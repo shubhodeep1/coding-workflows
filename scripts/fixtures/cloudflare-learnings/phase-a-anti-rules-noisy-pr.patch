@@ -1,0 +1,16 @@
+diff --git a/src/api/handler.py b/src/api/handler.py
+index 1234567..89abcde 100644
+--- a/src/api/handler.py
++++ b/src/api/handler.py
+@@ -10,8 +10,11 @@ def load_user(request):
+-    token = request.headers["X-Token"]
++    token = request.headers.get("X-Token", "")
++    if not token:
++        raise ValueError("missing token")
+     if len(token) > 128:
+         raise ValueError("token too long")
+ 
+     user_id = request.args["user_id"]
+     if not user_id.isdigit():
+         raise ValueError("invalid user id")
+     return fetch_user(int(user_id))

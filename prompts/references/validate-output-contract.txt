@@ -1,0 +1,34 @@
+Output contract:
+- Return exactly one valid JSON object.
+- Do not wrap JSON in markdown fences.
+- Do not include text before or after the JSON.
+
+JSON schema:
+{
+  "status": "ready" | "blocked",
+  "summary": "string",
+  "artifacts": [
+    {
+      "path": "string",
+      "action": "create" | "update",
+      "purpose": "string"
+    }
+  ],
+  "run_commands": ["string"],
+  "coverage": {
+    "build_verification": "implemented" | "skipped:<reason>",
+    "startup_health_checks": "implemented" | "skipped:<reason>",
+    "local_service_integration": "implemented" | "skipped:<reason>",
+    "route_testing": "implemented" | "skipped:<reason>",
+    "inbound_handler_testing": "implemented" | "skipped:<reason>",
+    "existing_test_suite_execution": "implemented" | "skipped:<reason>",
+    "env_var_validation": "implemented" | "skipped:<reason>",
+    "dependency_auditing": "implemented" | "skipped:<reason>",
+    "migration_verification": "implemented" | "skipped:<reason>",
+    "graceful_shutdown": "implemented" | "skipped:<reason>",
+    "error_format_validation": "implemented" | "skipped:<reason>"
+  },
+  "assumptions": ["string"],
+  "safety_constraints": ["string"],
+  "blockers": ["string"]
+}

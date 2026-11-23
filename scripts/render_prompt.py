@@ -1,0 +1,1456 @@
+#!/usr/bin/env python3
+"""Render prompt templates with optional mode contracts."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+try:
+	import yaml
+except ImportError:  # pragma: no cover - dependency is optional
+	yaml = None
+
+
+PLACEHOLDER_PATTERN = re.compile(r"\{\{([A-Za-z0-9_]+)\}\}")
+PLACEHOLDER_EXPRESSION_PATTERN = re.compile(r"\{\{(.*?)\}\}")
+# A `{{` opening delimiter that is immediately preceded by `$` (i.e. `${{`) is a
+# GitHub Actions expression / shell literal, not a template placeholder — the
+# same literal form already exempted by `_placeholder_expression_allowed_as_literal`
+# for balanced `${{ ... }}`. Assembled prompt bodies embed arbitrary PR diff text
+# that can carry a lone `${{` (e.g. a test assertion checking for the `${{`
+# prefix substring only), so the unmatched-delimiter residual check must skip
+# dollar-prefixed opens or it wrongly rejects the whole prompt.
+UNMATCHED_OPEN_DELIMITER_PATTERN = re.compile(r"(?<!\$)\{\{")
+STANDALONE_PLACEHOLDER_PATTERN = re.compile(r"^[ \t]*\{\{([A-Za-z0-9_]+)\}\}[ \t]*$")
+INCLUDE_DIRECTIVE_PATTERN = re.compile(r'^[ \t]*\{%[ \t]*include[ \t]+"([^"\n]+)"[ \t]*%\}[ \t]*$')
+VARIABLE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_]+$")
+LITERAL_DOT_EXPRESSION_PATTERN = re.compile(r"^\s*\.[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\s*$")
+OVERLAY_MODE_NAME_PATTERN = re.compile(r"^[A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*$")
+OVERLAY_REPLACE_DENIED_MODE_PATTERN = re.compile(r"^mode-(?:judge(?:-[A-Za-z0-9_-]+)?|orchestrate-poll-judge)$")
+CONTRACT_TOP_LEVEL_KEYS = {"required_vars", "optional_vars", "forbidden_vars"}
+PERSONA_SOURCE_FILE_NAME = "_prelude_role_persona.txt"
+LEGACY_STANDALONE_ONLY_VARS = frozenset({"WORKFLOW_EDIT_RESTRICTION", "SEMBLE_PREFETCH", "SERENA_TOOL_HINTS"})
+FALSEY_ENV_VALUES = frozenset({"0", "false", "no", "off"})
+TRUTHY_ENV_VALUES = frozenset({"1", "true", "yes", "on", "y"})
+IDENTITY_RECALL_TEMPLATE_FILE_NAME = "_identity_recall.txt"
+ROLE_GOAL_LINE_RE = re.compile(r"^Role:\s*(?P<role>.+?)\s+Goal:\s*(?P<goal>.+?)\s*$")
+
+
+class RenderPromptError(Exception):
+	"""Base error class for prompt rendering failures."""
+
+
+class PromptLoadError(RenderPromptError):
+	"""Raised when the prompt file cannot be loaded."""
+
+
+class TemplateSyntaxError(RenderPromptError):
+	"""Raised when unsupported template syntax is present in a prompt."""
+
+
+class PromptAssemblyError(RenderPromptError):
+	"""Raised when a prompt template include cannot be assembled."""
+
+
+class CliValueError(RenderPromptError):
+	"""Raised when CLI-provided variable mappings are invalid."""
+
+
+class ContractLoadError(RenderPromptError):
+	"""Raised when a prompt contract cannot be loaded or validated."""
+
+
+class ContractViolationError(RenderPromptError):
+	"""Raised when a prompt violates an applicable contract."""
+
+
+class WorkflowOverlayError(RenderPromptError):
+	"""Raised when workflow-overlay prompt overrides are invalid."""
+
+
+class IdentityRecallParseError(Exception):
+	"""Raised for fail-open identity-recall parsing/rendering problems."""
+
+	def __init__(self, reason: str, detail: str | None = None):
+		super().__init__(reason)
+		self.reason = reason
+		self.detail = detail
+
+
+@dataclass(frozen=True)
+class PromptFragment:
+	"""One prompt fragment before include assembly."""
+
+	path: Path
+	text: str
+
+
+@dataclass(frozen=True)
+class PromptContract:
+	"""Strict-mode contract for a prompt mode."""
+
+	mode_name: str
+	path: Path
+	required_vars: tuple[str, ...]
+	optional_vars: dict[str, str]
+	forbidden_vars: tuple[str, ...]
+
+	@property
+	def allowed_vars(self) -> set[str]:
+		return set(self.required_vars) | set(self.optional_vars.keys())
+
+
+@dataclass(frozen=True)
+class PromptOverride:
+	"""One workflow-overlay prompt override entry."""
+
+	mode_name: str
+	append_path: str | None
+	replace_path: str | None
+
+
+@dataclass(frozen=True)
+class WorkflowOverlay:
+	"""Runtime workflow overlay exported via environment variables."""
+
+	repo_root: Path
+	overrides: tuple[PromptOverride, ...]
+
+
+def build_parser() -> argparse.ArgumentParser:
+	parser = argparse.ArgumentParser(description="Render prompt templates with optional mode contracts")
+	parser.add_argument("prompt_file", help="Path to the prompt template file")
+	parser.add_argument(
+		"--assemble-only",
+		action="store_true",
+		help="Expand include directives and workflow overlays but do not render placeholders",
+	)
+	parser.add_argument(
+		"--input-already-assembled",
+		action="store_true",
+		help="Treat the input file as already overlay-expanded and include-assembled",
+	)
+	parser.add_argument(
+		"--skip-syntax-validation",
+		action="store_true",
+		help=(
+			"Skip the strict unsupported-template-syntax gate. Use ONLY when the "
+			"input is an already-assembled prompt body that embeds untrusted "
+			"content (e.g. a reviewer/editor prompt body carrying raw PR-diff or "
+			"comment text with literal {{...}}/{%%...%%} tokens that must not be "
+			"treated as prompt-authoring errors). Placeholder substitution still runs."
+		),
+	)
+	parser.add_argument(
+		"--legacy-mode-name",
+		default=None,
+		help="Optional mode-name override for legacy shims",
+	)
+	parser.add_argument(
+		"--var",
+		dest="variables",
+		action="append",
+		default=[],
+		metavar="NAME=VALUE",
+		help="Placeholder assignment; may be passed multiple times",
+	)
+	return parser
+
+
+def _normalize_prompt_text(content: str) -> str:
+	normalized = content.replace("\r\n", "\n").replace("\r", "\n")
+	if not normalized.endswith("\n"):
+		normalized += "\n"
+	return normalized
+
+
+def _normalize_identity_recall_field(value: str) -> str:
+	return value.strip().rstrip(". ")
+
+
+def load_prompt(prompt_path: Path) -> str:
+	if not prompt_path.is_file():
+		raise PromptLoadError(f"Prompt file not found: {prompt_path}")
+	try:
+		raw_prompt_bytes = prompt_path.read_bytes()
+		try:
+			decoded_prompt_text = raw_prompt_bytes.decode("utf-8")
+		except UnicodeDecodeError as decode_exc:
+			# Prompt files can embed PR/issue-derived bytes (untrusted). A single
+			# invalid byte used to abort the whole render with a traceback; keep
+			# valid UTF-8 byte-identical and replace only the bad bytes (U+FFFD).
+			# The warning names the path and offset only, never file content.
+			decoded_prompt_text = raw_prompt_bytes.decode("utf-8", errors="replace")
+			print(
+				f"WARNING: prompt file '{prompt_path}' contains invalid UTF-8 at byte "
+				f"{decode_exc.start}; replaced with U+FFFD",
+				file=sys.stderr,
+			)
+		return _normalize_prompt_text(decoded_prompt_text)
+	except (OSError, UnicodeDecodeError) as exc:
+		# Invalid UTF-8 in the prompt body is replaced above (#9261), so this
+		# handler names read failures; it supersedes #9341's exit-1 decode branch.
+		raise PromptLoadError(f"Unable to read prompt file '{prompt_path}': {exc}") from exc
+
+
+def _find_prompt_root(prompt_path: Path) -> Path | None:
+	resolved_prompt_path = prompt_path.resolve()
+	for candidate in (resolved_prompt_path.parent, *resolved_prompt_path.parents):
+		if candidate.name == "prompts":
+			return candidate
+	return None
+
+
+def _prompt_base_dir(prompt_path: Path) -> Path | None:
+	prompt_root = _find_prompt_root(prompt_path)
+	if prompt_root is None:
+		return None
+	return prompt_root.parent
+
+
+def _nearest_repo_root_with_prompts(prompt_path: Path | None) -> Path | None:
+	if prompt_path is None:
+		return None
+	resolved_prompt_path = prompt_path.resolve()
+	for candidate in (resolved_prompt_path.parent, *resolved_prompt_path.parents):
+		if (candidate / "prompts").is_dir():
+			return candidate
+	return None
+
+
+def _discover_prompt_repo_roots(prompt_path: Path | None) -> tuple[Path, ...]:
+	script_root = Path(__file__).resolve().parents[1]
+	nearest_repo_root = _nearest_repo_root_with_prompts(prompt_path)
+	prompt_root = _prompt_base_dir(prompt_path) if prompt_path is not None else None
+	return _unique_paths(
+		[path.resolve() for path in (
+			candidate
+			for candidate in (
+				nearest_repo_root,
+				prompt_root,
+				Path.cwd(),
+				script_root,
+				Path.cwd() / ".codex-workflow-src",
+				Path.cwd() / ".codex-workflow-src-main",
+			)
+			if candidate is not None
+		)]
+	)
+
+
+def _unique_paths(paths: list[Path]) -> tuple[Path, ...]:
+	ordered_paths: list[Path] = []
+	seen_paths: set[Path] = set()
+	for candidate in paths:
+		if candidate in seen_paths:
+			continue
+		seen_paths.add(candidate)
+		ordered_paths.append(candidate)
+	return tuple(ordered_paths)
+
+
+def _resolve_include_path(current_path: Path, include_target: str) -> Path:
+	include_path = Path(include_target.strip())
+	if not include_target.strip():
+		raise PromptAssemblyError(f"Empty include target in '{current_path}'")
+	if include_path.is_absolute():
+		raise PromptAssemblyError(
+			f"Absolute include paths are not allowed in '{current_path}': {include_target}"
+		)
+
+	prompt_root = _find_prompt_root(current_path)
+	candidate_paths = [
+		(current_path.parent / include_path).resolve(),
+	]
+	if prompt_root is not None:
+		candidate_paths.append((prompt_root / include_path).resolve())
+
+	for candidate in _unique_paths(candidate_paths):
+		if prompt_root is not None:
+			try:
+				candidate.relative_to(prompt_root)
+			except ValueError:
+				continue
+		if candidate.is_file():
+			return candidate
+
+	raise PromptAssemblyError(
+		f"Included prompt fragment not found from '{current_path}': {include_target}"
+	)
+
+
+def _assemble_prompt_fragment(
+	fragment: PromptFragment,
+	*,
+	stack: tuple[Path, ...],
+	resolve_includes: bool = True,
+) -> str:
+	assembled_lines: list[str] = []
+	for raw_line in fragment.text.splitlines():
+		# When include resolution is disabled the input is an already-assembled
+		# prompt body that embeds untrusted content (raw PR diff + full changed-file
+		# text). Such a body can legitimately carry a standalone double-quoted
+		# `{% include "..." %}` line — that is the reviewed template's own source,
+		# not a prompt-fragment directive to expand. Scanning it would misparse the
+		# line, fail to find the target on disk, and hard-exit the reviewer/editor
+		# render (PromptAssemblyError: "Included prompt fragment not found"). Emit
+		# every line verbatim instead so the directive survives into the prompt.
+		include_match = None if not resolve_includes else INCLUDE_DIRECTIVE_PATTERN.fullmatch(raw_line)
+		if include_match is None:
+			assembled_lines.append(f"{raw_line}\n")
+			continue
+
+		include_path = _resolve_include_path(fragment.path, include_match.group(1))
+		if include_path in stack:
+			include_chain = " -> ".join(str(path) for path in (*stack, include_path))
+			raise PromptAssemblyError(f"Cyclic prompt include detected: {include_chain}")
+		assembled_lines.append(
+			_assemble_prompt_fragment(
+				PromptFragment(path=include_path, text=load_prompt(include_path)),
+				stack=(*stack, include_path),
+				resolve_includes=resolve_includes,
+			)
+		)
+	return "".join(assembled_lines)
+
+
+def assemble_prompt_fragments(
+	fragments: tuple[PromptFragment, ...],
+	*,
+	resolve_includes: bool = True,
+) -> str:
+	return "".join(
+		_assemble_prompt_fragment(
+			fragment,
+			stack=(fragment.path.resolve(),),
+			resolve_includes=resolve_includes,
+		)
+		for fragment in fragments
+	)
+
+
+def resolve_mode_name(prompt_path: Path, legacy_mode_name: str | None) -> str:
+	if legacy_mode_name is not None:
+		mode_name = legacy_mode_name.strip()
+	else:
+		mode_name = prompt_path.stem.strip()
+	if not mode_name:
+		raise CliValueError(f"Unable to resolve mode name for prompt '{prompt_path}'")
+	return mode_name
+
+
+def parse_cli_variables(entries: list[str]) -> dict[str, str]:
+	variables: dict[str, str] = {}
+	for entry in entries:
+		name, separator, value = entry.partition("=")
+		if separator != "=":
+			raise CliValueError(f"Invalid --var value '{entry}'; expected NAME=VALUE")
+		name = name.strip()
+		if not name:
+			raise CliValueError(f"Invalid --var value '{entry}'; variable name is empty")
+		if VARIABLE_NAME_PATTERN.fullmatch(name) is None:
+			raise CliValueError(
+				f"Invalid --var name '{name}'; names must match {VARIABLE_NAME_PATTERN.pattern}"
+			)
+		variables[name] = value
+	return variables
+
+
+def _append_contract_candidate(
+	candidates: list[Path],
+	seen: set[Path],
+	base_dir: Path | None,
+	mode_name: str,
+) -> None:
+	if base_dir is None:
+		return
+	candidate = (base_dir / "prompts" / "contracts" / f"{mode_name}.yml").resolve()
+	if candidate in seen:
+		return
+	seen.add(candidate)
+	candidates.append(candidate)
+
+
+def discover_contract_path(prompt_path: Path, mode_name: str) -> Path | None:
+	candidates: list[Path] = []
+	seen: set[Path] = set()
+	script_root = Path(__file__).resolve().parents[1]
+	prompt_root = _prompt_base_dir(prompt_path)
+
+	_append_contract_candidate(candidates, seen, prompt_root, mode_name)
+	_append_contract_candidate(candidates, seen, Path.cwd(), mode_name)
+	_append_contract_candidate(candidates, seen, script_root, mode_name)
+	_append_contract_candidate(candidates, seen, Path.cwd() / ".codex-workflow-src", mode_name)
+	_append_contract_candidate(candidates, seen, Path.cwd() / ".codex-workflow-src-main", mode_name)
+
+	for candidate in candidates:
+		if candidate.is_file():
+			return candidate
+	return None
+
+
+def _append_reference_candidate(
+	candidates: list[Path],
+	seen: set[Path],
+	base_dir: Path | None,
+	file_name: str,
+) -> None:
+	if base_dir is None:
+		return
+	candidate = (base_dir / "prompts" / "references" / file_name).resolve()
+	if candidate in seen:
+		return
+	seen.add(candidate)
+	candidates.append(candidate)
+
+
+def discover_reference_path(prompt_path: Path, file_name: str) -> Path | None:
+	candidates: list[Path] = []
+	seen: set[Path] = set()
+	script_root = Path(__file__).resolve().parents[1]
+	prompt_root = _prompt_base_dir(prompt_path)
+
+	_append_reference_candidate(candidates, seen, prompt_root, file_name)
+	_append_reference_candidate(candidates, seen, Path.cwd(), file_name)
+	_append_reference_candidate(candidates, seen, script_root, file_name)
+	_append_reference_candidate(candidates, seen, Path.cwd() / ".codex-workflow-src", file_name)
+	_append_reference_candidate(candidates, seen, Path.cwd() / ".codex-workflow-src-main", file_name)
+
+	for candidate in candidates:
+		if candidate.is_file():
+			return candidate
+	return None
+
+
+def _expected_reference_path(prompt_path: Path, file_name: str) -> Path:
+	prompt_root = _prompt_base_dir(prompt_path) or Path.cwd()
+	return prompt_root / "prompts" / "references" / file_name
+
+
+def discover_persona_source_path(prompt_path: Path | None) -> Path | None:
+	for base_dir in _discover_prompt_repo_roots(prompt_path):
+		candidate = (base_dir / "prompts" / PERSONA_SOURCE_FILE_NAME).resolve()
+		if candidate.is_file():
+			return candidate
+	return None
+
+
+def _env_flag_enabled(name: str, *, default: bool = False) -> bool:
+	raw_value = os.environ.get(name)
+	if raw_value is None:
+		return default
+	normalized = raw_value.strip().lower()
+	return bool(normalized) and normalized not in FALSEY_ENV_VALUES
+
+
+def _identity_recall_enabled() -> bool:
+	raw_value = os.environ.get("UNATTENDED_IDENTITY_REINJECT_ENABLED", "")
+	return raw_value.strip().lower() in TRUTHY_ENV_VALUES
+
+
+def _prompt_prelude_refactor_enabled() -> bool:
+	return os.environ.get("PROMPT_PRELUDE_REFACTOR_ENABLED", "false") == "true"
+
+
+def _identity_canonical_prompt_basename(prompt_path: Path, mode_name: str) -> str:
+	prompt_basename = prompt_path.name
+	if prompt_basename.startswith("mode-") and prompt_basename.endswith("-inline.txt"):
+		return prompt_basename[: -len("-inline.txt")] + ".txt"
+	if prompt_basename.startswith("mode-") and prompt_basename.endswith(".txt"):
+		return prompt_basename
+	if mode_name.startswith("mode-") and mode_name.endswith("-inline"):
+		return mode_name[: -len("-inline")] + ".txt"
+	return f"{mode_name}.txt"
+
+
+def discover_identity_source_prompt(prompt_path: Path, mode_name: str) -> Path | None:
+	resolved_prompt_path = prompt_path.resolve()
+	canonical_basename = _identity_canonical_prompt_basename(resolved_prompt_path, mode_name)
+	candidates: list[Path] = []
+
+	if resolved_prompt_path.parent.name == "_templates":
+		candidates.append((resolved_prompt_path.parent.parent / canonical_basename).resolve())
+
+	if resolved_prompt_path.parent.name == "prompts" and _prompt_prelude_refactor_enabled():
+		for base_dir in _discover_prompt_repo_roots(resolved_prompt_path):
+			candidates.append((base_dir / "prompts" / "_templates" / canonical_basename).resolve())
+
+	if resolved_prompt_path.is_file() and resolved_prompt_path.name == canonical_basename and canonical_basename.startswith("mode-"):
+		candidates.append(resolved_prompt_path)
+
+	candidates.append((resolved_prompt_path.parent / canonical_basename).resolve())
+	for base_dir in _discover_prompt_repo_roots(resolved_prompt_path):
+		candidates.append((base_dir / "prompts" / canonical_basename).resolve())
+
+	for candidate in _unique_paths(candidates):
+		if candidate.is_file():
+			return candidate
+	return None
+
+
+def resolve_identity_source_prompt(prompt_path: Path, mode_name: str) -> Path:
+	canonical_prompt_path = discover_identity_source_prompt(prompt_path, mode_name)
+	if canonical_prompt_path is not None:
+		return canonical_prompt_path
+	expected_path = (_prompt_base_dir(prompt_path) or Path.cwd()) / "prompts" / _identity_canonical_prompt_basename(prompt_path.resolve(), mode_name)
+	raise PromptLoadError(f"Canonical prompt for identity recall not found: {expected_path.resolve()}")
+
+
+def _expected_identity_template_path(prompt_path: Path) -> Path:
+	prompt_root = _prompt_base_dir(prompt_path) or Path.cwd()
+	return prompt_root / "prompts" / IDENTITY_RECALL_TEMPLATE_FILE_NAME
+
+
+def discover_identity_recall_template_path(prompt_path: Path) -> Path | None:
+	for base_dir in _discover_prompt_repo_roots(prompt_path):
+		candidate = (base_dir / "prompts" / IDENTITY_RECALL_TEMPLATE_FILE_NAME).resolve()
+		if candidate.is_file():
+			return candidate
+	return None
+
+
+def resolve_identity_phase_name(canonical_prompt_path: Path) -> str | None:
+	phase_name = canonical_prompt_path.stem.strip()
+	if not phase_name:
+		return None
+	return phase_name
+
+
+def _extract_identity_recall_metadata_or_raise(prompt_text: str) -> tuple[str, str]:
+	paragraph_lines: list[str] = []
+	started = False
+	in_compaction_rules = False
+	for raw_line in prompt_text.splitlines():
+		line = raw_line.strip()
+		if not started:
+			if in_compaction_rules:
+				if line == "</compaction-rules>":
+					in_compaction_rules = False
+				continue
+			if not line or line.startswith("#") or (line.startswith("{%") and line.endswith("%}")):
+				continue
+			if line.startswith("<compaction-rules>"):
+				if not line.endswith("</compaction-rules>"):
+					in_compaction_rules = True
+				continue
+			started = True
+		if not line:
+			break
+		paragraph_lines.append(line)
+
+	if not paragraph_lines:
+		raise IdentityRecallParseError("metadata_extract_failed")
+
+	paragraph = " ".join(paragraph_lines)
+	match = ROLE_GOAL_LINE_RE.match(paragraph)
+	if match is None:
+		raise IdentityRecallParseError("metadata_extract_failed")
+
+	phase_role = _normalize_identity_recall_field(match.group("role"))
+	phase_mission = _normalize_identity_recall_field(match.group("goal"))
+	if not phase_role or not phase_mission:
+		raise IdentityRecallParseError("identity_metadata_incomplete")
+	return phase_role, phase_mission
+
+
+def extract_identity_recall_metadata(prompt_text: str) -> tuple[str, str] | None:
+	try:
+		return _extract_identity_recall_metadata_or_raise(prompt_text)
+	except IdentityRecallParseError:
+		return None
+
+
+def render_identity_recall_block(
+	*,
+	prompt_path: Path,
+	phase_name: str,
+	phase_role: str,
+	phase_mission: str,
+) -> str:
+	identity_template_path = discover_identity_recall_template_path(prompt_path)
+	if identity_template_path is None:
+		raise IdentityRecallParseError(
+			"render_failed",
+			f"Identity recall template not found: {_expected_identity_template_path(prompt_path)}",
+		)
+	try:
+		identity_template_text = load_prompt(identity_template_path)
+	except PromptLoadError as exc:
+		raise IdentityRecallParseError("render_failed", str(exc)) from exc
+	return render_prompt_text(
+		identity_template_text,
+		{
+			"PHASE_NAME": phase_name,
+			"PHASE_ROLE": phase_role,
+			"PHASE_MISSION": phase_mission,
+		},
+	).rstrip("\n")
+
+
+def _opening_role_goal_end_offset(rendered_text: str) -> int | None:
+	paragraph_lines: list[str] = []
+	paragraph_end: int | None = None
+	started = False
+	in_compaction_rules = False
+	offset = 0
+	for raw_line in rendered_text.splitlines(keepends=True):
+		line = raw_line.strip()
+		if not started:
+			if in_compaction_rules:
+				if line == "</compaction-rules>":
+					in_compaction_rules = False
+				offset += len(raw_line)
+				continue
+			if not line or line.startswith("#") or (line.startswith("{%") and line.endswith("%}")):
+				offset += len(raw_line)
+				continue
+			if line.startswith("<compaction-rules>"):
+				if not line.endswith("</compaction-rules>"):
+					in_compaction_rules = True
+				offset += len(raw_line)
+				continue
+			started = True
+		if not line:
+			paragraph = " ".join(paragraph_lines)
+			if paragraph_end is None or ROLE_GOAL_LINE_RE.match(paragraph) is None:
+				return None
+			return paragraph_end
+		paragraph_lines.append(line)
+		paragraph_end = offset + len(raw_line.rstrip("\r\n"))
+		offset += len(raw_line)
+	if not started or not paragraph_lines or paragraph_end is None:
+		return None
+	paragraph = " ".join(paragraph_lines)
+	if ROLE_GOAL_LINE_RE.match(paragraph) is None:
+		return None
+	return paragraph_end
+
+
+def inject_identity_recall_block(prompt_text: str, identity_block: str) -> str:
+	paragraph_end = _opening_role_goal_end_offset(prompt_text)
+	if paragraph_end is not None:
+		before = prompt_text[:paragraph_end].rstrip("\n")
+		remainder = prompt_text[paragraph_end:].lstrip("\r\n")
+		if remainder:
+			return before + "\n\n" + identity_block + "\n\n" + remainder
+		return before + "\n\n" + identity_block + "\n"
+
+	parts = prompt_text.split("\n\n", 1)
+	if len(parts) == 2:
+		return parts[0] + "\n\n" + identity_block + "\n\n" + parts[1]
+	return prompt_text + "\n\n" + identity_block + "\n"
+
+
+def emit_identity_reinject_parse_fail(mode_name: str, reason: str, detail: str | None = None) -> None:
+	message = f"IDENTITY_REINJECT_PARSE_FAIL: {mode_name} reason={reason}"
+	if detail:
+		sanitized_detail = " ".join(detail.split())
+		if sanitized_detail:
+			message += f" detail={json.dumps(sanitized_detail, ensure_ascii=True)}"
+	print(message, file=sys.stderr)
+
+
+def apply_identity_recall(prompt_text: str, *, prompt_path: Path, mode_name: str) -> str:
+	if not _identity_recall_enabled() or not mode_name.startswith("mode-"):
+		return prompt_text
+	try:
+		try:
+			canonical_prompt_path = resolve_identity_source_prompt(prompt_path, mode_name)
+		except PromptLoadError as exc:
+			raise IdentityRecallParseError("canonical_prompt_missing", str(exc)) from exc
+		phase_name = resolve_identity_phase_name(canonical_prompt_path)
+		if not phase_name:
+			raise IdentityRecallParseError("phase_name_missing")
+		try:
+			canonical_prompt_text = load_prompt(canonical_prompt_path)
+		except PromptLoadError as exc:
+			raise IdentityRecallParseError("canonical_prompt_load_failed", str(exc)) from exc
+		phase_role, phase_mission = _extract_identity_recall_metadata_or_raise(canonical_prompt_text)
+		identity_block = render_identity_recall_block(
+			prompt_path=canonical_prompt_path,
+			phase_name=phase_name,
+			phase_role=phase_role,
+			phase_mission=phase_mission,
+		)
+		return inject_identity_recall_block(prompt_text, identity_block)
+	except IdentityRecallParseError as exc:
+		emit_identity_reinject_parse_fail(mode_name, exc.reason, exc.detail)
+		return prompt_text
+
+
+def apply_identity_recall_block(rendered_prompt_text: str, *, prompt_path: Path, mode_name: str) -> str:
+	return apply_identity_recall(rendered_prompt_text, prompt_path=prompt_path, mode_name=mode_name)
+
+
+def load_phase_c_persona_prefixes(prompt_path: Path | None) -> dict[str, str]:
+	persona_source_path = discover_persona_source_path(prompt_path)
+	if persona_source_path is None:
+		return {}
+	try:
+		payload = json.loads(persona_source_path.read_text(encoding="utf-8"))
+	except OSError as exc:
+		raise PromptLoadError(
+			f"Unable to read persona source '{persona_source_path}': {exc}"
+		) from exc
+	except UnicodeDecodeError as exc:
+		# Trusted config stays strict (no errors="replace"), but a bad byte now
+		# names the path instead of escaping as a traceback (#9261/#9949).
+		# UnicodeDecodeError is not a json.JSONDecodeError subclass.
+		raise PromptLoadError(
+			f"Unable to decode persona source '{persona_source_path}' as UTF-8: {exc}"
+		) from exc
+	except json.JSONDecodeError as exc:
+		raise PromptLoadError(
+			f"Invalid JSON persona source '{persona_source_path}' at line {exc.lineno}, column {exc.colno}: {exc.msg}"
+		) from exc
+
+	if not isinstance(payload, dict):
+		raise PromptLoadError(
+			f"Persona source '{persona_source_path}' must decode to an object mapping mode names to prefixes"
+		)
+
+	prefixes: dict[str, str] = {}
+	for raw_mode_name, raw_prefix in payload.items():
+		if not isinstance(raw_mode_name, str) or OVERLAY_MODE_NAME_PATTERN.fullmatch(raw_mode_name) is None:
+			raise PromptLoadError(
+				f"Persona source '{persona_source_path}' contains invalid mode name {raw_mode_name!r}"
+			)
+		if not isinstance(raw_prefix, str):
+			raise PromptLoadError(
+				f"Persona source '{persona_source_path}' must use string prefixes for mode '{raw_mode_name}'"
+			)
+		prefixes[raw_mode_name] = raw_prefix
+	return prefixes
+
+
+def _reference_file_name_for_placeholder(placeholder_name: str) -> str | None:
+	if not placeholder_name.startswith("REFERENCE_"):
+		return None
+	reference_stem = placeholder_name.removeprefix("REFERENCE_").strip().lower()
+	if not reference_stem:
+		return None
+	return reference_stem.replace("_", "-") + ".txt"
+
+
+def _load_reference_placeholder_value(
+	*,
+	prompt_path: Path,
+	mode_name: str,
+	placeholder_name: str,
+) -> str:
+	file_name = _reference_file_name_for_placeholder(placeholder_name)
+	if file_name is None:
+		raise PromptLoadError(f"Unsupported reference placeholder '{placeholder_name}'")
+
+	reference_path = discover_reference_path(prompt_path, file_name)
+	if reference_path is None:
+		expected_path = _expected_reference_path(prompt_path, file_name)
+		raise PromptLoadError(
+			f"Reference file for placeholder '{placeholder_name}' not found: {expected_path}"
+		)
+
+	reference_text = load_prompt(reference_path)
+
+	mode_specific_append_name = None
+	if placeholder_name == "REFERENCE_OUTPUT_CONTRACT" and mode_name == "mode-validate-generate":
+		mode_specific_append_name = "validate-output-contract.txt"
+
+	if mode_specific_append_name is None:
+		return reference_text
+
+	mode_specific_append_path = discover_reference_path(prompt_path, mode_specific_append_name)
+	if mode_specific_append_path is None:
+		expected_path = _expected_reference_path(prompt_path, mode_specific_append_name)
+		raise PromptLoadError(
+			f"Append reference file '{mode_specific_append_name}' for placeholder '{placeholder_name}' not found: {expected_path}"
+		)
+
+	return reference_text + load_prompt(mode_specific_append_path)
+
+
+def hydrate_reference_placeholders(
+	*,
+	prompt_text: str,
+	prompt_path: Path,
+	mode_name: str,
+	values: dict[str, str],
+	strict: bool = True,
+) -> dict[str, str]:
+	hydrated = dict(values)
+	for placeholder_name in collect_placeholders(prompt_text):
+		if not placeholder_name.startswith("REFERENCE_"):
+			continue
+		if hydrated.get(placeholder_name, "") != "":
+			continue
+		fail_open_reference_file_name = _reference_file_name_for_placeholder(placeholder_name)
+		if not strict and fail_open_reference_file_name is None:
+			hydrated.pop(placeholder_name, None)
+			print(
+				f"WARNING: reference placeholder '{placeholder_name}' left unhydrated: "
+				"unsupported reference placeholder (untrusted assembled body; fail-open)",
+				file=sys.stderr,
+			)
+			continue
+		if (
+			not strict
+			and fail_open_reference_file_name is not None
+			and discover_reference_path(prompt_path, fail_open_reference_file_name) is None
+		):
+			hydrated.pop(placeholder_name, None)
+			# Only a missing primary reference is benign here. Read failures and
+			# missing mode-specific append references still flow through the loader.
+			# strict=False marks a prompt body that embeds untrusted content
+			# (reviewer/editor bodies carry raw PR-diff and comment text). A
+			# REFERENCE_* token collected from such a body may be the embedded
+			# content itself — e.g. a diff that documents the prompt-templating
+			# system with a braced REFERENCE_SECURITY_MONEY_LENS token — with no
+			# matching prompts/references/ file. Leave it unhydrated so it
+			# renders verbatim like every other untrusted {{...}} token instead
+			# of hard-failing every reviewer (observed on run 33245886964).
+			# Resolvable references still hydrate on this path.
+			print(
+				f"WARNING: reference placeholder '{placeholder_name}' left unhydrated: "
+				f"no reference file found at "
+				f"{_expected_reference_path(prompt_path, fail_open_reference_file_name)} "
+				f"(untrusted assembled body; fail-open)",
+				file=sys.stderr,
+			)
+			continue
+		hydrated[placeholder_name] = _load_reference_placeholder_value(
+			prompt_path=prompt_path,
+			mode_name=mode_name,
+			placeholder_name=placeholder_name,
+		)
+	return hydrated
+
+
+def _parse_scalar_value(raw_value: str, *, field_name: str, line_number: int, path: Path) -> str:
+	if raw_value == "":
+		return ""
+	if raw_value.startswith('"'):
+		try:
+			parsed = json.loads(raw_value)
+		except json.JSONDecodeError as exc:
+			raise ContractLoadError(
+				f"Invalid JSON-style quoted scalar for {field_name} at {path}:{line_number}: {exc.msg}"
+			) from exc
+		if not isinstance(parsed, str):
+			raise ContractLoadError(
+				f"Expected string scalar for {field_name} at {path}:{line_number}, got {type(parsed).__name__}"
+			)
+		return parsed
+	if raw_value.startswith("'") and raw_value.endswith("'") and len(raw_value) >= 2:
+		return raw_value[1:-1].replace("''", "'")
+	return raw_value
+
+
+def _parse_inline_list(raw_value: str, *, field_name: str, path: Path, line_number: int) -> list[str]:
+	if raw_value == "[]":
+		return []
+	try:
+		parsed = json.loads(raw_value)
+	except json.JSONDecodeError as exc:
+		raise ContractLoadError(
+			f"Invalid inline list for {field_name} at {path}:{line_number}: {exc.msg}"
+		) from exc
+	if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed):
+		raise ContractLoadError(
+			f"Expected {field_name} to be a list of strings at {path}:{line_number}"
+		)
+	return parsed
+
+
+def _parse_minimal_contract_yaml(text: str, path: Path) -> dict[str, Any]:
+	stripped = text.strip()
+	if not stripped:
+		return {}
+	if stripped.startswith("{"):
+		try:
+			loaded = json.loads(stripped)
+		except json.JSONDecodeError as exc:
+			raise ContractLoadError(
+				f"Invalid JSON-formatted contract '{path}' at line {exc.lineno}, column {exc.colno}: {exc.msg}"
+			) from exc
+		if not isinstance(loaded, dict):
+			raise ContractLoadError(f"Contract root must be a mapping/object in '{path}'")
+		return loaded
+
+	data: dict[str, Any] = {}
+	lines = text.splitlines()
+	index = 0
+	while index < len(lines):
+		raw_line = lines[index]
+		line_number = index + 1
+		stripped_line = raw_line.strip()
+		if not stripped_line or stripped_line.startswith("#"):
+			index += 1
+			continue
+		if raw_line.startswith((" ", "\t")):
+			raise ContractLoadError(
+				f"Unsupported indentation at {path}:{line_number}; install PyYAML for richer contract syntax"
+			)
+		key, separator, remainder = raw_line.partition(":")
+		if separator != ":":
+			raise ContractLoadError(f"Invalid contract line at {path}:{line_number}: {raw_line!r}")
+		key = key.strip()
+		remainder = remainder.strip()
+		if key not in CONTRACT_TOP_LEVEL_KEYS:
+			raise ContractLoadError(
+				f"Unknown contract key '{key}' in '{path}'; supported keys: {sorted(CONTRACT_TOP_LEVEL_KEYS)}"
+			)
+
+		if key in {"required_vars", "forbidden_vars"}:
+			if remainder:
+				data[key] = _parse_inline_list(remainder, field_name=key, path=path, line_number=line_number)
+				index += 1
+				continue
+			items: list[str] = []
+			index += 1
+			while index < len(lines):
+				child_raw = lines[index]
+				child_line_number = index + 1
+				child_stripped = child_raw.strip()
+				if not child_stripped or child_stripped.startswith("#"):
+					index += 1
+					continue
+				if not child_raw.startswith("  "):
+					break
+				child_payload = child_raw[2:]
+				if not child_payload.startswith("- "):
+					raise ContractLoadError(
+						f"Expected list item under {key} at {path}:{child_line_number}"
+					)
+				items.append(
+					_parse_scalar_value(
+						child_payload[2:].strip(),
+						field_name=key,
+						line_number=child_line_number,
+						path=path,
+					)
+				)
+				index += 1
+			data[key] = items
+			continue
+
+		if remainder:
+			if remainder == "{}":
+				data[key] = {}
+				index += 1
+				continue
+			raise ContractLoadError(
+				f"Unsupported inline mapping syntax for {key} at {path}:{line_number}; install PyYAML for richer contract syntax"
+			)
+
+		mapping: dict[str, str] = {}
+		index += 1
+		while index < len(lines):
+			child_raw = lines[index]
+			child_line_number = index + 1
+			child_stripped = child_raw.strip()
+			if not child_stripped or child_stripped.startswith("#"):
+				index += 1
+				continue
+			if not child_raw.startswith("  "):
+				break
+			child_payload = child_raw[2:]
+			child_key, child_separator, child_remainder = child_payload.partition(":")
+			if child_separator != ":":
+				raise ContractLoadError(
+					f"Expected key/value mapping under {key} at {path}:{child_line_number}"
+				)
+			mapping[child_key.strip()] = _parse_scalar_value(
+				child_remainder.strip(),
+				field_name=f"{key}.{child_key.strip()}",
+				line_number=child_line_number,
+				path=path,
+			)
+			index += 1
+		data[key] = mapping
+
+	return data
+
+
+def _load_contract_payload(contract_path: Path) -> dict[str, Any]:
+	try:
+		contract_text = contract_path.read_text(encoding="utf-8")
+	except OSError as exc:
+		raise ContractLoadError(f"Unable to read contract '{contract_path}': {exc}") from exc
+	except UnicodeDecodeError as exc:
+		# Contracts are trusted config and stay strict; name the path instead of
+		# letting the decode error escape as a traceback (#9261/#9949).
+		raise ContractLoadError(f"Unable to decode contract '{contract_path}': {exc}") from exc
+
+	if yaml is not None:
+		try:
+			loaded = yaml.safe_load(contract_text)
+		except yaml.YAMLError as exc:
+			location = ""
+			mark = getattr(exc, "problem_mark", None)
+			if mark is not None:
+				location = f" at line {mark.line + 1}, column {mark.column + 1}"
+			raise ContractLoadError(
+				f"Failed to parse contract '{contract_path}'{location}: {exc}"
+			) from exc
+	else:
+		loaded = _parse_minimal_contract_yaml(contract_text, contract_path)
+
+	if loaded is None:
+		loaded = {}
+	if not isinstance(loaded, dict):
+		raise ContractLoadError(
+			f"Contract root must be a mapping/object in '{contract_path}', got {type(loaded).__name__}"
+		)
+	return loaded
+
+
+def _coerce_name_list(value: Any, *, field_name: str, contract_path: Path) -> tuple[str, ...]:
+	if value is None:
+		value = []
+	if not isinstance(value, list):
+		raise ContractLoadError(f"Field '{field_name}' in '{contract_path}' must be a list of strings")
+	seen: set[str] = set()
+	items: list[str] = []
+	for item in value:
+		if not isinstance(item, str):
+			raise ContractLoadError(
+				f"Field '{field_name}' in '{contract_path}' must contain only strings"
+			)
+		name = item.strip()
+		if not name:
+			raise ContractLoadError(f"Field '{field_name}' in '{contract_path}' contains an empty variable name")
+		if VARIABLE_NAME_PATTERN.fullmatch(name) is None:
+			raise ContractLoadError(
+				f"Field '{field_name}' in '{contract_path}' contains invalid variable name '{name}'"
+			)
+		if name in seen:
+			continue
+		seen.add(name)
+		items.append(name)
+	return tuple(items)
+
+
+def _coerce_optional_vars(value: Any, *, contract_path: Path) -> dict[str, str]:
+	if value is None:
+		value = {}
+	if not isinstance(value, dict):
+		raise ContractLoadError(f"Field 'optional_vars' in '{contract_path}' must be a mapping")
+	optional_vars: dict[str, str] = {}
+	for raw_name, raw_default in value.items():
+		if not isinstance(raw_name, str):
+			raise ContractLoadError(
+				f"Field 'optional_vars' in '{contract_path}' must use string variable names"
+			)
+		name = raw_name.strip()
+		if not name:
+			raise ContractLoadError(f"Field 'optional_vars' in '{contract_path}' contains an empty variable name")
+		if VARIABLE_NAME_PATTERN.fullmatch(name) is None:
+			raise ContractLoadError(
+				f"Field 'optional_vars' in '{contract_path}' contains invalid variable name '{name}'"
+			)
+		if raw_default is None:
+			default_value = ""
+		elif isinstance(raw_default, str):
+			default_value = raw_default
+		elif isinstance(raw_default, bool):
+			default_value = "true" if raw_default else "false"
+		elif isinstance(raw_default, (int, float)):
+			default_value = str(raw_default)
+		else:
+			raise ContractLoadError(
+				f"Field 'optional_vars.{name}' in '{contract_path}' must be a string default"
+			)
+		optional_vars[name] = default_value
+	return optional_vars
+
+
+def load_contract(contract_path: Path, mode_name: str) -> PromptContract:
+	payload = _load_contract_payload(contract_path)
+	unknown_keys = sorted(set(payload.keys()) - CONTRACT_TOP_LEVEL_KEYS)
+	if unknown_keys:
+		raise ContractLoadError(
+			f"Unknown contract keys in '{contract_path}': {', '.join(unknown_keys)}"
+		)
+
+	required_vars = _coerce_name_list(payload.get("required_vars", []), field_name="required_vars", contract_path=contract_path)
+	optional_vars = _coerce_optional_vars(payload.get("optional_vars", {}), contract_path=contract_path)
+	forbidden_vars = _coerce_name_list(payload.get("forbidden_vars", []), field_name="forbidden_vars", contract_path=contract_path)
+
+	overlap = (set(required_vars) | set(optional_vars.keys())) & set(forbidden_vars)
+	if overlap:
+		raise ContractLoadError(
+			f"Contract '{contract_path}' declares variables in both allow and forbid lists: {', '.join(sorted(overlap))}"
+		)
+
+	return PromptContract(
+		mode_name=mode_name,
+		path=contract_path,
+		required_vars=required_vars,
+		optional_vars=optional_vars,
+		forbidden_vars=forbidden_vars,
+	)
+
+
+def collect_placeholders(prompt_text: str) -> tuple[str, ...]:
+	return tuple(sorted(set(PLACEHOLDER_PATTERN.findall(prompt_text))))
+
+
+def _placeholder_expression_allowed_as_literal(line: str, match: re.Match[str]) -> bool:
+	placeholder_expression = match.group(1)
+	if match.start() > 0 and line[match.start() - 1] == "$":
+		return True
+	return LITERAL_DOT_EXPRESSION_PATTERN.fullmatch(placeholder_expression) is not None
+
+
+def validate_supported_template_syntax(prompt_text: str, prompt_path: Path) -> None:
+	violations: list[str] = []
+	for line_number, line in enumerate(prompt_text.splitlines(), start=1):
+		matches = list(PLACEHOLDER_EXPRESSION_PATTERN.finditer(line))
+		last_end = 0
+		residual_segments: list[str] = []
+
+		for match in matches:
+			residual_segments.append(line[last_end:match.start()])
+			last_end = match.end()
+			placeholder_expression = match.group(1)
+			if VARIABLE_NAME_PATTERN.fullmatch(placeholder_expression) is not None:
+				continue
+			if _placeholder_expression_allowed_as_literal(line, match):
+				continue
+			violations.append(
+				f"{prompt_path}:{line_number}: unsupported placeholder expression '{{{{{placeholder_expression}}}}}'"
+			)
+
+		residual_segments.append(line[last_end:])
+		residual_text = "".join(residual_segments)
+		if UNMATCHED_OPEN_DELIMITER_PATTERN.search(residual_text) is not None:
+			violations.append(
+				f"{prompt_path}:{line_number}: unmatched placeholder delimiter in {line.strip()!r}"
+			)
+		if "{%" in line or "%}" in line:
+			violations.append(
+				f"{prompt_path}:{line_number}: unsupported template tag syntax {line.strip()!r}"
+			)
+
+	if violations:
+		raise TemplateSyntaxError("Unsupported template syntax:\n" + "\n".join(violations))
+
+
+def validate_contract(contract: PromptContract, prompt_text: str, values: dict[str, str]) -> None:
+	placeholders = collect_placeholders(prompt_text)
+	violations: list[tuple[str, list[str]]] = []
+
+	forbidden_present = sorted(name for name in placeholders if name in set(contract.forbidden_vars))
+	if forbidden_present:
+		violations.append(("forbidden_present", forbidden_present))
+
+	unknown_in_template = sorted(
+		name
+		for name in placeholders
+		if name not in contract.allowed_vars and name not in set(contract.forbidden_vars)
+	)
+	if unknown_in_template:
+		violations.append(("unknown_in_template", unknown_in_template))
+
+	missing_required = sorted(name for name in contract.required_vars if name not in values)
+	if missing_required:
+		violations.append(("missing_required", missing_required))
+
+	if not violations:
+		return
+
+	detail_lines = [f"- {category}: {', '.join(names)}" for category, names in violations]
+	raise ContractViolationError(
+		f"Prompt contract violations for mode '{contract.mode_name}' via '{contract.path}':\n"
+		+ "\n".join(detail_lines)
+	)
+
+
+def _render_replacement(value: str) -> str:
+	if value.endswith("\n"):
+		return value
+	return value + "\n"
+
+
+def _workflow_edit_restriction_value() -> str:
+	if os.environ.get("ALLOW_WORKFLOW_EDITS", "false") == "true":
+		return "- CI workflow edits under .github/workflows/ are permitted when required by the approved plan; keep changes inside the plan's stated file scope."
+	return "- Do not change CI workflows."
+
+
+def _persona_prefix_enabled() -> bool:
+	return _env_flag_enabled("PROMPT_PERSONA_PREFIX_ENABLED", default=True)
+
+
+def apply_phase_c_persona_prefix(prompt_text: str, *, prompt_path: Path | None = None, mode_name: str) -> str:
+	if not _persona_prefix_enabled():
+		return prompt_text
+	prefix = load_phase_c_persona_prefixes(prompt_path).get(mode_name)
+	if prefix is None or prompt_text.startswith(prefix):
+		return prompt_text
+	return prefix + prompt_text
+
+
+def collect_legacy_env_values() -> dict[str, str]:
+	return {
+		"WORKFLOW_EDIT_RESTRICTION": _workflow_edit_restriction_value(),
+		"SEMBLE_PREFETCH": os.environ.get("SEMBLE_PREFETCH", ""),
+		"SERENA_TOOL_HINTS": os.environ.get("SERENA_TOOL_HINTS", ""),
+	}
+
+
+def _coerce_overlay_mode_name(raw_value: Any, *, field_name: str) -> str:
+	if not isinstance(raw_value, str):
+		raise WorkflowOverlayError(f"Field '{field_name}' must be a string")
+	mode_name = raw_value.strip()
+	if not mode_name:
+		raise WorkflowOverlayError(f"Field '{field_name}' must not be empty")
+	if OVERLAY_MODE_NAME_PATTERN.fullmatch(mode_name) is None:
+		raise WorkflowOverlayError(
+			f"Field '{field_name}' contains invalid mode name '{mode_name}'"
+		)
+	return mode_name
+
+
+def _coerce_overlay_path(raw_value: Any, *, field_name: str) -> str | None:
+	if raw_value is None:
+		return None
+	if not isinstance(raw_value, str):
+		raise WorkflowOverlayError(f"Field '{field_name}' must be a string when present")
+	path_value = raw_value.strip()
+	if not path_value:
+		raise WorkflowOverlayError(f"Field '{field_name}' must not be empty when present")
+	return path_value
+
+
+def load_workflow_overlay_from_env() -> WorkflowOverlay | None:
+	raw_payload = os.environ.get("WORKFLOW_OVERLAY_PROMPT_OVERRIDES_JSON", "").strip()
+	if not raw_payload:
+		return None
+
+	try:
+		payload = json.loads(raw_payload)
+	except json.JSONDecodeError as exc:
+		raise WorkflowOverlayError(
+			f"Invalid WORKFLOW_OVERLAY_PROMPT_OVERRIDES_JSON payload: {exc.msg}"
+		) from exc
+
+	if not isinstance(payload, list):
+		raise WorkflowOverlayError("WORKFLOW_OVERLAY_PROMPT_OVERRIDES_JSON must decode to a list")
+
+	repo_root_raw = os.environ.get("WORKFLOW_OVERLAY_REPO_ROOT", "").strip()
+	if repo_root_raw:
+		repo_root = Path(repo_root_raw).resolve()
+		if not repo_root.exists():
+			raise WorkflowOverlayError(
+				f"WORKFLOW_OVERLAY_REPO_ROOT must point to an existing directory: {repo_root_raw}"
+			)
+		if not repo_root.is_dir():
+			raise WorkflowOverlayError(
+				f"WORKFLOW_OVERLAY_REPO_ROOT must point to a directory: {repo_root_raw}"
+			)
+	else:
+		repo_root = Path.cwd().resolve()
+	overrides: list[PromptOverride] = []
+	for index, item in enumerate(payload):
+		if not isinstance(item, dict):
+			raise WorkflowOverlayError(
+				f"Prompt override entry #{index + 1} must be an object"
+			)
+		unknown_keys = sorted(set(item.keys()) - {"mode", "append_path", "replace_path"})
+		if unknown_keys:
+			raise WorkflowOverlayError(
+				f"Prompt override entry #{index + 1} contains unknown keys: {', '.join(unknown_keys)}"
+			)
+		mode_name = _coerce_overlay_mode_name(item.get("mode"), field_name=f"prompt_overrides[{index}].mode")
+		append_path = _coerce_overlay_path(
+			item.get("append_path"),
+			field_name=f"prompt_overrides[{index}].append_path",
+		)
+		replace_path = _coerce_overlay_path(
+			item.get("replace_path"),
+			field_name=f"prompt_overrides[{index}].replace_path",
+		)
+		if (append_path is None) == (replace_path is None):
+			raise WorkflowOverlayError(
+				f"Prompt override entry #{index + 1} must set exactly one of append_path or replace_path"
+			)
+		overrides.append(
+			PromptOverride(
+				mode_name=mode_name,
+				append_path=append_path,
+				replace_path=replace_path,
+			)
+		)
+
+	return WorkflowOverlay(repo_root=repo_root, overrides=tuple(overrides))
+
+
+def _resolve_overlay_fragment_path(repo_root: Path, raw_path: str) -> Path:
+	fragment_path = Path(raw_path)
+	if not fragment_path.is_absolute():
+		fragment_path = (repo_root / fragment_path).resolve()
+	else:
+		fragment_path = fragment_path.resolve()
+	try:
+		fragment_path.relative_to(repo_root)
+	except ValueError as exc:
+		raise WorkflowOverlayError(
+			f"Overlay fragment path escapes repo root '{repo_root}': {raw_path}"
+		) from exc
+	if not fragment_path.is_file():
+		raise WorkflowOverlayError(f"Overlay fragment not found: {fragment_path}")
+	return fragment_path
+
+
+def _overlay_replace_denied(mode_name: str) -> bool:
+	return OVERLAY_REPLACE_DENIED_MODE_PATTERN.fullmatch(mode_name) is not None
+
+
+def apply_workflow_overlay(
+	prompt_path: Path,
+	prompt_text: str,
+	*,
+	mode_name: str,
+) -> tuple[PromptFragment, ...]:
+	overlay = load_workflow_overlay_from_env()
+	if overlay is None or not overlay.overrides:
+		return (PromptFragment(path=prompt_path, text=prompt_text),)
+
+	matches = [override for override in overlay.overrides if override.mode_name == mode_name]
+	if not matches:
+		return (PromptFragment(path=prompt_path, text=prompt_text),)
+	if len(matches) > 1:
+		raise WorkflowOverlayError(
+			f"Multiple workflow-overlay prompt overrides matched mode '{mode_name}'"
+		)
+
+	match = matches[0]
+	if match.replace_path is not None:
+		if _overlay_replace_denied(mode_name):
+			print(f"::warning::WORKFLOW_OVERLAY_REPLACE_REJECTED mode={mode_name} path={json.dumps(match.replace_path)}", file=sys.stderr)
+			return (PromptFragment(path=prompt_path, text=prompt_text),)
+		replacement_path = _resolve_overlay_fragment_path(overlay.repo_root, match.replace_path)
+		return (PromptFragment(path=replacement_path, text=load_prompt(replacement_path)),)
+
+	if match.append_path is None:
+		raise WorkflowOverlayError(
+			f"Workflow-overlay prompt override for mode '{mode_name}' is missing append/replace path"
+		)
+	append_path = _resolve_overlay_fragment_path(overlay.repo_root, match.append_path)
+	return (
+		PromptFragment(path=prompt_path, text=prompt_text),
+		PromptFragment(path=append_path, text=load_prompt(append_path)),
+	)
+
+
+def _render_inline_placeholders(line: str, values: dict[str, str]) -> str:
+	def replace_match(match: re.Match[str]) -> str:
+		placeholder_name = match.group(1)
+		if placeholder_name in LEGACY_STANDALONE_ONLY_VARS:
+			return match.group(0)
+		return values.get(placeholder_name, match.group(0))
+
+	return PLACEHOLDER_PATTERN.sub(replace_match, line)
+
+
+def render_prompt_text(prompt_text: str, values: dict[str, str]) -> str:
+	rendered_lines: list[str] = []
+	for line in prompt_text.splitlines():
+		match = STANDALONE_PLACEHOLDER_PATTERN.fullmatch(line)
+		if match is not None:
+			placeholder_name = match.group(1)
+			if placeholder_name in values:
+				rendered_lines.append(_render_replacement(values[placeholder_name]))
+				continue
+		rendered_lines.append(f"{_render_inline_placeholders(line, values)}\n")
+	return "".join(rendered_lines)
+
+
+def main(argv: list[str] | None = None) -> int:
+	args = build_parser().parse_args(argv)
+	prompt_path = Path(args.prompt_file)
+
+	try:
+		mode_name = resolve_mode_name(prompt_path, args.legacy_mode_name)
+		if args.input_already_assembled:
+			prompt_text = load_prompt(prompt_path)
+		else:
+			prompt_fragments = apply_workflow_overlay(
+				prompt_path,
+				load_prompt(prompt_path),
+				mode_name=mode_name,
+			)
+			# Reviewer/editor callers pair --input-already-assembled with
+			# --skip-syntax-validation to mark an untrusted assembled body. When this
+			# fallback assembly branch is reached, --skip-syntax-validation alone still
+			# disables include resolution. A standalone double-quoted include line in a
+			# reviewed template is the diff's own content, not a fragment to expand,
+			# and treating it as one hard-fails the whole render. The strict `{{...}}`
+			# syntax gate is skipped by the same flag a few lines below; this closes
+			# the matching gap for the `{% include %}` assembly pass.
+			prompt_text = assemble_prompt_fragments(
+				prompt_fragments,
+				resolve_includes=not args.skip_syntax_validation,
+			)
+		if not args.skip_syntax_validation:
+			validate_supported_template_syntax(prompt_text, prompt_path)
+		if args.assemble_only:
+			sys.stdout.write(prompt_text)
+			return 0
+		provided_values = parse_cli_variables(args.variables)
+		legacy_env_values = collect_legacy_env_values()
+		contract_path = discover_contract_path(prompt_path, mode_name)
+		if contract_path is not None:
+			contract = load_contract(contract_path, mode_name)
+			effective_values = dict(contract.optional_vars)
+			effective_values.update(legacy_env_values)
+			effective_values.update(provided_values)
+			validate_contract(contract, prompt_text, effective_values)
+		else:
+			effective_values = dict(legacy_env_values)
+			effective_values.update(provided_values)
+		# The two flags together mark an untrusted assembled body (see the
+		# include-resolution comment above); only on that path may a missing
+		# reference file fail open, because the placeholder may be embedded
+		# PR-diff text rather than a real template directive.
+		effective_values = hydrate_reference_placeholders(
+			prompt_text=prompt_text,
+			prompt_path=prompt_path,
+			mode_name=mode_name,
+			values=effective_values,
+			strict=not (args.input_already_assembled and args.skip_syntax_validation),
+		)
+		prompt_text = apply_identity_recall(prompt_text, prompt_path=prompt_path, mode_name=mode_name)
+		prompt_text = apply_phase_c_persona_prefix(prompt_text, prompt_path=prompt_path, mode_name=mode_name)
+		sys.stdout.write(render_prompt_text(prompt_text, effective_values))
+	except RenderPromptError as exc:
+		print(f"ERROR: {exc}", file=sys.stderr)
+		return 1
+	except Exception as exc:
+		# This branch only names the failure on one stderr line instead of a raw
+		# traceback (#9341). Exit code 1 matches an uncaught Python exception, so
+		# there is no new pass or fallback path. SystemExit/KeyboardInterrupt are
+		# not Exception subclasses and keep their previous behaviour. CR/LF in
+		# the message are escaped so a multi-line message stays on one line.
+		unexpected_exc_message = str(exc).replace("\r", "\\r").replace("\n", "\\n")
+		# Cap the message so one unexpected exception cannot emit a multi-KB log line.
+		if len(unexpected_exc_message) > 1000:
+			unexpected_exc_message = unexpected_exc_message[:1000] + "...[truncated]"
+		print(
+			f"ERROR: render_prompt unexpected {type(exc).__name__}: {unexpected_exc_message} (prompt={prompt_path})",
+			file=sys.stderr,
+		)
+		return 1
+
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

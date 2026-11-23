@@ -1,0 +1,10 @@
+FILE_PATH: /tmp/review_override.txt
+BYTES: 100
+SHA256: override
+CONTENT_START
+File: src/override.py
+Line or code reference: line 12
+Problem: Catastrophic mismatch in authorization branch.
+Why it fails at runtime: Incorrect branch chosen during validation.
+ISSUE_CONFIDENCE: 2
+CONTENT_END

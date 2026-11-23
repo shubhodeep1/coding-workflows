@@ -1,0 +1,17 @@
+{
+  "name": "missing_branch_fails",
+  "issues": {
+    "101": {
+      "body": "Child task body\n\n**Integration branch:** `orchestrator/project-missing`\n"
+    },
+    "1047": {
+      "body": "## Project: Tracking\n**Integration branch:** `orchestrator/project-tracking`\n"
+    }
+  },
+  "branch_exists": {
+    "orchestrator/project-missing": false,
+    "orchestrator/project-tracking": true
+  },
+  "expected_stdout": "",
+  "expected_exit_code": 1
+}

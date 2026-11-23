@@ -1,0 +1,554 @@
+---
+name: Forward-merge stable to main
+
+# After a bug fix lands on `stable` (the long-lived branch that backs the
+# moving `stable` git tag), forward-merge `stable` into `main` so the same
+# fix is also present on `main`. Without this, the next stable-from-main
+# release would re-introduce bugs that were already fixed on `stable`.
+#
+# Behaviour:
+#   - If `stable` has no commits ahead of `main`, exit 0 (no-op).
+#   - If the merge is clean, push directly to `main`.
+#   - If the push is rejected (branch protection) OR the merge has
+#     conflicts, open a PR for manual resolution. The PR is the audit
+#     trail and the safety net: as long as it exists, the fix can't be
+#     silently lost.
+#
+# Trigger: push to `stable` and manual dispatch.
+
+"on":
+  push:
+    branches: [stable]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  # actions: write lets the "Dispatch AI review for the fallback PR" step
+  # below start internal-review.yml via `gh workflow run` (workflow_dispatch
+  # is exempt from the GITHUB_TOKEN no-trigger rule). It is a superset of
+  # actions: read, so the hard-failure TG alert step's failing-step lookup
+  # against the Actions Jobs API still works when GH_PAT is unset and we
+  # fall back to github.token.
+  actions: write
+
+concurrency:
+  group: forward-merge-stable-to-main
+  cancel-in-progress: false
+
+jobs:
+  forward-merge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Configure git
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Check whether forward-merge is needed
+        id: check
+        run: |
+          set -euo pipefail
+          # Bounded retry on `git fetch` so a transient transport/auth
+          # blip can't drop the bug-fix propagation cycle. Stable→main
+          # propagation is the safety net for stable-only patches; if
+          # this workflow silently fails on a network flake, the next
+          # main-source release re-introduces already-fixed bugs.
+          fetch_attempt=1
+          while [ "$fetch_attempt" -le 3 ]; do
+            if git fetch origin stable main 2>/tmp/_git_fetch_err; then
+              break
+            fi
+            if [ "$fetch_attempt" -eq 3 ]; then
+              echo "::error::Failed to fetch origin/stable + origin/main after 3 attempts"
+              cat /tmp/_git_fetch_err >&2 2>/dev/null || true
+              exit 1
+            fi
+            backoff=$(( 2 ** fetch_attempt ))
+            echo "::warning::git fetch failed (attempt ${fetch_attempt}/3), retrying in ${backoff}s…"
+            cat /tmp/_git_fetch_err >&2 2>/dev/null || true
+            sleep "${backoff}"
+            fetch_attempt=$((fetch_attempt + 1))
+          done
+
+          # Compute ahead-count against `origin/main`, not local `main`.
+          # The checkout step pinned local main to whatever it was at
+          # workflow start; if main advanced concurrently between
+          # checkout and now, ahead-count off local main would be
+          # stale. origin/main was just refreshed by the fetch above.
+          AHEAD=$(git rev-list --count origin/main..origin/stable)
+          echo "ahead=${AHEAD}" >> "$GITHUB_OUTPUT"
+          if [ "${AHEAD}" = "0" ]; then
+            echo "stable is fully merged into main — nothing to do"
+          else
+            echo "stable is ${AHEAD} commit(s) ahead of main"
+          fi
+
+      - name: Attempt direct merge into main
+        id: direct
+        if: steps.check.outputs.ahead != '0'
+        run: |
+          set -euo pipefail
+          MSG="chore: forward-merge stable into main
+
+          Auto-merged by forward-merge-stable-to-main.yml so that
+          bug fixes on the stable branch are also present on main.
+          Source SHA: ${GITHUB_SHA}"
+
+          # Reset local main to origin/main right before merging.
+          # The checkout left local main at workflow-start state; if
+          # main advanced concurrently, merging on stale main would
+          # produce a non-fast-forward push that wastes a fallback PR
+          # for a race that a fresh merge would resolve.
+          # Bounded retry mirrors the check-step fetch so a transient
+          # transport/auth blip here can't drop the propagation cycle
+          # either — both fetches are equally resilient.
+          fetch_attempt=1
+          while [ "$fetch_attempt" -le 3 ]; do
+            if git fetch origin stable main 2>/tmp/_git_fetch_err; then
+              break
+            fi
+            if [ "$fetch_attempt" -eq 3 ]; then
+              echo "::error::Failed to refresh origin/stable + origin/main after 3 attempts"
+              cat /tmp/_git_fetch_err >&2 2>/dev/null || true
+              exit 1
+            fi
+            backoff=$(( 2 ** fetch_attempt ))
+            echo "::warning::git fetch failed (attempt ${fetch_attempt}/3), retrying in ${backoff}s…"
+            cat /tmp/_git_fetch_err >&2 2>/dev/null || true
+            sleep "${backoff}"
+            fetch_attempt=$((fetch_attempt + 1))
+          done
+          git checkout -B main origin/main
+
+          if ! git merge --no-ff origin/stable -m "${MSG}"; then
+            echo "merge_status=conflict" >> "$GITHUB_OUTPUT"
+            # Capture the conflicting file list BEFORE aborting so the
+            # fallback PR body can surface which files need manual
+            # resolution. `--diff-filter=U` lists only unmerged paths
+            # (the conflict-hunk files). `tr` collapses to a single
+            # space-separated line so it survives the GITHUB_OUTPUT
+            # single-line constraint.
+            CONFLICT_FILES=$(git diff --name-only --diff-filter=U 2>/dev/null | tr '\n' ' ' | sed 's/ *$//')
+            echo "conflict_files=${CONFLICT_FILES}" >> "$GITHUB_OUTPUT"
+            git merge --abort || true
+            exit 0
+          fi
+
+          # Push directly with bounded retry. Distinguish three failure
+          # modes by inspecting stderr:
+          #   - branch-protection rejection → real push_rejected,
+          #     fall through to PR fallback (operator review needed).
+          #   - non-fast-forward (concurrent main push raced us) → the
+          #     local merge is now stale; classify as push_rejected so
+          #     the fallback PR opens against fresh main rather than
+          #     looping here. The PR will surface what diverged.
+          #   - transient transport/auth/5xx → retry with backoff.
+          # If branch protection rejects the push, keep the local
+          # merge commit on HEAD so the PR-fallback step can push it
+          # to a dedicated branch — resetting here would discard the
+          # merge and the fallback PR would be a no-op.
+          push_attempt=1
+          while [ "$push_attempt" -le 3 ]; do
+            set +e
+            git push origin main 2>/tmp/_git_push_err
+            push_rc=$?
+            set -e
+            if [ "$push_rc" -eq 0 ]; then
+              echo "merge_status=pushed" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if grep -qiE 'protected branch|non-fast-forward|\[rejected\]|! \[remote rejected\]' /tmp/_git_push_err 2>/dev/null; then
+              cat /tmp/_git_push_err >&2 2>/dev/null || true
+              echo "merge_status=push_rejected" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            cat /tmp/_git_push_err >&2 2>/dev/null || true
+            if [ "$push_attempt" -eq 3 ]; then
+              # Persistent non-classifiable failure — fall through to
+              # PR fallback rather than hard-failing the run, so the
+              # bug fix can still propagate via manual review.
+              echo "::warning::git push failed 3 times with non-classifiable error; falling back to PR"
+              echo "merge_status=push_rejected" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            backoff=$(( 2 ** push_attempt ))
+            echo "::warning::git push failed (attempt ${push_attempt}/3), retrying in ${backoff}s…"
+            sleep "${backoff}"
+            push_attempt=$((push_attempt + 1))
+          done
+
+      - name: Verify forward-merge landed on main
+        if: steps.direct.outputs.merge_status == 'pushed'
+        run: |
+          set -euo pipefail
+          # Defensive post-condition check. After a successful direct
+          # push, origin/main MUST contain origin/stable — otherwise
+          # the bug fix wasn't actually propagated and the run looks
+          # successful while consumers of main remain unfixed. Refresh
+          # origin from the remote (don't trust local) and assert.
+          # Bounded retry on the verification fetch — propagation has
+          # already landed (the direct push succeeded); a transient
+          # transport blip on the verification fetch must not be
+          # reported as a propagation failure.
+          fetch_attempt=1
+          while [ "$fetch_attempt" -le 3 ]; do
+            if git fetch origin main stable 2>/tmp/_git_fetch_err; then
+              break
+            fi
+            if [ "$fetch_attempt" -eq 3 ]; then
+              echo "::error::Verification fetch failed after 3 attempts (push already succeeded — re-run when transport recovers)"
+              cat /tmp/_git_fetch_err >&2 2>/dev/null || true
+              exit 1
+            fi
+            backoff=$(( 2 ** fetch_attempt ))
+            echo "::warning::verification fetch failed (attempt ${fetch_attempt}/3), retrying in ${backoff}s…"
+            cat /tmp/_git_fetch_err >&2 2>/dev/null || true
+            sleep "${backoff}"
+            fetch_attempt=$((fetch_attempt + 1))
+          done
+          if ! git merge-base --is-ancestor origin/stable origin/main; then
+            # Use the just-fetched local origin/* refs for diagnostics
+            # rather than a fresh ls-remote — we already proved the
+            # remote is reachable in the fetch above, and rev-parse on
+            # local refs can't transiently fail and emit empty SHAs.
+            REMOTE_MAIN=$(git rev-parse origin/main 2>/dev/null || echo "?")
+            REMOTE_STABLE=$(git rev-parse origin/stable 2>/dev/null || echo "?")
+            echo "::error::Push reported success but origin/main (${REMOTE_MAIN}) does not contain origin/stable (${REMOTE_STABLE}). Bug fixes may not be propagated."
+            exit 1
+          fi
+          echo "Verified: origin/main contains origin/stable — propagation complete"
+
+      - name: Fallback — open PR for manual merge
+        id: fallback
+        if: >-
+          steps.check.outputs.ahead != '0' &&
+          (steps.direct.outputs.merge_status == 'conflict' ||
+           steps.direct.outputs.merge_status == 'push_rejected')
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          MERGE_STATUS: ${{ steps.direct.outputs.merge_status }}
+          CONFLICT_FILES: ${{ steps.direct.outputs.conflict_files }}
+        run: |
+          set -euo pipefail
+          # Include GITHUB_RUN_ATTEMPT so a workflow re-run uses a fresh
+          # branch name — without it, the second `git push origin
+          # <branch>` would fail (non-fast-forward or already-exists)
+          # and abort before the PR is opened.
+          resolve_existing_pr_number() {
+            # `gh pr create` only returns a machine-readable URL on the success
+            # path. The benign "already exists" branch still needs the open PR
+            # number for the follow-up review dispatch, so look it up by head/base.
+            gh pr list --head "${BRANCH}" --base main --state open \
+              --json number --jq '.[0].number // empty' 2>/dev/null || true
+          }
+
+          BRANCH="auto/forward-merge-stable-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          # Exported for the "Dispatch AI review for the fallback PR" step,
+          # which logs it. That step dispatches from the default branch
+          # (issue #4701), and internal-review.yml names the run
+          # "Internal: AI Review & Autofix [pr:<N>]", which is how the
+          # orchestrator poller's _has_active_autofix_run and
+          # review_autofix_sweep.yml's snapshot detect it. Before run names,
+          # a default-branch resolver run was invisible to both, and they
+          # duplicate-dispatched against it every cycle (PR #3895 incident:
+          # 10 duplicate dispatches and 6+ duplicate Telegram conflict
+          # warnings while the real resolver ran on main's ref).
+          echo "branch=${BRANCH}" >> "$GITHUB_OUTPUT"
+
+          # Reuse an open fallback PR that already carries this stable tip
+          # (PRs #8169 and #8170). A release pushes to stable, which starts
+          # this workflow, and test-and-mark-stable.yml's sync-to-main job
+          # then dispatches it again for the same commit. The concurrency
+          # group serializes the two runs, but each one opened its own PR
+          # from its own run-id branch. Both PRs resolved the same conflict
+          # separately, so once the first merged, the second had two merge
+          # bases with main, conflicted on GitHub and never merged.
+          # API budget (CLAUDE.md §15): one paginated REST list of open PRs
+          # into main (one call per 100 PRs), issued only on this fallback
+          # path. Only same-repository heads count, so a fork PR whose ref
+          # name matches a leftover origin branch cannot suppress the new
+          # PR. The calls below cannot answer
+          # it: `gh pr create` runs after the branch push, and
+          # resolve_existing_pr_number only looks up this run's own branch.
+          # Fail open: if the list or a branch fetch fails, open a new PR as
+          # before, because a missing PR would strand the stable fix.
+          STABLE_TIP="$(git rev-parse origin/stable)"
+          EXISTING_FALLBACK_PRS=""
+          if ! EXISTING_FALLBACK_PRS="$(gh api "repos/${GITHUB_REPOSITORY}/pulls?state=open&base=main&per_page=100" --paginate \
+            --jq '.[] | select((.head.repo.full_name // "") == env.GITHUB_REPOSITORY and (.head.ref | startswith("auto/forward-merge-stable-"))) | "\(.number) \(.head.ref)"' 2>/dev/null)"; then
+            EXISTING_FALLBACK_PRS=""
+            echo "::warning::Could not list open forward-merge PRs; opening a new fallback PR without the duplicate check."
+          fi
+          while read -r EXISTING_PR_NUMBER EXISTING_PR_REF; do
+            [ -n "${EXISTING_PR_REF:-}" ] || continue
+            if git fetch --no-tags origin "+refs/heads/${EXISTING_PR_REF}:refs/remotes/origin/${EXISTING_PR_REF}" 2>/dev/null \
+              && git merge-base --is-ancestor "${STABLE_TIP}" "refs/remotes/origin/${EXISTING_PR_REF}"; then
+              echo "FORWARD_MERGE_FALLBACK outcome=reused pr=${EXISTING_PR_NUMBER} head_ref=${EXISTING_PR_REF} stable=${STABLE_TIP:0:12}"
+              echo "::notice::Open forward-merge PR #${EXISTING_PR_NUMBER} already carries stable ${STABLE_TIP:0:12}; not opening a duplicate."
+              echo "reused_pr_number=${EXISTING_PR_NUMBER}" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done <<< "${EXISTING_FALLBACK_PRS}"
+          echo "FORWARD_MERGE_FALLBACK outcome=open_new stable=${STABLE_TIP:0:12}"
+
+          # The merge-strategy warning is identical on both paths and
+          # MUST appear at the top of the PR body. Squash-merging or
+          # rebase-merging this PR drops `stable`'s commits from `main`'s
+          # ancestry — the content lands but `git merge-base
+          # --is-ancestor stable origin/main` returns false, which is
+          # exactly what promote-main-to-stable.yml's pre-flight check
+          # refuses on. The fix is to merge with "Create a merge
+          # commit" so the 2-parent merge commit preserves ancestry.
+          MERGE_STRATEGY_WARNING="> [!CAUTION]
+          > **DO NOT use \"Squash and merge\" or \"Rebase and merge\" on this PR.**
+          > Use **\"Create a merge commit\"** so \`stable\`'s commits remain in \`main\`'s ancestry.
+          > Squashing strips ancestry — \`promote-main-to-stable.yml\`'s pre-flight
+          > \`git merge-base --is-ancestor HEAD origin/main\` check will then refuse
+          > the next promote run, even though the file content has been forwarded."
+
+          if [ "${MERGE_STATUS}" = "conflict" ]; then
+            # Conflict path: HEAD is back at origin/main after `merge
+            # --abort`, so push a branch rooted at origin/stable. With
+            # base=main, head=BRANCH, GitHub will surface the conflicts
+            # for manual resolution and the PR will contain the ahead
+            # commits from stable.
+            git push origin "refs/remotes/origin/stable:refs/heads/${BRANCH}"
+            CONFLICT_LIST="${CONFLICT_FILES:-(none captured)}"
+            BODY="${MERGE_STRATEGY_WARNING}
+
+          Automated forward-merge of \`stable\` into \`main\` failed due to merge conflicts. Resolve the conflicts and merge this PR so the bug fix on \`stable\` is also present on \`main\`.
+
+          Conflicting files (from the aborted merge attempt): \`${CONFLICT_LIST}\`
+
+          Source SHA: \`${GITHUB_SHA}\`
+          Triggered by: forward-merge-stable-to-main.yml"
+          else
+            # push_rejected path: HEAD already has the local merge
+            # commit (we did NOT reset). Push it to a dedicated branch
+            # so the PR contains the merge that branch protection
+            # rejected on `main`.
+            git push origin "HEAD:refs/heads/${BRANCH}"
+            BODY="${MERGE_STRATEGY_WARNING}
+
+          Automated forward-merge of \`stable\` into \`main\` could not push directly (branch protection). Merge this PR so the bug fix on \`stable\` is also present on \`main\`.
+
+          Source SHA: \`${GITHUB_SHA}\`
+          Triggered by: forward-merge-stable-to-main.yml"
+          fi
+
+          # The fallback PR is the safety net for stable→main propagation
+          # — silently treating any `gh pr create` failure as a benign
+          # warning could lose the bug fix. Only the "PR already exists"
+          # case is genuinely benign (re-run / concurrent push); every
+          # other failure (auth, scope, API outage) must hard-fail so
+          # the run is retryable and the operator notices.
+          set +e
+          PR_OUTPUT=$(gh pr create \
+            --base main \
+            --head "${BRANCH}" \
+            --title "chore: forward-merge stable into main" \
+            --body "${BODY}" 2>&1)
+          PR_RC=$?
+          set -e
+          if [ "${PR_RC}" -eq 0 ]; then
+            echo "${PR_OUTPUT}"
+            # Capture the PR URL so the follow-up TG alert step can
+            # surface it. `gh pr create` prints the URL on its own
+            # line on success; grep for the first github.com URL to
+            # be tolerant of any preceding banner output.
+            PR_URL=$(printf '%s' "${PR_OUTPUT}" | grep -oE 'https://github\.com/[^[:space:]]+' | head -n1 || true)
+            echo "pr_url=${PR_URL}" >> "$GITHUB_OUTPUT"
+            echo "reason=${MERGE_STATUS}" >> "$GITHUB_OUTPUT"
+            # Trailing path segment of the PR URL is its number — consumed by
+            # the "Dispatch AI review for the fallback PR" step below. A PR
+            # opened with GITHUB_TOKEN does not emit the pull_request event
+            # that would otherwise auto-start internal-review.yml's reviewer
+            # and conflict-resolver, so it must be dispatched explicitly.
+            PR_NUMBER=$(printf '%s' "${PR_URL}" | grep -oE '[0-9]+$' || true)
+            echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+          elif printf '%s' "${PR_OUTPUT}" | grep -qiE 'pull request for branch .* already exists'; then
+            # Anchored to gh CLI's canonical phrasing: "a pull request
+            # for branch <name> into branch <base> already exists". The
+            # earlier looser pattern could match unrelated errors that
+            # happened to mention "pull request" or "already exists".
+            # Don't re-alert: the original run that opened the PR
+            # already alerted, and a re-run shouldn't spam TG.
+            echo "::warning::PR already exists for ${BRANCH} — treating as benign"
+            echo "${PR_OUTPUT}"
+            PR_NUMBER="$(resolve_existing_pr_number)"
+            if [ -n "${PR_NUMBER}" ]; then
+              echo "pr_number=${PR_NUMBER}" >> "$GITHUB_OUTPUT"
+            else
+              echo "::warning::Could not resolve the existing fallback PR number for ${BRANCH}; skipping immediate review dispatch."
+            fi
+          else
+            echo "::error::Failed to create fallback PR for ${BRANCH} (rc=${PR_RC})"
+            echo "${PR_OUTPUT}" >&2
+            exit "${PR_RC}"
+          fi
+
+      - name: Telegram alert — fallback PR opened
+        if: steps.fallback.outputs.pr_url != ''
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          PR_URL: ${{ steps.fallback.outputs.pr_url }}
+          REASON: ${{ steps.fallback.outputs.reason }}
+        shell: bash
+        run: |
+          # Forward-merge is the safety net for stable→main propagation.
+          # When it falls back to a manual PR (conflict or branch
+          # protection), the bug fix is stuck on stable until a human
+          # resolves the PR. Surface that on TG so it doesn't sit
+          # unnoticed in GitHub email.
+          set -uo pipefail
+          if [ ! -f scripts/tg_helpers.sh ]; then
+            echo "::warning::tg_helpers.sh not found; skipping fallback PR TG alert"
+            exit 0
+          fi
+          # shellcheck disable=SC1091
+          source scripts/tg_helpers.sh
+
+          run_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          case "${REASON}" in
+            conflict)      reason_text="merge conflict" ;;
+            push_rejected) reason_text="branch protection / push rejected" ;;
+            *)             reason_text="${REASON}" ;;
+          esac
+
+          msg="forward-merge stable→main opened a fallback PR (${reason_text})"
+          msg+=$'\n'"PR: ${PR_URL}"
+          msg+=$'\n'"Run: ${run_url}"
+          msg+=$'\n'"Bug fixes on stable will not reach main until this PR is merged."
+
+          tg_send_msg "${msg}" "ERROR" >/dev/null || true
+
+      - name: Dispatch AI review for the fallback PR
+        # A fallback PR opened with GITHUB_TOKEN does not emit the
+        # pull_request event, so internal-review.yml's reviewer and
+        # conflict-resolver never auto-start. Dispatch it explicitly
+        # (workflow_dispatch is exempt from the GITHUB_TOKEN no-trigger
+        # rule) so the conflict resolver runs promptly instead of
+        # waiting for the orchestrator poller to discover the PR.
+        # Non-fatal: the PR is the durable safety net, and the poller
+        # remains the fallback if this dispatch fails.
+        if: steps.fallback.outputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          PR_NUMBER: ${{ steps.fallback.outputs.pr_number }}
+          HEAD_BRANCH: ${{ steps.fallback.outputs.branch }}
+          ALLOW_WORKFLOW_EDITS: ${{ contains(' 1 true yes on ', format(' {0} ', vars.ALLOW_WORKFLOW_EDITS || 'true')) && 'true' || 'false' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Dispatch from the default branch, never from the fallback
+          # branch (security, issue #4701). The branch is cut by this
+          # workflow from stable and main, but any writer can push to it
+          # between the fallback push and this dispatch, and a dispatch at
+          # that branch would run its copy of internal-review.yml
+          # with secrets: inherit (the finding issue #4618 fixed in the
+          # sweep). review_autofix.yml checks out the PR head from the PR's
+          # metadata, and the default branch's internal-review.yml names
+          # the run for its PR, so the poller and sweep active-run guards
+          # still see it. Only a validated PR number is passed.
+          if ! [[ "${PR_NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::warning::Invalid fallback PR number '${PR_NUMBER}'; not dispatching internal-review.yml. The orchestrator poller will pick the PR up on its next cycle."
+            exit 0
+          fi
+          dispatch_args=(-f "pr_number=${PR_NUMBER}"
+            -f "allow_workflow_edits=${ALLOW_WORKFLOW_EDITS}")
+          if gh workflow run internal-review.yml "${dispatch_args[@]}"; then
+            echo "Dispatched internal-review.yml for PR #${PR_NUMBER} from the default branch (head=${HEAD_BRANCH:-<unknown>})"
+          else
+            echo "::warning::Failed to dispatch internal-review.yml for PR #${PR_NUMBER}; the orchestrator poller will pick the PR up on its next cycle."
+          fi
+
+      - name: Summary
+        if: always()
+        run: |
+          set -euo pipefail
+          AHEAD="${{ steps.check.outputs.ahead }}"
+          STATUS="${{ steps.direct.outputs.merge_status }}"
+          REUSED_PR="${{ steps.fallback.outputs.reused_pr_number }}"
+          if [ "${AHEAD}" = "0" ]; then
+            echo "Result: no-op (stable already merged into main)"
+          elif [ -n "${REUSED_PR}" ]; then
+            echo "Result: open fallback PR #${REUSED_PR} already carries this stable commit; no new PR"
+          elif [ "${STATUS}" = "pushed" ]; then
+            echo "Result: forward-merged ${AHEAD} commit(s) directly to main"
+          elif [ "${STATUS}" = "conflict" ]; then
+            echo "Result: PR opened for manual conflict resolution"
+          elif [ "${STATUS}" = "push_rejected" ]; then
+            echo "Result: PR opened (direct push rejected)"
+          else
+            echo "Result: unknown — see job logs"
+          fi
+
+      - name: Telegram alert — hard failure
+        if: failure()
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+        shell: bash
+        run: |
+          # Catch-all for hard failures (transport retries exhausted,
+          # post-push verification mismatch, fallback PR creation
+          # failure, etc.). Without this, a red run only surfaces via
+          # GitHub's default email — and forward-merge silently failing
+          # means stable bug fixes don't reach main, which the next
+          # main-source release would then re-introduce. Sent at DEBUG:
+          # the heal intake files an issue for this failure (see below).
+          # Best-effort: missing tg_helpers.sh (e.g. an early checkout
+          # failure) degrades to a warning rather than masking the
+          # original failure.
+          set -uo pipefail
+          if [ ! -f scripts/tg_helpers.sh ]; then
+            echo "::warning::tg_helpers.sh not found; skipping hard-failure TG alert"
+            exit 0
+          fi
+          # shellcheck disable=SC1091
+          source scripts/tg_helpers.sh
+
+          run_url="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          workflow_name="${GITHUB_WORKFLOW:-forward-merge-stable-to-main}"
+
+          # Resolve the first failing step name via the GitHub API.
+          # Fail open: if the lookup fails or returns nothing, still
+          # send the alert without the step name rather than dropping
+          # the alert.
+          failing_step=""
+          if [ -n "${GH_TOKEN:-}" ]; then
+            jobs_json="$(curl -fsSL \
+              -H "Authorization: token ${GH_TOKEN}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "${GITHUB_API_URL:-https://api.github.com}/repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT:-1}/jobs" 2>/dev/null || echo '')"
+            if [ -n "${jobs_json}" ]; then
+              failing_step="$(printf '%s' "${jobs_json}" \
+                | jq -r '.jobs[]?.steps[]? | select(.conclusion == "failure") | .name' 2>/dev/null \
+                | head -n1)"
+            fi
+          fi
+
+          msg="forward-merge stable→main hard failure: ${workflow_name}"
+          if [ -n "${failing_step}" ]; then
+            msg+=$'\n'"Failing step: ${failing_step}"
+          fi
+          msg+=$'\n'"Run: ${run_url}"
+          msg+=$'\n'"Bug fixes on stable may not propagate to main until resolved."
+
+          # DEBUG: Workflow Failure Heal Intake listens for this workflow's
+          # failures and files a heal issue; its escalations page a human.
+          tg_send_msg "${msg}" "DEBUG" >/dev/null || true

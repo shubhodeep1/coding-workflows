@@ -1,0 +1,14 @@
+FILE_PATH: /tmp/review_reviewer_alpha.txt
+CONTENT_START
+reviewer_alpha
+src/module.py:2 issue from alpha
+file: src/module.py
+line: 4
+src/module.py:9 uncovered issue from alpha
+CONTENT_END
+
+FILE_PATH: /tmp/review_reviewer_beta.txt
+CONTENT_START
+reviewer_beta
+src/module.py:3 supporting concern
+CONTENT_END

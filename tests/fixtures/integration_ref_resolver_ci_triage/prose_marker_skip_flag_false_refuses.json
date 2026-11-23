@@ -1,0 +1,46 @@
+{
+  "name": "prose_marker_skip_flag_false_refuses",
+  "env": {
+    "CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED": "true",
+    "CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED": "false"
+  },
+  "issues": {
+    "101": {
+      "body": "## Feature request: dedupe check-triage issues by fingerprint\n\nTriage issues open with a fingerprint header such as\n`<!-- check-failure-triage:fp=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa -->` and a lineage marker like\n`<!-- check-failure-triage:pr=6564 -->`.\n\nPlease reuse the fingerprint when the same check fails again.\n",
+      "labels": [
+        {
+          "name": "enhancement"
+        }
+      ],
+      "author_association": "OWNER",
+      "user": {
+        "login": "owner"
+      }
+    }
+  },
+  "pulls": {
+    "6564": {
+      "number": 6564,
+      "state": "open",
+      "merged": false,
+      "head": {
+        "ref": "ai/issue-6564",
+        "repo": {
+          "full_name": "owner/repo"
+        }
+      },
+      "base": {
+        "ref": "main",
+        "repo": {
+          "full_name": "owner/repo"
+        }
+      }
+    }
+  },
+  "branch_exists": {
+    "ai/issue-6564": true
+  },
+  "expected_stdout": "",
+  "expected_exit_code": 3,
+  "expected_error_reason": "label_missing"
+}

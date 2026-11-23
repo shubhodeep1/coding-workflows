@@ -1,0 +1,57 @@
+name: "Internal: AI Validate"
+# The [tracking:N] marker lets the orchestrator poller attribute a run to its
+# project (scripts/orchestrate_poll_process.sh get_last_validation_run_info).
+run-name: "${{ format('Internal: AI Validate [tracking:{0}]', inputs.tracking_issue || '0') }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      tracking_issue:
+        description: Tracking issue number
+        required: false
+        type: string
+        default: "0"
+      pr_number:
+        description: Review PR number for restoring cached behavioural smoke artifacts
+        required: false
+        type: string
+        default: "0"
+      compose_file:
+        description: Compose file path fallback
+        required: false
+        type: string
+        default: "docker-compose.yml"
+      validation_timeout:
+        description: Validation idle timeout in minutes (killed after this long with no output)
+        required: false
+        type: string
+        default: "15"
+      alert_msg_level:
+        description: Minimum Telegram alert level for this run (empty honours vars.ALERT_MSG_LEVEL; SILENT suppresses all)
+        required: false
+        type: string
+        default: ""
+      target_ref:
+        description: Branch to validate instead of the default branch (empty = default branch or the tracking issue's integration branch)
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+  # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
+  id-token: write
+
+jobs:
+  validate:
+    uses: shubhodeep1/coding-workflows/.github/workflows/validate.yml@promote-candidate
+    with:
+      tracking_issue: ${{ inputs.tracking_issue || '0' }}
+      pr_number: ${{ inputs.pr_number || '0' }}
+      compose_file: ${{ inputs.compose_file || 'docker-compose.yml' }}
+      validation_timeout: ${{ inputs.validation_timeout || '15' }}
+      alert_msg_level: ${{ inputs.alert_msg_level || '' }}
+      target_ref: ${{ inputs.target_ref || '' }}
+    secrets: inherit

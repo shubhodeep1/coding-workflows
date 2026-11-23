@@ -1,0 +1,46 @@
+# IMPORTANT: This file is managed by coding-workflows and will be overwritten
+# by the update process. Do not add custom logic here.
+#
+# Fails any pull request or push that changes a coding-workflows managed
+# wrapper (.github/workflows/ai-*.yml and the other files the sync installs,
+# including ai-update-workflows.yml and this file) unless every managed
+# wrapper equals the upstream template rendered at the signed release this
+# file pins. The sync's own update pull requests and the daily restore pull
+# requests pass; hand edits do not.
+#
+# pull_request_target runs this file from the base branch, so a pull request
+# cannot change the check that judges it. Nothing from the pull request is
+# executed: its files are read as data. The verdict is the commit status
+# coding-workflows/workflow-integrity on the pull request head, which the
+# default-branch ruleset requires.
+#
+# The push run starts only for a push that changes a file under
+# .github/workflows/. Every managed wrapper is a top-level file there, and a
+# push to an existing branch that changes none of them ended at
+# no_managed_wrapper_changed without posting anything, after taking a runner.
+# A push that creates a branch, or whose old tip is gone, is compared with the
+# default branch, so its skipped run could have reported a stale wrapper; the
+# pull_request_target run still judges that branch. It is not path-filtered:
+# the ruleset requires its status on every pull request head. GitHub
+# evaluates a path filter on at most the first 300 changed files of a push
+# and always runs when it cannot compute the diff.
+name: AI Workflow Integrity
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: ['**']
+    paths: ['.github/workflows/**']
+permissions:
+  contents: read
+  statuses: write
+concurrency:
+  group: ai-workflow-integrity-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  integrity:
+    uses: shubhodeep1/coding-workflows/.github/workflows/workflow_integrity.yml@stable
+    # Least privilege: forward only the secrets the reusable workflow
+    # declares, never inherit them all (consumer repos hold other secrets).
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}

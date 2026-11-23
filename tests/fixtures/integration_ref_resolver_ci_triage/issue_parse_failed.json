@@ -1,0 +1,15 @@
+{
+  "name": "issue_parse_failed",
+  "env": {
+    "CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED": "true"
+  },
+  "issues": {
+    "101": {
+      "raw_response": "not json"
+    }
+  },
+  "branch_exists": {},
+  "expected_stdout": "",
+  "expected_exit_code": 3,
+  "expected_error_reason": "issue_parse_failed"
+}

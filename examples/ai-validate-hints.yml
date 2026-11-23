@@ -1,0 +1,41 @@
+# Optional `.ai/validate.yml` overrides for repository-specific runtime validation tuning.
+# Use only local/test values. Never place real credentials in this file.
+
+type: http-server
+entry: src/server.ts
+port: 3000
+health_check: /health
+
+timeout: 10  # minutes
+
+services:
+  - postgres:16
+  - redis:7
+
+env_overrides:
+  NODE_ENV: test
+  DATABASE_URL: postgresql://test_user:test_password@postgres:5432/app_test
+  REDIS_URL: redis://redis:6379
+  API_KEY: test_api_key_only
+
+custom_tests:
+  # Additional validation commands to run after the main test suite.
+  - npm run test:health-endpoint
+  - npm run test:error-payload-shape
+  - npm run test:webhook-signature-invalid
+
+bot_commands:
+  # For telegram-bot projects, list commands to exercise via webhook.
+  - /start
+  - /help
+
+worker_verify:
+  queue: default
+  payload:
+    type: health_check
+    message: test job
+  success_check: "job marked as processed in the jobs table"
+
+skip_tests:
+  # Optional exclusions for non-applicable checks.
+  - migration_verification

@@ -1,0 +1,1722 @@
+#!/usr/bin/env python3
+"""Claude engine: the pure decisions behind ``scripts/ai_engine.sh``.
+
+The Actions pipelines run each model role (clarify, plan, implement, the
+judges, the review write roles, …) either on the codex CLI or on the Claude
+Code CLI (``claude -p``). ``scripts/ai_engine.sh`` owns the shell side (which
+command runs, the fallback to codex); this module owns every decision it
+needs, so the shell only moves files around. It makes no network or GitHub
+API calls and never prints a token.
+
+Subcommands (inputs are files, arguments or the environment; output goes to
+stdout, diagnostics to stderr):
+
+  * ``config [--key K]`` — the normalised ``.github/ai/claude_engine.json``
+    (defaults for a missing file, unreadable JSON, or an invalid value), or
+    one top-level value of it.
+  * ``pool-health`` / ``pool-usage [--chatgpt-status JSON] [--chatgpt-reason R]
+    [--chatgpt-stale-hours H]`` — the hourly near-cap alert and the daily
+    usage report from probe records on stdin; the ChatGPT flags add the
+    ChatGPT account block (trial plan Phase 4).
+  * ``resolve --role R [--model-hint M] [--effort-hint E]`` — the engine,
+    model, effort and tool profile of one role, and where the engine came
+    from (``label:<name>``, ``var:AI_ENGINE_<R>``, ``var:AI_ENGINE`` or
+    ``default``). Labels come from ``AI_ENGINE_LABELS`` (D2), the variables
+    from the environment.
+  * ``settings --checkout DIR --out FILE [--profile P] [--allow-workflow-edits]
+    [--web-search]`` — render ``scripts/claude_settings.json.tmpl`` (the P5
+    permission policy) for one run; ``--web-search`` allows WebSearch in the
+    ``read`` profile.
+  * ``trust --workdir DIR [--home H]`` — mark DIR trusted in ``~/.claude.json``
+    (spike S10: until then the CLI ignores ``permissions.allow``).
+  * ``support-file --name config|template|guard-hook`` — the path of a trusted
+    support file, or exit 1 when it is missing.
+  * ``extract --transcript T --out O`` — write the final ``result`` text of a
+    stream-json transcript to ``O`` and print the run's usage line (the
+    ``result`` event without its text) for ``cost_audit.py``.
+  * ``classify --transcript T [--exit-code N]`` — ``success``,
+    ``auth_failed``, ``usage_limit``, ``crashed`` or ``timeout``, with a
+    reason (spike evidence S7, S15).
+  * ``inspect --transcript T`` — the start-up input tokens and every tool call
+    with its denial status, for the smoke run's context and P5 gates.
+  * ``probe-parse --account A [--exit-code N] < transcript`` — one Haiku
+    probe transcript to a usage record (spike S8).
+  * ``choose [--gate G] < probes.json`` — the usable accounts under the
+    gate, the one whose spare 7-day quota expires soonest first (ties to the
+    alphabetically first name), or why none is usable.
+  * ``chatgpt-slot --config F [--override V] [--model M] [--replaces R]`` —
+    whether the ChatGPT account review slot is on (fail closed), as one
+    ``enabled=… model=… replaces=… reasoning=… source=… reason=…`` line.
+  * ``chatgpt-classify --events T [--exit-code N] [--field F]`` — one
+    ``codex exec --json`` run of that slot: ``ok``, ``auth_rejected``,
+    ``quota_exhausted`` or ``run_failed`` (reason codes only).
+
+Exit codes: 0 success; 1 the input describes a failure (``extract`` found
+no result); 2 invalid arguments or input.
+"""
+
+from __future__ import annotations
+
+import argparse
+import datetime
+import json
+import math
+import os
+import re
+import sys
+from pathlib import Path
+from typing import Any
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+
+ENGINES: tuple[str, ...] = ("codex", "claude")
+PROFILES: tuple[str, ...] = ("write", "read")
+EFFORTS: tuple[str, ...] = ("low", "medium", "high", "xhigh", "max")
+OUTCOMES: tuple[str, ...] = ("success", "auth_failed", "usage_limit", "crashed", "timeout")
+
+ROLES: tuple[str, ...] = (
+	"CLARIFY",
+	"CLARIFY_RESPOND",
+	"PLAN",
+	"IMPLEMENT",
+	"IMPLEMENT_REPAIR",
+	"IMPLEMENT_DIAGNOSE",
+	"ORCHESTRATE",
+	"WAVE_JUDGE",
+	"STALL_JUDGE",
+	"INTEGRATION_JUDGE",
+	"SECURITY_JUDGE",
+	"UNBLOCK_JUDGE",
+	"REVIEW_EDITOR",
+	"REVIEW_CONSOLIDATOR",
+	"CONFLICT_RESOLVER",
+	"RB_JUDGE",
+	"VALIDATE",
+	"VALIDATE_SELF_HEAL",
+	"VALIDATION_REFRESH",
+	"SECURITY_AUDIT",
+	"CHECK_TRIAGE",
+	"WORKFLOW_HEAL",
+	"ACTIVATION_VERIFY",
+	"LOG_ANALYSIS",
+	"LOG_AUDIT",
+	"LOG_SUMMARY",
+	"RETRO",
+	"MATERIALITY",
+	"SUMMARISER",
+	"BEHAVIOURAL_SMOKE",
+	"PANEL_REVIEWER",
+	"CS_INVESTIGATE",
+)
+UTILITY_ROLES: tuple[str, ...] = ("LOG_SUMMARY", "RETRO", "MATERIALITY", "SUMMARISER", "BEHAVIOURAL_SMOKE")
+# Roles whose codex call runs `--sandbox read-only` today keep a read-only
+# tool set on Claude; every other role edits its checkout.
+READ_ROLES: tuple[str, ...] = ("CLARIFY", "CLARIFY_RESPOND", "SECURITY_JUDGE", "SECURITY_AUDIT", "WORKFLOW_HEAL", "UNBLOCK_JUDGE", "PANEL_REVIEWER", "CS_INVESTIGATE")
+
+LABEL_CODEX = "ai:codex"
+LABEL_ENGINE_CLAUDE = "ai:engine-claude"
+# Claude-fixer mode (plan Phase 5c, Q19/Q35): CLAUDE_FIXER_ENABLED=false keeps
+# these review write roles off Claude, ahead of the labels and AI_ENGINE.
+CLAUDE_FIXER_ROLES: tuple[str, ...] = ("REVIEW_EDITOR", "REVIEW_CONSOLIDATOR", "CONFLICT_RESOLVER", "RB_JUDGE")
+CLAUDE_FIXER_SWITCH = "CLAUDE_FIXER_ENABLED"
+
+MODEL_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,79}$")
+CLI_VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+# Only the deployed broker may receive an Actions OIDC token; loopback is for local tests.
+URL_RE = re.compile(
+	r"^(?:https://claude-pool-broker\.shubhodeep\.workers\.dev|http://(?:127\.0\.0\.1|localhost)(?::[0-9]{1,5})?)/v1/pool$"
+)
+AUDIENCE_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+
+
+# The Claude review-panel slot reviews on Sonnet 5.5; its slug
+# (anthropic/claude-sonnet-5.5) is also the model hint, so this is the
+# fallback when no hint is passed. The review consolidator merges and ranks
+# the panel's findings on Sonnet 5.5 too; its OpenCode model hint
+# (REVIEW_CONSOLIDATOR_MODEL) is not a claude- slug, so this default applies.
+SONNET_DEFAULT_ROLES: tuple[str, ...] = ("PANEL_REVIEWER", "REVIEW_CONSOLIDATOR")
+
+
+def _role_default(role: str) -> dict[str, str]:
+	return {
+		"engine": "codex",
+		"claude_model": "claude-sonnet-5-5" if role in UTILITY_ROLES or role in SONNET_DEFAULT_ROLES else "claude-opus-5-5",
+		"profile": "read" if role in READ_ROLES else "write",
+	}
+
+
+DEFAULT_CONFIG: dict[str, Any] = {
+	"cli_version": "2.1.289",
+	"broker_url": "",
+	"oidc_audience": "coding-workflows-claude-pool",
+	"gate_utilization": 0.95,
+	"probe_model": "claude-haiku-4-5-20251001",
+	"default_model": "claude-opus-5-5",
+	"utility_model": "claude-sonnet-5-5",
+	"default_effort": "high",
+	"hide_claude_md": False,
+	"web_search": True,
+	"utility_roles": list(UTILITY_ROLES),
+	"role_defaults": {role: _role_default(role) for role in ROLES},
+}
+
+# A rejected credential (spike S15): exit 1, `result` "Failed to authenticate.
+# API Error: 401 OAuth access token is invalid." with `is_error: true`.
+AUTH_ERROR_RE = re.compile(
+	r"Failed to authenticate|API Error: 401|authentication_error|OAuth (?:access )?token (?:is )?(?:invalid|expired|revoked)",
+	re.IGNORECASE,
+)
+# No real usage-limit rejection has been observed yet; these texts and the
+# rate-limit status (spike S7) are the best current evidence.
+USAGE_LIMIT_TEXT_RE = re.compile(
+	r"usage limit|limit reached|rate[ _-]?limit|out of extra usage|five[_ -]hour limit|weekly limit",
+	re.IGNORECASE,
+)
+# `timeout` sends SIGTERM (exit 124); its --kill-after sends SIGKILL (137).
+TIMEOUT_EXIT_CODES = (124, 137)
+
+# Command-prefix permissions cannot make Bash read-only: even git show/diff/log
+# can write files via --output. Read roles therefore have no shell tool.
+READ_PROFILE_ALLOW: tuple[str, ...] = (
+	"Read",
+	"Grep",
+	"Glob",
+)
+PROFILE_TOOLS: dict[str, str] = {
+	"write": "Read,Grep,Glob,Bash,Edit,Write",
+	"read": "Read,Grep,Glob",
+}
+# Added to every profile's tool list when the config's `web_search` is on
+# (default). It reaches the web only through the provider's search tool,
+# which the host relay admits with --allow-web-search
+# (scripts/claude_anthropic_relay.py); the container itself keeps no network.
+CLAUDE_WEB_SEARCH_TOOL = "WebSearch"
+PROFILE_MODES: dict[str, str] = {
+	"write": "bypassPermissions",
+	"read": "dontAsk",
+}
+
+TEMPLATE_NAME = "claude_settings.json.tmpl"
+GUARD_HOOK_RELATIVE = Path(".claude") / "hooks" / "gh_api_write_guard.py"
+CONFIG_RELATIVE = Path(".github") / "ai" / "claude_engine.json"
+CHECKOUT_PLACEHOLDER = "__CHECKOUT__"
+GUARD_HOOK_PLACEHOLDER = "__GUARD_HOOK__"
+WORKFLOW_DENY_MARKER = "/.github/workflows/"
+
+
+class EngineError(ValueError):
+	"""Invalid input to an engine subcommand."""
+
+
+# --- ChatGPT account review-panel slot (trial plan Phase 2, Refs #8969) ------
+# The slot never runs Claude, so its role stays out of ROLES (which drives the
+# Claude role defaults and claude_engine.json normalisation).
+CHATGPT_ROLES: tuple[str, ...] = ("PANEL_REVIEWER_CHATGPT",)
+CHATGPT_SLOT_DEFAULTS: dict[str, str] = {"model": "gpt-6-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh"}
+CHATGPT_MODEL_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,63}$")
+CHATGPT_REPLACES_RE = re.compile(r"^[a-z0-9-]+/[a-z0-9._-]+$")
+CHATGPT_REASONING: tuple[str, ...] = ("none", "low", "medium", "high", "xhigh")
+CHATGPT_AUTH_RE = re.compile(
+	r"\b40[13]\b|unauthori[sz]ed|forbidden|\blog ?in\b|refresh[_ ]token|token (?:is )?(?:invalid|expired|revoked)|authenticat",
+	re.IGNORECASE,
+)
+CHATGPT_QUOTA_RE = re.compile(r"\b429\b|usage[_ ]limit|rate[_ -]?limit|quota|too many requests", re.IGNORECASE)
+
+
+def resolve_chatgpt_slot(config_path: Path, override: str = "", model_var: str = "", replaces_var: str = "") -> dict[str, Any]:
+	"""Whether the ChatGPT review slot is on, failing closed.
+
+	Only a JSON boolean ``true`` for ``reviewer_slot_enabled`` (or an override
+	of exactly ``true``) turns it on. A missing or unreadable file, invalid
+	JSON, a non-object, a non-boolean switch, an invalid model / replaces /
+	reasoning value, or an override other than empty, ``true`` or ``false``
+	keeps it off. Printed values are always validated (or the defaults), so
+	they are safe to write to a step output.
+	"""
+	values = dict(CHATGPT_SLOT_DEFAULTS)
+	errors: list[str] = []
+	switch = False
+	source = "default"
+	raw: Any = None
+	try:
+		raw = json.loads(config_path.read_text(encoding="utf-8"))
+	except FileNotFoundError:
+		errors.append("config_missing")
+	except (OSError, ValueError):
+		errors.append("config_invalid")
+	if not errors:
+		source = "file"
+		if not isinstance(raw, dict):
+			errors.append("config_invalid")
+		else:
+			flag = raw.get("reviewer_slot_enabled", False)
+			if isinstance(flag, bool):
+				switch = flag
+			else:
+				errors.append("config_invalid")
+			checks = (("model", CHATGPT_MODEL_RE), ("replaces", CHATGPT_REPLACES_RE))
+			for key, pattern in checks:
+				if key in raw:
+					value = raw[key]
+					if isinstance(value, str) and pattern.fullmatch(value):
+						values[key] = value
+					else:
+						errors.append("config_invalid")
+			if "reasoning" in raw:
+				if raw["reasoning"] in CHATGPT_REASONING:
+					values["reasoning"] = raw["reasoning"]
+				else:
+					errors.append("config_invalid")
+	for key, value, pattern in (("model", model_var, CHATGPT_MODEL_RE), ("replaces", replaces_var, CHATGPT_REPLACES_RE)):
+		value = (value or "").strip()
+		if not value:
+			continue
+		if pattern.fullmatch(value):
+			values[key] = value
+		else:
+			errors.append("var_invalid")
+	override = (override or "").strip()
+	if override in ("true", "false"):
+		switch = override == "true"
+		source = "var"
+	elif override:
+		errors.append("var_invalid")
+	enabled = switch and not errors
+	reason = "ok" if enabled else (errors[0] if errors else "switch_off")
+	return {"enabled": enabled, **values, "source": source, "reason": reason}
+
+
+def classify_chatgpt_events(text: str, exit_code: int | None) -> dict[str, str]:
+	"""Classify one ``codex exec --json`` run of the ChatGPT slot.
+
+	``auth_rejected``: an ``error`` / ``turn.failed`` event naming a 401/403,
+	an unauthorized, login or refresh failure. ``quota_exhausted``: one naming
+	a 429, usage limit, rate limit or quota. ``ok``: exit code 0 with an agent
+	message and no ``turn.failed`` event, checked first, so a non-terminal
+	error the run recovered from does not discard it. Anything else is
+	``run_failed``. Returns
+	reason codes only, never event text.
+	"""
+	messages: list[str] = []
+	has_agent_message = False
+	has_turn_failed = False
+	for event in read_events(text):
+		event_type = event.get("type")
+		if event_type == "turn.failed":
+			has_turn_failed = True
+		if event_type in ("error", "turn.failed"):
+			error = event.get("error")
+			message = event.get("message")
+			if isinstance(error, dict):
+				message = error.get("message", message)
+			elif isinstance(error, str):
+				message = error
+			messages.append(str(message or ""))
+		elif event_type == "item.completed":
+			item = event.get("item")
+			if isinstance(item, dict) and item.get("type") in ("agent_message", "assistant_message"):
+				has_agent_message = True
+	# A completed run wins over earlier non-terminal errors Codex recovered from.
+	if exit_code == 0 and has_agent_message and not has_turn_failed:
+		return {"outcome": "ok", "reason": "ok"}
+	joined = "\n".join(messages)
+	if messages and CHATGPT_AUTH_RE.search(joined):
+		return {"outcome": "failed", "reason": "auth_rejected"}
+	if messages and CHATGPT_QUOTA_RE.search(joined):
+		return {"outcome": "failed", "reason": "quota_exhausted"}
+	return {"outcome": "failed", "reason": "run_failed"}
+
+
+# --- support files ---------------------------------------------------------
+
+
+def support_roots() -> list[Path]:
+	"""Directories that may hold the trusted coding-workflows files, in order.
+
+	The staged support root of the job, the verified support checkout, and the
+	repository this script lives in. The caller's checkout (a consumer repo or a
+	PR head) is never searched: its copy is not trusted.
+	"""
+	roots: list[Path] = []
+	support_root = os.environ.get("SUPPORT_ROOT_DIR", "")
+	if support_root:
+		roots.append(Path(support_root))
+	workspace = os.environ.get("GITHUB_WORKSPACE", "")
+	if workspace:
+		roots.append(Path(workspace) / ".codex-workflow-src")
+	roots.append(SCRIPT_DIR.parent)
+	unique: list[Path] = []
+	for root in roots:
+		if root not in unique:
+			unique.append(root)
+	return unique
+
+
+def find_support_file(relative: Path) -> Path | None:
+	for root in support_roots():
+		candidate = root / relative
+		if candidate.is_file():
+			return candidate
+	return None
+
+
+# --- configuration ---------------------------------------------------------
+
+
+def _is_number(value: Any) -> bool:
+	return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def normalize_config(raw: Any) -> tuple[dict[str, Any], list[str]]:
+	"""Merge ``raw`` over the defaults; return the config and the invalid keys.
+
+	Unknown keys are ignored. An invalid value keeps its default and is named in
+	the second element. ``role_defaults`` is merged per role and per field, so
+	a config that names one role leaves the others at their defaults; an unknown
+	role is ignored and reported.
+	"""
+	config = json.loads(json.dumps(DEFAULT_CONFIG))
+	invalid: list[str] = []
+	if not isinstance(raw, dict):
+		if raw is not None:
+			invalid.append("<root>")
+		return config, invalid
+
+	def take(key: str, ok: bool) -> None:
+		if key not in raw:
+			return
+		if ok:
+			config[key] = raw[key]
+		else:
+			invalid.append(key)
+
+	take("cli_version", isinstance(raw.get("cli_version"), str) and bool(CLI_VERSION_RE.match(raw.get("cli_version", ""))))
+	take("broker_url", isinstance(raw.get("broker_url"), str) and (raw.get("broker_url") == "" or bool(URL_RE.match(raw.get("broker_url", "")))))
+	take("oidc_audience", isinstance(raw.get("oidc_audience"), str) and bool(AUDIENCE_RE.match(raw.get("oidc_audience", ""))))
+	gate = raw.get("gate_utilization")
+	take("gate_utilization", _is_number(gate) and 0 < gate <= 1)
+	for key in ("probe_model", "default_model", "utility_model"):
+		take(key, isinstance(raw.get(key), str) and bool(MODEL_RE.match(raw.get(key, ""))))
+	take("default_effort", raw.get("default_effort") in EFFORTS)
+	take("hide_claude_md", isinstance(raw.get("hide_claude_md"), bool))
+	take("web_search", isinstance(raw.get("web_search"), bool))
+	if "utility_roles" in raw:
+		value = raw["utility_roles"]
+		if isinstance(value, list) and all(item in ROLES for item in value):
+			config["utility_roles"] = list(dict.fromkeys(value))
+		else:
+			invalid.append("utility_roles")
+	if "role_defaults" in raw:
+		value = raw["role_defaults"]
+		if not isinstance(value, dict):
+			invalid.append("role_defaults")
+		else:
+			for role, fields in value.items():
+				if role not in ROLES or not isinstance(fields, dict):
+					invalid.append(f"role_defaults.{role}")
+					continue
+				target = config["role_defaults"][role]
+				if "engine" in fields:
+					if fields["engine"] in ENGINES:
+						target["engine"] = fields["engine"]
+					else:
+						invalid.append(f"role_defaults.{role}.engine")
+				if "claude_model" in fields:
+					model = fields["claude_model"]
+					if isinstance(model, str) and MODEL_RE.match(model) and model.startswith("claude-"):
+						target["claude_model"] = model
+					else:
+						invalid.append(f"role_defaults.{role}.claude_model")
+				if "profile" in fields:
+					if fields["profile"] in PROFILES:
+						target["profile"] = fields["profile"]
+					else:
+						invalid.append(f"role_defaults.{role}.profile")
+	return config, invalid
+
+
+def load_config(path: Path | None = None) -> tuple[dict[str, Any], list[str]]:
+	"""Read and normalise the engine config. A missing file is the default (every role on codex)."""
+	if path is None:
+		path = find_support_file(CONFIG_RELATIVE)
+	if path is None:
+		return normalize_config(None)
+	try:
+		text = path.read_text(encoding="utf-8")
+	except OSError:
+		return normalize_config(None)
+	try:
+		raw = json.loads(text)
+	except ValueError:
+		config, _ = normalize_config(None)
+		return config, ["<unreadable>"]
+	return normalize_config(raw)
+
+
+# --- resolution (D1–D3) -----------------------------------------------------
+
+
+def parse_labels(text: str | None) -> list[str]:
+	"""Label names from a comma-, space- or newline-separated list, or a JSON list."""
+	text = (text or "").strip()
+	if not text:
+		return []
+	if text.startswith("["):
+		try:
+			value = json.loads(text)
+		except ValueError:
+			value = None
+		if isinstance(value, list):
+			names: list[str] = []
+			for item in value:
+				name = item.get("name") if isinstance(item, dict) else item
+				if isinstance(name, str) and name.strip():
+					names.append(name.strip())
+			return names
+	return [part for part in re.split(r"[,\s]+", text) if part]
+
+
+def work_item_labels(env: dict[str, str]) -> list[str]:
+	"""The labels of the run's work item (plan Phase 6).
+
+	``AI_ENGINE_LABELS`` when it is set, even empty (a call site that already
+	holds the issue's or PR's labels passes them). Otherwise the labels of
+	``issue`` or ``pull_request`` in the job's own event payload
+	(``GITHUB_EVENT_PATH``), which every Actions job carries: no API call. A
+	missing or unreadable payload means no labels.
+	"""
+	if "AI_ENGINE_LABELS" in env:
+		return parse_labels(env.get("AI_ENGINE_LABELS", ""))
+	event_path = env.get("GITHUB_EVENT_PATH", "")
+	if not event_path:
+		return []
+	try:
+		event = json.loads(Path(event_path).read_text(encoding="utf-8"))
+	except (OSError, ValueError):
+		return []
+	if not isinstance(event, dict):
+		return []
+	names: list[str] = []
+	for key in ("issue", "pull_request"):
+		item = event.get(key)
+		if isinstance(item, dict) and isinstance(item.get("labels"), list):
+			names += [label.get("name") for label in item["labels"] if isinstance(label, dict) and isinstance(label.get("name"), str)]
+	return names
+
+
+def normalize_effort(value: str | None, default: str) -> str:
+	"""D3: ``none|minimal`` → ``low``; ``low…max`` unchanged; anything else → ``default``."""
+	effort = (value or "").strip().lower()
+	if effort in ("none", "minimal"):
+		return "low"
+	if effort in EFFORTS:
+		return effort
+	return default
+
+
+def resolve_role(
+	role: str,
+	config: dict[str, Any],
+	env: dict[str, str],
+	model_hint: str = "",
+	effort_hint: str = "",
+) -> dict[str, Any]:
+	"""The engine, model, effort and profile of one role.
+
+	Engine order: ``CLAUDE_FIXER_ENABLED=false`` for the review write roles
+	in ``CLAUDE_FIXER_ROLES`` (always codex, Q35), the work-item labels
+	(``work_item_labels``; ``ai:codex`` beats ``ai:engine-claude``, D2),
+	``AI_ENGINE_<ROLE>``, ``AI_ENGINE``, the role's code default. An
+	invalid variable value is skipped and reported in ``warnings``.
+
+	Model (D3): ``model_hint`` (the role's existing model variable) when it
+	starts with ``claude-``, else the role's Claude default. Effort (D3): the
+	role's existing reasoning value mapped by ``normalize_effort``. The
+	``ai:engine-claude`` label forces the default model at ``high``.
+	``AI_ENGINE_READ_ONLY=true`` narrows any role's profile to read; no other
+	value can widen a read-default role.
+	"""
+	if role not in ROLES:
+		raise EngineError(f"unknown role: {role!r}")
+	defaults = config["role_defaults"][role]
+	warnings: list[str] = []
+	labels = {label.lower() for label in work_item_labels(env)}
+	engine = ""
+	source = ""
+	if role in CLAUDE_FIXER_ROLES and env.get(CLAUDE_FIXER_SWITCH, "").strip().lower() == "false":
+		engine, source = "codex", f"var:{CLAUDE_FIXER_SWITCH}"
+	elif LABEL_CODEX in labels:
+		engine, source = "codex", f"label:{LABEL_CODEX}"
+	elif LABEL_ENGINE_CLAUDE in labels:
+		engine, source = "claude", f"label:{LABEL_ENGINE_CLAUDE}"
+	if not engine:
+		for name in (f"AI_ENGINE_{role}", "AI_ENGINE"):
+			raw = env.get(name, "")
+			value = raw.strip().lower()
+			if not value:
+				continue
+			if value in ENGINES:
+				engine, source = value, f"var:{name}"
+				break
+			warnings.append(f"invalid {name}={raw[:40]!r} ignored")
+	if not engine:
+		engine, source = defaults["engine"], "default"
+	if source == f"label:{LABEL_ENGINE_CLAUDE}":
+		model = config["default_model"]
+		effort = "high"
+	else:
+		hint = (model_hint or "").strip()
+		model = hint if hint.startswith("claude-") and MODEL_RE.match(hint) else defaults["claude_model"]
+		effort = normalize_effort(effort_hint, config["default_effort"])
+	return {
+		"role": role,
+		"engine": engine,
+		"model": model,
+		"effort": effort,
+		"profile": "read" if env.get("AI_ENGINE_READ_ONLY", "").strip() == "true" else defaults["profile"],
+		"source": source,
+		"warnings": warnings,
+	}
+
+
+# --- settings (P5) -----------------------------------------------------------
+
+
+def render_settings(
+	template_text: str,
+	checkout: str,
+	guard_hook: str,
+	profile: str = "write",
+	allow_workflow_edits: bool = False,
+	web_search: bool = False,
+) -> dict[str, Any]:
+	"""Render the P5 permission policy for one run.
+
+	With ``web_search`` the ``read`` profile's allow list also names
+	CLAUDE_WEB_SEARCH_TOOL, since its ``dontAsk`` mode refuses any tool not
+	allowed; ``write`` runs in ``bypassPermissions`` and needs no rule.
+
+	``checkout`` and ``guard_hook`` must be absolute paths. The template's
+	``__CHECKOUT__`` and ``__GUARD_HOOK__`` placeholders are replaced inside
+	string values only. The two ``.github/workflows`` deny rules are dropped
+	when ``allow_workflow_edits``; the ``.claude/**`` rules never are. The
+	``read`` profile gets its allow list; ``write`` gets none (it runs in
+	``bypassPermissions``, where deny rules still apply).
+	"""
+	if profile not in PROFILES:
+		raise EngineError(f"unknown profile: {profile!r}")
+	for name, value in (("checkout", checkout), ("guard hook", guard_hook)):
+		if not value.startswith("/") or any(char in value for char in "\n\r\"'$`\\"):
+			raise EngineError(f"{name} must be an absolute path without quotes, '$', backticks or backslashes")
+	checkout = checkout.rstrip("/") or "/"
+	try:
+		settings = json.loads(template_text)
+	except ValueError as exc:
+		raise EngineError(f"settings template is not JSON: {exc}") from exc
+	if not isinstance(settings, dict):
+		raise EngineError("settings template must be a JSON object")
+
+	def substitute(value: Any) -> Any:
+		if isinstance(value, str):
+			# `//` anchors a permission path at the filesystem root.
+			return value.replace(CHECKOUT_PLACEHOLDER, checkout.lstrip("/")).replace(GUARD_HOOK_PLACEHOLDER, guard_hook)
+		if isinstance(value, list):
+			return [substitute(item) for item in value]
+		if isinstance(value, dict):
+			return {key: substitute(item) for key, item in value.items()}
+		return value
+
+	settings = substitute(settings)
+	permissions = settings.setdefault("permissions", {})
+	deny = [rule for rule in permissions.get("deny", []) if isinstance(rule, str)]
+	if allow_workflow_edits:
+		deny = [rule for rule in deny if WORKFLOW_DENY_MARKER not in rule]
+	permissions["deny"] = deny
+	permissions["allow"] = list(READ_PROFILE_ALLOW) if profile == "read" else []
+	if web_search and profile == "read":
+		permissions["allow"].append(CLAUDE_WEB_SEARCH_TOOL)
+	env = settings.get("env")
+	if isinstance(env, dict):
+		for key in list(env):
+			if "TOKEN" in key.upper() or "KEY" in key.upper() or "SECRET" in key.upper():
+				raise EngineError(f"settings env must not carry credentials: {key}")
+	return settings
+
+
+# --- transcripts -----------------------------------------------------------
+
+
+def read_events(text: str) -> list[dict[str, Any]]:
+	"""Parse a stream-json transcript; lines that are not JSON objects are skipped."""
+	events: list[dict[str, Any]] = []
+	for line in (text or "").splitlines():
+		line = line.strip()
+		if not line.startswith("{"):
+			continue
+		try:
+			event = json.loads(line)
+		except ValueError:
+			continue
+		if isinstance(event, dict):
+			events.append(event)
+	return events
+
+
+def last_event(events: list[dict[str, Any]], event_type: str) -> dict[str, Any] | None:
+	for event in reversed(events):
+		if event.get("type") == event_type:
+			return event
+	return None
+
+
+def last_rate_limit_info(events: list[dict[str, Any]]) -> dict[str, Any] | None:
+	event = last_event(events, "rate_limit_event")
+	info = event.get("rate_limit_info") if event else None
+	return info if isinstance(info, dict) else None
+
+
+def _number(value: Any) -> float | None:
+	if not _is_number(value):
+		return None
+	return float(value)
+
+
+def _int_or_none(value: Any) -> int | None:
+	number = _number(value)
+	return int(number) if number is not None else None
+
+
+def window(info: dict[str, Any] | None, name: str) -> tuple[float | None, int | None]:
+	"""(utilization 0..1, resetsAt epoch seconds) of one unified window, or Nones."""
+	windows = info.get("unifiedWindows") if isinstance(info, dict) else None
+	data = windows.get(name) if isinstance(windows, dict) else None
+	if not isinstance(data, dict):
+		return None, None
+	return _number(data.get("utilization")), _int_or_none(data.get("resetsAt"))
+
+
+def is_auth_error(text: str) -> bool:
+	return bool(AUTH_ERROR_RE.search(text or ""))
+
+
+def is_usage_limited(info: dict[str, Any] | None, result_text: str = "") -> bool:
+	"""True when the last rate-limit info is rejected or at 100%, or the result text says so."""
+	if isinstance(info, dict):
+		if info.get("status") == "rejected":
+			return True
+		for name in ("five_hour", "seven_day"):
+			utilization, _ = window(info, name)
+			if utilization is not None and utilization >= 1.0:
+				return True
+	return bool(USAGE_LIMIT_TEXT_RE.search(result_text or ""))
+
+
+def extract_result(text: str) -> tuple[str | None, dict[str, Any] | None]:
+	"""The final ``result`` text and the usage line of a transcript.
+
+	The usage line is the last ``result`` event without its ``result`` text:
+	``type``, ``subtype``, ``is_error``, ``duration_ms``, ``num_turns``,
+	``total_cost_usd``, ``usage`` and ``modelUsage`` when present. Returns
+	``(None, None)`` when the transcript has no ``result`` event.
+	"""
+	result = last_event(read_events(text), "result")
+	if result is None:
+		return None, None
+	keys = ("type", "subtype", "is_error", "duration_ms", "num_turns", "total_cost_usd", "usage", "modelUsage")
+	usage = {key: result[key] for key in keys if key in result}
+	value = result.get("result")
+	return (value if isinstance(value, str) else ""), usage
+
+
+def classify(text: str, exit_code: int | None = None) -> dict[str, Any]:
+	"""Classify one ``claude -p`` run.
+
+	``success``: a ``result`` event with ``subtype`` ``success``, ``is_error``
+	false, and exit code 0 (or unknown). ``timeout``: exit code 124 or 137
+	(``timeout`` and its kill). ``auth_failed``: the result text of a rejected
+	credential (S15). ``usage_limit``: a ``rejected`` or full rate-limit window
+	(S7), or a usage-limit result text. Anything else is ``crashed``.
+	Returns ``{outcome, reason, total_cost_usd, duration_ms}``.
+	"""
+	events = read_events(text)
+	info = last_rate_limit_info(events)
+	result = last_event(events, "result")
+	verdict: dict[str, Any] = {
+		"outcome": "crashed",
+		"reason": "",
+		"total_cost_usd": _number(result.get("total_cost_usd")) if result else None,
+		"duration_ms": _int_or_none(result.get("duration_ms")) if result else None,
+	}
+	if exit_code in TIMEOUT_EXIT_CODES:
+		verdict.update(outcome="timeout", reason=f"exit_{exit_code}")
+		return verdict
+	result_text = str(result.get("result", "")) if result else ""
+	if result and result.get("is_error") is False and result.get("subtype") == "success" and exit_code in (0, None):
+		verdict.update(outcome="success", reason="result_success")
+		return verdict
+	if is_auth_error(result_text):
+		verdict.update(outcome="auth_failed", reason="result_auth_error")
+	elif is_usage_limited(info, result_text):
+		reason = "rate_limit_rejected" if info and info.get("status") == "rejected" else "usage_limit"
+		verdict.update(outcome="usage_limit", reason=reason)
+	elif not events:
+		verdict["reason"] = "no_transcript"
+	elif result is None:
+		verdict["reason"] = "no_result"
+	else:
+		verdict["reason"] = f"result_{result.get('subtype') or 'error'}"
+	return verdict
+
+
+def inspect_transcript(text: str) -> dict[str, Any]:
+	"""Facts the smoke run asserts on (context gate, P5 denials).
+
+	``startup_input_tokens``: the prompt size of the first model call (input,
+	cache-creation and cache-read tokens of the first ``assistant`` event),
+	i.e. what the run loaded before doing anything. ``tool_calls``: every tool
+	use with its tool name, the Bash ``command`` or the ``file_path`` it named,
+	and whether its result was an error (a denial is one), with the first 200
+	characters of that result.
+	"""
+	events = read_events(text)
+	startup: int | None = None
+	calls: dict[str, dict[str, Any]] = {}
+	order: list[str] = []
+	for event in events:
+		message = event.get("message")
+		if not isinstance(message, dict):
+			continue
+		content = message.get("content")
+		if event.get("type") == "assistant":
+			usage = message.get("usage")
+			if startup is None and isinstance(usage, dict):
+				startup = sum(
+					_int_or_none(usage.get(key)) or 0
+					for key in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
+				)
+			for block in content if isinstance(content, list) else []:
+				if isinstance(block, dict) and block.get("type") == "tool_use" and isinstance(block.get("id"), str):
+					tool_input = block.get("input") if isinstance(block.get("input"), dict) else {}
+					target = tool_input.get("command") or tool_input.get("file_path") or tool_input.get("notebook_path") or ""
+					calls[block["id"]] = {"tool": block.get("name", ""), "target": str(target)[:500], "is_error": None, "result": ""}
+					order.append(block["id"])
+		elif event.get("type") == "user":
+			for block in content if isinstance(content, list) else []:
+				if isinstance(block, dict) and block.get("type") == "tool_result" and block.get("tool_use_id") in calls:
+					result = block.get("content")
+					if isinstance(result, list):
+						result = " ".join(str(part.get("text", "")) for part in result if isinstance(part, dict))
+					call = calls[block["tool_use_id"]]
+					call["is_error"] = block.get("is_error") is True
+					call["result"] = str(result or "")[:200]
+	return {"startup_input_tokens": startup, "tool_calls": [calls[call_id] for call_id in order]}
+
+
+# --- probes and account choice ---------------------------------------------
+
+
+def parse_probe(text: str, account: str, exit_code: int = 0) -> dict[str, Any]:
+	"""One Haiku probe transcript to a probe record.
+
+	``error`` is ``None`` for a usable reading, ``auth_failed`` for a rejected
+	token (S15), ``probe_failed`` for anything else that went wrong. A failed
+	probe that shows a usage limit keeps ``error`` ``None`` with ``status``
+	``rejected``, so ``choose`` gates it. A probe that succeeds without a
+	rate-limit event keeps ``five_hour`` / ``seven_day`` at ``None``.
+	"""
+	events = read_events(text)
+	info = last_rate_limit_info(events)
+	result = last_event(events, "result")
+	five_hour, five_reset = window(info, "five_hour")
+	seven_day, seven_reset = window(info, "seven_day")
+	record: dict[str, Any] = {
+		"account": account,
+		"five_hour": five_hour,
+		"seven_day": seven_day,
+		"five_hour_resets_at": five_reset,
+		"seven_day_resets_at": seven_reset,
+		"resets_at": _int_or_none(info.get("resetsAt")) if info else None,
+		"status": info.get("status") if info and isinstance(info.get("status"), str) else None,
+		"error": None,
+	}
+	result_text = str(result.get("result", "")) if result else ""
+	if result is None or result.get("is_error") is True or exit_code != 0:
+		if is_auth_error(result_text):
+			record["error"] = "auth_failed"
+		elif is_usage_limited(info, result_text):
+			record["status"] = "rejected"
+		else:
+			record["error"] = "probe_failed"
+	return record
+
+
+def _max_utilization(probe: dict[str, Any]) -> float | None:
+	"""Rank key for ``choose_account``: ``max(five_hour, seven_day)``.
+
+	A missing ``five_hour`` reading means the account has no 5-hour limit
+	(many accounts no longer report one), so it ranks by ``seven_day`` alone.
+	A missing ``seven_day`` reading is unknown and returns ``None``, and so
+	does a negative (malformed) one, so it ranks last instead of first.
+	"""
+	seven_day = probe.get("seven_day")
+	if seven_day is None or float(seven_day) < 0:
+		return None
+	five_hour = probe.get("five_hour")
+	return seven_day if five_hour is None else max(five_hour, seven_day)
+
+
+def _known_peak(probe: dict[str, Any]) -> float | None:
+	values = [value for value in (probe.get("five_hour"), probe.get("seven_day")) if value is not None]
+	return max(values) if values else None
+
+
+# Floor for the hours until a 7-day reset in ``_spare_per_hour``, so a reset
+# that is minutes away (or already passed) ranks first without dividing by 0.
+_SPARE_PER_HOUR_MIN_HOURS = 0.1
+
+
+def _spare_per_hour(probe: dict[str, Any], gate: float, now: float) -> float | None:
+	"""Rank key for ``choose_account``: 7-day headroom under ``gate`` per hour
+	until the 7-day window resets.
+
+	Quota left in a window is lost at its reset, so the account whose spare
+	quota expires soonest is used first, and an account that just reset is
+	saved for later in its week. ``None`` without a 7-day reading or reset
+	time, or with a negative (malformed) 7-day reading. The 5-hour window
+	does not change the rank; it only gates.
+	"""
+	seven_day = probe.get("seven_day")
+	reset = _int_or_none(probe.get("seven_day_resets_at"))
+	if seven_day is None or reset is None:
+		return None
+	if float(seven_day) < 0:
+		return None
+	hours = max((reset - now) / 3600, _SPARE_PER_HOUR_MIN_HOURS)
+	return max(gate - max(float(seven_day), 0.0), 0.0) / hours
+
+
+def _usable_at(probe: dict[str, Any], gate: float) -> int | None:
+	resets: list[int] = []
+	for name in ("five_hour", "seven_day"):
+		utilization = probe.get(name)
+		reset = probe.get(f"{name}_resets_at")
+		if utilization is not None and utilization >= gate and reset is not None:
+			resets.append(reset)
+	if not resets and probe.get("resets_at") is not None:
+		resets.append(probe["resets_at"])
+	return max(resets) if resets else None
+
+
+def choose_account(probes: list[dict[str, Any]], gate: float, now: float | None = None) -> dict[str, Any]:
+	"""Order the accounts for one job: the one whose spare quota expires soonest first.
+
+	Every account strictly below ``gate`` is ranked in three groups, ties to
+	the alphabetically first name:
+
+	1. accounts with a 7-day reading and reset time, the highest
+	``(gate - seven_day) / hours until the 7-day reset`` first
+	(``_spare_per_hour``; ``now`` is epoch seconds, default the current
+	time);
+	2. accounts with a 7-day reading but no reset time, the lowest
+	``max(five_hour, seven_day)`` first, where a missing ``five_hour``
+	reading counts as no 5-hour limit;
+	3. accounts whose probe succeeded without a usable ``seven_day`` reading
+	(missing, or negative and so malformed).
+
+	A window at or over the gate, or a ``rejected`` status, gates the
+	account; a probe error skips it. ``order`` lists every usable account in
+	that rank, so ``claude_run`` can move to the next one on ``usage_limit``
+	or ``auth_failed``. ``utilization`` is ``max(five_hour, seven_day)`` of
+	the first account, ``None`` when it has no 7-day reading. Verdicts when
+	nothing is usable: ``no_accounts``, ``all_gated`` (``resets_at`` is the
+	earliest time one is usable again), ``auth_failed`` (only token
+	failures), ``crashed``.
+	"""
+	now = _now_seconds(now)
+	ordered = sorted(probes, key=lambda probe: str(probe.get("account", "")))
+	by_reset: list[tuple[float, str]] = []
+	eligible: list[tuple[float, str]] = []
+	peaks: dict[str, float] = {}
+	unknown: list[str] = []
+	gated: list[dict[str, Any]] = []
+	auth_failed: list[str] = []
+	failed: list[str] = []
+	for probe in ordered:
+		name = str(probe.get("account", ""))
+		error = probe.get("error")
+		if error == "auth_failed":
+			auth_failed.append(name)
+			continue
+		if error:
+			failed.append(name)
+			continue
+		peak = _max_utilization(probe)
+		known = _known_peak(probe)
+		if probe.get("status") == "rejected" or (known is not None and known >= gate):
+			gated.append(probe)
+		elif peak is None:
+			unknown.append(name)
+		else:
+			peaks[name] = peak
+			spare = _spare_per_hour(probe, gate, now)
+			if spare is None:
+				eligible.append((peak, name))
+			else:
+				by_reset.append((-spare, name))
+	order = [name for _, name in sorted(by_reset)] + [name for _, name in sorted(eligible)] + unknown
+	verdict: dict[str, Any] = {
+		"outcome": "selected",
+		"account": order[0] if order else "",
+		"order": order,
+		"utilization": peaks.get(order[0]) if order else None,
+		"resets_at": None,
+		"gated": [probe.get("account") for probe in gated],
+		"auth_failed": auth_failed,
+		"probe_failed": failed,
+	}
+	if order:
+		return verdict
+	if not ordered:
+		verdict["outcome"] = "no_accounts"
+	elif gated:
+		times = [time for time in (_usable_at(probe, gate) for probe in gated) if time is not None]
+		verdict.update(outcome="all_gated", resets_at=min(times) if times else None)
+	elif auth_failed:
+		verdict["outcome"] = "auth_failed"
+	else:
+		verdict["outcome"] = "crashed"
+	return verdict
+
+
+def _format_reset(value: Any) -> str:
+	"""Epoch seconds to ``YYYY-MM-DD HH:MM UTC``; an unknown time is ``unknown``."""
+	seconds = _int_or_none(value)
+	if seconds is None:
+		return "unknown"
+	return datetime.datetime.fromtimestamp(seconds, datetime.timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _format_reset_in(value: Any, now: float) -> str | None:
+	"""Hours from ``now`` to the epoch-seconds ``value``: ``in 1.3h``, ``now``
+	once the time has passed or is under 0.05h away, ``None`` when the time
+	is unknown."""
+	seconds = _int_or_none(value)
+	if seconds is None:
+		return None
+	shown = round((seconds - now) / 3600, 1)
+	return f"in {shown:.1f}h" if shown > 0 else "now"
+
+
+def _reset_note(value: Any, now: float) -> str:
+	"""``resets in 0.8h, 2026-11-01 01:00 UTC``; ``resets unknown`` without a time."""
+	reset_in = _format_reset_in(value, now)
+	return f"resets {reset_in}, {_format_reset(value)}" if reset_in else "resets unknown"
+
+
+def _now_seconds(now: float | None) -> float:
+	return datetime.datetime.now(datetime.timezone.utc).timestamp() if now is None else float(now)
+
+
+def _window_summary(probe: dict[str, Any], name: str, label: str, gate: float, now: float | None = None) -> str | None:
+	"""``5h 13% (resets in 1.3h)`` below the gate; at or above it the note also
+	names the UTC reset time, or ``resets unknown`` when the probe had none."""
+	utilization = probe.get(name)
+	if utilization is None:
+		return None
+	now = _now_seconds(now)
+	reset = probe.get(f"{name}_resets_at")
+	text = f"{label} {round(float(utilization) * 100)}%"
+	if float(utilization) >= gate:
+		text += f" ({_reset_note(reset, now)})"
+	else:
+		reset_in = _format_reset_in(reset, now)
+		if reset_in:
+			text += f" (resets {reset_in})"
+	return text
+
+
+# --- ChatGPT account pool status (trial plan Phase 4, Refs #8969) -----------
+# Input: the one-line `status` output of .github/actions/chatgpt-pool-token in
+# `mode: status` ({"accounts": [...], "gate": n}, never a token). Every field
+# is re-validated here and only the named ones are read, so a stray key is
+# never rendered. Parsing never raises.
+CHATGPT_STATUS_DEFAULT_GATE = 0.9  # mirrors the broker's DEFAULT_CHATGPT_GATE
+CHATGPT_STATUS_DEFAULT_STALE_HOURS = 12.0
+CHATGPT_STATUS_MAX_ACCOUNTS = 64
+# The broker's wire contract (`^[A-Z0-9_]+$`, no length cap); always fullmatch,
+# so a trailing newline never passes.
+CHATGPT_STATUS_NAME_RE = re.compile(r"^[A-Z0-9_]+$")
+CHATGPT_STATUS_CODE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
+CHATGPT_STATUS_REASON_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
+# Outcomes that are not a refresh failure: `ok`, and `quota_exhausted` (the
+# account resets on its own; reported as gated, not as a failure).
+CHATGPT_STATUS_NON_FAILURE_OUTCOMES: tuple[str, ...] = ("ok", "quota_exhausted")
+
+
+def _chatgpt_status_number(value: Any) -> float | None:
+	"""A finite, non-negative usage fraction, or ``None``."""
+	if not _is_number(value) or value < 0:
+		return None
+	return float(value)
+
+
+def _chatgpt_status_parse(raw: str | None) -> tuple[list[dict[str, Any]], float, str | None]:
+	"""``(accounts, gate, error)`` from the action's ``status`` JSON.
+
+	Empty input is ``([], default gate, None)``; JSON that is not an object
+	with an ``accounts`` list is ``([], default gate, "status_invalid")``.
+	Entries whose ``account`` is not ``[A-Z0-9_]+`` are dropped, at most
+	CHATGPT_STATUS_MAX_ACCOUNTS are kept, sorted by name. A ``gate`` outside
+	(0, 1] is CHATGPT_STATUS_DEFAULT_GATE.
+	"""
+	gate = CHATGPT_STATUS_DEFAULT_GATE
+	if raw is None or not str(raw).strip():
+		return [], gate, None
+	try:
+		body = json.loads(raw)
+	except (ValueError, TypeError, RecursionError):
+		return [], gate, "status_invalid"
+	if not isinstance(body, dict) or not isinstance(body.get("accounts"), list):
+		return [], gate, "status_invalid"
+	value = body.get("gate")
+	if _is_number(value) and 0 < value <= 1:
+		gate = float(value)
+	accounts: list[dict[str, Any]] = []
+	seen: set[str] = set()
+	for entry in body["accounts"]:
+		if len(accounts) >= CHATGPT_STATUS_MAX_ACCOUNTS:
+			break
+		if not isinstance(entry, dict):
+			continue
+		name = entry.get("account")
+		if not isinstance(name, str) or not CHATGPT_STATUS_NAME_RE.fullmatch(name) or name in seen:
+			continue
+		seen.add(name)
+		usage = entry.get("usage") if isinstance(entry.get("usage"), dict) else {}
+		outcome = entry.get("last_outcome")
+		if outcome == "":
+			outcome = None  # never refreshed: reported as stale, not as a failed refresh
+		if outcome is not None:
+			# A value outside the safe character set is still a non-ok outcome.
+			outcome = outcome if isinstance(outcome, str) and CHATGPT_STATUS_CODE_RE.fullmatch(outcome) else "unknown"
+		reason = entry.get("reason")
+		accounts.append({
+			"account": name,
+			"last_refresh": entry.get("last_refresh") if isinstance(entry.get("last_refresh"), str) else None,
+			"last_outcome": outcome,
+			"five_hour": _chatgpt_status_number(usage.get("five_hour")),
+			"weekly": _chatgpt_status_number(usage.get("weekly")),
+			"usable": entry.get("usable") is True,
+			"reason": reason if isinstance(reason, str) and CHATGPT_STATUS_CODE_RE.fullmatch(reason) else None,
+		})
+	accounts.sort(key=lambda item: item["account"])
+	return accounts, gate, None
+
+
+def _chatgpt_status_refresh_epoch(value: Any) -> float | None:
+	"""Epoch seconds of an ISO-8601 ``last_refresh``; ``None`` when missing, naive or invalid."""
+	if not isinstance(value, str) or not value.strip():
+		return None
+	text = value.strip()
+	if text.endswith(("Z", "z")):
+		text = text[:-1] + "+00:00"
+	try:
+		parsed = datetime.datetime.fromisoformat(text)
+	except ValueError:
+		return None
+	if parsed.tzinfo is None or parsed.utcoffset() is None:
+		return None
+	return parsed.astimezone(datetime.timezone.utc).timestamp()
+
+
+def _chatgpt_status_stale_hours(value: Any) -> float:
+	if not _is_number(value) or value <= 0:
+		return CHATGPT_STATUS_DEFAULT_STALE_HOURS
+	return float(value)
+
+
+def _chatgpt_status_assess(entry: dict[str, Any], gate: float, stale_hours: float, now: float) -> tuple[str, list[str], bool]:
+	"""``(display line, causes, warning)`` of one ChatGPT account.
+
+	``warning`` (a person must act): a rejected login, a failed refresh
+	(any outcome other than ``ok`` / ``quota_exhausted``), or a refresh that
+	is missing or at least ``stale_hours`` old. Usage at or above ``gate``
+	and ``quota_exhausted`` are causes too, but reset on their own.
+	"""
+	name = entry["account"]
+	parts = []
+	for key, label in (("five_hour", "5h"), ("weekly", "weekly")):
+		usage = entry.get(key)
+		parts.append(f"{label} {round(usage * 100)}%" if usage is not None else f"{label} ?")
+	refreshed_at = _chatgpt_status_refresh_epoch(entry.get("last_refresh"))
+	age_hours = None if refreshed_at is None else max((now - refreshed_at) / 3600, 0.0)
+	parts.append("never refreshed" if age_hours is None else f"refreshed {age_hours:.1f}h ago")
+	outcome = entry.get("last_outcome")
+	parts.append(f"last outcome {outcome or 'unknown'}")
+	causes: list[str] = []
+	warning = False
+	if outcome == "auth_failed":
+		causes.append(f"login rejected (auth_failed); save a new CHATGPT_POOL_AUTH_{name}")
+		warning = True
+	elif outcome is not None and outcome not in CHATGPT_STATUS_NON_FAILURE_OUTCOMES:
+		causes.append(f"last refresh failed ({outcome})")
+		warning = True
+	if age_hours is None:
+		causes.append("stale (never refreshed)")
+		warning = True
+	elif age_hours >= stale_hours:
+		causes.append(f"stale (last refresh {age_hours:.1f}h ago)")
+		warning = True
+	if any(entry.get(key) is not None and entry[key] >= gate for key in ("five_hour", "weekly")):
+		causes.append(f"at or above the {round(gate * 100)}% usage gate")
+	if outcome == "quota_exhausted":
+		causes.append("quota exhausted")
+	return f"{name}: {', '.join(parts)}", causes, warning
+
+
+def _chatgpt_status_lines(accounts: list[dict[str, Any]], gate: float, stale_hours: float, now: float) -> tuple[list[str], list[str], bool]:
+	"""``(lines, flagged names, warning)``: one line per account, causes appended."""
+	lines: list[str] = []
+	flagged: list[str] = []
+	warning = False
+	for entry in accounts:
+		line, causes, needs_person = _chatgpt_status_assess(entry, gate, stale_hours, now)
+		if causes:
+			flagged.append(entry["account"])
+			line += "".join(f"; {cause}" for cause in causes)
+		warning = warning or needs_person
+		lines.append(line)
+	return lines, flagged, warning
+
+
+def pool_health(
+	probes: list[dict[str, Any]],
+	gate: float,
+	now: float | None = None,
+	*,
+	chatgpt_status: str | None = None,
+	chatgpt_stale_hours: float = CHATGPT_STATUS_DEFAULT_STALE_HOURS,
+) -> dict[str, Any]:
+	"""One operator-facing reading of the pool for the hourly near-cap alert (#6951).
+
+	Input: the probe records ``parse_probe`` produced for every account in the
+	pool (the ``probes`` output of ``.github/actions/claude-pool-token``). Output:
+	``alert`` is true when at least one account is gated (a window at or above
+	``gate``, or a ``rejected`` status) or its token was rejected
+	(``auth_failed``), since both shrink the pool until an operator acts;
+	``gated``, ``auth_failed``, ``probe_failed`` and ``usable`` list account
+	names; ``text`` is the message body, one line per probed account (usable
+	ones too) with each window's utilization and hours until it resets, plus
+	the UTC reset time of every window at or above the gate.
+	``next_usable_at`` is the earliest UTC time a gated account is usable
+	again and ``next_usable_in`` the hours until then (``in 0.8h``, or
+	``now`` once that time has passed), both empty without one. ``now`` (epoch seconds, default the current time) is
+	the reference for the hours. ``text`` is empty when ``alert`` is false.
+	Never raises on a malformed record: a record without a name is reported
+	as ``?``.
+
+	``chatgpt_status`` (the chatgpt-pool-token ``status`` JSON, trial plan
+	Phase 4) adds ``chatgpt_accounts``, ``chatgpt_alerts`` (names with any
+	cause, see ``_chatgpt_status_assess``) and ``chatgpt_warning`` (a person
+	must act). ``claude_alert`` is the Claude-only verdict; ``alert`` is true
+	when either pool alerts. With ChatGPT alerts, ``text`` gets a
+	``ChatGPT pool:`` block after the Claude text; without, it is unchanged.
+	"""
+	now = _now_seconds(now)
+	ordered = sorted(probes, key=lambda probe: str(probe.get("account", "")))
+	gated: list[str] = []
+	auth_failed: list[str] = []
+	failed: list[str] = []
+	usable: list[str] = []
+	lines: list[str] = []
+	for probe in ordered:
+		name = str(probe.get("account") or "?")
+		error = probe.get("error")
+		if error == "auth_failed":
+			auth_failed.append(name)
+			lines.append(f"{name}: token rejected (auth_failed); rotate CLAUDE_POOL_TOKEN_{name}")
+			continue
+		if error:
+			failed.append(name)
+			continue
+		known = _known_peak(probe)
+		rejected = probe.get("status") == "rejected"
+		if not rejected and (known is None or known < gate):
+			usable.append(name)
+			lines.append(f"{name}: {_usage_percent(probe, 'five_hour', '5h', gate, now)}, {_usage_percent(probe, 'seven_day', '7d', gate, now)}")
+			continue
+		gated.append(name)
+		parts = [part for part in (_window_summary(probe, "five_hour", "5h", gate, now), _window_summary(probe, "seven_day", "7d", gate, now)) if part]
+		if rejected and (known is None or known < gate):
+			parts.insert(0, f"usage limit reached ({_reset_note(probe.get('resets_at'), now)})")
+		lines.append(f"{name}: {', '.join(parts) if parts else 'at the gate'}")
+	claude_alert = bool(gated or auth_failed)
+	# Earliest time a gated account is usable again (issue #7370): the
+	# capacity-wait section of the alert names it.
+	usable_times = [
+		value for value in (_usable_at(probe, gate) for probe in ordered if str(probe.get("account") or "?") in gated)
+		if _int_or_none(value) is not None
+	]
+	earliest_usable = min(_int_or_none(value) for value in usable_times) if usable_times else None
+	next_usable_at = _format_reset(earliest_usable) if usable_times else ""
+	next_usable_in = (_format_reset_in(earliest_usable, now) or "") if usable_times else ""
+	text = ""
+	total = len(ordered)
+	if claude_alert:
+		headline = f"Claude pool: {len(gated)} of {total} account(s) at or above the {round(gate * 100)}% usage gate"
+		if auth_failed:
+			headline += f", {len(auth_failed)} with a rejected token"
+		headline += f"; {len(usable)} usable."
+		text = "\n".join([headline, *lines])
+		if failed:
+			text += "\nProbe failed (not counted): " + ", ".join(failed)
+	chatgpt_accounts, chatgpt_gate, _ = _chatgpt_status_parse(chatgpt_status)
+	chatgpt_lines, chatgpt_alerts, chatgpt_warning = _chatgpt_status_lines(
+		chatgpt_accounts, chatgpt_gate, _chatgpt_status_stale_hours(chatgpt_stale_hours), now
+	)
+	if chatgpt_alerts:
+		chatgpt_usable = sum(1 for entry in chatgpt_accounts if entry["usable"])
+		block = "\n".join([
+			f"ChatGPT pool: {len(chatgpt_alerts)} of {len(chatgpt_accounts)} account(s) need attention; {chatgpt_usable} usable.",
+			*chatgpt_lines,
+		])
+		text = f"{text}\n{block}" if text else block
+	return {
+		"alert": claude_alert or bool(chatgpt_alerts),
+		"claude_alert": claude_alert,
+		"chatgpt_accounts": len(chatgpt_accounts),
+		"chatgpt_alerts": chatgpt_alerts,
+		"chatgpt_warning": bool(chatgpt_alerts) and chatgpt_warning,
+		"accounts": total,
+		"gated": gated,
+		"auth_failed": auth_failed,
+		"probe_failed": failed,
+		"usable": usable,
+		"next_usable_at": next_usable_at,
+		"next_usable_in": next_usable_in,
+		"text": text,
+	}
+
+
+def _usage_percent(probe: dict[str, Any], name: str, label: str, gate: float, now: float | None = None) -> str:
+	"""``5h 12% (resets in 1.3h)`` for one window; ``5h ?`` when the probe had no reading."""
+	return _window_summary(probe, name, label, gate, now) or f"{label} ?"
+
+
+def pool_usage_report(
+	probes: list[dict[str, Any]],
+	gate: float,
+	now: float | None = None,
+	*,
+	chatgpt_status: str | None = None,
+	chatgpt_reason: str | None = None,
+	chatgpt_stale_hours: float = CHATGPT_STATUS_DEFAULT_STALE_HOURS,
+) -> dict[str, Any]:
+	"""The once-a-day Claude pool usage message: every account, in one message.
+
+	Input: the probe records ``parse_probe`` produced (the ``probes`` output of
+	``.github/actions/claude-pool-token``). Output: ``accounts``, ``usable``,
+	``gated``, ``auth_failed`` and ``probe_failed`` counts, and ``text``, a
+	headline plus one line per account, sorted by name: both windows'
+	utilization and hours until each resets (from ``now``, epoch seconds,
+	default the current time), the UTC reset time of each window at or above
+	``gate``, a ``rejected`` status, a rejected token, or a failed probe. Unlike
+	``pool_health`` it lists every account, below the gate too, and ``text`` is
+	never empty. Never raises on a malformed record: a record without a name is
+	reported as ``?``.
+
+	ChatGPT section (trial plan Phase 4), after a blank line: a
+	``ChatGPT accounts:`` headline and one line per account for a
+	``chatgpt_status`` with accounts; ``ChatGPT accounts: unavailable
+	(<reason>).`` for an unreadable status (``status_invalid``) or for an
+	empty status with ``chatgpt_reason`` (the action's ``reason`` output);
+	nothing for a status with no accounts, or neither input. Adds the
+	``chatgpt_accounts`` and ``chatgpt_alerts`` counts. The Claude text is
+	unchanged and the ChatGPT input never raises.
+	"""
+	now = _now_seconds(now)
+	ordered = sorted(probes, key=lambda probe: str(probe.get("account", "")))
+	counts = {"usable": 0, "gated": 0, "auth_failed": 0, "probe_failed": 0}
+	lines: list[str] = []
+	for probe in ordered:
+		name = str(probe.get("account") or "?")
+		error = probe.get("error")
+		if error == "auth_failed":
+			counts["auth_failed"] += 1
+			lines.append(f"{name}: token rejected (auth_failed); rotate CLAUDE_POOL_TOKEN_{name}")
+			continue
+		if error:
+			counts["probe_failed"] += 1
+			lines.append(f"{name}: probe failed ({error})")
+			continue
+		parts = [_usage_percent(probe, "five_hour", "5h", gate, now), _usage_percent(probe, "seven_day", "7d", gate, now)]
+		known = _known_peak(probe)
+		rejected = probe.get("status") == "rejected"
+		if rejected or (known is not None and known >= gate):
+			counts["gated"] += 1
+			if rejected and (known is None or known < gate):
+				parts.append(f"usage limit reached ({_reset_note(probe.get('resets_at'), now)})")
+		else:
+			counts["usable"] += 1
+		lines.append(f"{name}: {', '.join(parts)}")
+	headline = f"Claude pool daily usage: {len(ordered)} account(s), {counts['usable']} usable"
+	if counts["gated"]:
+		headline += f", {counts['gated']} at or above the {round(gate * 100)}% gate"
+	if counts["auth_failed"]:
+		headline += f", {counts['auth_failed']} with a rejected token"
+	if counts["probe_failed"]:
+		headline += f", {counts['probe_failed']} not probed"
+	if not ordered:
+		headline = "Claude pool daily usage: no probe results"
+	text = "\n".join([headline + ".", *lines])
+	chatgpt_accounts, chatgpt_gate, chatgpt_error = _chatgpt_status_parse(chatgpt_status)
+	chatgpt_lines, chatgpt_alerts, _ = _chatgpt_status_lines(
+		chatgpt_accounts, chatgpt_gate, _chatgpt_status_stale_hours(chatgpt_stale_hours), now
+	)
+	section = ""
+	if chatgpt_error:
+		section = f"ChatGPT accounts: unavailable ({chatgpt_error})."
+	elif chatgpt_accounts:
+		chatgpt_usable = sum(1 for entry in chatgpt_accounts if entry["usable"])
+		chatgpt_headline = f"ChatGPT accounts: {len(chatgpt_accounts)} account(s), {chatgpt_usable} usable"
+		if chatgpt_alerts:
+			chatgpt_headline += f", {len(chatgpt_alerts)} needing attention"
+		section = "\n".join([chatgpt_headline + ".", *chatgpt_lines])
+	elif not (chatgpt_status or "").strip() and (chatgpt_reason or "").strip():
+		reason = chatgpt_reason.strip()
+		section = f"ChatGPT accounts: unavailable ({reason if CHATGPT_STATUS_REASON_RE.fullmatch(reason) else 'unknown'})."
+	if section:
+		text += "\n\n" + section
+	return {
+		"accounts": len(ordered),
+		**counts,
+		"chatgpt_accounts": len(chatgpt_accounts),
+		"chatgpt_alerts": len(chatgpt_alerts),
+		"text": text,
+	}
+
+
+# --- command line ------------------------------------------------------------
+
+
+def _read_text(path: str) -> str:
+	try:
+		return Path(path).read_text(encoding="utf-8", errors="replace")
+	except FileNotFoundError:
+		return ""
+
+
+def _print_json(value: Any) -> None:
+	print(json.dumps(value, sort_keys=True))
+
+
+def cmd_config(args: argparse.Namespace) -> int:
+	config, invalid = load_config(Path(args.config) if args.config else None)
+	for key in invalid:
+		print(f"claude_engine.py: invalid config value ignored: {key}", file=sys.stderr)
+	if args.key:
+		if args.key not in config:
+			raise EngineError(f"unknown config key: {args.key}")
+		value = config[args.key]
+		print(value if isinstance(value, str) else json.dumps(value))
+		return 0
+	_print_json(config)
+	return 0
+
+
+def cmd_resolve(args: argparse.Namespace) -> int:
+	config, invalid = load_config(Path(args.config) if args.config else None)
+	for key in invalid:
+		print(f"claude_engine.py: invalid config value ignored: {key}", file=sys.stderr)
+	resolved = resolve_role(args.role, config, dict(os.environ), args.model_hint, args.effort_hint)
+	for warning in resolved["warnings"]:
+		print(f"::warning::AI engine: {warning}", file=sys.stderr)
+	if args.field:
+		print(resolved[args.field])
+	else:
+		_print_json(resolved)
+	return 0
+
+
+def cmd_settings(args: argparse.Namespace) -> int:
+	template = Path(args.template) if args.template else SCRIPT_DIR / TEMPLATE_NAME
+	if args.guard_hook:
+		guard_hook = args.guard_hook
+	else:
+		found = find_support_file(GUARD_HOOK_RELATIVE)
+		if found is None:
+			raise EngineError("gh_api_write_guard.py not found in the support checkout")
+		guard_hook = str(found.resolve())
+	try:
+		template_text = template.read_text(encoding="utf-8")
+	except OSError as exc:
+		raise EngineError(f"settings template unreadable: {exc}") from exc
+	settings = render_settings(
+		template_text,
+		str(Path(args.checkout).resolve()),
+		guard_hook,
+		profile=args.profile,
+		allow_workflow_edits=args.allow_workflow_edits,
+		web_search=args.web_search,
+	)
+	out = Path(args.out)
+	out.parent.mkdir(parents=True, exist_ok=True)
+	out.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+	os.chmod(out, 0o600)
+	return 0
+
+
+def trust_workdir(home: Path, workdir: str) -> None:
+	"""Set ``projects[<workdir>].hasTrustDialogAccepted`` in ``<home>/.claude.json``.
+
+	Other keys are kept. An unreadable or non-object file is replaced, because
+	the CLI would not start from it either.
+	"""
+	path = home / ".claude.json"
+	try:
+		data = json.loads(path.read_text(encoding="utf-8"))
+	except (OSError, ValueError):
+		data = {}
+	if not isinstance(data, dict):
+		data = {}
+	projects = data.get("projects")
+	if not isinstance(projects, dict):
+		projects = {}
+		data["projects"] = projects
+	entry = projects.get(workdir)
+	if not isinstance(entry, dict):
+		entry = {}
+		projects[workdir] = entry
+	entry["hasTrustDialogAccepted"] = True
+	tmp = path.with_name(f".claude.json.tmp.{os.getpid()}")
+	tmp.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+	os.chmod(tmp, 0o600)
+	os.replace(tmp, path)
+
+
+def cmd_trust(args: argparse.Namespace) -> int:
+	workdir = str(Path(args.workdir).resolve())
+	home = Path(args.home) if args.home else Path.home()
+	trust_workdir(home, workdir)
+	return 0
+
+
+SUPPORT_FILES: dict[str, Path] = {
+	"config": CONFIG_RELATIVE,
+	"template": Path("scripts") / TEMPLATE_NAME,
+	"guard-hook": GUARD_HOOK_RELATIVE,
+}
+
+
+def cmd_support_file(args: argparse.Namespace) -> int:
+	found = find_support_file(SUPPORT_FILES[args.name])
+	if found is None:
+		print(f"claude_engine.py: support file not found: {args.name}", file=sys.stderr)
+		return 1
+	print(found.resolve())
+	return 0
+
+
+def cmd_extract(args: argparse.Namespace) -> int:
+	result, usage = extract_result(_read_text(args.transcript))
+	if result is None:
+		print("claude_engine.py: transcript has no result event", file=sys.stderr)
+		return 1
+	Path(args.out).write_text(result, encoding="utf-8")
+	_print_json(usage)
+	return 0
+
+
+def cmd_classify(args: argparse.Namespace) -> int:
+	_print_json(classify(_read_text(args.transcript), args.exit_code))
+	return 0
+
+
+def cmd_inspect(args: argparse.Namespace) -> int:
+	_print_json(inspect_transcript(_read_text(args.transcript)))
+	return 0
+
+
+def cmd_probe_parse(args: argparse.Namespace) -> int:
+	_print_json(parse_probe(sys.stdin.read(), args.account, args.exit_code))
+	return 0
+
+
+def cmd_choose(args: argparse.Namespace) -> int:
+	try:
+		probes = json.loads(sys.stdin.read() or "[]")
+	except ValueError as exc:
+		raise EngineError(f"probes are not JSON: {exc}") from exc
+	if not isinstance(probes, list) or not all(isinstance(probe, dict) for probe in probes):
+		raise EngineError("probes must be a JSON list of objects")
+	gate = args.gate
+	if gate is None:
+		config, _ = load_config(Path(args.config) if args.config else None)
+		gate = config["gate_utilization"]
+	if not (0 < gate <= 1):
+		raise EngineError("gate must be in (0, 1]")
+	_print_json(choose_account(probes, gate))
+	return 0
+
+
+def cmd_pool_health(args: argparse.Namespace) -> int:
+	try:
+		probes = json.loads(sys.stdin.read() or "[]")
+	except ValueError as exc:
+		raise EngineError(f"probes are not JSON: {exc}") from exc
+	if not isinstance(probes, list) or not all(isinstance(probe, dict) for probe in probes):
+		raise EngineError("probes must be a JSON list of objects")
+	gate = args.gate
+	if gate is None:
+		config, _ = load_config(Path(args.config) if args.config else None)
+		gate = config["gate_utilization"]
+	if not (0 < gate <= 1):
+		raise EngineError("gate must be in (0, 1]")
+	_print_json(pool_health(probes, gate, chatgpt_status=args.chatgpt_status, chatgpt_stale_hours=args.chatgpt_stale_hours))
+	return 0
+
+
+def cmd_pool_usage(args: argparse.Namespace) -> int:
+	try:
+		probes = json.loads(sys.stdin.read() or "[]")
+	except ValueError as exc:
+		raise EngineError(f"probes are not JSON: {exc}") from exc
+	if not isinstance(probes, list) or not all(isinstance(probe, dict) for probe in probes):
+		raise EngineError("probes must be a JSON list of objects")
+	gate = args.gate
+	if gate is None:
+		config, _ = load_config(Path(args.config) if args.config else None)
+		gate = config["gate_utilization"]
+	if not (0 < gate <= 1):
+		raise EngineError("gate must be in (0, 1]")
+	_print_json(
+		pool_usage_report(
+			probes,
+			gate,
+			chatgpt_status=args.chatgpt_status,
+			chatgpt_reason=args.chatgpt_reason,
+			chatgpt_stale_hours=args.chatgpt_stale_hours,
+		)
+	)
+	return 0
+
+
+def cmd_chatgpt_slot(args: argparse.Namespace) -> int:
+	slot = resolve_chatgpt_slot(Path(args.config), args.override, args.model, args.replaces)
+	print(
+		f"enabled={'true' if slot['enabled'] else 'false'} model={slot['model']} replaces={slot['replaces']} "
+		f"reasoning={slot['reasoning']} source={slot['source']} reason={slot['reason']}"
+	)
+	return 0
+
+
+def cmd_chatgpt_classify(args: argparse.Namespace) -> int:
+	verdict = classify_chatgpt_events(_read_text(args.events), args.exit_code)
+	if args.field:
+		print(verdict[args.field])
+	else:
+		_print_json(verdict)
+	return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+	parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+	sub = parser.add_subparsers(dest="command", required=True)
+
+	p = sub.add_parser("config")
+	p.add_argument("--config", default="")
+	p.add_argument("--key", default="")
+	p.set_defaults(func=cmd_config)
+
+	p = sub.add_parser("resolve")
+	p.add_argument("--role", required=True)
+	p.add_argument("--model-hint", default="")
+	p.add_argument("--effort-hint", default="")
+	p.add_argument("--field", choices=("engine", "model", "effort", "profile", "source"), default="")
+	p.add_argument("--config", default="")
+	p.set_defaults(func=cmd_resolve)
+
+	p = sub.add_parser("settings")
+	p.add_argument("--checkout", required=True)
+	p.add_argument("--out", required=True)
+	p.add_argument("--profile", choices=PROFILES, default="write")
+	p.add_argument("--allow-workflow-edits", action="store_true")
+	p.add_argument("--web-search", action="store_true")
+	p.add_argument("--template", default="")
+	p.add_argument("--guard-hook", default="")
+	p.set_defaults(func=cmd_settings)
+
+	p = sub.add_parser("trust")
+	p.add_argument("--workdir", required=True)
+	p.add_argument("--home", default="")
+	p.set_defaults(func=cmd_trust)
+
+	p = sub.add_parser("support-file")
+	p.add_argument("--name", required=True, choices=sorted(SUPPORT_FILES))
+	p.set_defaults(func=cmd_support_file)
+
+	p = sub.add_parser("extract")
+	p.add_argument("--transcript", required=True)
+	p.add_argument("--out", required=True)
+	p.set_defaults(func=cmd_extract)
+
+	p = sub.add_parser("classify")
+	p.add_argument("--transcript", required=True)
+	p.add_argument("--exit-code", type=int, default=None)
+	p.set_defaults(func=cmd_classify)
+
+	p = sub.add_parser("inspect")
+	p.add_argument("--transcript", required=True)
+	p.set_defaults(func=cmd_inspect)
+
+	p = sub.add_parser("probe-parse")
+	p.add_argument("--account", required=True)
+	p.add_argument("--exit-code", type=int, default=0)
+	p.set_defaults(func=cmd_probe_parse)
+
+	p = sub.add_parser("choose")
+	p.add_argument("--gate", type=float, default=None)
+	p.add_argument("--config", default="")
+	p.set_defaults(func=cmd_choose)
+
+	p = sub.add_parser("pool-health")
+	p.add_argument("--gate", type=float, default=None)
+	p.add_argument("--config", default="")
+	p.add_argument("--chatgpt-status", default="")
+	p.add_argument("--chatgpt-stale-hours", type=float, default=CHATGPT_STATUS_DEFAULT_STALE_HOURS)
+	p.set_defaults(func=cmd_pool_health)
+
+	p = sub.add_parser("pool-usage")
+	p.add_argument("--gate", type=float, default=None)
+	p.add_argument("--config", default="")
+	p.add_argument("--chatgpt-status", default="")
+	p.add_argument("--chatgpt-reason", default="")
+	p.add_argument("--chatgpt-stale-hours", type=float, default=CHATGPT_STATUS_DEFAULT_STALE_HOURS)
+	p.set_defaults(func=cmd_pool_usage)
+
+	p = sub.add_parser("chatgpt-slot")
+	p.add_argument("--config", required=True)
+	p.add_argument("--override", default="")
+	p.add_argument("--model", default="")
+	p.add_argument("--replaces", default="")
+	p.set_defaults(func=cmd_chatgpt_slot)
+
+	p = sub.add_parser("chatgpt-classify")
+	p.add_argument("--events", required=True)
+	p.add_argument("--exit-code", type=int, default=None)
+	p.add_argument("--field", choices=("outcome", "reason"), default="")
+	p.set_defaults(func=cmd_chatgpt_classify)
+	return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+	args = build_parser().parse_args(argv)
+	try:
+		return args.func(args)
+	except EngineError as exc:
+		print(f"claude_engine.py: {exc}", file=sys.stderr)
+		return 2
+
+
+if __name__ == "__main__":
+	sys.exit(main())

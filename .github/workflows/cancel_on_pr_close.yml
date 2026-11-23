@@ -1,0 +1,467 @@
+---
+name: AI Cancel Runs on PR Close
+
+"on":
+  workflow_call:
+    secrets:
+      GH_PAT:
+        required: false
+      # Signed job-token comments (run-volume plan item 15): optional; see scripts/comment_signature.py.
+      AI_COMMENT_SIGNING_SECRET:
+        required: false
+
+env:
+  # Signed job-token comments (run-volume plan item 15, D16; see
+  # scripts/comment_signature.py). The opt-in secret and the job token sit
+  # next to each step's GH_PAT, never here, so a step without the PAT never
+  # sees them. Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false
+  # posts with GH_PAT again while signed comments already posted still verify.
+  AI_COMMENT_SIGNING_POST: ${{ vars.AI_COMMENT_SIGNING_POST || 'true' }}
+
+jobs:
+  cancel-active-runs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      # Each PR-close run gets its own group; scheduled sweeps keep the
+      # repository group. GitHub keeps one pending run per group and cancels
+      # the older one when another queues, so in a shared group a close event
+      # was dropped whenever another PR closed within a minute (release run
+      # 40794181365: run 40814653574 cancelled after 51 s, issue #8327).
+      # Overlapping runs are safe: cancel POSTs are idempotent and
+      # `review_merge_train.sh release` claims each PR by deleting its label.
+      group: cancel-on-pr-close-${{ github.repository }}${{ github.event_name == 'pull_request' && format('-pr-{0}', github.event.pull_request.number) || '' }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+      AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+      EVENT_NAME: ${{ github.event_name }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      REPOSITORY: ${{ github.repository }}
+      CURRENT_RUN_ID: ${{ github.run_id }}
+    steps:
+      - name: Resolve workflow support ref
+        shell: bash
+        env:
+          SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          wf_source="shubhodeep1/coding-workflows"
+          if [ "${{ github.repository }}" = "${wf_source}" ]; then
+            promote_candidate_support_ref="${{ github.sha }}"
+            promote_candidate_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            # Pipeline runs of this repository pinned to the protected promote-candidate
+            # branch (promote cycle, docs/plans/pin-promote-cycle-to-candidate-plan.md)
+            # take support code from that branch's tip. A look-alike ref, an unprotected
+            # branch or a failed read keep github.sha.
+            if [[ "${promote_candidate_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/cancel_on_pr_close\.yml@refs/heads/promote-candidate$ ]]; then
+              # One branches read, only on this path: no earlier call in this step
+              # returns the promote-candidate tip or its protection flag.
+              source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true
+              type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] || [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }
+              promote_candidate_json="$(gh_api_retry repos/shubhodeep1/coding-workflows/branches/promote-candidate 2>/dev/null || true)"
+              promote_candidate_sha="$(jq -r 'if .protected == true then (.commit.sha // "") else "" end' <<< "${promote_candidate_json}" 2>/dev/null || true)"
+              if [[ "${promote_candidate_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+                promote_candidate_support_ref="${promote_candidate_sha}"
+                echo "SUPPORT_REF source=promote_candidate sha=${promote_candidate_sha}"
+              else
+                echo "SUPPORT_REF source=promote_candidate_unprotected"
+              fi
+            fi
+            echo "SCRIPT_REF=${promote_candidate_support_ref}" >> "$GITHUB_ENV"
+          else
+            # A consumer wrapper pins this workflow to a commit (<file>@<sha>);
+            # take the support scripts from that same commit, never a newer
+            # stable or main (issue tele-funtoken#4566). Tags, branches and any
+            # other identity keep stable.
+            support_ref_pin="stable"
+            support_ref_workflow_ref="$(jq -r '.workflow_ref // ""' <<< "${SUPPORT_REF_WORKFLOW_JOB_JSON:-}" 2>/dev/null || true)"
+            if [[ "${support_ref_workflow_ref}" =~ ^shubhodeep1/coding-workflows/\.github/workflows/cancel_on_pr_close\.yml@[0-9a-f]{40}$ ]]; then
+              support_ref_pin="${support_ref_workflow_ref##*@}"
+            fi
+            echo "SUPPORT_REF ref=${support_ref_pin} workflow_ref=${support_ref_workflow_ref:-unknown}"
+            echo "SCRIPT_REF=${support_ref_pin}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Checkout workflow support source
+        id: checkout_support_source
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ env.SCRIPT_REF }}
+          token: ${{ secrets.GH_PAT || github.token }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+
+      - name: Checkout workflow support source fallback
+        if: ${{ steps.checkout_support_source.outcome == 'failure' && env.SCRIPT_REF == 'stable' }}
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: main
+          token: ${{ secrets.GH_PAT || github.token }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+
+      - name: Ensure workflow support source checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ ! -d .codex-workflow-src ]; then
+            echo "::error::Failed to checkout workflow support source from ${SCRIPT_REF} or main"
+            exit 1
+          fi
+          # A pinned support ref must be exactly the commit the caller pinned;
+          # never run support code from a moving ref in its place.
+          if [[ "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null || true)" != "${SCRIPT_REF}" ]; then
+            echo "::error::Workflow support checkout does not match the pinned commit ${SCRIPT_REF}; refusing to run support code from another ref."
+            exit 1
+          fi
+
+      - name: Checkout workflow support source main snapshot
+        if: ${{ env.SCRIPT_REF == 'stable' }}
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: main
+          token: ${{ secrets.GH_PAT || github.token }}
+          path: .codex-workflow-src-main
+          fetch-depth: 1
+
+      - name: Stage gh retry helper
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          src=".codex-workflow-src/scripts/gh_helpers.sh"
+          if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/gh_helpers.sh" ]; then
+            src=".codex-workflow-src-main/scripts/gh_helpers.sh"
+          fi
+          if [ ! -f "${src}" ]; then
+            echo "::error::Missing required support script gh_helpers.sh in shubhodeep1/coding-workflows@${SCRIPT_REF}"
+            exit 1
+          fi
+
+          mkdir -p scripts
+          install -m 0755 "${src}" scripts/gh_helpers.sh
+          for helper in review_merge_train.sh label_helpers.sh pr_checks_lib.sh; do
+            src=".codex-workflow-src/scripts/${helper}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${helper}" ]; then
+              src=".codex-workflow-src-main/scripts/${helper}"
+            fi
+            if [ -f "${src}" ]; then
+              install -m 0755 "${src}" "scripts/${helper}"
+            fi
+          done
+
+      - name: Cancel queued/in-progress runs for closed PR branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          source scripts/gh_helpers.sh 2>/dev/null || true
+          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+
+          cleanup_tmp_dir="$(mktemp -d)"
+          trap 'rm -rf "${cleanup_tmp_dir}"' EXIT
+          active_runs_file="${cleanup_tmp_dir}/active-runs.json"
+          pr_states_file="${cleanup_tmp_dir}/pr-states.json"
+
+          _cpr_fetch_active_runs()
+          {
+            local branch_filter="${1:-}"
+            local queued_file="${cleanup_tmp_dir}/queued-runs.json"
+            local in_progress_file="${cleanup_tmp_dir}/in-progress-runs.json"
+            local -a branch_args=()
+            if [ -n "${branch_filter}" ]; then
+              branch_args=(-f "branch=${branch_filter}")
+            fi
+
+            # Keep the two status-filtered calls: dropping the filters can
+            # paginate through an unbounded completed-run history.
+            gh_retry gh api \
+              --method GET \
+              "repos/${REPOSITORY}/actions/runs" \
+              --paginate \
+              -f status=queued \
+              -f event=pull_request \
+              "${branch_args[@]}" \
+              -f per_page=100 \
+              | jq -s '{workflow_runs: [.[].workflow_runs // []] | flatten}' \
+              > "${queued_file}"
+            gh_retry gh api \
+              --method GET \
+              "repos/${REPOSITORY}/actions/runs" \
+              --paginate \
+              -f status=in_progress \
+              -f event=pull_request \
+              "${branch_args[@]}" \
+              -f per_page=100 \
+              | jq -s '{workflow_runs: [.[].workflow_runs // []] | flatten}' \
+              > "${in_progress_file}"
+            jq -s '{workflow_runs: ((.[0].workflow_runs // []) + (.[1].workflow_runs // []))}' \
+              "${queued_file}" "${in_progress_file}"
+          }
+
+          # Batching contract: input is a newline-delimited set of numeric PR
+          # numbers; output is one JSON object keyed by PR number with live
+          # state fields. Each group of at most 50 PRs costs one
+          # aliased GraphQL call. A failed or malformed batch is omitted so
+          # callers fail open by preserving every run that depends on it.
+          _cpr_fetch_pr_state_batches()
+          {
+            local numbers_file="$1"
+            local output_file="$2"
+            local owner="${REPOSITORY%%/*}"
+            local repo_name="${REPOSITORY#*/}"
+            local batch_file="${cleanup_tmp_dir}/pr-number-batch.txt"
+            local response_file="${cleanup_tmp_dir}/pr-state-response.json"
+            local parsed_file="${cleanup_tmp_dir}/pr-state-parsed.json"
+            local merged_file="${cleanup_tmp_dir}/pr-state-merged.json"
+            local batch_index=0
+            printf '{}\n' > "${output_file}"
+
+            split -l 50 -d -a 4 "${numbers_file}" "${batch_file}."
+            for batch_file_part in "${batch_file}."*; do
+              [ -f "${batch_file_part}" ] || continue
+              batch_index=$((batch_index + 1))
+              local query='query($owner:String!,$name:String!){repository(owner:$owner,name:$name){'
+              local pr_number
+              while IFS= read -r pr_number; do
+                case "${pr_number}" in
+                  ''|*[!0-9]*) continue ;;
+                esac
+                query+="pr_${pr_number}:pullRequest(number:${pr_number}){number state}"
+              done < "${batch_file_part}"
+              query+='}}'
+
+              if ! gh_retry gh api graphql \
+                -f query="${query}" \
+                -f owner="${owner}" \
+                -f name="${repo_name}" \
+                > "${response_file}"; then
+                echo "::warning::Scheduled close cleanup could not resolve PR-state batch ${batch_index}; preserving affected runs."
+                continue
+              fi
+              if ! jq -e '
+                (.data.repository | type == "object") and
+                ((.errors // []) | type == "array")
+              ' "${response_file}" >/dev/null 2>&1; then
+                echo "::warning::Scheduled close cleanup received malformed PR-state batch ${batch_index}; preserving affected runs."
+                continue
+              fi
+              if jq -e '(.errors // []) | length > 0' "${response_file}" >/dev/null 2>&1; then
+                echo "::warning::Scheduled close cleanup received partial GraphQL errors in PR-state batch ${batch_index}; unresolved PRs will be preserved."
+              fi
+              jq '
+                .data.repository
+                | to_entries
+                | map(.value | select(. != null))
+                | map({
+                    key: (.number | tostring),
+                    value: {
+                      state: .state
+                    }
+                  })
+                | from_entries
+              ' "${response_file}" > "${parsed_file}"
+              jq -s '.[0] * .[1]' "${output_file}" "${parsed_file}" > "${merged_file}"
+              mv "${merged_file}" "${output_file}"
+            done
+          }
+
+          if [ "${EVENT_NAME}" = "schedule" ]; then
+            echo "Running scheduled closed-PR cleanup for ${REPOSITORY}."
+            _cpr_fetch_active_runs > "${active_runs_file}"
+            unlinked_active_run_count="$(jq '[.workflow_runs[] | select(((.pull_requests // []) | length) == 0)] | length' "${active_runs_file}")"
+            if [ "${unlinked_active_run_count}" -gt 0 ]; then
+              echo "::warning::Scheduled close cleanup preserved ${unlinked_active_run_count} active run(s) without pull-request linkage."
+              # List up to 10 of those runs from the same snapshot (no API call).
+              # Only id, workflow path, event, status, head branch and creation
+              # time are printed, never free-text titles; every value is limited
+              # to [A-Za-z0-9._/@:+-], has "::" broken up and is capped at 200
+              # characters. A listing failure only warns (fail open).
+              unlinked_run_listing_jq='
+                def _cpr_neutralize: if test("::") then gsub("::"; ": :") | _cpr_neutralize else . end;
+                def _cpr_safe: (if . == null then "" else tostring end)
+                  | gsub("[^A-Za-z0-9._/@:+-]"; "_") | _cpr_neutralize | .[0:200];
+                [.workflow_runs[] | select(((.pull_requests // []) | length) == 0)] as $unlinked
+                | ($unlinked[0:$unlinked_run_listing_max][]
+                    | "  unlinked run id=\(.id | _cpr_safe) workflow=\((.path // "") | tostring | sub("@.*$"; "") | _cpr_safe) event=\(.event | _cpr_safe) status=\(.status | _cpr_safe) head_branch=\(.head_branch | _cpr_safe) created_at=\(.created_at | _cpr_safe)"),
+                  (if ($unlinked | length) > $unlinked_run_listing_max
+                    then "  ... \(($unlinked | length) - $unlinked_run_listing_max) more unlinked active run(s) not listed."
+                    else empty end)
+              '
+              if ! unlinked_run_listing="$(jq -r --argjson unlinked_run_listing_max 10 "${unlinked_run_listing_jq}" "${active_runs_file}" 2>/dev/null)"; then
+                echo "::warning::Scheduled close cleanup could not list the unlinked active run details."
+              elif [ -n "${unlinked_run_listing}" ]; then
+                printf '%s\n' "${unlinked_run_listing}"
+              fi
+            fi
+            jq -r '
+              .workflow_runs[]
+              | (.pull_requests // [])[].number
+              | select(type == "number")
+            ' "${active_runs_file}" | sort -nu > "${cleanup_tmp_dir}/pr-numbers.txt"
+            _cpr_fetch_pr_state_batches \
+              "${cleanup_tmp_dir}/pr-numbers.txt" \
+              "${pr_states_file}"
+            mapfile -t target_run_ids < <(
+              jq -r \
+                --arg current_run_id "${CURRENT_RUN_ID}" \
+                --slurpfile states "${pr_states_file}" \
+                '.workflow_runs[]
+                | select(.event == "pull_request")
+                | select(.status == "queued" or .status == "in_progress")
+                | select((.id | tostring) != $current_run_id)
+                | select(
+                    ((.path // "") | endswith("/internal-cancel-on-pr-close.yml") | not) and
+                    ((.path // "") | endswith("/ai-cancel-on-pr-close.yml") | not)
+                  )
+                | (.pull_requests // []) as $linked_prs
+                | select(($linked_prs | length) > 0)
+                | select(all($linked_prs[];
+                    (.number | tostring) as $number
+                    | ($states[0][$number] // null) as $live_pr
+                    | ($live_pr != null and
+                      ($live_pr.state == "CLOSED" or $live_pr.state == "MERGED"))))
+                | .id' \
+                "${active_runs_file}" \
+              | awk '!seen[$0]++'
+            )
+          else
+            if [ -z "${PR_NUMBER}" ] || [ -z "${PR_HEAD_REF}" ]; then
+              echo "::error::pull_request cleanup is missing PR number or head ref."
+              exit 1
+            fi
+            echo "Processing PR #${PR_NUMBER}" \
+              "for ${REPOSITORY}" \
+              "(head ref: ${PR_HEAD_REF})"
+            _cpr_fetch_active_runs "${PR_HEAD_REF}" > "${active_runs_file}"
+            mapfile -t target_run_ids < <(
+              jq -r \
+                --arg head_ref "${PR_HEAD_REF}" \
+                --arg pr_number "${PR_NUMBER}" \
+                --arg current_run_id "${CURRENT_RUN_ID}" \
+                '.workflow_runs[]
+                | select(.head_branch == $head_ref)
+                | select((.pull_requests // [])
+                  | any(.number == ($pr_number | tonumber)))
+                | select(.event == "pull_request")
+                | select((.id | tostring) != $current_run_id)
+                | select(
+                    ((.path // "") | endswith("/internal-cancel-on-pr-close.yml") | not) and
+                    ((.path // "") | endswith("/ai-cancel-on-pr-close.yml") | not)
+                  )
+                | .id' \
+                "${active_runs_file}" \
+              | awk '!seen[$0]++'
+            )
+          fi
+
+          if [ "${#target_run_ids[@]}" -eq 0 ]; then
+            if [ "${EVENT_NAME}" = "schedule" ]; then
+              echo "Scheduled cleanup found no cancellable queued/in-progress pull_request workflow runs."
+            else
+              echo "No matching queued/in-progress" \
+                "pull_request workflow runs" \
+                "found for head ref" \
+                "'${PR_HEAD_REF}'."
+            fi
+            exit 0
+          fi
+
+          echo "Found ${#target_run_ids[@]}" \
+            "run(s) to cancel:" \
+            "${target_run_ids[*]}"
+
+          canceled_any=0
+          for run_id in "${target_run_ids[@]}"; do
+            echo "Attempting cancellation for run ${run_id}..."
+
+            cancel_url="repos/${REPOSITORY}"
+            cancel_url+="/actions/runs"
+            cancel_url+="/${run_id}/cancel"
+            if gh_retry gh api -X POST \
+              "${cancel_url}" \
+              >/dev/null 2>&1; then
+              echo "Canceled run ${run_id}."
+              canceled_any=1
+            else
+              echo "Run ${run_id} could not" \
+                "be canceled (likely already" \
+                "completed); continuing."
+            fi
+          done
+
+          if [ "${canceled_any}" -eq 1 ]; then
+            echo "Cancellation pass complete."
+          else
+            echo "No runs were canceled" \
+              "because matching runs" \
+              "finished before cancellation" \
+              "requests completed."
+          fi
+
+      - name: Release merge-queued PRs (merge train)
+        # A closed PR may have been blocking younger PRs that edit the same
+        # files (scripts/review_merge_train.sh), whether it merged or not.
+        # Re-evaluate immediately; core-profile repos have no poll backstop.
+        shell: bash
+        env:
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          EVENT_NAME: ${{ github.event_name }}
+          MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
+          MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
+          MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '240' }}
+          MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
+          MERGE_LEASE_REVOKE_ENABLED: ${{ vars.MERGE_LEASE_REVOKE_ENABLED || 'true' }}
+          MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '60' }}
+          MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars.MERGE_LEASE_PRIORITY_HEAD_PREFIXES || 'auto/forward-merge-stable-' }}
+          MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || 'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}
+          MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}
+          FINAL_CI_MERGE_RESUME_ENABLED: ${{ vars.FINAL_CI_MERGE_RESUME_ENABLED || 'true' }}
+          AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
+          ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
+          AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
+          MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
+          MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
+          ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
+          MERGE_TRAIN_MAX_OLDER_PRS: ${{ vars.MERGE_TRAIN_MAX_OLDER_PRS || '20' }}
+          MERGE_TRAIN_CONFLICT_CHECK_ENABLED: ${{ vars.MERGE_TRAIN_CONFLICT_CHECK_ENABLED || 'true' }}
+          MERGE_TRAIN_HEAD_MAX_AGE_HOURS: ${{ vars.MERGE_TRAIN_HEAD_MAX_AGE_HOURS || '6' }}
+          MERGE_TRAIN_PRIORITY_LABELS: ${{ vars.MERGE_TRAIN_PRIORITY_LABELS || 'ai:workflow-heal,ai:security' }}
+          MERGE_TRAIN_IGNORE_PATHS: ${{ vars.MERGE_TRAIN_IGNORE_PATHS || '.ai/.workspace_source_manifest.txt' }}
+          MERGE_TRAIN_ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
+          # Wedged-queued run filter read by review_merge_train.sh release
+          # (issue #9473); 0 disables it. The cancel step above stays unfiltered.
+          ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT_NAME}" = "schedule" ]; then
+            echo "Scheduled cleanup is running the global merge-train release scan."
+          else
+            case "${PR_HEAD_REF}" in
+              ai/issue-*) ;;
+              *)
+                echo "Closed PR #${PR_NUMBER} head '${PR_HEAD_REF}' is not an ai/issue-* branch; merge-train release still runs (the base may have changed for queued PRs)."
+                ;;
+            esac
+          fi
+          if [ ! -f scripts/review_merge_train.sh ]; then
+            echo "merge-train release skipped: scripts/review_merge_train.sh not staged from shubhodeep1/coding-workflows@${SCRIPT_REF}."
+            exit 0
+          fi
+          _mt_rc=0
+          SUPPORT_SCRIPTS_DIR="$(pwd)/scripts" bash scripts/review_merge_train.sh release || _mt_rc=$?
+          if [ "${_mt_rc}" -ne 0 ]; then
+            echo "::warning::review_merge_train.sh release exited ${_mt_rc}; ignoring (fail-open)."
+          fi

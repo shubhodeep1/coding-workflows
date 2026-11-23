@@ -1,0 +1,13 @@
+=== ISSUE 001 ===
+FILE: src/module.py
+LINES: 2
+LENS: SECURITY
+SEVERITY: high
+CLASSIFICATION: actionable
+EVIDENCE:
+  reviewer_bundle> SQL query is built from raw input.
+CURRENT_CODE:
+  total = a + b  # whitespace comment
+SUGGESTED_APPROACH:
+  Use parameterized query construction.
+=== END ISSUE 001 ===

@@ -1,0 +1,683 @@
+---
+name: Workflow Failure Heal Intake
+
+# Receives workflow-failure reports and turns them into heal issues for the AI
+# pipeline. Three entry points:
+#
+#   1. `repository_dispatch` (event type `workflow-failure-heal`), sent by
+#      scripts/workflow_failure_heal_report.sh from a consumer repository (or
+#      from this repo's own `internal-workflow-failure-heal.yml`) when a
+#      human-needed escalation label lands on an issue / pull request.
+#   2. `workflow_run: completed` for the release and promotion workflows of
+#      this repository; only `failure` / `timed_out` conclusions proceed.
+#   3. `workflow_dispatch` with a raw payload JSON, for manual re-runs.
+#   4. `schedule` (hourly): the heal-scope recovery scan (#7333,
+#      scripts/workflow_failure_heal_recovery_scan.sh) rebuilds the report of
+#      an open, pipeline-authored heal issue that has no scope marker and runs
+#      the intake on it, so the issue is replaced without a person. The
+#      `recovery-candidates` job lists candidates without the shared lock;
+#      only `recovery-scan`, which runs when there are any, joins the
+#      `workflow-failure-heal-intake` group. HEAL_SCOPE_RECOVERY_ENABLED=false
+#      turns the scan off.
+#      The same hourly schedule also runs the `heal-verify` job (P7, Refs
+#      #8434, scripts/workflow_failure_heal_verify.sh) when
+#      WORKFLOW_HEAL_VERIFY_ENABLED is 'true': it checks the first decisive run
+#      after a heal's fix merged and reopens the heal when the fix did not hold.
+#
+# scripts/workflow_failure_heal_intake.sh fetches the failed job logs, runs the
+# diagnosis model (prompts/mode-workflow-failure-heal.txt), de-duplicates by
+# fingerprint, applies the lineage / budget caps, and opens the heal issue
+# (label `ai:workflow-heal`, `Target branch: stable` so the fix ships as a
+# hotfix on the stable line). See README "Workflow Failure Heal".
+
+"on":
+  repository_dispatch:
+    types:
+      - workflow-failure-heal
+  workflow_run:
+    workflows:
+      - "Test & Mark Stable Release"
+      - "Mark Stable Release"
+      - "Promote main to stable"
+      - "Auto release stable"
+      - "Forward-merge stable to main"
+      # CI on pushes to main (Q51); the job skips CI runs for pull requests
+      # and other branches, which check-failure triage covers.
+      - "CI"
+      # Scheduled self-checks (SCHEDULED_CHECK_WORKFLOW_NAMES), default
+      # branch only: the nightly self-test and its daily validation harness
+      # sandbox check (Q39: C).
+      - "Nightly Validation Self-Test"
+    types:
+      - completed
+  schedule:
+    - cron: "41 * * * *"
+  workflow_dispatch:
+    inputs:
+      payload_json:
+        description: "Raw workflow_failure_heal.v1 payload JSON (manual re-run / testing; any source_kind, including release_blocker)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+  actions: read
+  # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
+  id-token: write
+
+# Every intake is serialised so the fingerprint dedup and the open-issue /
+# per-day budgets are evaluated against a consistent issue list. A shared
+# concurrency group did that by cancelling: GitHub keeps one pending run per
+# group and a newly queued run replaces it, so a burst of reports lost all but
+# the first and the last (about 15 cancelled runs on 2026-10-21). Each run now
+# gets its own group and waits its turn in the first-come, first-served queue
+# of scripts/workflow_failure_heal_queue.sh instead (intake and recovery-scan
+# jobs alike). HEAL_INTAKE_QUEUE_ENABLED=false turns the queue off and brings
+# back the shared group. A schedule run always gets its own group.
+concurrency:
+  group: ${{ github.event_name == 'schedule' && format('workflow-failure-heal-recovery-list-{0}', github.run_id) || vars.HEAL_INTAKE_QUEUE_ENABLED != 'false' && format('workflow-failure-heal-intake-run-{0}', github.run_id) || 'workflow-failure-heal-intake' }}
+  cancel-in-progress: false
+
+env:
+  # Claude capacity wait (issue #7370): a capacity fallback waits for the
+  # hourly capacity-resume pass instead of running codex/OpenCode. Off for the
+  # `core` install profile, which has no orchestrate-poll wrapper to resume
+  # waiting work; repo variable CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false rolls back.
+  CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
+  # Signed job-token comments (run-volume plan item 15, D16; see
+  # scripts/comment_signature.py). The opt-in secret and the job token sit
+  # next to each step's GH_PAT, never here, so a step without the PAT never
+  # sees them. Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false
+  # posts with GH_PAT again while signed comments already posted still verify.
+  AI_COMMENT_SIGNING_POST: ${{ vars.AI_COMMENT_SIGNING_POST || 'true' }}
+
+jobs:
+  intake:
+    if: >-
+      github.event_name != 'schedule' &&
+      !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED) &&
+      (github.event_name != 'workflow_run' ||
+       (contains(fromJson('["failure","timed_out"]'), github.event.workflow_run.conclusion) &&
+        (github.event.workflow_run.name != 'CI' ||
+         (github.event.workflow_run.event == 'push' &&
+          github.event.workflow_run.head_branch == github.event.repository.default_branch)) &&
+        (github.event.workflow_run.name != 'Nightly Validation Self-Test' ||
+         github.event.workflow_run.head_branch == github.event.repository.default_branch)))
+    runs-on: ubuntu-latest
+    # 45 minutes of intake work plus up to HEAL_INTAKE_QUEUE_MAX_WAIT_SECONDS
+    # (80 minutes) waiting for its turn in the report queue, plus up to 26
+    # minutes of reproduction (WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES, capped
+    # at 20 by the intake, and its 5.5-minute outer guard).
+    timeout-minutes: 156
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+      AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      # Polling reads of the heal queue use the job token (issue #9888).
+      GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
+      MODEL_EDITOR: ${{ vars.WORKFLOW_HEAL_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
+      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_WORKFLOW_HEAL || 'high' }}
+      MODEL_VERBOSITY: ${{ vars.VERBOSITY_WORKFLOW_HEAL || 'low' }}
+      OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
+      WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+      WORKFLOW_HEAL_MAX_LINEAGE_DEPTH: ${{ vars.WORKFLOW_HEAL_MAX_LINEAGE_DEPTH || '3' }}
+      WORKFLOW_HEAL_MAX_OPEN_ISSUES: ${{ vars.WORKFLOW_HEAL_MAX_OPEN_ISSUES || '10' }}
+      WORKFLOW_HEAL_MAX_ISSUES_PER_DAY: ${{ vars.WORKFLOW_HEAL_MAX_ISSUES_PER_DAY || '20' }}
+      WORKFLOW_HEAL_TARGET_BRANCH: ${{ vars.WORKFLOW_HEAL_TARGET_BRANCH || 'stable' }}
+      WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED || 'true' }}
+      # Heal issue creation gate (#6798 / #6871): 'true' (default) files a heal
+      # issue only after its scope marker verifies; 'false' files none except a
+      # verified heal-scope recovery replacement (see below).
+      HEAL_INTAKE_SCOPE_GUARD_ENABLED: ${{ vars.HEAL_INTAKE_SCOPE_GUARD_ENABLED || 'true' }}
+      # Heal-scope recovery (#7191, #7323): on by default. A verified-identity
+      # report replaces an open heal issue that has no scope marker instead of
+      # recording a duplicate, also while the creation gate above is off; the
+      # replacement must still pass `heal-scope verify`. 'false' turns off
+      # recovery only.
+      HEAL_SCOPE_RECOVERY_ENABLED: ${{ vars.HEAL_SCOPE_RECOVERY_ENABLED || 'true' }}
+      # Re-issue lineage (Q147): a report whose heal issue the unblock judge
+      # re-issued is recorded on the open re-issue. 'false' turns it off.
+      HEAL_REISSUE_DEDUPE_ENABLED: ${{ vars.HEAL_REISSUE_DEDUPE_ENABLED || 'true' }}
+      HEAL_OCCURRENCE_IN_PLACE_ENABLED: ${{ vars.HEAL_OCCURRENCE_IN_PLACE_ENABLED || 'true' }}
+      HEAL_SOURCE_DEDUPE_ENABLED: ${{ vars.HEAL_SOURCE_DEDUPE_ENABLED || 'true' }}
+      # Linked-run scope paths (#8360): for a release or promotion workflow_run
+      # report, the workflows and scripts its linked runs used join the frozen
+      # heal scope. 'false' turns that off and restores the previous scope.
+      WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED: ${{ vars.WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED || 'true' }}
+      # Evidence pack (P1): 'true' adds the failed-run and linked-run step
+      # timelines to the heal issue body after the scope freeze; off by default.
+      WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED: ${{ vars.WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED || 'false' }}
+      WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES: ${{ vars.WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES || '12000' }}
+      # Reproduction (P2 step 4): 'true' re-runs the extracted failing tests in
+      # the gate sandbox (scripts/heal_reproduce.sh, from this checkout) against
+      # the last green run and adds `## Reproduction`; off by default.
+      WORKFLOW_HEAL_REPRODUCE_ENABLED: ${{ vars.WORKFLOW_HEAL_REPRODUCE_ENABLED || 'false' }}
+      WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES: ${{ vars.WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES || '10' }}
+      # Run-time trend (P3): 'true' adds `## Run-time trend` (7 days of successful
+      # run durations per UTC day, at most 6 GETs) to stall / timeout heal issues;
+      # off by default. The ratio is the latest-day median that counts as a regression.
+      WORKFLOW_HEAL_TREND_ENABLED: ${{ vars.WORKFLOW_HEAL_TREND_ENABLED || 'false' }}
+      WORKFLOW_HEAL_TREND_REGRESSION_RATIO: ${{ vars.WORKFLOW_HEAL_TREND_REGRESSION_RATIO || '1.5' }}
+      # Suspect-commit scope (P4): 'true' adds up to 8 files changed since the failing
+      # workflow's last green run (compare files[]) to the frozen heal scope; off by default.
+      WORKFLOW_HEAL_SUSPECT_SCOPE_ENABLED: ${{ vars.WORKFLOW_HEAL_SUSPECT_SCOPE_ENABLED || 'false' }}
+      # Cause grouping (P5 / D3): 'true' adds the `cause=` header line to new heal
+      # issues and records a cause match on a recent open heal issue (within
+      # WORKFLOW_HEAL_CAUSE_GROUPING_DAYS) as an occurrence; off by default.
+      WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED: ${{ vars.WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED || 'false' }}
+      WORKFLOW_HEAL_CAUSE_GROUPING_DAYS: ${{ vars.WORKFLOW_HEAL_CAUSE_GROUPING_DAYS || '3' }}
+      # Code-ref routing (P6 step 1): 'true' routes the heal to the branch the failing
+      # child run's code came from (in-scope workflow only) and adds `Code ran from:`; off by default.
+      WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED || 'false' }}
+      # Non-retryable review/autofix failures (#6756): 'false' skips the PR
+      # diagnosis; host-only stops then keep #6745's skip, others are healed.
+      WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED || 'true' }}
+      # Synced-file security findings (source_kind synced_security_finding,
+      # project #7604): 'false' skips them; findings in the same file, category
+      # and line bucket (default 25 lines, minimum 1) share one heal issue.
+      HEAL_SYNCED_SECURITY_FINDING_ENABLED: ${{ vars.HEAL_SYNCED_SECURITY_FINDING_ENABLED || 'true' }}
+      HEAL_SYNCED_SECURITY_LINE_BUCKET: ${{ vars.HEAL_SYNCED_SECURITY_LINE_BUCKET || '25' }}
+      # Report authentication (issue #6559): 'true' skips repository_dispatch
+      # reports that carry no OIDC identity; 'false' (transition default)
+      # accepts them after the binding checks. An identity is always verified.
+      WORKFLOW_HEAL_REQUIRE_REPORT_AUTH: ${{ vars.WORKFLOW_HEAL_REQUIRE_REPORT_AUTH || 'false' }}
+      WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS: ${{ vars.WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS || '3600' }}
+      # Release-blocker occurrence throttle (stuck-states P4): a release_blocker
+      # duplicate posts at most one occurrence comment and alert per this many
+      # seconds on its open heal issue. Other kinds are never throttled.
+      WORKFLOW_HEAL_OCCURRENCE_THROTTLE_SECS: ${{ vars.WORKFLOW_HEAL_OCCURRENCE_THROTTLE_SECS || '86400' }}
+      # Report queue (scripts/workflow_failure_heal_queue.sh): 'false' turns it
+      # off and restores the shared concurrency group, which cancels pending runs.
+      HEAL_INTAKE_QUEUE_ENABLED: ${{ vars.HEAL_INTAKE_QUEUE_ENABLED || 'true' }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+      TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+      TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+    steps:
+      - name: Record GH_PAT budget at intake start
+        env:
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_workflow_heal_intake
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=workflow-failure-heal-intake job=intake remaining=${remaining} reset=${reset} used_in_job=unknown"
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          token: ${{ secrets.GH_PAT }}
+          persist-credentials: false
+
+      - name: Create runtime workspace
+        run: |
+          set -euo pipefail
+          RUNTIME_DIR="/tmp/workflow-heal-intake-${GITHUB_RUN_ID}"
+          mkdir -p "${RUNTIME_DIR}"
+          echo "RUNTIME_DIR=${RUNTIME_DIR}" >> "$GITHUB_ENV"
+          echo "WORKFLOW_HEAL_PAYLOAD_FILE=${RUNTIME_DIR}/payload_raw.json" >> "$GITHUB_ENV"
+
+      - name: Materialize the report payload
+        id: payload
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          # TRUST BOUNDARY: all three sources are external to this run. They are
+          # bound as env or read from the event file (never interpolated into
+          # the script) and re-validated by scripts/workflow_failure_heal.py
+          # before any field is used. client_payload is read from
+          # GITHUB_EVENT_PATH, not env, so the report's OIDC identity is never
+          # echoed in this step's env block (issue #6559).
+          WORKFLOW_RUN_JSON: ${{ toJson(github.event.workflow_run) }}
+          DISPATCH_PAYLOAD_JSON: ${{ inputs.payload_json }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          case "${EVENT_NAME}" in
+            repository_dispatch)
+              # Reporters envelope the report as {schema_version, report,
+              # report_identity?} (GitHub caps client_payload at 10 top-level
+              # properties); unwrap-dispatch also passes the legacy flat shape
+              # through. The OIDC identity goes to a 0600 file only; GITHUB_ENV
+              # gets its state (present / absent / malformed), never the token.
+              umask 077
+              jq '.client_payload // {}' "${GITHUB_EVENT_PATH}" > "${RUNTIME_DIR}/client_payload.json"
+              identity_state="$(python3 scripts/workflow_failure_heal.py extract-report-identity \
+                --client-payload-json "${RUNTIME_DIR}/client_payload.json" \
+                --out "${RUNTIME_DIR}/report_identity.jwt" 2>/dev/null || echo malformed)"
+              case "${identity_state}" in
+                present|absent|malformed) ;;
+                *) identity_state="malformed" ;;
+              esac
+              echo "WORKFLOW_HEAL_REPORT_IDENTITY_STATE=${identity_state}" >> "${GITHUB_ENV:-/dev/null}"
+              if ! python3 scripts/workflow_failure_heal.py unwrap-dispatch \
+                --payload-json "${RUNTIME_DIR}/client_payload.json" \
+                > "${WORKFLOW_HEAL_PAYLOAD_FILE}" 2> "${RUNTIME_DIR}/unwrap_error.txt"; then
+                rm -f "${RUNTIME_DIR}/client_payload.json"
+                echo "::error::client_payload could not be unwrapped or parsed: $(head -c 300 "${RUNTIME_DIR}/unwrap_error.txt" | tr '\n' ' ')"
+                exit 1
+              fi
+              rm -f "${RUNTIME_DIR}/client_payload.json"
+              ;;
+            workflow_run)
+              printf '%s' "${WORKFLOW_RUN_JSON}" > "${RUNTIME_DIR}/workflow_run.json"
+              python3 scripts/workflow_failure_heal.py build-run-payload \
+                --repo "${GITHUB_REPOSITORY}" \
+                --workflow-run-json "${RUNTIME_DIR}/workflow_run.json" \
+                > "${WORKFLOW_HEAL_PAYLOAD_FILE}"
+              ;;
+            workflow_dispatch)
+              printf '%s' "${DISPATCH_PAYLOAD_JSON}" > "${WORKFLOW_HEAL_PAYLOAD_FILE}"
+              ;;
+            *)
+              echo "::error::Unsupported event ${EVENT_NAME}"
+              exit 1
+              ;;
+          esac
+          if ! jq -e 'type == "object"' "${WORKFLOW_HEAL_PAYLOAD_FILE}" >/dev/null 2>&1; then
+            echo "::error::Payload is not a JSON object"
+            exit 1
+          fi
+          echo "source_repo=$(jq -r '.source_repo // ""' "${WORKFLOW_HEAL_PAYLOAD_FILE}" | tr -cd 'A-Za-z0-9_./-' | head -c 120)" >> "$GITHUB_OUTPUT"
+
+      # Waits for this report's turn instead of letting a newer run cancel it.
+      # Never fails the job: when the queue cannot be used the report proceeds.
+      - name: Wait for the heal intake queue
+        env:
+          HEAL_INTAKE_QUEUE_JOB: intake
+        run: bash scripts/workflow_failure_heal_queue.sh acquire
+
+      - name: Install Codex CLI
+        uses: ./.github/actions/install-codex
+        with:
+          codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+
+      - name: Create Codex config
+        run: |
+          set -euo pipefail
+          source scripts/codex_helpers.sh
+          codex_config_assemble "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "low"
+
+      # The WORKFLOW_HEAL diagnosis runs on Claude unless AI_ENGINE_WORKFLOW_HEAL
+      # or AI_ENGINE say codex (scripts/ai_engine.sh from this checkout). The
+      # CLI and the pool credential are fetched only for Claude; when Claude
+      # cannot start (exit 75) the intake runs its unchanged isolated codex
+      # command, so these steps never fail the job.
+      - name: Resolve AI engine
+        id: ai_engine
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_WORKFLOW_HEAL: ${{ vars.AI_ENGINE_WORKFLOW_HEAL || '' }}
+          AI_ENGINE_LABELS: ""
+        run: |
+          set -uo pipefail
+          engine="codex"
+          if [ -f scripts/ai_engine.sh ] && [ ! -L scripts/ai_engine.sh ]; then
+            # shellcheck source=/dev/null
+            if source scripts/ai_engine.sh; then
+              engine="$(ai_engine_for_role WORKFLOW_HEAL || echo codex)"
+            else
+              echo "::warning::Failed to source scripts/ai_engine.sh; the heal diagnosis stays on codex." >&2
+            fi
+          fi
+          [ "${engine}" = "claude" ] || engine="codex"
+          echo "engine=${engine}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.github/actions/install-claude
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Run workflow failure heal intake
+        env:
+          # Codex version baked into the isolated diagnosis agent's image (scripts/codex_isolated_exec.sh).
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_WORKFLOW_HEAL: ${{ vars.AI_ENGINE_WORKFLOW_HEAL || '' }}
+          SUPPORT_INSTRUCTIONS_FILE: ${{ github.workspace }}/unattended_system_instructions.md
+        run: |
+          set -euo pipefail
+          bash scripts/workflow_failure_heal_intake.sh
+
+      - name: Leave the heal intake queue
+        if: always()
+        env:
+          HEAL_INTAKE_QUEUE_JOB: intake
+        run: bash scripts/workflow_failure_heal_queue.sh release
+
+      - name: Notify on intake workflow failure
+        if: ${{ failure() }}
+        env:
+          SOURCE_REPO: ${{ steps.payload.outputs.source_repo }}
+        run: |
+          set -euo pipefail
+          source scripts/tg_helpers.sh 2>/dev/null || true
+          type tg_send_msg >/dev/null 2>&1 || exit 0
+          RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          notification="Workflow Failure Heal Intake workflow itself failed (report from '${SOURCE_REPO:-unknown}')."
+          tg_send_msg "${notification}"$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+
+      - name: Record GH_PAT budget at intake end
+        if: always()
+        env:
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_workflow_heal_intake
+        run: |
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
+            source scripts/gh_helpers.sh
+            gh_pat_budget end workflow-failure-heal-intake intake "${GH_PAT_BUDGET_FILE}"
+          else
+            echo 'GH_PAT_BUDGET phase=end workflow=workflow-failure-heal-intake job=intake remaining=unknown reset=unknown used_in_job=unknown'
+          fi
+
+  recovery-candidates:
+    # Heal-scope recovery scan, step 1 (#7333): count the candidates without
+    # holding the shared intake lock.
+    if: >-
+      github.event_name == 'schedule' &&
+      vars.WORKFLOW_HEAL_ENABLED != 'false' &&
+      vars.HEAL_SCOPE_RECOVERY_ENABLED != 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: read
+    outputs:
+      count: ${{ steps.list.outputs.count }}
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+      AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+      HEAL_SCOPE_RECOVERY_ENABLED: ${{ vars.HEAL_SCOPE_RECOVERY_ENABLED || 'true' }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: List markerless heal issues
+        id: list
+        run: |
+          set -euo pipefail
+          echo "count=0" >> "$GITHUB_OUTPUT"
+          RUNTIME_DIR="${RUNNER_TEMP}/workflow-heal-recovery-list" bash scripts/workflow_failure_heal_recovery_scan.sh --list-only
+
+  recovery-scan:
+    # Heal-scope recovery scan, step 2 (#7333): replace markerless heal issues
+    # through the unchanged intake, serialised with every other intake run.
+    needs: recovery-candidates
+    if: needs.recovery-candidates.outputs.count != '' && needs.recovery-candidates.outputs.count != '0'
+    runs-on: ubuntu-latest
+    # 95 minutes of scan work plus up to 80 minutes in the report queue.
+    timeout-minutes: 175
+    concurrency:
+      group: ${{ vars.HEAL_INTAKE_QUEUE_ENABLED != 'false' && format('workflow-failure-heal-recovery-scan-{0}', github.run_id) || 'workflow-failure-heal-intake' }}
+      cancel-in-progress: false
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+      AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      # Polling reads of the heal queue use the job token (issue #9888).
+      GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
+      MODEL_EDITOR: ${{ vars.WORKFLOW_HEAL_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
+      MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_WORKFLOW_HEAL || 'high' }}
+      MODEL_VERBOSITY: ${{ vars.VERBOSITY_WORKFLOW_HEAL || 'low' }}
+      OPENROUTER_PROMPT_CACHE_DISABLED: ${{ vars.OPENROUTER_PROMPT_CACHE_DISABLED || 'false' }}
+      WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+      WORKFLOW_HEAL_MAX_LINEAGE_DEPTH: ${{ vars.WORKFLOW_HEAL_MAX_LINEAGE_DEPTH || '3' }}
+      WORKFLOW_HEAL_MAX_OPEN_ISSUES: ${{ vars.WORKFLOW_HEAL_MAX_OPEN_ISSUES || '10' }}
+      WORKFLOW_HEAL_MAX_ISSUES_PER_DAY: ${{ vars.WORKFLOW_HEAL_MAX_ISSUES_PER_DAY || '20' }}
+      WORKFLOW_HEAL_TARGET_BRANCH: ${{ vars.WORKFLOW_HEAL_TARGET_BRANCH || 'stable' }}
+      WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_SELF_INFLICTED_ROUTING_ENABLED || 'true' }}
+      HEAL_INTAKE_SCOPE_GUARD_ENABLED: ${{ vars.HEAL_INTAKE_SCOPE_GUARD_ENABLED || 'true' }}
+      HEAL_SCOPE_RECOVERY_ENABLED: ${{ vars.HEAL_SCOPE_RECOVERY_ENABLED || 'true' }}
+      HEAL_SCOPE_RECOVERY_SCAN_MAX_PER_TICK: ${{ vars.HEAL_SCOPE_RECOVERY_SCAN_MAX_PER_TICK || '1' }}
+      HEAL_SCOPE_RECOVERY_SCAN_MAX_ATTEMPTS: ${{ vars.HEAL_SCOPE_RECOVERY_SCAN_MAX_ATTEMPTS || '3' }}
+      HEAL_REISSUE_DEDUPE_ENABLED: ${{ vars.HEAL_REISSUE_DEDUPE_ENABLED || 'true' }}
+      HEAL_OCCURRENCE_IN_PLACE_ENABLED: ${{ vars.HEAL_OCCURRENCE_IN_PLACE_ENABLED || 'true' }}
+      HEAL_SOURCE_DEDUPE_ENABLED: ${{ vars.HEAL_SOURCE_DEDUPE_ENABLED || 'true' }}
+      # Linked-run scope paths (#8360); kept in step with the intake job's env.
+      WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED: ${{ vars.WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED || 'true' }}
+      # Evidence pack (P1): 'true' adds the failed-run and linked-run step
+      # timelines to the heal issue body after the scope freeze; off by default.
+      WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED: ${{ vars.WORKFLOW_HEAL_EVIDENCE_PACK_ENABLED || 'false' }}
+      WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES: ${{ vars.WORKFLOW_HEAL_EVIDENCE_PACK_MAX_BYTES || '12000' }}
+      # Reproduction (P2 step 4): 'true' re-runs the extracted failing tests in
+      # the gate sandbox (scripts/heal_reproduce.sh, from this checkout) against
+      # the last green run and adds `## Reproduction`; off by default.
+      WORKFLOW_HEAL_REPRODUCE_ENABLED: ${{ vars.WORKFLOW_HEAL_REPRODUCE_ENABLED || 'false' }}
+      WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES: ${{ vars.WORKFLOW_HEAL_REPRODUCE_TIMEOUT_MINUTES || '10' }}
+      # Run-time trend (P3): 'true' adds `## Run-time trend` (7 days of successful
+      # run durations per UTC day, at most 6 GETs) to stall / timeout heal issues;
+      # off by default. The ratio is the latest-day median that counts as a regression.
+      WORKFLOW_HEAL_TREND_ENABLED: ${{ vars.WORKFLOW_HEAL_TREND_ENABLED || 'false' }}
+      WORKFLOW_HEAL_TREND_REGRESSION_RATIO: ${{ vars.WORKFLOW_HEAL_TREND_REGRESSION_RATIO || '1.5' }}
+      # Suspect-commit scope (P4): 'true' adds up to 8 files changed since the failing
+      # workflow's last green run (compare files[]) to the frozen heal scope; off by default.
+      WORKFLOW_HEAL_SUSPECT_SCOPE_ENABLED: ${{ vars.WORKFLOW_HEAL_SUSPECT_SCOPE_ENABLED || 'false' }}
+      # Cause grouping (P5 / D3): 'true' adds the `cause=` header line to new heal
+      # issues and records a cause match on a recent open heal issue (within
+      # WORKFLOW_HEAL_CAUSE_GROUPING_DAYS) as an occurrence; off by default.
+      WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED: ${{ vars.WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED || 'false' }}
+      WORKFLOW_HEAL_CAUSE_GROUPING_DAYS: ${{ vars.WORKFLOW_HEAL_CAUSE_GROUPING_DAYS || '3' }}
+      # Code-ref routing (P6 step 1): 'true' routes the heal to the branch the failing
+      # child run's code came from (in-scope workflow only) and adds `Code ran from:`; off by default.
+      WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED || 'false' }}
+      WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_NON_RETRYABLE_ROUTING_ENABLED || 'true' }}
+      # Synced-file security findings (project #7604); kept in step with the
+      # intake job's env (test_heal_scope_recovery_scan_workflow_wiring).
+      HEAL_SYNCED_SECURITY_FINDING_ENABLED: ${{ vars.HEAL_SYNCED_SECURITY_FINDING_ENABLED || 'true' }}
+      HEAL_SYNCED_SECURITY_LINE_BUCKET: ${{ vars.HEAL_SYNCED_SECURITY_LINE_BUCKET || '25' }}
+      WORKFLOW_HEAL_REQUIRE_REPORT_AUTH: ${{ vars.WORKFLOW_HEAL_REQUIRE_REPORT_AUTH || 'false' }}
+      WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS: ${{ vars.WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS || '3600' }}
+      # Release-blocker occurrence throttle; kept in step with the intake job's env.
+      WORKFLOW_HEAL_OCCURRENCE_THROTTLE_SECS: ${{ vars.WORKFLOW_HEAL_OCCURRENCE_THROTTLE_SECS || '86400' }}
+      # Report queue (scripts/workflow_failure_heal_queue.sh): 'false' turns it
+      # off and restores the shared concurrency group, which cancels pending runs.
+      HEAL_INTAKE_QUEUE_ENABLED: ${{ vars.HEAL_INTAKE_QUEUE_ENABLED || 'true' }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+      TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+      TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+    steps:
+      - name: Record GH_PAT budget at recovery scan start
+        env:
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_workflow_heal_recovery_scan
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=workflow-failure-heal-intake job=recovery-scan remaining=${remaining} reset=${reset} used_in_job=unknown"
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          token: ${{ secrets.GH_PAT }}
+          persist-credentials: false
+
+      - name: Create runtime workspace
+        run: |
+          set -euo pipefail
+          RUNTIME_DIR="/tmp/workflow-heal-recovery-scan-${GITHUB_RUN_ID}"
+          mkdir -p "${RUNTIME_DIR}"
+          echo "RUNTIME_DIR=${RUNTIME_DIR}" >> "$GITHUB_ENV"
+
+      - name: Wait for the heal intake queue
+        env:
+          HEAL_INTAKE_QUEUE_JOB: recovery-scan
+        run: bash scripts/workflow_failure_heal_queue.sh acquire
+
+      - name: Install Codex CLI
+        uses: ./.github/actions/install-codex
+        with:
+          codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+
+      - name: Create Codex config
+        run: |
+          set -euo pipefail
+          source scripts/codex_helpers.sh
+          codex_config_assemble "${MODEL_EDITOR}" "${MODEL_REASONING_EFFORT}" "low"
+
+      # Same engine selection as the intake job: the scan runs the unchanged
+      # intake, whose WORKFLOW_HEAL diagnosis defaults to Claude.
+      - name: Resolve AI engine
+        id: ai_engine
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_WORKFLOW_HEAL: ${{ vars.AI_ENGINE_WORKFLOW_HEAL || '' }}
+          AI_ENGINE_LABELS: ""
+        run: |
+          set -uo pipefail
+          engine="codex"
+          if [ -f scripts/ai_engine.sh ] && [ ! -L scripts/ai_engine.sh ]; then
+            # shellcheck source=/dev/null
+            if source scripts/ai_engine.sh; then
+              engine="$(ai_engine_for_role WORKFLOW_HEAL || echo codex)"
+            else
+              echo "::warning::Failed to source scripts/ai_engine.sh; the heal diagnosis stays on codex." >&2
+            fi
+          fi
+          [ "${engine}" = "claude" ] || engine="codex"
+          echo "engine=${engine}" >> "$GITHUB_OUTPUT"
+
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.github/actions/install-claude
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        if: steps.ai_engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Run heal-scope recovery scan
+        env:
+          # Codex version baked into the isolated diagnosis agent's image (scripts/codex_isolated_exec.sh).
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_WORKFLOW_HEAL: ${{ vars.AI_ENGINE_WORKFLOW_HEAL || '' }}
+          SUPPORT_INSTRUCTIONS_FILE: ${{ github.workspace }}/unattended_system_instructions.md
+        run: |
+          set -euo pipefail
+          bash scripts/workflow_failure_heal_recovery_scan.sh
+
+      - name: Leave the heal intake queue
+        if: always()
+        env:
+          HEAL_INTAKE_QUEUE_JOB: recovery-scan
+        run: bash scripts/workflow_failure_heal_queue.sh release
+
+      - name: Notify on recovery scan failure
+        if: ${{ failure() }}
+        run: |
+          set -euo pipefail
+          source scripts/tg_helpers.sh 2>/dev/null || true
+          type tg_send_msg >/dev/null 2>&1 || exit 0
+          RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          tg_send_msg "Workflow failure heal recovery scan failed."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+
+      - name: Record GH_PAT budget at recovery scan end
+        if: always()
+        env:
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_workflow_heal_recovery_scan
+        run: |
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
+            source scripts/gh_helpers.sh
+            gh_pat_budget end workflow-failure-heal-intake recovery-scan "${GH_PAT_BUDGET_FILE}"
+          else
+            echo 'GH_PAT_BUDGET phase=end workflow=workflow-failure-heal-intake job=recovery-scan remaining=unknown reset=unknown used_in_job=unknown'
+          fi
+
+  heal-verify:
+    # Post-merge heal verification (P7, Refs #8434): on the hourly schedule,
+    # check that the first decisive run after a heal's fix merged no longer
+    # fails at the same step (scripts/workflow_failure_heal_verify.sh). Off
+    # unless WORKFLOW_HEAL_VERIFY_ENABLED is 'true'; it does not join the
+    # intake queue because it never files a heal issue.
+    if: >-
+      github.event_name == 'schedule' &&
+      vars.WORKFLOW_HEAL_ENABLED != 'false' &&
+      vars.WORKFLOW_HEAL_VERIFY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ secrets.GH_PAT }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+      AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+      GITHUB_REPOSITORY: ${{ github.repository }}
+      WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
+      WORKFLOW_HEAL_VERIFY_ENABLED: ${{ vars.WORKFLOW_HEAL_VERIFY_ENABLED || 'false' }}
+      WORKFLOW_HEAL_VERIFY_MAX_PER_TICK: ${{ vars.WORKFLOW_HEAL_VERIFY_MAX_PER_TICK || '3' }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+      TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+      TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+    steps:
+      - name: Record GH_PAT budget at heal-verify start
+        env:
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_workflow_heal_verify
+        run: |
+          reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
+          if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
+            printf '%s\n' "${reading}" > "${GH_PAT_BUDGET_FILE}"
+            read -r remaining reset <<< "${reading}"
+          else
+            remaining=unknown; reset=unknown
+          fi
+          echo "GH_PAT_BUDGET phase=start workflow=workflow-failure-heal-intake job=heal-verify remaining=${remaining} reset=${reset} used_in_job=unknown"
+
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          token: ${{ secrets.GH_PAT }}
+          persist-credentials: false
+
+      - name: Run heal post-merge verification
+        run: |
+          set -euo pipefail
+          RUNTIME_DIR="${RUNNER_TEMP}/workflow-heal-verify" bash scripts/workflow_failure_heal_verify.sh
+
+      - name: Record GH_PAT budget at heal-verify end
+        if: always()
+        env:
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_workflow_heal_verify
+        run: |
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
+            source scripts/gh_helpers.sh
+            gh_pat_budget end workflow-failure-heal-intake heal-verify "${GH_PAT_BUDGET_FILE}"
+          else
+            echo 'GH_PAT_BUDGET phase=end workflow=workflow-failure-heal-intake job=heal-verify remaining=unknown reset=unknown used_in_job=unknown'
+          fi

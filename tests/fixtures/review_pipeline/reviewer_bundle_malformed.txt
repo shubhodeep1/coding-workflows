@@ -1,0 +1,18 @@
+FILE_PATH: /tmp/review_bad_a.txt
+BYTES: 100
+SHA256: bad_a
+CONTENT_START
+Line or code reference: line 12
+Problem: Missing file anchor should be skipped safely.
+ISSUE_CONFIDENCE: 5/5
+CONTENT_END
+
+FILE_PATH: /tmp/review_bad_b.txt
+BYTES: 100
+SHA256: bad_b
+CONTENT_START
+File:
+Line or code reference:
+Problem: Empty file and line references should be ignored.
+ISSUE_CONFIDENCE: highest confidence
+CONTENT_END

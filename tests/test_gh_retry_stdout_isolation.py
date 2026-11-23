@@ -1,0 +1,729 @@
+#!/usr/bin/env python3
+"""Tests for the stdout contract of ``gh_retry`` in scripts/gh_helpers.sh.
+
+Background (issue #5495, clarify run 36670937896, 2026-09-30): ``gh api``
+prints the error response body to **stdout** when a call fails.
+``gh_retry`` redirected only stderr per attempt, so a call that was
+rate-limited twice and then succeeded wrote two error objects followed by
+the real issue into the caller's file. ``jq -r '.number'`` printed
+``null``, ``null``, ``5016`` and the bare ``null`` line in ``$GITHUB_ENV``
+failed the step with ``Invalid format 'null'``.
+
+``gh_retry`` now buffers each attempt's stdout and emits only the buffer of
+the attempt that succeeds. These tests drive it through a fake ``gh`` whose
+per-attempt stdout, stderr, and exit code come from files, with ``sleep``
+stubbed so the retry waits cost nothing.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import textwrap
+from pathlib import Path
+
+import pytest
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+GH_HELPERS = REPO_ROOT / "scripts" / "gh_helpers.sh"
+REVIEW_AUTOFIX_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+
+# The two steps of review_autofix.yml that define their own retry loop
+# instead of sourcing scripts/gh_helpers.sh (the first only as a fallback
+# when the source fails). Both capture gh_retry output with $(...).
+INLINE_GH_RETRY_STEPS = (
+	"Dispatch standalone validate for orchestrator short-circuit issues",
+	"Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge",
+)
+
+ISSUE_BODY = json.dumps({"number": 5016, "title": "real issue"}) + "\n"
+RATE_LIMIT_BODY = (
+	'{"message":"API rate limit exceeded for user ID 11442166. BODY-MARKER-RL",'
+	'"documentation_url":"https://docs.github.com/rest/overview/rate-limits-for-the-rest-api"}'
+)
+RATE_LIMIT_STDERR = "gh: API rate limit exceeded for user ID 11442166. (HTTP 403)\n"
+NOT_FOUND_BODY = '{"message":"Not Found BODY-MARKER-404","status":"404"}'
+NOT_FOUND_STDERR = "gh: Not Found (HTTP 404)\n"
+BAD_GATEWAY_BODY = '{"message":"Server Error BODY-MARKER-502"}'
+BAD_GATEWAY_STDERR = "gh: HTTP 502: Bad Gateway\n"
+
+# The fake gh answers `gh api -i /rate_limit` (the rate-limit wait probe)
+# without consuming an attempt; every other call is attempt N, served from
+# $FAKE_GH_PLAN/N.{stdout,stderr,rc}, falling back to the highest-numbered
+# attempt when the plan runs out.
+FAKE_GH = r"""#!/usr/bin/env bash
+if [ "$1" = "api" ] && [ "$2" = "-i" ] && [ "$3" = "/rate_limit" ]; then
+	printf 'HTTP/2 200\r\nx-ratelimit-reset: 0\r\n\r\n{}'
+	exit 0
+fi
+count_file="${FAKE_GH_PLAN}/calls"
+n=$(( $(cat "${count_file}" 2>/dev/null || echo 0) + 1 ))
+echo "${n}" > "${count_file}"
+i="${n}"
+while [ "${i}" -gt 1 ] && [ ! -f "${FAKE_GH_PLAN}/${i}.rc" ]; do
+	i=$(( i - 1 ))
+done
+[ -f "${FAKE_GH_PLAN}/${i}.stdout" ] && cat "${FAKE_GH_PLAN}/${i}.stdout"
+[ -f "${FAKE_GH_PLAN}/${i}.stderr" ] && cat "${FAKE_GH_PLAN}/${i}.stderr" >&2
+exit "$(cat "${FAKE_GH_PLAN}/${i}.rc")"
+"""
+
+
+def _setup(tmp_path: Path, attempts: list[tuple[str, str, int]]) -> dict[str, str]:
+	"""Install the fake gh and its per-attempt plan; return the env to run with."""
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	fake = bin_dir / "gh"
+	fake.write_text(FAKE_GH, encoding="utf-8")
+	fake.chmod(0o755)
+	plan = tmp_path / "plan"
+	plan.mkdir()
+	for index, (stdout, stderr, rc) in enumerate(attempts, start=1):
+		(plan / f"{index}.stdout").write_text(stdout, encoding="utf-8")
+		(plan / f"{index}.stderr").write_text(stderr, encoding="utf-8")
+		(plan / f"{index}.rc").write_text(f"{rc}\n", encoding="utf-8")
+	tmpdir = tmp_path / "tmpdir"
+	tmpdir.mkdir()
+	env = {
+		key: value
+		for key, value in os.environ.items()
+		if key not in {"TG_BOT_SECRET", "TG_ADMIN_CHAT_ID", "TG_CHAT_ID", "GH_RETRY_MAX_ATTEMPTS"}
+	}
+	env.update(
+		{
+			"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
+			"FAKE_GH_PLAN": str(plan),
+			"TMPDIR": str(tmpdir),
+			"GH_RATE_LIMIT_BREAKER_FILE": str(tmp_path / "breaker"),
+			"PYTHONDONTWRITEBYTECODE": "1",
+		}
+	)
+	return env
+
+
+def _run(tmp_path: Path, env: dict[str, str], body: str) -> subprocess.CompletedProcess[str]:
+	"""Source gh_helpers.sh with sleep stubbed, then run ``body`` in bash."""
+	script = (
+		"set -uo pipefail\n"
+		f"source '{GH_HELPERS}'\n"
+		"sleep() { :; }\n"
+		f"{body}\n"
+	)
+	return subprocess.run(
+		["bash", "-c", script], env=env, capture_output=True, text=True, cwd=tmp_path, timeout=60,
+	)
+
+
+def _calls(tmp_path: Path) -> int:
+	calls = tmp_path / "plan" / "calls"
+	return int(calls.read_text(encoding="utf-8").strip()) if calls.exists() else 0
+
+
+def _leftover_temp_files(tmp_path: Path) -> list[str]:
+	return sorted(p.name for p in (tmp_path / "tmpdir").glob("gh_retry_*"))
+
+
+RATE_LIMITED_TWICE_THEN_OK = [
+	(RATE_LIMIT_BODY, RATE_LIMIT_STDERR, 1),
+	(RATE_LIMIT_BODY, RATE_LIMIT_STDERR, 1),
+	(ISSUE_BODY, "", 0),
+]
+
+
+def test_redirect_to_file_holds_only_the_successful_body(tmp_path: Path) -> None:
+	env = _setup(tmp_path, RATE_LIMITED_TWICE_THEN_OK)
+	out_file = tmp_path / "issue_meta.json"
+	result = _run(
+		tmp_path,
+		env,
+		f"gh_retry gh api repos/o/r/issues/5016 > '{out_file}'; echo \"rc=$?\"",
+	)
+	assert result.stdout.strip() == "rc=0", result.stderr
+	assert out_file.read_text(encoding="utf-8") == ISSUE_BODY
+	assert _calls(tmp_path) == 3
+	# The clarify.yml:392 consumer: exactly one number, no `null` lines.
+	jq = subprocess.run(
+		["jq", "-r", ".number", str(out_file)], capture_output=True, text=True, check=True,
+	)
+	assert jq.stdout == "5016\n"
+	assert _leftover_temp_files(tmp_path) == []
+
+
+def test_command_substitution_captures_only_the_successful_body(tmp_path: Path) -> None:
+	env = _setup(tmp_path, RATE_LIMITED_TWICE_THEN_OK)
+	captured = tmp_path / "captured.json"
+	result = _run(
+		tmp_path,
+		env,
+		"meta=\"$(gh_retry gh api repos/o/r/issues/5016)\"; rc=$?\n"
+		f"printf '%s' \"${{meta}}\" > '{captured}'; echo \"rc=${{rc}}\"",
+	)
+	assert result.stdout.strip() == "rc=0", result.stderr
+	assert captured.read_text(encoding="utf-8") == ISSUE_BODY.rstrip("\n")
+
+
+def test_failed_attempt_output_is_reported_by_size_not_content(tmp_path: Path) -> None:
+	env = _setup(tmp_path, RATE_LIMITED_TWICE_THEN_OK)
+	result = _run(tmp_path, env, "gh_retry gh api repos/o/r/issues/5016 > /dev/null")
+	assert result.returncode == 0, result.stderr
+	size = len(RATE_LIMIT_BODY.encode("utf-8"))
+	assert f"gh_retry: dropped {size} bytes of stdout from failed attempt 1/5" in result.stderr
+	assert f"gh_retry: dropped {size} bytes of stdout from failed attempt 2/5" in result.stderr
+	assert "BODY-MARKER" not in result.stderr
+	# The existing rate-limit handling still runs unchanged.
+	assert result.stderr.count("GitHub API rate limit hit") == 2
+	assert (tmp_path / "breaker").exists()
+
+
+def test_permanent_failure_leaves_stdout_empty_and_returns_1(tmp_path: Path) -> None:
+	env = _setup(tmp_path, [(NOT_FOUND_BODY, NOT_FOUND_STDERR, 1)])
+	result = _run(tmp_path, env, "gh_retry gh api repos/o/r/issues/1")
+	assert result.returncode == 1
+	assert result.stdout == ""
+	assert _calls(tmp_path) == 1
+	assert "non-retryable error" in result.stderr
+	assert "BODY-MARKER" not in result.stderr
+	assert _leftover_temp_files(tmp_path) == []
+
+
+def test_exhausted_retries_leave_stdout_empty_and_return_1(tmp_path: Path) -> None:
+	env = _setup(tmp_path, [(BAD_GATEWAY_BODY, BAD_GATEWAY_STDERR, 1)])
+	env["GH_RETRY_MAX_ATTEMPTS"] = "2"
+	result = _run(tmp_path, env, "gh_retry gh api repos/o/r/issues/1")
+	assert result.returncode == 1
+	assert result.stdout == ""
+	assert _calls(tmp_path) == 2
+	assert "gh command failed after 2 attempts" in result.stderr
+	assert _leftover_temp_files(tmp_path) == []
+
+
+def test_first_try_success_passes_stdout_through_unchanged(tmp_path: Path) -> None:
+	payload = "line one\nlast line without newline"
+	env = _setup(tmp_path, [(payload, "", 0)])
+	result = _run(tmp_path, env, "gh_retry gh api repos/o/r")
+	assert result.returncode == 0
+	assert result.stdout == payload
+	assert result.stderr == ""
+	assert _calls(tmp_path) == 1
+	assert _leftover_temp_files(tmp_path) == []
+
+
+def test_stdout_buffer_mktemp_failure_does_not_run_the_command(tmp_path: Path) -> None:
+	env = _setup(tmp_path, [(ISSUE_BODY, "", 0)])
+	result = _run(
+		tmp_path,
+		env,
+		'mktemp() { case "$1" in *gh_retry_stdout*) return 1 ;; esac; command mktemp "$@"; }\n'
+		"gh_retry gh api repos/o/r/issues/5016",
+	)
+	assert result.returncode == 1
+	assert result.stdout == ""
+	assert "gh_retry: failed to create stdout temp file" in result.stderr
+	assert _calls(tmp_path) == 0
+	assert _leftover_temp_files(tmp_path) == []
+
+
+def _output_larger_than_any_pipe() -> int:
+	"""Bytes that cannot fit in a pipe even after the writer enlarges it."""
+	try:
+		pipe_max = int(Path("/proc/sys/fs/pipe-max-size").read_text(encoding="utf-8").strip())
+	except (OSError, ValueError):
+		pipe_max = 1024 * 1024
+	return max(8 * 1024 * 1024, 4 * pipe_max)
+
+
+def test_closed_reader_does_not_rerun_a_successful_command(tmp_path: Path) -> None:
+	# More output than any pipe holds, into a reader that takes one byte and
+	# exits: the reader goes away before the output is written. The command
+	# already succeeded, so it must not be run again; the undelivered output is
+	# reported as a non-zero status. The size matters: Rust coreutils' cat
+	# (ubuntu-26.04) grows its stdout pipe to pipe-max-size (1 MiB by default)
+	# and splices up to 1 MiB in one call, so a 1 MiB output landed in the pipe
+	# whole and the copy returned 0 before the reader left. That is ordinary
+	# pipe behaviour, not a gh_retry defect.
+	big = "x" * _output_larger_than_any_pipe()
+	env = _setup(tmp_path, [(big, "", 0)])
+	result = _run(
+		tmp_path,
+		env,
+		"gh_retry gh api repos/o/r | { IFS= read -r -n 1 _ || true; }\n"
+		'echo "rc=${PIPESTATUS[0]}"',
+	)
+	assert _calls(tmp_path) == 1, result.stderr
+	rc_line = result.stdout.strip()
+	assert rc_line.startswith("rc=") and rc_line != "rc=0", (rc_line, result.stderr)
+	assert _leftover_temp_files(tmp_path) == []
+
+
+CLOSED_READER_BODY = (
+	"gh_retry gh api repos/o/r | head -c 1 > /dev/null\n"
+	'echo "rc=${PIPESTATUS[0]}"'
+)
+
+
+def test_closed_reader_status_does_not_depend_on_external_cat(tmp_path: Path) -> None:
+	"""Issue #9225: Rust coreutils' cat (ubuntu-26.04) exits 0 on a closed pipe.
+
+	A shim ``cat`` that always exits 0 stands in for it; gh_retry must still
+	report the undelivered output as a non-zero status on any host.
+	"""
+	real_cat = shutil.which("cat")
+	assert real_cat, "cat not found on PATH"
+	env = _setup(tmp_path, [("x" * (1024 * 1024), "", 0)])
+	shim_dir = tmp_path / "cat_shim"
+	shim_dir.mkdir()
+	shim = shim_dir / "cat"
+	shim.write_text(
+		f'#!/usr/bin/env bash\n"{real_cat}" "$@" 2>/dev/null\nexit 0\n', encoding="utf-8",
+	)
+	shim.chmod(0o755)
+	env["PATH"] = f"{shim_dir}{os.pathsep}{env['PATH']}"
+	result = _run(tmp_path, env, CLOSED_READER_BODY)
+	assert _calls(tmp_path) == 1, result.stderr
+	rc_line = result.stdout.strip()
+	assert rc_line.startswith("rc=") and rc_line != "rc=0", (rc_line, result.stderr)
+	assert _leftover_temp_files(tmp_path) == []
+
+
+def test_closed_reader_with_sigpipe_ignored_reports_nonzero(tmp_path: Path) -> None:
+	env = _setup(tmp_path, [("x" * (1024 * 1024), "", 0)])
+	result = _run(tmp_path, env, "trap '' PIPE\n" + CLOSED_READER_BODY)
+	assert _calls(tmp_path) == 1, result.stderr
+	rc_line = result.stdout.strip()
+	assert rc_line.startswith("rc=") and rc_line != "rc=0", (rc_line, result.stderr)
+	assert _leftover_temp_files(tmp_path) == []
+
+
+def test_success_replay_preserves_trailing_newlines_byte_exact(tmp_path: Path) -> None:
+	# Inner and trailing newlines, a CR, a literal backslash, a tab and
+	# printf format specifiers, which must all come through unchanged.
+	payload = "a\n\n  b\\n\tc\r\n%s %d\n\n\n"
+	env = _setup(tmp_path, [(payload, "", 0)])
+	out_file = tmp_path / "out.bin"
+	piped_file = tmp_path / "piped.bin"
+	result = _run(
+		tmp_path,
+		env,
+		f"gh_retry gh api repos/o/r > '{out_file}'; echo \"rc=$?\"\n"
+		f"gh_retry gh api repos/o/r | {{ cat > '{piped_file}'; }}; echo \"rc=${{PIPESTATUS[0]}}\"",
+	)
+	assert result.stdout == "rc=0\nrc=0\n", result.stderr
+	expected = payload.encode("utf-8")
+	assert out_file.read_bytes() == expected
+	assert piped_file.read_bytes() == expected
+	assert _calls(tmp_path) == 2
+	assert _leftover_temp_files(tmp_path) == []
+
+
+def test_success_replay_with_nul_byte_falls_back_to_cat(tmp_path: Path) -> None:
+	payload = "before\x00after\n"
+	env = _setup(tmp_path, [(payload, "", 0)])
+	out_file = tmp_path / "out.bin"
+	result = _run(tmp_path, env, f"gh_retry gh api repos/o/r > '{out_file}'; echo \"rc=$?\"")
+	assert result.stdout.strip() == "rc=0", result.stderr
+	assert out_file.read_bytes() == payload.encode("utf-8")
+	assert _calls(tmp_path) == 1
+	assert _leftover_temp_files(tmp_path) == []
+
+
+def _inline_gh_retry(step_name: str) -> str:
+	"""Return the inline ``gh_retry() { ... }`` defined in a review_autofix.yml step."""
+	lines = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8").splitlines()
+	step_idx = next(
+		(i for i, line in enumerate(lines) if line.strip() == f"- name: {step_name}"), None,
+	)
+	assert step_idx is not None, f"step not found in review_autofix.yml: {step_name}"
+	start = next(
+		(i for i in range(step_idx + 1, len(lines)) if lines[i].strip() == "gh_retry() {"), None,
+	)
+	assert start is not None, f"no inline gh_retry() in step: {step_name}"
+	indent = lines[start][: len(lines[start]) - len(lines[start].lstrip(" "))]
+	end = next(i for i in range(start + 1, len(lines)) if lines[i] == f"{indent}}}")
+	return textwrap.dedent("\n".join(lines[start : end + 1])) + "\n"
+
+
+def _run_inline(
+	tmp_path: Path, env: dict[str, str], step_name: str, body: str,
+) -> subprocess.CompletedProcess[str]:
+	"""Define the step's inline gh_retry with sleep stubbed, then run ``body``."""
+	script = (
+		"set -euo pipefail\n"
+		f"{_inline_gh_retry(step_name)}"
+		"sleep() { :; }\n"
+		f"{body}\n"
+	)
+	return subprocess.run(
+		["bash", "-c", script], env=env, capture_output=True, text=True, cwd=tmp_path, timeout=60,
+	)
+
+
+def _all_temp_files(tmp_path: Path) -> list[str]:
+	return sorted(p.name for p in (tmp_path / "tmpdir").iterdir())
+
+
+@pytest.mark.parametrize("step_name", INLINE_GH_RETRY_STEPS)
+def test_inline_wrapper_capture_holds_only_the_successful_body(
+	tmp_path: Path, step_name: str,
+) -> None:
+	env = _setup(tmp_path, RATE_LIMITED_TWICE_THEN_OK)
+	captured = tmp_path / "captured.json"
+	result = _run_inline(
+		tmp_path,
+		env,
+		step_name,
+		'meta="$(gh_retry gh api repos/o/r/pulls/1 --jq .head.sha)"\n'
+		f"printf '%s' \"${{meta}}\" > '{captured}'",
+	)
+	assert result.returncode == 0, result.stderr
+	assert captured.read_text(encoding="utf-8") == ISSUE_BODY.rstrip("\n")
+	assert _calls(tmp_path) == 3
+	size = len(RATE_LIMIT_BODY.encode("utf-8"))
+	# Same line format as scripts/gh_helpers.sh, so one log search finds both.
+	assert f"::warning::  gh_retry: dropped {size} bytes of stdout from failed attempt 1/4" in result.stderr
+	assert f"::warning::  gh_retry: dropped {size} bytes of stdout from failed attempt 2/4" in result.stderr
+	assert "BODY-MARKER" not in result.stderr
+	assert _all_temp_files(tmp_path) == []
+
+
+@pytest.mark.parametrize("step_name", INLINE_GH_RETRY_STEPS)
+def test_inline_wrapper_exhausted_retries_leave_stdout_empty(
+	tmp_path: Path, step_name: str,
+) -> None:
+	env = _setup(tmp_path, [(BAD_GATEWAY_BODY, BAD_GATEWAY_STDERR, 1)])
+	result = _run_inline(
+		tmp_path,
+		env,
+		step_name,
+		'if gh_retry gh api repos/o/r/pulls/1; then echo "rc=0"; else echo "rc=$?"; fi',
+	)
+	assert result.stdout == "rc=1\n", result.stderr
+	assert _calls(tmp_path) == 4
+	assert "BODY-MARKER" not in result.stdout + result.stderr
+	assert _all_temp_files(tmp_path) == []
+
+
+@pytest.mark.parametrize("step_name", INLINE_GH_RETRY_STEPS)
+def test_inline_wrapper_first_try_success_passes_stdout_through_unchanged(
+	tmp_path: Path, step_name: str,
+) -> None:
+	payload = "line one\nlast line without newline"
+	env = _setup(tmp_path, [(payload, "", 0)])
+	result = _run_inline(tmp_path, env, step_name, "gh_retry gh api repos/o/r")
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == payload
+	assert result.stderr == ""
+	assert _calls(tmp_path) == 1
+	assert _all_temp_files(tmp_path) == []
+
+
+@pytest.mark.parametrize("step_name", INLINE_GH_RETRY_STEPS)
+def test_inline_wrapper_mktemp_failure_does_not_run_the_command(
+	tmp_path: Path, step_name: str,
+) -> None:
+	env = _setup(tmp_path, [(ISSUE_BODY, "", 0)])
+	result = _run_inline(
+		tmp_path,
+		env,
+		step_name,
+		'mktemp() { return 1; }\n'
+		'if gh_retry gh api repos/o/r/issues/5016; then echo "rc=0"; else echo "rc=$?"; fi',
+	)
+	assert result.stdout == "rc=1\n", result.stderr
+	assert "::error::gh_retry: failed to create stdout temp file" in result.stderr
+	assert _calls(tmp_path) == 0
+
+
+def test_pat_budget_snapshot_and_window_change(tmp_path: Path) -> None:
+	"""Shared-PAT deltas are unknown across resets; no raw response is logged."""
+	snapshot = tmp_path / "budget"
+	helper = REPO_ROOT / "scripts" / "gh_helpers.sh"
+	script = f'''source "{helper}"
+gh() {{ printf '%s\\n' "${{FAKE_BUDGET}}"; }}
+gh_pat_budget "$PHASE" review_autofix gate "{snapshot}"
+'''
+	for phase, remaining, reset, expected in (
+		("start", 100, 1000, "used_in_job=unknown"),
+		("end", 93, 1000, "used_in_job=7"),
+		("end", 89, 2000, "used_in_job=unknown"),
+	):
+		env = {**os.environ, "PHASE": phase, "FAKE_BUDGET": json.dumps({"resources": {"core": {"remaining": remaining, "reset": reset}}})}
+		result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+		assert result.returncode == 0, result.stderr
+		assert f"GH_PAT_BUDGET phase={phase} workflow=review_autofix job=gate remaining={remaining} reset={reset} {expected}" in result.stdout
+	headers = ("HTTP/2 200\r\nx-ratelimit-resource: core\r\nx-ratelimit-remaining: 65\r\n"
+		"x-ratelimit-reset: 3000\r\n\r\n" + json.dumps({"resources": {"core": {"remaining": 20, "reset": 4000}}}))
+	result = subprocess.run(["bash", "-c", script], env={**os.environ, "PHASE": "start", "FAKE_BUDGET": headers},
+		capture_output=True, text=True)
+	assert result.returncode == 0 and "remaining=65 reset=3000" in result.stdout
+
+
+def test_review_watchdog_state_is_job_local_and_expires(tmp_path: Path) -> None:
+	gh = tmp_path / "gh"
+	gh.write_text('#!/usr/bin/env bash\necho called >> "$CALL_LOG"\necho open\n')
+	gh.chmod(0o755)
+	call_log = tmp_path / "calls"
+	env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}", "RUNNER_TEMP": str(tmp_path),
+		"GITHUB_RUN_ID": "25", "CALL_LOG": str(call_log), "GH_TOKEN": "fake"}
+	script = f'source "{GH_HELPERS}"; gh_review_pr_state o/r 7; gh_review_pr_state o/r 7'
+	result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+	assert result.returncode == 0 and result.stdout == "open\nopen\n", result.stderr
+	assert call_log.read_text().count("called") == 1
+	cache = next(tmp_path.glob("review_pr_state_*.lock")).with_suffix("")
+	cache.write_text("o/r 7 open 0\n")
+	result = subprocess.run(["bash", "-c", f'source "{GH_HELPERS}"; gh_review_pr_state o/r 7'], env=env, capture_output=True, text=True)
+	assert result.returncode == 0 and result.stdout == "open\n"
+	assert call_log.read_text().count("called") == 2
+
+
+def test_review_watchdog_does_not_cache_terminal_state(tmp_path: Path) -> None:
+	"""A reopened PR must not be aborted based on an earlier closed read."""
+	call_log = tmp_path / "calls"
+	state_file = tmp_path / "state"
+	state_file.write_text("closed\n")
+	env = {**os.environ, "RUNNER_TEMP": str(tmp_path), "GITHUB_RUN_ID": "26",
+		"CALL_LOG": str(call_log), "STATE_FILE": str(state_file)}
+	script = f'''source "{GH_HELPERS}"
+gh() {{ printf 'called\\n' >> "$CALL_LOG"; read -r terminal_state_from_fixture < "$STATE_FILE"; printf '%s\\n' "$terminal_state_from_fixture"; }}
+gh_review_pr_state o/r 7
+'''
+	result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+	assert result.returncode == 0 and result.stdout == "closed\n", result.stderr
+	state_file.write_text("open\n")
+	result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True)
+	assert result.returncode == 0 and result.stdout == "open\n", result.stderr
+	assert call_log.read_text().count("called") == 2
+
+
+# --- Issue #8095 (SEC-001 / SEC-002): diagnostics never print argument values
+# or API response content. -------------------------------------------------
+
+SECRET = "SECRET_SENTINEL"
+
+
+def _summary(tmp_path: Path, *args: str) -> str:
+	script = f"source '{GH_HELPERS}'\n_gh_cmd_log_summary \"$@\""
+	result = subprocess.run(
+		["bash", "-c", script, "summary", *args],
+		capture_output=True, text=True, cwd=tmp_path, timeout=30,
+	)
+	assert result.returncode == 0, result.stderr
+	return result.stdout
+
+
+def test_create_failure_reports_endpoint_and_flag_names_only(tmp_path: Path) -> None:
+	env = _setup(tmp_path, [(BAD_GATEWAY_BODY, BAD_GATEWAY_STDERR, 1)])
+	result = _run(
+		tmp_path, env, f"gh_retry gh api repos/o/r/issues/1/comments -f body={SECRET}",
+	)
+	assert result.returncode == 1
+	assert _calls(tmp_path) == 1
+	assert (
+		"single attempt for non-idempotent create: gh api repos/o/r/issues/1/comments (flags: -f)"
+		in result.stderr
+	)
+	assert "gh command failed after 1 attempts: gh api repos/o/r/issues/1/comments" in result.stderr
+	assert SECRET not in result.stderr + result.stdout
+
+
+def test_permanent_failure_reports_summary_not_body(tmp_path: Path) -> None:
+	env = _setup(tmp_path, [(NOT_FOUND_BODY, NOT_FOUND_STDERR, 1)])
+	result = _run(
+		tmp_path, env, f"gh_retry gh api -X PATCH repos/o/r/issues/1 -f body={SECRET}",
+	)
+	assert result.returncode == 1
+	assert "not retrying: gh api repos/o/r/issues/1 (flags: -X -f)" in result.stderr
+	assert SECRET not in result.stderr + result.stdout
+
+
+def test_non_api_subcommand_reports_number_and_flag_names(tmp_path: Path) -> None:
+	env = _setup(tmp_path, [(BAD_GATEWAY_BODY, BAD_GATEWAY_STDERR, 1)])
+	result = _run(tmp_path, env, f"gh_retry gh issue comment 5 --body {SECRET}")
+	assert result.returncode == 1
+	assert "gh issue comment 5 (flags: --body)" in result.stderr
+	assert SECRET not in result.stderr + result.stdout
+
+
+def test_retry_to_file_does_not_echo_field_values(tmp_path: Path) -> None:
+	env = _setup(tmp_path, [(BAD_GATEWAY_BODY, BAD_GATEWAY_STDERR, 1)])
+	env["GH_RETRY_MAX_ATTEMPTS"] = "2"
+	out_file = tmp_path / "out.json"
+	result = _run(
+		tmp_path,
+		env,
+		f"gh_retry_to_file --idempotent '{out_file}' gh api -X PATCH repos/o/r/issues/1 -f body={SECRET}",
+	)
+	assert result.returncode == 1
+	assert _calls(tmp_path) == 2
+	assert "gh command failed after 2 attempts: gh api repos/o/r/issues/1 (flags: -X -f)" in result.stderr
+	assert SECRET not in result.stderr + result.stdout
+
+
+@pytest.mark.parametrize(
+	("payload", "category"),
+	[("PRIVATE_SENTINEL not json\nsecond line\n", "invalid_json"), ("", "empty")],
+)
+def test_invalid_json_response_is_summarised_not_printed(
+	tmp_path: Path, payload: str, category: str,
+) -> None:
+	import hashlib
+
+	env = _setup(tmp_path, [(payload, "", 0)])
+	env["GH_RETRY_MAX_ATTEMPTS"] = "1"
+	out_file = tmp_path / "out.json"
+	result = _run(
+		tmp_path, env, f"gh_api_json_to_file '{out_file}' gh api repos/o/r/issues/1 -f q={SECRET}",
+	)
+	assert result.returncode == 1
+	raw = payload.encode("utf-8")
+	digest = hashlib.sha256(raw).hexdigest()[:12]
+	assert (
+		f"gh api response summary (attempt 1/1): bytes={len(raw)} sha256={digest} category={category}"
+		in result.stderr
+	)
+	assert "PRIVATE_SENTINEL" not in result.stderr + result.stdout
+	assert "Raw response (first 50 lines)" not in result.stderr
+	assert "gh api failed to return valid JSON after 1 attempts: gh api repos/o/r/issues/1 (flags: -f)" in result.stderr
+	assert SECRET not in result.stderr
+	assert out_file.read_text(encoding="utf-8") == ""
+
+
+@pytest.mark.parametrize(
+	("command", "expected"),
+	[
+		(f"gh_retry gh api repos/o/r/issues/1 -f body={SECRET}", "gh api repos/o/r/issues/1 (flags: -f)"),
+		(f"_safe_gh_jq repos/o/r/issues/1 --jq .{SECRET}", "gh api repos/o/r/issues/1 (flags: --jq)"),
+	],
+)
+def test_mktemp_failure_messages_are_redacted(tmp_path: Path, command: str, expected: str) -> None:
+	env = _setup(tmp_path, [(ISSUE_BODY, "", 0)])
+	result = _run(tmp_path, env, f"mktemp() {{ return 1; }}\n{command}")
+	assert result.returncode == 1
+	assert f"aborting without running: {expected}" in result.stderr
+	assert SECRET not in result.stderr + result.stdout
+	assert _calls(tmp_path) == 0
+
+
+def test_summary_drops_query_and_fragment(tmp_path: Path) -> None:
+	out = _summary(tmp_path, "gh", "api", f"repos/o/r/issues?per_page=100&q={SECRET}#x", "--paginate")
+	assert out == "gh api repos/o/r/issues (flags: --paginate)"
+
+
+def test_summary_breaks_workflow_command_markers(tmp_path: Path) -> None:
+	out = _summary(tmp_path, "gh", "api", "repos/o/r/::set-output", "-H", "x::y")
+	assert "::" not in out
+	assert out.startswith("gh api repos/o/r/")
+
+
+def test_summary_is_bounded(tmp_path: Path) -> None:
+	flags = []
+	for index in range(40):
+		flags += [f"--flag-number-{index}", "v"]
+	out = _summary(tmp_path, "gh", "api", "repos/" + "a" * 500, *flags)
+	assert len(out) <= 200
+	assert "\n" not in out
+
+
+def test_summary_keeps_flag_names_without_glued_values(tmp_path: Path) -> None:
+	assert _summary(tmp_path, "gh", "api", "--method=POST", "repos/o/r/x") == "gh api repos/o/r/x (flags: --method)"
+	assert _summary(tmp_path, "gh", "api", "-XPOST", "repos/o/r/x", f"-fbody={SECRET}") == "gh api repos/o/r/x (flags: -X -f)"
+	assert _summary(tmp_path, "gh", "api", "graphql", "-f", f"query={SECRET}") == "gh api graphql (flags: -f)"
+
+
+def test_summary_names_endpoint_for_safe_gh_jq_wrapper(tmp_path: Path) -> None:
+	out = _summary(tmp_path, "_safe_gh_jq", f"repos/o/r/pulls/7?q={SECRET}", "--jq", f".{SECRET}")
+	assert out == "_safe_gh_jq gh api repos/o/r/pulls/7 (flags: --jq)"
+	assert _summary(tmp_path, "_safe_gh_jq", "--paginate", "--slurp", "repos/o/r/x") == (
+		"_safe_gh_jq gh api repos/o/r/x (flags: --paginate --slurp)"
+	)
+
+
+def test_summary_of_other_commands_and_positionals(tmp_path: Path) -> None:
+	assert _summary(tmp_path, "curl", f"https://x/{SECRET}", "-H", SECRET) == "curl (flags: -H)"
+	assert _summary(tmp_path, "evil;cmd", SECRET) == "<command>"
+	assert _summary(tmp_path, "gh", "pr", "view", f"branch-{SECRET}", "--json", "x") == "gh pr view (flags: --json)"
+	assert _summary(tmp_path, "gh", "issue", "edit", "42", "--add-label", "bug") == "gh issue edit 42 (flags: --add-label)"
+	assert _summary(tmp_path) == ""
+	assert _summary(tmp_path, "gh") == "gh"
+
+
+def test_summary_never_logs_dash_prefixed_flag_values(tmp_path: Path) -> None:
+	out = _summary(tmp_path, "gh", "issue", "comment", "5", "--body", "--secret123", "--repo", "o/r")
+	assert out == "gh issue comment 5 (flags: --body --repo)"
+	assert "secret123" not in out
+	assert _summary(tmp_path, "gh", "api", "repos/o/r/x", "-f", "-secretfield") == "gh api repos/o/r/x (flags: -f)"
+
+
+def test_summary_finds_number_after_flags(tmp_path: Path) -> None:
+	assert _summary(tmp_path, "gh", "issue", "view", "--repo", "o/r", "42") == "gh issue view 42 (flags: --repo)"
+	assert _summary(tmp_path, "gh", "pr", "view", "--repo", "o/r", "br", "7") == "gh pr view (flags: --repo)"
+
+
+def test_summary_unknown_flag_never_logs_dash_prefixed_value(tmp_path: Path) -> None:
+	out = _summary(tmp_path, "gh", "issue", "create", "--project", "--PRIVATE_SENTINEL", "--title", "t")
+	assert out == "gh issue create (flags: --project --title)"
+	assert "PRIVATE_SENTINEL" not in out
+	assert _summary(tmp_path, "gh", "api", "--paginate", "--slurp", "repos/o/r/x") == "gh api repos/o/r/x (flags: --paginate --slurp)"
+
+
+# --- Issue #9227: the replay status must not depend on cat. -----------------
+# ubuntu-26.04 runners ship a cat that exits 0 after its reader closes the
+# pipe, so gh_retry's replay (then `cat file`) reported rc=0 there.
+
+
+def test_closed_reader_status_does_not_depend_on_cat_exit_status(tmp_path: Path) -> None:
+	big = "x" * (1024 * 1024)
+	env = _setup(tmp_path, [(big, "", 0)])
+	real_cat = shutil.which("cat")
+	assert real_cat, "no cat on PATH"
+	fake_cat = tmp_path / "bin" / "cat"
+	# Behaves like the runner's cat: SIGPIPE ignored and always exit 0 once
+	# every argument is a readable file. Exits 1 otherwise, so the fake gh's
+	# `cat "${count_file}" 2>/dev/null || echo 0` still counts calls.
+	fake_cat.write_text(
+		"#!/usr/bin/env bash\n"
+		'for arg in "$@"; do\n'
+		'\t[ -f "${arg}" ] && [ -r "${arg}" ] || exit 1\n'
+		"done\n"
+		"trap '' PIPE\n"
+		f"'{real_cat}' \"$@\" 2>/dev/null\n"
+		"exit 0\n",
+		encoding="utf-8",
+	)
+	fake_cat.chmod(0o755)
+	result = _run(
+		tmp_path,
+		env,
+		"gh_retry gh api repos/o/r | head -c 1 > /dev/null\n"
+		'echo "rc=${PIPESTATUS[0]}"',
+	)
+	assert _calls(tmp_path) == 1, result.stderr
+	rc_line = result.stdout.strip()
+	# 141 = SIGPIPE in the replay subshell; 1 = printf EPIPE when SIGPIPE is ignored.
+	assert rc_line in ("rc=141", "rc=1"), (rc_line, result.stderr)
+	assert _leftover_temp_files(tmp_path) == []
+
+
+def test_replay_keeps_nul_bytes_and_trailing_newlines(tmp_path: Path) -> None:
+	payload = "a\\b\0c  \n\n\0\0tail\n\n\n"
+	env = _setup(tmp_path, [(payload, "", 0)])
+	result = _run(tmp_path, env, "gh_retry gh api repos/o/r")
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == payload
+	assert result.stderr == ""
+	assert _calls(tmp_path) == 1
+	assert _leftover_temp_files(tmp_path) == []
+
+
+@pytest.mark.parametrize("payload", ["a\\b\0", "\0", "x\n\0\0"])
+def test_replay_of_output_ending_in_nul_is_not_duplicated(tmp_path: Path, payload: str) -> None:
+	# A trailing NUL makes the last `read -d ''` hit EOF with no data, so the
+	# post-loop branch must be skipped and the final chunk emitted once.
+	env = _setup(tmp_path, [(payload, "", 0)])
+	result = _run(tmp_path, env, "gh_retry gh api repos/o/r")
+	assert result.returncode == 0, result.stderr
+	assert result.stdout == payload
+	assert _calls(tmp_path) == 1
+	assert _leftover_temp_files(tmp_path) == []

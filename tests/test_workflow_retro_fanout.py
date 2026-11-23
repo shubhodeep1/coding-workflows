@@ -1,0 +1,662 @@
+#!/usr/bin/env python3
+"""Behavioral tests for the consumer retro fan-out script."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SCRIPT_PATH = REPO_ROOT / "scripts" / "workflow_retro_fanout.sh"
+WF_PATH = REPO_ROOT / ".github" / "workflows" / "workflow-log-analysis.yml"
+
+
+def _write_exec(path: Path, body: str) -> None:
+	path.write_text(body, encoding="utf-8")
+	path.chmod(0o755)
+
+
+def _install_mock_gh(bin_dir: Path) -> None:
+	gh_script = r'''#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+state_path = Path(os.environ["MOCK_GH_STATE_FILE"])
+state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+args = sys.argv[1:]
+
+
+def save() -> None:
+	state_path.write_text(json.dumps(state), encoding="utf-8")
+
+
+def first_value(flag: str) -> str:
+	for idx, arg in enumerate(args):
+		if arg == flag and idx + 1 < len(args):
+			return args[idx + 1]
+	return ""
+
+
+state.setdefault("calls", []).append(args)
+
+if args[:2] == ["api", "graphql"] or (args[0] == "api" and "graphql" in args[1]):
+	if state.get("graphql_should_fail"):
+		save()
+		sys.exit(1)
+	save()
+	print(json.dumps({
+		"data": {
+			"search": {
+				"pageInfo": {"hasNextPage": False, "endCursor": None},
+				"nodes": []
+			}
+		}
+	}))
+	sys.exit(0)
+
+if args[0] == "api":
+	method = first_value("-X") or "GET"
+	path_arg = next((a for a in args[1:] if "/" in a and not a.startswith("-")), "")
+	if "actions/variables/WORKFLOW_RETRO_ENABLED" in path_arg:
+		var_map = state.get("consumer_var_responses", {})
+		error_map = state.get("consumer_var_stdout_errors", {})
+		repo = path_arg.split("/actions/")[0][len("repos/"):]
+		save()
+		if repo in error_map:
+			print(error_map[repo])
+			sys.exit(1)
+		if repo in var_map:
+			print(var_map[repo])
+			sys.exit(0)
+		sys.exit(1)
+	if "/comments" in path_arg and method == "GET":
+		save()
+		print("[]")
+		sys.exit(0)
+	if "/comments" in path_arg and method in {"POST", "PATCH"}:
+		input_file = first_value("--input")
+		if input_file:
+			state.setdefault("comment_payloads", []).append(Path(input_file).read_text(encoding="utf-8"))
+		save()
+		sys.exit(0)
+	save()
+	sys.exit(1)
+
+if args[:2] == ["label", "create"]:
+	state.setdefault("label_create_args", []).append(args)
+	repo = first_value("--repo") or "owner/repo"
+	if repo in state.get("label_create_fail_repos", []):
+		save()
+		sys.exit(1)
+	save()
+	sys.exit(0)
+
+if args[:2] == ["issue", "list"]:
+	responses = state.setdefault("issue_list_responses", [])
+	response = responses.pop(0) if responses else []
+	save()
+	print(json.dumps(response))
+	sys.exit(0)
+
+if args[:2] == ["issue", "create"]:
+	state.setdefault("issue_create_args", []).append(args)
+	repo = first_value("--repo") or "owner/repo"
+	next_issue_number = int(state.get("next_issue_number", 9100))
+	state["next_issue_number"] = next_issue_number + 1
+	save()
+	print(f"https://github.com/{repo}/issues/{next_issue_number}")
+	sys.exit(0)
+
+if args[:2] == ["issue", "edit"]:
+	repo = first_value("--repo") or "owner/repo"
+	if repo in state.get("issue_edit_fail_repos", []):
+		save()
+		sys.exit(1)
+	save()
+	sys.exit(0)
+
+if args[:2] == ["issue", "reopen"]:
+	repo = first_value("--repo") or "owner/repo"
+	if repo in state.get("issue_reopen_fail_repos", []):
+		save()
+		sys.exit(1)
+	save()
+	sys.exit(0)
+
+save()
+print(f"unexpected gh args: {args}", file=sys.stderr)
+sys.exit(1)
+'''
+	_write_exec(bin_dir / "gh", gh_script)
+
+
+def _install_mock_codex(bin_dir: Path) -> None:
+	codex_script = r'''#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+state_path = Path(os.environ["MOCK_GH_STATE_FILE"])
+state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+state.setdefault("codex_calls", []).append(sys.argv[1:])
+state_path.write_text(json.dumps(state), encoding="utf-8")
+sys.stdout.write(os.environ.get("MOCK_CODEX_OUTPUT", ""))
+sys.exit(0)
+'''
+	_write_exec(bin_dir / "codex", codex_script)
+
+
+def _install_mock_cat(bin_dir: Path, real_cat: str) -> None:
+	"""PATH `cat` shim that fails when any argument contains $MOCK_CAT_FAIL_MATCH."""
+	cat_script = f"""#!/usr/bin/env bash
+if [ -n "${{MOCK_CAT_FAIL_MATCH:-}}" ]; then
+	for arg in "$@"; do
+		case "$arg" in
+			*"${{MOCK_CAT_FAIL_MATCH}}"*) exit 1 ;;
+		esac
+	done
+fi
+exec "{real_cat}" "$@"
+"""
+	_write_exec(bin_dir / "cat", cat_script)
+
+
+RETRO_BODY = "\n".join(
+	[
+		"## Weekly Retro",
+		"",
+		"### What Worked",
+		"- pipeline stayed green",
+		"",
+		"### Failure Modes",
+		"- none observed",
+		"",
+		"### Next Week Recommendation",
+		"- keep monitoring",
+		"",
+		"### Metrics Snapshot",
+		"- runs: 2",
+		"",
+	]
+)
+
+
+# The retro agent runs through scripts/codex_isolated_exec.sh (a Docker
+# container without credentials, PR #6187). The tests run a copy of the
+# support tree whose isolation wrapper hands the Codex arguments and stdin
+# straight to the mock `codex` on PATH, so no image is built.
+ISOLATED_EXEC_STUB = """#!/usr/bin/env bash
+set -euo pipefail
+[ "${1:-}" = run ] || exit 2
+shift
+while [ "$#" -gt 0 ] && [ "$1" != -- ]; do shift; done
+[ "$#" -gt 0 ] || exit 2
+shift
+exec codex "$@"
+"""
+
+
+def _stage_support_tree(root: Path) -> Path:
+	"""Copy scripts/ and prompts/ under root with the isolation wrapper stubbed; return the copied script."""
+	shutil.copytree(REPO_ROOT / "scripts", root / "scripts")
+	shutil.copytree(REPO_ROOT / "prompts", root / "prompts")
+	for name in ("unattended_system_instructions.md",):
+		if (REPO_ROOT / name).exists():
+			shutil.copy2(REPO_ROOT / name, root / name)
+	_write_exec(root / "scripts" / "codex_isolated_exec.sh", ISOLATED_EXEC_STUB)
+	return root / "scripts" / SCRIPT_PATH.name
+
+
+def _recent_iso(days_ago: int) -> str:
+	return (datetime.now(timezone.utc) - timedelta(days=days_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _run_fanout(
+	state: dict,
+	*,
+	report: dict,
+	consumer_repos: list[str],
+	extra_env: dict | None = None,
+	run_from_temp_dir: bool = False,
+	cat_fail_match: str | None = None,
+	sanitize_fail_match: str | None = None,
+	sanitize_corrupt_match: str | None = None,
+) -> tuple[subprocess.CompletedProcess[str], dict]:
+	with tempfile.TemporaryDirectory(prefix="retro-fanout-test-") as td:
+		tmp_path = Path(td)
+		bin_dir = tmp_path / "bin"
+		bin_dir.mkdir(parents=True, exist_ok=True)
+		state_file = tmp_path / "gh-state.json"
+		state_file.write_text(json.dumps(state), encoding="utf-8")
+		_install_mock_gh(bin_dir)
+		_install_mock_codex(bin_dir)
+		support_root = tmp_path / "support"
+		support_root.mkdir()
+		staged_script = _stage_support_tree(support_root)
+		if cat_fail_match is not None:
+			real_cat = shutil.which("cat")
+			assert real_cat, "cat not found on PATH"
+			_install_mock_cat(bin_dir, real_cat)
+		if sanitize_fail_match is not None:
+			# Appended after the real definition, so this override wins when
+			# the fan-out script sources the staged gh_helpers.sh.
+			with (support_root / "scripts" / "gh_helpers.sh").open("a", encoding="utf-8") as helpers:
+				helpers.write(
+					'\nsanitize_codex_prompt_file() { case "${1:-}" in *"${MOCK_SANITIZE_FAIL_MATCH}"*) return 1 ;; esac; return 0; }\n'
+				)
+		if sanitize_corrupt_match is not None:
+			# A sanitizer that reports success but leaves invalid UTF-8 behind.
+			with (support_root / "scripts" / "gh_helpers.sh").open("a", encoding="utf-8") as helpers:
+				helpers.write(
+					'\nsanitize_codex_prompt_file() { case "${1:-}" in *"${MOCK_SANITIZE_CORRUPT_MATCH}"*) printf \'\\377\' >> "$1" ;; esac; return 0; }\n'
+				)
+		# workflow_retro.py reads ai-memory run events from the workspace's
+		# origin (a git fetch per repo); a workspace without a remote fails
+		# that read open at once instead of fetching from the real origin.
+		workspace = tmp_path / "workspace"
+		subprocess.run(["git", "init", "-q", str(workspace)], check=True)
+		# workflow_retro.py needs the same interpreter version the tests run
+		# on (CI pins 3.12); shim `python3` so the script uses it too.
+		(bin_dir / "python3").symlink_to(sys.executable)
+
+		report_file = tmp_path / "workflow_log_report.json"
+		report_file.write_text(json.dumps(report), encoding="utf-8")
+		roster_file = tmp_path / "consumer_repos.json"
+		roster_file.write_text(json.dumps(consumer_repos), encoding="utf-8")
+
+		env = os.environ.copy()
+		env.update(
+			{
+				"GH_TOKEN": "test-token",
+				"GITHUB_REPOSITORY": "owner/source",
+				"GITHUB_WORKSPACE": str(workspace),
+				"OPENROUTER_API_KEY": "test-openrouter-key",
+				"MOCK_CODEX_OUTPUT": RETRO_BODY,
+				"MOCK_GH_STATE_FILE": str(state_file),
+				"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+				"PYTHONDONTWRITEBYTECODE": "1",
+				"WORKFLOW_LOG_REPORT_FILE": str(report_file),
+				"CONSUMER_REPOS_FILE": str(roster_file),
+				"CODEX_RETRY_BACKOFF_BASE_SECS": "1",
+			}
+		)
+		if cat_fail_match is not None:
+			env["MOCK_CAT_FAIL_MATCH"] = cat_fail_match
+		if sanitize_fail_match is not None:
+			env["MOCK_SANITIZE_FAIL_MATCH"] = sanitize_fail_match
+		if sanitize_corrupt_match is not None:
+			env["MOCK_SANITIZE_CORRUPT_MATCH"] = sanitize_corrupt_match
+		env.update(extra_env or {})
+		proc = subprocess.run(
+			["bash", str(staged_script)],
+			cwd=tmp_path if run_from_temp_dir else REPO_ROOT,
+			env=env,
+			capture_output=True,
+			text=True,
+			encoding="utf-8",
+		)
+		final_state = json.loads(state_file.read_text(encoding="utf-8"))
+		return proc, final_state
+
+
+def test_fanout_step_is_wired_default_on() -> None:
+	wf = WF_PATH.read_text(encoding="utf-8")
+	assert "bash scripts/workflow_retro_fanout.sh" in wf
+	assert (
+		"WORKFLOW_RETRO_CONSUMER_FANOUT_ENABLED: ${{ vars.WORKFLOW_RETRO_CONSUMER_FANOUT_ENABLED || 'true' }}"
+	) in wf
+	assert "!cancelled() && steps.retro_context.outcome == 'success'" in wf
+
+
+def test_fanout_disabled_makes_no_calls() -> None:
+	proc, state = _run_fanout(
+		{},
+		report={"runs": [], "summary": {}, "scope": {}, "errors": []},
+		consumer_repos=["owner/active-repo"],
+		extra_env={"WORKFLOW_RETRO_CONSUMER_FANOUT_ENABLED": "false"},
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert "WORKFLOW_RETRO_CONSUMER_FANOUT_ENABLED=false; skipping." in proc.stdout
+	assert state.get("calls", []) == []
+	assert state.get("codex_calls", []) == []
+
+
+def test_fanout_skips_cleanly_when_cross_repo_pat_is_missing() -> None:
+	proc, state = _run_fanout(
+		{},
+		report={"runs": [], "summary": {}, "scope": {}, "errors": []},
+		consumer_repos=["owner/active-repo"],
+		extra_env={"GH_TOKEN": ""},
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert "GH_TOKEN is empty; skipping consumer fan-out because cross-repo GH_PAT is unavailable." in proc.stdout
+	assert state.get("calls", []) == []
+	assert state.get("codex_calls", []) == []
+
+
+def test_fanout_posts_active_repo_skips_idle_and_disabled_and_source() -> None:
+	report = {
+		"runs": [
+			{
+				"repository": "owner/active-repo",
+				"run_id": idx + 1,
+				"workflow_name": f"Workflow {idx + 1}",
+				"workflow_family": "review_autofix",
+				"conclusion": "success",
+				"duration_seconds": 60,
+				"created_at": _recent_iso(days_ago=1),
+			}
+			for idx in range(2)
+		],
+		"summary": {},
+		"scope": {},
+		"errors": [],
+	}
+	state = {
+		"consumer_var_responses": {"owner/disabled-repo": "false"},
+		"issue_list_responses": [[]],
+		"next_issue_number": 9100,
+	}
+	proc, final_state = _run_fanout(
+		state,
+		report=report,
+		consumer_repos=[
+			"owner/active-repo",
+			"owner/disabled-repo",
+			"owner/idle-repo",
+			"owner/source",
+		],
+	)
+
+	assert proc.returncode == 0, proc.stderr
+	assert "WORKFLOW_RETRO_FANOUT_V1: repo=owner/disabled-repo status=skipped_disabled" in proc.stdout
+	assert "repo=owner/idle-repo" in proc.stdout
+	assert "status=skipped_no_activity" in proc.stdout
+	assert "WORKFLOW_RETRO_FANOUT_V1: repo=owner/active-repo" in proc.stdout
+	assert "status=posted tracker=#9100" in proc.stdout
+	# The source repo's own retro is posted by the dedicated job steps.
+	assert "repo=owner/source" not in proc.stdout
+	assert len(final_state.get("codex_calls", [])) == 1
+	create_args = final_state.get("issue_create_args", [])
+	assert len(create_args) == 1
+	assert "ai:retro" in create_args[0]
+	assert "owner/active-repo" in create_args[0]
+	assert any(
+		call[:2] == ["api", "--paginate"]
+		and any("/comments?since=" in arg for arg in call)
+		for call in final_state.get("calls", [])
+	)
+	payloads = "\n".join(final_state.get("comment_payloads", []))
+	assert "## Weekly Retro" in payloads
+	assert "<!-- ai:workflow-retro:" in payloads
+
+
+def test_fanout_treats_null_repo_var_as_enabled_and_runs_outside_repo_root() -> None:
+	report = {
+		"runs": [
+			{
+				"repository": "owner/active-repo",
+				"run_id": 1,
+				"workflow_name": "Workflow 1",
+				"workflow_family": "review_autofix",
+				"conclusion": "success",
+				"duration_seconds": 60,
+				"created_at": _recent_iso(days_ago=1),
+			}
+		],
+		"summary": {},
+		"scope": {},
+		"errors": [],
+	}
+	state = {
+		"consumer_var_responses": {"owner/active-repo": "null"},
+		"issue_list_responses": [[]],
+		"next_issue_number": 9200,
+	}
+	proc, final_state = _run_fanout(
+		state,
+		report=report,
+		consumer_repos=["owner/active-repo"],
+		run_from_temp_dir=True,
+	)
+
+	assert proc.returncode == 0, proc.stderr
+	assert "WORKFLOW_RETRO_FANOUT_V1: repo=owner/active-repo week=" in proc.stdout
+	assert "status=posted tracker=#9200" in proc.stdout
+	assert "skipped_disabled" not in proc.stdout
+	assert len(final_state.get("codex_calls", [])) == 1
+
+
+def test_fanout_treats_failed_repo_var_lookup_as_enabled() -> None:
+	report = {
+		"runs": [
+			{
+				"repository": "owner/active-repo",
+				"run_id": 1,
+				"workflow_name": "Workflow 1",
+				"workflow_family": "review_autofix",
+				"conclusion": "success",
+				"duration_seconds": 60,
+				"created_at": _recent_iso(days_ago=1),
+			}
+		],
+		"summary": {},
+		"scope": {},
+		"errors": [],
+	}
+	state = {
+		"consumer_var_stdout_errors": {"owner/active-repo": '{"message":"rate limited"}'},
+		"issue_list_responses": [[]],
+		"next_issue_number": 9300,
+	}
+	proc, final_state = _run_fanout(
+		state,
+		report=report,
+		consumer_repos=["owner/active-repo"],
+	)
+
+	assert proc.returncode == 0, proc.stderr
+	assert "WORKFLOW_RETRO_FANOUT_V1: repo=owner/active-repo week=" in proc.stdout
+	assert "status=posted tracker=#9300" in proc.stdout
+	assert "skipped_disabled" not in proc.stdout
+	assert len(final_state.get("codex_calls", [])) == 1
+
+
+def test_fanout_marks_repo_failed_when_label_creation_fails() -> None:
+	report = {
+		"runs": [
+			{
+				"repository": "owner/active-repo",
+				"run_id": 1,
+				"workflow_name": "Workflow 1",
+				"workflow_family": "review_autofix",
+				"conclusion": "success",
+				"duration_seconds": 60,
+				"created_at": _recent_iso(days_ago=1),
+			}
+		],
+		"summary": {},
+		"scope": {},
+		"errors": [],
+	}
+	state = {
+		"label_create_fail_repos": ["owner/active-repo"],
+	}
+	proc, final_state = _run_fanout(
+		state,
+		report=report,
+		consumer_repos=["owner/active-repo"],
+		extra_env={"GH_RETRY_MAX_ATTEMPTS": "1"},
+	)
+
+	assert proc.returncode == 1, proc.stderr
+	assert "WORKFLOW_RETRO_FANOUT_V1: repo=owner/active-repo status=failed" in proc.stdout
+	assert len(final_state.get("codex_calls", [])) == 1
+	assert final_state.get("issue_create_args", []) == []
+
+
+def test_fanout_marks_repo_failed_when_existing_tracker_reopen_or_edit_fails() -> None:
+	report = {
+		"runs": [
+			{
+				"repository": "owner/active-repo",
+				"run_id": 1,
+				"workflow_name": "Workflow 1",
+				"workflow_family": "review_autofix",
+				"conclusion": "success",
+				"duration_seconds": 60,
+				"created_at": _recent_iso(days_ago=1),
+			}
+		],
+		"summary": {},
+		"scope": {},
+		"errors": [],
+	}
+
+	for fail_key, tracker_state in (
+		("issue_reopen_fail_repos", "CLOSED"),
+		("issue_edit_fail_repos", "OPEN"),
+	):
+		state = {
+			fail_key: ["owner/active-repo"],
+			"issue_list_responses": [
+				[
+					{
+						"number": 9100,
+						"title": "AI Workflow Weekly Retro",
+						"body": "<!-- ai:retro-tracker:v1 -->\n# AI Workflow Weekly Retro\n",
+						"state": tracker_state,
+						"updatedAt": _recent_iso(days_ago=1),
+						"url": "https://github.com/owner/active-repo/issues/9100",
+					}
+				],
+			],
+		}
+		proc, final_state = _run_fanout(
+			state,
+			report=report,
+			consumer_repos=["owner/active-repo"],
+			extra_env={"GH_RETRY_MAX_ATTEMPTS": "1"},
+		)
+
+		assert proc.returncode == 1, proc.stderr
+		assert "WORKFLOW_RETRO_FANOUT_V1: repo=owner/active-repo status=failed" in proc.stdout
+		assert len(final_state.get("codex_calls", [])) == 1
+		assert final_state.get("comment_payloads", []) == []
+
+
+def _active_report(repos: list[str]) -> dict:
+	return {
+		"runs": [
+			{
+				"repository": repo,
+				"run_id": idx + 1,
+				"workflow_name": f"Workflow {idx + 1}",
+				"workflow_family": "review_autofix",
+				"conclusion": "success",
+				"duration_seconds": 60,
+				"created_at": _recent_iso(days_ago=1),
+			}
+			for idx, repo in enumerate(repos)
+		],
+		"summary": {},
+		"scope": {},
+		"errors": [],
+	}
+
+
+def _assert_bad_repo_failed_good_repo_posted(proc: subprocess.CompletedProcess[str], final_state: dict, warning: str) -> None:
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert warning in proc.stdout
+	assert "WORKFLOW_RETRO_FANOUT_V1: repo=owner/bad-repo status=failed" in proc.stdout
+	# Only good-repo reached the model; bad-repo failed closed before it.
+	assert len(final_state.get("codex_calls", [])) == 1
+	good_lines = [
+		line
+		for line in proc.stdout.splitlines()
+		if line.startswith("WORKFLOW_RETRO_FANOUT_V1: repo=owner/good-repo week=")
+	]
+	assert any("status=posted" in line for line in good_lines), proc.stdout
+	assert "retro-fanout: attempted=2 failed=1" in proc.stdout
+
+
+def test_fanout_prompt_assembly_failure_skips_model_call_and_continues() -> None:
+	state = {"issue_list_responses": [[]], "next_issue_number": 9400}
+	proc, final_state = _run_fanout(
+		state,
+		report=_active_report(["owner/bad-repo", "owner/good-repo"]),
+		consumer_repos=["owner/bad-repo", "owner/good-repo"],
+		# Fails the `cat "${ctx_file}"` in the middle of the prompt group.
+		cat_fail_match="owner__bad-repo-context.md",
+	)
+	_assert_bad_repo_failed_good_repo_posted(
+		proc,
+		final_state,
+		"::warning::retro-fanout: prompt assembly failed for owner/bad-repo; skipping the model call.",
+	)
+
+
+def test_fanout_sanitizer_failure_skips_model_call_and_continues() -> None:
+	state = {"issue_list_responses": [[]], "next_issue_number": 9500}
+	proc, final_state = _run_fanout(
+		state,
+		report=_active_report(["owner/bad-repo", "owner/good-repo"]),
+		consumer_repos=["owner/bad-repo", "owner/good-repo"],
+		sanitize_fail_match="owner__bad-repo-prompt.txt",
+	)
+	_assert_bad_repo_failed_good_repo_posted(
+		proc,
+		final_state,
+		"::warning::retro-fanout: prompt sanitization failed for owner/bad-repo; skipping the model call.",
+	)
+
+
+def test_fanout_invalid_utf8_after_sanitizer_skips_model_call_and_continues() -> None:
+	state = {"issue_list_responses": [[]], "next_issue_number": 9700}
+	proc, final_state = _run_fanout(
+		state,
+		report=_active_report(["owner/bad-repo", "owner/good-repo"]),
+		consumer_repos=["owner/bad-repo", "owner/good-repo"],
+		sanitize_corrupt_match="owner__bad-repo-prompt.txt",
+	)
+	_assert_bad_repo_failed_good_repo_posted(
+		proc,
+		final_state,
+		"::warning::retro-fanout: prompt for owner/bad-repo is not valid UTF-8 after sanitization; skipping the model call.",
+	)
+
+
+def test_fanout_comment_assembly_failure_posts_nothing() -> None:
+	state = {"issue_list_responses": [[]], "next_issue_number": 9600}
+	proc, final_state = _run_fanout(
+		state,
+		report=_active_report(["owner/active-repo"]),
+		consumer_repos=["owner/active-repo"],
+		cat_fail_match="owner__active-repo-retro.md",
+	)
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	assert "::warning::retro-fanout: retro comment assembly failed for owner/active-repo." in proc.stdout
+	assert "WORKFLOW_RETRO_FANOUT_V1: repo=owner/active-repo status=failed" in proc.stdout
+	assert len(final_state.get("codex_calls", [])) == 1
+	assert final_state.get("comment_payloads", []) == []
+
+
+def main() -> int:
+	for name in sorted(globals()):
+		if name.startswith("test_") and callable(globals()[name]):
+			globals()[name]()
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

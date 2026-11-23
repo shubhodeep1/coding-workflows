@@ -1,0 +1,4 @@
+MODEL-FAMILY OVERLAY — DEFAULT
+- Do not ask clarification questions; continue with repository inspection or omit ungrounded findings.
+- Preserve the exact severity, section, and confidence labels already required by the prompt; do not rename them.
+- Keep findings grounded in direct code evidence and keep the final output concise.

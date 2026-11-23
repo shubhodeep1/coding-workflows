@@ -1,0 +1,3997 @@
+#!/usr/bin/env bash
+# security_audit.sh — Run the default-branch OWASP Top 10 + STRIDE audit.
+
+set -euo pipefail
+# Signed job-token comments (run-volume plan item 15): route this script's
+# gh comment calls through the shim even when no earlier step loaded it.
+[ -z "${BASH_SOURCE[0]:-}" ] || AI_COMMENT_SIG_ACTIVATE_ONLY=1 source "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" >/dev/null 2>&1 || true
+
+security_audit_require_cmd() {
+	local cmd_name="${1:?command name required}"
+	command -v "${cmd_name}" >/dev/null 2>&1 || {
+		echo "${cmd_name} is required but not installed" >&2
+		exit 1
+	}
+}
+
+security_audit_flag_enabled() {
+	case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+		1|true|yes|on)
+			return 0
+			;;
+		*)
+			return 1
+			;;
+	esac
+}
+
+security_audit_sanitize_log_value() {
+	local sanitized_value
+	sanitized_value="$(
+		printf '%s' "${1:-}" \
+			| tr '\n\r\t' '   ' \
+			| LC_ALL=C tr -cd '[:print:]' \
+			| tr -s ' ' \
+			| sed -E 's#([[:alpha:]][[:alnum:]+.-]*://)[^/@[:space:]]+@#\1[redacted]@#g; s#([Aa]uthorization:[[:space:]]*)(([Bb]earer|[Bb]asic|[Tt]oken)[[:space:]]+)?[^[:space:]]+#\1[redacted]#g; s#([Bb]earer[[:space:]]+)[^[:space:]]+#\1[redacted]#g; s#(github_pat_|gh[pousr]_)[[:alnum:]_]+#\1[redacted]#g; s#(sk-or-)[[:alnum:]_-]+#\1[redacted]#g; s/^ //;s/ $//'
+	)"
+	if [ -z "${sanitized_value}" ]; then
+		sanitized_value="(empty)"
+	fi
+	printf '%q' "${sanitized_value}"
+}
+
+security_audit_emit_failure() {
+	local failure_phase="${1:?failure phase required}"
+	local failure_path="${2:?failure path required}"
+	local failure_reason="${3:?failure reason required}"
+	local failure_provider="${4:-}"
+	local failure_cwd
+	failure_cwd="$(pwd -P 2>/dev/null || printf '%s' '.')"
+	printf 'security-audit: phase=%s cwd=%s path=%s error=%s%s\n' \
+		"$(security_audit_sanitize_log_value "${failure_phase}")" \
+		"$(security_audit_sanitize_log_value "${failure_cwd}")" \
+		"$(security_audit_sanitize_log_value "${failure_path}")" \
+		"$(security_audit_sanitize_log_value "${failure_reason}")" \
+		"${failure_provider:+ provider=${failure_provider}}" >&2
+}
+
+security_audit_emit_path_diagnostic() {
+	local diagnostic_file="${1:?diagnostic file required}"
+	local path_diagnostic
+	if [ "${2:-}" = "sanitized-tail" ]; then
+		# The Codex path receives only already-redacted, published lines.
+		path_diagnostic="$(LC_ALL=C grep -E '(No\\ such\\ file\\ or\\ directory|os\\ error\\ 2|ENOENT)' "${diagnostic_file}" 2>/dev/null | tail -n 20 || true)"
+		if [ -n "${path_diagnostic}" ]; then
+			printf 'security-audit: captured_path_error=%s\n' "${path_diagnostic}" >&2
+		fi
+		return 0
+	fi
+	# ` not found: ` names the renderer's missing reference/template errors.
+	path_diagnostic="$(LC_ALL=C grep -E '(No such file or directory|os error 2|ENOENT| not found: )' "${diagnostic_file}" 2>/dev/null | tail -n 20 || true)"
+	if [ -n "${path_diagnostic}" ]; then
+		printf 'security-audit: captured_path_error=%s\n' \
+			"$(security_audit_sanitize_log_value "${path_diagnostic}")" >&2
+	fi
+}
+
+security_audit_emit_codex_stderr_tail() {
+	local stderr_path="${1:?stderr path required}"
+	local prompt_path="${2:?prompt path required}"
+	local tail_path="${3:?tail path required}"
+	# Optional label for the log prefix. Any label other than the default
+	# `codex` also drops lines before the first error-shaped line and keeps
+	# every line from it onward (prompt renderer output).
+	local stderr_label="${4:-codex}"
+	local masked_path="${tail_path}.masked"
+	local rendered_path="${tail_path}.rendered"
+	local stderr_line rendered_line
+	: > "${tail_path}"
+	# Read only the final 64 KiB plus one byte; discard a cut first line rather
+	# than publishing a fragment of a prompt or credential. Filter prompt/config
+	# echoes and mask secrets before calling the shared log sanitizer.
+	if ! python3 - "${stderr_path}" "${prompt_path}" "${stderr_label}" > "${masked_path}" 2>/dev/null <<'PY'
+import os
+import re
+import sys
+from pathlib import Path
+
+stderr_path = Path(sys.argv[1])
+prompt_path = Path(sys.argv[2])
+diagnostic_lines_only = sys.argv[3] != "codex"
+diagnostic_line = re.compile(
+	r"^ERROR:|^File \".*\", line \d+|Traceback|[A-Za-z]+(?:Error|Exception)\b|not found|unbound variable"
+	r"|no such file|permission denied|cannot|unable|invalid|unsupported|unresolved|failed|missing",
+	re.I,
+)
+with stderr_path.open("rb") as stderr_file:
+	stderr_file.seek(0, 2)
+	length = stderr_file.tell()
+	stderr_file.seek(max(0, length - 65537))
+	content = stderr_file.read()
+if length > 65537:
+	content = content.partition(b"\n")[2]
+
+prompt_lines = set()
+with prompt_path.open(encoding="utf-8", errors="replace") as prompt_file:
+	for prompt_line in prompt_file:
+		if prompt_line.strip():
+			prompt_lines.add(prompt_line.strip())
+
+secret_values = []
+for name, value in os.environ.items():
+	if value and re.search(r"(?:KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTH|(?:^|_)PAT(?:_|$))", name, re.I):
+		secret_values.extend(part for part in value.splitlines() if part)
+
+lines = []
+diagnostic_seen = False
+for raw_line in content.decode("utf-8", errors="replace").splitlines():
+	line = raw_line.strip()
+	if not line or line in prompt_lines or any(
+		len(prompt_line) >= 24 and prompt_line in line for prompt_line in prompt_lines
+	):
+		continue
+	if re.search(r"config\.toml|model_verbosity|OPENROUTER_API_KEY|=== (?:BEGIN|END) UNTRUSTED|(?:^|\s)(?:model|api_?key|base_url|model_provider)\s*=", line, re.I):
+		continue
+	# Keep every line from the first error-shaped line onward, so detail lines of
+	# a multi-line error (`- unknown_in_template: NAME`) are not dropped.
+	if diagnostic_lines_only and not diagnostic_seen:
+		if not diagnostic_line.search(line):
+			continue
+		diagnostic_seen = True
+	line = re.sub(r"(?i)(?:sk-[a-z0-9_-]{3,}|(?:gh[pousr]_|github_pat_)[a-z0-9_]+)", "[redacted]", line)
+	line = re.sub(r"(?i)\bBearer\s+\S+", "Bearer [redacted]", line)
+	line = re.sub(r"\b[0-9a-fA-F]{32,}\b|\b[A-Za-z0-9_+/=-]{40,}\b", "[redacted]", line)
+	for value in sorted(set(secret_values), key=len, reverse=True):
+		if len(value) >= 8:
+			line = line.replace(value, "[redacted]")
+		else:
+			line = re.sub(r"(?<![\w])" + re.escape(value) + r"(?![\w])", "[redacted]", line)
+	if line.strip():
+		lines.append(line)
+
+for line in lines[-40:]:
+	print(line)
+PY
+	then
+		: > "${masked_path}"
+	fi
+	: > "${rendered_path}"
+	while IFS= read -r stderr_line; do
+		rendered_line="$(security_audit_sanitize_log_value "${stderr_line}")"
+		# Prefix untrusted text so it cannot become an Actions workflow command.
+		printf 'security-audit: %s-stderr: %s\n' "${stderr_label}" "${rendered_line}" >> "${rendered_path}"
+	done < "${masked_path}"
+	# Cap *rendered* bytes without cutting a line through a redacted token.
+	local provider_class="unknown"
+	provider_class="$(python3 - "${rendered_path}" "${tail_path}" 2>/dev/null <<'PY'
+import re
+import sys
+from pathlib import Path
+
+lines = Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+kept = []
+total = 0
+for line in reversed(lines[-40:]):
+	size = len((line + "\n").encode("utf-8"))
+	if total + size > 4096:
+		break
+	kept.append(line)
+	total += size
+kept.reverse()
+Path(sys.argv[2]).write_text("".join(line + "\n" for line in kept), encoding="utf-8")
+
+provider = "unknown"
+status = re.compile(r"\b(?:http(?:/\d+(?:\.\d+)?)?|status|statuscode|code|error|errorcode)\s*[:=/-]?\s*(?:error\s+)?(402|401|429|5\d\d)\b", re.I)
+for line in kept:
+	visible = line.replace("\\ ", " ")
+	if re.search(r"payment required|insufficient credits", visible, re.I):
+		provider = "402"
+	elif re.search(r"rate limit", visible, re.I):
+		provider = "429"
+	else:
+		match = status.search(visible)
+		if match:
+			provider = "5xx" if match.group(1).startswith("5") else match.group(1)
+print(provider)
+PY
+	)" || provider_class="unknown"
+	printf 'security-audit: %s-stderr-tail begin\n' "${stderr_label}" >&2
+	if [ -s "${tail_path}" ]; then
+		cat "${tail_path}" >&2
+	fi
+	printf 'security-audit: %s-stderr-tail end\n' "${stderr_label}" >&2
+	printf '%s' "${provider_class}"
+}
+
+security_audit_require_file() {
+	local required_phase="${1:?required phase required}"
+	local required_path="${2:?required path required}"
+	if [ ! -f "${required_path}" ] || [ ! -r "${required_path}" ]; then
+		security_audit_emit_failure "${required_phase}" "${required_path}" "required readable file is unavailable"
+		return 1
+	fi
+}
+
+security_audit_require_directory() {
+	local required_phase="${1:?required phase required}"
+	local required_path="${2:?required path required}"
+	if [ ! -d "${required_path}" ]; then
+		security_audit_emit_failure "${required_phase}" "${required_path}" "required directory is unavailable"
+		return 1
+	fi
+}
+
+security_audit_require_writable_destination() {
+	local required_phase="${1:?required phase required}"
+	local required_path="${2:?required path required}"
+	local required_parent
+	required_parent="$(dirname -- "${required_path}")"
+	if [ ! -d "${required_parent}" ]; then
+		security_audit_emit_failure "${required_phase}" "${required_path}" "destination parent directory is unavailable"
+		return 1
+	fi
+	if { [ -e "${required_path}" ] && { [ ! -f "${required_path}" ] || [ ! -w "${required_path}" ]; }; } \
+			|| { [ ! -e "${required_path}" ] && [ ! -w "${required_parent}" ]; }; then
+		security_audit_emit_failure "${required_phase}" "${required_path}" "destination is not writable"
+		return 1
+	fi
+	# `-w` answers from permission bits alone, so it reports "writable" for
+	# root on read-only or pseudo filesystems (e.g. /sys) where the write
+	# itself is refused. Prove writability with a real write so a bad
+	# destination fails at preflight instead of after the model run.
+	if [ -e "${required_path}" ]; then
+		if ! : >> "${required_path}" 2>/dev/null; then
+			security_audit_emit_failure "${required_phase}" "${required_path}" "destination is not writable"
+			return 1
+		fi
+	else
+		local writable_probe_path
+		if ! writable_probe_path="$(mktemp -p "${required_parent}" ".security-audit-writable-probe.XXXXXX" 2>/dev/null)"; then
+			security_audit_emit_failure "${required_phase}" "${required_path}" "destination is not writable"
+			return 1
+		fi
+		if ! rm -f -- "${writable_probe_path}" 2>/dev/null; then
+			security_audit_emit_failure "${required_phase}" "${required_path}" "destination is not writable"
+			return 1
+		fi
+	fi
+}
+
+# Prior-findings prompt block, shared by findings-json mode and the
+# branch-scoped issues audit (single-issue security pass delta re-audit).
+security_audit_append_prior_findings_prompt() {
+	echo || return 1
+	echo "Previously reported findings for this project (earlier fix cycles; their fixes have merged into the audited head):" || return 1
+	echo "=== BEGIN UNTRUSTED PRIOR FINDINGS ===" || return 1
+	cat "${PRIOR_FINDINGS_PROMPT_FILE}" || return 1
+	echo "=== END UNTRUSTED PRIOR FINDINGS ===" || return 1
+	echo "Rules for previously reported findings:" || return 1
+	echo "- Verify each one against the current code. If it is still exploitable, re-emit it with the SAME finding_id and the current line number." || return 1
+	echo "- If it is resolved, omit it. Never report a resolved finding again under a new finding_id." || return 1
+	echo "- Report every remaining instance of the same defect class in the scoped files (sibling code paths, other venues, adapters, handlers) as its own finding. The fix loop converges only when a class is cleared, not one line." || return 1
+}
+
+security_audit_append_prompt_context() {
+	echo || return 1
+	echo "Current UTC date: $(date -u +%F)" || return 1
+	if [ "${AUDIT_SCOPE_MODE}" = "incremental" ]; then
+		if [ -n "${SECURITY_AUDIT_DIFF_BASE}" ]; then
+			echo "Audit scope override: INCREMENTAL — explicit diff range ${AUDIT_SCOPE_BASE_SHA}..${AUDIT_SCOPE_HEAD_SHA}; the checked-out HEAD may be a non-default branch." || return 1
+			if [ -n "${SECURITY_AUDIT_DIFF_SINCE}" ]; then
+				echo "Delta re-audit: an earlier audit already covered this range up to commit ${AUDIT_SCOPE_SINCE_SHA}. Only range files changed since that commit, plus files cited by previously reported findings and files written by recent fix cycles, are in scope." || return 1
+				echo "Files in scope (every finding MUST cite one of these files):" || return 1
+			else
+				echo "Files changed in the explicit range (every finding MUST cite one of these files):" || return 1
+			fi
+		else
+			echo "Audit scope: INCREMENTAL — commits ${AUDIT_SCOPE_BASE_SHA}..${AUDIT_SCOPE_HEAD_SHA} on the default branch." || return 1
+			echo "Files changed since the last audited commit (every finding MUST cite one of these files):" || return 1
+		fi
+		sed 's/^/- /' "${CHANGED_FILES_FILE}" || return 1
+		echo "You may read any file in the repository to trace cross-file impact (callers, configuration, trust boundaries), but only emit findings whose cited file appears in the changed list above; findings citing unchanged files are dropped by the post-filter." || return 1
+	else
+		if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
+			echo "Audit scope override: repository checkout at HEAD; do not assume the checked-out branch is the default branch." || return 1
+		else
+			echo "Audit scope: repository checkout at default-branch HEAD." || return 1
+		fi
+	fi
+	if [ -s "${OVERSIZED_PROMPT_FILE}" ]; then
+		echo || return 1
+		cat "${OVERSIZED_PROMPT_FILE}" || return 1
+	fi
+	if [ "${SECURITY_AUDIT_OUTPUT_MODE}" != "findings-json" ] && [ -n "${SECURITY_AUDIT_TARGET_REF}" ] \
+			&& [ -s "${PRIOR_FINDINGS_PROMPT_FILE}" ]; then
+		# Branch-scoped issues audit (single-issue security pass delta
+		# re-audit): same prior-findings block as findings-json mode, without
+		# the project-pass money lens.
+		security_audit_append_prior_findings_prompt || return 1
+	fi
+	if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
+		echo || return 1
+		echo "Project-pass security and money-handling lens:" || return 1
+		cat "${SECURITY_AUDIT_MONEY_LENS_FILE}" || return 1
+		if [ -s "${PRIOR_FINDINGS_PROMPT_FILE}" ]; then
+			security_audit_append_prior_findings_prompt || return 1
+		fi
+		if [ -s "${FIX_CYCLE_DIFFS_PROMPT_FILE}" ]; then
+			echo || return 1
+			echo "Newly introduced code since the last audit (written by the merged security-fix PR of the previous fix cycle and by any sync merges; the cycle before it is carried over once more). Shown as unified diff hunks per fix cycle:" || return 1
+			echo "=== BEGIN UNTRUSTED FIX-CYCLE CODE ===" || return 1
+			cat "${FIX_CYCLE_DIFFS_PROMPT_FILE}" || return 1
+			echo "=== END UNTRUSTED FIX-CYCLE CODE ===" || return 1
+			echo "Rules for newly introduced code:" || return 1
+			echo "- Audit this code as FRESH attack surface for NEW defect classes. A fix written under time pressure is the most likely place for a hole that no earlier finding describes; a finding here needs its own new finding_id." || return 1
+			echo "- Pay particular attention to readiness and state-transition predicates (is-settled, is-final, can-claim, may-refund, ready-to-pay), money-state transitions (debit, credit, payout, settlement, refund, pool distribution), and idempotency fences (unique keys, tombstones, TTLs, once-only guards) that the fix added or changed. Check that every predicate is complete, that every transition is atomic and authorised, and that every fence actually blocks the retry it exists for." || return 1
+			echo "- Do not limit yourself to the previously reported finding ids or their defect classes. The rules for previously reported findings still apply to those findings; this section adds to them, it does not replace them." || return 1
+			echo "- The hunks are for orientation only. Read the current file for surrounding context before concluding, and cite the current line number in the checked-out file." || return 1
+		fi
+		if [ -s "${WAIVED_FINDINGS_PROMPT_FILE}" ]; then
+			echo || return 1
+			echo "Accepted findings for this project (reviewed and waived as known risks; they are tracked in non-blocking follow-up issues):" || return 1
+			echo "=== BEGIN UNTRUSTED ACCEPTED FINDINGS ===" || return 1
+			cat "${WAIVED_FINDINGS_PROMPT_FILE}" || return 1
+			echo "=== END UNTRUSTED ACCEPTED FINDINGS ===" || return 1
+			echo "Rules for accepted findings:" || return 1
+			echo "- Do not report an accepted finding again. If you do report the same defect, reuse its original finding_id; a finding under any other finding_id is treated as a new, blocking finding." || return 1
+			echo "- Report a different exploit even when its file, category and line are near an accepted finding; an acceptance covers only its documented scenario." || return 1
+			echo "- An acceptance covers one location. Other locations in the scoped files remain in scope." || return 1
+		fi
+		if [ -n "${SECURITY_AUDIT_PROJECT_SPEC_PATH}" ]; then
+			echo || return 1
+			echo "=== BEGIN UNTRUSTED PROJECT SPECIFICATION ===" || return 1
+			cat "${SECURITY_AUDIT_PROJECT_SPEC_PATH}" || return 1
+			echo || return 1
+			echo "=== END UNTRUSTED PROJECT SPECIFICATION ===" || return 1
+		fi
+	fi
+}
+
+SECURITY_AUDIT_ENABLED="${SECURITY_AUDIT_ENABLED:-true}"
+if ! security_audit_flag_enabled "${SECURITY_AUDIT_ENABLED}"; then
+	echo "security-audit: SECURITY_AUDIT_ENABLED=${SECURITY_AUDIT_ENABLED}; skipping."
+	exit 0
+fi
+
+SECURITY_AUDIT_OUTPUT_MODE="${SECURITY_AUDIT_OUTPUT_MODE:-issues}"
+case "${SECURITY_AUDIT_OUTPUT_MODE}" in
+	issues|findings-json)
+		;;
+	*)
+		echo "SECURITY_AUDIT_OUTPUT_MODE must be issues or findings-json" >&2
+		exit 1
+		;;
+esac
+
+if [ "$#" -gt 1 ]; then
+	echo "security_audit.sh accepts at most one project-spec file" >&2
+	exit 1
+fi
+SECURITY_AUDIT_PROJECT_SPEC_PATH="${1:-}"
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] && [ -n "${SECURITY_AUDIT_PROJECT_SPEC_PATH}" ]; then
+	echo "the project-spec file is only valid in findings-json mode" >&2
+	exit 1
+fi
+
+SECURITY_AUDIT_FINDINGS_OUT="${SECURITY_AUDIT_FINDINGS_OUT:-}"
+SECURITY_AUDIT_DIFF_BASE="${SECURITY_AUDIT_DIFF_BASE:-}"
+SECURITY_AUDIT_DIFF_HEAD="${SECURITY_AUDIT_DIFF_HEAD:-}"
+if { [ -n "${SECURITY_AUDIT_DIFF_BASE}" ] && [ -z "${SECURITY_AUDIT_DIFF_HEAD}" ]; } \
+		|| { [ -z "${SECURITY_AUDIT_DIFF_BASE}" ] && [ -n "${SECURITY_AUDIT_DIFF_HEAD}" ]; }; then
+	echo "SECURITY_AUDIT_DIFF_BASE and SECURITY_AUDIT_DIFF_HEAD must be supplied together" >&2
+	exit 1
+fi
+
+# Optional delta narrowing for the explicit range: when set, only files that
+# also changed in SECURITY_AUDIT_DIFF_SINCE..SECURITY_AUDIT_DIFF_HEAD stay in
+# scope, so a re-audit after a merged fix looks at the fix (plus any prior
+# findings, below) instead of re-sampling the whole project range.  The
+# explicit range remains the scope contract: a file changed only by commits
+# that were already on the base side of the range never enters scope.
+SECURITY_AUDIT_DIFF_SINCE="${SECURITY_AUDIT_DIFF_SINCE:-}"
+if [ -n "${SECURITY_AUDIT_DIFF_SINCE}" ] && [ -z "${SECURITY_AUDIT_DIFF_BASE}" ]; then
+	echo "SECURITY_AUDIT_DIFF_SINCE requires SECURITY_AUDIT_DIFF_BASE and SECURITY_AUDIT_DIFF_HEAD" >&2
+	exit 1
+fi
+# Optional JSON array of findings reported by earlier audits of the same
+# project (findings-json mode, or a branch-scoped issues audit with
+# SECURITY_AUDIT_TARGET_REF set: the single-issue security pass delta re-audit,
+# stuck-states P5a).  Their files are added to the audit
+# scope and the list is appended to the prompt so the model verifies each one
+# against the current code and reports remaining instances of the same class
+# instead of re-discovering the project from scratch.
+SECURITY_AUDIT_PRIOR_FINDINGS="${SECURITY_AUDIT_PRIOR_FINDINGS:-}"
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] && [ -n "${SECURITY_AUDIT_PRIOR_FINDINGS}" ] \
+		&& [ -z "${SECURITY_AUDIT_TARGET_REF:-}" ]; then
+	echo "SECURITY_AUDIT_PRIOR_FINDINGS is only valid in findings-json mode or with SECURITY_AUDIT_TARGET_REF" >&2
+	exit 1
+fi
+# Optional destination (issues mode only, default empty) for the surviving
+# findings of this audit as a JSON array. The single-issue security pass
+# report persists them on the PR so the next delta re-audit can carry them
+# forward. A write failure only warns; it never fails the audit.
+SECURITY_AUDIT_PASS_FINDINGS_OUT="${SECURITY_AUDIT_PASS_FINDINGS_OUT:-}"
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" != "issues" ]; then
+	SECURITY_AUDIT_PASS_FINDINGS_OUT=""
+fi
+# Optional JSON array of findings that an operator (`/security-pass-waive`) or
+# the orchestrator's security-pass exhaustion judge accepted as known risks
+# for the audited project (findings-json mode only).  They are appended to the
+# prompt as accepted findings the model must not report again, and the
+# post-filter drops a re-report deterministically only when its non-empty
+# `finding_id` exactly matches the waiver's and every category, severity and
+# exploit scenario the waiver recorded also matches.  There is no proximity
+# match: a finding under a different `finding_id` is a new finding, even at
+# the waived file and line, so an accepted defect must keep its original id.
+# Counted as `suppressed_waived`.  Malformed input fails closed like prior
+# findings.  SECURITY_AUDIT_WAIVER_LINE_WINDOW is still accepted and validated
+# for compatibility, but it no longer controls suppression.
+SECURITY_AUDIT_WAIVED_FINDINGS="${SECURITY_AUDIT_WAIVED_FINDINGS:-}"
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] && [ -n "${SECURITY_AUDIT_WAIVED_FINDINGS}" ]; then
+	echo "SECURITY_AUDIT_WAIVED_FINDINGS is only valid in findings-json mode" >&2
+	exit 1
+fi
+SECURITY_AUDIT_WAIVER_LINE_WINDOW="${SECURITY_AUDIT_WAIVER_LINE_WINDOW:-40}"
+if ! [[ "${SECURITY_AUDIT_WAIVER_LINE_WINDOW}" =~ ^[0-9]+$ ]]; then
+	echo "SECURITY_AUDIT_WAIVER_LINE_WINDOW must be a non-negative integer" >&2
+	exit 1
+fi
+# Optional JSON array of fix-cycle diff entries (findings-json mode only),
+# produced by the orchestrator from the local checkout:
+#   [{"cycle": <int>, "since_sha": "<sha>", "head_sha": "<sha>", "files": [..]}]
+# Each entry describes the code one security-fix cycle wrote (the commits
+# between the head audited before the fix merged and the head audited after
+# it).  Its files join the audit scope and its added/modified hunks are
+# appended to the prompt as newly introduced code the model must audit as
+# fresh attack surface for NEW defect classes -- not only for the previously
+# reported finding ids.  Without this, re-audits verified the old findings
+# and looked for more of the same class, so tele-funtoken-msg-scoring#4281
+# exhausted its budget on a readiness predicate that cycle 1's fix created
+# and cycles 2 and 3 never audited as new code.  Hunks are capped by
+# SECURITY_AUDIT_FIX_DIFF_MAX_LINES / SECURITY_AUDIT_FIX_DIFF_MAX_BYTES;
+# over the cap the remaining files are listed by name only.  Everything here
+# fails OPEN: a missing or malformed file, an unresolvable SHA, or a git
+# failure logs a warning and the audit runs exactly as it did before.
+SECURITY_AUDIT_FIX_CYCLE_DIFFS="${SECURITY_AUDIT_FIX_CYCLE_DIFFS:-}"
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] && [ -n "${SECURITY_AUDIT_FIX_CYCLE_DIFFS}" ]; then
+	echo "SECURITY_AUDIT_FIX_CYCLE_DIFFS is only valid in findings-json mode" >&2
+	exit 1
+fi
+SECURITY_AUDIT_FIX_DIFF_MAX_LINES="${SECURITY_AUDIT_FIX_DIFF_MAX_LINES:-1200}"
+if ! [[ "${SECURITY_AUDIT_FIX_DIFF_MAX_LINES}" =~ ^[0-9]+$ ]]; then
+	echo "::warning::security-audit: SECURITY_AUDIT_FIX_DIFF_MAX_LINES must be a non-negative integer; defaulting to 1200"
+	SECURITY_AUDIT_FIX_DIFF_MAX_LINES="1200"
+fi
+SECURITY_AUDIT_FIX_DIFF_MAX_BYTES="${SECURITY_AUDIT_FIX_DIFF_MAX_BYTES:-96000}"
+if ! [[ "${SECURITY_AUDIT_FIX_DIFF_MAX_BYTES}" =~ ^[0-9]+$ ]]; then
+	echo "::warning::security-audit: SECURITY_AUDIT_FIX_DIFF_MAX_BYTES must be a non-negative integer; defaulting to 96000"
+	SECURITY_AUDIT_FIX_DIFF_MAX_BYTES="96000"
+fi
+# Line ownership (plan item 4b, decision D4; findings-json mode with an
+# explicit SECURITY_AUDIT_DIFF_BASE..SECURITY_AUDIT_DIFF_HEAD range only).
+# `project` (default) runs `git blame` over each finding's cited line at the
+# head and tags the finding `"advisory": true` when that line was not written
+# by a commit in base..head (it predates the project), `"advisory": false`
+# otherwise.  Any blame failure tags the finding blocking.  A pre-project
+# line still stays blocking when the project could have removed the control
+# that protected it (finding security-pass-deleted-guard-advisory): the cited
+# file lost or binary-changed lines in base..head (`deleted_lines_in_file`),
+# the project added lines within SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW
+# lines of it (`changed_hunk_within_window`), or the finding text names
+# another file that lost lines (`references_file_with_deletions`), the
+# cited file names a module that lost lines
+# (`cited_file_references_module_with_deletions`), or a module that lost
+# lines names the cited module (`module_with_deletions_references_cited_file`),
+# or a non-documentation file names both the cited module and a module that
+# lost lines (`shared_referrer_links_module_with_deletions`), or a chain of
+# references of any length links them through a common referrer
+# (`transitive_reference_links_module_with_deletions`; a search past
+# LINE_OWNERSHIP_REFERENCE_MAX_HOPS / _MAX_STEMS keeps it blocking as
+# `reference_search_limit`), or the cited file and a module that lost lines
+# both name a third repository module (`shared_dependency_links_module_with_deletions`).  Module
+# references are read at both the base and the head, so a router the project
+# adds is seen too.  Any project addition in the cited file keeps the finding
+# blocking (finding security-pass-distant-override-advisory): within the
+# window it logs `changed_hunk_within_window`, further away
+# `added_lines_in_file`; the window only selects the logged reason.  A
+# project-changed, non-documentation, non-test file that names the cited
+# module at the head keeps it blocking as well
+# (`changed_file_references_cited_module`), since such a file can wire or
+# override the cited operation without deleting anything.
+# A failed project diff, hunk read or module-reference read keeps the
+# finding blocking too, as does a one-letter module name that cannot be
+# searched (`module_name_too_short`).  `off` restores
+# the previous payload exactly (no `advisory` field, no `line_ownership` key).
+SECURITY_AUDIT_LINE_OWNERSHIP="$(printf '%s' "${SECURITY_AUDIT_LINE_OWNERSHIP:-project}" | tr '[:upper:]' '[:lower:]')"
+case "${SECURITY_AUDIT_LINE_OWNERSHIP}" in
+	project|off)
+		;;
+	*)
+		echo "::warning::security-audit: SECURITY_AUDIT_LINE_OWNERSHIP must be project or off; defaulting to project"
+		SECURITY_AUDIT_LINE_OWNERSHIP="project"
+		;;
+esac
+SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW="${SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW:-40}"
+if ! [[ "${SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW}" =~ ^[0-9]+$ ]]; then
+	echo "::warning::security-audit: SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW must be a non-negative integer; defaulting to 40"
+	SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW="40"
+fi
+SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES="${SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES:-16777216}"
+if ! [[ "${SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES}" =~ ^[0-9]+$ ]] || [ "${SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES}" -eq 0 ]; then
+	echo "::warning::security-audit: SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES must be a positive integer; defaulting to 16777216"
+	SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES=16777216
+fi
+SECURITY_AUDIT_OVERSIZED_TOTAL_MAX_BYTES="${SECURITY_AUDIT_OVERSIZED_TOTAL_MAX_BYTES:-67108864}"
+if ! [[ "${SECURITY_AUDIT_OVERSIZED_TOTAL_MAX_BYTES}" =~ ^[0-9]+$ ]] || [ "${SECURITY_AUDIT_OVERSIZED_TOTAL_MAX_BYTES}" -eq 0 ]; then
+	echo "::warning::security-audit: SECURITY_AUDIT_OVERSIZED_TOTAL_MAX_BYTES must be a positive integer; defaulting to 67108864"
+	SECURITY_AUDIT_OVERSIZED_TOTAL_MAX_BYTES=67108864
+fi
+
+# Optional non-default branch the audit targets (issues mode only), set by the
+# workflow's `ref` dispatch input for /implement-plan-claude project branches.
+# The workflow also sets SECURITY_AUDIT_DIFF_BASE / SECURITY_AUDIT_DIFF_HEAD to
+# the branch's merge-base with the default branch and its head, so the audit
+# covers exactly the project's changes.  Follow-up issues then carry an
+# `Integration branch:` line (scripts/resolve_integration_ref.sh routes their
+# fix PRs onto that branch), and the tracker's default-branch
+# last-audited-commit marker is left untouched.
+SECURITY_AUDIT_TARGET_REF="${SECURITY_AUDIT_TARGET_REF:-}"
+if [ -n "${SECURITY_AUDIT_TARGET_REF}" ]; then
+	if [ "${SECURITY_AUDIT_OUTPUT_MODE}" != "issues" ]; then
+		echo "SECURITY_AUDIT_TARGET_REF is only valid in issues mode" >&2
+		exit 1
+	fi
+	if [ -z "${SECURITY_AUDIT_DIFF_BASE}" ]; then
+		echo "SECURITY_AUDIT_TARGET_REF requires SECURITY_AUDIT_DIFF_BASE and SECURITY_AUDIT_DIFF_HEAD" >&2
+		exit 1
+	fi
+	if ! git check-ref-format --branch "${SECURITY_AUDIT_TARGET_REF}" >/dev/null 2>&1; then
+		echo "SECURITY_AUDIT_TARGET_REF must be a valid branch name" >&2
+		exit 1
+	fi
+fi
+
+# Consolidated follow-up (stuck-states P5b): a single-issue security pass audit
+# (issues mode, SECURITY_AUDIT_TARGET_REF set, SECURITY_AUDIT_PASS_PR_NUMBER a
+# valid PR number) files ONE follow-up issue per cycle that lists every new
+# finding, instead of one issue per finding. Both variables default here (§8),
+# so a security-audit.yml that does not export the PR number keeps the
+# per-finding path exactly. SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED=false
+# restores one issue per finding.
+SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED="${SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED:-true}"
+SECURITY_AUDIT_PASS_PR_NUMBER="${SECURITY_AUDIT_PASS_PR_NUMBER:-}"
+if [ -n "${SECURITY_AUDIT_PASS_PR_NUMBER}" ] && ! [[ "${SECURITY_AUDIT_PASS_PR_NUMBER}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+	echo "::warning::security-audit: SECURITY_AUDIT_PASS_PR_NUMBER must be a positive integer; filing one follow-up per finding"
+	SECURITY_AUDIT_PASS_PR_NUMBER=""
+fi
+SECURITY_AUDIT_CONSOLIDATE_ACTIVE="false"
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] && [ -n "${SECURITY_AUDIT_TARGET_REF}" ] \
+		&& [ -n "${SECURITY_AUDIT_PASS_PR_NUMBER}" ] \
+		&& security_audit_flag_enabled "${SINGLE_ISSUE_SECURITY_PASS_CONSOLIDATE_ENABLED}"; then
+	SECURITY_AUDIT_CONSOLIDATE_ACTIVE="true"
+fi
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ]; then
+	if [ "${SECURITY_AUDIT_CONSOLIDATE_ACTIVE}" = "true" ]; then
+		echo "security-audit: followup_mode=consolidated pr=${SECURITY_AUDIT_PASS_PR_NUMBER}"
+	else
+		echo "security-audit: followup_mode=per_finding pr=${SECURITY_AUDIT_PASS_PR_NUMBER:-none}"
+	fi
+fi
+
+# Skip the whole audit when HEAD matches the last audited commit recorded on
+# the tracker issue (log-only skip; no issue comment).
+SECURITY_AUDIT_SKIP_IF_UNCHANGED="${SECURITY_AUDIT_SKIP_IF_UNCHANGED:-true}"
+# Scope the audit to commits since the last audited commit when possible;
+# first runs and history rewrites fail open to the full default-branch scope.
+SECURITY_AUDIT_INCREMENTAL="${SECURITY_AUDIT_INCREMENTAL:-true}"
+
+: "${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}"
+
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ]; then
+	: "${GH_TOKEN:?GH_TOKEN is required}"
+	: "${GITHUB_REPOSITORY:?GITHUB_REPOSITORY is required}"
+	[[ "${GITHUB_REPOSITORY}" =~ ^[^/]+/[^/]+$ ]] || {
+		echo "GITHUB_REPOSITORY must be in owner/repo format" >&2
+		exit 1
+	}
+fi
+
+# Issues mode: the audit model invents the finding_id on every run, so a
+# defect that already has an OPEN follow-up came back under a new id and was
+# filed again: #9399, #9431 and #9465 were one finding at
+# `scripts/render_prompt.sh:326` on branch ai/issue-9341, each filed while the
+# earlier ones were still open. A finding whose id has no follow-up takes the
+# id of an open ai:security follow-up of the same audit scope (same
+# `Integration branch`, or both the default branch) that names the same file
+# and the same category within this many lines. From there on it is the
+# existing finding: nothing new is filed and the reported finding ids name the
+# open issue, which is what the single-issue security pass looks for. A
+# closed follow-up never matches, so a finding that comes back after its
+# issue closed is filed again. 0 turns the check off (id-only dedupe).
+SECURITY_AUDIT_SIMILAR_FINDING_LINE_WINDOW="${SECURITY_AUDIT_SIMILAR_FINDING_LINE_WINDOW:-25}"
+if ! [[ "${SECURITY_AUDIT_SIMILAR_FINDING_LINE_WINDOW}" =~ ^[0-9]{1,6}$ ]]; then
+	echo "SECURITY_AUDIT_SIMILAR_FINDING_LINE_WINDOW must be a non-negative integer" >&2
+	exit 1
+fi
+SECURITY_AUDIT_CONFIDENCE_GATE="${SECURITY_AUDIT_CONFIDENCE_GATE:-8}"
+if ! [[ "${SECURITY_AUDIT_CONFIDENCE_GATE}" =~ ^[0-9]+$ ]] \
+	|| [ "${SECURITY_AUDIT_CONFIDENCE_GATE}" -lt 1 ] \
+	|| [ "${SECURITY_AUDIT_CONFIDENCE_GATE}" -gt 10 ]; then
+	echo "SECURITY_AUDIT_CONFIDENCE_GATE must be an integer from 1 to 10" >&2
+	exit 1
+fi
+
+SECURITY_AUDIT_FP_EXCLUSIONS="${SECURITY_AUDIT_FP_EXCLUSIONS:-scripts/security_audit_fp_exclusions.json}"
+
+# Findings on paths coding-workflows owns (the synced wrapper workflows,
+# .claude/ assets, CLAUDE.md, audit-gate files, retired files) can never be
+# fixed by a consumer: the next sync overwrites the fix. In a consumer repo the
+# filter keeps them out of the follow-up / fix-cycle queue and reports them in
+# the run log (SECURITY_AUDIT_UPSTREAM_MANAGED) and the tracker comment
+# instead, but only while the consumer's file is byte-identical to what the
+# release writes there (build_sync_manifest.py managed-digests). A
+# consumer-modified copy is the consumer's own change and is filed as before.
+# `false` restores the old behaviour. The upstream tree is looked up in
+# SECURITY_AUDIT_UPSTREAM_SOURCE_DIR, then <support dir>/.codex-workflow-src
+# (the orchestrate poller's support checkout), then the support dir itself
+# (the security-audit.yml support checkout); a miss files the finding as before.
+SECURITY_AUDIT_UPSTREAM_MANAGED_FILTER="${SECURITY_AUDIT_UPSTREAM_MANAGED_FILTER:-true}"
+SECURITY_AUDIT_UPSTREAM_REPOSITORY="${SECURITY_AUDIT_UPSTREAM_REPOSITORY:-shubhodeep1/coding-workflows}"
+SECURITY_AUDIT_UPSTREAM_SOURCE_DIR="${SECURITY_AUDIT_UPSTREAM_SOURCE_DIR:-}"
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+cd "${REPO_ROOT}"
+
+# Consumer-called runs (workflow-templates/ai-security-audit.yml wrapper) stage
+# this repo's scripts/prompts outside the audited checkout and point
+# SECURITY_AUDIT_SUPPORT_DIR at that staged tree. Source-repo runs leave it
+# unset so support files resolve from the audited checkout itself,
+# byte-identical to the pre-consumer behaviour.
+SECURITY_AUDIT_SUPPORT_DIR="${SECURITY_AUDIT_SUPPORT_DIR:-${REPO_ROOT}}"
+
+# Resolve the exclusion catalog: a copy in the audited repository wins (so a
+# consumer can pin its own catalog at the default relative path); otherwise a
+# relative path falls back to the staged support tree.
+if [ ! -f "${SECURITY_AUDIT_FP_EXCLUSIONS}" ] \
+	&& [[ "${SECURITY_AUDIT_FP_EXCLUSIONS}" != /* ]] \
+	&& [ -f "${SECURITY_AUDIT_SUPPORT_DIR}/${SECURITY_AUDIT_FP_EXCLUSIONS}" ]; then
+	SECURITY_AUDIT_FP_EXCLUSIONS="${SECURITY_AUDIT_SUPPORT_DIR}/${SECURITY_AUDIT_FP_EXCLUSIONS}"
+fi
+
+[ -f "${SECURITY_AUDIT_FP_EXCLUSIONS}" ] || {
+	echo "SECURITY_AUDIT_FP_EXCLUSIONS not found: ${SECURITY_AUDIT_FP_EXCLUSIONS}" >&2
+	exit 1
+}
+
+export PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"
+
+security_audit_require_cmd bash
+security_audit_require_cmd python3
+
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ]; then
+	security_audit_require_cmd gh
+	[ -f "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/label_helpers.sh" ] || {
+		echo "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/label_helpers.sh is required" >&2
+		exit 1
+	}
+
+	# shellcheck disable=SC1091
+	source "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/label_helpers.sh"
+
+	# label_helpers.sh only finds gh_helpers.sh relative to the current working
+	# directory; consumer-called runs execute from the audited checkout, so
+	# re-source the staged gh_helpers.sh to restore the real gh_retry wrapper
+	# (re-sourcing is a no-op redefinition on source-repo runs).
+	if [ -f "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/gh_helpers.sh" ]; then
+		# shellcheck disable=SC1091
+		source "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/gh_helpers.sh"
+	fi
+	if [ -f "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/tg_helpers.sh" ]; then
+		# tg_helpers.sh sources gh_helpers.sh relative to cwd. Never let the
+		# audited checkout supply executable support to the trusted runner.
+		if pushd "${SECURITY_AUDIT_SUPPORT_DIR}" >/dev/null; then
+			# shellcheck disable=SC1091
+			source scripts/tg_helpers.sh || true
+			popd >/dev/null
+		fi
+	fi
+
+	ensure_label_exists "ai:security-audit" "${GITHUB_REPOSITORY}"
+	ensure_label_exists "ai:security" "${GITHUB_REPOSITORY}"
+fi
+
+TRACKER_TITLE="AI Security Audit Tracker"
+TRACKER_MARKER="<!-- ai:security-audit-tracker:v1 -->"
+FOLLOWUP_MARKER_PREFIX="<!-- ai:security-finding:"
+LAST_SHA_MARKER_PREFIX="<!-- ai:security-audit-last-sha:"
+PARTIAL_COVERAGE_MARKER="<!-- ai:security-audit-partial-coverage:v1 -->"
+# Past this many changed files an incremental diff stops being cheaper than a
+# full audit, so the scope resolver falls back to the full default-branch scope.
+SECURITY_AUDIT_INCREMENTAL_MAX_FILES="200"
+
+SECURITY_AUDIT_RUNTIME_DIR="$(mktemp -d "${TMPDIR:-/tmp}/security-audit.XXXXXX")"
+trap 'rm -rf "${SECURITY_AUDIT_RUNTIME_DIR}"' EXIT
+
+TRACKER_BODY_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/tracker-issue-body.md"
+TRACKER_CANDIDATES_JSON="${SECURITY_AUDIT_RUNTIME_DIR}/tracker-candidates.json"
+TRACKER_SELECTION_ENV="${SECURITY_AUDIT_RUNTIME_DIR}/tracker-selection.env"
+RENDERED_PROMPT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prompt.txt"
+RENDER_PROMPT_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prompt-render-error.txt"
+RENDER_PROMPT_TAIL_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prompt-render-tail.txt"
+CODEX_OUTPUT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/codex-output.json"
+CODEX_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/codex-error.txt"
+FILTERED_FINDINGS_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/filtered-findings.json"
+FILTER_SUMMARY_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/filter-summary.json"
+# Job-scoped copy of the summary's upstream_managed list for the sender step
+# (scripts/security_audit_upstream_report.sh, issue #7623). Lives outside the
+# runtime dir, which the EXIT trap removes. A stale copy from an earlier audit
+# in the same job is removed first, so the sender never re-sends old findings.
+UPSTREAM_MANAGED_EXPORT_FILE="${SECURITY_AUDIT_UPSTREAM_MANAGED_EXPORT:-${RUNNER_TEMP:-${SECURITY_AUDIT_RUNTIME_DIR}}/security-audit-upstream-managed.json}"
+rm -f -- "${UPSTREAM_MANAGED_EXPORT_FILE}" 2>/dev/null || true
+EXISTING_FOLLOWUPS_JSON="${SECURITY_AUDIT_RUNTIME_DIR}/existing-followups.json"
+TRACKER_COMMENT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/tracker-comment.md"
+FOLLOWUP_INDEX_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/followup-index.tsv"
+FOLLOWUP_SUMMARY_ENV="${SECURITY_AUDIT_RUNTIME_DIR}/followup-summary.env"
+FOLLOWUP_BODY_DIR="${SECURITY_AUDIT_RUNTIME_DIR}/followups"
+CHANGED_FILES_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/changed-files.txt"
+TRACKER_BODY_WITH_SHA_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/tracker-issue-body-with-sha.md"
+SECURITY_AUDIT_MONEY_LENS_TEMPLATE_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/security-money-lens.txt"
+SECURITY_AUDIT_MONEY_LENS_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/rendered-security-money-lens.txt"
+FINDINGS_PACKAGE_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/findings-package-error.txt"
+DELTA_CHANGED_FILES_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/delta-changed-files.txt"
+PRIOR_FINDINGS_SCOPE_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prior-findings-scope.txt"
+PRIOR_FINDINGS_PROMPT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prior-findings-prompt.txt"
+PRIOR_FINDINGS_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/prior-findings-error.txt"
+WAIVED_FINDINGS_NORMALIZED_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/waived-findings.json"
+WAIVED_FINDINGS_PROMPT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/waived-findings-prompt.txt"
+WAIVED_FINDINGS_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/waived-findings-error.txt"
+FIX_CYCLE_DIFFS_SCOPE_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/fix-cycle-diffs-scope.txt"
+FIX_CYCLE_DIFFS_PROMPT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/fix-cycle-diffs-prompt.txt"
+FIX_CYCLE_DIFFS_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/fix-cycle-diffs-error.txt"
+OVERSIZED_EXPORT_DIR="${SECURITY_AUDIT_RUNTIME_DIR}/oversized-chunks"
+OVERSIZED_SCOPE_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/oversized-scope.txt"
+OVERSIZED_PROMPT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/oversized-prompt.txt"
+OVERSIZED_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/oversized-error.txt"
+LINE_OWNERSHIP_SUMMARY_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/line-ownership-summary.json"
+LINE_OWNERSHIP_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/line-ownership-error.txt"
+UPSTREAM_MANAGED_DIGESTS_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/upstream-managed-digests.json"
+UPSTREAM_MANAGED_ERROR_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/upstream-managed-error.txt"
+
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
+	if [ -z "${SECURITY_AUDIT_FINDINGS_OUT}" ]; then
+		security_audit_emit_failure "findings-output-preflight" "(unset)" "SECURITY_AUDIT_FINDINGS_OUT is required in findings-json mode"
+		exit 1
+	fi
+	security_audit_require_writable_destination "findings-output-preflight" "${SECURITY_AUDIT_FINDINGS_OUT}"
+	if [ -n "${SECURITY_AUDIT_PROJECT_SPEC_PATH}" ]; then
+		security_audit_require_file "project-spec-preflight" "${SECURITY_AUDIT_PROJECT_SPEC_PATH}"
+	fi
+	if [ -n "${SECURITY_AUDIT_PRIOR_FINDINGS}" ]; then
+		security_audit_require_file "prior-findings-preflight" "${SECURITY_AUDIT_PRIOR_FINDINGS}"
+	fi
+	if [ -n "${SECURITY_AUDIT_WAIVED_FINDINGS}" ]; then
+		security_audit_require_file "waived-findings-preflight" "${SECURITY_AUDIT_WAIVED_FINDINGS}"
+	fi
+	if [ -n "${SECURITY_AUDIT_FIX_CYCLE_DIFFS}" ] && [ ! -f "${SECURITY_AUDIT_FIX_CYCLE_DIFFS}" ]; then
+		# Fail open (unlike prior/waived findings): the newly-introduced-code
+		# section is an aid, never a gate, so its absence must not stop the audit.
+		echo "::warning::security-audit: SECURITY_AUDIT_FIX_CYCLE_DIFFS file is missing; the audit runs without the newly introduced code section"
+		SECURITY_AUDIT_FIX_CYCLE_DIFFS=""
+	fi
+elif [ -n "${SECURITY_AUDIT_PRIOR_FINDINGS}" ]; then
+	# Branch-scoped issues audit (single-issue security pass delta re-audit).
+	security_audit_require_file "prior-findings-preflight" "${SECURITY_AUDIT_PRIOR_FINDINGS}"
+fi
+
+LAST_AUDITED_SHA=""
+TRACKER_PARTIAL_COVERAGE="false"
+TRACKER_NUMBER=""
+TRACKER_STATE=""
+
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ]; then
+cat > "${TRACKER_BODY_FILE}" <<EOF
+${TRACKER_MARKER}
+# ${TRACKER_TITLE}
+
+This issue is managed by \`.github/workflows/security-audit.yml\`.
+
+It collects weekly and ad-hoc default-branch OWASP Top 10 + STRIDE audit results.
+Follow-up issues created from this tracker use the additive label \`ai:security\`.
+EOF
+
+# No existing prefetch/cache exists in this standalone workflow. One bulk
+# issue-list call covers tracker discovery without per-issue follow-up probes.
+gh_retry gh issue list \
+	--repo "${GITHUB_REPOSITORY}" \
+	--state all \
+	--label "ai:security-audit" \
+	--limit 50 \
+		--json number,title,body,state,url > "${TRACKER_CANDIDATES_JSON}"
+
+python3 - "${TRACKER_CANDIDATES_JSON}" "${TRACKER_MARKER}" "${LAST_SHA_MARKER_PREFIX}" "${PARTIAL_COVERAGE_MARKER}" > "${TRACKER_SELECTION_ENV}" <<'PY'
+from __future__ import annotations
+
+import json
+import re
+import shlex
+import sys
+from pathlib import Path
+
+candidates_path = Path(sys.argv[1])
+marker = sys.argv[2]
+last_sha_marker_prefix = sys.argv[3]
+partial_coverage_marker = sys.argv[4]
+
+try:
+	candidates = json.loads(candidates_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as exc:
+	raise SystemExit(f"failed to load tracker candidates: {exc}")
+
+selected = None
+for candidate in candidates:
+	if not isinstance(candidate, dict):
+		continue
+	body = str(candidate.get("body") or "")
+	if marker not in body:
+		continue
+	selected = candidate
+	if str(candidate.get("state") or "").upper() == "OPEN":
+		break
+
+number = ""
+state = ""
+last_audited_sha = ""
+partial_coverage = False
+if isinstance(selected, dict):
+	number = str(selected.get("number") or "").strip()
+	state = str(selected.get("state") or "").strip()
+	# The tracker-discovery list call above already returns the body, so the
+	# last-audited-commit marker is parsed without any additional API call.
+	last_sha_match = re.search(
+		re.escape(last_sha_marker_prefix) + r"([0-9a-fA-F]{7,40}) -->",
+		str(selected.get("body") or ""),
+	)
+	if last_sha_match is not None:
+		last_audited_sha = last_sha_match.group(1).strip().lower()
+	partial_coverage = partial_coverage_marker in str(selected.get("body") or "")
+
+print(f"TRACKER_NUMBER={shlex.quote(number)}")
+print(f"TRACKER_STATE={shlex.quote(state)}")
+print(f"LAST_AUDITED_SHA={shlex.quote(last_audited_sha)}")
+print(f"TRACKER_PARTIAL_COVERAGE={'true' if partial_coverage else 'false'}")
+PY
+
+# shellcheck disable=SC1090
+source "${TRACKER_SELECTION_ENV}"
+
+if [ -z "${TRACKER_NUMBER}" ]; then
+	TRACKER_URL="$(gh_retry gh issue create \
+		--repo "${GITHUB_REPOSITORY}" \
+		--title "${TRACKER_TITLE}" \
+		--label "ai:security-audit" \
+		--body-file "${TRACKER_BODY_FILE}")"
+	TRACKER_NUMBER="${TRACKER_URL##*/}"
+else
+	if [ "$(printf '%s' "${TRACKER_STATE}" | tr '[:lower:]' '[:upper:]')" = "CLOSED" ]; then
+		gh_retry gh issue reopen "${TRACKER_NUMBER}" --repo "${GITHUB_REPOSITORY}"
+	fi
+	gh_retry gh issue edit "${TRACKER_NUMBER}" --repo "${GITHUB_REPOSITORY}" --add-label "ai:security-audit"
+fi
+fi
+
+# --- Scope resolution: skip-if-unchanged + incremental diff scope ---------
+# HEAD_SHA is empty when the checkout is not a git repository; both gates
+# then fail open to the historical full-scope audit.
+HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"
+
+AUDIT_SCOPE_MODE="full"
+AUDIT_SCOPE_REASON="no last-audited commit recorded on the tracker"
+AUDIT_SCOPE_BASE_SHA=""
+AUDIT_SCOPE_HEAD_SHA="${HEAD_SHA}"
+: > "${CHANGED_FILES_FILE}"
+
+if [ -n "${SECURITY_AUDIT_DIFF_BASE}" ]; then
+	if [ -z "${HEAD_SHA}" ]; then
+		security_audit_emit_failure "diff-scope" "${REPO_ROOT}" "checkout is not a git repository"
+		exit 1
+	fi
+	if ! AUDIT_SCOPE_BASE_SHA="$(git rev-parse --verify --end-of-options "${SECURITY_AUDIT_DIFF_BASE}^{commit}" 2>/dev/null)"; then
+		security_audit_emit_failure "diff-scope" "${SECURITY_AUDIT_DIFF_BASE}" "SECURITY_AUDIT_DIFF_BASE does not resolve to a commit"
+		exit 1
+	fi
+	if ! AUDIT_SCOPE_HEAD_SHA="$(git rev-parse --verify --end-of-options "${SECURITY_AUDIT_DIFF_HEAD}^{commit}" 2>/dev/null)"; then
+		security_audit_emit_failure "diff-scope" "${SECURITY_AUDIT_DIFF_HEAD}" "SECURITY_AUDIT_DIFF_HEAD does not resolve to a commit"
+		exit 1
+	fi
+	if [ "${AUDIT_SCOPE_HEAD_SHA}" != "${HEAD_SHA}" ]; then
+		security_audit_emit_failure "diff-scope" "${SECURITY_AUDIT_DIFF_HEAD}" "explicit diff head does not match the checked-out HEAD"
+		exit 1
+	fi
+	if ! git merge-base --is-ancestor "${AUDIT_SCOPE_BASE_SHA}" "${AUDIT_SCOPE_HEAD_SHA}" 2>/dev/null; then
+		security_audit_emit_failure "diff-scope" "${SECURITY_AUDIT_DIFF_BASE}..${SECURITY_AUDIT_DIFF_HEAD}" "explicit diff base is not an ancestor of the diff head"
+		exit 1
+	fi
+	if ! git diff --name-only "${AUDIT_SCOPE_BASE_SHA}..${AUDIT_SCOPE_HEAD_SHA}" -- > "${CHANGED_FILES_FILE}"; then
+		security_audit_emit_failure "diff-scope" "${SECURITY_AUDIT_DIFF_BASE}..${SECURITY_AUDIT_DIFF_HEAD}" "unable to derive explicit changed-file scope"
+		exit 1
+	fi
+	CHANGED_FILE_COUNT="$(grep -c . "${CHANGED_FILES_FILE}" 2>/dev/null || true)"
+	if ! [[ "${CHANGED_FILE_COUNT}" =~ ^[0-9]+$ ]]; then
+		security_audit_emit_failure "diff-scope" "${SECURITY_AUDIT_DIFF_BASE}..${SECURITY_AUDIT_DIFF_HEAD}" "could not count explicitly changed files"
+		exit 1
+	fi
+	AUDIT_SCOPE_MODE="incremental"
+	AUDIT_SCOPE_REASON="${CHANGED_FILE_COUNT} files in explicit range ${AUDIT_SCOPE_BASE_SHA}..${AUDIT_SCOPE_HEAD_SHA}"
+	if [ -n "${SECURITY_AUDIT_DIFF_SINCE}" ]; then
+		# Delta narrowing: keep only range files that also changed since the
+		# last audited commit.  Fails closed on an unusable SINCE commit so a
+		# stale or rewritten pointer never silently widens or empties scope.
+		if ! AUDIT_SCOPE_SINCE_SHA="$(git rev-parse --verify --end-of-options "${SECURITY_AUDIT_DIFF_SINCE}^{commit}" 2>/dev/null)"; then
+			security_audit_emit_failure "diff-scope" "${SECURITY_AUDIT_DIFF_SINCE}" "SECURITY_AUDIT_DIFF_SINCE does not resolve to a commit"
+			exit 1
+		fi
+		if ! git merge-base --is-ancestor "${AUDIT_SCOPE_SINCE_SHA}" "${AUDIT_SCOPE_HEAD_SHA}" 2>/dev/null; then
+			security_audit_emit_failure "diff-scope" "${SECURITY_AUDIT_DIFF_SINCE}..${SECURITY_AUDIT_DIFF_HEAD}" "SECURITY_AUDIT_DIFF_SINCE is not an ancestor of the diff head"
+			exit 1
+		fi
+		if ! git diff --name-only "${AUDIT_SCOPE_SINCE_SHA}..${AUDIT_SCOPE_HEAD_SHA}" -- > "${DELTA_CHANGED_FILES_FILE}"; then
+			security_audit_emit_failure "diff-scope" "${SECURITY_AUDIT_DIFF_SINCE}..${SECURITY_AUDIT_DIFF_HEAD}" "unable to derive delta changed-file scope"
+			exit 1
+		fi
+		if ! grep -Fxf "${DELTA_CHANGED_FILES_FILE}" "${CHANGED_FILES_FILE}" > "${CHANGED_FILES_FILE}.delta" 2>/dev/null; then
+			# grep exits 1 on an empty intersection; that is a legitimate
+			# (narrow) scope, not an error.
+			: > "${CHANGED_FILES_FILE}.delta"
+		fi
+		mv "${CHANGED_FILES_FILE}.delta" "${CHANGED_FILES_FILE}"
+		DELTA_FILE_COUNT="$(grep -c . "${CHANGED_FILES_FILE}" 2>/dev/null || true)"
+		[[ "${DELTA_FILE_COUNT}" =~ ^[0-9]+$ ]] || DELTA_FILE_COUNT=0
+		AUDIT_SCOPE_REASON="${DELTA_FILE_COUNT} of ${CHANGED_FILE_COUNT} files in explicit range ${AUDIT_SCOPE_BASE_SHA}..${AUDIT_SCOPE_HEAD_SHA} changed since last audited commit ${AUDIT_SCOPE_SINCE_SHA}"
+	fi
+elif [ -z "${HEAD_SHA}" ]; then
+	AUDIT_SCOPE_REASON="checkout is not a git repository; scope gates fail open to a full audit"
+elif [ "${TRACKER_PARTIAL_COVERAGE}" = "true" ]; then
+	AUDIT_SCOPE_REASON="previous default-branch full scan skipped over-cap text; repeating the full audit"
+elif [ -n "${LAST_AUDITED_SHA}" ]; then
+	if [ "${LAST_AUDITED_SHA}" = "${HEAD_SHA}" ]; then
+		if security_audit_flag_enabled "${SECURITY_AUDIT_SKIP_IF_UNCHANGED}"; then
+			echo "security-audit: skipping — HEAD ${HEAD_SHA} unchanged since last audit (tracker=#${TRACKER_NUMBER})."
+			exit 0
+		fi
+		AUDIT_SCOPE_REASON="HEAD unchanged since last audit but SECURITY_AUDIT_SKIP_IF_UNCHANGED is disabled"
+	elif security_audit_flag_enabled "${SECURITY_AUDIT_INCREMENTAL}"; then
+		if git cat-file -e "${LAST_AUDITED_SHA}^{commit}" 2>/dev/null \
+			&& git merge-base --is-ancestor "${LAST_AUDITED_SHA}" "${HEAD_SHA}" 2>/dev/null; then
+			git diff --name-only "${LAST_AUDITED_SHA}..${HEAD_SHA}" > "${CHANGED_FILES_FILE}"
+			CHANGED_FILE_COUNT="$(grep -c . "${CHANGED_FILES_FILE}" 2>/dev/null || true)"
+			if ! [[ "${CHANGED_FILE_COUNT}" =~ ^[0-9]+$ ]]; then
+				AUDIT_SCOPE_REASON="could not count changed files since ${LAST_AUDITED_SHA}; falling back to a full audit"
+			elif [ "${CHANGED_FILE_COUNT}" -eq 0 ]; then
+				if security_audit_flag_enabled "${SECURITY_AUDIT_SKIP_IF_UNCHANGED}"; then
+					echo "security-audit: skipping — no content changes between ${LAST_AUDITED_SHA} and ${HEAD_SHA} (tracker=#${TRACKER_NUMBER})."
+					exit 0
+				fi
+				AUDIT_SCOPE_REASON="empty diff since last audit but SECURITY_AUDIT_SKIP_IF_UNCHANGED is disabled"
+			elif [ "${CHANGED_FILE_COUNT}" -gt "${SECURITY_AUDIT_INCREMENTAL_MAX_FILES}" ]; then
+				AUDIT_SCOPE_REASON="${CHANGED_FILE_COUNT} changed files exceed the incremental cap of ${SECURITY_AUDIT_INCREMENTAL_MAX_FILES}; falling back to a full audit"
+			else
+				AUDIT_SCOPE_MODE="incremental"
+				AUDIT_SCOPE_REASON="${CHANGED_FILE_COUNT} files changed since last audited commit ${LAST_AUDITED_SHA}"
+				AUDIT_SCOPE_BASE_SHA="${LAST_AUDITED_SHA}"
+				AUDIT_SCOPE_HEAD_SHA="${HEAD_SHA}"
+			fi
+		else
+			AUDIT_SCOPE_REASON="last audited commit ${LAST_AUDITED_SHA} is missing or not an ancestor of HEAD (history rewrite?); falling back to a full audit"
+		fi
+	else
+		AUDIT_SCOPE_REASON="SECURITY_AUDIT_INCREMENTAL is disabled"
+	fi
+fi
+echo "security-audit: scope=${AUDIT_SCOPE_MODE} (${AUDIT_SCOPE_REASON})"
+
+# --- Prior findings: extend scope + render the prompt section ---------------
+# Findings reported by earlier audits of this project keep their files in
+# scope (so a still-present finding can be re-emitted through the incremental
+# post-filter) and are listed for the model to verify.  Validation fails
+# closed: the file is produced by the orchestrator from its own state, so a
+# malformed one signals a caller bug, not an audit result.
+PRIOR_FINDINGS_COUNT=0
+: > "${PRIOR_FINDINGS_SCOPE_FILE}"
+: > "${PRIOR_FINDINGS_PROMPT_FILE}"
+if [ -n "${SECURITY_AUDIT_PRIOR_FINDINGS}" ]; then
+	if ! PRIOR_FINDINGS_COUNT="$(python3 - \
+		"${REPO_ROOT}" \
+		"${SECURITY_AUDIT_PRIOR_FINDINGS}" \
+		"${PRIOR_FINDINGS_SCOPE_FILE}" \
+		"${PRIOR_FINDINGS_PROMPT_FILE}" 2> "${PRIOR_FINDINGS_ERROR_FILE}" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path, PurePosixPath
+
+repo_root = Path(sys.argv[1]).resolve()
+prior_findings_path = Path(sys.argv[2])
+scope_path = Path(sys.argv[3])
+prompt_path = Path(sys.argv[4])
+
+try:
+	prior_findings = json.loads(prior_findings_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as exc:
+	raise SystemExit(f"unable to load prior findings: {exc}")
+if not isinstance(prior_findings, list):
+	raise SystemExit("prior findings must be a JSON array")
+
+
+def text_field(finding: dict, key: str) -> str:
+	value = finding.get(key)
+	if not isinstance(value, (str, int, float)) or isinstance(value, bool):
+		return ""
+	sanitized_prompt_value = " ".join(str(value).split()).replace("`", "")
+	for untrusted_fence in (
+		"=== BEGIN UNTRUSTED PRIOR FINDINGS ===", "=== END UNTRUSTED PRIOR FINDINGS ===",
+		"=== BEGIN UNTRUSTED FIX-CYCLE CODE ===", "=== END UNTRUSTED FIX-CYCLE CODE ===",
+		"=== BEGIN UNTRUSTED ACCEPTED FINDINGS ===", "=== END UNTRUSTED ACCEPTED FINDINGS ===",
+	):
+		sanitized_prompt_value = sanitized_prompt_value.replace(untrusted_fence, "[untrusted marker removed]")
+	return sanitized_prompt_value
+
+
+scope_files: list[str] = []
+prompt_lines: list[str] = []
+for index, finding in enumerate(prior_findings):
+	if not isinstance(finding, dict):
+		raise SystemExit(f"prior finding #{index} must be an object")
+	file_value = finding.get("file")
+	if not isinstance(file_value, str) or not file_value.strip():
+		raise SystemExit(f"prior finding #{index} is missing its file")
+	relative_file_path = PurePosixPath(file_value.strip())
+	if relative_file_path.is_absolute() or ".." in relative_file_path.parts:
+		raise SystemExit(f"prior finding #{index} cites a non-repository path")
+	relative_file = relative_file_path.as_posix()
+	if not relative_file or relative_file == ".":
+		raise SystemExit(f"prior finding #{index} cites a non-repository path")
+	try:
+		resolved = (repo_root / relative_file).resolve()
+		resolved.relative_to(repo_root)
+	except (OSError, ValueError):
+		raise SystemExit(f"prior finding #{index} cites a path outside the repository")
+	# A deleted file cannot carry a finding any more; it stays in the prompt
+	# list (the model may confirm the removal) but never enters scope.
+	if resolved.is_file() and relative_file not in scope_files:
+		scope_files.append(relative_file)
+	finding_id = text_field(finding, "finding_id") or f"prior-finding-{index + 1}"
+	line_value = finding.get("line")
+	location = relative_file
+	if isinstance(line_value, int) and not isinstance(line_value, bool) and line_value > 0:
+		location = f"{relative_file}:{line_value}"
+	cycle_value = finding.get("cycle")
+	cycle_note = ""
+	if isinstance(cycle_value, int) and not isinstance(cycle_value, bool) and cycle_value > 0:
+		cycle_note = f" (reported in fix cycle {cycle_value})"
+	prompt_lines.append(
+		"- `{id}`{cycle} | {category} | {severity} | confidence {confidence} | {location}\n"
+		"  Exploit scenario: {exploit}\n"
+		"  Recommendation given: {recommendation}".format(
+			id=finding_id,
+			cycle=cycle_note,
+			category=text_field(finding, "owasp_or_stride_category") or "uncategorised",
+			severity=text_field(finding, "severity") or "unknown",
+			confidence=text_field(finding, "confidence") or "?",
+			location=location,
+			exploit=text_field(finding, "exploit_scenario") or "(not recorded)",
+			recommendation=text_field(finding, "recommendation") or "(not recorded)",
+		)
+	)
+
+scope_path.write_text("".join(f"{path}\n" for path in scope_files), encoding="utf-8")
+prompt_path.write_text("".join(f"{line}\n" for line in prompt_lines), encoding="utf-8")
+print(len(prior_findings))
+PY
+	)"; then
+		security_audit_emit_path_diagnostic "${PRIOR_FINDINGS_ERROR_FILE}"
+		security_audit_emit_failure "prior-findings" "${SECURITY_AUDIT_PRIOR_FINDINGS}" "$(head -n1 "${PRIOR_FINDINGS_ERROR_FILE}" 2>/dev/null || echo 'prior findings could not be processed')"
+		exit 1
+	fi
+	[[ "${PRIOR_FINDINGS_COUNT}" =~ ^[0-9]+$ ]] || PRIOR_FINDINGS_COUNT=0
+	PRIOR_FINDINGS_SCOPE_COUNT="$(grep -c . "${PRIOR_FINDINGS_SCOPE_FILE}" 2>/dev/null || true)"
+	[[ "${PRIOR_FINDINGS_SCOPE_COUNT}" =~ ^[0-9]+$ ]] || PRIOR_FINDINGS_SCOPE_COUNT=0
+	if [ "${AUDIT_SCOPE_MODE}" = "incremental" ] && [ "${PRIOR_FINDINGS_SCOPE_COUNT}" -gt 0 ]; then
+		cat "${CHANGED_FILES_FILE}" "${PRIOR_FINDINGS_SCOPE_FILE}" | grep . | sort -u > "${CHANGED_FILES_FILE}.union"
+		mv "${CHANGED_FILES_FILE}.union" "${CHANGED_FILES_FILE}"
+	fi
+	echo "security-audit: prior-findings=${PRIOR_FINDINGS_COUNT} (${PRIOR_FINDINGS_SCOPE_COUNT} cited files kept in scope)"
+fi
+
+# --- Fix-cycle diffs: extend scope + render newly introduced code ------------
+# Each entry names the code one fix cycle wrote (since_sha..head_sha, files).
+# Files join the incremental scope so a hole in a file that no finding ever
+# cited stays auditable for one more cycle, and the added/modified hunks are
+# rendered for the prompt under the line/byte caps.  Everything fails open: a
+# broken entry is skipped with a warning and the audit proceeds without it.
+FIX_CYCLE_DIFFS_SUMMARY=""
+: > "${FIX_CYCLE_DIFFS_SCOPE_FILE}"
+: > "${FIX_CYCLE_DIFFS_PROMPT_FILE}"
+if [ -n "${SECURITY_AUDIT_FIX_CYCLE_DIFFS}" ]; then
+	if FIX_CYCLE_DIFFS_SUMMARY="$(python3 - \
+		"${REPO_ROOT}" \
+		"${SECURITY_AUDIT_FIX_CYCLE_DIFFS}" \
+		"${FIX_CYCLE_DIFFS_SCOPE_FILE}" \
+		"${FIX_CYCLE_DIFFS_PROMPT_FILE}" \
+		"${SECURITY_AUDIT_FIX_DIFF_MAX_LINES}" \
+		"${SECURITY_AUDIT_FIX_DIFF_MAX_BYTES}" 2> "${FIX_CYCLE_DIFFS_ERROR_FILE}" <<'PY'
+from __future__ import annotations
+
+import json
+import re
+import subprocess
+import sys
+from pathlib import Path, PurePosixPath
+
+repo_root = Path(sys.argv[1]).resolve()
+entries_path = Path(sys.argv[2])
+scope_path = Path(sys.argv[3])
+prompt_path = Path(sys.argv[4])
+max_lines = int(sys.argv[5])
+max_bytes = int(sys.argv[6])
+
+SHA_RE = re.compile(r"^[0-9a-fA-F]{7,40}$")
+FENCES = (
+	"=== BEGIN UNTRUSTED PRIOR FINDINGS ===", "=== END UNTRUSTED PRIOR FINDINGS ===",
+	"=== BEGIN UNTRUSTED FIX-CYCLE CODE ===", "=== END UNTRUSTED FIX-CYCLE CODE ===",
+	"=== BEGIN UNTRUSTED ACCEPTED FINDINGS ===", "=== END UNTRUSTED ACCEPTED FINDINGS ===",
+)
+MAX_FILES_PER_ENTRY = 200
+
+
+def warn(message: str) -> None:
+	print(f"fix-cycle-diffs: {message}", file=sys.stderr)
+
+
+def sanitize(text: str) -> str:
+	for fence in FENCES:
+		text = text.replace(fence, "[untrusted marker removed]")
+	return text
+
+
+def git(*args: str) -> str | None:
+	try:
+		completed = subprocess.run(
+			["git", *args],
+			cwd=repo_root,
+			capture_output=True,
+			text=True,
+			encoding="utf-8",
+			errors="replace",
+			check=False,
+		)
+	except (OSError, ValueError) as exc:
+		warn(f"git {' '.join(args[:2])} failed: {exc}")
+		return None
+	if completed.returncode != 0:
+		return None
+	return completed.stdout
+
+
+def relative_repo_file(index: int, value: object) -> str | None:
+	if not isinstance(value, str) or not value.strip():
+		warn(f"entry #{index} lists a non-string file; skipped")
+		return None
+	candidate = PurePosixPath(value.strip())
+	if candidate.is_absolute() or ".." in candidate.parts:
+		warn(f"entry #{index} lists a non-repository path; skipped")
+		return None
+	relative = candidate.as_posix()
+	if relative.startswith("./"):
+		relative = relative[2:]
+	if not relative or relative == ".":
+		warn(f"entry #{index} lists a non-repository path; skipped")
+		return None
+	try:
+		(repo_root / relative).resolve().relative_to(repo_root)
+	except (OSError, ValueError):
+		warn(f"entry #{index} lists a path outside the repository; skipped")
+		return None
+	return relative
+
+
+try:
+	entries = json.loads(entries_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as exc:
+	raise SystemExit(f"unable to load fix-cycle diffs: {exc}")
+if not isinstance(entries, list):
+	raise SystemExit("fix-cycle diffs must be a JSON array")
+
+scope_files: list[str] = []
+prompt_blocks: list[str] = []
+entry_count = 0
+hunk_files = 0
+omitted_files = 0
+used_lines = 0
+used_bytes = 0
+over_budget = False
+
+for index, entry in enumerate(entries):
+	if not isinstance(entry, dict):
+		warn(f"entry #{index} is not an object; skipped")
+		continue
+	raw_files = entry.get("files")
+	if not isinstance(raw_files, list):
+		warn(f"entry #{index} has no files array; skipped")
+		continue
+	files: list[str] = []
+	for raw_file in raw_files[:MAX_FILES_PER_ENTRY]:
+		relative = relative_repo_file(index, raw_file)
+		if relative and relative not in files:
+			files.append(relative)
+	if len(raw_files) > MAX_FILES_PER_ENTRY:
+		warn(f"entry #{index} lists {len(raw_files)} files; only the first {MAX_FILES_PER_ENTRY} are used")
+	if not files:
+		warn(f"entry #{index} has no usable files; skipped")
+		continue
+	entry_count += 1
+	cycle = entry.get("cycle")
+	cycle_label = "Head advance after a clean pass"
+	if isinstance(cycle, int) and not isinstance(cycle, bool) and cycle > 0:
+		cycle_label = f"Fix cycle {cycle}"
+	since_sha = entry.get("since_sha")
+	head_sha = entry.get("head_sha")
+	range_ok = False
+	range_note = ""
+	if not (isinstance(since_sha, str) and SHA_RE.match(since_sha) and isinstance(head_sha, str) and SHA_RE.match(head_sha)):
+		range_note = "commit range not recorded; files listed by name"
+		since_sha = head_sha = ""
+	else:
+		since_resolved = git("rev-parse", "--verify", "--end-of-options", f"{since_sha}^{{commit}}")
+		head_resolved = git("rev-parse", "--verify", "--end-of-options", f"{head_sha}^{{commit}}")
+		if since_resolved is None or head_resolved is None:
+			range_note = "commit range does not resolve in this checkout; files listed by name"
+		elif git("merge-base", "--is-ancestor", since_resolved.strip(), head_resolved.strip()) is None:
+			range_note = "recorded since-commit is not an ancestor of the recorded head; files listed by name"
+		else:
+			range_ok = True
+			since_sha = since_resolved.strip()
+			head_sha = head_resolved.strip()
+	if range_note:
+		warn(f"entry #{index} ({cycle_label.lower()}): {range_note}")
+	for relative in files:
+		if (repo_root / relative).is_file() and relative not in scope_files:
+			scope_files.append(relative)
+	header = f"{cycle_label}"
+	if range_ok:
+		header += f" -- commits {since_sha[:12]}..{head_sha[:12]}"
+	header += f"; files: {', '.join(files)}"
+	if range_note:
+		header += f" ({range_note})"
+	lines = [sanitize(header)]
+	if range_ok:
+		for relative in files:
+			diff_text = git(
+				"diff", "--no-color", "--no-ext-diff", "--unified=3", "--diff-filter=AM",
+				f"{since_sha}..{head_sha}", "--", relative,
+			)
+			if diff_text is None:
+				warn(f"entry #{index}: git diff failed for {relative}; listed by name")
+				lines.append(f"--- {relative}: hunks unavailable (git diff failed; file is in scope by name) ---")
+				continue
+			diff_text = sanitize(diff_text.rstrip("\n"))
+			if not diff_text:
+				lines.append(f"--- {relative}: no added or modified hunks in this range ---")
+				continue
+			diff_lines = diff_text.count("\n") + 1
+			diff_bytes = len(diff_text.encode("utf-8"))
+			if over_budget or used_lines + diff_lines > max_lines or used_bytes + diff_bytes > max_bytes:
+				over_budget = True
+				omitted_files += 1
+				lines.append(f"--- {relative}: hunks omitted (size cap reached; file is in scope by name, read it directly) ---")
+				continue
+			used_lines += diff_lines
+			used_bytes += diff_bytes
+			hunk_files += 1
+			lines.append(f"--- {relative} ---")
+			lines.append(diff_text)
+	prompt_blocks.append(sanitize("\n".join(lines)))
+
+if omitted_files:
+	prompt_blocks.append(
+		f"Hunks omitted for {omitted_files} file(s): the fix-cycle diff exceeded the cap "
+		f"(SECURITY_AUDIT_FIX_DIFF_MAX_LINES={max_lines}, SECURITY_AUDIT_FIX_DIFF_MAX_BYTES={max_bytes}). "
+		"Those files are in scope by name; read them directly."
+	)
+	warn(
+		f"hunks omitted for {omitted_files} file(s) over the cap "
+		f"(lines {max_lines}, bytes {max_bytes}); they are in scope by name only"
+	)
+
+scope_path.write_text("".join(f"{path}\n" for path in scope_files), encoding="utf-8")
+prompt_path.write_text("".join(f"{block}\n\n" for block in prompt_blocks), encoding="utf-8")
+print(
+	f"fix-cycle-diffs={entry_count} entries ({len(scope_files)} files kept in scope, "
+	f"hunks for {hunk_files} files: {used_lines} lines, {used_bytes} bytes, {omitted_files} files over the cap)"
+)
+PY
+	)"; then
+		if [ -s "${FIX_CYCLE_DIFFS_ERROR_FILE}" ]; then
+			while IFS= read -r fix_cycle_diffs_warning_line; do
+				[ -n "${fix_cycle_diffs_warning_line}" ] || continue
+				echo "::warning::security-audit: ${fix_cycle_diffs_warning_line}"
+			done < "${FIX_CYCLE_DIFFS_ERROR_FILE}"
+		fi
+		FIX_CYCLE_DIFFS_SCOPE_COUNT="$(grep -c . "${FIX_CYCLE_DIFFS_SCOPE_FILE}" 2>/dev/null || true)"
+		[[ "${FIX_CYCLE_DIFFS_SCOPE_COUNT}" =~ ^[0-9]+$ ]] || FIX_CYCLE_DIFFS_SCOPE_COUNT=0
+		if [ "${AUDIT_SCOPE_MODE}" = "incremental" ] && [ "${FIX_CYCLE_DIFFS_SCOPE_COUNT}" -gt 0 ]; then
+			cat "${CHANGED_FILES_FILE}" "${FIX_CYCLE_DIFFS_SCOPE_FILE}" | grep . | sort -u > "${CHANGED_FILES_FILE}.union"
+			mv "${CHANGED_FILES_FILE}.union" "${CHANGED_FILES_FILE}"
+		fi
+		echo "security-audit: ${FIX_CYCLE_DIFFS_SUMMARY}"
+	else
+		# Fail open: the section is an aid, never a gate.
+		echo "::warning::security-audit: fix-cycle diffs could not be processed ($(head -n1 "${FIX_CYCLE_DIFFS_ERROR_FILE}" 2>/dev/null || echo 'unknown error')); the audit runs without the newly introduced code section"
+		: > "${FIX_CYCLE_DIFFS_SCOPE_FILE}"
+		: > "${FIX_CYCLE_DIFFS_PROMPT_FILE}"
+	fi
+fi
+
+# --- Waived findings: normalize + render the prompt section ----------------
+# Accepted findings never enter scope on their own (they are not to be
+# re-audited); they are listed for the model as accepted and enforced by the
+# post-filter below.  Validation fails closed: the file comes from the
+# orchestrator's own state or an operator command it already validated.
+WAIVED_FINDINGS_COUNT=0
+: > "${WAIVED_FINDINGS_PROMPT_FILE}"
+printf '[]\n' > "${WAIVED_FINDINGS_NORMALIZED_FILE}"
+if [ -n "${SECURITY_AUDIT_WAIVED_FINDINGS}" ]; then
+	if ! WAIVED_FINDINGS_COUNT="$(python3 - \
+		"${SECURITY_AUDIT_WAIVED_FINDINGS}" \
+		"${WAIVED_FINDINGS_NORMALIZED_FILE}" \
+		"${WAIVED_FINDINGS_PROMPT_FILE}" 2> "${WAIVED_FINDINGS_ERROR_FILE}" <<'PY'
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path, PurePosixPath
+
+waived_findings_path = Path(sys.argv[1])
+normalized_path = Path(sys.argv[2])
+prompt_path = Path(sys.argv[3])
+
+try:
+	waived_findings = json.loads(waived_findings_path.read_text(encoding="utf-8"))
+except (OSError, json.JSONDecodeError) as exc:
+	raise SystemExit(f"unable to load waived findings: {exc}")
+if not isinstance(waived_findings, list):
+	raise SystemExit("waived findings must be a JSON array")
+
+
+def text_field(finding: dict, key: str) -> str:
+	value = finding.get(key)
+	if not isinstance(value, (str, int, float)) or isinstance(value, bool):
+		return ""
+	sanitized_prompt_value = " ".join(str(value).split()).replace("`", "")
+	for untrusted_fence in (
+		"=== BEGIN UNTRUSTED PRIOR FINDINGS ===", "=== END UNTRUSTED PRIOR FINDINGS ===",
+		"=== BEGIN UNTRUSTED FIX-CYCLE CODE ===", "=== END UNTRUSTED FIX-CYCLE CODE ===",
+		"=== BEGIN UNTRUSTED ACCEPTED FINDINGS ===", "=== END UNTRUSTED ACCEPTED FINDINGS ===",
+	):
+		sanitized_prompt_value = sanitized_prompt_value.replace(untrusted_fence, "[untrusted marker removed]")
+	return sanitized_prompt_value
+
+
+def raw_lower(value: object) -> str:
+	if not isinstance(value, str):
+		return ""
+	return " ".join(value.lower().split())
+
+
+def raw_scenario(value: object) -> str:
+	# Backticks are dropped and whitespace collapsed (as the prompt renders
+	# the scenario), then both sides are cut to 600 characters (the poller's
+	# cap on reported and waived rows); case is kept.  An auditor that echoes
+	# the displayed scenario therefore still matches.
+	if not isinstance(value, str):
+		return ""
+	return " ".join(value.replace("`", "").split())[:600]
+
+
+normalized: list[dict] = []
+prompt_lines: list[str] = []
+for index, finding in enumerate(waived_findings):
+	if not isinstance(finding, dict):
+		raise SystemExit(f"waived finding #{index} must be an object")
+	finding_id = text_field(finding, "finding_id")
+	if not finding_id:
+		raise SystemExit(f"waived finding #{index} is missing its finding_id")
+	raw_finding_id_value = finding.get("finding_id")
+	raw_finding_id = raw_finding_id_value.strip() if isinstance(raw_finding_id_value, str) else ""
+	relative_file = ""
+	file_value = finding.get("file")
+	if isinstance(file_value, str) and file_value.strip():
+		relative_file_path = PurePosixPath(file_value.strip())
+		if relative_file_path.is_absolute() or ".." in relative_file_path.parts:
+			raise SystemExit(f"waived finding #{index} cites a non-repository path")
+		relative_file = relative_file_path.as_posix()
+		if relative_file.startswith("./"):
+			relative_file = relative_file[2:]
+		if not relative_file or relative_file == ".":
+			raise SystemExit(f"waived finding #{index} cites a non-repository path")
+	line_value = finding.get("line")
+	line_number = 0
+	if isinstance(line_value, int) and not isinstance(line_value, bool) and line_value > 0:
+		line_number = line_value
+	category = text_field(finding, "owasp_or_stride_category")
+	waived_finding = finding.get("finding")
+	# Match fields are normalized from the raw values, not the prompt-sanitized
+	# ones (stripping backticks or fence markers would distort the comparison).
+	# They are never rendered into the prompt.
+	match_exploit_scenario = raw_scenario(finding.get("exploit_scenario"))
+	if not match_exploit_scenario and isinstance(waived_finding, dict):
+		match_exploit_scenario = raw_scenario(waived_finding.get("exploit_scenario"))
+	normalized.append(
+		{
+			"finding_id": finding_id,
+			"match_finding_id": raw_finding_id,
+			"file": relative_file,
+			"line": line_number,
+			"owasp_or_stride_category": category,
+			"severity": text_field(finding, "severity"),
+			"exploit_scenario": text_field(finding, "exploit_scenario") or (text_field(waived_finding, "exploit_scenario") if isinstance(waived_finding, dict) else ""),
+			"match_category": raw_lower(finding.get("owasp_or_stride_category")),
+			"match_severity": raw_lower(finding.get("severity")),
+			"match_exploit_scenario": match_exploit_scenario,
+		}
+	)
+	location = relative_file or "(location not recorded)"
+	if relative_file and line_number:
+		location = f"{relative_file}:{line_number}"
+	prompt_lines.append(
+		"- `{id}` | {category} | {severity} | {location}\n"
+		"  Accepted exploit: {scenario}\n"
+		"  Accepted because: {reason}".format(
+			id=finding_id,
+			category=category or "uncategorised",
+			severity=text_field(finding, "severity") or "unknown",
+			location=location,
+			scenario=text_field(finding, "exploit_scenario") or (text_field(waived_finding, "exploit_scenario") if isinstance(waived_finding, dict) else "(not recorded)"),
+			reason=text_field(finding, "justification") or "(not recorded)",
+		)
+	)
+
+normalized_path.write_text(json.dumps(normalized, ensure_ascii=True, sort_keys=True) + "\n", encoding="utf-8")
+prompt_path.write_text("".join(f"{line}\n" for line in prompt_lines), encoding="utf-8")
+print(len(normalized))
+PY
+	)"; then
+		security_audit_emit_path_diagnostic "${WAIVED_FINDINGS_ERROR_FILE}"
+		security_audit_emit_failure "waived-findings" "${SECURITY_AUDIT_WAIVED_FINDINGS}" "$(head -n1 "${WAIVED_FINDINGS_ERROR_FILE}" 2>/dev/null || echo 'waived findings could not be processed')"
+		exit 1
+	fi
+	[[ "${WAIVED_FINDINGS_COUNT}" =~ ^[0-9]+$ ]] || WAIVED_FINDINGS_COUNT=0
+	echo "security-audit: waived-findings=${WAIVED_FINDINGS_COUNT} (match: exact finding_id plus recorded category/severity/exploit scenario)"
+	echo "security-audit: SECURITY_AUDIT_WAIVER_LINE_WINDOW=${SECURITY_AUDIT_WAIVER_LINE_WINDOW} is accepted for compatibility but no longer controls waiver suppression"
+fi
+
+# Full scans export every eligible oversized tracked file; listed prior-finding
+# and fix-cycle paths still get the strict explicit-scope checks.
+: > "${OVERSIZED_SCOPE_FILE}"
+OVERSIZED_EXPORT_SCOPE_MODE="explicit"
+if [ "${AUDIT_SCOPE_MODE}" = "incremental" ]; then
+	cp "${CHANGED_FILES_FILE}" "${OVERSIZED_SCOPE_FILE}"
+else
+	OVERSIZED_EXPORT_SCOPE_MODE="all"
+fi
+cat "${PRIOR_FINDINGS_SCOPE_FILE}" "${FIX_CYCLE_DIFFS_SCOPE_FILE}" >> "${OVERSIZED_SCOPE_FILE}"
+# The isolated launch hides CLAUDE.md when hide_claude_md is on; the
+# oversized chunks it mounts must honour the same filter (read as
+# ai_engine.sh reads it, default false), so a hidden file is reported as
+# not inspected instead of exported.
+OVERSIZED_EXPORT_HIDE=""
+if [ "$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/claude_engine.py" config --key hide_claude_md 2>/dev/null || echo false)" = "true" ]; then
+	OVERSIZED_EXPORT_HIDE="CLAUDE.md"
+fi
+if ! CODEX_ISOLATED_HIDE="${OVERSIZED_EXPORT_HIDE}" PYTHONDONTWRITEBYTECODE=1 python3 "${SECURITY_AUDIT_SUPPORT_DIR}/scripts/codex_isolated_workspace.py" export-oversized \
+	"${REPO_ROOT}" "${OVERSIZED_SCOPE_FILE}" "${OVERSIZED_EXPORT_DIR}" \
+	"${SECURITY_AUDIT_OVERSIZED_FILE_MAX_BYTES}" "${SECURITY_AUDIT_OVERSIZED_TOTAL_MAX_BYTES}" \
+	"${OVERSIZED_EXPORT_SCOPE_MODE}" 2> "${OVERSIZED_ERROR_FILE}"; then
+	security_audit_emit_path_diagnostic "${OVERSIZED_ERROR_FILE}"
+	security_audit_emit_failure "oversized-scope" "${REPO_ROOT}" "$(head -n1 "${OVERSIZED_ERROR_FILE}" 2>/dev/null || echo 'oversized export failed')"
+	exit 1
+fi
+if ! OVERSIZED_COUNTS="$(PYTHONDONTWRITEBYTECODE=1 python3 - "${OVERSIZED_EXPORT_DIR}/manifest.json" "${OVERSIZED_EXPORT_DIR}" "${OVERSIZED_PROMPT_FILE}" 2> "${OVERSIZED_ERROR_FILE}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+manifest = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+scoped = manifest["scoped"]
+unscoped = manifest["unscoped_oversized_count"]
+if manifest["schema_version"] != "oversized_readonly_export.v1" or not isinstance(scoped, list) or not isinstance(unscoped, int) or unscoped < 0:
+	raise ValueError("invalid oversized manifest")
+text_capped = manifest.get("unscoped_text_capped_count", unscoped)
+if type(text_capped) is not int or not 0 <= text_capped <= unscoped:
+	raise ValueError("invalid oversized text coverage count")
+if manifest.get("scope_mode", "explicit") not in ("explicit", "all"):
+	raise ValueError("invalid oversized manifest scope mode")
+lines = []
+if scoped:
+	lines.extend([
+		"These scoped files exceed the 2 MiB snapshot limit and are absent from the workspace copy and git show. Their full contents are in these read-only chunks:",
+	])
+	for item in scoped:
+		chunks = ", ".join(f"{sys.argv[2]}/{chunk['file']} lines {chunk['start_line']}-{chunk['end_line']}" for chunk in item["chunks"])
+		lines.append(f"- {item['path']} ({item['size']} bytes): {chunks}")
+	lines.extend([
+		"Read EVERY chunk of EVERY listed file before concluding it is clean.",
+		"Cite the original repository path and line numbers (chunk start_line + offset - 1), never the chunk path.",
+	])
+if unscoped:
+	lines.append(f"Coverage note: {unscoped} tracked files over 2 MiB were not inspected (outside the explicit scope, binary, or over the export caps).")
+filtered_scoped = manifest.get("filtered_scoped", [])
+filtered_scoped_count = manifest.get("filtered_scoped_count", len(filtered_scoped))
+if not isinstance(filtered_scoped, list) or type(filtered_scoped_count) is not int or filtered_scoped_count < len(filtered_scoped):
+	raise ValueError("invalid oversized filtered-scope record")
+if filtered_scoped_count:
+	filtered_names = ", ".join(item["path"] for item in filtered_scoped)
+	if filtered_scoped_count > len(filtered_scoped):
+		filtered_names += f" (+{filtered_scoped_count - len(filtered_scoped)} more)"
+	lines.append(
+		f"Coverage note: {filtered_scoped_count} scoped files are withheld from you by the credential filter and were not inspected: {filtered_names}. "
+		"They are absent from the workspace copy and git show; do not report on their contents or describe them as reviewed."
+	)
+Path(sys.argv[3]).write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+print(len(scoped), unscoped, text_capped, filtered_scoped_count)
+PY
+)" || ! [[ "${OVERSIZED_COUNTS}" =~ ^[0-9]+\ [0-9]+\ [0-9]+\ [0-9]+$ ]]; then
+	security_audit_emit_path_diagnostic "${OVERSIZED_ERROR_FILE}"
+	security_audit_emit_failure "oversized-scope" "${REPO_ROOT}" "oversized manifest could not be processed"
+	exit 1
+fi
+read -r OVERSIZED_SCOPED_COUNT OVERSIZED_UNSCOPED_COUNT OVERSIZED_TEXT_CAPPED_COUNT OVERSIZED_FILTERED_SCOPED_COUNT <<< "${OVERSIZED_COUNTS}"
+echo "security-audit: oversized scoped=${OVERSIZED_SCOPED_COUNT} unscoped=${OVERSIZED_UNSCOPED_COUNT} text_capped=${OVERSIZED_TEXT_CAPPED_COUNT} filtered_scoped=${OVERSIZED_FILTERED_SCOPED_COUNT}"
+if [ "${OVERSIZED_FILTERED_SCOPED_COUNT}" -gt 0 ]; then
+	echo "::warning::security-audit: ${OVERSIZED_FILTERED_SCOPED_COUNT} scoped files are withheld by the credential filter and were not inspected; see the coverage note."
+fi
+
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "issues" ] \
+		&& [ -z "${SECURITY_AUDIT_TARGET_REF}" ] \
+		&& [ "${OVERSIZED_TEXT_CAPPED_COUNT}" -gt 0 ]; then
+	# Persist incomplete coverage before invoking the model or publishing
+	# findings, so any later failure still forces the next default-branch run
+	# back through the full repository.
+	{
+		cat "${TRACKER_BODY_FILE}"
+		echo
+		if [ -n "${LAST_AUDITED_SHA}" ]; then
+			echo "Last audited commit (managed automatically; do not edit):"
+			echo "${LAST_SHA_MARKER_PREFIX}${LAST_AUDITED_SHA} -->"
+		fi
+		echo "${PARTIAL_COVERAGE_MARKER}"
+	} > "${TRACKER_BODY_WITH_SHA_FILE}"
+	gh_retry gh issue edit "${TRACKER_NUMBER}" \
+		--repo "${GITHUB_REPOSITORY}" \
+		--body-file "${TRACKER_BODY_WITH_SHA_FILE}"
+fi
+
+SECURITY_AUDIT_RENDER_HELPER="${SECURITY_AUDIT_SUPPORT_DIR}/scripts/render_prompt.sh"
+SECURITY_AUDIT_PROMPT_PATH="${SECURITY_AUDIT_SUPPORT_DIR}/prompts/mode-security-audit.txt"
+security_audit_require_file "prompt-preflight" "${SECURITY_AUDIT_RENDER_HELPER}"
+security_audit_require_file "prompt-preflight" "${SECURITY_AUDIT_PROMPT_PATH}"
+security_audit_require_directory "prompt-preflight" "${SECURITY_AUDIT_RUNTIME_DIR}"
+security_audit_require_writable_destination "prompt-preflight" "${RENDERED_PROMPT_FILE}"
+security_audit_require_writable_destination "prompt-preflight" "${RENDER_PROMPT_ERROR_FILE}"
+
+# Render from the trusted support root, not from ${REPO_ROOT}.  The project
+# security pass runs this script inside a clean audit worktree under the
+# poller's runtime dir, and render_prompt.sh / render_prompt.py fall back to
+# $PWD-relative paths (for example $PWD/.codex-workflow-src/prompts/references/
+# output-contract.txt, which the poller does not stage beside the prompt).
+# From the worktree those fallbacks miss, so every render failed with
+# "prompt renderer exited nonzero" (consumer tracking #3928), and they would
+# read the audited branch's files instead of the trusted support copies.
+security_audit_render_prompt_template() {
+	local render_template="${1:?render template required}"
+	local render_helper="${SECURITY_AUDIT_RENDER_HELPER}"
+	[[ "${render_helper}" = /* ]] || render_helper="${PWD}/${render_helper}"
+	[[ "${render_template}" = /* ]] || render_template="${PWD}/${render_template}"
+	( cd -- "${SECURITY_AUDIT_SUPPORT_DIR}" && bash "${render_helper}" "${render_template}" )
+}
+
+if security_audit_render_prompt_template "${SECURITY_AUDIT_PROMPT_PATH}" \
+		> "${RENDERED_PROMPT_FILE}" 2> "${RENDER_PROMPT_ERROR_FILE}"; then
+	:
+else
+	RENDER_PROMPT_STATUS=$?
+	security_audit_emit_path_diagnostic "${RENDER_PROMPT_ERROR_FILE}"
+	# Publish the renderer's own error lines (masked) so a failure that is not
+	# a missing path can be diagnosed from the run log.
+	security_audit_emit_codex_stderr_tail "${RENDER_PROMPT_ERROR_FILE}" "${SECURITY_AUDIT_PROMPT_PATH}" "${RENDER_PROMPT_TAIL_FILE}" "prompt-render" >/dev/null || true
+	security_audit_emit_failure "prompt-render" "${SECURITY_AUDIT_PROMPT_PATH}" "prompt renderer exited nonzero"
+	exit "${RENDER_PROMPT_STATUS}"
+fi
+
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
+	printf '%s\n' '{{REFERENCE_SECURITY_MONEY_LENS}}' > "${SECURITY_AUDIT_MONEY_LENS_TEMPLATE_FILE}"
+	if security_audit_render_prompt_template "${SECURITY_AUDIT_MONEY_LENS_TEMPLATE_FILE}" \
+			> "${SECURITY_AUDIT_MONEY_LENS_FILE}" 2> "${RENDER_PROMPT_ERROR_FILE}"; then
+		:
+	else
+		MONEY_LENS_RENDER_STATUS=$?
+		security_audit_emit_path_diagnostic "${RENDER_PROMPT_ERROR_FILE}"
+		security_audit_emit_codex_stderr_tail "${RENDER_PROMPT_ERROR_FILE}" "${SECURITY_AUDIT_MONEY_LENS_TEMPLATE_FILE}" "${RENDER_PROMPT_TAIL_FILE}" "prompt-render" >/dev/null || true
+		security_audit_emit_failure "prompt-render" "${SECURITY_AUDIT_MONEY_LENS_TEMPLATE_FILE}" "security money lens renderer exited nonzero"
+		exit "${MONEY_LENS_RENDER_STATUS}"
+	fi
+fi
+
+if security_audit_append_prompt_context >> "${RENDERED_PROMPT_FILE}"; then
+	:
+else
+	PROMPT_CONTEXT_STATUS=$?
+	security_audit_emit_failure "prompt-render" "${RENDERED_PROMPT_FILE}" "prompt context assembly exited nonzero"
+	exit "${PROMPT_CONTEXT_STATUS}"
+fi
+
+# --- Engine: Claude first (SECURITY_AUDIT role), codex on any failure ------
+# The role resolves through scripts/ai_engine.sh from the trusted support
+# tree: the engine config, the project's labels in AI_ENGINE_LABELS (`ai:codex`
+# keeps the audit on codex), AI_ENGINE_SECURITY_AUDIT, AI_ENGINE. Claude runs
+# in the same credential-free, network-isolated container as codex
+# (claude_run, read profile) on the role's model and effort. Every Claude
+# failure -- the account pool gated at gate_utilization (CLAUDE_POOL_REASON=
+# all_gated), no usable account, no isolation, a crash, a timeout, or output
+# that is missing or is not a JSON array of objects -- logs
+# AI_ENGINE_FALLBACK role=SECURITY_AUDIT. Under AI_ENGINE_FALLBACK_POLICY=
+# capacity (the default; plan item 3e, D1) only the capacity reasons
+# (all_gated, all_usage_limit) rerun the same prompt on codex; every other
+# reason logs ::error::AI_ENGINE_FALLBACK_REFUSED and fails the audit.
+# AI_ENGINE_FALLBACK_POLICY=always reruns on codex for every reason.
+CLAUDE_AUDIT_OUTPUT_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/claude-output.txt"
+SECURITY_AUDIT_ENGINE="codex"
+SECURITY_AUDIT_AI_ENGINE_SCRIPT="${SECURITY_AUDIT_SUPPORT_DIR}/scripts/ai_engine.sh"
+if [ -f "${SECURITY_AUDIT_AI_ENGINE_SCRIPT}" ]; then
+	# shellcheck source=/dev/null
+	if source "${SECURITY_AUDIT_AI_ENGINE_SCRIPT}"; then
+		SECURITY_AUDIT_ENGINE="$(AI_ENGINE_MODEL_HINT="" AI_ENGINE_EFFORT_HINT="" ai_engine_for_role SECURITY_AUDIT || echo codex)"
+	else
+		echo "security-audit: ai_engine.sh could not be loaded; running codex" >&2
+	fi
+else
+	echo "security-audit: ai_engine.sh not found in the support tree; running codex" >&2
+fi
+[ "${SECURITY_AUDIT_ENGINE}" = "claude" ] || SECURITY_AUDIT_ENGINE="codex"
+
+# The fallback reason also goes to stdout (the poller sends this script's
+# stderr to a file, so the AI_ENGINE_FALLBACK line never reached the job log).
+security_audit_claude_fallback()
+{
+	local fallback_reason="${1:?fallback reason required}"
+	if [ "${fallback_reason}" = "claude_run" ]; then
+		fallback_reason="${AI_ENGINE_LAST_FALLBACK_REASON:-unknown}"
+	else
+		ai_engine_fallback SECURITY_AUDIT "${fallback_reason}"
+		fallback_reason="${AI_ENGINE_LAST_FALLBACK_REASON:-${fallback_reason}}"
+	fi
+	echo "SECURITY_AUDIT_CLAUDE_FALLBACK reason=${fallback_reason}"
+}
+
+# security_audit_check_claude_reply <reply_file>: the reply check described in
+# security_audit_try_claude. Prints the verdict (ok, extracted ..., or a
+# fallback reason) and returns 0 with the accepted array in CODEX_OUTPUT_FILE,
+# 1 otherwise.
+security_audit_check_claude_reply()
+{
+	local claude_check_result=""
+	if ! claude_check_result="$(python3 - "${1:?reply file required}" "${CODEX_OUTPUT_FILE}" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+try:
+	text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").strip()
+except OSError:
+	text = ""
+if not text:
+	print("missing_output")
+	sys.exit(1)
+
+
+def accept(findings, note: str) -> None:
+	Path(sys.argv[2]).write_text(json.dumps(findings) + "\n", encoding="utf-8")
+	print(note)
+	sys.exit(0)
+
+
+strict_text = text
+fenced = re.fullmatch(r"```json[ \t]*\n(.*)\n```", text, re.S)
+if fenced:
+	strict_text = fenced.group(1).strip()
+try:
+	findings = json.loads(strict_text)
+except (ValueError, RecursionError):
+	findings = None
+else:
+	if not isinstance(findings, list) or not all(isinstance(item, dict) for item in findings):
+		print("schema_mismatch")
+		sys.exit(1)
+	accept(findings, "ok")
+
+# Top-level arrays only: after a parsed array or object the scan resumes past
+# its end, so an array nested in a JSON value that parsed is never a candidate.
+# An empty array never replaces a non-empty one, and it counts only when it
+# starts a line and nothing but a closing fence follows it. Any candidate
+# inside an unclosed value (`Results:\n{"findings":\n[]`) is rejected: earlier
+# failed openers must close first, read both with and without JSON string
+# quoting; bracketed prose such as `Files checked: [a.py, b.py].` closes.
+decoder = json.JSONDecoder()
+opener = re.compile(r"[\[{]")
+
+
+def next_open(start: int) -> int:
+	match = opener.search(text, start)
+	return match.start() if match else -1
+
+
+def closes_before(start: int, stop: int) -> bool:
+	for quoted in (False, True):
+		bracket_stack = []
+		in_string = escaped = False
+		for ch in text[start:stop]:
+			if quoted and in_string:
+				if escaped:
+					escaped = False
+				elif ch == "\\":
+					escaped = True
+				elif ch == '"':
+					in_string = False
+			elif quoted and ch == '"':
+				in_string = True
+			elif ch in "[{":
+				bracket_stack.append(ch)
+			elif ch in "]}":
+				if not bracket_stack or bracket_stack[-1] != (
+					"[" if ch == "]" else "{"
+				):
+					return False
+				bracket_stack.pop()
+				if not bracket_stack:
+					break
+		else:
+			return False
+	return True
+
+
+candidate = None
+failed_opens = []
+position = next_open(0)
+while position != -1:
+	try:
+		value, end = decoder.raw_decode(text, position)
+	except (ValueError, RecursionError):
+		failed_opens.append(position)
+		position = next_open(position + 1)
+		continue
+	if (
+		isinstance(value, list)
+		and all(isinstance(item, dict) and "finding_id" in item for item in value)
+		and all(closes_before(failed, position) for failed in failed_opens)
+	):
+		if value:
+			candidate = (value, position, end)
+		elif (
+			candidate is None
+			and re.search(r"(?:\A|\n)[ \t]*\Z", text[:position])
+			and re.fullmatch(r"\s*(```)?\s*", text[end:])
+		):
+			candidate = (value, position, end)
+	position = next_open(end)
+if candidate is None:
+	print("malformed_output")
+	sys.exit(1)
+value, start, end = candidate
+accept(value, f"extracted items={len(value)} leading_chars={start} trailing_chars={len(text) - end}")
+PY
+)"; then
+		printf '%s\n' "${claude_check_result:-malformed_output}"
+		return 1
+	fi
+	printf '%s\n' "${claude_check_result}"
+}
+
+# security_audit_repair_claude_reply <include_paths>: one repair turn for a
+# reply rejected as malformed_output, that is text around the JSON array (run
+# 40333816067 replied "[]" and then a summary despite the prompt and §16 of
+# unattended_system_instructions.md). It resumes the audit's own Claude
+# session with a request for the array alone, so the answer comes from the
+# audit already done, and checks the new reply with the same strict check.
+# The session id comes from the successful run's transcript, and the repair
+# runs only when that session is in the job's session store: claude_run starts
+# a new session for an id it cannot find, and a new session that never
+# audited anything could answer "[]". Returns 0 with the accepted array in
+# CODEX_OUTPUT_FILE and the check verdict in security_audit_repair_verdict;
+# otherwise returns 1 and the caller falls back as malformed_output, as before,
+# or 2 when claude_run itself fell back (75, 76, 80) and the caller records
+# that reason (AI_ENGINE_LAST_FALLBACK_REASON) instead. A repair claude_run that
+# fails writes no fallback record (AI_ENGINE_FALLBACK_RECORDS_FILE=/dev/null):
+# the caller's malformed_output fallback is the one the report step counts.
+# Log lines go to stdout as SECURITY_AUDIT_CLAUDE_REPAIR outcome= reason=.
+security_audit_repair_claude_reply()
+{
+	local repair_include="${1:-}" repair_session_id="" repair_rc=0 repair_check_result=""
+	security_audit_repair_verdict=""
+	local repair_prompt_file="${SECURITY_AUDIT_RUNTIME_DIR}/claude-repair-prompt.txt"
+	local repair_output_file="${SECURITY_AUDIT_RUNTIME_DIR}/claude-repair-output.txt"
+	repair_session_id="$(python3 - "${AI_ENGINE_LAST_RUN_DIR:-}/successful-transcript.jsonl" <<'PY' 2>/dev/null || true
+import json
+import re
+import sys
+
+try:
+	with open(sys.argv[1], encoding="utf-8", errors="replace") as handle:
+		for line in handle:
+			try:
+				event = json.loads(line)
+			except ValueError:
+				continue
+			if isinstance(event, dict) and event.get("type") == "system" and event.get("subtype") == "init":
+				session_id = event.get("session_id")
+				if isinstance(session_id, str) and re.fullmatch(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", session_id):
+					print(session_id)
+				break
+except OSError:
+	pass
+PY
+)"
+	if [ -z "${repair_session_id}" ]; then
+		echo "SECURITY_AUDIT_CLAUDE_REPAIR outcome=skipped reason=no_session_id"
+		return 1
+	fi
+	if ! compgen -G "$(ai_engine_claude_home)/projects/*/${repair_session_id}.jsonl" >/dev/null; then
+		echo "SECURITY_AUDIT_CLAUDE_REPAIR outcome=skipped reason=session_not_stored"
+		return 1
+	fi
+	if ! cat > "${repair_prompt_file}" <<'REPAIR'
+Your last reply could not be used: the script that reads it needs one JSON array and nothing else, and your reply had text before or after the array.
+
+Reply again with only that JSON array. Put no words, headings, summary or code fence before or after it. Include every finding your audit supports, each with exactly the fields the output contract lists. If your audit found no finding, reply with [] alone. Do not start a new audit.
+
+If your audit did not finish, or did not cover every file in scope, do not reply []: say so in plain words instead, and the audit will be treated as failed.
+REPAIR
+	then
+		echo "SECURITY_AUDIT_CLAUDE_REPAIR outcome=skipped reason=prompt_write_failed"
+		return 1
+	fi
+	rm -f -- "${repair_output_file}"
+	AI_ENGINE_FALLBACK_RECORDS_FILE=/dev/null \
+		AI_ENGINE_MODEL_HINT="" AI_ENGINE_EFFORT_HINT="" AI_ENGINE_READ_ONLY="true" \
+		AI_ENGINE_INCLUDE_PATHS="${repair_include}" \
+		claude_run SECURITY_AUDIT "${repair_prompt_file}" "${repair_output_file}" "${PWD}" "${repair_session_id}" || repair_rc=$?
+	if [ "${repair_rc}" -ne 0 ]; then
+		echo "SECURITY_AUDIT_CLAUDE_REPAIR outcome=failed reason=claude_run_rc_${repair_rc}"
+		# 75, 76 and 80 are claude_run's own fallback results (a capacity wait,
+		# a refused or a codex fallback): return 2 so the caller records the
+		# engine's reason instead of malformed_output (issue #7370).
+		case "${repair_rc}" in
+			75|76|80) return 2 ;;
+		esac
+		return 1
+	fi
+	if ! repair_check_result="$(security_audit_check_claude_reply "${repair_output_file}")"; then
+		echo "SECURITY_AUDIT_CLAUDE_REPAIR outcome=rejected reason=${repair_check_result:-malformed_output}"
+		security_audit_log_rejected_claude_reply "${repair_check_result:-malformed_output}" "${repair_output_file}" ""
+		return 1
+	fi
+	echo "SECURITY_AUDIT_CLAUDE_REPAIR outcome=accepted reason=${repair_check_result%% *}"
+	security_audit_repair_verdict="${repair_check_result}"
+}
+
+# Returns 0 with the findings array in CODEX_OUTPUT_FILE (the file the
+# post-filter reads), 1 after logging a fallback that may run codex, 2
+# after logging a refused fallback (AI_ENGINE_FALLBACK_EXIT=76): the audit
+# then fails closed instead of running codex, or 3 on a Claude capacity wait
+# (AI_ENGINE_FALLBACK_EXIT=80, issue #7370): the audit exits 80 without codex.
+security_audit_try_claude()
+{
+	local claude_rc=0 claude_include="" claude_check_result="" claude_check_reason="" claude_repair_rc=1
+	if [ "${CLAUDE_POOL_REASON:-}" = "all_gated" ]; then
+		security_audit_claude_fallback all_gated
+		[ "${AI_ENGINE_FALLBACK_EXIT:-75}" -eq 80 ] && return 3
+		[ "${AI_ENGINE_FALLBACK_EXIT:-75}" -eq 76 ] && return 2
+		return 1
+	fi
+	if [ "${OVERSIZED_SCOPED_COUNT}" -gt 0 ]; then
+		claude_include="${OVERSIZED_EXPORT_DIR}"
+	fi
+	AI_ENGINE_LAST_FALLBACK_REASON=""
+	AI_ENGINE_MODEL_HINT="" AI_ENGINE_EFFORT_HINT="" AI_ENGINE_READ_ONLY="true" \
+		AI_ENGINE_INCLUDE_PATHS="${claude_include}" \
+		claude_run SECURITY_AUDIT "${RENDERED_PROMPT_FILE}" "${CLAUDE_AUDIT_OUTPUT_FILE}" "${PWD}" || claude_rc=$?
+	case "${claude_rc}" in
+		0) ;;
+		# claude_run already logged AI_ENGINE_FALLBACK with its reason; 76
+		# also logged AI_ENGINE_FALLBACK_REFUSED.
+		75) security_audit_claude_fallback claude_run; return 1 ;;
+		76) security_audit_claude_fallback claude_run; return 2 ;;
+		80) security_audit_claude_fallback claude_run; return 3 ;;
+		124) security_audit_claude_fallback timeout ;;
+		*) security_audit_claude_fallback "crashed_rc_${claude_rc}" ;;
+	esac
+	if [ "${claude_rc}" -ne 0 ]; then
+		[ "${AI_ENGINE_FALLBACK_EXIT:-75}" -eq 76 ] && return 2
+		return 1
+	fi
+	# Same top-level contract the post-filter enforces on codex output: a JSON
+	# array. A reply that is one JSON array, or one outer ```json fence around
+	# it, is used as is. Otherwise the last top-level JSON array in the reply
+	# whose items are all objects with a finding_id is used (orchestrator run
+	# 38113094454 and others fell back to codex with malformed_output, so a
+	# sentence around the array cost the Claude result). An empty array
+	# counts there only when nothing but a closing fence follows it, so a
+	# "[]" inside prose or a cut-off reply is never read as a clean audit.
+	# The post-filter's field checks apply to whatever is accepted. Anything
+	# else falls back.
+	if ! claude_check_result="$(security_audit_check_claude_reply "${CLAUDE_AUDIT_OUTPUT_FILE}")"; then
+		claude_check_reason="${claude_check_result:-malformed_output}"
+		security_audit_log_rejected_claude_reply "${claude_check_reason}"
+		# Text around the array gets one repair turn before the reply falls back.
+		if [ "${claude_check_reason}" = "malformed_output" ]; then
+			claude_repair_rc=0
+			security_audit_repair_claude_reply "${claude_include}" || claude_repair_rc=$?
+		fi
+		if [ "${claude_repair_rc}" -eq 0 ]; then
+			claude_check_result="${security_audit_repair_verdict}"
+		else
+			if [ "${claude_repair_rc}" -eq 2 ]; then
+				# The repair's claude_run fell back on its own (a capacity wait,
+				# for example): record that reason, so a wait still exits 80.
+				security_audit_claude_fallback "${AI_ENGINE_LAST_FALLBACK_REASON:-${claude_check_reason}}"
+			else
+				security_audit_claude_fallback "${claude_check_reason}"
+			fi
+			[ "${AI_ENGINE_FALLBACK_EXIT:-75}" -eq 80 ] && return 3
+			[ "${AI_ENGINE_FALLBACK_EXIT:-75}" -eq 76 ] && return 2
+			return 1
+		fi
+	fi
+	case "${claude_check_result}" in
+		extracted\ *) echo "SECURITY_AUDIT_CLAUDE_EXTRACTED ${claude_check_result#extracted }" ;;
+	esac
+	return 0
+}
+
+# A rejected reply is logged to stdout as one line from its start and one from
+# its end (printable ASCII, whitespace collapsed, credentials redacted as in
+# security_audit_sanitize_log_value), so the next failure shows its shape.
+# SECURITY_AUDIT_CLAUDE_REJECTED_OUT (default unset) keeps the first 64 KiB of
+# the reply there. Diagnostics only: any error here is ignored.
+# Usage: security_audit_log_rejected_claude_reply <reason> [reply_file]
+# [kept_path]; the reply defaults to CLAUDE_AUDIT_OUTPUT_FILE and the kept
+# path to SECURITY_AUDIT_CLAUDE_REJECTED_OUT (an empty kept_path keeps none).
+security_audit_log_rejected_claude_reply()
+{
+	python3 - "${2:-${CLAUDE_AUDIT_OUTPUT_FILE}}" "${1:-unknown}" "${3-${SECURITY_AUDIT_CLAUDE_REJECTED_OUT:-}}" <<'PY' || true
+import re
+import sys
+from pathlib import Path
+
+reply_path, reason, kept_path = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+	raw = Path(reply_path).read_bytes()
+except OSError:
+	raw = b""
+kept = "none"
+if kept_path and raw:
+	try:
+		Path(kept_path).parent.mkdir(parents=True, exist_ok=True)
+		Path(kept_path).write_bytes(raw[:65536])
+		kept = kept_path
+	except OSError:
+		kept = "write_failed"
+excerpt_source = raw.decode("utf-8", errors="replace")
+excerpt_source = re.sub(r"\s+", " ", excerpt_source)
+excerpt_source = "".join(ch for ch in excerpt_source if " " <= ch <= "~")
+excerpt_source = re.sub(r" {2,}", " ", excerpt_source).strip()
+
+
+def redact(value: str) -> str:
+	value = re.sub(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@", r"\1[redacted]@", value)
+	value = re.sub(r"([Aa]uthorization:\s*)(([Bb]earer|[Bb]asic|[Tt]oken)\s+)?\S+", r"\1[redacted]", value)
+	value = re.sub(r"([Bb]earer\s+)\S+", r"\1[redacted]", value)
+	value = re.sub(r"(github_pat_|gh[pousr]_)[A-Za-z0-9_]+", r"\1[redacted]", value)
+	value = re.sub(r"(sk-or-)[A-Za-z0-9_-]+", r"\1[redacted]", value)
+	# Further key formats an audit reply may quote from the audited code.
+	value = re.sub(r"(sk-)[A-Za-z0-9_-]{20,}", r"\1[redacted]", value)
+	value = re.sub(r"\b(AKIA|ASIA)[0-9A-Z]{16}\b", r"\1[redacted]", value)
+	value = re.sub(r"\b(AIza)[0-9A-Za-z_-]{35}", r"\1[redacted]", value)
+	value = re.sub(r"\b(xox[abposr]-)[A-Za-z0-9-]+", r"\1[redacted]", value)
+	value = re.sub(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)", "[redacted private key]", value)
+	return value
+
+
+# Redact before slicing, so a token cut by the 300-character boundary is
+# still recognised by its prefix.
+redacted_source = redact(excerpt_source)
+print(f"SECURITY_AUDIT_CLAUDE_REJECTED reason={reason} bytes={len(raw)} chars={len(excerpt_source)} kept={kept}")
+if redacted_source:
+	print("security-audit: rejected Claude reply starts: " + redacted_source[:300])
+if len(redacted_source) > 300:
+	print("security-audit: rejected Claude reply ends: " + redacted_source[-300:])
+PY
+}
+
+
+SECURITY_AUDIT_CLAUDE_RC=1
+if [ "${SECURITY_AUDIT_ENGINE}" = "claude" ]; then
+	security_audit_try_claude && SECURITY_AUDIT_CLAUDE_RC=0 || SECURITY_AUDIT_CLAUDE_RC=$?
+fi
+if [ "${SECURITY_AUDIT_CLAUDE_RC}" -eq 3 ]; then
+	# Claude capacity wait (issue #7370): no codex, no tracker write, no
+	# last-SHA update. Callers treat exit 80 as "retry later".
+	echo "security-audit: engine=claude outcome=deferred reason=claude_capacity_wait"
+	exit 80
+fi
+if [ "${SECURITY_AUDIT_CLAUDE_RC}" -eq 2 ]; then
+	# A refused (non-capacity) Claude fallback never reruns on codex (D1).
+	security_audit_emit_failure "claude-engine" "${CLAUDE_AUDIT_OUTPUT_FILE}" "Claude engine unavailable for a non-capacity reason (AI_ENGINE_FALLBACK_REFUSED); codex fallback refused"
+	exit 1
+fi
+if [ "${SECURITY_AUDIT_CLAUDE_RC}" -eq 0 ]; then
+	echo "security-audit: engine=claude"
+else
+	security_audit_require_file "codex-preflight" "${RENDERED_PROMPT_FILE}"
+	SECURITY_AUDIT_CODEX_HOME="${CODEX_HOME:-${HOME:-}/.codex}"
+	security_audit_require_directory "codex-preflight" "${SECURITY_AUDIT_CODEX_HOME}"
+	security_audit_require_file "codex-preflight" "${SECURITY_AUDIT_CODEX_HOME}/config.toml"
+	if ! command -v codex >/dev/null 2>&1; then
+		security_audit_emit_failure "codex-preflight" "codex" "required command is unavailable"
+		exit 1
+	fi
+	security_audit_require_writable_destination "codex-preflight" "${CODEX_OUTPUT_FILE}"
+	security_audit_require_writable_destination "codex-preflight" "${CODEX_ERROR_FILE}"
+
+	# The audited code is untrusted input, so the agent runs in the
+	# credential-free, network-isolated container (read-only snapshot of the
+	# audit checkout), launched from the trusted support checkout.
+	audit_isolated_args=()
+	if [ "${OVERSIZED_SCOPED_COUNT}" -gt 0 ]; then
+		audit_isolated_args=(--include "${OVERSIZED_EXPORT_DIR}")
+	fi
+	# The oversized export hid CLAUDE.md when hide_claude_md is on and the
+	# prompt reports it as not inspected; hide it from the codex snapshot
+	# too, so both engines see the same view and the coverage note holds.
+	if [ "${OVERSIZED_EXPORT_HIDE}" = "CLAUDE.md" ]; then
+		audit_isolated_args+=(--hide-claude-md)
+	fi
+	if bash "${SECURITY_AUDIT_SUPPORT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/scripts/codex_isolated_exec.sh" run --mode read-only ${audit_isolated_args[@]+"${audit_isolated_args[@]}"} -- \
+			--ask-for-approval never \
+			-c model_verbosity=low \
+			-c include_apply_patch_tool=true \
+			exec \
+			--skip-git-repo-check \
+			--model "${WORKFLOW_EDITOR_MODEL:-openai/gpt-6-sol}" \
+			--sandbox read-only < "${RENDERED_PROMPT_FILE}" \
+			> "${CODEX_OUTPUT_FILE}" 2> "${CODEX_ERROR_FILE}"; then
+		:
+	else
+		CODEX_EXECUTION_STATUS=$?
+		CODEX_TAIL_FILE="${SECURITY_AUDIT_RUNTIME_DIR}/codex-stderr-tail.txt"
+		CODEX_PROVIDER_CLASS="$(security_audit_emit_codex_stderr_tail "${CODEX_ERROR_FILE}" "${RENDERED_PROMPT_FILE}" "${CODEX_TAIL_FILE}")" || CODEX_PROVIDER_CLASS="unknown"
+		security_audit_emit_path_diagnostic "${CODEX_TAIL_FILE}" "sanitized-tail"
+		security_audit_emit_failure "codex-execution" "codex" "Codex exited nonzero" "${CODEX_PROVIDER_CLASS}"
+		exit "${CODEX_EXECUTION_STATUS}"
+	fi
+	echo "security-audit: engine=codex"
+fi
+
+# security_audit_resolve_upstream_managed_paths — write the upstream-managed
+# path digests (a JSON object: consumer path -> sha256 values a sync writes) to
+# UPSTREAM_MANAGED_DIGESTS_FILE and log one SECURITY_AUDIT_UPSTREAM_MANAGED
+# outcome line. Reads local git objects only: no GitHub API calls (CLAUDE.md
+# §15). Fails open: any problem leaves the file empty, so every finding is
+# filed exactly as before.
+security_audit_resolve_upstream_managed_paths()
+{
+	local skip_reason="" skip_detail="" candidate_dir="" source_dir="" pattern_count=0 untrusted_seen="false" candidate_origin="" override_invalid="false"
+	: > "${UPSTREAM_MANAGED_DIGESTS_FILE}"
+	if ! security_audit_flag_enabled "${SECURITY_AUDIT_UPSTREAM_MANAGED_FILTER}"; then
+		skip_reason="disabled"
+	elif [ -z "${GITHUB_REPOSITORY:-}" ]; then
+		skip_reason="repository_unknown"
+	elif [ "${GITHUB_REPOSITORY}" = "${SECURITY_AUDIT_UPSTREAM_REPOSITORY}" ]; then
+		skip_reason="upstream_repository"
+	else
+		for candidate_dir in \
+			"${SECURITY_AUDIT_UPSTREAM_SOURCE_DIR}" \
+			"${SECURITY_AUDIT_SUPPORT_DIR}/.codex-workflow-src" \
+			"${SECURITY_AUDIT_SUPPORT_DIR}"; do
+			[ -n "${candidate_dir}" ] || continue
+			if [ -d "${candidate_dir}/workflow-templates" ] \
+				&& [ -f "${candidate_dir}/scripts/build_sync_manifest.py" ] \
+				&& env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "${candidate_dir}" rev-parse --verify --quiet 'HEAD^{commit}' >/dev/null 2>&1; then
+				# The builder runs as the caller (its environment is reduced to
+				# PATH and HOME below, but the user's files stay readable), so
+				# only an explicit SECURITY_AUDIT_UPSTREAM_SOURCE_DIR or a checkout whose
+				# origin is the upstream repository is executed. A consumer's own
+				# checkout (the poller's working directory) is never trusted.
+				candidate_origin="$(env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE git -C "${candidate_dir}" remote get-url origin 2>/dev/null || true)"
+				if [ "${candidate_dir}" = "${SECURITY_AUDIT_UPSTREAM_SOURCE_DIR}" ]; then
+					source_dir="${candidate_dir}"
+					break
+				fi
+				case "${candidate_origin}" in
+					"https://github.com/${SECURITY_AUDIT_UPSTREAM_REPOSITORY}"|"https://github.com/${SECURITY_AUDIT_UPSTREAM_REPOSITORY}.git"|"git@github.com:${SECURITY_AUDIT_UPSTREAM_REPOSITORY}"|"git@github.com:${SECURITY_AUDIT_UPSTREAM_REPOSITORY}.git")
+						source_dir="${candidate_dir}"
+						break
+						;;
+				esac
+				untrusted_seen="true"
+			elif [ "${candidate_dir}" = "${SECURITY_AUDIT_UPSTREAM_SOURCE_DIR}" ]; then
+				# An explicit override that is not an upstream checkout is
+				# reported as such instead of falling through to another tree.
+				override_invalid="true"
+				break
+			fi
+		done
+		if [ "${override_invalid}" = "true" ]; then
+			skip_reason="upstream_source_dir_invalid"
+		elif [ -z "${source_dir}" ] && [ "${untrusted_seen}" = "true" ]; then
+			skip_reason="upstream_tree_untrusted"
+		elif [ -z "${source_dir}" ]; then
+			skip_reason="upstream_tree_missing"
+		elif ! env -i PATH="${PATH}" HOME="${HOME:-/tmp}" PYTHONDONTWRITEBYTECODE=1 \
+			python3 -I -B "${source_dir}/scripts/build_sync_manifest.py" managed-digests \
+			--repo-root "${source_dir}" --commit HEAD \
+			> "${UPSTREAM_MANAGED_DIGESTS_FILE}" 2> "${UPSTREAM_MANAGED_ERROR_FILE}"; then
+			: > "${UPSTREAM_MANAGED_DIGESTS_FILE}"
+			skip_reason="manifest_failed"
+			skip_detail="$(tail -n 1 "${UPSTREAM_MANAGED_ERROR_FILE}" 2>/dev/null | tr -c 'A-Za-z0-9._:/@+=-' '_' | head -c 200 || true)"
+		else
+			pattern_count="$(env -i PATH="${PATH}" HOME="${HOME:-/tmp}" PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c 'import json, sys; data = json.load(open(sys.argv[1], encoding="utf-8")); print(len(data) if isinstance(data, dict) else 0)' "${UPSTREAM_MANAGED_DIGESTS_FILE}" 2>/dev/null || true)"
+			[[ "${pattern_count}" =~ ^[0-9]+$ ]] || pattern_count=0
+			[ "${pattern_count}" -gt 0 ] || skip_reason="empty_list"
+		fi
+	fi
+	if [ -n "${skip_reason}" ]; then
+		echo "SECURITY_AUDIT_UPSTREAM_MANAGED outcome=skipped reason=${skip_reason}${skip_detail:+ detail=${skip_detail}}"
+	else
+		echo "SECURITY_AUDIT_UPSTREAM_MANAGED outcome=enabled patterns=${pattern_count}"
+	fi
+	return 0
+}
+
+security_audit_resolve_upstream_managed_paths
+
+python3 - \
+	"${REPO_ROOT}" \
+	"${CODEX_OUTPUT_FILE}" \
+	"${SECURITY_AUDIT_FP_EXCLUSIONS}" \
+	"${SECURITY_AUDIT_CONFIDENCE_GATE}" \
+	"${FILTERED_FINDINGS_FILE}" \
+	"${FILTER_SUMMARY_FILE}" \
+	"${AUDIT_SCOPE_MODE}" \
+	"${CHANGED_FILES_FILE}" \
+	"${WAIVED_FINDINGS_NORMALIZED_FILE}" \
+	"${SECURITY_AUDIT_WAIVER_LINE_WINDOW}" \
+	"${UPSTREAM_MANAGED_DIGESTS_FILE}" <<'PY'
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+import sys
+from pathlib import Path, PurePosixPath
+
+repo_root = Path(sys.argv[1]).resolve()
+codex_output_path = Path(sys.argv[2])
+exclusions_path = Path(sys.argv[3])
+confidence_gate = int(sys.argv[4])
+filtered_findings_path = Path(sys.argv[5])
+summary_path = Path(sys.argv[6])
+audit_scope_mode = sys.argv[7]
+changed_files_path = Path(sys.argv[8])
+waived_findings_path = Path(sys.argv[9])
+# Still passed (and validated by the caller) to keep the argument order
+# stable; it no longer controls waiver suppression.
+_unused_waiver_line_window = int(sys.argv[10])
+upstream_managed_digests_path = Path(sys.argv[11]) if len(sys.argv) > 11 and sys.argv[11] else None
+
+# Incremental scope is enforced here deterministically: even if the model
+# ignores the prompt's changed-file restriction, out-of-scope findings never
+# reach the tracker or follow-up issues.
+changed_files: set[str] = set()
+if audit_scope_mode == "incremental":
+	try:
+		changed_files = {
+			line.strip()
+			for line in changed_files_path.read_text(encoding="utf-8").splitlines()
+			if line.strip()
+		}
+	except OSError as exc:
+		raise SystemExit(f"unable to read changed-files list: {exc}")
+
+severity_rank = {
+	"critical": 0,
+	"high": 1,
+	"medium": 2,
+	"low": 3,
+}
+allowed_exact_fields = {"finding_id", "owasp_or_stride_category", "severity", "file"}
+allowed_contains_fields = {"exploit_scenario", "recommendation"}
+
+
+# The error text normalize_finding returns for a cited file that is not in the
+# audited checkout; the drop log below keys its reason token on it.
+MISSING_FILE_ERROR = "file does not exist in checkout"
+
+
+def fail(message: str) -> None:
+	raise SystemExit(message)
+
+
+def log_safe_token(value: object) -> str:
+	"""A model-supplied value made safe for one key=value log field."""
+	token = re.sub(r"[^A-Za-z0-9._:/@+-]", "_", "" if value is None else str(value))[:120]
+	return token or "?"
+
+
+def load_upstream_managed_digests(path: Path | None) -> dict[str, frozenset[str]]:
+	"""Read the upstream-managed path digests; any problem means no filtering."""
+	if path is None:
+		return {}
+	try:
+		data = json.loads(path.read_text(encoding="utf-8"))
+	except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+		return {}
+	if not isinstance(data, dict):
+		return {}
+	digests: dict[str, frozenset[str]] = {}
+	for managed_path, values in data.items():
+		if not isinstance(managed_path, str) or not isinstance(values, list):
+			continue
+		valid = frozenset(value for value in values if isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value))
+		if valid:
+			digests[managed_path] = valid
+	return digests
+
+
+def load_json(path: Path, *, label: str):
+	try:
+		return json.loads(path.read_text(encoding="utf-8"))
+	except OSError as exc:
+		fail(f"unable to read {label}: {exc}")
+	except json.JSONDecodeError as exc:
+		fail(f"invalid JSON in {label}: {exc}")
+
+
+def normalize_exclusions(raw_exclusions: object) -> list[dict[str, object]]:
+	if not isinstance(raw_exclusions, dict):
+		fail("security-audit exclusions must be a JSON object")
+	if raw_exclusions.get("schema_version") != "security_audit_fp_exclusions.v1":
+		fail("unsupported security-audit exclusions schema_version")
+	rules = raw_exclusions.get("rules")
+	if not isinstance(rules, list):
+		fail("security-audit exclusions rules must be a JSON array")
+	normalized_rules: list[dict[str, object]] = []
+	for rule in rules:
+		if not isinstance(rule, dict):
+			fail("each security-audit exclusion rule must be an object")
+		rule_id = str(rule.get("id") or "").strip()
+		reason = str(rule.get("reason") or "").strip()
+		fields = rule.get("fields") or {}
+		contains = rule.get("contains") or {}
+		if not rule_id or not reason:
+			fail("security-audit exclusion rules require non-empty id and reason")
+		if not isinstance(fields, dict) or not isinstance(contains, dict):
+			fail(f"security-audit exclusion rule {rule_id} must use object fields/contains matchers")
+		normalized_fields: dict[str, str] = {}
+		for key, value in fields.items():
+			if key not in allowed_exact_fields:
+				fail(f"security-audit exclusion rule {rule_id} uses unsupported exact field {key}")
+			if not isinstance(value, str) or not value.strip():
+				fail(f"security-audit exclusion rule {rule_id} must use non-empty string exact matches")
+			normalized_fields[key] = value.strip()
+		normalized_contains: dict[str, list[str]] = {}
+		for key, value in contains.items():
+			if key not in allowed_contains_fields:
+				fail(f"security-audit exclusion rule {rule_id} uses unsupported contains field {key}")
+			if isinstance(value, str):
+				values = [value]
+			elif isinstance(value, list):
+				values = value
+			else:
+				fail(f"security-audit exclusion rule {rule_id} must use string or string-list contains values")
+			needles: list[str] = []
+			for needle in values:
+				if not isinstance(needle, str) or not needle.strip():
+					fail(f"security-audit exclusion rule {rule_id} contains entries must be non-empty strings")
+				needles.append(needle.strip().lower())
+			normalized_contains[key] = needles
+		normalized_rules.append(
+			{
+				"id": rule_id,
+				"reason": reason,
+				"fields": normalized_fields,
+				"contains": normalized_contains,
+			}
+		)
+	return normalized_rules
+
+
+def normalize_finding(raw_finding: object) -> tuple[dict[str, object] | None, str | None]:
+	if not isinstance(raw_finding, dict):
+		return None, "finding must be an object"
+	finding_id = str(raw_finding.get("finding_id") or "").strip()
+	category = str(raw_finding.get("owasp_or_stride_category") or "").strip()
+	severity = str(raw_finding.get("severity") or "").strip().lower()
+	exploit_scenario = str(raw_finding.get("exploit_scenario") or "").strip()
+	recommendation = str(raw_finding.get("recommendation") or "").strip()
+	file_value = str(raw_finding.get("file") or "").strip()
+	confidence = raw_finding.get("confidence")
+	line = raw_finding.get("line")
+
+	if not finding_id:
+		return None, "finding_id is required"
+	if not category:
+		return None, f"{finding_id}: owasp_or_stride_category is required"
+	if severity not in severity_rank:
+		return None, f"{finding_id}: severity must be one of critical/high/medium/low"
+	if isinstance(confidence, bool) or not isinstance(confidence, int) or confidence < 1 or confidence > 10:
+		return None, f"{finding_id}: confidence must be an integer from 1 to 10"
+	if isinstance(line, bool) or not isinstance(line, int) or line < 1:
+		return None, f"{finding_id}: line must be a positive integer"
+	if not exploit_scenario:
+		return None, f"{finding_id}: exploit_scenario is required"
+	if not recommendation:
+		return None, f"{finding_id}: recommendation is required"
+	if not file_value:
+		return None, f"{finding_id}: file is required"
+
+	try:
+		candidate_path = PurePosixPath(file_value)
+	except Exception as exc:
+		return None, f"{finding_id}: invalid file path: {exc}"
+
+	if candidate_path.is_absolute() or ".." in candidate_path.parts:
+		return None, f"{finding_id}: file must be a repository-relative path"
+
+	normalized_file = candidate_path.as_posix()
+	if normalized_file.startswith("./"):
+		normalized_file = normalized_file[2:]
+	if not normalized_file or normalized_file == ".":
+		return None, f"{finding_id}: file must resolve to a repository file"
+
+	resolved_path = (repo_root / normalized_file).resolve()
+	try:
+		resolved_path.relative_to(repo_root)
+	except ValueError:
+		return None, f"{finding_id}: file escapes repository root"
+	if not resolved_path.is_file():
+		return None, f"{finding_id}: {MISSING_FILE_ERROR}"
+
+	try:
+		line_count = len(resolved_path.read_text(encoding="utf-8", errors="replace").splitlines())
+	except OSError as exc:
+		return None, f"{finding_id}: unable to read file: {exc}"
+	if line_count < 1:
+		return None, f"{finding_id}: file is empty and cannot back a concrete line reference"
+	if line > line_count:
+		return None, f"{finding_id}: line {line} exceeds file length {line_count}"
+
+	return (
+		{
+			"finding_id": finding_id,
+			"owasp_or_stride_category": category,
+			"severity": severity,
+			"confidence": confidence,
+			"file": normalized_file,
+			"line": line,
+			"exploit_scenario": exploit_scenario,
+			"recommendation": recommendation,
+		},
+		None,
+	)
+
+
+def matching_exclusion_rule(finding: dict[str, object], rules: list[dict[str, object]]) -> str | None:
+	for rule in rules:
+		rule_fields = rule["fields"]
+		rule_contains = rule["contains"]
+		matched = True
+		for field_name, expected_value in rule_fields.items():
+			if str(finding.get(field_name) or "") != str(expected_value):
+				matched = False
+				break
+		if not matched:
+			continue
+		for field_name, needles in rule_contains.items():
+			haystack = str(finding.get(field_name) or "").lower()
+			if not all(needle in haystack for needle in needles):
+				matched = False
+				break
+		if matched:
+			return str(rule["id"])
+	return None
+
+
+upstream_managed_digests = load_upstream_managed_digests(upstream_managed_digests_path)
+
+# Pinned release SHAs in a rendered wrapper (scripts/workflow_wrapper_refs.py):
+# reusable-workflow `uses:` refs and support-checkout `ref:` lines. A consumer
+# wrapper is also compared with its pins replaced by the 40-zero SHA that
+# build_sync_manifest.py managed-digests renders a second digest with, so an
+# unmodified wrapper from an older release whose body matches the current
+# template is still recognised as upstream-owned.
+WRAPPER_PIN_PATTERNS = (
+	re.compile(rb"(shubhodeep1/coding-workflows/\.github/workflows/[A-Za-z0-9_.-]+\.yml@)[0-9a-f]{40}( # stable)"),
+	re.compile(rb"(ref: )[0-9a-f]{40}( # stable)"),
+)
+PIN_NORMALIZED_SHA = b"0" * 40
+
+
+def normalize_wrapper_pins(data: bytes) -> bytes:
+	for pattern in WRAPPER_PIN_PATTERNS:
+		data = pattern.sub(lambda match: match.group(1) + PIN_NORMALIZED_SHA + match.group(2), data)
+	return data
+
+
+def upstream_managed_status(file_path: str) -> str:
+	"""`unmanaged`, `unmodified` (the release's own bytes) or `modified`.
+
+	Only `unmodified` keeps a finding out of the consumer's queue: a consumer
+	change to a synced file is the consumer's own code until the next sync.
+	"""
+	expected = upstream_managed_digests.get(file_path)
+	if not expected:
+		return "unmanaged"
+	candidate = repo_root / file_path
+	try:
+		if candidate.is_symlink() or not candidate.is_file():
+			return "modified"
+		resolved = candidate.resolve()
+		resolved.relative_to(repo_root)
+		# repo_root is already resolved, so any symlinked parent directory
+		# makes the resolved path differ from the literal synced path.
+		if resolved != candidate:
+			return "modified"
+		data = resolved.read_bytes()
+	except (OSError, ValueError):
+		return "modified"
+	if hashlib.sha256(data).hexdigest() in expected:
+		return "unmodified"
+	if file_path.startswith(".github/workflows/"):
+		normalized = normalize_wrapper_pins(data)
+		if normalized != data and hashlib.sha256(normalized).hexdigest() in expected:
+			return "unmodified"
+	return "modified"
+
+
+raw_findings = load_json(codex_output_path, label="Codex output")
+exclusion_rules = normalize_exclusions(load_json(exclusions_path, label="security-audit exclusions"))
+waived_findings_input = load_json(waived_findings_path, label="waived findings") if waived_findings_path.is_file() else []
+if not isinstance(waived_findings_input, list):
+	fail("waived findings must be a JSON array")
+
+
+def matching_waiver(finding: dict[str, object]) -> str | None:
+	"""Return the waived finding_id this finding re-reports, if any.
+
+	A waiver suppresses a finding only when its non-empty finding_id exactly
+	matches and every category, severity and exploit scenario the waiver
+	recorded also matches.  There is no proximity match: a finding under a
+	different finding_id is a new finding, even at the waived location.
+	"""
+	finding_id = finding.get("finding_id")
+	if not isinstance(finding_id, str) or not finding_id:
+		return None
+	finding_category = " ".join(str(finding.get("owasp_or_stride_category") or "").lower().split())
+	finding_severity = " ".join(str(finding.get("severity") or "").lower().split())
+	# Same canonical form as the waiver side (raw_scenario above).
+	finding_scenario = " ".join(str(finding.get("exploit_scenario") or "").replace("`", "").split())[:600]
+	for waiver in waived_findings_input:
+		if not isinstance(waiver, dict):
+			continue
+		# Exact match on the raw recorded id only.  The prompt-sanitized
+		# finding_id (backticks dropped, whitespace collapsed) is never an
+		# alias: it would let a waiver for one id suppress a distinct id.
+		waived_id = waiver.get("match_finding_id")
+		if not isinstance(waived_id, str) or not waived_id.strip() or waived_id.strip() != finding_id:
+			continue
+		waived_category = str(waiver.get("match_category") or "")
+		waived_severity = str(waiver.get("match_severity") or "")
+		waived_scenario = str(waiver.get("match_exploit_scenario") or "")
+		if waived_category and waived_category != finding_category:
+			continue
+		if waived_severity and waived_severity != finding_severity:
+			continue
+		if waived_scenario and waived_scenario != finding_scenario:
+			continue
+		return finding_id
+	return None
+
+
+if not isinstance(raw_findings, list):
+	fail("security-audit Codex output must be a JSON array")
+
+kept_findings: list[dict[str, object]] = []
+invalid_findings: list[dict[str, str]] = []
+excluded_findings: list[dict[str, str]] = []
+low_confidence_findings: list[str] = []
+out_of_scope_findings: list[str] = []
+waived_findings: list[dict[str, str]] = []
+upstream_managed_findings: list[dict[str, object]] = []
+seen_ids: set[str] = set()
+
+for raw_finding in raw_findings:
+	normalized_finding, error_message = normalize_finding(raw_finding)
+	if normalized_finding is None:
+		invalid_findings.append({"error": error_message or "invalid finding"})
+		# A finding that cites a file the audited checkout does not have is
+		# dropped here (never filed, never a fix cycle); log it so the drop is
+		# searchable.
+		raw_view = raw_finding if isinstance(raw_finding, dict) else {}
+		dropped_reason = "file_missing" if (error_message or "").endswith(MISSING_FILE_ERROR) else "invalid"
+		print(
+			f"SECURITY_AUDIT_FINDING_DROPPED reason={dropped_reason}"
+			f" finding={log_safe_token(raw_view.get('finding_id'))}"
+			f" file={log_safe_token(raw_view.get('file'))}"
+			f" line={log_safe_token(raw_view.get('line'))}"
+		)
+		continue
+	finding_id = str(normalized_finding["finding_id"])
+	if finding_id in seen_ids:
+		invalid_findings.append({"error": f"{finding_id}: duplicate finding_id"})
+		print(
+			f"SECURITY_AUDIT_FINDING_DROPPED reason=duplicate_finding_id finding={log_safe_token(finding_id)}"
+			f" file={log_safe_token(normalized_finding['file'])} line={normalized_finding['line']}"
+		)
+		continue
+	seen_ids.add(finding_id)
+	if audit_scope_mode == "incremental" and str(normalized_finding["file"]) not in changed_files:
+		out_of_scope_findings.append(finding_id)
+		continue
+	if int(normalized_finding["confidence"]) < confidence_gate:
+		low_confidence_findings.append(finding_id)
+		continue
+	rule_id = matching_exclusion_rule(normalized_finding, exclusion_rules)
+	if rule_id is not None:
+		excluded_findings.append({"finding_id": finding_id, "rule_id": rule_id})
+		continue
+	waived_id = matching_waiver(normalized_finding)
+	if waived_id is not None:
+		waived_findings.append({"finding_id": finding_id, "waived_finding_id": waived_id})
+		continue
+	managed_status = upstream_managed_status(str(normalized_finding["file"]))
+	if managed_status == "modified":
+		print(
+			f"SECURITY_AUDIT_UPSTREAM_MANAGED outcome=filed reason=consumer_modified finding={log_safe_token(finding_id)}"
+			f" file={log_safe_token(normalized_finding['file'])} line={normalized_finding['line']}"
+		)
+	if managed_status == "unmodified":
+		# The release's own bytes, owned by coding-workflows: the next sync
+		# overwrites any consumer fix and consumer pipelines may not edit the
+		# path, so a fix-up issue could never be resolved. Report it instead of
+		# filing it.
+		upstream_managed_findings.append(
+			{
+				"finding_id": finding_id,
+				"owasp_or_stride_category": normalized_finding["owasp_or_stride_category"],
+				"severity": normalized_finding["severity"],
+				"confidence": normalized_finding["confidence"],
+				"file": normalized_finding["file"],
+				"line": normalized_finding["line"],
+				"exploit_scenario": str(normalized_finding["exploit_scenario"])[:600],
+				"recommendation": str(normalized_finding["recommendation"])[:600],
+			}
+		)
+		print(
+			f"SECURITY_AUDIT_UPSTREAM_MANAGED outcome=suppressed finding={log_safe_token(finding_id)}"
+			f" file={log_safe_token(normalized_finding['file'])} line={normalized_finding['line']}"
+			f" severity={normalized_finding['severity']} confidence={normalized_finding['confidence']}"
+		)
+		continue
+	kept_findings.append(normalized_finding)
+
+kept_findings.sort(
+	key=lambda finding: (
+		severity_rank[str(finding["severity"])],
+		-int(finding["confidence"]),
+		str(finding["file"]),
+		int(finding["line"]),
+		str(finding["finding_id"]),
+	)
+)
+
+filtered_findings_path.write_text(
+	json.dumps(kept_findings, ensure_ascii=True, indent=2, sort_keys=True) + "\n",
+	encoding="utf-8",
+)
+summary_path.write_text(
+	json.dumps(
+		{
+			"kept": len(kept_findings),
+			"suppressed_low_confidence": len(low_confidence_findings),
+			"suppressed_excluded": len(excluded_findings),
+			"suppressed_invalid": len(invalid_findings),
+			"suppressed_out_of_scope": len(out_of_scope_findings),
+			"suppressed_waived": len(waived_findings),
+			"suppressed_upstream_managed": len(upstream_managed_findings),
+			"upstream_managed": upstream_managed_findings,
+			"low_confidence_finding_ids": low_confidence_findings,
+			"excluded": excluded_findings,
+			"invalid": invalid_findings,
+			"out_of_scope_finding_ids": out_of_scope_findings,
+			"waived": waived_findings,
+		},
+		ensure_ascii=True,
+		indent=2,
+		sort_keys=True,
+	)
+	+ "\n",
+	encoding="utf-8",
+)
+PY
+
+# Export the upstream-managed findings for the synced-finding sender step
+# (issue #7623). Data only, fail-open: a failure warns and never changes the
+# audit's exit status. Nothing is written when the list is empty.
+python3 -I -B - "${FILTER_SUMMARY_FILE}" "${UPSTREAM_MANAGED_EXPORT_FILE}" <<'PY' || echo "::warning::SECURITY_AUDIT_UPSTREAM_MANAGED outcome=export_failed"
+import json
+import os
+import sys
+import tempfile
+
+summary_path, target = sys.argv[1], sys.argv[2]
+try:
+	with open(summary_path, encoding="utf-8") as handle:
+		summary = json.load(handle)
+	entries = summary.get("upstream_managed") if isinstance(summary, dict) else None
+	if isinstance(entries, list) and entries:
+		parent = os.path.dirname(os.path.abspath(target)) or "."
+		if os.path.islink(target) or os.path.islink(parent) or not os.path.isdir(parent):
+			raise OSError("unsafe export path")
+		fd, tmp = tempfile.mkstemp(prefix=".security-audit-upstream-managed.", dir=parent)
+		try:
+			with os.fdopen(fd, "w", encoding="utf-8") as out:
+				json.dump({"upstream_managed": entries}, out, ensure_ascii=True, sort_keys=True)
+				out.write("\n")
+			os.replace(tmp, target)
+		except BaseException:
+			try:
+				os.unlink(tmp)
+			except OSError:
+				pass
+			raise
+except Exception:
+	print("::warning::SECURITY_AUDIT_UPSTREAM_MANAGED outcome=export_failed")
+PY
+
+# --- Line ownership (plan item 4b, decision D4) -----------------------------
+# Effective only for findings-json audits of an explicit range; otherwise the
+# mode is `off` and the payload is unchanged.  Blame always runs against the
+# explicit range base (the integration merge-base), never
+# SECURITY_AUDIT_DIFF_SINCE, so project code from earlier fix cycles stays
+# project-written.  Each finding cites exactly one line, so "every cited line"
+# (D4) and "any cited line" (issue wording) are the same test here.
+SECURITY_AUDIT_LINE_OWNERSHIP_EFFECTIVE="off"
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ] \
+		&& [ -n "${SECURITY_AUDIT_DIFF_BASE}" ] \
+		&& [ "${SECURITY_AUDIT_LINE_OWNERSHIP}" = "project" ]; then
+	SECURITY_AUDIT_LINE_OWNERSHIP_EFFECTIVE="project"
+fi
+if [ "${SECURITY_AUDIT_LINE_OWNERSHIP_EFFECTIVE}" = "project" ]; then
+	if LINE_OWNERSHIP_LOG="$(PYTHONDONTWRITEBYTECODE=1 python3 - \
+		"${REPO_ROOT}" \
+		"${FILTERED_FINDINGS_FILE}" \
+		"${LINE_OWNERSHIP_SUMMARY_FILE}" \
+		"${AUDIT_SCOPE_BASE_SHA}" \
+		"${AUDIT_SCOPE_HEAD_SHA}" \
+		"${SECURITY_AUDIT_LINE_OWNERSHIP_HUNK_WINDOW}" 2> "${LINE_OWNERSHIP_ERROR_FILE}" <<'PY'
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path, PurePosixPath
+
+repo_root = Path(sys.argv[1])
+findings_path = Path(sys.argv[2])
+summary_path = Path(sys.argv[3])
+base_sha = sys.argv[4].strip()
+head_sha = sys.argv[5].strip()
+try:
+	hunk_window = int(sys.argv[6]) if len(sys.argv) > 6 else 40
+except ValueError:
+	hunk_window = 40
+if hunk_window < 0:
+	hunk_window = 40
+
+# Per-call bound on `git blame` (and the one-off rev-list); a timeout marks
+# the finding's ownership unknown, which keeps it blocking.
+LINE_OWNERSHIP_BLAME_TIMEOUT_SECS = 30
+LINE_OWNERSHIP_REVLIST_TIMEOUT_SECS = 120
+LINE_OWNERSHIP_DIFF_TIMEOUT_SECS = 120
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+HUNK_RE = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+
+
+def git(args: list[str], timeout: int) -> subprocess.CompletedProcess:
+	# List-form argv: finding data never reaches a shell.  core.fsmonitor is
+	# cleared so no repository-configured hook runs.
+	return subprocess.run(
+		["git", "-c", "core.fsmonitor=", *args],
+		cwd=repo_root,
+		capture_output=True,
+		text=True,
+		encoding="utf-8",
+		errors="replace",
+		timeout=timeout,
+		check=False,
+	)
+
+
+def safe_id(value: object) -> str:
+	return re.sub(r"[^A-Za-z0-9._:-]", "_", str(value or "?"))[:120] or "?"
+
+
+findings = json.loads(findings_path.read_text(encoding="utf-8"))
+if not isinstance(findings, list):
+	raise SystemExit("filtered findings must be a JSON array")
+
+global_reason = ""
+project_commits: set[str] = set()
+files_with_deletions: set[str] = set()
+# Every path the project diff touches, and the ones that gained lines (or
+# are binary).  Additions anywhere in the cited file keep a pre-project
+# finding blocking (finding security-pass-distant-override-advisory).
+files_with_additions: set[str] = set()
+project_changed_paths: set[str] = set()
+hunk_cache: dict[str, list[tuple[int, int]] | None] = {}
+if not SHA_RE.match(base_sha) or not SHA_RE.match(head_sha):
+	global_reason = "range_unresolved"
+else:
+	try:
+		shallow = git(["rev-parse", "--is-shallow-repository"], LINE_OWNERSHIP_BLAME_TIMEOUT_SECS)
+		if shallow.returncode != 0 or shallow.stdout.strip() == "true":
+			global_reason = "shallow_history"
+		elif git(["merge-base", "--is-ancestor", base_sha, head_sha], LINE_OWNERSHIP_BLAME_TIMEOUT_SECS).returncode != 0:
+			global_reason = "base_not_ancestor"
+		else:
+			revlist = git(["rev-list", "--end-of-options", f"{base_sha}..{head_sha}"], LINE_OWNERSHIP_REVLIST_TIMEOUT_SECS)
+			if revlist.returncode != 0:
+				global_reason = "rev_list_failed"
+			else:
+				project_commits = {line.strip() for line in revlist.stdout.splitlines() if SHA_RE.match(line.strip())}
+				# One project-wide diff: every path that lost lines (or is
+				# binary) in base..head.  --no-renames reports a rename as a
+				# full delete plus add, the conservative reading.  A failure
+				# keeps every finding blocking.
+				numstat = git(
+					["diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--numstat", "-z", base_sha, head_sha],
+					LINE_OWNERSHIP_DIFF_TIMEOUT_SECS,
+				)
+				if numstat.returncode != 0:
+					global_reason = "diff_failed"
+				else:
+					for record in numstat.stdout.split("\0"):
+						parts = record.split("\t", 2)
+						if len(parts) != 3 or not parts[2]:
+							continue
+						added_count, deleted_count, changed_path = parts
+						project_changed_paths.add(changed_path)
+						if deleted_count == "-" or added_count == "-":
+							files_with_deletions.add(changed_path)
+							files_with_additions.add(changed_path)
+							continue
+						if deleted_count.isdigit() and int(deleted_count) > 0:
+							files_with_deletions.add(changed_path)
+						if not added_count.isdigit() or int(added_count) > 0:
+							files_with_additions.add(changed_path)
+	except subprocess.TimeoutExpired:
+		global_reason = "timeout"
+
+
+def added_hunks(path: str) -> list[tuple[int, int]] | None:
+	# Added line ranges [start, end] of the project diff for one file, or None
+	# when the diff cannot be read or parsed (the caller keeps it blocking).
+	if path in hunk_cache:
+		return hunk_cache[path]
+	ranges: list[tuple[int, int]] | None = []
+	try:
+		diff = git(
+			["diff", "-U0", "--no-ext-diff", "--no-textconv", "--no-renames", base_sha, head_sha, "--", path],
+			LINE_OWNERSHIP_DIFF_TIMEOUT_SECS,
+		)
+	except subprocess.TimeoutExpired:
+		ranges = None
+	else:
+		if diff.returncode != 0:
+			ranges = None
+		else:
+			for diff_line in diff.stdout.splitlines():
+				if not diff_line.startswith("@@"):
+					continue
+				match = HUNK_RE.match(diff_line)
+				if match is None:
+					ranges = None
+					break
+				start = int(match.group(1))
+				count = int(match.group(2)) if match.group(2) is not None else 1
+				if count > 0:
+					ranges.append((start, start + count - 1))
+	hunk_cache[path] = ranges
+	return ranges
+
+
+# Basenames too generic to identify a module; the parent directory names it.
+LINE_OWNERSHIP_GENERIC_MODULE_STEMS = {"__init__", "index", "init", "main", "mod"}
+# Files whose mention of two modules is prose, not wiring.
+LINE_OWNERSHIP_DOC_SUFFIXES = {".md", ".markdown", ".rst", ".txt", ".adoc"}
+# Test files cannot change production execution, so a project-changed test
+# naming the cited module does not keep the finding blocking on its own.
+LINE_OWNERSHIP_TEST_PATH_RE = re.compile(
+	r"(?:^|/)(?:tests?|spec|__tests__)/|(?:^|/)test_[^/]*$|_test\.[^/]*$|\.(?:spec|test)\.[^/]*$",
+	re.IGNORECASE,
+)
+head_text_cache: dict[str, str | None] = {}
+mention_cache: dict[tuple[str, str], set[str] | None] = {}
+
+
+def module_stem(path: str) -> str:
+	pure = PurePosixPath(path)
+	stem = pure.stem
+	if stem.lower() in LINE_OWNERSHIP_GENERIC_MODULE_STEMS and pure.parent.name:
+		stem = pure.parent.name
+	# Two characters minimum: a short module such as db.py or io.py can hold
+	# the deleted guard, but a one-letter stem (a.py, i.py) matches ordinary
+	# words and loop variables, so it is not searched; callers treat an empty
+	# stem as unanalysable and keep the finding blocking (module_name_too_short).
+	return stem if len(stem) >= 2 else ""
+
+
+def head_file_text(path: str) -> str | None:
+	# The cited file at the audited head, or None when it cannot be read.
+	if path not in head_text_cache:
+		try:
+			shown = git(["show", f"{head_sha}:{path}"], LINE_OWNERSHIP_DIFF_TIMEOUT_SECS)
+		except subprocess.TimeoutExpired:
+			head_text_cache[path] = None
+		else:
+			head_text_cache[path] = shown.stdout if shown.returncode == 0 else None
+	return head_text_cache[path]
+
+
+def paths_mentioning_at(sha: str, stem: str) -> set[str] | None:
+	# Paths whose text at `sha` names `stem` as a word (one `git grep` per
+	# commit and stem), or None when the search fails.
+	key = (sha, stem)
+	if key not in mention_cache:
+		try:
+			grep = git(["grep", "-l", "-I", "-F", "-w", "-e", stem, sha, "--"], LINE_OWNERSHIP_DIFF_TIMEOUT_SECS)
+		except subprocess.TimeoutExpired:
+			mention_cache[key] = None
+		else:
+			if grep.returncode == 1:
+				mention_cache[key] = set()
+			elif grep.returncode != 0:
+				mention_cache[key] = None
+			else:
+				prefix = f"{sha}:"
+				mention_cache[key] = {
+					line[len(prefix):] if line.startswith(prefix) else line
+					for line in grep.stdout.splitlines()
+					if line
+				}
+	return mention_cache[key]
+
+
+def paths_mentioning(stem: str) -> set[str] | None:
+	# Union of the base and head references to `stem`: the base still holds a
+	# deleted guard's wiring, the head holds wiring the project added (a new
+	# router).  Either search failing returns None (the caller keeps blocking).
+	at_base = paths_mentioning_at(base_sha, stem)
+	at_head = paths_mentioning_at(head_sha, stem)
+	if at_base is None or at_head is None:
+		return None
+	return at_base | at_head
+
+
+def is_doc_path(path: str) -> bool:
+	return PurePosixPath(path).suffix.lower() in LINE_OWNERSHIP_DOC_SUFFIXES
+
+
+def is_test_path(path: str) -> bool:
+	return LINE_OWNERSHIP_TEST_PATH_RE.search(path) is not None
+
+
+def changed_file_reference_reason(path: str) -> tuple[str, bool]:
+	# A file the project changed (other than the cited one, documentation or
+	# tests) that names the cited module at the head can wire or override the
+	# cited operation without deleting a line anywhere.
+	cited_stem = module_stem(path)
+	candidates = {
+		changed for changed in project_changed_paths
+		if changed != path and not is_doc_path(changed) and not is_test_path(changed)
+	}
+	if not candidates:
+		return "", False
+	if not cited_stem:
+		# A one-letter module name cannot be searched reliably, so its links
+		# cannot be ruled out: keep the finding blocking (fail closed).
+		return "module_name_too_short", True
+	referencing = paths_mentioning_at(head_sha, cited_stem)
+	if referencing is None:
+		return "module_reference_check_failed", True
+	if candidates & referencing:
+		return "changed_file_references_cited_module", False
+	return "", False
+
+
+# Bounds on the transitive referrer search in deletion_block_reason.  A
+# search that cannot finish inside them proves nothing, so it keeps the
+# finding blocking (`reference_search_limit`, counted unknown).
+LINE_OWNERSHIP_REFERENCE_MAX_HOPS = 4
+LINE_OWNERSHIP_REFERENCE_MAX_STEMS = 32
+
+
+def referrer_closure(start_paths: set[str], searched_stems: set[str]) -> tuple[set[str], str]:
+	# Files that reach any of `start_paths` through a chain of module-name
+	# references at base or head.  Documentation and test files are not
+	# wiring and are not followed.  Returns (closure, reason); a non-empty
+	# reason means the search could not complete and the caller must keep
+	# the finding blocking (fail closed).
+	closure = set(start_paths)
+	frontier = set(start_paths)
+	for _ in range(LINE_OWNERSHIP_REFERENCE_MAX_HOPS):
+		next_frontier: set[str] = set()
+		for node in sorted(frontier):
+			stem = module_stem(node)
+			if not stem:
+				return closure, "module_name_too_short"
+			if stem not in searched_stems:
+				if len(searched_stems) >= LINE_OWNERSHIP_REFERENCE_MAX_STEMS:
+					return closure, "reference_search_limit"
+				searched_stems.add(stem)
+			referrers = paths_mentioning(stem)
+			if referrers is None:
+				return closure, "module_reference_check_failed"
+			for referrer in referrers:
+				if referrer in closure or is_doc_path(referrer) or is_test_path(referrer):
+					continue
+				closure.add(referrer)
+				next_frontier.add(referrer)
+		if not next_frontier:
+			return closure, ""
+		frontier = next_frontier
+	return closure, "reference_search_limit"
+
+
+tree_paths_cache: dict[str, set[str] | None] = {}
+revision_text_cache: dict[tuple[str, str], str | None] = {}
+LINE_OWNERSHIP_WORD_RE = re.compile(r"[A-Za-z0-9_]+")
+
+
+def tree_paths_at(sha: str) -> set[str] | None:
+	# Every tracked path at `sha` (one `git ls-tree` per commit), or None
+	# when the listing fails.
+	if sha not in tree_paths_cache:
+		try:
+			listed = git(["ls-tree", "-r", "--name-only", "-z", sha], LINE_OWNERSHIP_DIFF_TIMEOUT_SECS)
+		except subprocess.TimeoutExpired:
+			tree_paths_cache[sha] = None
+		else:
+			tree_paths_cache[sha] = (
+				{item for item in listed.stdout.split("\0") if item} if listed.returncode == 0 else None
+			)
+	return tree_paths_cache[sha]
+
+
+def text_at(sha: str, path: str) -> str | None:
+	key = (sha, path)
+	if key not in revision_text_cache:
+		try:
+			shown = git(["show", f"{sha}:{path}"], LINE_OWNERSHIP_DIFF_TIMEOUT_SECS)
+		except subprocess.TimeoutExpired:
+			revision_text_cache[key] = None
+		else:
+			revision_text_cache[key] = shown.stdout if shown.returncode == 0 else None
+	return revision_text_cache[key]
+
+
+def named_stems(text: str, stems: set[str]) -> set[str]:
+	# The subset of `stems` that `text` names as a word.
+	words = set(LINE_OWNERSHIP_WORD_RE.findall(text))
+	found = {stem for stem in stems if stem in words}
+	for stem in stems - found:
+		if not LINE_OWNERSHIP_WORD_RE.fullmatch(stem) and re.search(
+			rf"(?<![A-Za-z0-9_]){re.escape(stem)}(?![A-Za-z0-9_])", text
+		):
+			found.add(stem)
+	return found
+
+
+def shared_dependency_reason(path: str, cited_text: str, guard_paths: set[str]) -> tuple[str, bool]:
+	# Downward hop (finding security-pass-deleted-guard-advisory): the cited
+	# file and a source file that lost lines both name a third repository
+	# module (A -> C <- B).  The deleted control may have guarded state or a
+	# registry in that shared module which the cited operation relies on, and
+	# the referrer search above only walks upward, so it never sees C.
+	# Candidates are non-documentation, non-test modules tracked at base or
+	# head.  A one-letter module name (x.py) cannot be searched reliably, so
+	# when both files name one as a word the link cannot be ruled out and the
+	# finding stays blocking (module_name_too_short, fail closed).
+	base_paths = tree_paths_at(base_sha)
+	head_paths = tree_paths_at(head_sha)
+	if base_paths is None or head_paths is None:
+		return "module_reference_check_failed", True
+	excluded_stems = {module_stem(path)} | {module_stem(guard) for guard in guard_paths}
+	candidate_stems: set[str] = set()
+	short_candidate_stems: set[str] = set()
+	for candidate in base_paths | head_paths:
+		if candidate == path or candidate in guard_paths or is_doc_path(candidate) or is_test_path(candidate):
+			continue
+		stem = module_stem(candidate)
+		if stem and stem not in excluded_stems:
+			candidate_stems.add(stem)
+		elif not stem:
+			pure_candidate = PurePosixPath(candidate)
+			raw_stem = pure_candidate.stem
+			if raw_stem.lower() in LINE_OWNERSHIP_GENERIC_MODULE_STEMS and pure_candidate.parent.name:
+				raw_stem = pure_candidate.parent.name
+			if raw_stem:
+				short_candidate_stems.add(raw_stem)
+	cited_dependencies = named_stems(cited_text, candidate_stems)
+	cited_short_dependencies = named_stems(cited_text, short_candidate_stems)
+	if not cited_dependencies and not cited_short_dependencies:
+		return "", False
+	short_match = False
+	for guard in sorted(guard_paths):
+		# Base text holds the deleted guard's own imports; head text holds any
+		# the project added.  A side where the file does not exist is skipped.
+		guard_texts: list[str] = []
+		for sha, tree in ((base_sha, base_paths), (head_sha, head_paths)):
+			if guard not in tree:
+				continue
+			guard_text = text_at(sha, guard)
+			if guard_text is None:
+				return "module_reference_check_failed", True
+			guard_texts.append(guard_text)
+		if guard_texts and named_stems("\n".join(guard_texts), cited_dependencies):
+			return "shared_dependency_links_module_with_deletions", False
+		if guard_texts and named_stems("\n".join(guard_texts), cited_short_dependencies):
+			short_match = True
+	if short_match:
+		return "module_name_too_short", True
+	return "", False
+
+
+def finding_strings(value: object) -> list[str]:
+	if isinstance(value, str):
+		return [value]
+	if isinstance(value, dict):
+		return [text for item in value.values() for text in finding_strings(item)]
+	if isinstance(value, list):
+		return [text for item in value for text in finding_strings(item)]
+	return []
+
+
+def deletion_block_reason(finding: dict, path: str, line: int) -> tuple[str, bool]:
+	# Returns (reason, unknown) when a pre-project line must stay blocking
+	# because the project may have removed or bypassed its protection.
+	# Matching only ever adds blocking, never removes it.
+	if path in files_with_deletions:
+		return "deleted_lines_in_file", False
+	ranges = added_hunks(path)
+	if ranges is None:
+		return "hunk_diff_failed", True
+	for start, end in ranges:
+		if start - hunk_window <= line <= end + hunk_window:
+			return "changed_hunk_within_window", False
+	# Any other addition in the cited file can still change how the cited
+	# line executes (an override appended far below it), so line distance is
+	# not proof of safety: the window only selects the reason logged above.
+	if ranges or path in files_with_additions:
+		return "added_lines_in_file", False
+	texts = finding_strings({key: value for key, value in finding.items() if key not in ("file", "line")})
+	for other_path in files_with_deletions:
+		if other_path != path and any(other_path in text for text in texts):
+			return "references_file_with_deletions", False
+	# A guard can also live in a module the finding never names: the cited
+	# file imports or calls a module that lost lines, or a module that lost
+	# lines (at base, where the guard still was) names the cited module, as a
+	# router or middleware registration would.  Word matches on module names
+	# only ever add blocking; a failed read keeps the finding blocking.
+	other_paths = sorted(other for other in files_with_deletions if other != path)
+	if not other_paths:
+		return changed_file_reference_reason(path)
+	cited_text = head_file_text(path)
+	if cited_text is None:
+		return "module_reference_check_failed", True
+	cited_stem = module_stem(path)
+	# A one-letter module name (x.py) on either side cannot be searched
+	# reliably, so a link to the removed guard cannot be ruled out: keep the
+	# finding blocking (fail closed) instead of skipping the dependency checks.
+	if not cited_stem or any(not module_stem(other_path) for other_path in other_paths):
+		return "module_name_too_short", True
+	for other_path in other_paths:
+		other_stem = module_stem(other_path)
+		if other_stem and re.search(rf"(?<![A-Za-z0-9_]){re.escape(other_stem)}(?![A-Za-z0-9_])", cited_text):
+			return "cited_file_references_module_with_deletions", False
+	if cited_stem:
+		referencing = paths_mentioning(cited_stem)
+		if referencing is None:
+			return "module_reference_check_failed", True
+		if any(other_path in referencing for other_path in other_paths):
+			return "module_with_deletions_references_cited_file", False
+		# One hop further: a source file (a router table, registry or
+		# dependency-injection configuration, existing at base or added by the
+		# project) that names both the cited module and a module that lost
+		# lines can wire the removed guard to the cited operation.
+		# Documentation files are not wiring.
+		cited_referrers = {
+			referrer for referrer in referencing
+			if referrer != path and not is_doc_path(referrer)
+		}
+		if cited_referrers:
+			for other_path in other_paths:
+				other_stem = module_stem(other_path)
+				if not other_stem or other_stem == cited_stem:
+					continue
+				other_referrers = paths_mentioning(other_stem)
+				if other_referrers is None:
+					return "module_reference_check_failed", True
+				if any(referrer != other_path and referrer in cited_referrers for referrer in other_referrers):
+					return "shared_referrer_links_module_with_deletions", False
+	# Several hops: follow referrer chains up from the cited file and
+	# from every source file that lost lines (a guard cannot live in
+	# documentation or tests).  A shared ancestor (an app entry point that
+	# imports a middleware which imports the guard module, and the cited
+	# module) can wire the removed control to the cited operation, so only a
+	# search that completes inside its bounds without one leaves the finding advisory
+	# (finding security-pass-deleted-guard-advisory).
+	guard_paths = {other for other in other_paths if not is_doc_path(other) and not is_test_path(other)}
+	if guard_paths:
+		searched_stems: set[str] = set()
+		cited_closure, closure_reason = referrer_closure({path}, searched_stems)
+		if closure_reason:
+			return closure_reason, True
+		guard_closure, closure_reason = referrer_closure(guard_paths, searched_stems)
+		if closure_reason:
+			return closure_reason, True
+		if cited_closure & guard_closure:
+			return "transitive_reference_links_module_with_deletions", False
+		dependency_reason, dependency_unknown = shared_dependency_reason(path, cited_text, guard_paths)
+		if dependency_reason:
+			return dependency_reason, dependency_unknown
+	return changed_file_reference_reason(path)
+
+blocking = advisory = unknown = 0
+log_lines: list[str] = []
+annotated: list[object] = []
+for finding in findings:
+	if not isinstance(finding, dict):
+		annotated.append(finding)
+		continue
+	reason = global_reason
+	is_advisory = False
+	if not reason:
+		file_value = finding.get("file")
+		line_value = finding.get("line")
+		if (not isinstance(file_value, str) or not file_value
+			or isinstance(line_value, bool) or not isinstance(line_value, int) or line_value < 1):
+			reason = "missing_line"
+		else:
+			try:
+				blame = git(
+					["blame", "--porcelain", "--no-textconv", "-L", f"{line_value},{line_value}", head_sha, "--", file_value],
+					LINE_OWNERSHIP_BLAME_TIMEOUT_SECS,
+				)
+			except subprocess.TimeoutExpired:
+				reason = "timeout"
+			else:
+				if blame.returncode != 0:
+					reason = "missing_line" if "no such path" in blame.stderr or "has only" in blame.stderr else "blame_failed"
+				else:
+					first_line = blame.stdout.splitlines()[0] if blame.stdout else ""
+					commit = first_line.split(" ", 1)[0] if first_line else ""
+					if not SHA_RE.match(commit):
+						reason = "parse_failed"
+					else:
+						is_advisory = commit not in project_commits
+						if is_advisory:
+							block_reason, block_unknown = deletion_block_reason(finding, file_value, line_value)
+							if block_reason:
+								is_advisory = False
+								if block_unknown:
+									reason = block_reason
+								else:
+									log_lines.append(
+										f"security-audit: line_ownership_blocking finding={safe_id(finding.get('finding_id'))} reason={block_reason}"
+									)
+	finding = dict(finding)
+	finding["advisory"] = is_advisory
+	annotated.append(finding)
+	if reason:
+		unknown += 1
+		log_lines.append(f"security-audit: line_ownership_unknown finding={safe_id(finding.get('finding_id'))} reason={reason}")
+	if is_advisory:
+		advisory += 1
+	else:
+		blocking += 1
+
+with tempfile.NamedTemporaryFile(
+	mode="w", encoding="utf-8", dir=findings_path.parent, prefix=".line-ownership.", suffix=".tmp", delete=False
+) as temporary_file:
+	json.dump(annotated, temporary_file, ensure_ascii=True, indent=2, sort_keys=True)
+	temporary_file.write("\n")
+	temporary_name = temporary_file.name
+summary_path.write_text(
+	json.dumps({"mode": "project", "blocking": blocking, "advisory": advisory, "unknown": unknown}, sort_keys=True) + "\n",
+	encoding="utf-8",
+)
+os.replace(temporary_name, findings_path)
+log_lines.append(f"security-audit: line_ownership mode=project blocking={blocking} advisory={advisory} unknown={unknown}")
+print("\n".join(log_lines))
+PY
+	)"; then
+		printf '%s\n' "${LINE_OWNERSHIP_LOG}"
+	else
+		# Fail safe: the findings file is replaced only after a full pass, so
+		# it is untouched here and every finding stays blocking at the poller.
+		rm -f "${LINE_OWNERSHIP_SUMMARY_FILE}"
+		echo "::warning::security-audit: line_ownership annotation failed; all findings stay blocking"
+	fi
+fi
+
+if [ "${SECURITY_AUDIT_OUTPUT_MODE}" = "findings-json" ]; then
+	if python3 - \
+		"${FILTERED_FINDINGS_FILE}" \
+		"${FILTER_SUMMARY_FILE}" \
+		"${SECURITY_AUDIT_FINDINGS_OUT}" \
+		"${OVERSIZED_EXPORT_DIR}/manifest.json" \
+		"${LINE_OWNERSHIP_SUMMARY_FILE}" 2> "${FINDINGS_PACKAGE_ERROR_FILE}" <<'PY'
+from __future__ import annotations
+
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+findings_path = Path(sys.argv[1])
+summary_path = Path(sys.argv[2])
+output_path = Path(sys.argv[3])
+oversized_manifest_path = Path(sys.argv[4])
+line_ownership_summary_path = Path(sys.argv[5]) if len(sys.argv) > 5 else None
+count_keys = (
+	"kept",
+	"suppressed_excluded",
+	"suppressed_invalid",
+	"suppressed_low_confidence",
+	"suppressed_out_of_scope",
+	"suppressed_waived",
+)
+
+
+def load_json(path: Path, *, label: str):
+	try:
+		return json.loads(path.read_text(encoding="utf-8"))
+	except (OSError, json.JSONDecodeError) as exc:
+		raise SystemExit(f"unable to load {label}: {exc}")
+
+
+findings = load_json(findings_path, label="filtered findings")
+summary = load_json(summary_path, label="filter summary")
+if not isinstance(findings, list) or not isinstance(summary, dict):
+	raise SystemExit("security-audit findings packaging received invalid JSON payloads")
+
+counts: dict[str, int] = {}
+for count_key in count_keys:
+	count_value = summary.get(count_key)
+	if isinstance(count_value, bool) or not isinstance(count_value, int) or count_value < 0:
+		raise SystemExit(f"security-audit findings packaging received invalid count: {count_key}")
+	counts[count_key] = count_value
+if counts["kept"] != len(findings):
+	raise SystemExit("security-audit findings packaging received a mismatched kept count")
+
+payload = {
+	"schema_version": "security_audit_findings.v1",
+	"findings": findings,
+	"counts": counts,
+}
+oversized_manifest = load_json(oversized_manifest_path, label="oversized manifest")
+payload["coverage"] = {
+	"oversized_threshold_bytes": oversized_manifest["threshold_bytes"],
+	"scoped_oversized_chunked": [item["path"] for item in oversized_manifest["scoped"]],
+	"unscoped_oversized_skipped": [item["path"] for item in oversized_manifest["unscoped_oversized"]],
+	"unscoped_oversized_skipped_count": oversized_manifest["unscoped_oversized_count"],
+	"unscoped_text_capped_count": oversized_manifest.get("unscoped_text_capped_count", oversized_manifest["unscoped_oversized_count"]),
+	"scoped_filtered_skipped": [item["path"] for item in oversized_manifest.get("filtered_scoped", [])],
+	"scoped_filtered_skipped_count": oversized_manifest.get("filtered_scoped_count", len(oversized_manifest.get("filtered_scoped", []))),
+}
+# Additive: present only when findings on upstream-managed paths were kept out
+# of the result (a consumer cannot fix them; see the filter above).
+upstream_managed = summary.get("upstream_managed")
+if isinstance(upstream_managed, list) and upstream_managed:
+	payload["upstream_managed"] = {
+		"suppressed": len(upstream_managed),
+		"findings": upstream_managed[:50],
+	}
+# Additive (plan item 4b): present only when line ownership annotated the
+# findings; SECURITY_AUDIT_LINE_OWNERSHIP=off leaves the payload unchanged.
+if line_ownership_summary_path is not None and line_ownership_summary_path.is_file():
+	line_ownership = load_json(line_ownership_summary_path, label="line ownership summary")
+	if isinstance(line_ownership, dict):
+		payload["line_ownership"] = {
+			key: line_ownership.get(key) for key in ("mode", "blocking", "advisory", "unknown")
+		}
+
+temporary_path: Path | None = None
+try:
+	with tempfile.NamedTemporaryFile(
+		mode="w",
+		encoding="utf-8",
+		dir=output_path.parent,
+		prefix=f".{output_path.name}.",
+		suffix=".tmp",
+		delete=False,
+	) as temporary_file:
+		temporary_path = Path(temporary_file.name)
+		json.dump(payload, temporary_file, ensure_ascii=True, indent=2, sort_keys=True)
+		temporary_file.write("\n")
+		temporary_file.flush()
+		os.fsync(temporary_file.fileno())
+	os.replace(temporary_path, output_path)
+except OSError as exc:
+	if temporary_path is not None:
+		try:
+			temporary_path.unlink(missing_ok=True)
+		except OSError:
+			pass
+	raise SystemExit(f"unable to publish security-audit findings: {exc}")
+PY
+	then
+		:
+	else
+		FINDINGS_PACKAGE_STATUS=$?
+		security_audit_emit_path_diagnostic "${FINDINGS_PACKAGE_ERROR_FILE}"
+		security_audit_emit_failure "findings-output" "${SECURITY_AUDIT_FINDINGS_OUT}" "findings packaging exited nonzero"
+		exit "${FINDINGS_PACKAGE_STATUS}"
+	fi
+	echo "security-audit: findings-json output written"
+	exit 0
+fi
+
+# Standalone workflow: no cycle-local issue cache exists here. Fetch every
+# existing `ai:security` issue once (open and closed) and reuse the result for
+# the finding-marker dedupe. This replaces the former `gh issue list --limit
+# 200` call rather than adding one (§15): with no follow-up cap, a repo can
+# pass 200 labelled issues, and a truncated list would re-file every finding
+# whose marker fell off the end. One paginated REST read, ceil(N/100) calls;
+# `--slurp` wraps the pages in one JSON array, and pull requests (which the
+# issues endpoint also returns) are skipped by the dedupe below.
+gh_retry gh api --method GET --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues" \
+	-f labels="ai:security" \
+	-f state=all \
+	-f per_page=100 > "${EXISTING_FOLLOWUPS_JSON}"
+
+python3 - \
+	"${FILTERED_FINDINGS_FILE}" \
+	"${FILTER_SUMMARY_FILE}" \
+	"${EXISTING_FOLLOWUPS_JSON}" \
+	"${TRACKER_NUMBER}" \
+	"${TRACKER_COMMENT_FILE}" \
+	"${FOLLOWUP_BODY_DIR}" \
+	"${FOLLOWUP_INDEX_FILE}" \
+	"${FOLLOWUP_SUMMARY_ENV}" \
+	"${SECURITY_AUDIT_CONFIDENCE_GATE}" \
+	"${SECURITY_AUDIT_FP_EXCLUSIONS}" \
+	"${FOLLOWUP_MARKER_PREFIX}" \
+	"${AUDIT_SCOPE_MODE}" \
+	"${AUDIT_SCOPE_HEAD_SHA}" \
+	"${AUDIT_SCOPE_BASE_SHA}" \
+	"${SECURITY_AUDIT_TARGET_REF}" \
+	"${OVERSIZED_EXPORT_DIR}/manifest.json" \
+	"${SECURITY_AUDIT_PASS_FINDINGS_OUT}" \
+	"${SECURITY_AUDIT_CONSOLIDATE_ACTIVE}" \
+	"${SECURITY_AUDIT_PASS_PR_NUMBER}" \
+	"${SECURITY_AUDIT_SIMILAR_FINDING_LINE_WINDOW}" <<'PY'
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import re
+import shlex
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+findings_path = Path(sys.argv[1])
+summary_path = Path(sys.argv[2])
+existing_followups_path = Path(sys.argv[3])
+tracker_number = sys.argv[4]
+tracker_comment_path = Path(sys.argv[5])
+followup_body_dir = Path(sys.argv[6])
+followup_index_path = Path(sys.argv[7])
+followup_summary_env_path = Path(sys.argv[8])
+confidence_gate = sys.argv[9]
+exclusions_path = sys.argv[10]
+followup_marker_prefix = sys.argv[11]
+audit_scope_mode = sys.argv[12]
+head_sha = sys.argv[13].strip()
+last_audited_sha = sys.argv[14].strip()
+target_ref = sys.argv[15].strip()
+oversized_manifest = json.loads(Path(sys.argv[16]).read_text(encoding="utf-8"))
+# Optional (single-issue security pass, stuck-states P5a): surviving-findings
+# export for the PR report. Empty means no export.
+pass_findings_out = sys.argv[17].strip() if len(sys.argv) > 17 else ""
+# Optional (single-issue security pass, stuck-states P5b): one consolidated
+# follow-up issue per cycle. The shell already validated both values; check
+# again so a malformed argument can only fall back to the per-finding path.
+consolidate_pr_number = sys.argv[19].strip() if len(sys.argv) > 19 else ""
+consolidate_active = (
+	len(sys.argv) > 18
+	and sys.argv[18].strip() == "true"
+	and bool(target_ref)
+	and re.fullmatch(r"[1-9][0-9]{0,9}", consolidate_pr_number) is not None
+)
+# Same-file-and-category repeat window (argv 20, after the P5a/P5b arguments).
+similar_line_window = int(sys.argv[20])
+
+
+def load_json(path: Path, *, label: str):
+	try:
+		return json.loads(path.read_text(encoding="utf-8"))
+	except (OSError, json.JSONDecodeError) as exc:
+		raise SystemExit(f"unable to load {label}: {exc}")
+
+
+def truncate_title(title: str) -> str:
+	normalized = " ".join(title.split())
+	if len(normalized) <= 250:
+		return normalized
+	return normalized[:247] + "..."
+
+
+findings = load_json(findings_path, label="filtered findings")
+summary = load_json(summary_path, label="filter summary")
+existing_followups = load_json(existing_followups_path, label="existing follow-up issues")
+
+if not isinstance(findings, list) or not isinstance(summary, dict) or not isinstance(existing_followups, list):
+	raise SystemExit("security-audit summary generation received invalid JSON payloads")
+
+# `gh api --paginate --slurp` yields one array per page; flatten them.
+existing_followup_issues: list[object] = []
+for page in existing_followups:
+	if isinstance(page, list):
+		existing_followup_issues.extend(page)
+	else:
+		existing_followup_issues.append(page)
+
+marker_regex = re.compile(re.escape(followup_marker_prefix) + r"([^>]+) -->")
+# A consolidated follow-up (stuck-states P5b) opens with one marker line per
+# finding. Only that leading block counts: a marker quoted further down the
+# body (finding prose) never does. A legacy body has one leading marker, so
+# this adds nothing to the `marker_regex.search` result above.
+leading_marker_regex = re.compile(r"^" + re.escape(followup_marker_prefix) + r"([^<>\r\n]+) -->$")
+
+
+def leading_marker_ids(body: str) -> list[str]:
+	ids: list[str] = []
+	for raw_line in body.split("\n"):
+		line_match = leading_marker_regex.fullmatch(raw_line.rstrip())
+		if line_match is None:
+			break
+		ids.append(line_match.group(1).strip())
+	return ids
+
+existing_finding_ids: set[str] = set()
+existing_finding_numbers: dict[str, int] = {}
+# Issue state per finding ID, so the consolidated follow-up can depend on an
+# open same-file predecessor (stuck-states P5b).
+existing_finding_open: dict[str, bool] = {}
+# Open follow-ups by (file, category key), for the same-file-and-category
+# check: the lines this script wrote into the body (`- Category:`,
+# `- Location:`, `- Integration branch:`).
+category_line_regex = re.compile(r"^- Category: `([^`\n]+)`[ \t]*$", re.MULTILINE)
+location_line_regex = re.compile(r"^- Location: `([^`\n]+):([1-9][0-9]{0,8})`[ \t]*$", re.MULTILINE)
+branch_line_regex = re.compile(r"^- Integration branch: `([^`\n]+)`[ \t]*$", re.MULTILINE)
+open_by_location: dict[tuple[str, str, str], list[tuple[int, int, str]]] = {}
+
+
+def category_key(raw: object) -> str:
+	"""`A01` for any spelling of an OWASP category, else the lower-cased letters and digits."""
+	text = str(raw or "")
+	owasp = re.search(r"\bA(0[1-9]|10)\b", text, re.IGNORECASE)
+	if owasp:
+		return f"A{owasp.group(1)}"
+	return re.sub(r"[^a-z0-9]+", "", text.lower())
+
+
+def open_followup_for(finding: dict) -> tuple[int, str] | None:
+	"""(issue number, finding id) of the open follow-up this finding repeats, if any.
+
+	Same audit scope (the follow-up's `Integration branch` equals this
+	audit's target ref; both empty for the default branch), same file, same
+	category key, at most `similar_line_window` lines apart. The nearest
+	line wins, then the older issue.
+	"""
+	if similar_line_window <= 0:
+		return None
+	try:
+		line = int(finding.get("line"))
+	except (TypeError, ValueError):
+		return None
+	key = category_key(finding.get("owasp_or_stride_category"))
+	if not key:
+		return None
+	best: tuple[int, int, str] | None = None
+	for existing_line, existing_number, existing_id in open_by_location.get((target_ref, str(finding.get("file")), key), []):
+		distance = abs(existing_line - line)
+		if distance > similar_line_window:
+			continue
+		rank = (distance, existing_number, existing_id)
+		if best is None or rank < best:
+			best = rank
+	return (best[1], best[2]) if best is not None else None
+
+
+now_utc = datetime.now(timezone.utc)
+
+for issue in existing_followup_issues:
+	if not isinstance(issue, dict) or issue.get("pull_request"):
+		continue
+	body = str(issue.get("body") or "")
+	match = marker_regex.search(body)
+	if match is None:
+		continue
+	issue_marker_id = match.group(1).strip()
+	issue_finding_ids = [issue_marker_id, *leading_marker_ids(body)]
+	for finding_id in dict.fromkeys(issue_finding_ids):
+		if finding_id:
+			existing_finding_ids.add(finding_id)
+			if isinstance(issue.get("number"), int) and issue["number"] > 0:
+				existing_finding_numbers[finding_id] = issue["number"]
+				existing_finding_open[finding_id] = str(issue.get("state") or "").lower() == "open"
+	# Same-file-and-category index: the first `- Category:` / `- Location:`
+	# lines belong to the first marker's finding (legacy and consolidated bodies).
+	if issue_marker_id and isinstance(issue.get("number"), int) and issue["number"] > 0:
+		category_line = category_line_regex.search(body)
+		location_line = location_line_regex.search(body)
+		branch_line = branch_line_regex.search(body)
+		if str(issue.get("state") or "").lower() == "open" and category_line is not None and location_line is not None \
+			and category_key(category_line.group(1)):
+			open_by_location.setdefault(
+				(branch_line.group(1) if branch_line is not None else "", location_line.group(1), category_key(category_line.group(1))), []
+			).append((int(location_line.group(2)), issue["number"], issue_marker_id))
+
+# Every surviving finding without a marked follow-up gets its own issue; there
+# is no per-run or per-week cap.
+planned_followups: list[dict[str, object]] = []
+skipped_existing_count = 0
+# id(finding) -> (the id the model reported, the open issue whose id it took).
+adopted_ids: dict[int, tuple[str, int]] = {}
+
+for finding in findings:
+	if not isinstance(finding, dict):
+		continue
+	finding_id = str(finding.get("finding_id") or "").strip()
+	if finding_id not in existing_finding_ids:
+		repeated = open_followup_for(finding)
+		if repeated is not None:
+			# The same finding under a new id: it is the open follow-up's.
+			adopted_ids[id(finding)] = (finding_id, repeated[0])
+			finding["finding_id"] = finding_id = repeated[1]
+	if finding_id in existing_finding_ids:
+		skipped_existing_count += 1
+		continue
+	planned_followups.append(finding)
+
+consolidate_marker_id_regex = re.compile(r"[^<>\s](?:[^<>\r\n]*[^<>\s])?")
+if consolidate_active and not all(
+	consolidate_marker_id_regex.fullmatch(str(finding.get("finding_id") or "")) for finding in planned_followups
+):
+	# A finding ID that cannot sit on its own marker line would cut the leading
+	# block short; file one issue per finding instead.
+	print("::warning::security-audit: a finding_id cannot be written as a consolidated marker line; filing one follow-up per finding")
+	consolidate_active = False
+
+if target_ref:
+	scope_line = f"- Audit scope: branch `{target_ref}` changes since its merge-base with the default branch (`{last_audited_sha}`..`{head_sha}`)"
+elif audit_scope_mode == "incremental" and last_audited_sha:
+	scope_line = f"- Audit scope: incremental (`{last_audited_sha}`..`{head_sha}`)"
+else:
+	scope_line = "- Audit scope: full default-branch checkout"
+
+text_capped_count = oversized_manifest.get("unscoped_text_capped_count", oversized_manifest["unscoped_oversized_count"])
+text_capped_files = oversized_manifest.get("unscoped_text_capped", [])
+filtered_scoped_files = oversized_manifest.get("filtered_scoped", [])
+filtered_scoped_count = oversized_manifest.get("filtered_scoped_count", len(filtered_scoped_files))
+partial_coverage_line = ""
+if text_capped_count:
+	partial_coverage_line = f"- Coverage: partial — {text_capped_count} tracked text files over the export caps were not inspected"
+	if text_capped_files:
+		partial_coverage_line += ": " + ", ".join(
+			f"`{item['path']}` ({item['size']} bytes, {item['reason']})" for item in text_capped_files
+		)
+	if text_capped_count > len(text_capped_files):
+		partial_coverage_line += f" (+{text_capped_count - len(text_capped_files)} more)"
+	if not target_ref:
+		partial_coverage_line += "; the last-audited-commit marker was not moved, so the next run audits the full repository"
+
+comment_lines = [
+	f"## {now_utc.date().isoformat()} Security audit",
+	"",
+	scope_line,
+	f"- Audited commit: `{head_sha or 'n/a'}`",
+	*([f"- Oversized scoped files read in chunks: {len(oversized_manifest['scoped'])}"] if oversized_manifest["scoped"] else []),
+	*([partial_coverage_line] if partial_coverage_line else []),
+	*([f"- Coverage note: {filtered_scoped_count} scoped files are withheld by the credential filter and were not inspected: " + ", ".join(f"`{item['path']}`" for item in filtered_scoped_files) + (f" (+{filtered_scoped_count - len(filtered_scoped_files)} more)" if filtered_scoped_count > len(filtered_scoped_files) else "")] if filtered_scoped_count else []),
+	*([f"- Coverage note: {oversized_manifest['unscoped_oversized_count']} tracked files over 2 MiB were not inspected (outside the explicit scope, binary, or over the export caps): " + ", ".join(f"`{item['path']}`" for item in oversized_manifest["unscoped_oversized"]) + (f" (+{oversized_manifest['unscoped_oversized_count'] - len(oversized_manifest['unscoped_oversized'])} more)" if oversized_manifest['unscoped_oversized_count'] > len(oversized_manifest['unscoped_oversized']) else "")] if oversized_manifest["unscoped_oversized_count"] else []),
+	f"- Confidence gate: `>= {confidence_gate}`",
+	f"- Exclusion catalog: `{exclusions_path}`",
+	f"- Findings surfaced: {len(findings)}",
+	f"- Suppressed low-confidence findings: {int(summary.get('suppressed_low_confidence', 0))}",
+	f"- Suppressed excluded findings: {int(summary.get('suppressed_excluded', 0))}",
+	f"- Suppressed invalid findings: {int(summary.get('suppressed_invalid', 0))}",
+	f"- Suppressed out-of-scope findings: {int(summary.get('suppressed_out_of_scope', 0))}",
+	*([f"- Suppressed upstream-managed findings (reported below, not filed; fix them in coding-workflows): {int(summary.get('suppressed_upstream_managed', 0))}"] if summary.get("suppressed_upstream_managed") else []),
+	f"- New follow-up issues planned this run: {(1 if planned_followups else 0) if consolidate_active else len(planned_followups)}",
+	f"- Findings skipped because a marked follow-up issue already exists: {skipped_existing_count}",
+	*([f"- Follow-up mode: consolidated ({len(planned_followups)} findings in one issue)"] if consolidate_active and planned_followups else []),
+	*([f"- Of those, findings reported under a new id that repeat an open follow-up (same file and category, within {similar_line_window} lines): {len(adopted_ids)}"] if adopted_ids else []),
+]
+
+if findings:
+	comment_lines.extend(["", "### Findings", ""])
+	for idx, finding in enumerate(findings, 1):
+		comment_lines.extend(
+			[
+				f"{idx}. **[{finding['severity']} | {finding['confidence']}/10]** `{finding['file']}:{finding['line']}` — `{finding['owasp_or_stride_category']}`",
+				f"   - Finding ID: `{finding['finding_id']}`",
+				*([f"   - Reported this run as `{adopted_ids[id(finding)][0]}`; it repeats open follow-up #{adopted_ids[id(finding)][1]} (same file and category), so that issue's finding id is used and nothing new is filed."] if id(finding) in adopted_ids else []),
+				f"   - Exploit scenario: {finding['exploit_scenario']}",
+				f"   - Recommendation: {finding['recommendation']}",
+			]
+		)
+elif summary.get("upstream_managed"):
+	comment_lines.extend(["", "No findings to file after exclusions; upstream-managed findings are listed below."])
+else:
+	comment_lines.extend(["", "No findings met the confidence gate after exclusions."])
+
+upstream_managed_report = summary.get("upstream_managed")
+if isinstance(upstream_managed_report, list) and upstream_managed_report:
+	comment_lines.extend(
+		[
+			"",
+			"### Upstream-managed findings (not filed)",
+			"",
+			"These cite files that coding-workflows syncs into this repository. A fix here is overwritten by the next sync, so no follow-up issue was filed; the defect belongs upstream.",
+			"",
+		]
+	)
+	for idx, finding in enumerate(upstream_managed_report, 1):
+		if not isinstance(finding, dict):
+			continue
+		comment_lines.extend(
+			[
+				f"{idx}. **[{finding.get('severity')} | {finding.get('confidence')}/10]** `{finding.get('file')}:{finding.get('line')}` — `{finding.get('owasp_or_stride_category')}`",
+				f"   - Finding ID: `{finding.get('finding_id')}`",
+				f"   - Exploit scenario: {finding.get('exploit_scenario')}",
+				f"   - Recommendation: {finding.get('recommendation')}",
+			]
+		)
+
+tracker_comment_path.write_text("\n".join(comment_lines) + "\n", encoding="utf-8")
+
+followup_body_dir.mkdir(parents=True, exist_ok=True)
+index_lines: list[str] = []
+for idx, finding in enumerate(findings):
+	# The index includes existing findings so a retry can continue a chain
+	# after a partially successful earlier run without refiling its predecessor.
+	file_key = hashlib.sha256(str(finding["file"]).encode("utf-8")).hexdigest()
+	finding_id = str(finding["finding_id"])
+	if finding_id in existing_finding_ids:
+		# The title column of an existing row carries `open` for an open issue
+		# (read only by the consolidated `Depends on` choice), else `-`.
+		existing_state = "open" if existing_finding_open.get(finding_id) else "-"
+		index_lines.append(f"-\t{existing_state}\t{file_key}\t{existing_finding_numbers.get(finding_id, 0)}\n")
+		continue
+	if consolidate_active:
+		# Filed below as one consolidated issue (stuck-states P5b).
+		continue
+	title = truncate_title(
+		f"[security-audit] {finding['finding_id']}: {finding['severity']} {finding['file']}:{finding['line']}"
+	)
+	body_path = followup_body_dir / f"followup-{idx}.md"
+	body_lines = [
+		f"{followup_marker_prefix}{finding['finding_id']} -->",
+		f"Refs #{tracker_number}",
+		"",
+		"Generated by `.github/workflows/security-audit.yml`.",
+		"",
+		f"- Category: `{finding['owasp_or_stride_category']}`",
+		f"- Severity: `{finding['severity']}`",
+		f"- Confidence: `{finding['confidence']}/10`",
+		f"- Location: `{finding['file']}:{finding['line']}`",
+	]
+	if target_ref:
+		# resolve_integration_ref.sh reads this line, so clarify / plan /
+		# implement check out the audited branch and the fix PR targets it.
+		body_lines.append(f"- Integration branch: `{target_ref}`")
+	body_lines += [
+		"",
+		"## Exploit scenario",
+		str(finding["exploit_scenario"]),
+		"",
+		"## Recommendation",
+		str(finding["recommendation"]),
+	]
+	body_path.write_text("\n".join(body_lines) + "\n", encoding="utf-8")
+	index_lines.append(f"{body_path}\t{title}\t{file_key}\t0\n")
+
+followup_create_count = len(planned_followups)
+if consolidate_active:
+	followup_create_count = 0
+	if planned_followups:
+		consolidated_body_path = followup_body_dir / "followup-consolidated.md"
+		consolidated_title = truncate_title(
+			f"[security-audit] PR #{consolidate_pr_number}: {len(planned_followups)} findings at {head_sha[:12]}"
+		)
+		consolidated_header = [
+			*(f"{followup_marker_prefix}{finding['finding_id']} -->" for finding in planned_followups),
+			f"Refs #{tracker_number}",
+			"",
+			"Generated by `.github/workflows/security-audit.yml`.",
+			"",
+			f"- Pull request: #{consolidate_pr_number}",
+			f"- Audited head: `{head_sha}`",
+			# resolve_integration_ref.sh reads this line, so clarify / plan /
+			# implement check out the audited branch and the fix PR targets it.
+			f"- Integration branch: `{target_ref}`",
+			"",
+			"## Findings",
+		]
+
+		def consolidated_body(text_cap: int | None) -> str:
+			def capped(value: object) -> str:
+				text = str(value)
+				if text_cap is None or len(text) <= text_cap:
+					return text
+				return text[:text_cap] + " [truncated]"
+
+			lines = list(consolidated_header)
+			for number, finding in enumerate(planned_followups, 1):
+				lines += [
+					"",
+					f"### {number}. {finding['finding_id']}",
+					"",
+					f"- Category: `{finding['owasp_or_stride_category']}`",
+					f"- Severity: `{finding['severity']}`",
+					f"- Confidence: `{finding['confidence']}/10`",
+					f"- Location: `{finding['file']}:{finding['line']}`",
+					"",
+					"**Exploit scenario**",
+					"",
+					capped(finding["exploit_scenario"]),
+					"",
+					"**Recommendation**",
+					"",
+					capped(finding["recommendation"]),
+				]
+			if text_cap is not None:
+				lines += [
+					"",
+					"_Finding text was truncated to fit the issue body limit; the security audit tracker comment lists every finding in full._",
+				]
+			return "\n".join(lines) + "\n"
+
+		# GitHub caps issue bodies at 65,536 characters; keep every marker line
+		# and shorten the per-finding prose when the body would exceed 60,000.
+		consolidated_text = consolidated_body(None)
+		for text_cap in (2000, 500, 100, 0):
+			if len(consolidated_text) <= 60000:
+				break
+			consolidated_text = consolidated_body(text_cap)
+		consolidated_body_path.write_text(consolidated_text, encoding="utf-8")
+		consolidated_file_keys = list(
+			dict.fromkeys(
+				hashlib.sha256(str(finding["file"]).encode("utf-8")).hexdigest() for finding in planned_followups
+			)
+		)
+		# Existing-finding rows come first, so the create loop knows every
+		# same-file predecessor before it picks the one `Depends on`.
+		index_lines.append(f"{consolidated_body_path}\t{consolidated_title}\tmulti:{'+'.join(consolidated_file_keys)}\t0\n")
+		followup_create_count = 1
+
+followup_index_path.write_text("".join(index_lines), encoding="utf-8")
+# Two findings that repeat one open follow-up carry the same id. The count
+# is the number of distinct ids, because the single-issue security pass
+# (review_single_issue_security_pass.sh report) accepts the ids only when the
+# array has exactly `findings=` unique entries.
+surviving_finding_ids = list(dict.fromkeys(finding["finding_id"] for finding in findings))
+finding_ids_b64 = base64.b64encode(
+	json.dumps(surviving_finding_ids, ensure_ascii=True).encode("ascii")
+).decode("ascii")
+followup_summary_env_path.write_text(
+	"\n".join(
+		[
+			f"SURVIVING_FINDINGS_COUNT={shlex.quote(str(len(surviving_finding_ids)))}",
+			f"SURVIVING_FINDING_IDS_B64={shlex.quote(finding_ids_b64)}",
+			f"FOLLOWUP_CREATE_COUNT={shlex.quote(str(followup_create_count))}",
+		]
+	)
+	+ "\n",
+	encoding="utf-8",
+)
+if pass_findings_out:
+	pass_finding_fields = (
+		"finding_id", "owasp_or_stride_category", "severity", "confidence",
+		"file", "line", "exploit_scenario", "recommendation",
+	)
+	pass_findings_export = [
+		{key: finding.get(key) for key in pass_finding_fields if key in finding}
+		for finding in findings
+		if isinstance(finding, dict)
+	]
+	pass_findings_path = Path(pass_findings_out)
+	pass_findings_tmp = pass_findings_path.with_name(pass_findings_path.name + ".tmp")
+	try:
+		pass_findings_tmp.write_text(json.dumps(pass_findings_export, ensure_ascii=True), encoding="utf-8")
+		pass_findings_tmp.replace(pass_findings_path)
+	except OSError as exc:
+		print(f"::warning::security-audit: could not write the single-issue security pass findings export: {exc}")
+PY
+
+# The tracker comment is a report: nothing reads it back (the run markers live
+# in the tracker body, and security_pass_skip.py checks the tracker issue's
+# author, not its comments). With SECURITY_AUDIT_COMMENT_TOKEN (the job's
+# GITHUB_TOKEN, set by security-audit.yml) it starts no issue_comment
+# workflows (run-volume plan item 6). Unset, or refused by GitHub (401/403),
+# GH_TOKEN posts it. Any other failure fails the run as before: a POST is
+# sent once, and resending after a timeout could duplicate the comment.
+tracker_comment_via_pat="true"
+if [ -n "${SECURITY_AUDIT_COMMENT_TOKEN:-}" ]; then
+	tracker_comment_err="$(mktemp)"
+	tracker_comment_rc=0
+	GH_TOKEN="${SECURITY_AUDIT_COMMENT_TOKEN}" gh_retry gh issue comment "${TRACKER_NUMBER}" \
+		--repo "${GITHUB_REPOSITORY}" \
+		--body-file "${TRACKER_COMMENT_FILE}" 2>"${tracker_comment_err}" || tracker_comment_rc=$?
+	if [ "${tracker_comment_rc}" -eq 0 ]; then
+		echo "security-audit: tracker comment posted token=job"
+		tracker_comment_via_pat="false"
+	elif grep -qiE 'HTTP 40[13]|Resource not accessible by integration|Bad credentials|Requires authentication' "${tracker_comment_err}"; then
+		echo "security-audit: job token refused for the tracker comment; posting with GH_TOKEN" >&2
+	else
+		cat "${tracker_comment_err}" >&2
+		rm -f "${tracker_comment_err}"
+		exit "${tracker_comment_rc}"
+	fi
+	rm -f "${tracker_comment_err}"
+fi
+if [ "${tracker_comment_via_pat}" = "true" ]; then
+	gh_retry gh issue comment "${TRACKER_NUMBER}" \
+		--repo "${GITHUB_REPOSITORY}" \
+		--body-file "${TRACKER_COMMENT_FILE}"
+fi
+
+declare -A LAST_FOLLOWUP_BY_FILE=()
+# Highest open follow-up per file (existing open issues and issues filed in
+# this run); only the consolidated `Depends on` choice reads it.
+declare -A LAST_OPEN_FOLLOWUP_BY_FILE=()
+# Highest follow-up per file in any state; LAST_FOLLOWUP_BY_FILE keeps the
+# last-listed row for the per-finding chain, so the consolidated closed
+# fallback reads this map instead.
+declare -A LAST_ANY_FOLLOWUP_BY_FILE=()
+while IFS=$'\t' read -r FOLLOWUP_BODY_PATH FOLLOWUP_TITLE FOLLOWUP_FILE_KEY FOLLOWUP_EXISTING_NUMBER; do
+	if [ "${FOLLOWUP_EXISTING_NUMBER}" != "0" ]; then
+		[[ "${FOLLOWUP_EXISTING_NUMBER}" =~ ^[1-9][0-9]*$ ]] || {
+			echo "security-audit: existing follow-up has no verified issue number; refusing to break chain" >&2
+			exit 1
+		}
+		LAST_FOLLOWUP_BY_FILE["${FOLLOWUP_FILE_KEY}"]="${FOLLOWUP_EXISTING_NUMBER}"
+		if [ "${FOLLOWUP_TITLE}" = "open" ] \
+				&& { [ -z "${LAST_OPEN_FOLLOWUP_BY_FILE[${FOLLOWUP_FILE_KEY}]:-}" ] \
+					|| [ "${FOLLOWUP_EXISTING_NUMBER}" -gt "${LAST_OPEN_FOLLOWUP_BY_FILE[${FOLLOWUP_FILE_KEY}]}" ]; }; then
+			LAST_OPEN_FOLLOWUP_BY_FILE["${FOLLOWUP_FILE_KEY}"]="${FOLLOWUP_EXISTING_NUMBER}"
+		fi
+		if [ -z "${LAST_ANY_FOLLOWUP_BY_FILE[${FOLLOWUP_FILE_KEY}]:-}" ] \
+				|| [ "${FOLLOWUP_EXISTING_NUMBER}" -gt "${LAST_ANY_FOLLOWUP_BY_FILE[${FOLLOWUP_FILE_KEY}]}" ]; then
+			LAST_ANY_FOLLOWUP_BY_FILE["${FOLLOWUP_FILE_KEY}"]="${FOLLOWUP_EXISTING_NUMBER}"
+		fi
+		continue
+	fi
+	[ -n "${FOLLOWUP_BODY_PATH}" ] || continue
+	FOLLOWUP_FILE_KEYS=("${FOLLOWUP_FILE_KEY}")
+	if [[ "${FOLLOWUP_FILE_KEY}" == multi:* ]]; then
+		# Consolidated follow-up (stuck-states P5b): it touches several files but
+		# may carry only one `Depends on` line (scripts/security_dependency.py
+		# treats repeated lines as held), so depend on the highest-numbered
+		# same-file predecessor across all of them that is still open. A closed
+		# predecessor would release the hold (once ai:merged) while another
+		# file's open predecessor is still being fixed, so a closed one is used
+		# only when none is open. Known limit: with open predecessors in several
+		# files only the highest-numbered one is depended on, so merging it
+		# releases the hold even while a lower-numbered one is still open.
+		IFS='+' read -r -a FOLLOWUP_FILE_KEYS <<< "${FOLLOWUP_FILE_KEY#multi:}"
+		FOLLOWUP_DEPENDS_ON=""
+		FOLLOWUP_DEPENDS_ON_ANY=""
+		for FOLLOWUP_MULTI_KEY in "${FOLLOWUP_FILE_KEYS[@]}"; do
+			FOLLOWUP_MULTI_PREDECESSOR="${LAST_OPEN_FOLLOWUP_BY_FILE[${FOLLOWUP_MULTI_KEY}]:-}"
+			if [[ "${FOLLOWUP_MULTI_PREDECESSOR}" =~ ^[1-9][0-9]*$ ]] \
+					&& { [ -z "${FOLLOWUP_DEPENDS_ON}" ] || [ "${FOLLOWUP_MULTI_PREDECESSOR}" -gt "${FOLLOWUP_DEPENDS_ON}" ]; }; then
+				FOLLOWUP_DEPENDS_ON="${FOLLOWUP_MULTI_PREDECESSOR}"
+			fi
+			FOLLOWUP_MULTI_PREDECESSOR="${LAST_ANY_FOLLOWUP_BY_FILE[${FOLLOWUP_MULTI_KEY}]:-}"
+			if [[ "${FOLLOWUP_MULTI_PREDECESSOR}" =~ ^[1-9][0-9]*$ ]] \
+					&& { [ -z "${FOLLOWUP_DEPENDS_ON_ANY}" ] || [ "${FOLLOWUP_MULTI_PREDECESSOR}" -gt "${FOLLOWUP_DEPENDS_ON_ANY}" ]; }; then
+				FOLLOWUP_DEPENDS_ON_ANY="${FOLLOWUP_MULTI_PREDECESSOR}"
+			fi
+		done
+		FOLLOWUP_DEPENDS_ON="${FOLLOWUP_DEPENDS_ON:-${FOLLOWUP_DEPENDS_ON_ANY}}"
+		if [ -n "${FOLLOWUP_DEPENDS_ON}" ]; then
+			printf '\n- Depends on: #%s\n' "${FOLLOWUP_DEPENDS_ON}" >> "${FOLLOWUP_BODY_PATH}"
+		fi
+	elif [ -n "${LAST_FOLLOWUP_BY_FILE[${FOLLOWUP_FILE_KEY}]:-}" ]; then
+		printf '\n- Depends on: #%s\n' "${LAST_FOLLOWUP_BY_FILE[${FOLLOWUP_FILE_KEY}]}" >> "${FOLLOWUP_BODY_PATH}"
+	fi
+	# An ambiguous create result aborts: the next run reconciles by the
+	# existing finding marker before trying to create another follow-up.
+	# Issue creation is non-idempotent. gh_retry discards a failed attempt's
+	# stdout and retries it, which can create a duplicate when gh has already
+	# printed the URL. Stop here; next audit reconciles by finding marker.
+	FOLLOWUP_URL="$(gh issue create \
+		--repo "${GITHUB_REPOSITORY}" \
+		--title "${FOLLOWUP_TITLE}" \
+		--label "ai:security" \
+		--body-file "${FOLLOWUP_BODY_PATH}")"
+	case "${FOLLOWUP_URL}" in
+		"https://github.com/${GITHUB_REPOSITORY}/issues/"*) ;;
+		*) echo "security-audit: unverified follow-up URL; refusing to break chain" >&2; exit 1 ;;
+	esac
+	FOLLOWUP_NUMBER="${FOLLOWUP_URL##*/}"
+	[[ "${FOLLOWUP_NUMBER}" =~ ^[1-9][0-9]*$ ]] || {
+		echo "security-audit: unverified follow-up number; refusing to break chain" >&2
+		exit 1
+	}
+	for FOLLOWUP_MULTI_KEY in "${FOLLOWUP_FILE_KEYS[@]}"; do
+		LAST_FOLLOWUP_BY_FILE["${FOLLOWUP_MULTI_KEY}"]="${FOLLOWUP_NUMBER}"
+		LAST_OPEN_FOLLOWUP_BY_FILE["${FOLLOWUP_MULTI_KEY}"]="${FOLLOWUP_NUMBER}"
+		LAST_ANY_FOLLOWUP_BY_FILE["${FOLLOWUP_MULTI_KEY}"]="${FOLLOWUP_NUMBER}"
+	done
+done < "${FOLLOWUP_INDEX_FILE}"
+
+if [ -n "${SECURITY_AUDIT_TARGET_REF}" ]; then
+	# A branch audit covers a range that is not on the default branch; the
+	# marker records default-branch progress only, so leave it untouched.
+	echo "security-audit: target_ref=${SECURITY_AUDIT_TARGET_REF}; leaving the tracker's last-audited-commit marker unchanged."
+elif [ "${OVERSIZED_TEXT_CAPPED_COUNT:-0}" -gt 0 ]; then
+	echo "security-audit: coverage=partial skipped_text=${OVERSIZED_TEXT_CAPPED_COUNT}; leaving the last-audited-commit marker unchanged."
+	echo "::warning::Security audit coverage is partial: ${OVERSIZED_TEXT_CAPPED_COUNT} tracked text files over export caps were not inspected; last-audited-commit marker unchanged."
+	if declare -F tg_send_msg >/dev/null; then
+		tg_send_msg "${GITHUB_REPOSITORY}: security audit coverage partial — ${OVERSIZED_TEXT_CAPPED_COUNT} text files over export caps not inspected; marker unchanged (tracker #${TRACKER_NUMBER})" WARNING >/dev/null 2>&1 || true
+	fi
+elif [ -n "${HEAD_SHA}" ]; then
+	# Persist the audited HEAD SHA on the tracker body so the next run can
+	# skip when unchanged or diff-scope against it. One extra `gh issue edit`
+	# per completed audit; reads are free because the tracker-discovery
+	# `gh issue list` above already returns the body (§15). Runs only after
+	# the comment and follow-ups posted, so a failed run re-audits the same
+	# range instead of silently advancing the marker.
+	{
+		cat "${TRACKER_BODY_FILE}"
+		echo
+		echo "Last audited commit (managed automatically; do not edit):"
+		echo "${LAST_SHA_MARKER_PREFIX}${HEAD_SHA} -->"
+	} > "${TRACKER_BODY_WITH_SHA_FILE}"
+	gh_retry gh issue edit "${TRACKER_NUMBER}" \
+		--repo "${GITHUB_REPOSITORY}" \
+		--body-file "${TRACKER_BODY_WITH_SHA_FILE}"
+fi
+
+# shellcheck disable=SC1090
+source "${FOLLOWUP_SUMMARY_ENV}"
+
+echo "security-audit: tracker=#${TRACKER_NUMBER} findings=${SURVIVING_FINDINGS_COUNT} followups_created=${FOLLOWUP_CREATE_COUNT} finding_ids_b64=${SURVIVING_FINDING_IDS_B64}"

@@ -1,0 +1,24 @@
+{
+  "entry_id": "processed_command_42_123456789_answer",
+  "schema_version": "processed_command_entry.v1",
+  "issue_number": 42,
+  "comment_id": 123456789,
+  "command": "answer",
+  "workflow": "plan",
+  "status": "claimed",
+  "actor": "github-actions[bot]",
+  "run_id": "987654321",
+  "run_attempt": 1,
+  "timestamp": "2026-03-22T11:30:00Z",
+  "metadata": {
+    "source": "issue_comment",
+    "author_login": "octocat",
+    "clarify_hash": "dcf50f30d5dd8f6ca48e72b745ecdf7e96f5db84abaf5e26077f27de83b56dbf",
+    "answer_hash": "2bdbbc90af3bc4e3f0a13c5395f37f3969b683f8362a8c4640f6dd84f1b20544",
+    "clarify_comment_id": 123456789,
+    "answer_comment_id": 123456790,
+    "cycle": 1,
+    "loop_blocked": false,
+    "loop_block_reason": "none"
+  }
+}

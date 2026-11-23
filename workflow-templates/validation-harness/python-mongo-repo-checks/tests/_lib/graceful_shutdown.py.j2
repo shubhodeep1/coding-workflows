@@ -1,0 +1,68 @@
+#!/usr/bin/env python3
+"""Graceful shutdown helper contract stub with bounded log tail payload."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+import time
+
+
+def build_parser() -> argparse.ArgumentParser:
+	parser = argparse.ArgumentParser(description="Repo-checks graceful shutdown helper")
+	parser.add_argument("--timeout-seconds", type=int, default=30)
+	parser.add_argument("--poll-seconds", type=float, default=1.0)
+	parser.add_argument("--log-tail-lines", type=int, default=40)
+	parser.add_argument("--compose-file", default="validation/docker-compose.test.yml")
+	return parser
+
+
+def bounded_compose_logs_tail(lines: int, compose_file: str) -> str:
+	proc = subprocess.run(
+		["docker", "compose", "-f", compose_file, "logs", "--no-color", "app"],
+		text=True,
+		capture_output=True,
+		check=False,
+	)
+	if proc.returncode != 0 or lines <= 0:
+		return ""
+	log_lines = (proc.stdout or "").splitlines()
+	return "\n".join(log_lines[-lines:])
+
+
+def app_service_running(compose_file: str) -> bool:
+	proc = subprocess.run(
+		["docker", "compose", "-f", compose_file, "ps", "--status", "running", "--services", "app"],
+		text=True,
+		capture_output=True,
+		check=False,
+	)
+	if proc.returncode != 0:
+		return False
+	services = {(line or "").strip() for line in (proc.stdout or "").splitlines()}
+	return "app" in services
+
+
+def main() -> int:
+	args = build_parser().parse_args()
+	deadline = time.monotonic() + max(1, args.timeout_seconds)
+	while time.monotonic() < deadline:
+		if app_service_running(args.compose_file):
+			print("# graceful_shutdown helper contract satisfied")
+			return 0
+		time.sleep(max(0.1, args.poll_seconds))
+
+	tail = bounded_compose_logs_tail(args.log_tail_lines, args.compose_file)
+	payload = {
+		"reason": "timeout_waiting_for_shutdown",
+		"timeout_seconds": args.timeout_seconds,
+		"log_tail": tail,
+	}
+	print(f"# graceful_shutdown timeout {json.dumps(payload, sort_keys=True)}", file=sys.stderr)
+	return 1
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

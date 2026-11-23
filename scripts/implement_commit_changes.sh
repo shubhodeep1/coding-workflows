@@ -1,0 +1,901 @@
+#!/usr/bin/env bash
+# implement_commit_changes.sh — stage + commit implement-phase editor output.
+#
+# Extracted from the "Commit changes" step of .github/workflows/implement.yml
+# because the inline `run:` block exceeded GitHub Actions' per-step template
+# expression size limit. Keeping the logic in a helper preserves the existing
+# commit/output contract without re-approaching that ceiling.
+
+set -euo pipefail
+
+if [ "${HEAL_ROUTE:-false}" = true ]; then
+  HEAL_SCOPE_FILE="${HEAL_SCOPE_FILE:-${RUNNER_TEMP:-/tmp}/heal-scope-${GITHUB_RUN_ID:-local}.txt}"
+  [ -s "${HEAL_SCOPE_FILE}" ] || { echo '::error::Verified heal scope missing; refusing commit.' >&2; exit 1; }
+  export GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=/dev/null
+  export GIT_CONFIG_COUNT=5
+  export GIT_CONFIG_KEY_0=core.hooksPath GIT_CONFIG_VALUE_0=/dev/null
+  export GIT_CONFIG_KEY_1=core.fsmonitor GIT_CONFIG_VALUE_1=false
+  export GIT_CONFIG_KEY_2=core.attributesFile GIT_CONFIG_VALUE_2=/dev/null
+  export GIT_CONFIG_KEY_3=commit.gpgsign GIT_CONFIG_VALUE_3=false
+  export GIT_CONFIG_KEY_4=diff.external GIT_CONFIG_VALUE_4=''
+fi
+
+STEP_NAME="Commit changes"
+STEP_STDERR_FILE="$(mktemp)"
+CAPTURE_FILE=""
+if [ -n "${RUNTIME_DIR:-}" ] && [ -d "${RUNTIME_DIR}" ] && [ -w "${RUNTIME_DIR}" ]; then
+  CAPTURE_FILE="${RUNTIME_DIR}/post_codex_validation_errors.txt"
+fi
+
+capture_step_failure() {
+  local failed_command="$1"
+  [ -n "${CAPTURE_FILE}" ] || return 0
+  {
+    printf '===== %s =====\n' "${STEP_NAME}"
+    printf 'Command: %s\n' "${failed_command}"
+    if [ -s "${STEP_STDERR_FILE}" ]; then
+      cat "${STEP_STDERR_FILE}"
+    else
+      echo "(no stderr output)"
+    fi
+    printf '\n'
+  } >> "${CAPTURE_FILE}" || true
+}
+
+# Diagnostics only (#9940, Refs #9937): print one IMPLEMENT_SYMLINK_DELETE
+# line for every symlink tracked in HEAD that no longer exists in the
+# worktree. Called before and after the artifact cleanup below, so the log
+# shows whether the editor result (both stages) or the cleanup (post_cleanup
+# only) removed it. Fails open: never changes behaviour or the exit status.
+implement_log_tracked_symlink_deletes() {
+  local symlink_stage="${1:-unknown}"
+  local symlink_record symlink_meta symlink_path symlink_safe_path
+  while IFS= read -r -d '' symlink_record; do
+    symlink_meta="${symlink_record%%$'\t'*}"
+    if [ "${symlink_meta%% *}" != "120000" ]; then
+      continue
+    fi
+    symlink_path="${symlink_record#*$'\t'}"
+    if [ -z "${symlink_path}" ]; then
+      continue
+    fi
+    if [ ! -L "${symlink_path}" ] && [ ! -e "${symlink_path}" ]; then
+      symlink_safe_path="${symlink_path//[[:space:][:cntrl:]]/?}"
+      echo "IMPLEMENT_SYMLINK_DELETE path=${symlink_safe_path} stage=${symlink_stage}"
+    fi
+  done < <(git ls-tree -r -z --full-tree HEAD 2>/dev/null | grep -z '^120000 ' || true)
+  return 0
+}
+
+FAILED_COMMAND=""
+LAST_COMMAND=""
+trap 'LAST_COMMAND="${BASH_COMMAND}"' DEBUG
+trap 'FAILED_COMMAND="${BASH_COMMAND}"' ERR
+on_step_exit() {
+  local exit_code="$?"
+  trap - DEBUG ERR EXIT
+  set +e
+  exec 2>&3 || true
+  exec 3>&- || true
+  wait || true
+  if [ "${exit_code}" -ne 0 ]; then
+    local failed_command="${FAILED_COMMAND:-${LAST_COMMAND:-unknown command}}"
+    capture_step_failure "${failed_command}"
+  fi
+  rm -f "${STEP_STDERR_FILE}"
+  exit "${exit_code}"
+}
+trap on_step_exit EXIT
+exec 3>&2
+exec 2> >(tee "${STEP_STDERR_FILE}" >&3)
+
+implement_log_tracked_symlink_deletes pre_cleanup || true
+
+# Remove workflow-generated/fetched artifacts BEFORE checking for
+# changes so they don't cause false-positive "file changes" detection.
+# Restore pre_assembled_static.txt from HEAD when the consumer tracks it;
+# build_static_context overwrites that path before this cleanup runs.
+# The manifest tracks exactly which files were fetched — caller-repo
+# files that were never touched are safe. Refuse the cleanup batch if
+# the manifest contains any path outside repo-relative cleanup targets.
+if git ls-files --error-unmatch -- pre_assembled_static.txt >/dev/null 2>&1; then
+  echo "Preserving repo-tracked path during artifact cleanup: pre_assembled_static.txt"
+  git restore --source=HEAD --worktree -- pre_assembled_static.txt
+else
+  rm -f -- pre_assembled_static.txt
+fi
+fetched_manifest_path="${FETCHED_MANIFEST:-}"
+if [ -n "${fetched_manifest_path}" ] && [ -f "${fetched_manifest_path}" ]; then
+  safe_fetched_paths=()
+  unsafe_fetched_paths=""
+  while IFS= read -r fetched_file; do
+    [ -n "${fetched_file}" ] || continue
+    case "${fetched_file}" in
+      /*|../*|*/../*|..|*/..)
+        unsafe_fetched_paths="${unsafe_fetched_paths}${unsafe_fetched_paths:+$'\n'}${fetched_file}"
+        ;;
+      *)
+        safe_fetched_paths+=("${fetched_file}")
+        ;;
+    esac
+  done < "${fetched_manifest_path}"
+  if [ -n "${unsafe_fetched_paths}" ]; then
+    unsafe_fetched_count="$(printf '%s\n' "${unsafe_fetched_paths}" | sed '/^$/d' | wc -l | tr -d ' ')"
+    echo "::error::Refusing to continue: fetched-manifest contains unsafe cleanup path(s)."
+    printf '%s\n' "${unsafe_fetched_paths}" | sed 's/^/  - /'
+    {
+      echo "destructive_commit_blocked=unsafe-fetched-manifest"
+      echo "destructive_commit_count=${unsafe_fetched_count}"
+      echo 'destructive_commit_deletions<<__DCD_EOF__'
+      printf '%s\n' "${unsafe_fetched_paths}"
+      echo '__DCD_EOF__'
+    } >> "$GITHUB_OUTPUT"
+    exit 1
+  fi
+  if [ "${#safe_fetched_paths[@]}" -gt 0 ]; then
+    rm -f -- "${safe_fetched_paths[@]}"
+  fi
+fi
+
+# Self-repo staged-support restore. In this repository the "Stage workflow
+# support files" step of implement.yml installs SCRIPT_REF's copies of the
+# runtime helpers (scripts/*.sh, scripts/*.py, prompts/*, ai-memory/schemas/*)
+# over the checkout's tracked files, and the self-repo commit path below has
+# no scripts/ exclusions. When the issue's branch is an orchestrator
+# integration branch that diverged from SCRIPT_REF, that turned every
+# implementation commit into a silent revert of the branch's own edits to
+# those helpers (implement runs 34392788763 and 34613019339; PR #4079 dropped
+# 1,117 lines across eight helpers and its own review editor then failed with
+# `model_provider_broker_start: command not found`). The staging step records
+# every tracked file it overwrote in STAGED_SUPPORT_LEDGER, with the installed
+# content under STAGED_SUPPORT_BASE_DIR; put each one back before staging:
+#   - content and mode still equal to the installed copy: the editor never touched it,
+#     restore HEAD's version (IMPLEMENT_STAGED_SUPPORT_RESTORED);
+#   - content differs: the editor edited the installed copy, re-base that edit
+#     onto HEAD's version with a 3-way merge against the installed content
+#     (IMPLEMENT_STAGED_SUPPORT_REBASED);
+#   - the 3-way merge conflicts: fail closed (IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT)
+#     rather than commit a SCRIPT_REF-based copy that drops the branch's edits;
+#   - the editor deleted the file: keep the deletion, it is the editor's change.
+# Paths listed in STAGED_SUPPORT_EDITOR_HEAD_LEDGER were shown to the editor
+# as HEAD's version by scripts/implement_staged_support_workspace.sh (restore
+# before the editor, reinstall of untouched copies after it), so an edit
+# there is a plain edit of the branch's own file: it is committed as-is
+# (IMPLEMENT_STAGED_SUPPORT_EDITED_FROM_HEAD) and never re-based, which is
+# what turned #4113's codex_helpers.sh edit into a conflict and ai:needs-human.
+# Consumer repos never set the ledger (their staged helpers are excluded at
+# commit time), so this block is a no-op there.
+staged_support_ledger="${STAGED_SUPPORT_LEDGER:-}"
+staged_support_base_dir="${STAGED_SUPPORT_BASE_DIR:-}"
+staged_support_editor_head_ledger="${STAGED_SUPPORT_EDITOR_HEAD_LEDGER:-}"
+if [ -z "${staged_support_editor_head_ledger}" ] && [ -n "${staged_support_ledger}" ]; then
+  staged_support_editor_head_ledger="$(dirname -- "${staged_support_ledger}")/staged_support_editor_head.txt"
+fi
+declare -A staged_support_editor_saw_head=()
+if [ -n "${staged_support_editor_head_ledger}" ] && [ -f "${staged_support_editor_head_ledger}" ]; then
+  while IFS= read -r staged_support_head_path; do
+    [ -n "${staged_support_head_path}" ] || continue
+    staged_support_editor_saw_head["${staged_support_head_path}"]=1
+  done < "${staged_support_editor_head_ledger}"
+fi
+if [ -n "${staged_support_ledger}" ] || [ -n "${staged_support_base_dir}" ]; then
+  if [ -z "${staged_support_ledger}" ] || [ ! -f "${staged_support_ledger}" ]; then
+    echo "::error::IMPLEMENT_STAGED_SUPPORT_LEDGER_MISSING path=${staged_support_ledger:-<unset>}; refusing to commit without the staged-support inventory."
+    {
+      echo "staged_support_rebase_conflict=true"
+      echo "staged_support_rebase_conflict_files=${staged_support_ledger:-STAGED_SUPPORT_LEDGER}"
+    } >> "$GITHUB_OUTPUT"
+    exit 1
+  fi
+  if [ -z "${staged_support_base_dir}" ] || [ ! -d "${staged_support_base_dir}" ]; then
+    echo "::error::IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=${staged_support_base_dir:-<unset>}; refusing to commit without the installed-content baseline."
+    {
+      echo "staged_support_rebase_conflict=true"
+      echo "staged_support_rebase_conflict_files=${staged_support_base_dir:-STAGED_SUPPORT_BASE_DIR}"
+    } >> "$GITHUB_OUTPUT"
+    exit 1
+  fi
+  staged_support_restored=0
+  staged_support_rebased=0
+  staged_support_edited_from_head=0
+  staged_support_conflicts=""
+  staged_support_auto_release_safe="true"
+  while IFS= read -r staged_support_path; do
+    [ -n "${staged_support_path}" ] || continue
+    case "${staged_support_path}" in
+      /*|../*|*/../*|..|*/..)
+        echo "::error::IMPLEMENT_STAGED_SUPPORT_LEDGER_INVALID path=${staged_support_path} reason=unsafe_path"
+        {
+          echo "staged_support_rebase_conflict=true"
+          echo "staged_support_rebase_conflict_files=${staged_support_path}"
+        } >> "$GITHUB_OUTPUT"
+        exit 1
+        ;;
+    esac
+    staged_support_base="${staged_support_base_dir}/${staged_support_path}"
+    if [ ! -f "${staged_support_base}" ]; then
+      echo "::error::IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=${staged_support_path}; refusing to leave an unverifiable support-ref copy eligible for commit."
+      staged_support_conflicts="${staged_support_conflicts}${staged_support_conflicts:+ }${staged_support_path}"
+      staged_support_auto_release_safe="false"
+      continue
+    fi
+    staged_support_mode="$(stat -c '%a' -- "${staged_support_path}" 2>/dev/null || true)"
+    staged_support_base_mode="$(stat -c '%a' -- "${staged_support_base}" 2>/dev/null || true)"
+    if [ -e "${staged_support_path}" ] && { [ -z "${staged_support_mode}" ] || [ -z "${staged_support_base_mode}" ]; }; then
+      echo "::error::IMPLEMENT_STAGED_SUPPORT_REBASE_FAILED path=${staged_support_path} reason=mode_read: could not compare the editor and installed-content modes safely."
+      staged_support_conflicts="${staged_support_conflicts}${staged_support_conflicts:+ }${staged_support_path}"
+      staged_support_auto_release_safe="false"
+      continue
+    fi
+    if ! git cat-file -e "HEAD:${staged_support_path}" >/dev/null 2>&1; then
+      if [ ! -e "${staged_support_path}" ]; then
+        if [ -n "${staged_support_editor_saw_head[${staged_support_path}]+set}" ]; then
+          # The pre-editor restore removed this staging recreation of a
+          # branch-deleted file and the editor never brought it back.
+          echo "IMPLEMENT_STAGED_SUPPORT_RESTORED path=${staged_support_path} state=absent-in-head"
+          staged_support_restored=$((staged_support_restored + 1))
+        else
+          echo "IMPLEMENT_STAGED_SUPPORT_DELETED_BY_EDITOR path=${staged_support_path}"
+        fi
+      elif cmp -s -- "${staged_support_path}" "${staged_support_base}" \
+        && [ "${staged_support_mode}" = "${staged_support_base_mode}" ]; then
+        rm -f -- "${staged_support_path}"
+        echo "IMPLEMENT_STAGED_SUPPORT_RESTORED path=${staged_support_path} state=absent-in-head"
+        staged_support_restored=$((staged_support_restored + 1))
+      else
+        echo "IMPLEMENT_STAGED_SUPPORT_RECREATED_BY_EDITOR path=${staged_support_path}"
+      fi
+      continue
+    fi
+    if [ ! -e "${staged_support_path}" ]; then
+      echo "IMPLEMENT_STAGED_SUPPORT_DELETED_BY_EDITOR path=${staged_support_path}"
+      continue
+    fi
+    if cmp -s -- "${staged_support_path}" "${staged_support_base}" \
+      && [ "${staged_support_mode}" = "${staged_support_base_mode}" ]; then
+      git restore --source=HEAD --worktree -- "${staged_support_path}"
+      echo "IMPLEMENT_STAGED_SUPPORT_RESTORED path=${staged_support_path}"
+      staged_support_restored=$((staged_support_restored + 1))
+      continue
+    fi
+    if [ -n "${staged_support_editor_saw_head[${staged_support_path}]+set}" ]; then
+      # The editor was shown HEAD's version, so whatever is here now is its
+      # own edit of the branch's file: commit it as-is, no re-base needed.
+      if git diff --quiet HEAD -- "${staged_support_path}" 2>/dev/null; then
+        echo "IMPLEMENT_STAGED_SUPPORT_RESTORED path=${staged_support_path} state=already-head"
+        staged_support_restored=$((staged_support_restored + 1))
+      else
+        echo "IMPLEMENT_STAGED_SUPPORT_EDITED_FROM_HEAD path=${staged_support_path}"
+        staged_support_edited_from_head=$((staged_support_edited_from_head + 1))
+      fi
+      continue
+    fi
+    staged_support_head="$(mktemp)"
+    staged_support_merged="$(mktemp)"
+    if ! git show "HEAD:${staged_support_path}" > "${staged_support_head}"; then
+      echo "::error::IMPLEMENT_STAGED_SUPPORT_HEAD_READ_FAILED path=${staged_support_path}; refusing to commit without the branch-side merge input."
+      staged_support_conflicts="${staged_support_conflicts}${staged_support_conflicts:+ }${staged_support_path}"
+      staged_support_auto_release_safe="false"
+      rm -f -- "${staged_support_head}" "${staged_support_merged}"
+      continue
+    fi
+    staged_support_merge_rc=0
+    git merge-file -p -L "editor" -L "staged ${SCRIPT_REF:-support ref}" -L "HEAD" \
+      -- "${staged_support_path}" "${staged_support_base}" "${staged_support_head}" \
+      > "${staged_support_merged}" || staged_support_merge_rc=$?
+    if [ "${staged_support_merge_rc}" -eq 0 ]; then
+      # Restore HEAD's mode bits first (install -m changed them), then write
+      # the merged content over it.
+      git restore --source=HEAD --worktree -- "${staged_support_path}"
+      cat "${staged_support_merged}" > "${staged_support_path}"
+      if [ "${staged_support_mode}" != "${staged_support_base_mode}" ]; then
+        chmod "${staged_support_mode}" -- "${staged_support_path}"
+      fi
+      echo "IMPLEMENT_STAGED_SUPPORT_REBASED path=${staged_support_path}"
+      staged_support_rebased=$((staged_support_rebased + 1))
+    elif [ "${staged_support_merge_rc}" -le 127 ]; then
+      echo "::error::IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT path=${staged_support_path} conflicts=${staged_support_merge_rc}: the editor edited a helper that implement.yml had replaced with the ${SCRIPT_REF:-support ref} copy, and those edits do not apply cleanly to this branch's version. Refusing to commit the ${SCRIPT_REF:-support ref}-based copy; apply the edit against the branch's own file."
+      staged_support_conflicts="${staged_support_conflicts}${staged_support_conflicts:+ }${staged_support_path}"
+    else
+      echo "::error::IMPLEMENT_STAGED_SUPPORT_REBASE_FAILED path=${staged_support_path} merge_file_rc=${staged_support_merge_rc}: git merge-file could not process the staged, support-ref, and branch-side inputs."
+      staged_support_conflicts="${staged_support_conflicts}${staged_support_conflicts:+ }${staged_support_path}"
+      staged_support_auto_release_safe="false"
+    fi
+    rm -f -- "${staged_support_head}" "${staged_support_merged}"
+  done < "${staged_support_ledger}"
+  echo "IMPLEMENT_STAGED_SUPPORT_RESTORE restored=${staged_support_restored} rebased=${staged_support_rebased} edited_from_head=${staged_support_edited_from_head} conflicts=$(printf '%s' "${staged_support_conflicts}" | wc -w | tr -d ' ')"
+  if [ -n "${staged_support_conflicts}" ]; then
+    {
+      echo "staged_support_rebase_conflict=true"
+      echo "staged_support_rebase_conflict_files=${staged_support_conflicts}"
+      if [ "${staged_support_auto_release_safe}" = "true" ]; then
+        echo "staged_support_auto_release_safe=true"
+      fi
+    } >> "$GITHUB_OUTPUT"
+    exit 1
+  fi
+fi
+
+if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -n "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] && [ -f .serena/project.yml ]; then
+  current_serena_project_hash="$(sha256sum .serena/project.yml 2>/dev/null | awk '{print $1}' || true)"
+  if [ -n "${current_serena_project_hash}" ] && [ "${current_serena_project_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then
+    if ! git ls-files --error-unmatch -- .serena >/dev/null 2>&1; then
+      rm -rf .serena
+    fi
+  fi
+fi
+
+implement_log_tracked_symlink_deletes post_cleanup || true
+
+porcelain_status="$(git status --porcelain)"
+if [ -z "${porcelain_status}" ]; then
+  echo "No repository changes were produced by Codex implementation (worktree clean after artifact cleanup)."
+  echo "did_commit=false" >> "$GITHUB_OUTPUT"
+  exit 0
+fi
+echo "Worktree changes before staging (post artifact-cleanup):"
+# shellcheck disable=SC2001
+echo "${porcelain_status}" | sed 's/^/  /'
+
+# The commit author names the engine that wrote the edits: claude-bot only
+# when both editing roles (IMPLEMENT and IMPLEMENT_REPAIR) resolved to Claude
+# and neither fell back to Codex (codex_thread_reuse.sh leaves a
+# claude-<key>.unavailable marker when it does); codex-bot otherwise. Both
+# emails are on the reserved .invalid domain so GitHub links the commit to
+# no account.
+implement_commit_identity_states="${CODEX_THREAD_REUSE_RUNTIME_DIR:-${RUNTIME_DIR:-/nonexistent}}/codex-thread-reuse/states"
+if [ "${AI_ENGINE_RESOLVED_IMPLEMENT:-codex}" = "claude" ] \
+  && [ "${AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR:-codex}" = "claude" ] \
+  && [ ! -e "${implement_commit_identity_states}/claude-implement.unavailable" ] \
+  && [ ! -e "${implement_commit_identity_states}/claude-implement-repair.unavailable" ]; then
+  implement_commit_engine=claude
+  git config user.name "claude-bot"
+  git config user.email "claude-bot@users.noreply.invalid"
+else
+  implement_commit_engine=codex
+  git config user.name "codex-bot"
+  git config user.email "codex-bot@users.noreply.invalid"
+fi
+echo "AI_COMMIT_IDENTITY role=IMPLEMENT engine=${AI_ENGINE_RESOLVED_IMPLEMENT:-codex} repair_engine=${AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR:-codex} commit_engine=${implement_commit_engine} name=$(git config user.name)"
+git rm -r --cached node_modules 2>/dev/null || true
+# Template-owned paths (prompts/, .github/prompts/,
+# .github/scripts/) are fetched from coding-workflows at runtime in
+# consumer repos, and must NOT be committed there — any edit to them
+# in a consumer wrapper would either be a no-op (overwritten next run)
+# or leak a stale copy back into the caller's tree.  In the canonical
+# `shubhodeep1/coding-workflows` repository these paths ARE the source of truth
+# and must be editable, so the excludes are dropped.
+#
+# NOTE: scripts/ is NOT blanket-excluded here. Runtime-fetched
+# infrastructure helpers are filtered separately so consumer repos can
+# still commit their own scripts/ changes when required.
+wf_source="shubhodeep1/coding-workflows"
+is_self_repo="false"
+if [ "${GITHUB_REPOSITORY:-}" = "${wf_source}" ]; then
+  is_self_repo="true"
+fi
+add_u_excludes=(':!node_modules' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.ai/.workspace_source_manifest.txt')
+add_o_excludes=(':!node_modules' ':!.github/ai' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.ai/.workspace_source_manifest.txt')
+if [ "${is_self_repo}" = "false" ]; then
+  # Build per-file exclusions from the runtime-generated scripts/.gitignore
+  # instead of a blanket ':!scripts'.  The blanket exclusion previously
+  # blocked ALL consumer-repo-owned files under scripts/ (e.g.
+  # scripts/security/check-npm-audit.js), causing silent no-op commits.
+  # The .gitignore lists exactly the fetched coding-workflows helper
+  # scripts that must NOT be committed to consumer repos.
+  if [ -f scripts/.gitignore ]; then
+    while IFS= read -r _ign_entry; do
+      [[ -z "${_ign_entry}" || "${_ign_entry}" == \#* ]] && continue
+      add_u_excludes+=(":!scripts/${_ign_entry}")
+      add_o_excludes+=(":!scripts/${_ign_entry}")
+    done < scripts/.gitignore
+  else
+    # Fallback: if .gitignore was not created (bootstrap failure), use
+    # blanket exclusion for safety — same as the legacy behaviour.
+    add_u_excludes+=(':!scripts')
+    add_o_excludes+=(':!scripts')
+  fi
+  # Keep runtime artifact paths out of consumer-repo commits for
+  # both tracked updates (-u) and untracked additions.
+  add_u_excludes+=(':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
+  add_o_excludes+=(':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
+fi
+git add -u -- "${add_u_excludes[@]}"
+if git ls-files --error-unmatch -- .ai/.workspace_source_manifest.txt >/dev/null 2>&1 && [ ! -e .ai/.workspace_source_manifest.txt ] && [ ! -L .ai/.workspace_source_manifest.txt ]; then
+  git rm --cached --quiet -- .ai/.workspace_source_manifest.txt
+  echo "IMPLEMENT_GENERATED_MANIFEST_UNTRACKED path=.ai/.workspace_source_manifest.txt"
+fi
+git ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}" | xargs -0 -r git add --
+# Self-repo exact-path .github/ai additions (unblock fix-up for #9111).
+# add_o_excludes keeps ':!.github/ai' in every case so no new file under
+# .github/ai/ is ever staged wholesale, but that also dropped the one new
+# file an issue's files_touched list named (#9111 committed its test, not
+# .github/ai/chatgpt_pool.json). In this repository only, stage each new
+# regular file under .github/ai/ whose path is listed exactly (no glob, no
+# directory entry) in the same allowlist the files_touched scope guard
+# reads. The automation-path grant guard and the files_touched guard below
+# still check every staged path. Off switch:
+# IMPLEMENT_SELF_REPO_GITHUB_AI_ADDS_ENABLED=false (unset/empty/true = on;
+# any other value = off with a warning), read only from this script's
+# environment: implement.yml does not forward it from a repository variable.
+# Consumer repos never run this.
+if [ "${is_self_repo}" = "true" ]; then
+  self_repo_github_ai_flag_raw="${IMPLEMENT_SELF_REPO_GITHUB_AI_ADDS_ENABLED-}"
+  self_repo_github_ai_flag="${self_repo_github_ai_flag_raw,,}"
+  self_repo_github_ai_enabled="false"
+  case "${self_repo_github_ai_flag}" in
+    ''|true) self_repo_github_ai_enabled="true" ;;
+    false) ;;
+    *)
+      self_repo_github_ai_flag_safe="$(printf '%s' "${self_repo_github_ai_flag_raw}" | tr -cd '[:print:]' | sed 's/::/: :/g' | cut -c1-64 || true)"
+      echo "::warning::IMPLEMENT_SELF_REPO_GITHUB_AI_ADDS_ENABLED='${self_repo_github_ai_flag_safe}' is not true/false; self-repo .github/ai additions disabled."
+      ;;
+  esac
+  if [ "${self_repo_github_ai_enabled}" = "true" ]; then
+    self_repo_github_ai_guard="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py"
+    if [ "${HEAL_ROUTE:-false}" = true ]; then
+      self_repo_github_ai_input_flag="--allowlist-file"
+      self_repo_github_ai_input="${HEAL_SCOPE_FILE:-}"
+    else
+      self_repo_github_ai_input_flag="--issue-body-file"
+      self_repo_github_ai_input="${ISSUE_BODY_FILE:-}"
+    fi
+    if [ ! -f "${self_repo_github_ai_guard}" ]; then
+      echo "::notice::self-repo .github/ai additions skipped (reason=helper_unavailable)"
+    elif [ -z "${self_repo_github_ai_input}" ] || [ ! -s "${self_repo_github_ai_input}" ]; then
+      echo "::notice::self-repo .github/ai additions skipped (reason=no_allowlist)"
+    else
+      self_repo_github_ai_staged_file="$(mktemp "${TMPDIR:-/tmp}/implement-github-ai-staged.XXXXXX")"
+      self_repo_github_ai_allowlist_file="$(mktemp "${TMPDIR:-/tmp}/implement-github-ai-allowlist.XXXXXX")"
+      self_repo_github_ai_stderr_file="$(mktemp "${TMPDIR:-/tmp}/implement-github-ai-stderr.XXXXXX")"
+      self_repo_github_ai_rc=0
+      set +e
+      python3 "${self_repo_github_ai_guard}" \
+        "${self_repo_github_ai_input_flag}" "${self_repo_github_ai_input}" \
+        --issue-number "${ISSUE_NUMBER:-}" \
+        --staged-file "${self_repo_github_ai_staged_file}" \
+        --allowlist-out "${self_repo_github_ai_allowlist_file}" >/dev/null 2>"${self_repo_github_ai_stderr_file}"
+      self_repo_github_ai_rc=$?
+      set -e
+      cat -- "${self_repo_github_ai_stderr_file}" >&2 || true
+      if [ "${self_repo_github_ai_rc}" -ne 0 ]; then
+        if [ "${self_repo_github_ai_rc}" -eq 10 ]; then
+          echo "::notice::self-repo .github/ai additions skipped (reason=no_allowlist)"
+        else
+          self_repo_github_ai_err="$(head -n1 -- "${self_repo_github_ai_stderr_file}" 2>/dev/null | tr -cd '[:print:]' | sed 's/::/: :/g' | cut -c1-200 || true)"
+          echo "::notice::self-repo .github/ai additions skipped (reason=helper_rc_${self_repo_github_ai_rc})${self_repo_github_ai_err:+ error=${self_repo_github_ai_err}}"
+        fi
+      elif [ ! -s "${self_repo_github_ai_allowlist_file}" ]; then
+        echo "::notice::self-repo .github/ai additions skipped (reason=no_allowlist)"
+      else
+        while IFS= read -r -d '' self_repo_github_ai_path; do
+          [ -n "${self_repo_github_ai_path}" ] || continue
+          case "${self_repo_github_ai_path}" in
+            # Globs and directory entries never stage; a newline would split
+            # the grep -F pattern below into several patterns.
+            *'*'*|*'?'*|*'['*|*/|*$'\n'*|*$'\r'*) continue ;;
+          esac
+          [ -f "${self_repo_github_ai_path}" ] && [ ! -L "${self_repo_github_ai_path}" ] || continue
+          grep -Fxq -- "${self_repo_github_ai_path}" "${self_repo_github_ai_allowlist_file}" || continue
+          git add -- "${self_repo_github_ai_path}"
+          echo "IMPLEMENT_SELF_REPO_GITHUB_AI_ADD path=${self_repo_github_ai_path}"
+        done < <(git ls-files --others --exclude-standard -z -- .github/ai)
+      fi
+      rm -f -- "${self_repo_github_ai_staged_file}" "${self_repo_github_ai_allowlist_file}" "${self_repo_github_ai_stderr_file}"
+    fi
+  fi
+fi
+if [ "${is_self_repo}" = "false" ] && [ -f scripts/.gitignore ]; then
+  while IFS= read -r fetched_script; do
+    case "${fetched_script}" in ''|'#'*|'.gitignore') continue ;; esac
+    git reset -q HEAD -- "scripts/${fetched_script}" 2>/dev/null || true
+  done < scripts/.gitignore
+fi
+echo "Staged files before commit:"
+git diff --cached --name-only | sed 's/^/ - /' || true
+if [ "${is_self_repo}" = "false" ] && git diff --cached --name-only | grep -E '^\.github/(prompts|scripts)/'; then
+  echo "Error: .github/prompts or .github/scripts is staged"
+  exit 1
+fi
+
+# -----------------------------------------------------------------
+# Destructive-commit guard (P2 — defense-in-depth for PRs #917/#931)
+#
+# Before committing, inspect the staged deletion set and refuse
+# the commit if either:
+#
+#   (a) any deletion touches the canonical workflow-source list
+#       (agents.md, ai_pipeline.md, unattended_system_instructions.md,
+#        CLAUDE.md, prompts/**, scripts/**, .github/ai/**) and
+#       ALLOW_WORKFLOW_EDITS is
+#       not set to 'true'. Even on self-repo runs, deleting any
+#       of these files is almost never what an issue asked for;
+#       legitimate workflow-editing issues must opt in.
+#
+#   (b) the total number of staged deletions exceeds the
+#       effective bulk-delete threshold and ALLOW_BULK_DELETE
+#       is not set to 'true'. The effective threshold is
+#       BULK_DELETE_THRESHOLD (default 3) for any commit that
+#       includes at least one non-.md deletion, and
+#       BULK_DELETE_THRESHOLD_MD (default 100) for commits whose
+#       staged deletions are all .md files. This relaxes the
+#       cap for docs/scratchpad cleanups (e.g. analysis/*.md
+#       backlog purges) while keeping the strict cap whenever
+#       any source file is staged for deletion. Canonical .md
+#       files (agents.md, ai_pipeline.md, CLAUDE.md,
+#       unattended_system_instructions.md) remain covered by
+#       the canonical-source check above regardless of the
+#       threshold.
+# The unblock judge's one-shot bulk-delete override cannot bypass the
+# threshold for deletions under .github/, .claude/ or workflow-templates/,
+# in any repository, even when its marker predates the validator denylist.
+#
+# On rejection, `destructive_commit_blocked` is written to the
+# step output with the reason ('canonical-source' or
+# 'bulk-delete'); the `destructive_commit_deletions` output
+# carries the deletion list (newline-separated), and the
+# bulk-delete path also emits the active threshold label/value
+# so downstream steps (P3: label + TG alert) can act on it
+# before exiting.
+# -----------------------------------------------------------------
+deleted_staged="$(git diff --cached --diff-filter=D --name-only || true)"
+if [ -n "${deleted_staged}" ]; then
+  canonical_deletions="$(printf '%s\n' "${deleted_staged}" \
+    | grep -E '^(agents\.md|ai_pipeline\.md|unattended_system_instructions\.md|CLAUDE\.md|prompts/|scripts/|\.github/ai/|\.github/scripts/)' \
+    || true)"
+  unblock_protected_deletions="$(printf '%s\n' "${deleted_staged}" | grep -iE '^(\.github|\.claude|workflow-templates)(/|$)' || true)"
+  total_deletions="$(printf '%s\n' "${deleted_staged}" | sed '/^$/d' | wc -l | tr -d ' ')"
+  if ! [[ "${total_deletions}" =~ ^[0-9]+$ ]]; then
+    echo "::warning::Non-numeric staged deletion count '${total_deletions}'; forcing fail-closed bulk-delete handling."
+    total_deletions=999999
+  fi
+  # Count non-.md deletions to decide whether the lenient
+  # markdown-only threshold applies. Case-insensitive match so
+  # .MD / .Md are treated the same as .md.
+  non_md_deletions="$(printf '%s\n' "${deleted_staged}" | sed '/^$/d' | grep -ivE '\.md$' || true)"
+  non_md_count="$(printf '%s\n' "${non_md_deletions}" | sed '/^$/d' | wc -l | tr -d ' ')"
+  if ! [[ "${non_md_count}" =~ ^[0-9]+$ ]]; then
+    echo "::warning::Non-numeric non-markdown deletion count '${non_md_count}'; using the strict threshold path."
+    non_md_count=1
+  fi
+  threshold="${BULK_DELETE_THRESHOLD:-3}"
+  if ! [[ "${threshold}" =~ ^[0-9]+$ ]]; then
+    echo "::warning::Invalid BULK_DELETE_THRESHOLD='${threshold}'; defaulting to 3."
+    threshold=3
+  fi
+  md_threshold="${BULK_DELETE_THRESHOLD_MD:-100}"
+  if ! [[ "${md_threshold}" =~ ^[0-9]+$ ]]; then
+    echo "::warning::Invalid BULK_DELETE_THRESHOLD_MD='${md_threshold}'; defaulting to 100."
+    md_threshold=100
+  fi
+  # When every staged deletion is a .md file, apply the
+  # lenient markdown-only threshold; otherwise fall back to
+  # the strict mixed-content threshold so any source-file
+  # deletion still trips at the original limit.
+  if [ "${non_md_count}" -eq 0 ]; then
+    effective_threshold="${md_threshold}"
+    threshold_label="BULK_DELETE_THRESHOLD_MD"
+  else
+    effective_threshold="${threshold}"
+    threshold_label="BULK_DELETE_THRESHOLD"
+  fi
+
+  if [ -n "${canonical_deletions}" ] && [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ]; then
+    echo "::error::Refusing to commit: ${total_deletions} staged deletion(s) include canonical workflow-source files and ALLOW_WORKFLOW_EDITS is not 'true'."
+    echo "Canonical-source deletions blocked:"
+    printf '%s\n' "${canonical_deletions}" | sed 's/^/  - /'
+    # Emit outputs BEFORE exiting so downstream P3 step can read them.
+    {
+      echo "destructive_commit_blocked=canonical-source"
+      echo "destructive_commit_count=${total_deletions}"
+      echo 'destructive_commit_deletions<<__DCD_EOF__'
+      printf '%s\n' "${deleted_staged}"
+      echo '__DCD_EOF__'
+    } >> "$GITHUB_OUTPUT"
+    exit 1
+  fi
+
+  # The unblock judge's one-shot override (plan Phase 7, Q12) lifts the
+  # bulk-delete threshold for this run only, and never when a canonical
+  # workflow source or protected automation path is among the deletions.
+  unblock_bulk_override_applies="false"
+  if [ "${UNBLOCK_BULK_DELETE_OVERRIDE:-false}" = "true" ] && [ -z "${canonical_deletions}" ] &&
+    [ -z "${unblock_protected_deletions}" ] &&
+    printf '%s\n' "${deleted_staged}" | jq -R -s -e --argjson paths "${UNBLOCK_BULK_DELETE_PATHS:-null}" 'all(split("\n")[] | select(length > 0); . as $path | $paths | index($path) != null)' >/dev/null 2>&1; then
+    unblock_bulk_override_applies="true"
+    echo "UNBLOCK_BULK_DELETE_OVERRIDE applied deletions=${total_deletions}"
+  fi
+  if [ "${UNBLOCK_BULK_DELETE_OVERRIDE:-false}" = "true" ] && [ -n "${unblock_protected_deletions}" ]; then
+    echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=protected_automation_paths"
+  fi
+  if [ "${total_deletions}" -gt "${effective_threshold}" ] && [ "${ALLOW_BULK_DELETE:-false}" != "true" ] && [ "${unblock_bulk_override_applies}" != "true" ]; then
+    echo "::error::Refusing to commit: ${total_deletions} staged deletions exceeds ${threshold_label}=${effective_threshold} (non-md deletions=${non_md_count}) and ALLOW_BULK_DELETE is not 'true'."
+    echo "Deletions blocked by bulk-delete threshold:"
+    printf '%s\n' "${deleted_staged}" | sed 's/^/  - /'
+    {
+      echo "destructive_commit_blocked=bulk-delete"
+      echo "destructive_commit_count=${total_deletions}"
+      echo "destructive_commit_threshold_label=${threshold_label}"
+      echo "destructive_commit_effective_threshold=${effective_threshold}"
+      echo 'destructive_commit_deletions<<__DCD_EOF__'
+      printf '%s\n' "${deleted_staged}"
+      echo '__DCD_EOF__'
+    } >> "$GITHUB_OUTPUT"
+    exit 1
+  fi
+fi
+
+# >>> automation-path grant guard (commit) >>>
+# core.quotePath=false keeps non-ASCII names literal; names Git still
+# C-quotes (control characters, quotes, backslashes) start with '"' and
+# are denied below rather than slipping past the prefix match.
+automation_staged="$(git -c core.quotePath=false diff --cached --name-only --no-renames --diff-filter=ACMDT || true)"
+automation_paths="$(printf '%s\n' "${automation_staged}" | grep -iE '^"?(\.github|\.claude|scripts|prompts|workflow-templates)(/|$)' || true)"
+if [ -n "${automation_paths}" ]; then
+  automation_staged_file="$(mktemp "${TMPDIR:-/tmp}/implement-automation-staged.XXXXXX")"
+  printf '%s\n' "${automation_paths}" > "${automation_staged_file}"
+  automation_reason="grant_unavailable"
+  automation_denied="${automation_paths}"
+  automation_rc=127
+  if grep -q '^"' <<< "${automation_paths}"; then
+    automation_rc=30
+    automation_reason="quoted_path"
+  elif [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" ]; then
+    automation_error_file="$(mktemp "${TMPDIR:-/tmp}/implement-automation-error.XXXXXX")"
+    automation_rc=0
+    automation_denied="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
+      --check-automation-paths --staged-file "${automation_staged_file}" \
+      --automation-grant-file "${AUTOMATION_PATH_GRANT_FILE:-${RUNTIME_DIR:-/nonexistent}/automation_path_grant.json}" \
+      --allow-workflow-edits "${ALLOW_WORKFLOW_EDITS:-false}" --issue-number "${ISSUE_NUMBER}" \
+      2> "${automation_error_file}")" || automation_rc=$?
+    if [ "${automation_rc}" -eq 30 ]; then
+      automation_reason="$(grep -m1 '^reason=' "${automation_error_file}" | cut -d= -f2 || true)"
+    fi
+    rm -f "${automation_error_file}"
+  fi
+  rm -f "${automation_staged_file}"
+  if [ "${automation_rc}" -ne 0 ]; then
+    if [ "${automation_rc}" -ne 30 ] || [ -z "${automation_denied}" ]; then
+      automation_denied="${automation_paths}"
+      automation_reason="guard_error"
+    fi
+    automation_count="$(printf '%s\n' "${automation_denied}" | wc -l | tr -d ' ')"
+    automation_granted="$(jq -r '.paths[]? | strings' "${AUTOMATION_PATH_GRANT_FILE:-${RUNTIME_DIR:-/nonexistent}/automation_path_grant.json}" 2>/dev/null || true)"
+    {
+      echo 'scope_violation_blocked=automation-path'
+      echo "scope_violation_count=${automation_count}"
+      echo 'scope_violation_files<<__SVF_EOF__'
+      printf '%s\n' "${automation_denied}"
+      echo '__SVF_EOF__'
+      echo 'scope_violation_allowlist<<__SVA_EOF__'
+      printf 'reason=%s\n%s\n' "${automation_reason}" "${automation_granted}"
+      echo '__SVA_EOF__'
+    } >> "$GITHUB_OUTPUT"
+    echo "::error::Automation-path grant denied ${automation_count} staged path(s)."
+    echo "IMPLEMENT_AUTOMATION_PATH_GUARD mode=check outcome=rejected reason=${automation_reason} issue=${ISSUE_NUMBER} count=${automation_count}"
+    exit 1
+  fi
+  echo "IMPLEMENT_AUTOMATION_PATH_GUARD mode=check outcome=granted issue=${ISSUE_NUMBER} count=0"
+fi
+# <<< automation-path grant guard (commit) <<<
+
+# >>> files_touched scope-enforcement guard (commit) >>>
+# Mirror of the destructive-commit guard above, for scope drift:
+# reject when the staged change set includes paths the issue's
+# files_touched allowlist does not cover. Operates on the same real
+# index that was just staged for the destructive guard. Fails OPEN —
+# no allowlist, master toggle off, or a missing helper all
+# log-and-allow. On a violation the commit is neither created nor
+# pushed; the "Destructive-commit guard — label + alert on rejection"
+# step labels the issue ai:scope-blocked and alerts.
+if [ "${ENFORCE_FILES_TOUCHED:-true}" != "true" ] && [ "${HEAL_ROUTE:-false}" != true ]; then
+  echo "::notice::files_touched scope guard disabled (ENFORCE_FILES_TOUCHED='${ENFORCE_FILES_TOUCHED:-true}')."
+else
+  scope_staged="$(git diff --cached --name-only --diff-filter=ACMRD || true)"
+  if [ -n "${scope_staged}" ]; then
+    scope_staged_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-staged.XXXXXX")"
+    scope_allowlist_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-allowlist.XXXXXX")"
+    printf '%s\n' "${scope_staged}" > "${scope_staged_file}"
+    scope_violations=""
+    scope_rc=0
+    scope_guard_extra_args=()
+    if [ "${HEAL_ROUTE:-false}" = true ]; then
+      scope_guard_extra_args+=(--strict-allowlist)
+    fi
+    if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" ]; then
+      set +e
+      scope_violations="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
+        "$(if [ "${HEAL_ROUTE:-false}" = true ]; then printf '%s' '--allowlist-file'; else printf '%s' '--issue-body-file'; fi)" \
+        "$(if [ "${HEAL_ROUTE:-false}" = true ]; then printf '%s' "${HEAL_SCOPE_FILE:?}"; else printf '%s' "${ISSUE_BODY_FILE:-}"; fi)" \
+        "${scope_guard_extra_args[@]}" \
+        --issue-number "${ISSUE_NUMBER:-}" \
+        --issue-meta-file "${ISSUE_META_FILE:-}" --pipeline-login "${IMPLEMENT_SCOPE_PIPELINE_LOGIN:-}" \
+        --staged-file "${scope_staged_file}" \
+        --allowlist-out "${scope_allowlist_file}")"
+      scope_rc=$?
+      set -e
+    else
+      scope_rc=127
+    fi
+    rm -f "${scope_staged_file}"
+    case "${scope_rc}" in
+      0)
+        echo "files_touched scope guard: all staged paths fall within the issue allowlist."
+        ;;
+      10)
+        if [ "${HEAL_ROUTE:-false}" = true ]; then
+          echo '::error::Verified heal scope is empty; refusing scope check.' >&2
+          exit 1
+        fi
+        echo "::notice::files_touched scope guard skipped: issue declares no files_touched allowlist."
+        ;;
+      20)
+        scope_count="$(printf '%s\n' "${scope_violations}" | sed '/^$/d' | wc -l | tr -d ' ')"
+        scope_allowlist="$(sed '/^$/d' "${scope_allowlist_file}" 2>/dev/null || true)"
+        if [ "${ALLOW_OUT_OF_SCOPE_FILES:-false}" = "true" ] && [ "${HEAL_ROUTE:-false}" != true ]; then
+          echo "::warning::files_touched scope guard: ${scope_count} staged path(s) outside the allowlist, but ALLOW_OUT_OF_SCOPE_FILES=true — allowing."
+          printf '%s\n' "${scope_violations}" | sed '/^$/d;s/^/  - /'
+        else
+          echo "::error::Refusing to commit: ${scope_count} staged path(s) fall outside the issue's files_touched allowlist and ALLOW_OUT_OF_SCOPE_FILES is not 'true'."
+          printf '%s\n' "${scope_violations}" | sed '/^$/d;s/^/  - /'
+          {
+            echo "scope_violation_blocked=out-of-scope"
+            echo "scope_violation_count=${scope_count}"
+            echo 'scope_violation_files<<__SVF_EOF__'
+            printf '%s\n' "${scope_violations}" | sed '/^$/d'
+            echo '__SVF_EOF__'
+            echo 'scope_violation_allowlist<<__SVA_EOF__'
+            printf '%s\n' "${scope_allowlist}" | sed '/^$/d'
+            echo '__SVA_EOF__'
+          } >> "$GITHUB_OUTPUT"
+          rm -f "${scope_allowlist_file}"
+          exit 1
+        fi
+        ;;
+      *)
+        if [ "${HEAL_ROUTE:-false}" = true ]; then
+          echo "::error::Heal scope guard failed with exit ${scope_rc}; refusing scope check." >&2
+          exit 1
+        fi
+        echo "::warning::files_touched scope guard failed open (helper exit ${scope_rc}); staged change set not scope-checked this run."
+        ;;
+    esac
+    rm -f "${scope_allowlist_file}"
+  fi
+fi
+# <<< files_touched scope-enforcement guard (commit) <<<
+
+# If every Codex-produced change was filtered out by the path exclusions
+# above (or stripped by the fetched-manifest cleanup earlier in this step),
+# there is nothing to commit.  Treat this as a no-op rather than letting
+# `git commit` fail — the "Handle no-op implementation" step below will
+# re-label the issue and post an explanatory comment.
+if [ -z "$(git diff --cached --name-only)" ]; then
+  if [ "${is_self_repo}" = "false" ]; then
+    echo "All Codex changes were filtered out by staging exclusions or fetched-manifest cleanup; nothing to commit."
+  else
+    echo "No staged changes after fetched-manifest cleanup; nothing to commit."
+  fi
+  # Log what Codex created that didn't make it past the staging
+  # filters, for the no-op handler and the pathspec hard-fail (Guard
+  # 1) further below.
+  #
+  # The setup steps clone the runtime support checkout into the
+  # worktree as untracked, gitignore-free directories, so a raw
+  # `git status --porcelain` ALWAYS lists
+  #   ?? .codex-workflow-src/
+  #   ?? .codex-workflow-src-main/
+  # on every consumer-repo run, whether or not Codex touched them. (In
+  # this repo those paths are gitignored and never appear, which is why
+  # the false-positive only ever bit consumer repos.) Those bare
+  # untracked entries are the normal every-run state: they must NOT be
+  # reported as "excluded changes" here, nor trip Guard 1 below —
+  # doing so produced false ai:needs-human escalations on genuine
+  # no-ops (e.g. a task where Codex edited a file then reverted it).
+  # Strip exactly those whole-line entries at the source so
+  # remaining_changes carries only real survivors.
+  #
+  # The support-source directories are nested Git checkouts, so the
+  # outer repo's porcelain never descends into them: even after Codex
+  # edits a file inside .codex-workflow-src/, the outer status still
+  # shows only "?? .codex-workflow-src/". After stripping those benign
+  # top-level markers, query each support checkout's own Git status and
+  # splice any dirty inner paths back into remaining_changes so Guard 1
+  # still trips on real writes inside the runtime-fetched checkout.
+  remaining_changes="$(git status --porcelain 2>/dev/null \
+    | grep -vxE '\?\? \.codex-workflow-src(-main)?/?' || true)"
+  for support_checkout in .codex-workflow-src .codex-workflow-src-main; do
+    if [ -e "${support_checkout}/.git" ]; then
+      if support_checkout_changes="$(git -C "${support_checkout}" status --porcelain 2>/dev/null)"; then
+        support_checkout_changes="$(printf '%s\n' "${support_checkout_changes}" | sed "s#^\\(..\\) #\\1 ${support_checkout}/#")"
+      else
+        echo "::warning::Failed to query nested support checkout status for ${support_checkout}; treating it as clean."
+        support_checkout_changes=""
+      fi
+      if [ -n "${support_checkout_changes}" ]; then
+        remaining_changes="${remaining_changes}${remaining_changes:+$'\n'}${support_checkout_changes}"
+      fi
+    fi
+  done
+  if [ -n "${remaining_changes}" ]; then
+    echo "::warning::Files present in worktree but excluded from staging:"
+# shellcheck disable=SC2001
+    echo "${remaining_changes}" | sed 's/^/  /'
+    echo "If these are legitimate consumer-repo files, the pathspec exclusions in the commit step may be too broad."
+    # Pass to Handle no-op step for inclusion in the issue comment
+    {
+      echo "remaining_changes<<__RC_EOF__"
+      echo "${remaining_changes}"
+      echo "__RC_EOF__"
+    } >> "$GITHUB_OUTPUT"
+  fi
+  echo "did_commit=false" >> "$GITHUB_OUTPUT"
+  exit 0
+fi
+git commit -m "AI implementation for issue #${ISSUE_NUMBER}"
+
+# >>> ai:scope label post-commit verifier >>>
+# Optional defense-in-depth for per-issue scope-lock labels. When enabled and
+# an active ai:scope:<glob> label was resolved earlier in the workflow, inspect
+# the just-created local commit before push. If any changed path falls outside
+# the glob, emit the standard scope_violation_* outputs, roll back the local
+# unpushed commit per the approved plan's fail-revert behavior, and fail the
+# step so push/PR creation never runs.
+if [ "${SCOPE_LOCK_LABEL_ENABLED:-false}" = "true" ] && [ -n "${ISSUE_SCOPE_LOCK_GLOB:-}" ]; then
+  scope_committed="$(git diff-tree --no-commit-id --name-only --diff-filter=ACMRD -r --root --no-renames HEAD || true)"
+  if [ -n "${scope_committed}" ]; then
+    scope_committed_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-committed.XXXXXX")"
+    scope_glob_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-glob.XXXXXX")"
+    scope_allowlist_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-allowlist.XXXXXX")"
+    printf '%s\n' "${scope_committed}" > "${scope_committed_file}"
+    printf '%s\n' "${ISSUE_SCOPE_LOCK_GLOB}" > "${scope_glob_file}"
+    scope_violations=""
+    scope_rc=0
+    if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" ]; then
+      set +e
+      scope_violations="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
+        --staged-file "${scope_committed_file}" \
+        --allowlist-file "${scope_glob_file}" \
+        --allowlist-out "${scope_allowlist_file}")"
+      scope_rc=$?
+      set -e
+    else
+      scope_rc=127
+    fi
+    rm -f "${scope_committed_file}" "${scope_glob_file}"
+    case "${scope_rc}" in
+      0)
+        echo "ai:scope label verifier: all committed paths match the active scope-lock glob."
+        ;;
+      10)
+        echo "::notice::ai:scope label verifier skipped: active scope-lock glob was empty after normalization."
+        ;;
+      20)
+        scope_count="$(printf '%s\n' "${scope_violations}" | sed '/^$/d' | wc -l | tr -d ' ')"
+        scope_allowlist="$(sed '/^$/d' "${scope_allowlist_file}" 2>/dev/null || true)"
+        echo "::error::Rolling back local commit: ${scope_count} committed path(s) fall outside active ai:scope:${ISSUE_SCOPE_LOCK_GLOB}."
+        printf '%s\n' "${scope_violations}" | sed '/^$/d;s/^/  - /'
+        {
+          echo "scope_violation_blocked=scope-lock-label"
+          echo "scope_violation_count=${scope_count}"
+          echo 'scope_violation_files<<__SVF_EOF__'
+          printf '%s\n' "${scope_violations}" | sed '/^$/d'
+          echo '__SVF_EOF__'
+          echo 'scope_violation_allowlist<<__SVA_EOF__'
+          printf '%s\n' "${scope_allowlist}" | sed '/^$/d'
+          echo '__SVA_EOF__'
+        } >> "$GITHUB_OUTPUT"
+        rm -f "${scope_allowlist_file}"
+        git reset --hard HEAD^ >/dev/null 2>&1
+        exit 1
+        ;;
+      *)
+        echo "::warning::ai:scope label verifier failed open (helper exit ${scope_rc}); committed change set not scope-checked this run."
+        ;;
+    esac
+    rm -f "${scope_allowlist_file}"
+  fi
+fi
+# <<< ai:scope label post-commit verifier <<<
+
+echo "did_commit=true" >> "$GITHUB_OUTPUT"

@@ -1,0 +1,15 @@
+type: node-runtime
+entry: package.json
+custom_tests:
+  - npm test
+  - npm run lint --if-present
+skip_tests: []
+slots:
+  project_name: nightly-node-runtime
+  canary_tools:
+    - bash
+    - node
+    - npm
+    - npx
+    - jq
+  tap_plan: 5

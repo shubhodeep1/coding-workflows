@@ -1,0 +1,2160 @@
+#!/usr/bin/env python3
+"""files_touched scope-enforcement guard for the AI implement pipeline.
+
+Invoked by the two `files_touched` scope guards in
+`.github/workflows/implement.yml` (the preflight guard and the commit-time
+guard). It mirrors the destructive-commit guard's design: given the staged
+change set and the issue body, decide whether every staged path falls inside
+the issue's declared `files_touched` allowlist, and report the out-of-scope
+paths so the workflow can block the commit and alert.
+
+Parsing reuses the exact `files_touched:` block semantics from
+`scripts/review_reject_verify.sh:extract_files_touched` (the canonical
+issue-body allowlist parser) so the implement-time guard and the review-time
+scope verifier agree on what an allowlist looks like.
+
+Inputs:
+  --issue-body-file PATH  File containing the issue body (the allowlist source).
+                          Missing / empty / unreadable is treated as "no
+                          allowlist" (skip), never as an error.
+  --allowlist-file PATH   Explicit allowlist entries, one per line. When set,
+                          this bypasses issue-body parsing and reuses the same
+                          matcher for externally-supplied scopes such as
+                          `ai:scope:<glob>` labels.
+  --staged-file PATH      File with the staged paths, one per line (typically
+                          `git diff --cached --name-only --diff-filter=ACMRD`).
+                          Reads stdin when omitted.
+  --allowlist-out PATH    Optional: write the normalized allowlist (one entry
+                          per line) so the caller can surface it in the alert.
+  --issue-number NUMBER   Optional, with --issue-body-file: also allow the
+                          issue's own `changelog.d/<NUMBER>-<slug>.md` and
+                          `agents.d/<NUMBER>-<slug>.md` fragments, which
+                          CLAUDE.md §20/§30 require, even when the
+                          files_touched list omits them. Never applies to
+                          --allowlist-file scopes.
+  --issue-meta-file PATH --pipeline-login LOGIN
+                          Optional, with --issue-body-file: the issue's REST
+                          metadata and the pipeline login. When the issue was
+                          authored by that login and its body carries the
+                          `<!-- auto-heal-remediation:v1 ` marker, the
+                          auto-heal companion paths are also in scope (#8956).
+                          When --issue-number is given it must equal the
+                          metadata's number. Never applies to --allowlist-file
+                          scopes.
+  --emit-automation-grant PATH --issue-meta-file PATH --pipeline-login LOGIN
+                          [--origin-repo OWNER/NAME]
+                          Snapshot trusted-author exact automation paths. A
+                          pipeline-authored issue derived from another issue
+                          (re-issue, unblock fix-up) is granted only when its
+                          whole source chain is trusted; --origin-repo lets
+                          the guard read those source issues (Q82).
+  --check-automation-paths --automation-grant-file PATH --staged-file PATH
+                          --allow-workflow-edits VALUE --issue-number NUMBER
+                          Verify staged automation paths against the snapshot.
+  --plan-auto-approval-gate --plan-file PATH --flag-enabled VALUE
+                          [--issue-meta-file PATH --pipeline-login LOGIN
+                          --allow-workflow-edits VALUE --issue-number NUMBER
+                          --origin-repo OWNER/NAME
+                          --pipeline-grant-body-out PATH]
+                          Decide whether an automatic `/approved` may be posted
+                          for a plan that lists automation paths (issue #6769).
+                          Prints one JSON line; exit 0 approves, 30 holds.
+                          With --pipeline-grant-body-out, a pipeline-authored
+                          issue without files_touched can approve with reason
+                          pipeline_plan_grant; the record then has
+                          pipeline_grant_body: true and the caller must write
+                          the body at PATH to the issue first.
+                          With --issue-meta-file, a plan whose Files section
+                          lists an exact file outside the issue's
+                          files_touched list holds with reason
+                          plan_files_outside_files_touched, while
+                          ENFORCE_FILES_TOUCHED is "true" (default),
+                          ALLOW_OUT_OF_SCOPE_FILES is not "true" and
+                          PLAN_FILES_TOUCHED_GATE_ENABLED is not off
+                          (all read from the environment).
+                          A hold with reason path_not_granted whose denied
+                          paths are all directory or glob tokens, and whose
+                          other protected paths would be granted, carries
+                          replannable: true (#8339); the poller re-plans
+                          once. No grant is written for that check.
+  --plan-auto-approval-gate --plan-file PATH --heal-scope-file PATH
+                          --flag-enabled VALUE --issue-number NUMBER
+                          Workflow-heal plans (#7444): approve only when every
+                          path the plan lists is inside the verified heal
+                          scope (one path per line). Never writes a grant.
+
+Output:
+  stdout — the out-of-scope staged paths, one per line (empty when none).
+
+Exit codes (legacy scope callers fail open on other codes; automation callers
+fail closed on any nonzero result):
+  0   evaluated, every staged path is in scope.
+  10  skipped — the issue declares no (or an empty) files_touched allowlist.
+  20  one or more staged paths fall outside the allowlist (stdout lists them).
+  30  one or more automation paths lack a grant (stdout lists them).
+
+Matching semantics (allowlist entry -> staged path):
+  * leading "./" is stripped from both sides; surrounding whitespace trimmed.
+  * an entry containing a glob metacharacter (`*`, `?`, `[`) is matched with
+    Bash-style globstar semantics for `/`-separated paths (so `frontend/**`
+    allows anything under `frontend/`).
+  * an entry ending in "/" is a directory prefix (`frontend/` allows
+    `frontend/anything`).
+  * a bare entry matches an exact path OR anything beneath it as a directory
+    (`frontend` allows `frontend` and `frontend/anything`).
+  * dependency lockfiles the implement prompt mandates regenerating alongside
+    manifest edits are auto-allowed by basename. Compiled build outputs (e.g.
+    `*.js` twins, `dist/**`) are deliberately NOT auto-allowed — sweeping those
+    in was the incident this guard exists to stop.
+  * outside --strict-allowlist, paths matching SCOPE_GUARD_AUTO_ALLOW_PATHS
+    (comma-separated globs, default `changelog.d/*.md,tests/fixtures/**`;
+    `none`/`off`/`false`/`0`/`no` disables) are auto-allowed as a last check.
+    Automation prefixes and `.git` are never auto-allowed, in any letter case.
+    Each such decision logs `SCOPE_GUARD_AUTO_ALLOWED` to stderr.
+  * auto-heal companion paths (#8956): for an issue authored by the pipeline
+    login whose body carries the `<!-- auto-heal-remediation:v1 ` marker,
+    `db/contracts/<name>.yml` (one level) and top-level `tests/test_<name>.py`
+    are in scope, in both the plan gate and the implement guard. A body that
+    copies the marker but was written by anyone else gets nothing.
+"""
+
+from __future__ import annotations
+
+import argparse
+import ast
+import fnmatch
+from functools import lru_cache
+import json
+import os
+from pathlib import PurePosixPath
+import re
+import stat
+import subprocess
+import sys
+import time
+
+
+EXIT_IN_SCOPE = 0
+EXIT_SKIP_NO_ALLOWLIST = 10
+EXIT_OUT_OF_SCOPE = 20
+EXIT_AUTOMATION_UNGRANTED = 30
+
+# Keep this prefix set in sync with _rb_fix_scope_is_protected in
+# scripts/orchestrate_poll_process.sh. Case variants are denied here too.
+AUTOMATION_PATH_PREFIXES = (".github", ".claude", "scripts", "prompts", "workflow-templates")
+TRUSTED_AUTHOR_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+PIPELINE_AUTHOR_OPEN_REASON = "pipeline_author_no_allowlist"
+AUTOMATION_GRANT_SCHEMA = "automation_path_grant.v1"
+LOGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$")
+
+# Source-issue references the pipeline writes into issues it derives from
+# another issue (Q82). Only a pipeline-authored issue is walked: a person's
+# own issue is trusted on its author alone. Every reference counts, so text
+# copied from the source can only add checks, never remove one.
+ORIGIN_REFERENCE_PATTERNS = (
+	re.compile(r"Re-issued from\s+#([1-9][0-9]{0,9})\b"),  # stall recovery, no-op / validation re-issues
+	re.compile(r"Re-issued by the unblock judge from #([1-9][0-9]{0,9})\b"),  # unblock reissue
+	re.compile(r"<!--\s*ai:unblock-fixup:v1\s+item=([1-9][0-9]{0,9})\b"),  # unblock descope / operator_step
+	re.compile(r"^-\s*Replaces:\s*#([1-9][0-9]{0,9})\b", re.MULTILINE),  # review-blocked re-issue footer
+	re.compile(r"^-\s*Source issue:\s*#([1-9][0-9]{0,9})\b", re.MULTILINE),  # implement-diagnose fix-up
+	re.compile(r"Accepted with this follow-up by the unblock judge \(#([1-9][0-9]{0,9})\)"),  # unblock accept_with_followup
+	re.compile(r"^-\s*Parent issue:\s*#([1-9][0-9]{0,9})\b", re.MULTILINE),  # review-blocked merge_with_followup
+)
+# A review-blocked re-issue or follow-up whose metadata footer names no issue
+# names only its PR, so its source cannot be checked: it gets no automation
+# paths. The named-source line must sit in the same `---`-delimited block as
+# the last `- Type:` line of that kind (the pipeline-written footer); a match
+# in the model-written prose above it only adds a check, never names a source.
+ORIGIN_UNNAMED_PATTERN = re.compile(r"^-\s*Type:\s*review-blocked-reissue\s*$", re.MULTILINE)
+ORIGIN_FOOTER_KINDS = (
+	(ORIGIN_UNNAMED_PATTERN, re.compile(r"^-\s*Replaces:\s*#[1-9][0-9]{0,9}\b", re.MULTILINE)),
+	(re.compile(r"^-\s*Type:\s*review-blocked-followup\b.*$", re.MULTILINE),
+		re.compile(r"^-\s*Parent issue:\s*#[1-9][0-9]{0,9}\b", re.MULTILINE)),
+)
+ORIGIN_FOOTER_RULE = re.compile(r"^---\s*$", re.MULTILINE)
+ORIGIN_MAX_DEPTH = 4
+ORIGIN_MAX_ISSUES = 8
+ORIGIN_REASONS = ("untrusted_origin", "origin_unverified")
+
+STATUS_IN_SCOPE = "in-scope"
+STATUS_SKIP_NO_ALLOWLIST = "skip-no-allowlist"
+STATUS_OUT_OF_SCOPE = "out-of-scope"
+
+# Dependency lockfiles the implement prompt (prompts/mode-implement.txt,
+# "Dependency / lockfile discipline") instructs the editor to regenerate in the
+# same patch as a manifest edit. They are auto-allowed by basename so a routine
+# `npm install` / `cargo update` lockfile refresh does not trip the guard even
+# when the orchestrator forgot to list the lockfile in files_touched.
+# Compiled outputs are intentionally excluded — they are the drift this guard
+# blocks.
+LOCKFILE_BASENAMES = frozenset(
+	{
+		"package-lock.json",
+		"pnpm-lock.yaml",
+		"yarn.lock",
+		"Cargo.lock",
+		"poetry.lock",
+		"uv.lock",
+		"go.sum",
+		"composer.lock",
+	}
+)
+
+_GLOB_CHARS = ("*", "?", "[")
+
+# Data paths auto-allowed alongside lockfiles (stuck-states P7a, Refs #8291):
+# a changelog fragment or a test fixture the files_touched list forgot should
+# not latch ai:scope-blocked. Read from SCOPE_GUARD_AUTO_ALLOW_PATHS on every
+# call. Unset or empty means the default, because the workflows' `vars.X ||
+# 'default'` cannot pass an empty value; an explicit off token disables it.
+# Strict callers (allow_lockfiles=False) never get the allowance.
+SCOPE_GUARD_AUTO_ALLOW_DEFAULT = "changelog.d/*.md,tests/fixtures/**"
+SCOPE_GUARD_AUTO_ALLOW_ENV = "SCOPE_GUARD_AUTO_ALLOW_PATHS"
+SCOPE_GUARD_AUTO_ALLOW_OFF_VALUES = frozenset({"none", "off", "false", "0", "no"})
+SCOPE_GUARD_AUTO_ALLOW_MAX_ENTRIES = 20
+SCOPE_GUARD_AUTO_ALLOW_ENTRY_MAX_CHARS = 200
+SCOPE_GUARD_AUTO_ALLOW_DENY_PREFIXES = AUTOMATION_PATH_PREFIXES + (".git",)
+_SCOPE_GUARD_AUTO_ALLOW_WARNED: set[tuple[str, str]] = set()
+
+
+def extract_files_touched(text: str) -> list[str] | None:
+	"""Parse the first `files_touched:` block from an issue body.
+
+	Ported verbatim from scripts/review_reject_verify.sh:extract_files_touched
+	so the implement-time guard and the review-time scope verifier agree on the
+	allowlist format. Returns the raw entries (still needing normalization), or
+	None when no well-formed block is present.
+	"""
+	lines = text.splitlines()
+	for idx, raw in enumerate(lines):
+		stripped = raw.strip()
+		if stripped not in {"files_touched:", "- files_touched:"}:
+			continue
+		base_indent = len(raw) - len(raw.lstrip(" "))
+		# YAML also lets a bare `files_touched:` key keep its list at the
+		# key's own indent (`- path` lines flush with the key, as the
+		# orchestrator judge wrote #7296). The first entry fixes the indent:
+		# a flush list continues only with flush entries.
+		flush_allowed = stripped == "files_touched:"
+		flush: bool | None = None
+		entries: list[str] = []
+		for candidate in lines[idx + 1 :]:
+			if not candidate.strip():
+				if entries:
+					break
+				continue
+			indent = len(candidate) - len(candidate.lstrip(" "))
+			if flush is None:
+				flush = flush_allowed and indent == base_indent
+			if flush:
+				if indent != base_indent:
+					break
+			elif indent <= base_indent:
+				break
+			match = re.match(r"^\s*-\s+(.+?)\s*$", candidate)
+			if not match:
+				break
+			entry = match.group(1).strip()
+			if entry:
+				entries.append(entry)
+		return entries or None
+	return None
+
+
+def normalize_path(path: str) -> str:
+	"""Trim whitespace and a single leading './' from a path or allowlist entry."""
+	value = path.strip()
+	while value.startswith("./"):
+		value = value[2:]
+	return value
+
+
+def normalize_allowlist(entries: list[str]) -> list[str]:
+	"""Normalize + de-duplicate allowlist entries, preserving first-seen order."""
+	seen: set[str] = set()
+	normalized: list[str] = []
+	for raw in entries:
+		entry = normalize_path(raw)
+		if not entry or entry in seen:
+			continue
+		seen.add(entry)
+		normalized.append(entry)
+	return normalized
+
+
+def is_automation_path(path: str) -> bool:
+	return normalize_path(path).split("/", 1)[0].lower() in AUTOMATION_PATH_PREFIXES
+
+
+def files_touched_block_state(text: str) -> tuple[str, list[str]]:
+	entries = extract_files_touched(text)
+	if entries is not None:
+		return "ok", entries
+	if any(line.strip() in {"files_touched:", "- files_touched:"} for line in text.splitlines()):
+		return "malformed", []
+	return "missing", []
+
+
+def origin_references(body: str) -> tuple[list[int], bool]:
+	"""Source issue numbers a pipeline-authored body names, and whether it
+	also claims a source it does not name (an unverifiable review-blocked
+	re-issue)."""
+	numbers: list[int] = []
+	for pattern in ORIGIN_REFERENCE_PATTERNS:
+		for match in pattern.finditer(body):
+			number = int(match.group(1))
+			if number not in numbers:
+				numbers.append(number)
+	unnamed = False
+	for type_pattern, named_pattern in ORIGIN_FOOTER_KINDS:
+		type_matches = list(type_pattern.finditer(body))
+		if not type_matches:
+			continue
+		last = type_matches[-1]
+		rules_before = [rule.end() for rule in ORIGIN_FOOTER_RULE.finditer(body, 0, last.start())]
+		block_start = rules_before[-1] if rules_before else 0
+		rule_after = ORIGIN_FOOTER_RULE.search(body, last.end())
+		block_end = rule_after.start() if rule_after else len(body)
+		if not named_pattern.search(body[block_start:block_end]):
+			unnamed = True
+	return numbers, unnamed
+
+
+def fetch_issue_with_gh(repo: str, number: int) -> dict | None:
+	"""One `gh api` read of a source issue; two attempts, None on failure."""
+	for attempt in range(2):
+		try:
+			completed = subprocess.run(["gh", "api", f"repos/{repo}/issues/{number}"],
+				capture_output=True, text=True, timeout=60, check=False)
+		except (OSError, subprocess.SubprocessError):
+			completed = None
+		if completed is not None and completed.returncode == 0:
+			try:
+				data = json.loads(completed.stdout)
+			except ValueError:
+				data = None
+			if isinstance(data, dict):
+				return data
+		if completed is not None and "HTTP 404" in (completed.stderr or ""):
+			break  # a missing source will not appear on retry; fail closed now
+		if attempt == 0:
+			time.sleep(2)
+	return None
+
+
+def _origin_author_trusted(meta: dict, pipeline_login: str) -> tuple[bool, bool]:
+	"""(trusted, pipeline_authored) for a source issue's author."""
+	user = meta.get("user")
+	login = user.get("login") if isinstance(user, dict) else ""
+	login = login if isinstance(login, str) else ""
+	association = meta.get("author_association")
+	association = association.upper() if isinstance(association, str) else ""
+	if not LOGIN_RE.fullmatch(login):
+		return False, False
+	if login == pipeline_login:
+		return True, True
+	return association in TRUSTED_AUTHOR_ASSOCIATIONS, False
+
+
+def check_origin_chain(body: str, pipeline_login: str, fetch) -> tuple[str, list[int]]:
+	"""Walk the source chain of a pipeline-authored issue body.
+
+	Returns ("ok" | "untrusted_origin" | "origin_unverified", issues read).
+	A source written by a trusted person ends its branch; one written by the
+	pipeline is walked in turn. At most ORIGIN_MAX_DEPTH hops and
+	ORIGIN_MAX_ISSUES issue reads (one `gh api` call each, §15); anything
+	that cannot be read or exceeds the bounds fails closed.
+	"""
+	pending, unnamed = origin_references(body)
+	if unnamed:
+		return "origin_unverified", []
+	frontier = [(number, 1) for number in pending]
+	seen: list[int] = []
+	while frontier:
+		number, depth = frontier.pop(0)
+		if number in seen:
+			continue
+		if depth > ORIGIN_MAX_DEPTH or len(seen) >= ORIGIN_MAX_ISSUES or fetch is None:
+			return "origin_unverified", seen
+		seen.append(number)
+		meta = fetch(number)
+		if not isinstance(meta, dict):
+			return "origin_unverified", seen
+		trusted, pipeline_authored = _origin_author_trusted(meta, pipeline_login)
+		if not trusted:
+			return "untrusted_origin", seen
+		if pipeline_authored:
+			source_body = meta.get("body") if isinstance(meta.get("body"), str) else ""
+			numbers, source_unnamed = origin_references(source_body)
+			if source_unnamed:
+				return "origin_unverified", seen
+			frontier.extend((source, depth + 1) for source in numbers)
+	return "ok", seen
+
+
+def build_automation_grant(issue_meta: dict, pipeline_login: str, fetch_origin=None) -> dict:
+	"""Snapshot the author's authority and exact automation files in the issue.
+
+	``fetch_origin(number) -> dict | None`` reads a source issue for the
+	origin-chain check of a pipeline-authored issue; without it, a
+	pipeline-authored issue that names a source gets no automation paths.
+	"""
+	if not isinstance(issue_meta, dict):
+		raise ValueError("invalid issue metadata")
+	user = issue_meta.get("user")
+	author_login = user.get("login") if isinstance(user, dict) else ""
+	author_login = author_login if isinstance(author_login, str) else ""
+	author_association = issue_meta.get("author_association")
+	author_association = author_association if isinstance(author_association, str) else ""
+	record = {"schema_version": AUTOMATION_GRANT_SCHEMA, "issue_number": issue_meta.get("number"),
+		"trusted": False, "open": False, "reason": "grant_error", "author_login": author_login,
+		"author_association": author_association, "paths": []}
+	if not isinstance(pipeline_login, str) or not LOGIN_RE.fullmatch(pipeline_login):
+		record["reason"] = "identity_unavailable"
+	elif not LOGIN_RE.fullmatch(author_login):
+		record["reason"] = "untrusted_author"
+	elif author_login != pipeline_login and author_association.upper() not in TRUSTED_AUTHOR_ASSOCIATIONS:
+		record["reason"] = "untrusted_author"
+	else:
+		body = issue_meta.get("body")
+		if not isinstance(body, str):
+			body = ""
+		state, entries = files_touched_block_state(body)
+		origin_status = "ok"
+		if author_login == pipeline_login:
+			origin_status, origin_issues = check_origin_chain(body, pipeline_login, fetch_origin)
+			record["origin_issues"] = origin_issues
+		if origin_status != "ok":
+			# Q82: a re-issue or fix-up the pipeline filed from an issue that an
+			# untrusted author wrote must not turn that author's request into
+			# an automation-path grant.
+			record["reason"] = origin_status
+		elif state == "missing" and author_login == pipeline_login:
+			# Pipeline-generated issues (security-pass fixes, re-issues, heal
+			# issues) carry no files_touched block; Q24: A grants them every
+			# automation path. A declared block still grants exact entries
+			# only, and a malformed block still blocks.
+			record["trusted"] = True
+			record["open"] = True
+			record["reason"] = PIPELINE_AUTHOR_OPEN_REASON
+		elif state != "ok":
+			record["reason"] = "no_allowlist" if state == "missing" else "malformed_allowlist"
+		else:
+			record["trusted"] = True
+			record["reason"] = "granted"
+			record["paths"] = [entry for entry in normalize_allowlist(entries)
+			if is_automation_path(entry) and not entry.startswith("/") and not entry.endswith("/")
+			and not any(char in entry for char in _GLOB_CHARS)
+			and all(segment not in {".", ".."} for segment in entry.split("/"))]
+	return record
+
+
+def check_automation_paths(staged: list[str], grant: object, allow_workflow_edits: str,
+	issue_number: str) -> tuple[str, list[str], str]:
+	"""Deny each automation path unless a valid issue-bound exact grant covers it."""
+	paths = [normalize_path(path) for path in staged if is_automation_path(path)]
+	if not paths:
+		return STATUS_IN_SCOPE, [], "none"
+	if allow_workflow_edits != "true":
+		reason = "workflow_edits_disabled"
+	elif not isinstance(grant, dict) or grant.get("schema_version") != AUTOMATION_GRANT_SCHEMA \
+		or type(grant.get("trusted")) is not bool or not isinstance(grant.get("paths"), list) \
+		or not all(isinstance(path, str) and is_automation_path(path) and path == normalize_path(path)
+			and not path.startswith("/") and not path.endswith("/")
+			and not any(char in path for char in _GLOB_CHARS)
+			and all(segment not in {".", ".."} for segment in path.split("/"))
+			for path in grant.get("paths", [])) \
+		or type(grant.get("open", False)) is not bool \
+		or (grant.get("open", False) is True and (grant["trusted"] is not True
+			or grant.get("reason") != PIPELINE_AUTHOR_OPEN_REASON or grant["paths"] != [])):
+		reason = "grant_unavailable"
+	elif not issue_number.isdecimal() or type(grant.get("issue_number")) is not int \
+		or grant["issue_number"] != int(issue_number):
+		reason = "grant_issue_mismatch"
+	elif not grant["trusted"]:
+		reason = grant.get("reason") if grant.get("reason") in {
+			"identity_unavailable", "untrusted_author", "no_allowlist", "malformed_allowlist", "grant_error",
+			*ORIGIN_REASONS,
+		} else "grant_unavailable"
+	elif grant.get("open", False) is True:
+		return STATUS_IN_SCOPE, [], PIPELINE_AUTHOR_OPEN_REASON
+	else:
+		denied = [path for path in paths if path not in grant["paths"]]
+		return (STATUS_OUT_OF_SCOPE, denied, "path_not_granted") if denied else (STATUS_IN_SCOPE, [], "granted")
+	return STATUS_OUT_OF_SCOPE, paths, reason
+
+
+def is_lockfile(path: str) -> bool:
+	"""True when the path's basename is an auto-allowed dependency lockfile."""
+	return path.rsplit("/", 1)[-1] in LOCKFILE_BASENAMES
+
+
+def _path_glob_matches(path: str, pattern: str) -> bool:
+	"""True when a normalized path matches a normalized glob pattern."""
+	if "/" not in pattern:
+		return fnmatch.fnmatchcase(path, pattern)
+	path_parts = PurePosixPath(path).parts
+	pattern_parts = PurePosixPath(pattern).parts
+
+	@lru_cache(maxsize=None)
+	def match_parts(path_idx: int, pattern_idx: int) -> bool:
+		while pattern_idx < len(pattern_parts):
+			pattern_part = pattern_parts[pattern_idx]
+			if pattern_part == "**":
+				if pattern_idx + 1 == len(pattern_parts):
+					return True
+				for next_path_idx in range(path_idx, len(path_parts) + 1):
+					if match_parts(next_path_idx, pattern_idx + 1):
+						return True
+				return False
+			if path_idx >= len(path_parts) or not fnmatch.fnmatchcase(path_parts[path_idx], pattern_part):
+				return False
+			path_idx += 1
+			pattern_idx += 1
+		return path_idx == len(path_parts)
+
+	return match_parts(0, 0)
+
+
+def entry_matches(entry: str, path: str) -> bool:
+	"""True when a single normalized allowlist entry covers a staged path."""
+	if not entry:
+		return False
+	if any(ch in entry for ch in _GLOB_CHARS):
+		return _path_glob_matches(path, entry)
+	if entry.endswith("/"):
+		return path.startswith(entry)
+	return path == entry or path.startswith(entry + "/")
+
+
+# CLAUDE.md §30: agents.md is documented through agents.d/<pr>-<slug>.md
+# fragments that release automation folds in, so a scope that covers the agents
+# file covers its top-level fragments too.
+AGENTS_FRAGMENT_RE = re.compile(r"^agents\.d/[^/]+\.md$")
+AGENTS_DOC_PATHS = ("agents.md", "AGENTS.md")
+
+
+def is_agents_fragment(path: str) -> bool:
+	"""True for a top-level ``agents.d/*.md`` fragment."""
+	return bool(AGENTS_FRAGMENT_RE.match(path))
+
+
+# The issue's own changelog / agents fragments. CLAUDE.md §20 and §30 require
+# one `changelog.d/<issue-or-pr>-<slug>.md` (and an `agents.d/` fragment for
+# agents-file additions) per behaviour change, so an issue-body files_touched
+# list always covers the fragments named after the issue itself. Without this
+# an exact list that omits them blocks the commit (consumer
+# tele-funtoken-msg-scoring#4815, run 40055496344) or, since #7986, holds the
+# plan for a human. Only the issue's own number is allowed, only top-level
+# `.md` files, and only for issue-body lists: explicit scopes (`ai:scope:`
+# globs, the verified heal scope) are unchanged.
+def is_own_issue_fragment(path: str, issue_number: object) -> bool:
+	"""True for ``changelog.d/<N>-<slug>.md`` or ``agents.d/<N>-<slug>.md``."""
+	number = str(issue_number or "").strip()
+	if not number.isdecimal() or number.startswith("0"):
+		return False
+	return bool(re.fullmatch(r"(?:changelog|agents)\.d/" + number + r"-[A-Za-z0-9][A-Za-z0-9._-]*\.md", path))
+
+
+def parse_scope_guard_auto_allow_paths(raw: str | None) -> tuple[list[str], list[tuple[str, str]]]:
+	"""Parse SCOPE_GUARD_AUTO_ALLOW_PATHS into (globs, ignored entries with reasons).
+
+	Unset or empty uses SCOPE_GUARD_AUTO_ALLOW_DEFAULT; an off token returns
+	nothing. Entries that are too long, absolute, contain an empty or `..`
+	segment, start with a glob, or start with an automation / `.git` prefix
+	(any letter case) are ignored, as is everything past the entry cap.
+	"""
+	value = (raw or "").strip()
+	if not value:
+		value = SCOPE_GUARD_AUTO_ALLOW_DEFAULT
+	if value.lower() in SCOPE_GUARD_AUTO_ALLOW_OFF_VALUES:
+		return [], []
+	globs: list[str] = []
+	ignored: list[tuple[str, str]] = []
+	for entry in normalize_allowlist(value.split(",")):
+		if len(globs) >= SCOPE_GUARD_AUTO_ALLOW_MAX_ENTRIES:
+			ignored.append((entry, "too_many"))
+			continue
+		segments = entry.split("/")
+		if len(entry) > SCOPE_GUARD_AUTO_ALLOW_ENTRY_MAX_CHARS:
+			reason = "too_long"
+		elif entry.startswith("/"):
+			reason = "absolute"
+		elif ".." in segments:
+			reason = "parent_segment"
+		elif "" in segments:
+			# A trailing "/" or "//" (e.g. `docs/`): not a parent segment.
+			reason = "empty_segment"
+		elif any(char in segments[0] for char in _GLOB_CHARS):
+			reason = "unanchored_glob"
+		elif segments[0].lower() in SCOPE_GUARD_AUTO_ALLOW_DENY_PREFIXES:
+			reason = "automation_prefix"
+		else:
+			globs.append(entry)
+			continue
+		ignored.append((entry, reason))
+	return globs, ignored
+
+
+# Like _PLAN_LOG_UNSAFE_RE, but keeps glob characters so a logged glob reads
+# as configured (`changelog.d/*.md`). No whitespace, colon or newline survives.
+_SCOPE_GUARD_LOG_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._/*?\[\]-]")
+
+
+def _scope_guard_log_value(value: str) -> str:
+	return _SCOPE_GUARD_LOG_UNSAFE_RE.sub("_", value)[:PLAN_LOG_PATH_MAX_CHARS]
+
+
+def scope_guard_auto_allow_match(path: str) -> str | None:
+	"""The SCOPE_GUARD_AUTO_ALLOW_PATHS glob that covers ``path``, or None.
+
+	Automation paths, `.git` paths and paths with a `..` segment are never
+	matched. Each ignored configured entry is logged to stderr once per process.
+	"""
+	globs, ignored = parse_scope_guard_auto_allow_paths(os.environ.get(SCOPE_GUARD_AUTO_ALLOW_ENV))
+	for entry, reason in ignored:
+		if (entry, reason) in _SCOPE_GUARD_AUTO_ALLOW_WARNED:
+			continue
+		_SCOPE_GUARD_AUTO_ALLOW_WARNED.add((entry, reason))
+		print(f"SCOPE_GUARD_AUTO_ALLOW_IGNORED entry={_scope_guard_log_value(entry)} reason={reason}",
+			file=sys.stderr)
+	segments = path.split("/")
+	if is_automation_path(path) or segments[0].lower() == ".git" or ".." in segments:
+		return None
+	for glob in globs:
+		if entry_matches(glob, path):
+			return glob
+	return None
+
+
+# Auto-heal remediation companions (#8956). An auto-heal remediation issue's
+# files_touched list is built when the monitor files it, before any plan
+# exists, so it cannot name the index contract and index test a plan that adds
+# an index must also change (consumer tele-funtoken-msg-scoring 5122, held on
+# 2026-11-06 with plan_files_outside_files_touched for exactly
+# db/contracts/streak_claim_ledger.yml and
+# tests/test_streaks_quest_contracts_indexes.py). For an issue authored by the
+# pipeline login whose body carries the remediation marker, those two path
+# shapes are in scope. The marker alone grants nothing: the author comes from
+# the issue's API metadata, never from the body.
+_AUTO_HEAL_REMEDIATION_RE = re.compile(r"<!-- auto-heal-remediation:v1 ")
+# A leading `_` is allowed for collections such as `_locks` (CLAUDE.md §12);
+# a leading `.` (hidden file) and any `/` (nesting) are not.
+_AUTO_HEAL_CONTRACT_RE = re.compile(r"^db/contracts/[A-Za-z0-9_][A-Za-z0-9._-]*\.yml$")
+_AUTO_HEAL_TEST_RE = re.compile(r"^tests/test_[A-Za-z0-9_.-]+\.py$")
+
+
+def is_auto_heal_companion_path(path: str) -> bool:
+	"""True for ``db/contracts/<name>.yml`` (one level) or top-level ``tests/test_<name>.py``."""
+	if not isinstance(path, str) or ".." in path.split("/"):
+		return False
+	return bool(_AUTO_HEAL_CONTRACT_RE.fullmatch(path) or _AUTO_HEAL_TEST_RE.fullmatch(path))
+
+
+def auto_heal_companions_allowed(issue_body: object, author_login: object, pipeline_login: object) -> bool:
+	"""True when a pipeline-authored issue carries the auto-heal remediation marker.
+
+	The single place the companion flag is computed. Both logins must be
+	valid (LOGIN_RE) and equal; author association is not considered, so a
+	person who copies the marker into an issue gets nothing (fail closed).
+	"""
+	if not isinstance(pipeline_login, str) or not LOGIN_RE.fullmatch(pipeline_login):
+		return False
+	if not isinstance(author_login, str) or not LOGIN_RE.fullmatch(author_login):
+		return False
+	if author_login != pipeline_login:
+		return False
+	return bool(_AUTO_HEAL_REMEDIATION_RE.search(issue_body if isinstance(issue_body, str) else ""))
+
+
+def _issue_meta_author_login(meta: object) -> str:
+	"""``meta["user"]["login"]`` when it is a string, else ``""``."""
+	if not isinstance(meta, dict):
+		return ""
+	user = meta.get("user")
+	login = user.get("login") if isinstance(user, dict) else ""
+	return login if isinstance(login, str) else ""
+
+
+def path_in_scope(path: str, allowlist: list[str], *, allow_lockfiles: bool = True,
+	own_fragment_issue: object = None, allow_auto_heal_companions: bool = False) -> bool:
+	"""True when a staged path is auto-allowed or covered by any allowlist entry.
+
+	``own_fragment_issue`` (an issue number) also allows that issue's own
+	changelog / agents fragments (is_own_issue_fragment).
+	``allow_auto_heal_companions`` (from auto_heal_companions_allowed) also
+	allows the auto-heal companion paths (is_auto_heal_companion_path, #8956).
+	Outside strict mode (``allow_lockfiles``), a path matching
+	SCOPE_GUARD_AUTO_ALLOW_PATHS is allowed as the last check and logged as
+	SCOPE_GUARD_AUTO_ALLOWED.
+	"""
+	if allow_lockfiles and is_lockfile(path):
+		return True
+	if own_fragment_issue is not None and is_own_issue_fragment(path, own_fragment_issue):
+		return True
+	if allow_auto_heal_companions and is_auto_heal_companion_path(path):
+		return True
+	for entry in allowlist:
+		if entry_matches(entry, path):
+			return True
+	if is_agents_fragment(path) and any(entry_matches(entry, doc) for entry in allowlist for doc in AGENTS_DOC_PATHS):
+		return True
+	if allow_lockfiles:
+		glob = scope_guard_auto_allow_match(path)
+		if glob:
+			print(f"SCOPE_GUARD_AUTO_ALLOWED path={_scope_guard_log_value(path)} glob={_scope_guard_log_value(glob)}",
+				file=sys.stderr)
+			return True
+	return False
+
+
+def evaluate_allowlist(allowlist_entries: list[str] | None, staged_paths: list[str], *, allow_lockfiles: bool = True,
+	own_fragment_issue: object = None, allow_auto_heal_companions: bool = False) -> tuple[str, list[str], list[str]]:
+	"""Classify staged paths against an explicit allowlist using the shared matcher.
+
+	Returns (status, allowlist, out_of_scope) where status is one of
+	STATUS_IN_SCOPE / STATUS_SKIP_NO_ALLOWLIST / STATUS_OUT_OF_SCOPE.
+	"""
+	allowlist = normalize_allowlist(allowlist_entries or [])
+	if not allowlist:
+		return STATUS_SKIP_NO_ALLOWLIST, [], []
+
+	out_of_scope: list[str] = []
+	for raw in staged_paths:
+		path = normalize_path(raw)
+		if not path:
+			continue
+		if not path_in_scope(path, allowlist, allow_lockfiles=allow_lockfiles,
+				own_fragment_issue=own_fragment_issue, allow_auto_heal_companions=allow_auto_heal_companions):
+			out_of_scope.append(path)
+
+	if out_of_scope:
+		return STATUS_OUT_OF_SCOPE, allowlist, out_of_scope
+	return STATUS_IN_SCOPE, allowlist, []
+
+
+def evaluate(issue_body: str, staged_paths: list[str], *, allowlist_entries: list[str] | None = None, allow_lockfiles: bool = True,
+	issue_number: object = None, allow_auto_heal_companions: bool = False) -> tuple[str, list[str], list[str]]:
+	"""Classify the staged change set against issue-body or explicit allowlists.
+
+	Returns (status, allowlist, out_of_scope) where status is one of
+	STATUS_IN_SCOPE / STATUS_SKIP_NO_ALLOWLIST / STATUS_OUT_OF_SCOPE.
+	``issue_number`` allows the issue's own changelog / agents fragments, for
+	an issue-body list only (never for explicit ``allowlist_entries``), and
+	so does ``allow_auto_heal_companions`` for the auto-heal companion paths.
+	"""
+	if allowlist_entries is not None:
+		return evaluate_allowlist(allowlist_entries, staged_paths, allow_lockfiles=allow_lockfiles)
+	raw_allowlist = extract_files_touched(issue_body or "")
+	return evaluate_allowlist(raw_allowlist or [], staged_paths, allow_lockfiles=allow_lockfiles,
+		own_fragment_issue=issue_number, allow_auto_heal_companions=allow_auto_heal_companions)
+
+
+# --- Plan auto-approval gate (issue #6769) ---------------------------------
+# Automatic `/approved` posts (plan.yml "Auto-approve clear plan" and the
+# poller's stall-recovery arms) are held for plans that list automation
+# paths. While AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED is false (it defaults to true)
+# every such plan is held; when it is on, every protected path the plan lists
+# needs a trusted, exact issue-body grant. The open pipeline-author grant
+# (PIPELINE_AUTHOR_OPEN_REASON) never counts as exact here, although the
+# implement-time guard (check_automation_paths) still accepts it.
+
+PLAN_DECISION_APPROVE = "approve"
+PLAN_DECISION_HOLD = "hold"
+PLAN_LOG_PATHS_MAX_ENTRIES = 20
+PLAN_LOG_PATH_MAX_CHARS = 200
+_PLAN_FILES_LEADIN_RE = re.compile(
+	r"^\s{0,3}(?:#{1,6}\s*)?(?:\*\*|__)?(?:\d+[.)]\s*)?(?:\*\*|__)?\s*Files\b[^\n]*\bchange\b", re.IGNORECASE)
+_PLAN_HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+\S")
+# A lead-in that is not itself a heading has no known level; only a top-level
+# (`#` or `##`) heading ends its section, so nested headings never truncate it.
+_PLAN_PLAIN_LEADIN_LEVEL = 2
+# A protected path token: optional "./" or "/" prefix, an automation prefix in
+# any letter case, a slash, then everything up to whitespace, a backtick, a
+# quote or `<>|` (globs kept so they hold). The token is never cut at an
+# unusual filename character: `scripts/a+b.py` must stay whole, or a grant for
+# `scripts/a` would approve it. `_` is not a boundary character, so
+# `_scripts/x.sh_` or `my_scripts/x.sh` still holds (fail closed).
+_PLAN_PATH_TOKEN_RE = re.compile(
+	r"(?:^|[^A-Za-z0-9./-])(?:\./|/)?((?:\.github|\.claude|scripts|prompts|workflow-templates)/[^\s`'\"<>|]*)",
+	re.IGNORECASE)
+_PLAN_PATH_TRAILING_PUNCT = ".,;:!)]}"
+_PLAN_PATH_LINE_SUFFIX_RE = re.compile(r":\d+(?::\d+)?$")
+_PLAN_LOG_UNSAFE_RE = re.compile(r"[^A-Za-z0-9._/-]")
+
+
+def _plan_files_section(plan_text: str) -> str | None:
+	"""Text of a plan's "Files ... change" section; None when no section exists.
+
+	A heading or numbered lead-in naming "Files ... change" opens the section.
+	Only a heading at the lead-in's level or shallower ends it (a plain lead-in
+	ends at a `#`/`##` heading), so a nested sub-heading cannot cut the list
+	short. Negated wording ("No changes to:") does not suppress any line: every
+	protected path in the section counts, so the gate fails closed (#6769).
+	"""
+	found = False
+	inside = False
+	level = 0
+	kept: list[str] = []
+	for line in plan_text.splitlines():
+		if _PLAN_FILES_LEADIN_RE.match(line):
+			found = True
+			inside = True
+			heading = _PLAN_HEADING_RE.match(line)
+			level = len(heading.group(1)) if heading else _PLAN_PLAIN_LEADIN_LEVEL
+			# Paths on the lead-in line itself ("Files to change: `scripts/x.sh`") count.
+			kept.append(line)
+			continue
+		heading = _PLAN_HEADING_RE.match(line)
+		if inside and heading and len(heading.group(1)) <= level:
+			inside = False
+		if inside:
+			kept.append(line)
+	return "\n".join(kept) if found else None
+
+
+def _plan_path_token(raw: str) -> str:
+	"""Strip prose punctuation, a `:line[:col]` suffix and markdown bold from a token."""
+	token = raw
+	while True:
+		previous = token
+		token = _PLAN_PATH_LINE_SUFFIX_RE.sub("", token.rstrip(_PLAN_PATH_TRAILING_PUNCT))
+		if token.endswith("**") and not token.endswith("/**"):
+			token = token.rstrip("*")
+		if token == previous:
+			return token
+
+
+def extract_plan_automation_paths(plan_text: str) -> list[str]:
+	"""Protected paths a plan lists, scanning its Files section.
+
+	Falls back to the whole plan text when no Files section exists, so a plan
+	without the section errs toward holding. Directory and glob entries are
+	kept: they can never be granted exactly, so they hold the plan.
+	"""
+	section = _plan_files_section(plan_text or "")
+	text = section if section is not None else (plan_text or "")
+	seen: set[str] = set()
+	paths: list[str] = []
+	for line in text.splitlines():
+		for match in _PLAN_PATH_TOKEN_RE.finditer(line):
+			path = normalize_path(_plan_path_token(match.group(1)))
+			if not path or not is_automation_path(path) or path in seen:
+				continue
+			seen.add(path)
+			paths.append(path)
+	return paths
+
+
+def evaluate_plan_auto_approval(plan_paths: list[str], grant: object, *, flag_enabled: bool,
+	allow_workflow_edits: str, issue_number: str) -> tuple[str, str, list[str]]:
+	"""Decide whether an automatic `/approved` may be posted for a plan."""
+	protected = [path for path in (normalize_path(p) for p in plan_paths) if path and is_automation_path(path)]
+	if not protected:
+		return PLAN_DECISION_APPROVE, "none", []
+	if not flag_enabled:
+		return PLAN_DECISION_HOLD, "automation_path_plan_auto_approval_disabled", protected
+	if isinstance(grant, dict) and grant.get("open") is True:
+		return PLAN_DECISION_HOLD, "open_grant_not_exact", protected
+	status, denied, reason = check_automation_paths(protected, grant, allow_workflow_edits, issue_number)
+	if status == STATUS_IN_SCOPE and reason == "granted":
+		return PLAN_DECISION_APPROVE, "granted", []
+	if status == STATUS_IN_SCOPE:
+		# Any other in-scope reason (the open pipeline-author grant) is not an
+		# exact grant for auto-approval.
+		return PLAN_DECISION_HOLD, "open_grant_not_exact", protected
+	return PLAN_DECISION_HOLD, reason, denied or protected
+
+
+def plan_gate_log_paths(paths: list[str]) -> str:
+	"""Log-safe, comma-joined rendering of untrusted plan paths."""
+	rendered: list[str] = []
+	for path in paths[:PLAN_LOG_PATHS_MAX_ENTRIES]:
+		safe = _PLAN_LOG_UNSAFE_RE.sub("", path)[:PLAN_LOG_PATH_MAX_CHARS]
+		if safe:
+			rendered.append(safe)
+	return ",".join(rendered) if rendered else "none"
+
+
+# Pipeline plan grant (Q108). A pipeline-authored issue with no
+# files_touched block gets the open grant, which never auto-approves a plan.
+# When the gate would otherwise hold for that reason alone, it proposes an
+# exact block: every file the plan's Files section lists plus the companion
+# entries below. The caller writes it into the issue body (the pipeline
+# account owns the issue) and only then posts /approved; from then on the
+# block is the issue's ordinary exact grant and its implement-time scope.
+PIPELINE_PLAN_GRANT_COMPANIONS = ("tests/**", "changelog.d/*", "agents.d/*")
+PIPELINE_PLAN_GRANT_MAX_PATHS = 50
+PIPELINE_PLAN_GRANT_MARKER = "<!-- ai:pipeline-plan-grant:v1 -->"
+PIPELINE_PLAN_GRANT_REASON = "pipeline_plan_grant"
+# A plan whose Files section lists more than PIPELINE_PLAN_GRANT_MAX_PATHS
+# files gets no grant. The plan stage hands it to the orchestrator as a
+# project instead (scripts/plan_split_dispatch.sh, Q151); the record carries
+# the count as ``plan_path_count``.
+PIPELINE_PLAN_TOO_LARGE_REASON = "plan_too_large_for_grant"
+_PLAN_GRANT_BACKTICK_RE = re.compile(r"`([^`\n]+)`")
+_PLAN_GRANT_BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+(\S+)")
+# The planner's metadata lines (mode-plan.txt items 7-10). A plan sometimes
+# puts them right under the Files bullets with no heading in between,
+# sometimes as a list item, possibly nested at any indent.
+_PLAN_FILES_METADATA_RE = re.compile(
+	r"^\s*(?:(?:[-*+]|\d+[.)])\s+)?(?:\*\*|__)?(?:Scope-mode(?: justification)?|Reuse-audit|Implementation-time estimate)(?:\*\*|__)?\s*:",
+	re.IGNORECASE)
+_PLAN_GRANT_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.@+-]+$")
+# A root file is any name with a letter-led extension (the same rule as a
+# nested last segment), so a planned `main.c` or `app.php` is never left out of
+# the grant; a harmless extra entry beats an approved plan whose implement
+# scope then blocks a listed file. A root dotfile needs an extension
+# (`.gitlab-ci.yml`) or one of the names below: an extensionless dot name
+# (`.vscode`, `.devcontainer`) is often a directory. `.env*` files, which can
+# hold credentials, are never written.
+_PLAN_GRANT_ROOT_FILE_RE = re.compile(
+	r"^(?:[A-Za-z0-9_][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]*"
+	r"|\.(?!env(?:\.|$))[A-Za-z0-9_-][A-Za-z0-9._-]*\.[A-Za-z][A-Za-z0-9]*"
+	r"|\.(?:gitignore|gitattributes|gitmodules|editorconfig|dockerignore|npmignore|prettierrc|prettierignore"
+	r"|eslintrc|eslintignore|stylelintrc|nvmrc|node-version|python-version|ruby-version|tool-versions|flake8"
+	r"|pylintrc|yamllint|shellcheckrc|mailmap|markdownlint)"
+	r"|Makefile|Dockerfile)$")
+# Extensionless file names accepted as the last segment of a grant path. Any
+# other extensionless (or `.d`) last segment may be a directory, and a
+# files_touched entry without a trailing slash covers everything beneath it
+# (entry_matches), so it is never written as an "exact" grant. `_headers` and
+# `_redirects` are the Cloudflare Pages / Netlify static-site config files:
+# leaving them out dropped a planned `lobby-frontend/public/_headers` from the
+# grant, and implement then refused the commit (consumer fun-token-multi-chain
+# #771).
+_PLAN_GRANT_BARE_FILE_RE = re.compile(
+	r"^(?:Makefile|Dockerfile|LICENSE|COPYING|NOTICE|CODEOWNERS|Gemfile|Rakefile|Procfile|Justfile|Vagrantfile"
+	r"|Pipfile|Jenkinsfile|Containerfile|Brewfile|Podfile|Tiltfile|_headers|_redirects)$")
+# The extension must start with a letter: a digit-led suffix (`v1.0`,
+# `2024.01.15`) is usually a versioned directory, which would cover its subtree.
+_PLAN_GRANT_FILE_SEGMENT_RE = re.compile(r"^(?:\.[A-Za-z0-9_-][A-Za-z0-9._-]*|[^.].*\.[A-Za-z][A-Za-z0-9]*)$")
+
+
+def _plan_grant_checkout_state(path: str) -> str:
+	"""``"file"``, ``"missing"`` or ``"other"`` for a repo-relative path (#9387).
+
+	Read with os.lstat relative to the current directory, which is the planning
+	checkout: plan.yml and the poller (orchestrate_poll_process.sh) run the
+	guard from the repository checkout. Only a regular file is ``"file"``; a
+	symlink is never followed and, like a directory or any other type, is
+	``"other"``; a path under a symlinked parent directory is ``"other"`` too,
+	so a grant never reaches through a link. Run from anywhere else the answer is ``"missing"`` or
+	``"other"``, which keeps today's behaviour or holds the plan, and never
+	widens a grant.
+	"""
+	try:
+		parts = path.split("/")
+		for depth in range(1, len(parts)):
+			# os.lstat follows symlinks in parent components; refuse them.
+			if stat.S_ISLNK(os.lstat("/".join(parts[:depth])).st_mode):
+				return "other"
+		mode = os.lstat(path).st_mode
+	except (FileNotFoundError, NotADirectoryError):
+		return "missing"
+	except (OSError, ValueError):
+		return "other"
+	return "file" if stat.S_ISREG(mode) else "other"
+
+
+def _plan_grant_path(raw: str) -> str:
+	"""A plan token as an exact repo-relative file path, or "" when it is not one.
+
+	Directories, globs, absolute or parent paths, URLs and anything outside a
+	plain path alphabet are rejected: they can never be an exact grant. An
+	extensionless last segment (no ``.``) that the name rules reject is still
+	granted when the path is a regular file in the planning checkout
+	(_plan_grant_checkout_state, #9387); a directory or symlink never is.
+	"""
+	# Only `*` is stripped: `_` is part of names such as `__init__.py`.
+	path = normalize_path(_plan_path_token(raw.strip().strip("*")))
+	if not path or len(path) > 512 or path.endswith("/") or path.startswith("/") or "//" in path:
+		return ""
+	segments = path.split("/")
+	if any(seg in {"", ".", ".."} or not _PLAN_GRANT_SEGMENT_RE.match(seg) for seg in segments):
+		return ""
+	if segments[0].startswith("-") or any(char in path for char in _GLOB_CHARS):
+		return ""
+	last = segments[-1]
+	if _PLAN_GRANT_BARE_FILE_RE.match(last):
+		return path
+	if len(segments) == 1 and not _PLAN_GRANT_ROOT_FILE_RE.match(path):
+		if "." not in last and _plan_grant_checkout_state(path) == "file":
+			return path
+		return ""
+	if not _PLAN_GRANT_FILE_SEGMENT_RE.match(last) or last.endswith(".d"):
+		if "." not in last and _plan_grant_checkout_state(path) == "file":
+			return path
+		return ""
+	return path
+
+
+def _plan_grant_missing_path(raw: str) -> str:
+	"""A plan token naming an extensionless file absent from the checkout, else "".
+
+	Such a path is neither granted nor silently dropped: the plan gate holds the
+	plan as replannable (#9387). The syntax checks repeat _plan_grant_path's on
+	purpose (kept separate so that function's existing lines stay unchanged);
+	keep the two in step. The path must be nested and its first segment an
+	existing checkout directory, so prose tokens such as ``owner/repo`` never
+	count.
+	"""
+	path = normalize_path(_plan_path_token(raw.strip().strip("*")))
+	if not path or len(path) > 512 or path.endswith("/") or path.startswith("/") or "//" in path:
+		return ""
+	segments = path.split("/")
+	if len(segments) < 2:
+		return ""
+	if any(seg in {"", ".", ".."} or not _PLAN_GRANT_SEGMENT_RE.match(seg) for seg in segments):
+		return ""
+	if segments[0].startswith("-") or any(char in path for char in _GLOB_CHARS):
+		return ""
+	last = segments[-1]
+	if "." in last or _PLAN_GRANT_BARE_FILE_RE.match(last):
+		return ""
+	try:
+		if not stat.S_ISDIR(os.lstat(segments[0]).st_mode):
+			return ""
+	except (OSError, ValueError):
+		return ""
+	return path if _plan_grant_checkout_state(path) == "missing" else ""
+
+
+# A Files bullet that opens with one backticked token, alone or followed by a
+# dash, colon or parenthesis (`- `VERSION``, `- `VERSION` - bump it`), presents
+# that token as a listed path rather than prose (#9387). Only a top-level
+# (column 0) bullet counts: an indented sub-bullet annotates a listed file
+# with identifiers (`  - `build_payload`: wraps it`), not root file names.
+_PLAN_GRANT_LEAD_BACKTICK_RE = re.compile(r"^(?:[-*+]|\d+[.)])\s+`([^`\n]+)`\s*(?:$|[-:(–—])")
+# The same shape without backticks (`- VERSION`, `- VERSION - bump it`,
+# `- VERSION: bump it`); used only for a line with no backticks (#9387). The
+# bare token must be upper case (`VERSION`, `LICENSE`, `CODEOWNERS`), so a
+# label word in prose (`- Tests: add cases`, `- Docs - explain it`, `- None -
+# no files need edits`) never counts; NONE, TBD and TODO are excluded too.
+_PLAN_GRANT_LEAD_BARE_RE = re.compile(
+	r"^(?:[-*+]|\d+[.)])\s+\**(?!(?:NONE|TBD|TODO)(?![A-Z0-9_]))[A-Z][A-Z0-9_]*\**(?:\s*$|\s*[:(]|\s+[-–—])")
+
+
+def _plan_grant_missing_root_path(raw: str) -> str:
+	"""A root-level extensionless file name absent from the checkout, else "" (#9387).
+
+	The nested rule (_plan_grant_missing_path) needs an existing first
+	directory; a root name has none, so the caller only asks for a bullet's
+	top-level leading token (_PLAN_GRANT_LEAD_BACKTICK_RE, or
+	_PLAN_GRANT_LEAD_BARE_RE on a line without backticks), and the current
+	directory must be a git checkout (``.git`` present). Run from anywhere else
+	nothing is reported, which keeps the previous behaviour.
+	"""
+	path = normalize_path(_plan_path_token(raw.strip().strip("*")))
+	if not path or len(path) > 255 or "/" in path or not _PLAN_GRANT_SEGMENT_RE.match(path):
+		return ""
+	if path.startswith("-") or "." in path or any(char in path for char in _GLOB_CHARS):
+		return ""
+	if _PLAN_GRANT_BARE_FILE_RE.match(path) or not os.path.lexists(".git"):
+		return ""
+	if path.lower() in {"none", "tbd", "todo"}:
+		# A no-change or placeholder entry (`- `None` - no edits`), not a file.
+		return ""
+	return path if _plan_grant_checkout_state(path) == "missing" else ""
+
+
+def extract_plan_missing_file_paths(plan_text: str) -> list[str]:
+	"""Extensionless files a plan's Files section lists that the checkout lacks (#9387)."""
+	missing: list[str] = []
+	extract_plan_file_paths(plan_text, missing_out=missing)
+	return missing
+
+
+def extract_plan_file_paths(plan_text: str, *, missing_out: list[str] | None = None) -> list[str]:
+	"""Exact file paths a plan's Files section lists (empty without a section).
+
+	Reads backticked spans, a bullet's first token when the bullet has no
+	backticks, and bare protected-path tokens. Only tokens that are exact file
+	paths are kept (see _plan_grant_path); a listed directory or glob is
+	dropped here and still holds the plan through the protected-path check.
+	An extensionless token counts only when it is a regular file in the
+	planning checkout. With ``missing_out`` (a list), each rejected token that
+	_plan_grant_missing_path reports as a missing extensionless file is
+	appended to it once (#9387).
+	"""
+	section = _plan_files_section(plan_text or "")
+	if section is None:
+		return []
+	seen: set[str] = set()
+	paths: list[str] = []
+	skip_indent: int | None = None
+	for line in section.splitlines():
+		# A planner metadata line and its prose continuation are skipped: the
+		# prose names files the plan chose not to change (consumer
+		# tele-funtoken-msg-scoring #5101). Reading resumes at a blank line or
+		# at a list item no deeper than the metadata line, so files listed
+		# before or after the metadata are still checked. The protected-path
+		# scan still reads the whole section.
+		indent = len(line) - len(line.lstrip())
+		if _PLAN_FILES_METADATA_RE.match(line):
+			skip_indent = indent
+			continue
+		if skip_indent is not None:
+			if not line.strip() or (_PLAN_GRANT_BULLET_RE.match(line) and indent <= skip_indent):
+				skip_indent = None
+			else:
+				continue
+		candidates = _PLAN_GRANT_BACKTICK_RE.findall(line)
+		# The bullet's first token counts even when the line also has
+		# backticked spans (`- README.md — use `parse()``): otherwise a
+		# non-path span would drop the listed file from the grant.
+		bullet = _PLAN_GRANT_BULLET_RE.match(line)
+		if bullet:
+			candidates.append(bullet.group(1))
+		candidates.extend(match.group(1) for match in _PLAN_PATH_TOKEN_RE.finditer(line))
+		lead_token = _PLAN_GRANT_LEAD_BACKTICK_RE.match(line)
+		lead_raw = lead_token.group(1) if lead_token else ""
+		if not lead_raw and bullet and "`" not in line and _PLAN_GRANT_LEAD_BARE_RE.match(line):
+			lead_raw = bullet.group(1)
+		for raw in candidates:
+			path = _plan_grant_path(raw)
+			if path and path not in seen:
+				seen.add(path)
+				paths.append(path)
+			elif not path and isinstance(missing_out, list):
+				missing_path = _plan_grant_missing_path(raw)
+				if not missing_path and lead_raw and raw == lead_raw:
+					# A root-level name only as the bullet's leading token (#9387).
+					missing_path = _plan_grant_missing_root_path(raw)
+				if missing_path and missing_path not in missing_out:
+					missing_out.append(missing_path)
+	return paths
+
+
+def build_pipeline_plan_grant_body(body: str, plan_paths: list[str]) -> str:
+	"""Issue body with a canonical files_touched block appended after a rule."""
+	entries = list(plan_paths) + [c for c in PIPELINE_PLAN_GRANT_COMPANIONS if c not in plan_paths]
+	block = [
+		"",
+		"---",
+		("**Pipeline plan grant.** The pipeline wrote this `files_touched` list from the approved plan's"
+			" file list, plus tests, changelog and agents fragments. Implementation is limited to these paths."),
+		PIPELINE_PLAN_GRANT_MARKER,
+		"files_touched:",
+	] + ["  - " + entry for entry in entries]
+	return (body or "").rstrip("\n") + "\n" + "\n".join(block) + "\n"
+
+
+def _flag_enabled(value: str) -> bool:
+	# On by default: an unset or empty value is on, like the workflow defaults.
+	return (value or "").strip().lower() in {"", "1", "true", "yes", "on"}
+
+
+# Plan files outside files_touched. The implement-time scope guard refuses a
+# commit that stages a path outside the issue's files_touched list and latches
+# ai:scope-blocked. A plan that already names such a file in its Files section
+# is held here instead, before an automatic /approved spends an implementation
+# run that is certain to be refused (consumer tele-funtoken-msg-scoring #4795:
+# the planner widened the scope in prose, auto-approval passed, and the
+# implement run was blocked on the three files it added).
+PLAN_FILES_TOUCHED_GATE_REASON = "plan_files_outside_files_touched"
+
+
+def plan_files_touched_gate_active() -> bool:
+	"""True when the implement guard would block, so the plan gate checks too.
+
+	Mirrors implement.yml: ENFORCE_FILES_TOUCHED enforces only when it is
+	exactly "true" (default) and ALLOW_OUT_OF_SCOPE_FILES downgrades a block
+	only when exactly "true". PLAN_FILES_TOUCHED_GATE_ENABLED (default true)
+	turns this plan-time check off on its own.
+	"""
+	if (os.environ.get("PLAN_FILES_TOUCHED_GATE_ENABLED") or "true").strip().lower() in {"false", "0", "no", "off"}:
+		return False
+	return (os.environ.get("ENFORCE_FILES_TOUCHED") or "true") == "true" \
+		and (os.environ.get("ALLOW_OUT_OF_SCOPE_FILES") or "false") != "true"
+
+
+# Implement's heal-route classifier (workflow_failure_heal.is_heal_route): the
+# ai:workflow-heal label or the intake's fingerprint marker. The scope marker
+# alone does not put an issue on the heal route.
+_HEAL_ROUTE_FP_RE = re.compile(r"<!-- workflow-failure-heal:fp=[0-9a-f]{64} -->")
+
+
+def _issue_on_heal_route(issue_body: str, labels: object) -> bool:
+	names = [label.get("name") if isinstance(label, dict) else label
+		for label in (labels if isinstance(labels, list) else [])]
+	return "ai:workflow-heal" in names or bool(_HEAL_ROUTE_FP_RE.search(issue_body or ""))
+
+
+def plan_files_outside_files_touched(plan_text: str, issue_body: str, labels: object = None,
+	issue_number: object = None, *, author_login: str = "", pipeline_login: str = "") -> list[str]:
+	"""Exact files in a plan's Files section that the issue's files_touched list misses.
+
+	Uses the implement guard's matcher (path_in_scope: lockfiles and agents.d
+	fragments follow the same rules). An issue without a list, or with an empty
+	or malformed one, is not checked, as the implement guard skips it too. A
+	directory or glob the plan lists is not an exact file and is not checked
+	here; the implement guard still applies to whatever gets staged. An issue
+	on the heal route (the ai:workflow-heal label or the heal fingerprint
+	marker, as implement decides it) is not checked: there implement enforces
+	the heal scope marker, not files_touched. ``author_login`` and
+	``pipeline_login`` turn on the auto-heal companion paths through
+	auto_heal_companions_allowed, as the implement guard does (#8956).
+	"""
+	if _issue_on_heal_route(issue_body, labels):
+		return []
+	allowlist = normalize_allowlist(extract_files_touched(issue_body or "") or [])
+	if not allowlist:
+		return []
+	companions = auto_heal_companions_allowed(issue_body, author_login, pipeline_login)
+	return [path for path in extract_plan_file_paths(plan_text)
+		if not path_in_scope(path, allowlist, own_fragment_issue=issue_number,
+			allow_auto_heal_companions=companions)]
+
+
+# Re-plan of a hold caused only by non-exact tokens (#8339). A plan whose
+# Files section mentions a placeholder such as `scripts/<helper>` is read as
+# the bare directory `scripts/`, which can never be granted exactly, so the
+# plan is held with path_not_granted for good. When every denied path is a
+# directory or glob token and the rest of the plan would be approved, the
+# record carries ``replannable: true`` and the poller's stall recovery asks
+# for one new plan. The check is in memory only: it never changes the
+# decision, the denied list or any grant, and never writes a grant body.
+def _plan_hold_replannable(plan_text: str, protected: list[str], denied: list[str], replan_grant: object, *,
+	flag_on: bool, allow_workflow_edits: str, issue_number: str, metadata: object,
+	check_files_touched: bool, pipeline_login: str = "") -> bool:
+	"""True when a path_not_granted hold would approve without its non-exact tokens."""
+	if not denied or not isinstance(metadata, dict):
+		return False
+	# A missing extensionless file (#9387) counts like a non-exact token.
+	if not all(path.endswith("/") or any(char in path for char in _GLOB_CHARS)
+			or _plan_grant_missing_path(path) == path for path in denied):
+		return False
+	if _issue_on_heal_route(metadata.get("body") or "", metadata.get("labels")):
+		return False
+	remaining = [path for path in protected if path not in denied]
+	if not remaining:
+		return False
+	decision, reason, _ = evaluate_plan_auto_approval(remaining, replan_grant, flag_enabled=flag_on,
+		allow_workflow_edits=allow_workflow_edits, issue_number=issue_number)
+	if decision != PLAN_DECISION_APPROVE or reason != "granted":
+		return False
+	return not (check_files_touched and plan_files_outside_files_touched(plan_text, metadata.get("body") or "",
+		metadata.get("labels"), issue_number=issue_number or metadata.get("number"),
+		author_login=_issue_meta_author_login(metadata), pipeline_login=pipeline_login))
+
+
+def run_plan_auto_approval_gate(plan_file: str, flag_value: str, issue_meta_file: str,
+	pipeline_login: str, allow_workflow_edits: str, issue_number: str, origin_repo: str = "",
+	grant_body_out: str = "") -> tuple[dict, int]:
+	"""CLI body: returns (decision record, exit code). Errors always hold.
+
+	``origin_repo`` (owner/name) lets a pipeline-authored issue that names a
+	source issue pass the Q82 origin-chain check, as the implement-time grant
+	does; without it such an issue holds with ``origin_unverified``.
+
+	With ``grant_body_out``, a hold caused only by the open pipeline-author
+	grant becomes ``approve`` with reason ``pipeline_plan_grant`` when the body
+	from build_pipeline_plan_grant_body would grant every protected path. That
+	body is written to ``grant_body_out`` and the record carries
+	``pipeline_grant_body: true``; the caller must write it to the issue
+	before it posts /approved, and hold if that write fails.
+
+	A ``path_not_granted`` hold held only by directory or glob tokens, which
+	would approve without them, adds ``replannable: true`` (#8339).
+
+	A plan that would approve but lists an extensionless file missing from
+	the planning checkout (extract_plan_missing_file_paths) is held with
+	``path_not_granted``, those paths denied and ``replannable: true``; no
+	grant body is written. On the heal route ``replannable`` stays false
+	(#9387).
+	"""
+	protected: list[str] = []
+	grant_proposed = False
+	plan_path_count = 0
+	replannable = False
+	auto_heal_companions = False
+	try:
+		with open(plan_file, encoding="utf-8") as handle:
+			plan_text = handle.read()
+		if not plan_text.strip():
+			raise ValueError("empty plan")
+		protected = extract_plan_automation_paths(plan_text)
+		# Extensionless files the plan lists that the checkout lacks (#9387).
+		missing_paths = extract_plan_missing_file_paths(plan_text)
+		missing_hold = False
+		flag_on = _flag_enabled(flag_value)
+		grant: object = None
+		metadata = None
+		if protected and flag_on:
+			if not issue_meta_file:
+				record = {"decision": PLAN_DECISION_HOLD, "reason": "issue_meta_unavailable",
+					"protected_paths": protected, "denied_paths": protected}
+				record["log_paths"] = plan_gate_log_paths(protected)
+				return record, EXIT_AUTOMATION_UNGRANTED
+			with open(issue_meta_file, encoding="utf-8") as handle:
+				metadata = json.load(handle)
+			repo = origin_repo if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", origin_repo or "") else ""
+			origin_cache: dict[int, dict | None] = {}
+
+			def fetch_origin(number: int) -> dict | None:
+				# Cached so the proposed-grant re-check below reads each
+				# source issue once.
+				if number not in origin_cache:
+					origin_cache[number] = fetch_issue_with_gh(repo, number)
+				return origin_cache[number]
+
+			grant = build_automation_grant(metadata, pipeline_login, fetch_origin if repo else None)
+		decision, reason, denied = evaluate_plan_auto_approval(protected, grant, flag_enabled=flag_on,
+			allow_workflow_edits=allow_workflow_edits, issue_number=issue_number)
+		# The grant behind a path_not_granted hold, for the #8339 re-plan check.
+		replan_grant: object = grant
+		replan_via_proposal = False
+		if (grant_body_out and decision == PLAN_DECISION_HOLD and reason == "open_grant_not_exact"
+				and isinstance(grant, dict) and grant.get("open") is True
+				and grant.get("reason") == PIPELINE_AUTHOR_OPEN_REASON):
+			plan_paths = extract_plan_file_paths(plan_text)
+			if len(plan_paths) > PIPELINE_PLAN_GRANT_MAX_PATHS:
+				# The open grant hid the workflow-edits switch from the check
+				# above; a plan the implement guard would refuse anyway (for
+				# example workflow_edits_disabled) keeps that reason, so it is
+				# never handed to a project whose children would be blocked.
+				status, open_denied, open_reason = check_automation_paths(protected, grant, allow_workflow_edits,
+					issue_number)
+				if status != STATUS_IN_SCOPE:
+					decision, reason, denied = PLAN_DECISION_HOLD, open_reason, open_denied or protected
+				else:
+					decision, reason = PLAN_DECISION_HOLD, PIPELINE_PLAN_TOO_LARGE_REASON
+					plan_path_count = len(plan_paths)
+			elif plan_paths:
+				proposed_body = build_pipeline_plan_grant_body(metadata.get("body") or "", plan_paths)
+				proposed_grant = build_automation_grant(dict(metadata, body=proposed_body), pipeline_login,
+					fetch_origin if repo else None)
+				proposed = evaluate_plan_auto_approval(protected, proposed_grant, flag_enabled=flag_on,
+					allow_workflow_edits=allow_workflow_edits, issue_number=issue_number)
+				# #9387: the proposal would approve but for the missing
+				# extensionless files the plan lists.
+				proposal_held_by_missing = bool(missing_paths) and (proposed[0] == PLAN_DECISION_APPROVE
+					or evaluate_plan_auto_approval([path for path in protected if path not in missing_paths],
+						proposed_grant, flag_enabled=flag_on, allow_workflow_edits=allow_workflow_edits,
+						issue_number=issue_number)[0] == PLAN_DECISION_APPROVE)
+				if proposal_held_by_missing:
+					decision, reason, denied = PLAN_DECISION_HOLD, "path_not_granted", list(missing_paths)
+					# Not replannable on the heal route, as below.
+					replannable = not _issue_on_heal_route(metadata.get("body") or "", metadata.get("labels"))
+					missing_hold = True
+				elif proposed[0] == PLAN_DECISION_APPROVE:
+					with open(grant_body_out, "w", encoding="utf-8") as handle:
+						handle.write(proposed_body)
+					decision, reason, denied = PLAN_DECISION_APPROVE, PIPELINE_PLAN_GRANT_REASON, []
+					grant_proposed = True
+				else:
+					# Report what the proposed grant still misses (a listed
+					# directory or glob, or a path the plan named only in prose).
+					decision, reason, denied = proposed
+					replan_grant = proposed_grant
+					replan_via_proposal = True
+		# An approval the implement scope guard would refuse is held. The
+		# pipeline plan grant is skipped: its block is written from this plan.
+		# Without issue metadata (the poller's cache had no body) there is no
+		# list to compare, so the check is skipped; implement still enforces.
+		loaded_meta = metadata
+		if decision == PLAN_DECISION_APPROVE and not grant_proposed and issue_meta_file \
+				and plan_files_touched_gate_active():
+			issue_meta = metadata
+			if issue_meta is None:
+				with open(issue_meta_file, encoding="utf-8") as handle:
+					issue_meta = json.load(handle)
+			loaded_meta = issue_meta
+			# The issue's own changelog / agents fragments are allowed, as the
+			# implement guard allows them, so an auto-heal plan that adds the
+			# required fragment is not parked for a human.
+			# Auto-heal companion paths (#8956) use the implement guard's rule.
+			issue_author = _issue_meta_author_login(issue_meta)
+			outside = plan_files_outside_files_touched(plan_text, issue_meta.get("body") or "",
+				issue_meta.get("labels"), issue_number=issue_number or issue_meta.get("number"),
+				author_login=issue_author, pipeline_login=pipeline_login)
+			# The record key marks an approval that needed the rule: some plan
+			# path is in scope only because of the companion allowance.
+			companions_used = auto_heal_companions_allowed(issue_meta.get("body") or "", issue_author,
+				pipeline_login) and bool(plan_files_outside_files_touched(plan_text, issue_meta.get("body") or "",
+				issue_meta.get("labels"), issue_number=issue_number or issue_meta.get("number")))
+			if outside and not (isinstance(pipeline_login, str) and LOGIN_RE.fullmatch(pipeline_login)) \
+					and LOGIN_RE.fullmatch(issue_author) \
+					and _AUTO_HEAL_REMEDIATION_RE.search(issue_meta.get("body") or "") \
+					and all(is_auto_heal_companion_path(path) for path in outside):
+				# plan.yml reads the pipeline login only for plans that list
+				# protected paths. identity_unavailable makes it read the login
+				# once and re-run the gate, which then decides the companions.
+				# Without the login a valid author cannot be told apart from
+				# the pipeline, so any valid author with the marker asks once;
+				# an empty or invalid author can never match and holds below.
+				decision, reason, denied = PLAN_DECISION_HOLD, "identity_unavailable", outside
+			elif outside:
+				decision, reason, denied = PLAN_DECISION_HOLD, PLAN_FILES_TOUCHED_GATE_REASON, outside
+			auto_heal_companions = companions_used and decision == PLAN_DECISION_APPROVE
+		# #9387: any other approval of a plan that lists missing extensionless
+		# files holds too; replannable unless the issue is on the heal route.
+		if decision == PLAN_DECISION_APPROVE and not grant_proposed and missing_paths:
+			decision, reason, denied = PLAN_DECISION_HOLD, "path_not_granted", list(missing_paths)
+			if not isinstance(loaded_meta, dict) and issue_meta_file:
+				# No protected path and the files_touched gate off: read the
+				# issue metadata here so the heal-route check still runs.
+				try:
+					with open(issue_meta_file, encoding="utf-8") as handle:
+						loaded_meta = json.load(handle)
+				except (OSError, UnicodeDecodeError, ValueError):
+					loaded_meta = None
+			# Unknown metadata fails closed (not replannable), as in _plan_hold_replannable.
+			replannable = isinstance(loaded_meta, dict) and not _issue_on_heal_route(
+				loaded_meta.get("body") or "", loaded_meta.get("labels"))
+			missing_hold = True
+			auto_heal_companions = False
+		if decision == PLAN_DECISION_HOLD and reason == "path_not_granted" and not missing_hold:
+			# The counterfactual approval would be a proposed pipeline plan
+			# grant when the proposal produced this hold, and the real gate
+			# skips the files_touched check for that; otherwise it runs as
+			# above. Any error only means "not replannable".
+			try:
+				replannable = _plan_hold_replannable(plan_text, protected, denied, replan_grant,
+					flag_on=flag_on, allow_workflow_edits=allow_workflow_edits, issue_number=issue_number,
+					metadata=metadata, check_files_touched=(not replan_via_proposal and bool(issue_meta_file)
+						and plan_files_touched_gate_active()), pipeline_login=pipeline_login)
+			except Exception:  # noqa: BLE001 - advisory only; the hold stands
+				replannable = False
+	except (OSError, UnicodeDecodeError, ValueError, TypeError, KeyError, AttributeError):
+		decision, reason, denied = PLAN_DECISION_HOLD, "plan_gate_error", protected
+		grant_proposed = False
+		plan_path_count = 0
+		replannable = False
+		auto_heal_companions = False
+	record = {"decision": decision, "reason": reason, "protected_paths": protected, "denied_paths": denied,
+		"log_paths": plan_gate_log_paths(denied or protected)}
+	if grant_proposed:
+		record["pipeline_grant_body"] = True
+	if plan_path_count:
+		record["plan_path_count"] = plan_path_count
+	if replannable:
+		record["replannable"] = True
+	if auto_heal_companions:
+		record["auto_heal_companions"] = True
+	return record, (EXIT_IN_SCOPE if decision == PLAN_DECISION_APPROVE else EXIT_AUTOMATION_UNGRANTED)
+
+
+# Workflow-heal plans (unblock fix-up #7444 for #7434). A heal issue's scope is
+# its intake-written ai:workflow-heal-scope:v1 marker, and the implement
+# preflight refuses a body that was edited. So plan.yml never writes a Q108
+# grant into a heal issue: it verifies the live marker (workflow_failure_heal.py
+# heal-scope verify), passes the verified paths here, and this gate approves only
+# when every path the plan lists is inside them. The matcher is the one the heal
+# route's commit check uses (strict: no lockfile allowance). No body is written.
+HEAL_PLAN_APPROVE_REASON = "heal_scope_verified"
+
+
+# A heal issue's own agents.md fragment (#8064). CLAUDE.md §30 requires an
+# `agents.d/<N>-<slug>.md` fragment for any agents.md addition, and the intake
+# scope marker only carries `tests/**` and `changelog.d/*.md`, so every heal
+# that documented its change was held and then refused at implement. The heal
+# plan gate and implement_heal_preflight.sh (which writes HEAL_SCOPE_FILE for
+# the isolated transfer and the commit guard) add this one entry for the
+# issue's own number; review_untrusted_workspace.py accepts exactly this shape.
+# The marker format is unchanged, so issues filed before this fix benefit too.
+def heal_own_agents_fragment_entry(issue_number: object) -> str:
+	"""``agents.d/<N>-*.md`` for a positive decimal issue number, else ``""``."""
+	number = str(issue_number or "").strip()
+	if not re.fullmatch(r"[1-9][0-9]{0,9}", number):
+		return ""
+	return f"agents.d/{number}-*.md"
+_HEAL_BARE_GLOB_RE = re.compile(r"[A-Za-z0-9_.*?/\[\]-]+")
+
+
+# A heal plan that changes no file (#8241). After a partial delivery merges,
+# the re-plan can find every in-scope change already on the base branch and
+# answer "Files likely to change: None." Holding it parked the issue until
+# stall recovery posted /approved an hour later, and implement then closed it
+# through its success-no-op path. Only an explicit "None" counts: it must be
+# the first text under the section's single lead-in, no other line may be a
+# bullet, and no line may carry a backtick or a path- or filename-shaped token.
+# Anything else keeps the heal_scope_plan_paths_missing hold.
+HEAL_PLAN_NO_CHANGES_REASON = "heal_scope_plan_no_changes"
+_HEAL_PLAN_EMPHASIS = r"(?:\*\*|__|\*|_)?"
+_HEAL_PLAN_NONE_RE = re.compile(
+	r"^\s*(?:[-*+]\s+)?" + _HEAL_PLAN_EMPHASIS + r"none" + _HEAL_PLAN_EMPHASIS
+	+ r"(?:[.!:;]" + _HEAL_PLAN_EMPHASIS + r"(?:\s|$)|\s+(?:—|–|--?)\s|\s*$)", re.IGNORECASE)
+_HEAL_PLAN_LEADIN_REST_RE = re.compile(r"\bchange\w*\b[^:\n]*:\s*(?:\*\*|__)?\s*(.*)$", re.IGNORECASE)
+_HEAL_PLAN_PATHLIKE_RE = re.compile(r"[\w*?\[\]-]/|/[\w*?.\[\]-]|[\w*?\]-]\.[A-Za-z][A-Za-z0-9]{0,31}\b")
+# Common extensionless files the grant list does not name (README, OWNERS, ...).
+_HEAL_PLAN_EXTRA_BARE_FILE_RE = re.compile(
+	r"^(?:README|CHANGELOG|CONTRIBUTING|OWNERS|VERSION|AUTHORS|INSTALL|Caddyfile|Earthfile)$")
+# The same file names in any letter case (`readme`, `makefile`). Prose words
+# such as license, notice, version, authors and install stay uppercase-only.
+_HEAL_PLAN_BARE_FILE_ICASE_RE = re.compile(
+	r"^(?:readme|changelog|contributing|owners|codeowners|makefile|dockerfile|containerfile|gemfile|rakefile"
+	r"|procfile|justfile|vagrantfile|pipfile|jenkinsfile|brewfile|podfile|tiltfile|caddyfile|earthfile)$",
+	re.IGNORECASE)
+
+
+def _heal_plan_declares_no_file_changes(section: str | None) -> bool:
+	"""True when a Files section explicitly says the plan changes no file."""
+	if section is None:
+		return False
+	content: list[str] = []
+	raw_leadins: list[str] = []
+	leadins = 0
+	for line in section.splitlines():
+		if _PLAN_FILES_LEADIN_RE.match(line):
+			leadins += 1
+			# A file named on the lead-in line itself is checked below too.
+			raw_leadins.append(line)
+			rest = _HEAL_PLAN_LEADIN_REST_RE.search(line)
+			line = rest.group(1) if rest else ""
+		if line.strip():
+			content.append(line)
+	if leadins != 1 or not content or not _HEAL_PLAN_NONE_RE.match(content[0]):
+		return False
+	if any(_PLAN_GRANT_BULLET_RE.match(line) for line in content[1:]):
+		return False
+	# Extensionless names (`Makefile`, `CODEOWNERS`) and root dotfiles
+	# (`.gitignore`) are files too, though the path regex misses them. Any
+	# dot-led name (`.env`, `.ENV`, `.envrc`, `.npmrc`) counts, so an unlisted
+	# dotfile holds the plan instead of approving it (fail closed).
+	def _names_bare_file(line: str) -> bool:
+		return any(_PLAN_GRANT_BARE_FILE_RE.match(tok) or _HEAL_PLAN_EXTRA_BARE_FILE_RE.match(tok)
+			or _HEAL_PLAN_BARE_FILE_ICASE_RE.match(tok) or tok.startswith(".")
+			for tok in (raw.rstrip(".") for raw in re.findall(r"\.?[A-Za-z0-9_][A-Za-z0-9._-]*", line)))
+	return not any("`" in line or _HEAL_PLAN_PATHLIKE_RE.search(line) or _names_bare_file(line)
+		for line in content + raw_leadins)
+
+
+def run_heal_plan_scope_gate(plan_file: str, heal_scope_file: str, flag_value: str,
+	issue_number: str, allow_workflow_edits: str = "false") -> tuple[dict, int]:
+	"""Approve a heal plan only inside its verified heal scope; every error holds."""
+	protected: list[str] = []
+	denied: list[str] = []
+	try:
+		with open(plan_file, encoding="utf-8") as handle:
+			plan_text = handle.read()
+		if not plan_text.strip():
+			raise ValueError("empty plan")
+		protected = extract_plan_automation_paths(plan_text)
+		scope = normalize_allowlist(_read_allowlist(heal_scope_file)) if heal_scope_file else []
+		own_agents_fragment = heal_own_agents_fragment_entry(issue_number)
+		if scope and own_agents_fragment and own_agents_fragment not in scope:
+			scope.append(own_agents_fragment)
+		files = extract_plan_file_paths(plan_text)
+		if not scope:
+			decision, reason, denied = PLAN_DECISION_HOLD, "heal_scope_check_unavailable", protected
+		elif protected and not _flag_enabled(flag_value):
+			decision, reason, denied = PLAN_DECISION_HOLD, "automation_path_plan_auto_approval_disabled", protected
+		elif protected and allow_workflow_edits != "true":
+			# Same switch check_automation_paths applies at implement time.
+			decision, reason, denied = PLAN_DECISION_HOLD, "workflow_edits_disabled", protected
+		elif _plan_files_section(plan_text) is None:
+			decision, reason, denied = PLAN_DECISION_HOLD, "heal_scope_plan_paths_missing", protected
+		elif not files and not protected and _heal_plan_declares_no_file_changes(_plan_files_section(plan_text)):
+			# The empty change set is inside any scope (#8241).
+			decision, reason, denied = PLAN_DECISION_APPROVE, HEAL_PLAN_NO_CHANGES_REASON, []
+		elif not files and not protected:
+			decision, reason, denied = PLAN_DECISION_HOLD, "heal_scope_plan_paths_missing", protected
+		else:
+			# extract_plan_file_paths drops directory and glob tokens, so read
+			# them back from the Files section: a heal plan never approves a
+			# path set it cannot name exactly.
+			loose: list[str] = []
+			heal_skip_indent: int | None = None
+			for line in (_plan_files_section(plan_text) or "").splitlines():
+				bullet = _PLAN_GRANT_BULLET_RE.match(line)
+				# Skip planner metadata the way extract_plan_file_paths does: its
+				# prose names files the plan chose not to change (#5101).
+				line_indent = len(line) - len(line.lstrip())
+				if _PLAN_FILES_METADATA_RE.match(line):
+					heal_skip_indent = line_indent
+					continue
+				in_metadata = False
+				if heal_skip_indent is not None:
+					if not line.strip() or (bullet and line_indent <= heal_skip_indent):
+						heal_skip_indent = None
+					else:
+						in_metadata = True
+				if in_metadata:
+					# Only a nested bullet that starts with a file is checked
+					# (fail closed); prose lines and mid-line spans are not.
+					if not bullet:
+						continue
+					lead_span = re.match(r"`([^`\n]+)`", bullet.group(1).lstrip("*_"))
+					raw_tokens = [(lead_span.group(1), True)] if lead_span else [(bullet.group(1), False)]
+					if _plan_grant_path(raw_tokens[0][0].strip()) or "/" in raw_tokens[0][0]:
+						# A bullet that starts with a file or a path-shaped
+						# token (`docs/guide`) lists files: check its other
+						# backticked spans too (fail closed).
+						raw_tokens += [(raw, True) for raw in _PLAN_GRANT_BACKTICK_RE.findall(line)]
+				else:
+					raw_tokens = [(raw, True) for raw in _PLAN_GRANT_BACKTICK_RE.findall(line)]
+					if bullet:
+						raw_tokens.append((bullet.group(1), False))
+				for raw, backticked in raw_tokens:
+					raw = raw.strip()
+					if not backticked:
+						if "`" in raw:
+							# Its backticked spans were read above (``**`a/b.py`**``).
+							continue
+						# A leading bold marker is markdown, not a glob (`**Files`).
+						raw = re.sub(r"^\*\*(?=[^*/])", "", raw)
+					token = normalize_path(_plan_path_token(raw))
+					if not token:
+						continue
+					globlike = token.endswith("/") or any(char in token for char in _GLOB_CHARS)
+					# A bare root-level glob (`- *.py`, `- *foo*`) counts; a word
+					# with prose punctuation (`*Optional:*`) does not. An
+					# italic-shaped word is ambiguous, so it is checked (fail closed).
+					if globlike and not backticked and "/" not in token \
+						and not _HEAL_BARE_GLOB_RE.fullmatch(token):
+						continue
+					# Also keep nested tokens _plan_grant_path rejects (an
+					# extensionless `docs/guide`) so the scope check sees them.
+					if globlike or ("/" in token and "`" not in token and not _plan_grant_path(token)):
+						loose.append(token)
+					elif _plan_grant_path(token):
+						# extract_plan_file_paths skips a bullet nested under a
+						# planner metadata line, backticked or not; check it
+						# here (fail closed).
+						loose.append(_plan_grant_path(token))
+			candidates: list[str] = []
+			for path in files + protected + loose:
+				if path not in candidates:
+					candidates.append(path)
+			denied = [path for path in candidates if path.endswith("/") or any(char in path for char in _GLOB_CHARS)
+				or not path_in_scope(path, scope, allow_lockfiles=False)]
+			if denied:
+				decision, reason = PLAN_DECISION_HOLD, "heal_scope_plan_out_of_scope"
+			else:
+				decision, reason = PLAN_DECISION_APPROVE, HEAL_PLAN_APPROVE_REASON
+	except (OSError, UnicodeDecodeError, ValueError, TypeError):
+		decision, reason, denied = PLAN_DECISION_HOLD, "plan_gate_error", protected
+	record = {"decision": decision, "reason": reason, "protected_paths": protected, "denied_paths": denied,
+		"log_paths": plan_gate_log_paths(denied or protected)}
+	return record, (EXIT_IN_SCOPE if decision == PLAN_DECISION_APPROVE else EXIT_AUTOMATION_UNGRANTED)
+
+
+# Test-only heal plans (#8809). The heal counterfactual gate (#8249) holds a
+# plan whose HEAL_COUNTERFACTUAL line is UNVERIFIED, which is what a plan for a
+# flake always says. A second check approves such a plan when its Files section
+# lists only exact `tests/` files and `changelog.d/*.md` fragments inside the
+# verified heal scope (run_heal_plan_scope_gate decides exactness and scope).
+# The approver then posts the marker below before `/approved`, and the
+# implement preflight narrows the heal scope to the marker's paths
+# (run_heal_test_only_lock_scope); heal_isolated_implement.sh refuses an edit
+# that deletes a file, drops tests or asserts, or adds a skip
+# (run_heal_test_only_weakening_check).
+HEAL_TEST_ONLY_APPROVE_REASON = "test_only_paths"
+HEAL_TEST_ONLY_MAX_PATHS = 50
+HEAL_TEST_ONLY_MARKER_MAX_CHARS = 4000
+HEAL_TEST_ONLY_FILE_MAX_BYTES = 2 * 1024 * 1024
+HEAL_TEST_ONLY_PLAN_MARKER_LINE = "<!-- ai:plan-proposal:v1 -->"
+# The transfer's --scope-file accepts exact entries in [A-Za-z0-9_./-] only, so
+# a test-only path is held to that alphabet as well.
+_HEAL_TEST_ONLY_PATH_RE = re.compile(r"(?:tests/[A-Za-z0-9_./-]+|changelog\.d/[A-Za-z0-9_.-]+\.md)")
+_HEAL_TEST_ONLY_MARKER_RE = re.compile(
+	r"<!-- ai:heal-test-only-approval:v1 issue=([1-9][0-9]{0,9}) plan_comment=([1-9][0-9]{0,19}) paths=([^\s<>]+) -->")
+_HEAL_TEST_ONLY_ISSUE_RE = re.compile(r"[1-9][0-9]{0,9}")
+_HEAL_TEST_ONLY_COMMENT_RE = re.compile(r"[1-9][0-9]{0,19}")
+
+
+def heal_test_only_path_ok(path: object) -> bool:
+	"""True for an exact ``tests/`` file or ``changelog.d/*.md`` fragment."""
+	return isinstance(path, str) and bool(_HEAL_TEST_ONLY_PATH_RE.fullmatch(path)) and _plan_grant_path(path) == path
+
+
+def heal_test_only_marker(issue_number: str, plan_comment_id: str, paths: list[str]) -> str:
+	return (f"<!-- ai:heal-test-only-approval:v1 issue={issue_number} plan_comment={plan_comment_id} "
+		f"paths={','.join(paths)} -->")
+
+
+def run_heal_test_only_check(plan_file: str, heal_scope_file: str, flag_value: str, issue_number: str,
+	plan_comment_id: str) -> tuple[dict, int]:
+	"""Approve an UNVERIFIED heal plan that lists only exact test/changelog files; every error holds."""
+	flag = (flag_value or "").strip().lower()
+	flag_invalid = flag not in {"", "true", "false"}
+	number = str(issue_number or "").strip()
+	comment = str(plan_comment_id or "").strip()
+	paths: list[str] = []
+	marker = ""
+	decision = PLAN_DECISION_HOLD
+	try:
+		if flag == "false":
+			reason = "gate_disabled"
+		elif not _HEAL_TEST_ONLY_ISSUE_RE.fullmatch(number) or not _HEAL_TEST_ONLY_COMMENT_RE.fullmatch(comment):
+			reason = "plan_comment_unknown"
+		else:
+			scope_record, _ = run_heal_plan_scope_gate(plan_file, heal_scope_file, "false", number)
+			scope_reason = scope_record.get("reason")
+			if scope_reason in {"plan_gate_error", "heal_scope_check_unavailable"}:
+				reason = scope_reason
+			elif scope_record.get("protected_paths"):
+				reason = "path_not_test_only"
+			elif scope_reason in {"heal_scope_plan_paths_missing", HEAL_PLAN_NO_CHANGES_REASON}:
+				reason = "plan_paths_missing"
+			elif scope_reason == "heal_scope_plan_out_of_scope":
+				denied = scope_record.get("denied_paths") or []
+				reason = "path_not_exact" if any(path.endswith("/") or any(char in path for char in _GLOB_CHARS)
+					for path in denied) else "path_out_of_heal_scope"
+			elif scope_reason != HEAL_PLAN_APPROVE_REASON:
+				reason = "plan_gate_error"
+			else:
+				with open(plan_file, encoding="utf-8") as handle:
+					listed = extract_plan_file_paths(handle.read())
+				candidate = heal_test_only_marker(number, comment, listed)
+				if not listed:
+					reason = "plan_paths_missing"
+				elif not all(heal_test_only_path_ok(path) for path in listed) \
+					or any(path.rsplit("/", 1)[-1] in _HEAL_PYTEST_CONFIG_NAMES for path in listed):
+					# A pytest config file passes the path check but the
+					# implement lock always refuses changing it.
+					reason = "path_not_test_only"
+				elif len(listed) > HEAL_TEST_ONLY_MAX_PATHS or len(candidate) > HEAL_TEST_ONLY_MARKER_MAX_CHARS:
+					reason = "too_many_paths"
+				else:
+					decision, reason, paths, marker = PLAN_DECISION_APPROVE, HEAL_TEST_ONLY_APPROVE_REASON, listed, candidate
+	except (OSError, UnicodeDecodeError, ValueError, TypeError):
+		decision, reason, paths, marker = PLAN_DECISION_HOLD, "plan_gate_error", [], ""
+	record = {"decision": decision, "reason": reason, "paths": paths, "marker": marker, "flag_invalid": flag_invalid}
+	return record, (EXIT_IN_SCOPE if decision == PLAN_DECISION_APPROVE else EXIT_AUTOMATION_UNGRANTED)
+
+
+def _heal_test_only_comment_login(comment: dict) -> str:
+	user = comment.get("user")
+	login = user.get("login") if isinstance(user, dict) else ""
+	return login if isinstance(login, str) else ""
+
+
+def _heal_test_only_trusted(comment: dict, pipeline_login: str) -> bool:
+	login = _heal_test_only_comment_login(comment)
+	association = comment.get("author_association")
+	association = association.upper() if isinstance(association, str) else ""
+	return (login != "" and login == pipeline_login) or login.endswith("[bot]") \
+		or association in TRUSTED_AUTHOR_ASSOCIATIONS
+
+
+def _heal_test_only_created(comment: dict) -> str:
+	created = comment.get("created_at")
+	return created if isinstance(created, str) else ""
+
+
+def run_heal_test_only_lock_scope(comments_file: str, issue_number: str, pipeline_login: str, heal_scope_file: str,
+	lock_out: str) -> tuple[dict, int]:
+	"""Narrow a heal scope to the trusted test-only approval marker of the latest plan.
+
+	Returns ({"status": "none"}, 0) when the latest pipeline plan has no
+	trusted marker, ({"status": "locked", ...}, 0) after writing the marker's
+	paths to ``lock_out``, and ({"status": "invalid", "reason": ...}, 30)
+	for anything else (fail closed).
+	"""
+	try:
+		number = str(issue_number or "").strip()
+		if not _HEAL_TEST_ONLY_ISSUE_RE.fullmatch(number) or not LOGIN_RE.fullmatch(pipeline_login or ""):
+			return {"status": "invalid", "reason": "lock_scope_input_invalid"}, EXIT_AUTOMATION_UNGRANTED
+		with open(comments_file, encoding="utf-8") as handle:
+			comments = json.load(handle)
+		if not isinstance(comments, list):
+			return {"status": "invalid", "reason": "comments_unreadable"}, EXIT_AUTOMATION_UNGRANTED
+		comments = [comment for comment in comments if isinstance(comment, dict)]
+		# The latest plan: the poller's rule (pipeline login, a trimmed
+		# `<!-- ai:plan-proposal:v1 -->` line, newest created_at).
+		plans = [comment for comment in comments if _heal_test_only_comment_login(comment) == pipeline_login
+			and isinstance(comment.get("body"), str)
+			and any(line.rstrip("\r").strip(" \t") == HEAL_TEST_ONLY_PLAN_MARKER_LINE for line in comment["body"].split("\n"))]
+		if not plans:
+			return {"status": "none"}, EXIT_IN_SCOPE
+		plan = sorted(plans, key=_heal_test_only_created)[-1]
+		plan_id = str(plan.get("id") if plan.get("id") is not None else plan.get("databaseId") or "")
+		if not _HEAL_TEST_ONLY_COMMENT_RE.fullmatch(plan_id):
+			return {"status": "none"}, EXIT_IN_SCOPE
+		raw_paths = ""
+		for comment in sorted(comments, key=_heal_test_only_created):
+			body = comment.get("body")
+			if not isinstance(body, str) or not _heal_test_only_trusted(comment, pipeline_login):
+				continue
+			for match in _HEAL_TEST_ONLY_MARKER_RE.finditer(body):
+				if match.group(1) == number and match.group(2) == plan_id:
+					raw_paths = match.group(3)
+		if not raw_paths:
+			return {"status": "none"}, EXIT_IN_SCOPE
+		scope = normalize_allowlist(_read_allowlist(heal_scope_file)) if heal_scope_file else []
+		if not scope:
+			return {"status": "invalid", "reason": "heal_scope_unavailable"}, EXIT_AUTOMATION_UNGRANTED
+		paths: list[str] = []
+		for path in raw_paths.split(","):
+			if not heal_test_only_path_ok(path):
+				return {"status": "invalid", "reason": "path_not_test_only"}, EXIT_AUTOMATION_UNGRANTED
+			if not path_in_scope(path, scope, allow_lockfiles=False):
+				return {"status": "invalid", "reason": "path_out_of_heal_scope"}, EXIT_AUTOMATION_UNGRANTED
+			if path not in paths:
+				paths.append(path)
+		if not paths or len(paths) > HEAL_TEST_ONLY_MAX_PATHS:
+			return {"status": "invalid", "reason": "too_many_paths"}, EXIT_AUTOMATION_UNGRANTED
+		with open(lock_out, "w", encoding="utf-8") as handle:
+			handle.write("\n".join(paths) + "\n")
+		return {"status": "locked", "plan_comment": plan_id, "count": len(paths)}, EXIT_IN_SCOPE
+	except Exception:  # noqa: BLE001 - every error fails closed
+		return {"status": "invalid", "reason": "lock_scope_error"}, EXIT_AUTOMATION_UNGRANTED
+
+
+class _HealWeakeningRefused(Exception):
+	def __init__(self, reason: str, path: str) -> None:
+		super().__init__(reason)
+		self.reason = reason
+		self.path = path
+
+
+def _heal_test_only_read(root: str, rel: str) -> bytes | None:
+	"""Bytes of ``root/rel`` (None when missing); refuses symlinks, non-files and oversize files."""
+	current = root
+	segments = rel.split("/")
+	for index, segment in enumerate(segments):
+		current = os.path.join(current, segment)
+		try:
+			info = os.lstat(current)
+		except FileNotFoundError:
+			return None
+		if stat.S_ISLNK(info.st_mode):
+			raise _HealWeakeningRefused("unreadable", rel)
+		if index < len(segments) - 1 and not stat.S_ISDIR(info.st_mode):
+			raise _HealWeakeningRefused("unreadable", rel)
+	if not stat.S_ISREG(info.st_mode) or info.st_size > HEAL_TEST_ONLY_FILE_MAX_BYTES:
+		raise _HealWeakeningRefused("unreadable", rel)
+	with open(current, "rb") as handle:
+		data = handle.read(HEAL_TEST_ONLY_FILE_MAX_BYTES + 1)
+	if len(data) > HEAL_TEST_ONLY_FILE_MAX_BYTES:
+		raise _HealWeakeningRefused("unreadable", rel)
+	return data
+
+
+_HEAL_SKIP_NAMES = frozenset({"pytest.skip", "pytest.mark.skip", "pytest.mark.skipif", "pytest.xfail", "pytest.mark.xfail",
+	"pytest.importorskip", "pytest.exit", "pytest.hookimpl", "self.skipTest", "unittest.SkipTest", "unittest.expectedFailure",
+	"unittest.case.SkipTest", "unittest.case.expectedFailure",
+	# Process exits end pytest with status 0 before any test runs.
+	"sys.exit", "os._exit", "exit", "quit", "SystemExit", "builtins.exit", "builtins.quit", "os.abort", "os.kill",
+	# Dynamic dispatch can reach any of the above without naming it.
+	"exec", "eval", "compile", "__import__", "builtins.__import__", "importlib.import_module", "importlib.__import__",
+	"vars", "globals", "locals", "builtins.vars", "builtins.globals", "builtins.locals"})
+# Internal pytest spellings of skip/xfail/exit, reached through import aliases.
+_HEAL_SKIP_PREFIXES = ("unittest.skip", "unittest.case.skip", "_pytest.outcomes", "_pytest.skipping", "_pytest.mark",
+	"os.exec", "os.spawn")
+# An attribute of a computed object (`__import__("os")._exit`) is counted by name.
+_HEAL_DYNAMIC_ATTRS = frozenset({"_exit", "exit", "abort", "kill", "skip", "xfail", "skipTest", "importorskip"})
+# Attributes that add markers at runtime or reach a module namespace by name
+# (`request.node.add_marker("xfail")`, `pytest.mark.__getattr__("skip")`,
+# `os.__dict__["_exit"]`) are counted whatever their root is.
+_HEAL_MARKER_ATTRS = frozenset({"add_marker", "applymarker", "__getattr__", "__getattribute__", "__dict__", "__getitem__"})
+# Star imports from these modules hide which bare names resolve to a control.
+_HEAL_STAR_MODULE_ROOTS = frozenset({"os", "sys", "builtins", "pytest", "_pytest", "unittest", "importlib"})
+_HEAL_COLLECTION_NAMES = frozenset({"__test__", "collect_ignore", "collect_ignore_glob", "pytest_plugins", "pytestmark"})
+_HEAL_COLLECTION_HOOKS = frozenset({"pytest_collection_modifyitems", "pytest_ignore_collect"})
+_HEAL_PYTEST_CONFIG_NAMES = frozenset({"pytest.toml", ".pytest.toml", "pytest.ini", ".pytest.ini", "tox.ini", "setup.cfg",
+	"pyproject.toml"})
+
+
+def _heal_dotted(node: ast.AST, aliases: dict[str, str]) -> str:
+	parts: list[str] = []
+	while isinstance(node, ast.Attribute):
+		parts.append(node.attr)
+		node = node.value
+	if not isinstance(node, ast.Name):
+		return ""
+	parts.append(aliases.get(node.id, node.id))
+	return ".".join(reversed(parts))
+
+
+def _heal_test_only_counts(tree: ast.Module, count_tests: bool) -> dict:
+	"""Tests, asserts and skip/exit/collection-control uses in one parsed test file.
+
+	``controls`` counts each kind of control separately per enclosing
+	top-level scope (function, class or ``Class.method``), so removing one
+	(an old skip) cannot pay for adding another (a process exit), and moving
+	an existing skip onto another test counts as an added skip; ``skips``
+	is their total.
+	"""
+	aliases: dict[str, str] = {}
+	controls: dict[str, int] = {}
+	scopes: dict[int, str] = {}
+	for top in tree.body:
+		top_scope = top.name if isinstance(top, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) else "<module>"
+		for leaf in ast.walk(top):
+			scopes[id(leaf)] = top_scope
+		if isinstance(top, ast.ClassDef):
+			for item in top.body:
+				if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+					for leaf in ast.walk(item):
+						scopes[id(leaf)] = f"{top.name}.{item.name}"
+
+	def control(kind: str, node: ast.AST) -> None:
+		key = f"{scopes.get(id(node), '<module>')}|{kind}"
+		controls[key] = controls.get(key, 0) + 1
+
+	for node in ast.walk(tree):
+		if isinstance(node, ast.Import):
+			for alias in node.names:
+				if alias.asname:
+					aliases[alias.asname] = alias.name
+		elif isinstance(node, ast.ImportFrom) and node.module and not node.level:
+			for alias in node.names:
+				if alias.name == "*" and node.module.split(".", 1)[0] in _HEAL_STAR_MODULE_ROOTS:
+					control(f"star:{node.module}", node)
+				aliases[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+	# `SystemExit` caught or expected (`except SystemExit`, `pytest.raises(SystemExit)`,
+	# `isinstance(e, SystemExit)`) checks an exit; it does not cause one. Only the
+	# operand itself (or a direct tuple element) is exempt, never a nested expression.
+	exempt: set[int] = set()
+	for node in ast.walk(tree):
+		checked: list[ast.AST] = []
+		if isinstance(node, ast.ExceptHandler) and node.type is not None:
+			checked = [node.type]
+		elif isinstance(node, ast.Call) and node.args and _heal_dotted(node.func, aliases) in {"pytest.raises",
+			"isinstance", "issubclass", "self.assertRaises", "self.assertRaisesRegex"}:
+			checked = node.args[1:2] if _heal_dotted(node.func, aliases) in {"isinstance", "issubclass"} else node.args[:1]
+		for item in checked:
+			for leaf in (item.elts if isinstance(item, ast.Tuple) else [item]):
+				if isinstance(leaf, (ast.Name, ast.Attribute)) and _heal_dotted(leaf, aliases) == "SystemExit":
+					exempt.add(id(leaf))
+	# Same-file exception classes that raise an exit when called.
+	exit_classes = {node.name for node in ast.walk(tree) if isinstance(node, ast.ClassDef)
+		and any(_heal_dotted(base, aliases) in {"SystemExit", "BaseException", "KeyboardInterrupt"} for base in node.bases)}
+	functions = classes = asserts = 0
+	if count_tests:
+		for node in tree.body:
+			if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name.startswith("test_"):
+				functions += 1
+			elif isinstance(node, ast.ClassDef) and (node.name.startswith("Test")
+				or any(_heal_dotted(base, aliases).endswith("TestCase") for base in node.bases)):
+				# pytest also collects test_* methods of any unittest.TestCase subclass.
+				classes += sum(1 for item in node.body
+					if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)) and item.name.startswith("test_"))
+	for node in ast.walk(tree):
+		if isinstance(node, ast.Assert):
+			asserts += 1
+		elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) \
+			and isinstance(node.func.value, ast.Name) and node.func.value.id == "self" and node.func.attr.startswith("assert"):
+			asserts += 1
+		if isinstance(node, (ast.Attribute, ast.Name)) and id(node) not in exempt:
+			dotted = _heal_dotted(node, aliases)
+			if dotted in _HEAL_SKIP_NAMES or dotted.startswith(_HEAL_SKIP_PREFIXES):
+				control(dotted, node)
+			elif isinstance(node, ast.Name) and node.id in exit_classes:
+				control(f"exit_class:{node.id}", node)
+			elif isinstance(node, ast.Attribute) and node.attr in _HEAL_MARKER_ATTRS:
+				control(f"attr:{node.attr}", node)
+			elif not dotted and isinstance(node, ast.Attribute) and node.attr in _HEAL_DYNAMIC_ATTRS:
+				control(f"dynamic:{node.attr}", node)
+		if isinstance(node, ast.Call) and _heal_dotted(node.func, aliases) in {"getattr", "builtins.getattr"} and len(node.args) >= 2:
+			target = _heal_dotted(node.args[0], aliases).split(".", 1)[0]
+			name = node.args[1]
+			if target in _HEAL_STAR_MODULE_ROOTS or not (isinstance(name, ast.Constant) and isinstance(name.value, str)) \
+				or name.value in _HEAL_DYNAMIC_ATTRS:
+				control("getattr", node)
+		# An empty (or non-literal) parameter set makes pytest skip the test.
+		if isinstance(node, ast.Call) and _heal_dotted(node.func, aliases) in {"pytest.mark.parametrize", "_pytest.mark.parametrize"}:
+			values = node.args[1] if len(node.args) >= 2 else next(
+				(kw.value for kw in node.keywords if kw.arg == "argvalues"), None)
+			if not isinstance(values, (ast.List, ast.Tuple)) or not values.elts:
+				control("parametrize_empty", node)
+		if isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+			targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+			for target in targets:
+				for leaf in ast.walk(target):
+					if isinstance(leaf, ast.Name) and leaf.id in _HEAL_COLLECTION_NAMES:
+						control(f"assign:{leaf.id}", leaf)
+					elif isinstance(leaf, ast.Attribute) and leaf.attr in _HEAL_COLLECTION_NAMES:
+						control(f"assign:{leaf.attr}", leaf)
+		# Any pytest_* hook (e.g. pytest_runtest_makereport rewriting outcomes) is a collection/run control.
+		if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) \
+			and (node.name in _HEAL_COLLECTION_HOOKS or node.name.startswith("pytest_")):
+			control(f"hook:{node.name}", node)
+	return {"test_functions": functions, "test_methods": classes, "asserts": asserts,
+		"skips": sum(controls.values()), "controls": controls}
+
+
+def run_heal_test_only_weakening_check(lock_file: str, base_dir: str, edited_dir: str) -> tuple[dict, int]:
+	"""Refuse a locked test-only heal edit that deletes a file or weakens a test; every error refuses."""
+	path = ""
+	try:
+		locked = [line.strip() for line in _read_text_file(lock_file).splitlines() if line.strip()]
+		if not locked or not base_dir or not edited_dir:
+			raise _HealWeakeningRefused("lock_unavailable", "")
+		for path in locked:
+			if not heal_test_only_path_ok(path):
+				raise _HealWeakeningRefused("lock_invalid", path)
+			base = _heal_test_only_read(base_dir, path)
+			edited = _heal_test_only_read(edited_dir, path)
+			if base is not None and edited is None:
+				raise _HealWeakeningRefused("file_deleted", path)
+			# pytest config files can deselect or skip tests and cannot be checked with ast.
+			if path.rsplit("/", 1)[-1] in _HEAL_PYTEST_CONFIG_NAMES and edited is not None and edited != base:
+				raise _HealWeakeningRefused("pytest_config_changed", path)
+			if not (path.startswith("tests/") and path.endswith(".py")) or edited is None:
+				continue
+			count_tests = path.rsplit("/", 1)[-1].startswith("test_")
+			try:
+				before = _heal_test_only_counts(ast.parse(base or b"", filename=path), count_tests)
+				after = _heal_test_only_counts(ast.parse(edited, filename=path), count_tests)
+			except (SyntaxError, ValueError):
+				raise _HealWeakeningRefused("parse_error", path) from None
+			for key in ("test_functions", "test_methods", "asserts"):
+				if after[key] < before[key]:
+					raise _HealWeakeningRefused(f"{key}_dropped", path)
+			if any(count > before["controls"].get(kind, 0) for kind, count in after["controls"].items()):
+				raise _HealWeakeningRefused("skip_added", path)
+	except _HealWeakeningRefused as refused:
+		return {"decision": "refuse", "reason": refused.reason, "path": refused.path}, EXIT_AUTOMATION_UNGRANTED
+	except Exception:  # noqa: BLE001 - every error refuses
+		return {"decision": "refuse", "reason": "weakening_check_error", "path": path}, EXIT_AUTOMATION_UNGRANTED
+	return {"decision": "allow", "reason": "no_weakening", "path": ""}, EXIT_IN_SCOPE
+
+
+def _read_text_file(path: str) -> str:
+	try:
+		with open(path, encoding="utf-8") as handle:
+			return handle.read()
+	except (OSError, UnicodeDecodeError):
+		return ""
+
+
+def _read_staged(path: str | None) -> list[str]:
+	if path:
+		text = _read_text_file(path)
+	else:
+		text = sys.stdin.read()
+	return [line for line in text.splitlines() if line.strip()]
+
+
+def _read_allowlist(path: str) -> list[str]:
+	return [line for line in _read_text_file(path).splitlines() if line.strip()]
+
+
+def main(argv: list[str] | None = None) -> int:
+	parser = argparse.ArgumentParser(description="files_touched scope-enforcement guard")
+	parser.add_argument("--issue-body-file", default="")
+	parser.add_argument("--allowlist-file", default="")
+	parser.add_argument("--strict-allowlist", action="store_true", help="Do not auto-allow lockfiles outside the explicit scope")
+	parser.add_argument("--staged-file", default="")
+	parser.add_argument("--allowlist-out", default="")
+	parser.add_argument("--emit-automation-grant", default="")
+	parser.add_argument("--issue-meta-file", default="")
+	parser.add_argument("--pipeline-login", default="")
+	parser.add_argument("--origin-repo", default="", help="owner/name to read source issues from (Q82)")
+	parser.add_argument("--check-automation-paths", action="store_true")
+	parser.add_argument("--automation-grant-file", default="")
+	parser.add_argument("--allow-workflow-edits", default="false")
+	parser.add_argument("--issue-number", default="")
+	parser.add_argument("--plan-auto-approval-gate", action="store_true")
+	parser.add_argument("--plan-file", default="")
+	parser.add_argument("--flag-enabled", default="true")
+	parser.add_argument("--pipeline-grant-body-out", default="",
+		help="plan gate: write the proposed pipeline plan grant body here (Q108)")
+	parser.add_argument("--heal-scope-file", default="",
+		help="plan gate: verified workflow-heal scope paths; approve only inside them, never write a grant (#7444)")
+	parser.add_argument("--heal-test-only-check", action="store_true",
+		help="#8809: approve an UNVERIFIED heal plan listing only exact tests/ and changelog.d/*.md files")
+	parser.add_argument("--heal-test-only-lock-scope", action="store_true",
+		help="#8809: narrow the heal scope to the latest plan's trusted test-only approval marker")
+	parser.add_argument("--heal-test-only-weakening-check", action="store_true",
+		help="#8809: refuse a locked test-only edit that deletes files or weakens tests")
+	parser.add_argument("--plan-comment-id", default="")
+	parser.add_argument("--comments-file", default="")
+	parser.add_argument("--lock-out", default="")
+	parser.add_argument("--lock-file", default="")
+	parser.add_argument("--base-dir", default="")
+	parser.add_argument("--edited-dir", default="")
+	args = parser.parse_args(argv)
+	if args.heal_test_only_check:
+		record, code = run_heal_test_only_check(args.plan_file, args.heal_scope_file, args.flag_enabled,
+			args.issue_number, args.plan_comment_id)
+		sys.stdout.write(json.dumps(record) + "\n")
+		return code
+	if args.heal_test_only_lock_scope:
+		record, code = run_heal_test_only_lock_scope(args.comments_file, args.issue_number, args.pipeline_login,
+			args.heal_scope_file, args.lock_out)
+		sys.stdout.write(json.dumps(record) + "\n")
+		return code
+	if args.heal_test_only_weakening_check:
+		record, code = run_heal_test_only_weakening_check(args.lock_file, args.base_dir, args.edited_dir)
+		sys.stdout.write(json.dumps(record) + "\n")
+		if code != EXIT_IN_SCOPE:
+			safe_path = _PLAN_LOG_UNSAFE_RE.sub("", record.get("path") or "")[:300] or "none"
+			print(f"reason={record['reason']} path={safe_path}", file=sys.stderr)
+		return code
+	if args.plan_auto_approval_gate and args.heal_scope_file:
+		record, code = run_heal_plan_scope_gate(args.plan_file, args.heal_scope_file, args.flag_enabled,
+			args.issue_number, args.allow_workflow_edits)
+		sys.stdout.write(json.dumps(record) + "\n")
+		return code
+	if args.plan_auto_approval_gate:
+		record, code = run_plan_auto_approval_gate(args.plan_file, args.flag_enabled, args.issue_meta_file,
+			args.pipeline_login, args.allow_workflow_edits, args.issue_number, args.origin_repo,
+			args.pipeline_grant_body_out)
+		sys.stdout.write(json.dumps(record) + "\n")
+		return code
+	if args.emit_automation_grant:
+		try:
+			metadata = json.loads(_read_text_file(args.issue_meta_file))
+			origin_repo = args.origin_repo if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.origin_repo or "") else ""
+			fetch_origin = (lambda number: fetch_issue_with_gh(origin_repo, number)) if origin_repo else None
+			record = build_automation_grant(metadata, args.pipeline_login, fetch_origin)
+		except (ValueError, TypeError, KeyError):
+			record = {"schema_version": AUTOMATION_GRANT_SCHEMA, "issue_number": None,
+				"trusted": False, "open": False, "reason": "grant_error", "author_login": "", "author_association": "", "paths": []}
+		try:
+			with open(args.emit_automation_grant, "w", encoding="utf-8") as handle:
+				json.dump(record, handle)
+				handle.write("\n")
+		except OSError:
+			return 1
+		return 0
+	if args.check_automation_paths:
+		try:
+			grant = json.loads(_read_text_file(args.automation_grant_file))
+		except (ValueError, TypeError):
+			grant = None
+		status, denied, reason = check_automation_paths(_read_staged(args.staged_file or None),
+			grant, args.allow_workflow_edits, args.issue_number)
+		if status == STATUS_OUT_OF_SCOPE:
+			print(f"reason={reason}", file=sys.stderr)
+			sys.stdout.write("\n".join(denied) + "\n")
+			return EXIT_AUTOMATION_UNGRANTED
+		return EXIT_IN_SCOPE
+
+	issue_body = _read_text_file(args.issue_body_file) if args.issue_body_file else ""
+	staged_paths = _read_staged(args.staged_file or None)
+	allowlist_entries = _read_allowlist(args.allowlist_file) if args.allowlist_file else None
+
+	# Auto-heal companion paths (#8956): only for an issue-body list, with the
+	# issue's own metadata and the pipeline login. Every error gives False.
+	allow_companions = False
+	if args.issue_body_file and allowlist_entries is None and args.issue_meta_file and args.pipeline_login:
+		try:
+			issue_meta = json.loads(_read_text_file(args.issue_meta_file))
+			if isinstance(issue_meta, dict) and (not args.issue_number
+					or str(issue_meta.get("number")) == args.issue_number.strip()):
+				allow_companions = auto_heal_companions_allowed(issue_body, _issue_meta_author_login(issue_meta),
+					args.pipeline_login)
+		except (ValueError, TypeError):
+			allow_companions = False
+
+	status, allowlist, out_of_scope = evaluate(issue_body, staged_paths, allowlist_entries=allowlist_entries,
+		allow_lockfiles=not args.strict_allowlist, issue_number=args.issue_number or None,
+		allow_auto_heal_companions=allow_companions)
+
+	if args.allowlist_out:
+		try:
+			with open(args.allowlist_out, "w", encoding="utf-8") as handle:
+				if allowlist:
+					handle.write("\n".join(allowlist) + "\n")
+		except OSError:
+			# The allowlist dump is advisory (used only to enrich the alert);
+			# never fail the guard because it could not be written.
+			pass
+
+	if status == STATUS_SKIP_NO_ALLOWLIST:
+		return EXIT_SKIP_NO_ALLOWLIST
+	if status == STATUS_OUT_OF_SCOPE:
+		sys.stdout.write("\n".join(out_of_scope) + "\n")
+		return EXIT_OUT_OF_SCOPE
+	return EXIT_IN_SCOPE
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

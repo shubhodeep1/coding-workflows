@@ -1,0 +1,27 @@
+=== ISSUE 001 ===
+FILE: src/module.py
+LINES: 1
+LENS: SECURITY
+SEVERITY: high
+CLASSIFICATION: actionable
+EVIDENCE:
+  reviewer_bundle> Function entry validation missing.
+CURRENT_CODE:
+  def sample(a, b):
+SUGGESTED_APPROACH:
+  Add validation guard clauses.
+=== END ISSUE 001 ===
+
+=== ISSUE 002 ===
+FILE: src/module.py
+LINES: 3
+LENS: PERFORMANCE
+SEVERITY: medium
+CLASSIFICATION: actionable
+EVIDENCE:
+  reviewer_bundle> Return path performs repeated expensive operation.
+CURRENT_CODE:
+  return total
+SUGGESTED_APPROACH:
+  Cache computation before return.
+=== END ISSUE 002 ===

@@ -1,0 +1,1428 @@
+#!/usr/bin/env python3
+"""AI label contract utilities for workflow phase transitions and repair."""
+
+from __future__ import annotations
+
+import argparse
+import http.client
+import json
+import os
+import random
+import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+from typing import Any
+
+
+class LabelContractError(ValueError):
+    """Raised when label contract data is invalid."""
+
+
+GITHUB_API_BASE_URL = "https://api.github.com"
+GITHUB_API_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+GITHUB_API_MAX_ATTEMPTS = 3
+GITHUB_API_BACKOFF_BASE_SECONDS = 1.0
+GITHUB_API_BACKOFF_CAP_SECONDS = 8.0
+RETIRED_LABEL_IN_USE_PAGE_SIZE = 100
+RETIRED_LABEL_IN_USE_MAX_LISTED_NUMBERS = 10
+# Retired-label drain (RETIRED_LABEL_DRAIN_ENABLED, default true): before a
+# retired label is deleted, the open issues / PRs that still carry it are
+# commented on once (durable marker) and closed, at most
+# RETIRED_LABEL_DRAIN_MAX_ITEMS_PER_RUN items per sync run in total.
+RETIRED_LABEL_DRAIN_MAX_ITEMS_PER_RUN = 10
+RETIRED_LABEL_DRAIN_MAX_LIST_PAGES = 2
+# Wall-clock budget for the per-item drain loop in one sync run, so the
+# drain defers (reason=budget) well before sync_ai_labels.yml's 5-minute job
+# timeout instead of being killed mid-run without its errors and log lines.
+RETIRED_LABEL_DRAIN_DEADLINE_SECONDS = 180.0
+_retired_label_drain_deadline: float | None = None
+RETIRED_LABEL_DRAIN_PAGE_SIZE = 100
+RETIRED_LABEL_DRAIN_MARKER_PREFIX = "<!-- ai:retired-label-drain:v1 label="
+RETIRED_LABEL_DRAIN_TRUSTED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})
+RETIRED_LABEL_DRAIN_TRUSTED_BOT_LOGIN = "github-actions[bot]"
+RETIRED_LABEL_DRAIN_TRUE_VALUES = frozenset({"true", "1", "yes", "on"})
+RETIRED_LABEL_DRAIN_FALSE_VALUES = frozenset({"false", "0", "no", "off"})
+LABEL_SYNC_PREFETCH_PAGE_SIZE = 100
+LABEL_SYNC_PREFETCH_MAX_PAGES = 20
+
+
+def _require_nonempty(value: str | None, field_name: str) -> str:
+    text = (value or "").strip()
+    if not text:
+        raise LabelContractError(f"{field_name} is required")
+    return text
+
+
+def _require_repo_slug(value: str | None) -> str:
+    repo_text = _require_nonempty(value, "repo")
+    if repo_text.count("/") != 1:
+        raise LabelContractError("repo must be in 'owner/name' format")
+
+    owner_name, repo_name = repo_text.split("/", 1)
+    if not owner_name or not repo_name:
+        raise LabelContractError("repo must be in 'owner/name' format")
+    if owner_name.strip() != owner_name or repo_name.strip() != repo_name:
+        raise LabelContractError("repo must be in 'owner/name' format")
+
+    return repo_text
+
+
+def _load_json(path: Path) -> Any:
+    with path.open("r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def load_label_contract(path: Path) -> dict[str, Any]:
+    payload = _load_json(path)
+    if not isinstance(payload, dict):
+        raise LabelContractError("Label contract must be a JSON object")
+
+    schema_version = payload.get("schema_version")
+    if schema_version != "label_contract.v1":
+        raise LabelContractError(f"Unsupported schema_version: {schema_version!r}")
+
+    labels = payload.get("labels")
+    if not isinstance(labels, dict) or not labels:
+        raise LabelContractError("labels must be a non-empty object")
+
+    phase_groups = payload.get("phase_groups")
+    if not isinstance(phase_groups, list) or not phase_groups:
+        raise LabelContractError("phase_groups must be a non-empty array")
+
+    seen_group_names: set[str] = set()
+    for group in phase_groups:
+        if not isinstance(group, dict):
+            raise LabelContractError("Each phase group must be an object")
+
+        group_name = group.get("name")
+        if not isinstance(group_name, str) or not group_name.strip():
+            raise LabelContractError("Each phase group must define a non-empty name")
+        group_name = group_name.strip()
+        if group_name in seen_group_names:
+            raise LabelContractError(f"Duplicate phase group name: {group_name}")
+        seen_group_names.add(group_name)
+
+        members = group.get("members")
+        if not isinstance(members, list) or len(members) < 2:
+            raise LabelContractError("Each phase group must contain at least two members")
+
+        seen_members: set[str] = set()
+        for member in members:
+            if not isinstance(member, str):
+                raise LabelContractError(f"Phase group members must be strings: {member!r}")
+            if member not in labels:
+                raise LabelContractError(f"Phase group member not declared in labels: {member}")
+            if member in seen_members:
+                raise LabelContractError(f"Duplicate member in phase group {group_name}: {member}")
+            seen_members.add(member)
+
+        fallback = group.get("fallback")
+        if fallback is not None:
+            if not isinstance(fallback, str):
+                raise LabelContractError(f"Phase group fallback must be a string: {fallback!r}")
+            fallback_value = fallback.strip()
+            if not fallback_value:
+                raise LabelContractError("Phase group fallback cannot be empty")
+            if fallback_value not in labels:
+                raise LabelContractError(f"Phase group fallback not declared in labels: {fallback_value}")
+            if fallback_value not in members:
+                raise LabelContractError(f"Phase group fallback must be a member: {fallback_value}")
+
+    retired_labels = payload.get("retired_labels", [])
+    if not isinstance(retired_labels, list):
+        raise LabelContractError("retired_labels must be an array when present")
+    seen_retired: set[str] = set()
+    for retired_label in retired_labels:
+        if not isinstance(retired_label, str) or not retired_label.strip() or retired_label != retired_label.strip():
+            raise LabelContractError(f"retired_labels entries must be non-empty trimmed strings: {retired_label!r}")
+        if retired_label in labels:
+            raise LabelContractError(f"Label is both declared and retired: {retired_label}")
+        if retired_label in seen_retired:
+            raise LabelContractError(f"Duplicate retired label: {retired_label}")
+        seen_retired.add(retired_label)
+
+    return payload
+
+
+def _normalize_label_sync_metadata(label_name: str, metadata: Any) -> dict[str, str]:
+    if not isinstance(metadata, dict):
+        raise LabelContractError(f"Label metadata must be an object for {label_name}")
+
+    color_value = metadata.get("color")
+    if not isinstance(color_value, str) or not color_value.strip():
+        raise LabelContractError(f"Label color must be a non-empty string for {label_name}")
+
+    description_value = metadata.get("description")
+    if not isinstance(description_value, str) or not description_value.strip():
+        raise LabelContractError(f"Label description must be a non-empty string for {label_name}")
+
+    return {
+        "color": color_value.strip().lstrip("#").lower(),
+        "description": description_value.strip(),
+    }
+
+
+def _label_sync_validation_error(metadata: dict[str, str]) -> str | None:
+    description_text = metadata["description"]
+    if len(description_text) > 100:
+        return f"description exceeds GitHub's 100-character limit ({len(description_text)})"
+    return None
+
+
+def _label_sync_name_validation_error(label_name: str) -> str | None:
+    if len(label_name) > 50:
+        return f"label name exceeds GitHub's 50-character limit ({len(label_name)})"
+    return None
+
+
+def _github_token() -> str | None:
+    token_text = (os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or "").strip()
+    return token_text or None
+
+
+def _sanitize_log_detail(detail: str) -> str:
+    return " ".join(detail.split())
+
+
+def _github_retry_header_delay_seconds(headers: Any) -> float | None:
+    if headers is None:
+        return None
+
+    retry_after_value = headers.get("Retry-After")
+    if isinstance(retry_after_value, str):
+        retry_after_text = retry_after_value.strip()
+        if retry_after_text.isdigit():
+            return float(retry_after_text)
+
+    rate_limit_reset_value = headers.get("X-RateLimit-Reset")
+    if isinstance(rate_limit_reset_value, str):
+        rate_limit_reset_text = rate_limit_reset_value.strip()
+        if rate_limit_reset_text.isdigit():
+            reset_delay_seconds = float(int(rate_limit_reset_text) - int(time.time()))
+            return max(0.0, reset_delay_seconds)
+
+    return None
+
+
+def _github_retry_delay_seconds(headers: Any, attempt_index: int) -> float:
+    header_delay_seconds = _github_retry_header_delay_seconds(headers)
+    exponential_delay_seconds = min(
+        GITHUB_API_BACKOFF_CAP_SECONDS,
+        GITHUB_API_BACKOFF_BASE_SECONDS * (2**attempt_index),
+    )
+    base_delay_seconds = exponential_delay_seconds
+    if header_delay_seconds is not None:
+        base_delay_seconds = max(base_delay_seconds, header_delay_seconds)
+
+    jitter_seconds = random.uniform(0.0, 0.5)
+    if header_delay_seconds is not None and header_delay_seconds > GITHUB_API_BACKOFF_CAP_SECONDS:
+        return base_delay_seconds + jitter_seconds
+
+    return min(
+        GITHUB_API_BACKOFF_CAP_SECONDS,
+        base_delay_seconds + jitter_seconds,
+    )
+
+
+def _github_api_request(
+    path: str,
+    *,
+    method: str = "GET",
+    payload: dict[str, Any] | None = None,
+    require_token: bool = False,
+    retry_transient: bool = True,
+) -> Any:
+    # retry_transient=False makes exactly one attempt. Use it for
+    # non-idempotent writes (a comment POST): a 5xx or timeout after GitHub
+    # applied the write would otherwise post the same comment again. HTTP 429
+    # is still retried: GitHub rejects a rate-limited write without applying it.
+    attempt_limit = GITHUB_API_MAX_ATTEMPTS if retry_transient else 1
+    token_text = _github_token()
+    if require_token and token_text is None:
+        raise LabelContractError("GH_TOKEN / GITHUB_TOKEN is required unless --dry-run is set")
+
+    request_headers = {
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "coding-workflows-ai-labels",
+    }
+    if token_text:
+        request_headers["Authorization"] = f"Bearer {token_text}"
+
+    request_data: bytes | None = None
+    if payload is not None:
+        request_data = json.dumps(payload, ensure_ascii=True, sort_keys=True).encode("utf-8")
+        request_headers["Content-Type"] = "application/json; charset=utf-8"
+
+    method_name = method.upper()
+    request = urllib.request.Request(
+        f"{GITHUB_API_BASE_URL}/{path.lstrip('/')}",
+        data=request_data,
+        headers=request_headers,
+        method=method_name,
+    )
+    for attempt_index in range(GITHUB_API_MAX_ATTEMPTS):
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                response_body = response.read()
+        except urllib.error.HTTPError as exc:
+            status_attempt_limit = GITHUB_API_MAX_ATTEMPTS if exc.code == 429 else attempt_limit
+            if exc.code not in GITHUB_API_RETRY_STATUSES or attempt_index + 1 >= status_attempt_limit:
+                raise
+            time.sleep(_github_retry_delay_seconds(exc.headers, attempt_index))
+            continue
+        except (urllib.error.URLError, OSError):
+            if attempt_index + 1 >= attempt_limit:
+                raise
+            time.sleep(_github_retry_delay_seconds(None, attempt_index))
+            continue
+
+        if not response_body:
+            return None
+
+        try:
+            return json.loads(response_body)
+        except json.JSONDecodeError as exc:
+            response_preview = _sanitize_log_detail(response_body.decode("utf-8", errors="replace"))
+            if len(response_preview) > 160:
+                response_preview = f"{response_preview[:157]}..."
+            if not response_preview:
+                response_preview = "<empty response body>"
+            raise ValueError(
+                f"GitHub API returned non-JSON response for {method_name} {path}: {response_preview}"
+            ) from exc
+
+    raise RuntimeError(f"GitHub API retry loop exhausted for {method_name} {path}")
+
+
+def _github_label_path(repo: str, label_name: str) -> str:
+    encoded_label_name = urllib.parse.quote(label_name, safe="")
+    return f"repos/{repo}/labels/{encoded_label_name}"
+
+
+def _label_sync_matches(existing_label: dict[str, Any], expected_label: dict[str, str]) -> bool:
+    existing_color = str(existing_label.get("color") or "").strip().lstrip("#").lower()
+    existing_description = str(existing_label.get("description") or "")
+    return existing_color == expected_label["color"] and existing_description == expected_label["description"]
+
+
+def _http_error_message(exc: urllib.error.HTTPError) -> str:
+    error_body = b""
+    try:
+        error_body = exc.read() or b""
+    except (OSError, ValueError):
+        error_body = b""
+
+    if error_body:
+        try:
+            decoded_payload = json.loads(error_body.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            decoded_text = error_body.decode("utf-8", errors="replace").strip()
+            if decoded_text:
+                return decoded_text
+        else:
+            if isinstance(decoded_payload, dict):
+                payload_message = decoded_payload.get("message")
+                if isinstance(payload_message, str) and payload_message.strip():
+                    payload_errors = decoded_payload.get("errors")
+                    if payload_errors is None:
+                        return payload_message.strip()
+                    return f"{payload_message.strip()}: {json.dumps(payload_errors, ensure_ascii=True, sort_keys=True)}"
+
+    reason_text = exc.reason
+    if isinstance(reason_text, str) and reason_text.strip():
+        return reason_text.strip()
+    return f"HTTP {exc.code}"
+
+
+def _is_already_exists_error_message(message: str) -> bool:
+    lowered_message = message.lower()
+    return "already_exists" in lowered_message or "already exists" in lowered_message
+
+
+def _log_label_sync(
+    prefix: str,
+    *,
+    repo: str,
+    label_name: str,
+    action: str,
+    dry_run: bool,
+    status: int | None = None,
+    detail: str | None = None,
+    extra_fields: tuple[tuple[str, str], ...] = (),
+) -> None:
+    parts = [
+        f"{prefix}:",
+        f"repo={repo}",
+        f"label={label_name}",
+        f"action={action}",
+        f"dry_run={'true' if dry_run else 'false'}",
+    ]
+    for extra_key, extra_value in extra_fields:
+        parts.append(f"{extra_key}={extra_value}")
+    if status is not None:
+        parts.append(f"status={status}")
+    if detail:
+        parts.append(f"detail={_sanitize_log_detail(detail)}")
+    print(" ".join(parts), file=sys.stderr)
+
+
+def _append_label_sync_error(
+    errors: list[dict[str, Any]],
+    *,
+    repo: str,
+    label_name: str,
+    action: str,
+    dry_run: bool,
+    message: str,
+    status: int | None = None,
+) -> None:
+    error_record: dict[str, Any] = {
+        "label": label_name,
+        "action": action,
+        "message": _sanitize_log_detail(message),
+    }
+    if status is not None:
+        error_record["status"] = status
+    errors.append(error_record)
+    _log_label_sync(
+        "LABEL_SYNC_ERROR",
+        repo=repo,
+        label_name=label_name,
+        action=action,
+        dry_run=dry_run,
+        status=status,
+        detail=message,
+    )
+
+
+def _print_json(payload: dict[str, Any]) -> None:
+    print(json.dumps(payload, ensure_ascii=True, sort_keys=True))
+
+
+def cmd_contract_validate(args: argparse.Namespace) -> int:
+    contract = load_label_contract(Path(args.contract_file).resolve())
+    _print_json({"ok": True, "schema_version": contract["schema_version"], "labels": sorted(contract["labels"].keys())})
+    return 0
+
+
+def cmd_contract_get(args: argparse.Namespace) -> int:
+    contract = load_label_contract(Path(args.contract_file).resolve())
+    _print_json({"ok": True, "contract": contract})
+    return 0
+
+
+def cmd_resolve_phase(args: argparse.Namespace) -> int:
+    contract = load_label_contract(Path(args.contract_file).resolve())
+    phase = _require_nonempty(args.phase, "phase")
+
+    labels = contract["labels"]
+    if phase not in labels:
+        raise LabelContractError(f"Unknown phase label in contract: {phase}")
+
+    remove_labels: list[str] = []
+    for group in contract["phase_groups"]:
+        members = [str(item) for item in group.get("members") or []]
+        if phase in members:
+            remove_labels.extend([item for item in members if item != phase])
+
+    remove_labels = sorted(set(remove_labels))
+    _print_json({"ok": True, "add": [phase], "remove": remove_labels})
+    return 0
+
+
+# ai:needs-human is a person's latch, parked on top of the item's stop label
+# (unblock judge park, operator_step_issue.py needs-human park). Repair keeps it
+# beside a later phase-group member instead of dropping it, unless that member
+# is terminal.
+REPAIR_OVERLAY_PHASE_LABELS = frozenset({"ai:needs-human"})
+REPAIR_TERMINAL_PHASE_LABELS = frozenset({"ai:merged", "ai:closed"})
+
+
+def cmd_repair_labels(args: argparse.Namespace) -> int:
+    contract = load_label_contract(Path(args.contract_file).resolve())
+    issue_labels = sorted({item.strip() for item in (args.issue_labels or "").split(",") if item.strip()})
+    issue_labels_set = set(issue_labels)
+    known_labels = set(contract["labels"].keys())
+    has_known_label = bool(issue_labels_set & known_labels)
+
+    desired: list[str] = []
+    remove: set[str] = set()
+
+    for group in contract["phase_groups"]:
+        members = [str(item) for item in group.get("members") or []]
+        present = [label for label in members if label in issue_labels_set]
+        if not present:
+            # Only assign fallback when the issue is already in AI-managed states.
+            # This avoids adding AI labels to unrelated open issues during repair sweeps.
+            fallback = str(group.get("fallback") or "").strip()
+            if has_known_label and fallback and fallback in known_labels:
+                desired.append(fallback)
+            continue
+        if len(present) > 1:
+            # Keep the most-advanced (last) phase in the group when multiple are present.
+            # This avoids regressing issue state during repairs (e.g., keeping ai:done over ai:implementing).
+            keep = present[-1]
+            desired.append(keep)
+            kept = {keep}
+            # Keep-last ranks ai:blocked, ai:review-blocked and
+            # ai:implementation-failed above ai:needs-human, so it used to drop
+            # the latch the unblock judge parks on top of them: the needs-human
+            # digest then pruned the item and the judge parked it again every
+            # round. A terminal label still wins.
+            if keep not in REPAIR_TERMINAL_PHASE_LABELS:
+                overlay = {label for label in present if label in REPAIR_OVERLAY_PHASE_LABELS}
+                desired.extend(sorted(overlay - kept))
+                kept |= overlay
+            for label in present:
+                if label not in kept:
+                    remove.add(label)
+        else:
+            desired.append(present[0])
+
+    output = {
+        "ok": True,
+        "known_labels": sorted(known_labels),
+        "issue_labels": issue_labels,
+        "add": sorted(set(desired) - issue_labels_set),
+        "remove": sorted(remove - set(desired)),
+    }
+    _print_json(output)
+    return 0
+
+
+def _prefetch_repo_labels(repo: str) -> tuple[dict[str, dict[str, Any]] | None, str | None]:
+    """List every label in ``repo`` once, keyed by casefolded name.
+
+    Input: the repo slug. Output: ``(label_map, None)`` for a complete listing,
+    or ``(None, reason)`` when the prefetch fails open; the caller then falls
+    back to the per-label GET path.
+    API calls (CLAUDE.md §15): 1 to ``LABEL_SYNC_PREFETCH_MAX_PAGES`` read-only
+    ``GET repos/{repo}/labels?per_page=100&page=N`` calls (no token required,
+    so ``--dry-run`` behaves as before). A listing whose every page is full up
+    to the cap may be incomplete and is discarded (fail-open fallback).
+    """
+    label_map: dict[str, dict[str, Any]] = {}
+    # GH API hygiene (CLAUDE.md §15 / codex §14): this listing replaces the
+    # per-label ``GET repos/{repo}/labels/{name}`` (built by
+    # ``_github_label_path``) that ``cmd_sync_labels`` issued once per contract
+    # label (~59 calls today) with one paginated list read.
+    for page_number in range(1, LABEL_SYNC_PREFETCH_MAX_PAGES + 1):
+        page_path = f"repos/{repo}/labels?per_page={LABEL_SYNC_PREFETCH_PAGE_SIZE}&page={page_number}"
+        try:
+            page_items = _github_api_request(page_path)
+        except urllib.error.HTTPError as exc:
+            return None, f"HTTP {exc.code}"
+        except LabelContractError:
+            raise
+        except (urllib.error.URLError, OSError, ValueError, RuntimeError, http.client.HTTPException) as exc:
+            return None, type(exc).__name__
+        if not isinstance(page_items, list):
+            return None, f"malformed page {page_number}"
+        for page_item in page_items:
+            if not isinstance(page_item, dict):
+                return None, f"malformed page {page_number}"
+            listed_name = page_item.get("name")
+            if not isinstance(listed_name, str) or not listed_name.strip():
+                return None, f"malformed page {page_number}"
+            # GitHub label names are unique regardless of case and the
+            # per-label GET finds a label whatever case is requested
+            # (``_label_sync_matches`` ignores the returned name), so key the
+            # map case-insensitively to keep the per-label semantics.
+            folded_name = listed_name.casefold()
+            if folded_name in label_map:
+                return None, "duplicate casefolded name"
+            label_map[folded_name] = page_item
+        if len(page_items) < LABEL_SYNC_PREFETCH_PAGE_SIZE:
+            return label_map, None
+    return None, "page cap reached"
+
+
+def cmd_sync_labels(args: argparse.Namespace) -> int:
+    contract = load_label_contract(Path(args.contract_file).resolve())
+    repo = _require_repo_slug(args.repo)
+    dry_run = bool(args.dry_run)
+    if not dry_run and _github_token() is None:
+        raise LabelContractError("GH_TOKEN / GITHUB_TOKEN is required unless --dry-run is set")
+
+    label_items = sorted(contract["labels"].items())
+    created_count = 0
+    updated_count = 0
+    unchanged_count = 0
+    errors: list[dict[str, Any]] = []
+
+    # The prefetch is deferred until the first label passes local validation,
+    # so an invalid label (or an all-invalid contract) never costs a GitHub read.
+    prefetched_labels: dict[str, dict[str, Any]] | None = None
+    prefetch_attempted = False
+
+    for label_name, raw_metadata in label_items:
+        expected_metadata = _normalize_label_sync_metadata(label_name, raw_metadata)
+        name_validation_error = _label_sync_name_validation_error(label_name)
+        if name_validation_error is not None:
+            _append_label_sync_error(
+                errors,
+                repo=repo,
+                label_name=label_name,
+                action="validate",
+                dry_run=dry_run,
+                message=name_validation_error,
+            )
+            continue
+        # Validate locally before any GitHub read so a contract defect never
+        # costs an API call; the create/update checks below stay as defence
+        # in depth.
+        description_validation_error = _label_sync_validation_error(expected_metadata)
+        if description_validation_error is not None:
+            _append_label_sync_error(
+                errors,
+                repo=repo,
+                label_name=label_name,
+                action="validate",
+                dry_run=dry_run,
+                message=description_validation_error,
+            )
+            continue
+        label_path = _github_label_path(repo, label_name)
+
+        if not prefetch_attempted:
+            prefetch_attempted = True
+            prefetched_labels, prefetch_failure_reason = _prefetch_repo_labels(repo)
+            if prefetched_labels is None:
+                # Count only labels that pass local validation: invalid ones are
+                # skipped before any read, so they never get a per-label GET.
+                fallback_get_count = sum(
+                    1
+                    for fallback_name, fallback_metadata in label_items
+                    if _label_sync_name_validation_error(fallback_name) is None
+                    and _label_sync_validation_error(
+                        _normalize_label_sync_metadata(fallback_name, fallback_metadata)
+                    )
+                    is None
+                )
+                print(
+                    "ai_labels: label list prefetch unavailable "
+                    f"(reason={_sanitize_log_detail(prefetch_failure_reason or 'unknown')}); "
+                    f"falling back to per-label GET for {fallback_get_count} labels",
+                    file=sys.stderr,
+                )
+
+        if prefetched_labels is not None:
+            # A label missing from a complete prefetch counts as a 404.
+            existing_label = prefetched_labels.get(label_name.casefold())
+        else:
+            try:
+                existing_label = _github_api_request(label_path)
+            except urllib.error.HTTPError as exc:
+                if exc.code != 404:
+                    _append_label_sync_error(
+                        errors,
+                        repo=repo,
+                        label_name=label_name,
+                        action="get",
+                        dry_run=dry_run,
+                        message=_http_error_message(exc),
+                        status=exc.code,
+                    )
+                    continue
+                existing_label = None
+            except LabelContractError:
+                raise
+            except (urllib.error.URLError, OSError, ValueError, RuntimeError, http.client.HTTPException) as exc:
+                # The fallback runs right after the prefetch failed, so the
+                # same truncated read (IncompleteRead) is handled the same way;
+                # RuntimeError matches the prefetch handler (retry loop fallthrough).
+                _append_label_sync_error(
+                    errors,
+                    repo=repo,
+                    label_name=label_name,
+                    action="get",
+                    dry_run=dry_run,
+                    message=str(exc) or type(exc).__name__,
+                )
+                continue
+
+        if existing_label is None:
+            validation_error = _label_sync_validation_error(expected_metadata)
+            if validation_error is not None:
+                _append_label_sync_error(
+                    errors,
+                    repo=repo,
+                    label_name=label_name,
+                    action="create",
+                    dry_run=dry_run,
+                    message=validation_error,
+                )
+                continue
+
+            if dry_run:
+                created_count += 1
+                _log_label_sync(
+                    "LABEL_SYNC_CREATED",
+                    repo=repo,
+                    label_name=label_name,
+                    action="create",
+                    dry_run=True,
+                )
+                continue
+
+            try:
+                _github_api_request(
+                    f"repos/{repo}/labels",
+                    method="POST",
+                    payload={"name": label_name, **expected_metadata},
+                    require_token=True,
+                )
+            except urllib.error.HTTPError as exc:
+                error_message = _http_error_message(exc)
+                if exc.code == 422 and _is_already_exists_error_message(error_message):
+                    try:
+                        current_label = _github_api_request(label_path)
+                    except LabelContractError:
+                        raise
+                    except (urllib.error.HTTPError, urllib.error.URLError, OSError, ValueError):
+                        current_label = None
+                    if isinstance(current_label, dict) and _label_sync_matches(current_label, expected_metadata):
+                        created_count += 1
+                        _log_label_sync(
+                            "LABEL_SYNC_CREATED",
+                            repo=repo,
+                            label_name=label_name,
+                            action="create",
+                            dry_run=False,
+                            detail="resolved already_exists conflict by re-reading label",
+                        )
+                        continue
+                _append_label_sync_error(
+                    errors,
+                    repo=repo,
+                    label_name=label_name,
+                    action="create",
+                    dry_run=False,
+                    message=error_message,
+                    status=exc.code,
+                )
+                continue
+            except LabelContractError:
+                raise
+            except (urllib.error.URLError, OSError, ValueError) as exc:
+                _append_label_sync_error(
+                    errors,
+                    repo=repo,
+                    label_name=label_name,
+                    action="create",
+                    dry_run=False,
+                    message=str(exc),
+                )
+                continue
+
+            created_count += 1
+            _log_label_sync(
+                "LABEL_SYNC_CREATED",
+                repo=repo,
+                label_name=label_name,
+                action="create",
+                dry_run=False,
+            )
+            continue
+
+        if not isinstance(existing_label, dict):
+            _append_label_sync_error(
+                errors,
+                repo=repo,
+                label_name=label_name,
+                action="get",
+                dry_run=dry_run,
+                message="GitHub label response was not a JSON object",
+            )
+            continue
+
+        if _label_sync_matches(existing_label, expected_metadata):
+            unchanged_count += 1
+            _log_label_sync(
+                "LABEL_SYNC_UNCHANGED",
+                repo=repo,
+                label_name=label_name,
+                action="get",
+                dry_run=dry_run,
+            )
+            continue
+
+        validation_error = _label_sync_validation_error(expected_metadata)
+        if validation_error is not None:
+            _append_label_sync_error(
+                errors,
+                repo=repo,
+                label_name=label_name,
+                action="update",
+                dry_run=dry_run,
+                message=validation_error,
+            )
+            continue
+
+        if dry_run:
+            updated_count += 1
+            _log_label_sync(
+                "LABEL_SYNC_UPDATED",
+                repo=repo,
+                label_name=label_name,
+                action="update",
+                dry_run=True,
+            )
+            continue
+
+        try:
+            _github_api_request(
+                label_path,
+                method="PATCH",
+                payload=expected_metadata,
+                require_token=True,
+            )
+        except urllib.error.HTTPError as exc:
+            _append_label_sync_error(
+                errors,
+                repo=repo,
+                label_name=label_name,
+                action="update",
+                dry_run=False,
+                message=_http_error_message(exc),
+                status=exc.code,
+            )
+            continue
+        except LabelContractError:
+            raise
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            _append_label_sync_error(
+                errors,
+                repo=repo,
+                label_name=label_name,
+                action="update",
+                dry_run=False,
+                message=str(exc),
+            )
+            continue
+
+        updated_count += 1
+        _log_label_sync(
+            "LABEL_SYNC_UPDATED",
+            repo=repo,
+            label_name=label_name,
+            action="update",
+            dry_run=False,
+        )
+
+    label_error_count = len(errors)
+    deleted_count = _delete_retired_labels(contract, repo=repo, dry_run=dry_run, errors=errors)
+
+    output = {
+        "created": created_count,
+        "updated": updated_count,
+        "unchanged": unchanged_count,
+        "deleted": deleted_count,
+        "errors": errors,
+    }
+    _print_json(output)
+    return 1 if label_items and label_error_count == len(label_items) else 0
+
+
+def _warn_if_retired_label_in_use(*, repo: str, label_name: str, dry_run: bool) -> None:
+    """Log a warning when open issues / PRs still carry a retired label.
+
+    Input: the repo slug and one retired label name. Output: none; the
+    function never raises and never touches the sync error list or exit status.
+    API calls (CLAUDE.md §15): exactly one read-only
+    ``GET repos/{repo}/issues?labels=<label>&state=open&per_page=100`` per
+    call (the issues endpoint also returns pull requests). I audited the other
+    calls in this module: the label ``GET`` / ``DELETE`` target the label
+    resource and cannot report which issues carry it, so this read is
+    required. Counts are capped at one page: a full page is reported as
+    ``100+``. Fail-open: a failed or malformed read logs
+    ``LABEL_SYNC_RETIRED_CHECK_FAILED`` and returns.
+    Logs ``LABEL_SYNC_RETIRED_IN_USE`` (``level=WARNING``) with ``count`` and
+    up to 10 issue numbers when the count is above zero.
+    """
+    issues_path = (
+        f"repos/{repo}/issues?labels={urllib.parse.quote(label_name, safe='')}"
+        f"&state=open&per_page={RETIRED_LABEL_IN_USE_PAGE_SIZE}"
+    )
+    try:
+        issue_items = _github_api_request(issues_path)
+        if not isinstance(issue_items, list):
+            raise ValueError("unexpected issues response shape (expected a JSON array)")
+    except urllib.error.HTTPError as exc:
+        _log_label_sync(
+            "LABEL_SYNC_RETIRED_CHECK_FAILED",
+            repo=repo,
+            label_name=label_name,
+            action="in_use_check",
+            dry_run=dry_run,
+            status=exc.code,
+            detail=_http_error_message(exc),
+            extra_fields=(("level", "WARNING"),),
+        )
+        return
+    except (urllib.error.URLError, OSError, ValueError, LabelContractError) as exc:
+        _log_label_sync(
+            "LABEL_SYNC_RETIRED_CHECK_FAILED",
+            repo=repo,
+            label_name=label_name,
+            action="in_use_check",
+            dry_run=dry_run,
+            detail=str(exc),
+            extra_fields=(("level", "WARNING"),),
+        )
+        return
+
+    if not issue_items:
+        return
+    issue_numbers = [
+        item["number"]
+        for item in issue_items
+        if isinstance(item, dict) and isinstance(item.get("number"), int)
+    ]
+    if not issue_numbers:
+        # A non-empty page with no usable issue number is a malformed read,
+        # not proof that the label is in use.
+        _log_label_sync(
+            "LABEL_SYNC_RETIRED_CHECK_FAILED",
+            repo=repo,
+            label_name=label_name,
+            action="in_use_check",
+            dry_run=dry_run,
+            detail="issues response had no entries with an integer number",
+            extra_fields=(("level", "WARNING"),),
+        )
+        return
+    # Count only entries with an issue number, so count= agrees with issues=.
+    # The 100+ cap still follows the raw page size (a full page means more
+    # issues may exist past it).
+    count_text = str(len(issue_numbers))
+    if len(issue_items) >= RETIRED_LABEL_IN_USE_PAGE_SIZE:
+        count_text = f"{RETIRED_LABEL_IN_USE_PAGE_SIZE}+"
+    listed_numbers = issue_numbers[:RETIRED_LABEL_IN_USE_MAX_LISTED_NUMBERS]
+    _log_label_sync(
+        "LABEL_SYNC_RETIRED_IN_USE",
+        repo=repo,
+        label_name=label_name,
+        action="delete",
+        dry_run=dry_run,
+        extra_fields=(
+            ("level", "WARNING"),
+            ("count", count_text),
+            ("issues", ",".join(str(number) for number in listed_numbers)),
+        ),
+    )
+
+
+def _retired_label_drain_enabled() -> bool:
+    """Read the ``RETIRED_LABEL_DRAIN_ENABLED`` switch (default ``true``).
+
+    Unset or empty means enabled. ``true/1/yes/on`` and ``false/0/no/off`` are
+    matched trimmed and case-insensitively. Any other value logs
+    ``LABEL_SYNC_RETIRED_DRAIN_CONFIG`` (``level=WARNING``) and keeps the
+    default. The default lives here so callers that do not export the
+    variable still drain (CLAUDE.md §8).
+    """
+    raw_value = os.environ.get("RETIRED_LABEL_DRAIN_ENABLED")
+    value_text = (raw_value or "").strip().lower()
+    if not value_text or value_text in RETIRED_LABEL_DRAIN_TRUE_VALUES:
+        return True
+    if value_text in RETIRED_LABEL_DRAIN_FALSE_VALUES:
+        return False
+    shown_value = _sanitize_log_detail(raw_value or "")
+    if len(shown_value) > 40:
+        shown_value = f"{shown_value[:37]}..."
+    print(
+        f"LABEL_SYNC_RETIRED_DRAIN_CONFIG: level=WARNING value={shown_value} default=true "
+        "detail=unrecognised RETIRED_LABEL_DRAIN_ENABLED value; draining",
+        file=sys.stderr,
+    )
+    return True
+
+
+def _retired_label_drain_marker(label_name: str) -> str:
+    """Return the durable marker comment for one retired label.
+
+    The label name is percent-quoted (``:`` kept) so it can never close the
+    HTML comment early.
+    """
+    return f"{RETIRED_LABEL_DRAIN_MARKER_PREFIX}{urllib.parse.quote(label_name, safe=':')} -->"
+
+
+def _retired_label_drain_comment_body(label_name: str, *, is_pr: bool) -> str:
+    kind_text = "pull request" if is_pr else "issue"
+    return (
+        f"{_retired_label_drain_marker(label_name)}\n"
+        f"This {kind_text} carries the retired label `{label_name}`, which the AI label contract no longer uses "
+        "(`retired_labels` in `.github/ai/label_contract.v1.json`). Closing it so the label can be deleted. "
+        "Reopen it and remove the label if the work should continue."
+    )
+
+
+def _list_open_items_with_label(repo: str, label_name: str) -> tuple[list[dict[str, Any]], bool]:
+    """List the open issues and PRs that carry ``label_name``.
+
+    Input: repo slug and label name. Output: ``(items, complete)`` where each
+    item is ``{"number": int, "is_pr": bool, "comments": int}`` and
+    ``complete`` is true only when the last page read was not full.
+    API calls (CLAUDE.md §15): up to ``RETIRED_LABEL_DRAIN_MAX_LIST_PAGES``
+    read-only ``GET repos/{repo}/issues?labels=<label>&state=open&per_page=100&page=<n>``
+    (the issues endpoint also returns PRs); it stops after the first page
+    that is not full. Fails closed: HTTP / transport errors propagate, and a
+    non-array page or an entry without an integer ``number`` raises
+    ``ValueError``, so a malformed read never counts as an empty listing.
+    """
+    encoded_label_name = urllib.parse.quote(label_name, safe="")
+    items: list[dict[str, Any]] = []
+    for page_number in range(1, RETIRED_LABEL_DRAIN_MAX_LIST_PAGES + 1):
+        page_items = _github_api_request(
+            f"repos/{repo}/issues?labels={encoded_label_name}&state=open"
+            f"&per_page={RETIRED_LABEL_DRAIN_PAGE_SIZE}&page={page_number}"
+        )
+        if not isinstance(page_items, list):
+            raise ValueError("unexpected issues response shape (expected a JSON array)")
+        for entry in page_items:
+            if not isinstance(entry, dict):
+                raise ValueError("issues response entry was not a JSON object")
+            number_value = entry.get("number")
+            if not isinstance(number_value, int) or isinstance(number_value, bool) or number_value <= 0:
+                raise ValueError("issues response entry had no positive integer number")
+            comments_value = entry.get("comments")
+            if not isinstance(comments_value, int) or isinstance(comments_value, bool) or comments_value < 0:
+                comments_value = 0
+            items.append(
+                {
+                    "number": number_value,
+                    "is_pr": "pull_request" in entry,
+                    "comments": comments_value,
+                }
+            )
+        if len(page_items) < RETIRED_LABEL_DRAIN_PAGE_SIZE:
+            return items, True
+    return items, False
+
+
+def _retired_label_marker_present(repo: str, number: int, marker: str, comment_count: int) -> bool:
+    """Return true when a trusted author already posted ``marker`` on the item.
+
+    API calls (CLAUDE.md §15): one read-only
+    ``GET repos/{repo}/issues/{number}/comments?per_page=100&page=<last>``,
+    where ``<last>`` comes from the listing's ``comments`` count, so the
+    newest comments (where the drain's own marker sits) are read first. When
+    that page has no trusted marker and ``<last>`` is above 1, one more GET
+    reads ``<last> - 1``, so a marker that newer comments pushed across the
+    page boundary is still found (at most two calls). Only comments whose author association is OWNER / MEMBER / COLLABORATOR,
+    or whose author is ``github-actions[bot]``, count; a marker forged by
+    anyone else is ignored. Raises on read failure or a non-array response.
+    """
+    last_page = max(1, -(-comment_count // RETIRED_LABEL_DRAIN_PAGE_SIZE))
+    for page_number in range(last_page, max(0, last_page - 2), -1):
+        comment_items = _github_api_request(
+            f"repos/{repo}/issues/{number}/comments?per_page={RETIRED_LABEL_DRAIN_PAGE_SIZE}&page={page_number}"
+        )
+        if not isinstance(comment_items, list):
+            raise ValueError("unexpected comments response shape (expected a JSON array)")
+        for comment in comment_items:
+            if not isinstance(comment, dict):
+                continue
+            body_text = comment.get("body")
+            if not isinstance(body_text, str) or marker not in body_text:
+                continue
+            association_text = comment.get("author_association")
+            user_value = comment.get("user")
+            login_text = user_value.get("login") if isinstance(user_value, dict) else None
+            if association_text in RETIRED_LABEL_DRAIN_TRUSTED_ASSOCIATIONS or login_text == RETIRED_LABEL_DRAIN_TRUSTED_BOT_LOGIN:
+                return True
+    return False
+
+
+def _append_retired_label_drain_error(
+    errors: list[dict[str, Any]],
+    *,
+    repo: str,
+    label_name: str,
+    action: str,
+    dry_run: bool,
+    exc: Exception,
+    item_number: int | None = None,
+) -> None:
+    status_code: int | None = None
+    if isinstance(exc, urllib.error.HTTPError):
+        status_code = exc.code
+        message_text = _http_error_message(exc)
+    else:
+        message_text = str(exc)
+    if item_number is not None:
+        message_text = f"item=#{item_number}: {message_text}"
+    _append_label_sync_error(
+        errors,
+        repo=repo,
+        label_name=label_name,
+        action=action,
+        dry_run=dry_run,
+        message=message_text,
+        status=status_code,
+    )
+
+
+def _drain_retired_label(
+    *,
+    repo: str,
+    label_name: str,
+    dry_run: bool,
+    budget: list[int],
+    errors: list[dict[str, Any]],
+) -> bool:
+    """Close the open items that carry a retired label; return True when it may be deleted.
+
+    Input: repo slug, retired label name, ``dry_run``, a one-element list
+    ``[remaining]`` holding the item budget shared by every retired label in
+    the run, and the sync error list. Output: True only when a complete
+    listing confirmed that no open item carries the label.
+    API calls (CLAUDE.md §15), per retired label:
+
+    * one listing (``_list_open_items_with_label``, up to 2 GETs); when it is
+      complete and empty nothing else is called and the label may be deleted;
+    * per item, within the shared budget: one or two comments GETs (marker
+      check), one ``POST repos/{repo}/issues/{n}/comments`` when no trusted
+      marker is present (a 5xx or timeout is not retried, so a lost response
+      cannot post the comment twice and the next run re-checks the marker;
+      only an HTTP 429 is retried, up to ``GITHUB_API_MAX_ATTEMPTS`` calls,
+      because GitHub does not apply a rate-limited write), and one ``PATCH repos/{repo}/issues/{n}`` that closes it
+      (``state_reason=not_planned`` for issues only; PRs have none);
+    * one final listing (up to 2 GETs) after every listed item was closed.
+
+    ``dry_run`` only reads the first listing and logs
+    ``LABEL_SYNC_RETIRED_DRAIN action=plan``. The label is kept (False) after
+    a failed or incomplete listing, a failed marker read / comment / close,
+    an exhausted budget, or a non-empty final listing; the next run retries.
+    Every failure is appended to ``errors`` and never aborts the sync.
+    """
+    try:
+        items, complete = _list_open_items_with_label(repo, label_name)
+    except LabelContractError:
+        raise
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        _append_retired_label_drain_error(
+            errors, repo=repo, label_name=label_name, action="drain_list", dry_run=dry_run, exc=exc
+        )
+        return False
+
+    if complete and not items:
+        return True
+
+    def _count_text(count: int) -> str:
+        return str(count) if complete else f"{count}+"
+
+    if dry_run:
+        would_process = min(len(items), max(0, budget[0]))
+        budget[0] -= would_process
+        _log_label_sync(
+            "LABEL_SYNC_RETIRED_DRAIN",
+            repo=repo,
+            label_name=label_name,
+            action="plan",
+            dry_run=True,
+            extra_fields=(
+                ("count", _count_text(len(items))),
+                ("complete", "true" if complete else "false"),
+                ("would_process", str(would_process)),
+            ),
+        )
+        return False
+
+    marker = _retired_label_drain_marker(label_name)
+    processed_count = 0
+    item_failed = False
+    for item in items:
+        if budget[0] <= 0:
+            break
+        if _retired_label_drain_deadline is not None and time.monotonic() >= _retired_label_drain_deadline:
+            break
+        budget[0] -= 1
+        processed_count += 1
+        item_number = item["number"]
+        is_pr = bool(item["is_pr"])
+
+        try:
+            marker_found = _retired_label_marker_present(repo, item_number, marker, item["comments"])
+        except LabelContractError:
+            raise
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            _append_retired_label_drain_error(
+                errors,
+                repo=repo,
+                label_name=label_name,
+                action="drain_marker_check",
+                dry_run=False,
+                exc=exc,
+                item_number=item_number,
+            )
+            item_failed = True
+            continue
+
+        if not marker_found:
+            try:
+                _github_api_request(
+                    f"repos/{repo}/issues/{item_number}/comments",
+                    method="POST",
+                    payload={"body": _retired_label_drain_comment_body(label_name, is_pr=is_pr)},
+                    require_token=True,
+                    retry_transient=False,
+                )
+            except LabelContractError:
+                raise
+            except (urllib.error.URLError, OSError, ValueError) as exc:
+                # Never close an item whose explanation comment was not posted.
+                _append_retired_label_drain_error(
+                    errors,
+                    repo=repo,
+                    label_name=label_name,
+                    action="drain_comment",
+                    dry_run=False,
+                    exc=exc,
+                    item_number=item_number,
+                )
+                item_failed = True
+                continue
+
+        close_payload: dict[str, Any] = {"state": "closed"}
+        if not is_pr:
+            close_payload["state_reason"] = "not_planned"
+        try:
+            _github_api_request(
+                f"repos/{repo}/issues/{item_number}",
+                method="PATCH",
+                payload=close_payload,
+                require_token=True,
+            )
+        except LabelContractError:
+            raise
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            _append_retired_label_drain_error(
+                errors,
+                repo=repo,
+                label_name=label_name,
+                action="drain_close",
+                dry_run=False,
+                exc=exc,
+                item_number=item_number,
+            )
+            item_failed = True
+            continue
+
+        _log_label_sync(
+            "LABEL_SYNC_RETIRED_DRAINED",
+            repo=repo,
+            label_name=label_name,
+            action="close",
+            dry_run=False,
+            extra_fields=(
+                ("item", str(item_number)),
+                ("kind", "pr" if is_pr else "issue"),
+                ("comment", "marker_present" if marker_found else "posted"),
+            ),
+        )
+
+    remaining_count = len(items) - processed_count
+    deferred_reason: str | None = None
+    if item_failed:
+        deferred_reason = "item_failed"
+    elif not complete:
+        deferred_reason = "incomplete_listing"
+    elif remaining_count > 0:
+        deferred_reason = "budget"
+    if deferred_reason is not None:
+        _log_label_sync(
+            "LABEL_SYNC_RETIRED_DRAIN_DEFERRED",
+            repo=repo,
+            label_name=label_name,
+            action="delete",
+            dry_run=False,
+            extra_fields=(("reason", deferred_reason), ("remaining", _count_text(remaining_count))),
+        )
+        return False
+
+    try:
+        final_items, final_complete = _list_open_items_with_label(repo, label_name)
+    except LabelContractError:
+        raise
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        _append_retired_label_drain_error(
+            errors, repo=repo, label_name=label_name, action="drain_final_list", dry_run=False, exc=exc
+        )
+        return False
+    if final_complete and not final_items:
+        return True
+    final_count_text = str(len(final_items)) if final_complete else f"{len(final_items)}+"
+    _log_label_sync(
+        "LABEL_SYNC_RETIRED_DRAIN_DEFERRED",
+        repo=repo,
+        label_name=label_name,
+        action="delete",
+        dry_run=False,
+        extra_fields=(("reason", "final_listing_not_empty"), ("remaining", final_count_text)),
+    )
+    return False
+
+
+def _delete_retired_labels(
+    contract: dict[str, Any],
+    *,
+    repo: str,
+    dry_run: bool,
+    errors: list[dict[str, Any]],
+) -> int:
+    """Delete the contract's ``retired_labels`` from ``repo`` when present.
+
+    Input: the loaded label contract (``retired_labels`` is an optional list of
+    label names that are no longer used and are reserved, never re-declared).
+    Output: the number of labels deleted (or, with ``dry_run``, that would be
+    deleted); failures are appended to ``errors`` and never abort the sync.
+    API calls (CLAUDE.md §15), per retired label:
+
+    * one ``DELETE``, where a 404 means the label is already gone; ``dry_run``
+      issues one read-only ``GET`` of the label instead;
+    * one extra read-only ``GET repos/{repo}/issues?labels=...&state=open``
+      (see ``_warn_if_retired_label_in_use``) that warns when open issues or
+      PRs still carry the label. On a real run it must precede the ``DELETE``
+      (afterwards the label is gone), so it is also issued for a label that
+      turns out to be absent; on ``dry_run`` it runs only after the label
+      ``GET`` found the label. Its failure is logged and ignored (fail-open),
+      the warning never blocks the delete, and the exit status is unchanged.
+
+    The two bullets above describe the switch-off path
+    (``RETIRED_LABEL_DRAIN_ENABLED=false``), which is kept unchanged. With
+    the drain on (the default), the in-use warning is replaced by
+    ``_drain_retired_label``, which lists, comments on and closes the open
+    items carrying the label (at most ``RETIRED_LABEL_DRAIN_MAX_ITEMS_PER_RUN``
+    items per run across all retired labels) and allows the ``DELETE`` only
+    after a complete listing shows no open items. A label that is not in use
+    costs one listing ``GET`` and the ``DELETE``, as before. On ``dry_run``
+    the label ``GET`` runs first (404 is still ``LABEL_SYNC_RETIRED_ABSENT``),
+    then only the first listing; a label is counted as deleted only when that
+    listing is complete and empty. The drain never changes the exit status.
+
+    Logs ``LABEL_SYNC_DELETED`` / ``LABEL_SYNC_RETIRED_ABSENT`` per label, plus
+    ``LABEL_SYNC_RETIRED_IN_USE`` / ``LABEL_SYNC_RETIRED_CHECK_FAILED`` from
+    the in-use check (switch off) or ``LABEL_SYNC_RETIRED_DRAIN`` /
+    ``LABEL_SYNC_RETIRED_DRAINED`` / ``LABEL_SYNC_RETIRED_DRAIN_DEFERRED``
+    from the drain (switch on).
+    """
+    deleted_count = 0
+    retired_label_names = contract.get("retired_labels", [])
+    drain_enabled = _retired_label_drain_enabled() if retired_label_names else False
+    drain_budget = [RETIRED_LABEL_DRAIN_MAX_ITEMS_PER_RUN]
+    global _retired_label_drain_deadline
+    _retired_label_drain_deadline = time.monotonic() + RETIRED_LABEL_DRAIN_DEADLINE_SECONDS
+    for label_name in retired_label_names:
+        label_path = _github_label_path(repo, label_name)
+        try:
+            if drain_enabled and dry_run:
+                _github_api_request(label_path)
+                if not _drain_retired_label(
+                    repo=repo, label_name=label_name, dry_run=True, budget=drain_budget, errors=errors
+                ):
+                    continue
+            elif drain_enabled:
+                if not _drain_retired_label(
+                    repo=repo, label_name=label_name, dry_run=False, budget=drain_budget, errors=errors
+                ):
+                    continue
+                _github_api_request(label_path, method="DELETE", require_token=True)
+            elif dry_run:
+                _github_api_request(label_path)
+                _warn_if_retired_label_in_use(repo=repo, label_name=label_name, dry_run=dry_run)
+            else:
+                _warn_if_retired_label_in_use(repo=repo, label_name=label_name, dry_run=dry_run)
+                _github_api_request(label_path, method="DELETE", require_token=True)
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                _log_label_sync(
+                    "LABEL_SYNC_RETIRED_ABSENT",
+                    repo=repo,
+                    label_name=label_name,
+                    action="delete",
+                    dry_run=dry_run,
+                )
+                continue
+            _append_label_sync_error(
+                errors,
+                repo=repo,
+                label_name=label_name,
+                action="delete",
+                dry_run=dry_run,
+                message=_http_error_message(exc),
+                status=exc.code,
+            )
+            continue
+        except LabelContractError:
+            raise
+        except (urllib.error.URLError, OSError, ValueError) as exc:
+            _append_label_sync_error(
+                errors,
+                repo=repo,
+                label_name=label_name,
+                action="delete",
+                dry_run=dry_run,
+                message=str(exc),
+            )
+            continue
+        deleted_count += 1
+        _log_label_sync(
+            "LABEL_SYNC_DELETED",
+            repo=repo,
+            label_name=label_name,
+            action="delete",
+            dry_run=dry_run,
+        )
+    return deleted_count
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="AI label policy helper")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    validate = subparsers.add_parser("contract-validate", help="Validate label contract JSON")
+    validate.add_argument("--contract-file", required=True)
+    validate.set_defaults(func=cmd_contract_validate)
+
+    get_contract = subparsers.add_parser("contract-get", help="Print label contract JSON")
+    get_contract.add_argument("--contract-file", required=True)
+    get_contract.set_defaults(func=cmd_contract_get)
+
+    resolve_phase = subparsers.add_parser("resolve-phase", help="Resolve label add/remove set for a phase")
+    resolve_phase.add_argument("--contract-file", required=True)
+    resolve_phase.add_argument("--phase", required=True)
+    resolve_phase.set_defaults(func=cmd_resolve_phase)
+
+    repair = subparsers.add_parser("repair-labels", help="Repair issue labels against phase exclusivity rules")
+    repair.add_argument("--contract-file", required=True)
+    repair.add_argument("--issue-labels", required=True)
+    repair.set_defaults(func=cmd_repair_labels)
+
+    sync = subparsers.add_parser("sync-labels", help="Create or update repo labels from the label contract")
+    sync.add_argument("--contract-file", required=True)
+    sync.add_argument("--repo", required=True)
+    sync.add_argument("--dry-run", action="store_true")
+    sync.set_defaults(func=cmd_sync_labels)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    try:
+        return int(args.func(args))
+    except (LabelContractError, ValueError, json.JSONDecodeError, OSError) as exc:
+        # OSError: a missing or unreadable contract file gets a named error, not a traceback.
+        print(f"AI_LABELS_ERROR: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

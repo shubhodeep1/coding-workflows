@@ -1,0 +1,553 @@
+#!/usr/bin/env bash
+# Run one clarify attempt in a credential-free, network-isolated container.
+# Only this helper (not the agent) accesses Docker and the host-side broker.
+# CLARIFY_SOURCE_ROOT optionally selects the source snapshot (default: $PWD).
+# CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS=true omits agent instructions (default: false).
+# CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED (default: true) snapshots every tracked text
+# file that passes the sensitive-path filters; binary, oversize and over-limit
+# files are excluded, counted (CLARIFY_SNAPSHOT_EXCLUDED) and listed in the
+# prompt. false, 0, no or off restore the legacy roots/suffix filter.
+set -euo pipefail
+
+prompt_file="${1:?prompt file required}"
+output_file="${2:?output file required}"
+log_file="${3:?log file required}"
+# Optional engine (scripts/ai_engine.sh) and role; the default is the codex path.
+engine="${4:-codex}"
+engine_role="${5:-CLARIFY}"
+case "${engine}" in codex|claude) ;; *) echo '::error::Invalid clarify engine' >&2; exit 1 ;; esac
+[[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|PLAN|UNBLOCK_JUDGE|CHECK_TRIAGE)$ ]] || { echo '::error::Invalid clarify engine role' >&2; exit 1; }
+[ "${engine}" != claude ] || [[ "${engine_role}" =~ ^(CLARIFY|CLARIFY_RESPOND|PLAN|UNBLOCK_JUDGE|CHECK_TRIAGE)$ ]] || { echo '::error::Invalid Claude engine role' >&2; exit 1; }
+support="scripts"
+if [ -n "${CLARIFY_ISOLATION_SUPPORT_DIR:-}" ]; then
+	if [[ "${CLARIFY_ISOLATION_SUPPORT_DIR}" != /* ]] || [ ! -d "${CLARIFY_ISOLATION_SUPPORT_DIR}" ]; then
+		echo '::error::Invalid clarify isolation support directory' >&2
+		exit 1
+	fi
+	support="${CLARIFY_ISOLATION_SUPPORT_DIR}"
+fi
+isolation_timeout="${CLARIFY_ISOLATION_TIMEOUT_SECS:-}"
+if [ -n "${isolation_timeout}" ] && { [[ ! "${isolation_timeout}" =~ ^[0-9]+$ ]] || [[ ! "${isolation_timeout}" =~ [1-9] ]]; }; then
+	echo '::error::Invalid clarify isolation timeout' >&2
+	exit 1
+fi
+version="${CLARIFY_CODEX_VERSION:-v0.114.0}"
+[[ "${version}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Invalid Codex version' >&2; exit 1; }
+[[ "${MODEL_EDITOR:-}" =~ ^[a-zA-Z0-9/_.-]+$ ]] || { echo '::error::Invalid model slug' >&2; exit 1; }
+[[ "${MODEL_REASONING_EFFORT:-}" =~ ^(xhigh|high|medium|low|none)$ ]] || { echo '::error::Invalid reasoning level' >&2; exit 1; }
+if [ "${engine}" = codex ]; then
+	[ -n "${OPENROUTER_API_KEY:-}" ] && [ -s "${prompt_file}" ] || { echo '::error::Clarify isolation preflight failed' >&2; exit 1; }
+else
+	[ -s "${prompt_file}" ] || { echo '::error::Clarify isolation preflight failed' >&2; exit 1; }
+fi
+command -v docker >/dev/null && command -v python3 >/dev/null || { echo '::error::Clarify isolation prerequisites unavailable' >&2; exit 1; }
+[ -f "${support}/clarify_sandbox/Dockerfile" ] && [ -f "${support}/clarify_openrouter_broker.py" ] && [ -f "${support}/write_codex_config.sh" ] && [ -f "${support}/codex_model_catalog.json" ] || { echo '::error::Clarify isolation support missing' >&2; exit 1; }
+# Pull the prebuilt sandbox image, or build it locally (scripts/sandbox_image.sh);
+# without the helper, build locally as before. Arguments: docker build args.
+clarify_image_build()
+{
+	local clarify_prebuilt_ref="" clarify_prebuilt_secs="${SANDBOX_IMAGE_PULL_TIMEOUT_SECS:-60}"
+	# Try the prebuilt image first: it does not need the Dockerfile's FROM
+	# image, so slow or unreachable mirrors must not delay it (#7215 review).
+	if [ -f "${support}/sandbox_image.sh" ] && [ ! -L "${support}/sandbox_image.sh" ]; then
+		[[ "${clarify_prebuilt_secs}" =~ ^[1-9][0-9]{0,3}$ ]] || clarify_prebuilt_secs=60
+		clarify_prebuilt_ref="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN bash "${support}/sandbox_image.sh" ref --family clarify "$@" -f "${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox" 2>/dev/null)" || {
+			clarify_prebuilt_ref=""
+			# `ref` exits 1 on purpose when the registry is off, or invalid (which
+			# sandbox_image.sh treats as off with its own warning); not a failure.
+			local clarify_registry="${SANDBOX_IMAGE_REGISTRY:-}"
+			if [ "${clarify_registry}" != off ] && { [ -z "${clarify_registry}" ] || [[ "${clarify_registry}" =~ ^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)+$ ]]; }; then
+				echo "SANDBOX_IMAGE family=clarify outcome=ref_failed" >&2
+			fi
+		}
+		if [ -n "${clarify_prebuilt_ref}" ] && env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN timeout --signal=TERM --kill-after=10s "${clarify_prebuilt_secs}s" docker pull -q "${clarify_prebuilt_ref}" >/dev/null 2>&1; then
+			# sandbox_image.sh build re-pulls and checks the input label; on a
+			# label mismatch or a failed re-pull it builds locally without the
+			# pre-seed. If that fails, fall through to pre-seed and build again.
+			local clarify_prebuilt_id=""
+			if clarify_prebuilt_id="$(env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN bash "${support}/sandbox_image.sh" build --family clarify "$@" -f "${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox")" && [ -n "${clarify_prebuilt_id}" ]; then
+				printf '%s\n' "${clarify_prebuilt_id}"
+				return
+			fi
+		fi
+	fi
+	# A local build follows: seed the Dockerfile's FROM image from a Docker
+	# Official Images mirror first, so the build (no --pull) avoids Docker
+	# Hub's anonymous-pull 429 (#6985, #7215). Best effort; stdout is the
+	# image ID, so log to stderr.
+	if [ -f "${support}/clarify_base_image_preseed.sh" ] && [ ! -L "${support}/clarify_base_image_preseed.sh" ]; then
+		env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN bash "${support}/clarify_base_image_preseed.sh" "${support}/clarify_sandbox/Dockerfile" >&2 || true
+	else
+		echo "CLARIFY_BASE_IMAGE_PRESEED image=none outcome=skip reason=helper_missing" >&2
+	fi
+	if [ -f "${support}/sandbox_image.sh" ] && [ ! -L "${support}/sandbox_image.sh" ]; then
+		env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN bash "${support}/sandbox_image.sh" build --family clarify "$@" -f "${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox"
+	else
+		env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker build -q "$@" -f "${support}/clarify_sandbox/Dockerfile" "${support}/clarify_sandbox"
+	fi
+}
+# The source root is read as data only; host Python never imports from it.
+source_root="${CLARIFY_SOURCE_ROOT:-${PWD}}"
+omit_agent_instructions="${CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS:-false}"
+case "${omit_agent_instructions}" in true) ;; *) omit_agent_instructions=false ;; esac
+snapshot_all_text="${CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED:-true}"
+case "${snapshot_all_text,,}" in false|0|no|off) snapshot_all_text=false ;; *) snapshot_all_text=true ;; esac
+if [ ! -d "${source_root}" ] || [ -L "${source_root}" ]; then
+	echo '::error::Clarify source root unavailable' >&2
+	exit 1
+fi
+source_root="$(cd "${source_root}" && pwd -P)" || { echo '::error::Clarify source root unavailable' >&2; exit 1; }
+
+# The runner-owned temporary root contains no credentials. Its socket child is
+# traversable by the container's matching non-root UID, not by other users.
+run_root="$(mktemp -d)"
+container_name="clarify-${GITHUB_RUN_ID:-local}-$$"
+broker_pid=""
+cleanup()
+{
+	if [ -n "${broker_pid}" ]; then kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; fi
+	env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker rm -f "${container_name}" >/dev/null 2>&1 || true
+	rm -rf -- "${run_root}"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+mkdir -m 0700 "${run_root}/socket"
+mkdir -m 0755 "${run_root}/source" "${run_root}/results"
+
+# Include only regular, tracked source files with safe path classes. Never
+# follow a symlink (including parent directories); do not include .git,
+# support checkouts, runner configuration, env files or private keys.
+# triage-host-python-import-shadowing: -I excludes both cwd and the script directory.
+PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${source_root}" "${run_root}/source" "${omit_agent_instructions}" "${CLARIFY_ISOLATION_SUPPORT_DIR:-}" "${snapshot_all_text}" "${run_root}/snapshot_excluded.tsv" <<'PY'
+import os
+import pathlib
+import re
+import stat
+import subprocess
+import sys
+
+root = pathlib.Path(sys.argv[1])
+dest = pathlib.Path(sys.argv[2])
+omit_agent_instructions = sys.argv[3] == "true"
+# All-text mode (CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED, issue #8341): pass 1 copies
+# the legacy roots/suffix set with today's limit semantics, then the support
+# files, then pass 2 adds every other tracked text file. Pass-2 files that are
+# binary or past the limits are excluded and counted instead of rejecting the
+# snapshot, so the result always contains the legacy set.
+all_text = sys.argv[5] == "true"
+excluded_list_path = pathlib.Path(sys.argv[6])
+roots = {"src", "scripts", "tests", "prompts", "docs", "app", "lib", "workflow-templates", "validation", "db", "ai-memory", "changelog.d", "agents.d"}
+root_files = {"README.md", "agents.md", "AGENTS.md", "package.json", "pyproject.toml", "go.mod", "Cargo.toml"}
+agent_instruction_names = {"agents.md", "agents.override.md", "claude.md", "claude.local.md"}
+suffixes = {".py", ".sh", ".js", ".jsx", ".ts", ".tsx", ".go", ".rs", ".java", ".json", ".md", ".yml", ".yaml", ".toml", ".txt", ".css", ".html", ".sql"}
+bad_parts = {".git", ".ai", ".codex", ".codex-workflow-src", ".codex-workflow-src-main", ".env", "secrets", "credentials", "__pycache__"}
+max_file_bytes = 2 * 1024 * 1024
+max_files = 5000
+max_total_bytes = 64 * 1024 * 1024
+count = 0
+total = 0
+omitted = 0
+# (reason, listable path or None). Sensitive-path hits are never recorded.
+excluded = []
+listable_name = re.compile(r"[A-Za-z0-9._/@+-]{1,240}")
+
+def sensitive(parts):
+    return (not parts or any(part.lower() in bad_parts or part.lower().startswith(".env") for part in parts)
+            or any(part.lower().endswith((".pem", ".key", ".p12", ".pfx", ".keystore")) for part in parts))
+
+# Pass 2 only: credential-store names the legacy roots/suffix filter never
+# reached (the list mirrors codex_isolated_workspace.READONLY_BAD_PARTS; the
+# secret-name rules below mirror its readonly_allowed()). Like sensitive()
+# hits, these are neither copied, counted nor listed.
+pass2_credential_names = {".ssh", ".aws", ".azure", ".kube", ".config", ".docker", ".npmrc", ".netrc", ".pypirc",
+                          ".pgpass", ".git-credentials", "id_rsa", "id_ed25519", "id_ecdsa", "id_dsa"}
+
+# Secret-name rules copied from codex_isolated_workspace.readonly_allowed().
+pass2_secret_tails = ("_secret", "_secrets", "_credential", "_credentials", "-secret", "-secrets", "-credential", "-credentials")
+pass2_config_exts = ("json", "yaml", "yml", "toml", "ini", "env", "txt", "conf", "cfg", "properties", "xml")
+
+def pass2_secret_name(lower):
+    stem, _, ext = lower.rpartition(".")
+    return (lower in ("secret", "credential") or lower.endswith(pass2_secret_tails)
+            or (bool(stem) and ext in pass2_config_exts and (stem in ("secret", "secrets", "credential", "credentials")
+                or stem.endswith(pass2_secret_tails + (".secret", ".secrets", ".credential", ".credentials")))))
+
+def pass2_credential(parts):
+    return any(part.lower() in pass2_credential_names or part.lower().endswith((".jks", ".tfstate"))
+               or pass2_secret_name(part.lower()) for part in parts)
+
+def legacy_eligible(path, parts):
+    return ((path in root_files or parts[0] in roots or parts[:2] in ((".github", "workflows"), (".github", "actions")))
+            and (path in root_files or pathlib.PurePosixPath(path).suffix.lower() in suffixes or parts[-1] == "Dockerfile"))
+
+def exclude(reason, path):
+    excluded.append((reason, path if path is not None and listable_name.fullmatch(path) else None))
+
+def copy(path, extra=False):
+    # extra=True: an all-text pass-2 file outside the legacy set.
+    global count, total, omitted
+    parts = pathlib.PurePosixPath(path).parts
+    if sensitive(parts) or (extra and pass2_credential(parts)) or (not extra and not legacy_eligible(path, parts)):
+        return
+    # agents.d/ fragments (CLAUDE.md §30) are agents.md content waiting to be folded.
+    if omit_agent_instructions and (parts[-1].lower() in agent_instruction_names or parts[0] == "agents.d"):
+        omitted += 1
+        return
+    node = root
+    for part in parts:
+        node = node / part
+        try:
+            info = node.lstat()
+        except FileNotFoundError:
+            if extra:
+                # Tracked but absent from the worktree, the file itself or a
+                # parent directory (e.g. a cone-mode sparse checkout).
+                return
+            raise
+        if stat.S_ISLNK(info.st_mode) and node == root / path:
+            return  # A tracked symlink is not part of the snapshot.
+        if stat.S_ISLNK(info.st_mode) or (node != root / path and not stat.S_ISDIR(info.st_mode)):
+            raise ValueError("unsafe source path")
+    if extra and stat.S_ISDIR(info.st_mode):
+        return  # A gitlink (submodule) entry; its content is not tracked here.
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError("unsafe source file")
+    if info.st_size > max_file_bytes:
+        if not all_text:
+            raise ValueError("unsafe source file")
+        exclude("oversize", path)
+        return
+    if extra:
+        if count + 1 > max_files or total + info.st_size > max_total_bytes:
+            exclude("limit", path)
+            return
+    else:
+        count += 1
+        total += info.st_size
+        if count > max_files or total > max_total_bytes:
+            raise ValueError("source snapshot limit exceeded")
+    # Fail if a path is swapped for a symlink between lstat and open.
+    fd = os.open(node, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, "rb") as source:
+        opened = os.fstat(source.fileno())
+        if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino, opened.st_size) != (info.st_dev, info.st_ino, info.st_size):
+            raise ValueError("source changed during snapshot")
+        # Pass 2 sniffs the first 8 KiB before reading the rest, so excluded
+        # binaries are not read in full.
+        data = source.read(8192 if extra else max_file_bytes + 1)
+        if extra and b"\0" not in data:
+            data += source.read(max_file_bytes + 1 - len(data))
+    if extra and b"\0" in data[:8192]:
+        exclude("binary", path)
+        return
+    if len(data) != info.st_size:
+        raise ValueError("source changed during snapshot")
+    if extra:
+        count += 1
+        total += info.st_size
+    target = dest.joinpath(*parts)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with target.open("xb") as sink:
+        sink.write(data)
+    os.chmod(target, 0o644)
+
+def copy_support_files():
+    # Consumer checkouts do not track the staged writer/catalog; these are
+    # fixed support files, never read from the issue prompt or user input.
+    if not sys.argv[4]:
+        for required in ("scripts/write_codex_config.sh", "scripts/codex_model_catalog.json"):
+            if not (dest / required).exists():
+                copy(required)
+
+try:
+    tracked = subprocess.check_output(["git", "ls-files", "-z"], cwd=root).split(b"\0")
+    if not all_text:
+        for entry in tracked:
+            if entry:
+                copy(entry.decode("utf-8"))
+        if omitted:
+            print(f"CLARIFY_SNAPSHOT_AGENT_INSTRUCTIONS_OMITTED count={omitted}", file=sys.stderr)
+        copy_support_files()
+    else:
+        extra_paths = []
+        for entry in tracked:
+            if not entry:
+                continue
+            try:
+                path = entry.decode("utf-8")
+            except UnicodeDecodeError:
+                undecodable_parts = pathlib.PurePosixPath(entry.decode("utf-8", "surrogateescape")).parts
+                if not sensitive(undecodable_parts) and not pass2_credential(undecodable_parts):
+                    exclude("path_encoding", None)
+                continue
+            parts = pathlib.PurePosixPath(path).parts
+            if parts and legacy_eligible(path, parts):
+                copy(path)
+            else:
+                extra_paths.append(path)
+        copy_support_files()
+        for path in extra_paths:
+            copy(path, extra=True)
+        if omitted:
+            print(f"CLARIFY_SNAPSHOT_AGENT_INSTRUCTIONS_OMITTED count={omitted}", file=sys.stderr)
+        reason_counts = {reason: 0 for reason in ("binary", "oversize", "limit", "path_encoding")}
+        for reason, _ in excluded:
+            reason_counts[reason] += 1
+        sample = ",".join(name or "<unlisted>" for _, name in excluded[:5]) or "none"
+        print(
+            f"CLARIFY_SNAPSHOT_EXCLUDED count={len(excluded)} binary={reason_counts['binary']} oversize={reason_counts['oversize']}"
+            f" limit={reason_counts['limit']} path_encoding={reason_counts['path_encoding']} sample={sample}",
+            file=sys.stderr,
+        )
+        if excluded:
+            listed = [(reason, name) for reason, name in excluded if name is not None][:100]
+            lines = "".join(f"{reason}\t{name}\n" for reason, name in listed)
+            if len(excluded) > len(listed):
+                lines += f"more\t{len(excluded) - len(listed)}\n"
+            with excluded_list_path.open("x", encoding="utf-8") as excluded_sink:
+                excluded_sink.write(lines)
+except (OSError, ValueError, UnicodeError) as exc:
+    raise SystemExit("clarify source snapshot rejected") from None
+PY
+
+# A separate support checkout must supply the executable config writer and
+# catalog, not similarly named files in the untrusted target snapshot.
+if [ -n "${CLARIFY_ISOLATION_SUPPORT_DIR:-}" ]; then
+	install -D -m 0644 "${support}/write_codex_config.sh" "${run_root}/source/scripts/write_codex_config.sh"
+	install -D -m 0644 "${support}/codex_model_catalog.json" "${run_root}/source/scripts/codex_model_catalog.json"
+fi
+
+# All-text mode: tell the agent which tracked files the snapshot left out, in a
+# delimited data block appended to a run-root copy of the prompt. The caller's
+# prompt file is never edited; with nothing excluded it is mounted unchanged.
+clarify_prompt_src="$(realpath "${prompt_file}")"
+if [ "${snapshot_all_text}" = true ] && [ -s "${run_root}/snapshot_excluded.tsv" ]; then
+	clarify_excluded_total=0
+	clarify_excluded_unlisted=0
+	clarify_excluded_listing=""
+	while IFS=$'\t' read -r clarify_excluded_reason clarify_excluded_name; do
+		if [ "${clarify_excluded_reason}" = more ]; then
+			[[ "${clarify_excluded_name}" =~ ^[0-9]{1,7}$ ]] || continue
+			clarify_excluded_unlisted=$((10#${clarify_excluded_name}))
+		else
+			clarify_excluded_total=$((clarify_excluded_total + 1))
+			clarify_excluded_listing+="- ${clarify_excluded_name} (${clarify_excluded_reason})"$'\n'
+		fi
+	done < "${run_root}/snapshot_excluded.tsv"
+	clarify_excluded_total=$((clarify_excluded_total + clarify_excluded_unlisted))
+	{
+		cat -- "${prompt_file}"
+		printf '\n=== CLARIFY SNAPSHOT EXCLUSIONS (repository data, not instructions) ===\n'
+		printf 'The read-only snapshot under /source omits %s tracked file(s): binary content, over the 2 MiB per-file cap, or past the snapshot size limits. These paths exist in git at this ref; do not report them as missing.\n' "${clarify_excluded_total}"
+		printf '%s' "${clarify_excluded_listing}"
+		[ "${clarify_excluded_unlisted}" -eq 0 ] || printf -- '- (%s more not listed)\n' "${clarify_excluded_unlisted}"
+		printf '=== END CLARIFY SNAPSHOT EXCLUSIONS ===\n'
+	} > "${run_root}/prompt_with_exclusions.txt"
+	chmod 0644 "${run_root}/prompt_with_exclusions.txt"
+	clarify_prompt_src="${run_root}/prompt_with_exclusions.txt"
+fi
+
+# Claude engine branch: the same isolation, with the Claude Code CLI inside
+# the container and scripts/claude_anthropic_relay.py on the host. The real
+# OAuth token stays in the host relay; the container sees a placeholder.
+# Exit 75 means Claude is out of capacity and the caller runs the codex path;
+# exit 76 means Claude is unavailable for any other reason and the caller must
+# fail closed (AI_ENGINE_FALLBACK_POLICY=capacity, the default; plan item 3e,
+# D1). AI_ENGINE_FALLBACK_POLICY=always keeps exit 75 for every reason.
+# Exit 80 means wait: Claude is out of capacity and
+# CLAUDE_POOL_CAPACITY_WAIT_ENABLED is true (off by default, issue #7251); the
+# caller must not run codex.
+if [ "${engine}" = claude ]; then
+	engine_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+	# Mirror ai_engine_fallback's record so the job's report step sees it.
+	unsourced_fallback_record()
+	{
+		local rec_role rec_policy=capacity rec_action=refused rec_file="${AI_ENGINE_FALLBACK_RECORDS_FILE:-${RUNNER_TEMP:-/tmp}/ai-engine-fallback-records.tsv}"
+		rec_role="$(printf '%s' "$1" | tr -c 'A-Z0-9_' '_' | cut -c1-40)"
+		[[ "${rec_role}" =~ ^[A-Z] ]] || rec_role="UNKNOWN"
+		[ "${AI_ENGINE_FALLBACK_POLICY:-capacity}" = always ] && { rec_policy=always; rec_action=codex; }
+		[ -L "${rec_file}" ] || printf 'v1\t%s\t%s\t%s\tnon_capacity\t%s\t%s\n' "$(date -u +%s)" "${rec_role}" "$2" "${rec_action}" "${rec_policy}" >> "${rec_file}" 2>/dev/null || true
+	}
+	for required in ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl; do
+		if [ ! -f "${engine_dir}/${required}" ]; then
+			# ai_engine.sh cannot be sourced: decide the policy inline.
+			echo "AI_ENGINE_FALLBACK role=${engine_role} reason=support_missing" >&2
+			unsourced_fallback_record "${engine_role}" support_missing
+			[ "${AI_ENGINE_FALLBACK_POLICY:-capacity}" = always ] && exit 75
+			echo "::error::AI_ENGINE_FALLBACK_REFUSED role=${engine_role} reason=support_missing" >&2
+			exit 76
+		fi
+	done
+	# shellcheck source=ai_engine.sh
+	source "${engine_dir}/ai_engine.sh"
+	claude_model="$(ai_engine_model "${engine_role}" "${MODEL_EDITOR}")"
+	claude_effort="$(ai_engine_effort "${engine_role}" "${MODEL_REASONING_EFFORT}")"
+	claude_version="$(ai_engine_cli_version)"
+	probe_model="$(_ai_engine_py config --key probe_model)"
+	guard_hook="$(_ai_engine_py support-file --name guard-hook)" || { ai_engine_fallback "${engine_role}" policy_unavailable; exit "${AI_ENGINE_FALLBACK_EXIT}"; }
+	instructions="$(_ai_engine_instructions_file)" || { ai_engine_fallback "${engine_role}" instructions_missing; exit "${AI_ENGINE_FALLBACK_EXIT}"; }
+	# Provider-side web search (claude_engine.json `web_search`, default on);
+	# a failed read leaves it off and the relay refuses the tool as before.
+	clarify_web_search="$(_ai_engine_py config --key web_search 2>/dev/null || echo false)"
+	clarify_claude_tools="Read,Grep,Glob"
+	clarify_settings_args=(settings --checkout /source --out "${run_root}/claude-settings.json" --profile read --guard-hook /guard.py)
+	clarify_relay_args=()
+	if [ "${clarify_web_search}" = true ]; then
+		clarify_claude_tools+=",WebSearch"
+		clarify_settings_args+=(--web-search)
+		clarify_relay_args+=(--allow-web-search)
+	fi
+	_ai_engine_py "${clarify_settings_args[@]}" || { ai_engine_fallback "${engine_role}" policy_unavailable; exit "${AI_ENGINE_FALLBACK_EXIT}"; }
+	chmod 0644 "${run_root}/claude-settings.json"
+	mapfile -t claude_accounts < <(ai_engine_accounts)
+	[ "${#claude_accounts[@]}" -gt 0 ] || { ai_engine_fallback "${engine_role}" "$(ai_engine_no_account_reason)"; exit "${AI_ENGINE_FALLBACK_EXIT}"; }
+	if ! image="$(clarify_image_build --build-arg "CODEX_VERSION=${version}" --build-arg "CLAUDE_CLI_VERSION=${claude_version}")"; then
+		ai_engine_fallback "${engine_role}" image_build_failed
+		exit "${AI_ENGINE_FALLBACK_EXIT}"
+	fi
+	[ -n "${image}" ] || { ai_engine_fallback "${engine_role}" image_build_failed; exit "${AI_ENGINE_FALLBACK_EXIT}"; }
+	all_usage_limit=true
+	for account in "${claude_accounts[@]}"; do
+		rm -f -- "${run_root}/results/transcript.jsonl" "${run_root}/results/stderr" "${run_root}/socket/provider.sock"
+		env -i PATH="${PATH}" PYTHONDONTWRITEBYTECODE=1 \
+			python3 -I -B "${engine_dir}/claude_anthropic_relay.py" broker "${run_root}/socket/provider.sock" "$(ai_engine_pool_dir)/tokens/${account}" "${claude_model},${probe_model}" ${clarify_relay_args[@]+"${clarify_relay_args[@]}"} &
+		broker_pid=$!
+		for _ in $(seq 1 50); do
+			[ -S "${run_root}/socket/provider.sock" ] && break
+			kill -0 "${broker_pid}" 2>/dev/null || break
+			sleep 0.1
+		done
+		if [ ! -S "${run_root}/socket/provider.sock" ]; then
+			echo "CLAUDE_POOL run role=${engine_role} account=${account} outcome=crashed reason=relay_unavailable" >&2
+			kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; broker_pid=""
+			all_usage_limit=false
+			continue
+		fi
+		run_rc=0
+		env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker run --rm \
+			--name "${container_name}" --user "$(id -u):$(id -g)" \
+			--network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+			--pids-limit 128 --memory 2g --cpus 2 \
+			--tmpfs /tmp:rw,nosuid,nodev,size=64m --tmpfs /home/agent:rw,nosuid,nodev,size=64m,mode=1777 \
+			--mount "type=bind,src=${run_root}/source,dst=/source,readonly" \
+			--mount "type=bind,src=${clarify_prompt_src},dst=/prompt,readonly" \
+			--mount "type=bind,src=${run_root}/socket,dst=/socket,readonly" \
+			--mount "type=bind,src=${engine_dir}/claude_anthropic_relay.py,dst=/relay.py,readonly" \
+			--mount "type=bind,src=$(realpath "${instructions}"),dst=/instructions.md,readonly" \
+			--mount "type=bind,src=${run_root}/claude-settings.json,dst=/settings.json,readonly" \
+			--mount "type=bind,src=$(realpath "${guard_hook}"),dst=/guard.py,readonly" \
+			--mount "type=bind,src=${run_root}/results,dst=/results" \
+			--env HOME=/home/agent \
+			--env ANTHROPIC_BASE_URL=http://127.0.0.1:8765 \
+			--env CLAUDE_CODE_OAUTH_TOKEN=isolated-placeholder \
+			--env CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 --env DISABLE_AUTOUPDATER=1 \
+			--env "CLAUDE_MODEL=${claude_model}" --env "CLAUDE_EFFORT=${claude_effort}" \
+			--env "CLAUDE_TOOLS=${clarify_claude_tools}" \
+			--env "CLARIFY_ISOLATION_TIMEOUT_SECS=${isolation_timeout}" \
+			--workdir /source "${image}" /bin/bash -c '
+				set -euo pipefail
+				printf "{\"projects\":{\"/source\":{\"hasTrustDialogAccepted\":true}}}\n" > "${HOME}/.claude.json"
+				python3 /relay.py bridge /socket/provider.sock &
+				bridge_pid=$!
+				trap '\''kill "${bridge_pid}" 2>/dev/null || true'\'' EXIT
+				python3 -c '\''import socket,time; [(time.sleep(.1) if s.connect_ex(("127.0.0.1",8765)) else exit(0)) for s in (socket.socket() for _ in range(50))]; exit(1)'\''
+				if [ -n "${CLARIFY_ISOLATION_TIMEOUT_SECS}" ]; then
+					timeout "${CLARIFY_ISOLATION_TIMEOUT_SECS}" claude -p --model "${CLAUDE_MODEL}" --effort "${CLAUDE_EFFORT}" \
+						--system-prompt-file /instructions.md \
+						--setting-sources "" --settings /settings.json \
+						--strict-mcp-config --disable-slash-commands \
+						--exclude-dynamic-system-prompt-sections \
+						--tools "${CLAUDE_TOOLS}" --permission-mode dontAsk \
+						--output-format stream-json --verbose < /prompt > /results/transcript.jsonl 2> /results/stderr
+				else
+					claude -p --model "${CLAUDE_MODEL}" --effort "${CLAUDE_EFFORT}" \
+						--system-prompt-file /instructions.md \
+						--setting-sources "" --settings /settings.json \
+						--strict-mcp-config --disable-slash-commands \
+						--exclude-dynamic-system-prompt-sections \
+						--tools "${CLAUDE_TOOLS}" --permission-mode dontAsk \
+						--output-format stream-json --verbose < /prompt > /results/transcript.jsonl 2> /results/stderr
+				fi
+			' || run_rc=$?
+		kill "${broker_pid}" 2>/dev/null || true; wait "${broker_pid}" 2>/dev/null || true; broker_pid=""
+		[ ! -f "${run_root}/results/stderr" ] || tee -a "${log_file}" < "${run_root}/results/stderr" >&2
+		verdict="$(_ai_engine_py classify --transcript "${run_root}/results/transcript.jsonl" --exit-code "${run_rc}")" || verdict='{"outcome":"crashed","reason":"classify_failed"}'
+		outcome="$(_ai_engine_json_field "${verdict}" outcome)"
+		echo "CLAUDE_POOL run role=${engine_role} account=${account} outcome=${outcome} reason=$(_ai_engine_json_field "${verdict}" reason) exit_code=${run_rc}" >&2
+		case "${outcome}" in
+			success)
+				_ai_engine_py extract --transcript "${run_root}/results/transcript.jsonl" --out "${run_root}/results/output" >&2 || exit 1
+				install -m 0600 "${run_root}/results/output" "${output_file}"
+				exit 0
+				;;
+			usage_limit)
+				continue
+				;;
+			auth_failed)
+				all_usage_limit=false
+				continue
+				;;
+			*)
+				exit 1
+				;;
+		esac
+	done
+	# Every account at its usage limit is the capacity reason (D1).
+	if [ "${all_usage_limit}" = true ]; then
+		ai_engine_fallback "${engine_role}" all_usage_limit
+	else
+		ai_engine_fallback "${engine_role}" all_accounts_failed
+	fi
+	exit "${AI_ENGINE_FALLBACK_EXIT}"
+fi
+
+# Nothing from the privileged checkout, HOME or runtime workspace is mounted.
+# The Docker build context contains only the pinned Dockerfile.
+image="$(clarify_image_build --build-arg "CODEX_VERSION=${version}")"
+[ -n "${image}" ] || { echo '::error::Clarify image build failed' >&2; exit 1; }
+env -i PATH="${PATH}" OPENROUTER_API_KEY="${OPENROUTER_API_KEY}" CLARIFY_MODEL="${MODEL_EDITOR}" PYTHONDONTWRITEBYTECODE=1 \
+	python3 -I -B "${support}/clarify_openrouter_broker.py" broker "${run_root}/socket/provider.sock" &
+broker_pid=$!
+for _ in $(seq 1 50); do
+	[ -S "${run_root}/socket/provider.sock" ] && break
+	kill -0 "${broker_pid}" 2>/dev/null || { echo '::error::Clarify broker failed' >&2; exit 1; }
+	sleep 0.1
+done
+[ -S "${run_root}/socket/provider.sock" ] || { echo '::error::Clarify broker unavailable' >&2; exit 1; }
+
+env -u OPENROUTER_API_KEY -u GH_TOKEN -u GITHUB_TOKEN docker run --rm \
+	--name "${container_name}" --user "$(id -u):$(id -g)" \
+	--network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+	--pids-limit 128 --memory 2g --cpus 2 \
+	--tmpfs /tmp:rw,nosuid,nodev,size=64m --tmpfs /home/agent:rw,nosuid,nodev,size=64m,mode=1777 \
+	--mount "type=bind,src=${run_root}/source,dst=/source,readonly" \
+	--mount "type=bind,src=${clarify_prompt_src},dst=/prompt,readonly" \
+	--mount "type=bind,src=${run_root}/socket,dst=/socket,readonly" \
+	--mount "type=bind,src=$(realpath "${support}/clarify_openrouter_broker.py"),dst=/bridge.py,readonly" \
+	--mount "type=bind,src=${run_root}/results,dst=/results" \
+	--env HOME=/home/agent --env CODEX_HOME=/home/agent/.codex \
+	--env CLARIFY_PROXY_KEY=isolated-placeholder \
+	--env "CLARIFY_MODEL=${MODEL_EDITOR}" --env "CLARIFY_REASONING=${MODEL_REASONING_EFFORT}" \
+	--env "CLARIFY_ISOLATION_TIMEOUT_SECS=${isolation_timeout}" \
+	--workdir /source "${image}" /bin/bash -c '
+		set -euo pipefail
+		mkdir -p "${CODEX_HOME}"
+		bash /source/scripts/write_codex_config.sh --model "${CLARIFY_MODEL:-openai/gpt-6-sol}" --reasoning "${CLARIFY_REASONING:-high}" --catalog-path /source/scripts/codex_model_catalog.json --project-path /source --config-path "${CODEX_HOME}/config.toml" --allow-elevation forbid
+		sed -i -e '\''s#base_url = "https://openrouter.ai/api/v1"#base_url = "http://127.0.0.1:8765/api/v1"#'\'' -e '\''s/env_key = "OPENROUTER_API_KEY"/env_key = "CLARIFY_PROXY_KEY"/'\'' "${CODEX_HOME}/config.toml"
+		python3 /bridge.py bridge /socket/provider.sock &
+		bridge_pid=$!
+		trap '\''kill "${bridge_pid}" 2>/dev/null || true'\'' EXIT
+		# Bridge startup is bounded; model traffic stays on loopback.
+		python3 -c '\''import socket,time; [(time.sleep(.1) if s.connect_ex(("127.0.0.1",8765)) else exit(0)) for s in (socket.socket() for _ in range(50))]; exit(1)'\''
+		if [ -n "${CLARIFY_ISOLATION_TIMEOUT_SECS}" ]; then
+			timeout "${CLARIFY_ISOLATION_TIMEOUT_SECS}" codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${CLARIFY_MODEL:-openai/gpt-6-sol}" --sandbox read-only < /prompt > /results/output 2> /results/stderr
+		else
+			codex --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${CLARIFY_MODEL:-openai/gpt-6-sol}" --sandbox read-only < /prompt > /results/output 2> /results/stderr
+		fi
+	' || {
+		[ ! -f "${run_root}/results/stderr" ] || tee -a "${log_file}" < "${run_root}/results/stderr" >&2
+		exit 1
+	}
+install -m 0600 "${run_root}/results/output" "${output_file}"
+tee -a "${log_file}" < "${run_root}/results/stderr" >&2

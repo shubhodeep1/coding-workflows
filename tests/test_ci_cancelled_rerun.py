@@ -1,0 +1,1226 @@
+"""The sweep's CI recovery is head-bound, bounded, and failed-jobs-only."""
+
+import contextlib
+import importlib.util
+import io
+import json
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from unittest import mock
+
+import pytest
+
+
+ROOT = Path(__file__).resolve().parent.parent
+SPEC = importlib.util.spec_from_file_location("ci_cancelled_rerun", ROOT / "scripts/ci_cancelled_rerun.py")
+assert SPEC and SPEC.loader
+HELPER = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(HELPER)
+SHA = "a" * 40
+OLD_SHA = "b" * 40
+
+
+def pr(sha=SHA, number=11, **extra):
+	return {"number": number, "head_sha": sha, "head_ref": "topic", "title": "Update", "body": "", **extra}
+
+
+def run(sha=SHA, number=11, conclusion="cancelled", attempt=1, run_id=123, **extra):
+	return {
+		"id": run_id, "head_sha": "c" * 40,  # pull_request GITHUB_SHA can be a merge commit
+		"pull_requests": [{"number": number, "head": {"sha": sha}}],
+		"event": "pull_request", "status": "completed", "conclusion": conclusion,
+		"run_attempt": attempt, "created_at": "2026-10-03T06:00:00Z",
+		"path": ".github/workflows/ci.yml", **extra,
+	}
+
+
+def exercise(prs=None, completed=None, active=None, enabled=True, dry_run=False, head_filter="", classify="genuine",
+		zombie_hours=0):
+	prs = [pr()] if prs is None else prs
+	completed = [run()] if completed is None else completed
+	active = [] if active is None else active
+	output = io.StringIO()
+	# The fixtures carry a fixed 2026-10-03 created_at, so the wedged-queued
+	# filter (issue #9473) is off unless a test turns it on. Load it first so
+	# the lazy load cannot overwrite the patched hours.
+	HELPER._zombie_lib()
+	with mock.patch.dict(HELPER._ZOMBIE_LIB_STATE, {"hours": zombie_hours}), \
+		mock.patch.object(HELPER, "list_runs", side_effect=lambda repo, status: completed if status == "completed" else active) as listing, \
+		mock.patch.object(HELPER, "current_pr_heads", return_value={item["number"]: item["head_sha"] for item in prs if isinstance(item, dict) and type(item.get("number")) is int}), \
+		mock.patch.object(HELPER, "classify_runner_shutdown", return_value=classify) as classifier, \
+		mock.patch.object(HELPER, "rerun_failed_jobs", return_value=True) as post, contextlib.redirect_stdout(output):
+		HELPER.process(prs, HELPER.SOURCE_REPO, enabled, dry_run, head_filter)
+	exercise.classifier = classifier
+	return output.getvalue().splitlines(), listing, post
+
+
+@pytest.mark.parametrize("conclusion", ["cancelled", "startup_failure"])
+def test_first_attempt_restarts_failed_jobs(conclusion):
+	lines, listing, post = exercise(completed=[run(conclusion=conclusion)])
+	assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=123 action=rerun reason=cancelled_ci"]
+	assert listing.call_count == 4
+	post.assert_called_once_with(HELPER.SOURCE_REPO, 123)
+
+
+@pytest.mark.parametrize("completed,reason", [
+	([run(attempt=2)], "already_retried"),
+	([run(conclusion="failure")], "other_conclusion"),
+	([run(conclusion="success")], "other_conclusion"),
+	([run(sha=OLD_SHA)], "no_attributable_run"),
+])
+def test_ineligible_runs_are_not_retried(completed, reason):
+	lines, _, post = exercise(completed=completed)
+	assert f"reason={reason}" in lines[0]
+	post.assert_not_called()
+
+
+def test_newer_success_and_visible_retry_on_other_id_block():
+	older = run(run_id=120)
+	newer = run(run_id=124, conclusion="success", created_at="2026-10-03T07:00:00Z")
+	lines, _, post = exercise(completed=[older, newer])
+	assert "run=124 action=skip reason=other_conclusion" in lines[0]
+	post.assert_not_called()
+	lines, _, post = exercise(completed=[run(run_id=121, attempt=2), older])
+	assert "reason=already_retried" in lines[0]
+	post.assert_not_called()
+
+
+def test_push_run_on_same_sha_is_included_in_newest_and_retry_checks():
+	push = run(run_id=124, event="push", head_sha=SHA, head_branch="stable",
+		pull_requests=[], conclusion="success", created_at="2026-10-03T07:00:00Z")
+	stable_pr = dict(pr(), head_ref="stable")
+	lines, _, post = exercise(prs=[stable_pr], completed=[run(), push])
+	assert "run=124 action=skip reason=other_conclusion" in lines[0]
+	post.assert_not_called()
+	lines, _, post = exercise(prs=[stable_pr], completed=[run(), dict(push, run_attempt=2,
+		created_at="2026-10-03T05:00:00Z")])
+	assert "reason=already_retried" in lines[0]
+	post.assert_not_called()
+	lines, _, post = exercise(prs=[stable_pr], completed=[run(), dict(push, conclusion="cancelled")])
+	assert "run=124 action=rerun reason=cancelled_ci" in lines[0]
+	post.assert_called_once_with(HELPER.SOURCE_REPO, 124)
+
+
+def test_other_branch_push_on_same_sha_does_not_mask_cancelled_pr_run():
+	push = run(run_id=124, event="push", head_sha=SHA, head_branch="stable",
+		pull_requests=[], conclusion="success", attempt=2, created_at="2026-10-03T07:00:00Z")
+	lines, _, post = exercise(completed=[run(), push])
+	assert "run=123 action=rerun reason=cancelled_ci" in lines[0]
+	post.assert_called_once_with(HELPER.SOURCE_REPO, 123)
+
+
+def _iso_hours_ago(hours):
+	stamp = datetime.now(timezone.utc) - timedelta(hours=hours)
+	return stamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_wedged_queued_run_does_not_block_but_fresh_queued_and_in_progress_do(capsys):
+	"""Issue #9473: only a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is ignored."""
+	wedged = run(status="queued", run_id=43095142301, created_at=_iso_hours_ago(25))
+	lines, _, post = exercise(active=[wedged], zombie_hours=24)
+	assert "action=rerun reason=cancelled_ci" in lines[0]
+	post.assert_called_once()
+	assert ("ZOMBIE_RUN_IGNORED run=43095142301 workflow=.github/workflows/ci.yml age_h=25 guard=ci_cancelled_rerun"
+		in capsys.readouterr().err)
+	for blocker in (run(status="queued", run_id=7, created_at=_iso_hours_ago(23)),
+			run(status="in_progress", run_id=8, created_at=_iso_hours_ago(100))):
+		lines, _, post = exercise(active=[wedged, blocker], zombie_hours=24)
+		assert "reason=active_run" in lines[0]
+		post.assert_not_called()
+
+
+@pytest.mark.parametrize("status", ["queued", "in_progress", "pending"])
+def test_active_run_on_current_head_blocks(status):
+	active = run(status=status)
+	lines, _, post = exercise(active=[active])
+	assert "reason=active_run" in lines[0]
+	post.assert_not_called()
+
+
+def test_active_run_without_association_on_same_branch_blocks():
+	active = run(status="queued", pull_requests=[], head_branch="topic")
+	lines, _, post = exercise(active=[active])
+	assert "reason=active_run" in lines[0]
+	post.assert_not_called()
+
+
+@pytest.mark.parametrize("association", [
+	{"number": 11, "head": {"sha": None}},
+	{"number": 11, "head": {}},
+	{"number": 11},
+])
+def test_active_run_with_incomplete_candidate_association_blocks(association):
+	active = run(status="queued", pull_requests=[association])
+	lines, _, post = exercise(active=[active])
+	assert "reason=active_run" in lines[0]
+	post.assert_not_called()
+
+
+def test_unrelated_active_run_on_same_sha_or_branch_does_not_block():
+	active = run(status="queued", event="push", head_sha=SHA, head_branch="main", pull_requests=[])
+	lines, _, post = exercise(active=[active])
+	assert "action=rerun" in lines[0]
+	post.assert_called_once()
+	active = run(status="queued", event="push", head_sha=OLD_SHA, head_branch="topic", pull_requests=[])
+	lines, _, post = exercise(active=[active])
+	assert "action=rerun" in lines[0]
+	post.assert_called_once()
+	active = run(status="queued", number=12, head_branch="topic")
+	lines, _, post = exercise(active=[active])
+	assert "action=rerun" in lines[0]
+	post.assert_called_once()
+	active = run(status="queued", sha=OLD_SHA, head_branch="topic")
+	lines, _, post = exercise(active=[active])
+	assert "action=rerun" in lines[0]
+	post.assert_called_once()
+
+
+def test_push_run_on_current_pr_branch_and_sha_blocks():
+	active = run(status="queued", event="push", head_sha=SHA, head_branch="topic", pull_requests=[])
+	lines, _, post = exercise(active=[active])
+	assert "reason=active_run" in lines[0]
+	post.assert_not_called()
+
+
+def test_switch_off_makes_no_ci_reads():
+	lines, listing, post = exercise(enabled=False)
+	assert "reason=disabled" in lines[0]
+	listing.assert_not_called()
+	post.assert_not_called()
+
+
+def test_head_advanced_after_snapshot_skips_rerun():
+	output = io.StringIO()
+	with mock.patch.object(HELPER, "list_runs", side_effect=lambda repo, status: [run()] if status == "completed" else []), \
+		mock.patch.object(HELPER, "current_pr_heads", return_value={11: OLD_SHA}) as fresh, \
+		mock.patch.object(HELPER, "rerun_failed_jobs") as post, contextlib.redirect_stdout(output):
+		HELPER.process([pr()], HELPER.SOURCE_REPO, True, False, "")
+	assert "action=skip reason=superseded_head" in output.getvalue()
+	fresh.assert_called_once_with(HELPER.SOURCE_REPO)
+	post.assert_not_called()
+
+
+def test_unavailable_live_pr_listing_fails_closed():
+	output = io.StringIO()
+	with mock.patch.object(HELPER, "list_runs", side_effect=lambda repo, status: [run()] if status == "completed" else []), \
+		mock.patch.object(HELPER, "current_pr_heads", side_effect=ValueError("invalid_pr_listing")), \
+		mock.patch.object(HELPER, "rerun_failed_jobs") as post, contextlib.redirect_stdout(output):
+		HELPER.process([pr()], HELPER.SOURCE_REPO, True, False, "")
+	assert "action=skip reason=invalid_pr_listing" in output.getvalue()
+	post.assert_not_called()
+
+
+def test_shared_head_posts_once_and_logs_each_pr():
+	lines, _, post = exercise(prs=[pr(), pr(number=12)], completed=[run(), run(number=12, run_id=125)])
+	assert len(lines) == 2
+	assert "reason=shared_head" in lines[1]
+	post.assert_called_once()
+
+
+@pytest.mark.parametrize("prs,reason", [
+	([pr(title="[skip ai] Update")], "skip_ai"),
+	([pr(head_sha="invalid")], "invalid_snapshot"),
+	([pr(number="11")], "invalid_snapshot"),
+])
+def test_snapshot_input_and_opt_out(prs, reason):
+	lines, listing, post = exercise(prs=prs)
+	assert f"reason={reason}" in lines[0]
+	listing.assert_not_called()
+	post.assert_not_called()
+
+
+def test_filter_and_dry_run():
+	lines, listing, _ = exercise(head_filter="other")
+	assert "reason=filtered" in lines[0]
+	listing.assert_not_called()
+	lines, _, post = exercise(dry_run=True)
+	assert "reason=dry_run" in lines[0]
+	post.assert_not_called()
+
+
+def test_shared_head_without_first_pr_run_can_still_find_other_pr():
+	lines, _, post = exercise(prs=[pr(), pr(number=12)], completed=[run(number=12)])
+	assert "reason=no_attributable_run" in lines[0]
+	assert "action=rerun" in lines[1]
+	post.assert_called_once()
+
+
+def test_malformed_snapshot_blocks_other_prs():
+	lines, listing, post = exercise(prs=[pr(), pr(number="12")])
+	assert len(lines) == 2
+	assert all("reason=invalid_snapshot" in line for line in lines)
+	listing.assert_not_called()
+	post.assert_not_called()
+
+
+def test_failed_listing_fails_closed_for_every_pr():
+	output = io.StringIO()
+	with mock.patch.object(HELPER, "list_runs", side_effect=ValueError("listing_truncated")), \
+		mock.patch.object(HELPER, "rerun_failed_jobs") as post, contextlib.redirect_stdout(output):
+		HELPER.process([pr(), pr(number=12)], HELPER.SOURCE_REPO, True, False, "")
+	assert output.getvalue().count("reason=listing_truncated") == 2
+	post.assert_not_called()
+
+
+def test_listings_are_fixed_count_with_no_pr_lookup():
+	responses = {
+		"completed": [run()], "queued": [], "in_progress": [], "pending": [],
+	}
+
+	def fake_gh(args, **_kwargs):
+		assert args[0:4] == ["gh", "api", "-X", "GET"]
+		assert args[4] == f"repos/{HELPER.SOURCE_REPO}/actions/workflows/ci.yml/runs"
+		assert args[-2:] == ["-f", "per_page=100"]
+		status = args[6].split("=", 1)[1]
+		rows = responses[status]
+		return mock.Mock(returncode=0, stdout=json.dumps({"total_count": len(rows), "workflow_runs": rows}))
+
+	with mock.patch.object(HELPER.subprocess, "run", side_effect=fake_gh) as gh, \
+		mock.patch.object(HELPER, "current_pr_heads", return_value={11: SHA}) as fresh, \
+		mock.patch.object(HELPER, "rerun_failed_jobs", return_value=True) as post, contextlib.redirect_stdout(io.StringIO()):
+		HELPER.process([pr()], HELPER.SOURCE_REPO, True, False, "")
+	assert gh.call_count == 4
+	fresh.assert_called_once_with(HELPER.SOURCE_REPO)
+	post.assert_called_once()
+
+
+def test_missing_or_bad_association_does_not_authorize_post():
+	for completed in ([run(pull_requests=[])], [run(pull_requests=[{"number": 11, "head": {"sha": OLD_SHA}}])]):
+		lines, _, post = exercise(completed=completed)
+		assert "reason=no_attributable_run" in lines[0]
+		post.assert_not_called()
+
+
+def test_prior_retry_on_shared_head_blocks_another_pr():
+	lines, _, post = exercise(completed=[run(), run(number=12, attempt=2, run_id=124)])
+	assert "reason=already_retried" in lines[0]
+	post.assert_not_called()
+
+
+@pytest.mark.parametrize("payload", [
+	{"total_count": 101, "workflow_runs": []},
+	{"total_count": 1, "workflow_runs": []},
+	{"total_count": 1, "workflow_runs": [{"id": "unsafe"}]},
+	{"total_count": 99, "workflow_runs": [run()] * 100},
+])
+def test_malformed_or_truncated_listing_cannot_authorize_post(payload):
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=json.dumps(payload))):
+		with pytest.raises(ValueError):
+			HELPER.list_runs(HELPER.SOURCE_REPO, "completed")
+
+
+def test_full_completed_page_is_valid_but_full_active_page_is_not():
+	payload = {"total_count": 253, "workflow_runs": [run(run_id=index + 1) for index in range(100)]}
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=json.dumps(payload))):
+		assert len(HELPER.list_runs(HELPER.SOURCE_REPO, "completed")) == 100
+		with pytest.raises(ValueError, match="listing_truncated"):
+			HELPER.list_runs(HELPER.SOURCE_REPO, "queued")
+
+
+@pytest.mark.parametrize("path", [
+	".github/workflows/ci.yml",
+	".github/workflows/ci.yml@refs/heads/main",
+	".github/workflows/ci.yml@refs/pull/4713/merge",
+])
+def test_ci_run_path_accepts_ref_suffix(path):
+	response = {"total_count": 1, "workflow_runs": [run(path=path)]}
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=json.dumps(response))):
+		listed = HELPER.list_runs(HELPER.SOURCE_REPO, "completed")
+	lines, _, post = exercise(completed=listed)
+	assert "action=rerun" in lines[0]
+	post.assert_called_once()
+
+
+def test_invalid_unrelated_association_does_not_block_valid_candidate():
+	unrelated = run(number=12, run_id=120, pull_requests=[{"number": 12, "head": {"sha": None}}])
+	response = {"total_count": 2, "workflow_runs": [run(), unrelated]}
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=json.dumps(response))):
+		listed = HELPER.list_runs(HELPER.SOURCE_REPO, "completed")
+	lines, _, post = exercise(completed=listed)
+	assert "action=rerun" in lines[0]
+	post.assert_called_once()
+	lines, _, post = exercise(prs=[pr(number=12)], completed=listed)
+	assert "reason=invalid_association" in lines[0]
+	post.assert_not_called()
+
+
+def test_live_pr_listing_is_batched_and_must_be_valid():
+	payload = [[{"number": 11, "draft": False, "head": {"sha": SHA}},
+		{"number": 12, "draft": True, "head": {"sha": OLD_SHA}}], []]
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=json.dumps(payload))) as gh:
+		assert HELPER.current_pr_heads(HELPER.SOURCE_REPO) == {11: SHA}
+		assert gh.call_args.args[0][-1].endswith("/pulls?state=open&per_page=100")
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout="[]")):
+		with pytest.raises(ValueError, match="invalid_pr_listing"):
+			HELPER.current_pr_heads(HELPER.SOURCE_REPO)
+
+
+@pytest.mark.parametrize("body,skipped", [
+	("Intro\n[skip ai]\n", True),
+	("Add [skip ai] to the title to opt out.", False),
+	("```\n[skip ai]\n```", False),
+	("````md\n```\n[skip ai]\n````", False),
+	("~~~md\n[skip ai]\n~~~\n[skip ai]", True),
+])
+def test_body_opt_out_uses_standalone_unfenced_marker(body, skipped):
+	lines, _, post = exercise(prs=[pr(body=body)])
+	assert ("reason=skip_ai" in lines[0]) is skipped
+	if skipped:
+		post.assert_not_called()
+
+
+def test_refused_post_has_no_full_rerun_fallback():
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=1, stdout="", stderr="private")) as gh:
+		assert not HELPER.rerun_failed_jobs(HELPER.SOURCE_REPO, 123)
+		assert gh.call_count == 1
+		assert gh.call_args.args[0][-1].endswith("/rerun-failed-jobs")
+	lines, _, _ = exercise()
+	assert len(lines) == 1
+
+
+def test_only_http_201_counts_as_successful_post():
+	for code in ("HTTP/2.0 201 Created\r\n\r\n", "HTTP/2.0 204 No Content\r\n\r\n"):
+		with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=code)):
+			assert HELPER.rerun_failed_jobs(HELPER.SOURCE_REPO, 123) == ("201" in code)
+
+
+def test_post_refusal_is_logged_as_skip():
+	output = io.StringIO()
+	with mock.patch.object(HELPER, "list_runs", side_effect=lambda repo, status: [run(conclusion="startup_failure")] if status == "completed" else []), \
+		mock.patch.object(HELPER, "current_pr_heads", return_value={11: SHA}), \
+		mock.patch.object(HELPER, "rerun_failed_jobs", return_value=False) as post, contextlib.redirect_stdout(output):
+		HELPER.process([pr()], HELPER.SOURCE_REPO, True, False, "")
+	assert "action=skip reason=rerun_refused" in output.getvalue()
+	post.assert_called_once()
+
+
+def test_workflow_trusted_checkout_snapshot_and_permissions():
+	text = (ROOT / ".github/workflows/review_autofix_sweep.yml").read_text(encoding="utf-8")
+	assert "head_sha: .head.sha" in text
+	assert '"${RUNNER_TEMP}/ci-cancelled-pr-snapshot.json"' in text
+	assert "ref: ${{ github.event.repository.default_branch || github.ref_name }}" in text
+	assert "persist-credentials: false" in text
+	assert "python3 .ci-rerun-support/scripts/ci_cancelled_rerun.py" in text
+	assert "actions: write" in text
+	assert "checks: read" in text
+	assert "CI_CANCELLED_AUTO_RERUN_ENABLED: ${{ vars.CI_CANCELLED_AUTO_RERUN_ENABLED || 'true' }}" in text
+	assert "CI_ACTION_RESOLUTION_RERUN_ENABLED: ${{ vars.CI_ACTION_RESOLUTION_RERUN_ENABLED || 'true' }}" in text
+
+
+# --- Runner-shutdown recovery (issue #7109) -------------------------------
+
+def job(name, job_id, conclusion="failure"):
+	return {"id": job_id, "name": name, "status": "completed", "conclusion": conclusion,
+		"check_run_url": f"https://api.github.com/repos/{HELPER.SOURCE_REPO}/check-runs/{job_id + 1000}"}
+
+
+SHUTDOWN = "The runner has received a shutdown signal. This can happen when the runner service is stopped, or a manually started runner is canceled."
+
+
+def annotation(message, level="failure"):
+	return {"message": message, "annotation_level": level}
+
+
+def classify(jobs, annotations, enabled=True, checkout_enabled=True, abandoned_enabled=True):
+	"""Run the real classifier against stubbed jobs/annotations reads."""
+	def fake_annotations(repo, check_run_id):
+		value = annotations[check_run_id - 1000]
+		if isinstance(value, Exception):
+			raise value
+		return [item for item in value if item["annotation_level"] == "failure"]
+	jobs_mock = mock.Mock(side_effect=jobs) if isinstance(jobs, Exception) else mock.Mock(return_value=jobs)
+	with mock.patch.object(HELPER, "list_run_jobs", jobs_mock), \
+		mock.patch.object(HELPER, "failure_annotations", side_effect=fake_annotations) as reads:
+		return HELPER.classify_runner_shutdown(HELPER.SOURCE_REPO, 123, action_resolution_enabled=enabled,
+			checkout_fetch_enabled=checkout_enabled, abandoned_job_enabled=abandoned_enabled), reads
+
+
+def test_shutdown_failure_with_lint_aggregate_is_classified_shutdown():
+	jobs = [job("static-checks", 1), job("tests-hooks-and-orchestrator", 2, "success"), job("lint", 3)]
+	verdict, _ = classify(jobs, {
+		1: [annotation(SHUTDOWN), annotation("The operation was canceled.")],
+		3: [annotation("CI jobs that did not succeed: static-checks"),
+			annotation("Process completed with exit code 1.")],
+	})
+	assert verdict == "shutdown"
+
+
+def test_shutdown_classification_reruns_once_with_new_reason():
+	lines, _, post = exercise(completed=[run(conclusion="failure")], classify="shutdown")
+	assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=123 action=rerun reason=runner_shutdown"]
+	post.assert_called_once_with(HELPER.SOURCE_REPO, 123)
+
+
+def test_failure_without_signal_is_other_conclusion():
+	verdict, _ = classify([job("static-checks", 1)], {1: [annotation("Process completed with exit code 1.")]})
+	assert verdict == "genuine"
+	lines, _, post = exercise(completed=[run(conclusion="failure")], classify="genuine")
+	assert "action=skip reason=other_conclusion" in lines[0]
+	post.assert_not_called()
+
+
+def test_mixed_shutdown_and_genuine_failure_is_genuine():
+	jobs = [job("static-checks", 1), job("tests-heal-plan-and-validation", 2), job("lint", 3)]
+	verdict, _ = classify(jobs, {
+		1: [annotation(SHUTDOWN)],
+		2: [annotation("Process completed with exit code 1.")],
+		3: [annotation("CI jobs that did not succeed: static-checks, tests-heal-plan-and-validation")],
+	})
+	assert verdict == "genuine"
+
+
+def test_lint_naming_a_genuinely_failed_job_is_genuine():
+	jobs = [job("static-checks", 1), job("orchestrate-poll (1)", 2, "success"), job("lint", 3)]
+	verdict, _ = classify(jobs, {
+		1: [annotation(SHUTDOWN)],
+		3: [annotation("CI jobs that did not succeed: static-checks, orchestrate-poll")],
+	})
+	assert verdict == "genuine"
+
+
+def test_lint_with_unparseable_message_is_unverified_or_genuine():
+	jobs = [job("static-checks", 1), job("lint", 3)]
+	verdict, _ = classify(jobs, {1: [annotation(SHUTDOWN)], 3: [annotation("Process completed with exit code 1.")]})
+	assert verdict == "unverified"
+	verdict, _ = classify(jobs, {1: [annotation(SHUTDOWN)], 3: [annotation("something else")]})
+	assert verdict == "genuine"
+	lines, _, post = exercise(completed=[run(conclusion="failure")], classify="unverified")
+	assert "action=skip reason=runner_shutdown_unverified" in lines[0]
+	post.assert_not_called()
+
+
+def test_matrix_key_matches_matrix_job_names():
+	jobs = [job("orchestrate-poll (0)", 1, "cancelled"), job("orchestrate-poll (2)", 2), job("lint", 3)]
+	verdict, _ = classify(jobs, {
+		2: [annotation(SHUTDOWN)],
+		3: [annotation("CI jobs that did not succeed: orchestrate-poll")],
+	})
+	assert verdict == "shutdown"
+
+
+def test_successful_matrix_sibling_does_not_block_shutdown():
+	jobs = [job("orchestrate-poll (0)", 1, "success"), job("orchestrate-poll (2)", 2), job("lint", 3)]
+	verdict, _ = classify(jobs, {
+		2: [annotation(SHUTDOWN), annotation("The operation was canceled.")],
+		3: [annotation("CI jobs that did not succeed: orchestrate-poll")],
+	})
+	assert verdict == "shutdown"
+
+
+def test_shutdown_text_next_to_a_real_failure_is_genuine():
+	jobs = [job("static-checks", 1), job("lint", 3)]
+	verdict, _ = classify(jobs, {
+		1: [annotation(SHUTDOWN), annotation("Process completed with exit code 1.")],
+		3: [annotation("CI jobs that did not succeed: static-checks")],
+	})
+	assert verdict == "genuine"
+
+
+def test_lint_alone_without_shutdown_job_is_unverified_or_genuine():
+	jobs = [job("static-checks", 1, "cancelled"), job("lint", 3)]
+	verdict, _ = classify(jobs, {3: [annotation("CI jobs that did not succeed: static-checks")]},
+		abandoned_enabled=False)
+	assert verdict == "unverified"
+
+
+def test_second_attempt_never_classifies():
+	lines, _, post = exercise(completed=[run(conclusion="failure", attempt=2)], classify="shutdown")
+	assert "reason=already_retried" in lines[0]
+	exercise.classifier.assert_not_called()
+	post.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", ["jobs", "annotations"])
+def test_unreadable_reads_are_unverified(failure):
+	jobs = [job("static-checks", 1)]
+	if failure == "jobs":
+		verdict, reads = classify(ValueError("jobs_unreadable"), {})
+		reads.assert_not_called()
+	else:
+		verdict, _ = classify(jobs, {1: ValueError("annotations_unreadable")})
+	assert verdict == "unverified"
+
+
+def test_too_many_failed_jobs_is_unverified():
+	jobs = [job(f"job-{index}", index + 1) for index in range(HELPER.MAX_FAILED_JOBS_CLASSIFIED + 1)]
+	verdict, reads = classify(jobs, {})
+	assert verdict == "unverified"
+	reads.assert_not_called()
+
+
+def test_timed_out_job_is_genuine():
+	verdict, reads = classify([job("static-checks", 1), job("tests-hooks-and-orchestrator", 2, "timed_out")], {})
+	assert verdict == "genuine"
+	reads.assert_not_called()
+
+
+def test_per_tick_classification_budget():
+	count = HELPER.MAX_FAILURE_CLASSIFICATIONS_PER_TICK + 1
+	shas = [f"{index:040x}" for index in range(1, count + 1)]
+	prs = [pr(sha=sha, number=20 + index) for index, sha in enumerate(shas)]
+	completed = [run(sha=sha, number=20 + index, run_id=200 + index, conclusion="failure")
+		for index, sha in enumerate(shas)]
+	lines, _, post = exercise(prs=prs, completed=completed, classify="shutdown")
+	assert exercise.classifier.call_count == HELPER.MAX_FAILURE_CLASSIFICATIONS_PER_TICK
+	assert post.call_count == HELPER.MAX_FAILURE_CLASSIFICATIONS_PER_TICK
+	assert "action=skip reason=runner_shutdown_unverified" in lines[-1]
+
+
+def test_dry_run_and_active_run_short_circuit_classification():
+	lines, _, post = exercise(completed=[run(conclusion="failure")], dry_run=True, classify="shutdown")
+	assert "reason=dry_run" in lines[0]
+	exercise.classifier.assert_not_called()
+	lines, _, post = exercise(completed=[run(conclusion="failure")], active=[run(status="queued")], classify="shutdown")
+	assert "reason=active_run" in lines[0]
+	exercise.classifier.assert_not_called()
+	post.assert_not_called()
+
+
+@pytest.mark.parametrize("conclusion", ["cancelled", "startup_failure"])
+def test_cancelled_path_never_classifies(conclusion):
+	lines, _, post = exercise(completed=[run(conclusion=conclusion)], classify="genuine")
+	assert "reason=cancelled_ci" in lines[0]
+	exercise.classifier.assert_not_called()
+	post.assert_called_once()
+
+
+def test_list_run_jobs_parser():
+	good = {"total_count": 1, "jobs": [job("static-checks", 1)]}
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=json.dumps(good))) as gh:
+		assert HELPER.list_run_jobs(HELPER.SOURCE_REPO, 123) == good["jobs"]
+		assert gh.call_args.args[0][4] == f"repos/{HELPER.SOURCE_REPO}/actions/runs/123/attempts/1/jobs"
+	bad_payloads = [
+		"not json", "[]",
+		json.dumps({"total_count": 2, "jobs": [job("a", 1)]}),
+		json.dumps({"total_count": 100, "jobs": [job("a", index + 1) for index in range(100)]}),
+		json.dumps({"total_count": 1, "jobs": [dict(job("a", 1), status="in_progress")]}),
+		json.dumps({"total_count": 1, "jobs": [dict(job("a", 1), check_run_url="https://x/checks")]}),
+	]
+	for stdout in bad_payloads:
+		with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=stdout)):
+			with pytest.raises(ValueError, match="jobs_unreadable"):
+				HELPER.list_run_jobs(HELPER.SOURCE_REPO, 123)
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=1, stdout="")):
+		with pytest.raises(ValueError, match="jobs_unreadable"):
+			HELPER.list_run_jobs(HELPER.SOURCE_REPO, 123)
+
+
+def test_failure_annotations_parser():
+	payload = [annotation(SHUTDOWN), annotation("note", "notice")]
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=json.dumps(payload))) as gh:
+		assert HELPER.failure_annotations(HELPER.SOURCE_REPO, 1001) == [annotation(SHUTDOWN)]
+		assert gh.call_args.args[0][4] == f"repos/{HELPER.SOURCE_REPO}/check-runs/1001/annotations"
+	for stdout in ("not json", "{}", json.dumps([annotation("x")] * 100), json.dumps([{"message": 1}])):
+		with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=stdout)):
+			with pytest.raises(ValueError, match="annotations_unreadable"):
+				HELPER.failure_annotations(HELPER.SOURCE_REPO, 1001)
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=1, stdout="")):
+		with pytest.raises(ValueError, match="annotations_unreadable"):
+			HELPER.failure_annotations(HELPER.SOURCE_REPO, 1001)
+
+
+# --- Action-resolution recovery (issue #8471) ------------------------------
+
+ACTION_RESOLUTION = ("Unable to resolve action `actions/checkout@v5`, unable to find version `v5`. "
+	"Unable to resolve action `actions/setup-python@v6`, unable to find version `v6`.")
+
+
+def no_step_job(name, job_id, steps=None):
+	return dict(job(name, job_id), steps=[] if steps is None else steps)
+
+
+@pytest.mark.parametrize("message,steps", [
+	(ACTION_RESOLUTION, []),
+	("Unable to resolve action `actions/checkout@v5`, unable to find version `v5`", []),
+	(ACTION_RESOLUTION, [{"name": "Set up job", "conclusion": "skipped"}, {"name": "Run", "conclusion": None}]),
+])
+def test_action_resolution_job_is_eligible(message, steps):
+	jobs = [no_step_job("tests-hooks-and-orchestrator", 2, steps), job("static-checks", 1, "success")]
+	verdict, _ = classify(jobs, {2: [annotation(message)]})
+	assert verdict == "action_resolution"
+
+
+def test_action_resolution_verdict_reruns_once_with_new_reason():
+	lines, _, post = exercise(completed=[run(conclusion="failure")], classify="action_resolution")
+	assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=123 action=rerun reason=action_resolution"]
+	post.assert_called_once_with(HELPER.SOURCE_REPO, 123)
+	assert exercise.classifier.call_args.kwargs == {"action_resolution_enabled": True, "checkout_fetch_enabled": True,
+		"abandoned_job_enabled": True}
+
+
+def test_action_resolution_flag_off_falls_back_to_genuine():
+	jobs = [no_step_job("tests-hooks-and-orchestrator", 2)]
+	verdict, _ = classify(jobs, {2: [annotation(ACTION_RESOLUTION)]}, enabled=False)
+	assert verdict == "genuine"
+	output = io.StringIO()
+	with mock.patch.object(HELPER, "list_runs", side_effect=lambda repo, status: [run(conclusion="failure")] if status == "completed" else []), \
+		mock.patch.object(HELPER, "current_pr_heads", return_value={11: SHA}), \
+		mock.patch.object(HELPER, "classify_runner_shutdown", return_value="genuine") as classifier, \
+		mock.patch.object(HELPER, "rerun_failed_jobs") as post, contextlib.redirect_stdout(output):
+		HELPER.process([pr()], HELPER.SOURCE_REPO, True, False, "", action_resolution_enabled=False)
+	assert classifier.call_args.kwargs == {"action_resolution_enabled": False, "checkout_fetch_enabled": True,
+		"abandoned_job_enabled": True}
+	assert "action=skip reason=other_conclusion" in output.getvalue()
+	post.assert_not_called()
+
+
+@pytest.mark.parametrize("raw,expected,warned", [
+	(None, True, False), ("", True, False), ("true", True, False), ("TRUE", True, False),
+	("false", False, False), ("FALSE", False, False), ("yes", False, True),
+])
+def test_action_resolution_flag_parser(raw, expected, warned):
+	err = io.StringIO()
+	with contextlib.redirect_stderr(err):
+		assert HELPER.action_resolution_rerun_enabled(raw) is expected
+	assert ("::warning::CI_ACTION_RESOLUTION_RERUN_ENABLED" in err.getvalue()) is warned
+	if warned:
+		assert raw not in err.getvalue()
+
+
+def test_main_reads_action_resolution_flag(tmp_path, monkeypatch):
+	snapshot = tmp_path / "snapshot.json"
+	snapshot.write_text(json.dumps([pr()]), encoding="utf-8")
+	monkeypatch.setenv("CI_CANCELLED_PR_SNAPSHOT", str(snapshot))
+	monkeypatch.delenv("CI_CHECKOUT_FETCH_RERUN_ENABLED", raising=False)
+	monkeypatch.delenv("CI_ABANDONED_JOB_RERUN_ENABLED", raising=False)
+	for value, expected in ((None, True), ("false", False), ("bogus", False)):
+		if value is None:
+			monkeypatch.delenv("CI_ACTION_RESOLUTION_RERUN_ENABLED", raising=False)
+		else:
+			monkeypatch.setenv("CI_ACTION_RESOLUTION_RERUN_ENABLED", value)
+		with mock.patch.object(HELPER, "process") as processed, contextlib.redirect_stderr(io.StringIO()):
+			HELPER.main()
+		assert processed.call_args.kwargs == {"action_resolution_enabled": expected, "checkout_fetch_enabled": True,
+			"abandoned_job_enabled": True}
+
+
+@pytest.mark.parametrize("steps", [
+	[{"name": "Set up job", "conclusion": "success"}],
+	[{"name": "Set up job", "conclusion": "failure"}],
+	None,
+	"not-a-list",
+	["not-a-dict"],
+])
+def test_step_ran_or_unknown_steps_job_is_genuine(steps):
+	base = job("tests-hooks-and-orchestrator", 2)
+	failed = base if steps is None else dict(base, steps=steps)
+	verdict, _ = classify([failed], {2: [annotation(ACTION_RESOLUTION)]})
+	assert verdict == "genuine"
+
+
+@pytest.mark.parametrize("messages", [
+	[ACTION_RESOLUTION, "Process completed with exit code 1."],
+	[ACTION_RESOLUTION + " Also, something else"],
+	["Unable to resolve action `actions/checkout@v5`"],
+])
+def test_mixed_or_extended_action_resolution_annotations_are_genuine(messages):
+	jobs = [no_step_job("tests-hooks-and-orchestrator", 2)]
+	verdict, _ = classify(jobs, {2: [annotation(message) for message in messages]})
+	assert verdict == "genuine"
+
+
+def test_action_resolution_job_without_failure_annotation_is_genuine():
+	jobs = [no_step_job("tests-hooks-and-orchestrator", 2)]
+	verdict, _ = classify(jobs, {2: [annotation(ACTION_RESOLUTION, "warning")]})
+	assert verdict == "genuine"
+
+
+def test_shutdown_and_action_resolution_mix_still_reruns_as_shutdown():
+	jobs = [job("static-checks", 1), no_step_job("tests-hooks-and-orchestrator", 2), job("lint", 3)]
+	verdict, _ = classify(jobs, {
+		1: [annotation(SHUTDOWN), annotation("The operation was canceled.")],
+		2: [annotation(ACTION_RESOLUTION)],
+		3: [annotation("CI jobs that did not succeed: static-checks, tests-hooks-and-orchestrator"),
+			annotation("Process completed with exit code 1.")],
+	})
+	assert verdict == "shutdown"
+
+
+def test_lint_aggregate_naming_action_resolution_job():
+	jobs = [no_step_job("tests-hooks-and-orchestrator", 2), job("static-checks", 1, "success"), job("lint", 3)]
+	verdict, _ = classify(jobs, {
+		2: [annotation(ACTION_RESOLUTION)],
+		3: [annotation("CI jobs that did not succeed: tests-hooks-and-orchestrator"),
+			annotation("Process completed with exit code 1.")],
+	})
+	assert verdict == "action_resolution"
+	jobs = [no_step_job("tests-hooks-and-orchestrator", 2), job("static-checks", 1, "cancelled"),
+		job("orchestrate-poll (1)", 4, "success"), job("lint", 3)]
+	verdict, _ = classify(jobs, {
+		2: [annotation(ACTION_RESOLUTION)],
+		3: [annotation("CI jobs that did not succeed: tests-hooks-and-orchestrator, orchestrate-poll")],
+	})
+	assert verdict == "genuine"
+
+
+def test_lint_job_with_action_resolution_annotation_is_genuine():
+	jobs = [no_step_job("lint", 3)]
+	verdict, _ = classify(jobs, {3: [annotation(ACTION_RESOLUTION)]})
+	assert verdict == "genuine"
+
+
+def test_action_resolution_keeps_once_per_head_cap():
+	lines, _, post = exercise(completed=[run(conclusion="failure", attempt=2)], classify="action_resolution")
+	assert "reason=already_retried" in lines[0]
+	exercise.classifier.assert_not_called()
+	post.assert_not_called()
+
+
+# --- Checkout-fetch recovery (issue #8671) ---------------------------------
+
+CHECKOUT_8433 = [
+	"RPC failed; HTTP 408 curl 22 The requested URL returned error: 408",
+	"expected 'packfile'",
+	"RPC failed; HTTP 408 curl 22 The requested URL returned error: 408",
+	"expected 'packfile'",
+	"RPC failed; HTTP 408 curl 22 The requested URL returned error: 408",
+	"expected 'packfile'",
+	"The process '/usr/bin/git' failed with exit code 128",
+]
+
+
+def checkout_steps(checkout_name="Checkout repository", after=None):
+	steps = [
+		{"name": "Set up job", "conclusion": "success"},
+		{"name": checkout_name, "conclusion": "failure"},
+	]
+	steps += after if after is not None else [
+		{"name": "Set up Python", "conclusion": "skipped"},
+		{"name": "Run tests", "conclusion": "skipped"},
+		{"name": "Post Checkout repository", "conclusion": "success"},
+		{"name": "Complete job", "conclusion": "success"},
+	]
+	return steps
+
+
+def checkout_job(job_id=2, steps=None):
+	return dict(job("tests-hooks-and-orchestrator", job_id), steps=checkout_steps() if steps is None else steps)
+
+
+@pytest.mark.parametrize("checkout_name", ["Checkout repository", "Run actions/checkout@v5"])
+def test_checkout_fetch_job_is_eligible(checkout_name):
+	jobs = [checkout_job(steps=checkout_steps(checkout_name)), job("static-checks", 1, "success")]
+	verdict, reads = classify(jobs, {2: [annotation(message) for message in CHECKOUT_8433]})
+	assert verdict == "checkout_fetch"
+	assert reads.call_count == 1
+
+
+def test_checkout_fetch_verdict_reruns_once_with_new_reason():
+	lines, _, post = exercise(completed=[run(conclusion="failure")], classify="checkout_fetch")
+	assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=123 action=rerun reason=checkout_fetch"]
+	post.assert_called_once_with(HELPER.SOURCE_REPO, 123)
+
+
+def test_checkout_fetch_already_retried_is_not_rerun():
+	lines, _, post = exercise(completed=[run(conclusion="failure", attempt=2)], classify="checkout_fetch")
+	assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=123 action=skip reason=already_retried"]
+	post.assert_not_called()
+
+
+@pytest.mark.parametrize("steps", [
+	checkout_steps(after=[{"name": "Run tests", "conclusion": "failure"}]),
+	checkout_steps(after=[{"name": "Run tests", "conclusion": "success"}]),
+	checkout_steps(checkout_name="Run tests"),
+	[{"name": "Set up job", "conclusion": "success"}, {"name": "Prepare", "conclusion": "success"},
+		{"name": "Checkout repository", "conclusion": "failure"}],
+	[{"name": "Checkout repository", "conclusion": "failure"}, {"name": 5, "conclusion": "skipped"}],
+	[],
+	"not-a-list",
+])
+def test_checkout_fetch_requires_failure_at_checkout_before_any_step(steps):
+	verdict, _ = classify([checkout_job(steps=steps)], {2: [annotation(message) for message in CHECKOUT_8433]})
+	assert verdict == "genuine"
+
+
+@pytest.mark.parametrize("messages", [
+	CHECKOUT_8433 + ["Process completed with exit code 1."],
+	["The process '/usr/bin/git' failed with exit code 128"],
+	["early EOF", "expected 'packfile'"],
+	["RPC failed; HTTP 403 curl 22 The requested URL returned error: 403"],
+	[],
+])
+def test_checkout_fetch_annotations_must_all_be_fetch_errors(messages):
+	verdict, _ = classify([checkout_job()], {2: [annotation(message) for message in messages]})
+	assert verdict == "genuine"
+
+
+@pytest.mark.parametrize("messages", [
+	["fetch-pack: unexpected disconnect while reading sideband packet", "early EOF"],
+	["the remote end hung up unexpectedly", "The process '/usr/bin/git' failed with exit code 128"],
+	["RPC failed; HTTP 502 curl 22 The requested URL returned error: 502"],
+])
+def test_checkout_fetch_other_fetch_errors_are_eligible(messages):
+	verdict, _ = classify([checkout_job()], {2: [annotation(message) for message in messages]})
+	assert verdict == "checkout_fetch"
+
+
+def test_checkout_fetch_flag_off_is_genuine():
+	verdict, _ = classify([checkout_job()], {2: [annotation(message) for message in CHECKOUT_8433]},
+		checkout_enabled=False)
+	assert verdict == "genuine"
+
+
+def test_checkout_fetch_mixed_with_shutdown_and_lint_reruns():
+	jobs = [job("static-checks", 1), checkout_job(), job("lint", 3)]
+	verdict, _ = classify(jobs, {
+		1: [annotation(SHUTDOWN), annotation("The operation was canceled.")],
+		2: [annotation(message) for message in CHECKOUT_8433],
+		3: [annotation("CI jobs that did not succeed: static-checks, tests-hooks-and-orchestrator"),
+			annotation("Process completed with exit code 1.")],
+	})
+	assert verdict == "checkout_fetch"
+
+
+def test_checkout_fetch_next_to_genuine_failure_is_genuine():
+	jobs = [job("static-checks", 1), checkout_job()]
+	verdict, _ = classify(jobs, {
+		1: [annotation("Process completed with exit code 1.")],
+		2: [annotation(message) for message in CHECKOUT_8433],
+	})
+	assert verdict == "genuine"
+
+
+@pytest.mark.parametrize("raw,expected,warned", [
+	(None, True, False), ("", True, False), ("True", True, False),
+	("false", False, False), ("enable", False, True),
+])
+def test_checkout_fetch_flag_parser(raw, expected, warned):
+	err = io.StringIO()
+	with contextlib.redirect_stderr(err):
+		assert HELPER.checkout_fetch_rerun_enabled(raw) is expected
+	assert ("::warning::CI_CHECKOUT_FETCH_RERUN_ENABLED" in err.getvalue()) is warned
+	if warned:
+		assert raw not in err.getvalue()
+
+
+def test_main_reads_checkout_fetch_flag(tmp_path, monkeypatch):
+	snapshot = tmp_path / "snapshot.json"
+	snapshot.write_text(json.dumps([pr()]), encoding="utf-8")
+	monkeypatch.setenv("CI_CANCELLED_PR_SNAPSHOT", str(snapshot))
+	monkeypatch.delenv("CI_ACTION_RESOLUTION_RERUN_ENABLED", raising=False)
+	monkeypatch.delenv("CI_ABANDONED_JOB_RERUN_ENABLED", raising=False)
+	for value, expected in ((None, True), ("false", False), ("bogus", False)):
+		if value is None:
+			monkeypatch.delenv("CI_CHECKOUT_FETCH_RERUN_ENABLED", raising=False)
+		else:
+			monkeypatch.setenv("CI_CHECKOUT_FETCH_RERUN_ENABLED", value)
+		with mock.patch.object(HELPER, "process") as processed, contextlib.redirect_stderr(io.StringIO()):
+			HELPER.main()
+		assert processed.call_args.kwargs == {"action_resolution_enabled": True, "checkout_fetch_enabled": expected,
+			"abandoned_job_enabled": True}
+
+
+def test_workflow_forwards_checkout_fetch_flag():
+	text = (ROOT / ".github/workflows/review_autofix_sweep.yml").read_text(encoding="utf-8")
+	assert "CI_CHECKOUT_FETCH_RERUN_ENABLED: ${{ vars.CI_CHECKOUT_FETCH_RERUN_ENABLED || 'true' }}" in text
+
+
+# --- Abandoned-job recovery (issue #9146) ----------------------------------
+
+ABANDONED_LINT = [
+	annotation("CI jobs that did not succeed: static-checks, tests-hooks-and-orchestrator, "
+		"tests-release-and-log-analysis, orchestrate-poll"),
+	annotation("Process completed with exit code 1."),
+]
+CANCELED = "The operation was canceled."
+TIMEOUT = "The job running on runner GitHub Actions 12 has exceeded the maximum execution time of 30 minutes."
+
+
+def abandoned_jobs():
+	# Mirrors run 42673813893: four abandoned (reported cancelled), two green.
+	return [
+		job("static-checks", 1, "cancelled"),
+		job("tests-hooks-and-orchestrator", 2, "cancelled"),
+		job("tests-heal-plan-and-validation", 3, "success"),
+		job("tests-promote-stall-and-review", 4, "success"),
+		job("tests-release-and-log-analysis", 5, "cancelled"),
+		job("orchestrate-poll (0)", 6, "cancelled"),
+		job("lint", 9),
+	]
+
+
+@pytest.mark.parametrize("named_annotations", [
+	[],
+	[annotation(SHUTDOWN), annotation(CANCELED)],
+	[annotation(CANCELED)],
+])
+def test_lint_only_with_abandoned_named_jobs_is_abandoned(named_annotations):
+	annotations = {index: list(named_annotations) for index in (1, 2, 5, 6)}
+	annotations[9] = ABANDONED_LINT
+	verdict, reads = classify(abandoned_jobs(), annotations)
+	assert verdict == "abandoned"
+	assert reads.call_count == 1 + 4
+	assert {call.args[1] for call in reads.call_args_list} == {1009, 1001, 1002, 1005, 1006}
+
+
+@pytest.mark.parametrize("bad", [
+	[annotation(TIMEOUT), annotation(CANCELED)],
+	[annotation("Error: something broke")],
+	[annotation(SHUTDOWN), annotation("Process completed with exit code 1.")],
+])
+def test_abandoned_named_job_with_timeout_or_other_annotation_is_genuine(bad):
+	annotations = {index: [annotation(CANCELED)] for index in (1, 2, 5, 6)}
+	annotations[5] = bad
+	annotations[9] = ABANDONED_LINT
+	verdict, _ = classify(abandoned_jobs(), annotations)
+	assert verdict == "genuine"
+
+
+def test_abandoned_job_flag_off_keeps_unverified():
+	verdict, reads = classify(abandoned_jobs(), {9: ABANDONED_LINT}, abandoned_enabled=False)
+	assert verdict == "unverified"
+	assert [call.args[1] for call in reads.call_args_list] == [1009]
+
+
+def test_abandoned_over_read_cap_is_unverified():
+	count = HELPER.MAX_FAILED_JOBS_CLASSIFIED
+	jobs = [job(f"job-{index}", index, "cancelled") for index in range(1, count + 1)] + [job("lint", 99)]
+	names = ", ".join(f"job-{index}" for index in range(1, count + 1))
+	verdict, reads = classify(jobs, {99: [annotation(f"CI jobs that did not succeed: {names}")]})
+	assert verdict == "unverified"
+	assert [call.args[1] for call in reads.call_args_list] == [1099]
+
+
+def test_abandoned_within_read_cap_is_classified():
+	count = HELPER.MAX_FAILED_JOBS_CLASSIFIED - 1
+	jobs = [job(f"job-{index}", index, "cancelled") for index in range(1, count + 1)] + [job("lint", 99)]
+	names = ", ".join(f"job-{index}" for index in range(1, count + 1))
+	annotations = {index: [] for index in range(1, count + 1)}
+	annotations[99] = [annotation(f"CI jobs that did not succeed: {names}")]
+	verdict, reads = classify(jobs, annotations)
+	assert verdict == "abandoned"
+	assert reads.call_count == HELPER.MAX_FAILED_JOBS_CLASSIFIED
+
+
+def test_abandoned_unreadable_annotations_is_unverified():
+	annotations = {index: [annotation(CANCELED)] for index in (1, 2, 5, 6)}
+	annotations[2] = ValueError("annotations_unreadable")
+	annotations[9] = ABANDONED_LINT
+	verdict, _ = classify(abandoned_jobs(), annotations)
+	assert verdict == "unverified"
+
+
+def test_abandoned_named_jobs_are_deduplicated():
+	jobs = [job("orchestrate-poll (0)", 1, "cancelled"), job("lint", 9)]
+	verdict, reads = classify(jobs, {
+		1: [],
+		9: [annotation("CI jobs that did not succeed: orchestrate-poll, orchestrate-poll (0)")],
+	})
+	assert verdict == "abandoned"
+	assert [call.args[1] for call in reads.call_args_list] == [1009, 1001]
+
+
+def test_abandoned_does_not_change_mixed_shutdown_runs():
+	jobs = [job("static-checks", 1), job("orchestrate-poll (0)", 2, "cancelled"), job("lint", 3)]
+	verdict, reads = classify(jobs, {
+		1: [annotation(SHUTDOWN)],
+		3: [annotation("CI jobs that did not succeed: static-checks, orchestrate-poll")],
+	})
+	assert verdict == "shutdown"
+	assert reads.call_count == 2
+
+
+def test_abandoned_verdict_reruns_once_with_new_reason():
+	lines, _, post = exercise(completed=[run(conclusion="failure")], classify="abandoned")
+	assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=123 action=rerun reason=abandoned"]
+	post.assert_called_once_with(HELPER.SOURCE_REPO, 123)
+
+
+def test_abandoned_already_retried_is_not_rerun():
+	lines, _, post = exercise(completed=[run(conclusion="failure", attempt=2)], classify="abandoned")
+	assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=123 action=skip reason=already_retried"]
+	exercise.classifier.assert_not_called()
+	post.assert_not_called()
+
+
+@pytest.mark.parametrize("raw,expected,warned", [
+	(None, True, False), ("", True, False), ("true", True, False), ("TRUE", True, False),
+	("false", False, False), ("bogus", False, True),
+])
+def test_abandoned_job_flag_parser(raw, expected, warned):
+	err = io.StringIO()
+	with contextlib.redirect_stderr(err):
+		assert HELPER.abandoned_job_rerun_enabled(raw) is expected
+	assert ("::warning::CI_ABANDONED_JOB_RERUN_ENABLED" in err.getvalue()) is warned
+	if warned:
+		assert raw not in err.getvalue()
+
+
+def test_main_reads_abandoned_job_flag(tmp_path, monkeypatch):
+	snapshot = tmp_path / "snapshot.json"
+	snapshot.write_text(json.dumps([pr()]), encoding="utf-8")
+	monkeypatch.setenv("CI_CANCELLED_PR_SNAPSHOT", str(snapshot))
+	monkeypatch.delenv("CI_ACTION_RESOLUTION_RERUN_ENABLED", raising=False)
+	monkeypatch.delenv("CI_CHECKOUT_FETCH_RERUN_ENABLED", raising=False)
+	for value, expected in ((None, True), ("false", False), ("bogus", False)):
+		if value is None:
+			monkeypatch.delenv("CI_ABANDONED_JOB_RERUN_ENABLED", raising=False)
+		else:
+			monkeypatch.setenv("CI_ABANDONED_JOB_RERUN_ENABLED", value)
+		with mock.patch.object(HELPER, "process") as processed, contextlib.redirect_stderr(io.StringIO()):
+			HELPER.main()
+		assert processed.call_args.kwargs == {"action_resolution_enabled": True, "checkout_fetch_enabled": True,
+			"abandoned_job_enabled": expected}
+
+
+def test_process_forwards_abandoned_job_flag():
+	output = io.StringIO()
+	with mock.patch.object(HELPER, "list_runs", side_effect=lambda repo, status: [run(conclusion="failure")] if status == "completed" else []), \
+		mock.patch.object(HELPER, "current_pr_heads", return_value={11: SHA}), \
+		mock.patch.object(HELPER, "classify_runner_shutdown", return_value="unverified") as classifier, \
+		mock.patch.object(HELPER, "rerun_failed_jobs") as post, contextlib.redirect_stdout(output):
+		HELPER.process([pr()], HELPER.SOURCE_REPO, True, False, "", abandoned_job_enabled=False)
+	assert classifier.call_args.kwargs["abandoned_job_enabled"] is False
+	assert "action=skip reason=runner_shutdown_unverified" in output.getvalue()
+	post.assert_not_called()
+
+
+def test_workflow_forwards_abandoned_job_flag():
+	text = (ROOT / ".github/workflows/review_autofix_sweep.yml").read_text(encoding="utf-8")
+	assert "CI_ABANDONED_JOB_RERUN_ENABLED: ${{ vars.CI_ABANDONED_JOB_RERUN_ENABLED || 'true' }}" in text
+
+
+# --- Final-CI dispatch runs (final-ci-failure-ci-fix plan, Phase 1) ---------
+
+def final_run(sha=SHA, number=11, conclusion="failure", attempt=1, run_id=321, title=None, **extra):
+	return {
+		"id": run_id, "head_sha": sha, "pull_requests": [], "event": "workflow_dispatch",
+		"display_title": f"CI [pr:{number}]" if title is None else title, "status": "completed",
+		"conclusion": conclusion, "run_attempt": attempt, "created_at": "2026-11-17T06:00:00Z",
+		"path": ".github/workflows/ci.yml", "head_branch": "topic", **extra,
+	}
+
+
+@pytest.mark.parametrize("verdict,reason", [
+	("shutdown", "runner_shutdown"), ("action_resolution", "action_resolution"),
+	("checkout_fetch", "checkout_fetch"), ("abandoned", "abandoned"),
+])
+def test_final_ci_infra_failure_is_rerun_once_with_final_ci_flag(verdict, reason):
+	lines, _, post = exercise(completed=[final_run()], classify=verdict)
+	assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=321 action=rerun reason={reason} final_ci=true"]
+	post.assert_called_once_with(HELPER.SOURCE_REPO, 321)
+
+
+@pytest.mark.parametrize("verdict,reason", [("genuine", "other_conclusion"), ("unverified", "runner_shutdown_unverified")])
+def test_final_ci_genuine_or_unverified_failure_is_not_rerun(verdict, reason):
+	lines, _, post = exercise(completed=[final_run()], classify=verdict)
+	assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=321 action=skip reason={reason} final_ci=true"]
+	post.assert_not_called()
+
+
+def test_final_ci_cancelled_run_is_rerun_like_a_pr_run():
+	lines, _, post = exercise(completed=[final_run(conclusion="cancelled")])
+	assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=321 action=rerun reason=cancelled_ci final_ci=true"]
+	exercise.classifier.assert_not_called()
+	post.assert_called_once_with(HELPER.SOURCE_REPO, 321)
+
+
+@pytest.mark.parametrize("completed", [
+	[final_run(sha=OLD_SHA)],
+	[final_run(number=12)],
+	[final_run(title="CI [pr:11] [sync-quick]")],
+	[final_run(title="CI")],
+	[final_run(title="CI [pr:011]")],
+])
+def test_final_ci_run_must_name_the_pr_on_its_current_head(completed):
+	lines, _, post = exercise(completed=completed, classify="shutdown")
+	assert "reason=no_attributable_run" in lines[0]
+	post.assert_not_called()
+
+
+def test_final_ci_second_attempt_is_never_rerun():
+	lines, _, post = exercise(completed=[final_run(attempt=2)], classify="shutdown")
+	assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=321 action=skip reason=already_retried final_ci=true"]
+	exercise.classifier.assert_not_called()
+	post.assert_not_called()
+	# An older, re-attempted sync-quick or manual dispatch on the head does
+	# not use up the final run's re-run (the hand-back deferred to it).
+	for title in ("CI [pr:11] [sync-quick]", ""):
+		older = final_run(run_id=300, attempt=2, title=title, created_at="2026-11-17T05:00:00Z")
+		lines, _, post = exercise(completed=[final_run(), older], classify="shutdown")
+		assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=321 action=rerun reason=runner_shutdown final_ci=true"], title
+		post.assert_called_once_with(HELPER.SOURCE_REPO, 321)
+
+
+def test_newer_sync_quick_run_on_the_head_is_not_a_candidate():
+	newer = final_run(run_id=400, title="CI [pr:11] [sync-quick]", created_at="2026-11-17T07:00:00Z")
+	lines, _, post = exercise(completed=[final_run(), newer], classify="shutdown")
+	assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=400 action=skip reason=not_final_ci"]
+	post.assert_not_called()
+
+
+@pytest.mark.parametrize("title", ["CI [pr:11]", "CI [pr:11] [sync-quick]", "CI [pr:99]"])
+def test_active_dispatch_on_the_head_blocks(title):
+	active = final_run(run_id=500, title=title, status="in_progress", conclusion=None)
+	lines, _, post = exercise(completed=[final_run()], active=[active], classify="shutdown")
+	assert lines == [f"CI_CANCELLED_RERUN pr=11 head={SHA} run=321 action=skip reason=active_run final_ci=true"]
+	post.assert_not_called()
+
+
+def test_listing_accepts_dispatch_runs_only_with_a_title():
+	good = {"total_count": 2, "workflow_runs": [run(), final_run()]}
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=json.dumps(good))):
+		assert len(HELPER.list_runs(HELPER.SOURCE_REPO, "completed")) == 2
+	bad = {"total_count": 1, "workflow_runs": [{k: v for k, v in final_run().items() if k != "display_title"}]}
+	other_event = {"total_count": 1, "workflow_runs": [final_run(event="schedule")]}
+	for payload in (bad, other_event):
+		with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=json.dumps(payload))):
+			with pytest.raises(ValueError, match="invalid_listing"):
+				HELPER.list_runs(HELPER.SOURCE_REPO, "completed")
+
+
+def test_list_run_jobs_can_ignore_the_callers_running_job():
+	payload = {"total_count": 2, "jobs": [job("lint", 1), dict(job("final-ci-failed", 2), status="in_progress", conclusion=None)]}
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=json.dumps(payload))):
+		with pytest.raises(ValueError, match="jobs_unreadable"):
+			HELPER.list_run_jobs(HELPER.SOURCE_REPO, 123)
+		assert [item["name"] for item in HELPER.list_run_jobs(HELPER.SOURCE_REPO, 123, ("final-ci-failed",))] == ["lint"]
+	# The count must still match the whole page.
+	short = dict(payload, total_count=3)
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=json.dumps(short))):
+		with pytest.raises(ValueError, match="jobs_unreadable"):
+			HELPER.list_run_jobs(HELPER.SOURCE_REPO, 123, ("final-ci-failed",))
+
+
+def test_classify_run_cli_prints_the_verdict(monkeypatch):
+	output = io.StringIO()
+	with mock.patch.object(HELPER, "classify_runner_shutdown", return_value="shutdown") as classifier, \
+		contextlib.redirect_stdout(output):
+		assert HELPER.classify_run_cli(["--repo", "o/r", "--run-id", "77", "--ignore-job", "final-ci-failed"]) == 0
+	assert output.getvalue() == "shutdown\n"
+	assert classifier.call_args.args == ("o/r", 77)
+	assert classifier.call_args.kwargs["ignore_job_names"] == ("final-ci-failed",)
+	monkeypatch.setenv("CI_CHECKOUT_FETCH_RERUN_ENABLED", "false")
+	with mock.patch.object(HELPER, "classify_runner_shutdown", return_value="genuine") as classifier, \
+		contextlib.redirect_stdout(io.StringIO()):
+		HELPER.classify_run_cli(["--repo", "o/r", "--run-id", "77"])
+	assert classifier.call_args.kwargs["checkout_fetch_enabled"] is False
+	assert classifier.call_args.kwargs["ignore_job_names"] == ()
+
+
+@pytest.mark.parametrize("argv", [
+	[], ["--repo", "o/r"], ["--repo", "o/r", "--run-id", "0"], ["--repo", "../r", "--run-id", "7"],
+	["--repo", "o/r", "--run-id", "7", "--bogus"], ["--repo", "o/r", "--run-id", "7", "--ignore-job", "a;b"],
+])
+def test_classify_run_cli_bad_arguments_print_unverified(argv):
+	output = io.StringIO()
+	with mock.patch.object(HELPER, "classify_runner_shutdown") as classifier, contextlib.redirect_stdout(output):
+		assert HELPER.classify_run_cli(argv) == 0
+	assert output.getvalue() == "unverified\n"
+	classifier.assert_not_called()
+
+
+def test_classify_run_against_its_own_running_run():
+	jobs = [job("static-checks", 1), job("lint", 2),
+		dict(job("final-ci-failed", 3), status="in_progress", conclusion=None)]
+	reads = {1: [annotation(SHUTDOWN)], 2: [annotation("CI jobs that did not succeed: static-checks")]}
+	payload = json.dumps({"total_count": 3, "jobs": jobs})
+	def fake(argv, **_kwargs):
+		endpoint = argv[4]
+		if endpoint.endswith("/attempts/1/jobs"):
+			return mock.Mock(returncode=0, stdout=payload)
+		check_run = int(endpoint.split("/")[-2]) - 1000
+		return mock.Mock(returncode=0, stdout=json.dumps(reads[check_run]))
+	with mock.patch.object(HELPER.subprocess, "run", side_effect=fake):
+		assert HELPER.classify_runner_shutdown(HELPER.SOURCE_REPO, 9, ignore_job_names=("final-ci-failed",)) == "shutdown"
+		assert HELPER.classify_runner_shutdown(HELPER.SOURCE_REPO, 9) == "unverified"

@@ -1,0 +1,71 @@
+name: "Internal: AI Review & Autofix"
+# Dispatched runs carry their PR in the run name. review_autofix_sweep.yml
+# dispatches from the default branch only (issue #4618: never an unmerged
+# head ref), so the run's head_branch no longer identifies the PR; the sweep's
+# active-run snapshot and the poller's _has_active_autofix_run match this
+# exact name instead. Every other event gets an empty expression, which GitHub
+# replaces with its event-specific default (PR title / commit message).
+run-name: "${{ github.event_name == 'workflow_dispatch' && format('Internal: AI Review & Autofix [pr:{0}]', inputs.pr_number) || '' }}"
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, closed]
+  # No push trigger: a claude/** branch is reviewed once it has a PR, like
+  # every other branch. The no-PR claude-branch-review push route (commit
+  # comment with the consensus ledger) was removed in PR #6438.
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Pull request number to review (used by autofix re-trigger)"
+        required: true
+        type: string
+      allow_workflow_edits:
+        description: "Allow AI/editor changes to .github/workflows files"
+        required: false
+        default: true
+        type: boolean
+      force_rb_judge:
+        description: "Skip reviewers/editor and run only the review-blocked judge (stale security-hold sweep)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+  # Claude engine: the job's OIDC token for claude-pool-broker (plan Phase 4).
+  id-token: write
+
+# De-duplicate review runs on the same branch. claude/** branches use the
+# same full autofix loop as every other PR, so do not cancel in-progress PR
+# runs on autofix pushes; otherwise the [ai-autofix] synchronize event can
+# kill the run before its continuation dispatch.
+#
+# workflow_dispatch is keyed separately on inputs.pr_number, because on
+# manual dispatch head_ref is empty and ref_name is the workflow's ref
+# (typically the default branch) — without a PR-scoped key, manual
+# re-triggers for different PRs would cancel each other.
+concurrency:
+  group: ${{ github.event_name == 'workflow_dispatch' && format('internal-review-dispatch-pr-{0}', github.event.inputs.pr_number) || format('internal-review-{0}-{1}', github.event_name, github.head_ref || github.ref_name) }}
+  cancel-in-progress: false
+
+jobs:
+  review:
+    if: ${{ github.event.action != 'closed' || github.event.pull_request.merged == true }}
+    uses: shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@promote-candidate
+    with:
+      pr_number: ${{ github.event.inputs.pr_number || github.event.pull_request.number || '' }}
+      pr_is_draft: >-
+        ${{ github.event_name != 'workflow_dispatch' && github.event.pull_request.draft || false }}
+      pr_title: >-
+        ${{ github.event_name != 'workflow_dispatch' && format('{0}', github.event.pull_request.title) || '' }}
+      pr_body: >-
+        ${{ github.event_name != 'workflow_dispatch' && format('{0}', github.event.pull_request.body) || '' }}
+      pr_skip_ai: false
+      allow_workflow_edits: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.allow_workflow_edits == 'true') || (github.event_name != 'workflow_dispatch' && contains(' 1 true yes on ', format(' {0} ', vars.ALLOW_WORKFLOW_EDITS || 'true'))) }}
+      force_rb_judge: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.force_rb_judge == 'true' }}
+      # The PR's one full CI run starts when review finishes with a head
+      # (cut-ci-runner-time Phase 4; ci.yml has no pull_request trigger).
+      final_ci_workflow: ci.yml
+    secrets: inherit

@@ -1,0 +1,303 @@
+---
+# One runner job for the small per-PR checks (CLAUDE.md §33.A, fold before
+# you add). Until 2026-11-18 each check below ran in a workflow of its own
+# (`integration-pr-readiness.yml`, `lint-pr-body-auto-close.yml`), and each
+# took a runner slot for under a minute of work on every pull request event:
+# 1,192 and 1,015 runs in the eight days 2026-11-10 to 2026-11-17, each
+# waiting 20 to 70 minutes in the queue
+# (docs/plans/fold-per-pr-checks-plan.md).
+#
+# The checks are step groups of one job. Each group runs whether or not
+# the other failed. They share one job because they have the same trigger,
+# the same token and the same trust: all run the PR's own copy of the
+# scripts with `github.token` and no secret.
+#
+# Label events are not handled here. `integration-pr-readiness.yml` keeps
+# them, because a job skipped on a label event would report a newer
+# `skipped` `pr-body-lint` check-run and hide a failed lint on the same head
+# (see that file's header). This job therefore has no job-level `if:` and
+# never reports `skipped`.
+#
+# ---------------------------------------------------------------------------
+# Step group "PR-body lint"
+# P1 from docs/postmortems/2026-05-18-project-2734-stall.md.
+#
+# Enforces CLAUDE.md §19 (and the mirror in unattended_system_instructions.md)
+# on the merge path this repo actually uses: squash merge. On squash-merge,
+# GitHub uses the PR title + body for the squash commit message and
+# auto-closes referenced issues, which kills the orchestrator's wave-by-wave
+# dispatch (poller filters tracking issues by `--state open`).
+#
+# The squash commit's body is not always the PR body. This repository's
+# squash setting is "default to commit messages", and the merge train runs
+# `gh pr merge --squash` without `--body`, so the PR's commit messages are
+# copied into the commit that lands on the default branch. Merge commit
+# ae99a17d202 (PR #7190) closed tracking issue #6664 that way, through a
+# commit message the body-only check never saw. For PRs into the default
+# branch the job therefore also lints every commit message on the PR.
+# PRs into `stable` skip that part: GitHub only closes issues from commits
+# on the default branch, and a promotion PR carries all of main's history.
+#
+# This was the layer-3 failure mode in project #2734: PR #2760 used
+# `Fixes #2734` in its body → GitHub auto-closed #2734 → orchestrator
+# stopped dispatching Waves 2-7 → 7 of 9 sub-issues never shipped code.
+# §19 was added (PR #2776) as a prose reaction to this incident; this
+# step group turns the prose into an enforced check. Its verdict is the job
+# result, and it is the only verdict the job result carries.
+#
+# ---------------------------------------------------------------------------
+# Step group "Integration PR readiness"
+# P3 from docs/postmortems/2026-05-18-project-2734-stall.md.
+#
+# Orchestrator integration PRs (head ref `orchestrator/project-<N>`) are
+# opened eagerly by the self-healing pipeline so main <-> integration
+# drift can be resolved continuously rather than only at finalize time.
+# Without a readiness gate, any human or another Claude session can
+# manually squash-merge a partially-complete integration PR — exactly
+# what happened with PR #2750 (only Wave 1 shipped; Waves 2-7 had
+# `status=not_created` and `github_issue=null` at merge time).
+#
+# This step group posts a commit status
+# `orchestrator/integration-pr-not-ready` on every change to such a PR
+# (every event of this workflow except `edited`). The
+# status is failure while any sub-issue checkbox in the tracking issue body
+# is unchecked, and success when all are ticked. An auditable escape valve —
+# applying the `ai:override-incomplete-merge` label to the PR — flips the
+# status to success without ticking the boxes, for the rare case where the
+# operator explicitly chooses to merge with de-scoped phases
+# (`integration-pr-readiness.yml` re-evaluates on that label event).
+#
+# Its verdict is that commit status, never the job result. The steps are
+# `continue-on-error`: when the script cannot read the tracking issue or
+# cannot post the status (a fork PR's token is read-only) it exits non-zero,
+# and that must not turn the `pr-body-lint` check-run red, which the merge
+# gate reads as a §19 violation. Before the fold such a failure failed only
+# the `readiness` job, which no gate reads. A missing or `error` status
+# still blocks wherever the status is required.
+#
+# Configure this status as a required check in repository branch
+# protection settings so the PR cannot be merged while the status is
+# failing.
+#
+# ---------------------------------------------------------------------------
+# Step group "GitHub API calls inside loops" (issue #9929)
+# CLAUDE.md §15 (GitHub API call hygiene) enforcement, warning only.
+#
+# `scripts/lint_gh_calls_in_loops.py` diffs the PR merge commit against its
+# first parent with the local git and emits a `::warning` for each line the
+# PR adds where a GitHub API call (`gh api`, `gh pr view`, `_safe_gh_jq`,
+# `gh_retry`, `curl ... api.github.com`, ...) sits inside a shell
+# `for` / `while` / `until` body, in `*.sh` / `*.bash` files and workflow
+# `run:` blocks. Calls through a batched or cached helper, and lines
+# annotated `# gh-loop-ok: <reason>`, do not warn. It makes no GitHub API
+# call, takes no token, always exits 0 and is `continue-on-error`, so it
+# never fails `pr-body-lint`. It logs `GH_LOOP_CALL_LINT warnings=<n>
+# files=<n>`, or `GH_LOOP_CALL_LINT outcome=skipped reason=<token>` when
+# the base commit cannot be read.
+name: PR checks
+
+"on":
+  pull_request:
+    # `edited` catches PR title/body changes after creation;
+    # `synchronize` catches new commits pushed to the PR head; `reopened` and
+    # `ready_for_review` ensure the checks re-run when a draft PR
+    # transitions to ready-for-review (which is when the merge button
+    # becomes available).
+    # No `labeled` / `unlabeled` (see the header) and no `paths:` filter:
+    # both verdicts are needed on every PR. The readiness steps skip
+    # `edited`.
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+    branches: [main, stable]
+
+permissions:
+  # Read-only on issues so the lint can resolve labels of referenced
+  # issues and the readiness script can read the tracking issue.
+  # `statuses: write` posts `orchestrator/integration-pr-not-ready`. A
+  # `pull_request` run uses the PR's own copy of this file, so a
+  # same-repository PR could already use that permission through the
+  # readiness workflow, and a fork PR's token is read-only whatever is
+  # written here.
+  contents: read
+  issues: read
+  pull-requests: read
+  statuses: write
+
+jobs:
+  # Job id `pr-body-lint`, not `lint` (renamed 2026-11-18) and not a name of
+  # the folded workflow. The job id is the check-run name. The `main` ruleset
+  # requires a check named `lint`, meaning the aggregate `lint` job of the
+  # full CI (.github/workflows/ci.yml); while the PR-body lint shared that
+  # name, GitHub accepted its success in place of CI's (PR #9570: this check
+  # passed about six hours before CI's `lint`). The job keeps the name it had
+  # before the fold because `pr-body-lint` is in
+  # ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT (scripts/pr_checks_lib.sh): a
+  # failed lint step fails this job and blocks the pipeline's merges, and a
+  # pull request opened before the fold already reports the same name. Do not
+  # add a job-level `name:` (it would change the check-run name) or a
+  # job-level `if:` (a skipped job reports `skipped`, which reads as passed).
+  pr-body-lint:
+    runs-on: ubuntu-latest
+    # Two former 5-minute jobs whose real work is under a minute each.
+    timeout-minutes: 10
+    # No `concurrency:` group, like the two workflows this job replaces
+    # (CLAUDE.md §33.A asks for one; these are the reasons it is left out):
+    # - With `cancel-in-progress: false`, a job for a superseded head that
+    #   is still waiting for a runner holds the group, so the current head's
+    #   `pr-body-lint` would wait through two runner queues instead of one.
+    # - With `cancel-in-progress: true`, the job would be cancelled while it
+    #   writes a commit status.
+    # - Either way a newer `edited` run could replace a waiting
+    #   `synchronize` run, so every run would have to refresh the readiness
+    #   status, from a label snapshot that may be older than a label change
+    #   `integration-pr-readiness.yml` has already acted on.
+    steps:
+      - name: Checkout repository
+        id: checkout
+        uses: actions/checkout@v5
+        with:
+          # Only the lint and readiness scripts are needed. Neither runs
+          # tooling that needs history: the PR's commits are read via the
+          # GH API below (no local git log needed). The §15 loop-call lint
+          # deepens the merge commit to depth 2 itself, so this stays at 1.
+          fetch-depth: 1
+
+      # Every step below starts its `if:` with `!cancelled()`, so a failed
+      # step in one group does not skip the other group. Within a group a
+      # step still waits for the steps it depends on, as it did when the
+      # group was a job of its own.
+
+      # ---- Step group: PR-body lint (CLAUDE.md §19) ----
+
+      - name: Write PR title and body to file
+        id: pr_body_file
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          # Squash merge uses the PR title + body as the merge-commit
+          # message. Write the exact merge artifact shape (title, blank
+          # line, body) to disk so the lint script validates the same
+          # text GitHub will evaluate for auto-close keywords.
+          mkdir -p /tmp/pr-body-lint
+          printf '%s\n\n%s' "${PR_TITLE:-}" "${PR_BODY:-}" > /tmp/pr-body-lint/body.txt
+
+      - name: Write PR commit messages to file
+        id: pr_commit_messages
+        if: >-
+          ${{ !cancelled() && steps.pr_body_file.outcome == 'success'
+          && github.event.pull_request.base.ref == github.event.repository.default_branch }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_COMMIT_COUNT: ${{ github.event.pull_request.commits }}
+        run: |
+          set -euo pipefail
+          # CLAUDE.md §15: no other call in this workflow reads the PR's
+          # commits; this is one paginated REST read (100 commits per page).
+          # The endpoint returns at most 250 commits, the same list GitHub
+          # builds the squash message from. Commit messages are written
+          # oldest first, NUL-separated, as the lint script expects. A
+          # failed read fails the step, so the check never passes unread.
+          gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/commits?per_page=100" \
+            --paginate --jq '.[].commit.message | @json' > /tmp/pr-body-lint/commits.jsonl
+          python3 -I -c '
+          import json, sys
+          src, dst = sys.argv[1], sys.argv[2]
+          with open(src, encoding="utf-8") as fh:
+              messages = [json.loads(line) for line in fh if line.strip()]
+          with open(dst, "w", encoding="utf-8") as out:
+              out.write("\0".join(messages))
+          print(f"Collected {len(messages)} commit message(s).")
+          ' /tmp/pr-body-lint/commits.jsonl /tmp/pr-body-lint/commits.bin
+          if [ "${PR_COMMIT_COUNT:-0}" -gt 250 ]; then
+            echo "::warning::PR #${PR_NUMBER} has ${PR_COMMIT_COUNT} commits; GitHub lists only the first 250, so later commit messages are not linted."
+          fi
+
+      - name: Run auto-close keyword lint
+        # Not after a failed commit read: the lint must not report a clean
+        # body while the commit messages are unread. `skipped` (a PR into
+        # `stable`) is fine.
+        if: >-
+          ${{ !cancelled() && steps.pr_body_file.outcome == 'success'
+          && steps.pr_commit_messages.outcome != 'failure' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # This required check validates the text that lands on the
+          # default branch: PR title + body, plus the PR's commit messages
+          # when the previous step collected them.
+          commit_args=()
+          if [ -f /tmp/pr-body-lint/commits.bin ]; then
+            commit_args=(--commit-messages-file /tmp/pr-body-lint/commits.bin)
+          fi
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/lint_pr_body_auto_close.py \
+            --pr-body-file /tmp/pr-body-lint/body.txt \
+            "${commit_args[@]}" \
+            --repo "${GITHUB_REPOSITORY}"
+
+      # ---- Step group: Integration PR readiness ----
+      # `continue-on-error` on both steps: see the header. The verdict is
+      # the commit status, and a failure here must not fail `pr-body-lint`.
+      # Not on `edited`: a title or body edit changes nothing the readiness
+      # script reads (head ref, labels, tracking issue), the status already
+      # on the head stands, and the readiness check did not run on `edited`
+      # before the fold either.
+
+      - name: Write PR labels to file
+        id: pr_labels_file
+        if: >-
+          ${{ !cancelled() && steps.checkout.outcome == 'success'
+          && github.event.action != 'edited' }}
+        continue-on-error: true
+        env:
+          PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels) }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/integration-pr-readiness
+          # Extract label names from the event payload; one per line.
+          printf '%s' "${PR_LABELS_JSON}" \
+            | python3 -c "import json,sys; print('\n'.join(l['name'] for l in json.load(sys.stdin)))" \
+            > /tmp/integration-pr-readiness/labels.txt
+
+      - name: Check integration PR readiness and post status
+        if: ${{ !cancelled() && steps.pr_labels_file.outcome == 'success' }}
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_integration_pr_readiness.py \
+            --head-ref "${HEAD_REF}" \
+            --head-sha "${HEAD_SHA}" \
+            --pr-labels-file /tmp/integration-pr-readiness/labels.txt \
+            --repo "${REPO}"
+
+      # ---- Step group: GitHub API calls inside loops (CLAUDE.md §15, warning only) ----
+      # See the header. Runs on `edited` too: an `edited` run reports a newer
+      # `pr-body-lint` check-run on the same head, which would otherwise lose
+      # the warning annotations. No `env:` and no token: zero API calls.
+
+      - name: Lint new GitHub API calls inside loops (CLAUDE.md §15, warning only)
+        id: gh_loop_call_lint
+        if: ${{ !cancelled() && steps.checkout.outcome == 'success' }}
+        continue-on-error: true
+        # A step timeout is covered by `continue-on-error`; the job's is not.
+        timeout-minutes: 5
+        run: |
+          set -uo pipefail
+          # CLAUDE.md §15: zero API calls. The base is the merge commit's first
+          # parent, fetched over git like ci.yml's agents.md direct-edit check.
+          head_commit="$(git rev-parse HEAD)"
+          # `continue-on-error` does not cover the job's 10-minute timeout, so
+          # a stalled fetch is cut off here instead of failing pr-body-lint.
+          if ! timeout 90 git fetch --no-tags --depth=2 origin "${head_commit}"; then
+            echo "::warning::could not deepen the merge commit; the lint reports outcome=skipped"
+          fi
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/lint_gh_calls_in_loops.py \
+            --base "${head_commit}^1" --head "${head_commit}" || true

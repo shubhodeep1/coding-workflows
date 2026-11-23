@@ -1,0 +1,722 @@
+#!/usr/bin/env bash
+# self_heal_validation.sh — attempt to self-heal a validation failure by
+# patching one of the four validation prompt files based on the current
+# failure context, then signalling validate_process.sh to re-run.
+#
+# This script is invoked ONLY by scripts/validate_process.sh, which passes
+# the failure context via env vars and dispatches on this script's exit
+# code. The self-heal decision JSON and the resulting patch are written
+# to files under ${RUNTIME_DIR} (validate_self_heal_decision.json and
+# validate_self_heal_patch.diff) for diagnostic/artifact purposes only;
+# the caller does not read those files. The accumulated-patches JSONL
+# ledger at ${SELF_HEAL_PATCHES_FILE} IS consumed by the caller later,
+# in dispatch_self_heal_improvements(), to build the repository_dispatch
+# payload. Callers must check the exit code:
+#   0  — patch produced and applied; caller should re-exec validate_process.sh
+#   1  — no patch produced; caller should fall through to normal hard-fail
+#   2  — hard error inside self-heal (LLM failure, malformed decision, budget
+#        exhausted, etc.); caller should fall through to normal hard-fail
+#
+# Required env vars (set by validate_process.sh):
+#   RUNTIME_DIR                — scratch dir shared with the caller
+#   SELF_HEAL_ATTEMPT          — current attempt count (0-based, pre-increment)
+#   MAX_SELF_HEAL_ATTEMPTS     — budget for this validate_process.sh invocation
+#   SELF_HEAL_PATCHES_FILE     — JSONL ledger of accumulated patches
+#   SELF_HEAL_FAILURE_PHASE    — string tag ("generate"|"preflight"|"render"|"canary"|"diagnose"|"runtime"|"discover")
+#   MODEL_EDITOR               — OpenRouter model slug for the self-heal LLM call
+#   OPENROUTER_API_KEY         — for codex exec
+# Optional:
+#   VALIDATION_RESULT_FILE, DIAGNOSE_RESULT_FILE, VALIDATION_LOG_TAIL_FILE,
+#   CONTAINER_LOG_TAIL_FILE, VALIDATE_HINTS_FILE, STATIC_CONTEXT_FILE,
+#   DISCOVER_OUTPUT_FILE, GENERATE_OUTPUT_FILE, DIAGNOSE_OUTPUT_FILE
+
+set -euo pipefail
+
+: "${RUNTIME_DIR:?RUNTIME_DIR is required}"
+: "${SELF_HEAL_ATTEMPT:?SELF_HEAL_ATTEMPT is required}"
+: "${MAX_SELF_HEAL_ATTEMPTS:?MAX_SELF_HEAL_ATTEMPTS is required}"
+: "${SELF_HEAL_PATCHES_FILE:?SELF_HEAL_PATCHES_FILE is required}"
+: "${SELF_HEAL_FAILURE_PHASE:=unknown}"
+: "${MODEL_EDITOR:?MODEL_EDITOR is required}"
+: "${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}"
+
+command -v jq >/dev/null 2>&1 || { echo "self-heal: jq is required" >&2; exit 2; }
+command -v patch >/dev/null 2>&1 || { echo "self-heal: patch is required" >&2; exit 2; }
+
+# Source gh_helpers.sh for sanitize_codex_prompt_file (best-effort —
+# the call site below guards via `command -v`).
+if [ -f "scripts/gh_helpers.sh" ]; then
+	# shellcheck source=gh_helpers.sh
+	# shellcheck disable=SC1091
+	source scripts/gh_helpers.sh 2>/dev/null || true
+fi
+
+SEMBLE_HELPERS_AVAILABLE="false"
+# shellcheck source=semble_helpers.sh
+if [ -f "scripts/semble_helpers.sh" ]; then
+	# shellcheck disable=SC1091
+	if source scripts/semble_helpers.sh; then
+		if type semble_query_block >/dev/null 2>&1; then
+			SEMBLE_HELPERS_AVAILABLE="true"
+		else
+			echo "self-heal: semble_helpers.sh did not expose semble_query_block; continuing without Semble context" >&2
+		fi
+	else
+		echo "self-heal: failed to source scripts/semble_helpers.sh; continuing without Semble context" >&2
+	fi
+fi
+
+SELF_HEAL_SEMBLE_MAX_CHUNKS="${SELF_HEAL_SEMBLE_MAX_CHUNKS:-3}"
+if ! [[ "${SELF_HEAL_SEMBLE_MAX_CHUNKS}" =~ ^[0-9]+$ ]] || [ "${SELF_HEAL_SEMBLE_MAX_CHUNKS}" -lt 1 ]; then
+	echo "self-heal: SELF_HEAL_SEMBLE_MAX_CHUNKS must be a positive integer (got: ${SELF_HEAL_SEMBLE_MAX_CHUNKS}); defaulting to 3" >&2
+	SELF_HEAL_SEMBLE_MAX_CHUNKS="3"
+fi
+
+# Budget check — if we're already at or past the budget, bail out immediately.
+if [ "${SELF_HEAL_ATTEMPT}" -ge "${MAX_SELF_HEAL_ATTEMPTS}" ]; then
+	echo "self-heal: budget exhausted (attempt=${SELF_HEAL_ATTEMPT} max=${MAX_SELF_HEAL_ATTEMPTS})" >&2
+	exit 2
+fi
+
+SELF_HEAL_PROMPT_FILE="${RUNTIME_DIR}/validate_self_heal_prompt.txt"
+SELF_HEAL_OUTPUT_FILE="${RUNTIME_DIR}/validate_self_heal_output.txt"
+SELF_HEAL_LOG_FILE="${RUNTIME_DIR}/validate_self_heal.log"
+SELF_HEAL_DECISION_FILE="${RUNTIME_DIR}/validate_self_heal_decision.json"
+SELF_HEAL_PATCH_TMP="${RUNTIME_DIR}/validate_self_heal_patch.diff"
+SELF_HEAL_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CODEX_HEARTBEAT_HELPER="${SELF_HEAL_SCRIPT_DIR}/codex_heartbeat.sh"
+CODEX_STALL_GUARD_HELPER="${SELF_HEAL_SCRIPT_DIR}/codex_stall_guard.sh"
+LEDGER_SUBSTATE_HELPER=""
+for _ledger_candidate in \
+	"${SELF_HEAL_SCRIPT_DIR}/ledger_emit_substate.sh" \
+	"scripts/ledger_emit_substate.sh" \
+	".codex-workflow-src/scripts/ledger_emit_substate.sh"; do
+	if [ -f "${_ledger_candidate}" ]; then
+		LEDGER_SUBSTATE_HELPER="${_ledger_candidate}"
+		break
+	fi
+done
+SELF_HEAL_STALL_STATE=""
+
+emit_self_heal_substate()
+{
+	local event_or_substate="$1"
+	local llm_attempt="$2"
+	local tokens_log_file="${3:-}"
+	local lane="self-heal-attempt-$((SELF_HEAL_ATTEMPT + 1))"
+	local issue_number=""
+	local args=()
+
+	if [[ "${TRACKING_ISSUE:-}" =~ ^[0-9]+$ ]] && [ "${TRACKING_ISSUE}" -gt 0 ]; then
+		issue_number="${TRACKING_ISSUE}"
+	fi
+
+	[ -f "${LEDGER_SUBSTATE_HELPER:-}" ] || return 0
+
+	args=(
+		--run-id "${GITHUB_RUN_ID:-}"
+		--workflow "validate"
+		--phase "validate_self_heal"
+		--mode "self_heal"
+		--attempt "${llm_attempt}"
+		--lane "${lane}"
+		--model "${MODEL_EDITOR:-}"
+		--issue-number "${issue_number}"
+		--actor "${GITHUB_ACTOR:-codex-bot}"
+		--repo-root "$(pwd)"
+	)
+	case "${event_or_substate}" in
+		codex_stall_observed|codex_stall_killed)
+			args+=(--event-type "${event_or_substate}")
+			;;
+		*)
+			args+=(--substate "${event_or_substate}")
+			;;
+	esac
+	if [ -n "${tokens_log_file}" ]; then
+		args+=(--tokens-log-file "${tokens_log_file}")
+	fi
+
+	bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" || true
+}
+
+read_codex_stall_guard_state()
+{
+	local status_file="$1"
+	local state=""
+
+	[ -s "${status_file}" ] || return 1
+	state="$(sed -n 's/^state=//p' "${status_file}" | head -n 1)"
+	case "${state}" in
+		observed|killed)
+			printf '%s\n' "${state}"
+			return 0
+			;;
+	esac
+
+	return 1
+}
+
+ALLOWED_TARGETS=(
+	"mode-validate-discover.txt"
+	"mode-validate-generate.txt"
+	"mode-validate-fix-harness.txt"
+	"mode-validate-diagnose.txt"
+)
+
+is_allowed_target()
+{
+	local needle="$1"
+	local candidate
+	for candidate in "${ALLOWED_TARGETS[@]}"; do
+		if [ "${needle}" = "${candidate}" ]; then
+			return 0
+		fi
+	done
+	return 1
+}
+
+_cat_if_exists()
+{
+	local label="$1"
+	local path="${2:-}"
+	if [ -n "${path}" ] && [ -s "${path}" ]; then
+		echo "=== ${label} ==="
+		cat "${path}"
+		echo
+	fi
+}
+
+_tail_if_exists()
+{
+	local label="$1"
+	local path="${2:-}"
+	local n="${3:-200}"
+	if [ -n "${path}" ] && [ -s "${path}" ]; then
+		echo "=== ${label} (tail ${n}) ==="
+		tail -n "${n}" "${path}"
+		echo
+	fi
+}
+
+build_self_heal_semble_query()
+{
+	python3 - \
+		"${SELF_HEAL_FAILURE_PHASE}" \
+		"${VALIDATION_RESULT_FILE:-}" \
+		"${DIAGNOSE_RESULT_FILE:-}" \
+		"${VALIDATION_LOG_TAIL_FILE:-}" \
+		"${CONTAINER_LOG_TAIL_FILE:-}" \
+		"${VALIDATE_HINTS_FILE:-}" \
+		"${DISCOVER_OUTPUT_FILE:-}" \
+		"${GENERATE_OUTPUT_FILE:-}" \
+		"${DIAGNOSE_OUTPUT_FILE:-}" <<'PY'
+import pathlib
+import re
+import sys
+
+phase = sys.argv[1].strip() or "unknown"
+sources = sys.argv[2:]
+path_tokens = []
+interesting_lines = []
+
+path_re = re.compile(
+    r"(?<![A-Za-z0-9_./-])(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\."
+    r"(?:py|sh|ya?ml|json|toml|js|jsx|ts|tsx|go|rs|java|kt|rb|php|sql|md|txt)"
+    r"(?![A-Za-z0-9_./-])"
+)
+special_file_re = re.compile(r"\b(?:Dockerfile(?:\.[A-Za-z0-9_.-]+)?|Makefile|Procfile)\b")
+
+def append_unique(bucket, value, *, limit):
+    value = value.strip()
+    if not value or value in bucket or len(bucket) >= limit:
+        return
+    bucket.append(value)
+
+for source in sources:
+    if not source:
+        continue
+    candidate = pathlib.Path(source)
+    if candidate.is_file():
+        try:
+            text = candidate.read_text(encoding="utf-8", errors="replace")[:14000]
+        except OSError:
+            continue
+    else:
+        text = source[:14000]
+    if not text.strip():
+        continue
+
+    for token in re.findall(r"`([^`\n]+)`", text):
+        token = token.strip()
+        if "/" in token or "." in pathlib.Path(token).name or token in {"Dockerfile", "Makefile", "Procfile"}:
+            append_unique(path_tokens, token, limit=10)
+
+    for token in path_re.findall(text):
+        append_unique(path_tokens, token, limit=10)
+    for token in special_file_re.findall(text):
+        append_unique(path_tokens, token, limit=10)
+
+    for raw_line in text.splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if not line or line.startswith(("===", "---", "```", "#")):
+            continue
+        if len(line) < 8:
+            continue
+        append_unique(interesting_lines, line[:180], limit=8)
+
+query_parts = [f"validation self-heal {phase} prompt context"]
+if path_tokens:
+    query_parts.append("files " + " ".join(path_tokens[:8]))
+if interesting_lines:
+    query_parts.extend(interesting_lines[:6])
+
+query = " ; ".join(part for part in query_parts if part)
+query = query[:700].strip(" ;")
+if query:
+    print(query)
+PY
+}
+
+append_self_heal_semble_context()
+{
+	local query_text="${1:-}"
+
+	if [ "${SEMBLE_HELPERS_AVAILABLE}" != "true" ] || [ -z "${query_text}" ]; then
+		return 0
+	fi
+
+	echo
+	# The self-heal prompt embeds STATIC_CONTEXT_FILE; count overlap with it.
+	if SEMBLE_STATIC_CONTEXT_FILE="${STATIC_CONTEXT_FILE:-}" semble_query_block "${query_text}" "${SELF_HEAL_SEMBLE_MAX_CHUNKS}" "Validate Self-Heal Context"; then
+		echo
+	fi
+}
+
+build_self_heal_serena_tool_hints()
+{
+	# Isolated agents (scripts/codex_isolated_exec.sh) have no MCP server.
+	if [ -n "${CODEX_ISOLATED_EXEC:-}" ] || [ "${SERENA_AVAILABLE:-false}" != "true" ]; then
+		return 0
+	fi
+
+	printf '%s\n' \
+		'Serena hints:' \
+		'- Serena MCP is available in this run. Prefer Serena symbol/navigation tools when they materially reduce shell reads while tracing which validation prompt instruction likely caused the failure.' \
+		'- Use Serena for evidence and focused navigation only; keep any proposed patch additive, prompt-only, and limited to the four allow-listed validation prompts.'
+}
+
+# The self-heal agent reads harness and container logs, so it runs in the
+# credential-free, network-isolated container (read-only snapshot). The
+# helper is the copy next to this script; the thread-reuse wrapper, when it
+# is first on PATH, routes through the same helper via the exported
+# CODEX_ISOLATED_* values.
+CODEX_ISOLATED_EXEC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/codex_isolated_exec.sh"
+CODEX_ISOLATED_MODE="read-only"
+export CODEX_ISOLATED_EXEC CODEX_ISOLATED_MODE
+unset CODEX_ISOLATED_ROOT
+self_heal_codex_cmd=(bash "${CODEX_ISOLATED_EXEC}" run --mode read-only --)
+self_heal_codex_path="$(command -v codex 2>/dev/null || true)"
+if [ -n "${self_heal_codex_path}" ] && head -c 4096 "${self_heal_codex_path}" 2>/dev/null | grep -q 'codex_thread_reuse.sh.* wrapper-main'; then
+	self_heal_codex_cmd=(codex)
+fi
+
+run_self_heal_codex_direct()
+{
+	local stderr_tmp="$1"
+	local stall_status_file=""
+	local rc=0
+
+	SELF_HEAL_STALL_STATE=""
+	if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+		stall_status_file="$(mktemp /tmp/self_heal_stall_status.XXXXXX)"
+		set +e
+		"${CODEX_STALL_GUARD_HELPER}" \
+			--phase validate_self_heal \
+			--stdout-file "${SELF_HEAL_OUTPUT_FILE}" \
+			--status-file "${stall_status_file}" \
+			-- "${self_heal_codex_cmd[@]}" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}" 2> "${stderr_tmp}"
+		rc=$?
+		set -e
+		if SELF_HEAL_STALL_STATE="$(read_codex_stall_guard_state "${stall_status_file}" 2>/dev/null)"; then
+			:
+		elif [ -s "${stall_status_file}" ]; then
+			echo "self-heal: could not parse codex stall guard status from ${stall_status_file}" >&2
+		fi
+		rm -f "${stall_status_file}"
+		return "${rc}"
+	elif [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+		"${CODEX_HEARTBEAT_HELPER}" \
+			--phase validate_self_heal \
+			--stdout-file "${SELF_HEAL_OUTPUT_FILE}" \
+			--stderr-file "${stderr_tmp}" \
+			-- "${self_heal_codex_cmd[@]}" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}"
+	else
+		"${self_heal_codex_cmd[@]}" --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${SELF_HEAL_PROMPT_FILE}" > "${SELF_HEAL_OUTPUT_FILE}" 2> "${stderr_tmp}"
+	fi
+}
+
+# Engine selection for the self-heal agent (role VALIDATE_SELF_HEAL): Claude
+# by default through the trusted engine root validate.yml stages from the
+# verified support clone (CLAUDE_ENGINE_SUPPORT_DIR, default
+# ${RUNNER_TEMP}/claude-engine-support), the unchanged codex launch in
+# run_self_heal_codex_direct otherwise (AI_ENGINE_VALIDATE_SELF_HEAL=codex,
+# the ai:codex label, Claude unavailable, or no trusted root). ai_engine.sh is
+# never sourced from the checkout. The Claude run is read-only; it writes
+# SELF_HEAL_OUTPUT_FILE, and SELF_HEAL_STALL_STATE stays empty.
+run_self_heal_codex()
+{
+	local stderr_tmp="$1"
+	local engine_root="${CLAUDE_ENGINE_SUPPORT_DIR:-${RUNNER_TEMP:-/tmp}/claude-engine-support}"
+	local engine_script="${engine_root}/scripts/ai_engine.sh"
+	local rc=0
+
+	SELF_HEAL_STALL_STATE=""
+	# shellcheck source=/dev/null
+	if [ ! -f "${engine_script}" ] || [ -L "${engine_script}" ] || ! source "${engine_script}"; then
+		echo "AI_ENGINE_FALLBACK role=VALIDATE_SELF_HEAL reason=engine_support_missing" >&2
+		run_self_heal_codex_direct "${stderr_tmp}"
+		return $?
+	fi
+	# claude_run_selected runs the codex fallback in this shell ("$@"), so the
+	# function run_self_heal_codex_direct must stay defined in this script.
+	AI_ENGINE_MODEL_HINT="${MODEL_EDITOR:-}" AI_ENGINE_EFFORT_HINT="${MODEL_REASONING_EFFORT:-}" \
+		claude_run_selected VALIDATE_SELF_HEAL "${SELF_HEAL_PROMPT_FILE}" "${SELF_HEAL_OUTPUT_FILE}" "${PWD}" -- \
+		run_self_heal_codex_direct "${stderr_tmp}" 2>> "${stderr_tmp}" || rc=$?
+	return "${rc}"
+}
+
+# Ensure the patches ledger exists.
+: > "${SELF_HEAL_LOG_FILE}"
+if [ ! -f "${SELF_HEAL_PATCHES_FILE}" ]; then
+	: > "${SELF_HEAL_PATCHES_FILE}"
+fi
+
+# ---------------------------------------------------------------
+# Compose the self-heal prompt
+# ---------------------------------------------------------------
+self_heal_semble_query="$(build_self_heal_semble_query || true)"
+self_heal_serena_tool_hints="$(build_self_heal_serena_tool_hints || true)"
+{
+	_cat_if_exists "STATIC CONTEXT" "${STATIC_CONTEXT_FILE:-}"
+	echo
+	echo "=== SELF-HEAL TASK ==="
+	echo
+	SERENA_TOOL_HINTS="${self_heal_serena_tool_hints}" bash scripts/render_prompt.sh prompts/mode-validate-self-heal.txt
+	echo
+	echo "=== SELF-HEAL ATTEMPT ==="
+	echo "attempt_number: $((SELF_HEAL_ATTEMPT + 1))"
+	echo "max_attempts: ${MAX_SELF_HEAL_ATTEMPTS}"
+	echo "failing_phase: ${SELF_HEAL_FAILURE_PHASE}"
+	echo
+	echo "=== PRIOR ACCUMULATED SELF-HEAL PATCHES (this run) ==="
+	if [ -s "${SELF_HEAL_PATCHES_FILE}" ]; then
+		cat "${SELF_HEAL_PATCHES_FILE}"
+	else
+		echo "(none — this is the first self-heal attempt for this run)"
+	fi
+	echo
+	echo "=== CURRENT VALIDATION PROMPT FILES (raw on-disk contents with any prior self-heal patches already applied) ==="
+	echo "Note: keep diffs anchored to the literal file text shown here; some prompts intentionally contain the runtime placeholder {{SERENA_TOOL_HINTS}}."
+	echo
+	for _target in "${ALLOWED_TARGETS[@]}"; do
+		if [ -f "prompts/${_target}" ]; then
+			echo "--- prompts/${_target} ---"
+			cat "prompts/${_target}"
+			echo
+			echo "--- end prompts/${_target} ---"
+			echo
+		fi
+	done
+	echo
+	_cat_if_exists "STRUCTURED VALIDATION FAILURE JSON" "${VALIDATION_RESULT_FILE:-}"
+	_cat_if_exists "DIAGNOSIS JSON" "${DIAGNOSE_RESULT_FILE:-}"
+	_tail_if_exists "VALIDATION LOG TAIL" "${VALIDATION_LOG_TAIL_FILE:-}" 200
+	_tail_if_exists "CONTAINER LOG TAIL" "${CONTAINER_LOG_TAIL_FILE:-}" 200
+	_cat_if_exists "VALIDATE HINTS" "${VALIDATE_HINTS_FILE:-}"
+	_tail_if_exists "DISCOVER OUTPUT" "${DISCOVER_OUTPUT_FILE:-}" 120
+	_tail_if_exists "GENERATE OUTPUT" "${GENERATE_OUTPUT_FILE:-}" 120
+	_tail_if_exists "DIAGNOSE OUTPUT" "${DIAGNOSE_OUTPUT_FILE:-}" 120
+	append_self_heal_semble_context "${self_heal_semble_query}"
+} > "${SELF_HEAL_PROMPT_FILE}" 2>> "${SELF_HEAL_LOG_FILE}"
+
+# ---------------------------------------------------------------
+# Call the self-heal LLM (up to 2 attempts to parse valid JSON)
+# ---------------------------------------------------------------
+SELF_HEAL_LLM_SUCCESS=false
+for _llm_attempt in 1 2; do
+	_self_heal_terminal_substate="Failed"
+	echo "self-heal: LLM call attempt ${_llm_attempt}/2" >> "${SELF_HEAL_LOG_FILE}"
+	emit_self_heal_substate "PreparingWorkspace" "${_llm_attempt}"
+	if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+		sanitize_codex_prompt_file "${SELF_HEAL_PROMPT_FILE}"
+	fi
+	_self_heal_stderr_tmp="$(mktemp)"
+	emit_self_heal_substate "BuildingPrompt" "${_llm_attempt}"
+	emit_self_heal_substate "LaunchingAgentProcess" "${_llm_attempt}"
+	emit_self_heal_substate "InitializingSession" "${_llm_attempt}"
+	emit_self_heal_substate "StreamingTurn" "${_llm_attempt}"
+	_self_heal_run_rc=0
+	run_self_heal_codex "${_self_heal_stderr_tmp}" || _self_heal_run_rc=$?
+	if [ "${_self_heal_run_rc}" -eq 80 ]; then
+		# Claude capacity wait (issue #7370): no codex, no retry; the caller
+		# exits 80 so validate.yml records a wait instead of a verdict.
+		cat "${_self_heal_stderr_tmp}" >> "${SELF_HEAL_LOG_FILE}" 2>/dev/null || true
+		rm -f "${_self_heal_stderr_tmp}"
+		echo "AI_ENGINE_CAPACITY_WAIT role=VALIDATE_SELF_HEAL outcome=deferred stage=validate" >&2
+		exit 80
+	fi
+	if [ "${_self_heal_run_rc}" -eq 0 ]; then
+		emit_self_heal_substate "Finishing" "${_llm_attempt}" "${_self_heal_stderr_tmp}"
+		cat "${_self_heal_stderr_tmp}" >> "${SELF_HEAL_LOG_FILE}" 2>/dev/null || true
+		case "${SELF_HEAL_STALL_STATE}" in
+			observed)
+				echo "self-heal: codex_stall_observed recorded (observe-only mode)" >> "${SELF_HEAL_LOG_FILE}"
+				emit_self_heal_substate "codex_stall_observed" "${_llm_attempt}" "${_self_heal_stderr_tmp}"
+				;;
+			killed)
+				echo "self-heal: codex_stall_killed recorded despite zero exit; treating output with caution" >> "${SELF_HEAL_LOG_FILE}"
+				emit_self_heal_substate "codex_stall_killed" "${_llm_attempt}" "${_self_heal_stderr_tmp}"
+				;;
+		esac
+		# Extract the last JSON object that contains a "target_prompt" key.
+		# Use json.JSONDecoder.raw_decode() which is string/escape-aware
+		# (the earlier brace-depth counter mis-handled JSON strings that
+		# contain literal '{' or '}' — unified diffs frequently do).
+		if python3 - "${SELF_HEAL_OUTPUT_FILE}" "${SELF_HEAL_DECISION_FILE}" <<'PY'
+import json, sys
+src, dst = sys.argv[1], sys.argv[2]
+with open(src, 'r', encoding='utf-8', errors='replace') as fh:
+    txt = fh.read()
+
+decoder = json.JSONDecoder()
+
+def is_valid_candidate(obj):
+    return isinstance(obj, dict) and 'target_prompt' in obj and 'patch' in obj
+
+picked = None
+
+# Fast path: whole output is already valid JSON.
+try:
+    whole = json.loads(txt)
+except Exception:
+    whole = None
+else:
+    if is_valid_candidate(whole):
+        picked = whole
+
+# Fallback: scan for each '{' and attempt raw_decode — which correctly
+# handles strings, escapes, and nested structures. Keep the LAST valid
+# candidate so a trailing JSON block in mixed model output wins.
+if picked is None:
+    for i, ch in enumerate(txt):
+        if ch != '{':
+            continue
+        try:
+            obj, _end = decoder.raw_decode(txt, i)
+        except Exception:
+            continue
+        if is_valid_candidate(obj):
+            picked = obj
+
+if picked is None:
+    sys.exit(1)
+with open(dst, 'w', encoding='utf-8') as fh:
+    json.dump(picked, fh, ensure_ascii=False, indent=2)
+PY
+		then
+			SELF_HEAL_LLM_SUCCESS=true
+			emit_self_heal_substate "Succeeded" "${_llm_attempt}" "${_self_heal_stderr_tmp}"
+			rm -f "${_self_heal_stderr_tmp}"
+			break
+		fi
+	else
+		emit_self_heal_substate "Finishing" "${_llm_attempt}" "${_self_heal_stderr_tmp}"
+		cat "${_self_heal_stderr_tmp}" >> "${SELF_HEAL_LOG_FILE}" 2>/dev/null || true
+		case "${SELF_HEAL_STALL_STATE}" in
+			observed)
+				echo "self-heal: codex_stall_observed recorded before non-zero exit" >> "${SELF_HEAL_LOG_FILE}"
+				emit_self_heal_substate "codex_stall_observed" "${_llm_attempt}" "${_self_heal_stderr_tmp}"
+				;;
+			killed)
+				echo "self-heal: codex_stall_killed recorded; preserving non-zero exit" >> "${SELF_HEAL_LOG_FILE}"
+				emit_self_heal_substate "codex_stall_killed" "${_llm_attempt}" "${_self_heal_stderr_tmp}"
+				_self_heal_terminal_substate="Stalled"
+				;;
+		esac
+	fi
+	emit_self_heal_substate "${_self_heal_terminal_substate}" "${_llm_attempt}" "${_self_heal_stderr_tmp}"
+	rm -f "${_self_heal_stderr_tmp}"
+	if [ "${_llm_attempt}" -lt 2 ]; then
+		sleep $((_llm_attempt * 5))
+	fi
+done
+
+if [ "${SELF_HEAL_LLM_SUCCESS}" != "true" ]; then
+	echo "self-heal: LLM call or JSON parse failed twice; abandoning self-heal" >&2
+	exit 2
+fi
+
+# ---------------------------------------------------------------
+# Validate the decision
+# ---------------------------------------------------------------
+DECISION_TARGET="$(jq -r '.target_prompt // ""' "${SELF_HEAL_DECISION_FILE}")"
+DECISION_CLASS="$(jq -r '.failure_class // "unknown"' "${SELF_HEAL_DECISION_FILE}")"
+DECISION_CONF="$(jq -r '.confidence // 0' "${SELF_HEAL_DECISION_FILE}")"
+DECISION_RATIONALE="$(jq -r '.rationale // ""' "${SELF_HEAL_DECISION_FILE}")"
+DECISION_PATCH="$(jq -r '.patch // ""' "${SELF_HEAL_DECISION_FILE}")"
+
+echo "self-heal: target=${DECISION_TARGET} class=${DECISION_CLASS} confidence=${DECISION_CONF}" >> "${SELF_HEAL_LOG_FILE}"
+
+# Empty patch means "no self-heal proposed" — fall through to hard fail.
+if [ -z "${DECISION_PATCH}" ] || [ "${DECISION_PATCH}" = "null" ]; then
+	echo "self-heal: empty patch proposed; rationale: ${DECISION_RATIONALE}" >&2
+	exit 1
+fi
+
+# Target must be one of the four allowed validation prompts.
+if ! is_allowed_target "${DECISION_TARGET}"; then
+	echo "self-heal: refusing — target_prompt '${DECISION_TARGET}' is not in the self-heal allow-list" >&2
+	exit 2
+fi
+
+# Write patch to a tmp file and validate.
+printf '%s\n' "${DECISION_PATCH}" > "${SELF_HEAL_PATCH_TMP}"
+
+# Enforce an upper bound on the patch size. A derailed model response
+# could emit an enormous diff (e.g., reprinting entire prompt files),
+# which would bloat run artifacts, slow the patch validator/apply, and
+# later make the repository_dispatch payload construction in
+# validate_process.sh::dispatch_self_heal_improvements awkward. Since
+# self-heal patches MUST be small additive clarifications to one of the
+# four validation prompts (none of which currently exceeds ~12 KB), a
+# 64 KB budget is already luxurious. Treat oversized patches as "no
+# patch proposed" (exit 1) so the caller falls through to the normal
+# hard-fail path instead of pretending success.
+SELF_HEAL_MAX_PATCH_BYTES="${SELF_HEAL_MAX_PATCH_BYTES:-65536}"
+_patch_size="$(wc -c < "${SELF_HEAL_PATCH_TMP}" | tr -d ' ')"
+if [ "${_patch_size}" -gt "${SELF_HEAL_MAX_PATCH_BYTES}" ]; then
+	echo "self-heal: refusing — patch is ${_patch_size} bytes, exceeds SELF_HEAL_MAX_PATCH_BYTES=${SELF_HEAL_MAX_PATCH_BYTES}; treating as no patch proposed" >&2
+	exit 1
+fi
+
+# Reject non-additive diffs explicitly before any dry-run/apply.
+# The self-heal prompt's hard constraints require patches to be additive
+# clarifications only: no deletions, no renames, no schema/identifier
+# changes, no file deletions via /dev/null headers. We enforce the
+# syntactic parts of that contract here so a misbehaving self-heal LLM
+# cannot remove "Hard constraints" blocks, rename JSON schema fields, or
+# delete the target prompt file wholesale.
+if grep -Eq '^(---|\+\+\+) /dev/null([[:space:]]|$)' "${SELF_HEAL_PATCH_TMP}"; then
+	echo "self-heal: refusing — patch uses /dev/null headers (file add/delete not allowed)" >&2
+	exit 2
+fi
+if grep -Eq '^(deleted file mode|new file mode|rename from |rename to |copy from |copy to )' "${SELF_HEAL_PATCH_TMP}"; then
+	echo "self-heal: refusing — patch includes non-additive file operations (rename/copy/delete/new)" >&2
+	exit 2
+fi
+# Reject any deletion lines inside hunks. This catches *all* deletions,
+# including lines whose original content begins with '-' (e.g. '--foo'),
+# while ignoring file header lines outside hunks.
+if awk '
+  /^diff --git / { in_hunk=0; next }
+  /^@@ / { in_hunk=1; next }
+  in_hunk && /^-/ { found=1; exit }
+  END { exit(found ? 0 : 1) }
+' "${SELF_HEAL_PATCH_TMP}"; then
+	echo "self-heal: refusing — patch contains deletion lines; self-heal patches must be additive-only" >&2
+	exit 2
+fi
+
+# Reject obvious out-of-scope diffs: patch must only touch prompts/<target>.
+# Accept a/, b/ prefixes and optional trailing whitespace+timestamp.
+# (/dev/null is excluded here because the earlier guard rejects it.)
+# Escape regex metacharacters so only the exact allowed target filename
+# is accepted in ---/+++ headers. The sed replacement is `\\&` — in sed
+# replacement syntax, `\\` is ONE literal backslash and `&` is the
+# matched text, producing output like `discover\.txt` (one backslash,
+# one dot). A previous revision used `\\\\&` (two backslashes) which
+# made the resulting ERE `discover\\.txt` — ERE interprets `\\` as a
+# literal backslash and `.` as any char, so every benign patch was
+# falsely rejected. See PR #1009 autofix d060ad0 regression.
+_escaped_target="$(printf '%s' "${DECISION_TARGET}" | sed 's/[][\\.^$*+?(){}|]/\\&/g')"
+_expected_re="(a/|b/)?prompts/${_escaped_target}([[:space:]]|$)"
+if grep -E '^(\+\+\+|---) ' "${SELF_HEAL_PATCH_TMP}" | grep -vE "${_expected_re}" >/dev/null 2>&1; then
+	echo "self-heal: refusing — patch touches files outside prompts/${DECISION_TARGET}" >&2
+	exit 2
+fi
+
+# Dry-run the patch.
+if ! patch --dry-run -p1 -N -s < "${SELF_HEAL_PATCH_TMP}" >> "${SELF_HEAL_LOG_FILE}" 2>&1; then
+	# Try git apply as a fallback (handles different whitespace tolerances).
+	if ! git apply --check "${SELF_HEAL_PATCH_TMP}" >> "${SELF_HEAL_LOG_FILE}" 2>&1; then
+		echo "self-heal: refusing — patch does not apply cleanly to prompts/${DECISION_TARGET}" >&2
+		exit 2
+	fi
+	_APPLY_WITH_GIT=true
+else
+	_APPLY_WITH_GIT=false
+fi
+
+# ---------------------------------------------------------------
+# Apply the patch
+# ---------------------------------------------------------------
+# Record the target file hash before applying so we can detect the
+# "already applied" case that `patch -N` treats as a successful no-op.
+# Without this, a model-produced idempotent patch would burn a self-heal
+# attempt without changing the prompt, and the re-exec would hit the
+# same failure and repeat — silently draining MAX_SELF_HEAL_ATTEMPTS.
+_target_file="prompts/${DECISION_TARGET}"
+_hash_before=""
+if [ -f "${_target_file}" ]; then
+	_hash_before="$(sha256sum "${_target_file}" | awk '{print $1}')"
+fi
+
+if [ "${_APPLY_WITH_GIT}" = "true" ]; then
+	if ! git apply "${SELF_HEAL_PATCH_TMP}" >> "${SELF_HEAL_LOG_FILE}" 2>&1; then
+		echo "self-heal: git apply failed after dry-run succeeded (race)" >&2
+		exit 2
+	fi
+else
+	if ! patch -p1 -N -s < "${SELF_HEAL_PATCH_TMP}" >> "${SELF_HEAL_LOG_FILE}" 2>&1; then
+		echo "self-heal: patch -p1 failed after dry-run succeeded (race)" >&2
+		exit 2
+	fi
+fi
+
+_hash_after=""
+if [ -f "${_target_file}" ]; then
+	_hash_after="$(sha256sum "${_target_file}" | awk '{print $1}')"
+fi
+if [ -n "${_hash_before}" ] && [ "${_hash_before}" = "${_hash_after}" ]; then
+	echo "self-heal: refusing — patch applied cleanly but left prompts/${DECISION_TARGET} unchanged (likely already-applied / idempotent no-op); treating as no patch to avoid burning budget" >&2
+	exit 1
+fi
+
+# ---------------------------------------------------------------
+# Record the patch in the ledger
+# ---------------------------------------------------------------
+_ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+_ledger_entry="$(jq -cn \
+	--arg ts "${_ts}" \
+	--arg target "${DECISION_TARGET}" \
+	--arg phase "${SELF_HEAL_FAILURE_PHASE}" \
+	--arg class "${DECISION_CLASS}" \
+	--arg rationale "${DECISION_RATIONALE}" \
+	--argjson attempt "$((SELF_HEAL_ATTEMPT + 1))" \
+	--argjson confidence "${DECISION_CONF}" \
+	--rawfile patch "${SELF_HEAL_PATCH_TMP}" \
+	'{
+		timestamp: $ts,
+		attempt: $attempt,
+		failure_phase: $phase,
+		failure_class: $class,
+		confidence: $confidence,
+		target_prompt: $target,
+		rationale: $rationale,
+		patch: $patch
+	}')"
+printf '%s\n' "${_ledger_entry}" >> "${SELF_HEAL_PATCHES_FILE}"
+
+echo "self-heal: applied patch to prompts/${DECISION_TARGET} (attempt $((SELF_HEAL_ATTEMPT + 1))/${MAX_SELF_HEAL_ATTEMPTS})" >&2
+exit 0

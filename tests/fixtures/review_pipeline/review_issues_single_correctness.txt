@@ -1,0 +1,13 @@
+=== ISSUE 001 ===
+FILE: src/module.py
+LINES: 2
+LENS: CORRECTNESS & LOGIC
+SEVERITY: high
+CLASSIFICATION: actionable
+EVIDENCE:
+  reviewer_bundle> Wrong arithmetic result for edge case.
+CURRENT_CODE:
+  total = a + b
+SUGGESTED_APPROACH:
+  Validate operand bounds before summing.
+=== END ISSUE 001 ===

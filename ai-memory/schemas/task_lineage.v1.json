@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/schemas/task_lineage.v1.json",
+  "title": "TaskLineageV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "lineage_id",
+    "issue_number",
+    "issue_url",
+    "state",
+    "prs",
+    "runs",
+    "memory_record_ids",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "const": "task_lineage.v1"
+    },
+    "lineage_id": {
+      "type": "string",
+      "pattern": "^issue-[0-9]+$"
+    },
+    "issue_number": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "issue_url": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "state": {
+      "type": "string",
+      "enum": ["open", "in_progress", "merged", "closed", "cancelled"]
+    },
+    "prs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["pr_number", "url", "state"],
+        "properties": {
+          "pr_number": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "url": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "state": {
+            "type": "string",
+            "enum": ["open", "in_progress", "merged", "closed", "cancelled"]
+          }
+        }
+      }
+    },
+    "runs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["run_id", "workflow", "run_attempt", "status", "timestamp"],
+        "properties": {
+          "run_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "pattern": "^[A-Za-z0-9_.:-]+$"
+          },
+          "workflow": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "run_attempt": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": ["open", "in_progress", "merged", "closed", "cancelled"]
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    },
+    "memory_record_ids": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 128
+      }
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

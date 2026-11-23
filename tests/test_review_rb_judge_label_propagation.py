@@ -1,0 +1,3240 @@
+#!/usr/bin/env python3
+"""Regression tests for the review-blocked reissue label-propagation fix.
+
+Background
+----------
+scripts/review_rb_judge.sh handles three judge actions: merge, fix, and
+close_and_reissue.  The close_and_reissue branch creates a replacement
+issue via `gh issue create`.  Before this fix, the `gh issue create`
+call passed no `--label` flag — the reissue inherited only
+`ai:clarification` (added later by clarify.yml on issues.opened) and
+NOT `ai:orchestrator-managed` from the parent.
+
+The auto-answer fast path in clarify.yml gates strictly on
+`has_label("ai:orchestrator-managed") && !forced_reclarify && !is_closed`
+(see clarify.yml: "Decide clarify route" step).  Without that label,
+an orchestrator-managed parent's review-blocked reissue would stall
+in clarification forever — emitting standalone-stall heartbeats while
+the orchestrator's parallel judge-addition issue (which IS labelled
+`ai:orchestrator-managed` by orchestrate_poll_process.sh) silently
+delivered the same work.  See downstream evidence in
+shubhodeep1/bitsafe.io issues #41/#43/#44.
+
+The fix
+-------
+1. The linked-issue GraphQL query captures body and labels alongside
+   issue numbers, with a per-node REST fallback for incomplete data,
+   into FIRST_ISSUE_LABELS_JSON.
+2. The close_and_reissue branch checks FIRST_ISSUE_LABELS_JSON for
+   `ai:orchestrator-managed` via `jq -e 'index(...)'`; on hit, it
+   appends `--label ai:orchestrator-managed` to the `gh issue create`
+   call.  Standalone reissues (parent without the label) get no
+   `--label` so their human-driven clarify semantics are preserved.
+
+These tests pin both halves so a future refactor cannot silently
+re-orphan the reissue lineage.
+"""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import textwrap
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+RB_JUDGE_SCRIPT = REPO_ROOT / "scripts" / "review_rb_judge.sh"
+RB_JUDGE_PROMPT = REPO_ROOT / "prompts" / "mode-judge-review-blocked.txt"
+REVIEW_AUTOFIX_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+
+
+def _rb_judge_text() -> str:
+	return RB_JUDGE_SCRIPT.read_text(encoding="utf-8")
+
+
+def _rb_judge_prompt_text() -> str:
+	return RB_JUDGE_PROMPT.read_text(encoding="utf-8")
+
+
+def _review_autofix_text() -> str:
+	return REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+
+
+def _sanitized_git_env(extra: dict[str, str] | None = None) -> dict[str, str]:
+	env = os.environ.copy()
+	for key in (
+		"BASH_ENV",
+		"ENV",
+		"GIT_DIR",
+		"GIT_WORK_TREE",
+		"GIT_COMMON_DIR",
+		"GIT_INDEX_FILE",
+		"GIT_OBJECT_DIRECTORY",
+		"GIT_ALTERNATE_OBJECT_DIRECTORIES",
+		"LINKED_ISSUE_FALLBACK_NUMBERS_JSON",
+	):
+		env.pop(key, None)
+	if extra:
+		env.update(extra)
+	return env
+
+
+def _git(cmd: list[str], *, cwd: Path) -> str:
+	result = subprocess.run(
+		cmd,
+		cwd=str(cwd),
+		check=True,
+		text=True,
+		capture_output=True,
+		env=_sanitized_git_env(),
+	)
+	return result.stdout.strip()
+
+
+def _bootstrap_repo_with_remote(tmp_path: Path, files: dict[str, str]) -> tuple[Path, str, str]:
+	repo_dir = tmp_path / "repo"
+	remote_dir = tmp_path / "remote.git"
+	repo_dir.mkdir(parents=True, exist_ok=True)
+	_git(["git", "init", "--bare", str(remote_dir)], cwd=tmp_path)
+	_git(["git", "init"], cwd=repo_dir)
+	_git(["git", "checkout", "-b", "main"], cwd=repo_dir)
+	_git(["git", "config", "user.name", "tests"], cwd=repo_dir)
+	_git(["git", "config", "user.email", "tests@example.com"], cwd=repo_dir)
+	for rel, content in files.items():
+		path = repo_dir / rel
+		path.parent.mkdir(parents=True, exist_ok=True)
+		path.write_text(content, encoding="utf-8")
+	_git(["git", "add", "."], cwd=repo_dir)
+	_git(["git", "commit", "-m", "initial"], cwd=repo_dir)
+	_git(["git", "remote", "add", "origin", str(remote_dir)], cwd=repo_dir)
+	_git(["git", "push", "-u", "origin", "main"], cwd=repo_dir)
+	return (
+		repo_dir,
+		_git(["git", "rev-parse", "HEAD"], cwd=repo_dir),
+		_git(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_dir),
+	)
+
+
+def _extract_close_and_reissue_branch() -> str:
+	"""Pull the body of the `close_and_reissue)` case arm out of the
+	real script.  We anchor on the next case label (`*)`) so we don't
+	swallow the catch-all branch."""
+	text = _rb_judge_text()
+	match = re.search(
+		r"  close_and_reissue\)\n(?P<branch>.*?)\n    ;;\n\n  \*\)",
+		text,
+		re.DOTALL,
+	)
+	if not match:
+		raise AssertionError(
+			"could not extract close_and_reissue branch from review_rb_judge.sh"
+		)
+	return match.group("branch")
+
+
+def _extract_body_fetch_loop() -> str:
+	"""Pull the FIRST_ISSUE / FIRST_ISSUE_BODY / FIRST_ISSUE_LABELS_JSON
+	body-fetch loop out of the real script.  Anchored on the
+	`FIRST_ISSUE=""` declaration through the loop's `done` line so the
+	regex follows the loop's lexical block."""
+	text = _rb_judge_text()
+	match = re.search(
+		r'(?P<loop>FIRST_ISSUE=""\n.*?done <<< "\$\{ISSUE_NUMBERS\}")',
+		text,
+		re.DOTALL,
+	)
+	if not match:
+		raise AssertionError(
+			"could not extract body-fetch loop from review_rb_judge.sh"
+		)
+	return match.group("loop")
+
+
+def _extract_linked_issue_hydration_block() -> str:
+	"""Pull the GraphQL discovery, fallback, and hydration block."""
+	text = _rb_judge_text()
+	match = re.search(
+		r'(?P<block>RB_LINKED_ISSUES_GRAPHQL_JSON=.*?done <<< "\$\{ISSUE_NUMBERS\}")',
+		text,
+		re.DOTALL,
+	)
+	if not match:
+		raise AssertionError(
+			"could not extract linked-issue hydration block from review_rb_judge.sh"
+		)
+	return match.group("block")
+
+
+def _extract_issue_number_fallback_block() -> str:
+	"""Pull the linked-issue fallback block out of the real script.
+
+	Anchored on the top-level `if [ -z "${ISSUE_NUMBERS}" ]` block through
+	the cleanup line immediately before `FIRST_ISSUE=""` so tests execute
+	the same cached-metadata reuse / fail-open refetch logic the script
+	runs in production.
+	"""
+	lines = _rb_judge_text().splitlines()
+	start = None
+	for idx, line in enumerate(lines):
+		if line == 'if [ -z "${ISSUE_NUMBERS}" ]; then':
+			start = idx
+			break
+	if start is None:
+		raise AssertionError(
+			"could not locate ISSUE_NUMBERS fallback block in review_rb_judge.sh"
+		)
+
+	end = None
+	for idx in range(start + 1, len(lines)):
+		if lines[idx] == 'FIRST_ISSUE=""':
+			end = idx
+			break
+	if end is None or end <= start:
+		raise AssertionError(
+			"could not locate the end of the ISSUE_NUMBERS fallback block in review_rb_judge.sh"
+		)
+	return "\n".join(lines[start:end]).rstrip()
+
+
+def test_loop_captures_first_issue_labels_json() -> None:
+	"""The hydration loop must populate FIRST_ISSUE_LABELS_JSON from
+	the parent issue's labels. Static check: a future refactor that drops
+	the labels capture would silently disable the propagation."""
+	src = _rb_judge_text()
+
+	assert "FIRST_ISSUE_LABELS_JSON=" in src, (
+		"review_rb_judge.sh must declare FIRST_ISSUE_LABELS_JSON; the "
+		"close_and_reissue branch reads it to decide whether to "
+		"propagate ai:orchestrator-managed to the reissue."
+	)
+	# Complete GraphQL nodes and REST fallbacks are both normalized into
+	# ISSUE_META_JSON so labels and body can be extracted client-side
+	# without a separate labels request.
+	assert "ISSUE_META_JSON=" in src, (
+		"review_rb_judge.sh hydration loop must normalize issue JSON so "
+		"labels and body can be extracted client-side without a separate "
+		"labels API call."
+	)
+	assert "[(.labels // [])[]?.name]" in src, (
+		"review_rb_judge.sh must extract label names from the parent "
+		"issue JSON via the canonical jq filter; otherwise the "
+		"close_and_reissue branch's `index(\"ai:orchestrator-managed\")` "
+		"check would never see a hit."
+	)
+
+
+def test_close_and_reissue_branch_gates_on_orchestrator_managed_label() -> None:
+	"""The propagation gate must be exactly
+	`index("ai:orchestrator-managed")` against FIRST_ISSUE_LABELS_JSON,
+	not a wider/looser check (e.g. any `ai:` label) — that would
+	mislabel standalone review-blocked reissues."""
+	branch = _extract_close_and_reissue_branch()
+
+	assert "FIRST_ISSUE_LABELS_JSON" in branch, (
+		"close_and_reissue branch must reference FIRST_ISSUE_LABELS_JSON; "
+		"otherwise it cannot decide whether to propagate the label."
+	)
+	assert 'jq -e \'index("ai:orchestrator-managed")\'' in branch, (
+		"close_and_reissue branch must gate label propagation strictly "
+		"on the parent carrying ai:orchestrator-managed — widening the "
+		"gate would mislabel standalone (non-orchestrator) reissues."
+	)
+	# Pin the exact bash array assignment that appends the label flag
+	# pair to `gh issue create`.  Matching the literal source line is
+	# clearer than a quote-escaped substring search and catches both a
+	# missing `--label` arg and a wrong label name in one assertion.
+	assert 'RB_PROPAGATE_LABELS+=("--label" "ai:orchestrator-managed")' in branch, (
+		"close_and_reissue branch must append `--label ai:orchestrator-managed` "
+		"to the gh issue create args via the RB_PROPAGATE_LABELS array."
+	)
+
+
+def _install_mock_gh(bin_dir: Path, state_file: Path) -> None:
+	gh_script = r'''#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+state_path = Path(os.environ["MOCK_GH_STATE_FILE"])
+if state_path.exists():
+	state = json.loads(state_path.read_text(encoding="utf-8"))
+else:
+	state = {}
+args = sys.argv[1:]
+
+
+def save() -> None:
+	state_path.write_text(json.dumps(state), encoding="utf-8")
+
+
+def first_value(flag: str) -> str:
+	for i, arg in enumerate(args):
+		if arg == flag and i + 1 < len(args):
+			return args[i + 1]
+	return ""
+
+
+state.setdefault("calls", []).append(args)
+
+if args[:2] == ["issue", "create"]:
+	# `issue_create_should_fail` flag lets a test exercise the
+	# error-handling path in the merge_with_followup branch (when
+	# gh issue create fails after merge confirmation, the script
+	# must NOT emit judge_handled=true and must NOT swap the
+	# linked issue to ai:ready-to-merge).
+	state.setdefault("issue_create_args", []).append(args)
+	if state.get("issue_create_should_fail", False):
+		save()
+		sys.stderr.write("mock gh: simulated issue create failure\n")
+		sys.exit(1)
+	repo = first_value("--repo") or "owner/repo"
+	next_num = int(state.get("next_issue_number", 4301))
+	state["next_issue_number"] = next_num + 1
+	save()
+	print(f"https://github.com/{repo}/issues/{next_num}")
+	sys.exit(0)
+
+if args[:2] == ["pr", "close"]:
+	state.setdefault("pr_close_args", []).append(args)
+	save()
+	sys.exit(0)
+
+if args[:2] == ["pr", "view"]:
+	state.setdefault("pr_view_args", []).append(args)
+	head_ref_oid = state.get("pr_view_head_ref_oid", "")
+	save()
+	if "--jq" in args:
+		jq_expr = args[args.index("--jq") + 1]
+		if jq_expr == ".headRefOid":
+			print(head_ref_oid)
+			sys.exit(0)
+	print(json.dumps({"headRefOid": head_ref_oid}))
+	sys.exit(0)
+
+if args[:2] == ["label", "create"]:
+	state.setdefault("label_create_args", []).append(args)
+	save()
+	sys.exit(0)
+
+if args[:1] == ["api"]:
+	# Find the path arg (first non-flag, non-flag-value).  We treat the
+	# first positional after `api` as the path.  Caller-configured
+	# `api_responses` is keyed by substring match against that path.
+	path = ""
+	for arg in args[1:]:
+		if not arg.startswith("-"):
+			path = arg
+			break
+	state.setdefault("api_calls", []).append(args)
+	api_failures = state.get("api_failures", []) or []
+	if any(pattern and pattern in path for pattern in api_failures):
+		save()
+		sys.stderr.write(f"mock gh: simulated API failure for {path}\n")
+		sys.exit(1)
+	api_responses = state.get("api_responses", {}) or {}
+	matched = None
+	api_response_sequences = state.get("api_response_sequences", {}) or {}
+	for pattern, responses in api_response_sequences.items():
+		if pattern and pattern in path and responses:
+			matched = responses.pop(0)
+			break
+	for pattern, resp in api_responses.items():
+		if matched is None and pattern and pattern in path:
+			matched = resp
+			break
+	save()
+	if matched is not None:
+		# Honour `--jq` server-side filtering: emit the filtered string,
+		# not the raw JSON, so callers that pre-fix used `--jq '.body'`
+		# still see the same shape (this matters for tests that exercise
+		# behaviour beyond the loop refactor).
+		jq_filter = ""
+		for i, arg in enumerate(args):
+			if arg == "--jq" and i + 1 < len(args):
+				jq_filter = args[i + 1]
+				break
+		if jq_filter:
+			# Limited support: handle `.body // ""` and `.state` to keep
+			# the mock predictable; anything else falls through to raw
+			# JSON so a future test can extend behaviour as needed.
+			if jq_filter == ".body // \"\"" or jq_filter == ".body":
+				print(matched.get("body", ""))
+			elif jq_filter == '.title + " " + (.body // "")':
+				print(f"{matched.get('title', '') or ''} {matched.get('body', '') or ''}")
+			elif jq_filter == ".state":
+				print(matched.get("state", ""))
+			else:
+				print(json.dumps(matched))
+		else:
+			print(json.dumps(matched))
+	sys.exit(0)
+
+save()
+sys.exit(0)
+'''
+	mock_path = bin_dir / "gh"
+	mock_path.write_text(gh_script, encoding="utf-8")
+	mock_path.chmod(0o755)
+	state_file.write_text("{}", encoding="utf-8")
+
+
+def _build_harness(
+	branch: str,
+	runtime_dir: Path,
+	github_output: Path,
+	*,
+	enable_xpg_echo: bool = False,
+) -> str:
+	"""Wrap the extracted close_and_reissue branch in a self-contained
+	bash harness with stubs for the helpers it depends on."""
+	xpg_echo_line = "shopt -s xpg_echo\n\n" if enable_xpg_echo else ""
+	return f"""#!/usr/bin/env bash
+set -euo pipefail
+
+{xpg_echo_line}gh_retry() {{ "$@"; }}
+ensure_label_exists() {{ printf '%s\\n' "$1" >> "${{ENSURE_LABELS_FILE}}"; }}
+_resilient_phase_swap() {{ :; }}
+_safe_gh_jq() {{ :; }}
+flag_enabled() {{ case "${{1,,}}" in 1|true|yes|on) return 0 ;; *) return 1 ;; esac; }}
+
+GITHUB_OUTPUT="{github_output}"
+
+case "${{RB_ACTION}}" in
+  close_and_reissue)
+{branch}
+    ;;
+esac
+"""
+
+
+def _run_close_and_reissue(
+	parent_label_set: list[str],
+	*,
+	judge_payload: dict | None = None,
+	reissue_preserve_baseline_enabled: str = "false",
+	repo_files: dict[str, str] | None = None,
+	pr_view_head_ref_oid: str | None = None,
+	judged_head_sha: str | None = None,
+	precreate_baseline_branch: bool = False,
+	enable_xpg_echo: bool = False,
+	issue_create_should_fail: bool = False,
+	extra_env: dict[str, str] | None = None,
+	api_responses: dict[str, object] | None = None,
+	path_prefix: str | None = None,
+) -> dict:
+	"""Run the close_and_reissue branch with FIRST_ISSUE_LABELS_JSON
+	pre-seeded to ``parent_label_set`` and return the captured gh
+	mock state.
+
+	``extra_env`` adds or overrides harness environment variables (for
+	example ``FIRST_ISSUE_LINEAGE_BODY`` / ``PR_BASE_REF``);
+	``api_responses`` seeds the mock ``gh api`` substring-matched
+	responses (for example ``{"pulls/42/files": [...]}``);
+	``path_prefix`` is a directory put on ``PATH`` ahead of the mock
+	``gh`` (for example a ``git`` shim that makes one lookup fail).
+	``judged_head_sha`` sets ``RB_JUDGED_HEAD_SHA`` (the head the judge
+	evaluated, which the spot-fix baseline uses); ``None`` uses the
+	resolved head and ``"__REPO_HEAD__"`` the bootstrapped repo head
+	(an ``extra_env`` value of ``"__REPO_HEAD__"`` resolves the same way)."""
+	branch = _extract_close_and_reissue_branch()
+
+	with tempfile.TemporaryDirectory(prefix="test_review_rb_judge_") as td:
+		tmp_path = Path(td)
+		runtime_dir = tmp_path / "runtime"
+		bin_dir = tmp_path / "bin"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		bin_dir.mkdir(parents=True, exist_ok=True)
+
+		gh_state_file = runtime_dir / "gh_state.json"
+		_install_mock_gh(bin_dir, gh_state_file)
+		mock_state: dict[str, object] = {}
+		if issue_create_should_fail:
+			mock_state["issue_create_should_fail"] = True
+		run_cwd = tmp_path
+		resolved_judged_head = ""
+		repo_head_before = ""
+		repo_branch_before = ""
+		if repo_files is not None:
+			run_cwd, repo_head_before, repo_branch_before = _bootstrap_repo_with_remote(tmp_path, repo_files)
+			resolved_head_ref_oid = pr_view_head_ref_oid or repo_head_before
+			if resolved_head_ref_oid == "__UPPER_REPO_HEAD__":
+				resolved_head_ref_oid = repo_head_before.upper()
+			mock_state["pr_view_head_ref_oid"] = resolved_head_ref_oid
+			resolved_judged_head = resolved_head_ref_oid
+			if precreate_baseline_branch:
+				expected_baseline_branch = f"ai/reissue-baseline/pr-42-{repo_head_before[:12]}-777-1"
+				_git(["git", "branch", expected_baseline_branch], cwd=run_cwd)
+		elif pr_view_head_ref_oid is not None:
+			mock_state["pr_view_head_ref_oid"] = pr_view_head_ref_oid
+			resolved_judged_head = pr_view_head_ref_oid
+		if judged_head_sha == "__REPO_HEAD__":
+			resolved_judged_head = repo_head_before
+		elif judged_head_sha is not None:
+			resolved_judged_head = judged_head_sha
+		if api_responses:
+			mock_state["api_responses"] = dict(api_responses)
+		gh_state_file.write_text(json.dumps(mock_state), encoding="utf-8")
+
+		labels_file = runtime_dir / "ensure_labels.txt"
+		labels_file.write_text("", encoding="utf-8")
+		github_output = runtime_dir / "github_output.txt"
+		github_output.write_text("", encoding="utf-8")
+
+		script_path = runtime_dir / "rb_branch_harness.sh"
+		script_path.write_text(
+			_build_harness(
+				branch,
+				runtime_dir,
+				github_output,
+				enable_xpg_echo=enable_xpg_echo,
+			),
+			encoding="utf-8",
+		)
+		script_path.chmod(0o755)
+
+		if judge_payload is None:
+			judge_payload = {
+				"action": "close_and_reissue",
+				"justification": "rework needed",
+				"new_issue": {
+					"title": "Reissue: redo approach",
+					"body": "Try again with smaller scope.",
+				},
+			}
+		judge_json = json.dumps(judge_payload)
+
+		env = {
+			"PATH": f"{path_prefix + ':' if path_prefix else ''}{bin_dir}:{os.environ.get('PATH', '')}",
+			"MOCK_GH_STATE_FILE": str(gh_state_file),
+			"ENSURE_LABELS_FILE": str(labels_file),
+			"REPOSITORY": "owner/repo",
+			"PR_NUMBER": "42",
+			"ISSUE_NUMBERS": "41",
+			"FIRST_ISSUE": "41",
+			"FIRST_ISSUE_LABELS_JSON": json.dumps(parent_label_set),
+			"JUDGE_JSON": judge_json,
+			"RB_ACTION": "close_and_reissue",
+			"REISSUE_PRESERVE_BASELINE_ENABLED": reissue_preserve_baseline_enabled,
+			"GITHUB_RUN_ID": "777",
+			"GITHUB_RUN_ATTEMPT": "1",
+			"RB_JUDGED_HEAD_SHA": resolved_judged_head,
+		}
+		if extra_env:
+			env.update({str(k): (repo_head_before if v == "__REPO_HEAD__" else str(v)) for k, v in extra_env.items()})
+		run_env = _sanitized_git_env(env)
+
+		proc = subprocess.run(
+			["bash", str(script_path)],
+			cwd=str(run_cwd),
+			env=run_env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+		assert proc.returncode == 0, (
+			f"harness exited {proc.returncode}\n"
+			f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		)
+
+		state = json.loads(gh_state_file.read_text(encoding="utf-8"))
+		state["_ensure_labels"] = labels_file.read_text(encoding="utf-8").strip().splitlines()
+		state["_stdout"] = proc.stdout
+		state["_stderr"] = proc.stderr
+		state["_github_output"] = github_output.read_text(encoding="utf-8")
+		if repo_files is not None:
+			state["_repo_head_before"] = repo_head_before
+			state["_repo_head_after"] = _git(["git", "rev-parse", "HEAD"], cwd=run_cwd)
+			state["_repo_branch_before"] = repo_branch_before
+			state["_repo_branch_after"] = _git(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=run_cwd)
+			state["_repo_status_after"] = _git(["git", "status", "--short"], cwd=run_cwd)
+			state["_remote_heads"] = _git(["git", "ls-remote", "--heads", "origin"], cwd=run_cwd)
+		return state
+
+
+def test_orchestrator_managed_parent_propagates_label_to_reissue() -> None:
+	"""Parent carries ai:orchestrator-managed → reissue must be
+	created with `--label ai:orchestrator-managed`.  Without this, the
+	auto-answer fast path in clarify.yml never fires and the reissue
+	stalls in clarification."""
+	state = _run_close_and_reissue(["ai:orchestrator-managed", "ai:closed"])
+
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1, (
+		f"expected exactly one `gh issue create` call, got {len(creates)}: {creates}"
+	)
+	args = creates[0]
+	assert "--label" in args, (
+		f"reissue must carry --label when parent is orchestrator-managed; "
+		f"got args: {args}"
+	)
+	# Find the value that follows --label
+	idx = args.index("--label")
+	assert args[idx + 1] == "ai:orchestrator-managed", (
+		f"reissue --label must be exactly 'ai:orchestrator-managed'; "
+		f"got: {args[idx + 1]!r}"
+	)
+
+	# ensure_label_exists must be called for the propagated label so the
+	# repo has the label definition before `gh issue create` references it.
+	assert "ai:orchestrator-managed" in state["_ensure_labels"], (
+		"ensure_label_exists must be invoked for ai:orchestrator-managed "
+		"before the gh issue create call; otherwise a fresh consumer repo "
+		"could 422 on an unknown label."
+	)
+
+
+def test_standalone_parent_does_not_propagate_orchestrator_managed_label() -> None:
+	"""Parent does NOT carry ai:orchestrator-managed → reissue must be
+	created WITHOUT that label.  Standalone clarifications must keep
+	their human-driven semantics — widening the propagation would
+	mislabel non-orchestrator reissues as orchestrator-managed and
+	cause clarify.yml to auto-answer human PRs."""
+	state = _run_close_and_reissue(["bug", "good first issue"])
+
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1, (
+		f"expected exactly one `gh issue create` call, got {len(creates)}: {creates}"
+	)
+	args = creates[0]
+	assert "ai:orchestrator-managed" not in args, (
+		f"standalone reissue must NOT carry ai:orchestrator-managed; "
+		f"got args: {args}"
+	)
+
+
+def test_empty_parent_label_set_does_not_propagate() -> None:
+	"""No linked-issue labels (e.g. parent fetch failed → empty array)
+	→ reissue must be created without `--label ai:orchestrator-managed`.
+	Conservative fail-closed default; an extra label on a reissue is
+	harder to undo than its absence."""
+	state = _run_close_and_reissue([])
+
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1
+	args = creates[0]
+	assert "ai:orchestrator-managed" not in args, (
+		f"reissue must NOT inherit ai:orchestrator-managed when parent "
+		f"label set is empty; got args: {args}"
+	)
+
+
+def test_close_and_reissue_create_failure_reports_missing_replacement() -> None:
+	state = _run_close_and_reissue([], issue_create_should_fail=True)
+	assert len(state.get("pr_close_args", [])) == 1
+	assert len(state.get("issue_create_args", [])) == 1
+	assert "Failed to create replacement issue for closed PR #42" in state["_stdout"]
+	assert state["_github_output"].splitlines() == [
+		"judge_handled=true", "judge_action=close_and_reissue", "judge_reissue_created=false",
+	]
+
+
+def test_review_blocked_prompt_includes_phase_e_schema_fields() -> None:
+	prompt = _rb_judge_prompt_text()
+
+	assert '"reissue_mode": "spot-fix" | "redo"' in prompt, (
+		"mode-judge-review-blocked.txt must require the new reissue_mode field "
+		"so the judge can choose spot-fix vs redo."
+	)
+	assert '"remaining_issues": [' in prompt, (
+		"mode-judge-review-blocked.txt must include the structured remaining_issues[] sibling."
+	)
+	assert '"file": "<repo-relative path>"' in prompt
+	assert '"line_start": <integer>' in prompt
+	assert '"line_end": <integer>' in prompt
+	assert '"symptom": "<brief grounded gap>"' in prompt
+	# Heal #4665: the judge can declare new files a spot-fix follow-up must
+	# create, in both the runtime prompt and its include-based template.
+	template = (REPO_ROOT / "prompts" / "_templates" / "mode-judge-review-blocked.txt").read_text(encoding="utf-8")
+	for text in (prompt, template):
+		assert '"new_output_paths": ["<repo-relative path of a new file the spot-fix follow-up must create>"],' in text
+		assert "- new_output_paths: optional;" in text
+		assert "so list in `new_output_paths` the exact repo-relative path of each file the new issue body requires it to CREATE" in text
+		assert "each with a file extension" in text
+
+
+def test_review_autofix_wires_reissue_preserve_baseline_flag_default_true() -> None:
+	wf = _review_autofix_text()
+	assert "REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}" in wf, (
+		"review_autofix.yml must pass REISSUE_PRESERVE_BASELINE_ENABLED to the "
+		"review-blocked judge and default it to true (Phase E bake-out complete) so a "
+		"spot-fix verdict preserves the closed PR head unless a repo opts out."
+	)
+
+
+def test_review_autofix_wires_integration_branch_pattern_to_judge() -> None:
+	wf = _review_autofix_text()
+	assert "ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}" in wf, (
+		"review_autofix.yml must pass the configured integration-branch pattern to "
+		"the review-blocked judge's follow-up lineage fallback."
+	)
+
+
+def test_close_and_reissue_spot_fix_preserves_baseline_branch_and_keeps_caller_checkout_clean() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload={
+			"action": "close_and_reissue",
+			"reissue_mode": "spot-fix",
+			"justification": "Approach is correct; only a small follow-up is needed.",
+			"remaining_issues": [
+				{"file": "src/app.py", "line_start": 10, "line_end": 14, "symptom": "Guard missing"},
+				{"file": "src/app.py", "line_start": 15, "line_end": 16, "symptom": "Duplicate anchor should dedupe"},
+				{"file": "README.md", "line_start": 1, "line_end": 2, "symptom": "Docs must mention the edge case"},
+			],
+			"new_issue": {
+				"title": "Reissue: surgical follow-up",
+				"body": "Keep the prior implementation and patch only the grounded gaps.",
+			},
+		},
+		reissue_preserve_baseline_enabled="1",
+		repo_files={
+			"src/app.py": "print('hello')\n",
+			"README.md": "hello\n",
+		},
+	)
+
+	assert not state.get("pr_view_args"), (
+		"spot-fix baseline must use RB_JUDGED_HEAD_SHA, not a live `gh pr view` re-read: "
+		f"{state.get('pr_view_args')}"
+	)
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1, f"expected one reissue create call, got: {creates}"
+	body = creates[0][creates[0].index("--body") + 1]
+	match = re.search(r"prior_pr_baseline_branch: ([^\n]+)", body)
+	assert match, f"expected prior_pr_baseline_branch metadata in body:\n{body}"
+	baseline_branch = match.group(1).strip()
+	assert baseline_branch.startswith("ai/reissue-baseline/pr-42-"), baseline_branch
+	expected_footer = (
+		"---\n"
+		"**Review-blocked reissue metadata**\n"
+		"- Replaces: #41 (PR #42 closed — approach rework)\n"
+		"- Type: review-blocked-reissue\n"
+		f"- prior_pr_baseline_branch: {baseline_branch}\n"
+		"- files_touched:\n"
+		"  - src/app.py\n"
+		"  - README.md"
+	)
+	assert body.rstrip().endswith(expected_footer.rstrip()), (
+		"spot-fix reissue body must emit the canonical footer-scoped baseline metadata contract"
+	)
+	assert body.count("  - src/app.py") == 1, (
+		"spot-fix reissue body must dedupe repeated remaining_issues[].file entries"
+	)
+	assert "  - README.md" in body
+	assert f"refs/heads/{baseline_branch}" in state.get("_remote_heads", ""), (
+		"spot-fix must push the preserved baseline branch to origin before creating the reissue"
+	)
+	assert "REISSUE_BASELINE_PRESERVED" in state["_stdout"], (
+		"spot-fix success path must emit the REISSUE_BASELINE_PRESERVED log prefix"
+	)
+	assert "REISSUE_MODE requested_raw=spot-fix effective=spot-fix" in state["_stdout"]
+	assert "judge_handled=true" in state["_github_output"]
+	assert state.get("_repo_head_after") == state.get("_repo_head_before"), (
+		"git worktree preservation path must not change the caller checkout's HEAD commit"
+	)
+	assert state.get("_repo_branch_after") == state.get("_repo_branch_before") == "main", (
+		"git worktree preservation path must not switch the caller checkout off its original branch"
+	)
+	assert state.get("_repo_status_after", "") == "", (
+		"git worktree preservation path must leave the caller checkout clean"
+	)
+
+
+def _parent_orchestrator_metadata_body() -> str:
+	return textwrap.dedent(
+		"""\
+		Refs #249
+
+		The mandatory project security pass found the following blocking issues.
+
+		---
+		**Orchestrator metadata** (do not edit)
+		- Tracking issue: #249
+		- Integration branch: `orchestrator/project-249`
+		- Local ID: `security-pass-fix-cycle-1`
+		- Priority: 1
+		- Managed by: AI Orchestrator
+		"""
+	)
+
+
+def test_close_and_reissue_carries_parent_orchestrator_metadata_before_reissue_footer() -> None:
+	"""Regression for binance-blessings#249 / #294 (2026-09-19).
+
+	The judge reissued security-pass fix issue #292 as #294 with only the
+	review-blocked footer.  resolve_security_pass_fix_successor matches a
+	replacement on the exact ``- Tracking issue: #<N>`` and
+	``- Local ID: `security-pass-fix-cycle-<K>` `` lines, so the poller saw
+	"#292 closed without a merged PR" and parked the project three minutes
+	later, and #294 was planned against main because it carried no
+	``- Integration branch:`` line either.
+	"""
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		extra_env={
+			"FIRST_ISSUE_LINEAGE_BODY": _parent_orchestrator_metadata_body(),
+			"PR_BASE_REF": "orchestrator/project-249",
+		},
+	)
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1, f"expected one reissue create call, got: {creates}"
+	body = creates[0][creates[0].index("--body") + 1]
+	lines = body.split("\n")
+	for marker in (
+		"- Tracking issue: #249",
+		"- Integration branch: `orchestrator/project-249`",
+		"- Local ID: `security-pass-fix-cycle-1`",
+		"- Priority: 1",
+		"- Managed by: AI Orchestrator",
+	):
+		assert lines.count(marker) == 1, f"expected exactly one {marker!r} line in:\n{body}"
+	# The orchestrator block sits before the review-blocked footer: the
+	# implement.yml baseline resolver requires that footer to run to the
+	# end of the body, and the poller / resolver markers are line matches
+	# that do not care about position.
+	orch_idx = body.index("**Orchestrator metadata** (do not edit)")
+	footer_idx = body.index("**Review-blocked reissue metadata**")
+	assert orch_idx < footer_idx
+	assert body.rstrip().endswith("- Type: review-blocked-reissue")
+	assert "REISSUE_ORCHESTRATOR_METADATA_CARRIED parent=41 lines=5" in state["_stdout"]
+
+
+def test_close_and_reissue_carries_wave_issue_metadata_with_bare_integration_branch() -> None:
+	"""Regression for project #8969 (2026-11-07).
+
+	Wave issues write ``- Integration branch: orchestrator/project-N`` with no
+	backticks.  The parser only accepted the backticked form, so reissue #8994
+	of wave issue #8970 dropped ``Local ID``, ``Priority`` and ``Managed by``
+	and carried only the two base-derived lines."""
+	parent_body = textwrap.dedent(
+		"""\
+		Phase 1 work.
+
+		---
+		**Orchestrator metadata** (do not edit)
+		- Tracking issue: #8969
+		- Integration branch: orchestrator/project-8969
+		- Local ID: `phase1-broker-chatgpt-store-token-action`
+		- Priority: 1
+		- Managed by: AI Orchestrator
+		"""
+	)
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		extra_env={
+			"FIRST_ISSUE_LINEAGE_BODY": parent_body,
+			"PR_BASE_REF": "orchestrator/project-8969",
+		},
+	)
+	body = state["issue_create_args"][0][state["issue_create_args"][0].index("--body") + 1]
+	lines = body.split("\n")
+	for marker in (
+		"- Tracking issue: #8969",
+		"- Integration branch: `orchestrator/project-8969`",
+		"- Local ID: `phase1-broker-chatgpt-store-token-action`",
+		"- Priority: 1",
+		"- Managed by: AI Orchestrator",
+	):
+		assert lines.count(marker) == 1, f"expected exactly one {marker!r} line in:\n{body}"
+	assert "REISSUE_ORCHESTRATOR_METADATA_CARRIED parent=41 lines=5" in state["_stdout"]
+	assert "Ignoring parent issue orchestrator metadata" not in state["_stdout"] + state["_stderr"]
+
+
+def test_close_and_reissue_rejects_half_backticked_integration_branch() -> None:
+	parent_body = textwrap.dedent(
+		"""\
+		---
+		**Orchestrator metadata** (do not edit)
+		- Tracking issue: #8969
+		- Integration branch: `orchestrator/project-8969
+		- Local ID: `phase1`
+		"""
+	)
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		extra_env={
+			"FIRST_ISSUE_LINEAGE_BODY": parent_body,
+			"PR_BASE_REF": "orchestrator/project-8969",
+		},
+	)
+	body = state["issue_create_args"][0][state["issue_create_args"][0].index("--body") + 1]
+	assert "- Local ID: `phase1`" not in body
+	assert "REISSUE_ORCHESTRATOR_METADATA_CARRIED parent=41 lines=2" in state["_stdout"]
+
+
+def test_close_and_reissue_rejects_parent_metadata_inconsistent_with_pr_base() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		extra_env={
+			"FIRST_ISSUE_LINEAGE_BODY": _parent_orchestrator_metadata_body(),
+			"PR_BASE_REF": "orchestrator/project-77",
+		},
+	)
+	body = state["issue_create_args"][0][state["issue_create_args"][0].index("--body") + 1]
+	assert "- Tracking issue: #77" in body
+	assert "- Integration branch: `orchestrator/project-77`" in body
+	assert "- Tracking issue: #249" not in body
+	assert "- Local ID: `security-pass-fix-cycle-1`" not in body
+	assert "Ignoring parent issue orchestrator metadata that does not match verified PR base" in (
+		state["_stdout"] + state["_stderr"]
+	)
+
+
+def test_close_and_reissue_strips_judge_generated_orchestrator_lineage_markers() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload={
+			"action": "close_and_reissue",
+			"reissue_mode": "redo",
+			"justification": "Reissue with validated lineage.",
+			"remaining_issues": [],
+			"new_issue": {
+				"title": "Reissue: preserve validated lineage",
+				"body": (
+					"Keep this implementation guidance and metadata explanation.\n"
+					"**Orchestrator metadata** (do not edit)\n"
+					"- Tracking issue: #999\n"
+					"**Tracking issue:** #998\n"
+					"Integration branch: main\n"
+					"  - Integration branch: `orchestrator/project-999`\n"
+					"**Local ID:** security-pass-fix-cycle-9\n"
+					"Priority: 9\n"
+					"**Managed by:** AI Orchestrator"
+				),
+			},
+		},
+		extra_env={
+			"FIRST_ISSUE_LINEAGE_BODY": _parent_orchestrator_metadata_body(),
+			"PR_BASE_REF": "orchestrator/project-249",
+		},
+	)
+	body = state["issue_create_args"][0][state["issue_create_args"][0].index("--body") + 1]
+	lines = body.split("\n")
+	assert "Keep this implementation guidance and metadata explanation." in body
+	assert lines.count("**Orchestrator metadata** (do not edit)") == 1
+	assert "- Tracking issue: #999" not in lines
+	assert "**Tracking issue:** #998" not in lines
+	assert "Integration branch: main" not in lines
+	assert "  - Integration branch: `orchestrator/project-999`" not in lines
+	assert "**Local ID:** security-pass-fix-cycle-9" not in lines
+	assert "Priority: 9" not in lines
+	assert "**Managed by:** AI Orchestrator" not in lines
+	assert lines.count("- Tracking issue: #249") == 1
+	assert lines.count("- Integration branch: `orchestrator/project-249`") == 1
+	assert lines.count("- Local ID: `security-pass-fix-cycle-1`") == 1
+	assert lines.count("- Priority: 1") == 1
+	assert lines.count("- Managed by: AI Orchestrator") == 1
+
+
+def test_close_and_reissue_graphql_fetches_verified_pr_base() -> None:
+	script = _rb_judge_text()
+	assert "pullRequest(number:$number) { baseRefName closingIssuesReferences" in script
+	assert "PR_BASE_REF=\"$(printf '%s' \"${RB_LINKED_ISSUES_GRAPHQL_JSON}\"" in script
+
+
+def test_close_and_reissue_derives_orchestrator_metadata_from_pr_base_when_parent_has_none() -> None:
+	derived = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		extra_env={"FIRST_ISSUE_LINEAGE_BODY": "Plain body without metadata.", "PR_BASE_REF": "orchestrator/project-77"},
+	)
+	body = derived["issue_create_args"][0][derived["issue_create_args"][0].index("--body") + 1]
+	lines = body.split("\n")
+	assert lines.count("- Tracking issue: #77") == 1
+	assert lines.count("- Integration branch: `orchestrator/project-77`") == 1
+	assert "- Local ID:" not in body
+	assert "REISSUE_ORCHESTRATOR_METADATA_CARRIED parent=41 lines=2" in derived["_stdout"]
+
+	plain = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		extra_env={"FIRST_ISSUE_LINEAGE_BODY": "Plain body without metadata.", "PR_BASE_REF": "main"},
+	)
+	plain_body = plain["issue_create_args"][0][plain["issue_create_args"][0].index("--body") + 1]
+	assert "**Orchestrator metadata**" not in plain_body
+	assert "- Tracking issue:" not in plain_body
+	assert "REISSUE_ORCHESTRATOR_METADATA_ABSENT parent=41 pr_base=main" in plain["_stdout"]
+
+
+def test_close_and_reissue_spot_fix_unions_closed_pr_files_into_files_touched() -> None:
+	"""Regression for binance-blessings#294 (run 35446715455).
+
+	The spot-fix allowlist held only the two files the judge cited while
+	the reissue body itself ordered contract, README and changelog updates
+	and the fix added tests; implement.yml's files_touched scope guard
+	rejected nine staged paths and latched ai:scope-blocked for a human.
+	The allowlist now unions the judge's files with the files the closed
+	PR changed, skipping paths that no longer exist at the closed head or
+	fail the path validator.
+	"""
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload={
+			"action": "close_and_reissue",
+			"reissue_mode": "spot-fix",
+			"justification": "Approach is correct; only a small follow-up is needed.",
+			"remaining_issues": [
+				{"file": "src/app.py", "line_start": 10, "line_end": 14, "symptom": "Guard missing"},
+			],
+			"new_issue": {
+				"title": "Reissue: surgical follow-up",
+				"body": "Keep the prior implementation and patch only the grounded gaps.",
+			},
+		},
+		reissue_preserve_baseline_enabled="1",
+		repo_files={
+			"src/app.py": "print('hello')\n",
+			"README.md": "hello\n",
+			"db/contracts/example.yml": "collection: example\n",
+			"tests/test_app.py": "print('test')\n",
+		},
+		api_responses={
+			"pulls/42/files": [
+				{"filename": "src/app.py"},
+				{"filename": "db/contracts/example.yml"},
+				{"filename": "tests/test_app.py"},
+				{"filename": "removed_by_pr.py"},
+				{"filename": "../outside.py"},
+			],
+		},
+	)
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1, f"expected one reissue create call, got: {creates}"
+	body = creates[0][creates[0].index("--body") + 1]
+	footer = body[body.index("- files_touched:"):]
+	assert footer.rstrip() == (
+		"- files_touched:\n"
+		"  - src/app.py\n"
+		"  - db/contracts/example.yml\n"
+		"  - tests/test_app.py"
+	).rstrip(), footer
+	assert "removed_by_pr.py" not in body
+	assert "outside.py" not in body
+	assert "README.md" not in footer, "files the PR did not change stay out of the allowlist"
+	assert "REISSUE_FILES_TOUCHED_UNION pr=42 judge_files=1 pr_files_added=2 pr_files_skipped=2 total=3" in state["_stdout"]
+	assert any("pulls/42/files" in " ".join(call) for call in state.get("api_calls", [])), (
+		"spot-fix must list the closed PR's files exactly once"
+	)
+
+
+def test_close_and_reissue_spot_fix_keeps_judge_files_when_pr_file_listing_fails() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload={
+			"action": "close_and_reissue",
+			"reissue_mode": "spot-fix",
+			"justification": "Approach is correct; only a small follow-up is needed.",
+			"remaining_issues": [
+				{"file": "src/app.py", "line_start": 10, "line_end": 14, "symptom": "Guard missing"},
+			],
+			"new_issue": {"title": "Reissue: surgical follow-up", "body": "Patch the gap."},
+		},
+		reissue_preserve_baseline_enabled="1",
+		repo_files={"src/app.py": "print('hello')\n", "tests/test_app.py": "print('test')\n"},
+		api_responses={"pulls/42/files": {"message": "boom"}},
+	)
+	body = state["issue_create_args"][0][state["issue_create_args"][0].index("--body") + 1]
+	assert body.rstrip().endswith("- files_touched:\n  - src/app.py"), body
+	assert "REISSUE_FILES_TOUCHED_UNION pr=42 judge_files=1 pr_files_added=0 pr_files_skipped=0 total=1" in state["_stdout"]
+
+
+def _spot_fix_payload_with_new_outputs(new_output_paths: object) -> dict:
+	return {
+		"action": "close_and_reissue",
+		"reissue_mode": "spot-fix",
+		"justification": "Approach is correct; the follow-up adds regressions and a fragment.",
+		"remaining_issues": [
+			{"file": "src/app.py", "line_start": 10, "line_end": 14, "symptom": "Guard missing"},
+		],
+		"new_output_paths": new_output_paths,
+		"new_issue": {
+			"title": "Reissue: surgical follow-up",
+			"body": "Patch the gap, add the new fixture regressions and the changelog fragment.",
+		},
+	}
+
+
+def test_close_and_reissue_spot_fix_adds_declared_new_output_paths_to_files_touched() -> None:
+	"""Regression for #4664 / heal #4665.
+
+	The reissue of #4605 (PR #4607) had to add a changelog fragment and four
+	new mixed-fence fixtures.  None of them existed at the closed PR head, so
+	neither the judge-cited files nor the closed PR's changed files could
+	carry them, and implement.yml's files_touched scope guard refused all five
+	and latched ai:scope-blocked.  The judge now declares such files in
+	``new_output_paths`` and they are appended after the other two sources.
+	"""
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload=_spot_fix_payload_with_new_outputs(
+			[
+				"tests/fixtures/integration_ref_resolver/mixed_fence_tilde_footer.json",
+				"changelog.d/4605-security-issue-base-binding.md",
+			]
+		),
+		reissue_preserve_baseline_enabled="1",
+		repo_files={
+			"src/app.py": "print('hello')\n",
+			"tests/test_app.py": "print('test')\n",
+			"tests/fixtures/integration_ref_resolver/existing.json": "{}\n",
+		},
+		api_responses={
+			"pulls/42/files": [
+				{"filename": "src/app.py"},
+				{"filename": "tests/test_app.py"},
+			],
+		},
+	)
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1, f"expected one reissue create call, got: {creates}"
+	body = creates[0][creates[0].index("--body") + 1]
+	footer = body[body.index("- files_touched:"):]
+	assert footer.rstrip() == (
+		"- files_touched:\n"
+		"  - src/app.py\n"
+		"  - tests/test_app.py\n"
+		"  - tests/fixtures/integration_ref_resolver/mixed_fence_tilde_footer.json\n"
+		"  - changelog.d/4605-security-issue-base-binding.md"
+	).rstrip(), footer
+	assert "REISSUE_FILES_TOUCHED_UNION pr=42 judge_files=1 pr_files_added=1 pr_files_skipped=0 total=2" in state["_stdout"]
+	assert "REISSUE_FILES_TOUCHED_NEW_OUTPUTS pr=42 declared=2 added=2 skipped=0 total=4" in state["_stdout"]
+	assert "REISSUE_MODE requested_raw=spot-fix effective=spot-fix" in state["_stdout"]
+	assert len([call for call in state.get("api_calls", []) if "pulls/42/files" in " ".join(call)]) == 1, (
+		"new_output_paths validation must not add GitHub API calls (§15)"
+	)
+
+
+def _run_new_output_rejection_case(declared: list) -> dict:
+	return _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload=_spot_fix_payload_with_new_outputs(declared),
+		reissue_preserve_baseline_enabled="1",
+		repo_files={
+			"src/app.py": "print('hello')\n",
+			"README.md": "hello\n",
+			"tests/fixtures/existing.json": "{}\n",
+		},
+		api_responses={"pulls/42/files": [{"filename": "src/app.py"}]},
+	)
+
+
+def _assert_new_output_footer_and_skips(state: dict, expected_tail: list[str], skips: list[tuple]) -> None:
+	body = state["issue_create_args"][0][state["issue_create_args"][0].index("--body") + 1]
+	footer = body[body.index("- files_touched:"):]
+	expected = ["- files_touched:", "  - src/app.py"] + [f"  - {path}" for path in expected_tail]
+	assert footer.rstrip() == "\n".join(expected), footer
+	assert "prior_pr_baseline_branch: ai/reissue-baseline/pr-42-" in body, (
+		"a rejected new_output_paths entry must never discard the preserved baseline"
+	)
+	stdout = state["_stdout"]
+	for skip in skips:
+		if len(skip) == 2:
+			index, reason = skip
+			line = f"::notice::Skipping judge new_output_paths entry {index}: {reason}."
+		else:
+			index, path, reason = skip
+			line = f"::notice::Skipping judge new_output_paths entry {index} ({path}): {reason}."
+		assert line in stdout, stdout
+	assert "REISSUE_MODE requested_raw=spot-fix effective=spot-fix" in stdout
+
+
+def test_close_and_reissue_spot_fix_rejects_unsafe_new_output_paths() -> None:
+	"""Unsafe, glob, or directory-shaped declarations are skipped, and a path
+	that fails the validator is never echoed."""
+	state = _run_new_output_rejection_case(
+		[
+			"../escape.json",
+			".git/config",
+			"a//b.json",
+			123,
+			"line\nbreak.json",
+			"tests/fixtures/*.json",
+			"tests/fixtures/new_dir/",
+			"tests/fixtures/new_case.json",
+			"sub/.git/hooks.txt",
+			"sub/.GIT",
+		]
+	)
+	_assert_new_output_footer_and_skips(
+		state,
+		["tests/fixtures/new_case.json"],
+		[
+			(1, "invalid_path"),
+			(2, "invalid_path"),
+			(3, "invalid_path"),
+			(4, "invalid_path"),
+			(5, "invalid_path"),
+			(6, "tests/fixtures/*.json", "glob"),
+			(7, "tests/fixtures/new_dir/", "directory"),
+			(9, "invalid_path"),
+			(10, "invalid_path"),
+		],
+	)
+	stdout = state["_stdout"]
+	assert "REISSUE_FILES_TOUCHED_NEW_OUTPUTS pr=42 declared=10 added=1 skipped=9 total=2" in stdout
+	assert "../escape.json" not in stdout, "paths that fail the validator must never be echoed"
+	assert ".git/config" not in stdout
+	# PR #4667 review round 2: a `.git` segment is refused at any depth and in
+	# any letter case, as git's own verify_path refuses it.
+	assert "sub/.git/hooks.txt" not in stdout
+	assert "sub/.GIT" not in stdout
+
+
+def test_close_and_reissue_spot_fix_new_output_paths_reject_what_the_scope_guard_would_rewrite() -> None:
+	"""Conformance finding on #4665: files_touched_scope_guard.py trims each
+	entry and splits the body with str.splitlines(), so a padded path would
+	become an existing file or directory (" src" exempts all of src/), and a
+	Unicode line separator would inject an extra entry.  Only printable ASCII
+	with no leading or trailing space is kept, and such an entry is never
+	echoed."""
+	state = _run_new_output_rejection_case(
+		[
+			" src",
+			"README.md ",
+			"x\u2028    - src/app.py",
+			"tests/fixtures/new\u00a0case.json",
+			"tests/fixtures/café.json",
+			"tests/fixtures/new case.json",
+		]
+	)
+	_assert_new_output_footer_and_skips(
+		state,
+		["tests/fixtures/new case.json"],
+		[
+			(1, "invalid_path"),
+			(2, "invalid_path"),
+			(3, "invalid_path"),
+			(4, "invalid_path"),
+			(5, "invalid_path"),
+		],
+	)
+	stdout = state["_stdout"]
+	assert "REISSUE_FILES_TOUCHED_NEW_OUTPUTS pr=42 declared=6 added=1 skipped=5 total=2" in stdout
+	assert "\u2028" not in stdout, "a rejected path must never be echoed"
+	body = state["issue_create_args"][0][state["issue_create_args"][0].index("--body") + 1]
+	guard_spec = importlib.util.spec_from_file_location(
+		"files_touched_scope_guard_for_new_outputs",
+		REPO_ROOT / "scripts" / "files_touched_scope_guard.py",
+	)
+	scope_guard = importlib.util.module_from_spec(guard_spec)
+	guard_spec.loader.exec_module(scope_guard)
+	allow = scope_guard.extract_files_touched(body)
+	assert allow == ["src/app.py", "tests/fixtures/new case.json"], allow
+	for staged_path in ("src/other.py", "README.md"):
+		status, _allow, _oos = scope_guard.evaluate(body, [staged_path])
+		assert status == scope_guard.STATUS_OUT_OF_SCOPE, staged_path
+
+
+def test_close_and_reissue_spot_fix_new_output_paths_never_exempt_existing_paths_and_are_capped() -> None:
+	"""No existing file or directory can enter the allowlist this way,
+	duplicates collapse, and only the first 10 declarations are read."""
+	state = _run_new_output_rejection_case(
+		[
+			"tests/fixtures",
+			"README.md",
+			"src/app.py",
+			"tests/fixtures/new_case.json",
+			"tests/fixtures/new_case.json",
+			"tests/fixtures/new_2.json",
+			"tests/fixtures/new_3.json",
+			"tests/fixtures/new_4.json",
+			"tests/fixtures/new_5.json",
+			"tests/fixtures/new_6.json",
+			"tests/fixtures/over_cap.json",
+		]
+	)
+	_assert_new_output_footer_and_skips(
+		state,
+		[
+			"tests/fixtures/new_case.json",
+			"tests/fixtures/new_2.json",
+			"tests/fixtures/new_3.json",
+			"tests/fixtures/new_4.json",
+			"tests/fixtures/new_5.json",
+			"tests/fixtures/new_6.json",
+		],
+		[
+			(1, "tests/fixtures", "exists_at_head"),
+			(2, "README.md", "exists_at_head"),
+			(3, "src/app.py", "duplicate"),
+			(5, "tests/fixtures/new_case.json", "duplicate"),
+			(11, "over_cap"),
+		],
+	)
+	stdout = state["_stdout"]
+	assert "REISSUE_FILES_TOUCHED_NEW_OUTPUTS pr=42 declared=11 added=6 skipped=5 total=7" in stdout
+
+
+def test_close_and_reissue_spot_fix_new_output_paths_reject_directory_shaped_paths() -> None:
+	"""PR #4667 review round 1: files_touched_scope_guard.py lets a bare entry
+	cover everything beneath it, so a new directory-shaped declaration would
+	exempt a whole new subtree.  Only paths whose last segment carries a `.`
+	that is neither its first nor its last character are kept."""
+	state = _run_new_output_rejection_case(
+		[
+			"tests/fixtures/new_suite",
+			"tests/fixtures/.keep",
+			"tests/fixtures/trailing.",
+			".env.example",
+			"tests/fixtures/new_suite.json",
+		]
+	)
+	_assert_new_output_footer_and_skips(
+		state,
+		[".env.example", "tests/fixtures/new_suite.json"],
+		[
+			(1, "tests/fixtures/new_suite", "no_extension"),
+			(2, "tests/fixtures/.keep", "no_extension"),
+			(3, "tests/fixtures/trailing.", "no_extension"),
+		],
+	)
+	assert "REISSUE_FILES_TOUCHED_NEW_OUTPUTS pr=42 declared=5 added=2 skipped=3 total=3" in state["_stdout"]
+	body = state["issue_create_args"][0][state["issue_create_args"][0].index("--body") + 1]
+	guard_spec = importlib.util.spec_from_file_location(
+		"files_touched_scope_guard_for_directory_shaped_outputs",
+		REPO_ROOT / "scripts" / "files_touched_scope_guard.py",
+	)
+	scope_guard = importlib.util.module_from_spec(guard_spec)
+	guard_spec.loader.exec_module(scope_guard)
+	# The tests/fixtures/** auto-allow (SCOPE_GUARD_AUTO_ALLOW_PATHS, #8751) is
+	# switched off so this still checks that a directory-shaped declaration
+	# grants no subtree.
+	saved_auto_allow = os.environ.get("SCOPE_GUARD_AUTO_ALLOW_PATHS")
+	os.environ["SCOPE_GUARD_AUTO_ALLOW_PATHS"] = "none"
+	try:
+		status, _allow, oos = scope_guard.evaluate(body, ["tests/fixtures/new_suite/undeclared.json"])
+		assert status == scope_guard.STATUS_OUT_OF_SCOPE, oos
+		status, _allow, oos = scope_guard.evaluate(body, ["src/app.py", ".env.example", "tests/fixtures/new_suite.json"])
+		assert status == scope_guard.STATUS_IN_SCOPE, oos
+	finally:
+		if saved_auto_allow is None:
+			os.environ.pop("SCOPE_GUARD_AUTO_ALLOW_PATHS", None)
+		else:
+			os.environ["SCOPE_GUARD_AUTO_ALLOW_PATHS"] = saved_auto_allow
+
+
+def test_close_and_reissue_spot_fix_new_output_path_lookup_failure_fails_closed() -> None:
+	"""PR #4668 review round 1: a failed existence lookup at the closed head
+	(an unreadable object, a partial clone that cannot fetch, a bad SHA) must
+	never read as "absent", or an existing path could enter the allowlist.
+	The entry is skipped as ``lookup_failed`` and the other entries still
+	go through."""
+	real_git = shutil.which("git")
+	assert real_git, "git is required for this harness"
+	with tempfile.TemporaryDirectory(prefix="test_rb_git_shim_") as shim_td:
+		shim = Path(shim_td) / "git"
+		shim.write_text(
+			"#!/usr/bin/env bash\n"
+			'case " $* " in\n'
+			'  *" ls-tree "*" tests/fixtures/lookup_fails.json "*)\n'
+			'    echo "fatal: simulated tree read failure" >&2\n'
+			"    exit 128\n"
+			"    ;;\n"
+			"esac\n"
+			f'exec "{real_git}" "$@"\n',
+			encoding="utf-8",
+		)
+		shim.chmod(0o755)
+		state = _run_close_and_reissue(
+			["ai:orchestrator-managed"],
+			judge_payload=_spot_fix_payload_with_new_outputs(
+				["tests/fixtures/lookup_fails.json", "tests/fixtures/new_case.json"]
+			),
+			reissue_preserve_baseline_enabled="1",
+			repo_files={
+				"src/app.py": "print('hello')\n",
+				"README.md": "hello\n",
+				"tests/fixtures/existing.json": "{}\n",
+			},
+			api_responses={"pulls/42/files": [{"filename": "src/app.py"}]},
+			path_prefix=shim_td,
+		)
+	_assert_new_output_footer_and_skips(
+		state,
+		["tests/fixtures/new_case.json"],
+		[(1, "tests/fixtures/lookup_fails.json", "lookup_failed")],
+	)
+	assert "REISSUE_FILES_TOUCHED_NEW_OUTPUTS pr=42 declared=2 added=1 skipped=1 total=2" in state["_stdout"]
+
+
+def test_new_output_existence_check_uses_literal_pathspecs() -> None:
+	"""`git ls-tree` reads its path arguments as pathspecs, so a declared
+	path such as ``:(top)README.md`` would be matched as ``README.md``.  The
+	existence check must read the declared path literally and from the tree
+	root, and never via ``git cat-file -e``, which cannot tell a failed read
+	from a missing path."""
+	branch = _extract_close_and_reissue_branch()
+	block = branch[branch.index("# New output paths:"):branch.index("REISSUE_FILES_TOUCHED_NEW_OUTPUTS pr=")]
+	assert 'git --literal-pathspecs ls-tree --full-tree --name-only "${RB_HEAD_SHA}" -- "${RB_NEW_OUTPUT_PATH}"' in block
+	assert "cat-file -e" not in block
+
+
+def test_close_and_reissue_without_new_output_paths_keeps_the_body_unchanged() -> None:
+	"""A judge on the old contract (no field, or an empty / non-array field)
+	must produce exactly today's footer and no new log line.  A field that is
+	present but not an array only adds one notice naming its type."""
+	footers = []
+	for new_output_paths in (None, [], "changelog.d/not-a-list.md"):
+		payload = _spot_fix_payload_with_new_outputs(new_output_paths)
+		if new_output_paths is None:
+			payload.pop("new_output_paths")
+		state = _run_close_and_reissue(
+			["ai:orchestrator-managed"],
+			judge_payload=payload,
+			reissue_preserve_baseline_enabled="1",
+			repo_files={"src/app.py": "print('hello')\n"},
+			api_responses={"pulls/42/files": [{"filename": "src/app.py"}]},
+		)
+		body = state["issue_create_args"][0][state["issue_create_args"][0].index("--body") + 1]
+		assert body.rstrip().endswith("- files_touched:\n  - src/app.py"), body
+		assert "REISSUE_FILES_TOUCHED_NEW_OUTPUTS" not in state["_stdout"]
+		assert "new_output_paths entry" not in state["_stdout"]
+		notice = "::notice::Ignoring judge new_output_paths: expected an array, got string."
+		assert (notice in state["_stdout"]) == isinstance(new_output_paths, str), state["_stdout"]
+		assert "not-a-list" not in state["_stdout"], "a malformed field's value must never be echoed"
+		footers.append(body[body.index("- files_touched:"):])
+	assert len(set(footers)) == 1
+
+
+def test_close_and_reissue_redo_ignores_new_output_paths() -> None:
+	payload = _spot_fix_payload_with_new_outputs(["changelog.d/4665-x.md"])
+	payload["reissue_mode"] = "redo"
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload=payload,
+		reissue_preserve_baseline_enabled="1",
+		repo_files={"src/app.py": "print('hello')\n"},
+	)
+	body = state["issue_create_args"][0][state["issue_create_args"][0].index("--body") + 1]
+	assert "files_touched:" not in body
+	assert "changelog.d/4665-x.md" not in body
+	assert "REISSUE_FILES_TOUCHED_NEW_OUTPUTS" not in state["_stdout"]
+
+
+def test_reissue_new_outputs_log_prefix_is_registered() -> None:
+	agents_text = _agents_text_with_fragments()
+	assert "- `REISSUE_FILES_TOUCHED_NEW_OUTPUTS`" in agents_text
+	assert "LOG_PREFIX.name=REISSUE_FILES_TOUCHED_NEW_OUTPUTS" in agents_text
+
+
+def test_close_and_reissue_spot_fix_lowercases_baseline_branch_sha_prefix() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload={
+			"action": "close_and_reissue",
+			"reissue_mode": "spot-fix",
+			"justification": "Uppercase head SHAs must still produce a trusted preserved baseline branch.",
+			"remaining_issues": [
+				{"file": "src/app.py", "line_start": 10, "line_end": 14, "symptom": "Guard missing"},
+			],
+			"new_issue": {
+				"title": "Reissue: lowercase preserved baseline",
+				"body": "Keep the prior implementation and patch only the grounded gap.",
+			},
+		},
+		reissue_preserve_baseline_enabled="true",
+		repo_files={"src/app.py": "print('hello')\n"},
+		pr_view_head_ref_oid="__UPPER_REPO_HEAD__",
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1, f"expected one reissue create call, got: {creates}"
+	body = creates[0][creates[0].index("--body") + 1]
+	match = re.search(r"prior_pr_baseline_branch: ([^\n]+)", body)
+	assert match, f"expected prior_pr_baseline_branch metadata in body:\n{body}"
+	baseline_branch = match.group(1).strip()
+	expected_head_sha = str(state["_repo_head_before"]).lower()
+	assert baseline_branch == f"ai/reissue-baseline/pr-42-{expected_head_sha[:12]}-777-1"
+	assert f"refs/heads/{baseline_branch}" in state.get("_remote_heads", "")
+	assert f"REISSUE_BASELINE_PRESERVED branch={baseline_branch} head_sha={expected_head_sha}" in state["_stdout"]
+
+
+def test_close_and_reissue_invalid_reissue_mode_falls_back_to_redo() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload={
+			"action": "close_and_reissue",
+			"reissue_mode": "unknown-mode",
+			"justification": "Malformed output from the judge should fail open.",
+			"remaining_issues": [
+				{"file": "src/app.py", "line_start": 1, "line_end": 2, "symptom": "Unused in redo fallback"},
+			],
+			"new_issue": {
+				"title": "Reissue: redo",
+				"body": "Re-derive the patch from scratch.",
+			},
+		},
+		reissue_preserve_baseline_enabled="true",
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1
+	body = creates[0][creates[0].index("--body") + 1]
+	assert "prior_pr_baseline_branch:" not in body
+	assert "files_touched:" not in body
+	assert "REISSUE_MODE requested_raw=unknown-mode effective=redo" in state["_stdout"], (
+		"invalid reissue_mode must fail open back to redo instead of attempting spot-fix"
+	)
+	assert "REISSUE_BASELINE_PRESERVED" not in state["_stdout"]
+
+
+def test_close_and_reissue_preserves_judge_json_bytes_under_xpg_echo() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload={
+			"action": "close_and_reissue",
+			"reissue_mode": "redo",
+			"justification": "Quoted reissues should not be dropped.",
+			"new_issue": {
+				"title": 'Reissue: handle "quoted" follow-up',
+				"body": 'First line keeps "quotes" and literal \\n intact.\nSecond line stays attached.',
+			},
+		},
+		enable_xpg_echo=True,
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1, (
+		"close_and_reissue must still create the replacement issue when bash xpg_echo is enabled"
+	)
+	args = creates[0]
+	title = args[args.index("--title") + 1]
+	body = args[args.index("--body") + 1]
+	assert title == 'Reissue: handle "quoted" follow-up'
+	assert body.startswith('First line keeps "quotes" and literal \\n intact.\nSecond line stays attached.')
+
+
+def test_close_and_reissue_spot_fix_invalid_remaining_issue_file_falls_back_to_redo() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload={
+			"action": "close_and_reissue",
+			"reissue_mode": "spot-fix",
+			"justification": "Path validation must reject unsafe files_touched metadata.",
+			"remaining_issues": [
+				{"file": "../escape.sh", "line_start": 1, "line_end": 1, "symptom": "Unsafe path"},
+			],
+			"new_issue": {
+				"title": "Reissue: invalid path should redo",
+				"body": "Fallback to redo when the structured file list is unsafe.",
+			},
+		},
+		reissue_preserve_baseline_enabled="true",
+		repo_files={"src/app.py": "print('hello')\n"},
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1
+	body = creates[0][creates[0].index("--body") + 1]
+	assert "prior_pr_baseline_branch:" not in body
+	assert "files_touched:" not in body
+	assert "REISSUE_BASELINE_DISCARDED requested=spot-fix reason=invalid_file_path:../escape.sh" in state["_stdout"], (
+		"unsafe remaining_issues[].file entries must discard the spot-fix baseline and redo instead"
+	)
+	assert "REISSUE_MODE requested_raw=spot-fix effective=redo" in state["_stdout"]
+
+
+def test_close_and_reissue_spot_fix_setup_failure_uses_setup_reason_and_surfaces_git_error() -> None:
+	state = _run_close_and_reissue(
+		["ai:orchestrator-managed"],
+		judge_payload={
+			"action": "close_and_reissue",
+			"reissue_mode": "spot-fix",
+			"justification": "Baseline creation should fail open when local setup fails.",
+			"remaining_issues": [
+				{"file": "src/app.py", "line_start": 1, "line_end": 2, "symptom": "Needs a focused fix"},
+			],
+			"new_issue": {
+				"title": "Reissue: setup failure redo",
+				"body": "Fallback to redo when the baseline branch cannot be prepared locally.",
+			},
+		},
+		reissue_preserve_baseline_enabled="true",
+		repo_files={"src/app.py": "print('hello')\n"},
+		precreate_baseline_branch=True,
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1
+	body = creates[0][creates[0].index("--body") + 1]
+	assert "prior_pr_baseline_branch:" not in body
+	assert "files_touched:" not in body
+	assert "REISSUE_BASELINE_DISCARDED requested=spot-fix reason=baseline_branch_setup_failed" in state["_stdout"], (
+		"pre-push baseline setup failures must log the setup-specific discard reason"
+	)
+	assert "baseline_branch_push_failed" not in state["_stdout"]
+	assert "fatal: a branch named" in state["_stderr"], (
+		"git checkout -b setup failures must surface the underlying git error on stderr"
+	)
+
+
+def _run_body_fetch_loop(issue_responses: dict[str, dict], issue_numbers: str) -> dict:
+	"""Run the real body-fetch loop block against a mocked `gh api` so
+	the actual jq pipeline (`[(.labels // [])[]?.name]` plus the body
+	extract) is exercised end-to-end.
+
+	``issue_responses`` maps an API path substring (e.g.
+	``"issues/41"``) to the mocked GitHub issue JSON the mock returns.
+	``issue_numbers`` is the newline-separated string fed to the loop's
+	``ISSUE_NUMBERS`` reader.
+
+	Returns the captured ``FIRST_ISSUE``, ``FIRST_ISSUE_BODY``, and
+	``FIRST_ISSUE_LABELS_JSON`` values."""
+	loop = _extract_body_fetch_loop()
+
+	with tempfile.TemporaryDirectory(prefix="test_rb_judge_loop_") as td:
+		tmp_path = Path(td)
+		runtime_dir = tmp_path / "runtime"
+		bin_dir = tmp_path / "bin"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		bin_dir.mkdir(parents=True, exist_ok=True)
+
+		gh_state_file = runtime_dir / "gh_state.json"
+		_install_mock_gh(bin_dir, gh_state_file)
+		gh_state_file.write_text(
+			json.dumps({"api_responses": issue_responses}),
+			encoding="utf-8",
+		)
+
+		capture_file = runtime_dir / "captured.env"
+		# _safe_gh_jq is the gh_helpers.sh wrapper.  Substitute a thin
+		# bash function that forwards directly to the mocked `gh api`
+		# so the loop's actual jq filters run against real shell output.
+		harness = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+_safe_gh_jq() {{ gh api "$@"; }}
+
+ISSUE_NUMBERS="${{ISSUE_NUMBERS_INPUT}}"
+RB_LINKED_ISSUES_GRAPHQL_JSON=""
+
+{loop}
+
+{{
+  printf 'FIRST_ISSUE=%s\\n' "${{FIRST_ISSUE}}"
+  printf 'FIRST_ISSUE_BODY=%s\\n' "${{FIRST_ISSUE_BODY}}"
+  printf 'FIRST_ISSUE_LABELS_JSON=%s\\n' "${{FIRST_ISSUE_LABELS_JSON}}"
+}} > "${{CAPTURE_FILE}}"
+"""
+		script_path = runtime_dir / "loop_harness.sh"
+		script_path.write_text(harness, encoding="utf-8")
+		script_path.chmod(0o755)
+
+		env = {
+			"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+			"MOCK_GH_STATE_FILE": str(gh_state_file),
+			"REPOSITORY": "owner/repo",
+			"ISSUE_NUMBERS_INPUT": issue_numbers,
+			"CAPTURE_FILE": str(capture_file),
+		}
+		run_env = _sanitized_git_env(env)
+
+		proc = subprocess.run(
+			["bash", str(script_path)],
+			cwd=str(tmp_path),
+			env=run_env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+		assert proc.returncode == 0, (
+			f"loop harness exited {proc.returncode}\n"
+			f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		)
+
+		captured = {}
+		for raw in capture_file.read_text(encoding="utf-8").splitlines():
+			if "=" in raw:
+				k, _, v = raw.partition("=")
+				captured[k] = v
+		return captured
+
+
+def _run_issue_number_fallback(*, pr_meta: str, fallback_pr_response: dict | None = None) -> dict:
+	"""Run the real linked-issue fallback block against mocked `gh`.
+
+	``pr_meta`` seeds the early `_pr_meta` cache captured before the
+	linked-issue lookup.  ``fallback_pr_response`` is the mocked
+	`pulls/{pr}` response returned only when the block falls back to a
+	secondary `_safe_gh_jq` fetch.
+	"""
+	block = _extract_issue_number_fallback_block()
+
+	with tempfile.TemporaryDirectory(prefix="test_rb_judge_issue_fallback_") as td:
+		tmp_path = Path(td)
+		runtime_dir = tmp_path / "runtime"
+		bin_dir = tmp_path / "bin"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		bin_dir.mkdir(parents=True, exist_ok=True)
+
+		gh_state_file = runtime_dir / "gh_state.json"
+		_install_mock_gh(bin_dir, gh_state_file)
+		mock_state: dict[str, object] = {}
+		if fallback_pr_response is not None:
+			mock_state["api_responses"] = {"pulls/42": fallback_pr_response}
+		gh_state_file.write_text(json.dumps(mock_state), encoding="utf-8")
+
+		capture_file = runtime_dir / "captured.env"
+		helper_path = (REPO_ROOT / "scripts" / "gh_helpers.sh").as_posix()
+		harness = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+source "{helper_path}"
+gh_retry() {{ "$@"; }}
+_safe_gh_jq() {{ gh api "$@"; }}
+
+REPOSITORY="owner/repo"
+PR_NUMBER="42"
+ISSUE_NUMBERS=""
+_pr_meta="${{PR_META_INPUT}}"
+
+{block}
+
+{{
+  printf 'ISSUE_NUMBERS=%s\\n' "${{ISSUE_NUMBERS}}"
+}} > "${{CAPTURE_FILE}}"
+"""
+		script_path = runtime_dir / "issue_fallback_harness.sh"
+		script_path.write_text(harness, encoding="utf-8")
+		script_path.chmod(0o755)
+
+		env = {
+			"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+			"MOCK_GH_STATE_FILE": str(gh_state_file),
+			"PR_META_INPUT": pr_meta,
+			"CAPTURE_FILE": str(capture_file),
+		}
+		run_env = _sanitized_git_env(env)
+
+		proc = subprocess.run(
+			["bash", str(script_path)],
+			cwd=str(tmp_path),
+			env=run_env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+		assert proc.returncode == 0, (
+			f"issue fallback harness exited {proc.returncode}\n"
+			f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		)
+
+		captured = {}
+		for raw in capture_file.read_text(encoding="utf-8").splitlines():
+			if "=" in raw:
+				k, _, v = raw.partition("=")
+				captured[k] = v
+
+		state = json.loads(gh_state_file.read_text(encoding="utf-8"))
+		state["_captured"] = captured
+		state["_stdout"] = proc.stdout
+		state["_stderr"] = proc.stderr
+		return state
+
+
+def _matching_api_calls(state: dict, path_fragment: str) -> list[list[str]]:
+	return [
+		call for call in state.get("api_calls", [])
+		if any(path_fragment in arg for arg in call)
+	]
+
+
+def _run_linked_issue_hydration(
+	*,
+	graphql_response: dict,
+	issue_responses: dict[str, dict] | None = None,
+	fallback_numbers: list[int] | None = None,
+	graphql_failure: bool = False,
+	pr_meta: dict | None = None,
+) -> dict:
+	"""Execute the real GraphQL discovery and issue hydration block."""
+	block = _extract_linked_issue_hydration_block()
+
+	with tempfile.TemporaryDirectory(prefix="test_rb_judge_graphql_hydration_") as td:
+		tmp_path = Path(td)
+		runtime_dir = tmp_path / "runtime"
+		bin_dir = tmp_path / "bin"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		bin_dir.mkdir(parents=True, exist_ok=True)
+
+		gh_state_file = runtime_dir / "gh_state.json"
+		_install_mock_gh(bin_dir, gh_state_file)
+		api_responses: dict[str, dict] = {"graphql": graphql_response}
+		api_responses.update(issue_responses or {})
+		mock_state: dict[str, object] = {"api_responses": api_responses}
+		if graphql_failure:
+			mock_state["api_failures"] = ["graphql"]
+		gh_state_file.write_text(json.dumps(mock_state), encoding="utf-8")
+
+		capture_file = runtime_dir / "captured.env"
+		harness = f"""#!/usr/bin/env bash
+set -euo pipefail
+
+gh_retry() {{ "$@"; }}
+_safe_gh_jq() {{ gh api "$@"; }}
+extract_repo_scoped_issue_refs_from_text() {{ :; }}
+
+REPOSITORY="owner/repo"
+PR_NUMBER="42"
+_pr_meta="${{PR_META_INPUT}}"
+
+{block}
+
+{{
+  printf 'FIRST_ISSUE=%s\n' "${{FIRST_ISSUE}}"
+  printf 'FIRST_ISSUE_BODY=%s\n' "${{FIRST_ISSUE_BODY}}"
+  printf 'FIRST_ISSUE_LINEAGE_BODY=%s\n' "${{FIRST_ISSUE_LINEAGE_BODY}}"
+  printf 'FIRST_ISSUE_LABELS_JSON=%s\n' "${{FIRST_ISSUE_LABELS_JSON}}"
+  printf 'PR_BASE_REF=%s\n' "${{PR_BASE_REF}}"
+}} > "${{CAPTURE_FILE}}"
+"""
+		script_path = runtime_dir / "graphql_hydration_harness.sh"
+		script_path.write_text(harness, encoding="utf-8")
+		script_path.chmod(0o755)
+
+		env = {
+			"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+			"MOCK_GH_STATE_FILE": str(gh_state_file),
+			"LINKED_ISSUE_FALLBACK_NUMBERS_JSON": json.dumps(fallback_numbers or []),
+			"PR_META_INPUT": json.dumps(pr_meta or {}),
+			"CAPTURE_FILE": str(capture_file),
+		}
+		proc = subprocess.run(
+			["bash", str(script_path)],
+			cwd=str(tmp_path),
+			env=_sanitized_git_env(env),
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+		assert proc.returncode == 0, (
+			f"GraphQL hydration harness exited {proc.returncode}\n"
+			f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		)
+
+		captured = {}
+		for raw in capture_file.read_text(encoding="utf-8").splitlines():
+			if "=" in raw:
+				key, _, value = raw.partition("=")
+				captured[key] = value
+		state = json.loads(gh_state_file.read_text(encoding="utf-8"))
+		state["_captured"] = captured
+		state["_stderr"] = proc.stderr
+		return state
+
+
+def _graphql_linked_issues(nodes: list[object]) -> dict:
+	return {
+		"data": {
+			"repository": {
+				"pullRequest": {
+					"closingIssuesReferences": {"nodes": nodes},
+				},
+			},
+		},
+	}
+
+
+def _complete_graphql_issue(number: int, body: str | None, labels: list[str]) -> dict:
+	return {
+		"number": number,
+		"body": body,
+		"labels": {
+			"nodes": [{"name": label} for label in labels],
+			"pageInfo": {"hasNextPage": False},
+		},
+	}
+
+
+def test_linked_issue_query_requests_complete_pagination_aware_nodes() -> None:
+	src = _rb_judge_text()
+	assert "closingIssuesReferences(first: 50)" in src
+	assert "labels(first: 100)" in src
+	assert "pageInfo { hasNextPage }" in src
+
+
+def test_complete_graphql_node_avoids_issue_rest_read() -> None:
+	state = _run_linked_issue_hydration(
+		graphql_response=_graphql_linked_issues([
+			_complete_graphql_issue(41, "Build feature X.", ["ai:orchestrator-managed", "ai:closed"]),
+		]),
+	)
+
+	assert state["_captured"] == {
+		"FIRST_ISSUE": "41",
+		"FIRST_ISSUE_BODY": "Build feature X.",
+		"FIRST_ISSUE_LINEAGE_BODY": "Build feature X.",
+		"FIRST_ISSUE_LABELS_JSON": '["ai:orchestrator-managed","ai:closed"]',
+		"PR_BASE_REF": "",
+	}
+	assert len(_matching_api_calls(state, "graphql")) == 1
+	assert _matching_api_calls(state, "issues/41") == []
+
+
+def test_complete_graphql_empty_body_preserves_first_issue_labels() -> None:
+	state = _run_linked_issue_hydration(
+		graphql_response=_graphql_linked_issues([
+			_complete_graphql_issue(41, None, ["ai:orchestrator-managed"]),
+			_complete_graphql_issue(42, "Fallback body", ["bug"]),
+		]),
+	)
+
+	assert state["_captured"]["FIRST_ISSUE"] == "41"
+	assert state["_captured"]["FIRST_ISSUE_BODY"] == "Fallback body"
+	assert state["_captured"]["FIRST_ISSUE_LINEAGE_BODY"] == ""
+	assert json.loads(state["_captured"]["FIRST_ISSUE_LABELS_JSON"]) == ["ai:orchestrator-managed"]
+	assert _matching_api_calls(state, "issues/41") == []
+	assert _matching_api_calls(state, "issues/42") == []
+
+
+def test_partial_graphql_node_falls_back_to_one_issue_rest_read() -> None:
+	state = _run_linked_issue_hydration(
+		graphql_response=_graphql_linked_issues([{
+			"number": 41,
+			"labels": {"nodes": [{"name": "truncated"}], "pageInfo": {"hasNextPage": False}},
+		}]),
+		issue_responses={
+			"issues/41": {"body": "REST body", "labels": [{"name": "ai:orchestrator-managed"}]},
+		},
+	)
+
+	assert state["_captured"]["FIRST_ISSUE_BODY"] == "REST body"
+	assert json.loads(state["_captured"]["FIRST_ISSUE_LABELS_JSON"]) == ["ai:orchestrator-managed"]
+	assert len(_matching_api_calls(state, "issues/41")) == 1
+
+
+def test_paginated_graphql_labels_fall_back_to_one_issue_rest_read() -> None:
+	paginated_node = _complete_graphql_issue(41, "Truncated GraphQL body", ["first-page-label"])
+	paginated_node["labels"]["pageInfo"]["hasNextPage"] = True
+	state = _run_linked_issue_hydration(
+		graphql_response=_graphql_linked_issues([paginated_node]),
+		issue_responses={
+			"issues/41": {"body": "Complete REST body", "labels": [{"name": "complete-label"}]},
+		},
+	)
+
+	assert state["_captured"]["FIRST_ISSUE_BODY"] == "Complete REST body"
+	assert json.loads(state["_captured"]["FIRST_ISSUE_LABELS_JSON"]) == ["complete-label"]
+	assert len(_matching_api_calls(state, "issues/41")) == 1
+
+
+def test_empty_graphql_response_uses_fallback_number_and_rest() -> None:
+	state = _run_linked_issue_hydration(
+		graphql_response=_graphql_linked_issues([]),
+		fallback_numbers=[41],
+		issue_responses={"issues/41": {"body": "Fallback body", "labels": []}},
+	)
+
+	assert state["_captured"]["FIRST_ISSUE"] == "41"
+	assert state["_captured"]["FIRST_ISSUE_BODY"] == "Fallback body"
+	assert len(_matching_api_calls(state, "issues/41")) == 1
+
+
+def test_failed_graphql_request_uses_fallback_number_and_rest() -> None:
+	state = _run_linked_issue_hydration(
+		graphql_response=_graphql_linked_issues([]),
+		graphql_failure=True,
+		fallback_numbers=[41],
+		issue_responses={"issues/41": {"body": "Fallback after failure", "labels": []}},
+		pr_meta={"base": {"ref": "orchestrator/project-249"}},
+	)
+
+	assert state["_captured"]["FIRST_ISSUE_BODY"] == "Fallback after failure"
+	assert state["_captured"]["PR_BASE_REF"] == "orchestrator/project-249"
+	assert len(_matching_api_calls(state, "graphql")) == 1
+	assert len(_matching_api_calls(state, "issues/41")) == 1
+
+
+def test_mixed_graphql_nodes_only_rest_hydrate_incomplete_node() -> None:
+	state = _run_linked_issue_hydration(
+		graphql_response=_graphql_linked_issues([
+			_complete_graphql_issue(41, "", ["ai:orchestrator-managed"]),
+			{"number": 42, "body": "Incomplete GraphQL body", "labels": None},
+		]),
+		issue_responses={"issues/42": {"body": "REST fallback body", "labels": [{"name": "bug"}]}},
+	)
+
+	assert state["_captured"]["FIRST_ISSUE"] == "41"
+	assert state["_captured"]["FIRST_ISSUE_BODY"] == "REST fallback body"
+	assert json.loads(state["_captured"]["FIRST_ISSUE_LABELS_JSON"]) == ["ai:orchestrator-managed"]
+	assert _matching_api_calls(state, "issues/41") == []
+	assert len(_matching_api_calls(state, "issues/42")) == 1
+
+
+def test_loop_jq_filter_extracts_orchestrator_managed_from_realistic_payload() -> None:
+	"""End-to-end runtime test: feed the real body-fetch loop a
+	GitHub-shape issue JSON via mocked `gh api` and assert the actual
+	jq filter populates FIRST_ISSUE_LABELS_JSON with the parent's
+	label names.
+
+	Without this, the other runtime tests (which pre-seed
+	FIRST_ISSUE_LABELS_JSON via env and stub _safe_gh_jq to a no-op)
+	would not catch a future jq-filter typo or a GitHub-shape change
+	in the `.labels` field — the propagation gate would silently see
+	`[]` and skip."""
+	captured = _run_body_fetch_loop(
+		issue_responses={
+			"issues/41": {
+				"number": 41,
+				"title": "Orchestrator-managed parent",
+				"body": "Build feature X.",
+				"state": "closed",
+				"labels": [
+					{"id": 1, "name": "ai:orchestrator-managed", "color": "bfdadc"},
+					{"id": 2, "name": "ai:closed", "color": "6a737d"},
+				],
+			},
+		},
+		issue_numbers="41",
+	)
+	assert captured.get("FIRST_ISSUE") == "41"
+	assert captured.get("FIRST_ISSUE_BODY") == "Build feature X."
+	labels = json.loads(captured.get("FIRST_ISSUE_LABELS_JSON", "[]"))
+	assert labels == ["ai:orchestrator-managed", "ai:closed"], (
+		f"expected the loop's jq filter to extract both label names from a "
+		f"realistic GitHub /issues/N response; got {labels}"
+	)
+
+
+def test_loop_jq_filter_handles_null_labels_field() -> None:
+	"""GitHub shape variation: some payloads return ``"labels": null``
+	(rare but documented).  The `// []` defensive default in the jq
+	filter must collapse that to an empty list, not error out — a
+	future filter rewrite that dropped the safe default would silently
+	break propagation here."""
+	captured = _run_body_fetch_loop(
+		issue_responses={
+			"issues/41": {
+				"number": 41,
+				"body": "Body present",
+				"labels": None,
+			},
+		},
+		issue_numbers="41",
+	)
+	assert captured.get("FIRST_ISSUE") == "41"
+	assert json.loads(captured.get("FIRST_ISSUE_LABELS_JSON", "null")) == []
+
+
+def test_loop_jq_filter_handles_missing_labels_key() -> None:
+	"""If the labels key is absent entirely (defensive: malformed or
+	stripped response), the filter must yield an empty list — not
+	error and not propagate stale state from a previous iteration."""
+	captured = _run_body_fetch_loop(
+		issue_responses={
+			"issues/41": {
+				"number": 41,
+				"body": "Body present",
+			},
+		},
+		issue_numbers="41",
+	)
+	assert json.loads(captured.get("FIRST_ISSUE_LABELS_JSON", "null")) == []
+
+
+def test_loop_pins_labels_to_first_issue_even_when_body_comes_from_later_issue() -> None:
+	"""When the first linked issue has an empty body, the loop falls
+	back to a later issue's body — pre-existing behaviour.  The
+	label-propagation fix MUST keep FIRST_ISSUE_LABELS_JSON pinned to
+	the first issue's labels (which match the reissue footer's
+	``Replaces #FIRST_ISSUE``), not jump to the later issue's labels.
+
+	This nails down the contract grok-4.1-fast flagged on PR #2267:
+	labels follow FIRST_ISSUE, not whichever issue contributed the body."""
+	captured = _run_body_fetch_loop(
+		issue_responses={
+			"issues/41": {
+				"number": 41,
+				"body": "",
+				"labels": [{"name": "ai:orchestrator-managed"}],
+			},
+			"issues/42": {
+				"number": 42,
+				"body": "Fallback body",
+				"labels": [{"name": "bug"}],
+			},
+		},
+		issue_numbers="41\n42",
+	)
+	assert captured.get("FIRST_ISSUE") == "41", (
+		"FIRST_ISSUE must be the first linked issue, not the body-source"
+	)
+	assert captured.get("FIRST_ISSUE_BODY") == "Fallback body", (
+		"pre-existing behaviour: empty first body → fall back to next issue's body"
+	)
+	labels = json.loads(captured.get("FIRST_ISSUE_LABELS_JSON", "[]"))
+	assert labels == ["ai:orchestrator-managed"], (
+		f"FIRST_ISSUE_LABELS_JSON must follow FIRST_ISSUE (#41), not the "
+		f"body-source (#42); got {labels}"
+	)
+
+
+def test_issue_number_fallback_reuses_cached_pr_metadata_without_refetch() -> None:
+	state = _run_issue_number_fallback(
+		pr_meta=json.dumps({
+			"title": "Fixes #41",
+			"body": "Strict fallback should reuse cached PR metadata.",
+		}),
+	)
+
+	assert state["_captured"].get("ISSUE_NUMBERS") == "41", (
+		"linked-issue fallback must still extract issue numbers from cached PR title/body"
+	)
+	pull_calls = _matching_api_calls(state, "pulls/42")
+	assert pull_calls == [], (
+		"when cached _pr_meta already contains reusable title/body text, the fallback "
+		"must not re-fetch pulls/42"
+	)
+
+
+def test_issue_number_fallback_refetches_when_cached_metadata_is_unusable() -> None:
+	state = _run_issue_number_fallback(
+		pr_meta="{}",
+		fallback_pr_response={
+			"title": "owner/repo/issues/52",
+			"body": "Fallback GET should preserve strict repo-scoped path extraction.",
+		},
+	)
+
+	assert state["_captured"].get("ISSUE_NUMBERS") == "52", (
+		"when cached _pr_meta is unusable, the fallback must still extract issue numbers "
+		"from the secondary pulls/{pr} fetch"
+	)
+	pull_calls = _matching_api_calls(state, "pulls/42")
+	assert len(pull_calls) == 1, (
+		"unusable cached _pr_meta must fall open to exactly one secondary pulls/{pr} fetch"
+	)
+	assert "--jq" in pull_calls[0] and '.title + " " + (.body // "")' in pull_calls[0], (
+		"the secondary pulls/{pr} fetch must preserve the existing title/body jq projection"
+	)
+
+
+def test_issue_number_fallback_ignores_bare_issue_mentions_in_cached_pr_metadata() -> None:
+	state = _run_issue_number_fallback(
+		pr_meta=json.dumps({
+			"title": "Linked issue #41",
+			"body": "Bare prose mentions must stay non-actionable.",
+		}),
+	)
+
+	assert state["_captured"].get("ISSUE_NUMBERS", "") == "", (
+		"bare 'issue #N' mentions must not resolve linked issues in the judge fallback"
+	)
+	assert _matching_api_calls(state, "pulls/42") == [], (
+		"non-empty cached PR metadata must not trigger a fallback pulls/{pr} refetch just because strict parsing found no issue links"
+	)
+
+
+def test_issue_number_fallback_ignores_bare_issue_path_mentions_in_cached_pr_metadata() -> None:
+	state = _run_issue_number_fallback(
+		pr_meta=json.dumps({
+			"title": "Docs note about issues/41",
+			"body": "Bare issues/N paths must stay non-actionable.",
+		}),
+	)
+
+	assert state["_captured"].get("ISSUE_NUMBERS", "") == "", (
+		"bare 'issues/N' mentions must not resolve linked issues in the judge fallback"
+	)
+	assert _matching_api_calls(state, "pulls/42") == [], (
+		"non-empty cached PR metadata must not refetch pulls/{pr} for ignored bare issues/N mentions"
+	)
+
+
+# =============================================================================
+# merge_with_followup branch coverage
+# =============================================================================
+#
+# Pins the same label-propagation contract for the merge_with_followup
+# action (added in PR #2519) AND the new safety gates introduced when
+# review comments flagged orphan-risk on the original implementation:
+#   - Refuse the action when followup_issue title/body are missing.
+#   - Only label / create follow-up / emit judge_handled when the merge
+#     can be confirmed (mergeable=true + auto-merge enrolled, or PR
+#     already merged).
+# Without these tests, a future refactor that re-orphans the follow-up
+# tracking issue (e.g. by moving the issue creation outside the
+# MERGE_CONFIRMED gate) would slip through.
+
+
+def _extract_merge_with_followup_branch() -> str:
+	"""Pull the body of the `merge_with_followup)` case arm out of the
+	real script.  Anchored on the next case label (`close_and_reissue)`)
+	so we don't swallow the rest of the case statement."""
+	text = _rb_judge_text()
+	match = re.search(
+		r"  merge_with_followup\)\n(?P<branch>.*?)\n    ;;\n\n  close_and_reissue\)",
+		text,
+		re.DOTALL,
+	)
+	if not match:
+		raise AssertionError(
+			"could not extract merge_with_followup branch from review_rb_judge.sh"
+		)
+	return match.group("branch")
+
+
+def _build_merge_with_followup_harness(
+	branch: str,
+	github_output: Path,
+	*,
+	enable_xpg_echo: bool = False,
+) -> str:
+	"""Wrap the extracted merge_with_followup branch in a self-contained
+	bash harness with stubs for the helpers it depends on.
+
+	Differences from `_build_harness` (close_and_reissue):
+	- `_safe_gh_jq` forwards to `gh api` so the mergeability-poll loop
+		sees real (mocked) PR JSON rather than no-op'ing into empty
+		output.  Without this the MERGE_CONFIRMED gate can never flip
+		true and every test would skip the issue-create path.
+	- `sleep` is no-op'd so the mergeability-poll backoff (which the
+		real script measures in seconds) doesn't slow tests.
+	"""
+	xpg_echo_line = "shopt -s xpg_echo\n\n" if enable_xpg_echo else ""
+	# The check-runs gate now delegates to the shared _pr_checks_completed
+	# helper in scripts/pr_checks_lib.sh; source it so the branch can call it
+	# (gh_retry/_safe_gh_jq are defined above, used by the helper at call time).
+	pr_checks_lib_path = (REPO_ROOT / "scripts" / "pr_checks_lib.sh").as_posix()
+	# The sync merge calls the #7659 merge-error helpers, which live outside
+	# the case arm; copy their definitions in from the real script.
+	script_text = _rb_judge_text()
+	helpers_begin = script_text.index("# BEGIN rb-judge merge error capture (#7659)")
+	helpers_end = script_text.index("# END rb-judge merge error capture (#7659)", helpers_begin)
+	merge_err_helpers = script_text[helpers_begin:helpers_end]
+	return f"""#!/usr/bin/env bash
+set -euo pipefail
+
+{xpg_echo_line}gh_retry() {{ "$@"; }}
+ensure_label_exists() {{ printf '%s\\n' "$1" >> "${{ENSURE_LABELS_FILE}}"; }}
+_resilient_phase_swap() {{ :; }}
+_safe_gh_jq() {{ gh api "$@"; }}
+sleep() {{ :; }}
+review_head_gate_post_status() {{ :; }}
+source "{pr_checks_lib_path}"
+{merge_err_helpers}
+GITHUB_OUTPUT="{github_output}"
+
+case "${{RB_ACTION}}" in
+  merge_with_followup)
+{branch}
+    ;;
+esac
+"""
+
+
+def _run_merge_with_followup(
+	parent_label_set: list[str],
+	followup_title: str = "Follow-up: wire deriveX into production",
+	followup_body: str = "Acceptance criteria: a production caller invokes deriveX with the same args the unit tests use.",
+	pr_state: str = "open",
+	pr_mergeable: object = True,  # bool or None (=mergeability still computing)
+	pr_merged: bool = False,  # GitHub's `.merged` field — authoritative did-this-land signal
+	pr_head_sha: str = "abcdef1234567890abcdef1234567890abcdef12",
+	enable_auto_merge: str = "true",
+	issue_create_should_fail: bool = False,
+	check_runs_state: str = "success",  # "success" (all complete + green) or "pending" (one in_progress)
+	enable_xpg_echo: bool = False,
+	first_issue_body: str = "",
+	first_issue_lineage_body: str | None = None,
+	# A real PR always has a base ref, and the merge-base freshness gate
+	# defers a merge whose base it cannot resolve (#6988).
+	pr_base_ref: str = "main",
+	orch_integration_branch_pattern: str = "^orchestrator/project-",
+	# GitHub's mergeable_state; the #9939 blocked-merge guard defers the
+	# sync merge on blocked / unknown / missing. None omits the field.
+	pr_mergeable_state: str | None = "clean",
+) -> dict:
+	"""Run the merge_with_followup branch with a mocked PR mergeability
+	state and judge JSON.  Returns the captured gh-mock state plus the
+	contents of GITHUB_OUTPUT so callers can assert on judge_handled /
+	judge_action emission.
+
+	``pr_merged`` mirrors GitHub's REST API shape — a merged PR is
+	reported as ``state=closed`` + ``merged=true`` (NEVER
+	``state=merged``).  The script's MERGE_CONFIRMED ladder reads
+	``.merged`` to detect the already-merged case; tests must use this
+	parameter (not ``pr_state``) to pin that branch.
+
+	``issue_create_should_fail`` causes the mock gh to return non-zero
+	from ``gh issue create`` so the test can exercise the error-handling
+	path (script must skip label swap + judge_handled emission)."""
+	branch = _extract_merge_with_followup_branch()
+
+	with tempfile.TemporaryDirectory(prefix="test_rb_judge_mwf_") as td:
+		tmp_path = Path(td)
+		runtime_dir = tmp_path / "runtime"
+		bin_dir = tmp_path / "bin"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+		bin_dir.mkdir(parents=True, exist_ok=True)
+
+		gh_state_file = runtime_dir / "gh_state.json"
+		_install_mock_gh(bin_dir, gh_state_file)
+
+		# Seed the mock's api_responses with a PR-mergeability shape
+		# keyed by the URL path suffix the script will call.  Substring
+		# match is what the mock uses, so "pulls/42" is enough.
+		# Include `head.sha` so the check-runs gate has a SHA to query
+		# against (matches GitHub's real shape).
+		pr_response: dict = {
+			"state": pr_state,
+			"merged": pr_merged,
+			"head": {"sha": pr_head_sha},
+		}
+		if pr_base_ref:
+			pr_response["base"] = {"ref": pr_base_ref}
+		# `mergeable: null` is meaningful (mergeability still computing);
+		# emit it explicitly so jq's `// ""` defaults fire.
+		pr_response["mergeable"] = pr_mergeable  # type: ignore[assignment]
+		if pr_mergeable_state is not None:
+			pr_response["mergeable_state"] = pr_mergeable_state
+
+		# Check-runs response — the new check-runs gate in
+		# merge_with_followup (round 12) fetches
+		# /commits/{sha}/check-runs and refuses the merge if any
+		# check-run is incomplete or has a non-success conclusion.
+		# Default to one passing check-run so the gate clears; tests
+		# that want to exercise the "checks pending" refusal pass
+		# check_runs_state="pending".
+		if check_runs_state == "pending":
+			check_runs_response: dict = {
+				"check_runs": [
+					{"status": "in_progress", "conclusion": None, "name": "ci/test"},
+				],
+			}
+		else:
+			check_runs_response = {
+				"check_runs": [
+					{"status": "completed", "conclusion": "success", "name": "ci/test"},
+				],
+			}
+
+		_mock_config: dict = {
+			"api_responses": {
+				"pulls/42": pr_response,
+				f"commits/{pr_head_sha}/check-runs": check_runs_response,
+				# Merge-base freshness gate (pr_checks_lib): the base has not
+				# moved past this head. An unverifiable base now defers the
+				# merge (#6988), so the gate needs a real answer here.
+				f"compare/{pr_head_sha}...": {"ahead_by": 0, "files": []},
+			},
+		}
+		if issue_create_should_fail:
+			_mock_config["issue_create_should_fail"] = True
+		gh_state_file.write_text(
+			json.dumps(_mock_config),
+			encoding="utf-8",
+		)
+
+		labels_file = runtime_dir / "ensure_labels.txt"
+		labels_file.write_text("", encoding="utf-8")
+		github_output = runtime_dir / "github_output.txt"
+		github_output.write_text("", encoding="utf-8")
+
+		script_path = runtime_dir / "rb_branch_harness.sh"
+		script_path.write_text(
+			_build_merge_with_followup_harness(
+				branch,
+				github_output,
+				enable_xpg_echo=enable_xpg_echo,
+			),
+			encoding="utf-8",
+		)
+		script_path.chmod(0o755)
+
+		# Build judge JSON.  Empty title or body simulates the
+		# "missing follow-up details" case the refusal gate catches.
+		followup_payload: dict = {"title": followup_title, "body": followup_body}
+		judge_json = json.dumps({
+			"action": "merge_with_followup",
+			"justification": "PR is shippable; deferred wiring tracked separately",
+			"remaining_issues_summary": "deriveX has only test callers",
+			"followup_issue": followup_payload,
+		})
+
+		env = {
+			"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+			"MOCK_GH_STATE_FILE": str(gh_state_file),
+			"ENSURE_LABELS_FILE": str(labels_file),
+			"REPOSITORY": "owner/repo",
+			"PR_NUMBER": "42",
+			"ISSUE_NUMBERS": "41",
+			"FIRST_ISSUE": "41",
+			"FIRST_ISSUE_BODY": first_issue_body,
+			"FIRST_ISSUE_LINEAGE_BODY": (
+				first_issue_body if first_issue_lineage_body is None else first_issue_lineage_body
+			),
+			"FIRST_ISSUE_LABELS_JSON": json.dumps(parent_label_set),
+			"JUDGE_JSON": judge_json,
+			"RB_ACTION": "merge_with_followup",
+			"ENABLE_AUTO_MERGE": enable_auto_merge,
+			"ORCH_INTEGRATION_BRANCH_PATTERN": orch_integration_branch_pattern,
+			"RB_JUDGED_HEAD_SHA": pr_head_sha,
+			# Speed up both polling loops — one attempt is enough
+			# because the mock returns the configured value
+			# deterministically on the first call (sync merge succeeds
+			# via the catch-all path in the mock).
+			"PR_MERGEABLE_POLL_ATTEMPTS": "1",
+			"PR_MERGEABLE_POLL_SLEEP": "0",
+		}
+		run_env = _sanitized_git_env(env)
+
+		proc = subprocess.run(
+			["bash", str(script_path)],
+			cwd=str(tmp_path),
+			env=run_env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+		assert proc.returncode == 0, (
+			f"merge_with_followup harness exited {proc.returncode}\n"
+			f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		)
+
+		state = json.loads(gh_state_file.read_text(encoding="utf-8"))
+		state["_ensure_labels"] = labels_file.read_text(encoding="utf-8").strip().splitlines()
+		state["_stdout"] = proc.stdout
+		state["_github_output"] = github_output.read_text(encoding="utf-8")
+		return state
+
+
+def test_merge_with_followup_branch_gates_on_orchestrator_managed_label() -> None:
+	"""Static check that mirrors the close_and_reissue branch contract:
+	the propagation gate must be exactly `index("ai:orchestrator-managed")`
+	against FIRST_ISSUE_LABELS_JSON.  Widening the gate would mislabel
+	standalone follow-ups; narrowing or removing it would re-orphan
+	orchestrator-managed lineage exactly like the bug the
+	close_and_reissue tests already pin."""
+	branch = _extract_merge_with_followup_branch()
+
+	assert "FIRST_ISSUE_LABELS_JSON" in branch, (
+		"merge_with_followup branch must reference FIRST_ISSUE_LABELS_JSON; "
+		"otherwise it cannot decide whether to propagate the label."
+	)
+	assert 'jq -e \'index("ai:orchestrator-managed")\'' in branch, (
+		"merge_with_followup branch must gate label propagation strictly "
+		"on the parent carrying ai:orchestrator-managed."
+	)
+	assert 'RB_FOLLOWUP_LABELS+=("--label" "ai:orchestrator-managed")' in branch, (
+		"merge_with_followup branch must append `--label ai:orchestrator-managed` "
+		"to the gh issue create args via the RB_FOLLOWUP_LABELS array."
+	)
+
+
+def test_merge_with_followup_orchestrator_managed_parent_propagates_label() -> None:
+	"""Parent carries ai:orchestrator-managed AND PR is mergeable AND
+	follow-up details are present → follow-up issue must be created
+	with `--label ai:orchestrator-managed` so the clarify auto-answer
+	fast path fires on the new issue."""
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed", "ai:review-blocked"],
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1, (
+		f"expected exactly one gh issue create call, got {len(creates)}: {creates}"
+	)
+	args = creates[0]
+	assert "--label" in args, (
+		f"follow-up issue must carry --label when parent is orchestrator-managed; "
+		f"got args: {args}"
+	)
+	# Collect all (flag, value) label pairs — the script attaches both
+	# `ai:clarification` (always, so the issue enters the pipeline
+	# without waiting for clarify.yml's issues.opened handler) and
+	# `ai:orchestrator-managed` (only when parent has it).
+	label_values = [
+		args[i + 1] for i, arg in enumerate(args)
+		if arg == "--label" and i + 1 < len(args)
+	]
+	assert "ai:orchestrator-managed" in label_values, (
+		f"follow-up must carry --label ai:orchestrator-managed when parent "
+		f"is orchestrator-managed; got label values: {label_values}"
+	)
+	assert "ai:clarification" in label_values, (
+		f"follow-up must carry --label ai:clarification so the issue enters "
+		f"the pipeline immediately (matches the orchestrator path's pattern); "
+		f"got label values: {label_values}"
+	)
+	assert "ai:orchestrator-managed" in state["_ensure_labels"], (
+		"ensure_label_exists must be invoked for ai:orchestrator-managed "
+		"before the gh issue create call; otherwise a fresh consumer repo "
+		"could 422 on an unknown label."
+	)
+	assert "ai:clarification" in state["_ensure_labels"], (
+		"ensure_label_exists must also be invoked for ai:clarification "
+		"so a fresh consumer repo has the label defined before issue "
+		"creation references it."
+	)
+	# Confirm the metadata footer landed in the issue body.
+	idx = args.index("--body")
+	body = args[idx + 1]
+	assert "Merge-with-followup metadata" in body, (
+		f"follow-up issue body must include the metadata footer; got body:\n{body}"
+	)
+	assert "Source PR: #42" in body, (
+		"follow-up issue body must reference the source PR number so the "
+		"deferred gap can be traced back to its origin"
+	)
+	assert "Parent issue: #41" in body, (
+		"follow-up issue body must reference the parent linked issue"
+	)
+	# judge_handled must be emitted on the confirmed-merge path.
+	assert "judge_handled=true" in state["_github_output"], (
+		"merge_with_followup must emit judge_handled=true when merge is "
+		"confirmed; otherwise the workflow's review-blocked fallback re-fires"
+	)
+	assert "judge_action=merge_with_followup" in state["_github_output"]
+
+
+def test_merge_with_followup_standalone_parent_does_not_propagate_label() -> None:
+	"""Parent does NOT carry ai:orchestrator-managed → follow-up must
+	be created WITHOUT that label.  Standalone clarify semantics must
+	be preserved (mirrors the close_and_reissue contract)."""
+	state = _run_merge_with_followup(
+		parent_label_set=["bug", "review-blocked"],
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1
+	args = creates[0]
+	assert "ai:orchestrator-managed" not in args, (
+		f"standalone follow-up must NOT carry ai:orchestrator-managed; "
+		f"got args: {args}"
+	)
+
+
+def test_merge_with_followup_refuses_without_followup_details() -> None:
+	"""Judge picked merge_with_followup but omitted follow-up
+	title/body → action must be refused: NO gh issue create call,
+	NO judge_handled=true emission.  This is the safety gate that
+	prevents the new action from silently degrading to a plain merge
+	(which would lose the deferred gap entirely)."""
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed"],
+		followup_title="",
+		followup_body="",
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert creates == [], (
+		f"merge_with_followup must NOT create any follow-up issue when "
+		f"followup_issue is missing — that's the whole point of the safety "
+		f"refusal. Got: {creates}"
+	)
+	assert "judge_handled=true" not in state["_github_output"], (
+		"merge_with_followup must NOT emit judge_handled=true when refusing "
+		"the action; the workflow's review-blocked fallback should fire instead"
+	)
+
+
+def test_merge_with_followup_skips_creation_when_pr_not_mergeable() -> None:
+	"""PR has merge conflicts (mergeable=false) → MERGE_CONFIRMED stays
+	false → NO follow-up issue created, NO label swap, NO
+	judge_handled=true.  This prevents orphaning the tracking issue
+	against code that never lands on the base ref."""
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed"],
+		pr_mergeable=False,
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert creates == [], (
+		f"merge_with_followup must NOT create the follow-up issue when "
+		f"the PR has merge conflicts (would orphan against unmerged code). "
+		f"Got: {creates}"
+	)
+	assert "judge_handled=true" not in state["_github_output"], (
+		"merge_with_followup must NOT emit judge_handled=true when merge "
+		"cannot be confirmed; the PR must stay in ai:review-blocked for "
+		"stall recovery"
+	)
+
+
+def test_merge_with_followup_skips_creation_when_auto_merge_disabled() -> None:
+	"""PR is mergeable but ENABLE_AUTO_MERGE=false → operator wants to
+	merge manually → MERGE_CONFIRMED stays false → NO follow-up issue
+	created.  Avoids opening a tracking issue against a PR the
+	operator might decide not to merge."""
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed"],
+		pr_mergeable=True,
+		enable_auto_merge="false",
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert creates == [], (
+		f"merge_with_followup must NOT create the follow-up issue when "
+		f"auto-merge is disabled and the PR is still open — the operator "
+		f"controls the merge decision. Got: {creates}"
+	)
+	assert "judge_handled=true" not in state["_github_output"]
+
+
+def test_merge_with_followup_defers_sync_merge_when_github_reports_blocked() -> None:
+	"""#9939: the judge merges with the owner's admin GH_PAT, so a sync
+	merge of a PR GitHub reports blocked (or not yet computed) would bypass
+	the ruleset. The guard defers it: no merge, no follow-up, the existing
+	mergeability_pending skip reason, and stall recovery re-fires the judge.
+	Loops over the states instead of pytest parametrization: CI runs this
+	file directly and main() calls every test with no arguments."""
+	for mergeable_state in ("blocked", "unknown", None):
+		state = _run_merge_with_followup(
+			parent_label_set=["ai:orchestrator-managed"],
+			pr_mergeable=True,
+			pr_mergeable_state=mergeable_state,
+		)
+		merges = [call for call in state.get("calls", []) if call[:2] == ["pr", "merge"]]
+		assert merges == [], (mergeable_state, merges)
+		assert state.get("issue_create_args", []) == [], mergeable_state
+		assert "judge_skip_reason=mergeability_pending" in state["_github_output"], mergeable_state
+		assert "judge_skip_reason=sync_merge_failed" not in state["_github_output"], mergeable_state
+		assert "judge_handled=true" not in state["_github_output"], mergeable_state
+
+
+def test_merge_with_followup_refuses_when_check_runs_pending() -> None:
+	"""PR is mergeable=true but a check-run is still in_progress →
+	the new check-runs gate must refuse the merge, leaving the issue
+	in ai:review-blocked. Without this gate, sync merge could land
+	code that subsequently fails informational CI (claude-branch-
+	review consensus round 12)."""
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed"],
+		check_runs_state="pending",
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert creates == [], (
+		f"merge_with_followup must NOT create the follow-up issue when "
+		f"check-runs are still pending — the gate exists to prevent "
+		f"creating a tracking issue against unvalidated code. Got: {creates}"
+	)
+	assert "judge_handled=true" not in state["_github_output"], (
+		"merge_with_followup must NOT emit judge_handled=true when "
+		"check-runs are pending; the PR must stay in ai:review-blocked "
+		"for stall recovery to retry after checks complete"
+	)
+
+
+def test_merge_with_followup_creates_followup_when_pr_already_merged() -> None:
+	"""PR was merged before the judge ran (rare race; e.g. a concurrent
+	workflow merged it).  GitHub's REST `/pulls/{N}` reports this as
+	``state=closed`` + ``merged=true`` — NEVER ``state=merged``.  The
+	MERGE_CONFIRMED ladder must read `.merged` (boolean field), not
+	infer "merged" from `.state`.  Pins the
+	``PR_MERGED=true`` short-path of the ladder against the real GitHub
+	API response shape; an earlier draft incorrectly checked
+	``PR_STATE=merged`` and was unreachable in production."""
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed"],
+		pr_state="closed",  # GitHub's real shape for merged PRs
+		pr_mergeable=None,
+		pr_merged=True,  # the authoritative did-this-land signal
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1, (
+		f"merge_with_followup must create the follow-up issue when the PR "
+		f"is already merged (.merged=true). Got: {creates}"
+	)
+	assert "judge_handled=true" in state["_github_output"]
+
+
+def test_merge_with_followup_skips_when_pr_closed_without_merge() -> None:
+	"""PR is closed but NOT merged (e.g. operator rejected and closed
+	manually) → MERGE_CONFIRMED stays false → NO follow-up issue
+	created.  Distinguishes the closed-without-merge case from the
+	merged-and-closed case (both report ``state=closed``; only
+	``.merged`` separates them).  Without this distinction, closing a
+	PR while a merge_with_followup judge run is in flight would create
+	a follow-up issue against a base ref that never received the PR's
+	changes."""
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed"],
+		pr_state="closed",
+		pr_mergeable=None,
+		pr_merged=False,  # closed without merge
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert creates == [], (
+		f"merge_with_followup must NOT create the follow-up when the PR "
+		f"was closed without merge — the deferred gap would reference code "
+		f"that never lands on the base ref. Got: {creates}"
+	)
+	assert "judge_handled=true" not in state["_github_output"]
+
+
+def test_merge_with_followup_does_not_advance_when_issue_create_fails() -> None:
+	"""``gh issue create`` fails (transient API / disabled-issues /
+	permissions) AFTER merge confirmation → script must NOT swap the
+	linked issue to ai:ready-to-merge and must NOT emit
+	judge_handled=true.  The linked issue must stay in ai:review-
+	blocked so stall recovery / the next judge run can retry follow-up
+	creation; otherwise the PR is merged but the deferred gap is lost.
+	Pins the order-of-operations fix where follow-up creation now
+	happens BEFORE the label swap."""
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed"],
+		issue_create_should_fail=True,
+	)
+
+	# The script DID attempt to create the issue (gh issue create was
+	# called once); we want to confirm it called it but recovered.
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1, (
+		f"merge_with_followup must attempt the issue create when merge "
+		f"is confirmed. Got: {creates}"
+	)
+	# But after the failure, NO judge_handled emission.
+	assert "judge_handled=true" not in state["_github_output"], (
+		"merge_with_followup must NOT emit judge_handled=true when "
+		"gh issue create failed; otherwise the workflow's review-blocked "
+		"fallback is suppressed and the deferred gap is lost"
+	)
+	# And NO ai:ready-to-merge label swap (the label swap now happens
+	# AFTER issue create succeeds — order-of-operations contract).
+	ensure_labels = state["_ensure_labels"]
+	assert "ai:ready-to-merge" not in ensure_labels, (
+		f"ai:ready-to-merge must NOT be ensured when issue create failed "
+		f"(label swap is gated on issue-create success). Got: {ensure_labels}"
+	)
+
+
+def test_merge_with_followup_preserves_judge_json_bytes_under_xpg_echo() -> None:
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed"],
+		followup_title='Follow-up: handle "quoted" wiring',
+		followup_body='First line keeps "quotes" and literal \\n intact.\nSecond line stays attached.',
+		enable_xpg_echo=True,
+	)
+
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1, (
+		"merge_with_followup must still create the follow-up issue when bash xpg_echo is enabled"
+	)
+	args = creates[0]
+	title = args[args.index("--title") + 1]
+	body = args[args.index("--body") + 1]
+	assert title == 'Follow-up: handle "quoted" wiring'
+	assert body.startswith('First line keeps "quotes" and literal \\n intact.\nSecond line stays attached.')
+
+
+def test_review_blocked_preamble_uses_printf_for_judge_json_extraction() -> None:
+	src = _rb_judge_text()
+
+	assert """RB_ACTION="$(printf '%s\\n' "${JUDGE_JSON}" | jq -r '.action')"
+RB_JUSTIFICATION="$(printf '%s\\n' "${JUDGE_JSON}" | jq -r '.justification // "no justification"')"
+RB_FIX_DESC="$(printf '%s\\n' "${JUDGE_JSON}" | jq -r '.fix_description // ""')"
+RB_REMAINING="$(printf '%s\\n' "${JUDGE_JSON}" | jq -r '.remaining_issues_summary // ""')""" in src
+	assert 'RB_ACTION="$(echo "${JUDGE_JSON}" | jq -r' not in src
+	assert "FOLLOWUP_BODY=\"$(printf '%s\\n' \"${JUDGE_JSON}\" | jq -r '.followup_issue.body // empty')\"" in src
+	assert "NEW_ISSUE_BODY=\"$(printf '%s\\n' \"${JUDGE_JSON}\" | jq -r '.new_issue.body // empty')\"" in src
+	assert "| sed 's/\\\\n/\\n/g'" not in src
+
+
+def test_review_blocked_pr_metadata_parsing_uses_printf_under_xpg_echo() -> None:
+	src = _rb_judge_text()
+
+	assert '_rps_merged_seen="$(printf \'%s\\n\' "${_rps_cur}" | jq -r \'index("ai:merged") != null\'' in src
+	assert '_pr_state="$(printf \'%s\\n\' "${_pr_meta}" | jq -r \'.state // ""\')"' in src
+	assert '_pr_merged="$(printf \'%s\\n\' "${_pr_meta}" | jq -r \'(.merged_at != null) or (.merged == true)\')"' in src
+	assert '_guard_pr_merged="$(printf \'%s\\n\' "${_guard_pr_meta}" | jq -r \'(.merged_at != null) or (.merged == true)\')"' in src
+	assert 'PR_STATE="$(printf \'%s\\n\' "${_pr_json}" | jq -r \'.state // ""\'' in src
+	assert 'PR_MERGEABLE="$(printf \'%s\\n\' "${_pr_json}" | jq -r \'.mergeable // ""\'' in src
+	assert 'PR_HEAD_SHA="$(printf \'%s\\n\' "${_pr_json}" | jq -r \'.head.sha // ""\'' in src
+	assert 'PR_MERGED="$(printf \'%s\\n\' "${_pr_json}" | jq -r \'(.merged_at != null) or (.merged == true)\'' in src
+	assert 'echo "${_rps_cur}" | jq -c' not in src
+	assert 'echo "${_pr_meta}" | jq -r' not in src
+	assert 'echo "${_guard_pr_meta}" | jq -r' not in src
+	assert 'echo "${_pr_json}" | jq -r' not in src
+
+
+# =============================================================================
+# Merged-PR action guard coverage
+# =============================================================================
+#
+# The early guard at script start allows merged PRs (state=closed +
+# merged=true) through so the judge can pick merge_with_followup for
+# the post-merge recovery flow. A merged-PR action guard later in the
+# script refuses `fix` and `close_and_reissue` for merged PRs because
+# those actions are structurally unsafe (fix would push to a merged
+# branch; close_and_reissue would reissue work that already landed).
+#
+# Static checks because the guard sits between the JSON parse and the
+# case statement, and exercising it end-to-end through the harness
+# would require mocking the full script entry (including the early
+# guard's gh api call) — significantly heavier than the
+# close_and_reissue branch tests. The pattern checks below pin the
+# guard's existence + structure so a future refactor cannot silently
+# remove it.
+
+
+def test_merged_pr_action_guard_refuses_fix_and_close_and_reissue() -> None:
+	"""The guard must refuse fix and close_and_reissue for merged PRs.
+	claude-branch-review Finding (round 4 Copilot): the early-guard
+	permissiveness for merged PRs opens a footgun if the judge picks
+	fix / close_and_reissue — both unsafe for code that has already
+	landed. The guard pattern is asserted statically so a future
+	refactor cannot silently drop it."""
+	src = _rb_judge_text()
+
+	# The guard must check PR_ALREADY_MERGED against the two safe actions.
+	assert 'PR_ALREADY_MERGED' in src, (
+		"review_rb_judge.sh must define PR_ALREADY_MERGED so the merged-PR "
+		"action guard can refuse fix/close_and_reissue."
+	)
+	# Match the literal guard line (or fragments thereof) so widening
+	# the safe-action set (e.g. accidentally allowing fix) is caught.
+	assert '"${PR_ALREADY_MERGED:-false}" = "true"' in src, (
+		"merged-PR action guard must use the canonical "
+		'`[ \"${PR_ALREADY_MERGED:-false}\" = \"true\" ]` test.'
+	)
+	assert '[ "${RB_ACTION}" != "merge" ]' in src and '[ "${RB_ACTION}" != "merge_with_followup" ]' in src, (
+		"merged-PR action guard must whitelist exactly 'merge' and "
+		"'merge_with_followup' — widening the set would re-introduce "
+		"the footgun the guard exists to prevent."
+	)
+
+
+def test_merged_pr_action_guard_emits_skip_reason() -> None:
+	"""Refusal must emit `judge_skip_reason=merged_pr_unsafe_action` so
+	downstream log analysis can classify the refusal. Without this,
+	the workflow sees `judge_handled` unset with no explicit reason —
+	indistinguishable from an unknown failure (claude-branch-review
+	consensus Finding #2)."""
+	src = _rb_judge_text()
+
+	assert 'judge_skip_reason=merged_pr_unsafe_action' in src, (
+		"merged-PR action guard must emit "
+		"judge_skip_reason=merged_pr_unsafe_action so log analysis "
+		"can classify the refusal explicitly."
+	)
+	# Pin the exit code so a refactor doesn't accidentally let the
+	# script continue into the case dispatch after refusal.
+	# The refusal block ends with `exit 0`.
+	guard_match = re.search(
+		r'judge_skip_reason=merged_pr_unsafe_action.*?exit 0',
+		src,
+		re.DOTALL,
+	)
+	assert guard_match is not None, (
+		"merged-PR action guard must end with `exit 0` so the refused "
+		"action does not continue into the case dispatch below."
+	)
+
+
+def test_merged_pr_action_guard_runs_before_judge_comment() -> None:
+	"""The guard must run BEFORE the JUDGE_COMMENT post so a refused
+	action does not leave a misleading audit trail on the PR
+	(claude-branch-review consensus Finding #3 — comment claiming a
+	`fix` or `close_and_reissue` action that the guard then silently
+	refuses)."""
+	src = _rb_judge_text()
+
+	guard_pos = src.find('judge_skip_reason=merged_pr_unsafe_action')
+	# JUDGE_COMMENT is the heredoc declaration; find its first
+	# occurrence and ensure it sits AFTER the guard.
+	comment_pos = src.find('JUDGE_COMMENT="## Review-Blocked Judge Decision')
+
+	assert guard_pos > 0 and comment_pos > 0, (
+		"failed to locate guard and JUDGE_COMMENT markers in "
+		"review_rb_judge.sh — has the structure changed?"
+	)
+	assert guard_pos < comment_pos, (
+		f"merged-PR action guard (pos={guard_pos}) must run BEFORE "
+		f"the JUDGE_COMMENT post (pos={comment_pos}) so a refused "
+		f"action does not leave a misleading audit trail on the PR."
+	)
+
+
+def test_review_rb_judge_validates_pr_number_before_pr_lookups() -> None:
+	src = _rb_judge_text()
+	guard = 'if [ -z "${PR_NUMBER:-}" ] || ! [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then'
+	guard_pos = src.find(guard)
+	lookup_pos = src.find('repos/${REPOSITORY}/pulls/${PR_NUMBER}')
+	assert guard_pos != -1 and 'judge_skip_reason=invalid_pr_number' in src, (
+		"review_rb_judge.sh must reject missing or non-numeric PR_NUMBER values before any PR-scoped API calls."
+	)
+	assert lookup_pos != -1 and guard_pos < lookup_pos, (
+		"PR_NUMBER validation must run before review_rb_judge.sh performs PR-scoped lookups or path construction."
+	)
+
+
+def test_prompt_budget_helpers_fail_closed_on_non_numeric_counters() -> None:
+	"""Prompt-budget helpers must pin their non-numeric-counter fallbacks.
+
+	The shared primary helper (`gh_helpers.sh`) coerces both `_used` and
+	`_size` to 0 before arithmetic. The narrower review-blocked-judge
+	fallback still coerces `_used`, but it must omit the file entirely when
+	`wc -c` returns a non-numeric `_size` so prompt budgeting cannot
+	under-count a full-file embed.
+	"""
+	rb_src = _rb_judge_text()
+	gh_src = (REPO_ROOT / "scripts" / "gh_helpers.sh").read_text(encoding="utf-8")
+	for src, label in ((rb_src, "review_rb_judge.sh fallback"), (gh_src, "gh_helpers.sh primary")):
+		assert '[[ "${_used}" =~ ^[0-9]+$ ]] || _used=0' in src, (
+			f"{label} must coerce non-numeric _used values to 0 before arithmetic in _embed_input_file()."
+		)
+	assert '[[ "${_size}" =~ ^[0-9]+$ ]] || _size=0' in gh_src, (
+		"gh_helpers.sh primary must coerce non-numeric _size values to 0 before integer comparisons in _embed_input_file()."
+	)
+	assert 'if ! [[ "${_size}" =~ ^[0-9]+$ ]]; then' in rb_src, (
+		"review_rb_judge.sh fallback must guard non-numeric _size values before integer comparisons in _embed_input_file()."
+	)
+	assert 'printf \'(omitted — could not determine file size for prompt budgeting)\\n\'' in rb_src, (
+		"review_rb_judge.sh fallback must omit files whose size probe is non-numeric so prompt budgeting cannot under-count a full embed."
+	)
+
+
+def main() -> int:
+	# Direct `python3 tests/<file>.py` entrypoint — the repo's CI runs
+	# tests via that pattern (see ci.yml) rather than pytest discovery,
+	# so without this block the assertions never execute under CI.
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			func()
+			print(f"  PASS  {name}")
+			passed += 1
+		except Exception as exc:
+			print(f"  FAIL  {name}: {exc}")
+			failed += 1
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed > 0 else 0
+
+
+# =============================================================================
+# merge_with_followup lineage metadata + terminal-label guard
+# =============================================================================
+#
+# tele-funtoken-msg-scoring#4386 / binance-blessings#290: a follow-up
+# created here carried only Source PR / Parent issue / Type, so
+# scripts/resolve_integration_ref.sh (which reads "Integration branch:" /
+# "Tracking issue:") resolved it to the default branch and plan/implement
+# ran against main instead of the project's integration branch.
+#
+# tele-funtoken-msg-scoring#4379: the post-merge phase swap replaced the
+# PR-close handler's ai:merged with ai:ready-to-merge, and the orchestrator
+# then failed project #3928 as "fix issue closed without a merged PR".
+
+
+def _followup_body_from_state(state: dict) -> str:
+	creates = state.get("issue_create_args", [])
+	assert len(creates) == 1, (
+		f"expected exactly one gh issue create call, got {len(creates)}: {creates}"
+	)
+	args = creates[0]
+	return args[args.index("--body") + 1]
+
+
+def test_merge_with_followup_copies_lineage_from_parent_issue_metadata() -> None:
+	"""Parent body carries orchestrator metadata → the follow-up must
+	carry the same Tracking issue / Integration branch lines, in the
+	exact form scripts/resolve_integration_ref.sh parses."""
+	parent_body = (
+		"Refs #4001\n\nFix the thing.\n\n---\n"
+		"**Orchestrator metadata** (do not edit)\n"
+		"- Tracking issue: #4001\n"
+		"- Integration branch: `orchestrator/project-4001`\n"
+		"- Local ID: `security-pass-fix-cycle-2`\n"
+		"- Managed by: AI Orchestrator\n"
+	)
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed", "ai:review-blocked"],
+		first_issue_body=parent_body,
+		pr_base_ref="orchestrator/project-4001",
+	)
+	body = _followup_body_from_state(state)
+	assert "Merge-with-followup metadata" in body
+	assert "- Tracking issue: #4001" in body, body
+	assert "- Integration branch: orchestrator/project-4001" in body, body
+	assert "`orchestrator/project-4001`" not in body, (
+		"integration branch must be emitted without backticks, matching the "
+		f"orchestrator's own follow-up footer; got body:\n{body}"
+	)
+	assert "Follow-up lineage: tracking issue #4001, integration branch orchestrator/project-4001." in state["_stdout"]
+
+
+def test_merge_with_followup_derives_lineage_from_pr_base_branch_fallback() -> None:
+	"""Parent body has no metadata (binance-blessings#288 shape) but the
+	PR base is an orchestrator integration branch → derive both lines
+	from the base branch name."""
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed", "ai:review-blocked"],
+		first_issue_body="Add replay protection to the router.\n",
+		pr_base_ref="orchestrator/project-249",
+	)
+	body = _followup_body_from_state(state)
+	assert "- Tracking issue: #249" in body, body
+	assert "- Integration branch: orchestrator/project-249" in body, body
+
+
+def test_merge_with_followup_ignores_default_branch_sentinel() -> None:
+	"""Explicit default-branch metadata suppresses a matching PR-base fallback."""
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed", "ai:review-blocked"],
+		first_issue_body=(
+			"- Tracking issue: #4001\n"
+			"- Integration branch: `(default branch)`\n"
+		),
+		pr_base_ref="orchestrator/project-249",
+	)
+	body = _followup_body_from_state(state)
+	assert "- Tracking issue: #4001" in body, body
+	assert "Integration branch:" not in body, body
+	assert "follow-up will resolve to the default branch" in state["_stdout"]
+
+
+def test_merge_with_followup_honors_custom_integration_branch_pattern() -> None:
+	"""A custom configured pattern still propagates a metadata-less PR base."""
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed", "ai:review-blocked"],
+		first_issue_body="Parent body without orchestrator metadata.\n",
+		pr_base_ref="custom/integration/249",
+		orch_integration_branch_pattern="^custom/integration/",
+	)
+	body = _followup_body_from_state(state)
+	assert "- Integration branch: custom/integration/249" in body, body
+	assert "Tracking issue:" not in body, body
+
+
+def test_merge_with_followup_parent_metadata_wins_over_pr_base_branch() -> None:
+	"""Both sources present and disagreeing → the parent's own metadata
+	is authoritative (user decision: metadata first, base-branch fallback)."""
+	parent_body = (
+		"Body\n\n- Tracking issue: #4001\n- Integration branch: orchestrator/project-4001\n"
+	)
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed", "ai:review-blocked"],
+		first_issue_body=parent_body,
+		pr_base_ref="orchestrator/project-9999",
+	)
+	body = _followup_body_from_state(state)
+	assert "- Tracking issue: #4001" in body, body
+	assert "- Integration branch: orchestrator/project-4001" in body, body
+	assert "project-9999" not in body, body
+
+
+def test_merge_with_followup_ignores_sibling_issue_lineage() -> None:
+	"""The first non-empty requirement body may belong to a sibling issue,
+	but lineage must come from the actual parent or the PR-base fallback."""
+	sibling_body = "- Tracking issue: #4001\n- Integration branch: orchestrator/project-4001\n"
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed"], first_issue_body=sibling_body,
+		first_issue_lineage_body="", pr_base_ref="orchestrator/project-249",
+	)
+	body = _followup_body_from_state(state)
+	assert "- Tracking issue: #249" in body and "project-4001" not in body, body
+
+
+def test_merge_with_followup_invalid_parent_branch_uses_pr_base_fallback() -> None:
+	invalid_parent_body = "- Tracking issue: #4001\n- Integration branch: invalid branch\n"
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:orchestrator-managed"], first_issue_body=invalid_parent_body,
+		pr_base_ref="orchestrator/project-249",
+	)
+	body = _followup_body_from_state(state)
+	assert "- Tracking issue: #249" in body and "invalid branch" not in body, body
+	assert "Ignoring invalid Integration branch metadata" in state["_stdout"]
+
+
+def test_merge_with_followup_without_lineage_keeps_body_unchanged() -> None:
+	"""Standalone PR into main with a plain parent → no lineage lines are
+	added and the existing three-line footer is preserved verbatim."""
+	state = _run_merge_with_followup(
+		parent_label_set=["ai:review-blocked"],
+		first_issue_body="Plain standalone issue body.\n",
+		pr_base_ref="main",
+	)
+	body = _followup_body_from_state(state)
+	assert "Tracking issue:" not in body, body
+	assert "Integration branch:" not in body, body
+	assert body.rstrip().endswith("- Type: review-blocked-followup"), body
+	assert "follow-up will resolve to the default branch" in state["_stdout"]
+
+
+def _extract_resilient_phase_swap() -> str:
+	text = _rb_judge_text()
+	match = re.search(
+		r"(?ms)^_resilient_phase_swap\(\)\n\{\n.*?^\}\n",
+		text,
+	)
+	if not match:
+		raise AssertionError("could not extract _resilient_phase_swap from review_rb_judge.sh")
+	return match.group(0)
+
+
+def _run_resilient_phase_swap(
+	current_labels: list[str],
+	target: str,
+	*,
+	labels_after_mutation: list[str] | None = None,
+) -> dict:
+	"""Run the real _resilient_phase_swap against a mock gh whose GET
+	labels endpoint returns ``current_labels``; returns the mock state
+	plus stdout so callers can assert which label mutations were issued."""
+	fn = _extract_resilient_phase_swap()
+	with tempfile.TemporaryDirectory(prefix="test_rb_judge_rps_") as td:
+		tmp_path = Path(td)
+		bin_dir = tmp_path / "bin"
+		bin_dir.mkdir()
+		gh_state_file = tmp_path / "gh_state.json"
+		_install_mock_gh(bin_dir, gh_state_file)
+		mock_state = {"api_responses": {"issues/41/labels": current_labels}}
+		if labels_after_mutation is not None:
+			mock_state["api_response_sequences"] = {
+				"issues/41/labels": [current_labels, labels_after_mutation],
+			}
+		gh_state_file.write_text(json.dumps(mock_state), encoding="utf-8")
+		script = tmp_path / "rps_harness.sh"
+		script.write_text(
+			"#!/usr/bin/env bash\nset -euo pipefail\n"
+			"gh_retry() { \"$@\"; }\n"
+			f"{fn}\n"
+			f"_resilient_phase_swap 41 \"{target}\"\n",
+			encoding="utf-8",
+		)
+		env = _sanitized_git_env({
+			"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+			"MOCK_GH_STATE_FILE": str(gh_state_file),
+			"REPOSITORY": "owner/repo",
+		})
+		proc = subprocess.run(
+			["bash", str(script)], cwd=str(tmp_path), env=env,
+			text=True, capture_output=True, timeout=60,
+		)
+		assert proc.returncode == 0, f"harness exited {proc.returncode}\n{proc.stdout}\n{proc.stderr}"
+		state = json.loads(gh_state_file.read_text(encoding="utf-8"))
+		state["_stdout"] = proc.stdout
+		return state
+
+
+def _put_label_calls(state: dict) -> list[list[str]]:
+	return [
+		call for call in state.get("api_calls", [])
+		if "PUT" in call and any(arg.endswith("/issues/41/labels") for arg in call)
+	]
+
+
+def _delete_label_calls(state: dict) -> list[list[str]]:
+	return [
+		call for call in state.get("api_calls", [])
+		if "DELETE" in call and any("/issues/41/labels/" in arg for arg in call)
+	]
+
+
+def test_resilient_phase_swap_does_not_downgrade_ai_merged() -> None:
+	"""An issue the PR-close handler already labelled ai:merged must keep
+	it: the swap to ai:ready-to-merge is skipped and no PUT is issued."""
+	state = _run_resilient_phase_swap(
+		["ai:merged", "ai:orchestrator-managed"], "ai:ready-to-merge",
+	)
+	assert _put_label_calls(state) == [], state.get("api_calls")
+	assert "already carries terminal label ai:merged; not swapping to ai:ready-to-merge" in state["_stdout"]
+
+
+def test_resilient_phase_swap_does_not_downgrade_ai_closed() -> None:
+	state = _run_resilient_phase_swap(["ai:closed"], "ai:ready-to-merge")
+	assert _put_label_calls(state) == [], state.get("api_calls")
+	assert "terminal label ai:closed" in state["_stdout"]
+
+
+def test_resilient_phase_swap_still_swaps_non_terminal_phase() -> None:
+	"""The ordinary case is unchanged: ai:review-blocked → ai:ready-to-merge
+	replaces the phase label and keeps non-phase labels."""
+	state = _run_resilient_phase_swap(
+		["ai:review-blocked", "ai:orchestrator-managed"], "ai:ready-to-merge",
+	)
+	assert _put_label_calls(state) == [], state.get("api_calls")
+	assert any("POST" in call for call in state.get("api_calls", [])), state.get("api_calls")
+	assert any("ai%3Areview-blocked" in arg for call in _delete_label_calls(state) for arg in call)
+	assert "not swapping" not in state["_stdout"]
+
+
+def test_resilient_phase_swap_preserves_terminal_label_added_during_swap() -> None:
+	state = _run_resilient_phase_swap(
+		["ai:review-blocked", "ai:orchestrator-managed"],
+		"ai:ready-to-merge",
+		labels_after_mutation=["ai:merged", "ai:ready-to-merge", "ai:orchestrator-managed"],
+	)
+	assert _put_label_calls(state) == [], state.get("api_calls")
+	deletes = _delete_label_calls(state)
+	assert any("ai%3Areview-blocked" in arg for call in deletes for arg in call), deletes
+	assert any("ai%3Aready-to-merge" in arg for call in deletes for arg in call), deletes
+	assert not any("ai%3Amerged" in arg for call in deletes for arg in call), deletes
+	assert "terminal label ai:merged appeared while swapping #41" in state["_stdout"]
+
+
+def test_resilient_phase_swap_allows_terminal_to_terminal() -> None:
+	"""close_and_reissue moves issues to ai:closed; a terminal target is
+	never blocked by the guard."""
+	state = _run_resilient_phase_swap(["ai:merged"], "ai:closed")
+	assert _put_label_calls(state) == [], state.get("api_calls")
+	assert _post_label_calls(state, "ai:closed"), state.get("api_calls")
+	deletes = _delete_label_calls(state)
+	# The initial GET saw ai:merged, so terminal-to-terminal replacement is
+	# still allowed and the merge-wins reconciliation does not fire.
+	assert any("ai%3Amerged" in arg for call in deletes for arg in call), deletes
+	assert not any("ai%3Aclosed" in arg for call in deletes for arg in call), deletes
+
+
+def _post_label_calls(state: dict, label: str) -> list[list[str]]:
+	return [
+		call for call in state.get("api_calls", [])
+		if "POST" in call and f"labels[]={label}" in call
+	]
+
+
+def test_resilient_phase_swap_closed_target_yields_to_concurrent_merged_and_keeps_unrelated_labels() -> None:
+	"""Terminal ai:closed swap is additive: a concurrent ai:merged and an
+	unrelated label added between the initial GET and the reconciliation
+	GET are never removed, and merge evidence wins over ai:closed."""
+	state = _run_resilient_phase_swap(
+		["ai:review-blocked", "ai:orchestrator-managed"],
+		"ai:closed",
+		labels_after_mutation=["ai:merged", "ai:closed", "ai:orchestrator-managed", "ai:followup"],
+	)
+	assert _put_label_calls(state) == [], state.get("api_calls")
+	assert _post_label_calls(state, "ai:closed"), state.get("api_calls")
+	deletes = _delete_label_calls(state)
+	assert any("ai%3Areview-blocked" in arg for call in deletes for arg in call), deletes
+	assert any("ai%3Aclosed" in arg for call in deletes for arg in call), deletes
+	for kept in ("ai%3Amerged", "ai%3Aorchestrator-managed", "ai%3Afollowup"):
+		assert not any(kept in arg for call in deletes for arg in call), (kept, deletes)
+	assert (
+		"terminal label ai:merged appeared while swapping #41; removed terminal target ai:closed"
+		in state["_stdout"]
+	)
+
+
+def test_resilient_phase_swap_closed_target_replaces_review_blocked_without_put() -> None:
+	state = _run_resilient_phase_swap(
+		["ai:review-blocked", "ai:orchestrator-managed"],
+		"ai:closed",
+		labels_after_mutation=["ai:closed", "ai:orchestrator-managed"],
+	)
+	assert _put_label_calls(state) == [], state.get("api_calls")
+	assert _post_label_calls(state, "ai:closed"), state.get("api_calls")
+	deletes = _delete_label_calls(state)
+	assert any("ai%3Areview-blocked" in arg for call in deletes for arg in call), deletes
+	assert not any("ai%3Aclosed" in arg for call in deletes for arg in call), deletes
+	assert not any("ai%3Aorchestrator-managed" in arg for call in deletes for arg in call), deletes
+	assert "appeared while swapping" not in state["_stdout"]
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

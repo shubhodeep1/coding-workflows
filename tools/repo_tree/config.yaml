@@ -1,0 +1,7 @@
+trees:
+  - file: agents.md
+    marker_id: workflows
+    source_glob: ".github/workflows/*.yml"
+  - file: agents.md
+    marker_id: workflow_templates
+    source_glob: "workflow-templates/*.yml"

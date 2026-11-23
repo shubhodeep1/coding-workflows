@@ -1,0 +1,10 @@
+{
+	"body": "see attached log\nhttps://ex.org/x",
+	"expected_score": 0.6,
+	"expected_signals": [
+		"no_ask",
+		"no_acceptance",
+		"link_only"
+	],
+	"description": "Minimal issue body with a short log note and exactly one URL."
+}

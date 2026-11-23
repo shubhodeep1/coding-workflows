@@ -1,0 +1,3497 @@
+#!/usr/bin/env python3
+"""Behavioural tests for scripts/review_merge_train.sh (the merge train).
+
+The script is driven through a fake `gh` placed first on PATH. The fake
+serves canned JSON for the REST endpoints the script reads and records every
+write (label add/remove, comment upsert, workflow dispatch) to a log file
+the tests assert on. No network, no real repository.
+
+Scenario pinned here (tele-funtoken-msg-scoring, 2026-09-07): fourteen
+auto-heal issues opened for one incident produced ten ai/issue-* PRs that
+all edit backend/promo_email_sender.py against main; every merge conflicted
+every remaining sibling. With the train, a younger PR whose files overlap an
+older open ai/issue-* PR is labelled ai:merge-queued and soft-exits; once
+the older PR merges, `release` removes the label and re-dispatches review.
+"""
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import stat
+import subprocess
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import pytest
+import yaml
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SCRIPT = REPO_ROOT / "scripts" / "review_merge_train.sh"
+
+FAKE_GH = r'''#!/usr/bin/env bash
+# Fake gh: serves fixtures from $FAKE_GH_DIR and logs writes to $FAKE_GH_LOG.
+set -euo pipefail
+args=("$@")
+printf '%s\n' "gh ${args[*]}" >> "${FAKE_GH_LOG}"
+if [ "${1:-}" = "workflow" ] && [ "${2:-}" = "run" ]; then
+  if [ -f "${FAKE_GH_DIR}/dispatch_fail" ]; then exit 1; fi
+  exit 0
+fi
+if [ "${1:-}" = "label" ]; then exit 0; fi
+if [ "${1:-}" != "api" ]; then echo "unexpected: $*" >&2; exit 1; fi
+method="GET"; endpoint=""
+shift
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -X) method="$2"; shift 2 ;;
+    --paginate|--jq|-f) [ "$1" = "--paginate" ] && shift || shift 2 ;;
+    *) if [ -z "${endpoint}" ]; then endpoint="$1"; fi; shift ;;
+  esac
+done
+# jq filter is the last --jq value
+jqf=""
+for ((i=0; i<${#args[@]}; i++)); do
+  if [ "${args[$i]}" = "--jq" ]; then jqf="${args[$((i+1))]}"; fi
+done
+path="${endpoint%%\?*}"
+# Merge lease refs (scripts/pr_checks_lib.sh): none exist unless a fixture
+# provides lease_refs.json, as on a repository that never used the lease.
+if [ "${method}" = "GET" ] && [[ "${path}" == repos/*/git/matching-refs/* ]]; then
+  if [ -f "${FAKE_GH_DIR}/lease_refs.json" ]; then cat "${FAKE_GH_DIR}/lease_refs.json"; else printf '[]'; fi
+  exit 0
+fi
+# actions/runs is served like the REST listing: filtered by the status query
+# parameter and by a URL-encoded created=<=<timestamp> bound (runs without a
+# created_at never match a bound), paged by page/per_page, with total_count
+# (issue #5443). A fixture may set total_count_override: {"<status>": <n>} to
+# report more runs than it holds. A run's listed_status, when set, is the
+# status query that returns it, whatever its own status field says.
+# fail_runs_get fails the call; malformed_runs returns an object with no
+# total_count. actions_runs_switch_at (a call number, counting every
+# actions/runs call from 1) serves actions_runs_after_switch.json from that
+# call on: a run changed status between two status queries.
+# actions_runs_switch2_at serves actions_runs_after_switch2.json from that
+# call on, after the first switch: the run changed status a second time.
+# runs_raw_page.json, when present, is served as is for every actions/runs
+# call (a response whose shape the listing must validate itself).
+if [ "${method}" = "GET" ] && [[ "${path}" == repos/*/actions/runs ]]; then
+  if [ -f "${FAKE_GH_DIR}/fail_runs_get" ] || [ -f "${FAKE_GH_DIR}/fail_get" ]; then exit 1; fi
+  run_call=1
+  [ -f "${FAKE_GH_DIR}/runs_call_count" ] && run_call=$(( $(cat "${FAKE_GH_DIR}/runs_call_count") + 1 ))
+  printf '%s' "${run_call}" > "${FAKE_GH_DIR}/runs_call_count"
+  query=""
+  [[ "${endpoint}" == *\?* ]] && query="${endpoint#*\?}"
+  run_status=""; run_page=1; run_per_page=30; run_created_max=""
+  IFS='&' read -ra query_parts <<< "${query}"
+  for part in "${query_parts[@]}"; do
+    case "${part}" in
+      status=*) run_status="${part#status=}" ;;
+      created=%3C%3D*) run_created_max="${part#created=%3C%3D}" ;;
+      page=*) run_page="${part#page=}" ;;
+      per_page=*) run_per_page="${part#per_page=}" ;;
+    esac
+  done
+  if [ -f "${FAKE_GH_DIR}/malformed_runs" ]; then
+    page_json='{"workflow_runs":[]}'
+  elif [ -f "${FAKE_GH_DIR}/runs_raw_page.json" ]; then
+    page_json="$(cat "${FAKE_GH_DIR}/runs_raw_page.json")"
+  else
+    runs_source='{"workflow_runs":[]}'
+    [ -f "${FAKE_GH_DIR}/actions_runs.json" ] && runs_source="$(cat "${FAKE_GH_DIR}/actions_runs.json")"
+    # actions_runs_after_page1.json, when present, serves every later page
+    # and every created-bounded follow-up query: runs changed status between
+    # two reads.
+    if { [ "${run_page}" -gt 1 ] || [ -n "${run_created_max}" ]; } && [ -f "${FAKE_GH_DIR}/actions_runs_after_page1.json" ]; then
+      runs_source="$(cat "${FAKE_GH_DIR}/actions_runs_after_page1.json")"
+    fi
+    if [ -f "${FAKE_GH_DIR}/actions_runs_switch_at" ] && [ "${run_call}" -ge "$(cat "${FAKE_GH_DIR}/actions_runs_switch_at")" ]; then
+      runs_source="$(cat "${FAKE_GH_DIR}/actions_runs_after_switch.json")"
+    fi
+    if [ -f "${FAKE_GH_DIR}/actions_runs_switch2_at" ] && [ "${run_call}" -ge "$(cat "${FAKE_GH_DIR}/actions_runs_switch2_at")" ]; then
+      runs_source="$(cat "${FAKE_GH_DIR}/actions_runs_after_switch2.json")"
+    fi
+    page_json="$(printf '%s' "${runs_source}" | jq -c --arg st "${run_status}" --arg cm "${run_created_max}" --argjson pg "${run_page}" --argjson pp "${run_per_page}" '
+      ((.workflow_runs // []) | map(select($st == "" or (.listed_status // .status) == $st))
+        | map(select($cm == "" or ((.created_at // "") != "" and .created_at <= $cm)))) as $r
+      | {total_count: ((.total_count_override // {})[$st] // ($r | length)),
+         workflow_runs: $r[(($pg - 1) * $pp):($pg * $pp)]}')"
+  fi
+  if [ -n "${jqf}" ]; then printf '%s' "${page_json}" | jq -r "${jqf}"; else printf '%s\n' "${page_json}"; fi
+  exit 0
+fi
+# GraphQL (issue #6570): graphql.json is served through the --jq filter when
+# given; graphql_fail or a missing fixture fails the call with a permanent
+# (HTTP 404) error so gh_retry does not back off.
+if [ "${endpoint}" = "graphql" ]; then
+  if [ -f "${FAKE_GH_DIR}/graphql_fail" ] || [ ! -f "${FAKE_GH_DIR}/graphql.json" ]; then
+    echo "gh: Not Found (HTTP 404)" >&2
+    exit 1
+  fi
+  if [ -n "${jqf}" ]; then jq -r "${jqf}" "${FAKE_GH_DIR}/graphql.json"; else cat "${FAKE_GH_DIR}/graphql.json"; fi
+  exit 0
+fi
+case "${method}" in
+  GET)
+    if [ -f "${FAKE_GH_DIR}/fail_get" ]; then exit 1; fi
+    case "${path}" in
+      user)
+        if [ -f "${FAKE_GH_DIR}/fail_user" ] || [ -f "${FAKE_GH_DIR}/fail_user_get" ]; then exit 1; fi
+        fixture="${FAKE_GH_DIR}/user.json"
+        if [ ! -f "${fixture}" ]; then
+          printf '%s\n' '{"login":"automation-bot"}' | jq -r "${jqf}"
+          exit 0
+        fi
+        ;;
+      repos/*/pulls) fixture="${FAKE_GH_DIR}/pulls.json" ;;
+      repos/*/pulls/*/files) n="${path#*/pulls/}"; n="${n%%/*}"; fixture="${FAKE_GH_DIR}/files_${n}.json" ;;
+      repos/*/issues/*/comments)
+        if [ -f "${FAKE_GH_DIR}/fail_comments" ]; then exit 1; fi
+        n="${path#*/issues/}"; n="${n%%/*}"; fixture="${FAKE_GH_DIR}/comments_${n}.json" ;;
+      repos/*/issues/*/events)
+        if [ -f "${FAKE_GH_DIR}/fail_events" ]; then exit 1; fi
+        n="${path#*/issues/}"; n="${n%%/*}"; fixture="${FAKE_GH_DIR}/events_${n}.json" ;;
+      repos/*/collaborators/*/permission)
+        n="${path#*/collaborators/}"; n="${n%%/*}"; fixture="${FAKE_GH_DIR}/permission_${n}.json"
+        [ -f "${fixture}" ] || exit 1 ;;
+      repos/*/issues/comments/*) fixture="${FAKE_GH_DIR}/comment_body.json" ;;
+      repos/*)
+        # The repository itself: the default-branch read (issue #6629).
+        # default_branch_fail fails it; default_branch overrides "main".
+        if [[ "${path}" =~ ^repos/[^/]+/[^/]+$ ]]; then
+          if [ -f "${FAKE_GH_DIR}/default_branch_fail" ]; then exit 1; fi
+          db="main"
+          [ -f "${FAKE_GH_DIR}/default_branch" ] && db="$(cat "${FAKE_GH_DIR}/default_branch")"
+          printf '{"default_branch":"%s"}\n' "${db}" | jq -r "${jqf:-.}"
+          exit 0
+        fi
+        echo "unexpected GET ${path}" >&2; exit 1 ;;
+      *) echo "unexpected GET ${path}" >&2; exit 1 ;;
+    esac
+    if [[ "${path}" == repos/*/issues/*/comments ]] && [[ "${jqf}" == *"merge-train:released"* ]] && [ -f "${FAKE_GH_DIR}/fail_released_comment_lookup" ]; then
+      exit 1
+    fi
+    if [ ! -f "${fixture}" ]; then
+      if [ "${path}" = "user" ]; then
+        if [ -n "${jqf}" ]; then printf '%s\n' '{"login":"merge-train-bot"}' | jq -r "${jqf}"; else echo '{"login":"merge-train-bot"}'; fi
+      else echo '[]'; fi
+      exit 0
+    fi
+    if [ -n "${jqf}" ]; then jq -r "${jqf}" "${fixture}"; else cat "${fixture}"; fi
+    ;;
+  DELETE)
+    if [ -f "${FAKE_GH_DIR}/label_delete_fail" ]; then exit 1; fi
+    exit 0
+    ;;
+  POST)
+    if [[ "${path}" == repos/*/issues/*/labels ]] && [ -f "${FAKE_GH_DIR}/label_post_fail" ]; then exit 1; fi
+    if [[ "${path}" == repos/*/issues/*/comments ]] && [ -f "${FAKE_GH_DIR}/comment_post_fail" ]; then exit 1; fi
+    exit 0
+    ;;
+  PATCH)
+    if [[ "${path}" == repos/*/issues/comments/* ]] && [ -f "${FAKE_GH_DIR}/comment_patch_fail" ]; then exit 1; fi
+    exit 0
+    ;;
+  *) exit 0 ;;
+esac
+'''
+
+
+def _install_fake_gh(tmp_path: Path) -> tuple[Path, Path, Path]:
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	gh = bin_dir / "gh"
+	gh.write_text(FAKE_GH, encoding="utf-8")
+	gh.chmod(gh.stat().st_mode | stat.S_IEXEC)
+	fixtures = tmp_path / "fixtures"
+	fixtures.mkdir()
+	log = tmp_path / "gh.log"
+	log.touch()
+	return bin_dir, fixtures, log
+
+
+def _pr(number: int, head: str, base: str = "main", labels: list[str] | None = None, draft: bool = False,
+		head_repo: str | None = "acme/consumer", head_sha: str | None = None, created_at: str | None = None) -> dict:
+	pr = {
+		"number": number,
+		"head": {"ref": head, "repo": {"full_name": head_repo} if head_repo is not None else None},
+		"base": {"ref": base},
+		"draft": draft,
+		"labels": [{"name": name} for name in (labels or [])],
+	}
+	if head_sha is not None:
+		pr["head"]["sha"] = head_sha
+	if created_at is not None:
+		pr["created_at"] = created_at
+	return pr
+
+
+def _write_files(fixtures: Path, number: int, paths: list[str]) -> None:
+	(fixtures / f"files_{number}.json").write_text(
+		json.dumps([{"filename": p} for p in paths]), encoding="utf-8"
+	)
+
+
+def _marker_comment(comment_id: int, author: str = "automation-bot", created_at: str = "2026-10-01T00:00:00Z") -> dict:
+	return {
+		"id": comment_id,
+		"body": "<!-- merge-train:queued -->\nReview queued",
+		"user": {"login": author},
+		"created_at": created_at,
+	}
+
+
+def _label_event(event: str, created_at: str = "2026-10-01T00:00:01Z", actor: str = "maint") -> dict:
+	return {"event": event, "label": {"name": "ai:merge-queued"}, "created_at": created_at,
+		"actor": {"login": actor}}
+
+
+def _run(subcommand: str, tmp_path: Path, bin_dir: Path, fixtures: Path, log: Path, *, run_cwd: Path | None = None,
+		**env: str) -> tuple[subprocess.CompletedProcess, str, dict]:
+	github_env = tmp_path / "github_env"
+	github_env.touch()
+	run_env = dict(os.environ)
+	# The review workflow exports these names in the editor process. Tests must
+	# opt in explicitly rather than inherit the live PR's paths or base branch.
+	for inherited_name in ("BASE_BRANCH", "PR_DIFF_FILE", "PR_NUMBER", "TARGET_BRANCH", "IS_SMOKE_TEST",
+			"MERGE_TRAIN_CONFLICT_CHECK_ENABLED", "MERGE_TRAIN_HEAD_MAX_AGE_HOURS", "MERGE_TRAIN_PRIORITY_LABELS",
+			"MERGE_TRAIN_IGNORE_PATHS", "ZOMBIE_RUN_MAX_QUEUED_HOURS"):
+		run_env.pop(inherited_name, None)
+	run_env.update({
+		"PATH": f"{bin_dir}:{os.environ['PATH']}",
+		"FAKE_GH_DIR": str(fixtures),
+		"FAKE_GH_LOG": str(log),
+		"GITHUB_REPOSITORY": "acme/consumer",
+		"GITHUB_ENV": str(github_env),
+		"GH_TOKEN": "x",
+		"PYTHONDONTWRITEBYTECODE": "1",
+		# Outside a checkout the conflict probe fetches from
+		# ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}.git; keep tests offline.
+		"GITHUB_SERVER_URL": f"file://{tmp_path}/no-such-server",
+		"RUNNER_TEMP": str(tmp_path),
+	})
+	run_env.update(env)
+	result = subprocess.run(
+		["bash", str(SCRIPT), subcommand], env=run_env, capture_output=True, text=True, cwd=run_cwd or tmp_path,
+	)
+	env_lines = {}
+	for line in github_env.read_text(encoding="utf-8").splitlines():
+		if "=" in line:
+			k, v = line.split("=", 1)
+			env_lines[k] = v
+	return result, log.read_text(encoding="utf-8"), env_lines
+
+
+def test_gate_queues_younger_overlapping_pr(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"),
+		_pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4075, ["backend/promo_email_sender.py", "backend/README.md"])
+	diff = tmp_path / "pr.diff"
+	diff.write_text(
+		"diff --git a/backend/promo_email_sender.py b/backend/promo_email_sender.py\n"
+		"--- a/backend/promo_email_sender.py\n+++ b/backend/promo_email_sender.py\n"
+		"diff --git a/tests/test_promo_email_sender.py b/tests/test_promo_email_sender.py\n",
+		encoding="utf-8",
+	)
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064", PR_DIFF_FILE=str(diff),
+	)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_GATE pr=4077 base=main result=queued blockers=#4075" in result.stdout
+	assert env_out.get("AUTOFIX_MERGE_QUEUED") == "true"
+	assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
+	assert env_out.get("AUTOFIX_MERGE_QUEUED_BLOCKERS") == "#4075"
+	assert "issues/4077/labels" in log_text and "labels[]=ai:merge-queued" in log_text
+	assert "POST repos/acme/consumer/issues/4077/comments" in log_text
+	# Own paths came from PR_DIFF_FILE: no pulls/4077/files call.
+	assert "pulls/4077/files" not in log_text
+
+
+@pytest.mark.parametrize("ignored_setting,queued", [(None, False), ("", True), ("none", True), ("*", True)])
+def test_manifest_only_overlap_respects_ignore_setting(tmp_path: Path, ignored_setting: str | None, queued: bool) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"), _pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	manifest = ".ai/.workspace_source_manifest.txt"
+	_write_files(fixtures, 4075, [manifest])
+	_write_files(fixtures, 4077, [manifest])
+	env = {} if ignored_setting is None else {"MERGE_TRAIN_IGNORE_PATHS": ignored_setting}
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064", **env,
+	)
+	assert result.returncode == 0, result.stderr
+	assert f"result={'queued' if queued else 'unblocked'}" in result.stdout
+	assert f"ignored={manifest if not queued else 'none'}" in result.stdout
+	assert ("labels[]=ai:merge-queued" in log_text) == queued
+	assert (env_out.get("AUTOFIX_MERGE_QUEUED") == "true") == queued
+	if ignored_setting == "*":
+		assert "ignoring glob entry" in result.stdout
+
+
+def test_manifest_ignored_but_real_overlap_queues(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"), _pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	manifest = ".ai/.workspace_source_manifest.txt"
+	_write_files(fixtures, 4075, [manifest, "src/shared.py"])
+	_write_files(fixtures, 4077, [manifest, "src/shared.py"])
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064",
+	)
+	assert result.returncode == 0, result.stderr
+	assert f"result=queued blockers=#4075 action=soft_exit ignored={manifest}" in result.stdout
+	assert "src/shared.py" in log_text
+	assert manifest not in log_text
+	assert env_out.get("AUTOFIX_MERGE_QUEUED") == "true"
+
+
+def test_release_unblocks_manifest_only_overlap(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"), _pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4075, [".ai/.workspace_source_manifest.txt"])
+	_write_files(fixtures, 4077, [".ai/.workspace_source_manifest.txt"])
+	result, log_text, _ = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+	assert "workflow run" in log_text
+
+
+def test_merge_train_workflows_forward_ignore_default() -> None:
+	for name in ("review_autofix", "orchestrate_poll", "cancel_on_pr_close"):
+		text = (REPO_ROOT / ".github" / "workflows" / f"{name}.yml").read_text(encoding="utf-8")
+		assert "MERGE_TRAIN_IGNORE_PATHS: ${{ vars.MERGE_TRAIN_IGNORE_PATHS || '.ai/.workspace_source_manifest.txt' }}" in text
+
+
+def test_gate_smoke_bypasses_overlap_but_other_signals_queue(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"),
+		_pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	canary = "tests/e2e_smoke_canary.txt"
+	_write_files(fixtures, 4075, [canary])
+	_write_files(fixtures, 4077, [canary])
+	for signal in ("true", "TRUE", "false", None):
+		log.write_text("", encoding="utf-8")
+		kwargs = {"IS_SMOKE_TEST": signal} if signal is not None else {}
+		result, log_text, env_out = _run(
+			"gate", tmp_path, bin_dir, fixtures, log,
+			PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064", **kwargs,
+		)
+		assert result.returncode == 0, result.stderr
+		if signal == "true":
+			assert "result=unblocked action=continue" in result.stdout
+			assert "pulls/4075/files" not in log_text
+			assert "pulls/4077/files" not in log_text
+			assert "issues/4077/labels" not in log_text
+			assert "issues/4077/comments" not in log_text
+			assert "AUTOFIX_MERGE_QUEUED" not in env_out
+			assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
+		else:
+			assert "result=queued blockers=#4075" in result.stdout
+			assert "pulls/4075/files" in log_text
+			assert "labels[]=ai:merge-queued" in log_text
+			assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
+
+
+def test_gate_smoke_retires_prior_queue_before_removing_label(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"),
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	(fixtures / "comments_4077.json").write_text(json.dumps([_marker_comment(98)]), encoding="utf-8")
+	_write_files(fixtures, 4075, ["tests/e2e_smoke_canary.txt"])
+	_write_files(fixtures, 4077, ["tests/e2e_smoke_canary.txt"])
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064", IS_SMOKE_TEST="true",
+	)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=gate" in result.stdout
+	assert "pulls/4075/files" not in log_text
+	assert "pulls/4077/files" not in log_text
+	assert "merge-train:queue-retired" in log_text
+	assert log_text.index("PATCH repos/acme/consumer/issues/comments/98") < log_text.index(
+		"DELETE repos/acme/consumer/issues/4077/labels/ai%3Amerge-queued"
+	)
+	assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
+
+
+def test_gate_smoke_lookup_failure_does_not_retire_queue(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "fail_get").touch()
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064", IS_SMOKE_TEST="true",
+	)
+	assert result.returncode == 0, result.stderr
+	assert "::warning::" in result.stdout
+	assert "issues/4077/labels" not in log_text
+	assert "merge-train:queue-retired" not in log_text
+	assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
+
+
+def test_gate_continues_when_older_pr_is_disjoint_or_younger(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"),        # older, disjoint
+		_pr(4077, "ai/issue-4064"),        # this PR
+		_pr(4091, "ai/issue-4079"),        # younger, overlapping — must not block
+		_pr(4080, "feature/manual"),       # older, non-ai branch — ignored
+	]), encoding="utf-8")
+	_write_files(fixtures, 4075, ["docs/other.md"])
+	_write_files(fixtures, 4091, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4080, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064",
+	)
+	assert result.returncode == 0, result.stderr
+	assert "result=unblocked action=continue" in result.stdout
+	assert "AUTOFIX_MERGE_QUEUED" not in env_out
+	assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
+	assert "pulls/4091/files" not in log_text, "younger PRs must not be examined"
+	assert "pulls/4080/files" not in log_text, "non ai/issue-* PRs must not be examined"
+
+
+@pytest.mark.parametrize("head_repo", ["evil/consumer", None])
+def test_gate_ignores_older_fork_pr_with_ai_issue_head(tmp_path: Path, head_repo: str | None) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063", head_repo=head_repo),
+		_pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4075, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064",
+	)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_FOREIGN_HEAD_SKIPPED pr=4077 older=4075" in result.stdout
+	assert "result=unblocked action=continue" in result.stdout
+	assert "AUTOFIX_MERGE_QUEUED" not in env_out
+	assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
+	assert "pulls/4075/files" not in log_text
+
+
+def test_gate_counts_case_insensitive_same_repo_head(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063", head_repo="Acme/Consumer"),
+		_pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4075, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, _log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064",
+	)
+	assert result.returncode == 0, result.stderr
+	assert "result=queued blockers=#4075" in result.stdout
+	assert env_out.get("AUTOFIX_MERGE_QUEUED") == "true"
+
+
+def test_gate_foreign_heads_do_not_use_older_pr_cap(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4073, "ai/issue-4062", head_repo="evil/consumer"),
+		_pr(4075, "ai/issue-4063"),
+		_pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	for number in (4073, 4075, 4077):
+		_write_files(fixtures, number, ["backend/promo_email_sender.py"])
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064",
+		MERGE_TRAIN_MAX_OLDER_PRS="1",
+	)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_FOREIGN_HEAD_SKIPPED pr=4077 older=4073" in result.stdout
+	assert "result=queued blockers=#4075" in result.stdout
+	assert env_out.get("AUTOFIX_MERGE_QUEUED_BLOCKERS") == "#4075"
+	assert "pulls/4073/files" not in log_text
+
+
+def test_gate_releases_stale_label_when_unblocked(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	(fixtures / "comments_4077.json").write_text(json.dumps([_marker_comment(98)]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064",
+	)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=gate" in result.stdout
+	assert "PATCH repos/acme/consumer/issues/comments/98" in log_text
+	assert "merge-train:queue-retired" in log_text
+	assert "DELETE repos/acme/consumer/issues/4077/labels/ai%3Amerge-queued" in log_text
+	assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
+
+
+def test_gate_consumes_prior_queue_marker_as_one_shot_bypass(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"),
+		_pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	(fixtures / "comments_4077.json").write_text(json.dumps([_marker_comment(99)]), encoding="utf-8")
+	(fixtures / "events_4077.json").write_text(json.dumps([_label_event("unlabeled"), _label_event("labeled", "2026-10-01T00:00:00Z")]), encoding="utf-8")
+	(fixtures / "permission_maint.json").write_text('{"role_name":"write"}', encoding="utf-8")
+	_write_files(fixtures, 4075, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064",
+	)
+	assert result.returncode == 0, result.stderr
+	assert "result=bypassed blockers=#4075 action=continue" in result.stdout
+	assert "PATCH repos/acme/consumer/issues/comments/99" in log_text
+	assert "labels[]=ai:merge-queued" not in log_text
+	assert "AUTOFIX_MERGE_QUEUED" not in env_out
+	assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
+
+
+@pytest.mark.parametrize(("author", "events", "role", "failure", "reason"), [
+	("mallory", [], None, None, None),
+	("AUTOMATION-BOT", [], None, None, "no_label_removal"),
+	("automation-bot", [_label_event("unlabeled"), _label_event("labeled", "2026-10-01T00:00:02Z")], None, None, "no_label_removal"),
+	("automation-bot", [_label_event("labeled", "2026-10-01T00:00:02Z"), _label_event("unlabeled")], None, None, "no_label_removal"),
+	("automation-bot", [_label_event("unlabeled", "2026-10-01T00:00:03Z"), _label_event("labeled", "2026-10-01T00:00:02Z"), _label_event("unlabeled", actor="owner")], "read", None, "actor_unauthorized"),
+	("automation-bot", [_label_event("unlabeled", "2026-10-01T00:00:01Z"), _label_event("unlabeled", "2026-10-01T00:00:01Z")], "write", None, "events_unavailable"),
+	("automation-bot", [_label_event("unlabeled", "2026-10-01T00:00:00Z")], None, None, "removal_not_after_marker"),
+	("automation-bot", [_label_event("unlabeled", "2026-09-30T23:59:59Z")], None, None, "removal_not_after_marker"),
+	("automation-bot", [_label_event("unlabeled", actor="ghost")], None, None, "actor_unknown"),
+	("automation-bot", [_label_event("unlabeled")], "read", None, "actor_unauthorized"),
+	("automation-bot", [_label_event("unlabeled")], None, None, "permission_unavailable"),
+	("automation-bot", [_label_event("unlabeled")], "write", "fail_events", "events_unavailable"),
+])
+def test_gate_rejects_unverified_bypass(tmp_path: Path, author: str, events: list[dict], role: str | None, failure: str | None, reason: str | None) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([_pr(4075, "ai/issue-4063"), _pr(4077, "ai/issue-4064")]), encoding="utf-8")
+	(fixtures / "comments_4077.json").write_text(json.dumps([_marker_comment(99, author)]), encoding="utf-8")
+	(fixtures / "events_4077.json").write_text(json.dumps(events), encoding="utf-8")
+	if role is not None:
+		(fixtures / "permission_maint.json").write_text(json.dumps({"role_name": role}), encoding="utf-8")
+	if failure is not None:
+		(fixtures / failure).touch()
+	_write_files(fixtures, 4075, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, env_out = _run("gate", tmp_path, bin_dir, fixtures, log, PR_NUMBER="4077",
+		BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064", GH_RETRY_MAX_ATTEMPTS="1")
+	assert result.returncode == 0, result.stderr
+	if reason is not None:
+		assert f"result=bypass_rejected reason={reason} action=queue" in result.stdout
+	assert "result=queued blockers=#4075 action=soft_exit" in result.stdout
+	assert "labels[]=ai:merge-queued" in log_text
+	assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
+	if author == "mallory":
+		assert "POST repos/acme/consumer/issues/4077/comments" in log_text
+		assert "issues/comments/99" not in log_text
+
+
+@pytest.mark.parametrize("failure", ["fail_user", "fail_comments"])
+def test_gate_identity_failure_does_not_trust_or_patch_marker(tmp_path: Path, failure: str) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([_pr(4075, "ai/issue-4063"), _pr(4077, "ai/issue-4064")]), encoding="utf-8")
+	(fixtures / "comments_4077.json").write_text(json.dumps([_marker_comment(99)]), encoding="utf-8")
+	(fixtures / failure).touch()
+	_write_files(fixtures, 4075, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, env_out = _run("gate", tmp_path, bin_dir, fixtures, log, PR_NUMBER="4077",
+		BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064", GH_RETRY_MAX_ATTEMPTS="1")
+	assert result.returncode == 0, result.stderr
+	assert "::warning::" in result.stdout
+	assert "result=bypassed" not in result.stdout
+	assert "result=queued blockers=#4075 action=soft_exit" in result.stdout
+	assert "POST repos/acme/consumer/issues/4077/labels" in log_text
+	assert "POST repos/acme/consumer/issues/4077/comments" not in log_text
+	assert "PATCH repos/acme/consumer/issues/comments/99" not in log_text
+	assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
+
+
+def test_gate_failed_bypass_marker_update_keeps_pr_queued(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([_pr(4075, "ai/issue-4063"), _pr(4077, "ai/issue-4064")]), encoding="utf-8")
+	(fixtures / "comments_4077.json").write_text(json.dumps([_marker_comment(99)]), encoding="utf-8")
+	(fixtures / "events_4077.json").write_text(json.dumps([_label_event("unlabeled")]), encoding="utf-8")
+	(fixtures / "permission_maint.json").write_text('{"role_name":"write"}', encoding="utf-8")
+	(fixtures / "comment_patch_fail").touch()
+	_write_files(fixtures, 4075, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, env_out = _run("gate", tmp_path, bin_dir, fixtures, log, PR_NUMBER="4077",
+		BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064", GH_RETRY_MAX_ATTEMPTS="1")
+	assert result.returncode == 0, result.stderr
+	assert "result=bypass_rejected reason=marker_update_failed action=queue" in result.stdout
+	assert "result=bypassed" not in result.stdout
+	assert "PATCH repos/acme/consumer/issues/comments/99" in log_text
+	assert "POST repos/acme/consumer/issues/4077/labels" in log_text
+	assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
+
+
+def test_gate_matches_automation_author_case_insensitively(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([_pr(4075, "ai/issue-4063"), _pr(4077, "ai/issue-4064")]), encoding="utf-8")
+	(fixtures / "comments_4077.json").write_text(json.dumps([_marker_comment(99, "AUTOMATION-BOT")]), encoding="utf-8")
+	(fixtures / "events_4077.json").write_text(json.dumps([_label_event("unlabeled")]), encoding="utf-8")
+	(fixtures / "permission_maint.json").write_text('{"role_name":"triage"}', encoding="utf-8")
+	_write_files(fixtures, 4075, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, _env = _run("gate", tmp_path, bin_dir, fixtures, log, PR_NUMBER="4077",
+		BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064")
+	assert result.returncode == 0, result.stderr
+	assert "result=bypassed blockers=#4075 action=continue" in result.stdout
+	assert "PATCH repos/acme/consumer/issues/comments/99" in log_text
+
+
+def test_gate_uses_newest_trusted_queue_marker(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([_pr(4075, "ai/issue-4063"), _pr(4077, "ai/issue-4064")]), encoding="utf-8")
+	(fixtures / "comments_4077.json").write_text(json.dumps([
+		_marker_comment(100, created_at="2026-10-01T00:00:02Z"),
+		_marker_comment(99),
+	]), encoding="utf-8")
+	(fixtures / "events_4077.json").write_text(json.dumps([_label_event("unlabeled")]), encoding="utf-8")
+	(fixtures / "permission_maint.json").write_text('{"role_name":"write"}', encoding="utf-8")
+	_write_files(fixtures, 4075, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, env_out = _run("gate", tmp_path, bin_dir, fixtures, log, PR_NUMBER="4077",
+		BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064")
+	assert result.returncode == 0, result.stderr
+	assert "result=bypass_rejected reason=removal_not_after_marker action=queue" in result.stdout
+	assert "PATCH repos/acme/consumer/issues/comments/99" not in log_text
+	assert "PATCH repos/acme/consumer/issues/comments/100" in log_text
+	assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
+
+
+def test_gate_allows_owner_pat_account_to_remove_queue_label(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([_pr(4075, "ai/issue-4063"), _pr(4077, "ai/issue-4064")]), encoding="utf-8")
+	(fixtures / "comments_4077.json").write_text(json.dumps([_marker_comment(99)]), encoding="utf-8")
+	(fixtures / "events_4077.json").write_text(json.dumps([_label_event("unlabeled", actor="automation-bot")]), encoding="utf-8")
+	(fixtures / "permission_automation-bot.json").write_text('{"role_name":"admin"}', encoding="utf-8")
+	_write_files(fixtures, 4075, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, _env = _run("gate", tmp_path, bin_dir, fixtures, log, PR_NUMBER="4077",
+		BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064")
+	assert result.returncode == 0, result.stderr
+	assert "result=bypassed blockers=#4075 action=continue" in result.stdout
+	assert "collaborators/automation-bot/permission" in log_text
+
+
+def test_gate_does_not_retire_forged_marker(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"])]), encoding="utf-8")
+	(fixtures / "comments_4077.json").write_text(json.dumps([_marker_comment(98, "mallory")]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, _env = _run("gate", tmp_path, bin_dir, fixtures, log, PR_NUMBER="4077",
+		BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064")
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=gate" in result.stdout
+	assert "PATCH repos/acme/consumer/issues/comments/98" not in log_text
+	assert "DELETE repos/acme/consumer/issues/4077/labels/ai%3Amerge-queued" in log_text
+
+
+def test_release_does_not_retire_forged_marker(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"])]), encoding="utf-8")
+	(fixtures / "comments_4077.json").write_text(json.dumps([_marker_comment(98, "mallory")]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+	assert "PATCH repos/acme/consumer/issues/comments/98" not in log_text
+	assert "DELETE repos/acme/consumer/issues/4077/labels/ai%3Amerge-queued" in log_text
+	assert "gh workflow run ai-review.yml" in log_text
+
+
+def test_gate_falls_back_to_api_for_git_quoted_paths(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"),
+		_pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	quoted_path = "src/\u00e9.py"
+	_write_files(fixtures, 4075, [quoted_path])
+	_write_files(fixtures, 4077, [quoted_path])
+	diff = tmp_path / "pr.diff"
+	diff.write_text(
+		r'diff --git "a/src/\303\251.py" "b/src/\303\251.py"' + "\n",
+		encoding="utf-8",
+	)
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064", PR_DIFF_FILE=str(diff),
+	)
+	assert result.returncode == 0, result.stderr
+	assert "result=queued blockers=#4075" in result.stdout
+	assert "pulls/4077/files" in log_text
+	assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
+
+
+def test_gate_does_not_arm_bypass_marker_when_queue_label_add_fails(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"),
+		_pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4075, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	(fixtures / "label_post_fail").touch()
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064",
+	)
+	assert result.returncode == 0, result.stderr
+	assert "no bypass marker will be armed" in result.stdout
+	assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
+	assert "POST repos/acme/consumer/issues/4077/comments" not in log_text
+
+
+def test_gate_ignores_non_ai_issue_head_and_disabled_flag(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="7", BASE_BRANCH="main", TARGET_BRANCH="auto/forward-merge-stable-1-1",
+	)
+	assert result.returncode == 0
+	assert "result=not_ai_issue_branch" in result.stdout
+	assert log_text.strip() == "", "no API call for non ai/issue-* heads"
+
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="7", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-7", MERGE_TRAIN_ENABLED="false",
+	)
+	assert result.returncode == 0
+	assert "MERGE_TRAIN_DISABLED" in result.stdout
+	assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
+
+
+def test_gate_enabled_flag_is_case_insensitive(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	result, _log_text, _env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="7", BASE_BRANCH="main", TARGET_BRANCH="feature/manual", MERGE_TRAIN_ENABLED="yEs",
+	)
+	assert result.returncode == 0
+	assert "result=not_ai_issue_branch" in result.stdout
+	assert "MERGE_TRAIN_DISABLED" not in result.stdout
+
+
+def test_gate_fails_open_on_api_error(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "fail_get").touch()
+	result, _log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064",
+	)
+	assert result.returncode == 0, result.stderr
+	assert "::warning::" in result.stdout
+	assert "AUTOFIX_STALE_BASE_SKIP" not in env_out, "API failure must never queue a PR"
+
+
+def test_release_dispatches_only_unblocked_queued_prs(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	# 4075 merged (absent). 4077 queued and now unblocked; 4081 queued but
+	# still overlaps the open 4077 (older) so it stays queued; 4085 queued on
+	# another base with no blockers.
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+		_pr(4081, "ai/issue-4059", labels=["ai:merge-queued"]),
+		_pr(4085, "ai/issue-4069", base="orchestrator/project-9", labels=["ai:merge-queued"]),
+		_pr(4090, "ai/issue-4073"),
+	]), encoding="utf-8")
+	(fixtures / "comments_4077.json").write_text(json.dumps([_marker_comment(97)]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4081, ["backend/promo_email_sender.py", "db/contracts/promo_email_jobs.yml"])
+	_write_files(fixtures, 4085, ["twap_router.py"])
+	_write_files(fixtures, 4090, ["backend/promo_email_sender.py"])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, BASE_BRANCH="main")
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+	assert "MERGE_TRAIN_STILL_QUEUED pr=4081 blockers=#4077" in result.stdout
+	assert "pr=4085" not in result.stdout, "BASE_BRANCH filter must skip other bases"
+	# Issue #4701: dispatched from the default branch, never --ref the head.
+	assert "gh workflow run ai-review.yml --repo acme/consumer -f pr_number=4077" in log_text
+	assert "--ref" not in log_text
+	assert "MERGE_TRAIN_DISPATCHED pr=4077 workflow=ai-review.yml ref=default head=ai/issue-4064" in result.stdout
+	assert "PATCH repos/acme/consumer/issues/comments/97" in log_text
+	assert "merge-train:queue-retired" in log_text
+	assert "DELETE repos/acme/consumer/issues/4077/labels/ai%3Amerge-queued" in log_text
+	assert "issues/4081/labels/ai%3Amerge-queued" not in log_text
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=2 released=1 base_filter=main" in result.stdout
+	# Per-reason counts are appended after base_filter= (overlap scenario).
+	assert (
+		"MERGE_TRAIN_RELEASE_SUMMARY examined=2 released=1 base_filter=main overlap=1 active_review=0"
+		" runs_incomplete=0 files_unavailable=0 blockers_unavailable=0 marker_unavailable=0"
+		" claim_skipped=0 dispatch_failed=0 oldest_queued_age_secs=none"
+	) in result.stdout
+
+
+def test_release_summary_reports_oldest_queued_age(tmp_path: Path) -> None:
+	"""oldest_queued_age_secs comes from the listing's created_at (no extra API call)."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4070, "ai/issue-4060", labels=["ai:merge-queued"], created_at="not-a-timestamp"),
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"], created_at="2026-01-01T00:00:00Z"),
+		_pr(4081, "ai/issue-4059", labels=["ai:merge-queued"], created_at="2026-06-01T00:00:00Z"),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4070, ["a.py"])
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4081, ["backend/promo_email_sender.py"])
+	result, _log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, BASE_BRANCH="main")
+	assert result.returncode == 0, result.stderr
+	summary = [line for line in result.stdout.splitlines() if line.startswith("MERGE_TRAIN_RELEASE_SUMMARY ")]
+	assert len(summary) == 1
+	fields = dict(item.split("=", 1) for item in summary[0].split()[1:])
+	assert fields["examined"] == "3"
+	assert fields["overlap"] == "1", "4081 still overlaps the open, older 4077"
+	counted = sum(int(fields[key]) for key in (
+		"overlap", "active_review", "runs_incomplete", "files_unavailable", "blockers_unavailable",
+		"marker_unavailable", "claim_skipped", "dispatch_failed"))
+	assert int(fields["released"]) + counted == int(fields["examined"])
+	# The malformed created_at on 4070 is skipped; the oldest parseable one wins.
+	expected = (datetime.now(timezone.utc) - datetime(2026, 1, 1, tzinfo=timezone.utc)).total_seconds()
+	assert abs(int(fields["oldest_queued_age_secs"]) - expected) <= 300
+
+
+def test_release_does_not_read_actions_without_queued_prs(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([_pr(1, "ai/issue-1"), _pr(2, "ai/issue-2")]))
+	result, calls, _ = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=0 released=0" in result.stdout
+	assert "actions/runs" not in calls
+	(fixtures / "pulls.json").write_text(json.dumps([_pr(1, "ai/issue-1", labels=["ai:merge-queued"])]))
+	result, calls, _ = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "actions/runs" in calls
+
+
+def test_release_ignores_forged_marker_and_resolves_identity_once(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+		_pr(4085, "ai/issue-4069", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/a.py"])
+	_write_files(fixtures, 4085, ["backend/b.py"])
+	(fixtures / "comments_4077.json").write_text(json.dumps([
+		{"id": 97, "user": {"login": "attacker"}, "body": "<!-- merge-train:queued -->"},
+		{"id": 100, "user": {"login": "attacker"}, "body": "<!-- merge-train:released -->"},
+	]), encoding="utf-8")
+	(fixtures / "comments_4085.json").write_text(json.dumps([_marker_comment(98)]), encoding="utf-8")
+	result, log_text, _env_out = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=2 released=2" in result.stdout
+	assert "PATCH repos/acme/consumer/issues/comments/97" not in log_text
+	assert "PATCH repos/acme/consumer/issues/comments/100" not in log_text
+	assert "POST repos/acme/consumer/issues/4077/comments" in log_text
+	assert "PATCH repos/acme/consumer/issues/comments/98" in log_text
+	assert log_text.count("gh api user") == 1
+
+
+def test_release_keeps_queue_when_identity_unavailable(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/a.py"])
+	(fixtures / "fail_user_get").touch()
+	result, log_text, _env_out = _run("release", tmp_path, bin_dir, fixtures, log, GH_RETRY_MAX_ATTEMPTS="1")
+	assert result.returncode == 0, result.stderr
+	assert "could not inspect the queue marker" in result.stdout
+	assert "marker_unavailable=1" in result.stdout
+	assert "DELETE repos/acme/consumer/issues/4077/labels" not in log_text
+	assert "gh workflow run" not in log_text
+
+
+def test_release_ignores_fork_blocker_and_dispatches(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063", head_repo="evil/consumer"),
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4075, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, BASE_BRANCH="main")
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_FOREIGN_HEAD_SKIPPED pr=4077 older=4075" in result.stdout
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+	assert "pulls/4075/files" not in log_text
+	assert "DELETE repos/acme/consumer/issues/4077/labels/ai%3Amerge-queued" in log_text
+	assert "gh workflow run ai-review.yml --repo acme/consumer -f pr_number=4077" in log_text
+
+
+def test_release_fetches_each_pr_file_list_once_per_run(tmp_path: Path) -> None:
+	"""The per-run file-list cache must survive across queued-PR evaluations.
+
+	Regression for the api-batching finding on ``_MT_FILES_CACHE``: every
+	caller invoked ``_mt_pr_files`` through a command substitution, so the
+	cache write happened in a subshell and was discarded. With three open
+	PRs where 4081 and 4090 are both queued behind 4077, the release path
+	re-fetched ``/pulls/4077/files`` once per queued PR (and 4081's list
+	twice: once as its own, once as 4090's older blocker). Each list must
+	now cost exactly one ``GET`` for the whole run. See CLAUDE.md §15.
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064"),
+		_pr(4081, "ai/issue-4059", labels=["ai:merge-queued"]),
+		_pr(4090, "ai/issue-4073", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4081, ["backend/promo_email_sender.py", "db/contracts/promo_email_jobs.yml"])
+	_write_files(fixtures, 4090, ["backend/promo_email_sender.py"])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, BASE_BRANCH="main")
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_STILL_QUEUED pr=4081 blockers=#4077" in result.stdout
+	assert "MERGE_TRAIN_STILL_QUEUED pr=4090 blockers=#4077,#4081" in result.stdout
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=2 released=0 base_filter=main overlap=2 " in result.stdout
+	for number in (4077, 4081, 4090):
+		calls = log_text.count(f"pulls/{number}/files")
+		assert calls == 1, f"/pulls/{number}/files fetched {calls} times; the per-run cache must hold it to one"
+
+
+def test_release_without_base_filter_covers_every_base(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4085, "ai/issue-4069", base="orchestrator/project-9", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4085, ["twap_router.py"])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASED pr=4085 source=release" in result.stdout
+	assert "gh workflow run ai-review.yml --repo acme/consumer -f pr_number=4085" in log_text
+	assert "--ref" not in log_text
+
+
+def test_release_keeps_label_when_dispatch_fails(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	(fixtures / "dispatch_fail").touch()
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "could not be dispatched" in result.stdout
+	assert "MERGE_TRAIN_RELEASED" not in result.stdout
+	assert "DELETE repos/acme/consumer/issues/4077/labels/ai%3Amerge-queued" in log_text
+	assert "POST repos/acme/consumer/issues/4077/labels" in log_text
+	assert "labels[]=ai:merge-queued" in log_text, "failed dispatch must restore the queue label"
+	assert "merge-train:released" not in log_text
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=1 released=0 base_filter=* " in result.stdout
+	assert " dispatch_failed=1 " in result.stdout
+
+
+def test_release_comment_lookup_failure_does_not_abort_successful_release(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	(fixtures / "fail_released_comment_lookup").touch()
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "could not upsert the released comment" in result.stdout
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=1 released=1" in result.stdout
+	assert "gh workflow run ai-review.yml" in log_text
+
+
+def test_release_leaves_active_review_queued_without_dispatch(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	(fixtures / "actions_runs.json").write_text(json.dumps({"workflow_runs": [{
+		"id": 9001,
+		"status": "in_progress",
+		"head_branch": "ai/issue-4064",
+		"event": "pull_request",
+		"path": ".github/workflows/ai-review.yml",
+	}]}), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+	assert "issues/4077/labels/ai%3Amerge-queued" not in log_text
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=1 released=0 base_filter=* overlap=0 active_review=1 " in result.stdout
+
+
+def test_release_leaves_pr_named_dispatch_run_queued_without_dispatch(tmp_path: Path) -> None:
+	"""Issue #4701: a default-branch dispatch run is keyed by the PR its name carries."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	(fixtures / "actions_runs.json").write_text(json.dumps({"workflow_runs": [{
+		"id": 9002,
+		"status": "pending",
+		"head_branch": "main",
+		"event": "workflow_dispatch",
+		"display_title": "AI Review [pr:4077]",
+		"path": ".github/workflows/ai-review.yml",
+	}]}), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_rejects_zero_pr_number_before_dispatch(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(0, "ai/issue-invalid", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "gh workflow run" not in log_text
+	assert "issues/0/labels" not in log_text
+
+
+def test_release_ignores_pr_named_runs_of_other_prs_and_other_events(tmp_path: Path) -> None:
+	"""Only a workflow_dispatch run named exactly for this PR suppresses it."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	(fixtures / "actions_runs.json").write_text(json.dumps({"workflow_runs": [
+		{"id": 9007, "event": "workflow_dispatch", "display_title": "AI Review [pr:4077]", "status": "pending", "head_branch": "main", "path": ".github/workflows/unrelated.yml"},
+		{
+			"id": 9003,
+			"status": "in_progress",
+			"head_branch": "main",
+			"event": "workflow_dispatch",
+			"display_title": "Internal: AI Review & Autofix [pr:40771]",
+			"path": ".github/workflows/internal-review.yml",
+		},
+		{
+			"id": 9004,
+			"status": "in_progress",
+			"head_branch": "ai/issue-9999",
+			"event": "pull_request",
+			"display_title": "AI Review [pr:4077]",
+			"path": ".github/workflows/ai-review.yml",
+		},
+	]}), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE" not in result.stdout
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+
+
+def test_release_empty_head_does_not_match_blank_run_branch(tmp_path: Path) -> None:
+	"""An empty PR head is never a grep pattern, so a run with head_branch "" does not hold the PR.
+
+	The blank-branch run is a dispatch named for another PR, so it has a key
+	and the listing stays complete (AD-14).
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	(fixtures / "actions_runs.json").write_text(json.dumps({"workflow_runs": [
+		{
+			"id": 9005,
+			"status": "in_progress",
+			"head_branch": "",
+			"event": "workflow_dispatch",
+			"display_title": "AI Review [pr:9999]",
+			"path": ".github/workflows/ai-review.yml",
+		},
+		{
+			"id": 9006,
+			"status": "in_progress",
+			"head_branch": "ai/issue-9999",
+			"event": "pull_request",
+			"display_title": "AI Review",
+			"path": ".github/workflows/ai-review.yml",
+		},
+	]}), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE" not in result.stdout
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+
+
+def test_release_dispatch_claim_prevents_concurrent_release(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	(fixtures / "label_delete_fail").touch()
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_CLAIM_SKIPPED pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+	assert " claim_skipped=1 dispatch_failed=0 " in result.stdout
+
+
+def _queued_pr_4077(fixtures: Path) -> None:
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+
+
+def _write_runs(fixtures: Path, runs: list[dict], total_count_override: dict | None = None, runs_after_page1: list[dict] | None = None) -> None:
+	payload: dict = {"workflow_runs": runs}
+	if total_count_override is not None:
+		payload["total_count_override"] = total_count_override
+	(fixtures / "actions_runs.json").write_text(json.dumps(payload), encoding="utf-8")
+	if runs_after_page1 is not None:
+		(fixtures / "actions_runs_after_page1.json").write_text(json.dumps({"workflow_runs": runs_after_page1}), encoding="utf-8")
+
+
+def test_release_matches_ref_suffixed_run_path(tmp_path: Path) -> None:
+	"""Issue #5443: a path ending in "@<ref>" still identifies a review run."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [{
+		"id": 1,
+		"status": "in_progress",
+		"head_branch": "ai/issue-4064",
+		"event": "pull_request",
+		"path": ".github/workflows/ai-review.yml@refs/heads/main",
+	}])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+	assert "issues/4077/labels/ai%3Amerge-queued" not in log_text
+
+
+def test_release_matches_owner_prefixed_ref_suffixed_dispatch_run(tmp_path: Path) -> None:
+	"""A PR-named dispatch run reported under "<owner>/<repo>/…yml@<ref>" holds its PR."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [{
+		"id": 1,
+		"status": "pending",
+		"head_branch": "main",
+		"event": "workflow_dispatch",
+		"display_title": "Internal: AI Review & Autofix [pr:4077]",
+		"path": "acme/consumer/.github/workflows/internal-review.yml@refs/heads/main",
+	}])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_ignores_ref_suffixed_runs_of_other_workflows(tmp_path: Path) -> None:
+	"""Stripping "@<ref>" does not widen the match beyond the review workflows."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [
+		{"id": 1, "status": "in_progress", "head_branch": "ai/issue-4064", "event": "pull_request",
+			"path": ".github/workflows/ci.yml@refs/heads/main"},
+		{"id": 2, "status": "in_progress", "head_branch": "ai/issue-4064", "event": "pull_request",
+			"path": ".github/workflows/not-ai-review.yml@refs/heads/ai-review.yml"},
+	])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE" not in result.stdout
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+
+
+RUNS_STATUS_ORDER = (
+	"requested", "pending", "queued", "waiting", "in_progress",
+	"requested", "pending", "queued", "waiting", "in_progress",
+)
+
+
+def test_release_queries_each_active_status_in_lifecycle_order(tmp_path: Path) -> None:
+	"""PR #5451 review round 4 (AD-13) and the review of head fd3ad67 (AD-15):
+	the five statuses in lifecycle order, twice."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	runs_calls = [line for line in log_text.splitlines() if "actions/runs" in line]
+	assert len(runs_calls) == len(RUNS_STATUS_ORDER), runs_calls
+	for call, status in zip(runs_calls, RUNS_STATUS_ORDER):
+		assert f"actions/runs?status={status}&per_page=100&page=1" in call
+		assert "-X GET" in call
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+
+
+@pytest.mark.parametrize(("before", "after"), [
+	("in_progress", "waiting"),
+	("waiting", "in_progress"),
+	("waiting", "queued"),
+	("queued", "in_progress"),
+	("requested", "queued"),
+])
+def test_release_holds_pr_for_review_run_that_changes_status_mid_listing(tmp_path: Path, before: str, after: str) -> None:
+	"""PR #5451 review round 4 (AD-13): a run that changes status once while the
+	statuses are read is still seen, whichever two queries the change falls between.
+
+	With the five statuses read once in lifecycle order, a run moving from
+	in_progress back to waiting (a later job reaching a deployment environment)
+	after the waiting query and before the in_progress query was in neither result.
+	"""
+	for switch_at in range(2, len(RUNS_STATUS_ORDER) + 1):
+		case_dir = tmp_path / f"switch-{switch_at}"
+		case_dir.mkdir()
+		bin_dir, fixtures, log = _install_fake_gh(case_dir)
+		_queued_pr_4077(fixtures)
+		run = {"id": 5000, "head_branch": "ai/issue-4064", "event": "pull_request",
+			"path": ".github/workflows/internal-review.yml", "created_at": _run_created_at(0)}
+		_write_runs(fixtures, [dict(run, status=before)])
+		(fixtures / "actions_runs_after_switch.json").write_text(
+			json.dumps({"workflow_runs": [dict(run, status=after)]}), encoding="utf-8")
+		(fixtures / "actions_runs_switch_at").write_text(str(switch_at), encoding="utf-8")
+		# The fixed-date fixture is far older than 24h, so the wedged-queued
+		# rule (issue #9473) is switched off to observe the status flip alone.
+		result, log_text, _env = _run("release", case_dir, bin_dir, fixtures, log, ZOMBIE_RUN_MAX_QUEUED_HOURS="0")
+		assert result.returncode == 0, (switch_at, result.stderr)
+		assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr, (switch_at, result.stderr)
+		assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout, (switch_at, result.stdout)
+		assert "gh workflow run" not in log_text, switch_at
+
+
+@pytest.mark.parametrize("statuses", [
+	("in_progress", "waiting", "in_progress"),
+	("requested", "queued", "in_progress"),
+	("queued", "waiting", "in_progress"),
+	("waiting", "queued", "in_progress"),
+	("pending", "queued", "waiting"),
+])
+def test_release_holds_pr_for_review_run_that_changes_status_twice_mid_listing(tmp_path: Path, statuses: tuple[str, str, str]) -> None:
+	"""PR #5451, review of head fd3ad67 (AD-15): a run that changes status twice
+	while the statuses are read is still seen, when at most one change is
+	backward (into `waiting` after `in_progress`, or out of it to `queued`).
+
+	With `in_progress` missing from the second pass, a run in `in_progress`
+	that moved to `waiting` after the first `in_progress` query was issued and
+	back to `in_progress` after the second `waiting` query was in no result.
+	"""
+	first, second, third = statuses
+	for switch_at in range(2, len(RUNS_STATUS_ORDER) + 1):
+		for switch2_at in range(switch_at + 1, len(RUNS_STATUS_ORDER) + 1):
+			case_dir = tmp_path / f"switch-{switch_at}-{switch2_at}"
+			case_dir.mkdir()
+			bin_dir, fixtures, log = _install_fake_gh(case_dir)
+			_queued_pr_4077(fixtures)
+			run = {"id": 5000, "head_branch": "ai/issue-4064", "event": "pull_request",
+				"path": ".github/workflows/internal-review.yml", "created_at": _run_created_at(0)}
+			_write_runs(fixtures, [dict(run, status=first)])
+			(fixtures / "actions_runs_after_switch.json").write_text(
+				json.dumps({"workflow_runs": [dict(run, status=second)]}), encoding="utf-8")
+			(fixtures / "actions_runs_switch_at").write_text(str(switch_at), encoding="utf-8")
+			(fixtures / "actions_runs_after_switch2.json").write_text(
+				json.dumps({"workflow_runs": [dict(run, status=third)]}), encoding="utf-8")
+			(fixtures / "actions_runs_switch2_at").write_text(str(switch2_at), encoding="utf-8")
+			# See the single-switch test: the wedged-queued rule (issue #9473) is off here.
+			result, log_text, _env = _run("release", case_dir, bin_dir, fixtures, log, ZOMBIE_RUN_MAX_QUEUED_HOURS="0")
+			case = (statuses, switch_at, switch2_at)
+			assert result.returncode == 0, (case, result.stderr)
+			assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr, (case, result.stderr)
+			assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout, (case, result.stdout)
+			assert "gh workflow run" not in log_text, case
+
+
+@pytest.mark.parametrize("run_fields", [
+	{"head_branch": None, "event": "pull_request", "display_title": "Add promo sender"},
+	{"head_branch": "", "event": "pull_request", "display_title": "Add promo sender"},
+	{"event": "push"},
+	{"head_branch": None, "event": "workflow_dispatch", "display_title": "AI Review"},
+	{"head_branch": "", "event": "workflow_dispatch", "display_title": "Internal: AI Review & Autofix [pr:0]"},
+	# PR #5451 review round 2 (AD-16): a dispatch run's head_branch is the ref
+	# the workflow ran from, so it never attributes the run to a PR.
+	{"head_branch": "main", "event": "workflow_dispatch", "display_title": "Codex PR Self-Healing Semantic Agent"},
+	{"head_branch": "main", "event": "workflow_dispatch", "display_title": "Codex PR Self-Healing Semantic Agent",
+		"path": ".github/workflows/review_autofix.yml"},
+])
+def test_release_leaves_pr_queued_when_a_review_run_has_no_key(tmp_path: Path, run_fields: dict) -> None:
+	"""PR #5451, review of head fd3ad67 (AD-14): a review run with no non-empty
+	head_branch and no PR-named dispatch title could be running for any queued
+	PR, so the listing is incomplete and nothing is released. A workflow_dispatch
+	run with no PR-named title is unattributed whatever its head_branch (AD-16)."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [dict({"id": 5000, "status": "in_progress",
+		"path": ".github/workflows/ai-review.yml@refs/heads/main"}, **run_fields)])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=unattributed_run" in result.stderr
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "MERGE_TRAIN_RELEASED" not in result.stdout
+	assert "gh workflow run" not in log_text
+	assert "issues/4077/labels/ai%3Amerge-queued" not in log_text
+
+
+def test_release_keys_pr_named_dispatch_run_with_no_head_branch(tmp_path: Path) -> None:
+	"""A PR-named dispatch run with a null head_branch still holds its PR (AD-14)."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [{"id": 5000, "status": "queued", "head_branch": None, "event": "workflow_dispatch",
+		"display_title": "AI Review [pr:4077]", "path": ".github/workflows/ai-review.yml"}])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_ignores_keyless_runs_of_other_workflows(tmp_path: Path) -> None:
+	"""A run of another workflow with no head_branch never holds the train (AD-14)."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [{"id": 5000, "status": "in_progress", "head_branch": None, "event": "schedule",
+		"display_title": "Nightly", "path": ".github/workflows/ci.yml"}])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+
+
+@pytest.mark.parametrize("status", ["requested", "waiting"])
+def test_release_holds_pr_for_review_run_in_requested_or_waiting_status(tmp_path: Path, status: str) -> None:
+	"""PR #5451 review round 3 (AD-12): every non-terminal status counts as active.
+
+	A review run that is still `requested` (not yet queued) or `waiting` (held by
+	a deployment environment) holds its PR instead of being missed by a listing
+	that only read pending, queued, and in_progress.
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [{"id": 5000, "status": status, "head_branch": "ai/issue-4064",
+		"event": "pull_request", "path": ".github/workflows/internal-review.yml"}])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+	assert "issues/4077/labels/ai%3Amerge-queued" not in log_text
+
+
+def _run_created_at(index: int) -> str:
+	"""created_at for the run at listing position index: newest first, one second apart."""
+	return (datetime(2026, 9, 30, 8, 0, 0, tzinfo=timezone.utc) - timedelta(seconds=index)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_release_reads_every_page_before_deciding(tmp_path: Path) -> None:
+	"""A review run past the first 100 of a status still holds its PR.
+
+	The follow-up query is bounded by the oldest created_at read so far, never
+	an offset page (issue #5443, AD-8).
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	runs = [
+		{"id": 1000 + i, "status": "in_progress", "head_branch": f"feature/{i}", "event": "push",
+			"path": ".github/workflows/ci.yml", "created_at": _run_created_at(i)}
+		for i in range(150)
+	]
+	runs.append({"id": 5000, "status": "in_progress", "head_branch": "ai/issue-4064",
+		"event": "pull_request", "path": ".github/workflows/ai-review.yml", "created_at": _run_created_at(150)})
+	_write_runs(fixtures, runs)
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert f"actions/runs?status=in_progress&per_page=100&page=1&created=%3C%3D{_run_created_at(99)}" in log_text
+	assert "page=2" not in log_text
+	assert log_text.count("actions/runs?status=in_progress") == 4, "two queries in each of the two in_progress reads"
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_leaves_pr_queued_when_run_listing_fails(tmp_path: Path) -> None:
+	"""Issue #5443: a failed listing never releases blind; it is read once per run."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+		_pr(4085, "ai/issue-4069", base="orchestrator/project-9", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4085, ["twap_router.py"])
+	(fixtures / "comments_4077.json").write_text(json.dumps([_marker_comment(97)]), encoding="utf-8")
+	(fixtures / "fail_runs_get").touch()
+	# One attempt per call, so the log counts listing attempts, not gh_retry retries.
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, GH_RETRY_MAX_ATTEMPTS="1")
+	assert result.returncode == 0, result.stderr
+	assert "could not list every active review run" in result.stdout
+	assert result.stdout.count("::warning::") == 1
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077 head=ai/issue-4064 action=leave_queued" in result.stdout
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4085 head=ai/issue-4069 action=leave_queued" in result.stdout
+	assert "MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=page_failed status=requested page=1" in result.stderr
+	assert log_text.count("actions/runs") == 1, "the listing is read once per release invocation"
+	assert "gh workflow run" not in log_text
+	assert "DELETE" not in log_text
+	assert "PATCH" not in log_text, "the queue marker must not be retired on an incomplete listing"
+	assert "pulls/4077/files" not in log_text
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=2 released=0" in result.stdout
+	# Incomplete-listing scenario: every examined PR is attributed to it.
+	assert (
+		"MERGE_TRAIN_RELEASE_SUMMARY examined=2 released=0 base_filter=* overlap=0 active_review=0"
+		" runs_incomplete=2 files_unavailable=0 blockers_unavailable=0 marker_unavailable=0"
+		" claim_skipped=0 dispatch_failed=0"
+	) in result.stdout
+
+
+def test_release_leaves_pr_queued_on_malformed_run_listing(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	(fixtures / "malformed_runs").touch()
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "reason=malformed_page status=requested page=1" in result.stderr
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_leaves_pr_queued_when_listing_shifts(tmp_path: Path) -> None:
+	"""A short page before total_count is reached means runs moved while it was read."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [
+		{"id": 1, "status": "queued", "head_branch": "feature/x", "event": "push",
+			"path": ".github/workflows/ci.yml"},
+	], total_count_override={"queued": 3})
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRY_SLEEP="0")
+	assert result.returncode == 0, result.stderr
+	# A shift that persists is re-read twice (the default budget), then the
+	# listing is incomplete as before.
+	assert "MERGE_TRAIN_RUNS_LISTING outcome=retry reason=listing_shifted status=queued page=1 read=1 total=3 attempt=1/2" in result.stderr
+	assert "attempt=2/2" in result.stderr
+	assert "attempt=3/" not in result.stderr
+	assert "outcome=incomplete reason=listing_shifted status=queued page=1 read=1 total=3" in result.stderr
+	assert log_text.count("actions/runs?status=queued") == 3
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_rereads_a_listing_that_shifted_once(tmp_path: Path) -> None:
+	"""One run changing status mid-read no longer costs the release tick (run 38003551535)."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	runs = [{"id": 1, "status": "queued", "head_branch": "feature/x", "event": "push", "path": ".github/workflows/ci.yml"}]
+	_write_runs(fixtures, runs, total_count_override={"queued": 3})
+	# Calls 1-3 read requested, pending and queued (shifted); the re-read of
+	# queued (call 4) and every later call see a consistent listing.
+	(fixtures / "actions_runs_after_switch.json").write_text(json.dumps({"workflow_runs": runs}), encoding="utf-8")
+	(fixtures / "actions_runs_switch_at").write_text("4", encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRY_SLEEP="0")
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING outcome=retry reason=listing_shifted status=queued page=1 read=1 total=3 attempt=1/2" in result.stderr
+	assert "outcome=incomplete" not in result.stderr
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE" not in result.stdout
+	# No review run is in flight, so the queued PR is released this tick.
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=1 released=1" in result.stdout
+
+
+def test_release_accepts_a_shifting_listing_once_the_reads_cover_the_count(tmp_path: Path) -> None:
+	"""Q59: count and listing disagreed on every read 2 s apart (run 38043169762);
+	the union of the re-reads covering the latest total_count is complete."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [
+		{"id": 1, "status": "queued", "head_branch": "feature/x", "event": "push", "path": ".github/workflows/ci.yml"},
+	], total_count_override={"queued": 3})
+	# The re-read (call 4) is still short of its count, but it shows the two
+	# runs the first read missed.
+	(fixtures / "actions_runs_after_switch.json").write_text(json.dumps({
+		"workflow_runs": [
+			{"id": 2, "status": "queued", "head_branch": "feature/y", "event": "push", "path": ".github/workflows/ci.yml"},
+			{"id": 3, "status": "queued", "head_branch": "feature/z", "event": "push", "path": ".github/workflows/ci.yml"},
+		],
+		"total_count_override": {"queued": 3},
+	}), encoding="utf-8")
+	(fixtures / "actions_runs_switch_at").write_text("4", encoding="utf-8")
+	# From call 5 on the listing is consistent again (the second pass over the statuses).
+	(fixtures / "actions_runs_after_switch2.json").write_text(json.dumps({"workflow_runs": [
+		{"id": 2, "status": "queued", "head_branch": "feature/y", "event": "push", "path": ".github/workflows/ci.yml"},
+		{"id": 3, "status": "queued", "head_branch": "feature/z", "event": "push", "path": ".github/workflows/ci.yml"},
+	]}), encoding="utf-8")
+	(fixtures / "actions_runs_switch2_at").write_text("5", encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRY_SLEEP="0")
+	assert result.returncode == 0, result.stderr
+	assert "outcome=retry reason=listing_shifted status=queued page=1 read=1 total=3 attempt=1/2" in result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING outcome=accepted reason=union_covers_total status=queued page=1 read=3 total=3" in result.stderr
+	assert "outcome=incomplete" not in result.stderr
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+
+
+def test_release_still_refuses_a_shift_the_union_does_not_cover(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [
+		{"id": 1, "status": "queued", "head_branch": "feature/x", "event": "push", "path": ".github/workflows/ci.yml"},
+	], total_count_override={"queued": 3})
+	(fixtures / "actions_runs_after_switch.json").write_text(json.dumps({
+		"workflow_runs": [{"id": 2, "status": "queued", "head_branch": "feature/y", "event": "push", "path": ".github/workflows/ci.yml"}],
+		"total_count_override": {"queued": 3},
+	}), encoding="utf-8")
+	(fixtures / "actions_runs_switch_at").write_text("4", encoding="utf-8")
+	result, _log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRY_SLEEP="0")
+	assert result.returncode == 0, result.stderr
+	assert "reason=union_covers_total" not in result.stderr
+	assert "outcome=incomplete reason=listing_shifted status=queued page=1 read=2 total=3" in result.stderr
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+
+
+def test_listing_shift_retry_budget_is_configurable_and_validated(tmp_path: Path) -> None:
+	for value, expected_queued_reads in (("0", 1), ("1", 2), ("abc", 3), ("9", 3)):
+		case_dir = tmp_path / f"case-{value}"
+		case_dir.mkdir()
+		bin_dir, fixtures, log = _install_fake_gh(case_dir)
+		_queued_pr_4077(fixtures)
+		_write_runs(fixtures, [
+			{"id": 1, "status": "queued", "head_branch": "feature/x", "event": "push",
+				"path": ".github/workflows/ci.yml"},
+		], total_count_override={"queued": 3})
+		result, log_text, _env = _run("release", case_dir, bin_dir, fixtures, log,
+			MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRIES=value, MERGE_TRAIN_RUNS_LISTING_SHIFT_RETRY_SLEEP="0")
+		assert result.returncode == 0, result.stderr
+		assert log_text.count("actions/runs?status=queued") == expected_queued_reads, (value, log_text.count("actions/runs?status=queued"))
+		assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+
+
+def _in_progress_runs_with_review_at(count: int, review_index: int) -> list[dict]:
+	runs = [
+		{"id": 1000 + i, "status": "in_progress", "head_branch": f"feature/{i}", "event": "push",
+			"path": ".github/workflows/ci.yml", "created_at": _run_created_at(i)}
+		for i in range(count)
+	]
+	runs[review_index] = {"id": 5000, "status": "in_progress", "head_branch": "ai/issue-4064",
+		"event": "pull_request", "path": ".github/workflows/ai-review.yml", "created_at": _run_created_at(review_index)}
+	return runs
+
+
+def test_release_holds_pr_when_listing_shrinks_between_pages(tmp_path: Path) -> None:
+	"""Runs that finish after the first read must not hide a still-active review run.
+
+	150 runs, the review run at position 105. After the first query, ten of its
+	runs finish. An offset page 2 (offset 100 of 140) would start at the old
+	position 110 and never read the review run; the created-bounded follow-up
+	query still returns it.
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	runs = _in_progress_runs_with_review_at(150, 105)
+	_write_runs(fixtures, runs, runs_after_page1=runs[10:])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_holds_pr_when_listing_grows_between_pages(tmp_path: Path) -> None:
+	"""Runs created after the first read push older runs down; the bounded query still reads them."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	runs = _in_progress_runs_with_review_at(150, 120)
+	newer = [
+		{"id": 9000 + i, "status": "in_progress", "head_branch": f"hotfix/{i}", "event": "push",
+			"path": ".github/workflows/ci.yml", "created_at": "2026-09-30T08:05:00Z"}
+		for i in range(5)
+	]
+	_write_runs(fixtures, runs, runs_after_page1=newer + runs)
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_holds_pr_when_listing_membership_shifts_at_same_count(tmp_path: Path) -> None:
+	"""PR #5512 review round 1: one run leaves and another enters, total_count unchanged.
+
+	200 runs, the review run at position 100. After the first query, the run at
+	position 50 finishes and an older run enters in_progress at position 150
+	(it was queued). The positions between shift up by one, so an offset page 2
+	(offset 100 of 200) would start at the old position 101: the review run is
+	skipped while the runs read (200) reach the unchanged total_count (200).
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	runs = _in_progress_runs_with_review_at(200, 100)
+	for index in range(150, 200):
+		runs[index]["created_at"] = _run_created_at(index + 1)
+	entering = {"id": 7000, "status": "in_progress", "head_branch": "feature/entering", "event": "push",
+		"path": ".github/workflows/ci.yml", "created_at": _run_created_at(150)}
+	after_first_read = runs[:50] + runs[51:150] + [entering] + runs[150:]
+	assert len(after_first_read) == len(runs)
+	_write_runs(fixtures, runs + [dict(entering, status="queued")], runs_after_page1=after_first_read)
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr
+	assert f"created=%3C%3D{_run_created_at(99)}" in log_text
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_leaves_pr_queued_when_listing_exceeds_ten_pages(tmp_path: Path) -> None:
+	"""More active runs than 10 queries read cannot be proven absent."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [
+		{"id": 10000 + i, "status": "in_progress", "head_branch": f"feature/{i}", "event": "push",
+			"path": ".github/workflows/ci.yml", "created_at": _run_created_at(i)}
+		for i in range(1001)
+	])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	# The inclusive bound reads the oldest run of each query again: 100 + 9 * 99.
+	# The diagnostic names the last query sent (PR #5451 review round 1).
+	assert "reason=truncated status=in_progress page=10 read=991 total=110" in result.stderr
+	assert log_text.count("actions/runs?status=in_progress") == 10
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_leaves_pr_queued_when_bounded_query_adds_no_run(tmp_path: Path) -> None:
+	"""More than 100 runs created in one second return the same page again: never loop, never release."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [
+		{"id": 10000 + i, "status": "in_progress", "head_branch": f"feature/{i}", "event": "push",
+			"path": ".github/workflows/ci.yml", "created_at": "2026-09-30T08:00:00Z"}
+		for i in range(150)
+	])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "reason=truncated status=in_progress page=2 read=100 total=150" in result.stderr
+	assert log_text.count("actions/runs?status=in_progress") == 2
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_leaves_pr_queued_when_full_page_has_no_created_at(tmp_path: Path) -> None:
+	"""A page that needs a follow-up query but carries no usable created_at bound is malformed."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	runs = _in_progress_runs_with_review_at(150, 120)
+	del runs[40]["created_at"]
+	_write_runs(fixtures, runs)
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "reason=malformed_page status=in_progress page=1 read=100 total=150" in result.stderr
+	assert log_text.count("actions/runs?status=in_progress") == 1
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_bounds_follow_up_query_by_fractional_created_at(tmp_path: Path) -> None:
+	"""PR #5451 review round 1: a created_at with fractional seconds still pages.
+
+	The bound is rounded up to the next whole second, so the inclusive
+	follow-up query covers the oldest run read and every run after it.
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	runs = _in_progress_runs_with_review_at(150, 120)
+	for run in runs:
+		run["created_at"] = run["created_at"].replace("Z", ".250Z")
+	_write_runs(fixtures, runs)
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr
+	assert f"actions/runs?status=in_progress&per_page=100&page=1&created=%3C%3D{_run_created_at(98)}" in log_text
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+@pytest.mark.parametrize("missing", ["path", "id", "empty_path", "null_path"])
+def test_release_leaves_pr_queued_when_a_run_cannot_be_classified(tmp_path: Path, missing: str) -> None:
+	"""PR #5451 review round 1: a run with no id or path could be a review run.
+
+	It can be neither deduplicated nor matched to a review workflow, so the
+	listing is malformed and the queued PR stays queued.
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	run = {"id": 5000, "status": "in_progress", "head_branch": "ai/issue-4064", "event": "pull_request",
+		"path": ".github/workflows/ai-review.yml"}
+	if missing == "empty_path":
+		run["path"] = ""
+	elif missing == "null_path":
+		run["path"] = None
+	else:
+		del run[missing]
+	_write_runs(fixtures, [run])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "reason=malformed_page status=in_progress page=1" in result.stderr
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+@pytest.mark.parametrize("status", ["missing", None, ""])
+def test_release_leaves_pr_queued_when_a_run_has_no_status(tmp_path: Path, status: object) -> None:
+	"""PR #5451 review round 2: a run with no status could be an active review run.
+
+	Every run an active-status query returns must carry a non-empty status, or
+	the page is malformed and the queued PR stays queued.
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	run = {"id": 5000, "listed_status": "in_progress", "head_branch": "ai/issue-4064", "event": "pull_request",
+		"path": ".github/workflows/ai-review.yml"}
+	if status != "missing":
+		run["status"] = status
+	_write_runs(fixtures, [run])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "reason=malformed_page status=in_progress page=1" in result.stderr
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_holds_pr_for_review_run_with_unexpected_status(tmp_path: Path) -> None:
+	"""PR #5451 review round 2 (AD-11): an active-status query proves the run active.
+
+	A review run the in_progress query returns with another status value still
+	holds its PR instead of being dropped by a status filter.
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [{"id": 5000, "listed_status": "in_progress", "status": "waiting",
+		"head_branch": "ai/issue-4064", "event": "pull_request", "path": ".github/workflows/ai-review.yml"}])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_leaves_pr_queued_on_fractional_total_count(tmp_path: Path) -> None:
+	"""PR #5451 review round 2: a fractional total_count is malformed, never floored.
+
+	100 runs read against total_count 100.5 would look complete once floored,
+	so a review run past them could be missed.
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [
+		{"id": 1000 + i, "status": "in_progress", "head_branch": f"feature/{i}", "event": "push",
+			"path": ".github/workflows/ci.yml", "created_at": _run_created_at(i)}
+		for i in range(100)
+	], total_count_override={"in_progress": 100.5})
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "reason=malformed_page status=in_progress page=1" in result.stderr
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+@pytest.mark.parametrize("workflow_runs", ["missing", None, {}, "runs"])
+def test_release_leaves_pr_queued_when_workflow_runs_is_not_an_array(tmp_path: Path, workflow_runs: object) -> None:
+	"""PR #5451 review round 5: a missing, null, or non-array workflow_runs is malformed.
+
+	Defaulting it to [] made a page with total_count 0 look like a complete,
+	empty listing, so the queued PR was released without a real listing.
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	page: dict = {"total_count": 0}
+	if workflow_runs != "missing":
+		page["workflow_runs"] = workflow_runs
+	(fixtures / "runs_raw_page.json").write_text(json.dumps(page), encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "reason=malformed_page status=requested page=1" in result.stderr
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+@pytest.mark.parametrize("entry", [None, "run", 5000, ["run"]])
+def test_release_leaves_pr_queued_when_a_workflow_runs_entry_is_not_an_object(tmp_path: Path, entry: object) -> None:
+	"""PR #5451 review round 3: a non-object workflow_runs entry is malformed.
+
+	The projection used to drop it, so total_count 0 with one such entry read
+	as a complete, empty listing and the queued PR was released.
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	(fixtures / "runs_raw_page.json").write_text(json.dumps({"total_count": 0, "workflow_runs": [entry]}), encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "reason=malformed_page status=requested page=1" in result.stderr
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+@pytest.mark.parametrize("event", ["missing", None, ""])
+def test_release_leaves_pr_queued_when_a_run_has_no_event(tmp_path: Path, event: object) -> None:
+	"""PR #5451 review round 3 (AD-17): a run with no event could be a dispatch run.
+
+	The event decides whether a run is keyed by its PR-named title or by its
+	head_branch, which for a dispatch run is the ref it ran from. A run with no
+	non-empty event makes the page malformed and the queued PR stays queued.
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	run = {"id": 5000, "status": "in_progress", "head_branch": "main",
+		"display_title": "Internal: AI Review & Autofix [pr:4077]", "path": ".github/workflows/internal-review.yml"}
+	if event != "missing":
+		run["event"] = event
+	_write_runs(fixtures, [run])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "reason=malformed_page status=in_progress page=1" in result.stderr
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_accepts_empty_workflow_runs_array(tmp_path: Path) -> None:
+	"""An explicit empty workflow_runs with total_count 0 is a complete listing."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	(fixtures / "runs_raw_page.json").write_text(json.dumps({"total_count": 0, "workflow_runs": []}), encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+	assert log_text.count("actions/runs") == len(RUNS_STATUS_ORDER)
+
+
+def test_release_skips_run_listing_when_nothing_queued(tmp_path: Path) -> None:
+	"""§15: the listing is read lazily, only for a queued PR that passes the base filter."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064"),
+		_pr(4085, "ai/issue-4069", base="orchestrator/project-9", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, BASE_BRANCH="main")
+	assert result.returncode == 0, result.stderr
+	assert "actions/runs" not in log_text
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=0 released=0 base_filter=main" in result.stdout
+
+
+def test_cancel_on_close_releases_train_for_unmerged_prs() -> None:
+	workflow = (REPO_ROOT / ".github" / "workflows" / "cancel_on_pr_close.yml").read_text(encoding="utf-8")
+	release_step = workflow.split("- name: Release merge-queued PRs (merge train)", 1)[1]
+	assert "github.event.pull_request.merged == true" not in release_step
+	assert "whether it merged or not" in release_step
+
+
+def test_cancel_on_close_wrappers_keep_event_and_add_matching_schedule() -> None:
+	wrappers = [
+		REPO_ROOT / ".github" / "workflows" / "internal-cancel-on-pr-close.yml",
+		REPO_ROOT / "workflow-templates" / "ai-cancel-on-pr-close.yml",
+	]
+	for wrapper in wrappers:
+		workflow = wrapper.read_text(encoding="utf-8")
+		assert "pull_request:\n    types: [closed]" in workflow
+		assert 'schedule:\n    - cron: "23 * * * *"' in workflow
+		assert "pull_request_target" not in workflow
+		assert "  actions: write" in workflow
+		assert "  contents: read" in workflow
+		assert "  pull-requests: read" in workflow
+		assert "issues: write" not in workflow
+		assert "checkout" not in str(yaml.safe_load(workflow)["jobs"]["cancel"]).lower()
+
+
+def test_scheduled_cancel_sweep_batches_live_pr_state_and_fails_safe() -> None:
+	workflow = (REPO_ROOT / ".github" / "workflows" / "cancel_on_pr_close.yml").read_text(encoding="utf-8")
+	# Parse the job's own concurrency group: a whole-file substring check also
+	# passed against the old repository-wide group (#8411, follow-up to #8327).
+	cancel_group = yaml.safe_load(workflow)["jobs"]["cancel-active-runs"]["concurrency"]["group"]
+	assert cancel_group.startswith("cancel-on-pr-close-${{ github.repository }}")
+	assert "github.event_name == 'pull_request'" in cancel_group
+	assert "github.event.pull_request.number" in cancel_group
+	assert cancel_group != "cancel-on-pr-close-${{ github.repository }}"
+	assert 'if [ "${EVENT_NAME}" = "schedule" ]; then' in workflow
+	assert workflow.count("-f status=queued") == 1
+	assert workflow.count("-f status=in_progress") == 1
+	assert "split -l 50" in workflow
+	assert "pullRequest(number:${pr_number}){number state}" in workflow
+	assert "headRefName baseRefName" not in workflow
+	assert "active run(s) without pull-request linkage" in workflow
+	assert "select(all($linked_prs[];" in workflow
+	assert '$live_pr.state == "CLOSED" or $live_pr.state == "MERGED"' in workflow
+	assert 'endswith("/internal-cancel-on-pr-close.yml")' in workflow
+	assert 'endswith("/ai-cancel-on-pr-close.yml")' in workflow
+	assert "Scheduled cleanup found no cancellable queued/in-progress pull_request workflow runs." in workflow
+	assert "Scheduled cleanup is running the global merge-train release scan." in workflow
+	assert "BASE_BRANCH: ${{ github.event.pull_request.base.ref }}" in workflow
+
+
+def test_cancel_on_close_event_runs_get_their_own_concurrency_group() -> None:
+	# A shared group let a second PR close cancel the first close's pending
+	# run (release run 40794181365, issue #8327). Event runs are keyed by PR;
+	# scheduled sweeps keep the repository group so they still run one at a time.
+	workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "cancel_on_pr_close.yml").read_text(encoding="utf-8"))
+	concurrency = workflow["jobs"]["cancel-active-runs"]["concurrency"]
+	assert concurrency["group"] == (
+		"cancel-on-pr-close-${{ github.repository }}"
+		"${{ github.event_name == 'pull_request' && format('-pr-{0}', github.event.pull_request.number) || '' }}"
+	)
+	assert concurrency["cancel-in-progress"] is False
+
+
+def test_usage_error_for_unknown_subcommand(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	result, _log_text, _env = _run("bogus", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 2
+	assert "usage" in result.stderr
+
+
+# ---------------------------------------------------------------------------
+# Issue #6629 (re-issue of #5152): review-run provenance in the release listing
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("run_fields", [
+	# (a) the same title on a branch copy of the wrapper.
+	{"head_branch": "attacker/branch", "display_title": "AI Review [pr:4077]", "path": ".github/workflows/ai-review.yml"},
+	# (b) the title on the wrong wrapper path, or under another repository.
+	{"head_branch": "main", "display_title": "AI Review [pr:4077]", "path": ".github/workflows/internal-review.yml"},
+	{"head_branch": "main", "display_title": "Internal: AI Review & Autofix [pr:4077]",
+		"path": ".github/workflows/review_autofix.yml"},
+	{"head_branch": "main", "display_title": "Internal: AI Review & Autofix [pr:4077]",
+		"path": "other/repo/.github/workflows/internal-review.yml@refs/heads/main"},
+	# An untitled dispatch on a non-default branch is not a trusted review run (Q3).
+	{"head_branch": "ai/issue-9999", "display_title": "AI Review", "path": ".github/workflows/ai-review.yml"},
+])
+def test_release_drops_spoofed_dispatch_runs(tmp_path: Path, run_fields: dict) -> None:
+	"""A dispatch run that fails the trust rule neither holds its PR nor makes
+	the listing incomplete: counting it would let a spoof hold every release."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [dict({"id": 6000, "status": "in_progress", "event": "workflow_dispatch"}, **run_fields)])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE" not in result.stdout
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+
+
+def test_release_non_dispatch_pr_named_run_keeps_head_branch_keying(tmp_path: Path) -> None:
+	"""(c) A marker-titled run from another event is keyed by its head branch only."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [{"id": 6001, "status": "in_progress", "event": "pull_request",
+		"head_branch": "ai/issue-9999", "display_title": "AI Review [pr:4077]",
+		"path": ".github/workflows/ai-review.yml"}])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE" not in result.stdout
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+
+
+def test_release_untitled_default_branch_dispatch_is_still_unattributed(tmp_path: Path) -> None:
+	"""review_autofix.yml self-dispatches carry no PR-named title; on the
+	default branch they still make the listing incomplete."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [{"id": 6002, "status": "in_progress", "event": "workflow_dispatch",
+		"head_branch": "main", "display_title": "Codex PR Self-Healing Semantic Agent",
+		"path": ".github/workflows/review_autofix.yml"}])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=unattributed_run" in result.stderr
+	assert "MERGE_TRAIN_RELEASED" not in result.stdout
+
+
+def test_release_honours_a_default_branch_other_than_main(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	(fixtures / "default_branch").write_text("trunk", encoding="utf-8")
+	_write_runs(fixtures, [{"id": 6003, "status": "pending", "event": "workflow_dispatch",
+		"head_branch": "trunk", "display_title": "AI Review [pr:4077]",
+		"path": ".github/workflows/ai-review.yml"}])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_release_unresolvable_default_branch_leaves_pr_queued(tmp_path: Path) -> None:
+	"""(d) No `main` fallback: the listing is incomplete before any runs call."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	(fixtures / "default_branch_fail").write_text("", encoding="utf-8")
+	_write_runs(fixtures, [])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=default_branch_unavailable" in result.stderr
+	assert "MERGE_TRAIN_RELEASE_RUNS_INCOMPLETE pr=4077" in result.stdout
+	assert "actions/runs" not in log_text
+	assert "gh workflow run" not in log_text
+	assert "issues/4077/labels/ai%3Amerge-queued" not in log_text
+
+
+def test_release_reads_the_default_branch_once(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+		_pr(4078, "ai/issue-4065", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["a.py"])
+	_write_files(fixtures, 4078, ["b.py"])
+	_write_runs(fixtures, [])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	reads = [line for line in log_text.splitlines() if line.rstrip().endswith("repos/acme/consumer --jq .default_branch")]
+	assert len(reads) == 1, log_text
+
+# ---------------------------------------------------------------------------
+# Issue #6570 (plan P1): real conflicts, bounded head, priority lane.
+# ---------------------------------------------------------------------------
+
+_GIT_ENV_STRIP = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_OBJECT_DIRECTORY",
+	"GIT_ALTERNATE_OBJECT_DIRECTORIES")
+
+
+def _git(cwd: Path, *args: str) -> str:
+	env = {k: v for k, v in os.environ.items() if k not in _GIT_ENV_STRIP}
+	env.update({"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+		"GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"})
+	return subprocess.run(["git", *args], cwd=cwd, env=env, check=True, capture_output=True, text=True).stdout.strip()
+
+
+def _git_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
+	"""A bare origin with three heads branched from main, and a main-only clone.
+
+	older and conflict both rewrite line 1 of app.txt; clean rewrites line 15.
+	The clone lacks the branch objects, so the probe must fetch them by SHA.
+	"""
+	seed = tmp_path / "seed"
+	seed.mkdir()
+	_git(seed, "init", "-q", "-b", "main")
+	(seed / "app.txt").write_text("".join(f"line {i}\n" for i in range(1, 21)), encoding="utf-8")
+	_git(seed, "add", "app.txt")
+	_git(seed, "commit", "-q", "-m", "base")
+	shas: dict[str, str] = {}
+	for branch, line_no, text in (("older", 1, "older edit"), ("clean", 15, "clean edit"), ("conflict", 1, "conflicting edit")):
+		_git(seed, "checkout", "-q", "-b", branch, "main")
+		lines = (seed / "app.txt").read_text(encoding="utf-8").splitlines()
+		lines[line_no - 1] = text
+		(seed / "app.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+		_git(seed, "commit", "-q", "-am", branch)
+		shas[branch] = _git(seed, "rev-parse", "HEAD")
+	origin = tmp_path / "origin.git"
+	_git(tmp_path, "clone", "-q", "--bare", str(seed), str(origin))
+	_git(origin, "config", "uploadpack.allowAnySHA1InWant", "true")
+	work = tmp_path / "work"
+	_git(tmp_path, "clone", "-q", "--no-local", "--single-branch", "-b", "main", str(origin), str(work))
+	# Precondition: every branch head must be missing from the main-only clone,
+	# or tests asserting the probe did (not) fetch an object prove nothing.
+	for branch, sha in shas.items():
+		assert not _has_object(work, sha), (
+			f"fixture precondition: {branch} head must be absent from the main-only clone (local-clone optimisation?)"
+		)
+	return work, shas
+
+
+def _has_object(repo: Path, sha: str) -> bool:
+	try:
+		_git(repo, "cat-file", "-e", f"{sha}^{{commit}}")
+	except subprocess.CalledProcessError:
+		return False
+	return True
+
+
+def _overlap_scenario(tmp_path: Path, fixtures: Path, older: dict, younger: dict) -> Path:
+	(fixtures / "pulls.json").write_text(json.dumps([older, younger]), encoding="utf-8")
+	_write_files(fixtures, older["number"], ["app.txt"])
+	diff = tmp_path / "pr.diff"
+	diff.write_text("diff --git a/app.txt b/app.txt\n", encoding="utf-8")
+	return diff
+
+
+def _iso(hours_ago: float) -> str:
+	return (datetime.now(timezone.utc) - timedelta(hours=hours_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _gql_pr(number: int, head: str, created_at: str, closing: list[tuple[int, list[str]]] | None = None,
+		events: list[tuple[str, str]] | None = None, has_previous: bool = False) -> dict:
+	return {
+		"number": number,
+		"headRefName": head,
+		"createdAt": created_at,
+		"closingIssuesReferences": {"nodes": [
+			{"number": n, "labels": {"nodes": [{"name": name} for name in names]}} for n, names in (closing or [])
+		]},
+		"timelineItems": {
+			"pageInfo": {"hasPreviousPage": has_previous},
+			"nodes": [{"__typename": kind, "createdAt": ts, "label": {"name": "ai:merge-queued"}} for kind, ts in (events or [])],
+		},
+	}
+
+
+def _write_gql(fixtures: Path, prs: list[dict]) -> None:
+	(fixtures / "graphql.json").write_text(
+		json.dumps({"data": {"repository": {f"p{pr['number']}": pr for pr in prs}}}), encoding="utf-8"
+	)
+
+
+_GATE_4077 = {"PR_NUMBER": "4077", "BASE_BRANCH": "main", "TARGET_BRANCH": "ai/issue-4064"}
+
+
+def test_gate_same_path_clean_merge_is_not_queued(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	work, shas = _git_fixture(tmp_path)
+	diff = _overlap_scenario(tmp_path, fixtures, _pr(4075, "ai/issue-4063", head_sha=shas["older"]),
+		_pr(4077, "ai/issue-4064", head_sha=shas["clean"]))
+	result, log_text, env_out = _run("gate", tmp_path, bin_dir, fixtures, log, run_cwd=work,
+		PR_DIFF_FILE=str(diff), MERGE_TRAIN_PRIORITY_LABELS="none", **_GATE_4077)
+	assert result.returncode == 0, result.stderr
+	assert "older=4075 overlap=paths conflict=none" in result.stdout
+	assert "action=skip" in result.stdout
+	assert "skipped_clean=1" in result.stdout
+	assert "result=unblocked action=continue" in result.stdout
+	assert "AUTOFIX_MERGE_QUEUED" not in env_out
+	assert "labels[]=ai:merge-queued" not in log_text
+	assert "api graphql" not in log_text
+	# The probe fetched both heads by SHA without writing FETCH_HEAD.
+	assert _has_object(work, shas["older"]) and _has_object(work, shas["clean"])
+	assert not (work / ".git" / "FETCH_HEAD").exists()
+
+
+def test_gate_same_path_conflict_is_queued_with_conflicted_paths(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	work, shas = _git_fixture(tmp_path)
+	diff = _overlap_scenario(tmp_path, fixtures, _pr(4075, "ai/issue-4063", head_sha=shas["older"]),
+		_pr(4077, "ai/issue-4064", head_sha=shas["conflict"]))
+	result, log_text, env_out = _run("gate", tmp_path, bin_dir, fixtures, log, run_cwd=work,
+		PR_DIFF_FILE=str(diff), MERGE_TRAIN_PRIORITY_LABELS="none", **_GATE_4077)
+	assert result.returncode == 0, result.stderr
+	assert "older=4075 overlap=paths conflict=conflict" in result.stdout
+	assert "result=queued blockers=#4075" in result.stdout
+	assert env_out.get("AUTOFIX_MERGE_QUEUED") == "true"
+	assert "`app.txt`" in log_text
+
+
+@pytest.mark.parametrize("where", ["no_repo", "unknown_sha", "missing_sha"])
+def test_gate_conflict_probe_failure_keeps_path_overlap_rule(tmp_path: Path, where: str) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	work, shas = _git_fixture(tmp_path)
+	own_sha = shas["clean"]
+	older_sha = shas["older"]
+	run_cwd = work
+	if where == "no_repo":
+		run_cwd = tmp_path / "plain"
+		run_cwd.mkdir()
+	elif where == "unknown_sha":
+		older_sha = "0" * 40
+	else:
+		older_sha = None
+	diff = _overlap_scenario(tmp_path, fixtures, _pr(4075, "ai/issue-4063", head_sha=older_sha),
+		_pr(4077, "ai/issue-4064", head_sha=own_sha))
+	result, _log_text, env_out = _run("gate", tmp_path, bin_dir, fixtures, log, run_cwd=run_cwd,
+		PR_DIFF_FILE=str(diff), MERGE_TRAIN_PRIORITY_LABELS="none", **_GATE_4077)
+	assert result.returncode == 0, result.stderr
+	assert "older=4075 overlap=paths conflict=unknown" in result.stdout
+	assert "result=queued blockers=#4075" in result.stdout
+	assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
+
+
+def _probe_server(tmp_path: Path) -> str:
+	"""A file:// server root whose acme/consumer.git is the fixture origin."""
+	server = tmp_path / "srv"
+	(server / "acme").mkdir(parents=True)
+	(server / "acme" / "consumer.git").symlink_to(tmp_path / "origin.git")
+	return f"file://{server}"
+
+
+@pytest.mark.parametrize(("own", "expected"), [("clean", "conflict=none"), ("conflict", "conflict=conflict")])
+def test_conflict_probe_outside_a_checkout_uses_a_private_repository(tmp_path: Path, own: str, expected: str) -> None:
+	"""The poller and PR-close callers run `release` with no checkout; the probe must still decide."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_work, shas = _git_fixture(tmp_path)
+	plain = tmp_path / "plain"
+	plain.mkdir()
+	diff = _overlap_scenario(tmp_path, fixtures, _pr(4075, "ai/issue-4063", head_sha=shas["older"]),
+		_pr(4077, "ai/issue-4064", head_sha=shas[own]))
+	result, _log_text, _env_out = _run("gate", tmp_path, bin_dir, fixtures, log, run_cwd=plain,
+		PR_DIFF_FILE=str(diff), MERGE_TRAIN_PRIORITY_LABELS="none", GITHUB_SERVER_URL=_probe_server(tmp_path),
+		GH_TOKEN="probe-token-must-not-leak", **_GATE_4077)
+	assert result.returncode == 0, result.stderr
+	assert f"MERGE_TRAIN_PROBE_REPO outcome=created origin=file://{tmp_path}/srv/acme/consumer.git" in result.stdout
+	assert f"older=4075 overlap=paths {expected}" in result.stdout
+	# The private repository is removed on exit, and the token is never printed.
+	assert not list(tmp_path.glob("merge-train-probe.*"))
+	assert "probe-token-must-not-leak" not in result.stdout + result.stderr
+	assert not (plain / ".git").exists()
+
+
+def test_conflict_probe_outside_a_checkout_keeps_the_blocker_when_the_fetch_fails(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_work, shas = _git_fixture(tmp_path)
+	plain = tmp_path / "plain"
+	plain.mkdir()
+	diff = _overlap_scenario(tmp_path, fixtures, _pr(4075, "ai/issue-4063", head_sha=shas["older"]),
+		_pr(4077, "ai/issue-4064", head_sha=shas["clean"]))
+	result, _log_text, env_out = _run("gate", tmp_path, bin_dir, fixtures, log, run_cwd=plain,
+		PR_DIFF_FILE=str(diff), MERGE_TRAIN_PRIORITY_LABELS="none", **_GATE_4077)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_PROBE_REPO outcome=created" in result.stdout
+	assert "older=4075 overlap=paths conflict=unknown" in result.stdout
+	assert "result=queued blockers=#4075" in result.stdout
+	assert not list(tmp_path.glob("merge-train-probe.*"))
+
+
+@pytest.mark.parametrize("library", ["shared", "older"])
+def test_conflict_probe_wraps_the_shared_probe_and_falls_back(tmp_path: Path, library: str) -> None:
+	"""Plan D9 (merge-lease Phase 4, Refs #9781): with the staged library's shared
+	`_pr_*` probe the train's `_mt_*` functions delegate to it and keep the
+	merge-train-probe.* directory, MT_REPO and MERGE_TRAIN_PROBE_REPO on stdout;
+	an older staged library without it keeps the train's own body."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_work, shas = _git_fixture(tmp_path)
+	plain = tmp_path / "plain"
+	plain.mkdir()
+	support = tmp_path / "support"
+	support.mkdir()
+	for name in ("gh_helpers.sh", "pr_checks_lib.sh"):
+		shutil.copy(REPO_ROOT / "scripts" / name, support / name)
+	if library == "older":
+		with (support / "pr_checks_lib.sh").open("a", encoding="utf-8") as fh:
+			fh.write("\nunset -f _pr_probe_repo_log _pr_merge_tree_probe\n")
+	diff = _overlap_scenario(tmp_path, fixtures, _pr(4075, "ai/issue-4063", head_sha=shas["older"]),
+		_pr(4077, "ai/issue-4064", head_sha=shas["conflict"]))
+	result, _log_text, _env_out = _run("gate", tmp_path, bin_dir, fixtures, log, run_cwd=plain,
+		PR_DIFF_FILE=str(diff), MERGE_TRAIN_PRIORITY_LABELS="none", GITHUB_SERVER_URL=_probe_server(tmp_path),
+		SUPPORT_SCRIPTS_DIR=str(support), **_GATE_4077)
+	assert result.returncode == 0, result.stderr
+	assert f"MERGE_TRAIN_PROBE_REPO outcome=created origin=file://{tmp_path}/srv/acme/consumer.git" in result.stdout
+	assert "older=4075 overlap=paths conflict=conflict" in result.stdout
+	assert "PR_MERGE_TREE_PROBE_REPO" not in result.stdout + result.stderr
+	assert not list(tmp_path.glob("merge-train-probe.*"))
+	assert not list(tmp_path.glob("pr-merge-tree-probe.*"))
+	text = SCRIPT.read_text(encoding="utf-8")
+	for fn, call in (("_mt_git", "_pr_mt_git"), ("_mt_git_fetch", "_pr_mt_git_fetch"),
+			("_mt_probe_repo_cleanup", "_pr_probe_repo_cleanup"), ("_mt_probe_repo_init", "_pr_probe_repo_init"),
+			("_mt_conflict_probe", "_pr_merge_tree_probe")):
+		start = text.index(f"\n{fn}()\n{{")
+		body = text[start:text.index("\n}\n", start)]
+		delegated = body.split("if _mt_probe_via_lib; then", 1)[1].split("\n\tfi\n", 1)[0]
+		assert re.search(rf"\b{call}\b", delegated), fn
+
+
+def test_https_probe_fetch_passes_the_token_through_environment_only() -> None:
+	text = SCRIPT.read_text(encoding="utf-8")
+	fetch = text[text.index("_mt_git_fetch()\n"):text.index("_mt_probe_repo_cleanup()\n")]
+	assert "export GIT_CONFIG_COUNT=1" in fetch
+	assert 'export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic ${basic}"' in fetch
+	assert "[[ \"${server}\" =~ ^https:// ]]" in fetch
+	assert "-c http" not in fetch and "config --" not in fetch
+
+
+def _manifest_conflict_fixture(tmp_path: Path) -> tuple[Path, dict[str, str]]:
+	"""Two heads that merge cleanly in app.txt but both rewrite the generated manifest."""
+	seed = tmp_path / "mseed"
+	seed.mkdir()
+	_git(seed, "init", "-q", "-b", "main")
+	(seed / "app.txt").write_text("".join(f"line {i}\n" for i in range(1, 21)), encoding="utf-8")
+	(seed / ".ai").mkdir()
+	(seed / ".ai" / ".workspace_source_manifest.txt").write_text("base\n", encoding="utf-8")
+	_git(seed, "add", "-A")
+	_git(seed, "commit", "-q", "-m", "base")
+	shas: dict[str, str] = {}
+	for branch, line_no in (("older", 1), ("younger", 15)):
+		_git(seed, "checkout", "-q", "-b", branch, "main")
+		lines = (seed / "app.txt").read_text(encoding="utf-8").splitlines()
+		lines[line_no - 1] = f"{branch} edit"
+		(seed / "app.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+		(seed / ".ai" / ".workspace_source_manifest.txt").write_text(f"{branch}\n", encoding="utf-8")
+		_git(seed, "commit", "-q", "-am", branch)
+		shas[branch] = _git(seed, "rev-parse", "HEAD")
+	origin = tmp_path / "morigin.git"
+	_git(tmp_path, "clone", "-q", "--bare", str(seed), str(origin))
+	_git(origin, "config", "uploadpack.allowAnySHA1InWant", "true")
+	work = tmp_path / "mwork"
+	_git(tmp_path, "clone", "-q", "--no-local", "--single-branch", "-b", "main", str(origin), str(work))
+	return work, shas
+
+
+@pytest.mark.parametrize(("ignore", "expected", "queued"), [
+	(None, "conflict=ignored", False),
+	("none", "conflict=conflict", True),
+])
+def test_conflict_only_in_ignored_paths_does_not_block(tmp_path: Path, ignore: str | None, expected: str, queued: bool) -> None:
+	"""The generated manifest is ignored by the path rule, so a conflict only there does not block either."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	work, shas = _manifest_conflict_fixture(tmp_path)
+	diff = _overlap_scenario(tmp_path, fixtures, _pr(4075, "ai/issue-4063", head_sha=shas["older"]),
+		_pr(4077, "ai/issue-4064", head_sha=shas["younger"]))
+	extra = {} if ignore is None else {"MERGE_TRAIN_IGNORE_PATHS": ignore}
+	result, _log_text, env_out = _run("gate", tmp_path, bin_dir, fixtures, log, run_cwd=work,
+		PR_DIFF_FILE=str(diff), MERGE_TRAIN_PRIORITY_LABELS="none", **extra, **_GATE_4077)
+	assert result.returncode == 0, result.stderr
+	assert f"older=4075 overlap=paths {expected}" in result.stdout
+	if queued:
+		assert "result=queued blockers=#4075" in result.stdout
+		assert env_out.get("AUTOFIX_MERGE_QUEUED") == "true"
+	else:
+		assert "skipped_clean=1" in result.stdout
+		assert "result=unblocked action=continue" in result.stdout
+		assert "AUTOFIX_MERGE_QUEUED" not in env_out
+
+
+def test_gate_conflict_check_off_queues_on_overlap_without_fetch(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	work, shas = _git_fixture(tmp_path)
+	diff = _overlap_scenario(tmp_path, fixtures, _pr(4075, "ai/issue-4063", head_sha=shas["older"]),
+		_pr(4077, "ai/issue-4064", head_sha=shas["clean"]))
+	result, _log_text, _env = _run("gate", tmp_path, bin_dir, fixtures, log, run_cwd=work,
+		PR_DIFF_FILE=str(diff), MERGE_TRAIN_PRIORITY_LABELS="none", MERGE_TRAIN_CONFLICT_CHECK_ENABLED="false",
+		**_GATE_4077)
+	assert result.returncode == 0, result.stderr
+	assert "conflict=unchecked" in result.stdout
+	assert "result=queued blockers=#4075" in result.stdout
+	assert not _has_object(work, shas["older"])
+
+
+def _stale_gate(tmp_path: Path, older: dict, gql: list[dict] | None, **env: str):
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	diff = _overlap_scenario(tmp_path, fixtures, older, _pr(4077, "ai/issue-4064"))
+	if gql is not None:
+		_write_gql(fixtures, gql)
+	env.setdefault("MERGE_TRAIN_PRIORITY_LABELS", "none")
+	env.setdefault("MERGE_TRAIN_CONFLICT_CHECK_ENABLED", "false")
+	return _run("gate", tmp_path, bin_dir, fixtures, log, PR_DIFF_FILE=str(diff), **_GATE_4077, **env)
+
+
+def test_gate_skips_old_unlabelled_blocker(tmp_path: Path) -> None:
+	created = _iso(48)
+	result, log_text, env_out = _stale_gate(tmp_path, _pr(4075, "ai/issue-4063", created_at=created),
+		[_gql_pr(4075, "ai/issue-4063", created)])
+	assert result.returncode == 0, result.stderr
+	assert "older=4075 overlap=paths conflict=unchecked priority=off:n/a stale=yes action=skip" in result.stdout
+	assert "skipped_stale_head=1" in result.stdout
+	assert "result=unblocked action=continue" in result.stdout
+	assert "AUTOFIX_MERGE_QUEUED" not in env_out
+	assert log_text.count("api graphql") == 1
+	assert "timelineItems" in log_text
+
+
+def test_gate_keeps_recently_released_old_blocker(tmp_path: Path) -> None:
+	created = _iso(48)
+	result, _log_text, env_out = _stale_gate(tmp_path, _pr(4075, "ai/issue-4063", created_at=created),
+		[_gql_pr(4075, "ai/issue-4063", created, events=[("LabeledEvent", _iso(30)), ("UnlabeledEvent", _iso(1))])])
+	assert result.returncode == 0, result.stderr
+	assert "stale=no action=block" in result.stdout
+	assert "result=queued blockers=#4075" in result.stdout
+	assert env_out.get("AUTOFIX_MERGE_QUEUED") == "true"
+
+
+def test_gate_skips_blocker_released_longer_ago_than_cap(tmp_path: Path) -> None:
+	created = _iso(100)
+	result, _log_text, _env = _stale_gate(tmp_path, _pr(4075, "ai/issue-4063", created_at=created),
+		[_gql_pr(4075, "ai/issue-4063", created, events=[("LabeledEvent", _iso(80)), ("UnlabeledEvent", _iso(30))],
+			has_previous=True)])
+	assert "stale=yes action=skip" in result.stdout
+	assert "result=unblocked" in result.stdout
+
+
+@pytest.mark.parametrize("case", ["graphql_fail", "incomplete_history", "relabelled", "tie", "head_mismatch"])
+def test_gate_keeps_blocker_without_verified_history(tmp_path: Path, case: str) -> None:
+	created = _iso(48)
+	gql = _gql_pr(4075, "ai/issue-4063", created)
+	if case == "incomplete_history":
+		gql = _gql_pr(4075, "ai/issue-4063", created, has_previous=True)
+	elif case == "relabelled":
+		gql = _gql_pr(4075, "ai/issue-4063", created, events=[("UnlabeledEvent", _iso(40)), ("LabeledEvent", _iso(30))])
+	elif case == "tie":
+		stamp = _iso(30)
+		gql = _gql_pr(4075, "ai/issue-4063", created, events=[("LabeledEvent", stamp), ("UnlabeledEvent", stamp)])
+	elif case == "head_mismatch":
+		gql = _gql_pr(4075, "ai/issue-9999", created)
+	result, _log_text, env_out = _stale_gate(tmp_path, _pr(4075, "ai/issue-4063", created_at=created),
+		None if case == "graphql_fail" else [gql])
+	assert result.returncode == 0, result.stderr
+	assert "stale=no action=block" in result.stdout
+	assert "result=queued blockers=#4075" in result.stdout
+	assert env_out.get("AUTOFIX_MERGE_QUEUED") == "true"
+	if case == "graphql_fail":
+		assert "::warning::merge-train: metadata lookup failed" in result.stdout
+
+
+def test_gate_keeps_old_blocker_that_is_itself_queued(tmp_path: Path) -> None:
+	created = _iso(48)
+	result, log_text, _env = _stale_gate(tmp_path,
+		_pr(4075, "ai/issue-4063", labels=["ai:merge-queued"], created_at=created),
+		[_gql_pr(4075, "ai/issue-4063", created)])
+	assert "result=queued blockers=#4075" in result.stdout
+	assert "api graphql" not in log_text
+
+
+def test_gate_head_age_zero_disables_cap_and_invalid_value_defaults(tmp_path: Path) -> None:
+	created = _iso(48)
+	older = _pr(4075, "ai/issue-4063", created_at=created)
+	gql = [_gql_pr(4075, "ai/issue-4063", created)]
+	(tmp_path / "zero").mkdir()
+	result, log_text, _env = _stale_gate(tmp_path / "zero", older, gql, MERGE_TRAIN_HEAD_MAX_AGE_HOURS="0")
+	assert "stale=off" in result.stdout
+	assert "result=queued blockers=#4075" in result.stdout
+	assert "api graphql" not in log_text
+	(tmp_path / "abc").mkdir()
+	result, _log_text, _env = _stale_gate(tmp_path / "abc", older, gql, MERGE_TRAIN_HEAD_MAX_AGE_HOURS="abc")
+	assert "::warning::review_merge_train.sh: MERGE_TRAIN_HEAD_MAX_AGE_HOURS='abc'" in result.stdout
+	assert "stale=yes action=skip" in result.stdout
+
+
+def _priority_gate(tmp_path: Path, own_closing: list, blocker_closing: list | None, **env: str):
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	diff = _overlap_scenario(tmp_path, fixtures, _pr(4075, "ai/issue-40"), _pr(4077, "ai/issue-50"))
+	gql = [_gql_pr(4077, "ai/issue-50", _iso(1), closing=own_closing)]
+	if blocker_closing is not None:
+		gql.append(_gql_pr(4075, "ai/issue-40", _iso(2), closing=blocker_closing))
+	_write_gql(fixtures, gql)
+	env.setdefault("MERGE_TRAIN_CONFLICT_CHECK_ENABLED", "false")
+	return _run("gate", tmp_path, bin_dir, fixtures, log, PR_DIFF_FILE=str(diff),
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-50", **env)
+
+
+def test_gate_priority_pr_is_not_queued_behind_non_priority(tmp_path: Path) -> None:
+	result, log_text, env_out = _priority_gate(tmp_path, [(50, ["ai:workflow-heal"])], [(40, ["bug"])])
+	assert result.returncode == 0, result.stderr
+	assert "priority=yes:no stale=unchecked action=skip" in result.stdout
+	assert "skipped_priority=1" in result.stdout
+	assert "result=unblocked" in result.stdout
+	assert "AUTOFIX_MERGE_QUEUED" not in env_out
+	assert log_text.count("api graphql") == 1
+
+
+def test_gate_two_priority_prs_keep_lowest_number_first(tmp_path: Path) -> None:
+	result, _log_text, env_out = _priority_gate(tmp_path, [(50, ["ai:security"])], [(40, ["ai:workflow-heal"])])
+	assert "priority=yes:yes" in result.stdout
+	assert "result=queued blockers=#4075" in result.stdout
+	assert env_out.get("AUTOFIX_MERGE_QUEUED") == "true"
+
+
+def test_gate_priority_requires_link_to_head_issue(tmp_path: Path) -> None:
+	result, _log_text, _env = _priority_gate(tmp_path, [(51, ["ai:workflow-heal"])], [(40, [])])
+	assert "priority=no:n/a" in result.stdout
+	assert "result=queued blockers=#4075" in result.stdout
+
+
+def test_gate_priority_keeps_blocker_with_unknown_priority(tmp_path: Path) -> None:
+	result, _log_text, _env = _priority_gate(tmp_path, [(50, ["ai:workflow-heal"])], None)
+	assert "priority=yes:unknown" in result.stdout
+	assert "result=queued blockers=#4075" in result.stdout
+
+
+def test_gate_priority_lane_off_makes_no_graphql_call(tmp_path: Path) -> None:
+	result, log_text, _env = _priority_gate(tmp_path, [(50, ["ai:workflow-heal"])], [(40, [])],
+		MERGE_TRAIN_PRIORITY_LABELS="none")
+	assert "priority=off:n/a" in result.stdout
+	assert "result=queued blockers=#4075" in result.stdout
+	assert "api graphql" not in log_text
+
+
+def test_gate_all_rules_off_matches_path_overlap_behaviour(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	work, shas = _git_fixture(tmp_path)
+	created = _iso(48)
+	diff = _overlap_scenario(tmp_path, fixtures,
+		_pr(4075, "ai/issue-40", head_sha=shas["older"], created_at=created),
+		_pr(4077, "ai/issue-50", head_sha=shas["clean"], created_at=_iso(1)))
+	_write_gql(fixtures, [_gql_pr(4075, "ai/issue-40", created),
+		_gql_pr(4077, "ai/issue-50", _iso(1), closing=[(50, ["ai:workflow-heal"])])])
+	result, log_text, env_out = _run("gate", tmp_path, bin_dir, fixtures, log, run_cwd=work, PR_DIFF_FILE=str(diff),
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-50",
+		MERGE_TRAIN_CONFLICT_CHECK_ENABLED="false", MERGE_TRAIN_HEAD_MAX_AGE_HOURS="0", MERGE_TRAIN_PRIORITY_LABELS="")
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_GATE pr=4077 base=main result=queued blockers=#4075 action=soft_exit" in result.stdout
+	assert env_out == {"AUTOFIX_MERGE_QUEUED": "true", "AUTOFIX_MERGE_QUEUED_BLOCKERS": "#4075",
+		"AUTOFIX_STALE_BASE_SKIP": "true"}
+	assert "labels[]=ai:merge-queued" in log_text
+	assert "POST repos/acme/consumer/issues/4077/comments" in log_text
+	assert "api graphql" not in log_text
+	assert not _has_object(work, shas["older"])
+
+
+def test_release_dispatches_pr_whose_only_blocker_is_stale(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	created = _iso(48)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063", created_at=created),
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+		_pr(4078, "ai/issue-4065", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	for number in (4075, 4077, 4078):
+		_write_files(fixtures, number, [f"backend/shared_{number}.py", "backend/shared.py"])
+	_write_gql(fixtures, [_gql_pr(4075, "ai/issue-4063", created), _gql_pr(4077, "ai/issue-4064", _iso(5)),
+		_gql_pr(4078, "ai/issue-4065", _iso(4))])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, BASE_BRANCH="main")
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+	assert "source=release older=4075 overlap=paths" in result.stdout
+	assert "gh workflow run ai-review.yml --repo acme/consumer -f pr_number=4077" in log_text
+	# 4078 overlaps the still-open, recently created 4077, so it stays queued;
+	# 4075's metadata was fetched once for both evaluations.
+	assert "MERGE_TRAIN_STILL_QUEUED pr=4078 blockers=#4077" in result.stdout
+	assert log_text.count("p4075:pullRequest") == 1
+
+
+def test_release_keeps_pr_queued_behind_recently_released_old_blocker(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	created = _iso(48)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063", created_at=created),
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4075, ["backend/shared.py"])
+	_write_files(fixtures, 4077, ["backend/shared.py"])
+	_write_gql(fixtures, [_gql_pr(4075, "ai/issue-4063", created, events=[("UnlabeledEvent", _iso(1))]),
+		_gql_pr(4077, "ai/issue-4064", _iso(5))])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, BASE_BRANCH="main")
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_STILL_QUEUED pr=4077 blockers=#4075" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def test_merge_train_conflict_aware_settings_are_wired_in_every_caller() -> None:
+	expected = {
+		"MERGE_TRAIN_CONFLICT_CHECK_ENABLED": "${{ vars.MERGE_TRAIN_CONFLICT_CHECK_ENABLED || 'true' }}",
+		"MERGE_TRAIN_HEAD_MAX_AGE_HOURS": "${{ vars.MERGE_TRAIN_HEAD_MAX_AGE_HOURS || '6' }}",
+		"MERGE_TRAIN_PRIORITY_LABELS": "${{ vars.MERGE_TRAIN_PRIORITY_LABELS || 'ai:workflow-heal,ai:security' }}",
+	}
+	workflows = REPO_ROOT / ".github" / "workflows"
+	review = yaml.safe_load((workflows / "review_autofix.yml").read_text(encoding="utf-8"))
+	envs = {"review_autofix.yml": review["env"]}
+	for name in ("orchestrate_poll.yml", "cancel_on_pr_close.yml"):
+		doc = yaml.safe_load((workflows / name).read_text(encoding="utf-8"))
+		steps = [step for job in doc["jobs"].values() for step in job.get("steps", [])
+			if "review_merge_train.sh release" in str(step.get("run", ""))]
+		assert len(steps) == 1, name
+		envs[name] = steps[0]["env"]
+	for name, env in envs.items():
+		for key, value in expected.items():
+			assert env.get(key) == value, (name, key)
+
+
+def test_scheduled_cancel_sweep_lists_unlinked_runs_safely(tmp_path: Path) -> None:
+	import re
+	import shutil
+
+	workflow = (REPO_ROOT / ".github" / "workflows" / "cancel_on_pr_close.yml").read_text(encoding="utf-8")
+	assert (
+		'echo "::warning::Scheduled close cleanup preserved ${unlinked_active_run_count}'
+		' active run(s) without pull-request linkage."'
+	) in workflow
+	assert (
+		'jq -r --argjson unlinked_run_listing_max 10 "${unlinked_run_listing_jq}" "${active_runs_file}"'
+	) in workflow
+	assert "::warning::Scheduled close cleanup could not list the unlinked active run details." in workflow
+	match = re.search(r"unlinked_run_listing_jq='(.*?)'\n", workflow, re.S)
+	assert match is not None
+	program = match.group(1)
+	assert "display_title" not in program
+	assert ".name" not in program
+	assert "'" not in program
+
+	if shutil.which("jq") is None:
+		pytest.skip("jq is not installed")
+
+	hostile_branch = "x\n::error::pwned\a:::y"
+	runs: list[dict] = [
+		{"id": 9100001, "path": ".github/workflows/a.yml", "event": "pull_request", "status": "queued",
+			"head_branch": "linked-a", "created_at": "2026-10-22T00:00:00Z",
+			"display_title": "SECRET_TITLE_MARKER", "pull_requests": [{"number": 5}]},
+		{"id": 9100002, "path": ".github/workflows/b.yml", "event": "pull_request", "status": "in_progress",
+			"head_branch": "linked-b", "created_at": "2026-10-22T00:00:00Z",
+			"display_title": "SECRET_TITLE_MARKER", "pull_requests": [{"number": 5}]},
+		{"id": 1, "path": ".github/workflows/x.yml", "event": "pull_request", "status": "queued",
+			"head_branch": hostile_branch, "created_at": "2026-10-22T00:00:00Z",
+			"display_title": "SECRET_TITLE_MARKER", "pull_requests": []},
+		{"id": 2, "path": ".github/workflows/x.yml", "event": "pull_request", "status": "queued",
+			"head_branch": "b" * 500, "created_at": "2026-10-22T00:00:00Z",
+			"display_title": "SECRET_TITLE_MARKER", "pull_requests": []},
+		{"id": 3, "path": "owner/repo/.github/workflows/x.yml@refs/heads/main", "event": "pull_request",
+			"status": "in_progress", "head_branch": "feature", "created_at": "2026-10-22T00:00:00Z",
+			"display_title": "SECRET_TITLE_MARKER"},
+	]
+	for index in range(4, 14):
+		runs.append({"id": index, "path": ".github/workflows/y.yml", "event": "pull_request",
+			"status": "queued", "head_branch": f"branch-{index}", "created_at": "2026-10-22T00:00:00Z",
+			"display_title": "SECRET_TITLE_MARKER", "name": "SECRET_TITLE_MARKER", "pull_requests": []})
+	runs_file = tmp_path / "runs.json"
+	runs_file.write_text(json.dumps({"workflow_runs": runs}), encoding="utf-8")
+
+	result = subprocess.run(
+		["jq", "-r", "--argjson", "unlinked_run_listing_max", "10", program, str(runs_file)],
+		capture_output=True, text=True, check=False,
+	)
+	assert result.returncode == 0, result.stderr
+	lines = result.stdout.splitlines()
+	assert len(lines) == 11, lines
+	assert lines[-1] == "  ... 3 more unlinked active run(s) not listed."
+	assert all(line.startswith("  unlinked run id=") for line in lines[:10])
+	assert "9100001" not in result.stdout
+	assert "9100002" not in result.stdout
+	assert "SECRET_TITLE_MARKER" not in result.stdout
+	for line in lines:
+		assert "::" not in line
+		assert all(ch == "\t" or 32 <= ord(ch) < 127 for ch in line), line
+	assert "workflow=owner/repo/.github/workflows/x.yml event=" in result.stdout
+	assert "@refs/heads/main" not in result.stdout
+	for line in lines[:10]:
+		for value in re.findall(r"=(\S*)", line):
+			assert len(value) <= 200, line
+	assert "head_branch=" + "b" * 200 + " " in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# _mt_upsert_comment reports the status of its write (issue #8127)
+# ---------------------------------------------------------------------------
+
+def _extract_upsert_function() -> str:
+	lines = SCRIPT.read_text(encoding="utf-8").splitlines()
+	start = lines.index("_mt_upsert_comment() {")
+	end = lines.index("}", start)
+	return "\n".join(lines[start:end + 1])
+
+
+def _run_upsert_helper(tmp_path: Path, bin_dir: Path, fixtures: Path, log: Path, *args: str,
+		lookup_fails: bool = False) -> tuple[int, str]:
+	lookup = "return 1" if lookup_fails else "printf ''"
+	program = "\n".join([
+		"set -euo pipefail",
+		'gh_retry() { "$@"; }',
+		f"_mt_find_marker_comment_id() {{ {lookup}; }}",
+		_extract_upsert_function(),
+		'rc=0; _mt_upsert_comment "$@" || rc=$?',
+		'echo "UPSERT_RC=${rc}"',
+	])
+	run_env = dict(os.environ)
+	run_env.update({
+		"PATH": f"{bin_dir}:{os.environ['PATH']}",
+		"FAKE_GH_DIR": str(fixtures),
+		"FAKE_GH_LOG": str(log),
+		"MT_REPO": "acme/consumer",
+	})
+	result = subprocess.run(["bash", "-c", program, "upsert", *args], env=run_env,
+		capture_output=True, text=True, cwd=tmp_path)
+	assert result.returncode == 0, result.stderr
+	rc_lines = [line for line in result.stdout.splitlines() if line.startswith("UPSERT_RC=")]
+	assert rc_lines, result.stdout
+	return int(rc_lines[-1].split("=", 1)[1]), log.read_text(encoding="utf-8")
+
+
+def test_upsert_failed_post_returns_nonzero(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "comment_post_fail").touch()
+	rc, log_text = _run_upsert_helper(tmp_path, bin_dir, fixtures, log, "4077", "<!-- m -->", "body", "")
+	assert rc != 0
+	assert "POST repos/acme/consumer/issues/4077/comments" in log_text
+
+
+def test_upsert_failed_patch_returns_nonzero(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "comment_body.json").write_text(json.dumps({"body": "old body"}), encoding="utf-8")
+	(fixtures / "comment_patch_fail").touch()
+	rc, log_text = _run_upsert_helper(tmp_path, bin_dir, fixtures, log, "4077", "<!-- m -->", "new body", "555")
+	assert rc != 0
+	assert "PATCH repos/acme/consumer/issues/comments/555" in log_text
+
+
+def test_upsert_identical_body_returns_zero_without_write(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "comment_body.json").write_text(json.dumps({"body": "same body"}), encoding="utf-8")
+	(fixtures / "comment_patch_fail").touch()
+	(fixtures / "comment_post_fail").touch()
+	rc, log_text = _run_upsert_helper(tmp_path, bin_dir, fixtures, log, "4077", "<!-- m -->", "same body", "555")
+	assert rc == 0
+	assert "-X PATCH" not in log_text
+	assert "-X POST" not in log_text
+
+
+def test_upsert_successful_writes_return_zero(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	rc, log_text = _run_upsert_helper(tmp_path, bin_dir, fixtures, log, "4077", "<!-- m -->", "body", "")
+	assert rc == 0
+	assert "POST repos/acme/consumer/issues/4077/comments" in log_text
+	(fixtures / "comment_body.json").write_text(json.dumps({"body": "old body"}), encoding="utf-8")
+	rc, log_text = _run_upsert_helper(tmp_path, bin_dir, fixtures, log, "4077", "<!-- m -->", "new body", "555")
+	assert rc == 0
+	assert "PATCH repos/acme/consumer/issues/comments/555" in log_text
+
+
+def test_upsert_lookup_failure_returns_one_without_write(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	rc, log_text = _run_upsert_helper(tmp_path, bin_dir, fixtures, log, "4077", "<!-- m -->", "body",
+		lookup_fails=True)
+	assert rc == 1
+	assert "-X PATCH" not in log_text
+	assert "-X POST" not in log_text
+
+
+def test_release_released_comment_post_failure_warns_and_counts_release(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	(fixtures / "comment_post_fail").touch()
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "could not upsert the released comment for PR #4077" in result.stdout
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=1 released=1" in result.stdout
+	assert "POST repos/acme/consumer/issues/4077/comments" in log_text
+
+
+def test_gate_queued_comment_post_failure_warns_and_still_queues(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"),
+		_pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4075, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	(fixtures / "comment_post_fail").touch()
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064",
+	)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_GATE pr=4077 base=main result=queued blockers=#4075" in result.stdout
+	assert "could not upsert the queued comment for PR #4077; continuing." in result.stdout
+	assert env_out.get("AUTOFIX_MERGE_QUEUED") == "true"
+	assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
+	assert "POST repos/acme/consumer/issues/4077/comments" in log_text
+
+
+def _write_raw_files(fixtures: Path, number: int, entries: list[dict]) -> None:
+	(fixtures / f"files_{number}.json").write_text(json.dumps(entries), encoding="utf-8")
+
+
+def test_gate_queues_pr_editing_old_path_of_older_rename(tmp_path: Path) -> None:
+	"""An older PR renaming a.sh -> b.sh blocks a younger PR that edits a.sh.
+
+	Regression: ``_mt_pr_files_into`` read only ``.filename`` from
+	``pulls/N/files``, so the old path of a rename was dropped and the gate
+	failed open while the diff-based own-files path counted both sides.
+	"""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"),
+		_pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	_write_raw_files(fixtures, 4075, [{"filename": "b.sh", "previous_filename": "a.sh", "status": "renamed"}])
+	diff = tmp_path / "pr.diff"
+	diff.write_text("diff --git a/a.sh b/a.sh\n", encoding="utf-8")
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064", PR_DIFF_FILE=str(diff),
+	)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_GATE pr=4077 base=main result=queued blockers=#4075" in result.stdout
+	assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
+	assert log_text.count("pulls/4075/files") == 1
+
+
+def test_gate_own_api_fallback_includes_renamed_old_path(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"),
+		_pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4075, ["a.sh"])
+	_write_raw_files(fixtures, 4077, [{"filename": "b.sh", "previous_filename": "a.sh", "status": "renamed"}])
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064",
+	)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_GATE pr=4077 base=main result=queued blockers=#4075" in result.stdout
+	assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
+	assert log_text.count("pulls/4077/files") == 1
+
+
+def test_release_keeps_pr_queued_behind_older_rename_and_fetches_once(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064"),
+		_pr(4081, "ai/issue-4059", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_raw_files(fixtures, 4077, [{"filename": "b.sh", "previous_filename": "a.sh", "status": "renamed"}])
+	_write_files(fixtures, 4081, ["a.sh"])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, BASE_BRANCH="main")
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_STILL_QUEUED pr=4081 blockers=#4077" in result.stdout
+	assert "MERGE_TRAIN_RELEASED pr=4081" not in result.stdout
+	for number in (4077, 4081):
+		calls = log_text.count(f"pulls/{number}/files")
+		assert calls == 1, f"/pulls/{number}/files fetched {calls} times; the per-run cache must hold it to one"
+
+
+@pytest.mark.parametrize("own_path,queued", [("null", False), ("y.sh", True)])
+def test_gate_missing_null_or_empty_previous_filename_adds_no_path(tmp_path: Path, own_path: str, queued: bool) -> None:
+	"""Entries without a usable previous_filename add no blank or ``null`` path,
+	but still count their ``filename``."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"),
+		_pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	_write_raw_files(fixtures, 4075, [
+		{"filename": "x.sh"},
+		{"filename": "y.sh", "previous_filename": None},
+		{"filename": "z.sh", "previous_filename": ""},
+	])
+	diff = tmp_path / "pr.diff"
+	diff.write_text(f"diff --git a/{own_path} b/{own_path}\n", encoding="utf-8")
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064", PR_DIFF_FILE=str(diff),
+	)
+	assert result.returncode == 0, result.stderr
+	if queued:
+		assert "MERGE_TRAIN_GATE pr=4077 base=main result=queued blockers=#4075" in result.stdout
+		assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
+	else:
+		assert "MERGE_TRAIN_GATE pr=4077 base=main result=unblocked action=continue" in result.stdout
+		assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
+	assert log_text.count("pulls/4075/files") == 1
+
+
+@pytest.mark.parametrize("own_path,queued", [("a.sh", True), ("null", False)])
+def test_gate_skips_non_object_and_null_filename_entries(tmp_path: Path, own_path: str, queued: bool) -> None:
+	"""A non-object entry no longer fails the whole files lookup (which made
+	the gate fail open), and a null or empty ``filename`` adds no ``null`` path."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4075, "ai/issue-4063"),
+		_pr(4077, "ai/issue-4064"),
+	]), encoding="utf-8")
+	_write_raw_files(fixtures, 4075, [
+		"junk",
+		{"filename": None},
+		{"filename": ""},
+		{"filename": "b.sh", "previous_filename": "a.sh"},
+	])
+	diff = tmp_path / "pr.diff"
+	diff.write_text(f"diff --git a/{own_path} b/{own_path}\n", encoding="utf-8")
+	result, log_text, env_out = _run(
+		"gate", tmp_path, bin_dir, fixtures, log,
+		PR_NUMBER="4077", BASE_BRANCH="main", TARGET_BRANCH="ai/issue-4064", PR_DIFF_FILE=str(diff),
+	)
+	assert result.returncode == 0, result.stderr
+	if queued:
+		assert "MERGE_TRAIN_GATE pr=4077 base=main result=queued blockers=#4075" in result.stdout
+		assert env_out.get("AUTOFIX_STALE_BASE_SKIP") == "true"
+	else:
+		assert "MERGE_TRAIN_GATE pr=4077 base=main result=unblocked action=continue" in result.stdout
+		assert "AUTOFIX_STALE_BASE_SKIP" not in env_out
+	assert log_text.count("pulls/4075/files") == 1
+
+
+# SHELL-001 (Refs #8975): MERGE_TRAIN_DISPATCH_WORKFLOWS is split on default
+# IFS without pathname expansion; order and first-success stop are unchanged.
+def _dispatch_lines(log_text: str) -> list[str]:
+	return [line for line in log_text.splitlines() if line.startswith("gh workflow run ")]
+
+
+def test_release_dispatch_list_glob_is_not_expanded(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	(tmp_path / "x.yml").write_text("", encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
+		MERGE_TRAIN_DISPATCH_WORKFLOWS="*.yml")
+	assert result.returncode == 0, result.stderr
+	assert "gh workflow run *.yml --repo acme/consumer -f pr_number=4077" in log_text
+	assert "gh workflow run x.yml" not in log_text
+	assert "MERGE_TRAIN_DISPATCHED pr=4077 workflow=*.yml ref=default head=ai/issue-4064" in result.stdout
+
+
+def test_release_default_dispatch_list_order_unchanged(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	(fixtures / "dispatch_fail").touch()
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	workflows = [line.split()[3] for line in _dispatch_lines(log_text)]
+	assert workflows == ["ai-review.yml", "internal-review.yml", "review_autofix.yml"]
+	assert " dispatch_failed=1 " in result.stdout
+
+
+def test_release_newline_separated_dispatch_list_is_split(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	(fixtures / "dispatch_fail").touch()
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
+		MERGE_TRAIN_DISPATCH_WORKFLOWS="first.yml\nsecond.yml\tthird.yml\n")
+	assert result.returncode == 0, result.stderr
+	workflows = [line.split()[3] for line in _dispatch_lines(log_text)]
+	assert workflows == ["first.yml", "second.yml", "third.yml"]
+
+
+def test_release_whitespace_only_dispatch_list_dispatches_nothing(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
+		MERGE_TRAIN_DISPATCH_WORKFLOWS="  \n ")
+	assert result.returncode == 0, result.stderr
+	assert _dispatch_lines(log_text) == []
+	assert "could not be dispatched" in result.stdout
+	assert " dispatch_failed=1 " in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# MERGE_TRAIN_RELEASE_SUMMARY API-cost fields (analysis/workflow-optimization-
+# 2026-10-08.md, GH API Call Audit #1). Appended after oldest_queued_age_secs=.
+# ---------------------------------------------------------------------------
+_MT_API_COST_FIELDS = ["file_list_fetches", "file_list_cache_hits", "active_listing_calls", "elapsed_ms"]
+
+
+def _release_summary_fields(stdout: str) -> tuple[str, dict[str, str]]:
+	summary = [line for line in stdout.splitlines() if line.startswith("MERGE_TRAIN_RELEASE_SUMMARY ")]
+	assert len(summary) == 1, stdout
+	return summary[0], dict(item.split("=", 1) for item in summary[0].split()[1:])
+
+
+def test_release_summary_appends_api_cost_fields(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+		_pr(4081, "ai/issue-4059", labels=["ai:merge-queued"]),
+		_pr(4085, "ai/issue-4069", base="orchestrator/project-9", labels=["ai:merge-queued"]),
+		_pr(4090, "ai/issue-4073"),
+	]), encoding="utf-8")
+	(fixtures / "comments_4077.json").write_text(json.dumps([_marker_comment(97)]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4081, ["backend/promo_email_sender.py", "db/contracts/promo_email_jobs.yml"])
+	_write_files(fixtures, 4085, ["twap_router.py"])
+	_write_files(fixtures, 4090, ["backend/promo_email_sender.py"])
+	result, _log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, BASE_BRANCH="main")
+	assert result.returncode == 0, result.stderr
+	line, fields = _release_summary_fields(result.stdout)
+	# Existing prefix and fields stay byte-identical, in the same order.
+	assert line.startswith(
+		"MERGE_TRAIN_RELEASE_SUMMARY examined=2 released=1 base_filter=main overlap=1 active_review=0"
+		" runs_incomplete=0 files_unavailable=0 blockers_unavailable=0 marker_unavailable=0"
+		" claim_skipped=0 dispatch_failed=0 oldest_queued_age_secs=none "
+	), line
+	# The four new fields close the line, in this order.
+	assert [token.split("=", 1)[0] for token in line.split()[-4:]] == _MT_API_COST_FIELDS
+	for key in _MT_API_COST_FIELDS:
+		assert re.fullmatch(r"[0-9]+", fields[key]), (key, fields[key])
+	assert fields["active_listing_calls"] == "1"
+
+
+def test_release_counts_shared_blocker_file_list_once(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064"),
+		_pr(4081, "ai/issue-4059", labels=["ai:merge-queued"]),
+		_pr(4090, "ai/issue-4073", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	_write_files(fixtures, 4081, ["backend/promo_email_sender.py", "db/contracts/promo_email_jobs.yml"])
+	_write_files(fixtures, 4090, ["backend/promo_email_sender.py"])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, BASE_BRANCH="main")
+	assert result.returncode == 0, result.stderr
+	_line, fields = _release_summary_fields(result.stdout)
+	assert log_text.count("pulls/4077/files") == 1
+	assert int(fields["file_list_cache_hits"]) >= 1
+	# 4081 (own), 4077 (4081's blocker), 4090 (own) are fetched; 4090's pass
+	# reuses 4077 and 4081 from the cache.
+	assert fields["file_list_fetches"] == "3"
+	assert fields["file_list_cache_hits"] == "2"
+	assert int(fields["file_list_fetches"]) == sum(log_text.count(f"pulls/{n}/files") for n in (4077, 4081, 4090))
+
+
+def test_release_active_listing_calls_zero_or_one(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"]),
+		_pr(4085, "ai/issue-4069", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/a.py"])
+	_write_files(fixtures, 4085, ["backend/b.py"])
+	result, calls, _env = _run("release", tmp_path, bin_dir, fixtures, log, BASE_BRANCH="main")
+	assert result.returncode == 0, result.stderr
+	_line, fields = _release_summary_fields(result.stdout)
+	assert fields["examined"] == "2"
+	assert fields["active_listing_calls"] == "1"
+	assert re.fullmatch(r"[0-9]+", fields["elapsed_ms"])
+	assert "actions/runs" in calls
+
+	other_tmp = tmp_path / "other-base"
+	other_tmp.mkdir()
+	bin_dir, fixtures, log = _install_fake_gh(other_tmp)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4085, "ai/issue-4069", base="orchestrator/project-9", labels=["ai:merge-queued"]),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4085, ["twap_router.py"])
+	result, calls, _env = _run("release", other_tmp, bin_dir, fixtures, log, BASE_BRANCH="main")
+	assert result.returncode == 0, result.stderr
+	_line, fields = _release_summary_fields(result.stdout)
+	assert fields["examined"] == "0"
+	assert fields["active_listing_calls"] == "0"
+	assert fields["file_list_fetches"] == "0"
+	assert fields["file_list_cache_hits"] == "0"
+	assert re.fullmatch(r"[0-9]+", fields["elapsed_ms"])
+	assert "actions/runs" not in calls
+
+
+# ---------------------------------------------------------------------------
+# Stale unattributed runs and the daily queue-age note.
+#
+# coding-workflows run 41814678900 (2026-11-04): GitHub accepted an
+# internal-review.yml dispatch and never started it. The run stayed "queued"
+# with no jobs and an unrendered title, so every release pass ended
+# reason=unattributed_run for six days and 16 PRs stayed queued unnoticed.
+# ---------------------------------------------------------------------------
+
+def _untitled_dispatch_run(run_id: int, status: str, hours_ago: float | None) -> dict:
+	run = {"id": run_id, "status": status, "event": "workflow_dispatch", "head_branch": "main",
+		"display_title": "Internal: AI Review & Autofix", "path": ".github/workflows/internal-review.yml"}
+	if hours_ago is not None:
+		run["created_at"] = _iso(hours_ago)
+	return run
+
+
+@pytest.mark.parametrize("status", ["queued", "requested", "pending", "waiting"])
+def test_release_ignores_stale_untitled_dispatch_that_never_started(tmp_path: Path, status: str) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [_untitled_dispatch_run(6100, status, 7)])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert ("MERGE_TRAIN_RUNS_LISTING outcome=ignored reason=stale_unattributed_run runs=1 ids=6100 max_age_hours=6"
+		in result.stderr)
+	assert "outcome=incomplete" not in result.stderr
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+	assert "runs_incomplete=0" in result.stdout
+
+
+@pytest.mark.parametrize("run", [
+	_untitled_dispatch_run(6101, "queued", 1),       # younger than the limit
+	_untitled_dispatch_run(6102, "in_progress", 7),  # executing: could be any PR's review
+	_untitled_dispatch_run(6103, "queued", None),    # no created_at: age unknown
+	dict(_untitled_dispatch_run(6104, "queued", None), created_at="yesterday"),
+])
+def test_release_keeps_other_untitled_dispatches_unattributed(tmp_path: Path, run: dict) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [run])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=unattributed_run" in result.stderr
+	assert "outcome=ignored" not in result.stderr
+	assert "MERGE_TRAIN_RELEASED" not in result.stdout
+
+
+def test_release_stale_untitled_rule_can_be_turned_off(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [_untitled_dispatch_run(6105, "queued", 200)])
+	# Issue #9473: the wedged-queued rule would also drop a 200-hour queued
+	# run, so it is switched off too to observe the stale rule alone.
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
+		MERGE_TRAIN_STALE_UNATTRIBUTED_RUN_HOURS="0", ZOMBIE_RUN_MAX_QUEUED_HOURS="0")
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=unattributed_run" in result.stderr
+	assert "MERGE_TRAIN_RELEASED" not in result.stdout
+
+
+def test_release_drops_wedged_queued_review_run_even_with_stale_rule_off(tmp_path: Path) -> None:
+	"""Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS never holds the train."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [_untitled_dispatch_run(6107, "queued", 200)])
+	result, _log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
+		MERGE_TRAIN_STALE_UNATTRIBUTED_RUN_HOURS="0")
+	assert result.returncode == 0, result.stderr
+	assert ("ZOMBIE_RUN_IGNORED run=6107 workflow=.github/workflows/internal-review.yml age_h=200 guard=merge_train_release"
+		in result.stderr)
+	assert "outcome=incomplete" not in result.stderr
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+
+
+@pytest.mark.parametrize("hours_ago,status,held", [
+	(25, "queued", False),
+	(23, "queued", True),
+	(100, "in_progress", True),
+])
+def test_release_wedged_rule_only_ages_out_old_queued_runs(tmp_path: Path, hours_ago: int, status: str, held: bool) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	run = {"id": 6200, "status": status, "event": "workflow_dispatch", "head_branch": "main",
+		"display_title": "Internal: AI Review & Autofix [pr:4077]", "path": ".github/workflows/internal-review.yml",
+		"created_at": _iso(hours_ago)}
+	_write_runs(fixtures, [run])
+	result, _log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	if held:
+		assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+		assert "ZOMBIE_RUN_IGNORED" not in result.stderr
+	else:
+		assert "ZOMBIE_RUN_IGNORED run=6200 " in result.stderr
+		assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+
+
+def test_release_stale_untitled_limit_is_configurable_and_validated(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [_untitled_dispatch_run(6106, "queued", 7)])
+	# A 12-hour limit keeps a 7-hour-old run unattributed.
+	result, _log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
+		MERGE_TRAIN_STALE_UNATTRIBUTED_RUN_HOURS="12")
+	assert "reason=unattributed_run" in result.stderr
+	assert "MERGE_TRAIN_RELEASED" not in result.stdout
+	# A value that is not a whole number warns and falls back to 6 hours.
+	result, _log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
+		MERGE_TRAIN_STALE_UNATTRIBUTED_RUN_HOURS="soon")
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_STALE_UNATTRIBUTED_RUN_HOURS is not a whole number of hours; using 6." in result.stderr
+	assert "soon" not in result.stderr
+	assert "ids=6106 max_age_hours=6" in result.stderr
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+
+
+def test_release_stale_untitled_run_does_not_hide_an_active_review(tmp_path: Path) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [
+		_untitled_dispatch_run(6107, "queued", 150),
+		{"id": 6108, "status": "in_progress", "event": "workflow_dispatch", "head_branch": "main",
+			"display_title": "Internal: AI Review & Autofix [pr:4077]",
+			"path": ".github/workflows/internal-review.yml", "created_at": _iso(0.1)},
+	])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	assert "outcome=ignored reason=stale_unattributed_run runs=1 ids=6107" in result.stderr
+	assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+	assert "gh workflow run" not in log_text
+
+
+def _stall_alert_setup(tmp_path: Path, pr_hours_old: float = 30) -> tuple[Path, Path, Path, Path, dict]:
+	"""A queued PR the pass cannot release (a young untitled review run keeps
+	the listing incomplete), the real tg_helpers.sh and a fake curl that
+	records the Telegram call."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	(fixtures / "pulls.json").write_text(json.dumps([
+		_pr(4077, "ai/issue-4064", labels=["ai:merge-queued"], created_at=_iso(pr_hours_old)),
+	]), encoding="utf-8")
+	_write_files(fixtures, 4077, ["backend/promo_email_sender.py"])
+	_write_runs(fixtures, [_untitled_dispatch_run(6200, "in_progress", 0.2)])
+	tg_log = tmp_path / "tg.log"
+	curl = bin_dir / "curl"
+	curl.write_text(
+		"#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"${FAKE_TG_LOG}\"\n"
+		"[ ! -f \"${FAKE_GH_DIR}/tg_fail\" ] || exit 7\nprintf '%s' '{\"result\":{\"message_id\":77}}'\n",
+		encoding="utf-8")
+	curl.chmod(curl.stat().st_mode | stat.S_IEXEC)
+	env = {
+		"MERGE_TRAIN_TG_HELPERS": str(REPO_ROOT / "scripts" / "tg_helpers.sh"),
+		"MERGE_TRAIN_STALL_ALERT_HOUR_UTC": str(datetime.now(timezone.utc).hour),
+		"TG_BOT_SECRET": "test-bot-secret",
+		"TG_ADMIN_CHAT_ID": "12345",
+		"TG_CHAT_ID": "",
+		"ALERT_MSG_LEVEL": "WARNING",
+		"FAKE_TG_LOG": str(tg_log),
+		"BASE_BRANCH": "",
+	}
+	return bin_dir, fixtures, log, tg_log, env
+
+
+def _stall_note(comment_id: int, alert_date: str, author: str = "automation-bot") -> dict:
+	return {"id": comment_id, "user": {"login": author}, "created_at": "2026-10-01T00:00:00Z",
+		"body": f"<!-- merge-train:stalled alert_date={alert_date} -->\n**Merge train: still queued.**"}
+
+
+def _today_utc() -> str:
+	return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+
+def test_release_sends_queue_age_note_once_for_an_old_queued_pr(tmp_path: Path) -> None:
+	bin_dir, fixtures, log, tg_log, env = _stall_alert_setup(tmp_path)
+	# One clock read gives both the slot hour and its start date, so they
+	# agree even if UTC midnight passes between setup and this point.
+	slot_start = datetime.now(timezone.utc)
+	env["MERGE_TRAIN_STALL_ALERT_HOUR_UTC"] = str(slot_start.hour)
+	today = slot_start.strftime("%Y-%m-%d")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **env)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASED" not in result.stdout
+	assert re.search(r"MERGE_TRAIN_STALL_ALERT pr=4077 age_secs=\d+ queued=1 outcome=sent", result.stdout)
+	assert "gh api -X POST repos/acme/consumer/issues/4077/comments" in log_text
+	assert f"<!-- merge-train:stalled alert_date={today} -->" in log_text
+	assert "runs_incomplete=1" in log_text
+	sent = tg_log.read_text(encoding="utf-8")
+	assert sent.count("sendMessage") == 1
+	assert "WARNING" in sent and "#4077" in sent and "open 30h" in sent
+	assert "https://github.com/acme/consumer/pull/4077" in sent
+	# The summary line is unchanged and still last-but-one of the pass.
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=1 released=0" in result.stdout
+
+	# Second tick the same day: today's note exists, nothing is sent again.
+	(fixtures / "comments_4077.json").write_text(json.dumps([_stall_note(900, today)]), encoding="utf-8")
+	log.write_text("", encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **env)
+	assert "outcome=already_alerted" in result.stdout
+	assert "-X POST" not in log_text and "-X PATCH" not in log_text
+	assert tg_log.read_text(encoding="utf-8").count("sendMessage") == 1
+
+
+def test_release_queue_age_note_is_keyed_by_the_slot_start_date(tmp_path: Path) -> None:
+	"""A slot that started one hour ago keys the note by the slot's start
+	date (the previous UTC date when the slot crossed midnight), and a second
+	tick in the same slot is already alerted."""
+	bin_dir, fixtures, log, tg_log, env = _stall_alert_setup(tmp_path)
+	slot_start = datetime.now(timezone.utc) - timedelta(hours=1)
+	env["MERGE_TRAIN_STALL_ALERT_HOUR_UTC"] = str(slot_start.hour)
+	expected_date = slot_start.strftime("%Y-%m-%d")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **env)
+	assert result.returncode == 0, result.stderr
+	assert "outcome=sent" in result.stdout
+	assert f"<!-- merge-train:stalled alert_date={expected_date} -->" in log_text
+	(fixtures / "comments_4077.json").write_text(json.dumps([_stall_note(903, expected_date)]), encoding="utf-8")
+	log.write_text("", encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **env)
+	assert "outcome=already_alerted" in result.stdout
+	assert tg_log.read_text(encoding="utf-8").count("sendMessage") == 1
+
+
+def test_release_queue_age_note_updates_yesterdays_comment(tmp_path: Path) -> None:
+	bin_dir, fixtures, log, tg_log, env = _stall_alert_setup(tmp_path)
+	(fixtures / "comments_4077.json").write_text(json.dumps([_stall_note(901, "2026-01-01")]), encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **env)
+	assert "outcome=sent" in result.stdout
+	assert "gh api -X PATCH repos/acme/consumer/issues/comments/901" in log_text
+	assert "issues/4077/comments -f body" not in log_text
+	assert tg_log.read_text(encoding="utf-8").count("sendMessage") == 1
+
+
+def test_release_queue_age_note_ignores_a_note_from_another_author(tmp_path: Path) -> None:
+	bin_dir, fixtures, log, tg_log, env = _stall_alert_setup(tmp_path)
+	(fixtures / "comments_4077.json").write_text(
+		json.dumps([_stall_note(902, _today_utc(), author="someone-else")]), encoding="utf-8")
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **env)
+	assert "outcome=sent" in result.stdout
+	assert "gh api -X POST repos/acme/consumer/issues/4077/comments" in log_text
+	assert "issues/comments/902" not in log_text
+
+
+@pytest.mark.parametrize("overrides,outcome", [
+	({"MERGE_TRAIN_STALL_ALERT_HOUR_UTC": str((datetime.now(timezone.utc).hour + 5) % 24)}, "outside_slot"),
+	({"MERGE_TRAIN_TG_HELPERS": ""}, "telegram_unavailable"),
+	({"MERGE_TRAIN_TG_HELPERS": "/nonexistent/tg_helpers.sh"}, "telegram_unavailable"),
+	({"TG_BOT_SECRET": ""}, "telegram_unconfigured"),
+	({"TG_ADMIN_CHAT_ID": ""}, "telegram_unconfigured"),
+	({"ALERT_MSG_LEVEL": "ERROR"}, "below_alert_level"),
+])
+def test_release_queue_age_note_skips_without_any_api_call(tmp_path: Path, overrides: dict, outcome: str) -> None:
+	bin_dir, fixtures, log, tg_log, env = _stall_alert_setup(tmp_path)
+	env.update(overrides)
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **env)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_STALL_ALERT pr=4077" in result.stdout and f"outcome={outcome}" in result.stdout
+	assert "issues/4077/comments" not in log_text
+	assert not tg_log.exists()
+
+
+@pytest.mark.parametrize("overrides,pr_hours_old", [
+	({}, 23),                                         # younger than the 24-hour threshold
+	({"MERGE_TRAIN_STALL_ALERT_HOURS": "0"}, 300),    # turned off
+	({"MERGE_TRAIN_STALL_ALERT_HOURS": "48"}, 30),    # threshold raised
+	({"BASE_BRANCH": "main"}, 300),                   # a PR close event, not a poll tick
+])
+def test_release_queue_age_note_is_silent_when_not_due(tmp_path: Path, overrides: dict, pr_hours_old: float) -> None:
+	bin_dir, fixtures, log, tg_log, env = _stall_alert_setup(tmp_path, pr_hours_old=pr_hours_old)
+	env.update(overrides)
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **env)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_STALL_ALERT" not in result.stdout
+	assert "issues/4077/comments" not in log_text
+	assert not tg_log.exists()
+
+
+@pytest.mark.parametrize("flag,outcome,telegram_calls", [
+	("comment_post_fail", "marker_write_failed", 0),
+	("fail_comments", "marker_unavailable", 0),
+	("fail_user", "marker_unavailable", 0),
+	("tg_fail", "not_delivered", 1),
+])
+def test_release_queue_age_note_failures_never_fail_the_pass(tmp_path: Path, flag: str, outcome: str,
+		telegram_calls: int) -> None:
+	bin_dir, fixtures, log, tg_log, env = _stall_alert_setup(tmp_path)
+	(fixtures / flag).touch()
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **env)
+	assert result.returncode == 0, result.stderr
+	assert f"outcome={outcome}" in result.stdout
+	assert "MERGE_TRAIN_RELEASE_SUMMARY examined=1 released=0" in result.stdout
+	sent = tg_log.read_text(encoding="utf-8") if tg_log.exists() else ""
+	assert sent.count("sendMessage") == telegram_calls
+
+
+def test_release_queue_age_note_skips_a_pr_released_in_this_pass(tmp_path: Path) -> None:
+	bin_dir, fixtures, log, tg_log, env = _stall_alert_setup(tmp_path, pr_hours_old=300)
+	_write_runs(fixtures, [])
+	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log, **env)
+	assert result.returncode == 0, result.stderr
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+	assert "MERGE_TRAIN_STALL_ALERT" not in result.stdout
+	assert not tg_log.exists()
+
+
+def test_poll_release_step_passes_the_trusted_telegram_helper() -> None:
+	doc = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml").read_text(encoding="utf-8"))
+	steps = [step for job in doc["jobs"].values() for step in job.get("steps", [])
+		if "review_merge_train.sh release" in str(step.get("run", ""))]
+	assert len(steps) == 1
+	env, run = steps[0]["env"], steps[0]["run"]
+	assert env["TG_BOT_SECRET"] == "${{ secrets.TG_BOT_SECRET }}"
+	assert env["TG_ADMIN_CHAT_ID"] == "${{ vars.TG_ADMIN_CHAT_ID || '' }}"
+	assert env["ALERT_MSG_LEVEL"] == "${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}"
+	assert '_mt_tg_helpers="$(pwd)/.codex-workflow-src/scripts/tg_helpers.sh"' in run
+	assert '_mt_tg_helpers="$(pwd)/.codex-workflow-src-main/scripts/tg_helpers.sh"' in run
+	assert 'MERGE_TRAIN_TG_HELPERS="${_mt_tg_helpers}"' in run
+	# Never the repository's own scripts/ copy.
+	assert "scripts/tg_helpers.sh" not in run.replace(".codex-workflow-src/scripts/tg_helpers.sh", "").replace(
+		".codex-workflow-src-main/scripts/tg_helpers.sh", "")
+
+
+def test_merge_lease_tick_metrics_are_additive_and_guarded():
+	"""Merge-lease Phase 1 metrics (Refs #9781): the tick emits MERGE_LEASE_METRIC
+	only behind a `declare -F` guard, so an older staged pr_checks_lib.sh without
+	the helper still releases and grants, and every existing MERGE_LEASE tick
+	line keeps its fields (Phase 1 step 1.1 only appends held_s=, merged= and
+	queue_len=)."""
+	text = SCRIPT.read_text()
+	start = text.index("_mt_merge_lease_tick()\n{")
+	body = text[start:text.index("\n}\n", start)]
+	assert "declare -F _merge_lease_metric >/dev/null 2>&1 && tick_metric_ok=1" in body
+	calls = [line.strip() for line in body.splitlines() if "_merge_lease_metric " in line and "declare -F" not in line]
+	# 9 Phase 1 calls plus Phase 2's skipped (skip_head_unchanged, ineligible)
+	# and no_waiter reason=no_eligible_waiter.
+	assert len(calls) == 12, calls
+	for call in calls:
+		assert call.startswith('[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric '), call
+		assert call.endswith("|| true"), call
+	for fmt in (
+		'_mt_log "MERGE_LEASE pr=${MERGE_LEASE_PR} base=${tick_base} mode=tick outcome=held reason=holder_open"',
+		# Phase 1 step 1.1 appends held_s= and merged= to the release line and
+		# queue_len= to the grant lines; the existing fields are unchanged.
+		'_mt_log "MERGE_LEASE pr=${MERGE_LEASE_PR} base=${tick_base} mode=tick outcome=released reason=${tick_reason} held_s=${tick_rel_held:--} merged=${tick_merged}"',
+		'_mt_log "MERGE_LEASE pr=- base=${tick_base} mode=tick outcome=no_waiter reason=lease_free"',
+		'_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=first_in_queue${tick_queue_len_field}"',
+		'_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=dispatch_failed_sweep_retries${tick_queue_len_field}"',
+		'_mt_warn "MERGE_LEASE mode=tick outcome=unavailable reason=refs_list_failed (no lease freed or granted this tick)"',
+		'_mt_warn "MERGE_LEASE base=${tick_base} mode=tick outcome=unavailable reason=read_failed"',
+	):
+		assert fmt in body, fmt
+	# The grant metric's ts is taken right after the lease write, before the
+	# unlabel and the dispatch, so dispatch latency is not counted as wait.
+	# rindex: the grant's unlabel is the last one (Phase 2 also unlabels an
+	# ineligible candidate in the grant loop, before any write).
+	assert body.index('tick_grant_ts="$(date -u +%s') < body.rindex('_merge_lease_unlabel_wait "${tick_first}"')
+	# No new GitHub call: the tick's gh reads are the matching-refs listing and
+	# the live holder-state read, as before the metrics.
+	assert body.count("gh_retry _safe_gh_jq") == 2
+
+
+def test_list_open_prs_emits_the_title_for_the_merge_lease():
+	"""Merge-lease Phase 2 (Refs #9781): _mt_list_open_prs adds `title` (the
+	lease tick's `[skip ai]` check) and keeps every existing field."""
+	text = SCRIPT.read_text()
+	start = text.index("_mt_list_open_prs() {")
+	body = text[start:text.index("\n}\n", start)]
+	program = re.search(r"--jq '([^']*)'", body).group(1)
+	listing = [{"number": 5, "head": {"ref": "ai/issue-5", "sha": "a" * 40, "repo": {"full_name": "o/r"}},
+		"created_at": "2026-11-19T00:00:00Z", "base": {"ref": "main"}, "draft": False,
+		"labels": [{"name": "ai:merge-lease-wait"}], "title": "Fix [skip ai] \"quoted\""},
+		{"number": 6, "head": {"ref": "ai/issue-6", "sha": "b" * 40, "repo": None},
+		"base": {"ref": "main"}, "draft": True, "labels": []}]
+	res = subprocess.run(["jq", "-r", program], input=json.dumps(listing), capture_output=True, text=True, check=True)
+	rows = [json.loads(line) for line in res.stdout.splitlines()]
+	assert len(rows) == 2
+	assert rows[0] == {"number": 5, "head": "ai/issue-5", "head_repo": "o/r", "head_sha": "a" * 40,
+		"created_at": "2026-11-19T00:00:00Z", "base": "main", "draft": False, "labels": ["ai:merge-lease-wait"],
+		"title": 'Fix [skip ai] "quoted"'}
+	assert rows[1]["title"] == ""
+	assert rows[1]["head_repo"] == ""
+
+
+def test_merge_lease_tick_phase_2_is_guarded_by_the_staged_library():
+	"""Phase 2 runs only when the staged pr_checks_lib.sh has its helpers, and
+	the tick adds no direct GitHub call of its own."""
+	text = SCRIPT.read_text()
+	start = text.index("_mt_merge_lease_tick()\n{")
+	body = text[start:text.index("\n}\n", start)]
+	assert "declare -F _merge_lease_pr_eligible >/dev/null 2>&1" in body
+	assert 'if [ "${tick_p2_lib}" = 1 ] && _merge_lease_revoke_enabled; then' in body
+	assert "local tick_max_candidates=10" in body
+	assert '_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=skipped reason=${tick_skip_why}"' in body
+
+
+def test_merge_lease_tick_phase_5_is_guarded_and_keeps_the_single_holder_lines():
+	"""Merge-lease Phase 5 (Refs #9781): the multi-holder tick runs only when the
+	staged library has the Phase 5 helpers and MERGE_LEASE_MAX_HOLDERS > 1 or the
+	record lists 2+ live holders; the single-holder block keeps its pinned lines."""
+	text = SCRIPT.read_text()
+	start = text.index("_mt_merge_lease_tick()\n{")
+	body = text[start:text.index("\n}\n", start)]
+	for helper in ("_merge_lease_max_holders", "_merge_lease_write_holders", "_merge_lease_rows_without"):
+		assert f"declare -F {helper} >/dev/null 2>&1" in body, helper
+	assert '[ "${tick_p5_lib}" = 1 ] && tick_max_holders="$(_merge_lease_max_holders)"' in body
+	assert ('if [ "${tick_p5_lib}" = 1 ] && { [ "${tick_max_holders}" -gt 1 ] || [ "${MERGE_LEASE_HOLDER_COUNT:-0}" -gt 1 ]; }; then'
+		in body)
+	assert body.index("_mt_merge_lease_tick_multi ") < body.index('if [ "${MERGE_LEASE_STATE}" = "held" ]; then')
+	assert '_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=first_in_queue${tick_queue_len_field}"' in body
+	assert " holders=" not in body
+	multi_start = text.index("_mt_merge_lease_tick_multi()\n{")
+	multi = text[multi_start:text.index("\n}\n", multi_start)]
+	assert "outcome=skipped reason=holder_shares_paths blocker=${tm_blocker}" in multi
+	assert "outcome=granted reason=first_in_queue${tm_queue_len_field} holders=${tm_count}" in multi
+	assert multi.count("gh_retry _safe_gh_jq") == 1
+
+
+def _merge_lease_queue_first_from_train_rows(listing: list[dict], extra_env: dict[str, str] | None = None) -> str:
+	"""Run the _mt_list_open_prs --jq program over a REST listing, then the
+	staged library's _merge_lease_queue_first over the slurped rows."""
+	text = SCRIPT.read_text()
+	start = text.index("_mt_list_open_prs() {")
+	body = text[start:text.index("\n}\n", start)]
+	program = re.search(r"--jq '([^']*)'", body).group(1)
+	assert "head: .head.ref" in program
+	assert "head_repo: (.head.repo.full_name" in program
+	res = subprocess.run(["jq", "-r", program], input=json.dumps(listing), capture_output=True, text=True, check=True)
+	rows = "[" + ",".join(res.stdout.splitlines()) + "]"
+	env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "GITHUB_REPOSITORY": "o/r", "ROWS": rows, **(extra_env or {})}
+	lib = REPO_ROOT / "scripts" / "pr_checks_lib.sh"
+	out = subprocess.run(["bash", "-c", f'source {str(lib)!r}; _merge_lease_queue_first "${{ROWS}}" ""'],
+		env=env, capture_output=True, text=True, check=True)
+	return out.stdout
+
+
+def test_merge_lease_queue_ranks_forward_merge_rows_from_the_train_listing():
+	"""Merge-lease Phase 3 (Refs #9781): the tick's rows carry the head ref and
+	head repository, so a same-repository forward-merge waiter orders first."""
+	def pr(num: int, ref: str, repo: str = "o/r") -> dict:
+		return {"number": num, "head": {"ref": ref, "sha": f"{num:040d}", "repo": {"full_name": repo}},
+			"created_at": "2026-11-19T00:00:00Z", "base": {"ref": "main"}, "draft": False,
+			"labels": [{"name": "ai:merge-lease-wait"}], "title": ""}
+	listing = [pr(5, "ai/issue-5"), pr(12, "auto/forward-merge-stable-1-1")]
+	assert _merge_lease_queue_first_from_train_rows(listing) == "12"
+	# Unchanged ordering when no forward-merge PR waits.
+	assert _merge_lease_queue_first_from_train_rows([pr(5, "ai/issue-5"), pr(12, "ai/issue-12")]) == "5"
+	# A fork head with a forward-merge name gets no priority.
+	assert _merge_lease_queue_first_from_train_rows([pr(5, "ai/issue-5"), pr(12, "auto/forward-merge-stable-1-1", "x/r")]) == "5"
+	# The kill switch restores number order.
+	assert _merge_lease_queue_first_from_train_rows(listing, {"MERGE_LEASE_PRIORITY_HEAD_PREFIXES": "none"}) == "5"

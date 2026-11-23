@@ -1,0 +1,1774 @@
+"""Tests for the pre-push affected-test gate (issue #7137, plan phase P1).
+
+Covers workflow-templates/.claude/hooks/prepush_affected_tests.py (selection
+rules 1-6, companion files, command resolution, the sharded time-boxed runner,
+baseline classification, assertion-diff, the interactive stamp and hook, the
+settings wiring, no network use, the measured cases from the plan) and the
+container wrapper scripts/prepush_test_gate_run.sh with a fake `docker`.
+"""
+
+from __future__ import annotations
+
+import ast
+import importlib.util
+import json
+import os
+import stat
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+MODULE_PATH = REPO_ROOT / "workflow-templates" / ".claude" / "hooks" / "prepush_affected_tests.py"
+WRAPPER = REPO_ROOT / "scripts" / "prepush_test_gate_run.sh"
+TEMPLATE_SETTINGS = REPO_ROOT / "workflow-templates" / ".claude" / "settings.json"
+
+_spec = importlib.util.spec_from_file_location("prepush_affected_tests", MODULE_PATH)
+assert _spec is not None and _spec.loader is not None
+gate = importlib.util.module_from_spec(_spec)
+sys.modules[_spec.name] = gate
+_spec.loader.exec_module(gate)
+
+
+def _git(root: Path, *args: str) -> str:
+	return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, check=True).stdout.strip()
+
+
+def _repo(tmp_path: Path, files: dict[str, str], name: str = "repo") -> Path:
+	root = tmp_path / name
+	root.mkdir()
+	_git(root, "init", "-q", "-b", "main")
+	for path, text in files.items():
+		target = root / path
+		target.parent.mkdir(parents=True, exist_ok=True)
+		target.write_text(text, encoding="utf-8")
+	_git(root, "add", "-A")
+	_git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "base")
+	return root
+
+
+def _commit(root: Path, files: dict[str, str]) -> str:
+	for path, text in files.items():
+		target = root / path
+		target.parent.mkdir(parents=True, exist_ok=True)
+		target.write_text(text, encoding="utf-8")
+	_git(root, "add", "-A")
+	_git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "change")
+	return _git(root, "rev-parse", "HEAD")
+
+
+def _select(root: Path, *lines: str, planned: bool = False, **kwargs) -> dict:
+	return gate.select_tests(root, gate.parse_changes(list(lines)), planned=planned, **kwargs)
+
+
+def _by_path(selection: dict) -> dict[str, dict]:
+	return {entry["path"]: entry for entry in selection["affected_tests"]}
+
+
+# --- selection rules -------------------------------------------------------
+
+def test_rule1_changed_test_files_are_selected(tmp_path):
+	root = _repo(tmp_path, {"tests/test_alpha.py": "def test_a():\n\tpass\n", "src/__tests__/beta.js": "", "web/x.spec.ts": ""})
+	selected = _by_path(_select(root, "tests/test_alpha.py", "src/__tests__/beta.js", "web/x.spec.ts"))
+	for path in ("tests/test_alpha.py", "src/__tests__/beta.js", "web/x.spec.ts"):
+		assert "changed_test" in selected[path]["reasons"]
+
+
+def test_rule2_naming_convention_maps_scripts_workflows_and_generic_files(tmp_path):
+	root = _repo(tmp_path, {
+		"scripts/foo-bar.sh": "", "tests/test_foo_bar.py": "",
+		".github/workflows/my-flow.yml": "", "tests/test_my_flow.sh": "",
+		"src/widget.js": "", "src/widget.test.js": "", "src/widget_test.py": "",
+	})
+	selected = _by_path(_select(root, "scripts/foo-bar.sh", ".github/workflows/my-flow.yml", "src/widget.js"))
+	assert "naming" in selected["tests/test_foo_bar.py"]["reasons"]
+	assert "naming" in selected["tests/test_my_flow.sh"]["reasons"]
+	assert "naming" in selected["src/widget.test.js"]["reasons"]
+	assert "naming" in selected["src/widget_test.py"]["reasons"]
+
+
+def test_rule3_path_basename_and_stem_references(tmp_path):
+	root = _repo(tmp_path, {
+		"scripts/deploy_tool.sh": "",
+		"tests/test_path.py": "X = 'scripts/deploy_tool.sh'\n",
+		"tests/test_base.py": "X = 'run deploy_tool.sh now'\n",
+		"tests/test_stem.py": "deploy_tool(1)\n",
+		"tests/test_partial.py": "my_deploy_tool_x = 1\n",
+		"tests/test_none.py": "nothing here\n",
+	})
+	selected = _by_path(_select(root, "scripts/deploy_tool.sh"))
+	assert selected["tests/test_path.py"]["reasons"] == ["path_text"]
+	assert selected["tests/test_base.py"]["reasons"] == ["basename_text"]
+	assert selected["tests/test_stem.py"]["reasons"] == ["stem_text"]
+	assert "tests/test_partial.py" not in selected
+	assert "tests/test_none.py" not in selected
+
+
+def test_rule3_short_and_stop_list_stems_are_not_matched(tmp_path):
+	root = _repo(tmp_path, {
+		"lib/abc.py": "", "lib/utils.py": "", "lib/config.yml": "",
+		"tests/test_words.py": "abc utils config\n",
+	})
+	assert "tests/test_words.py" not in _by_path(_select(root, "lib/abc.py", "lib/utils.py", "lib/config.yml"))
+
+
+def test_rule3_helper_module_indirection(tmp_path):
+	root = _repo(tmp_path, {
+		".github/workflows/big.yml": "",
+		"tests/workflow_text.py": "PATH = '.github/workflows/big.yml'\n",
+		"tests/test_uses_helper.py": "from workflow_text import PATH\n",
+		"tests/test_imports_module.py": "import workflow_text\n",
+		"tests/test_unrelated.py": "import os\n",
+	})
+	selected = _by_path(_select(root, ".github/workflows/big.yml"))
+	assert "helper:workflow_text" in selected["tests/test_uses_helper.py"]["reasons"]
+	assert "helper:workflow_text" in selected["tests/test_imports_module.py"]["reasons"]
+	assert "tests/test_unrelated.py" not in selected
+
+
+def test_rule3_changed_helper_selects_its_importers(tmp_path):
+	root = _repo(tmp_path, {"tests/agents_text.py": "X = 1\n", "tests/test_importer.py": "from agents_text import X\n"})
+	assert "helper:agents_text" in _by_path(_select(root, "tests/agents_text.py"))["tests/test_importer.py"]["reasons"]
+
+
+GUARDS = {
+	gate.WIRING_GUARD: "", gate.INVENTORY_GUARD: "", gate.LIVE_PARITY_GUARD: "", gate.SIZE_GUARD: "",
+	"scripts/assemble_agents.py": "", "Makefile": "generate-check:\n\ttrue\n",
+	**{guard: "" for guard in gate.CI_GUARD_TESTS},
+}
+
+
+def test_rule4_registry_guards_trigger_on_their_changes(tmp_path):
+	root = _repo(tmp_path, {**GUARDS, ".github/workflows/x.yml": "", "scripts/old.sh": ""})
+	sel = _select(root, "A\ttests/test_new.py", "A\tscripts/new.sh", "M\t.github/workflows/x.yml", "M\tworkflow-templates/.claude/settings.json", "M\tagents.md")
+	selected = _by_path(sel)
+	assert "registry:ci_test_wiring" in selected[gate.WIRING_GUARD]["reasons"]
+	assert "registry:inventory_parity" in selected[gate.INVENTORY_GUARD]["reasons"]
+	assert "registry:claude_live_parity" in selected[gate.LIVE_PARITY_GUARD]["reasons"]
+	assert "registry:workflow_file_size" in selected[gate.SIZE_GUARD]["reasons"]
+	checks = {c["check"]: c["argv"] for c in sel["registry_checks"]}
+	assert checks["generate-check"] == ["make", "generate-check"]
+	assert checks["assemble_agents"] == ["python3", "scripts/assemble_agents.py", "check", "--repo-root", "."]
+
+
+def test_rule4_modified_script_does_not_trigger_structural_guards(tmp_path):
+	root = _repo(tmp_path, {**GUARDS, "scripts/old.sh": ""})
+	sel = _select(root, "M\tscripts/old.sh")
+	assert gate.INVENTORY_GUARD not in _by_path(sel)
+	assert gate.WIRING_GUARD not in _by_path(sel)
+	assert sel["registry_checks"] == []
+
+
+def test_rule4_guards_absent_from_the_repo_are_not_selected(tmp_path):
+	root = _repo(tmp_path, {"README.md": ""})
+	sel = _select(root, "A\ttests/test_new.py", "A\tscripts/new.sh", "M\t.github/workflows/ci.yml", "M\tagents.md")
+	assert all(not reason.startswith("registry:") and reason != "guard_inverse" for e in sel["affected_tests"] for reason in e["reasons"])
+	assert sel["registry_checks"] == []
+
+
+def test_rule4_ci_workflow_selects_the_guard_inverse(tmp_path):
+	root = _repo(tmp_path, {**GUARDS, ".github/workflows/ci.yml": ""})
+	selected = _by_path(_select(root, ".github/workflows/ci.yml"))
+	for guard in gate.CI_GUARD_TESTS:
+		assert "guard_inverse" in selected[guard]["reasons"]
+
+
+def test_ci_guard_inverse_matches_the_heal_scope_mapping():
+	tree = ast.parse((REPO_ROOT / "scripts" / "workflow_failure_heal.py").read_text(encoding="utf-8"))
+	mapping = None
+	for node in tree.body:
+		if isinstance(node, ast.AnnAssign) and getattr(node.target, "id", "") == "HEAL_SCOPE_GUARD_TEST_SUBJECTS":
+			mapping = ast.literal_eval(node.value)
+	assert mapping is not None
+	assert sorted(test for test, subjects in mapping.items() if gate.CI_WORKFLOW in subjects) == sorted(gate.CI_GUARD_TESTS)
+
+
+def test_rule5_static_checks_and_missing_tools_are_unverified(tmp_path, monkeypatch):
+	root = _repo(tmp_path, {"lib/a.py": "x = 1\n", "lib/b.sh": "true\n"})
+	sel = _select(root, "lib/a.py", "lib/b.sh")
+	tools = {c["tool"]: c["argv"] for c in sel["static_checks"]}
+	assert tools["ruff"] == ["ruff", "check", "--select", "E,F", "--ignore", "E501", "lib/a.py"]
+	assert tools["shellcheck"] == ["shellcheck", "--severity=error", "lib/b.sh"]
+	monkeypatch.setattr(gate.shutil, "which", lambda name: None)
+	units, unverified = gate.plan_units(root, sel)
+	assert units == []
+	assert {"item": "ruff", "reason": "tool_unavailable"} in unverified
+	assert {"item": "shellcheck", "reason": "tool_unavailable"} in unverified
+
+
+def _big_test_file(count: int, special: str = "") -> str:
+	body = [f"def test_case_{i}():\n\tassert {i} == {i}\n" for i in range(count)]
+	if special:
+		body.append(f"def test_special():\n\tassert {special}() is None\n")
+	return "\n".join(body)
+
+
+def test_rule6_large_files_keep_functions_that_mention_a_change(tmp_path):
+	root = _repo(tmp_path, {"lib/engine.py": "", "tests/test_engine.py": "import engine\n" + _big_test_file(60, "compute_total")})
+	sel = _select(root, "lib/engine.py", function_names={"compute_total"})
+	assert _by_path(sel)["tests/test_engine.py"]["functions"] == ["test_special"]
+
+
+def test_rule6_falls_back_to_the_whole_file_when_nothing_matches(tmp_path):
+	root = _repo(tmp_path, {"lib/engine.py": "", "tests/test_engine.py": "import engine\n" + _big_test_file(60)})
+	assert "functions" not in _by_path(_select(root, "lib/engine.py", function_names={"nothing_here"}))["tests/test_engine.py"]
+
+
+def test_changed_function_names_from_diff_hunks():
+	diff = "@@ -1,2 +1,2 @@ def compute_total(x):\n-def old_helper():\n+def new_helper():\n+my_shell_fn() {\n"
+	assert gate.changed_function_names(diff) == {"compute_total", "old_helper", "new_helper", "my_shell_fn"}
+
+
+def test_planned_mode_adds_companion_files_only_when_guards_exist(tmp_path):
+	root = _repo(tmp_path, {gate.INVENTORY_GUARD: "", gate.WIRING_GUARD: ""})
+	sel = _select(root, "scripts/new_tool.sh", "tests/test_new_tool.py", planned=True)
+	assert sel["companion_files"] == ["docs/INVENTORY.md", ".github/workflows/ci.yml"]
+	bare = _repo(tmp_path, {"README.md": ""}, name="bare")
+	assert _select(bare, "scripts/new_tool.sh", "tests/test_new_tool.py", planned=True)["companion_files"] == []
+
+
+def test_parse_changes_handles_name_status_and_renames():
+	assert gate.parse_changes(["M\ta.py", "R087\told.sh\tnew.sh", "A\tb.py", "plain.txt", ""]) == {
+		"a.py": "M", "old.sh": "D", "new.sh": "R", "b.py": "A", "plain.txt": "",
+	}
+
+
+# --- measured cases (plan P1 step 9), against the real tree ----------------
+
+MEASURED_CASES = [
+	(".github/workflows/review_autofix.yml", "tests/test_unblock_scan.py", {"helper:review_autofix_step_scripts"}),
+	(".github/workflows/clarify.yml", "tests/test_workflow_failure_heal.py", {"path_text", "basename_text"}),
+	("scripts/gh_api_retry.py", "tests/test_gh_api_retry.py", {"naming"}),
+	("workflow-templates/.claude/hooks/gh_api_write_guard.py", "tests/test_claude_template_live_parity.py", {"registry:claude_live_parity"}),
+	(".github/workflows/ci.yml", "tests/test_ci_wires_every_test_file.py", {"registry:ci_test_wiring"}),
+	("A\tscripts/claude_pool_health_alert.sh", "tests/inventory_parity.py", {"registry:inventory_parity"}),
+	(".github/workflows/ci.yml", "tests/test_ci_job_split_contract.py", {"guard_inverse"}),
+]
+
+
+@pytest.mark.parametrize(("changed", "expected", "reasons"), MEASURED_CASES)
+def test_measured_cases_select_the_failing_test_file(changed, expected, reasons):
+	selected = _by_path(gate.select_tests(REPO_ROOT, gate.parse_changes([changed])))
+	assert expected in selected, f"{expected} not selected for {changed}"
+	assert reasons & set(selected[expected]["reasons"]), selected[expected]["reasons"]
+
+
+# --- command resolution -----------------------------------------------------
+
+def _units(root: Path, *paths: str) -> list[dict]:
+	units, _ = gate.plan_units(root, {"affected_tests": [{"path": p, "reasons": []} for p in paths]})
+	return units
+
+
+def test_resolution_1_validate_override_with_and_without_files(tmp_path):
+	root = _repo(tmp_path, {".ai/validate.yml": "family: x\nprepush_test_command: \"pytest -x {files}\"\n", "tests/test_a.py": "", "tests/test b.py": ""})
+	units = _units(root, "tests/test_a.py", "tests/test b.py")
+	assert units == [{"id": "prepush_test_command", "file": None, "argv": ["bash", "-c", "pytest -x tests/test_a.py 'tests/test b.py'"], "kind": "test"}]
+	(root / ".ai" / "validate.yml").write_text("prepush_test_command: make check\n", encoding="utf-8")
+	assert [u["argv"] for u in _units(root, "tests/test_a.py")] == [["bash", "-c", "make check"]]
+
+
+def test_resolution_1_line_parser_fallback(tmp_path, monkeypatch):
+	root = _repo(tmp_path, {".ai/validate.yml": "prepush_test_command: 'run {files}'\n"})
+	monkeypatch.setitem(sys.modules, "yaml", None)
+	assert gate._validate_override(root) == "run {files}"
+
+
+def test_resolution_2_workflow_script_and_pytest_style(tmp_path):
+	root = _repo(tmp_path, {
+		".github/workflows/ci.yml": "run: |\n  PYTHONDONTWRITEBYTECODE=1 python3 tests/test_script.py\n  python3 -m pytest -q \\\n    tests/test_py.py\n",
+		"tests/test_script.py": "", "tests/test_py.py": "",
+	})
+	units, _ = gate.plan_units(root, {"affected_tests": [
+		{"path": "tests/test_script.py", "reasons": [], "functions": ["test_one", "Klass::test_two"]},
+		{"path": "tests/test_py.py", "reasons": []},
+	]})
+	assert units[0]["argv"] == ["python3", "tests/test_script.py", "test_one", "test_two"]
+	assert units[1]["argv"] == ["python3", "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests/test_py.py"]
+
+
+def test_resolution_3_pytest_detection(tmp_path):
+	plain = _repo(tmp_path, {"tests/test_a.py": ""}, name="plain")
+	assert _units(plain, "tests/test_a.py")[0]["argv"] == ["python3", "tests/test_a.py"]
+	configured = _repo(tmp_path, {"tests/test_a.py": "", "pyproject.toml": "[tool.pytest.ini_options]\n"}, name="configured")
+	units, _ = gate.plan_units(configured, {"affected_tests": [{"path": "tests/test_a.py", "reasons": [], "functions": ["test_x"]}]})
+	assert units[0]["argv"] == ["python3", "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests/test_a.py::test_x"]
+
+
+def test_resolution_4_shell_tests(tmp_path):
+	root = _repo(tmp_path, {"tests/test_a.sh": ""})
+	assert _units(root, "tests/test_a.sh")[0]["argv"] == ["bash", "tests/test_a.sh"]
+
+
+def test_resolution_5_node_runners(tmp_path):
+	jest = _repo(tmp_path, {"package.json": json.dumps({"scripts": {"test": "jest --ci"}}), "a.test.js": ""}, name="jest")
+	assert _units(jest, "a.test.js")[0]["argv"] == ["npx", "--no-install", "jest", "a.test.js"]
+	npm = _repo(tmp_path, {"package.json": json.dumps({"scripts": {"test": "node run.js"}}), "a.test.js": "", "b.test.js": ""}, name="npm")
+	assert [u["argv"] for u in _units(npm, "a.test.js", "b.test.js")] == [["npm", "test"]]
+
+
+def test_resolution_6_and_7_make_and_unresolved(tmp_path):
+	make = _repo(tmp_path, {"Makefile": "test:\n\ttrue\n", "spec/a_test.rb": ""}, name="make")
+	assert [u["argv"] for u in _units(make, "spec/a_test.rb")] == [["make", "test"]]
+	bare = _repo(tmp_path, {"spec/a_test.rb": ""}, name="bare")
+	units, unverified = gate.plan_units(bare, {"affected_tests": [{"path": "spec/a_test.rb", "reasons": []}]})
+	assert units == [] and unverified == [{"item": "spec/a_test.rb", "reason": "no_test_command"}]
+
+
+# --- running, baseline, assertion-diff ---------------------------------------
+
+def test_run_units_shards_in_parallel(tmp_path):
+	units = [{"id": f"u{i}", "file": None, "argv": [sys.executable, "-c", "import time; time.sleep(1.5)"], "kind": "test"} for i in range(2)]
+	start = time.monotonic()
+	results = gate.run_units(units, tmp_path, time.monotonic() + 60, 2)
+	assert [r["status"] for r in results] == ["pass", "pass"]
+	assert time.monotonic() - start < 2.8
+
+
+def test_run_units_budget_exhaustion_is_a_timeout(tmp_path):
+	units = [
+		{"id": "slow", "file": None, "argv": [sys.executable, "-c", "import time; time.sleep(30)"], "kind": "test"},
+		{"id": "late", "file": None, "argv": [sys.executable, "-c", "pass"], "kind": "test"},
+	]
+	start = time.monotonic()
+	results = gate.run_units(units, tmp_path, time.monotonic() + 1, 1)
+	assert [r["status"] for r in results] == ["timeout", "timeout"]
+	assert time.monotonic() - start < 10
+
+
+def test_run_gate_reports_timeouts_as_unverified(tmp_path, monkeypatch):
+	root = _repo(tmp_path, {"tests/test_a.py": ""})
+	monkeypatch.setattr(gate, "run_units", lambda units, cwd, deadline, shards: [{**u, "status": "timeout", "rc": None, "tail": ""} for u in units])
+	result = gate.run_gate(root, {"changed_files": [], "affected_tests": [{"path": "tests/test_a.py", "reasons": []}]}, timeout_minutes=1, shards=1)
+	assert result["status"] == "unverified"
+	assert result["unverified"] == [{"item": "tests/test_a.py", "reason": "timeout"}]
+
+
+FAILING = "import sys\nprint('FAIL: test_broken (mod.Case)')\nsys.exit(1)\n"
+
+
+def test_run_gate_classifies_inherited_and_pr_caused_failures(tmp_path):
+	root = _repo(tmp_path, {"tests/test_ok.py": "", "tests/test_old.py": FAILING, "tests/test_new.py": FAILING})
+	baseline = _repo(tmp_path, {"tests/test_ok.py": "", "tests/test_old.py": FAILING}, name="baseline")
+	selection = {"changed_files": [], "affected_tests": [{"path": p, "reasons": []} for p in ("tests/test_ok.py", "tests/test_old.py", "tests/test_new.py")]}
+	result = gate.run_gate(root, selection, baseline, timeout_minutes=2, shards=2)
+	assert result["schema"] == "prepush_test_gate.v1"
+	assert result["status"] == "fail"
+	assert [f["test"] for f in result["failures"]] == ["tests/test_new.py"]
+	assert result["failures"][0]["names"] == ["test_broken"]
+	assert [i["test"] for i in result["inherited"]] == ["tests/test_old.py"]
+	assert sorted(result["ran"]) == ["tests/test_new.py", "tests/test_ok.py", "tests/test_old.py"]
+
+
+@pytest.mark.parametrize("baseline_status", ["timeout", "error"])
+def test_run_gate_reports_unfinished_baseline_rerun_as_unverified(tmp_path, monkeypatch, baseline_status):
+	# Release v1.40.3: a slow test failed on the PR tree, its baseline re-run hit
+	# the deadline, and the gate blamed the change (repair turn + second run).
+	root = _repo(tmp_path, {"tests/test_slow.py": FAILING, "tests/test_new.py": FAILING})
+	baseline = _repo(tmp_path, {"tests/test_slow.py": FAILING}, name="baseline")
+
+	def fake_run_units(units, cwd, deadline, shards):
+		status = baseline_status if Path(cwd).resolve() == baseline.resolve() else "fail"
+		return [{**u, "status": status, "rc": None if status != "fail" else 1, "tail": "FAIL: test_x (m.C)"} for u in units]
+
+	monkeypatch.setattr(gate, "run_units", fake_run_units)
+	selection = {"changed_files": [], "affected_tests": [{"path": p, "reasons": []} for p in ("tests/test_slow.py", "tests/test_new.py")]}
+	result = gate.run_gate(root, selection, baseline, timeout_minutes=1, shards=1)
+	# test_new.py has no baseline copy, so it is still caused by the change.
+	assert [f["test"] for f in result["failures"]] == ["tests/test_new.py"]
+	assert result["inherited"] == []
+	assert result["unverified"] == [{"item": "tests/test_slow.py", "reason": f"baseline_{baseline_status}", "names": ["test_x"]}]
+	assert result["status"] == "fail"
+	assert f"`tests/test_slow.py`: baseline_{baseline_status} (failed on this change: `test_x`)" in gate.write_summary(result)
+
+
+def test_run_gate_unfinished_baseline_only_is_unverified_not_fail(tmp_path, monkeypatch):
+	root = _repo(tmp_path, {"tests/test_slow.py": FAILING})
+	baseline = _repo(tmp_path, {"tests/test_slow.py": FAILING}, name="baseline")
+
+	def fake_run_units(units, cwd, deadline, shards):
+		status = "timeout" if Path(cwd).resolve() == baseline.resolve() else "fail"
+		return [{**u, "status": status, "rc": None, "tail": ""} for u in units]
+
+	monkeypatch.setattr(gate, "run_units", fake_run_units)
+	result = gate.run_gate(root, {"changed_files": [], "affected_tests": [{"path": "tests/test_slow.py", "reasons": []}]}, baseline, timeout_minutes=1, shards=1)
+	assert result["status"] == "unverified"
+	assert result["failures"] == [] and result["inherited"] == []
+	assert result["unverified"] == [{"item": "tests/test_slow.py", "reason": "baseline_timeout", "names": []}]
+	assert result["ran"] == ["tests/test_slow.py"]
+
+
+def test_run_gate_inherited_only_passes(tmp_path):
+	root = _repo(tmp_path, {"tests/test_old.py": FAILING})
+	baseline = _repo(tmp_path, {"tests/test_old.py": FAILING}, name="baseline")
+	result = gate.run_gate(root, {"changed_files": [], "affected_tests": [{"path": "tests/test_old.py", "reasons": []}]}, baseline, timeout_minutes=2, shards=1)
+	assert result["status"] == "pass" and result["failures"] == [] and len(result["inherited"]) == 1
+
+
+LINT_OLD = "import os\nimport sys\n"
+
+
+@pytest.mark.skipif(gate.shutil.which("ruff") is None, reason="ruff not installed")
+def test_run_gate_counts_only_lint_findings_the_change_added(tmp_path):
+	# The file already has an unused import on the merge-base; a change that
+	# adds an unrelated line must not fail for it.
+	root = _repo(tmp_path, {"lib/a.py": LINT_OLD + "X = 1\n"})
+	baseline = _repo(tmp_path, {"lib/a.py": LINT_OLD}, name="baseline")
+	selection = {"changed_files": ["lib/a.py"], "affected_tests": [], "static_checks": [
+		{"tool": "ruff", "files": ["lib/a.py"], "argv": ["ruff", *gate.RUFF_CHECK_ARGS, "lib/a.py"]}]}
+	result = gate.run_gate(root, selection, baseline, timeout_minutes=2, shards=1)
+	assert result["status"] == "pass" and result["failures"] == []
+	assert [i["test"] for i in result["inherited"]] == ["ruff"]
+	# A new unused import is a finding the change added.
+	(root / "lib" / "a.py").write_text(LINT_OLD + "import json\nX = 1\n", encoding="utf-8")
+	result = gate.run_gate(root, selection, baseline, timeout_minutes=2, shards=1)
+	assert result["status"] == "fail" and [f["test"] for f in result["failures"]] == ["ruff"]
+	tail = result["failures"][0]["tail"]
+	assert tail.startswith("1 finding(s) added by this change:") and "lib/a.py: F401" in tail and "json" in tail
+	assert "`os`" not in tail and "`sys`" not in tail
+
+
+@pytest.mark.skipif(gate.shutil.which("ruff") is None, reason="ruff not installed")
+def test_run_gate_counts_every_lint_finding_in_a_new_file(tmp_path):
+	root = _repo(tmp_path, {"lib/new.py": LINT_OLD})
+	baseline = _repo(tmp_path, {"README": ""}, name="baseline")
+	selection = {"changed_files": ["lib/new.py"], "affected_tests": [], "static_checks": [
+		{"tool": "ruff", "files": ["lib/new.py"], "argv": ["ruff", *gate.RUFF_CHECK_ARGS, "lib/new.py"]}]}
+	result = gate.run_gate(root, selection, baseline, timeout_minutes=2, shards=1)
+	assert result["status"] == "fail" and result["failures"][0]["tail"].startswith("2 finding(s) added")
+
+
+@pytest.mark.skipif(gate.shutil.which("ruff") is None, reason="ruff not installed")
+def test_run_gate_matches_moved_findings_whose_message_cites_a_line(tmp_path):
+	# F811 says "from line N"; lines added above it must not make it new.
+	old = "def f():\n\tpass\n\n\ndef f():\n\tpass\n"
+	root = _repo(tmp_path, {"lib/a.py": "X = 1\nY = 2\n" + old})
+	baseline = _repo(tmp_path, {"lib/a.py": old}, name="baseline")
+	selection = {"changed_files": ["lib/a.py"], "affected_tests": [], "static_checks": [
+		{"tool": "ruff", "files": ["lib/a.py"], "argv": ["ruff", *gate.RUFF_CHECK_ARGS, "lib/a.py"]}]}
+	result = gate.run_gate(root, selection, baseline, timeout_minutes=2, shards=1)
+	assert result["status"] == "pass" and [i["test"] for i in result["inherited"]] == ["ruff"]
+
+
+def test_static_failure_stays_caused_by_the_change_when_findings_cannot_be_read(tmp_path, monkeypatch):
+	baseline = tmp_path / "baseline"
+	baseline.mkdir()
+	monkeypatch.setattr(gate, "_static_findings", lambda tool, files, cwd, deadline: None)
+	unit = {"id": "ruff", "file": None, "kind": "static", "files": ["a.py"], "status": "fail", "tail": "raw"}
+	pr_caused, inherited = gate.classify_baseline([unit], baseline, time.monotonic() + 30, 1, tmp_path)
+	assert pr_caused == [unit] and inherited == [] and unit["tail"] == "raw"
+
+
+def test_static_failure_without_a_repo_keeps_the_old_classification(tmp_path):
+	baseline = tmp_path / "baseline"
+	baseline.mkdir()
+	unit = {"id": "ruff", "file": None, "kind": "static", "files": ["a.py"], "status": "fail", "tail": "raw"}
+	assert gate.classify_baseline([unit], baseline, time.monotonic() + 30, 1) == ([unit], [])
+
+
+@pytest.mark.skipif(gate.shutil.which("shellcheck") is None, reason="shellcheck not installed")
+def test_run_gate_compares_shellcheck_findings_against_the_baseline(tmp_path):
+	old = "#!/bin/bash\nif [ 1 ]\nthen echo x\n"
+	root = _repo(tmp_path, {"lib/b.sh": old})
+	baseline = _repo(tmp_path, {"lib/b.sh": old}, name="baseline")
+	selection = {"changed_files": ["lib/b.sh"], "affected_tests": [], "static_checks": [
+		{"tool": "shellcheck", "files": ["lib/b.sh"], "argv": ["shellcheck", *gate.SHELLCHECK_ARGS, "lib/b.sh"]}]}
+	result = gate.run_gate(root, selection, baseline, timeout_minutes=2, shards=1)
+	assert result["status"] == "pass" and [i["test"] for i in result["inherited"]] == ["shellcheck"]
+
+
+def test_failing_names_parses_the_heal_shapes():
+	tail = "\n".join([
+		'TEST_CASE_EVENT: {"status":"fail","test_name":"test_event"}',
+		'TEST_CASE_EVENT: {"status":"pass","test_name":"test_fine"}',
+		"  FAIL  test_runner:",
+		"2026-10-09T10:00:01Z FAILED tests/x.py::TestThing::test_method - AssertionError",
+		"ERROR: test_unit (mod.Case)",
+	])
+	assert gate.failing_names(tail) == ["test_event", "test_runner", "tests/x.py::TestThing::test_method", "test_unit"]
+
+
+def test_assertion_diff_lists_removed_assertions_and_added_skips(tmp_path):
+	baseline = _repo(tmp_path, {"tests/test_a.py": "def test_x():\n\tassert f() == 1\n\tok = 2\n"}, name="baseline")
+	root = _repo(tmp_path, {"tests/test_a.py": "@pytest.mark.skip\ndef test_x():\n\tassert f() == 2\n\tok = 3\n", "tests/test_new.py": "assert 1\n"})
+	findings = gate.assertion_diff(root, baseline, ["tests/test_a.py", "tests/test_new.py", "lib/x.py"])
+	assert {"file": "tests/test_a.py", "kind": "removed_or_modified", "line": "assert f() == 1"} in findings
+	assert {"file": "tests/test_a.py", "kind": "skip_added", "line": "@pytest.mark.skip"} in findings
+	assert all(f["file"] == "tests/test_a.py" for f in findings)
+
+
+def test_summary_neutralises_workflow_commands_and_lists_names_only():
+	result = {"status": "fail", "ran": ["a"], "selected": 1, "unverified": [], "changed_assertions": [], "inherited": [],
+		"failures": [{"test": "::error::forged", "names": ["test_x"], "tail": "SECRET TAIL"}]}
+	summary = gate.write_summary(result)
+	assert summary.startswith("## Pre-push test gate\n")
+	assert "SECRET TAIL" not in summary
+	assert not any(line.startswith("::") for line in summary.splitlines())
+
+
+# --- stamp ------------------------------------------------------------------
+
+def _stamp_repo(tmp_path: Path) -> Path:
+	root = _repo(tmp_path, {"lib/calc.py": "X = 1\n", "tests/test_calc.py": "# covers lib/calc.py\n"})
+	_git(root, "update-ref", "refs/remotes/origin/main", "HEAD")
+	_commit(root, {"lib/calc.py": "X = 2\n"})
+	return root
+
+
+def test_stamp_writes_a_head_keyed_stamp_under_tmpdir(tmp_path, monkeypatch):
+	root = _stamp_repo(tmp_path)
+	tmp = tmp_path / "tmp"
+	tmp.mkdir()
+	monkeypatch.setenv("TMPDIR", str(tmp))
+	assert gate.cmd_stamp(root) == 0
+	head = _git(root, "rev-parse", "HEAD")
+	path = gate.stamp_path(root.resolve(), head)
+	assert path.is_file() and path.name == f"{head}.json"
+	assert gate._inside(path, tmp) and not gate._inside(path, root)
+	assert stat.S_IMODE(path.stat().st_mode) == 0o600
+	stamp = json.loads(path.read_text(encoding="utf-8"))
+	assert stamp["head"] == head and stamp["status"] in gate.PASSING_STAMP_STATUSES
+	assert "tests/test_calc.py" in stamp["ran"]
+
+
+def test_stamp_refuses_uncommitted_tracked_changes(tmp_path, monkeypatch):
+	root = _stamp_repo(tmp_path)
+	monkeypatch.setenv("TMPDIR", str(tmp_path))
+	(root / "lib" / "calc.py").write_text("X = 3\n", encoding="utf-8")
+	assert gate.cmd_stamp(root) == 2
+
+
+def test_stamp_without_a_merge_base_is_unverified(tmp_path, monkeypatch):
+	root = _repo(tmp_path, {"a.txt": "1\n"})
+	monkeypatch.setenv("TMPDIR", str(tmp_path))
+	assert gate.cmd_stamp(root) == 0
+	stamp = json.loads(gate.stamp_path(root.resolve(), _git(root, "rev-parse", "HEAD")).read_text(encoding="utf-8"))
+	assert stamp["status"] == "unverified" and stamp["unverified"][0]["reason"] == "no_merge_base"
+
+
+def test_export_tree_writes_the_merge_base_files(tmp_path):
+	root = _repo(tmp_path, {"lib/a.py": "OLD\n", "tests/test_a.py": "x\n"})
+	base = _git(root, "rev-parse", "HEAD")
+	_commit(root, {"lib/a.py": "NEW\n", "lib/b.py": ""})
+	dest = tmp_path / "baseline"
+	dest.mkdir()
+	gate.export_tree(root, base, dest)
+	assert (dest / "lib" / "a.py").read_text(encoding="utf-8") == "OLD\n"
+	assert (dest / "tests" / "test_a.py").is_file() and not (dest / "lib" / "b.py").exists()
+	assert not (dest / ".git").exists()
+
+
+def test_write_stamp_refuses_paths_inside_the_repository(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	with pytest.raises(ValueError):
+		gate.write_stamp(root / "stamp.json", {}, root)
+	with pytest.raises(ValueError):
+		gate.write_stamp(root / ".git" / "stamp.json", {}, root)
+
+
+# --- hook -------------------------------------------------------------------
+
+def _hook(payload, env_extra: dict[str, str], module: Path = MODULE_PATH) -> dict:
+	env = {**os.environ, **env_extra}
+	proc = subprocess.run([sys.executable, str(module), "hook"], input=payload if isinstance(payload, str) else json.dumps(payload),
+		capture_output=True, text=True, env=env, timeout=60)
+	assert proc.returncode == 0, proc.stderr
+	return json.loads(proc.stdout) if proc.stdout.strip() else {}
+
+
+def _push(root: Path, command: str = "git push origin HEAD") -> dict:
+	return {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": command}, "cwd": str(root)}
+
+
+def _write(root: Path, tmp: Path, status: str, failures=()) -> None:
+	head = _git(root, "rev-parse", "HEAD")
+	path = tmp / gate.STAMP_DIR_NAME / gate.stamp_path(root.resolve(), head).parent.name / f"{head}.json"
+	path.parent.mkdir(parents=True, exist_ok=True)
+	path.write_text(json.dumps({"head": head, "status": status, "failures": list(failures)}), encoding="utf-8")
+
+
+def test_hook_asks_when_no_stamp_exists(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	out = _hook(_push(root), {"TMPDIR": str(tmp_path)})
+	decision = out["hookSpecificOutput"]
+	assert decision["permissionDecision"] == "ask"
+	assert gate.STAMP_COMMAND in decision["permissionDecisionReason"]
+	assert "CLAUDE_PREPUSH_TEST_GATE=off" in decision["permissionDecisionReason"]
+
+
+def test_hook_allows_with_a_passing_stamp_and_reports_failures_without_asking(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	_write(root, tmp_path, "pass")
+	assert _hook(_push(root), {"TMPDIR": str(tmp_path)}) == {}
+	_write(root, tmp_path, "fail", [{"test": "tests/test_broken.py"}])
+	out = _hook(_push(root), {"TMPDIR": str(tmp_path)})
+	specific = out["hookSpecificOutput"]
+	assert "permissionDecision" not in specific
+	assert specific["hookEventName"] == "PreToolUse"
+	assert "tests/test_broken.py" in specific["additionalContext"]
+	assert "tests/test_broken.py" in out["systemMessage"]
+
+
+def test_hook_ignores_non_push_commands_and_other_tools(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	assert _hook(_push(root, "git status && echo push"), {"TMPDIR": str(tmp_path)}) == {}
+	assert _hook({**_push(root), "tool_name": "Edit"}, {"TMPDIR": str(tmp_path)}) == {}
+
+
+def test_hook_off_switch_allows(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	assert _hook(_push(root), {"TMPDIR": str(tmp_path), "CLAUDE_PREPUSH_TEST_GATE": "off"}) == {}
+
+
+@pytest.mark.parametrize("payload", ["{not json", "[1, 2]"])
+def test_hook_malformed_payload_allows_with_a_warning(payload):
+	out = _hook(payload, {})
+	assert "systemMessage" in out and "hookSpecificOutput" not in out
+
+
+def test_hook_falls_back_when_the_guard_module_is_missing(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	lone = tmp_path / "lone"
+	lone.mkdir()
+	(lone / MODULE_PATH.name).write_bytes(MODULE_PATH.read_bytes())
+	out = _hook(_push(root), {"TMPDIR": str(tmp_path)}, module=lone / MODULE_PATH.name)
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "conservative push check" in out["systemMessage"]
+
+
+def test_hook_internal_error_fails_open(monkeypatch, capsys):
+	monkeypatch.setattr(gate, "hook_decision", lambda payload: (_ for _ in ()).throw(RuntimeError("boom")))
+	assert gate.cmd_hook(json.dumps({"tool_name": "Bash"})) == 0
+	out = json.loads(capsys.readouterr().out)
+	assert "internal error" in out["systemMessage"] and "hookSpecificOutput" not in out
+
+
+# --- settings, network, CI wiring -------------------------------------------
+
+def test_template_settings_wire_the_hook_once_in_its_own_entry():
+	settings = json.loads(TEMPLATE_SETTINGS.read_text(encoding="utf-8"))
+	entries = [e for e in settings["hooks"]["PreToolUse"] if any("prepush_affected_tests.py" in h.get("command", "") for h in e["hooks"])]
+	assert len(entries) == 1
+	entry = entries[0]
+	assert entry["matcher"] == "Bash" and len(entry["hooks"]) == 1
+	assert entry["hooks"][0] == {"type": "command", "command": 'python3 "$CLAUDE_PROJECT_DIR"/.claude/hooks/prepush_affected_tests.py hook', "timeout": 30}
+
+
+def test_module_makes_no_network_or_github_calls(tmp_path, monkeypatch):
+	calls: list[list[str]] = []
+	real_run, real_popen = subprocess.run, subprocess.Popen
+
+	def record_run(argv, *args, **kwargs):
+		calls.append(list(argv))
+		return real_run(argv, *args, **kwargs)
+
+	def record_popen(argv, *args, **kwargs):
+		calls.append(list(argv))
+		return real_popen(argv, *args, **kwargs)
+
+	monkeypatch.setattr(gate.subprocess, "run", record_run)
+	monkeypatch.setattr(gate.subprocess, "Popen", record_popen)
+	monkeypatch.setenv("TMPDIR", str(tmp_path))
+	root = _stamp_repo(tmp_path)
+	gate.cmd_stamp(root)
+	gate.evaluate_hook(_push(root))
+	assert calls
+	assert not any(Path(c[0]).name in ("gh", "curl", "wget") for c in calls)
+	source = MODULE_PATH.read_text(encoding="utf-8")
+	assert "api.github.com" not in source and "urllib" not in source and "http.client" not in source
+
+
+def test_ci_runs_this_suite_and_sets_the_parity_base_only_from_the_pr_event():
+	ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+	assert "tests/test_prepush_affected_tests.py" in ci
+	# Final-CI dispatch runs (cut-ci-runner-time Phase 4) have no pull_request
+	# event, so the steps fall back to the base the fetch step exported.
+	pr_event_only = "CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}"
+	pr_event_or_final_ci = "CLAUDE_PARITY_PR_BASE_SHA: ${{ github.event.pull_request.base.sha || env.CI_FINAL_PR_BASE_SHA }}"
+	parity_assignments = [line.strip() for line in ci.splitlines() if line.strip().startswith("CLAUDE_PARITY_PR_BASE_SHA:")]
+	assert parity_assignments
+	assert set(parity_assignments) <= {pr_event_only, pr_event_or_final_ci}
+	assert ci.count(pr_event_or_final_ci) == 6
+	for gate_workflow in ("mark-stable.yml", "test-and-mark-stable.yml"):
+		assert "CLAUDE_PARITY_PR_BASE_SHA" not in (REPO_ROOT / ".github" / "workflows" / gate_workflow).read_text(encoding="utf-8")
+
+
+# --- container wrapper --------------------------------------------------------
+
+FAKE_DOCKER = r'''#!/usr/bin/env bash
+printf '%s\n' "$*" >> "__LOG__"
+if [ "$1" = run ]; then
+	results=""
+	for arg in "$@"; do
+		case "$arg" in
+			type=bind,src=*,dst=/results) results="${arg#type=bind,src=}"; results="${results%,dst=/results}" ;;
+		esac
+	done
+	printf '{"schema": "prepush_test_gate.v1", "status": "pass", "ran": ["x"]}\n' > "$results/result.json"
+	printf '## Pre-push test gate\n' > "$results/summary.md"
+	printf 'not copied\n' > "$results/evil.txt"
+fi
+exit 0
+'''
+
+
+def _wrapper_env(tmp_path: Path, with_docker: bool = True) -> tuple[dict[str, str], Path]:
+	log = tmp_path / "docker.log"
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	seen: set[str] = set()
+	for directory in os.environ.get("PATH", "").split(os.pathsep):
+		if not directory or not os.path.isdir(directory):
+			continue
+		for name in os.listdir(directory):
+			full = os.path.join(directory, name)
+			if name in seen or name == "docker" or not os.access(full, os.X_OK) or os.path.isdir(full):
+				continue
+			seen.add(name)
+			os.symlink(full, bin_dir / name)
+	if with_docker:
+		fake = bin_dir / "docker"
+		fake.write_text(FAKE_DOCKER.replace("__LOG__", str(log)), encoding="utf-8")
+		fake.chmod(0o755)
+	env = {key: value for key, value in os.environ.items() if not key.startswith(("GITHUB_", "GIT_"))}
+	env.update({"PATH": str(bin_dir), "RUNNER_TEMP": str(tmp_path), "TMPDIR": str(tmp_path)})
+	return env, log
+
+
+def _run_wrapper(tmp_path: Path, worktree: Path, module: Path, env: dict[str, str]) -> tuple[subprocess.CompletedProcess, Path]:
+	out = tmp_path / "out"
+	base = _git(worktree, "rev-parse", "HEAD~1")
+	proc = subprocess.run(["bash", str(WRAPPER), "--worktree", str(worktree), "--module", str(module), "--image", "gate-image:test",
+		"--base", base, "--out-dir", str(out), "--timeout-minutes", "2"], capture_output=True, text=True, env=env, timeout=120)
+	return proc, out
+
+
+def _worktree(tmp_path: Path) -> Path:
+	root = _repo(tmp_path, {"lib/a.py": "X = 1\n", "tests/test_a.py": "# lib/a.py\n"}, name="worktree")
+	_commit(root, {"lib/a.py": "X = 2\n"})
+	return root
+
+
+def test_wrapper_runs_an_isolated_container_and_copies_back_only_results(tmp_path):
+	worktree = _worktree(tmp_path)
+	env, log = _wrapper_env(tmp_path)
+	proc, out = _run_wrapper(tmp_path, worktree, MODULE_PATH, env)
+	assert proc.returncode == 0, proc.stderr
+	run_line = next(line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("run "))
+	for flag in ("--network none", "--read-only", "--cap-drop ALL", "--security-opt no-new-privileges", "--rm", "--init"):
+		assert flag in run_line
+	# Docker's --tmpfs defaults to noexec; tests that run a stub script from
+	# a temp dir need exec (PR #8371 loop).
+	assert "--tmpfs /tmp:rw,exec,nosuid,nodev,size=512m" in run_line
+	assert "--env" not in run_line and " -e " not in run_line
+	assert f"src={MODULE_PATH.resolve()},dst=/gate/prepush_affected_tests.py,readonly" in run_line
+	assert "dst=/baseline,readonly" in run_line
+	assert sorted(p.name for p in out.iterdir()) == ["result.json", "summary.md"]
+	assert json.loads((out / "result.json").read_text(encoding="utf-8"))["status"] == "pass"
+	assert "PREPUSH_TEST_GATE phase=wrapper outcome=pass" in proc.stderr
+
+
+@pytest.mark.parametrize("dockerfile_source", [
+	"scripts/codex_isolated_exec.sh",  # implement gate (generated Dockerfile)
+	"scripts/review_sandbox/Dockerfile",  # review and conflict-resolver gates
+	"scripts/clarify_sandbox/Dockerfile",  # heal gate
+])
+def test_gate_images_install_jq(dockerfile_source):
+	# Most repo scripts call jq; without it their tests fail on both trees in
+	# the gate container and the gate reports noise instead of results.
+	text = (REPO_ROOT / dockerfile_source).read_text(encoding="utf-8")
+	installs = [line for line in text.splitlines() if "apt-get install" in line]
+	assert installs, dockerfile_source
+	assert any("jq" in line.split() for line in installs), dockerfile_source
+
+
+def test_wrapper_refuses_a_module_inside_the_worktree(tmp_path):
+	worktree = _worktree(tmp_path)
+	module = worktree / "gate.py"
+	module.write_bytes(MODULE_PATH.read_bytes())
+	env, log = _wrapper_env(tmp_path)
+	proc, out = _run_wrapper(tmp_path, worktree, module, env)
+	assert proc.returncode == 0
+	assert "reason=module_untrusted" in proc.stderr
+	assert json.loads((out / "result.json").read_text(encoding="utf-8"))["reason"] == "module_untrusted"
+	assert not log.exists()
+
+
+def test_wrapper_without_docker_reports_unverified_and_exits_zero(tmp_path):
+	worktree = _worktree(tmp_path)
+	env, _ = _wrapper_env(tmp_path, with_docker=False)
+	proc, out = _run_wrapper(tmp_path, worktree, MODULE_PATH, env)
+	assert proc.returncode == 0
+	result = json.loads((out / "result.json").read_text(encoding="utf-8"))
+	assert result["status"] == "unverified" and result["reason"] == "docker_unavailable"
+
+
+# --- review fixes -------------------------------------------------------------
+
+def test_resolution_3_pytest_style_file_without_main_uses_pytest(tmp_path, monkeypatch):
+	root = _repo(tmp_path, {"tests/test_a.py": "def test_x():\n\tassert False\n", "tests/test_b.py": "def test_y():\n\tpass\n\nif __name__ == '__main__':\n\ttest_y()\n"})
+	assert _units(root, "tests/test_a.py")[0]["argv"] == ["python3", "-m", "pytest", "-q", "-p", "no:cacheprovider", "tests/test_a.py"]
+	assert _units(root, "tests/test_b.py")[0]["argv"] == ["python3", "tests/test_b.py"]
+	monkeypatch.setattr(gate.importlib.util, "find_spec", lambda name: None)
+	units, unverified = gate.plan_units(root, {"affected_tests": [{"path": "tests/test_a.py", "reasons": []}]})
+	assert units == [] and unverified == [{"item": "tests/test_a.py", "reason": "pytest_unavailable"}]
+
+
+def test_hook_checks_the_stamp_of_the_pushed_ref_not_head(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	_git(root, "branch", "other")
+	_commit(root, {"a.txt": "changed\n"})
+	_write(root, tmp_path, "pass")
+	assert _hook(_push(root, "git push origin HEAD"), {"TMPDIR": str(tmp_path)}) == {}
+	out = _hook(_push(root, "git push origin other"), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "other" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_hook_asks_when_the_pushed_ref_does_not_resolve(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	_write(root, tmp_path, "pass")
+	out = _hook(_push(root, "git push origin no-such-branch:main"), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "Could not resolve" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_hook_falls_back_for_a_push_the_guard_does_not_parse(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	# Since #6038 the guard parses `command git push`; a bare `git push)`
+	# closing a multi-segment subshell still reaches the fallback.
+	out = _hook(_push(root, "(cd . && git push)"), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert _hook(_push(root, 'git commit -m "push later"'), {"TMPDIR": str(tmp_path)}) == {}
+
+
+def test_wrapper_rejects_a_result_when_the_container_exits_non_zero(tmp_path):
+	worktree = _worktree(tmp_path)
+	env, log = _wrapper_env(tmp_path)
+	fake = tmp_path / "bin" / "docker"
+	fake.write_text(fake.read_text(encoding="utf-8").replace('\nfi\nexit 0\n', '\n\texit 1\nfi\nexit 0\n'), encoding="utf-8")
+	proc, out = _run_wrapper(tmp_path, worktree, MODULE_PATH, env)
+	assert proc.returncode == 0
+	result = json.loads((out / "result.json").read_text(encoding="utf-8"))
+	assert result["status"] == "unverified" and result["reason"] == "container_rc_1"
+
+
+def test_wrapper_lists_uncommitted_tracked_edits_and_overlays_command_inputs(tmp_path):
+	worktree = _worktree(tmp_path)
+	(worktree / "Makefile").write_text("test:\n\ttrue\n", encoding="utf-8")
+	_commit(worktree, {".ai/validate.yml": "prepush_test_command: make test\n"})
+	(worktree / "tests" / "test_a.py").write_text("# edited, not committed\n", encoding="utf-8")
+	env, log = _wrapper_env(tmp_path)
+	fake = tmp_path / "bin" / "docker"
+	capture = tmp_path / "capture"
+	fake.write_text(fake.read_text(encoding="utf-8").replace(
+		'\tprintf \'{"schema"',
+		'\tsrc="${results%/results}/source"; cp "$results/changed.txt" "__CAP__.changed"; ls -a "$src" > "__CAP__.ls"; ls -a "$src/.ai" >> "__CAP__.ls"\n\tprintf \'{"schema"',
+	).replace("__CAP__", str(capture)), encoding="utf-8")
+	proc, _ = _run_wrapper(tmp_path, worktree, MODULE_PATH, env)
+	assert proc.returncode == 0, proc.stderr
+	changed = (tmp_path / "capture.changed").read_text(encoding="utf-8").split("\n")
+	assert "M\ttests/test_a.py" in changed
+	listing = (tmp_path / "capture.ls").read_text(encoding="utf-8").split()
+	assert "Makefile" in listing and "validate.yml" in listing
+
+
+def test_resolution_configured_pytest_without_pytest_is_unverified(tmp_path, monkeypatch):
+	root = _repo(tmp_path, {"tests/test_a.py": "", "pytest.ini": "[pytest]\n"})
+	monkeypatch.setattr(gate.importlib.util, "find_spec", lambda name: None)
+	units, unverified = gate.plan_units(root, {"affected_tests": [{"path": "tests/test_a.py", "reasons": []}]})
+	assert units == [] and unverified == [{"item": "tests/test_a.py", "reason": "pytest_unavailable"}]
+
+
+def test_hook_asks_for_bulk_pushes_even_with_a_passing_head_stamp(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	_write(root, tmp_path, "pass")
+	out = _hook(_push(root, "git push --all origin"), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "--all" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_hook_asks_for_tag_only_pushes(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	_git(root, "tag", "v1")
+	_write(root, tmp_path, "pass")
+	out = _hook(_push(root, "git push origin refs/tags/v1"), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "tags" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_hook_ignores_git_push_inside_quoted_text(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	assert _hook(_push(root, 'git commit -m "document git push behaviour"'), {"TMPDIR": str(tmp_path)}) == {}
+	assert _hook(_push(root, "echo 'git push'"), {"TMPDIR": str(tmp_path)}) == {}
+
+
+@pytest.mark.parametrize("command", ["git push origin main refs/tags/v1", "git push --tags origin main", "git push --follow-tags origin main"])
+def test_hook_asks_for_mixed_branch_and_tag_pushes(tmp_path, command):
+	root = _repo(tmp_path, {"a.txt": ""})
+	_git(root, "tag", "v1")
+	_write(root, tmp_path, "pass")
+	assert _hook(_push(root, "git push origin main"), {"TMPDIR": str(tmp_path)}) == {}
+	out = _hook(_push(root, command), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "tags" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize("command", ["git push --follow-tag origin main", "git push --thin origin main"])
+def test_hook_asks_when_the_guard_cannot_resolve_push_options(tmp_path, command):
+	root = _repo(tmp_path, {"a.txt": ""})
+	_write(root, tmp_path, "pass")
+	assert _hook(_push(root, "git push origin main"), {"TMPDIR": str(tmp_path)}) == {}
+	out = _hook(_push(root, command), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "Could not resolve which refs" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+# --- Auto mode ----------------------------------------------------------------
+
+def _auto(payload: dict, mode: str = "auto") -> dict:
+	return {**payload, "permission_mode": mode}
+
+
+def test_hook_denies_a_missing_stamp_in_auto_mode(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	out = _hook(_auto(_push(root)), {"TMPDIR": str(tmp_path)})
+	decision = out["hookSpecificOutput"]
+	assert decision["permissionDecision"] == "deny"
+	reason = decision["permissionDecisionReason"]
+	assert gate.STAMP_COMMAND in reason and "nothing ran" in reason and "tell the user" in reason
+	# The session cannot set the hook's environment, so the off switch is not offered.
+	assert "CLAUDE_PREPUSH_TEST_GATE=off" not in reason
+
+
+@pytest.mark.parametrize("mode", ["default", "acceptEdits", "bypassPermissions", "plan", "dontAsk", "Auto", None])
+def test_hook_still_asks_for_a_missing_stamp_outside_auto_mode(tmp_path, mode):
+	root = _repo(tmp_path, {"a.txt": ""})
+	payload = _push(root) if mode is None else _auto(_push(root), mode)
+	out = _hook(payload, {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+@pytest.mark.parametrize("mode", ["auto", "default", "acceptEdits", "bypassPermissions", "dontAsk"])
+def test_hook_never_holds_a_push_for_a_failing_stamp(tmp_path, mode):
+	root = _repo(tmp_path, {"a.txt": ""})
+	_write(root, tmp_path, "pass")
+	assert _hook(_auto(_push(root), mode), {"TMPDIR": str(tmp_path)}) == {}
+	_write(root, tmp_path, "fail", [{"test": "tests/test_broken.py"}])
+	out = _hook(_auto(_push(root), mode), {"TMPDIR": str(tmp_path)})
+	specific = out["hookSpecificOutput"]
+	assert "permissionDecision" not in specific
+	assert "tests/test_broken.py" in specific["additionalContext"]
+	assert "confirm to push anyway" not in specific["additionalContext"]
+
+
+@pytest.mark.parametrize("command", ["git push --tags origin", "git push --all origin"])
+def test_hook_auto_mode_still_asks_when_a_person_must_decide(tmp_path, command):
+	root = _repo(tmp_path, {"a.txt": ""})
+	out = _hook(_auto(_push(root, command)), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+@pytest.mark.parametrize(
+	"command",
+	[
+		"git push origin no-such-branch:main",
+		# The branch only exists once the command has run, so the hook cannot see it yet.
+		"git checkout -q -b claude/new-log && git commit -qam log && git push -u origin claude/new-log 2>&1 | tail -1",
+	],
+)
+def test_hook_auto_mode_denies_a_pushed_branch_that_does_not_exist_yet(tmp_path, command):
+	root = _repo(tmp_path, {"a.txt": ""})
+	out = _hook(_auto(_push(root, command)), {"TMPDIR": str(tmp_path)})
+	decision = out["hookSpecificOutput"]
+	assert decision["permissionDecision"] == "deny"
+	reason = decision["permissionDecisionReason"]
+	assert "Could not resolve the pushed ref" in reason and "nothing ran" in reason
+	assert "own plain command" in reason and gate.STAMP_COMMAND in reason
+
+
+def test_hook_still_asks_for_a_pushed_branch_that_does_not_exist_yet_outside_auto_mode(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	out = _hook(_push(root, "git checkout -b claude/new-log && git push -u origin claude/new-log"), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "Could not resolve the pushed ref" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_hook_auto_mode_asks_when_a_missing_stamp_comes_with_a_human_finding(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	out = _hook(_auto(_push(root, "git push origin HEAD && git push --tags origin")), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+	reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+	assert "No pre-push test stamp" in reason and "tags" in reason
+
+
+def test_hook_auto_mode_a_failing_stamp_next_to_a_missing_one_still_denies(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	_git(root, "branch", "other")
+	_commit(root, {"a.txt": "changed\n"})
+	_write(root, tmp_path, "fail", [{"test": "tests/test_broken.py"}])
+	out = _hook(_auto(_push(root, "git push origin HEAD && git push origin other")), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
+	reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+	assert "No pre-push test stamp" in reason and "tests/test_broken.py" in reason
+	assert "not held" not in reason
+
+
+@pytest.mark.parametrize("status", [None, "garbled", ["fail"], {"k": "v"}])
+def test_hook_asks_for_a_stamp_without_a_valid_status(tmp_path, status):
+	root = _repo(tmp_path, {"a.txt": ""})
+	_write(root, tmp_path, status)
+	out = _hook(_auto(_push(root)), {"TMPDIR": str(tmp_path)})
+	assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+	assert "no valid status" in out["hookSpecificOutput"]["permissionDecisionReason"]
+
+
+def test_hook_auto_mode_off_switch_still_allows(tmp_path):
+	root = _repo(tmp_path, {"a.txt": ""})
+	assert _hook(_auto(_push(root)), {"TMPDIR": str(tmp_path), "CLAUDE_PREPUSH_TEST_GATE": "off"}) == {}
+
+
+def test_evaluate_hook_keeps_its_two_value_contract(tmp_path, monkeypatch):
+	monkeypatch.setenv("TMPDIR", str(tmp_path))
+	root = _repo(tmp_path, {"a.txt": ""})
+	ask, message = gate.evaluate_hook(_auto(_push(root)))
+	assert "No pre-push test stamp" in ask and message == ""
+
+
+# --- wrapper pass-through flags (issue #8190) ---------------------------------
+
+def test_wrapper_forwards_venv_shards_and_large_file_limit(tmp_path):
+	worktree = _worktree(tmp_path)
+	venv = tmp_path / "venv"
+	(venv / "bin").mkdir(parents=True)
+	env, log = _wrapper_env(tmp_path)
+	out = tmp_path / "out"
+	base = _git(worktree, "rev-parse", "HEAD~1")
+	proc = subprocess.run(["bash", str(WRAPPER), "--worktree", str(worktree), "--module", str(MODULE_PATH), "--image", "gate-image:test",
+		"--base", base, "--out-dir", str(out), "--timeout-minutes", "2", "--venv", str(venv), "--shards", "3",
+		"--large-file-tests", "7"], capture_output=True, text=True, env=env, timeout=120)
+	assert proc.returncode == 0, proc.stderr
+	run_line = next(line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("run "))
+	assert f"src={venv.resolve()},dst=/opt/codex-venv,readonly" in run_line
+	assert "--env PATH=/opt/codex-venv/bin:" in run_line
+	assert "--env PREPUSH_TEST_GATE_LARGE_FILE_TESTS=7" in run_line
+	assert "--shards 3" in run_line
+	for flag in ("--network none", "--read-only", "--cap-drop ALL"):
+		assert flag in run_line
+
+
+def test_wrapper_drops_invalid_shards_and_large_file_values(tmp_path):
+	worktree = _worktree(tmp_path)
+	env, log = _wrapper_env(tmp_path)
+	out = tmp_path / "out"
+	base = _git(worktree, "rev-parse", "HEAD~1")
+	proc = subprocess.run(["bash", str(WRAPPER), "--worktree", str(worktree), "--module", str(MODULE_PATH), "--image", "gate-image:test",
+		"--base", base, "--out-dir", str(out), "--shards", "4;rm -rf /", "--large-file-tests", "0", "--venv", str(tmp_path / "missing")],
+		capture_output=True, text=True, env=env, timeout=120)
+	assert proc.returncode == 0, proc.stderr
+	assert "name=PREPUSH_TEST_GATE_SHARDS" in proc.stderr and "name=PREPUSH_TEST_GATE_LARGE_FILE_TESTS" in proc.stderr
+	assert "reason=venv_missing" in proc.stderr
+	run_line = next(line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("run "))
+	assert "--env" not in run_line and "--shards" not in run_line and "/opt/codex-venv" not in run_line
+
+
+def test_wrapper_mounts_node_modules_read_only_on_both_trees(tmp_path):
+	worktree = _worktree(tmp_path)
+	node_modules = tmp_path / "prep" / "node_modules"
+	node_modules.mkdir(parents=True)
+	env, log = _wrapper_env(tmp_path)
+	base = _git(worktree, "rev-parse", "HEAD~1")
+	proc = subprocess.run(["bash", str(WRAPPER), "--worktree", str(worktree), "--module", str(MODULE_PATH), "--image", "gate-image:test",
+		"--base", base, "--out-dir", str(tmp_path / "out"), "--node-modules", str(node_modules)], capture_output=True, text=True, env=env, timeout=120)
+	assert proc.returncode == 0, proc.stderr
+	run_line = next(line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("run "))
+	assert f"src={node_modules.resolve()},dst=/source/node_modules,readonly" in run_line
+	assert f"src={node_modules.resolve()},dst=/baseline/node_modules,readonly" in run_line
+
+
+# --- PR tree built from git, like the baseline (PR #9666 reproduction) -------
+
+def _capture_source(tmp_path: Path) -> Path:
+	"""Make the fake docker copy the mounted /source tree to tmp_path/captured."""
+	capture = tmp_path / "captured"
+	fake = tmp_path / "bin" / "docker"
+	fake.write_text(fake.read_text(encoding="utf-8").replace(
+		'\tprintf \'{"schema"',
+		'\tcp -a "${results%/results}/source" "__CAP__"\n\tprintf \'{"schema"',
+	).replace("__CAP__", str(capture)), encoding="utf-8")
+	return capture
+
+
+def _git_state(root: Path) -> tuple[bytes, list[str]]:
+	git_dir = root / ".git"
+	return (git_dir / "index").read_bytes(), sorted(str(p.relative_to(git_dir)) for p in git_dir.rglob("*"))
+
+
+def test_wrapper_builds_the_pr_tree_from_git_with_tracked_dotfiles_and_filtered_untracked(tmp_path):
+	root = _repo(tmp_path, {
+		"lib/a.py": "X = 1\n", "tests/test_a.py": "# lib/a.py\n",
+		".gitattributes": "CHANGELOG.md merge=union\n", ".gitignore": "ignored.txt\ntests/test_tracked_ignored.py\n",
+		"tests/test_tracked_ignored.py": "# tracked although ignored\n",
+		".github/ai/label_contract.v1.json": "{}\n", ".github/ai/dropped.json": "{}\n",
+		".claude/settings.json": "{}\n", "scripts/propagate_consumer_secrets.sh": "true\n",
+		"changelog.d/.gitkeep": "", "gone.txt": "gone\n", "old.txt": "old\n",
+	}, name="worktree")
+	# Tracked although a .gitignore rule matches it (git add -f).
+	_git(root, "add", "-f", "tests/test_tracked_ignored.py")
+	_commit(root, {"lib/a.py": "X = 2\n"})
+	(root / "tests" / "test_a.py").write_text("# unstaged edit\n", encoding="utf-8")
+	(root / "old.txt").write_text("staged\n", encoding="utf-8")
+	_git(root, "add", "old.txt")
+	(root / "old.txt").write_text("staged then edited\n", encoding="utf-8")
+	_git(root, "rm", "-q", "gone.txt")
+	(root / "staged_new.py").write_text("NEW = 1\n", encoding="utf-8")
+	_git(root, "add", "staged_new.py")
+	# Untracked again (rm --cached): the credential filter decides, and drops it.
+	_git(root, "rm", "-q", "--cached", ".github/ai/dropped.json")
+	for name, text in {".env": "TOKEN=x\n", "credentials.json": "{}\n", "untracked_ok.py": "OK = 1\n", "ignored.txt": "x\n"}.items():
+		(root / name).write_text(text, encoding="utf-8")
+	before = _git_state(root)
+	env, _ = _wrapper_env(tmp_path)
+	capture = _capture_source(tmp_path)
+	proc, out = _run_wrapper(tmp_path, root, MODULE_PATH, env)
+	assert proc.returncode == 0, proc.stderr
+	assert json.loads((out / "result.json").read_text(encoding="utf-8"))["status"] == "pass", proc.stderr
+	for name in (".gitattributes", ".gitignore", ".github/ai/label_contract.v1.json", ".claude/settings.json",
+			"scripts/propagate_consumer_secrets.sh", "changelog.d/.gitkeep", "lib/a.py", "staged_new.py", "untracked_ok.py"):
+		assert (capture / name).is_file(), name
+	assert (capture / "tests" / "test_a.py").read_text(encoding="utf-8") == "# unstaged edit\n"
+	assert (capture / "old.txt").read_text(encoding="utf-8") == "staged then edited\n"
+	for name in ("gone.txt", ".env", "credentials.json", "ignored.txt", ".github/ai/dropped.json"):
+		assert not os.path.lexists(capture / name), name
+	# /source carries a fresh one-commit repository of its own files (as the old
+	# snapshot did), never the checkout's .git or its objects.
+	assert _git(capture, "rev-list", "--count", "HEAD") == "1"
+	assert not (capture / ".git" / "objects" / "info" / "alternates").exists()
+	synthetic_files = set(_git(capture, "ls-files").splitlines())
+	assert {".gitattributes", "staged_new.py", "untracked_ok.py"} <= synthetic_files
+	# A tracked file a .gitignore rule matches stays listed in the synthetic index.
+	assert "tests/test_tracked_ignored.py" in synthetic_files
+	assert not {".env", "credentials.json", "gone.txt"} & synthetic_files
+	# The real index and the checkout's .git are only read.
+	assert _git_state(root) == before
+
+
+def test_wrapper_fails_closed_when_the_source_git_repository_cannot_be_built(tmp_path):
+	# Without /source's one-commit repository, git-dependent tests would fail on
+	# both trees and be classified as inherited (a false pass), so the run must
+	# stop as unverified instead of carrying on without it.
+	root = _worktree(tmp_path)
+	env, log = _wrapper_env(tmp_path)
+	shim = tmp_path / "bin" / "git"
+	real_git = os.path.realpath(shim)
+	shim.unlink()
+	# Only the wrapper's commit at /source fails (the credential-filter snapshot
+	# commits from its own cwd, without -C); every other git call is real.
+	shim.write_text(f'#!/usr/bin/env bash\ncase " $* " in *" -C "*"/source "*" -qm snapshot "*) exit 1 ;; esac\nexec "{real_git}" "$@"\n', encoding="utf-8")
+	shim.chmod(0o755)
+	proc, out = _run_wrapper(tmp_path, root, MODULE_PATH, env)
+	assert proc.returncode == 0, proc.stderr
+	assert "outcome=error reason=source_git_init_failed" in proc.stderr
+	result = json.loads((out / "result.json").read_text(encoding="utf-8"))
+	assert result["status"] == "unverified"
+	assert result["reason"] == "snapshot_failed"
+	assert not log.exists() or not any(line.startswith("run ") for line in log.read_text(encoding="utf-8").splitlines())
+
+
+def test_wrapper_baseline_keeps_export_ignored_files(tmp_path):
+	# export-ignore already at the merge-base: git archive would drop tests/
+	# from /baseline only, so a failure there could never be classified as inherited.
+	root = _repo(tmp_path, {"lib/a.py": "X = 1\n", "tests/test_a.py": "# lib/a.py\n",
+		".gitattributes": "tests/** export-ignore\n"}, name="worktree")
+	_commit(root, {"lib/a.py": "X = 2\n"})
+	capture = tmp_path / "captured_baseline"
+	env, _ = _wrapper_env(tmp_path)
+	fake = tmp_path / "bin" / "docker"
+	fake.write_text(fake.read_text(encoding="utf-8").replace(
+		'\tprintf \'{"schema"',
+		f'\tcp -a "${{results%/results}}/baseline" "{capture}"\n\tprintf \'{{"schema"',
+	), encoding="utf-8")
+	proc, out = _run_wrapper(tmp_path, root, MODULE_PATH, env)
+	assert proc.returncode == 0, proc.stderr
+	assert json.loads((out / "result.json").read_text(encoding="utf-8"))["status"] == "pass", proc.stderr
+	assert (capture / "tests" / "test_a.py").read_text(encoding="utf-8") == "# lib/a.py\n"
+	assert (capture / "lib" / "a.py").read_text(encoding="utf-8") == "X = 1\n"
+	assert not os.path.lexists(capture / ".git")
+
+
+def test_wrapper_pr_tree_ignores_global_filters_and_export_ignore(tmp_path):
+	root = _repo(tmp_path, {"lib/a.py": "X = 1\n", "tests/test_a.py": "# lib/a.py\n"}, name="worktree")
+	# A clean filter would change the blob, a smudge filter leaves a marker.
+	# (The changed-file diff, unchanged here, may still run the clean filter.)
+	marker = tmp_path / "smudge_ran"
+	home = tmp_path / "home"
+	home.mkdir()
+	(home / ".gitconfig").write_text(
+		f'[filter "evil"]\n\tclean = "sed s/3/CLEANED/"\n\tsmudge = "touch {marker}; cat"\n', encoding="utf-8")
+	_commit(root, {".gitattributes": "*.py filter=evil\n*.bin filter=lfs\ntests/** export-ignore\n", "lib/a.py": "X = 2\n", "data.bin": "3\n"})
+	(root / "lib" / "a.py").write_text("X = 3\n", encoding="utf-8")
+	# A repository-local git-lfs driver (actions/checkout lfs: true) is switched off.
+	_git(root, "config", "filter.lfs.clean", "sed s/3/CLEANED/")
+	_git(root, "config", "filter.lfs.smudge", f"touch {tmp_path / 'lfs_smudge_ran'}; cat")
+	(root / "data.bin").write_text("3 edited\n", encoding="utf-8")
+	env, _ = _wrapper_env(tmp_path)
+	env["HOME"] = str(home)
+	capture = _capture_source(tmp_path)
+	proc, _ = _run_wrapper(tmp_path, root, MODULE_PATH, env)
+	assert proc.returncode == 0, proc.stderr
+	assert (capture / "lib" / "a.py").read_text(encoding="utf-8") == "X = 3\n"
+	assert (capture / "tests" / "test_a.py").is_file()
+	assert not marker.exists()
+	assert (capture / "data.bin").read_text(encoding="utf-8") == "3 edited\n"
+	assert not (tmp_path / "lfs_smudge_ran").exists()
+
+
+def test_wrapper_skips_a_tracked_node_modules_symlink_in_the_pr_tree(tmp_path):
+	root = _repo(tmp_path, {"lib/a.py": "X = 1\n", "tests/test_a.py": "# lib/a.py\n"}, name="worktree")
+	outside = tmp_path / "outside"
+	outside.mkdir()
+	(root / "node_modules").symlink_to(outside / "made")
+	_commit(root, {"lib/a.py": "X = 2\n"})
+	node_modules = tmp_path / "prep" / "node_modules"
+	node_modules.mkdir(parents=True)
+	env, log = _wrapper_env(tmp_path)
+	base = _git(root, "rev-parse", "HEAD~1")
+	proc = subprocess.run(["bash", str(WRAPPER), "--worktree", str(root), "--module", str(MODULE_PATH), "--image", "gate-image:test",
+		"--base", base, "--out-dir", str(tmp_path / "out"), "--node-modules", str(node_modules)], capture_output=True, text=True, env=env, timeout=120)
+	assert proc.returncode == 0, proc.stderr
+	assert "reason=node_modules_missing" in proc.stderr
+	assert "dst=/source/node_modules" not in log.read_text(encoding="utf-8")
+	assert not (outside / "made").exists()
+
+
+# --- run --tests-only (issue #8461) -----------------------------------------
+
+TF_PR_A = "def test_ok():\n\tpass\n\n\ndef test_new_break():\n\tassert False\n\n\ndef test_old_break():\n\tassert False\n"
+TF_BASE_A = "def test_ok():\n\tpass\n\n\ndef test_new_break():\n\tpass\n\n\ndef test_old_break():\n\tassert False\n"
+
+
+def _tests_file_run(tmp_path: Path, root: Path, lines: str | bytes, baseline: Path | None = None, changed: str = "M\ttests/test_a.py\n") -> dict:
+	changed_file = tmp_path / "changed.txt"
+	changed_file.write_text(changed, encoding="utf-8")
+	listing = tmp_path / "tests.txt"
+	if isinstance(lines, bytes):
+		listing.write_bytes(lines)
+	else:
+		listing.write_text(lines, encoding="utf-8")
+	out = tmp_path / "result.json"
+	argv = ["run", "--repo-root", str(root), "--changed-files-file", str(changed_file), "--tests-only", str(listing),
+		"--timeout-minutes", "2", "--shards", "2", "--out", str(out)]
+	if baseline is not None:
+		argv += ["--baseline-tree", str(baseline)]
+	assert gate.main(argv) == 0
+	return json.loads(out.read_text(encoding="utf-8"))
+
+
+def test_tests_file_runs_listed_files_and_names_on_both_trees(tmp_path):
+	root = _repo(tmp_path, {"tests/test_a.py": TF_PR_A, "tests/test_b.py": FAILING, "tests/test_c.py": FAILING})
+	baseline = _repo(tmp_path, {"tests/test_a.py": TF_BASE_A, "tests/test_b.py": FAILING}, name="baseline")
+	result = _tests_file_run(tmp_path, root, "tests/test_a.py::test_new_break\ntests/test_b.py\n", baseline)
+	# Only the listed files ran (test_c.py fails but was not listed).
+	assert sorted(result["ran"]) == ["tests/test_a.py", "tests/test_b.py"]
+	assert result["status"] == "fail"
+	assert [f["test"] for f in result["failures"]] == ["tests/test_a.py"]
+	names = result["failures"][0]["names"]
+	# Only the named function ran: test_old_break also fails on this tree.
+	assert any(n.endswith("test_new_break") for n in names) and not any("test_old_break" in n for n in names)
+	assert [i["test"] for i in result["inherited"]] == ["tests/test_b.py"]
+	assert result["unverified"] == []
+
+	inherited = _tests_file_run(tmp_path, root, "tests/test_a.py::test_old_break\n", baseline)
+	assert inherited["status"] == "pass"
+	assert inherited["failures"] == [] and [i["test"] for i in inherited["inherited"]] == ["tests/test_a.py"]
+
+
+def test_tests_file_merges_duplicate_and_whole_file_lines(tmp_path):
+	root = _repo(tmp_path, {"tests/test_a.py": TF_PR_A, "tests/test_b.py": ""})
+	affected, rejected = gate.parse_tests_file(root, "tests/test_b.py::test_y\ntests/test_b.py::test_x\ntests/test_b.py::test_y\n"
+		"tests/test_a.py::Case::test_m[p-1]\ntests/test_a.py\n")
+	assert rejected == []
+	assert affected == [
+		{"path": "tests/test_a.py", "reasons": ["tests_file"], "functions": []},
+		{"path": "tests/test_b.py", "reasons": ["tests_file"], "functions": ["test_y", "test_x"]},
+	]
+
+
+def test_tests_file_bypasses_select_tests(tmp_path, monkeypatch):
+	root = _repo(tmp_path, {"tests/test_ok.py": "", "lib/zz.py": "import os\n", "tests/test_ci_wires_every_test_file.py": ""})
+
+	def boom(*args, **kwargs):
+		raise AssertionError("select_tests must not run with --tests-only")
+
+	monkeypatch.setattr(gate, "select_tests", boom)
+	result = _tests_file_run(tmp_path, root, "tests/test_ok.py\n", changed="M\tlib/zz.py\nA\ttests/test_new.py\n")
+	assert result["ran"] == ["tests/test_ok.py"] and result["status"] == "pass"
+	selection = gate.tests_file_selection(root, str(tmp_path / "tests.txt"), ["lib/zz.py"])
+	assert selection["registry_checks"] == [] and selection["static_checks"] == [] and selection["companion_files"] == []
+	assert selection["changed_files"] == ["lib/zz.py"] and selection["tests_file_rejected"] == []
+
+
+@pytest.mark.parametrize("line,reason", [
+	("/abs/tests/test_zz.py", "tests_file_absolute_path"),
+	("C:/zz/test_zz.py", "tests_file_absolute_path"),
+	("tests\\test_zz.py", "tests_file_absolute_path"),
+	("tests/../tests/test_zz.py", "tests_file_parent_traversal"),
+	("-p/test_zz.py", "tests_file_invalid_path"),
+	("tests//test_zz.py", "tests_file_invalid_path"),
+	("./tests/test_zz.py", "tests_file_invalid_path"),
+	("tests/test_zz\x01.py", "tests_file_control_character"),
+	("tests/test_zz_missing.py", "tests_file_missing"),
+	("tests/test_zzlink.py", "tests_file_outside_repo"),
+	("lib/zz_helper.py", "tests_file_not_test_file"),
+	("tests/test_ok.py::zz bad", "tests_file_invalid_name"),
+	("tests/test_ok.py::--zz", "tests_file_invalid_name"),
+	("tests/test_ok.py::", "tests_file_invalid_name"),
+	("tests/test_zz.py::" + "a" * 1100, "tests_file_line_too_long"),
+	("tests/test_zz.py\x0c", "tests_file_control_character"),
+	("\ttests/test_zz.py", "tests_file_control_character"),
+])
+def test_tests_file_rejects_invalid_entries(tmp_path, line, reason):
+	root = _repo(tmp_path, {"tests/test_ok.py": "", "lib/zz_helper.py": ""})
+	outside = tmp_path / "outside" / "test_zz.py"
+	outside.parent.mkdir()
+	outside.write_text("", encoding="utf-8")
+	(root / "tests" / "test_zzlink.py").symlink_to(outside)
+	result = _tests_file_run(tmp_path, root, f"tests/test_ok.py\n{line}\n")
+	assert result["unverified"] == [{"item": "tests_file:line2", "reason": reason}]
+	assert result["ran"] == ["tests/test_ok.py"]
+	assert result["status"] == "unverified"
+	# Rejected text is never echoed back.
+	assert "zz" not in json.dumps(result) and "zz" not in gate.write_summary(result)
+
+
+def test_tests_file_caps_and_unreadable(tmp_path):
+	root = _repo(tmp_path, {"tests/test_ok.py": ""})
+	too_large = _tests_file_run(tmp_path, root, b"#" * (gate.MAX_TESTS_FILE_BYTES + 1))
+	assert too_large["status"] == "unverified" and too_large["ran"] == []
+	assert too_large["unverified"] == [{"item": "tests_file", "reason": "tests_file_too_large"}]
+	unreadable = _tests_file_run(tmp_path, root, b"\xff\xfe tests/test_ok.py\n")
+	assert unreadable["status"] == "unverified"
+	assert unreadable["unverified"] == [{"item": "tests_file", "reason": "tests_file_unreadable"}]
+	many = _tests_file_run(tmp_path, root, "tests/test_ok.py\n" * (gate.MAX_TESTS_FILE_ENTRIES + 5))
+	assert many["ran"] == ["tests/test_ok.py"]
+	assert many["unverified"] == [{"item": "tests_file", "reason": "tests_file_too_many_entries"}]
+	empty = _tests_file_run(tmp_path, root, "\n# a comment\n\n   \n")
+	assert empty["status"] == "skipped" and empty["ran"] == [] and empty["unverified"] == []
+	commented = _tests_file_run(tmp_path, root, "# comment\n\ntests/test_ok.py\n")
+	assert commented["status"] == "pass" and commented["ran"] == ["tests/test_ok.py"]
+
+
+def test_run_without_tests_file_is_unchanged(tmp_path):
+	root = _repo(tmp_path, {"lib/a.py": "X = 1\n", "tests/test_a.py": "# lib/a.py\n"})
+	changed = tmp_path / "changed.txt"
+	changed.write_text("M\tlib/a.py\n", encoding="utf-8")
+	out = tmp_path / "result.json"
+	assert gate.main(["run", "--repo-root", str(root), "--changed-files-file", str(changed), "--timeout-minutes", "2", "--out", str(out)]) == 0
+	result = json.loads(out.read_text(encoding="utf-8"))
+	selection = _select(root, "M\tlib/a.py")
+	expected = gate.run_gate(root, selection, timeout_minutes=2)
+	assert "tests_file_rejected" not in selection
+	assert sorted(result["ran"]) == sorted(expected["ran"]) and result["selected"] == expected["selected"]
+	assert "tests/test_a.py" in result["ran"]
+
+
+def _run_wrapper_with(tmp_path: Path, worktree: Path, env: dict[str, str], *extra: str) -> tuple[subprocess.CompletedProcess, Path]:
+	out = tmp_path / "out"
+	base = _git(worktree, "rev-parse", "HEAD~1")
+	proc = subprocess.run(["bash", str(WRAPPER), "--worktree", str(worktree), "--module", str(MODULE_PATH), "--image", "gate-image:test",
+		"--base", base, "--out-dir", str(out), "--timeout-minutes", "2", *extra], capture_output=True, text=True, env=env, timeout=120)
+	return proc, out
+
+
+def test_wrapper_passes_tests_file_read_only(tmp_path):
+	worktree = _worktree(tmp_path)
+	env, log = _wrapper_env(tmp_path)
+	fake = tmp_path / "bin" / "docker"
+	capture = tmp_path / "capture.tests"
+	fake.write_text(fake.read_text(encoding="utf-8").replace(
+		'\tprintf \'{"schema"',
+		'\tfor a in "$@"; do case "$a" in type=bind,src=*,dst=/gate/tests.txt,readonly) t="${a#type=bind,src=}"; t="${t%,dst=/gate/tests.txt,readonly}"; cp "$t" "__CAP__"; stat -c %a "$t" > "__CAP__.mode" ;; esac; done\n\tprintf \'{"schema"',
+	).replace("__CAP__", str(capture)), encoding="utf-8")
+	listing = tmp_path / "list, with comma.txt"
+	listing.write_text("tests/test_a.py::test_x\n", encoding="utf-8")
+	proc, out = _run_wrapper_with(tmp_path, worktree, env, "--tests-only", str(listing))
+	assert proc.returncode == 0, proc.stderr
+	run_line = next(line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("run "))
+	assert gate.re.search(r"type=bind,src=\S+/tests\.txt,dst=/gate/tests\.txt,readonly", run_line)
+	assert "--tests-only /gate/tests.txt" in run_line
+	assert "--changed-files-file /results/changed.txt" in run_line
+	assert "comma" not in run_line
+	for flag in ("--network none", "--read-only", "--cap-drop ALL", "--security-opt no-new-privileges"):
+		assert flag in run_line
+	assert "--env" not in run_line
+	assert capture.read_text(encoding="utf-8") == "tests/test_a.py::test_x\n"
+	assert (tmp_path / "capture.tests.mode").read_text(encoding="utf-8").strip() == "444"
+	assert json.loads((out / "result.json").read_text(encoding="utf-8"))["status"] == "pass"
+
+
+def test_wrapper_without_tests_file_adds_no_mount_or_flag(tmp_path):
+	worktree = _worktree(tmp_path)
+	env, log = _wrapper_env(tmp_path)
+	proc, _ = _run_wrapper(tmp_path, worktree, MODULE_PATH, env)
+	assert proc.returncode == 0, proc.stderr
+	run_line = next(line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("run "))
+	assert "/gate/tests.txt" not in run_line and "--tests-only" not in run_line
+
+
+@pytest.mark.parametrize("kind,reason", [
+	("missing", "tests_file_missing"),
+	("symlink", "tests_file_not_regular"),
+	("directory", "tests_file_not_regular"),
+	("oversize", "tests_file_too_large"),
+	("empty", "usage_error"),
+])
+def test_wrapper_rejects_bad_tests_file(tmp_path, kind, reason):
+	worktree = _worktree(tmp_path)
+	env, log = _wrapper_env(tmp_path)
+	real = tmp_path / "real.txt"
+	real.write_text("tests/test_a.py\n", encoding="utf-8")
+	if kind == "missing":
+		value = str(tmp_path / "nope.txt")
+	elif kind == "symlink":
+		value = str(tmp_path / "link.txt")
+		os.symlink(real, value)
+	elif kind == "directory":
+		value = str(tmp_path / "adir")
+		os.mkdir(value)
+	elif kind == "oversize":
+		value = str(tmp_path / "big.txt")
+		Path(value).write_bytes(b"#" * 262145)
+	else:
+		value = ""
+	proc, out = _run_wrapper_with(tmp_path, worktree, env, "--tests-only", value)
+	assert proc.returncode == 0
+	result = json.loads((out / "result.json").read_text(encoding="utf-8"))
+	assert result["status"] == "unverified" and result["reason"] == reason
+	assert f"reason={reason}" in proc.stderr
+	assert not log.exists()
+
+
+TF_PR_NEW = "def test_ok():\n\tpass\n\n\ndef test_added_break():\n\tassert False\n"
+TF_BASE_NEW = "def test_ok():\n\tpass\n"
+
+
+def test_tests_file_named_test_missing_on_baseline_is_caused_by_the_change(tmp_path):
+	root = _repo(tmp_path, {"tests/test_a.py": TF_PR_NEW})
+	baseline = _repo(tmp_path, {"tests/test_a.py": TF_BASE_NEW}, name="baseline")
+	result = _tests_file_run(tmp_path, root, "tests/test_a.py::test_added_break\n", baseline)
+	# pytest exits 4 on the baseline (node not found); that is not inherited.
+	assert result["status"] == "fail"
+	assert [f["test"] for f in result["failures"]] == ["tests/test_a.py"]
+	assert result["inherited"] == []
+
+
+def test_tests_file_rejects_names_on_non_python_tests(tmp_path):
+	root = _repo(tmp_path, {"tests/test_ok.py": "", "tests/test_run.sh": "true\n"})
+	affected, rejected = gate.parse_tests_file(root, "tests/test_ok.py\ntests/test_run.sh::case_x\ntests/test_run.sh\n")
+	assert rejected == [{"item": "tests_file:line2", "reason": "tests_file_name_unsupported"}]
+	assert [entry["path"] for entry in affected] == ["tests/test_ok.py", "tests/test_run.sh"]
+
+
+def test_tests_file_empty_value_never_falls_back_to_selection(tmp_path, monkeypatch):
+	root = _repo(tmp_path, {"tests/test_ok.py": ""})
+
+	def boom(*args, **kwargs):
+		raise AssertionError("an empty --tests-only must not run the selection")
+
+	monkeypatch.setattr(gate, "select_tests", boom)
+	changed = tmp_path / "changed.txt"
+	changed.write_text("M\ttests/test_ok.py\n", encoding="utf-8")
+	out = tmp_path / "result.json"
+	assert gate.main(["run", "--repo-root", str(root), "--changed-files-file", str(changed), "--tests-only", "", "--timeout-minutes", "2", "--out", str(out)]) == 0
+	result = json.loads(out.read_text(encoding="utf-8"))
+	assert result["ran"] == []
+	assert result["unverified"] == [{"item": "tests_file", "reason": "tests_file_unreadable"}]
+
+
+def test_tests_file_named_test_missing_on_both_trees_is_inherited(tmp_path):
+	root = _repo(tmp_path, {"tests/test_a.py": TF_BASE_NEW})
+	baseline = _repo(tmp_path, {"tests/test_a.py": TF_BASE_NEW}, name="baseline")
+	result = _tests_file_run(tmp_path, root, "tests/test_a.py::test_nowhere\n", baseline)
+	# pytest exits 4 on both trees: the change did not cause it.
+	assert result["failures"] == []
+	assert [i["test"] for i in result["inherited"]] == ["tests/test_a.py"]
+	# pytest's `ERROR: not found:` line is no node error, so a missing node never
+	# proves a failure to the heal reproduction mapping.
+	assert result["inherited"][0]["error_names"] == []
+
+
+def test_error_node_names_parses_only_summary_lines():
+	tail = (
+		"ERROR tests/test_a.py::test_early - printed before the summary\n"
+		"=========================== short test summary info ============================\n"
+		"ERROR tests/test_a.py::test_x - RuntimeError: boom\n"
+		"2026-11-01T00:00:00.0Z ERROR tests/test_a.py::test_p[1] - fixture\n"
+		"log: ERROR tests/test_a.py::test_mid - noise\n"
+		"ERROR: not found: tests/test_a.py::test_gone\n"
+		"FAILED tests/test_a.py::test_f - assert 0\n"
+	)
+	assert gate.error_node_names(tail) == ["tests/test_a.py::test_x", "tests/test_a.py::test_p[1]"]
+	# Without the summary banner nothing counts (fail closed).
+	assert gate.error_node_names("ERROR tests/test_a.py::test_x - boom\n") == []
+
+
+def test_tests_file_setup_error_on_both_trees_lists_error_names(tmp_path):
+	body = "import pytest\n\n@pytest.fixture\ndef boom():\n\traise RuntimeError('boom')\n\ndef test_x(boom):\n\tpass\n"
+	root = _repo(tmp_path, {"tests/test_a.py": body})
+	baseline = _repo(tmp_path, {"tests/test_a.py": body}, name="baseline")
+	result = _tests_file_run(tmp_path, root, "tests/test_a.py::test_x\n", baseline)
+	assert result["failures"] == []
+	assert [(i["test"], i["names"], i["error_names"]) for i in result["inherited"]] == [
+		("tests/test_a.py", [], ["tests/test_a.py::test_x"])]
+
+
+def test_tests_file_names_ignored_by_whole_file_runners_are_unverified(tmp_path):
+	script = _repo(tmp_path, {"tests/test_m.py": "def test_x():\n\tpass\n\nif __name__ == '__main__':\n\ttest_x()\n"}, name="script")
+	units, unverified = gate.plan_units(script, {"affected_tests": [{"path": "tests/test_m.py", "reasons": ["tests_file"], "functions": ["test_x"]}]})
+	assert units[0]["argv"] == ["python3", "tests/test_m.py"]
+	assert unverified == [{"item": "tests/test_m.py", "reason": "tests_file_names_ignored"}]
+	override = _repo(tmp_path, {".ai/validate.yml": "prepush_test_command: run {files}\n", "tests/test_a.py": ""}, name="override")
+	units, unverified = gate.plan_units(override, {"affected_tests": [{"path": "tests/test_a.py", "reasons": ["tests_file"], "functions": ["test_x"]}]})
+	assert [u["id"] for u in units] == ["prepush_test_command"]
+	assert unverified == [{"item": "tests/test_a.py", "reason": "tests_file_names_ignored"}]
+	# Without --tests-only the selection's functions keep the old behaviour.
+	assert gate.plan_units(script, {"affected_tests": [{"path": "tests/test_m.py", "reasons": [], "functions": ["test_x"]}]})[1] == []
+
+
+def test_wrapper_trailing_tests_file_without_value_is_a_usage_error(tmp_path):
+	worktree = _worktree(tmp_path)
+	env, log = _wrapper_env(tmp_path)
+	proc, out = _run_wrapper_with(tmp_path, worktree, env, "--tests-only")
+	assert proc.returncode == 0
+	assert json.loads((out / "result.json").read_text(encoding="utf-8"))["reason"] == "usage_error"
+	assert not log.exists()
+
+
+@pytest.mark.parametrize("flag", ["--tests-file", "--expect-baseline-fail-file"])
+def test_wrapper_trailing_done_check_option_without_value_is_a_usage_error(tmp_path, flag):
+	# A trailing option used to loop forever in the parser (shift 2 failed).
+	worktree = _worktree(tmp_path)
+	env, log = _wrapper_env(tmp_path)
+	proc, out = _run_wrapper_with(tmp_path, worktree, env, flag)
+	assert proc.returncode == 0
+	assert json.loads((out / "result.json").read_text(encoding="utf-8"))["reason"] == "usage_error"
+	assert not log.exists()
+
+
+def test_wrapper_empty_done_check_value_is_logged_as_rejected(tmp_path):
+	worktree = _worktree(tmp_path)
+	env, log = _wrapper_env(tmp_path)
+	proc, out = _run_wrapper_with(tmp_path, worktree, env, "--tests-file", "")
+	assert proc.returncode == 0, proc.stderr
+	assert "reason=tests_file_rejected" in proc.stderr + proc.stdout
+	run_line = next(line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("run "))
+	assert "--tests-file" not in run_line and "dst=/inputs" not in run_line
+
+
+TF_PR_MIXED = "def test_added():\n\tpass\n\n\ndef test_old_break():\n\tassert False\n"
+TF_BASE_MIXED = "def test_old_break():\n\tassert False\n"
+
+
+def test_tests_file_multi_name_unit_missing_node_on_baseline_is_unverified(tmp_path):
+	root = _repo(tmp_path, {"tests/test_a.py": TF_PR_MIXED})
+	baseline = _repo(tmp_path, {"tests/test_a.py": TF_BASE_MIXED}, name="baseline")
+	result = _tests_file_run(tmp_path, root, "tests/test_a.py::test_added\ntests/test_a.py::test_old_break\n", baseline)
+	# pytest exits 4 on the baseline (test_added missing) without running
+	# test_old_break, so the inherited failure cannot be told apart.
+	assert result["failures"] == [] and result["inherited"] == []
+	assert [(u["item"], u["reason"]) for u in result["unverified"]] == [("tests/test_a.py", "baseline_error")]
+	assert result["status"] == "unverified"
+
+
+def test_tests_file_named_test_missing_on_pr_tree_only_is_unverified(tmp_path):
+	root = _repo(tmp_path, {"tests/test_a.py": TF_BASE_NEW})
+	baseline = _repo(tmp_path, {"tests/test_a.py": TF_BASE_NEW + "\n\ndef test_gone():\n\tassert False\n"}, name="baseline")
+	result = _tests_file_run(tmp_path, root, "tests/test_a.py::test_gone\n", baseline)
+	# The requested test never ran on this change's tree: not inherited.
+	assert result["failures"] == [] and result["inherited"] == []
+	assert [(u["item"], u["reason"]) for u in result["unverified"]] == [("tests/test_a.py", "baseline_error")]
+
+
+def test_tests_file_multi_name_unit_missing_node_on_both_trees_is_unverified(tmp_path):
+	root = _repo(tmp_path, {"tests/test_a.py": "def test_x():\n\tassert False\n"})
+	baseline = _repo(tmp_path, {"tests/test_a.py": "def test_x():\n\tpass\n"}, name="baseline")
+	result = _tests_file_run(tmp_path, root, "tests/test_a.py::test_stale\ntests/test_a.py::test_x\n", baseline)
+	# test_stale is missing on both trees, so pytest exits 4 on both without
+	# running test_x: the change-caused test_x failure must not pass as inherited.
+	assert result["failures"] == [] and result["inherited"] == []
+	assert [(u["item"], u["reason"]) for u in result["unverified"]] == [("tests/test_a.py", "baseline_error")]
+	assert result["status"] == "unverified"
+
+
+# --- Explicit done-check targets (issue #8427, P3) ----------------------------
+
+
+def _plain_tree(root: Path, files: dict[str, str]) -> Path:
+	for rel, text in files.items():
+		path = root / rel
+		path.parent.mkdir(parents=True, exist_ok=True)
+		path.write_text(text, encoding="utf-8")
+	return root
+
+
+def test_explicit_targets_are_validated_and_capped(tmp_path):
+	repo = _plain_tree(tmp_path / "repo", {"tests/a.py": "", "outside.py": ""})
+	(repo / "tests" / "link.py").symlink_to(repo / "outside.py")
+	lines = ["# comment", "", "tests/a.py", "tests/a.py", "tests/a.py::test_x", "../etc/passwd", "/abs.py",
+		"tests/./a.py", "tests/a.py::bad name", "tests/nope.py", "tests/link.py"]
+	targets, unverified = gate._parse_targets(lines, repo, "tests_file")
+	assert [t[0] for t in targets] == ["tests/a.py", "tests/a.py::test_x"]
+	reasons = {u["item"]: u["reason"] for u in unverified}
+	assert reasons == {
+		"../etc/passwd": "tests_file_invalid", "/abs.py": "tests_file_invalid", "tests/./a.py": "tests_file_invalid",
+		"tests/a.py::bad name": "tests_file_invalid", "tests/nope.py": "tests_file_missing", "tests/link.py": "tests_file_invalid",
+	}
+	many = [f"tests/a.py::test_{n}" for n in range(60)]
+	targets, unverified = gate._parse_targets(many, repo, "tests_file")
+	assert len(targets) == gate.MAX_EXPLICIT_TARGETS
+	assert unverified == [{"item": "tests_file", "reason": "too_many_targets"}]
+
+
+def test_explicit_targets_merge_with_path_selection():
+	selection = {"affected_tests": [{"path": "tests/a.py", "reasons": ["naming"], "functions": ["test_1"]}, {"path": "tests/c.py", "reasons": ["naming"]}]}
+	gate._merge_explicit_tests(selection, [("tests/a.py::test_2", "tests/a.py", "test_2"), ("tests/b.py", "tests/b.py", ""),
+		("tests/c.py::test_9", "tests/c.py", "test_9")])
+	by_path = {e["path"]: e for e in selection["affected_tests"]}
+	assert by_path["tests/a.py"]["functions"] == ["test_1", "test_2"]
+	assert "functions" not in by_path["tests/b.py"] and by_path["tests/b.py"]["reasons"] == ["explicit"]
+	assert "functions" not in by_path["tests/c.py"]
+	gate._merge_explicit_tests(selection, [("tests/a.py", "tests/a.py", "")])
+	assert "functions" not in by_path["tests/a.py"]
+
+
+def test_explicit_targets_run_on_head_and_red_on_base_targets_on_the_baseline(tmp_path):
+	head = _plain_tree(tmp_path / "head", {
+		"tests/red_case.py": "import sys\nsys.exit(0)\n",
+		"tests/green_case.py": "import sys\nsys.exit(0)\n",
+		"tests/new_case.py": "import sys\nsys.exit(0)\n",
+		"tests/broken_case.py": "import sys\nsys.exit(3)\n",
+	})
+	base = _plain_tree(tmp_path / "base", {
+		"tests/red_case.py": "import sys\nsys.exit(1)\n",
+		"tests/green_case.py": "import sys\nsys.exit(0)\n",
+		"tests/broken_case.py": "import sys\nsys.exit(0)\n",
+	})
+	result = gate.run_gate(head, {"affected_tests": [], "changed_files": []}, base, 2, 2,
+		explicit_tests=["tests/red_case.py", "tests/green_case.py", "tests/new_case.py", "tests/broken_case.py"],
+		expect_baseline_fail=["tests/red_case.py", "tests/green_case.py", "tests/new_case.py"])
+	assert result["acceptance"] == {
+		"tests/red_case.py": {"head": "pass", "base": "fail"},
+		"tests/green_case.py": {"head": "pass", "base": "pass"},
+		"tests/new_case.py": {"head": "pass", "base": "not_run", "base_reason": "absent_on_base"},
+		"tests/broken_case.py": {"head": "fail", "base": "not_run"},
+	}
+	assert result["selected"] == 0
+	assert [f["test"] for f in result["failures"]] == ["tests/broken_case.py"]
+	assert result["status"] == "fail" and result["schema"] == gate.RESULT_SCHEMA
+
+
+def test_run_without_target_options_has_no_acceptance_key(tmp_path):
+	head = _plain_tree(tmp_path / "head", {"tests/red_case.py": "import sys\nsys.exit(0)\n"})
+	result = gate.run_gate(head, {"affected_tests": [{"path": "tests/red_case.py", "reasons": ["changed_test"]}], "changed_files": []}, None, 2, 2)
+	assert "acceptance" not in result and result["status"] == "pass" and result["selected"] == 1
+
+
+def test_run_cli_reads_the_target_files(tmp_path):
+	head = _plain_tree(tmp_path / "head", {"tests/red_case.py": "import sys\nsys.exit(0)\n"})
+	base = _plain_tree(tmp_path / "base", {"tests/red_case.py": "import sys\nsys.exit(1)\n"})
+	changed, targets, out = tmp_path / "changed.txt", tmp_path / "tests.txt", tmp_path / "result.json"
+	changed.write_text("", encoding="utf-8")
+	targets.write_text("tests/red_case.py\n", encoding="utf-8")
+	assert gate.main(["run", "--repo-root", str(head), "--changed-files-file", str(changed), "--baseline-tree", str(base),
+		"--tests-file", str(targets), "--expect-baseline-fail-file", str(targets), "--out", str(out)]) == 0
+	data = json.loads(out.read_text(encoding="utf-8"))
+	assert data["acceptance"] == {"tests/red_case.py": {"head": "pass", "base": "fail"}}
+	assert gate.main(["run", "--repo-root", str(head), "--changed-files-file", str(changed),
+		"--tests-file", str(tmp_path / "missing.txt"), "--out", str(out)]) == 0
+	data = json.loads(out.read_text(encoding="utf-8"))
+	assert data["acceptance"] == {} and {"item": "tests_file", "reason": "tests_file_unreadable"} in data["unverified"]
+	assert data["status"] == "unverified"
+
+
+def test_run_cli_tests_file_adds_done_check_targets_to_the_selection(tmp_path):
+	# `--tests-file` (issue #8427 P3) adds to the affected-test selection;
+	# only `--tests-only` replaces it. The #8436 merge had `--tests-file`
+	# replace it, so a done-check skipped the change's own affected tests.
+	root = _repo(tmp_path, {"tests/test_a.py": "def test_ok():\n\tpass\n", "tests/test_b.py": "def test_ok():\n\tpass\n"})
+	changed, targets, out = tmp_path / "changed.txt", tmp_path / "tests.txt", tmp_path / "result.json"
+	changed.write_text("M\ttests/test_a.py\n", encoding="utf-8")
+	targets.write_text("tests/test_b.py\n", encoding="utf-8")
+	assert gate.main(["run", "--repo-root", str(root), "--changed-files-file", str(changed), "--tests-file", str(targets),
+		"--timeout-minutes", "2", "--out", str(out)]) == 0
+	data = json.loads(out.read_text(encoding="utf-8"))
+	# The selected test and the done-check target both ran (plus static checks).
+	assert sorted(r for r in data["ran"] if r.startswith("tests/")) == ["tests/test_a.py", "tests/test_b.py"]
+	assert data["acceptance"] == {"tests/test_b.py": {"head": "pass", "base": "not_run"}}
+	assert gate.main(["run", "--repo-root", str(root), "--changed-files-file", str(changed), "--tests-only", str(targets),
+		"--timeout-minutes", "2", "--out", str(out)]) == 0
+	assert json.loads(out.read_text(encoding="utf-8"))["ran"] == ["tests/test_b.py"]
+
+
+def test_wrapper_tests_file_is_a_done_check_input_not_a_test_list(tmp_path):
+	worktree = _worktree(tmp_path)
+	env, log = _wrapper_env(tmp_path)
+	listing = tmp_path / "tests.txt"
+	listing.write_text("tests/test_a.py\n", encoding="utf-8")
+	proc, out = _run_wrapper_with(tmp_path, worktree, env, "--tests-file", str(listing))
+	assert proc.returncode == 0, proc.stderr
+	run_line = next(line for line in log.read_text(encoding="utf-8").splitlines() if line.startswith("run "))
+	assert "--tests-file /inputs/tests.txt" in run_line and "dst=/inputs,readonly" in run_line
+	assert "/gate/tests.txt" not in run_line and "--tests-only" not in run_line
+	# A bad done-check file is logged and the run goes ahead, unlike --tests-only.
+	second = tmp_path / "second"
+	second.mkdir()
+	proc, out = _run_wrapper_with(second, worktree, env, "--tests-file", str(tmp_path / "missing.txt"))
+	assert proc.returncode == 0, proc.stderr
+	assert "reason=tests_file_rejected" in proc.stderr + proc.stdout
+	assert json.loads((out / "result.json").read_text(encoding="utf-8"))["status"] == "pass"
+
+
+def test_done_check_baseline_rerun_gets_the_floored_deadline(tmp_path, monkeypatch):
+	# Head run uses the whole budget: the red-on-base re-run still gets the
+	# same floored deadline classify_baseline got (one BASELINE_MIN_SECS window).
+	head = _plain_tree(tmp_path / "head", {"tests/red_case.py": "import sys\nsys.exit(0)\n"})
+	base = _plain_tree(tmp_path / "base", {"tests/red_case.py": "import sys\nsys.exit(1)\n"})
+	seen = []
+	real = gate.run_units
+
+	def fake_run_units(units, cwd, deadline, shards):
+		seen.append((Path(cwd).resolve(), deadline))
+		if Path(cwd).resolve() == head.resolve():
+			return [{**u, "status": "pass", "rc": 0, "tail": ""} for u in units]
+		return real(units, cwd, deadline, shards)
+
+	monkeypatch.setattr(gate, "run_units", fake_run_units)
+	t0 = time.monotonic()
+	result = gate.run_gate(head, {"affected_tests": [], "changed_files": []}, base, 1, 2,
+		explicit_tests=["tests/red_case.py"], expect_baseline_fail=["tests/red_case.py"])
+	base_calls = [d for cwd, d in seen if cwd == base.resolve()]
+	assert base_calls and all(d >= t0 + gate.BASELINE_MIN_SECS for d in base_calls)
+	assert result["acceptance"]["tests/red_case.py"]["base"] != "unverified"
+
+
+def test_red_on_base_target_failing_on_head_is_not_rerun_on_base(tmp_path, monkeypatch):
+	# A head-failing target scores "unmet" whatever its base result, so its
+	# base re-run would only use up the shared baseline window.
+	head = _plain_tree(tmp_path / "head", {"tests/broken_case.py": "import sys\nsys.exit(3)\n", "tests/red_case.py": "import sys\nsys.exit(0)\n"})
+	base = _plain_tree(tmp_path / "base", {"tests/broken_case.py": "import sys\nsys.exit(1)\n", "tests/red_case.py": "import sys\nsys.exit(1)\n"})
+	reran = []
+	real = gate._baseline_target_statuses
+
+	def spy(repo, baseline, targets, deadline, shards):
+		reran.extend(t[0] for t in targets)
+		return real(repo, baseline, targets, deadline, shards)
+
+	monkeypatch.setattr(gate, "_baseline_target_statuses", spy)
+	result = gate.run_gate(head, {"affected_tests": [], "changed_files": []}, base, 2, 2,
+		explicit_tests=["tests/broken_case.py", "tests/red_case.py"], expect_baseline_fail=["tests/broken_case.py", "tests/red_case.py"])
+	assert reran == ["tests/red_case.py"]
+	assert result["acceptance"]["tests/broken_case.py"] == {"head": "fail", "base": "not_run"}
+	assert result["acceptance"]["tests/red_case.py"] == {"head": "pass", "base": "fail"}

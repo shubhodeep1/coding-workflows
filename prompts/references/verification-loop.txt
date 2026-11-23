@@ -1,0 +1,6 @@
+Verification loop:
+- When the task produces file changes, run the cheapest relevant checks first: typecheck -> lint -> tests -> build -> smoke.
+- Stop at the first failing tier, fix that tier, then continue only after it passes.
+- Confirm the requested behavior is satisfied, not just the first test.
+- Ground every factual claim in repository evidence you actually read.
+- Before finishing, make sure the on-disk result matches what you report.

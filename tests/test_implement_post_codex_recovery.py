@@ -1,0 +1,6530 @@
+#!/usr/bin/env python3
+"""Regression tests for implement-phase post-Codex diagnose/fix-up recovery.
+
+These tests intentionally execute extracted `run:` blocks from
+`.github/workflows/implement.yml` with mocked `gh`/`codex` binaries so the
+contract is validated against workflow behavior, not reimplemented logic.
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import textwrap
+import unittest
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
+IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
+IMPLEMENT_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
+IMPLEMENT_STAGED_SUPPORT_WORKSPACE_SCRIPT = REPO_ROOT / "scripts" / "implement_staged_support_workspace.sh"
+IMPLEMENT_GUARD_HANDLER = REPO_ROOT / "scripts" / "implement_handle_guard_block.sh"
+FILES_TOUCHED_SCOPE_GUARD = REPO_ROOT / "scripts" / "files_touched_scope_guard.py"
+
+
+def _workflow_text() -> str:
+	return IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
+
+
+def _implement_commit_script_text() -> str:
+	return IMPLEMENT_COMMIT_SCRIPT.read_text(encoding="utf-8")
+
+
+def test_generated_manifest_staging_excludes_modifications_but_accepts_deletion(tmp_path: Path) -> None:
+	text = _implement_commit_script_text()
+	preflight = _extract_run_script("Preflight destructive-commit guard")
+	path = ".ai/.workspace_source_manifest.txt"
+	# The real commit and its temporary-index preflight project the same paths.
+	start = "add_u_excludes=(':!node_modules'"
+	end = 'git ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}"'
+	commit_stage = text[text.index(start):text.index(end, text.index(start))]
+	preflight_stage = preflight[preflight.index(start):preflight.index('while IFS= read -r -d \'\' untracked_candidate', preflight.index(start))]
+	for stage in (commit_stage, preflight_stage):
+		assert stage.count(f"':!{path}'") == 2
+		assert 'git add -u -- "${add_u_excludes[@]}"' in stage
+		assert f'git rm --cached --quiet -- {path}' in stage
+		assert f'IMPLEMENT_GENERATED_MANIFEST_UNTRACKED path={path}' in stage
+
+	repo = tmp_path / "repo"
+	repo.mkdir()
+	_bootstrap_git_repo(repo)
+	manifest = repo / path
+	manifest.parent.mkdir()
+	manifest.write_text("original\n", encoding="utf-8")
+	_git(["git", "add", "-f", "--", path], cwd=repo)
+	_git(["git", "commit", "-qm", "manifest"], cwd=repo)
+	# Exercise the shipped block, not a reconstructed staging command.
+	stage = "set -euo pipefail\nis_self_repo=true\n" + commit_stage + "\n"
+	for deleted in (False, True):
+		if deleted:
+			manifest.unlink()
+		else:
+			manifest.write_text("regenerated\n", encoding="utf-8")
+		result = subprocess.run(["bash", "-c", stage], cwd=repo, env=_isolated_test_env({"GITHUB_REPOSITORY": "shubhodeep1/coding-workflows"}, cwd=repo), capture_output=True, text=True)
+		assert result.returncode == 0, (result.stdout, result.stderr)
+		staged = subprocess.run(["git", "diff", "--cached", "--name-status"], cwd=repo, env=_isolated_test_env(cwd=repo), check=True, capture_output=True, text=True).stdout
+		assert staged == (f"D\t{path}\n" if deleted else "")
+		assert ("IMPLEMENT_GENERATED_MANIFEST_UNTRACKED" in result.stdout) == deleted
+
+
+def test_review_commit_paths_exclude_generated_manifest() -> None:
+	pathspec = "':!.ai/.workspace_source_manifest.txt'"
+	review = (REPO_ROOT / "scripts" / "review_commit_changes.sh").read_text(encoding="utf-8")
+	judge = (REPO_ROOT / "scripts" / "review_rb_judge.sh").read_text(encoding="utf-8")
+	resolver = (REPO_ROOT / "scripts" / "review_conflict_resolve.sh").read_text(encoding="utf-8")
+	assert all(pathspec in line for line in review.splitlines() if "git add -u --" in line or "git ls-files --others --exclude-standard -z -- ':!node_modules'" in line)
+	assert "node_modules/*|.ai/.workspace_source_manifest.txt) continue" in review
+	assert all(pathspec in line for line in judge.splitlines() if "git add -u --" in line)
+	assert "git add -u -- ':!node_modules'" in resolver
+	assert all(pathspec in line for line in resolver.splitlines() if line.lstrip().startswith(("git add -u --", "git ls-files --others --exclude-standard -z -- ':!node_modules'")))
+
+
+def _implement_guard_handler_text() -> str:
+	return IMPLEMENT_GUARD_HANDLER.read_text(encoding="utf-8")
+
+
+def _step_block(step_name: str) -> list[str]:
+	lines = _workflow_text().splitlines()
+	needle = f"- name: {step_name}"
+	for idx, line in enumerate(lines):
+		if line.strip() != needle:
+			continue
+		step_indent = len(line) - len(line.lstrip(" "))
+		end = len(lines)
+		for j in range(idx + 1, len(lines)):
+			candidate = lines[j]
+			if candidate.strip().startswith("- name:"):
+				indent = len(candidate) - len(candidate.lstrip(" "))
+				if indent == step_indent:
+					end = j
+					break
+		return lines[idx:end]
+	raise AssertionError(f"Step not found in workflow: {step_name}")
+
+
+def _extract_run_script(step_name: str) -> str:
+	block = _step_block(step_name)
+	run_idx = -1
+	run_indent = 0
+	for i, line in enumerate(block):
+		if line.strip() == "run: |":
+			run_idx = i
+			run_indent = len(line) - len(line.lstrip(" "))
+			break
+	if run_idx == -1:
+		raise AssertionError(f"Step has no run block: {step_name}")
+
+	script_lines: list[str] = []
+	for line in block[run_idx + 1 :]:
+		if line.strip() == "":
+			script_lines.append("")
+			continue
+		indent = len(line) - len(line.lstrip(" "))
+		if indent <= run_indent:
+			break
+		prefix = " " * (run_indent + 2)
+		if line.startswith(prefix):
+			script_lines.append(line[len(prefix) :])
+		else:
+			script_lines.append(line.lstrip())
+	return "\n".join(script_lines).rstrip() + "\n"
+
+
+def _render_github_expressions(script: str, overrides: dict[str, str] | None = None) -> str:
+	values = {
+		"github.repository": "owner/repo",
+		"github.repository_owner": "owner",
+		"github.run_id": "777",
+		"github.server_url": "https://github.com",
+		"github.event.repository.default_branch": "main",
+		"github.sha": "deadbeef",
+		"job.status": "failure",
+	}
+	if overrides:
+		values.update(overrides)
+
+	def _replace(match: re.Match[str]) -> str:
+		key = " ".join(match.group(1).split())
+		return values.get(key, "")
+
+	rendered = re.sub(r"\$\{\{\s*(.*?)\s*\}\}", _replace, script)
+	assert "${{" not in rendered, "Found unrendered GitHub expression(s)"
+	return rendered
+
+
+def _isolated_test_env(extra_env: dict[str, str] | None = None, *, cwd: Path | None = None) -> dict[str, str]:
+	baseline_env = os.environ.copy()
+	env = baseline_env.copy()
+	if extra_env:
+		env.update(extra_env)
+	# Scratch-repo tests must ignore the runner's workspace-shell hook and the
+	# main-checkout git-location overrides, or bash/git subprocesses will operate
+	# on the outer workspace instead of the temp repo under test. When callers
+	# pass os.environ.copy(), drop inherited runner values after the merge while
+	# preserving explicit test overrides that intentionally differ.
+	for key in ("BASH_ENV", "ENV"):
+		env.pop(key, None)
+	for key in ("WORKSPACE_PATH", "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR"):
+		if env.get(key) == baseline_env.get(key):
+			env.pop(key, None)
+	if cwd is not None:
+		env["PWD"] = str(cwd)
+		env.pop("OLDPWD", None)
+	return env
+
+
+def _run_shell_script(script: str, *, cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+	env = _isolated_test_env(env, cwd=cwd)
+	script_path = cwd / "__workflow_step_under_test.sh"
+	script_path.write_text(script, encoding="utf-8")
+	script_path.chmod(0o755)
+	return subprocess.run(
+		["bash", str(script_path)],
+		cwd=str(cwd),
+		env=env,
+		text=True,
+		capture_output=True,
+		timeout=60,
+		check=False,
+	)
+
+
+def _git(cmd: list[str], *, cwd: Path) -> None:
+	env = _isolated_test_env(cwd=cwd)
+	subprocess.run(cmd, cwd=str(cwd), env=env, check=True, capture_output=True, text=True)
+
+
+def _bootstrap_git_repo(repo_dir: Path) -> None:
+	repo_dir.mkdir(parents=True, exist_ok=True)
+	_git(["git", "init"], cwd=repo_dir)
+	_git(["git", "config", "user.name", "tests"], cwd=repo_dir)
+	_git(["git", "config", "user.email", "tests@example.com"], cwd=repo_dir)
+	(repo_dir / "README.md").write_text("test\n", encoding="utf-8")
+	_git(["git", "add", "README.md"], cwd=repo_dir)
+	_git(["git", "commit", "-m", "init"], cwd=repo_dir)
+
+
+def _install_mock_gh(bin_dir: Path) -> None:
+	gh_script = r'''#!/usr/bin/env python3
+import json
+import os
+import re
+import sys
+from pathlib import Path
+
+state_path = Path(os.environ["MOCK_GH_STATE_FILE"])
+state = json.loads(state_path.read_text(encoding="utf-8"))
+args = sys.argv[1:]
+
+
+def save() -> None:
+	state_path.write_text(json.dumps(state), encoding="utf-8")
+
+
+def first_value(flag: str) -> str:
+	for i, arg in enumerate(args):
+		if arg == flag and i + 1 < len(args):
+			return args[i + 1]
+	return ""
+
+
+def collect_values(flag: str) -> list[str]:
+	out = []
+	for i, arg in enumerate(args):
+		if arg == flag and i + 1 < len(args):
+			out.append(args[i + 1])
+	return out
+
+
+def first_non_flag(values: list[str]) -> str:
+	i = 0
+	while i < len(values):
+		arg = values[i]
+		if arg in ("--jq", "-f", "-H", "-X", "--method", "--input", "--repo", "--title", "--body", "--add-label", "--remove-label"):
+			i += 2
+			continue
+		if arg.startswith("-"):
+			i += 1
+			continue
+		return arg
+	return ""
+
+
+def parse_fields() -> dict[str, str]:
+	parsed = {}
+	for item in collect_values("-f"):
+		if "=" in item:
+			k, v = item.split("=", 1)
+			parsed[k] = v
+	return parsed
+
+
+def issue_from_path(path: str) -> str:
+	m = re.search(r"/issues/(\d+)", path)
+	return m.group(1) if m else str(state.get("issue_number", 948))
+
+
+state.setdefault("calls", []).append(args)
+
+if not args:
+	save()
+	sys.exit(0)
+
+if args[0] == "label" and len(args) >= 3 and args[1] in ("create", "edit"):
+	state.setdefault(f"label_{args[1]}s", []).append({
+		"name": args[2],
+		"repo": first_value("--repo"),
+	})
+	save()
+	if args[1] == "create" and os.environ.get("MOCK_GH_LABEL_CREATE_EXISTS") == "true":
+		sys.stderr.write(f'label with name "{args[2]}" already exists; use `--force` to update its color and description\n')
+		sys.exit(1)
+	sys.exit(0)
+
+if args[0] == "issue" and len(args) >= 3 and args[1] == "edit":
+	transient_failures = int(os.environ.get("MOCK_GH_ISSUE_EDIT_TRANSIENT_FAILURES") or "0")
+	if int(state.get("issue_edit_transient_failures_seen", 0)) < transient_failures:
+		state["issue_edit_transient_failures_seen"] = int(state.get("issue_edit_transient_failures_seen", 0)) + 1
+		save()
+		sys.stderr.write("HTTP 502: Bad Gateway\n")
+		sys.exit(1)
+	if os.environ.get("MOCK_GH_ISSUE_EDIT_FAILURE") == "true":
+		save()
+		sys.exit(1)
+	issue_num = args[2]
+	adds = collect_values("--add-label")
+	removes = collect_values("--remove-label")
+	state.setdefault("issue_edits", []).append({
+		"issue": issue_num,
+		"add": adds,
+		"remove": removes,
+		"repo": first_value("--repo"),
+	})
+	labels = list(state.get("issue_labels", []))
+	for label in adds:
+		if label not in labels:
+			labels.append(label)
+	for label in removes:
+		labels = [x for x in labels if x != label]
+	state["issue_labels"] = labels
+	save()
+	sys.exit(0)
+
+if args[0] == "issue" and len(args) >= 3 and args[1] == "create":
+	next_num = int(state.get("next_issue_number", 900))
+	state["next_issue_number"] = next_num + 1
+	repo = first_value("--repo")
+	title = first_value("--title")
+	body = first_value("--body")
+	state.setdefault("created_issues", []).append({
+		"number": next_num,
+		"repo": repo,
+		"title": title,
+		"body": body,
+		"args": args,
+	})
+	save()
+	print(f"https://github.com/{repo}/issues/{next_num}")
+	sys.exit(0)
+
+if args[0] == "issue" and len(args) >= 3 and args[1] == "comment":
+	body_file = first_value("--body-file")
+	state.setdefault("issue_comments", []).append({
+		"issue": args[2],
+		"repo": first_value("--repo"),
+		"body": Path(body_file).read_text(encoding="utf-8") if body_file else first_value("--body"),
+	})
+	save()
+	sys.exit(0)
+
+if args[0] == "issue" and len(args) >= 3 and args[1] == "view":
+	for label in state.get("issue_labels", []):
+		print(label)
+	save()
+	sys.exit(0)
+
+if args[0] == "api":
+	path = first_non_flag(args[1:])
+	jq = first_value("--jq")
+	fields = parse_fields()
+
+	if "/actions/runs/" in path and "/jobs" in path:
+		failed_step = state.get("failed_step_name", "")
+		payload = {"jobs": [{"steps": [{"name": failed_step, "conclusion": "failure"}]}]}
+		if jq:
+			if "conclusion == \"failure\"" in jq:
+				print(failed_step)
+			elif "conclusion == \"cancelled\"" in jq:
+				print(state.get("cancelled_step_name", ""))
+			else:
+				print("")
+		else:
+			print(json.dumps(payload))
+		save()
+		sys.exit(0)
+
+	if re.search(r"/issues/\d+/comments$", path) and "body" in fields:
+		state.setdefault("api_comments", []).append({
+			"issue": issue_from_path(path),
+			"body": fields["body"],
+			"path": path,
+		})
+		save()
+		print("{}")
+		sys.exit(0)
+
+	if re.search(r"/issues/\d+$", path):
+		state.setdefault("issue_queries", []).append(path)
+		failures_remaining = int(state.get("issue_api_failures_remaining", 0) or 0)
+		if failures_remaining > 0:
+			state["issue_api_failures_remaining"] = failures_remaining - 1
+			save()
+			print("gh: simulated transient failure", file=sys.stderr)
+			sys.exit(1)
+		raw_issue_response = state.get("issue_api_raw_response")
+		if raw_issue_response is not None:
+			save()
+			print(raw_issue_response)
+			sys.exit(0)
+		issue_num = int(state.get("issue_number", issue_from_path(path)))
+		labels = [{"name": x} for x in state.get("issue_labels", [])]
+		body = state.get("issue_body", "")
+		title = state.get("issue_title", "Test issue")
+		html_url = state.get("issue_url", f"https://github.com/owner/repo/issues/{issue_num}")
+		issue_state = state.get("issue_state", "open")
+		payload = {
+			"number": issue_num,
+			"title": title,
+			"body": body,
+			"html_url": html_url,
+			"state": issue_state,
+			"labels": labels,
+		}
+		if jq:
+			if "labels" in jq and "state" in jq:
+				print(json.dumps({"state": issue_state, "labels": [x["name"] for x in labels]}))
+			elif "labels" in jq:
+				print(json.dumps([x["name"] for x in labels]))
+			elif ".body" in jq:
+				print(body)
+			else:
+				print("")
+		else:
+			print(json.dumps(payload))
+		save()
+		sys.exit(0)
+
+	if "/git/ref/heads/" in path:
+		ref = path.split("/git/ref/heads/", 1)[1]
+		from urllib.parse import unquote
+
+		decoded_ref = unquote(ref)
+		state.setdefault("branch_ref_queries", []).append(decoded_ref)
+		exists = bool((state.get("branch_exists", {}) or {}).get(decoded_ref, False))
+		save()
+		if exists:
+			print(json.dumps({"ref": f"refs/heads/{decoded_ref}"}))
+			sys.exit(0)
+		print("gh: Not Found (HTTP 404)", file=sys.stderr)
+		sys.exit(1)
+
+	# Asset fetch fallback path (unused in these tests, but keep stable behavior).
+	if "/contents/" in path:
+		print("not found", file=sys.stderr)
+		save()
+		sys.exit(1)
+
+	save()
+	print("{}")
+	sys.exit(0)
+
+print("Unsupported gh call: " + " ".join(args), file=sys.stderr)
+save()
+sys.exit(1)
+'''
+	mock_path = bin_dir / "gh"
+	mock_path.write_text(gh_script, encoding="utf-8")
+	mock_path.chmod(0o755)
+	(bin_dir / "sleep").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+	(bin_dir / "sleep").chmod(0o755)
+
+
+def _install_guard_mock_curl(bin_dir: Path) -> None:
+	curl_script = r'''#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+calls_path = Path(os.environ["MOCK_CURL_CALLS_FILE"])
+calls = json.loads(calls_path.read_text(encoding="utf-8"))
+calls.append(sys.argv[1:])
+calls_path.write_text(json.dumps(calls), encoding="utf-8")
+'''
+	mock_path = bin_dir / "curl"
+	mock_path.write_text(curl_script, encoding="utf-8")
+	mock_path.chmod(0o755)
+
+
+def _install_mock_codex(bin_dir: Path) -> None:
+	codex_script = r'''#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+args = sys.argv[1:]
+stdin_text = sys.stdin.read()
+
+calls_file = os.environ.get("MOCK_CODEX_CALLS_FILE")
+if calls_file:
+	with open(calls_file, "a", encoding="utf-8") as handle:
+		handle.write(json.dumps(args))
+		handle.write("\n")
+
+stdin_file = os.environ.get("MOCK_CODEX_STDIN_FILE")
+if stdin_file:
+	Path(stdin_file).write_text(stdin_text, encoding="utf-8")
+
+mode = os.environ.get("MOCK_CODEX_MODE", "success")
+if mode == "fail":
+	print("mock codex failure", file=sys.stderr)
+	sys.exit(1)
+if mode == "invalid":
+	print("this is not json")
+	sys.exit(0)
+
+payload = os.environ.get("MOCK_CODEX_OUTPUT", "{}")
+print(payload)
+sys.exit(0)
+'''
+	mock_path = bin_dir / "codex"
+	mock_path.write_text(codex_script, encoding="utf-8")
+	mock_path.chmod(0o755)
+
+
+def _read_gh_state(state_file: Path) -> dict:
+	return json.loads(state_file.read_text(encoding="utf-8"))
+
+
+def _copy_diagnose_assets(repo_dir: Path) -> None:
+	for rel in (
+		"scripts/gh_helpers.sh",
+		"scripts/implement_diagnose_post_codex_failure.sh",
+		"scripts/render_prompt.py",
+		"scripts/render_prompt.sh",
+		"scripts/validate_changed_files_syntax.sh",
+		"prompts/contracts/mode-implement-diagnose.yml",
+		"prompts/references/output-contract.txt",
+		"prompts/mode-implement-diagnose.txt",
+		"prompts/mode-implement-repair-syntax.txt",
+	):
+		src = REPO_ROOT / rel
+		dst = repo_dir / rel
+		dst.parent.mkdir(parents=True, exist_ok=True)
+		shutil.copy2(src, dst)
+		if dst.suffix == ".sh":
+			dst.chmod(0o755)
+
+
+def _copy_write_guard_assets(repo_dir: Path) -> None:
+	for rel in (
+		"scripts/write_guard.sh",
+		".github/ai/write_guards.v1.json",
+	):
+		src = REPO_ROOT / rel
+		dst = repo_dir / rel
+		dst.parent.mkdir(parents=True, exist_ok=True)
+		shutil.copy2(src, dst)
+		if dst.suffix == ".sh":
+			dst.chmod(0o755)
+
+
+def _prepare_diagnose_repo(tmp_path: Path) -> Path:
+	repo_dir = tmp_path / "diag-repo"
+	_bootstrap_git_repo(repo_dir)
+	_copy_diagnose_assets(repo_dir)
+
+	tracked = repo_dir / "tracked.txt"
+	tracked.write_text("before\n", encoding="utf-8")
+	_git(["git", "add", "tracked.txt"], cwd=repo_dir)
+	_git(["git", "commit", "-m", "tracked"], cwd=repo_dir)
+	tracked.write_text("after\n", encoding="utf-8")
+
+	return repo_dir
+
+
+def _run_diagnose_step(
+	tmp_path: Path,
+	*,
+	issue_labels: list[str],
+	capture_contents: str | None,
+	codex_mode: str,
+	codex_output: dict | None,
+	failed_step_name: str,
+	issue_body: str,
+	issue_meta_payload: object | None = None,
+	write_issue_body_file: bool = True,
+	issue_api_failures_remaining: int = 0,
+	fake_ai_engine: str | None = None,
+	extra_env: dict[str, str] | None = None,
+) -> tuple[subprocess.CompletedProcess[str], dict, Path, dict[str, str]]:
+	repo_dir = _prepare_diagnose_repo(tmp_path)
+	if fake_ai_engine is not None:
+		(repo_dir / "scripts" / "ai_engine.sh").write_text(fake_ai_engine, encoding="utf-8")
+	runtime_dir = tmp_path / "runtime"
+	bin_dir = tmp_path / "bin"
+	runtime_dir.mkdir(parents=True, exist_ok=True)
+	bin_dir.mkdir(parents=True, exist_ok=True)
+
+	_install_mock_gh(bin_dir)
+	_install_mock_codex(bin_dir)
+
+	if capture_contents is not None:
+		(runtime_dir / "post_codex_validation_errors.txt").write_text(capture_contents, encoding="utf-8")
+
+	issue_body_file = runtime_dir / "issue_body.txt"
+	if write_issue_body_file:
+		issue_body_file.write_text(issue_body, encoding="utf-8")
+
+	issue_meta_file = runtime_dir / "issue_meta.json"
+	if issue_meta_payload is not None:
+		if isinstance(issue_meta_payload, str):
+			issue_meta_file.write_text(issue_meta_payload, encoding="utf-8")
+		else:
+			issue_meta_file.write_text(json.dumps(issue_meta_payload), encoding="utf-8")
+
+	gh_state_file = runtime_dir / "gh_state.json"
+	gh_state_file.write_text(
+		json.dumps(
+			{
+				"issue_number": 948,
+				"issue_labels": issue_labels,
+				"issue_body": issue_body,
+				"failed_step_name": failed_step_name,
+				"next_issue_number": 1001,
+				"issue_api_failures_remaining": issue_api_failures_remaining,
+			}
+		),
+		encoding="utf-8",
+	)
+
+	github_output = runtime_dir / "github_output.txt"
+	result_file = runtime_dir / "implement_diagnose_result.json"
+	prompt_file = runtime_dir / "implement_diagnose_prompt.txt"
+	output_file = runtime_dir / "implement_diagnose_output.txt"
+	log_file = runtime_dir / "implement_diagnose_log.txt"
+	calls_file = runtime_dir / "codex_calls.log"
+	stdin_file = runtime_dir / "codex_stdin.txt"
+
+	script = _render_github_expressions(_extract_run_script("Diagnose post-Codex failure and create fix-up issues"))
+	env = os.environ.copy()
+	env.update(
+		{
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"GH_TOKEN": "test-token",
+			"OPENROUTER_API_KEY": "test-openrouter",
+			"ISSUE_NUMBER": "948",
+			"RUNTIME_DIR": str(runtime_dir),
+			"GITHUB_OUTPUT": str(github_output),
+			"GITHUB_REPOSITORY": "owner/repo",
+			"GITHUB_RUN_ID": "777",
+			"GITHUB_SERVER_URL": "https://github.com",
+			"JOB_STATUS": "failure",
+			"DEFAULT_BRANCH": "main",
+			"MODEL_EDITOR": "openai/gpt-5.4",
+			"PR_BASE_BRANCH": "orchestrator/project-829",
+			"SERENA_AVAILABLE": "true",
+			"ISSUE_BODY_FILE": str(issue_body_file),
+			"ISSUE_META_FILE": str(issue_meta_file),
+			"IMPLEMENT_DIAGNOSE_PROMPT_FILE": str(prompt_file),
+			"IMPLEMENT_DIAGNOSE_OUTPUT_FILE": str(output_file),
+			"IMPLEMENT_DIAGNOSE_LOG_FILE": str(log_file),
+			"IMPLEMENT_DIAGNOSE_RESULT_FILE": str(result_file),
+			"CODEX_OUTPUT_FILE": str(runtime_dir / "codex_output.txt"),
+			"MOCK_GH_STATE_FILE": str(gh_state_file),
+			"MOCK_CODEX_MODE": codex_mode,
+			"MOCK_CODEX_OUTPUT": json.dumps(codex_output or {}),
+			"MOCK_CODEX_CALLS_FILE": str(calls_file),
+			"MOCK_CODEX_STDIN_FILE": str(stdin_file),
+			"TMPDIR": str(runtime_dir),
+			# The step skips when the staged support run dir is unset (#7540);
+			# point it at the helper copy _copy_diagnose_assets made.
+			"IMPLEMENT_STAGED_SUPPORT_RUN_DIR": str(repo_dir / "scripts"),
+		}
+	)
+	if extra_env:
+		env.update(extra_env)
+
+	# The diagnose agent now runs through scripts/codex_isolated_exec.sh; the
+	# fake docker runs the mock codex inside the fake container.
+	env = enable_fake_isolation(bin_dir, repo_dir / "scripts", env)
+	proc = _run_shell_script(script, cwd=repo_dir, env=env)
+	state = _read_gh_state(gh_state_file)
+	paths = {
+		"github_output": str(github_output),
+		"result_file": str(result_file),
+		"prompt_file": str(prompt_file),
+		"output_file": str(output_file),
+		"log_file": str(log_file),
+		"calls_file": str(calls_file),
+		"stdin_file": str(stdin_file),
+	}
+	return proc, state, runtime_dir, paths
+
+
+def _read_file(path: str) -> str:
+	p = Path(path)
+	if not p.exists():
+		return ""
+	return p.read_text(encoding="utf-8")
+
+def _step_block_text(step_name: str) -> str:
+	return "\n".join(_step_block(step_name))
+
+
+def _parse_github_output(path: Path) -> dict[str, str]:
+	if not path.exists():
+		return {}
+	parsed: dict[str, str] = {}
+	for line in path.read_text(encoding="utf-8").splitlines():
+		if "=" not in line:
+			continue
+		key, value = line.split("=", 1)
+		parsed[key] = value
+	return parsed
+
+
+def _parse_github_env_text(text: str) -> tuple[dict[str, str], list[str]]:
+	"""Parse runner-style single-line and multiline GITHUB_ENV entries."""
+	parsed: dict[str, str] = {}
+	delimiters: list[str] = []
+	lines = text.splitlines()
+	index = 0
+	while index < len(lines):
+		line = lines[index]
+		index += 1
+		if "<<" in line:
+			key, delimiter = line.split("<<", 1)
+			delimiters.append(delimiter)
+			start = index
+			while index < len(lines) and lines[index] != delimiter:
+				index += 1
+			assert index < len(lines), f"Unterminated GITHUB_ENV value for {key}"
+			parsed[key] = "\n".join(lines[start:index])
+			index += 1
+		else:
+			key, value = line.split("=", 1)
+			parsed[key] = value
+	return parsed, delimiters
+
+
+def _run_resolve_checkout_ref_step(
+	tmp_path: Path,
+	*,
+	issue_body: str,
+	default_checkout_ref: str,
+	branch_exists: dict[str, bool] | None = None,
+	issue_meta_payload: object | None = None,
+	issue_api_failures_remaining: int = 0,
+	issue_api_raw_response: str | None = None,
+) -> tuple[subprocess.CompletedProcess[str], dict, dict[str, str], dict[str, str]]:
+	repo_dir = tmp_path / "checkout-ref-repo"
+	_bootstrap_git_repo(repo_dir)
+	bin_dir = tmp_path / "bin"
+	runtime_dir = tmp_path / "runtime"
+	bin_dir.mkdir(parents=True, exist_ok=True)
+	runtime_dir.mkdir(parents=True, exist_ok=True)
+
+	_install_mock_gh(bin_dir)
+
+	gh_state_file = runtime_dir / "checkout_ref_gh_state.json"
+	gh_state_file.write_text(
+		json.dumps(
+			{
+				"issue_number": 948,
+				"issue_body": issue_body,
+				"branch_exists": branch_exists or {},
+				"issue_api_failures_remaining": issue_api_failures_remaining,
+				"issue_api_raw_response": issue_api_raw_response,
+			}
+		),
+		encoding="utf-8",
+	)
+
+	github_output = runtime_dir / "checkout_ref_github_output.txt"
+	issue_meta_file = runtime_dir / "issue_meta.json"
+	issue_body_file = runtime_dir / "issue_body.txt"
+	if issue_meta_payload is not None:
+		if isinstance(issue_meta_payload, str):
+			issue_meta_file.write_text(issue_meta_payload, encoding="utf-8")
+		else:
+			issue_meta_file.write_text(json.dumps(issue_meta_payload), encoding="utf-8")
+	script = _render_github_expressions(_extract_run_script("Resolve checkout ref"))
+	env = os.environ.copy()
+	env.update(
+		{
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"GH_TOKEN": "test-token",
+			"GITHUB_OUTPUT": str(github_output),
+			"ISSUE_NUMBER": "948",
+			"ISSUE_META_FILE": str(issue_meta_file),
+			"ISSUE_BODY_FILE": str(issue_body_file),
+			"DEFAULT_CHECKOUT_REF": default_checkout_ref,
+			"MOCK_GH_STATE_FILE": str(gh_state_file),
+			"TMPDIR": str(runtime_dir),
+		}
+	)
+
+	proc = _run_shell_script(script, cwd=repo_dir, env=env)
+	state = _read_gh_state(gh_state_file)
+	outputs = _parse_github_output(github_output)
+	files = {
+		"issue_meta": _read_file(str(issue_meta_file)),
+		"issue_body": _read_file(str(issue_body_file)),
+	}
+	return proc, state, outputs, files
+
+
+def _run_fetch_issue_metadata_step(
+	tmp_path: Path,
+	*,
+	issue_body: str,
+	issue_meta_payload: object | None = None,
+	issue_title: str = "Test issue",
+	issue_url: str = "https://github.com/owner/repo/issues/948",
+) -> tuple[subprocess.CompletedProcess[str], dict, str, dict[str, str]]:
+	repo_dir = tmp_path / "fetch-issue-repo"
+	_bootstrap_git_repo(repo_dir)
+	bin_dir = tmp_path / "bin"
+	runtime_dir = tmp_path / "runtime"
+	bin_dir.mkdir(parents=True, exist_ok=True)
+	runtime_dir.mkdir(parents=True, exist_ok=True)
+
+	_install_mock_gh(bin_dir)
+
+	gh_state_file = runtime_dir / "fetch_issue_gh_state.json"
+	gh_state_file.write_text(
+		json.dumps(
+			{
+				"issue_number": 948,
+				"issue_body": issue_body,
+				"issue_title": issue_title,
+				"issue_url": issue_url,
+			}
+		),
+		encoding="utf-8",
+	)
+
+	github_env = runtime_dir / "github_env.txt"
+	issue_meta_file = runtime_dir / "issue_meta.json"
+	issue_body_file = runtime_dir / "issue_body.txt"
+	if issue_meta_payload is not None:
+		if isinstance(issue_meta_payload, str):
+			issue_meta_file.write_text(issue_meta_payload, encoding="utf-8")
+		else:
+			issue_meta_file.write_text(json.dumps(issue_meta_payload), encoding="utf-8")
+
+	script = _render_github_expressions(
+		_extract_run_script("Fetch issue metadata"),
+		overrides={"steps.refctx.outputs.ref || github.event.repository.default_branch": "orchestrator/project-829"},
+	)
+	env = os.environ.copy()
+	env.update(
+		{
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"GH_TOKEN": "test-token",
+			"IMPLEMENT_METADATA_PR_BASE_REF": "orchestrator/project-829",
+			"GITHUB_ENV": str(github_env),
+			"ISSUE_NUMBER": "948",
+			"ISSUE_META_FILE": str(issue_meta_file),
+			"ISSUE_BODY_FILE": str(issue_body_file),
+			"MOCK_GH_STATE_FILE": str(gh_state_file),
+			"TMPDIR": str(runtime_dir),
+			"RUNTIME_DIR": str(runtime_dir),
+		}
+	)
+
+	proc = _run_shell_script(script, cwd=repo_dir, env=env)
+	state = _read_gh_state(gh_state_file)
+	files = {
+		"issue_meta": _read_file(str(issue_meta_file)),
+		"issue_body": _read_file(str(issue_body_file)),
+	}
+	return proc, state, _read_file(str(github_env)), files
+
+
+def _install_capture_step_mock_gh(bin_dir: Path) -> None:
+	gh_script = r'''#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+state_path = Path(os.environ["MOCK_CAPTURE_GH_STATE_FILE"])
+state = json.loads(state_path.read_text(encoding="utf-8"))
+args = sys.argv[1:]
+
+
+def save() -> None:
+	state_path.write_text(json.dumps(state), encoding="utf-8")
+
+
+def first_non_flag(values: list[str]) -> str:
+	i = 0
+	while i < len(values):
+		arg = values[i]
+		if arg in ("--jq", "-q", "-f", "--field", "-H", "--header", "-X", "--method", "--input", "--template", "-t", "--preview"):
+			i += 2
+			continue
+		if arg.startswith("-"):
+			i += 1
+			continue
+		return arg
+	return ""
+
+
+state.setdefault("calls", []).append(args)
+
+if args and args[0] == "api":
+	path = first_non_flag(args[1:])
+	if "/actions/runs/" in path and "/jobs" in path:
+		state["jobs_api_calls"] = int(state.get("jobs_api_calls", 0)) + 1
+		mode = state.get("mode", "ok")
+		if mode == "api_error":
+			save()
+			print("mock jobs api error", file=sys.stderr)
+			sys.exit(1)
+		if mode == "invalid_json":
+			save()
+			print("{invalid-json")
+			sys.exit(0)
+		payload = state.get("jobs_payload", {"jobs": []})
+		save()
+		print(json.dumps(payload))
+		sys.exit(0)
+
+save()
+print("{}")
+sys.exit(0)
+'''
+	mock_path = bin_dir / "gh"
+	mock_path.write_text(gh_script, encoding="utf-8")
+	mock_path.chmod(0o755)
+
+
+def _run_capture_step(
+	tmp_path: Path,
+	*,
+	jobs_payload: dict | None,
+	mode: str,
+	job_status: str,
+) -> tuple[subprocess.CompletedProcess[str], dict, dict[str, str]]:
+	repo_dir = tmp_path / "capture-repo"
+	_bootstrap_git_repo(repo_dir)
+	bin_dir = tmp_path / "bin"
+	runtime_dir = tmp_path / "runtime"
+	bin_dir.mkdir(parents=True, exist_ok=True)
+	runtime_dir.mkdir(parents=True, exist_ok=True)
+
+	_install_capture_step_mock_gh(bin_dir)
+
+	gh_state_file = runtime_dir / "capture_gh_state.json"
+	gh_state_file.write_text(
+		json.dumps(
+			{
+				"mode": mode,
+				"jobs_payload": jobs_payload if jobs_payload is not None else {"jobs": []},
+				"jobs_api_calls": 0,
+			}
+		),
+		encoding="utf-8",
+	)
+
+	github_output = runtime_dir / "capture_github_output.txt"
+	script = _render_github_expressions(
+		_extract_run_script("Capture post-Codex validation errors"),
+		overrides={"job.status": job_status},
+	)
+	env = os.environ.copy()
+	env.update(
+		{
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"GH_TOKEN": "test-token",
+			"GITHUB_OUTPUT": str(github_output),
+			"RUNTIME_DIR": str(runtime_dir),
+			"ISSUE_NUMBER": "948",
+			"MOCK_CAPTURE_GH_STATE_FILE": str(gh_state_file),
+			"TMPDIR": str(runtime_dir),
+		}
+	)
+
+	proc = _run_shell_script(script, cwd=repo_dir, env=env)
+	state = _read_gh_state(gh_state_file)
+	outputs = _parse_github_output(github_output)
+	return proc, state, outputs
+
+
+def test_capture_step_reuses_single_jobs_fetch_for_failure_selector() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_capture_") as td:
+		tmp_path = Path(td)
+		payload = {
+			"jobs": [
+				{
+					"steps": [
+						{"name": "Checkout", "conclusion": "success", "status": "completed"},
+						{
+							"name": "Validate syntax of changed files",
+							"conclusion": "failure",
+							"status": "completed",
+						},
+					]
+				}
+			]
+		}
+		proc, state, outputs = _run_capture_step(
+			tmp_path,
+			jobs_payload=payload,
+			mode="ok",
+			job_status="failure",
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert state.get("jobs_api_calls") == 1
+		assert outputs.get("failed_step_name") == "Validate syntax of changed files"
+
+
+def test_capture_step_reuses_single_jobs_fetch_for_cancelled_fallback_selector() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_capture_") as td:
+		tmp_path = Path(td)
+		payload = {
+			"jobs": [
+				{
+					"steps": [
+						{"name": "Checkout", "conclusion": "success", "status": "completed"},
+						{
+							"name": "Run Codex implementation",
+							"conclusion": "",
+							"status": "in_progress",
+						},
+					]
+				}
+			]
+		}
+		proc, state, outputs = _run_capture_step(
+			tmp_path,
+			jobs_payload=payload,
+			mode="ok",
+			job_status="cancelled",
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert state.get("jobs_api_calls") == 1
+		assert outputs.get("failed_step_name") == "Run Codex implementation"
+
+
+def test_capture_step_fails_open_on_invalid_jobs_payload() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_capture_") as td:
+		tmp_path = Path(td)
+		proc, state, outputs = _run_capture_step(
+			tmp_path,
+			jobs_payload=None,
+			mode="invalid_json",
+			job_status="cancelled",
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert state.get("jobs_api_calls") == 1
+		assert outputs.get("failed_step_name", "") == ""
+
+
+def test_resolve_checkout_ref_ignores_prior_pr_baseline_branch_when_present() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_checkout_ref_") as td:
+		tmp_path = Path(td)
+		baseline_branch = "ai/reissue-baseline/pr-42-abcdef123456-777-1"
+		proc, state, outputs, files = _run_resolve_checkout_ref_step(
+			tmp_path,
+			issue_body=textwrap.dedent(
+				f"""\
+				Plan body
+
+				---
+				**Review-blocked reissue metadata**
+				- Replaces: #41 (PR #42 closed — approach rework)
+				- Type: review-blocked-reissue
+				- prior_pr_baseline_branch: {baseline_branch}
+				- files_touched:
+				  - src/app.py
+				"""
+			),
+			default_checkout_ref="orchestrator/project-829",
+			branch_exists={baseline_branch: True},
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert outputs.get("ref") == "orchestrator/project-829"
+		assert outputs.get("source") == "integration/default"
+		assert len(state.get("issue_queries", [])) == 1
+		assert state.get("branch_ref_queries", []) == [], (
+			"Resolve checkout ref must not resolve prior_pr_baseline_branch; trusted baseline checkout happens only in baseline_refctx"
+		)
+		assert f"prior_pr_baseline_branch: {baseline_branch}" in files["issue_body"]
+
+
+def test_resolve_checkout_ref_falls_back_when_hint_missing() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_checkout_ref_") as td:
+		tmp_path = Path(td)
+		proc, state, outputs, _ = _run_resolve_checkout_ref_step(
+			tmp_path,
+			issue_body="No baseline hint here.\n",
+			default_checkout_ref="orchestrator/project-829",
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert outputs.get("ref") == "orchestrator/project-829"
+		assert outputs.get("source") == "integration/default"
+		assert state.get("branch_ref_queries", []) == [], (
+			"Resolve checkout ref should not hit /git/ref/heads when prior_pr_baseline_branch is absent"
+		)
+
+
+def test_resolve_checkout_ref_reuses_matching_cached_issue_metadata() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_checkout_ref_cache_hit_") as td:
+		tmp_path = Path(td)
+		issue_body = "Plan body with cached metadata.\n"
+		proc, state, outputs, files = _run_resolve_checkout_ref_step(
+			tmp_path,
+			issue_body=issue_body,
+			default_checkout_ref="orchestrator/project-829",
+			issue_meta_payload={
+				"number": 948,
+				"body": issue_body,
+				"labels": [],
+			},
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert outputs.get("ref") == "orchestrator/project-829"
+		assert outputs.get("source") == "integration/default"
+		assert state.get("issue_queries", []) == [], (
+			"Matching cached issue metadata should satisfy Resolve checkout ref without re-fetching /issues/{n}"
+		)
+		assert files["issue_body"] == issue_body
+
+
+def test_resolve_checkout_ref_refetches_invalid_or_mismatched_cached_issue_metadata() -> None:
+	for case_name, issue_meta_payload in (
+		(
+			"mismatched",
+			{
+				"number": 999,
+				"body": "stale body\n",
+				"labels": [],
+			},
+		),
+		("invalid", '{"number": 948, "body": '),
+	):
+		with tempfile.TemporaryDirectory(prefix=f"test_checkout_ref_cache_miss_{case_name}_") as td:
+			tmp_path = Path(td)
+			issue_body = "Fresh body from API\n"
+			proc, state, outputs, files = _run_resolve_checkout_ref_step(
+				tmp_path,
+				issue_body=issue_body,
+				default_checkout_ref="orchestrator/project-829",
+				issue_meta_payload=issue_meta_payload,
+				issue_api_failures_remaining=2,
+			)
+
+			assert proc.returncode == 0, f"case={case_name}\nstdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+			assert outputs.get("ref") == "orchestrator/project-829"
+			assert outputs.get("source") == "integration/default"
+			assert len(state.get("issue_queries", [])) == 3, f"case={case_name}"
+			assert files["issue_body"] == issue_body, f"case={case_name}"
+			assert json.loads(files["issue_meta"])["number"] == 948, f"case={case_name}"
+
+
+def test_resolve_checkout_ref_retries_issue_metadata_fetch() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_checkout_ref_") as td:
+		tmp_path = Path(td)
+		proc, state, outputs, files = _run_resolve_checkout_ref_step(
+			tmp_path,
+			issue_body="Plan body with canonical footer metadata.\n",
+			default_checkout_ref="orchestrator/project-829",
+			issue_api_failures_remaining=2,
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert outputs.get("ref") == "orchestrator/project-829"
+		assert outputs.get("source") == "integration/default"
+		assert len(state.get("issue_queries", [])) == 3, (
+			"Resolve checkout ref must retry transient issue metadata fetch failures before returning the integration/default ref"
+		)
+		assert state.get("branch_ref_queries", []) == [], (
+			"Resolve checkout ref must not perform baseline ref lookups after a successful retry"
+		)
+		assert files["issue_meta"], "successful retry path must still cache valid issue metadata"
+
+
+def test_resolve_checkout_ref_surfaces_final_issue_metadata_fetch_stderr_on_fallback() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_checkout_ref_") as td:
+		tmp_path = Path(td)
+		proc, state, outputs, files = _run_resolve_checkout_ref_step(
+			tmp_path,
+			issue_body="prior_pr_baseline_branch: ai/reissue-baseline/pr-42-failed\n",
+			default_checkout_ref="orchestrator/project-829",
+			issue_api_failures_remaining=3,
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert outputs.get("ref") == "orchestrator/project-829"
+		assert outputs.get("source") == "integration/default"
+		assert len(state.get("issue_queries", [])) == 3, (
+			"Resolve checkout ref must still retry three times before failing open to the default ref"
+		)
+		assert files["issue_meta"] == "", "failed issue metadata fetch must not cache partial data"
+		assert files["issue_body"] == "", "failed issue metadata fetch must not cache partial body data"
+		assert "gh: simulated transient failure" in proc.stderr, (
+			"Final failed gh api stderr must remain visible so the fail-open fallback is debuggable"
+		)
+
+
+def test_resolve_checkout_ref_fails_open_on_invalid_issue_metadata_without_caching_it() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_checkout_ref_") as td:
+		tmp_path = Path(td)
+		proc, state, outputs, files = _run_resolve_checkout_ref_step(
+			tmp_path,
+			issue_body="prior_pr_baseline_branch: ai/reissue-baseline/pr-42-invalid\n",
+			default_checkout_ref="orchestrator/project-829",
+			issue_api_raw_response="<!doctype html>not-json",
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert outputs.get("ref") == "orchestrator/project-829"
+		assert outputs.get("source") == "integration/default"
+		assert state.get("branch_ref_queries", []) == [], (
+			"Invalid issue metadata must fail open before any prior_pr_baseline_branch lookup"
+		)
+		assert files["issue_meta"] == "", "invalid issue metadata must not poison ISSUE_META_FILE"
+		assert files["issue_body"] == "", "invalid issue metadata must not populate ISSUE_BODY_FILE"
+
+
+def test_resolve_checkout_ref_ignores_untrusted_baseline_hints_without_api_lookup() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_checkout_ref_") as td:
+		tmp_path = Path(td)
+		proc, state, outputs, _ = _run_resolve_checkout_ref_step(
+			tmp_path,
+			issue_body="prior_pr_baseline_branch: ../escape\n",
+			default_checkout_ref="orchestrator/project-829",
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert outputs.get("ref") == "orchestrator/project-829"
+		assert outputs.get("source") == "integration/default"
+		assert state.get("branch_ref_queries", []) == [], (
+			"Resolve checkout ref must ignore untrusted prior_pr_baseline_branch hints instead of resolving them"
+		)
+
+
+def test_resolve_checkout_ref_no_longer_performs_baseline_branch_resolution() -> None:
+	checkout_ref_block = _extract_run_script("Resolve checkout ref")
+	assert "/git/ref/heads/" not in checkout_ref_block, (
+		"Resolve checkout ref must not resolve prior_pr_baseline_branch via /git/ref/heads; only baseline_refctx may honor preserved baselines"
+	)
+	assert "source=prior_pr_baseline_branch" not in checkout_ref_block, (
+		"Resolve checkout ref must no longer emit prior_pr_baseline_branch as a checkout source"
+	)
+	assert "Using prior_pr_baseline_branch checkout override" not in checkout_ref_block, (
+		"Resolve checkout ref must not announce an untrusted baseline checkout override"
+	)
+
+
+def test_checkout_repository_fallback_uses_checkout_ref_output_chain() -> None:
+	fallback_checkout_step = _step_block_text("Checkout repository")
+	log_step = _step_block_text("Log checkout ref")
+
+	assert (
+		"ref: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+		in fallback_checkout_step
+	)
+	assert (
+		"IMPLEMENT_RESOLVED_FALLBACK_REF: ${{ steps.checkout_ref.outputs.ref || steps.refctx.outputs.ref || github.event.repository.default_branch }}"
+		in log_step
+	)
+	assert 'Resolved fallback ref: ${IMPLEMENT_RESOLVED_FALLBACK_REF}' in log_step
+	assert "steps.checkout_ref.outputs.source" not in log_step, (
+		"Resolved checkout source logging must not read the dead checkout_ref.outputs.source output"
+	)
+	assert 'resolved_checkout_source="${{ steps.baseline_refctx.outputs.branch }}"' in log_step
+
+
+def test_fetch_issue_metadata_keeps_pr_base_branch_on_refctx_default_chain() -> None:
+	fetch_step = _step_block_text("Fetch issue metadata")
+	fetch_block = _extract_run_script("Fetch issue metadata")
+	assert "IMPLEMENT_METADATA_PR_BASE_REF: ${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}" in fetch_step, (
+		"Fetch issue metadata must keep PR_BASE_BRANCH anchored to the integration/default ref, not the baseline checkout override"
+	)
+	assert 'PR_BASE_BRANCH="${IMPLEMENT_METADATA_PR_BASE_REF}"' in fetch_block
+	assert 'PR_BASE_BRANCH="${{ steps.refctx.outputs.ref || github.event.repository.default_branch }}"' not in fetch_block
+	assert "steps.checkout_ref.outputs.ref" not in fetch_block, (
+		"PR_BASE_BRANCH must not follow the optional prior_pr_baseline_branch checkout override"
+	)
+
+
+def test_fetch_issue_metadata_reuses_matching_cache_without_api_call() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_fetch_issue_meta_cache_hit_") as td:
+		tmp_path = Path(td)
+		issue_body = "Cached body\n"
+		issue_title = "Cached title"
+		issue_url = "https://github.com/owner/repo/issues/948"
+		proc, state, github_env_text, files = _run_fetch_issue_metadata_step(
+			tmp_path,
+			issue_body=issue_body,
+			issue_title=issue_title,
+			issue_url=issue_url,
+			issue_meta_payload={
+				"number": 948,
+				"title": issue_title,
+				"body": issue_body,
+				"html_url": issue_url,
+			},
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert state.get("issue_queries", []) == [], (
+			"Matching ISSUE_META_FILE should satisfy Fetch issue metadata without hitting /issues/{n}"
+		)
+		assert files["issue_body"] == issue_body
+		assert "ISSUE_NUMBER=948" in github_env_text
+		assert "PR_BASE_BRANCH=orchestrator/project-829" in github_env_text
+
+
+def test_fetch_issue_metadata_does_not_let_issue_text_close_env_values() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_fetch_issue_env_delimiter_") as td:
+		issue_body = "Description\nEOF\nUNSAFE_BODY=enabled\nmore detail"
+		issue_title = "Title\nEOF\nUNSAFE_TITLE=enabled"
+		fetch_script = _extract_run_script("Fetch issue metadata")
+		start = fetch_script.index('printf \'%s\\n\' "${ISSUE_BODY}" > "${ISSUE_BODY_FILE}"')
+		end = fetch_script.index('write_untrusted_multiline_env ISSUE_TITLE "${ISSUE_TITLE}"', start) + len('write_untrusted_multiline_env ISSUE_TITLE "${ISSUE_TITLE}"')
+		github_env_file = Path(td) / "github_env.txt"
+		body_file = Path(td) / "issue_body.txt"
+		proc = subprocess.run(
+			["bash", "-c", "set -euo pipefail\n" + fetch_script[start:end]],
+			env={**os.environ, "ISSUE_BODY": issue_body, "ISSUE_TITLE": issue_title,
+				"ISSUE_BODY_FILE": str(body_file), "ISSUE_SCOPE_LOCK_GLOB": "EOF\nUNSAFE_SCOPE=enabled",
+				"ISSUE_NUMBER_JSON": "948", "ISSUE_URL_JSON": "https://github.com/owner/repo/issues/948",
+				"PR_BASE_BRANCH": "main", "GITHUB_ENV": str(github_env_file),
+				"RUNTIME_DIR": td, "ISSUE_NUMBER": "948", "ISSUE_META_FILE": str(Path(td) / "issue_meta.json")},
+			capture_output=True, text=True, check=False,
+		)
+		assert proc.returncode == 0, proc.stderr
+		assert body_file.read_text(encoding="utf-8") == issue_body + "\n"
+		github_env_text = github_env_file.read_text(encoding="utf-8")
+		for name, value in (("ISSUE_TITLE", issue_title), ("ISSUE_SCOPE_LOCK_GLOB", "EOF\nUNSAFE_SCOPE=enabled")):
+			match = re.search(rf"(?m)^{name}<<(ghadelimiter_[0-9a-f]{{32}})$", github_env_text)
+			assert match is not None
+			delimiter = match.group(1)
+			assert f"{name}<<{delimiter}\n{value}\n{delimiter}\n" in github_env_text
+		assert "ISSUE_BODY<<" not in github_env_text
+		assert github_env_text.count("<<EOF") == 0
+		collision = "ghadelimiter_" + "a" * 32
+		blocked_github_env_file = Path(td) / "blocked_github_env.txt"
+		blocked = subprocess.run(
+			["bash", "-c", "set -euo pipefail\nod() { printf '%s\\n' '" + "a" * 32 + "'; }\n" + fetch_script[start:end]],
+			env={**os.environ, "ISSUE_BODY": issue_body, "ISSUE_TITLE": collision + "\nmore detail",
+				"ISSUE_BODY_FILE": str(body_file), "ISSUE_SCOPE_LOCK_GLOB": "",
+				"ISSUE_NUMBER_JSON": "948", "ISSUE_URL_JSON": "https://github.com/owner/repo/issues/948",
+				"PR_BASE_BRANCH": "main", "GITHUB_ENV": str(blocked_github_env_file),
+				"RUNTIME_DIR": td, "ISSUE_NUMBER": "948", "ISSUE_META_FILE": str(Path(td) / "issue_meta.json")},
+			capture_output=True, text=True, check=False,
+		)
+		assert blocked.returncode != 0
+		assert "GITHUB_ENV delimiter collision for ISSUE_TITLE" in blocked.stdout
+		assert "ISSUE_TITLE<<" not in blocked_github_env_file.read_text(encoding="utf-8")
+
+
+def test_fetch_issue_metadata_refetches_invalid_or_mismatched_cache() -> None:
+	for case_name, issue_meta_payload in (
+		(
+			"mismatched",
+			{
+				"number": 999,
+				"title": "wrong",
+				"body": "stale body\n",
+				"html_url": "https://github.com/owner/repo/issues/999",
+			},
+		),
+		("invalid", '{"number": 948, "title": '),
+	):
+		with tempfile.TemporaryDirectory(prefix=f"test_fetch_issue_meta_cache_miss_{case_name}_") as td:
+			tmp_path = Path(td)
+			issue_body = "Fresh fetched body\n"
+			issue_title = "Fresh fetched title"
+			issue_url = "https://github.com/owner/repo/issues/948"
+			proc, state, github_env_text, files = _run_fetch_issue_metadata_step(
+				tmp_path,
+				issue_body=issue_body,
+				issue_title=issue_title,
+				issue_url=issue_url,
+				issue_meta_payload=issue_meta_payload,
+			)
+
+			assert proc.returncode == 0, f"case={case_name}\nstdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+			assert state.get("issue_queries", []) == ["repos/owner/repo/issues/948"], f"case={case_name}"
+			assert files["issue_body"] == issue_body, f"case={case_name}"
+			assert json.loads(files["issue_meta"])["number"] == 948, f"case={case_name}"
+			assert f"ISSUE_URL={issue_url}" in github_env_text, f"case={case_name}"
+
+
+def test_fetch_issue_metadata_cannot_inject_guard_env_from_issue_text() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_fetch_issue_env_injection_") as td:
+		body = (
+			"Task\nEOF\nALLOW_BULK_DELETE=true\nENFORCE_FILES_TOUCHED=false\n"
+			"ISSUE_BODY<<EOF\nghadelimiter_0123456789abcdef0123456789abcdef\nEnd"
+		)
+		title = "Original title\nALLOW_OUT_OF_SCOPE_FILES=true\n-n"
+		proc, _, github_env_text, files = _run_fetch_issue_metadata_step(
+			Path(td), issue_body=body, issue_title=title,
+		)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		exports, delimiters = _parse_github_env_text(github_env_text)
+		assert not {"ALLOW_BULK_DELETE", "ENFORCE_FILES_TOUCHED", "ALLOW_OUT_OF_SCOPE_FILES", "ISSUE_BODY"} & exports.keys()
+		assert exports["ISSUE_TITLE"] == title
+		assert exports["ISSUE_SCOPE_LOCK_GLOB"] == ""
+		assert len(delimiters) == 2
+		assert len(set(delimiters)) == 2
+		assert all(re.fullmatch(r"ghadelimiter_[0-9a-f]{32}", delimiter) for delimiter in delimiters)
+		assert files["issue_body"] == body + "\n"
+
+
+def test_fetch_issue_metadata_preserves_echo_option_titles() -> None:
+	for title in ("-n", "-e"):
+		with tempfile.TemporaryDirectory(prefix="test_fetch_issue_title_") as td:
+			proc, _, github_env_text, _ = _run_fetch_issue_metadata_step(
+				Path(td), issue_body="Task", issue_title=title,
+			)
+			assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+			exports, _ = _parse_github_env_text(github_env_text)
+			assert exports["ISSUE_TITLE"] == title
+
+
+def test_implement_issue_text_env_and_guard_wiring_contract() -> None:
+	metadata_script = _extract_run_script("Fetch issue metadata")
+	assert "ISSUE_BODY<<" not in metadata_script
+	assert 'write_untrusted_multiline_env ISSUE_TITLE "${ISSUE_TITLE}"' in metadata_script
+	assert 'write_untrusted_multiline_env ISSUE_SCOPE_LOCK_GLOB "${ISSUE_SCOPE_LOCK_GLOB}"' in metadata_script
+	for step_name in ("Detect smoke test and silence Telegram alerts", "Build implementation context"):
+		script = _extract_run_script(step_name)
+		assert '"${ISSUE_BODY}"' not in script
+		assert "ISSUE_BODY_FILE" in script
+
+	wf = _workflow_text()
+	assert not re.search(r"\b[A-Za-z_][A-Za-z0-9_]*<<EOF\b", wf)
+	guard_keys = (
+		"ALLOW_BULK_DELETE", "BULK_DELETE_THRESHOLD", "BULK_DELETE_THRESHOLD_MD",
+		"ENFORCE_FILES_TOUCHED", "ALLOW_OUT_OF_SCOPE_FILES", "ALLOW_WORKFLOW_EDITS",
+		"WRITE_GUARDS_ENABLED", "SCOPE_LOCK_LABEL_ENABLED",
+	)
+	workflow_env = wf.split("\nenv:\n", 1)[1].split("\njobs:\n", 1)[0]
+	for step_name in (
+		"Preflight destructive-commit guard",
+		"Protect workflow files from implementation edits",
+		"Commit changes",
+		"Destructive-commit guard — label + alert on rejection",
+	):
+		step = _step_block_text(step_name)
+		step_env = step.split("\n        env:\n", 1)[1].split("\n        run: |", 1)[0]
+		for key in guard_keys:
+			pattern = rf"^\s+{key}: (.+)$"
+			workflow_value = re.search(pattern, workflow_env, re.MULTILINE)
+			step_value = re.search(pattern, step_env, re.MULTILINE)
+			assert workflow_value is not None and step_value is not None, (step_name, key)
+			assert step_value.group(1) == workflow_value.group(1), (step_name, key)
+
+
+def test_implementation_context_reads_body_file_and_fails_if_missing() -> None:
+	script = _render_github_expressions(_extract_run_script("Build implementation context"))
+	with tempfile.TemporaryDirectory(prefix="test_implementation_context_") as td:
+		root = Path(td)
+		body_file = root / "issue_body.txt"
+		context_file = root / "implementation_context.txt"
+		answers_file = root / "answers.txt"
+		plan_file = root / "plan.txt"
+		comments_file = root / "comments.json"
+		answers_file.write_text("None\n", encoding="utf-8")
+		plan_file.write_text("Plan\n", encoding="utf-8")
+		comments_file.write_text("[]", encoding="utf-8")
+		env = {
+			**os.environ,
+			"ISSUE_BODY_FILE": str(body_file),
+			"IMPLEMENTATION_CONTEXT_FILE": str(context_file),
+			"CLARIFICATION_ANSWERS_FILE": str(answers_file),
+			"PLAN_FILE": str(plan_file),
+			"ISSUE_COMMENTS_FILE": str(comments_file),
+		}
+		missing = _run_shell_script(script, cwd=root, env=env)
+		assert missing.returncode != 0
+		assert "::error::ISSUE_BODY_FILE is not a regular file." in missing.stderr
+		assert not context_file.exists()
+		body = "Issue description\nEOF\nALLOW_BULK_DELETE=true\n"
+		body_file.write_text(body, encoding="utf-8")
+		# The context builder must never consult an inherited issue-body env value.
+		env["ISSUE_BODY"] = "Wrong issue"
+		result = _run_shell_script(script, cwd=root, env=env)
+		assert result.returncode == 0, f"stdout:\n{result.stdout}\n\nstderr:\n{result.stderr}"
+		assert context_file.read_text(encoding="utf-8").startswith("ISSUE DESCRIPTION\n" + body + "\nCLARIFICATION ANSWERS\n")
+
+
+def test_noop_failure_labeling_is_gated_on_non_destructive_failures() -> None:
+	wf = _workflow_text()
+	assert (
+		"if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'false' "
+		"&& steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' "
+		"&& steps.commit_changes.outputs.destructive_commit_blocked == ''"
+	) in wf, (
+		"Handle no-op implementation must be skipped when destructive_commit_blocked is set "
+		"so destructive-guard failures cannot transition the issue into ai:implementation-failed"
+	)
+
+
+def test_failure_comment_step_skips_destructive_blocked_runs() -> None:
+	wf = _workflow_text()
+	assert (
+		"if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' "
+		"&& steps.commit_changes.outputs.destructive_commit_blocked == ''"
+	) in wf, (
+		"Generic failure comment flow must be disabled for destructive-blocked runs to avoid "
+		"re-adding ai:awaiting-approval"
+	)
+
+
+def test_preflight_destructive_guard_runs_before_validation_with_temp_index_contract() -> None:
+	wf = _workflow_text()
+	assert "FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true" in wf
+	assert -1 < wf.find("- name: Create implementation branch") < wf.find("- name: Preflight destructive-commit guard") < wf.find("- name: Validate syntax of changed files"), (
+		"Destructive-delete preflight must run after branch creation and before syntax-validation tail work"
+	)
+
+	preflight_block = _step_block_text("Preflight destructive-commit guard")
+	assert 'git read-tree HEAD' in preflight_block, (
+		"Preflight destructive guard must project the would-be staged set from a temporary HEAD-seeded index"
+	)
+	assert 'git add -u -- "${add_u_excludes[@]}"' in preflight_block
+	assert 'if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ] && git cat-file -e HEAD:.github/workflows >/dev/null 2>&1; then' in preflight_block
+	assert 'git reset -q HEAD -- .github/workflows' in preflight_block
+	assert 'git diff --cached --diff-filter=D --name-only' in preflight_block
+	assert 'destructive_commit_blocked=canonical-source' in preflight_block
+	assert 'destructive_commit_blocked=bulk-delete' in preflight_block
+
+
+def test_self_repo_guards_use_exact_canonical_repo_match() -> None:
+	stage_block = _step_block_text("Stage workflow support files")
+	preflight_block = _step_block_text("Preflight destructive-commit guard")
+	commit_step = _step_block_text("Commit changes")
+	commit_helper = _implement_commit_script_text()
+
+	for block in (stage_block, preflight_block):
+		assert 'wf_source="shubhodeep1/coding-workflows"' in block
+		assert 'if [ "${GITHUB_REPOSITORY:-}" = "${wf_source}" ]; then' in block
+		assert 'if [[ "${GITHUB_REPOSITORY:-}" == *"/coding-workflows" ]]; then' not in block
+		assert '${{ github.repository }}' not in block
+
+	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"' in commit_step
+	assert 'wf_source="shubhodeep1/coding-workflows"' in commit_helper
+	assert 'if [ "${GITHUB_REPOSITORY:-}" = "${wf_source}" ]; then' in commit_helper
+	assert 'if [[ "${GITHUB_REPOSITORY:-}" == *"/coding-workflows" ]]; then' not in commit_helper
+
+	assert '`*/coding-workflows`' not in preflight_block
+	assert '`*/coding-workflows`' not in commit_helper
+
+
+def test_preflight_destructive_guard_fails_without_touching_the_real_index() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_preflight_destructive_guard_") as td:
+		repo_dir = Path(td)
+		_bootstrap_git_repo(repo_dir)
+		(repo_dir / "agents.md").write_text("canonical\n", encoding="utf-8")
+		_git(["git", "add", "agents.md"], cwd=repo_dir)
+		_git(["git", "commit", "-m", "add canonical source"], cwd=repo_dir)
+		(repo_dir / "agents.md").unlink()
+
+		script = _render_github_expressions(_extract_run_script("Preflight destructive-commit guard"))
+		github_output = repo_dir / "github_output.txt"
+		fetched_manifest = repo_dir / "fetched_manifest.txt"
+		fetched_manifest.write_text("", encoding="utf-8")
+		env = os.environ.copy()
+		env.update(
+			{
+				"GITHUB_OUTPUT": str(github_output),
+				"GITHUB_REPOSITORY": "owner/repo",
+				"GITHUB_RUN_ID": "777",
+				"FETCHED_MANIFEST": str(fetched_manifest),
+				"ALLOW_WORKFLOW_EDITS": "false",
+				"ALLOW_BULK_DELETE": "false",
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"SERENA_PROJECT_BOOTSTRAP_HASH": "",
+			}
+		)
+
+		proc = _run_shell_script(script, cwd=repo_dir, env=env)
+		assert proc.returncode != 0, "canonical-source deletions must fail fast in the preflight guard"
+		output_text = github_output.read_text(encoding="utf-8")
+		assert "destructive_commit_blocked=canonical-source" in output_text
+		assert "destructive_commit_count=1" in output_text
+		assert "agents.md" in output_text
+
+		cached = subprocess.run(
+			["git", "diff", "--cached", "--name-only"],
+			cwd=str(repo_dir),
+			check=True,
+			capture_output=True,
+			text=True,
+		).stdout.strip()
+		assert cached == "", "preflight guard must not dirty the real git index when it rejects"
+
+
+def test_preflight_bulk_override_cannot_approve_workflow_deletions() -> None:
+	script = _render_github_expressions(_extract_run_script("Preflight destructive-commit guard"))
+	for directory, protected in ((".github/workflows", True), ("src", False)):
+		with tempfile.TemporaryDirectory(prefix="test_preflight_bulk_override_") as td:
+			repo_dir = Path(td)
+			_bootstrap_git_repo(repo_dir)
+			deletion_dir = repo_dir / directory
+			deletion_dir.mkdir(parents=True)
+			paths = [f"{directory}/file{i}.{'yml' if protected else 'py'}" for i in range(4)]
+			for path in paths:
+				(repo_dir / path).write_text("test\n", encoding="utf-8")
+			_git(["git", "add", directory], cwd=repo_dir)
+			_git(["git", "commit", "-m", "add files"], cwd=repo_dir)
+			for path in paths:
+				(repo_dir / path).unlink()
+			github_output = repo_dir / "github_output.txt"
+			proc = _run_shell_script(script, cwd=repo_dir, env={
+				"GITHUB_OUTPUT": str(github_output),
+				"GITHUB_REPOSITORY": "owner/repo",
+				"ALLOW_WORKFLOW_EDITS": "true",
+				"ALLOW_BULK_DELETE": "false",
+				"UNBLOCK_BULK_DELETE_OVERRIDE": "true",
+				"UNBLOCK_BULK_DELETE_PATHS": json.dumps(paths),
+				"ENFORCE_FILES_TOUCHED": "false",
+			})
+			if protected:
+				assert proc.returncode != 0, proc.stdout + proc.stderr
+				assert "destructive_commit_blocked=bulk-delete" in github_output.read_text(encoding="utf-8")
+				assert "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=protected_automation_paths" in proc.stdout
+			else:
+				assert proc.returncode == 0, proc.stdout + proc.stderr
+				assert "UNBLOCK_BULK_DELETE_OVERRIDE applied deletions=4" in proc.stdout
+
+
+def test_commit_helper_fails_closed_on_unsafe_fetched_manifest_paths() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_manifest_guard_") as td:
+		tmp_path = Path(td)
+		repo_dir = tmp_path / "repo"
+		outside_path = tmp_path / "outside.txt"
+		_bootstrap_git_repo(repo_dir)
+		(repo_dir / "scripts").mkdir()
+		shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
+		outside_path.write_text("keep\n", encoding="utf-8")
+		github_output = repo_dir / "github_output.txt"
+		github_output.write_text("", encoding="utf-8")
+		runtime_dir = repo_dir / "runtime"
+		runtime_dir.mkdir()
+		fetched_manifest = repo_dir / "fetched_manifest.txt"
+		fetched_manifest.write_text("../outside.txt\n", encoding="utf-8")
+		env = os.environ.copy()
+		env.update(
+			{
+				"FETCHED_MANIFEST": str(fetched_manifest),
+				"GITHUB_OUTPUT": str(github_output),
+				"GITHUB_REPOSITORY": "owner/repo",
+				"ISSUE_NUMBER": "948",
+				"RUNTIME_DIR": str(runtime_dir),
+				"SERENA_PROJECT_BOOTSTRAP_HASH": "",
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"TMPDIR": str(runtime_dir),
+			}
+		)
+
+		proc = _run_shell_script("bash scripts/implement_commit_changes.sh\n", cwd=repo_dir, env=env)
+		assert proc.returncode != 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert outside_path.read_text(encoding="utf-8") == "keep\n"
+		output_text = github_output.read_text(encoding="utf-8")
+		assert "destructive_commit_blocked=unsafe-fetched-manifest" in output_text
+		assert "destructive_commit_count=1" in output_text
+		assert "../outside.txt" in output_text
+		assert "unsafe cleanup path" in (proc.stdout + proc.stderr)
+
+
+def test_commit_helper_treats_unset_fetched_manifest_as_empty() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_manifest_unset_") as td:
+		tmp_path = Path(td)
+		repo_dir = tmp_path / "repo"
+		_bootstrap_git_repo(repo_dir)
+		(repo_dir / "scripts").mkdir()
+		shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
+		_git(["git", "add", "scripts/implement_commit_changes.sh"], cwd=repo_dir)
+		_git(["git", "commit", "-m", "add helper"], cwd=repo_dir)
+		github_output = tmp_path / "github_output.txt"
+		github_output.write_text("", encoding="utf-8")
+		runtime_dir = tmp_path / "runtime"
+		runtime_dir.mkdir()
+		env = _isolated_test_env(
+			{
+				"GITHUB_OUTPUT": str(github_output),
+				"GITHUB_REPOSITORY": "owner/repo",
+				"ISSUE_NUMBER": "948",
+				"RUNTIME_DIR": str(runtime_dir),
+				"SERENA_PROJECT_BOOTSTRAP_HASH": "",
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"TMPDIR": str(runtime_dir),
+			},
+			cwd=repo_dir,
+		)
+
+		proc = subprocess.run(
+			["bash", "scripts/implement_commit_changes.sh"],
+			cwd=str(repo_dir),
+			env=env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "No repository changes were produced by Codex implementation" in proc.stdout
+		assert "did_commit=false" in github_output.read_text(encoding="utf-8")
+
+
+def _run_commit_helper_with_tracked_symlink(tmp_path: Path, *, remove_link: bool, manifest_lists_link: bool, link_name: str = "CLAUDE.md") -> subprocess.CompletedProcess:
+	"""#9940: commit docs/<link_name> -> ../README.md, then run the commit helper."""
+	repo_dir = tmp_path / "repo"
+	_bootstrap_git_repo(repo_dir)
+	(repo_dir / "scripts").mkdir()
+	shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
+	(repo_dir / "docs").mkdir()
+	os.symlink("../README.md", repo_dir / "docs" / link_name)
+	_git(["git", "add", "scripts/implement_commit_changes.sh", f"docs/{link_name}"], cwd=repo_dir)
+	_git(["git", "commit", "-m", "add helper and link"], cwd=repo_dir)
+	if remove_link:
+		(repo_dir / "docs" / link_name).unlink()
+	github_output = tmp_path / "github_output.txt"
+	github_output.write_text("", encoding="utf-8")
+	runtime_dir = tmp_path / "runtime"
+	runtime_dir.mkdir()
+	env_overrides = {
+		"ENFORCE_FILES_TOUCHED": "false",
+		"GITHUB_OUTPUT": str(github_output),
+		"GITHUB_REPOSITORY": "owner/repo",
+		"ISSUE_NUMBER": "9940",
+		"RUNTIME_DIR": str(runtime_dir),
+		"SERENA_PROJECT_BOOTSTRAP_HASH": "",
+		"SERENA_PROJECT_PREEXISTED": "false",
+		"TMPDIR": str(runtime_dir),
+	}
+	if manifest_lists_link:
+		fetched_manifest = tmp_path / "fetched_manifest.txt"
+		fetched_manifest.write_text("docs/CLAUDE.md\n", encoding="utf-8")
+		env_overrides["FETCHED_MANIFEST"] = str(fetched_manifest)
+	env = _isolated_test_env(env_overrides, cwd=repo_dir)
+	return subprocess.run(
+		["bash", "scripts/implement_commit_changes.sh"],
+		cwd=str(repo_dir),
+		env=env,
+		text=True,
+		capture_output=True,
+		timeout=60,
+	)
+
+
+def test_commit_helper_logs_tracked_symlink_delete_stages() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_symlink_delete_") as td:
+		proc = _run_commit_helper_with_tracked_symlink(Path(td), remove_link=True, manifest_lists_link=False)
+		assert "IMPLEMENT_SYMLINK_DELETE path=docs/CLAUDE.md stage=pre_cleanup" in proc.stdout, proc.stdout + proc.stderr
+		assert "IMPLEMENT_SYMLINK_DELETE path=docs/CLAUDE.md stage=post_cleanup" in proc.stdout, proc.stdout + proc.stderr
+
+
+def test_commit_helper_logs_symlink_removed_by_artifact_cleanup() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_symlink_cleanup_") as td:
+		proc = _run_commit_helper_with_tracked_symlink(Path(td), remove_link=False, manifest_lists_link=True)
+		assert "stage=pre_cleanup" not in proc.stdout, proc.stdout + proc.stderr
+		assert "IMPLEMENT_SYMLINK_DELETE path=docs/CLAUDE.md stage=post_cleanup" in proc.stdout, proc.stdout + proc.stderr
+
+
+def test_commit_helper_symlink_delete_path_masks_whitespace_and_control_chars() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_symlink_sanitize_") as td:
+		proc = _run_commit_helper_with_tracked_symlink(Path(td), remove_link=True, manifest_lists_link=False, link_name="my link\x1bx")
+		assert "IMPLEMENT_SYMLINK_DELETE path=docs/my?link?x stage=pre_cleanup" in proc.stdout, proc.stdout + proc.stderr
+		assert "IMPLEMENT_SYMLINK_DELETE path=docs/my?link?x stage=post_cleanup" in proc.stdout, proc.stdout + proc.stderr
+		assert "\x1b" not in proc.stdout
+
+
+def test_commit_helper_logs_no_symlink_delete_for_intact_links() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_symlink_intact_") as td:
+		proc = _run_commit_helper_with_tracked_symlink(Path(td), remove_link=False, manifest_lists_link=False)
+		assert proc.returncode == 0, proc.stdout + proc.stderr
+		assert "IMPLEMENT_SYMLINK_DELETE" not in proc.stdout
+
+
+def test_commit_helper_rolls_back_post_commit_scope_lock_violation() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_scope_lock_") as td:
+		tmp_path = Path(td)
+		repo_dir = tmp_path / "repo"
+		_bootstrap_git_repo(repo_dir)
+		(repo_dir / "scripts").mkdir()
+		shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
+		shutil.copy2(FILES_TOUCHED_SCOPE_GUARD, repo_dir / "scripts" / "files_touched_scope_guard.py")
+		_git(["git", "add", "scripts/implement_commit_changes.sh", "scripts/files_touched_scope_guard.py"], cwd=repo_dir)
+		_git(["git", "commit", "-m", "add scope helpers"], cwd=repo_dir)
+		baseline_head = subprocess.run(
+			["git", "rev-parse", "HEAD"],
+			cwd=str(repo_dir),
+			env=_isolated_test_env(cwd=repo_dir),
+			check=True,
+			capture_output=True,
+			text=True,
+		).stdout.strip()
+
+		(repo_dir / "README.md").write_text("out of scope change\n", encoding="utf-8")
+		github_output = tmp_path / "github_output.txt"
+		github_output.write_text("", encoding="utf-8")
+		runtime_dir = tmp_path / "runtime"
+		runtime_dir.mkdir()
+		env = _isolated_test_env(
+			{
+				"GITHUB_OUTPUT": str(github_output),
+				"GITHUB_REPOSITORY": "owner/repo",
+				"ISSUE_NUMBER": "948",
+				"ISSUE_SCOPE_LOCK_GLOB": "scripts/**/*.sh",
+				"RUNTIME_DIR": str(runtime_dir),
+				"SCOPE_LOCK_LABEL_ENABLED": "true",
+				"SERENA_PROJECT_BOOTSTRAP_HASH": "",
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"TMPDIR": str(runtime_dir),
+			},
+			cwd=repo_dir,
+		)
+
+		proc = subprocess.run(
+			["bash", "scripts/implement_commit_changes.sh"],
+			cwd=str(repo_dir),
+			env=env,
+			text=True,
+			capture_output=True,
+			timeout=60,
+		)
+		assert proc.returncode != 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		output_text = github_output.read_text(encoding="utf-8")
+		assert "scope_violation_blocked=scope-lock-label" in output_text
+		assert "README.md" in output_text
+		assert "scripts/**/*.sh" in output_text
+
+		head_after = subprocess.run(
+			["git", "rev-parse", "HEAD"],
+			cwd=str(repo_dir),
+			env=_isolated_test_env(cwd=repo_dir),
+			check=True,
+			capture_output=True,
+			text=True,
+		).stdout.strip()
+		assert head_after == baseline_head, "scope-lock violation must roll back the local commit before push"
+
+		status = subprocess.run(
+			["git", "status", "--porcelain"],
+			cwd=str(repo_dir),
+			env=_isolated_test_env(cwd=repo_dir),
+			check=True,
+			capture_output=True,
+			text=True,
+		).stdout.strip()
+		assert status == "", "scope-lock rollback must leave the repo clean after rejecting the local commit"
+
+
+# ---------------------------------------------------------------------------
+# Self-repo exact-path .github/ai additions (unblock fix-up for #9111): the
+# untracked add keeps ':!.github/ai', and a separate self-repo-only step stages
+# only the new .github/ai files the issue's files_touched list names exactly.
+# ---------------------------------------------------------------------------
+
+_GITHUB_AI_SELF_REPO = "shubhodeep1/coding-workflows"
+
+
+def _run_github_ai_add_fixture(
+	tmp_path: Path,
+	*,
+	repository: str,
+	extra_env: dict[str, str] | None = None,
+	issue_body: str = "files_touched:\n  - .github/ai/x.json\n  - tests/new_test.py\n",
+) -> tuple[subprocess.CompletedProcess[str], list[str], str]:
+	repo_dir = tmp_path / "repo"
+	_bootstrap_git_repo(repo_dir)
+	(repo_dir / "scripts").mkdir()
+	shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
+	shutil.copy2(FILES_TOUCHED_SCOPE_GUARD, repo_dir / "scripts" / "files_touched_scope_guard.py")
+	_git(["git", "add", "scripts/implement_commit_changes.sh", "scripts/files_touched_scope_guard.py"], cwd=repo_dir)
+	_git(["git", "commit", "-m", "add commit helpers"], cwd=repo_dir)
+
+	(repo_dir / ".github" / "ai").mkdir(parents=True)
+	(repo_dir / ".github" / "ai" / "x.json").write_text("{}\n", encoding="utf-8")
+	(repo_dir / ".github" / "ai" / "y.json").write_text("{}\n", encoding="utf-8")
+	(repo_dir / "tests").mkdir()
+	(repo_dir / "tests" / "new_test.py").write_text("def test_x():\n\tpass\n", encoding="utf-8")
+
+	runtime_dir = tmp_path / "runtime"
+	runtime_dir.mkdir()
+	github_output = tmp_path / "github_output.txt"
+	github_output.write_text("", encoding="utf-8")
+	issue_body_file = tmp_path / "issue_body.txt"
+	issue_body_file.write_text(issue_body, encoding="utf-8")
+	grant_file = tmp_path / "automation_path_grant.json"
+	grant_file.write_text(json.dumps({
+		"schema_version": "automation_path_grant.v1",
+		"trusted": True,
+		"issue_number": 948,
+		"paths": [".github/ai/x.json"],
+	}), encoding="utf-8")
+	env_values = {
+		"GITHUB_OUTPUT": str(github_output),
+		"GITHUB_REPOSITORY": repository,
+		"ISSUE_NUMBER": "948",
+		"ISSUE_BODY_FILE": str(issue_body_file),
+		"ALLOW_WORKFLOW_EDITS": "true",
+		"AUTOMATION_PATH_GRANT_FILE": str(grant_file),
+		"RUNTIME_DIR": str(runtime_dir),
+		"SERENA_PROJECT_BOOTSTRAP_HASH": "",
+		"SERENA_PROJECT_PREEXISTED": "false",
+		"TMPDIR": str(runtime_dir),
+	}
+	if extra_env:
+		env_values.update(extra_env)
+	env = _isolated_test_env(env_values, cwd=repo_dir)
+	env.pop("IMPLEMENT_STAGED_SUPPORT_RUN_DIR", None)
+	if not extra_env or "IMPLEMENT_SELF_REPO_GITHUB_AI_ADDS_ENABLED" not in extra_env:
+		env.pop("IMPLEMENT_SELF_REPO_GITHUB_AI_ADDS_ENABLED", None)
+	for key in ("STAGED_SUPPORT_LEDGER", "STAGED_SUPPORT_BASE_DIR", "STAGED_SUPPORT_EDITOR_HEAD_LEDGER",
+			"HEAL_ROUTE", "SCOPE_LOCK_LABEL_ENABLED", "ISSUE_SCOPE_LOCK_GLOB", "FETCHED_MANIFEST"):
+		env.pop(key, None)
+
+	proc = subprocess.run(
+		["bash", "scripts/implement_commit_changes.sh"],
+		cwd=str(repo_dir),
+		env=env,
+		text=True,
+		capture_output=True,
+		timeout=60,
+	)
+	git_env = _isolated_test_env(cwd=repo_dir)
+	committed = subprocess.run(
+		["git", "show", "--name-only", "--format=", "HEAD"],
+		cwd=str(repo_dir), env=git_env, check=True, capture_output=True, text=True,
+	).stdout.split()
+	untracked = subprocess.run(
+		["git", "ls-files", "--others", "--exclude-standard"],
+		cwd=str(repo_dir), env=git_env, check=True, capture_output=True, text=True,
+	).stdout
+	return proc, committed, untracked
+
+
+def test_commit_helper_self_repo_stages_allowlisted_github_ai_file() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_github_ai_add_") as td:
+		proc, committed, untracked = _run_github_ai_add_fixture(Path(td), repository=_GITHUB_AI_SELF_REPO)
+		details = f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert proc.returncode == 0, details
+		assert "IMPLEMENT_SELF_REPO_GITHUB_AI_ADD path=.github/ai/x.json" in proc.stdout, details
+		assert "IMPLEMENT_SELF_REPO_GITHUB_AI_ADD path=.github/ai/y.json" not in proc.stdout, details
+		assert ".github/ai/x.json" in committed, details
+		assert "tests/new_test.py" in committed, details
+		assert ".github/ai/y.json" not in committed, details
+		assert ".github/ai/y.json" in untracked.splitlines(), details
+
+
+def test_commit_helper_self_repo_github_ai_add_skips_glob_and_missing_allowlist() -> None:
+	for issue_body in (
+		"files_touched:\n  - .github/ai/**\n  - tests/new_test.py\n",
+		"files_touched:\n  - .github/ai/\n  - tests/new_test.py\n",
+		"No files_touched list here.\n",
+	):
+		with tempfile.TemporaryDirectory(prefix="test_commit_github_ai_glob_") as td:
+			proc, committed, _untracked = _run_github_ai_add_fixture(
+				Path(td), repository=_GITHUB_AI_SELF_REPO, issue_body=issue_body,
+			)
+			details = f"body={issue_body!r}\nstdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+			assert proc.returncode == 0, details
+			assert "IMPLEMENT_SELF_REPO_GITHUB_AI_ADD path=" not in proc.stdout, details
+			assert not any(path.startswith(".github/ai/") for path in committed), details
+
+
+def test_commit_helper_self_repo_github_ai_add_flag_off() -> None:
+	for flag_value in ("false", "FALSE", "bogus"):
+		with tempfile.TemporaryDirectory(prefix="test_commit_github_ai_flag_") as td:
+			proc, committed, untracked = _run_github_ai_add_fixture(
+				Path(td),
+				repository=_GITHUB_AI_SELF_REPO,
+				extra_env={"IMPLEMENT_SELF_REPO_GITHUB_AI_ADDS_ENABLED": flag_value},
+			)
+			details = f"flag={flag_value}\nstdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+			assert proc.returncode == 0, details
+			assert "IMPLEMENT_SELF_REPO_GITHUB_AI_ADD path=" not in proc.stdout, details
+			assert ".github/ai/x.json" not in committed, details
+			assert "tests/new_test.py" in committed, details
+			assert ".github/ai/x.json" in untracked.splitlines(), details
+			warning = "::warning::IMPLEMENT_SELF_REPO_GITHUB_AI_ADDS_ENABLED="
+			if flag_value == "bogus":
+				assert warning in proc.stdout, details
+			else:
+				assert warning not in proc.stdout, details
+
+
+def test_commit_helper_consumer_repo_never_stages_github_ai_file() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_github_ai_consumer_") as td:
+		proc, committed, untracked = _run_github_ai_add_fixture(Path(td), repository="owner/repo")
+		details = f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert proc.returncode == 0, details
+		assert "IMPLEMENT_SELF_REPO_GITHUB_AI_ADD path=" not in proc.stdout, details
+		assert "self-repo .github/ai additions" not in proc.stdout, details
+		assert committed == ["tests/new_test.py"], details
+		assert ".github/ai/x.json" in untracked.splitlines(), details
+
+
+# ---------------------------------------------------------------------------
+# Self-repo staged-support restore (PR #4079 incident): implement.yml installs
+# SCRIPT_REF's helpers over tracked files before Codex runs; the commit helper
+# must not commit those staging-only modifications on a branch that diverged.
+# ---------------------------------------------------------------------------
+
+_STAGED_HELPER_SHARED = "".join(f"shared line {n}\n" for n in range(1, 7))
+# The branch changed line 2 and appended a line; SCRIPT_REF's copy has neither.
+_STAGED_HELPER_BRANCH = "#!/usr/bin/env bash\nbranch line A\n" + _STAGED_HELPER_SHARED + "branch line B\n"
+_STAGED_HELPER_MAIN = "#!/usr/bin/env bash\nmain line A\n" + _STAGED_HELPER_SHARED
+
+
+def _staged_support_fixture(tmp_path: Path, worktree_helper: str | None) -> tuple[Path, Path, dict[str, str], str]:
+	"""Build a self-repo checkout whose scripts/helper.sh was overwritten by staging.
+
+	Returns (repo_dir, github_output, env, baseline_head). `worktree_helper` is the
+	content left in the worktree after staging + editing; None deletes the file.
+	"""
+	repo_dir = tmp_path / "repo"
+	_bootstrap_git_repo(repo_dir)
+	(repo_dir / "scripts").mkdir()
+	shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
+	helper = repo_dir / "scripts" / "helper.sh"
+	helper.write_text(_STAGED_HELPER_BRANCH, encoding="utf-8")
+	helper.chmod(0o644)
+	_git(["git", "add", "scripts/implement_commit_changes.sh", "scripts/helper.sh"], cwd=repo_dir)
+	_git(["git", "commit", "-m", "branch-side helper edit"], cwd=repo_dir)
+	baseline_head = subprocess.run(
+		["git", "rev-parse", "HEAD"],
+		cwd=str(repo_dir),
+		env=_isolated_test_env(cwd=repo_dir),
+		check=True,
+		capture_output=True,
+		text=True,
+	).stdout.strip()
+
+	runtime_dir = tmp_path / "runtime"
+	runtime_dir.mkdir()
+	support_run_dir = runtime_dir / "staged_support_run" / "scripts"
+	support_run_dir.mkdir(parents=True)
+	shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, support_run_dir / "implement_commit_changes.sh")
+	shutil.copy2(FILES_TOUCHED_SCOPE_GUARD, support_run_dir / "files_touched_scope_guard.py")
+	# This fixture exercises staged-support reconciliation, not grant rejection:
+	# give the trusted issue an exact grant for its intentionally edited helper.
+	grant_file = runtime_dir / "automation_path_grant.json"
+	grant_file.write_text(json.dumps({"schema_version": "automation_path_grant.v1", "issue_number": 4075,
+		"trusted": True, "reason": "granted", "author_login": "maintainer",
+		"author_association": "OWNER", "paths": ["scripts/helper.sh", "scripts/extra.sh"]}), encoding="utf-8")
+	base_dir = runtime_dir / "staged_support_base"
+	(base_dir / "scripts").mkdir(parents=True)
+	(base_dir / "scripts" / "helper.sh").write_text(_STAGED_HELPER_MAIN, encoding="utf-8")
+	(base_dir / "scripts" / "helper.sh").chmod(0o755)
+	ledger = runtime_dir / "staged_support_overwrites.txt"
+	ledger.write_text("scripts/helper.sh\n", encoding="utf-8")
+	# What the staging step leaves behind: install -m 0755 of SCRIPT_REF's copy.
+	if worktree_helper is None:
+		helper.unlink()
+	else:
+		helper.write_text(worktree_helper, encoding="utf-8")
+		helper.chmod(0o755)
+	# The editor's own change.
+	(repo_dir / "README.md").write_text("editor change\n", encoding="utf-8")
+
+	github_output = tmp_path / "github_output.txt"
+	github_output.write_text("", encoding="utf-8")
+	env = _isolated_test_env(
+		{
+			"GITHUB_OUTPUT": str(github_output),
+			"GITHUB_REPOSITORY": "shubhodeep1/coding-workflows",
+			"ISSUE_NUMBER": "4075",
+			"ALLOW_WORKFLOW_EDITS": "true",
+			"AUTOMATION_PATH_GRANT_FILE": str(grant_file),
+			"RUNTIME_DIR": str(runtime_dir),
+			"SCRIPT_REF": "abc123",
+			"SERENA_PROJECT_BOOTSTRAP_HASH": "",
+			"SERENA_PROJECT_PREEXISTED": "false",
+			"STAGED_SUPPORT_BASE_DIR": str(base_dir),
+			"STAGED_SUPPORT_LEDGER": str(ledger),
+			"IMPLEMENT_STAGED_SUPPORT_RUN_DIR": str(support_run_dir),
+			"TMPDIR": str(runtime_dir),
+		},
+		cwd=repo_dir,
+	)
+	return repo_dir, github_output, env, baseline_head
+
+
+def _run_commit_helper(repo_dir: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+	return subprocess.run(
+		["bash", str(Path(env.get("IMPLEMENT_STAGED_SUPPORT_RUN_DIR", "scripts")) / "implement_commit_changes.sh")],
+		cwd=str(repo_dir),
+		env=env,
+		text=True,
+		capture_output=True,
+		timeout=60,
+	)
+
+
+def _git_out(args: list[str], *, cwd: Path) -> str:
+	return subprocess.run(
+		args,
+		cwd=str(cwd),
+		env=_isolated_test_env(cwd=cwd),
+		check=True,
+		capture_output=True,
+		text=True,
+	).stdout
+
+
+def test_commit_helper_restores_untouched_staged_support_files_to_head() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_staged_restore_") as td:
+		repo_dir, github_output, env, baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_RESTORED path=scripts/helper.sh" in proc.stdout
+		assert "IMPLEMENT_STAGED_SUPPORT_RESTORE restored=1 rebased=0 edited_from_head=0 conflicts=0" in proc.stdout
+		assert "did_commit=true" in github_output.read_text(encoding="utf-8")
+		assert _git_out(["git", "rev-parse", "HEAD"], cwd=repo_dir).strip() != baseline_head
+		committed = _git_out(["git", "show", "--name-only", "--format=", "HEAD"], cwd=repo_dir).split()
+		assert committed == ["README.md"], committed
+		assert _git_out(["git", "show", "HEAD:scripts/helper.sh"], cwd=repo_dir) == _STAGED_HELPER_BRANCH
+		assert _git_out(["git", "status", "--porcelain"], cwd=repo_dir).strip() == ""
+		# install -m 0755 changed the mode; the restore put HEAD's mode back too.
+		mode_line = _git_out(["git", "ls-files", "-s", "scripts/helper.sh"], cwd=repo_dir)
+		assert mode_line.startswith("100644 "), mode_line
+
+
+def test_commit_helper_rebases_editor_edits_of_staged_support_files_onto_head() -> None:
+	# An edit away from the lines the branch changed: it must land on the
+	# branch's version, not drag SCRIPT_REF's copy in with it.
+	edited = _STAGED_HELPER_MAIN.replace("shared line 3\n", "shared line 3 edited by the editor\n")
+	with tempfile.TemporaryDirectory(prefix="test_commit_staged_rebase_") as td:
+		repo_dir, github_output, env, _baseline_head = _staged_support_fixture(Path(td), edited)
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_REBASED path=scripts/helper.sh" in proc.stdout
+		assert "IMPLEMENT_STAGED_SUPPORT_RESTORE restored=0 rebased=1 edited_from_head=0 conflicts=0" in proc.stdout
+		assert "did_commit=true" in github_output.read_text(encoding="utf-8")
+		committed = _git_out(["git", "show", "--name-only", "--format=", "HEAD"], cwd=repo_dir).split()
+		assert sorted(committed) == ["README.md", "scripts/helper.sh"], committed
+		# The branch's lines survive; only the editor's addition lands on top.
+		assert _git_out(["git", "show", "HEAD:scripts/helper.sh"], cwd=repo_dir) == _STAGED_HELPER_BRANCH.replace(
+			"shared line 3\n", "shared line 3 edited by the editor\n"
+		)
+		assert "main line A" not in _git_out(["git", "show", "HEAD:scripts/helper.sh"], cwd=repo_dir)
+
+
+def test_commit_helper_preserves_editor_mode_change_on_staged_support_file() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_staged_mode_rebase_") as td:
+		repo_dir, github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		helper = repo_dir / "scripts" / "helper.sh"
+		base_helper = Path(env["STAGED_SUPPORT_BASE_DIR"]) / "scripts" / "helper.sh"
+		base_helper.chmod(0o644)
+		helper.chmod(0o755)
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_REBASED path=scripts/helper.sh" in proc.stdout
+		assert "did_commit=true" in github_output.read_text(encoding="utf-8")
+		mode_line = _git_out(["git", "ls-files", "-s", "scripts/helper.sh"], cwd=repo_dir)
+		assert mode_line.startswith("100755 "), mode_line
+
+
+def test_commit_helper_fails_closed_when_staged_support_rebase_conflicts() -> None:
+	conflicting = _STAGED_HELPER_MAIN.replace("main line A", "editor rewrote line A")
+	with tempfile.TemporaryDirectory(prefix="test_commit_staged_conflict_") as td:
+		repo_dir, github_output, env, baseline_head = _staged_support_fixture(Path(td), conflicting)
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode != 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT path=scripts/helper.sh" in proc.stdout + proc.stderr
+		output_text = github_output.read_text(encoding="utf-8")
+		assert "staged_support_rebase_conflict=true" in output_text
+		assert "staged_support_rebase_conflict_files=scripts/helper.sh" in output_text
+		assert "staged_support_auto_release_safe=true" in output_text
+		assert "did_commit=" not in output_text
+		assert _git_out(["git", "rev-parse", "HEAD"], cwd=repo_dir).strip() == baseline_head
+		assert _git_out(["git", "diff", "--cached", "--name-only"], cwd=repo_dir).strip() == ""
+
+
+def test_commit_helper_keeps_editor_deletion_of_staged_support_file() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_staged_deleted_") as td:
+		repo_dir, github_output, env, _baseline_head = _staged_support_fixture(Path(td), None)
+		# Deleting a canonical scripts/ file is otherwise refused by the
+		# destructive-commit guard; that guard is not under test here.
+		env["ALLOW_WORKFLOW_EDITS"] = "true"
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_DELETED_BY_EDITOR path=scripts/helper.sh" in proc.stdout
+		assert "did_commit=true" in github_output.read_text(encoding="utf-8")
+		committed = _git_out(["git", "show", "--name-status", "--format=", "HEAD"], cwd=repo_dir)
+		assert "D\tscripts/helper.sh" in committed, committed
+
+
+def test_commit_helper_preserves_branch_deletion_recreated_by_staging() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_staged_branch_deleted_") as td:
+		repo_dir, github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		_git(["git", "restore", "scripts/helper.sh"], cwd=repo_dir)
+		_git(["git", "rm", "scripts/helper.sh"], cwd=repo_dir)
+		_git(["git", "commit", "-m", "delete helper on branch"], cwd=repo_dir)
+		helper = repo_dir / "scripts" / "helper.sh"
+		helper.write_text(_STAGED_HELPER_MAIN, encoding="utf-8")
+		helper.chmod(0o755)
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_RESTORED path=scripts/helper.sh state=absent-in-head" in proc.stdout
+		assert "did_commit=true" in github_output.read_text(encoding="utf-8")
+		assert not helper.exists()
+		assert _git_out(["git", "show", "--name-only", "--format=", "HEAD"], cwd=repo_dir).split() == ["README.md"]
+
+
+def test_commit_helper_runtime_copy_survives_restoring_its_worktree_path() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_staged_self_restore_") as td:
+		repo_dir, github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		worktree_script = repo_dir / "scripts" / "implement_commit_changes.sh"
+		worktree_script.write_text("#!/usr/bin/env bash\nexit 97\n", encoding="utf-8")
+		_git(["git", "add", "scripts/implement_commit_changes.sh"], cwd=repo_dir)
+		_git(["git", "commit", "-m", "divergent branch commit helper"], cwd=repo_dir)
+		shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, worktree_script)
+		base_script = Path(env["STAGED_SUPPORT_BASE_DIR"]) / "scripts" / "implement_commit_changes.sh"
+		shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, base_script)
+		with Path(env["STAGED_SUPPORT_LEDGER"]).open("a", encoding="utf-8") as ledger_handle:
+			ledger_handle.write("scripts/implement_commit_changes.sh\n")
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_RESTORED path=scripts/implement_commit_changes.sh" in proc.stdout
+		assert "did_commit=true" in github_output.read_text(encoding="utf-8")
+		assert _git_out(["git", "show", "HEAD:scripts/implement_commit_changes.sh"], cwd=repo_dir) == "#!/usr/bin/env bash\nexit 97\n"
+		assert _git_out(["git", "show", "--name-only", "--format=", "HEAD"], cwd=repo_dir).split() == ["README.md"]
+
+
+def _run_workspace_helper(repo_dir: Path, env: dict[str, str], mode: str) -> subprocess.CompletedProcess[str]:
+	return subprocess.run(
+		["bash", str(IMPLEMENT_STAGED_SUPPORT_WORKSPACE_SCRIPT), mode],
+		cwd=str(repo_dir),
+		env=env,
+		text=True,
+		capture_output=True,
+		timeout=60,
+	)
+
+
+def _editor_head_ledger(env: dict[str, str]) -> Path:
+	return Path(env["STAGED_SUPPORT_LEDGER"]).parent / "staged_support_editor_head.txt"
+
+
+def test_staged_support_workspace_restore_then_reinstall_round_trip() -> None:
+	"""restore shows the editor HEAD's copy; reinstall puts SCRIPT_REF's back when untouched."""
+	with tempfile.TemporaryDirectory(prefix="test_staged_ws_roundtrip_") as td:
+		repo_dir, _github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		helper = repo_dir / "scripts" / "helper.sh"
+		proc = _run_workspace_helper(repo_dir, env, "restore")
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_RESTORED path=scripts/helper.sh" in proc.stdout
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_RESTORE restored=1 removed=0 skipped=0" in proc.stdout
+		assert helper.read_text(encoding="utf-8") == _STAGED_HELPER_BRANCH
+		assert (helper.stat().st_mode & 0o777) == 0o644
+		assert _editor_head_ledger(env).read_text(encoding="utf-8") == "scripts/helper.sh\n"
+		assert _git_out(["git", "status", "--porcelain", "--", "scripts/helper.sh"], cwd=repo_dir).strip() == ""
+
+		proc = _run_workspace_helper(repo_dir, env, "reinstall")
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_REINSTALLED path=scripts/helper.sh" in proc.stdout
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_REINSTALL reinstalled=1 edited_from_head=0" in proc.stdout
+		assert helper.read_text(encoding="utf-8") == _STAGED_HELPER_MAIN
+		assert (helper.stat().st_mode & 0o777) == 0o755
+		# The head ledger survives for the commit helper; the untouched copy
+		# then takes the existing restore-to-HEAD path.
+		assert _editor_head_ledger(env).read_text(encoding="utf-8") == "scripts/helper.sh\n"
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_RESTORE restored=1 rebased=0 edited_from_head=0 conflicts=0" in proc.stdout
+		committed = _git_out(["git", "show", "--name-only", "--format=", "HEAD"], cwd=repo_dir).split()
+		assert committed == ["README.md"], committed
+
+
+def test_staged_support_workspace_editor_edit_of_branch_file_commits_without_rebase() -> None:
+	"""Regression for #4113 (run 35072286584): the editor edits the branch's
+	own helper, so an edit on a line the branch changed is a plain edit and
+	never the 3-way conflict that fails closed into ai:needs-human."""
+	with tempfile.TemporaryDirectory(prefix="test_staged_ws_edit_") as td:
+		repo_dir, github_output, env, baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		helper = repo_dir / "scripts" / "helper.sh"
+		assert _run_workspace_helper(repo_dir, env, "restore").returncode == 0
+		# The editor edits the branch's line — the shape that conflicted before.
+		edited = _STAGED_HELPER_BRANCH.replace("branch line A\n", "branch line A hardened by the editor\n")
+		helper.write_text(edited, encoding="utf-8")
+		proc = _run_workspace_helper(repo_dir, env, "reinstall")
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITED_FROM_HEAD path=scripts/helper.sh" in proc.stdout
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_REINSTALL reinstalled=0 edited_from_head=1" in proc.stdout
+		assert helper.read_text(encoding="utf-8") == edited
+
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITED_FROM_HEAD path=scripts/helper.sh" in proc.stdout
+		assert "IMPLEMENT_STAGED_SUPPORT_REBASE" not in proc.stdout + proc.stderr
+		assert "IMPLEMENT_STAGED_SUPPORT_RESTORE restored=0 rebased=0 edited_from_head=1 conflicts=0" in proc.stdout
+		assert "did_commit=true" in github_output.read_text(encoding="utf-8")
+		assert _git_out(["git", "rev-parse", "HEAD"], cwd=repo_dir).strip() != baseline_head
+		committed = _git_out(["git", "show", "--name-only", "--format=", "HEAD"], cwd=repo_dir).split()
+		assert sorted(committed) == ["README.md", "scripts/helper.sh"], committed
+		assert _git_out(["git", "show", "HEAD:scripts/helper.sh"], cwd=repo_dir) == edited
+		assert "main line A" not in _git_out(["git", "show", "HEAD:scripts/helper.sh"], cwd=repo_dir)
+		mode_line = _git_out(["git", "ls-files", "-s", "scripts/helper.sh"], cwd=repo_dir)
+		assert mode_line.startswith("100644 "), mode_line
+
+
+def test_staged_support_workspace_preserves_implement_edit_across_repair_restore() -> None:
+	"""A second restore for syntax repair must not drop the implementation edit ledger."""
+	with tempfile.TemporaryDirectory(prefix="test_staged_ws_repair_restore_") as td:
+		repo_dir, _github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		helper = repo_dir / "scripts" / "helper.sh"
+		assert _run_workspace_helper(repo_dir, env, "restore").returncode == 0
+		edited = _STAGED_HELPER_BRANCH.replace("branch line A\n", "branch line A hardened by the editor\n")
+		helper.write_text(edited, encoding="utf-8")
+		assert _run_workspace_helper(repo_dir, env, "reinstall").returncode == 0
+
+		proc = _run_workspace_helper(repo_dir, env, "restore")
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "reason=modified_before_editor" in proc.stdout
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_RESTORE restored=0 removed=0 skipped=1" in proc.stdout
+		assert _editor_head_ledger(env).read_text(encoding="utf-8") == "scripts/helper.sh\n"
+		proc = _run_workspace_helper(repo_dir, env, "reinstall")
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_REINSTALL reinstalled=0 edited_from_head=1" in proc.stdout
+		assert helper.read_text(encoding="utf-8") == edited
+
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITED_FROM_HEAD path=scripts/helper.sh" in proc.stdout
+		assert "IMPLEMENT_STAGED_SUPPORT_REBASE" not in proc.stdout + proc.stderr
+		assert _git_out(["git", "show", "HEAD:scripts/helper.sh"], cwd=repo_dir) == edited
+
+
+def test_staged_support_workspace_handles_staging_recreation_of_branch_deleted_file() -> None:
+	"""A file the branch deleted but staging recreated is hidden from the
+	editor, reinstalled when untouched, and never committed; an editor
+	recreation survives as the editor's own change."""
+	with tempfile.TemporaryDirectory(prefix="test_staged_ws_deleted_") as td:
+		repo_dir, _github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		extra = repo_dir / "scripts" / "extra.sh"
+		extra.write_text("#!/usr/bin/env bash\nmain-only helper\n", encoding="utf-8")
+		extra.chmod(0o755)
+		base_extra = Path(env["STAGED_SUPPORT_BASE_DIR"]) / "scripts" / "extra.sh"
+		base_extra.write_text("#!/usr/bin/env bash\nmain-only helper\n", encoding="utf-8")
+		base_extra.chmod(0o755)
+		with open(env["STAGED_SUPPORT_LEDGER"], "a", encoding="utf-8") as ledger:
+			ledger.write("scripts/extra.sh\n")
+
+		proc = _run_workspace_helper(repo_dir, env, "restore")
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_RESTORED path=scripts/extra.sh state=absent-in-head" in proc.stdout
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_RESTORE restored=1 removed=1 skipped=0" in proc.stdout
+		assert not extra.exists()
+
+		proc = _run_workspace_helper(repo_dir, env, "reinstall")
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_REINSTALLED path=scripts/extra.sh state=absent-in-head" in proc.stdout
+		assert extra.read_text(encoding="utf-8") == "#!/usr/bin/env bash\nmain-only helper\n"
+
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_RESTORED path=scripts/extra.sh state=absent-in-head" in proc.stdout
+		committed = _git_out(["git", "show", "--name-only", "--format=", "HEAD"], cwd=repo_dir).split()
+		assert committed == ["README.md"], committed
+		assert not extra.exists()
+
+	with tempfile.TemporaryDirectory(prefix="test_staged_ws_recreated_") as td:
+		repo_dir, _github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		extra = repo_dir / "scripts" / "extra.sh"
+		extra.write_text("#!/usr/bin/env bash\nmain-only helper\n", encoding="utf-8")
+		base_extra = Path(env["STAGED_SUPPORT_BASE_DIR"]) / "scripts" / "extra.sh"
+		base_extra.write_text("#!/usr/bin/env bash\nmain-only helper\n", encoding="utf-8")
+		with open(env["STAGED_SUPPORT_LEDGER"], "a", encoding="utf-8") as ledger:
+			ledger.write("scripts/extra.sh\n")
+		assert _run_workspace_helper(repo_dir, env, "restore").returncode == 0
+		assert not extra.exists()
+		extra.write_text("#!/usr/bin/env bash\nrecreated by the editor\n", encoding="utf-8")
+		proc = _run_workspace_helper(repo_dir, env, "reinstall")
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITED_FROM_HEAD path=scripts/extra.sh state=recreated-by-editor" in proc.stdout
+		assert extra.read_text(encoding="utf-8") == "#!/usr/bin/env bash\nrecreated by the editor\n"
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_RECREATED_BY_EDITOR path=scripts/extra.sh" in proc.stdout
+		committed = _git_out(["git", "show", "--name-only", "--format=", "HEAD"], cwd=repo_dir).split()
+		assert sorted(committed) == ["README.md", "scripts/extra.sh"], committed
+
+
+def test_staged_support_workspace_skips_paths_modified_before_editor_and_noops_without_ledger() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_staged_ws_skip_") as td:
+		modified = _STAGED_HELPER_MAIN + "touched by a pre-editor step\n"
+		repo_dir, _github_output, env, _baseline_head = _staged_support_fixture(Path(td), modified)
+		proc = _run_workspace_helper(repo_dir, env, "restore")
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_SKIPPED_PATH path=scripts/helper.sh reason=modified_before_editor" in proc.stdout
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_RESTORE restored=0 removed=0 skipped=1" in proc.stdout
+		assert (repo_dir / "scripts" / "helper.sh").read_text(encoding="utf-8") == modified
+		assert _editor_head_ledger(env).read_text(encoding="utf-8") == ""
+		proc = _run_workspace_helper(repo_dir, env, "reinstall")
+		assert proc.returncode == 0
+		assert "IMPLEMENT_STAGED_SUPPORT_EDITOR_REINSTALL reinstalled=0 edited_from_head=0" in proc.stdout
+
+	with tempfile.TemporaryDirectory(prefix="test_staged_ws_noledger_") as td:
+		repo_dir, _github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		consumer_env = {key: value for key, value in env.items() if key not in {"STAGED_SUPPORT_LEDGER", "STAGED_SUPPORT_BASE_DIR"}}
+		for mode in ("restore", "reinstall"):
+			proc = _run_workspace_helper(repo_dir, consumer_env, mode)
+			assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+			assert f"IMPLEMENT_STAGED_SUPPORT_EDITOR_SKIPPED mode={mode} reason=no_ledger" in proc.stdout
+		assert (repo_dir / "scripts" / "helper.sh").read_text(encoding="utf-8") == _STAGED_HELPER_MAIN
+		proc = _run_workspace_helper(repo_dir, env, "bogus")
+		assert proc.returncode == 2
+
+
+def test_staged_support_workspace_fails_closed_on_unsafe_path_or_missing_base() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_staged_ws_unsafe_") as td:
+		repo_dir, _github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		Path(env["STAGED_SUPPORT_LEDGER"]).write_text("../escape.sh\n", encoding="utf-8")
+		proc = _run_workspace_helper(repo_dir, env, "restore")
+		assert proc.returncode == 1
+		assert "IMPLEMENT_STAGED_SUPPORT_LEDGER_INVALID path=../escape.sh reason=unsafe_path" in proc.stdout + proc.stderr
+	for unsafe_ledger_path in (".", "./"):
+		with tempfile.TemporaryDirectory(prefix="test_staged_ws_current_dir_") as td:
+			repo_dir, _github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+			Path(env["STAGED_SUPPORT_LEDGER"]).write_text(f"{unsafe_ledger_path}\n", encoding="utf-8")
+			proc = _run_workspace_helper(repo_dir, env, "restore")
+			assert proc.returncode == 1
+			assert f"IMPLEMENT_STAGED_SUPPORT_LEDGER_INVALID path={unsafe_ledger_path} reason=unsafe_path" in proc.stdout + proc.stderr
+	with tempfile.TemporaryDirectory(prefix="test_staged_ws_nobase_") as td:
+		repo_dir, _github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		(Path(env["STAGED_SUPPORT_BASE_DIR"]) / "scripts" / "helper.sh").unlink()
+		proc = _run_workspace_helper(repo_dir, env, "restore")
+		assert proc.returncode == 1
+		assert "IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=scripts/helper.sh" in proc.stdout + proc.stderr
+		assert (repo_dir / "scripts" / "helper.sh").read_text(encoding="utf-8") == _STAGED_HELPER_MAIN
+	with tempfile.TemporaryDirectory(prefix="test_staged_ws_nomode_") as td:
+		repo_dir, _github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		assert _run_workspace_helper(repo_dir, env, "restore").returncode == 0
+		mock_bin = Path(td) / "mock-bin"
+		mock_bin.mkdir()
+		mock_stat = mock_bin / "stat"
+		mock_stat.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+		mock_stat.chmod(0o755)
+		env["PATH"] = f"{mock_bin}:{env['PATH']}"
+		proc = _run_workspace_helper(repo_dir, env, "reinstall")
+		assert proc.returncode == 1
+		assert "IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=scripts/helper.sh reason=mode_unavailable" in proc.stdout + proc.stderr
+
+
+def test_implement_workflow_wires_staged_support_workspace_helper() -> None:
+	stage_block = _step_block_text("Stage workflow support files")
+	assert "codex_thread_reuse.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py" in stage_block
+	assert "lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do" in stage_block
+	assert 'echo "STAGED_SUPPORT_EDITOR_HEAD_LEDGER=${RUNTIME_DIR}/staged_support_editor_head.txt"' in stage_block
+	implement_run = _extract_run_script("Run Codex implementation")
+	helper_line = 'STAGED_SUPPORT_WORKSPACE_HELPER="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_staged_support_workspace.sh"'
+	restore_call = 'bash "${STAGED_SUPPORT_WORKSPACE_HELPER}" restore'
+	reinstall_call = 'bash "${STAGED_SUPPORT_WORKSPACE_HELPER}" reinstall'
+	assert implement_run.count(helper_line) == 1
+	assert implement_run.count(restore_call) == 1
+	assert implement_run.count(reinstall_call) == 1
+	assert '--repo-root "${WORKSPACE_PATH:-${GITHUB_WORKSPACE}}"' in implement_run
+	# restore precedes the pre-Codex baseline capture and the attempt loop;
+	# reinstall follows the loop and precedes the transcript archive.
+	assert implement_run.index(restore_call) < implement_run.index('python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/targeted_file_context.py"')
+	assert implement_run.index(restore_call) < implement_run.index('CODEX_PRE_BASELINE="${RUNTIME_DIR}/codex_pre_baseline.txt"')
+	assert implement_run.index(restore_call) < implement_run.index('for attempt in $(seq 1 "${max_attempts}"); do')
+	assert implement_run.rindex('bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" direct-run') < implement_run.index(reinstall_call)
+	assert implement_run.index(reinstall_call) < implement_run.index('if [ "${implement_succeeded}" = "true" ]; then')
+	repair_run = _extract_run_script("Attempt post-Codex syntax repair")
+	assert repair_run.count(restore_call) == 1
+	assert repair_run.count(reinstall_call) == 1
+	assert repair_run.index(restore_call) < repair_run.index("repair_succeeded=false")
+	assert repair_run.index(reinstall_call) < repair_run.index("if [ \"${repair_succeeded}\" != 'true' ]; then")
+	commit_helper = IMPLEMENT_COMMIT_SCRIPT.read_text(encoding="utf-8")
+	assert 'staged_support_editor_head_ledger="${STAGED_SUPPORT_EDITOR_HEAD_LEDGER:-}"' in commit_helper
+	assert "IMPLEMENT_STAGED_SUPPORT_EDITED_FROM_HEAD" in commit_helper
+
+
+EDITOR_LEDGER_ENV_SCRUB = (
+	"env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR"
+	" -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR \\"
+)
+
+
+def test_editor_launches_drop_staged_support_ledger_env() -> None:
+	"""Every codex editor launch runs without the staged-support ledger paths.
+
+	Incident: implement runs 35614385686, 35628923735, 35642366131,
+	35656715219 and 35668070395 (issues #4227 / #4242, project #4139). The
+	editor inherited STAGED_SUPPORT_EDITOR_HEAD_LEDGER from $GITHUB_ENV, its own
+	pytest run of this file appended scripts/helper.sh to the live ledger, and
+	the post-editor reinstall failed closed. tests/conftest.py strips the same
+	variables, but a review-blocked baseline branch checks out an older
+	conftest.py, so the launch line has to scrub them itself.
+	"""
+	for step_name, launch_line in (
+		("Run Codex implementation", 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" direct-run || cmd_rc=$?'),
+		("Attempt post-Codex syntax repair", 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" direct-run || repair_direct_rc=$?'),
+	):
+		script_lines = _extract_run_script(step_name).splitlines()
+		launch_indexes = [idx for idx, line in enumerate(script_lines) if line.strip() == launch_line]
+		assert len(launch_indexes) == 1, (step_name, launch_indexes)
+		preceding = script_lines[launch_indexes[0] - 1].strip()
+		assert preceding == EDITOR_LEDGER_ENV_SCRUB, (step_name, preceding)
+		# The scrub sits inside the CODEX_THREAD_REUSE_* prefix assignment chain,
+		# so the helper still receives its own configuration.
+		assert script_lines[launch_indexes[0] - 2].rstrip().endswith("\\"), step_name
+	assert _workflow_text().count(EDITOR_LEDGER_ENV_SCRUB) == 2
+
+
+def test_editor_env_scrub_keeps_helper_config_and_drops_ledger_paths() -> None:
+	"""`VAR=x env -u LEDGER bash helper` hands VAR through and removes LEDGER."""
+	with tempfile.TemporaryDirectory(prefix="test_editor_env_scrub_") as td:
+		probe = Path(td) / "probe.sh"
+		probe.write_text(
+			"#!/usr/bin/env bash\n"
+			"printf 'key=%s\\n' \"${CODEX_THREAD_REUSE_STATE_KEY:-unset}\"\n"
+			"for v in STAGED_SUPPORT_LEDGER STAGED_SUPPORT_BASE_DIR STAGED_SUPPORT_EDITOR_HEAD_LEDGER IMPLEMENT_STAGED_SUPPORT_RUN_DIR; do\n"
+			"  printf '%s=%s\\n' \"$v\" \"${!v:-unset}\"\n"
+			"done\n",
+			encoding="utf-8",
+		)
+		script = (
+			'CODEX_THREAD_REUSE_STATE_KEY="implement" \\\n'
+			f"  {EDITOR_LEDGER_ENV_SCRUB}\n"
+			f'  bash "{probe}"\n'
+		)
+		env = os.environ.copy()
+		env.update(
+			{
+				"STAGED_SUPPORT_LEDGER": f"{td}/ledger.txt",
+				"STAGED_SUPPORT_BASE_DIR": f"{td}/base",
+				"STAGED_SUPPORT_EDITOR_HEAD_LEDGER": f"{td}/head.txt",
+				"IMPLEMENT_STAGED_SUPPORT_RUN_DIR": f"{td}/run",
+			}
+		)
+		proc = subprocess.run(["bash", "-c", script], cwd=td, env=env, text=True, capture_output=True, timeout=30)
+		assert proc.returncode == 0, proc.stderr
+		lines = proc.stdout.splitlines()
+		assert lines == [
+			"key=implement",
+			"STAGED_SUPPORT_LEDGER=unset",
+			"STAGED_SUPPORT_BASE_DIR=unset",
+			"STAGED_SUPPORT_EDITOR_HEAD_LEDGER=unset",
+			"IMPLEMENT_STAGED_SUPPORT_RUN_DIR=unset",
+		], lines
+
+
+def test_commit_helper_fails_closed_when_staged_support_base_is_missing() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_staged_base_missing_") as td:
+		repo_dir, github_output, env, baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		(Path(env["STAGED_SUPPORT_BASE_DIR"]) / "scripts" / "helper.sh").unlink()
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode != 0
+		assert "IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=scripts/helper.sh" in proc.stdout + proc.stderr
+		output_text = github_output.read_text(encoding="utf-8")
+		assert "staged_support_rebase_conflict=true" in output_text
+		assert "staged_support_rebase_conflict_files=scripts/helper.sh" in output_text
+		assert "staged_support_auto_release_safe=" not in output_text
+		assert _git_out(["git", "rev-parse", "HEAD"], cwd=repo_dir).strip() == baseline_head
+
+
+def test_commit_helper_fails_closed_when_staged_support_base_directory_is_missing() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_staged_base_dir_missing_") as td:
+		repo_dir, github_output, env, baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		shutil.rmtree(env["STAGED_SUPPORT_BASE_DIR"])
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode != 0
+		assert "IMPLEMENT_STAGED_SUPPORT_BASE_MISSING" in proc.stdout + proc.stderr
+		assert "staged_support_rebase_conflict=true" in github_output.read_text(encoding="utf-8")
+		assert _git_out(["git", "rev-parse", "HEAD"], cwd=repo_dir).strip() == baseline_head
+
+
+def test_commit_helper_fails_closed_when_staged_support_ledger_file_is_missing() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_staged_ledger_missing_") as td:
+		repo_dir, github_output, env, baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		Path(env["STAGED_SUPPORT_LEDGER"]).unlink()
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode != 0
+		assert "IMPLEMENT_STAGED_SUPPORT_LEDGER_MISSING" in proc.stdout + proc.stderr
+		assert "staged_support_rebase_conflict=true" in github_output.read_text(encoding="utf-8")
+		assert _git_out(["git", "rev-parse", "HEAD"], cwd=repo_dir).strip() == baseline_head
+
+
+def test_commit_helper_rejects_unsafe_staged_support_ledger_paths() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_staged_unsafe_") as td:
+		repo_dir, github_output, env, baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		Path(env["STAGED_SUPPORT_LEDGER"]).write_text("../outside.sh\n", encoding="utf-8")
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode != 0
+		assert "IMPLEMENT_STAGED_SUPPORT_LEDGER_INVALID path=../outside.sh reason=unsafe_path" in proc.stdout + proc.stderr
+		output_text = github_output.read_text(encoding="utf-8")
+		assert "staged_support_rebase_conflict=true" in output_text
+		assert "staged_support_rebase_conflict_files=../outside.sh" in output_text
+		assert _git_out(["git", "rev-parse", "HEAD"], cwd=repo_dir).strip() == baseline_head
+
+
+def test_commit_helper_ignores_absent_staged_support_ledger() -> None:
+	# Consumer repos (and self-repo runs before the ledger exists) must behave exactly as before.
+	with tempfile.TemporaryDirectory(prefix="test_commit_staged_absent_") as td:
+		repo_dir, github_output, env, _baseline_head = _staged_support_fixture(Path(td), _STAGED_HELPER_MAIN)
+		env.pop("STAGED_SUPPORT_LEDGER")
+		env.pop("STAGED_SUPPORT_BASE_DIR")
+		proc = _run_commit_helper(repo_dir, env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "IMPLEMENT_STAGED_SUPPORT" not in proc.stdout
+		assert "did_commit=true" in github_output.read_text(encoding="utf-8")
+
+
+def test_stage_workflow_support_step_records_self_repo_staged_support_ledger() -> None:
+	stage_block = _step_block_text("Stage workflow support files")
+	# Explicit install destinations are inventoried before the ledger is rendered.
+	assert stage_block.index("_staged_support_installed_paths=()") < stage_block.index('install -m 0755 "${src}" "scripts/${f}"')
+	assert 'grep -Fqx -- "${_staged_status_line}"' not in stage_block
+	assert 'git status --porcelain --untracked-files=all' not in stage_block
+	assert '_staged_support_installed_paths+=("scripts/${f}")' in stage_block
+	assert '_staged_support_installed_paths+=("ai-memory/schemas/${sf}")' in stage_block
+	assert '_staged_support_installed_paths+=("prompts/${prompt_assembly_asset}")' in stage_block
+	assert stage_block.index("STAGED_SUPPORT_LEDGER=") > stage_block.index('install -m 0644 "${src}" "prompts/${prompt_assembly_asset}"')
+	assert 'STAGED_SUPPORT_LEDGER="${RUNTIME_DIR}/staged_support_overwrites.txt"' in stage_block
+	assert 'STAGED_SUPPORT_BASE_DIR="${RUNTIME_DIR}/staged_support_base"' in stage_block
+	assert 'IMPLEMENT_STAGED_SUPPORT_RUN_DIR="${RUNTIME_DIR}/staged_support_run/scripts"' in stage_block
+	assert 'echo "STAGED_SUPPORT_LEDGER=${STAGED_SUPPORT_LEDGER}"' in stage_block
+	assert 'echo "STAGED_SUPPORT_BASE_DIR=${STAGED_SUPPORT_BASE_DIR}"' in stage_block
+	assert 'echo "IMPLEMENT_STAGED_SUPPORT_RUN_DIR=${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"' in stage_block
+	# P2b: the run dir copies from the bundle (or scripts/ under the kill switch).
+	assert 'install -m 0755 "${support_run_src}/${_staged_support_runtime_script}" "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/${_staged_support_runtime_script}"' in stage_block
+	assert 'support_run_src="scripts"' in stage_block
+	assert 'for _staged_support_path in "${_staged_support_installed_paths[@]}"; do' in stage_block
+	assert 'git diff --quiet HEAD -- "${_staged_support_path}"' in stage_block
+	assert "IMPLEMENT_STAGED_SUPPORT_LEDGER ref=${SCRIPT_REF} overwritten_tracked_files=" in stage_block
+	assert stage_block.count('if [ "${is_self_repo}" = "true" ]; then') >= 1
+	script_text = _implement_commit_script_text()
+	for marker in (
+		'staged_support_ledger="${STAGED_SUPPORT_LEDGER:-}"',
+		"IMPLEMENT_STAGED_SUPPORT_RESTORED",
+		"IMPLEMENT_STAGED_SUPPORT_REBASED",
+		"IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT",
+		"IMPLEMENT_STAGED_SUPPORT_LEDGER_MISSING",
+		"IMPLEMENT_STAGED_SUPPORT_HEAD_READ_FAILED",
+		"IMPLEMENT_STAGED_SUPPORT_REBASE_FAILED",
+		"IMPLEMENT_STAGED_SUPPORT_DELETED_BY_EDITOR",
+		"git merge-file -p",
+	):
+		assert marker in script_text, marker
+	# The restore runs before anything is staged.
+	assert script_text.index("IMPLEMENT_STAGED_SUPPORT_RESTORE ") < script_text.index('git add -u -- "${add_u_excludes[@]}"')
+	commit_block = _step_block_text("Commit changes")
+	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"' in commit_block
+	assert 'source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh"' in _step_block_text("Push branch")
+	assert 'python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/lint_pr_body_auto_close.py"' in _step_block_text(
+		"Pre-flight — lint PR title/body for auto-close keywords against tracking issues"
+	)
+
+
+def test_preflight_scope_guard_projects_only_untouched_staged_support_files() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_preflight_staged_support_scope_") as td:
+		tmp_path = Path(td)
+		repo_dir, github_output, env, _baseline_head = _staged_support_fixture(tmp_path, _STAGED_HELPER_MAIN)
+		support_run_dir = Path(env["IMPLEMENT_STAGED_SUPPORT_RUN_DIR"])
+		shutil.copy2(FILES_TOUCHED_SCOPE_GUARD, support_run_dir / "files_touched_scope_guard.py")
+		issue_body = tmp_path / "issue_body.txt"
+		issue_body.write_text("files_touched:\n  - README.md\n", encoding="utf-8")
+		fetched_manifest = tmp_path / "fetched_manifest.txt"
+		fetched_manifest.write_text("__workflow_step_under_test.sh\n", encoding="utf-8")
+		env.update(
+			{
+				"ALLOW_BULK_DELETE": "false",
+				"ALLOW_OUT_OF_SCOPE_FILES": "false",
+				"ALLOW_WORKFLOW_EDITS": "true",
+				"ENFORCE_FILES_TOUCHED": "true",
+				"FETCHED_MANIFEST": str(fetched_manifest),
+				"ISSUE_BODY_FILE": str(issue_body),
+			}
+		)
+		script = _render_github_expressions(
+			_extract_run_script("Preflight destructive-commit guard"),
+			{"github.repository": "shubhodeep1/coding-workflows"},
+		)
+
+		proc = _run_shell_script(script, cwd=repo_dir, env=env)
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert "scope_violation_blocked" not in github_output.read_text(encoding="utf-8")
+
+		(repo_dir / "scripts" / "helper.sh").write_text(
+			_STAGED_HELPER_MAIN.replace("shared line 3\n", "shared line 3 edited by the editor\n"),
+			encoding="utf-8",
+		)
+		github_output.write_text("", encoding="utf-8")
+		proc = _run_shell_script(script, cwd=repo_dir, env=env)
+		assert proc.returncode != 0
+		output_text = github_output.read_text(encoding="utf-8")
+		assert "scope_violation_blocked=out-of-scope" in output_text
+		assert "scripts/helper.sh" in output_text
+
+		(repo_dir / "scripts" / "helper.sh").write_text(_STAGED_HELPER_MAIN, encoding="utf-8")
+		(repo_dir / "scripts" / "helper.sh").chmod(0o644)
+		github_output.write_text("", encoding="utf-8")
+		proc = _run_shell_script(script, cwd=repo_dir, env=env)
+		assert proc.returncode != 0
+		output_text = github_output.read_text(encoding="utf-8")
+		assert "scope_violation_blocked=out-of-scope" in output_text
+		assert "scripts/helper.sh" in output_text
+
+		(repo_dir / "scripts" / "helper.sh").write_text(_STAGED_HELPER_MAIN, encoding="utf-8")
+		(repo_dir / "scripts" / "helper.sh").chmod(0o755)
+		(Path(env["STAGED_SUPPORT_BASE_DIR"]) / "scripts" / "helper.sh").unlink()
+		github_output.write_text("", encoding="utf-8")
+		proc = _run_shell_script(script, cwd=repo_dir, env=env)
+		assert proc.returncode != 0
+		assert "IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=scripts/helper.sh" in proc.stdout + proc.stderr
+		output_text = github_output.read_text(encoding="utf-8")
+		assert "staged_support_rebase_conflict=true" in output_text
+		assert "staged_support_rebase_conflict_files=scripts/helper.sh" in output_text
+		assert "scope_violation_blocked" not in output_text
+
+
+def test_validate_step_uses_reusable_validator_with_continue_on_error() -> None:
+	validate_block = _step_block_text("Validate syntax of changed files")
+	assert "continue-on-error: true" in validate_block
+	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/validate_changed_files_syntax.sh"' in validate_block
+
+
+def test_post_codex_syntax_repair_step_contract() -> None:
+	wf = _workflow_text()
+	assert "MAX_POST_CODEX_REPAIR_ATTEMPTS: ${{ vars.MAX_POST_CODEX_REPAIR_ATTEMPTS || '3' }}" in wf
+
+	repair_block = _step_block_text("Attempt post-Codex syntax repair")
+	assert "steps.validate_syntax_changed_files.outcome == 'failure'" in repair_block
+	assert "prompts/mode-implement-repair.txt" in repair_block
+	assert "/validate_changed_files_syntax.sh\"" in repair_block
+	assert "MAX_POST_CODEX_REPAIR_ATTEMPTS" in repair_block
+	assert "[ \"${max_attempts_raw}\" -lt 0 ]" in repair_block
+	assert "if [ \"${max_attempts}\" -eq 0 ]; then" in repair_block
+	assert "BASELINE_COMMIT=\"$(git stash create" in repair_block
+	assert "PRE_UNTRACKED_FILE=\"${RUNTIME_DIR}/post_codex_pre_untracked_attempt_" in repair_block
+	assert "Required repair artifacts are missing from repair-prompt-and-validator-split dependency." in repair_block
+	assert 'SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/render_prompt.sh" "${REPAIR_PROMPT_TEMPLATE}"' in repair_block
+	assert 'Failed to render repair prompt template ${REPAIR_PROMPT_TEMPLATE}; using raw prompt.' in repair_block
+	# The repair agent runs isolated (no MCP server), so the step renders no Serena hints.
+	assert "Serena MCP is available in this run" not in repair_block
+
+
+def test_syntax_failure_requires_successful_repair_before_commit_path() -> None:
+	enforce_block = _step_block_text("Enforce syntax validation outcome")
+	assert "steps.validate_syntax_changed_files.outcome" in enforce_block
+	assert "steps.post_codex_syntax_repair.outputs.repaired" in enforce_block
+	assert "Syntax validation failed and post-Codex repair did not recover." in enforce_block
+
+
+def test_telegram_failure_step_skips_destructive_blocked_runs() -> None:
+	telegram_block = _step_block_text("Telegram failure notification")
+	assert "if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == ''" in telegram_block, (
+		"Post-failure Telegram flow must be skipped for destructive-blocked runs; only the dedicated "
+		"destructive-guard CRITICAL alert should fire"
+	)
+	assert "steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict == ''" in telegram_block
+	assert "steps.commit_changes.outputs.staged_support_rebase_conflict == ''" in telegram_block
+
+
+def test_staged_support_failure_uses_dedicated_handler_and_skips_generic_diagnose() -> None:
+	guard_block = _step_block_text("Destructive-commit guard — label + alert on rejection")
+	assert "steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict != ''" in guard_block
+	assert "steps.commit_changes.outputs.staged_support_rebase_conflict != ''" in guard_block
+	assert "SSB_REASON: ${{ steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict || steps.commit_changes.outputs.staged_support_rebase_conflict }}" in guard_block
+	assert "SSB_FILES: ${{ steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict_files || steps.commit_changes.outputs.staged_support_rebase_conflict_files }}" in guard_block
+	for step_name in (
+		"Capture post-Codex validation errors",
+		"Diagnose post-Codex failure and create fix-up issues",
+		"Comment on issue failure",
+		"Telegram failure notification",
+	):
+		assert "steps.preflight_destructive_guard.outputs.staged_support_rebase_conflict == ''" in _step_block_text(step_name), step_name
+		assert "steps.commit_changes.outputs.staged_support_rebase_conflict == ''" in _step_block_text(step_name), step_name
+
+
+def _run_guard_handler_case(
+	tmp_path: Path,
+	*,
+	repository: str,
+	destructive_reason: str = "",
+	scope_reason: str = "",
+	staged_support_reason: str = "",
+	staged_support_auto_release_safe: bool = False,
+	mock_issue_edit_failure: bool = False,
+	guard_overrides: dict[str, str] | None = None,
+	with_gh_helpers: bool = False,
+	issue_edit_transient_failures: int = 0,
+	mock_label_create_exists: bool = False,
+) -> tuple[subprocess.CompletedProcess[str], dict, list[list[str]]]:
+	repo_dir = tmp_path / "repo"
+	runtime_dir = tmp_path / "runtime"
+	bin_dir = tmp_path / "bin"
+	(repo_dir / "scripts").mkdir(parents=True)
+	runtime_dir.mkdir()
+	bin_dir.mkdir()
+
+	repository_helper = repo_dir / "scripts" / "implement_handle_guard_block.sh"
+	runtime_helper = runtime_dir / "implement_handle_guard_block.sh"
+	shutil.copy2(IMPLEMENT_GUARD_HANDLER, repository_helper)
+	shutil.copy2(repository_helper, runtime_helper)
+	repository_helper.unlink()
+	assert not repository_helper.exists(), "test setup must simulate fetched-support cleanup"
+	if with_gh_helpers:
+		shutil.copy2(REPO_ROOT / "scripts" / "gh_helpers.sh", runtime_dir / "gh_helpers.sh")
+
+	_install_mock_gh(bin_dir)
+	_install_guard_mock_curl(bin_dir)
+	gh_state_file = runtime_dir / "gh_state.json"
+	gh_state_file.write_text(
+		json.dumps({"issue_number": 948, "issue_labels": ["ai:implementing"]}),
+		encoding="utf-8",
+	)
+	curl_calls_file = runtime_dir / "curl_calls.json"
+	curl_calls_file.write_text("[]", encoding="utf-8")
+
+	env = _isolated_test_env(
+		{
+			"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+			"MOCK_GH_STATE_FILE": str(gh_state_file),
+			"MOCK_CURL_CALLS_FILE": str(curl_calls_file),
+			"GITHUB_REPOSITORY": repository,
+			"GITHUB_RUN_ID": "777",
+			"GITHUB_RUN_ATTEMPT": "1",
+			"GITHUB_OUTPUT": str(runtime_dir / "step_output.txt"),
+			"RUNTIME_DIR": str(runtime_dir),
+			"GITHUB_SERVER_URL": "https://github.example.test",
+			"ISSUE_NUMBER": "948",
+			"GH_TOKEN": "test-token",
+			"TG_BOT_SECRET": "test-bot-token",
+			"TG_ADMIN_CHAT_ID": "12345",
+			"DCB_REASON": destructive_reason,
+			"DCB_COUNT": "1",
+			"DCB_THRESHOLD_LABEL": "BULK_DELETE_THRESHOLD",
+			"DCB_EFFECTIVE_THRESHOLD": "3",
+			"DCB_DELETIONS": "agents.md",
+			"SVB_REASON": scope_reason,
+			"SVB_COUNT": "1",
+			"SVB_FILES": "README.md",
+			"SVB_ALLOWLIST": "scripts/**/*.sh",
+			"SSB_REASON": staged_support_reason,
+			"SSB_FILES": "scripts/helper.sh",
+			"SSB_AUTO_RELEASE_SAFE": "true" if staged_support_auto_release_safe else "",
+			"MOCK_GH_ISSUE_EDIT_FAILURE": "true" if mock_issue_edit_failure else "false",
+			"MOCK_GH_ISSUE_EDIT_TRANSIENT_FAILURES": str(issue_edit_transient_failures),
+			"MOCK_GH_LABEL_CREATE_EXISTS": "true" if mock_label_create_exists else "false",
+		},
+		cwd=repo_dir,
+	)
+	env.update(guard_overrides or {})
+	proc = subprocess.run(
+		["bash", str(runtime_helper)],
+		cwd=str(repo_dir),
+		env=env,
+		text=True,
+		capture_output=True,
+		timeout=60,
+	)
+	return (
+		proc,
+		json.loads(gh_state_file.read_text(encoding="utf-8")),
+		json.loads(curl_calls_file.read_text(encoding="utf-8")),
+	)
+
+
+def test_guard_handler_executes_all_rejection_modes_after_support_cleanup() -> None:
+	cases = (
+		("canonical", "shubhodeep1/coding-workflows", "canonical-source", "", "", "ai:destructive-blocked", "canonical workflow-source file deletion"),
+		("unsafe-manifest", "owner/consumer", "unsafe-fetched-manifest", "", "", "ai:destructive-blocked", "artifact-cleanup manifest contained unsafe path(s)"),
+		("bulk-delete", "owner/consumer", "bulk-delete", "", "", "ai:destructive-blocked", "bulk deletion exceeded"),
+		("files-touched", "shubhodeep1/coding-workflows", "", "out-of-scope", "", "ai:scope-blocked", "files_touched scope guard rejected"),
+		("scope-lock", "owner/consumer", "", "scope-lock-label", "", "ai:scope-blocked", "Issue scope-lock rejected"),
+		("staged-support", "shubhodeep1/coding-workflows", "", "", "true", "ai:needs-human", "Staged-support restore failed"),
+	)
+	for case_name, repository, destructive_reason, scope_reason, staged_support_reason, expected_label, expected_comment in cases:
+		case_dir = Path(tempfile.mkdtemp(prefix=f"test_guard_handler_{case_name}_"))
+		try:
+			proc, gh_state, curl_calls = _run_guard_handler_case(
+				case_dir,
+				repository=repository,
+				destructive_reason=destructive_reason,
+				scope_reason=scope_reason,
+				staged_support_reason=staged_support_reason,
+			)
+			assert proc.returncode != 0, f"case={case_name}\nstdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+			assert gh_state["label_creates"] == [{"name": expected_label, "repo": repository}], f"case={case_name}"
+			assert gh_state["issue_labels"] == [expected_label], f"case={case_name}"
+			assert gh_state["issue_edits"] == [{
+				"issue": "948",
+				"add": [expected_label],
+				"remove": ["ai:implementing"],
+				"repo": repository,
+			}], f"case={case_name}"
+			assert gh_state["issue_comments"][0]["repo"] == repository, f"case={case_name}"
+			assert expected_comment in gh_state["issue_comments"][0]["body"], f"case={case_name}"
+			comment_lines = gh_state["issue_comments"][0]["body"].splitlines()
+			if case_name != "staged-support":
+				assert comment_lines[-1].startswith("<!-- ai:guard-rejection:v1 item=948 ")
+				assert " run=777 count=1 truncated=false paths=" in comment_lines[-1]
+				assert f"guard={'scope-lock' if case_name == 'scope-lock' else 'scope' if case_name == 'files-touched' else 'destructive'}" in comment_lines[-1]
+				assert json.loads(base64.b64decode(comment_lines[-1].split("paths=")[1].split(" -->")[0])) == (
+					["README.md"] if scope_reason else ["agents.md"])
+			else:
+				assert "ai:guard-rejection:v1" not in gh_state["issue_comments"][0]["body"]
+			assert len(curl_calls) == 1, f"case={case_name}"
+			curl_text = " ".join(curl_calls[0])
+			assert "CRITICAL:" in curl_text, f"case={case_name}"
+			assert f"repo: {repository}" in curl_text, f"case={case_name}"
+			assert f"run: https://github.example.test/{repository}/actions/runs/777" in curl_text, f"case={case_name}"
+		finally:
+			shutil.rmtree(case_dir)
+
+
+def test_bulk_delete_handler_records_snapshot_only_for_bulk_rejection() -> None:
+	for reason in ("bulk-delete", "canonical-source", ""):
+		with tempfile.TemporaryDirectory(prefix="test_bulk_delete_snapshot_") as td:
+			case_dir = Path(td)
+			proc, state, _ = _run_guard_handler_case(case_dir, repository="owner/consumer",
+				destructive_reason=reason, scope_reason="files-touched" if not reason else "")
+			assert proc.returncode != 0
+			snapshot_path = case_dir / "runtime/destructive_rejection/destructive_rejection.json"
+			assert snapshot_path.exists() == (reason == "bulk-delete")
+			if reason == "bulk-delete":
+				assert json.loads(snapshot_path.read_text()) == {
+					"schema": "destructive_rejection.v1", "issue": 948, "run_id": 777,
+					"run_attempt": 1, "reason": "bulk-delete", "paths": ["agents.md"],
+				}
+				assert "rejection_snapshot=true" in (case_dir / "runtime/step_output.txt").read_text()
+				assert "<!-- ai:destructive-rejection:v1 item=948 run=777 attempt=1 -->" in state["issue_comments"][0]["body"]
+			else:
+				assert not (case_dir / "runtime/step_output.txt").exists()
+
+
+def test_destructive_snapshot_upload_wiring() -> None:
+	handler = _step_block_text("Destructive-commit guard — label + alert on rejection")
+	upload = _step_block_text("Upload destructive-rejection snapshot")
+	assert "id: handle_guard_block" in handler
+	assert "always() && steps.handle_guard_block.outputs.rejection_snapshot == 'true'" in upload
+	assert "uses: actions/upload-artifact@v6" in upload
+	assert "name: destructive-rejection-issue-${{ env.ISSUE_NUMBER }}" in upload
+	assert "path: ${{ env.RUNTIME_DIR }}/destructive_rejection/destructive_rejection.json" in upload
+	assert "retention-days: 30" in upload and "continue-on-error: true" in upload
+	assert "unblock_ledger.py" in _step_block_text("Stage workflow support files")
+
+
+def test_guard_handler_omits_marker_for_incomplete_path_list() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_partial_rejection_") as td:
+		proc, gh_state, _ = _run_guard_handler_case(Path(td), repository="owner/consumer", scope_reason="out-of-scope",
+			guard_overrides={"SVB_COUNT": "2"})
+		assert proc.returncode != 0
+		assert "ai:guard-rejection:v1" not in gh_state["issue_comments"][0]["body"]
+
+
+def test_guard_handler_marks_capped_and_unidentified_rejections() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_capped_rejection_") as td:
+		paths = [f"src/{index}.py" for index in range(100)]
+		proc, gh_state, _ = _run_guard_handler_case(Path(td), repository="owner/consumer", scope_reason="out-of-scope",
+			guard_overrides={"SVB_COUNT": "100", "SVB_FILES": "\n".join(paths)})
+		assert proc.returncode != 0
+		marker_line = gh_state["issue_comments"][0]["body"].splitlines()[-1]
+		assert "count=100 truncated=true" in marker_line
+		assert json.loads(base64.b64decode(marker_line.split("paths=")[1].split(" -->")[0])) == paths
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_missing_run_") as td:
+		proc, gh_state, _ = _run_guard_handler_case(Path(td), repository="owner/consumer", scope_reason="out-of-scope",
+			guard_overrides={"GITHUB_RUN_ID": "unknown"})
+		assert proc.returncode != 0
+		assert "ai:guard-rejection:v1" not in gh_state["issue_comments"][0]["body"]
+
+
+def test_staged_support_guard_reports_failed_human_latch() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_staged_latch_") as td:
+		proc, gh_state, curl_calls = _run_guard_handler_case(
+			Path(td),
+			repository="shubhodeep1/coding-workflows",
+			staged_support_reason="true",
+			mock_issue_edit_failure=True,
+		)
+		assert proc.returncode != 0
+		assert "FAILED to latch ai:needs-human" in proc.stdout + proc.stderr
+		assert gh_state["issue_labels"] == ["ai:implementing"]
+		assert "did not find `ai:needs-human`" in gh_state["issue_comments"][0]["body"]
+		assert "<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->" not in gh_state["issue_comments"][0]["body"]
+		assert "FAILED to confirm ai:needs-human latch" in " ".join(curl_calls[0])
+
+
+def test_staged_support_guard_marks_only_auto_release_safe_conflicts() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_staged_release_safe_") as td:
+		proc, gh_state, _curl_calls = _run_guard_handler_case(
+			Path(td),
+			repository="shubhodeep1/coding-workflows",
+			staged_support_reason="true",
+			staged_support_auto_release_safe=True,
+		)
+		assert proc.returncode != 0
+		assert "<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->" in gh_state["issue_comments"][0]["body"]
+
+
+def test_guard_handler_retries_transient_destructive_latch_write() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_retry_destructive_") as td:
+		proc, gh_state, _ = _run_guard_handler_case(
+			Path(td),
+			repository="owner/consumer",
+			destructive_reason="canonical-source",
+			with_gh_helpers=True,
+			issue_edit_transient_failures=1,
+		)
+		output = proc.stdout + proc.stderr
+		assert proc.returncode != 0, output
+		assert "gh_helpers.sh not available" not in output
+		assert gh_state["issue_edit_transient_failures_seen"] == 1
+		# The retried call is the combined add+remove edit, not the add-only fallback.
+		assert gh_state["issue_edits"][0]["remove"] == ["ai:implementing"]
+		assert "ai:destructive-blocked" in gh_state["issue_labels"]
+		assert "ai:implementing" not in gh_state["issue_labels"]
+		assert gh_state["label_creates"] == [{"name": "ai:destructive-blocked", "repo": "owner/consumer"}]
+		assert "Confirmed ai:destructive-blocked is latched" in output
+		assert len(gh_state["issue_comments"]) == 1
+
+
+def test_guard_handler_retries_transient_needs_human_latch_write() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_retry_staged_") as td:
+		proc, gh_state, curl_calls = _run_guard_handler_case(
+			Path(td),
+			repository="shubhodeep1/coding-workflows",
+			staged_support_reason="true",
+			staged_support_auto_release_safe=True,
+			with_gh_helpers=True,
+			issue_edit_transient_failures=1,
+		)
+		output = proc.stdout + proc.stderr
+		assert proc.returncode != 0, output
+		assert gh_state["issue_edit_transient_failures_seen"] == 1
+		assert gh_state["issue_edits"][0]["remove"] == ["ai:implementing"]
+		assert gh_state["issue_labels"] == ["ai:needs-human"]
+		assert "Confirmed ai:needs-human is latched" in output
+		assert len(gh_state["issue_comments"]) == 1
+		assert "<!-- ai:needs-human-latch reason=staged_support_rebase_conflict -->" in gh_state["issue_comments"][0]["body"]
+		assert "Confirmed ai:needs-human latch" in " ".join(curl_calls[0])
+
+
+def test_guard_handler_scope_latch_with_gh_helpers() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_retry_scope_") as td:
+		proc, gh_state, _ = _run_guard_handler_case(
+			Path(td),
+			repository="owner/consumer",
+			scope_reason="out-of-scope",
+			with_gh_helpers=True,
+		)
+		output = proc.stdout + proc.stderr
+		assert proc.returncode != 0, output
+		assert gh_state["label_creates"] == [{"name": "ai:scope-blocked", "repo": "owner/consumer"}]
+		assert gh_state["issue_labels"] == ["ai:scope-blocked"]
+		assert "Confirmed ai:scope-blocked is latched" in output
+		assert len(gh_state["issue_comments"]) == 1
+
+
+def test_guard_handler_existing_label_edits_without_retrying_create() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_label_exists_") as td:
+		proc, gh_state, _ = _run_guard_handler_case(
+			Path(td),
+			repository="owner/consumer",
+			scope_reason="out-of-scope",
+			with_gh_helpers=True,
+			mock_label_create_exists=True,
+		)
+		output = proc.stdout + proc.stderr
+		assert proc.returncode != 0, output
+		# One raw create; the "already exists" reply goes straight to the edit, never to a create retry.
+		assert gh_state["label_creates"] == [{"name": "ai:scope-blocked", "repo": "owner/consumer"}]
+		assert gh_state["label_edits"] == [{"name": "ai:scope-blocked", "repo": "owner/consumer"}]
+		assert "gh command failed" not in output
+		assert "Could not ensure the ai:scope-blocked label exists" not in output
+		assert "Confirmed ai:scope-blocked is latched" in output
+
+
+def test_guard_handler_fails_open_without_gh_helpers() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_guard_handler_no_helpers_") as td:
+		proc, gh_state, _ = _run_guard_handler_case(
+			Path(td),
+			repository="owner/consumer",
+			destructive_reason="canonical-source",
+		)
+		output = proc.stdout + proc.stderr
+		assert proc.returncode != 0, output
+		assert "gh_helpers.sh not available beside the handler" in output
+		assert gh_state["issue_labels"] == ["ai:destructive-blocked"]
+		assert "Confirmed ai:destructive-blocked is latched" in output
+
+
+def test_guard_handler_gh_retry_wiring_contract() -> None:
+	stage_block = _step_block_text("Stage workflow support files")
+	handler = _implement_guard_handler_text()
+	assert 'install -m 0644 "${support_run_src}/gh_helpers.sh" "${RUNTIME_DIR}/gh_helpers.sh"' in stage_block
+	assert stage_block.index('install -m 0755 "${support_run_src}/implement_handle_guard_block.sh" "${RUNTIME_DIR}/implement_handle_guard_block.sh"') < stage_block.index(
+		'install -m 0644 "${support_run_src}/gh_helpers.sh" "${RUNTIME_DIR}/gh_helpers.sh"'
+	)
+	assert 'GUARD_BLOCK_GH_HELPERS_FILE="$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh"' in handler
+	assert 'source "${GUARD_BLOCK_GH_HELPERS_FILE}" && declare -F gh_retry' in handler
+	assert "::warning::implement_handle_guard_block: gh_helpers.sh not available beside the handler" in handler
+	assert handler.count("gh_retry gh issue view") == 3
+	assert handler.count("guard_block_gh gh issue edit") == 6
+	assert "gh_retry gh issue comment" not in handler
+	assert "guard_block_gh gh issue comment" not in handler
+
+
+def test_guard_handler_runtime_wiring_and_expression_size_contract() -> None:
+	workflow = _workflow_text()
+	stage_block = _step_block_text("Stage workflow support files")
+	guard_block = _step_block_text("Destructive-commit guard — label + alert on rejection")
+	assert 'RUN_URL="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"' in _implement_guard_handler_text()
+	assert 'GUARD_COMMENT_FILE="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/implement-guard-comment.XXXXXX")"' in _implement_guard_handler_text()
+	assert "/tmp/scope_comment.md" not in _implement_guard_handler_text()
+	assert "/tmp/destructive_comment.md" not in _implement_guard_handler_text()
+	assert "implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh" in stage_block
+	assert 'install -m 0755 "${support_run_src}/implement_handle_guard_block.sh" "${RUNTIME_DIR}/implement_handle_guard_block.sh"' in stage_block
+	assert workflow.find("- name: Stage workflow support files") < workflow.find("- name: Commit changes") < workflow.find("- name: Destructive-commit guard — label + alert on rejection")
+	assert _extract_run_script("Destructive-commit guard — label + alert on rejection") == (
+		'set -euo pipefail\nbash "${RUNTIME_DIR}/implement_handle_guard_block.sh"\n'
+	)
+	assert len(guard_block.encode("utf-8")) < 21_000
+	for env_name in (
+		"DCB_REASON",
+		"DCB_COUNT",
+		"DCB_THRESHOLD_LABEL",
+		"DCB_EFFECTIVE_THRESHOLD",
+		"DCB_DELETIONS",
+		"SVB_REASON",
+		"SVB_COUNT",
+		"SVB_FILES",
+		"SVB_ALLOWLIST",
+		"SSB_REASON",
+		"SSB_FILES",
+		"SSB_AUTO_RELEASE_SAFE",
+	):
+		assert f"{env_name}:" in guard_block
+	assert "SSB_AUTO_RELEASE_SAFE: ${{ steps.commit_changes.outputs.staged_support_auto_release_safe }}" in guard_block
+
+
+def test_destructive_guard_path_does_not_set_implementation_failed_or_fixup_flow() -> None:
+	destructive_block = _step_block_text("Destructive-commit guard — label + alert on rejection")
+	guard_handler = _implement_guard_handler_text()
+	lowered = (destructive_block + guard_handler).lower()
+	assert "steps.preflight_destructive_guard.outputs.destructive_commit_blocked != '' || steps.commit_changes.outputs.destructive_commit_blocked != ''" in destructive_block, (
+		"Dedicated destructive guard handler must trigger for both early preflight and late commit rejections"
+	)
+	assert "steps.preflight_destructive_guard.outputs.destructive_commit_blocked || steps.commit_changes.outputs.destructive_commit_blocked" in destructive_block, (
+		"Dedicated destructive guard handler must source its reason from either the preflight or commit guard output"
+	)
+	assert 'bash "${RUNTIME_DIR}/implement_handle_guard_block.sh"' in destructive_block
+	assert "--add-label 'ai:destructive-blocked'" in guard_handler, (
+		"Destructive guard must preserve ai:destructive-blocked human-halt signaling"
+	)
+	assert "ai:implementation-failed" not in destructive_block + guard_handler, (
+		"Destructive guard block must not apply ai:implementation-failed"
+	)
+	assert "fix-up" not in lowered and "fixup" not in lowered, (
+		"Destructive guard block must not trigger fix-up issue generation"
+	)
+
+	capture_block = _step_block_text("Capture post-Codex validation errors")
+	assert "if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == ''" in capture_block, (
+		"Captured validation diagnostics must not run for destructive-blocked failures"
+	)
+
+	diagnose_block = _step_block_text("Diagnose post-Codex failure and create fix-up issues")
+	assert "if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == ''" in diagnose_block, (
+		"Diagnose/fix-up automation must be skipped for destructive-blocked runs"
+	)
+
+	diagnose_script = (REPO_ROOT / "scripts" / "implement_diagnose_post_codex_failure.sh").read_text(encoding="utf-8")
+	assert 'FIX_COUNT="$(jq -r \'(.fix_issues // []) | if type == "array" then length else 0 end\' "${IMPLEMENT_DIAGNOSE_RESULT_FILE}")"' in diagnose_script, (
+		"needs_fixes handling must tolerate non-array fix_issues without aborting"
+	)
+
+def test_destructive_guard_knobs_wired_from_repo_variables() -> None:
+	# RC-1 regression guard: both destructive-guard shells read these knobs
+	# as bare ${VAR:-default}, so they only take effect when bound at the
+	# workflow env level (vars.* resolving to the caller/consumer repo).
+	# Mirrors the MAX_POST_CODEX_REPAIR_ATTEMPTS wiring assertion above.
+	wf = _workflow_text()
+	assert "ALLOW_BULK_DELETE: ${{ vars.ALLOW_BULK_DELETE || 'false' }}" in wf
+	assert "BULK_DELETE_THRESHOLD: ${{ vars.BULK_DELETE_THRESHOLD || '3' }}" in wf
+	assert "BULK_DELETE_THRESHOLD_MD: ${{ vars.BULK_DELETE_THRESHOLD_MD || '100' }}" in wf
+
+
+def test_destructive_guard_latch_verifies_label_applied() -> None:
+	# RC-2 regression guard: the latch must confirm ai:destructive-blocked
+	# actually applied, distinguish a failed verification read from a
+	# genuinely missing label, and avoid the old fire-and-forget
+	# `gh issue view ... || true` false-negative path.
+	destructive_block = _implement_guard_handler_text()
+	assert "if latched_labels=\"$(gh issue view \"${ISSUE_NUMBER}\" --repo \"${GITHUB_REPOSITORY}\" --json labels -q '.labels[].name' 2>/dev/null)\"; then" in destructive_block
+	assert "gh issue view \"${ISSUE_NUMBER}\" --repo \"${GITHUB_REPOSITORY}\" --json labels -q '.labels[].name' 2>/dev/null || true" not in destructive_block
+	assert "::warning::Could not verify ai:destructive-blocked" in destructive_block
+	assert "::error::FAILED to latch ai:destructive-blocked" in destructive_block
+	assert "The workflow attempted to apply \\`ai:destructive-blocked\\`; verify that the label is present before relying on the \\`Validate approval phase\\` redispatch block." in destructive_block
+	assert "remove \\`ai:destructive-blocked\\` from the issue if it is present and redispatch" in destructive_block
+	assert destructive_block.count(
+		"--description 'Implementation blocked for mass/destructive deletions; this issue ID now waits for human review'"
+	) == 4
+	assert "gh label create 'ai:destructive-blocked' \\" in destructive_block
+	assert "--repo \"${GITHUB_REPOSITORY}\" \\" in destructive_block
+	assert "--color 'b60205' \\" in destructive_block
+	assert "(gh label edit ai:destructive-blocked --repo ${GITHUB_REPOSITORY} --color b60205" in destructive_block
+	assert "|| gh label create ai:destructive-blocked --repo ${GITHUB_REPOSITORY} --color b60205" in destructive_block
+	assert ") && gh issue edit ${ISSUE_NUMBER} --repo ${GITHUB_REPOSITORY} --add-label ai:destructive-blocked" in destructive_block
+
+
+def test_scope_guard_latch_verifies_label_applied() -> None:
+	# RC-2 sibling regression guard: the scope-block latch must mirror the
+	# destructive-block verification contract instead of claiming success
+	# before GitHub confirms the issue label set.
+	destructive_block = _implement_guard_handler_text()
+	assert "if scope_latched_labels=\"$(gh issue view \"${ISSUE_NUMBER}\" --repo \"${GITHUB_REPOSITORY}\" --json labels -q '.labels[].name' 2>/dev/null)\"; then" in destructive_block
+	assert "Confirmed ai:scope-blocked is latched on #${ISSUE_NUMBER}; redispatch will be refused until a human removes it." in destructive_block
+	assert "::error::FAILED to latch ai:scope-blocked on #${ISSUE_NUMBER}; the redispatch block is NOT in effect. Apply it manually: (gh label edit ai:scope-blocked --repo ${GITHUB_REPOSITORY} --color b60205 --description 'Implementation blocked: staged files fell outside files_touched scope; human review required' || gh label create ai:scope-blocked --repo ${GITHUB_REPOSITORY} --color b60205 --description 'Implementation blocked: staged files fell outside files_touched scope; human review required') && gh issue edit ${ISSUE_NUMBER} --repo ${GITHUB_REPOSITORY} --add-label ai:scope-blocked" in destructive_block
+	assert "::warning::Could not verify ai:scope-blocked on #${ISSUE_NUMBER}; gh issue view failed, so the latch state is unknown. Re-check manually: gh issue view ${ISSUE_NUMBER} --repo ${GITHUB_REPOSITORY} --json labels -q '.labels[].name'" in destructive_block
+	assert r"The workflow attempted to label this issue \`ai:scope-blocked\`, but verification failed, so the latch state is unknown. Re-check the issue labels manually before assuming the \`Validate approval phase\` redispatch block is active." in destructive_block
+	assert r"This issue is now labeled \`ai:scope-blocked\`" not in destructive_block
+	assert "Issue is now ai:scope-blocked." not in destructive_block
+	assert "SCOPE_BLOCK_LABEL_DESCRIPTION='Implementation blocked: staged files fell outside files_touched scope; human review required'" in destructive_block
+	assert destructive_block.count("--description \"${SCOPE_BLOCK_LABEL_DESCRIPTION}\"") == 2
+	assert "gh label create 'ai:scope-blocked' \\" in destructive_block
+	assert "gh label edit 'ai:scope-blocked' \\" in destructive_block
+	assert "|| gh label create ai:scope-blocked --repo ${GITHUB_REPOSITORY} --color b60205" in destructive_block
+	assert ") && gh issue edit ${ISSUE_NUMBER} --repo ${GITHUB_REPOSITORY} --add-label ai:scope-blocked" in destructive_block
+
+
+def test_destructive_guard_handler_covers_unsafe_fetched_manifest_rejections() -> None:
+	destructive_block = _implement_guard_handler_text()
+	assert "unsafe-fetched-manifest" in destructive_block
+	assert "artifact-cleanup manifest contained unsafe path(s)" in destructive_block
+	assert "Unsafe manifest paths" in destructive_block
+	assert "Inspect the runtime-fetched manifest producer" in destructive_block
+
+
+def test_scope_guard_allowlist_and_workflow_rollback_contracts_present() -> None:
+	commit_step = _step_block_text("Commit changes")
+	commit_helper = _implement_commit_script_text()
+	assert 'bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"' in commit_step
+	assert 'STEP_NAME="Commit changes"' not in commit_step
+	assert "canonical_deletions" in commit_helper
+	assert "ALLOW_WORKFLOW_EDITS" in commit_helper
+	assert "destructive_commit_blocked=canonical-source" in commit_helper
+	assert "destructive_commit_blocked=unsafe-fetched-manifest" in commit_helper
+	assert "Non-numeric staged deletion count" in commit_helper
+	assert "total_deletions=999999" in commit_helper
+	assert "Non-numeric non-markdown deletion count" in commit_helper
+	assert "non_md_count=1" in commit_helper
+	assert "scope_violation_blocked=scope-lock-label" in commit_helper
+	assert "--allowlist-file" in commit_helper
+	assert "git diff-tree --no-commit-id --name-only --diff-filter=ACMRD -r --root --no-renames HEAD" in commit_helper
+	assert "git reset --hard HEAD^" in commit_helper
+
+	protect_block = _step_block_text("Protect workflow files from implementation edits")
+	assert 'git cat-file -e HEAD:.github/workflows >/dev/null 2>&1 || [ -d .github/workflows ]' in protect_block
+	assert 'git cat-file -e HEAD:.github/workflows >/dev/null 2>&1' in protect_block
+	assert "git restore --source=HEAD --staged --worktree .github/workflows" in protect_block
+	assert "git clean -fd -- .github/workflows" in protect_block
+
+
+def test_scope_lock_workflow_wiring_contracts_present() -> None:
+	wf = _workflow_text()
+	build_context_block = _step_block_text("Build implementation context")
+	scope_alert_block = _implement_guard_handler_text()
+	assert "SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}" in wf
+	assert 'select(startswith("ai:scope:"))' in wf
+	assert 'write_untrusted_multiline_env ISSUE_SCOPE_LOCK_GLOB "${ISSUE_SCOPE_LOCK_GLOB}"' in wf
+	assert "ACTIVE ISSUE SCOPE LOCK" in build_context_block
+	assert "Issue label: ai:scope:" in build_context_block
+	assert "scope-lock-label" in scope_alert_block
+
+
+def test_protect_workflow_files_restores_deleted_workflow_directory() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_protect_workflow_dir_") as td:
+		repo_dir = Path(td)
+		_bootstrap_git_repo(repo_dir)
+		_copy_write_guard_assets(repo_dir)
+		workflow_file = repo_dir / ".github" / "workflows" / "sample.yml"
+		workflow_file.parent.mkdir(parents=True, exist_ok=True)
+		workflow_file.write_text("name: sample\n", encoding="utf-8")
+		_git(["git", "add", ".github/workflows/sample.yml"], cwd=repo_dir)
+		_git(["git", "commit", "-m", "add workflow"], cwd=repo_dir)
+		shutil.rmtree(workflow_file.parent)
+
+		script = _render_github_expressions(_extract_run_script("Protect workflow files from implementation edits"))
+		proc = _run_shell_script(script, cwd=repo_dir, env={**os.environ.copy(), "ALLOW_WORKFLOW_EDITS": "false"})
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert workflow_file.exists(), "workflow protection must restore tracked workflow files even when the directory was deleted"
+		workflow_status = subprocess.run(
+			["git", "status", "--porcelain", ".github/workflows"],
+			cwd=str(repo_dir),
+			env=_isolated_test_env(cwd=repo_dir),
+			check=True,
+			capture_output=True,
+			text=True,
+		).stdout.strip()
+		assert workflow_status == "", "restored workflow tree should leave no pending .github/workflows changes"
+
+
+def test_protect_workflow_files_cleans_untracked_workflow_directory_when_head_lacks_it() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_protect_workflow_dir_head_absent_") as td:
+		repo_dir = Path(td)
+		_bootstrap_git_repo(repo_dir)
+		_copy_write_guard_assets(repo_dir)
+		workflow_file = repo_dir / ".github" / "workflows" / "sample.yml"
+		workflow_file.parent.mkdir(parents=True, exist_ok=True)
+		workflow_file.write_text("name: sample\n", encoding="utf-8")
+
+		script = _render_github_expressions(_extract_run_script("Protect workflow files from implementation edits"))
+		proc = _run_shell_script(script, cwd=repo_dir, env={**os.environ.copy(), "ALLOW_WORKFLOW_EDITS": "false"})
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert not workflow_file.exists(), "workflow protection must clean untracked workflow files when HEAD has no tracked .github/workflows tree"
+		workflow_status = subprocess.run(
+			["git", "status", "--porcelain", ".github/workflows"],
+			cwd=str(repo_dir),
+			env=_isolated_test_env(cwd=repo_dir),
+			check=True,
+			capture_output=True,
+			text=True,
+		).stdout.strip()
+		assert workflow_status == "", "untracked workflow tree should be removed cleanly when HEAD has no tracked workflows"
+
+
+def test_successful_repair_path_still_flows_into_commit_gated_push_and_pr_steps() -> None:
+	push_block = _step_block_text("Push branch")
+	assert "if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true'" in push_block
+	assert "bash \"${health_script}\" repair" in push_block
+
+	create_pr_block = _step_block_text("Create Pull Request")
+	assert "if: env.SKIP_IMPLEMENT != 'true' && steps.commit_changes.outputs.did_commit == 'true'" in create_pr_block
+
+
+
+def test_diagnose_prompt_contract_round_trip_and_fixup_metadata():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		capture = "===== broken.yml (python3 yaml.safe_load) =====\nscanner error on line 3\n"
+		issue_body = "Issue context\n\nTracking issue: #829\n"
+		failed_step = "Validate syntax of changed files"
+		codex_payload = {
+			"status": "needs_fixes",
+			"diagnosis": "Validator failed after Codex edits.",
+			"evidence_trace": [
+				{
+					"file": "broken.yml",
+					"line": 3,
+					"function": "document",
+					"observation": "The YAML scanner error occurs on the failing line captured by the validator.",
+				},
+				{
+					"file": "scripts/validate_changed_files_syntax.sh",
+					"line": 12,
+					"function": "parse_capture",
+					"observation": "The syntax validator is the entrypoint that surfaced the broken YAML capture.",
+				},
+			],
+			"hypothesis": "Repairing the syntax-capture parsing path will let the validator consume the failing YAML safely.",
+			"fix_issues": [
+				{
+					"id": "implement-fix-1",
+					"title": "Repair syntax capture and parsing",
+					"body": "Fix parser output and re-run implementation.\n\nEvidence trace:\n- broken.yml:3 in document — the YAML scanner error occurs on the failing line.\n- scripts/validate_changed_files_syntax.sh:12 in parse_capture — the validator surfaced the broken YAML capture.\n\nHypothesis:\n- Repairing the syntax-capture parsing path will let the validator consume the failing YAML safely.",
+					"priority": 1,
+					"depends_on": [],
+				}
+			],
+			"harness_fixes": "",
+		}
+
+		proc, state, _runtime_dir, paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementing", "ai:awaiting-approval"],
+			capture_contents=capture,
+			codex_mode="success",
+			codex_output=codex_payload,
+			failed_step_name=failed_step,
+			issue_body=issue_body,
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+
+		result = json.loads(_read_file(paths["result_file"]))
+		assert isinstance(result, dict)
+		assert result.get("status") in {"needs_fixes", "harness_error", "infeasible"}
+		assert isinstance(result.get("diagnosis"), str)
+		assert result.get("evidence_trace") == codex_payload["evidence_trace"]
+		assert result.get("hypothesis") == codex_payload["hypothesis"]
+		assert isinstance(result.get("fix_issues"), list)
+		assert isinstance(result.get("harness_fixes"), str)
+
+		stdin_prompt = _read_file(paths["stdin_file"])
+		assert "=== SOURCE ISSUE BODY ===" in stdin_prompt
+		assert issue_body.strip() in stdin_prompt
+		assert "=== FAILED STEP NAME ===" in stdin_prompt
+		assert failed_step in stdin_prompt
+		assert "=== WORKING TREE CHANGES (git diff HEAD) ===" in stdin_prompt
+		assert "tracked.txt" in stdin_prompt
+		assert "=== CAPTURED POST-CODEX VALIDATION ERRORS (FULL) ===" in stdin_prompt
+		assert "scanner error on line 3" in stdin_prompt
+		assert "Serena hints:" in stdin_prompt
+		assert "Edit-tool discipline (apply_patch first with fallbacks" in stdin_prompt
+
+		created_issues = state.get("created_issues", [])
+		assert len(created_issues) == 1
+		created = created_issues[0]
+		assert created["repo"] == "owner/repo"
+		assert created["title"] == "Repair syntax capture and parsing"
+		assert "--label" in created["args"]
+		assert created["args"].count("--label") == 2
+		assert "ai:clarification" in created["args"]
+		assert "ai:implement-fix-up" in created["args"]
+		body = created["body"]
+		assert "Type: implement-fix-up (post-codex-validation)" in body
+		assert "Source issue: #948" in body
+		assert f"Failed step: {failed_step}" in body
+		assert "Evidence trace:" in body
+		assert "Hypothesis:" in body
+
+		created_labels = {entry.get("name") for entry in state.get("label_creates", [])}
+		assert "ai:clarification" in created_labels
+		assert "ai:implement-fix-up" in created_labels
+
+		source_comments = [
+			c.get("body", "")
+			for c in state.get("api_comments", [])
+			if c.get("issue") == "948"
+		]
+		assert source_comments, "expected a source-issue summary comment"
+		match = re.search(
+			r"<!-- IMPLEMENT_FIXUP_BLOCKERS_V1\n(.*?)\nIMPLEMENT_FIXUP_BLOCKERS_V1 -->",
+			source_comments[-1],
+			flags=re.S,
+		)
+		assert match is not None, "expected implement blocker metadata marker"
+		blocker_payload = json.loads(match.group(1))
+		assert blocker_payload["blocks_source_issue"] == 948
+		assert blocker_payload["fixup_issue_numbers"] == [1001]
+
+		labels = state.get("issue_labels", [])
+		assert "ai:implementation-failed" in labels
+		assert "ai:awaiting-approval" not in labels
+
+
+def test_diagnose_prompt_includes_iron_law_trace_contract():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		proc, _state, runtime_dir, paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementing"],
+			capture_contents="===== broken.yml =====\nerror\n",
+			codex_mode="success",
+			codex_output={
+				"status": "needs_fixes",
+				"diagnosis": "diag",
+				"evidence_trace": [
+					{
+						"file": "broken.yml",
+						"line": 1,
+						"function": "document",
+						"observation": "error",
+					}
+				],
+				"hypothesis": "diag hypothesis",
+				"fix_issues": [
+					{
+						"id": "fix-1",
+						"title": "Fix 1",
+						"body": "Body\n\nEvidence trace:\n- broken.yml:1 in document — error\n\nHypothesis:\n- diag hypothesis",
+						"priority": 1,
+						"depends_on": [],
+					}
+				],
+				"harness_fixes": "",
+			},
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		stdin_prompt = _read_file(paths["stdin_file"])
+		rendered_prompt = _read_file(str(runtime_dir / "mode-implement-diagnose.rendered.txt"))
+		assert "Iron Law of Investigation" in stdin_prompt
+		assert "`evidence_trace`" in stdin_prompt
+		assert "`hypothesis`" in stdin_prompt
+		assert "Repeat the relevant trace and hypothesis inside each `fix_issues[].body`" in stdin_prompt
+		assert "do not propose a 4th fix" in stdin_prompt
+		assert "as a normal `fix_issues[]` entry" in stdin_prompt
+		assert "Do not add any new top-level JSON keys." in stdin_prompt
+		assert 'return `status: "infeasible"`' in stdin_prompt
+		assert "For `harness_error` or `infeasible`, they may be empty" in stdin_prompt
+		assert rendered_prompt
+		assert "DIAGNOSE_TRACE_REQUIRED=true" in rendered_prompt
+		assert "{{DIAGNOSE_TRACE_REQUIRED}}" not in rendered_prompt
+		assert "{{REFERENCE_OUTPUT_CONTRACT}}" not in rendered_prompt
+		assert "render_prompt.py not found" not in proc.stderr
+
+
+def test_diagnose_invokes_codex_when_capture_exists_and_issue_is_not_already_failed():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		proc, _state, _runtime_dir, paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementing"],
+			capture_contents="===== broken.yml =====\nerror\n",
+			codex_mode="success",
+			codex_output={
+				"status": "needs_fixes",
+				"diagnosis": "diag",
+				"evidence_trace": [
+					{"file": "broken.yml", "line": 1, "function": "document", "observation": "error"},
+				],
+				"hypothesis": "diag hypothesis",
+				"fix_issues": [{"id": "fix-1", "title": "Fix 1", "body": "Body", "priority": 1, "depends_on": []}],
+				"harness_fixes": "",
+			},
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+		)
+
+		assert proc.returncode == 0
+		assert "handled=true" in _read_file(paths["github_output"])
+		call_lines = [line for line in _read_file(paths["calls_file"]).splitlines() if line.strip()]
+		assert len(call_lines) == 1
+		call_args = json.loads(call_lines[0])
+		assert "exec" in call_args
+		assert "--model" in call_args
+
+def test_diagnose_reuses_matching_issue_meta_body_without_issue_api_fallback() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		issue_body = "Issue context\n\nTracking issue: #829\n"
+		proc, state, runtime_dir, paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementing"],
+			capture_contents="===== broken.yml =====\nerror\n",
+			codex_mode="success",
+			codex_output={
+				"status": "harness_error",
+				"diagnosis": "diag",
+				"fix_issues": [],
+				"harness_fixes": "rerun validator",
+			},
+			failed_step_name="Validate syntax of changed files",
+			issue_body=issue_body,
+			issue_meta_payload={
+				"number": 948,
+				"labels": [{"name": "ai:implementing"}],
+				"body": issue_body,
+			},
+			write_issue_body_file=False,
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert state.get("issue_queries", []) == [], (
+			"Matching ISSUE_META_FILE should satisfy diagnose label/body reads without hitting /issues/{n}"
+		)
+		assert _read_file(str(runtime_dir / "issue_body_from_api.txt")) == issue_body
+		assert issue_body.strip() in _read_file(paths["stdin_file"])
+
+
+def test_diagnose_uses_safe_issue_api_body_fallback_when_issue_meta_invalid_or_mismatched() -> None:
+	for case_name, issue_meta_payload in (
+		(
+			"mismatched",
+			{
+				"number": 999,
+				"labels": [{"name": "ai:implementing"}],
+				"body": "wrong issue body\n",
+			},
+		),
+		("invalid", '{"number": 948, "labels": ['),
+	):
+		with tempfile.TemporaryDirectory(prefix=f"test_diag_{case_name}_") as td:
+			tmp_path = Path(td)
+			issue_body = "Issue context\n\nTracking issue: #829\n"
+			proc, state, runtime_dir, _paths = _run_diagnose_step(
+				tmp_path,
+				issue_labels=["ai:implementing"],
+				capture_contents="===== broken.yml =====\nerror\n",
+				codex_mode="success",
+				codex_output={
+					"status": "harness_error",
+					"diagnosis": "diag",
+					"fix_issues": [],
+					"harness_fixes": "rerun validator",
+				},
+				failed_step_name="Validate syntax of changed files",
+				issue_body=issue_body,
+				issue_meta_payload=issue_meta_payload,
+				write_issue_body_file=False,
+			)
+
+			assert proc.returncode == 0, f"case={case_name}\nstdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+			assert state.get("issue_queries", []) == [
+				"repos/owner/repo/issues/948",
+			], f"case={case_name}"
+			issue_api_calls = [
+				call
+				for call in state.get("calls", [])
+				if call
+				and call[0] == "api"
+				and "repos/owner/repo/issues/948" in call
+			]
+			assert ["api", "repos/owner/repo/issues/948"] in issue_api_calls, (
+				f"case={case_name}: body fallback must use the safe _safe_gh_jq JSON fetch without --jq"
+			)
+			assert all("--jq" not in call for call in issue_api_calls), (
+				f"case={case_name}: memoized fallback should reuse the same non--jq issue payload for labels and body"
+			)
+			assert _read_file(str(runtime_dir / "issue_body_from_api.txt")) == issue_body, (
+				f"case={case_name}: body fallback should still materialize plain-text issue body content"
+			)
+
+
+def test_diagnose_retries_issue_api_after_exhausted_label_fetch_failures() -> None:
+	previous_retry_budget = os.environ.get("GH_RETRY_MAX_ATTEMPTS")
+	os.environ["GH_RETRY_MAX_ATTEMPTS"] = "2"
+	try:
+		with tempfile.TemporaryDirectory(prefix="test_diag_retry_") as td:
+			tmp_path = Path(td)
+			issue_body = "Issue context\n\nTracking issue: #829\n"
+			proc, state, runtime_dir, paths = _run_diagnose_step(
+				tmp_path,
+				issue_labels=["ai:implementing"],
+				capture_contents="===== broken.yml =====\nerror\n",
+				codex_mode="success",
+				codex_output={
+					"status": "harness_error",
+					"diagnosis": "diag",
+					"fix_issues": [],
+					"harness_fixes": "rerun validator",
+				},
+				failed_step_name="Validate syntax of changed files",
+				issue_body=issue_body,
+				issue_meta_payload='{"number": 948, "labels": [',
+				write_issue_body_file=False,
+				issue_api_failures_remaining=2,
+			)
+
+			assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+			assert state.get("issue_queries", []) == [
+				"repos/owner/repo/issues/948",
+				"repos/owner/repo/issues/948",
+				"repos/owner/repo/issues/948",
+			]
+			assert _read_file(str(runtime_dir / "issue_body_from_api.txt")) == issue_body
+			assert issue_body.strip() in _read_file(paths["stdin_file"])
+	finally:
+		if previous_retry_budget is None:
+			os.environ.pop("GH_RETRY_MAX_ATTEMPTS", None)
+		else:
+			os.environ["GH_RETRY_MAX_ATTEMPTS"] = previous_retry_budget
+
+
+def test_diagnose_posts_dependency_notes_for_fix_issue_edges():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		proc, state, _runtime_dir, _paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementing"],
+			capture_contents="===== broken.yml =====\nerror\n",
+			codex_mode="success",
+			codex_output={
+				"status": "needs_fixes",
+				"diagnosis": "diag",
+				"evidence_trace": [
+					{"file": "broken.yml", "line": 1, "function": "document", "observation": "error"},
+				],
+				"hypothesis": "diag hypothesis",
+				"fix_issues": [
+					{"id": "fix-a", "title": "Fix A", "body": "Body A", "priority": 1, "depends_on": []},
+					{"id": "fix-b", "title": "Fix B", "body": "Body B", "priority": 2, "depends_on": ["fix-a"]},
+				],
+				"harness_fixes": "",
+			},
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+		)
+
+		assert proc.returncode == 0
+		created_issues = state.get("created_issues", [])
+		assert len(created_issues) == 2
+		dep_comment = next((x for x in state.get("issue_comments", []) if x.get("issue") == "1002"), None)
+		assert dep_comment is not None
+		assert "Dependency Notes" in dep_comment.get("body", "")
+		assert "#1001 (from fix-a)" in dep_comment.get("body", "")
+
+
+def test_validator_capture_aggregates_multiple_files_before_nonzero_exit():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		repo_dir = tmp_path / "validate-repo"
+		_bootstrap_git_repo(repo_dir)
+
+		validator_src = REPO_ROOT / "scripts" / "validate_changed_files_syntax.sh"
+		validator_dst = repo_dir / "scripts" / "validate_changed_files_syntax.sh"
+		validator_dst.parent.mkdir(parents=True, exist_ok=True)
+		shutil.copy2(validator_src, validator_dst)
+		validator_dst.chmod(0o755)
+
+		(runtime_py := repo_dir / "broken.py").write_text("x = 1\n", encoding="utf-8")
+		(runtime_yaml := repo_dir / "broken.yml").write_text("a: 1\n", encoding="utf-8")
+		_git(["git", "add", "broken.py", "broken.yml"], cwd=repo_dir)
+		_git(["git", "commit", "-m", "add files"], cwd=repo_dir)
+
+		runtime_py.write_text("def nope(:\n\tpass\n", encoding="utf-8")
+		runtime_yaml.write_text("key: [1, 2\n", encoding="utf-8")
+
+		runtime_dir = tmp_path / "runtime"
+		runtime_dir.mkdir(parents=True, exist_ok=True)
+
+		script = _extract_run_script("Validate syntax of changed files")
+		env = os.environ.copy()
+		github_output = runtime_dir / "github_output.txt"
+		env.update(
+			{
+				"RUNTIME_DIR": str(runtime_dir),
+				"PATH": env.get("PATH", ""),
+				"GITHUB_OUTPUT": str(github_output),
+			}
+		)
+
+		proc = _run_shell_script(script, cwd=repo_dir, env=env)
+		assert proc.returncode != 0, "expected syntax validator step script to fail on syntax errors"
+
+		capture_file = runtime_dir / "post_codex_validation_errors.txt"
+		assert capture_file.exists(), "expected capture file to be written"
+		capture = capture_file.read_text(encoding="utf-8")
+		assert "broken.py" in capture
+		assert "python3 -m py_compile" in capture
+		assert "broken.yml" in capture
+		assert "python3 yaml.safe_load" in capture
+
+
+def test_validator_scratch_repo_without_head_still_checks_untracked_files() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		repo_dir = tmp_path / "validate-repo"
+		repo_dir.mkdir(parents=True, exist_ok=True)
+		_git(["git", "init"], cwd=repo_dir)
+		_git(["git", "config", "user.name", "tests"], cwd=repo_dir)
+		_git(["git", "config", "user.email", "tests@example.com"], cwd=repo_dir)
+
+		validator_src = REPO_ROOT / "scripts" / "validate_changed_files_syntax.sh"
+		validator_dst = repo_dir / "scripts" / "validate_changed_files_syntax.sh"
+		validator_dst.parent.mkdir(parents=True, exist_ok=True)
+		shutil.copy2(validator_src, validator_dst)
+		validator_dst.chmod(0o755)
+
+		(repo_dir / "broken.py").write_text("def nope(:\n\tpass\n", encoding="utf-8")
+		capture_path = tmp_path / "captured.txt"
+		env = _isolated_test_env(
+			{
+				"CAPTURE_FILE": str(capture_path),
+				"ALLOW_WORKFLOW_EDITS": "true",
+			},
+			cwd=repo_dir,
+		)
+
+		result = subprocess.run(
+			["bash", str(validator_dst)],
+			cwd=str(repo_dir),
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+
+		assert result.returncode != 0, (
+			"scratch repos without HEAD must still validate untracked files "
+			"instead of silently succeeding"
+		)
+		combined = result.stdout + result.stderr
+		assert "fatal: bad revision 'HEAD'" not in combined, (
+			"the tolerated scratch-repo HEAD error must stay suppressed; "
+			f"got:\n{combined}"
+		)
+		assert "::error file=broken.py::Syntax error in broken.py" in combined, (
+			"the untracked python file must still be fed to py_compile in a "
+			"scratch repo"
+		)
+		assert capture_path.exists(), "scratch-repo validation must still emit CAPTURE_FILE"
+		assert "broken.py" in capture_path.read_text(encoding="utf-8")
+
+
+def test_validator_surfaces_real_git_failures_instead_of_silently_skipping() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		repo_dir = tmp_path / "validate-repo"
+		_bootstrap_git_repo(repo_dir)
+
+		validator_src = REPO_ROOT / "scripts" / "validate_changed_files_syntax.sh"
+		validator_dst = repo_dir / "scripts" / "validate_changed_files_syntax.sh"
+		validator_dst.parent.mkdir(parents=True, exist_ok=True)
+		shutil.copy2(validator_src, validator_dst)
+		validator_dst.chmod(0o755)
+
+		missing_git_dir = tmp_path / "missing-git-dir"
+		env = _isolated_test_env(
+			{
+				"ALLOW_WORKFLOW_EDITS": "true",
+				"GIT_DIR": str(missing_git_dir),
+			},
+			cwd=repo_dir,
+		)
+
+		result = subprocess.run(
+			["bash", str(validator_dst)],
+			cwd=str(repo_dir),
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+
+		assert result.returncode != 0, "real git failures must abort the validator"
+		combined = result.stdout + result.stderr
+		assert "All changed files passed syntax validation." not in combined, (
+			"real git failures must not degrade into a false success"
+		)
+		assert "Could not access 'HEAD'" in combined or "fatal:" in combined, (
+			"the underlying git failure must still surface to stderr/stdout; "
+			f"got:\n{combined}"
+		)
+
+
+def test_syntax_gate_step_fails_when_check_reports_unresolved_errors():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		repo_dir = tmp_path / "validate-repo"
+		_bootstrap_git_repo(repo_dir)
+
+		script = _render_github_expressions(
+			_extract_run_script("Enforce syntax validation outcome"),
+			overrides={
+				"steps.validate_syntax_changed_files.outcome": "failure",
+				"steps.post_codex_syntax_repair.outputs.repaired || 'false'": "false",
+			},
+		)
+		env = os.environ.copy()
+		env.update(
+			{
+				"RUNTIME_DIR": str(tmp_path / "runtime"),
+			}
+		)
+
+		proc = _run_shell_script(script, cwd=repo_dir, env=env)
+		assert proc.returncode != 0, "expected syntax-enforcement step to fail when repair did not recover"
+		assert "Syntax validation failed and post-Codex repair did not recover" in (proc.stderr + proc.stdout)
+
+
+def test_syntax_gate_step_fails_when_check_did_not_report_status():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		repo_dir = tmp_path / "validate-repo"
+		_bootstrap_git_repo(repo_dir)
+
+		script = _render_github_expressions(
+			_extract_run_script("Enforce syntax validation outcome"),
+			overrides={
+				"steps.validate_syntax_changed_files.outcome": "success",
+				"steps.post_codex_syntax_repair.outputs.repaired || 'false'": "false",
+			},
+		)
+		env = os.environ.copy()
+		env.update(
+			{
+				"RUNTIME_DIR": str(tmp_path / "runtime"),
+			}
+		)
+
+		proc = _run_shell_script(script, cwd=repo_dir, env=env)
+		assert proc.returncode == 0, "expected syntax-enforcement step to pass when syntax validation succeeded"
+
+
+def test_needs_fixes_labels_source_issue_and_generic_failure_step_is_bypassed():
+	wf = _workflow_text()
+	assert "--add-label 'ai:implementation-failed'" in wf
+	assert "--remove-label 'ai:awaiting-approval'" in wf
+	assert "if: (failure() || cancelled()) && steps.preflight_destructive_guard.outputs.destructive_commit_blocked == '' && steps.commit_changes.outputs.destructive_commit_blocked == '' && steps.diagnose_post_codex_failure.outputs.handled != 'true'" in wf
+
+
+def test_idempotency_skips_diagnose_and_issue_creation_when_already_failed_label():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		proc, state, _runtime_dir, paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementation-failed", "ai:implementing"],
+			capture_contents="===== x =====\nerror\n",
+			codex_mode="success",
+			codex_output={
+				"status": "needs_fixes",
+				"diagnosis": "should not run",
+				"fix_issues": [],
+				"harness_fixes": "",
+			},
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+		)
+
+		assert proc.returncode == 0
+		assert "handled=true" in _read_file(paths["github_output"])
+		assert _read_file(paths["calls_file"]).strip() == ""
+		assert state.get("created_issues", []) == []
+
+
+def test_fallback_creates_deterministic_fixup_issue_when_diagnose_output_invalid():
+	for codex_mode in ("invalid", "fail"):
+		with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+			tmp_path = Path(td)
+			raw_diag = "yaml parse failed on alpha.yml\npython compile failed on beta.py\n"
+			proc, state, _runtime_dir, paths = _run_diagnose_step(
+				tmp_path,
+				issue_labels=["ai:implementing"],
+				capture_contents=raw_diag,
+				codex_mode=codex_mode,
+				codex_output=None,
+				failed_step_name="Validate syntax of changed files",
+				issue_body="Tracking issue: #829\n",
+			)
+
+			assert proc.returncode == 0, f"mode={codex_mode}\nstdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+
+			result = json.loads(_read_file(paths["result_file"]))
+			assert result.get("status") == "needs_fixes"
+			assert "Fallback fix-up issue created" in result.get("diagnosis", "")
+			assert result.get("evidence_trace")
+			assert isinstance(result.get("hypothesis"), str) and result["hypothesis"]
+
+			created_issues = state.get("created_issues", [])
+			assert len(created_issues) == 1
+			created = created_issues[0]
+			assert created["title"] == "Implement phase post-Codex validation failure fallback"
+			assert created["args"].count("--label") == 2
+			assert "ai:clarification" in created["args"]
+			assert "ai:implement-fix-up" in created["args"]
+			assert "ai:orchestrator-managed" not in created["args"]
+			assert "The diagnose step could not produce a valid JSON contract" in created["body"]
+			assert "Evidence trace:" in created["body"]
+			assert "Hypothesis:" in created["body"]
+			assert "yaml parse failed on alpha.yml" in created["body"]
+			assert "Type: implement-fix-up (post-codex-validation)" in created["body"]
+			assert "Tracking issue: #829" in created["body"]
+			assert "ai:implementation-failed" in state.get("issue_labels", [])
+
+
+def test_empty_fix_issues_fallback_preserves_trace_context():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		evidence_trace = [
+			{
+				"file": "broken.yml",
+				"line": 1,
+				"function": "document",
+				"observation": "error",
+			}
+		]
+		hypothesis = "diag hypothesis"
+		proc, state, _runtime_dir, paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementing"],
+			capture_contents="===== broken.yml =====\nerror\n",
+			codex_mode="success",
+			codex_output={
+				"status": "needs_fixes",
+				"diagnosis": "diag",
+				"evidence_trace": evidence_trace,
+				"hypothesis": hypothesis,
+				"fix_issues": [],
+				"harness_fixes": "",
+			},
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+		)
+
+		assert proc.returncode == 0, f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		result = json.loads(_read_file(paths["result_file"]))
+		assert result.get("evidence_trace") == evidence_trace
+		assert result.get("hypothesis") == hypothesis
+
+		created_issues = state.get("created_issues", [])
+		assert len(created_issues) == 1
+		created = created_issues[0]
+		assert created["title"] == "Implement phase diagnose returned empty fix_issues"
+		assert "Evidence trace:" in created["body"]
+		assert "- broken.yml:1 in document — error" in created["body"]
+		assert "Hypothesis:" in created["body"]
+		assert hypothesis in created["body"]
+
+
+def test_out_of_scope_noop_when_capture_file_missing():
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		tmp_path = Path(td)
+		proc, state, _runtime_dir, paths = _run_diagnose_step(
+			tmp_path,
+			issue_labels=["ai:implementing", "ai:awaiting-approval"],
+			capture_contents=None,
+			codex_mode="success",
+			codex_output={
+				"status": "needs_fixes",
+				"diagnosis": "should not run",
+				"fix_issues": [],
+				"harness_fixes": "",
+			},
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+		)
+
+		assert proc.returncode == 0
+		assert "handled=false" in _read_file(paths["github_output"])
+		assert _read_file(paths["calls_file"]).strip() == ""
+		assert state.get("created_issues", []) == []
+
+
+def test_diagnose_reasoning_patch_preserves_serena_mcp_block() -> None:
+	diagnose = (REPO_ROOT / "scripts" / "implement_diagnose_post_codex_failure.sh").read_text(encoding="utf-8")
+	assert "top_level_lines = lines[:first_table_idx]" in diagnose
+	assert "rest_lines = lines[first_table_idx:]" in diagnose
+	assert 're.match(r"^(\\[[^\\]]+\\]|\\[\\[[^\\]]+\\]\\])(?:[ \\t]+#.*)?$", stripped)' in diagnose
+	assert 'config_path.write_text("".join(updated_top + rest_lines), encoding="utf-8")' in diagnose
+	assert 'if ! patch_diagnose_reasoning_into_config; then' in diagnose
+	assert 'Failed to patch ~/.codex/config.toml for diagnose reasoning; leaving existing config unchanged.' in diagnose
+	assert "[mcp_servers.serena]" not in diagnose.split("patch_diagnose_reasoning_into_config()", 1)[1].split("patch_diagnose_reasoning_into_config", 1)[0], (
+		"Diagnose reasoning patch must update only the top-level model_reasoning_effort key without inlining Serena table rewrites"
+	)
+
+
+def test_repair_reasoning_patch_preserves_serena_mcp_block() -> None:
+	repair_block = _extract_run_script("Attempt post-Codex syntax repair")
+	repair_patcher = repair_block.split("upsert_repair_reasoning_into_config() {", 1)[1].split('if ! upsert_repair_reasoning_into_config', 1)[0]
+	assert "\nfrom pathlib import Path\n" in repair_patcher
+	assert "top_level_lines = lines[:first_table_idx]" in repair_patcher
+	assert "rest_lines = lines[first_table_idx:]" in repair_patcher
+	assert 're.match(r"^(\\[[^\\]]+\\]|\\[\\[[^\\]]+\\]\\])(?:[ \\t]+#.*)?$", stripped)' in repair_patcher
+	assert 'config_path.write_text("".join(updated_top + rest_lines), encoding="utf-8")' in repair_patcher
+	assert "[mcp_servers.serena]" not in repair_patcher
+
+
+def test_repair_reasoning_heredoc_is_column_zero_after_yaml_strip() -> None:
+	block = _step_block("Attempt post-Codex syntax repair")
+	run_idx = next(i for i, line in enumerate(block) if line.strip() == "run: |")
+	run_indent = len(block[run_idx]) - len(block[run_idx].lstrip(" "))
+	opener_idx = next(
+		i for i, line in enumerate(block)
+		if 'PYTHONDONTWRITEBYTECODE=1 python3 - "${cfg}" "${REPAIR_REASONING}" <<\'PY\'' in line
+	)
+	body_line = block[opener_idx + 1]
+	terminator_idx = next(i for i in range(opener_idx + 1, len(block)) if block[i].strip() == "PY")
+	terminator_line = block[terminator_idx]
+	assert len(body_line) - len(body_line.lstrip(" ")) == run_indent + 2, (
+		"Repair heredoc Python must be flush with the run-block base indent so YAML stripping leaves Python at column 0"
+	)
+	assert len(terminator_line) - len(terminator_line.lstrip(" ")) == run_indent + 2, (
+		"Repair heredoc terminator must share the run-block base indent so bash terminates <<'PY' correctly"
+	)
+
+
+def test_codex_pre_baseline_captured_before_retry_loop() -> None:
+	codex_block = _step_block_text("Run Codex implementation")
+	assert 'CODEX_PRE_BASELINE="${RUNTIME_DIR}/codex_pre_baseline.txt"' in codex_block, (
+		"Pre-Codex baseline snapshot must be captured so detection/retry-nudge/no-op "
+		"handlers can diff only real Codex-produced deltas"
+	)
+	assert 'git status --porcelain -uall | filter_runtime_status_noise > "${CODEX_PRE_BASELINE}"' in codex_block, (
+		"Baseline must be written with --porcelain -uall so untracked directories "
+		"expand to stable per-file lines while filtering runtime Serena noise"
+	)
+	# The baseline must be captured before the retry loop so it doesn't drift
+	# between attempts.
+	baseline_idx = codex_block.find('CODEX_PRE_BASELINE="${RUNTIME_DIR}/codex_pre_baseline.txt"')
+	loop_idx = codex_block.find('for attempt in $(seq 1 "${max_attempts}"); do')
+	assert baseline_idx != -1 and loop_idx != -1 and baseline_idx < loop_idx, (
+		"CODEX_PRE_BASELINE must be captured BEFORE the attempt loop"
+	)
+
+
+def test_success_noop_flag_cleared_before_retry_loop() -> None:
+	codex_block = _step_block_text("Run Codex implementation")
+	# Proactive cleanup prevents a stale flag from a prior run_attempt (which
+	# shares GITHUB_RUN_ID and therefore RUNTIME_DIR) from tricking Guard 0
+	# into closing an issue this attempt never classified as success-no-op.
+	assert 'rm -f "${RUNTIME_DIR}/codex_success_noop.flag"' in codex_block, (
+		"Stale success-no-op flag must be cleared before the retry loop so a "
+		"rerun on a non-ephemeral runner cannot falsely trigger Guard 0"
+	)
+	cleanup_idx = codex_block.find('rm -f "${RUNTIME_DIR}/codex_success_noop.flag"')
+	loop_idx = codex_block.find('for attempt in $(seq 1 "${max_attempts}"); do')
+	assert cleanup_idx != -1 and loop_idx != -1 and cleanup_idx < loop_idx, (
+		"Success-no-op flag cleanup must happen BEFORE the attempt loop"
+	)
+
+
+def test_codex_success_detection_uses_baseline_diff() -> None:
+	codex_block = _step_block_text("Run Codex implementation")
+	assert 'filter_runtime_status_noise() {' in codex_block, (
+		"Retry and success detection must share the Serena runtime-noise filter helper"
+	)
+	# Retry-nudge check must use baseline-filtered delta, not raw porcelain.
+	assert 'codex_retry_delta="$(git status --porcelain -uall | filter_runtime_status_noise | grep -vxFf "${CODEX_PRE_BASELINE}"' in codex_block, (
+		"Retry-nudge must use baseline-filtered delta so workflow bootstrap artifacts "
+		"(.codex-workflow-src*, .serena/project.yml) don't falsely trigger the 'modify files' nudge"
+	)
+	# Success detection must also use baseline-filtered delta.
+	assert 'codex_delta="$(git status --porcelain -uall | filter_runtime_status_noise | grep -vxFf "${CODEX_PRE_BASELINE}"' in codex_block, (
+		"Success-detection must use baseline-filtered delta so bootstrap artifacts "
+		"don't produce a false-positive 'Codex changed files' signal"
+	)
+	# Success-no-op flag must be written when delta is empty and output matches
+	# an 'already implemented' pattern.
+	assert ': > "${RUNTIME_DIR}/codex_success_noop.flag"' in codex_block, (
+		"Success-no-op branch must touch the flag file so Handle no-op "
+		"implementation can short-circuit to ai:closed instead of re-issuing"
+	)
+	assert 'no file changes were made|nothing to change|already' in codex_block, (
+		"Success-no-op detection must match Codex's explicit 'already implemented' signals"
+	)
+	# The regex must cover multiple common completion phrasings so robustness
+	# doesn't depend on a single LLM wording.
+	for phrase in ("implemented", "done", "exists", "present", "complete"):
+		assert phrase in codex_block, (
+			f"Success-no-op regex should include the '{phrase}' completion signal"
+		)
+	# Phrases added after observed Codex outputs ("No repository changes
+	# made.", "already satisfied.") on issue #1768 — keep them covered so
+	# a future regex tightening can't silently regress them.
+	for phrase in (
+		"satisfied",
+		"no repository changes",
+		"no file changes made",
+		"no repository changes (were )?required",
+		"no files (were )?modified",
+		"no repository changes (were )?needed",
+		"no file changes (were )?needed",
+	):
+		assert phrase in codex_block, (
+			f"Success-no-op regex should include the '{phrase}' completion signal "
+			f"(observed Codex phrasings on issues #1768, #1816, #1859)"
+		)
+
+
+def test_serena_runtime_artifact_filter_uses_bootstrap_hash_and_commit_cleanup_is_content_aware() -> None:
+	codex_block = _step_block_text("Run Codex implementation")
+	assert 'SERENA_PROJECT_BOOTSTRAP_HASH' in _workflow_text(), (
+		"Workflow must export a Serena bootstrap hash for runtime-noise filtering"
+	)
+	assert "bootstrap-owned .serena/ state" in codex_block, (
+		"Runtime-noise filter should document that bootstrap-owned .serena state is filtered together"
+	)
+	assert "*' .serena/'*|*' .serena')" in codex_block, (
+		"Run Codex implementation must filter bootstrap-owned .serena directory entries, not only project.yml"
+	)
+	assert 'current_hash="$(sha256sum .serena/project.yml' in codex_block, (
+		"Run Codex implementation must hash .serena/project.yml when deciding whether it is only runtime noise"
+	)
+	assert 'if [ -n "${current_hash}" ] && [ "${current_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then' in codex_block, (
+		"Only the unchanged bootstrap Serena project file should be filtered from no-op detection"
+	)
+
+	commit_helper = _implement_commit_script_text()
+	assert 'current_serena_project_hash="$(sha256sum .serena/project.yml' in commit_helper, (
+		"Commit cleanup must compare the current Serena project file against the bootstrap hash before deleting it"
+	)
+	assert 'if [ -n "${current_serena_project_hash}" ] && [ "${current_serena_project_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then' in commit_helper, (
+		"Commit cleanup must preserve .serena/project.yml when Codex changed it"
+	)
+	assert 'if ! git ls-files --error-unmatch -- .serena >/dev/null 2>&1; then' in commit_helper, (
+		"Commit cleanup must never remove a git-tracked .serena tree"
+	)
+	assert 'rm -rf .serena' in commit_helper, (
+		"Commit cleanup must remove the full bootstrap-owned .serena directory once the project hash still matches"
+	)
+
+
+def test_serena_runtime_filter_and_cleanup_preserve_mutated_tree_and_drop_unchanged_bootstrap_state() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_serena_runtime_") as td:
+		repo_dir = Path(td)
+		_bootstrap_git_repo(repo_dir)
+
+		run_codex_script = _extract_run_script("Run Codex implementation")
+		filter_helper = "filter_runtime_status_noise() {" + run_codex_script.split("filter_runtime_status_noise() {", 1)[1].split(
+			"\n\n# ────────────────────────────────────────────────────────────────", 1
+		)[0]
+		commit_script = _implement_commit_script_text()
+		cleanup_start = 'if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -n "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] && [ -f .serena/project.yml ]; then'
+		cleanup_snippet = cleanup_start + commit_script.split(cleanup_start, 1)[1].split('porcelain_status="$(git status --porcelain)"', 1)[0]
+
+		def _write_serena_tree(project_body: str) -> str:
+			project_path = repo_dir / ".serena" / "project.yml"
+			cache_path = repo_dir / ".serena" / "cache" / "state.json"
+			cache_path.parent.mkdir(parents=True, exist_ok=True)
+			project_path.write_text(project_body, encoding="utf-8")
+			cache_path.write_text('{"runtime": true}\n', encoding="utf-8")
+			return hashlib.sha256(project_path.read_bytes()).hexdigest()
+
+		def _run_inline_bash(script: str, *, extra_env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+			env = _isolated_test_env(extra_env, cwd=repo_dir)
+			return subprocess.run(
+				["bash", "-s"],
+				cwd=str(repo_dir),
+				env=env,
+				input=script,
+				text=True,
+				capture_output=True,
+				timeout=60,
+			)
+
+		filter_script = "set -euo pipefail\n" + filter_helper + "\ngit status --porcelain -uall | filter_runtime_status_noise\n"
+		cleanup_script = "set -euo pipefail\n" + cleanup_snippet + "\n"
+
+		bootstrap_hash = _write_serena_tree("project_name: bootstrap\n")
+		filter_result = _run_inline_bash(
+			filter_script,
+			extra_env={
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"SERENA_PROJECT_BOOTSTRAP_HASH": bootstrap_hash,
+			},
+		)
+		assert filter_result.returncode == 0, filter_result.stderr
+		assert ".serena/" not in filter_result.stdout, (
+			"Unchanged bootstrap-owned .serena state should be filtered out of the no-op baseline delta"
+		)
+
+		(repo_dir / ".serena" / "project.yml").write_text("project_name: mutated\n", encoding="utf-8")
+		mutated_filter_result = _run_inline_bash(
+			filter_script,
+			extra_env={
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"SERENA_PROJECT_BOOTSTRAP_HASH": bootstrap_hash,
+			},
+		)
+		assert mutated_filter_result.returncode == 0, mutated_filter_result.stderr
+		assert ".serena/project.yml" in mutated_filter_result.stdout, (
+			"Changing project.yml must stop the filter from hiding .serena/project.yml"
+		)
+		assert ".serena/cache/state.json" in mutated_filter_result.stdout, (
+			"Changing project.yml must stop the filter from hiding sibling .serena runtime files"
+		)
+
+		shutil.rmtree(repo_dir / ".serena")
+		bootstrap_hash = _write_serena_tree("project_name: cleanup-bootstrap\n")
+		cleanup_result = _run_inline_bash(
+			cleanup_script,
+			extra_env={
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"SERENA_PROJECT_BOOTSTRAP_HASH": bootstrap_hash,
+			},
+		)
+		assert cleanup_result.returncode == 0, cleanup_result.stderr
+		assert not (repo_dir / ".serena").exists(), (
+			"Commit cleanup must drop the unchanged bootstrap-owned .serena tree before staging"
+		)
+
+		bootstrap_hash = _write_serena_tree("project_name: cleanup-mutated\n")
+		(repo_dir / ".serena" / "project.yml").write_text("project_name: cleanup-mutated-again\n", encoding="utf-8")
+		preserved_cleanup_result = _run_inline_bash(
+			cleanup_script,
+			extra_env={
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"SERENA_PROJECT_BOOTSTRAP_HASH": bootstrap_hash,
+			},
+		)
+		assert preserved_cleanup_result.returncode == 0, preserved_cleanup_result.stderr
+		assert (repo_dir / ".serena" / "project.yml").is_file(), (
+			"Commit cleanup must preserve .serena/project.yml once its content diverges from the bootstrap hash"
+		)
+		assert (repo_dir / ".serena" / "cache" / "state.json").is_file(), (
+			"Commit cleanup must preserve sibling .serena files once project.yml diverges from the bootstrap hash"
+		)
+
+		shutil.rmtree(repo_dir / ".serena")
+		bootstrap_hash = _write_serena_tree("project_name: tracked-bootstrap\n")
+		_git(["git", "add", ".serena/cache/state.json"], cwd=repo_dir)
+		tracked_cleanup_result = _run_inline_bash(
+			cleanup_script,
+			extra_env={
+				"SERENA_PROJECT_PREEXISTED": "false",
+				"SERENA_PROJECT_BOOTSTRAP_HASH": bootstrap_hash,
+			},
+		)
+		assert tracked_cleanup_result.returncode == 0, tracked_cleanup_result.stderr
+		assert (repo_dir / ".serena").is_dir(), (
+			"Commit cleanup must preserve git-tracked .serena content even when the bootstrap hash still matches"
+		)
+
+
+def test_serena_preexistence_detection_runs_after_checkout() -> None:
+	workflow = _workflow_text()
+	assert 'echo "SERENA_PROJECT_PREEXISTED=false"' in _step_block_text("Create runtime workspace"), (
+		"Runtime workspace should default Serena preexistence to false until checkout makes the repo visible"
+	)
+	detect_block = _step_block_text("Detect preexisting Serena project config")
+	assert 'git ls-files --error-unmatch -- .serena/project.yml' in detect_block, (
+		"Serena preexistence detection must query the checked-out repo, not the pre-checkout workspace"
+	)
+	assert workflow.find("- name: Checkout repository") < workflow.find("- name: Detect preexisting Serena project config") < workflow.find("- name: Setup Serena"), (
+		"Serena preexistence detection must run after checkout and before Setup Serena records bootstrap hashes"
+	)
+
+
+def test_stage_support_files_preserves_consumer_owned_serena_template() -> None:
+	stage_block = _step_block_text("Stage workflow support files")
+	assert 'elif [ "${is_self_repo}" = "false" ] && git ls-files --error-unmatch -- "scripts/templates/serena_project.yml.j2" >/dev/null 2>&1; then' in stage_block, (
+		"Stage workflow support files must preserve a consumer-owned Serena template instead of overwriting it"
+	)
+	assert "preserving caller-owned Serena template" in stage_block, (
+		"Preserved consumer Serena templates should emit an audit notice"
+	)
+
+
+def test_retry_prompt_includes_exec_history_recap() -> None:
+	"""Pin the cross-attempt exec-history recap so a future Codex CLI
+	output-format change (or accidental edit to the awk parser) cannot
+	silently disable the feature.
+
+	The recap is critical for multi-file issues with xhigh reasoning:
+	without it, every retry redoes the same recon and the wall-time
+	budget runs out before any edit lands (observed on bitsafe.io
+	issue #26 — see the agents.md historical note).
+	"""
+	codex_block = _step_block_text("Run Codex implementation")
+
+	# (a) The retry-prompt expansion block must be present in the step.
+	#     These are the marker strings the model sees on retry; if any
+	#     drifts, the recap stops being an effective nudge.
+	assert "codex_prompt_retry.txt" in codex_block, (
+		"Retry-prompt path must be referenced so the nudged prompt is built"
+	)
+	assert "Prior-attempt exploration recap" in codex_block, (
+		"Retry prompt must include the explicit exploration-recap header so the "
+		"model knows the bullet list is what it has already tried"
+	)
+	assert "DO NOT redo these — go straight to editing" in codex_block, (
+		"Recap header must instruct the model to skip re-exploration and edit"
+	)
+	assert "apply_patch or printf shell exec" in codex_block, (
+		"Recap must point the model at the actual editing tools to use"
+	)
+	assert "Do NOT narrate — call a write tool" in codex_block, (
+		"Recap must reinforce that narrating is not the same as a tool call"
+	)
+
+	# (b) The awk parser must match the Codex CLI stderr format we
+	#     observe in production. We extract the parser fragment from the
+	#     workflow and run it against a synthetic codex_log fixture that
+	#     mirrors what Codex CLI prints (verified against real bitsafe.io
+	#     run logs). If Codex CLI changes its `exec\n<cmd>` format, this
+	#     test fails loudly instead of the recap silently going empty.
+	assert "/^exec$/" in codex_block, (
+		"awk pattern must anchor on `exec` lines as Codex CLI prints them"
+	)
+	assert "!seen[display]++" in codex_block, (
+		"Dedup must be order-preserving (awk associative array), not sort -u, "
+		"so the recap shows commands in the chronological order they were tried. "
+		"(`display` rather than `cmd` because long commands are truncated to a "
+		"display string before dedup so two identical truncated calls dedup as one)"
+	)
+	assert "${RUNTIME_DIR}/codex_log.txt" in codex_block, (
+		"Parser must read codex_log.txt — the file accumulates across attempts "
+		"via `tee -a` so attempt N+1 sees attempt 1..N's exec calls"
+	)
+
+	# (c) Run the actual awk command against a synthetic log to verify
+	#     the parser still extracts what we expect. Pattern lifted
+	#     verbatim from implement.yml so a regex/format edit there
+	#     surfaces here as a parse mismatch.
+	#
+	#     The fixture intentionally exercises suffix variation that
+	#     real Codex CLI logs exhibit (different `succeeded in <N>ms:`
+	#     elapsed values, `exited <code> in <N>ms:` failure forms,
+	#     non-zero ms values) so a parser that accidentally hard-codes
+	#     `succeeded in 0ms:` would fail this test.
+	# A long synthetic command (>500 chars) that mirrors MCP tool-call
+	# bash serializations — these get serialized into one line and
+	# routinely exceed 500 chars. The parser must show them (truncated)
+	# rather than drop them, otherwise the model can't see they were
+	# already tried and re-runs them on retry.
+	long_cmd = "/bin/bash -lc 'rg -n find_symbol --name " + ("X" * 600) + "' in /repo succeeded in 99ms:"
+	assert len(long_cmd) > 500, "long_cmd fixture must exceed 500 chars to exercise truncation"
+	codex_log_fixture = (
+		"some startup chatter\n"
+		"exec\n"
+		"/bin/bash -lc 'ls -1' in /repo succeeded in 0ms:\n"
+		"file_a\n"
+		"file_b\n"
+		"exec\n"
+		"/bin/bash -lc 'rg -n PATTERN_A' in /repo succeeded in 47ms:\n"
+		"matches…\n"
+		"exec\n"
+		"/bin/bash -lc 'rg -n MISSING' in /repo exited 1 in 12ms:\n"
+		"exec\n"
+		"/bin/bash -lc 'rg -n PATTERN_A' in /repo succeeded in 47ms:\n"
+		"duplicate of attempt 2 — should dedup\n"
+		"exec\n"
+		f"{long_cmd}\n"
+		"exec\n"
+		"/bin/bash -lc 'cat foo' in /repo succeeded in 3ms:\n"
+		"tokens used 12345\n"
+	)
+	with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+		f.write(codex_log_fixture)
+		log_path = f.name
+	try:
+		# Pattern verbatim from implement.yml retry-nudge block.
+		awk_program = (
+			'/^exec$/ { getline cmd; '
+			'if (length(cmd) > 0) { '
+			'display = (length(cmd) > 500) ? substr(cmd, 1, 500) " …[truncated]" : cmd; '
+			'if (!seen[display]++) print "  - " display } }'
+		)
+		result = subprocess.run(
+			["awk", awk_program, log_path],
+			capture_output=True,
+			text=True,
+			check=True,
+			timeout=10,
+		)
+	finally:
+		os.unlink(log_path)
+	lines = [line for line in result.stdout.splitlines() if line]
+	expected_long_recap = "  - " + long_cmd[:500] + " …[truncated]"
+	assert lines == [
+		"  - /bin/bash -lc 'ls -1' in /repo succeeded in 0ms:",
+		"  - /bin/bash -lc 'rg -n PATTERN_A' in /repo succeeded in 47ms:",
+		"  - /bin/bash -lc 'rg -n MISSING' in /repo exited 1 in 12ms:",
+		expected_long_recap,
+		"  - /bin/bash -lc 'cat foo' in /repo succeeded in 3ms:",
+	], (
+		"awk parser must (1) capture each `exec`-followed command line "
+		"regardless of trailing-suffix variability (succeeded vs exited, "
+		"different ms values), (2) dedup duplicates while preserving "
+		"chronological order, (3) skip non-`exec` chatter, "
+		"(4) truncate commands >500 chars with a `…[truncated]` marker "
+		"rather than dropping them silently. Got:\n"
+		+ "\n".join(lines)
+	)
+
+
+def test_yaml_reserved_indicator_recipe_in_repair_prompts() -> None:
+	"""Pin the YAML reserved-indicator recipe in both repair prompts so a
+	future edit can't silently drop the guidance that prevents the
+	`rg "...\\`..."` shell-quoting failure observed on
+	tele-funtoken-msg-scoring run 25099535242.
+
+	Both prompts must:
+	- Name the diagnostic substring the recipe matches against
+	- Tell the model to wrap the scalar in DOUBLE quotes
+	- Tell the model to use sed (NOT rg/grep) to inspect the line
+	- Provide the python3 yaml.safe_load verification command
+	"""
+	for prompt_path in (
+		REPO_ROOT / "prompts" / "mode-implement-repair.txt",
+		REPO_ROOT / "prompts" / "mode-implement-repair-syntax.txt",
+	):
+		body = prompt_path.read_text(encoding="utf-8")
+		assert "yaml.scanner.ScannerError" in body, (
+			f"{prompt_path.name} must reference the diagnostic substring "
+			"`yaml.scanner.ScannerError` so the recipe matches at the right time"
+		)
+		assert "cannot start any token" in body, (
+			f"{prompt_path.name} must include the ScannerError message tail "
+			"so the model knows which exact diagnostic this recipe handles"
+		)
+		assert "double quotes" in body, (
+			f"{prompt_path.name} must instruct the model to wrap the scalar "
+			"in double quotes (the actual YAML fix)"
+		)
+		assert "sed -n" in body, (
+			f"{prompt_path.name} must point the model at sed -n for line "
+			"inspection — using rg/grep with literal backticks blows up "
+			"shell quoting and burns the repair turn"
+		)
+		assert "python3 -c \"import yaml; yaml.safe_load" in body, (
+			f"{prompt_path.name} must give the model an exact verification "
+			"command so the repair doesn't ship without revalidation"
+		)
+		assert "Do NOT shell out to `rg`/`grep`" in body or "Do NOT shell out to `rg`" in body, (
+			f"{prompt_path.name} must explicitly forbid the failed strategy "
+			"(rg/grep with literal backtick)"
+		)
+		assert "{{SERENA_TOOL_HINTS}}" in body, (
+			f"{prompt_path.name} must expose the Serena guidance placeholder"
+		)
+
+
+def test_yaml_quoting_clause_in_implement_prompt() -> None:
+	"""Pin the YAML reserved-indicator quoting clause in the main
+	implement prompt. Source-side prevention complements the repair
+	recipe — without this, Codex keeps emitting bare scalars starting
+	with backtick / @ / etc. in db/contracts/*.yml prose."""
+	body = (REPO_ROOT / "prompts" / "mode-implement.txt").read_text(encoding="utf-8")
+	assert "{{SERENA_TOOL_HINTS}}" in body, (
+		"mode-implement.txt must expose the Serena guidance placeholder"
+	)
+	assert "YAML reserved-indicator quoting" in body, (
+		"mode-implement.txt must have a labelled clause for YAML reserved-"
+		"indicator quoting so it's discoverable on review"
+	)
+	# All YAML 1.2 reserved indicators that cannot start a plain scalar.
+	for ch in ("`", "@", "*", "&", "|", ">", "!", "%", "#", "?", ",", "[", "]", "{", "}"):
+		assert f"`{ch}`" in body, (
+			f"mode-implement.txt must list the reserved indicator `{ch}` in "
+			"the YAML quoting clause"
+		)
+	assert "double quotes" in body, (
+		"mode-implement.txt must say to wrap reserved-indicator scalars "
+		"in DOUBLE quotes specifically (single quotes don't escape backticks "
+		"identically and the consistency matters for the repair regex)"
+	)
+	assert "validate_changed_files_syntax.sh" in body, (
+		"mode-implement.txt must reference the validator that enforces "
+		"the rule, so the model knows the cost of getting this wrong"
+	)
+
+
+def test_scope_lock_clause_in_implement_prompt() -> None:
+	body = (REPO_ROOT / "prompts" / "mode-implement.txt").read_text(encoding="utf-8")
+	assert "Scope-lock discipline" in body
+	assert "ai:scope:<glob>" in body
+	assert "`BLOCKED: scope-lock-violation file=<path>`" in body
+
+
+def test_validator_diagnostic_surfaces_offending_lines() -> None:
+	"""End-to-end test for `append_checker_error` line-context surfacing.
+
+	Bootstrap a git repo with a YAML file that has a reserved-indicator
+	scalar (`` ` ``) on a known line. Run
+	`scripts/validate_changed_files_syntax.sh` with `CAPTURE_FILE` set,
+	and verify the capture contains both the original ScannerError and
+	an "Offending bytes" block with the backticked line numbered. This
+	guards the failure mode where the repair prompt has to find the
+	offending byte itself — when the validator surfaces the bytes
+	inline, the repair model patches in one shot.
+	"""
+	with tempfile.TemporaryDirectory(prefix="test_validator_diag_") as td:
+		repo_dir = Path(td)
+		_bootstrap_git_repo(repo_dir)
+		# Stage prior file so git diff sees the new YAML as a modification
+		# (validator iterates `git diff --name-only HEAD ...` + untracked).
+		# Just leaving as untracked is enough — the script's second list
+		# (`git ls-files --others --exclude-standard`) covers it.
+		yaml_path = repo_dir / "broken.yml"
+		yaml_path.write_text(
+			# 5 lines of valid YAML, then a reserved-indicator scalar on
+			# line 6. Python's yaml.scanner.ScannerError will report
+			# `line 6, column N`.
+			"key1: value1\n"
+			"key2: value2\n"
+			"items:\n"
+			"  - alpha\n"
+			"  - beta\n"
+			"  - `backticked-leader is invalid YAML\n",
+			encoding="utf-8",
+		)
+		capture_path = repo_dir / "captured.txt"
+		env = _isolated_test_env(
+			{
+				"CAPTURE_FILE": str(capture_path),
+				"ALLOW_WORKFLOW_EDITS": "true",
+			},
+			cwd=repo_dir,
+		)
+		validator = REPO_ROOT / "scripts" / "validate_changed_files_syntax.sh"
+		result = subprocess.run(
+			["bash", str(validator)],
+			cwd=str(repo_dir),
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+		# Validator should fail (YAML is broken).
+		assert result.returncode != 0, (
+			f"validator should fail on a YAML with reserved-indicator "
+			f"scalar on line 6, got rc={result.returncode}\n"
+			f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+		)
+		assert capture_path.exists(), (
+			f"validator must write the capture file at CAPTURE_FILE; "
+			f"missing at {capture_path}"
+		)
+		captured = capture_path.read_text(encoding="utf-8")
+		# (a) The original ScannerError stderr must be in the capture
+		assert "yaml.scanner.ScannerError" in captured or "ScannerError" in captured, (
+			f"capture must include the YAML ScannerError stderr. Got:\n{captured}"
+		)
+		# (b) The "Offending bytes" block must be present with the
+		#     reported line number (6 in this fixture).
+		assert "Offending bytes" in captured, (
+			f"capture must include the new offending-bytes block so the "
+			f"repair prompt sees the exact failing line inline. Got:\n{captured}"
+		)
+		assert "error reported at line 6" in captured, (
+			f"capture must report the line number extracted from the "
+			f"ScannerError (6 in fixture). Got:\n{captured}"
+		)
+		# (c) The actual offending line content must be in the capture,
+		#     numbered.
+		assert "6: " in captured and "backticked-leader" in captured, (
+			f"capture must show the backticked line content, numbered, so "
+			f"the repair prompt can patch it without re-grepping. Got:\n{captured}"
+		)
+
+
+def test_codex_request_user_input_bail_and_flag() -> None:
+	"""Pin Fix #1: when Codex emits the `request_user_input is not
+	supported in exec mode` error path (model wanted to ask the user a
+	clarifying question, but exec mode rejected the request), the
+	retry loop must bail immediately and leave a flag file so the
+	orchestrator's `ai:implementation-failed` sweep can route the
+	issue back to clarify instead of re-issuing as another implement.
+
+	Production failure mode: tele-funtoken-msg-scoring run
+	(2026-04-29) wasted ~80 min and ~1.7M tokens before exhausting
+	all 5 attempts on an issue/plan ambiguity Codex wanted to ask
+	about. Retrying with the same prompt cannot fix that; bail early.
+	"""
+	codex_block = _step_block_text("Run Codex implementation")
+	assert "request_user_input is not supported in exec mode" in codex_block, (
+		"loop must grep for the exact CLI error string; this is the "
+		"canonical signal that the model needed user input"
+	)
+	# The grep must scope to the CURRENT attempt's per-attempt log,
+	# not the cumulative codex_log.txt. The cumulative log accumulates
+	# across attempts via `tee -a`, so grepping it would let a stale
+	# error from attempt 1 trip a false bail on every subsequent
+	# attempt and prevent legitimate later recovery (consensus finding
+	# from multi-model review on commit 523cc99).
+	assert 'grep -q \'request_user_input is not supported in exec mode\' \\\n                  "${attempt_log_file}"' in codex_block or \
+		'"${attempt_log_file}"' in codex_block.split('request_user_input is not supported in exec mode')[1][:200], (
+		"request_user_input grep MUST target ${attempt_log_file} (the "
+		"per-attempt log), not the cumulative ${RUNTIME_DIR}/codex_log.txt. "
+		"A stale error from an earlier attempt would otherwise trip a "
+		"false bail on every subsequent attempt"
+	)
+	assert "codex_request_user_input.flag" in codex_block, (
+		"loop must touch a request-user-input flag file so downstream "
+		"routing (the orchestrator's ai:implementation-failed sweep) can "
+		"send the issue back to clarify"
+	)
+	# The bail must be a `break`, not `continue` — the request-user-input
+	# error means retrying with the same prompt cannot fix the underlying
+	# ambiguity. The flag-touch must precede the break so the flag is
+	# always present when the loop exits via this path.
+	bail_idx = codex_block.find("codex_request_user_input.flag")
+	assert bail_idx != -1
+	assert "break" in codex_block[bail_idx:bail_idx + 200], (
+		"request_user_input bail must `break` out of the retry loop, "
+		"not `continue` — same prompt won't fix an ambiguity"
+	)
+
+
+def test_codex_blocked_verdict_bail_and_flag() -> None:
+	"""Pin the deliberate-BLOCKED bail: when Codex exits 0 with a final
+	message containing any line that starts with `BLOCKED:` and the
+	baseline-relative worktree delta is empty, the retry loop must treat
+	that as the model's verdict (prompts/mode-implement.txt's completeness_contract
+	names `BLOCKED: <reason>` as a valid terminal deliverable), not as an
+	anonymous "no file changes" attempt. Without this, run 33470149029
+	on multi-user-ai-agent issue #246 (an admin-only fail-closed task
+	whose plan forbade repository edits) burned 5/5 attempts and ~201K
+	tokens re-emitting the same BLOCKED line under a retry nudge that
+	told the model it "must modify files".
+	"""
+	codex_block = _step_block_text("Run Codex implementation")
+	blocked_grep = "grep -qE '^[[:space:]]*BLOCKED:' \"${CODEX_OUTPUT_FILE}\""
+	assert blocked_grep in codex_block, (
+		"loop must grep CODEX_OUTPUT_FILE for a line-anchored BLOCKED: "
+		"marker (same anchor shape as clarify.yml's STATUS grep) so the "
+		"model's terminal verdict is recognised"
+	)
+	blocked_idx = codex_block.find(blocked_grep)
+	# Position: inside the cmd_rc==0 + non-empty-output branch, AFTER the
+	# non-empty-delta success check (a BLOCKED line alongside real file
+	# changes must still count as success) and BEFORE the success-no-op
+	# regex (a BLOCKED message that also says "no file changes were made"
+	# must not be misread as done).
+	delta_success_idx = codex_block.find('if [ -n "${codex_delta}" ]; then')
+	noop_regex_idx = codex_block.find("no file changes were made|nothing to change")
+	assert delta_success_idx != -1 and noop_regex_idx != -1
+	assert delta_success_idx < blocked_idx < noop_regex_idx, (
+		"BLOCKED detection must sit in the empty-delta branch: after the "
+		"non-empty-delta success break and before the success-no-op regex"
+	)
+	# The reason must be logged so the workflow log names WHY the loop
+	# stopped without the operator opening codex_output.txt.
+	escape_helper_source_idx = codex_block.find('source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh"')
+	assert 0 <= escape_helper_source_idx < blocked_idx, (
+		"the GitHub Actions annotation escaper must be sourced before the BLOCKED bail"
+	)
+	assert 'Model reason: $(_gh_actions_escape "${codex_blocked_reason}")' in codex_block, (
+		"the bail must safely escape and log the model's own BLOCKED: line"
+	)
+	# Flag file → diag_reason routing; flag write must precede the break
+	# so the flag is always present when the loop exits via this path.
+	flag_idx = codex_block.find('> "${RUNTIME_DIR}/codex_blocked.flag"', blocked_idx)
+	assert flag_idx != -1, (
+		"bail must write codex_blocked.flag so the diagnostics comment can "
+		"name the verdict instead of 'failed after N attempts'"
+	)
+	bail_window = codex_block[flag_idx:flag_idx + 300]
+	assert 'emit_implement_substate "implement" "implement" "Failed"' in bail_window, (
+		"BLOCKED bail must emit the Failed substate, mirroring the "
+		"request_user_input bail"
+	)
+	assert "break" in bail_window, (
+		"BLOCKED bail must `break` out of the retry loop, not `continue` — "
+		"a deterministic verdict does not change on retry"
+	)
+	# The retry-nudge prompt is only assembled at the top of the NEXT
+	# attempt, so the break must come before it: the nudge text must not
+	# appear between the flag write and the break.
+	assert "requires repository modifications" not in bail_window
+	# Stale-flag hygiene: cleared before the loop, like codex_success_noop.flag.
+	cleanup_idx = codex_block.find('rm -f "${RUNTIME_DIR}/codex_blocked.flag"')
+	loop_idx = codex_block.find('for attempt in $(seq 1 "${max_attempts}"); do')
+	assert cleanup_idx != -1 and loop_idx != -1
+	assert cleanup_idx < loop_idx, (
+		"codex_blocked.flag must be cleared before the retry loop so a "
+		"stale marker from a prior run_attempt cannot relabel an unrelated "
+		"failure as a BLOCKED verdict"
+	)
+	# Diagnostics comment wording.
+	diag_branch = 'elif [ -f "${RUNTIME_DIR}/codex_blocked.flag" ]; then'
+	diag_idx = codex_block.find(diag_branch)
+	assert diag_idx != -1, "diag_reason must have a codex_blocked.flag branch"
+	assert "deliberate BLOCKED verdict" in codex_block[diag_idx:diag_idx + 600], (
+		"the issue diagnostics comment must say 'deliberate BLOCKED "
+		"verdict', not the generic 'failed after N attempts'"
+	)
+	assert "captured from final assistant output" in codex_block[diag_idx:diag_idx + 600]
+	assert "tails below contain stderr only" in codex_block[diag_idx:diag_idx + 600]
+	generic_idx = codex_block.find('diag_reason="${implement_engine_name} implement failed after ${max_attempts} attempts"')
+	assert generic_idx != -1 and generic_idx < diag_idx, (
+		"the BLOCKED branch must override the generic default reason"
+	)
+
+
+def test_codex_blocked_verdict_regex_matches_line_start_only() -> None:
+	"""Exercise the live BLOCKED anchor from implement.yml against fixtures:
+	it must match a `BLOCKED:` line (optionally indented) anywhere in the
+	final message, and must NOT match the word inside prose, a
+	lower-case variant, or an empty output — the same discipline the
+	prompt contract mandates ("emit exactly `BLOCKED: <reason>`").
+	"""
+	codex_block = _step_block_text("Run Codex implementation")
+	m = re.search(r"grep -qE '(\^\[\[:space:\]\]\*BLOCKED:)' \"\$\{CODEX_OUTPUT_FILE\}\"", codex_block)
+	assert m is not None, "could not extract the BLOCKED anchor regex from implement.yml"
+	pattern = m.group(1)
+	assert pattern == "^[[:space:]]*BLOCKED:"
+
+	def _matches(body: str) -> bool:
+		with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8") as fh:
+			fh.write(body)
+			path = fh.name
+		try:
+			proc = subprocess.run(
+				["grep", "-qE", pattern, path],
+				capture_output=True,
+				check=False,
+			)
+			return proc.returncode == 0
+		finally:
+			os.unlink(path)
+
+	# Verbatim shape from run 33470149029 attempt 1.
+	assert _matches(
+		"BLOCKED: Audit-script parity failed. `main` uses ESM imports; the branch uses CommonJS requires.\n\n"
+		"No comment/state/branch mutations occurred. Issue #26 remains open.\n"
+	)
+	assert _matches("Summary of checks:\n- fetch: PASS\n\nBLOCKED: fail-closed parity gate failed.\n")
+	assert _matches("  BLOCKED: scope-lock-violation file=scripts/x.py\n")
+	assert not _matches("The plan says BLOCKED: is a valid deliverable, but nothing blocks us.\n")
+	assert not _matches("blocked: lower-case is not the contract marker\n")
+	assert not _matches("No file changes were made.\n")
+	assert not _matches("")
+
+
+def test_blocked_already_satisfied_routes_to_success_noop() -> None:
+	"""Pin the BLOCKED-verdict classifier (run 33711184784, issue #3972).
+
+	Issue #3972 asked for an `author_association` gate that `main` already
+	carried. Codex correctly found nothing to do and answered
+	`BLOCKED: Approved plan requires no edits; ...`. The bail below treated
+	every BLOCKED line as a hard failure, so a legitimate "already
+	implemented" outcome failed the run and posted implementation-failed
+	diagnostics instead of taking the success-no-op path that closes the
+	issue with `ai:closed`.
+
+	The classifier must sit inside the BLOCKED branch, before the failure
+	bail, and must set `codex_success_noop.flag` (the same marker Guard 0
+	in "Handle no-op implementation" reads) rather than
+	`codex_blocked.flag`.
+	"""
+	codex_block = _step_block_text("Run Codex implementation")
+
+	# Both halves of the classifier must exist as named knobs above the loop.
+	assert "BLOCKED_ALREADY_SATISFIED_REGEX='" in codex_block, (
+		"the positive half of the classifier must be a named regex knob"
+	)
+	assert "BLOCKED_REAL_OBSTACLE_REGEX='" in codex_block, (
+		"the negative half must be a named regex knob so a real obstacle "
+		"that merely mentions 'already present' keeps failing"
+	)
+	regex_def_idx = codex_block.find("BLOCKED_ALREADY_SATISFIED_REGEX='")
+	loop_idx = codex_block.find('for attempt in $(seq 1 "${max_attempts}"); do')
+	assert regex_def_idx != -1 and loop_idx != -1
+	assert regex_def_idx < loop_idx, (
+		"classifier regexes must be defined once above the retry loop, "
+		"mirroring ANNOUNCE_EDIT_REGEX"
+	)
+
+	# Placement: inside the BLOCKED branch, before the failure bail.
+	blocked_idx = codex_block.find(
+		"grep -qE '^[[:space:]]*BLOCKED:' \"${CODEX_OUTPUT_FILE}\""
+	)
+	classifier_idx = codex_block.find(
+		'grep -qiE "${BLOCKED_ALREADY_SATISFIED_REGEX}"'
+	)
+	fail_bail_idx = codex_block.find(
+		"${implement_engine_name} returned a deliberate BLOCKED verdict on attempt"
+	)
+	assert -1 not in (blocked_idx, classifier_idx, fail_bail_idx)
+	assert blocked_idx < classifier_idx < fail_bail_idx, (
+		"the already-satisfied classifier must run inside the BLOCKED "
+		"branch and before the failure bail, otherwise the bail wins"
+	)
+
+	# The negative half must be applied as a negation, not a second positive.
+	assert '! printf' in codex_block[classifier_idx:classifier_idx + 500], (
+		"the real-obstacle regex must be applied as a NOT condition"
+	)
+
+	# Outcome: success-no-op flag, success substate, break. Never the
+	# blocked flag — that would re-route the run into failure diagnostics.
+	window = codex_block[classifier_idx:fail_bail_idx]
+	assert ': > "${RUNTIME_DIR}/codex_success_noop.flag"' in window, (
+		"an already-satisfied verdict must set codex_success_noop.flag so "
+		"Guard 0 closes the issue with ai:closed"
+	)
+	assert "codex_blocked.flag" not in window, (
+		"the already-satisfied path must not write codex_blocked.flag"
+	)
+	assert "implement_succeeded=true" in window, (
+		"an already-satisfied verdict is a success, not a failure"
+	)
+	assert 'emit_implement_substate "implement" "implement" "Succeeded"' in window, (
+		"the already-satisfied path must emit the Succeeded substate"
+	)
+	assert "break" in window, (
+		"an already-satisfied verdict is terminal — break, do not retry"
+	)
+
+
+def test_blocked_already_satisfied_regexes_classify_real_verdicts() -> None:
+	"""Exercise the live classifier regexes from implement.yml against
+	fixtures. The positive half must recognise "nothing was required"
+	verdicts; the negative half must veto every real obstacle, including
+	one whose wording happens to contain an "already present" clause.
+
+	A miss in either direction is not symmetric: failing to classify keeps
+	today's behaviour (a failed run), while a false positive would close a
+	genuinely unfinished issue. The fixtures below pin both.
+	"""
+	block = _step_block_text("Run Codex implementation")
+
+	def _regex(name: str) -> str:
+		match = re.search(rf"^\s+{name}='(.*)'$", block, re.M)
+		assert match is not None, f"could not extract {name} from implement.yml"
+		return match.group(1)
+
+	positive = _regex("BLOCKED_ALREADY_SATISFIED_REGEX")
+	negative = _regex("BLOCKED_REAL_OBSTACLE_REGEX")
+
+	def _grep(pattern: str, text: str) -> bool:
+		proc = subprocess.run(
+			["grep", "-qiE", pattern],
+			input=text,
+			text=True,
+			capture_output=True,
+			check=False,
+		)
+		return proc.returncode == 0
+
+	# The veto reads only a conservatively detected first sentence. Pin the
+	# extraction and abbreviation fallback so this helper cannot drift from it.
+	first_sentence_sed = "s/[.!?][[:space:]]+[[:upper:][:digit:]].*$//"
+	first_sentence_abbreviation = (
+		r"(^|[^[:alpha:]])(([[:alpha:]]\.)+[[:alpha:]]|etc|vs|cf|mr|mrs|ms|dr|prof|sr|jr|st)$"
+	)
+	assert (
+		"if ! codex_blocked_first_sentence=\"$(printf '%s' \"${codex_blocked_reason}\" "
+		f"| sed -E '{first_sentence_sed}')\"; then"
+	) in block, "the workflow must fail closed when first-sentence extraction fails"
+	assert (
+		f"grep -qiE '{first_sentence_abbreviation}'"
+	) in block, "the workflow must fail closed on ambiguous abbreviation boundaries"
+	assert (
+		'! printf \'%s\' "${codex_blocked_first_sentence}" | grep -qiE "${BLOCKED_REAL_OBSTACLE_REGEX}"'
+	) in block, "the real-obstacle veto must read the first sentence, not the whole reason"
+
+	def _first_sentence(reason: str) -> str:
+		proc = subprocess.run(
+			["sed", "-E", first_sentence_sed],
+			input=reason,
+			text=True,
+			capture_output=True,
+			check=False,
+		)
+		if proc.returncode != 0 or not proc.stdout:
+			return reason
+		if _grep(first_sentence_abbreviation, proc.stdout):
+			return reason
+		return proc.stdout
+
+	def _is_success_noop(reason: str) -> bool:
+		return _grep(positive, reason) and not _grep(negative, _first_sentence(reason))
+
+	# Verbatim verdict from run 33711184784 attempt 1 (issue #3972).
+	assert _is_success_noop(
+		"BLOCKED: Approved plan requires no edits; all actor gates exist and "
+		"the focused contract test passes (5/5). Pre-existing manifest change "
+		"left untouched."
+	)
+	assert _is_success_noop("BLOCKED: The requested gate is already implemented on main.")
+	assert _is_success_noop("BLOCKED: No repository changes are required.")
+	assert _is_success_noop("BLOCKED: Nothing to do; the index already exists.")
+
+	# Verbatim verdict from run 34125645374 attempt 1
+	# (tele-funtoken-msg-scoring issue #4090). The plan phase emitted
+	# "Files likely to change: None." because the remediation had already
+	# landed in PR #4075; the run then failed with an ERROR alert instead
+	# of closing the issue through the success-no-op path.
+	assert _is_success_noop(
+		"BLOCKED: Approved plan requires validation only; existing "
+		"remediation passed all 74 targeted tests, so no repository edit "
+		"is permitted."
+	)
+	assert _is_success_noop(
+		"BLOCKED: Approved plan requires verification-only checks; no repository "
+		"change is permitted."
+	)
+
+	# Validation-only wording without an affirmative no-edit statement is not
+	# sufficient: work may remain or the phrase itself may be negated.
+	assert not _is_success_noop(
+		"BLOCKED: This is not validation-only work; the plan requires repository edits."
+	)
+	assert not _is_success_noop(
+		"BLOCKED: Approved plan requires validation only for phase 1; phase 2 "
+		"still requires repository edits."
+	)
+
+	# The validation-only branch must still yield to the real-obstacle veto.
+	assert not _is_success_noop(
+		"BLOCKED: Approved plan requires validation only and no repository edit "
+		"is permitted, but pytest is unavailable in the runner."
+	)
+	assert not _is_success_noop(
+		"BLOCKED: Approved plan requires validation-only checks and no repository "
+		"edit is permitted, but the fixture database is inaccessible."
+	)
+	assert not _is_success_noop(
+		"BLOCKED: Approved plan requires validation only and no repository edit "
+		"is permitted, but the harness is broken."
+	)
+
+	# Real obstacles must keep failing.
+	assert not _is_success_noop("BLOCKED: scope-lock-violation file=scripts/x.py")
+	assert not _is_success_noop(
+		"BLOCKED: Audit-script parity failed. `main` uses ESM imports; the "
+		"branch uses CommonJS requires."
+	)
+	assert not _is_success_noop("BLOCKED: fail-closed parity gate failed.")
+	assert not _is_success_noop("BLOCKED: requirements are contradictory and the plan is ambiguous.")
+	assert not _is_success_noop("BLOCKED: needs human review before proceeding.")
+	assert not _is_success_noop("BLOCKED: the target file is inaccessible.")
+	# Negative half vetoes an obstacle that also claims something is already present.
+	assert not _is_success_noop(
+		"BLOCKED: cannot regenerate the lockfile; uv is unavailable in the "
+		"runner, though the dependency is already present in pyproject.toml"
+	)
+	assert not _is_success_noop(
+		"BLOCKED: the upstream API is missing, so no changes are required here."
+	)
+
+	# Verbatim verdicts from tele-funtoken-msg-scoring runs 34166170045,
+	# 34163969134, 34163977712, 34164219124, 34163478446, 34162543282 and
+	# 34162832548 (issues #4213, #4192, #4191, #4193, #4189, #4180, #4184).
+	# Thirteen auto-heal issues for one SES error each dispatched an implement
+	# run; the model found the fix already at HEAD, but `failures` / `lacks`
+	# in the trailing aside about the pre-existing test suite tripped the
+	# veto and every run went red with an ERROR alert.
+	assert _is_success_noop(
+		"BLOCKED: Approved plan requires no repository edits; existing fix "
+		"verified (121 targeted tests passed). Full suite has 6 unrelated failures."
+	)
+	assert _is_success_noop(
+		"BLOCKED: Approved plan requires no repository changes; HEAD already "
+		"contains the fix. Targeted tests pass (148). Full suite has 6 unrelated "
+		"failures."
+	)
+	assert _is_success_noop(
+		"BLOCKED: Approved verification-only plan requires no repository edit. "
+		"HEAD matches the planning ref; targeted tests pass (148). Full suite has "
+		"6 unrelated failures. Production deployment status is unknown."
+	)
+	assert _is_success_noop(
+		"BLOCKED: Approved plan forbids repository changes because HEAD already "
+		"contains the fix. Focused tests passed; full suite lacks project "
+		"dependencies."
+	)
+	assert _is_success_noop(
+		"BLOCKED: Approved plan requires no repository diff; any edit would "
+		"violate scope. Targeted tests pass (148); full suite has 6 unrelated "
+		"failures."
+	)
+	assert _is_success_noop(
+		"BLOCKED: Approved plan requires no repository changes; fix already "
+		"exists. Targeted tests pass (148 total). Full suite has 5 unrelated "
+		"pre-existing failures."
+	)
+	assert _is_success_noop(
+		"BLOCKED: Approved plan is verification-only; current HEAD already "
+		"contains the fix. Six issue-specific tests pass. No in-scope repository "
+		"change is justified."
+	)
+	assert _is_success_noop("BLOCKED: main already holds the requested gate.")
+
+	# First-sentence scoping is narrow: `;` and `,` do not end the sentence,
+	# so an obstacle joined to the verdict stays vetoed, and an obstacle
+	# stated as the opening sentence stays vetoed however the rest reads.
+	assert not _is_success_noop(
+		"BLOCKED: Approved plan requires no edits; pytest is unavailable so "
+		"validation could not run."
+	)
+	assert not _is_success_noop(
+		"BLOCKED: Approved plan requires no edits, but the fixture database is "
+		"inaccessible. Targeted tests pass."
+	)
+	assert not _is_success_noop(
+		"BLOCKED: No changes are required, e.g. DigitalOcean token is unavailable."
+	)
+	assert not _is_success_noop(
+		"BLOCKED: DigitalOcean credential unavailable for approved "
+		"PROMO_EMAIL_SENDER configuration correction. No repository changes are "
+		"required."
+	)
+	# Verbatim from run 34168336869 (issue #4198): a genuine blocker with no
+	# already-satisfied claim at all.
+	assert not _is_success_noop(
+		"BLOCKED: DigitalOcean credential unavailable for approved "
+		"PROMO_EMAIL_SENDER configuration correction."
+	)
+
+
+def test_implement_prompt_reserves_blocked_for_real_obstacles() -> None:
+	"""The prompt contract must stop steering the model toward `BLOCKED:`
+	for a no-op outcome. `prompts/mode-implement.txt` previously named
+	`BLOCKED: <reason>` as the only alternative to on-disk changes, which
+	is what produced the issue #3972 verdict. It must now name the
+	success-no-op phrasing for the "nothing was required" case.
+	"""
+	prompt = (REPO_ROOT / "prompts" / "mode-implement.txt").read_text(encoding="utf-8")
+	assert "No changes needed." in prompt, (
+		"the prompt must name the exact success-no-op phrase the workflow's "
+		"success-no-op regex recognises"
+	)
+	assert "It is NOT the marker for" in prompt, (
+		"the prompt must state that BLOCKED is not the nothing-to-do marker"
+	)
+	# The phrase the prompt tells the model to emit must actually satisfy the
+	# workflow's success-no-op regex — otherwise the guidance is a dead end.
+	block = _step_block_text("Run Codex implementation")
+	match = re.search(
+		r"if grep -qEi '(\^\(\[\[:space:\]\]\*.*?)' \"\$\{CODEX_OUTPUT_FILE\}\"",
+		block,
+	)
+	assert match is not None, "could not extract the success-no-op regex from implement.yml"
+	proc = subprocess.run(
+		["grep", "-qEi", match.group(1)],
+		input="No changes needed.\n",
+		text=True,
+		capture_output=True,
+		check=False,
+	)
+	assert proc.returncode == 0, (
+		"the phrase the prompt mandates must match the workflow's "
+		"success-no-op regex"
+	)
+
+
+def _heredoc_body(block: str, opener: str, terminator: str) -> str:
+	"""Return the text between `opener` and a line that is just
+	`terminator` (both matched after stripping indentation), with all
+	whitespace runs collapsed to single spaces."""
+	lines = block.splitlines()
+	start = next(
+		(i for i, line in enumerate(lines) if line.strip().endswith(opener)),
+		None,
+	)
+	assert start is not None, f"could not find heredoc opener {opener!r}"
+	end = next(
+		(i for i in range(start + 1, len(lines)) if lines[i].strip() == terminator),
+		None,
+	)
+	assert end is not None, f"could not find heredoc terminator {terminator!r}"
+	# Collapse wrapping so assertions can match phrases across line breaks.
+	return " ".join(" ".join(line.strip() for line in lines[start + 1:end]).split())
+
+
+def test_implement_inline_prompt_names_success_noop_sentinel() -> None:
+	"""The prompt `implement.yml` actually sends is the inline
+	`mode-implement-inline.txt` heredoc, not `prompts/mode-implement.txt`.
+	Run 38082111776 (issue #6812, a verification-only plan whose fix was
+	already on `main`) spent 5 attempts and about $14 because the inline
+	completeness contract never named `No changes needed.`: the model wrote
+	"This is reported as already done" in prose, the success-no-op regex did
+	not match, and the retry nudge then insisted the plan required edits.
+	Both texts the model sees must name the exact sentinel, and the
+	sentinel must satisfy the workflow's success-no-op regex.
+	"""
+	block = _step_block_text("Run Codex implementation")
+	inline_prompt = _heredoc_body(block, '"${PROMPT_TEMPLATE_FILE}" <<\'EOF\'', "EOF")
+	retry_nudge = _heredoc_body(block, "<<'RETRY_EOF'", "RETRY_EOF")
+	for label, text in (("inline prompt", inline_prompt), ("retry nudge", retry_nudge)):
+		assert "exactly `No changes needed.` on its own line" in text, (
+			f"the {label} must name the exact success-no-op sentinel"
+		)
+	assert "It is NOT the marker for" in inline_prompt, (
+		"the inline prompt must state that BLOCKED is not the nothing-to-do marker"
+	)
+	match = re.search(
+		r"if grep -qEi '(\^\(\[\[:space:\]\]\*.*?)' \"\$\{CODEX_OUTPUT_FILE\}\"",
+		block,
+	)
+	assert match is not None, "could not extract the success-no-op regex from implement.yml"
+	# The final message from run 38082111776, ended the way the prompt now
+	# asks; the prose-only original must still miss (no loosening).
+	prose = "I've again made no file changes. This is reported as already done, not as `BLOCKED`.\n"
+	for text, expected_rc in ((prose, 1), (prose + "\nNo changes needed.\n", 0)):
+		proc = subprocess.run(
+			["grep", "-qEi", match.group(1)],
+			input=text,
+			text=True,
+			capture_output=True,
+			check=False,
+		)
+		assert proc.returncode == expected_rc, text
+
+
+def test_codex_empty_output_streak_bail_and_flag() -> None:
+	"""Pin Fix #2: when Codex returns empty output for
+	`empty_streak_threshold` (default 2) attempts in a row, the retry
+	loop must bail and leave a flag file. Recovers ~60% of wasted
+	budget on confirmed stuck-in-exploration scenarios where the
+	exec-history retry nudge alone hasn't broken the loop.
+	"""
+	codex_block = _step_block_text("Run Codex implementation")
+	assert "empty_streak=0" in codex_block, (
+		"loop must initialise the empty-output streak counter to 0 before "
+		"the for-loop so it accumulates across attempts"
+	)
+	assert "empty_streak_threshold=" in codex_block, (
+		"threshold must be a named knob (not a magic 2) so it can be "
+		"tuned without re-deriving it from the increment logic"
+	)
+	assert "empty_streak=$((empty_streak + 1))" in codex_block, (
+		"streak must increment on the genuine empty-output path"
+	)
+	assert "else\n              empty_streak=0" in codex_block, (
+		"streak must reset to 0 on any non-empty attempt outcome so a "
+		"mid-run recovery doesn't re-tip the threshold from accumulated "
+		"earlier empties"
+	)
+	assert "codex_stuck_in_exploration.flag" in codex_block, (
+		"streak-bail must touch a stuck-in-exploration flag file so "
+		"the orchestrator can distinguish exploration-stuck from other "
+		"failure modes when picking the recovery action"
+	)
+	# Align with the post-#1864 wording which broadens the bail to also
+	# cover the stuck-intent (announced-edit-without-changes) contributor
+	# that now feeds the same `attempt_was_empty=true` counter. Strict
+	# match (not "old OR new") so an accidental revert of the #1864
+	# wording fails this regression test loudly.
+	assert 'no actionable output ${empty_streak} attempts in a row' in codex_block, (
+		"the bail error must explain WHY the loop is aborting, with the "
+		"actual streak count, so the GHA log shows a one-line root cause"
+	)
+	# Watchdog-kill / non-zero-exit + empty stdout is the same
+	# stuck/no-output failure mode and must also count toward the
+	# streak. Without this, a series of watchdog kills (which exit
+	# with non-zero AND empty stdout) would never trip the bail and
+	# the loop would burn the full 5-attempt budget on stuck runs.
+	assert '${implement_engine_name} exited with code $cmd_rc and returned empty output' in codex_block, (
+		"the cmd_rc != 0 branch must distinguish empty-stdout exits "
+		"(stuck/no-output, count toward streak) from non-empty exits "
+		"(legitimate work attempted, don't count). Without this, a run "
+		"of watchdog kills would never trip the empty-streak bail"
+	)
+
+
+def _extract_announce_edit_regex() -> str:
+	"""Pull the live ANNOUNCE_EDIT_REGEX value from implement.yml.
+
+	Mirrors the workflow's own assignment: `ANNOUNCE_EDIT_REGEX='...'`
+	on a single line inside the "Run Codex implementation" step. Asserting
+	against the real string (not a copy) is what makes this a contract
+	test — a regex regression in the workflow trips the test.
+	"""
+	codex_block = _step_block_text("Run Codex implementation")
+	match = re.search(
+		r"^\s*ANNOUNCE_EDIT_REGEX='(?P<regex>[^']+)'\s*$",
+		codex_block,
+		re.MULTILINE,
+	)
+	assert match is not None, (
+		"ANNOUNCE_EDIT_REGEX must be defined as a single-quoted single-line "
+		"shell assignment inside the 'Run Codex implementation' step so the "
+		"contract test can extract its value verbatim"
+	)
+	return match.group("regex")
+
+
+def _grep_matches(regex: str, text: str) -> bool:
+	"""Return True iff `grep -iE <regex>` matches `text`.
+
+	Uses the same POSIX ERE engine the workflow's matcher (`grep -qEi`)
+	runs against, so any divergence between Python's `re` engine (no
+	POSIX character classes by default) and POSIX ERE doesn't bite.
+	The workflow uses `-q` for silent match-only; this test omits `-q`
+	because we still want grep to surface stderr on engine errors via
+	`capture_output=True`. Match/no-match is decided by exit code in
+	either form. Stdin-fed so no temp files leak.
+	"""
+	result = subprocess.run(
+		["grep", "-iE", regex],
+		input=text,
+		text=True,
+		capture_output=True,
+		check=False,
+	)
+	# grep returns 0 on match, 1 on no-match, >1 on error.
+	assert result.returncode in (0, 1), (
+		f"grep error rc={result.returncode}: {result.stderr.strip()}"
+	)
+	return result.returncode == 0
+
+
+def test_announce_edit_regex_contract() -> None:
+	"""Pin PR #2196: ANNOUNCE_EDIT_REGEX must catch the stuck-intent
+	narration patterns observed across historical failure runs AND the
+	new patterns from fun-token-multi-chain issue #201, while leaving
+	benign control prose un-flagged.
+
+	The workflow logic at implement.yml:1361 / :1397 / :1434 only fires
+	this regex on attempts that already have an empty worktree delta
+	(or empty stdout), so false positives don't regress correctness —
+	but a false negative resets `empty_streak` to 0 and lets the agent
+	loop burn the full retry budget on identical no-op repetitions.
+	Run-25467038876-style failures (issue #201, all 5 attempts, 5+ min
+	wasted) regress this contract by exactly that mechanism.
+	"""
+	regex = _extract_announce_edit_regex()
+
+	# Strings the regex MUST match.
+	#
+	# Historical patterns (do not regress):
+	#   - bare apply_patch token, "applying the patch", `i'll apply`,
+	#     `will apply`, "patching `<path>`", "Applying the requested
+	#     overwrite to <path>" (PR #1906 / run 25223836137 / issue
+	#     #1909).
+	# New patterns from issue #201:
+	#   - "Applying the one-file edit now ..." (attempts 2 + 5)
+	#   - "Implementing the one-file cleanup now ..." (attempt 3)
+	#   - "Applying the planned one-file edit now ..." (attempt 4 —
+	#     matched the pre-PR-#2196 regex via the substring "applying
+	#     the plan", but listed for completeness so a future regex
+	#     reshuffle that drops "plan" doesn't regress this case).
+	must_match = [
+		"I'll apply_patch to fix this.",
+		"applying the patch now",
+		"applying a minimal change",
+		"patching `foo.py`",
+		"editing src/main.ts",
+		"I'll apply the patch",
+		"will apply the implementation",
+		"Applying the requested overwrite to tests/e2e_smoke_canary.txt now, with no other file changes.",
+		"Applying the one-file edit now by removing the redundant `FunOFT._debitView(...)` override in `contracts/FunOFT.sol`.",
+		"Implementing the one-file cleanup now by removing the redundant `_debitView(...)` override from `contracts/FunOFT.sol`, then I'll verify the diff landed.",
+		"Applying the planned one-file edit now by removing the redundant `_debitView(...)` override from `contracts/FunOFT.sol`, then I'll verify the diff landed.",
+		"Applying the one-file edit now by removing the redundant `_debitView(...)` override from `contracts/FunOFT.sol`, then verifying the diff landed.",
+	]
+	for s in must_match:
+		assert _grep_matches(regex, s), (
+			f"ANNOUNCE_EDIT_REGEX must match stuck-intent narration: {s!r}"
+		)
+
+	# Minimal atomic must-match cases for each verb/noun added in PR #2196,
+	# so a future regression that removes one term from the alternation
+	# fails this test specifically (without relying on any of the long
+	# composite strings still passing through other subpatterns). Each
+	# case is the shortest narration that exercises exactly one new
+	# alternation: a `<gerund-verb> <noun>` for the wildcard-noun branch,
+	# and a `<gerund-verb> \`<path>\`` for the direct-path branch.
+	#
+	# Wildcard-noun branch — new gerund verbs, paired with each new noun.
+	new_verb_noun_must_match = [
+		# Verbs added to the wildcard-noun list.
+		"implementing the patch",
+		"removing the patch",
+		"deleting the patch",
+		"cleaning the patch",
+		# Nouns added to the wildcard-noun list (pair with one verb each).
+		"applying the cleanup",
+		"applying the removal",
+		"applying the deletion",
+		"applying the override",
+		"applying the file",
+	]
+	for s in new_verb_noun_must_match:
+		assert _grep_matches(regex, s), (
+			"ANNOUNCE_EDIT_REGEX must match minimal new-verb/new-noun "
+			f"combination: {s!r}"
+		)
+
+	# Direct-path branch — every gerund verb in the second alternation must
+	# match `<verb> <path-token>` and `<verb> \`<path-token>\``. The
+	# `cleaning` entry pins the post-claude-branch-review-#2196 fix that
+	# adds it to the direct-path list (it was added to the wildcard-noun
+	# list first and missed here, see consensus finding from 6/6 reviewers).
+	direct_path_must_match = [
+		"patching foo.py",
+		"editing foo.py",
+		"overwriting foo.py",
+		"rewriting foo.py",
+		"replacing foo.py",
+		"writing foo.py",
+		"implementing foo.py",
+		"removing foo.py",
+		"deleting foo.py",
+		"cleaning foo.py",
+		"cleaning `contracts/FunOFT.sol`",
+	]
+	for s in direct_path_must_match:
+		assert _grep_matches(regex, s), (
+			"ANNOUNCE_EDIT_REGEX direct-path branch must match minimal "
+			f"`<gerund> <path>` narration: {s!r}"
+		)
+
+	# Benign control prose that MUST NOT match. False positives on these
+	# would still be safe at the call sites (gated on empty-delta), but
+	# matching arbitrary non-edit-narration prose would mask genuine
+	# diagnostic signal in the workflow log, so the contract enforces
+	# minimum precision.
+	must_not_match = [
+		"The user is happy with the result.",
+		"This is a normal sentence with no edits announced.",
+		"codex",
+		"mcp startup: no servers",
+		"Reading prompt from stdin...",
+		# Substring-collision controls. The nouns added in PR #2196
+		# (`override`, `file`, `cleanup`, `removal`, `deletion`) are not
+		# word-anchored in the regex (consistent with PR #1906's existing
+		# unanchored nouns like `change`/`edit`/`implementation`), so a
+		# few specific spelling collisions are worth pinning so a future
+		# refactor that DOES add anchors doesn't silently change behavior:
+		#   - "profile" contains "file" but only as a non-prefix substring
+		#     (the regex's `(noun)` alternation tries each alternative
+		#     anchored at the position immediately after the consumed
+		#     space-delimited tokens, not floating mid-word).
+		#   - "overridden" does not start with "override" (`overridd...`
+		#     vs `overrid...e`) so it is not a prefix and does not match.
+		# Both verified to currently NOT match; the test pins that.
+		"applying the profile",
+		"applying the overridden behavior",
+	]
+	for s in must_not_match:
+		assert not _grep_matches(regex, s), (
+			f"ANNOUNCE_EDIT_REGEX must not match benign prose: {s!r}"
+		)
+
+
+def test_salvage_branches_gate_on_substantive_changes() -> None:
+	"""Pin PR #2176: the empty-stdout and watchdog-kill salvage branches
+	must require a non-whitespace worktree change before declaring
+	`implement_succeeded=true`. Without the gate, the announce-without-
+	emit failure mode (openai/codex#11151) ships a no-op PR when the
+	model writes only a trailing newline / blank line — see fun-token-
+	multi-chain run 25436981639 issue 200, where
+	`printf '\\n' >> contracts/FunOFTAdapter.sol` rode through the
+	cmd_rc==0+empty-stdout branch and the workflow opened PR #202
+	with `+` (one blank line) as the entire diff.
+
+	The flag pair `--ignore-space-at-eol --ignore-blank-lines` is
+	intentional and pinned: `-w` would also drop leading-whitespace
+	(indentation) changes, which are semantic in Python/YAML/Makefiles,
+	so an indentation-only fix would be misclassified as trivial and
+	the salvage branch would discard real work.
+	"""
+	codex_block = _step_block_text("Run Codex implementation")
+
+	# Helper must be defined exactly once before the retry loop so it
+	# is in scope at both salvage call sites.
+	assert codex_block.count("delta_is_substantive() {") == 1, (
+		"`delta_is_substantive` helper must be defined exactly once in the "
+		"step (before the for-attempt loop) so both salvage branches see it"
+	)
+
+	# Both salvage branches must call the helper instead of the bare
+	# `[ -n "${codex_delta}" ]` check that PR #2176 replaced. The
+	# branch-message strings are also pinned so an accidental wording
+	# regression on the warning text fails this test loudly.
+	assert codex_block.count('if delta_is_substantive "${codex_delta}"; then') == 2, (
+		"both salvage branches (cmd_rc==0+empty-stdout AND watchdog-kill / "
+		"non-zero-exit) must gate `implement_succeeded=true` on "
+		"`delta_is_substantive` — a bare `[ -n \"${codex_delta}\" ]` would "
+		"accept any worktree change, including a `printf '\\n' >> file` "
+		"trailing-newline append (PR #2176 root cause)"
+	)
+	assert (
+		"${implement_engine_name} returned empty output on attempt ${attempt} and only made "
+		"whitespace-only worktree changes — refusing to salvage; treating as empty."
+	) in codex_block, (
+		"empty-stdout branch must emit a distinct warning when the "
+		"worktree delta is whitespace-only so the GHA log shows WHY the "
+		"loop continues retrying instead of breaking"
+	)
+	assert (
+		"${implement_engine_name} exited with code $cmd_rc on attempt ${attempt} and only made "
+		"whitespace-only worktree changes — refusing to salvage; treating as empty."
+	) in codex_block, (
+		"watchdog-kill / non-zero-exit branch must emit the symmetric "
+		"whitespace-only warning so a stuck-on-trivial-edits run is "
+		"diagnosable from the log alone"
+	)
+
+	# The flag pair `--ignore-space-at-eol --ignore-blank-lines` is the
+	# intentional choice (`-w` would discard semantic Python/YAML
+	# indentation changes). Lock it in so a regression to `-w` fails
+	# loudly and reviewers see why this matters.
+	assert "git diff --quiet --ignore-space-at-eol --ignore-blank-lines" in codex_block, (
+		"the substantive-change probe must use --ignore-space-at-eol + "
+		"--ignore-blank-lines, NOT -w. -w drops leading-whitespace diffs, "
+		"which are semantic in Python/YAML/Makefiles and would cause an "
+		"indentation-only fix to be misclassified as trivial and discarded"
+	)
+	assert " -w " not in (
+		"\n".join(
+			line for line in codex_block.splitlines()
+			if "git diff --quiet" in line and "ignore-blank-lines" in line
+		)
+	), (
+		"the substantive-change probe must not use `-w`; the indentation-"
+		"semantic regression case (Python dedent fixes scope, YAML re-"
+		"indent restructures keys) requires `--ignore-space-at-eol` to "
+		"keep semantic indentation changes substantive"
+	)
+
+
+def test_retry_nudge_includes_apply_patch_directive() -> None:
+	"""Pin Fix #4-generic: the retry preamble that fires when an
+	attempt produces no file changes must include actionable guidance
+	(use apply_patch, don't read more files until first patch lands)
+	rather than just chiding ("you MUST create or edit files"). The
+	chiding-only version was already there; this clause is what
+	moves the model from "describe the changes" → "execute them".
+	"""
+	codex_block = _step_block_text("Run Codex implementation")
+	assert "apply_patch`" in codex_block, (
+		"retry preamble must name `apply_patch` as the preferred edit "
+		"tool — `sed`/`grep` shell-out workarounds routinely fail "
+		"shell quoting on literal special chars and waste the attempt"
+	)
+	assert "Pick the single file you understand best" in codex_block, (
+		"retry preamble must instruct the model to pick a single file and "
+		"edit it before expanding scope, since the bitsafe.io / "
+		"tele-funtoken-msg-scoring failure mode was the model spending the "
+		"full budget on recon"
+	)
+	assert "before expanding scope" in codex_block, (
+		"retry preamble must explicitly bound recon — the 'before expanding "
+		"scope' clause is the constraint that prevents wide reads ahead of "
+		"the first successful write"
+	)
+	assert "git diff --stat" in codex_block, (
+		"retry preamble must point the model at `git diff --stat` as the "
+		"verification step so it confirms the write tool actually landed "
+		"before continuing — the announce-without-emit failure mode burns "
+		"the budget when the model trusts its own narrative"
+	)
+
+
+def test_failure_diagnostics_posted_to_source_issue() -> None:
+	"""Pin Fix #5: when the loop exits without success (5/5 attempts
+	exhausted OR an early-bail flag tripped), the workflow must post
+	a per-attempt diagnostics report to the source issue so the
+	orchestrator and the next operator can debug without re-downloading
+	the 24K-line job log. Mirrors the validation-harness exit-14
+	pattern documented in the spec.
+	"""
+	codex_block = _step_block_text("Run Codex implementation")
+	# Per-attempt log capture must be wired into the stderr tee.
+	assert "codex_log_attempt_${attempt}.txt" in codex_block, (
+		"per-attempt log files must accumulate alongside the cumulative "
+		"codex_log.txt so the diagnostics block can tail each attempt"
+	)
+	# Final-failure diagnostics block must check implement_succeeded
+	# AFTER the loop, branch on which flag tripped, and assemble a
+	# diagnostics file before posting to the issue.
+	assert 'if [ "${implement_succeeded}" != "true" ]; then' in codex_block, (
+		"diagnostics block must run on any failure path (5/5 exhausted "
+		"OR early-bail), not only when the final attempt fails"
+	)
+	assert "codex_failure_diagnostics.md" in codex_block, (
+		"diagnostics file must have a stable name so future tooling "
+		"can read it"
+	)
+	assert "${implement_engine_name} bailed: request_user_input rejected" in codex_block, (
+		"diagnostics reason must distinguish the request_user_input "
+		"bail so the orchestrator can route accordingly"
+	)
+	# Align with the post-#1864 wording which broadens the diag_reason
+	# to cover both empty-output AND announced-edit-without-changes
+	# contributors that now feed the same streak counter. Strict match
+	# (not "old OR new") so an accidental revert of the #1864 wording
+	# fails this regression test loudly.
+	assert "consecutive attempts with no actionable output" in codex_block, (
+		"diagnostics reason must distinguish the empty-streak bail "
+		"from the 5/5 exhausted path"
+	)
+	assert "tail -n 40" in codex_block, (
+		"diagnostics must include the last 40 lines of each per-attempt "
+		"log — small enough to fit in a GitHub issue comment, large "
+		"enough to capture the actual failure tail"
+	)
+	# SECURITY: the per-attempt stderr tail can include tool output
+	# (apply_patch diffs, cat/sed results) carrying repo file content
+	# — so credentials present in any touched file would leak into a
+	# public GitHub issue comment without redaction. Pin the same
+	# keyword list and high-entropy guard the validator uses, so a
+	# regression dropping the redaction (or out-of-sync keyword lists)
+	# fails the test.
+	#
+	# Naive substring (`"token" in codex_block`) is unreliable — words
+	# like "token" / "secret" appear in many places in the step
+	# (env names, GH_TOKEN, comments, gh-issue-comment messages). To
+	# avoid incidental false-positives masking a regression, extract
+	# the actual `match(lower, /^...(<alternation>)...$/)` regex
+	# alternation from the awk block and check membership against
+	# just that. The same check runs against
+	# `scripts/validate_changed_files_syntax.sh` to catch drift
+	# between the two duplicated redaction implementations — there is
+	# only ONE policy, encoded in two places, and both must contain
+	# every keyword.
+	#
+	# Membership is by EXACT alternation entry (`alt.split("|")`),
+	# not substring — otherwise removing standalone `token` from the
+	# alternation would still pass because `auth[_-]?token` contains
+	# the substring `token`. The reviewer-flagged regression mode.
+	def extract_redaction_alternation(text: str, source: str) -> list[str]:
+		# The redaction regex looks like:
+		#   match(lower, /^[[:space:]-]*[a-z0-9_.-]*(secret|token|...|bearer)[a-z0-9_.-]*/)
+		# Anchor on `match(lower,` and the alternation parens; allow
+		# arbitrary whitespace around the awk-regex bracket-class
+		# prefix/suffix so harmless awk refactors (extra newlines,
+		# different whitespace) don't break extraction. The
+		# alternation runs to the matching `)` followed by the
+		# `[a-z0-9_.-]*` suffix — anchoring on that suffix avoids
+		# being fooled by any nested `)` inside future keyword
+		# patterns.
+		m = re.search(
+			r"match\(\s*lower\s*,\s*/[^/]*?\(([^)]+)\)\[a-z0-9_\.-\]\*",
+			text,
+			re.DOTALL,
+		)
+		assert m is not None, (
+			f"could not locate the secret-keyword alternation in {source}; "
+			"either the redaction awk was removed or its shape changed "
+			"materially and this test needs updating to match"
+		)
+		return m.group(1).split("|")
+
+	expected_keywords = (
+		"secret", "token", "password", "passwd", "credential",
+		"api[_-]?key", "private[_-]?key", "access[_-]?key",
+		"auth[_-]?token", "client[_-]?secret", "bearer",
+	)
+
+	# (i) Diagnostics-tail redaction in implement.yml's "Run Codex
+	#     implementation" step.
+	implement_alts = extract_redaction_alternation(
+		codex_block, "implement.yml diagnostics-tail awk"
+	)
+	for keyword in expected_keywords:
+		assert keyword in implement_alts, (
+			f"diagnostics tail-redaction (implement.yml) must include the "
+			f"'{keyword}' secret-key keyword as a STANDALONE alternation "
+			f"entry in its awk regex. Found alternation: {implement_alts!r}. "
+			"(Substring match is not enough — `token` substring-matches "
+			"`auth[_-]?token`, so a regression dropping standalone `token` "
+			"would slip through a substring check.)"
+		)
+
+	# (ii) Validator offending-bytes redaction in
+	#      scripts/validate_changed_files_syntax.sh — the policy MUST
+	#      stay synchronised with the diagnostics path, so check it
+	#      against the same keyword list with the same exact-entry
+	#      semantics.
+	validator_text = (
+		REPO_ROOT / "scripts" / "validate_changed_files_syntax.sh"
+	).read_text(encoding="utf-8")
+	validator_alts = extract_redaction_alternation(
+		validator_text, "validate_changed_files_syntax.sh awk"
+	)
+	for keyword in expected_keywords:
+		assert keyword in validator_alts, (
+			f"validator offending-bytes redaction (validate_changed_files_"
+			f"syntax.sh) must include the '{keyword}' secret-key keyword "
+			f"as a STANDALONE alternation entry. Found alternation: "
+			f"{validator_alts!r}. The validator capture is later embedded "
+			"in prompts and posted to issues by the diagnose fallback path."
+		)
+
+	# (iii) Lockstep: the two alternations must be identical (same
+	#       keywords, same order). Drift between them means one path
+	#       redacts and the other doesn't.
+	assert implement_alts == validator_alts, (
+		"implement.yml diagnostics-tail and validate_changed_files_syntax.sh "
+		"redaction alternations have drifted apart — they must stay "
+		"identical so adding/removing a keyword affects both paths "
+		"atomically.\n"
+		f"implement.yml entries: {implement_alts!r}\n"
+		f"validator.sh entries:  {validator_alts!r}"
+	)
+
+	assert "<redacted: secret-like key>" in codex_block, (
+		"diagnostics tail-redaction must replace secret-keyword lines "
+		"with the standard redaction marker (lockstep with the validator)"
+	)
+	assert "<redacted: long opaque token>" in codex_block, (
+		"diagnostics tail-redaction must replace high-entropy value "
+		"lines with the standard redaction marker"
+	)
+	assert "tolower(line)" in codex_block, (
+		"diagnostics tail-redaction must use tolower() rather than "
+		"GNU-only `IGNORECASE = 1` so mixed-case keys (Api_Token, "
+		"AUTH_TOKEN) redact on POSIX/BSD/mawk runtimes too"
+	)
+	assert 'gh issue comment "${ISSUE_NUMBER}"' in codex_block, (
+		"diagnostics must be posted to the source issue (not just left "
+		"in /tmp); the orchestrator polls comments to pick recovery actions"
+	)
+	# gh failure must not abort the job — the diagnostics file is
+	# preserved locally as a fallback.
+	assert "Could not post ${implement_engine_name} failure diagnostics" in codex_block, (
+		"a failed gh issue comment must downgrade to a warning, not "
+		"abort the job — the underlying Codex failure is still the "
+		"primary signal"
+	)
+	# CRITICAL: the gh-issue-comment guard checks `[ -n "${GH_TOKEN:-}" ]`.
+	# If GH_TOKEN isn't in the step's `env:` block, the guard always
+	# fails and the entire diagnostics-posting branch is dead code —
+	# the same regression that the multi-model consensus review caught
+	# on commit 523cc99. Parse the workflow YAML and look up the
+	# step's env directly so this assertion is robust to harmless
+	# workflow refactors (re-ordering, run-syntax changes, etc.) — a
+	# previous fixed-anchor implementation was flagged as brittle in
+	# review.
+	import yaml as _yaml
+	wf_doc = _yaml.safe_load(_workflow_text())
+	codex_step_env: dict | None = None
+	for job in (wf_doc.get("jobs") or {}).values():
+		for step in (job.get("steps") or []):
+			if isinstance(step, dict) and step.get("name") == "Run Codex implementation":
+				codex_step_env = step.get("env") or {}
+				break
+		if codex_step_env is not None:
+			break
+	assert codex_step_env is not None, (
+		"could not locate `Run Codex implementation` step in workflow YAML"
+	)
+	assert "GH_TOKEN" in codex_step_env, (
+		"`Run Codex implementation` step must declare GH_TOKEN in its "
+		"env: block so the Fix #5 diagnostics-posting branch (`gh issue "
+		"comment`) can authenticate. Without it, the `[ -n \"${GH_TOKEN:-}\" ]` "
+		"guard is always false and the whole diagnostics feature is dead "
+		f"code at runtime. Step env keys: {sorted(codex_step_env.keys())}"
+	)
+	assert "${{ secrets.GH_PAT }}" in str(codex_step_env["GH_TOKEN"]), (
+		"GH_TOKEN must reference `${{ secrets.GH_PAT }}` (the workflow's "
+		"canonical secret name for GitHub auth — every other gh-using "
+		"step in this workflow uses the same name). Found: "
+		f"{codex_step_env['GH_TOKEN']!r}"
+	)
+
+
+def test_validator_offending_bytes_redacts_secrets() -> None:
+	"""Pin the SECURITY hardening on `append_checker_error`'s offending-
+	bytes block. The block dumps file contents around a syntax error
+	into the capture file, which is later embedded into prompts AND
+	posted to GitHub issues by the diagnose fallback path. Without
+	guardrails, a syntax error in a credential-bearing config could
+	exfiltrate secrets to public issue text.
+
+	Two layered guards (per Copilot review):
+	(a) Path denylist: skip the dump for files whose names match
+	    common secret-bearing patterns (.env, *secret*, *.pem, ...).
+	(b) Per-line redaction: replace lines whose key contains
+	    secret-like keywords (token/password/api_key/...) or whose
+	    value contains a long opaque token with a redaction marker.
+	"""
+	with tempfile.TemporaryDirectory(prefix="test_validator_redact_") as td:
+		repo_dir = Path(td)
+		_bootstrap_git_repo(repo_dir)
+		# (b) Per-line redaction: file with credential lines + a YAML
+		#     syntax error on the line AFTER them. Includes a mixed-
+		#     case key (`Api_Token`) on line 5 (within the ±2 window
+		#     of the line-7 error) to exercise the portability fix
+		#     for GNU-only `IGNORECASE = 1` (replaced with tolower()
+		#     so non-GNU awk also redacts mixed-case keys).
+		#
+		# Layout (line numbers):
+		#   1: service:
+		#   2:   name: foo
+		#   3:   url: http://example.com
+		#   4:   api_token: sk-...     <- in window, exact-case
+		#   5:   Api_Token: sk-...     <- in window, MIXED CASE (key fix)
+		#   6:   password: hunter2-... <- in window
+		#   7:   - `bad scalar         <- ERROR LINE
+		(repo_dir / "config.yml").write_text(
+			"service:\n"
+			"  name: foo\n"
+			"  url: http://example.com\n"
+			"  api_token: sk-1234567890abcdef1234567890abcdef1234567890abcdef\n"
+			"  Api_Token: sk-mixed-case-1234567890abcdef1234567890abcdef\n"
+			"  password: hunter2-very-secret\n"
+			"  - `bad scalar that breaks YAML\n",
+			encoding="utf-8",
+		)
+		# (a) Path denylist: secret-named file with the same syntax error.
+		(repo_dir / ".env.broken.yml").write_text(
+			"items:\n"
+			"  - alpha\n"
+			"  - beta\n"
+			"  - gamma\n"
+			"  - delta\n"
+			"  - `bad scalar\n",
+			encoding="utf-8",
+		)
+		# Control: innocuous file with same error — should dump fully.
+		(repo_dir / "innocuous.yml").write_text(
+			"items:\n"
+			"  - alpha\n"
+			"  - beta\n"
+			"  - gamma\n"
+			"  - delta\n"
+			"  - `bad scalar\n",
+			encoding="utf-8",
+		)
+		capture_path = repo_dir / "captured.txt"
+		env = _isolated_test_env(
+			{
+				"CAPTURE_FILE": str(capture_path),
+				"ALLOW_WORKFLOW_EDITS": "true",
+			},
+			cwd=repo_dir,
+		)
+		validator = REPO_ROOT / "scripts" / "validate_changed_files_syntax.sh"
+		subprocess.run(
+			["bash", str(validator)],
+			cwd=str(repo_dir),
+			env=env,
+			capture_output=True,
+			text=True,
+		)
+		assert capture_path.exists(), "validator must produce CAPTURE_FILE"
+		captured = capture_path.read_text(encoding="utf-8")
+		# (b) Per-line redaction must hide credential values from
+		#     config.yml. The actual secrets must NOT appear in the
+		#     capture; the redaction marker must.
+		assert "sk-1234567890abcdef" not in captured, (
+			"api_token value MUST be redacted from the offending-bytes "
+			"dump — leaking it would exfiltrate the secret into prompts "
+			"and issue text. Got:\n" + captured
+		)
+		assert "sk-mixed-case-1234567890abcdef" not in captured, (
+			"MIXED-CASE `Api_Token` value MUST be redacted on POSIX/BSD "
+			"awk runtimes too — `BEGIN { IGNORECASE = 1 }` is a GNU "
+			"extension and silently no-ops elsewhere. The portable "
+			"replacement is tolower() + lowercase-only regex. If this "
+			"fails, mixed-case secrets evade redaction on non-GNU awk. "
+			"Got:\n" + captured
+		)
+		assert "hunter2-very-secret" not in captured, (
+			"password value MUST be redacted from the offending-bytes "
+			"dump. Got:\n" + captured
+		)
+		assert "<redacted: secret-like key>" in captured, (
+			"redaction marker must replace each suppressed line so the "
+			"repair model still sees the file structure (line numbers + "
+			"placeholder) without the actual credentials"
+		)
+		# (a) Path denylist must suppress the entire dump for .env*.
+		assert "Offending bytes (suppressed: file path matches secret-bearing pattern)" in captured, (
+			"secret-named files (.env*, *.pem, etc.) must produce a "
+			"path-denylist suppression marker instead of any file content. "
+			"Got:\n" + captured
+		)
+		# Innocuous file must still dump in full — the redaction must
+		# not be over-broad.
+		assert "  6:   - `bad scalar" in captured, (
+			"innocuous file (no secrets in name or content) must still "
+			"surface its offending line content — the redaction is "
+			"targeted, not an indiscriminate suppression. Got:\n" + captured
+		)
+
+
+def test_handle_noop_guard_zero_closes_with_ai_closed() -> None:
+	noop_block = _step_block_text("Handle no-op implementation")
+	# Guard 0 must run BEFORE Guard 1 (pathspec hard-fail) and Guard 2
+	# (ancestor-chain cap); otherwise surviving .codex-workflow-src* paths
+	# in remaining_changes would falsely trip Guard 1.
+	g0_idx = noop_block.find('codex_success_noop.flag')
+	g1_idx = noop_block.find("Guard 1 (Q2): pathspec hard-fail")
+	g2_idx = noop_block.find("Guard 2 (Q1): ancestor-chain no-op cap")
+	assert g0_idx != -1, "Guard 0 (success-no-op) flag check must be present"
+	assert g1_idx != -1 and g0_idx < g1_idx, "Guard 0 must run before Guard 1"
+	assert g2_idx != -1 and g0_idx < g2_idx, "Guard 0 must run before Guard 2"
+	# Guard 0 closes with ai:closed (not ai:implementation-failed, not ai:needs-human).
+	guard_zero_region = noop_block[g0_idx:g1_idx]
+	assert "--add-label 'ai:closed'" in guard_zero_region, (
+		"Guard 0 must apply ai:closed so the orchestrator treats it as terminal "
+		"and the wave-completion judge verifies"
+	)
+	assert "gh issue close" in guard_zero_region, "Guard 0 must close the issue"
+	assert "exit 0" in guard_zero_region, (
+		"Guard 0 must exit 0 to prevent falling through to Guards 1/2 or the "
+		"legacy ai:implementation-failed path"
+	)
+
+
+def test_failure_log_artifact_upload_contract() -> None:
+	"""Pin the failure-only codex-log artifact upload added in #1940.
+
+	The artifact captures per-attempt stderr (codex_log_attempt_*.txt — the
+	only place the OpenRouter response / finish_reason / tool-router
+	rejection surfaces), the combined codex log, codex stdout, the assembled
+	prompt, the diagnose-step outputs, and the codex CLI's own ~/.codex/log
+	directory (raw HTTP wire logs). This exists because the redacted last-
+	40-stderr-lines diagnostic comment posted by the "Run Codex
+	implementation" step is not enough to root-cause empty-completion
+	failures.
+	"""
+	stage_block = _step_block_text("Stage codex logs for upload (failure only)")
+	upload_block = _step_block_text("Upload codex logs (failure only)")
+	cleanup_block = _step_block_text("Cleanup temporary artifacts")
+
+	# Both staging and upload must gate on failure() OR cancelled() so a
+	# successful run leaves zero artifact artefacts. Both also gate on the
+	# env vars they read so an early-skip path (env unset) doesn't try to
+	# stage a directory that doesn't exist.
+	assert "if: (failure() || cancelled()) && env.RUNTIME_DIR != ''" in stage_block, (
+		"Stage step must gate on failure() || cancelled() AND RUNTIME_DIR being "
+		"set, so early-skip paths don't try to stage a non-existent dir"
+	)
+	assert "if: (failure() || cancelled()) && env.CODEX_FAILURE_LOG_DIR != ''" in upload_block, (
+		"Upload step must gate on failure() || cancelled() AND the env var "
+		"the staging step exports, so the upload doesn't fire when staging "
+		"was skipped"
+	)
+
+	# Staging dir must live under RUNNER_TEMP, not directly in RUNTIME_DIR,
+	# so it survives the cleanup step's rm -rf "${RUNTIME_DIR}".
+	assert 'STAGE_DIR="${RUNNER_TEMP:-/tmp}/codex-implement-failure-logs"' in stage_block, (
+		"Staging dir must be rooted at RUNNER_TEMP so the existing "
+		"Cleanup step that wipes RUNTIME_DIR doesn't also wipe the "
+		"about-to-be-uploaded files"
+	)
+
+	# The per-attempt stderr captures are the critical artefact — every
+	# other file is bonus context. Pin the glob explicitly so a refactor
+	# that drops it fails this test.
+	assert 'codex_log_attempt_*.txt' in stage_block, (
+		"Per-attempt stderr captures (codex_log_attempt_*.txt) are the "
+		"primary artefact — they hold the only model-side output we have "
+		"for empty-completion debugging"
+	)
+	# And the combined log + prompt + stdout + diagnose outputs.
+	for f in (
+		"codex_log.txt",
+		"codex_output.txt",
+		"codex_prompt.txt",
+		"post_codex_validation_errors.txt",
+		"implement_diagnose.log",
+		"implement_diagnose_output.txt",
+		"implement_diagnose_result.json",
+	):
+		assert f in stage_block, (
+			f"Staging step must copy {f} so post-mortem has the full "
+			f"context block, not just per-attempt stderr"
+		)
+
+	# ~/.codex/log must be copied WITHOUT a wall-clock filter — the job
+	# can run for up to 180 min and a single Codex attempt up to 130 min,
+	# so any -mmin -N filter risks dropping the earliest session log on a
+	# multi-retry failure (Copilot review on PR #1940). The cleanup +
+	# retention-days bound storage cost instead.
+	assert '${CODEX_HOME:-$HOME/.codex}/log' in stage_block, (
+		"Staging step must copy ~/.codex/log (the codex CLI's own session "
+		"log directory — raw HTTP wire logs)"
+	)
+	assert '-mmin' not in stage_block, (
+		"Do NOT use a -mmin filter on the ~/.codex/log copy: a single "
+		"Codex attempt can run 130 min (IMPLEMENT_MAX_WALL=7800s) and a "
+		"job can run 180 min, so any wall-clock filter risks dropping "
+		"the earliest session log on a multi-retry failure — exactly "
+		"the case this artifact exists for"
+	)
+
+	# The artifact name must be unique per (run_id, run_attempt) so a
+	# rerun-failed-jobs invocation doesn't conflict with the prior
+	# attempt's upload.
+	assert 'codex-implement-failure-logs-${{ github.run_id }}-${{ github.run_attempt }}' in upload_block, (
+		"Artifact name must be unique per (run_id, run_attempt) so "
+		"rerun-failed-jobs doesn't 409 on a duplicate name"
+	)
+	assert 'if-no-files-found: ignore' in upload_block, (
+		"Upload step must fail-open on empty staging dir so an early-skip "
+		"failure path doesn't add a second cascading failure"
+	)
+	assert 'retention-days:' in upload_block, (
+		"Upload step must declare retention-days explicitly (artifacts "
+		"can otherwise hit the org-default ceiling and get pruned at "
+		"unpredictable times)"
+	)
+
+	# The cleanup step must also rm the staging dir on a warm runner so
+	# the next implement job on the same runner doesn't see a stale
+	# CODEX_FAILURE_LOG_DIR pointing at a previous run's files.
+	assert 'CODEX_FAILURE_LOG_DIR' in cleanup_block, (
+		"Cleanup step must remove CODEX_FAILURE_LOG_DIR so warm runners "
+		"don't leak stale staging dirs across implement jobs"
+	)
+	assert 'codex-implement-failure-logs' in cleanup_block, (
+		"Cleanup step's rm guard must reference the same staging-dir "
+		"name as the staging step — drift between the two would leave "
+		"stale dirs on warm runners"
+	)
+
+
+def _run_smoke_detection_step(
+	*,
+	issue_title: str,
+	issue_body: str,
+	default_model: str = "openai/gpt-5.4",
+	missing_body_file: bool = False,
+) -> dict[str, str]:
+	"""Run the implement.yml "Detect smoke test ..." step in isolation
+	and return the GITHUB_ENV exports it produced.
+
+	Mirrors the helper pattern used elsewhere in this file: extract the
+	`run:` block from the workflow, render the GitHub expressions out,
+	and execute under bash with the env vars the real job would have
+	set in earlier steps.
+	"""
+
+	script = _render_github_expressions(_extract_run_script("Detect smoke test and silence Telegram alerts"))
+	with tempfile.TemporaryDirectory(prefix="test_smoke_") as tmp:
+		tmp_path = Path(tmp)
+		github_env = tmp_path / "github_env"
+		github_env.write_text("", encoding="utf-8")
+		issue_body_file = tmp_path / "issue_body.txt"
+		if not missing_body_file:
+			issue_body_file.write_text(issue_body + "\n", encoding="utf-8")
+		env = os.environ.copy()
+		env.update(
+			{
+				"ISSUE_TITLE": issue_title,
+				"ISSUE_BODY_FILE": str(issue_body_file),
+				"MODEL_EDITOR": default_model,
+				"SKIP_IMPLEMENT": "false",
+				"GITHUB_ENV": str(github_env),
+			}
+		)
+		proc = _run_shell_script(script, cwd=tmp_path, env=env)
+		assert proc.returncode == 0, (
+			"smoke detection step failed:\n"
+			f"stdout:\n{proc.stdout}\n"
+			f"stderr:\n{proc.stderr}\n"
+		)
+		return _parse_github_output(github_env)
+
+
+def test_alt_model_smoke_override_parses_valid_body() -> None:
+	"""[E2E Smoke Test alt-model] title + valid Note line → MODEL_EDITOR
+	overridden to the model named in the issue body.
+
+	Closes the propagation gap acknowledged in PR #1913 body and never
+	wired since PR #1841 introduced e2e-alt-model-test.
+	"""
+
+	body = (
+		"## Task\n"
+		"Update canary file.\n\n"
+		"## Constraints\n"
+		"- Only modify `tests/e2e_smoke_canary.txt`.\n"
+		"- Note: this run uses `anthropic/claude-sonnet-4-6` as the editor model override."
+	)
+	exports = _run_smoke_detection_step(
+		issue_title="[E2E Smoke Test alt-model] update canary (run 123)",
+		issue_body=body,
+	)
+	assert exports.get("IS_SMOKE_TEST") == "true"
+	assert exports.get("MODEL_EDITOR") == "anthropic/claude-sonnet-4-6", (
+		"alt-model override must propagate from issue body to MODEL_EDITOR; "
+		f"got exports={exports}"
+	)
+
+
+def test_alt_model_override_inert_on_regular_smoke_title() -> None:
+	"""Regular [E2E Smoke Test] (no alt-model sub-tag) leaves MODEL_EDITOR
+	at the workflow-level default — even when the body carries a
+	"this run uses ..." line. Prevents drift between the regular smoke
+	job and the alt-model variant.
+	"""
+
+	body = "Note: this run uses `anthropic/claude-sonnet-4-6` as the editor model override."
+	exports = _run_smoke_detection_step(
+		issue_title="[E2E Smoke Test] update canary",
+		issue_body=body,
+	)
+	assert exports.get("IS_SMOKE_TEST") == "true"
+	assert "MODEL_EDITOR" not in exports, (
+		"Regular smoke title must not trigger MODEL_EDITOR override; "
+		f"got exports={exports}"
+	)
+
+
+def test_alt_model_override_inert_on_production_title() -> None:
+	"""Production issue (no smoke title at all) cannot smuggle a model
+	override via its body. Trust-boundary check — the body is
+	user-controlled, so the gate must be the title.
+	"""
+
+	body = "Note: this run uses `evil/model` as the editor model override."
+	exports = _run_smoke_detection_step(
+		issue_title="Add a feature to the repo",
+		issue_body=body,
+	)
+	assert "IS_SMOKE_TEST" not in exports
+	assert "MODEL_EDITOR" not in exports, (
+		"Production title must never accept body-supplied MODEL_EDITOR; "
+		f"got exports={exports}"
+	)
+
+
+def test_alt_model_override_falls_back_when_body_file_is_missing() -> None:
+	exports = _run_smoke_detection_step(
+		issue_title="[E2E Smoke Test alt-model] update canary",
+		issue_body="Note: this run uses `anthropic/claude-sonnet-4-6` as the editor model override.",
+		missing_body_file=True,
+	)
+	assert exports.get("IS_SMOKE_TEST") == "true"
+	assert "MODEL_EDITOR" not in exports
+
+
+def test_alt_model_override_falls_back_on_malformed_body() -> None:
+	"""Alt-model title with a body that fails the shape regex (shell
+	metacharacters, missing slash, oversized) leaves MODEL_EDITOR alone
+	rather than failing the implement run. Fail-open behaviour matches
+	the dispatcher's own validation in test-and-mark-stable.yml.
+	"""
+
+	cases = [
+		# Shell injection attempt — backtick token contains spaces / ;
+		"Note: this run uses `evil; rm -rf /` as the editor model override.",
+		# No slash → shape regex rejects
+		"Note: this run uses `badmodel` as the editor model override.",
+		# No Note line at all
+		"Just a plain body without the override directive.",
+	]
+	for body in cases:
+		exports = _run_smoke_detection_step(
+			issue_title="[E2E Smoke Test alt-model] update canary",
+			issue_body=body,
+		)
+		assert exports.get("IS_SMOKE_TEST") == "true"
+		assert "MODEL_EDITOR" not in exports, (
+			f"Malformed alt-model body must fall through to default MODEL_EDITOR; "
+			f"body={body!r}, exports={exports}"
+		)
+
+
+def test_review_pipeline_integration_chain_module_runs_clean() -> None:
+	# The chain runs scripts/review_issue_ledger.sh and
+	# scripts/review_parse_consolidator.sh, which need gawk. Skip explicitly
+	# instead of passing on a module whose own tests all skipped.
+	if shutil.which("gawk") is None:
+		raise unittest.SkipTest("gawk is required by the review ledger/parser scripts")
+	integration_test = REPO_ROOT / "tests" / "test_review_pipeline_integration.py"
+	env = os.environ.copy()
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	result = subprocess.run(
+		["python3", str(integration_test)],
+		cwd=str(REPO_ROOT),
+		env=env,
+		capture_output=True,
+		text=True,
+		timeout=180,
+	)
+	assert result.returncode == 0, (
+		"review pipeline integration test failed\n"
+		f"stdout:\n{result.stdout}\n"
+		f"stderr:\n{result.stderr}"
+	)
+
+# Phase 5b (replace-claude-sessions plan): a stand-in for scripts/ai_engine.sh
+# whose claude_run records its arguments and plays the scenario in
+# MOCK_CLAUDE_MODE: success writes MOCK_CODEX_OUTPUT, unavailable returns 75,
+# crash returns 1.
+FAKE_DIAGNOSE_AI_ENGINE = r"""claude_run() {
+  printf '%s|%s|%s|%s|%s\n' "$1" "$(basename "$2")" "$(basename "$3")" "${AI_ENGINE_MODEL_HINT:-}" "${AI_ENGINE_EFFORT_HINT:-}" >> "${MOCK_CLAUDE_CALLS_FILE}"
+  case "${MOCK_CLAUDE_MODE:-success}" in
+    success) printf '%s\n' "${MOCK_CODEX_OUTPUT}" > "$3"; return 0 ;;
+    unavailable) echo "AI_ENGINE_FALLBACK role=$1 reason=no_credential" >&2; return 75 ;;
+    *) return 1 ;;
+  esac
+}
+"""
+
+_DIAGNOSE_OK_OUTPUT = {
+	"status": "needs_fixes",
+	"diagnosis": "diag",
+	"evidence_trace": [
+		{"file": "broken.yml", "line": 1, "function": "document", "observation": "error"},
+	],
+	"hypothesis": "diag hypothesis",
+	"fix_issues": [{"id": "fix-1", "title": "Fix 1", "body": "Body", "priority": 1, "depends_on": []}],
+	"harness_fixes": "",
+}
+
+
+def _run_diagnose_on_engine(tmp_path: Path, engine: str, claude_mode: str) -> tuple[subprocess.CompletedProcess[str], dict[str, str], str]:
+	claude_calls = tmp_path / "claude_calls.log"
+	proc, _state, _runtime_dir, paths = _run_diagnose_step(
+		tmp_path,
+		issue_labels=["ai:implementing"],
+		capture_contents="===== broken.yml =====\nerror\n",
+		codex_mode="success",
+		codex_output=_DIAGNOSE_OK_OUTPUT,
+		failed_step_name="Validate syntax of changed files",
+		issue_body="Tracking issue: #829\n",
+		fake_ai_engine=FAKE_DIAGNOSE_AI_ENGINE,
+		extra_env={
+			"AI_ENGINE_RESOLVED_IMPLEMENT_DIAGNOSE": engine,
+			"MODEL_DIAGNOSE_REASONING_EFFORT": "high",
+			"MOCK_CLAUDE_MODE": claude_mode,
+			"MOCK_CLAUDE_CALLS_FILE": str(claude_calls),
+		},
+	)
+	return proc, paths, _read_file(str(claude_calls))
+
+
+def test_diagnose_on_claude_runs_claude_and_never_codex() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		proc, paths, claude_calls = _run_diagnose_on_engine(Path(td), "claude", "success")
+		assert proc.returncode == 0, proc.stderr
+		assert claude_calls.splitlines() == [
+			"IMPLEMENT_DIAGNOSE|implement_diagnose_prompt.txt|implement_diagnose_output.txt|openai/gpt-5.4|high",
+		]
+		assert _read_file(paths["calls_file"]).strip() == ""
+		assert "handled=true" in _read_file(paths["github_output"])
+		assert json.loads(_read_file(paths["result_file"]))["status"] == "needs_fixes"
+
+
+def test_diagnose_claude_uses_role_specific_effort_and_timeout() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		claude_calls = Path(td) / "claude_calls.log"
+		proc, _state, _runtime_dir, paths = _run_diagnose_step(
+			Path(td),
+			issue_labels=["ai:implementing"],
+			capture_contents="===== broken.yml =====\nerror\n",
+			codex_mode="success",
+			codex_output=_DIAGNOSE_OK_OUTPUT,
+			failed_step_name="Validate syntax of changed files",
+			issue_body="Tracking issue: #829\n",
+			fake_ai_engine=FAKE_DIAGNOSE_AI_ENGINE,
+			extra_env={
+				"AI_ENGINE_RESOLVED_IMPLEMENT_DIAGNOSE": "claude",
+				"MODEL_DIAGNOSE_REASONING_EFFORT": "medium",
+				"MOCK_CLAUDE_MODE": "success",
+				"MOCK_CLAUDE_CALLS_FILE": str(claude_calls),
+			},
+		)
+		assert proc.returncode == 0, proc.stderr
+		assert claude_calls.read_text(encoding="utf-8").strip().endswith("|medium")
+		assert _read_file(paths["calls_file"]).strip() == ""
+		diagnose = (REPO_ROOT / "scripts" / "implement_diagnose_post_codex_failure.sh").read_text(encoding="utf-8")
+		assert 'timeout --signal=TERM --kill-after=5s "${IMPLEMENT_DIAGNOSE_TIMEOUT_SEC}"s bash -c' in diagnose
+
+
+def test_diagnose_claude_unavailable_runs_the_unchanged_codex_call() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		proc, paths, claude_calls = _run_diagnose_on_engine(Path(td), "claude", "unavailable")
+		assert proc.returncode == 0, proc.stderr
+		assert len(claude_calls.splitlines()) == 1
+		call_lines = [line for line in _read_file(paths["calls_file"]).splitlines() if line.strip()]
+		assert len(call_lines) == 1
+		assert "exec" in json.loads(call_lines[0])
+		assert "handled=true" in _read_file(paths["github_output"])
+		assert json.loads(_read_file(paths["result_file"]))["status"] == "needs_fixes"
+
+
+def test_diagnose_claude_crash_does_not_fall_back_to_codex() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		_proc, paths, claude_calls = _run_diagnose_on_engine(Path(td), "claude", "crash")
+		assert len(claude_calls.splitlines()) == 1
+		assert _read_file(paths["calls_file"]).strip() == ""
+
+
+def test_diagnose_on_codex_never_touches_claude() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_diag_") as td:
+		proc, paths, claude_calls = _run_diagnose_on_engine(Path(td), "codex", "success")
+		assert proc.returncode == 0, proc.stderr
+		assert claude_calls == ""
+		assert len([line for line in _read_file(paths["calls_file"]).splitlines() if line.strip()]) == 1
+
+
+def test_diagnose_codex_command_is_unchanged() -> None:
+	diagnose = (REPO_ROOT / "scripts" / "implement_diagnose_post_codex_failure.sh").read_text(encoding="utf-8")
+	assert (
+		'timeout "${IMPLEMENT_DIAGNOSE_TIMEOUT_SEC}"s "${diagnose_codex_cmd[@]}" --ask-for-approval never -c model_verbosity=low '
+		'-c include_apply_patch_tool=true exec --skip-git-repo-check --model "${DIAGNOSE_MODEL}" --sandbox danger-full-access'
+	) in diagnose
+
+
+_RESTORE_SYMLINK_STEP_A = "Restore tracked symlinks the editor replaced"
+_RESTORE_SYMLINK_STEP_B = "Restore tracked symlinks the syntax-repair editor replaced"
+_RESTORE_SYMLINK_ENV_LINE = (
+	"IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED: ${{ vars.IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED || 'true' }}"
+)
+
+
+def _workflow_step_index(step_name: str) -> int:
+	names = [line.strip() for line in _workflow_text().splitlines() if line.strip().startswith("- name:")]
+	matches = [i for i, name in enumerate(names) if name == f"- name: {step_name}"]
+	assert len(matches) == 1, f"expected exactly one step named {step_name!r}, got {len(matches)}"
+	return matches[0]
+
+
+def _symlink_restore_repo(root: Path) -> Path:
+	repo = root / "repo"
+	_bootstrap_git_repo(repo)
+	(repo / "CLAUDE.md").write_text("root rules\n", encoding="utf-8")
+	(repo / "workflow-templates").mkdir()
+	os.symlink("../CLAUDE.md", repo / "workflow-templates" / "CLAUDE.md")
+	(repo / "src").mkdir()
+	(repo / "src" / "a.txt").write_text("original\n", encoding="utf-8")
+	_git(["git", "add", "-A"], cwd=repo)
+	_git(["git", "commit", "-m", "fixture"], cwd=repo)
+	return repo
+
+
+def _break_tracked_symlink(repo: Path, case: str) -> None:
+	link = repo / "workflow-templates" / "CLAUDE.md"
+	link.unlink()
+	if case == "regular_file":
+		link.write_text("editor copy\n", encoding="utf-8")
+	elif case == "directory":
+		link.mkdir()
+		(link / "dump.txt").write_text("x\n", encoding="utf-8")
+	elif case == "retarget":
+		os.symlink("../src/a.txt", link)
+	elif case != "deleted":
+		raise AssertionError(case)
+	(repo / "src" / "a.txt").write_text("edited by editor\n", encoding="utf-8")
+
+
+def _changed_paths(repo: Path) -> list[str]:
+	env = _isolated_test_env(cwd=repo)
+	out = subprocess.run(
+		["git", "diff", "--name-only", "HEAD"], cwd=str(repo), env=env, check=True, capture_output=True, text=True
+	)
+	return [line for line in out.stdout.splitlines() if line]
+
+
+def _run_symlink_restore(repo: Path, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+	script = _extract_run_script(_RESTORE_SYMLINK_STEP_A)
+	env = {
+		"IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED": "",
+		"STAGED_SUPPORT_LEDGER": "",
+		"FETCHED_MANIFEST": "",
+	}
+	env.update(extra_env or {})
+	result = _run_shell_script(script, cwd=repo, env=env)
+	(repo / "__workflow_step_under_test.sh").unlink(missing_ok=True)
+	return result
+
+
+def test_restore_tracked_symlink_steps_are_placed_before_the_guards() -> None:
+	a = _workflow_step_index(_RESTORE_SYMLINK_STEP_A)
+	b = _workflow_step_index(_RESTORE_SYMLINK_STEP_B)
+	assert _workflow_step_index("Create implementation branch") < a < _workflow_step_index(
+		"Preflight destructive-commit guard"
+	)
+	assert _workflow_step_index("Attempt post-Codex syntax repair") < b
+	assert b < _workflow_step_index("Protect workflow files from implementation edits")
+	assert b < _workflow_step_index("Commit changes")
+
+
+def test_restore_tracked_symlink_steps_share_one_body() -> None:
+	body_a = _extract_run_script(_RESTORE_SYMLINK_STEP_A)
+	body_b = _extract_run_script(_RESTORE_SYMLINK_STEP_B)
+	assert body_a == body_b
+	assert "${{" not in body_a
+	for name in (_RESTORE_SYMLINK_STEP_A, _RESTORE_SYMLINK_STEP_B):
+		block = "\n".join(_step_block(name))
+		assert "if: env.SKIP_IMPLEMENT != 'true'" in block
+		assert _RESTORE_SYMLINK_ENV_LINE in block
+
+
+def test_restore_tracked_symlink_puts_back_every_broken_link_shape() -> None:
+	for case in ("regular_file", "deleted", "directory", "retarget"):
+		with tempfile.TemporaryDirectory() as tmp:
+			repo = _symlink_restore_repo(Path(tmp))
+			_break_tracked_symlink(repo, case)
+			result = _run_symlink_restore(repo)
+			assert result.returncode == 0, (case, result.stdout, result.stderr)
+			link = repo / "workflow-templates" / "CLAUDE.md"
+			assert link.is_symlink(), case
+			assert os.readlink(link) == "../CLAUDE.md", case
+			assert (repo / "CLAUDE.md").read_text(encoding="utf-8") == "root rules\n", case
+			assert (repo / "src" / "a.txt").read_text(encoding="utf-8") == "edited by editor\n", case
+			assert "::warning::Restored tracked symlink workflow-templates/CLAUDE.md" in result.stdout, case
+			assert "restored=1 skipped=0" in result.stdout, case
+			assert _changed_paths(repo) == ["src/a.txt"], case
+
+
+def test_restore_tracked_symlink_regression_shape_without_the_step() -> None:
+	# The #7623 failure shape: without the step the replaced alias stays changed.
+	with tempfile.TemporaryDirectory() as tmp:
+		repo = _symlink_restore_repo(Path(tmp))
+		_break_tracked_symlink(repo, "regular_file")
+		assert "workflow-templates/CLAUDE.md" in _changed_paths(repo)
+
+
+def test_restore_tracked_symlink_switch() -> None:
+	for value, expect_restore in (("false", False), ("FALSE", False), ("bogus", False), ("", True), ("TRUE", True), (None, True)):
+		with tempfile.TemporaryDirectory() as tmp:
+			repo = _symlink_restore_repo(Path(tmp))
+			_break_tracked_symlink(repo, "regular_file")
+			extra: dict[str, str] = {}
+			if value is not None:
+				extra["IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED"] = value
+			script = _extract_run_script(_RESTORE_SYMLINK_STEP_A)
+			env = os.environ.copy()
+			env.pop("IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED", None)
+			env.pop("STAGED_SUPPORT_LEDGER", None)
+			env.pop("FETCHED_MANIFEST", None)
+			env.update(extra)
+			result = _run_shell_script(script, cwd=repo, env=env)
+			(repo / "__workflow_step_under_test.sh").unlink(missing_ok=True)
+			assert result.returncode == 0, (value, result.stderr)
+			assert (repo / "workflow-templates" / "CLAUDE.md").is_symlink() is expect_restore, value
+			if value == "bogus":
+				assert "::warning::IMPLEMENT_RESTORE_TRACKED_SYMLINKS_ENABLED has an unrecognized value" in result.stdout
+				assert "bogus" not in result.stdout + result.stderr
+
+
+def test_restore_tracked_symlink_leaves_commit_step_paths_alone() -> None:
+	for var in ("STAGED_SUPPORT_LEDGER", "FETCHED_MANIFEST"):
+		with tempfile.TemporaryDirectory() as tmp:
+			repo = _symlink_restore_repo(Path(tmp))
+			_break_tracked_symlink(repo, "regular_file")
+			listing = Path(tmp) / "list.txt"
+			listing.write_text("other/path\nworkflow-templates/CLAUDE.md\n", encoding="utf-8")
+			result = _run_symlink_restore(repo, {var: str(listing)})
+			assert result.returncode == 0, (var, result.stderr)
+			assert not (repo / "workflow-templates" / "CLAUDE.md").is_symlink(), var
+			assert "::notice::Left tracked symlink workflow-templates/CLAUDE.md" in result.stdout, var
+
+
+def test_restore_tracked_symlink_refuses_a_symlinked_parent() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		repo = _symlink_restore_repo(Path(tmp))
+		outside = Path(tmp) / "outside"
+		outside.mkdir()
+		(outside / "CLAUDE.md").write_text("keep me\n", encoding="utf-8")
+		shutil.rmtree(repo / "workflow-templates")
+		os.symlink(str(outside), repo / "workflow-templates")
+		result = _run_symlink_restore(repo)
+		assert result.returncode == 0, result.stderr
+		assert "::warning::Skipped tracked symlink workflow-templates/CLAUDE.md (unsafe path)" in result.stdout
+		assert (outside / "CLAUDE.md").read_text(encoding="utf-8") == "keep me\n"
+		assert "restored=0 skipped=1" in result.stdout
+
+
+def test_restore_tracked_symlink_leaves_unchanged_links_alone() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		repo = _symlink_restore_repo(Path(tmp))
+		result = _run_symlink_restore(repo)
+		assert result.returncode == 0, result.stderr
+		assert "Restored tracked symlink" not in result.stdout
+		assert "restored=0 skipped=0" in result.stdout
+		assert _changed_paths(repo) == []
+
+
+# --- Issue #8121: keep pipeline Python bytecode out of consumer implement commits ---
+# Host steps import the helpers "Stage workflow support files" copies into a
+# consumer's scripts/ (memory_helpers.sh -> ai_memory.py -> ai_memory_lib.py ...).
+# Bytecode written next to them landed in scripts/__pycache__/, the commit paths
+# staged it, and the automation-path guard blocked the issue as ai:scope-blocked
+# (mongo-explorer#42, run 40179480717).
+
+_PYCACHE_GITIGNORE_PRINTF = "printf '%s\\n' \"${_fetched_scripts[@]}\" __pycache__/ .gitignore"
+
+
+def _workflow_top_level_env() -> dict[str, str]:
+	env: dict[str, str] = {}
+	in_env = False
+	for line in _workflow_text().splitlines():
+		if line.startswith("env:"):
+			in_env = True
+			continue
+		if not in_env:
+			continue
+		if line and not line.startswith(" ") and not line.startswith("#"):
+			break
+		match = re.match(r"^  ([A-Z0-9_]+):\s*(.*?)\s*$", line)
+		if match:
+			env[match.group(1)] = match.group(2).strip('"').strip("'")
+	return env
+
+
+def test_implement_workflow_disables_python_bytecode_writes() -> None:
+	env = _workflow_top_level_env()
+	assert env, "top-level env: block not found in implement.yml"
+	assert env.get("PYTHONDONTWRITEBYTECODE") == "1", env.get("PYTHONDONTWRITEBYTECODE")
+
+
+def test_generated_scripts_gitignore_excludes_pycache() -> None:
+	script = _extract_run_script("Stage workflow support files")
+	assert _PYCACHE_GITIGNORE_PRINTF in script
+
+
+def _extract_scripts_gitignore_generation(script: str) -> str:
+	end_marker = "} > scripts/.gitignore\nfi\n"
+	end = script.index(end_marker) + len(end_marker)
+	start = script.rindex('if [ "${is_self_repo}" = "false" ]; then', 0, end)
+	return script[start:end]
+
+
+def _extract_staging_block(text: str) -> str:
+	start = text.index("add_u_excludes=(':!node_modules'")
+	reset_line = 'git reset -q HEAD -- "scripts/${fetched_script}"'
+	reset_at = text.index(reset_line, start)
+	end = text.index("\nfi\n", reset_at) + len("\nfi\n")
+	return text[start:end]
+
+
+def test_preflight_and_commit_staging_skip_scripts_pycache() -> None:
+	generation = _extract_scripts_gitignore_generation(_extract_run_script("Stage workflow support files"))
+	stagings = {
+		"preflight": _extract_staging_block(_extract_run_script("Preflight destructive-commit guard")),
+		"commit": _extract_staging_block(_implement_commit_script_text()),
+	}
+	planned = ".github/workflows/claude-auto-review.yml"
+	for label, staging in stagings.items():
+		with tempfile.TemporaryDirectory() as tmp_dir:
+			repo = Path(tmp_dir) / "repo"
+			_bootstrap_git_repo(repo)
+			(repo / planned).parent.mkdir(parents=True)
+			(repo / planned).write_text("name: review\n", encoding="utf-8")
+			_git(["git", "add", planned], cwd=repo)
+			_git(["git", "commit", "-m", "planned file"], cwd=repo)
+			(repo / planned).write_text("name: review\non: push\n", encoding="utf-8")
+			scripts_dir = repo / "scripts"
+			(scripts_dir / "__pycache__").mkdir(parents=True)
+			(scripts_dir / "ai_memory.py").write_text("print('helper')\n", encoding="utf-8")
+			(scripts_dir / "ai_memory_lib.py").write_text("X = 1\n", encoding="utf-8")
+			(scripts_dir / "__pycache__" / "ai_memory_lib.cpython-312.pyc").write_bytes(b"\x00bytecode")
+			(scripts_dir / "consumer_tool.sh").write_text("#!/bin/sh\necho ok\n", encoding="utf-8")
+			script = (
+				"set -euo pipefail\n"
+				"is_self_repo=false\n"
+				"_fetched_scripts=(ai_memory.py ai_memory_lib.py)\n"
+				"is_virtual_cleanup_path() { return 1; }\n"
+				+ generation
+				+ staging
+				+ "git diff --cached --name-only\n"
+			)
+			result = _run_shell_script(
+				script,
+				cwd=repo,
+				env={
+					"GITHUB_REPOSITORY": "owner/consumer",
+					"GIT_CONFIG_GLOBAL": "/dev/null",
+					"GIT_CONFIG_NOSYSTEM": "1",
+				},
+			)
+			assert result.returncode == 0, f"{label}: {result.stderr}"
+			staged = set(result.stdout.split())
+			assert "scripts/consumer_tool.sh" in staged, f"{label}: {staged}"
+			assert planned in staged, f"{label}: {staged}"
+			assert not any(p.startswith("scripts/__pycache__/") for p in staged), f"{label}: {staged}"
+			assert "scripts/ai_memory.py" not in staged, f"{label}: {staged}"
+			assert "scripts/ai_memory_lib.py" not in staged, f"{label}: {staged}"
+			assert "scripts/.gitignore" not in staged, f"{label}: {staged}"
+			gitignore = (scripts_dir / ".gitignore").read_text(encoding="utf-8").splitlines()
+			assert "__pycache__/" in gitignore, f"{label}: {gitignore}"
+
+
+def main() -> int:
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	passed = 0
+	failed = 0
+	skipped = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			if func is test_generated_manifest_staging_excludes_modifications_but_accepts_deletion:
+				with tempfile.TemporaryDirectory() as tmp_dir:
+					func(Path(tmp_dir))
+			else:
+				func()
+			print(f"  PASS  {name}")
+			passed += 1
+		except unittest.SkipTest as e:
+			print(f"  SKIP  {name}: {e}")
+			skipped += 1
+		except Exception as e:
+			print(f"  FAIL  {name}: {e}")
+			failed += 1
+	print(f"\n{passed} passed, {failed} failed, {skipped} skipped, {passed + failed + skipped} total")
+	return 1 if failed > 0 else 0
+
+if __name__ == "__main__":
+	raise SystemExit(main())

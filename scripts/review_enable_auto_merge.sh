@@ -1,0 +1,474 @@
+#!/usr/bin/env bash
+# review_enable_auto_merge.sh — enable or suppress PR auto-merge in
+# review_autofix.yml.
+#
+# Extracted from the workflow's "Enable auto-merge on PR" step so the
+# policy stays local to one helper while preserving the existing env/log
+# contract.
+#
+# Inputs (environment):
+#   GITHUB_REPOSITORY
+#   PR_NUMBER
+#   ENABLE_AUTO_MERGE
+#   FORWARD_MERGE_FALLBACK_AUTO_MERGE
+#   ORCH_INTEGRATION_BRANCH_PATTERN
+#   INITIAL_HEAD_SHA
+#   GH_TOKEN
+#
+# Outputs (via GITHUB_ENV):
+#   AUTO_MERGE_READY_LABELS_ALLOWED — true only when the reviewed head may
+#   receive merge-authorization labels after this helper returns.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/gh_helpers.sh" 2>/dev/null || true
+
+# shellcheck source=/dev/null
+if [ -f "${SCRIPT_DIR}/review_head_gate.sh" ]; then
+	source "${SCRIPT_DIR}/review_head_gate.sh" || true
+fi
+if ! type review_head_gate_post_status >/dev/null 2>&1; then
+	review_head_gate_post_status()
+	{
+		echo "::warning::review_head_gate.sh unavailable; leaving review status pending."
+	}
+fi
+
+type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+
+# Merge-base freshness gate (scripts/pr_checks_lib.sh, operator decision
+# Q35: A): a reviewed head whose base moved under files this PR touches is
+# updated from the base instead of auto-merged, so CI and review run on the
+# combined tree first. The library is a required bootstrap script; a missing
+# copy fails closed: freshness cannot be verified, so auto-merge defers.
+# shellcheck source=/dev/null
+if [ -f "${SCRIPT_DIR}/pr_checks_lib.sh" ]; then
+	source "${SCRIPT_DIR}/pr_checks_lib.sh" 2>/dev/null || true
+fi
+if ! type _pr_base_fresh_for_merge >/dev/null 2>&1; then
+	_pr_base_fresh_for_merge()
+	{
+		PR_BASE_FRESHNESS_OUTCOME="unknown"
+		PR_BASE_FRESHNESS_LAST_REASON="library_unavailable"
+		echo "::warning::MERGE_BASE_FRESHNESS pr=${1:-unknown} outcome=unknown reason=library_unavailable action=defer (pr_checks_lib.sh unavailable)"
+		return 1
+	}
+fi
+if ! type _pr_wait_for_required_checks >/dev/null 2>&1; then
+	# Fail closed: without the library nothing verifies CI, and an
+	# unprotected base would let `gh pr merge --auto` land the PR at once.
+	_pr_wait_for_required_checks()
+	{
+		PR_CHECKS_WAIT_OUTCOME="unavailable"
+		echo "::warning::pr_checks_lib.sh unavailable; refusing auto-merge for PR #${1:-unknown} (required checks cannot be verified)."
+		return 1
+	}
+fi
+
+# Final CI at the end of review (cut-ci-runner-time Phase 4): once this step
+# has posted ai-review/head-gate success for the reviewed head, make sure that
+# head gets its one full CI run, also for PRs that are never auto-merged.
+# No-op unless REVIEW_FINAL_CI_WORKFLOW is set (review_autofix.yml's
+# final_ci_workflow input). $1: the PR head ref when already known (saves
+# the helper's PR read). Never fails the step.
+review_enable_auto_merge_ensure_final_ci()
+{
+	[ -n "${REVIEW_FINAL_CI_WORKFLOW:-}" ] || return 0
+	if ! type _pr_ensure_final_ci >/dev/null 2>&1; then
+		echo "::warning::REVIEW_FINAL_CI pr=${PR_NUMBER:-?} head=${INITIAL_HEAD_SHA:-?} outcome=dispatch_failed reason=library_unavailable"
+		return 0
+	fi
+	_pr_ensure_final_ci "${GITHUB_REPOSITORY}" "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${1:-}" || true
+	return 0
+}
+
+# Deferral reason for the freshness gate: `base_moved_overlap` when the base
+# moved under this PR's files (a branch update was requested), otherwise
+# `base_freshness_unknown` (freshness could not be verified; no update).
+base_freshness_defer_reason()
+{
+	if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
+		echo "base_moved_overlap"
+	elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+		echo "merge_lease_wait"
+	else
+		echo "base_freshness_unknown"
+	fi
+}
+
+record_auto_merge_ready_labels_allowed()
+{
+	if [ -n "${GITHUB_ENV:-}" ]; then
+		printf 'AUTO_MERGE_READY_LABELS_ALLOWED=%s\n' "$1" >> "${GITHUB_ENV}"
+	fi
+}
+
+record_auto_merge_ready_labels_allowed "false"
+
+reviewed_head_is_current_for_labels()
+{
+	local ready_label_current_head_sha=""
+	if ! [[ "${INITIAL_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+		echo "::warning::Reviewed head SHA is unavailable or malformed for PR #${PR_NUMBER}. Failing closed: refusing merge-authorization labels."
+		return 1
+	fi
+	# The full PR-metadata call below is unreachable on these intentional
+	# early-exit paths, so this is the smallest non-duplicative freshness read.
+	if ! ready_label_current_head_sha="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null)"; then
+		echo "::warning::Could not refresh the current head for PR #${PR_NUMBER}; refusing merge-authorization labels."
+		return 1
+	fi
+	if [ -z "${ready_label_current_head_sha}" ] || [ "${ready_label_current_head_sha}" != "${INITIAL_HEAD_SHA}" ]; then
+		echo "::warning::PR #${PR_NUMBER} no longer points at reviewed head ${INITIAL_HEAD_SHA}. Failing closed: refusing merge-authorization labels for current head ${ready_label_current_head_sha:-unknown}."
+		return 1
+	fi
+	return 0
+}
+
+if [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
+	if reviewed_head_is_current_for_labels; then
+		review_head_gate_post_status "${GITHUB_REPOSITORY}" "${INITIAL_HEAD_SHA}" success "review and security gate passed"
+		record_auto_merge_ready_labels_allowed "true"
+		review_enable_auto_merge_ensure_final_ci
+	fi
+	echo "Auto-merge disabled (set ENABLE_AUTO_MERGE=true to enable)."
+	exit 0
+fi
+
+# Scoped opt-out for the e2e smoke test. The implement workflow
+# tags PRs born from `[E2E Smoke Test]` issues with the
+# `e2e-smoke-test` label. Without this guard the editor's
+# bait-removal commit would race the e2e gate's verify-bait-
+# removed step: auto-merge could fire the moment the editor
+# commit lands, closing the PR before the e2e gate has read
+# the post-edit canary blob. Repo-wide ENABLE_AUTO_MERGE stays
+# untouched so non-e2e PRs keep auto-merging as before.
+#
+# Fail-closed on API failure: if gh_retry exhausts its
+# retries, we cannot tell whether the PR carries
+# `e2e-smoke-test`. Defaulting to "no label → auto-merge"
+# would silently bypass this guard for an e2e PR (consensus
+# finding from the multi-reviewer claude-branch-review on
+# this PR — when a transient API blip persists past 5
+# retries, auto-merge would race the e2e gate again, the
+# exact regression this guard was added to prevent). Skip
+# auto-merge with a clear ::warning:: instead — non-e2e PRs
+# lose auto-merge for one review_autofix cycle on a
+# persistent outage, but the next sync event (next push,
+# next reviewer commit) re-runs review_autofix and picks it
+# up. This trade is asymmetric in our favour: a missed
+# auto-merge on a non-e2e PR is recoverable; an e2e PR that
+# auto-merges mid-test is not.
+# `--paginate ?per_page=100` so a PR carrying many labels
+# (e.g., orchestrator-managed PRs that accumulate phase
+# labels + review-blocked + e2e-smoke-test, easily >30) can
+# still surface `e2e-smoke-test` on page ≥2. Without the
+# override this endpoint defaults to 30/page and a label on
+# page 2 is silently dropped, allowing auto-merge — the
+# exact race this guard prevents (Copilot review #3 on
+# PR #1823). With `--paginate`, gh emits one JSON array per
+# page; `--jq '.[].name'` flattens to one label per line so
+# the downstream `grep -qx` works regardless of page count.
+_label_err_file="$(mktemp 2>/dev/null || echo /dev/null)"
+if PR_LABELS_RAW="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels?per_page=100" --jq '.[].name' 2>"${_label_err_file}")"; then
+	[ "${_label_err_file}" = /dev/null ] || rm -f "${_label_err_file}"
+	if printf '%s\n' "${PR_LABELS_RAW}" | grep -qx 'e2e-smoke-test'; then
+		if reviewed_head_is_current_for_labels; then
+			review_head_gate_post_status "${GITHUB_REPOSITORY}" "${INITIAL_HEAD_SHA}" success "review and security gate passed"
+			record_auto_merge_ready_labels_allowed "true"
+			review_enable_auto_merge_ensure_final_ci
+		fi
+		echo "PR #${PR_NUMBER} carries 'e2e-smoke-test' label — auto-merge suppressed for the e2e gate's lifecycle."
+		exit 0
+	fi
+else
+	_label_err="$(cat "${_label_err_file}" 2>/dev/null || true)"
+	[ "${_label_err_file}" = /dev/null ] || rm -f "${_label_err_file}"
+	echo "::warning::Could not fetch labels for PR #${PR_NUMBER} (gh_retry exhausted): ${_label_err}. Failing closed: skipping auto-merge enablement so an e2e-smoke-test PR cannot race the e2e gate. Next sync event will re-run review_autofix and retry the merge enablement."
+	exit 0
+fi
+
+# Scoped opt-out for orchestrator integration PRs (head ref matches
+# ORCH_INTEGRATION_BRANCH_PATTERN; default `^orchestrator/project-`).
+# The canonical `orchestrator/project-<N>` form still gets the
+# tracking-number body cross-check below, but any configured
+# integration-branch naming must suppress auto-merge too so the
+# safeguard remains effective for customised repos.
+#
+# The orchestrator's
+# integration-conflict self-healing path dispatches review_autofix
+# on the eager final PR to resolve drift (see
+# scripts/orchestrate_poll_process.sh: _dispatch_review_for_conflicts);
+# without this guard, the auto-merge step would ship the integration
+# branch partway through the project as soon as Copilot review
+# passes — stranding subsequent wave PRs on the integration branch
+# with no path to default. The orchestrator's
+# mark_validation_complete → finalize_integration_merge_if_needed
+# owns the legitimate final merge via a synchronous `gh pr merge
+# --squash --delete-branch`, so auto-merge is never required for
+# these PRs. See shubhodeep1/binance-blessings#135 for the
+# regression case.
+#
+# PR body cross-check (defense in depth): when the head-ref regex
+# matches we first look for a standalone `Refs #<N>` / `Refs: #<N>`
+# line in the PR body and then fall back to a standalone
+# `Closes/Fixes/Resolves #<N>` / `Closes/Fixes/Resolves: #<N>` line
+# before logging a mismatch
+# warning if the tracking number disagrees with the head ref — an
+# operational signal that something unexpected created an
+# orchestrator-shaped head ref. Auto-merge is still suppressed
+# whenever the head-ref pattern matches (head-ref evidence is
+# sufficient on its own; the body check is informational).
+#
+# Fail-closed on PR metadata fetch failure: skip auto-merge so a
+# transient API blip cannot inadvertently ship an orchestrator
+# integration PR. Mirrors the e2e-smoke-test guard above.
+_orch_pr_meta_err_file="$(mktemp 2>/dev/null || true)"
+_orch_pr_meta_err=""
+if [ -z "${_orch_pr_meta_err_file}" ]; then
+	# gh_retry logs transient retry diagnostics to stderr before a
+	# later attempt can succeed, so the mktemp-failed fallback still
+	# needs a separate stderr sink. Merging stderr into stdout would
+	# pollute the JSON response with retry warnings and spuriously
+	# trip the fail-closed parse path.
+	_orch_pr_meta_err_file="${RUNNER_TEMP:-${GITHUB_WORKSPACE:-$PWD}}/review-autofix-pr-meta-${PR_NUMBER}-$$.err"
+	if ! : > "${_orch_pr_meta_err_file}" 2>/dev/null; then
+		echo "::warning::Could not create a stderr capture file for PR metadata lookup on #${PR_NUMBER} (mktemp failed and fallback path '${_orch_pr_meta_err_file}' was unwritable). Failing closed: skipping auto-merge enablement so an orchestrator integration PR cannot be inadvertently shipped via auto-merge on a transient runner filesystem issue. Next sync event will re-run review_autofix and retry."
+		exit 0
+	fi
+fi
+if ! _ORCH_PR_META_JSON="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" 2>"${_orch_pr_meta_err_file}")"; then
+	_orch_pr_meta_err="$(cat "${_orch_pr_meta_err_file}" 2>/dev/null || true)"
+	rm -f "${_orch_pr_meta_err_file}"
+	echo "::warning::Could not fetch PR metadata for #${PR_NUMBER} (gh_retry exhausted): ${_orch_pr_meta_err:-gh_retry error details unavailable}. Failing closed: skipping auto-merge enablement so an orchestrator integration PR cannot be inadvertently shipped via auto-merge on a transient API blip. Next sync event will re-run review_autofix and retry."
+	exit 0
+else
+	rm -f "${_orch_pr_meta_err_file}"
+fi
+
+_orch_pr_head_ref="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.head.ref // ""' 2>/dev/null || echo "")"
+if [ -z "${_orch_pr_head_ref}" ]; then
+	echo "::warning::Could not determine PR head ref for #${PR_NUMBER} from fetched metadata (empty/null .head.ref). Failing closed: skipping auto-merge enablement so an orchestrator integration PR cannot be inadvertently shipped when PR metadata is incomplete or the head branch was deleted. Next sync event will re-run review_autofix and retry."
+	exit 0
+fi
+
+# Consumer-updater PRs (update_workflows.yml pull-request delivery, #7004):
+# only that workflow's `verify` job may enable auto-merge, after it has checked
+# the PR tree against the attested release manifest. Review never does.
+if [[ "${_orch_pr_head_ref}" =~ ^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$ ]]; then
+	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA:-unknown} action=skip reason=updater_pr_verify_job_owns_merge"
+	exit 0
+fi
+
+_orch_pr_head_sha="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.head.sha // ""' 2>/dev/null || echo "")"
+if ! [[ "${INITIAL_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA:-unknown} action=refuse reason=head_sha_unavailable"
+	echo "::warning::Reviewed head SHA is unavailable or malformed for PR #${PR_NUMBER}. Failing closed: refusing auto-merge enablement and merge-authorization labels without a --match-head-commit guard."
+	exit 0
+fi
+if [ -z "${_orch_pr_head_sha}" ] || [ "${_orch_pr_head_sha}" != "${INITIAL_HEAD_SHA}" ]; then
+	echo "::warning::PR #${PR_NUMBER} no longer points at reviewed head ${INITIAL_HEAD_SHA}. Failing closed: refusing auto-merge enablement and merge-authorization labels for current head ${_orch_pr_head_sha:-unknown}."
+	exit 0
+fi
+
+# Superseded security follow-up guard (#9479): a PR whose base is a standalone
+# PR's head branch must not merge once that branch's current head passed its
+# single-issue security audit (the merge would move the clean head). On this
+# auto-merge path it runs before the success status, so a refused PR gets
+# neither status nor merge labels; the ENABLE_AUTO_MERGE!=true and
+# e2e-smoke-test early exits above never enable auto-merge and are not
+# covered. No API call for PRs into the default or an integration branch.
+# Anything but `allow` (helper missing, lookup failure) fails closed; the next
+# review run or the review sweep retries. Sets _followup_guard_result.
+_followup_guard_result=""
+run_security_followup_guard()
+{
+	local _followup_guard_output="" _followup_guard_payload
+	_followup_guard_result=""
+	_followup_guard_payload="$(mktemp 2>/dev/null || true)"
+	if [ -n "${_followup_guard_payload}" ] && [ -f "${SCRIPT_DIR}/review_single_issue_security_pass.sh" ] \
+		&& printf '%s' "${_ORCH_PR_META_JSON}" > "${_followup_guard_payload}"; then
+		_followup_guard_output="$(REPOSITORY="${GITHUB_REPOSITORY}" PR_NUMBER="${PR_NUMBER}" PR_PAYLOAD_FILE="${_followup_guard_payload}" \
+			bash "${SCRIPT_DIR}/review_single_issue_security_pass.sh" followup-guard)" || _followup_guard_output=""
+		printf '%s\n' "${_followup_guard_output}" | grep '^SINGLE_ISSUE_SECURITY_PASS ' || true
+		_followup_guard_result="$(printf '%s\n' "${_followup_guard_output}" | sed -n 's/^SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=//p' | tail -n 1)" || _followup_guard_result=""
+	fi
+	[ -n "${_followup_guard_payload}" ] && rm -f "${_followup_guard_payload}"
+	if [ "${_followup_guard_result}" != "allow" ]; then
+		echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=refuse reason=security_followup_guard_${_followup_guard_result:-unavailable}"
+		echo "::warning::Auto-merge not enabled for PR #${PR_NUMBER}: the security follow-up guard returned '${_followup_guard_result:-unavailable}' (its base branch's head passed a clean security audit, or that could not be verified). The PR stays open."
+		return 1
+	fi
+	return 0
+}
+if ! run_security_followup_guard; then
+	exit 0
+fi
+
+# This step runs only after a clean review tail and a non-holding security
+# pass; post for the verified head before any merge or manual-merge path.
+review_head_gate_post_status "${GITHUB_REPOSITORY}" "${INITIAL_HEAD_SHA}" success "review and security gate passed"
+# Final CI (Phase 4) for this path starts in the required-checks wait below,
+# after the freshness gate, so a head the gate is about to update never gets
+# a run; a head that leaves this step early is picked up by the review
+# sweep's safety net. The wait reuses the head ref (no PR read).
+PR_CHECKS_HEAD_REF="${_orch_pr_head_ref}"
+
+# Base moved under this PR's files since its checks ran: request the branch
+# update and stop here. The synchronize run re-validates the combined tree
+# and reaches this step again with a current head. Integration PRs are
+# synced by the orchestrator itself and never auto-merged here, so they
+# skip the two reads.
+_orch_pr_base_ref="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")"
+if ! printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}" \
+	&& ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${_orch_pr_base_ref}"; then
+	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=defer reason=$(base_freshness_defer_reason)"
+	if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
+		echo "Auto-merge not enabled for PR #${PR_NUMBER}: the base moved under files this PR touches since its checks ran. The branch update's synchronize run re-validates and re-enables auto-merge."
+	elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+		echo "Auto-merge not enabled for PR #${PR_NUMBER}: waiting for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}. The merge-train release re-dispatches this PR when the lease is granted to it."
+	else
+		echo "Auto-merge not enabled for PR #${PR_NUMBER}: base freshness could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); no branch update was requested. The review sweep or the next review round retries."
+	fi
+	exit 0
+fi
+
+# `gh pr merge --auto` merges immediately when the base has no required
+# status checks (no branch protection), whatever CI says. Wait for the
+# required set on the reviewed head to settle, and enable auto-merge only
+# when it is green; a settled failure leaves the PR for the next review
+# round (the sweep re-dispatches) and withholds the merge labels.
+if ! printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}" \
+	&& ! _pr_wait_for_required_checks "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${_orch_pr_base_ref}"; then
+	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=refuse reason=required_checks_${PR_CHECKS_WAIT_OUTCOME:-unknown}"
+	echo "::warning::Auto-merge not enabled for PR #${PR_NUMBER}: required check-runs on ${INITIAL_HEAD_SHA:0:7} are ${PR_CHECKS_WAIT_OUTCOME:-unknown}. Nothing merges until a later review round sees them green."
+	exit 0
+fi
+
+# The wait above can take minutes; the base may have moved under this PR's
+# files meanwhile (`--match-head-commit` binds only the head), so re-check
+# freshness once more when the wait actually polled.
+if [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null \
+	&& ! printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}" \
+	&& ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${_orch_pr_base_ref}"; then
+	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=defer reason=$(base_freshness_defer_reason)"
+	if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
+		echo "Auto-merge not enabled for PR #${PR_NUMBER}: the base moved under files this PR touches while its checks ran. The branch update's synchronize run re-validates and re-enables auto-merge."
+	elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+		echo "Auto-merge not enabled for PR #${PR_NUMBER}: waiting for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?} after the checks wait. The merge-train release re-dispatches this PR when the lease is granted to it."
+	else
+		echo "Auto-merge not enabled for PR #${PR_NUMBER}: base freshness could not be verified after the checks wait (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); no branch update was requested. The review sweep or the next review round retries."
+	fi
+	exit 0
+fi
+
+# The base branch's head may have received a clean security audit after the
+# first guard ran (#9479). That result is a snapshot, and security-audit.yml
+# posts its marker concurrently whether or not the checks wait polled, so
+# re-run the guard once more right before any --auto merge. PRs into the
+# default or an integration branch get `allow` with no API call. The success
+# status posted above stays bound to this PR's head; refusing here withholds
+# auto-merge and merge labels.
+if ! run_security_followup_guard; then
+	exit 0
+fi
+
+# Scoped opt-out for forward-merge fallback PRs opened by
+# forward-merge-stable-to-main.yml — these are routed AWAY from the
+# `--squash --auto` tail below. Head ref is hard-coded as
+# `auto/forward-merge-stable-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}`
+# at forward-merge-stable-to-main.yml:255. These PRs MUST land as a
+# "Create a merge commit" so the 2-parent merge keeps stable's tip
+# reachable from main; the squash auto-merge would silently strip
+# stable's commits from main's ancestry, after which
+# promote-main-to-stable.yml's pre-flight
+# `git merge-base --is-ancestor HEAD origin/main` refuses to
+# fast-forward stable on the next promote run, with the exact
+# "squash/rebase strips ancestry" error at
+# promote-main-to-stable.yml:122. By default
+# (FORWARD_MERGE_FALLBACK_AUTO_MERGE='true') we therefore call
+# `gh pr merge --merge --auto` — the unattended equivalent of the
+# manual "Create a merge commit" the PR-body CAUTION banner
+# (forward-merge-stable-to-main.yml:265-270) asks for, which
+# preserves ancestry. Set the var to any non-'true' value to suppress
+# auto-merge entirely and leave the PR for a manual merge commit. The
+# head-ref pattern is hard-coded (not configurable) because the branch
+# prefix is owned by forward-merge-stable-to-main.yml and never varies
+# per repo; only the auto-merge-vs-manual choice is var-gated.
+if printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq '^auto/forward-merge-stable-'; then
+	# forward-merge fallback PRs (opened by forward-merge-stable-to-main.yml)
+	# MUST land as a real 2-parent merge commit so stable's commits stay
+	# reachable from main. A squash/rebase strips stable's ancestry even
+	# though the file content is forwarded, which then trips
+	# promote-main-to-stable.yml's pre-flight
+	# `git merge-base --is-ancestor HEAD origin/main` check
+	# (promote-main-to-stable.yml:115-126). `gh pr merge --merge --auto`
+	# is the unattended equivalent of the manual "Create a merge commit"
+	# the PR-body CAUTION banner asks for, so it preserves ancestry and
+	# satisfies that check — unlike the `--squash --auto` tail below.
+	#
+	# Gated by FORWARD_MERGE_FALLBACK_AUTO_MERGE (default 'true'); set the
+	# repo var to any non-'true' value to fall back to the previous
+	# behaviour of leaving these PRs for a manual merge commit.
+	if [ "${FORWARD_MERGE_FALLBACK_AUTO_MERGE}" = "true" ]; then
+		echo "Enabling auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER} (head ref '${_orch_pr_head_ref}')..."
+		echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=merge_commit"
+		if gh_retry gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --merge --auto --match-head-commit "${INITIAL_HEAD_SHA}"; then
+			record_auto_merge_ready_labels_allowed "true"
+			echo "Auto-merge (merge commit) enabled. PR will merge once all required checks pass, preserving stable's ancestry on main."
+		else
+			echo "::warning::Could not enable auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER}. Check that 'Allow merge commits' and 'Allow auto-merge' are enabled in repo settings and branch protection is configured. The PR remains open for manual 'Create a merge commit'."
+		fi
+	else
+		record_auto_merge_ready_labels_allowed "true"
+		echo "PR #${PR_NUMBER} head ref '${_orch_pr_head_ref}' matches forward-merge fallback pattern '^auto/forward-merge-stable-' and FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true' — auto-merge suppressed. Merge manually via 'Create a merge commit' (NOT squash/rebase) so stable's commits remain in main's ancestry; promote-main-to-stable.yml's pre-flight 'git merge-base --is-ancestor HEAD origin/main' check refuses otherwise (see promote-main-to-stable.yml:115-126 and the CAUTION banner in the PR body)."
+	fi
+	exit 0
+fi
+
+_orch_pr_body="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.body // ""' 2>/dev/null || echo "")"
+_orch_is_integration_pr="false"
+if [ -n "${ORCH_INTEGRATION_BRANCH_PATTERN}" ]; then
+	if printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN}"; then
+		_orch_is_integration_pr="true"
+	else
+		_orch_pattern_match_rc=$?
+		if [ "${_orch_pattern_match_rc}" -gt 1 ]; then
+			echo "::warning::ORCH_INTEGRATION_BRANCH_PATTERN is not a valid POSIX ERE (grep exit ${_orch_pattern_match_rc}); falling back to canonical '^orchestrator/project-([0-9]+)$' auto-merge suppressor for this run."
+		fi
+	fi
+else
+	echo "::warning::ORCH_INTEGRATION_BRANCH_PATTERN is empty; falling back to canonical '^orchestrator/project-([0-9]+)$' auto-merge suppressor for this run."
+fi
+if [ "${_orch_is_integration_pr}" != "true" ] && [[ "${_orch_pr_head_ref}" =~ ^orchestrator/project-([0-9]+)$ ]]; then
+	_orch_is_integration_pr="true"
+fi
+if [ "${_orch_is_integration_pr}" = "true" ]; then
+	record_auto_merge_ready_labels_allowed "true"
+	if [[ "${_orch_pr_head_ref}" =~ ^orchestrator/project-([0-9]+)$ ]]; then
+		_orch_ref_tracking_num="${BASH_REMATCH[1]}"
+		_orch_body_tracking_num="$(printf '%s' "${_orch_pr_body}" | grep -im1 -oE '^[[:space:]]*refs:?[[:space:]]*#[0-9]+' | grep -oE '[0-9]+' || echo "")"
+		if [ -z "${_orch_body_tracking_num}" ]; then
+			_orch_body_tracking_num="$(printf '%s' "${_orch_pr_body}" | grep -im1 -oE '^[[:space:]]*(closes|fixes|resolves):?[[:space:]]*#[0-9]+' | grep -oE '[0-9]+' || echo "")"
+		fi
+		if [ -n "${_orch_body_tracking_num}" ] && [ "${_orch_body_tracking_num}" != "${_orch_ref_tracking_num}" ]; then
+			echo "::warning::PR #${PR_NUMBER} head ref '${_orch_pr_head_ref}' implies orchestrator tracking issue #${_orch_ref_tracking_num} but the PR body references #${_orch_body_tracking_num}. Suppressing auto-merge anyway — head-ref pattern matches an orchestrator integration PR; the orchestrator will land this via finalize_integration_merge_if_needed when the project is genuinely complete."
+		else
+			echo "PR #${PR_NUMBER} is the orchestrator integration PR for tracking #${_orch_ref_tracking_num} (head ref '${_orch_pr_head_ref}') — auto-merge suppressed. finalize_integration_merge_if_needed handles the legitimate final merge synchronously once the project is complete and the integration tip is contained in the default branch."
+		fi
+	else
+		echo "PR #${PR_NUMBER} head ref '${_orch_pr_head_ref}' matches ORCH_INTEGRATION_BRANCH_PATTERN='${ORCH_INTEGRATION_BRANCH_PATTERN}' — auto-merge suppressed. finalize_integration_merge_if_needed handles the legitimate final merge synchronously once the project is complete and the integration tip is contained in the default branch."
+	fi
+	exit 0
+fi
+
+echo "Enabling auto-merge (squash) on PR #${PR_NUMBER}..."
+echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=squash"
+if gh_retry gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --squash --auto --match-head-commit "${INITIAL_HEAD_SHA}"; then
+	record_auto_merge_ready_labels_allowed "true"
+	echo "Auto-merge enabled. PR will merge once all required checks pass."
+else
+	echo "::warning::Could not enable auto-merge on PR #${PR_NUMBER}. Check that 'Allow auto-merge' is enabled in repo settings and branch protection is configured."
+fi

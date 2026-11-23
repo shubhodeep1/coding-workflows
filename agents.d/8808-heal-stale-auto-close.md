@@ -1,0 +1,3 @@
+<!-- agents: section="Stable log prefixes (contractual)" -->
+- `HEAL_STALE_CLOSE` — emitted once per held heal issue by `_heal_stale_close_check` in `scripts/orchestrate_poll_process.sh` (issue #8808). Format: `HEAL_STALE_CLOSE issue=<n> outcome=closed|kept|skipped reason=<token> green_runs=<k>`. `reason` is limited to `[a-z_]` (for example `workflow_green`, `disabled`, `not_run_sourced`, `too_few_green_runs`, `run_not_green`, `too_young`, `runs_unavailable`, `runs_window_incomplete`, `linked_pr_unknown`, `open_pr`, `hold_marker_missing`, `comment_failed`, `close_failed`, `decision_unavailable`). `green_runs` is digits only.
+LOG_PREFIX.name=HEAL_STALE_CLOSE

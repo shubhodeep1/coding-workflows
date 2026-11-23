@@ -1,0 +1,4600 @@
+#!/usr/bin/env python3
+"""Unit tests for orchestrate_lib.py — wave computation, status checks, and state schema."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+# Add scripts/ to path so we can import orchestrate_lib
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+
+import orchestrate_lib
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+INTEGRATION_FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "integration_ref_resolver"
+
+
+def _iter_integration_fixtures() -> list[dict]:
+	fixtures: list[dict] = []
+	for path in sorted(INTEGRATION_FIXTURE_DIR.glob("*.json")):
+		fixtures.append(json.loads(path.read_text(encoding="utf-8")))
+	return fixtures
+
+
+def _fixture_path_by_name(name: str) -> Path:
+	return INTEGRATION_FIXTURE_DIR / f"{name}.json"
+
+
+def _write_mock_gh(bin_dir: Path) -> None:
+	script = """#!/usr/bin/env python3
+import json
+import os
+import pathlib
+import sys
+from urllib.parse import unquote
+
+
+def _load_fixture() -> dict:
+	path = pathlib.Path(os.environ['GH_FIXTURE_FILE'])
+	return json.loads(path.read_text(encoding='utf-8'))
+
+
+def _parse_issue(endpoint: str):
+	parts = endpoint.split('/')
+	if len(parts) < 5:
+		return None
+	if parts[0] != 'repos' or parts[3] != 'issues':
+		return None
+	try:
+		return int(parts[4])
+	except ValueError:
+		return None
+
+
+def main() -> int:
+	# gh_api_retry adds -i per attempt (issue #6634); the mock prints bodies only.
+	args = [a for a in sys.argv[1:] if a != '-i']
+	if len(args) < 2 or args[0] != 'api':
+		print('mock gh only supports gh api', file=sys.stderr)
+		return 2
+	fixture = _load_fixture()
+	endpoint = args[1]
+	if endpoint.startswith('repos/') and '/issues/' in endpoint:
+		issue_num = _parse_issue(endpoint)
+		if issue_num is None:
+			print('invalid issue endpoint', file=sys.stderr)
+			return 2
+		body = fixture.get('issues', {}).get(str(issue_num), {}).get('body', '')
+		if '--jq' in args:
+			jq_expr = args[args.index('--jq') + 1]
+			if jq_expr == '.body // ""':
+				print(body)
+				return 0
+		print(json.dumps({'number': issue_num, 'body': body}))
+		return 0
+	if endpoint.startswith('repos/') and '/git/ref/heads/' in endpoint:
+		ref = unquote(endpoint.split('/git/ref/heads/', 1)[1])
+		exists = bool(fixture.get('branch_exists', {}).get(ref, False))
+		if exists:
+			print(json.dumps({'ref': f'refs/heads/{ref}'}))
+			return 0
+		print('gh: Not Found (HTTP 404)', file=sys.stderr)
+		return 1
+	print(f'unsupported endpoint: {endpoint}', file=sys.stderr)
+	return 2
+
+
+if __name__ == '__main__':
+	raise SystemExit(main())
+"""
+	gh_path = bin_dir / "gh"
+	gh_path.write_text(script, encoding="utf-8")
+	gh_path.chmod(0o755)
+
+
+def _run_bash_resolver(fixture_path: Path, bin_dir: Path) -> tuple[int, str, str]:
+	env = os.environ.copy()
+	env.update(
+		{
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"GH_TOKEN": "test-token",
+			"GH_FIXTURE_FILE": str(fixture_path),
+			"REPO": "owner/repo",
+			"ISSUE": "101",
+			# The Python resolver has no CI-triage PR-branch routing (it has no
+			# workflow callers), so the parity check runs bash with it off;
+			# tests/test_resolve_integration_ref_ci_triage.py covers routing.
+			"CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED": "false",
+		}
+	)
+	proc = subprocess.run(
+		["bash", str(REPO_ROOT / "scripts" / "resolve_integration_ref.sh")],
+		check=False,
+		capture_output=True,
+		text=True,
+		env=env,
+		cwd=str(REPO_ROOT),
+	)
+	return proc.returncode, proc.stdout.strip(), proc.stderr
+
+
+def _run_python_resolver(fixture_path: Path, bin_dir: Path) -> tuple[int, str, str]:
+	env = os.environ.copy()
+	env.update(
+		{
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"GH_TOKEN": "test-token",
+			"GH_FIXTURE_FILE": str(fixture_path),
+			"REPO": "owner/repo",
+		}
+	)
+	proc = subprocess.run(
+		[
+			"python3",
+			str(REPO_ROOT / "scripts" / "orchestrate_lib.py"),
+			"--print-integration-ref",
+			"101",
+		],
+		check=False,
+		capture_output=True,
+		text=True,
+		env=env,
+		cwd=str(REPO_ROOT),
+	)
+	return proc.returncode, proc.stdout.strip(), proc.stderr
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _write_json(path: Path, data: dict) -> None:
+	with path.open("w", encoding="utf-8") as f:
+		json.dump(data, f)
+
+
+def _make_decomposition(
+	issues: list[dict] | None = None,
+	edges: list[dict] | None = None,
+) -> dict:
+	"""Build a minimal valid decomposition."""
+	if issues is None:
+		issues = [
+			{"id": "issue-1", "title": "First task", "body": "Do the first thing", "priority": 1},
+			{"id": "issue-2", "title": "Second task", "body": "Do the second thing", "priority": 2},
+		]
+	if edges is None:
+		edges = []
+	return {
+		"schema_version": "orchestrate_decomposition.v1",
+		"project_title": "Test Project",
+		"project_summary": "A test project for unit tests",
+		"issues": issues,
+		"dependency_edges": edges,
+	}
+
+
+def _make_state(
+	waves: list[list[dict]] | None = None,
+	current_wave: int = 1,
+	review_blocked_retries: dict | None = None,
+) -> dict:
+	"""Build a minimal valid tracking state."""
+	if waves is None:
+		waves = [
+			{
+				"wave": 1,
+				"issues": [
+					{"id": "issue-1", "github_issue": 10, "status": "pending"},
+					{"id": "issue-2", "github_issue": 11, "status": "pending"},
+				],
+			}
+		]
+	return {
+		"schema_version": "orchestrate_state.v1",
+		"project_title": "Test Project",
+		"total_issues": sum(len(w["issues"]) for w in waves),
+		"total_waves": len(waves),
+		"current_wave": current_wave,
+		"judge_cycle": 0,
+		"recovery_attempted": False,
+		"review_blocked_retries": review_blocked_retries or {},
+		"status": "in_progress",
+		"waves": waves,
+		"dependency_edges": [],
+		"issue_number_map": {},
+		"pending_issue_defs": {},
+		"integration_branch": "",
+		"final_merge_strategy": "squash",
+		"final_merge_pr": None,
+		"final_merge_status": "pending",
+	}
+
+
+# ---------------------------------------------------------------------------
+# Tests: validation
+# ---------------------------------------------------------------------------
+
+def test_validate_decomposition_valid():
+	data = _make_decomposition()
+	result = orchestrate_lib.validate_decomposition(data)
+	assert result["project_title"] == "Test Project"
+
+
+def test_validate_decomposition_invalid_schema():
+	data = _make_decomposition()
+	data["schema_version"] = "wrong"
+	try:
+		orchestrate_lib.validate_decomposition(data)
+		assert False, "Should have raised OrchestrateError"
+	except orchestrate_lib.OrchestrateError:
+		pass
+
+
+def test_validate_decomposition_missing_schema_version_legacy_accepted():
+	data = _make_decomposition()
+	data.pop("schema_version")
+	result = orchestrate_lib.validate_decomposition(data)
+	assert result["schema_version"] == "orchestrate_decomposition.v1"
+
+
+def test_validate_decomposition_null_schema_version_legacy_accepted():
+	data = _make_decomposition()
+	data["schema_version"] = None
+	result = orchestrate_lib.validate_decomposition(data)
+	assert result["schema_version"] == "orchestrate_decomposition.v1"
+
+
+def test_validate_decomposition_duplicate_ids():
+	issues = [
+		{"id": "dup", "title": "A", "body": "B", "priority": 1},
+		{"id": "dup", "title": "C", "body": "D", "priority": 2},
+	]
+	try:
+		orchestrate_lib.validate_decomposition(_make_decomposition(issues=issues))
+		assert False, "Should have raised OrchestrateError"
+	except orchestrate_lib.OrchestrateError as e:
+		assert "Duplicate" in str(e)
+
+
+def test_validate_decomposition_cycle_detection():
+	issues = [
+		{"id": "a", "title": "A", "body": "B", "priority": 1},
+		{"id": "b", "title": "C", "body": "D", "priority": 2},
+	]
+	edges = [{"from": "a", "to": "b"}, {"from": "b", "to": "a"}]
+	try:
+		orchestrate_lib.validate_decomposition(_make_decomposition(issues=issues, edges=edges))
+		assert False, "Should have raised OrchestrateError"
+	except orchestrate_lib.OrchestrateError as e:
+		assert "cycle" in str(e).lower()
+
+
+# ---------------------------------------------------------------------------
+# Tests: wave computation
+# ---------------------------------------------------------------------------
+
+def test_compute_waves_no_deps():
+	# Disjoint files_touched: siblings with declared, non-overlapping scope
+	# stay in one wave. (An EMPTY files_touched is unknown scope and is
+	# serialized; see test_validate_wave_file_partition_empty_scope_is_serialized.)
+	data = _make_decomposition(issues=[
+		{"id": "issue-1", "title": "First task", "body": "Do the first thing", "priority": 1, "files_touched": ["src/one.py"]},
+		{"id": "issue-2", "title": "Second task", "body": "Do the second thing", "priority": 2, "files_touched": ["src/two.py"]},
+	])
+	waves = orchestrate_lib.compute_waves(data)
+	assert len(waves) == 1
+	assert len(waves[0]) == 2
+
+
+def test_compute_waves_no_deps_unknown_scope_serializes():
+	"""Siblings that declare no files_touched cannot be proven disjoint, so
+	the default fixture (no files_touched at all) now yields one wave per
+	issue instead of running them in parallel."""
+	data = _make_decomposition()
+	waves = orchestrate_lib.compute_waves(data)
+	assert [[i["id"] for i in wave] for wave in waves] == [["issue-1"], ["issue-2"]]
+	assert data["partition_serializations"][0]["overlap_type"] == "unknown_scope"
+
+
+def test_compute_waves_with_deps():
+	issues = [
+		{"id": "a", "title": "A", "body": "A body", "priority": 1},
+		{"id": "b", "title": "B", "body": "B body", "priority": 2},
+		{"id": "c", "title": "C", "body": "C body", "priority": 3},
+	]
+	edges = [{"from": "a", "to": "b"}, {"from": "b", "to": "c"}]
+	data = _make_decomposition(issues=issues, edges=edges)
+	waves = orchestrate_lib.compute_waves(data)
+	assert len(waves) == 3
+	assert waves[0][0]["id"] == "a"
+	assert waves[1][0]["id"] == "b"
+	assert waves[2][0]["id"] == "c"
+
+
+def test_compute_waves_parallel_deps():
+	issues = [
+		{"id": "root", "title": "Root", "body": "Root body", "priority": 1, "files_touched": ["src/root.py"]},
+		{"id": "child-1", "title": "Child 1", "body": "Body", "priority": 2, "files_touched": ["src/c1.py"]},
+		{"id": "child-2", "title": "Child 2", "body": "Body", "priority": 3, "files_touched": ["src/c2.py"]},
+	]
+	edges = [{"from": "root", "to": "child-1"}, {"from": "root", "to": "child-2"}]
+	data = _make_decomposition(issues=issues, edges=edges)
+	waves = orchestrate_lib.compute_waves(data)
+	assert len(waves) == 2
+	assert len(waves[0]) == 1  # root
+	assert len(waves[1]) == 2  # child-1, child-2
+
+
+# ---------------------------------------------------------------------------
+# Tests: check-wave-status
+# ---------------------------------------------------------------------------
+
+def _run_check_wave_status(state: dict, labels: dict[str, list[str]]) -> dict:
+	"""Run check-wave-status via the CLI and return parsed JSON."""
+	with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+		json.dump(state, f)
+		state_path = f.name
+
+	import io
+	from contextlib import redirect_stdout
+
+	try:
+		buf = io.StringIO()
+		with redirect_stdout(buf):
+			orchestrate_lib.cmd_check_wave_status(
+				type("Args", (), {"state_file": state_path, "labels_json": json.dumps(labels)})()
+			)
+		return json.loads(buf.getvalue())
+	finally:
+		os.unlink(state_path)
+
+
+def _run_check_stalls(
+	state: dict,
+	labels: dict[str, list[str]],
+	threshold_minutes: int = 60,
+	now_ts: int = 2000,
+	max_recoveries: int = 5,
+	phase_thresholds_json: str | None = None,
+	max_recoveries_by_phase_json: str | None = None,
+	stall_judge_trigger_count: int = 2,
+	enable_stall_judge: str = "false",
+	enable_stall_human_terminalization: str = "false",
+) -> dict:
+	"""Run check-stalls via the CLI and return parsed JSON."""
+	with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+		json.dump(state, f)
+		state_path = f.name
+
+	import io
+	from contextlib import redirect_stdout
+
+	try:
+		buf = io.StringIO()
+		with redirect_stdout(buf):
+			orchestrate_lib.cmd_check_stalls(
+				type(
+					"Args",
+					(),
+					{
+						"state_file": state_path,
+						"labels_json": json.dumps(labels),
+						"threshold_minutes": str(threshold_minutes),
+						"max_recoveries": str(max_recoveries),
+						"phase_thresholds_json": phase_thresholds_json,
+						"max_recoveries_by_phase_json": max_recoveries_by_phase_json,
+					"now_ts": str(now_ts),
+					"stall_judge_trigger_count": str(stall_judge_trigger_count),
+					"enable_stall_judge": enable_stall_judge,
+					"enable_stall_human_terminalization": enable_stall_human_terminalization,
+				},
+			)()
+			)
+		return json.loads(buf.getvalue())
+	finally:
+		os.unlink(state_path)
+
+
+def test_check_wave_status_all_merged():
+	state = _make_state()
+	labels = {"10": ["ai:merged"], "11": ["ai:merged"]}
+	result = _run_check_wave_status(state, labels)
+	assert result["wave_complete"] is True
+	assert result["any_failed"] is False
+	assert result["any_review_blocked"] is False
+	assert result["project_complete"] is True
+	assert all(i["status"] == "merged" for i in result["issues"])
+
+
+def test_check_wave_status_some_in_progress():
+	state = _make_state()
+	labels = {"10": ["ai:merged"], "11": ["ai:implementing"]}
+	result = _run_check_wave_status(state, labels)
+	assert result["wave_complete"] is False
+	assert result["any_review_blocked"] is False
+
+
+def test_check_wave_status_ready_to_merge():
+	state = _make_state()
+	labels = {"10": ["ai:ready-to-merge"], "11": ["ai:merged"]}
+	result = _run_check_wave_status(state, labels)
+	assert result["wave_complete"] is False
+	issues_by_gh = {i["github_issue"]: i for i in result["issues"]}
+	assert issues_by_gh[10]["status"] == "ready-to-merge"
+	assert issues_by_gh[11]["status"] == "merged"
+
+
+def test_check_wave_status_review_blocked():
+	state = _make_state()
+	labels = {"10": ["ai:review-blocked"], "11": ["ai:merged"]}
+	result = _run_check_wave_status(state, labels)
+	assert result["wave_complete"] is False
+	assert result["any_review_blocked"] is True
+	assert result["any_failed"] is False
+	issues_by_gh = {i["github_issue"]: i for i in result["issues"]}
+	assert issues_by_gh[10]["status"] == "review-blocked"
+
+
+def test_check_wave_status_review_blocked_and_failed():
+	state = _make_state()
+	labels = {"10": ["ai:review-blocked"], "11": ["ai:closed"]}
+	result = _run_check_wave_status(state, labels)
+	assert result["wave_complete"] is False
+	assert result["any_review_blocked"] is True
+	assert result["any_failed"] is True
+
+
+def test_check_wave_status_all_review_blocked():
+	state = _make_state()
+	labels = {"10": ["ai:review-blocked"], "11": ["ai:review-blocked"]}
+	result = _run_check_wave_status(state, labels)
+	assert result["wave_complete"] is False
+	assert result["any_review_blocked"] is True
+	assert all(i["status"] == "review-blocked" for i in result["issues"])
+
+
+def test_check_wave_status_no_labels_means_in_progress():
+	state = _make_state()
+	labels = {"10": [], "11": []}
+	result = _run_check_wave_status(state, labels)
+	assert result["wave_complete"] is False
+	assert result["any_review_blocked"] is False
+	assert all(i["status"] == "in_progress" for i in result["issues"])
+
+
+def test_check_wave_status_multi_wave_not_project_complete():
+	waves = [
+		{"wave": 1, "issues": [{"id": "a", "github_issue": 10, "status": "pending"}]},
+		{"wave": 2, "issues": [{"id": "b", "github_issue": 11, "status": "pending"}]},
+	]
+	state = _make_state(waves=waves, current_wave=1)
+	labels = {"10": ["ai:merged"]}
+	result = _run_check_wave_status(state, labels)
+	assert result["wave_complete"] is True
+	assert result["project_complete"] is False  # wave 2 still exists
+
+
+def test_check_wave_status_closed_counts_as_failed():
+	state = _make_state()
+	labels = {"10": ["ai:closed"], "11": ["ai:merged"]}
+	result = _run_check_wave_status(state, labels)
+	assert result["any_failed"] is True
+	issues_by_gh = {i["github_issue"]: i for i in result["issues"]}
+	assert issues_by_gh[10]["status"] == "closed"
+
+
+def test_check_wave_status_final_wave_one_closed_rest_merged_is_complete_but_failed():
+	"""Contract underpinning the validate-dispatch deadlock fix
+	(hylifegroup.com#3): a final wave whose issues are all ``ai:merged``
+	EXCEPT one legitimately closed without a merged PR (``ai:closed`` — e.g. a
+	judge-fix-up that needed no code change) yields ``wave_complete=true`` AND
+	``any_failed=true`` simultaneously. ``"closed"`` is in the
+	merged/closed/skipped set so it keeps ``all_merged`` (hence
+	``wave_complete``) True, while still flipping ``any_failed`` True. This is
+	the only failed-wave shape that should still allow validate dispatch.
+
+	The orchestrator MUST therefore NOT gate validate-dispatch on
+	``any_failed`` (see ``dispatch_validation_if_needed`` in
+	``scripts/orchestrate_poll_process.sh``): doing so deferred dispatch every
+	poll cycle and wedged the project in ``ai:validating`` indefinitely. This
+	test pins the value pair the dispatch gate now relies on."""
+	state = _make_state()
+	labels = {"10": ["ai:closed"], "11": ["ai:merged"]}
+	result = _run_check_wave_status(state, labels)
+	assert result["wave_complete"] is True
+	assert result["any_failed"] is True
+	assert result["validation_dispatch_safe_despite_failures"] is True
+	# Single (final) wave with no separate integration branch -> the project
+	# is genuinely complete; the closed wave issue must not change that.
+	assert result["project_complete"] is True
+	issues_by_gh = {i["github_issue"]: i for i in result["issues"]}
+	assert issues_by_gh[10]["status"] == "closed"
+	assert issues_by_gh[11]["status"] == "merged"
+
+
+def test_check_wave_status_failure_phase_counts_as_failed():
+	state = _make_state()
+	labels = {"10": ["ai:plan-failed"], "11": ["ai:merged"]}
+	result = _run_check_wave_status(state, labels)
+	assert result["any_failed"] is True
+	assert result["validation_dispatch_safe_despite_failures"] is False
+	issues_by_gh = {i["github_issue"]: i for i in result["issues"]}
+	assert issues_by_gh[10]["status"] == "closed"
+	assert issues_by_gh[10]["decision_source"] == "label_terminal_phase"
+
+
+def test_check_wave_status_closed_label_does_not_mask_failure_phase():
+	state = _make_state()
+	labels = {"10": ["ai:closed", "ai:plan-failed"], "11": ["ai:merged"]}
+	result = _run_check_wave_status(state, labels)
+	assert result["wave_complete"] is True
+	assert result["any_failed"] is True
+	assert result["validation_dispatch_safe_despite_failures"] is False
+	issues_by_gh = {i["github_issue"]: i for i in result["issues"]}
+	assert issues_by_gh[10]["status"] == "closed"
+	assert issues_by_gh[10]["decision_source"] == "label_ai_closed"
+
+
+def test_check_wave_status_null_github_issue_means_not_created():
+	"""Issues with github_issue: null should be reported as not_created."""
+	waves = [
+		{
+			"wave": 1,
+			"issues": [
+				{"id": "task-a", "github_issue": None, "status": "not_created"},
+				{"id": "task-b", "github_issue": None, "status": "not_created"},
+			],
+		}
+	]
+	state = _make_state(waves=waves, current_wave=1)
+	labels = {}  # no labels since no issues exist
+	result = _run_check_wave_status(state, labels)
+	assert result["wave_complete"] is False
+	assert result["any_not_created"] is True
+	assert all(i["status"] == "not_created" for i in result["issues"])
+
+
+def test_check_wave_status_mixed_null_and_real_issues():
+	"""Mix of created and uncreated issues should report correctly."""
+	waves = [
+		{
+			"wave": 1,
+			"issues": [
+				{"id": "task-a", "github_issue": 10, "status": "pending"},
+				{"id": "task-b", "github_issue": None, "status": "not_created"},
+			],
+		}
+	]
+	state = _make_state(waves=waves, current_wave=1)
+	labels = {"10": ["ai:merged"]}
+	result = _run_check_wave_status(state, labels)
+	assert result["wave_complete"] is False
+	assert result["any_not_created"] is True
+	issues_by_id = {i["id"]: i for i in result["issues"]}
+	assert issues_by_id["task-a"]["status"] == "merged"
+	assert issues_by_id["task-b"]["status"] == "not_created"
+
+
+def test_check_wave_status_unblocks_task_state_dependents_on_first_terminal_transition():
+	import io
+	from contextlib import redirect_stderr, redirect_stdout
+
+	import task_state
+
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		previous_root = task_state.REPO_ROOT
+		previous_flag = os.environ.get("ORCH_TASK_FILES_ENABLED")
+		task_state.REPO_ROOT = root
+		os.environ["ORCH_TASK_FILES_ENABLED"] = "true"
+		try:
+			issue_one = {"id": "issue-1", "github_issue": 10, "status": "pending"}
+			issue_two = {
+				"id": "issue-2",
+				"github_issue": 11,
+				"status": "pending",
+				"depends_on": ["issue-1"],
+				"reissue_depends_on": [10, 999],
+			}
+			assert task_state.write_task(1, "issue-1", issue_one)
+			assert task_state.write_task(1, "issue-2", issue_two)
+
+			first_state = _make_state(
+				waves=[{"wave": 1, "issues": [dict(issue_one), dict(issue_two)]}],
+				current_wave=1,
+			)
+			with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as handle:
+				json.dump(first_state, handle)
+				first_state_path = handle.name
+
+			try:
+				first_stdout = io.StringIO()
+				first_stderr = io.StringIO()
+				with redirect_stdout(first_stdout), redirect_stderr(first_stderr):
+					assert orchestrate_lib.cmd_check_wave_status(
+						type("Args", (), {
+							"state_file": first_state_path,
+							"labels_json": json.dumps({"10": ["ai:merged"], "11": []}),
+						})()
+					) == 0
+			finally:
+				os.unlink(first_state_path)
+
+			assert json.loads(first_stdout.getvalue())["wave_complete"] is False
+			assert task_state.read_task(1, "issue-2") == {
+				"depends_on": [],
+				"github_issue": 11,
+				"id": "issue-2",
+				"reissue_depends_on": [999],
+				"schema_version": "task_state.v1.json",
+				"status": "pending",
+			}
+			assert "TASK_STATE_UNBLOCK 1 issue-1 1" in first_stderr.getvalue()
+
+			second_state = _make_state(
+				waves=[{"wave": 1, "issues": [{**issue_one, "status": "merged"}, dict(issue_two)]}],
+				current_wave=1,
+			)
+			with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as handle:
+				json.dump(second_state, handle)
+				second_state_path = handle.name
+
+			try:
+				second_stdout = io.StringIO()
+				second_stderr = io.StringIO()
+				with redirect_stdout(second_stdout), redirect_stderr(second_stderr):
+					assert orchestrate_lib.cmd_check_wave_status(
+						type("Args", (), {
+							"state_file": second_state_path,
+							"labels_json": json.dumps({"10": ["ai:merged"], "11": []}),
+						})()
+					) == 0
+			finally:
+				os.unlink(second_state_path)
+
+			assert json.loads(second_stdout.getvalue())["wave_complete"] is False
+			assert "TASK_STATE_UNBLOCK" not in second_stderr.getvalue()
+		finally:
+			task_state.REPO_ROOT = previous_root
+			if previous_flag is None:
+				os.environ.pop("ORCH_TASK_FILES_ENABLED", None)
+			else:
+				os.environ["ORCH_TASK_FILES_ENABLED"] = previous_flag
+
+def test_check_wave_status_does_not_unblock_task_state_dependents_for_not_created_transition():
+	import io
+	from contextlib import redirect_stderr, redirect_stdout
+
+	import task_state
+
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		previous_root = task_state.REPO_ROOT
+		previous_flag = os.environ.get("ORCH_TASK_FILES_ENABLED")
+		task_state.REPO_ROOT = root
+		os.environ["ORCH_TASK_FILES_ENABLED"] = "true"
+		try:
+			issue_one = {"id": "issue-1", "github_issue": None, "status": "pending"}
+			issue_two = {
+				"id": "issue-2",
+				"github_issue": 11,
+				"status": "pending",
+				"depends_on": ["issue-1"],
+				"reissue_depends_on": [999],
+			}
+			assert task_state.write_task(1, "issue-1", issue_one)
+			assert task_state.write_task(1, "issue-2", issue_two)
+
+			state = _make_state(
+				waves=[{"wave": 1, "issues": [dict(issue_one), dict(issue_two)]}],
+				current_wave=1,
+			)
+			with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as handle:
+				json.dump(state, handle)
+				state_path = handle.name
+
+			try:
+				stdout_buffer = io.StringIO()
+				stderr_buffer = io.StringIO()
+				with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+					assert orchestrate_lib.cmd_check_wave_status(
+						type("Args", (), {
+							"state_file": state_path,
+							"labels_json": json.dumps({"11": []}),
+						})()
+					) == 0
+			finally:
+				os.unlink(state_path)
+
+			assert json.loads(stdout_buffer.getvalue())["wave_complete"] is False
+			assert task_state.read_task(1, "issue-2") == {
+				"depends_on": ["issue-1"],
+				"github_issue": 11,
+				"id": "issue-2",
+				"reissue_depends_on": [999],
+				"schema_version": "task_state.v1.json",
+				"status": "pending",
+			}
+			assert "TASK_STATE_UNBLOCK" not in stderr_buffer.getvalue()
+		finally:
+			task_state.REPO_ROOT = previous_root
+			if previous_flag is None:
+				os.environ.pop("ORCH_TASK_FILES_ENABLED", None)
+			else:
+				os.environ["ORCH_TASK_FILES_ENABLED"] = previous_flag
+
+
+def test_check_wave_status_uses_legacy_unblock_call_for_wrapper_without_payload_param():
+	import io
+	from contextlib import redirect_stderr, redirect_stdout
+
+	import task_state
+
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		previous_root = task_state.REPO_ROOT
+		previous_flag = os.environ.get("ORCH_TASK_FILES_ENABLED")
+		original_unblock_dependents = task_state.unblock_dependents
+		task_state.REPO_ROOT = root
+		os.environ["ORCH_TASK_FILES_ENABLED"] = "true"
+		try:
+			issue_one = {"id": "issue-1", "github_issue": 10, "status": "pending"}
+			issue_two = {
+				"id": "issue-2",
+				"github_issue": 11,
+				"status": "pending",
+				"depends_on": ["issue-1"],
+				"reissue_depends_on": [10, 999],
+			}
+			assert task_state.write_task(1, "issue-1", issue_one)
+			assert task_state.write_task(1, "issue-2", issue_two)
+
+			def _legacy_wrapper(_wave_id: object, _completed_issue_id: object, **kwargs: object) -> int:
+				if kwargs:
+					raise TypeError("legacy wrapper rejected kwargs")
+				return original_unblock_dependents(_wave_id, _completed_issue_id)
+
+			task_state.unblock_dependents = _legacy_wrapper
+			state = _make_state(
+				waves=[{"wave": 1, "issues": [dict(issue_one), dict(issue_two)]}],
+				current_wave=1,
+			)
+			with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as handle:
+				json.dump(state, handle)
+				state_path = handle.name
+
+			try:
+				stdout_buffer = io.StringIO()
+				stderr_buffer = io.StringIO()
+				with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+					assert orchestrate_lib.cmd_check_wave_status(
+						type("Args", (), {
+							"state_file": state_path,
+							"labels_json": json.dumps({"10": ["ai:merged"], "11": []}),
+						})()
+					) == 0
+			finally:
+				os.unlink(state_path)
+
+			assert json.loads(stdout_buffer.getvalue())["wave_complete"] is False
+			assert task_state.read_task(1, "issue-2") == {
+				"depends_on": [],
+				"github_issue": 11,
+				"id": "issue-2",
+				"reissue_depends_on": [999],
+				"schema_version": "task_state.v1.json",
+				"status": "pending",
+			}
+			assert "TASK_STATE_UNBLOCK 1 issue-1 1" in stderr_buffer.getvalue()
+			assert "TASK_STATE_WRITE_FAIL" not in stderr_buffer.getvalue()
+		finally:
+			task_state.unblock_dependents = original_unblock_dependents
+			task_state.REPO_ROOT = previous_root
+			if previous_flag is None:
+				os.environ.pop("ORCH_TASK_FILES_ENABLED", None)
+			else:
+				os.environ["ORCH_TASK_FILES_ENABLED"] = previous_flag
+
+
+def test_check_wave_status_task_state_failures_are_fail_open():
+	import io
+	from contextlib import redirect_stderr, redirect_stdout
+
+	import task_state
+
+	previous_flag = os.environ.get("ORCH_TASK_FILES_ENABLED")
+	original_unblock_dependents = task_state.unblock_dependents
+	os.environ["ORCH_TASK_FILES_ENABLED"] = "true"
+	try:
+		def _boom(_wave_id: object, _completed_issue_id: object) -> int:
+			raise RuntimeError("boom")
+
+		task_state.unblock_dependents = _boom
+		state = _make_state()
+		stdout_buffer = io.StringIO()
+		stderr_buffer = io.StringIO()
+		with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as handle:
+			json.dump(state, handle)
+			state_path = handle.name
+
+		try:
+			with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
+				assert orchestrate_lib.cmd_check_wave_status(
+					type("Args", (), {
+						"state_file": state_path,
+						"labels_json": json.dumps({"10": ["ai:merged"], "11": ["ai:merged"]}),
+					})()
+				) == 0
+		finally:
+			os.unlink(state_path)
+
+		result = json.loads(stdout_buffer.getvalue())
+		assert result["wave_complete"] is True
+		assert result["project_complete"] is True
+		assert "TASK_STATE_WRITE_FAIL issue-1 unblock_failed:boom" in stderr_buffer.getvalue()
+	finally:
+		task_state.unblock_dependents = original_unblock_dependents
+		if previous_flag is None:
+			os.environ.pop("ORCH_TASK_FILES_ENABLED", None)
+		else:
+			os.environ["ORCH_TASK_FILES_ENABLED"] = previous_flag
+
+def test_detect_stalls_selects_run_stall_judge_at_trigger_threshold():
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 2
+	labels = {"10": ["ai:implementing"], "11": ["ai:merged"]}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=True,
+	)
+
+	assert len(stalls) == 1
+	assert stalls[0]["github_issue"] == 10
+	assert stalls[0]["recovery_action"] == "run_stall_judge"
+
+
+def test_detect_stalls_uses_ladder_when_stall_judge_disabled_for_implementing_phase():
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 2
+	labels = {"10": ["ai:implementing"], "11": ["ai:merged"]}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=False,
+	)
+
+	assert len(stalls) == 1
+	assert stalls[0]["recovery_action"] == orchestrate_lib.STALL_RECOVERY_ACTIONS["ai:implementing"][1]
+
+
+def _iso_z(epoch: int) -> str:
+	"""Render a Unix epoch as an ISO 8601 UTC string with the trailing Z suffix.
+
+	Mirrors GitHub's GraphQL ``pushedDate`` / ``committedDate`` shape so the
+	re-anchor tests below exercise the same parser path as production input.
+	"""
+	import datetime as _dt
+	return _dt.datetime.fromtimestamp(epoch, tz=_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _ai_done_state_past_threshold(now_ts: int) -> tuple[dict, dict]:
+	"""Build a wave with one ``ai:done`` issue whose ``status_since_ts`` sits
+	200 minutes in the past, comfortably past the 120-minute ``ai:done``
+	stall threshold so any failure to re-anchor still surfaces as a stall.
+	"""
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = now_ts - 200 * 60
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 0
+	labels = {"10": ["ai:done"], "11": ["ai:merged"]}
+	return state, labels
+
+
+def test_detect_stalls_ai_done_reanchors_to_fresh_head_pushed_at():
+	"""Q2=A: an ``ai:done`` issue whose linked PR was pushed inside the
+	stall window must NOT be flagged as stalled, even when
+	``status_since_ts`` alone would put it well past the threshold.
+	"""
+	now_ts = 1_700_000_000
+	state, labels = _ai_done_state_past_threshold(now_ts)
+
+	# Push happened 30 minutes ago — well inside the 120-min ai:done window,
+	# so the re-anchor must clamp the effective elapsed back below threshold.
+	head_pushed_at = {"10": _iso_z(now_ts - 30 * 60)}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=now_ts,
+		head_pushed_at=head_pushed_at,
+	)
+
+	assert stalls == [], (
+		f"Fresh head-push should re-anchor ai:done out of stalled set; got {stalls!r}"
+	)
+
+
+def test_detect_stalls_ai_done_still_stalled_when_head_push_is_also_stale():
+	"""Re-anchor must NOT mask a genuine stall: when ``headPushedAt`` itself
+	is older than the stall threshold, the issue must still be flagged.
+	"""
+	now_ts = 1_700_000_000
+	state, labels = _ai_done_state_past_threshold(now_ts)
+
+	# Push happened 180 minutes ago — still past the 120-min threshold.
+	head_pushed_at = {"10": _iso_z(now_ts - 180 * 60)}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=now_ts,
+		head_pushed_at=head_pushed_at,
+	)
+
+	assert len(stalls) == 1, stalls
+	assert stalls[0]["github_issue"] == 10
+	# stall_duration_minutes reflects the re-anchored elapsed (now - max(status_since, push))
+	assert stalls[0]["stall_duration_minutes"] == 180
+
+
+def test_detect_stalls_reanchor_scope_excludes_non_ai_done_phases():
+	"""Q2=A scopes the re-anchor to ``ai:done`` only.  Other phases keep
+	the legacy ``status_since_ts``-only anchor, so a fresh head push on an
+	``ai:implementing`` issue must NOT suppress the stall flag.
+	"""
+	now_ts = 1_700_000_000
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = now_ts - 200 * 60
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 0
+	# ai:implementing has the same 120-min default threshold as ai:done, so the
+	# only thing standing between "stalled" and "not stalled" is the re-anchor.
+	labels = {"10": ["ai:implementing"], "11": ["ai:merged"]}
+
+	head_pushed_at = {"10": _iso_z(now_ts - 30 * 60)}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=now_ts,
+		head_pushed_at=head_pushed_at,
+	)
+
+	assert len(stalls) == 1, (
+		f"Re-anchor must NOT apply to ai:implementing; got {stalls!r}"
+	)
+	assert stalls[0]["phase"] == "ai:implementing"
+
+
+def test_detect_stalls_reanchor_fails_open_on_missing_entry():
+	"""Fail-open: when the head-push mapping is provided but contains no
+	entry for a given issue, the legacy ``status_since_ts`` anchor is used.
+	"""
+	now_ts = 1_700_000_000
+	state, labels = _ai_done_state_past_threshold(now_ts)
+
+	# Mapping is non-empty but lacks an entry for issue 10.
+	head_pushed_at = {"99": _iso_z(now_ts - 30 * 60)}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=now_ts,
+		head_pushed_at=head_pushed_at,
+	)
+
+	assert len(stalls) == 1, stalls
+	assert stalls[0]["github_issue"] == 10
+
+
+def test_detect_stalls_reanchor_fails_open_on_unparseable_timestamp():
+	"""Fail-open: an unparseable ISO 8601 string must not crash detection
+	and must not suppress the stall — the legacy anchor remains in effect.
+	"""
+	now_ts = 1_700_000_000
+	state, labels = _ai_done_state_past_threshold(now_ts)
+
+	head_pushed_at = {"10": "not-an-iso-8601-string"}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=now_ts,
+		head_pushed_at=head_pushed_at,
+	)
+
+	assert len(stalls) == 1, stalls
+	assert stalls[0]["github_issue"] == 10
+
+
+def test_detect_stalls_reanchor_clamps_future_dated_head_push_to_now():
+	"""Clock-skew defence: a future-dated ``headPushedAt`` (clock skew or a
+	bogus value) must be clamped at ``now_ts`` rather than making the issue
+	look perpetually fresh.  The clamped anchor still moves the effective
+	elapsed to 0, so the issue is treated as fresh until wall-clock time
+	reaches the future timestamp.  Tests the clamp specifically by
+	asserting the issue drops out of the stalled set on this cycle.
+	"""
+	now_ts = 1_700_000_000
+	state, labels = _ai_done_state_past_threshold(now_ts)
+
+	# Timestamp three hours in the future — clamped at now_ts.
+	head_pushed_at = {"10": _iso_z(now_ts + 3 * 60 * 60)}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=now_ts,
+		head_pushed_at=head_pushed_at,
+	)
+
+	assert stalls == [], (
+		f"Future-dated head push must clamp at now_ts, not propagate; got {stalls!r}"
+	)
+
+
+def test_detect_stalls_reanchor_parses_iso_with_microseconds_and_z_suffix():
+	"""GitHub's GraphQL emits both ``2023-11-14T21:43:20Z`` and
+	``2023-11-14T21:43:20.123456Z`` shapes.  Both must parse cleanly.
+	"""
+	now_ts = 1_700_000_000
+	state, labels = _ai_done_state_past_threshold(now_ts)
+
+	import datetime as _dt
+	fresh_with_us = _dt.datetime.fromtimestamp(
+		now_ts - 30 * 60, tz=_dt.timezone.utc
+	).strftime("%Y-%m-%dT%H:%M:%S.123456Z")
+	head_pushed_at = {"10": fresh_with_us}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=now_ts,
+		head_pushed_at=head_pushed_at,
+	)
+
+	assert stalls == [], (
+		f"ISO 8601 with microseconds + Z suffix must parse; got {stalls!r}"
+	)
+
+
+def test_detect_stalls_reanchor_no_op_when_head_pushed_at_is_none():
+	"""Calling ``detect_stalls`` without the new kwarg must preserve every
+	pre-existing semantic exactly — the new logic is opt-in via the kwarg.
+	"""
+	now_ts = 1_700_000_000
+	state, labels = _ai_done_state_past_threshold(now_ts)
+
+	stalls_legacy = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=now_ts,
+	)
+	stalls_none = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=now_ts,
+		head_pushed_at=None,
+	)
+	stalls_empty = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=now_ts,
+		head_pushed_at={},
+	)
+
+	assert stalls_legacy == stalls_none == stalls_empty
+	assert len(stalls_legacy) == 1
+	assert stalls_legacy[0]["github_issue"] == 10
+
+
+def test_parse_iso8601_to_epoch_handles_common_shapes_and_failures():
+	"""Direct coverage of the parser helper used by the ai:done re-anchor.
+
+	The helper feeds untrusted strings from GitHub's GraphQL responses, so
+	the contract is "return a finite integer epoch or None — never raise".
+	"""
+	# Z suffix (the common GitHub shape)
+	assert orchestrate_lib._parse_iso8601_to_epoch("2023-11-14T21:43:20Z") == 1_699_998_200
+	# Z suffix with microseconds
+	assert orchestrate_lib._parse_iso8601_to_epoch("2023-11-14T21:43:20.500Z") == 1_699_998_200
+	# Explicit +00:00 offset
+	assert orchestrate_lib._parse_iso8601_to_epoch("2023-11-14T21:43:20+00:00") == 1_699_998_200
+	# Non-UTC offset: 21:43:20+02:00 = 19:43:20Z = epoch 1_699_991_000
+	# 1_699_998_200 - 2*3600 = 1_699_991_000
+	assert orchestrate_lib._parse_iso8601_to_epoch("2023-11-14T21:43:20+02:00") == 1_699_991_000
+	# Naive datetime (interpreted as UTC per GitHub contract)
+	assert orchestrate_lib._parse_iso8601_to_epoch("2023-11-14T21:43:20") == 1_699_998_200
+
+	# Failure modes — must return None, must not raise.
+	assert orchestrate_lib._parse_iso8601_to_epoch("") is None
+	assert orchestrate_lib._parse_iso8601_to_epoch(None) is None
+	assert orchestrate_lib._parse_iso8601_to_epoch("not-a-date") is None
+	assert orchestrate_lib._parse_iso8601_to_epoch(12345) is None
+	assert orchestrate_lib._parse_iso8601_to_epoch([]) is None
+	assert orchestrate_lib._parse_iso8601_to_epoch("2023-99-99T99:99:99Z") is None
+
+def test_parse_iso8601_to_epoch_fails_open_on_timestamp_conversion_errors():
+	"""``datetime.timestamp()`` can raise platform-specific conversion errors.
+
+	The helper's fail-open contract must treat those the same as parse errors.
+	"""
+	original_datetime = orchestrate_lib.datetime
+
+	def _fake_datetime_module(exc_type):
+		class _FakeDatetimeModule:
+			@staticmethod
+			def fromisoformat(_s):
+				class _FakeDT:
+					tzinfo = object()
+
+					def replace(self, **_kwargs):
+						return self
+
+					def timestamp(self):
+						raise exc_type("boom")
+
+				return _FakeDT()
+
+		return _FakeDatetimeModule
+
+	try:
+		for exc_type in (OverflowError, OSError):
+			orchestrate_lib.datetime = _fake_datetime_module(exc_type)
+			assert orchestrate_lib._parse_iso8601_to_epoch("2023-11-14T21:43:20Z") is None
+	finally:
+		orchestrate_lib.datetime = original_datetime
+
+def test_cmd_check_stalls_parses_head_pushed_at_json_and_threads_it_through(tmp_path=None):
+	"""``cmd_check_stalls`` must accept ``--head-pushed-at-json`` and pass
+	the parsed mapping into ``detect_stalls``.  Validates the CLI wiring
+	added alongside the re-anchor.
+	"""
+	# tmp_path arg is optional so this test runs under both pytest and the
+	# project's plain-python runner (which doesn't inject fixtures).
+	import pathlib
+	import shutil
+	import tempfile
+
+	td_owner = None
+	if tmp_path is None:
+		td_owner = tempfile.mkdtemp(prefix="stall_reanchor_cli_")
+		tmp_path = pathlib.Path(td_owner)
+	try:
+		now_ts = 1_700_000_000
+		state, _labels = _ai_done_state_past_threshold(now_ts)
+		state_path = tmp_path / "state.json"
+		state_path.write_text(json.dumps(state), encoding="utf-8")
+
+		captured: dict = {}
+		original = orchestrate_lib.detect_stalls
+
+		def _capturing_detect_stalls(*args, **kwargs):
+			captured["head_pushed_at"] = kwargs.get("head_pushed_at")
+			return original(*args, **kwargs)
+
+		orchestrate_lib.detect_stalls = _capturing_detect_stalls
+		try:
+			parser = orchestrate_lib.build_parser()
+			args = parser.parse_args([
+				"check-stalls",
+				"--state-file", str(state_path),
+				"--labels-json", json.dumps({"10": ["ai:done"], "11": ["ai:merged"]}),
+				"--threshold-minutes", "120",
+				"--now-ts", str(now_ts),
+				"--head-pushed-at-json", json.dumps({"10": _iso_z(now_ts - 30 * 60), "11": ""}),
+			])
+			rc = orchestrate_lib.cmd_check_stalls(args)
+		finally:
+			orchestrate_lib.detect_stalls = original
+
+		assert rc == 0
+		assert captured.get("head_pushed_at") is not None
+		# Empty-string entry for "11" must be filtered out by the CLI parser
+		# so detect_stalls never sees it.
+		assert "11" not in captured["head_pushed_at"]
+		assert "10" in captured["head_pushed_at"]
+	finally:
+		if td_owner is not None:
+			shutil.rmtree(td_owner, ignore_errors=True)
+
+
+def test_resolve_stall_recovery_action_allows_human_terminalization_when_enabled():
+	action = orchestrate_lib.resolve_stall_recovery_action(
+		"ai:implementing",
+		2,
+		max_recoveries=5,
+		enable_stall_human_terminalization=True,
+	)
+
+	assert action == "escalate_human"
+
+
+def test_resolve_stall_recovery_action_fails_open_for_terminal_only_malformed_ladder():
+	action = orchestrate_lib.resolve_stall_recovery_action(
+		"ai:planning",
+		2,
+		max_recoveries=5,
+		enable_stall_human_terminalization=False,
+		actions_by_phase={"ai:planning": ["escalate_human"]},
+	)
+
+	assert action == "retrigger_pipeline"
+
+
+def test_resolve_stall_recovery_action_phase_specific_cap_overrides_global_max():
+	# At/above the global max_recoveries cap, the default behaviour returns
+	# "skip" — see test_detect_stalls_still_skips_at_or_above_max_recoveries
+	# below.  A per-phase override raises that cap so the configured ladder
+	# runs to its natural end (e.g. retrigger_review → escalate_human for
+	# ai:done) instead of devolving into a destructive skip.
+	action_default = orchestrate_lib.resolve_stall_recovery_action(
+		"ai:done",
+		recovery_count=5,
+		max_recoveries=5,
+	)
+	assert action_default == "skip"
+
+	action_overridden = orchestrate_lib.resolve_stall_recovery_action(
+		"ai:done",
+		recovery_count=5,
+		max_recoveries=5,
+		max_recoveries_by_phase={"ai:done": 99},
+	)
+	assert action_overridden == "retrigger_review"
+
+	# Override on an unrelated phase must not affect ai:done.
+	action_unrelated = orchestrate_lib.resolve_stall_recovery_action(
+		"ai:done",
+		recovery_count=5,
+		max_recoveries=5,
+		max_recoveries_by_phase={"ai:clarification": 99},
+	)
+	assert action_unrelated == "skip"
+
+
+def test_resolve_stall_recovery_action_phase_specific_cap_invalid_values_ignored():
+	# Non-int / non-positive overrides must be ignored so a misconfigured
+	# operator setting (e.g. MAX_STALL_RECOVERIES_DONE=0 or "bogus") cannot
+	# accidentally raise the effective cap to 0 and turn every ai:done
+	# recovery into "skip" on the first attempt.
+	for bogus in (0, -1, "bogus", None, 3.5):
+		action = orchestrate_lib.resolve_stall_recovery_action(
+			"ai:done",
+			recovery_count=5,
+			max_recoveries=5,
+			max_recoveries_by_phase={"ai:done": bogus},  # type: ignore[dict-item]
+		)
+		# Falls back to the global cap, which at recovery_count=5 returns skip.
+		assert action == "skip", f"bogus override {bogus!r} should fall back to global cap"
+
+
+def test_resolve_effective_stall_recovery_action_threads_phase_specific_cap():
+	# `resolve_effective_stall_recovery_action` is the entry point used to
+	# normalise stall-judge candidate actions; it must thread the per-phase
+	# cap through to the fallback resolution so a candidate of None /
+	# unrecognised string still respects the ai:done override.
+	effective = orchestrate_lib.resolve_effective_stall_recovery_action(
+		"ai:done",
+		recovery_count=10,
+		candidate_action=None,
+		max_recoveries=5,
+		max_recoveries_by_phase={"ai:done": 99},
+	)
+	assert effective == "retrigger_review"
+
+
+def test_detect_stalls_skips_needs_human_label():
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 3
+	labels = {"10": ["ai:implementing", "ai:needs-human"], "11": ["ai:merged"]}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=True,
+	)
+
+	assert stalls == []
+
+	# Invalid zero-based state must not select the final wave via waves[-1].
+	state["current_wave"] = 0
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+	)
+	assert stalls == []
+
+
+def test_detect_stalls_skips_human_gated_latch_labels():
+	"""Regression for issue #3906 (shubhodeep1/tele-funtoken-msg-scoring):
+	an ai:awaiting-approval issue latched with ai:destructive-blocked was
+	re-approved by stall recovery once per poll cycle even though
+	implement.yml refuses to redispatch it until a human removes the
+	latch.  The latch must pause stall detection like ai:needs-human.
+
+	Plain loop rather than pytest.mark.parametrize: CI also runs this
+	module directly via ``python3 tests/test_orchestrate_lib.py``.
+	"""
+	for latch_label in ("ai:destructive-blocked", "ai:scope-blocked"):
+		_assert_detect_stalls_skips_latch_label(latch_label)
+
+
+def _assert_detect_stalls_skips_latch_label(latch_label: str) -> None:
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 1
+	labels = {
+		"10": ["ai:awaiting-approval", "ai:orchestrator-managed", latch_label],
+		"11": ["ai:merged"],
+	}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=60,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=True,
+	)
+
+	assert stalls == []
+
+	# Negative control: the same issue without the latch is a real stall
+	# whose ladder action is auto_approve.
+	labels["10"] = ["ai:awaiting-approval", "ai:orchestrator-managed"]
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=60,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=True,
+	)
+	assert [s["github_issue"] for s in stalls] == [10]
+	assert stalls[0]["recovery_action"] == "auto_approve"
+
+
+def test_detect_stalls_skips_workflow_heal_escalated_latch():
+	"""Issue #9248: a heal issue the workflow-failure heal intake escalated
+	(ai:workflow-heal-escalated) must not be retried or auto-answered by
+	stall recovery; the poller reports it as a human-gated latch instead.
+	"""
+	_assert_detect_stalls_skips_latch_label("ai:workflow-heal-escalated")
+
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	labels = {"10": ["ai:awaiting-approval", "ai:workflow-heal-escalated"]}
+	latched = orchestrate_lib.detect_stall_latched_issues(state, labels)
+	assert latched == [
+		{
+			"id": "issue-1",
+			"github_issue": 10,
+			"phase": "ai:awaiting-approval",
+			"latch_label": "ai:workflow-heal-escalated",
+		}
+	]
+
+
+def test_stall_recovery_latch_label_helper():
+	assert orchestrate_lib.stall_recovery_latch_label(["ai:awaiting-approval"]) is None
+	assert orchestrate_lib.stall_recovery_latch_label([]) is None
+	assert orchestrate_lib.stall_recovery_latch_label(None) is None
+	assert orchestrate_lib.stall_recovery_latch_label("ai:destructive-blocked") is None
+	assert (
+		orchestrate_lib.stall_recovery_latch_label(["ai:awaiting-approval", "ai:destructive-blocked"])
+		== "ai:destructive-blocked"
+	)
+	assert (
+		orchestrate_lib.stall_recovery_latch_label(["ai:scope-blocked", "ai:implementing"])
+		== "ai:scope-blocked"
+	)
+	assert (
+		orchestrate_lib.stall_recovery_latch_label(["ai:awaiting-approval", "ai:workflow-heal-escalated"])
+		== "ai:workflow-heal-escalated"
+	)
+	# Appended last: first-match order for the older latch labels holds.
+	assert (
+		orchestrate_lib.stall_recovery_latch_label(["ai:workflow-heal-escalated", "ai:destructive-blocked"])
+		== "ai:destructive-blocked"
+	)
+	# Every latch label is a plain marker, never a phase label, so the
+	# phase machine keeps reporting the underlying pipeline phase.
+	for latch_label in orchestrate_lib.STALL_RECOVERY_LATCH_LABELS:
+		assert latch_label not in orchestrate_lib.PHASE_LABELS_PRIORITY
+		assert orchestrate_lib.determine_phase(["ai:awaiting-approval", latch_label]) == "ai:awaiting-approval"
+
+
+def test_detect_stall_latched_issues_reports_only_latched_non_terminal_issues():
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][1]["status"] = "merged"
+	labels = {
+		"10": ["ai:awaiting-approval", "ai:destructive-blocked"],
+		# Terminal wave status: never reported even when latched.
+		"11": ["ai:merged", "ai:scope-blocked"],
+	}
+
+	latched = orchestrate_lib.detect_stall_latched_issues(state, labels)
+
+	assert latched == [
+		{
+			"id": "issue-1",
+			"github_issue": 10,
+			"phase": "ai:awaiting-approval",
+			"latch_label": "ai:destructive-blocked",
+		}
+	]
+	assert orchestrate_lib.detect_stall_latched_issues(state, {"10": ["ai:awaiting-approval"]}) == []
+	# Invalid current waves fail open instead of selecting waves[-1].
+	assert orchestrate_lib.detect_stall_latched_issues(_make_state(current_wave=0), labels) == []
+	assert orchestrate_lib.detect_stall_latched_issues(_make_state(current_wave=5), labels) == []
+
+
+def test_cmd_check_stalls_emits_additive_latched_field():
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 1
+
+	result = _run_check_stalls(
+		state,
+		{"10": ["ai:awaiting-approval", "ai:destructive-blocked"], "11": ["ai:merged"]},
+		threshold_minutes=60,
+		now_ts=8 * 60 * 60,
+	)
+
+	assert result["ok"] is True
+	assert result["stalls"] == []
+	assert result["count"] == 0
+	assert result["latched"] == [
+		{
+			"id": "issue-1",
+			"github_issue": 10,
+			"phase": "ai:awaiting-approval",
+			"latch_label": "ai:destructive-blocked",
+		}
+	]
+
+	# Unlatched payload keeps the pre-existing keys and an empty list.
+	result = _run_check_stalls(
+		state,
+		{"10": ["ai:awaiting-approval"], "11": ["ai:merged"]},
+		threshold_minutes=60,
+		now_ts=8 * 60 * 60,
+	)
+	assert result["count"] == 1
+	assert result["stalls"][0]["recovery_action"] == "auto_approve"
+	assert result["latched"] == []
+
+
+def test_detect_stalls_max_recoveries_still_skips_with_judge_enabled():
+	state = _make_state()
+	state["waves"][0]["issues"][0]["status"] = "in_progress"
+	state["waves"][0]["issues"][0]["status_since_ts"] = 1
+	state["waves"][0]["issues"][0]["stall_recovery_count"] = 5
+	labels = {"10": ["ai:implementing"], "11": ["ai:merged"]}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=True,
+	)
+
+	assert len(stalls) == 1
+	assert stalls[0]["recovery_action"] == "skip"
+
+
+def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_with_trigger_override():
+	captured: dict[str, object] = {}
+	original_detect_stalls = orchestrate_lib.detect_stalls
+
+	def _fake_detect_stalls(
+		state: dict,
+		issue_labels: dict[str, list[str]],
+		threshold_minutes: int,
+		now_ts: int,
+		max_recoveries: int = 5,
+		phase_thresholds: dict[str, int] | None = None,
+		stall_judge_trigger_count: int = 2,
+		enable_stall_judge: bool = True,
+		enable_stall_human_terminalization: bool = False,
+		max_recoveries_by_phase: dict[str, int] | None = None,
+		head_pushed_at: dict[str, str] | None = None,
+	) -> list[dict[str, object]]:
+		captured["state"] = state
+		captured["issue_labels"] = issue_labels
+		captured["threshold_minutes"] = threshold_minutes
+		captured["now_ts"] = now_ts
+		captured["max_recoveries"] = max_recoveries
+		captured["phase_thresholds"] = phase_thresholds
+		captured["max_recoveries_by_phase"] = max_recoveries_by_phase
+		captured["stall_judge_trigger_count"] = stall_judge_trigger_count
+		captured["enable_stall_judge"] = enable_stall_judge
+		captured["enable_stall_human_terminalization"] = enable_stall_human_terminalization
+		return []
+
+	orchestrate_lib.detect_stalls = _fake_detect_stalls
+	try:
+		state = _make_state()
+		labels = {"10": ["ai:planning"], "11": ["ai:planning"]}
+		_ = _run_check_stalls(
+			state,
+			labels,
+			threshold_minutes=45,
+			now_ts=777,
+			max_recoveries=6,
+			phase_thresholds_json='{"ai:planning": 90}',
+			stall_judge_trigger_count=3,
+			enable_stall_judge="true",
+		)
+	finally:
+		orchestrate_lib.detect_stalls = original_detect_stalls
+
+	assert captured["threshold_minutes"] == 45
+	assert captured["now_ts"] == 777
+	assert captured["max_recoveries"] == 6
+	assert captured["phase_thresholds"] == {"ai:planning": 90}
+	assert captured["max_recoveries_by_phase"] is None
+	assert captured["stall_judge_trigger_count"] == 3
+	assert captured["enable_stall_judge"] is True
+	assert captured["enable_stall_human_terminalization"] is False
+
+
+def test_detect_stalls_returns_run_stall_judge_at_trigger():
+	now_ts = 5000
+	waves = [
+		{
+			"wave": 1,
+			"issues": [
+				{
+					"id": "issue-1",
+					"github_issue": 10,
+					"status": "pending",
+					"status_since_ts": 1000,
+					"stall_recovery_count": 2,
+				}
+			],
+		}
+	]
+	state = _make_state(waves=waves, current_wave=1)
+	labels = {"10": ["ai:planning"]}
+	result = orchestrate_lib.detect_stalls(
+		state,
+		labels,
+		threshold_minutes=1,
+		now_ts=now_ts,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=True,
+	)
+	assert len(result) == 1
+	assert result[0]["recovery_action"] == "run_stall_judge"
+
+
+def test_detect_stalls_still_skips_at_or_above_max_recoveries():
+	now_ts = 5000
+	waves = [
+		{
+			"wave": 1,
+			"issues": [
+				{
+					"id": "issue-1",
+					"github_issue": 10,
+					"status": "pending",
+					"status_since_ts": 1000,
+					"stall_recovery_count": 5,
+				}
+			],
+		}
+	]
+	state = _make_state(waves=waves, current_wave=1)
+	labels = {"10": ["ai:planning"]}
+	result = orchestrate_lib.detect_stalls(
+		state,
+		labels,
+		threshold_minutes=1,
+		now_ts=now_ts,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=True,
+	)
+	assert len(result) == 1
+	assert result[0]["recovery_action"] == "skip"
+
+
+def test_detect_stalls_uses_ladder_when_stall_judge_disabled_for_planning_phase_low_trigger():
+	now_ts = 5000
+	waves = [
+		{
+			"wave": 1,
+			"issues": [
+				{
+					"id": "issue-1",
+					"github_issue": 10,
+					"status": "pending",
+					"status_since_ts": 1000,
+					"stall_recovery_count": 1,
+				}
+			],
+		}
+	]
+	state = _make_state(waves=waves, current_wave=1)
+	labels = {"10": ["ai:planning"]}
+	result = orchestrate_lib.detect_stalls(
+		state,
+		labels,
+		threshold_minutes=1,
+		now_ts=now_ts,
+		max_recoveries=5,
+		stall_judge_trigger_count=0,
+		enable_stall_judge=False,
+	)
+	assert len(result) == 1
+	assert result[0]["recovery_action"] == orchestrate_lib.STALL_RECOVERY_ACTIONS["ai:planning"][1]
+
+
+def test_detect_stalls_human_terminalization_enabled_preserves_escalate_human():
+	now_ts = 5000
+	waves = [
+		{
+			"wave": 1,
+			"issues": [
+				{
+					"id": "issue-1",
+					"github_issue": 10,
+					"status": "pending",
+					"status_since_ts": 1000,
+					"stall_recovery_count": 2,
+				}
+			],
+		}
+	]
+	state = _make_state(waves=waves, current_wave=1)
+	labels = {"10": ["ai:planning"]}
+	result = orchestrate_lib.detect_stalls(
+		state,
+		labels,
+		threshold_minutes=1,
+		now_ts=now_ts,
+		max_recoveries=5,
+		stall_judge_trigger_count=0,
+		enable_stall_judge=False,
+		enable_stall_human_terminalization=True,
+	)
+	assert len(result) == 1
+	assert result[0]["recovery_action"] == "escalate_human"
+
+
+def test_cmd_check_stalls_forwards_stall_judge_flags_to_detect_stalls_when_explicitly_enabled():
+	captured: dict[str, object] = {}
+	original_detect_stalls = orchestrate_lib.detect_stalls
+
+	def _fake_detect_stalls(
+		state: dict,
+		issue_labels: dict[str, list[str]],
+		threshold_minutes: int,
+		now_ts: int,
+		max_recoveries: int = 5,
+		phase_thresholds: dict[str, int] | None = None,
+		stall_judge_trigger_count: int = 0,
+		enable_stall_judge: bool = False,
+		enable_stall_human_terminalization: bool = False,
+		max_recoveries_by_phase: dict[str, int] | None = None,
+		head_pushed_at: dict[str, str] | None = None,
+	) -> list[dict[str, object]]:
+		captured["state"] = state
+		captured["issue_labels"] = issue_labels
+		captured["threshold_minutes"] = threshold_minutes
+		captured["now_ts"] = now_ts
+		captured["max_recoveries"] = max_recoveries
+		captured["phase_thresholds"] = phase_thresholds
+		captured["max_recoveries_by_phase"] = max_recoveries_by_phase
+		captured["stall_judge_trigger_count"] = stall_judge_trigger_count
+		captured["enable_stall_judge"] = enable_stall_judge
+		captured["enable_stall_human_terminalization"] = enable_stall_human_terminalization
+		return []
+
+	orchestrate_lib.detect_stalls = _fake_detect_stalls
+	try:
+		state = _make_state()
+		labels = {"10": ["ai:planning"], "11": ["ai:planning"]}
+		_ = _run_check_stalls(
+			state,
+			labels,
+			threshold_minutes=45,
+			now_ts=777,
+			max_recoveries=6,
+			phase_thresholds_json='{"ai:planning": 90}',
+			stall_judge_trigger_count=3,
+			enable_stall_judge="true",
+		)
+	finally:
+		orchestrate_lib.detect_stalls = original_detect_stalls
+
+	assert captured["threshold_minutes"] == 45
+	assert captured["now_ts"] == 777
+	assert captured["max_recoveries"] == 6
+	assert captured["phase_thresholds"] == {"ai:planning": 90}
+	assert captured["max_recoveries_by_phase"] is None
+	assert captured["stall_judge_trigger_count"] == 3
+	assert captured["enable_stall_judge"] is True
+	assert captured["enable_stall_human_terminalization"] is False
+
+
+def test_cmd_check_stalls_forwards_human_terminalization_flag_to_detect_stalls():
+	captured: dict[str, object] = {}
+	original_detect_stalls = orchestrate_lib.detect_stalls
+
+	def _fake_detect_stalls(
+		state: dict,
+		issue_labels: dict[str, list[str]],
+		threshold_minutes: int,
+		now_ts: int,
+		max_recoveries: int = 5,
+		phase_thresholds: dict[str, int] | None = None,
+		stall_judge_trigger_count: int = 0,
+		enable_stall_judge: bool = False,
+		enable_stall_human_terminalization: bool = False,
+		max_recoveries_by_phase: dict[str, int] | None = None,
+		head_pushed_at: dict[str, str] | None = None,
+	) -> list[dict[str, object]]:
+		captured["max_recoveries_by_phase"] = max_recoveries_by_phase
+		captured["enable_stall_human_terminalization"] = enable_stall_human_terminalization
+		return []
+
+	orchestrate_lib.detect_stalls = _fake_detect_stalls
+	try:
+		state = _make_state()
+		labels = {"10": ["ai:planning"], "11": ["ai:planning"]}
+		_ = _run_check_stalls(
+			state,
+			labels,
+			stall_judge_trigger_count=1,
+			enable_stall_human_terminalization="true",
+		)
+	finally:
+		orchestrate_lib.detect_stalls = original_detect_stalls
+
+	assert captured["enable_stall_human_terminalization"] is True
+	assert captured["max_recoveries_by_phase"] is None
+
+
+def test_cmd_check_stalls_forwards_phase_specific_max_recoveries_to_detect_stalls():
+	captured: dict[str, object] = {}
+	original_detect_stalls = orchestrate_lib.detect_stalls
+
+	def _fake_detect_stalls(
+		state: dict,
+		issue_labels: dict[str, list[str]],
+		threshold_minutes: int,
+		now_ts: int,
+		max_recoveries: int = 5,
+		phase_thresholds: dict[str, int] | None = None,
+		stall_judge_trigger_count: int = 0,
+		enable_stall_judge: bool = False,
+		enable_stall_human_terminalization: bool = False,
+		max_recoveries_by_phase: dict[str, int] | None = None,
+		head_pushed_at: dict[str, str] | None = None,
+	) -> list[dict[str, object]]:
+		captured["max_recoveries_by_phase"] = max_recoveries_by_phase
+		return []
+
+	orchestrate_lib.detect_stalls = _fake_detect_stalls
+	try:
+		state = _make_state()
+		labels = {"10": ["ai:done"], "11": ["ai:merged"]}
+		_ = _run_check_stalls(
+			state,
+			labels,
+			max_recoveries_by_phase_json='{"ai:done": 99}',
+		)
+	finally:
+		orchestrate_lib.detect_stalls = original_detect_stalls
+
+	assert captured["max_recoveries_by_phase"] == {"ai:done": 99}
+
+
+def test_cmd_check_stalls_forwards_phase_specific_recovery_caps_to_detect_stalls():
+	captured: dict[str, object] = {}
+	original_detect_stalls = orchestrate_lib.detect_stalls
+
+	def _fake_detect_stalls(
+		state: dict,
+		issue_labels: dict[str, list[str]],
+		threshold_minutes: int,
+		now_ts: int,
+		max_recoveries: int = 5,
+		phase_thresholds: dict[str, int] | None = None,
+		stall_judge_trigger_count: int = 0,
+		enable_stall_judge: bool = False,
+		enable_stall_human_terminalization: bool = False,
+		max_recoveries_by_phase: dict[str, int] | None = None,
+		head_pushed_at: dict[str, str] | None = None,
+	) -> list[dict[str, object]]:
+		captured["max_recoveries_by_phase"] = max_recoveries_by_phase
+		return []
+
+	orchestrate_lib.detect_stalls = _fake_detect_stalls
+	try:
+		state = _make_state()
+		labels = {"10": ["ai:done"], "11": ["ai:planning"]}
+		_ = _run_check_stalls(
+			state,
+			labels,
+			max_recoveries_by_phase_json='{"ai:done": 99}',
+			stall_judge_trigger_count=1,
+		)
+	finally:
+		orchestrate_lib.detect_stalls = original_detect_stalls
+
+	assert captured["max_recoveries_by_phase"] == {"ai:done": 99}
+
+
+# ---------------------------------------------------------------------------
+# Tests: state schema
+# ---------------------------------------------------------------------------
+
+def test_build_tracking_state_has_review_blocked_retries():
+	data = _make_decomposition()
+	waves = orchestrate_lib.compute_waves(data)
+	issue_map = {"issue-1": 10, "issue-2": 11}
+	state = orchestrate_lib.build_tracking_state(data, waves, issue_map)
+	assert "review_blocked_retries" in state
+	assert isinstance(state["review_blocked_retries"], dict)
+	assert len(state["review_blocked_retries"]) == 0
+
+
+def test_build_tracking_state_schema():
+	data = _make_decomposition()
+	# Schema test only: skip the partition guard so both issues sit in one
+	# wave as the assertions below expect.
+	waves = orchestrate_lib.compute_waves(data, auto_serialize=False)
+	issue_map = {"issue-1": 10}
+	state = orchestrate_lib.build_tracking_state(data, waves, issue_map, integration_branch="orchestrator/project-42")
+	assert state["schema_version"] == "orchestrate_state.v1"
+	assert state["total_issues"] == 2
+	assert state["total_waves"] == 1
+	assert state["current_wave"] == 1
+	assert state["judge_cycle"] == 0
+	assert state["recovery_attempted"] is False
+	assert state["status"] == "in_progress"
+	assert state["integration_branch"] == "orchestrator/project-42"
+	assert re.fullmatch(r"[0-9a-f]{64}", state["tracking_body_sync_hash"])
+	assert re.fullmatch(r"[0-9a-f]{64}", state["tracking_body_last_readiness_refresh_hash"])
+	assert state["final_merge_strategy"] == "squash"
+	assert state["final_merge_pr"] is None
+	assert state["final_merge_status"] == "pending"
+	assert state["security_pass_cycle"] == 0
+	assert state["security_pass_status"] == "pending"
+	assert state["security_pass_active_fix_issues"] == []
+	assert state["security_pass_head_sha"] == ""
+	# issue-2 should be in pending_issue_defs (not in issue_map)
+	assert "issue-2" in state["pending_issue_defs"]
+
+
+def test_build_tracking_issue_body_includes_integration_branch():
+	data = _make_decomposition()
+	waves = orchestrate_lib.compute_waves(data)
+	body = orchestrate_lib.build_tracking_issue_body(
+		data,
+		waves,
+		integration_branch="orchestrator/project-55",
+	)
+	assert "**Integration branch:** `orchestrator/project-55`" in body
+
+
+def test_parse_tracking_body_extracts_integration_branch():
+	fixture = json.loads(_fixture_path_by_name("child_footer_backticks").read_text(encoding="utf-8"))
+	body = fixture["issues"]["1047"]["body"] + "\n### Wave 1\n\n- [ ] **issue-1**: First task (priority 1)\n"
+	parsed = orchestrate_lib.parse_tracking_body(body)
+	assert parsed["integration_branch"] == fixture["expected_stdout"]
+
+
+def test_rebuild_tracking_state_preserves_integration_defaults():
+	body = """## Project: Test Project
+
+Summary
+
+---
+
+**Total issues:** 1 | **Waves:** 1
+**Integration branch:** `orchestrator/project-77`
+
+### Wave 1
+
+- [ ] **issue-1**: First task (priority 1)
+
+---
+"""
+	state = orchestrate_lib.rebuild_tracking_state(body, {"issue-1": 10}, tracking_issue=123)
+	assert state["integration_branch"] == "orchestrator/project-77"
+	assert re.fullmatch(r"[0-9a-f]{64}", state["tracking_body_sync_hash"])
+	assert re.fullmatch(r"[0-9a-f]{64}", state["tracking_body_last_readiness_refresh_hash"])
+	assert state["final_merge_strategy"] == "squash"
+	assert state["final_merge_pr"] is None
+	assert state["final_merge_status"] == "pending"
+	assert state["security_pass_cycle"] == 0
+	assert state["security_pass_status"] == "pending"
+	assert state["security_pass_active_fix_issues"] == []
+	assert state["security_pass_head_sha"] == ""
+
+
+def test_parse_tracking_body_captures_completion_marks():
+	body = (
+		"## Project: P\n\n"
+		"### Wave 1\n\n"
+		"- [x] **done-issue**: Finished task (priority 1)\n\n"
+		"- [X] **done-issue-2**: Finished task (priority 2)\n\n"
+		"### Wave 2\n\n"
+		"- [ ] **todo-issue**: Pending task (priority 3)\n"
+	)
+	parsed = orchestrate_lib.parse_tracking_body(body)
+	assert parsed["waves"][0][0]["completed"] is True
+	assert parsed["waves"][0][1]["completed"] is True
+	assert parsed["waves"][1][0]["completed"] is False
+
+
+def test_rebuild_tracking_state_refuses_when_completed_issue_unmapped():
+	"""Mirrors project #3627: wave 1 is already complete ([x]) but the child-
+	issue search returned an empty map, so a from-scratch rebuild would reset
+	current_wave to 1 and re-create the finished issue as a duplicate.  The
+	rebuild must refuse rather than rewind."""
+	body = (
+		"## Project: P\n\n"
+		"**Integration branch:** `orchestrator/project-9`\n\n"
+		"### Wave 1\n\n- [x] **phase-h**: Phase H (priority 1)\n\n"
+		"### Wave 2\n\n- [ ] **phase-d**: Phase D (priority 2)\n"
+	)
+	try:
+		orchestrate_lib.rebuild_tracking_state(body, {}, tracking_issue=9)
+	except orchestrate_lib.ReconstructionUnsafeError as exc:
+		assert "phase-h" in str(exc)
+		# It must be an OrchestrateError so the CLI maps it to a non-zero exit
+		# and the poller falls into its "reconstruction failed, skipping" arm.
+		assert isinstance(exc, orchestrate_lib.OrchestrateError)
+	else:
+		raise AssertionError("expected ReconstructionUnsafeError")
+
+
+def test_rebuild_tracking_state_allows_when_completed_issue_mapped():
+	"""When the completed issue IS discoverable, reconstruction proceeds and
+	never queues it for re-creation."""
+	body = (
+		"## Project: P\n\n"
+		"**Integration branch:** `orchestrator/project-9`\n\n"
+		"### Wave 1\n\n- [x] **phase-h**: Phase H (priority 1)\n\n"
+		"### Wave 2\n\n- [ ] **phase-d**: Phase D (priority 2)\n"
+	)
+	state = orchestrate_lib.rebuild_tracking_state(body, {"phase-h": 100}, tracking_issue=9)
+	# The mapped, completed issue carries its real number and is not pending.
+	assert state["issue_number_map"]["phase-h"] == 100
+	assert "phase-h" not in state["pending_issue_defs"]
+	w1_issue = state["waves"][0]["issues"][0]
+	assert w1_issue["id"] == "phase-h"
+	assert w1_issue["github_issue"] == 100
+	# The still-pending, unmapped issue is legitimately queued for creation.
+	assert "phase-d" in state["pending_issue_defs"]
+
+
+def test_render_tracking_issue_body_from_state_preserves_structure_and_ticks_terminal_rows():
+	template = """## Project: Test Project
+
+Summary text stays the same.
+
+---
+
+**Total issues:** 4 | **Waves:** 2
+**Integration branch:** `orchestrator/project-77`
+
+### Wave 1
+
+- [ ] **issue-1**: First task (priority 1)
+- [ ] **issue-2**: Second task (priority 2)
+
+### Wave 2
+
+- [ ] **issue-3**: Third task (priority 3)
+- [ ] **issue-4**: Fourth task (priority 4)
+
+### Dependencies
+
+- `issue-1` -> `issue-3`
+
+---
+*This issue is managed by the AI orchestrator. Do not edit manually.*
+`ai:orchestrator-tracking`
+"""
+	state = _make_state(
+		waves=[
+			{
+				"wave": 1,
+				"issues": [
+					{"id": "issue-1", "github_issue": 10, "status": "merged"},
+					{"id": "issue-2", "github_issue": 11, "status": "closed"},
+				],
+			},
+			{
+				"wave": 2,
+				"issues": [
+					{"id": "issue-3", "github_issue": 12, "status": "skipped"},
+					{"id": "issue-4", "github_issue": None, "status": "not_created"},
+				],
+			},
+		],
+	)
+	state["project_body_snapshot"] = template
+
+	rendered = orchestrate_lib.render_tracking_issue_body_from_state(state)
+
+	assert "Summary text stays the same." in rendered
+	assert "**Integration branch:** `orchestrator/project-77`" in rendered
+	assert "### Dependencies" in rendered
+	assert "- `issue-1` -> `issue-3`" in rendered
+	assert rendered.rstrip().endswith("`ai:orchestrator-tracking`")
+	assert "- [x] **issue-1**: First task (priority 1)" in rendered
+	assert "- [x] **issue-2**: Second task (priority 2)" in rendered
+	assert "- [x] **issue-3**: Third task (priority 3)" in rendered
+	assert "- [ ] **issue-4**: Fourth task (priority 4)" in rendered
+	assert "### Security pass" not in rendered
+	assert "### Security pass" not in orchestrate_lib.format_wave_status_comment(state, 0)
+
+
+def test_security_pass_status_rendering_includes_active_fix_issue() -> None:
+	state = _make_state()
+	state.update(
+		{
+			"security_pass_cycle": 2,
+			"security_pass_status": "blocked",
+			"security_pass_active_fix_issues": [321],
+			"security_pass_head_sha": "a" * 40,
+		}
+	)
+	state["project_body_snapshot"] = (
+		"## Project: Test Project\n\n"
+		"### Wave 1\n\n"
+		"- [ ] **issue-1**: First task (priority 1)\n"
+		"- [ ] **issue-2**: Second task (priority 2)\n"
+	)
+
+	rendered_body = orchestrate_lib.render_tracking_issue_body_from_state(state)
+	rendered_wave = orchestrate_lib.format_wave_status_comment(state, 0)
+	for rendered in (rendered_body, rendered_wave):
+		assert "- Status: `blocked`" in rendered
+		assert "- Completed fix cycles: 2" in rendered
+		assert f"- Audited integration SHA: `{'a' * 40}`" in rendered
+		assert "- Active fix issue: #321" in rendered
+
+
+def test_security_pass_status_rendering_adds_waived_row_only_when_findings_are_waived() -> None:
+	state = _make_state()
+	state.update(
+		{
+			"security_pass_cycle": 3,
+			"security_pass_status": "passed",
+			"security_pass_active_fix_issues": [],
+			"security_pass_head_sha": "b" * 40,
+		}
+	)
+	state["project_body_snapshot"] = (
+		"## Project: Test Project\n\n"
+		"### Wave 1\n\n"
+		"- [ ] **issue-1**: First task (priority 1)\n"
+		"- [ ] **issue-2**: Second task (priority 2)\n"
+	)
+
+	for rendered in (
+		orchestrate_lib.render_tracking_issue_body_from_state(state),
+		orchestrate_lib.format_wave_status_comment(state, 0),
+	):
+		assert "- Waived findings:" not in rendered
+
+	state["security_pass_waived_findings"] = [
+		{"finding_id": "SEC-1", "source": "judge"},
+		{"finding_id": "SEC-2", "source": "operator"},
+		{"not": "a waiver"},
+	]
+	for rendered in (
+		orchestrate_lib.render_tracking_issue_body_from_state(state),
+		orchestrate_lib.format_wave_status_comment(state, 0),
+	):
+		assert "- Active fix issue: none\n- Waived findings: 2" in rendered
+
+
+def test_render_tracking_issue_body_from_state_inserts_missing_issue_rows_into_existing_wave():
+	template = """## Project: Test Project
+
+### Wave 1
+
+- [ ] **issue-1**: First task (priority 1)
+"""
+	state = _make_state()
+	state["project_body_snapshot"] = template
+
+	rendered = orchestrate_lib.render_tracking_issue_body_from_state(state)
+
+	assert "- [ ] **issue-1**: First task (priority 1)" in rendered
+	assert "- [ ] **issue-2**: #11" in rendered
+
+
+def test_render_tracking_issue_body_from_state_rejects_missing_wave_heading_for_state_wave():
+	template = """## Project: Test Project
+
+### Wave 1
+
+- [ ] **issue-1**: First task (priority 1)
+"""
+	state = _make_state(
+		waves=[
+			{
+				"wave": 1,
+				"issues": [{"id": "issue-1", "github_issue": 10, "status": "merged"}],
+			},
+			{
+				"wave": 2,
+				"issues": [{"id": "issue-2", "github_issue": 11, "status": "merged"}],
+			},
+		],
+	)
+	state["project_body_snapshot"] = template
+
+	try:
+		orchestrate_lib.render_tracking_issue_body_from_state(state)
+		assert False, "Should have raised OrchestrateError"
+	except orchestrate_lib.OrchestrateError as exc:
+		assert "missing wave heading" in str(exc)
+
+
+def test_resolve_integration_ref_parity_for_fixtures():
+	fixtures = _iter_integration_fixtures()
+	assert fixtures, "integration-ref fixtures are required"
+
+	with tempfile.TemporaryDirectory() as tmpdir:
+		bin_dir = Path(tmpdir)
+		_write_mock_gh(bin_dir)
+		for fixture in fixtures:
+			fixture_path = _fixture_path_by_name(fixture["name"])
+			expected_stdout = fixture["expected_stdout"]
+			expected_exit = int(fixture["expected_exit_code"])
+
+			bash_rc, bash_stdout, bash_stderr = _run_bash_resolver(fixture_path, bin_dir)
+			python_rc, python_stdout, python_stderr = _run_python_resolver(fixture_path, bin_dir)
+
+			assert bash_rc == expected_exit, f"bash exit mismatch for {fixture['name']}"
+			assert python_rc == expected_exit, f"python exit mismatch for {fixture['name']}"
+			assert bash_stdout == expected_stdout, f"bash stdout mismatch for {fixture['name']}"
+			assert python_stdout == expected_stdout, f"python stdout mismatch for {fixture['name']}"
+			assert bash_rc == python_rc, f"parity exit mismatch for {fixture['name']}"
+			assert bash_stdout == python_stdout, f"parity stdout mismatch for {fixture['name']}"
+
+			if expected_exit != 0:
+				assert "::error::" in bash_stderr, f"bash missing ::error:: for {fixture['name']}"
+				assert "::error::" in python_stderr, f"python missing ::error:: for {fixture['name']}"
+
+
+def test_resolve_integration_ref_child_missing_tracking_present_fallback():
+	fixture_path = _fixture_path_by_name("fallback_tracking_issue")
+	fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+	expected_stdout = fixture["expected_stdout"]
+	expected_exit = int(fixture["expected_exit_code"])
+
+	with tempfile.TemporaryDirectory() as tmpdir:
+		bin_dir = Path(tmpdir)
+		_write_mock_gh(bin_dir)
+		bash_rc, bash_stdout, _bash_stderr = _run_bash_resolver(fixture_path, bin_dir)
+		python_rc, python_stdout, _python_stderr = _run_python_resolver(fixture_path, bin_dir)
+
+	assert expected_stdout, "fallback fixture must resolve a tracking integration branch"
+	assert expected_exit == 0, "fallback fixture should resolve successfully"
+	assert bash_rc == expected_exit
+	assert python_rc == expected_exit
+	assert bash_stdout == expected_stdout
+	assert python_stdout == expected_stdout
+
+
+def test_resolve_integration_ref_shell_self_test():
+	proc = subprocess.run(
+		["bash", str(REPO_ROOT / "scripts" / "resolve_integration_ref.sh"), "--self-test"],
+		check=False,
+		capture_output=True,
+		text=True,
+		cwd=str(REPO_ROOT),
+	)
+	assert proc.returncode == 0, proc.stderr
+	assert "self-test passed" in proc.stdout
+
+
+# ---------------------------------------------------------------------------
+# Tests: label priority (review-blocked takes precedence over in_progress)
+# ---------------------------------------------------------------------------
+
+def test_review_blocked_label_priority_over_other_labels():
+	"""ai:review-blocked should be detected even if other non-phase labels are present."""
+	state = _make_state()
+	labels = {"10": ["bug", "ai:review-blocked", "enhancement"], "11": ["ai:merged"]}
+	result = _run_check_wave_status(state, labels)
+	assert result["any_review_blocked"] is True
+	issues_by_gh = {i["github_issue"]: i for i in result["issues"]}
+	assert issues_by_gh[10]["status"] == "review-blocked"
+
+
+def test_reconcile_wave_status_precedence_pr_then_label_then_issue_state():
+	issue = {"id": "task-1", "github_issue": 10, "status": "pending"}
+	status, source = orchestrate_lib.reconcile_wave_issue_status(
+		issue=issue,
+		labels=["ai:planning"],
+		issue_state="closed",
+		pr_state="closed",
+		pr_merged=True,
+	)
+	assert status == "merged"
+	assert source == "linked_pr_merged"
+
+	status, source = orchestrate_lib.reconcile_wave_issue_status(
+		issue=issue,
+		labels=["ai:merged"],
+		issue_state="closed",
+		pr_state="closed",
+		pr_merged=False,
+	)
+	assert status == "merged"
+	assert source == "label_ai_merged"
+
+	status, source = orchestrate_lib.reconcile_wave_issue_status(
+		issue=issue,
+		labels=[],
+		issue_state="closed",
+		pr_state="closed",
+		pr_merged=False,
+	)
+	assert status == "closed"
+	assert source == "issue_closed"
+
+
+def test_reconcile_wave_status_terminal_non_regression():
+	issue_merged = {"id": "task-1", "github_issue": 10, "status": "merged"}
+	status_merged, source_merged = orchestrate_lib.reconcile_wave_issue_status(
+		issue=issue_merged,
+		labels=["ai:implementing"],
+		issue_state="open",
+		pr_state="open",
+		pr_merged=False,
+	)
+	assert status_merged == "merged"
+	assert source_merged == "stored_terminal"
+
+	issue_closed = {"id": "task-2", "github_issue": 11, "status": "closed"}
+	status_closed, source_closed = orchestrate_lib.reconcile_wave_issue_status(
+		issue=issue_closed,
+		labels=["ai:planning"],
+		issue_state="open",
+		pr_state="open",
+		pr_merged=False,
+	)
+	assert status_closed == "closed"
+	assert source_closed == "stored_terminal"
+
+
+def test_detect_stalls_skips_needs_human_phase():
+	state = _make_state()
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["status_since_ts"] = 1
+	issue["last_seen_phase"] = "ai:needs-human"
+	issue["stall_recovery_count"] = 2
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels={"10": ["ai:planning", "ai:needs-human"], "11": []},
+		threshold_minutes=1,
+		now_ts=10_000,
+	)
+
+	assert stalls == []
+
+
+# --- Claude capacity wait label (issue #7251, capacity-wait Phase 1) --------------
+
+
+def test_capacity_wait_label_outranks_the_stage_label():
+	assert orchestrate_lib.determine_phase(["ai:clarification", "ai:claude-capacity-wait"]) == "ai:claude-capacity-wait"
+	assert orchestrate_lib.determine_phase(["ai:implementing", "ai:claude-capacity-wait"]) == "ai:claude-capacity-wait"
+	# A human escalation still wins over the wait.
+	assert orchestrate_lib.determine_phase(["ai:claude-capacity-wait", "ai:needs-human"]) == "ai:needs-human"
+	priority = orchestrate_lib.PHASE_LABELS_PRIORITY
+	assert priority.index("ai:claude-capacity-wait") == priority.index("ai:needs-human") + 1
+	assert "ai:claude-capacity-wait" in orchestrate_lib.DEDICATED_HANDLER_PHASES
+	assert "ai:claude-capacity-wait" not in orchestrate_lib.TERMINAL_PHASES
+
+
+def test_split_to_project_label_is_a_dedicated_phase():
+	# Q152: a plan-split source issue carries only ai:split-to-project while
+	# its orchestrator project runs. It must not read as no_labels, which
+	# would post /reclarify after 60 minutes.
+	assert orchestrate_lib.determine_phase(["ai:split-to-project"]) == "ai:split-to-project"
+	assert orchestrate_lib.determine_phase(["ai:split-to-project", "ai:closed"]) == "ai:closed"
+	assert "ai:split-to-project" in orchestrate_lib.DEDICATED_HANDLER_PHASES
+	assert "ai:split-to-project" not in orchestrate_lib.TERMINAL_PHASES
+	text = (Path(__file__).resolve().parent.parent / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	skip = next(line for line in text.splitlines() if '[ "${phase}" = "ai:needs-human" ] || ' in line and "ai:validation-fixing" in line)
+	assert '[ "${phase}" = "ai:split-to-project" ]' in skip
+
+
+def test_waiting_on_dependency_label_priority_and_dedicated_handler():
+	# Stuck-states P8 / confine plan Phase 4a: the dependency-wait label sits
+	# right after ai:blocked, so human latches still win but it outranks every
+	# failure and stage label. The resume scan owns it, so stall recovery
+	# (managed and standalone) leaves it alone.
+	assert orchestrate_lib.determine_phase(["ai:planning", "ai:waiting-on-dependency"]) == "ai:waiting-on-dependency"
+	assert orchestrate_lib.determine_phase(["ai:plan-failed", "ai:waiting-on-dependency"]) == "ai:waiting-on-dependency"
+	assert orchestrate_lib.determine_phase(["ai:waiting-on-dependency", "ai:blocked"]) == "ai:blocked"
+	assert orchestrate_lib.determine_phase(["ai:waiting-on-dependency", "ai:needs-human"]) == "ai:needs-human"
+	priority = orchestrate_lib.PHASE_LABELS_PRIORITY
+	assert priority.index("ai:waiting-on-dependency") == priority.index("ai:blocked") + 1
+	assert "ai:waiting-on-dependency" in orchestrate_lib.DEDICATED_HANDLER_PHASES
+	assert "ai:waiting-on-dependency" not in orchestrate_lib.TERMINAL_PHASES
+	text = (Path(__file__).resolve().parent.parent / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	skip = next(line for line in text.splitlines() if '[ "${phase}" = "ai:needs-human" ] || ' in line and "ai:validation-fixing" in line)
+	assert '[ "${phase}" = "ai:waiting-on-dependency" ]' in skip
+
+
+def test_detect_stalls_skips_waiting_on_dependency_phase():
+	state = _make_state()
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["status_since_ts"] = 1
+	issue["last_seen_phase"] = "ai:waiting-on-dependency"
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels={"10": ["ai:planning", "ai:waiting-on-dependency"], "11": []},
+		threshold_minutes=1,
+		now_ts=10_000,
+	)
+
+	assert stalls == []
+
+
+def test_detect_stalls_skips_capacity_wait_phase():
+	state = _make_state()
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["status_since_ts"] = 1
+	issue["last_seen_phase"] = "ai:claude-capacity-wait"
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels={"10": ["ai:clarification", "ai:claude-capacity-wait"], "11": []},
+		threshold_minutes=1,
+		now_ts=10_000,
+	)
+
+	assert stalls == []
+
+
+def test_removing_capacity_wait_label_resets_the_stall_window():
+	state = _make_state()
+	issue = state["waves"][0]["issues"][0]
+	issue["status_since_ts"] = 100
+	issue["last_seen_phase"] = "ai:claude-capacity-wait"
+	issue["stall_recovery_count"] = 1
+
+	orchestrate_lib.update_issue_timestamps(state, {"10": ["ai:clarification"]}, now_ts=5_000)
+
+	assert issue["last_seen_phase"] == "ai:clarification"
+	assert issue["status_since_ts"] == 5_000
+	assert issue["stall_recovery_count"] == 0
+
+
+def test_standalone_stall_loop_skips_capacity_wait_phase():
+	# The standalone stall loop has its own skip list; it must leave a
+	# waiting item alone like DEDICATED_HANDLER_PHASES does (issue #7251),
+	# but only after recording the wait as last_seen_phase, so removing the
+	# label restarts the stall window.
+	text = (Path(__file__).resolve().parent.parent / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	skip = next(line for line in text.splitlines() if '[ "${phase}" = "ai:needs-human" ] || ' in line and "ai:validation-fixing" in line)
+	assert "ai:claude-capacity-wait" not in skip
+	update_start = text.index('updated_state="$(python3 - "$state_json" "$phase" <<\'PY\'\n', text.index(skip))
+	wait_check = text.index('if [ "${phase}" = "ai:claude-capacity-wait" ]; then', update_start)
+	status_read = text.index('status_since="$(echo "${updated_state}"', update_start)
+	assert update_start < wait_check < status_read
+	wait_block = text[wait_check:status_read]
+	assert 'write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"' in wait_block
+	assert "continue" in wait_block
+
+	# Run the embedded state update for stage -> wait -> stage.
+	body_start = update_start + len('updated_state="$(python3 - "$state_json" "$phase" <<\'PY\'\n')
+	script = text[body_start:text.index("\nPY\n", body_start)]
+
+	def step(state: dict, phase: str) -> dict:
+		result = subprocess.run([sys.executable, "-c", script, json.dumps(state), phase], capture_output=True, text=True, check=True)
+		return json.loads(result.stdout)
+
+	stale = {"last_seen_phase": "ai:clarification", "status_since_ts": 1, "stall_recovery_count": 2}
+	waiting = step(stale, "ai:claude-capacity-wait")
+	assert waiting["last_seen_phase"] == "ai:claude-capacity-wait"
+	assert waiting["stall_recovery_count"] == 0
+	resumed = step(dict(waiting, status_since_ts=1), "ai:clarification")
+	assert resumed["last_seen_phase"] == "ai:clarification"
+	assert resumed["status_since_ts"] > 1
+	assert resumed["stall_recovery_count"] == 0
+
+
+def test_label_contract_matches_helper_catalog_and_phase_priority():
+	contract_path = Path(__file__).resolve().parent.parent / ".github" / "ai" / "label_contract.v1.json"
+	helper_path = Path(__file__).resolve().parent.parent / "scripts" / "label_helpers.sh"
+	contract = json.loads(contract_path.read_text(encoding="utf-8"))
+	contract_labels = set(contract["labels"].keys())
+
+	helper_body = helper_path.read_text(encoding="utf-8")
+	colors_block_match = re.search(
+		r"declare -A _AI_LABEL_COLORS=\((.*?)\n\)",
+		helper_body,
+		flags=re.S,
+	)
+	assert colors_block_match, "Could not parse _AI_LABEL_COLORS from label_helpers.sh"
+	helper_labels = set(re.findall(r'\["([^"]+)"\]=', colors_block_match.group(1)))
+	assert helper_labels == contract_labels, (
+		f"label_helpers catalog drift detected.\n"
+		f"Missing in helper: {sorted(contract_labels - helper_labels)}\n"
+		f"Extra in helper: {sorted(helper_labels - contract_labels)}"
+	)
+
+	phase_labels = {
+		member
+		for group in contract.get("phase_groups", [])
+		for member in group.get("members", [])
+	}
+	priority_labels = set(orchestrate_lib.PHASE_LABELS_PRIORITY)
+	missing_priority = sorted(phase_labels - priority_labels)
+	assert not missing_priority, (
+		f"PHASE_LABELS_PRIORITY missing contract phase labels: {missing_priority}"
+	)
+
+
+# ---------------------------------------------------------------------------
+# Partition guard: files_touched validation, hot-file loader, and
+# auto-serialize sibling-overlap resolution
+# ---------------------------------------------------------------------------
+
+
+def test_validate_decomposition_accepts_missing_files_touched():
+	"""Backward compat: issues without files_touched still validate, and the
+	field is normalized to an empty list on the issue object."""
+	data = _make_decomposition()
+	validated = orchestrate_lib.validate_decomposition(data)
+	for issue in validated["issues"]:
+		assert issue["files_touched"] == [], f"expected empty list for {issue['id']}, got {issue['files_touched']!r}"
+
+
+def test_validate_decomposition_normalizes_files_touched_paths():
+	"""Paths are normalized: leading ./ stripped, backslashes → forward, dedup."""
+	data = _make_decomposition(issues=[
+		{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": [
+			"./src/a.py",
+			"src/a.py",
+			"scripts\\b.sh",
+			"  docs/c.md  ",
+		]},
+	])
+	validated = orchestrate_lib.validate_decomposition(data)
+	ft = validated["issues"][0]["files_touched"]
+	assert "src/a.py" in ft
+	assert ft.count("src/a.py") == 1, "duplicates should be collapsed"
+	assert "scripts/b.sh" in ft
+	assert "docs/c.md" in ft
+
+
+def test_validate_decomposition_rejects_non_list_files_touched():
+	data = _make_decomposition(issues=[
+		{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": "README.md"},
+	])
+	try:
+		orchestrate_lib.validate_decomposition(data)
+	except orchestrate_lib.OrchestrateError as exc:
+		assert "files_touched" in str(exc)
+	else:
+		raise AssertionError("expected OrchestrateError for non-list files_touched")
+
+
+def test_validate_decomposition_rejects_empty_path_in_files_touched():
+	data = _make_decomposition(issues=[
+		{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": ["src/a.py", ""]},
+	])
+	try:
+		orchestrate_lib.validate_decomposition(data)
+	except orchestrate_lib.OrchestrateError as exc:
+		assert "must not be empty" in str(exc)
+	else:
+		raise AssertionError("expected OrchestrateError for empty path")
+
+
+def test_validate_decomposition_caps_files_touched_length():
+	data = _make_decomposition(issues=[
+		{"id": "a", "title": "T", "body": "b", "priority": 1,
+			"files_touched": [f"f{i}.py" for i in range(51)]},
+	])
+	try:
+		orchestrate_lib.validate_decomposition(data)
+	except orchestrate_lib.OrchestrateError as exc:
+		assert "max 50" in str(exc)
+	else:
+		raise AssertionError("expected OrchestrateError for oversize files_touched")
+
+
+def test_load_hot_files_missing_returns_empty_set(tmp_path_hack=None):
+	with tempfile.TemporaryDirectory() as td:
+		result = orchestrate_lib.load_hot_files(Path(td) / "does_not_exist.json")
+		assert result == set()
+
+
+def test_load_hot_files_parses_valid_registry():
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "hot_files.json"
+		_write_json(p, {"hot_files": ["README.md", "./agents.md", "scripts\\x.sh", ""]})
+		result = orchestrate_lib.load_hot_files(p)
+		assert "README.md" in result
+		assert "agents.md" in result, "./ prefix must be stripped"
+		assert "scripts/x.sh" in result, "backslash must be normalized"
+		assert "" not in result
+
+
+def test_load_hot_files_malformed_returns_empty_set():
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "hot_files.json"
+		p.write_text("not json", encoding="utf-8")
+		assert orchestrate_lib.load_hot_files(p) == set()
+
+
+def test_load_hot_files_wrong_shape_returns_empty_set():
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "hot_files.json"
+		_write_json(p, {"something_else": ["x"]})
+		assert orchestrate_lib.load_hot_files(p) == set()
+
+
+def test_validate_wave_file_partition_empty_scope_is_serialized():
+	"""An empty files_touched list is unknown scope: the guard cannot prove
+	the sibling disjoint from anyone, so it is paired with every other
+	sibling as type=unknown_scope. binance-blessings#249 omitted the list on
+	three phases that all edit twap_router.py specifically to run them in
+	parallel; each sibling merge then conflicted the rest."""
+	data = _make_decomposition(issues=[
+		{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": []},
+		{"id": "b", "title": "T", "body": "b", "priority": 2, "files_touched": []},
+	])
+	data = orchestrate_lib.validate_decomposition(data)
+	issues_by_id = {i["id"]: i for i in data["issues"]}
+	overlaps = orchestrate_lib.validate_wave_file_partition(["a", "b"], issues_by_id)
+	assert overlaps == [{"type": "unknown_scope", "issue_a": "a", "issue_b": "b", "files": []}]
+
+
+def test_validate_wave_file_partition_empty_scope_pairs_with_declared_siblings():
+	"""One unknown-scope sibling is paired with every declared sibling, and
+	the declared siblings still get their own pair/hot_file verdicts."""
+	data = _make_decomposition(issues=[
+		{"id": "known-1", "title": "T", "body": "b", "priority": 1, "files_touched": ["src/x.py"]},
+		{"id": "known-2", "title": "T", "body": "b", "priority": 2, "files_touched": ["src/y.py"]},
+		{"id": "mystery", "title": "T", "body": "b", "priority": 3},
+	])
+	data = orchestrate_lib.validate_decomposition(data)
+	issues_by_id = {i["id"]: i for i in data["issues"]}
+	overlaps = orchestrate_lib.validate_wave_file_partition(["known-1", "known-2", "mystery"], issues_by_id, hot_files=set())
+	unknown = [o for o in overlaps if o["type"] == "unknown_scope"]
+	assert {(o["issue_a"], o["issue_b"]) for o in unknown} == {("known-1", "mystery"), ("known-2", "mystery")}
+	assert [o for o in overlaps if o["type"] != "unknown_scope"] == []
+
+
+def test_validate_wave_file_partition_single_issue_wave_never_flags():
+	data = _make_decomposition(issues=[
+		{"id": "solo", "title": "T", "body": "b", "priority": 1},
+	])
+	data = orchestrate_lib.validate_decomposition(data)
+	issues_by_id = {i["id"]: i for i in data["issues"]}
+	assert orchestrate_lib.validate_wave_file_partition(["solo"], issues_by_id) == []
+
+
+def test_compute_waves_serializes_parallel_phases_that_omit_files_touched():
+	"""Regression for binance-blessings#249: phase-2/3/4 shared a Phase-1
+	dependency, declared no files_touched, and were dispatched as one wave.
+	They must now run one after another, ordered by priority then id."""
+	issues = [
+		{"id": "phase-1", "title": "T", "body": "b", "priority": 1, "files_touched": ["lib/candles.py"]},
+		{"id": "phase-4-slice-jitter", "title": "T", "body": "b", "priority": 2},
+		{"id": "phase-2-level-flips", "title": "T", "body": "b", "priority": 2},
+		{"id": "phase-3-sell-guardrails", "title": "T", "body": "b", "priority": 2},
+	]
+	edges = [
+		{"from": "phase-1", "to": "phase-2-level-flips"},
+		{"from": "phase-1", "to": "phase-3-sell-guardrails"},
+		{"from": "phase-1", "to": "phase-4-slice-jitter"},
+	]
+	data = _make_decomposition(issues=issues, edges=edges)
+	data = orchestrate_lib.validate_decomposition(data)
+	waves = orchestrate_lib.compute_waves(data, hot_files=set())
+	assert [[i["id"] for i in wave] for wave in waves] == [
+		["phase-1"],
+		["phase-2-level-flips"],
+		["phase-3-sell-guardrails"],
+		["phase-4-slice-jitter"],
+	]
+	assert all(rec["overlap_type"] == "unknown_scope" for rec in data["partition_serializations"])
+
+
+def test_validate_wave_file_partition_detects_plain_pair_overlap():
+	data = _make_decomposition(issues=[
+		{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": ["src/x.py"]},
+		{"id": "b", "title": "T", "body": "b", "priority": 2, "files_touched": ["src/x.py", "src/y.py"]},
+	])
+	data = orchestrate_lib.validate_decomposition(data)
+	issues_by_id = {i["id"]: i for i in data["issues"]}
+	overlaps = orchestrate_lib.validate_wave_file_partition(["a", "b"], issues_by_id, hot_files=set())
+	assert len(overlaps) == 1
+	assert overlaps[0]["type"] == "pair"
+	assert overlaps[0]["files"] == ["src/x.py"]
+	assert {overlaps[0]["issue_a"], overlaps[0]["issue_b"]} == {"a", "b"}
+
+
+def test_validate_wave_file_partition_separates_hot_file_category():
+	"""An overlap entirely on hot files is reported as type=hot_file; a
+	mixed overlap is reported twice (once hot_file, once pair)."""
+	data = _make_decomposition(issues=[
+		{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": ["README.md", "src/x.py"]},
+		{"id": "b", "title": "T", "body": "b", "priority": 2, "files_touched": ["README.md", "src/x.py"]},
+		{"id": "c", "title": "T", "body": "b", "priority": 3, "files_touched": ["README.md"]},
+		{"id": "d", "title": "T", "body": "b", "priority": 4, "files_touched": ["README.md"]},
+	])
+	data = orchestrate_lib.validate_decomposition(data)
+	issues_by_id = {i["id"]: i for i in data["issues"]}
+	overlaps = orchestrate_lib.validate_wave_file_partition(["a", "b", "c", "d"], issues_by_id, hot_files={"README.md"})
+
+	hot_pairs = [o for o in overlaps if o["type"] == "hot_file"]
+	plain_pairs = [o for o in overlaps if o["type"] == "pair"]
+	# a vs b: both hot_file (README.md) and pair (src/x.py)
+	# a vs c, a vs d, b vs c, b vs d, c vs d: hot_file only
+	assert len(hot_pairs) == 6
+	assert len(plain_pairs) == 1
+	assert plain_pairs[0]["files"] == ["src/x.py"]
+
+
+def test_auto_serialize_file_overlaps_basic_pair():
+	data = _make_decomposition(issues=[
+		{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": ["src/shared.py"]},
+		{"id": "b", "title": "T", "body": "b", "priority": 2, "files_touched": ["src/shared.py"]},
+	])
+	data = orchestrate_lib.validate_decomposition(data)
+	serializations = orchestrate_lib.auto_serialize_file_overlaps(data, hot_files=set())
+	assert len(serializations) == 1
+	assert serializations[0]["winner"] == "a"  # lower priority number wins first-wave
+	assert serializations[0]["loser"] == "b"
+	# An edge a -> b should now exist
+	assert {"from": "a", "to": "b"} in data["dependency_edges"]
+
+
+def test_auto_serialize_file_overlaps_priority_tie_breaker_is_stable():
+	data = _make_decomposition(issues=[
+		{"id": "beta", "title": "T", "body": "b", "priority": 1, "files_touched": ["x.md"]},
+		{"id": "alpha", "title": "T", "body": "b", "priority": 1, "files_touched": ["x.md"]},
+	])
+	data = orchestrate_lib.validate_decomposition(data)
+	serializations = orchestrate_lib.auto_serialize_file_overlaps(data, hot_files=set())
+	# Tie-break by lexicographic ID: alpha wins
+	assert serializations[0]["winner"] == "alpha"
+	assert serializations[0]["loser"] == "beta"
+
+
+def test_auto_serialize_file_overlaps_cycle_guard_wires_to_detect_cycles():
+	"""The cycle guard is defensive. In practice it is structurally
+	unreachable (a pre-existing edge always separates the two siblings
+	into different waves so no overlap is detected). This test verifies
+	that the guard is wired up by monkey-patching _detect_cycles to
+	raise, and asserting that auto_serialize_file_overlaps re-raises
+	with a 'cycle' marker so the orchestrate.yml check-partition step
+	surfaces the right diagnostic."""
+	data = _make_decomposition(issues=[
+		{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": ["x.py"]},
+		{"id": "b", "title": "T", "body": "b", "priority": 2, "files_touched": ["x.py"]},
+	])
+	data = orchestrate_lib.validate_decomposition(data)
+	orig = orchestrate_lib._detect_cycles
+	try:
+		def _fake(ids, edges):
+			# Raise only when the candidate edge (a -> b) is present, to
+			# mimic a cycle being introduced by the serializer.
+			if any(e.get("from") == "a" and e.get("to") == "b" for e in edges):
+				raise orchestrate_lib.OrchestrateError("synthetic cycle for test")
+		orchestrate_lib._detect_cycles = _fake
+		try:
+			orchestrate_lib.auto_serialize_file_overlaps(data, hot_files=set())
+		except orchestrate_lib.OrchestrateError as exc:
+			assert "cycle" in str(exc).lower()
+		else:
+			raise AssertionError("expected OrchestrateError for cycle")
+	finally:
+		orchestrate_lib._detect_cycles = orig
+
+
+def test_compute_waves_auto_serializes_sibling_overlap():
+	"""End-to-end: compute_waves() default path pushes the overlapping
+	sibling into a later wave."""
+	data = _make_decomposition(issues=[
+		{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": ["README.md"]},
+		{"id": "b", "title": "T", "body": "b", "priority": 2, "files_touched": ["README.md"]},
+		{"id": "c", "title": "T", "body": "b", "priority": 3, "files_touched": ["src/other.py"]},
+	])
+	data = orchestrate_lib.validate_decomposition(data)
+	waves = orchestrate_lib.compute_waves(data, hot_files=set())
+	# With auto-serialize, b is pushed to wave 2; a and c remain in wave 1
+	assert len(waves) == 2
+	w1_ids = {i["id"] for i in waves[0]}
+	w2_ids = {i["id"] for i in waves[1]}
+	assert w1_ids == {"a", "c"}
+	assert w2_ids == {"b"}
+	assert data["partition_serializations"], "serializations audit trail must be recorded"
+
+
+def test_compute_waves_opt_out_of_auto_serialize_returns_raw_waves():
+	"""auto_serialize=False yields the pre-rewrite wave layout."""
+	data = _make_decomposition(issues=[
+		{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": ["README.md"]},
+		{"id": "b", "title": "T", "body": "b", "priority": 2, "files_touched": ["README.md"]},
+	])
+	data = orchestrate_lib.validate_decomposition(data)
+	waves = orchestrate_lib.compute_waves(data, hot_files=set(), auto_serialize=False)
+	assert len(waves) == 1
+	assert {i["id"] for i in waves[0]} == {"a", "b"}
+
+
+def test_compute_waves_persists_files_touched_on_state_entries():
+	"""build_tracking_state carries files_touched onto each wave entry so
+	the poller can consult it without re-parsing issue bodies."""
+	data = _make_decomposition(issues=[
+		{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": ["src/a.py"]},
+		{"id": "b", "title": "T", "body": "b", "priority": 2, "files_touched": ["src/b.py"]},
+	])
+	data = orchestrate_lib.validate_decomposition(data)
+	waves = orchestrate_lib.compute_waves(data, hot_files=set())
+	state = orchestrate_lib.build_tracking_state(
+		data=data,
+		waves=waves,
+		issue_number_map={"a": 100, "b": 101},
+	)
+	wave_issues = state["waves"][0]["issues"]
+	ft_by_id = {i["id"]: i["files_touched"] for i in wave_issues}
+	assert ft_by_id["a"] == ["src/a.py"]
+	assert ft_by_id["b"] == ["src/b.py"]
+
+
+def test_cli_check_partition_reports_planned_serializations():
+	"""End-to-end CLI: check-partition emits planned rewrites without
+	mutating the input file."""
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "decomp.json"
+		_write_json(p, _make_decomposition(issues=[
+			{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": ["README.md"]},
+			{"id": "b", "title": "T", "body": "b", "priority": 2, "files_touched": ["README.md"]},
+		]))
+		# Isolate from the real hot_files.json in CWD
+		hot_p = Path(td) / "hot.json"
+		_write_json(hot_p, {"hot_files": []})
+		argv = [
+			"check-partition",
+			"--input-file", str(p),
+			"--hot-files-path", str(hot_p),
+		]
+		# Capture stdout
+		import io
+		from contextlib import redirect_stdout
+		buf = io.StringIO()
+		with redirect_stdout(buf):
+			rc = orchestrate_lib.main(argv)
+		assert rc == 0, f"check-partition exit {rc}"
+		report = json.loads(buf.getvalue())
+		assert report["ok"] is True
+		assert report["total_overlaps"] == 1
+		assert len(report["planned_serializations"]) == 1
+		# Input file should be untouched (check-partition is dry-run)
+		roundtrip = json.loads(p.read_text(encoding="utf-8"))
+		assert roundtrip["dependency_edges"] == []
+
+
+def test_compute_effective_hot_files_no_telemetry_returns_seed():
+	"""Zero-config baseline: no committed seed, no telemetry => empty set."""
+	import orchestrate_lib as ol
+	eff, audit = ol.compute_effective_hot_files(set())
+	assert eff == set()
+	assert audit["committed_seed_count"] == 0
+	assert audit["learned_count"] == 0
+
+
+def test_compute_effective_hot_files_only_committed_seed():
+	import orchestrate_lib as ol
+	eff, audit = ol.compute_effective_hot_files({"README.md", "src/a.py"})
+	assert eff == {"README.md", "src/a.py"}
+	assert audit["committed_seed_count"] == 2
+	assert audit["learned_count"] == 0
+
+
+def test_compute_effective_hot_files_learns_from_telemetry_meeting_threshold():
+	import time
+	import orchestrate_lib as ol
+	now = int(time.time())
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "c.jsonl"
+		records = [
+			{"ts": now - 86400 * 1, "project": "A", "pr_a": 1, "pr_b": 2, "paths": ["scripts/god.sh"]},
+			{"ts": now - 86400 * 5, "project": "A", "pr_a": 3, "pr_b": 4, "paths": ["scripts/god.sh"]},
+			{"ts": now - 86400 * 10, "project": "B", "pr_a": 5, "pr_b": 6, "paths": ["scripts/god.sh", "README.md"]},
+		]
+		with p.open("w", encoding="utf-8") as f:
+			for r in records:
+				f.write(json.dumps(r) + "\n")
+		eff, audit = ol.compute_effective_hot_files(set(), p)
+		assert "scripts/god.sh" in eff, "3 events / 2 projects should promote"
+		assert "README.md" not in eff, "1 event is below threshold"
+		assert audit["learned_count"] == 1
+		assert audit["learned_files"][0]["path"] == "scripts/god.sh"
+		assert audit["learned_files"][0]["events"] == 3
+		assert audit["learned_files"][0]["distinct_projects"] == 2
+
+
+def test_compute_effective_hot_files_window_excludes_old_events():
+	import time
+	import orchestrate_lib as ol
+	now = int(time.time())
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "c.jsonl"
+		records = [
+			# Plenty of events — but all outside the 90-day window.
+			{"ts": now - 86400 * 120, "project": "A", "pr_a": 1, "pr_b": 2, "paths": ["old.py"]},
+			{"ts": now - 86400 * 130, "project": "B", "pr_a": 3, "pr_b": 4, "paths": ["old.py"]},
+			{"ts": now - 86400 * 140, "project": "C", "pr_a": 5, "pr_b": 6, "paths": ["old.py"]},
+		]
+		with p.open("w", encoding="utf-8") as f:
+			for r in records:
+				f.write(json.dumps(r) + "\n")
+		eff, audit = ol.compute_effective_hot_files(set(), p, window_days=90)
+		assert "old.py" not in eff, "events outside window should not promote"
+		assert audit["telemetry_events_total"] == 3
+		assert audit["telemetry_events_in_window"] == 0
+		assert audit["learned_count"] == 0
+
+
+def test_compute_effective_hot_files_distinct_projects_required():
+	"""Even with many events, a single project cannot promote on its own."""
+	import time
+	import orchestrate_lib as ol
+	now = int(time.time())
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "c.jsonl"
+		records = [
+			{"ts": now - 86400 * i, "project": "only_one", "pr_a": i, "pr_b": i + 100, "paths": ["runaway.py"]}
+			for i in range(1, 10)
+		]
+		with p.open("w", encoding="utf-8") as f:
+			for r in records:
+				f.write(json.dumps(r) + "\n")
+		eff, audit = ol.compute_effective_hot_files(set(), p, min_distinct_projects=2)
+		assert "runaway.py" not in eff, "single project should not promote even with high event count"
+		assert audit["telemetry_events_in_window"] == 9
+		assert audit["learned_count"] == 0
+
+
+def test_compute_effective_hot_files_unions_seed_and_learned():
+	"""Committed seed and learned telemetry compose via set union."""
+	import time
+	import orchestrate_lib as ol
+	now = int(time.time())
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "c.jsonl"
+		records = [
+			{"ts": now - 86400 * 1, "project": "A", "pr_a": 1, "pr_b": 2, "paths": ["learned.py"]},
+			{"ts": now - 86400 * 2, "project": "A", "pr_a": 3, "pr_b": 4, "paths": ["learned.py"]},
+			{"ts": now - 86400 * 3, "project": "B", "pr_a": 5, "pr_b": 6, "paths": ["learned.py"]},
+		]
+		with p.open("w", encoding="utf-8") as f:
+			for r in records:
+				f.write(json.dumps(r) + "\n")
+		eff, audit = ol.compute_effective_hot_files({"seeded.py"}, p)
+		assert eff == {"seeded.py", "learned.py"}
+		assert audit["committed_seed_count"] == 1
+		assert audit["learned_count"] == 1
+
+
+def test_compute_effective_hot_files_handles_missing_file_gracefully():
+	"""A missing JSONL path is equivalent to an empty telemetry source."""
+	import orchestrate_lib as ol
+	eff, audit = ol.compute_effective_hot_files({"seed.py"}, "/nonexistent/path/merge.jsonl")
+	assert eff == {"seed.py"}
+	assert audit["learned_count"] == 0
+
+
+def test_compute_effective_hot_files_skips_malformed_records():
+	"""Non-JSON lines and records with wrong shapes are silently skipped."""
+	import time
+	import orchestrate_lib as ol
+	now = int(time.time())
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "c.jsonl"
+		lines = [
+			"not json at all",
+			"{}",  # empty object
+			'{"ts": "not_an_int", "project": "X", "paths": ["x.py"]}',
+			'{"ts": %d, "project": "A", "paths": "not-a-list"}' % now,
+			# Three valid records across two projects meeting threshold
+			'{"ts": %d, "project": "A", "paths": ["valid.py"]}' % (now - 86400),
+			'{"ts": %d, "project": "A", "paths": ["valid.py"]}' % (now - 86400 * 2),
+			'{"ts": %d, "project": "B", "paths": ["valid.py"]}' % (now - 86400 * 3),
+		]
+		p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+		eff, audit = ol.compute_effective_hot_files(set(), p)
+		assert "valid.py" in eff
+		assert audit["telemetry_events_total"] >= 3
+
+
+def test_compute_effective_hot_files_normalizes_learned_paths():
+	"""Learned paths are normalized the same way the committed seed is."""
+	import time
+	import orchestrate_lib as ol
+	now = int(time.time())
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "c.jsonl"
+		records = [
+			{"ts": now - 86400 * 1, "project": "A", "pr_a": 1, "pr_b": 2, "paths": ["./src/a.py"]},
+			{"ts": now - 86400 * 2, "project": "A", "pr_a": 3, "pr_b": 4, "paths": ["src\\a.py"]},
+			{"ts": now - 86400 * 3, "project": "B", "pr_a": 5, "pr_b": 6, "paths": ["src/a.py"]},
+		]
+		with p.open("w", encoding="utf-8") as f:
+			for r in records:
+				f.write(json.dumps(r) + "\n")
+		eff, audit = ol.compute_effective_hot_files(set(), p)
+		assert eff == {"src/a.py"}, f"paths should normalize to a single entry, got {eff}"
+		assert audit["learned_files"][0]["events"] == 3
+
+
+def test_cli_check_partition_uses_telemetry_jsonl():
+	"""End-to-end CLI: check-partition accepts --conflict-telemetry-jsonl
+	and promotes learned hot files into the effective set."""
+	import time
+	import orchestrate_lib as ol
+	now = int(time.time())
+	with tempfile.TemporaryDirectory() as td:
+		decomp_p = Path(td) / "decomp.json"
+		_write_json(decomp_p, _make_decomposition(issues=[
+			{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": ["scripts/god.sh"]},
+			{"id": "b", "title": "T", "body": "b", "priority": 2, "files_touched": ["scripts/god.sh"]},
+		]))
+		tel_p = Path(td) / "tel.jsonl"
+		hot_p = Path(td) / "hot.json"
+		_write_json(hot_p, {"hot_files": []})
+		records = [
+			{"ts": now - 86400 * 1, "project": "A", "pr_a": 1, "pr_b": 2, "paths": ["scripts/god.sh"]},
+			{"ts": now - 86400 * 2, "project": "A", "pr_a": 3, "pr_b": 4, "paths": ["scripts/god.sh"]},
+			{"ts": now - 86400 * 3, "project": "B", "pr_a": 5, "pr_b": 6, "paths": ["scripts/god.sh"]},
+		]
+		with tel_p.open("w", encoding="utf-8") as f:
+			for r in records:
+				f.write(json.dumps(r) + "\n")
+
+		argv = [
+			"check-partition",
+			"--input-file", str(decomp_p),
+			"--hot-files-path", str(hot_p),
+			"--conflict-telemetry-jsonl", str(tel_p),
+		]
+		import io
+		from contextlib import redirect_stdout
+		buf = io.StringIO()
+		with redirect_stdout(buf):
+			rc = ol.main(argv)
+		assert rc == 0
+		report = json.loads(buf.getvalue())
+		assert "scripts/god.sh" in report["hot_files"]
+		assert report["hot_files_audit"]["learned_count"] == 1
+		# The overlap is reported as hot_file (not just plain pair) because
+		# the learned set now includes scripts/god.sh.
+		hot_overlaps = [o for o in report["wave_reports"][0]["overlaps"] if o["type"] == "hot_file"]
+		assert len(hot_overlaps) >= 1
+
+
+def test_cli_compute_waves_uses_telemetry_for_serialization():
+	"""Auto-serialize uses the effective (seed ∪ learned) hot-file set."""
+	import time
+	import orchestrate_lib as ol
+	now = int(time.time())
+	with tempfile.TemporaryDirectory() as td:
+		decomp_p = Path(td) / "decomp.json"
+		_write_json(decomp_p, _make_decomposition(issues=[
+			{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": ["shared.md"]},
+			{"id": "b", "title": "T", "body": "b", "priority": 2, "files_touched": ["shared.md"]},
+		]))
+		hot_p = Path(td) / "hot.json"
+		_write_json(hot_p, {"hot_files": []})
+		tel_p = Path(td) / "tel.jsonl"
+		records = [
+			{"ts": now - 86400 * 1, "project": "A", "pr_a": 1, "pr_b": 2, "paths": ["shared.md"]},
+			{"ts": now - 86400 * 2, "project": "A", "pr_a": 3, "pr_b": 4, "paths": ["shared.md"]},
+			{"ts": now - 86400 * 3, "project": "B", "pr_a": 5, "pr_b": 6, "paths": ["shared.md"]},
+		]
+		with tel_p.open("w", encoding="utf-8") as f:
+			for r in records:
+				f.write(json.dumps(r) + "\n")
+		argv = [
+			"compute-waves",
+			"--input-file", str(decomp_p),
+			"--hot-files-path", str(hot_p),
+			"--conflict-telemetry-jsonl", str(tel_p),
+			"--write-back",
+		]
+		import io
+		from contextlib import redirect_stdout
+		buf = io.StringIO()
+		with redirect_stdout(buf):
+			rc = ol.main(argv)
+		assert rc == 0
+		report = json.loads(buf.getvalue())
+		assert "shared.md" in report["hot_files"]
+		# b should be serialized into wave 2 because shared.md is learned hot
+		assert report["total_waves"] == 2
+
+
+def test_cli_compute_waves_write_back_mutates_input():
+	"""compute-waves --write-back persists serialized edges back to disk."""
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "decomp.json"
+		_write_json(p, _make_decomposition(issues=[
+			{"id": "a", "title": "T", "body": "b", "priority": 1, "files_touched": ["x.md"]},
+			{"id": "b", "title": "T", "body": "b", "priority": 2, "files_touched": ["x.md"]},
+		]))
+		hot_p = Path(td) / "hot.json"
+		_write_json(hot_p, {"hot_files": []})
+		argv = [
+			"compute-waves",
+			"--input-file", str(p),
+			"--hot-files-path", str(hot_p),
+			"--write-back",
+		]
+		import io
+		from contextlib import redirect_stdout
+		buf = io.StringIO()
+		with redirect_stdout(buf):
+			rc = orchestrate_lib.main(argv)
+		assert rc == 0
+		roundtrip = json.loads(p.read_text(encoding="utf-8"))
+		assert {"from": "a", "to": "b"} in roundtrip["dependency_edges"]
+		assert roundtrip.get("partition_serializations")
+
+
+# ---------------------------------------------------------------------------
+# Tests: phase_attempts lifetime counter (fix 1a)
+# ---------------------------------------------------------------------------
+
+def test_phase_attempts_counter_survives_phase_oscillation():
+	"""Regression test for the loop where an autofix run nudges an issue
+	out of ai:review-blocked into ai:done and back, zeroing
+	stall_recovery_count each time and re-running the ladder forever.
+
+	After this fix, increment_stall_recovery bumps a phase-scoped
+	lifetime counter that update_issue_timestamps does NOT reset on
+	phase change, so the cap is reached even when phase flaps.
+	"""
+	state = _make_state()
+	issue = state["waves"][0]["issues"][0]
+
+	# Simulate three recovery cycles in ai:review-blocked with a phase
+	# flap to ai:done between each one.  After every flap,
+	# update_issue_timestamps zeroes stall_recovery_count.
+	now_ts = 1_000_000
+	for cycle in range(3):
+		# Stall observed: bump both counters.
+		orchestrate_lib.increment_stall_recovery(state, issue["id"], phase="ai:review-blocked")
+		# Phase flap: autofix flicks ai:review-blocked off and back on.
+		orchestrate_lib.update_issue_timestamps(
+			state,
+			issue_labels={str(issue["github_issue"]): ["ai:done"]},
+			now_ts=now_ts + (cycle * 100),
+		)
+		orchestrate_lib.update_issue_timestamps(
+			state,
+			issue_labels={str(issue["github_issue"]): ["ai:review-blocked"]},
+			now_ts=now_ts + (cycle * 100) + 50,
+		)
+
+	# stall_recovery_count was zeroed by the last phase change.
+	assert issue["stall_recovery_count"] == 0
+	# phase_attempts survived all three oscillations.
+	assert issue["phase_attempts"]["ai:review-blocked"] == 3
+
+
+def test_phase_attempts_count_caps_recovery_action():
+	"""When phase_attempts_count reaches max_recoveries, the resolver
+	returns 'skip' even if stall_recovery_count is 0."""
+	action = orchestrate_lib.resolve_stall_recovery_action(
+		"ai:review-blocked",
+		recovery_count=0,
+		max_recoveries=5,
+		phase_attempts_count=5,
+	)
+	assert action == "skip"
+
+	# Below the cap, the ladder still runs.
+	action = orchestrate_lib.resolve_stall_recovery_action(
+		"ai:review-blocked",
+		recovery_count=0,
+		max_recoveries=5,
+		phase_attempts_count=4,
+	)
+	assert action == "dispatch_rb_judge"
+
+
+def test_detect_stalls_skips_when_phase_attempts_exhausted():
+	"""detect_stalls returns recovery_action='skip' when phase_attempts
+	reaches the cap, even with a fresh stall_recovery_count of 0."""
+	state = _make_state()
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0  # zeroed by phase oscillation
+	issue["phase_attempts"] = {"ai:review-blocked": 5}
+	labels = {"10": ["ai:review-blocked"], "11": ["ai:merged"]}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+		stall_judge_trigger_count=2,
+		enable_stall_judge=True,
+	)
+
+	assert len(stalls) == 1
+	assert stalls[0]["recovery_action"] == "skip"
+	assert stalls[0]["phase_attempts_count"] == 5
+def test_detect_stalls_honors_phase_specific_cap_for_phase_attempts():
+	"""Phase-attempt caps must honour per-phase recovery overrides too."""
+	state = _make_state()
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 0
+	issue["phase_attempts"] = {"ai:done": 5}
+	labels = {"10": ["ai:done"], "11": ["ai:merged"]}
+
+	stalls = orchestrate_lib.detect_stalls(
+		state=state,
+		issue_labels=labels,
+		threshold_minutes=120,
+		now_ts=8 * 60 * 60,
+		max_recoveries=5,
+		enable_stall_judge=False,
+		max_recoveries_by_phase={"ai:done": 99},
+	)
+
+	assert len(stalls) == 1
+	assert stalls[0]["recovery_action"] == "retrigger_review"
+	assert stalls[0]["phase_attempts_count"] == 5
+
+
+def test_increment_stall_recovery_without_phase_is_backward_compatible():
+	"""Old callers that pass only (state, issue_id) still work and do
+	not create a phase_attempts dict."""
+	state = _make_state()
+	orchestrate_lib.increment_stall_recovery(state, "issue-1")
+	issue = state["waves"][0]["issues"][0]
+	assert issue["stall_recovery_count"] == 1
+	assert "phase_attempts" not in issue
+
+
+# ---------------------------------------------------------------------------
+# Unrouted replies on blocked issues (issue #6630)
+# ---------------------------------------------------------------------------
+
+def _unrouted_now():
+	from datetime import datetime, timezone
+	return datetime(2026, 10, 7, 12, 0, 0, tzinfo=timezone.utc)
+
+
+def _unrouted_ts(minutes_ago: float) -> str:
+	from datetime import timedelta
+	return (_unrouted_now() - timedelta(minutes=minutes_ago)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _unrouted_comment(cid: int, body: str, minutes_ago: float, assoc: str = "OWNER", kind: str = "User", login: str = "owner") -> dict:
+	return {"databaseId": cid, "body": body, "createdAt": _unrouted_ts(minutes_ago),
+		"authorAssociation": assoc, "author": {"login": login, "__typename": kind}}
+
+
+def _unrouted_issue(comments: list, label_events: list | None = None, labels: tuple = ("ai:blocked",)) -> dict:
+	events = label_events if label_events is not None else [("ai:blocked", 120)]
+	return {"7": {"number": 7, "labels": {"nodes": [{"name": n} for n in labels]},
+		"comments": {"nodes": comments},
+		"timelineItems": {"nodes": [{"createdAt": _unrouted_ts(m), "label": {"name": n}} for n, m in events]}}}
+
+
+def _unrouted(details: dict) -> list:
+	return orchestrate_lib.classify_unrouted_blocked_issues(details, _unrouted_now(), 15, 168)
+
+
+def test_unrouted_flags_trailing_reclarify_after_grace():
+	blocked = _unrouted_comment(1, "Clarification blocked: human input required.\n\nRun: x", 119)
+	answer = _unrouted_comment(2, "Here is the answer.\n\n/reclarify", 20)
+	assert _unrouted(_unrouted_issue([blocked, answer])) == [
+		{"issue": 7, "comment_id": 2, "reason": "command_unrouted", "age_minutes": 20}]
+
+
+def test_unrouted_crlf_and_same_login_as_automation():
+	answer = _unrouted_comment(2, "Answer\r\n/reclarify", 30, login="shubhodeep1")
+	marker = _unrouted_comment(3, "/answer [auto-answered-by-clarify]", 90, login="shubhodeep1")
+	assert _unrouted(_unrouted_issue([marker, answer]))[0]["reason"] == "command_unrouted"
+
+
+def test_unrouted_respects_grace_and_max_age():
+	assert _unrouted(_unrouted_issue([_unrouted_comment(2, "answer\n/reclarify", 10)])) == []
+	assert _unrouted(_unrouted_issue([_unrouted_comment(2, "answer", 169 * 60)], [("ai:blocked", 170 * 60)])) == []
+
+
+def test_unrouted_skips_when_later_automation_or_routing_exists():
+	answer = _unrouted_comment(2, "answer\n/reclarify", 40)
+	later_auto = _unrouted_comment(3, "Clarification required\n\n<!-- ai:clarification-questions -->", 30)
+	assert _unrouted(_unrouted_issue([answer, later_auto])) == []
+	flagged = _unrouted_comment(4, "still blocked\n\n<!-- ai:reclarify-unrouted:v1 comment=2 -->", 20)
+	assert _unrouted(_unrouted_issue([answer, flagged])) == []
+	assert _unrouted(_unrouted_issue([answer], [("ai:blocked", 120), ("ai:clarification", 35)])) == []
+
+
+def test_unrouted_ignores_untrusted_bots_and_replies_before_the_block():
+	assert _unrouted(_unrouted_issue([_unrouted_comment(2, "answer", 30, assoc="NONE")])) == []
+	assert _unrouted(_unrouted_issue([_unrouted_comment(2, "answer", 30, kind="Bot")])) == []
+	assert _unrouted(_unrouted_issue([_unrouted_comment(2, "answer", 60)], [("ai:blocked", 30)])) == []
+	assert _unrouted(_unrouted_issue([_unrouted_comment(2, "answer", 30)], labels=("ai:planning",))) == []
+
+
+def test_unrouted_reports_no_command_and_automation_bodies_are_not_human():
+	result = _unrouted(_unrouted_issue([_unrouted_comment(2, "The answer is B. Please mention /reclarify inline.", 25)]))
+	assert result == [{"issue": 7, "comment_id": 2, "reason": "no_command", "age_minutes": 25}]
+	plan = _unrouted_comment(3, "Implementation Plan\n\nTo restart clarification reply:\n\n/reclarify", 25)
+	assert _unrouted(_unrouted_issue([plan])) == []
+
+
+def test_unrouted_ignores_pipeline_bookkeeping_comments():
+	# Issue #7013: the Telegram cleanup marker, posted one second after the
+	# ai:blocked label, was flagged as an unrouted human reply.
+	blocked = _unrouted_comment(2, "Planning blocked: human input required.\nReason: superseded", 20)
+	cleanup = _unrouted_comment(3, "<!-- tg_cleanup:11613 -->", 19.98)
+	assert _unrouted(_unrouted_issue([blocked, cleanup], [("ai:blocked", 20)])) == []
+	for body in (
+		"<!-- workflow-failure-heal:occurrence -->\nAnother occurrence of this failure: run 1",
+		"<!-- tg_phase:plan:12 -->",
+		"<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->\nPartial autofix",
+		"  <!-- a -->\n\n<!-- b -->  ",
+	):
+		assert _unrouted(_unrouted_issue([_unrouted_comment(4, body, 30)])) == [], body
+
+
+def test_unrouted_ignores_claude_code_status_notes():
+	# Issue #8287: an interactive session's status note (owner account,
+	# Claude Code footer) was flagged as an unrouted reply.
+	note = ("The plan above is implemented outside the heal pipeline in stable patch #8309."
+		" Once #8309 merges, this issue can be closed as completed.\n\n---\n_Generated by [Claude Code](https://claude.ai/code)_")
+	assert _unrouted(_unrouted_issue([_unrouted_comment(2, note, 20)])) == []
+	pr_style = "Status update.\n\n🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+	assert _unrouted(_unrouted_issue([_unrouted_comment(3, pr_style, 20)])) == []
+	# A footer note does not hide an earlier human reply.
+	answer = _unrouted_comment(4, "Pick option B.", 40)
+	assert _unrouted(_unrouted_issue([answer, _unrouted_comment(5, note, 20)])) == [
+		{"issue": 7, "comment_id": 4, "reason": "no_command", "age_minutes": 40}]
+	# A session's own slash command that did not route is still flagged.
+	command = "/reclarify\n\n---\n_Generated by [Claude Code](https://claude.ai/code)_"
+	assert _unrouted(_unrouted_issue([_unrouted_comment(6, command, 20)])) == [
+		{"issue": 7, "comment_id": 6, "reason": "command_unrouted", "age_minutes": 20}]
+	# A later-line /reclarify (which clarify routes) is still checked too.
+	later = "Re-running clarification.\n/reclarify\n\n---\n_Generated by [Claude Code](https://claude.ai/code)_"
+	assert _unrouted(_unrouted_issue([_unrouted_comment(8, later, 20)])) == [
+		{"issue": 7, "comment_id": 8, "reason": "command_unrouted", "age_minutes": 20}]
+	# Mentioning Claude Code without the footer link is still a human reply.
+	plain = _unrouted_comment(7, "I generated this with Claude Code; answer is B.", 20)
+	assert _unrouted(_unrouted_issue([plain]))[0]["comment_id"] == 7
+
+
+def test_unrouted_ignores_unblock_judge_status_notes():
+	# fun-token-multi-chain#821: the judge's unmarked "belongs in the harness"
+	# note, posted a second after its verdict comment, was flagged twice.
+	import unblock_actions
+	# Every opening must still appear in the note text unblock_actions posts,
+	# so a reworded note fails here instead of paging the operator again.
+	source = Path(unblock_actions.__file__).read_text(encoding="utf-8").lower()
+	for prefix in orchestrate_lib._UNROUTED_PIPELINE_PREFIXES:
+		assert prefix in source, prefix
+	verdict = _unrouted_comment(2, "## Unblock judge: `operator_step` (round 1)\n\n<!-- ai:unblock:v1 item=7 -->", 20)
+	for index, call in enumerate((
+		lambda: unblock_actions._harness_ops(
+			{"item": 7, "stop": "blocked", "labels": ["ai:blocked"], "kind": "issue", "tracking": 0},
+			{"instructions": "Change the implement workflow.", "reason": "Wrong checkout.", "fingerprint": ""},
+			{"reason": "target_repo", "harness_paths": [], "project_paths": []}),
+		lambda: unblock_actions._untrusted_pr_ops({"item": 7}, "reissue"),
+	)):
+		bodies = [op["body"] for op in call() if op.get("op") == "comment"]
+		assert bodies, index
+		for body in bodies:
+			assert _unrouted(_unrouted_issue([verdict, _unrouted_comment(3, body, 19.98)], [("ai:blocked", 120)])) == [], body
+	for body in (
+		"The unblock judge has no verdicts left for this security finding. It stays open until a linked fix is merged.\n\nWhy: x",
+		"Next attempt, per the unblock judge: retry with the cache cleared",
+		"This security finding stays open: its finding marker could not be carried.",
+		"This pull request stays open: its linked issue's security finding marker could not be carried.",
+		"Superseded: owning PR #5 merged with its required checks passing at head `abc`. No re-issue was created.",
+	):
+		assert _unrouted(_unrouted_issue([_unrouted_comment(3, body, 20)])) == [], body
+	# A judge note after a human reply does not hide that reply.
+	answer = _unrouted_comment(4, "Pick option B.", 40)
+	note = _unrouted_comment(5, "The unblock judge found this work belongs in `o/r` (the shared workflow harness).", 30)
+	assert _unrouted(_unrouted_issue([answer, note])) == [
+		{"issue": 7, "comment_id": 4, "reason": "no_command", "age_minutes": 40}]
+	# A human reply that opens with the bare "stays open" words still counts.
+	for index, body in enumerate(("This security finding stays open until B lands.", "This pull request stays open; use B.")):
+		assert _unrouted(_unrouted_issue([_unrouted_comment(8 + index, body, 20)]))[0]["comment_id"] == 8 + index
+	# A human who merely mentions the judge is still a human reply.
+	plain = _unrouted_comment(6, "I think the unblock judge found this work belongs in the harness; use B.", 20)
+	assert _unrouted(_unrouted_issue([plain]))[0]["comment_id"] == 6
+
+
+def test_unrouted_bookkeeping_after_a_reply_does_not_hide_it():
+	answer = _unrouted_comment(2, "Pick option B.", 40)
+	cleanup = _unrouted_comment(3, "<!-- tg_cleanup:1 -->", 30)
+	heal = _unrouted_comment(4, "<!-- workflow-failure-heal:occurrence -->\nAnother occurrence", 25)
+	assert _unrouted(_unrouted_issue([answer, cleanup, heal])) == [
+		{"issue": 7, "comment_id": 2, "reason": "no_command", "age_minutes": 40}]
+	# Visible text around an unrelated HTML comment is still a human reply.
+	quoted = _unrouted_comment(5, "Answer: B <!-- note to self -->", 20)
+	assert _unrouted(_unrouted_issue([quoted]))[0]["comment_id"] == 5
+
+
+def test_unrouted_cli_reads_stdin():
+	details = _unrouted_issue([_unrouted_comment(2, "answer\n\n/reclarify", 20)])
+	result = subprocess.run(
+		[sys.executable, str(REPO_ROOT / "scripts" / "orchestrate_lib.py"), "unrouted-blocked-comments",
+			"--now", "2026-10-07T12:00:00Z"],
+		input=json.dumps(details), capture_output=True, text=True, check=True,
+		env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+	)
+	assert json.loads(result.stdout) == [{"issue": 7, "comment_id": 2, "reason": "command_unrouted", "age_minutes": 20}]
+
+def _run_extract_integration_branch_cli(body: str) -> subprocess.CompletedProcess:
+	env = os.environ.copy()
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	return subprocess.run(
+		["python3", str(REPO_ROOT / "scripts" / "orchestrate_lib.py"), "extract-integration-branch"],
+		input=body,
+		check=False,
+		capture_output=True,
+		text=True,
+		env=env,
+		cwd=str(REPO_ROOT),
+	)
+
+
+def test_extract_integration_branch_cli_reads_body_from_stdin() -> None:
+	"""Issue #6631: close_merged_issues_sweep and issue_pr_status.yml parse an
+	issue's declared integration branch through this subcommand."""
+	cases = [
+		("Body\n- Integration branch: orchestrator/project-7\n", "orchestrator/project-7"),
+		("Body\n- **Integration branch:** `orchestrator/project-7`\n", "orchestrator/project-7"),
+		("Body\nIntegration branch: `orchestrator/project-7`\n", "orchestrator/project-7"),
+		("**Target branch:** `orchestrator/project-3965` (integration branch)\n", "orchestrator/project-3965"),
+		("Target branch: feature/x\n", "feature/x"),
+		(
+			"- Target branch: feature/alias\n- Integration branch: orchestrator/project-8\n",
+			"orchestrator/project-8",
+		),
+		("No branch metadata here.\n", ""),
+		("", ""),
+	]
+	for body, expected in cases:
+		proc = _run_extract_integration_branch_cli(body)
+		assert proc.returncode == 0, proc.stderr
+		assert proc.stdout.strip() == expected, (body, proc.stdout)
+		if not expected:
+			assert proc.stdout == ""
+
+
+# ---------------------------------------------------------------------------
+# Issue #8955: check_triage_target_branch / check-triage-target-pr.
+# ---------------------------------------------------------------------------
+
+_TRIAGE_BODY = "<!-- check-failure-triage:pr=5038 -->\nCheck failed.\n\n---\n\nDiagnosis.\n"
+
+
+def test_check_triage_target_branch_accepts_trusted_issue() -> None:
+	fn = orchestrate_lib.check_triage_target_branch
+	assert fn(_TRIAGE_BODY, ["ai:check-triage"], "pipeline-bot", "pipeline-bot") == 5038
+	assert fn(_TRIAGE_BODY, [{"name": "ai:check-triage"}, {"name": "ai:done"}], "Pipeline-Bot", "pipeline-bot") == 5038
+	assert fn("   <!-- check-failure-triage:pr=7 -->  \r\nx", ["ai:check-triage"], "bot", "bot") == 7
+
+
+def test_check_triage_target_branch_rejects_untrusted_or_malformed() -> None:
+	fn = orchestrate_lib.check_triage_target_branch
+	assert fn(_TRIAGE_BODY, ["ai:done"], "bot", "bot") is None
+	assert fn(_TRIAGE_BODY, [], "bot", "bot") is None
+	assert fn(_TRIAGE_BODY, "ai:check-triage", "bot", "bot") is None
+	assert fn(_TRIAGE_BODY, [42, None], "bot", "bot") is None
+	assert fn(_TRIAGE_BODY, ["ai:check-triage"], "someone", "bot") is None
+	assert fn(_TRIAGE_BODY, ["ai:check-triage"], "", "") is None
+	assert fn(_TRIAGE_BODY, ["ai:check-triage"], "bot", "") is None
+	assert fn("No marker\n", ["ai:check-triage"], "bot", "bot") is None
+	assert fn("", ["ai:check-triage"], "bot", "bot") is None
+	assert fn(None, ["ai:check-triage"], "bot", "bot") is None
+	assert fn(_TRIAGE_BODY + "<!-- check-failure-triage:pr=5038 -->\n", ["ai:check-triage"], "bot", "bot") is None
+	assert fn(_TRIAGE_BODY + "<!-- check-failure-triage:pr=99 -->\n", ["ai:check-triage"], "bot", "bot") is None
+	assert fn("<!-- check-failure-triage:pr=abc -->\n", ["ai:check-triage"], "bot", "bot") is None
+	assert fn("<!-- check-failure-triage:pr=0 -->\n", ["ai:check-triage"], "bot", "bot") is None
+	assert fn("<!-- check-failure-triage:pr=012 -->\n", ["ai:check-triage"], "bot", "bot") is None
+	assert fn("    <!-- check-failure-triage:pr=12 -->\n", ["ai:check-triage"], "bot", "bot") is None
+	assert fn("text <!-- check-failure-triage:pr=12 -->\n", ["ai:check-triage"], "bot", "bot") is None
+
+
+def test_check_triage_marker_pattern_matches_resolution_gate() -> None:
+	import check_triage_resolution
+
+	assert orchestrate_lib.CHECK_TRIAGE_PR_MARKER_RE.pattern == check_triage_resolution.PR_MARKER_RE.pattern
+
+
+def test_check_triage_target_branch_ignores_fenced_marker_copies() -> None:
+	import check_triage_resolution
+
+	fn = orchestrate_lib.check_triage_target_branch
+	body = _TRIAGE_BODY + "```\n<!-- check-failure-triage:pr=5038 -->\n```\n~~~~\n<!-- check-failure-triage:pr=9 -->\n~~~~\n"
+	assert fn(body, ["ai:check-triage"], "bot", "bot") == 5038
+	for sample in (body, _TRIAGE_BODY, "a\n```\nb\n~~~\nc\n```\nd\n", "```\nunclosed\n"):
+		assert orchestrate_lib._check_triage_lines_outside_fences(sample) == check_triage_resolution._lines_outside_fences(sample)
+
+
+def _run_check_triage_target_pr_cli(body: str, *extra: str) -> subprocess.CompletedProcess:
+	env = os.environ.copy()
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	return subprocess.run(
+		["python3", str(REPO_ROOT / "scripts" / "orchestrate_lib.py"), "check-triage-target-pr", *extra],
+		input=body, check=False, capture_output=True, text=True, env=env, cwd=str(REPO_ROOT),
+	)
+
+
+def test_check_triage_target_pr_cli_prints_number_or_nothing() -> None:
+	ok = _run_check_triage_target_pr_cli(
+		_TRIAGE_BODY, "--labels-json", '["ai:check-triage"]', "--author", "Bot", "--pipeline-login", "bot",
+	)
+	assert ok.returncode == 0, ok.stderr
+	assert ok.stdout == "5038\n"
+	for extra in (
+		("--labels-json", "not json", "--author", "bot", "--pipeline-login", "bot"),
+		("--labels-json", '["ai:done"]', "--author", "bot", "--pipeline-login", "bot"),
+		("--labels-json", '["ai:check-triage"]', "--author", "other", "--pipeline-login", "bot"),
+		("--labels-json", '{"name": "ai:check-triage"}', "--author", "bot", "--pipeline-login", "bot"),
+		(),
+	):
+		proc = _run_check_triage_target_pr_cli(_TRIAGE_BODY, *extra)
+		assert proc.returncode == 0, (extra, proc.stderr)
+		assert proc.stdout == "", (extra, proc.stdout)
+
+
+# ---------------------------------------------------------------------------
+# Pre-push affected-test gate, phase P2 (issue #8189): augment-files-touched
+# and render-expected-files.
+# ---------------------------------------------------------------------------
+
+_PREPUSH_STUB_TEMPLATE = """#!/usr/bin/env python3
+import json
+import sys
+import time
+
+MODE = {mode!r}
+argv = sys.argv[1:]
+out = argv[argv.index("--out") + 1]
+paths_file = argv[argv.index("--paths-file") + 1]
+planned = [line for line in open(paths_file, encoding="utf-8").read().splitlines() if line]
+if MODE == "fail":
+	sys.exit(3)
+if MODE == "sleep":
+	time.sleep(60)
+if MODE == "no_output":
+	sys.exit(0)
+if MODE == "malformed":
+	open(out, "w", encoding="utf-8").write("{{not json")
+	sys.exit(0)
+if MODE == "wrong_shape":
+	open(out, "w", encoding="utf-8").write(json.dumps({{"affected_tests": "x", "companion_files": []}}))
+	sys.exit(0)
+payload = {payload!r}
+if MODE == "derived":
+	# One affected test per planned path, so feeding the added tests back in
+	# would derive further tests (transitive expansion).
+	payload = {{
+		"affected_tests": [{{"path": "tests/derived/test_" + p.replace("/", "_"), "reasons": ["stem_text"]}} for p in planned],
+		"companion_files": [],
+	}}
+open(out, "w", encoding="utf-8").write(json.dumps(payload))
+"""
+
+
+def _write_prepush_stub(tmp: Path, mode: str = "fixed", payload: dict | None = None) -> Path:
+	stub = tmp / "prepush_affected_tests_stub.py"
+	stub.write_text(_PREPUSH_STUB_TEMPLATE.format(mode=mode, payload=payload or {}), encoding="utf-8")
+	return stub
+
+
+def _run_augment_cli(decomposition: Path, module: Path, *extra: str) -> subprocess.CompletedProcess:
+	return subprocess.run(
+		[
+			sys.executable, str(REPO_ROOT / "scripts" / "orchestrate_lib.py"), "augment-files-touched",
+			"--decomposition", str(decomposition),
+			"--repo-root", str(decomposition.parent),
+			"--gate-module", str(module),
+			"--write-back",
+			*extra,
+		],
+		capture_output=True,
+		text=True,
+		check=False,
+		timeout=120,
+	)
+
+
+def _write_prepush_decomposition(tmp: Path, issues: list[dict]) -> Path:
+	path = tmp / "decomposition.json"
+	path.write_text(json.dumps(_make_decomposition(issues=issues), indent=2), encoding="utf-8")
+	return path
+
+
+def test_augment_files_touched_adds_tests_and_companions():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		stub = _write_prepush_stub(tmp_path, payload={
+			"changed_files": ["scripts/new_tool.py"],
+			"affected_tests": [{"path": "tests/test_new_tool.py", "reasons": ["naming"]}, {"path": "scripts/new_tool.py", "reasons": ["changed_test"]}],
+			"companion_files": ["docs/INVENTORY.md"],
+			"registry_checks": [],
+			"static_checks": [],
+		})
+		decomposition = _write_prepush_decomposition(tmp_path, [
+			{"id": "a", "title": "A", "body": "b", "priority": 1, "files_touched": ["scripts/new_tool.py"]},
+			{"id": "b", "title": "B", "body": "b", "priority": 2},
+		])
+		proc = _run_augment_cli(decomposition, stub)
+		assert proc.returncode == 0, proc.stderr
+		data = json.loads(decomposition.read_text(encoding="utf-8"))
+		issues = {i["id"]: i for i in data["issues"]}
+		assert issues["a"]["files_touched"] == ["scripts/new_tool.py", "tests/test_new_tool.py", "docs/INVENTORY.md"]
+		assert issues["b"]["files_touched"] == []
+		assert "PREPUSH_TEST_GATE phase=augment issue=a added=2 truncated=0" in proc.stderr
+		assert "PREPUSH_TEST_GATE phase=augment issue=b added=0 truncated=0" in proc.stderr
+		assert json.loads(proc.stdout)["written"] is True
+		orchestrate_lib.validate_decomposition(data)
+
+
+def test_augment_files_touched_caps_at_fifty_with_log():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		stub = _write_prepush_stub(tmp_path, payload={
+			"affected_tests": [{"path": f"tests/test_extra_{n}.py"} for n in range(5)],
+			"companion_files": [],
+		})
+		planned = [f"src/file_{n}.py" for n in range(48)]
+		decomposition = _write_prepush_decomposition(tmp_path, [
+			{"id": "a", "title": "A", "body": "b", "priority": 1, "files_touched": planned},
+		])
+		proc = _run_augment_cli(decomposition, stub)
+		assert proc.returncode == 0, proc.stderr
+		data = json.loads(decomposition.read_text(encoding="utf-8"))
+		files = data["issues"][0]["files_touched"]
+		assert len(files) == 50
+		assert files[-2:] == ["tests/test_extra_0.py", "tests/test_extra_1.py"]
+		assert "issue=a added=2 truncated=3" in proc.stderr
+		orchestrate_lib.validate_decomposition(data)
+
+
+def test_augment_files_touched_is_idempotent():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		stub = _write_prepush_stub(tmp_path, mode="derived")
+		decomposition = _write_prepush_decomposition(tmp_path, [
+			{"id": "a", "title": "A", "body": "b", "priority": 1, "files_touched": ["src/one.py", "src/two.py"]},
+		])
+		first = _run_augment_cli(decomposition, stub)
+		assert first.returncode == 0, first.stderr
+		assert "issue=a added=2 truncated=0" in first.stderr
+		after_first = decomposition.read_bytes()
+		second = _run_augment_cli(decomposition, stub)
+		assert second.returncode == 0, second.stderr
+		assert "issue=a added=0 truncated=0" in second.stderr
+		assert json.loads(second.stdout)["written"] is False
+		assert decomposition.read_bytes() == after_first
+
+
+def test_augment_files_touched_missing_or_failing_module_is_noop():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		decomposition = _write_prepush_decomposition(tmp_path, [
+			{"id": "a", "title": "A", "body": "b", "priority": 1, "files_touched": ["src/one.py"]},
+		])
+		original = decomposition.read_bytes()
+		proc = _run_augment_cli(decomposition, tmp_path / "absent_module.py")
+		assert proc.returncode == 0, proc.stderr
+		assert "PREPUSH_TEST_GATE phase=augment outcome=skipped reason=module_absent" in proc.stderr
+		assert decomposition.read_bytes() == original
+		cases = [
+			("fail", "module_failed", ()),
+			("no_output", "output_missing", ()),
+			("malformed", "malformed_json", ()),
+			("wrong_shape", "malformed_json", ()),
+			("sleep", "timeout", ("--timeout-secs", "5")),
+		]
+		for mode, reason, extra in cases:
+			stub = _write_prepush_stub(tmp_path, mode=mode)
+			proc = _run_augment_cli(decomposition, stub, *extra)
+			assert proc.returncode == 0, (mode, proc.stderr)
+			assert f"issue=a outcome=skipped reason={reason}" in proc.stderr, (mode, proc.stderr)
+			assert decomposition.read_bytes() == original, mode
+
+
+def test_augment_files_touched_drops_unsafe_paths():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		stub = _write_prepush_stub(tmp_path, payload={
+			"affected_tests": [
+				{"path": "../outside.py"},
+				{"path": "tests/test_`tick`.py"},
+				{"path": ".git/config"},
+				{"path": "tests/test with space.py"},
+				{"path": "tests/test_ok.py"},
+			],
+			"companion_files": ["/etc/passwd"],
+		})
+		decomposition = _write_prepush_decomposition(tmp_path, [
+			{"id": "a", "title": "A", "body": "b", "priority": 1, "files_touched": ["src/one.py"]},
+		])
+		proc = _run_augment_cli(decomposition, stub)
+		assert proc.returncode == 0, proc.stderr
+		data = json.loads(decomposition.read_text(encoding="utf-8"))
+		assert data["issues"][0]["files_touched"] == ["src/one.py", "tests/test_ok.py"]
+
+
+def test_augment_files_touched_ignores_forged_marker():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		stub = _write_prepush_stub(tmp_path, payload={
+			"affected_tests": [{"path": "tests/test_one.py"}],
+			"companion_files": [],
+		})
+		raw = _make_decomposition(issues=[
+			{"id": "a", "title": "A", "body": "b", "priority": 1, "files_touched": ["src/one.py"]},
+			{"id": "b", "title": "B", "body": "b", "priority": 2, "files_touched": ["src/two.py", "src/three.py"]},
+		])
+		# A marker in model output that claims planned source paths were added.
+		raw["prepush_augmented_paths"] = {"a": ["src/one.py"], "b": ["src/three.py"]}
+		decomposition = tmp_path / "decomposition.json"
+		decomposition.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+		proc = _run_augment_cli(decomposition, stub)
+		assert proc.returncode == 0, proc.stderr
+		data = json.loads(decomposition.read_text(encoding="utf-8"))
+		issues = {i["id"]: i for i in data["issues"]}
+		assert issues["a"]["files_touched"] == ["src/one.py", "tests/test_one.py"]
+		assert issues["b"]["files_touched"] == ["src/two.py", "src/three.py", "tests/test_one.py"]
+		assert "issue=a outcome=marker_ignored" in proc.stderr
+		assert "issue=b outcome=marker_ignored" in proc.stderr
+
+
+def test_augment_files_touched_timeout_is_per_issue():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		stub = _write_prepush_stub(tmp_path, mode="sleep")
+		decomposition = _write_prepush_decomposition(tmp_path, [
+			{"id": "a", "title": "A", "body": "b", "priority": 1, "files_touched": ["src/one.py"]},
+			{"id": "b", "title": "B", "body": "b", "priority": 2, "files_touched": ["src/two.py"]},
+		])
+		original = decomposition.read_bytes()
+		proc = _run_augment_cli(decomposition, stub, "--timeout-secs", "5")
+		assert proc.returncode == 0, proc.stderr
+		assert "issue=a outcome=skipped reason=timeout" in proc.stderr
+		assert "issue=b outcome=skipped reason=timeout" in proc.stderr
+		assert "timeout_previous" not in proc.stderr
+		assert decomposition.read_bytes() == original
+
+
+def test_augment_files_touched_rejects_incomplete_module_output():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		decomposition = _write_prepush_decomposition(tmp_path, [
+			{"id": "a", "title": "A", "body": "b", "priority": 1, "files_touched": ["src/one.py"]},
+		])
+		original = decomposition.read_bytes()
+		for payload in ({}, {"affected_tests": [{"path": "tests/test_one.py"}]}, {"companion_files": ["docs/INVENTORY.md"]}):
+			stub = _write_prepush_stub(tmp_path, payload=payload)
+			proc = _run_augment_cli(decomposition, stub)
+			assert proc.returncode == 0, proc.stderr
+			assert "issue=a outcome=skipped reason=malformed_json" in proc.stderr, (payload, proc.stderr)
+			assert decomposition.read_bytes() == original
+
+
+def test_augment_files_touched_drops_stale_marker_without_additions():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		stub = _write_prepush_stub(tmp_path, payload={"affected_tests": [], "companion_files": []})
+		raw = _make_decomposition(issues=[
+			{"id": "a", "title": "A", "body": "b", "priority": 1, "files_touched": ["src/one.py"]},
+			{"id": "b", "title": "B", "body": "b", "priority": 2},
+		])
+		raw["prepush_augmented_paths"] = {"a": ["src/one.py"], "b": ["src/two.py"]}
+		decomposition = tmp_path / "decomposition.json"
+		decomposition.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+		proc = _run_augment_cli(decomposition, stub)
+		assert proc.returncode == 0, proc.stderr
+		assert "issue=a outcome=marker_ignored" in proc.stderr
+		data = json.loads(decomposition.read_text(encoding="utf-8"))
+		assert "prepush_augmented_paths" not in data
+		assert data["issues"][0]["files_touched"] == ["src/one.py"]
+		second = _run_augment_cli(decomposition, stub)
+		assert second.returncode == 0, second.stderr
+		assert json.loads(second.stdout)["written"] is False
+
+
+def test_augment_files_touched_ignored_marker_with_failed_module_is_noop():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		raw = _make_decomposition(issues=[
+			{"id": "a", "title": "A", "body": "b", "priority": 1, "files_touched": ["src/one.py"]},
+		])
+		# A marker that claims every planned path was added is ignored; the
+		# retry selection then fails, so the file must stay unchanged.
+		raw["prepush_augmented_paths"] = {"a": ["src/one.py"]}
+		decomposition = tmp_path / "decomposition.json"
+		decomposition.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+		original = decomposition.read_bytes()
+		for mode in ("fail", "malformed", "no_output"):
+			stub = _write_prepush_stub(tmp_path, mode=mode)
+			proc = _run_augment_cli(decomposition, stub)
+			assert proc.returncode == 0, (mode, proc.stderr)
+			assert "issue=a outcome=marker_ignored" in proc.stderr, (mode, proc.stderr)
+			assert "issue=a outcome=skipped" in proc.stderr, (mode, proc.stderr)
+			assert json.loads(proc.stdout)["written"] is False, mode
+			assert decomposition.read_bytes() == original, mode
+
+
+def test_augment_files_touched_malformed_marker_with_failed_module_is_noop():
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		for marker in ({"a": ["src/one.py", 5]}, {"a": "src/one.py"}, ["src/one.py"]):
+			raw = _make_decomposition(issues=[
+				{"id": "a", "title": "A", "body": "b", "priority": 1, "files_touched": ["src/one.py"]},
+			])
+			raw["prepush_augmented_paths"] = marker
+			decomposition = tmp_path / "decomposition.json"
+			decomposition.write_text(json.dumps(raw, indent=2), encoding="utf-8")
+			original = decomposition.read_bytes()
+			stub = _write_prepush_stub(tmp_path, mode="fail")
+			proc = _run_augment_cli(decomposition, stub)
+			assert proc.returncode == 0, (marker, proc.stderr)
+			assert "issue=a outcome=skipped" in proc.stderr, (marker, proc.stderr)
+			assert json.loads(proc.stdout)["written"] is False, marker
+			assert decomposition.read_bytes() == original, marker
+			# A successful run cleans the malformed marker.
+			ok_stub = _write_prepush_stub(tmp_path, payload={"affected_tests": [], "companion_files": []})
+			proc = _run_augment_cli(decomposition, ok_stub)
+			assert proc.returncode == 0, (marker, proc.stderr)
+			assert json.loads(proc.stdout)["written"] is True, marker
+			assert "prepush_augmented_paths" not in json.loads(decomposition.read_text(encoding="utf-8")), marker
+
+
+def test_render_expected_files_section_has_no_allowlist():
+	import files_touched_scope_guard
+
+	assert orchestrate_lib.render_expected_files_section([]) == ""
+	assert orchestrate_lib.render_expected_files_section("nope") == ""
+	section = orchestrate_lib.render_expected_files_section(
+		["scripts/a.py", "files_touched:", "scripts/a.py", "../x", "tests/test_a.py"]
+	)
+	assert section == (
+		"**Expected files** (advisory, from the decomposition; includes the tests and\n"
+		"registries this change affects. Update them in the same change.)\n"
+		"- `scripts/a.py`\n"
+		"- `files_touched:`\n"
+		"- `tests/test_a.py`"
+	)
+	assert "files_touched" not in section.splitlines()[0]
+	body = (
+		"Do the thing.\n\n" + section + "\n\n---\n**Orchestrator metadata** (do not edit)\n"
+		"- Tracking issue: #1\n- Managed by: AI Orchestrator\n"
+	)
+	assert files_touched_scope_guard.extract_files_touched(body) is None
+	with tempfile.TemporaryDirectory() as tmp:
+		body_file = Path(tmp) / "body.md"
+		body_file.write_text(body, encoding="utf-8")
+		staged_file = Path(tmp) / "staged.txt"
+		staged_file.write_text("scripts/a.py\n", encoding="utf-8")
+		guard = subprocess.run(
+			[sys.executable, str(REPO_ROOT / "scripts" / "files_touched_scope_guard.py"),
+				"--issue-body-file", str(body_file), "--staged-file", str(staged_file)],
+			capture_output=True, text=True, check=False,
+		)
+		assert guard.returncode == 10, (guard.returncode, guard.stdout, guard.stderr)
+	rendered = subprocess.run(
+		[sys.executable, str(REPO_ROOT / "scripts" / "orchestrate_lib.py"), "render-expected-files", "--paths-json-file", "-"],
+		input=json.dumps(["scripts/a.py", "files_touched:", "tests/test_a.py"]),
+		capture_output=True, text=True, check=False,
+	)
+	assert rendered.returncode == 0, rendered.stderr
+	assert rendered.stdout == section + "\n"
+	for empty_input in ("[]", "not json", "{}"):
+		proc = subprocess.run(
+			[sys.executable, str(REPO_ROOT / "scripts" / "orchestrate_lib.py"), "render-expected-files", "--paths-json-file", "-"],
+			input=empty_input, capture_output=True, text=True, check=False,
+		)
+		assert proc.returncode == 0 and proc.stdout == "", (empty_input, proc.stdout)
+
+
+def test_augmented_only_shared_test_does_not_serialize_siblings():
+	# Issue #8244 (run 40609251819): a test the pre-push gate added to both
+	# siblings, which neither planned, used to inject an edge and push the
+	# second sibling out of Wave 1.
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_path = Path(tmp)
+		stub = _write_prepush_stub(tmp_path, payload={
+			"affected_tests": [{"path": "tests/test_shared.py"}],
+			"companion_files": [],
+		})
+		decomposition = _write_prepush_decomposition(tmp_path, [
+			{"id": "a", "title": "A", "body": "b", "priority": 1, "files_touched": ["src/a.py"]},
+			{"id": "b", "title": "B", "body": "b", "priority": 2, "files_touched": ["src/b.py"]},
+		])
+		before = orchestrate_lib.validate_decomposition(json.loads(decomposition.read_text(encoding="utf-8")))
+		assert orchestrate_lib.auto_serialize_file_overlaps(before, hot_files=set()) == []
+		proc = _run_augment_cli(decomposition, stub)
+		assert proc.returncode == 0, proc.stderr
+		data = orchestrate_lib.validate_decomposition(json.loads(decomposition.read_text(encoding="utf-8")))
+		assert data["issues"][0]["files_touched"] == ["src/a.py", "tests/test_shared.py"]
+		assert data["issues"][1]["files_touched"] == ["src/b.py", "tests/test_shared.py"]
+		serializations = orchestrate_lib.auto_serialize_file_overlaps(data, hot_files=set())
+		assert serializations == []
+		assert data["dependency_edges"] == []
+
+
+def _augmented_pair(a_files, b_files, marker, hot_files=None, edges=None) -> dict:
+	data = _make_decomposition(issues=[
+		{"id": "a", "title": "A", "body": "b", "priority": 1, "files_touched": list(a_files)},
+		{"id": "b", "title": "B", "body": "b", "priority": 2, "files_touched": list(b_files)},
+	], edges=edges)
+	if marker is not None:
+		data["prepush_augmented_paths"] = marker
+	return orchestrate_lib.validate_decomposition(data)
+
+
+def _check_partition_report(data: dict, hot_files: list[str] | None = None) -> dict:
+	import io
+	from contextlib import redirect_stdout
+	with tempfile.TemporaryDirectory() as td:
+		p = Path(td) / "decomp.json"
+		_write_json(p, data)
+		hot_p = Path(td) / "hot.json"
+		_write_json(hot_p, {"hot_files": hot_files or []})
+		buf = io.StringIO()
+		with redirect_stdout(buf):
+			rc = orchestrate_lib.main(["check-partition", "--input-file", str(p), "--hot-files-path", str(hot_p)])
+		assert rc == 0, f"check-partition exit {rc}"
+		return json.loads(buf.getvalue())
+
+
+def test_trusted_prepush_augmented_paths_trust_rule():
+	shared = "tests/test_shared.py"
+	good = _augmented_pair(["src/a.py", shared], ["src/b.py", shared], {"a": [shared], "b": [shared]})
+	assert orchestrate_lib.trusted_prepush_augmented_paths(good) == {"a": {shared}, "b": {shared}}
+	before = json.dumps(good, sort_keys=True)
+	orchestrate_lib.trusted_prepush_augmented_paths(good)
+	assert json.dumps(good, sort_keys=True) == before
+	assert orchestrate_lib.trusted_prepush_augmented_paths(_augmented_pair(["src/a.py"], ["src/b.py"], None)) == {}
+	assert orchestrate_lib.trusted_prepush_augmented_paths(_augmented_pair(["src/a.py"], ["src/b.py"], ["x"])) == {}
+	malformed = _augmented_pair(
+		["src/a.py", shared], ["src/b.py", shared],
+		{"a": [shared, 7], "b": "tests/test_shared.py"},
+	)
+	assert orchestrate_lib.trusted_prepush_augmented_paths(malformed) == {}
+	outside = _augmented_pair(["src/a.py", shared], ["src/b.py", shared], {"a": [shared, "other.py"], "b": [shared]})
+	assert orchestrate_lib.trusted_prepush_augmented_paths(outside) == {"b": {shared}}
+	covers_all = _augmented_pair([shared], ["src/b.py", shared], {"a": [shared], "b": [shared]})
+	assert orchestrate_lib.trusted_prepush_augmented_paths(covers_all) == {"b": {shared}}
+
+
+def test_augmented_only_overlap_gives_one_wave_and_no_reported_overlap():
+	shared = "tests/test_shared.py"
+	data = _augmented_pair(["src/a.py", shared], ["src/b.py", shared], {"a": [shared], "b": [shared]})
+	report = _check_partition_report(data)
+	assert report["total_overlaps"] == 0
+	assert report["augmented_only_overlaps_ignored"] == 1
+	assert report["planned_serializations"] == []
+	waves = orchestrate_lib.compute_waves(data, hot_files=set())
+	assert [[i["id"] for i in w] for w in waves] == [["a", "b"]]
+	assert data["partition_serializations"] == []
+
+
+def test_overlap_on_a_path_one_sibling_planned_still_serializes():
+	shared = "tests/test_shared.py"
+	# b planned the test itself; only a got it from augmentation.
+	data = _augmented_pair(["src/a.py", shared], ["src/b.py", shared], {"a": [shared]})
+	report = _check_partition_report(data)
+	assert report["total_overlaps"] == 1
+	assert report["augmented_only_overlaps_ignored"] == 0
+	waves = orchestrate_lib.compute_waves(data, hot_files=set())
+	assert [[i["id"] for i in w] for w in waves] == [["a"], ["b"]]
+	assert {"from": "a", "to": "b"} in data["dependency_edges"]
+
+
+def test_augmented_hot_file_rule_matches_pair_rule():
+	hot = "tests/test_hot.py"
+	both_augmented = _augmented_pair(["src/a.py", hot], ["src/b.py", hot], {"a": [hot], "b": [hot]})
+	assert orchestrate_lib.validate_wave_file_partition(
+		["a", "b"], {i["id"]: i for i in both_augmented["issues"]}, {hot},
+		augmented_paths=orchestrate_lib.trusted_prepush_augmented_paths(both_augmented),
+	) == []
+	one_planned = _augmented_pair(["src/a.py", hot], ["src/b.py", hot], {"a": [hot]})
+	overlaps = orchestrate_lib.validate_wave_file_partition(
+		["a", "b"], {i["id"]: i for i in one_planned["issues"]}, {hot},
+		augmented_paths=orchestrate_lib.trusted_prepush_augmented_paths(one_planned),
+	)
+	assert overlaps == [{"type": "hot_file", "issue_a": "a", "issue_b": "b", "files": [hot]}]
+
+
+def test_malformed_augmented_marker_counts_overlap_as_before():
+	shared = "tests/test_shared.py"
+	for marker in (
+		["not", "a", "dict"],
+		{"a": [shared, 3], "b": [shared]},
+		{"a": [shared, "src/elsewhere.py"], "b": [shared]},
+		{"a": [shared], "b": ["src/b.py", shared]},
+	):
+		data = _augmented_pair(["src/a.py", shared], ["src/b.py", shared], marker)
+		report = _check_partition_report(data)
+		assert report["total_overlaps"] == 1, marker
+		assert report["augmented_only_overlaps_ignored"] == 0, marker
+		serializations = orchestrate_lib.auto_serialize_file_overlaps(data, hot_files=set())
+		assert len(serializations) == 1, marker
+		assert {"from": "a", "to": "b"} in data["dependency_edges"], marker
+
+
+def _orchestrate_overlap_log_filter() -> str:
+	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate.yml").read_text(encoding="utf-8")
+	line = next(wf_line for wf_line in workflow.splitlines() if "jq -r '.wave_reports[]? | select(.overlap_count > 0)" in wf_line)
+	match = re.search(r"jq -r '([^']*)'", line)
+	assert match is not None, line
+	return match.group(1)
+
+
+def test_orchestrate_overlap_log_filter_compiles_and_formats():
+	import shutil
+	jq_filter = _orchestrate_overlap_log_filter()
+	assert "\\u2194" not in jq_filter and '\\"' not in jq_filter, jq_filter
+	if shutil.which("jq") is None:
+		print("  SKIP  jq not installed; overlap log filter not executed")
+		return
+	report = {"wave_reports": [
+		{"wave": 1, "overlap_count": 1, "overlaps": [{"type": "pair", "issue_a": "a", "issue_b": "b", "files": ["x", "y"]}]},
+		{"wave": 2, "overlap_count": 0, "overlaps": []},
+	]}
+	proc = subprocess.run(["jq", "-r", jq_filter], input=json.dumps(report), capture_output=True, text=True, check=False)
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout == "  Wave 1: 1 overlap(s): a <-> b on x, y\n", proc.stdout
+
+
+def test_prepush_gate_orchestrator_scoping_wiring_contract():
+	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate.yml").read_text(encoding="utf-8")
+	validate_idx = workflow.index('python3 scripts/orchestrate_lib.py validate --input-file "${DECOMPOSITION_FILE}"')
+	augment_idx = workflow.index("python3 scripts/orchestrate_lib.py augment-files-touched")
+	partition_idx = workflow.index("python3 scripts/orchestrate_lib.py check-partition")
+	assert validate_idx < augment_idx < partition_idx
+	# A model-supplied marker is dropped before augmentation (issue #8244).
+	strip_idx = workflow.index("jq 'del(.prepush_augmented_paths)' \"${DECOMPOSITION_FILE}\"")
+	assert validate_idx < strip_idx < workflow.index('_prepush_gate_mode="$(printf') < augment_idx
+	assert "outcome=marker_dropped reason=model_supplied" in workflow
+	assert "PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}" in workflow
+	assert '"${PREPUSH_TEST_GATE_MODE:-repair}"' in workflow
+	assert "PREPUSH_TEST_GATE outcome=mode_invalid" in workflow
+	assert "reason=mode_off" in workflow
+	assert '"${GITHUB_WORKSPACE}/.codex-workflow-src/workflow-templates/.claude/hooks/prepush_affected_tests.py"' in workflow
+	wave1_render_idx = workflow.index("render-expected-files --paths-json-file -")
+	assert wave1_render_idx < workflow.index("**Orchestrator metadata** (do not edit)")
+	poller = (REPO_ROOT / "scripts" / "orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	render_line = (
+		"DEF_EXPECTED_SECTION=\"$(echo \"${ISSUE_DEF}\" | jq -c '.files_touched // []' 2>/dev/null"
+		" | python3 scripts/orchestrate_lib.py render-expected-files --paths-json-file - 2>/dev/null || true)\""
+	)
+	assert poller.count(render_line) == 2
+	for match in re.finditer(re.escape(render_line), poller):
+		tail = poller[match.end():]
+		assert tail.index("FULL_BODY=\"${DEF_BODY}") < tail.index("**Orchestrator metadata** (do not edit)")
+		assert tail.index("DEF_BODY=\"$(printf '%s\\n\\n%s' \"${DEF_BODY}\" \"${DEF_EXPECTED_SECTION}\")\"") < tail.index("FULL_BODY=\"${DEF_BODY}")
+
+
+# ---------------------------------------------------------------------------
+# Issue #8314: Wave 1 deferral reasons + missing child issue number
+# ---------------------------------------------------------------------------
+
+def _wave1_create_issues_step_body() -> str:
+	"""Return the dedented run: body of the orchestrate.yml create_issues step.
+
+	Extracted textually (PyYAML is not a dependency of this suite): the body is
+	every line after ``run: |`` up to the next step, with the 10-space block
+	indentation removed, which is what the runner executes.
+	"""
+	workflow = (REPO_ROOT / ".github" / "workflows" / "orchestrate.yml").read_text(encoding="utf-8")
+	lines = workflow.splitlines()
+	start = lines.index("      - name: Create Wave 1 issues only")
+	assert lines[start + 2] == "        id: create_issues", lines[start + 2]
+	run_idx = next(i for i in range(start, len(lines)) if lines[i] == "        run: |")
+	body: list[str] = []
+	for line in lines[run_idx + 1:]:
+		if line.startswith("      - name:"):
+			break
+		assert line == "" or line.startswith(" " * 10), line
+		body.append(line[10:])
+	return "\n".join(body) + "\n"
+
+
+def _run_wave1_create_issues_step(data: dict, create_output: str = "https://github.com/o/r/issues/101", create_rc: int = 0) -> dict:
+	import shutil
+	tmp = Path(tempfile.mkdtemp(prefix="wave1-deferral-"))
+	try:
+		scripts_dir = tmp / "scripts"
+		scripts_dir.mkdir()
+		shutil.copy(REPO_ROOT / "scripts" / "orchestrate_lib.py", scripts_dir / "orchestrate_lib.py")
+		(scripts_dir / "gh_helpers.sh").write_text(
+			'gh_retry() { printf \'%s\\n\' "$*" >> "${RUNTIME_DIR}/gh_calls.txt"; '
+			'printf \'%s\' "${STUB_CREATE_OUTPUT}"; return "${STUB_CREATE_RC:-0}"; }\n',
+			encoding="utf-8",
+		)
+		runtime = tmp / "runtime"
+		runtime.mkdir()
+		decomposition = runtime / "decomposition.json"
+		decomposition.write_text(json.dumps(data), encoding="utf-8")
+		script = _wave1_create_issues_step_body().replace("${{ github.repository }}", "o/r")
+		env = dict(os.environ)
+		env.update({
+			"DECOMPOSITION_FILE": str(decomposition),
+			"RUNTIME_DIR": str(runtime),
+			"TRACKING_ISSUE_NUMBER": "1",
+			"INTEGRATION_BRANCH": "x",
+			"PYTHONDONTWRITEBYTECODE": "1",
+			"STUB_CREATE_OUTPUT": create_output,
+			"STUB_CREATE_RC": str(create_rc),
+		})
+		env.pop("PROJECT_ENGINE_LABEL", None)
+		proc = subprocess.run(["bash", "-c", script], cwd=str(tmp), env=env, capture_output=True, text=True, check=False)
+		issue_map_path = runtime / "issue_map.json"
+		issue_map = json.loads(issue_map_path.read_text(encoding="utf-8")) if issue_map_path.exists() else None
+		return {"rc": proc.returncode, "stdout": proc.stdout, "stderr": proc.stderr, "issue_map": issue_map}
+	finally:
+		shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _wave1_deferral_reasons(stdout: str, local_id: str, wave: int) -> list:
+	prefix = f"  Deferring {local_id} (not in Wave 1): wave={wave} deferral_reasons="
+	line = next((ln for ln in stdout.splitlines() if ln.startswith(prefix)), None)
+	assert line is not None, stdout
+	return json.loads(line[len(prefix):])
+
+
+def _wave1_two_issue_decomposition(files_a: list, files_b: list, edges: list) -> dict:
+	return {
+		"project_title": "P",
+		"project_summary": "S",
+		"issues": [
+			{"id": "T1", "title": "One", "body": "b1", "priority": 1, "files_touched": files_a},
+			{"id": "T2", "title": "Two", "body": "b2", "priority": 2, "files_touched": files_b},
+		],
+		"dependency_edges": edges,
+	}
+
+
+def _wave1_tools_available() -> bool:
+	import shutil
+	if shutil.which("jq") is None or shutil.which("bash") is None:
+		print("  SKIP  jq or bash not installed; create_issues step not executed")
+		return False
+	return True
+
+
+def test_wave1_create_issues_step_static_contract():
+	body = _wave1_create_issues_step_body()
+	assert 'echo "  Deferring ${LOCAL_ID} (not in Wave 1): ${_wave1_defer_detail:-deferral_reasons=unavailable}"' in body
+	assert "ensure_ascii=True" in body and "wave1_deferrals.json" in body
+	assert '"${child_create_args[@]}")" || _wave1_create_rc=$?' in body
+	assert "::error::Wave 1 child issue creation for local id ${LOCAL_ID} returned no issue number" in body
+	assert body.index("::error::Wave 1 child issue creation") < body.index('ISSUE_MAP["${LOCAL_ID}"]="${ISSUE_NUM}"')
+
+
+def test_wave1_deferral_logs_model_dependency_edge():
+	if not _wave1_tools_available():
+		return
+	data = _wave1_two_issue_decomposition(["a.py"], ["b.py"], [{"from": "T1", "to": "T2"}])
+	result = _run_wave1_create_issues_step(data)
+	assert result["rc"] == 0, result
+	assert _wave1_deferral_reasons(result["stdout"], "T2", 2) == [{"from": "T1", "source": "model"}]
+	assert result["issue_map"] == {"T1": 101}, result
+
+
+def test_wave1_deferral_logs_auto_serialize_pair_after_write_back():
+	if not _wave1_tools_available():
+		return
+	data = _wave1_two_issue_decomposition(["shared.py", "a.py"], ["shared.py", "b.py"], [])
+	# Mirror the partition-guard step's compute-waves --write-back.
+	orchestrate_lib.compute_waves(data, hot_files=set())
+	assert data["dependency_edges"] == [{"from": "T1", "to": "T2"}]
+	result = _run_wave1_create_issues_step(data)
+	assert result["rc"] == 0, result
+	assert _wave1_deferral_reasons(result["stdout"], "T2", 2) == [
+		{"from": "T1", "source": "auto_serialize", "overlap_type": "pair", "files": ["shared.py"]},
+	]
+	assert result["issue_map"] == {"T1": 101}, result
+
+
+def test_wave1_deferral_logs_auto_serialize_hot_file_after_write_back():
+	if not _wave1_tools_available():
+		return
+	data = _wave1_two_issue_decomposition(["README.md", "a.py"], ["README.md", "b.py"], [])
+	orchestrate_lib.compute_waves(data, hot_files={"README.md"})
+	result = _run_wave1_create_issues_step(data)
+	assert result["rc"] == 0, result
+	reasons = _wave1_deferral_reasons(result["stdout"], "T2", 2)
+	assert len(reasons) == 1, reasons
+	assert reasons[0]["source"] == "auto_serialize" and reasons[0]["from"] == "T1", reasons
+	assert reasons[0]["overlap_type"] == "hot_file", reasons
+	assert "README.md" in reasons[0]["files"], reasons
+
+
+def test_wave1_deferral_logs_all_shared_files_for_mixed_hot_overlap():
+	if not _wave1_tools_available():
+		return
+	data = _wave1_two_issue_decomposition(["README.md", "shared.py", "a.py"], ["README.md", "shared.py", "b.py"], [])
+	orchestrate_lib.compute_waves(data, hot_files={"README.md"})
+	result = _run_wave1_create_issues_step(data)
+	assert result["rc"] == 0, result
+	reasons = _wave1_deferral_reasons(result["stdout"], "T2", 2)
+	assert len(reasons) == 1 and reasons[0]["overlap_type"] == "hot_file", reasons
+	assert reasons[0]["files"] == ["README.md", "shared.py"], reasons
+
+
+def test_wave1_deferral_omits_paths_augmented_for_both_issues():
+	if not _wave1_tools_available():
+		return
+	data = _wave1_two_issue_decomposition(["shared.py", "tests/test_x.py", "a.py"], ["shared.py", "tests/test_x.py", "b.py"], [])
+	data["prepush_augmented_paths"] = {"T1": ["tests/test_x.py"], "T2": ["tests/test_x.py"]}
+	orchestrate_lib.compute_waves(data, hot_files=set())
+	result = _run_wave1_create_issues_step(data)
+	assert result["rc"] == 0, result
+	reasons = _wave1_deferral_reasons(result["stdout"], "T2", 2)
+	assert len(reasons) == 1 and reasons[0]["source"] == "auto_serialize", reasons
+	assert reasons[0]["files"] == ["shared.py"], reasons
+
+
+def test_wave1_deferral_logs_auto_serialize_without_write_back():
+	if not _wave1_tools_available():
+		return
+	data = _wave1_two_issue_decomposition(["shared.py"], ["shared.py"], [])
+	assert "partition_serializations" not in data
+	result = _run_wave1_create_issues_step(data)
+	assert result["rc"] == 0, result
+	reasons = _wave1_deferral_reasons(result["stdout"], "T2", 2)
+	assert [(r["from"], r["source"]) for r in reasons] == [("T1", "auto_serialize")], reasons
+	assert "shared.py" in reasons[0]["files"], reasons
+
+
+def test_wave1_create_without_issue_number_fails_with_error():
+	if not _wave1_tools_available():
+		return
+	data = _wave1_two_issue_decomposition(["a.py"], ["b.py"], [{"from": "T1", "to": "T2"}])
+	for output, rc in (("", 0), ("not a url", 0), ("https://github.com/o/r/issues/7", 1)):
+		result = _run_wave1_create_issues_step(data, create_output=output, create_rc=rc)
+		assert result["rc"] != 0, (output, rc, result)
+		assert "::error::Wave 1 child issue creation for local id T1 returned no issue number" in result["stdout"], (output, rc, result)
+		assert f"gh_retry exit={rc}," in result["stdout"], (output, rc, result)
+		assert result["issue_map"] is None, (output, rc, result)
+		assert "Created #" not in result["stdout"], (output, rc, result)
+
+
+# ---------------------------------------------------------------------------
+# Runner
+# ---------------------------------------------------------------------------
+
+def main() -> int:
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			func()
+			print(f"  PASS  {name}")
+			passed += 1
+		except Exception as e:
+			print(f"  FAIL  {name}: {e}")
+			failed += 1
+
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed > 0 else 0
+
+
+def _zq_iso_hours_ago(now_epoch, hours):
+	from datetime import datetime, timezone
+	return datetime.fromtimestamp(now_epoch - int(hours * 3600), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_zombie_run_max_queued_hours_parsing():
+	import contextlib
+	import io
+	assert orchestrate_lib.zombie_run_max_queued_hours({}) == 24
+	assert orchestrate_lib.zombie_run_max_queued_hours({"ZOMBIE_RUN_MAX_QUEUED_HOURS": ""}) == 24
+	assert orchestrate_lib.zombie_run_max_queued_hours({"ZOMBIE_RUN_MAX_QUEUED_HOURS": "0"}) == 0
+	assert orchestrate_lib.zombie_run_max_queued_hours({"ZOMBIE_RUN_MAX_QUEUED_HOURS": "48"}) == 48
+	for bad in ("abc", "-1", "1.5", "123456"):
+		err = io.StringIO()
+		with contextlib.redirect_stderr(err):
+			assert orchestrate_lib.zombie_run_max_queued_hours({"ZOMBIE_RUN_MAX_QUEUED_HOURS": bad}) == 0
+		assert "ZOMBIE_RUN_MAX_QUEUED_HOURS is not a whole number of hours" in err.getvalue()
+
+
+def test_is_wedged_queued_run_matrix():
+	now = 1794650000
+	wedged = orchestrate_lib.is_wedged_queued_run
+	assert wedged({"status": "queued", "created_at": _zq_iso_hours_ago(now, 25)}, now, 24) is True
+	assert wedged({"status": "queued", "created_at": _zq_iso_hours_ago(now, 23)}, now, 24) is False
+	assert wedged({"status": "QUEUED", "createdAt": _zq_iso_hours_ago(now, 30)}, now, 24) is True
+	for status in ("in_progress", "pending", "waiting", "requested"):
+		assert wedged({"status": status, "created_at": _zq_iso_hours_ago(now, 100)}, now, 24) is False
+	for created in (None, "", "garbage", 12345):
+		run = {"status": "queued"}
+		if created is not None:
+			run["created_at"] = created
+		assert wedged(run, now, 24) is False
+	assert wedged({"status": "queued", "created_at": _zq_iso_hours_ago(now, 500)}, now, 0) is False
+	assert wedged({"status": "queued", "created_at": _zq_iso_hours_ago(now, 500)}, 0, 24) is False
+	assert wedged("not-a-run", now, 24) is False
+
+
+def test_log_zombie_run_ignored_dedupes_per_guard():
+	import io
+	now = 1794650000
+	stream = io.StringIO()
+	run = {"id": 43095142301, "status": "queued", "created_at": _zq_iso_hours_ago(now, 25),
+		"path": ".github/workflows/implement.yml"}
+	orchestrate_lib._ZOMBIE_RUN_IGNORED_SEEN.discard(("lib_test_guard", "43095142301"))
+	orchestrate_lib._ZOMBIE_RUN_IGNORED_SEEN.discard(("lib_test_guard_b", "43095142301"))
+	orchestrate_lib.log_zombie_run_ignored(run, "lib_test_guard", now, stream=stream)
+	orchestrate_lib.log_zombie_run_ignored(run, "lib_test_guard", now, stream=stream)
+	orchestrate_lib.log_zombie_run_ignored(run, "lib_test_guard_b", now, stream=stream)
+	assert stream.getvalue().splitlines() == [
+		"ZOMBIE_RUN_IGNORED run=43095142301 workflow=.github/workflows/implement.yml age_h=25 guard=lib_test_guard",
+		"ZOMBIE_RUN_IGNORED run=43095142301 workflow=.github/workflows/implement.yml age_h=25 guard=lib_test_guard_b",
+	]
+
+
+def test_wedged_queued_run_needs_a_z_suffixed_created_at():
+	now = 1794650000
+	stamp = _zq_iso_hours_ago(now, 30)
+	assert orchestrate_lib.is_wedged_queued_run({"status": "queued", "created_at": stamp}, now, 24) is True
+	for other in (stamp[:-1] + "+00:00", stamp[:-1]):
+		assert orchestrate_lib.is_wedged_queued_run({"status": "queued", "created_at": other}, now, 24) is False
+
+
+def test_concurrency_snapshot_skips_wedged_queued_runs_under_a_long_threshold():
+	now = 1794650000
+	# This file runs under its own main() (no pytest fixtures), so the env
+	# override is saved and restored by hand.
+	previous_hours = os.environ.pop("ZOMBIE_RUN_MAX_QUEUED_HOURS", None)
+	try:
+		_check_concurrency_snapshot_skips_wedged_queued_runs(now)
+	finally:
+		if previous_hours is None:
+			os.environ.pop("ZOMBIE_RUN_MAX_QUEUED_HOURS", None)
+		else:
+			os.environ["ZOMBIE_RUN_MAX_QUEUED_HOURS"] = previous_hours
+
+
+def _check_concurrency_snapshot_skips_wedged_queued_runs(now):
+	import contextlib
+	import io
+	runs = {"workflow_runs": [
+		{"id": 71, "status": "queued", "name": "Internal: AI Implement", "path": ".github/workflows/internal-implement.yml",
+			"created_at": _zq_iso_hours_ago(now, 25)},
+		{"id": 72, "status": "queued", "name": "Internal: AI Implement", "path": ".github/workflows/internal-implement.yml",
+			"created_at": _zq_iso_hours_ago(now, 23)},
+		{"id": 73, "status": "in_progress", "name": "Internal: AI Implement", "path": ".github/workflows/internal-implement.yml",
+			"created_at": _zq_iso_hours_ago(now, 30), "run_started_at": _zq_iso_hours_ago(now, 30)},
+	]}
+	err = io.StringIO()
+	with contextlib.redirect_stderr(err):
+		snapshot = orchestrate_lib.build_concurrency_snapshot(runs, caps={}, threshold_minutes=3000, now_ts=now)
+	assert snapshot["running_by_state"]["ai:implementing"] == 2
+	assert "ZOMBIE_RUN_IGNORED run=71 " in err.getvalue() and "guard=concurrency_snapshot" in err.getvalue()
+	os.environ["ZOMBIE_RUN_MAX_QUEUED_HOURS"] = "0"
+	snapshot = orchestrate_lib.build_concurrency_snapshot(runs, caps={}, threshold_minutes=3000, now_ts=now)
+	assert snapshot["running_by_state"]["ai:implementing"] == 3
+
+
+# ---------------------------------------------------------------
+# Stuck-states P3b: failure-signature breaker evaluator
+# ---------------------------------------------------------------
+_FFB_LOGIN = "github-actions[bot]"
+_FP_A = "0123456789ab"
+_FP_B = "ba9876543210"
+
+
+def _ffb_marker(phase: str, fp: str, run: int) -> str:
+	return f"Plan failed.\n<!-- AI_FAILURE_FINGERPRINT_V1 phase={phase} fp={fp} run={run} -->"
+
+
+def _ffb_comment(cid: int, body: str, login: str = _FFB_LOGIN) -> dict:
+	return {"id": cid, "body": body, "created_at": f"2026-10-29T08:{cid:02d}:00Z", "user": {"login": login}}
+
+
+def test_ffb_two_identical_trusted_markers_trip_with_plan_label():
+	comments = [_ffb_comment(1, _ffb_marker("plan", _FP_A, 101)), _ffb_comment(2, _ffb_marker("plan", _FP_A, 102))]
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)
+	assert result["decision"] == "trip"
+	assert result["label"] == "ai:plan-failed"
+	assert result["phase"] == "plan"
+	assert result["fp"] == _FP_A
+	assert result["runs"] == ["101", "102"]
+	assert result["tail_comment_id"] == 2
+	assert [m["run"] for m in result["recent"]] == ["101", "102"]
+
+
+def test_ffb_trips_across_phase_flip_with_unrelated_comments_between():
+	comments = [
+		_ffb_comment(1, _ffb_marker("plan", _FP_A, 101)),
+		_ffb_comment(2, "/answer auto"),
+		_ffb_comment(3, "Some human note", login="octocat"),
+		_ffb_comment(4, "## Clarification questions"),
+		_ffb_comment(5, _ffb_marker("plan", _FP_A, 102)),
+	]
+	assert orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)["decision"] == "trip"
+
+
+def test_ffb_different_fingerprints_do_not_trip():
+	comments = [_ffb_comment(1, _ffb_marker("plan", _FP_A, 101)), _ffb_comment(2, _ffb_marker("plan", _FP_B, 102))]
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)
+	assert result["decision"] == "none"
+	assert result["streak"] == 1
+
+
+def test_ffb_untrusted_login_markers_are_ignored():
+	comments = [
+		_ffb_comment(1, _ffb_marker("plan", _FP_A, 101), login="mallory"),
+		_ffb_comment(2, _ffb_marker("plan", _FP_A, 102), login="mallory"),
+	]
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)
+	assert result == {"decision": "none", "streak": 0, "recent": []}
+
+
+def test_ffb_malformed_marker_is_skipped():
+	comments = [
+		_ffb_comment(1, _ffb_marker("plan", _FP_A, 101)),
+		_ffb_comment(2, "<!-- AI_FAILURE_FINGERPRINT_V1 phase=plan fp=XYZ run=102 -->"),
+		_ffb_comment(3, "<!-- AI_FAILURE_FINGERPRINT_V1 phase=plan fp=0123456789ab run=0 -->"),
+	]
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)
+	assert result["decision"] == "none"
+	assert result["streak"] == 1
+
+
+def test_ffb_comment_with_two_markers_is_skipped():
+	two = _ffb_marker("plan", _FP_A, 101) + "\n" + _ffb_marker("plan", _FP_A, 102)
+	comments = [_ffb_comment(1, two), _ffb_comment(2, _ffb_marker("plan", _FP_A, 103))]
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)
+	assert result["decision"] == "none"
+	assert [m["run"] for m in result["recent"]] == ["103"]
+
+
+def test_ffb_duplicate_run_id_counts_once():
+	comments = [_ffb_comment(1, _ffb_marker("plan", _FP_A, 101)), _ffb_comment(2, _ffb_marker("plan", _FP_A, 101))]
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)
+	assert result["decision"] == "none"
+	assert result["streak"] == 1
+
+
+def test_ffb_trusted_breaker_comment_is_consumption_point():
+	breaker = f"<!-- AI_FAILURE_FINGERPRINT_BREAKER_V1 phase=plan fp={_FP_A} runs=101,102 -->\n## stopped"
+	comments = [
+		_ffb_comment(1, _ffb_marker("plan", _FP_A, 101)),
+		_ffb_comment(2, _ffb_marker("plan", _FP_A, 102)),
+		_ffb_comment(3, breaker),
+		_ffb_comment(4, _ffb_marker("plan", _FP_A, 103)),
+	]
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)
+	assert result["decision"] == "none"
+	assert result["streak"] == 1
+	comments.append(_ffb_comment(5, _ffb_marker("plan", _FP_A, 104)))
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)
+	assert result["decision"] == "trip"
+	assert result["runs"] == ["103", "104"]
+
+
+def test_ffb_forged_breaker_comment_is_ignored():
+	breaker = f"<!-- AI_FAILURE_FINGERPRINT_BREAKER_V1 phase=plan fp={_FP_A} runs=1,2 -->"
+	comments = [
+		_ffb_comment(1, _ffb_marker("plan", _FP_A, 101)),
+		_ffb_comment(2, breaker, login="mallory"),
+		_ffb_comment(3, _ffb_marker("plan", _FP_A, 102)),
+	]
+	assert orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)["decision"] == "trip"
+
+
+def test_ffb_incomplete_window_with_streak_at_start_needs_full_history():
+	comments = [_ffb_comment(1, "noise"), _ffb_comment(2, _ffb_marker("clarify", _FP_A, 101))]
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, False)
+	assert result["decision"] == "needs_full_history"
+	# Complete history: a lone marker is simply no trip.
+	assert orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)["decision"] == "none"
+	# A different older fingerprint inside the window bounds the streak.
+	older = _ffb_comment(3, _ffb_marker("clarify", _FP_B, 99))
+	older["created_at"] = "2026-10-29T07:00:00Z"
+	assert orchestrate_lib.evaluate_failure_fingerprint_breaker([older, *comments], _FFB_LOGIN, 2, False)["decision"] == "none"
+
+
+def test_ffb_repeat_max_three():
+	comments = [_ffb_comment(1, _ffb_marker("plan", _FP_A, 101)), _ffb_comment(2, _ffb_marker("plan", _FP_A, 102))]
+	assert orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 3, True)["decision"] == "none"
+	comments.append(_ffb_comment(3, _ffb_marker("plan", _FP_A, 103)))
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 3, True)
+	assert result["decision"] == "trip"
+	assert result["runs"] == ["101", "102", "103"]
+
+
+def test_ffb_empty_login_is_identity_unavailable():
+	comments = [_ffb_comment(1, _ffb_marker("plan", _FP_A, 101))]
+	assert orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, "", 2, True) == {"decision": "identity_unavailable"}
+
+
+def test_ffb_repeat_max_below_two_is_rejected():
+	try:
+		orchestrate_lib.evaluate_failure_fingerprint_breaker([], _FFB_LOGIN, 1, True)
+	except ValueError:
+		return
+	raise AssertionError("repeat_max=1 must be rejected")
+
+
+def test_ffb_phase_label_mapping():
+	assert orchestrate_lib.failure_fingerprint_label_for_phase("plan") == "ai:plan-failed"
+	assert orchestrate_lib.failure_fingerprint_label_for_phase("clarify") == "ai:clarify-failed"
+	assert orchestrate_lib.failure_fingerprint_label_for_phase("implement") == "ai:needs-human"
+	comments = [_ffb_comment(1, _ffb_marker("review-autofix", _FP_A, 1)), _ffb_comment(2, _ffb_marker("review-autofix", _FP_A, 2))]
+	assert orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)["label"] == "ai:needs-human"
+
+
+def test_ffb_recent_is_capped_at_five():
+	comments = [_ffb_comment(i, _ffb_marker("plan", _FP_A if i % 2 else _FP_B, 100 + i)) for i in range(1, 9)]
+	result = orchestrate_lib.evaluate_failure_fingerprint_breaker(comments, _FFB_LOGIN, 2, True)
+	assert len(result["recent"]) == 5
+	assert result["recent"][-1]["run"] == "108"
+
+
+def _ffb_run_cli(argv: list[str]) -> tuple[int, dict]:
+	import contextlib
+	import io
+	buffer = io.StringIO()
+	with contextlib.redirect_stdout(buffer):
+		rc = orchestrate_lib.main(["failure-fingerprint-breaker", *argv])
+	return rc, json.loads(buffer.getvalue().strip())
+
+
+def test_ffb_cli_valid_and_invalid_input():
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		tmp_path = Path(tmp_dir)
+		comments_file = tmp_path / "comments.json"
+		comments_file.write_text(json.dumps([
+			_ffb_comment(1, _ffb_marker("clarify", _FP_A, 101)),
+			_ffb_comment(2, _ffb_marker("clarify", _FP_A, 102)),
+		]), encoding="utf-8")
+		rc, payload = _ffb_run_cli([
+			"--comments-file", str(comments_file),
+			"--trusted-login", _FFB_LOGIN, "--repeat-max", "2", "--comments-complete", "true",
+		])
+		assert rc == 0
+		assert payload["decision"] == "trip"
+		assert payload["label"] == "ai:clarify-failed"
+
+		bad_file = tmp_path / "bad.json"
+		bad_file.write_text("{not json", encoding="utf-8")
+		for argv in (
+			["--comments-file", str(bad_file), "--trusted-login", _FFB_LOGIN],
+			["--comments-file", str(tmp_path / "missing.json"), "--trusted-login", _FFB_LOGIN],
+			["--comments-file", str(comments_file), "--trusted-login", _FFB_LOGIN, "--repeat-max", "1"],
+			["--comments-file", str(comments_file), "--trusted-login", _FFB_LOGIN, "--comments-complete", "maybe"],
+		):
+			rc, payload = _ffb_run_cli(argv)
+			assert rc == 0
+			assert payload == {"decision": "unavailable"}
+
+
+def test_linked_pr_evidence_ignores_merge_into_non_target_base():
+	"""Issue #9481 (binance-blessings #507 shape): a linked PR merged into an
+	unrelated branch must not imply attempt_merge once the default branch is known."""
+	evidence = orchestrate_lib._linked_pr_evidence
+	merged_other = {"merged": True, "state": "closed", "base_ref": "claude/busy-babbage-grn9nj"}
+	assert evidence(merged_other, default_branch="main") is None
+	assert evidence({"merged": True, "baseRefName": "claude/x"}, default_branch="main") is None
+	assert evidence({"merged": True, "base": {"ref": "claude/x"}}, default_branch="main") is None
+	# Target bases still imply attempt_merge.
+	assert evidence({"merged": True, "base_ref": "main"}, default_branch="main")["action"] == "attempt_merge"
+	assert evidence(
+		{"merged": True, "base_ref": "orchestrator/project-5"}, default_branch="main", declared_branch="orchestrator/project-5",
+	)["action"] == "attempt_merge"
+	assert evidence(
+		{"merged": True, "base_ref": "orchestrator/project-5"}, default_branch="main", is_managed=True,
+	)["action"] == "attempt_merge"
+	assert evidence({"merged": True, "base_ref": "orchestrator/project-5"}, default_branch="main") is None
+	assert evidence(
+		{"merged": True, "base_ref": "orchestrator/project-5"}, default_branch="main",
+		declared_branch="orchestrator/project-6", is_managed=True,
+	) is None
+	# Legacy: base missing, or no default branch passed.
+	assert evidence({"merged": True}, default_branch="main")["action"] == "attempt_merge"
+	assert evidence(merged_other)["action"] == "attempt_merge"
+	# Closed and unmerged stays None; open stays retrigger_review.
+	assert evidence({"merged": False, "state": "closed", "base_ref": "main"}, default_branch="main") is None
+	assert evidence({"merged": False, "state": "OPEN"}, default_branch="main")["action"] == "retrigger_review"
+	# The keyword arguments reach the resolver through the public entry points.
+	resolved = orchestrate_lib.resolve_label_repair_evidence(
+		labels=["ai:ready-to-merge"], comments=[], linked_pr=merged_other, default_branch="main",
+	)
+	assert "linked_pr_state" not in json.dumps(resolved)
+	legacy = orchestrate_lib.resolve_label_repair_evidence(labels=["ai:ready-to-merge"], comments=[], linked_pr=merged_other)
+	assert "linked_pr_state" in json.dumps(legacy)
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
+

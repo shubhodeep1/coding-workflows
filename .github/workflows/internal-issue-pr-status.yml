@@ -1,0 +1,19 @@
+name: "Internal: Issue-PR Status Sync"
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  issues: write
+
+jobs:
+  sync-status:
+    # Job-scoped so only this call (whose activation-verify job fetches the
+    # Claude pool credential with OIDC) gets id-token: write; a job added to
+    # this wrapper later does not inherit it.
+    permissions:
+      issues: write
+      id-token: write
+    uses: shubhodeep1/coding-workflows/.github/workflows/issue_pr_status.yml@promote-candidate
+    secrets: inherit

@@ -1,0 +1,565 @@
+---
+name: Promote main to stable
+
+# Use this workflow when `main` is ready to become the new stable
+# baseline (typically a minor or major version bump). It does two
+# things in one run:
+#
+#   1. Fast-forwards the long-lived `stable` branch to `main`.
+#   2. Dispatches `test-and-mark-stable.yml` on the freshly-updated
+#      `stable` branch, which runs the release gate, tags the commit,
+#      moves the `stable` and `vN` git tags, creates a GitHub Release,
+#      and fires the `coding-workflows-stable-released` dispatch to
+#      every consumer repo.
+#
+# For BUG-FIX patch releases on the existing stable line, do NOT use
+# this workflow — dispatch `test-and-mark-stable.yml` directly from
+# the `stable` branch with `--ref stable`.
+#
+# Pre-condition: `stable` must be an ancestor of (or equal to) `main`.
+# The `forward-merge-stable-to-main.yml` workflow normally guarantees
+# this. If `--ff-only` would refuse, this workflow refuses too — fix
+# the divergence first instead of force-pushing stable.
+
+#
+# Daily cycle (schedule): the `cycle` job runs scripts/promote_main_cycle.sh,
+# which promotes `main` only after it has been proven end to end:
+#
+#   1. detect a code change on `main` since the `stable` tag (non-code paths
+#      such as analysis/, docs/ and most *.md do not count), hold while a
+#      cycle is in flight, already ran for this tip, or already failed on it
+#      PROMOTE_CYCLE_MAX_ATTEMPTS times (a tracking issue parked on a human
+#      latch label for PROMOTE_CYCLE_HOLD_MAX_HOURS no longer holds);
+#   2. run test-and-mark-stable.yml in gate_only mode on `main` (the smoke
+#      gate) and wait for it;
+#   3. dispatch the PROVING apply-analysis run (one analysis doc) with the
+#      ai:comprehensive-test-pending label.
+#
+# The orchestrator poller carries the cycle from there: when the proving run
+# merges it dispatches the VERIFYING run on the next doc, and when that run
+# is ready to merge it dispatches THIS workflow with `target_sha` (the
+# proving merge) and holds the verifying merge until the release finishes.
+#
+# Release-blocker reporters (stuck-states P4 / release-blocker Phase 2b,
+# Refs #8291): when a tick skips, the cycle job may send one `release_blocker`
+# heal report (cycle_gate_unavailable, cycle_held_untrusted_marker or
+# cycle_stale) to workflow-failure-heal through repository_dispatch, signed
+# with the job's OIDC identity (hence `id-token: write`). It never changes
+# the tick's outcome; RELEASE_BLOCKER_HEAL_ENABLED=false turns it off.
+#
+"on":
+  schedule:
+    - cron: "0 0 * * *"
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: >
+          Optional commit on `main` to fast-forward `stable` to instead of
+          main's tip. Used by the orchestrator poller to promote exactly the
+          commit the verifying apply-analysis run was tested on. Must be
+          reachable from main and a descendant of stable.
+        required: false
+        type: string
+        default: ""
+      version_tag:
+        description: >
+          Semantic version tag (e.g. v1.5.0). Leave blank to
+          auto-increment the MINOR component from the latest
+          stable-reachable tag (vX.Y.Z → vX.(Y+1).0). The patch
+          component is reset to 0 — promotes are minor/major bumps
+          by definition; the patch-bump default in
+          test-and-mark-stable.yml is for the stable-only patch path.
+        required: false
+        type: string
+        default: ""
+      test_repo:
+        description: >
+          Forwarded to test-and-mark-stable.yml. Repository to run
+          E2E smoke test on (owner/repo). Defaults to this repo. Any
+          other repository must be listed in
+          .github/ai/smoke_test_repos.json on the default branch, or
+          the release gate rejects the run.
+        required: false
+        type: string
+        default: ""
+      skip_e2e:
+        description: Forwarded to test-and-mark-stable.yml.
+        required: false
+        type: boolean
+        default: false
+      dry_run:
+        description: >
+          Validate only. Still fast-forwards `stable` to `main` (so
+          you can verify the move), but the downstream release gate
+          runs in dry_run mode — no tags pushed, no GitHub Release
+          created, no consumer dispatches.
+        required: false
+        type: boolean
+        default: false
+      phase_timeout:
+        description: Forwarded to test-and-mark-stable.yml.
+        required: false
+        type: number
+        default: 30
+      review_timeout:
+        description: >
+          Forwarded to test-and-mark-stable.yml. Default mirrors that
+          workflow's own `review_timeout` default (60), which was raised
+          30→40 in #3290 and 40→60 after run 28282500673 (v1.20.1) to
+          absorb slow multi-pass reviewer LLM steps.
+          Because this dispatcher forwards the value explicitly
+          (`-f review_timeout=...`), a stale lower value here silently
+          overrides the downstream default and re-introduces the
+          wait-review false-timeout: the v1.27.0 release failure
+          (run 32824674139) happened exactly this way — this default
+          still said 40 after the downstream 40→60 bump, so a healthy
+          51m "Run reviewer models" step aged out the 40m inactivity
+          timer. When test-and-mark-stable.yml's `review_timeout`
+          default changes, this default MUST change with it.
+        required: false
+        type: number
+        default: 60
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  cycle:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    # The smoke gate alone can take ~2-3h. The default 30m idle wait plus 5h
+    # smoke wait leaves 10m for setup and cleanup under this job cap.
+    timeout-minutes: 340
+    permissions:
+      contents: read
+      issues: write
+      actions: write
+      # OIDC identity for the release-blocker heal reports (Refs #8291).
+      id-token: write
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Run the promote cycle
+        id: cycle
+        env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          PROMOTE_CYCLE_ENABLED: ${{ vars.PROMOTE_CYCLE_ENABLED || 'true' }}
+          PROMOTE_CYCLE_MIN_DOCS: ${{ vars.PROMOTE_CYCLE_MIN_DOCS || '2' }}
+          PROMOTE_CYCLE_MAX_ATTEMPTS: ${{ vars.PROMOTE_CYCLE_MAX_ATTEMPTS || '3' }}
+          PROMOTE_CYCLE_PIN_ENABLED: ${{ vars.PROMOTE_CYCLE_PIN_ENABLED || 'true' }}
+          PROMOTE_CYCLE_FREEZE_MAX_SECS: ${{ vars.PROMOTE_CYCLE_FREEZE_MAX_SECS || '172800' }}
+          PROMOTE_CYCLE_HOLD_RELEASE_ENABLED: ${{ vars.PROMOTE_CYCLE_HOLD_RELEASE_ENABLED || 'true' }}
+          PROMOTE_CYCLE_HOLD_MAX_HOURS: ${{ vars.PROMOTE_CYCLE_HOLD_MAX_HOURS || '24' }}
+          # WARNING alert when a human-latched tracking issue stops holding
+          # the cycle (same rows as promote-candidate-follow.yml).
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
+          ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
+          # Release-blocker reporters (stuck-states P4 / Phase 2b).
+          RELEASE_BLOCKER_HEAL_ENABLED: ${{ vars.RELEASE_BLOCKER_HEAL_ENABLED || 'true' }}
+          RELEASE_BLOCKER_CYCLE_SKIP_STREAK: ${{ vars.RELEASE_BLOCKER_CYCLE_SKIP_STREAK || '3' }}
+          RELEASE_BLOCKER_UNTRUSTED_HOLD_SECS: ${{ vars.RELEASE_BLOCKER_UNTRUSTED_HOLD_SECS || '86400' }}
+          RELEASE_BLOCKER_CYCLE_STALE_SECS: ${{ vars.RELEASE_BLOCKER_CYCLE_STALE_SECS || '259200' }}
+          PROMOTE_CYCLE_GATE_WAIT_SECS: ${{ vars.PROMOTE_CYCLE_GATE_WAIT_SECS || '18000' }}
+          PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS: ${{ vars.PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS || '1800' }}
+          PROMOTE_CYCLE_GATE_POLL_SECS: ${{ vars.PROMOTE_CYCLE_GATE_POLL_SECS || '60' }}
+          APPLY_ANALYSIS_ON_MAIN_ENABLED: ${{ vars.APPLY_ANALYSIS_ON_MAIN_ENABLED || 'true' }}
+          COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS: ${{ vars.COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS || 'OWNER,MEMBER,COLLABORATOR' }}
+          ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}
+        run: |
+          set -euo pipefail
+          bash scripts/promote_main_cycle.sh
+
+  promote:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: promote-main-to-stable
+      cancel-in-progress: false
+    steps:
+      - name: Checkout stable (full history)
+        uses: actions/checkout@v5
+        with:
+          ref: stable
+          fetch-depth: 0
+          token: ${{ secrets.GH_PAT || github.token }}
+
+      - name: Configure git
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch latest main
+        run: |
+          set -euo pipefail
+          git fetch origin main
+
+      - name: Validate stable is fast-forwardable to main
+        run: |
+          set -euo pipefail
+          # `stable` must be an ancestor of `origin/main` (or equal). If
+          # it isn't, stable has commits not present on main — most
+          # likely a forward-merge PR that wasn't merged, a direct push
+          # to stable that bypassed the forward-merge workflow, or — by
+          # far the most common cause in this repo's history — a
+          # forward-merge PR that WAS merged but via "Squash and merge"
+          # / "Rebase and merge" instead of "Create a merge commit",
+          # which copies the file content into a new single-parent
+          # commit on main and silently strips stable's commits from
+          # main's ancestry. Refuse rather than silently force-pushing
+          # or merging — the operator should investigate first.
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            ahead=$(git rev-list --count origin/main..HEAD)
+            mb=$(git merge-base HEAD origin/main 2>/dev/null || echo "")
+            echo "::error::stable has ${ahead} commit(s) not present on main — refusing to promote."
+            if [ -z "${mb}" ]; then
+              echo "::error::stable and main have NO common ancestor (unrelated histories) — every recent forward-merge PR was likely squash-merged. Recovery: cherry-pick any genuinely unforwarded stable patches onto main, then force-reset stable to origin/main (\`git push --force-with-lease origin <main-sha>:refs/heads/stable\`)."
+            else
+              echo "::error::Most likely cause: a forward-merge PR was merged via \"Squash and merge\" or \"Rebase and merge\" instead of \"Create a merge commit\". Squash/rebase strips stable's commits from main's ancestry even though the file content was forwarded. Inspect with: \`git log --oneline origin/main..HEAD\` and verify the corresponding squash commits on main."
+            fi
+            echo "::error::Forward-merge those commits via forward-merge-stable-to-main.yml first (and use \"Create a merge commit\" when merging the fallback PR), then re-run."
+            exit 1
+          fi
+
+      - name: Fast-forward stable to main
+        id: ff
+        env:
+          TARGET_SHA_INPUT: ${{ inputs.target_sha }}
+          PROMOTE_STABLE_PUSH_TRANSIENT_RETRY_ENABLED: ${{ vars.PROMOTE_STABLE_PUSH_TRANSIENT_RETRY_ENABLED || 'true' }}
+        run: |
+          set -euo pipefail
+          # Pre-check: `stable` MUST exist on origin as a branch. A naked
+          # `git push origin stable` from a detached HEAD (which is what
+          # `actions/checkout ref: stable` produces when only a `stable`
+          # tag exists) will silently match the tag refspec and report
+          # "Everything up-to-date" without moving any branch — the
+          # downstream release would then run against an unchanged
+          # commit. ls-remote --exit-code: 0 found, 2 absent, other =
+          # transport/auth/repo error.
+          set +e
+          git ls-remote --exit-code --heads origin stable >/dev/null 2>&1
+          rc=$?
+          set -e
+          case "$rc" in
+            0) ;;
+            2)
+              echo "::error::Origin has no 'stable' branch. The promote workflow requires a long-lived stable branch (consumers pin to the @stable tag, but the branch is what this workflow fast-forwards)."
+              echo "::error::Create it once with: git push origin <commit>:refs/heads/stable"
+              exit 1
+              ;;
+            *)
+              echo "::error::git ls-remote failed with exit code ${rc} (transport/auth/repo error). Refusing to proceed without a confirmed branch-present signal."
+              exit 1
+              ;;
+          esac
+
+          BEFORE=$(git rev-parse HEAD)
+          TARGET=$(git rev-parse origin/main)
+          if [ -n "${TARGET_SHA_INPUT}" ]; then
+            # Pinned promotion (poller-driven): promote exactly the commit the
+            # verifying apply-analysis run was tested on, not whatever main
+            # has become since. It must be on main and ahead of stable.
+            if ! [[ "${TARGET_SHA_INPUT}" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::target_sha must be a 40-hex commit SHA (got '${TARGET_SHA_INPUT}')."
+              exit 1
+            fi
+            if ! git cat-file -e "${TARGET_SHA_INPUT}^{commit}" 2>/dev/null; then
+              echo "::error::target_sha ${TARGET_SHA_INPUT} is not a commit in this repository."
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "${TARGET_SHA_INPUT}" origin/main; then
+              echo "::error::target_sha ${TARGET_SHA_INPUT} is not reachable from main — refusing to promote a commit main does not contain."
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor HEAD "${TARGET_SHA_INPUT}"; then
+              echo "::error::stable (${BEFORE}) is not an ancestor of target_sha ${TARGET_SHA_INPUT} — refusing to move stable backwards or sideways."
+              exit 1
+            fi
+            TARGET="${TARGET_SHA_INPUT}"
+            echo "Pinned promotion target: ${TARGET} (main tip is $(git rev-parse origin/main))"
+          fi
+          if [ "${BEFORE}" = "${TARGET}" ]; then
+            echo "stable already at main's HEAD (${TARGET}) — no-op"
+            echo "moved=false" >> "$GITHUB_OUTPUT"
+            echo "sha=${TARGET}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git merge --ff-only "${TARGET}"
+          # Push HEAD explicitly to refs/heads/stable. Without the
+          # explicit refspec, `git push origin stable` from a detached
+          # HEAD resolves to the local `stable` tag (if present) and
+          # no-ops; the explicit `HEAD:refs/heads/stable` always
+          # targets the branch.
+          #
+          # Transient push retry (issue #8822): run 41819783609 lost a
+          # pinned promotion to a single HTTP 500 on this push. The loop
+          # follows the review_autofix.yml "Push all pending commits"
+          # pattern (#7974): a protected-branch / repository-rule or a
+          # non-fast-forward rejection fails at once; a transient failure
+          # gets at most 2 retries (5 s, then 10 s), and before each retry
+          # (and once more before giving up) an ls-remote read treats a
+          # push that landed anyway as done. Each decision is logged as a
+          # registered PROMOTE_STABLE_PUSH_RETRY line. Never --force,
+          # --force-with-lease or a rebase. Only
+          # PROMOTE_STABLE_PUSH_TRANSIENT_RETRY_ENABLED=false (any letter
+          # case) turns the retry off.
+          promote_push_retry_enabled="${PROMOTE_STABLE_PUSH_TRANSIENT_RETRY_ENABLED:-true}"
+          promote_push_retry_max=2
+          promote_push_retry=0
+          promote_push_out="$(mktemp)"
+          trap 'rm -f "${promote_push_out}"' EXIT
+          while true; do
+            promote_push_exit=0
+            git push origin "HEAD:refs/heads/stable" >"${promote_push_out}" 2>&1 || promote_push_exit=$?
+            # Echo the push output with URL userinfo redacted.
+            sed -E 's#(https?://)[^/@[:space:]]+@#\1***@#g' "${promote_push_out}" >&2 || true
+            if [ "${promote_push_exit}" -eq 0 ]; then
+              break
+            fi
+            if grep -qiE 'GH006|GH013|protected branch|push declined|repository rule' "${promote_push_out}"; then
+              echo "::error::git push to refs/heads/stable was rejected by a protected-branch or repository rule; not retrying."
+              exit "${promote_push_exit}"
+            fi
+            if grep -qE '\[rejected\].*\((fetch first|non-fast-forward)\)' "${promote_push_out}"; then
+              echo "::error::stable moved on origin during the promotion (non-fast-forward); refusing to move stable sideways. Not retrying."
+              exit "${promote_push_exit}"
+            fi
+            promote_push_class=""
+            if [ "${promote_push_retry_enabled,,}" != "false" ]; then
+              if grep -qiE 'Internal Server Error|The requested URL returned error: 5[0-9][0-9]|HTTP 5[0-9][0-9]' "${promote_push_out}"; then
+                promote_push_class="server_error"
+              elif grep -qiE 'remote rejected.*\(failed\)' "${promote_push_out}"; then
+                promote_push_class="remote_rejected_failed"
+              elif grep -qiE 'RPC failed|unexpected disconnect|early EOF|Connection reset|Could not resolve host|Operation timed out' "${promote_push_out}"; then
+                promote_push_class="network"
+              fi
+            fi
+            if [ -z "${promote_push_class}" ]; then
+              echo "::error::git push to refs/heads/stable failed (exit ${promote_push_exit}); not retrying."
+              exit "${promote_push_exit}"
+            fi
+            if [ "${promote_push_retry}" -lt "${promote_push_retry_max}" ]; then
+              promote_push_retry=$((promote_push_retry + 1))
+              sleep "$((5 * promote_push_retry))"
+              promote_remote_tip=""
+              if promote_ls_out="$(timeout 60 git ls-remote origin refs/heads/stable 2>/dev/null)"; then
+                promote_remote_tip="${promote_ls_out%%[[:space:]]*}"
+              else
+                echo "::warning::git ls-remote origin refs/heads/stable failed (exit $?) before the retry decision; treating the push as not landed."
+              fi
+              if [ -n "${promote_remote_tip}" ] && [ "${promote_remote_tip}" = "${TARGET}" ]; then
+                echo "::warning::PROMOTE_STABLE_PUSH_RETRY attempt=${promote_push_retry}/${promote_push_retry_max} class=${promote_push_class} outcome=landed"
+                break
+              fi
+              echo "::warning::PROMOTE_STABLE_PUSH_RETRY attempt=${promote_push_retry}/${promote_push_retry_max} class=${promote_push_class} outcome=retry"
+              : >"${promote_push_out}"
+              continue
+            fi
+            promote_remote_tip=""
+            if promote_ls_out="$(timeout 60 git ls-remote origin refs/heads/stable 2>/dev/null)"; then
+              promote_remote_tip="${promote_ls_out%%[[:space:]]*}"
+            else
+              echo "::warning::git ls-remote origin refs/heads/stable failed (exit $?) before giving up; treating the push as not landed."
+            fi
+            if [ -n "${promote_remote_tip}" ] && [ "${promote_remote_tip}" = "${TARGET}" ]; then
+              echo "::warning::PROMOTE_STABLE_PUSH_RETRY attempt=${promote_push_retry}/${promote_push_retry_max} class=${promote_push_class} outcome=landed"
+              break
+            fi
+            echo "::warning::PROMOTE_STABLE_PUSH_RETRY attempt=${promote_push_retry}/${promote_push_retry_max} class=${promote_push_class} outcome=gave_up"
+            echo "::error::git push to refs/heads/stable failed with a transient error after ${promote_push_retry_max} retries; giving up."
+            exit "${promote_push_exit}"
+          done
+          rm -f "${promote_push_out}"
+          trap - EXIT
+
+          # Post-verify: confirm origin's stable branch actually moved
+          # to TARGET. Catches any path where the push appeared to
+          # succeed but the remote ref didn't advance (e.g. a server-
+          # side hook silently dropped the update, or an intermediate
+          # cache returned a stale OK).
+          # Bounded retry distinguishes a transient transport failure
+          # from a real ref mismatch — without it, a network blip
+          # would surface as "origin/stable is at <empty>, expected
+          # TARGET" instead of the underlying transport error.
+          ls_attempt=1
+          REMOTE_AFTER=""
+          while [ "$ls_attempt" -le 3 ]; do
+            set +e
+            git ls-remote origin refs/heads/stable >/tmp/_ls_remote_out 2>/tmp/_ls_remote_err
+            ls_rc=$?
+            set -e
+            if [ "$ls_rc" -eq 0 ]; then
+              REMOTE_AFTER=$(awk '{print $1}' /tmp/_ls_remote_out 2>/dev/null || true)
+              if [ -n "$REMOTE_AFTER" ]; then
+                break
+              fi
+            fi
+            if [ "$ls_attempt" -eq 3 ]; then
+              echo "::error::Post-push verification failed: git ls-remote could not return a SHA for refs/heads/stable after 3 attempts (rc=${ls_rc}). Cannot confirm origin/stable advanced — re-run after the transport issue resolves."
+              cat /tmp/_ls_remote_err >&2 2>/dev/null || true
+              exit 1
+            fi
+            backoff=$(( 2 ** ls_attempt ))
+            echo "::warning::git ls-remote failed (attempt ${ls_attempt}/3), retrying in ${backoff}s…"
+            cat /tmp/_ls_remote_err >&2 2>/dev/null || true
+            sleep "${backoff}"
+            ls_attempt=$((ls_attempt + 1))
+          done
+          if [ "${REMOTE_AFTER}" != "${TARGET}" ]; then
+            echo "::error::Push reported success but origin/stable is at ${REMOTE_AFTER}, expected ${TARGET}. Refusing to dispatch the release on stale state."
+            exit 1
+          fi
+          echo "Fast-forwarded stable: ${BEFORE} → ${TARGET} (verified on origin)"
+          echo "moved=true" >> "$GITHUB_OUTPUT"
+          echo "sha=${TARGET}" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve version (compute next minor if not provided)
+        id: resolve_version
+        env:
+          INPUT_VERSION: ${{ inputs.version_tag }}
+        run: |
+          set -euo pipefail
+          # Promote runs are minor/major bumps by definition; the
+          # auto-bump path here computes vX.(Y+1).0 from the latest
+          # semver tag reachable from the just-fast-forwarded HEAD
+          # (== main HEAD). The patch-bump auto-resolver in
+          # test-and-mark-stable.yml is appropriate for the stable-
+          # only patch path; we override it here by passing an
+          # explicit version_tag through to the dispatch.
+          if [ -n "${INPUT_VERSION}" ]; then
+            if [[ ! "${INPUT_VERSION}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::Provided version '${INPUT_VERSION}' is invalid; must match vX.Y.Z"
+              exit 1
+            fi
+            echo "Using user-provided version: ${INPUT_VERSION}"
+            echo "version=${INPUT_VERSION}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Refresh tags from origin BEFORE computing LATEST. Bounded
+          # retry tolerates transient network/auth flakes; persistent
+          # failure is a hard error since computing the next version
+          # on stale tag data could pick a colliding version.
+          fetch_attempt=1
+          while [ "$fetch_attempt" -le 3 ]; do
+            if git fetch --tags --force origin 2>/tmp/_git_fetch_err; then
+              break
+            fi
+            if [ "$fetch_attempt" -eq 3 ]; then
+              echo "::error::Failed to fetch remote tags after 3 attempts — refusing to compute next version on potentially stale tag data"
+              cat /tmp/_git_fetch_err >&2 2>/dev/null || true
+              exit 1
+            fi
+            backoff=$(( 2 ** fetch_attempt ))
+            echo "::warning::git fetch --tags failed (attempt ${fetch_attempt}/3), retrying in ${backoff}s…"
+            cat /tmp/_git_fetch_err >&2 2>/dev/null || true
+            sleep "${backoff}"
+            fetch_attempt=$((fetch_attempt + 1))
+          done
+
+          # Strict semver filter mirrors test-and-mark-stable.yml's
+          # resolver: the shell glob also matches prerelease tags
+          # (e.g. v1.4.2-beta.1) which would later break minor
+          # arithmetic on `cut -d. -f2` under `set -euo pipefail`.
+          LATEST=$(git tag --merged HEAD --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname \
+            | { grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true; } \
+            | head -n1)
+
+          if [ -z "$LATEST" ]; then
+            NEXT="v1.0.0"
+            echo "No existing version tags reachable from HEAD. Defaulting to ${NEXT}"
+          else
+            MAJOR=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f1)
+            MINOR=$(echo "$LATEST" | sed 's/^v//' | cut -d. -f2)
+            # Bump minor (patch resets to 0) and skip any candidate
+            # already in the local tag namespace (which mirrors origin
+            # after the fetch above). Bounded to 1000 iterations as a
+            # belt-and-braces guard.
+            NEXT=""
+            i=0
+            while [ "$i" -lt 1000 ]; do
+              MINOR=$((MINOR + 1))
+              CANDIDATE="v${MAJOR}.${MINOR}.0"
+              if ! git rev-parse "refs/tags/${CANDIDATE}" >/dev/null 2>&1; then
+                NEXT="$CANDIDATE"
+                break
+              fi
+              echo "Tag ${CANDIDATE} already exists — skipping"
+              i=$((i + 1))
+            done
+            if [ -z "$NEXT" ]; then
+              echo "::error::Could not find an unused minor tag after 1000 attempts starting from ${LATEST}"
+              exit 1
+            fi
+            echo "Latest reachable tag: ${LATEST} → next promote version: ${NEXT}"
+          fi
+
+          echo "version=${NEXT}" >> "$GITHUB_OUTPUT"
+
+      - name: Dispatch test-and-mark-stable on stable
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          RESOLVED_VERSION: ${{ steps.resolve_version.outputs.version }}
+          TEST_REPO_INPUT: ${{ inputs.test_repo }}
+          SKIP_E2E_INPUT: ${{ inputs.skip_e2e }}
+          DRY_RUN_INPUT: ${{ inputs.dry_run }}
+          PHASE_TIMEOUT_INPUT: ${{ inputs.phase_timeout }}
+          REVIEW_TIMEOUT_INPUT: ${{ inputs.review_timeout }}
+        run: |
+          set -euo pipefail
+          if [ -n "${TEST_REPO_INPUT}" ] && ! [[ "${TEST_REPO_INPUT}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+            echo "::error::test_repo must be empty or match owner/repo."
+            exit 1
+          fi
+          for timeout_value in "${PHASE_TIMEOUT_INPUT}" "${REVIEW_TIMEOUT_INPUT}"; do
+            if ! [[ "${timeout_value}" =~ ^[0-9]+$ ]] || [ "${timeout_value}" -lt 1 ]; then
+              echo "::error::phase_timeout and review_timeout must be positive integers."
+              exit 1
+            fi
+          done
+          if [[ "${SKIP_E2E_INPUT}" != "true" && "${SKIP_E2E_INPUT}" != "false" ]] \
+              || [[ "${DRY_RUN_INPUT}" != "true" && "${DRY_RUN_INPUT}" != "false" ]]; then
+            echo "::error::skip_e2e and dry_run must be true or false."
+            exit 1
+          fi
+          # test-and-mark-stable.yml hard-rejects any dispatch ref
+          # other than refs/heads/stable, so we MUST pass the fully
+          # qualified branch ref here (`stable` is also a tag).
+          # The release job tags the just-fast-forwarded commit on
+          # stable and `gh release create` targets the stable branch.
+          # Passing `version_tag` explicitly overrides
+          # test-and-mark-stable.yml's auto-bump (which would patch-
+          # bump) — promote runs are minor/major by definition.
+          gh workflow run test-and-mark-stable.yml \
+            --ref refs/heads/stable \
+            -f version_tag="${RESOLVED_VERSION}" \
+            -f test_repo="${TEST_REPO_INPUT}" \
+            -f skip_e2e="${SKIP_E2E_INPUT}" \
+            -f dry_run="${DRY_RUN_INPUT}" \
+            -f phase_timeout="${PHASE_TIMEOUT_INPUT}" \
+            -f review_timeout="${REVIEW_TIMEOUT_INPUT}"
+          echo "Dispatched test-and-mark-stable.yml on stable branch with version=${RESOLVED_VERSION}."
+          echo "View runs: https://github.com/${GITHUB_REPOSITORY}/actions/workflows/test-and-mark-stable.yml"
+
+      - name: Summary
+        run: |
+          set -euo pipefail
+          echo "Promotion summary:"
+          echo "  stable now at: ${{ steps.ff.outputs.sha }}"
+          echo "  fast-forward moved: ${{ steps.ff.outputs.moved }}"
+          echo "  resolved version: ${{ steps.resolve_version.outputs.version }}"
+          echo "  release pipeline dispatched on stable branch (see link above)"
+          echo ""
+          echo "The release run will tag, move the stable/vN pointers, create a"
+          echo "GitHub Release, and dispatch coding-workflows-stable-released"
+          echo "to every consumer repo. Watch its status for completion."

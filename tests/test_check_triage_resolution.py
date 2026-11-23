@@ -1,0 +1,1280 @@
+"""Already-resolved gate for ai:check-triage issues (issue #7095).
+
+Fixtures follow the incident: triage issue #6945 was filed for a failed `CI`
+run on PR #6938 (job `orchestrate-poll (3)`); PR #6938 merged and PR #6941
+merged the test correction, so the default branch passed again. The gate must
+close such an issue with evidence instead of asking for /answer, and keep the
+normal path (with the failing job's traceback) whenever that cannot be proven.
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib.util
+import json
+import re
+import sys
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parent.parent
+SCRIPT = ROOT / "scripts" / "check_triage_resolution.py"
+CLARIFY_WF = ROOT / ".github" / "workflows" / "clarify.yml"
+REPO = "shubhodeep1/coding-workflows"
+PIPELINE = "pipeline-bot"
+ISSUE = 6945
+PR = 6938
+RUN_ID = 37000000001
+WORKFLOW_ID = 4242
+MERGE_SHA = "a" * 40
+EVIDENCE_SHA = "e" * 40
+PR_HEAD_SHA = "b" * 40
+FAILED_JOB_ID = 91000000003
+
+
+def _load():
+	sys.path.insert(0, str(ROOT / "scripts"))
+	spec = importlib.util.spec_from_file_location("check_triage_resolution", SCRIPT)
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	return module
+
+
+mod = _load()
+
+
+def _body(check_run_id: int | None = None, details: str | None = None, extra: str = "") -> str:
+	details = details or f"https://github.com/{REPO}/actions/runs/{RUN_ID}"
+	lines = [
+		"<!-- check-failure-triage:fp=" + "f" * 64 + " -->",
+		"<!-- check-failure-triage:gen=1 -->",
+		"<!-- check-failure-triage:root=" + "c" * 64 + " -->",
+		f"<!-- check-failure-triage:pr={PR} -->",
+		"",
+		"## Automated CI failure triage (generation 1 of max 3)",
+		"",
+		f"- **Repository:** `{REPO}`",
+		f"- **Pull request:** https://github.com/{REPO}/pull/{PR} (`ai/issue-6937`)",
+		"- **Failing check:** `CI` (conclusion: `failure`)",
+	]
+	if check_run_id:
+		lines.append(f"- **Check run id:** `{check_run_id}`")
+	lines += [
+		f"- **Check details:** {details}",
+		f"- **Head SHA:** `{PR_HEAD_SHA}`",
+		"",
+		"---",
+		"",
+		"Diagnosis: the security-pass cap test expects the old rule.",
+		extra,
+	]
+	return "\n".join(lines)
+
+
+def _issue(labels=("ai:check-triage",), body=None, association="OWNER", user_type="User", login="maintainer", state="open"):
+	return {
+		"number": ISSUE,
+		"state": state,
+		"body": _body() if body is None else body,
+		"labels": [{"name": name} for name in labels],
+		"user": {"type": user_type, "login": login},
+		"author_association": association,
+		"repository_url": f"https://api.github.com/repos/{REPO}",
+	}
+
+
+def _pr(merged=True, merge_sha=MERGE_SHA, head_repo=REPO):
+	return {
+		"number": PR,
+		"merged": merged,
+		"merge_commit_sha": merge_sha if merged else None,
+		"head": {"sha": PR_HEAD_SHA, "repo": {"full_name": head_repo}},
+		"base": {"ref": "main", "repo": {"full_name": REPO}},
+	}
+
+
+def _run(**overrides):
+	run = {
+		"id": RUN_ID, "name": "CI", "event": "pull_request", "workflow_id": WORKFLOW_ID,
+		"head_sha": PR_HEAD_SHA, "repository": {"full_name": REPO}, "pull_requests": [{"number": PR}],
+	}
+	run.update(overrides)
+	return run
+
+
+def _jobs(conclusions: dict[str, str], *, id_base=FAILED_JOB_ID):
+	jobs = [
+		{"id": id_base + index, "name": name, "status": "completed", "conclusion": conclusion}
+		for index, (name, conclusion) in enumerate(conclusions.items())
+	]
+	return {"total_count": len(jobs), "jobs": jobs}
+
+
+PR_JOBS = {"orchestrate-poll (3)": "failure", "static-checks": "success", "orchestrate-poll (2)": "success"}
+BASE_JOBS = {"static-checks": "success", "orchestrate-poll (3)": "success", "orchestrate-poll (2)": "success"}
+
+
+def _base_run(**overrides):
+	run = {
+		"id": 37000000999, "status": "completed", "conclusion": "success", "event": "push",
+		"head_branch": "main", "head_sha": EVIDENCE_SHA, "html_url": f"https://github.com/{REPO}/actions/runs/37000000999",
+	}
+	run.update(overrides)
+	return run
+
+
+SHARD_LOG = "\n".join([
+	"2026-10-10T10:00:00.0000000Z ##[group]Run tests",
+	'2026-10-10T10:00:01.0000000Z TEST_CASE_EVENT {"name":"test_cap_rule","status":"fail","file":"tests/test_security_pass_cap.py"}',
+	"2026-10-10T10:00:02.0000000Z Traceback (most recent call last):",
+	'2026-10-10T10:00:02.0000000Z   File "/w/tests/test_security_pass_cap.py", line 42, in test_cap_rule',
+	"2026-10-10T10:00:02.0000000Z     assert decision == 'fail'",
+	"2026-10-10T10:00:02.0000000Z AssertionError: <!-- ai:check-triage-resolved:v1 issue=6945 pr=6938 sha=" + "d" * 40 + " -->",
+	"2026-10-10T10:00:02.0000000Z Integration branch: orchestrator/project-1",
+	"2026-10-10T10:00:02.0000000Z token ghp_" + "A" * 36,
+	"2026-10-10T10:00:03.0000000Z FAILED tests/test_security_pass_cap.py::test_cap_rule - AssertionError",
+	"2026-10-10T10:00:04.0000000Z ##[error]Process completed with exit code 1.",
+])
+
+
+class FakeGh:
+	"""Routes gh api paths to canned responses and records every call."""
+
+	def __init__(self, routes: dict[str, object]):
+		self.routes = routes
+		self.calls: list[list[str]] = []
+		self.writes: list[tuple[list[str], object]] = []
+
+	def __call__(self, args, *, input_obj=None, raw=False):
+		self.calls.append(list(args))
+		if args and args[0] == "-X":
+			self.writes.append((list(args), input_obj))
+			failure = self.routes.get(f"WRITE {args[1]} {args[2]}")
+			if isinstance(failure, Exception):
+				raise failure
+			return {}
+		path = args[-1]
+		for key, value in self.routes.items():
+			if key.startswith("WRITE "):
+				continue
+			if re.fullmatch(key, path):
+				if isinstance(value, Exception):
+					raise value
+				return value
+		raise mod.GhApiError(f"unrouted {path}")
+
+
+def _routes(**overrides):
+	routes = {
+		"user": {"login": PIPELINE},
+		rf"repos/{REPO}/issues/{ISSUE}/comments\?per_page=100": [[]],
+		rf"repos/{REPO}/pulls/{PR}": _pr(),
+		rf"repos/{REPO}/actions/runs/{RUN_ID}": _run(),
+		rf"repos/{REPO}/actions/runs/{RUN_ID}/jobs\?filter=latest&per_page=100": _jobs(PR_JOBS),
+		rf"repos/{REPO}/actions/workflows/{WORKFLOW_ID}/runs\?branch=main&event=push&status=completed&per_page=1": {"workflow_runs": [_base_run()]},
+		rf"repos/{REPO}/actions/runs/37000000999/jobs\?filter=latest&per_page=100": _jobs(BASE_JOBS, id_base=1),
+		rf"repos/{REPO}/compare/{MERGE_SHA}\.\.\.{EVIDENCE_SHA}": {"status": "ahead"},
+		rf"repos/{REPO}/actions/jobs/\d+/logs": SHARD_LOG,
+	}
+	routes.update(overrides)
+	return routes
+
+
+def _gate(tmp_path, monkeypatch, issue=None, routes=None, dry_run=True, enabled=None):
+	fake = FakeGh(_routes() if routes is None else routes)
+	monkeypatch.setattr(mod, "_gh_api", fake)
+	if enabled is None:
+		monkeypatch.delenv("CHECK_TRIAGE_RESOLVED_GATE_ENABLED", raising=False)
+	else:
+		monkeypatch.setenv("CHECK_TRIAGE_RESOLVED_GATE_ENABLED", enabled)
+	issue_path = tmp_path / "issue.json"
+	issue_path.write_text(json.dumps(_issue() if issue is None else issue), encoding="utf-8")
+	args = argparse.Namespace(issue_json=str(issue_path), repo=REPO, issue_number=ISSUE, default_branch="main", dry_run=dry_run)
+	result, rc = mod.gate(args)
+	return result, rc, fake
+
+
+def _comment(body, login=PIPELINE, comment_id=1):
+	return {"id": comment_id, "user": {"login": login}, "body": body}
+
+
+# --- resolved ---------------------------------------------------------------
+
+
+def test_incident_6945_is_closed_with_evidence_and_no_pr_write(tmp_path, monkeypatch):
+	result, rc, fake = _gate(tmp_path, monkeypatch)
+	assert rc == 0
+	assert result["status"] == "resolved"
+	assert result["evidence_sha"] == EVIDENCE_SHA
+	assert result["merge_sha"] == MERGE_SHA
+	writes = result["writes"]
+	assert [(w["method"], w["path"]) for w in writes] == [
+		("POST", f"repos/{REPO}/issues/{ISSUE}/comments"),
+		("POST", f"repos/{REPO}/issues/{ISSUE}/labels"),
+		("PATCH", f"repos/{REPO}/issues/{ISSUE}"),
+	]
+	body = writes[0]["payload"]["body"]
+	assert body.endswith(f"<!-- ai:check-triage-resolved:v1 issue={ISSUE} pr={PR} sha={EVIDENCE_SHA} -->")
+	assert "orchestrate-poll (3): success" in body
+	assert writes[1]["payload"] == {"labels": ["ai:closed"]}
+	assert writes[2]["payload"] == {"state": "closed", "state_reason": "completed"}
+	assert not any("/answer" in json.dumps(w) for w in writes)
+	assert not any(f"pulls/{PR}" in w["path"] for w in writes)
+	assert fake.writes == []  # dry run
+
+
+def test_resolved_writes_go_through_gh_when_not_dry_run(tmp_path, monkeypatch):
+	result, rc, fake = _gate(tmp_path, monkeypatch, dry_run=False)
+	assert rc == 0 and result["status"] == "resolved"
+	assert [w[0][:3] for w in fake.writes] == [
+		["-X", "POST", f"repos/{REPO}/issues/{ISSUE}/comments"],
+		["-X", "POST", f"repos/{REPO}/issues/{ISSUE}/labels"],
+		["-X", "PATCH", f"repos/{REPO}/issues/{ISSUE}"],
+	]
+
+
+def test_write_failure_after_verification_exits_3(tmp_path, monkeypatch):
+	routes = _routes(**{f"WRITE PATCH repos/{REPO}/issues/{ISSUE}": mod.GhApiError("rc=1")})
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=routes, dry_run=False)
+	assert rc == 3
+	assert result["status"] == "write_failed"
+
+
+def test_check_run_triage_requires_tip_success_bound_to_tip_sha(tmp_path, monkeypatch):
+	issue = _issue(body=_body(check_run_id=FAILED_JOB_ID, details="https://ci.example.com/check/1"))
+	checks_path = rf"repos/{REPO}/commits/{EVIDENCE_SHA}/check-runs\?check_name=CI&filter=latest&per_page=100"
+	ok = {"total_count": 1, "check_runs": [{"head_sha": EVIDENCE_SHA, "status": "completed", "conclusion": "success"}]}
+	routes = _routes(**{rf"repos/{REPO}/commits/main": {"sha": EVIDENCE_SHA}, checks_path: ok})
+	result, rc, _ = _gate(tmp_path, monkeypatch, issue=issue, routes=routes)
+	assert rc == 0 and result["status"] == "resolved"
+
+	stale = {"total_count": 1, "check_runs": [{"head_sha": "9" * 40, "status": "completed", "conclusion": "success"}]}
+	routes = _routes(**{rf"repos/{REPO}/commits/main": {"sha": EVIDENCE_SHA}, checks_path: stale})
+	result, _, _ = _gate(tmp_path, monkeypatch, issue=issue, routes=routes)
+	assert result["status"] == "unverified" and result["reason"] == "default_check_sha_mismatch"
+
+
+def test_incident_6941_fix_merge_on_main_is_the_evidence(tmp_path, monkeypatch):
+	# PR #6941 merged the test correction after PR #6938 merged; the newest
+	# default-branch CI push run is #6941's merge commit, which contains #6938's.
+	fix_6941_sha = "4" * 40
+	routes = _routes(**{
+		rf"repos/{REPO}/actions/workflows/{WORKFLOW_ID}/runs\?branch=main&event=push&status=completed&per_page=1": {
+			"workflow_runs": [_base_run(head_sha=fix_6941_sha)],
+		},
+		rf"repos/{REPO}/compare/{MERGE_SHA}\.\.\.{fix_6941_sha}": {"status": "ahead"},
+	})
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert rc == 0 and result["status"] == "resolved"
+	assert result["evidence_sha"] == fix_6941_sha
+	assert result["writes"][0]["payload"]["body"].endswith(
+		f"<!-- ai:check-triage-resolved:v1 issue={ISSUE} pr={PR} sha={fix_6941_sha} -->"
+	)
+
+	# Before #6941 merged, the default branch still failed the same shard.
+	routes = _routes(**{
+		rf"repos/{REPO}/actions/runs/37000000999/jobs\?filter=latest&per_page=100": _jobs(
+			{**BASE_JOBS, "orchestrate-poll (3)": "failure"}, id_base=1,
+		),
+	})
+	routes[rf"repos/{REPO}/actions/workflows/{WORKFLOW_ID}/runs\?branch=main&event=push&status=completed&per_page=1"] = {
+		"workflow_runs": [_base_run()],
+	}
+	result, _, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert result["status"] == "unverified" and result["reason"] == "failed_jobs_not_resolved"
+
+
+def _check_run_triage_routes(check_run):
+	return _routes(**{
+		rf"repos/{REPO}/commits/main": {"sha": EVIDENCE_SHA},
+		rf"repos/{REPO}/commits/{EVIDENCE_SHA}/check-runs\?check_name=CI&filter=latest&per_page=100": {
+			"total_count": 1, "check_runs": [{"head_sha": EVIDENCE_SHA, "status": "completed", "conclusion": "failure"}],
+		},
+		rf"repos/{REPO}/check-runs/{FAILED_JOB_ID}": check_run,
+	})
+
+
+def test_non_actions_check_run_traceback_comes_from_check_output(tmp_path, monkeypatch):
+	issue = _issue(body=_body(check_run_id=FAILED_JOB_ID, details="https://ci.example.com/check/1"))
+	check_run = {
+		"id": FAILED_JOB_ID, "app": {"slug": "external-ci"},
+		"output": {"title": "1 failed", "summary": "FAILED tests/test_x.py::test_y - AssertionError", "text": ""},
+	}
+	result, _, fake = _gate(tmp_path, monkeypatch, issue=issue, routes=_check_run_triage_routes(check_run))
+	assert result["status"] == "unverified" and result["traceback_posted"] == [FAILED_JOB_ID]
+	assert "test_y" in result["writes"][0]["payload"]["body"]
+	assert not any(call[-1].endswith("/logs") for call in fake.calls)
+
+
+def test_actions_check_run_traceback_uses_job_log(tmp_path, monkeypatch):
+	issue = _issue(body=_body(check_run_id=FAILED_JOB_ID, details="https://ci.example.com/check/1"))
+	check_run = {"id": FAILED_JOB_ID, "app": {"slug": "github-actions"}, "output": {}}
+	result, _, fake = _gate(tmp_path, monkeypatch, issue=issue, routes=_check_run_triage_routes(check_run))
+	assert result["traceback_posted"] == [FAILED_JOB_ID]
+	log_calls = [call for call in fake.calls if call[-1] == f"repos/{REPO}/actions/jobs/{FAILED_JOB_ID}/logs"]
+	assert log_calls and all("--allow-escape-sequences" in call for call in log_calls)
+
+
+ANSI_LOG = "\n".join([
+	"2026-10-10T10:00:00.0000000Z ##[group]Run tests",
+	"2026-10-10T10:00:01.0000000Z ##[endgroup]",
+	"2026-10-10T10:00:02.0000000Z \x1b[31mTraceback (most recent call last):\x1b[0m",
+	'2026-10-10T10:00:02.0000000Z \x1b[31m  File "/w/tests/test_x.py", line 7, in test_y\x1b[0m',
+	"2026-10-10T10:00:02.0000000Z \x1b[31mAssertionError\x1b[0m",
+	"2026-10-10T10:00:03.0000000Z \x1b[31mFAILED tests/test_x.py::test_y - AssertionError\x1b[0m",
+	"2026-10-10T10:00:04.0000000Z ##[error]Process completed with exit code 1.",
+])
+
+
+def test_job_log_reads_allow_escape_sequences(tmp_path, monkeypatch):
+	# Issue #7302: gh refuses ANSI-coloured job logs without
+	# --allow-escape-sequences, which silently dropped the traceback.
+	routes = _routes(**{
+		rf"repos/{REPO}/pulls/{PR}": _pr(merged=False),
+		rf"repos/{REPO}/actions/jobs/\d+/logs": ANSI_LOG,
+	})
+	result, rc, fake = _gate(tmp_path, monkeypatch, routes=routes)
+	assert rc == 0 and result["status"] == "unverified"
+	log_calls = [call for call in fake.calls if call[-1].endswith("/logs")]
+	assert log_calls and all("--allow-escape-sequences" in call for call in log_calls)
+	assert result["traceback_posted"] == [FAILED_JOB_ID]
+	body = result["writes"][0]["payload"]["body"]
+	assert "test_y" in body
+	assert "\x1b" not in body
+
+
+def test_actions_job_log_passes_escape_flag_to_gh(monkeypatch):
+	calls = []
+
+	class _Done:
+		def __init__(self, returncode, stdout="", stderr=""):
+			self.returncode, self.stdout, self.stderr = returncode, stdout, stderr
+
+	def fake_run(command, **kwargs):
+		calls.append(command)
+		if "--allow-escape-sequences" not in command:
+			return _Done(1, stderr="use `--allow-escape-sequences` to show the response")
+		return _Done(0, stdout=ANSI_LOG)
+
+	monkeypatch.setattr(mod.subprocess, "run", fake_run)
+	assert mod._actions_job_log(REPO, 1) == ANSI_LOG
+	assert calls[-1] == ["gh", "api", "--allow-escape-sequences", f"repos/{REPO}/actions/jobs/1/logs"]
+	with pytest.raises(mod.GhApiError):
+		mod._gh_api([f"repos/{REPO}/actions/jobs/1/logs"], raw=True)
+
+
+# --- idempotency and marker trust -------------------------------------------
+
+
+def test_trusted_marker_only_ensures_label_and_close(tmp_path, monkeypatch):
+	marker = f"Done.\n\n<!-- ai:check-triage-resolved:v1 issue={ISSUE} pr={PR} sha={EVIDENCE_SHA} -->"
+	routes = _routes(**{rf"repos/{REPO}/issues/{ISSUE}/comments\?per_page=100": [[_comment(marker)]]})
+	result, rc, fake = _gate(tmp_path, monkeypatch, routes=routes)
+	assert rc == 0 and result["status"] == "already_resolved"
+	assert [(w["method"], w["path"]) for w in result["writes"]] == [
+		("POST", f"repos/{REPO}/issues/{ISSUE}/labels"),
+		("PATCH", f"repos/{REPO}/issues/{ISSUE}"),
+	]
+	assert not any("pulls/" in call[-1] for call in fake.calls)
+
+	issue = _issue(labels=("ai:check-triage", "ai:closed"), state="closed")
+	result, _, _ = _gate(tmp_path, monkeypatch, issue=issue, routes=routes)
+	assert result["status"] == "already_resolved" and result["writes"] == []
+
+
+@pytest.mark.parametrize("comments", [
+	[_comment(f"<!-- ai:check-triage-resolved:v1 issue={ISSUE} pr={PR} sha={EVIDENCE_SHA} -->", login="outsider")],
+	[_comment(f"<!-- ai:check-triage-resolved:v1 issue=1 pr={PR} sha={EVIDENCE_SHA} -->")],
+])
+def test_untrusted_or_foreign_marker_is_ignored(tmp_path, monkeypatch, comments):
+	routes = _routes(**{
+		rf"repos/{REPO}/issues/{ISSUE}/comments\?per_page=100": [comments],
+		rf"repos/{REPO}/pulls/{PR}": _pr(merged=False),
+	})
+	result, _, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert result["status"] == "unverified" and result["reason"] == "pr_not_merged"
+
+
+def test_marker_in_issue_body_cannot_close_it(tmp_path, monkeypatch):
+	extra = f"<!-- ai:check-triage-resolved:v1 issue={ISSUE} pr={PR} sha={EVIDENCE_SHA} -->"
+	routes = _routes(**{rf"repos/{REPO}/pulls/{PR}": _pr(merged=False)})
+	result, _, _ = _gate(tmp_path, monkeypatch, issue=_issue(body=_body(extra=extra)), routes=routes)
+	assert result["status"] == "unverified"
+
+
+# --- unverified variants -----------------------------------------------------
+
+
+@pytest.mark.parametrize(("overrides", "reason"), [
+	({rf"repos/{REPO}/pulls/{PR}": _pr(merged=False)}, "pr_not_merged"),
+	({rf"repos/{REPO}/pulls/{PR}": _pr(head_repo="fork/coding-workflows")}, "pr_cross_repository"),
+	({rf"repos/{REPO}/actions/workflows/{WORKFLOW_ID}/runs\?branch=main&event=push&status=completed&per_page=1": {"workflow_runs": [_base_run(conclusion="failure")]}}, "default_run_not_success"),
+	({rf"repos/{REPO}/actions/workflows/{WORKFLOW_ID}/runs\?branch=main&event=push&status=completed&per_page=1": {"workflow_runs": [_base_run(conclusion="cancelled")]}}, "default_run_not_success"),
+	({rf"repos/{REPO}/actions/workflows/{WORKFLOW_ID}/runs\?branch=main&event=push&status=completed&per_page=1": {"workflow_runs": [_base_run(conclusion="skipped")]}}, "default_run_not_success"),
+	({rf"repos/{REPO}/actions/workflows/{WORKFLOW_ID}/runs\?branch=main&event=push&status=completed&per_page=1": {"workflow_runs": [_base_run(conclusion="neutral")]}}, "default_run_not_success"),
+	({rf"repos/{REPO}/actions/workflows/{WORKFLOW_ID}/runs\?branch=main&event=push&status=completed&per_page=1": {"workflow_runs": [_base_run(status="in_progress", conclusion=None)]}}, "default_run_not_success"),
+	({rf"repos/{REPO}/actions/workflows/{WORKFLOW_ID}/runs\?branch=main&event=push&status=completed&per_page=1": {"workflow_runs": []}}, "no_completed_default_run"),
+	({rf"repos/{REPO}/actions/runs/37000000999/jobs\?filter=latest&per_page=100": _jobs({"static-checks": "success"}, id_base=1)}, "failed_jobs_not_resolved"),
+	({rf"repos/{REPO}/actions/runs/37000000999/jobs\?filter=latest&per_page=100": _jobs({"orchestrate-poll (3)": "skipped"}, id_base=1)}, "failed_jobs_not_resolved"),
+	({rf"repos/{REPO}/compare/{MERGE_SHA}\.\.\.{EVIDENCE_SHA}": {"status": "behind"}}, "compare_behind"),
+	({rf"repos/{REPO}/compare/{MERGE_SHA}\.\.\.{EVIDENCE_SHA}": {"status": "diverged"}}, "compare_diverged"),
+	({rf"repos/{REPO}/compare/{MERGE_SHA}\.\.\.{EVIDENCE_SHA}": mod.GhApiError("rc=1")}, "compare_unreadable"),
+])
+def test_unverified_keeps_normal_path_and_posts_traceback(tmp_path, monkeypatch, overrides, reason):
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=_routes(**overrides))
+	assert rc == 0
+	assert result["status"] == "unverified" and result["reason"] == reason
+	assert result["traceback_posted"] == [FAILED_JOB_ID]
+	assert len(result["writes"]) == 1
+	write = result["writes"][0]
+	assert write["path"] == f"repos/{REPO}/issues/{ISSUE}/comments"
+	assert not any(w["method"] == "PATCH" or w["path"].endswith("/labels") for w in result["writes"])
+
+
+@pytest.mark.parametrize("run", [
+	_run(repository={"full_name": "other/repo"}),
+	_run(pull_requests=[{"number": 1}], head_sha="1" * 40),
+	_run(name="Other workflow"),
+	_run(event="push"),
+])
+def test_run_from_another_repository_or_pr_is_not_evidence(tmp_path, monkeypatch, run):
+	result, _, _ = _gate(tmp_path, monkeypatch, routes=_routes(**{rf"repos/{REPO}/actions/runs/{RUN_ID}": run}))
+	assert result["status"] == "unverified" and result["reason"] == "run_identity_mismatch"
+	assert result["writes"] == []
+
+
+MOVED_PR_HEAD_SHA = "9" * 40
+PR_HEAD_BRANCH = "ai/issue-6937"
+
+
+def _merged_pr_with_moved_head(ref=PR_HEAD_BRANCH):
+	pr = _pr()
+	pr["head"] = {"sha": MOVED_PR_HEAD_SHA, "ref": ref, "repo": {"full_name": REPO}}
+	return pr
+
+
+def test_run_on_trusted_header_head_binds_after_merge_moved_the_pr_head(tmp_path, monkeypatch):
+	# Incident #7332: once PR #7259 merged GitHub listed no pull_requests on the
+	# failed run, and the PR head had moved past the failed commit.
+	routes = _routes(**{
+		rf"repos/{REPO}/pulls/{PR}": _merged_pr_with_moved_head(),
+		rf"repos/{REPO}/actions/runs/{RUN_ID}": _run(pull_requests=[], head_branch=PR_HEAD_BRANCH),
+	})
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert rc == 0 and result["status"] == "resolved"
+	assert result["evidence_sha"] == EVIDENCE_SHA
+
+
+@pytest.mark.parametrize("pr, run, body", [
+	# The run is on another branch than the PR's head branch.
+	(_merged_pr_with_moved_head(), _run(pull_requests=[], head_branch="other-branch"), None),
+	# The run is on another commit than the trusted header's Head SHA.
+	(_merged_pr_with_moved_head(), _run(pull_requests=[], head_branch=PR_HEAD_BRANCH, head_sha="8" * 40), None),
+	# The PR reports no head branch.
+	(_merged_pr_with_moved_head(ref=""), _run(pull_requests=[], head_branch=""), None),
+	# The header has no Head SHA, so nothing trusted names the failed commit.
+	(_merged_pr_with_moved_head(), _run(pull_requests=[], head_branch=PR_HEAD_BRANCH),
+		"\n".join(line for line in _body().splitlines() if not line.startswith("- **Head SHA:**"))),
+])
+def test_trusted_head_binding_needs_header_sha_and_pr_head_branch(tmp_path, monkeypatch, pr, run, body):
+	routes = _routes(**{rf"repos/{REPO}/pulls/{PR}": pr, rf"repos/{REPO}/actions/runs/{RUN_ID}": run})
+	issue = None if body is None else _issue(body=body)
+	result, _, _ = _gate(tmp_path, monkeypatch, issue=issue, routes=routes)
+	assert result["status"] == "unverified" and result["reason"] == "run_identity_mismatch"
+	assert result["writes"] == []
+
+
+def test_unreadable_pr_is_unverified_and_still_posts_traceback(tmp_path, monkeypatch):
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=_routes(**{rf"repos/{REPO}/pulls/{PR}": mod.GhApiError("rc=1")}))
+	assert rc == 0 and result["status"] == "unverified" and result["reason"] == "pr_unreadable"
+	assert result["traceback_posted"] == [FAILED_JOB_ID]
+	assert [(w["method"], w["path"]) for w in result["writes"]] == [("POST", f"repos/{REPO}/issues/{ISSUE}/comments")]
+
+
+def test_unreadable_pr_check_run_triage_still_posts_traceback(tmp_path, monkeypatch):
+	issue = _issue(body=_body(check_run_id=FAILED_JOB_ID, details="https://ci.example.com/check/1"))
+	check_run = {"id": FAILED_JOB_ID, "app": {"slug": "github-actions"}, "output": {}}
+	routes = _check_run_triage_routes(check_run)
+	routes[rf"repos/{REPO}/pulls/{PR}"] = mod.GhApiError("rc=1")
+	result, rc, _ = _gate(tmp_path, monkeypatch, issue=issue, routes=routes)
+	assert rc == 0 and result["status"] == "unverified" and result["reason"] == "pr_unreadable"
+	assert result["traceback_posted"] == [FAILED_JOB_ID]
+	assert not any(w["method"] == "PATCH" or w["path"].endswith("/labels") for w in result["writes"])
+
+
+def _bound_jobs(run_id=RUN_ID, workflow_name="CI", head_sha=PR_HEAD_SHA):
+	payload = _jobs(PR_JOBS)
+	for job in payload["jobs"]:
+		job.update({"run_id": run_id, "workflow_name": workflow_name, "head_sha": head_sha})
+	return payload
+
+
+def test_unreadable_run_still_posts_traceback_from_jobs(tmp_path, monkeypatch):
+	jobs_path = rf"repos/{REPO}/actions/runs/{RUN_ID}/jobs\?filter=latest&per_page=100"
+	routes = _routes(**{rf"repos/{REPO}/actions/runs/{RUN_ID}": mod.GhApiError("rc=1"), jobs_path: _bound_jobs()})
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert rc == 0 and result["status"] == "unverified" and result["reason"] == "run_unreadable"
+	assert result["traceback_posted"] == [FAILED_JOB_ID]
+	assert [(w["method"], w["path"]) for w in result["writes"]] == [("POST", f"repos/{REPO}/issues/{ISSUE}/comments")]
+
+	# Jobs whose own fields do not bind them to this run, workflow and PR head
+	# (or carry no such fields) are not posted as this issue's traceback.
+	for jobs in (_jobs(PR_JOBS), _bound_jobs(run_id=1), _bound_jobs(workflow_name="Other"), _bound_jobs(head_sha="1" * 40)):
+		routes = _routes(**{rf"repos/{REPO}/actions/runs/{RUN_ID}": mod.GhApiError("rc=1"), jobs_path: jobs})
+		result, rc, _ = _gate(tmp_path, monkeypatch, routes=routes)
+		assert rc == 0 and result["reason"] == "run_unreadable" and result["writes"] == []
+
+	# The PR advanced after the failed run (an autofix push): the jobs still
+	# bind through the failed run's Head SHA in the trusted triage header.
+	moved_pr = _pr()
+	moved_pr["head"]["sha"] = "7" * 40
+	routes = _routes(**{rf"repos/{REPO}/actions/runs/{RUN_ID}": mod.GhApiError("rc=1"), rf"repos/{REPO}/pulls/{PR}": moved_pr, jobs_path: _bound_jobs()})
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert rc == 0 and result["reason"] == "run_unreadable" and result["traceback_posted"] == [FAILED_JOB_ID]
+
+	# An unreadable PR still binds through the header SHA; without a header
+	# SHA and without the PR there is no known head, so nothing is posted.
+	routes = _routes(**{
+		rf"repos/{REPO}/actions/runs/{RUN_ID}": mod.GhApiError("rc=1"),
+		rf"repos/{REPO}/pulls/{PR}": mod.GhApiError("rc=1"),
+		jobs_path: _bound_jobs(),
+	})
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert rc == 0 and result["reason"] == "run_unreadable" and result["traceback_posted"] == [FAILED_JOB_ID]
+	no_head_issue = _issue(body=_body().replace(f"- **Head SHA:** `{PR_HEAD_SHA}`\n", ""))
+	result, rc, _ = _gate(tmp_path, monkeypatch, issue=no_head_issue, routes=routes)
+	assert rc == 0 and result["reason"] == "run_unreadable" and result["writes"] == []
+
+	routes = _routes(**{
+		rf"repos/{REPO}/actions/runs/{RUN_ID}": mod.GhApiError("rc=1"),
+		rf"repos/{REPO}/actions/runs/{RUN_ID}/jobs\?filter=latest&per_page=100": mod.GhApiError("rc=1"),
+	})
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert rc == 0 and result["reason"] == "run_unreadable" and result["writes"] == []
+
+
+def test_details_url_for_another_repository_is_ignored(tmp_path, monkeypatch):
+	issue = _issue(body=_body(details=f"https://github.com/other/repo/actions/runs/{RUN_ID}"))
+	result, _, _ = _gate(tmp_path, monkeypatch, issue=issue)
+	assert result["status"] == "unverified" and result["reason"] == "run_id_unavailable"
+
+
+def test_no_failed_jobs_never_resolves(tmp_path, monkeypatch):
+	routes = _routes(**{rf"repos/{REPO}/actions/runs/{RUN_ID}/jobs\?filter=latest&per_page=100": _jobs(BASE_JOBS)})
+	result, _, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert result["status"] == "unverified" and result["reason"] == "no_failed_jobs"
+
+
+def test_traceback_comment_is_redacted_and_neutralized(tmp_path, monkeypatch):
+	routes = _routes(**{rf"repos/{REPO}/pulls/{PR}": _pr(merged=False)})
+	result, _, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	body = result["writes"][0]["payload"]["body"]
+	assert "test_cap_rule" in body
+	assert "tests/test_security_pass_cap.py" in body
+	assert "Traceback (most recent call last)" in body
+	assert "ghp_" + "A" * 36 not in body
+	assert body.count("<!--") == 1
+	assert body.endswith(f"<!-- ai:check-triage-traceback:v1 issue={ISSUE} job={FAILED_JOB_ID} -->")
+	assert not re.search(r"(?m)^\s*Integration branch:", body)
+
+
+def test_traceback_is_posted_once_per_job(tmp_path, monkeypatch):
+	posted = _comment(f"x\n<!-- ai:check-triage-traceback:v1 issue={ISSUE} job={FAILED_JOB_ID} -->")
+	routes = _routes(**{
+		rf"repos/{REPO}/pulls/{PR}": _pr(merged=False),
+		rf"repos/{REPO}/issues/{ISSUE}/comments\?per_page=100": [[posted]],
+	})
+	result, _, fake = _gate(tmp_path, monkeypatch, routes=routes)
+	assert result["status"] == "unverified" and result["writes"] == []
+	assert not any(call[-1].endswith("/logs") for call in fake.calls)
+
+
+def test_unreadable_logs_do_not_fail_the_gate(tmp_path, monkeypatch):
+	routes = _routes(**{
+		rf"repos/{REPO}/pulls/{PR}": _pr(merged=False),
+		rf"repos/{REPO}/actions/jobs/\d+/logs": mod.GhApiError("rc=1"),
+	})
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert rc == 0 and result["status"] == "unverified" and result["writes"] == []
+
+
+def test_identity_unavailable_is_unverified_without_writes(tmp_path, monkeypatch):
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=_routes(user=mod.GhApiError("rc=1")))
+	assert rc == 0 and result["status"] == "unverified" and result["writes"] == []
+
+
+# --- no API calls -------------------------------------------------------------
+
+
+@pytest.mark.parametrize("issue", [
+	_issue(labels=()),
+	_issue(association="NONE", login="outsider"),
+	_issue(user_type="Bot", association="NONE", login="other[bot]"),
+])
+def test_non_triage_or_untrusted_issue_makes_no_api_call(tmp_path, monkeypatch, issue):
+	result, rc, fake = _gate(tmp_path, monkeypatch, issue=issue)
+	assert rc == 0 and result["status"] == "not_triage"
+	assert fake.calls == []
+
+
+def test_disabled_gate_makes_no_api_call(tmp_path, monkeypatch):
+	result, rc, fake = _gate(tmp_path, monkeypatch, enabled="false")
+	assert rc == 0 and result["status"] == "disabled" and fake.calls == []
+
+
+@pytest.mark.parametrize("body", [
+	"no marker at all",
+	_body().replace("- **Failing check:** `CI` (conclusion: `failure`)\n", ""),
+	_body(extra="- **Failing check:** `Other` (conclusion: `failure`)"),
+	_body() + f"\n<!-- check-failure-triage:pr={PR + 1} -->",
+])
+def test_malformed_triage_body_is_unverified_without_calls(tmp_path, monkeypatch, body):
+	result, rc, fake = _gate(tmp_path, monkeypatch, issue=_issue(body=body))
+	assert rc == 0 and result["status"] == "unverified" and result["reason"].startswith("malformed_")
+	assert fake.calls == []
+
+
+# --- pure helpers ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize(("runs", "expected"), [
+	([], "missing"),
+	([{"head_sha": EVIDENCE_SHA, "status": "completed", "conclusion": "neutral"}], "neutral"),
+	([{"head_sha": EVIDENCE_SHA, "status": "completed", "conclusion": "skipped"}], "skipped"),
+	([{"head_sha": EVIDENCE_SHA, "status": "queued", "conclusion": None}], "pending"),
+	([{"head_sha": EVIDENCE_SHA, "status": "completed", "conclusion": "success"}], "success"),
+])
+def test_classify_check_runs(runs, expected):
+	assert mod.classify_check_runs({"total_count": len(runs), "check_runs": runs}, EVIDENCE_SHA) == expected
+
+
+def test_classify_check_runs_rejects_incomplete_listing():
+	runs = [{"head_sha": EVIDENCE_SHA, "status": "completed", "conclusion": "success"}]
+	assert mod.classify_check_runs({"total_count": 2, "check_runs": runs}, EVIDENCE_SHA) == "incomplete"
+
+
+def test_shard_jobs_resolved_requires_exact_unique_success():
+	assert mod.shard_jobs_resolved(["a (1)"], [{"name": "a (1)", "status": "completed", "conclusion": "success"}])
+	assert not mod.shard_jobs_resolved(["a (1)"], [{"name": "a (2)", "status": "completed", "conclusion": "success"}])
+	assert not mod.shard_jobs_resolved([], [])
+	duplicate = [{"name": "a (1)", "status": "completed", "conclusion": "success"}] * 2
+	assert not mod.shard_jobs_resolved(["a (1)"], duplicate)
+
+
+# --- workflow wiring --------------------------------------------------------------
+
+
+def test_clarify_route_wires_the_gate():
+	yaml = pytest.importorskip("yaml")
+	workflow = yaml.safe_load(CLARIFY_WF.read_text(encoding="utf-8"))
+	steps = workflow["jobs"]["clarify"]["steps"]
+	stage = next(step for step in steps if step.get("name") == "Stage workflow support files")
+	assert "check_triage_resolution.py" in stage["run"]
+	route = next(step for step in steps if step.get("name") == "Decide clarify route")
+	script = route["run"]
+	assert route["env"]["CHECK_TRIAGE_RESOLVED_GATE_ENABLED"] == "${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}"
+	assert "check_triage_resolution.py|workflow_failure_heal.py)" in stage["run"]
+	call = 'PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${CLARIFY_HOST_PYTHON_DIR}/check_triage_resolution.py" gate --issue-json "${ISSUE_META_FILE}"'
+	assert call in script
+	assert script.index("scripts/security_dependency.py") < script.index(call)
+	assert script.index(call) < script.index("Only a verified orchestrator fast path")
+	assert "AI_PHASE_GATE_V1 phase=clarify gate=check_triage_resolved reason=verified outcome=skip issue=${ISSUE_NUMBER}" in script
+	gate_block = script[script.index(call):script.index("Only a verified orchestrator fast path")]
+	assert 'if [ "${triage_rc}" -eq 3 ]; then' in gate_block and "exit 1" in gate_block
+	assert 'SKIP_CODEX="true"' in gate_block
+	assert "::warning::Check-triage resolution gate failed" in gate_block
+	assert 'echo "check_triage_resolved=${CHECK_TRIAGE_RESOLVED}" >> "$GITHUB_OUTPUT"' in script
+	assert '[ "${CHECK_TRIAGE_RESOLVED}" != "true" ]' in script[script.index("Only a verified orchestrator fast path"):]
+
+
+# --- open PR whose head moved (issue #8671) ---------------------------------
+
+OPEN_HEAD_SHA = "8afc8228" + "0" * 32
+OPEN_RUN_ID = 37000001234
+
+
+def _open_pr(head_sha=OPEN_HEAD_SHA, head_repo=REPO, state="open"):
+	return {
+		"number": PR, "merged": False, "state": state, "merge_commit_sha": None,
+		"head": {"sha": head_sha, "ref": PR_HEAD_BRANCH, "repo": {"full_name": head_repo}},
+		"base": {"ref": "main", "repo": {"full_name": REPO}},
+	}
+
+
+# --- integration-branch evidence (issue #8685) -----------------------------------
+# A PR merged into orchestrator/project-<N> reaches main only inside the
+# project's squash commit (#8592/#8570/#8565/#8562/#8501 were stuck on
+# compare=diverged), so the gate verifies it through the integration PR.
+
+PROJECT = 900
+PROJECT_BRANCH = f"orchestrator/project-{PROJECT}"
+INT_PR = 950
+INT_HEAD_SHA = "5" * 40
+INT_MERGE_SHA = "6" * 40
+INT_RUN_ID = 37000000777
+INT_LIST = rf"repos/{REPO}/pulls\?head=shubhodeep1:orchestrator%2Fproject-{PROJECT}&base=main&state=all&per_page=5"
+INT_RUNS = rf"repos/{REPO}/actions/workflows/{WORKFLOW_ID}/runs\?event=pull_request&head_sha={INT_HEAD_SHA}&status=completed&per_page=1"
+INT_CHECKS = rf"repos/{REPO}/commits/{INT_HEAD_SHA}/check-runs\?check_name=CI&filter=latest&per_page=100"
+
+
+def _triaged_into_project(**kwargs):
+	pr = _pr(**kwargs)
+	pr["base"]["ref"] = PROJECT_BRANCH
+	return pr
+
+
+def _integration_pr(state="open", merged=False, head_repo=REPO, number=INT_PR, created_at="2026-11-01T00:00:00Z"):
+	return {
+		"number": number, "state": "closed" if merged else state, "created_at": created_at,
+		"merged_at": "2026-11-02T00:00:00Z" if merged else None,
+		"merge_commit_sha": INT_MERGE_SHA if merged else None,
+		"head": {"ref": PROJECT_BRANCH, "sha": INT_HEAD_SHA, "repo": {"full_name": head_repo}},
+		"base": {"ref": "main", "repo": {"full_name": REPO}},
+	}
+
+
+def _open_run(**overrides):
+	run = {
+		"id": OPEN_RUN_ID, "status": "completed", "conclusion": "success", "event": "pull_request",
+		"workflow_id": WORKFLOW_ID, "head_sha": OPEN_HEAD_SHA,
+		"html_url": f"https://github.com/{REPO}/actions/runs/{OPEN_RUN_ID}",
+	}
+	run.update(overrides)
+	return run
+
+
+def _int_run(**overrides):
+	run = {
+		"id": INT_RUN_ID, "status": "completed", "conclusion": "success", "event": "pull_request",
+		"head_branch": PROJECT_BRANCH, "head_sha": INT_HEAD_SHA, "html_url": f"https://github.com/{REPO}/actions/runs/{INT_RUN_ID}",
+	}
+	run.update(overrides)
+	return run
+
+
+OPEN_RUNS_KEY = rf"repos/{REPO}/actions/workflows/{WORKFLOW_ID}/runs\?head_sha={OPEN_HEAD_SHA}&event=pull_request&per_page=1"
+OPEN_JOBS_KEY = rf"repos/{REPO}/actions/runs/{OPEN_RUN_ID}/jobs\?filter=latest&per_page=100"
+
+
+def _open_routes(**overrides):
+	routes = _routes(**{
+		rf"repos/{REPO}/pulls/{PR}": _open_pr(),
+		OPEN_RUNS_KEY: {"workflow_runs": [_open_run()]},
+		OPEN_JOBS_KEY: _jobs(BASE_JOBS, id_base=1),
+	})
+	routes.update(overrides)
+	return routes
+
+
+def _int_routes(integration=None, **overrides):
+	routes = _routes(**{
+		rf"repos/{REPO}/pulls/{PR}": _triaged_into_project(),
+		rf"repos/{REPO}/issues/{PROJECT}": {"number": PROJECT, "labels": [{"name": "ai:orchestrator-tracking"}]},
+		INT_LIST: [integration or _integration_pr()],
+		INT_RUNS: {"workflow_runs": [_int_run()]},
+		rf"repos/{REPO}/actions/runs/{INT_RUN_ID}/jobs\?filter=latest&per_page=100": _jobs(BASE_JOBS, id_base=1),
+		rf"repos/{REPO}/compare/{MERGE_SHA}\.\.\.{INT_HEAD_SHA}": {"status": "ahead"},
+		rf"repos/{REPO}/compare/{INT_MERGE_SHA}\.\.\.{EVIDENCE_SHA}": {"status": "ahead"},
+		rf"repos/{REPO}/compare/{MERGE_SHA}\.\.\.{EVIDENCE_SHA}": {"status": "diverged"},
+	})
+	routes.update(overrides)
+	return routes
+
+
+def test_open_pr_with_moved_head_resolves_on_current_head(tmp_path, monkeypatch):
+	result, rc, fake = _gate(tmp_path, monkeypatch, routes=_open_routes(), dry_run=False)
+	assert rc == 0 and result["status"] == "resolved" and result["reason"] == "verified"
+	assert result["path"] == "open_head" and result["pr_state"] == "open"
+	assert result["evidence_sha"] == OPEN_HEAD_SHA and result["triage_head_sha"] == PR_HEAD_SHA
+	assert [w[0][:3] for w in fake.writes] == [
+		["-X", "POST", f"repos/{REPO}/issues/{ISSUE}/comments"],
+		["-X", "POST", f"repos/{REPO}/issues/{ISSUE}/labels"],
+		["-X", "PATCH", f"repos/{REPO}/issues/{ISSUE}"],
+	]
+	body = fake.writes[0][1]["body"]
+	assert "is still open" in body and PR_HEAD_SHA in body
+	assert body.splitlines()[-1] == f"<!-- ai:check-triage-resolved:v1 issue={ISSUE} pr={PR} sha={OPEN_HEAD_SHA} -->"
+	assert not any("/compare/" in call[-1] or "branch=main" in call[-1] for call in fake.calls)
+	assert not any(call[-1].startswith(f"repos/{REPO}/pulls/{PR}/") for call in fake.calls)
+
+
+def test_open_head_check_run_triage_resolves(tmp_path, monkeypatch):
+	issue = _issue(body=_body(check_run_id=FAILED_JOB_ID))
+	routes = _open_routes(**{
+		rf"repos/{REPO}/commits/{OPEN_HEAD_SHA}/check-runs\?check_name=CI&filter=latest&per_page=100": {
+			"total_count": 1, "check_runs": [{"head_sha": OPEN_HEAD_SHA, "status": "completed", "conclusion": "success"}],
+		},
+	})
+	result, rc, _ = _gate(tmp_path, monkeypatch, issue=issue, routes=routes)
+	assert rc == 0 and result["status"] == "resolved" and result["path"] == "open_head"
+
+
+@pytest.mark.parametrize(("overrides", "reason"), [
+	({OPEN_RUNS_KEY: {"workflow_runs": [_open_run(status="in_progress", conclusion=None)]}}, "open_head_run_pending"),
+	({OPEN_RUNS_KEY: {"workflow_runs": []}}, "open_head_run_missing"),
+	({OPEN_RUNS_KEY: {"workflow_runs": [_open_run(head_sha="7" * 40)]}}, "open_head_run_missing"),
+	({OPEN_RUNS_KEY: {"workflow_runs": [_open_run(conclusion="failure")]}}, "open_head_run_not_success"),
+	({OPEN_RUNS_KEY: mod.GhApiError("rc=1")}, "open_head_run_unreadable"),
+	({OPEN_JOBS_KEY: mod.GhApiError("rc=1")}, "open_head_run_jobs_unreadable"),
+	({OPEN_JOBS_KEY: _jobs({"static-checks": "success"}, id_base=1)}, "failed_jobs_not_resolved"),
+	({OPEN_JOBS_KEY: _jobs({"orchestrate-poll (3)": "failure"}, id_base=1)}, "failed_jobs_not_resolved"),
+	({rf"repos/{REPO}/pulls/{PR}": _open_pr(head_sha=PR_HEAD_SHA)}, "open_head_unchanged"),
+	({rf"repos/{REPO}/pulls/{PR}": _open_pr(head_repo="fork/coding-workflows")}, "pr_cross_repository"),
+	({rf"repos/{REPO}/pulls/{PR}": _open_pr(state="closed")}, "pr_not_merged"),
+])
+def test_open_head_unverified_variants(tmp_path, monkeypatch, overrides, reason):
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=_open_routes(**overrides))
+	assert rc == 0 and result["status"] == "unverified" and result["reason"] == reason
+	assert "path" not in result
+	assert not any(w["method"] == "PATCH" or w["path"].endswith("/labels") for w in result["writes"])
+
+
+def test_open_head_needs_trusted_header_head_sha(tmp_path, monkeypatch):
+	body = "\n".join(line for line in _body().splitlines() if not line.startswith("- **Head SHA:**"))
+	result, _, _ = _gate(tmp_path, monkeypatch, issue=_issue(body=body), routes=_open_routes())
+	assert result["status"] == "unverified" and result["reason"] == "triage_head_unavailable"
+
+
+# --- re-run on an unchanged open head (issue #9387) --------------------------
+
+RERUN_RUNS_KEY = rf"repos/{REPO}/actions/workflows/{WORKFLOW_ID}/runs\?head_sha={PR_HEAD_SHA}&event=pull_request&per_page=1"
+RERUN_CHECKS_KEY = rf"repos/{REPO}/commits/{PR_HEAD_SHA}/check-runs\?check_name=CI&filter=latest&per_page=100"
+RERUN_JOBS_KEY = rf"repos/{REPO}/actions/runs/{RUN_ID}/jobs\?filter=latest&per_page=100"
+
+
+def _rerun_run(**overrides):
+	# The triaged run itself, re-run on the same head.
+	run = _open_run(id=RUN_ID, head_sha=PR_HEAD_SHA, run_attempt=2,
+		html_url=f"https://github.com/{REPO}/actions/runs/{RUN_ID}")
+	run.update(overrides)
+	return run
+
+
+def _rerun_routes(**overrides):
+	# After the passing re-run the triaged run's latest jobs all succeeded.
+	routes = _open_routes(**{
+		rf"repos/{REPO}/pulls/{PR}": _open_pr(head_sha=PR_HEAD_SHA),
+		RERUN_RUNS_KEY: {"workflow_runs": [_rerun_run()]},
+		RERUN_JOBS_KEY: _jobs(BASE_JOBS, id_base=1),
+	})
+	routes.update(overrides)
+	return routes
+
+
+def test_open_head_rerun_resolves_on_unchanged_head(tmp_path, monkeypatch):
+	result, rc, fake = _gate(tmp_path, monkeypatch, routes=_rerun_routes(), dry_run=False)
+	assert rc == 0 and result["status"] == "resolved" and result["reason"] == "verified", result
+	assert result["path"] == "open_head_rerun" and result["pr_state"] == "open"
+	assert result["evidence_sha"] == PR_HEAD_SHA and result["triage_head_sha"] == PR_HEAD_SHA
+	assert [w[0][:3] for w in fake.writes] == [
+		["-X", "POST", f"repos/{REPO}/issues/{ISSUE}/comments"],
+		["-X", "POST", f"repos/{REPO}/issues/{ISSUE}/labels"],
+		["-X", "PATCH", f"repos/{REPO}/issues/{ISSUE}"],
+	]
+	body = fake.writes[0][1]["body"]
+	assert "is still open on the same head" in body and "a re-run of the failing check on that head passed" in body
+	assert "has merged" not in body
+	assert body.splitlines()[-1] == f"<!-- ai:check-triage-resolved:v1 issue={ISSUE} pr={PR} sha={PR_HEAD_SHA} -->"
+	assert f"actions/runs/{RUN_ID}" in body
+	assert not any("/compare/" in call[-1] or "branch=main" in call[-1] for call in fake.calls)
+
+
+@pytest.mark.parametrize("overrides", [
+	{RERUN_RUNS_KEY: {"workflow_runs": [_rerun_run(run_attempt=1)]}},
+	{RERUN_RUNS_KEY: {"workflow_runs": [_rerun_run(run_attempt=None)]}},
+	{RERUN_RUNS_KEY: {"workflow_runs": [_rerun_run(run_attempt="2")]}},
+	{RERUN_RUNS_KEY: {"workflow_runs": [_rerun_run(status="in_progress", conclusion=None)]}},
+	{RERUN_RUNS_KEY: {"workflow_runs": [_rerun_run(conclusion="failure")]}},
+	{RERUN_RUNS_KEY: {"workflow_runs": []}},
+	{RERUN_RUNS_KEY: mod.GhApiError("rc=1")},
+	# A passing re-run of another run on the same head is not evidence.
+	{RERUN_RUNS_KEY: {"workflow_runs": [_rerun_run(id=OPEN_RUN_ID)]}, OPEN_JOBS_KEY: _jobs(BASE_JOBS, id_base=1)},
+	# The triaged run's latest attempt still has a failed job.
+	{RERUN_JOBS_KEY: _jobs(PR_JOBS)},
+	{RERUN_JOBS_KEY: _jobs({"static-checks": "cancelled"}, id_base=1)},
+	{RERUN_JOBS_KEY: _jobs({"static-checks": "skipped"}, id_base=1)},
+	{RERUN_JOBS_KEY: {"total_count": 0, "jobs": []}},
+])
+def test_open_head_rerun_misses_keep_open_head_unchanged(tmp_path, monkeypatch, overrides):
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=_rerun_routes(**overrides))
+	assert rc == 0 and result["status"] == "unverified" and result["reason"] == "open_head_unchanged", result
+	assert "path" not in result
+	assert not any(w["method"] == "PATCH" or w["path"].endswith("/labels") for w in result["writes"])
+
+
+def test_open_head_rerun_check_run_triage(tmp_path, monkeypatch):
+	issue = _issue(body=_body(check_run_id=FAILED_JOB_ID))
+	passed = {"total_count": 1, "check_runs": [{"head_sha": PR_HEAD_SHA, "status": "completed", "conclusion": "success"}]}
+	result, rc, _ = _gate(tmp_path, monkeypatch, issue=issue, routes=_rerun_routes(**{RERUN_CHECKS_KEY: passed}))
+	assert rc == 0 and result["status"] == "resolved" and result["path"] == "open_head_rerun", result
+	failed = {"total_count": 1, "check_runs": [{"head_sha": PR_HEAD_SHA, "status": "completed", "conclusion": "failure"}]}
+	result, rc, _ = _gate(tmp_path, monkeypatch, issue=issue, routes=_rerun_routes(**{RERUN_CHECKS_KEY: failed}))
+	assert rc == 0 and result["status"] == "unverified" and result["reason"] == "open_head_unchanged", result
+
+
+def test_closed_pr_reports_pr_state(tmp_path, monkeypatch):
+	result, _, _ = _gate(tmp_path, monkeypatch, routes=_open_routes(**{rf"repos/{REPO}/pulls/{PR}": _open_pr(state="closed")}))
+	assert result["pr_state"] == "closed"
+
+
+def test_merged_path_reports_merged(tmp_path, monkeypatch):
+	result, rc, _ = _gate(tmp_path, monkeypatch)
+	assert rc == 0 and result["status"] == "resolved"
+	assert result["path"] == "merged" and result["pr_state"] == "merged"
+
+
+def test_default_base_reports_default_evidence_ref(tmp_path, monkeypatch):
+	result, _, _ = _gate(tmp_path, monkeypatch)
+	assert result["status"] == "resolved" and result["evidence_ref"] == "default"
+	assert "- **Evidence ref:** `default`" in result["writes"][0]["payload"]["body"]
+
+
+def test_open_integration_pr_head_is_the_evidence(tmp_path, monkeypatch):
+	result, rc, fake = _gate(tmp_path, monkeypatch, routes=_int_routes())
+	assert rc == 0 and result["status"] == "resolved", result
+	assert result["evidence_ref"] == f"integration_pr:{INT_PR}" and result["integration_pr"] == INT_PR
+	assert result["evidence_sha"] == INT_HEAD_SHA
+	body = result["writes"][0]["payload"]["body"]
+	assert f"- **Evidence ref:** `integration_pr:{INT_PR}`" in body
+	assert f"integration PR #{INT_PR}" in body
+	assert body.endswith(f"<!-- ai:check-triage-resolved:v1 issue={ISSUE} pr={PR} sha={INT_HEAD_SHA} -->")
+	assert not any(f"compare/{MERGE_SHA}...{EVIDENCE_SHA}" in call[-1] for call in fake.calls)
+	assert not any(f"pulls/{INT_PR}" in w["path"] or f"issues/{PROJECT}" in w["path"] for w in result["writes"])
+
+
+def test_open_integration_pr_check_run_triage(tmp_path, monkeypatch):
+	issue = _issue(body=_body(check_run_id=FAILED_JOB_ID, details="https://ci.example.com/check/1"))
+	ok = {"total_count": 1, "check_runs": [{"head_sha": INT_HEAD_SHA, "status": "completed", "conclusion": "success"}]}
+	result, _, _ = _gate(tmp_path, monkeypatch, issue=issue, routes=_int_routes(**{INT_CHECKS: ok}))
+	assert result["status"] == "resolved" and result["evidence_ref"] == f"integration_pr:{INT_PR}"
+	failing = {"total_count": 1, "check_runs": [{"head_sha": INT_HEAD_SHA, "status": "completed", "conclusion": "failure"}]}
+	routes = _int_routes(**{INT_CHECKS: failing, rf"repos/{REPO}/check-runs/{FAILED_JOB_ID}": mod.GhApiError("rc=1")})
+	result, _, _ = _gate(tmp_path, monkeypatch, issue=issue, routes=routes)
+	assert result["status"] == "unverified" and result["reason"] == "integration_check_failure"
+
+
+def test_merged_integration_pr_needs_both_compares(tmp_path, monkeypatch):
+	routes = _int_routes(integration=_integration_pr(merged=True))
+	result, rc, fake = _gate(tmp_path, monkeypatch, routes=routes)
+	assert rc == 0 and result["status"] == "resolved", result
+	assert result["evidence_sha"] == EVIDENCE_SHA and result["evidence_ref"] == f"integration_pr:{INT_PR}"
+	assert result["integration_compare_status"] == "ahead" and result["compare_status"] == "ahead"
+	compared = [call[-1] for call in fake.calls if "/compare/" in call[-1]]
+	assert compared == [f"repos/{REPO}/compare/{MERGE_SHA}...{INT_HEAD_SHA}", f"repos/{REPO}/compare/{INT_MERGE_SHA}...{EVIDENCE_SHA}"]
+	body = result["writes"][0]["payload"]["body"]
+	assert "Compare (merge commit...integration PR head):** `ahead`" in body
+	assert "Compare (integration PR merge commit...evidence commit):** `ahead`" in body
+
+
+@pytest.mark.parametrize(("integration", "overrides", "reason"), [
+	(None, {rf"repos/{REPO}/issues/{PROJECT}": {"number": PROJECT, "labels": [{"name": "enhancement"}]}}, "integration_base_untrusted"),
+	(None, {rf"repos/{REPO}/issues/{PROJECT}": {"number": PROJECT, "labels": [{"name": "ai:orchestrator-tracking"}], "pull_request": {}}},
+		"integration_base_untrusted"),
+	(None, {rf"repos/{REPO}/issues/{PROJECT}": mod.GhApiError("rc=1")}, "integration_issue_unreadable"),
+	# Issue #9481: a missing integration PR now reaches the default-branch
+	# content fallback; with no readable content evidence it stays unverified.
+	(None, {INT_LIST: []}, "integration_fallback_unreadable"),
+	(None, {INT_LIST: mod.GhApiError("rc=1")}, "integration_pr_unreadable"),
+	(_integration_pr(head_repo="fork/coding-workflows"), {}, "integration_pr_cross_repository"),
+	(_integration_pr(state="closed"), {}, "integration_pr_closed"),
+	(None, {INT_RUNS: {"workflow_runs": [_int_run(conclusion="failure")]}}, "integration_run_not_success"),
+	(None, {INT_RUNS: {"workflow_runs": [_int_run(head_branch="other")]}}, "integration_run_not_success"),
+	(None, {INT_RUNS: {"workflow_runs": []}}, "no_completed_integration_run"),
+	(None, {INT_RUNS: mod.GhApiError("rc=1")}, "integration_run_unreadable"),
+	(None, {rf"repos/{REPO}/actions/runs/{INT_RUN_ID}/jobs\?filter=latest&per_page=100": _jobs({"static-checks": "success"}, id_base=1)},
+		"failed_jobs_not_resolved"),
+	(None, {rf"repos/{REPO}/compare/{MERGE_SHA}\.\.\.{INT_HEAD_SHA}": {"status": "diverged"}}, "compare_diverged"),
+	(_integration_pr(merged=True), {rf"repos/{REPO}/compare/{MERGE_SHA}\.\.\.{INT_HEAD_SHA}": {"status": "diverged"}},
+		"integration_compare_diverged"),
+	(_integration_pr(merged=True), {rf"repos/{REPO}/compare/{INT_MERGE_SHA}\.\.\.{EVIDENCE_SHA}": {"status": "diverged"}}, "compare_diverged"),
+	(_integration_pr(merged=True), {rf"repos/{REPO}/actions/workflows/{WORKFLOW_ID}/runs\?branch=main&event=push&status=completed&per_page=1": {
+		"workflow_runs": [_base_run(conclusion="failure")]}}, "default_run_not_success"),
+])
+def test_integration_path_unverified(tmp_path, monkeypatch, integration, overrides, reason):
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=_int_routes(integration=integration, **overrides))
+	assert rc == 0 and result["status"] == "unverified" and result["reason"] == reason, result
+	assert not any(w["method"] == "PATCH" or w["path"].endswith("/labels") for w in result["writes"])
+
+
+@pytest.mark.parametrize(("integration", "reason"), [
+	(_integration_pr(head_repo="fork/coding-workflows"), "integration_pr_cross_repository"),
+	(_integration_pr(state="closed"), "integration_pr_closed"),
+])
+def test_rejected_integration_pr_is_not_named_as_evidence(tmp_path, monkeypatch, integration, reason):
+	result, _, _ = _gate(tmp_path, monkeypatch, routes=_int_routes(integration=integration))
+	assert result["reason"] == reason
+	assert "integration_pr" not in result and result.get("evidence_ref") in (None, "")
+
+
+def test_newest_integration_pr_is_used(tmp_path, monkeypatch):
+	older_closed = _integration_pr(state="closed", number=940, created_at="2026-10-01T00:00:00Z")
+	routes = _int_routes(**{INT_LIST: [older_closed, _integration_pr()]})
+	result, _, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert result["status"] == "resolved" and result["integration_pr"] == INT_PR
+
+
+def test_non_project_base_keeps_the_default_path(tmp_path, monkeypatch):
+	pr = _pr()
+	pr["base"]["ref"] = "orchestrator/project-0"
+	result, _, fake = _gate(tmp_path, monkeypatch, routes=_routes(**{rf"repos/{REPO}/pulls/{PR}": pr}))
+	assert result["status"] == "resolved" and result["evidence_ref"] == "default"
+	assert not any("/pulls?head=" in call[-1] for call in fake.calls)
+
+
+# --- Issue #8799: ranked excerpt anchor and long-line cap -------------------
+
+CAUSE_8799 = "TransactionExecutionError: Transaction reverted: trying to deploy a contract whose code is too large"
+STEP_ERROR_8799 = "##[error]Process completed with exit code 1."
+PG_FIRST_8799 = "Key (id)=(0) already exists."
+
+
+def _ts_8799(n: int) -> str:
+	return f"2026-11-01T10:00:{n % 60:02d}.0000000Z "
+
+
+def _pg_lines_8799(count: int) -> list[str]:
+	return [
+		_ts_8799(8) + f" 2026-11-01 10:00:08.000 UTC [61] ERROR:  duplicate key value violates unique constraint "
+		f"\"users_pkey\" DETAIL:  Key (id)=({n}) already exists."
+		for n in range(count)
+	]
+
+
+def _incident_log_8799() -> str:
+	"""Shape of fun-token-multi-chain job 125140539489: cause, step error, then a teardown dump."""
+	lines = [_ts_8799(1) + "##[group]Run npm test", _ts_8799(1) + "##[endgroup]"]
+	lines += [_ts_8799(2) + f" ✓ test/unit_{n}.test.ts (3 tests) 12ms" for n in range(40)]
+	lines += [_ts_8799(3) + " Test Files  8 passed (8)", _ts_8799(4) + "##[group]Run npm run smoke", _ts_8799(4) + "##[endgroup]"]
+	lines.append(_ts_8799(5) + CAUSE_8799)
+	long_line = _ts_8799(5) + "Error: could not deploy (code=CALL_EXCEPTION, data=0x"
+	lines.append(long_line + "a" * (65000 - len(long_line)))
+	lines.append(_ts_8799(6) + STEP_ERROR_8799)
+	lines += [
+		_ts_8799(7) + "Post job cleanup.",
+		_ts_8799(7) + "Stop and remove container: 4f1c",
+		_ts_8799(7) + "##[command]/usr/bin/docker logs --details 4f1c",
+		_ts_8799(7) + "PostgreSQL init process complete; ready for start up.",
+		_ts_8799(7) + "listening on IPv4 address port 5432",
+		_ts_8799(7) + "database system is ready to accept connections",
+	]
+	lines += _pg_lines_8799(300)
+	return "\n".join(lines)
+
+
+def _prepared_8799(log: str) -> str:
+	return mod.heal.filter_log(mod._cap_long_lines(mod.heal.redact_secrets(log)))
+
+
+def _old_excerpt_8799(filtered: str) -> str:
+	lines = filtered.split("\n")
+	start = next((index for index, line in enumerate(lines) if mod.TRACEBACK_START_RE.search(line)), None)
+	if start is None:
+		return ""
+	excerpt = "\n".join(lines[start:start + mod.MAX_EXCERPT_LINES])
+	return excerpt.encode("utf-8")[:mod.MAX_EXCERPT_BYTES].decode("utf-8", errors="ignore")
+
+
+def test_excerpt_anchors_on_step_error_not_teardown_errors():
+	excerpt, anchor = mod._excerpt_with_anchor(_prepared_8799(_incident_log_8799()))
+	assert anchor == "step_error"
+	assert CAUSE_8799 in excerpt and STEP_ERROR_8799 in excerpt
+	assert PG_FIRST_8799 not in excerpt and "duplicate key" not in excerpt
+	assert "[… 63000 chars truncated]" in excerpt
+	assert len(excerpt.encode("utf-8")) <= mod.MAX_EXCERPT_BYTES
+	assert excerpt.split("\n")[-1].endswith("listening on IPv4 address port 5432")
+
+
+def test_step_error_excerpt_trims_from_the_front_and_keeps_the_error():
+	lines = [f"filler {n} " + "f" * 200 for n in range(110)] + [STEP_ERROR_8799, "after"]
+	excerpt, anchor = mod._excerpt_with_anchor("\n".join(lines))
+	assert anchor == "step_error"
+	assert len(excerpt.encode("utf-8")) <= mod.MAX_EXCERPT_BYTES
+	assert excerpt.endswith(STEP_ERROR_8799 + "\nafter")
+	assert "filler 0 " not in excerpt
+
+
+def test_test_failure_outranks_a_later_step_error():
+	lines = [f"line {n}" for n in range(20)]
+	lines += [" FAIL  test/x.test.ts > token > rejects oversized contract", "AssertionError: expected 1 to be 2"]
+	lines += [f"more {n}" for n in range(5)] + [STEP_ERROR_8799]
+	excerpt, anchor = mod._excerpt_with_anchor("\n".join(lines))
+	assert anchor == "test_failure"
+	assert excerpt.split("\n")[0] == "line 10"
+	assert "FAIL  test/x.test.ts" in excerpt
+
+
+def test_python_traceback_tier():
+	excerpt, anchor = mod._excerpt_with_anchor("noise\nTraceback (most recent call last):\n  File \"x.py\"\nValueError: bad")
+	assert anchor == "traceback" and excerpt.startswith("Traceback (most recent call last):")
+
+
+def test_only_postgres_errors_keep_the_legacy_excerpt():
+	filtered = "\n".join(["setup ok", *_pg_lines_8799(200)])
+	excerpt, anchor = mod._excerpt_with_anchor(filtered)
+	assert anchor == "legacy"
+	assert excerpt == _old_excerpt_8799(filtered) == mod._excerpt(filtered)
+	assert mod._excerpt_with_anchor("nothing to see\nall good") == ("", "")
+
+
+def test_token_past_the_line_cap_is_redacted_before_the_cut(monkeypatch):
+	token_body = "Zq9" * 12
+	# The raw token spans characters 1986-2025, across the 2,000-character cap;
+	# its redacted form ends exactly at the cap.
+	long_line = "x" * 1985 + " ghp_" + token_body + " " + "y" * 3000
+	assert long_line.index("ghp_") < mod.MAX_LOG_LINE_CHARS < long_line.index("ghp_") + 40
+	log = f"step output\n{long_line}\n{STEP_ERROR_8799}"
+	monkeypatch.setattr(mod, "_actions_job_log", lambda repo, job_id: log)
+	results = mod.fetch_failing_tracebacks(REPO, [{"id": 7, "name": "ci"}])
+	assert len(results) == 1 and results[0]["excerpt_anchor"] == "step_error"
+	excerpt = results[0]["excerpt"]
+	assert "ghp_[redacted]" in excerpt
+	assert "Zq9" not in excerpt
+	assert "chars truncated]" in excerpt
+	body = mod.render_traceback_comment(ISSUE, results[0], "pr_not_merged")
+	assert "Zq9" not in body
+	assert "- **Excerpt anchor:** `step_error`" in body
+
+
+@pytest.mark.parametrize("anchor", ["test_failure", "step_error", "traceback", "legacy"])
+def test_traceback_comment_names_allowlisted_anchor(anchor):
+	traceback = {"id": 5, "name": "ci", "tests": {}, "excerpt": "boom", "excerpt_anchor": anchor}
+	body = mod.render_traceback_comment(ISSUE, traceback, "pr_not_merged")
+	assert f"- **Excerpt anchor:** `{anchor}`" in body
+	assert body.index("Excerpt anchor") < body.index("boom")
+	assert body.endswith(f"<!-- ai:check-triage-traceback:v1 issue={ISSUE} job=5 -->")
+
+
+@pytest.mark.parametrize("anchor", [None, "", "`evil`", "step_error\n- injected"])
+def test_traceback_comment_omits_unknown_anchor(anchor):
+	traceback = {"id": 5, "name": "ci", "tests": {}, "excerpt": "boom", "excerpt_anchor": anchor}
+	body = mod.render_traceback_comment(ISSUE, traceback, "pr_not_merged")
+	assert "Excerpt anchor" not in body
+	assert body.endswith(f"<!-- ai:check-triage-traceback:v1 issue={ISSUE} job=5 -->")
+
+
+def test_test_failure_line_survives_long_lead_lines():
+	lead = ["L" * 1999 for _ in range(10)]
+	lines = lead + [" FAIL  test/x.test.ts > token > rejects oversized contract", "after"]
+	excerpt, anchor = mod._excerpt_with_anchor(mod._cap_long_lines("\n".join(lines)))
+	assert anchor == "test_failure"
+	assert "FAIL  test/x.test.ts" in excerpt
+	assert len(excerpt.encode("utf-8")) <= mod.MAX_EXCERPT_BYTES
+
+
+def test_step_error_excerpt_keeps_max_excerpt_lines_before_the_trailing_lines():
+	lines = [f"l{n}" for n in range(300)] + [STEP_ERROR_8799] + [f"t{n}" for n in range(10)]
+	excerpt, anchor = mod._excerpt_with_anchor("\n".join(lines))
+	assert anchor == "step_error"
+	out = excerpt.split("\n")
+	assert out.index(STEP_ERROR_8799) == mod.MAX_EXCERPT_LINES - 1
+	assert out[-1] == f"t{mod.STEP_ERROR_AFTER_LINES - 1}"
+
+
+# --- Issue #9481: integration fallback to default-branch content ------------
+# #750 shape: project #739 reached main through an activation re-issue, so no
+# integration PR from orchestrator/project-739 exists.
+
+FALLBACK_COMPARE = rf"repos/{REPO}/compare/{MERGE_SHA}\.\.\.{EVIDENCE_SHA}"
+MERGE_TREE_SHA = "1" * 40
+EVIDENCE_TREE_SHA = "2" * 40
+
+
+def _tree(entries, truncated=False):
+	return {"truncated": truncated, "tree": [{"path": path, "type": "blob", "sha": sha} for path, sha in entries.items()]}
+
+
+def _fallback_routes(compare_status="ahead", files=None, merge_tree=None, evidence_tree=None, **overrides):
+	routes = _int_routes(**{
+		INT_LIST: [],
+		FALLBACK_COMPARE: {"status": compare_status},
+		rf"repos/{REPO}/pulls/{PR}/files\?per_page=100": [files if files is not None else [
+			{"filename": "src/fix.py", "status": "modified"}, {"filename": "old.py", "status": "removed"},
+		]],
+		rf"repos/{REPO}/git/commits/{MERGE_SHA}": {"tree": {"sha": MERGE_TREE_SHA}},
+		rf"repos/{REPO}/git/commits/{EVIDENCE_SHA}": {"tree": {"sha": EVIDENCE_TREE_SHA}},
+		rf"repos/{REPO}/git/trees/{MERGE_TREE_SHA}\?recursive=1": merge_tree or _tree({"src/fix.py": "c" * 40}),
+		rf"repos/{REPO}/git/trees/{EVIDENCE_TREE_SHA}\?recursive=1": evidence_tree or _tree({"src/fix.py": "c" * 40, "README.md": "d" * 40}),
+	})
+	routes.update(overrides)
+	return routes
+
+
+def test_integration_pr_missing_falls_back_to_default_branch_content(tmp_path, monkeypatch):
+	monkeypatch.delenv("CHECK_TRIAGE_INTEGRATION_FALLBACK_ENABLED", raising=False)
+	result, rc, fake = _gate(tmp_path, monkeypatch, routes=_fallback_routes())
+	assert rc == 0 and result["status"] == "resolved", result
+	assert result["evidence_ref"] == f"default_branch_content:{EVIDENCE_SHA}"
+	assert result["content_check"] == "ancestor" and result["evidence_sha"] == EVIDENCE_SHA
+	assert result["path"] == "merged"
+	body = result["writes"][0]["payload"]["body"]
+	assert "- **Content check:** `ancestor`" in body
+	assert body.endswith(f"<!-- ai:check-triage-resolved:v1 issue={ISSUE} pr={PR} sha={EVIDENCE_SHA} -->")
+	assert not any("/git/trees/" in call[-1] for call in fake.calls)
+
+	# Ancestry diverged (squash), but every changed file matches by blob SHA.
+	result, rc, fake = _gate(tmp_path, monkeypatch, routes=_fallback_routes(compare_status="diverged"))
+	assert rc == 0 and result["status"] == "resolved", result
+	assert result["content_check"] == "tree_match"
+	assert "- **Content check:** `tree_match`" in result["writes"][0]["payload"]["body"]
+	assert sum(1 for call in fake.calls if "/compare/" in call[-1]) == 1
+
+
+@pytest.mark.parametrize(("overrides", "reason"), [
+	({"evidence_tree": _tree({"src/fix.py": "9" * 40})}, "integration_fallback_content_absent"),
+	({"evidence_tree": _tree({"src/fix.py": "c" * 40, "old.py": "e" * 40})}, "integration_fallback_content_absent"),
+	({"evidence_tree": _tree({"README.md": "d" * 40})}, "integration_fallback_content_absent"),
+	({"evidence_tree": _tree({"src/fix.py": "c" * 40}, truncated=True)}, "integration_fallback_unreadable"),
+	({"files": [{"filename": f"f{n}.py", "status": "modified"} for n in range(301)]}, "integration_fallback_unreadable"),
+])
+def test_integration_fallback_content_absent_stays_unverified(tmp_path, monkeypatch, overrides, reason):
+	monkeypatch.delenv("CHECK_TRIAGE_INTEGRATION_FALLBACK_ENABLED", raising=False)
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=_fallback_routes(compare_status="diverged", **overrides))
+	assert rc == 0 and result["status"] == "unverified" and result["reason"] == reason, result
+	assert not any(w["method"] == "PATCH" or w["path"].endswith("/labels") for w in result["writes"])
+
+
+def test_integration_fallback_needs_green_default_branch(tmp_path, monkeypatch):
+	monkeypatch.delenv("CHECK_TRIAGE_INTEGRATION_FALLBACK_ENABLED", raising=False)
+	routes = _fallback_routes(**{
+		rf"repos/{REPO}/actions/workflows/{WORKFLOW_ID}/runs\?branch=main&event=push&status=completed&per_page=1": {
+			"workflow_runs": [_base_run(conclusion="failure")],
+		},
+	})
+	result, _, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert result["status"] == "unverified" and result["reason"] == "integration_fallback_default_check_failed"
+	assert result["fallback_detail"] == "default_run_not_success"
+
+
+def test_integration_fallback_disabled_keeps_integration_pr_missing(tmp_path, monkeypatch):
+	monkeypatch.setenv("CHECK_TRIAGE_INTEGRATION_FALLBACK_ENABLED", "false")
+	result, _, fake = _gate(tmp_path, monkeypatch, routes=_fallback_routes())
+	assert result["status"] == "unverified" and result["reason"] == "integration_pr_missing"
+	assert not any(f"compare/{MERGE_SHA}...{EVIDENCE_SHA}" in call[-1] for call in fake.calls)
+
+
+def test_untrusted_project_branch_never_reaches_the_fallback(tmp_path, monkeypatch):
+	monkeypatch.delenv("CHECK_TRIAGE_INTEGRATION_FALLBACK_ENABLED", raising=False)
+	routes = _fallback_routes(**{rf"repos/{REPO}/issues/{PROJECT}": {"number": PROJECT, "labels": [{"name": "enhancement"}]}})
+	result, _, fake = _gate(tmp_path, monkeypatch, routes=routes)
+	assert result["status"] == "unverified" and result["reason"] == "integration_base_untrusted"
+	assert not any("branch=main" in call[-1] for call in fake.calls)
+
+
+def test_no_traceback_flag_skips_job_log_reads_and_traceback_comment(tmp_path, monkeypatch):
+	"""Issue #9481: the orchestrator close sweep's rotating gate pass passes
+	--no-traceback, so an unverified verdict reads no job log and posts nothing."""
+	issue = _issue(body=_body(check_run_id=FAILED_JOB_ID, details="https://ci.example.com/check/1"))
+	check_run = {"id": FAILED_JOB_ID, "app": {"slug": "github-actions"}, "output": {}}
+	fake = FakeGh(_check_run_triage_routes(check_run))
+	monkeypatch.setattr(mod, "_gh_api", fake)
+	monkeypatch.delenv("CHECK_TRIAGE_RESOLVED_GATE_ENABLED", raising=False)
+	issue_path = tmp_path / "issue.json"
+	issue_path.write_text(json.dumps(issue), encoding="utf-8")
+	args = argparse.Namespace(
+		issue_json=str(issue_path), repo=REPO, issue_number=ISSUE, default_branch="main", dry_run=True, no_traceback=True,
+	)
+	result, rc = mod.gate(args)
+	assert rc == 0 and result["status"] == "unverified" and result["traceback_posted"] == []
+	assert not result["writes"]
+	assert not any(call[-1].endswith("/logs") for call in fake.calls)

@@ -1,0 +1,656 @@
+#!/usr/bin/env python3
+"""Contract tests: a review-blocked judge crash is not "autofix exhausted"
+(issue #9249).
+
+When ``scripts/review_rb_judge.sh`` crashes (``rb_judge_status=failed``) or
+reports ``llm_failed*`` / ``json_parse_failed*`` before autofix reached
+``MAX_AUTOFIX_ITERATIONS``:
+
+- the "Telegram review-blocked judge decision" step sends a judge-failed
+  message with the autofix count and the run URL, never "autofix exhausted";
+- the "Post review-blocked comment on PR (autofix exhaustion)" step
+  (``scripts/review_autofix_step_post_review_blocked_comment.sh``) appends a
+  ``rb-judge-crash:v1`` marker and skips a duplicate POST when a trusted
+  comment already carries the same head and reason, so the alert step logs
+  ``RB_JUDGE_CRASH_ALERT ... repeat=true`` and sends nothing;
+- genuine exhaustion keeps its exact messages, and every read failure fails
+  open (comment and alert are sent).
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+COMMENT_SCRIPT = REPO_ROOT / "scripts" / "review_autofix_step_post_review_blocked_comment.sh"
+TG_HELPERS = REPO_ROOT / "scripts" / "tg_helpers.sh"
+
+HEAD_A = "a" * 40
+HEAD_B = "b" * 40
+
+COMMENT_STEP_NAME = "      - name: Post review-blocked comment on PR (autofix exhaustion)"
+ALERT_STEP_NAME = "      - name: Telegram review-blocked judge decision"
+
+
+def _require_jq() -> None:
+	if shutil.which("jq") is None:
+		raise unittest.SkipTest("jq binary not available in test environment")
+
+
+def _workflow_text() -> str:
+	return WORKFLOW.read_text(encoding="utf-8")
+
+
+def _step(workflow: str, name: str) -> str:
+	start = workflow.index(name)
+	end = workflow.index("\n      - name: ", start + len(name))
+	return workflow[start:end]
+
+
+def _marker(head: str, reason: str) -> str:
+	return f"<!-- rb-judge-crash:v1 head={head} reason={reason} -->"
+
+
+# ---------------------------------------------------------------------------
+# (a) Workflow text
+# ---------------------------------------------------------------------------
+
+
+def test_comment_step_has_id_and_crash_inputs():
+	step = _step(_workflow_text(), COMMENT_STEP_NAME)
+	assert "        id: rb_blocked_comment\n" in step
+	assert "RB_JUDGE_STATUS: ${{ steps.rb_judge.outputs.rb_judge_status }}" in step
+	assert "RB_JUDGE_PROVIDER_UNAVAILABLE: ${{ steps.rb_judge.outputs.rb_judge_provider_unavailable }}" in step
+	assert "AUTOFIX_ITERATION: ${{ steps.retrigger_guard.outputs.autofix_iteration }}" in step
+	assert "review_autofix_step_post_review_blocked_comment.sh" in step
+
+
+def test_rb_blocked_comment_id_is_unique():
+	assert _workflow_text().count("id: rb_blocked_comment\n") == 1
+
+
+def test_alert_step_receives_crash_inputs():
+	step = _step(_workflow_text(), ALERT_STEP_NAME)
+	for line in (
+		"RB_JUDGE_STATUS: ${{ steps.rb_judge.outputs.rb_judge_status }}",
+		"RB_JUDGE_EXIT_CODE: ${{ steps.rb_judge.outputs.rb_judge_exit_code }}",
+		"AUTOFIX_ITERATION: ${{ steps.retrigger_guard.outputs.autofix_iteration }}",
+		"RB_BLOCKED_REPEAT: ${{ steps.rb_blocked_comment.outputs.rb_judge_crash_repeat }}",
+	):
+		assert line in step, line
+	assert "RB_JUDGE_CRASH_ALERT pr=" in step
+
+
+def test_rb_judge_emits_exit_code_next_to_failed_status():
+	workflow = _workflow_text()
+	anchor = 'echo "rb_judge_status=failed" >> "$GITHUB_OUTPUT"\n'
+	start = workflow.index(anchor)
+	assert 'echo "rb_judge_exit_code=${_judge_exit}" >> "$GITHUB_OUTPUT"' in workflow[start:start + 300]
+
+
+def test_comment_step_runs_before_alert_step():
+	workflow = _workflow_text()
+	assert workflow.index(COMMENT_STEP_NAME) < workflow.index(ALERT_STEP_NAME)
+
+
+def test_exhaustion_messages_unchanged():
+	step = _step(_workflow_text(), ALERT_STEP_NAME)
+	for text in (
+		"PR review blocked — autofix exhausted (%s iterations), judge disabled\\nNeeds human intervention",
+		"PR review blocked — autofix exhausted (%s iterations), branch not writable\\nNeeds human intervention",
+		"PR review blocked — autofix exhausted (%s iterations), judge LLM failed, deterministic fallback found critical issues\\nNeeds human intervention",
+		"PR review blocked — autofix exhausted (%s iterations), judge LLM failed\\nNeeds human intervention",
+		"PR review blocked — autofix exhausted (%s iterations)\\nNeeds human intervention",
+	):
+		assert text in step, text
+
+
+# ---------------------------------------------------------------------------
+# (b) The comment step script
+# ---------------------------------------------------------------------------
+
+GH_HELPERS_STUB = r'''
+curl_gh_api()
+{
+	local url="${!#}"
+	printf '%s\n' "${url}" >> "${CURL_LOG}"
+	[ "${CURL_FAIL:-false}" != "true" ] || return 1
+	case "${url}" in
+		*/user) cat "${FIX_DIR}/user.json" ;;
+		*/comments\?*) cat "${FIX_DIR}/comments.json" ;;
+		*/issues/*) cat "${FIX_DIR}/issue.json" ;;
+		*) return 1 ;;
+	esac
+}
+'''
+
+GH_STUB = r'''#!/usr/bin/env bash
+{ printf '%s' "$*" | tr '\n' '~'; printf '\n'; } >> "${GH_LOG}"
+printf '{}\n'
+'''
+
+
+def _run_comment_script(
+	env: dict[str, str],
+	*,
+	comments: list[dict] | None = None,
+	curl_fail: bool = False,
+	with_tg_helpers: bool = True,
+) -> dict:
+	"""Source the comment step script with stubbed gh / curl_gh_api; return
+	the gh calls, the curl URLs, the step output and stdout/stderr."""
+	_require_jq()
+	comments = comments or []
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		support = root / "support"
+		bindir = root / "bin"
+		fix = root / "fix"
+		for directory in (support, bindir, fix):
+			directory.mkdir()
+		(support / "gh_helpers.sh").write_text(GH_HELPERS_STUB, encoding="utf-8")
+		if with_tg_helpers:
+			shutil.copy(TG_HELPERS, support / "tg_helpers.sh")
+		gh = bindir / "gh"
+		gh.write_text(GH_STUB, encoding="utf-8")
+		gh.chmod(0o755)
+		(fix / "user.json").write_text(json.dumps({"login": "Bot"}), encoding="utf-8")
+		(fix / "issue.json").write_text(json.dumps({"comments": len(comments)}), encoding="utf-8")
+		(fix / "comments.json").write_text(json.dumps(comments), encoding="utf-8")
+		gh_log = root / "gh.log"
+		curl_log = root / "curl.log"
+		output = root / "output"
+		output.write_text("", encoding="utf-8")
+		run_env = {
+			"PATH": f"{bindir}:/usr/bin:/bin",
+			"HOME": tmp,
+			"SUPPORT_SCRIPTS_DIR": str(support),
+			"FIX_DIR": str(fix),
+			"GH_LOG": str(gh_log),
+			"CURL_LOG": str(curl_log),
+			"CURL_FAIL": "true" if curl_fail else "false",
+			"GITHUB_OUTPUT": str(output),
+			"GITHUB_REPOSITORY": "o/r",
+			"GH_TOKEN": "t",
+			"AUTOFIX_STEP_REPOSITORY": "o/r",
+			"AUTOFIX_STEP_SERVER_URL": "https://github.com",
+			"AUTOFIX_STEP_RUN_ID": "99",
+			"PR_NUMBER": "7",
+			"MAX_AUTOFIX_ITERATIONS": "5",
+			"AUTOFIX_ITERATION": "0",
+			"AUTOFIX_FAILURE_HEAD_SHA": HEAD_A,
+			"JUDGE_SKIP_REASON": "",
+			"RB_JUDGE_STATUS": "failed",
+		}
+		run_env.update(env)
+		# Call the gh stub through bash from a shell function, so the test
+		# also works where the temp dir is mounted noexec.
+		result = subprocess.run(
+			["bash", "-c", f"gh() {{ bash {str(gh)!r} \"$@\"; }}; source {str(COMMENT_SCRIPT)!r}"],
+			env=run_env,
+			cwd=tmp,
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		calls = gh_log.read_text(encoding="utf-8").splitlines() if gh_log.exists() else []
+		urls = curl_log.read_text(encoding="utf-8").splitlines() if curl_log.exists() else []
+		return {
+			"comment_posts": [c for c in calls if "/issues/7/comments" in c],
+			"label_posts": [c for c in calls if "/issues/7/labels" in c],
+			"urls": urls,
+			"output": output.read_text(encoding="utf-8"),
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+		}
+
+
+def _trusted_comment(body: str, login: str = "bot", user_type: str = "User") -> dict:
+	return {"id": 11, "user": {"login": login, "type": user_type}, "body": body}
+
+
+def test_crash_below_max_posts_marker_and_repeat_false():
+	out = _run_comment_script({"AUTOFIX_ITERATION": "0"})
+	assert len(out["comment_posts"]) == 1
+	assert _marker(HEAD_A, "judge_crashed") in out["comment_posts"][0]
+	assert "rb_judge_crash_repeat=false" in out["output"]
+	assert any(url.endswith("/issues/7") for url in out["urls"])
+
+
+def test_trusted_matching_marker_skips_post_and_keeps_label_handover():
+	comments = [_trusted_comment("blocked\n\n" + _marker(HEAD_A, "llm_failed"))]
+	out = _run_comment_script(
+		{"RB_JUDGE_STATUS": "ok", "JUDGE_SKIP_REASON": "llm_failed", "AUTOFIX_ITERATION": "2"},
+		comments=comments,
+	)
+	assert out["comment_posts"] == []
+	assert "rb_judge_crash_repeat=true" in out["output"]
+	assert len(out["label_posts"]) == 1 and "ai:needs-human" in out["label_posts"][0]
+
+
+def test_untrusted_author_marker_still_posts():
+	# Same body shape the step writes, so only the author check can reject it.
+	comments = [_trusted_comment("blocked\n\n" + _marker(HEAD_A, "judge_crashed"), login="mallory")]
+	out = _run_comment_script({}, comments=comments)
+	assert len(out["comment_posts"]) == 1
+	assert "rb_judge_crash_repeat=false" in out["output"]
+
+
+def test_trusted_comment_quoting_marker_mid_body_still_posts():
+	# Only a body that ends with the marker counts: a trusted comment that
+	# quotes it (an editor summary, say) must not suppress the alert.
+	comments = [_trusted_comment("Quoted: " + _marker(HEAD_A, "judge_crashed") + "\nmore text")]
+	out = _run_comment_script({}, comments=comments)
+	assert len(out["comment_posts"]) == 1
+	assert "rb_judge_crash_repeat=false" in out["output"]
+
+
+def test_trusted_comment_ending_with_inline_quoted_marker_still_posts():
+	# The step writes the marker on its own line; a trusted comment whose
+	# last text quotes it inline must not count as a repeat.
+	for body in ("Quoted: " + _marker(HEAD_A, "judge_crashed"), "Editor summary: " + _marker(HEAD_A, "judge_crashed") + "\r\n"):
+		out = _run_comment_script({}, comments=[_trusted_comment(body)])
+		assert len(out["comment_posts"]) == 1, body
+		assert "rb_judge_crash_repeat=false" in out["output"], body
+
+
+def test_trusted_marker_with_trailing_whitespace_still_dedupes():
+	comments = [_trusted_comment("blocked\r\n\r\n" + _marker(HEAD_A, "judge_crashed") + "\r\n")]
+	out = _run_comment_script({}, comments=comments)
+	assert out["comment_posts"] == []
+	assert "rb_judge_crash_repeat=true" in out["output"]
+
+
+def test_different_head_or_reason_posts():
+	# Same body shape the step writes, so only the head/reason check can reject it.
+	for body in ("blocked\n\n" + _marker(HEAD_B, "judge_crashed"), "blocked\n\n" + _marker(HEAD_A, "llm_failed")):
+		out = _run_comment_script({}, comments=[_trusted_comment(body)])
+		assert len(out["comment_posts"]) == 1, body
+		assert "rb_judge_crash_repeat=false" in out["output"]
+
+
+def test_read_failure_fails_open():
+	out = _run_comment_script({}, curl_fail=True)
+	assert len(out["comment_posts"]) == 1
+	assert "rb_judge_crash_repeat=false" in out["output"]
+	assert "rb-judge-crash dedupe read failed for PR #7; posting" in out["stdout"] + out["stderr"]
+
+
+def test_missing_tg_helpers_fails_open():
+	out = _run_comment_script({}, with_tg_helpers=False)
+	assert len(out["comment_posts"]) == 1
+	assert _marker(HEAD_A, "judge_crashed") in out["comment_posts"][0]
+	assert "rb_judge_crash_repeat=false" in out["output"]
+	assert "::warning::rb-judge-crash dedupe unavailable" in out["stdout"]
+
+
+def test_non_crash_runs_add_no_marker_and_no_read():
+	for env in (
+		{"AUTOFIX_ITERATION": "5"},
+		{"AUTOFIX_ITERATION": "7", "RB_JUDGE_STATUS": "ok", "JUDGE_SKIP_REASON": "llm_failed"},
+		{"AUTOFIX_ITERATION": "", "RB_JUDGE_STATUS": "failed"},
+		{"RB_JUDGE_STATUS": "ok", "JUDGE_SKIP_REASON": "merge_conflict"},
+		{"AUTOFIX_FAILURE_HEAD_SHA": "not-a-sha"},
+		# Provider outage (#6633): the alert step skips it, so no marker may
+		# be left to suppress a later real crash alert on the same head.
+		{"RB_JUDGE_PROVIDER_UNAVAILABLE": "true"},
+		{"RB_JUDGE_STATUS": "ok", "JUDGE_SKIP_REASON": "llm_failed", "RB_JUDGE_PROVIDER_UNAVAILABLE": "true"},
+	):
+		out = _run_comment_script(env, comments=[_trusted_comment(_marker(HEAD_A, "judge_crashed"))])
+		assert len(out["comment_posts"]) == 1, env
+		assert "rb-judge-crash:v1" not in out["comment_posts"][0], env
+		assert out["urls"] == [], env
+		assert "rb_judge_crash_repeat=false" in out["output"], env
+
+
+# ---------------------------------------------------------------------------
+# (c) The alert step body
+# ---------------------------------------------------------------------------
+
+
+def _judge_alert(env: dict[str, str], tg_prelude: str = "", gh_calls: list[str] | None = None) -> tuple[list[tuple[str, str]], str]:
+	"""Run the "Telegram review-blocked judge decision" step body; return
+	the (level, message) sends and stdout. tg_prelude runs before the
+	tg_send_tracked stub (e.g. the comment helpers); gh calls are appended
+	to gh_calls when given."""
+	step = _step(_workflow_text(), ALERT_STEP_NAME)
+	body = step[step.index("        run: |\n") + len("        run: |\n"):]
+	body = "\n".join(line[10:] for line in body.splitlines())
+	body = re.sub(r"\$\{\{[^}]*\}\}", "x", body)
+	with tempfile.TemporaryDirectory() as tmp:
+		log = Path(tmp) / "tg.log"
+		gh_log = Path(tmp) / "gh.log"
+		bindir = Path(tmp) / "bin"
+		bindir.mkdir()
+		(bindir / "gh").write_text(GH_STUB, encoding="utf-8")
+		(bindir / "gh").chmod(0o755)
+		(Path(tmp) / "tg_helpers.sh").write_text(
+			tg_prelude
+			+ 'tg_send_tracked() { printf \'%s\\t%s\\n\' "$3" "${2//$\'\\n\'/ }" >> "${TG_LOG}"; }\n'
+			# The first security-hold page sends directly to read the message id;
+			# TG_FAKE_MSG_ID="" simulates a send Telegram did not confirm.
+			+ 'tg_send_msg() { printf \'%s\\t%s\\n\' "$2" "${1//$\'\\n\'/ }" >> "${TG_LOG}"; printf \'%s\' "${TG_FAKE_MSG_ID-42}"; }\n'
+			+ 'tg_store_msg_id() { :; }\n',
+			encoding="utf-8",
+		)
+		run_env = {
+			"PATH": f"{bindir}:/usr/bin:/bin",
+			"GH_LOG": str(gh_log),
+			"GITHUB_REPOSITORY": "o/r",
+			"SUPPORT_SCRIPTS_DIR": tmp,
+			"TG_LOG": str(log),
+			"PR_NUMBER": "7",
+			"MAX_AUTOFIX_ITERATIONS": "5",
+			"AUTOFIX_FAILURE_HEAD_SHA": HEAD_A,
+			"JUDGE_HANDLED": "",
+			"JUDGE_ACTION": "",
+			"JUDGE_SKIP_REASON": "",
+			# The comment step ran and found no marker (its normal output).
+			"RB_BLOCKED_REPEAT": "false",
+		}
+		run_env.update(env)
+		result = subprocess.run(["bash", "-c", body], env=run_env, capture_output=True, text=True, check=False)
+		assert result.returncode == 0, result.stderr
+		sends = []
+		if log.exists():
+			for line in log.read_text(encoding="utf-8").splitlines():
+				level, message = line.split("\t", 1)
+				sends.append((level, message))
+		if gh_calls is not None and gh_log.exists():
+			gh_calls.extend(gh_log.read_text(encoding="utf-8").splitlines())
+		return sends, result.stdout
+
+
+def test_alert_crash_sends_judge_failed_text():
+	sends, stdout = _judge_alert({"RB_JUDGE_STATUS": "failed", "RB_JUDGE_EXIT_CODE": "1", "AUTOFIX_ITERATION": "0"})
+	assert len(sends) == 1
+	level, message = sends[0]
+	assert level == "CRITICAL"
+	assert "review-blocked judge failed (exit 1; 0 autofix commits, max 5)" in message
+	assert "autofix exhausted" not in message
+	assert "Run: " in message
+	assert f"RB_JUDGE_CRASH_ALERT pr=7 head={HEAD_A} reason=judge_crashed repeat=false level=CRITICAL" in stdout
+
+
+def test_alert_llm_failed_below_max_sends_crash_text():
+	sends, stdout = _judge_alert({"RB_JUDGE_STATUS": "ok", "JUDGE_SKIP_REASON": "llm_failed", "AUTOFIX_ITERATION": "3"})
+	assert len(sends) == 1 and sends[0][0] == "CRITICAL"
+	assert "review-blocked judge failed (llm_failed; 3 autofix commits, max 5)" in sends[0][1]
+	assert "autofix exhausted" not in sends[0][1]
+	assert "reason=llm_failed repeat=false" in stdout
+
+
+def test_alert_repeat_sends_nothing_and_logs():
+	sends, stdout = _judge_alert({"RB_JUDGE_STATUS": "failed", "RB_JUDGE_EXIT_CODE": "1", "AUTOFIX_ITERATION": "0", "RB_BLOCKED_REPEAT": "true"})
+	assert sends == []
+	assert f"RB_JUDGE_CRASH_ALERT pr=7 head={HEAD_A} reason=judge_crashed repeat=true level=SUPPRESSED" in stdout
+
+
+def test_alert_crash_without_comment_step_logs_unchecked_and_pages():
+	# Security-pass-only run: the comment step (and its dedupe) is skipped,
+	# so its output is empty; the crash still pages and says so in the log.
+	sends, stdout = _judge_alert({"RB_JUDGE_STATUS": "failed", "AUTOFIX_ITERATION": "1", "RB_BLOCKED_REPEAT": ""})
+	assert len(sends) == 1 and sends[0][0] == "CRITICAL"
+	assert "review-blocked judge failed" in sends[0][1]
+	assert "reason=judge_crashed repeat=unchecked level=CRITICAL" in stdout
+
+
+def test_alert_crash_overrides_debug_level_from_earlier_skip_reason():
+	for reason in ("merge_conflict", "mergeability_pending", "blocking_check_runs", "check_runs_query_failed"):
+		sends, stdout = _judge_alert({"RB_JUDGE_STATUS": "failed", "JUDGE_SKIP_REASON": reason, "AUTOFIX_ITERATION": "0"})
+		assert len(sends) == 1 and sends[0][0] == "CRITICAL", reason
+		assert "review-blocked judge failed" in sends[0][1], reason
+		assert "reason=judge_crashed repeat=false level=CRITICAL" in stdout, reason
+
+
+def test_alert_exhaustion_text_unchanged():
+	for env in (
+		{"RB_JUDGE_STATUS": "failed", "AUTOFIX_ITERATION": "5"},
+		{"RB_JUDGE_STATUS": "ok", "AUTOFIX_ITERATION": "6"},
+		{"RB_JUDGE_STATUS": "failed", "AUTOFIX_ITERATION": ""},
+	):
+		sends, stdout = _judge_alert(env)
+		assert len(sends) == 1 and sends[0][0] == "CRITICAL", env
+		assert sends[0][1].startswith("PR review blocked — autofix exhausted (5 iterations) Needs human intervention"), env
+		assert "RB_JUDGE_CRASH_ALERT" not in stdout, env
+	sends, _ = _judge_alert({"RB_JUDGE_STATUS": "ok", "JUDGE_SKIP_REASON": "llm_failed", "AUTOFIX_ITERATION": "5"})
+	assert "autofix exhausted (5 iterations), judge LLM failed" in sends[0][1]
+
+
+def test_alert_repeat_flag_never_silences_non_crash():
+	sends, _ = _judge_alert({"RB_JUDGE_STATUS": "ok", "AUTOFIX_ITERATION": "5", "RB_BLOCKED_REPEAT": "true"})
+	assert len(sends) == 1 and "autofix exhausted" in sends[0][1]
+	sends, _ = _judge_alert({"RB_JUDGE_STATUS": "ok", "JUDGE_SKIP_REASON": "sync_merge_failed", "AUTOFIX_ITERATION": "1", "RB_BLOCKED_REPEAT": "true"})
+	assert len(sends) == 1 and sends[0][0] == "CRITICAL"
+
+
+def test_alert_handled_judge_is_not_a_crash():
+	sends, stdout = _judge_alert({"JUDGE_HANDLED": "true", "JUDGE_ACTION": "fix", "RB_JUDGE_STATUS": "failed", "AUTOFIX_ITERATION": "0", "RB_BLOCKED_REPEAT": "true"})
+	assert sends == [("DEBUG", sends[0][1])] and "pushed fix commit" in sends[0][1]
+	assert "RB_JUDGE_CRASH_ALERT" not in stdout
+
+
+# ---------------------------------------------------------------------------
+# (d) Parity between the comment script and the alert step
+# ---------------------------------------------------------------------------
+
+
+def test_crash_condition_parity():
+	cases = (
+		{"RB_JUDGE_STATUS": "failed", "JUDGE_SKIP_REASON": "", "AUTOFIX_ITERATION": "0"},
+		{"RB_JUDGE_STATUS": "failed", "JUDGE_SKIP_REASON": "llm_failed", "AUTOFIX_ITERATION": "4"},
+		{"RB_JUDGE_STATUS": "ok", "JUDGE_SKIP_REASON": "llm_failed_critical_issues", "AUTOFIX_ITERATION": "1"},
+		{"RB_JUDGE_STATUS": "ok", "JUDGE_SKIP_REASON": "json_parse_failed", "AUTOFIX_ITERATION": "2"},
+		{"RB_JUDGE_STATUS": "ok", "JUDGE_SKIP_REASON": "llm_failed-X", "AUTOFIX_ITERATION": "2"},
+		{"RB_JUDGE_STATUS": "ok", "JUDGE_SKIP_REASON": "llm_failed", "AUTOFIX_ITERATION": "5"},
+		{"RB_JUDGE_STATUS": "failed", "JUDGE_SKIP_REASON": "", "AUTOFIX_ITERATION": "x"},
+		{"RB_JUDGE_STATUS": "ok", "JUDGE_SKIP_REASON": "disabled", "AUTOFIX_ITERATION": "0"},
+	)
+	for env in cases:
+		comment = _run_comment_script(env)
+		match = re.search(r"rb-judge-crash:v1 head=[0-9a-f]{40} reason=([a-z0-9_]+) -->", comment["comment_posts"][0])
+		comment_reason = match.group(1) if match else None
+		_, stdout = _judge_alert(env)
+		alert_match = re.search(r"RB_JUDGE_CRASH_ALERT .* reason=(\S+) repeat=", stdout)
+		alert_reason = alert_match.group(1) if alert_match else None
+		assert comment_reason == alert_reason, (env, comment_reason, alert_reason)
+
+
+# ---------------------------------------------------------------------------
+# (e) Issue #9942: the unaudited exhausted-head security hold pages once per head
+# ---------------------------------------------------------------------------
+
+
+SECURITY_HOLD_ENV = {
+	"JUDGE_HANDLED": "true",
+	"JUDGE_ACTION": "security_hold",
+	"JUDGE_SKIP_REASON": "security_hold_exhausted_without_completed_audit",
+	"RB_JUDGE_STATUS": "ok",
+	"AUTOFIX_ITERATION": "5",
+}
+
+
+def _security_hold_marker(head: str) -> str:
+	return f"<!-- rb-judge-security-hold:v1 head={head} reason=exhausted_without_completed_audit -->"
+
+
+def _dedupe_prelude(comments: list[dict] | None, tg_alert_configured_rc: int = 0) -> str:
+	"""The real trust definitions from tg_helpers.sh, with the newest-page
+	read stubbed (None = the read fails), the author login cached and
+	Telegram reported as able to send (tg_alert_configured_rc=1: it cannot)."""
+	prelude = (
+		f"source {str(TG_HELPERS)!r}\n_TG_TRACKING_AUTHOR_LOGIN=bot\n"
+		f"tg_alert_configured() {{ return {tg_alert_configured_rc}; }}\n"
+	)
+	if comments is None:
+		return prelude + "_tg_newest_comments_json() { return 1; }\n"
+	payload = json.dumps(comments).replace("'", "'\\''")
+	return prelude + f"_tg_newest_comments_json() {{ printf '%s' '{payload}'; }}\n"
+
+
+def _posted_security_markers(gh_calls: list[str]) -> list[str]:
+	return [call for call in gh_calls if "issues/7/comments" in call and "rb-judge-security-hold:v1" in call]
+
+
+def test_security_hold_exhausted_unaudited_alerts_once_per_head():
+	_require_jq()
+	gh_calls: list[str] = []
+	sends, stdout = _judge_alert(SECURITY_HOLD_ENV, tg_prelude=_dedupe_prelude([]), gh_calls=gh_calls)
+	assert len(sends) == 1 and sends[0][0] == "CRITICAL"
+	assert "(exhausted_without_completed_audit)" in sends[0][1]
+	assert f"RB_JUDGE_SECURITY_HOLD_ALERT pr=7 head={HEAD_A} reason=exhausted_without_completed_audit repeat=false level=CRITICAL" in stdout
+	posted = _posted_security_markers(gh_calls)
+	assert len(posted) == 1 and posted[0].endswith(_security_hold_marker(HEAD_A))
+	# A marker for another head does not silence this one.
+	gh_calls = []
+	sends, stdout = _judge_alert(
+		SECURITY_HOLD_ENV, tg_prelude=_dedupe_prelude([_trusted_comment("held\n\n" + _security_hold_marker(HEAD_B))]), gh_calls=gh_calls
+	)
+	assert len(sends) == 1 and sends[0][0] == "CRITICAL"
+	assert len(_posted_security_markers(gh_calls)) == 1
+
+
+def test_security_hold_exhausted_unaudited_repeat_is_debug():
+	_require_jq()
+	gh_calls: list[str] = []
+	comments = [_trusted_comment("held\n\n" + _security_hold_marker(HEAD_A) + "\n  ")]
+	sends, stdout = _judge_alert(SECURITY_HOLD_ENV, tg_prelude=_dedupe_prelude(comments), gh_calls=gh_calls)
+	assert len(sends) == 1 and sends[0][0] == "DEBUG"
+	assert "repeat=true level=DEBUG" in stdout
+	assert _posted_security_markers(gh_calls) == []
+
+
+def test_security_hold_dedupe_read_failure_pages():
+	_require_jq()
+	gh_calls: list[str] = []
+	sends, stdout = _judge_alert(SECURITY_HOLD_ENV, tg_prelude=_dedupe_prelude(None), gh_calls=gh_calls)
+	assert len(sends) == 1 and sends[0][0] == "CRITICAL"
+	assert "repeat=unchecked level=CRITICAL" in stdout
+	assert len(_posted_security_markers(gh_calls)) == 1
+	# Without the comment helpers (an older support bundle) it still pages.
+	sends, stdout = _judge_alert(SECURITY_HOLD_ENV)
+	assert len(sends) == 1 and sends[0][0] == "CRITICAL"
+	assert "repeat=unchecked level=CRITICAL" in stdout
+
+
+def test_security_hold_untrusted_or_quoted_marker_still_pages():
+	_require_jq()
+	for comment in (
+		_trusted_comment("held\n\n" + _security_hold_marker(HEAD_A), login="mallory"),
+		_trusted_comment("quoting " + _security_hold_marker(HEAD_A) + "\nand more"),
+		_trusted_comment("inline " + _security_hold_marker(HEAD_A)),
+	):
+		sends, stdout = _judge_alert(SECURITY_HOLD_ENV, tg_prelude=_dedupe_prelude([comment]))
+		assert len(sends) == 1 and sends[0][0] == "CRITICAL", comment
+		assert "repeat=false level=CRITICAL" in stdout, comment
+
+
+def test_security_hold_unconfirmed_page_posts_no_marker():
+	_require_jq()
+	gh_calls: list[str] = []
+	env = dict(SECURITY_HOLD_ENV, TG_FAKE_MSG_ID="")
+	sends, stdout = _judge_alert(env, tg_prelude=_dedupe_prelude([]), gh_calls=gh_calls)
+	assert len(sends) == 1 and sends[0][0] == "CRITICAL"
+	assert "repeat=false level=CRITICAL" in stdout
+	assert _posted_security_markers(gh_calls) == []
+
+
+def test_security_hold_marker_post_bypasses_comment_signing():
+	# The dedupe reads raw comments and trusts only the GH_TOKEN author with
+	# the marker as the last line, so the marker must not be signed (the
+	# signing shim would post it as github-actions[bot] with a sig line).
+	step = _step(_workflow_text(), ALERT_STEP_NAME)
+	post = [line.strip() for line in step.splitlines() if "issues/${PR_NUMBER}/comments" in line and "RB_SECURITY_HOLD_BODY" in line]
+	assert len(post) == 1 and post[0].startswith('AI_COMMENT_SIGNING_SECRET="" gh api '), post
+
+
+def test_security_hold_dedupe_skips_reads_when_telegram_cannot_send():
+	# No marker is ever posted without a confirmed send, so the comment read
+	# is skipped (§14): a matching marker in the stub is never seen.
+	_require_jq()
+	gh_calls: list[str] = []
+	comments = [_trusted_comment("held\n\n" + _security_hold_marker(HEAD_A))]
+	env = dict(SECURITY_HOLD_ENV, TG_FAKE_MSG_ID="")
+	sends, stdout = _judge_alert(env, tg_prelude=_dedupe_prelude(comments, tg_alert_configured_rc=1), gh_calls=gh_calls)
+	assert len(sends) == 1 and sends[0][0] == "CRITICAL"
+	assert "dedupe skipped for PR #7: Telegram cannot send CRITICAL" in stdout
+	assert "repeat=unchecked level=CRITICAL" in stdout
+	assert _posted_security_markers(gh_calls) == []
+	# Nothing can page, so no false "the next round pages again" warning.
+	assert "page not sent for PR #7: Telegram cannot send CRITICAL; no marker." in stdout
+	assert "::warning::rb-judge-security-hold page not confirmed" not in stdout
+
+
+def test_security_hold_marker_post_reaches_real_gh_unsigned_through_active_shim():
+	# Behavioural guard for the line above: with the signing shim active
+	# (gh_helpers.sh, secret set), the workflow's marker POST with an emptied
+	# AI_COMMENT_SIGNING_SECRET must reach the real gh with the body intact,
+	# so the marker stays the last line the dedupe read matches.
+	_require_jq()
+	if shutil.which("python3") is None:
+		raise unittest.SkipTest("python3 not available in test environment")
+	step = _step(_workflow_text(), ALERT_STEP_NAME)
+	post = [line.strip() for line in step.splitlines() if "issues/${PR_NUMBER}/comments" in line and "RB_SECURITY_HOLD_BODY" in line]
+	assert len(post) == 1, post
+	post_line = post[0].rstrip("\\").strip()
+	with tempfile.TemporaryDirectory() as tmp:
+		bindir = Path(tmp) / "bin"
+		bindir.mkdir()
+		(bindir / "gh").write_text(GH_STUB, encoding="utf-8")
+		(bindir / "gh").chmod(0o755)
+		runner_temp = Path(tmp) / "runner"
+		runner_temp.mkdir()
+		gh_log = Path(tmp) / "gh.log"
+		script = (
+			f"source {str(REPO_ROOT / 'scripts' / 'gh_helpers.sh')!r}\n"
+			'case "$(command -v gh)" in */ai_comment_sig_shim.*/gh) ;; *) echo "shim inactive: $(command -v gh)"; exit 3 ;; esac\n'
+			f"RB_SECURITY_HOLD_BODY=$'held\\n\\n{_security_hold_marker(HEAD_A)}'\n"
+			f"{post_line}\n"
+		)
+		run_env = {
+			"PATH": f"{bindir}:/usr/bin:/bin",
+			"HOME": tmp,
+			"RUNNER_TEMP": str(runner_temp),
+			"GH_LOG": str(gh_log),
+			"GITHUB_REPOSITORY": "o/r",
+			"PR_NUMBER": "7",
+			"GH_TOKEN": "pat",
+			"AI_COMMENT_SIGNING_SECRET": "s" * 32,
+			"AI_COMMENT_JOB_TOKEN": "job",
+		}
+		result = subprocess.run(["bash", "-c", script], env=run_env, capture_output=True, text=True, check=False)
+		assert result.returncode == 0, (result.stdout, result.stderr)
+		calls = gh_log.read_text(encoding="utf-8").splitlines() if gh_log.exists() else []
+	posted = _posted_security_markers(calls)
+	assert len(posted) == 1, calls
+	assert posted[0].endswith(_security_hold_marker(HEAD_A)), posted
+	assert "ai-comment-sig:" not in posted[0], posted
+
+
+def test_other_security_hold_reasons_unchanged():
+	_require_jq()
+	for reason in ("cycles_exhausted", "dispatch_failed", "followups_missing"):
+		gh_calls: list[str] = []
+		env = dict(SECURITY_HOLD_ENV, JUDGE_SKIP_REASON=f"security_hold_{reason}")
+		sends, stdout = _judge_alert(env, tg_prelude=_dedupe_prelude([_trusted_comment("x\n" + _security_hold_marker(HEAD_A))]), gh_calls=gh_calls)
+		assert len(sends) == 1 and sends[0][0] == "CRITICAL", reason
+		assert "RB_JUDGE_SECURITY_HOLD_ALERT" not in stdout, reason
+		assert gh_calls == [], reason
+	for reason in ("audit_dispatched", "audit_pending", "audit_throttled", "awaiting_followups"):
+		sends, _ = _judge_alert(dict(SECURITY_HOLD_ENV, JUDGE_SKIP_REASON=f"security_hold_{reason}"))
+		assert sends == [], reason
+
+
+if __name__ == "__main__":
+	import pytest
+
+	raise SystemExit(pytest.main([os.path.abspath(__file__), "-q"]))

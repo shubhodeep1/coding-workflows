@@ -1,0 +1,11307 @@
+#!/usr/bin/env python3
+"""Contract tests for review-pipeline plumbing in review_autofix.yml."""
+
+# The embedded shell fixtures keep tab-then-space indentation on purpose
+# (their content is the shell script under test), so E101 is exempt here.
+# ruff: noqa: E101
+
+from __future__ import annotations
+
+import contextlib
+import hashlib
+import http.client  # noqa: F401 -- broker tests patch http.client.HTTPSConnection
+import importlib.util
+import inspect
+import io
+import json
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+import textwrap
+import sys
+import threading
+import time
+from pathlib import Path
+from unittest import mock
+
+import pytest
+import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
+from agents_doc import agents_text as _agents_text_with_fragments  # noqa: E402
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+WORKFLOW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
+STAGE_HELPER = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
+REVIEWERS = REPO_ROOT / "scripts" / "review_run_reviewers.sh"
+SUMMARISER = REPO_ROOT / "scripts" / "summarize_reviewer_consensus.sh"
+APPLY_FIXES = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
+CONSOLIDATE = REPO_ROOT / "scripts" / "review_consolidate.sh"
+RB_JUDGE = REPO_ROOT / "scripts" / "review_rb_judge.sh"
+AGENTS_MD_MATERIALITY = REPO_ROOT / "scripts" / "review_agents_md_materiality.sh"
+METADATA_HELPER = REPO_ROOT / "scripts" / "review_collect_pr_metadata.sh"
+AUTO_MERGE_HELPER = REPO_ROOT / "scripts" / "review_enable_auto_merge.sh"
+HEAD_GATE_HELPER = REPO_ROOT / "scripts" / "review_head_gate.sh"
+CHECK_RUNS_HELPER = REPO_ROOT / "scripts" / "collect_pr_check_runs_context.py"
+REVIEWER_FAILBACK_CHAINS = REPO_ROOT / "scripts" / "reviewer_failback_chains.json"
+MODEL_CATALOG = REPO_ROOT / "scripts" / "codex_model_catalog.json"
+FIXTURES_DIR = REPO_ROOT / "scripts" / "fixtures" / "cloudflare-learnings"
+PHASE_A_ANTI_RULES_FIXTURE = FIXTURES_DIR / "phase-a-anti-rules-noisy-pr.patch"
+PHASE_B_RISK_TIER_TRIVIAL_FIXTURE = FIXTURES_DIR / "phase-b-risk-tier-trivial.patch"
+PHASE_B_RISK_TIER_LITE_FIXTURE = FIXTURES_DIR / "phase-b-risk-tier-lite.patch"
+PHASE_B_RISK_TIER_FULL_FIXTURE = FIXTURES_DIR / "phase-b-risk-tier-full.patch"
+PHASE_B_RISK_TIER_ALWAYS_FULL_FIXTURE = FIXTURES_DIR / "phase-b-risk-tier-always-full.patch"
+PHASE_C_FILTER_FIXTURE = FIXTURES_DIR / "phase-c-lockfile-and-generated.patch"
+PHASE_D_MATERIALITY_FIXTURE = FIXTURES_DIR / "phase-d-package-bump-no-agents-update.patch"
+PHASE_G_FLAKY_REVIEWER_FIXTURE = FIXTURES_DIR / "phase-g-flaky-reviewer.patch"
+PHASE_H_CONTEXT_BUDGET_FIXTURE = FIXTURES_DIR / "phase-h-context-budget-overflow.txt"
+
+
+def _workflow_text() -> str:
+	# Moved step bodies (scripts/review_autofix_step_*.sh) inlined again.
+	return expanded_review_autofix_text()
+
+
+def test_head_gate_is_verified_and_binds_merge_status_to_evaluated_head() -> None:
+	workflow = _workflow_text()
+	stage = STAGE_HELPER.read_text(encoding="utf-8")
+	auto_merge = AUTO_MERGE_HELPER.read_text(encoding="utf-8")
+	judge = RB_JUDGE.read_text(encoding="utf-8")
+	assert workflow.index('name: Verify retarget helper identity') < workflow.index('name: Checkout head-gate helper')
+	assert workflow.index('name: Verify head-gate helper identity') < workflow.index('name: Evaluate review gate') < workflow.index('name: Withdraw stale auto-merge and publish head-gate status')
+	assert 'ref: ${{ steps.resolve_support.outputs.review_support_sha }}' in workflow
+	assert 'git -C .codex-head-gate-src rev-parse HEAD' in workflow
+	assert 'bash .codex-head-gate-src/scripts/review_head_gate.sh gate' in workflow
+	assert 'auto_merge_enabled: (if has("auto_merge")' in workflow
+	assert 'if .auto_merge_enabled == null then "" else (.auto_merge_enabled | tostring) end' in workflow
+	# The gate's single PR read goes through the classified retry helper
+	# (#6634); the head gate runs only after that read succeeded.
+	assert (
+		workflow.index('_pr_gate="$(gh_api_retry "repos/${REPOSITORY}/pulls/${PR_NUMBER}"')
+		< workflow.index('if [ "${_pr_gate_rc}" -eq 0 ]; then')
+		< workflow.index('GATE_AUTO_MERGE_ENABLED="${pr_auto_merge_enabled}"')
+		< workflow.index('# Port P6: retarget')
+	)
+	assert 'echo "HEAD_GATE_EARLY_DONE=true" >> "${GITHUB_ENV}"' in workflow
+	assert 'export EVENT_NAME=workflow_dispatch' in workflow
+	for key in ("PR_EVENT_HEAD_SHA", "GATE_HEAD_SHA", "GATE_AUTO_MERGE_ENABLED", "DETERMINISTIC_SKIP", "REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED"):
+		assert f"{key}:" in workflow
+	assert 'review_head_gate.sh' in stage.split('REQUIRED_BOOTSTRAP_SCRIPTS="', 1)[1].split('"', 1)[0].split()
+	# #8195: the consolidator, parser, ledger and floor-rule stages are skipped when these are not staged.
+	for script in ("review_floor_rules.sh", "review_consolidate.sh", "review_parse_consolidator.sh", "review_issue_ledger.sh", "ledger_emit_substate.sh", "codex_thread_reuse.sh"):
+		assert script in stage.split('REQUIRED_BOOTSTRAP_SCRIPTS="', 1)[1].split('"', 1)[0].split(), script
+	assert 'REVIEW_HEAD_GATE_CONTEXT="ai-review/head-gate"' in HEAD_GATE_HELPER.read_text(encoding="utf-8")
+	assert auto_merge.index('review_head_gate_post_status "${GITHUB_REPOSITORY}" "${INITIAL_HEAD_SHA}" success "review and security gate passed"', auto_merge.index('_orch_pr_head_sha=')) < auto_merge.index('gh_retry gh pr merge')
+	judge_lines = judge.splitlines()
+	for index, merge_line in enumerate(judge_lines):
+		if 'if gh pr merge "${PR_NUMBER}"' in merge_line and ('--match-head-commit "${RB_JUDGED_HEAD_SHA}"' in merge_line or '"${_match_head_arg[@]}"' in merge_line):
+			if merge_line.lstrip().startswith("if "):
+				assert 'review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success' in judge_lines[index - 1]
+				continue
+			# #9939: the merge_with_followup sync site is `elif gh pr merge`,
+			# preceded by the blocked-merge guard's deferral branch. The
+			# success post must still come first, within that short branch,
+			# with no other merge attempt in between.
+			window = judge_lines[max(0, index - 8):index]
+			posts = [i for i, line in enumerate(window) if 'review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success' in line]
+			assert posts, merge_line
+			assert not any("gh pr merge" in line for line in window[posts[-1] + 1:]), merge_line
+			assert any("rb_judge_sync_merge_guard" in line for line in window[posts[-1] + 1:]), merge_line
+	assert judge.index('rb_security_merge_gate; then') < judge.index('review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success')
+	manual_status = 'review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"'
+	assert f'else\n        {manual_status}\n        RB_MERGE_READY_LABEL_ALLOWED="true"' in judge
+	assert f'elif [ "${{ENABLE_AUTO_MERGE}}" != "true" ]; then\n        if [ "${{PR_STATE}}" = "open" ]; then\n          {manual_status}\n        fi\n        RB_MERGE_READY_LABEL_ALLOWED="true"' in judge
+	assert f'          else\n            {manual_status}\n            echo "::warning::PR #${{PR_NUMBER}} is mergeable but ENABLE_AUTO_MERGE=false' in judge
+	assert f'          {manual_status}\n          ensure_label_exists "ai:ready-to-merge"' in judge
+	assert f'        {manual_status}\n        ensure_label_exists "ai:ready-to-merge"' in judge
+
+
+def _stage_helper_text() -> str:
+	return STAGE_HELPER.read_text(encoding="utf-8")
+
+
+def _auto_merge_helper_text() -> str:
+	return AUTO_MERGE_HELPER.read_text(encoding="utf-8")
+
+
+def _reviewers_text() -> str:
+	return REVIEWERS.read_text(encoding="utf-8")
+
+
+def _review_collect_pr_metadata_graphql_helper_block() -> str:
+	text = METADATA_HELPER.read_text(encoding="utf-8")
+	match = re.search(r"(?ms)^_fetch_linked_issue_bodies_graphql\(\)\n\{.*?^\}\s*$", text)
+	assert match, "missing _fetch_linked_issue_bodies_graphql helper"
+	return match.group(0)
+
+
+def _apply_fixes_text() -> str:
+	return APPLY_FIXES.read_text(encoding="utf-8")
+
+
+def _consolidate_text() -> str:
+	return CONSOLIDATE.read_text(encoding="utf-8")
+
+
+def _rb_judge_text() -> str:
+	return RB_JUDGE.read_text(encoding="utf-8")
+
+
+def _install_review_collect_mock_gh(bin_dir: Path, state_file: Path) -> None:
+	gh_script = r'''#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+state_path = Path(os.environ["MOCK_GH_STATE_FILE"])
+if state_path.exists():
+	state = json.loads(state_path.read_text(encoding="utf-8"))
+else:
+	state = {}
+args = sys.argv[1:]
+
+
+def save() -> None:
+	state_path.write_text(json.dumps(state), encoding="utf-8")
+
+
+def first_value(flag: str) -> str:
+	for idx, arg in enumerate(args):
+		if arg == flag and idx + 1 < len(args):
+			return args[idx + 1]
+	return ""
+
+
+def api_path() -> str:
+	idx = 1
+	takes_value = {"--jq", "-f", "-F", "-H", "-X", "--input"}
+	no_value = {"--paginate", "-i"}
+	while idx < len(args):
+		arg = args[idx]
+		if arg in takes_value:
+			idx += 2
+			continue
+		if arg in no_value:
+			idx += 1
+			continue
+		if arg.startswith("-"):
+			idx += 1
+			continue
+		return arg
+	return ""
+
+
+state.setdefault("calls", []).append(args)
+
+if args[:2] == ["pr", "diff"]:
+	pr_number = args[2] if len(args) > 2 else ""
+	diff_text = (state.get("pr_diffs", {}) or {}).get(pr_number, state.get("pr_diff_default", ""))
+	save()
+	sys.stdout.write(diff_text)
+	sys.exit(0)
+
+if args[:1] == ["api"]:
+	path = api_path()
+	if path == "/rate_limit":
+		save()
+		sys.stdout.write("HTTP/1.1 200 OK\nx-ratelimit-reset: 0\n")
+		sys.exit(0)
+	api_responses = state.get("api_responses", {}) or {}
+	matched = None
+	for pattern, response in sorted(api_responses.items(), key=lambda item: len(item[0]), reverse=True):
+		if pattern and pattern in path:
+			matched = response
+			break
+	if matched is None:
+		save()
+		sys.stderr.write(f"mock gh: unsupported api path: {path}\n")
+		sys.exit(1)
+	jq_filter = first_value("--jq")
+	save()
+	if jq_filter == ".default_branch":
+		print((matched or {}).get("default_branch", ""))
+	elif jq_filter == ".data.repository.pullRequest.closingIssuesReferences.nodes // []":
+		nodes = (((matched or {}).get("data") or {}).get("repository") or {}).get("pullRequest") or {}
+		nodes = ((nodes.get("closingIssuesReferences") or {}).get("nodes") or [])
+		print(json.dumps(nodes))
+	elif jq_filter == '{number: (.number // 0), title: (.title // ""), body: (.body // "")}':
+		print(json.dumps({
+			"number": (matched or {}).get("number", 0) or 0,
+			"title": (matched or {}).get("title", "") or "",
+			"body": (matched or {}).get("body", "") or "",
+		}))
+	else:
+		print(json.dumps(matched))
+	sys.exit(0)
+
+save()
+sys.stderr.write(f"mock gh: unsupported args: {args!r}\n")
+sys.exit(1)
+'''
+	mock_path = bin_dir / "gh"
+	mock_path.write_text(gh_script, encoding="utf-8")
+	mock_path.chmod(0o755)
+	state_file.write_text("{}", encoding="utf-8")
+
+
+def _run_review_collect_pr_metadata_harness(
+	*,
+	pr_number: str,
+	claude_branch_review_mode: str,
+	head_ref_override: str,
+	head_sha_override: str,
+	base_ref_override: str,
+	review_break_glass_enabled: str = "false",
+	mock_state: dict[str, object],
+) -> dict[str, object]:
+	with tempfile.TemporaryDirectory(prefix="review-collect-pr-metadata-") as td:
+		tmp = Path(td)
+		bin_dir = tmp / "bin"
+		runtime_dir = tmp / "runtime"
+		bin_dir.mkdir()
+		runtime_dir.mkdir()
+
+		gh_state_file = runtime_dir / "gh_state.json"
+		_install_review_collect_mock_gh(bin_dir, gh_state_file)
+		gh_state_file.write_text(json.dumps(mock_state), encoding="utf-8")
+
+		files = {
+			"pr_payload": runtime_dir / "pr_payload.json",
+			"pr_meta": runtime_dir / "pr_meta.json",
+			"pr_issue_comments": runtime_dir / "pr_issue_comments.json",
+			"pr_reviews": runtime_dir / "pr_reviews.json",
+			"pr_review_comments": runtime_dir / "pr_review_comments.json",
+			"linked_issue_context": runtime_dir / "linked_issue_context.txt",
+			"comments_context": runtime_dir / "pr_all_comments_context.txt",
+			"pr_diff": runtime_dir / "pr_diff.patch",
+			"github_env": runtime_dir / "github_env.txt",
+		}
+
+		env = os.environ.copy()
+		env.update({
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"MOCK_GH_STATE_FILE": str(gh_state_file),
+			"PYTHONDONTWRITEBYTECODE": "1",
+			"GITHUB_REPOSITORY": "owner/repo",
+			"GITHUB_REPOSITORY_OWNER": "owner",
+			"GH_TOKEN": "test-token",
+			"PR_NUMBER": pr_number,
+			"CLAUDE_BRANCH_REVIEW_MODE": claude_branch_review_mode,
+			"HEAD_REF_OVERRIDE_INPUT": head_ref_override,
+			"HEAD_SHA_OVERRIDE_INPUT": head_sha_override,
+			"BASE_REF_OVERRIDE_INPUT": base_ref_override,
+			"PR_PAYLOAD_FILE": str(files["pr_payload"]),
+			"PR_META_FILE": str(files["pr_meta"]),
+			"PR_ISSUE_COMMENTS_FILE": str(files["pr_issue_comments"]),
+			"PR_REVIEWS_FILE": str(files["pr_reviews"]),
+			"PR_REVIEW_COMMENTS_FILE": str(files["pr_review_comments"]),
+			"LINKED_ISSUE_CONTEXT_FILE": str(files["linked_issue_context"]),
+			"PR_ALL_COMMENTS_CONTEXT_FILE": str(files["comments_context"]),
+			"PR_DIFF_FILE": str(files["pr_diff"]),
+			"GITHUB_ENV": str(files["github_env"]),
+			"REVIEW_BREAK_GLASS_ENABLED": review_break_glass_enabled,
+			})
+
+		result = subprocess.run(
+			["bash", str(METADATA_HELPER)],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+			timeout=60,
+		)
+
+		github_env: dict[str, str] = {}
+		for raw_line in files["github_env"].read_text(encoding="utf-8").splitlines():
+			if "=" not in raw_line:
+				continue
+			key, value = raw_line.split("=", 1)
+			github_env[key] = value
+
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			"github_env": github_env,
+			"mock_state": json.loads(gh_state_file.read_text(encoding="utf-8")),
+			"pr_payload": json.loads(files["pr_payload"].read_text(encoding="utf-8")),
+			"pr_meta": json.loads(files["pr_meta"].read_text(encoding="utf-8")),
+			"pr_issue_comments": json.loads(files["pr_issue_comments"].read_text(encoding="utf-8")),
+			"pr_reviews": json.loads(files["pr_reviews"].read_text(encoding="utf-8")),
+			"pr_review_comments": json.loads(files["pr_review_comments"].read_text(encoding="utf-8")),
+			"linked_issue_context": files["linked_issue_context"].read_text(encoding="utf-8"),
+			"comments_context": files["comments_context"].read_text(encoding="utf-8"),
+			"pr_diff": files["pr_diff"].read_text(encoding="utf-8"),
+		}
+
+
+def _install_check_runs_mock_gh(bin_dir: Path, state_file: Path) -> None:
+	gh_script = r'''#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+state_path = Path(os.environ["MOCK_GH_STATE_FILE"])
+if state_path.exists():
+	state = json.loads(state_path.read_text(encoding="utf-8"))
+else:
+	state = {}
+args = sys.argv[1:]
+
+
+def save() -> None:
+	state_path.write_text(json.dumps(state), encoding="utf-8")
+
+
+def api_path() -> str:
+	idx = 1
+	takes_value = {"--jq", "-f", "-F", "-H", "-X", "--input"}
+	no_value = {"--paginate", "--slurp", "-i"}
+	while idx < len(args):
+		arg = args[idx]
+		if arg in takes_value:
+			idx += 2
+			continue
+		if arg in no_value:
+			idx += 1
+			continue
+		if arg.startswith("-"):
+			idx += 1
+			continue
+		return arg
+	return ""
+
+
+def render_response(response: object) -> tuple[int, str, str]:
+	if not isinstance(response, dict):
+		return 1, "", "mock gh: malformed check-runs response\n"
+	exit_code = int(response.get("exit_code", 0) or 0)
+	stdout = response.get("stdout", "")
+	stderr = response.get("stderr", "")
+	if "json" in response:
+		stdout = json.dumps(response["json"])
+	return exit_code, str(stdout), str(stderr)
+
+
+state.setdefault("calls", []).append(args)
+
+if args[:1] == ["api"]:
+	path = api_path()
+	if path == "/rate_limit":
+		save()
+		sys.stdout.write("HTTP/1.1 200 OK\nx-ratelimit-reset: 0\n")
+		sys.exit(0)
+	if "/check-runs" in path:
+		responses = state.get("check_runs_responses", []) or []
+		idx = int(state.get("check_runs_index", 0) or 0)
+		if idx < len(responses):
+			response = responses[idx]
+			state["check_runs_index"] = idx + 1
+		else:
+			response = state.get("check_runs_default", {"json": [{"check_runs": []}]})
+		exit_code, stdout, stderr = render_response(response)
+		save()
+		if stdout:
+			sys.stdout.write(stdout)
+		if stderr:
+			sys.stderr.write(stderr)
+			if not stderr.endswith("\n"):
+				sys.stderr.write("\n")
+		sys.exit(exit_code)
+
+save()
+sys.stderr.write(f"mock gh: unsupported args: {args!r}\n")
+sys.exit(1)
+'''
+	mock_path = bin_dir / "gh"
+	mock_path.write_text(gh_script, encoding="utf-8")
+	mock_path.chmod(0o755)
+	state_file.write_text("{}", encoding="utf-8")
+
+
+def _run_collect_pr_check_runs_harness(
+	*,
+	pr_payload: object,
+	check_runs_responses: list[dict[str, object]] | None = None,
+	check_runs_autofix_enabled: str = "true",
+	self_run_id: str = "",
+	exclude_self_from_context: str = "false",
+	wait_timeout_secs: str = "300",
+	poll_interval_secs: str = "20",
+	log_tail_bytes: str = "0",
+	gh_retry_max_attempts: str = "1",
+) -> dict[str, object]:
+	with tempfile.TemporaryDirectory(prefix="collect-pr-check-runs-") as td:
+		tmp = Path(td)
+		bin_dir = tmp / "bin"
+		runtime_dir = tmp / "runtime"
+		bin_dir.mkdir()
+		runtime_dir.mkdir()
+
+		gh_state_file = runtime_dir / "gh_state.json"
+		_install_check_runs_mock_gh(bin_dir, gh_state_file)
+		gh_state_file.write_text(json.dumps({
+			"check_runs_responses": check_runs_responses or [],
+		}), encoding="utf-8")
+
+		pr_payload_file = runtime_dir / "pr_payload.json"
+		if isinstance(pr_payload, str):
+			pr_payload_file.write_text(pr_payload, encoding="utf-8")
+		else:
+			pr_payload_file.write_text(json.dumps(pr_payload), encoding="utf-8")
+		context_file = runtime_dir / "pr_check_runs_context.txt"
+
+		env = os.environ.copy()
+		env.update({
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"MOCK_GH_STATE_FILE": str(gh_state_file),
+			"PYTHONDONTWRITEBYTECODE": "1",
+			"GH_TOKEN": "test-token",
+			"GITHUB_REPOSITORY": "owner/repo",
+			"PR_PAYLOAD_FILE": str(pr_payload_file),
+			"PR_CHECK_RUNS_CONTEXT_FILE": str(context_file),
+			"CHECK_RUNS_AUTOFIX_ENABLED": check_runs_autofix_enabled,
+			"CHECK_RUNS_WAIT_TIMEOUT_SECS": wait_timeout_secs,
+			"CHECK_RUNS_POLL_INTERVAL_SECS": poll_interval_secs,
+			"CHECK_RUNS_LOG_TAIL_BYTES": log_tail_bytes,
+			"GH_RETRY_MAX_ATTEMPTS": gh_retry_max_attempts,
+			"SELF_RUN_ID": self_run_id,
+			"CHECK_RUNS_EXCLUDE_SELF_FROM_CONTEXT": exclude_self_from_context,
+		})
+
+		result = subprocess.run(
+			["python3", str(CHECK_RUNS_HELPER)],
+			cwd=str(REPO_ROOT),
+			env=env,
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+
+		return {
+			"returncode": result.returncode,
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			"context_text": context_file.read_text(encoding="utf-8"),
+			"mock_state": json.loads(gh_state_file.read_text(encoding="utf-8")),
+		}
+
+
+def _step_block(step_name: str) -> str:
+	lines = _workflow_text().splitlines()
+	needle = f"- name: {step_name}"
+	for idx, line in enumerate(lines):
+		if line.strip() != needle:
+			continue
+		step_indent = len(line) - len(line.lstrip(" "))
+		end = len(lines)
+		for j in range(idx + 1, len(lines)):
+			candidate = lines[j]
+			if candidate.strip().startswith("- name:"):
+				indent = len(candidate) - len(candidate.lstrip(" "))
+				if indent == step_indent:
+					end = j
+					break
+		return "\n".join(lines[idx:end])
+	raise AssertionError(f"Step not found in workflow: {step_name}")
+
+
+def _job_block(job_name: str) -> str:
+	lines = _workflow_text().splitlines()
+	needle = f"{job_name}:"
+	for idx, line in enumerate(lines):
+		if line.strip() != needle:
+			continue
+		if len(line) - len(line.lstrip(" ")) != 2:
+			continue
+		end = len(lines)
+		for j in range(idx + 1, len(lines)):
+			candidate = lines[j]
+			if candidate.strip().endswith(":") and len(candidate) - len(candidate.lstrip(" ")) == 2:
+				end = j
+				break
+		return "\n".join(lines[idx:end])
+	raise AssertionError(f"Job not found in workflow: {job_name}")
+
+
+def _step_run_script(step_name: str) -> str:
+	block_lines = _step_block(step_name).splitlines()
+	run_idx = -1
+	run_indent = -1
+	for idx, line in enumerate(block_lines):
+		if line.strip() == "run: |":
+			run_idx = idx
+			run_indent = len(line) - len(line.lstrip(" "))
+			break
+	if run_idx < 0:
+		raise AssertionError(f"run block not found in workflow step: {step_name}")
+
+	script_lines: list[str] = []
+	for line in block_lines[run_idx + 1:]:
+		if line.strip():
+			indent = len(line) - len(line.lstrip(" "))
+			if indent <= run_indent:
+				break
+		script_lines.append(line)
+
+	script = textwrap.dedent("\n".join(script_lines)).strip("\n")
+	return script + ("\n" if script else "")
+
+
+def _extract_review_autofix_timeout_minutes(workflow_text: str) -> tuple[int, int]:
+	workflow = yaml.safe_load(workflow_text) or {}
+	jobs = workflow.get("jobs") or {}
+	codex_agent_job = jobs.get("codex-agent") or {}
+	job_timeout_minutes = codex_agent_job.get("timeout-minutes")
+	resolver_timeout_minutes = None
+	for step in codex_agent_job.get("steps") or []:
+		if isinstance(step, dict) and step.get("name") == "Run Codex resolver, validate, stage, commit":
+			resolver_timeout_minutes = step.get("timeout-minutes")
+			break
+	assert isinstance(job_timeout_minutes, int), "codex-agent timeout-minutes not found"
+	assert isinstance(resolver_timeout_minutes, int), "resolver step timeout-minutes not found"
+	return job_timeout_minutes, resolver_timeout_minutes
+
+
+def _review_autofix_timeout_minutes() -> tuple[int, int]:
+	return _extract_review_autofix_timeout_minutes(_workflow_text())
+
+
+def _parse_env_file(path: Path) -> dict[str, str]:
+	parsed: dict[str, str] = {}
+	for raw_line in path.read_text(encoding="utf-8").splitlines():
+		if "=" not in raw_line:
+			continue
+		key, value = raw_line.split("=", 1)
+		parsed[key] = value
+	return parsed
+
+
+def _read_dir_text_files(path: Path, *, exclude_names: set[str] | None = None) -> dict[str, str]:
+	exclude = exclude_names or set()
+	if not path.exists():
+		return {}
+	return {
+		child.name: child.read_text(encoding="utf-8")
+		for child in sorted(path.iterdir())
+		if child.is_file() and child.name not in exclude
+	}
+
+
+def _run_partial_finalize_publish_safety_gate_step(
+	*,
+	partial_finalize_requested: str = "true",
+	job_start_epoch: str = "",
+	codex_run_budget_start_epoch: str = "",
+) -> dict[str, object]:
+	gate_script = _step_run_script("Decide partial-finalize validation/push safety")
+	with tempfile.TemporaryDirectory(prefix="review-partial-finalize-gate-") as td:
+		tmp = Path(td)
+		github_env_file = tmp / "github_env.txt"
+		github_env_file.write_text("", encoding="utf-8")
+		result = subprocess.run(
+			["bash", "-c", f"set -euo pipefail\n{gate_script}"],
+			cwd=str(REPO_ROOT),
+			env=_git_clean_env({
+				"GITHUB_ENV": str(github_env_file),
+				"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": partial_finalize_requested,
+				"JOB_START_EPOCH": job_start_epoch,
+				"CODEX_RUN_BUDGET_START_EPOCH": codex_run_budget_start_epoch,
+				"PYTHONDONTWRITEBYTECODE": "1",
+			}),
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			"github_env": _parse_env_file(github_env_file),
+		}
+
+
+def _git_clean_env(overrides: dict[str, str] | None = None) -> dict[str, str]:
+	env = {
+		key: value
+		for key, value in os.environ.items()
+		if not key.startswith("GIT_") and key not in {"BASH_ENV", "ENV"}
+	}
+	if overrides:
+		env.update(overrides)
+	return env
+
+
+def _reviewer_harness_budget_env() -> dict[str, str]:
+	run_budget_start_epoch = int(time.time())
+	return {
+		"JOB_START_EPOCH": str(run_budget_start_epoch),
+		"CODEX_RUN_BUDGET_START_EPOCH": str(run_budget_start_epoch),
+		"CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH": str(run_budget_start_epoch + 600),
+		"CODEX_RUN_BUDGET_TOTAL_SECS": "600",
+		"REVIEW_SOFT_DEADLINE_MINUTES": "10",
+	}
+
+
+def _init_git_repo(repo: Path) -> str:
+	env = _git_clean_env()
+	subprocess.run(["git", "init"], cwd=str(repo), env=env, check=True, capture_output=True, text=True)
+	subprocess.run(["git", "config", "user.name", "Test User"], cwd=str(repo), env=env, check=True, capture_output=True, text=True)
+	subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=str(repo), env=env, check=True, capture_output=True, text=True)
+	(repo / "README.md").write_text("seed\n", encoding="utf-8")
+	subprocess.run(["git", "add", "README.md"], cwd=str(repo), env=env, check=True, capture_output=True, text=True)
+	subprocess.run(["git", "commit", "-m", "seed"], cwd=str(repo), env=env, check=True, capture_output=True, text=True)
+	return subprocess.run(
+		["git", "rev-parse", "HEAD"],
+		cwd=str(repo),
+		env=env,
+		check=True,
+		capture_output=True,
+		text=True,
+	).stdout.strip()
+
+
+def _run_restore_same_head_resume_step(
+	repo: Path,
+	*,
+	pr_number: str = "123",
+	review_max_resume_rounds: str = "3",
+	runtime_dir: Path | None = None,
+	reviews_dir: Path | None = None,
+) -> dict[str, object]:
+	restore_script = _step_run_script("Restore same-head partial resume state")
+	effective_runtime_dir = runtime_dir or (repo / "runtime")
+	effective_reviews_dir = reviews_dir or (repo / "reviews")
+	effective_runtime_dir.mkdir(parents=True, exist_ok=True)
+	effective_reviews_dir.mkdir(parents=True, exist_ok=True)
+	github_env_file = effective_runtime_dir / "github_env_restore.txt"
+	github_env_file.write_text("", encoding="utf-8")
+	result = subprocess.run(
+		["bash", "-c", f"set -euo pipefail\n{restore_script}"],
+		cwd=str(repo),
+		env=_git_clean_env({
+			"GITHUB_ENV": str(github_env_file),
+			"PR_NUMBER": pr_number,
+			"RETARGETED_BASE_REF": "main",
+			"REVIEW_MAX_RESUME_ROUNDS": review_max_resume_rounds,
+			"PREVIOUS_REVIEWS_DIR": str(effective_reviews_dir),
+			"RUNTIME_DIR": str(effective_runtime_dir),
+			"PYTHONDONTWRITEBYTECODE": "1",
+		}),
+		check=True,
+		capture_output=True,
+		text=True,
+	)
+	return {
+		"stdout": result.stdout,
+		"stderr": result.stderr,
+		"github_env": _parse_env_file(github_env_file),
+		"restored_runtime_files": _read_dir_text_files(effective_runtime_dir, exclude_names={github_env_file.name}),
+		"restored_review_files": _read_dir_text_files(effective_reviews_dir),
+	}
+
+
+def _install_partial_finalize_mock_gh(bin_dir: Path, state_file: Path) -> None:
+	gh_script = r'''#!/usr/bin/env python3
+import json
+import os
+import sys
+from pathlib import Path
+
+state_path = Path(os.environ["MOCK_GH_STATE_FILE"])
+if state_path.exists():
+	state = json.loads(state_path.read_text(encoding="utf-8"))
+else:
+	state = {}
+args = sys.argv[1:]
+
+
+def save() -> None:
+	state_path.write_text(json.dumps(state), encoding="utf-8")
+
+
+def api_path() -> str:
+	idx = 1
+	takes_value = {"--jq", "-f", "-F", "-H", "-X", "--input"}
+	no_value = {"--paginate", "--slurp", "-i"}
+	while idx < len(args):
+		arg = args[idx]
+		if arg in takes_value:
+			idx += 2
+			continue
+		if arg in no_value:
+			idx += 1
+			continue
+		if arg.startswith("-"):
+			idx += 1
+			continue
+		return arg
+	return ""
+
+
+def first_form_value(prefix: str) -> str:
+	for idx, arg in enumerate(args):
+		if arg == "-f" and idx + 1 < len(args):
+			value = args[idx + 1]
+			if value.startswith(prefix):
+				return value.split("=", 1)[1]
+	return ""
+
+
+state.setdefault("calls", []).append(args)
+
+if args[:1] == ["api"]:
+	path = api_path()
+	if path == "/rate_limit":
+		save()
+		sys.stdout.write("HTTP/1.1 200 OK\nx-ratelimit-reset: 0\n")
+		sys.exit(0)
+	if "/issues/" in path and path.endswith("/comments"):
+		state.setdefault("issue_comments", []).append({
+			"path": path,
+			"body": first_form_value("body="),
+		})
+		save()
+		sys.stdout.write("{}\n")
+		sys.exit(0)
+
+save()
+sys.stderr.write(f"mock gh: unsupported args: {args!r}\n")
+sys.exit(1)
+'''
+	mock_path = bin_dir / "gh"
+	mock_path.write_text(gh_script, encoding="utf-8")
+	mock_path.chmod(0o755)
+	state_file.write_text("{}", encoding="utf-8")
+
+
+def _dispatch_fallback_chain_slice(step_name: str) -> str:
+	# The default-branch dispatch chain (issue #4898) sits between two marker
+	# comments in both retrigger step bodies.
+	block = _step_block(step_name)
+	lines = block.splitlines()
+	start_marker = "# --- default-branch review dispatch (issue #4898) ---"
+	end_marker = "# --- end default-branch review dispatch ---"
+	starts = [idx for idx, line in enumerate(lines) if line.strip() == start_marker]
+	ends = [idx for idx, line in enumerate(lines) if line.strip() == end_marker]
+	assert len(starts) == 1 and len(ends) == 1 and starts[0] < ends[0], (
+		f"missing redispatch dispatch chain in step: {step_name}"
+	)
+	return textwrap.dedent("\n".join(lines[starts[0] : ends[0] + 1])).strip()
+
+
+def _reviewer_iteration_scope_helper_block() -> str:
+	text = _reviewers_text()
+	start = text.index("# ── Reviewer iteration-scoping helpers")
+	end = text.index("# ── End reviewer iteration-scoping helpers", start)
+	return text[start:end]
+
+
+def _reviewer_filter_helper_block() -> str:
+	text = _reviewers_text()
+	start = text.index("# ── Reviewer uninteresting-file filter helpers")
+	end = text.index("# ── End reviewer uninteresting-file filter helpers", start)
+	return text[start:end]
+
+
+def _reviewer_risk_tier_helper_block() -> str:
+	text = _reviewers_text()
+	start = text.index("# ── Reviewer risk-tier helpers")
+	end = text.index("# ── End reviewer risk-tier helpers", start)
+	return text[start:end]
+
+
+def _reviewer_failback_helper_block() -> str:
+	text = _reviewers_text()
+	start = text.index("# ── Reviewer failback / health helpers")
+	end = text.index("# ── End reviewer failback / health helpers", start)
+	return text[start:end]
+
+
+def _reviewer_partial_finalize_budget_helper_block() -> str:
+	text = _reviewers_text()
+	start = text.index('REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE="${RUNTIME_DIR:-.}/reviewers_partial_finalize_request.txt"')
+	end = text.index("resolve_ledger_substate_helper() {", start)
+	return text[start:end]
+
+
+def _reviewer_run_reviewer_block() -> str:
+	text = _reviewers_text()
+	start = text.index("run_reviewer() {")
+	end = text.index("# ── Two-pass reviewer architecture", start)
+	return text[start:end]
+
+
+def _reviewer_run_reviewer_pass_block() -> str:
+	text = _reviewers_text()
+	start = text.index("run_reviewer_pass() {")
+	end = text.index("# Wrap a consolidated pass-1 ledger", start)
+	return text[start:end]
+
+
+def _reviewer_zero_success_guard_block() -> str:
+	text = _reviewers_text()
+	start = text.index('if [ "${reviewers_successful}" -eq 0 ]; then')
+	return text[start:]
+
+
+def _workflow_reviewer_models() -> list[str]:
+	lines = _workflow_text().splitlines()
+	needle = "  REVIEWER_MODELS: |"
+	for idx, line in enumerate(lines):
+		if line != needle:
+			continue
+		models: list[str] = []
+		for candidate in lines[idx + 1:]:
+			if not candidate.startswith("    "):
+				break
+			stripped = candidate.strip()
+			if stripped:
+				models.append(stripped)
+		if models:
+			return models
+		break
+	raise AssertionError("REVIEWER_MODELS block not found in workflow")
+
+
+def _reviewer_failback_chains() -> dict[str, list[str]]:
+	payload = json.loads(REVIEWER_FAILBACK_CHAINS.read_text(encoding="utf-8"))
+	if not isinstance(payload, dict):
+		raise AssertionError("reviewer failback chains must be a JSON object")
+
+	chains: dict[str, list[str]] = {}
+	for model, entry in payload.items():
+		if isinstance(entry, str):
+			entry = [entry]
+		if not isinstance(model, str) or not isinstance(entry, list):
+			raise AssertionError("reviewer failback chains entries must be string -> list[str]")
+		candidates: list[str] = []
+		for candidate in entry:
+			if not isinstance(candidate, str) or not candidate.strip():
+				raise AssertionError(
+					f"reviewer failback chains candidates must be non-empty strings, got {candidate!r}"
+				)
+			candidates.append(candidate.strip())
+		chains[model] = candidates
+	return chains
+
+
+def _catalog_declared_model_slugs() -> set[str]:
+	payload = json.loads(MODEL_CATALOG.read_text(encoding="utf-8"))
+	models = payload.get("models") if isinstance(payload, dict) else payload
+	if not isinstance(models, list):
+		raise AssertionError("model catalog must expose a top-level models list")
+
+	declared: set[str] = set()
+	for entry in models:
+		if not isinstance(entry, dict):
+			continue
+		slug = entry.get("slug")
+		if isinstance(slug, str) and slug.strip():
+			declared.add(slug.strip())
+	return declared
+
+
+def _diff_changed_paths(diff_text: str) -> list[str]:
+	paths: list[str] = []
+	seen: set[str] = set()
+	for raw_line in diff_text.splitlines():
+		prefix = "diff --git a/"
+		if not raw_line.startswith(prefix):
+			continue
+		path = raw_line[len(prefix):].split(" b/", 1)[0].strip()
+		if not path or path in seen:
+			continue
+		seen.add(path)
+		paths.append(path)
+	return paths
+
+
+def _gate_agents_md_materiality_classifier_script() -> str:
+	gate_block = _step_block("Evaluate review gate").splitlines()
+	start_idx = -1
+	for idx, line in enumerate(gate_block):
+		if "gate_materiality_json" in line and "python3 - <<'PY'" in line:
+			start_idx = idx + 1
+			break
+	if start_idx < 0:
+		raise AssertionError("AGENTS.md materiality gate classifier heredoc not found")
+	body: list[str] = []
+	for line in gate_block[start_idx:]:
+		if line.strip() == "PY":
+			return textwrap.dedent("\n".join(body))
+		body.append(line)
+	raise AssertionError("AGENTS.md materiality gate classifier heredoc missing terminator")
+
+
+def _run_gate_agents_md_materiality_classifier(paths: list[str]) -> dict[str, object]:
+	result = subprocess.run(
+		["python3", "-c", _gate_agents_md_materiality_classifier_script()],
+		cwd=str(REPO_ROOT),
+		input=json.dumps([{"filename": path} for path in paths]),
+		check=True,
+		capture_output=True,
+		text=True,
+	)
+	return json.loads(result.stdout)
+
+
+def _phase_c_workspace_files() -> dict[str, str]:
+	return {
+		"package-lock.json": '{\n  "lockfileVersion": 3\n}\n',
+		"src/generated/client.ts": "@generated\nexport const endpoint = '/v2';\n",
+		"public/app.min.js": "console.log('minified');\n",
+		"db/migrations/20260529000000_generated.sql": "-- GENERATED FILE\nCREATE TABLE widgets (id INT);\n",
+		"scripts/migrate/seed.sh": "# GENERATED BY seed-tool\necho seed\n",
+		"db/contracts/widgets.yml": "# GENERATED BY contract-tool\ncollection: widgets\n",
+	}
+
+
+def _phase_c_changed_files_text() -> str:
+	return "\n".join(_phase_c_workspace_files().keys()) + "\n"
+
+
+def _phase_c_diff_stat_text() -> str:
+	return "\n".join([
+		" package-lock.json                          | 2 +-",
+		" src/generated/client.ts                   | 2 +-",
+		" public/app.min.js                         | 2 +-",
+		" db/migrations/20260529000000_generated.sql | 2 +-",
+		" scripts/migrate/seed.sh                   | 2 +-",
+		" db/contracts/widgets.yml                  | 2 +-",
+		" 6 files changed, 6 insertions(+), 6 deletions(-)",
+	]) + "\n"
+
+
+def _run_uninteresting_filter_script(*, diff_text: str, workspace_files: dict[str, str]) -> dict[str, str]:
+	with tempfile.TemporaryDirectory(prefix="reviewer-filter-script-") as td:
+		tmp = Path(td)
+		workspace = tmp / "workspace"
+		workspace.mkdir()
+		diff_file = tmp / "input.patch"
+		output_diff_file = tmp / "output.patch"
+		kept_paths_file = tmp / "kept_paths.txt"
+		skipped_paths_file = tmp / "skipped_paths.txt"
+
+		for rel_path, text in workspace_files.items():
+			target = workspace / rel_path
+			target.parent.mkdir(parents=True, exist_ok=True)
+			target.write_text(text, encoding="utf-8")
+
+		diff_file.write_text(diff_text, encoding="utf-8")
+		result = subprocess.run(
+			[
+				"bash",
+				str(REPO_ROOT / "scripts" / "review_filter_uninteresting_files.sh"),
+				"--diff-file",
+				str(diff_file),
+				"--output-diff",
+				str(output_diff_file),
+				"--kept-paths-file",
+				str(kept_paths_file),
+				"--skipped-paths-file",
+				str(skipped_paths_file),
+				"--repo-root",
+				str(workspace),
+			],
+			cwd=str(REPO_ROOT),
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			"output_diff": output_diff_file.read_text(encoding="utf-8"),
+			"kept_paths": kept_paths_file.read_text(encoding="utf-8"),
+			"skipped_paths": skipped_paths_file.read_text(encoding="utf-8"),
+		}
+
+
+def _run_reviewer_filter_harness(*, filter_enabled: str, helper_mode: str) -> dict[str, str]:
+	helper_block = _reviewer_filter_helper_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-filter-") as td:
+		tmp = Path(td)
+		workspace = tmp / "workspace"
+		workspace.mkdir()
+		runtime = tmp / "runtime"
+		runtime.mkdir()
+
+		for rel_path, text in _phase_c_workspace_files().items():
+			target = workspace / rel_path
+			target.parent.mkdir(parents=True, exist_ok=True)
+			target.write_text(text, encoding="utf-8")
+
+		files = {
+			"pr_diff": runtime / "pr_diff.patch",
+			"original_pr_diff": runtime / "original_pr_diff.patch",
+			"last_run_diff": runtime / "last_run_diff.patch",
+			"pr_changed": runtime / "pr_changed_files.txt",
+			"last_run_changed": runtime / "last_run_changed_files.txt",
+			"last_run_diff_stat": runtime / "last_run_diff_stat.txt",
+			"last_commit_stat": runtime / "last_commit_stat.txt",
+			"symbol_diff": runtime / "symbol_diff_summary.txt",
+			"state": runtime / "filter_state.txt",
+		}
+		fixture_text = PHASE_C_FILTER_FIXTURE.read_text(encoding="utf-8")
+		files["pr_diff"].write_text(fixture_text, encoding="utf-8")
+		files["original_pr_diff"].write_text(fixture_text, encoding="utf-8")
+		files["last_run_diff"].write_text(fixture_text, encoding="utf-8")
+		changed_files = _phase_c_changed_files_text()
+		files["pr_changed"].write_text(changed_files, encoding="utf-8")
+		files["last_run_changed"].write_text(changed_files, encoding="utf-8")
+		diff_stat = _phase_c_diff_stat_text()
+		files["last_run_diff_stat"].write_text(diff_stat, encoding="utf-8")
+		files["last_commit_stat"].write_text(diff_stat, encoding="utf-8")
+		files["symbol_diff"].write_text(
+			"RAW SYMBOL SUMMARY\npackage-lock.json\nsrc/generated/client.ts\n",
+			encoding="utf-8",
+		)
+
+		if helper_mode == "repo":
+			support_scripts_dir = REPO_ROOT / "scripts"
+		elif helper_mode == "missing":
+			support_scripts_dir = tmp / "missing_support_scripts"
+			support_scripts_dir.mkdir()
+		elif helper_mode == "failing":
+			support_scripts_dir = tmp / "failing_support_scripts"
+			support_scripts_dir.mkdir()
+			(support_scripts_dir / "review_filter_uninteresting_files.sh").write_text(
+				"#!/usr/bin/env bash\nset -euo pipefail\nexit 42\n",
+				encoding="utf-8",
+			)
+			(support_scripts_dir / "review_filter_uninteresting_files.sh").chmod(0o755)
+		else:
+			raise AssertionError(f"unknown helper_mode: {helper_mode}")
+
+		env = os.environ.copy()
+		env.update({
+			"SUPPORT_ROOT_DIR": str(REPO_ROOT),
+			"SUPPORT_SCRIPTS_DIR": str(support_scripts_dir),
+			"RUNTIME_DIR": str(runtime),
+			"GITHUB_WORKSPACE": str(workspace),
+			"REVIEWER_FILTER_UNINTERESTING_ENABLED": filter_enabled,
+			"REVIEWER_FILTER_EXTRA_GLOBS": "",
+			"REVIEWER_FILTER_EXEMPT_GLOBS": "db/contracts/**,**/migrations/**,**/migrate/**",
+			"PR_DIFF_FILE": str(files["pr_diff"]),
+			"ORIGINAL_PR_DIFF_FILE": str(files["original_pr_diff"]),
+			"LAST_RUN_DIFF_FILE": str(files["last_run_diff"]),
+			"LAST_RUN_CHANGED_FILES_FILE": str(files["last_run_changed"]),
+			"PR_CHANGED_FILES_FILE": str(files["pr_changed"]),
+			"LAST_RUN_DIFF_STAT_FILE": str(files["last_run_diff_stat"]),
+			"LAST_COMMIT_STAT_FILE": str(files["last_commit_stat"]),
+			"SYMBOL_DIFF_SUMMARY_FILE": str(files["symbol_diff"]),
+			"HARNESS_STATE_FILE": str(files["state"]),
+		})
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{helper_block}\n"
+				"prepare_reviewer_filtered_artifacts\n"
+				"{\n"
+				"\tprintf 'REVIEWER_FILTER_ACTIVE=%s\\n' \"${REVIEWER_FILTER_ACTIVE}\"\n"
+				"\tprintf 'PR_DIFF_FILE=%s\\n' \"${PR_DIFF_FILE}\"\n"
+				"\tprintf 'ORIGINAL_PR_DIFF_FILE=%s\\n' \"${ORIGINAL_PR_DIFF_FILE}\"\n"
+				"\tprintf 'LAST_RUN_DIFF_FILE=%s\\n' \"${LAST_RUN_DIFF_FILE}\"\n"
+				"\tprintf 'PR_CHANGED_FILES_FILE=%s\\n' \"${PR_CHANGED_FILES_FILE}\"\n"
+				"\tprintf 'LAST_RUN_CHANGED_FILES_FILE=%s\\n' \"${LAST_RUN_CHANGED_FILES_FILE}\"\n"
+				"\tprintf 'LAST_RUN_DIFF_STAT_FILE=%s\\n' \"${LAST_RUN_DIFF_STAT_FILE}\"\n"
+				"\tprintf 'LAST_COMMIT_STAT_FILE=%s\\n' \"${LAST_COMMIT_STAT_FILE}\"\n"
+				"\tprintf 'SYMBOL_DIFF_SUMMARY_FILE=%s\\n' \"${SYMBOL_DIFF_SUMMARY_FILE}\"\n"
+				"} > \"${HARNESS_STATE_FILE}\"\n",
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+		state: dict[str, str] = {}
+		for raw_line in files["state"].read_text(encoding="utf-8").splitlines():
+			if "=" not in raw_line:
+				continue
+			key, value = raw_line.split("=", 1)
+			state[key] = value
+		artifact_contents = {
+			f"{key}_CONTENT": Path(path).read_text(encoding="utf-8")
+			for key, path in state.items()
+			if key.endswith("_FILE")
+		}
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			**{key: value for key, value in state.items()},
+			**artifact_contents,
+		}
+
+
+def _run_reviewer_stat_filter_harness(*, diff_stat_text: str, skipped_rows_text: str) -> str:
+	helper_block = _reviewer_filter_helper_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-filter-stat-") as td:
+		tmp = Path(td)
+		input_file = tmp / "diff_stat.txt"
+		output_file = tmp / "filtered_diff_stat.txt"
+		skipped_file = tmp / "skipped_paths.txt"
+		input_file.write_text(diff_stat_text, encoding="utf-8")
+		skipped_file.write_text(skipped_rows_text, encoding="utf-8")
+
+		env = os.environ.copy()
+		env.update({
+			"SUPPORT_ROOT_DIR": str(REPO_ROOT),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"RUNTIME_DIR": str(tmp),
+			"PR_DIFF_FILE": str(input_file),
+			"ORIGINAL_PR_DIFF_FILE": str(input_file),
+			"LAST_RUN_DIFF_FILE": str(input_file),
+			"LAST_RUN_CHANGED_FILES_FILE": str(input_file),
+			"PR_CHANGED_FILES_FILE": str(input_file),
+			"LAST_RUN_DIFF_STAT_FILE": str(input_file),
+			"LAST_COMMIT_STAT_FILE": str(input_file),
+			"SYMBOL_DIFF_SUMMARY_FILE": str(input_file),
+			"INPUT_FILE": str(input_file),
+			"OUTPUT_FILE": str(output_file),
+			"SKIPPED_FILE": str(skipped_file),
+		})
+		subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{helper_block}\n"
+				'filter_reviewer_stat_file_against_skips "${INPUT_FILE}" "${OUTPUT_FILE}" "${SKIPPED_FILE}"\n',
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+		return output_file.read_text(encoding="utf-8")
+
+
+def _run_reviewer_risk_tier_harness(
+	*,
+	diff_text: str,
+	current_changed_paths: list[str] | None = None,
+	raw_changed_paths: list[str] | None = None,
+	filter_active: str = "false",
+	extra_env: dict[str, str] | None = None,
+) -> dict[str, str | list[str]]:
+	helper_block = _reviewer_risk_tier_helper_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-risk-tier-") as td:
+		tmp = Path(td)
+		files = {
+			"pr_diff": tmp / "pr_diff.patch",
+			"pr_changed": tmp / "pr_changed_files.txt",
+			"raw_pr_changed": tmp / "raw_pr_changed_files.txt",
+			"state": tmp / "risk_tier_state.txt",
+			"risk_tier": tmp / "reviewer_risk_tier.txt",
+			"active_models": tmp / "reviewer_active_models.txt",
+		}
+		files["pr_diff"].write_text(diff_text, encoding="utf-8")
+		visible_paths = current_changed_paths if current_changed_paths is not None else _diff_changed_paths(diff_text)
+		files["pr_changed"].write_text("\n".join(visible_paths) + ("\n" if visible_paths else ""), encoding="utf-8")
+		raw_paths = raw_changed_paths if raw_changed_paths is not None else visible_paths
+		files["raw_pr_changed"].write_text("\n".join(raw_paths) + ("\n" if raw_paths else ""), encoding="utf-8")
+
+		env = os.environ.copy()
+		env.update({
+			"SUPPORT_ROOT_DIR": str(REPO_ROOT),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"RUNTIME_DIR": str(tmp),
+			"PR_NUMBER": "123",
+			"HAS_PR_DIFF": "true",
+			"REVIEWER_FILTER_ACTIVE": filter_active,
+			"REVIEWER_RISK_TIER_ENABLED": "true",
+			"REVIEWER_MODELS": "\n".join(_workflow_reviewer_models()) + "\n",
+			"REVIEWER_TIER_TRIVIAL_MODELS": "",
+			"REVIEWER_TIER_LITE_MODELS": "",
+			"PR_DIFF_FILE": str(files["pr_diff"]),
+			"PR_CHANGED_FILES_FILE": str(files["pr_changed"]),
+			"RAW_REVIEWER_PR_CHANGED_FILES_FILE": str(files["raw_pr_changed"]),
+			"STATE_FILE": str(files["state"]),
+		})
+		if extra_env:
+			env.update(extra_env)
+
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{helper_block}\n"
+				"classify_reviewer_risk_tier\n"
+				"{\n"
+				"\tprintf 'REVIEWER_RISK_TIER=%s\\n' \"${REVIEWER_RISK_TIER}\"\n"
+				"\tprintf 'REVIEWER_RISK_TIER_FORCED_FULL=%s\\n' \"${REVIEWER_RISK_TIER_FORCED_FULL}\"\n"
+				"\tprintf 'REVIEWER_RISK_TIER_LOC=%s\\n' \"${REVIEWER_RISK_TIER_LOC}\"\n"
+				"\tprintf 'REVIEWER_RISK_TIER_FILES=%s\\n' \"${REVIEWER_RISK_TIER_FILES}\"\n"
+				"\tprintf 'REVIEWER_ACTIVE_MODELS_SOURCE=%s\\n' \"${REVIEWER_ACTIVE_MODELS_SOURCE}\"\n"
+				"} > \"${STATE_FILE}\"\n",
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+		state: dict[str, str] = {}
+		for raw_line in files["state"].read_text(encoding="utf-8").splitlines():
+			if "=" not in raw_line:
+				continue
+			key, value = raw_line.split("=", 1)
+			state[key] = value
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			**state,
+			"risk_tier_file": files["risk_tier"].read_text(encoding="utf-8").strip(),
+			"active_models": files["active_models"].read_text(encoding="utf-8").splitlines(),
+		}
+
+
+def _run_review_tier_harness(
+	*,
+	diff_text: str,
+	current_changed_paths: list[str] | None = None,
+	raw_changed_paths: list[str] | None = None,
+	extra_env: dict[str, str] | None = None,
+	unset_env: tuple[str, ...] = (),
+	pre_classify: str = "",
+) -> dict[str, str | list[str]]:
+	helper_block = _reviewer_risk_tier_helper_block()
+	with tempfile.TemporaryDirectory(prefix="review-tier-") as td:
+		tmp = Path(td)
+		files = {
+			"pr_diff": tmp / "pr_diff.patch",
+			"pr_changed": tmp / "pr_changed_files.txt",
+			"raw_pr_changed": tmp / "raw_pr_changed_files.txt",
+			"state": tmp / "review_tier_state.txt",
+			"review_tier": tmp / "review_tier.txt",
+			"active_models": tmp / "reviewer_active_models.txt",
+			"github_env": tmp / "github_env.txt",
+		}
+		files["pr_diff"].write_text(diff_text, encoding="utf-8")
+		visible_paths = current_changed_paths if current_changed_paths is not None else _diff_changed_paths(diff_text)
+		files["pr_changed"].write_text("\n".join(visible_paths) + ("\n" if visible_paths else ""), encoding="utf-8")
+		raw_paths = raw_changed_paths if raw_changed_paths is not None else visible_paths
+		files["raw_pr_changed"].write_text("\n".join(raw_paths) + ("\n" if raw_paths else ""), encoding="utf-8")
+		files["github_env"].write_text("", encoding="utf-8")
+
+		env = os.environ.copy()
+		env.update({
+			"SUPPORT_ROOT_DIR": str(REPO_ROOT),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"RUNTIME_DIR": str(tmp),
+			"PR_NUMBER": "123",
+			"HAS_PR_DIFF": "true",
+			"REVIEW_TIER_RESOLVER_ENABLED": "true",
+			"REVIEW_TIER_LITE_MAX_LOC": "50",
+			"REVIEW_TIER_LITE_REVIEWER_SLUG": "google/gemini-3.1-flash-lite",
+			"REVIEW_TIER_STANDARD_MAX_LOC": "200",
+			"REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "minimax/minimax-m3,z-ai/glm-5.3-flash,google/gemini-3.1-flash-lite,openai/gpt-6-luna",
+			"REVIEWER_MODELS": "\n".join(_workflow_reviewer_models()) + "\n",
+			"PR_DIFF_FILE": str(files["pr_diff"]),
+			"ORIGINAL_PR_DIFF_FILE": str(files["pr_diff"]),
+			"RAW_REVIEWER_PR_DIFF_FILE": str(files["pr_diff"]),
+			"RAW_REVIEWER_ORIGINAL_PR_DIFF_FILE": str(files["pr_diff"]),
+			"PR_CHANGED_FILES_FILE": str(files["pr_changed"]),
+			"RAW_REVIEWER_PR_CHANGED_FILES_FILE": str(files["raw_pr_changed"]),
+			"GITHUB_ENV": str(files["github_env"]),
+			"STATE_FILE": str(files["state"]),
+		})
+		if extra_env:
+			env.update(extra_env)
+		for name in unset_env:
+			env.pop(name, None)
+
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{helper_block}\n"
+				f"{pre_classify}\n"
+				"classify_review_tier\n"
+				"{\n"
+				"\tprintf 'REVIEW_TIER=%s\\n' \"${REVIEW_TIER}\"\n"
+				"\tprintf 'REVIEW_TIER_REASON=%s\\n' \"${REVIEW_TIER_REASON}\"\n"
+				"\tprintf 'REVIEW_TIER_FORCED_FULL=%s\\n' \"${REVIEW_TIER_FORCED_FULL}\"\n"
+				"\tprintf 'REVIEW_TIER_LOC=%s\\n' \"${REVIEW_TIER_LOC}\"\n"
+				"\tprintf 'REVIEW_TIER_SCOPE=%s\\n' \"${REVIEW_TIER_SCOPE}\"\n"
+				"\tprintf 'REVIEW_TIER_ACTIVE_MODELS_SOURCE=%s\\n' \"${REVIEW_TIER_ACTIVE_MODELS_SOURCE}\"\n"
+				"} > \"${STATE_FILE}\"\n",
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+		state: dict[str, str] = {}
+		for raw_line in files["state"].read_text(encoding="utf-8").splitlines():
+			if "=" not in raw_line:
+				continue
+			key, value = raw_line.split("=", 1)
+			state[key] = value
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			**state,
+			"review_tier_file": files["review_tier"].read_text(encoding="utf-8").strip(),
+			"active_models": files["active_models"].read_text(encoding="utf-8").splitlines(),
+			"github_env": files["github_env"].read_text(encoding="utf-8"),
+		}
+
+
+def _run_agents_md_materiality_harness(
+	*,
+	diff_text: str,
+	changed_paths: list[str] | None = None,
+	workspace_files: dict[str, str] | None = None,
+	enabled: str = "true",
+) -> dict[str, object]:
+	with tempfile.TemporaryDirectory(prefix="agents-md-materiality-") as td:
+		tmp = Path(td)
+		workspace = tmp / "workspace"
+		workspace.mkdir()
+		files = {
+			"diff": tmp / "pr_diff.patch",
+			"changed": tmp / "pr_changed_files.txt",
+			"result": tmp / "agents_md_materiality_result.json",
+			"comment": tmp / "agents_md_materiality_comment.md",
+		}
+		files["diff"].write_text(diff_text, encoding="utf-8")
+		visible_paths = changed_paths if changed_paths is not None else _diff_changed_paths(diff_text)
+		files["changed"].write_text("\n".join(visible_paths) + ("\n" if visible_paths else ""), encoding="utf-8")
+
+		for rel_path, text in (workspace_files or {"agents.md": "# repo agents\n"}).items():
+			target = workspace / rel_path
+			target.parent.mkdir(parents=True, exist_ok=True)
+			target.write_text(text, encoding="utf-8")
+
+		result = subprocess.run(
+			["bash", str(AGENTS_MD_MATERIALITY)],
+			cwd=str(REPO_ROOT),
+			env={
+				**os.environ,
+				"AGENTS_MD_MATERIALITY_ENABLED": enabled,
+				"AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED": "0",
+				"AGENTS_MD_MATERIALITY_MODEL": "openai/gpt-6-luna",
+				"AGENTS_MD_MATERIALITY_REASONING": "medium",
+				"AGENTS_MD_MATERIALITY_RESULT_FILE": str(files["result"]),
+				"AGENTS_MD_MATERIALITY_COMMENT_FILE": str(files["comment"]),
+				"PR_CHANGED_FILES_FILE": str(files["changed"]),
+				"PR_DIFF_FILE": str(files["diff"]),
+				"GITHUB_WORKSPACE": str(workspace),
+				"REPOSITORY": "octo/example",
+				"PR_NUMBER": "123",
+				"GITHUB_SERVER_URL": "https://github.com",
+				"GITHUB_RUN_ID": "456",
+				"BASE_BRANCH": "main",
+			},
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			"result": json.loads(files["result"].read_text(encoding="utf-8")),
+			"comment": files["comment"].read_text(encoding="utf-8"),
+		}
+
+
+def _run_reviewer_scope_harness(*, scope_mode: str, last_run_changed_text: str, ledger_text: str) -> dict[str, str]:
+	helper_block = _reviewer_iteration_scope_helper_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-iteration-scope-") as td:
+		tmp = Path(td)
+		workspace = tmp / "workspace"
+		workspace.mkdir()
+		files = {
+			"last_run_changed": tmp / "last_run_changed_files.txt",
+			"ledger": tmp / "ledger_status.txt",
+			"scope_paths": tmp / "reviewer_scope_paths.txt",
+			"scope_summary": tmp / "reviewer_scope_summary.txt",
+			"scope_context": tmp / "reviewer_scoped_files_context.txt",
+			"scope_query_seed": tmp / "reviewer_scope_query_seed.txt",
+			"scope_context_source": tmp / "scope_context_source.txt",
+			"semble_query": tmp / "reviewer_semble_query.txt",
+			"context_sections": tmp / "context_sections.txt",
+			"scoped_active": tmp / "scoped_active.txt",
+			"symbol_diff": tmp / "symbol_diff_summary.txt",
+			"original_pr_diff": tmp / "original_pr_diff.patch",
+			"last_run_diff": tmp / "last_run_diff.patch",
+			"pr_changed": tmp / "pr_changed_files.txt",
+			"last_run_diff_stat": tmp / "last_run_diff_stat.txt",
+			"last_commit_stat": tmp / "last_commit_stat.txt",
+			"comments": tmp / "comments.txt",
+			"checks": tmp / "checks.txt",
+			"pr_diff": tmp / "pr_diff.patch",
+		}
+		files["last_run_changed"].write_text(last_run_changed_text, encoding="utf-8")
+		files["ledger"].write_text(ledger_text, encoding="utf-8")
+		files["scope_paths"].write_text("", encoding="utf-8")
+		files["scope_summary"].write_text("", encoding="utf-8")
+		files["scope_context"].write_text("", encoding="utf-8")
+		files["scope_context_source"].write_text(
+			"=== TARGETED FILE CONTEXT ===\nScoped reviewer file context sentinel\n",
+			encoding="utf-8",
+		)
+		files["symbol_diff"].write_text("symbol diff sentinel\n", encoding="utf-8")
+		files["original_pr_diff"].write_text("original pr diff sentinel\n", encoding="utf-8")
+		files["last_run_diff"].write_text("last run diff sentinel\n", encoding="utf-8")
+		files["pr_changed"].write_text("scripts/review_run_reviewers.sh\nextra/pr_scope.py\n", encoding="utf-8")
+		files["last_run_diff_stat"].write_text("1 file changed\n", encoding="utf-8")
+		files["last_commit_stat"].write_text("commit stat sentinel\n", encoding="utf-8")
+		files["comments"].write_text("comments sentinel\n", encoding="utf-8")
+		files["checks"].write_text("checks sentinel\n", encoding="utf-8")
+		files["pr_diff"].write_text("full pr diff sentinel\n", encoding="utf-8")
+		(workspace / "scripts").mkdir()
+		(workspace / "tests").mkdir()
+		(workspace / "scripts" / "review_run_reviewers.sh").write_text("scoped shell target\n", encoding="utf-8")
+		(workspace / "tests" / "test_review_autofix_review_pipeline_contract.py").write_text("scoped test target\n", encoding="utf-8")
+
+		env = os.environ.copy()
+		env.update({
+			"SUPPORT_ROOT_DIR": str(REPO_ROOT),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"LAST_RUN_CHANGED_FILES_FILE": str(files["last_run_changed"]),
+			"LEDGER_STATUS_FILE": str(files["ledger"]),
+			"REVIEWER_SCOPE_PATHS_FILE": str(files["scope_paths"]),
+			"REVIEWER_SCOPE_SUMMARY_FILE": str(files["scope_summary"]),
+			"REVIEWER_SCOPED_FILES_CONTEXT_FILE": str(files["scope_context"]),
+			"REVIEWER_SCOPE_QUERY_SEED_FILE": str(files["scope_query_seed"]),
+			"SCOPE_CONTEXT_SOURCE_FILE": str(files["scope_context_source"]),
+			"REVIEWER_SEMBLE_QUERY_FILE": str(files["semble_query"]),
+			"OUTPUT_CONTEXT_FILE": str(files["context_sections"]),
+			"SCOPED_ACTIVE_FILE": str(files["scoped_active"]),
+			"SYMBOL_DIFF_SUMMARY_FILE": str(files["symbol_diff"]),
+			"ORIGINAL_PR_DIFF_FILE": str(files["original_pr_diff"]),
+			"LAST_RUN_DIFF_FILE": str(files["last_run_diff"]),
+			"PR_CHANGED_FILES_FILE": str(files["pr_changed"]),
+			"LAST_RUN_DIFF_STAT_FILE": str(files["last_run_diff_stat"]),
+			"LAST_COMMIT_STAT_FILE": str(files["last_commit_stat"]),
+			"PR_ALL_COMMENTS_CONTEXT_FILE": str(files["comments"]),
+			"PR_CHECK_RUNS_CONTEXT_FILE": str(files["checks"]),
+			"PR_DIFF_FILE": str(files["pr_diff"]),
+			"TARGETED_FILE_CONTEXT_SCRIPT": str(REPO_ROOT / "scripts" / "targeted_file_context.py"),
+			"TARGETED_FILE_CONTEXT_MAX_BYTES": "8192",
+			"GITHUB_WORKSPACE": str(workspace),
+			"SEMBLE_INDEX_AVAILABLE": "false",
+			"SCOPE_MODE": scope_mode,
+			"USE_PREPARE": "0",
+		})
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				"_embed_input_file() { local _p=\"${1:-}\"; if [ -z \"${_p}\" ] || [ ! -e \"${_p}\" ]; then printf '(missing)\\n'; return 0; fi; if [ ! -s \"${_p}\" ]; then printf '(empty)\\n'; return 0; fi; cat \"${_p}\"; }\n"
+				f"{helper_block}\n"
+				"if [ \"${SCOPE_MODE}\" = \"auto\" ]; then\n"
+				"\tREVIEWER_SCOPED_CONTEXT_ACTIVE=false\n"
+				"\tif [ \"${USE_PREPARE}\" = \"1\" ]; then\n"
+				"\t\tif prepare_reviewer_scoped_context; then\n"
+				"\t\t\tREVIEWER_SCOPED_CONTEXT_ACTIVE=true\n"
+				"\t\tfi\n"
+				"\telif build_reviewer_iteration_scope_artifacts \"${LAST_RUN_CHANGED_FILES_FILE}\" \"${LEDGER_STATUS_FILE}\" \"${REVIEWER_SCOPE_PATHS_FILE}\" \"${REVIEWER_SCOPE_SUMMARY_FILE}\"; then\n"
+				"\t\tREVIEWER_SCOPED_CONTEXT_ACTIVE=true\n"
+				"\t\tcp \"${SCOPE_CONTEXT_SOURCE_FILE}\" \"${REVIEWER_SCOPED_FILES_CONTEXT_FILE}\"\n"
+				"\tfi\n"
+				"else\n"
+				"\tREVIEWER_SCOPED_CONTEXT_ACTIVE=false\n"
+				"\twrite_reviewer_scope_summary \"full-diff\" \"first iteration — keep full PR context\"\n"
+				"fi\n"
+				"emit_reviewer_prompt_context_sections > \"${OUTPUT_CONTEXT_FILE}\"\n"
+				"build_reviewer_semble_query\n"
+				"printf '%s\\n' \"${REVIEWER_SCOPED_CONTEXT_ACTIVE}\" > \"${SCOPED_ACTIVE_FILE}\"\n",
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			"context_sections": files["context_sections"].read_text(encoding="utf-8"),
+			"scope_summary": files["scope_summary"].read_text(encoding="utf-8"),
+			"scope_paths": files["scope_paths"].read_text(encoding="utf-8"),
+			"scope_context": files["scope_context"].read_text(encoding="utf-8"),
+			"semble_query": files["semble_query"].read_text(encoding="utf-8"),
+			"scoped_active": files["scoped_active"].read_text(encoding="utf-8").strip(),
+		}
+
+
+def _run_prepare_reviewer_scope_harness(*, last_run_changed_text: str, ledger_text: str, missing_targeted_script: bool = False, workspace_files: dict[str, str] | None = None) -> dict[str, str]:
+	helper_block = _reviewer_iteration_scope_helper_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-iteration-scope-prepare-") as td:
+		tmp = Path(td)
+		workspace = tmp / "workspace"
+		workspace.mkdir()
+		files = {
+			"last_run_changed": tmp / "last_run_changed_files.txt",
+			"ledger": tmp / "ledger_status.txt",
+			"scope_paths": tmp / "reviewer_scope_paths.txt",
+			"scope_summary": tmp / "reviewer_scope_summary.txt",
+			"scope_context": tmp / "reviewer_scoped_files_context.txt",
+			"scope_query_seed": tmp / "reviewer_scope_query_seed.txt",
+			"scope_context_source": tmp / "scope_context_source.txt",
+			"semble_query": tmp / "reviewer_semble_query.txt",
+			"context_sections": tmp / "context_sections.txt",
+			"scoped_active": tmp / "scoped_active.txt",
+			"symbol_diff": tmp / "symbol_diff_summary.txt",
+			"original_pr_diff": tmp / "original_pr_diff.patch",
+			"last_run_diff": tmp / "last_run_diff.patch",
+			"pr_changed": tmp / "pr_changed_files.txt",
+			"last_run_diff_stat": tmp / "last_run_diff_stat.txt",
+			"last_commit_stat": tmp / "last_commit_stat.txt",
+			"comments": tmp / "comments.txt",
+			"checks": tmp / "checks.txt",
+			"pr_diff": tmp / "pr_diff.patch",
+		}
+		files["last_run_changed"].write_text(last_run_changed_text, encoding="utf-8")
+		files["ledger"].write_text(ledger_text, encoding="utf-8")
+		files["scope_paths"].write_text("", encoding="utf-8")
+		files["scope_summary"].write_text("", encoding="utf-8")
+		files["scope_context"].write_text("", encoding="utf-8")
+		files["scope_query_seed"].write_text("", encoding="utf-8")
+		files["scope_context_source"].write_text("unused sentinel\n", encoding="utf-8")
+		files["symbol_diff"].write_text("symbol diff sentinel\n", encoding="utf-8")
+		files["original_pr_diff"].write_text("original pr diff sentinel\n", encoding="utf-8")
+		files["last_run_diff"].write_text("last run diff sentinel\n", encoding="utf-8")
+		files["pr_changed"].write_text("scripts/review_run_reviewers.sh\nextra/pr_scope.py\n", encoding="utf-8")
+		files["last_run_diff_stat"].write_text("1 file changed\n", encoding="utf-8")
+		files["last_commit_stat"].write_text("commit stat sentinel\n", encoding="utf-8")
+		files["comments"].write_text("comments sentinel\n", encoding="utf-8")
+		files["checks"].write_text("checks sentinel\n", encoding="utf-8")
+		files["pr_diff"].write_text("full pr diff sentinel\n", encoding="utf-8")
+
+		for rel_path, text in (workspace_files or {
+			"scripts/review_run_reviewers.sh": "scoped shell target\n",
+			"tests/test_review_autofix_review_pipeline_contract.py": "scoped test target\n",
+		}).items():
+			target = workspace / rel_path
+			target.parent.mkdir(parents=True, exist_ok=True)
+			target.write_text(text, encoding="utf-8")
+
+		targeted_script = tmp / "missing_targeted_file_context.py" if missing_targeted_script else REPO_ROOT / "scripts" / "targeted_file_context.py"
+
+		env = os.environ.copy()
+		env.update({
+			"SUPPORT_ROOT_DIR": str(REPO_ROOT),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"LAST_RUN_CHANGED_FILES_FILE": str(files["last_run_changed"]),
+			"LEDGER_STATUS_FILE": str(files["ledger"]),
+			"REVIEWER_SCOPE_PATHS_FILE": str(files["scope_paths"]),
+			"REVIEWER_SCOPE_SUMMARY_FILE": str(files["scope_summary"]),
+			"REVIEWER_SCOPED_FILES_CONTEXT_FILE": str(files["scope_context"]),
+			"REVIEWER_SCOPE_QUERY_SEED_FILE": str(files["scope_query_seed"]),
+			"SCOPE_CONTEXT_SOURCE_FILE": str(files["scope_context_source"]),
+			"REVIEWER_SEMBLE_QUERY_FILE": str(files["semble_query"]),
+			"OUTPUT_CONTEXT_FILE": str(files["context_sections"]),
+			"SCOPED_ACTIVE_FILE": str(files["scoped_active"]),
+			"SYMBOL_DIFF_SUMMARY_FILE": str(files["symbol_diff"]),
+			"ORIGINAL_PR_DIFF_FILE": str(files["original_pr_diff"]),
+			"LAST_RUN_DIFF_FILE": str(files["last_run_diff"]),
+			"PR_CHANGED_FILES_FILE": str(files["pr_changed"]),
+			"LAST_RUN_DIFF_STAT_FILE": str(files["last_run_diff_stat"]),
+			"LAST_COMMIT_STAT_FILE": str(files["last_commit_stat"]),
+			"PR_ALL_COMMENTS_CONTEXT_FILE": str(files["comments"]),
+			"PR_CHECK_RUNS_CONTEXT_FILE": str(files["checks"]),
+			"PR_DIFF_FILE": str(files["pr_diff"]),
+			"TARGETED_FILE_CONTEXT_SCRIPT": str(targeted_script),
+			"TARGETED_FILE_CONTEXT_MAX_BYTES": "8192",
+			"GITHUB_WORKSPACE": str(workspace),
+			"SEMBLE_INDEX_AVAILABLE": "false",
+			"SCOPE_MODE": "auto",
+			"USE_PREPARE": "1",
+		})
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				"_embed_input_file() { local _p=\"${1:-}\"; if [ -z \"${_p}\" ] || [ ! -e \"${_p}\" ]; then printf '(missing)\\n'; return 0; fi; if [ ! -s \"${_p}\" ]; then printf '(empty)\\n'; return 0; fi; cat \"${_p}\"; }\n"
+				f"{helper_block}\n"
+				"REVIEWER_SCOPED_CONTEXT_ACTIVE=false\n"
+				"if prepare_reviewer_scoped_context; then\n"
+				"\tREVIEWER_SCOPED_CONTEXT_ACTIVE=true\n"
+				"fi\n"
+				"emit_reviewer_prompt_context_sections > \"${OUTPUT_CONTEXT_FILE}\"\n"
+				"build_reviewer_semble_query\n"
+				"printf '%s\\n' \"${REVIEWER_SCOPED_CONTEXT_ACTIVE}\" > \"${SCOPED_ACTIVE_FILE}\"\n",
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			"context_sections": files["context_sections"].read_text(encoding="utf-8"),
+			"scope_summary": files["scope_summary"].read_text(encoding="utf-8"),
+			"scope_paths": files["scope_paths"].read_text(encoding="utf-8"),
+			"scope_context": files["scope_context"].read_text(encoding="utf-8"),
+			"semble_query": files["semble_query"].read_text(encoding="utf-8"),
+			"scoped_active": files["scoped_active"].read_text(encoding="utf-8").strip(),
+		}
+def _run_reviewer_failback_harness() -> dict[str, object]:
+	partial_finalize_budget_helper_block = _reviewer_partial_finalize_budget_helper_block()
+	helper_block = _reviewer_failback_helper_block()
+	run_reviewer_block = _reviewer_run_reviewer_block()
+	run_reviewer_pass_block = _reviewer_run_reviewer_pass_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-failback-") as td:
+		tmp = Path(td)
+		reviews = tmp / "reviews"
+		runtime = tmp / "runtime"
+		home = tmp / "home"
+		runner_temp = tmp / "runner_temp"
+		bin_dir = tmp / "bin"
+		seed_codex_home = tmp / "codex_home_seed"
+		reviews.mkdir()
+		runtime.mkdir()
+		home.mkdir()
+		runner_temp.mkdir()
+		bin_dir.mkdir()
+		seed_codex_home.mkdir()
+
+		prompt_file = runtime / "reviewer_prompt.patch"
+		prompt_file.write_text(PHASE_G_FLAKY_REVIEWER_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+
+		failback_file = tmp / "reviewer_failback_chains.json"
+		failback_file.write_text(REVIEWER_FAILBACK_CHAINS.read_text(encoding="utf-8"), encoding="utf-8")
+
+		catalog_file = tmp / "codex_model_catalog.json"
+		catalog_file.write_text(MODEL_CATALOG.read_text(encoding="utf-8"), encoding="utf-8")
+
+		health_file = tmp / ".ai" / "review_runtime" / "pr-123" / "reviewer_health_state.json"
+		health_file.parent.mkdir(parents=True)
+		attempt_log_file = tmp / "attempts.tsv"
+		state_file = tmp / "state.txt"
+		github_env_file = tmp / "github_env.txt"
+
+		codex_stub = bin_dir / "codex"
+		codex_stub.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+		codex_stub.chmod(0o755)
+
+		env = os.environ.copy()
+		env.update({
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"PREVIOUS_REVIEWS_DIR": str(reviews),
+			"RUNTIME_DIR": str(runtime),
+			"PROMPT_FILE": str(prompt_file),
+			"PR_NUMBER": "123",
+			"RUNNER_TEMP": str(runner_temp),
+			"HOME": str(home),
+			"CODEX_HOME": str(seed_codex_home),
+			"GITHUB_ENV": str(github_env_file),
+			"REVIEWER_CIRCUIT_BREAKER_ENABLED": "1",
+			"REVIEWER_FAILBACK_MAX_RETRIES": "1",
+			"REVIEWER_HEALTH_OPEN_THRESHOLD": "1",
+			"REVIEWER_HEALTH_OPEN_TTL_SECS": "600",
+			"REVIEWER_FAILBACK_CHAINS_FILE": str(failback_file),
+			"REVIEWER_MODEL_CATALOG_FILE": str(catalog_file),
+			"REVIEWER_HEALTH_STATE_FILE": str(health_file),
+			"REVIEWER_REASONING_EFFORT": "xhigh",
+			"HEARTBEAT_IDLE_TIMEOUT": "30",
+			"HEARTBEAT_MAX_WALL": "30",
+			"REVIEW_PR_STATE_POLL_INTERVAL_SECS": "10",
+			"ATTEMPT_LOG_FILE": str(attempt_log_file),
+			"STATE_FILE": str(state_file),
+		})
+		env.update(_reviewer_harness_budget_env())
+
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{partial_finalize_budget_helper_block}\n"
+				f"{helper_block}\n"
+				f"{run_reviewer_block}\n"
+				f"{run_reviewer_pass_block}\n"
+				"execute_reviewer_attempt() {\n"
+				"\tlocal _attempt_label=\"${1:-}\"\n"
+				"\tlocal _attempt_number=\"${2:-}\"\n"
+				"\tlocal _attempt_reasoning=\"${3:-}\"\n"
+				"\tprintf '%s\t%s\t%s\t%s\n' \"${slot_model}\" \"${effective_model}\" \"${_attempt_reasoning:-<empty>}\" \"${_attempt_label}\" >> \"${ATTEMPT_LOG_FILE}\"\n"
+				"\tcase \"${slot_model}\" in\n"
+				"\t\tx-ai/grok-4.20)\n"
+				"\t\t\tcase \"${effective_model}\" in\n"
+				"\t\t\t\tx-ai/grok-4.20)\n"
+				"\t\t\t\t\tREVIEWER_ATTEMPT_OUTCOME=\"retryable_failure\"\n"
+				"\t\t\t\t\tREVIEWER_ATTEMPT_RETRYABLE_CLASS=\"rate_limit\"\n"
+				"\t\t\t\t\tREVIEWER_ATTEMPT_CMD_RC=1\n"
+				"\t\t\t\t\treturn 0\n"
+				"\t\t\t\t\t;;\n"
+				"\t\t\t\tx-ai/grok-4.3)\n"
+				"\t\t\t\t\tprintf 'fallback success for %s\\n' \"${slot_model}\" > \"${output_file}\"\n"
+				"\t\t\t\t\tREVIEWER_ATTEMPT_OUTCOME=\"success\"\n"
+				"\t\t\t\t\tREVIEWER_ATTEMPT_RETRYABLE_CLASS=\"\"\n"
+				"\t\t\t\t\tREVIEWER_ATTEMPT_CMD_RC=0\n"
+				"\t\t\t\t\treturn 0\n"
+				"\t\t\t\t\t;;\n"
+				"\t\t\tesac\n"
+				"\t\t\t;;\n"
+				"\t\tmoonshotai/kimi-k2.5)\n"
+				"\t\t\tREVIEWER_ATTEMPT_OUTCOME=\"retryable_failure\"\n"
+				"\t\t\tREVIEWER_ATTEMPT_RETRYABLE_CLASS=\"server_error\"\n"
+				"\t\t\tREVIEWER_ATTEMPT_CMD_RC=1\n"
+				"\t\t\treturn 0\n"
+				"\t\t\t;;\n"
+				"\tesac\n"
+				"\tREVIEWER_ATTEMPT_OUTCOME=\"failed\"\n"
+				"\tREVIEWER_ATTEMPT_RETRYABLE_CLASS=\"\"\n"
+				"\tREVIEWER_ATTEMPT_CMD_RC=1\n"
+				"\treturn 0\n"
+				"}\n"
+				"get_active_reviewer_models_text() {\n"
+				"\tprintf 'x-ai/grok-4.20\\n'\n"
+				"}\n"
+				"prepare_reviewer_prompt_for_model() {\n"
+				"\tprintf '%s\\n' \"${2:-}\"\n"
+				"}\n"
+				"mapped_model=\"x-ai/grok-4.20\"\n"
+				"mapped_safe_name=\"$(printf '%s' \"${mapped_model}\" | tr '/.:' '___')\"\n"
+				"unmapped_model=\"moonshotai/kimi-k2.5\"\n"
+				"unmapped_safe_name=\"$(printf '%s' \"${unmapped_model}\" | tr '/.:' '___')\"\n"
+				"run_reviewer \"${mapped_model}\" \"${mapped_safe_name}\" \"mapped\" \"${PROMPT_FILE}\" \"xhigh\"\n"
+				"cached_successes=\"$(run_reviewer_pass \"cached\" \"${PROMPT_FILE}\" \"xhigh\")\"\n"
+				"run_reviewer \"${unmapped_model}\" \"${unmapped_safe_name}\" \"unmapped\" \"${PROMPT_FILE}\" \"xhigh\"\n"
+				"{\n"
+				"\tprintf 'MAPPED_STATUS_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/status_mapped_${mapped_safe_name}.txt\"\n"
+				"\tprintf 'MAPPED_OUTPUT_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/mapped_${mapped_safe_name}.txt\"\n"
+				"\tprintf 'MAPPED_LOG_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/mapped_${mapped_safe_name}.log\"\n"
+				"\tprintf 'CACHED_STATUS_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/status_cached_${mapped_safe_name}.txt\"\n"
+				"\tprintf 'CACHED_OUTPUT_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/cached_${mapped_safe_name}.txt\"\n"
+				"\tprintf 'CACHED_LOG_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/cached_${mapped_safe_name}.log\"\n"
+				"\tprintf 'UNMAPPED_STATUS_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/status_unmapped_${unmapped_safe_name}.txt\"\n"
+				"\tprintf 'UNMAPPED_OUTPUT_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/unmapped_${unmapped_safe_name}.txt\"\n"
+				"\tprintf 'UNMAPPED_LOG_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/unmapped_${unmapped_safe_name}.log\"\n"
+				"\tprintf 'ATTEMPT_LOG_FILE=%s\\n' \"${ATTEMPT_LOG_FILE}\"\n"
+				"\tprintf 'CACHED_SUCCESSES=%s\\n' \"${cached_successes}\"\n"
+				"} > \"${STATE_FILE}\"\n",
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+
+		state: dict[str, str] = {}
+		for raw_line in state_file.read_text(encoding="utf-8").splitlines():
+			if "=" not in raw_line:
+				continue
+			key, value = raw_line.split("=", 1)
+			state[key] = value
+
+		artifact_contents = {
+			f"{key}_CONTENT": Path(path).read_text(encoding="utf-8")
+			for key, path in state.items()
+			if key.endswith("_FILE")
+		}
+
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			**state,
+			**artifact_contents,
+			"health_state": json.loads(health_file.read_text(encoding="utf-8")),
+		}
+
+
+def _run_reviewer_slot_retry_budget_harness() -> dict[str, object]:
+	partial_finalize_budget_helper_block = _reviewer_partial_finalize_budget_helper_block()
+	helper_block = _reviewer_failback_helper_block()
+	run_reviewer_block = _reviewer_run_reviewer_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-slot-retry-budget-") as td:
+		tmp = Path(td)
+		reviews = tmp / "reviews"
+		runtime = tmp / "runtime"
+		home = tmp / "home"
+		runner_temp = tmp / "runner_temp"
+		bin_dir = tmp / "bin"
+		seed_codex_home = tmp / "codex_home_seed"
+		reviews.mkdir()
+		runtime.mkdir()
+		home.mkdir()
+		runner_temp.mkdir()
+		bin_dir.mkdir()
+		seed_codex_home.mkdir()
+
+		prompt_file = runtime / "reviewer_prompt.patch"
+		prompt_file.write_text(PHASE_G_FLAKY_REVIEWER_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+
+		failback_file = tmp / "reviewer_failback_chains.json"
+		failback_file.write_text(REVIEWER_FAILBACK_CHAINS.read_text(encoding="utf-8"), encoding="utf-8")
+
+		catalog_file = tmp / "codex_model_catalog.json"
+		catalog_file.write_text(MODEL_CATALOG.read_text(encoding="utf-8"), encoding="utf-8")
+
+		attempt_log_file = tmp / "attempts.tsv"
+		state_file = tmp / "state.txt"
+		github_env_file = tmp / "github_env.txt"
+
+		codex_stub = bin_dir / "codex"
+		codex_stub.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+		codex_stub.chmod(0o755)
+
+		env = os.environ.copy()
+		env.update({
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"PREVIOUS_REVIEWS_DIR": str(reviews),
+			"RUNTIME_DIR": str(runtime),
+			"PROMPT_FILE": str(prompt_file),
+			"PR_NUMBER": "123",
+			"RUNNER_TEMP": str(runner_temp),
+			"HOME": str(home),
+			"CODEX_HOME": str(seed_codex_home),
+			"GITHUB_ENV": str(github_env_file),
+			# review_run_reviewers.sh exits early unless SUPPORT_SCRIPTS_DIR is
+			# absolute (#5824), so its helpers read it without a default. This
+			# harness skips that guard: without the variable,
+			# reviewer_cache_status_for_model dies on `set -u` and kills the run.
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"REVIEWER_CIRCUIT_BREAKER_ENABLED": "0",
+			"REVIEWER_FAILBACK_MAX_RETRIES": "1",
+			"REVIEWER_FAILBACK_CHAINS_FILE": str(failback_file),
+			"REVIEWER_MODEL_CATALOG_FILE": str(catalog_file),
+			"REVIEWER_SLOT_RETRYABLE_FAILURE_LIMIT": "3",
+			"REVIEWER_SLOT_BACKOFF_BASE_SECS": "0",
+			"REVIEWER_SLOT_BACKOFF_CAP_SECS": "0",
+			"REVIEWER_SLOT_BACKOFF_BUDGET_RATIO": "0.05",
+			"REVIEWER_REASONING_EFFORT": "xhigh",
+			"HEARTBEAT_IDLE_TIMEOUT": "30",
+			"HEARTBEAT_MAX_WALL": "30",
+			"REVIEW_PR_STATE_POLL_INTERVAL_SECS": "10",
+			"ATTEMPT_LOG_FILE": str(attempt_log_file),
+			"STATE_FILE": str(state_file),
+		})
+		env.update(_reviewer_harness_budget_env())
+
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{partial_finalize_budget_helper_block}\n"
+				f"{helper_block}\n"
+				f"{run_reviewer_block}\n"
+				"execute_reviewer_attempt() {\n"
+				"\tlocal _attempt_label=\"${1:-}\"\n"
+				"\tlocal _attempt_number=\"${2:-}\"\n"
+				"\tlocal _attempt_reasoning=\"${3:-}\"\n"
+				"\treviewer_log_cache_attempt \"${_attempt_number}\" \"${PROMPT_FILE}\" \"${PROMPT_FILE}\" \"${log_file}\" \"${slot_model}\" \"${effective_model}\"\n"
+				"\tprintf '%s\t%s\t%s\t%s\n' \"${slot_model}\" \"${effective_model}\" \"${_attempt_reasoning:-<empty>}\" \"${_attempt_label}\" >> \"${ATTEMPT_LOG_FILE}\"\n"
+				"\tif [ \"${_attempt_number}\" -gt 1 ]; then\n"
+				"\t\tcache_read_input_tokens=3500\n"
+				"\telse\n"
+				"\t\tcache_read_input_tokens=0\n"
+				"\tfi\n"
+				"\tprintf 'INFO: openrouter usage phase=review call=mapped model=%s cache_enabled=true cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na prompt_tokens=4000 completion_tokens=100 total_tokens=4100 cache_creation_input_tokens=0 cache_read_input_tokens=%s\n' \"${effective_model}\" \"${cache_read_input_tokens}\" >> \"${log_file}\"\n"
+				"\tREVIEWER_ATTEMPT_OUTCOME=\"retryable_failure\"\n"
+				"\tREVIEWER_ATTEMPT_RETRYABLE_CLASS=\"rate_limit\"\n"
+				"\tREVIEWER_ATTEMPT_CMD_RC=1\n"
+				"\treturn 0\n"
+				"}\n"
+				"prepare_reviewer_prompt_for_model() {\n"
+				"\tprintf '%s\\n' \"${2:-}\"\n"
+				"}\n"
+				"mapped_model=\"x-ai/grok-4.20\"\n"
+				"mapped_safe_name=\"$(printf '%s' \"${mapped_model}\" | tr '/.:' '___')\"\n"
+				"run_reviewer \"${mapped_model}\" \"${mapped_safe_name}\" \"mapped\" \"${PROMPT_FILE}\" \"xhigh\"\n"
+				"{\n"
+				"\tprintf 'MAPPED_STATUS_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/status_mapped_${mapped_safe_name}.txt\"\n"
+				"\tprintf 'MAPPED_OUTPUT_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/mapped_${mapped_safe_name}.txt\"\n"
+				"\tprintf 'MAPPED_LOG_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/mapped_${mapped_safe_name}.log\"\n"
+				"\tprintf 'ATTEMPT_LOG_FILE=%s\\n' \"${ATTEMPT_LOG_FILE}\"\n"
+				"} > \"${STATE_FILE}\"\n",
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+
+		state: dict[str, str] = {}
+		for raw_line in state_file.read_text(encoding="utf-8").splitlines():
+			if "=" not in raw_line:
+				continue
+			key, value = raw_line.split("=", 1)
+			state[key] = value
+
+		artifact_contents = {
+			f"{key}_CONTENT": Path(path).read_text(encoding="utf-8")
+			for key, path in state.items()
+			if key.endswith("_FILE")
+		}
+
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			**state,
+			**artifact_contents,
+		}
+
+
+def _run_reviewer_stall_recovery_harness() -> dict[str, object]:
+	partial_finalize_budget_helper_block = _reviewer_partial_finalize_budget_helper_block()
+	helper_block = _reviewer_failback_helper_block()
+	run_reviewer_block = _reviewer_run_reviewer_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-stall-recovery-") as td:
+		tmp = Path(td)
+		reviews = tmp / "reviews"
+		runtime = tmp / "runtime"
+		home = tmp / "home"
+		runner_temp = tmp / "runner_temp"
+		bin_dir = tmp / "bin"
+		seed_codex_home = tmp / "codex_home_seed"
+		reviews.mkdir()
+		runtime.mkdir()
+		home.mkdir()
+		runner_temp.mkdir()
+		bin_dir.mkdir()
+		seed_codex_home.mkdir()
+
+		prompt_file = runtime / "reviewer_prompt.patch"
+		prompt_file.write_text(PHASE_G_FLAKY_REVIEWER_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+
+		failback_file = tmp / "reviewer_failback_chains.json"
+		failback_file.write_text(REVIEWER_FAILBACK_CHAINS.read_text(encoding="utf-8"), encoding="utf-8")
+
+		catalog_file = tmp / "codex_model_catalog.json"
+		catalog_file.write_text(MODEL_CATALOG.read_text(encoding="utf-8"), encoding="utf-8")
+
+		health_file = tmp / ".ai" / "review_runtime" / "pr-123" / "reviewer_health_state.json"
+		health_file.parent.mkdir(parents=True)
+		attempt_log_file = tmp / "attempts.tsv"
+		state_file = tmp / "state.txt"
+		github_env_file = tmp / "github_env.txt"
+
+		codex_stub = bin_dir / "codex"
+		codex_stub.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+		codex_stub.chmod(0o755)
+
+		env = os.environ.copy()
+		env.update({
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"PREVIOUS_REVIEWS_DIR": str(reviews),
+			"RUNTIME_DIR": str(runtime),
+			"PROMPT_FILE": str(prompt_file),
+			"PR_NUMBER": "123",
+			"RUNNER_TEMP": str(runner_temp),
+			"HOME": str(home),
+			"CODEX_HOME": str(seed_codex_home),
+			"GITHUB_ENV": str(github_env_file),
+			"REVIEWER_CIRCUIT_BREAKER_ENABLED": "1",
+			"REVIEWER_FAILBACK_MAX_RETRIES": "1",
+			"REVIEWER_HEALTH_OPEN_THRESHOLD": "1",
+			"REVIEWER_HEALTH_OPEN_TTL_SECS": "600",
+			"REVIEWER_FAILBACK_CHAINS_FILE": str(failback_file),
+			"REVIEWER_MODEL_CATALOG_FILE": str(catalog_file),
+			"REVIEWER_HEALTH_STATE_FILE": str(health_file),
+			"REVIEWER_REASONING_EFFORT": "xhigh",
+			"HEARTBEAT_IDLE_TIMEOUT": "30",
+			"HEARTBEAT_MAX_WALL": "30",
+			"REVIEW_PR_STATE_POLL_INTERVAL_SECS": "10",
+			"ATTEMPT_LOG_FILE": str(attempt_log_file),
+			"STATE_FILE": str(state_file),
+		})
+		env.update(_reviewer_harness_budget_env())
+
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{partial_finalize_budget_helper_block}\n"
+				f"{helper_block}\n"
+				f"{run_reviewer_block}\n"
+				"execute_reviewer_attempt() {\n"
+				"\tlocal _attempt_label=\"${1:-}\"\n"
+				"\tlocal _attempt_number=\"${2:-}\"\n"
+				"\tlocal _attempt_reasoning=\"${3:-}\"\n"
+				"\tprintf '%s\t%s\t%s\t%s\n' \"${slot_model}\" \"${effective_model}\" \"${_attempt_reasoning:-<empty>}\" \"${_attempt_label}\" >> \"${ATTEMPT_LOG_FILE}\"\n"
+				"\tcase \"${effective_model}:${_attempt_number}\" in\n"
+				"\t\tx-ai/grok-4.20:1|x-ai/grok-4.20:2)\n"
+				"\t\t\tprintf 'Reviewer slot %s (%s) recorded codex_stall_killed on %s (exit=137).\\n' \"${slot_model}\" \"${effective_model}\" \"${_attempt_label}\" >> \"${log_file}\"\n"
+				"\t\t\tprintf 'Reviewer slot %s (%s) failure classified as retryable (stall_guard) on %s.\\n' \"${slot_model}\" \"${effective_model}\" \"${_attempt_label}\" >> \"${log_file}\"\n"
+				"\t\t\tREVIEWER_ATTEMPT_OUTCOME=\"retryable_failure\"\n"
+				"\t\t\tREVIEWER_ATTEMPT_RETRYABLE_CLASS=\"stall_guard\"\n"
+				"\t\t\tREVIEWER_ATTEMPT_CMD_RC=137\n"
+				"\t\t\treturn 0\n"
+				"\t\t\t;;\n"
+				"\t\tx-ai/grok-4.3:3)\n"
+				"\t\t\tprintf 'fallback success for %s\\n' \"${slot_model}\" > \"${output_file}\"\n"
+				"\t\t\tREVIEWER_ATTEMPT_OUTCOME=\"success\"\n"
+				"\t\t\tREVIEWER_ATTEMPT_RETRYABLE_CLASS=\"\"\n"
+				"\t\t\tREVIEWER_ATTEMPT_CMD_RC=0\n"
+				"\t\t\treturn 0\n"
+				"\t\t\t;;\n"
+				"\tesac\n"
+				"\tREVIEWER_ATTEMPT_OUTCOME=\"failed\"\n"
+				"\tREVIEWER_ATTEMPT_RETRYABLE_CLASS=\"\"\n"
+				"\tREVIEWER_ATTEMPT_CMD_RC=1\n"
+				"\treturn 0\n"
+				"}\n"
+				"prepare_reviewer_prompt_for_model() {\n"
+				"\tprintf '%s\\n' \"${2:-}\"\n"
+				"}\n"
+				"mapped_model=\"x-ai/grok-4.20\"\n"
+				"mapped_safe_name=\"$(printf '%s' \"${mapped_model}\" | tr '/.:' '___')\"\n"
+				"run_reviewer \"${mapped_model}\" \"${mapped_safe_name}\" \"mapped\" \"${PROMPT_FILE}\" \"xhigh\"\n"
+				"{\n"
+				"\tprintf 'MAPPED_STATUS_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/status_mapped_${mapped_safe_name}.txt\"\n"
+				"\tprintf 'MAPPED_OUTPUT_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/mapped_${mapped_safe_name}.txt\"\n"
+				"\tprintf 'MAPPED_LOG_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/mapped_${mapped_safe_name}.log\"\n"
+				"\tprintf 'ATTEMPT_LOG_FILE=%s\\n' \"${ATTEMPT_LOG_FILE}\"\n"
+				"} > \"${STATE_FILE}\"\n",
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+
+		state: dict[str, str] = {}
+		for raw_line in state_file.read_text(encoding="utf-8").splitlines():
+			if "=" not in raw_line:
+				continue
+			key, value = raw_line.split("=", 1)
+			state[key] = value
+
+		artifact_contents = {
+			f"{key}_CONTENT": Path(path).read_text(encoding="utf-8")
+			for key, path in state.items()
+			if key.endswith("_FILE")
+		}
+
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			**state,
+			**artifact_contents,
+			"health_state": json.loads(health_file.read_text(encoding="utf-8")),
+		}
+
+
+def _run_reviewer_silent_retry_harness() -> dict[str, object]:
+	partial_finalize_budget_helper_block = _reviewer_partial_finalize_budget_helper_block()
+	helper_block = _reviewer_failback_helper_block()
+	run_reviewer_block = _reviewer_run_reviewer_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-silent-retry-") as td:
+		tmp = Path(td)
+		reviews = tmp / "reviews"
+		runtime = tmp / "runtime"
+		home = tmp / "home"
+		runner_temp = tmp / "runner_temp"
+		bin_dir = tmp / "bin"
+		seed_codex_home = tmp / "codex_home_seed"
+		reviews.mkdir()
+		runtime.mkdir()
+		home.mkdir()
+		runner_temp.mkdir()
+		bin_dir.mkdir()
+		seed_codex_home.mkdir()
+
+		prompt_file = runtime / "reviewer_prompt.patch"
+		prompt_file.write_text(PHASE_G_FLAKY_REVIEWER_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+
+		attempt_log_file = tmp / "attempts.txt"
+		state_file = tmp / "state.txt"
+		github_env_file = tmp / "github_env.txt"
+
+		codex_stub = bin_dir / "codex"
+		codex_stub.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+		codex_stub.chmod(0o755)
+
+		env = os.environ.copy()
+		env.update({
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"PREVIOUS_REVIEWS_DIR": str(reviews),
+			"RUNTIME_DIR": str(runtime),
+			"PROMPT_FILE": str(prompt_file),
+			"PR_NUMBER": "123",
+			"RUNNER_TEMP": str(runner_temp),
+			"HOME": str(home),
+			"CODEX_HOME": str(seed_codex_home),
+			"GITHUB_ENV": str(github_env_file),
+			"REVIEWER_CIRCUIT_BREAKER_ENABLED": "0",
+			"REVIEWER_REASONING_EFFORT": "xhigh",
+			"HEARTBEAT_IDLE_TIMEOUT": "30",
+			"HEARTBEAT_MAX_WALL": "30",
+			"REVIEW_PR_STATE_POLL_INTERVAL_SECS": "10",
+			"ATTEMPT_LOG_FILE": str(attempt_log_file),
+			"STATE_FILE": str(state_file),
+		})
+		env.update(_reviewer_harness_budget_env())
+
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{partial_finalize_budget_helper_block}\n"
+				f"{helper_block}\n"
+				f"{run_reviewer_block}\n"
+				"execute_reviewer_attempt() {\n"
+				"\tlocal _attempt_label=\"${1:-}\"\n"
+				"\tprintf '%s\\n' \"${_attempt_label}\" >> \"${ATTEMPT_LOG_FILE}\"\n"
+				"\tREVIEWER_ATTEMPT_OUTCOME=\"silent_retry\"\n"
+				"\tREVIEWER_ATTEMPT_RETRYABLE_CLASS=\"\"\n"
+				"\tREVIEWER_ATTEMPT_CMD_RC=0\n"
+				"\treturn 0\n"
+				"}\n"
+				"prepare_reviewer_prompt_for_model() {\n"
+				"\tprintf '%s\\n' \"${2:-}\"\n"
+				"}\n"
+				"mapped_model=\"x-ai/grok-4.20\"\n"
+				"mapped_safe_name=\"$(printf '%s' \"${mapped_model}\" | tr '/.:' '___')\"\n"
+				"run_reviewer \"${mapped_model}\" \"${mapped_safe_name}\" \"mapped\" \"${PROMPT_FILE}\" \"xhigh\"\n"
+				"{\n"
+				"\tprintf 'MAPPED_STATUS_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/status_mapped_${mapped_safe_name}.txt\"\n"
+				"\tprintf 'MAPPED_OUTPUT_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/mapped_${mapped_safe_name}.txt\"\n"
+				"\tprintf 'MAPPED_LOG_FILE=%s\\n' \"${PREVIOUS_REVIEWS_DIR}/mapped_${mapped_safe_name}.log\"\n"
+				"\tprintf 'ATTEMPT_LOG_FILE=%s\\n' \"${ATTEMPT_LOG_FILE}\"\n"
+				"} > \"${STATE_FILE}\"\n",
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+
+		state: dict[str, str] = {}
+		for raw_line in state_file.read_text(encoding="utf-8").splitlines():
+			if "=" not in raw_line:
+				continue
+			key, value = raw_line.split("=", 1)
+			state[key] = value
+
+		artifact_contents = {
+			f"{key}_CONTENT": Path(path).read_text(encoding="utf-8")
+			for key, path in state.items()
+			if key.endswith("_FILE")
+		}
+
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			**state,
+			**artifact_contents,
+		}
+
+
+def _run_review_pipeline_summary_step_harness(*, extra_env: dict[str, str] | None = None) -> dict[str, object]:
+	summary_script = _step_run_script("Append review pipeline iteration summary")
+	with tempfile.TemporaryDirectory(prefix="review-pipeline-summary-") as td:
+		tmp = Path(td)
+		runtime = tmp / "runtime"
+		reviews = tmp / "reviews"
+		runtime.mkdir()
+		reviews.mkdir()
+
+		(runtime / "reviewer_bundle.txt").write_text("bundle sentinel\n", encoding="utf-8")
+		(runtime / "floor_tags.txt").write_text("CORRECTNESS & LOGIC\n", encoding="utf-8")
+		(runtime / "consolidator_raw.txt").write_text("consolidator sentinel\n", encoding="utf-8")
+		(runtime / "parser_stats.txt").write_text("parsed_blocks=1\npassthrough_blocks=0\nline_unverified=0\n", encoding="utf-8")
+		(runtime / "ledger_status.txt").write_text(
+			"issue-1\tNEW\t0\tscripts/review_run_reviewers.sh:1\tCORRECTNESS & LOGIC\t[]\n",
+			encoding="utf-8",
+		)
+		(runtime / "editor_summary.txt").write_text("editor summary sentinel\n", encoding="utf-8")
+		(runtime / "committed_files.txt").write_text("", encoding="utf-8")
+
+		(reviews / "status_review_model_one.txt").write_text("success\n", encoding="utf-8")
+		(reviews / "review_model_one.txt").write_text("fresh reviewer output\n", encoding="utf-8")
+		(reviews / "review_model_one.log").write_text(
+			"REVIEWER_CACHE: slot=x-ai/grok-4.20 model=x-ai/grok-4.20 attempt=1 status=supported prompt_reused=true\n"
+			"Reviewer slot x-ai/grok-4.20 (x-ai/grok-4.20) recorded codex_stall_killed on attempt 1 (exit=137).\n"
+			"Reviewer slot x-ai/grok-4.20 (x-ai/grok-4.20) failure classified as retryable (stall_guard) on attempt 1.\n"
+			"REVIEWER_ADVANCE: slot=x-ai/grok-4.20 model=x-ai/grok-4.20 reason=stall_guard next_action=retry_cheaper_reasoning next_attempt=2 next_model=x-ai/grok-4.20\n"
+				"REVIEWER_BACKOFF: slot=x-ai/grok-4.20 model=x-ai/grok-4.20 reason=stall_guard next_action=retry_cheaper_reasoning next_attempt=2 sleep_secs=2 total_sleep_secs=2\n"
+				"INFO: openrouter usage phase=review call=review model=x-ai/grok-4.20 cache_enabled=true cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na prompt_tokens=na completion_tokens=na total_tokens=na cache_creation_input_tokens=na cache_read_input_tokens=na usage_available=false\n"
+				"REVIEWER_CACHE: slot=x-ai/grok-4.20 model=x-ai/grok-4.20 attempt=2 status=supported prompt_reused=true\n"
+				"INFO: openrouter usage phase=review call=review model=x-ai/grok-4.20 cache_enabled=true cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na prompt_tokens=4000 completion_tokens=100 total_tokens=4100 cache_creation_input_tokens=0 cache_read_input_tokens=120 usage_available=true\n"
+			"Reviewer slot x-ai/grok-4.20 (x-ai/grok-4.20) succeeded on attempt 2.\n"
+			"REVIEWER_SLOT_STATE: slot=x-ai/grok-4.20 retryable_failure_count=1 retryable_failure_classes=stall_guard backoff_sleep_secs_total=2 slot_retry_budget_exhausted=false fallback_model_used=false cache_status=supported cache_reuse_attempted=true\n",
+			encoding="utf-8",
+		)
+
+		(reviews / "status_review_model_two.txt").write_text("skipped_unmapped\n", encoding="utf-8")
+		(reviews / "review_model_two.txt").write_text(
+			"Reviewer slot moonshotai/kimi-k2.5 skipped after retryable failure (timeout); no same-family failback mapping is available.\n",
+			encoding="utf-8",
+		)
+		(reviews / "review_model_two.log").write_text(
+			"REVIEWER_CACHE: slot=moonshotai/kimi-k2.5 model=moonshotai/kimi-k2.5 attempt=1 status=unsupported prompt_reused=true\n"
+			"Reviewer slot moonshotai/kimi-k2.5 (moonshotai/kimi-k2.5) recorded codex_stall_killed on attempt 1 (exit=137).\n"
+			"Reviewer slot moonshotai/kimi-k2.5 (moonshotai/kimi-k2.5) failure classified as retryable (timeout) on attempt 1.\n"
+			"REVIEWER_ADVANCE: slot=moonshotai/kimi-k2.5 model=moonshotai/kimi-k2.5 reason=stall_guard next_action=skip_unmapped\n"
+			"INFO: openrouter usage phase=review call=review model=moonshotai/kimi-k2.5 cache_enabled=true cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na prompt_tokens=2800 completion_tokens=80 total_tokens=2880 cache_creation_input_tokens=0 cache_read_input_tokens=0 usage_available=true\n"
+			"REVIEWER_SLOT_STATE: slot=moonshotai/kimi-k2.5 retryable_failure_count=1 retryable_failure_classes=timeout backoff_sleep_secs_total=0 slot_retry_budget_exhausted=false fallback_model_used=false cache_status=unsupported cache_reuse_attempted=false\n",
+			encoding="utf-8",
+		)
+
+		(reviews / "status_review_model_three.txt").write_text("failed\n", encoding="utf-8")
+		(reviews / "review_model_three.txt").write_text("reviewer failure\n", encoding="utf-8")
+		(reviews / "review_model_three.log").write_text(
+			"INFO: openrouter usage phase=review call=review model=fixture/model cache_enabled=true cache_breakpoint_enabled=na cache_breakpoint_fallback_retry=na prompt_tokens=900 completion_tokens=30 total_tokens=930 cache_creation_input_tokens=0 cache_read_input_tokens=33 usage_available=true\n",
+			encoding="utf-8",
+		)
+
+		step_summary = tmp / "step_summary.md"
+		env = os.environ.copy()
+		env.update({
+			"RUNTIME_DIR": str(runtime),
+			"PREVIOUS_REVIEWS_DIR": str(reviews),
+			"EDITOR_SUMMARY_FILE": str(runtime / "editor_summary.txt"),
+			"COMMITTED_FILES_FILE": str(runtime / "committed_files.txt"),
+			"GITHUB_STEP_SUMMARY": str(step_summary),
+			"AUTOFIX_ITERATION_METRIC": "3",
+			"REVIEWERS_SUCCESSFUL": "1",
+			"REVIEW_CONSOLIDATOR_ENABLED": "1",
+		})
+		if extra_env:
+			env.update(extra_env)
+
+		result = subprocess.run(
+			["bash", "-c", f"set -euo pipefail\n{summary_script}"],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+
+		summary_line = next(
+			line for line in result.stdout.splitlines() if line.startswith("REVIEW_AUTOFIX_RUN_SUMMARY_V1 ")
+		)
+		summary = json.loads(summary_line.split(" ", 1)[1])
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			"step_summary": step_summary.read_text(encoding="utf-8"),
+			"summary": summary,
+		}
+
+
+def _run_reviewer_partial_finalize_budget_harness() -> dict[str, object]:
+	partial_finalize_budget_helper_block = _reviewer_partial_finalize_budget_helper_block()
+	run_reviewer_block = _reviewer_run_reviewer_block()
+	run_reviewer_pass_block = _reviewer_run_reviewer_pass_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-partial-finalize-") as td:
+		tmp = Path(td)
+		reviews = tmp / "reviews"
+		runtime = tmp / "runtime"
+		home = tmp / "home"
+		runner_temp = tmp / "runner_temp"
+		seed_codex_home = tmp / "codex_home_seed"
+		reviews.mkdir()
+		runtime.mkdir()
+		home.mkdir()
+		runner_temp.mkdir()
+		seed_codex_home.mkdir()
+
+		prompt_file = runtime / "reviewer_prompt.patch"
+		prompt_file.write_text(PHASE_G_FLAKY_REVIEWER_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+
+		state_file = tmp / "state.txt"
+		github_env_file = tmp / "github_env.txt"
+		call_marker = tmp / "run_reviewer_called.txt"
+
+		env = os.environ.copy()
+		env.update({
+			"PREVIOUS_REVIEWS_DIR": str(reviews),
+			"RUNTIME_DIR": str(runtime),
+			"PROMPT_FILE": str(prompt_file),
+			"PR_NUMBER": "123",
+			"RUNNER_TEMP": str(runner_temp),
+			"HOME": str(home),
+			"CODEX_HOME": str(seed_codex_home),
+			"GITHUB_ENV": str(github_env_file),
+			"REVIEWER_REASONING_EFFORT": "xhigh",
+			"REVIEW_PR_STATE_POLL_INTERVAL_SECS": "10",
+			"REVIEW_SOFT_DEADLINE_MINUTES": "210",
+			"JOB_START_EPOCH": "",
+			"CODEX_RUN_BUDGET_START_EPOCH": "",
+			"CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH": "",
+			"CODEX_RUN_BUDGET_TOTAL_SECS": "",
+			"STATE_FILE": str(state_file),
+			"CALL_MARKER": str(call_marker),
+		})
+
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{partial_finalize_budget_helper_block}\n"
+				f"{run_reviewer_block}\n"
+				f"{run_reviewer_pass_block}\n"
+				"run_reviewer() {\n"
+				"\t: > \"${CALL_MARKER}\"\n"
+				"\treturn 97\n"
+				"}\n"
+				"get_active_reviewer_models_text() {\n"
+				"\tprintf 'x-ai/grok-4.20\\n'\n"
+				"}\n"
+				"prepare_reviewer_prompt_for_model() {\n"
+				"\tprintf '%s\\n' \"${2:-}\"\n"
+				"}\n"
+				"pass_successful=\"$(run_reviewer_pass \"review\" \"${PROMPT_FILE}\" \"xhigh\")\"\n"
+				"{\n"
+				"\tprintf 'PASS_SUCCESSFUL=%s\\n' \"${pass_successful}\"\n"
+				"\tprintf 'REQUEST_FILE=%s\\n' \"${REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE}\"\n"
+				"\tprintf 'GITHUB_ENV_FILE=%s\\n' \"${GITHUB_ENV}\"\n"
+				"} > \"${STATE_FILE}\"\n",
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+
+		state: dict[str, str] = {}
+		for raw_line in state_file.read_text(encoding="utf-8").splitlines():
+			if "=" not in raw_line:
+				continue
+			key, value = raw_line.split("=", 1)
+			state[key] = value
+
+		request_file = Path(state["REQUEST_FILE"])
+		github_env = Path(state["GITHUB_ENV_FILE"])
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			**state,
+			"request_file_content": request_file.read_text(encoding="utf-8"),
+			"github_env_content": github_env.read_text(encoding="utf-8"),
+			"reviewer_called": call_marker.exists(),
+		}
+
+
+def _run_reviewer_health_dispatch_logging_harness() -> dict[str, str]:
+	helper_block = _reviewer_failback_helper_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-health-dispatch-") as td:
+		tmp = Path(td)
+		health_file = tmp / "reviewer_health_state.json"
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{helper_block}\n"
+				"reviewer_health_state_action() {\n"
+				"\tcat <<'EOF'\n"
+				"decision=run\n"
+				"state=healthy\n"
+				"transition=healthy\n"
+				"reason=open_ttl_expired\n"
+				"consecutive_retryable_failures=0\n"
+				"effective_model=x-ai/grok-4.3\n"
+				"open_until_epoch=0\n"
+				"EOF\n"
+				"}\n"
+				"reviewer_health_dispatch_prepare 'x-ai/grok-4.20'\n",
+			],
+			cwd=str(REPO_ROOT),
+			env={
+				**os.environ,
+				"REVIEWER_CIRCUIT_BREAKER_ENABLED": "1",
+				"REVIEWER_HEALTH_STATE_FILE": str(health_file),
+			},
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+		}
+
+
+def _run_reviewer_zero_success_guard_harness(*, statuses: list[str], review_tier: str = "standard") -> dict[str, object]:
+	guard_block = _reviewer_zero_success_guard_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-zero-success-") as td:
+		tmp = Path(td)
+		reviews = tmp / "reviews"
+		reviews.mkdir()
+		github_env_file = tmp / "github_env.txt"
+		active_models_file_for_guard = tmp / "active_models.txt"
+		active_models_file_for_guard.write_text("".join(f"model{idx}\n" for idx in range(1, len(statuses) + 1)), encoding="utf-8")
+
+		for idx, status in enumerate(statuses, 1):
+			(reviews / f"status_review_model{idx}.txt").write_text(f"{status}\n", encoding="utf-8")
+			(reviews / f"review_model{idx}.log").write_text(f"status={status}\n", encoding="utf-8")
+
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				"reviewers_successful=0\n"
+				f"{guard_block}\n",
+			],
+			cwd=str(REPO_ROOT),
+			env={
+				**os.environ,
+				"PREVIOUS_REVIEWS_DIR": str(reviews),
+				"PR_NUMBER": "123",
+				"REVIEW_TIER": review_tier,
+				"REVIEWER_ACTIVE_MODELS_FILE": str(active_models_file_for_guard),
+				"GITHUB_ENV": str(github_env_file),
+			},
+			capture_output=True,
+			text=True,
+		)
+
+		return {
+			"returncode": result.returncode,
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			"github_env": github_env_file.read_text(encoding="utf-8") if github_env_file.exists() else "",
+		}
+
+
+def _run_restore_same_head_resume_harness(
+	*,
+	markers: list[dict[str, object]],
+	review_max_resume_rounds: str = "3",
+	artifacts_by_round: dict[int, dict[str, dict[str, str]]] | None = None,
+) -> dict[str, object]:
+	with tempfile.TemporaryDirectory(prefix="review-resume-restore-") as td:
+		tmp = Path(td)
+		repo = tmp / "repo"
+		repo.mkdir()
+		head_sha = _init_git_repo(repo)
+		marker_root = repo / ".ai" / "review_runtime" / "pr-123"
+		marker_root.mkdir(parents=True)
+
+		for marker in markers:
+			payload = dict(marker)
+			payload.setdefault("base_ref", "main")
+			if payload.get("head_sha") == "__HEAD__":
+				payload["head_sha"] = head_sha
+			round_value = int(payload["resume_round"])
+			marker_dir = marker_root / f"round-{round_value}"
+			marker_dir.mkdir(parents=True, exist_ok=True)
+			(marker_dir / "partial_finalize.json").write_text(
+				json.dumps(payload, sort_keys=True, indent=2) + "\n",
+				encoding="utf-8",
+			)
+			for directory_name, file_map in (artifacts_by_round or {}).get(round_value, {}).items():
+				directory = marker_dir / directory_name
+				directory.mkdir(parents=True, exist_ok=True)
+				for file_name, contents in file_map.items():
+					(directory / file_name).write_text(str(contents), encoding="utf-8")
+
+		result = _run_restore_same_head_resume_step(
+			repo,
+			review_max_resume_rounds=review_max_resume_rounds,
+			runtime_dir=tmp / "runtime_restored",
+			reviews_dir=tmp / "reviews_restored",
+		)
+		return {
+			**result,
+			"head_sha": head_sha,
+		}
+
+
+def _build_partial_finalize_step_context(tmp: Path) -> dict[str, object]:
+	repo = tmp / "repo"
+	repo.mkdir()
+	head_sha = _init_git_repo(repo)
+	runtime = repo / "runtime"
+	reviews = repo / "reviews"
+	runtime.mkdir()
+	reviews.mkdir()
+	support_scripts_dir = tmp / "support_scripts"
+	support_scripts_dir.mkdir()
+	(support_scripts_dir / "gh_helpers.sh").write_text(
+		"#!/usr/bin/env bash\nset -euo pipefail\ngh_retry() { \"$@\"; }\n",
+		encoding="utf-8",
+	)
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	gh_state_file = tmp / "gh_state.json"
+	_install_partial_finalize_mock_gh(bin_dir, gh_state_file)
+
+	paths = {
+		"repo": repo,
+		"runtime": runtime,
+		"reviews": reviews,
+		"support_scripts_dir": support_scripts_dir,
+		"bin_dir": bin_dir,
+		"gh_state_file": gh_state_file,
+		"editor_summary": runtime / "editor_summary.txt",
+		"committed_files": runtime / "committed_files.txt",
+	}
+	(reviews / "status_review_model_one.txt").write_text("success\n", encoding="utf-8")
+	(reviews / "review_model_one.txt").write_text("cached reviewer output\n", encoding="utf-8")
+	(runtime / "reviewer_consensus.txt").write_text("consensus sentinel\n", encoding="utf-8")
+	(runtime / "reviewer_bundle.txt").write_text("bundle sentinel\n", encoding="utf-8")
+	(runtime / "floor_tags.txt").write_text("CORRECTNESS & LOGIC\n", encoding="utf-8")
+	(runtime / "consolidator_raw.txt").write_text("consolidator sentinel\n", encoding="utf-8")
+	(runtime / "parser_stats.txt").write_text("parsed_blocks=1\npassthrough_blocks=0\nline_unverified=0\n", encoding="utf-8")
+	(runtime / "review_issues.txt").write_text("issue sentinel\n", encoding="utf-8")
+	(runtime / "ledger_status.txt").write_text(
+		"issue-1\tNEW\t0\tscripts/review_apply_fixes.sh:1\tCORRECTNESS & LOGIC\t[]\n",
+		encoding="utf-8",
+	)
+	Path(paths["editor_summary"]).write_text("editor summary sentinel\n", encoding="utf-8")
+	Path(paths["committed_files"]).write_text("", encoding="utf-8")
+	return {"head_sha": head_sha, **paths}
+
+
+def _run_partial_finalize_step(
+	context: dict[str, object],
+	*,
+	previous_env: dict[str, str] | None = None,
+	editor_summary_text: str | None = None,
+	committed_files_text: str | None = None,
+	runtime_dir: Path | None = None,
+	reviews_dir: Path | None = None,
+	review_max_resume_rounds: str = "3",
+	partial_phase: str = "editor",
+	partial_reason: str = "soft_deadline",
+	edits_pushed: str = "false",
+	editor_commit_produced: str = "false",
+	validation_tail_can_complete: str = "true",
+	edits_withheld_for_safety: str = "false",
+	withheld_reason: str = "none",
+) -> dict[str, object]:
+	partial_script = _step_run_script("Post partial finalize comment and persist runtime marker")
+	repo = Path(context["repo"])
+	runtime = runtime_dir or Path(context["runtime"])
+	reviews = reviews_dir or Path(context["reviews"])
+	gh_state_file = Path(context["gh_state_file"])
+	runtime.mkdir(parents=True, exist_ok=True)
+	reviews.mkdir(parents=True, exist_ok=True)
+	editor_summary = runtime / "editor_summary.txt"
+	committed_files = runtime / "committed_files.txt"
+
+	if editor_summary_text is not None:
+		editor_summary.write_text(editor_summary_text, encoding="utf-8")
+	if committed_files_text is not None:
+		committed_files.write_text(committed_files_text, encoding="utf-8")
+
+	run_index = len(json.loads(gh_state_file.read_text(encoding="utf-8") or "{}").get("issue_comments", [])) + 1
+	github_env_file = runtime / f"github_env_run_{run_index}.txt"
+	github_env_file.write_text("", encoding="utf-8")
+	resume_env = previous_env or {}
+	result = subprocess.run(
+		["bash", "-c", f"set -euo pipefail\n{partial_script}"],
+		cwd=str(repo),
+			env=_git_clean_env({
+				"PATH": f"{context['bin_dir']}:{os.environ.get('PATH', '')}",
+			"MOCK_GH_STATE_FILE": str(gh_state_file),
+			"SUPPORT_SCRIPTS_DIR": str(context["support_scripts_dir"]),
+			"GITHUB_ENV": str(github_env_file),
+			"GH_TOKEN": "test-token",
+			"PR_NUMBER": "123",
+			"RETARGETED_BASE_REF": "main",
+			"RUNTIME_DIR": str(runtime),
+			"PREVIOUS_REVIEWS_DIR": str(reviews),
+			"EDITOR_SUMMARY_FILE": str(editor_summary),
+			"COMMITTED_FILES_FILE": str(committed_files),
+			"GITHUB_REPOSITORY": "owner/repo",
+				"WORKFLOW_RUN_URL": "https://github.com/owner/repo/actions/runs/12345",
+				"AUTOFIX_PARTIAL_FINALIZE_REASON": partial_reason,
+				"AUTOFIX_PARTIAL_FINALIZE_PHASE": partial_phase,
+				"AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": validation_tail_can_complete,
+				"AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY": edits_withheld_for_safety,
+				"AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON": withheld_reason,
+				"AUTOFIX_EDITS_PUSHED": edits_pushed,
+				"EDITOR_COMMIT_PRODUCED": editor_commit_produced,
+			"REVIEW_MAX_RESUME_ROUNDS": review_max_resume_rounds,
+			"AUTOFIX_RESUME_ROUND": resume_env.get("AUTOFIX_RESUME_ROUND", "0"),
+			"AUTOFIX_RESUME_PROGRESS_FINGERPRINT": resume_env.get("AUTOFIX_RESUME_PROGRESS_FINGERPRINT", ""),
+			"AUTOFIX_RESUME_HEAD_SHA": resume_env.get("AUTOFIX_RESUME_HEAD_SHA", str(context["head_sha"])),
+			"AUTOFIX_RESUME_ROUND_LIMIT": resume_env.get("AUTOFIX_RESUME_ROUND_LIMIT", review_max_resume_rounds),
+			"PYTHONDONTWRITEBYTECODE": "1",
+		}),
+		check=True,
+		capture_output=True,
+		text=True,
+	)
+	github_env = _parse_env_file(github_env_file)
+	marker_path = Path(github_env["AUTOFIX_PARTIAL_MARKER_FILE"])
+	if not marker_path.is_absolute():
+		marker_path = repo / marker_path
+	marker_payload = json.loads(marker_path.read_text(encoding="utf-8"))
+	gh_state = json.loads(gh_state_file.read_text(encoding="utf-8"))
+	issue_comments = gh_state.get("issue_comments", []) if isinstance(gh_state, dict) else []
+	latest_comment = issue_comments[-1]["body"] if issue_comments else ""
+	return {
+		"stdout": result.stdout,
+		"stderr": result.stderr,
+		"github_env": github_env,
+		"marker_payload": marker_payload,
+		"latest_comment": latest_comment,
+		"gh_state": gh_state,
+	}
+
+
+def _run_reviewer_resume_cached_success_harness() -> dict[str, object]:
+	partial_finalize_budget_helper_block = _reviewer_partial_finalize_budget_helper_block()
+	run_reviewer_pass_block = _reviewer_run_reviewer_pass_block()
+	with tempfile.TemporaryDirectory(prefix="reviewer-resume-cached-success-") as td:
+		tmp = Path(td)
+		reviews = tmp / "reviews"
+		runtime = tmp / "runtime"
+		reviews.mkdir()
+		runtime.mkdir()
+
+		prompt_file = runtime / "reviewer_prompt.patch"
+		prompt_file.write_text(PHASE_G_FLAKY_REVIEWER_FIXTURE.read_text(encoding="utf-8"), encoding="utf-8")
+		called_models_file = tmp / "called_models.txt"
+		state_file = tmp / "state.txt"
+		github_env_file = tmp / "github_env.txt"
+
+		cached_model = "x-ai/grok-4.20"
+		rerun_model = "moonshotai/kimi-k2.5"
+		cached_safe_name = cached_model.translate(str.maketrans({"/": "_", ".": "_", ":": "_"}))
+		rerun_safe_name = rerun_model.translate(str.maketrans({"/": "_", ".": "_", ":": "_"}))
+		(reviews / f"status_review_{cached_safe_name}.txt").write_text("success\n", encoding="utf-8")
+		(reviews / f"review_{cached_safe_name}.txt").write_text("cached reviewer output\n", encoding="utf-8")
+		(reviews / f"review_{cached_safe_name}.log").write_text("cached log\n", encoding="utf-8")
+		(reviews / f"status_review_{rerun_safe_name}.txt").write_text("failed\n", encoding="utf-8")
+		(reviews / f"review_{rerun_safe_name}.txt").write_text("stale failure output\n", encoding="utf-8")
+		env = {
+			**os.environ,
+			"PREVIOUS_REVIEWS_DIR": str(reviews),
+			"RUNTIME_DIR": str(runtime),
+			"PROMPT_FILE": str(prompt_file),
+			"GITHUB_ENV": str(github_env_file),
+			"REVIEWER_REASONING_EFFORT": "xhigh",
+			"REVIEW_PR_STATE_POLL_INTERVAL_SECS": "10",
+			"AUTOFIX_RESUME_RESTORED": "true",
+			"AUTOFIX_RESUME_SHOULD_CONTINUE": "true",
+			"AUTOFIX_RESUME_STATE": "resumable",
+			"CALLED_MODELS_FILE": str(called_models_file),
+			"STATE_FILE": str(state_file),
+		}
+		env.update(_reviewer_harness_budget_env())
+
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				"emit_run_budget_gate_note() { :; }\n"
+				"reviewer_circuit_breaker_enabled() { return 1; }\n"
+				f"{partial_finalize_budget_helper_block}\n"
+				f"{run_reviewer_pass_block}\n"
+				"run_reviewer() {\n"
+				"\tlocal model=\"$1\"\n"
+				"\tlocal safe_name=\"$2\"\n"
+				"\tlocal output_prefix=\"${3:-review}\"\n"
+				"\tprintf '%s\\n' \"${model}\" >> \"${CALLED_MODELS_FILE}\"\n"
+				"\tprintf 'fresh reviewer output for %s\\n' \"${model}\" > \"${PREVIOUS_REVIEWS_DIR}/${output_prefix}_${safe_name}.txt\"\n"
+				"\techo success > \"${PREVIOUS_REVIEWS_DIR}/status_${output_prefix}_${safe_name}.txt\"\n"
+				"\tprintf 'fresh log for %s\\n' \"${model}\" > \"${PREVIOUS_REVIEWS_DIR}/${output_prefix}_${safe_name}.log\"\n"
+				"}\n"
+				"get_active_reviewer_models_text() {\n"
+				f"\tprintf '{cached_model}\\n{rerun_model}\\n'\n"
+				"}\n"
+				"pass_successful=\"$(run_reviewer_pass \"review\" \"${PROMPT_FILE}\" \"xhigh\")\"\n"
+				"{\n"
+				"\tprintf 'PASS_SUCCESSFUL=%s\\n' \"${pass_successful}\"\n"
+				"\tprintf 'CALLED_MODELS_FILE=%s\\n' \"${CALLED_MODELS_FILE}\"\n"
+				f"\tprintf 'CACHED_LOG_FILE=%s\\n' \"${{PREVIOUS_REVIEWS_DIR}}/review_{cached_safe_name}.log\"\n"
+				f"\tprintf 'RERUN_OUTPUT_FILE=%s\\n' \"${{PREVIOUS_REVIEWS_DIR}}/review_{rerun_safe_name}.txt\"\n"
+				"} > \"${STATE_FILE}\"\n",
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+
+		state = _parse_env_file(state_file)
+		return {
+			"stdout": result.stdout,
+			"stderr": result.stderr,
+			**state,
+			"called_models": called_models_file.read_text(encoding="utf-8").splitlines() if called_models_file.exists() else [],
+			"cached_log": Path(state["CACHED_LOG_FILE"]).read_text(encoding="utf-8"),
+			"rerun_output": Path(state["RERUN_OUTPUT_FILE"]).read_text(encoding="utf-8"),
+		}
+
+
+def test_review_pipeline_knobs_are_wired_into_codex_agent_env() -> None:
+	workflow = _workflow_text()
+	for expected in (
+		"REVIEW_FLOOR_RULES_ENABLED: ${{ vars.REVIEW_FLOOR_RULES_ENABLED || '1' }}",
+		"REVIEW_FLOOR_KEYWORDS_FILE: ${{ vars.REVIEW_FLOOR_KEYWORDS_FILE || '' }}",
+		"REVIEW_CONSOLIDATOR_ENABLED: ${{ vars.REVIEW_CONSOLIDATOR_ENABLED || '1' }}",
+		"REVIEW_CONSOLIDATOR_MODEL: ${{ vars.REVIEW_CONSOLIDATOR_MODEL || 'openai/gpt-6-sol' }}",
+		"REVIEW_CONSOLIDATOR_REASONING: ${{ vars.REVIEW_CONSOLIDATOR_REASONING || 'high' }}",
+		"REVIEW_CONSOLIDATOR_TIMEOUT_SECS: ${{ vars.REVIEW_CONSOLIDATOR_TIMEOUT_SECS || '300' }}",
+		"REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT: ${{ vars.REVIEW_CONSOLIDATOR_MAX_TOKENS_OUT || '16000' }}",
+		"REVIEW_PARSER_FAILOPEN: ${{ vars.REVIEW_PARSER_FAILOPEN || '1' }}",
+		"CONSOLIDATOR_REJECT_SCHEMA_ENABLED: ${{ vars.CONSOLIDATOR_REJECT_SCHEMA_ENABLED || 'false' }}",
+		"REVIEW_LEDGER_ENABLED: ${{ vars.REVIEW_LEDGER_ENABLED || '1' }}",
+		"REVIEW_LEDGER_PERSIST_LIMIT: ${{ vars.REVIEW_LEDGER_PERSIST_LIMIT || '2' }}",
+		"REVIEW_LEDGER_PATH: ${{ vars.REVIEW_LEDGER_PATH || format('.ai/review_issue_ledger/pr-{0}.txt', inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || '0') }}",
+		"REVIEW_REVIEWER_CHECKLIST_ENABLED: ${{ vars.REVIEW_REVIEWER_CHECKLIST_ENABLED || '1' }}",
+		"REVIEW_REVIEWER_ITERATION_SCOPING: ${{ vars.REVIEW_REVIEWER_ITERATION_SCOPING || '1' }}",
+		"FORCE_FULL_REVIEW_TIER: ${{ needs.gate.outputs.force_full_review_tier || 'false' }}",
+		"REVIEW_TIER_RESOLVER_ENABLED: ${{ vars.REVIEW_TIER_RESOLVER_ENABLED || 'true' }}",
+		"REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}",
+		"REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || '' }}",
+		"REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}",
+		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || '' }}",
+		"REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}",
+		"REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}",
+		"REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}",
+		"REVIEWER_RISK_TIER_LITE_LOC: ${{ vars.REVIEWER_RISK_TIER_LITE_LOC || '100' }}",
+		"REVIEWER_RISK_TIER_LITE_FILES: ${{ vars.REVIEWER_RISK_TIER_LITE_FILES || '20' }}",
+		"REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX: ${{ vars.REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX || '^(scripts/|\\.github/workflows/|\\.github/ai/|prompts/|workflow-templates/|db/contracts/|ai-memory/)' }}",
+		"REVIEWER_TIER_TRIVIAL_MODELS: ${{ vars.REVIEWER_TIER_TRIVIAL_MODELS || '' }}",
+		"REVIEWER_TIER_LITE_MODELS: ${{ vars.REVIEWER_TIER_LITE_MODELS || '' }}",
+		"REVIEWER_CIRCUIT_BREAKER_ENABLED: ${{ vars.REVIEWER_CIRCUIT_BREAKER_ENABLED || '0' }}",
+		"REVIEWER_FAILBACK_MAX_RETRIES: ${{ vars.REVIEWER_FAILBACK_MAX_RETRIES || '1' }}",
+		"REVIEWER_SLOT_RETRYABLE_FAILURE_LIMIT: ${{ vars.REVIEWER_SLOT_RETRYABLE_FAILURE_LIMIT || '3' }}",
+		"REVIEWER_SLOT_BACKOFF_BASE_SECS: ${{ vars.REVIEWER_SLOT_BACKOFF_BASE_SECS || '2' }}",
+		"REVIEWER_SLOT_BACKOFF_CAP_SECS: ${{ vars.REVIEWER_SLOT_BACKOFF_CAP_SECS || '30' }}",
+		"REVIEWER_SLOT_BACKOFF_BUDGET_RATIO: ${{ vars.REVIEWER_SLOT_BACKOFF_BUDGET_RATIO || '0.05' }}",
+		"REVIEWER_HEALTH_OPEN_THRESHOLD: ${{ vars.REVIEWER_HEALTH_OPEN_THRESHOLD || '3' }}",
+		"REVIEWER_HEALTH_OPEN_TTL_SECS: ${{ vars.REVIEWER_HEALTH_OPEN_TTL_SECS || '1800' }}",
+		"REVIEW_SOFT_DEADLINE_MINUTES: ${{ vars.REVIEW_SOFT_DEADLINE_MINUTES || '210' }}",
+		"CONTEXT_BUDGET_WARN_RATIO: ${{ vars.CONTEXT_BUDGET_WARN_RATIO || '0.7' }}",
+		"MAX_PROMPT_TOKENS_FOR_PHASE: ${{ vars.MAX_PROMPT_TOKENS_FOR_PHASE || '' }}",
+		"CODEX_HEARTBEAT_ENABLED: ${{ vars.CODEX_HEARTBEAT_ENABLED || '1' }}",
+		"CODEX_HEARTBEAT_INTERVAL_SECS: ${{ vars.CODEX_HEARTBEAT_INTERVAL_SECS || '30' }}",
+		"CODEX_STALL_GUARD_ENABLED: ${{ vars.CODEX_STALL_GUARD_ENABLED || 'true' }}",
+		"CODEX_STALL_TIMEOUT_SECONDS: ${{ vars.CODEX_STALL_TIMEOUT_SECONDS || '600' }}",
+		"CODEX_STALL_KILL_GRACE_SECONDS: ${{ vars.CODEX_STALL_KILL_GRACE_SECONDS || '30' }}",
+		"REVIEWER_FILTER_UNINTERESTING_ENABLED: ${{ vars.REVIEWER_FILTER_UNINTERESTING_ENABLED || 'false' }}",
+		"REVIEWER_FILTER_EXTRA_GLOBS: ${{ vars.REVIEWER_FILTER_EXTRA_GLOBS || '' }}",
+		"REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}",
+		"SLOP_SCAN_ENABLED: ${{ vars.SLOP_SCAN_ENABLED || 'true' }}",
+		"REVIEW_MAX_RESUME_ROUNDS: ${{ vars.REVIEW_MAX_RESUME_ROUNDS || '3' }}",
+		"AGENTS_MD_MATERIALITY_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_ENABLED || '1' }}",
+		"AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '0' }}",
+		"AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-6-luna' }}",
+		"AGENTS_MD_MATERIALITY_REASONING: ${{ vars.AGENTS_MD_MATERIALITY_REASONING || 'medium' }}",
+		"REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED: ${{ vars.REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED || 'true' }}",
+	):
+		assert expected in workflow, f"Missing codex-agent env wiring: {expected}"
+
+	for expected in (
+		"CODEX_STALL_GUARD_ENABLED: ${{ vars.CODEX_STALL_GUARD_ENABLED || 'true' }}",
+		"CODEX_STALL_TIMEOUT_SECONDS: ${{ vars.CODEX_STALL_TIMEOUT_SECONDS || '600' }}",
+		"CODEX_STALL_KILL_GRACE_SECONDS: ${{ vars.CODEX_STALL_KILL_GRACE_SECONDS || '30' }}",
+	):
+		assert workflow.count(expected) >= 2, f"Review stall wiring must appear in both workflow env blocks: {expected}"
+
+	stage_step_block = _step_block("Stage workflow support files")
+	assert '.codex-workflow-src/scripts/stage_workflow_support.sh' in stage_step_block
+	assert '.codex-workflow-src-main/scripts/stage_workflow_support.sh' not in stage_step_block
+	assert "REQUIRED_BOOTSTRAP_SCRIPTS=" not in stage_step_block
+	assert 'mkdir -p "${SUPPORT_SCRIPTS_DIR}"' not in stage_step_block
+	required_bootstrap_line = next(
+		line for line in _stage_helper_text().splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line
+	)
+	assert "codex_heartbeat.sh" in required_bootstrap_line, required_bootstrap_line
+	assert "cost_audit.py" in required_bootstrap_line, required_bootstrap_line
+
+	for expected in (
+		"REVIEW_TIER_RESOLVER_ENABLED: ${{ vars.REVIEW_TIER_RESOLVER_ENABLED || 'true' }}",
+		"REVIEW_TIER_LITE_MAX_LOC: ${{ vars.REVIEW_TIER_LITE_MAX_LOC || '50' }}",
+		"REVIEW_TIER_LITE_REVIEWER_SLUG: ${{ vars.REVIEW_TIER_LITE_REVIEWER_SLUG || '' }}",
+		"REVIEW_TIER_STANDARD_MAX_LOC: ${{ vars.REVIEW_TIER_STANDARD_MAX_LOC || '200' }}",
+		"REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || '' }}",
+		"REVIEWER_RISK_TIER_ENABLED: ${{ vars.REVIEWER_RISK_TIER_ENABLED || '0' }}",
+		"REVIEWER_RISK_TIER_TRIVIAL_LOC: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_LOC || '10' }}",
+		"REVIEWER_RISK_TIER_TRIVIAL_FILES: ${{ vars.REVIEWER_RISK_TIER_TRIVIAL_FILES || '20' }}",
+		"REVIEWER_RISK_TIER_LITE_LOC: ${{ vars.REVIEWER_RISK_TIER_LITE_LOC || '100' }}",
+		"REVIEWER_RISK_TIER_LITE_FILES: ${{ vars.REVIEWER_RISK_TIER_LITE_FILES || '20' }}",
+		"REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX: ${{ vars.REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX || '^(scripts/|\\.github/workflows/|\\.github/ai/|prompts/|workflow-templates/|db/contracts/|ai-memory/)' }}",
+		"REVIEWER_TIER_TRIVIAL_MODELS: ${{ vars.REVIEWER_TIER_TRIVIAL_MODELS || '' }}",
+		"REVIEWER_TIER_LITE_MODELS: ${{ vars.REVIEWER_TIER_LITE_MODELS || '' }}",
+		"REVIEWER_CIRCUIT_BREAKER_ENABLED: ${{ vars.REVIEWER_CIRCUIT_BREAKER_ENABLED || '0' }}",
+		"REVIEWER_FAILBACK_MAX_RETRIES: ${{ vars.REVIEWER_FAILBACK_MAX_RETRIES || '1' }}",
+		"REVIEWER_SLOT_RETRYABLE_FAILURE_LIMIT: ${{ vars.REVIEWER_SLOT_RETRYABLE_FAILURE_LIMIT || '3' }}",
+		"REVIEWER_SLOT_BACKOFF_BASE_SECS: ${{ vars.REVIEWER_SLOT_BACKOFF_BASE_SECS || '2' }}",
+		"REVIEWER_SLOT_BACKOFF_CAP_SECS: ${{ vars.REVIEWER_SLOT_BACKOFF_CAP_SECS || '30' }}",
+		"REVIEWER_SLOT_BACKOFF_BUDGET_RATIO: ${{ vars.REVIEWER_SLOT_BACKOFF_BUDGET_RATIO || '0.05' }}",
+		"REVIEWER_HEALTH_OPEN_THRESHOLD: ${{ vars.REVIEWER_HEALTH_OPEN_THRESHOLD || '3' }}",
+		"REVIEWER_HEALTH_OPEN_TTL_SECS: ${{ vars.REVIEWER_HEALTH_OPEN_TTL_SECS || '1800' }}",
+		"REVIEW_SOFT_DEADLINE_MINUTES: ${{ vars.REVIEW_SOFT_DEADLINE_MINUTES || '210' }}",
+		"AGENTS_MD_MATERIALITY_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_ENABLED || '1' }}",
+		"AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED: ${{ vars.AGENTS_MD_MATERIALITY_LLM_FALLBACK_ENABLED || '0' }}",
+		"AGENTS_MD_MATERIALITY_MODEL: ${{ vars.AGENTS_MD_MATERIALITY_MODEL || 'openai/gpt-6-luna' }}",
+		"AGENTS_MD_MATERIALITY_REASONING: ${{ vars.AGENTS_MD_MATERIALITY_REASONING || 'medium' }}",
+		"REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED: ${{ vars.REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED || 'true' }}",
+	):
+		assert workflow.count(expected) >= 2, f"Missing workflow-level + codex-agent env wiring: {expected}"
+
+
+def test_opencode_full_review_cutover_removes_codex_runtime() -> None:
+	workflow = _workflow_text()
+	stage_helper = _stage_helper_text()
+	reviewers = _reviewers_text()
+	summariser = SUMMARISER.read_text(encoding="utf-8")
+	apply_fixes = _apply_fixes_text()
+	consolidate = _consolidate_text()
+	rb_judge = RB_JUDGE.read_text(encoding="utf-8")
+	resolver = (REPO_ROOT / "scripts" / "review_conflict_resolve.sh").read_text(encoding="utf-8")
+	preflight_block = _step_block('"Preflight: Verify required files before reviewer invocation"')
+
+	assert "OPENCODE_VERSION: ${{ vars.OPENCODE_VERSION || '1.18.23' }}" in workflow
+	assert "Install Codex CLI" not in workflow
+	assert "Create Codex config" not in workflow
+	assert ".codex/config.toml" not in workflow
+	opencode_install = _step_block("Install OpenCode CLI")
+	assert "install-opencode@0e8d83a7bc8c05218b77026899c8d53f45ab921f" in opencode_install
+	assert "opencode_version: ${{ env.OPENCODE_VERSION }}" in opencode_install
+	assert "continue-on-error" not in opencode_install
+
+	required_bootstrap_line = next(
+		line for line in stage_helper.splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line
+	)
+	for helper_name in ("opencode_helpers.sh", "write_opencode_config.sh"):
+		assert helper_name in required_bootstrap_line
+		assert helper_name in workflow.split("REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS:", 1)[1].split("REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS:", 1)[0]
+	assert 'command -v opencode' in preflight_block
+	assert 'command -v codex' not in preflight_block
+	for expected in (
+		"opencode_emit_failure_alert review_autofix_preflight reviewer",
+		"emit_opencode_preflight_alert 1 helpers_missing",
+		"emit_opencode_preflight_alert 1 config_writer_missing",
+		"emit_opencode_preflight_alert 127 binary_missing",
+	):
+		assert expected in preflight_block
+
+	assert 'source "${OPENCODE_HELPERS_PATH}"' in reviewers
+	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in reviewers
+	assert 'OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR:-scripts}/write_opencode_config.sh}"' in reviewers
+	assert 'opencode_emit_failure_alert review_run_reviewers reviewer "${reviewer_helpers_alert_model}" 1 config_writer_missing' in reviewers
+	assert 'bash "${OPENCODE_CONFIG_WRITER_PATH}" \\' in reviewers
+	assert '--model "${effective_model}"' in reviewers
+	assert '--variant "${variant}"' in (REPO_ROOT / "scripts" / "opencode_helpers.sh").read_text(encoding="utf-8")
+	assert reviewers.count('"${probe_opencode_cmd[@]}"') == 2
+	assert 'reviewer_strip_opencode_output_file "${tmp_structured_output}"' in reviewers
+	assert 'reviewer_materialize_opencode_json_text "${tmp_structured_output}" "${tmp_output}"' in reviewers
+	assert 'if [ "${reviewer_materialize_rc}" -eq 2 ]; then' in reviewers
+	assert 'reviewer_strip_opencode_output_file "${tmp_stderr}"' in reviewers
+	assert 'opencode_emit_failure_alert review_run_reviewers reviewer' in reviewers
+	assert 'REVIEWER_FAILBACK:' in reviewers
+	assert 'reviewer_record_health_outcome' in reviewers
+
+	assert 'opencode_run_cmd' not in summariser
+	assert 'bash "${summariser_sandbox_sh}" run' in summariser
+	assert '"${sandbox_engine}" SUMMARISER read' in summariser
+	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in summariser
+	assert 'OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR}/write_opencode_config.sh}"' in summariser
+	assert 'opencode_emit_failure_alert review_summariser reviewer "${SUMMARISER_MODEL}" 1 config_writer_missing' in summariser
+	assert 'opencode_emit_failure_alert review_summariser reviewer' in summariser
+	assert 'opencode_strip_ansi < "${tmp_stdout}"' in summariser
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" run' in apply_fixes
+	assert '"${editor_attempt_model}"' in apply_fixes
+	assert 'opencode_emit_failure_alert review_apply_fixes writer' in apply_fixes
+	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in apply_fixes
+	assert 'failure_class=config_writer_missing' in apply_fixes
+	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" 2>/dev/null || true' in apply_fixes
+	assert 'opencode_run_cmd' not in consolidate
+	assert 'prepare-ephemeral codex' in consolidate
+	assert 'codex REVIEW_CONSOLIDATOR read' in consolidate
+	assert '--role reviewer' in consolidate
+	assert 'opencode_emit_failure_alert review_consolidate reviewer' in consolidate
+	assert 'CONSOLIDATOR_ISOLATION outcome=skipped reason=%s' in consolidate
+	sandbox = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	assert '"RB_JUDGE", "REVIEW_CONSOLIDATOR"' in sandbox
+	assert 'RB_JUDGE|REVIEW_CONSOLIDATOR|SUMMARISER|BEHAVIOURAL_SMOKE|JUDGE_INTERIM)' in sandbox
+	assert 'opencode_source_mount+=\',readonly\'' in sandbox
+	assert 'opencode_agent=reviewer' in sandbox
+	assert 'LOG_PREFIX.name=CONSOLIDATOR_ISOLATION' in _agents_text_with_fragments()
+	assert 'opencode_helpers_loaded=false' in consolidate
+	assert 'if source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in consolidate
+	assert 'missing=opencode_config_writer failopen=1 output_bytes=0' in consolidate
+	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" 2>/dev/null || true' in consolidate
+	assert 'review_rb_opencode_sandbox_prepare "${RB_JUDGE_SANDBOX_OPENCODE_CONFIG}" review_rb_judge "${JUDGE_STDERR_FILE}" off' in rb_judge
+	assert 'review_rb_opencode_sandbox_prepare "${RB_FIX_OPENCODE_CONFIG}" review_rb_fix "${RB_FIX_STDERR}" "${rb_fix_serena_mode}"' in rb_judge
+	assert 'OPENCODE_HELPERS_PATH="${OPENCODE_HELPERS_PATH:-${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh}"' in rb_judge
+	assert 'opencode_emit_failure_alert review_rb_judge reviewer' in rb_judge
+	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in rb_judge
+	assert 'opencode_emit_failure_alert review_rb_judge reviewer "${MODEL_EDITOR:-unknown}" 1 config_writer_missing' in rb_judge
+	assert 'source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh" 2>/dev/null || true' in rb_judge
+	assert '[ "${rb_oc_phase}" != review_rb_judge ] || rb_oc_role=reviewer' in rb_judge
+	assert 'if ! review_rb_prepare_opencode_config "${rb_oc_role}" "${rb_oc_phase}" "${rb_oc_config_path}" "${rb_oc_serena_mode}"; then' in rb_judge
+	assert 'review_rb_opencode_sandbox_finish "${rb_fix_rc}" "${RB_FIX_OUTPUT}" "${RB_FIX_STDERR}" || rb_fix_rc=$?' in rb_judge
+	assert 'opencode_run_cmd "$@"' not in resolver
+	assert 'resolver_opencode_cmd=(env "REVIEW_SANDBOX_ROOT=${resolver_opencode_root}" bash "${resolver_sandbox_sh}" run' in resolver
+	assert '--role writer --model "${MODEL_EDITOR}"' in resolver
+	assert '"${_current_reasoning_effort}"' in resolver
+	assert 'if [ ! -f "${OPENCODE_HELPERS_PATH}" ] || ! source "${OPENCODE_HELPERS_PATH}" 2>/dev/null; then' in resolver
+	assert 'opencode_emit_failure_alert review_conflict_resolve writer "${MODEL_EDITOR:-unknown}" 1 config_writer_missing' in resolver
+	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh" 2>/dev/null || true' in resolver
+	for converted in (apply_fixes, consolidate, rb_judge, resolver):
+		assert "--ask-for-approval never" not in converted
+	judge_stall_case = rb_judge.index('case "${judge_stall_state}" in')
+	judge_success_branch = rb_judge.index('if [ "${rc}" -eq 0 ] && grep -q', judge_stall_case)
+	assert judge_stall_case < judge_success_branch
+	assert "shell commands only for read-only inspection" not in reviewers
+	judge_prompt = (REPO_ROOT / "prompts" / "mode-judge-review-blocked.txt").read_text(encoding="utf-8")
+	assert "all tools (shell" not in judge_prompt
+	assert "read, grep, glob, and list" in judge_prompt
+
+
+def _write_telegram_capture_helper(support_dir: Path) -> Path:
+	capture_file = support_dir / "telegram_alerts.txt"
+	(support_dir / "tg_helpers.sh").write_text(
+		'tg_send_msg() { printf \'%s|%s\\n\' "$1" "$2" >> "${TG_CAPTURE_FILE}"; }\n',
+		encoding="utf-8",
+	)
+	return capture_file
+
+
+def test_review_preflight_missing_opencode_binary_emits_classified_error() -> None:
+	with tempfile.TemporaryDirectory(prefix="review-preflight-opencode-missing-") as td:
+		workspace = Path(td)
+		support_dir = workspace / "support"
+		prompts_dir = workspace / "prompts"
+		runtime_dir = workspace / "runtime"
+		previous_reviews_dir = workspace / "reviews"
+		context_dir = workspace / "context"
+		bin_dir = workspace / "bin"
+		for directory in (support_dir, prompts_dir, runtime_dir, previous_reviews_dir, context_dir, bin_dir):
+			directory.mkdir()
+
+		(support_dir / "opencode_helpers.sh").write_text(
+			(REPO_ROOT / "scripts" / "opencode_helpers.sh").read_text(encoding="utf-8"),
+			encoding="utf-8",
+		)
+		(support_dir / "write_opencode_config.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+		telegram_capture = _write_telegram_capture_helper(support_dir)
+		codex_capture = workspace / "codex_invoked.txt"
+		(bin_dir / "codex").write_text(
+			'#!/usr/bin/env bash\nprintf invoked > "${CODEX_CAPTURE_FILE}"\n',
+			encoding="utf-8",
+		)
+		(bin_dir / "codex").chmod(0o755)
+		for command_name in ("dirname", "realpath", "sed", "tr"):
+			(bin_dir / command_name).symlink_to(Path("/usr/bin") / command_name)
+
+		required_files: dict[str, Path] = {
+			"SUPPORT_INSTRUCTIONS_FILE": workspace / "instructions.txt",
+			"PR_DIFF_FILE": workspace / "pr.diff",
+			"ORIGINAL_PR_DIFF_FILE": workspace / "original.diff",
+			"PR_CHANGED_FILES_FILE": workspace / "changed.txt",
+			"PR_ALL_COMMENTS_CONTEXT_FILE": workspace / "comments.txt",
+			"PR_CHECK_RUNS_CONTEXT_FILE": workspace / "checks.txt",
+			"SYMBOL_DIFF_SUMMARY_FILE": workspace / "symbols.txt",
+			"MEMORY_CONTEXT_FILE": workspace / "memory.txt",
+		}
+		for required_path in required_files.values():
+			required_path.write_text("fixture\n", encoding="utf-8")
+		(workspace / "pre_assembled_static.txt").write_text("fixture\n", encoding="utf-8")
+
+		env = os.environ.copy()
+		env.update({
+			"PATH": str(bin_dir),
+			"RUNTIME_DIR": str(runtime_dir),
+			"PREVIOUS_REVIEWS_DIR": str(previous_reviews_dir),
+			"RUNTIME_CONTEXT_DIR": str(context_dir),
+			"SUPPORT_SCRIPTS_DIR": str(support_dir),
+			"SUPPORT_PROMPTS_DIR": str(prompts_dir),
+			"REVIEW_PREFLIGHT_REQUIRED_SUPPORT_SCRIPTS": "opencode_helpers.sh write_opencode_config.sh",
+			"REVIEW_PREFLIGHT_SOFT_SUPPORT_SCRIPTS": "",
+			"REVIEWER_MODELS": "  minimax/minimax-m3  \nqwen/qwen3.7-plus",
+			"SUPPORT_CODEX_INSTRUCTIONS_FILE": str(workspace / "optional-codex.txt"),
+			"SUPPORT_AGENTS_FILE": str(workspace / "optional-agents.txt"),
+			"LAST_RUN_DIFF_FILE": str(workspace / "optional-last.diff"),
+			"LAST_RUN_CHANGED_FILES_FILE": str(workspace / "optional-last-files.txt"),
+			"LAST_RUN_DIFF_STAT_FILE": str(workspace / "optional-last-stat.txt"),
+			"LAST_COMMIT_STAT_FILE": str(workspace / "optional-commit-stat.txt"),
+			"REVIEW_REVIEWER_CHECKLIST_ENABLED": "0",
+			"REVIEWER_FILTER_UNINTERESTING_ENABLED": "0",
+			"AGENTS_MD_MATERIALITY_ENABLED": "0",
+			"REVIEWER_CIRCUIT_BREAKER_ENABLED": "0",
+			"TG_CAPTURE_FILE": str(telegram_capture),
+			"CODEX_CAPTURE_FILE": str(codex_capture),
+			**{name: str(path) for name, path in required_files.items()},
+		})
+		result = subprocess.run(
+			["/usr/bin/bash", "-c", _step_run_script('"Preflight: Verify required files before reviewer invocation"')],
+			cwd=workspace,
+			env=env,
+			text=True,
+			capture_output=True,
+			check=False,
+		)
+
+		stable_alert = "opencode_agent_failure phase=review_autofix_preflight role=reviewer model=minimax/minimax-m3 rc=127 failure_class=binary_missing"
+		assert result.returncode == 1, result
+		assert stable_alert in result.stderr, result.stderr
+		assert telegram_capture.read_text(encoding="utf-8") == f"{stable_alert}|ERROR\n"
+		assert not codex_capture.exists(), "preflight must not invoke Codex"
+
+		(support_dir / "opencode_helpers.sh").unlink()
+		telegram_capture.write_text("", encoding="utf-8")
+		(bin_dir / "opencode").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+		(bin_dir / "opencode").chmod(0o755)
+		preflight_helpers_missing_result = subprocess.run(
+			["/usr/bin/bash", "-c", _step_run_script('"Preflight: Verify required files before reviewer invocation"')],
+			cwd=workspace,
+			env=env,
+			text=True,
+			capture_output=True,
+			check=False,
+		)
+
+		preflight_helpers_missing_alert = "opencode_agent_failure phase=review_autofix_preflight role=reviewer model=minimax/minimax-m3 rc=1 failure_class=helpers_missing"
+		assert preflight_helpers_missing_result.returncode == 1, preflight_helpers_missing_result
+		assert preflight_helpers_missing_result.stderr.strip() == preflight_helpers_missing_alert
+		assert telegram_capture.read_text(encoding="utf-8") == f"{preflight_helpers_missing_alert}|ERROR\n"
+		assert not codex_capture.exists(), "preflight helper failure must not invoke Codex"
+
+
+def test_reviewer_missing_opencode_helpers_emits_classified_error() -> None:
+	with tempfile.TemporaryDirectory(prefix="reviewers-opencode-helpers-missing-") as td:
+		support_dir = Path(td)
+		telegram_capture = _write_telegram_capture_helper(support_dir)
+		env = os.environ.copy()
+		env.update({
+			"SUPPORT_SCRIPTS_DIR": str(support_dir),
+			"REVIEWER_MODELS": "\n  moonshotai/kimi-k3  \nminimax/minimax-m3",
+			"TG_CAPTURE_FILE": str(telegram_capture),
+		})
+		result = subprocess.run(
+			["/usr/bin/bash", str(REVIEWERS)],
+			env=env,
+			text=True,
+			capture_output=True,
+			check=False,
+		)
+
+		stable_alert = "opencode_agent_failure phase=review_run_reviewers role=reviewer model=moonshotai/kimi-k3 rc=1 failure_class=helpers_missing"
+		assert result.returncode == 1, result
+		assert result.stderr.strip() == stable_alert, result.stderr
+		assert telegram_capture.read_text(encoding="utf-8") == f"{stable_alert}|ERROR\n"
+
+
+def test_summariser_missing_opencode_helpers_emits_classified_error() -> None:
+	with tempfile.TemporaryDirectory(prefix="summariser-opencode-helpers-missing-") as td:
+		fixture_root = Path(td)
+		support_dir = fixture_root / "support"
+		previous_reviews_dir = fixture_root / "reviews"
+		runtime_dir = fixture_root / "runtime"
+		for directory in (support_dir, previous_reviews_dir, runtime_dir):
+			directory.mkdir()
+		telegram_capture = _write_telegram_capture_helper(support_dir)
+		env = os.environ.copy()
+		env.update({
+			"SUPPORT_SCRIPTS_DIR": str(support_dir),
+			"PREVIOUS_REVIEWS_DIR": str(previous_reviews_dir),
+			"RUNTIME_DIR": str(runtime_dir),
+			"XPOLL_SUMMARISER_MODEL": "openai/gpt-6-luna",
+			"TG_CAPTURE_FILE": str(telegram_capture),
+		})
+		result = subprocess.run(
+			["/usr/bin/bash", str(SUMMARISER), "--prefix", "review", "--output", str(fixture_root / "output.txt")],
+			env=env,
+			text=True,
+			capture_output=True,
+			check=False,
+		)
+
+		stable_alert = "opencode_agent_failure phase=review_summariser role=reviewer model=openai/gpt-6-luna rc=1 failure_class=helpers_missing"
+		assert result.returncode == 1, result
+		assert result.stderr.strip() == stable_alert, result.stderr
+		assert telegram_capture.read_text(encoding="utf-8") == f"{stable_alert}|ERROR\n"
+
+
+def test_review_soft_deadline_budget_contract_is_wired() -> None:
+	init_step_block = _step_block("Initialize runtime workspace")
+	for expected in (
+		'review_soft_deadline_minutes="${REVIEW_SOFT_DEADLINE_MINUTES:-210}"',
+		'review_soft_deadline_minutes_raw="${review_soft_deadline_minutes}"',
+		"Invalid REVIEW_SOFT_DEADLINE_MINUTES=",
+		'review_soft_deadline_minutes="$(( 10#${review_soft_deadline_minutes} ))"',
+		'if [ "${review_soft_deadline_minutes}" -le 0 ]; then',
+		'echo "REVIEW_SOFT_DEADLINE_MINUTES=${review_soft_deadline_minutes}"',
+		'echo "CODEX_RUN_BUDGET_START_EPOCH=${job_start_epoch}"',
+		'echo "CODEX_RUN_BUDGET_SOFT_DEADLINE_EPOCH=${codex_run_budget_soft_deadline_epoch}"',
+		'echo "CODEX_RUN_BUDGET_TOTAL_SECS=${codex_run_budget_total_secs}"',
+	):
+		assert expected in init_step_block, f"missing budget init wiring: {expected}"
+	assert "0[0-9]*" not in init_step_block, "workflow init should accept zero-padded soft deadlines"
+
+	reviewers_text = _reviewers_text()
+	for expected in (
+		'WATCHDOG_HELPERS="${SUPPORT_SCRIPTS_DIR:-scripts}/watchdog_helpers.sh"',
+		'codex_run_budget_export "${JOB_START_EPOCH:-}" "${REVIEW_SOFT_DEADLINE_MINUTES:-}"',
+		"codex_run_budget_summary",
+		"codex_run_budget_phase_may_start",
+		'REVIEWER_SOFT_DEADLINE_DEFAULT_MINUTES="210"',
+		"reviewer_budget_remaining_secs_fallback",
+		'REVIEWER_PARTIAL_FINALIZE_REQUEST_FILE="${RUNTIME_DIR:-.}/reviewers_partial_finalize_request.txt"',
+		'reviewer_pass_minimum_secs=300',
+		'reviewer_request_partial_finalize "soft_deadline"',
+		'AUTOFIX_PARTIAL_FINALIZE_REQUESTED=true',
+		'AUTOFIX_PARTIAL_FINALIZE_PHASE=reviewers',
+		'echo "skipped_budget" > "${status_file}"',
+		'| tee -a "${budget_log_file}" >&2 || true',
+	):
+		assert expected in reviewers_text, f"missing reviewer budget wiring: {expected}"
+
+	apply_fixes_text = _apply_fixes_text()
+	for expected in (
+		'codex_run_budget_export "${JOB_START_EPOCH:-}" "${REVIEW_SOFT_DEADLINE_MINUTES:-}"',
+		'REVIEW_SOFT_DEADLINE_MINUTES_NORMALIZED="$(normalize_review_soft_deadline_minutes "${REVIEW_SOFT_DEADLINE_MINUTES:-}")"',
+		"codex_run_budget_remaining_secs",
+		"budget_deadline_label=\"soft deadline\"",
+		"request_editor_partial_finalize",
+		'editor_partial_finalize_reason="soft_deadline"',
+		'editor_partial_finalize_reason="refusal"',
+		'editor_partial_finalize_reason="recoverable_failure"',
+		'AUTOFIX_PARTIAL_FINALIZE_PHASE=editor',
+	):
+		assert expected in apply_fixes_text, f"missing editor budget wiring: {expected}"
+
+
+def test_review_collect_pr_metadata_helper_is_bootstrapped_and_delegated() -> None:
+	required_bootstrap_line = next(
+		line for line in _stage_helper_text().splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line
+	)
+	block = _step_block("Collect PR metadata")
+	helper_text = METADATA_HELPER.read_text(encoding="utf-8")
+
+	assert METADATA_HELPER.exists(), f"missing helper: {METADATA_HELPER}"
+	assert "review_collect_pr_metadata.sh" in required_bootstrap_line, required_bootstrap_line
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_collect_pr_metadata.sh"' in block
+	assert 'gh_retry "${PR_PAYLOAD_FILE}"' not in block
+	assert 'source "${SCRIPT_DIR}/gh_helpers.sh"' in helper_text
+	assert 'gh_retry_to_file "${PR_PAYLOAD_FILE}" gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"' in helper_text
+	assert 'review_collect_pr_metadata.XXXXXX' in helper_text
+	assert '::error::Unable to determine PR base branch' in helper_text
+
+
+def test_review_enable_auto_merge_helper_is_bootstrapped_and_delegated() -> None:
+	required_bootstrap_line = next(
+		line for line in _stage_helper_text().splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line
+	)
+	block = _step_block("Enable auto-merge on PR")
+	helper_text = _auto_merge_helper_text()
+
+	assert AUTO_MERGE_HELPER.exists(), f"missing helper: {AUTO_MERGE_HELPER}"
+	assert "review_enable_auto_merge.sh" in required_bootstrap_line, required_bootstrap_line
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_enable_auto_merge.sh"' in block
+	assert 'gh pr merge "${PR_NUMBER}"' not in block
+	assert 'source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh"' not in block
+	assert 'source "${SCRIPT_DIR}/gh_helpers.sh"' in helper_text
+	assert 'type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }' in helper_text
+	assert "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels?per_page=100" in helper_text
+	assert "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" in helper_text
+	assert "INITIAL_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}" in block
+	assert "#   INITIAL_HEAD_SHA" in helper_text
+	assert "#   AUTO_MERGE_READY_LABELS_ALLOWED" in helper_text
+	assert 'record_auto_merge_ready_labels_allowed "false"' in helper_text
+	assert helper_text.count("if reviewed_head_is_current_for_labels; then") == 2
+	assert 'if ! [[ "${INITIAL_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then' in helper_text
+	assert '[ "${_orch_pr_head_sha}" != "${INITIAL_HEAD_SHA}" ]' in helper_text
+	assert 'gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --merge --auto --match-head-commit "${INITIAL_HEAD_SHA}"' in helper_text
+	assert 'gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --squash --auto --match-head-commit "${INITIAL_HEAD_SHA}"' in helper_text
+	for merge_line in (line for line in helper_text.splitlines() if "gh_retry gh pr merge" in line):
+		assert '--match-head-commit "${INITIAL_HEAD_SHA}"' in merge_line, merge_line
+	assert re.search(
+		r'if gh_retry gh pr merge .*? --merge --auto --match-head-commit "\$\{INITIAL_HEAD_SHA\}"; then\n\s+record_auto_merge_ready_labels_allowed "true"',
+		helper_text,
+	)
+	assert re.search(
+		r'if gh_retry gh pr merge .*? --squash --auto --match-head-commit "\$\{INITIAL_HEAD_SHA\}"; then\n\s+record_auto_merge_ready_labels_allowed "true"',
+		helper_text,
+	)
+
+
+def test_reviewed_head_authorization_precedes_ready_labels() -> None:
+	wf = _workflow_text()
+	auto_merge_step = wf.index("      - name: Enable auto-merge on PR")
+	ready_label_step = wf.index("      - name: Mark linked issues ready to merge")
+	ready_label_block = _step_block("Mark linked issues ready to merge")
+
+	assert auto_merge_step < ready_label_step
+	assert "env.AUTO_MERGE_READY_LABELS_ALLOWED == 'true'" in ready_label_block
+
+
+def test_checkout_captures_initial_head_sha_before_non_push_exits() -> None:
+	block = _step_block("Checkout PR head branch")
+	payload_capture = 'INITIAL_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"'
+	export_capture = 'echo "INITIAL_HEAD_SHA=${INITIAL_HEAD_SHA}" >> "$GITHUB_ENV"'
+	non_push_exits = [match.start() for match in re.finditer('echo "CAN_PUSH=false"', block)]
+	payload_capture_positions = [match.start() for match in re.finditer(re.escape(payload_capture), block)]
+
+	assert payload_capture in block
+	assert len(non_push_exits) == 3
+	assert len(payload_capture_positions) == 1
+	assert payload_capture_positions[0] < block.index(export_capture) < min(non_push_exits)
+	assert block.index('INITIAL_HEAD_SHA="$(git rev-parse HEAD)"') > max(non_push_exits)
+
+
+def test_collect_pr_check_runs_helper_is_bootstrapped_and_delegated() -> None:
+	required_bootstrap_line = next(
+		line for line in _stage_helper_text().splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line
+	)
+	block = _step_block("Collect PR check-run failures (CI/lint autofix context)")
+	helper_text = CHECK_RUNS_HELPER.read_text(encoding="utf-8")
+
+	assert CHECK_RUNS_HELPER.exists(), f"missing helper: {CHECK_RUNS_HELPER}"
+	assert "collect_pr_check_runs_context.py" in required_bootstrap_line, required_bootstrap_line
+	assert 'python3 "${SUPPORT_SCRIPTS_DIR}/collect_pr_check_runs_context.py"' in block
+	assert 'gh api --paginate --slurp' not in block
+	assert 'gh_retry gh api --paginate --slurp' in helper_text
+	assert 'NamedTemporaryFile' in helper_text
+	assert '_write_text(out_path, "")' in helper_text
+	assert 'with _LOG_REDIRECT_OPENER.open(api_req, timeout=10):' in helper_text
+	assert 'exc.close()' in helper_text
+	assert 'traceback.print_exc(file=sys.stderr)' in helper_text
+	assert 'CHECK_RUNS_AUTOFIX_WRITER_ERROR' in helper_text
+
+
+def test_collect_pr_check_runs_helper_closes_direct_log_redirect_response() -> None:
+	spec = importlib.util.spec_from_file_location("collect_pr_check_runs_context_test", CHECK_RUNS_HELPER)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+
+	class _DirectResponse:
+		def __init__(self) -> None:
+			self.closed = False
+
+		def __enter__(self):
+			return self
+
+		def __exit__(self, exc_type, exc, tb) -> None:
+			self.closed = True
+
+	class _FakeOpener:
+		def __init__(self, response: _DirectResponse) -> None:
+			self._response = response
+
+		def open(self, req, timeout=10):
+			return self._response
+
+	response = _DirectResponse()
+	original_opener = module._LOG_REDIRECT_OPENER
+	try:
+		module._LOG_REDIRECT_OPENER = _FakeOpener(response)
+		result = module._fetch_log_tail(
+			details_url="https://github.com/owner/repo/actions/runs/41/job/82",
+			log_tail_bytes=64,
+			repository="owner/repo",
+			token="test-token",
+		)
+	finally:
+		module._LOG_REDIRECT_OPENER = original_opener
+
+	assert result == ""
+	assert response.closed is True
+
+
+def test_collect_pr_check_runs_helper_ready_contract_preserves_self_run_exclusion() -> None:
+	result = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "abc123"}},
+		self_run_id="777",
+		check_runs_responses=[{
+			"json": [
+				{
+					"check_runs": [
+						{
+							"id": 41,
+							"name": "unit-tests",
+							"status": "completed",
+							"conclusion": "failure",
+							"app": {"slug": "github-actions"},
+							"html_url": "https://github.com/owner/repo/runs/41",
+							"details_url": "https://github.com/owner/repo/actions/runs/41/job/82",
+							"output": {"title": "Tests failed", "summary": ""},
+						},
+					],
+				},
+				{
+					"check_runs": [
+						{
+							"id": 99,
+							"name": "review / codex-agent",
+							"status": "in_progress",
+							"html_url": "https://github.com/owner/repo/runs/99",
+							"details_url": "https://github.com/owner/repo/actions/runs/777/job/99",
+						},
+					],
+				},
+			],
+		}],
+	)
+
+	assert result["returncode"] == 0, result
+	assert "collection_status: ready\n" in result["context_text"]
+	assert "total_check_runs: 2\n" in result["context_text"]
+	assert "failed_count: 1\n" in result["context_text"]
+	assert "incomplete_count: 1\n" in result["context_text"]
+	assert "failed[0].name: unit-tests\n" in result["context_text"]
+	assert "failed[0].summary: \n" in result["context_text"]
+	assert "failed[0].log_tail (0 chars):\n" in result["context_text"]
+	assert "incomplete[0].name: review / codex-agent\n" in result["context_text"]
+	assert "Check-run context bytes:" in result["stdout"]
+	assert "Check-run context sha256:" in result["stdout"]
+	call_texts = [" ".join(call) for call in result["mock_state"]["calls"]]
+	assert any("--paginate" in call and "--slurp" in call and "/check-runs?per_page=100" in call for call in call_texts)
+
+
+def test_post_review_snapshot_ignores_only_its_own_incomplete_check() -> None:
+	runs = [
+		{"id": 1, "name": "review / codex-agent", "status": "in_progress", "details_url": "https://github.com/owner/repo/actions/runs/777/job/1"},
+		{"id": 2, "name": "ci", "status": "completed", "conclusion": "success"},
+	]
+	result = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "abc123"}}, self_run_id="777", exclude_self_from_context="true",
+		check_runs_responses=[{"json": [{"check_runs": runs}]}],
+	)
+	assert "collection_status: ready\n" in result["context_text"]
+	assert "total_check_runs: 1\n" in result["context_text"]
+	assert "incomplete_count: 0\n" in result["context_text"]
+
+
+def test_pending_and_startup_failure_checks_cannot_look_clean() -> None:
+	result = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "abc123"}}, wait_timeout_secs="0",
+		check_runs_responses=[{"json": [{"check_runs": [
+			{"id": 1, "name": "ci", "status": "pending"},
+			{"id": 2, "name": "lint", "status": "completed", "conclusion": "startup_failure"},
+			{"id": 3, "name": "unknown", "status": "completed", "conclusion": None},
+		]}]}],
+	)
+	assert "collection_status: timeout\n" in result["context_text"]
+	assert "incomplete_count: 2\n" in result["context_text"]
+	assert "failed_count: 1\n" in result["context_text"]
+
+
+def test_collect_pr_check_runs_helper_accepts_genuine_empty_check_list() -> None:
+	result = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "abc123"}},
+		check_runs_responses=[{"json": [{"check_runs": []}]}],
+	)
+	assert result["returncode"] == 0, result
+	assert "collection_status: ready\n" in result["context_text"]
+	assert "total_check_runs: 0\n" in result["context_text"]
+	assert "No failed or incomplete check-runs detected" in result["context_text"]
+
+
+def test_collect_pr_check_runs_helper_rejects_malformed_successful_output() -> None:
+	bad_responses = [
+		({"stdout": ""}, "empty_output"),
+		({"stdout": "NOT-JSON-SECRET-MARKER"}, "invalid_json"),
+		({"stdout": '{"check_runs": []}{"check_runs": []}'}, "invalid_json"),
+		({"json": []}, "no_pages"),
+		({"json": {"message": "NOT-JSON-SECRET-MARKER"}}, "missing_check_runs"),
+		({"json": {"check_runs": None}}, "missing_check_runs"),
+		({"json": {"check_runs": {}}}, "missing_check_runs"),
+		({"json": [{"check_runs": []}, 1]}, "invalid_page"),
+		({"json": [{"check_runs": []}, {}]}, "missing_check_runs"),
+	]
+	for response, reason in bad_responses:
+		result = _run_collect_pr_check_runs_harness(
+			pr_payload={"head": {"sha": "abc123"}}, wait_timeout_secs="0",
+			check_runs_responses=[response],
+		)
+		assert result["returncode"] == 0, (reason, result)
+		assert "collection_status: api_error\n" in result["context_text"], (reason, result)
+		assert "total_check_runs: 0\n" in result["context_text"]
+		assert "No failed or incomplete check-runs detected" not in result["context_text"]
+		assert f"reason={reason} bytes=" in result["stdout"]
+		assert "head_sha=abc123" in result["stdout"]
+		assert "NOT-JSON-SECRET-MARKER" not in result["stdout"] + result["context_text"]
+		assert result["mock_state"]["check_runs_index"] == 1
+
+
+def test_collect_pr_check_runs_helper_recovers_from_malformed_snapshot() -> None:
+	result = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "abc123"}}, wait_timeout_secs="15", poll_interval_secs="5",
+		check_runs_responses=[{"stdout": "garbage"}, {"json": [{"check_runs": [
+			{"id": 1, "name": "ci", "status": "completed", "conclusion": "success"},
+		]}]}],
+	)
+	assert result["returncode"] == 0, result
+	assert "collection_status: ready\n" in result["context_text"]
+	assert "total_check_runs: 1\n" in result["context_text"]
+	assert "reason=invalid_json" in result["stdout"]
+	assert result["mock_state"]["check_runs_index"] == 2
+
+
+def test_collect_pr_check_runs_helper_stops_malformed_repoll_at_deadline() -> None:
+	result = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "abc123"}}, wait_timeout_secs="1", poll_interval_secs="5",
+		check_runs_responses=[{"json": []}, {"json": [{"check_runs": [
+			{"id": 1, "status": "completed", "conclusion": "success"},
+		]}]}],
+	)
+	assert result["returncode"] == 0, result
+	assert "collection_status: api_error\n" in result["context_text"]
+	assert result["mock_state"]["check_runs_index"] == 1
+
+
+def test_collect_pr_check_runs_helper_retry_drops_failed_attempt_stdout() -> None:
+	runs = [
+		{"id": idx, "name": f"check-{idx}", "status": "completed", "conclusion": "success"}
+		for idx in range(4)
+	]
+	result = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "abc123"}}, gh_retry_max_attempts="2",
+		check_runs_responses=[
+			{"exit_code": 1, "stdout": '{"message":"FAILED-ATTEMPT-BODY"}', "stderr": "gh: HTTP 502: Bad Gateway"},
+			{"json": [{"check_runs": runs}]},
+		],
+	)
+	assert result["returncode"] == 0, result
+	assert "collection_status: ready\n" in result["context_text"]
+	assert "total_check_runs: 4\n" in result["context_text"]
+	assert "failed_count: 0\n" in result["context_text"]
+	assert "FAILED-ATTEMPT-BODY" not in result["stdout"] + result["stderr"] + result["context_text"]
+	assert result["mock_state"]["check_runs_index"] == 2
+
+
+def test_collect_pr_check_runs_helper_fail_open_contracts() -> None:
+	disabled = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "abc123"}},
+		check_runs_autofix_enabled="false",
+	)
+	assert disabled["returncode"] == 0, disabled
+	assert disabled["context_text"] == (
+		"PR_CHECK_RUNS_CONTEXT\n"
+		"head_sha: \n"
+		"collection_status: disabled\n"
+		"total_check_runs: 0\n"
+		"failed_count: 0\n"
+		"incomplete_count: 0\n"
+		"\n"
+		"Check-run autofix context collection is disabled (CHECK_RUNS_AUTOFIX_ENABLED=false).\n"
+	)
+	assert "CHECK_RUNS_AUTOFIX disabled via CHECK_RUNS_AUTOFIX_ENABLED=false\n" == disabled["stdout"]
+	assert disabled["mock_state"].get("calls", []) == []
+
+	api_error = _run_collect_pr_check_runs_harness(
+		pr_payload={"head": {"sha": "abc123"}},
+		check_runs_responses=[{"exit_code": 1, "stderr": "mock gh: check-runs failure"}],
+	)
+	assert api_error["returncode"] == 0, api_error
+	assert "collection_status: api_error\n" in api_error["context_text"]
+	assert "Check-run API output was unavailable or invalid; treat absence of failures as unknown rather than confirmed-passing.\n" in api_error["context_text"]
+	assert "mock gh: check-runs failure\n" in api_error["stderr"]
+	assert "Check-run context bytes:" in api_error["stdout"]
+
+
+def test_collect_pr_check_runs_helper_writer_error_is_observable_and_fail_open() -> None:
+	spec = importlib.util.spec_from_file_location("collect_pr_check_runs_context_test", CHECK_RUNS_HELPER)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+
+	with tempfile.TemporaryDirectory(prefix="collect-pr-check-runs-writer-error-") as td:
+		tmp = Path(td)
+		pr_payload_file = tmp / "pr_payload.json"
+		pr_payload_file.write_text(json.dumps({"head": {"sha": "abc123"}}), encoding="utf-8")
+		context_file = tmp / "pr_check_runs_context.txt"
+		context_file.write_text("stale-context\n", encoding="utf-8")
+
+		def _fake_run_check_runs_api(*, repository: str, head_sha: str, script_dir: Path) -> subprocess.CompletedProcess[str]:
+			return subprocess.CompletedProcess(args=["gh"], returncode=0, stdout='[{"check_runs": []}]', stderr="")
+
+		def _boom(*, raw_text: str, head_sha: str, final_status: str) -> str:
+			raise RuntimeError("boom")
+
+		original_env = os.environ.copy()
+		original_run = module._run_check_runs_api
+		original_build = module._build_context_text
+		try:
+			os.environ.update({
+				"PR_PAYLOAD_FILE": str(pr_payload_file),
+				"PR_CHECK_RUNS_CONTEXT_FILE": str(context_file),
+				"CHECK_RUNS_AUTOFIX_ENABLED": "true",
+				"CHECK_RUNS_WAIT_TIMEOUT_SECS": "300",
+				"CHECK_RUNS_POLL_INTERVAL_SECS": "20",
+				"CHECK_RUNS_LOG_TAIL_BYTES": "0",
+				"GITHUB_REPOSITORY": "owner/repo",
+				"SELF_RUN_ID": "",
+			})
+			module._run_check_runs_api = _fake_run_check_runs_api
+			module._build_context_text = _boom
+			stdout = io.StringIO()
+			stderr = io.StringIO()
+			with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+				returncode = module.main()
+		finally:
+			os.environ.clear()
+			os.environ.update(original_env)
+			module._run_check_runs_api = original_run
+			module._build_context_text = original_build
+
+		assert returncode == 0
+		assert context_file.read_text(encoding="utf-8") == (
+			"PR_CHECK_RUNS_CONTEXT\n"
+			"head_sha: abc123\n"
+			"collection_status: writer_error\n"
+			"total_check_runs: 0\n"
+			"failed_count: 0\n"
+			"incomplete_count: 0\n"
+			"\n"
+			"Check-run snapshot writer failed; treat absence of failures as unknown rather than confirmed-passing.\n"
+		)
+		assert "stale-context" not in context_file.read_text(encoding="utf-8")
+		assert "RuntimeError: boom" in stderr.getvalue()
+		assert "::warning::CHECK_RUNS_AUTOFIX_WRITER_ERROR head_sha=abc123 writer_ok=False" in stdout.getvalue()
+
+
+def test_collect_pr_check_runs_helper_top_level_exception_is_fail_open() -> None:
+	spec = importlib.util.spec_from_file_location("collect_pr_check_runs_context_test", CHECK_RUNS_HELPER)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+
+	with tempfile.TemporaryDirectory(prefix="collect-pr-check-runs-top-level-") as td:
+		tmp = Path(td)
+		pr_payload_file = tmp / "pr_payload.json"
+		pr_payload_file.write_text(json.dumps({"head": {"sha": "abc123"}}), encoding="utf-8")
+		context_file = tmp / "pr_check_runs_context.txt"
+		context_file.write_text("stale-context\n", encoding="utf-8")
+
+		def _fake_run_check_runs_api(*, repository: str, head_sha: str, script_dir: Path) -> subprocess.CompletedProcess[str]:
+			return subprocess.CompletedProcess(args=["gh"], returncode=0, stdout='[{"check_runs": []}]', stderr="")
+
+		def _boom_wait_view(raw_text: str, self_run_id: str):
+			raise RuntimeError("wait-view boom")
+
+		original_env = os.environ.copy()
+		original_run = module._run_check_runs_api
+		original_wait_view = module._build_wait_view
+		try:
+			os.environ.update({
+				"PR_PAYLOAD_FILE": str(pr_payload_file),
+				"PR_CHECK_RUNS_CONTEXT_FILE": str(context_file),
+				"CHECK_RUNS_AUTOFIX_ENABLED": "true",
+				"CHECK_RUNS_WAIT_TIMEOUT_SECS": "300",
+				"CHECK_RUNS_POLL_INTERVAL_SECS": "20",
+				"CHECK_RUNS_LOG_TAIL_BYTES": "0",
+				"GITHUB_REPOSITORY": "owner/repo",
+				"SELF_RUN_ID": "",
+			})
+			module._run_check_runs_api = _fake_run_check_runs_api
+			module._build_wait_view = _boom_wait_view
+			stdout = io.StringIO()
+			stderr = io.StringIO()
+			with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+				returncode = module.main()
+		finally:
+			os.environ.clear()
+			os.environ.update(original_env)
+			module._run_check_runs_api = original_run
+			module._build_wait_view = original_wait_view
+
+		assert returncode == 0
+		assert context_file.read_text(encoding="utf-8") == (
+			"PR_CHECK_RUNS_CONTEXT\n"
+			"head_sha: abc123\n"
+			"collection_status: writer_error\n"
+			"total_check_runs: 0\n"
+			"failed_count: 0\n"
+			"incomplete_count: 0\n"
+			"\n"
+			"Check-run snapshot writer failed; treat absence of failures as unknown rather than confirmed-passing.\n"
+		)
+		assert "stale-context" not in context_file.read_text(encoding="utf-8")
+		assert "RuntimeError: wait-view boom" in stderr.getvalue()
+		assert "::warning::CHECK_RUNS_AUTOFIX_WRITER_ERROR head_sha=abc123 writer_ok=False" in stdout.getvalue()
+
+
+def test_review_collect_pr_metadata_helper_supports_no_pr_synthetic_mode() -> None:
+	result = _run_review_collect_pr_metadata_harness(
+		pr_number="",
+		claude_branch_review_mode="true",
+		head_ref_override="claude/test-no-pr",
+		head_sha_override="deadbeef",
+		base_ref_override="",
+		mock_state={
+			"api_responses": {
+				"repos/owner/repo": {"default_branch": "main"},
+			},
+		},
+	)
+
+	assert result["pr_payload"] == {
+		"title": "",
+		"body": "",
+		"head": {
+			"ref": "claude/test-no-pr",
+			"sha": "deadbeef",
+			"repo": {"full_name": "owner/repo"},
+		},
+		"base": {"ref": "main"},
+	}
+	assert result["pr_meta"] == {
+		"title": "",
+		"body": "",
+		"baseRefName": "main",
+		"headRefName": "claude/test-no-pr",
+		"headRepoFullName": "owner/repo",
+	}
+	assert result["pr_issue_comments"] == []
+	assert result["pr_reviews"] == []
+	assert result["pr_review_comments"] == []
+	assert result["linked_issue_context"] == "No linked issues found."
+	assert "issue_comments_count: 0" in result["comments_context"]
+	assert "reviews_count: 0" in result["comments_context"]
+	assert "review_comments_count: 0" in result["comments_context"]
+	assert "AUTOFIX_NO_PR_METADATA_SYNTHESIZED head_ref=claude/test-no-pr head_sha=deadbeef base_ref=main" in result["stdout"]
+	assert result["github_env"]["LINKED_ISSUES_JSON"] == "[]"
+	assert result["github_env"]["PR_DIFF_ATTEMPTED_PATHS"].endswith("/pr_diff.patch")
+	assert result["github_env"]["HAS_PR_DIFF"] == "false"
+	assert result["github_env"]["PR_DIFF_SOURCE"] == "gh_pr_diff_empty"
+	assert result["pr_diff"] == ""
+	assert result["github_env"]["BASE_BRANCH"] == "main"
+	assert any(call[:2] == ["api", "repos/owner/repo"] for call in result["mock_state"]["calls"])
+	assert not any(call[:2] == ["api", "graphql"] for call in result["mock_state"]["calls"])
+	assert not any(call[:2] == ["pr", "diff"] for call in result["mock_state"]["calls"])
+	assert not any("repos/owner/repo/pulls/" in " ".join(call) for call in result["mock_state"]["calls"])
+
+
+_NO_PR_BASE_REF_ERROR = (
+	"::error::No-PR claude-branch-review path: could not resolve the repository "
+	"default branch; pass base_ref_override or retry."
+)
+
+
+def test_review_collect_pr_metadata_no_pr_base_ref_fails_closed() -> None:
+	text = METADATA_HELPER.read_text(encoding="utf-8")
+	assert "|| echo 'main'" not in text
+	assert "gh api \"repos/${REPOSITORY}\" --jq '.default_branch'" not in text
+
+	start_marker = 'if [ "${CLAUDE_BRANCH_REVIEW_MODE:-}" = "true" ] && [ -z "${PR_NUMBER:-}" ]; then'
+	end_marker = "AUTOFIX_NO_PR_METADATA_SYNTHESIZED"
+	start = text.index(start_marker)
+	end = text.index(end_marker, start)
+	block = text[start:end]
+
+	assert 'BASE_REF_OVERRIDE="${BASE_REF_OVERRIDE_INPUT:-}"' in block
+	assert 'gh_retry_to_file "${branch_review_repo_json}" gh api "repos/${REPOSITORY}"' in block
+	assert ".default_branch // empty" in block
+	assert _NO_PR_BASE_REF_ERROR in block
+	error_idx = block.index(_NO_PR_BASE_REF_ERROR)
+	assert "exit 1" in block[error_idx:]
+
+
+@pytest.mark.parametrize(
+	"api_responses",
+	[
+		{},
+		{"repos/owner/repo": {"default_branch": ""}},
+		{"repos/owner/repo": {"default_branch": "+lead"}},
+	],
+	ids=["repo_read_fails", "empty_default_branch", "leading_plus_rejected"],
+)
+def test_review_collect_pr_metadata_no_pr_base_ref_unresolvable_exits_nonzero(
+	api_responses: dict[str, object],
+) -> None:
+	with tempfile.TemporaryDirectory(prefix="review-collect-pr-metadata-base-") as td:
+		tmp = Path(td)
+		bin_dir = tmp / "bin"
+		runtime_dir = tmp / "runtime"
+		bin_dir.mkdir()
+		runtime_dir.mkdir()
+		gh_state_file = runtime_dir / "gh_state.json"
+		_install_review_collect_mock_gh(bin_dir, gh_state_file)
+		gh_state_file.write_text(json.dumps({"api_responses": api_responses}), encoding="utf-8")
+
+		env = os.environ.copy()
+		env.update({
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"MOCK_GH_STATE_FILE": str(gh_state_file),
+			"PYTHONDONTWRITEBYTECODE": "1",
+			"GITHUB_REPOSITORY": "owner/repo",
+			"GITHUB_REPOSITORY_OWNER": "owner",
+			"GH_TOKEN": "test-token",
+			"GH_RETRY_MAX_ATTEMPTS": "1",
+			"PR_NUMBER": "",
+			"CLAUDE_BRANCH_REVIEW_MODE": "true",
+			"HEAD_REF_OVERRIDE_INPUT": "claude/test-no-pr",
+			"HEAD_SHA_OVERRIDE_INPUT": "deadbeef",
+			"BASE_REF_OVERRIDE_INPUT": "",
+			"PR_PAYLOAD_FILE": str(runtime_dir / "pr_payload.json"),
+			"PR_META_FILE": str(runtime_dir / "pr_meta.json"),
+			"PR_ISSUE_COMMENTS_FILE": str(runtime_dir / "pr_issue_comments.json"),
+			"PR_REVIEWS_FILE": str(runtime_dir / "pr_reviews.json"),
+			"PR_REVIEW_COMMENTS_FILE": str(runtime_dir / "pr_review_comments.json"),
+			"LINKED_ISSUE_CONTEXT_FILE": str(runtime_dir / "linked_issue_context.txt"),
+			"PR_ALL_COMMENTS_CONTEXT_FILE": str(runtime_dir / "pr_all_comments_context.txt"),
+			"PR_DIFF_FILE": str(runtime_dir / "pr_diff.patch"),
+			"GITHUB_ENV": str(runtime_dir / "github_env.txt"),
+		})
+
+		result = subprocess.run(
+			["bash", str(METADATA_HELPER)],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=False,
+			capture_output=True,
+			text=True,
+			timeout=60,
+		)
+
+		assert result.returncode != 0
+		assert _NO_PR_BASE_REF_ERROR in result.stdout
+		assert "AUTOFIX_NO_PR_METADATA_SYNTHESIZED" not in result.stdout
+		assert not (runtime_dir / "pr_payload.json").exists()
+
+
+def test_review_collect_pr_metadata_helper_skips_optional_pr_reviews_by_default() -> None:
+	result = _run_review_collect_pr_metadata_harness(
+		pr_number="42",
+		claude_branch_review_mode="false",
+		head_ref_override="",
+		head_sha_override="",
+		base_ref_override="",
+		mock_state={
+			"api_responses": {
+				"repos/owner/repo/pulls/42/comments": [
+					{
+						"id": 13,
+						"user": {"login": "carol"},
+						"created_at": "2026-06-03T00:00:00Z",
+						"updated_at": "2026-06-03T01:00:00Z",
+						"path": "scripts/helper.sh",
+						"line": 7,
+						"body": "Review comment body",
+					},
+				],
+				"repos/owner/repo/pulls/42/reviews": [
+					{
+						"id": 12,
+						"user": {"login": "bob"},
+						"submitted_at": "2026-06-02T00:00:00Z",
+						"updated_at": "2026-06-02T01:00:00Z",
+						"state": "COMMENTED",
+						"body": "Review body",
+					},
+				],
+				"repos/owner/repo/issues/42/comments": [
+					{
+						"id": 11,
+						"user": {"login": "alice"},
+						"created_at": "2026-06-01T00:00:00Z",
+						"updated_at": "2026-06-01T01:00:00Z",
+						"body": "Issue comment body",
+					},
+				],
+				"repos/owner/repo/pulls/42": {
+					"title": "Synthetic PR title",
+					"body": "Fixes #7\n\nContext body",
+					"base": {"ref": "main"},
+					"head": {
+						"ref": "feature/ref",
+						"sha": "abc123",
+						"repo": {"full_name": "owner/repo"},
+					},
+				},
+				"graphql": {
+					"data": {
+						"repository": {
+							"pullRequest": {
+								"closingIssuesReferences": {
+									"nodes": [],
+								},
+							},
+							"i0": {
+								"__typename": "Issue",
+								"number": 7,
+								"title": "Linked fallback issue",
+								"body": "Linked fallback body",
+							},
+						},
+					},
+				},
+			},
+			"pr_diffs": {"42": "pr diff sentinel\n"},
+		},
+	)
+
+	assert result["pr_meta"] == {
+		"title": "Synthetic PR title",
+		"body": "Fixes #7\n\nContext body",
+		"baseRefName": "main",
+		"headRefName": "feature/ref",
+		"headRepoFullName": "owner/repo",
+	}
+	assert len(result["pr_issue_comments"]) == 1
+	assert result["pr_reviews"] == []
+	assert len(result["pr_review_comments"]) == 1
+	assert result["linked_issue_context"].splitlines()[:2] == [
+		"Issue #7: Linked fallback issue",
+		"Linked fallback body",
+	]
+	assert "issue_comments_count: 1" in result["comments_context"]
+	assert "reviews_count: 0" in result["comments_context"]
+	assert "review_comments_count: 1" in result["comments_context"]
+	assert "total_entries: 2" in result["comments_context"]
+	assert "entry[0].kind: issue_comment" in result["comments_context"]
+	assert "entry[1].kind: review_comment" in result["comments_context"]
+	assert result["pr_diff"] == "pr diff sentinel\n"
+	assert result["github_env"]["LINKED_ISSUES_JSON"] == "[]"
+	assert result["github_env"]["LINKED_ISSUE_FALLBACK_NUMBERS_JSON"] == "[7]"
+	assert result["github_env"]["HAS_PR_DIFF"] == "true"
+	assert result["github_env"]["PR_DIFF_SOURCE"] == "gh_pr_diff"
+	assert result["github_env"]["BASE_BRANCH"] == "main"
+	assert any(call[:2] == ["api", "repos/owner/repo/pulls/42"] for call in result["mock_state"]["calls"])
+	call_texts = [" ".join(call) for call in result["mock_state"]["calls"]]
+	graphql_call_texts = [call for call in call_texts if call.startswith("api graphql ")]
+	assert len(graphql_call_texts) == 2
+	fallback_call = next(call for call in graphql_call_texts if "issueOrPullRequest(number:" in call)
+	assert "i0: issueOrPullRequest(number: 7)" in fallback_call
+	assert not any("repos/owner/repo/issues/7" in call for call in call_texts)
+	assert not any("repos/owner/repo/pulls/42/reviews" in call for call in call_texts)
+
+
+def test_review_collect_pr_metadata_helper_fetches_top_level_reviews_when_break_glass_enabled() -> None:
+	result = _run_review_collect_pr_metadata_harness(
+		pr_number="42",
+		claude_branch_review_mode="false",
+		head_ref_override="",
+		head_sha_override="",
+		base_ref_override="",
+		review_break_glass_enabled="true",
+		mock_state={
+			"api_responses": {
+				"repos/owner/repo/pulls/42/comments": [
+					{
+						"id": 13,
+						"user": {"login": "carol"},
+						"created_at": "2026-06-03T00:00:00Z",
+						"updated_at": "2026-06-03T01:00:00Z",
+						"path": "scripts/helper.sh",
+						"line": 7,
+						"body": "Review comment body",
+					},
+				],
+				"repos/owner/repo/pulls/42/reviews": [
+					{
+						"id": 12,
+						"user": {"login": "bob"},
+						"submitted_at": "2026-06-02T00:00:00Z",
+						"updated_at": "2026-06-02T01:00:00Z",
+						"state": "COMMENTED",
+						"body": "Review body",
+					},
+				],
+				"repos/owner/repo/issues/42/comments": [
+					{
+						"id": 11,
+						"user": {"login": "alice"},
+						"created_at": "2026-06-01T00:00:00Z",
+						"updated_at": "2026-06-01T01:00:00Z",
+						"body": "Issue comment body",
+					},
+				],
+				"repos/owner/repo/pulls/42": {
+					"title": "Synthetic PR title",
+					"body": "Fixes #7\n\nContext body",
+					"base": {"ref": "main"},
+					"head": {
+						"ref": "feature/ref",
+						"sha": "abc123",
+						"repo": {"full_name": "owner/repo"},
+					},
+				},
+				"repos/owner/repo/issues/7": {
+					"number": 7,
+					"title": "Linked fallback issue",
+					"body": "Linked fallback body",
+				},
+				"graphql": {
+					"data": {
+						"repository": {
+							"pullRequest": {
+								"closingIssuesReferences": {
+									"nodes": [],
+								},
+							},
+						},
+					},
+				},
+			},
+			"pr_diffs": {"42": "pr diff sentinel\n"},
+		},
+	)
+
+	assert len(result["pr_reviews"]) == 1
+	assert "reviews_count: 1" in result["comments_context"]
+	assert "total_entries: 3" in result["comments_context"]
+	assert "entry[1].kind: review" in result["comments_context"]
+	assert "entry[2].kind: review_comment" in result["comments_context"]
+	assert any("repos/owner/repo/pulls/42/reviews" in " ".join(call) for call in result["mock_state"]["calls"])
+
+
+def test_review_collect_pr_metadata_helper_fails_open_on_non_array_batch_input() -> None:
+	helper_block = _review_collect_pr_metadata_graphql_helper_block()
+	script = textwrap.dedent(
+		"""\
+		set -euo pipefail
+		TMP_RUNTIME_DIR="$(mktemp -d)"
+		REPOSITORY_OWNER="owner"
+		REPOSITORY_NAME="repo"
+		# Neither retry wrapper may run on the fail-open path.
+		gh_retry() { echo "unexpected gh_retry call" >&2; return 99; }
+		gh_retry_to_file() { echo "unexpected gh_retry_to_file call" >&2; return 99; }
+		"""
+	) + helper_block + "\n_fetch_linked_issue_bodies_graphql $'1\\n2'\n"
+
+	result = subprocess.run(
+		["bash"],
+		cwd=str(REPO_ROOT),
+		input=script,
+		capture_output=True,
+		text=True,
+		check=False,
+		timeout=60,
+	)
+
+	assert result.returncode == 0
+	assert result.stdout.strip() == "[]"
+	assert "unexpected gh_retry call" not in result.stderr
+	assert "unexpected gh_retry_to_file call" not in result.stderr
+
+
+def test_review_collect_pr_metadata_helper_strict_fallback_drops_bare_mentions() -> None:
+	result = _run_review_collect_pr_metadata_harness(
+		pr_number="42",
+		claude_branch_review_mode="false",
+		head_ref_override="",
+		head_sha_override="",
+		base_ref_override="",
+		mock_state={
+			"api_responses": {
+				"repos/owner/repo/pulls/42/comments": [],
+				"repos/owner/repo/pulls/42/reviews": [],
+				"repos/owner/repo/issues/42/comments": [],
+				"repos/owner/repo/pulls/42": {
+					"title": "Docs update referencing issue #7 and issues/8 plus someotherowner/repo/issues/15",
+					"body": "Fixes #10\nIgnore Fixes #11a and owner/repo/issues/16abc\nAlso see owner/repo/issues/12 and github.com/owner/repo/issues/13\nCloses: #14",
+					"base": {"ref": "main"},
+					"head": {
+						"ref": "feature/ref",
+						"sha": "abc123",
+						"repo": {"full_name": "owner/repo"},
+					},
+				},
+				"graphql": {
+					"data": {
+						"repository": {
+							"pullRequest": {
+								"closingIssuesReferences": {
+									"nodes": [],
+								},
+							},
+							"i0": {
+								"__typename": "Issue",
+								"number": 10,
+								"title": "Closing keyword match",
+								"body": "Fix keyword body",
+							},
+							"i1": {
+								"__typename": "Issue",
+								"number": 12,
+								"title": "Repo path match",
+								"body": "Path body",
+							},
+							"i2": {
+								"__typename": "Issue",
+								"number": 13,
+								"title": "Repo URL match",
+								"body": "URL body",
+							},
+						},
+					},
+				},
+			},
+			"pr_diffs": {"42": "pr diff sentinel\n"},
+		},
+	)
+
+	assert result["github_env"]["LINKED_ISSUES_JSON"] == "[]"
+	assert result["github_env"]["LINKED_ISSUE_FALLBACK_NUMBERS_JSON"] == "[10,12,13]"
+	assert "Issue #10: Closing keyword match" in result["linked_issue_context"]
+	assert "Issue #12: Repo path match" in result["linked_issue_context"]
+	assert "Issue #13: Repo URL match" in result["linked_issue_context"]
+	assert "Issue #7:" not in result["linked_issue_context"]
+	assert "Issue #8:" not in result["linked_issue_context"]
+	assert "Issue #11:" not in result["linked_issue_context"]
+	assert "Issue #14:" not in result["linked_issue_context"]
+	assert "Issue #15:" not in result["linked_issue_context"]
+	assert "Issue #16:" not in result["linked_issue_context"]
+	call_texts = [" ".join(call) for call in result["mock_state"]["calls"]]
+	graphql_call_texts = [call for call in call_texts if call.startswith("api graphql ")]
+	assert len(graphql_call_texts) == 2
+	fallback_call = next(call for call in graphql_call_texts if "issueOrPullRequest(number:" in call)
+	assert "i0: issueOrPullRequest(number: 10)" in fallback_call
+	assert "i1: issueOrPullRequest(number: 12)" in fallback_call
+	assert "i2: issueOrPullRequest(number: 13)" in fallback_call
+	assert not any("repos/owner/repo/issues/7" in call for call in call_texts)
+	assert not any("repos/owner/repo/issues/8" in call for call in call_texts)
+	assert not any("repos/owner/repo/issues/10" in call for call in call_texts)
+	assert not any("repos/owner/repo/issues/11" in call for call in call_texts)
+	assert not any("repos/owner/repo/issues/12" in call for call in call_texts)
+	assert not any("repos/owner/repo/issues/13" in call for call in call_texts)
+	assert not any("repos/owner/repo/issues/14" in call for call in call_texts)
+	assert not any("repos/owner/repo/issues/15" in call for call in call_texts)
+	assert not any("repos/owner/repo/issues/16" in call for call in call_texts)
+
+
+def test_review_collect_pr_metadata_helper_warns_when_fallback_graphql_returns_errors_without_data() -> None:
+	result = _run_review_collect_pr_metadata_harness(
+		pr_number="42",
+		claude_branch_review_mode="false",
+		head_ref_override="",
+		head_sha_override="",
+		base_ref_override="",
+		mock_state={
+			"api_responses": {
+				"repos/owner/repo/pulls/42/comments": [],
+				"repos/owner/repo/pulls/42/reviews": [],
+				"repos/owner/repo/issues/42/comments": [],
+				"repos/owner/repo/pulls/42": {
+					"title": "Synthetic PR title",
+					"body": "Fixes #7\n\nContext body",
+					"base": {"ref": "main"},
+					"head": {
+						"ref": "feature/ref",
+						"sha": "abc123",
+						"repo": {"full_name": "owner/repo"},
+					},
+				},
+				"graphql": {
+					"errors": [{"message": "synthetic graphql failure"}],
+					"data": None,
+				},
+			},
+			"pr_diffs": {"42": "pr diff sentinel\n"},
+		},
+	)
+
+	assert result["github_env"]["LINKED_ISSUES_JSON"] == "[]"
+	assert result["github_env"]["LINKED_ISSUE_FALLBACK_NUMBERS_JSON"] == "[7]"
+	assert result["linked_issue_context"] == "No linked issues found."
+	assert "::warning::Linked-issue body-text fallback: batched GraphQL issue hydration failed; skipping" in result["stdout"]
+	call_texts = [" ".join(call) for call in result["mock_state"]["calls"]]
+	assert len([call for call in call_texts if call.startswith("api graphql ")]) == 2
+	assert not any("repos/owner/repo/issues/7" in call for call in call_texts)
+
+	partial_result = _run_review_collect_pr_metadata_harness(
+		pr_number="42",
+		claude_branch_review_mode="false",
+		head_ref_override="",
+		head_sha_override="",
+		base_ref_override="",
+		mock_state={
+			"api_responses": {
+				"repos/owner/repo/pulls/42/comments": [],
+				"repos/owner/repo/pulls/42/reviews": [],
+				"repos/owner/repo/issues/42/comments": [],
+				"repos/owner/repo/pulls/42": {
+					"title": "Synthetic PR title",
+					"body": "Fixes #7\nFixes #8\n\nContext body",
+					"base": {"ref": "main"},
+					"head": {
+						"ref": "feature/ref",
+						"sha": "abc123",
+						"repo": {"full_name": "owner/repo"},
+					},
+				},
+				"graphql": {
+					"errors": [{"message": "synthetic partial graphql failure"}],
+					"data": {
+						"repository": {
+							"pullRequest": {
+								"closingIssuesReferences": {
+									"nodes": [],
+								},
+							},
+							"i0": {
+								"__typename": "Issue",
+								"number": 7,
+								"title": "Linked fallback issue",
+								"body": "Linked fallback body",
+							},
+							"i1": None,
+						},
+					},
+				},
+			},
+			"pr_diffs": {"42": "pr diff sentinel\n"},
+		},
+	)
+
+	assert partial_result["github_env"]["LINKED_ISSUE_FALLBACK_NUMBERS_JSON"] == "[7,8]"
+	assert "Issue #7: Linked fallback issue" in partial_result["linked_issue_context"]
+	assert "Issue #8:" not in partial_result["linked_issue_context"]
+	assert "Linked-issue body-text fallback resolved 1 issue(s) for context" in partial_result["stdout"]
+	assert (
+		"::warning::Linked-issue body-text fallback: batched GraphQL issue hydration returned partial data "
+		"(hydrated 1 of 2 references); continuing with available context."
+		in partial_result["stderr"]
+	)
+
+
+def test_review_collect_pr_metadata_helper_caps_fallback_graphql_batch_at_twenty_issues() -> None:
+	referenced_numbers = list(range(1, 23))
+	graphql_repository = {
+		"pullRequest": {
+			"closingIssuesReferences": {
+				"nodes": [],
+			},
+		},
+	}
+	for idx, number in enumerate(referenced_numbers[:20]):
+		graphql_repository[f"i{idx}"] = {
+			"__typename": "Issue",
+			"number": number,
+			"title": f"Issue {number}",
+			"body": f"Body {number}",
+		}
+
+	result = _run_review_collect_pr_metadata_harness(
+		pr_number="42",
+		claude_branch_review_mode="false",
+		head_ref_override="",
+		head_sha_override="",
+		base_ref_override="",
+		mock_state={
+			"api_responses": {
+				"repos/owner/repo/pulls/42/comments": [],
+				"repos/owner/repo/pulls/42/reviews": [],
+				"repos/owner/repo/issues/42/comments": [],
+				"repos/owner/repo/pulls/42": {
+					"title": "Synthetic PR title",
+					"body": "\n".join(f"Fixes #{number}" for number in referenced_numbers),
+					"base": {"ref": "main"},
+					"head": {
+						"ref": "feature/ref",
+						"sha": "abc123",
+						"repo": {"full_name": "owner/repo"},
+					},
+				},
+				"graphql": {
+					"data": {
+						"repository": graphql_repository,
+					},
+				},
+			},
+			"pr_diffs": {"42": "pr diff sentinel\n"},
+		},
+	)
+
+	assert result["github_env"]["LINKED_ISSUES_JSON"] == "[]"
+	assert result["github_env"]["LINKED_ISSUE_FALLBACK_NUMBERS_JSON"] == json.dumps(
+		referenced_numbers,
+		separators=(",", ":"),
+	)
+	assert "Issue #20: Issue 20" in result["linked_issue_context"]
+	assert "Issue #21:" not in result["linked_issue_context"]
+	assert "Issue #22:" not in result["linked_issue_context"]
+	call_texts = [" ".join(call) for call in result["mock_state"]["calls"]]
+	graphql_call_texts = [call for call in call_texts if call.startswith("api graphql ")]
+	assert len(graphql_call_texts) == 2
+	fallback_call = next(call for call in graphql_call_texts if "issueOrPullRequest(number:" in call)
+	for idx, number in enumerate(referenced_numbers[:20]):
+		assert f"i{idx}: issueOrPullRequest(number: {number})" in fallback_call
+	assert "issueOrPullRequest(number: 21)" not in fallback_call
+	assert "issueOrPullRequest(number: 22)" not in fallback_call
+	for number in referenced_numbers:
+		assert not any(
+			call[:2] == ["api", f"repos/owner/repo/issues/{number}"]
+			for call in result["mock_state"]["calls"]
+		)
+
+
+def test_extract_repo_scoped_issue_refs_rejects_malformed_repository_input() -> None:
+	helpers_path = (REPO_ROOT / "scripts" / "gh_helpers.sh").as_posix()
+	script = textwrap.dedent(
+		f"""\
+		set -euo pipefail
+		source \"{helpers_path}\"
+		extract_repo_scoped_issue_refs_from_text \"$REPOSITORY_INPUT\" \"$TEXT_INPUT\"
+		"""
+	)
+
+	for repository_input in ("owner", "owner/repo/extra"):
+		env = os.environ.copy()
+		env.update({
+			"REPOSITORY_INPUT": repository_input,
+			"TEXT_INPUT": "Fixes #12\nowner/repo/issues/13",
+		})
+		result = subprocess.run(
+			["bash", "-lc", script],
+			cwd=str(REPO_ROOT),
+			env=env,
+			capture_output=True,
+			text=True,
+			check=True,
+		)
+		assert result.stdout == ""
+
+
+def test_review_scripts_emit_context_budget_warn_signals() -> None:
+	for script_text, expected_call in (
+		(_reviewers_text(), 'emit_context_budget_warn_for_prompt "review"'),
+		(_consolidate_text(), 'emit_context_budget_warn_for_prompt "consolidator"'),
+		(_apply_fixes_text(), 'emit_context_budget_warn_for_prompt "editor"'),
+		(_rb_judge_text(), 'emit_context_budget_warn_for_prompt "review_blocked_judge"'),
+	):
+		assert "build_context_budget_warn_line_for_file" in script_text
+		assert expected_call in script_text
+
+
+def test_review_consolidator_prompt_is_staged_for_review_runtime_support() -> None:
+	stage_helper = _stage_helper_text()
+	consolidate = _consolidate_text()
+
+	assert 'PROMPT_TEMPLATE="${SUPPORT_PROMPTS_DIR:-prompts}/review-consolidator.txt"' in consolidate
+	assert 'if [ ! -f "${SUPPORT_PROMPTS_DIR}/review-consolidator.txt" ]; then' in stage_helper
+	assert 'src=".codex-workflow-src/prompts/review-consolidator.txt"' in stage_helper
+	assert 'src=".codex-workflow-src-main/prompts/review-consolidator.txt"' not in stage_helper
+	assert 'install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/review-consolidator.txt"' in stage_helper
+	assert 'review-consolidator.txt not found in checked-out support sources' in stage_helper
+	assert 'REVIEW_CONSOLIDATOR_ENABLED=true' in stage_helper
+	assert 'rm -f "${SUPPORT_PROMPTS_DIR}/review-consolidator.txt"' in stage_helper
+
+
+def test_review_pipeline_slop_scan_wiring_is_flagged_fail_open_and_pre_commit_cleaned() -> None:
+	workflow = _workflow_text()
+	collect_block = _step_block("Collect local slop-scan findings")
+	cleanup_block = _step_block("Remove slop-scan runtime artifact")
+
+	assert 'echo "SLOP_SCAN_FINDINGS_FILE=${GITHUB_WORKSPACE}/.ai/slop_scan/findings.json"' in workflow
+	assert "continue-on-error: true" in collect_block
+	assert 'write_slop_scan_sentinel "disabled"' in collect_block
+	assert 'write_slop_scan_sentinel "scan_error"' in collect_block
+	assert '"${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/slop_scan_local.py"' in collect_block
+	assert '--output "${SLOP_SCAN_FINDINGS_FILE}"' in collect_block
+	assert 'if: always()' in cleanup_block
+	assert 'rm -f "${SLOP_SCAN_FINDINGS_FILE}"' in cleanup_block
+	assert 'rmdir "${expected_dir}"' in cleanup_block
+	assert workflow.index("- name: Remove slop-scan runtime artifact") < workflow.index("- name: Commit changes")
+
+
+def test_reviewer_and_consolidator_slop_scan_context_is_wired() -> None:
+	reviewers = _reviewers_text()
+	consolidate = _consolidate_text()
+	prompt_text = (REPO_ROOT / "prompts" / "review-consolidator.txt").read_text(encoding="utf-8")
+
+	assert 'SLOP_SCAN_FINDINGS_FILE="${SLOP_SCAN_FINDINGS_FILE:-${GITHUB_WORKSPACE:-$(pwd)}/.ai/slop_scan/findings.json}"' in reviewers
+	assert '=== BEGIN UNTRUSTED ${SLOP_SCAN_FINDINGS_FILE} (heuristic local slop-scan findings' in reviewers
+	assert 'SLOP_SCAN_FINDINGS_FILE="${SLOP_SCAN_FINDINGS_FILE:-${GITHUB_WORKSPACE:-$PWD}/.ai/slop_scan/findings.json}"' in consolidate
+	assert "'SLOP SCAN FINDINGS'" in consolidate
+	assert "=== BEGIN UNTRUSTED SLOP SCAN FINDINGS ===" in prompt_text
+	assert "best-effort cleanup helpers" in prompt_text
+	assert "catch-and-log boundaries" in prompt_text
+
+
+def test_review_filter_smoke_fixtures_are_present() -> None:
+	assert PHASE_A_ANTI_RULES_FIXTURE.exists(), f"missing fixture: {PHASE_A_ANTI_RULES_FIXTURE}"
+	assert PHASE_C_FILTER_FIXTURE.exists(), f"missing fixture: {PHASE_C_FILTER_FIXTURE}"
+	assert PHASE_B_RISK_TIER_TRIVIAL_FIXTURE.exists(), f"missing fixture: {PHASE_B_RISK_TIER_TRIVIAL_FIXTURE}"
+	assert PHASE_B_RISK_TIER_LITE_FIXTURE.exists(), f"missing fixture: {PHASE_B_RISK_TIER_LITE_FIXTURE}"
+	assert PHASE_B_RISK_TIER_FULL_FIXTURE.exists(), f"missing fixture: {PHASE_B_RISK_TIER_FULL_FIXTURE}"
+	assert PHASE_B_RISK_TIER_ALWAYS_FULL_FIXTURE.exists(), f"missing fixture: {PHASE_B_RISK_TIER_ALWAYS_FULL_FIXTURE}"
+	assert PHASE_D_MATERIALITY_FIXTURE.exists(), f"missing fixture: {PHASE_D_MATERIALITY_FIXTURE}"
+	assert PHASE_G_FLAKY_REVIEWER_FIXTURE.exists(), f"missing fixture: {PHASE_G_FLAKY_REVIEWER_FIXTURE}"
+	assert PHASE_H_CONTEXT_BUDGET_FIXTURE.exists(), f"missing fixture: {PHASE_H_CONTEXT_BUDGET_FIXTURE}"
+
+
+def test_reviewer_risk_tier_classifier_honours_thresholds_and_always_full_regex() -> None:
+	reviewer_models = _workflow_reviewer_models()
+	assert len(reviewer_models) >= 2, "workflow reviewer list should provide default trivial/lite subsets"
+
+	for fixture, expected_tier, expected_models, expected_loc, expected_files, forced_full in (
+		(PHASE_B_RISK_TIER_TRIVIAL_FIXTURE, "trivial", reviewer_models[:1], "2", "1", "false"),
+		(PHASE_B_RISK_TIER_LITE_FIXTURE, "lite", reviewer_models[:2], "50", "1", "false"),
+		(PHASE_B_RISK_TIER_FULL_FIXTURE, "full", reviewer_models, "42", "21", "false"),
+		(PHASE_B_RISK_TIER_ALWAYS_FULL_FIXTURE, "full", reviewer_models, "2", "1", "true"),
+	):
+		result = _run_reviewer_risk_tier_harness(diff_text=fixture.read_text(encoding="utf-8"))
+		assert result["REVIEWER_RISK_TIER"] == expected_tier
+		assert result["risk_tier_file"] == expected_tier
+		assert result["active_models"] == expected_models
+		assert result["REVIEWER_RISK_TIER_LOC"] == expected_loc
+		assert result["REVIEWER_RISK_TIER_FILES"] == expected_files
+		assert result["REVIEWER_RISK_TIER_FORCED_FULL"] == forced_full
+		assert f"REVIEWER_RISK_TIER: tier={expected_tier}" in result["stdout"]
+
+	always_full_result = _run_reviewer_risk_tier_harness(diff_text=PHASE_B_RISK_TIER_ALWAYS_FULL_FIXTURE.read_text(encoding="utf-8"))
+	assert "matched_path=scripts/review_helper.sh" in always_full_result["stdout"]
+
+
+def test_review_tier_resolver_routes_lite_standard_and_full_and_handles_overrides() -> None:
+	reviewer_models = _workflow_reviewer_models()
+	lite_diff = textwrap.dedent(
+		"""\
+		diff --git a/README.md b/README.md
+		index 1111111..2222222 100644
+		--- a/README.md
+		+++ b/README.md
+		@@ -1 +1,2 @@
+		-old line
+		+new line
+		+second line
+		"""
+	)
+	standard_diff = textwrap.dedent(
+		"""\
+		diff --git a/scripts/review_helper.sh b/scripts/review_helper.sh
+		index 1111111..2222222 100644
+		--- a/scripts/review_helper.sh
+		+++ b/scripts/review_helper.sh
+		@@ -1 +1,3 @@
+		-echo old
+		+echo new
+		+echo newer
+		+echo newest
+		"""
+	)
+	workflow_diff = textwrap.dedent(
+		"""\
+		diff --git a/.github/workflows/review.yml b/.github/workflows/review.yml
+		index 1111111..2222222 100644
+		--- a/.github/workflows/review.yml
+		+++ b/.github/workflows/review.yml
+		@@ -1 +1,2 @@
+		-name: Old review
+		+name: New review
+		+run-name: Reviewer update
+		"""
+	)
+	full_diff = textwrap.dedent(
+		"""\
+		diff --git a/scripts/review_helper.sh b/scripts/review_helper.sh
+		index 1111111..2222222 100644
+		--- a/scripts/review_helper.sh
+		+++ b/scripts/review_helper.sh
+		@@ -1 +1,2 @@
+		-echo old
+		+echo new
+		+echo newer
+		diff --git a/tests/test_review_helper.py b/tests/test_review_helper.py
+		index 3333333..4444444 100644
+		--- a/tests/test_review_helper.py
+		+++ b/tests/test_review_helper.py
+		@@ -1 +1,2 @@
+		-old_test()
+		+new_test()
+		+more_test()
+		"""
+	)
+
+	unprotected_code_diff = _numbered_code_diff({"src/app.py": 12})
+	protected_doc_diff = textwrap.dedent(
+		"""\
+		diff --git a/CLAUDE.md b/CLAUDE.md
+		index 1111111..2222222 100644
+		--- a/CLAUDE.md
+		+++ b/CLAUDE.md
+		@@ -1 +1,2 @@
+		-old rule
+		+new rule
+		+another rule
+		"""
+	)
+	rename_from_protected_diff = textwrap.dedent(
+		"""\
+		diff --git a/scripts/helper.sh b/src/helper.py
+		similarity index 90%
+		rename from scripts/helper.sh
+		rename to src/helper.py
+		index 1111111..2222222 100644
+		--- a/scripts/helper.sh
+		+++ b/src/helper.py
+		@@ -1 +1,2 @@
+		-echo old
+		+print("new")
+		+print("newer")
+		"""
+	)
+
+	lite_result = _run_review_tier_harness(diff_text=lite_diff)
+	assert lite_result["REVIEW_TIER"] == "lite"
+	assert lite_result["REVIEW_TIER_REASON"] == "doc_only_<=50_loc"
+	assert lite_result["review_tier_file"] == "lite"
+	assert lite_result["active_models"] == ["google/gemini-3.1-flash-lite"]
+	assert lite_result["REVIEW_TIER_FORCED_FULL"] == "false"
+	assert "REVIEW_CONSOLIDATOR_ENABLED=0\n" in lite_result["github_env"]
+	assert "REVIEW_TIER: tier=lite" in lite_result["stdout"]
+	assert "protected=false" in lite_result["stdout"]
+
+	# Small code outside protected paths now takes the one-reviewer lite tier.
+	code_lite_result = _run_review_tier_harness(diff_text=unprotected_code_diff)
+	assert code_lite_result["REVIEW_TIER"] == "lite"
+	assert code_lite_result["REVIEW_TIER_REASON"] == "code_<=50_loc_unprotected"
+	assert code_lite_result["active_models"] == ["google/gemini-3.1-flash-lite"]
+
+	# A small diff under a protected path never drops below four reviewers.
+	standard_result = _run_review_tier_harness(diff_text=standard_diff)
+	assert standard_result["REVIEW_TIER"] == "standard"
+	assert standard_result["REVIEW_TIER_REASON"] == "protected_path_<=50_loc"
+	assert standard_result["REVIEW_TIER_SCOPE"] == "scripts/"
+	assert standard_result["review_tier_file"] == "standard"
+	assert standard_result["active_models"] == [
+		"minimax/minimax-m3",
+		"z-ai/glm-5.3-flash",
+		"google/gemini-3.1-flash-lite",
+		"openai/gpt-6-luna",
+	]
+	assert "REVIEW_CONSOLIDATOR_ENABLED=0\n" not in standard_result["github_env"]
+	assert "protected=true protected_path=scripts/review_helper.sh" in standard_result["stdout"]
+
+	workflow_result = _run_review_tier_harness(diff_text=workflow_diff)
+	assert workflow_result["REVIEW_TIER"] == "standard"
+	assert workflow_result["REVIEW_TIER_SCOPE"] == ".github/workflows/"
+
+	# Protected instruction files are Markdown but still get four reviewers.
+	protected_doc_result = _run_review_tier_harness(diff_text=protected_doc_diff)
+	assert protected_doc_result["REVIEW_TIER"] == "standard"
+	assert protected_doc_result["REVIEW_TIER_REASON"] == "protected_path_<=50_loc"
+
+	# A rename away from a protected path counts as protected even though the
+	# changed-files list only names the destination.
+	rename_result = _run_review_tier_harness(
+		diff_text=rename_from_protected_diff,
+		raw_changed_paths=["src/helper.py"],
+	)
+	assert rename_result["REVIEW_TIER"] == "standard"
+	assert "protected_path=scripts/helper.sh" in rename_result["stdout"]
+
+	# Any folder qualifies for the standard tier now (was: one of four dirs).
+	multi_dir_result = _run_review_tier_harness(diff_text=_numbered_code_diff({"src/app.py": 40, "lib/util.py": 40}))
+	assert multi_dir_result["REVIEW_TIER"] == "standard"
+	assert multi_dir_result["REVIEW_TIER_REASON"] == "code_<=200_loc"
+	assert multi_dir_result["REVIEW_TIER_SCOPE"] == ""
+
+	mixed_protected_result = _run_review_tier_harness(diff_text=full_diff)
+	assert mixed_protected_result["REVIEW_TIER"] == "standard"
+	assert mixed_protected_result["REVIEW_TIER_REASON"] == "protected_path_<=50_loc"
+
+	full_result = _run_review_tier_harness(diff_text=_numbered_code_diff({"src/app.py": 150, "lib/util.py": 60}))
+	assert full_result["REVIEW_TIER"] == "full"
+	assert full_result["REVIEW_TIER_REASON"] == "default"
+	assert full_result["review_tier_file"] == "full"
+	assert full_result["active_models"] == reviewer_models
+
+	# Protected globs match nested paths, like the gate's bash `case`.
+	for nested_path in ("scripts/sub/README.md", ".github/CODEOWNERS", "db/contracts/x/y.yml"):
+		nested_result = _run_review_tier_harness(diff_text=_numbered_code_diff({nested_path: 3}))
+		assert nested_result["REVIEW_TIER"] == "standard", nested_path
+		assert f"protected_path={nested_path}" in nested_result["stdout"], nested_path
+
+	# Quoted git paths (special characters) are unquoted before matching.
+	quoted_rename_result = _run_review_tier_harness(
+		diff_text=textwrap.dedent(
+			"""\
+			diff --git "a/scripts/my helper.sh" "b/src/my helper.py"
+			similarity index 90%
+			rename from "scripts/my helper.sh"
+			rename to "src/my helper.py"
+			--- "a/scripts/my helper.sh"
+			+++ "b/src/my helper.py"
+			@@ -1 +1 @@
+			-echo old
+			+print("new")
+			"""
+		),
+		raw_changed_paths=["src/my helper.py"],
+	)
+	assert quoted_rename_result["REVIEW_TIER"] == "standard"
+
+	# A full panel forced by the risk-tier resolver (REVIEWER_RISK_TIER_ENABLED,
+	# e.g. its always-full regex) is never shrunk by the size tiers.
+	risk_forced_result = _run_review_tier_harness(
+		diff_text=standard_diff,
+		extra_env={"REVIEWER_RISK_TIER_ENABLED": "1", "REVIEWER_FILTER_ACTIVE": "false"},
+		pre_classify="classify_reviewer_risk_tier",
+	)
+	assert "REVIEWER_RISK_TIER: tier=full" in risk_forced_result["stdout"]
+	assert "reason=always_full_regex" in risk_forced_result["stdout"]
+	assert risk_forced_result["REVIEW_TIER"] == "full"
+	assert risk_forced_result["REVIEW_TIER_REASON"] == "risk_tier_forced_full"
+	assert risk_forced_result["REVIEW_TIER_FORCED_FULL"] == "true"
+	assert risk_forced_result["active_models"] == reviewer_models
+
+	force_full_result = _run_review_tier_harness(
+		diff_text=lite_diff,
+		extra_env={"FORCE_FULL_REVIEW_TIER": "true"},
+	)
+	assert force_full_result["REVIEW_TIER"] == "full"
+	assert force_full_result["REVIEW_TIER_REASON"] == "force_review_marker"
+	assert force_full_result["REVIEW_TIER_FORCED_FULL"] == "true"
+	assert force_full_result["active_models"] == reviewer_models
+
+	invalid_lite_result = _run_review_tier_harness(
+		diff_text=lite_diff,
+		extra_env={"REVIEW_TIER_LITE_REVIEWER_SLUG": "unknown/model"},
+	)
+	assert invalid_lite_result["REVIEW_TIER"] == "full"
+	assert invalid_lite_result["REVIEW_TIER_REASON"] == "invalid_lite_reviewer_slug"
+	assert invalid_lite_result["active_models"] == reviewer_models
+
+	invalid_standard_result = _run_review_tier_harness(
+		diff_text=standard_diff,
+		extra_env={"REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "unknown/model"},
+	)
+	assert invalid_standard_result["REVIEW_TIER"] == "full"
+	assert invalid_standard_result["REVIEW_TIER_REASON"] == "invalid_standard_reviewer_slugs"
+	assert invalid_standard_result["active_models"] == reviewer_models
+
+
+def _numbered_code_diff(files: dict[str, int]) -> str:
+	"""Build a diff that adds ``count`` lines to each path in ``files``."""
+	chunks: list[str] = []
+	for path, count in files.items():
+		chunks.append(f"diff --git a/{path} b/{path}\n")
+		chunks.append("index 1111111..2222222 100644\n")
+		chunks.append(f"--- a/{path}\n")
+		chunks.append(f"+++ b/{path}\n")
+		chunks.append(f"@@ -0,0 +1,{count} @@\n")
+		chunks.extend(f"+line {idx}\n" for idx in range(count))
+	return "".join(chunks)
+
+
+def test_review_tier_random_pick_is_seeded_by_pr_number_and_pinned_by_variables() -> None:
+	reviewer_models = _workflow_reviewer_models()
+	lite_diff = _numbered_code_diff({"src/app.py": 5})
+	standard_diff = _numbered_code_diff({"src/app.py": 120})
+	unpinned = {"REVIEW_TIER_LITE_REVIEWER_SLUG": "", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": ""}
+
+	def pick(diff_text: str, pr_number: str) -> dict[str, str | list[str]]:
+		return _run_review_tier_harness(diff_text=diff_text, extra_env={**unpinned, "PR_NUMBER": pr_number})
+
+	def expected(pr_number: str, count: int) -> list[str]:
+		ranked = sorted(
+			reviewer_models,
+			key=lambda model: hashlib.sha256(f"{pr_number}:{model}".encode("utf-8")).hexdigest(),
+		)
+		chosen = set(ranked[:count])
+		return [model for model in reviewer_models if model in chosen]
+
+	lite_picks: set[tuple[str, ...]] = set()
+	standard_picks: set[tuple[str, ...]] = set()
+	for pr_number in ("101", "202", "303", "404", "505", "606", "707", "808"):
+		lite_result = pick(lite_diff, pr_number)
+		assert lite_result["REVIEW_TIER"] == "lite"
+		assert lite_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "random_lite"
+		assert lite_result["active_models"] == expected(pr_number, 1)
+		lite_picks.add(tuple(lite_result["active_models"]))
+
+		standard_result = pick(standard_diff, pr_number)
+		assert standard_result["REVIEW_TIER"] == "standard"
+		assert standard_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "random_standard"
+		assert standard_result["active_models"] == expected(pr_number, 4)
+		assert len(set(standard_result["active_models"])) == 4
+		assert set(standard_result["active_models"]) <= set(reviewer_models)
+		standard_picks.add(tuple(standard_result["active_models"]))
+
+	# Different PRs spread across the panel instead of always hitting one set.
+	assert len(lite_picks) > 1
+	assert len(standard_picks) > 1
+
+	# Same PR, same reviewers on every round and rerun.
+	assert pick(standard_diff, "4242")["active_models"] == pick(standard_diff, "4242")["active_models"]
+
+	# Unset variables behave like empty ones.
+	unset_env_result = _run_review_tier_harness(
+		diff_text=standard_diff,
+		extra_env={"PR_NUMBER": "4242"},
+		unset_env=("REVIEW_TIER_LITE_REVIEWER_SLUG", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS"),
+	)
+	assert unset_env_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "random_standard"
+	assert unset_env_result["active_models"] == expected("4242", 4)
+
+	# A broken pick (sha256sum failing) fails open to the full panel instead of
+	# running the tier with fewer reviewers than it asked for.
+	with tempfile.TemporaryDirectory(prefix="review-tier-nosha-") as fake_bin:
+		fake_sha = Path(fake_bin) / "sha256sum"
+		fake_sha.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+		fake_sha.chmod(0o755)
+		broken_result = _run_review_tier_harness(
+			diff_text=standard_diff,
+			extra_env={**unpinned, "PR_NUMBER": "4242", "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}"},
+		)
+	assert broken_result["REVIEW_TIER"] == "full"
+	assert broken_result["REVIEW_TIER_REASON"] == "random_reviewer_pick_failed"
+	assert broken_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "fallback_full_random_pick_failed"
+	assert broken_result["active_models"] == reviewer_models
+
+	# A sha256sum that prints junk (same text for every model) must fail open
+	# too, rather than ranking models by name.
+	with tempfile.TemporaryDirectory(prefix="review-tier-junksha-") as fake_bin:
+		fake_sha = Path(fake_bin) / "sha256sum"
+		fake_sha.write_text("#!/bin/sh\necho deadbeef\n", encoding="utf-8")
+		fake_sha.chmod(0o755)
+		junk_result = _run_review_tier_harness(
+			diff_text=standard_diff,
+			extra_env={**unpinned, "PR_NUMBER": "4242", "PATH": f"{fake_bin}:{os.environ.get('PATH', '')}"},
+		)
+	assert junk_result["REVIEW_TIER_REASON"] == "random_reviewer_pick_failed"
+	assert junk_result["active_models"] == reviewer_models
+
+	# A repo that sets the variables keeps exactly those reviewers.
+	pinned_result = _run_review_tier_harness(
+		diff_text=standard_diff,
+		extra_env={"PR_NUMBER": "4242", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "z-ai/glm-5.3-flash"},
+	)
+	assert pinned_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "configured_standard"
+	assert pinned_result["active_models"] == ["z-ai/glm-5.3-flash"]
+
+
+def test_review_tier_lite_draws_from_standard_list_and_defaults_use_whole_panel() -> None:
+	"""By default every tier draws from the whole panel; a pinned standard list
+	becomes the lite pool (PR #6438: the panel models now cost about the same,
+	so no model is reserved for the full tier)."""
+	reviewer_models = _workflow_reviewer_models()
+	assert len(reviewer_models) == 5
+
+	workflow_text = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	default_line = "REVIEW_TIER_STANDARD_REVIEWER_SLUGS: ${{ vars.REVIEW_TIER_STANDARD_REVIEWER_SLUGS || '' }}"
+	assert workflow_text.count(default_line) == 2
+
+	lite_diff = _numbered_code_diff({"src/app.py": 5})
+	standard_diff = _numbered_code_diff({"src/app.py": 120})
+	empty_defaults = {"REVIEW_TIER_LITE_REVIEWER_SLUG": "", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": ""}
+
+	def expected_lite(pr_number: str, pool: list[str]) -> list[str]:
+		return [min(pool, key=lambda model: hashlib.sha256(f"{pr_number}:{model}".encode("utf-8")).hexdigest())]
+
+	# With the defaults, every panel model shows up as a lite and a standard reviewer.
+	default_lite_picks: set[str] = set()
+	default_standard_picks: set[str] = set()
+	for pr_number in [str(n) for n in range(1, 41)]:
+		lite_result = _run_review_tier_harness(diff_text=lite_diff, extra_env={**empty_defaults, "PR_NUMBER": pr_number})
+		assert lite_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "random_lite"
+		assert lite_result["active_models"] == expected_lite(pr_number, reviewer_models)
+		default_lite_picks.update(lite_result["active_models"])
+		standard_result = _run_review_tier_harness(diff_text=standard_diff, extra_env={**empty_defaults, "PR_NUMBER": pr_number})
+		assert standard_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "random_standard"
+		assert len(standard_result["active_models"]) == 4
+		default_standard_picks.update(standard_result["active_models"])
+	assert default_lite_picks == set(reviewer_models)
+	assert default_standard_picks == set(reviewer_models)
+
+	# A repo that pins the standard list: lite draws from that list only.
+	pinned_standard = ["minimax/minimax-m3", "z-ai/glm-5.3-flash", "google/gemini-3.1-flash-lite", "openai/gpt-6-luna"]
+	assert set(pinned_standard) < set(reviewer_models)
+	excluded = set(reviewer_models) - set(pinned_standard)
+	defaults = {"REVIEW_TIER_LITE_REVIEWER_SLUG": "", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": ",".join(pinned_standard)}
+	default_standard = pinned_standard
+
+	lite_picks: set[str] = set()
+	for pr_number in [str(n) for n in range(1, 41)]:
+		lite_result = _run_review_tier_harness(diff_text=lite_diff, extra_env={**defaults, "PR_NUMBER": pr_number})
+		assert lite_result["REVIEW_TIER"] == "lite"
+		assert lite_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "random_lite"
+		assert lite_result["active_models"] == expected_lite(pr_number, default_standard)
+		assert not set(lite_result["active_models"]) & excluded
+		lite_picks.update(lite_result["active_models"])
+	# Lite spreads across the pinned list rather than always one model.
+	assert lite_picks == set(default_standard)
+
+	# Standard runs exactly the four configured reviewers, in the given order.
+	standard_result = _run_review_tier_harness(diff_text=standard_diff, extra_env={**defaults, "PR_NUMBER": "77"})
+	assert standard_result["REVIEW_TIER"] == "standard"
+	assert standard_result["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "configured_standard"
+	assert standard_result["active_models"] == default_standard
+
+	# The full panel still runs every model.
+	full_result = _run_review_tier_harness(
+		diff_text=_numbered_code_diff({"src/app.py": 150, "lib/util.py": 60}),
+		extra_env={**defaults, "PR_NUMBER": "77"},
+	)
+	assert full_result["REVIEW_TIER"] == "full"
+	assert full_result["active_models"] == reviewer_models
+
+	# A standard list with an unknown slug: lite draws from the full panel and
+	# says so, while standard itself fails open to the full panel as before.
+	bad_standard = {"REVIEW_TIER_LITE_REVIEWER_SLUG": "", "REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "google/gemini-3.1-flash-lite,unknown/model"}
+	bad_lite = _run_review_tier_harness(diff_text=lite_diff, extra_env={**bad_standard, "PR_NUMBER": "4242"})
+	assert bad_lite["REVIEW_TIER"] == "lite"
+	assert bad_lite["active_models"] == expected_lite("4242", reviewer_models)
+	assert "Unknown review-tier model 'unknown/model' in REVIEW_TIER_STANDARD_REVIEWER_SLUGS" in bad_lite["stderr"]
+
+	# Duplicate slugs in the standard list do not skew the lite pick.
+	dup_lite = _run_review_tier_harness(
+		diff_text=lite_diff,
+		extra_env={
+			"REVIEW_TIER_LITE_REVIEWER_SLUG": "",
+			"REVIEW_TIER_STANDARD_REVIEWER_SLUGS": "google/gemini-3.1-flash-lite,google/gemini-3.1-flash-lite",
+			"PR_NUMBER": "9",
+		},
+	)
+	assert dup_lite["active_models"] == ["google/gemini-3.1-flash-lite"]
+
+	# A pinned lite slug still wins over the standard pool.
+	pinned_lite = _run_review_tier_harness(
+		diff_text=lite_diff,
+		extra_env={**defaults, "REVIEW_TIER_LITE_REVIEWER_SLUG": "anthropic/claude-sonnet-5.5", "PR_NUMBER": "9"},
+	)
+	assert pinned_lite["REVIEW_TIER_ACTIVE_MODELS_SOURCE"] == "configured_lite"
+	assert pinned_lite["active_models"] == ["anthropic/claude-sonnet-5.5"]
+
+
+def test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer(review_tier: str = "lite") -> None:
+	reviewer_text = REVIEWERS.read_text(encoding="utf-8")
+	pass_function = reviewer_text.split("run_reviewer_pass() {", 1)[1].split("# Wrap a consolidated pass-1 ledger", 1)[0]
+	script = "run_reviewer_pass() {" + pass_function + textwrap.dedent("""\
+		get_active_reviewer_models_text() { cat "$REVIEWER_ACTIVE_MODELS_FILE"; }
+		reviewer_write_model_list_file() { printf '%s\\n' "${@:2}" > "$1"; }
+		reviewer_resume_should_reuse_success_slot() { return 1; }
+		reviewer_circuit_breaker_enabled() { [ -n "${TEST_HEALTH_DECISION:-}" ]; }
+		reviewer_health_dispatch_prepare() {
+		  REVIEWER_HEALTH_DISPATCH_DECISION=run
+		  if [ "$1" = 'mistralai/mistral-small-2603' ]; then
+		    REVIEWER_HEALTH_DISPATCH_DECISION="$TEST_MISTRAL_HEALTH_DECISION"
+		  elif [ "$1" = 'openai/gpt-6-luna' ]; then
+		    REVIEWER_HEALTH_DISPATCH_DECISION="$TEST_HEALTH_DECISION"
+		  fi
+		}
+		emit_run_budget_gate_note() { :; }
+		codex_run_budget_phase_may_start() { return 0; }
+		reviewer_request_partial_finalize() { printf '%s\\n' "$1" > "$PARTIAL_REQUEST_FILE"; }
+		normalize_reviewer_model_list() { printf '%s\\n' "$1" | tr ',' '\\n'; }
+		run_reviewer() {
+		  printf '%s\\n' "$1" >> "$CALLS_FILE"
+		  model_safe="$2"
+		  if [ "$1" = 'mistralai/mistral-small-2603' ]; then
+		    printf '%s\\n' "$MISTRAL_STATUS" > "$PREVIOUS_REVIEWS_DIR/status_$3_$model_safe.txt"
+		    printf '%s\\n' "$MISTRAL_ERROR" > "$PREVIOUS_REVIEWS_DIR/$3_$model_safe.log"
+		  else
+		    printf '%s\\n' "$FALLBACK_STATUS" > "$PREVIOUS_REVIEWS_DIR/status_$3_$model_safe.txt"
+		  fi
+		}
+		result="$(run_reviewer_pass review "$PROMPT_FILE" high)"
+		printf 'RESULT=%s\\nACTIVE=%s\\n' "$result" "$(cat "$REVIEWER_ACTIVE_MODELS_FILE")"
+		""")
+	for error, roster, fallback_status, expected_count, health_decision, mistral_status, mistral_health_decision, expected_success in (
+		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 2, "", "failed", "", 1),
+		("maximum context length is 262144 tokens, however you requested 300000 tokens", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 2, "", "failed", "", 1),
+		("model context window full", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 2, "", "failed", "", 1),
+		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "failed", 2, "", "failed", "", 0),
+		("HTTP 401 unauthorized", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 1, "", "failed", "", 0),
+		("maximum context length exceeded", "mistralai/mistral-small-2603", "success", 1, "", "failed", "", 0),
+		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 1, "skip_open", "failed", "", 0),
+		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 2, "run", "failed", "", 1),
+		("HTTP 429 rate limit", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 2, "", "skipped_unmapped", "", 1),
+		("HTTP 429 rate limit", "mistralai/mistral-small-2603,openai/gpt-6-luna", "failed", 2, "", "skipped_unmapped", "", 0),
+		("HTTP 429 rate limit", "mistralai/mistral-small-2603", "success", 1, "", "skipped_unmapped", "", 0),
+		("", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 1, "run", "failed", "skip_open", 1),
+		("", "mistralai/mistral-small-2603,openai/gpt-6-luna", "success", 0, "skip_open", "failed", "skip_open", 0),
+		("", "mistralai/mistral-small-2603,openai/gpt-6-luna", "skipped_budget", 2, "", "skipped_unmapped", "", 0),
+		("", "mistralai/mistral-small-2603,openai/gpt-6-luna", "skipped_budget", 1, "run", "failed", "skip_open", 0),
+		("maximum context length exceeded", "mistralai/mistral-small-2603,openai/gpt-6-luna", "skipped_budget", 2, "", "failed", "", 0),
+	):
+		with tempfile.TemporaryDirectory(prefix="lite-mistral-overflow-") as temp_dir:
+			root = Path(temp_dir)
+			partial_request_file = root / "partial.txt"
+			active_file = root / "active.txt"
+			active_file.write_text("mistralai/mistral-small-2603\n", encoding="utf-8")
+			prompt_file = root / "prompt.txt"
+			prompt_file.write_text("review this\n", encoding="utf-8")
+			proc = subprocess.run(
+				["bash", "-c", "set -euo pipefail\n" + script],
+				env={
+					**os.environ,
+					"PREVIOUS_REVIEWS_DIR": temp_dir,
+					"REVIEWER_ACTIVE_MODELS_FILE": str(active_file),
+					"PROMPT_FILE": str(prompt_file),
+					"CALLS_FILE": str(root / "calls.txt"),
+					"PARTIAL_REQUEST_FILE": str(partial_request_file),
+					"MISTRAL_ERROR": error,
+					"MISTRAL_STATUS": mistral_status,
+					"TEST_MISTRAL_HEALTH_DECISION": mistral_health_decision,
+					"REVIEWER_MODELS": roster,
+					"FALLBACK_STATUS": fallback_status,
+					"TEST_HEALTH_DECISION": health_decision,
+					"REVIEW_TIER": review_tier,
+					"PR_NUMBER": "6438",
+				},
+				capture_output=True,
+				text=True,
+				check=True,
+			)
+			called_reviewers = (root / "calls.txt").read_text(encoding="utf-8").splitlines() if (root / "calls.txt").exists() else []
+			assert len(called_reviewers) == expected_count, (mistral_status, mistral_health_decision, fallback_status, proc.stdout, proc.stderr)
+			assert f"RESULT={expected_success}" in proc.stdout
+			assert partial_request_file.exists() == (fallback_status == "skipped_budget" and "openai/gpt-6-luna" in called_reviewers), (mistral_status, mistral_health_decision, fallback_status, proc.stdout, proc.stderr)
+			if partial_request_file.exists():
+				assert partial_request_file.read_text(encoding="utf-8") == "soft_deadline\n"
+			if expected_success:
+				assert "ACTIVE=openai/gpt-6-luna" in proc.stdout
+			else:
+				assert "ACTIVE=mistralai/mistral-small-2603" in proc.stdout
+
+
+def test_risk_tier_sole_mistral_retries_with_live_larger_window_reviewer() -> None:
+	test_lite_mistral_context_overflow_retries_with_live_larger_window_reviewer("disabled")
+
+
+def test_review_tier_disabled_keeps_risk_tier_selection_and_pick_guards_short_args() -> None:
+	"""Turning the size tiers off leaves the panel to the risk-tier resolver."""
+	reviewer_models = _workflow_reviewer_models()
+	small_unprotected_diff = _numbered_code_diff({"src/app.py": 5})
+
+	# Both resolvers off: the full panel runs.
+	both_off = _run_review_tier_harness(
+		diff_text=small_unprotected_diff,
+		extra_env={"REVIEW_TIER_RESOLVER_ENABLED": "false", "REVIEWER_RISK_TIER_ENABLED": "0", "REVIEWER_FILTER_ACTIVE": "false"},
+		pre_classify="classify_reviewer_risk_tier",
+	)
+	assert both_off["REVIEW_TIER"] == "disabled"
+	assert both_off["active_models"] == reviewer_models
+
+	# Size tiers off, risk tiers on: the risk tier's smaller selection stands,
+	# as README.md / agents.md now document for REVIEW_TIER_RESOLVER_ENABLED.
+	risk_only = _run_review_tier_harness(
+		diff_text=small_unprotected_diff,
+		extra_env={"REVIEW_TIER_RESOLVER_ENABLED": "false", "REVIEWER_RISK_TIER_ENABLED": "1", "REVIEWER_FILTER_ACTIVE": "false"},
+		pre_classify="classify_reviewer_risk_tier",
+	)
+	assert "REVIEWER_RISK_TIER: tier=trivial" in risk_only["stdout"]
+	assert risk_only["REVIEW_TIER"] == "disabled"
+	assert risk_only["active_models"] == reviewer_models[:1]
+
+	# reviewer_pick_seeded_models with fewer than <count> and <seed> prints
+	# nothing and succeeds under set -euo pipefail, so callers fail open.
+	with tempfile.TemporaryDirectory(prefix="review-tier-pick-args-") as runtime_dir:
+		for args in ("", "1", "1 123"):
+			result = subprocess.run(
+				[
+					"bash",
+					"-c",
+					"set -euo pipefail\n"
+					f"{_reviewer_risk_tier_helper_block()}\n"
+					f"reviewer_pick_seeded_models {args}\n"
+					"echo DONE\n",
+				],
+				cwd=str(REPO_ROOT),
+				env={**os.environ, "RUNTIME_DIR": runtime_dir},
+				check=False,
+				capture_output=True,
+				text=True,
+			)
+			assert result.returncode == 0, (args, result.stderr[-500:])
+			assert result.stdout == "DONE\n", (args, result.stdout, result.stderr[-500:])
+
+
+def test_review_tier_protected_paths_match_deterministic_skip_gate() -> None:
+	"""The tier resolver's protected-path lists must equal the skip gate's."""
+	gate_block = _step_block("Evaluate review gate")
+	gate_patterns = re.findall(
+		r"^\s*([^\n]+)\)\n\s*PROTECTED_SKIP_SUPPRESSED=\"true\" ;;",
+		gate_block,
+		flags=re.MULTILINE,
+	)
+	assert len(gate_patterns) == 4, gate_patterns
+	reviewers = _reviewers_text()
+	for constant, gate_pattern in zip(
+		(
+			"PROTECTED_BASENAMES",
+			"PROTECTED_PATH_GLOBS",
+			"PROTECTED_BASENAME_GLOBS",
+			"PROTECTED_ROOT_BASENAME_GLOBS",
+		),
+		gate_patterns,
+	):
+		match = re.search(rf'^{constant} = \(\n\t"([^"]+)"\n\)\.split\("\|"\)', reviewers, flags=re.MULTILINE)
+		assert match, f"{constant} not found in scripts/review_run_reviewers.sh"
+		assert match.group(1) == gate_pattern.strip(), constant
+
+	# Same strings are not enough: the matchers must agree too. Run the gate's
+	# own bash `case` patterns and the resolver's Python matcher on the same
+	# paths, nested ones included.
+	start = reviewers.index("PROTECTED_BASENAMES = (")
+	end = reviewers.index("def diff_side_paths(")
+	namespace: dict[str, object] = {}
+	exec("from fnmatch import fnmatchcase\n" + reviewers[start:end], namespace)
+	is_protected_path = namespace["is_protected_path"]
+	basenames, path_globs, basename_globs, root_globs = (pattern.strip() for pattern in gate_patterns)
+	bash_check = (
+		"check() {\n"
+		"\tlc_fname=\"${1,,}\"; lc_base=\"${lc_fname##*/}\"; result=false\n"
+		f"\tcase \"${{lc_base}}\" in {basenames}) result=true ;; esac\n"
+		f"\tcase \"${{lc_fname}}\" in {path_globs}) result=true ;; esac\n"
+		f"\tcase \"${{lc_base}}\" in {basename_globs}) result=true ;; esac\n"
+		"\tif [ \"${lc_fname}\" = \"${lc_base}\" ]; then\n"
+		f"\t\tcase \"${{lc_base}}\" in {root_globs}) result=true ;; esac\n"
+		"\tfi\n"
+		"\tprintf '%s\\n' \"${result}\"\n"
+		"}\n"
+		"for path in \"$@\"; do check \"${path}\"; done\n"
+	)
+	sample_paths = [
+		"scripts/sub/README.md", "scripts/x.py", ".github/CODEOWNERS", ".github/workflows/ci.yml",
+		".claude/hooks/a.py", "db/contracts/x/y.yml", "docs/AGENTS.md", "CLAUDE.md", "src/app.py",
+		"src/lib/util.ts", "docs/guide.md", "README.md", "src/Dockerfile", "web/package.json",
+		"package.json", "pyproject.toml", "src/pyproject.toml", "src/config.yaml", "app/run.sh",
+		"src/.eslintrc.json", "tests/test_x.py", "lib/settings.gradle.kts", "notes/todo.txt",
+	]
+	bash_result = subprocess.run(
+		["bash", "-c", bash_check, "check", *sample_paths],
+		check=True,
+		capture_output=True,
+		text=True,
+	)
+	bash_verdicts = bash_result.stdout.split()
+	assert len(bash_verdicts) == len(sample_paths)
+	for path, bash_verdict in zip(sample_paths, bash_verdicts):
+		assert is_protected_path(path) == (bash_verdict == "true"), path
+
+
+def test_review_filter_helper_wiring_is_flag_gated_and_fail_open() -> None:
+	workflow = _workflow_text()
+	stage_helper = _stage_helper_text()
+	preflight_block = _step_block('"Preflight: Verify required files before reviewer invocation"')
+	reviewers = _reviewers_text()
+
+	assert "REVIEWER_FILTER_UNINTERESTING_ENABLED: ${{ vars.REVIEWER_FILTER_UNINTERESTING_ENABLED || 'false' }}" in workflow
+	assert "REVIEWER_FILTER_EXTRA_GLOBS: ${{ vars.REVIEWER_FILTER_EXTRA_GLOBS || '' }}" in workflow
+	assert "REVIEWER_FILTER_EXEMPT_GLOBS: ${{ vars.REVIEWER_FILTER_EXEMPT_GLOBS || 'db/contracts/**,**/migrations/**,**/migrate/**' }}" in workflow
+	assert 'if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh" ]; then' in stage_helper
+	assert 'src=".codex-workflow-src/scripts/review_filter_uninteresting_files.sh"' in stage_helper
+	assert 'src=".codex-workflow-src-main/scripts/review_filter_uninteresting_files.sh"' not in stage_helper
+	assert 'install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh"' in stage_helper
+	assert 'review_filter_uninteresting_files.sh not found in checked-out support sources' in stage_helper
+	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/review_filter_uninteresting_files.sh"' in preflight_block
+	assert 'REVIEWER_FILTER_SCRIPT="${SUPPORT_SCRIPTS_DIR:-scripts}/review_filter_uninteresting_files.sh"' in reviewers
+	assert 'prepare_reviewer_filtered_artifacts' in reviewers
+	assert 'REVIEWER_FILTER_SKIP:' in reviewers
+	assert 'review_filter_uninteresting_files.sh unavailable' in reviewers
+
+
+def test_agents_md_materiality_classifier_and_workflow_wiring() -> None:
+	positive = _run_agents_md_materiality_harness(
+		diff_text=PHASE_D_MATERIALITY_FIXTURE.read_text(encoding="utf-8"),
+		workspace_files={"agents.md": "# repo agents\n"},
+	)
+	positive_result = positive["result"]
+	assert positive_result["materiality"] == "high"
+	assert positive_result["advisory_required"] is True
+	assert positive_result["agents_md_changed"] is False
+	assert "## AI Materiality Advisory" in positive["comment"]
+	assert "`package.json`" in positive["comment"]
+	assert "informational only" in positive["comment"]
+	assert "AGENTS_MD_MATERIALITY: materiality=high advisory=true" in positive["stdout"]
+
+	satisfied = _run_agents_md_materiality_harness(
+		diff_text=PHASE_D_MATERIALITY_FIXTURE.read_text(encoding="utf-8"),
+		changed_paths=["package.json", "agents.md"],
+		workspace_files={"agents.md": "# repo agents\n"},
+	)
+	satisfied_result = satisfied["result"]
+	assert satisfied_result["materiality"] == "high"
+	assert satisfied_result["advisory_required"] is False
+	assert satisfied_result["agents_md_changed"] is True
+	assert satisfied_result["reason"] == "agents_md_changed"
+	assert satisfied["comment"] == ""
+
+	low = _run_agents_md_materiality_harness(
+		diff_text=PHASE_B_RISK_TIER_TRIVIAL_FIXTURE.read_text(encoding="utf-8"),
+		workspace_files={"agents.md": "# repo agents\n"},
+	)
+	low_result = low["result"]
+	assert low_result["materiality"] == "low"
+	assert low_result["advisory_required"] is False
+	assert low_result["reason"] == "low_materiality"
+	assert low["comment"] == ""
+
+	gate_docs_client = _run_gate_agents_md_materiality_classifier(["docs/client.js"])
+	assert gate_docs_client["materiality"] == "low"
+	assert gate_docs_client["agents_md_changed"] is False
+
+	gate_api_client = _run_gate_agents_md_materiality_classifier(["sdk/client.go"])
+	assert gate_api_client["materiality"] == "medium"
+	assert gate_api_client["agents_md_changed"] is False
+
+	workflow = _workflow_text()
+	stage_helper = _stage_helper_text()
+	consolidate = _consolidate_text()
+	preflight_block = _step_block('"Preflight: Verify required files before reviewer invocation"')
+	reviewer_block = _step_block("Run reviewer models")
+	advisory_block = _step_block("Post AI Materiality Advisory comment")
+	gate_block = _step_block("Evaluate review gate")
+	prompt_text = (REPO_ROOT / "prompts" / "review-consolidator.txt").read_text(encoding="utf-8")
+
+	assert "AGENTS_MD_MATERIALITY_RESULT_FILE=${RUNTIME_DIR}/agents_md_materiality_result.json" in workflow
+	assert "AGENTS_MD_MATERIALITY_COMMENT_FILE=${RUNTIME_DIR}/agents_md_materiality_comment.md" in workflow
+	assert "REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED: ${{ vars.REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED || 'true' }}" in workflow
+	assert 'if [ ! -f "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" ]; then' in stage_helper
+	assert 'src=".codex-workflow-src/scripts/review_agents_md_materiality.sh"' in stage_helper
+	assert 'src=".codex-workflow-src-main/scripts/review_agents_md_materiality.sh"' not in stage_helper
+	assert 'install -m 0755 "${src}" "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh"' in stage_helper
+	assert 'review_agents_md_materiality.sh not found in checked-out support sources' in stage_helper
+	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh"' in preflight_block
+	assert 'REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED="${REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED:-true}"' in consolidate
+	assert 'AGENTS_MD_MATERIALITY_RESULT_FILE="${AGENTS_MD_MATERIALITY_RESULT_FILE:-${RUNTIME_DIR}/agents_md_materiality_result.json}"' in consolidate
+	assert 'if is_truthy "${REVIEW_AGENTS_MD_MATERIALITY_CHECK_ENABLED}" && [ -s "${AGENTS_MD_MATERIALITY_RESULT_FILE}" ]; then' in consolidate
+	assert "'AGENTS MD MATERIALITY RESULT'" in consolidate
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_agents_md_materiality.sh" &' in reviewer_block
+	assert 'materiality_pid="$!"' in reviewer_block
+	assert 'AGENTS_MD_MATERIALITY_ENABLED:-0' in reviewer_block
+	assert "continue-on-error: true" in advisory_block
+	assert "AGENTS_MD_MATERIALITY_RESULT_FILE" in advisory_block
+	assert "PR_ISSUE_COMMENTS_FILE" in advisory_block
+	assert 'issues/comments/${existing_comment_id}' in advisory_block
+	assert 'issues/${PR_NUMBER}/comments' in advisory_block
+	assert 'AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=agents_md_materiality' in gate_block
+	assert 'AGENTS_MD_MATERIALITY_ENABLED:-0' in gate_block
+	assert 'PR_FILES_JSON="${pr_files_json}" python3 - <<\'PY\'' in gate_block
+	assert 'changed_files: .changed_files' in gate_block
+	assert 'FILES_SKIP_SUPPRESSED="true"' in gate_block
+	assert 'PROTECTED_SKIP_SUPPRESSED="true"' in gate_block
+	assert 'reason=protected_path' in gate_block
+	assert 'length < 3000' in gate_block
+	assert '(.previous_filename | valid_path)' in gate_block
+	assert gate_block.count('gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files"') == 1
+	assert gate_block.index('PROTECTED_SKIP_SUPPRESSED="false"') < gate_block.index('AGENTS_MD_MATERIALITY_ENABLED:-0')
+	assert '&& [ "${FILES_SKIP_SUPPRESSED}" != "true" ]' in gate_block
+	assert '&& [ "${PROTECTED_SKIP_SUPPRESSED}" != "true" ]' in gate_block
+	assert "=== BEGIN UNTRUSTED AGENTS MD MATERIALITY RESULT ===" in prompt_text
+	assert "SEVERITY: high` by default" in prompt_text
+
+
+def test_gate_protects_executable_configuration_from_both_skip_routes() -> None:
+	# Run the real gate body with the existing mocked /pulls/{n}/files
+	# harness. The doc-only branch needs a large change under docs/; the
+	# small-diff branch also accepts root and nested paths outside docs/.
+	from test_workflow_failure_heal import SELF_REPO, SHA_A, _run_gate
+
+	base_pr = {
+		"state": "open", "merged": False, "head": {"ref": "ai/issue-4454", "sha": SHA_A, "repo": {"full_name": SELF_REPO}},
+		"labels": [], "additions": 1, "deletions": 1, "changed_files": 1,
+		"mergeable": True, "mergeable_state": "clean", "title": "test", "body": "",
+	}
+	protected_paths = (
+		"Dockerfile", "src/DOCKERFILE.prod", "apps/dev.Dockerfile", "docs/Dockerfile-prod",
+		"nested/Containerfile", "docker-compose.yml", "docs/.dockerignore", "docs/DOCKER-COMPOSE-prod.YML",
+		"docs/compose.override.yaml", "docs/Compose.yaml", "docs/Makefile",
+		"docs/build.gradle.kts", "docs/Taskfile.yml", "docs/pytest.config.py", "docs/BUILD.bazel",
+		"docs/custom.json", "docs/build.rules.toml", "docs/requirements-dev.txt",
+		"docs/.npmrc", "docs/test.sh",
+	)
+	for materiality in ("false", "true"):
+		for path in protected_paths:
+			with tempfile.TemporaryDirectory(prefix="gate-executable-") as tmp_name:
+				# Large docs/ changes qualify only via the doc-only route;
+				# other paths qualify only via the small-diff route.
+				additions = 400 if path.startswith("docs/") else 1
+				result, outputs, state = _run_gate(Path(tmp_name), comments=[], state_overrides={
+					"pr": {**base_pr, "additions": additions, "deletions": additions},
+					"file_pages": [[{"filename": path, "status": "modified"}]],
+				}, extra_env={"AGENTS_MD_MATERIALITY_ENABLED": materiality})
+				assert result.returncode == 0, (path, result.stderr)
+				assert outputs["deterministic_skip"] == "false" and outputs["should_run"] == "true", (path, result.stdout)
+				assert "protected_suppressed=true" in result.stdout, (path, result.stdout)
+				assert sum(any(str(arg).endswith("/files") for arg in call) for call in state["calls"]) == 1, path
+
+	# A rename out of an executable configuration is still protected, even
+	# when only the new filename looks like ordinary documentation.
+	for additions, destination, source in (
+		(1, "docs/guide.md", "src/DOCKERFILE.prod"),
+		(400, "docs/guide.md", "docs/compose.override.yaml"),
+	):
+		with tempfile.TemporaryDirectory(prefix="gate-executable-rename-") as tmp_name:
+			result, outputs, state = _run_gate(Path(tmp_name), comments=[], state_overrides={
+				"pr": {**base_pr, "additions": additions, "deletions": additions},
+				"file_pages": [[{"filename": destination, "previous_filename": source, "status": "renamed"}]],
+			}, extra_env={"AGENTS_MD_MATERIALITY_ENABLED": "false"})
+			assert result.returncode == 0, result.stderr
+			assert outputs["should_run"] == "true" and outputs["deterministic_skip"] == "false", result.stdout
+			assert "protected_suppressed=true" in result.stdout
+			assert sum(any(str(arg).endswith("/files") for arg in call) for call in state["calls"]) == 1
+
+	for additions, path, expected_reason in (
+		(400, "docs/guide.md", "docs_only"),
+		(400, "docs/docker-compose.md", "docs_only"),
+		(1, "src/widget.py", "small_diff"),
+	):
+		with tempfile.TemporaryDirectory(prefix="gate-benign-skip-") as tmp_name:
+			result, outputs, state = _run_gate(Path(tmp_name), comments=[], state_overrides={
+				"pr": {**base_pr, "additions": additions, "deletions": additions},
+				"file_pages": [[{"filename": path, "status": "modified"}]],
+			}, extra_env={"AGENTS_MD_MATERIALITY_ENABLED": "false"})
+			assert result.returncode == 0, (path, result.stderr)
+			assert outputs["deterministic_skip"] == "true" and outputs["should_run"] == "false", (path, result.stdout)
+			assert outputs["det_skip_reason"] == expected_reason, path
+			assert "protected_suppressed=false" in result.stdout, path
+			assert sum(any(str(arg).endswith("/files") for arg in call) for call in state["calls"]) == 1, path
+	with tempfile.TemporaryDirectory(prefix="gate-incomplete-files-") as tmp_name:
+		result, outputs, state = _run_gate(Path(tmp_name), comments=[], state_overrides={
+			"pr": {**base_pr, "changed_files": 2},
+			"file_pages": [[{"filename": "Dockerfile", "status": "modified"}]],
+		}, extra_env={"AGENTS_MD_MATERIALITY_ENABLED": "false"})
+		assert result.returncode == 0, result.stderr
+		assert outputs["deterministic_skip"] == "false" and outputs["should_run"] == "true", result.stdout
+		assert "AUTOFIX_GATE_DET_SKIP_FILES_UNAVAILABLE" in result.stdout
+		assert sum(any(str(arg).endswith("/files") for arg in call) for call in state["calls"]) == 1
+
+
+def test_reviewer_failback_wiring_stages_asset_and_restores_cache_before_reviewers() -> None:
+	workflow = _workflow_text()
+	stage_helper = _stage_helper_text()
+	preflight_block = _step_block('"Preflight: Verify required files before reviewer invocation"')
+	restore_block = _step_block("Restore review-issue ledger")
+	reviewers = _reviewers_text()
+
+	assert 'failback_src=".codex-workflow-src/scripts/reviewer_failback_chains.json"' in stage_helper
+	assert 'failback_src=".codex-workflow-src-main/scripts/reviewer_failback_chains.json"' not in stage_helper
+	assert 'install -m 0644 "${failback_src}" "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json"' in stage_helper
+	assert 'reviewer_failback_chains.json not found in checked-out support sources' in stage_helper
+	assert 'check_soft_file "${SUPPORT_SCRIPTS_DIR}/reviewer_failback_chains.json"' in preflight_block
+	assert 'REVIEWER_FAILBACK_CHAINS_FILE="${REVIEWER_FAILBACK_CHAINS_FILE:-${SUPPORT_SCRIPTS_DIR:-scripts}/reviewer_failback_chains.json}"' in reviewers
+	assert '.ai/review_runtime/' in restore_block
+	assert workflow.index('- name: Restore review-issue ledger') < workflow.index('- name: Run reviewer models')
+
+
+def test_reviewer_failback_mapping_covers_live_reviewer_roster() -> None:
+	# reviewer_failback_target_for_model() only checks whether a candidate slug is
+	# declared in scripts/codex_model_catalog.json, so the contract test mirrors
+	# that lookup rather than inspecting supported_in_api.
+	reviewer_models = _workflow_reviewer_models()
+	chains = _reviewer_failback_chains()
+	catalog_slugs = _catalog_declared_model_slugs()
+	mapped: list[str] = []
+	unmapped: list[str] = []
+
+	for model in reviewer_models:
+		provider_prefix = f"{model.split('/', 1)[0]}/"
+		catalog_alternates = sorted(
+			slug for slug in catalog_slugs
+			if slug.startswith(provider_prefix) and slug != model
+		)
+		configured_candidates = chains.get(model, [])
+		for candidate in configured_candidates:
+			assert candidate.startswith(provider_prefix)
+			assert candidate != model
+			assert candidate in catalog_slugs
+		if catalog_alternates:
+			mapped.append(model)
+			assert configured_candidates, (
+				f"live reviewer {model} has catalog-declared same-provider fallback(s) "
+				f"{catalog_alternates} but reviewer_failback_chains.json leaves it unmapped"
+			)
+		else:
+			unmapped.append(model)
+			assert model not in chains, (
+				f"live reviewer {model} should stay unmapped until the catalog ships "
+				"a same-provider fallback slug"
+			)
+
+	assert sorted(mapped) == [
+		"google/gemini-3.1-flash-lite",
+		"minimax/minimax-m3",
+		"openai/gpt-6-luna",
+		"z-ai/glm-5.3-flash",
+	]
+	# The Claude review-panel slot never runs on OpenRouter: it retries on
+	# REVIEWER_POOL_FALLBACK_MODEL in the Claude account pool itself, so it has
+	# no chain entry and the catalog ships no other anthropic/ slug.
+	assert sorted(unmapped) == ["anthropic/claude-sonnet-5.5"]
+	assert "anthropic/claude-sonnet-5.5" not in chains
+	assert chains["z-ai/glm-5.3-flash"] == ["z-ai/glm-5.3-flashx"]
+	# Retired from the panel in the 2026-10 refresh; kept for operator overrides.
+	assert chains["deepseek/deepseek-v4-pro"] == ["deepseek/deepseek-v3.2"]
+	assert "mistralai/mistral-small-2603" not in chains
+	assert chains["google/gemini-3.1-flash-lite"] == ["google/gemini-3-flash-preview"]
+	assert chains["google/gemini-3.8-flash"] == ["google/gemini-3.1-flash-lite"]
+	assert chains["minimax/minimax-m3"] == ["minimax/minimax-m2.5"]
+	assert chains["openai/gpt-6-luna"] == ["openai/gpt-5.6-luna"]
+	# Retired from the panel in the 2026-10-26 cost cut (lowest unique-finding
+	# yield per dollar); kept for operator overrides.
+	assert chains["qwen/qwen3.7-plus"] == ["qwen/qwen3.6-plus"]
+	# Retired-roster mappings stay for operator overrides (CLAUDE.md §6).
+	assert chains["z-ai/glm-5.2"] == ["z-ai/glm-5.3-flashx"]
+	assert chains["moonshotai/kimi-k3"] == ["moonshotai/kimi-k2.7-code"]
+	assert chains["x-ai/grok-4.6"] == ["x-ai/grok-4.20"]
+	assert chains["x-ai/grok-4.20"] == ["x-ai/grok-4.3"]
+	assert chains["google/gemini-3.1-flash-lite"] == ["google/gemini-3-flash-preview"]
+	# Grok left the default roster after single-tool-call loops (2026-09-29).
+	assert not any(model.startswith("x-ai/") for model in reviewer_models)
+
+
+def _run_reviewer_loop_guard_function(function_names: list[str], script_body: str) -> subprocess.CompletedProcess[str]:
+	reviewers_text = REVIEWERS.read_text(encoding="utf-8")
+	definitions = []
+	for function_name in function_names:
+		match = re.search(rf"(?ms)^{re.escape(function_name)}\(\) \{{\n.*?^\}}\n", reviewers_text)
+		assert match, f"missing shell function {function_name}"
+		definitions.append(match.group(0))
+	return subprocess.run(
+		["bash", "-c", "set -uo pipefail\n" + "\n".join(definitions) + "\n" + script_body],
+		text=True,
+		capture_output=True,
+		check=False,
+		env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
+	)
+
+
+def _reviewer_tool_use_event(tool: str, tool_input: dict[str, object]) -> str:
+	# Shape of an OpenCode 1.18.23 `run --format json` completed tool call.
+	return json.dumps(
+		{
+			"type": "tool_use",
+			"timestamp": 1790672547390,
+			"sessionID": "ses_test",
+			"part": {
+				"type": "tool",
+				"tool": tool,
+				"callID": "call_1",
+				"state": {"status": "completed", "input": tool_input, "output": "Found 1 matches"},
+			},
+		},
+		separators=(",", ":"),
+	)
+
+
+def test_reviewer_tool_repeat_detected_flags_only_identical_consecutive_calls() -> None:
+	grep_event = _reviewer_tool_use_event("grep", {"pattern": "### Zombie-checker cleanup"})
+	step_event = json.dumps({"type": "step_start", "part": {"type": "step-start"}}, separators=(",", ":"))
+	paging_events = [
+		_reviewer_tool_use_event("read", {"filePath": "/w/review_autofix.yml", "offset": offset, "limit": 200})
+		for offset in range(1, 2201, 200)
+	]
+	reordered_event = json.dumps(
+		{"type": "tool_use", "part": {"state": {"input": {"pattern": "### Zombie-checker cleanup"}}, "tool": "grep"}},
+		separators=(",", ":"),
+	)
+	cases = {
+		"loop": ([grep_event, step_event] * 10, 0),
+		"nine_repeats": ([grep_event] * 9, 1),
+		"broken_by_other_call": ([grep_event] * 10 + [_reviewer_tool_use_event("grep", {"pattern": "other"})], 1),
+		"paging_same_file": (paging_events, 1),
+		"key_order_ignored": ([grep_event] * 9 + [reordered_event], 0),
+		"partial_last_line": ([grep_event] * 9 + [grep_event[:60]], 1),
+		# A malformed or still-being-written line is skipped; it never hides
+		# the identical calls around it (review round 1 on PR #5110).
+		"malformed_line_inside_loop": ([grep_event] * 5 + ['{"type":"tool_use", broken'] + [grep_event] * 5, 0),
+		"partial_line_after_full_loop": ([grep_event] * 10 + [grep_event[:60]], 0),
+		"spaced_json": ([json.dumps(json.loads(grep_event))] * 10, 0),
+	}
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		for name, (lines, expected_rc) in cases.items():
+			events = root / f"{name}.jsonl"
+			events.write_text("\n".join(lines) + "\n", encoding="utf-8")
+			result = _run_reviewer_loop_guard_function(
+				["reviewer_tool_repeat_detected"],
+				f'reviewer_tool_repeat_detected "{events}" 10',
+			)
+			assert result.returncode == expected_rc, (name, result.stdout, result.stderr)
+			if expected_rc == 0:
+				assert result.stdout.strip() == "grep", name
+		missing = _run_reviewer_loop_guard_function(
+			["reviewer_tool_repeat_detected"],
+			f'reviewer_tool_repeat_detected "{root / "absent.jsonl"}" 10',
+		)
+		assert missing.returncode == 1
+
+
+def test_reviewer_positive_int_or_default_falls_back_on_invalid_values() -> None:
+	cases = [("", "120", ""), ("80", "80", ""), ("010", "10", ""), ("0", "120", "::warning::"), ("abc", "120", "::warning::"), ("-3", "120", "::warning::")]
+	for raw_value, expected, warning in cases:
+		result = _run_reviewer_loop_guard_function(
+			["reviewer_positive_int_or_default"],
+			f"reviewer_positive_int_or_default '{raw_value}' 120 1 REVIEWER_MAX_STEPS",
+		)
+		assert result.returncode == 0
+		assert result.stdout.strip() == expected, raw_value
+		assert (warning in result.stderr) if warning else result.stderr == "", raw_value
+	repeat_floor = _run_reviewer_loop_guard_function(
+		["reviewer_positive_int_or_default"],
+		"reviewer_positive_int_or_default 1 10 2 REVIEWER_TOOL_REPEAT_LIMIT",
+	)
+	assert repeat_floor.stdout.strip() == "10"
+
+
+def test_reviewer_classify_retryable_failure_maps_loop_guards() -> None:
+	result = _run_reviewer_loop_guard_function(
+		["reviewer_classify_retryable_failure"],
+		"reviewer_classify_retryable_failure 143 tool_repeat /dev/null ''",
+	)
+	assert result.returncode == 0
+	assert result.stdout.strip() == "tool_repeat"
+	# The turn cap is final: not retryable even though the kill exit code
+	# (143/137) would otherwise classify as a timeout.
+	for exit_code in ("143", "137", "0"):
+		result = _run_reviewer_loop_guard_function(
+			["reviewer_classify_retryable_failure"],
+			f"reviewer_classify_retryable_failure {exit_code} max_steps /dev/null ''",
+		)
+		assert result.returncode == 1, exit_code
+		assert result.stdout == "", exit_code
+
+
+def test_reviewer_turn_count_counts_opencode_step_starts() -> None:
+	step_event = json.dumps({"type": "step_start", "part": {"type": "step-start"}}, separators=(",", ":"))
+	grep_event = _reviewer_tool_use_event("grep", {"pattern": "x"})
+	with tempfile.TemporaryDirectory() as directory:
+		root = Path(directory)
+		events = root / "events.jsonl"
+		events.write_text("\n".join([step_event, grep_event] * 121) + "\n", encoding="utf-8")
+		spaced = root / "spaced.jsonl"
+		spaced.write_text(
+			"\n".join([json.dumps({"type": "step_start", "part": {"type": "step-start"}})] * 3) + "\n",
+			encoding="utf-8",
+		)
+		empty = root / "empty.jsonl"
+		empty.write_text("", encoding="utf-8")
+		for path, expected in ((events, "121"), (spaced, "3"), (empty, "0"), (root / "absent.jsonl", "0")):
+			result = _run_reviewer_loop_guard_function(["reviewer_turn_count"], f'reviewer_turn_count "{path}"')
+			assert result.returncode == 0
+			assert result.stdout.strip() == expected, path.name
+
+
+def test_reviewer_loop_guards_are_wired_for_the_review_panel_only() -> None:
+	workflow = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	assert "REVIEWER_MAX_STEPS: ${{ vars.REVIEWER_MAX_STEPS || '120' }}" in workflow
+	assert "REVIEWER_TOOL_REPEAT_LIMIT: ${{ vars.REVIEWER_TOOL_REPEAT_LIMIT || '10' }}" in workflow
+	reviewers_text = REVIEWERS.read_text(encoding="utf-8")
+	assert 'turns_started="$(reviewer_turn_count "${tmp_structured_output}")"' in reviewers_text
+	assert '[ "${turns_started}" -gt "${REVIEWER_MAX_STEPS_EFFECTIVE}" ]' in reviewers_text
+	assert "printf 'max_steps' > \"${wd_reason_file}\"" in reviewers_text
+	assert 'reviewer_tool_repeat_detected "${tmp_structured_output}" "${REVIEWER_TOOL_REPEAT_LIMIT_EFFECTIVE}"' in reviewers_text
+	assert "printf 'tool_repeat' > \"${wd_reason_file}\"" in reviewers_text
+	# The guards live in the panel watchdog only; OpenCode's soft `steps`
+	# setting is not used, and no other reviewer-role caller is capped.
+	assert "--max-steps" not in (REPO_ROOT / "scripts" / "write_opencode_config.sh").read_text(encoding="utf-8")
+	for other_caller in ("review_run_judge_interim.sh", "review_synthesise_smoke.sh", "summarize_reviewer_consensus.sh"):
+		other_text = (REPO_ROOT / "scripts" / other_caller).read_text(encoding="utf-8")
+		assert "REVIEWER_MAX_STEPS" not in other_text
+		assert "REVIEWER_TOOL_REPEAT_LIMIT" not in other_text
+
+
+def test_reviewer_failback_harness_reuses_cached_open_state_and_skips_unmapped_models() -> None:
+	result = _run_reviewer_failback_harness()
+	health_state = result["health_state"]
+	assert isinstance(health_state, dict)
+	assert health_state["version"] == 1
+
+	mapped_entry = health_state["reviewers"]["x-ai/grok-4.20"]
+	assert mapped_entry["state"] == "open"
+	assert mapped_entry["effective_model"] == "x-ai/grok-4.3"
+	assert mapped_entry["last_failure_kind"] == "rate_limit"
+	assert mapped_entry["open_until_epoch"] > 0
+
+	unmapped_entry = health_state["reviewers"]["moonshotai/kimi-k2.5"]
+	assert unmapped_entry["state"] == "open"
+	assert unmapped_entry["effective_model"] == ""
+	assert unmapped_entry["last_failure_kind"] == "server_error"
+
+	assert result["MAPPED_STATUS_FILE_CONTENT"].strip() == "success"
+	assert "fallback success for x-ai/grok-4.20" in result["MAPPED_OUTPUT_FILE_CONTENT"]
+	assert "REVIEWER_FAILBACK: x-ai/grok-4.20 -> x-ai/grok-4.3 reason=rate_limit" in result["MAPPED_LOG_FILE_CONTENT"]
+	assert "REVIEWER_HEALTH: x-ai/grok-4.20 open reason=rate_limit failures=1 effective_model=x-ai/grok-4.3" in result["MAPPED_LOG_FILE_CONTENT"]
+
+	assert result["CACHED_SUCCESSES"] == "0"
+	assert result["CACHED_STATUS_FILE_CONTENT"].strip() == "skipped_open"
+	assert "cached reviewer health state is open" in result["CACHED_OUTPUT_FILE_CONTENT"]
+	assert "cached reviewer health state is open" in result["CACHED_LOG_FILE_CONTENT"]
+	assert "cached_effective_model=x-ai/grok-4.3" in result["CACHED_LOG_FILE_CONTENT"]
+
+	assert result["UNMAPPED_STATUS_FILE_CONTENT"].strip() == "skipped_unmapped"
+	assert "no same-family failback mapping is available" in result["UNMAPPED_OUTPUT_FILE_CONTENT"]
+	assert "REVIEWER_FAILBACK_UNMAPPED: moonshotai/kimi-k2.5" in result["UNMAPPED_LOG_FILE_CONTENT"]
+
+	attempt_lines = result["ATTEMPT_LOG_FILE_CONTENT"].splitlines()
+	assert attempt_lines == [
+		"x-ai/grok-4.20\tx-ai/grok-4.20\txhigh\tattempt 1",
+		"x-ai/grok-4.20\tx-ai/grok-4.20\thigh\tattempt 2 (cheaper reasoning high)",
+		"x-ai/grok-4.20\tx-ai/grok-4.3\txhigh\tattempt 3 (failback x-ai/grok-4.3)",
+		"moonshotai/kimi-k2.5\tmoonshotai/kimi-k2.5\txhigh\tattempt 1",
+		"moonshotai/kimi-k2.5\tmoonshotai/kimi-k2.5\thigh\tattempt 2 (cheaper reasoning high)",
+	]
+
+
+def test_slot_retry_budget_stops_rate_limited_slot_after_bounded_attempts() -> None:
+	result = _run_reviewer_slot_retry_budget_harness()
+	assert result["MAPPED_STATUS_FILE_CONTENT"].strip() == "failed"
+	assert "slot retryable-failure limit (3)" in result["MAPPED_OUTPUT_FILE_CONTENT"]
+	assert result["ATTEMPT_LOG_FILE_CONTENT"].splitlines() == [
+		"x-ai/grok-4.20\tx-ai/grok-4.20\txhigh\tattempt 1",
+		"x-ai/grok-4.20\tx-ai/grok-4.20\thigh\tattempt 2 (cheaper reasoning high)",
+		"x-ai/grok-4.20\tx-ai/grok-4.3\txhigh\tattempt 3 (failback x-ai/grok-4.3)",
+	]
+	assert result["MAPPED_LOG_FILE_CONTENT"].count("REVIEWER_BACKOFF: ") == 2
+	assert "attempt 4" not in result["MAPPED_LOG_FILE_CONTENT"]
+	assert (
+		"REVIEWER_ADVANCE: slot=x-ai/grok-4.20 model=x-ai/grok-4.20 reason=rate_limit "
+		"next_action=retry_cheaper_reasoning next_attempt=2 next_model=x-ai/grok-4.20"
+	) in result["MAPPED_LOG_FILE_CONTENT"]
+	assert (
+		"REVIEWER_ADVANCE: slot=x-ai/grok-4.20 model=x-ai/grok-4.3 reason=rate_limit "
+		"next_action=failback next_attempt=3 next_model=x-ai/grok-4.3"
+	) in result["MAPPED_LOG_FILE_CONTENT"]
+	assert (
+		"REVIEWER_SLOT_STATE: slot=x-ai/grok-4.20 retryable_failure_count=3 "
+		"retryable_failure_classes=rate_limit backoff_sleep_secs_total=0 "
+		"slot_retry_budget_exhausted=false fallback_model_used=true cache_status=supported "
+		"cache_reuse_attempted=true"
+	) in result["MAPPED_LOG_FILE_CONTENT"]
+	assert (
+		"REVIEWER_CACHE: slot=x-ai/grok-4.20 model=x-ai/grok-4.3 attempt=3 "
+		"status=supported prompt_reused=true"
+	) in result["MAPPED_LOG_FILE_CONTENT"]
+
+
+def test_stall_guard_retryable_failures_log_deterministic_reviewer_advance() -> None:
+	result = _run_reviewer_stall_recovery_harness()
+	health_state = result["health_state"]
+	assert result["MAPPED_STATUS_FILE_CONTENT"].strip() == "success"
+	assert "fallback success for x-ai/grok-4.20" in result["MAPPED_OUTPUT_FILE_CONTENT"]
+	assert (
+		"REVIEWER_ADVANCE: slot=x-ai/grok-4.20 model=x-ai/grok-4.20 reason=stall_guard "
+		"next_action=retry_cheaper_reasoning next_attempt=2 next_model=x-ai/grok-4.20"
+	) in result["MAPPED_LOG_FILE_CONTENT"]
+	assert (
+		"REVIEWER_ADVANCE: slot=x-ai/grok-4.20 model=x-ai/grok-4.3 reason=stall_guard "
+		"next_action=failback next_attempt=3 next_model=x-ai/grok-4.3"
+	) in result["MAPPED_LOG_FILE_CONTENT"]
+	assert health_state["reviewers"]["x-ai/grok-4.20"]["last_failure_kind"] == "stall_guard"
+	assert result["ATTEMPT_LOG_FILE_CONTENT"].splitlines() == [
+		"x-ai/grok-4.20\tx-ai/grok-4.20\txhigh\tattempt 1",
+		"x-ai/grok-4.20\tx-ai/grok-4.20\thigh\tattempt 2 (cheaper reasoning high)",
+		"x-ai/grok-4.20\tx-ai/grok-4.3\txhigh\tattempt 3 (failback x-ai/grok-4.3)",
+	]
+
+
+def test_silent_retry_exhaustion_logs_terminal_failure_reason() -> None:
+	result = _run_reviewer_silent_retry_harness()
+	assert result["MAPPED_STATUS_FILE_CONTENT"].strip() == "failed"
+	assert "REVIEWER_ADVANCE: slot=x-ai/grok-4.20 model=x-ai/grok-4.20 reason=silent_retry next_action=terminal_failure" in result["MAPPED_LOG_FILE_CONTENT"]
+	assert "reason=unknown" not in result["MAPPED_LOG_FILE_CONTENT"]
+	assert result["ATTEMPT_LOG_FILE_CONTENT"].splitlines() == ["attempt 1", "attempt 2", "attempt 3"]
+
+
+def test_reviewer_soft_deadline_fallback_requests_partial_finalize_and_exits_green() -> None:
+	result = _run_reviewer_partial_finalize_budget_harness()
+	assert result["PASS_SUCCESSFUL"] == "0"
+	assert result["reviewer_called"] is False
+	assert "remaining run budget fallback is below 300s (0s remain)" in result["stderr"]
+	assert "AUTOFIX_PARTIAL_FINALIZE_REQUESTED=true" in result["request_file_content"]
+	assert "AUTOFIX_PARTIAL_FINALIZE_REASON=soft_deadline" in result["request_file_content"]
+	assert "AUTOFIX_PARTIAL_FINALIZE_PHASE=reviewers" in result["request_file_content"]
+	assert "AUTOFIX_PARTIAL_FINALIZE_REQUESTED=true" in result["github_env_content"]
+	assert "AUTOFIX_PARTIAL_FINALIZE_REASON=soft_deadline" in result["github_env_content"]
+	assert "AUTOFIX_PARTIAL_FINALIZE_PHASE=reviewers" in result["github_env_content"]
+
+
+def test_reviewer_health_dispatch_logs_to_stderr_only() -> None:
+	result = _run_reviewer_health_dispatch_logging_harness()
+	assert result["stdout"] == ""
+	assert "REVIEWER_HEALTH: x-ai/grok-4.20 healthy reason=open_ttl_expired failures=0 effective_model=x-ai/grok-4.3" in result["stderr"]
+
+
+def test_reviewer_zero_success_guard_fails_open_when_every_review_slot_was_skipped() -> None:
+	result = _run_reviewer_zero_success_guard_harness(statuses=["skipped_open", "skipped_unmapped"])
+	assert result["returncode"] == 0
+	assert "REVIEWERS_SUCCESSFUL=0\n" == result["github_env"]
+	assert "all review slots were skipped fail-open" in result["stdout"]
+
+
+def test_reviewer_zero_success_guard_fails_closed_for_lite_without_a_successful_reviewer() -> None:
+	for review_tier in ("lite", "disabled", "trivial", "standard", "full"):
+		for status in ("skipped_open", "skipped_unmapped", "failed"):
+			result = _run_reviewer_zero_success_guard_harness(statuses=[status], review_tier=review_tier)
+			assert result["returncode"] == 1
+			assert result["github_env"] == ""
+			assert "All reviewers failed." in result["stdout"]
+
+
+def test_reviewer_filter_harness_strips_low_signal_paths_and_preserves_exemptions() -> None:
+	result = _run_reviewer_filter_harness(filter_enabled="true", helper_mode="repo")
+	pr_diff = result["PR_DIFF_FILE_CONTENT"]
+	pr_changed = result["PR_CHANGED_FILES_FILE_CONTENT"]
+	last_run_changed = result["LAST_RUN_CHANGED_FILES_FILE_CONTENT"]
+	last_run_diff_stat = result["LAST_RUN_DIFF_STAT_FILE_CONTENT"]
+	last_commit_stat = result["LAST_COMMIT_STAT_FILE_CONTENT"]
+	symbol_summary = result["SYMBOL_DIFF_SUMMARY_FILE_CONTENT"]
+
+	assert result["REVIEWER_FILTER_ACTIVE"] == "true"
+	assert result["PR_DIFF_FILE"].endswith("reviewer_filtered_pr_diff.patch")
+	for skipped_path in ("package-lock.json", "src/generated/client.ts", "public/app.min.js"):
+		assert skipped_path not in pr_diff
+		assert skipped_path not in pr_changed
+		assert skipped_path not in last_run_changed
+		assert skipped_path not in last_run_diff_stat
+		assert skipped_path not in last_commit_stat
+		assert skipped_path not in symbol_summary
+	for kept_path in (
+		"db/migrations/20260529000000_generated.sql",
+		"scripts/migrate/seed.sh",
+		"db/contracts/widgets.yml",
+	):
+		assert kept_path in pr_diff
+		assert kept_path in pr_changed
+		assert kept_path in last_run_changed
+		assert kept_path in symbol_summary
+	assert "REVIEWER_FILTER_SKIP: package-lock.json path-glob:package-lock.json" in result["stdout"]
+	assert "REVIEWER_FILTER_SKIP: src/generated/client.ts generated-marker:@generated" in result["stdout"]
+	assert "REVIEWER_FILTER_SKIP: public/app.min.js path-glob:*.min.js" in result["stdout"]
+
+
+def test_reviewer_filter_script_preserves_nested_exempt_paths() -> None:
+	diff_text = "\n".join([
+		"diff --git a/db/contracts/nested/widgets.yml b/db/contracts/nested/widgets.yml",
+		"index 1111111..2222222 100644",
+		"--- a/db/contracts/nested/widgets.yml",
+		"+++ b/db/contracts/nested/widgets.yml",
+		"@@ -1,2 +1,2 @@",
+		"-collection: widget_versions",
+		"+collection: widgets",
+		"diff --git a/db/migrations/nested/20260529000000_generated.sql b/db/migrations/nested/20260529000000_generated.sql",
+		"index 3333333..4444444 100644",
+		"--- a/db/migrations/nested/20260529000000_generated.sql",
+		"+++ b/db/migrations/nested/20260529000000_generated.sql",
+		"@@ -1,2 +1,2 @@",
+		"-CREATE TABLE widgets (id INTEGER);",
+		"+CREATE TABLE widgets (id INT);",
+		"diff --git a/scripts/migrate/nested/seed.sh b/scripts/migrate/nested/seed.sh",
+		"index 5555555..6666666 100644",
+		"--- a/scripts/migrate/nested/seed.sh",
+		"+++ b/scripts/migrate/nested/seed.sh",
+		"@@ -1,2 +1,2 @@",
+		"-echo old-seed",
+		"+echo seed",
+		"diff --git a/src/generated/deep/client.ts b/src/generated/deep/client.ts",
+		"index 7777777..8888888 100644",
+		"--- a/src/generated/deep/client.ts",
+		"+++ b/src/generated/deep/client.ts",
+		"@@ -1,2 +1,2 @@",
+		"-export const endpoint = '/v1';",
+		"+export const endpoint = '/v2';",
+	]) + "\n"
+	result = _run_uninteresting_filter_script(
+		diff_text=diff_text,
+		workspace_files={
+			"db/contracts/nested/widgets.yml": "# GENERATED BY contract-tool\ncollection: widgets\n",
+			"db/migrations/nested/20260529000000_generated.sql": "-- GENERATED FILE\nCREATE TABLE widgets (id INT);\n",
+			"scripts/migrate/nested/seed.sh": "# GENERATED BY seed-tool\necho seed\n",
+			"src/generated/deep/client.ts": "@generated export const endpoint = '/v2';\n",
+		},
+	)
+
+	assert "db/contracts/nested/widgets.yml" in result["output_diff"]
+	assert "db/migrations/nested/20260529000000_generated.sql" in result["output_diff"]
+	assert "scripts/migrate/nested/seed.sh" in result["output_diff"]
+	assert "src/generated/deep/client.ts" not in result["output_diff"]
+	assert "db/contracts/nested/widgets.yml\n" in result["kept_paths"]
+	assert "db/migrations/nested/20260529000000_generated.sql\n" in result["kept_paths"]
+	assert "scripts/migrate/nested/seed.sh\n" in result["kept_paths"]
+	assert "src/generated/deep/client.ts\tgenerated-marker:@generated\n" in result["skipped_paths"]
+
+
+def test_reviewer_filter_script_preserves_root_level_migration_exempt_paths() -> None:
+	diff_text = "\n".join([
+		"diff --git a/migrations/20260529000000_generated.sql b/migrations/20260529000000_generated.sql",
+		"index 1111111..2222222 100644",
+		"--- a/migrations/20260529000000_generated.sql",
+		"+++ b/migrations/20260529000000_generated.sql",
+		"@@ -1,2 +1,2 @@",
+		"--- GENERATED FILE",
+		"-CREATE TABLE widgets (id INTEGER);",
+		"+CREATE TABLE widgets (id INT);",
+		"diff --git a/migrate/seed.sh b/migrate/seed.sh",
+		"index 3333333..4444444 100644",
+		"--- a/migrate/seed.sh",
+		"+++ b/migrate/seed.sh",
+		"@@ -1,2 +1,2 @@",
+		"-# GENERATED BY seed-tool",
+		"+# GENERATED BY seed-tool",
+		"-echo old-seed",
+		"+echo seed",
+		"diff --git a/src/generated/client.ts b/src/generated/client.ts",
+		"index 5555555..6666666 100644",
+		"--- a/src/generated/client.ts",
+		"+++ b/src/generated/client.ts",
+		"@@ -1,2 +1,2 @@",
+		"-@generated export const endpoint = '/v1';",
+		"+@generated export const endpoint = '/v2';",
+	]) + "\n"
+	result = _run_uninteresting_filter_script(
+		diff_text=diff_text,
+		workspace_files={
+			"migrations/20260529000000_generated.sql": "-- GENERATED FILE\nCREATE TABLE widgets (id INT);\n",
+			"migrate/seed.sh": "# GENERATED BY seed-tool\necho seed\n",
+			"src/generated/client.ts": "@generated export const endpoint = '/v2';\n",
+		},
+	)
+
+	assert "migrations/20260529000000_generated.sql" in result["output_diff"]
+	assert "migrate/seed.sh" in result["output_diff"]
+	assert "src/generated/client.ts" not in result["output_diff"]
+	assert "migrations/20260529000000_generated.sql\n" in result["kept_paths"]
+	assert "migrate/seed.sh\n" in result["kept_paths"]
+	assert "src/generated/client.ts\tgenerated-marker:@generated\n" in result["skipped_paths"]
+
+
+def test_reviewer_filter_script_strips_deleted_generated_file_when_workspace_copy_is_missing() -> None:
+	diff_text = "\n".join([
+		"diff --git a/src/generated/deleted_client.ts b/src/generated/deleted_client.ts",
+		"deleted file mode 100644",
+		"index 1111111..0000000",
+		"--- a/src/generated/deleted_client.ts",
+		"+++ /dev/null",
+		"@@ -1,2 +0,0 @@",
+		"-@generated",
+		"-export const endpoint = '/v1';",
+	]) + "\n"
+	result = _run_uninteresting_filter_script(diff_text=diff_text, workspace_files={})
+
+	assert result["output_diff"] == ""
+	assert result["kept_paths"] == ""
+	assert result["skipped_paths"] == "src/generated/deleted_client.ts\tgenerated-marker:@generated\n"
+
+
+def test_reviewer_filter_script_keeps_deleted_file_when_first_hunk_starts_later() -> None:
+	diff_text = "\n".join([
+		"diff --git a/src/generated/deleted_client.ts b/src/generated/deleted_client.ts",
+		"deleted file mode 100644",
+		"index 1111111..0000000",
+		"--- a/src/generated/deleted_client.ts",
+		"+++ /dev/null",
+		"@@ -10,2 +0,0 @@",
+		"-@generated",
+		"-export const endpoint = '/v1';",
+	]) + "\n"
+	result = _run_uninteresting_filter_script(diff_text=diff_text, workspace_files={})
+
+	assert result["output_diff"] == diff_text
+	assert result["kept_paths"] == "src/generated/deleted_client.ts\n"
+	assert result["skipped_paths"] == ""
+
+
+def test_reviewer_filter_script_ignores_later_hunk_marker_when_first_hunk_has_no_marker() -> None:
+	diff_text = "\n".join([
+		"diff --git a/src/manual/client.ts b/src/manual/client.ts",
+		"deleted file mode 100644",
+		"index 1111111..0000000",
+		"--- a/src/manual/client.ts",
+		"+++ /dev/null",
+		"@@ -1,2 +0,0 @@",
+		"-const endpoint = '/v1';",
+		"-const timeoutMs = 5000;",
+		"@@ -50,2 +0,0 @@",
+		"-@generated",
+		"-console.log('later marker');",
+	]) + "\n"
+	result = _run_uninteresting_filter_script(diff_text=diff_text, workspace_files={})
+
+	assert result["output_diff"] == diff_text
+	assert result["kept_paths"] == "src/manual/client.ts\n"
+	assert result["skipped_paths"] == ""
+
+
+def test_reviewer_filter_script_keeps_existing_file_with_marker_on_line_six() -> None:
+	diff_text = "\n".join([
+		"diff --git a/src/manual/client.ts b/src/manual/client.ts",
+		"index 1111111..2222222 100644",
+		"--- a/src/manual/client.ts",
+		"+++ b/src/manual/client.ts",
+		"@@ -1,6 +1,6 @@",
+		" line01",
+		" line02",
+		" line03",
+		" line04",
+		"-line05",
+		"+line05 updated",
+		" @generated",
+	]) + "\n"
+	result = _run_uninteresting_filter_script(
+		diff_text=diff_text,
+		workspace_files={
+			"src/manual/client.ts": "\n".join([
+				"line01",
+				"line02",
+				"line03",
+				"line04",
+				"line05 updated",
+				"@generated",
+			]) + "\n",
+		},
+	)
+
+	assert result["output_diff"] == diff_text
+	assert result["kept_paths"] == "src/manual/client.ts\n"
+	assert result["skipped_paths"] == ""
+
+
+def test_reviewer_filter_script_keeps_deleted_file_with_marker_on_line_six() -> None:
+	diff_text = "\n".join([
+		"diff --git a/src/manual/deleted_client.ts b/src/manual/deleted_client.ts",
+		"deleted file mode 100644",
+		"index 1111111..0000000",
+		"--- a/src/manual/deleted_client.ts",
+		"+++ /dev/null",
+		"@@ -1,6 +0,0 @@",
+		"-line01",
+		"-line02",
+		"-line03",
+		"-line04",
+		"-line05",
+		"-@generated",
+	]) + "\n"
+	result = _run_uninteresting_filter_script(diff_text=diff_text, workspace_files={})
+
+	assert result["output_diff"] == diff_text
+	assert result["kept_paths"] == "src/manual/deleted_client.ts\n"
+	assert result["skipped_paths"] == ""
+
+
+def test_reviewer_filter_script_ignores_existing_file_marker_beyond_header_lines() -> None:
+	diff_text = "\n".join([
+		"diff --git a/src/manual/client.ts b/src/manual/client.ts",
+		"index 1111111..2222222 100644",
+		"--- a/src/manual/client.ts",
+		"+++ b/src/manual/client.ts",
+		"@@ -1,20 +1,20 @@",
+		" line01",
+		" line02",
+		" line03",
+		" line04",
+		" line05",
+		" line06",
+		" line07",
+		" line08",
+		" line09",
+		" line10",
+		" line11",
+		" line12",
+		" line13",
+		" line14",
+		" line15",
+		" line16",
+		" line17",
+		" line18",
+		"-line19",
+		"+line19 updated",
+		" @generated",
+	]) + "\n"
+	result = _run_uninteresting_filter_script(
+		diff_text=diff_text,
+		workspace_files={
+			"src/manual/client.ts": "\n".join([
+				"line01",
+				"line02",
+				"line03",
+				"line04",
+				"line05",
+				"line06",
+				"line07",
+				"line08",
+				"line09",
+				"line10",
+				"line11",
+				"line12",
+				"line13",
+				"line14",
+				"line15",
+				"line16",
+				"line17",
+				"line18",
+				"line19 updated",
+				"@generated",
+			]) + "\n",
+		},
+	)
+
+	assert result["output_diff"] == diff_text
+	assert result["kept_paths"] == "src/manual/client.ts\n"
+	assert result["skipped_paths"] == ""
+
+
+def test_reviewer_filter_script_ignores_deleted_file_marker_beyond_header_lines() -> None:
+	diff_text = "\n".join([
+		"diff --git a/src/manual/deleted_client.ts b/src/manual/deleted_client.ts",
+		"deleted file mode 100644",
+		"index 1111111..0000000",
+		"--- a/src/manual/deleted_client.ts",
+		"+++ /dev/null",
+		"@@ -1,20 +0,0 @@",
+		"-line01",
+		"-line02",
+		"-line03",
+		"-line04",
+		"-line05",
+		"-line06",
+		"-line07",
+		"-line08",
+		"-line09",
+		"-line10",
+		"-line11",
+		"-line12",
+		"-line13",
+		"-line14",
+		"-line15",
+		"-line16",
+		"-line17",
+		"-line18",
+		"-line19",
+		"-@generated",
+	]) + "\n"
+	result = _run_uninteresting_filter_script(diff_text=diff_text, workspace_files={})
+
+	assert result["output_diff"] == diff_text
+	assert result["kept_paths"] == "src/manual/deleted_client.ts\n"
+	assert result["skipped_paths"] == ""
+
+
+def test_reviewer_filter_harness_fails_open_when_disabled_missing_or_failing() -> None:
+	disabled = _run_reviewer_filter_harness(filter_enabled="false", helper_mode="repo")
+	assert disabled["REVIEWER_FILTER_ACTIVE"] == "false"
+	assert disabled["PR_DIFF_FILE"].endswith("pr_diff.patch")
+	assert disabled["PR_DIFF_FILE_CONTENT"] == PHASE_C_FILTER_FIXTURE.read_text(encoding="utf-8")
+	assert disabled["SYMBOL_DIFF_SUMMARY_FILE_CONTENT"] == "RAW SYMBOL SUMMARY\npackage-lock.json\nsrc/generated/client.ts\n"
+	assert "REVIEWER_FILTER_SKIP:" not in disabled["stdout"]
+
+	missing = _run_reviewer_filter_harness(filter_enabled="true", helper_mode="missing")
+	assert missing["REVIEWER_FILTER_ACTIVE"] == "false"
+	assert missing["PR_DIFF_FILE"].endswith("pr_diff.patch")
+	assert "review_filter_uninteresting_files.sh unavailable" in missing["stdout"]
+	assert missing["SYMBOL_DIFF_SUMMARY_FILE_CONTENT"] == "RAW SYMBOL SUMMARY\npackage-lock.json\nsrc/generated/client.ts\n"
+
+	failing = _run_reviewer_filter_harness(filter_enabled="true", helper_mode="failing")
+	assert failing["REVIEWER_FILTER_ACTIVE"] == "false"
+	assert failing["PR_DIFF_FILE"].endswith("pr_diff.patch")
+	assert "review_filter_uninteresting_files.sh failed for" in failing["stdout"]
+	assert failing["SYMBOL_DIFF_SUMMARY_FILE_CONTENT"] == "RAW SYMBOL SUMMARY\npackage-lock.json\nsrc/generated/client.ts\n"
+
+
+def test_reviewer_filter_stat_harness_handles_brace_expansion_renames() -> None:
+	output = _run_reviewer_stat_filter_harness(
+		diff_stat_text="\n".join([
+			" src/{generated => api}/client.ts | 2 +-",
+			" lib/{ => util}/helpers.py | 2 +-",
+			" db/contracts/{legacy => nested}/widgets.yml | 2 +-",
+			" 3 files changed, 3 insertions(+), 3 deletions(-)",
+		]) + "\n",
+		skipped_rows_text="\n".join([
+			"src/api/client.ts\tgenerated-marker:@generated",
+			"lib/util/helpers.py\tgenerated-marker:@generated",
+		]) + "\n",
+	)
+
+	assert "src/{generated => api}/client.ts" not in output
+	assert "lib/{ => util}/helpers.py" not in output
+	assert "db/contracts/{legacy => nested}/widgets.yml" in output
+	assert "3 files changed, 3 insertions(+), 3 deletions(-)" not in output
+
+
+def test_reject_verifier_bootstrap_and_stage_order_contract() -> None:
+	stage_helper = _stage_helper_text()
+	apply_fixes = _apply_fixes_text()
+	assert "review_apply_fixes.sh review_untrusted_sandbox.sh sandbox_image.sh review_untrusted_workspace.py clarify_openrouter_broker.py review_reject_verify.sh review_rb_judge.sh" in stage_helper
+	parse_idx = apply_fixes.index('if parse_script="$(resolve_support_script review_parse_consolidator.sh)"; then')
+	verify_idx = apply_fixes.index('if verify_script="$(resolve_support_script review_reject_verify.sh)"; then')
+	ledger_idx = apply_fixes.index('if ledger_script="$(resolve_support_script review_issue_ledger.sh)"; then')
+	assert parse_idx < verify_idx < ledger_idx
+	assert 'CONSOLIDATOR_REJECT_SCHEMA_ENABLED="${CONSOLIDATOR_REJECT_SCHEMA_ENABLED:-false}"' in apply_fixes
+
+
+def test_render_prompt_py_is_main_primary_so_validator_fixes_reach_wedged_branches() -> None:
+	# Regression guard: render_prompt.py validates arbitrary embedded PR-diff
+	# text before every reviewer/editor call. When it was branch-primary
+	# (staged from SCRIPT_REF), a false-positive fix landed on main (#3593 —
+	# lone `${{` in the diff tripping the unmatched-delimiter check) never
+	# reached an in-flight PR whose branch predated the fix, wedging that PR's
+	# review indefinitely (PR #3592, run 28888093412). It must be main-primary
+	# so a render_prompt fix on main immediately protects wedged branches.
+	stage_helper = _stage_helper_text()
+	main_primary_line = next(
+		(line for line in stage_helper.splitlines() if "MAIN_PRIMARY_BOOTSTRAP_SCRIPTS=" in line),
+		"",
+	)
+	optional_line = next(
+		(line for line in stage_helper.splitlines() if "OPTIONAL_BOOTSTRAP_SCRIPTS=" in line),
+		"",
+	)
+	required_line = next(
+		(line for line in stage_helper.splitlines() if "REQUIRED_BOOTSTRAP_SCRIPTS=" in line),
+		"",
+	)
+	assert "render_prompt.py" in main_primary_line, (
+		"render_prompt.py must be in MAIN_PRIMARY_BOOTSTRAP_SCRIPTS so main-side "
+		"validator fixes reach wedged/in-flight PR branches"
+	)
+	assert "render_prompt.py" not in optional_line, (
+		"render_prompt.py must not be branch-primary in OPTIONAL_BOOTSTRAP_SCRIPTS"
+	)
+	# Regex word-boundary check so render_prompt.sh membership does not mask a
+	# stray render_prompt.py entry in the required (branch-primary) list.
+	assert re.search(r"\brender_prompt\.py\b", required_line) is None, (
+		"render_prompt.py must not be branch-primary in REQUIRED_BOOTSTRAP_SCRIPTS"
+	)
+
+
+def test_support_ai_memory_schema_bootstrap_includes_revalidate_lifecycle_assets() -> None:
+	stage_helper = _stage_helper_text()
+	assert "validation_history.v1.json" in stage_helper
+	assert "operator_bypass_audit.v1.json" in stage_helper
+	assert "revalidate_events.v1.json" in stage_helper
+
+
+def test_editor_changes_lost_redispatch_matches_post_commit_fallback_chain() -> None:
+	post_commit_block = _step_block("Re-trigger review via workflow_dispatch")
+	changes_lost_block = _step_block("Re-dispatch review on editor-changes-lost")
+
+	for block in (post_commit_block, changes_lost_block):
+		# Issue #4898: dispatch from the default branch (no --ref), PR-named
+		# wrappers first, review_autofix.yml last, validated PR number only.
+		assert 'if gh workflow run "${candidate}" \\' in block
+		assert '-f pr_number="${PR_NUMBER}" \\' in block
+		assert '-f allow_workflow_edits="${retrigger_allow_workflow_edits}"; then' in block
+		assert 'caller_workflow="internal-review.yml"' in block
+		assert 'retrigger_candidates+=(review_autofix.yml)' in block
+		assert 'if ! [[ "${PR_NUMBER:-}" =~ ^[1-9][0-9]*$ ]]; then' in block
+		for line in block.splitlines():
+			if "gh workflow run" in line or line.strip().startswith("--ref"):
+				assert "--ref" not in line, line
+		# The caller ref reaches the sourced body through env, never as an
+		# expression (GitHub does not substitute ${{ }} in scripts/).
+		assert "REVIEW_AUTOFIX_CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}" in block
+		assert "${{ github.workflow_ref }}" not in block.split("run: |", 1)[1]
+
+	assert _dispatch_fallback_chain_slice("Re-trigger review via workflow_dispatch") == _dispatch_fallback_chain_slice(
+		"Re-dispatch review on editor-changes-lost"
+	)
+	assert (
+		'echo "CHANGES_LOST_REDISPATCHED=${dispatched}" >> "$GITHUB_ENV"' in changes_lost_block
+	)
+	assert (
+		'Could not dispatch review workflow for editor-changes-lost recovery. The next synchronize event or manual re-run is needed.'
+		in changes_lost_block
+	)
+
+
+def test_review_pipeline_summary_step_is_local_only_and_grep_friendly() -> None:
+	block = _step_block("Append review pipeline iteration summary")
+	assert "### Review Pipeline — Iteration ${iteration_label}" in block
+	assert "REVIEW_AUTOFIX_RUN_SUMMARY_V1" in block
+	assert "printf '\\n### Review Autofix Run Summary\\n\\n' >> \"${GITHUB_STEP_SUMMARY}\"" in block
+	assert "printf '%s\\n' \"${structured_summary_line}\" | tee -a \"${GITHUB_STEP_SUMMARY}\"" in block
+	for expected in (
+		'"completed_phases":',
+		'"skipped_phases":',
+		'"slot_results":',
+		'"attempt_count":',
+		'"status":',
+		'"failure_class":',
+		'"stall_kill_count":',
+		'"stall_recovery_next_action":',
+		'"stall_recovered":',
+		'"retryable_failure_count":',
+		'"retryable_failure_classes":',
+		'"backoff_sleep_secs_total":',
+		'"slot_retry_budget_exhausted":',
+		'"fallback_model_used":',
+		'"cache_status":',
+			'"cache_reuse_attempted":',
+			'"cache_read_input_tokens_total":',
+			'"cache_read_input_tokens_available":',
+		'"budget_elapsed_secs":',
+		'"budget_total_secs":',
+		'"budget_remaining_secs":',
+		'"stall_recovery":',
+		'"finalize_reason":',
+		'"partial_finalize":',
+		'"partial_finalize_reason":',
+		'"partial_finalize_phase":',
+		'"partial_finalize_validation_tail_can_complete":',
+		'"partial_finalize_edits_withheld_for_safety":',
+		'"partial_finalize_withheld_reason":',
+		'"partial_comment_posted":',
+		'"incomplete_phases":',
+		'"edits_pushed":',
+		'"resume_round":',
+		'"resume_restored":',
+		'"resume_head_sha":',
+		'"resume_round_limit":',
+		'"resume_state":',
+		'"resume_should_continue":',
+		'"resume_source_reason":',
+		'"resume_source_phase":',
+		'"resume_comment_posted":',
+		'"resume_completed_scope":',
+		'"resume_incomplete_scope":',
+	):
+		assert expected in block, f"Missing structured summary key contract: {expected}"
+	assert "reviewer_scope_label=\"full-diff\"" in block, (
+		"Summary step must not overclaim scoped reviewer behaviour before "
+		"review_run_reviewers.sh consumes REVIEW_REVIEWER_ITERATION_SCOPING"
+	)
+	for expected in (
+		"| Reviewers run | ${reviewers_run} |",
+		"| Reviewer scope | ${reviewer_scope_label} |",
+		"| Raw bundle size (bytes) | ${bundle_bytes} |",
+		"| Floor tags | ${floor_tag_count} |",
+		"| Consolidator model | ${REVIEW_CONSOLIDATOR_MODEL:-openai/gpt-6-sol} |",
+		"| Consolidator invoked | ${consolidator_invoked} |",
+		"| Consolidator output bytes | ${consolidator_output_bytes} |",
+		"| Parsed issue blocks | ${parsed_blocks} |",
+		"| Passthrough blocks | ${passthrough_blocks} |",
+		"| Line-unverified blocks | ${line_unverified} |",
+		"| Ledger entries total | ${ledger_total} |",
+		"| NEW | ${ledger_new} |",
+		"| PERSISTING | ${ledger_persisting} |",
+		"| FIXED | ${ledger_fixed} |",
+		"| RESURGENT | ${ledger_resurgent} |",
+		"| accepted-residual | ${ledger_accepted_residual} |",
+		"| Editor invoked | ${editor_invoked} |",
+		"| CONSOLIDATOR_OVERRIDDEN count | ${override_count} |",
+		"| Editor commit produced | ${editor_commit_produced} |",
+		"| Partial validation tail can complete | ${partial_finalize_validation_tail_can_complete} |",
+		"| Partial edits withheld for safety | ${partial_finalize_edits_withheld_for_safety} |",
+		"| Partial withheld reason | ${partial_finalize_withheld_reason} |",
+		"| Resume round | ${resume_round} |",
+		"| Resume restored | ${resume_restored} |",
+		"| Resume state | ${resume_state} |",
+		"| Resume round limit | ${resume_round_limit} |",
+		"| Resume should continue | ${resume_should_continue} |",
+		"| Resume head SHA | ${resume_head_sha:-none} |",
+	):
+		assert expected in block, f"Missing summary row contract: {expected}"
+	for artifact in (
+		"${RUNTIME_DIR}/reviewer_bundle.txt",
+		"${RUNTIME_DIR}/floor_tags.txt",
+		"${RUNTIME_DIR}/consolidator_raw.txt",
+		"${RUNTIME_DIR}/parser_stats.txt",
+		"${RUNTIME_DIR}/ledger_status.txt",
+		'COMMITTED_FILES_FILE="${committed_files_file}"',
+		"grep -c 'CONSOLIDATOR_OVERRIDDEN:' \"${EDITOR_SUMMARY_FILE}\"",
+		"EDITOR_COMMIT_PRODUCED: ${{ steps.commit_changes.outputs.did_commit }}",
+		"MAX_ITERATIONS_REACHED: ${{ steps.retrigger_guard.outputs.max_iterations_reached }}",
+		"SKIP_JUDGE: ${{ steps.retrigger_guard.outputs.skip_judge }}",
+		"RB_JUDGE_STATUS: ${{ steps.rb_judge.outputs.rb_judge_status }}",
+		"JUDGE_HANDLED: ${{ steps.rb_judge.outputs.judge_handled }}",
+		"JUDGE_ACTION: ${{ steps.rb_judge.outputs.judge_action }}",
+		"JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}",
+		'budget_total_secs="$(sanitize_nonnegative_int "${CODEX_RUN_BUDGET_TOTAL_SECS:-0}")"',
+		'budget_start_epoch="$(sanitize_nonnegative_int "${CODEX_RUN_BUDGET_START_EPOCH:-${JOB_START_EPOCH:-0}}")"',
+		'resume_round="${AUTOFIX_RESUME_ROUND:-${RESUME_ROUND:-0}}"',
+		'resume_round_limit="$(sanitize_nonnegative_int "${AUTOFIX_RESUME_ROUND_LIMIT:-0}")"',
+		'resume_restored="${AUTOFIX_RESUME_RESTORED:-false}"',
+		'resume_head_sha="${AUTOFIX_RESUME_HEAD_SHA:-}"',
+		'resume_state="${AUTOFIX_RESUME_STATE:-fresh}"',
+		'resume_should_continue="${AUTOFIX_RESUME_SHOULD_CONTINUE:-false}"',
+		'partial_finalize_validation_tail_can_complete="${AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE:-false}"',
+		'partial_finalize_edits_withheld_for_safety="${AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY:-false}"',
+		'partial_finalize_withheld_reason="${AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON:-none}"',
+		'push_allowed = bool_env("CAN_PUSH")',
+		'edits_pushed = bool_env("AUTOFIX_EDITS_PUSHED")',
+		'partial_finalize = bool_env("AUTOFIX_PARTIAL_FINALIZE_REQUESTED")',
+		'partial_finalize_validation_tail_can_complete = bool_env("AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE")',
+		'partial_finalize_edits_withheld_for_safety = bool_env("AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY")',
+		'partial_finalize_withheld_reason = env("AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON").strip() or "none"',
+		'partial_comment_posted = bool_env("AUTOFIX_PARTIAL_COMMENT_POSTED")',
+		'resume_restored = bool_env("AUTOFIX_RESUME_RESTORED")',
+		'resume_head_sha = env("AUTOFIX_RESUME_HEAD_SHA").strip()',
+		'resume_round_limit = int_env("AUTOFIX_RESUME_ROUND_LIMIT")',
+		'resume_state = env("AUTOFIX_RESUME_STATE", "fresh").strip() or "fresh"',
+		'resume_should_continue = bool_env("AUTOFIX_RESUME_SHOULD_CONTINUE")',
+		'resume_source_reason = env("AUTOFIX_RESUME_REASON").strip()',
+		'resume_source_phase = env("AUTOFIX_RESUME_PHASE").strip()',
+		'resume_comment_posted = bool_env("AUTOFIX_RESUME_COMMENT_POSTED")',
+		'resume_completed_scope = csv_env_list("AUTOFIX_RESUME_COMPLETED_SCOPE")',
+		'resume_incomplete_scope = csv_env_list("AUTOFIX_RESUME_INCOMPLETE_SCOPE")',
+		'"REVIEWER_BACKOFF: "',
+		'"REVIEWER_CACHE: "',
+		'"REVIEWER_SLOT_STATE: "',
+		'"INFO: openrouter usage "',
+		'status_pass1_*.txt',
+		'if status == "skipped_budget":',
+		'if resume_state in {"no_progress", "round_budget_exhausted"} and not resume_should_continue:',
+		'return "soft_deadline"',
+	):
+		assert artifact in block, f"Summary step is missing local metric source: {artifact}"
+	assert '"failure_class": "push_not_allowed"' in block
+	assert '"failure_class": "withheld_for_safety"' in block
+	assert "gh api" not in block
+	assert "gh_retry" not in block
+	assert "curl https://api.github.com" not in block
+
+
+def test_review_pipeline_summary_reports_stall_recovery_for_retried_and_skipped_slots() -> None:
+	result = _run_review_pipeline_summary_step_harness()
+	summary = result["summary"]
+	slots = {slot["slot"]: slot for slot in summary["slot_results"]["reviewers"]}
+
+	assert "REVIEW_AUTOFIX_RUN_SUMMARY_V1" in result["step_summary"]
+	assert slots["model_one"]["failure_class"] == "none"
+	assert slots["model_one"]["stall_kill_count"] == 1
+	assert slots["model_one"]["stall_recovery_next_action"] == "retry_cheaper_reasoning"
+	assert slots["model_one"]["stall_recovered"] is True
+	assert slots["model_one"]["retryable_failure_count"] == 1
+	assert slots["model_one"]["retryable_failure_classes"] == ["stall_guard"]
+	assert slots["model_one"]["backoff_sleep_secs_total"] == 2
+	assert slots["model_one"]["slot_retry_budget_exhausted"] is False
+	assert slots["model_one"]["fallback_model_used"] is False
+	assert slots["model_one"]["cache_status"] == "supported"
+	assert slots["model_one"]["cache_reuse_attempted"] is True
+	assert slots["model_one"]["cache_read_input_tokens_total"] == 120
+	assert slots["model_one"]["cache_read_input_tokens_available"] is False
+
+	assert slots["model_two"]["failure_class"] == "stall_guard"
+	assert slots["model_two"]["attempt_count"] == 1
+	assert slots["model_two"]["stall_kill_count"] == 1
+	assert slots["model_two"]["stall_recovery_next_action"] == "skip_unmapped"
+	assert slots["model_two"]["stall_recovered"] is False
+	assert slots["model_two"]["retryable_failure_count"] == 1
+	assert slots["model_two"]["retryable_failure_classes"] == ["timeout"]
+	assert slots["model_two"]["backoff_sleep_secs_total"] == 0
+	assert slots["model_two"]["slot_retry_budget_exhausted"] is False
+	assert slots["model_two"]["fallback_model_used"] is False
+	assert slots["model_two"]["cache_status"] == "unsupported"
+	assert slots["model_two"]["cache_reuse_attempted"] is False
+	assert slots["model_two"]["cache_read_input_tokens_total"] == 0
+	assert slots["model_two"]["cache_read_input_tokens_available"] is True
+	assert slots["model_three"]["attempt_count"] == 1
+	assert slots["model_three"]["cache_read_input_tokens_total"] == 33
+	assert slots["model_three"]["cache_read_input_tokens_available"] is True
+
+	assert summary["stall_recovery"] == {
+		"advanced_slots": 2,
+		"killed_attempts": 2,
+		"partial_finalize_requested": False,
+		"recovered_slots": 1,
+	}
+
+
+def test_review_pipeline_summary_reports_partial_finalize_validated_push() -> None:
+	result = _run_review_pipeline_summary_step_harness(
+		extra_env={
+			"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true",
+			"AUTOFIX_PARTIAL_FINALIZE_REASON": "soft_deadline",
+			"AUTOFIX_PARTIAL_FINALIZE_PHASE": "editor",
+			"AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "true",
+			"AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY": "false",
+			"AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON": "none",
+			"AUTOFIX_PARTIAL_COMMENT_POSTED": "true",
+			"AUTOFIX_RESUME_ROUND": "1",
+			"AUTOFIX_RESUME_ROUND_LIMIT": "3",
+			"AUTOFIX_RESUME_STATE": "resumable",
+			"AUTOFIX_RESUME_SHOULD_CONTINUE": "true",
+			"AUTOFIX_RESUME_HEAD_SHA": "head-sha-123",
+			"DID_COMMIT": "true",
+			"AUTOFIX_EDITS_PUSHED": "true",
+		},
+	)
+	summary = result["summary"]
+
+	assert summary["partial_finalize"] is True
+	assert summary["partial_finalize_reason"] == "soft_deadline"
+	assert summary["partial_finalize_phase"] == "editor"
+	assert summary["partial_finalize_validation_tail_can_complete"] is True
+	assert summary["partial_finalize_edits_withheld_for_safety"] is False
+	assert summary["partial_finalize_withheld_reason"] == "none"
+	assert summary["finalize_reason"] == "partial_finalize"
+	assert summary["slot_results"]["commit"]["failure_class"] == "none"
+	assert summary["slot_results"]["push"]["failure_class"] == "none"
+	assert summary["edits_pushed"] is True
+	assert "| Partial validation tail can complete | true |" in result["step_summary"]
+	assert "| Partial edits withheld for safety | false |" in result["step_summary"]
+	assert "| Partial withheld reason | none |" in result["step_summary"]
+
+
+def test_review_pipeline_summary_reports_partial_finalize_withheld_for_safety() -> None:
+	result = _run_review_pipeline_summary_step_harness(
+		extra_env={
+			"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true",
+			"AUTOFIX_PARTIAL_FINALIZE_REASON": "soft_deadline",
+			"AUTOFIX_PARTIAL_FINALIZE_PHASE": "editor",
+			"AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false",
+			"AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY": "true",
+			"AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON": "insufficient_budget_for_validation_tail",
+			"AUTOFIX_PARTIAL_COMMENT_POSTED": "true",
+			"AUTOFIX_RESUME_ROUND": "1",
+			"AUTOFIX_RESUME_ROUND_LIMIT": "3",
+			"AUTOFIX_RESUME_STATE": "resumable",
+			"AUTOFIX_RESUME_SHOULD_CONTINUE": "true",
+			"AUTOFIX_RESUME_HEAD_SHA": "head-sha-456",
+		},
+	)
+	summary = result["summary"]
+
+	assert summary["partial_finalize"] is True
+	assert summary["partial_finalize_reason"] == "soft_deadline"
+	assert summary["partial_finalize_phase"] == "editor"
+	assert summary["partial_finalize_validation_tail_can_complete"] is False
+	assert summary["partial_finalize_edits_withheld_for_safety"] is True
+	assert summary["partial_finalize_withheld_reason"] == "insufficient_budget_for_validation_tail"
+	assert summary["finalize_reason"] == "partial_finalize"
+	assert summary["slot_results"]["commit"] == {
+		"attempt_count": 1,
+		"status": "skipped",
+		"failure_class": "withheld_for_safety",
+	}
+	assert summary["slot_results"]["push"] == {
+		"attempt_count": 0,
+		"status": "skipped",
+		"failure_class": "withheld_for_safety",
+	}
+	assert summary["edits_pushed"] is False
+	assert "| Partial validation tail can complete | false |" in result["step_summary"]
+	assert "| Partial edits withheld for safety | true |" in result["step_summary"]
+	assert "| Partial withheld reason | insufficient_budget_for_validation_tail |" in result["step_summary"]
+
+
+def test_review_pipeline_summary_classifies_editor_noop_recoverable_failure() -> None:
+	"""The `REVIEW_AUTOFIX_RUN_SUMMARY_V1` editor slot and finalize_reason gain
+	additive values for `EDITOR_NOOP_RECOVERABLE_FAILURE` (validator Check 1c:
+	every editor attempt failed, no editor output). Refusal keeps precedence;
+	the pre-existing `unexpected_noop` / `editor_noop_suspicious` values stay
+	the fallback for runs without either specific flag (CLAUDE.md §6)."""
+	editor_noop_cases = {
+		"recoverable_failure": (
+			{"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "false", "EDITOR_NOOP_RECOVERABLE_FAILURE": "true"},
+			"recoverable_failure",
+			"editor_noop_recoverable_failure",
+		),
+		"refusal_precedence": (
+			{"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "true", "EDITOR_NOOP_RECOVERABLE_FAILURE": "true"},
+			"refusal",
+			"editor_noop_refusal",
+		),
+		"generic_noop_unchanged": (
+			{"EDITOR_NOOP_SUSPICIOUS": "true", "EDITOR_NOOP_REFUSAL": "false", "EDITOR_NOOP_RECOVERABLE_FAILURE": "false"},
+			"unexpected_noop",
+			"editor_noop_suspicious",
+		),
+	}
+	for case_name, (case_env, expected_failure_class, expected_finalize_reason) in editor_noop_cases.items():
+		summary = _run_review_pipeline_summary_step_harness(extra_env=case_env)["summary"]
+		assert summary["slot_results"]["editor"] == {
+			"attempt_count": 1,
+			"status": "failed",
+			"failure_class": expected_failure_class,
+		}, case_name
+		assert summary["finalize_reason"] == expected_finalize_reason, case_name
+		assert "editor" in summary["completed_phases"], case_name
+
+	# The flag alone never demotes the editor slot: only the validator's
+	# EDITOR_NOOP_SUSPICIOUS decides between "failed" and "success", which is
+	# why Check 1c has to set SUSPICIOUS itself at REVIEWERS_SUCCESSFUL=0.
+	flag_only_summary = _run_review_pipeline_summary_step_harness(
+		extra_env={"EDITOR_NOOP_SUSPICIOUS": "false", "EDITOR_NOOP_RECOVERABLE_FAILURE": "true"},
+	)["summary"]
+	assert flag_only_summary["slot_results"]["editor"]["status"] == "success"
+	assert flag_only_summary["slot_results"]["editor"]["failure_class"] == "none"
+
+
+def test_review_pipeline_summary_recoverable_failure_keeps_partial_finalize_reason_precedence() -> None:
+	"""On the real recoverable_failure path review_apply_fixes.sh also requests
+	a partial finalize, and `determine_finalize_reason` returns
+	`partial_finalize` before any editor-noop outcome (the same precedence
+	`editor_noop_refusal` already has). The editor slot's failure_class is the
+	field that names the cause on that path; the run outcome stays
+	`partial_finalize`, unchanged."""
+	summary = _run_review_pipeline_summary_step_harness(
+		extra_env={
+			"EDITOR_NOOP_SUSPICIOUS": "true",
+			"EDITOR_NOOP_REFUSAL": "false",
+			"EDITOR_NOOP_RECOVERABLE_FAILURE": "true",
+			"AUTOFIX_PARTIAL_FINALIZE_REQUESTED": "true",
+			"AUTOFIX_PARTIAL_FINALIZE_REASON": "recoverable_failure",
+			"AUTOFIX_PARTIAL_FINALIZE_PHASE": "editor",
+			"AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false",
+		},
+	)["summary"]
+	assert summary["partial_finalize"] is True
+	assert summary["partial_finalize_reason"] == "recoverable_failure"
+	assert summary["partial_finalize_validation_tail_can_complete"] is False
+	assert summary["finalize_reason"] == "partial_finalize"
+	assert summary["slot_results"]["editor"]["failure_class"] == "recoverable_failure"
+	assert summary["slot_results"]["editor"]["status"] == "failed"
+
+
+def test_review_partial_finalize_publish_safety_gate_is_wired() -> None:
+	block = _step_block("Decide partial-finalize validation/push safety")
+	for expected in (
+		'if [ "${AUTOFIX_PARTIAL_FINALIZE_REQUESTED:-false}" = "true" ]; then',
+		'workflow_timeout_source_path=".codex-workflow-src/.github/workflows/review_autofix.yml"',
+		'workflow_timeout_source_path=".github/workflows/review_autofix.yml"',
+		'import sys, yaml',
+		'workflow = yaml.safe_load(Path(sys.argv[1]).read_text(encoding="utf-8")) or {}',
+		'codex_agent_job = jobs.get("codex-agent") or {}',
+		'resolver_timeout_minutes = next((step.get("timeout-minutes")',
+		'step.get("name") == "Run Codex resolver, validate, stage, commit"',
+		'sys.exit(1) if not isinstance(job_timeout_minutes, int) or not isinstance(resolver_timeout_minutes, int) else print(job_timeout_minutes, resolver_timeout_minutes)',
+		'job_timeout_total_secs=$(( job_timeout_minutes * 60 ))',
+		'partial_finalize_validation_minimum_secs=$(( (resolver_timeout_minutes * 60) + 600 ))',
+		'hard_timeout_remaining_secs=$(( job_deadline_epoch - now_epoch ))',
+		'withheld_reason="insufficient_budget_for_validation_tail"',
+		'echo "AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE=${validation_tail_can_complete}"',
+		'echo "AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY=${edits_withheld_for_safety}"',
+		'echo "AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON=${withheld_reason}"',
+	):
+		assert expected in block, f"missing partial-finalize safety-gate contract detail: {expected}"
+
+
+def test_review_partial_finalize_timeout_extractor_handles_structured_yaml_layout() -> None:
+	workflow_text = textwrap.dedent(
+		"""\
+		jobs:
+		  codex-agent:
+		    steps:
+		      - name: Bootstrap
+		        timeout-minutes: 5
+		      - name: Run Codex resolver, validate, stage, commit
+		        timeout-minutes: 170
+		    timeout-minutes: 240
+		"""
+	)
+
+	assert _extract_review_autofix_timeout_minutes(workflow_text) == (240, 170)
+
+
+def test_review_partial_finalize_publish_safety_gate_keeps_validated_path_when_budget_remains() -> None:
+	job_timeout_minutes, resolver_timeout_minutes = _review_autofix_timeout_minutes()
+	assert job_timeout_minutes * 60 > (resolver_timeout_minutes * 60) + 600
+	now_epoch = int(time.time())
+	result = _run_partial_finalize_publish_safety_gate_step(job_start_epoch=str(now_epoch - 60))
+
+	assert "validated tail remains available" in result["stdout"]
+	assert result["github_env"] == {
+		"AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "true",
+		"AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY": "false",
+		"AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON": "none",
+	}
+
+
+def test_review_partial_finalize_publish_safety_gate_prefers_codex_budget_start_epoch_when_withholding() -> None:
+	job_timeout_minutes, _resolver_timeout_minutes = _review_autofix_timeout_minutes()
+	now_epoch = int(time.time())
+	result = _run_partial_finalize_publish_safety_gate_step(
+		job_start_epoch=str(now_epoch - 60),
+		codex_run_budget_start_epoch=str(now_epoch - (job_timeout_minutes * 60)),
+	)
+
+	assert "findings-only fallback" in result["stdout"]
+	assert result["github_env"] == {
+		"AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE": "false",
+		"AUTOFIX_PARTIAL_FINALIZE_EDITS_WITHHELD_FOR_SAFETY": "true",
+		"AUTOFIX_PARTIAL_FINALIZE_WITHHELD_REASON": "insufficient_budget_for_validation_tail",
+	}
+
+
+def test_review_partial_finalize_workflow_path_is_wired() -> None:
+	early_save_block = _step_block("Save review-issue ledger")
+	restore_block = _step_block("Restore same-head partial resume state")
+	partial_block = _step_block("Post partial finalize comment and persist runtime marker")
+	late_save_block = _step_block("Save review-issue ledger after partial finalize")
+
+	assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'" in early_save_block
+	for expected in (
+		'CURRENT_PREVIOUS_REVIEWS_DIR="${PREVIOUS_REVIEWS_DIR:-}"',
+		'CURRENT_RUNTIME_DIR="${RUNTIME_DIR:-}"',
+		'"AUTOFIX_RESUME_RESTORED_ARTIFACT_COUNT": "0",',
+		'selected_marker_root / "previous_reviews"',
+		'selected_marker_root / "runtime"',
+	):
+		assert expected in restore_block, f"missing same-head restore artifact contract detail: {expected}"
+	assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED == 'true'" in partial_block
+	assert "always() && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED == 'true'" in partial_block
+	for expected in (
+		"<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->",
+		"partial_finalize=true",
+		"reason=${AUTOFIX_PARTIAL_FINALIZE_REASON:-unknown}",
+		"phase=${AUTOFIX_PARTIAL_FINALIZE_PHASE:-unknown}",
+		"completed_scope=${completed_scope_csv}",
+		"incomplete_scope=${incomplete_scope_csv}",
+		"validated_edits_committed=${validated_edits_committed}",
+		"edits_pushed=${edits_pushed}",
+		"validation_tail_can_complete=${validation_tail_can_complete}",
+		"edits_withheld_for_safety=${edits_withheld_for_safety}",
+		"withheld_reason=${withheld_reason}",
+		"head_sha=${current_head_sha}",
+		"resume_round=${resume_round}",
+		"resume_round_limit=${resume_round_limit}",
+		"resume_state=${RESUME_STATE}",
+		"resume_should_continue=${RESUME_SHOULD_CONTINUE}",
+		'VALIDATION_TAIL_CAN_COMPLETE="${validation_tail_can_complete}"',
+		'EDITS_WITHHELD_FOR_SAFETY="${edits_withheld_for_safety}"',
+		'WITHHELD_REASON="${withheld_reason}"',
+		'"validation_tail_can_complete": parse_bool("VALIDATION_TAIL_CAN_COMPLETE"),',
+		'"edits_withheld_for_safety": parse_bool("EDITS_WITHHELD_FOR_SAFETY"),',
+		'"withheld_reason": os.environ.get("WITHHELD_REASON", "").strip() or "none",',
+		"partial_finalize.json",
+		'echo "AUTOFIX_PARTIAL_COMMENT_POSTED=${partial_comment_posted}"',
+		'echo "AUTOFIX_RESUME_ROUND=${resume_round}"',
+		'echo "AUTOFIX_RESUME_HEAD_SHA=${current_head_sha}"',
+		'echo "AUTOFIX_RESUME_ROUND_LIMIT=${resume_round_limit}"',
+		'echo "AUTOFIX_RESUME_STATE=${RESUME_STATE}"',
+		'echo "AUTOFIX_RESUME_SHOULD_CONTINUE=${RESUME_SHOULD_CONTINUE}"',
+		'"progress_fingerprint": os.environ.get("PROGRESS_FINGERPRINT_VALUE", "").strip(),',
+		'reviewer_consensus.txt',
+		'partial_marker_dir / "previous_reviews"',
+		'partial_marker_dir / "runtime"',
+	):
+		assert expected in partial_block, f"missing partial-finalize contract detail: {expected}"
+	for expected in (
+		".ai/review_issue_ledger/",
+		".ai/review_runtime/",
+		"REVIEW_LEDGER_PATH",
+	):
+		assert expected in late_save_block, f"missing persisted partial-finalize state path: {expected}"
+
+
+def test_review_partial_finalize_comment_and_marker_report_validated_push_state() -> None:
+	with tempfile.TemporaryDirectory(prefix="partial-finalize-validated-push-") as td:
+		context = _build_partial_finalize_step_context(Path(td))
+		result = _run_partial_finalize_step(
+			context,
+			edits_pushed="true",
+			editor_commit_produced="true",
+			validation_tail_can_complete="true",
+			edits_withheld_for_safety="false",
+			withheld_reason="none",
+		)
+
+	assert "so the validated finalize tail could complete before the hard job timeout." in result["latest_comment"]
+	assert "- Validated edits committed: true" in result["latest_comment"]
+	assert "- Edits pushed: true" in result["latest_comment"]
+	assert "- Validation tail can complete: true" in result["latest_comment"]
+	assert "- Edits withheld for safety: false" in result["latest_comment"]
+	assert "- Withheld reason: none" in result["latest_comment"]
+	assert "validated_edits_committed=true" in result["latest_comment"]
+	assert "edits_pushed=true" in result["latest_comment"]
+	assert "validation_tail_can_complete=true" in result["latest_comment"]
+	assert "edits_withheld_for_safety=false" in result["latest_comment"]
+	assert "withheld_reason=none" in result["latest_comment"]
+	assert result["marker_payload"]["validated_edits_committed"] is True
+	assert result["marker_payload"]["edits_pushed"] is True
+	assert result["marker_payload"]["validation_tail_can_complete"] is True
+	assert result["marker_payload"]["edits_withheld_for_safety"] is False
+	assert result["marker_payload"]["withheld_reason"] == "none"
+
+
+def test_review_partial_finalize_comment_and_marker_report_withheld_state() -> None:
+	with tempfile.TemporaryDirectory(prefix="partial-finalize-withheld-") as td:
+		context = _build_partial_finalize_step_context(Path(td))
+		result = _run_partial_finalize_step(
+			context,
+			validation_tail_can_complete="false",
+			edits_withheld_for_safety="true",
+			withheld_reason="insufficient_budget_for_validation_tail",
+		)
+
+	assert "The remaining job headroom could not cover the existing validation/publish tail, so the workflow posted findings only and withheld any unpushed edits for safety." in result["latest_comment"]
+	assert "- Validated edits committed: false" in result["latest_comment"]
+	assert "- Edits pushed: false" in result["latest_comment"]
+	assert "- Validation tail can complete: false" in result["latest_comment"]
+	assert "- Edits withheld for safety: true" in result["latest_comment"]
+	assert "- Withheld reason: insufficient_budget_for_validation_tail" in result["latest_comment"]
+	assert "validated_edits_committed=false" in result["latest_comment"]
+	assert "edits_pushed=false" in result["latest_comment"]
+	assert "validation_tail_can_complete=false" in result["latest_comment"]
+	assert "edits_withheld_for_safety=true" in result["latest_comment"]
+	assert "withheld_reason=insufficient_budget_for_validation_tail" in result["latest_comment"]
+	assert result["marker_payload"]["validated_edits_committed"] is False
+	assert result["marker_payload"]["edits_pushed"] is False
+	assert result["marker_payload"]["validation_tail_can_complete"] is False
+	assert result["marker_payload"]["edits_withheld_for_safety"] is True
+	assert result["marker_payload"]["withheld_reason"] == "insufficient_budget_for_validation_tail"
+
+
+def test_review_partial_finalize_skips_remaining_expensive_steps() -> None:
+	for step_name in (
+		"Pre-editor stale-base gate",
+		"Install project dependencies (best-effort)",
+		"Switch reasoning effort for editor",
+		"Setup Serena for editor",
+		"Apply fixes with editor model",
+		"Post editor summary comment",
+		"Mark linked issues ready to merge",
+		"Enable auto-merge on PR",
+		"Telegram success",
+	):
+		block = _step_block(step_name)
+		assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'" in block, (
+			f"step should skip during partial finalize: {step_name}"
+		)
+	for step_name in (
+		"Run interim judge",
+		"Synthesize behavioural smoke",
+		"Detect editor-claimed-but-uncommitted changes",
+		"Detect merge conflicts",
+		"Prepare merge-conflict resolver prompt and pre-snapshot",
+		"Run Codex resolver, validate, stage, commit",
+		"Push all pending commits",
+	):
+		block = _step_block(step_name)
+		assert "(env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true')" in block, (
+			f"step should stay available only when the partial-finalize validation tail can complete: {step_name}"
+		)
+	validator_block = _step_block("Validate editor no-op disposition")
+	assert "(env.AUTOFIX_PARTIAL_FINALIZE_PHASE == 'editor' && (env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'recoverable_failure' || env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'refusal'))" in validator_block
+
+
+def test_review_partial_finalize_keeps_commit_and_push_path_available() -> None:
+	commit_block = _step_block("Commit changes")
+	push_block = _step_block("Push all pending commits")
+	assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'" not in commit_block
+	assert "(env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true')" in push_block
+
+
+def test_review_pipeline_summary_finalize_reason_marks_partial_runs() -> None:
+	block = _step_block("Append review pipeline iteration summary")
+	assert re.search(
+		r'if resume_state in \{"no_progress", "round_budget_exhausted"\} and not resume_should_continue:\n\s+return resume_state\n\s+if partial_finalize:\n\s+return "partial_finalize"',
+		block,
+	), "summary finalize_reason contract should classify partial-finalize runs"
+
+
+def test_same_head_partial_resume_restore_prefers_latest_matching_marker_and_ignores_other_heads() -> None:
+	result = _run_restore_same_head_resume_harness(
+		markers=[
+			{
+				"resume_round": 1,
+				"head_sha": "other-head-one",
+				"resume_state": "resumable",
+				"resume_should_continue": True,
+				"completed_scope": ["reviewers"],
+				"incomplete_scope": ["editor"],
+				"progress_fingerprint": "fp-other-1",
+				"reason": "soft_deadline",
+				"phase": "editor",
+				"comment_posted": False,
+			},
+			{
+				"resume_round": 2,
+				"head_sha": "__HEAD__",
+				"resume_state": "resumable",
+				"resume_should_continue": True,
+				"completed_scope": ["reviewers"],
+				"incomplete_scope": ["editor"],
+				"progress_fingerprint": "fp-match-2",
+				"reason": "soft_deadline",
+				"phase": "editor",
+				"comment_posted": False,
+			},
+			{
+				"resume_round": 4,
+				"head_sha": "__HEAD__",
+				"resume_state": "round_budget_exhausted",
+				"resume_should_continue": False,
+				"completed_scope": ["reviewers", "consolidator", "parser"],
+				"incomplete_scope": ["ledger", "editor"],
+				"progress_fingerprint": "fp-match-4",
+				"reason": "soft_deadline",
+				"phase": "editor",
+				"comment_posted": True,
+			},
+		],
+	)
+	github_env = result["github_env"]
+	assert github_env["AUTOFIX_RESUME_RESTORED"] == "true"
+	assert github_env["AUTOFIX_RESUME_TERMINAL"] == "true"
+	assert github_env["AUTOFIX_RESUME_ROUND"] == "4"
+	assert github_env["AUTOFIX_RESUME_ROUND_LIMIT"] == "3"
+	assert github_env["AUTOFIX_RESUME_STATE"] == "round_budget_exhausted"
+	assert github_env["AUTOFIX_RESUME_SHOULD_CONTINUE"] == "false"
+	assert github_env["AUTOFIX_RESUME_HEAD_SHA"] == result["head_sha"]
+	assert github_env["AUTOFIX_RESUME_COMPLETED_SCOPE"] == "reviewers,consolidator,parser"
+	assert github_env["AUTOFIX_RESUME_INCOMPLETE_SCOPE"] == "ledger,editor"
+	assert github_env["AUTOFIX_RESUME_PROGRESS_FINGERPRINT"] == "fp-match-4"
+	assert github_env["AUTOFIX_RESUME_REASON"] == "soft_deadline"
+	assert github_env["AUTOFIX_RESUME_PHASE"] == "editor"
+	assert github_env["AUTOFIX_RESUME_COMMENT_POSTED"] == "true"
+	assert github_env["AUTOFIX_RESUME_MARKER_FILE"].endswith("round-4/partial_finalize.json")
+	assert "Restored same-head partial resume state" in result["stdout"]
+
+
+def test_same_head_partial_resume_restore_fails_open_when_no_marker_matches_head() -> None:
+	result = _run_restore_same_head_resume_harness(
+		markers=[
+			{
+				"resume_round": 1,
+				"head_sha": "other-head-one",
+				"resume_state": "resumable",
+				"resume_should_continue": True,
+				"completed_scope": ["reviewers"],
+				"incomplete_scope": ["editor"],
+				"progress_fingerprint": "fp-other-1",
+				"reason": "soft_deadline",
+				"phase": "editor",
+				"comment_posted": False,
+			},
+			{
+				"resume_round": 3,
+				"head_sha": "other-head-two",
+				"resume_state": "no_progress",
+				"resume_should_continue": False,
+				"completed_scope": ["reviewers", "consolidator"],
+				"incomplete_scope": ["editor"],
+				"progress_fingerprint": "fp-other-3",
+				"reason": "soft_deadline",
+				"phase": "editor",
+				"comment_posted": True,
+			},
+		],
+	)
+	github_env = result["github_env"]
+	assert github_env["AUTOFIX_RESUME_RESTORED"] == "false"
+	assert github_env["AUTOFIX_RESUME_TERMINAL"] == "false"
+	assert github_env["AUTOFIX_RESUME_ROUND"] == "0"
+	assert github_env["AUTOFIX_RESUME_ROUND_LIMIT"] == "3"
+	assert github_env["AUTOFIX_RESUME_STATE"] == "fresh"
+	assert github_env["AUTOFIX_RESUME_SHOULD_CONTINUE"] == "false"
+	assert github_env["AUTOFIX_RESUME_HEAD_SHA"] == result["head_sha"]
+	assert github_env["AUTOFIX_RESUME_MARKER_FILE"] == ""
+	assert f"No cached same-head partial resume state matched HEAD={result['head_sha']}" in result["stdout"]
+
+
+def test_reviewer_resume_reuses_cached_successes_and_reruns_only_incomplete_slots() -> None:
+	result = _run_reviewer_resume_cached_success_harness()
+	assert result["PASS_SUCCESSFUL"] == "2"
+	assert result["called_models"] == ["moonshotai/kimi-k2.5"]
+	assert result["cached_log"].startswith("cached log\n")
+	assert result["rerun_output"] == "fresh reviewer output for moonshotai/kimi-k2.5\n"
+	assert "Resume: reusing cached reviewer success for x-ai/grok-4.20 (review)." in result["stderr"]
+
+
+def test_review_partial_resume_path_does_not_workflow_dispatch_without_new_push() -> None:
+	block = _step_block("Re-trigger review via workflow_dispatch")
+	assert "env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'" in block
+	assert "env.AUTOFIX_RESUME_TERMINAL != 'true'" in block
+
+
+def _evaluate_step_if_gate(step_name: str, gate_env: dict[str, str]) -> bool:
+	"""Evaluate a step's ``if:`` over env.* comparisons; unset vars are ''."""
+	if_line = next(
+		line.strip() for line in _step_block(step_name).splitlines() if line.strip().startswith("if:")
+	)
+	expression = if_line[len("if:"):].strip().strip('"')
+	assert "steps." not in expression, f"gate evaluator only models env.* terms: {step_name}"
+
+	def replace_comparison(match: re.Match[str]) -> str:
+		actual_value = gate_env.get(match.group(1), "")
+		result = actual_value == match.group(3) if match.group(2) == "==" else actual_value != match.group(3)
+		return str(result)
+
+	python_expression = re.sub(r"env\.([A-Z0-9_]+)\s*(==|!=)\s*'([^']*)'", replace_comparison, expression)
+	python_expression = python_expression.replace("success()", "True").replace("&&", " and ").replace("||", " or ")
+	assert re.fullmatch(r"[\sA-Za-z()]*", python_expression), python_expression
+	return bool(eval(python_expression))  # noqa: S307 - only True/False/and/or/() remain
+
+
+# A dispatched conflict-recovery run on a PR whose same-head resume state is
+# terminal (PR #4332: round 3/3, no_progress). The editor and commit steps are
+# skipped, so DID_COMMIT is unset.
+_TERMINAL_RESUME_CONFLICT_ENV = {
+	"CAN_PUSH": "true",
+	"AUTOFIX_RESUME_TERMINAL": "true",
+}
+
+
+def test_terminal_resume_still_resolves_merge_conflicts() -> None:
+	assert _evaluate_step_if_gate("Detect merge conflicts", _TERMINAL_RESUME_CONFLICT_ENV)
+	conflict_env = {**_TERMINAL_RESUME_CONFLICT_ENV, "MERGE_CONFLICT": "true"}
+	for step_name in (
+		"Prepare merge-conflict resolver prompt and pre-snapshot",
+		"Run Codex resolver, validate, stage, commit",
+	):
+		assert _evaluate_step_if_gate(step_name, conflict_env), step_name
+	resolved_env = {**conflict_env, "CONFLICT_RESOLVED": "true"}
+	assert _evaluate_step_if_gate("Telegram conflict resolution message", resolved_env)
+
+
+def test_terminal_resume_push_only_carries_resolved_merge() -> None:
+	resolved_env = {**_TERMINAL_RESUME_CONFLICT_ENV, "MERGE_CONFLICT": "true", "CONFLICT_RESOLVED": "true"}
+	assert _evaluate_step_if_gate("Push all pending commits", resolved_env)
+	unresolved_commit_env = {**_TERMINAL_RESUME_CONFLICT_ENV, "DID_COMMIT": "true"}
+	assert not _evaluate_step_if_gate("Push all pending commits", unresolved_commit_env)
+	non_terminal_commit_env = {"CAN_PUSH": "true", "AUTOFIX_RESUME_TERMINAL": "false", "DID_COMMIT": "true"}
+	assert _evaluate_step_if_gate("Push all pending commits", non_terminal_commit_env)
+	# The editor and commit steps must keep skipping terminal resumes, which is
+	# what keeps DID_COMMIT unset on that path.
+	commit_block = _step_block("Commit changes")
+	editor_block = _step_block("Apply fixes with editor model")
+	assert "env.AUTOFIX_RESUME_TERMINAL != 'true'" in commit_block
+	assert "env.AUTOFIX_RESUME_TERMINAL != 'true'" in editor_block
+
+
+def test_review_partial_finalize_marker_sets_no_progress_terminal_state() -> None:
+	with tempfile.TemporaryDirectory(prefix="partial-finalize-no-progress-") as td:
+		context = _build_partial_finalize_step_context(Path(td))
+		first = _run_partial_finalize_step(context)
+		second = _run_partial_finalize_step(context, previous_env=first["github_env"])
+
+	assert first["github_env"]["AUTOFIX_RESUME_STATE"] == "resumable"
+	assert first["marker_payload"]["base_ref"] == "main"
+	assert "base_ref=main" in first["latest_comment"]
+	assert first["github_env"]["AUTOFIX_RESUME_SHOULD_CONTINUE"] == "true"
+	assert second["github_env"]["AUTOFIX_RESUME_ROUND"] == "2"
+	assert second["github_env"]["AUTOFIX_RESUME_STATE"] == "no_progress"
+	assert second["github_env"]["AUTOFIX_RESUME_SHOULD_CONTINUE"] == "false"
+	assert second["github_env"]["AUTOFIX_RESUME_TERMINAL"] == "true"
+	assert second["marker_payload"]["resume_round"] == 2
+	assert second["marker_payload"]["resume_state"] == "no_progress"
+	assert second["marker_payload"]["resume_should_continue"] is False
+	assert second["marker_payload"]["progress_fingerprint"] == first["marker_payload"]["progress_fingerprint"]
+	assert "resume_state=no_progress" in second["latest_comment"]
+	assert "resume_should_continue=false" in second["latest_comment"]
+
+
+def test_review_partial_finalize_marker_sets_round_budget_exhausted_terminal_state() -> None:
+	with tempfile.TemporaryDirectory(prefix="partial-finalize-round-budget-") as td:
+		context = _build_partial_finalize_step_context(Path(td))
+		first = _run_partial_finalize_step(context, review_max_resume_rounds="2")
+		second = _run_partial_finalize_step(
+			context,
+			previous_env=first["github_env"],
+			review_max_resume_rounds="2",
+			editor_summary_text="editor summary changed\n",
+		)
+
+	assert first["github_env"]["AUTOFIX_RESUME_STATE"] == "resumable"
+	assert second["github_env"]["AUTOFIX_RESUME_ROUND"] == "2"
+	assert second["github_env"]["AUTOFIX_RESUME_ROUND_LIMIT"] == "2"
+	assert second["github_env"]["AUTOFIX_RESUME_STATE"] == "round_budget_exhausted"
+	assert second["github_env"]["AUTOFIX_RESUME_SHOULD_CONTINUE"] == "false"
+	assert second["github_env"]["AUTOFIX_RESUME_TERMINAL"] == "true"
+	assert second["marker_payload"]["resume_round"] == 2
+	assert second["marker_payload"]["resume_round_limit"] == 2
+	assert second["marker_payload"]["resume_state"] == "round_budget_exhausted"
+	assert second["marker_payload"]["resume_should_continue"] is False
+	assert second["marker_payload"]["progress_fingerprint"] != first["marker_payload"]["progress_fingerprint"]
+	assert "resume_state=round_budget_exhausted" in second["latest_comment"]
+	assert "resume_should_continue=false" in second["latest_comment"]
+
+
+def test_same_head_partial_resume_restore_rehydrates_cached_artifacts_and_preserves_no_progress_across_run_dirs() -> None:
+	with tempfile.TemporaryDirectory(prefix="partial-finalize-cross-run-") as td:
+		root = Path(td)
+		context = _build_partial_finalize_step_context(root)
+		first = _run_partial_finalize_step(context)
+		restored_runtime = root / "runtime_restored"
+		restored_reviews = root / "reviews_restored"
+		restore = _run_restore_same_head_resume_step(
+			Path(context["repo"]),
+			runtime_dir=restored_runtime,
+			reviews_dir=restored_reviews,
+		)
+		second = _run_partial_finalize_step(
+			context,
+			previous_env=restore["github_env"],
+			runtime_dir=restored_runtime,
+			reviews_dir=restored_reviews,
+		)
+
+	assert restore["github_env"]["AUTOFIX_RESUME_RESTORED"] == "true"
+	assert int(restore["github_env"]["AUTOFIX_RESUME_RESTORED_ARTIFACT_COUNT"]) > 0
+	assert restore["restored_review_files"]["review_model_one.txt"] == "cached reviewer output\n"
+	assert restore["restored_review_files"]["status_review_model_one.txt"] == "success\n"
+	assert restore["restored_runtime_files"]["reviewer_consensus.txt"] == "consensus sentinel\n"
+	assert restore["restored_runtime_files"]["editor_summary.txt"] == "editor summary sentinel\n"
+	assert second["github_env"]["AUTOFIX_RESUME_STATE"] == "no_progress"
+	assert second["github_env"]["AUTOFIX_RESUME_SHOULD_CONTINUE"] == "false"
+	assert second["marker_payload"]["progress_fingerprint"] == first["marker_payload"]["progress_fingerprint"]
+
+
+def test_push_step_exports_edits_pushed_sentinel_for_summary_contract() -> None:
+	block = _step_block("Push all pending commits")
+	assert 'echo "AUTOFIX_EDITS_PUSHED=true" >> "$GITHUB_ENV"' in block
+
+
+def test_review_pipeline_summary_finalize_reason_distinguishes_push_not_allowed() -> None:
+	block = _step_block("Append review pipeline iteration summary")
+	assert re.search(
+		r'if max_iterations_reached and not skip_judge:.*?return "rb_judge_review_blocked"\n\s+if push_needed and not push_allowed:\n\s+return "push_not_allowed"\n\s+if push_needed and not edits_pushed:\n\s+return "push_failed"',
+		block,
+		re.S,
+	), "Summary finalize_reason contract must distinguish push-disabled runs before push_failed"
+
+
+def test_conflict_resolver_exports_actuation_sentinel_before_invocation() -> None:
+	block = _step_block("Run Codex resolver, validate, stage, commit")
+	sentinel = 'echo "RESOLVER_ACTUATION_REQUIRED=true" >> "$GITHUB_ENV"'
+	invocation = 'bash "${RESOLVER_SCRIPT}"'
+	assert sentinel in block
+	assert block.index(sentinel) < block.index("_probe_resolver() {")
+	assert block.index(sentinel) < block.index("exit 2")
+	assert block.index(sentinel) < block.index(invocation)
+
+
+def test_review_pipeline_summary_classifies_unresolved_resolver_actuation() -> None:
+	block = _step_block("Append review pipeline iteration summary")
+	resolver_failure = 'if bool_env("RESOLVER_ACTUATION_REQUIRED") and not bool_env("CONFLICT_RESOLVED"):'
+	assert resolver_failure in block
+	resolver_index = block.index(resolver_failure)
+	assert 'return "conflict_resolver_failed"' in block[resolver_index:]
+	assert resolver_index < block.index('return "push_failed"', resolver_index)
+	assert resolver_index < block.index('return "clean_review_no_commit"', resolver_index)
+	assert 'return "conflict_resolved_pushed"' in block
+	assert 'return "autofix_pushed"' in block
+
+
+def test_auto_merge_guard_honours_configured_orchestrator_branch_pattern() -> None:
+	block = _step_block("Enable auto-merge on PR")
+	helper_text = _auto_merge_helper_text()
+	assert "ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}" in block
+	assert 'grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN}"' in helper_text
+	assert 'if [ -z "${_orch_pr_head_ref}" ]; then' in helper_text
+	assert "empty/null .head.ref" in helper_text
+	assert "refs:?[[:space:]]*#[0-9]+" in helper_text
+	assert "(closes|fixes|resolves):?[[:space:]]*#[0-9]+" in helper_text
+	assert "matches ORCH_INTEGRATION_BRANCH_PATTERN='${ORCH_INTEGRATION_BRANCH_PATTERN}'" in helper_text
+	assert "falling back to canonical '^orchestrator/project-([0-9]+)$' auto-merge suppressor" in helper_text
+	assert "falling back to canonical '^orchestrator/project-[0-9]+$' auto-merge suppressor" not in helper_text
+
+
+def test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_codex_agent_path() -> None:
+	# forward-merge-stable-to-main.yml opens fallback PRs with head ref
+	# `auto/forward-merge-stable-<run-id>-<attempt>`. These MUST be merged
+	# via "Create a merge commit" so stable's tip stays in main's ancestry —
+	# the regular auto-merge call `gh pr merge --squash --auto` would strip
+	# that ancestry and break the next promote-main-to-stable.yml run. By
+	# default (FORWARD_MERGE_FALLBACK_AUTO_MERGE='true') the codex-agent
+	# "Enable auto-merge on PR" step instead enables auto-merge with a REAL
+	# merge commit (`gh pr merge --merge --auto`) — the unattended equivalent
+	# of "Create a merge commit", which preserves ancestry — and short-circuits
+	# (exit 0) BEFORE reaching the orchestrator block and the squash-auto tail.
+	# Setting the var to any non-'true' value restores the old behaviour of
+	# leaving the PR for a manual merge commit; both branches are verified.
+	helper_text = _auto_merge_helper_text()
+	assert "Scoped opt-out for forward-merge fallback PRs" in helper_text, (
+		"Forward-merge fallback suppressor comment is missing"
+	)
+	assert "grep -Eq '^auto/forward-merge-stable-'" in helper_text, (
+		"Forward-merge fallback head-ref regex is missing or has drifted"
+	)
+	assert "matches forward-merge fallback pattern '^auto/forward-merge-stable-'" in helper_text, (
+		"Forward-merge suppressor log line is missing the canonical phrasing"
+	)
+	assert "promote-main-to-stable.yml" in helper_text, (
+		"Suppressor must explain WHY (ancestry / promote-main-to-stable) for operator debuggability"
+	)
+	# The forward-merge suppressor must run BEFORE the orchestrator pattern
+	# block — otherwise a forward-merge head ref that someone retrofitted
+	# to also look orchestrator-shaped (or any future suppressor that
+	# moves on) would be evaluated in the wrong order. Concretely: the
+	# suppressor must appear above the first reference to the configured
+	# ORCH_INTEGRATION_BRANCH_PATTERN match attempt.
+	idx_forward = helper_text.find("matches forward-merge fallback pattern")
+	idx_orch_match = helper_text.find('grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN}"')
+	assert idx_forward != -1
+	assert idx_orch_match != -1
+	assert idx_forward < idx_orch_match, (
+		"Forward-merge suppressor must short-circuit before the orchestrator-pattern match attempt"
+	)
+	# Default behaviour: gated by FORWARD_MERGE_FALLBACK_AUTO_MERGE and merges
+	# via a real merge commit (NOT squash) so stable's ancestry is preserved.
+	assert "FORWARD_MERGE_FALLBACK_AUTO_MERGE" in helper_text, (
+		"Forward-merge auto-merge must be gated by the FORWARD_MERGE_FALLBACK_AUTO_MERGE var"
+	)
+	assert 'gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --merge --auto' in helper_text, (
+		"Forward-merge fallback PRs must auto-merge via a real merge commit (--merge --auto), not squash"
+	)
+	# The merge-commit enable must sit on the forward-merge branch, before the
+	# exit 0 that prevents falling through to the --squash --auto tail. Anchor
+	# on the full command lines so comment mentions of "--squash --auto" above
+	# the call site do not perturb the ordering check.
+	idx_fm_merge = helper_text.find('--repo "${GITHUB_REPOSITORY}" --merge --auto')
+	idx_squash = helper_text.find('--repo "${GITHUB_REPOSITORY}" --squash --auto')
+	assert idx_fm_merge != -1 and idx_squash != -1
+	assert idx_fm_merge < idx_squash, (
+		"Forward-merge merge-commit call must precede (and short-circuit before) the squash tail"
+	)
+	# Opt-out branch still suppresses + explains when the var is not 'true'.
+	assert "FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true' — auto-merge suppressed" in helper_text, (
+		"Forward-merge path must still suppress + log when the opt-out var is set"
+	)
+
+
+def test_auto_merge_guard_suppresses_forward_merge_fallback_pr_on_deterministic_skip_path() -> None:
+	# Defense in depth: a small/doc-only forward-merge fallback PR would
+	# otherwise short-circuit through deterministic-skip-merge's auto-merge
+	# call before the codex-agent path's suppressor ran. The
+	# deterministic-skip job must apply the same head-ref guard, sourced
+	# from the gate job's existing /pulls/{n} fetch (§15 API hygiene — no
+	# duplicate API call).
+	block = _step_block("Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge")
+	assert "PR_HEAD_REF" in block, (
+		"deterministic-skip-merge must read the gate's head_ref output"
+	)
+	assert "grep -Eq '^auto/forward-merge-stable-'" in block, (
+		"Forward-merge fallback head-ref regex is missing from deterministic-skip-merge"
+	)
+	assert "auto-merge suppressed on the deterministic-skip path" in block, (
+		"Deterministic-skip suppressor log line is missing the canonical phrasing"
+	)
+	# The check must run BEFORE the `gh pr merge --squash --auto` call.
+	idx_guard = block.find("grep -Eq '^auto/forward-merge-stable-'")
+	idx_merge = block.find('gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto')
+	assert idx_guard != -1
+	assert idx_merge != -1
+	assert idx_guard < idx_merge, (
+		"Forward-merge suppressor must short-circuit before the gh pr merge --squash --auto call"
+	)
+	assert 'auto_merge_summary="SUPPRESSED (forward-merge fallback head ref' in block, (
+		"deterministic-skip-merge must track suppressed auto-merge state for the step summary (opt-out branch)"
+	)
+	assert 'echo "- **Auto-merge:** ${auto_merge_summary}"' in block, (
+		"Deterministic-skip summary must report the actual auto-merge outcome"
+	)
+	# Default behaviour mirrors the codex-agent path: gated by
+	# FORWARD_MERGE_FALLBACK_AUTO_MERGE and merged via a real merge commit so a
+	# small/doc-only forward-merge fallback PR routed through deterministic-skip
+	# does not get squash-merged and strip stable's ancestry.
+	assert "FORWARD_MERGE_FALLBACK_AUTO_MERGE" in block, (
+		"deterministic-skip-merge forward-merge handling must be gated by FORWARD_MERGE_FALLBACK_AUTO_MERGE"
+	)
+	assert 'gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --merge --auto' in block, (
+		"deterministic-skip-merge must auto-merge forward-merge fallback PRs via a real merge commit"
+	)
+	assert 'auto_merge_summary="ENABLED (merge commit)"' in block, (
+		"deterministic-skip-merge must record the merge-commit auto-merge outcome for the step summary"
+	)
+	assert 'elif ! [[ "${PR_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then' in block, (
+		"deterministic-skip-merge must fail closed when the gate-observed head SHA is unavailable or malformed"
+	)
+	assert 'auto_merge_summary="REFUSED (gate-observed head SHA unavailable or malformed)"' in block, (
+		"deterministic-skip summary must report an invalid-head refusal"
+	)
+	assert "refusing deterministic-skip auto-merge enablement without a --match-head-commit guard" in block
+	assert 'gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --merge --auto --match-head-commit "${PR_HEAD_SHA}"' in block
+	assert 'gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${PR_HEAD_SHA}"' in block
+	assert 'auto_merge_ready_labels_allowed="false"' in block
+	assert 'if [ "${auto_merge_ready_labels_allowed}" != "true" ]; then' in block
+	assert block.count("if deterministic_skip_head_is_current; then") == 2
+	idx_review_skipped_label = block.find('ensure_label_exists "ai:review-skipped"')
+	idx_bound_squash_merge = block.find('--squash --auto --match-head-commit "${PR_HEAD_SHA}"')
+	assert idx_review_skipped_label > idx_bound_squash_merge, (
+		"Deterministic-skip labels must be applied only after bound merge authorization succeeds"
+	)
+	idx_missing_head_guard = block.find('elif ! [[ "${PR_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]')
+	assert idx_missing_head_guard != -1
+	assert idx_missing_head_guard < idx_merge, (
+		"Missing gate head must refuse auto-merge before either merge strategy can run"
+	)
+	for merge_line in (line for line in block.splitlines() if "gh_retry gh pr merge" in line):
+		assert '--match-head-commit "${PR_HEAD_SHA}"' in merge_line, merge_line
+
+
+def test_deterministic_skip_merge_excludes_orchestrator_integration_prs() -> None:
+	job = _job_block("deterministic-skip-merge")
+	assert "ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}" in job
+	assert "PR_HEAD_REF: ${{ needs.gate.outputs.head_ref }}" in job
+	block = _step_block("Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge")
+	assert 'grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN}"' in block
+	assert '[[ "${PR_HEAD_REF}" =~ ^orchestrator/project-([0-9]+)$ ]]' in block
+	assert 'reason=head_ref_unavailable' in block
+	assert 'reason=orchestrator_integration_pr' in block
+	assert 'if [ "${auto_merge_ready_labels_allowed}" != "true" ]; then' in block
+	idx_guard = block.find('elif deterministic_skip_head_ref_is_integration_pr; then')
+	assert idx_guard > block.find('if [ -z "${PR_HEAD_REF}" ]; then')
+	assert idx_guard < block.find('elif [ "${ENABLE_AUTO_MERGE}" != "true" ]; then')
+	assert idx_guard < block.find('gh_retry gh pr merge')
+	assert idx_guard < block.find('ensure_label_exists "ai:review-skipped"')
+
+
+def test_deterministic_skip_merge_integration_pr_runs_no_merge_or_label_calls() -> None:
+	workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+	step = next(
+		step for step in workflow["jobs"]["deterministic-skip-merge"]["steps"]
+		if step["name"] == "Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge"
+	)
+	head_sha = "a" * 40
+	with tempfile.TemporaryDirectory() as tmp_str:
+		tmp = Path(tmp_str)
+		bin_dir = tmp / "bin"
+		bin_dir.mkdir()
+		fake_gh = bin_dir / "gh"
+		# Every call is recorded; the required-checks wait reads one green check-run.
+		# The merge-base freshness gate defers when it cannot resolve the base
+		# (#6988), so the PR read names one and the compare reports it up to date.
+		fake_gh.write_text(
+			'#!/bin/sh\nprintf "%s\\n" "$*" >> "$GH_CALLS"\n'
+			'case "$*" in *check-runs*) printf \'[{"check_runs":[{"name":"lint","status":"completed","conclusion":"success","details_url":""}]}]\' ;;\n'
+			f'  *compare/*) printf \'{{"ahead_by":0,"files":[]}}\' ;;\n'
+			f'  *pulls/42*) printf \'{{"head":{{"sha":"{head_sha}"}},"base":{{"ref":"main"}}}}\' ;;\nesac\n',
+			encoding="utf-8",
+		)
+		fake_gh.chmod(0o755)
+		# The verified merge-gate helper checkout the step sources
+		# (.codex-freshness-src pinned to REVIEW_SUPPORT_SHA); without it the
+		# required-checks wait fails closed and no auto-merge is enabled.
+		helper = tmp / ".codex-freshness-src"
+		(helper / "scripts").mkdir(parents=True)
+		for name in ("pr_checks_lib.sh", "gh_helpers.sh"):
+			(helper / "scripts" / name).write_text((REPO_ROOT / "scripts" / name).read_text(encoding="utf-8"), encoding="utf-8")
+		git_env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
+		subprocess.run(["git", "init", "-q", str(helper)], check=True, env=git_env)
+		subprocess.run(["git", "-C", str(helper), "add", "-A"], check=True, env=git_env)
+		subprocess.run(["git", "-C", str(helper), "commit", "-q", "-m", "helper"], check=True, env=git_env)
+		support_sha = subprocess.run(["git", "-C", str(helper), "rev-parse", "HEAD"], check=True, capture_output=True, text=True).stdout.strip()
+		for index, (head_ref, pattern, expected_summary, expected_reason) in enumerate((
+			("orchestrator/project-7", "^orchestrator/project-", "SUPPRESSED (orchestrator integration PR", "orchestrator_integration_pr"),
+			("orchestrator/project-7", "(", "SUPPRESSED (orchestrator integration PR", "orchestrator_integration_pr"),
+			("orchestrator/project-7", "", "SUPPRESSED (orchestrator integration PR", "orchestrator_integration_pr"),
+			("custom/integration-7", "^custom/integration-", "SUPPRESSED (orchestrator integration PR", "orchestrator_integration_pr"),
+			("", "^orchestrator/project-", "REFUSED (gate-observed head ref unavailable)", "head_ref_unavailable"),
+			("ai/issue-5", "^orchestrator/project-", "ENABLED (squash)", ""),
+		)):
+			calls_path = tmp / f"calls-{index}.txt"
+			summary_path = tmp / f"summary-{index}.txt"
+			env = dict(os.environ)
+			env.update({
+				"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+				"GH_CALLS": str(calls_path),
+				"GITHUB_STEP_SUMMARY": str(summary_path),
+				"REPOSITORY": "test-owner/test-repo",
+				"PR_NUMBER": "42",
+				"PR_HEAD_SHA": head_sha,
+				"PR_HEAD_REF": head_ref,
+				"ORCH_INTEGRATION_BRANCH_PATTERN": pattern,
+				"ENABLE_AUTO_MERGE": "true",
+				"FORWARD_MERGE_FALLBACK_AUTO_MERGE": "true",
+				"DET_SKIP_REASON": "doc_only",
+				"FRESHNESS_HELPER_CHECKOUT_OUTCOME": "success",
+				"REVIEW_SUPPORT_SHA": support_sha,
+				"AUTO_MERGE_CHECKS_POLL_SECONDS": "1",
+				"AUTO_MERGE_CHECKS_WAIT_MINUTES": "1",
+				# Do not inherit the runner's repository: in this repo the
+				# required CI check defaults to `lint` (#6963), which the fake
+				# gh cannot bind to a CI run, so the wait would time out.
+				"GITHUB_REPOSITORY": "test-owner/test-repo",
+				"AUTO_MERGE_REQUIRED_CI_CHECK": "none",
+			})
+			result = subprocess.run(["bash", "-c", step["run"]], env=env, cwd=tmp, capture_output=True, text=True, check=False)
+			assert result.returncode == 0, result.stderr
+			assert expected_summary in summary_path.read_text(encoding="utf-8"), result.stdout + result.stderr
+			calls = calls_path.read_text(encoding="utf-8").splitlines() if calls_path.exists() else []
+			if expected_reason:
+				assert not calls, calls
+				assert f"action=refuse reason={expected_reason}" in result.stdout
+			else:
+				assert [call for call in calls if call.startswith("pr merge ")] == [
+					f"pr merge 42 --repo test-owner/test-repo --squash --auto --match-head-commit {head_sha}"
+				]
+
+
+def test_gate_emits_head_ref_output_for_forward_merge_suppressor_reuse() -> None:
+	# The deterministic-skip-merge suppressor sources head ref from the
+	# gate's /pulls/{n} fetch (§15: don't repeat an API call). Verify the
+	# gate exposes head_ref as an output and the deterministic-skip-merge
+	# job reads it via needs.gate.outputs.head_ref.
+	wf = _workflow_text()
+	assert "head_ref: ${{ steps.evaluate.outputs.head_ref }}" in wf, (
+		"Gate job must expose head_ref output for downstream forward-merge suppressors"
+	)
+	assert "head_sha: ${{ steps.evaluate.outputs.head_sha }}" in wf, (
+		"Gate job must expose the exact head SHA used for deterministic-skip authorization"
+	)
+	assert 'echo "head_ref=${pr_head_ref}"' in wf, (
+		"Gate evaluate step must emit head_ref to GITHUB_OUTPUT"
+	)
+	assert 'echo "head_sha=${pr_head_sha_gate}"' in wf, (
+		"Gate evaluate step must reuse the authenticated PR metadata head SHA"
+	)
+	assert "PR_HEAD_REF: ${{ needs.gate.outputs.head_ref }}" in wf, (
+		"deterministic-skip-merge must consume head_ref from gate outputs"
+	)
+	assert "PR_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}" in wf, (
+		"deterministic-skip-merge must consume the gate-observed head SHA"
+	)
+	assert "post_merge_pr_text_json: ${{ steps.evaluate.outputs.post_merge_pr_text_json }}" in wf, (
+		"Gate job must expose cached PR title/body for the post-merge validation dispatch"
+	)
+
+
+def test_gate_emits_force_full_review_tier_output_for_phase_i_resolver() -> None:
+	wf = _workflow_text()
+	assert "force_full_review_tier: ${{ steps.evaluate.outputs.force_full_review_tier }}" in wf, (
+		"Gate job must expose the force-full review-tier signal for downstream reviewer routing"
+	)
+	assert 'echo "force_full_review_tier=${FORCE_FULL_REVIEW_TIER}"' in wf, (
+		"Gate evaluate step must emit the force-full review-tier signal to GITHUB_OUTPUT"
+	)
+	assert "FORCE_FULL_REVIEW_TIER: ${{ needs.gate.outputs.force_full_review_tier || 'false' }}" in wf, (
+		"codex-agent must consume the gate's force-full review-tier output"
+	)
+	assert "post_merge_linked_issues_json: ${{ steps.evaluate.outputs.post_merge_linked_issues_json }}" in wf, (
+		"Gate job must expose cached linked-issue labels for the post-merge validation dispatch"
+	)
+	assert "post_merge_validate_context_definitely_empty: ${{ steps.evaluate.outputs.post_merge_validate_context_definitely_empty }}" in wf, (
+		"Gate job must expose the definitely-empty post-merge validation guard output"
+	)
+	assert 'echo "post_merge_validate_context_definitely_empty=${POST_MERGE_VALIDATE_CONTEXT_DEFINITELY_EMPTY}"' in wf, (
+		"Gate evaluate step must emit the definitely-empty post-merge validation guard"
+	)
+	assert "POST_MERGE_PR_TEXT_JSON: ${{ needs.gate.outputs.post_merge_pr_text_json }}" in wf, (
+		"post-merge validate dispatch must consume cached PR text from gate outputs"
+	)
+	assert "POST_MERGE_LINKED_ISSUES_JSON: ${{ needs.gate.outputs.post_merge_linked_issues_json }}" in wf, (
+		"post-merge validate dispatch must consume cached linked-issue labels from gate outputs"
+	)
+	assert "needs.gate.outputs.post_merge_validate_context_definitely_empty != 'true'" in wf, (
+		"post-merge validate dispatch must skip only when the gate has already proven the context is definitely empty"
+	)
+
+
+def test_post_merge_validate_dispatch_warns_on_degraded_github_reads() -> None:
+	block = _step_block("Dispatch standalone validate for orchestrator short-circuit issues")
+	assert "Unable to refresh closingIssuesReferences for merged PR" in block, (
+		"post-merge validate dispatch must warn when linked-issue GraphQL retries exhaust"
+	)
+	assert "Unable to refresh PR title/body for merged PR" in block, (
+		"post-merge validate dispatch must warn when PR text retries exhaust"
+	)
+	assert "GitHub read retries were exhausted; leaving validation state unchanged." in block, (
+		"post-merge validate dispatch must not report an unknown linked-issue state as a clean no-op"
+	)
+	assert "PR body/title fallback helper was unavailable; leaving validation state unchanged." in block, (
+		"post-merge validate dispatch must not report an unavailable PR-text fallback helper as a clean no-op"
+	)
+	assert "Unable to read labels for issue #${issue_number} after retries" in block, (
+		"post-merge validate dispatch must warn when per-issue label hydration retries exhaust"
+	)
+
+
+def test_post_merge_validate_dispatch_inlines_retry_wrapper_when_helper_load_fails() -> None:
+	script = _step_run_script("Dispatch standalone validate for orchestrator short-circuit issues")
+	assert 'type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }' not in script, (
+		"post-merge validate dispatch must not fall back to a no-op gh_retry wrapper"
+	)
+	assert "if ! type gh_retry >/dev/null 2>&1; then" in script, (
+		"post-merge validate dispatch must define an inline retry wrapper when gh_helpers.sh is unavailable"
+	)
+	assert "local n=0 max=4 delay=2" in script, (
+		"post-merge validate dispatch inline retry wrapper must preserve the lightweight retry contract"
+	)
+
+
+def test_post_merge_force_poll_is_not_blocked_by_definitely_empty_validate_context() -> None:
+	job = _job_block("post-merge-force-poll")
+	assert "needs.gate.outputs.post_merge_dispatch == 'true' && needs.gate.outputs.claude_branch_review != 'true'" in job, (
+		"post-merge force poll must run whenever merged-PR handling is active for non-claude branches"
+	)
+	assert "post_merge_validate_context_definitely_empty" not in job, (
+		"post-merge force poll must stay independent of the definitely-empty validate-dispatch guard"
+	)
+
+
+def test_deterministic_skip_warns_when_closing_issue_resolution_is_unknown() -> None:
+	block = _step_block("Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge")
+	assert 'if issue_numbers="$(gh_retry gh api graphql \\' in block, (
+		"deterministic-skip-merge must retry closingIssuesReferences lookups"
+	)
+	assert "Unable to resolve closingIssuesReferences for PR #${PR_NUMBER} after retries" in block, (
+		"deterministic-skip-merge must warn when linked-issue resolution stays unknown"
+	)
+	assert "linked-issue state is unknown" in block, (
+		"deterministic-skip-merge must distinguish read failures from real empty linked-issue results"
+	)
+
+
+def test_reviewer_prompt_output_rules_still_forbid_scripts() -> None:
+	reviewers = _reviewers_text()
+	assert "OUTPUT RULES" in reviewers
+	assert "No scripts" in reviewers
+
+
+def test_reviewer_iteration_scope_first_iteration_keeps_full_diff_context() -> None:
+	result = _run_reviewer_scope_harness(
+		scope_mode="full",
+		last_run_changed_text="scripts/review_run_reviewers.sh\n",
+		ledger_text="",
+	)
+
+	assert result["scoped_active"] == "false"
+	assert "full change set of the pull request" in result["context_sections"]
+	assert "full PR patch; secondary context" in result["context_sections"]
+	assert "scoped reviewer focus derived from latest autofix changes" not in result["context_sections"]
+	assert "PR changed files:" in result["semble_query"]
+	assert "Scoped reviewer focus files:" not in result["semble_query"]
+
+
+def test_reviewer_iteration_scope_valid_artifacts_narrow_to_last_run_and_actionable_ledger_files() -> None:
+	ledger_text = "\n".join([
+		"issue-1\tPERSISTING\t1\tscripts/review_run_reviewers.sh:10\tCORRECTNESS & LOGIC\t[]",
+		"issue-2\tNEW\t0\ttests/test_review_autofix_review_pipeline_contract.py:20\tCORRECTNESS & LOGIC\t[]",
+		"issue-3\tFIXED\t0\tignored/fixed.py:30\tCORRECTNESS & LOGIC\t[]",
+		"issue-4\taccepted-residual\t0\tignored/residual.py:40\tCORRECTNESS & LOGIC\t[]",
+		"issue-5\tRESURGENT\t0\ttests/test_review_autofix_review_pipeline_contract.py:22\tCORRECTNESS & LOGIC\t[]",
+	]) + "\n"
+	result = _run_reviewer_scope_harness(
+		scope_mode="auto",
+		last_run_changed_text="scripts/review_run_reviewers.sh\n",
+		ledger_text=ledger_text,
+	)
+
+	assert result["scoped_active"] == "true"
+	assert result["scope_paths"].splitlines() == [
+		"scripts/review_run_reviewers.sh",
+		"tests/test_review_autofix_review_pipeline_contract.py",
+	]
+	assert "ignored/fixed.py" not in result["scope_paths"]
+	assert "ignored/residual.py" not in result["scope_paths"]
+	assert "Reviewer iteration scoping mode: scoped" in result["scope_summary"]
+	assert "Actionable statuses: NEW, PERSISTING, RESURGENT" in result["scope_summary"]
+	assert "ledger:PERSISTING" in result["scope_summary"]
+	assert "ledger:NEW, ledger:RESURGENT" in result["scope_summary"]
+	assert "scoped reviewer focus derived from latest autofix changes + still-actionable ledger rows" in result["context_sections"]
+	assert "current contents of the scoped reviewer focus files" in result["context_sections"]
+	assert "full change set of the pull request" not in result["context_sections"]
+	assert "full PR patch; secondary context" not in result["context_sections"]
+	assert "Scoped reviewer focus summary:" in result["semble_query"]
+	assert "Scoped reviewer focus files:" in result["semble_query"]
+	assert "PR changed files:" not in result["semble_query"]
+
+
+def test_reviewer_iteration_scope_fails_open_on_bad_scope_artifacts() -> None:
+	result = _run_reviewer_scope_harness(
+		scope_mode="auto",
+		last_run_changed_text="scripts/review_run_reviewers.sh\n",
+		ledger_text="",
+	)
+
+	assert result["scoped_active"] == "false"
+	assert "Reviewer iteration scoping mode: full-diff" in result["scope_summary"]
+	assert "Reason: empty LEDGER_STATUS_FILE" in result["scope_summary"]
+	assert result["scope_paths"] == ""
+	assert "full change set of the pull request" in result["context_sections"]
+	assert "full PR patch; secondary context" in result["context_sections"]
+	assert "scoped reviewer focus derived from latest autofix changes" not in result["context_sections"]
+	assert "PR changed files:" in result["semble_query"]
+	assert "Scoped reviewer focus files:" not in result["semble_query"]
+
+
+def test_reviewer_iteration_scope_uses_targeted_context_helper_and_scoped_semble_labels() -> None:
+	reviewers = _reviewers_text()
+	assert 'TARGETED_FILE_CONTEXT_SCRIPT="${TARGETED_FILE_CONTEXT_SCRIPT:-${SUPPORT_SCRIPTS_DIR:-scripts}/targeted_file_context.py}"' in reviewers
+	assert 'python3 "${TARGETED_FILE_CONTEXT_SCRIPT}"' in reviewers
+	assert '--paths-file "${REVIEWER_SCOPE_PATHS_FILE}"' in reviewers
+	assert 'Scoped reviewer focus summary:' in reviewers
+	assert 'Scoped reviewer focus files:' in reviewers
+	assert 'SCOPED REVIEWER FOCUS SUMMARY / FILE LIST / TARGETED FILE CONTEXT' in reviewers
+
+
+def test_reviewer_iteration_scope_prepare_path_accepts_root_level_actionable_files() -> None:
+	ledger_text = "\n".join([
+		"issue-1\tNEW\t0\tLICENSE:3\tCORRECTNESS & LOGIC\t[]",
+		"issue-2\tPERSISTING\t1\tgo.mod:2\tCORRECTNESS & LOGIC\t[]",
+		"issue-3\tRESURGENT\t0\t.gitignore:1\tCORRECTNESS & LOGIC\t[]",
+	]) + "\n"
+	result = _run_prepare_reviewer_scope_harness(
+		last_run_changed_text="scripts/review_run_reviewers.sh\n",
+		ledger_text=ledger_text,
+		workspace_files={
+			"scripts/review_run_reviewers.sh": "scoped shell target\n",
+			"LICENSE": "test license\n",
+			"go.mod": "module example.com/test\n",
+			".gitignore": "__pycache__/\n",
+		},
+	)
+
+	assert result["scoped_active"] == "true"
+	assert result["scope_paths"].splitlines() == [
+		"scripts/review_run_reviewers.sh",
+		"LICENSE",
+		"go.mod",
+		".gitignore",
+	]
+	assert "- LICENSE [ledger:NEW]" in result["scope_summary"]
+	assert "- go.mod [ledger:PERSISTING]" in result["scope_summary"]
+	assert "- .gitignore [ledger:RESURGENT]" in result["scope_summary"]
+	assert "=== TARGETED FILE CONTEXT ===" in result["scope_context"]
+	assert "--- FILE: LICENSE" in result["scope_context"]
+	assert "--- FILE: go.mod" in result["scope_context"]
+	assert "--- FILE: .gitignore" in result["scope_context"]
+
+
+def test_reviewer_iteration_scope_prepare_path_trims_trailing_parenthesis_from_root_level_actionable_files() -> None:
+	ledger_text = "\n".join([
+		"issue-1\tNEW\t0\tLICENSE):3\tCORRECTNESS & LOGIC\t[]",
+		"issue-2\tPERSISTING\t1\tgo.mod):2\tCORRECTNESS & LOGIC\t[]",
+		"issue-3\tRESURGENT\t0\t.gitignore):1\tCORRECTNESS & LOGIC\t[]",
+	]) + "\n"
+	result = _run_prepare_reviewer_scope_harness(
+		last_run_changed_text="scripts/review_run_reviewers.sh\n",
+		ledger_text=ledger_text,
+		workspace_files={
+			"scripts/review_run_reviewers.sh": "scoped shell target\n",
+			"LICENSE": "test license\n",
+			"go.mod": "module example.com/test\n",
+			".gitignore": "__pycache__/\n",
+		},
+	)
+
+	assert result["scoped_active"] == "true"
+	assert result["scope_paths"].splitlines() == [
+		"scripts/review_run_reviewers.sh",
+		"LICENSE",
+		"go.mod",
+		".gitignore",
+	]
+	assert "- LICENSE [ledger:NEW]" in result["scope_summary"]
+	assert "- go.mod [ledger:PERSISTING]" in result["scope_summary"]
+	assert "- .gitignore [ledger:RESURGENT]" in result["scope_summary"]
+	assert "--- FILE: LICENSE" in result["scope_context"]
+	assert "--- FILE: go.mod" in result["scope_context"]
+	assert "--- FILE: .gitignore" in result["scope_context"]
+
+
+def test_reviewer_iteration_scope_prepare_path_preserves_literal_root_level_trailing_punctuation() -> None:
+	ledger_text = "\n".join([
+		"issue-1\tNEW\t0\tREADME.:3\tCORRECTNESS & LOGIC\t[]",
+		"issue-2\tPERSISTING\t1\tgo.mod.:2\tCORRECTNESS & LOGIC\t[]",
+		"issue-3\tRESURGENT\t0\t.env.:1\tCORRECTNESS & LOGIC\t[]",
+	]) + "\n"
+	result = _run_prepare_reviewer_scope_harness(
+		last_run_changed_text="scripts/review_run_reviewers.sh\n",
+		ledger_text=ledger_text,
+		workspace_files={
+			"scripts/review_run_reviewers.sh": "scoped shell target\n",
+			"README.": "literal trailing dot\n",
+			"go.mod.": "module example.com/literal\n",
+			".env.": "TOKEN=test\n",
+		},
+	)
+
+	assert result["scoped_active"] == "true"
+	assert result["scope_paths"].splitlines() == [
+		"scripts/review_run_reviewers.sh",
+		"README.",
+		"go.mod.",
+		".env.",
+	]
+	assert "- README. [ledger:NEW]" in result["scope_summary"]
+	assert "- go.mod. [ledger:PERSISTING]" in result["scope_summary"]
+	assert "- .env. [ledger:RESURGENT]" in result["scope_summary"]
+	assert "--- FILE: README." in result["scope_context"]
+	assert "--- FILE: go.mod." in result["scope_context"]
+	assert "--- FILE: .env." in result["scope_context"]
+
+
+def test_reviewer_iteration_scope_prepare_path_preserves_hidden_directory_prefixes() -> None:
+	ledger_text = "issue-1\tNEW\t0\t.github/workflows/review_autofix.yml:3\tCORRECTNESS & LOGIC\t[]\n"
+	result = _run_prepare_reviewer_scope_harness(
+		last_run_changed_text=".github/workflows/review_autofix.yml\n.config/tool.toml\n",
+		ledger_text=ledger_text,
+		workspace_files={
+			".github/workflows/review_autofix.yml": "name: review\n",
+			".config/tool.toml": "enabled = true\n",
+		},
+	)
+
+	assert result["scoped_active"] == "true"
+	assert result["scope_paths"].splitlines() == [
+		".github/workflows/review_autofix.yml",
+		".config/tool.toml",
+	]
+	assert "- .github/workflows/review_autofix.yml [last-run-changed, ledger:NEW]" in result["scope_summary"]
+	assert "- .config/tool.toml [last-run-changed]" in result["scope_summary"]
+	assert "--- FILE: .github/workflows/review_autofix.yml" in result["scope_context"]
+	assert "--- FILE: .config/tool.toml" in result["scope_context"]
+
+
+def test_reviewer_iteration_scope_prepare_path_reports_missing_targeted_context_helper() -> None:
+	ledger_text = "issue-1\tNEW\t0\tscripts/review_run_reviewers.sh:3\tCORRECTNESS & LOGIC\t[]\n"
+	result = _run_prepare_reviewer_scope_harness(
+		last_run_changed_text="scripts/review_run_reviewers.sh\n",
+		ledger_text=ledger_text,
+		missing_targeted_script=True,
+	)
+
+	assert result["scoped_active"] == "false"
+	assert "Reviewer iteration scoping mode: full-diff" in result["scope_summary"]
+	assert "Reason: missing targeted_file_context.py" in result["scope_summary"]
+	assert result["scope_paths"] == ""
+	assert "full change set of the pull request" in result["context_sections"]
+
+
+def _run_dependency_install_step(
+	repo_files: dict[str, str],
+	*,
+	pytest_importable: bool,
+	extra_env: dict[str, str] | None = None,
+	pip_stub_body: str | None = None,
+	extra_stubs: dict[str, str] | None = None,
+) -> dict[str, str]:
+	"""Execute the container's dependency-install body against a synthetic repo.
+
+	`pip` and `python3` are stubbed on PATH so nothing is really installed:
+	the `python3` stub reports pytest importability from `pytest_importable`
+	and records every invocation.  Returns the step's stdout/stderr under
+	"output", the recorded stub invocations under "calls" and the wall time
+	in seconds under "elapsed". `extra_env` reaches the body the way the
+	helper's `--env` flags do inside the container; `pip_stub_body` replaces
+	the `pip` stub and `extra_stubs` adds further PATH stubs.
+	"""
+	workflow_step = _step_run_script("Install project dependencies (best-effort)")
+	assert 'review_untrusted_sandbox.sh" prepare' in workflow_step
+	helper = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	script = helper.split('--workdir /source "${image}" /bin/bash -c \'\n', 1)[1].split("\n\t\t' ||", 1)[0]
+	# The isolation helper creates the venv before this body executes; the
+	# unit stub supplies pip/python3 on PATH without installing packages.
+	script = script.replace('python3 -m venv --system-site-packages /source/.review-venv || exit 1', ':')
+	script = script.replace('export PATH=/source/.review-venv/bin:$PATH', ':')
+	with tempfile.TemporaryDirectory(prefix="autofix-dep-install-") as td:
+		root = Path(td)
+		repo = root / "repo"
+		bin_dir = root / "bin"
+		repo.mkdir()
+		bin_dir.mkdir()
+		log_path = root / "calls.log"
+		for name, body in repo_files.items():
+			(repo / name).parent.mkdir(parents=True, exist_ok=True)
+			(repo / name).write_text(body)
+		script_path = root / "step.sh"
+		script_path.write_text(script)
+		(bin_dir / "pip").write_text(
+			pip_stub_body
+			if pip_stub_body is not None
+			else '#!/bin/sh\necho "pip $*" >> "$STUB_CALL_LOG"\nexit 0\n'
+		)
+		(bin_dir / "python3").write_text(
+			"#!/bin/sh\n"
+			'echo "python3 $*" >> "$STUB_CALL_LOG"\n'
+			"case \"$*\" in\n"
+			"  *'import pytest'*) exit %d ;;\n"
+			"  *'-m pip install pytest'*) exit 1 ;;\n"
+			"esac\n"
+			"exit 0\n" % (0 if pytest_importable else 1)
+		)
+		for stub_name, stub_body in (extra_stubs or {}).items():
+			(bin_dir / stub_name).write_text(stub_body)
+		for stub in ("pip", "python3", *(extra_stubs or {})):
+			(bin_dir / stub).chmod(0o755)
+		env = _git_clean_env()
+		env.pop("REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED", None)
+		env.pop("REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS", None)
+		env.update(extra_env or {})
+		env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+		env["STUB_CALL_LOG"] = str(log_path)
+		started = time.monotonic()
+		completed = subprocess.run(
+			["bash", str(script_path)],
+			cwd=str(repo),
+			env=env,
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+		return {
+			"output": completed.stdout + completed.stderr,
+			"calls": log_path.read_text() if log_path.exists() else "",
+			"returncode": str(completed.returncode),
+			"elapsed": str(time.monotonic() - started),
+		}
+
+
+def test_dependency_install_bootstraps_pytest_when_pyproject_declares_it() -> None:
+	"""A tool-only pyproject must still leave pytest importable for the editor.
+
+	`pip install -e .` exits 0 on a pyproject.toml that carries no [project]
+	table (setuptools builds an UNKNOWN-0.0.0 package), so the pre-existing
+	`install_failed` guard never fires and pytest silently stays missing.
+	"""
+	result = _run_dependency_install_step(
+		{"pyproject.toml": "[tool.pytest.ini_options]\ntestpaths = [\"tests\"]\n"},
+		pytest_importable=False,
+	)
+	assert "-m pip install pytest" in result["calls"], result["calls"]
+	assert "--user --break-system-packages pytest" in result["calls"], result["calls"]
+	assert "pytest is not importable" in result["output"], result["output"]
+
+
+def test_dependency_install_warns_when_pytest_bootstrap_does_not_take() -> None:
+	result = _run_dependency_install_step(
+		{"pyproject.toml": "[tool.pytest.ini_options]\n"},
+		pytest_importable=False,
+	)
+	assert "-m pip install pytest" in result["calls"], result["calls"]
+	assert (
+		"::warning::pytest is declared by this repository but could not be installed"
+		in result["output"]
+	), result["output"]
+
+
+def test_dependency_install_bootstraps_pytest_for_nested_conftest() -> None:
+	result = _run_dependency_install_step(
+		{"tests/conftest.py": ""},
+		pytest_importable=False,
+	)
+	assert "-m pip install pytest" in result["calls"], result["calls"]
+
+
+def test_dependency_install_skips_pytest_bootstrap_when_already_importable() -> None:
+	result = _run_dependency_install_step(
+		{"pyproject.toml": "[tool.pytest.ini_options]\n"},
+		pytest_importable=True,
+	)
+	assert "-m pip install pytest" not in result["calls"], result["calls"]
+	assert "already importable" in result["output"], result["output"]
+
+
+def test_dependency_install_skips_pytest_bootstrap_for_non_pytest_repos() -> None:
+	result = _run_dependency_install_step(
+		{"pyproject.toml": "[tool.ruff]\nline-length = 100\n"},
+		pytest_importable=False,
+	)
+	assert "-m pip install pytest" not in result["calls"], result["calls"]
+
+
+# Issue #6835: a pip stub that stalls on `-r requirements.txt` stands in for a
+# registry hang through the dependency proxy.
+_STALLING_PIP_STUB = (
+	"#!/bin/sh\n"
+	'echo "pip $*" >> "$STUB_CALL_LOG"\n'
+	'case "$*" in *-r*) exec sleep 120 ;; esac\n'
+	"exit 0\n"
+)
+
+
+def test_dependency_install_stalled_optional_install_times_out_when_bounded() -> None:
+	"""A stalled optional install warns and continues instead of eating the
+	outer 900s container budget (whose expiry ends every pending install with
+	a warning) when the flag is on."""
+	result = _run_dependency_install_step(
+		{
+			"requirements.txt": "requests\n",
+			"pyproject.toml": "[tool.pytest.ini_options]\n",
+		},
+		pytest_importable=False,
+		extra_env={
+			"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": "true",
+			"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "3",
+		},
+		pip_stub_body=_STALLING_PIP_STUB,
+	)
+	assert result["returncode"] == "0", result["output"]
+	assert float(result["elapsed"]) < 30, result
+	assert "Review dependency install timed out (step=pip_requirements" in result["output"], result["output"]
+	assert "Some project dependencies could not be installed" in result["output"], result["output"]
+	assert (
+		"-m pip install pytest" in result["calls"]
+		or "skipped (step=pytest_bootstrap" in result["output"]
+	), result
+
+
+def test_dependency_install_unbounded_when_flag_disabled() -> None:
+	"""Off by default: only the existing per-command `timeout` (unchanged 600s
+	limit, no shared deadline) and the same stub calls as before."""
+	# Records the call, then runs the command like `timeout` would.
+	timeout_stub = (
+		'#!/bin/sh\necho "timeout $*" >> "$STUB_CALL_LOG"\n'
+		"shift 3\nexec \"$@\"\n"
+	)
+	repo = {"requirements.txt": "requests\n", "pyproject.toml": "[tool.pytest.ini_options]\n"}
+	for extra_env in ({}, {"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": "false"}):
+		result = _run_dependency_install_step(
+			repo,
+			pytest_importable=False,
+			extra_env=extra_env,
+			extra_stubs={"timeout": timeout_stub},
+		)
+		assert result["returncode"] == "0", result["output"]
+		assert (
+			"timeout --signal=TERM --kill-after=10s 600 pip install -r requirements.txt"
+			in result["calls"]
+		), result["calls"]
+		assert "(step=" not in result["output"], result["output"]
+		assert "dependency install budget" not in result["output"], result["output"]
+		assert "pip install -r requirements.txt" in result["calls"], result["calls"]
+		assert "python3 -m pip install pytest" in result["calls"], result["calls"]
+		assert "--user --break-system-packages pytest" in result["calls"], result["calls"]
+		assert "Review dependency install" not in result["output"], result["output"]
+
+
+def test_dependency_install_budget_exhausted_skips_remaining_steps() -> None:
+	result = _run_dependency_install_step(
+		{"requirements.txt": "requests\n", "pyproject.toml": "[tool.pytest.ini_options]\n"},
+		pytest_importable=False,
+		extra_env={
+			"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": "true",
+			"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "1",
+		},
+		pip_stub_body=_STALLING_PIP_STUB,
+	)
+	assert result["returncode"] == "0", result["output"]
+	assert "skipped (step=pytest_bootstrap" in result["output"], result["output"]
+	assert "-m pip install pytest" not in result["calls"], result["calls"]
+	assert "pytest is declared by this repository but could not be installed" in result["output"], result["output"]
+
+
+def test_review_sandbox_bounded_install_flag_contract() -> None:
+	helper = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	assert '"${REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED:-true}"' in helper
+	assert 'bounded_deps_budget="${REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS:-600}"' in helper
+	assert '--env "REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED=${bounded_deps_enabled}"' in helper
+	assert '--env "REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS=${bounded_deps_budget}"' in helper
+	# Isolation failures stay fatal.
+	assert "python3 -m venv --system-site-packages /source/.review-venv || exit 1" in helper
+	assert "timeout --signal=TERM --kill-after=10s 900s env -i" in helper
+	assert "\t\t*)\n\t\t\techo '::error::Review dependency isolation failed' >&2\n\t\t\texit 1\n" in helper
+	assert 'review_untrusted_workspace.py" refresh "${workspace}"' in helper
+	block = _step_block("Install project dependencies (best-effort)")
+	assert (
+		"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED: ${{ vars.REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED || 'true' }}"
+		in block
+	)
+	assert (
+		"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS: ${{ vars.REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS || '600' }}"
+		in block
+	)
+
+
+def test_review_sandbox_bounded_install_host_normalization() -> None:
+	helper = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	start = helper.index("\tbounded_deps_enabled=true\n")
+	end_marker = '\tbounded_deps_budget="$((10#${bounded_deps_budget}))"\n'
+	snippet = helper[start:helper.index(end_marker) + len(end_marker)]
+	snippet += 'printf "%s %s\\n" "${bounded_deps_enabled}" "${bounded_deps_budget}"\n'
+	# On by default since #6793; `false`/0/no/off turn it off and an
+	# unrecognised value turns it off with a warning.
+	cases = [
+		({}, "true 600", False),
+		({"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": ""}, "true 600", False),
+		({"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": "TRUE"}, "true 600", False),
+		({"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": "false"}, "false 600", False),
+		({"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": "OFF"}, "false 600", False),
+		({"REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED": "maybe"}, "false 600", True),
+		({"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "0300"}, "true 300", False),
+		({"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "abc"}, "true 600", True),
+		({"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "0"}, "true 600", True),
+		({"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "9999"}, "true 600", True),
+		({"REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS": "99999999999999999999"}, "true 600", True),
+	]
+	for extra, expected, warns in cases:
+		env = _git_clean_env()
+		env.pop("REVIEW_BOUNDED_DEPENDENCY_INSTALL_ENABLED", None)
+		env.pop("REVIEW_DEPENDENCY_INSTALL_BUDGET_SECS", None)
+		env.update(extra)
+		completed = subprocess.run(
+			["bash", "-c", "set -euo pipefail\n" + snippet],
+			env=env,
+			capture_output=True,
+			text=True,
+			check=False,
+		)
+		assert completed.returncode == 0, (extra, completed.stderr)
+		assert completed.stdout.strip() == expected, (extra, completed.stdout)
+		assert ("::warning::" in completed.stderr) == warns, (extra, completed.stderr)
+
+
+def test_deterministic_skip_merge_is_bound_to_gate_evaluated_head_sha() -> None:
+	# Issue #4109: the skip decision is taken on the head the gate fetched,
+	# but `gh pr merge` was issued by PR number only, so a push that landed
+	# between the gate and the merge (fun-token-multi-chain#498, #527) was
+	# what actually merged. Both skip-path merge calls must carry
+	# --match-head-commit with the gate's head SHA, and an unknown SHA must
+	# refuse the merge instead of merging unbound.
+	wf = _workflow_text()
+	assert "head_sha: ${{ steps.evaluate.outputs.head_sha }}" in wf, (
+		"Gate job must expose head_sha output for deterministic-skip-merge head binding"
+	)
+	assert 'echo "head_sha=${pr_head_sha_gate}" >> "${GITHUB_OUTPUT}"' in wf, (
+		"Gate evaluate step must emit the authenticated PR-metadata head SHA to GITHUB_OUTPUT"
+	)
+	job = _job_block("deterministic-skip-merge")
+	assert "PR_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}" in job, (
+		"deterministic-skip-merge must consume the gate's head_sha output"
+	)
+	block = _step_block("Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge")
+	assert (
+		'gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${PR_HEAD_SHA}"'
+		in block
+	), "deterministic-skip squash merge must be bound with --match-head-commit"
+	assert (
+		'gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --merge --auto --match-head-commit "${PR_HEAD_SHA}"'
+		in block
+	), "deterministic-skip forward-merge merge-commit path must be bound with --match-head-commit"
+	unbound = re.findall(r'gh pr merge "\$\{PR_NUMBER\}"[^\n]*--auto(?![^\n]*--match-head-commit)', block)
+	assert not unbound, f"unbound gh pr merge call(s) remain on the deterministic-skip path: {unbound}"
+	assert '[[ "${PR_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]' in block, (
+		"deterministic-skip-merge must validate the gate head SHA before merging"
+	)
+	assert 'auto_merge_summary="REFUSED (gate-observed head SHA unavailable or malformed)"' in block, (
+		"deterministic-skip-merge must refuse (fail closed) when the gate head SHA is unknown"
+	)
+	# The refusal must be evaluated before either merge call.
+	assert block.find('=~ ^[0-9a-f]{40}$') < block.find("gh_retry gh pr merge"), (
+		"head-SHA validation must precede the gh pr merge calls"
+	)
+	assert "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=" in block, (
+		"deterministic-skip-merge must emit the AUTOFIX_DET_SKIP_MERGE_BOUND audit line"
+	)
+	ready_guard_pos = block.find('if [ "${auto_merge_ready_labels_allowed}" != "true" ]; then')
+	ready_label_pos = block.find('ensure_label_exists "ai:ready-to-merge"')
+	assert ready_guard_pos > block.rfind("gh_retry gh pr merge"), (
+		"deterministic-skip linked-issue advancement must follow the bound merge attempts"
+	)
+	assert ready_label_pos > ready_guard_pos, (
+		"deterministic-skip linked-issue advancement must be gated on successful bound enrolment"
+	)
+	assert re.search(
+		r'else\n\s+if deterministic_skip_head_is_current; then\n\s+auto_merge_ready_labels_allowed="true"',
+		block,
+	), "configured forward-merge manual mode must still advance reviewed linked issues"
+
+
+def test_codex_agent_auto_merge_helper_is_bound_to_reviewed_head_sha() -> None:
+	# Same binding on the reviewed path: the helper must merge only the head
+	# the reviewer panel / editor ran against (INITIAL_HEAD_SHA), and must
+	# refuse when that SHA is unavailable.
+	block = _step_block("Enable auto-merge on PR")
+	assert "INITIAL_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}" in block, (
+		"Enable auto-merge on PR must bind to the exact checked-out head the reviewers inspected"
+	)
+	assert "needs.gate.outputs.head_sha" not in block, (
+		"reviewed-path merge must not fall back to a later live gate SHA"
+	)
+	checkout_block = _step_block("Checkout PR head branch")
+	checked_out_sha_capture = 'INITIAL_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"'
+	assert checkout_block.find(checked_out_sha_capture) < checkout_block.find('echo "CAN_PUSH=false"'), (
+		"read-only and fork paths must capture their checked-out reviewed SHA before exiting"
+	)
+	assert 'INITIAL_HEAD_SHA="$(jq -r \'.head.sha' not in checkout_block, (
+		"read-only and fork paths must not authorize a later live PR head"
+	)
+	workflow_text = _workflow_text()
+	assert workflow_text.find("      - name: Enable auto-merge on PR") < workflow_text.find(
+		"      - name: Mark linked issues ready to merge"
+	), "reviewed-path bound merge enrolment must run before linked issues advance"
+	ready_label_block = _step_block("Mark linked issues ready to merge")
+	assert "env.AUTO_MERGE_READY_LABELS_ALLOWED == 'true'" in ready_label_block, (
+		"linked issues must not advance when head-bound auto-merge is refused or fails"
+	)
+	helper_text = _auto_merge_helper_text()
+	assert (
+		'gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --squash --auto --match-head-commit "${INITIAL_HEAD_SHA}"'
+		in helper_text
+	), "helper squash merge must be bound with --match-head-commit"
+	assert (
+		'gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --merge --auto --match-head-commit "${INITIAL_HEAD_SHA}"'
+		in helper_text
+	), "helper forward-merge merge-commit path must be bound with --match-head-commit"
+	unbound = re.findall(r'gh pr merge "\$\{PR_NUMBER\}"[^\n]*--auto(?![^\n]*--match-head-commit)', helper_text)
+	assert not unbound, f"unbound gh pr merge call(s) remain in review_enable_auto_merge.sh: {unbound}"
+	assert '[[ "${INITIAL_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]' in helper_text, (
+		"helper must validate INITIAL_HEAD_SHA before any merge call"
+	)
+	assert helper_text.find('=~ ^[0-9a-f]{40}$') < helper_text.find("gh_retry gh pr merge"), (
+		"helper head-SHA validation must precede the gh pr merge calls"
+	)
+	assert 'record_auto_merge_ready_labels_allowed "false"' in helper_text, (
+		"helper must fail closed before any refusal or merge failure"
+	)
+	assert 'record_auto_merge_ready_labels_allowed "true"' in helper_text, (
+		"helper must expose successful bound enrolment to the linked-issue step"
+	)
+	assert re.search(
+		r'else\n\s+record_auto_merge_ready_labels_allowed "true"\n\s+echo "PR #\$\{PR_NUMBER\} head ref .*FORWARD_MERGE_FALLBACK_AUTO_MERGE',
+		helper_text,
+	), "configured forward-merge manual mode must permit linked-issue advancement"
+
+
+def test_review_blocked_judge_merges_are_bound_to_judged_head_sha() -> None:
+	judge_text = _rb_judge_text()
+	assert 'RB_JUDGED_HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || echo "")"' in judge_text, (
+		"review-blocked judge must derive merge authorization from its checked-out code snapshot"
+	)
+	assert 'printf \'Evaluated head SHA: %s\\n\' "${RB_JUDGED_HEAD_SHA:-unknown}"' in judge_text, (
+		"review-blocked judge prompt must identify the exact head its decision can authorize"
+	)
+	assert '[[ "${RB_JUDGED_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]' in judge_text, (
+		"review-blocked judge must refuse merge actions without a full evaluated head SHA"
+	)
+	for merge_mode in ('"${RB_MERGE_METHOD_FLAG:---squash}" --auto', '"${RB_MERGE_METHOD_FLAG:---squash}"'):
+		expected_call = (
+			'gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" '
+			f'{merge_mode} --match-head-commit "${{RB_JUDGED_HEAD_SHA}}"'
+		)
+		# The transient-retry helper (#8524) repeats each call once before the
+		# case block; it must stay head-bound too.
+		helper_end = judge_text.index("# END rb-judge merge error capture (#7659)")
+		assert judge_text[helper_end:].count(expected_call) == 2, (
+			f"both review-blocked judge merge actions must bind {merge_mode} to RB_JUDGED_HEAD_SHA"
+		)
+		assert judge_text[:helper_end].count(expected_call) == 1, (
+			f"the transient merge retry must bind {merge_mode} to RB_JUDGED_HEAD_SHA"
+		)
+	judge_merge_region = judge_text[judge_text.index("  merge)\n") : judge_text.index("  merge_with_followup)\n")]
+	judge_merge_commands = [line for line in judge_merge_region.splitlines() if 'gh pr merge "${PR_NUMBER}"' in line]
+	assert len(judge_merge_commands) == 4, judge_merge_commands
+	assert all("--match-head-commit" in line for line in judge_merge_commands), (
+		f"unbound review-blocked judge merge call(s) remain: {judge_merge_commands}"
+	)
+	assert '_match_head_arg=(--match-head-commit "${RB_JUDGED_HEAD_SHA}")' in judge_text, (
+		"merge_with_followup must bind to the checked-out judged head, not a later live PR head"
+	)
+	assert '_pr_checks_completed "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}"' in judge_text, (
+		"merge_with_followup must validate checks for the same judged head it can merge"
+	)
+	assert judge_text.count('RB_MERGE_READY_LABEL_ALLOWED="false"') == 2, (
+		"both judge merge actions must withhold ready labels until a bound merge request succeeds"
+	)
+	assert 'elif [ "${PR_ALREADY_MERGED:-false}" = "true" ]; then\n      RB_MERGE_READY_LABEL_ALLOWED="true"' in judge_text, (
+		"an already-merged PR must still advance its linked issues without another merge request"
+	)
+
+
+def _run_auto_merge_helper_with_fake_gh(
+	tmp: Path,
+	*,
+	expected_head_sha: str,
+	head_ref: str = "ai/issue-42",
+	forward_merge_auto_setting: str = "true",
+) -> tuple[subprocess.CompletedProcess[str], list[list[str]]]:
+	"""Run scripts/review_enable_auto_merge.sh with a fake ``gh`` on PATH.
+
+	The fake serves the label and PR-metadata reads the helper makes and
+	records every invocation to ``gh_calls.jsonl`` so the test can assert
+	the exact ``gh pr merge`` argv (or its absence).
+	"""
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir(parents=True, exist_ok=True)
+	calls_path = tmp / "gh_calls.jsonl"
+	github_output_path = tmp / "github_output.txt"
+	fake_gh = bin_dir / "gh"
+	fake_gh.write_text(
+		textwrap.dedent(
+			f"""\
+			#!/usr/bin/env python3
+			import json, sys
+			args = sys.argv[1:]
+			with open({str(calls_path)!r}, "a", encoding="utf-8") as fh:
+			    fh.write(json.dumps(args) + "\\n")
+			if args[:1] == ["api"]:
+			    path = next(a for a in args[1:] if not a.startswith("-"))
+			    if "/labels" in path:
+			        sys.stdout.write("")
+			        sys.exit(0)
+			    if path.endswith("/pulls/42"):
+			        sys.stdout.write(json.dumps({{"head": {{"ref": {head_ref!r}, "sha": {expected_head_sha!r}}}, "base": {{"ref": "main"}}, "body": ""}}))
+			        sys.exit(0)
+			    # Merge-base freshness gate: the base did not move.
+			    if "/compare/" in path:
+			        sys.stdout.write(json.dumps({{"ahead_by": 0, "files": []}}))
+			        sys.exit(0)
+			    # Required-checks wait: the reviewed head's checks are green.
+			    if "/check-runs" in path:
+			        sys.stdout.write(json.dumps([{{"check_runs": [{{"name": "CI", "status": "completed", "conclusion": "success"}}]}}]))
+			        sys.exit(0)
+			    if path.endswith("/protection"):
+			        sys.stderr.write("Branch not protected\\n")
+			        sys.exit(1)
+			    sys.stderr.write("unhandled gh api path: %r\\n" % (path,))
+			    sys.exit(1)
+			if args[:2] == ["pr", "merge"]:
+			    sys.exit(1 if args[-1] == "f" * 40 else 0)
+			sys.stderr.write("unhandled gh invocation: %r\\n" % (args,))
+			sys.exit(1)
+			"""
+		),
+		encoding="utf-8",
+	)
+	fake_gh.chmod(0o755)
+	env = dict(os.environ)
+	env.update(
+		{
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"GITHUB_REPOSITORY": "test-owner/test-repo",
+			"PR_NUMBER": "42",
+			"ENABLE_AUTO_MERGE": "true",
+			"FORWARD_MERGE_FALLBACK_AUTO_MERGE": forward_merge_auto_setting,
+			"ORCH_INTEGRATION_BRANCH_PATTERN": "^orchestrator/project-",
+			"INITIAL_HEAD_SHA": expected_head_sha,
+			"GH_TOKEN": "fake-token",
+			"GITHUB_ENV": str(github_output_path),
+			"GH_RETRY_MAX_ATTEMPTS": "1",
+		}
+	)
+	proc = subprocess.run(
+		["bash", str(AUTO_MERGE_HELPER)],
+		cwd=str(tmp),
+		env=env,
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+	calls: list[list[str]] = []
+	if calls_path.exists():
+		calls = [json.loads(line) for line in calls_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+	return proc, calls
+
+
+def test_auto_merge_helper_passes_match_head_commit_and_refuses_unknown_sha() -> None:
+	reviewed_sha = "5e5f148079b569f2fb248b4cb99eca23883ad452"
+	with tempfile.TemporaryDirectory() as tmp_str:
+		proc, calls = _run_auto_merge_helper_with_fake_gh(Path(tmp_str), expected_head_sha=reviewed_sha)
+		assert proc.returncode == 0, proc.stderr
+		merge_calls = [c for c in calls if c[:2] == ["pr", "merge"]]
+		assert merge_calls == [
+			["pr", "merge", "42", "--repo", "test-owner/test-repo", "--squash", "--auto", "--match-head-commit", reviewed_sha]
+		], merge_calls
+		assert f"AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=42 head_sha={reviewed_sha} action=squash" in proc.stdout, proc.stdout
+		assert (Path(tmp_str) / "github_output.txt").read_text(encoding="utf-8").splitlines() == [
+			"AUTO_MERGE_READY_LABELS_ALLOWED=false",
+			"AUTO_MERGE_READY_LABELS_ALLOWED=true",
+		]
+
+	# The explicit forward-merge opt-out is manual-merge mode, not a review refusal.
+	with tempfile.TemporaryDirectory() as tmp_str:
+		proc, calls = _run_auto_merge_helper_with_fake_gh(
+			Path(tmp_str),
+			expected_head_sha=reviewed_sha,
+			head_ref="auto/forward-merge-stable-20260916",
+			forward_merge_auto_setting="false",
+		)
+		assert proc.returncode == 0, proc.stderr
+		assert not [c for c in calls if c[:2] == ["pr", "merge"]], calls
+		assert (Path(tmp_str) / "github_output.txt").read_text(encoding="utf-8").splitlines() == [
+			"AUTO_MERGE_READY_LABELS_ALLOWED=false",
+			"AUTO_MERGE_READY_LABELS_ALLOWED=true",
+		]
+
+	# Forward-merge fallback PRs keep the merge-commit path, now head-bound.
+	with tempfile.TemporaryDirectory() as tmp_str:
+		proc, calls = _run_auto_merge_helper_with_fake_gh(
+			Path(tmp_str), expected_head_sha=reviewed_sha, head_ref="auto/forward-merge-stable-20260916"
+		)
+		assert proc.returncode == 0, proc.stderr
+		merge_calls = [c for c in calls if c[:2] == ["pr", "merge"]]
+		assert merge_calls == [
+			["pr", "merge", "42", "--repo", "test-owner/test-repo", "--merge", "--auto", "--match-head-commit", reviewed_sha]
+		], merge_calls
+		assert (Path(tmp_str) / "github_output.txt").read_text(encoding="utf-8").splitlines() == [
+			"AUTO_MERGE_READY_LABELS_ALLOWED=false",
+			"AUTO_MERGE_READY_LABELS_ALLOWED=true",
+		]
+
+	# A moved-head rejection leaves the label permission false.
+	with tempfile.TemporaryDirectory() as tmp_str:
+		rejected_sha = "f" * 40
+		proc, calls = _run_auto_merge_helper_with_fake_gh(Path(tmp_str), expected_head_sha=rejected_sha)
+		assert proc.returncode == 0, proc.stderr
+		assert [c for c in calls if c[:2] == ["pr", "merge"]], calls
+		assert "Could not enable auto-merge" in proc.stdout, proc.stdout
+		assert (Path(tmp_str) / "github_output.txt").read_text(encoding="utf-8").splitlines() == [
+			"AUTO_MERGE_READY_LABELS_ALLOWED=false"
+		]
+
+	# Unknown / malformed SHA: refuse without calling gh pr merge at all.
+	for bad in ("", "5e5f1480", "not-a-sha"):
+		with tempfile.TemporaryDirectory() as tmp_str:
+			proc, calls = _run_auto_merge_helper_with_fake_gh(Path(tmp_str), expected_head_sha=bad)
+			assert proc.returncode == 0, proc.stderr
+			assert not [c for c in calls if c[:2] == ["pr", "merge"]], calls
+			assert "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=42" in proc.stdout and "action=refuse reason=head_sha_unavailable" in proc.stdout, proc.stdout
+			assert "::warning::Reviewed head SHA is unavailable or malformed" in proc.stdout, proc.stdout
+			assert (Path(tmp_str) / "github_output.txt").read_text(encoding="utf-8").splitlines() == [
+				"AUTO_MERGE_READY_LABELS_ALLOWED=false"
+			]
+
+
+def test_identical_failure_fingerprint_cap_gate_wiring() -> None:
+	gate = _step_block("Evaluate review gate")
+	assert "REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED: ${{ vars.REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED || 'true' }}" in gate
+	assert "REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL: ${{ vars.REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL || '3' }}" in gate
+	assert '[ "${REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED:-true}" != "false" ]' in gate
+	assert "''|*[!0-9]*|0) FINGERPRINT_CAP_MAX=3 ;;" in gate
+	# One comments call serves the terminal same-head skip and the cap (§15);
+	# its filter keeps both marker families.
+	assert gate.count('gh api --paginate -X GET "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments"') == 1
+	assert gate.count("gh api user --jq") == 1
+	assert 'contains("<!-- REVIEW_AUTOFIX_PARTIAL_V1 -->")' in gate
+	assert 'contains("review-autofix-failure")' in gate
+	assert gate.count("gate_fetch_marker_comments\n") >= 2
+	assert "autofix-identical-failure-count" in gate
+	assert '--author-login "${gate_marker_author_login}"' in gate
+	# The cap runs after the terminal skip and before the deterministic skip,
+	# and never swallows a force_rb_judge dispatch.
+	terminal = gate.index('SKIP_REASON="terminal_same_head"')
+	cap = gate.index('SKIP_REASON="fingerprint_cap"')
+	deterministic = gate.index("# Deterministic pre-review skip (last gate check):")
+	assert terminal < cap < deterministic
+	assert 'if [ "${FORCE_RB_JUDGE:-false}" = "true" ]; then' in gate
+	for output in ("fingerprint_cap", "fingerprint_cap_fp", "fingerprint_cap_reason", "fingerprint_cap_count", "fingerprint_cap_max", "fingerprint_cap_already_applied", "fingerprint_cap_non_retryable", "fingerprint_cap_marker_author_login"):
+		assert f'echo "{output}=${{' in gate, output
+		assert f"{output}: ${{{{ steps.evaluate.outputs.{output} }}}}" in _job_block("gate"), output
+	gate_job = _job_block("gate")
+	block = _step_block("Checkout fingerprint cap helper")
+	assert "continue-on-error: true" in block
+	assert "sparse-checkout: scripts/workflow_failure_heal.py" in block
+	assert "ref: ${{ steps.resolve_support.outputs.review_support_sha }}" in block
+	assert "Checkout fingerprint cap helper main snapshot" not in gate_job
+	assert gate_job.index("- name: Resolve trusted review support commit") < gate_job.index("- name: Checkout fingerprint cap helper")
+	assert gate_job.index("- name: Verify fingerprint cap support identity") < gate_job.index("- name: Evaluate review gate")
+	assert 'FINGERPRINT_CAP_SUPPORT_VERIFIED:-false' in gate_job
+
+
+def test_fingerprint_cap_support_sha_rearm_wiring() -> None:
+	"""#6911: the verified support SHA reaches the cap decision and every marker."""
+	verify = _step_block("Verify fingerprint cap support identity")
+	assert 'echo "FINGERPRINT_CAP_SUPPORT_SHA=${WORKFLOW_SHA}" >> "$GITHUB_ENV"' in verify
+	assert verify.index("FINGERPRINT_CAP_SUPPORT_VERIFIED=true") < verify.index("FINGERPRINT_CAP_SUPPORT_SHA=${WORKFLOW_SHA}")
+	gate = _step_block("Evaluate review gate")
+	assert "if grep -q 'current-support-sha' \"${fingerprint_cap_helper}\"; then" in gate
+	assert 'fingerprint_cap_extra_args=(--current-support-sha "${FINGERPRINT_CAP_SUPPORT_SHA:-}")' in gate
+	assert '"${fingerprint_cap_extra_args[@]}"' in gate
+	assert '[[ "${FINGERPRINT_CAP_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]]' in gate
+	rearm = gate.index("AUTOFIX_FINGERPRINT_CAP_REARMED pr=${PR_NUMBER}")
+	assert rearm < gate.index('SKIP_REASON="fingerprint_cap"')
+	assert "prior_support=${fingerprint_cap_prior_support:-none} support=${FINGERPRINT_CAP_SUPPORT_SHA}" in gate
+	assert """awk -F= '$1 == "prior_support" { print $2 }'""" in gate
+	agent = _job_block("codex-agent")
+	assert "AUTOFIX_FAILURE_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}" in agent
+	cap_job = _job_block("fingerprint-cap-block")
+	assert "REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}" in cap_job
+	assert 'if [[ "${REVIEW_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then' in cap_job
+	assert "count=${FINGERPRINT_CAP_COUNT}${cap_support:+ support=${cap_support}} -->" in cap_job
+	assert "review_support_sha: ${{ steps.resolve_support.outputs.review_support_sha }}" in _job_block("gate")
+
+
+def test_identical_failure_fingerprint_cap_block_job_wiring() -> None:
+	job = _job_block("fingerprint-cap-block")
+	assert "needs: gate" in job
+	assert "group: fingerprint-cap-${{ github.repository }}-${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || github.run_id }}" in job
+	assert "cancel-in-progress: false" in job
+	assert "if: ${{ needs.gate.outputs.fingerprint_cap == 'true' && needs.gate.outputs.fingerprint_cap_already_applied != 'true' }}" in job
+	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in job
+	assert "PR_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}" in job
+	assert "FINGERPRINT_CAP_ALREADY_APPLIED: ${{ needs.gate.outputs.fingerprint_cap_already_applied }}" in job
+	assert "FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN: ${{ needs.gate.outputs.fingerprint_cap_marker_author_login }}" in job
+	assert 'fresh_cap_comments_file="${work_dir}/fresh_comments.json"' in job
+	assert "reason=fresh_cap_marker_lookup_failed" in job
+	# Idempotent: a cap marker already on the head ends the job before any write.
+	already = job.index("AUTOFIX_FINGERPRINT_CAP_ALREADY_APPLIED pr=")
+	assert already < job.index('gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"')
+	assert already < job.index('ensure_label_exists "ai:review-blocked"')
+	# One PR read; linked issues via the strict title/body fallback, else the PR.
+	assert job.count('gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"') == 1
+	assert "extract_repo_scoped_issue_refs_from_text" in job
+	assert 'set_issue_phase_label_resilient "${issue_number}" "ai:review-blocked" "${REPOSITORY}"' in job
+	assert '"repos/${REPOSITORY}/issues/${PR_NUMBER}/labels" -f "labels[]=ai:review-blocked"' in job
+	assert "**AI review/autofix stopped: ${cap_title}**" in job
+	assert 'cap_title="identical failure repeated"' in job and 'cap_title="non-retryable failure"' in job
+	assert "FINGERPRINT_CAP_NON_RETRYABLE: ${{ needs.gate.outputs.fingerprint_cap_non_retryable }}" in job
+	# The quoted First error comes from the comments already fetched (§15).
+	assert job.count('"${fresh_cap_comments_file}" 2>/dev/null || true)"') == 1
+	assert "<!-- review-autofix-failure-cap:v1 head=${PR_HEAD_SHA} fp=${FINGERPRINT_CAP_FP}" in job
+	assert 'AUTOFIX_FAILURE_REASON="identical_failure_cap"' in job
+	assert 'WORKFLOW_HEAL_AUTOFIX_FAILURE_STREAK="1"' in job
+	# The failed runs' markers ride in the comments fetched above, so the heal
+	# intake reads their logs instead of this gate-stopped run's (§15: no new call).
+	assert 'PR_ISSUE_COMMENTS_FILE="${fresh_cap_comments_file}"' in job
+	assert 'AUTOFIX_FAILURE_MARKER_AUTHOR="${FINGERPRINT_CAP_MARKER_AUTHOR_LOGIN}"' in job
+	# DEBUG: the ai:review-blocked label hands the PR to the judge, which pages.
+	assert 'tg_send_msg "${MSG}" "DEBUG"' in job
+	assert "head_moved" in job
+
+
+def test_identical_failure_fingerprint_marker_on_every_failure_comment() -> None:
+	# The no-output, changes-lost and no-op-suspicious comments post before
+	# "Assemble failure evidence" and compute the marker inline.
+	inline_steps = {
+		"Post editor summary comment": 1,
+		"Telegram editor-changes-lost warning": 1,
+		"Telegram editor-noop-suspicious warning": 3,
+	}
+	for name, posts in inline_steps.items():
+		block = _step_block(name)
+		assert "autofix-failure-fingerprint" in block, name
+		assert '--head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}"' in block, name
+		assert block.count('BODY+="${AUTOFIX_FAILURE_MARKER_SUFFIX}"') == posts, name
+	post_summary = _step_block("Post editor summary comment")
+	assert '--failure-reason "${autofix_empty_failure_reason}"' in post_summary
+	# The reviewer step failing (the editor never ran) names the failure
+	# reviewers_failed; otherwise it stays editor_empty_noop.
+	assert 'autofix_empty_failure_reason="editor_empty_noop"' in post_summary
+	assert 'REVIEWERS_STEP_OUTCOME: ${{ steps.reviewers.outcome }}' in post_summary
+	assert 'if [ "${REVIEWERS_STEP_OUTCOME:-}" = "failure" ]; then' in post_summary
+	assert 'autofix_empty_failure_reason="reviewers_failed"' in post_summary
+	assert 'echo "AUTOFIX_REVIEWERS_FAILED=true" >> "$GITHUB_ENV"' in post_summary
+	assert "reviewer-failure-evidence" in post_summary
+	# The retry-friendly no-output flow and its streak heading are unchanged.
+	assert "**AI review/autofix produced no output — will retry**" in post_summary
+	assert 'echo "AUTOFIX_EDITOR_EMPTY_NOOP=true" >> "$GITHUB_ENV"' in post_summary
+	failure_comment = _step_block("Post review-blocked comment on PR (workflow failure)")
+	assert 'BODY+=$\'\\n\\n\'"${AUTOFIX_FAILURE_MARKER}"' in failure_comment
+	# Every call site fingerprints the same evidence files, so one run's
+	# comments carry one fingerprint.
+	evidence = _step_block("Assemble failure evidence")
+	files = (
+		'--evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt"',
+		'--evidence-file "${RUNTIME_DIR:-}/sandbox_prepare_failure_evidence.txt"',
+		'--evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt"',
+		'--evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt"',
+		'--evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt"',
+	)
+	for name in (*inline_steps, "Assemble failure evidence"):
+		block = _step_block(name)
+		for line in files:
+			assert line in block, (name, line)
+	assert "if: always() && (failure() || env.EDITOR_NOOP_SUSPICIOUS == 'true' || env.EDITOR_CHANGES_LOST == 'true')" in evidence
+	for exported in ("AUTOFIX_FAILURE_FP=", "AUTOFIX_FAILURE_REASON=", "AUTOFIX_FAILURE_MARKER="):
+		assert exported in evidence
+	assert "AUTOFIX_FINGERPRINT pr=${PR_NUMBER:-} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} degraded=1 reason=helper_missing" in evidence
+	text = _workflow_text()
+	assert text.index("- name: Assemble failure evidence") < text.index("- name: Mark linked issues review-blocked (workflow failure)")
+	assert text.index("- name: Assemble failure evidence") < text.index("- name: Post review-blocked comment on PR (workflow failure)")
+	assert "AUTOFIX_FAILURE_HEAD_SHA: ${{ needs.gate.outputs.head_sha }}" in _job_block("codex-agent")
+	assert 'echo "AUTOFIX_FAILURE_HEAL_PY=${AUTOFIX_FAILURE_HEAL_PY}" >> "$GITHUB_ENV"' in text
+
+
+def test_identical_failure_fingerprint_stage_stderr_is_captured() -> None:
+	editor = _step_block("Apply fixes with editor model")
+	tee = '2> >(tee -a "${RUNTIME_DIR}/editor_stage_stderr.txt" >&2)'
+	assert editor.count('bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh" ' + tee) == 2
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_collect_pr_metadata.sh" 2> >(tee -a "${RUNTIME_DIR}/collect_metadata_stderr.txt" >&2)' in _step_block("Collect PR metadata")
+
+
+
+_EDITOR_GUARD_RE = re.compile(r':\s+"\$\{([A-Za-z_][A-Za-z0-9_]*):\?')
+_EDITOR_PREFLIGHT_VAR_RE = re.compile(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*$")
+
+
+def _code_lines(text: str) -> list[str]:
+	return [line for line in text.splitlines() if not line.lstrip().startswith("#")]
+
+
+def _editor_preflight_body(text: str) -> str:
+	lines = text.splitlines()
+	start = lines.index("review_apply_fixes_preflight()")
+	end = next(idx for idx in range(start + 1, len(lines)) if lines[idx] == "}")
+	return "\n".join(lines[start:end + 1])
+
+
+def _editor_preflight_guard_gaps(text: str) -> set[str]:
+	"""Guarded names (`: "${VAR:?…}"`, comments ignored) missing from the preflight list."""
+	guarded = {m.group(1) for line in _code_lines(text) for m in _EDITOR_GUARD_RE.finditer(line)}
+	body = _editor_preflight_body(text)
+	array = body[body.index("preflight_required_vars=("):]
+	array = array[:array.index("\n\t)")]
+	listed = {m.group(1) for line in _code_lines(array) if (m := _EDITOR_PREFLIGHT_VAR_RE.match(line))}
+	return guarded - listed
+
+
+def test_editor_preflight_mode_covers_every_guard() -> None:
+	text = APPLY_FIXES.read_text(encoding="utf-8")
+	assert re.search(r"^# supports: --preflight$", text, re.MULTILINE)
+	assert 'if [ "${1:-}" = "--preflight" ]; then\n\treview_apply_fixes_preflight\n\texit $?\nfi' in text
+	# The dispatch sits after the helper sourcing and before any top-level
+	# work (prompt files, reviewer bundles) the editor run does.
+	dispatch = text.index('if [ "${1:-}" = "--preflight" ]; then')
+	assert text.index('source "${OPENCODE_HELPERS_PATH}"') < dispatch < text.index('REVIEWER_MANIFEST_FILE="${RUNTIME_DIR}/reviewer_manifest.txt"')
+	assert _editor_preflight_guard_gaps(text) == set()
+	# The rule rejects a guard added without its preflight entry, and a
+	# commented-out guard or the comment text itself is not a guard.
+	guarded = text.replace("CODEX_STALL_GUARD_HELPER=", ': "${OPENROUTER_API_KEY:?OPENROUTER_API_KEY is required}"\nCODEX_STALL_GUARD_HELPER=', 1)
+	assert _editor_preflight_guard_gaps(guarded) == {"OPENROUTER_API_KEY"}
+	covered = guarded.replace("\t\t# same change.\n\t)", "\t\t# same change.\n\t\tOPENROUTER_API_KEY\n\t)", 1)
+	assert covered != guarded
+	assert _editor_preflight_guard_gaps(covered) == set()
+
+
+def test_editor_preflight_mode_reports_each_check_and_fails_fast() -> None:
+	with tempfile.TemporaryDirectory(prefix="editor-preflight-") as td:
+		tmp = Path(td)
+		bin_dir = tmp / "bin"
+		bin_dir.mkdir()
+		runtime_dir = tmp / "runtime"
+		runtime_dir.mkdir()
+		(bin_dir / "opencode").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+		(bin_dir / "opencode").chmod(0o755)
+		date_executable = shutil.which("date")
+		dirname_executable = shutil.which("dirname")
+		bash_executable = shutil.which("bash")
+		assert date_executable and dirname_executable and bash_executable
+		(bin_dir / "date").symlink_to(date_executable)
+		(bin_dir / "dirname").symlink_to(dirname_executable)
+		env = os.environ.copy()
+		env.update({
+			"PATH": f"{bin_dir}:{env.get('PATH', '')}",
+			"RUNTIME_DIR": str(runtime_dir),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+		})
+		env.pop("CODEX_HELPERS_PATH", None)
+		ok = subprocess.run(["bash", str(APPLY_FIXES), "--preflight"], env=env, cwd=tmp, capture_output=True, text=True, check=False, timeout=60)
+		assert ok.returncode == 0, ok.stderr
+		assert ok.stderr.splitlines()[-1] == "REVIEW_EDITOR_PREFLIGHT result=ok checks=4 failed=0"
+		for check in ("opencode_helpers", "opencode_config_writer", "opencode_binary", "runtime_dir"):
+			assert f"REVIEW_EDITOR_PREFLIGHT check={check} result=ok " in ok.stderr
+		assert list(runtime_dir.iterdir()) == [], "preflight must not write runtime files"
+
+		(bin_dir / "opencode").unlink()
+		env["PATH"] = str(bin_dir)
+		env["RUNTIME_DIR"] = str(tmp / "missing-runtime")
+		env["CODEX_HELPERS_PATH"] = str(tmp / "missing-codex-helpers.sh")
+		bad = subprocess.run([bash_executable, str(APPLY_FIXES), "--preflight"], env=env, cwd=tmp, capture_output=True, text=True, check=False, timeout=60)
+		assert bad.returncode == 1, bad.stderr
+		assert bad.stderr.splitlines()[-1] == "REVIEW_EDITOR_PREFLIGHT result=fail checks=5 failed=3"
+		for check in ("codex_helpers", "opencode_binary", "runtime_dir"):
+			assert f"REVIEW_EDITOR_PREFLIGHT check={check} result=fail " in bad.stderr
+
+
+def _step_explicit_env_names(step_name: str) -> list[str]:
+	block = _step_block(step_name)
+	env = block[block.index("\n        env:\n") + len("\n        env:\n"):block.index("\n        run: |")]
+	return [line.strip().split(":", 1)[0] for line in env.splitlines() if line.startswith("          ") and not line.strip().startswith("#")]
+
+
+def test_editor_preflight_step_wiring() -> None:
+	preflight = _step_block('"Preflight: Verify required files before reviewer invocation"')
+	editor_env = _step_explicit_env_names("Apply fixes with editor model")
+	# GH_READ_TOKEN: the job token for read-only polling (issue #9888).
+	assert editor_env == ["GH_READ_TOKEN", "GH_TOKEN", "REPOSITORY", "TOOL_CALL_BUDGET_JUDGE"], editor_env
+	editor = _step_block("Apply fixes with editor model")
+	for name in editor_env:
+		line = next(line.strip() for line in editor.splitlines() if line.strip().startswith(f"{name}:"))
+		assert line in preflight, name
+	assert "REVIEW_EDITOR_PREFLIGHT_ENABLED: ${{ vars.REVIEW_EDITOR_PREFLIGHT_ENABLED || 'true' }}" in preflight
+	probe = preflight.index("""grep -q '^# supports: --preflight' "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh\"""")
+	flag = preflight.index('"${REVIEW_EDITOR_PREFLIGHT_ENABLED:-true}"')
+	invoke = preflight.index('bash "${SUPPORT_SCRIPTS_DIR}/review_apply_fixes.sh" --preflight 2> >(tee -a "${RUNTIME_DIR}/editor_stage_stderr.txt" >&2)')
+	assert flag < probe < invoke
+	# The file checks run (and fail) first; the editor preflight follows them.
+	assert preflight.index('echo "Preflight check PASSED: all required files present."') < flag
+	assert 'echo "EDITOR_PREFLIGHT_FAILED=true" >> "$GITHUB_ENV"' in preflight
+	assert "REVIEW_EDITOR_PREFLIGHT result=fail" in preflight
+	assert "REVIEW_EDITOR_PREFLIGHT skip reason=unsupported script_ref=${SCRIPT_REF:-unknown}" in preflight
+	assert "REVIEW_EDITOR_PREFLIGHT skip reason=disabled" in preflight
+	assert "REVIEW_EDITOR_PREFLIGHT skip reason=editor_not_scheduled" in preflight
+
+
+_RUNTIME_OUTPUT_RE = re.compile(r'(?:>>?|\btee(?:\s+-a)?)\s*"?(\$\{[A-Za-z_][A-Za-z0-9_]*(?::-[^}]*)?\}[^"\s;)|&]*)')
+
+
+def _runtime_outputs(text: str) -> set[str]:
+	"""Runtime files a script writes: `${RUNTIME_DIR…}/<file>` and `${*_FILE}` redirect or tee targets."""
+	outputs: set[str] = set()
+	for line in _code_lines(text):
+		for match in _RUNTIME_OUTPUT_RE.finditer(line):
+			target = re.sub(r"^\$\{([A-Za-z_][A-Za-z0-9_]*):-[^}]*\}", r"${\1}", match.group(1))
+			name = target[2:target.index("}")]
+			if (name == "RUNTIME_DIR" and target.startswith("${RUNTIME_DIR}/")) or name.endswith("_FILE"):
+				outputs.add(target)
+	return outputs
+
+
+def _main_primary_scripts() -> list[str]:
+	line = next(line for line in _stage_helper_text().splitlines() if line.startswith("MAIN_PRIMARY_BOOTSTRAP_SCRIPTS="))
+	return line.split("=", 1)[1].strip('"').split()
+
+
+def _origin_main_ref() -> str | None:
+	def _has_ref() -> bool:
+		return subprocess.run(["git", "rev-parse", "--verify", "--quiet", "origin/main^{commit}"], cwd=REPO_ROOT, capture_output=True, check=False).returncode == 0
+	if _has_ref():
+		return "origin/main"
+	shallow = subprocess.run(["git", "rev-parse", "--is-shallow-repository"], cwd=REPO_ROOT, capture_output=True, text=True, check=False).stdout.strip() == "true"
+	# --depth only on an already-shallow checkout (CI): it would turn a full
+	# local clone shallow.
+	fetch = ["git", "fetch", "--depth=1", "origin", "main:refs/remotes/origin/main"] if shallow else ["git", "fetch", "origin", "main:refs/remotes/origin/main"]
+	try:
+		subprocess.run(fetch, cwd=REPO_ROOT, capture_output=True, check=False, timeout=120)
+	except (OSError, subprocess.TimeoutExpired):
+		return None
+	return "origin/main" if _has_ref() else None
+
+
+def _main_pinned_output_violations(branch_text: str, main_text: str) -> set[str]:
+	return _runtime_outputs(branch_text) - _runtime_outputs(main_text)
+
+
+def test_main_pinned_scripts_add_no_runtime_output_over_main() -> None:
+	# The comparison utility remains useful for diagnosing older review runs;
+	# runtime code now comes from the workflow SHA, not a moving main snapshot.
+	main_copy = 'printf "%s\\n" "${x}" > "${PR_BODY_FILE}"\n: > "${RUNTIME_DIR}/metadata.txt"\n'
+	branch_copy = main_copy + 'jq -n "{}" > "${RUNTIME_DIR}/linked_issue_digest.json"\necho x | tee -a "${DIGEST_FILE}" >/dev/null\n'
+	assert _main_pinned_output_violations(branch_copy, main_copy) == {"${RUNTIME_DIR}/linked_issue_digest.json", "${DIGEST_FILE}"}
+	assert _main_pinned_output_violations(main_copy, branch_copy) == set()
+	assert _runtime_outputs('# > "${RUNTIME_DIR}/commented.txt"\ncat x > "${RUNTIME_DIR:-/tmp}/y.txt" 2>/dev/null\n') == {"${RUNTIME_DIR}/y.txt"}
+
+	assert 'src=".codex-workflow-src/scripts/${f}"' in _stage_helper_text()
+
+
+def test_stage_helper_logs_main_pinned_divergence_in_main_primary_loop() -> None:
+	text = _stage_helper_text()
+	start = text.index("for f in ${MAIN_PRIMARY_BOOTSTRAP_SCRIPTS}; do")
+	loop = text[start:text.index("\ndone\n", start)]
+	assert 'src=".codex-workflow-src/scripts/${f}"' in loop
+	assert '.codex-workflow-src-main' not in loop
+
+
+def test_review_support_identity_is_bound_across_jobs() -> None:
+	workflow = _workflow_text()
+	gate_job = _job_block("gate")
+	assert "review_support_sha: ${{ steps.resolve_support.outputs.review_support_sha }}" in gate_job
+	assert "review_support_ref: ${{ steps.resolve_support.outputs.review_support_ref }}" in gate_job
+	assert "review_support_repo: ${{ steps.resolve_support.outputs.review_support_repo }}" in gate_job
+	assert "WORKFLOW_JOB_JSON: ${{ toJSON(job) }}" in gate_job
+	resolve_support_step = _step_block("Resolve trusted review support commit")
+	assert "GH_TOKEN: ${{ secrets.GH_PAT }}" in resolve_support_step
+	# The lookups use the classified retry helper (#6634), with a plain
+	# `gh api` fallback when the helper library did not load.
+	assert 'source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true' in resolve_support_step
+	assert 'type gh_api_retry >/dev/null 2>&1 || gh_api_retry() {' in resolve_support_step
+	assert "gh_api_retry repos/shubhodeep1/coding-workflows/branches/main" in gate_job
+	assert "gh_api_retry repos/shubhodeep1/coding-workflows/git/ref/tags/stable" in gate_job
+	assert "repos/shubhodeep1/coding-workflows/commits/stable" not in gate_job
+	for job_name in ("gate", "post-merge-validate-dispatch", "post-merge-force-poll", "fingerprint-cap-block", "codex-agent"):
+		job = _job_block(job_name)
+		assert "job.workflow_" not in job, job_name
+		assert "WORKFLOW_REF: ${{ " in job, job_name
+		assert "WORKFLOW_REPOSITORY: ${{ " in job, job_name
+		assert "WORKFLOW_SHA: ${{ " in job, job_name
+		if job_name != "codex-agent":
+			assert 'git -C .codex-workflow-src rev-parse HEAD' in job, job_name
+			assert "ref: ${{ " in job, job_name
+		else:
+			assert 'git -C .codex-workflow-src rev-parse HEAD' in job
+			assert "WORKFLOW_SHA: ${{ needs.gate.outputs.review_support_sha }}" in job
+	assert 'ref: ${{ github.repository == \'shubhodeep1/coding-workflows\' && github.sha || \'stable\' }}' not in workflow
+	stage = _stage_helper_text().split('WORKFLOW_SUPPORT_SOURCE_REPO_DEFAULT=', 1)[0]
+	assert '.codex-workflow-src-main/' not in stage
+	assert '[[ ! "${SCRIPT_REF}" =~ ^[0-9a-f]{40}$ ]]' in stage
+
+
+def test_review_support_ref_rejects_untrusted_workflow_identity() -> None:
+	workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+	gate_step = next(step for step in workflow["jobs"]["gate"]["steps"] if step.get("name") == "Resolve trusted review support commit")
+	resolve_step = next(step for step in workflow["jobs"]["codex-agent"]["steps"] if step.get("name") == "Resolve workflow support ref")
+	with tempfile.TemporaryDirectory(prefix="review-workflow-identity-") as td:
+		github_env = Path(td) / "github_env"
+		github_output = Path(td) / "github_output"
+		sha = "a" * 40
+		main_sha = "b" * 40
+		stable_sha = "c" * 40
+		pinned_sha = "d" * 40
+		mock_bin = Path(td) / "bin"
+		mock_bin.mkdir()
+		mock_gh = mock_bin / "gh"
+		mock_gh.write_text(
+			'#!/usr/bin/env bash\ncase "$2" in\n'
+			'  repos/shubhodeep1/coding-workflows/branches/main) [ "${MOCK_MAIN_FAIL:-false}" != true ] || exit 1; printf "%s\\n" "$MOCK_MAIN_RESPONSE" ;;\n'
+			'  repos/shubhodeep1/coding-workflows/git/ref/tags/stable) printf "%s\\n" "$MOCK_STABLE_REF" ;;\n'
+			'  repos/shubhodeep1/coding-workflows/git/tags/*) printf "%s\\n" "$MOCK_STABLE_TAG" ;;\n'
+			'  *) exit 1 ;;\nesac\n', encoding="utf-8",
+		)
+		mock_gh.chmod(0o755)
+		gate_base_env = {
+			"PATH": f"{mock_bin}:{os.environ.get('PATH', '')}", "GITHUB_OUTPUT": str(github_output),
+			"GH_TOKEN": "test-token", "MOCK_MAIN_RESPONSE": json.dumps({"protected": True, "commit": {"sha": main_sha}}),
+			"MOCK_STABLE_REF": json.dumps({"object": {"type": "tag", "sha": "e" * 40}}),
+			"MOCK_STABLE_TAG": json.dumps({"object": {"type": "commit", "sha": stable_sha}}),
+		}
+		for caller_repo, workflow_repo, workflow_ref, workflow_sha, expected_sha, expected_ref in (
+			("shubhodeep1/coding-workflows", "shubhodeep1/coding-workflows", "refs/heads/main", sha, main_sha, "refs/heads/main"),
+			("shubhodeep1/coding-workflows", "shubhodeep1/coding-workflows", "refs/heads/ai/issue-4399", sha, main_sha, "refs/heads/main"),
+			("consumer/repo", "shubhodeep1/coding-workflows", "refs/tags/stable", sha, stable_sha, "refs/tags/stable"),
+			("consumer/repo", "shubhodeep1/coding-workflows", pinned_sha, sha, pinned_sha, pinned_sha),
+			("shubhodeep1/coding-workflows", "shubhodeep1/coding-workflows", pinned_sha, sha, None, None),
+			("consumer/repo", "other/repo", "refs/tags/stable", sha, None, None),
+			("consumer/repo", "shubhodeep1/coding-workflows", "refs/heads/feature", sha, None, None),
+			("consumer/repo", "shubhodeep1/coding-workflows", "refs/tags/stable", "not-a-sha", None, None),
+		):
+			github_output.write_text("", encoding="utf-8")
+			job_json = json.dumps({"workflow_repository": workflow_repo, "workflow_ref": f"shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@{workflow_ref}", "workflow_sha": workflow_sha})
+			gate_env = {**gate_base_env, "CALLER_REPOSITORY": caller_repo, "WORKFLOW_JOB_JSON": job_json}
+			result = subprocess.run(["bash", "-c", gate_step["run"]], env=gate_env, capture_output=True, text=True)
+			assert (result.returncode == 0) == (expected_sha is not None), (caller_repo, workflow_ref, result.stderr)
+			if expected_sha is not None:
+				assert f"review_support_sha={expected_sha}\n" in github_output.read_text(encoding="utf-8")
+				assert f"review_support_ref={expected_ref}\n" in github_output.read_text(encoding="utf-8")
+			else:
+				assert github_output.read_text(encoding="utf-8") == ""
+		for main_response, main_fail in (({"protected": False, "commit": {"sha": main_sha}}, "false"), ({"protected": True, "commit": {"sha": "invalid"}}, "false"), ({}, "true")):
+			github_output.write_text("", encoding="utf-8")
+			gate_env = {**gate_base_env, "CALLER_REPOSITORY": "shubhodeep1/coding-workflows", "WORKFLOW_JOB_JSON": json.dumps({"workflow_repository": "shubhodeep1/coding-workflows", "workflow_ref": "shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@refs/heads/ai/issue-4399", "workflow_sha": sha}), "MOCK_MAIN_RESPONSE": json.dumps(main_response), "MOCK_MAIN_FAIL": main_fail}
+			result = subprocess.run(["bash", "-c", gate_step["run"]], env=gate_env, capture_output=True, text=True)
+			assert result.returncode != 0 and not github_output.read_text(encoding="utf-8"), result.stderr
+		github_output.write_text("", encoding="utf-8")
+		stable_env = {**gate_base_env, "CALLER_REPOSITORY": "consumer/repo", "WORKFLOW_JOB_JSON": json.dumps({"workflow_repository": "shubhodeep1/coding-workflows", "workflow_ref": "shubhodeep1/coding-workflows/.github/workflows/review_autofix.yml@refs/tags/stable", "workflow_sha": sha}), "MOCK_STABLE_REF": json.dumps({"object": {"type": "commit", "sha": stable_sha}})}
+		result = subprocess.run(["bash", "-c", gate_step["run"]], env=stable_env, capture_output=True, text=True)
+		assert result.returncode == 0 and f"review_support_sha={stable_sha}\n" in github_output.read_text(encoding="utf-8"), result.stderr
+		github_output.write_text("", encoding="utf-8")
+		stable_env["MOCK_STABLE_REF"] = json.dumps({"object": {"type": "tag", "sha": "invalid"}})
+		result = subprocess.run(["bash", "-c", gate_step["run"]], env=stable_env, capture_output=True, text=True)
+		assert result.returncode != 0 and not github_output.read_text(encoding="utf-8"), result.stderr
+		for ref, repo, workflow_sha, allowed in (
+			("refs/heads/main", "shubhodeep1/coding-workflows", sha, True),
+			("refs/tags/stable", "shubhodeep1/coding-workflows", sha, True),
+			(sha, "shubhodeep1/coding-workflows", sha, True),
+			("refs/heads/ai/issue-4399", "shubhodeep1/coding-workflows", sha, False),
+			("refs/heads/main", "other/repo", sha, False),
+			("refs/heads/main", "shubhodeep1/coding-workflows", "not-a-sha", False),
+		):
+			github_env.write_text("", encoding="utf-8")
+			env = {"PATH": os.environ.get("PATH", ""), "GITHUB_ENV": str(github_env), "WORKFLOW_REPOSITORY": repo, "WORKFLOW_REF": ref, "WORKFLOW_SHA": workflow_sha}
+			result = subprocess.run(["bash", "-c", resolve_step["run"]], env=env, capture_output=True, text=True)
+			assert (result.returncode == 0) == allowed, (ref, repo, result.stderr)
+			assert (f"SCRIPT_REF={sha}" in github_env.read_text(encoding="utf-8")) == allowed
+
+
+def test_post_merge_validate_dispatch_retries_label_removal_but_not_dispatch() -> None:
+	job = _job_block("post-merge-validate-dispatch")
+	assert "gh_retry gh issue edit \"${issue_number}\" --repo \"${REPOSITORY}\" --remove-label 'ai:orchestrator-validate-required'" in job
+	for line in job.splitlines():
+		if "--remove-label 'ai:orchestrator-validate-required'" in line:
+			assert "gh_retry gh issue edit" in line, line
+	assert 'gh workflow run "${validate_workflow}"' in job
+	assert 'gh workflow run "internal-validate.yml"' in job
+	assert "gh_retry gh workflow run" not in job
+	assert "but failed to remove ai:orchestrator-validate-required." in job
+
+
+def test_post_merge_validate_dispatch_notice_when_no_issue_requires_validation() -> None:
+	job = _job_block("post-merge-validate-dispatch")
+	init = 'validation_required_seen="" validation_label_unknown=""'
+	assert init in job
+	assert job.index(init) < job.index("while IFS=$'\\t' read -r issue_number has_validate_label labels_known")
+	unknown_warn = job.index("Unable to read labels for issue #${issue_number}")
+	unknown_set = job.index("validation_label_unknown=1")
+	assert unknown_warn < unknown_set < job.index("continue", unknown_warn)
+	assert job[unknown_set:job.index("continue", unknown_warn)].strip() == "validation_label_unknown=1"
+	seen_set = job.index("validation_required_seen=1")
+	assert job.index("does not have ai:orchestrator-validate-required; skipping.") < seen_set
+	assert seen_set < job.index("Dispatching standalone validation for linked issue")
+	lines = [line.strip() for line in job.splitlines() if line.strip()]
+	notice = 'echo "::notice::No linked issue of merged PR #${PR_NUMBER} required standalone validation; nothing dispatched."'
+	assert notice in lines
+	assert lines[lines.index(notice) - 1] == 'if [ -z "${validation_required_seen}${validation_label_unknown}" ]; then'
+	warning = 'echo "::warning::No standalone validation workflow could be dispatched for merged PR #${PR_NUMBER}."'
+	assert lines.count(warning) == 1
+	assert lines[lines.index(warning) - 1] == 'elif [ "${validation_dispatched}" = "false" ]; then'
+
+
+def test_post_merge_validate_dispatch_fails_closed_when_required_dispatch_fails() -> None:
+	job = _job_block("post-merge-validate-dispatch")
+	init = 'validation_dispatch_failed=""'
+	assert init in job
+	assert job.index(init) < job.index("while IFS=$'\\t' read -r issue_number has_validate_label labels_known")
+	per_issue = "the job fails after the remaining linked issues are processed if none of them dispatches validation."
+	failed_set = job.index("validation_dispatch_failed=1")
+	assert failed_set < job.index(per_issue) < job.index("continue", job.index(per_issue))
+	assert "continuing without failing workflow" not in job
+	lines = [line.strip() for line in job.splitlines() if line.strip()]
+	error = (
+		'echo "::error::Standalone validation was required for merged PR #${PR_NUMBER} but could not be dispatched; '
+		'the ai:orchestrator-validate-required label is kept, re-run this job to retry."'
+	)
+	assert lines.count(error) == 1
+	idx = lines.index(error)
+	assert lines[idx - 1].startswith("elif ") and "validation_dispatch_failed" in lines[idx - 1]
+	assert "validation_required_seen" in lines[idx - 1]
+	assert lines[idx + 1] == "exit 1"
+	after_loop = job[job.index("done < <("):]
+	assert after_loop.count("exit 1") == 1
+	assert after_loop.index("exit 1") < after_loop.index('elif [ "${validation_dispatched}" = "false" ]; then')
+	assert "continue-on-error" not in job
+
+
+def test_post_merge_validate_dispatch_exit_status_after_loop() -> None:
+	if shutil.which("jq") is None:
+		# The step's loop reads its input through jq; CI runners provide it.
+		print("skip: jq not available", file=sys.stderr)
+		return
+	script = _step_run_script("Dispatch standalone validate for orchestrator short-circuit issues")
+	start = script.index('validation_dispatched="false"')
+	body = script[start:]
+	fake_gh = textwrap.dedent(
+		"""\
+		#!/usr/bin/env bash
+		echo "$*" >> "${FAKE_GH_LOG}"
+		case "$1 $2" in
+		  "workflow run")
+		    n=$(( $(cat "${FAKE_GH_COUNT}" 2>/dev/null || echo 0) + 1 ))
+		    echo "${n}" > "${FAKE_GH_COUNT}"
+		    if [ "${n}" -le "${FAKE_GH_FAIL_RUNS}" ]; then exit 1; fi
+		    exit 0 ;;
+		  "issue view") exit "${FAKE_GH_VIEW_RC:-0}" ;;
+		  *) exit 0 ;;
+		esac
+		"""
+	)
+	label = "ai:orchestrator-validate-required"
+	cases = [
+		# (name, issue nodes, failing workflow-run calls, issue view rc, expected rc, expected text)
+		("required_dispatch_fails", [{"number": 11, "labels": [label]}], 99, 0, 1, "::error::Standalone validation was required"),
+		("later_dispatch_succeeds", [{"number": 11, "labels": [label]}, {"number": 12, "labels": [label]}], 2, 0, 0, None),
+		("nothing_required", [{"number": 11, "labels": []}], 99, 0, 0, "::notice::No linked issue"),
+		("labels_unknown", [{"number": 11, "labels": None}], 99, 1, 0, "::warning::No standalone validation workflow"),
+	]
+	for name, nodes, fail_runs, view_rc, want_rc, want_text in cases:
+		with tempfile.TemporaryDirectory() as tmp:
+			tmp_path = Path(tmp)
+			bin_dir = tmp_path / "bin"
+			bin_dir.mkdir()
+			gh = bin_dir / "gh"
+			gh.write_text(fake_gh, encoding="utf-8")
+			gh.chmod(0o755)
+			log = tmp_path / "gh.log"
+			prelude = "set -euo pipefail\ngh_retry() { \"$@\"; }\nissue_nodes_json=\"${ISSUE_NODES_JSON}\"\n"
+			env = {
+				**os.environ,
+				"PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+				"PR_NUMBER": "42",
+				"REPOSITORY": "owner/repo",
+				"VALIDATE_WORKFLOW_NAME": "ai-validate.yml",
+				"ISSUE_NODES_JSON": json.dumps(nodes),
+				"FAKE_GH_LOG": str(log),
+				"FAKE_GH_COUNT": str(tmp_path / "count"),
+				"FAKE_GH_FAIL_RUNS": str(fail_runs),
+				"FAKE_GH_VIEW_RC": str(view_rc),
+			}
+			result = subprocess.run(["bash", "-c", prelude + body], env=env, capture_output=True, text=True)
+			output = result.stdout + result.stderr
+			assert result.returncode == want_rc, (name, result.returncode, output)
+			if want_text:
+				assert want_text in output, (name, output)
+			calls = log.read_text(encoding="utf-8") if log.exists() else ""
+			if name == "required_dispatch_fails":
+				assert "--remove-label" not in calls, calls
+			if name == "later_dispatch_succeeds":
+				assert "::error::" not in output, output
+				assert "issue edit 12" in calls and "--remove-label" in calls, calls
+
+
+def _plain_runner_parametrize_cases(func) -> list[dict[str, object]]:
+	"""Expand ``@pytest.mark.parametrize`` marks into keyword sets.
+
+	Input: a test function. Output: one kwargs dict per pytest case
+	(``[{}]`` for an unparametrized test), so main() calls each test the way
+	pytest would.
+	"""
+	cases: list[dict[str, object]] = [{}]
+	for mark in getattr(func, "pytestmark", []):
+		if mark.name != "parametrize":
+			continue
+		argnames, argvalues = mark.args[0], mark.args[1]
+		if isinstance(argnames, str):
+			argnames = tuple(part.strip() for part in argnames.split(","))
+		expanded: list[dict[str, object]] = []
+		for base in cases:
+			for values in argvalues:
+				if len(argnames) == 1:
+					values = (values,)
+				expanded.append({**base, **dict(zip(argnames, values))})
+		cases = expanded
+	return cases
+
+
+def _plain_runner_tests() -> list[object]:
+	"""Every ``test_*`` function in this module, in definition order (pytest's order)."""
+	return [value for name, value in list(globals().items()) if name.startswith("test_") and callable(value)]
+
+
+def test_plain_runner_can_call_every_test() -> None:
+	"""main() supplies only parametrize values and ``tmp_path``.
+
+	A test that needs any other pytest fixture would pass under pytest but
+	crash the ``python3`` runner CI uses, so catch that under pytest too.
+	"""
+	for test_func in _plain_runner_tests():
+		for kwargs in _plain_runner_parametrize_cases(test_func):
+			for name, param in inspect.signature(test_func).parameters.items():
+				assert name in kwargs or name == "tmp_path" or param.default is not inspect.Parameter.empty, (
+					f"{test_func.__name__} needs fixture {name!r}, which main() cannot supply"
+				)
+
+
+_PUSH_FAKE_GIT = r'''#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+with open(os.environ["FAKE_GIT_ARGV_LOG"], "a", encoding="utf-8") as fh:
+	fh.write(json.dumps(args) + "\n")
+cmd = args[0] if args else ""
+if cmd == "push":
+	state_path = os.environ["FAKE_GIT_PUSH_STATE"]
+	with open(state_path, encoding="utf-8") as fh:
+		state = json.load(fh)
+	idx = min(state["count"], len(state["pushes"]) - 1)
+	entry = state["pushes"][idx]
+	state["count"] += 1
+	with open(state_path, "w", encoding="utf-8") as fh:
+		json.dump(state, fh)
+	sys.stderr.write(entry["out"])
+	sys.exit(entry["rc"])
+if cmd == "rev-parse":
+	print(os.environ["FAKE_GIT_HEAD"])
+	sys.exit(0)
+if cmd == "ls-remote":
+	tip = os.environ.get("FAKE_GIT_LS_REMOTE", "")
+	if "," in tip:
+		seq_path = os.environ["FAKE_GIT_LS_REMOTE_COUNT"]
+		try:
+			with open(seq_path, encoding="utf-8") as fh:
+				n = int(fh.read().strip() or "0")
+		except FileNotFoundError:
+			n = 0
+		with open(seq_path, "w", encoding="utf-8") as fh:
+			fh.write(str(n + 1))
+		seq = tip.split(",")
+		tip = seq[min(n, len(seq) - 1)]
+	if tip == "FAIL":
+		sys.stderr.write("fatal: unable to access remote\n")
+		sys.exit(128)
+	print(tip + "\trefs/heads/" + os.environ.get("TARGET_BRANCH", ""))
+	sys.exit(0)
+sys.exit(0)
+'''
+
+_PUSH_HEAD_SHA = "a" * 40
+
+
+def _run_push_pending_commits_step(
+	tmp_path: Path,
+	pushes: list[tuple[int, str]],
+	*,
+	ls_remote: str = "b" * 40,
+	enabled: str | None = None,
+) -> dict[str, object]:
+	script = _step_run_script("Push all pending commits")
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	fake_git = bin_dir / "git"
+	fake_git.write_text(_PUSH_FAKE_GIT, encoding="utf-8")
+	fake_git.chmod(0o755)
+	sleep_log = tmp_path / "sleep.log"
+	fake_sleep = bin_dir / "sleep"
+	fake_sleep.write_text(f'#!/usr/bin/env bash\necho "$1" >> "{sleep_log}"\n', encoding="utf-8")
+	fake_sleep.chmod(0o755)
+	support_dir = tmp_path / "support"
+	support_dir.mkdir()
+	state = tmp_path / "push_state.json"
+	state.write_text(json.dumps({"count": 0, "pushes": [{"rc": rc, "out": out} for rc, out in pushes]}), encoding="utf-8")
+	argv_log = tmp_path / "git_argv.log"
+	argv_log.write_text("", encoding="utf-8")
+	github_env = tmp_path / "github_env"
+	github_env.write_text("", encoding="utf-8")
+	script_path = tmp_path / "push_step.sh"
+	script_path.write_text(script, encoding="utf-8")
+	env = {
+		"PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+		"HOME": str(tmp_path),
+		"GITHUB_ENV": str(github_env),
+		"SUPPORT_SCRIPTS_DIR": str(support_dir),
+		"TARGET_BRANCH": "ai/issue-1",
+		"PR_NUMBER": "7",
+		"GITHUB_REPOSITORY": "o/r",
+		"GH_TOKEN": "secret-token",
+		"LOCAL_HEAD_SHA": _PUSH_HEAD_SHA,
+		"FAKE_GIT_ARGV_LOG": str(argv_log),
+		"FAKE_GIT_PUSH_STATE": str(state),
+		"FAKE_GIT_HEAD": _PUSH_HEAD_SHA,
+		"FAKE_GIT_LS_REMOTE": ls_remote,
+		"FAKE_GIT_LS_REMOTE_COUNT": str(tmp_path / "ls_remote_count"),
+	}
+	if enabled is not None:
+		env["AUTOFIX_PUSH_TRANSIENT_RETRY_ENABLED"] = enabled
+	result = subprocess.run(["bash", str(script_path)], env=env, capture_output=True, text=True, timeout=60, check=False)
+	git_calls = [json.loads(line) for line in argv_log.read_text(encoding="utf-8").splitlines() if line.strip()]
+	push_calls = [call for call in git_calls if call and call[0] == "push"]
+	for call in push_calls:
+		assert not any(arg.startswith("--force") for arg in call), call
+	assert not any(call and call[0] == "rebase" for call in git_calls)
+	assert "secret-token" not in result.stdout + result.stderr
+	return {
+		"returncode": result.returncode,
+		"output": result.stdout + result.stderr,
+		"stdout": result.stdout,
+		"pushes": len(push_calls),
+		"git_calls": git_calls,
+		"github_env": github_env.read_text(encoding="utf-8"),
+		"sleeps": sleep_log.read_text(encoding="utf-8").split() if sleep_log.exists() else [],
+	}
+
+
+def test_push_pending_commits_transient_retry_contract() -> None:
+	block = _step_block("Push all pending commits")
+	assert "AUTOFIX_PUSH_TRANSIENT_RETRY_ENABLED: ${{ vars.AUTOFIX_PUSH_TRANSIENT_RETRY_ENABLED || 'true' }}" in block
+	assert 'push_transient_enabled="${AUTOFIX_PUSH_TRANSIENT_RETRY_ENABLED:-true}"' in block
+	assert '"${push_transient_enabled,,}" != "false"' in block
+	assert "push_transient_max=2" in block
+	assert 'sleep "$((5 * push_transient_retry))"' in block
+	protected = "grep -qiE 'GH006|GH013|protected branch|push declined|repository rule'"
+	server = "grep -qiE 'Internal Server Error|The requested URL returned error: 5[0-9][0-9]|HTTP 5[0-9][0-9]'"
+	rejected_failed = "grep -qiE 'remote rejected.*\\(failed\\)'"
+	network = "grep -qiE 'RPC failed|unexpected disconnect|early EOF|Connection reset|Could not resolve host|Operation timed out'"
+	for needle in (protected, server, rejected_failed, network):
+		assert needle in block, needle
+	assert block.index(protected) < block.index(server) < block.index(rejected_failed) < block.index(network)
+	assert 'git ls-remote origin "refs/heads/${TARGET_BRANCH}" 2>/dev/null' in block
+	assert 'local_head="$(git rev-parse HEAD)"' in block
+	for outcome in ("retry", "landed", "gave_up"):
+		assert (
+			"AUTOFIX_PUSH_TRANSIENT_RETRY pr=${PR_NUMBER:-unknown} attempt=${push_transient_retry}/${push_transient_max} "
+			f"class=${{push_transient_class}} outcome={outcome}"
+		) in block
+	# Existing non-fast-forward merge path is unchanged.
+	assert "grep -qE '\\[rejected\\].*\\((fetch first|non-fast-forward)\\)'" in block
+	assert "max_push_attempts=3" in block
+	assert 'git merge --no-edit --no-ff "origin/${TARGET_BRANCH}"' in block
+	script = _step_run_script("Push all pending commits")
+	for line in script.splitlines():
+		if line.strip().startswith("#"):
+			continue
+		assert "--force" not in line, line
+		assert "git rebase" not in line, line
+
+
+def test_push_pending_commits_transient_retry_succeeds_after_server_error(tmp_path: Path) -> None:
+	result = _run_push_pending_commits_step(
+		tmp_path,
+		[(1, "remote: Internal Server Error\nfatal: unable to access\n"), (0, "")],
+	)
+	assert result["returncode"] == 0, result["output"]
+	assert result["pushes"] == 2
+	assert "AUTOFIX_EDITS_PUSHED=true" in str(result["github_env"])
+	assert "AUTOFIX_PUSH_TRANSIENT_RETRY pr=7 attempt=1/2 class=server_error outcome=retry" in str(result["stdout"])
+	assert result["sleeps"] == ["5"]
+
+
+def test_push_pending_commits_transient_retry_detects_landed_push(tmp_path: Path) -> None:
+	result = _run_push_pending_commits_step(
+		tmp_path,
+		[(128, "error: RPC failed; HTTP 502 curl 22 The requested URL returned error: 502\n")],
+		ls_remote=_PUSH_HEAD_SHA,
+	)
+	assert result["returncode"] == 0, result["output"]
+	assert result["pushes"] == 1
+	assert "AUTOFIX_PUSH_TRANSIENT_RETRY pr=7 attempt=1/2 class=server_error outcome=landed" in str(result["stdout"])
+	assert "Push complete." in str(result["stdout"])
+	assert "AUTOFIX_EDITS_PUSHED=true" in str(result["github_env"])
+
+
+def test_push_pending_commits_transient_retry_gives_up_after_two(tmp_path: Path) -> None:
+	result = _run_push_pending_commits_step(
+		tmp_path,
+		[(1, " ! [remote rejected] HEAD -> ai/issue-1 (failed)\nerror: failed to push some refs\n")],
+		ls_remote="FAIL",
+	)
+	assert result["returncode"] != 0
+	assert result["pushes"] == 3
+	output = str(result["stdout"])
+	assert "class=remote_rejected_failed outcome=retry" in output
+	assert "AUTOFIX_PUSH_TRANSIENT_RETRY pr=7 attempt=2/2 class=remote_rejected_failed outcome=gave_up" in output
+	assert result["sleeps"] == ["5", "10"]
+	assert "AUTOFIX_EDITS_PUSHED=true" not in str(result["github_env"])
+
+
+def test_push_pending_commits_transient_retry_final_landed_check(tmp_path: Path) -> None:
+	result = _run_push_pending_commits_step(
+		tmp_path,
+		[(1, "remote: Internal Server Error\n")],
+		ls_remote=f"FAIL,{'b' * 40},{_PUSH_HEAD_SHA}",
+	)
+	assert result["returncode"] == 0, result["output"]
+	assert result["pushes"] == 3
+	output = str(result["stdout"])
+	assert "AUTOFIX_PUSH_TRANSIENT_RETRY pr=7 attempt=2/2 class=server_error outcome=landed" in output
+	assert "outcome=gave_up" not in output
+	assert "AUTOFIX_EDITS_PUSHED=true" in str(result["github_env"])
+	assert result["sleeps"] == ["5", "10"]
+
+
+def test_push_pending_commits_protected_rejection_is_never_retried(tmp_path: Path) -> None:
+	result = _run_push_pending_commits_step(
+		tmp_path,
+		[(1, " ! [remote rejected] HEAD -> ai/issue-1 (GH006: Protected branch update failed (failed)\n"), (0, "")],
+	)
+	assert result["returncode"] != 0
+	assert result["pushes"] == 1
+	assert "AUTOFIX_PUSH_TRANSIENT_RETRY" not in str(result["output"])
+	assert "for a reason other than [rejected]" in str(result["output"])
+
+
+def test_push_pending_commits_transient_retry_kill_switch(tmp_path: Path) -> None:
+	result = _run_push_pending_commits_step(
+		tmp_path,
+		[(1, "remote: Internal Server Error\n"), (0, "")],
+		enabled="FALSE",
+	)
+	assert result["returncode"] == 1
+	assert result["pushes"] == 1
+	assert "AUTOFIX_PUSH_TRANSIENT_RETRY" not in str(result["output"])
+	assert "for a reason other than [rejected]" in str(result["output"])
+
+
+def test_push_pending_commits_transient_retry_hands_advanced_remote_to_merge_path(tmp_path: Path) -> None:
+	result = _run_push_pending_commits_step(
+		tmp_path,
+		[
+			(1, "fatal: the remote end hung up unexpectedly\nfatal: early EOF\n"),
+			(1, " ! [rejected]        HEAD -> ai/issue-1 (fetch first)\n"),
+			(0, ""),
+		],
+	)
+	assert result["returncode"] == 0, result["output"]
+	assert result["pushes"] == 3
+	assert "class=network outcome=retry" in str(result["stdout"])
+	git_calls = result["git_calls"]
+	assert any(call[:1] == ["merge"] for call in git_calls)  # type: ignore[union-attr]
+	assert "AUTOFIX_EDITS_PUSHED=true" in str(result["github_env"])
+
+
+def main() -> int:
+	"""Run every ``test_*`` function, as pytest would.
+
+	CI and the release gates (ci.yml, mark-stable.yml,
+	test-and-mark-stable.yml) run this file with ``python3``, which executes
+	only main(). main() used to call a hand-kept list; 47 tests were missing
+	from it, so CI never ran them, and four had gone stale unnoticed.
+	Collecting the module's ``test_*`` functions means a new test cannot drop
+	out of CI.
+	"""
+	for test_func in _plain_runner_tests():
+		for kwargs in _plain_runner_parametrize_cases(test_func):
+			if "tmp_path" in inspect.signature(test_func).parameters and "tmp_path" not in kwargs:
+				with tempfile.TemporaryDirectory(prefix="review-pipeline-tmp-path-") as tmp_dir:
+					test_func(tmp_path=Path(tmp_dir), **kwargs)
+				continue
+			test_func(**kwargs)
+	print("OK: review_autofix review-pipeline plumbing contract holds")
+	return 0
+
+
+def _run_normalize_openrouter_usage(log_text: str | None) -> str:
+	"""Run the reviewer usage helper against log text (None: no log file)."""
+	reviewers = REVIEWERS.read_text(encoding="utf-8")
+	start = reviewers.index("normalize_openrouter_usage() {")
+	end = reviewers.index("emit_reviewer_substate()", start)
+	block = reviewers[start:end]
+	with tempfile.TemporaryDirectory(prefix="usage-missing-reason-") as tmp:
+		log_file = Path(tmp) / "reviewer.stderr"
+		if log_text is not None:
+			log_file.write_text(log_text, encoding="utf-8")
+		env = os.environ.copy()
+		env["SUPPORT_SCRIPTS_DIR"] = str(REPO_ROOT / "scripts")
+		env["PYTHONDONTWRITEBYTECODE"] = "1"
+		env.pop("OPENROUTER_PROMPT_CACHE_DISABLED", None)
+		result = subprocess.run(
+			[
+				"bash",
+				"-c",
+				"set -euo pipefail\n"
+				f"{block}\n"
+				'normalize_openrouter_usage "$1" "$2" "$3" "$4"\n',
+				"bash",
+				str(log_file),
+				"review",
+				"pass1",
+				"test-model",
+			],
+			cwd=str(REPO_ROOT),
+			env=env,
+			check=True,
+			capture_output=True,
+			text=True,
+		)
+	lines = [line for line in result.stdout.splitlines() if line.startswith("INFO: openrouter usage ")]
+	assert len(lines) == 1, result.stdout
+	return lines[0]
+
+
+_USAGE_MISSING_REASON_FIXTURES = {
+	"log_missing": None,
+	"no_json_events": "plain text, no json\n",
+	"no_usage_event": '{"type":"text","part":{"text":"NONE"}}\n',
+	"incomplete_step_finish": '{"type":"step_finish","part":{"tokens":{"input":5,"output":2,"cache":{"write":0}}}}\n',
+	"incomplete_fields": '{"usage":{"prompt_tokens":5,"completion_tokens":2}}\n',
+}
+
+
+def test_normalize_openrouter_usage_reports_missing_reason() -> None:
+	for reason, fixture in _USAGE_MISSING_REASON_FIXTURES.items():
+		line = _run_normalize_openrouter_usage(fixture)
+		assert line.endswith(f"usage_available=false usage_missing_reason={reason}"), (reason, line)
+		assert line.count("usage_missing_reason=") == 1, line
+
+
+def test_normalize_openrouter_usage_available_line_has_no_reason() -> None:
+	step_finish_log = (
+		'{"type":"step_finish","part":{"tokens":{"input":5,"output":2,'
+		'"reasoning":1,"cache":{"write":3,"read":4}}}}\n'
+	)
+	usage_dict_log = (
+		'{"usage":{"prompt_tokens":11,"completion_tokens":7,"total_tokens":18,'
+		'"cache_creation_input_tokens":5,"cache_read_input_tokens":3}}\n'
+	)
+	for fixture in (step_finish_log, usage_dict_log):
+		line = _run_normalize_openrouter_usage(fixture)
+		assert "usage_available=true" in line, line
+		assert "usage_missing_reason" not in line, line
+		assert line.endswith("usage_available=true"), line
+
+
+def test_cost_audit_openrouter_re_matches_line_with_missing_reason() -> None:
+	scripts_dir = str(REPO_ROOT / "scripts")
+	if scripts_dir not in sys.path:
+		sys.path.insert(0, scripts_dir)
+	import cost_audit  # noqa: PLC0415
+
+	line = _run_normalize_openrouter_usage(_USAGE_MISSING_REASON_FIXTURES["no_usage_event"])
+	match = cost_audit.OPENROUTER_RE.search(line)
+	assert match is not None, line
+	assert match.group("available") == "false"
+	for group_name in ("pt", "ct", "tt", "cw", "cr"):
+		assert match.group(group_name) == "na", (group_name, line)
+	# Iteration-summary style key=value parsing keeps both fields.
+	fields = dict(token.split("=", 1) for token in line.split() if "=" in token)
+	assert fields.get("usage_available") == "false"
+	assert fields.get("usage_missing_reason") == "no_usage_event"
+
+
+def _run_model_catalog_backfill(tmp: Path, staged_catalog: dict | str, main_catalog: dict | str | None) -> tuple[subprocess.CompletedProcess[str], Path]:
+	"""Run the "Model catalog backfill" block of "Stage workflow support files" in ``tmp``."""
+	workflow = yaml.safe_load(_workflow_text())
+	steps = workflow["jobs"]["codex-agent"]["steps"]
+	stage_run = next(step["run"] for step in steps if step.get("name") == "Stage workflow support files")
+	start = stage_run.index("# Model catalog backfill.")
+	end = stage_run.index("\nfi\n", stage_run.index("MODEL_CATALOG_BACKFILL failed", start)) + len("\nfi\n")
+	snippet = "set -euo pipefail\n" + stage_run[start:end]
+	support = tmp / "support" / "scripts"
+	support.mkdir(parents=True, exist_ok=True)
+	main_dir = tmp / ".codex-workflow-src-main" / "scripts"
+	main_dir.mkdir(parents=True, exist_ok=True)
+	staged_path = support / "codex_model_catalog.json"
+	staged_path.write_text(staged_catalog if isinstance(staged_catalog, str) else json.dumps(staged_catalog), encoding="utf-8")
+	main_path = main_dir / "codex_model_catalog.json"
+	main_path.unlink(missing_ok=True)
+	if main_catalog is not None:
+		main_path.write_text(main_catalog if isinstance(main_catalog, str) else json.dumps(main_catalog), encoding="utf-8")
+	result = subprocess.run(
+		["bash", "-c", snippet],
+		cwd=tmp,
+		env=_git_clean_env({"SUPPORT_SCRIPTS_DIR": str(support)}),
+		text=True,
+		capture_output=True,
+		check=False,
+	)
+	return result, staged_path
+
+
+def _write_reviewer_opencode_config(tmp: Path, catalog_path: Path, model_slug: str) -> subprocess.CompletedProcess[str]:
+	models_cache = tmp / "models.json"
+	models_cache.write_text(
+		json.dumps({"openrouter": {"models": {model_slug: {"limit": {"context": 1000000, "output": 1000}}}}}),
+		encoding="utf-8",
+	)
+	return subprocess.run(
+		[
+			"bash", str(REPO_ROOT / "scripts" / "write_opencode_config.sh"),
+			"--role", "reviewer", "--model", model_slug,
+			"--project-path", str(tmp), "--config-path", str(tmp / "config.json"), "--serena", "off",
+		],
+		env={**os.environ, "OPENCODE_MODEL_CATALOG_PATH": str(catalog_path), "OPENCODE_MODELS_PATH": str(models_cache)},
+		text=True,
+		capture_output=True,
+		check=False,
+	)
+
+
+def test_stage_step_backfills_missing_model_catalog_rows_from_main() -> None:
+	# The catalog and roster are now pinned to the same workflow SHA.
+	stage = _step_block("Stage workflow support files")
+	assert "main_model_catalog=" not in stage
+	assert 'catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"' in _stage_helper_text()
+
+
+def test_stage_step_model_catalog_backfill_fails_open() -> None:
+	stage = _step_block("Stage workflow support files")
+	assert "MODEL_CATALOG_BACKFILL added=0 source=workflow_commit" in stage
+	assert ".codex-workflow-src-main/scripts/codex_model_catalog.json" not in stage
+
+
+def test_review_isolation_wiring_and_model_relay() -> None:
+	step = _step_block("Install project dependencies (best-effort)")
+	helper = (REPO_ROOT / "scripts/review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	stage = _stage_helper_text()
+	assert 'review_untrusted_sandbox.sh" prepare' in step
+	assert "pip install" not in step and "npm ci" not in step
+	assert "--network none --read-only --cap-drop ALL" in helper
+	assert 'env -i PATH="${PATH}" HOME="${HOME:-/tmp}" docker run' in helper
+	assert 'opencode_source_mount="type=bind,src=${root}/source,dst=/source"' in helper
+	assert '--mount "${opencode_source_mount}"' in helper
+	assert '--mount "type=bind,src=${workspace}' not in helper
+	assert '--env OPENROUTER_API_KEY=isolated-placeholder' in helper
+	assert 'review_untrusted_workspace.py" transfer' in helper
+	assert ': > "${RUNTIME_DIR:?}/review_sandbox_transfer_failed"' in helper
+	assert '2> "${RUNTIME_DIR}/review_sandbox_transfer_reason_${output##*/}"' in helper
+	assert helper.count('2> "${RUNTIME_DIR}/review_sandbox_transfer_reason_${output##*/}"') == 2
+	assert 'rm -f "${RUNTIME_DIR}/review_sandbox_transfer_failed"' in helper
+	assert 'rm -f "${RUNTIME_DIR}/review_sandbox_transfer_reason_${tmp_output##*/}"' in _apply_fixes_text()
+	assert 'if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then' in _apply_fixes_text()
+	assert 'review_sandbox/Dockerfile' in stage
+	assert '"${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup' in _workflow_text()
+	broker = (REPO_ROOT / "scripts/clarify_openrouter_broker.py").read_text(encoding="utf-8")
+	assert 'REVIEW_PATH = "/api/v1/chat/completions"' in broker
+	assert '"review-broker"' in broker and '"review-bridge"' in broker
+	assert 'self.server.model' in broker
+
+
+def test_review_isolation_workspace_transfer_and_hostile_paths() -> None:
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		host = root / "host"
+		source = root / "isolated" / "source"
+		source.mkdir(parents=True)
+		(host / "scripts").mkdir(parents=True)
+		(host / ".git-credentials").write_text("private-sentinel")
+		(host / "scripts/app.py").write_text("before\n")
+		for module_suffix in (".cjs", ".mjs", ".mts", ".cts"):
+			(host / f"scripts/module{module_suffix}").write_text("before\n")
+		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", "scripts"], cwd=host, env=_git_clean_env(), check=True)
+		manifest = root / "isolated" / "baseline.json"
+		def run(action: str) -> subprocess.CompletedProcess[str]:
+			return subprocess.run(
+				[sys.executable, str(workspace_helper), action, str(host), str(source), str(manifest)],
+				env={**os.environ, "GIT_DIR": str(host / ".git"), "GIT_WORK_TREE": str(host)},
+				capture_output=True, text=True, check=False,
+			)
+		assert run("snapshot").returncode == 0
+		for module_suffix in (".cjs", ".mjs", ".mts", ".cts"):
+			assert (source / f"scripts/module{module_suffix}").read_text() == "before\n"
+		assert subprocess.run(["git", "-C", str(host), "rev-parse", "HEAD"], env=_git_clean_env(), capture_output=True).returncode != 0
+		assert not (source / ".git-credentials").exists()
+		assert "private-sentinel" not in (source / ".git" / "config").read_text()
+		(source / "scripts/app.py").write_text("backend write\n")
+		(source / "scripts/backend.py").write_text("untrusted build output\n")
+		assert run("refresh").returncode == 0
+		assert (source / "scripts/app.py").read_text() == "before\n"
+		assert not (source / "scripts/backend.py").exists()
+		(source / "scripts/app.py").write_text("after\n")
+		(source / "scripts/new.py").write_text("new\n")
+		for module_suffix in (".cjs", ".mjs", ".mts", ".cts"):
+			(source / f"scripts/module{module_suffix}").write_text("after\n")
+		assert run("transfer").returncode == 0
+		assert (host / "scripts/app.py").read_text() == "after\n"
+		assert (host / "scripts/new.py").read_text() == "new\n"
+		for module_suffix in (".cjs", ".mjs", ".mts", ".cts"):
+			assert (host / f"scripts/module{module_suffix}").read_text() == "after\n"
+		# A later retry has an updated baseline; a concurrent host edit does not.
+		(host / "scripts/app.py").write_text("host changed\n")
+		(source / "scripts/app.py").write_text("isolated changed\n")
+		rejection = run("transfer")
+		assert rejection.returncode != 0
+		assert rejection.stderr == "::error::Review isolation snapshot or transfer rejected (ValueError) reason=host_baseline_changed\n"
+		assert (host / "scripts/app.py").read_text() == "host changed\n"
+		(host / "scripts/app.py").write_text("after\n")
+		(source / "scripts/new.py").unlink()
+		(source / "scripts/new.py").symlink_to("/etc/passwd")
+		rejection = run("transfer")
+		assert rejection.returncode != 0
+		assert rejection.stderr == "::error::Review isolation snapshot or transfer rejected (ValueError) reason=symlink_path\n"
+		assert (host / "scripts/new.py").read_text() == "new\n"
+
+
+def _review_transfer_fixture(root: Path, files: dict[str, bytes]) -> tuple[Path, Path, Path]:
+	host = root / "host"
+	source = root / "isolated" / "source"
+	source.mkdir(parents=True)
+	for name, data in files.items():
+		path = host / name
+		path.parent.mkdir(parents=True, exist_ok=True)
+		path.write_bytes(data)
+		if name == "a.py":
+			path.chmod(0o755)
+	subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+	subprocess.run(["git", "add", "--all"], cwd=host, env=_git_clean_env(), check=True)
+	manifest = root / "isolated" / "baseline.json"
+	result = subprocess.run([sys.executable, str(REPO_ROOT / "scripts/review_untrusted_workspace.py"),
+		"snapshot", str(host), str(source), str(manifest)], capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	return host, source, manifest
+
+
+def test_review_transfer_rejects_extensionless_parent_before_writes(tmp_path):
+	for parent_name in ("zblocked", "scripts/zblocked"):
+		root = tmp_path / parent_name.replace("/", "-")
+		host, source, manifest = _review_transfer_fixture(root, {"a.py": b"before", parent_name: b"file"})
+		before = manifest.read_bytes()
+		(source / "a.py").write_bytes(b"after")
+		(source / parent_name / "next.py").parent.mkdir(parents=True)
+		(source / parent_name / "next.py").write_bytes(b"new")
+		result = subprocess.run([sys.executable, str(REPO_ROOT / "scripts/review_untrusted_workspace.py"),
+			"transfer", str(host), str(source), str(manifest)], capture_output=True, text=True)
+		assert result.returncode == 1
+		assert result.stderr.strip().endswith("reason=result_conflicts_host")
+		assert (host / "a.py").read_bytes() == b"before"
+		assert manifest.read_bytes() == before
+		assert not list(host.glob(".review-isolated-*"))
+
+
+def test_review_snapshot_skips_oversized_files_only_when_the_review_sandbox_asks(tmp_path):
+	# tele-funtoken-msg-scoring: a 2.1 MB app.py and a 3.3 MB page failed every
+	# review snapshot under the old 2 MiB limit.
+	limit = 8 * 1024 * 1024
+	files = {"a.py": b"before", "mid.html": b"m" * (3 * 1024 * 1024), "big.py": b"b" * (limit + 1)}
+	host = tmp_path / "host"
+	for name, data in files.items():
+		(host / name).parent.mkdir(parents=True, exist_ok=True)
+		(host / name).write_bytes(data)
+	subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+	subprocess.run(["git", "add", "--all"], cwd=host, env=_git_clean_env(), check=True)
+	script = str(REPO_ROOT / "scripts/review_untrusted_workspace.py")
+	base_env = {k: v for k, v in os.environ.items() if k != "REVIEW_SNAPSHOT_SKIP_OVERSIZED"}
+
+	def snapshot(name, **extra):
+		source = tmp_path / name / "source"
+		source.mkdir(parents=True)
+		manifest = tmp_path / name / "baseline.json"
+		result = subprocess.run([sys.executable, script, "snapshot", str(host), str(source), str(manifest)],
+			capture_output=True, text=True, env={**base_env, **extra})
+		return result, source, manifest
+
+	# Every other caller (heal editor, pre-push gate) still fails closed.
+	for name, extra in (("default", {}), ("off", {"REVIEW_SNAPSHOT_SKIP_OVERSIZED": "0"})):
+		result, _, _ = snapshot(name, **extra)
+		assert result.returncode == 1
+		assert result.stderr.strip().endswith("reason=unsafe_file")
+
+	result, source, manifest = snapshot("review", REVIEW_SNAPSHOT_SKIP_OVERSIZED="1")
+	assert result.returncode == 0, result.stderr
+	assert f"REVIEW_ISOLATION_SNAPSHOT oversized_skipped=1 max_file_bytes={limit}" in result.stderr
+	assert "big.py" not in result.stderr
+	baseline = json.loads(manifest.read_text())
+	assert set(baseline) == {"a.py", "mid.html"}
+	assert not (source / "big.py").exists() and (source / "mid.html").read_bytes() == files["mid.html"]
+
+	transfer = [sys.executable, script, "transfer", str(host), str(source), str(manifest)]
+	# The editor cannot recreate a file it never saw. An oversized recreation is
+	# refused by the result read itself (reason=unsafe_file).
+	(source / "big.py").write_bytes(b"r" * (limit + 1))
+	result = subprocess.run(transfer, capture_output=True, text=True, env=base_env)
+	assert result.returncode == 1 and result.stderr.strip().endswith("reason=unsafe_file")
+	assert (host / "big.py").read_bytes() == files["big.py"]
+	(source / "big.py").write_bytes(b"replaced")
+	result = subprocess.run(transfer, capture_output=True, text=True, env=base_env)
+	assert result.returncode == 1 and result.stderr.strip().endswith("reason=result_conflicts_host")
+	assert (host / "big.py").read_bytes() == files["big.py"]
+	# Edits to the files it did see transfer as usual.
+	(source / "big.py").unlink()
+	(source / "a.py").write_bytes(b"after")
+	result = subprocess.run(transfer, capture_output=True, text=True, env=base_env)
+	assert result.returncode == 0, result.stderr
+	assert (host / "a.py").read_bytes() == b"after" and (host / "big.py").read_bytes() == files["big.py"]
+
+
+def test_only_the_review_sandbox_snapshot_skips_oversized_files() -> None:
+	sandbox = (REPO_ROOT / "scripts/review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	assert re.search(r'^\tREVIEW_SNAPSHOT_SKIP_OVERSIZED=1 PYTHONDONTWRITEBYTECODE=1 python3 "\$\{support\}/review_untrusted_workspace\.py" snapshot ', sandbox, re.M)
+	for other in ("scripts/heal_isolated_implement.sh", "scripts/prepush_test_gate_run.sh"):
+		text = (REPO_ROOT / other).read_text(encoding="utf-8")
+		assert "review_untrusted_workspace.py\" snapshot" in text and "REVIEW_SNAPSHOT_SKIP_OVERSIZED" not in text
+
+
+def test_review_transfer_rolls_back_after_mid_apply_failure(tmp_path):
+	host, source, manifest = _review_transfer_fixture(tmp_path, {"a.py": b"before", "c.py": b"delete"})
+	manifest_before = manifest.read_bytes()
+	(source / "a.py").write_bytes(b"after")
+	(source / "b").mkdir()
+	(source / "b/new.py").write_bytes(b"created")
+	(source / "c.py").unlink()
+	(source / "z.py").write_bytes(b"late")
+	spec = importlib.util.spec_from_file_location("review_transfer_atomic_test", REPO_ROOT / "scripts/review_untrusted_workspace.py")
+	assert spec and spec.loader
+	workspace_module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(workspace_module)
+	original_link = workspace_module.os.link
+	def fail_late(source_path, target_path, **kwargs):
+		if Path(target_path).name == "z.py":
+			raise OSError("injected apply failure")
+		return original_link(source_path, target_path, **kwargs)
+	with mock.patch.object(workspace_module.os, "link", side_effect=fail_late):
+		with pytest.raises(OSError, match="injected apply failure"):
+			workspace_module.transfer(host, source, manifest)
+	assert (host / "a.py").read_bytes() == b"before"
+	assert (host / "a.py").stat().st_mode & 0o777 == 0o755
+	assert (host / "c.py").read_bytes() == b"delete"
+	assert not (host / "b").exists() and not (host / "z.py").exists()
+	assert not list(host.glob(".review-isolated-*"))
+	assert manifest.read_bytes() == manifest_before
+
+
+def test_review_transfer_replaces_deleted_file_with_directory(tmp_path):
+	host, source, manifest = _review_transfer_fixture(tmp_path, {"d.py": b"old"})
+	(source / "d.py").unlink()
+	(source / "d.py").mkdir()
+	(source / "d.py/x.py").write_bytes(b"new")
+	result = subprocess.run([sys.executable, str(REPO_ROOT / "scripts/review_untrusted_workspace.py"),
+		"transfer", str(host), str(source), str(manifest)], capture_output=True, text=True)
+	assert result.returncode == 0, result.stderr
+	assert (host / "d.py/x.py").read_bytes() == b"new"
+	assert "d.py/x.py" in json.loads(manifest.read_text())
+	assert "d.py" not in json.loads(manifest.read_text())
+
+
+def test_review_isolation_unsafe_directory_names_bounded_dir() -> None:
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		host = root / "host"
+		source = root / "isolated" / "source"
+		source.mkdir(parents=True)
+		(host / "scripts").mkdir(parents=True)
+		(host / "scripts/app.py").write_text("before\n")
+		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", "scripts"], cwd=host, env=_git_clean_env(), check=True)
+		manifest = root / "isolated" / "baseline.json"
+		def run(action: str) -> subprocess.CompletedProcess[str]:
+			return subprocess.run(
+				[sys.executable, str(workspace_helper), action, str(host), str(source), str(manifest)],
+				capture_output=True, text=True, check=False,
+			)
+		assert run("snapshot").returncode == 0
+		for directory, category, depth in (
+			(".claude/commands", "other", "2"),
+			(".github/ai/::set-output name=x::y", "invalid_name", "3+"),
+			(".github/ai/" + "a" * 100, "dot_github_subtree", "3+"),
+			(".github/ai/secrets_backup", "sensitive_name", "3+"),
+		):
+			bad_dir = source / directory
+			bad_dir.mkdir(parents=True)
+			(bad_dir / "audit-plans.md").write_text("untrusted\n")
+			rejection = run("transfer")
+			assert rejection.returncode == 1
+			assert rejection.stderr == f"::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory category={category} depth={depth}\n"
+			assert directory not in rejection.stderr
+			assert (host / "scripts/app.py").read_text() == "before\n"
+			assert not (host / directory).exists()
+			(bad_dir / "audit-plans.md").unlink()
+			bad_dir.rmdir()
+		(source / "scripts/link").symlink_to(host, target_is_directory=True)
+		rejection = run("transfer")
+		assert rejection.returncode == 1
+		assert rejection.stderr == "::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory category=symlink depth=2\n"
+		assert not (host / "scripts/link").exists()
+		assert run("refresh").stderr == "::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory category=symlink depth=2\n"
+
+
+def test_review_editor_prompt_explains_sandbox_limits() -> None:
+	apply_fixes = _apply_fixes_text()
+	block = apply_fixes.split("SANDBOX WORKSPACE LIMITS", 1)[1].split("=== BEGIN UNTRUSTED", 1)[0]
+	assert ".claude/commands/" in block
+	assert "sandbox-excluded path" in block
+	# #8321: twinned .claude/docs/ reference files are admitted; both copies are edited together.
+	assert '".claude/docs/<name>.md" reference' in block
+	assert "edit both copies in the same run so they stay byte-identical" in block
+	assert 'new ".claude/docs/" files' in block and "cannot be created" in block
+	assert "selected .claude/docs/ reference files" in apply_fixes
+	# PR #9112 / issue #9111: the editor may create or edit .github/ai/chatgpt_pool.json.
+	assert '".github/ai/chatgpt_pool.json"' in block
+	assert ".github/ai/chatgpt_pool.json when present" in apply_fixes
+	assert "`" not in block and "$" not in block and "\\" not in block
+	spec = importlib.util.spec_from_file_location("review_untrusted_workspace_test", REPO_ROOT / "scripts/review_untrusted_workspace.py")
+	assert spec is not None and spec.loader is not None
+	workspace_module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(workspace_module)
+	assert not workspace_module.allowed(".claude/commands/audit-plans.md")
+	assert not workspace_module.allowed(".github/ai/other.json")
+	with mock.patch.dict(os.environ):
+		os.environ.pop("REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED", None)
+		assert workspace_module.allowed(".github/ai/chatgpt_pool.json")
+	assert not workspace_module.allowed(".claude/hooks/pr_merge_status_guard.py")
+	assert workspace_module.allowed(".github/workflows/x.yml")
+	assert workspace_module.allowed(".claude/hooks/gh_api_write_guard.py")
+
+
+def test_review_isolation_admits_only_twinned_claude_docs() -> None:
+	"""#8321: .claude/docs/<name>.md is admitted like .claude/commands/*.md (twin-only)."""
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	spec = importlib.util.spec_from_file_location("review_workspace_docs_admission", workspace_helper)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	admitted = {".claude/docs/x.md"}
+	assert module.allowed(".claude/docs/x.md", commands=admitted)
+	assert not module.allowed(".claude/docs/x.md")
+	assert not module.allowed(".claude/docs/y.md", commands=admitted)
+	for rejected in (".claude/docs/a/x.md", ".claude/docs/.x.md", ".claude/docs/x.txt", ".claude/hooks/other.py", ".claude/settings.json", ".claude/settings.local.json"):
+		assert not module.allowed(rejected, commands=admitted | {rejected}), rejected
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		host = root / "host"
+		source = root / "isolated" / "source"
+		source.mkdir(parents=True)
+		(host / ".claude/docs").mkdir(parents=True)
+		(host / ".claude/docs/x.md").write_text("live before\n")
+		(host / ".claude/docs/y.md").write_text("untwinned\n")
+		(host / "workflow-templates/.claude/docs").mkdir(parents=True)
+		(host / "workflow-templates/.claude/docs/x.md").write_text("live before\n")
+		(host / "workflow-templates/.claude/docs/y.md").write_text("PR-only twin\n")
+		# z.md is twinned on both sides but has no live copy: never admitted.
+		(host / "workflow-templates/.claude/docs/z.md").write_text("template only\n")
+		trusted = root / "verified" / ".codex-workflow-src" / "workflow-templates/.claude/docs"
+		trusted.mkdir(parents=True)
+		(trusted / "x.md").write_text("trusted template\n")
+		(trusted / "z.md").write_text("trusted template\n")
+		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", ".claude", "workflow-templates"], cwd=host, env=_git_clean_env(), check=True)
+		manifest = root / "isolated" / "baseline.json"
+
+		def run(action: str) -> subprocess.CompletedProcess[str]:
+			return subprocess.run(
+				[sys.executable, str(workspace_helper), action, str(host), str(source), str(manifest)],
+				env={**_git_clean_env(), "GITHUB_WORKSPACE": str(root / "verified")},
+				capture_output=True, text=True, check=False,
+			)
+
+		snap = run("snapshot")
+		assert snap.returncode == 0, snap.stderr
+		inventory = json.loads(manifest.with_name(manifest.name + ".admitted_commands.json").read_text())
+		assert inventory == [".claude/docs/x.md"]
+		assert (source / ".claude/docs/x.md").exists()
+		assert not (source / ".claude/docs/y.md").exists()
+		assert (source / "workflow-templates/.claude/docs/x.md").exists()
+		# An unadmitted new docs file is dropped by refresh and never transferred.
+		(source / ".claude/docs/new.md").write_text("new instructions\n")
+		refreshed = run("refresh")
+		assert refreshed.returncode == 0, refreshed.stderr
+		assert not (source / ".claude/docs/new.md").exists()
+		# Both copies transfer back together; a new docs file does not.
+		(source / ".claude/docs/x.md").write_text("live after\n")
+		(source / "workflow-templates/.claude/docs/x.md").write_text("live after\n")
+		(source / ".claude/docs/new.md").write_text("new instructions\n")
+		(source / ".claude/docs/z.md").write_text("created live copy\n")
+		moved = run("transfer")
+		assert moved.returncode == 0, moved.stderr
+		assert (host / ".claude/docs/x.md").read_text() == "live after\n"
+		assert (host / "workflow-templates/.claude/docs/x.md").read_text() == "live after\n"
+		assert not (host / ".claude/docs/new.md").exists()
+		assert not (host / ".claude/docs/z.md").exists()
+		assert (host / ".claude/docs/y.md").read_text() == "untwinned\n"
+		# Heal scope (strict enumeration, no admitted inventory) still refuses .claude/docs/.
+		with pytest.raises(ValueError, match="out of heal scope|unsafe workspace directory"):
+			list(module.enumerate_workspace(source, None, None, strict=True))
+		# A forged nested docs entry in the frozen inventory fails closed.
+		inventory_path = manifest.with_name(manifest.name + ".admitted_commands.json")
+		inventory_path.write_text(json.dumps([".claude/docs/a/b.md"]))
+		with pytest.raises(ValueError, match="admitted command inventory missing"):
+			module.load_admitted_commands(manifest)
+		forged = run("transfer")
+		assert forged.returncode == 1
+		assert "reason=admitted_inventory_missing" in forged.stderr
+	# Without docs twins in the verified checkout, creating .claude/docs/ stays an unsafe directory.
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		host = root / "host"
+		source = root / "isolated" / "source"
+		source.mkdir(parents=True)
+		(host / "scripts").mkdir(parents=True)
+		(host / "scripts/a.py").write_text("x = 1\n")
+		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", "scripts"], cwd=host, env=_git_clean_env(), check=True)
+		manifest = root / "isolated" / "baseline.json"
+		env = {**_git_clean_env(), "GITHUB_WORKSPACE": str(root / "verified")}
+		assert subprocess.run([sys.executable, str(workspace_helper), "snapshot", str(host), str(source), str(manifest)], env=env, capture_output=True, text=True).returncode == 0
+		(source / ".claude/docs").mkdir(parents=True)
+		(source / ".claude/docs/x.md").write_text("new\n")
+		rejected_run = subprocess.run([sys.executable, str(workspace_helper), "transfer", str(host), str(source), str(manifest)], env=env, capture_output=True, text=True)
+		assert rejected_run.returncode == 1 and "reason=unsafe_directory" in rejected_run.stderr
+		assert not (host / ".claude").exists()
+
+
+def test_review_isolation_transfer_failure_evidence() -> None:
+	apply_fixes = _apply_fixes_text()
+	start = '  if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then'
+	# Execute the actual early-exit block, not a reimplementation of its parsing.
+	block = start + apply_fixes.split(start, 1)[1].split("\n  fi\n", 1)[0] + "\n  fi\n"
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		archive = root / "previous_reviews"
+		archive.mkdir()
+		(root / "review_sandbox_transfer_failed").touch()
+		attempt_output = root / "attempt-output"
+		attempt_err = root / "attempt-stderr"
+		reason_file = root / f"review_sandbox_transfer_reason_{attempt_output.name}"
+		old_reason = root / "review_sandbox_transfer_reason_previous-attempt"
+		old_reason.write_text("::error::Review isolation snapshot or transfer rejected (ValueError) reason=symlink_path\n")
+		base_env = {**os.environ, "RUNTIME_DIR": str(root), "PREVIOUS_REVIEWS_DIR": str(archive),
+			"attempt": "2", "tmp_output": str(attempt_output), "tmp_err": str(attempt_err)}
+		valid_reason = "::error::Review isolation snapshot or transfer rejected (ValueError) reason=host_baseline_changed\n"
+		for diagnostic, expected in (
+			(valid_reason, "host_baseline_changed"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=size_limit\n", "size_limit"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=symlink_in_path\n", "symlink_in_path"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=result_conflicts_host\n", "result_conflicts_host"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory category=dot_github_subtree depth=3+\n", "unsafe_directory category=dot_github_subtree depth=3+"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory category=symlink depth=1\n", "unsafe_directory category=symlink depth=1"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory category=unknown depth=2\n", "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory category=symlink depth=2 extra=path\n", "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=transfer_rollback_failed\n", "transfer_rollback_failed"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory category=symlink depth=2\n", "unsafe_directory category=symlink depth=2"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory category=excluded_name_variant depth=3+\n", "unsafe_directory category=excluded_name_variant depth=3+"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=.claude/commands\n", "unsafe_directory dir=.claude/commands"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=redacted\n", "unsafe_directory dir=redacted"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=../x\n", "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=a b\n", "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=a//b\n", "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=scripts/\n", "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=.env-private\n", "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory dir=secrets_backup\n", "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=host_baseline_changed dir=x\n", "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory category=forged depth=2\n", "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=unsafe_directory category=symlink depth=4\n", "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=admitted_inventory_missing\n", "admitted_inventory_missing"),
+			(None, "unknown"),
+			("::error::Review isolation snapshot or transfer rejected (ValueError) reason=forged\n", "unknown"),
+			(valid_reason + "secret second line\n", "unknown"),
+			("untrusted contents " * 100, "unknown"),
+		):
+			attempt_err.write_text("existing editor stderr\n")
+			if diagnostic is None:
+				reason_file.unlink(missing_ok=True)
+			else:
+				reason_file.write_text(diagnostic)
+			result = subprocess.run(["bash", "-c", "set -eu\n" + block], env=base_env,
+				capture_output=True, text=True, check=False)
+			assert result.returncode == 1
+			assert (root / "review_sandbox_transfer_failed").exists()
+			assert result.stderr == f"::error::Review sandbox result transfer was incomplete; refusing editor fallback. reason={expected}\n"
+			assert (archive / "editor_attempt_2.err").read_text() == "existing editor stderr\n" + result.stderr
+			archived_reason = archive / "review_sandbox_transfer_reason_2.txt"
+			if expected == "unknown":
+				assert not archived_reason.exists()
+			else:
+				assert archived_reason.read_text() == diagnostic
+			archived_reason.unlink(missing_ok=True)
+			assert "secret" not in result.stderr
+		# A successful transfer removes the marker, so even a stale reason is ignored.
+		(root / "review_sandbox_transfer_failed").unlink()
+		result = subprocess.run(["bash", "-c", "set -eu\n" + block], env=base_env,
+			capture_output=True, text=True, check=False)
+		assert result.returncode == 0 and not result.stderr
+
+
+def test_review_other_sandbox_transfer_failure_evidence() -> None:
+	rb_function = re.search(r"(?ms)^_review_rb_consume_transfer_marker\(\)\n\{.*?^\}", _rb_judge_text())
+	assert rb_function
+	resolver_function = re.search(r"(?ms)^_resolver_sandbox_opencode_attempt\(\)\n\{.*?^\}",
+		(REPO_ROOT / "scripts/review_conflict_resolve.sh").read_text())
+	assert resolver_function
+	branch_start = '  if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then'
+	resolver_branch = branch_start + resolver_function.group(0).split(branch_start, 1)[1].split('\n  if [ "${_codex_exit}" -eq 2 ]; then', 1)[0]
+	for diagnostic, expected in (
+		("symlink_in_path", " reason=symlink_in_path"),
+		("size_limit", " reason=size_limit"),
+		("result_conflicts_host", " reason=result_conflicts_host"),
+		("unsafe_directory category=dot_github_subtree depth=3+", " reason=unsafe_directory category=dot_github_subtree depth=3+"),
+		("unsafe_directory category=symlink depth=1", " reason=unsafe_directory category=symlink depth=1"),
+		("unsafe_directory category=evil depth=2", ""),
+		("unsafe_directory category=symlink depth=2 extra=path", ""),
+		("unsafe_directory dir=.claude/commands", " reason=unsafe_directory"),
+		("transfer_rollback_failed", " reason=transfer_rollback_failed"),
+	):
+		with tempfile.TemporaryDirectory() as td:
+			root = Path(td)
+			marker = root / "review_sandbox_transfer_failed"
+			marker.touch()
+			(root / "review_sandbox_transfer_reason_attempt-output").write_text(
+				f"::error::Review isolation snapshot or transfer rejected (ValueError) reason={diagnostic}\n"
+			)
+			base_env = {**os.environ, "RUNTIME_DIR": str(root), "tmp_output": str(root / "attempt-output")}
+			rb_result = subprocess.run(["bash", "-c", "set -eu\n" + rb_function.group(0) + '\n_review_rb_consume_transfer_marker "$tmp_output"'],
+				env=base_env, capture_output=True, text=True, check=False)
+			assert rb_result.returncode == 0, rb_result.stderr
+			assert rb_result.stderr == f"::error::Review-blocked judge sandbox transfer failed; refusing to commit the fix.{expected}\n"
+			marker.touch()
+			resolver_result = subprocess.run(["bash", "-c", 'set -eu\n_resolver_fail_closed() { echo "$1"; exit 7; }\nresolver_transfer_reason=""\nresolver_transfer_reason_file="${RUNTIME_DIR}/review_sandbox_transfer_reason_${tmp_output##*/}"\n' + resolver_branch],
+				env=base_env, capture_output=True, text=True, check=False)
+			assert resolver_result.returncode == 7, resolver_result.stderr
+			assert resolver_result.stderr == f"::error::Conflict resolver sandbox transfer failed; refusing to accept output.{expected}\n"
+			assert resolver_result.stdout == ("transfer_rollback_failed\n" if diagnostic == "transfer_rollback_failed" else "sandbox_transfer_failed\n")
+
+
+def _load_review_workspace_module(module_name: str):
+	spec = importlib.util.spec_from_file_location(module_name, REPO_ROOT / "scripts/review_untrusted_workspace.py")
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	return module
+
+
+def test_review_isolation_admits_chatgpt_pool_config_behind_flag() -> None:
+	"""PR #9112 / issue #9111: .github/ai/chatgpt_pool.json is admitted behind an on-by-default off switch.
+
+	No pytest fixtures: main() runs this file under plain python3 in CI.
+	"""
+	module = _load_review_workspace_module("review_workspace_chatgpt_pool_flag")
+	flag = "REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED"
+	assert module.CHATGPT_POOL_CONFIG_FLAG == flag
+	with mock.patch.dict(os.environ):
+		os.environ.pop(flag, None)
+		assert module.allowed(".github/ai/chatgpt_pool.json")
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			for value in ("", "true", "TRUE", "True"):
+				os.environ[flag] = value
+				assert module.allowed(".github/ai/chatgpt_pool.json"), value
+				# Every other .github/ai/ path stays rejected, including a case variant.
+				assert not module.allowed(".github/ai/other.json")
+				assert not module.allowed(".github/ai/WORKFLOW.md")
+				assert not module.allowed(".github/ai/ChatGPT_pool.json")
+				assert not module.allowed(".github/ai/chatgpt_pool.json/x")
+				assert module.allowed(".github/ai/claude_engine.json")
+			for value in ("false", "False", "FALSE"):
+				os.environ[flag] = value
+				assert not module.allowed(".github/ai/chatgpt_pool.json"), value
+				assert module.allowed(".github/ai/claude_engine.json")
+				assert not module.allowed(".github/ai/other.json")
+		assert stderr.getvalue() == ""
+		module._chatgpt_pool_config_flag_warned = False
+		os.environ[flag] = "maybe"
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			assert not module.allowed(".github/ai/chatgpt_pool.json")
+			assert not module.allowed(".github/ai/chatgpt_pool.json")
+		err = stderr.getvalue()
+		assert err == "::warning::REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED has an unrecognised value; .github/ai/chatgpt_pool.json stays out of the review sandbox\n"
+		assert "maybe" not in err
+		os.environ[flag] = " true "
+		with contextlib.redirect_stderr(io.StringIO()):
+			assert not module.allowed(".github/ai/chatgpt_pool.json")
+
+
+def test_review_isolation_transfers_new_chatgpt_pool_config() -> None:
+	"""PR #9112 / issue #9111: an editor-created or edited chatgpt_pool.json survives transfer unless the flag is false."""
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	flag = "REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED"
+	# ("false", True): with the switch off, an existing host file stays out of
+	# the sandbox and is never overwritten by an editor write.
+	for flag_value, existing in ((None, False), ("false", False), (None, True), ("false", True)):
+		with tempfile.TemporaryDirectory() as td:
+			root = Path(td)
+			host = root / "host"
+			source = root / "isolated" / "source"
+			source.mkdir(parents=True)
+			(host / ".github/ai").mkdir(parents=True)
+			(host / ".github/ai/claude_engine.json").write_text("{}\n")
+			if existing:
+				(host / ".github/ai/chatgpt_pool.json").write_text('{"enabled": false}\n')
+			subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+			subprocess.run(["git", "add", ".github"], cwd=host, env=_git_clean_env(), check=True)
+			manifest = root / "isolated" / "baseline.json"
+			env = {**_git_clean_env()}
+			env.pop(flag, None)
+			if flag_value is not None:
+				env[flag] = flag_value
+
+			def run(action: str) -> subprocess.CompletedProcess[str]:
+				return subprocess.run(
+					[sys.executable, str(workspace_helper), action, str(host), str(source), str(manifest)],
+					env=env, capture_output=True, text=True, check=False,
+				)
+
+			assert run("snapshot").returncode == 0
+			assert (source / ".github/ai/chatgpt_pool.json").exists() is (existing and flag_value != "false")
+			assert run("refresh").returncode == 0
+			(source / ".github/ai/chatgpt_pool.json").write_text('{"enabled": true}\n')
+			(source / ".github/ai/other.json").write_text("{}\n")
+			result = run("transfer")
+			assert result.returncode == 0, result.stderr
+			assert not (host / ".github/ai/other.json").exists()
+			if flag_value == "false" and existing:
+				assert (host / ".github/ai/chatgpt_pool.json").read_text() == '{"enabled": false}\n'
+			elif flag_value == "false":
+				assert not (host / ".github/ai/chatgpt_pool.json").exists()
+			else:
+				assert (host / ".github/ai/chatgpt_pool.json").read_text() == '{"enabled": true}\n'
+
+
+def test_review_isolation_snapshot_logs_unrecognised_chatgpt_pool_flag() -> None:
+	"""PR #9112 / issue #9111: snapshot (whose stderr reaches the Actions log) warns on a mistyped switch."""
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		host = root / "host"
+		(host / ".github/ai").mkdir(parents=True)
+		(host / ".github/ai/claude_engine.json").write_text("{}\n")
+		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", ".github"], cwd=host, env=_git_clean_env(), check=True)
+		(root / "isolated" / "source").mkdir(parents=True)
+		env = {**_git_clean_env(), "REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED": "flase"}
+		result = subprocess.run(
+			[sys.executable, str(workspace_helper), "snapshot", str(host), str(root / "isolated" / "source"), str(root / "isolated" / "baseline.json")],
+			env=env, capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 0, result.stderr
+		assert "::warning::REVIEW_SANDBOX_ADMIT_CHATGPT_POOL_CONFIG_ENABLED has an unrecognised value" in result.stderr
+		assert "flase" not in result.stderr
+
+
+def test_review_isolation_traverses_only_allowed_github_directories() -> None:
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	helper_text = workspace_helper.read_text()
+	assert helper_text.count("commands = load_admitted_commands(manifest)") == 2
+	assert "allowed(name, host)" not in helper_text.split("def transfer(", 1)[1].split("def refresh(", 1)[0]
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		host = root / "host"
+		source = root / "isolated" / "source"
+		source.mkdir(parents=True)
+		for subdir in ("workflows", "actions", "ai"):
+			(host / ".github" / subdir).mkdir(parents=True)
+			(host / ".github" / subdir / ("claude_engine.json" if subdir == "ai" else "example.yml")).write_text("before\n")
+		(host / ".github/ai/WORKFLOW.md").write_text("operator config\n")
+		(host / ".claude/hooks").mkdir(parents=True)
+		(host / ".claude/hooks/gh_api_write_guard.py").write_text("before\n")
+		(host / ".claude/hooks/pr_merge_status_guard.py").write_text("before\n")
+		(host / ".claude/hooks/other.py").write_text("operator hook\n")
+		(host / ".claude/commands").mkdir(parents=True)
+		(host / ".claude/commands/audit-plans.md").write_text("before\n")
+		(host / ".claude/commands/other.md").write_text("operator command\n")
+		(host / ".claude/commands/apply-url.md").write_text("before\n")
+		# A live command needs a twin in both the PR and verified support checkouts.
+		(host / "workflow-templates/.claude/commands").mkdir(parents=True)
+		(host / "workflow-templates/.claude/commands/audit-plans.md").write_text("template\n")
+		(host / "workflow-templates/.claude/commands/apply-url.md").write_text("template\n")
+		(host / "workflow-templates/.claude/commands/pr-new.md").write_text("PR template\n")
+		trusted_checkout = root / "verified" / ".codex-workflow-src" / "workflow-templates/.claude/commands"
+		trusted_checkout.mkdir(parents=True)
+		(trusted_checkout / "audit-plans.md").write_text("trusted template\n")
+		(trusted_checkout / "apply-url.md").write_text("trusted template\n")
+		admission_spec = importlib.util.spec_from_file_location("review_workspace_admission", workspace_helper)
+		assert admission_spec and admission_spec.loader
+		admission_module = importlib.util.module_from_spec(admission_spec)
+		admission_spec.loader.exec_module(admission_module)
+		assert not admission_module.allowed(".claude/commands/pr-new.md", host)
+		assert admission_module.allowed(".claude/commands/audit-plans.md", commands={".claude/commands/audit-plans.md"})
+		(host / "scripts").mkdir()
+		(host / "scripts/claude_settings.json.tmpl").write_text("before\n")
+		(host / "tests").mkdir()
+		(host / "tests/test_audit_plans_command.py").write_text("operator command contract\n")
+		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", ".github", ".claude", "workflow-templates", "scripts", "tests"], cwd=host, env=_git_clean_env(), check=True)
+		manifest = root / "isolated" / "baseline.json"
+		def run(action: str) -> subprocess.CompletedProcess[str]:
+			return subprocess.run(
+				[sys.executable, str(workspace_helper), action, str(host), str(source), str(manifest)],
+				env={**_git_clean_env(), "GITHUB_WORKSPACE": str(root / "verified")},
+				capture_output=True, text=True, check=False,
+			)
+		assert run("snapshot").returncode == 0
+		inventory_path = manifest.with_name(manifest.name + ".admitted_commands.json")
+		assert json.loads(inventory_path.read_text()) == [".claude/commands/apply-url.md", ".claude/commands/audit-plans.md"]
+		# A PR-added twin before snapshot cannot authorize a new command.
+		(source / ".claude/commands/pr-new.md").write_text("PR command\n")
+		assert run("transfer").returncode == 0
+		assert not (host / ".claude/commands/pr-new.md").exists()
+		(source / ".claude/commands/pr-new.md").unlink()
+		assert not (source / ".github/ai/WORKFLOW.md").exists()
+		assert (source / ".claude/hooks/gh_api_write_guard.py").exists()
+		assert not (source / ".claude/hooks/pr_merge_status_guard.py").exists()
+		assert not (source / ".claude/hooks/other.py").exists()
+		assert (source / ".claude/commands/audit-plans.md").exists()
+		assert (source / ".claude/commands/apply-url.md").exists()
+		assert not (source / ".claude/commands/other.md").exists()
+		assert (source / "scripts/claude_settings.json.tmpl").exists()
+		assert not (source / "tests/test_audit_plans_command.py").exists()
+		assert run("refresh").returncode == 0
+		(source / ".github/workflows/example.yml").write_text("after\n")
+		(source / ".github/ai/claude_engine.json").write_text("after\n")
+		(source / ".claude/hooks/gh_api_write_guard.py").write_text("after\n")
+		(source / ".claude/hooks/pr_merge_status_guard.py").write_text("untrusted\n")
+		(source / ".claude/commands/audit-plans.md").write_text("after\n")
+		(source / ".claude/commands/apply-url.md").write_text("after\n")
+		(source / "scripts/claude_settings.json.tmpl").write_text("after\n")
+		assert run("transfer").returncode == 0
+		assert (host / ".github/workflows/example.yml").read_text() == "after\n"
+		assert (host / ".github/ai/claude_engine.json").read_text() == "after\n"
+		assert (host / ".claude/hooks/gh_api_write_guard.py").read_text() == "after\n"
+		assert (host / ".claude/hooks/pr_merge_status_guard.py").read_text() == "before\n"
+		assert (host / ".claude/commands/audit-plans.md").read_text() == "after\n"
+		assert (host / ".claude/commands/apply-url.md").read_text() == "after\n"
+		assert (host / "scripts/claude_settings.json.tmpl").read_text() == "after\n"
+		assert (host / "tests/test_audit_plans_command.py").read_text() == "operator command contract\n"
+		# A command without a host template twin stays out: the write is dropped.
+		(source / ".claude/commands/other.md").write_text("untrusted\n")
+		assert run("transfer").returncode == 0
+		assert (host / ".claude/commands/other.md").read_text() == "operator command\n"
+		(source / ".claude/commands/other.md").unlink()
+		# Creating the twin in the same transfer does not admit a new command.
+		(source / "workflow-templates/.claude/commands/new.md").write_text("template\n")
+		(source / ".claude/commands/new.md").write_text("untrusted\n")
+		assert run("transfer").returncode == 0
+		assert (host / "workflow-templates/.claude/commands/new.md").read_text() == "template\n"
+		assert not (host / ".claude/commands/new.md").exists()
+		(source / ".claude/commands/new.md").unlink()
+		# A retry cannot widen admission after the first transfer adds the twin.
+		(source / ".claude/commands/new.md").write_text("untrusted retry\n")
+		(source / ".claude/commands/scratch.txt").write_text("untrusted retry scratch\n")
+		(source / ".claude/commands/broken.md").symlink_to("missing.md")
+		assert run("transfer").returncode == 0
+		assert (source / ".claude/commands/scratch.txt").exists()
+		assert (source / ".claude/commands/broken.md").is_symlink()
+		assert not (host / ".claude/commands/new.md").exists()
+		assert not (host / ".claude/commands/scratch.txt").exists()
+		assert run("refresh").returncode == 0
+		assert not (source / ".claude/commands/new.md").exists()
+		assert not (source / ".claude/commands/scratch.txt").exists()
+		assert not (source / ".claude/commands/broken.md").is_symlink()
+		(source / ".github/ai/WORKFLOW.md").write_text("untrusted\n")
+		assert run("transfer").returncode == 0
+		assert (host / ".github/ai/WORKFLOW.md").read_text() == "operator config\n"
+		(source / ".github/ai/WORKFLOW.md").unlink()
+		(source / ".github/untrusted").mkdir()
+		(source / ".github/untrusted/result.yml").write_text("untrusted\n")
+		assert run("transfer").returncode != 0
+		assert not (host / ".github/untrusted/result.yml").exists()
+		shutil.rmtree(source / ".github/untrusted")
+		# A new .claude/ directory outside the admitted ones still fails closed.
+		(source / ".claude/skills").mkdir()
+		(source / ".claude/skills/result.md").write_text("untrusted\n")
+		assert run("transfer").returncode != 0
+		assert not (host / ".claude/skills").exists()
+		# Missing or corrupt authorization state cannot fall back to the live host.
+		shutil.rmtree(source / ".claude/skills")
+		inventory_path.write_text('{"not": "a list"}')
+		rejection = run("transfer")
+		assert rejection.returncode != 0
+		assert "reason=admitted_inventory_missing" in rejection.stderr
+		inventory_path.unlink()
+		rejection = run("transfer")
+		assert rejection.returncode != 0
+		assert "reason=admitted_inventory_missing" in rejection.stderr
+		assert run("refresh").returncode != 0
+		assert not (host / ".claude/commands/new.md").exists()
+		# No verified support checkout means no command path is admitted.
+		no_support_source = root / "without-support" / "source"
+		no_support_source.mkdir(parents=True)
+		no_support_manifest = root / "without-support" / "baseline.json"
+		no_support_snapshot = subprocess.run(
+			[sys.executable, str(workspace_helper), "snapshot", str(host), str(no_support_source), str(no_support_manifest)],
+			env={**_git_clean_env(), "GITHUB_WORKSPACE": str(root / "without-support")},
+			capture_output=True, text=True, check=False,
+		)
+		assert no_support_snapshot.returncode == 0
+		assert json.loads(no_support_manifest.with_name(no_support_manifest.name + ".admitted_commands.json").read_text()) == []
+		assert not (no_support_source / ".claude/commands/audit-plans.md").exists()
+
+
+def test_review_isolation_transfers_into_active_work_tree() -> None:
+	"""Editor edits land in the work tree the job's git commands read (#6055).
+
+	"Activate workspace shell context" moves every later step into a per-run
+	copy (WORKSPACE_PATH) that has no .git of its own, with GIT_WORK_TREE set
+	to it and GIT_DIR to ${GITHUB_WORKSPACE}/.git. The sandbox used to
+	snapshot from and transfer into GITHUB_WORKSPACE, so every editor edit
+	reached a directory git no longer looked at and the run ended in
+	editor_changes_lost. Prepare validates WORKSPACE_PATH (it must sit
+	directly under ${RUNNER_TEMP}/workspaces) and records it for run.
+	Docker is stubbed; the stub editor edits /source.
+	"""
+	with tempfile.TemporaryDirectory(prefix="review-iso-") as td:
+		root = Path(td)
+		checkout = root / "checkout"
+		work_tree = root / "workspaces" / "run"
+		runner_temp = root
+		runtime_dir = root / "runtime"
+		stub_bin = root / "bin"
+		for path in (checkout / "scripts", work_tree / "scripts", runtime_dir, stub_bin):
+			path.mkdir(parents=True)
+		(checkout / "scripts/app.py").write_text("before\n")
+		subprocess.run(["git", "init", "-q", str(checkout)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", "scripts"], cwd=checkout, env=_git_clean_env(), check=True)
+		subprocess.run(
+			["git", "-c", "user.name=t", "-c", "user.email=t@invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "base"],
+			cwd=checkout, env=_git_clean_env(), check=True,
+		)
+		(work_tree / "scripts/app.py").write_text("before\n")
+		docker_stub = stub_bin / "docker"
+		docker_stub.write_text(textwrap.dedent("""\
+			#!/usr/bin/env bash
+			case "$1" in
+				build) echo "sha256:$(printf '0%.0s' $(seq 1 64))"; exit 0 ;;
+				rm) exit 0 ;;
+			esac
+			source_dir=""
+			editor=false
+			for arg in "$@"; do
+				case "${arg}" in
+					type=bind,src=*,dst=/source) source_dir="${arg#type=bind,src=}"; source_dir="${source_dir%,dst=/source}" ;;
+					review-editor-*) editor=true ;;
+				esac
+			done
+			if [ "${editor}" = true ]; then
+				printf 'after\\n' > "${source_dir}/scripts/app.py"
+				echo "Changes made:"
+			fi
+			exit 0
+			"""))
+		docker_stub.chmod(0o755)
+		github_env = root / "github_env"
+		github_env.write_text("")
+		env = _git_clean_env({
+			"PATH": f"{stub_bin}:{os.environ['PATH']}",
+			"GIT_DIR": str(checkout / ".git"),
+			"GIT_WORK_TREE": str(work_tree),
+			"WORKSPACE_PATH": str(work_tree),
+			"GITHUB_WORKSPACE": str(checkout),
+			"GITHUB_ENV": str(github_env),
+			"RUNNER_TEMP": str(runner_temp),
+			"RUNTIME_DIR": str(runtime_dir),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"OPENROUTER_API_KEY": "test-only-key",
+			"PYTHONDONTWRITEBYTECODE": "1",
+		})
+		sandbox = str(REPO_ROOT / "scripts/review_untrusted_sandbox.sh")
+		# A workspace outside ${RUNNER_TEMP}/workspaces is never a transfer target.
+		stray = root / "stray"
+		stray.mkdir()
+		rejected = subprocess.run(
+			["bash", sandbox, "prepare"], cwd=work_tree, env={**env, "WORKSPACE_PATH": str(stray)},
+			capture_output=True, text=True, timeout=120,
+		)
+		assert rejected.returncode != 0 and "Review workspace path rejected" in rejected.stderr
+		# The per-PR tree has no .git, so GITHUB_WORKSPACE must stay the
+		# checkout; review_rb_judge.sh once replaced it with its cwd (#6455).
+		github_env.write_text("")
+		overridden = subprocess.run(
+			["bash", sandbox, "prepare"], cwd=work_tree, env={**env, "GITHUB_WORKSPACE": str(work_tree)},
+			capture_output=True, text=True, timeout=120,
+		)
+		assert overridden.returncode != 0 and "Review workspace path rejected" in overridden.stderr
+		github_env.write_text("")
+		prepared = subprocess.run(["bash", sandbox, "prepare"], cwd=work_tree, env=env, capture_output=True, text=True, timeout=120)
+		assert prepared.returncode == 0, prepared.stdout + prepared.stderr
+		sandbox_root = github_env.read_text().split("REVIEW_SANDBOX_ROOT=", 1)[1].strip()
+		prompt = root / "prompt.txt"
+		prompt.write_text("fix it\n")
+		config = root / "config.json"
+		config.write_text(json.dumps({
+			"model": "openrouter/openai/gpt-6-sol",
+			"provider": {"openrouter": {"options": {"baseURL": "https://openrouter.ai/api/v1"}}},
+		}))
+		ran = subprocess.run(
+			["bash", sandbox, "run", str(prompt), str(root / "editor_output.txt"), "openai/gpt-6-sol", "high", str(config)],
+			cwd=work_tree, env={**env, "REVIEW_SANDBOX_ROOT": sandbox_root}, capture_output=True, text=True, timeout=120,
+		)
+		assert ran.returncode == 0, ran.stdout + ran.stderr
+		assert not (runtime_dir / "review_sandbox_transfer_failed").exists()
+		assert (work_tree / "scripts/app.py").read_text() == "after\n"
+		assert (checkout / "scripts/app.py").read_text() == "before\n"
+		changed = subprocess.run(
+			["git", "diff", "--name-only", "HEAD"], cwd=work_tree,
+			env={**_git_clean_env(), "GIT_DIR": str(checkout / ".git"), "GIT_WORK_TREE": str(work_tree)},
+			capture_output=True, text=True, check=True,
+		)
+		assert changed.stdout.split() == ["scripts/app.py"]
+
+
+def test_review_blocked_fix_sandbox_prepare_accepts_per_pr_workspace() -> None:
+	"""The judge selects the sandbox target without replacing the checkout's .git.
+
+	The fix writer prepares its sandbox through
+	review_rb_opencode_sandbox_prepare (`prepare-ephemeral codex`, #6208). The
+	harness runs the judge's own selection block, prepare function and call
+	line; only the OpenCode config writer is stubbed.
+	"""
+	judge = RB_JUDGE.read_text(encoding="utf-8")
+	assert 'GITHUB_WORKSPACE="${RB_OPENCODE_WORKSPACE}"' not in judge
+	assert '"GITHUB_WORKSPACE=${RB_OPENCODE_WORKSPACE}"' not in judge
+	prepare_function = re.search(r"(?ms)^review_rb_opencode_sandbox_prepare\(\)\n\{\n.*?^\}\n", judge)
+	assert prepare_function, "missing review_rb_opencode_sandbox_prepare"
+	assert 'bash "${rb_oc_sandbox_sh}" prepare-ephemeral codex' in prepare_function.group(0)
+	selection = judge.split('      rb_fix_checkout_real=', 1)[1].split('      rb_fix_isolation_deferred=false\n', 1)[0]
+	prepare_lines = [
+		line.strip() for line in judge.splitlines()
+		if 'review_rb_opencode_sandbox_prepare "${RB_FIX_OPENCODE_CONFIG}" review_rb_fix' in line
+	]
+	assert prepare_lines == [
+		'elif ! WORKSPACE_PATH="${rb_fix_workspace_path}" review_rb_opencode_sandbox_prepare '
+		'"${RB_FIX_OPENCODE_CONFIG}" review_rb_fix "${RB_FIX_STDERR}" "${rb_fix_serena_mode}"; then'
+	]
+	prepare_command = prepare_lines[0].removeprefix("elif ! ").removesuffix("; then")
+	judge_prepare = (
+		"set -euo pipefail\n"
+		+ prepare_function.group(0)
+		+ "review_rb_prepare_opencode_config() { :; }\n"
+		+ 'RB_OPENCODE_WORKSPACE="$(pwd)"\nrb_fix_serena_mode="off"\n'
+		+ "rb_fix_checkout_real=" + selection
+		+ prepare_command + "\n"
+		+ 'printf "REVIEW_SANDBOX_ROOT=%s\\n" "${RB_OC_SANDBOX_ROOT}"\n'
+	)
+
+	with tempfile.TemporaryDirectory(prefix="rb-fix-iso-") as td:
+		root = Path(td)
+		checkout = root / "checkout"
+		work_tree = root / "workspaces" / "run"
+		stub_bin = root / "bin"
+		for path in (checkout / "scripts", work_tree / "scripts", stub_bin, root / "runtime"):
+			path.mkdir(parents=True)
+		(checkout / "scripts/app.py").write_text("before\n")
+		(work_tree / "scripts/app.py").write_text("before\n")
+		subprocess.run(["git", "init", "-q", str(checkout)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", "scripts"], cwd=checkout, env=_git_clean_env(), check=True)
+		subprocess.run(
+			["git", "-c", "user.name=t", "-c", "user.email=t@invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "base"],
+			cwd=checkout, env=_git_clean_env(), check=True,
+		)
+		docker_stub = stub_bin / "docker"
+		docker_stub.write_text(textwrap.dedent("""\
+			#!/usr/bin/env bash
+			case "$1" in
+				build) echo "sha256:$(printf '0%.0s' $(seq 1 64))"; exit 0 ;;
+				rm) exit 0 ;;
+				esac
+				source_dir=""
+				editor=false
+				for arg in "$@"; do
+					case "$arg" in
+						type=bind,src=*,dst=/source) source_dir="${arg#type=bind,src=}"; source_dir="${source_dir%,dst=/source}" ;;
+						review-editor-*) editor=true ;;
+					 esac
+				done
+				if [ "$editor" = true ]; then printf 'after\\n' > "${source_dir}/scripts/app.py"; fi
+				"""))
+		docker_stub.chmod(0o755)
+		fix_stderr = root / "rb_fix_stderr.txt"
+		env = _git_clean_env({
+			"PATH": f"{stub_bin}:{os.environ['PATH']}",
+			"GIT_DIR": str(checkout / ".git"),
+			"GIT_WORK_TREE": str(work_tree),
+			"WORKSPACE_PATH": str(work_tree),
+			"GITHUB_WORKSPACE": str(checkout),
+			"RUNNER_TEMP": str(root),
+			"RUNTIME_DIR": str(root / "runtime"),
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"RB_FIX_OPENCODE_CONFIG": str(root / "rb_fix_opencode.json"),
+			"RB_FIX_STDERR": str(fix_stderr),
+			"OPENROUTER_API_KEY": "test-only-key",
+			"PYTHONDONTWRITEBYTECODE": "1",
+		})
+		env.pop("GITHUB_ENV", None)
+		sandbox = str(REPO_ROOT / "scripts/review_untrusted_sandbox.sh")
+		# #6455: the per-PR tree has no .git, so GITHUB_WORKSPACE must stay the checkout.
+		old_call = subprocess.run(
+			["bash", sandbox, "prepare-ephemeral", "codex"], cwd=work_tree,
+			env={**env, "GITHUB_WORKSPACE": str(work_tree)},
+			capture_output=True, text=True, timeout=120,
+		)
+		assert old_call.returncode != 0 and "Review workspace path rejected" in old_call.stderr
+		prepared = subprocess.run(
+			["bash", "-c", judge_prepare], cwd=work_tree, env=env,
+			capture_output=True, text=True, timeout=120,
+		)
+		assert prepared.returncode == 0, prepared.stdout + prepared.stderr + fix_stderr.read_text()
+		sandbox_root = prepared.stdout.split("REVIEW_SANDBOX_ROOT=", 1)[1].strip()
+		assert sandbox_root
+		assert (Path(sandbox_root) / "workspace").read_text().strip() == str(work_tree)
+		prompt = root / "prompt.txt"
+		prompt.write_text("fix it\n")
+		config = root / "config.json"
+		config.write_text(json.dumps({
+			"model": "openrouter/openai/gpt-6-sol",
+			"provider": {"openrouter": {"options": {"baseURL": "https://openrouter.ai/api/v1"}}},
+		}))
+		# Same argument shape as the judge's rb_fix_opencode_cmd.
+		ran = subprocess.run(
+			["bash", sandbox, "run", str(prompt), str(root / "editor_output.txt"), "openai/gpt-6-sol", "high", str(config), "codex", "RB_JUDGE", "write"],
+			cwd=work_tree, env={**env, "REVIEW_SANDBOX_ROOT": sandbox_root},
+			capture_output=True, text=True, timeout=120,
+		)
+		assert ran.returncode == 0, ran.stdout + ran.stderr
+		assert (work_tree / "scripts/app.py").read_text() == "after\n"
+		assert (checkout / "scripts/app.py").read_text() == "before\n"
+
+		# The checkout layout must ignore a stale inherited per-PR target.
+		legacy = subprocess.run(
+			["bash", "-c", judge_prepare], cwd=checkout, env=env,
+			capture_output=True, text=True, timeout=120,
+		)
+		assert legacy.returncode == 0, legacy.stdout + legacy.stderr + fix_stderr.read_text()
+		legacy_root = legacy.stdout.split("REVIEW_SANDBOX_ROOT=", 1)[1].strip()
+		assert legacy_root and legacy_root != sandbox_root
+		assert (Path(legacy_root) / "workspace").read_text().strip() == str(checkout)
+		for sandbox_root_to_clean in (sandbox_root, legacy_root):
+			subprocess.run(
+				["bash", sandbox, "cleanup"], env={**env, "REVIEW_SANDBOX_ROOT": sandbox_root_to_clean},
+				check=True, capture_output=True, text=True, timeout=120,
+			)
+
+
+def _review_isolation_transfer_case(mutate, *, with_reason_env: bool = True, host_mutate=None):
+	"""Snapshot a small host tree, let `mutate` edit the sandbox, then transfer (#6413)."""
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		host = root / "host"
+		source = root / "isolated" / "source"
+		source.mkdir(parents=True)
+		(host / "scripts").mkdir(parents=True)
+		(host / "scripts/app.py").write_text("before\n")
+		subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+		subprocess.run(["git", "add", "scripts"], cwd=host, env=_git_clean_env(), check=True)
+		manifest = root / "isolated" / "baseline.json"
+		reason_file = root / "runtime" / "review_sandbox_transfer_reason"
+		reason_file.parent.mkdir()
+		env = {k: v for k, v in os.environ.items() if k != "REVIEW_SANDBOX_TRANSFER_REASON_FILE"}
+		def run(action: str, extra_env=None) -> subprocess.CompletedProcess[str]:
+			return subprocess.run(
+				[sys.executable, str(workspace_helper), action, str(host), str(source), str(manifest)],
+				env={**env, **(extra_env or {})}, capture_output=True, text=True, check=False,
+			)
+		assert run("snapshot").returncode == 0
+		assert run("refresh").returncode == 0
+		mutate(source, root)
+		if host_mutate is not None:
+			host_mutate(host)
+		host_before = sorted(str(p.relative_to(host)) for p in host.rglob("*") if ".git" not in p.relative_to(host).parts)
+		result = run("transfer", {"REVIEW_SANDBOX_TRANSFER_REASON_FILE": str(reason_file)} if with_reason_env else None)
+		host_after = sorted(str(p.relative_to(host)) for p in host.rglob("*") if ".git" not in p.relative_to(host).parts)
+		reason = reason_file.read_text() if reason_file.exists() else None
+		leftovers = sorted(p.name for p in reason_file.parent.iterdir())
+		return result, reason, host_before, host_after, leftovers
+
+
+def test_review_isolation_transfer_rejection_names_path_and_rule() -> None:
+	def make_dir(rel: str):
+		def mutate(source: Path, _root: Path) -> None:
+			(source / rel).mkdir(parents=True)
+			(source / rel / "x.py").write_text("x\n")
+		return mutate
+
+	def make_symlink(source: Path, root: Path) -> None:
+		target = root / "elsewhere"
+		target.mkdir()
+		(target / "x.py").write_text("x\n")
+		(source / "scripts/link").symlink_to(target, target_is_directory=True)
+
+	def make_root_file(source: Path, _root: Path) -> None:
+		(source / "Makefile").write_text("all:\n")
+
+	cases = [
+		(make_dir(".github/ai_SENTINEL"), "reason=unsafe_directory category=dot_github_subtree depth=2"),
+		(make_dir("scripts/my_secret"), "reason=unsafe_directory category=sensitive_name depth=2"),
+		(make_dir("scripts/Secrets"), "reason=unsafe_directory category=sensitive_name depth=2"),
+		(make_dir("scripts/Credentials"), "reason=unsafe_directory category=sensitive_name depth=2"),
+		(make_dir("scripts/.envx"), "reason=unsafe_directory category=env_like depth=2"),
+		(make_symlink, "reason=unsafe_directory category=symlink depth=2"),
+		(make_root_file, "reason=unsafe_result_path"),
+		(make_dir("scripts/bad\nname::add-mask::%0A"), "reason=unsafe_directory category=invalid_name depth=2"),
+	]
+	for mutate, expected in cases:
+		result, reason, host_before, host_after, leftovers = _review_isolation_transfer_case(mutate)
+		assert result.returncode == 1, (expected, result.stderr)
+		assert result.stderr == f"::error::Review isolation snapshot or transfer rejected (ValueError) {expected}\n", result.stderr
+		# Only fixed classification tokens reach the log.
+		assert result.stderr.count("::") == 2 and result.stderr.count("\n") == 1
+		assert reason is None
+		assert host_after == host_before
+		assert leftovers == []
+		assert "my_secret" not in result.stderr and ".envx" not in result.stderr
+		assert "path=" not in result.stderr
+
+
+def test_review_isolation_transfer_prunes_root_dot_and_case_variant_build_dirs() -> None:
+	# Exact excluded build names are pruned; case variants fail closed.
+	def mutate(source: Path, _root: Path) -> None:
+		for rel in ("build", "scripts/dist", "scripts/nested/coverage"):
+			(source / rel).mkdir(parents=True)
+			(source / rel / "x.py").write_text("x\n")
+
+	result, reason, host_before, host_after, _leftovers = _review_isolation_transfer_case(mutate)
+	assert result.returncode == 0, result.stderr
+	assert reason is None
+	assert host_after == host_before
+	assert not any(path.endswith("/x.py") for path in host_after)
+	for variant in ("Build", "scripts/Dist", "scripts/nested/Coverage"):
+		result, reason, host_before, host_after, _leftovers = _review_isolation_transfer_case(
+			lambda source, _root: (source / variant).mkdir(parents=True),
+		)
+		assert result.returncode == 1
+		depth = "1" if variant == "Build" else "3+" if variant.count("/") == 2 else "2"
+		assert f"reason=unsafe_directory category=excluded_name_variant depth={depth}" in result.stderr
+		assert reason is None
+		assert host_before == host_after
+
+
+def test_review_isolation_transfer_plain_rejection_reports_fixed_detail() -> None:
+	def host_mutate(host: Path) -> None:
+		(host / "scripts/app.py").write_text("host changed\n")
+
+	def noop(_source: Path, _root: Path) -> None:
+		return None
+
+	expected = "reason=host_baseline_changed"
+	result, reason, _before, _after, _leftovers = _review_isolation_transfer_case(noop, host_mutate=host_mutate)
+	assert result.returncode == 1
+	assert result.stderr == f"::error::Review isolation snapshot or transfer rejected (ValueError) {expected}\n"
+	assert reason is None
+	result, reason, _before, _after, leftovers = _review_isolation_transfer_case(noop, host_mutate=host_mutate, with_reason_env=False)
+	assert result.returncode == 1
+	assert reason is None and leftovers == []
+
+
+def test_review_sandbox_transfer_reason_is_reported_and_archived() -> None:
+	helper = (REPO_ROOT / "scripts/review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	assert helper.count('2> "${RUNTIME_DIR}/review_sandbox_transfer_reason_${output##*/}"') == 2
+	apply_fixes = _apply_fixes_text()
+	start = apply_fixes.index('if [ -f "${RUNTIME_DIR}/review_sandbox_transfer_failed" ]; then')
+	block = apply_fixes[start:apply_fixes.index("exit 1", start)]
+	assert 'cp "${tmp_err}" "${PREVIOUS_REVIEWS_DIR}/editor_attempt_${attempt}.err"' in block
+	assert 'cp "${transfer_reason_file}" "${PREVIOUS_REVIEWS_DIR}/review_sandbox_transfer_reason_${attempt}.txt"' in block
+	assert "::error::Review sandbox result transfer was incomplete; refusing editor fallback. reason=${transfer_reason}" in block
+	assert 'transfer_reason_file="${RUNTIME_DIR}/review_sandbox_transfer_reason_${tmp_output##*/}"' in block
+	assert "including selected .claude/commands/ files, selected .claude/docs/ reference files, .claude/hooks/gh_api_write_guard.py" in apply_fixes
+	assert "sandbox-excluded path" in apply_fixes
+
+
+def test_review_isolation_unsafe_directory_reports_path_free_category() -> None:
+	"""An unsafe_directory rejection only names fixed classification tokens.
+
+	The rejection itself is unchanged: the whole transfer still fails before
+	the first host write, including the legitimate edit beside the directory.
+	"""
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	cases = (
+		(".github/ai_SENTINEL", "dot_github_subtree", "2"),
+		("scripts/secret_store_SENTINEL", "sensitive_name", "2"),
+		("scripts/.envdir_SENTINEL", "env_like", "2"),
+		("scripts/Build", "excluded_name_variant", "2"),
+		("scripts/nested/Coverage", "excluded_name_variant", "3+"),
+		("scripts/certs_SENTINEL.pem", "key_material_suffix", "2"),
+		("scripts/back\\slash_SENTINEL", "invalid_name", "2"),
+		("scripts/linkdir_SENTINEL", "symlink", "2"),
+	)
+	for rel, category, depth in cases:
+		with tempfile.TemporaryDirectory() as td:
+			root = Path(td)
+			host = root / "host"
+			source = root / "isolated" / "source"
+			source.mkdir(parents=True)
+			(host / "scripts/nested").mkdir(parents=True)
+			(host / ".github/workflows").mkdir(parents=True)
+			(host / "scripts/app.py").write_text("before\n")
+			(host / "scripts/nested/keep.py").write_text("keep\n")
+			(host / ".github/workflows/example.yml").write_text("before\n")
+			subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+			subprocess.run(["git", "add", "scripts", ".github"], cwd=host, env=_git_clean_env(), check=True)
+			manifest = root / "isolated" / "baseline.json"
+			def run(action: str) -> subprocess.CompletedProcess[str]:
+				return subprocess.run(
+					[sys.executable, str(workspace_helper), action, str(host), str(source), str(manifest)],
+					capture_output=True, text=True, check=False,
+				)
+			assert run("snapshot").returncode == 0
+			assert run("refresh").returncode == 0
+			(source / "scripts/app.py").write_text("after\n")
+			offending = source / rel
+			if rel == "scripts/linkdir_SENTINEL":
+				outside = root / "outside"
+				outside.mkdir()
+				(outside / "inner.py").write_text("outside\n")
+				offending.symlink_to(outside, target_is_directory=True)
+			else:
+				offending.mkdir(parents=True)
+				(offending / "inner.py").write_text("untrusted\n")
+			result = run("transfer")
+			assert result.returncode != 0, rel
+			assert f"(ValueError) reason=unsafe_directory category={category} depth={depth}" in result.stderr, (rel, result.stderr)
+			assert "SENTINEL" not in result.stderr, rel
+			assert (host / "scripts/app.py").read_text() == "before\n", rel
+			assert not (host / rel / "inner.py").exists(), rel
+
+
+def test_review_isolation_rejection_line_drops_unknown_tokens() -> None:
+	spec = importlib.util.spec_from_file_location("review_untrusted_workspace", REPO_ROOT / "scripts/review_untrusted_workspace.py")
+	assert spec and spec.loader
+	workspace_module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(workspace_module)
+	assert workspace_module._log_safe_dir("scripts/safe-name") == "scripts/safe-name"
+	for forged in ("../etc", "scripts/evil\n::error::y", "a//b", "scripts/my_secret", "scripts/.env-private", "scripts/private.pem", "scripts/private.key", "scripts/private.dist-info", "a" * 65):
+		assert workspace_module._log_safe_dir(forged) == "redacted"
+
+
+def test_review_isolation_reports_snapshot_refresh_and_transfer_reasons() -> None:
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		host, source, manifest = _review_transfer_fixture(root, {"a.py": b"before"})
+		(host / "a.py").write_bytes(b"changed")
+		refresh_result = subprocess.run(
+			[sys.executable, str(workspace_helper), "refresh", str(host), str(source), str(manifest)],
+			capture_output=True, text=True, check=False,
+		)
+		assert refresh_result.returncode == 1
+		assert refresh_result.stderr == "::error::Review isolation snapshot or transfer rejected (ValueError) reason=host_baseline_changed\n"
+		(host / "a.py").write_bytes(b"before")
+		spec = importlib.util.spec_from_file_location("workspace_rejection_test", workspace_helper)
+		assert spec and spec.loader
+		workspace_module = importlib.util.module_from_spec(spec)
+		spec.loader.exec_module(workspace_module)
+		with mock.patch.object(workspace_module, "MAX_TOTAL", 0):
+			for action in ("snapshot", "transfer"):
+				output_source = source if action == "transfer" else root / "snapshot-source"
+				output_source.mkdir(exist_ok=True)
+				error_output = io.StringIO()
+				with mock.patch.object(sys, "argv", [str(workspace_helper), action, str(host), str(output_source), str(manifest)]), \
+						contextlib.redirect_stderr(error_output), pytest.raises(SystemExit) as error:
+					workspace_module.main()
+				assert error.value.code == 1
+				assert error_output.getvalue() == "::error::Review isolation snapshot or transfer rejected (ValueError) reason=size_limit\n"
+		assert (host / "a.py").read_bytes() == b"before"
+
+
+def test_review_isolation_reports_result_conflicts_host() -> None:
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	with tempfile.TemporaryDirectory() as td:
+		host, source, manifest = _review_transfer_fixture(Path(td), {"a.py": b"before"})
+		(host / "b.py").write_bytes(b"host")
+		(source / "a.py").write_bytes(b"edited")
+		(source / "b.py").write_bytes(b"container")
+		result = subprocess.run(
+			[sys.executable, str(workspace_helper), "transfer", str(host), str(source), str(manifest)],
+			capture_output=True, text=True, check=False,
+		)
+		assert result.returncode == 1
+		assert result.stderr == "::error::Review isolation snapshot or transfer rejected (ValueError) reason=result_conflicts_host\n"
+		assert (host / "a.py").read_bytes() == b"before"
+		assert (host / "b.py").read_bytes() == b"host"
+
+
+
+_SMOKE_CANARY_BAIT = (
+	"status: BROKEN_BY_E2E_BAIT_123\n"
+	"run_id: WRONG_VALUE_SHOULD_BE_123\n"
+	"updated-by: e2e-bait-injector\n"
+	"# E2E_EDITOR_BAIT_123: canary corrupted; restore to linked issue spec (smoke gate)\n"
+)
+_SMOKE_CANARY_SPEC = "status: ok\nrun_id: 123\nupdated-by: ai-pipeline\n"
+
+
+def _seed_fixture(root: Path):
+	"""Snapshot a host with a baited smoke canary; return (host, source, run)."""
+	workspace_helper = REPO_ROOT / "scripts/review_untrusted_workspace.py"
+	host = root / "host"
+	source = root / "isolated" / "source"
+	source.mkdir(parents=True)
+	(host / "tests").mkdir(parents=True)
+	(host / "tests/e2e_smoke_canary.txt").write_text(_SMOKE_CANARY_BAIT)
+	subprocess.run(["git", "init", "-q", str(host)], env=_git_clean_env(), check=True)
+	subprocess.run(["git", "add", "tests"], cwd=host, env=_git_clean_env(), check=True)
+	manifest = root / "isolated" / "baseline.json"
+	payload = root / "payload.txt"
+	payload.write_text(_SMOKE_CANARY_SPEC)
+
+	def run(action: str, *extra: str) -> subprocess.CompletedProcess[str]:
+		return subprocess.run(
+			[sys.executable, str(workspace_helper), action, str(host), str(source), str(manifest), *extra],
+			env={**os.environ, "GIT_DIR": str(host / ".git"), "GIT_WORK_TREE": str(host)},
+			capture_output=True, text=True, check=False,
+		)
+
+	assert run("snapshot").returncode == 0
+	return host, source, payload, run
+
+
+def test_review_isolation_seed_publishes_smoke_canary_through_transfer() -> None:
+	"""Regression for release gate run 37669315093 (review run 37674139451)."""
+	with tempfile.TemporaryDirectory() as td:
+		host, source, payload, run = _seed_fixture(Path(td))
+		canary = "tests/e2e_smoke_canary.txt"
+		seeded = run("seed", canary, str(payload))
+		assert seeded.returncode == 0, seeded.stderr
+		# Seeding never touches the host before the validated transfer.
+		assert (host / canary).read_text() == _SMOKE_CANARY_BAIT
+		assert (source / canary).read_text() == _SMOKE_CANARY_SPEC
+		transferred = run("transfer")
+		assert transferred.returncode == 0, transferred.stderr
+		assert (host / canary).read_text() == _SMOKE_CANARY_SPEC
+		spec_path = REPO_ROOT / "tests/e2e_smoke_canary_spec.txt"
+		if spec_path.exists():
+			for key in ("status: ok", "run_id:", "updated-by: ai-pipeline"):
+				assert key in spec_path.read_text(encoding="utf-8")
+	# The old order (host write after the snapshot) is still refused.
+	with tempfile.TemporaryDirectory() as td:
+		host, source, _payload, run = _seed_fixture(Path(td))
+		(host / "tests/e2e_smoke_canary.txt").write_text(_SMOKE_CANARY_SPEC)
+		refused = run("transfer")
+		assert refused.returncode != 0
+		assert "reason=host_baseline_changed" in refused.stderr
+
+
+def test_review_isolation_seed_rejects_host_drift_symlinks_and_unknown_paths() -> None:
+	canary = "tests/e2e_smoke_canary.txt"
+	with tempfile.TemporaryDirectory() as td:
+		host, source, payload, run = _seed_fixture(Path(td))
+		(host / canary).write_text("host drifted\n")
+		drift = run("seed", canary, str(payload))
+		assert drift.returncode != 0
+		assert "reason=host_baseline_changed" in drift.stderr
+		assert (source / canary).read_text() == _SMOKE_CANARY_BAIT
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		host, source, payload, run = _seed_fixture(root)
+		outside = root / "outside.txt"
+		outside.write_text("outside\n")
+		(source / canary).unlink()
+		(source / canary).symlink_to(outside)
+		linked = run("seed", canary, str(payload))
+		assert linked.returncode != 0
+		assert "reason=symlink_in_path" in linked.stderr
+		assert outside.read_text() == "outside\n"
+	with tempfile.TemporaryDirectory() as td:
+		host, source, payload, run = _seed_fixture(Path(td))
+		for name in ("tests/other.txt", "../escape.txt", ".github/x.txt", ".env.txt"):
+			rejected = run("seed", name, str(payload))
+			assert rejected.returncode != 0, name
+			assert "reason=unsafe_result_path" in rejected.stderr, name
+		assert not (source / "tests/other.txt").exists()
+		assert run("seed", canary).returncode == 2
+
+
+def test_review_isolation_seed_wiring() -> None:
+	helper = (REPO_ROOT / "scripts/review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	assert 'case "${action}" in prepare|prepare-ephemeral|run|cleanup|seed) ;; *) exit 2 ;; esac' in helper
+	seed_call = 'review_untrusted_workspace.py" seed "${workspace}" "${root}/source" "${root}/baseline.json" "$2" "$3"'
+	assert seed_call in helper
+	# The seed branch only runs on a validated, prepared root.
+	assert helper.index("echo '::error::Review sandbox not prepared'") < helper.index(seed_call)
+	assert helper.index(seed_call) < helper.index('[ "$#" -ge 6 ] && [ "$#" -le 9 ] || exit 2')
+
+def test_review_relay_accepts_only_configured_chat_model() -> None:
+	spec = importlib.util.spec_from_file_location("review_broker", REPO_ROOT / "scripts/clarify_openrouter_broker.py")
+	assert spec and spec.loader
+	broker_module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(broker_module)
+	seen = []
+
+	class Upstream:
+		def __init__(self, _host, **_kwargs):
+			pass
+
+		def request(self, method, path, body, headers):
+			seen.append((method, path, json.loads(body)["model"], headers["Authorization"]))
+
+		def getresponse(self):
+			class Response:
+				status = 200
+				def getheader(self, _name, default):
+					return default
+				def read1(self, _size):
+					return b""
+			return Response()
+
+		def close(self):
+			pass
+
+	with tempfile.TemporaryDirectory() as td, mock.patch.object(broker_module.http.client, "HTTPSConnection", Upstream):
+		server = broker_module.UnixHTTPServer(str(Path(td) / "broker.sock"), broker_module.Relay)
+		server.mode = "review-broker"
+		server.model = "openai/gpt-6-sol"
+		server.api_key = "test-only-key"
+		thread = threading.Thread(target=server.serve_forever, daemon=True)
+		thread.start()
+		try:
+			for path, model, status in (("/api/v1/responses", "openai/gpt-6-sol", 400),
+				("/api/v1/chat/completions", "other/model", 400),
+				("/api/v1/chat/completions", "openai/gpt-6-sol", 200)):
+				conn = broker_module.UnixHTTPConnection(str(Path(td) / "broker.sock"))
+				# The rejected route closes before reading a body; send no body
+				# there to avoid a client-side BrokenPipe race on a Unix socket.
+				body = None if path == "/api/v1/responses" else json.dumps({"model": model})
+				conn.request("POST", path, body, {"Content-Type": "application/json"})
+				assert conn.getresponse().status == status
+				conn.close()
+		finally:
+			server.shutdown()
+			server.server_close()
+			thread.join(timeout=2)
+	assert seen == [("POST", "/api/v1/chat/completions", "openai/gpt-6-sol", "Bearer test-only-key")]
+
+
+def test_review_relay_main_preserves_invoked_mode() -> None:
+	spec = importlib.util.spec_from_file_location("review_broker", REPO_ROOT / "scripts/clarify_openrouter_broker.py")
+	assert spec and spec.loader
+	broker_module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(broker_module)
+	with mock.patch.object(broker_module, "UnixHTTPServer") as broker_class, \
+		mock.patch.object(broker_module.http.server, "HTTPServer") as bridge_class, \
+		mock.patch.object(broker_module.os, "chmod"), \
+		mock.patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-only-key"}):
+		for mode in ("broker", "bridge", "review-broker", "review-bridge"):
+			with mock.patch.object(broker_module.sys, "argv", ["broker", mode, "/unused.sock"]):
+				broker_module.main()
+			server = broker_class.return_value if mode.endswith("broker") else bridge_class.return_value
+			assert server.mode == mode
+
+
+def _review_step_runs_after_status(condition: object, job_failed: bool) -> bool:
+	"""Model GitHub's step status functions for an ``if:`` expression.
+
+	``always()`` and ``!cancelled()`` run regardless of an earlier failure,
+	``failure()`` runs only after one, and anything else (explicit
+	``success()`` or no status function) runs only while nothing has failed.
+	"""
+	text = str(condition or "")
+	if "always()" in text or "!cancelled()" in text:
+		return True
+	if "failure()" in text:
+		return job_failed
+	return not job_failed
+
+
+def test_review_sandbox_cleanup_failure_cannot_skip_commit_or_fake_changes_lost() -> None:
+	"""Reproduces #6484 / run 37666355049: cleanup exited 1 before ``Commit
+	changes``, the implicit ``success()`` skipped the commit and the
+	``!cancelled()`` detector reported the editor's work as editor_changes_lost.
+	"""
+	workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
+	steps = workflow["jobs"]["codex-agent"]["steps"]
+	cleanup_name = "Clean up isolated review workspace"
+	by_name = {step.get("name"): step for step in steps}
+	cleanup = by_name[cleanup_name]
+	assert "always()" in str(cleanup.get("if")), "cleanup must still run after editor failures"
+	assert '"${SUPPORT_SCRIPTS_DIR}/review_untrusted_sandbox.sh" cleanup' in cleanup["run"]
+	assert '>(tee -a "${RUNTIME_DIR}/editor_stage_stderr.txt" >&2)' in cleanup["run"]
+	job_failed = False
+	evaluated: dict[str, bool] = {}
+	for step in steps:
+		name = step.get("name")
+		runs = _review_step_runs_after_status(step.get("if"), job_failed)
+		evaluated[name] = runs
+		if name == cleanup_name:
+			assert runs
+			job_failed = True  # cleanup exits 1
+	names = [step.get("name") for step in steps]
+	assert names.index("Commit changes") < names.index(cleanup_name), "Commit changes must run before sandbox cleanup"
+	assert names.index("Remove slop-scan runtime artifact") < names.index("Commit changes")
+	assert evaluated["Commit changes"] is True, "a cleanup failure must not skip the commit"
+	assert evaluated["Push all pending commits"] is False, "a cleanup failure must still block the push"
+	detector = str(by_name["Detect editor-claimed-but-uncommitted changes"].get("if"))
+	# With did_commit=true (the commit ran) and the strict ledger flag unset,
+	# the detector is gated off, so editor_changes_lost is not reported.
+	assert "(steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true')" in detector
+
+
+def _run_review_sandbox_cleanup(runner_temp: Path, root: Path, stub_bin: Path) -> subprocess.CompletedProcess[str]:
+	env = {key: value for key, value in os.environ.items() if key not in {"REVIEW_SANDBOX_ROOT", "WORKSPACE_PATH"}}
+	env.update({
+		"PATH": f"{stub_bin}:{os.environ['PATH']}",
+		"RUNNER_TEMP": str(runner_temp),
+		"REVIEW_SANDBOX_ROOT": str(root),
+		"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+		"PYTHONDONTWRITEBYTECODE": "1",
+	})
+	return subprocess.run(
+		["bash", str(REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh"), "cleanup"],
+		env=env, capture_output=True, text=True, check=False, timeout=60,
+	)
+
+
+def _make_prepared_review_root(root: Path) -> None:
+	root.mkdir(parents=True)
+	(root / "image").write_text("sha256:" + "0" * 64 + "\n")
+	(root / "baseline.json").write_text("{}\n")
+
+
+def test_review_sandbox_cleanup_reports_path_free_reason() -> None:
+	assert 'LOG_PREFIX.name=REVIEW_SANDBOX_CLEANUP' in _agents_text_with_fragments()
+	with tempfile.TemporaryDirectory(prefix="review-cleanup-") as td:
+		runner_temp = Path(td).resolve()
+		stub_bin = runner_temp / "bin"
+		stub_bin.mkdir()
+		docker_stub = stub_bin / "docker"
+		docker_stub.write_text("#!/usr/bin/env bash\nexit 0\n")
+		docker_stub.chmod(0o755)
+		locked = runner_temp / "review-isolated-locked"
+		try:
+			# Read-only nested directory (dependency cache shape): repaired once.
+			_make_prepared_review_root(locked)
+			nested = locked / "source" / "cache"
+			nested.mkdir(parents=True)
+			(nested / "pkg.txt").write_text("x\n")
+			nested.chmod(0o555)
+			result = _run_review_sandbox_cleanup(runner_temp, locked, stub_bin)
+			assert result.returncode == 0, result.stderr
+			assert not locked.exists()
+			if os.geteuid() != 0:
+				assert "REVIEW_SANDBOX_CLEANUP reason=remove_permission_repaired" in result.stderr
+			assert "::error::" not in result.stderr
+			assert not list(runner_temp.glob("review-cleanup-err-*"))
+		finally:
+			if locked.exists():
+				for dirpath, _dirs, _files in os.walk(locked):
+					os.chmod(dirpath, 0o755)
+
+		# A clean root is removed silently, as before.
+		plain = runner_temp / "review-isolated-plain"
+		_make_prepared_review_root(plain)
+		result = _run_review_sandbox_cleanup(runner_temp, plain, stub_bin)
+		assert result.returncode == 0 and result.stderr == "" and not plain.exists(), result.stderr
+
+		missing_baseline = runner_temp / "review-isolated-nobaseline"
+		_make_prepared_review_root(missing_baseline)
+		(missing_baseline / "baseline.json").unlink()
+		result = _run_review_sandbox_cleanup(runner_temp, missing_baseline, stub_bin)
+		assert result.returncode == 1
+		assert "Review sandbox not prepared" in result.stderr
+		assert "::error::REVIEW_SANDBOX_CLEANUP reason=baseline_missing" in result.stderr
+		assert str(missing_baseline) not in result.stderr
+
+		missing_image = runner_temp / "review-isolated-noimage"
+		_make_prepared_review_root(missing_image)
+		(missing_image / "image").unlink()
+		result = _run_review_sandbox_cleanup(runner_temp, missing_image, stub_bin)
+		assert result.returncode == 1 and "REVIEW_SANDBOX_CLEANUP reason=image_marker_missing" in result.stderr
+
+		nested_root = runner_temp / "review-isolated-outer" / "review-isolated-inner"
+		_make_prepared_review_root(nested_root)
+		result = _run_review_sandbox_cleanup(runner_temp, nested_root, stub_bin)
+		assert result.returncode == 1 and "REVIEW_SANDBOX_CLEANUP reason=root_outside_runner_temp" in result.stderr
+		assert str(nested_root) not in result.stderr
+
+		elsewhere = runner_temp / "other" / "review-isolated-x"
+		_make_prepared_review_root(elsewhere)
+		result = _run_review_sandbox_cleanup(runner_temp, elsewhere, stub_bin)
+		assert result.returncode == 1 and "REVIEW_SANDBOX_CLEANUP reason=root_pattern_mismatch" in result.stderr
+
+		# rm keeps failing: classify its stderr, never echo its paths.
+		rm_bin = runner_temp / "rmbin"
+		rm_bin.mkdir()
+		rm_stub = rm_bin / "rm"
+		rm_stub.write_text("#!/usr/bin/env bash\necho \"rm: cannot remove '/secret/path': Permission denied\" >&2\nexit 1\n")
+		rm_stub.chmod(0o755)
+		(rm_bin / "docker").write_text(docker_stub.read_text())
+		(rm_bin / "docker").chmod(0o755)
+		stuck = runner_temp / "review-isolated-stuck"
+		_make_prepared_review_root(stuck)
+		result = _run_review_sandbox_cleanup(runner_temp, stuck, rm_bin)
+		assert result.returncode == 1
+		assert "::error::REVIEW_SANDBOX_CLEANUP reason=remove_failed cause=permission_denied" in result.stderr
+		assert "/secret/path" not in result.stderr
+		assert str(stuck) not in result.stderr
+
+	# The run path keeps its original single-line output.
+	helper = (REPO_ROOT / "scripts" / "review_untrusted_sandbox.sh").read_text(encoding="utf-8")
+	assert 'if [ "${action}" = cleanup ]; then\n\t\techo "::error::REVIEW_SANDBOX_CLEANUP reason=${sandbox_root_reason}" >&2' in helper
+
+
+def _step_if_line(step_name: str) -> str:
+	return next(line.strip() for line in _step_block(step_name).splitlines() if line.strip().startswith("if:"))
+
+
+def test_force_rb_judge_host_only_marker_skips_conflict_steps_but_not_the_judge() -> None:
+	"""Issue #6743 (#6733): the gate's trusted same-head host-only decision
+	skips conflict detection and both resolver halves; the judge and the
+	review-blocked handoff keep their conditions."""
+	text = _workflow_text()
+	gate = _job_block("gate")
+	assert "force_rb_judge_conflict_skip: ${{ steps.evaluate.outputs.force_rb_judge_conflict_skip }}" in gate
+	assert "REVIEW_FORCE_RB_JUDGE_HOST_ONLY_SKIP_ENABLED: ${{ vars.REVIEW_FORCE_RB_JUDGE_HOST_ONLY_SKIP_ENABLED || 'true' }}" in gate
+	assert 'echo "force_rb_judge_conflict_skip=${FORCE_RB_JUDGE_CONFLICT_SKIP}" >> "${GITHUB_OUTPUT}"' in gate
+	assert '[ "${frj_marker_reason}" != "conflict_resolver_sandbox_path_host_only" ]' in gate
+	assert "AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP pr=" in gate
+	# A newer trusted marker of any reason (provider_unavailable included) keeps the conflict steps.
+	assert '[ "${frj_newest_reason}" != "conflict_resolver_sandbox_path_host_only" ]' in gate
+	# The helper checkout and support verification must also run on
+	# force_rb_judge dispatches when the fingerprint cap is disabled.
+	for setup_step in ("Checkout fingerprint cap helper", "Verify fingerprint cap support identity"):
+		assert "|| inputs.force_rb_judge || github.event.inputs.force_rb_judge == 'true'" in _step_if_line(setup_step), setup_step
+	assert "AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP: ${{ needs.gate.outputs.force_rb_judge_conflict_skip || 'false' }}" in _job_block("codex-agent")
+	skip_condition = "env.AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP != 'true'"
+	for step_name in (
+		"Detect merge conflicts",
+		"Prepare merge-conflict resolver prompt and pre-snapshot",
+		"Run Codex resolver, validate, stage, commit",
+	):
+		assert skip_condition in _step_if_line(step_name), step_name
+	assert _step_if_line("Prepare merge-conflict resolver prompt and pre-snapshot") == _step_if_line("Run Codex resolver, validate, stage, commit")
+	for step_name in (
+		"Review-blocked judge decision",
+		"Mark linked issues review-blocked (autofix exhaustion)",
+		"Post review-blocked comment on PR (autofix exhaustion)",
+	):
+		assert "AUTOFIX_FORCE_RB_JUDGE_CONFLICT_SKIP" not in _step_block(step_name), step_name
+	# The sandbox refusal itself is unchanged.
+	assert "_resolver_fail_closed sandbox_path_host_only" in (REPO_ROOT / "scripts" / "review_conflict_resolve.sh").read_text(encoding="utf-8")
+	assert text.count(skip_condition) == 3
+
+
+# ── Reviewer pass-2 shadow decision (issue #7625) ──────────────────────
+
+_PASS2_SHADOW_FAILED_LINE = "REVIEWER_PASS2_SHADOW would_skip=unknown reason=evaluation_failed"
+
+
+def _reviewer_pass2_shadow_helper_block() -> str:
+	text = _reviewers_text()
+	start = text.index("# ── Reviewer pass-2 shadow helpers")
+	end = text.index("# ── End reviewer pass-2 shadow helpers", start)
+	return text[start:end]
+
+
+def _reviewer_bash_function(name: str) -> str:
+	match = re.search(rf"(?ms)^{re.escape(name)}\(\) \{{\n.*?^\}}\n", _reviewers_text())
+	assert match, f"missing {name}() in review_run_reviewers.sh"
+	return match.group(0)
+
+
+def _run_pass2_shadow_harness(
+	tmp_path: Path,
+	*,
+	pass1_ok: int = 2,
+	pass1_failed: int = 0,
+	outputs: dict[str, str] | None = None,
+	changed_files: str | None = "docs/x.md\n",
+	diff_loc: int | None = 10,
+	threshold: str = "200",
+	env_overrides: dict[str, str | None] | None = None,
+) -> subprocess.CompletedProcess[str]:
+	reviews = tmp_path / "reviews"
+	reviews.mkdir(exist_ok=True)
+	for index in range(pass1_ok):
+		(reviews / f"status_pass1_model{index}.txt").write_text("success", encoding="utf-8")
+	for index in range(pass1_failed):
+		(reviews / f"status_pass1_failed{index}.txt").write_text("failed", encoding="utf-8")
+	for name, body in (outputs or {}).items():
+		(reviews / name).write_text(body, encoding="utf-8")
+	changed_path = tmp_path / "changed_files.txt"
+	if changed_files is not None:
+		changed_path.write_text(changed_files, encoding="utf-8")
+	pr_diff_path = tmp_path / "pr_diff.patch"
+	if diff_loc is not None:
+		pr_diff_path.write_text(_pass2_shadow_pr_diff(diff_loc), encoding="utf-8")
+
+	script = "\n".join(
+		[
+			"set -euo pipefail",
+			_reviewer_bash_function("reviewer_count_success_statuses"),
+			_reviewer_bash_function("reviewer_count_diff_loc"),
+			_reviewer_bash_function("reviewer_any_path_matches_regex"),
+			_reviewer_pass2_shadow_helper_block(),
+			"reviewer_pass2_shadow_log || true",
+			"echo HARNESS_DONE",
+		]
+	)
+	env = {key: value for key, value in os.environ.items() if not key.startswith("REVIEWER_")}
+	env.pop("PASS2_DIFF_LOC", None)
+	env.pop("HAS_PR_DIFF", None)
+	env.update(
+		{
+			"PREVIOUS_REVIEWS_DIR": str(reviews),
+			"RAW_REVIEWER_PR_CHANGED_FILES_FILE": str(changed_path),
+			"RAW_REVIEWER_PR_DIFF_FILE": str(pr_diff_path),
+			"PASS2_DIFF_LARGE_LOC": threshold,
+			"LAST_RUN_DIFF_FILE": str(tmp_path / "missing.diff"),
+		}
+	)
+	for key, value in (env_overrides or {}).items():
+		if value is None:
+			env.pop(key, None)
+		else:
+			env[key] = value
+	return subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, check=False)
+
+
+def _pass2_shadow_pr_diff(lines: int) -> str:
+	return "--- a/x\n+++ b/x\n" + "".join(f"+line {index}\n" for index in range(lines))
+
+
+def _shadow_lines(result: subprocess.CompletedProcess[str]) -> list[str]:
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.rstrip("\n").endswith("HARNESS_DONE"), result.stdout
+	return [line for line in result.stdout.splitlines() if line.startswith("REVIEWER_PASS2_SHADOW")]
+
+
+def test_reviewer_pass2_shadow_eligible(tmp_path: Path) -> None:
+	result = _run_pass2_shadow_harness(
+		tmp_path,
+		outputs={"pass1_model0.txt": "SEVERITY: NIT\nSEVERITY: low\n", "pass1_model1.txt": "No findings.\n"},
+	)
+	assert _shadow_lines(result) == [
+		"REVIEWER_PASS2_SHADOW would_skip=true reason=eligible pass1_ok=2 high_findings=0 diff_loc=10 threshold=200 sensitive=false"
+	]
+
+
+def test_reviewer_pass2_shadow_pass1_insufficient(tmp_path: Path) -> None:
+	result = _run_pass2_shadow_harness(tmp_path, pass1_ok=1, pass1_failed=2)
+	assert _shadow_lines(result) == [
+		"REVIEWER_PASS2_SHADOW would_skip=false reason=pass1_insufficient pass1_ok=1 high_findings=0 diff_loc=10 threshold=200 sensitive=false"
+	]
+
+
+@pytest.mark.parametrize(
+	"finding",
+	["SEVERITY: high", "Severity: CRITICAL", "SEVERITY: BLOCKER", "SEVERITY: major", "- **SEVERITY:** MAJOR"],
+)
+def test_reviewer_pass2_shadow_high_findings(tmp_path: Path, finding: str) -> None:
+	result = _run_pass2_shadow_harness(tmp_path, outputs={"pass1_model0.txt": f"File: a.py\n{finding}\n"})
+	assert _shadow_lines(result) == [
+		"REVIEWER_PASS2_SHADOW would_skip=false reason=high_findings pass1_ok=2 high_findings=1 diff_loc=10 threshold=200 sensitive=false"
+	]
+
+
+def test_reviewer_pass2_shadow_large_diff_at_threshold(tmp_path: Path) -> None:
+	result = _run_pass2_shadow_harness(tmp_path, diff_loc=200, threshold="200")
+	assert _shadow_lines(result) == [
+		"REVIEWER_PASS2_SHADOW would_skip=false reason=large_diff pass1_ok=2 high_findings=0 diff_loc=200 threshold=200 sensitive=false"
+	]
+
+
+def test_reviewer_pass2_shadow_sensitive_paths(tmp_path: Path) -> None:
+	result = _run_pass2_shadow_harness(tmp_path, changed_files="docs/x.md\nscripts/foo.sh\n")
+	assert _shadow_lines(result) == [
+		"REVIEWER_PASS2_SHADOW would_skip=false reason=sensitive_paths pass1_ok=2 high_findings=0 diff_loc=10 threshold=200 sensitive=true"
+	]
+
+
+def test_reviewer_pass2_shadow_reason_is_first_failing_condition(tmp_path: Path) -> None:
+	(tmp_path / "a").mkdir()
+	first = _run_pass2_shadow_harness(
+		tmp_path / "a",
+		pass1_ok=1,
+		outputs={"pass1_model0.txt": "SEVERITY: high\n"},
+		diff_loc=500,
+	)
+	assert _shadow_lines(first) == [
+		"REVIEWER_PASS2_SHADOW would_skip=false reason=pass1_insufficient pass1_ok=1 high_findings=1 diff_loc=500 threshold=200 sensitive=false"
+	]
+	(tmp_path / "b").mkdir()
+	second = _run_pass2_shadow_harness(
+		tmp_path / "b",
+		outputs={"pass1_model0.txt": "SEVERITY: high\n"},
+		changed_files="scripts/foo.sh\n",
+	)
+	assert _shadow_lines(second) == [
+		"REVIEWER_PASS2_SHADOW would_skip=false reason=high_findings pass1_ok=2 high_findings=1 diff_loc=10 threshold=200 sensitive=true"
+	]
+
+
+def test_reviewer_pass2_shadow_ignores_rejected_status_and_consensus_files(tmp_path: Path) -> None:
+	result = _run_pass2_shadow_harness(
+		tmp_path,
+		outputs={
+			"rejected_pass1_model0_attempt1.txt": "SEVERITY: high\n",
+			"consensus_pass1.txt": "SEVERITY: BLOCKER\n",
+			"pass1_model0.log": "SEVERITY: critical\n",
+			"review_model0.txt": "SEVERITY: high\n",
+		},
+	)
+	assert _shadow_lines(result) == [
+		"REVIEWER_PASS2_SHADOW would_skip=true reason=eligible pass1_ok=2 high_findings=0 diff_loc=10 threshold=200 sensitive=false"
+	]
+
+
+@pytest.mark.parametrize(
+	"case",
+	["invalid_regex", "missing_changed_files", "empty_changed_files", "missing_pr_diff", "empty_pr_diff", "has_pr_diff_false"],
+)
+def test_reviewer_pass2_shadow_evaluation_failed_fails_open(tmp_path: Path, case: str) -> None:
+	kwargs: dict[str, object] = {}
+	if case == "invalid_regex":
+		kwargs["env_overrides"] = {"REVIEWER_RISK_TIER_ALWAYS_FULL_REGEX": "(unclosed"}
+	elif case == "missing_changed_files":
+		kwargs["changed_files"] = None
+	elif case == "empty_changed_files":
+		kwargs["changed_files"] = "\n  \n"
+	elif case == "missing_pr_diff":
+		kwargs["diff_loc"] = None
+	elif case == "empty_pr_diff":
+		kwargs["diff_loc"] = None
+		empty = tmp_path / "empty.patch"
+		empty.write_text("", encoding="utf-8")
+		kwargs["env_overrides"] = {"RAW_REVIEWER_PR_DIFF_FILE": str(empty)}
+	else:
+		kwargs["env_overrides"] = {"HAS_PR_DIFF": "false"}
+	result = _run_pass2_shadow_harness(tmp_path, **kwargs)  # type: ignore[arg-type]
+	assert _shadow_lines(result) == [_PASS2_SHADOW_FAILED_LINE]
+
+
+def test_reviewer_pass2_shadow_measures_pr_diff_not_last_run_diff(tmp_path: Path) -> None:
+	# PASS2_DIFF_LOC counts the previous autofix diff (0 on a first review);
+	# the shadow must count the whole PR diff instead.
+	last_run = tmp_path / "last.diff"
+	last_run.write_text("No previous AI autofix run on PR head\n", encoding="utf-8")
+	result = _run_pass2_shadow_harness(
+		tmp_path,
+		diff_loc=300,
+		env_overrides={"PASS2_DIFF_LOC": "0", "LAST_RUN_DIFF_FILE": str(last_run)},
+	)
+	assert _shadow_lines(result) == [
+		"REVIEWER_PASS2_SHADOW would_skip=false reason=large_diff pass1_ok=2 high_findings=0 diff_loc=300 threshold=200 sensitive=false"
+	]
+
+
+@pytest.mark.parametrize("path", ["db/migrations/0001_init.sql", "app/migrate/step.rb"])
+def test_reviewer_pass2_shadow_migration_paths_are_sensitive(tmp_path: Path, path: str) -> None:
+	result = _run_pass2_shadow_harness(tmp_path, changed_files=f"{path}\n")
+	assert _shadow_lines(result) == [
+		"REVIEWER_PASS2_SHADOW would_skip=false reason=sensitive_paths pass1_ok=2 high_findings=0 diff_loc=10 threshold=200 sensitive=true"
+	]
+
+
+@pytest.mark.parametrize("value", [None, "", "true", "TRUE", "True"])
+def test_reviewer_pass2_shadow_switch_on_values_emit_line(tmp_path: Path, value: str | None) -> None:
+	result = _run_pass2_shadow_harness(tmp_path, env_overrides={"REVIEWER_PASS2_SHADOW_ENABLED": value})
+	assert len(_shadow_lines(result)) == 1
+	assert "::warning::" not in result.stderr
+
+
+@pytest.mark.parametrize("value", ["false", "FALSE"])
+def test_reviewer_pass2_shadow_switch_off_emits_nothing(tmp_path: Path, value: str) -> None:
+	result = _run_pass2_shadow_harness(tmp_path, env_overrides={"REVIEWER_PASS2_SHADOW_ENABLED": value})
+	assert _shadow_lines(result) == []
+	assert result.stdout == "HARNESS_DONE\n"
+	assert result.stderr == ""
+
+
+def test_reviewer_pass2_shadow_invalid_switch_warns_once_without_echoing_value(tmp_path: Path) -> None:
+	result = _run_pass2_shadow_harness(tmp_path, env_overrides={"REVIEWER_PASS2_SHADOW_ENABLED": "bogus"})
+	assert _shadow_lines(result) == []
+	assert result.stderr.count("::warning::") == 1
+	assert "REVIEWER_PASS2_SHADOW_ENABLED" in result.stderr
+	assert "bogus" not in result.stderr
+
+
+def test_reviewer_pass2_shadow_is_never_read_by_pass2_control() -> None:
+	text = _reviewers_text()
+	block = _reviewer_pass2_shadow_helper_block()
+	call = "  reviewer_pass2_shadow_log || true\n"
+	assert text.count(call) == 1
+	two_pass_start = text.index('if [ "${TWO_PASS_ENABLED}" = "true" ]; then\n  echo "Two-pass review enabled."')
+	loc_default = text.index('  : "${PASS2_DIFF_LOC:=0}"\n', two_pass_start)
+	call_at = text.index(call, two_pass_start)
+	pass2_launch = text.index(
+		'pass2_successful="$(run_reviewer_pass "review" "${PASS2_PROMPT_FILE}" "${PASS2_REASONING}")"', two_pass_start
+	)
+	single_pass = text.index('  echo "Single-pass review mode."', two_pass_start)
+	assert loc_default < call_at < pass2_launch < single_pass
+	outside = text.replace(block, "").replace(call, "")
+	for token in ("REVIEWER_PASS2_SHADOW", "would_skip", "reviewer_pass2_shadow"):
+		assert token not in outside, token
+	for forbidden in ("GITHUB_ENV", "GITHUB_OUTPUT", "gh_retry", "curl", "export "):
+		assert forbidden not in block, forbidden
+	assert not re.search(r"(?m)^(?!\s*#).*\bgh\s", block), "shadow helpers must not call gh"
+
+
+def test_reviewer_pass2_still_launches_when_shadow_would_skip(tmp_path: Path) -> None:
+	text = _reviewers_text()
+	two_pass_start = text.index('if [ "${TWO_PASS_ENABLED}" = "true" ]; then\n  echo "Two-pass review enabled."')
+	start = text.index('  : "${PASS2_DIFF_LOC:=0}"\n', two_pass_start)
+	launch = 'pass2_successful="$(run_reviewer_pass "review" "${PASS2_PROMPT_FILE}" "${PASS2_REASONING}")"'
+	end = text.index(launch, start) + len(launch)
+	reviews = tmp_path / "reviews"
+	reviews.mkdir()
+	for index in range(2):
+		(reviews / f"status_pass1_model{index}.txt").write_text("success", encoding="utf-8")
+	changed = tmp_path / "changed.txt"
+	changed.write_text("docs/x.md\n", encoding="utf-8")
+	pr_diff = tmp_path / "pr_diff.patch"
+	pr_diff.write_text(_pass2_shadow_pr_diff(10), encoding="utf-8")
+	marker = tmp_path / "pass2_launched"
+	script = "\n".join(
+		[
+			"set -euo pipefail",
+			_reviewer_bash_function("reviewer_count_success_statuses"),
+			_reviewer_bash_function("reviewer_count_diff_loc"),
+			_reviewer_bash_function("reviewer_any_path_matches_regex"),
+			_reviewer_pass2_shadow_helper_block(),
+			'assemble_reviewer_prompt() { : > "$1"; }',
+			'log_reviewer_prompt_components() { :; }',
+			'run_reviewer_pass() { printf "%s %s\\n" "$1" "$3" > "${PASS2_MARKER}"; echo 2; }',
+			"PASS2_DIFF_LOC=10",
+			"PASS2_DIFF_LARGE_LOC=200",
+			"PASS2_REASONING_SMALL=xhigh",
+			"PASS2_REASONING_LARGE=xhigh",
+			text[start:end],
+			'echo "pass2_successful=${pass2_successful}"',
+		]
+	)
+	env = {key: value for key, value in os.environ.items() if not key.startswith("REVIEWER_")}
+	env.update(
+		{
+			"PREVIOUS_REVIEWS_DIR": str(reviews),
+			"RAW_REVIEWER_PR_CHANGED_FILES_FILE": str(changed),
+			"RAW_REVIEWER_PR_DIFF_FILE": str(pr_diff),
+			"RUNTIME_DIR": str(tmp_path),
+			"REVIEWER_PROMPT_BODY_FILE": str(tmp_path / "body.txt"),
+			"CROSS_POLLINATION_FILE": str(tmp_path / "xpoll.txt"),
+			"PASS2_MARKER": str(marker),
+			"LAST_RUN_DIFF_FILE": str(tmp_path / "missing.diff"),
+		}
+	)
+	env.pop("HAS_PR_DIFF", None)
+	env.pop("PASS2_DIFF_LOC", None)
+	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, check=False)
+	assert result.returncode == 0, result.stderr
+	assert (
+		"REVIEWER_PASS2_SHADOW would_skip=true reason=eligible pass1_ok=2 high_findings=0 diff_loc=10 threshold=200 sensitive=false"
+		in result.stdout
+	)
+	assert marker.read_text(encoding="utf-8") == "review xhigh\n"
+	assert "pass2_successful=2" in result.stdout
+
+
+def _run_reviewer_pass2_shadow_tests() -> None:
+	"""Run the pytest-style pass-2 shadow tests, each case in its own temporary directory.
+
+	main() no longer calls this: it now runs every ``test_*`` function,
+	these included, with the same parametrize cases and ``tmp_path``.
+	"""
+	cases: list[tuple[object, tuple[object, ...]]] = [
+		(test_reviewer_pass2_shadow_eligible, ()),
+		(test_reviewer_pass2_shadow_pass1_insufficient, ()),
+		(test_reviewer_pass2_shadow_large_diff_at_threshold, ()),
+		(test_reviewer_pass2_shadow_sensitive_paths, ()),
+		(test_reviewer_pass2_shadow_reason_is_first_failing_condition, ()),
+		(test_reviewer_pass2_shadow_ignores_rejected_status_and_consensus_files, ()),
+		(test_reviewer_pass2_shadow_measures_pr_diff_not_last_run_diff, ()),
+		(test_reviewer_pass2_shadow_invalid_switch_warns_once_without_echoing_value, ()),
+		(test_reviewer_pass2_still_launches_when_shadow_would_skip, ()),
+	]
+	for finding in ("SEVERITY: high", "Severity: CRITICAL", "SEVERITY: BLOCKER", "SEVERITY: major", "- **SEVERITY:** MAJOR"):
+		cases.append((test_reviewer_pass2_shadow_high_findings, (finding,)))
+	for case in ("invalid_regex", "missing_changed_files", "empty_changed_files", "missing_pr_diff", "empty_pr_diff", "has_pr_diff_false"):
+		cases.append((test_reviewer_pass2_shadow_evaluation_failed_fails_open, (case,)))
+	for path in ("db/migrations/0001_init.sql", "app/migrate/step.rb"):
+		cases.append((test_reviewer_pass2_shadow_migration_paths_are_sensitive, (path,)))
+	for value in (None, "", "true", "TRUE", "True"):
+		cases.append((test_reviewer_pass2_shadow_switch_on_values_emit_line, (value,)))
+	for value in ("false", "FALSE"):
+		cases.append((test_reviewer_pass2_shadow_switch_off_emits_nothing, (value,)))
+	for func, args in cases:
+		with tempfile.TemporaryDirectory(prefix="pass2-shadow-") as tmp:
+			func(Path(tmp), *args)  # type: ignore[operator]
+	test_reviewer_pass2_shadow_is_never_read_by_pass2_control()
+
+
+# ── Integration post-sync test repair (#8210, plan phase P5) ──────────
+
+_POST_SYNC_REPAIR_SKIP_CLAUSE = "env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'"
+
+
+def test_post_sync_test_repair_skips_every_reviewer_and_editor_step() -> None:
+	raw = WORKFLOW.read_text(encoding="utf-8")
+	pre_review = [line for line in raw.splitlines() if "env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true'" in line]
+	# 19 since #8427 P3: the switch-gated done-check prepare and label steps.
+	# 21 since #9052: the review findings record write and upload steps.
+	assert len(pre_review) == 21, len(pre_review)
+	for line in pre_review:
+		assert line.lstrip().startswith("if: "), line
+		assert _POST_SYNC_REPAIR_SKIP_CLAUSE in line, line
+	# Plus the two merge-authorizing steps: a repair-only run reviewed nothing,
+	# so it must neither enable auto-merge nor apply ai:ready-to-merge.
+	# The security-pass gate and the review-blocked judge skip too: neither may
+	# dispatch an audit, use up a cycle, or fix/merge on a repair-only run.
+	for name in (
+		"Enable auto-merge on PR",
+		"Mark linked issues ready to merge",
+		"Single-issue security pass",
+		"Review-blocked judge decision",
+		# With the judge skipped its outputs are empty, so the exhaustion
+		# fallbacks would label, comment, poll and page without a verdict.
+		"Mark linked issues review-blocked (autofix exhaustion)",
+		"Force orchestrate poll after review-blocked exhaustion",
+		"Post review-blocked comment on PR (autofix exhaustion)",
+		"Telegram review-blocked judge decision",
+		"Telegram success",
+	):
+		assert _POST_SYNC_REPAIR_SKIP_CLAUSE in _step_block(name), name
+	assert raw.count(_POST_SYNC_REPAIR_SKIP_CLAUSE) == 30
+
+
+def test_post_sync_test_repair_commit_is_pushed() -> None:
+	push = _step_block("Push all pending commits")
+	assert (
+		"(env.DID_COMMIT == 'true' || env.CONFLICT_RESOLVED == 'true' || env.INTEGRATION_TEST_REPAIRED == 'true')"
+		in push
+	)
+	retrigger = _step_block("Re-trigger review via workflow_dispatch")
+	assert "INTEGRATION_TEST_REPAIRED" not in retrigger
+
+
+def test_post_sync_test_repair_step_follows_the_topology_gate() -> None:
+	raw = WORKFLOW.read_text(encoding="utf-8")
+	topology = raw.index("      - name: Pre-review deterministic merge-topology gate\n")
+	step = raw.index("      - name: Integration post-sync test repair\n")
+	reviewers = raw.index("      - name: Run reviewer models\n")
+	assert topology < step < reviewers
+	following = raw[topology + 1:step]
+	assert following.count("      - name: ") == 0
+	block = raw[step:reviewers]
+	# Widened for the final-CI repair (final-ci-failure-ci-fix plan, Phase 2).
+	assert ("if: ((inputs.post_sync_test_repair && startsWith(env.TARGET_BRANCH, 'orchestrator/project-')) "
+		"|| needs.gate.outputs.final_ci_repair == 'true') && env.CAN_PUSH == 'true'") in block
+	assert "continue-on-error: true" in block
+	assert "PREPUSH_TEST_GATE_STEP_MODE: integration" in block
+	assert "POST_SYNC_TEST_REPAIR: ${{ inputs.post_sync_test_repair }}" in block
+	assert "PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}" in block
+	assert 'source "${REVIEW_AUTOFIX_STEP_SCRIPT}"' in block
+	assert "review_autofix_step_prepush_test_gate.sh" in block
+
+
+def test_post_sync_test_repair_input_is_declared_on_both_triggers_and_the_template() -> None:
+	raw = WORKFLOW.read_text(encoding="utf-8")
+	declaration = (
+		"      post_sync_test_repair:\n"
+		"        description: \"Integration branch only: gate and repair post-sync test failures (#8210)\"\n"
+		"        required: false\n"
+		"        default: false\n"
+		"        type: boolean\n"
+	)
+	assert raw.count(declaration) == 2
+	call_start = raw.index("  workflow_call:\n")
+	dispatch_start = raw.index("  workflow_dispatch:\n")
+	positions = [m.start() for m in re.finditer(re.escape(declaration), raw)]
+	assert any(call_start < pos < dispatch_start for pos in positions)
+	assert any(pos > dispatch_start for pos in positions)
+	template = (REPO_ROOT / "workflow-templates" / "ai-review.yml").read_text(encoding="utf-8")
+	assert re.search(r"^      post_sync_test_repair:\n        description: ", template, re.M)
+	assert (
+		"      post_sync_test_repair: ${{ github.event_name == 'workflow_dispatch' && "
+		"github.event.inputs.post_sync_test_repair == 'true' }}\n"
+	) in template
+	# internal-review.yml calls review_autofix.yml@main, which must declare
+	# the input before a pass-through can land (PR #4438 startup_failure).
+	internal = (REPO_ROOT / ".github" / "workflows" / "internal-review.yml").read_text(encoding="utf-8")
+	assert "post_sync_test_repair" not in internal
+
+
+def test_post_sync_test_repair_keeps_review_autofix_well_under_the_size_guard() -> None:
+	assert WORKFLOW.stat().st_size < 430_000, WORKFLOW.stat().st_size
+
+
+def test_post_sync_test_repair_step_script_mode_and_resolver_hand_off() -> None:
+	script = (REPO_ROOT / "scripts" / "review_autofix_step_prepush_test_gate.sh").read_text(encoding="utf-8")
+	assert 'if [ "${PREPUSH_TEST_GATE_STEP_MODE:-}" = "integration" ]; then' in script
+	body = script[script.index("review_prepush_test_gate_integration_main()\n{"):]
+	body = body[:body.index("\n}\n")]
+	# The skip flag is written before any mode/conflict/merge-base check.
+	active = body.index('echo "INTEGRATION_TEST_REPAIR_ACTIVE=true" >> "${GITHUB_ENV}"')
+	assert active < body.index("review_prepush_test_gate_mode")
+	assert active < body.index("reason=conflict_path")
+	assert 'bash "${resolver}" --test-repair "${gate_dir}/run1/result.json"' in body
+	assert "--phase integration" in body
+
+
+def test_review_collect_pr_metadata_does_not_shadow_shared_gh_retry() -> None:
+	# The helper sources gh_helpers.sh, whose gh_retry takes a full command.
+	# A local outfile-first gh_retry override would break any shared helper
+	# that calls gh_retry from this shell (CONSIST-001).
+	text = METADATA_HELPER.read_text(encoding="utf-8")
+
+	assert re.search(r"(?m)^\s*(function\s+)?gh_retry\s*\(\)", text) is None
+	assert re.search(r'(?<![\w])gh_retry\s+"\$\{', text) is None
+	commands = re.findall(r'gh_retry_to_file\s+"\$\{[^}]+\}"\s+(\S+)', text)
+	assert commands, "expected gh_retry_to_file call sites in the helper"
+	assert all(command == "gh" for command in commands), commands
+	assert 'source "${SCRIPT_DIR}/gh_helpers.sh"' in text
+
+
+# --- Repeated reviewer failure stops the retry loop (issue #9533) ---------
+
+_RRF_REPO_ROOT = Path(__file__).resolve().parents[1]
+_RRF_POST_SUMMARY = _RRF_REPO_ROOT / "scripts" / "review_autofix_step_post_editor_summary.sh"
+_RRF_FAILURE_COMMENT = _RRF_REPO_ROOT / "scripts" / "review_autofix_step_failure_comment.sh"
+_RRF_HEAL_PY = _RRF_REPO_ROOT / "scripts" / "workflow_failure_heal.py"
+_RRF_HEAD = "a" * 40
+_RRF_CRASH = "/home/runner/work/_temp/support/scripts/render_prompt.sh: line 306: 1abc: invalid variable name\n"
+_RRF_FAKE_GH_HELPERS = '''gh_retry() {
+  local arg
+  for arg in "$@"; do
+    case "${arg}" in body=*) printf '%s' "${arg#body=}" > "${FAKE_GH_BODY_FILE}" ;; esac
+  done
+  return 0
+}
+'''
+
+
+def _rrf_run(tmp_path: Path, script: Path, extra_env: dict[str, str]) -> tuple[subprocess.CompletedProcess[str], str, str]:
+	support_dir = tmp_path / "support"
+	support_dir.mkdir(exist_ok=True)
+	(support_dir / "gh_helpers.sh").write_text(_RRF_FAKE_GH_HELPERS, encoding="utf-8")
+	runtime_dir = tmp_path / "runtime"
+	runtime_dir.mkdir(exist_ok=True)
+	(runtime_dir / "reviewers_stage_stderr.txt").write_text("starting reviewers\n" + _RRF_CRASH, encoding="utf-8")
+	summary_file = tmp_path / "editor_summary.txt"
+	summary_file.write_text("", encoding="utf-8")
+	github_env = tmp_path / "github_env"
+	github_env.write_text("", encoding="utf-8")
+	body_file = tmp_path / "posted_body.txt"
+	body_file.unlink(missing_ok=True)
+	env = {
+		"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+		"HOME": str(tmp_path),
+		"PYTHONDONTWRITEBYTECODE": "1",
+		"FAKE_GH_BODY_FILE": str(body_file),
+		"SUPPORT_SCRIPTS_DIR": str(support_dir),
+		"RUNTIME_DIR": str(runtime_dir),
+		"EDITOR_SUMMARY_FILE": str(summary_file),
+		"COMMITTED_FILES_FILE": str(tmp_path / "missing_committed.txt"),
+		"PR_EDITOR_COMMENT_FILE": str(tmp_path / "pr_editor_comment.txt"),
+		"GITHUB_ENV": str(github_env),
+		"PR_NUMBER": "9356",
+		"REPOSITORY": "owner/repo",
+		"AUTOFIX_STEP_REPOSITORY": "owner/repo",
+		"AUTOFIX_STEP_SERVER_URL": "https://github.com",
+		"AUTOFIX_STEP_RUN_ID": "4242",
+		"GITHUB_RUN_ID": "4242",
+		"AUTOFIX_FAILURE_HEAD_SHA": _RRF_HEAD,
+		"REVIEW_SUPPORT_SHA": "1" * 40,
+		"AUTOFIX_FAILURE_HEAL_PY": str(_RRF_HEAL_PY),
+		"REVIEWERS_STEP_OUTCOME": "failure",
+		"REVIEW_FAILURE_RUN_URL": "https://github.com/owner/repo/actions/runs/4242",
+		**extra_env,
+	}
+	result = subprocess.run(["bash", str(script)], capture_output=True, text=True, env=env, timeout=120)
+	body = body_file.read_text(encoding="utf-8") if body_file.exists() else ""
+	return result, body, github_env.read_text(encoding="utf-8")
+
+
+def _rrf_first_failure_fp(tmp_path: Path) -> str:
+	result, body, github_env = _rrf_run(tmp_path, _RRF_POST_SUMMARY, {})
+	assert result.returncode == 1, result.stdout + result.stderr
+	assert "**AI review/autofix produced no output — will retry**" in body
+	assert "AUTOFIX_EDITOR_EMPTY_NOOP=true" in github_env
+	assert "AUTOFIX_REVIEWERS_FAILED_REPEATED" not in github_env
+	# Specification item 3: the crash line is named.
+	assert "**First error:** `render_prompt.sh: line 306: 1abc: invalid variable name`" in body
+	match = re.search(r"<!-- review-autofix-failure:v1 head=" + _RRF_HEAD + r" reason=reviewers_failed fp=([0-9a-f]{64}) ", body)
+	assert match, body
+	return match.group(1)
+
+
+def _rrf_gate_env(fp: str, *, head: str = _RRF_HEAD, count: str = "1", reason: str = "reviewers_failed") -> dict[str, str]:
+	return {
+		"GATE_FINGERPRINT_CAP_FP": fp,
+		"GATE_FINGERPRINT_CAP_REASON": reason,
+		"GATE_FINGERPRINT_CAP_COUNT": count,
+		"GATE_HEAD_SHA_FOR_FINGERPRINT": head,
+	}
+
+
+def test_second_same_head_same_fp_reviewers_failed_blocks_instead_of_retrying(tmp_path: Path) -> None:
+	fp = _rrf_first_failure_fp(tmp_path)
+	result, body, github_env = _rrf_run(tmp_path, _RRF_POST_SUMMARY, _rrf_gate_env(fp))
+	assert result.returncode == 1, result.stdout + result.stderr
+	assert body == "", "no 'will retry' comment on a repeated reviewer failure"
+	assert "AUTOFIX_EDITOR_EMPTY_NOOP=true" not in github_env
+	assert "AUTOFIX_REVIEWERS_FAILED=true" in github_env
+	assert "AUTOFIX_REVIEWERS_FAILED_REPEATED=true" in github_env
+	assert "AUTOFIX_REVIEWERS_FAILED_REPEATED_COUNT=2" in github_env
+	assert f"AUTOFIX_REVIEWERS_FAILED_REPEATED_FP={fp}" in github_env
+	assert f"AUTOFIX_REVIEWERS_FAILED_REPEATED pr=9356 head={_RRF_HEAD} fp={fp} count=2 max=2" in result.stdout
+
+
+@pytest.mark.parametrize("variant", ["other_fp", "other_head", "other_reason", "no_prior", "cap_disabled"])
+def test_reviewers_failed_with_a_different_fp_or_head_still_retries(tmp_path: Path, variant: str) -> None:
+	fp = _rrf_first_failure_fp(tmp_path)
+	env = {
+		"other_fp": _rrf_gate_env("e" * 64),
+		"other_head": _rrf_gate_env(fp, head="b" * 40),
+		"other_reason": _rrf_gate_env(fp, reason="editor_empty_noop"),
+		"no_prior": _rrf_gate_env(fp, count="0"),
+		"cap_disabled": {**_rrf_gate_env(fp), "REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED": "false"},
+	}[variant]
+	result, body, github_env = _rrf_run(tmp_path, _RRF_POST_SUMMARY, env)
+	assert result.returncode == 1
+	assert "**AI review/autofix produced no output — will retry**" in body, variant
+	assert "AUTOFIX_EDITOR_EMPTY_NOOP=true" in github_env
+	assert "AUTOFIX_REVIEWERS_FAILED_REPEATED" not in github_env
+
+
+def test_repeated_reviewer_failure_comment_names_fingerprint_and_first_error(tmp_path: Path) -> None:
+	fp = "c" * 64
+	result, body, _github_env = _rrf_run(tmp_path, _RRF_FAILURE_COMMENT, {
+		"AUTOFIX_REVIEWERS_FAILED_REPEATED": "true",
+		"AUTOFIX_REVIEWERS_FAILED_REPEATED_COUNT": "2",
+		"AUTOFIX_REVIEWERS_FAILED_REPEATED_FP": fp,
+		"AUTOFIX_FAILED_STEP": "Run reviewer models",
+		"AUTOFIX_FAILURE_FIRST_ERROR": "render_prompt.sh: line 306: 1abc: invalid variable name",
+		"AUTOFIX_FAILURE_MARKER": f"<!-- review-autofix-failure:v1 head={_RRF_HEAD} reason=reviewers_failed fp={fp} degraded=0 run=4242 -->",
+	})
+	assert result.returncode == 0, result.stderr
+	assert f"**Repeated reviewer failure:** this head failed 2 times with fingerprint `{fp[:16]}` (reason `reviewers_failed`), so the review is not retried." in body
+	assert "**First error:** `render_prompt.sh: line 306: 1abc: invalid variable name`" in body
+	assert body.rstrip().endswith(f"fp={fp} degraded=0 run=4242 -->")
+	plain, plain_body, _ = _rrf_run(tmp_path, _RRF_FAILURE_COMMENT, {})
+	assert plain.returncode == 0 and "Repeated reviewer failure" not in plain_body
+
+
+def test_repeated_reviewer_failure_workflow_wiring() -> None:
+	reviewers = _step_block("Run reviewer models")
+	assert 'bash "${SUPPORT_SCRIPTS_DIR}/review_run_reviewers.sh" 2> >(tee -a "${RUNTIME_DIR:-/tmp}/reviewers_stage_stderr.txt" >&2) || reviewers_rc=$?' in reviewers
+	post_summary = _step_block("Post editor summary comment")
+	for line in (
+		"GATE_FINGERPRINT_CAP_FP: ${{ needs.gate.outputs.fingerprint_cap_fp }}",
+		"GATE_FINGERPRINT_CAP_REASON: ${{ needs.gate.outputs.fingerprint_cap_reason }}",
+		"GATE_FINGERPRINT_CAP_COUNT: ${{ needs.gate.outputs.fingerprint_cap_count }}",
+		"GATE_HEAD_SHA_FOR_FINGERPRINT: ${{ needs.gate.outputs.head_sha }}",
+		"REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED: ${{ vars.REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED || '2' }}",
+	):
+		assert line in post_summary, line
+	assert "REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED: ${{ vars.REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED || '2' }}" in _step_block("Evaluate review gate")
+	# The base-sync carry kill switch reaches every security-pass step.
+	workflow_text = (_RRF_REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	assert workflow_text.count("SECURITY_PASS_BASE_SYNC_CARRY_ENABLED: ${{ vars.SECURITY_PASS_BASE_SYNC_CARRY_ENABLED || 'true' }}") == 3
+
+
+_RRF_MARK_BLOCKED = _RRF_REPO_ROOT / "scripts" / "review_autofix_step_mark_review_blocked_workflow_failure.sh"
+
+
+@pytest.mark.parametrize("variant", ["fallback_issue", "issueless", "not_repeated"])
+def test_repeated_reviewer_failure_labels_fallback_issue_before_the_pr(tmp_path: Path, variant: str) -> None:
+	# Issue #9533: the PR itself is labelled only when no issue is found by
+	# closingIssuesReferences, the fallback numbers or the PR title/body.
+	support_dir = tmp_path / "support"
+	support_dir.mkdir()
+	calls_file = tmp_path / "gh_calls.txt"
+	(support_dir / "gh_helpers.sh").write_text('gh_retry() { printf \'%s\\n\' "$*" >> "${FAKE_GH_CALLS}"; return 0; }\n', encoding="utf-8")
+	pr_meta = tmp_path / "pr_meta.json"
+	pr_meta.write_text(json.dumps({"title": "t", "body": "no refs"}), encoding="utf-8")
+	env = {
+		"PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+		"HOME": str(tmp_path),
+		"FAKE_GH_CALLS": str(calls_file),
+		"SUPPORT_SCRIPTS_DIR": str(support_dir),
+		"REPOSITORY": "owner/repo",
+		"PR_NUMBER": "9356",
+		"PR_META_FILE": str(pr_meta),
+		"LINKED_ISSUES_JSON": "[]",
+		"LINKED_ISSUE_FALLBACK_NUMBERS_JSON": "[77]" if variant == "fallback_issue" else "[]",
+		"AUTOFIX_REVIEWERS_FAILED_REPEATED": "false" if variant == "not_repeated" else "true",
+	}
+	result = subprocess.run(["bash", str(_RRF_MARK_BLOCKED)], capture_output=True, text=True, env=env, timeout=60, check=False)
+	assert result.returncode == 0, result.stdout + result.stderr
+	calls = calls_file.read_text(encoding="utf-8") if calls_file.exists() else ""
+	if variant == "fallback_issue":
+		assert "repos/owner/repo/issues/77/labels" in calls
+		assert "issues/9356/labels" not in calls
+	elif variant == "issueless":
+		assert "repos/owner/repo/issues/9356/labels" in calls
+	else:
+		assert "/labels" not in calls
+		assert "No linked issues found for PR #9356" in result.stdout
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
