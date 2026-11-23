@@ -60,7 +60,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/drift-audit.yml` — GitHub Actions workflow: Drift Audit.
 - `.github/workflows/forward-merge-stable-to-main.yml` — GitHub Actions workflow: Forward-merge stable to main.
 - `.github/workflows/implement.yml` — GitHub Actions workflow: AI Implement.
-- `.github/workflows/integration-pr-readiness.yml` — GitHub Actions workflow: Integration PR readiness check.
+- `.github/workflows/integration-pr-readiness.yml` — GitHub Actions workflow: Integration PR readiness check (label events only; other PR events run the same script in `pr-checks.yml`).
 - `.github/workflows/internal-cancel-on-pr-close.yml` — GitHub Actions workflow: Internal: Cancel on PR Close.
 - `.github/workflows/internal-check-failure-triage.yml` — GitHub Actions workflow: Internal: AI Check Failure Triage.
 - `.github/workflows/internal-clarify.yml` — GitHub Actions workflow: Internal: AI Clarify.
@@ -72,11 +72,11 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/internal-orchestrate.yml` — GitHub Actions workflow: Internal: AI Orchestrate.
 - `.github/workflows/internal-plan.yml` — GitHub Actions workflow: Internal: AI Plan.
 - `.github/workflows/internal-review.yml` — GitHub Actions workflow: Internal: AI Review & Autofix.
+- `.github/workflows/internal-sync-ai-labels.yml` — GitHub Actions workflow: Internal: Sync AI Labels.
 - `.github/workflows/internal-validate.yml` — GitHub Actions workflow: Internal: AI Validate.
 - `.github/workflows/internal-workflow-failure-heal.yml` — GitHub Actions workflow: Internal: AI Workflow Failure Heal.
 - `.github/workflows/issue_pr_status.yml` — GitHub Actions workflow: AI Issue PR Status Sync.
 - `.github/workflows/lint-plan-archival.yml` — GitHub Actions workflow: Lint plan-archival completeness.
-- `.github/workflows/lint-pr-body-auto-close.yml` — GitHub Actions workflow: Lint PR body for auto-close keywords against orchestrator-tracking issues.
 - `.github/workflows/mark-stable.yml` — GitHub Actions workflow: Mark Stable Release.
 - `.github/workflows/memory_maintenance.yml` — GitHub Actions workflow: AI Memory Maintenance (Reusable).
 - `.github/workflows/nightly-validation-selftest.yml` — GitHub Actions workflow: Nightly Validation Self-Test.
@@ -85,6 +85,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `.github/workflows/orchestrate_clarify_respond.yml` — GitHub Actions workflow: AI Orchestrate Clarify Respond (Reusable).
 - `.github/workflows/orchestrate_poll.yml` — GitHub Actions workflow: AI Orchestrate Poller (Reusable).
 - `.github/workflows/plan.yml` — GitHub Actions workflow: AI Plan.
+- `.github/workflows/pr-checks.yml` — GitHub Actions workflow: PR checks; one job (`pr-body-lint`) runs the §19 PR-body auto-close lint and posts the `orchestrator/integration-pr-not-ready` status on every PR into `main` or `stable`.
 - `.github/workflows/promote-candidate-follow.yml` — GitHub Actions workflow: Promote candidate follower (keeps the `promote-candidate` branch at the main tip between promote cycles).
 - `.github/workflows/promote-main-to-stable.yml` — GitHub Actions workflow: Promote main to stable.
 - `.github/workflows/propagate-consumer-secrets.yml` — GitHub Actions workflow: Propagate consumer secrets.
@@ -145,9 +146,11 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/ci_budget_watch.py` — CI early warning on pushes to main: opens one `ai:ci-budget` issue when a workflow file nears the 480,000-byte guard or a CI job nears its timeout.
 - `scripts/ci_cancelled_rerun.py` — Scheduled sweep helper: re-run failed jobs once for cancelled, startup-failed, or runner-shutdown-failed CI on a current PR head.
 - `scripts/ci_docs_only_paths.sh` — The list of paths no test job or CI step reads; a PR whose changed files are all on it gets a final CI run with `docs_only=true` (static checks and lint only, test jobs skipped; #9566). `classify` decides whether a PR's changed files are all docs-only and `verify` re-checks that in `ci.yml`'s `lint` job (log prefix `CI_DOCS_ONLY_GATE`, Refs #9528).
-- `scripts/ci_final_merge_ref_fresh.sh` — Final-CI step after each `refs/pull/<n>/merge` checkout: refreshes a merge ref GitHub has not recomputed since the base moved, or fails the job, so a final run never tests an old base (final-CI self-heal).
+- `scripts/ci_final_merge_ref_fresh.sh` — Final-CI step after each `refs/pull/<n>/merge` checkout: pins the run's base (the base tip when the run was dispatched, the same in every job), refreshes a merge ref GitHub has not recomputed, else merges the PR head into the pinned base locally (`outcome=merged_locally`); fails the job only on a conflict or a merge it cannot build (final-CI self-heal).
+- `scripts/ci_final_status.sh` — Last step of `ci.yml`'s `lint` job: posts the `ci/final` commit status (`success` only when every CI job succeeded and, in a docs-only run, the docs-only verify step did too; `failure` otherwise; nothing when cancelled) on the tested head, because GitHub does not evaluate the dispatched final CI's check-runs for a PR. Always exits 0; a failed post leaves the PR blocked (log prefix `CI_FINAL_STATUS`, Refs #9939).
 - `scripts/ci_sync_quick.sh` — Sync-quick final CI for merge-base freshness updates: `classify` says whether every overlap path is a CI-wiring file, `full-ci-green` whether the approved head passed a full final CI run; ci.yml's `tests-sync-quick` re-checks both (#9642).
 - `scripts/clarify_base_image_preseed.sh` — Seed the clarify sandbox's Docker Official Image base from a mirror before the build (CLARIFY_BASE_IMAGE_PRESEED log prefix).
+- `scripts/clarify_blocked_verify.sh` — Decide whether a clarify `BLOCKED:` answer cites a tracked path and build the one retry prompt (CLARIFY_BLOCKED_VERIFY log prefix).
 - `scripts/clarify_data_provision_guard.py` — Post-processing guard for orchestrate_clarify_respond.
 - `scripts/clarify_github_facts.py` — Read referenced GitHub issue, PR, branch and run state for the isolated clarify-respond worker.
 - `scripts/clarify_informal_detect.py` — Score clarify issue bodies for advisory informal-issue signals.
@@ -230,6 +233,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/issue_attachment_bundle.py` — Python helper for issue attachment bundle.
 - `scripts/label_helpers.sh` — label_helpers.sh — idempotent AI label creation helpers.
 - `scripts/ledger_emit_substate.sh` — Shell helper for ledger emit substate.
+- `scripts/lint_gh_calls_in_loops.py` — Warning-only lint (CLAUDE.md §15) that flags GitHub API calls a PR adds inside shell for/while/until loops; run by the pr-body-lint job in pr-checks.yml.
 - `scripts/lint_plan_archival_completeness.py` — Lint a PR that adds files under docs/completed/ for plan-archival completeness.
 - `scripts/lint_plan_decisions.py` — Advisory lint for the `## Decisions` convention in `docs/plans/*.md`.
 - `scripts/lint_pr_body_auto_close.py` — Lint PR title/body text (and optionally commit messages) for GitHub auto- close keywords that target ai:orchestrator-tracking issues.
@@ -303,6 +307,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_autofix_step_mark_ready_to_merge.sh` — body of the review_autofix.yml "Mark linked issues ready to merge" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
 - `scripts/review_autofix_step_prepush_test_gate.sh` — body of the review_autofix.yml "Pre-push affected-test gate" step (one repair turn through `review_apply_fixes.sh --repair-turn`), and the shared `gate` / `repair-prompt` / `allow-list` entry point the conflict resolver and the heal editor call (issue #8201).
 - `scripts/review_autofix_step_checkout_pr_head_branch.sh` — body of the review_autofix.yml "Checkout PR head branch" step (sourced by the step; the step passes the repository as `REVIEW_HEAD_CHECKOUT_REPOSITORY`; moved out to keep the workflow under the §27 size guard).
+- `scripts/review_autofix_sweep_reaper.sh` — sourced by the review_autofix_sweep.yml enumerate step from the trusted default-branch checkout: cancels, then force-cancels on 409, up to 10 review runs per sweep queued longer than `ZOMBIE_RUN_MAX_QUEUED_HOURS`, from the listing the sweep already fetched (P11b; log prefix `ZOMBIE_RUN_REAPED`).
 - `scripts/review_collect_pr_metadata.sh` — artifacts for review_autofix.yml.
 - `scripts/review_commit_changes.sh` — review_commit_changes.sh — stage + commit editor output in review_autofix.yml.
 - `scripts/review_conflict_prepare.sh` — pre-snapshot for review_autofix.yml.
@@ -316,6 +321,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_workflow_sync_skip.sh` — review-gate check that skips the reviewer panel for an `ai-sync/stable` consumer sync PR whose changed paths are all in the signed sync allowlist.
 - `scripts/review_filter_uninteresting_files.sh` — Shell helper for review filter uninteresting files.
 - `scripts/review_sweep_head_gate.sh` — Sourced by the review sweep's enumerate step: reads every open PR's `ai-review/head-gate` state in one GraphQL call per 100 PRs into the snapshot (`head_gate_state`, fail-open), and gives the final-CI state of a head so the sweep skips re-reviewing an approved head whose final CI failed (PR #9649).
+- `scripts/review_sweep_round_cap.sh` — Sourced by the review sweep's enumerate step: counts each PR's dispatched `internal-review.yml` runs in a time window from one paginated listing per tick (fail-open), and escalates a PR at the cap whose head is not approved with `ai:needs-human` and one comment in place of another dispatch.
 - `scripts/review_floor_rules.sh` — Shell helper for review floor rules.
 - `scripts/review_issue_ledger.sh` — Shell helper for review issue ledger.
 - `scripts/review_merge_train.sh` — merge train for review_autofix.yml: `gate` queues an ai/issue-* PR behind older open same-repository ai/issue-* PRs on the same base that edit the same files (fork heads never block; label ai:merge-queued); `release` (cancel_on_pr_close.yml, orchestrate_poll.yml) re-dispatches review once the blockers are gone.
@@ -345,20 +351,25 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/security_audit_upstream_report.sh` — Send a consumer audit's high/critical findings on unmodified synced files to coding-workflows' heal intake as one OIDC-bound `synced_security_finding` report (issue #7623).
 - `scripts/security_audit_fp_exclusions.json` — JSON asset for editable security-audit false-positive exclusions.
 - `scripts/security_dependency.py` — Hold a generated security follow-up until the issue it depends on has merged (issue #4934).
+- `scripts/dependency_wait_resume.py` — Poller step "Resume dependency waits": resume, re-clarify or escalate `ai:waiting-on-dependency` issues and seed blocked `Depends on: #N` issues into the wait (stuck-states P8b, Refs #8291).
 - `scripts/pr_dependency.py` — Hold a trusted standalone issue that declares `- Depends on PR: #N` until that PR merged into the default branch and a declared string is on it (issue #7228).
 - `scripts/security_pass_skip.py` — Decide whether the security pass skips a follow-up issue (verified-trust rules, #4623).
 - `scripts/semble_helpers.sh` — semble_helpers.sh — shared, sourceable Semble query helpers.
 - `scripts/serena_stats_emit.py` — Aggregate Serena tool-call rollups from Codex logs.
 - `scripts/setup_serena.sh` — setup_serena.sh — fail-soft Serena bootstrapper for Codex MCP usage.
 - `scripts/slop_scan_local.py` — Local slop-scan heuristics for review_autofix changed scripts and Python heredocs.
+- `scripts/stable_e2e_step_deep_verify.sh` — body of the test-and-mark-stable.yml "Deep verify: inspect all workflow run steps" step (`id: deep-verify`; sourced by the step from a `github.sha`-pinned copy in `RUNNER_TEMP`; moved out to keep the workflow at or under the 430,000-byte headroom ceiling in `tests/test_test_and_mark_stable_step_scripts_contract.py`).
 - `scripts/stable_e2e_step_verify_bait_removed.sh` — body of the test-and-mark-stable.yml "Phase 4b: Verify editor restored canary (pytest + retry)" step (`id: verify-bait-removed`; sourced by the step from a `github.sha`-pinned copy in `RUNNER_TEMP`; moved out to keep the workflow under the §27 size guard, issue #7991).
+- `scripts/stable_e2e_step_verify_cancel_on_close.sh` — body of the test-and-mark-stable.yml "Phase 7: Close PR and verify cancel_on_pr_close fires" step (`id: verify-cancel-on-close`; sourced by the step from a `github.sha`-pinned copy in `RUNNER_TEMP`; moved out to keep the workflow under the 430,000-byte headroom check, PR #9794). Its wait budget starts when the cancel run leaves the queue, under `PHASE7_QUEUE_WAIT_CAP_MINUTES`.
 - `scripts/stable_e2e_step_wait_review.sh` — body of the test-and-mark-stable.yml "Phase 4: Wait for review & autofix to complete" step (`id: wait-review`; sourced by the step from a `github.sha`-pinned copy in `RUNNER_TEMP`; moved out to keep the workflow under the §27 size guard, issue #7991).
 - `scripts/stable_orchestrate_cancel_dispatched_run.sh` — called by the test-and-mark-stable.yml "Cleanup orchestrate test issues" step: cancels the orchestrate bootstrap the job dispatched when it is still queued or running, and finds a tracking issue it already created.
 - `scripts/stage_workflow_log_bundle.py` — Bound workflow-log artifacts before mounting them into the isolated analyzer.
+- `scripts/stage_support_for_phase.sh` — Shell helper that stages one phase's support scripts from the verified support checkout into the out-of-tree runtime bundle.
 - `scripts/stage_workflow_support.sh` — Shell helper for stage workflow support.
 - `scripts/summarize_reviewer_consensus.sh` — ledger via codex-cli (model: openai/gpt-6-luna, reasoning: medium).
 - `scripts/summarize_unselected_runs.py` — Summarize unselected workflow runs via gpt-6-luna to widen analysis coverage.
 - `scripts/sync_claude_live_copies.py` — Keep coding-workflows' live `.claude/` copies in step with their templates.
+- `scripts/sync_contract_list_union.py` — Merge a `db/contracts/*.yml` integration-sync conflict whose hunks only append to `read_entrypoints` / `write_entrypoints`, or report it ineligible so the LLM resolver runs (stuck-states P12; log prefix `SYNC_LIST_UNION_INELIGIBLE_V1`).
 - `scripts/targeted_file_context.py` — Inline likely-to-be-edited files into the Codex prompt as a reference block so the editor doesn't waste budget reading them.
 - `scripts/task_state.py` — Mirror orchestrator wave-issue state into per-task JSON files and unblock mirrored dependents.
 - `scripts/templates/serena_project.yml.j2` — Template asset for serena_project.yml.j2.
