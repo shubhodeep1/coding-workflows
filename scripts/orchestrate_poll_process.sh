@@ -19297,6 +19297,19 @@ sync_validation_fix_issues_from_comments() {
 
 declare -g _ACTIONS_RUNS_BLOB_CACHE=''
 declare -g _ACTIONS_RUNS_BLOB_READY='false'
+# Per-process (= per-tick) provenance of the memoised actions-runs blob, set by
+# _load_actions_runs_cached on every non-memo path: ttl_hit|etag_304|live|
+# fallback|no_repo. Empty means the loader never recorded one (e.g. a test stub).
+declare -g _ACTIONS_RUNS_BLOB_SOURCE=''
+# When true, _load_actions_runs_cached skips the TTL hit and sends no
+# If-None-Match, so the next load is a confirmed live fetch or a fallback.
+# Only _ensure_actions_runs_blob_has_self_run sets it, at most once per tick.
+declare -g _ACTIONS_RUNS_FORCE_LIVE='false'
+declare -g _ACTIONS_RUNS_SELF_CHECK_DONE='false'
+# True when the self-run check refetched live and the refetch was not
+# confirmed: stall recovery then holds escalate_human for this tick
+# (STALL_SKIP reason=active_set_unverifiable); other stall actions run as usual.
+declare -g STALL_ACTIVE_SET_UNVERIFIABLE='false'
 declare -g PHASE_CAPS_ENABLED='false'
 declare -g PHASE_CAPS_STATUS='missing'
 declare -g PHASE_CAPS_GLOBAL_MAX='-1'
@@ -19304,6 +19317,51 @@ declare -g PHASE_CAPS_GLOBAL_RUNNING='0'
 declare -g PHASE_CAPS_MAX_BY_STATE='{}'
 declare -g PHASE_CAPS_RUNNING_BY_STATE='{}'
 
+# Emit one ACTIONS_RUNS_SOURCE line (stderr; stdout carries the blob) naming
+# which path produced the memoised actions-runs blob and its counts. Counts
+# print `?` when jq fails (fail open); self_run is `unknown` when
+# GITHUB_RUN_ID is not numeric or the blob cannot be parsed. No API calls.
+_emit_actions_runs_source_line() {
+  local _arsl_blob="${_ACTIONS_RUNS_BLOB_CACHE:-}"
+  local _arsl_run_id="${GITHUB_RUN_ID:-}"
+  local _arsl_counts=''
+  local _arsl_total='?' _arsl_in_progress='?' _arsl_queued='?' _arsl_completed='?'
+  local _arsl_self='unknown'
+  _arsl_counts="$(printf '%s' "${_arsl_blob}" | jq -r '[(.workflow_runs // [] | length),
+      ([.workflow_runs[]? | select(.status == "in_progress")] | length),
+      ([.workflow_runs[]? | select(.status == "queued")] | length),
+      ([.workflow_runs[]? | select(.status == "completed")] | length)] | map(tostring) | join(" ")' 2>/dev/null || true)"
+  if [[ "${_arsl_counts}" =~ ^[0-9]+\ [0-9]+\ [0-9]+\ [0-9]+$ ]]; then
+    read -r _arsl_total _arsl_in_progress _arsl_queued _arsl_completed <<<"${_arsl_counts}"
+  fi
+  if [[ "${_arsl_run_id}" =~ ^[0-9]+$ ]]; then
+    if printf '%s' "${_arsl_blob}" | jq -e --argjson id "${_arsl_run_id}" 'any(.workflow_runs[]?; (.id // 0) == $id)' >/dev/null 2>&1; then
+      _arsl_self='present'
+    elif [ "${_arsl_total}" != '?' ]; then
+      # Only a blob whose counts parsed is a valid listing; an unparseable
+      # blob stays `unknown`, like its `?` counts, instead of `absent`.
+      _arsl_self='absent'
+    fi
+  fi
+  printf '%s\n' "ACTIONS_RUNS_SOURCE source=${_ACTIONS_RUNS_BLOB_SOURCE:-unknown} forced_live=${_ACTIONS_RUNS_FORCE_LIVE:-false} total=${_arsl_total} in_progress=${_arsl_in_progress} queued=${_arsl_queued} completed=${_arsl_completed} self_run=${_arsl_self}" >&2
+  return 0
+}
+
+# API-call contract (GitHub §15):
+#   - memo hit / no_repo: 0 calls.
+#   - TTL hit: 0 calls. ETag 304: 1 call (`status=in_progress` only; the cached
+#     queued/completed lists are reused as-is).
+#   - live: 3 REST reads (in_progress + queued + completed companion reads).
+#   - forced refetch (_ACTIONS_RUNS_FORCE_LIVE=true, set only by
+#     _ensure_actions_runs_blob_has_self_run, at most once per tick): the TTL
+#     hit is skipped and no If-None-Match is sent, so it costs exactly 3 extra
+#     reads on success (1 on failure). The ai-memory cache is still read so the
+#     stale-cache fallback and the post-fetch cache write behave as before.
+#     Note: a ttl_hit or etag_304 blob was written by an earlier poller run, so
+#     it normally lacks the current run; stall ticks that start from those
+#     sources should expect to pay this refetch, not only on a broken cache.
+# Every non-memo path records _ACTIONS_RUNS_BLOB_SOURCE and emits one
+# ACTIONS_RUNS_SOURCE line on stderr (when the emitter is defined).
 _load_actions_runs_cached() {
   local empty_blob='{"workflow_runs":[]}'
   if [ "${_ACTIONS_RUNS_BLOB_READY}" = "true" ]; then
@@ -19315,6 +19373,8 @@ _load_actions_runs_cached() {
   if [ -z "${repo}" ]; then
     _ACTIONS_RUNS_BLOB_CACHE="${empty_blob}"
     _ACTIONS_RUNS_BLOB_READY="true"
+    _ACTIONS_RUNS_BLOB_SOURCE="no_repo"
+    if declare -F _emit_actions_runs_source_line >/dev/null 2>&1; then _emit_actions_runs_source_line || true; fi
     printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
     return 0
   fi
@@ -19347,9 +19407,12 @@ _load_actions_runs_cached() {
     fi
   fi
 
-  if [ "${cache_hit}" = "true" ] && [ "${cache_age_seconds}" -lt "${ACTIONS_RUNS_CACHE_TTL_SECONDS}" ]; then
+  if [ "${cache_hit}" = "true" ] && [ "${cache_age_seconds}" -lt "${ACTIONS_RUNS_CACHE_TTL_SECONDS}" ] \
+    && [ "${_ACTIONS_RUNS_FORCE_LIVE:-false}" != "true" ]; then
     _ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
     _ACTIONS_RUNS_BLOB_READY="true"
+    _ACTIONS_RUNS_BLOB_SOURCE="ttl_hit"
+    if declare -F _emit_actions_runs_source_line >/dev/null 2>&1; then _emit_actions_runs_source_line || true; fi
     printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
     return 0
   fi
@@ -19371,6 +19434,8 @@ _load_actions_runs_cached() {
 			_ACTIONS_RUNS_BLOB_CACHE="${empty_blob}"
 		fi
 		_ACTIONS_RUNS_BLOB_READY="true"
+		_ACTIONS_RUNS_BLOB_SOURCE="fallback"
+		if declare -F _emit_actions_runs_source_line >/dev/null 2>&1; then _emit_actions_runs_source_line || true; fi
 		printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
 		return 0
 	fi
@@ -19380,7 +19445,9 @@ _load_actions_runs_cached() {
   # response headers or 304 status lines. This direct `gh api -i` call is used
   # so one conditional fetch can carry If-None-Match and parse ETag metadata.
 	api_cmd=(gh_retry gh api -i "repos/${repo}/actions/runs?status=in_progress&per_page=50")
-  if [ -n "${cached_etag}" ]; then
+  # A forced live refetch must not be answered with a 304 that reuses the same
+  # stale cached lists, so it never sends If-None-Match.
+  if [ -n "${cached_etag}" ] && [ "${_ACTIONS_RUNS_FORCE_LIVE:-false}" != "true" ]; then
     api_cmd+=(-H "If-None-Match: ${cached_etag}")
   fi
 
@@ -19423,6 +19490,8 @@ _load_actions_runs_cached() {
       fi
       _ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
       _ACTIONS_RUNS_BLOB_READY="true"
+      _ACTIONS_RUNS_BLOB_SOURCE="etag_304"
+      if declare -F _emit_actions_runs_source_line >/dev/null 2>&1; then _emit_actions_runs_source_line || true; fi
       rm -f "${response_file}" "${response_body_file}" "${response_err}"
       printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
       return 0
@@ -19454,6 +19523,8 @@ _load_actions_runs_cached() {
 	fi
 		_ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${runs_only}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
     _ACTIONS_RUNS_BLOB_READY="true"
+    _ACTIONS_RUNS_BLOB_SOURCE="live"
+    if declare -F _emit_actions_runs_source_line >/dev/null 2>&1; then _emit_actions_runs_source_line || true; fi
     rm -f "${response_file}" "${response_body_file}" "${response_err}"
     printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
     return 0
@@ -19480,8 +19551,88 @@ _load_actions_runs_cached() {
     _ACTIONS_RUNS_BLOB_CACHE="${empty_blob}"
   fi
   _ACTIONS_RUNS_BLOB_READY="true"
+  _ACTIONS_RUNS_BLOB_SOURCE="fallback"
+  if declare -F _emit_actions_runs_source_line >/dev/null 2>&1; then _emit_actions_runs_source_line || true; fi
   rm -f "${response_file}" "${response_body_file}" "${response_err}"
   printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
+  return 0
+}
+
+# Self-run check for the per-tick actions-runs blob, run before stall recovery
+# builds ACTIVE_WORKFLOW_ISSUES. The poller's own run (GITHUB_RUN_ID) is always
+# in_progress, so a blob without it that did not come from a confirmed live
+# fetch (ttl_hit / etag_304 / fallback) is stale and cannot prove "no active
+# runs". In that case the blob is refetched live ONCE (TTL bypassed, no
+# If-None-Match). If the refetch is not confirmed live either,
+# STALL_ACTIVE_SET_UNVERIFIABLE=true holds escalate_human for this tick.
+#
+# MUST be called directly in the parent shell (never inside `$(...)`) so the
+# memo globals, the source global and the flag survive.
+#
+# API-call contract (GitHub §15): 0 extra calls unless the check fails on a
+# non-live blob; then exactly one forced _load_actions_runs_cached (3 REST
+# reads on success, 1 on failure). Guarded by _ACTIONS_RUNS_SELF_CHECK_DONE so
+# it runs at most once per tick even though both stall consumers (tracking
+# block and run_standalone_stall_recovery) call it. Audited existing calls: the
+# memoised blob and ACTIVE_WORKFLOW_ISSUES cannot show whether the blob is
+# stale, and no other call in the tick lists actions runs.
+#
+# Fail open for everything except escalation: missing run id, unknown source
+# (stubbed loader), no_repo, or a live blob without the self run (eventual
+# consistency / 50-item page cap) are logged and the blob is used as-is.
+_ensure_actions_runs_blob_has_self_run() {
+  if [ "${_ACTIONS_RUNS_SELF_CHECK_DONE:-false}" = "true" ]; then
+    return 0
+  fi
+  _ACTIONS_RUNS_SELF_CHECK_DONE='true'
+
+  _load_actions_runs_cached >/dev/null || true
+
+  local _arsc_run_id="${GITHUB_RUN_ID:-}"
+  local _arsc_source="${_ACTIONS_RUNS_BLOB_SOURCE:-}"
+  if ! [[ "${_arsc_run_id}" =~ ^[0-9]+$ ]]; then
+    echo "ACTIONS_RUNS_SELF_CHECK result=skipped source=${_arsc_source:-unknown} prior_source=none run_id=none reason=no_run_id"
+    return 0
+  fi
+  if [ -z "${_arsc_source}" ]; then
+    echo "ACTIONS_RUNS_SELF_CHECK result=skipped source=unknown prior_source=none run_id=${_arsc_run_id} reason=source_unknown"
+    return 0
+  fi
+  if [ "${_arsc_source}" = "no_repo" ]; then
+    echo "ACTIONS_RUNS_SELF_CHECK result=skipped source=no_repo prior_source=none run_id=${_arsc_run_id} reason=no_repo"
+    return 0
+  fi
+  if printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE:-}" | jq -e --argjson id "${_arsc_run_id}" 'any(.workflow_runs[]?; (.id // 0) == $id)' >/dev/null 2>&1; then
+    echo "ACTIONS_RUNS_SELF_CHECK result=present source=${_arsc_source} prior_source=none run_id=${_arsc_run_id} reason=none"
+    return 0
+  fi
+  if [ "${_arsc_source}" = "live" ]; then
+    echo "::warning::ACTIONS_RUNS_SELF_CHECK result=absent_live source=live prior_source=none run_id=${_arsc_run_id} reason=self_run_missing_from_live_blob"
+    return 0
+  fi
+
+  local _arsc_prior_source="${_arsc_source}"
+  _ACTIONS_RUNS_BLOB_READY='false'
+  _ACTIONS_RUNS_FORCE_LIVE='true'
+  _load_actions_runs_cached >/dev/null || true
+  _ACTIONS_RUNS_FORCE_LIVE='false'
+  _arsc_source="${_ACTIONS_RUNS_BLOB_SOURCE:-}"
+
+  if [ "${_arsc_source}" = "live" ]; then
+    local _arsc_self='absent'
+    if printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE:-}" | jq -e --argjson id "${_arsc_run_id}" 'any(.workflow_runs[]?; (.id // 0) == $id)' >/dev/null 2>&1; then
+      _arsc_self='present'
+    fi
+    # A confirmed live blob that still lacks this run (eventual consistency /
+    # 50-item page cap) is used as-is but logged as a warning annotation.
+    local _arsc_annotation=''
+    [ "${_arsc_self}" = "present" ] || _arsc_annotation='::warning::'
+    echo "${_arsc_annotation}ACTIONS_RUNS_SELF_CHECK result=refetched source=live prior_source=${_arsc_prior_source} run_id=${_arsc_run_id} reason=self_run_missing self_run=${_arsc_self}"
+    return 0
+  fi
+
+  STALL_ACTIVE_SET_UNVERIFIABLE='true'
+  echo "::warning::ACTIONS_RUNS_SELF_CHECK result=unverifiable source=${_arsc_source:-unknown} prior_source=${_arsc_prior_source} run_id=${_arsc_run_id} reason=refetch_failed"
   return 0
 }
 
@@ -19588,6 +19739,10 @@ prime_phase_concurrency_snapshot() {
   if _load_actions_runs_cached >"${actions_runs_blob_file}" 2>"${actions_runs_fetch_err_file}"; then
     actions_runs_blob="$(cat "${actions_runs_blob_file}" 2>/dev/null || true)"
     [ -n "${actions_runs_blob}" ] || actions_runs_blob="${_ACTIONS_RUNS_BLOB_CACHE:-${empty_actions_runs}}"
+    # This is usually the first loader call of the tick: forward its
+    # diagnostics (ACTIONS_RUNS_SOURCE, rate_limit_audit_fallback ...
+    # reason=fetch_unconfirmed) instead of discarding them with the temp file.
+    cat "${actions_runs_fetch_err_file}" >&2 || true
   else
     actions_runs_fetch_rc=$?
     actions_runs_fetch_error="$(tr '\n' ' ' < "${actions_runs_fetch_err_file}" | sed 's/[[:space:]]\+/ /g' | cut -c1-200)"
@@ -21816,6 +21971,14 @@ execute_stall_recovery_action() {
   phase_cap_state="$(phase_cap_state_for_action "${action}")"
   if [ -n "${phase_cap_state}" ] && ! phase_cap_can_dispatch "${phase_cap_state}" "${action}" "${issue_num}"; then
     echo "STALL_SKIP issue=${issue_num} reason=phase_capped phase=${phase} action=${action}"
+    return 1
+  fi
+
+  # The actions-runs blob behind ACTIVE_WORKFLOW_ISSUES could not be verified
+  # this tick (_ensure_actions_runs_blob_has_self_run): do not escalate to a
+  # human over runs that may still be in flight. Other actions are unchanged.
+  if [ "${action}" = "escalate_human" ] && [ "${STALL_ACTIVE_SET_UNVERIFIABLE:-false}" = "true" ]; then
+    echo "STALL_SKIP issue=${issue_num} reason=active_set_unverifiable phase=${phase} action=${action}"
     return 1
   fi
 
@@ -24227,7 +24390,21 @@ invoke_stall_judge() {
   # Threshold reuses MAX_JUDGE_REPLAY for parity with the input-hash cap.
   local _judge_escalate_streak=0
   if [ "${_judge_state_file_ready}" = "true" ]; then
-    if [ "${judge_action}" = "escalate_human" ]; then
+    if [ "${judge_action}" = "escalate_human" ] && [ "${STALL_ACTIVE_SET_UNVERIFIABLE:-false}" = "true" ]; then
+      # Active set unverifiable this tick: compute the streak this verdict
+      # would reach so the MAX_JUDGE_REPLAY backstop still yields
+      # effective_action=escalate_human (then held by
+      # execute_stall_recovery_action as STALL_SKIP
+      # reason=active_set_unverifiable) instead of falling through to the
+      # ladder action. The stored streak is NOT written, so a held tick does not
+      # count toward the backstop. Below the cap, in the default configuration
+      # (ENABLE_STALL_HUMAN_TERMINALIZATION=false), the verdict is still
+      # normalized to the ladder action as on a verified tick, and no STALL_SKIP
+      # line is printed.
+      _judge_escalate_streak="$(jq -r --arg n "${issue_num}" '.judge_escalate_streak[$n] // 0' "${_judge_state_file}" 2>/dev/null || echo "0")"
+      [[ "${_judge_escalate_streak}" =~ ^[0-9]+$ ]] || _judge_escalate_streak=0
+      _judge_escalate_streak=$(( _judge_escalate_streak + 1 ))
+    elif [ "${judge_action}" = "escalate_human" ]; then
       _judge_escalate_streak="$(jq -r --arg n "${issue_num}" '.judge_escalate_streak[$n] // 0' "${_judge_state_file}" 2>/dev/null || echo "0")"
       [[ "${_judge_escalate_streak}" =~ ^[0-9]+$ ]] || _judge_escalate_streak=0
       _judge_escalate_streak=$(( _judge_escalate_streak + 1 ))
@@ -24298,11 +24475,20 @@ invoke_stall_judge() {
       "${_judge_state_file}" > "${_judge_state_file}.tmp" 2>/dev/null && mv "${_judge_state_file}.tmp" "${_judge_state_file}" || rm -f "${_judge_state_file}.tmp" 2>/dev/null || true
   fi
 
+  # Human-facing label only: when this tick's active set is unverifiable,
+  # execute_stall_recovery_action holds escalate_human (STALL_SKIP
+  # reason=active_set_unverifiable), so the comment and Telegram line must not
+  # claim an escalation ran. effective_action and the dispatch are unchanged.
+  local _judge_effective_label="${effective_action}"
+  if [ "${effective_action}" = "escalate_human" ] && [ "${STALL_ACTIVE_SET_UNVERIFIABLE:-false}" = "true" ]; then
+    _judge_effective_label="${effective_action} (held: active_set_unverifiable)"
+  fi
+
   local judge_comment
   judge_comment="## 🧑‍⚖️ Stall Judge — Issue #${issue_num} attempt $((recovery_count + 1))
 
 **Decision (judge):** ${judge_action}
-**Decision (effective):** ${effective_action}
+**Decision (effective):** ${_judge_effective_label}
 **Justification:** ${judge_justification}
 
 **Diagnostics snapshot:**
@@ -24316,7 +24502,7 @@ ${diagnostics}
   else
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${judge_comment}" >/dev/null 2>&1 || true
   fi
-  tg_notify "Stall judge evaluated issue #${issue_num}: judged=${judge_action}, effective=${effective_action}. ${judge_justification}"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
+  tg_notify "Stall judge evaluated issue #${issue_num}: judged=${judge_action}, effective=${_judge_effective_label}. ${judge_justification}"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
 
   if [ "${effective_action}" != "${judge_action}" ]; then
     echo "::notice::Stall judge action '${judge_action}' normalized to '${effective_action}' for issue #${issue_num}."
@@ -28160,6 +28346,12 @@ run_standalone_stall_recovery() {
   local candidates
   candidates="$(jq -s 'add | unique_by(.number)' <(printf '%s\n' "${labeled_issues}") <(printf '%s\n' "${marker_issues}"))"
 
+  # Verify the shared actions-runs blob contains this run before building the
+  # active set (parent shell; at most one live refetch per tick, shared with
+  # the tracking stall block).
+  if declare -F _ensure_actions_runs_blob_has_self_run >/dev/null 2>&1; then
+    _ensure_actions_runs_blob_has_self_run || true
+  fi
   ACTIVE_WORKFLOW_ISSUES="$(build_active_issue_set)"
 
   local _candidate_details_json
@@ -29092,6 +29284,16 @@ PY
     _std_phase_cap_state="$(phase_cap_state_for_action "${action}")"
     if [ -n "${_std_phase_cap_state}" ] && ! phase_cap_can_dispatch "${_std_phase_cap_state}" "${action}" "${issue_num}"; then
       echo "STALL_SKIP issue=${issue_num} reason=phase_capped phase=${phase} action=${action}"
+      continue
+    fi
+
+    # Hold a direct escalate_human while this tick's actions-runs blob is
+    # unverifiable (_ensure_actions_runs_blob_has_self_run refetch failed).
+    if [ "${action}" = "escalate_human" ] && [ "${STALL_ACTIVE_SET_UNVERIFIABLE:-false}" = "true" ]; then
+      echo "STALL_SKIP issue=${issue_num} reason=active_set_unverifiable phase=${phase} action=${action}"
+      if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+        write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+      fi
       continue
     fi
 
@@ -37052,6 +37254,11 @@ fi
       # assignments stay trapped in the subshell and the diagnostic branch
       # cannot inspect the same payload.
       _load_actions_runs_cached >/dev/null || true
+      # Self-run check: refetch live once when the blob is stale (TTL/304/
+      # fallback without this run); parent shell so the memo survives.
+      if declare -F _ensure_actions_runs_blob_has_self_run >/dev/null 2>&1; then
+        _ensure_actions_runs_blob_has_self_run || true
+      fi
 
       # Build the set of issues with active workflows (reusing the one API
       # call batch primed above to avoid per-issue API calls).

@@ -4079,6 +4079,11 @@ sys.exit(proc.returncode)
 		# Exercise the script default of the automation-path plan gate (#7181)
 		# unless a test sets the flag through env_overrides.
 		env.pop("AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED", None)
+		# An Actions runner's real GITHUB_RUN_ID is never in the mocked
+		# actions-runs fixtures, so the stall self-run check
+		# (_ensure_actions_runs_blob_has_self_run) would force an extra live
+		# fetch only in CI. Tests that need a run id set it via env_overrides.
+		env.pop("GITHUB_RUN_ID", None)
 		# A CI runner's own Actions identity must not turn on the poller's
 		# release-blocker reporter (producer gate, OIDC) unless a test asks.
 		for actions_identity_var in ("GITHUB_WORKFLOW_REF", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "RELEASE_BLOCKER_HEAL_ENABLED", "RELEASE_BLOCKER_HEAL_PY"):
@@ -21730,7 +21735,12 @@ def test_stall_judge_keeps_escalation_when_linked_pr_merged_into_non_target_base
 	body = script[start:script.index("\n}\n", start)]
 	normalize = body.index('effective_action="$(normalize_stall_recovery_action')
 	keep = body.index('_stall_judge_linked_pr_keeps_escalation "${issue_num}" "${linked_pr_json}"')
-	assert normalize < keep < body.index("**Decision (effective):** ${effective_action}")
+	# Issue #9520 renders the effective decision through _judge_effective_label
+	# (so a held escalation reads "escalate_human (held: ...)"); the label must
+	# still be computed from effective_action after the keep-escalation override.
+	label = body.index('local _judge_effective_label="${effective_action}"')
+	decision = body.index("**Decision (effective):** ${_judge_effective_label}")
+	assert normalize < keep < label < decision
 	assert '[ "${judge_action}" = "escalate_human" ] && [ "${effective_action}" = "attempt_merge" ]' in body
 	assert '"${_keep_escalation_managed}" "${_keep_escalation_declared}"; then' in body
 	assert "extract-integration-branch" in body[normalize:keep]
