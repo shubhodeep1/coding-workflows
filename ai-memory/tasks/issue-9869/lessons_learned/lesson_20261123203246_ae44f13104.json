@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-11-23T20:32:46Z",
+  "issue_number": 9869,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=tests/test_orchestrate_poll_process.py:10405-10449; cited_path=validation runs of test_security_pass_external_finalize_uses_verified_pr_head_when_integration_branch_is_deleted (20 sharded runs on 5b2a57d, reruns on 5b2a57d and 89f18ce); files_touched=changelog.d/9869-external-finalize-test-assert-messages.md, tests/test_orchestrate_poll_process.py.",
+  "phase": "review_autofix",
+  "pr_number": 10008,
+  "record_id": "lesson_20261123203246_ae44f13104",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "validation runs of test_security_pass_external_finalize_uses_verified_pr_head_when_integration_branch_is_deleted (20 sharded runs on 5b2a57d, reruns on 5b2a57d and 89f18ce)",
+    "tests/test_orchestrate_poll_process.py",
+    "changelog.d/9869-external-finalize-test-assert-messages.md"
+  ]
+}
