@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: check lint_pr_body_auto_close\nACCEPTANCE: post-merge none: this changes one data file, and no workflow reads it after merge\n\n## Functions or modules to implement\n- None. Replace the whole content of `tests/e2e_smoke_canary.txt` with exactly three lines, each ending in a newline:\n  - `status: ok`\n  - `run_id: 45241972349`\n  - `updated-by: ai-pipeline`\n\n## Data structures affected\n- None.\n\n## API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Overwrite the file completely\n- Chosen: write the whole file in one step, equivalent to `printf 'status: ok\\nrun_id: 45241972349\\nupdated-by: ai-pipeline\\n'`.\n- Alternatives considered: editing only the lines that change.\n- Why: the issue asks for the exact content with nothing left over from before. A full overwrite guarantees that.\n\n## Security considerations\n- No trust boundary, endpoint, secret or money state is touched. The file is plain text that no code runs.\n\n## Potential risks or edge cases\n- The final newline must be there, and there must be no extra blank line or carriage return. Check with `wc -l` (expect 3) and `cat -A`.\n- No other file may change. Check that `git diff --stat` shows only this file.\n\n## Testing considerations\n- Compare the file byte for byte with the expected `printf` output.\n- No new tests are needed: the issue limits the change to this one file.\n- Not verified at planning time: I did not confirm that `lint_pr_body_auto_close` is the exact name of a CI check run.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue is fully specified and limits the change to one existing file. Holding scope to exactly that overwrite gives the complete implementation, with no extra changes. This follows the \u00a76 priorities: Security > Correctness & safety > Backward compatibility > Operational clarity > Performance > Speed.\n\nPlanning ref: main @ cb4efef57ffea4cde938b3fef6dd49251aabfa90\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "c3bba4366550d149986977c9aa11fbf2598bb6c291da70113b31b60add9e43d0",
+  "lineage": {
+    "issue_number": 10011,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45248683343",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45248683343",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10011"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261123193039_d60b02c4f6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10011,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45248683343"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #10011",
+  "timestamps": {
+    "created_at": "2026-11-23T19:30:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
