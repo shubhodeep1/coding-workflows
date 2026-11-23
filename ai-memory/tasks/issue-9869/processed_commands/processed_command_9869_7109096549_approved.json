@@ -5,13 +5,23 @@
   "entry_id": "processed_command_9869_7109096549_approved",
   "issue_number": 9869,
   "metadata": {
+    "branch": "ai/issue-9869",
+    "changed_files": [
+      "changelog.d/9869-external-finalize-test-assert-messages.md",
+      "tests/test_orchestrate_poll_process.py"
+    ],
+    "issue_number": 9869,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/9869",
+    "pr_number": 10008,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/10008",
+    "run_attempt": "1",
+    "run_id": "45230816284",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/45230816284"
   },
   "run_attempt": 1,
   "run_id": "45230816284",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-23T17:46:41Z",
+  "status": "completed",
+  "timestamp": "2026-11-23T18:07:38Z",
   "workflow": "implement"
 }
