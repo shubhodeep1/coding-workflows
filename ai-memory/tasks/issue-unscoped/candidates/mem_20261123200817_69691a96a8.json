@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_pool_daily_usage.sh:68-73 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The new `^[0-9]{1,2}$` check in `daily_usage_start_hour` rejects zero-padded hour values such as `023`, which the previous `^[0-9]+$` accepted as hour 23, and now falls back to hour 0.\n  WHY: With `CLAUDE_POOL_DAILY_USAGE_HOUR_UTC=023`, the daily report becomes due at 00:00 UTC instead of 23:00 UTC, and no warning is emitted; all four reviewers rated this SEVERITY: NIT, recorded here as low, and anthropic_claude-sonnet-5_5 explicitly declined to raise it because the input falls outside the documented 0-23 range and no caller passes it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/claude_pool_daily_usage.sh:70 | severity=NIT | confidence=4\n  PROBLEM: The new length check ^[0-9]{1,2}$ in daily_usage_start_hour rejects zero-padded values such as 023.\n  WHY: The previous implementation accepted zero-padded values, which shell arithmetic (10#) parses correctly, so the report now silently becomes due at hour 0 instead of hour 23 for such legacy configurations.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_pool_daily_usage.sh:line 68, `if ! [[ \"${start_hour}\" =~ ^[0-9]{1,2}$ ]] || [ \"$((10#${start_hour}))\" -gt 23 ]` | severity=NIT | confidence=4\n  PROBLEM: The new `^[0-9]{1,2}$` regex rejects zero-padded values such as `023`, which the previous `^[0-9]+$` regex accepted (giving `10#023 = 23`).\n  WHY: With `CLAUDE_POOL_DAILY_USAGE_HOUR_UTC=023` the function falls back to hour 0, so the report goes out at 00:00 UTC instead of 23:00 UTC; the side effect is intentional (it prevents 64-bit overflow wraparound) and was accepted on the documented 0-23 range, but it is still a behavior change.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/claude_pool_daily_usage.sh:69-73, `daily_usage_start_hour` | severity=NIT | confidence=4\n  PROBLEM: The new `^[0-9]{1,2}$` check rejects zero-padded hour values such as `023` and falls back to `0`.\n  WHY: With `CLAUDE_POOL_DAILY_USAGE_HOUR_UTC=023`, the daily report slot opens at 00:00 UTC instead of 23:00 UTC, which changes the configured send time.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/claude_pool_daily_usage.sh:line 70 in `daily_usage_start_hour` (`^[0-9]{1,2}$`), introduced by the last run (see also test at tests/test_claude_pool_daily_usage.py:150-151) | severity=NIT | confidence=4\n  PROBLEM: The new one-or-two-digit check rejects zero-padded three-character values that the previous `^[0-9]+$` accepted: `CLAUDE_POOL_DAILY_USAGE_HOUR_UTC=023` used to resolve to start hour 23 and now falls back to hour 0.\n  WHY: An operator who set a zero-padded hour silently gets different slot timing; the fallback (0) is at the opposite end of the documented 0-23 range, and unlike the retry-hours path, no warning is emitted.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "34823071f3aa7a0d7776edba4478339bf40d74e2e5b90eb59a2c47ba230ae568",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9995,
+    "run_id": "45232358413",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45232358413",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123200817_69691a96a8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9995,
+    "run_id": "45232358413"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T20:08:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
