@@ -2128,6 +2128,11 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_recovery_pr_lookup.py
 
+      - name: Heal counterfactual hold expiry unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_heal_counterfactual_hold_expiry.py
+
       - name: Review editor stderr-drain unit tests
         run: |
           set -euo pipefail

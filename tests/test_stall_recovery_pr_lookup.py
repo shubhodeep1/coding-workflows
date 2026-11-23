@@ -1595,6 +1595,266 @@ def test_implement_workflow_does_not_use_buggy_search_form():
 
 
 # ---------------------------------------------------------------------------
+# Issue #9986: the stall judge resolves the issue's implementation PR first
+# (_stall_judge_resolve_linked_pr). The #9212 incident: the last
+# cross-reference was a docs/plans-only PR (#9478) filed after the merged
+# implementation PR (#9262) on ai/issue-9212, and the judge reasoned about
+# the plan PR.
+# ---------------------------------------------------------------------------
+
+
+_RESOLVER_FUNCTIONS = (
+	"_issue_cross_ref_pr_number_last",
+	"_pr_json_closes_issue",
+	"_pr_json_implements_issue",
+	"_pr_json_is_issue_implementation_pr",
+	"_pr_files_all_under_docs_plans",
+	"_stall_judge_resolve_linked_pr",
+)
+
+
+def _extract_poller_function(name: str) -> str:
+	lines = POLLER_SCRIPT.read_text(encoding="utf-8").splitlines()
+	for idx, line in enumerate(lines):
+		if line.startswith(f"{name}()"):
+			out = []
+			for body_line in lines[idx:]:
+				out.append(body_line)
+				if body_line == "}":
+					return "\n".join(out) + "\n"
+	raise AssertionError(f"function not found in poller: {name}")
+
+
+_RESOLVER_HARNESS = r"""
+set -uo pipefail
+source ./resolver.sh
+gh_retry() { "$@"; }
+_review_run_default_branch() { echo main; }
+_linked_prs_by_branch_name() { echo "branch $1" >> "${CALL_LOG}"; printf '%s\n' ${BRANCH_PRS:-}; }
+_issue_timeline_with_cross_refs_json() {
+	echo "timeline $1" >> "${CALL_LOG}"
+	[ "${TIMELINE_FAIL:-0}" = "1" ] && return 1
+	printf '%s' "${TIMELINE_JSON:-[]}"
+}
+_fetch_pr_json() {
+	echo "fetch $1" >> "${CALL_LOG}"
+	if [ -f "${PR_DIR}/$1.json" ]; then cat "${PR_DIR}/$1.json"; else echo '{}'; fi
+}
+gh() {
+	if [ "${1:-}" = "api" ] && [[ "${2:-}" == *"/files?per_page=100" ]]; then
+		local n="${2%/files*}"
+		n="${n##*/}"
+		echo "files ${n}" >> "${CALL_LOG}"
+		[ -f "${PR_DIR}/${n}.files.json" ] || return 1
+		cat "${PR_DIR}/${n}.files.json"
+		return 0
+	fi
+	echo "gh-unexpected $*" >> "${CALL_LOG}"
+	return 1
+}
+for _call in $(seq 1 "${RESOLVE_CALLS:-1}"); do
+	_stall_judge_resolve_linked_pr "${ISSUE_NUM}"
+done
+if [ -n "${STALL_JUDGE_LINKED_PR_JSON:-}" ]; then
+	_json_num="$(printf '%s' "${STALL_JUDGE_LINKED_PR_JSON}" | jq -r '.number')"
+else
+	_json_num="none"
+fi
+echo "RESULT num=${STALL_JUDGE_LINKED_PR_NUM:-none} json=${_json_num}"
+"""
+
+
+def _xref(number: int) -> dict:
+	return {
+		"event": "cross-referenced",
+		"source": {"issue": {"number": number, "state": "closed", "pull_request": {"url": f"x/{number}"}}},
+	}
+
+
+def _pr(number: int, head_ref: str, body: str = "", changed_files: int = 3, state: str = "closed") -> dict:
+	return {
+		"number": number,
+		"state": state,
+		"head": {"ref": head_ref, "sha": "a" * 40},
+		"base": {"ref": "main"},
+		"body": body,
+		"changed_files": changed_files,
+	}
+
+
+def _resolve(
+	issue: int,
+	prs: dict[int, dict],
+	timeline: list[int],
+	*,
+	files: dict[int, list] | None = None,
+	branch_prs: str = "",
+	env: dict[str, str] | None = None,
+	calls: int = 1,
+) -> tuple[subprocess.CompletedProcess, list[str]]:
+	with tempfile.TemporaryDirectory() as td:
+		tmp = Path(td)
+		(tmp / "resolver.sh").write_text(
+			"\n".join(_extract_poller_function(name) for name in _RESOLVER_FUNCTIONS), encoding="utf-8"
+		)
+		pr_dir = tmp / "prs"
+		pr_dir.mkdir()
+		for number, pr_json in prs.items():
+			(pr_dir / f"{number}.json").write_text(json.dumps(pr_json), encoding="utf-8")
+		for number, names in (files or {}).items():
+			(pr_dir / f"{number}.files.json").write_text(
+				json.dumps([
+					name if isinstance(name, dict) else {"filename": name, "status": "added"} for name in names
+				]),
+				encoding="utf-8",
+			)
+		call_log = tmp / "calls.log"
+		call_log.write_text("", encoding="utf-8")
+		run_env = {
+			"ISSUE_NUM": str(issue),
+			"PR_DIR": str(pr_dir),
+			"CALL_LOG": str(call_log),
+			"TIMELINE_JSON": json.dumps([_xref(n) for n in timeline]),
+			"BRANCH_PRS": branch_prs,
+			"RESOLVE_CALLS": str(calls),
+		}
+		run_env.update(env or {})
+		proc = _run_bash(_RESOLVER_HARNESS, cwd=tmp, env=run_env)
+		return proc, [ln for ln in call_log.read_text(encoding="utf-8").splitlines() if ln]
+
+
+def _linked_pr_line(proc: subprocess.CompletedProcess) -> str:
+	lines = [ln for ln in proc.stdout.splitlines() if ln.startswith("STALL_JUDGE_LINKED_PR ")]
+	assert lines, proc.stdout + proc.stderr
+	return lines[-1]
+
+
+def test_stall_judge_prefers_implementation_pr_over_plan_doc_xref():
+	"""#9212 shape: merged #9262 on ai/issue-9212, then a docs/plans-only
+	#9478 cross-referenced last. The judge must reason about #9262 and reuse
+	its fetched JSON; the docs-only PR is counted as skipped when it claims
+	the issue, and rejected by the predicate when it only mentions it."""
+	for plan_body, skipped in (
+		("Plan for the follow-up work. Fixes #9212", 1),
+		("Plan for the follow-up work. Refs #9212", 0),
+	):
+		prs = {
+			9262: _pr(9262, "ai/issue-9212", "Automated implementation.", changed_files=12),
+			9478: _pr(9478, "claude/write-plan-pipeline-human-wait-elimination", plan_body, changed_files=1, state="open"),
+		}
+		proc, calls = _resolve(
+			9212, prs, [9262, 9478], files={9478: ["docs/plans/pipeline-human-wait-elimination-plan.md"]}
+		)
+		assert proc.returncode == 0, proc.stderr
+		line = _linked_pr_line(proc)
+		assert line == (
+			f"STALL_JUDGE_LINKED_PR issue=9212 pr=9262 source=cross_ref_impl skipped_docs_plans={skipped}"
+		), (plan_body, line)
+		assert "RESULT num=9262 json=9262" in proc.stdout, proc.stdout
+		# The ai/issue-<n> PR is never docs-checked.
+		assert "files 9262" not in calls, calls
+
+
+def test_stall_judge_picks_open_branch_pr_without_timeline():
+	prs = {9300: _pr(9300, "ai/issue-9212", state="open")}
+	proc, calls = _resolve(9212, prs, [9478], branch_prs="9300")
+	assert proc.returncode == 0, proc.stderr
+	assert _linked_pr_line(proc) == "STALL_JUDGE_LINKED_PR issue=9212 pr=9300 source=branch skipped_docs_plans=0"
+	assert "RESULT num=9300 json=9300" in proc.stdout
+	assert not any(c.startswith("timeline") for c in calls), calls
+
+
+def test_stall_judge_uses_last_xref_when_only_mentions_exist():
+	prs = {
+		500: _pr(500, "claude/tooling-a", "Refs #77", changed_files=2),
+		501: _pr(501, "claude/tooling-b", "Refs #77", changed_files=2),
+	}
+	files = {500: ["scripts/a.sh", "docs/plans/x.md"], 501: ["scripts/b.sh"]}
+	proc, _ = _resolve(77, prs, [501, 500], files=files)
+	assert proc.returncode == 0, proc.stderr
+	assert _linked_pr_line(proc) == "STALL_JUDGE_LINKED_PR issue=77 pr=500 source=cross_ref_last skipped_docs_plans=0"
+	assert "RESULT num=500 json=500" in proc.stdout
+
+
+def test_stall_judge_takes_no_pr_when_every_xref_is_docs_only():
+	prs = {
+		600: _pr(600, "claude/plan-a", "Closes #77", changed_files=1),
+		601: _pr(601, "claude/plan-b", "Refs #77", changed_files=2),
+	}
+	files = {600: ["docs/plans/a.md"], 601: ["docs/plans/b.md", "docs/plans/c.md"]}
+	proc, calls = _resolve(77, prs, [600, 601], files=files, calls=2)
+	assert proc.returncode == 0, proc.stderr
+	assert _linked_pr_line(proc) == "STALL_JUDGE_LINKED_PR issue=77 pr=none source=none skipped_docs_plans=2"
+	assert "RESULT num=none json=none" in proc.stdout
+	# The file lists are cached per tick: two resolutions, one read per PR.
+	assert sorted(c for c in calls if c.startswith("files")) == ["files 600", "files 601"], calls
+
+
+def test_stall_judge_keeps_candidate_when_files_read_fails():
+	prs = {700: _pr(700, "claude/fix", "Closes #77", changed_files=2)}
+	proc, calls = _resolve(77, prs, [700])
+	assert proc.returncode == 0, proc.stderr
+	assert _linked_pr_line(proc) == "STALL_JUDGE_LINKED_PR issue=77 pr=700 source=cross_ref_impl skipped_docs_plans=0"
+	assert "files 700" in calls
+
+
+def test_stall_judge_skips_files_read_for_large_or_empty_change_sets():
+	for changed in (0, 101):
+		prs = {710: _pr(710, "claude/fix", "Closes #77", changed_files=changed)}
+		proc, calls = _resolve(77, prs, [710], files={710: ["docs/plans/x.md"]})
+		assert _linked_pr_line(proc).startswith("STALL_JUDGE_LINKED_PR issue=77 pr=710 "), proc.stdout
+		assert not any(c.startswith("files") for c in calls), calls
+
+
+def test_stall_judge_keeps_docs_only_pr_on_issue_branch():
+	prs = {800: _pr(800, "ai/issue-77", "Automated implementation.", changed_files=1)}
+	proc, calls = _resolve(77, prs, [800], files={800: ["docs/plans/x.md"]})
+	assert proc.returncode == 0, proc.stderr
+	assert _linked_pr_line(proc) == "STALL_JUDGE_LINKED_PR issue=77 pr=800 source=cross_ref_impl skipped_docs_plans=0"
+	assert not any(c.startswith("files") for c in calls), calls
+
+
+def test_stall_judge_rename_out_of_docs_plans_is_not_docs_only():
+	"""A file moved into docs/plans/ from elsewhere changes more than plans,
+	so the PR stays a candidate."""
+	prs = {820: _pr(820, "claude/move", "Closes #77", changed_files=1)}
+	proc, _ = _resolve(77, prs, [820], files={820: ["docs/plans/moved.md"]})
+	assert _linked_pr_line(proc) == "STALL_JUDGE_LINKED_PR issue=77 pr=none source=none skipped_docs_plans=1"
+	renamed = {"filename": "docs/plans/moved.md", "previous_filename": "scripts/old.sh", "status": "renamed"}
+	proc, _ = _resolve(77, prs, [820], files={820: [renamed]})
+	assert _linked_pr_line(proc) == "STALL_JUDGE_LINKED_PR issue=77 pr=820 source=cross_ref_impl skipped_docs_plans=0"
+
+
+def test_stall_judge_switch_off_restores_last_cross_reference():
+	prs = {
+		9262: _pr(9262, "ai/issue-9212", changed_files=12),
+		9478: _pr(9478, "claude/write-plan", "Refs #9212", changed_files=1),
+	}
+	for value in ("false", "FALSE"):
+		proc, calls = _resolve(
+			9212, prs, [9262, 9478], files={9478: ["docs/plans/x.md"]},
+			branch_prs="9262", env={"STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED": value},
+		)
+		assert proc.returncode == 0, proc.stderr
+		assert _linked_pr_line(proc) == "STALL_JUDGE_LINKED_PR issue=9212 pr=9478 source=legacy skipped_docs_plans=0"
+		# The caller fetches the PR as before.
+		assert "RESULT num=9478 json=none" in proc.stdout
+		assert not any(c.startswith(("fetch", "branch", "files")) for c in calls), calls
+
+
+def test_invoke_stall_judge_uses_resolver_and_reuses_pr_json():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	body = script.split("\ninvoke_stall_judge() {\n", 1)[1].split("\n}\n", 1)[0]
+	assert '_stall_judge_resolve_linked_pr "${issue_num}" || true' in body
+	assert 'linked_pr="${STALL_JUDGE_LINKED_PR_NUM:-}"' in body
+	assert 'linked_pr_json="${STALL_JUDGE_LINKED_PR_JSON}"' in body
+	assert "_issue_cross_ref_pr_number_last" not in body
+	# The resolver must run in the main shell, not in a command substitution.
+	assert "$(_stall_judge_resolve_linked_pr" not in body
+	assert 'STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED="${STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED:-true}"' in script
+
+
+# ---------------------------------------------------------------------------
 # Direct-invocation entrypoint
 #
 # `.github/workflows/ci.yml` runs each test as `python3 tests/<file>.py` from
