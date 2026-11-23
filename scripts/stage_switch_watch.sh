@@ -148,7 +148,7 @@ stage_switch_report()
 	local counts off_count waiting_count on_purpose_count alert_count
 	counts="$(printf '%s' "${result}" | jq -r '[.counts.off, .counts.waiting, .counts.on_purpose, .counts.alerts] | map(tostring) | join(" ")' 2>/dev/null)" || counts=""
 	if [ -z "${counts}" ]; then
-		echo "::warning::STAGE_SWITCH_WATCH could not parse the evaluation counts; the counts below read 0."
+		echo "::warning::STAGE_SWITCH_WATCH could not parse the evaluation counts; the counts below read 0 and alerts are skipped this run (no day marker is written, so a later run retries)."
 	fi
 	read -r off_count waiting_count on_purpose_count alert_count <<< "${counts:-0 0 0 0}"
 
@@ -194,7 +194,9 @@ stage_switch_report()
 						+ "\nRun: \($run)"' 2>/dev/null)" || msg=""
 					[ -n "${msg}" ] || continue
 					attempted=$((attempted + 1))
-					msg_id="$(tg_send_msg "${msg}" WARNING 2>/dev/null)" || msg_id=""
+					# tg_send_msg's stderr (fixed text or Telegram's sanitized description,
+					# never the token) stays in the log so a failed send shows why.
+					msg_id="$(tg_send_msg "${msg}" WARNING)" || msg_id=""
 					[ -n "${msg_id}" ] && delivered=$((delivered + 1))
 				done
 				if [ "${delivered}" -gt 0 ]; then

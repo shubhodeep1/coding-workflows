@@ -26,10 +26,12 @@ WORKFLOWS_DIR = ROOT / ".github" / "workflows"
 REGISTRY = ROOT / "scripts" / "stage_switches.json"
 WATCH_WORKFLOW = WORKFLOWS_DIR / "workflow-log-analysis.yml"
 
-SWITCH_DEFAULT_RE = re.compile(r"vars\.([A-Z][A-Z0-9_]*_ENABLED) \|\| (?:\([^()]*\) \|\| )*'([^']*)'")
+# Matched against each workflow's whole text (comment lines removed), with
+# `\s` between tokens, so an expression split across lines is still found.
+SWITCH_DEFAULT_RE = re.compile(r"vars\.([A-Z][A-Z0-9_]*_ENABLED)\s*\|\|\s*(?:\([^()]*\)\s*\|\|\s*)*'([^']*)'")
 # `vars.<NAME>_ENABLED != 'false'` keeps a stage on unless the variable is
 # `false`, so it is a default-on switch too.
-SWITCH_NOT_FALSE_RE = re.compile(r"vars\.([A-Z][A-Z0-9_]*_ENABLED) != 'false'")
+SWITCH_NOT_FALSE_RE = re.compile(r"vars\.([A-Z][A-Z0-9_]*_ENABLED)\s*!=\s*'false'")
 README_SWITCH_TABLES = ("#### Variables", "## Required Variables")
 # README rows with default `true` that no workflow reads from a repository
 # variable (the watch reads repository variables only). Each needs a reason.
@@ -58,14 +60,15 @@ def _workflow_true_switches(workflows_dir: Path) -> dict[str, set[str]]:
 	"""Map each switch defaulting to 'true' in some workflow to those files."""
 	found: dict[str, set[str]] = {}
 	for workflow in sorted(workflows_dir.glob("*.yml")):
-		for line in workflow.read_text(encoding="utf-8").splitlines():
-			if line.strip().startswith("#"):
-				continue
-			for name, default in SWITCH_DEFAULT_RE.findall(line):
-				if default == "true":
-					found.setdefault(name, set()).add(workflow.name)
-			for name in SWITCH_NOT_FALSE_RE.findall(line):
+		text = "\n".join(
+			line for line in workflow.read_text(encoding="utf-8").splitlines()
+			if not line.strip().startswith("#")
+		)
+		for name, default in SWITCH_DEFAULT_RE.findall(text):
+			if default == "true":
 				found.setdefault(name, set()).add(workflow.name)
+		for name in SWITCH_NOT_FALSE_RE.findall(text):
+			found.setdefault(name, set()).add(workflow.name)
 	return found
 
 
@@ -110,11 +113,12 @@ def test_registry_check_fails_on_unlisted_workflow_switch(tmp_path):
 		"      NEW_STAGE_ENABLED: ${{ vars.NEW_STAGE_ENABLED || 'true' }}\n"
 		"      CHAINED_STAGE_ENABLED: ${{ vars.CHAINED_STAGE_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}\n"
 		"      OPT_IN_ENABLED: ${{ vars.OPT_IN_ENABLED || 'false' }}\n"
+		"      MULTI_LINE_STAGE_ENABLED: >-\n        ${{ vars.MULTI_LINE_STAGE_ENABLED\n          || 'true' }}\n"
 		"    if: ${{ vars.NOT_FALSE_STAGE_ENABLED != 'false' }}\n"
 		"      # COMMENTED_ENABLED: ${{ vars.COMMENTED_ENABLED || 'true' }}\n",
 		encoding="utf-8",
 	)
-	assert _missing_from_registry(tmp_path, _registry_names()) == ["CHAINED_STAGE_ENABLED", "NEW_STAGE_ENABLED", "NOT_FALSE_STAGE_ENABLED"]
+	assert _missing_from_registry(tmp_path, _registry_names()) == ["CHAINED_STAGE_ENABLED", "MULTI_LINE_STAGE_ENABLED", "NEW_STAGE_ENABLED", "NOT_FALSE_STAGE_ENABLED"]
 
 
 def test_every_readme_true_switch_is_in_registry():
