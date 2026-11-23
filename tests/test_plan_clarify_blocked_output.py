@@ -1154,6 +1154,141 @@ def test_blocked_issue_without_check_triage_label_keeps_critical_and_text() -> N
 		assert sends[0][2].startswith("Planning blocked for issue #746: work is already"), labels
 
 
+# Issue #9534: a planning block caused only by missing scope is routed into the
+# unblock judge's override_guard flow. The steps are read as text so the
+# exact env wiring and the real handler body are what the tests run.
+PLANNING_SCOPE_HEADER = "🚨 **files_touched scope guard rejected this planning run.**"
+PLANNING_SCOPE_MARKER = (
+	"<!-- ai:guard-rejection:v1 item=5 guard=scope reason=out-of-scope run=77 count=1 "
+	"truncated=false paths=WyJ0ZXN0cy90ZXN0X2EucHkiXQo= -->"
+)
+
+
+def _plan_step_block(name: str) -> str:
+	wf = _read(PLAN_WF)
+	start = wf.index(f"      - name: {name}\n")
+	end = wf.index("\n      - name:", start + 1)
+	return wf[start:end]
+
+
+def _plan_step_run(name: str) -> str:
+	block = _plan_step_block(name)
+	run = block[block.index("        run: |\n") + len("        run: |\n"):]
+	lines = [line[10:] if line.startswith("          ") else line.strip() for line in run.split("\n")]
+	script = "\n".join(lines)
+	for expression, value in {
+		"${{ github.repository }}": "o/r",
+		"${{ github.server_url }}": "https://github.com",
+		"${{ github.run_id }}": "123",
+	}.items():
+		script = script.replace(expression, value)
+	assert not re.findall(r"\$\{\{[^}]*\}\}", script)
+	return script
+
+
+def _run_blocked_handler(scope_routed: str, scope_marker: str, reason: str = "needed files are outside files_touched") -> tuple[str, str]:
+	script = _plan_step_run("Handle blocked planning output")
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "scripts").mkdir()
+		(root / "bin").mkdir()
+		(root / "scripts" / "gh_helpers.sh").write_text('gh_retry() { "$@"; }\n', encoding="utf-8")
+		(root / "scripts" / "label_helpers.sh").write_text('ensure_label_exists() { printf "ensure %s\\n" "$1" >> "${STUB_LOG}"; }\n', encoding="utf-8")
+		(root / "scripts" / "tg_helpers.sh").write_text("tg_send_tracked() { :; }\n", encoding="utf-8")
+		gh = root / "bin" / "gh"
+		gh.write_text(
+			'#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "${STUB_LOG}"\n'
+			'for arg in "$@"; do case "${arg}" in body=*) printf "%s" "${arg#body=}" > "${STUB_BODY}" ;; esac; done\n',
+			encoding="utf-8",
+		)
+		gh.chmod(0o755)
+		env = {
+			"PATH": f"{root / 'bin'}:/usr/bin:/bin",
+			"SUPPORT_SCRIPTS_DIR": str(root / "scripts"),
+			"STUB_LOG": str(root / "log"),
+			"STUB_BODY": str(root / "body"),
+			"ISSUE_NUMBER": "5",
+			"ISSUE_URL": "https://github.com/o/r/issues/5",
+			"PLAN_COMMENT_FILE": str(root / "comment.txt"),
+			"BLOCKED_REASON": reason,
+			"SCOPE_ROUTED": scope_routed,
+			"SCOPE_MARKER": scope_marker,
+		}
+		result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=False)
+		assert result.returncode == 0, result.stdout + result.stderr
+		return (root / "log").read_text(encoding="utf-8"), (root / "body").read_text(encoding="utf-8")
+
+
+def test_route_scope_block_step_sits_before_the_handler_with_the_same_if() -> None:
+	wf = _read(PLAN_WF)
+	route = _plan_step_block("Route planning scope block")
+	handler = _plan_step_block("Handle blocked planning output")
+	assert wf.index(route) < wf.index(handler)
+	assert wf[wf.index(route) + len(route):].startswith("\n      - name: Handle blocked planning output\n")
+	condition = "        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked == 'true'\n"
+	assert condition in route and condition in handler
+	assert "        id: route_scope_block\n" in route
+	assert "          PLAN_SCOPE_BLOCK_ROUTING_ENABLED: ${{ vars.PLAN_SCOPE_BLOCK_ROUTING_ENABLED || 'true' }}\n" in route
+	assert "          WAITING_PARSED: ${{ steps.parse_plan.outputs.waiting }}\n" in route
+	assert "plan_scope_block_route.sh" in route and 'reason=helper_absent' in route
+	assert "          SCOPE_ROUTED: ${{ steps.route_scope_block.outputs.scope_routed }}\n" in handler
+	assert "          SCOPE_MARKER: ${{ steps.route_scope_block.outputs.scope_marker }}\n" in handler
+	# Optional staging for the legacy support path.
+	assert "for f in plan_scope_block_route.sh; do" in wf
+	orchestrate = _read(REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml")
+	wiring = "          JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED: ${{ vars.JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED || 'true' }}\n"
+	assert orchestrate.count(wiring) == orchestrate.count("          STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ") == 3
+
+
+def test_unrouted_blocked_comment_is_unchanged() -> None:
+	for routed, marker in (("", ""), ("false", ""), ("true", ""), ("true", PLANNING_SCOPE_MARKER.replace("item=5", "item=6"))):
+		log, body = _run_blocked_handler(routed, marker)
+		assert body == (
+			"Planning blocked: human input required.\n\nReason: needed files are outside files_touched\n\n"
+			"Auto-answer has been paused to avoid unsatisfiable clarification loops.\n"
+			"Provide the required input, then reply with /answer.\n\nRun: https://github.com/o/r/actions/runs/123"
+		), (routed, marker, body)
+		assert "--add-label ai:blocked --remove-label ai:planning" in log
+		assert "ai:scope-blocked" not in log
+
+
+def test_routed_blocked_comment_has_header_first_and_marker_last() -> None:
+	log, body = _run_blocked_handler("true", PLANNING_SCOPE_MARKER)
+	lines = [line for line in body.splitlines() if line.strip()]
+	assert lines[0] == PLANNING_SCOPE_HEADER
+	assert lines[-1] == PLANNING_SCOPE_MARKER
+	# Every line of today's comment stays in between.
+	assert lines[1:-1] == [
+		"Planning blocked: human input required.",
+		"Reason: needed files are outside files_touched",
+		"Auto-answer has been paused to avoid unsatisfiable clarification loops.",
+		"Provide the required input, then reply with /answer.",
+		"Run: https://github.com/o/r/actions/runs/123",
+	]
+	assert "ensure ai:scope-blocked" in log
+	assert "--add-label ai:blocked --add-label ai:scope-blocked --remove-label ai:planning" in log
+	header_line = PLANNING_SCOPE_HEADER
+	ledger_text = _read(REPO_ROOT / "scripts" / "unblock_ledger.py")
+	assert f'"{header_line}",' in ledger_text
+
+
+def test_open_pr_wait_reason_is_never_scope_routed() -> None:
+	log, body = _run_blocked_handler(
+		"true", PLANNING_SCOPE_MARKER, reason="work is delivered by open PR #9246; resume once it is merged"
+	)
+	assert PLANNING_SCOPE_HEADER not in body and "ai:guard-rejection" not in body
+	assert "ai:scope-blocked" not in log
+
+
+def test_plan_prompt_documents_scope_missing_lines() -> None:
+	for path in (PROMPT_PLAN, REPO_ROOT / "prompts" / "_templates" / "mode-plan.txt"):
+		text = _read(path)
+		assert "`SCOPE_MISSING: <repo-relative path>`" in text
+		assert "at most 20, outside any code fence" in text
+	for path in (REPO_ROOT / "prompts" / "mode-judge.txt", REPO_ROOT / "prompts" / "_templates" / "mode-judge.txt"):
+		assert "job or step, its `files_touched:` list names every repository script that job" in _read(path)
+
+
 def main() -> int:
 	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	for test in tests:
@@ -1367,3 +1502,4 @@ def test_blocked_verify_retry_accepts_a_waiting_answer() -> None:
 		assert _read(Path(tmp) / "o.txt") == "WAITING: pr=owner/repo#7\n"
 	assert _blocked_verify_lines(result)[-1] == "CLARIFY_BLOCKED_VERIFY stage=retry outcome=still_blocked exit_code=0"
 	assert "^\\s*WAITING:\\s*.+$" in _read(CLARIFY_WF)
+

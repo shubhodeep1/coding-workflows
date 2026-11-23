@@ -791,6 +791,22 @@ jobs:
             _fetched_scripts+=("${f}")
           done
 
+          # Planning scope-block router (issue #9534): optional, so a support ref
+          # without it never fails planning; the route step then keeps today's
+          # ai:blocked comment.
+          for f in plan_scope_block_route.sh; do
+            src=".codex-workflow-src/scripts/${f}"
+            if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
+              src=".codex-workflow-src-main/scripts/${f}"
+            fi
+            if [ ! -f "${src}" ]; then
+              echo "::notice::Optional planning scope-block router ${f} unavailable on ${SCRIPT_REF}; scope blocks keep the ai:blocked comment."
+              continue
+            fi
+            install -m 0755 "${src}" "scripts/${f}"
+            _fetched_scripts+=("${f}")
+          done
+
           # Attempt-journal helpers (issue #8428, P1): optional, so a support ref
           # without them never fails planning while PERSIST_JOURNAL_ENABLED is
           # off. They are not in the required loop above because that list must
@@ -2514,6 +2530,35 @@ jobs:
               > "${RUNTIME_DIR}/acceptance_marker.txt" || rm -f "${RUNTIME_DIR}/acceptance_marker.txt"
           fi
 
+      - name: Route planning scope block
+        id: route_scope_block
+        if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked == 'true'
+        continue-on-error: true
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          WAITING_PARSED: ${{ steps.parse_plan.outputs.waiting }}
+          PLAN_SCOPE_BLOCK_ROUTING_ENABLED: ${{ vars.PLAN_SCOPE_BLOCK_ROUTING_ENABLED || 'true' }}
+        run: |
+          set -euo pipefail
+          # Issue #9534: a block whose only cause is files outside files_touched
+          # (the planner's SCOPE_MISSING: lines) gets a trusted guard-rejection
+          # marker, so the unblock judge can offer override_guard. Fail open: a
+          # missing or failing router leaves scope_routed=false and the handler
+          # below posts today's comment. No API calls.
+          route_script=""
+          for candidate in "${SUPPORT_SCRIPTS_DIR:-scripts}/plan_scope_block_route.sh" ".codex-workflow-src/scripts/plan_scope_block_route.sh"; do
+            if [ -f "${candidate}" ] && [ ! -L "${candidate}" ]; then
+              route_script="${candidate}"
+              break
+            fi
+          done
+          if [ -z "${route_script}" ]; then
+            echo "scope_routed=false" >> "$GITHUB_OUTPUT"
+            echo "PLAN_SCOPE_BLOCK outcome=not_routed issue=${ISSUE_NUMBER:--} paths=0 reason=helper_absent"
+            exit 0
+          fi
+          SUPPORT_SCRIPTS_DIR="${SUPPORT_SCRIPTS_DIR:-scripts}" bash "${route_script}" || echo "scope_routed=false" >> "$GITHUB_OUTPUT"
+
       - name: Handle blocked planning output
         if: env.SKIP_PLAN != 'true' && steps.parse_plan.outputs.blocked == 'true'
         env:
@@ -2536,6 +2581,9 @@ jobs:
           # The pr_on_branch hold also needs the judge's `wait` verdict, which
           # UNBLOCK_JUDGE_WAIT_ENABLED=false removes (same default as unblock_judge.yml).
           UNBLOCK_JUDGE_WAIT_ENABLED: ${{ vars.UNBLOCK_JUDGE_WAIT_ENABLED || 'true' }}
+          # Issue #9534: set by the "Route planning scope block" step.
+          SCOPE_ROUTED: ${{ steps.route_scope_block.outputs.scope_routed }}
+          SCOPE_MARKER: ${{ steps.route_scope_block.outputs.scope_marker }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
@@ -2581,9 +2629,29 @@ jobs:
             BLOCKED_REASON="${BLOCKED_REASON} (dependency wait not parked: ${DEP_WAIT_PARK_STATUS:-error})"
           fi
 
+          # Issue #9534: a routed scope block (SCOPE_MISSING: paths validated by
+          # scripts/plan_scope_block_route.sh) also gets ai:scope-blocked and ends
+          # its comment with the guard-rejection marker, so the unblock judge can
+          # offer override_guard. Never for the open-PR wait reason below. The
+          # label rides on the same edit as ai:blocked (no extra API call).
+          PLAN_SCOPE_ROUTED=false
+          plan_scope_marker_re="^<!-- ai:guard-rejection:v1 item=${ISSUE_NUMBER} guard=scope reason=out-of-scope run=[0-9]+ count=[1-9][0-9]* truncated=false paths=[A-Za-z0-9+/=]+ -->\$"
+          plan_scope_wait_re='^work is delivered by open PR #'
+          if [ "${SCOPE_ROUTED:-false}" = "true" ] && [[ "${ISSUE_NUMBER:-}" =~ ^[1-9][0-9]*$ ]] \
+            && [[ "${SCOPE_MARKER:-}" =~ ${plan_scope_marker_re} ]] && ! [[ "${BLOCKED_REASON}" =~ ${plan_scope_wait_re} ]]; then
+            PLAN_SCOPE_ROUTED=true
+          fi
+          plan_scope_label_args=()
+          if [ "${PLAN_SCOPE_ROUTED}" = "true" ]; then
+            ensure_label_exists "ai:scope-blocked" "${{ github.repository }}" || true
+            plan_scope_label_args=(--add-label 'ai:scope-blocked')
+          fi
+          echo "PLAN_SCOPE_BLOCK op=handle issue=${ISSUE_NUMBER} routed=${PLAN_SCOPE_ROUTED}"
+
           ensure_label_exists "ai:blocked" "${{ github.repository }}"
           gh_retry gh issue edit "${ISSUE_NUMBER}" --repo "${{ github.repository }}" \
             --add-label 'ai:blocked' \
+            ${plan_scope_label_args[@]+"${plan_scope_label_args[@]}"} \
             --remove-label 'ai:planning' \
             --remove-label 'ai:clarification' \
             --remove-label 'ai:awaiting-approval' >/dev/null 2>&1 || true
@@ -2635,6 +2703,10 @@ jobs:
             } > "${PLAN_COMMENT_FILE}"
           else
             {
+              if [ "${PLAN_SCOPE_ROUTED}" = "true" ]; then
+                printf '%s\n' "🚨 **files_touched scope guard rejected this planning run.**"
+                printf '\n'
+              fi
               printf '%s\n' "Planning blocked: human input required."
               printf '\n'
               printf '%s\n' "Reason: ${BLOCKED_REASON}"
@@ -2647,6 +2719,11 @@ jobs:
               printf '%s\n' "Provide the required input, then reply with /answer."
               printf '\n'
               printf '%s\n' "Run: ${RUN_URL}"
+              # The marker must be the last non-empty line (unblock_ledger.py).
+              if [ "${PLAN_SCOPE_ROUTED}" = "true" ]; then
+                printf '\n'
+                printf '%s\n' "${SCOPE_MARKER}"
+              fi
             } > "${PLAN_COMMENT_FILE}"
           fi
 

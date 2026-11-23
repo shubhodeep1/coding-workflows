@@ -34686,5 +34686,76 @@ def test_final_merge_auto_resume_ignores_other_failed_projects() -> None:
 	assert result["latest_state"]["status"] == "failed"
 
 
+# Issue #9534: judge-created issues get the scope companions (tests/**,
+# changelog.d/*, agents.d/*) in their files_touched block.
+def _judge_companions_run(body: str, *, enabled: str | None = None, scripts_dir: Path | None = None) -> tuple[str, str]:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	source = _extract_bash_function(script, "add_files_touched_companions() {") \
+		+ _extract_bash_function(script, "apply_judge_files_touched_companions() {")
+	program = source + '\napply_judge_files_touched_companions "$1" fixup "fix-1"\nprintf "%s" "${JUDGE_COMPANIONS_BODY_OUT}" > "$2"\n'
+	with tempfile.TemporaryDirectory() as tmp:
+		out_file = Path(tmp) / "body.txt"
+		env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "PYTHONDONTWRITEBYTECODE": "1"}
+		if enabled is not None:
+			env["JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED"] = enabled
+		# The helper finds files_touched_scope_guard.py next to the script ($0's directory).
+		cwd = scripts_dir if scripts_dir is not None else REPO_ROOT / "scripts"
+		result = subprocess.run(["bash", "-c", program, "./poller", body, str(out_file)], cwd=cwd, env=env,
+			capture_output=True, text=True, check=False, timeout=60)
+		assert result.returncode == 0, result.stderr
+		return result.stdout, out_file.read_text(encoding="utf-8")
+
+
+def test_judge_companions_added_at_the_block_indent() -> None:
+	body = "Fix it.\n\nfiles_touched:\n  - scripts/b.sh\n  - scripts/a.sh\n\nNotes after."
+	log, out = _judge_companions_run(body)
+	assert out == ("Fix it.\n\nfiles_touched:\n  - scripts/b.sh\n  - scripts/a.sh\n  - tests/**\n"
+		"  - changelog.d/*\n  - agents.d/*\n\nNotes after.")
+	assert "JUDGE_SCOPE_COMPANIONS outcome=added issue_kind=fixup local_id=fix-1 added=3" in log
+
+
+def test_judge_companions_only_missing_entries_are_added() -> None:
+	body = "files_touched:\n  - tests/**\n  - src/a.py"
+	log, out = _judge_companions_run(body)
+	assert out == "files_touched:\n  - tests/**\n  - src/a.py\n  - changelog.d/*\n  - agents.d/*"
+	assert "added=2" in log
+	full = "files_touched:\n  - agents.d/*\n  - tests/**\n  - changelog.d/*"
+	log, out = _judge_companions_run(full)
+	assert out == full and "JUDGE_SCOPE_COMPANIONS outcome=unchanged issue_kind=fixup local_id=fix-1 added=0" in log
+
+
+def test_judge_companions_flush_list_and_no_block() -> None:
+	log, out = _judge_companions_run("Body\nfiles_touched:\n- src/a.py\n- src/b.py\nTrailer")
+	assert out == "Body\nfiles_touched:\n- src/a.py\n- src/b.py\n- tests/**\n- changelog.d/*\n- agents.d/*\nTrailer"
+	log, out = _judge_companions_run("No scope list in this body.")
+	assert out == "No scope list in this body."
+	assert "JUDGE_SCOPE_COMPANIONS outcome=unchanged issue_kind=fixup local_id=fix-1 added=0 reason=no_block" in log
+
+
+def test_judge_companions_disabled_and_helper_failure_keep_the_body() -> None:
+	body = "files_touched:\n  - src/a.py"
+	for value in ("false", "FALSE", " false "):
+		log, out = _judge_companions_run(body, enabled=value)
+		assert out == body
+		assert "outcome=skipped issue_kind=fixup local_id=fix-1 added=0 reason=disabled" in log
+	with tempfile.TemporaryDirectory() as tmp:
+		log, out = _judge_companions_run(body, scripts_dir=Path(tmp))
+	assert out == body
+	assert "outcome=skipped issue_kind=fixup local_id=fix-1 added=0 reason=helper_failed" in log
+
+
+def test_judge_companions_wired_at_both_judge_issue_sites() -> None:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert 'JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED="${JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED:-true}"' in script
+	fixup = _extract_bash_function(script, "create_judge_fixup_issues_from_verdict() {")
+	call = 'apply_judge_files_touched_companions "${FIX_BODY}" fixup "${FIX_ID}"\n          FIX_BODY="${JUDGE_COMPANIONS_BODY_OUT}"'
+	assert call in fixup and fixup.index(call) < fixup.index('FULL_FIX_BODY="${FIX_BODY}')
+	addition = 'apply_judge_files_touched_companions "${NEW_BODY}" addition "${NEW_ID}"\n          NEW_BODY="${JUDGE_COMPANIONS_BODY_OUT}"'
+	assert script.count(addition) == 1
+	assert script.index(addition) < script.index('FULL_NEW_BODY="${NEW_BODY}')
+	helper = _extract_bash_function(script, "add_files_touched_companions() {")
+	assert "python3 -I -B -c" in helper and "PIPELINE_PLAN_GRANT_COMPANIONS" in helper and "gh " not in helper
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())

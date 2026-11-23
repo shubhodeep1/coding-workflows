@@ -3154,6 +3154,9 @@ fi
 # DEBUG; after this many automatic resolution attempts on the same PR head
 # the sweep sends one WARNING. 0 disables that alert.
 STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS="${STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS:-3}"
+# Issue #9534: judge-created issues get the scope companions (tests/**,
+# changelog.d/*, agents.d/*) in their files_touched block. `false` disables it.
+JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED="${JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED:-true}"
 if ! [[ "${STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS}" =~ ^[0-9]+$ ]]; then
   echo "::warning::STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS must be a non-negative integer; defaulting to 3"
   STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS="3"
@@ -10775,6 +10778,129 @@ judge_tracking_issue_closed_skip() {
   return 1
 }
 
+# add_files_touched_companions <body> (issue #9534)
+# Input: $1 is an issue body (a judge addition or judge fix-up).
+# Output: one JSON line on stdout,
+#   {"outcome":"added|unchanged|no_block","added":<n>,"body":"<body>"}
+# where body is the input with each missing PIPELINE_PLAN_GRANT_COMPANIONS
+# entry (scripts/files_touched_scope_guard.py) appended to the first
+# `files_touched:` block, at that block's indent and bullet prefix. Entries
+# the judge wrote keep their text and order; a body without a block (or with
+# an empty one) comes back unchanged as `no_block`. The block is located with
+# the same rules as extract_files_touched, imported from the guard module, so
+# there is one source of truth. 0 API calls. Exits non-zero when the guard
+# module is missing or the scan disagrees with extract_files_touched; callers
+# fail open and keep the body as it was.
+add_files_touched_companions() {
+  local aftc_body="${1-}"
+  local aftc_dir=""
+  aftc_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || return 1
+  [ -f "${aftc_dir}/files_touched_scope_guard.py" ] || return 1
+  printf '%s' "${aftc_body}" | python3 -I -B -c '
+import json
+import re
+import sys
+
+sys.path.insert(0, sys.argv[1])
+from files_touched_scope_guard import PIPELINE_PLAN_GRANT_COMPANIONS, extract_files_touched, normalize_path
+
+body = sys.stdin.read()
+
+
+def emit(outcome, added, text):
+	print(json.dumps({"outcome": outcome, "added": added, "body": text}))
+
+
+entries = extract_files_touched(body)
+if not entries:
+	emit("no_block", 0, body)
+	raise SystemExit(0)
+lines = body.split("\n")
+found = None
+for idx, raw in enumerate(lines):
+	stripped = raw.strip()
+	if stripped not in {"files_touched:", "- files_touched:"}:
+		continue
+	base_indent = len(raw) - len(raw.lstrip(" "))
+	flush_allowed = stripped == "files_touched:"
+	flush = None
+	scanned = []
+	last_index = -1
+	for offset, candidate in enumerate(lines[idx + 1:], start=idx + 1):
+		if not candidate.strip():
+			if scanned:
+				break
+			continue
+		indent = len(candidate) - len(candidate.lstrip(" "))
+		if flush is None:
+			flush = flush_allowed and indent == base_indent
+		if flush:
+			if indent != base_indent:
+				break
+		elif indent <= base_indent:
+			break
+		match = re.match(r"^\s*-\s+(.+?)\s*$", candidate)
+		if not match:
+			break
+		entry = match.group(1).strip()
+		if entry:
+			scanned.append(entry)
+			last_index = offset
+	found = (scanned, last_index)
+	break
+if found is None or found[0] != entries or found[1] < 0:
+	raise SystemExit(3)
+existing = {normalize_path(entry) for entry in entries}
+missing = [companion for companion in PIPELINE_PLAN_GRANT_COMPANIONS if companion not in existing]
+if not missing:
+	emit("unchanged", 0, body)
+	raise SystemExit(0)
+last_line = lines[found[1]]
+prefix = re.match(r"^(\s*-\s+)", last_line).group(1)
+new_lines = lines[: found[1] + 1] + [prefix + companion for companion in missing] + lines[found[1] + 1:]
+emit("added", len(missing), "\n".join(new_lines))
+' "${aftc_dir}"
+}
+
+# apply_judge_files_touched_companions <body> <addition|fixup> <local_id>
+# Sets JUDGE_COMPANIONS_BODY_OUT to the body with the scope companions added
+# (add_files_touched_companions), or to the body unchanged when
+# JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED is `false` or the helper fails (fail
+# open). Logs one JUDGE_SCOPE_COMPANIONS line. Runs in the caller's shell so
+# the result needs no command substitution. 0 API calls.
+apply_judge_files_touched_companions() {
+  local ajc_body="${1-}" ajc_kind="${2:-addition}" ajc_id="${3:-}"
+  local ajc_flag="" ajc_json="" ajc_outcome="" ajc_added="" ajc_new="" ajc_reason=""
+  JUDGE_COMPANIONS_BODY_OUT="${ajc_body}"
+  ajc_id="$(printf '%s' "${ajc_id}" | tr -c 'A-Za-z0-9._-' '_' | cut -c1-80)" || ajc_id="unknown"
+  ajc_flag="$(printf '%s' "${JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')" || ajc_flag="true"
+  if [ "${ajc_flag}" = "false" ]; then
+    echo "JUDGE_SCOPE_COMPANIONS outcome=skipped issue_kind=${ajc_kind} local_id=${ajc_id} added=0 reason=disabled"
+    return 0
+  fi
+  if ! ajc_json="$(add_files_touched_companions "${ajc_body}" 2>/dev/null)" \
+    || ! ajc_outcome="$(printf '%s' "${ajc_json}" | jq -er '.outcome | select(. == "added" or . == "unchanged" or . == "no_block")' 2>/dev/null)" \
+    || ! ajc_added="$(printf '%s' "${ajc_json}" | jq -er '.added | select(type == "number") | floor' 2>/dev/null)" \
+    || ! ajc_new="$(printf '%s' "${ajc_json}" | jq -er '.body | select(type == "string")' 2>/dev/null)"; then
+    echo "JUDGE_SCOPE_COMPANIONS outcome=skipped issue_kind=${ajc_kind} local_id=${ajc_id} added=0 reason=helper_failed"
+    return 0
+  fi
+  case "${ajc_outcome}" in
+    added)
+      JUDGE_COMPANIONS_BODY_OUT="${ajc_new}"
+      echo "JUDGE_SCOPE_COMPANIONS outcome=added issue_kind=${ajc_kind} local_id=${ajc_id} added=${ajc_added}"
+      ;;
+    no_block)
+      ajc_reason=" reason=no_block"
+      echo "JUDGE_SCOPE_COMPANIONS outcome=unchanged issue_kind=${ajc_kind} local_id=${ajc_id} added=0${ajc_reason}"
+      ;;
+    *)
+      echo "JUDGE_SCOPE_COMPANIONS outcome=unchanged issue_kind=${ajc_kind} local_id=${ajc_id} added=0"
+      ;;
+  esac
+  return 0
+}
+
 create_judge_fixup_issues_from_verdict() {
       if [ "${NEW_ISSUES_COUNT}" -gt 0 ] && ! judge_tracking_issue_closed_skip judge-fix-up; then
         echo "Processing ${NEW_ISSUES_COUNT} judge fix-up candidate(s)..."
@@ -10809,6 +10935,11 @@ create_judge_fixup_issues_from_verdict() {
               echo "  ${FIX_ID}: prior issue #${EXISTING_NUM} is already merged/closed, allowing new fix-up."
             fi
           fi
+
+          # Issue #9534: add the standard scope companions to a judge-written
+          # files_touched block (fail open; JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED).
+          apply_judge_files_touched_companions "${FIX_BODY}" fixup "${FIX_ID}"
+          FIX_BODY="${JUDGE_COMPANIONS_BODY_OUT}"
 
           FULL_FIX_BODY="${FIX_BODY}
 
@@ -37528,6 +37659,11 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
               echo "  ${NEW_ID}: prior issue #${EXISTING_NUM} is already merged/closed, allowing new addition."
             fi
           fi
+
+          # Issue #9534: add the standard scope companions to a judge-written
+          # files_touched block (fail open; JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED).
+          apply_judge_files_touched_companions "${NEW_BODY}" addition "${NEW_ID}"
+          NEW_BODY="${JUDGE_COMPANIONS_BODY_OUT}"
 
           FULL_NEW_BODY="${NEW_BODY}
 

@@ -1157,7 +1157,20 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 	elif name == "override_guard":
 		if ctx["stop"] == "scope-blocked":
 			ops.append({"op": "edit_files_touched", "issue": item, "paths": verdict["paths"]})
-		ops += _approve(item, ctx["labels"], _stop_label(ctx["stop"]) if _stop_label(ctx["stop"]) in ctx["labels"] else "")
+		guard_label = _stop_label(ctx["stop"]) if _stop_label(ctx["stop"]) in ctx["labels"] else ""
+		if ctx["has_plan"]:
+			ops += _approve(item, ctx["labels"], guard_label)
+		else:
+			# Issue #9534: a guard grant before any plan exists (a routed planning
+			# scope block) resumes through the reset_ops GUARD_STOPS rule:
+			# /reclarify and drop the stop label. /reclarify and the planning
+			# transition never clear ai:blocked, which the routed block also set,
+			# so drop it too or the next scan would resume the issue a second time.
+			ops.append({"op": "comment", "issue": item, "body": "/reclarify"})
+			if guard_label:
+				ops.append({"op": "remove_label", "issue": item, "label": guard_label})
+			if ctx["stop"] == "scope-blocked" and "ai:blocked" in ctx["labels"]:
+				ops.append({"op": "remove_label", "issue": item, "label": "ai:blocked"})
 	elif name == "reissue":
 		title = f"Re-issue of #{item}: {_lineage_title(ctx)}"[:240]
 		body = "\n".join([f"Re-issued by the unblock judge from #{item}.", "", f"Specification: {verdict['instructions']}", "", f"Why: {verdict['reason']}"])
