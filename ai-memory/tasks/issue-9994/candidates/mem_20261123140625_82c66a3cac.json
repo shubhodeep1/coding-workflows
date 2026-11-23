@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9994,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9994\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9999\",\"pr_number\":9999,\"branch\":\"ai/issue-9994\",\"run_id\":\"45170678716\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/45170678716\",\"changed_files\":[\".github/workflows/workflow-log-analysis.yml\",\"README.md\",\"agents.d/9994-stage-switch-watch.md\",\"changelog.d/9994-stage-switch-watch.md\",\"scripts/stage_switch_watch.py\",\"scripts/stage_switch_watch.sh\",\"scripts/stage_switches.json\",\"tests/test_stage_switch_registry.py\",\"tests/test_stage_switch_watch.py\"]}",
+  "fingerprint": "17a86bc6054e5bf60c753d304146649ae3e54f9651c92adc7dcdc9f98f1a6c9a",
+  "lineage": {
+    "issue_number": 9994,
+    "parent_ids": [],
+    "pr_number": 9999,
+    "run_id": "45170678716",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45170678716",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9999"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261123140625_82c66a3cac",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9994,
+    "level": "run",
+    "pr_number": 9999,
+    "run_id": "45170678716"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9994: https://github.com/shubhodeep1/coding-workflows/pull/9999",
+  "timestamps": {
+    "created_at": "2026-11-23T14:06:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
