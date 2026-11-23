@@ -1607,7 +1607,9 @@ jobs:
       # bodies unchanged; each step runs once per CI run. Why this job: every
       # single-leg test job has been flagged near 15 of its 20 minutes, and this
       # one lost its largest step to orchestrate-poll after its last flag
-      # (#9391). The never-flagged tests-system-python (24 shards) and
+      # (#9391); #9895 later moved that step (Pre-push affected-test gate
+      # tests) back into this job, so this job now holds it as well as these
+      # six. The never-flagged tests-system-python (24 shards) and
       # tests-sandbox-python (3 image families) are matrix jobs, where an
       # unguarded step would run once per leg. If budget-watch flags this job
       # next, measure step timings before moving anything again.
