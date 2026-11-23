@@ -34877,10 +34877,16 @@ def test_standalone_attempt_merge_arm_gates_new_chain_and_keeps_legacy():
 	arm = body[start:body.index("\n        ;;\n", start)]
 	assert "if _stall_merge_required_checks_enabled; then" in arm
 	assert '_standalone_attempt_merge_required_checks "${issue_num}" "${merge_pr}"' in arm
-	# Flag off: the legacy chain is unchanged.
-	assert '&& _pr_checks_completed "${merge_pr}" "${merge_head_sha}" \\\n' in arm
-	assert '&& _pr_base_fresh_for_merge "${merge_pr}" "${merge_head_sha}" "${merge_base_ref}"; then' in arm
-	assert '_orch_squash_merge_bound "${merge_pr}" "${merge_head_sha}" auto || true' in arm
+	# Flag off: the legacy chain (#9715 first-refusal ladder, same gates,
+	# order and arguments) runs unchanged.
+	legacy_gates = (
+		'elif ! _pr_checks_completed "${merge_pr}" "${merge_head_sha}"; then',
+		'elif ! _pr_base_fresh_for_merge "${merge_pr}" "${merge_head_sha}" "${merge_base_ref}"; then',
+		'elif ! _orch_squash_merge_bound "${merge_pr}" "${merge_head_sha}" auto; then',
+	)
+	for gate in legacy_gates:
+		assert gate in arm, gate
+	assert [arm.index(gate) for gate in legacy_gates] == sorted(arm.index(gate) for gate in legacy_gates)
 	assert arm.index("_stall_merge_required_checks_enabled") < arm.index("_pr_checks_completed")
 	# Refusals are recorded; lease wait keeps its action and no increment.
 	assert "STALL_MERGE_REFUSAL issue=${issue_num} pr=${merge_pr}" in arm
@@ -34889,7 +34895,8 @@ def test_standalone_attempt_merge_arm_gates_new_chain_and_keeps_legacy():
 	lease = arm[arm.index('= "lease_wait" ]; then'):arm.index("attempt_merge_skipped_merge_lease_wait")]
 	assert "STALL_RECOVERY_SHOULD_INCREMENT" not in lease
 	refused = arm[arm.index('attempt_merge_refused_${STALL_MERGE_REFUSAL_REASON}'):]
-	refused = refused[:refused.index("\n        else\n")]
+	# The #9732 refused branch ends where the #9715 legacy-refusal branch starts.
+	refused = refused[:refused.index("\n        elif ")]
 	in_flight = refused[refused.index('"${STALL_MERGE_CHECKS_IN_FLIGHT:-false}" = "true"'):refused.index("          else\n")]
 	assert "STALL_RECOVERY_SHOULD_INCREMENT" not in in_flight
 	assert 'STALL_RECOVERY_SHOULD_INCREMENT="true"' in refused
