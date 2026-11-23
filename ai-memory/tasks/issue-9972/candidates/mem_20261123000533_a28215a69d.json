@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The code matches what the question says. In `scripts/unblock_actions.py`, the `override_guard` branch (lines 1157\u20131160) adds `edit_files_touched` and then always calls `_approve(...)`, which adds `ai:awaiting-approval` and posts `/approved` (lines 844\u2013851). Only `reset_ops` checks `ctx[\"has_plan\"]` for `GUARD_STOPS` (lines 874\u2013878): it calls `_approve` when a plan exists, and otherwise posts `/reclarify` and removes the stop label if present. Option A gives the issue's promised behaviour (\"a grant resumes the issue through the existing guard-stop reset (`/reclarify` when there is no plan yet)\") with the smallest change. The branch keeps `edit_files_touched` first. Its resume half then follows the same `has_plan` split as `reset_ops`: `_approve` exactly as today when a plan exists, otherwise `/reclarify` plus removal of `ai:scope-blocked` when present. Implement-time scope blocks always have a plan, so they still produce the same ops as today. The file is already in `files_touched`. Option B would leave planning-time grants stuck on `/approved` with no plan. Option C adds a second resume path tied to the header, which is more surface for no gain.\nQ2: In `scripts/unblock_ledger.py` `latest_rejection` (lines 611\u2013637), the marker is read from `lines[-1]`, but the header is only checked as `lines[0]` (line 627). The same `lines[0]` check appears at lines 713 and 773. If the header is the second-to-last line, a comment with the header and a broken marker returns `missing` instead of `malformed`. That breaks the issue's stated reason for adding the header to `GUARD_REJECTION_HEADERS`. Option A (header first line, marker last line, every existing line of the blocked comment kept unchanged in between) makes the malformed check cover real comments. It needs no ledger logic change beyond the tuple entry, so it respects \"make no other ledger change\". Option C breaks that constraint. Option B leaves the check ineffective in practice.\n\nEXECUTION PLAN (required for any non-letter decision):\nNone. Both decisions are lettered options. Notes the planner should treat as binding:\n- Q1 (A): only the resume half of the `override_guard` `scope-blocked` branch changes.\n  - When `ctx[\"has_plan\"]` is true, the emitted ops are identical to today's.\n  - When it is false, the ops are `edit_files_touched`, then a `/reclarify` comment, then `remove_label ai:scope-blocked` (only if present).\n  - The `destructive-blocked` override path keeps its current `_approve` behaviour unless it also lacks a plan, in which case it follows the same `reset_ops` `GUARD_STOPS` rule.\n  - Add `tests/test_unblock_judge.py` cases for both the has-plan and no-plan cases.\n- Q2 (A): the routed planning-blocked comment is laid out as follows:\n  - line 1: `\ud83d\udea8 **files_touched scope guard rejected this planning run.**`;\n  - then every existing line of the blocked comment, unchanged;\n  - last non-empty line: the `<!-- ai:guard-rejection:v1 item=<n> guard=scope reason=out-of-scope ... -->` marker.\n\n  Add these tests:\n  - in `tests/test_plan_clarify_blocked_output.py`: the header is the first non-empty line and the marker the last;\n  - in `tests/test_unblock_judge.py`: a comment that opens with the header but has a broken or missing marker resolves to `malformed`.\n\n  The comment is unchanged when `scope_routed` is false.",
+  "fingerprint": "e8d29b581848a3f2373a78c2d64e5f4b6beebcd3d68038d2e60cf1ba9c794e93",
+  "lineage": {
+    "issue_number": 9972,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45086162643",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45086162643",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9972"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261123000533_a28215a69d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9972,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45086162643"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #9972",
+  "timestamps": {
+    "created_at": "2026-11-23T00:05:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
