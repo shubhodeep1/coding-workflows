@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml (selection of steps moved from tests-release-and-log-analysis to orchestrate-poll), changelog.d/9966-ci-release-job-budget-move.md\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The moved steps (\"Judge Semble prefetch contract test\" and \"Regression tests wired by the CI wiring guard (part 1)\") were picked by test and subprocess counts because the run's step timings were unreadable, so the diff does not establish they are the slowest. The cause of the rise to 19m01s is not identified. The \"most headroom\" target is justified by historical overruns of other groups, not by measured budget. The PR discloses this limitation, and budget-watch reopens the issue if the job stays over budget. The other constraints are met: step names and bodies are unchanged, `timeout-minutes` is not raised, and no new job names are added. Severity disagreement: NIT (anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash) vs MAJOR (minimax_minimax-m3, openai_gpt-6-luna); the highest is MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\nExpected change site: `.github/workflows/ci.yml`, the choice of steps moved out of `tests-release-and-log-analysis`.\nEvidence of absence: The diff meets every hard constraint but does not show that the two moved steps were the slowest. The step timings were unreadable and the pick is an estimate. The cause of the rise to 19m01s is not identified. The limitation is disclosed in the PR.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: .github/workflows/ci.yml (selection of steps to move).\nEvidence of absence: The PR moves \"Regression tests wired by the CI wiring guard (part 1)\" and \"Judge Semble prefetch contract test\" to `orchestrate-poll` group 1 but does not establish they are the slowest. The step timings were unreadable and the choice is an estimate. This is documented and reasonable but does not strictly fulfil \"see the run's step timings\".\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\" (issue #9966 body)\nExpected change site: `.github/workflows/ci.yml`, the rationale comments above the two moved steps at lines 4045-4098 and `changelog.d/9966-ci-release-job-budget-move.md` line 2\nEvidence of absence: The PR moves two steps to `orchestrate-poll` group 1, but the diff provides no measured step timings and does not establish that the moved steps are the slowest. The \"most headroom\" choice rests on historical overruns of other groups (#9916 shards 0 and 3 at 20.2 minutes), not a measurement. The other constraints are met. budget-watch does not retroactively satisfy the \"see the run's step timings\" clause.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \u201cMove its slowest steps (see the run's step timings)\u201d out of `tests-release-and-log-analysis`.\nExpected change site: `.github/workflows/ci.yml`, selection of steps moved from `tests-release-and-log-analysis` to `orchestrate-poll`.\nEvidence of absence: The PR moves \u201cJudge Semble prefetch contract test\u201d and \u201cRegression tests wired by the CI wiring guard (part 1)\u201d, but its comments and changelog say the step timings were unreadable and the selection was estimated from test and subprocess counts. The diff does not establish that the moved steps were the slowest.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: .github/workflows/ci.yml (selection of the steps moved from tests-release-and-log-analysis to orchestrate-poll) and changelog.d/9966-ci-release-job-budget-move.md\nEvidence of absence: The PR satisfies the unchanged-bodies, same-names, no-timeout-raise and no-new-job constraints, but the moved steps were selected by test and subprocess counts, not measured timings. ci.yml:4047-4048 and ci.yml:4092-4093 state \"the run's step timings were not readable ... the pick is an estimate\", ci.yml:4051-4052 states \"what raised it to 19m01s is not identified\", and the changelog fragment repeats both disclosures. This is the same disclosed residual limitation that prior consolidator passes classified as non-actionable.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0d910323961a2295ecdea92deec5f2d954d811997f59fb55d84fc44ade5b4cda",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9968,
+    "run_id": "45161801562",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45161801562",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123122733_d10a753779",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9968,
+    "run_id": "45161801562"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T12:27:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
