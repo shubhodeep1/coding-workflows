@@ -57,7 +57,7 @@ def test_manifest_is_built_and_attested_before_tagging(workflow):
 	assert 'echo "path=${SYNC_MANIFEST_PATH}" >> "$GITHUB_OUTPUT"' in build_block
 	attest_block = step(job, "Attest sync manifest")
 	assert RELEASE_GATE in attest_block
-	assert "uses: actions/attest-build-provenance@v3" in attest_block
+	assert "uses: actions/attest-build-provenance@v4" in attest_block
 	assert "subject-path: ${{ steps.sync_manifest.outputs.path }}" in attest_block
 	assert "continue-on-error" not in attest_block
 
