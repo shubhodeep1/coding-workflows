@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  expected_change_site: `.github/workflows/ci.yml`, target-job selection for \"Pre-push affected-test gate tests\" (now `tests-hooks-and-orchestrator`, step at line 1584)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: No run step timings establish that `tests-hooks-and-orchestrator` has the most headroom; run 44909097036 recorded step statuses only, and the rationale at ci.yml:1567-1582, the test-file comment at tests/test_ci_poll_test_sharding.py:4270-4286, and the changelog call the choice \"a judgment, not a measured margin\". Mechanical constraints are met (step moved unchanged, name kept, no timeout-minutes change, no new job). Severity disagreement: openai_gpt-6-luna rated MAJOR (confidence 5); the others rated NIT (confidence 2) and called it a data limit that no code edit can close.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\nExpected change site: `.github/workflows/ci.yml`, the choice of target job for \"Pre-push affected-test gate tests\".\nEvidence of absence: The mechanical constraints are met, but no run records step timings proving `tests-hooks-and-orchestrator` has the most headroom; the choice is openly called a judgment. Flagged in earlier rounds and left open as a data limit.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\nExpected change site: .github/workflows/ci.yml, choice of target job for \"Pre-push affected-test gate tests\" (now tests-hooks-and-orchestrator)\nEvidence of absence: Mechanical constraints are met, but run 44909097036 recorded step statuses only, with no durations. The comment above ci.yml line 1584, the test-file comment above POLL_GROUP_ZERO_9895_TARGET_JOB_ID, and the changelog fragment acknowledge this. The comment update at ci.yml:1607-1610 does not close the gap.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\nExpected change site: `.github/workflows/ci.yml`, destination selection for `Pre-push affected-test gate tests`.\nEvidence of absence: The step is moved to `tests-hooks-and-orchestrator`, but the rationale at lines 1567-1578 states that no candidate job's current total with the step is measured and calls the selection \"a judgment, not a measured margin.\" The diff provides no run step timings establishing that this job has the most headroom.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: `.github/workflows/ci.yml`, target-job selection for `Pre-push affected-test gate tests` (currently `tests-hooks-and-orchestrator`, step at line 1584).\nEvidence of absence: The rationale comment (ci.yml:1567-1582) and the test-file comment (tests/test_ci_poll_test_sharding.py:4270-4286) state no candidate job's total is measured; run 44909097036 recorded step statuses only. This is a data limit, not missing code; prior autofix passes deferred it. All mechanical constraints are met.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a3e6f3bffef4eaa683953287397e4d46edf87930c7655b7ec354d0bc1a1c0688",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9898,
+    "run_id": "45155979770",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45155979770",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123104509_85befbb6c7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9898,
+    "run_id": "45155979770"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T10:45:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
