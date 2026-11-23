@@ -3570,7 +3570,7 @@ PROFILE.name=full manifest=workflow-templates/profiles/full.txt wrappers=ai-canc
   - Wrappers on `@stable`, a branch, or any other identity keep `stable`
     support with the `main` fallback; the wrapper itself is mutable there.
   - `install-codex` is referenced by commit
-    (`install-codex@91b30f6fba400686c5dded34423f88f1ea10e163`), in the
+    (`install-codex@cbe65b01a1ff0890a0149a244ee46121065a0c45`), in the
     workflows and inside `setup-runtime`. Bump that pin in the same PR when the
     action changes. `validate.yml` still calls `setup-runtime@stable`; its
     pin moves to the commit that carries this change in a follow-up.
