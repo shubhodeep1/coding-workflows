@@ -228,14 +228,17 @@ class Wiring(unittest.TestCase):
 		sites = case_text.split('"${RB_MERGE_METHOD_FLAG:---squash}" --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}"')[:-1]
 		self.assertEqual(len(sites), 2)
 		# 1600: the merge-lease `lease_wait` branch (2026-11-17) sits between
-		# the post-wait gate and the merge call.
+		# the post-wait gate and the merge call. 2000: the #9939 blocked-merge
+		# guard comment and RB_SYNC_MERGE_DEFERRED reset sit there too.
 		for site in sites:
-			self.assertIn("_pr_base_fresh_for_merge", site[-1600:])
+			self.assertIn("_pr_base_fresh_for_merge", site[-2000:])
 		# Each call to the retry helper follows its site's gate.
 		retry_calls = list(re.finditer(r"\|\| rb_judge_merge_retry_transient (?:auto|direct) (?:merge|terminal|sync); then", case_text))
 		self.assertEqual(len(retry_calls), 3)
+		# 3600: the #9939 blocked-merge guard and its deferral branch sit
+		# between merge_with_followup's gate and its merge call (3404 chars).
 		for call in retry_calls:
-			self.assertIn("_pr_base_fresh_for_merge", case_text[max(0, call.start() - 3000):call.start()])
+			self.assertIn("_pr_base_fresh_for_merge", case_text[max(0, call.start() - 3600):call.start()])
 		# merge_with_followup's synchronous merge is gated too.
 		self.assertIn('_pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}"; then', text)
 
@@ -745,10 +748,15 @@ def _poller_function(name: str) -> str:
 	return text[start:end]
 
 
-def _merge_bound(args: str, *, auto_rc: int = 0, sync_rc: int = 0) -> tuple[int, str, list[str]]:
+def _merge_bound(args: str, *, auto_rc: int = 0, sync_rc: int = 0, guard_rc: int | None = 0) -> tuple[int, str, list[str]]:
 	log = Path(os.environ.get("TMPDIR", "/tmp")) / f"orch_merge_bound_{os.getpid()}.log"
 	if log.exists():
 		log.unlink()
+	# #9939 blocked-merge guard (scripts/pr_checks_lib.sh): stubbed with a
+	# fixed return code; guard_rc=None leaves it undefined (library missing).
+	guard_stub = ""
+	if guard_rc is not None:
+		guard_stub = f'_pr_sync_merge_blocked_guard() {{ printf "guard %s\\n" "$*" >> "${{CALL_LOG}}"; return {guard_rc}; }}'
 	script = f"""
 set -uo pipefail
 gh_retry() {{ "$@"; }}
@@ -759,6 +767,7 @@ gh() {{
     *) return "${{SYNC_RC}}" ;;
   esac
 }}
+{guard_stub}
 {_poller_function("_orch_squash_merge_bound")}
 _orch_squash_merge_bound {args}; rc=$?
 printf 'rc=%s outcome=%s\\n' "${{rc}}" "${{ORCH_MERGE_BOUND_OUTCOME}}"
@@ -785,11 +794,29 @@ class HeadBoundPollerMerge(unittest.TestCase):
 		rc, out, calls = _merge_bound(f"7 {HEAD} auto", auto_rc=1, sync_rc=0)
 		self.assertEqual(rc, 0)
 		self.assertIn("outcome=merged", out)
+		calls = [call for call in calls if not call.startswith("guard ")]
 		self.assertEqual(len(calls), 2)
 		for call in calls:
 			self.assertIn(f"--match-head-commit {HEAD}", call)
 		self.assertIn("--auto", calls[0])
 		self.assertNotIn("--auto", calls[1])
+
+	def test_blocked_guard_defers_the_direct_fallback(self) -> None:
+		# #9939: the admin GH_PAT must not merge a PR GitHub reports blocked.
+		for guard_rc in (1, None):
+			with self.subTest(guard_rc=guard_rc):
+				rc, out, calls = _merge_bound(f"7 {HEAD} auto", auto_rc=1, sync_rc=0, guard_rc=guard_rc)
+				self.assertEqual(rc, 1)
+				self.assertIn(f"ORCH_MERGE_HEAD_BOUND pr=7 head_sha={HEAD} mode=auto outcome=deferred", out)
+				self.assertIn("outcome=deferred", out.splitlines()[-1])
+				merges = [call for call in calls if not call.startswith("guard ")]
+				self.assertEqual(len(merges), 1)
+				self.assertIn("--auto", merges[0])
+				if guard_rc is not None:
+					self.assertIn("guard 7", calls)
+		rc, out, calls = _merge_bound(f"7 {HEAD} sync", guard_rc=1)
+		self.assertEqual(rc, 1)
+		self.assertEqual([call for call in calls if not call.startswith("guard ")], [])
 
 	def test_auto_mode_enabled_skips_direct_merge(self) -> None:
 		rc, out, calls = _merge_bound(f"7 {HEAD}")
@@ -799,10 +826,12 @@ class HeadBoundPollerMerge(unittest.TestCase):
 
 	def test_sync_mode_and_total_failure(self) -> None:
 		rc, _, calls = _merge_bound(f"7 {HEAD} sync")
+		calls = [call for call in calls if not call.startswith("guard ")]
 		self.assertEqual(rc, 0)
 		self.assertEqual(len(calls), 1)
 		self.assertNotIn("--auto", calls[0])
 		rc, out, calls = _merge_bound(f"7 {HEAD}", auto_rc=1, sync_rc=1)
+		calls = [call for call in calls if not call.startswith("guard ")]
 		self.assertEqual(rc, 1)
 		self.assertIn("outcome=failed", out)
 		self.assertEqual(len(calls), 2)

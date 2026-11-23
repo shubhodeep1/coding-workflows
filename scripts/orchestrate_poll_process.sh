@@ -2601,8 +2601,14 @@ _jq_field()
 #     sync:           direct merge only.
 # The noop-suspicious force-merge (auto-merge only) binds inline.
 #   Returns 0 when GitHub accepted the merge or the auto-merge request,
-#   1 when it refused, 2 (no gh call) when the SHA is not 40-hex.
-#   Sets ORCH_MERGE_BOUND_OUTCOME=enabled|merged|failed|refused.
+#   1 when it refused or the blocked-merge guard deferred the direct merge,
+#   2 (no gh call) when the SHA is not 40-hex.
+#   Sets ORCH_MERGE_BOUND_OUTCOME=enabled|merged|failed|refused|deferred.
+# The direct merge runs only when _pr_sync_merge_blocked_guard
+# (scripts/pr_checks_lib.sh, #9939) does not see mergeable_state=blocked or
+# unknown: the poller's admin GH_PAT would otherwise bypass the ruleset.
+# Deferring returns 1, which is what callers already saw when GitHub refused
+# a blocked merge for a token without bypass rights.
 _orch_squash_merge_bound()
 {
 	local pr="$1"
@@ -2622,6 +2628,12 @@ _orch_squash_merge_bound()
 		ORCH_MERGE_BOUND_OUTCOME="enabled"
 		echo "ORCH_MERGE_HEAD_BOUND pr=${pr} head_sha=${head_sha} mode=${mode} outcome=enabled"
 		return 0
+	fi
+	if ! declare -F _pr_sync_merge_blocked_guard >/dev/null 2>&1 \
+		|| ! _pr_sync_merge_blocked_guard "${pr}"; then
+		ORCH_MERGE_BOUND_OUTCOME="deferred"
+		echo "ORCH_MERGE_HEAD_BOUND pr=${pr} head_sha=${head_sha} mode=${mode} outcome=deferred"
+		return 1
 	fi
 	if gh_retry gh pr merge "${pr}" --repo "${GITHUB_REPOSITORY}" --squash --match-head-commit "${head_sha}" >/dev/null; then
 		ORCH_MERGE_BOUND_OUTCOME="merged"
@@ -15714,6 +15726,7 @@ Unable to create or locate the final integration PR from \`${integration_branch}
   # so the ineligibility alert (ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS) names
   # it instead of three refused merges parking the project. A failed lookup
   # fails open to the merge attempt, which records GitHub's refusal reason.
+  local final_blockers_hint=""
   if [ "${pr_state}" = "open" ] && [ "$(_jq_field "${pr_json}" '.mergeable_state' '[a-z_]+')" = "blocked" ] \
     && declare -F _pr_ruleset_required_check_blockers >/dev/null 2>&1; then
     local final_ruleset_rc=0
@@ -15724,8 +15737,29 @@ Unable to create or locate the final integration PR from \`${integration_branch}
       return 1
     fi
     if [ "${final_ruleset_rc}" = "2" ]; then
-      echo "::warning::  [final-merge] Could not read ruleset-required checks for PR #${final_pr}; attempting the merge."
+      final_blockers_hint="unknown"
+      case "$(printf '%s' "${PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+        false|0|no|off)
+          echo "::warning::  [final-merge] Could not read ruleset-required checks for PR #${final_pr}; attempting the merge."
+          ;;
+      esac
+    else
+      final_blockers_hint="none"
     fi
+  fi
+
+  # Blocked-merge guard (#9939): never merge while GitHub reports the PR
+  # blocked, even when the ruleset helper names no blocker (it matches by
+  # name, and counted the dispatched final CI's `lint` check-run that GitHub
+  # never evaluates for the PR, so the admin GH_PAT merge bypassed the
+  # rule). Reuses pr_json and the blockers found above: no extra call.
+  # PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED=false keeps the old behaviour.
+  if [ "${pr_state}" = "open" ] \
+    && { ! declare -F _pr_sync_merge_blocked_guard >/dev/null 2>&1 \
+      || ! _pr_sync_merge_blocked_guard "${pr_json}" "${default_branch}" "${final_blockers_hint}"; }; then
+    FINAL_MERGE_BUDGET_ELIGIBLE="0"
+    echo "  [final-merge] PR #${final_pr} is blocked (mergeable_state=${SYNC_MERGE_BLOCKED_GUARD_STATE:-unknown}; blockers: ${SYNC_MERGE_BLOCKED_GUARD_BLOCKERS:-unknown}). Will retry next poll."
+    return 1
   fi
 
   # Promote cycle: a VERIFYING run's ready-to-merge point promotes the pinned
@@ -35642,7 +35676,13 @@ ${RB_FIX_DESC}
                 # the merge is always bound — no concurrent-push
                 # window between judge decision and merge.
                 _rb_mwf_match_arg=(--match-head-commit "${_rb_mwf_sha}")
-                if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash "${_rb_mwf_match_arg[@]}" 2>/dev/null; then
+                # #9939: never merge synchronously while GitHub reports
+                # the PR blocked (the admin GH_PAT would bypass the
+                # ruleset). Reuses _rb_mwf_json: no extra call.
+                if ! declare -F _pr_sync_merge_blocked_guard >/dev/null 2>&1 \
+                  || ! _pr_sync_merge_blocked_guard "${_rb_mwf_json}" "${_rb_mwf_base}"; then
+                  echo "::warning::PR #${RB_PR} sync merge deferred: GitHub reports mergeable_state=${SYNC_MERGE_BLOCKED_GUARD_STATE:-unknown} (blockers: ${SYNC_MERGE_BLOCKED_GUARD_BLOCKERS:-unknown}). Leaving issue in ai:review-blocked — next poll cycle will re-fire the judge."
+                elif gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash "${_rb_mwf_match_arg[@]}" 2>/dev/null; then
                   echo "  PR #${RB_PR} merged synchronously."
                   MERGE_CONFIRMED="true"
                 else
