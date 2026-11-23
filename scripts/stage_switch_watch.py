@@ -24,7 +24,11 @@ Exit codes: 0 ok, 2 invalid registry, 3 unreadable listing or snapshot. The
 wrapper turns every non-zero exit into one warning and exits 0 (fail-open).
 
 Registry (``scripts/stage_switches.json``, schema ``stage_switches.v1``):
-    ``switches``: ``[{"name", "default": "true", "stage"}]``
+    ``switches``: ``[{"name", "default": "true", "stage"[, "on_values"]}]``
+    ``on_values`` (optional): extra lowercase values, from ``1``, ``yes`` and
+    ``on``, that the switch's consumers also treat as on. Without it only
+    ``true`` counts as on. Set it only when every consumer of the switch
+    keeps the stage on for those values (for example ``!= 'false'``).
     ``off_on_purpose``: ``[{"name", "until": "YYYY-MM-DD", "reason"}]`` --
     a switch listed here does not alert before ``until`` (00:00 UTC); on and
     after that date it alerts again (``marker=expired``).
@@ -51,6 +55,8 @@ SECRET_NAME_RE = re.compile(
 	r"(?:^|_)(?:TOKENS?|SECRETS?|KEYS?|PASSWORDS?|CREDENTIALS?|PATS?)(?:_|$)"
 )
 BOOLEAN_DISPLAY_VALUES = frozenset({"true", "false", "0", "1", "yes", "no", "on", "off"})
+# Values a registry entry may add to "on" through its optional on_values list.
+ALLOWED_EXTRA_ON_VALUES = frozenset({"1", "yes", "on"})
 
 
 class RegistryError(ValueError):
@@ -71,9 +77,9 @@ def _display_value(name: str, raw: object) -> str:
 	return "<non-boolean>"
 
 
-def _value_class(raw: object) -> str:
+def _value_class(raw: object, on_values=()) -> str:
 	value = str(raw if raw is not None else "").strip().lower()
-	return "on" if value == "true" else "off"
+	return "on" if value == "true" or value in on_values else "off"
 
 
 def _parse_date(text: object) -> _dt.datetime | None:
@@ -126,6 +132,11 @@ def load_registry(path: str | Path) -> dict:
 			raise RegistryError(f"registry switch {name} default is not 'true'")
 		if not isinstance(entry.get("stage"), str) or not entry["stage"].strip():
 			raise RegistryError(f"registry switch {name} has no stage text")
+		on_values = entry.get("on_values", [])
+		if not isinstance(on_values, list) or not all(
+			isinstance(value, str) and value in ALLOWED_EXTRA_ON_VALUES for value in on_values
+		):
+			raise RegistryError(f"registry switch {name} on_values must list only 1, yes or on")
 	markers = data.get("off_on_purpose", [])
 	if not isinstance(markers, list):
 		raise RegistryError("registry off_on_purpose is not a list")
@@ -138,7 +149,7 @@ def load_registry(path: str | Path) -> dict:
 
 def build_snapshot(registry: dict, lines) -> dict:
 	"""Keep only registry switches; never keep a raw value."""
-	wanted = {entry["name"] for entry in registry["switches"]}
+	wanted = {entry["name"]: frozenset(entry.get("on_values", [])) for entry in registry["switches"]}
 	snapshot = {}
 	for line in lines:
 		line = line.strip()
@@ -153,7 +164,7 @@ def build_snapshot(registry: dict, lines) -> dict:
 		raw = record.get("value")
 		updated_at = record.get("updated_at")
 		snapshot[name] = {
-			"value_class": _value_class(raw),
+			"value_class": _value_class(raw, wanted[name]),
 			"display_value": _display_value(name, raw),
 			"updated_at": updated_at if isinstance(updated_at, str) else "",
 		}

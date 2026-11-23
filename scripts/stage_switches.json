@@ -4,7 +4,8 @@
 		{
 			"name": "ACTIVATION_VERIFY_ENABLED",
 			"default": "true",
-			"stage": "Activation verification (port P4 of docs/plans/replace-claude-sessions-with-cli-engine-plan.md)."
+			"stage": "Activation verification (port P4 of docs/plans/replace-claude-sessions-with-cli-engine-plan.md).",
+			"on_values": ["1", "yes", "on"]
 		},
 		{
 			"name": "AI_MEMORY_ENABLED",
@@ -44,7 +45,8 @@
 		{
 			"name": "CHATGPT_POOL_HEALTH_ALERT_ENABLED",
 			"default": "true",
-			"stage": "Turns on chatgpt pool health alert (orchestrate_poll.yml); false turns that stage off."
+			"stage": "Turns on chatgpt pool health alert (orchestrate_poll.yml); false turns that stage off.",
+			"on_values": ["1", "yes", "on"]
 		},
 		{
 			"name": "CHECK_FAILURE_TRIAGE_BASE_GATE_ENABLED",
@@ -219,12 +221,14 @@
 		{
 			"name": "E2E_ALT_MODEL_ENABLED",
 			"default": "true",
-			"stage": "External-dependency opt-out. Set to false to skip the alt-model job when the upstream OpenRouter model (selected via ALT_EDITOR_MODEL) is temporarily unavailable, deprecated, or your API key lacks access."
+			"stage": "External-dependency opt-out. Set to false to skip the alt-model job when the upstream OpenRouter model (selected via ALT_EDITOR_MODEL) is temporarily unavailable, deprecated, or your API key lacks access.",
+			"on_values": ["1", "yes", "on"]
 		},
 		{
 			"name": "E2E_PHASE4B_QUEUED_GRACE_ENABLED",
 			"default": "true",
-			"stage": "Stuck states P4: while truthy (1, true, yes, on, any letter case), Phase 4b's EDITOR_RETRY_BUDGET_MINUTES (25) counts from the first poll that reads the pinned retry review run as in_progress or completed, not from ad..."
+			"stage": "Stuck states P4: while truthy (1, true, yes, on, any letter case), Phase 4b's EDITOR_RETRY_BUDGET_MINUTES (25) counts from the first poll that reads the pinned retry review run as in_progress or completed, not from ad...",
+			"on_values": ["1", "yes", "on"]
 		},
 		{
 			"name": "FINAL_CI_FAILED_INFRA_RERUN_ENABLED",
@@ -284,7 +288,8 @@
 		{
 			"name": "HEAL_INTAKE_QUEUE_ENABLED",
 			"default": "true",
-			"stage": "Turns on heal intake queue (workflow-failure-heal-intake.yml); false turns that stage off."
+			"stage": "Turns on heal intake queue (workflow-failure-heal-intake.yml); false turns that stage off.",
+			"on_values": ["1", "yes", "on"]
 		},
 		{
 			"name": "HEAL_INTAKE_SCOPE_GUARD_ENABLED",
@@ -295,6 +300,11 @@
 			"name": "HEAL_OCCURRENCE_IN_PLACE_ENABLED",
 			"default": "true",
 			"stage": "Turns on heal occurrence in place (workflow-failure-heal-intake.yml); false turns that stage off."
+		},
+		{
+			"name": "HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED",
+			"default": "true",
+			"stage": "plan.yml's Auto-approve clear plan verifies the live ai:workflow-heal-scope:v1 marker before writing a pipeline plan grant into an ai:workflow-heal issue body (#7444); read as vars.HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED || '' in clarify.yml, implement.yml and plan.yml, with the default true applied in the step."
 		},
 		{
 			"name": "HEAL_REISSUE_DEDUPE_ENABLED",
@@ -499,7 +509,8 @@
 		{
 			"name": "PROVIDER_OUTAGE_RESUME_ENABLED",
 			"default": "true",
-			"stage": "Turns on provider outage resume (review_autofix_sweep.yml); false turns that stage off."
+			"stage": "Turns on provider outage resume (review_autofix_sweep.yml); false turns that stage off.",
+			"on_values": ["1", "yes", "on"]
 		},
 		{
 			"name": "PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED",
@@ -544,7 +555,8 @@
 		{
 			"name": "RETARGET_MERGED_BASE_ENABLED",
 			"default": "true",
-			"stage": "Retarget after a merged base (port P6 of docs/plans/replace-claude-sessions-with-cli-engine-plan.md). scripts/retarget_merged_base.sh treats an existing branch as finished when a merged PR has it as its head and the t..."
+			"stage": "Retarget after a merged base (port P6 of docs/plans/replace-claude-sessions-with-cli-engine-plan.md). scripts/retarget_merged_base.sh treats an existing branch as finished when a merged PR has it as its head and the t...",
+			"on_values": ["1", "yes", "on"]
 		},
 		{
 			"name": "RETIRED_LABEL_DRAIN_ENABLED",
@@ -574,7 +586,8 @@
 		{
 			"name": "REVIEW_FAILURE_FINGERPRINT_CAP_ENABLED",
 			"default": "true",
-			"stage": "Turns on review failure fingerprint cap (review_autofix.yml); false turns that stage off."
+			"stage": "Turns on review failure fingerprint cap (review_autofix.yml); false turns that stage off.",
+			"on_values": ["1", "yes", "on"]
 		},
 		{
 			"name": "REVIEW_FORCE_RB_JUDGE_HOST_ONLY_SKIP_ENABLED",
@@ -809,7 +822,8 @@
 		{
 			"name": "WORKFLOW_HEAL_PR_RECONCILE_ENABLED",
 			"default": "true",
-			"stage": "Turns on workflow heal pr reconcile (internal-cancel-on-pr-close.yml); false turns that stage off."
+			"stage": "Turns on workflow heal pr reconcile (internal-cancel-on-pr-close.yml); false turns that stage off.",
+			"on_values": ["1", "yes", "on"]
 		},
 		{
 			"name": "WORKFLOW_HEAL_SCOPE_LINKED_WORKFLOWS_ENABLED",

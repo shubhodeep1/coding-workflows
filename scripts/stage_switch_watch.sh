@@ -17,7 +17,11 @@
 #           Telegram WARNING per switch off for longer than the wait time,
 #           unless today's alert was already sent (cache marker) or the switch
 #           is marked off on purpose in the registry's `off_on_purpose` list.
-#           GITHUB_OUTPUT: alerted=true when at least one send was attempted.
+#           GITHUB_OUTPUT: alerted=true when at least one message was
+#           delivered (a failed send writes no day marker, so a later run
+#           that day retries). The marker covers the whole watch: a switch
+#           that passes its wait time after the day's first alert waits for
+#           the next day's run.
 #
 # Env:
 #   STAGE_SWITCH_WATCH_ENABLED     `true` runs the watch (default true)
@@ -78,8 +82,12 @@ stage_switch_read()
 		--jq '.variables[] | {name, value, updated_at}' > "${listing}" 2>"${stage_switch_dir}/listing.err"
 	rc=$?
 	if [ "${rc}" -ne 0 ]; then
+		local gh_error=""
+		# gh's error text (never the stdout listing, which can hold values):
+		# first line, printable characters only, at most 200 characters.
+		gh_error="$(head -n 1 "${stage_switch_dir}/listing.err" 2>/dev/null | tr -cd '[:print:]' | cut -c1-200)" || gh_error=""
 		rm -f "${listing}" "${stage_switch_dir}/listing.err"
-		echo "::warning::STAGE_SWITCH_WATCH repository variable listing failed (gh exit ${rc}); GH_PAT needs repo scope or Variables: read."
+		echo "::warning::STAGE_SWITCH_WATCH repository variable listing failed (gh exit ${rc}: ${gh_error:-no error text}); check rate limits and API status, and that GH_PAT has repo scope or Variables: read."
 		echo "STAGE_SWITCH_WATCH outcome=read_failed reason=gh_api rc=${rc}"
 		echo "snapshot_ready=false" >> "${stage_switch_output}" 2>/dev/null || true
 		return 0
@@ -184,12 +192,15 @@ stage_switch_report()
 					msg_id="$(tg_send_msg "${msg}" WARNING 2>/dev/null)" || msg_id=""
 					[ -n "${msg_id}" ] && delivered=$((delivered + 1))
 				done
-				if [ "${attempted}" -gt 0 ]; then
+				if [ "${delivered}" -gt 0 ]; then
 					# Marker file the workflow's actions/cache/save step stores
-					# under stage-switch-off-alert-<day>.
+					# under stage-switch-off-alert-<day>. Only after a delivered
+					# send, so a failed send is retried by a later run that day.
 					mkdir -p "${stage_switch_alert_marker_dir}" 2>/dev/null \
 						&& date -u +%F > "${stage_switch_alert_marker_dir}/day.txt" 2>/dev/null || true
 					echo "alerted=true" >> "${stage_switch_output}" 2>/dev/null || true
+				fi
+				if [ "${attempted}" -gt 0 ]; then
 					if [ "${delivered}" -eq "${attempted}" ]; then
 						alert_state="sent"
 					else

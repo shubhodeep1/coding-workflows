@@ -1,9 +1,10 @@
 """scripts/stage_switches.json stays in step with the workflows and README (issue #9994).
 
 Every `vars.<NAME>_ENABLED || 'true'` expression (also the chained form
-`vars.<NAME>_ENABLED || (...) || 'true'`) in .github/workflows/*.yml and every
-README "#### Variables" `_ENABLED` row whose default is `true` must be listed
-in the registry, so a new switch cannot be added without the stage switch
+`vars.<NAME>_ENABLED || (...) || 'true'`) and every `vars.<NAME>_ENABLED !=
+'false'` test in .github/workflows/*.yml, and every `_ENABLED` row whose
+default is `true` in the README "#### Variables" and "## Required Variables"
+tables, must be listed in the registry, so a new switch cannot be added without the stage switch
 watch covering it. Also locks the workflow wiring in workflow-log-analysis.yml.
 """
 
@@ -26,6 +27,17 @@ REGISTRY = ROOT / "scripts" / "stage_switches.json"
 WATCH_WORKFLOW = WORKFLOWS_DIR / "workflow-log-analysis.yml"
 
 SWITCH_DEFAULT_RE = re.compile(r"vars\.([A-Z][A-Z0-9_]*_ENABLED) \|\| (?:\([^()]*\) \|\| )*'([^']*)'")
+# `vars.<NAME>_ENABLED != 'false'` keeps a stage on unless the variable is
+# `false`, so it is a default-on switch too.
+SWITCH_NOT_FALSE_RE = re.compile(r"vars\.([A-Z][A-Z0-9_]*_ENABLED) != 'false'")
+README_SWITCH_TABLES = ("#### Variables", "## Required Variables")
+# README rows with default `true` that no workflow reads from a repository
+# variable (the watch reads repository variables only). Each needs a reason.
+README_NOT_REPOSITORY_VARIABLES = {
+	"CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED": "scripts/resolve_integration_ref.sh environment only; no workflow forwards a repository variable",
+	"LESSONS_LEARNED_ENABLED": "job environment only (README Memory System); no workflow reads vars.LESSONS_LEARNED_ENABLED",
+	"WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED": "scripts/workflow_failure_heal_intake.sh environment only; not forwarded from a repository variable",
+}
 WATCH_STEP_NAMES = (
 	"Read stage switch variables",
 	"Look up today's stage switch alert",
@@ -52,6 +64,8 @@ def _workflow_true_switches(workflows_dir: Path) -> dict[str, set[str]]:
 			for name, default in SWITCH_DEFAULT_RE.findall(line):
 				if default == "true":
 					found.setdefault(name, set()).add(workflow.name)
+			for name in SWITCH_NOT_FALSE_RE.findall(line):
+				found.setdefault(name, set()).add(workflow.name)
 	return found
 
 
@@ -59,20 +73,25 @@ def _missing_from_registry(workflows_dir: Path, names: set[str]) -> list[str]:
 	return sorted(set(_workflow_true_switches(workflows_dir)) - names)
 
 
-def _readme_variables_rows() -> dict[str, list[str]]:
+def _readme_variables_rows(heading: str = "#### Variables") -> dict[str, list[str]]:
 	lines = README.read_text(encoding="utf-8").splitlines()
-	starts = [i for i, line in enumerate(lines) if line == "#### Variables"]
+	starts = [i for i, line in enumerate(lines) if line == heading]
 	assert len(starts) == 1
 	rows: dict[str, list[str]] = {}
+	# The tables differ ("| Variable | Required | Default |" vs
+	# "| Variable | Default |"), so take the Default column from the header.
+	default_col = None
 	for line in lines[starts[0] + 1:]:
 		if re.match(r"^#", line):
 			break
-		if not line.startswith("| `"):
-			continue
 		cells = [cell.strip() for cell in re.split(r"(?<!\\)\|", line.strip().strip("|"))]
-		if len(cells) < 3:
+		if line.startswith("| Variable "):
+			default_col = cells.index("Default")
 			continue
-		rows.setdefault(cells[0].strip("`"), []).append(cells[2].replace("`", "").strip())
+		if not line.startswith("| `") or default_col is None or len(cells) <= default_col:
+			continue
+		rows.setdefault(cells[0].strip("`"), []).append(cells[default_col].replace("`", "").strip())
+	assert default_col is not None, heading
 	return rows
 
 
@@ -81,6 +100,7 @@ def test_every_workflow_true_switch_is_in_registry():
 	assert found, "no vars.<NAME>_ENABLED || 'true' expressions found"
 	assert "FINAL_CI_FAILED_REDISPATCH_ENABLED" in found
 	assert "CLAUDE_POOL_CAPACITY_WAIT_ENABLED" in found  # chained form
+	assert "E2E_ALT_MODEL_ENABLED" in found  # `!= 'false'` form
 	assert _missing_from_registry(WORKFLOWS_DIR, _registry_names()) == []
 
 
@@ -90,19 +110,29 @@ def test_registry_check_fails_on_unlisted_workflow_switch(tmp_path):
 		"      NEW_STAGE_ENABLED: ${{ vars.NEW_STAGE_ENABLED || 'true' }}\n"
 		"      CHAINED_STAGE_ENABLED: ${{ vars.CHAINED_STAGE_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}\n"
 		"      OPT_IN_ENABLED: ${{ vars.OPT_IN_ENABLED || 'false' }}\n"
+		"    if: ${{ vars.NOT_FALSE_STAGE_ENABLED != 'false' }}\n"
 		"      # COMMENTED_ENABLED: ${{ vars.COMMENTED_ENABLED || 'true' }}\n",
 		encoding="utf-8",
 	)
-	assert _missing_from_registry(tmp_path, _registry_names()) == ["CHAINED_STAGE_ENABLED", "NEW_STAGE_ENABLED"]
+	assert _missing_from_registry(tmp_path, _registry_names()) == ["CHAINED_STAGE_ENABLED", "NEW_STAGE_ENABLED", "NOT_FALSE_STAGE_ENABLED"]
 
 
 def test_every_readme_true_switch_is_in_registry():
 	names = _registry_names()
+	assert not names & set(README_NOT_REPOSITORY_VARIABLES)
 	missing = []
-	for name, defaults in _readme_variables_rows().items():
-		if name.endswith("_ENABLED") and any(d.lower().startswith("true") for d in defaults) and name not in names:
-			missing.append(name)
-	assert missing == []
+	seen = set()
+	for heading in README_SWITCH_TABLES:
+		for name, defaults in _readme_variables_rows(heading).items():
+			if not name.endswith("_ENABLED") or not any(d.lower().startswith("true") for d in defaults):
+				continue
+			seen.add(name)
+			if name not in names and name not in README_NOT_REPOSITORY_VARIABLES:
+				missing.append(name)
+	assert "HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED" in seen  # Required Variables table
+	assert sorted(missing) == []
+	# An exclusion must still name a documented default-on row.
+	assert set(README_NOT_REPOSITORY_VARIABLES) <= seen
 
 
 def test_registry_entries_are_well_formed():
@@ -111,7 +141,8 @@ def test_registry_entries_are_well_formed():
 	names = [entry["name"] for entry in data["switches"]]
 	assert len(names) == len(set(names))
 	for entry in data["switches"]:
-		assert set(entry) == {"name", "default", "stage"}, entry
+		assert {"name", "default", "stage"} <= set(entry) <= {"name", "default", "stage", "on_values"}, entry
+		assert set(entry.get("on_values", [])) <= {"1", "yes", "on"}, entry
 		assert re.fullmatch(r"[A-Z][A-Z0-9_]*", entry["name"])
 		assert entry["default"] == "true"
 		assert entry["stage"].strip()
@@ -201,9 +232,13 @@ def test_watch_steps_are_wired_in_collect_logs():
 		assert name in steps, name
 		step = steps[name]
 		assert step.get("continue-on-error") is True, name
-		assert "vars.STAGE_SWITCH_WATCH_ENABLED || 'true'" in step["if"], name
 		assert step["if"].startswith("${{ always()"), name
+		if name != "Read stage switch variables":
+			assert "vars.STAGE_SWITCH_WATCH_ENABLED || 'true'" in step["if"], name
 	read = steps["Read stage switch variables"]
+	# The read step runs when the watch is off so the wrapper can log
+	# `STAGE_SWITCH_WATCH outcome=disabled`; the wrapper reads the switch.
+	assert read["env"]["STAGE_SWITCH_WATCH_ENABLED"] == "${{ vars.STAGE_SWITCH_WATCH_ENABLED || 'true' }}"
 	assert read["env"]["GH_TOKEN"] == "${{ secrets.GH_PAT }}"
 	assert "TG_BOT_SECRET" not in read["env"]
 	assert read["run"].strip() == "bash scripts/stage_switch_watch.sh read"

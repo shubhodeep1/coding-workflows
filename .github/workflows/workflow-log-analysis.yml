@@ -424,10 +424,12 @@ jobs:
       # scripts/stage_switches.json). Steps in this existing daily job, not a
       # new job (§26). The read step holds only the PAT, the report step only
       # the Telegram secrets. A per-UTC-day cache marker keeps the Monday
-      # retro run, dispatches and re-runs from alerting twice a day.
+      # retro run, dispatches and re-runs from alerting twice a day. The read
+      # step runs even when the watch is off, so the wrapper logs
+      # `STAGE_SWITCH_WATCH outcome=disabled` and returns before any API call.
       - name: Read stage switch variables
         id: stage_switch_read
-        if: ${{ always() && (vars.STAGE_SWITCH_WATCH_ENABLED || 'true') == 'true' }}
+        if: ${{ always() }}
         continue-on-error: true
         timeout-minutes: 5
         env:

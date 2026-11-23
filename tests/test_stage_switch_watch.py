@@ -151,6 +151,30 @@ def test_values_are_sanitized_and_unlisted_variables_dropped(tmp_path):
 	assert ssw._display_value("GH_PAT_ENABLED", "false") == "<redacted>"
 
 
+def test_on_values_keep_a_consumer_on_value_from_alerting(tmp_path):
+	registry = _registry(tmp_path)
+	data = json.loads(registry.read_text(encoding="utf-8"))
+	data["switches"][1]["on_values"] = ["1", "yes", "on"]  # ALPHA_ENABLED
+	registry.write_text(json.dumps(data), encoding="utf-8")
+	snapshot = _snapshot(
+		tmp_path, registry,
+		{"name": "ALPHA_ENABLED", "value": "YES", "updated_at": "2026-11-01T00:00:00Z"},
+		{"name": "BETA_ENABLED", "value": "yes", "updated_at": "2026-11-01T00:00:00Z"},
+	)
+	result, _ = _evaluate(registry, snapshot)
+	# ALPHA's consumers treat yes as on; BETA has no on_values, so yes is off.
+	assert [entry["name"] for entry in result["off"]] == ["BETA_ENABLED"]
+
+
+def test_invalid_on_values_exits_2(tmp_path):
+	registry = _registry(tmp_path)
+	data = json.loads(registry.read_text(encoding="utf-8"))
+	data["switches"][1]["on_values"] = ["false"]
+	registry.write_text(json.dumps(data), encoding="utf-8")
+	result = _run_py(["snapshot", "--registry", str(registry)], "")
+	assert result.returncode == 2
+
+
 def test_invalid_registry_exits_2(tmp_path):
 	bad = tmp_path / "bad.json"
 	bad.write_text('{"schema": "other"}', encoding="utf-8")
@@ -232,6 +256,20 @@ def test_wrapper_alerts_once_and_not_again_same_day(tmp_path):
 	assert not (tmp_path / "sent.txt").exists()
 
 
+def test_wrapper_failed_send_writes_no_day_marker(tmp_path):
+	env = _wrapper_env(tmp_path, GH_OFF)
+	# A tg_send_msg that returns no message id is a failed send.
+	(tmp_path / "scripts" / "tg_helpers.sh").write_text(
+		"tg_alert_configured() { return 0; }\ntg_send_msg() { return 1; }\n", encoding="utf-8",
+	)
+	assert _wrapper(tmp_path, "read", env).returncode == 0
+	report = _wrapper(tmp_path, "report", env)
+	assert report.returncode == 0
+	assert "alerts=1 alert=not_delivered" in report.stdout
+	assert "alerted=true" not in Path(env["GITHUB_OUTPUT"]).read_text()
+	assert not (tmp_path / "runner" / "stage-switch-alert-day" / "day.txt").exists()
+
+
 def test_wrapper_does_not_alert_under_wait_time(tmp_path):
 	env = _wrapper_env(tmp_path, GH_OFF, STAGE_SWITCH_OFF_ALERT_HOURS="200")
 	assert _wrapper(tmp_path, "read", env).returncode == 0
@@ -254,6 +292,7 @@ def test_wrapper_gh_failure_warns_and_exits_zero(tmp_path):
 	assert read.returncode == 0
 	assert "::warning::" in read.stdout
 	assert "STAGE_SWITCH_WATCH outcome=read_failed" in read.stdout
+	assert "HTTP 403" in read.stdout  # gh's error line is shown
 	assert "snapshot_ready=false" in Path(env["GITHUB_OUTPUT"]).read_text()
 
 
