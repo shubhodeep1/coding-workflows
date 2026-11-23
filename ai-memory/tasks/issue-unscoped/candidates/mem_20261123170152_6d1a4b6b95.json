@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CLAUDE.md:1672-1675 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The \u00a734.B \"Anything larger\" sentence makes the session wait for the user's go before the plan PR, but \u00a731.B step 2 (lines 1483-1486) opens the plan PR first and gates only the dispatch and implementation.\n  WHY: The two rules put the gate at different points for the same action, so sessions may behave differently and the user may have to approve twice; all reviewers rated it NIT (low), and no wrong write results.\n- changelog.d/9992-claude-md-prevent-recurrence.md:4 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The lead paragraph has six sentences, over the 3 to 5 sentence limit in CLAUDE.md (\u00a720.D, template at line 803).\n  WHY: It breaks the fragment style contract that review would flag; the fragment still assembles, and merging two sentences restores five (all rated NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- CLAUDE.md:1672-1675 | severity=NIT | confidence=3\n  PROBLEM: \u00a734.B \"Anything larger\" bullet waits for the go before the plan PR, while \u00a731.B step 2 (lines 1483-1486) opens the plan PR first and gates only the dispatch.\n  WHY: The gating is ambiguous, so sessions may behave differently and the user may approve twice; no wrong write is made.\n- changelog.d/9992-claude-md-prevent-recurrence.md:4 | severity=NIT | confidence=4\n  PROBLEM: The lead paragraph has six sentences, over the 3 to 5 sentence limit in CLAUDE.md line 803.\n  WHY: It breaks the documented style contract; nothing breaks at runtime.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/9992-claude-md-prevent-recurrence.md:4 | severity=NIT | confidence=4\n  PROBLEM: The lead paragraph contains 6 sentences, violating the 3-5 sentence limit in CLAUDE.md \u00a720.D.\n  WHY: It violates the project's changelog structure contract.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/9992-claude-md-prevent-recurrence.md:4 | severity=NIT | confidence=5\n  PROBLEM: The lead paragraph has six sentences, exceeding the \"Lead paragraph \u2014 3\u20135 sentences\" rule in CLAUDE.md \u00a720.D item 2.\n  WHY: It is a style-contract deviation; the fragment still assembles. The last run's added sentence pushed the count from 5 to 6.\n- CLAUDE.md:1672-1675 | severity=NIT | confidence=3\n  PROBLEM: The \u00a734.B sentence about a multi-PR fix reverses the gate point set by \u00a731.B step 2, which says \"that plan PR is the plan the user reviews in step 3\".\n  WHY: The two readings are inconsistent about when the gate fires; practical impact is an extra earlier approval.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- CLAUDE.md:1672-1675 | severity=NIT | confidence=4\n  PROBLEM: The \u00a734.B sentence gates the plan PR behind the user's go, but \u00a731.B step 2 (lines 1483-1486) defines the plan PR as the artifact the user reviews in step 3.\n  WHY: A literal \u00a734.B session waits on an artifact that does not yet exist, or violates the new wording by opening the plan PR; this is an internal contradiction, harmless write-wise.\n- changelog.d/9992-claude-md-prevent-recurrence.md:4 | severity=NIT | confidence=4\n  PROBLEM: The lead paragraph is now six sentences, exceeding the 3-5 sentence limit in CLAUDE.md \u00a720.D (line 768) and the template at line 803.\n  WHY: No runtime effect, since tests/test_changelog_fragment_contract.py does not check sentence counts; merging sentences 4 and 5 restores five.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "25212ea4ca269070947fc9e0245c53a66d86b0cdbe445259e97aec4a38b78efd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9992,
+    "run_id": "45200321214",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45200321214",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123170152_6d1a4b6b95",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9992,
+    "run_id": "45200321214"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T17:01:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
