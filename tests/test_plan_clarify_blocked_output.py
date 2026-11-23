@@ -1281,10 +1281,12 @@ def test_open_pr_wait_reason_is_never_scope_routed() -> None:
 
 
 def test_plan_prompt_documents_scope_missing_lines() -> None:
-	for path in (PROMPT_PLAN, REPO_ROOT / "prompts" / "_templates" / "mode-plan.txt"):
+	# run_plan_codex.sh renders its own inline prompt; it is what the plan run sends.
+	for path in (PROMPT_PLAN, REPO_ROOT / "prompts" / "_templates" / "mode-plan.txt", REPO_ROOT / "scripts" / "run_plan_codex.sh"):
 		text = _read(path)
-		assert "`SCOPE_MISSING: <repo-relative path>`" in text
-		assert "at most 20, outside any code fence" in text
+		assert "`SCOPE_MISSING: <repo-relative path>`" in text, path
+		assert "at most 20, outside any code fence" in text, path
+		assert "as plain text, with no backticks or quotes" in text, path
 	for path in (REPO_ROOT / "prompts" / "mode-judge.txt", REPO_ROOT / "prompts" / "_templates" / "mode-judge.txt"):
 		assert "job or step, its `files_touched:` list names every repository script that job" in _read(path)
 

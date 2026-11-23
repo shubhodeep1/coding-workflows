@@ -6367,10 +6367,25 @@ def test_scope_override_without_a_plan_reclarifies_and_clears_both_labels() -> N
 
 
 def test_scope_override_with_a_plan_keeps_todays_ops() -> None:
-	ctx = _ctx(stop="scope-blocked", labels=["ai:blocked", "ai:scope-blocked"], has_plan=True)
+	# An implement-time scope block (no ai:blocked) with a plan still approves.
+	ctx = _ctx(stop="scope-blocked", labels=["ai:scope-blocked"], has_plan=True)
 	ops = actions.plan(_verdict("override_guard", paths=["tests/test_a.py"]), ctx)
 	assert ops == [{"op": "edit_files_touched", "issue": 7, "paths": ["tests/test_a.py"]}] \
 		+ actions._approve(7, ctx["labels"], "ai:scope-blocked")
+
+
+def test_routed_planning_scope_override_with_an_older_plan_reclarifies() -> None:
+	# ai:blocked beside ai:scope-blocked marks a routed planning block: an older
+	# plan comment is never approved, and both labels go.
+	ctx = _ctx(stop="scope-blocked", labels=["ai:blocked", "ai:scope-blocked"], has_plan=True)
+	ops = actions.plan(_verdict("override_guard", paths=["tests/test_a.py"]), ctx)
+	assert ops == [
+		{"op": "edit_files_touched", "issue": 7, "paths": ["tests/test_a.py"]},
+		{"op": "comment", "issue": 7, "body": "/reclarify"},
+		{"op": "remove_label", "issue": 7, "label": "ai:scope-blocked"},
+		{"op": "remove_label", "issue": 7, "label": "ai:blocked"},
+	]
+	assert "/approved" not in _bodies(ops)
 
 
 def test_destructive_override_without_a_plan_follows_the_guard_stop_reset() -> None:

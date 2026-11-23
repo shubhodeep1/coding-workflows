@@ -111,10 +111,19 @@ def test_scope_lines_inside_a_fence_are_ignored(tmp_path: Path) -> None:
 	_assert_not_routed(result, outputs, "no_scope_lines")
 
 
-@pytest.mark.parametrize("path", ["tests/*.py", "docs/../scripts/x.sh", "/etc/passwd", "tests/", "tests/caf\u00e9.py", "a\\b.py", "tests/{a,b}.py"])
+@pytest.mark.parametrize("path", ["tests/*.py", "docs/../scripts/x.sh", "/etc/passwd", "tests/", "tests/caf\u00e9.py", "a\\b.py", "tests/{a,b}.py",
+	"`tests/a.py", "tests/'a'.py", '"tests/a.py"', "tests/$x.py", "``tests/a.py``"])
 def test_invalid_paths_are_not_routed(tmp_path: Path, path: str) -> None:
 	result, outputs = _run(tmp_path, _blocked("tests/test_ok.py", path))
 	_assert_not_routed(result, outputs, "invalid_path")
+
+
+def test_one_pair_of_backticks_is_stripped(tmp_path: Path) -> None:
+	result, outputs = _run(tmp_path, _blocked("`tests/test_a.py`"))
+	assert result.returncode == 0, result.stderr
+	assert outputs["scope_routed"] == "true"
+	match = ledger.REJECTION_RE.fullmatch(outputs["scope_marker"])
+	assert match and json.loads(base64.b64decode(match.group("paths"))) == ["tests/test_a.py"]
 
 
 def test_a_scope_line_with_two_tokens_is_invalid(tmp_path: Path) -> None:

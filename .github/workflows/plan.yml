@@ -2633,7 +2633,9 @@ jobs:
           # scripts/plan_scope_block_route.sh) also gets ai:scope-blocked and ends
           # its comment with the guard-rejection marker, so the unblock judge can
           # offer override_guard. Never for the open-PR wait reason below. The
-          # label rides on the same edit as ai:blocked (no extra API call).
+          # label rides on the same edit as ai:blocked; ensure_label_exists may make
+          # one `gh label create` for it on a routed block (the edit fails on a
+          # missing label).
           PLAN_SCOPE_ROUTED=false
           plan_scope_marker_re="^<!-- ai:guard-rejection:v1 item=${ISSUE_NUMBER} guard=scope reason=out-of-scope run=[0-9]+ count=[1-9][0-9]* truncated=false paths=[A-Za-z0-9+/=]+ -->\$"
           plan_scope_wait_re='^work is delivered by open PR #'

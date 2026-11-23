@@ -107,6 +107,10 @@ def clean(raw):
 	# The rules of scripts/unblock_ledger.py _clean_path, plus no trailing `/`:
 	# an exact repository-relative file path, never a directory or a glob.
 	path = raw.strip()
+	# Markdown habit: accept one surrounding pair of backticks, then refuse any
+	# backtick, quote or `$` left over, which no granted entry could match.
+	if len(path) > 2 and path.startswith("`") and path.endswith("`"):
+		path = path[1:-1]
 	while path.startswith("./"):
 		path = path[2:]
 	if (
@@ -116,7 +120,7 @@ def clean(raw):
 		or path.endswith("/")
 		or "\\" in path
 		or any(part in ("", ".", "..") for part in path.split("/"))
-		or any(ch in path for ch in "*?[]{}")
+		or any(ch in path for ch in "*?[]{}`'\"$")
 		or any(ord(ch) <= 0x20 or ord(ch) > 0x7E for ch in path)
 	):
 		return None
