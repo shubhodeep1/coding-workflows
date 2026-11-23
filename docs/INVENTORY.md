@@ -233,6 +233,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/issue_attachment_bundle.py` — Python helper for issue attachment bundle.
 - `scripts/label_helpers.sh` — label_helpers.sh — idempotent AI label creation helpers.
 - `scripts/ledger_emit_substate.sh` — Shell helper for ledger emit substate.
+- `scripts/lint_gh_calls_in_loops.py` — Warning-only lint (CLAUDE.md §15) that flags GitHub API calls a PR adds inside shell for/while/until loops; run by the pr-body-lint job in pr-checks.yml.
 - `scripts/lint_plan_archival_completeness.py` — Lint a PR that adds files under docs/completed/ for plan-archival completeness.
 - `scripts/lint_plan_decisions.py` — Advisory lint for the `## Decisions` convention in `docs/plans/*.md`.
 - `scripts/lint_pr_body_auto_close.py` — Lint PR title/body text (and optionally commit messages) for GitHub auto- close keywords that target ai:orchestrator-tracking issues.

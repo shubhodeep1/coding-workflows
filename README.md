@@ -1620,6 +1620,26 @@ not delete wrappers that are already present in `.github/workflows/`.
 > implement prompt, the review editor prompt and
 > `unattended_system_instructions.md` §25 give the same rule.
 
+> **GitHub API calls inside loops (CLAUDE.md §15, warning only):** the
+> `pr-body-lint` job of `.github/workflows/pr-checks.yml` runs
+> `scripts/lint_gh_calls_in_loops.py` on every pull request into `main` or
+> `stable` in this repository. It diffs the PR merge commit against its first
+> parent with the local git (no GitHub API call, no token) and emits a
+> `::warning` for each line the PR adds in a `*.sh` / `*.bash` file or a
+> `run:` block of `.github/workflows/*.yml` / `workflow-templates/*.yml`
+> where a GitHub API call (`gh api`, `gh pr view|list|checks`,
+> `gh issue view|list`, `gh run list|view`, `_safe_gh_jq`, `gh_retry`,
+> `gh_api_retry`, `curl ... api.github.com`) sits inside a `for` / `while` /
+> `until` body. Existing code is never flagged. A call through a batched or
+> cached helper (`_fetch_candidate_issue_details_graphql`,
+> `_fetch_linked_pr_status_graphql`, `_fetch_issue_labels_batch_graphql`,
+> `gh_review_pr_state`, `gh_read`) or a line annotated
+> `# gh-loop-ok: <reason>` (same line or the line above) does not warn. The
+> step always exits 0 and is `continue-on-error`, so it never fails the
+> check; it logs `GH_LOOP_CALL_LINT warnings=<n> files=<n>`, or
+> `GH_LOOP_CALL_LINT outcome=skipped reason=<token>` when the base commit
+> cannot be read.
+
 > **Interactive session hooks delivered by the `.claude/` sync:** the same
 > `Sync .claude/ assets from upstream` step ships three `PreToolUse` hooks with
 > their `settings.json` wiring, each documented in the root `CLAUDE.md` that
