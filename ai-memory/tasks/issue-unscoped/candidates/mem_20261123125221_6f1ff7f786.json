@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:21298 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: In `_heal_counterfactual_hold_expiry_check`, the expired_marker_post_failed branch now sends its lost-response Telegram alert at DEBUG instead of WARNING, so the default `ALERT_MSG_LEVEL=WARNING` filter drops it, even though the alert's own text asks a person to \"close or answer it by hand\".\n  WHY: If GitHub creates the hold-expired comment but the single-attempt POST reports failure, the issue is reopened, and every later tick keeps it as `kept reason=reopened` (lines 21229-21230) with no expiry retry and no Telegram message, so the hold can stay open indefinitely. The only signal left is the ::warning:: line at 21297. Reviewers disagree on severity: openai_gpt-6-luna rated it MAJOR; anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash downgraded it to NIT because the trigger is narrow, it is not a regression from pre-PR behaviour, and DEBUG stops a repeat of about 96 alerts per day per issue in the common case. The highest rating is used here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh:_heal_counterfactual_hold_expiry_check, the expired_marker_post_failed branch: tg_notify_issue \"${issue_num}\" \"Heal counterfactual hold: the hold-expired comment failed to post, ... If the hold-expired comment appears anyway, the hold will not expire on its own; close or answer it by hand.\" \"DEBUG\" || true | severity=NIT | confidence=3\n  PROBLEM: The Telegram alert moved from WARNING to DEBUG, so the default threshold drops it. The filter chain is tg_notify_issue (scripts/orchestrate_poll_process.sh:948-966), then tg_send_msg/_tg_should_send (scripts/tg_helpers.sh:90-96 and 133-136), with ALERT_MSG_LEVEL defaulting to 'WARNING' in orchestrate_poll.yml (line 1091). The change also contradicts scripts/tg_helpers.sh:48-52, which says WARNING means \"a human has to act\".\n  WHY: In the lost-response case the next tick returns kept reason=reopened with no Telegram message and no warning, so the hold never expires and no one is notified. This matches pre-PR behaviour, so it is not a regression, and DEBUG is justified for the common repeat-every-tick case. The trigger is narrow, so the reviewer rated it a NIT rather than MAJOR. The reviewer's hardening suggestion (risk score 1): keep DEBUG, and either add an \"ai:heal-counterfactual-hold-expired:v1 \u2026 close or answer it by hand\" note to the README row for HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED or emit a ::notice:: in the kept/reopened branch.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:`_heal_counterfactual_hold_expiry_check`, line 21298; the next tick handles a trusted expired marker at lines 21229-21230. | severity=MAJOR | confidence=5\n  PROBLEM: The lost-response alert is sent at DEBUG, which the default Telegram threshold suppresses.\n  WHY: If GitHub creates the expired comment but the POST reports failure, the issue is reopened, and the next tick keeps it as reopened with no expiry retry or new alert. `tg_helpers.sh` filters DEBUG below WARNING, and `orchestrate_poll.yml` defaults `ALERT_MSG_LEVEL` to WARNING, so no Telegram message is sent and the hold can stay open indefinitely.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:line 21298 (expired_marker_post_failed branch); threshold chain at .github/workflows/orchestrate_poll.yml:1091 and scripts/tg_helpers.sh:133-136 | severity=NIT | confidence=4\n  PROBLEM: The lost-response Telegram alert was lowered from WARNING to DEBUG, so at the default ALERT_MSG_LEVEL=WARNING no notification is sent for the failure mode whose text says it needs manual handling. In that case the comment is created, the POST reports failure, the issue is reopened, and every later tick logs kept reason=reopened with no expiry retry.\n  WHY: The hold stalls permanently with no Telegram message. The remaining signals are the per-tick ::warning:: at line 21297 and the posted hold-expired comment. The reviewer confirmed the editor's constraints: the linked issue allows no new GitHub reads, there is no tg_notify_issue dedupe (a WARNING would fire about 96 times a day), and the reopen_failed WARNING at line 21302 remains. Prior rounds accepted this residual, so the reviewer downgraded pass-1 MAJOR to NIT, with all facts confirmed.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "310e62f6ff7f0a9538913ad04a4b0bf3404ed704ce59d17ef2bd910f6286c8a5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9989,
+    "run_id": "45163750996",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45163750996",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123125221_6f1ff7f786",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9989,
+    "run_id": "45163750996"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T12:52:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
