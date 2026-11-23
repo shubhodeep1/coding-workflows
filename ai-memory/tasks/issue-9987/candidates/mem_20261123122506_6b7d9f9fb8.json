@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9987,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9987\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9996\",\"pr_number\":9996,\"branch\":\"ai/issue-9987\",\"run_id\":\"45160501087\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/45160501087\",\"changed_files\":[\"README.md\",\"agents.d/9987-judge-decision-lease-grant.md\",\"changelog.d/9987-judge-decision-lease-grant.md\",\"scripts/pr_checks_lib.sh\",\"scripts/review_merge_train.sh\",\"scripts/review_rb_judge.sh\",\"tests/test_merge_lease.py\",\"tests/test_pr_base_freshness_gate.py\",\"tests/test_review_merge_train.py\",\"tests/test_review_rb_judge_head_binding.py\"]}",
+  "fingerprint": "7257de5d2e5e419304e82322156ed2e6e91edad22eea724d856b91db112fd63d",
+  "lineage": {
+    "issue_number": 9987,
+    "parent_ids": [],
+    "pr_number": 9996,
+    "run_id": "45160501087",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45160501087",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9996"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261123122506_6b7d9f9fb8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9987,
+    "level": "run",
+    "pr_number": 9996,
+    "run_id": "45160501087"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9987: https://github.com/shubhodeep1/coding-workflows/pull/9996",
+  "timestamps": {
+    "created_at": "2026-11-23T12:25:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
