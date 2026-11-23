@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"If you set `tool-cache:`, rename it to `preinstalled-runtimes:`. The old name still works until v3.0.0 and prints a warning.\"\n  expected_change_site: `.github/workflows/review_autofix.yml` line 2213 (\"Free disk space\" step `with:` block) and `EXPECTED_WITH` in `tests/test_review_autofix_disk_headroom_contract.py` (line 35)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: `.github/workflows/review_autofix.yml` line 2213 still sets `tool-cache: true`, `tests/test_review_autofix_disk_headroom_contract.py` line 35 still expects `\"tool-cache\": True`; severity NIT; the old name keeps working until v3.0.0, and the new input name was not verified against action metadata at the pinned SHA.\n- requirement: Repo convention that behaviour-changing PRs add a `changelog.d/<issue-or-pr>-<slug>.md` fragment.\n  expected_change_site: a new `changelog.d/` fragment for this PR\n  confidence=[3]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  EVIDENCE: `pr_changed_files.txt` lists only the workflow and two test files, no changelog fragment exists in `changelog.d/` for this PR; severity NIT; a Dependabot SHA bump may be exempt, which the reviewer could not confirm.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nTASK_GAP:\nRequirement: \"If you set `tool-cache:`, rename it to `preinstalled-runtimes:`. The old name still works until v3.0.0 and prints a warning.\"\nExpected change site: `.github/workflows/review_autofix.yml` line 2213, and `EXPECTED_WITH` in `tests/test_review_autofix_disk_headroom_contract.py`.\nEvidence of absence: line 2213 still reads `tool-cache: true`. Optional migration; the deprecated name works until v3.0.0. Could not check the new input name against the action's metadata at the pinned SHA; follow-up suggested.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\nTASK_GAP:\nRequirement: Repo convention that behaviour-changing PRs add a `changelog.d/<issue-or-pr>-<slug>.md` fragment.\nExpected change site: a new `changelog.d/` fragment.\nEvidence of absence: `pr_changed_files.txt` lists only the workflow and two test files. Dependabot SHA bump is likely exempt; not confirmed.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\nTASK_GAP:\nRequirement: \"If you set `tool-cache:`, rename it to `preinstalled-runtimes:`. The old name still works until v3.0.0 and prints a warning.\"\nExpected change site: `.github/workflows/review_autofix.yml` (\"Free disk space\" step `with:` block, codex-agent job, line 2213) and `tests/test_review_autofix_disk_headroom_contract.py` (`EXPECTED_WITH` dictionary, line 35).\nEvidence of absence: line 2213 still sets `tool-cache: true`, and the test line 35 still expects `\"tool-cache\": True`. The action was bumped to v2.0.0 but the deprecated input was not migrated.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\nTASK_GAP:\nRequirement: Repository convention (CLAUDE.md \u00a720.A): add exactly one changelog fragment file at `changelog.d/<issue-or-pr>-<slug>.md` when the PR changes observable behavior.\nExpected change site: A new `changelog.d/` fragment for this pull request.\nEvidence of absence: No changelog fragment file exists in `changelog.d/` for this PR.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\nTASK_GAP:\nRequirement: PR description release notes for jlumbroso/free-disk-space v2.0.0 recommend: \"If you set `tool-cache:`, rename it to `preinstalled-runtimes:`. The old name still works until v3.0.0 and prints a warning.\"\nExpected change site: `.github/workflows/review_autofix.yml` line 2213 and `tests/test_review_autofix_disk_headroom_contract.py` line 35 (`EXPECTED_WITH[\"tool-cache\"] = True`).\nEvidence of absence: Workflow line 2213 still sets `tool-cache: true`; test line 35 still expects `\"tool-cache\": True`. The rename was deferred because the new input name could not be verified against action metadata at SHA `ceedf095f4ec1a097402bc6bd80831f2e1a6fde6`. `swap-storage` is set explicitly at line 2219 and is unaffected.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\nTASK_GAP:\nRequirement: \"If you set `tool-cache:`, rename it to `preinstalled-runtimes:`.\"\nExpected change site: `.github/workflows/review_autofix.yml`, the \"Free disk space\" step's `with:` block, and `tests/test_review_autofix_disk_headroom_contract.py`.\nEvidence of absence: The PR updates the action pin but leaves `tool-cache: true` in the workflow and `\"tool-cache\": True` in the contract test.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "95febedda8ed9a69c4b89df0ef8a590ca5fbdb66a95bc25eb0d132e508bdf476",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10004,
+    "run_id": "45225146627",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45225146627",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123191326_5a0d0bdb38",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10004,
+    "run_id": "45225146627"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T19:13:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
