@@ -1278,10 +1278,10 @@ _mt_resolve_default_branch()
 
 # MT_INFLIGHT_RUNS_ALL_JSON (issue #9983): the raw runs every status page of
 # the last call read (a JSON array of {id, status, event, head_branch,
-# head_sha, display_title, path, created_at}), set only when every page was
-# read completely, before the review-run classification; "" otherwise. Read
-# by _mt_lease_pr_runs_active from the caller's shell. Stdout, return codes
-# and log lines are unchanged.
+# head_sha, display_title, path, created_at}), set only when the call returns
+# 0 (every page read and every review run classified; an unattributed run or
+# a failed filter leaves it ""). Read by _mt_lease_runs_seed from the
+# caller's shell. Stdout, return codes and log lines are unchanged.
 MT_INFLIGHT_RUNS_ALL_JSON=""
 _mt_inflight_review_branches()
 {
@@ -1404,9 +1404,6 @@ _mt_inflight_review_branches()
 			break
 		fi
 	done
-	# Every page was read: keep the raw runs for the merge-lease idle test
-	# (issue #9983), whatever the review-run classification below decides.
-	[ -n "${__mt_runs_reason}" ] || MT_INFLIGHT_RUNS_ALL_JSON="${__mt_runs_all}"
 	if [ -z "${__mt_runs_reason}" ]; then
 		# One array of keys per review run. A review run with no key at all (no
 		# non-empty head_branch and no PR-named dispatch title) could belong to
@@ -1470,6 +1467,9 @@ _mt_inflight_review_branches()
 		echo "MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=${__mt_runs_reason} status=${__mt_runs_status} page=${__mt_runs_page} read=${__mt_runs_read} total=${__mt_runs_total}" >&2
 		return 1
 	fi
+	# A complete listing: keep the raw runs for the merge-lease activity tests
+	# (issue #9983). An incomplete one (any reason above) proves nothing.
+	MT_INFLIGHT_RUNS_ALL_JSON="${__mt_runs_all}"
 	printf '%s\n' "${__mt_runs_keys}" | sed '/^$/d' | sort -u
 }
 
@@ -1706,25 +1706,37 @@ _mt_merge_lease_queue_log()
 # failed filter; the caller keeps the holder, fail-open).
 # API: one listing pass per tick (about 10 status reads plus the memoized
 # `GET repos/<repo>`), cached in _MT_LEASE_RUNS_STATE / _MT_LEASE_RUNS_JSON,
-# which _mt_merge_lease_tick resets; none after the first call of a tick. Runs
-# in the caller's shell (not $(...)) so the cache persists. The listing's
-# MERGE_TRAIN_RUNS_LISTING lines stay on stderr.
+# which _mt_merge_lease_tick resets unless _mt_release already seeded them
+# from its own listing pass in this invocation (_MT_LEASE_RUNS_SEEDED=1); none
+# after the first call of a tick. Runs in the caller's shell (not $(...)) so
+# the cache persists. The listing's MERGE_TRAIN_RUNS_LISTING lines stay on
+# stderr. An incomplete listing (non-zero return) caches "failed" (return 2).
 _MT_LEASE_RUNS_STATE=""
 _MT_LEASE_RUNS_JSON=""
+_MT_LEASE_RUNS_SEEDED=""
+# _mt_lease_runs_seed <listing rc>: fills the lease cache from the
+# _mt_inflight_review_branches call just made in this shell: "ok" with its raw
+# runs only when it returned 0 with a JSON array, "failed" otherwise. No API.
+_mt_lease_runs_seed()
+{
+	_MT_LEASE_RUNS_STATE="failed"
+	_MT_LEASE_RUNS_JSON=""
+	if [ "${1:-1}" = "0" ] && [ -n "${MT_INFLIGHT_RUNS_ALL_JSON}" ] \
+		&& jq -e 'type == "array"' >/dev/null 2>&1 <<< "${MT_INFLIGHT_RUNS_ALL_JSON}"; then
+		_MT_LEASE_RUNS_JSON="${MT_INFLIGHT_RUNS_ALL_JSON}"
+		_MT_LEASE_RUNS_STATE="ok"
+	fi
+	return 0
+}
 _mt_lease_pr_runs_active()
 {
-	local lra_pr="${1:-}" lra_head="${2:-}" lra_now lra_wedged lra_hit
+	local lra_pr="${1:-}" lra_head="${2:-}" lra_now lra_wedged lra_hit lra_rc=0
 	[[ "${lra_pr}" =~ ^[1-9][0-9]*$ ]] || return 2
 	[[ "${lra_head}" =~ ^[0-9a-f]{40}$ ]] || lra_head=""
 	declare -F _merge_lease_wedged_queued_seconds >/dev/null 2>&1 || return 2
 	if [ -z "${_MT_LEASE_RUNS_STATE}" ]; then
-		_MT_LEASE_RUNS_STATE="failed"
-		_MT_LEASE_RUNS_JSON=""
-		_mt_inflight_review_branches >/dev/null || true
-		if [ -n "${MT_INFLIGHT_RUNS_ALL_JSON}" ] && jq -e 'type == "array"' >/dev/null 2>&1 <<< "${MT_INFLIGHT_RUNS_ALL_JSON}"; then
-			_MT_LEASE_RUNS_JSON="${MT_INFLIGHT_RUNS_ALL_JSON}"
-			_MT_LEASE_RUNS_STATE="ok"
-		fi
+		_mt_inflight_review_branches >/dev/null || lra_rc=$?
+		_mt_lease_runs_seed "${lra_rc}"
 	fi
 	[ "${_MT_LEASE_RUNS_STATE}" = "ok" ] && [ -n "${MT_DEFAULT_BRANCH}" ] || return 2
 	lra_now="$(date -u +%s 2>/dev/null)" || lra_now=0
@@ -1819,7 +1831,10 @@ _mt_lease_pr_runs_active()
 # Issue #9983 (holders kept while their runs are queued):
 # - G1: a holder past the head-gate grace with a review or CI run queued or
 #   in progress on its head (not wedged) stays eligible
-#   (_merge_lease_pr_eligible reads the head runs once).
+#   (_merge_lease_pr_eligible reads the head runs once). With none there, the
+#   cached listing (_mt_lease_pr_runs_active) is checked before revoking with
+#   revoked_no_head_gate: the `[pr:<n>]` review dispatch runs on the default
+#   branch. Active keeps it (holder_runs_active); unknown keeps it.
 # - G2: past MERGE_LEASE_IDLE_MINUTES with no run on its head, the holder is
 #   revoked_idle only when the active-run listing (_mt_lease_pr_runs_active,
 #   one listing pass per tick, cached for every base and holder) has no live
@@ -1841,9 +1856,11 @@ _mt_lease_pr_runs_active()
 #   outcome=skipped reason=skip_head_unchanged, as a hard entry does.
 # API budget (#9983): at most one `actions/runs?head_sha=` read per holder
 # per tick (only after the grace, or for the idle test when no read was made)
-# and at most one listing pass per tick (only for a holder past the idle time
-# with no live run on its head). G5 adds no call: it reuses the candidate's
-# statuses read inside the 10-candidate cap.
+# and at most one listing pass per tick (only for a holder past the grace or
+# the idle time with no live run on its head; none when _mt_release already
+# seeded the cache from its own listing). G5 adds no call: it reuses the
+# candidate's statuses read inside the 10-candidate cap, and grants a soft
+# entry's waiter only on a confirmed success (MERGE_LEASE_GATE_CONFIRMED).
 _mt_merge_lease_tick()
 {
 	local tick_prs_json="$1" tick_base_filter="$2"
@@ -1861,9 +1878,13 @@ _mt_merge_lease_tick()
 	# whether the candidate has a soft skip entry on its head.
 	local tick_held_why="holder_open" tick_skip3=0 tick_first_soft=0 tick_cand_head="" tick_runs_rc=0
 	declare -F _merge_lease_skips_hard >/dev/null 2>&1 && declare -F _merge_lease_skips_soft >/dev/null 2>&1 && tick_skip3=1
-	# One active-run listing pass per tick (_mt_lease_pr_runs_active).
-	_MT_LEASE_RUNS_STATE=""
-	_MT_LEASE_RUNS_JSON=""
+	# One active-run listing pass per tick (_mt_lease_pr_runs_active); the
+	# release pass's listing, when it seeded the cache, is that pass.
+	if [ "${_MT_LEASE_RUNS_SEEDED:-}" != "1" ]; then
+		_MT_LEASE_RUNS_STATE=""
+		_MT_LEASE_RUNS_JSON=""
+	fi
+	_MT_LEASE_RUNS_SEEDED=""
 	# merged=true|false on the released metric (plan K1, wasted-hold share).
 	local tick_merged="false" tick_holder_state=""
 	local tick_max_candidates=10
@@ -1976,6 +1997,19 @@ _mt_merge_lease_tick()
 				if ! _merge_lease_pr_eligible "${MERGE_LEASE_PR}" "${tick_holder_head}" "${tick_holder_title}" "${tick_holder_draft}" \
 					"${tick_base}" "${tick_login}" "${tick_since}"; then
 					tick_reason="revoked_${MERGE_LEASE_INELIGIBLE_REASON:-no_head_gate}"
+					# #9983 G1: no live run on the head past the grace. The review
+					# dispatch runs on the default branch (`[pr:<n>]` title), so
+					# check the cached active-run listing before revoking: active
+					# keeps it (holder_runs_active), unknown keeps it (fail-open).
+					if [ "${tick_reason}" = "revoked_no_head_gate" ] && [ "${MERGE_LEASE_HEAD_RUNS_READ:-false}" = "true" ]; then
+						tick_runs_rc=0
+						_mt_lease_pr_runs_active "${MERGE_LEASE_PR}" "${tick_holder_head}" || tick_runs_rc=$?
+						case "${tick_runs_rc}" in
+							0) tick_reason=""; tick_held_why="holder_runs_active" ;;
+							1) ;;
+							*) tick_reason="" ;;
+						esac
+					fi
 				elif [ -n "${tick_login}" ]; then
 					# #9983 G1/G4: kept past the head-gate grace by a live run.
 					if [ "${MERGE_LEASE_HEAD_RUNS_READ:-false}" = "true" ] && [ "${MERGE_LEASE_CI_ACTIVE:-}" = "true" ]; then
@@ -2101,7 +2135,10 @@ _mt_merge_lease_tick()
 			if _merge_lease_pr_eligible "${tick_first}" "${tick_cand_head}" \
 				"$(jq -r '.title // ""' <<< "${tick_first_row}" 2>/dev/null)" "$(jq -r '.draft // false' <<< "${tick_first_row}" 2>/dev/null)" \
 				"${tick_base}" "${tick_login}"; then
-				break
+				# #9983 G5: a soft entry clears only on a confirmed head-gate
+				# success; a fail-open eligible (failed login or statuses read)
+				# keeps it, so the waiter stays skip-held below.
+				[ "${tick_first_soft}" = 1 ] && [ "${MERGE_LEASE_GATE_CONFIRMED:-false}" != "true" ] || break
 			fi
 			tick_skip_why="${MERGE_LEASE_INELIGIBLE_REASON:-no_head_gate}"
 			tick_skipped_any=1
@@ -2255,6 +2292,17 @@ _mt_merge_lease_tick_multi()
 			[ "$((10#${tm_h_acq:-0}))" -le "${tm_since}" ] || tm_since="$((10#${tm_h_acq:-0}))"
 			if ! _merge_lease_pr_eligible "${tm_h}" "${tm_listed_head}" "${tm_title}" "${tm_draft}" "${tm_base}" "${tm_login}" "${tm_since}"; then
 				tm_reason="revoked_${MERGE_LEASE_INELIGIBLE_REASON:-no_head_gate}"
+				# #9983 G1: a `[pr:<n>]` review dispatch on the default branch in
+				# the cached listing keeps it; an unknown listing keeps it too.
+				if [ "${tm_reason}" = "revoked_no_head_gate" ] && [ "${MERGE_LEASE_HEAD_RUNS_READ:-false}" = "true" ]; then
+					tm_runs_rc=0
+					_mt_lease_pr_runs_active "${tm_h}" "${tm_listed_head}" || tm_runs_rc=$?
+					case "${tm_runs_rc}" in
+						0) tm_reason=""; tm_runs_active_prs="${tm_runs_active_prs}${tm_h} " ;;
+						1) ;;
+						*) tm_reason="" ;;
+					esac
+				fi
 			elif [ -n "${tm_login}" ]; then
 				# #9983 G1/G4: kept past the head-gate grace by a live run.
 				if [ "${MERGE_LEASE_HEAD_RUNS_READ:-false}" = "true" ] && [ "${MERGE_LEASE_CI_ACTIVE:-}" = "true" ]; then
@@ -2365,9 +2413,11 @@ _mt_merge_lease_tick_multi()
 			&& grep -Eq -- "^${tm_first}:${tm_first_head}(:|\$)" <<< "$(_merge_lease_skips_soft "${MERGE_LEASE_SKIPS:-}")"; then
 			tm_first_soft=1
 		fi
-		if [ "${tm_p2}" = 1 ] && ! _merge_lease_pr_eligible "${tm_first}" "${tm_first_head}" \
+		# #9983 G5: a soft entry clears only on a confirmed head-gate success.
+		if [ "${tm_p2}" = 1 ] && { ! _merge_lease_pr_eligible "${tm_first}" "${tm_first_head}" \
 			"$(jq -r '.title // ""' <<< "${tm_first_row}" 2>/dev/null)" "$(jq -r '.draft // false' <<< "${tm_first_row}" 2>/dev/null)" \
-			"${tm_base}" "${tm_login}"; then
+			"${tm_base}" "${tm_login}" \
+			|| { [ "${tm_first_soft}" = 1 ] && [ "${MERGE_LEASE_GATE_CONFIRMED:-false}" != "true" ]; }; }; then
 			tm_skip_why="${MERGE_LEASE_INELIGIBLE_REASON:-no_head_gate}"
 			tm_skipped_any=1
 			if [ "${tm_first_soft}" = 1 ]; then
@@ -2607,7 +2657,7 @@ _mt_release() {
 	# "incomplete". An incomplete listing proves nothing about active reviews,
 	# so every queued PR stays queued this invocation and the next close event
 	# or poll tick retries.
-	local release_runs_listing_state=""
+	local release_runs_listing_state="" release_listing_file="" release_listing_rc=1
 	# Per-reason leave-queued counts for MERGE_TRAIN_RELEASE_SUMMARY, so a tick
 	# that examines queued PRs and releases none can be attributed. Each counted
 	# branch is terminal for its PR, so released + the counts == examined.
@@ -2654,9 +2704,22 @@ _mt_release() {
 			fi
 		fi
 		if [ -z "${release_runs_listing_state}" ]; then
-			# Counted here, not inside the listing: it runs in $(...).
+			# Counted here, not inside the listing.
 			release_active_listing_calls=$((release_active_listing_calls + 1))
-			if inflight_review_branches="$(_mt_inflight_review_branches)"; then
+			release_listing_rc=1
+			# Issue #9983 G2: in this shell (stdout to a temp file), so the raw
+			# runs seed the lease tick's cache and the tick lists no second
+			# time. Without a temp file the listing runs in $(...) as before.
+			if release_listing_file="$(mktemp "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/merge-train-runs.XXXXXX" 2>/dev/null)"; then
+				_mt_inflight_review_branches > "${release_listing_file}" && release_listing_rc=0
+				inflight_review_branches="$(cat -- "${release_listing_file}" 2>/dev/null)" || release_listing_rc=1
+				rm -f -- "${release_listing_file}"
+				_mt_lease_runs_seed "${release_listing_rc}"
+				_MT_LEASE_RUNS_SEEDED=1
+			elif inflight_review_branches="$(_mt_inflight_review_branches)"; then
+				release_listing_rc=0
+			fi
+			if [ "${release_listing_rc}" = 0 ]; then
 				release_runs_listing_state="complete"
 			else
 				release_runs_listing_state="incomplete"

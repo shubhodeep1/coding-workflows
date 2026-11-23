@@ -3267,6 +3267,12 @@ _merge_lease_queue_order()
 # MERGE_LEASE_HEAD_RUNS_READ=true when that read was made, so the tick's idle
 # test does not read the head runs a second time. The CI-activity reads below
 # also use the live count, so a wedged run never counts as activity.
+# That read sees only runs on the head; the tick also checks its cached
+# active-run listing for a `[pr:<n>]` review dispatch on the default branch
+# before it revokes for no_head_gate (scripts/review_merge_train.sh).
+# MERGE_LEASE_GATE_CONFIRMED=true only when the newest head-gate status was
+# read as `success` by <login>; every fail-open return leaves it false, so a
+# soft skip entry (#9983 G5) is cleared only on a confirmed success.
 # API: 1 statuses read plus the reads of _pr_wait_for_required_checks; none
 # for draft or `[skip ai]`, or without a valid login or head; +1
 # actions/runs?head_sha read for a holder past the grace with a pending
@@ -3279,6 +3285,7 @@ _merge_lease_pr_eligible()
 	MERGE_LEASE_INELIGIBLE_REASON=""
 	MERGE_LEASE_CI_ACTIVE="unknown"
 	MERGE_LEASE_HEAD_RUNS_READ="false"
+	MERGE_LEASE_GATE_CONFIRMED="false"
 	if [ "${elig_draft}" = "true" ]; then
 		MERGE_LEASE_INELIGIBLE_REASON="draft"
 		return 1
@@ -3296,7 +3303,7 @@ _merge_lease_pr_eligible()
 	# Newest first: the latest head-gate status decides.
 	elig_gate="$(jq -r '[ .[] | select(type == "object" and .context == "ai-review/head-gate") ][0] | if . == null then "" else "\(.state) \((.creator.login // "") | ascii_downcase)" end' <<< "${elig_statuses}" 2>/dev/null)" || return 0
 	case "${elig_gate}" in
-		"success ${elig_login}") ;;
+		"success ${elig_login}") MERGE_LEASE_GATE_CONFIRMED="true" ;;
 		"failure ${elig_login}"|"error ${elig_login}")
 			MERGE_LEASE_INELIGIBLE_REASON="no_head_gate"
 			return 1
@@ -3386,7 +3393,8 @@ _merge_lease_pr_eligible()
 # head is `success` created by the pipeline login. Hard entries always stay.
 # Runs in the caller's shell (not $(...)) so the login cache persists.
 # API: none when no soft entry qualifies; otherwise one `GET user` per
-# process (cached in _MERGE_LEASE_GATE_LOGIN) and at most 10 commit-statuses
+# process and token (cached in _MERGE_LEASE_GATE_LOGIN and the token-keyed
+# PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE) and at most 10 commit-statuses
 # reads per call (entries past the cap stay). Fail-closed for the skip: a
 # failed login or statuses read keeps the entry (today's rule). Returns 0.
 _MERGE_LEASE_GATE_LOGIN=""
@@ -3394,7 +3402,7 @@ _merge_lease_skips_effective()
 {
 	local eff_skips="${1:-}" eff_pulls="${2:-}" eff_cand="${3:-}" eff_label="${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}"
 	local eff_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" eff_rows eff_entry eff_pair eff_head eff_reads=0
-	local eff_statuses eff_gate eff_login eff_drop=""
+	local eff_statuses eff_gate eff_login="" eff_drop="" eff_token_fp=""
 	MERGE_LEASE_SKIPS_EFFECTIVE="${eff_skips}"
 	[ -n "${eff_skips}" ] || return 0
 	[[ "${eff_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 0
@@ -3408,8 +3416,21 @@ _merge_lease_skips_effective()
 		eff_pair="${eff_entry%%:*}:$(printf '%s' "${eff_entry#*:}" | cut -d: -f1)"
 		printf '%s\n' "${eff_rows}" | grep -Fxq -- "${eff_pair}" || continue
 		[ "${eff_reads}" -lt 10 ] || break
-		if [ -z "${_MERGE_LEASE_GATE_LOGIN}" ]; then
-			eff_login="$(gh_retry _safe_gh_jq user 2>/dev/null | jq -r 'if type == "object" then (.login // "") else "" end' 2>/dev/null | tail -n1)" || eff_login=""
+		if [ -z "${eff_login}" ]; then
+			# Once per call, from the token-keyed login cache of the head-gate
+			# supersede check (PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE), so a token
+			# switch reads the login again and one token reads `user` once.
+			eff_token_fp="$(printf '%s|%s' "${GH_TOKEN:-}" "${GITHUB_TOKEN:-}" | sha256sum 2>/dev/null | cut -c1-64)"
+			if [ -n "${eff_token_fp}" ] && [ "${PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE_KEY:-}" = "${eff_token_fp}" ]; then
+				eff_login="${PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE:-}"
+			fi
+			if [ -z "${eff_login}" ]; then
+				eff_login="$(gh_retry _safe_gh_jq user 2>/dev/null | jq -r 'if type == "object" then (.login // "") else "" end' 2>/dev/null | tail -n1)" || eff_login=""
+				if [ -n "${eff_token_fp}" ] && [[ "${eff_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+					PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE="${eff_login}"
+					PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE_KEY="${eff_token_fp}"
+				fi
+			fi
 			eff_login="$(printf '%s' "${eff_login}" | tr '[:upper:]' '[:lower:]')"
 			[[ "${eff_login}" =~ ^[a-z0-9][a-z0-9-]*(\[bot\])?$ ]] || return 0
 			_MERGE_LEASE_GATE_LOGIN="${eff_login}"

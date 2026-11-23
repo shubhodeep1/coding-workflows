@@ -3338,13 +3338,16 @@ def test_merge_lease_tick_metrics_are_additive_and_guarded():
 	assert "declare -F _merge_lease_metric >/dev/null 2>&1 && tick_metric_ok=1" in body
 	calls = [line.strip() for line in body.splitlines() if "_merge_lease_metric " in line and "declare -F" not in line]
 	# 9 Phase 1 calls plus Phase 2's skipped (skip_head_unchanged, ineligible)
-	# and no_waiter reason=no_eligible_waiter.
-	assert len(calls) == 12, calls
+	# and no_waiter reason=no_eligible_waiter, plus #9983's skipped
+	# skip_head_unchanged for a candidate still held by a soft skip entry.
+	assert len(calls) == 13, calls
 	for call in calls:
 		assert call.startswith('[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric '), call
 		assert call.endswith("|| true"), call
 	for fmt in (
-		'_mt_log "MERGE_LEASE pr=${MERGE_LEASE_PR} base=${tick_base} mode=tick outcome=held reason=holder_open"',
+		# #9983 G4: the held reason is holder_open or holder_runs_active.
+		'_mt_log "MERGE_LEASE pr=${MERGE_LEASE_PR} base=${tick_base} mode=tick outcome=held reason=${tick_held_why}"',
+		'tick_held_why="holder_open"',
 		# Phase 1 step 1.1 appends held_s= and merged= to the release line and
 		# queue_len= to the grant lines; the existing fields are unchanged.
 		'_mt_log "MERGE_LEASE pr=${MERGE_LEASE_PR} base=${tick_base} mode=tick outcome=released reason=${tick_reason} held_s=${tick_rel_held:--} merged=${tick_merged}"',

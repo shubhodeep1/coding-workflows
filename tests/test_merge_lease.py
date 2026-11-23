@@ -1983,6 +1983,55 @@ class HolderRunsActive(unittest.TestCase):
 		self.assertLessEqual(_calls_with(h, "actions/runs?status="), 10, h.calls)
 		self.assertEqual(_calls_with(h, "repos/owner/repo --jq"), 1, h.calls)
 
+	def test_pending_head_gate_holder_with_a_queued_dispatch_review_is_held(self) -> None:
+		# The sweep's review dispatch runs on the default branch, so the head
+		# runs read cannot see it; the cached listing does (review of #9983).
+		h, out = _p2_tick(self._holder(gate=None, updated=OLD, extra={"active_runs": [_dispatch_run(4)]}))
+		self.assertIn("MERGE_LEASE pr=4 base=main mode=tick outcome=held reason=holder_runs_active\n", out)
+		self.assertEqual(h.state["refs"][REF], "c" * 40)
+		self.assertEqual(_calls_with(h, "actions/runs?head_sha="), 1, h.calls)
+
+	def test_pending_head_gate_holder_with_an_unreadable_listing_is_kept(self) -> None:
+		h, out = _p2_tick(self._holder(gate=None, updated=OLD, extra={"fail": ["actions/runs?status="]}))
+		self.assertIn("MERGE_LEASE pr=4 base=main mode=tick outcome=held reason=holder_open\n", out)
+		self.assertEqual(h.state["refs"][REF], "c" * 40)
+
+	def test_an_incomplete_listing_keeps_the_idle_holder(self) -> None:
+		# A review dispatch without a `[pr:<n>]` title could be the holder's:
+		# the listing is incomplete (unattributed_run), so the holder is kept.
+		unattributed = dict(_dispatch_run(9), display_title="AI Review & Autofix", name="AI Review & Autofix",
+			path=".github/workflows/review_autofix.yml")
+		h, out = _p2_tick(self._holder(updated=OLD, extra={"active_runs": [unattributed]}))
+		self.assertIn("reason=unattributed_run", out)
+		self.assertIn("MERGE_LEASE pr=4 base=main mode=tick outcome=held reason=holder_open\n", out)
+		self.assertEqual(h.state["refs"][REF], "c" * 40)
+
+	def test_a_seeded_listing_is_the_ticks_only_listing_pass(self) -> None:
+		st = self._holder(updated=OLD, extra={"active_runs": [_dispatch_run(4)]})
+		h0, _ = _p2_tick(st)
+		one_pass = _calls_with(h0, "actions/runs?status=")
+		self.assertGreater(one_pass, 0, h0.calls)
+		h = _Harness(st)
+		res = h.train_fn('_mt_inflight_review_branches >/dev/null; _mt_lease_runs_seed $?; _MT_LEASE_RUNS_SEEDED=1\n'
+			'_mt_merge_lease_tick "${PRS_JSONL}" ""', {"PRS_JSONL": _p2_jsonl(st["pulls"], {})})
+		out = res.stdout + res.stderr
+		self.assertIn("MERGE_LEASE pr=4 base=main mode=tick outcome=held reason=holder_runs_active\n", out)
+		self.assertEqual(_calls_with(h, "actions/runs?status="), one_pass, h.calls)
+
+	def test_release_pass_listing_seeds_the_lease_tick(self) -> None:
+		st = self._holder(updated=OLD, extra={"active_runs": [_dispatch_run(4)]})
+		st["pulls"].append(_pull(5))
+		st["labels"] = {"5": ["ai:merge-queued"]}
+		h0, _ = _p2_tick(self._holder(updated=OLD, extra={"active_runs": [_dispatch_run(4)]}))
+		one_pass = _calls_with(h0, "actions/runs?status=")
+		h = _Harness(st)
+		res = h.train_fn("_mt_release", {"MT_REPO": "owner/repo"})
+		out = res.stdout + res.stderr
+		# The release pass made the listing (queued PR 5) and the tick reused it.
+		self.assertIn("active_listing_calls=1 ", out)
+		self.assertIn("MERGE_LEASE pr=4 base=main mode=tick outcome=held reason=holder_runs_active\n", out)
+		self.assertEqual(_calls_with(h, "actions/runs?status="), one_pass, h.calls)
+
 	def test_revocation_off_is_unchanged(self) -> None:
 		h, out = _p2_tick(self._holder(gate=None, updated=OLD), env={"MERGE_LEASE_REVOKE_ENABLED": "false"})
 		self.assertIn("outcome=held reason=holder_open", out)
@@ -2043,6 +2092,19 @@ class SoftSkipEntries(unittest.TestCase):
 		_head_gate(st, _sha(5))
 		_, out = _p2_tick(st)
 		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=granted", out)
+
+	def test_soft_entry_with_an_unreadable_head_gate_stays_skip_held(self) -> None:
+		# A failed head-gate read keeps the soft entry (#9983 G5): the
+		# fail-open eligibility must not grant the waiter or drop its entry.
+		entry = f"5:{_sha(5)}:revoked_no_head_gate"
+		st = self._free([entry])
+		_head_gate(st, _sha(5))
+		st["fail"] = [f"commits/{_sha(5)}/statuses"]
+		h, out = _p2_tick(st)
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=skipped reason=skip_head_unchanged\n", out)
+		self.assertIn("pr=6 base=main mode=tick outcome=granted", out)
+		self.assertIn(WAIT, h.state["labels"]["5"])
+		self.assertEqual(_skips(h.record()), [entry])
 
 	def test_three_field_entries_survive_the_prune(self) -> None:
 		st = {"pulls": [_pull(5), _pull(6)], "labels": {"6": [WAIT]}, "files": {"6": ["b"]}}
