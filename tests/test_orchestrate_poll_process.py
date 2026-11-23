@@ -10402,12 +10402,51 @@ def test_security_pass_external_finalize_uses_verified_pr_head_when_integration_
 		pull_ref_shas={395: "__integration_head__"},
 	)
 
-	assert result["latest_state"]["status"] == "complete"
-	assert result["latest_state"]["security_pass_status"] == "passed"
-	assert result["latest_state"]["security_pass_head_sha"] == result["security_audit_capture"]["diff_head"]
-	assert result["pr_get_calls"]["395"] == 1
-	assert result["git_fetch_calls"]["refs/pull/395/head:refs/orchestrator/security-pass/pr-395-head"] == 2
-	assert "EXTERNAL_FINALIZE_DELIVERY tracking_issue=192 pr=395 outcome=branch_deleted reason=branch_absent" in result["stdout"] + result["stderr"]
+	# Diagnostics only (issue #9869): a CI failure of this test printed an
+	# empty message, so each assert below names the values it saw. Every
+	# lookup here is safe, so building it never changes which assert fails.
+	_fc_result = result if isinstance(result, dict) else {}
+	_fc_state = _fc_result.get("latest_state") or {}
+	if not isinstance(_fc_state, dict):
+		_fc_state = {}
+	_fc_capture = _fc_result.get("security_audit_capture") or {}
+	if not isinstance(_fc_capture, dict):
+		_fc_capture = {}
+	_fc_output = f"{_fc_result.get('stdout') or ''}\n{_fc_result.get('stderr') or ''}"
+	_fc_lines = [
+		line[:400]
+		for line in _fc_output.splitlines()
+		if "EXTERNAL_FINALIZE_DELIVERY" in line or "SECURITY_PASS" in line or "security-pass" in line
+	][-40:]
+	failure_context = (
+		"state="
+		+ json.dumps(
+			{
+				key: _fc_state.get(key)
+				for key in (
+					"status",
+					"security_pass_status",
+					"security_pass_head_sha",
+					"final_merge_status",
+					"final_merge_pr",
+				)
+			},
+			sort_keys=True,
+			default=str,
+		)
+		+ f" diff_head={_fc_capture.get('diff_head')!r}"
+		+ f" pr_get_calls={_fc_result.get('pr_get_calls')!r}"
+		+ f" git_fetch_calls={_fc_result.get('git_fetch_calls')!r}"
+		+ " log_lines="
+		+ "\n".join(_fc_lines)
+	)
+
+	assert result["latest_state"]["status"] == "complete", failure_context
+	assert result["latest_state"]["security_pass_status"] == "passed", failure_context
+	assert result["latest_state"]["security_pass_head_sha"] == result["security_audit_capture"]["diff_head"], failure_context
+	assert result["pr_get_calls"]["395"] == 1, failure_context
+	assert result["git_fetch_calls"]["refs/pull/395/head:refs/orchestrator/security-pass/pr-395-head"] == 2, failure_context
+	assert "EXTERNAL_FINALIZE_DELIVERY tracking_issue=192 pr=395 outcome=branch_deleted reason=branch_absent" in result["stdout"] + result["stderr"], failure_context
 
 
 def _external_finalize_delivery_run(
