@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/9732-stall-merge-required-checks.md:2 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: The flag-off sentence (\"legacy chain ... merge `|| true` runs unchanged\") is stale. The actual chain in `scripts/orchestrate_poll_process.sh:29207-29212` is the #9715 refusal-recording `elif !` ladder, whose merge step sets `_std_merge_refusal_reason=\"merge_call_failed\"` and no longer ends in `|| true`.\n  WHY: Someone troubleshooting a `STALL_MERGE_REQUIRED_CHECKS_ENABLED=false` run would look for a swallowed merge failure that no longer exists, and would miss that the failure now records `attempt_merge_refused_merge_call_failed`. Both reviewers rated it NIT, and no runtime breakage occurs.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The judge-fix commit (head 15b4c3f, item 3) required replacing line 2's flag-off sentence with \"With the flag off the existing chain runs unchanged (the #9715 refusal-recording `elif` chain: two-argument `_pr_checks_completed`, freshness, bound merge, logged as `STANDALONE_STALL_MERGE`).\"\n  expected_change_site: agents.d/9732-stall-merge-required-checks.md, line 2\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  EVIDENCE: The last run changed only tests/test_orchestrate_poll_process.py and tests/test_standalone_stall_attempt_merge_refusal.py, and agents.d/9732-stall-merge-required-checks.md:2 still reads \"legacy chain ... merge `|| true`\". The actual chain at scripts/orchestrate_poll_process.sh:29201-29213 is the #9715 `elif !` ladder with `merge_call_failed` and no `|| true`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.d/9732-stall-merge-required-checks.md:2 | severity=NIT | confidence=5\n  PROBLEM: The flag-off sentence is stale. The chain in `scripts/orchestrate_poll_process.sh` is now #9715's refusal-recording `elif !` ladder, and its merge step sets `_std_merge_refusal_reason=\"merge_call_failed\"` (line 29212) and is logged as `STANDALONE_STALL_MERGE`. It no longer ends in `|| true`.\n  WHY: Nothing breaks at runtime, but a troubleshooter would look for a swallowed merge failure and miss that a flag-off merge failure records `attempt_merge_refused_merge_call_failed`.\n- TASK_GAP: agents.d/9732-stall-merge-required-checks.md, line 2 | severity=NIT | confidence=5\n  Requirement: Judge-fix item 3 says to replace the flag-off sentence on line 2 with the #9715 refusal-recording `elif` chain wording.\n  Expected change site: agents.d/9732-stall-merge-required-checks.md, line 2.\n  Evidence of absence: The last run changed only the two test files, and the fragment still has the old \"merge `|| true`\" wording.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP: agents.d/9732-stall-merge-required-checks.md, line 2 | severity=NIT | confidence=5\n  Requirement: Update line 2 so the flag-off sentence describes the #9715 refusal-recording `elif` chain (two-argument `_pr_checks_completed`, freshness, bound merge, logged as `STANDALONE_STALL_MERGE`).\n  Expected change site: agents.d/9732-stall-merge-required-checks.md, line 2.\n  Evidence of absence: The last run did not update the file. Line 2 still reads \"legacy chain ... merge `|| true`\", which misdescribes the actual `elif !` refusal-recording chain in `scripts/orchestrate_poll_process.sh`.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: agents.d/9732-stall-merge-required-checks.md, line 2 | severity=NIT | confidence=5\n  Requirement: Judge-fix item 3 required replacing the flag-off sentence on line 2 with \"With the flag off the existing chain runs unchanged (the #9715 refusal-recording `elif` chain: two-argument `_pr_checks_completed`, freshness, bound merge, logged as `STANDALONE_STALL_MERGE`).\"\n  Expected change site: agents.d/9732-stall-merge-required-checks.md line 2, the flag-off sentence.\n  Evidence of absence: The last run changed only tests/test_orchestrate_poll_process.py and tests/test_standalone_stall_attempt_merge_refusal.py, and line 2 still has the old wording. The actual chain at scripts/orchestrate_poll_process.sh:29201-29213 ends at `elif ! _orch_squash_merge_bound \"${merge_pr}\" \"${merge_head_sha}\" auto; then _std_merge_refusal_reason=\"merge_call_failed\"` with no `|| true`. The `STANDALONE_STALL_MERGE issue= pr= head= outcome=refused reason=...` log at line 29247 is not mentioned. A flag-off merge failure now records `attempt_merge_refused_merge_call_failed` and increments the recovery count.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.d/9732-stall-merge-required-checks.md:2 | severity=NIT | confidence=5\n  PROBLEM: The documented flag-off behavior is stale. The current chain in `scripts/orchestrate_poll_process.sh:29207-29212` uses the #9715 refusal-recording `elif` ladder, and a failed merge sets `merge_call_failed`.\n  WHY: Someone diagnosing a flag-off merge refusal would expect the merge failure to be swallowed, but the poller records the refusal and increments the recovery count.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP: agents.d/9732-stall-merge-required-checks.md, line 2 | severity=NIT | confidence=5\n  Requirement: The judge-fix commit (15b4c3f, item 3) required editing line 2 so the flag-off sentence describes the #9715 refusal-recording chain: \"With the flag off the existing chain runs unchanged (the #9715 refusal-recording `elif` chain: two-argument `_pr_checks_completed`, freshness, bound merge, logged as `STANDALONE_STALL_MERGE`).\"\n  Expected change site: agents.d/9732-stall-merge-required-checks.md, line 2 (the sentence beginning \"With the flag off the legacy chain\").\n  Evidence of absence: The last run changed only tests/test_orchestrate_poll_process.py and tests/test_standalone_stall_attempt_merge_refusal.py. Line 2 still reads \"legacy chain ... merge `|| true`\". The actual chain at scripts/orchestrate_poll_process.sh:29201-29213 is the #9715 `elif !` ladder whose merge arm sets `_std_merge_refusal_reason=\"merge_call_failed\"` with no `|| true`. A flag-off run now records `attempt_merge_refused_merge_call_failed` and increments the recovery count, which the fragment does not say.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0a3ae39321d6e01c6ec74569ab78700253c763f5515e82e5a9382f0702c3bad7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9737,
+    "run_id": "45147768967",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45147768967",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123095119_817cf1daa0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9737,
+    "run_id": "45147768967"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T09:51:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
