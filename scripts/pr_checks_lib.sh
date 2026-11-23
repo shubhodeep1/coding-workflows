@@ -1218,7 +1218,17 @@ _pr_ensure_final_ci()
 				final_ci_wiring_base="$(printf '%s' "${pr_json}" | jq -r 'if type == "object" then (.base.ref // "") else "" end' 2>/dev/null | tail -n1)"
 			fi
 		fi
-		_pr_final_ci_wiring_behind_update "${pr}" "${sha}" "${final_ci_wiring_base}" "${wf}" dispatch || true
+		# An e2e-smoke-test PR's branch is never updated mid-gate: the review
+		# step's e2e exit is check-only, and the final-CI sweep reaches the same
+		# head without that flag. The labels come from the PR read above (the
+		# sweep path always makes it), so this costs no call.
+		local final_ci_wiring_no_update="${PR_FINAL_CI_WIRING_NO_UPDATE:-}"
+		if [ -n "${pr_json}" ] && printf '%s' "${pr_json}" | jq -e 'type == "object"
+			and ([(.labels // [])[]? | select(type == "object") | (.name // "")] | any(. == "e2e-smoke-test"))' >/dev/null 2>&1; then
+			final_ci_wiring_no_update="true"
+		fi
+		PR_FINAL_CI_WIRING_NO_UPDATE="${final_ci_wiring_no_update}" \
+			_pr_final_ci_wiring_behind_update "${pr}" "${sha}" "${final_ci_wiring_base}" "${wf}" dispatch || true
 		case "${PR_FINAL_CI_WIRING_OUTCOME:-}" in
 			updated|requested|held)
 				PR_FINAL_CI_OUTCOME="deferred"
@@ -2305,8 +2315,12 @@ _pr_final_ci_refused_base_update()
 #       and holds with reason=update_branch_failed; the next call tries once
 #       more, and a second refusal posts the hold marker. So the update lease
 #       is taken at most twice per head without progress.
-#       With PR_FINAL_CI_WIRING_NO_UPDATE=true (check-only callers), a behind
-#       head holds with reason=no_update_path: no lease, update or comment.
+#       With PR_FINAL_CI_WIRING_NO_UPDATE=true (check-only callers; also set
+#       by _pr_ensure_final_ci for a PR labelled e2e-smoke-test in its PR
+#       read), a behind head holds with reason=no_update_path: no lease and no
+#       update; one note per head ending in
+#         <!-- ai:final-ci-wiring-behind:v1 pr=<n> head=<sha> reason=no_update_path -->
+#       (only when the comment read succeeded), which is not a hold.
 #       The update chain runs with REVIEW_FINAL_CI_WORKFLOW defaulted to
 #       <workflow file>, so the poller's calls also dispatch the update
 #       head's final CI.
@@ -2331,7 +2345,9 @@ _pr_final_ci_refused_base_update()
 # reads, sync count (_pr_base_sync_count reads `user` and the comments a
 # second time: two of each on an updated head, once per head), marker POST
 # and final-CI dispatch, or, when the update is refused, one `GET pulls/<pr>`
-# and at most one comment POST (two refusals per head at most). No earlier call in these paths reads the
+# and at most one comment POST (two refusals per head at most). A
+# check-only hold reads `user` and the comments once and posts at most one
+# note per head. No earlier call in these paths reads the
 # compare for a head the side channel does not cover. A held head that
 # stays a final-CI sweep candidate pays the compare, `GET user` and comments
 # read again on each sweep tick (at most FINAL_CI_SWEEP_MAX_PER_TICK heads).
@@ -2352,11 +2368,15 @@ _pr_final_ci_wiring_enabled()
 # (any reason except update_branch_failed), 3 when it posted only the
 # one-time retry note (reason=update_branch_failed: a refusal without a
 # reported conflict, so one more attempt is allowed), 1 when it posted
-# neither, 2 when the login or the comments could not be read.
+# neither, 2 when the login or the comments could not be read. The check-only
+# note (reason=no_update_path) is not a hold either: it is counted apart in
+# PR_FINAL_CI_WIRING_NOTE_NO_UPDATE_SEEN (0 or more; empty unless the read
+# succeeded), so a merge path or the sweep still updates the branch.
 _pr_final_ci_wiring_note_seen()
 {
 	local seen_pr="$1" seen_head="$2"
-	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" seen_login="" seen_comments="" seen_count="" seen_hold="" seen_retry=""
+	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" seen_login="" seen_comments="" seen_count="" seen_hold="" seen_retry="" seen_no_update=""
+	PR_FINAL_CI_WIRING_NOTE_NO_UPDATE_SEEN=""
 	seen_login="$(gh_retry _safe_gh_jq user 2>/dev/null | jq -r 'if type == "object" then (.login // "") else "" end' 2>/dev/null | tail -n1)"
 	[[ "${seen_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]] || return 2
 	seen_comments="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${repo}/issues/${seen_pr}/comments?per_page=100" 2>/dev/null)" || return 2
@@ -2365,9 +2385,10 @@ _pr_final_ci_wiring_note_seen()
 		  | select(type == "object" and ((.user.login // "") == $login))
 		  | (.body // "") | select(type == "string")
 		  | (capture("<!-- ai:final-ci-wiring-behind:v1 pr=" + $pr + " head=" + $head + " reason=(?<r>[a-z_]+) -->\\s*$")? | .r) ]
-		| "\(map(select(. != "update_branch_failed")) | length) \(map(select(. == "update_branch_failed")) | length)"' 2>/dev/null | tail -n1)"
-	read -r seen_hold seen_retry <<< "${seen_count}"
-	[[ "${seen_hold}" =~ ^[0-9]+$ ]] && [[ "${seen_retry}" =~ ^[0-9]+$ ]] || return 2
+		| "\(map(select(. != "update_branch_failed" and . != "no_update_path")) | length) \(map(select(. == "update_branch_failed")) | length) \(map(select(. == "no_update_path")) | length)"' 2>/dev/null | tail -n1)"
+	read -r seen_hold seen_retry seen_no_update <<< "${seen_count}"
+	[[ "${seen_hold}" =~ ^[0-9]+$ ]] && [[ "${seen_retry}" =~ ^[0-9]+$ ]] && [[ "${seen_no_update}" =~ ^[0-9]+$ ]] || return 2
+	PR_FINAL_CI_WIRING_NOTE_NO_UPDATE_SEEN="${seen_no_update}"
 	[ "${seen_hold}" -gt 0 ] && return 0
 	[ "${seen_retry}" -gt 0 ] && return 3
 	return 1
@@ -2500,10 +2521,24 @@ _pr_final_ci_wiring_behind_update()
 		return 0
 	fi
 	# Check-only callers (scripts/review_enable_auto_merge.sh on its exits
-	# that never merge): no lease, no branch update, no comment, and no
-	# dispatch on the stale workflow copy (G2); a merge path or the final-CI
-	# sweep updates the branch.
+	# that never merge, and an e2e-smoke-test PR reached by the sweep): no
+	# lease, no branch update, and no dispatch on the stale workflow copy
+	# (G2). One note per head records the reason on the PR (G2), only when
+	# the comment read succeeded and nothing is recorded for the head yet;
+	# it is not a hold, so a merge path or the final-CI sweep still updates
+	# the branch.
 	if [ "${PR_FINAL_CI_WIRING_NO_UPDATE:-}" = "true" ]; then
+		wiring_seen_rc=0
+		_pr_final_ci_wiring_note_seen "${wiring_pr}" "${wiring_head}" || wiring_seen_rc=$?
+		if [ "${wiring_seen_rc}" -eq 1 ] && [ "${PR_FINAL_CI_WIRING_NOTE_NO_UPDATE_SEEN:-}" = "0" ]; then
+			# shellcheck disable=SC2016  # Markdown backticks, not expansions
+			wiring_body="$(printf '**Final CI held: this branch'"'"'s `%s` is behind `%s`**\n\n`%s` has commits to `%s` that this branch lacks. The final CI run starts from the branch'"'"'s own copy of that workflow but runs the scripts from `%s`, so on this head it would fail or never report its result. This review step does not update branches (auto-merge is off, or the PR is an e2e smoke test), so the final CI was not started on head `%s`. Update the branch from `%s`; the final CI then runs on the new head.\n\n<!-- ai:final-ci-wiring-behind:v1 pr=%s head=%s reason=no_update_path -->' \
+				"${wiring_wf}" "${wiring_base}" "${wiring_base}" "${wiring_path}" "${wiring_base}" "${wiring_head}" "${wiring_base}" "${wiring_pr}" "${wiring_head}")"
+			# One attempt only: a retried POST whose first response was lost
+			# would post a duplicate.
+			_safe_gh_jq -X POST "repos/${repo}/issues/${wiring_pr}/comments" -f "body=${wiring_body}" >/dev/null 2>&1 \
+				|| echo "::warning::REVIEW_FINAL_CI_WIRING pr=${wiring_pr} head=${wiring_head} comment=post_failed (the next call posts the note again)"
+		fi
 		_pr_final_ci_wiring_log held no_update_path
 		return 0
 	fi
@@ -2559,13 +2594,21 @@ _pr_final_ci_wiring_behind_update()
 				_pr_final_ci_wiring_log held update_branch_failed
 				return 0
 			fi
+			# The cause sentence follows the PR read: a conflict only when GitHub
+			# reported one (a second refusal may come without one).
+			local wiring_cause="because of a merge conflict"
+			[ "${wiring_after_mergeable}" = "false" ] || wiring_cause="twice, without reporting a merge conflict"
 			# shellcheck disable=SC2016  # Markdown backticks, not expansions
-			wiring_body="$(printf '**Final CI held: this branch'"'"'s `%s` is behind `%s`**\n\n`%s` has commits to `%s` that this branch lacks. The final CI run starts from the branch'"'"'s own copy of that workflow but runs the scripts from `%s`, so on this head it would fail or never report its result. GitHub refused to update the branch from `%s` (for example, a merge conflict), so the final CI was not started on head `%s`. Update the branch from `%s` (resolving any conflict); the final CI then runs on the new head.\n\n<!-- ai:final-ci-wiring-behind:v1 pr=%s head=%s reason=update_branch_refused -->' \
-				"${wiring_wf}" "${wiring_base}" "${wiring_base}" "${wiring_path}" "${wiring_base}" "${wiring_base}" "${wiring_head}" "${wiring_base}" "${wiring_pr}" "${wiring_head}")"
+			wiring_body="$(printf '**Final CI held: this branch'"'"'s `%s` is behind `%s`**\n\n`%s` has commits to `%s` that this branch lacks. The final CI run starts from the branch'"'"'s own copy of that workflow but runs the scripts from `%s`, so on this head it would fail or never report its result. GitHub refused to update the branch from `%s` %s, so the final CI was not started on head `%s`. Update the branch from `%s` (resolving any conflict); the final CI then runs on the new head.\n\n<!-- ai:final-ci-wiring-behind:v1 pr=%s head=%s reason=update_branch_refused -->' \
+				"${wiring_wf}" "${wiring_base}" "${wiring_base}" "${wiring_path}" "${wiring_base}" "${wiring_base}" "${wiring_cause}" "${wiring_head}" "${wiring_base}" "${wiring_pr}" "${wiring_head}")"
 			# One attempt only: a retried POST whose first response was lost
 			# would post a duplicate.
 			_safe_gh_jq -X POST "repos/${repo}/issues/${wiring_pr}/comments" -f "body=${wiring_body}" >/dev/null 2>&1 \
 				|| echo "::warning::REVIEW_FINAL_CI_WIRING pr=${wiring_pr} head=${wiring_head} comment=post_failed (the next call tries the update again)"
+		else
+			# The comment read failed: nothing is posted (no comment per tick),
+			# so surface the refusal as a run-level warning instead.
+			echo "::warning::REVIEW_FINAL_CI_WIRING pr=${wiring_pr} head=${wiring_head} comment=skipped reason=notes_unreadable (the branch update was refused; the next call tries again)"
 		fi
 		_pr_final_ci_wiring_log held update_branch_refused
 		return 0

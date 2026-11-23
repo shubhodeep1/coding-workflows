@@ -1201,6 +1201,7 @@ def test_wiring_behind_update_refused_records_reason_and_does_not_dispatch(fake_
 	posts = _posts_of(calls)
 	assert len(posts) == 1 and posts[0][-1].rstrip().endswith(WIRING_MARKER)
 	assert "Final CI held" in posts[0][-1]
+	assert "because of a merge conflict" in posts[0][-1]
 	# The recorded refusal (by the token's own login) holds the head: no new attempt.
 	recorded = [{"user": {"login": "bot"}, "body": "x\n\n" + WIRING_MARKER}]
 	result, calls = _ensure(fake_gh, _wiring_fixtures(update_rc=1, comments=recorded), env=WIRING_ENV)
@@ -1253,21 +1254,48 @@ def test_wiring_behind_second_refusal_after_retry_note_records_the_hold(fake_gh)
 	assert len(_puts_of(calls)) == 1 and _dispatches(calls) == []
 	posts = _posts_of(calls)
 	assert len(posts) == 1 and posts[0][-1].rstrip().endswith(WIRING_MARKER)
+	assert "without reporting a merge conflict" in posts[0][-1]
+
+
+NO_UPDATE_NOTE = f"<!-- ai:final-ci-wiring-behind:v1 pr=7 head={SHA} reason=no_update_path -->"
 
 
 def test_wiring_behind_check_only_holds_without_lease_update_or_dispatch(fake_gh) -> None:
-	"""PR_FINAL_CI_WIRING_NO_UPDATE (review exits that never merge): hold, no update, no stale dispatch."""
+	"""PR_FINAL_CI_WIRING_NO_UPDATE (review exits that never merge): hold, no update, no stale
+	dispatch, and one note on the PR (G2) that is not a hold."""
 	result, calls = _ensure(fake_gh, _wiring_fixtures(), env={**WIRING_ENV, "PR_FINAL_CI_WIRING_NO_UPDATE": "true"})
 	out = result.stdout + result.stderr
 	assert f"REVIEW_FINAL_CI_WIRING pr=7 head={SHA} entry=dispatch outcome=held reason=no_update_path" in out, out
 	assert "outcome=deferred reason=ci_wiring_behind" in out
+	assert _puts_of(calls) == [] and _dispatches(calls) == []
+	posts = _posts_of(calls)
+	assert len(posts) == 1 and posts[0][-1].rstrip().endswith(NO_UPDATE_NOTE), posts
+	# The note is posted once per head.
+	noted = [{"user": {"login": "bot"}, "body": "x\n\n" + NO_UPDATE_NOTE}]
+	result, calls = _ensure(fake_gh, _wiring_fixtures(comments=noted), env={**WIRING_ENV, "PR_FINAL_CI_WIRING_NO_UPDATE": "true"})
+	assert "outcome=held reason=no_update_path" in result.stdout, result.stdout + result.stderr
 	assert _puts_of(calls) == [] and _posts_of(calls) == [] and _dispatches(calls) == []
-	assert not any(c[:2] == ["api", "user"] for c in calls)
+	# The note is not a hold: a merge path still updates the branch.
+	result, calls = _ensure(fake_gh, _wiring_fixtures(comments=noted), env=WIRING_ENV)
+	assert "outcome=updated reason=ci_wiring_behind" in result.stdout, result.stdout + result.stderr
+	assert len(_puts_of(calls)) == 1
 	# A current head still dispatches as before.
 	fixtures = _wiring_fixtures(base_files=[{"filename": "scripts/x.sh"}])
 	result, calls = _ensure(fake_gh, fixtures, env={**WIRING_ENV, "PR_FINAL_CI_WIRING_NO_UPDATE": "true"})
 	assert "outcome=dispatched reason=no_run" in result.stdout, result.stdout + result.stderr
 	assert len(_old_head_dispatches(calls)) == 1
+
+
+def test_e2e_labelled_pr_is_never_updated_by_the_sweep_path(fake_gh) -> None:
+	"""The sweep calls _pr_ensure_final_ci without the check-only flag; the e2e-smoke-test
+	label in the PR read it already makes (no base ref known) holds the head instead."""
+	fixtures = _wiring_fixtures()
+	fixtures[f"repos/{REPO}/pulls/7"] = {"body": {"head": {"sha": SHA, "ref": "ai/issue-1", "repo": {"full_name": REPO}},
+		"base": {"ref": "main"}, "labels": [{"name": "e2e-smoke-test"}]}}
+	result, calls = _ensure(fake_gh, fixtures, env={**WIRING_ENV, "PR_FINAL_CI_BASE_REF": ""})
+	out = result.stdout + result.stderr
+	assert f"REVIEW_FINAL_CI_WIRING pr=7 head={SHA} entry=dispatch outcome=held reason=no_update_path" in out, out
+	assert _puts_of(calls) == [] and _dispatches(calls) == []
 
 
 def test_non_merge_auto_merge_exits_skip_the_wiring_update() -> None:
@@ -1293,6 +1321,7 @@ def test_wiring_behind_unreadable_comments_attempt_without_posting(fake_gh) -> N
 	fixtures["user"] = {"rc": 1}
 	result, calls = _ensure(fake_gh, fixtures, env=WIRING_ENV)
 	assert "outcome=held reason=update_branch_refused" in result.stdout, result.stdout + result.stderr
+	assert "comment=skipped reason=notes_unreadable" in result.stdout + result.stderr
 	assert len(_puts_of(calls)) == 1 and _posts_of(calls) == [] and _dispatches(calls) == []
 
 
