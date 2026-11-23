@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":9990,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/9990\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/9995\",\"pr_number\":9995,\"branch\":\"ai/issue-9990\",\"run_id\":\"45159844808\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/45159844808\",\"changed_files\":[\".github/workflows/orchestrate_poll.yml\",\"README.md\",\"agents.d/9990-broker-durable-sha-cache.md\",\"changelog.d/9990-broker-durable-sha-cache.md\",\"scripts/claude_pool_daily_usage.sh\",\"tests/test_claude_pool_daily_usage.py\",\"tools/claude-pool-broker/src/index.ts\",\"tools/claude-pool-broker/test/broker.test.ts\",\"tools/claude-pool-broker/wrangler.toml\"]}",
+  "fingerprint": "8616f597983b6c9745db867443585b2e0dc7d707baf431a3428b5847fae40db6",
+  "lineage": {
+    "issue_number": 9990,
+    "parent_ids": [],
+    "pr_number": 9995,
+    "run_id": "45159844808",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45159844808",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/9995"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261123113554_808da2e061",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9990,
+    "level": "run",
+    "pr_number": 9995,
+    "run_id": "45159844808"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #9990: https://github.com/shubhodeep1/coding-workflows/pull/9995",
+  "timestamps": {
+    "created_at": "2026-11-23T11:35:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
