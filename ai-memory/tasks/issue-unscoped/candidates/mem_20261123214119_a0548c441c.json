@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add exactly one fragment when the PR changes observable behaviour ... new or changed workflows, scheduled jobs, or supervisors\" (bumping `actions/attest-build-provenance` from v3 to v4 in the release workflows changes workflow files)\n  expected_change_site: changelog.d/<pr-number>-attest-build-provenance-v4.md\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The PR has no `changelog.d/` fragment. The change touches .github/workflows/mark-stable.yml (lines 1118 and 1315) and .github/workflows/test-and-mark-stable.yml (lines 5790 and 5987). `git diff --stat` shows only four files (the two workflows, agents.md, tests/test_release_sync_manifest_contract.py). A glob of `changelog.d/*attest*` matches nothing. Severity is NIT in all three reviews. anthropic_claude-sonnet-5_5 rated it confidence 2 and non-blocking, because this is a Dependabot PR and the bump does not change what the release job produces.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: Bump `actions/attest-build-provenance` from v3 to v4 across the release workflows. The pass-1 reviewer (minimax) also said a `changelog.d` fragment is needed because a workflow definition changed.\nExpected change site: `changelog.d/<pr>-attest-build-provenance-v4.md`\nEvidence of absence: The PR has no `changelog.d/` file. Other dependency-bump PRs may carry one, such as `changelog.d/9485-dependabot-managed-wrapper-exclusions.md`, but a pure action-pin bump may not need one. The version bump does not change what the release job produces. This is a Dependabot PR, which cannot add a fragment itself, and the gap would be a documentation nicety only. Low-confidence and non-blocking.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Add exactly one fragment when the PR changes observable behaviour ... new or changed workflows, scheduled jobs, or supervisors\". Bumping a workflow step's action reference is a workflow change.\nExpected change site: changelog.d/10008-attest-build-provenance-v4.md\nEvidence of absence: No changelog.d/ fragment has been added to the PR despite the bump of actions/attest-build-provenance to v4 in four workflow steps in .github/workflows/mark-stable.yml and .github/workflows/test-and-mark-stable.yml.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: Per the CHANGELOG policy applied in this repo, \"Add exactly one fragment when the PR changes observable behaviour ... new or changed workflows, scheduled jobs, or supervisors\". Bumping a workflow step's `uses:` pin from `@v3` to `@v4` is a change to two workflow files (`.github/workflows/mark-stable.yml` lines 1118 and 1315; `.github/workflows/test-and-mark-stable.yml` lines 5790 and 5987), so the PR should add exactly one `changelog.d/<pr>-<slug>.md` fragment.\nExpected change site: `changelog.d/<pr-number>-attest-build-provenance-v4.md` (one fragment per PR; valid first-line markers are `<!-- changelog: changed -->` or `<!-- changelog: fixed -->`).\nEvidence of absence: `git diff --stat` on the PR shows only four files (`.github/workflows/mark-stable.yml`, `.github/workflows/test-and-mark-stable.yml`, `agents.md`, `tests/test_release_sync_manifest_contract.py`) with no `changelog.d/` entry. A `glob` of `changelog.d/*attest*` matches nothing. The \u00a720 fragment-folding release workflow in `.github/workflows/mark-stable.yml` (release job) would otherwise have nothing to fold for this PR.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "9e80d11b3e9ef0611614081a6d21eee4c194ffdf109062a7928c13e7a92511e9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10001,
+    "run_id": "45253407772",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45253407772",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123214119_a0548c441c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10001,
+    "run_id": "45253407772"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T21:41:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
