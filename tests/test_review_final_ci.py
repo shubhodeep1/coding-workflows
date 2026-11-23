@@ -1214,25 +1214,68 @@ def test_wiring_behind_update_refused_records_reason_and_does_not_dispatch(fake_
 
 
 def test_wiring_behind_refusal_without_conflict_or_after_a_move_posts_no_marker(fake_gh) -> None:
-	"""A transient refusal (mergeable) or a head another caller already moved records no hold."""
+	"""A head another caller already moved records nothing; a refusal without a
+	confirmed conflict (mergeable true, null, or an unreadable PR read) posts only
+	the one-time retry note, never the hold marker."""
 	pr_key = f"repos/{REPO}/pulls/7"
-	for head, mergeable, reason in ((SHA, True, "update_branch_failed"), (WIRING_UPDATE_SHA, False, "head_moved")):
+	retry_marker = f"<!-- ai:final-ci-wiring-behind:v1 pr=7 head={SHA} reason=update_branch_failed -->"
+	cases = (
+		({"body": {"head": {"sha": WIRING_UPDATE_SHA, "ref": "ai/issue-1", "repo": {"full_name": REPO}}, "base": {"ref": "main"}, "mergeable": False}}, "head_moved"),
+		({"body": {"head": {"sha": SHA, "ref": "ai/issue-1", "repo": {"full_name": REPO}}, "base": {"ref": "main"}, "mergeable": True}}, "update_branch_failed"),
+		({"body": {"head": {"sha": SHA, "ref": "ai/issue-1", "repo": {"full_name": REPO}}, "base": {"ref": "main"}, "mergeable": None}}, "update_branch_failed"),
+		({"rc": 1}, "update_branch_failed"),
+	)
+	for pr_fixture, reason in cases:
 		fixtures = _wiring_fixtures(update_rc=1)
-		fixtures[pr_key] = {"body": {"head": {"sha": head, "ref": "ai/issue-1", "repo": {"full_name": REPO}},
-			"base": {"ref": "main"}, "mergeable": mergeable}}
+		fixtures[pr_key] = pr_fixture
 		result, calls = _ensure(fake_gh, fixtures, env=WIRING_ENV)
 		out = result.stdout + result.stderr
 		assert f"REVIEW_FINAL_CI_WIRING pr=7 head={SHA} entry=dispatch outcome=held reason={reason}" in out, out
 		assert "outcome=deferred reason=ci_wiring_behind" in out
-		assert len(_puts_of(calls)) == 1 and _posts_of(calls) == [] and _dispatches(calls) == []
+		assert len(_puts_of(calls)) == 1 and _dispatches(calls) == []
+		posts = _posts_of(calls)
+		if reason == "head_moved":
+			assert posts == []
+		else:
+			assert len(posts) == 1 and posts[0][-1].rstrip().endswith(retry_marker), posts
+			assert WIRING_MARKER not in posts[0][-1]
+
+
+def test_wiring_behind_second_refusal_after_retry_note_records_the_hold(fake_gh) -> None:
+	"""The retry note allows one more attempt; a second refusal posts the hold marker."""
+	retry_note = [{"user": {"login": "bot"}, "body": f"x\n\n<!-- ai:final-ci-wiring-behind:v1 pr=7 head={SHA} reason=update_branch_failed -->"}]
+	fixtures = _wiring_fixtures(update_rc=1, comments=retry_note)
+	fixtures[f"repos/{REPO}/pulls/7"] = {"body": {"head": {"sha": SHA, "ref": "ai/issue-1", "repo": {"full_name": REPO}},
+		"base": {"ref": "main"}, "mergeable": True}}
+	result, calls = _ensure(fake_gh, fixtures, env=WIRING_ENV)
+	out = result.stdout + result.stderr
+	assert f"REVIEW_FINAL_CI_WIRING pr=7 head={SHA} entry=dispatch outcome=held reason=update_branch_refused" in out, out
+	assert len(_puts_of(calls)) == 1 and _dispatches(calls) == []
+	posts = _posts_of(calls)
+	assert len(posts) == 1 and posts[0][-1].rstrip().endswith(WIRING_MARKER)
+
+
+def test_wiring_behind_check_only_holds_without_lease_update_or_dispatch(fake_gh) -> None:
+	"""PR_FINAL_CI_WIRING_NO_UPDATE (review exits that never merge): hold, no update, no stale dispatch."""
+	result, calls = _ensure(fake_gh, _wiring_fixtures(), env={**WIRING_ENV, "PR_FINAL_CI_WIRING_NO_UPDATE": "true"})
+	out = result.stdout + result.stderr
+	assert f"REVIEW_FINAL_CI_WIRING pr=7 head={SHA} entry=dispatch outcome=held reason=no_update_path" in out, out
+	assert "outcome=deferred reason=ci_wiring_behind" in out
+	assert _puts_of(calls) == [] and _posts_of(calls) == [] and _dispatches(calls) == []
+	assert not any(c[:2] == ["api", "user"] for c in calls)
+	# A current head still dispatches as before.
+	fixtures = _wiring_fixtures(base_files=[{"filename": "scripts/x.sh"}])
+	result, calls = _ensure(fake_gh, fixtures, env={**WIRING_ENV, "PR_FINAL_CI_WIRING_NO_UPDATE": "true"})
+	assert "outcome=dispatched reason=no_run" in result.stdout, result.stdout + result.stderr
+	assert len(_old_head_dispatches(calls)) == 1
 
 
 def test_non_merge_auto_merge_exits_skip_the_wiring_update() -> None:
-	"""The auto-merge-off and e2e-smoke-test exits never merge: no lease, no branch update."""
+	"""The auto-merge-off and e2e-smoke-test exits never merge: check only (no lease, no branch update)."""
 	text = (REPO_ROOT / "scripts/review_enable_auto_merge.sh").read_text(encoding="utf-8")
 	calls = re.findall(r"^\s*(.*)review_enable_auto_merge_ensure_final_ci\s*$", text, re.M)
 	assert len(calls) == 2, calls
-	assert all(c.strip() == "PR_FINAL_CI_WIRING_SKIP=true" for c in calls), calls
+	assert all(c.strip() == "PR_FINAL_CI_WIRING_NO_UPDATE=true" for c in calls), calls
 
 
 def test_poller_ruleset_blocked_final_merge_routes_missing_ci_final() -> None:
@@ -1283,6 +1326,8 @@ def test_blocked_by_missing_ci_final_routes_to_update(fake_gh) -> None:
 	assert "guard_rc=1" in out
 	puts = _puts_of(calls)
 	assert len(puts) == 1 and f"expected_head_sha={SHA}" in puts[0]
+	# The poller never sets REVIEW_FINAL_CI_WORKFLOW; the update head still gets its final CI.
+	assert [d for d in _dispatches(calls) if f"head_sha={WIRING_UPDATE_SHA}" in d], out
 	# Any other blocker set: no wiring check at all.
 	result, calls = _guard(fake_gh, _wiring_fixtures(runs=runs), "ci/final (missing), ai-review/head-gate (pending)")
 	assert "REVIEW_FINAL_CI_WIRING" not in result.stdout and "guard_rc=1" in result.stdout
