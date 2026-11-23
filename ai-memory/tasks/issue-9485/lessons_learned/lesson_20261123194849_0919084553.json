@@ -1,0 +1,25 @@
+{
+  "discovered_at": "2026-11-23T19:48:49Z",
+  "issue_number": 9485,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=scripts/unblock_scan.py:1; cited_path=scripts/unblock_scan.py; files_touched=.github/actions/setup-runtime/action.yml, .github/workflows/check_failure_triage.yml, .github/workflows/clarify.yml, .github/workflows/implement.yml, .github/workflows/issue_pr_status.yml, .github/workflows/orchestrate.yml, .github/workflows/orchestrate_clarify_respond.yml, .github/workflows/orchestrate_poll.yml, .github/workflows/plan.yml, .github/workflows/unblock_judge.yml, .github/workflows/workflow-log-analysis.yml, agents.md.",
+  "phase": "review_autofix",
+  "pr_number": 10006,
+  "record_id": "lesson_20261123194849_0919084553",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/unblock_scan.py",
+    ".github/actions/setup-runtime/action.yml",
+    ".github/workflows/check_failure_triage.yml",
+    ".github/workflows/clarify.yml",
+    ".github/workflows/implement.yml",
+    ".github/workflows/issue_pr_status.yml",
+    ".github/workflows/orchestrate.yml",
+    ".github/workflows/orchestrate_clarify_respond.yml",
+    ".github/workflows/orchestrate_poll.yml",
+    ".github/workflows/plan.yml",
+    ".github/workflows/unblock_judge.yml",
+    ".github/workflows/workflow-log-analysis.yml",
+    "agents.md"
+  ]
+}
