@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-11-23T17:22:06Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=.github/workflows/review_autofix.yml:338; cited_path=.github/workflows/review_autofix.yml; files_touched=.github/workflows/ci.yml, .github/workflows/orchestrate.yml, .github/workflows/orchestrate_poll.yml.",
+  "phase": "review_autofix",
+  "pr_number": 10003,
+  "record_id": "lesson_20261123172206_d754f32bd6",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/review_autofix.yml",
+    ".github/workflows/ci.yml",
+    ".github/workflows/orchestrate.yml",
+    ".github/workflows/orchestrate_poll.yml"
+  ]
+}
