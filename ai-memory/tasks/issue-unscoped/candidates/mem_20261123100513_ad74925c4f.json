@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/plan.yml:2662 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The routed-block path makes an additional GitHub API request even when ai:scope-blocked already exists.\n  WHY: Every routed planning block attempts to create the second label, consuming an additional API request unnecessarily, which contradicts the \"no new GitHub API calls\" constraint from the original issue; the source severity was NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The \u00a718.F registry entry for the new script must include the introducing PR number and date.\n  expected_change_site: docs/scripts-pending-removal.md, the plan_scope_block_route.sh entry\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The entry's \"Introduced in\" field says \"PR for #9534 (2026-11-23)\", which names an issue but not the required PR number, Line 422 says \"PR for #9534 (2026-11-23)\"; it identifies the issue, but does not give the PR number.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/plan.yml:2662 (ensure_label_exists \"ai:scope-blocked\" ...) | severity=NIT | confidence=5\n  PROBLEM: The routed-block path makes an additional GitHub API request even when ai:scope-blocked already exists.\n  WHY: Every routed planning block attempts to create the second label, consuming an additional API request unnecessarily, which contradicts the \"no new GitHub API calls\" constraint from the original issue.\n- TASK_GAP | severity=NIT | confidence=5\n  Requirement: Add a pending-removal registry entry for the new script under \u00a718.F; the registry requires the introducing PR number and date.\n  Expected change site: docs/scripts-pending-removal.md, the plan_scope_block_route.sh entry\n  Evidence of absence: The entry's \"Introduced in\" field says \"PR for #9534 (2026-11-23)\". That names an issue but not the required PR number.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP | severity=NIT | confidence=5\n  Requirement: The \u00a718.F registry entry must include the introducing PR number and date.\n  Expected change site: `docs/scripts-pending-removal.md`, the `plan_scope_block_route.sh` entry.\n  Evidence of absence: Line 422 says \"PR for #9534 (2026-11-23)\"; it identifies the issue, but does not give the PR number.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "32072710824b7c8c85fe778d72f287d280e08332cd6755745b878f47e35d2851",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9981,
+    "run_id": "45147991140",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45147991140",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123100513_ad74925c4f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9981,
+    "run_id": "45147991140"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T10:05:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
