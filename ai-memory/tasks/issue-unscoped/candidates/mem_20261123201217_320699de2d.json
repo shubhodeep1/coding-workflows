@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_merge_train.sh:1529 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The force_rb_judge fallback tier in `_mt_dispatch_rb_judge` uses a hard-coded wrapper list (`for mt_rbj_wf in ai-review.yml internal-review.yml`). It ignores `MERGE_TRAIN_DISPATCH_WORKFLOWS`, which `_mt_dispatch_review` honours at lines 1486-1490.\n  WHY: In a consumer whose custom dispatch list leaves out these wrappers, every judge-decision grant spends one workflow-dispatch attempt that is certain to fail before it falls through. Severity: z-ai_glm-5_3-flash rated it NIT, mapped here to low; google_gemini-3_1-flash-lite gave none. anthropic_claude-sonnet-5_5 rejected this item: it says the list is deliberately limited to wrappers that declare `force_rb_judge`, and that the path is not hot.\n- scripts/pr_checks_lib.sh:3354 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The case pattern `pending ${elig_login}` in `_merge_lease_pr_eligible` puts `elig_login` directly into a shell glob pattern, which is brittle.\n  WHY: A login with glob or special shell characters might match wrongly. The reviewer gave no severity, so low is used here as the lowest level. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash both rejected it: the arm is fully quoted, and `elig_login` is lowercased (line 3325) and limited to `^[a-z0-9][a-z0-9-]*(\\[bot\\])?$` (line 3326).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION: scripts/review_merge_train.sh | location: `_mt_dispatch_rb_judge`, the final `_mt_dispatch_review \"${mt_rbj_pr}\" \"${mt_rbj_head}\"` call (line 1537) | HARDENING_RISK_SCORE: 1\n  PROBLEM: The last-resort plain review dispatch takes `MERGE_TRAIN_ALLOW_WORKFLOW_EDITS` from the environment (default `true`, line 1475). A grant that rested only on the judge decision can therefore end in a review run that may edit workflows.\n  WHY: This matches behaviour before #9987, so it is not a regression. It runs only after all three judge-capable dispatches have failed. Suggested fix: prefix the call with `MERGE_TRAIN_ALLOW_WORKFLOW_EDITS=false` and change the `calls[3]` assertion in `tests/test_review_merge_train.py::test_no_force_wrapper_falls_back_to_the_plain_review_dispatch` to `allow_workflow_edits=false` (about 2 lines).\n- NOTE: Rejected the glob concern on `\"pending ${elig_login}\"` (quoted arm; login limited at line 3326). Rejected the hard-coded wrapper list in `scripts/review_merge_train.sh` lines 1529-1535 (deliberately limited to wrappers that declare `force_rb_judge`). Marks `tests/test_workflow_file_size_limit.py` \"unmet\" as not a gap in this PR: it also fails on the merge-base, and the PR changes no workflow file.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/pr_checks_lib.sh:3354 | confidence=2\n  PROBLEM: The use of a shell glob pattern `pending ${elig_login}` in a `case` statement is brittle.\n  WHY: If `elig_login` contains glob or special shell characters, the pattern may fail to match correctly or behave in unintended ways.\n- scripts/review_merge_train.sh:1529 | confidence=3\n  PROBLEM: The function `_mt_dispatch_rb_judge` uses a hardcoded list of workflow wrappers (`ai-review.yml` and `internal-review.yml`) for the fallback mechanism.\n  WHY: The list ignores `MERGE_TRAIN_DISPATCH_WORKFLOWS` (used by `_mt_dispatch_review` at lines 1486-1490). Consumers with custom configurations or missing wrappers will make workflow-dispatch API calls that fail, wasting quota and time.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- HARDENING_SUGGESTION: scripts/review_merge_train.sh | location: _mt_dispatch_rb_judge, final fallback line `_mt_dispatch_review \"${mt_rbj_pr}\" \"${mt_rbj_head}\"` | HARDENING_RISK_SCORE: 1\n  PROBLEM: The degraded last-resort review dispatch inherits `MERGE_TRAIN_ALLOW_WORKFLOW_EDITS` (default `true`). A grant that rested on the judge's merge decision can therefore end in a plain review run that is allowed to edit workflows.\n  WHY: `review_rb_judge_dispatch.yml` and the `force_rb_judge` fallback explicitly pass `-f allow_workflow_edits=false`; only this final fallback lacks the override. Suggested fix: `MERGE_TRAIN_ALLOW_WORKFLOW_EDITS=false _mt_dispatch_review \"${mt_rbj_pr}\" \"${mt_rbj_head}\"`, and update the `calls[3]` assertion in `tests/test_review_merge_train.py::test_no_force_wrapper_falls_back_to_the_plain_review_dispatch` (about 2 lines).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_merge_train.sh:1529 | severity=NIT | confidence=3\n  PROBLEM: The force_rb_judge fallback tier hardcodes its wrapper list. The last resort in the same function (`_mt_dispatch_review`, lines 1486-1490) honours `MERGE_TRAIN_DISPATCH_WORKFLOWS` (documented at line 66, default `ai-review.yml internal-review.yml review_autofix.yml`).\n  WHY: In a repo whose list leaves out `ai-review.yml`, `gh workflow run ai-review.yml` fails, so every grant spends one dispatch attempt that is wasted. Behaviour stays correct but is inconsistent with the configurable tier below it. The last run did not introduce this.\n- NOTE: Did not report the `\"pending ${elig_login}\"` glob concern (scripts/pr_checks_lib.sh:3360), because the arm is quoted and the login is limited at lines 3325-3326. Did not re-flag the last resort inheriting `MERGE_TRAIN_ALLOW_WORKFLOW_EDITS=true` (line 1537 into `_mt_dispatch_review` line 1475): it is behaviour from before #9987 that the consolidator accepted. HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d72277366945c3b52689bee7bbb16ba1b45526eec1196da79dc0c297df564f14",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9996,
+    "run_id": "45233934680",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45233934680",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123201217_320699de2d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9996,
+    "run_id": "45233934680"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T20:12:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
