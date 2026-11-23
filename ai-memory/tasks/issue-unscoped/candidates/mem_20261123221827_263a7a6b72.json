@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/claude_pool_daily_usage.sh:164-171 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: When `CLAUDE_POOL_DAILY_USAGE_RETRY_HOURS` is `0` and a temporary broker error occurs with no probes (`probes_json=\"[]\"`), the reviewer says the script does not defer and instead logs `outcome=not_delivered` (lines 177-181) rather than sending the report.\n  WHY: The source gave severity MAJOR, which is mapped here to high. The reviewer says this silently skips the report for that day, against the \"a day is never silently skipped\" requirement. anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash each said they checked this claim and rejected it: with retry_hours=0 the condition at line 178 is false, the flow continues to the normal send path (lines 187-221), and `test_send_does_not_defer` asserts `outcome=sent`.\n- scripts/claude_pool_daily_usage.sh:72,167 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: `CLAUDE_POOL_DAILY_USAGE_HOUR_UTC` accepts leading zeros again (`^0*[0-9]{1,2}$`, line 72), but `CLAUDE_POOL_DAILY_USAGE_RETRY_HOURS` still rejects them (`^[0-9]{1,2}$`, line 167), so `RETRY_HOURS=023` falls back to 2 with `reason=retry_hours_invalid`.\n  WHY: The source gave severity NIT, which is mapped here to low. An operator who zero-pads both variables gets a 2-hour deferral window instead of 23 hours, so the report goes out about 21 hours early; the reviewer notes the impact is bounded because the fallback emits a loud `::warning::` and no data is lost. anthropic_claude-sonnet-5_5 raised the same point only as a hardening suggestion, not as a finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Every compare call logs its HTTP status and the remaining GitHub budget\"\n  expected_change_site: tools/claude-pool-broker/src/index.ts (compareStatus)\n  confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer says `logCompare` logs `http=... ratelimit_remaining=...` but uses `sha.slice(0, 12)` for the SHA and does not include the branch name consistently on all compare paths in `compareStatus`, so the log line content does not strictly match the agents.md prefix (source severity NIT). anthropic_claude-sonnet-5_5 rejected this gap, saying every `logCompare` call writes `branch=` and `sha=`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION: scripts/claude_pool_daily_usage.sh | `daily_usage_send`, line 167 (`[[ \"${retry_hours}\" =~ ^[0-9]{1,2}$ ]]`)\n  PROBLEM: `CLAUDE_POOL_DAILY_USAGE_HOUR_UTC` now accepts zero padding (`^0*[0-9]{1,2}$`, line 72), but `CLAUDE_POOL_DAILY_USAGE_RETRY_HOURS` does not, so `023` warns and falls back to 2 instead of meaning 23.\n  WHY: Consistency only, because the fallback is loud and stays inside the documented range. Suggested fix: change the regex on line 167 to `^0*[0-9]{1,2}$` (1 line). HARDENING_RISK_SCORE: 1\n- NOTE: Rejected gemini's `RETRY_HOURS=0` \u2192 `outcome=not_delivered` finding: the condition at line 178 is false, the normal send path at lines 187-221 runs, and `test_send_does_not_defer` checks `outcome=sent`.\n- NOTE: Rejected gemini's compare-logging TASK_GAP: every `logCompare` call writes `branch=` and `sha=`, and `ratelimit_remaining=unknown` is what the issue specifies.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/claude_pool_daily_usage.sh:164-171 | severity=MAJOR | confidence=3\n  PROBLEM: With `CLAUDE_POOL_DAILY_USAGE_RETRY_HOURS=0`, no probes and a temporary reason (`broker_refused_workflow_sha_unverifiable` or `broker_unavailable_NNN`), the script does not defer and logs `outcome=not_delivered` (the `daily_usage_output \"sent=false\"` and log `outcome=not_delivered` at lines 177-181) instead of sending the report.\n  WHY: The report is not sent and is logged as `not_delivered`, which silences that day's report, against the requirement that a day is never silently skipped.\n- TASK_GAP: Requirement: \"Every compare call logs its HTTP status and the remaining GitHub budget\"\n  Expected change site: tools/claude-pool-broker/src/index.ts (compareStatus)\n  Evidence of absence: `logCompare` logs `http=... ratelimit_remaining=...` but uses `sha.slice(0, 12)` and does not include the branch name consistently across all compare paths, so the log line content should strictly match the agents.md prefix.\n  SEVERITY: NIT | ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- NOTE: Did not promote gemini's `RETRY_HOURS=0` \u2192 \"outcome=not_delivered\" claim (scripts/claude_pool_daily_usage.sh:181): the LAST RUN DIFF does not modify that code, and `test_send_does_not_defer` (tests/test_claude_pool_daily_usage.py:307) asserts `\"outcome=sent\" in result.stdout`.\n- NOTE: Did not promote glm's `HOUR_UTC`/`RETRY_HOURS` zero-padding asymmetry: the editor accepted it in the prior round, and the LAST RUN DIFF does not modify the `RETRY_HOURS` regex.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/claude_pool_daily_usage.sh:line 72 (`daily_usage_start_hour`: `[[ \"${start_hour}\" =~ ^0*[0-9]{1,2}$ ]]`) vs line 167 (`daily_usage_send`: `[[ \"${retry_hours}\" =~ ^[0-9]{1,2}$ ]]`) | severity=NIT | confidence=3\n  PROBLEM: `CLAUDE_POOL_DAILY_USAGE_HOUR_UTC` accepts leading zeros again (verified by tests/test_claude_pool_daily_usage.py:153-154), but `CLAUDE_POOL_DAILY_USAGE_RETRY_HOURS` still rejects them, so `RETRY_HOURS=023` falls back to 2 with `reason=retry_hours_invalid`.\n  WHY: An operator who zero-pads both variables gets an inconsistent deferral window and the report goes out about 21 hours early; the impact is bounded because the fallback is loud (`::warning::`), no data is lost, and the prior editor run accepted this residual.\n- NOTE: Rejected gemini's `RETRY_HOURS=0` MAJOR as not reproducible: the condition at scripts/claude_pool_daily_usage.sh:178 is false and the flow falls through to the normal send path (lines 187-192); `outcome=not_delivered` happens only when the Telegram send itself fails.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5e8c5ad31e904caf78cd2a3668cb93e2db16afd89b79fc5dd212a4fc43a83035",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9995,
+    "run_id": "45256572591",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45256572591",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123221827_263a7a6b72",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9995,
+    "run_id": "45256572591"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-23T22:18:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
