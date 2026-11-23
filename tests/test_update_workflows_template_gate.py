@@ -54,6 +54,7 @@ VERIFY_EXECUTED_SCRIPTS = {
 	"apply_audit_gate_assets.py",
 	"assemble_changelog.py",
 	"assemble_agents.py",
+	"sync_dependabot_exclusions.py",
 }
 BOOTSTRAP_SCRIPTS = {
 	"scripts/verify_release_manifest.py",
@@ -63,6 +64,17 @@ BOOTSTRAP_SCRIPTS = {
 	"scripts/assemble_changelog.py",
 	"scripts/assemble_agents.py",
 }
+# Executed only when the attested release manifest lists them, after their own
+# hash check in verify_release (issue #9485): a release whose manifest predates
+# the helper must still verify.
+ATTESTATION_GATED_SCRIPTS = {
+	"scripts/sync_dependabot_exclusions.py",
+}
+DEPENDABOT_HELPER_JQ = (
+	"'[(.files // [])[] | select(type == \"object\" and .path == $p and .mode != \"120000\")] "
+	"| if length == 1 then (.[0].sha256 // \"\") else \"\" end'"
+)
+PROFILE_EXPRESSION = "${{ vars.WORKFLOW_PROFILE != '' && vars.WORKFLOW_PROFILE || 'full' }}"
 
 
 def _load(path: Path) -> dict:
@@ -294,7 +306,7 @@ def test_verify_job_runs_only_attested_release_python() -> None:
 	assert loop
 	assert set(loop.group(1).split()) == BOOTSTRAP_SCRIPTS
 	for name in VERIFY_EXECUTED_SCRIPTS:
-		assert f"scripts/{name}" in BOOTSTRAP_SCRIPTS
+		assert f"scripts/{name}" in BOOTSTRAP_SCRIPTS | ATTESTATION_GATED_SCRIPTS
 	assert release.index("gh attestation verify") < release.index("python3 -I -B")
 
 
@@ -384,6 +396,70 @@ def test_verify_job_reproduces_agents_fragment_assembly() -> None:
 	run = _verify_step("verify_reproduce")["run"]
 	assert '"${RELEASE_ROOT}/scripts/assemble_agents.py" assemble' in run
 	assert '--repo-root "${BASE_TREE}"' in run
+
+
+def test_dependabot_helper_is_hash_checked_before_the_verify_job_runs_it() -> None:
+	release = _verify_step("verify_release")["run"]
+	gate = release.index('DEPENDABOT_HELPER_REL="scripts/sync_dependabot_exclusions.py"')
+	block = release[gate:release.index('PATHS_FILE="${WORK}/paths.txt"', gate)]
+	assert DEPENDABOT_HELPER_JQ in block
+	assert 'sha256sum -- "${dependabot_helper_path}"' in block
+	assert block.count("reject bootstrap verifier_hash_mismatch") == 2
+	assert block.index("verifier_hash_mismatch") < block.index("dependabot_helper_attested=true")
+	assert release.index("gh attestation verify") < gate
+	assert 'echo "dependabot_helper_attested=${dependabot_helper_attested}"' in release
+	paths = release[release.index('PATHS_FILE="${WORK}/paths.txt"'):]
+	assert 'printf \'%s\\n\' "${DEPENDABOT_HELPER_REL}"' in paths[:paths.index("> \"${PATHS_FILE}\"")]
+	step = _verify_step("verify_reproduce")
+	assert step["env"]["DEPENDABOT_HELPER_ATTESTED"] == "${{ steps.verify_release.outputs.dependabot_helper_attested }}"
+	assert step["env"]["WORKFLOW_PROFILE_SELECTED"] == PROFILE_EXPRESSION
+	run = step["run"]
+	call = run.index('"${RELEASE_ROOT}/scripts/sync_dependabot_exclusions.py"')
+	# VERIFIED=true too: with UPDATER_VERIFY_RELEASE_MANIFEST=false the update
+	# job never attests the helper, so the verify job must skip it as well.
+	guard = run.rindex('if [ "${VERIFIED:-}" = "true" ] && [ "${DEPENDABOT_HELPER_ATTESTED:-}" = "true" ]; then', 0, call)
+	assert "fi" not in run[guard:call].split()
+	invocation = run[call:run.index("\nfi\n", call)]
+	assert '--repo-root "${BASE_TREE}"' in invocation
+	assert '--templates-dir "${RELEASE_ROOT}/workflow-templates"' in invocation
+	assert '--profile "${WORKFLOW_PROFILE_SELECTED}"' in invocation
+	assert '--changed-paths-file "${WORK}/dependabot_changed_files.txt"' in invocation
+	# Fail open like the update job, never a reject.
+	assert "reject" not in invocation
+	assert run.index("ensure-assets") < call
+
+
+def test_dependabot_sync_runs_before_the_wrapper_update_and_gates_the_commit() -> None:
+	steps = _workflow()["jobs"]["update-wrappers"]["steps"]
+	ids = [step.get("id") for step in steps]
+	assert ids.index("changelog_sync") < ids.index("dependabot_sync") < ids.index("update")
+	sync = steps[ids.index("dependabot_sync")]
+	assert sync["name"] == "Sync Dependabot exclusions for managed wrappers"
+	assert sync["if"] == "${{ inputs.allow_workflow_edits != false }}"
+	assert sync["env"]["SELECTED_PROFILE"] == PROFILE_EXPRESSION
+	assert sync["env"]["DEPENDABOT_HELPER_ATTESTED"] == "${{ steps.verify_release_manifest.outputs.dependabot_helper_attested }}"
+	assert sync["env"]["RELEASE_MANIFEST_VERIFIED"] == "${{ steps.verify_release_manifest.outputs.verified }}"
+	run = sync["run"]
+	assert '--changed-paths-file /tmp/dependabot_changed_files.txt' in run
+	assert '|| echo "::warning::DEPENDABOT_EXCLUDE_SYNC' in run
+	# The update job skips the helper whenever it is unattested, including
+	# verified=skipped, so it never stages an edit verify_reproduce cannot
+	# reproduce (verify-pr-tree would reject it as unlisted_path).
+	skip = run.index('if [ "${DEPENDABOT_HELPER_ATTESTED:-}" != "true" ]; then')
+	assert '[ "${RELEASE_MANIFEST_VERIFIED:-}" = "true" ] &&' not in run
+	assert skip < run.index('python3 -I -B "${DEPENDABOT_HELPER}"')
+	gate = "steps.dependabot_sync.outputs.dependabot_has_changes == 'true'"
+	commit = steps[ids.index("commit_push")]
+	assert gate in commit["if"]
+	notify = [step for step in steps if step.get("name") == "Send Telegram notification"][0]
+	assert gate in notify["if"]
+	assert "done < /tmp/dependabot_changed_files.txt" in commit["run"]
+	# The update job reads the attestation from its verified manifest with the
+	# verify job's exact expression, and hash-verifies the helper when listed.
+	manifest_step = steps[ids.index("verify_release_manifest")]["run"]
+	assert DEPENDABOT_HELPER_JQ in manifest_step
+	assert 'echo "dependabot_helper_attested=${dependabot_helper_attested}" >> "${VERIFY_OUT}"' in manifest_step
+	assert manifest_step.index('printf \'%s\\n\' "${DEPENDABOT_HELPER_REL}"') < manifest_step.index('--paths-file "${PATHS_FILE}"')
 
 
 def test_template_gate_is_registered_in_ci() -> None:

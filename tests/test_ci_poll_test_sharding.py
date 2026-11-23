@@ -481,7 +481,7 @@ class ReleaseValidateScriptsShardContractTest(unittest.TestCase):
 		for workflow_name, workflow_path in RELEASE_WORKFLOWS.items():
 			with self.subTest(workflow=workflow_name):
 				self.assertEqual(
-					load_release_validate_scripts_job(workflow_path)["timeout-minutes"], 90
+					load_release_validate_scripts_job(workflow_path)["timeout-minutes"], 135
 				)
 
 
@@ -1984,9 +1984,11 @@ class MovedHooksJobStepsContractTest(unittest.TestCase):
 
 # Steps moved out of tests-release-and-log-analysis, which took 15m01s of its
 # 20 minutes (run 40368173231, budget-watch issue #8208): step name -> module
-# paths its body names.
+# paths its body names. #8208 moved them to tests-heal-plan-and-validation; #9420
+# moved them on to tests-hooks-and-orchestrator, so "HEAL" in the constant names
+# below records where they first went, not where they run now.
 RELEASE_TO_HEAL_SOURCE_JOB_ID = "tests-release-and-log-analysis"
-RELEASE_TO_HEAL_TARGET_JOB_ID = "tests-heal-plan-and-validation"
+RELEASE_TO_HEAL_TARGET_JOB_ID = "tests-hooks-and-orchestrator"
 RELEASE_TO_HEAL_SETUP_STEP = "Install Python CI dependencies"
 MOVED_RELEASE_TO_HEAL_STEPS = {
 	"Mark-stable release-tag refspec contract test": (
@@ -2004,7 +2006,11 @@ MOVED_RELEASE_TO_HEAL_STEPS = {
 
 
 class MovedReleaseToHealStepsContractTest(unittest.TestCase):
-	"""The steps moved out of tests-release-and-log-analysis run once, in one job (#8208)."""
+	"""The steps moved out of tests-release-and-log-analysis run once, in one job (#8208).
+
+	They moved on from tests-heal-plan-and-validation to tests-hooks-and-orchestrator
+	in #9420; the test method names are kept.
+	"""
 
 	def jobs(self) -> dict:
 		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
@@ -3573,15 +3579,16 @@ MOVED_POLL_GROUP_TWO_8772_STEPS = {
 }
 # The body's first and last module, the module count and the sha256 below pin
 # the step's module set, which #9021's in-place sharding kept. #9056 added
-# tests/test_ci_actionlint_cache.py (53 -> 54 modules).
+# tests/test_ci_actionlint_cache.py (53 -> 54 modules). #9485 added
+# tests/test_sync_dependabot_exclusions.py (54 -> 55 modules).
 POLL_GROUP_TWO_8772_BOUNDARY_MODULES = (
 	"tests/test_ai_memory_sync_reference_files.py",
 	"tests/test_workflow_untrusted_input_contract.py",
 )
-POLL_GROUP_TWO_8772_MODULE_COUNT = 54
+POLL_GROUP_TWO_8772_MODULE_COUNT = 55
 # sha256 of the sorted, newline-joined module paths, so swapping an interior
 # module for another one is caught too.
-POLL_GROUP_TWO_8772_MODULE_SET_SHA256 = "7a3ed25f8f1aaca89c28d47d55b31abcfac8fe8fae5096a7796ae615e888dc80"
+POLL_GROUP_TWO_8772_MODULE_SET_SHA256 = "db4ba29afc92a8a0d4aa231c1d7222566427053b460b92addb52b79617e8119c"
 
 
 class MovedPollGroupTwo8772StepsContractTest(unittest.TestCase):
@@ -4666,6 +4673,108 @@ class MovedRelease9450StepsContractTest(unittest.TestCase):
 		self.assertEqual(jobs[RELEASE_9450_SOURCE_JOB_ID].get("timeout-minutes"), RELEASE_9450_TIMEOUT_MINUTES)
 		# #9916 deliberately raised the poll job's limit; the source job stays at 20.
 		self.assertEqual(jobs[POLL_JOB_ID].get("timeout-minutes"), POLL_JOB_TIMEOUT_MINUTES)
+
+
+# Steps moved out of tests-heal-plan-and-validation, which took 15m35s of its 20
+# minutes (run 43314513853, budget-watch issue #9420, re-issued as #9684), to the
+# end of tests-hooks-and-orchestrator: step name -> module paths its body names.
+# That run's step timings could not be read, so the pick is an estimate from
+# planning-sandbox timings and test and subprocess counts. The last three are the
+# #8208 group pinned by MovedReleaseToHealStepsContractTest.
+HEAL_9420_SOURCE_JOB_ID = "tests-heal-plan-and-validation"
+HEAL_9420_TARGET_JOB_ID = "tests-hooks-and-orchestrator"
+HEAL_9420_SETUP_STEP = "Install Python CI dependencies"
+HEAL_9420_TIMEOUT_MINUTES = 20
+MOVED_HEAL_9420_STEPS = {
+	"Merge probe unit tests": (
+		"tests/test_merge_probe.py",
+	),
+	"Validation shell-quoting and credential-scrub tests": (
+		"tests/test_render_validation_templates_shell_quoting.py",
+		"tests/test_validate_driver_credential_scrub.py",
+		"tests/test_validation_streaming_output.py",
+		"tests/test_validate_scheduled_mode.py",
+		"tests/test_validate_scheduled_sink.py",
+		"tests/test_validate_presetup_cleanup_contract.py",
+	),
+	"Shared PR check-runs merge gate (pr_checks_lib) tests": (
+		"tests/test_pr_checks_lib_required_filter.py",
+	),
+	"Mark-stable release-tag refspec contract test": (
+		"tests/test_mark_stable_release_tag_refspec_contract.py",
+	),
+	"Release CI gate tests (stubbed gh; both release workflows)": (
+		"tests/test_release_ci_gate.py",
+	),
+	"Cancelled CI sweep recovery tests": (
+		"tests/test_ci_cancelled_rerun.py",
+	),
+}
+
+
+class MovedHeal9420StepsContractTest(unittest.TestCase):
+	"""The six steps moved out of the heal job run once, in tests-hooks-and-orchestrator (#9420)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_each_step_is_owned_only_by_the_hooks_job(self) -> None:
+		for name in MOVED_HEAL_9420_STEPS:
+			with self.subTest(step=name):
+				self.assertEqual(
+					[owner for owner, _step in self.owning_steps(name)],
+					[HEAL_9420_TARGET_JOB_ID],
+				)
+
+	def test_each_step_has_no_guard(self) -> None:
+		for name in MOVED_HEAL_9420_STEPS:
+			with self.subTest(step=name):
+				for _owner, step in self.owning_steps(name):
+					self.assertNotIn("if", step)
+
+	def test_each_step_still_names_its_modules(self) -> None:
+		for name, modules in MOVED_HEAL_9420_STEPS.items():
+			steps = self.owning_steps(name)
+			self.assertEqual(len(steps), 1, name)
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertTrue((REPO_ROOT / module).is_file(), module)
+					self.assertIn(module, steps[0][1]["run"])
+
+	def test_moved_steps_left_the_source_job(self) -> None:
+		source_names = {step.get("name") for step in self.jobs()[HEAL_9420_SOURCE_JOB_ID]["steps"]}
+		for name in MOVED_HEAL_9420_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, source_names)
+
+	def test_moved_steps_run_after_setup_in_their_original_order(self) -> None:
+		names = [step.get("name") for step in self.jobs()[HEAL_9420_TARGET_JOB_ID]["steps"]]
+		self.assertIn(HEAL_9420_SETUP_STEP, names)
+		setup_index = names.index(HEAL_9420_SETUP_STEP)
+		positions = []
+		for name in MOVED_HEAL_9420_STEPS:
+			with self.subTest(step=name):
+				self.assertIn(name, names)
+				self.assertLess(setup_index, names.index(name))
+				positions.append(names.index(name))
+		self.assertEqual(positions, sorted(positions))
+
+	def test_target_is_not_the_source_job(self) -> None:
+		self.assertNotEqual(HEAL_9420_TARGET_JOB_ID, HEAL_9420_SOURCE_JOB_ID)
+		self.assertEqual(RELEASE_TO_HEAL_TARGET_JOB_ID, HEAL_9420_TARGET_JOB_ID)
+
+	def test_source_and_target_timeouts_are_unchanged(self) -> None:
+		jobs = self.jobs()
+		self.assertEqual(jobs[HEAL_9420_SOURCE_JOB_ID].get("timeout-minutes"), HEAL_9420_TIMEOUT_MINUTES)
+		self.assertEqual(jobs[HEAL_9420_TARGET_JOB_ID].get("timeout-minutes"), HEAL_9420_TIMEOUT_MINUTES)
 
 
 # Issue #9045: tests-heal-plan-and-validation took 17m00s of its 20 minutes

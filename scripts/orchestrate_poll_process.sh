@@ -291,6 +291,75 @@ _fetch_blocked_issue_routing_graphql() {
   rm -rf "${page_dir}"
 }
 
+# Issue #9730: the long-lived security-audit tracker (label ai:security-audit,
+# body marker `<!-- ai:security-audit-tracker:v1 -->`) is not a work item.
+# clarify.yml and internal-clarify.yml already skip it; the poller's standalone
+# stall recovery, unblock scan and unrouted-blocked detector skip it too while
+# SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED is on. Unset, empty or `true`
+# (any case) is on; `false` is off; any other value is off with one warning.
+# Defined here because the reclarify-only early exit below runs before the
+# main flag block. No trimming, matching scripts/unblock_scan.py.
+_SECURITY_AUDIT_TRACKER_EXCLUDE_WARNED="${_SECURITY_AUDIT_TRACKER_EXCLUDE_WARNED:-false}"
+readonly SECURITY_AUDIT_TRACKER_RELEASE_LABELS_JSON='["ai:blocked","ai:clarification","ai:planning","ai:awaiting-approval","ai:implementing","ai:done","ai:ready-to-merge","ai:review-blocked"]' 2>/dev/null || true
+_security_audit_tracker_exclude_enabled() {
+  local _sat_raw="${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED-}"
+  local _sat_value
+  _sat_value="$(printf '%s' "${_sat_raw}" | tr '[:upper:]' '[:lower:]')"
+  case "${_sat_value}" in
+    ""|true) return 0 ;;
+    false) return 1 ;;
+  esac
+  if [ "${_SECURITY_AUDIT_TRACKER_EXCLUDE_WARNED}" != "true" ]; then
+    echo "::warning::SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED=${_sat_raw} is not true/false; tracker exclusion is off"
+    _SECURITY_AUDIT_TRACKER_EXCLUDE_WARNED="true"
+  fi
+  return 1
+}
+
+# Releases ai:blocked and the pipeline phase labels from a security-audit
+# tracker and logs one STALL_RECOVERY_SKIP line. Labels are removed only when
+# the caller saw the tracker body marker (fail closed for a work item labelled
+# ai:security-audit by mistake). Never closes the tracker, never edits its body
+# and never reads or writes comments (its ai:security-audit-last-sha: marker
+# stays untouched). Only names from SECURITY_AUDIT_TRACKER_RELEASE_LABELS_JSON
+# reach --remove-label. Always returns 0.
+# Args: <issue_num> <labels_json (array of names)> <marker_present true|false> <source>
+_security_audit_tracker_release_pipeline_labels() {
+  local _sat_issue="${1-}" _sat_labels_json="${2-}" _sat_marker="${3-false}" _sat_source="${4-unknown}"
+  local _sat_present _sat_outcome _sat_removed="none" _sat_name
+  local -a _sat_args=()
+  [[ "${_sat_issue}" =~ ^[1-9][0-9]*$ ]] || return 0
+  case "${_sat_source}" in
+    standalone_stall|unblock_scan) ;;
+    *) _sat_source="unknown" ;;
+  esac
+  _sat_present="$(printf '%s' "${_sat_labels_json:-[]}" | jq -r --argjson allowed "${SECURITY_AUDIT_TRACKER_RELEASE_LABELS_JSON}" '
+    [(if type == "array" then . else [] end)[]? | (if type == "object" then .name else . end) | select(type == "string")] as $have
+    | $allowed[] | select(. as $l | $have | index($l))' 2>/dev/null || true)"
+  while IFS= read -r _sat_name; do
+    [ -n "${_sat_name}" ] || continue
+    _sat_args+=(--remove-label "${_sat_name}")
+    if [ "${_sat_removed}" = "none" ]; then
+      _sat_removed="${_sat_name}"
+    else
+      _sat_removed="${_sat_removed},${_sat_name}"
+    fi
+  done <<<"${_sat_present}"
+  if [ "${#_sat_args[@]}" -eq 0 ]; then
+    _sat_outcome="nothing_to_remove"
+  elif [ "${_sat_marker}" != "true" ]; then
+    _sat_outcome="marker_missing"
+    _sat_removed="none"
+  elif gh_retry gh issue edit "${_sat_issue}" --repo "${GITHUB_REPOSITORY}" "${_sat_args[@]}" >/dev/null 2>&1 </dev/null; then
+    _sat_outcome="labels_removed"
+  else
+    _sat_outcome="label_remove_failed"
+    _sat_removed="none"
+  fi
+  echo "STALL_RECOVERY_SKIP issue=${_sat_issue} reason=security_audit_tracker source=${_sat_source} removed=${_sat_removed} outcome=${_sat_outcome}"
+  return 0
+}
+
 # Defence in depth for issue #6630: flag an open ai:blocked issue whose newest
 # trusted human comment never resumed the pipeline within the grace period (a
 # /reclarify the intake skipped, or an answer without a command). One advisory
@@ -304,12 +373,20 @@ _fetch_blocked_issue_routing_graphql() {
 # restores the previous filter. Input: the `gh issue list --json number,labels`
 # array; output: a JSON array of issue numbers. No API calls.
 _unrouted_blocked_candidate_numbers() {
-  # The sweep-only path exits before is_truthy is defined, so the same
-  # 1|true|yes|on vocabulary is parsed inline here.
+  # The sweep-only path runs before the main flag block normalises the
+  # switch, so the raw value is read here with the strict #9730 rule (unset,
+  # empty or `true` in any case is on; anything else is off). The helper's
+  # warning for an unknown value goes to stderr: stdout carries the JSON.
   local exclude_tracker="false"
-  case "$(printf '%s' "${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
-    1|true|yes|on) exclude_tracker="true" ;;
-  esac
+  if declare -F _security_audit_tracker_exclude_enabled >/dev/null 2>&1; then
+    if _security_audit_tracker_exclude_enabled >&2; then
+      exclude_tracker="true"
+    fi
+  else
+    case "$(printf '%s' "${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+      true) exclude_tracker="true" ;;
+    esac
+  fi
   printf '%s' "${1:-[]}" | jq -c --argjson exclude_tracker "${exclude_tracker}" '[.[]? | select(any(.labels[]?; .name == "ai:orchestrator-tracking" or .name == "ai:reclarify-requeue") | not)
     | select(($exclude_tracker and any(.labels[]?; .name == "ai:security-audit")) | not)
     | .number | select(type == "number" and . > 0)] | unique' 2>/dev/null
@@ -2601,8 +2678,14 @@ _jq_field()
 #     sync:           direct merge only.
 # The noop-suspicious force-merge (auto-merge only) binds inline.
 #   Returns 0 when GitHub accepted the merge or the auto-merge request,
-#   1 when it refused, 2 (no gh call) when the SHA is not 40-hex.
-#   Sets ORCH_MERGE_BOUND_OUTCOME=enabled|merged|failed|refused.
+#   1 when it refused or the blocked-merge guard deferred the direct merge,
+#   2 (no gh call) when the SHA is not 40-hex.
+#   Sets ORCH_MERGE_BOUND_OUTCOME=enabled|merged|failed|refused|deferred.
+# The direct merge runs only when _pr_sync_merge_blocked_guard
+# (scripts/pr_checks_lib.sh, #9939) does not see mergeable_state=blocked or
+# unknown: the poller's admin GH_PAT would otherwise bypass the ruleset.
+# Deferring returns 1, which is what callers already saw when GitHub refused
+# a blocked merge for a token without bypass rights.
 _orch_squash_merge_bound()
 {
 	local pr="$1"
@@ -2622,6 +2705,12 @@ _orch_squash_merge_bound()
 		ORCH_MERGE_BOUND_OUTCOME="enabled"
 		echo "ORCH_MERGE_HEAD_BOUND pr=${pr} head_sha=${head_sha} mode=${mode} outcome=enabled"
 		return 0
+	fi
+	if ! declare -F _pr_sync_merge_blocked_guard >/dev/null 2>&1 \
+		|| ! _pr_sync_merge_blocked_guard "${pr}"; then
+		ORCH_MERGE_BOUND_OUTCOME="deferred"
+		echo "ORCH_MERGE_HEAD_BOUND pr=${pr} head_sha=${head_sha} mode=${mode} outcome=deferred"
+		return 1
 	fi
 	if gh_retry gh pr merge "${pr}" --repo "${GITHUB_REPOSITORY}" --squash --match-head-commit "${head_sha}" >/dev/null; then
 		ORCH_MERGE_BOUND_OUTCOME="merged"
@@ -3272,8 +3361,12 @@ fi
 # standalone stall recovery, the unblock scan and the unrouted-comment detector.
 # Exported so scripts/unblock_scan.py sees the same value; false restores the
 # previous behaviour.
+# Issue #9730: normalised with the strict rule of
+# _security_audit_tracker_exclude_enabled (unset, empty or `true` in any case is
+# on; `false` is off; any other value is off with one ::warning::), not the
+# wider is_truthy vocabulary, so every later reader sees the same true/false.
 SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED="${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED:-true}"
-if is_truthy "${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED}"; then
+if _security_audit_tracker_exclude_enabled; then
   SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED="true"
 else
   SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED="false"
@@ -15714,6 +15807,7 @@ Unable to create or locate the final integration PR from \`${integration_branch}
   # so the ineligibility alert (ORCH_FINAL_MERGE_INELIGIBLE_ALERT_HOURS) names
   # it instead of three refused merges parking the project. A failed lookup
   # fails open to the merge attempt, which records GitHub's refusal reason.
+  local final_blockers_hint=""
   if [ "${pr_state}" = "open" ] && [ "$(_jq_field "${pr_json}" '.mergeable_state' '[a-z_]+')" = "blocked" ] \
     && declare -F _pr_ruleset_required_check_blockers >/dev/null 2>&1; then
     local final_ruleset_rc=0
@@ -15724,8 +15818,29 @@ Unable to create or locate the final integration PR from \`${integration_branch}
       return 1
     fi
     if [ "${final_ruleset_rc}" = "2" ]; then
-      echo "::warning::  [final-merge] Could not read ruleset-required checks for PR #${final_pr}; attempting the merge."
+      final_blockers_hint="unknown"
+      case "$(printf '%s' "${PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+        false|0|no|off)
+          echo "::warning::  [final-merge] Could not read ruleset-required checks for PR #${final_pr}; attempting the merge."
+          ;;
+      esac
+    else
+      final_blockers_hint="none"
     fi
+  fi
+
+  # Blocked-merge guard (#9939): never merge while GitHub reports the PR
+  # blocked, even when the ruleset helper names no blocker (it matches by
+  # name, and counted the dispatched final CI's `lint` check-run that GitHub
+  # never evaluates for the PR, so the admin GH_PAT merge bypassed the
+  # rule). Reuses pr_json and the blockers found above: no extra call.
+  # PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED=false keeps the old behaviour.
+  if [ "${pr_state}" = "open" ] \
+    && { ! declare -F _pr_sync_merge_blocked_guard >/dev/null 2>&1 \
+      || ! _pr_sync_merge_blocked_guard "${pr_json}" "${default_branch}" "${final_blockers_hint}"; }; then
+    FINAL_MERGE_BUDGET_ELIGIBLE="0"
+    echo "  [final-merge] PR #${final_pr} is blocked (mergeable_state=${SYNC_MERGE_BLOCKED_GUARD_STATE:-unknown}; blockers: ${SYNC_MERGE_BLOCKED_GUARD_BLOCKERS:-unknown}). Will retry next poll."
+    return 1
   fi
 
   # Promote cycle: a VERIFYING run's ready-to-merge point promotes the pinned
@@ -17229,8 +17344,20 @@ has_active_validation_run() {
   # is acceptable because the poll cycle retries on the next tick
   # and the actual dispatch/mutation calls still go through
   # gh_retry.  (Copilot review on PR #1044.)
-  active_count="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?per_page=5" \
-    --jq '[.workflow_runs[] | select(.status == "in_progress" or .status == "queued")] | length' || echo '0')"
+  # Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is
+  # wedged (zero jobs, cannot be cancelled) and is not active. gh --jq takes
+  # no jq arguments, so the same single response is filtered locally.
+  local va_zq_cutoff va_zq_def va_runs_body
+  va_zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+  [[ "${va_zq_cutoff}" =~ ^[0-9]+$ ]] || va_zq_cutoff=0
+  va_zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
+  va_runs_body="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/${wf_name}/runs?per_page=5" || echo '')"
+  if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+    zombie_queued_log_ignored poll_validate_active "${va_zq_cutoff}" <<< "${va_runs_body}"
+  fi
+  active_count="$(printf '%s' "${va_runs_body}" \
+    | jq -r --argjson zq_cutoff "${va_zq_cutoff}" "${va_zq_def}"'[.workflow_runs[] | select(.status == "in_progress" or .status == "queued") | select(is_wedged_queued($zq_cutoff) | not)] | length' 2>/dev/null || echo '0')"
+  [[ "${active_count}" =~ ^[0-9]+$ ]] || active_count=0
   if [ "${active_count}" -gt 0 ]; then
     return 0
   fi
@@ -17240,8 +17367,13 @@ has_active_validation_run() {
   # one that actually resolves, so we want it to fire fast without
   # retry backoff on the preceding 404.
   if [ "${wf_name}" != "internal-validate.yml" ]; then
-    active_count="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?per_page=5" \
-      --jq '[.workflow_runs[] | select(.status == "in_progress" or .status == "queued")] | length' || echo '0')"
+    va_runs_body="$(_safe_gh_jq "repos/${GITHUB_REPOSITORY}/actions/workflows/internal-validate.yml/runs?per_page=5" || echo '')"
+    if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+      zombie_queued_log_ignored poll_validate_active "${va_zq_cutoff}" <<< "${va_runs_body}"
+    fi
+    active_count="$(printf '%s' "${va_runs_body}" \
+      | jq -r --argjson zq_cutoff "${va_zq_cutoff}" "${va_zq_def}"'[.workflow_runs[] | select(.status == "in_progress" or .status == "queued") | select(is_wedged_queued($zq_cutoff) | not)] | length' 2>/dev/null || echo '0')"
+    [[ "${active_count}" =~ ^[0-9]+$ ]] || active_count=0
     if [ "${active_count}" -gt 0 ]; then
       return 0
     fi
@@ -19165,6 +19297,19 @@ sync_validation_fix_issues_from_comments() {
 
 declare -g _ACTIONS_RUNS_BLOB_CACHE=''
 declare -g _ACTIONS_RUNS_BLOB_READY='false'
+# Per-process (= per-tick) provenance of the memoised actions-runs blob, set by
+# _load_actions_runs_cached on every non-memo path: ttl_hit|etag_304|live|
+# fallback|no_repo. Empty means the loader never recorded one (e.g. a test stub).
+declare -g _ACTIONS_RUNS_BLOB_SOURCE=''
+# When true, _load_actions_runs_cached skips the TTL hit and sends no
+# If-None-Match, so the next load is a confirmed live fetch or a fallback.
+# Only _ensure_actions_runs_blob_has_self_run sets it, at most once per tick.
+declare -g _ACTIONS_RUNS_FORCE_LIVE='false'
+declare -g _ACTIONS_RUNS_SELF_CHECK_DONE='false'
+# True when the self-run check refetched live and the refetch was not
+# confirmed: stall recovery then holds escalate_human for this tick
+# (STALL_SKIP reason=active_set_unverifiable); other stall actions run as usual.
+declare -g STALL_ACTIVE_SET_UNVERIFIABLE='false'
 declare -g PHASE_CAPS_ENABLED='false'
 declare -g PHASE_CAPS_STATUS='missing'
 declare -g PHASE_CAPS_GLOBAL_MAX='-1'
@@ -19172,6 +19317,51 @@ declare -g PHASE_CAPS_GLOBAL_RUNNING='0'
 declare -g PHASE_CAPS_MAX_BY_STATE='{}'
 declare -g PHASE_CAPS_RUNNING_BY_STATE='{}'
 
+# Emit one ACTIONS_RUNS_SOURCE line (stderr; stdout carries the blob) naming
+# which path produced the memoised actions-runs blob and its counts. Counts
+# print `?` when jq fails (fail open); self_run is `unknown` when
+# GITHUB_RUN_ID is not numeric or the blob cannot be parsed. No API calls.
+_emit_actions_runs_source_line() {
+  local _arsl_blob="${_ACTIONS_RUNS_BLOB_CACHE:-}"
+  local _arsl_run_id="${GITHUB_RUN_ID:-}"
+  local _arsl_counts=''
+  local _arsl_total='?' _arsl_in_progress='?' _arsl_queued='?' _arsl_completed='?'
+  local _arsl_self='unknown'
+  _arsl_counts="$(printf '%s' "${_arsl_blob}" | jq -r '[(.workflow_runs // [] | length),
+      ([.workflow_runs[]? | select(.status == "in_progress")] | length),
+      ([.workflow_runs[]? | select(.status == "queued")] | length),
+      ([.workflow_runs[]? | select(.status == "completed")] | length)] | map(tostring) | join(" ")' 2>/dev/null || true)"
+  if [[ "${_arsl_counts}" =~ ^[0-9]+\ [0-9]+\ [0-9]+\ [0-9]+$ ]]; then
+    read -r _arsl_total _arsl_in_progress _arsl_queued _arsl_completed <<<"${_arsl_counts}"
+  fi
+  if [[ "${_arsl_run_id}" =~ ^[0-9]+$ ]]; then
+    if printf '%s' "${_arsl_blob}" | jq -e --argjson id "${_arsl_run_id}" 'any(.workflow_runs[]?; (.id // 0) == $id)' >/dev/null 2>&1; then
+      _arsl_self='present'
+    elif [ "${_arsl_total}" != '?' ]; then
+      # Only a blob whose counts parsed is a valid listing; an unparseable
+      # blob stays `unknown`, like its `?` counts, instead of `absent`.
+      _arsl_self='absent'
+    fi
+  fi
+  printf '%s\n' "ACTIONS_RUNS_SOURCE source=${_ACTIONS_RUNS_BLOB_SOURCE:-unknown} forced_live=${_ACTIONS_RUNS_FORCE_LIVE:-false} total=${_arsl_total} in_progress=${_arsl_in_progress} queued=${_arsl_queued} completed=${_arsl_completed} self_run=${_arsl_self}" >&2
+  return 0
+}
+
+# API-call contract (GitHub §15):
+#   - memo hit / no_repo: 0 calls.
+#   - TTL hit: 0 calls. ETag 304: 1 call (`status=in_progress` only; the cached
+#     queued/completed lists are reused as-is).
+#   - live: 3 REST reads (in_progress + queued + completed companion reads).
+#   - forced refetch (_ACTIONS_RUNS_FORCE_LIVE=true, set only by
+#     _ensure_actions_runs_blob_has_self_run, at most once per tick): the TTL
+#     hit is skipped and no If-None-Match is sent, so it costs exactly 3 extra
+#     reads on success (1 on failure). The ai-memory cache is still read so the
+#     stale-cache fallback and the post-fetch cache write behave as before.
+#     Note: a ttl_hit or etag_304 blob was written by an earlier poller run, so
+#     it normally lacks the current run; stall ticks that start from those
+#     sources should expect to pay this refetch, not only on a broken cache.
+# Every non-memo path records _ACTIONS_RUNS_BLOB_SOURCE and emits one
+# ACTIONS_RUNS_SOURCE line on stderr (when the emitter is defined).
 _load_actions_runs_cached() {
   local empty_blob='{"workflow_runs":[]}'
   if [ "${_ACTIONS_RUNS_BLOB_READY}" = "true" ]; then
@@ -19183,6 +19373,8 @@ _load_actions_runs_cached() {
   if [ -z "${repo}" ]; then
     _ACTIONS_RUNS_BLOB_CACHE="${empty_blob}"
     _ACTIONS_RUNS_BLOB_READY="true"
+    _ACTIONS_RUNS_BLOB_SOURCE="no_repo"
+    if declare -F _emit_actions_runs_source_line >/dev/null 2>&1; then _emit_actions_runs_source_line || true; fi
     printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
     return 0
   fi
@@ -19215,9 +19407,12 @@ _load_actions_runs_cached() {
     fi
   fi
 
-  if [ "${cache_hit}" = "true" ] && [ "${cache_age_seconds}" -lt "${ACTIONS_RUNS_CACHE_TTL_SECONDS}" ]; then
+  if [ "${cache_hit}" = "true" ] && [ "${cache_age_seconds}" -lt "${ACTIONS_RUNS_CACHE_TTL_SECONDS}" ] \
+    && [ "${_ACTIONS_RUNS_FORCE_LIVE:-false}" != "true" ]; then
     _ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
     _ACTIONS_RUNS_BLOB_READY="true"
+    _ACTIONS_RUNS_BLOB_SOURCE="ttl_hit"
+    if declare -F _emit_actions_runs_source_line >/dev/null 2>&1; then _emit_actions_runs_source_line || true; fi
     printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
     return 0
   fi
@@ -19239,6 +19434,8 @@ _load_actions_runs_cached() {
 			_ACTIONS_RUNS_BLOB_CACHE="${empty_blob}"
 		fi
 		_ACTIONS_RUNS_BLOB_READY="true"
+		_ACTIONS_RUNS_BLOB_SOURCE="fallback"
+		if declare -F _emit_actions_runs_source_line >/dev/null 2>&1; then _emit_actions_runs_source_line || true; fi
 		printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
 		return 0
 	fi
@@ -19248,7 +19445,9 @@ _load_actions_runs_cached() {
   # response headers or 304 status lines. This direct `gh api -i` call is used
   # so one conditional fetch can carry If-None-Match and parse ETag metadata.
 	api_cmd=(gh_retry gh api -i "repos/${repo}/actions/runs?status=in_progress&per_page=50")
-  if [ -n "${cached_etag}" ]; then
+  # A forced live refetch must not be answered with a 304 that reuses the same
+  # stale cached lists, so it never sends If-None-Match.
+  if [ -n "${cached_etag}" ] && [ "${_ACTIONS_RUNS_FORCE_LIVE:-false}" != "true" ]; then
     api_cmd+=(-H "If-None-Match: ${cached_etag}")
   fi
 
@@ -19291,6 +19490,8 @@ _load_actions_runs_cached() {
       fi
       _ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${cached_runs}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
       _ACTIONS_RUNS_BLOB_READY="true"
+      _ACTIONS_RUNS_BLOB_SOURCE="etag_304"
+      if declare -F _emit_actions_runs_source_line >/dev/null 2>&1; then _emit_actions_runs_source_line || true; fi
       rm -f "${response_file}" "${response_body_file}" "${response_err}"
       printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
       return 0
@@ -19322,6 +19523,8 @@ _load_actions_runs_cached() {
 	fi
 		_ACTIONS_RUNS_BLOB_CACHE="$(jq -cn --argjson runs "${runs_only}" '{workflow_runs: $runs}' 2>/dev/null || echo "${empty_blob}")"
     _ACTIONS_RUNS_BLOB_READY="true"
+    _ACTIONS_RUNS_BLOB_SOURCE="live"
+    if declare -F _emit_actions_runs_source_line >/dev/null 2>&1; then _emit_actions_runs_source_line || true; fi
     rm -f "${response_file}" "${response_body_file}" "${response_err}"
     printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
     return 0
@@ -19348,8 +19551,88 @@ _load_actions_runs_cached() {
     _ACTIONS_RUNS_BLOB_CACHE="${empty_blob}"
   fi
   _ACTIONS_RUNS_BLOB_READY="true"
+  _ACTIONS_RUNS_BLOB_SOURCE="fallback"
+  if declare -F _emit_actions_runs_source_line >/dev/null 2>&1; then _emit_actions_runs_source_line || true; fi
   rm -f "${response_file}" "${response_body_file}" "${response_err}"
   printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE}"
+  return 0
+}
+
+# Self-run check for the per-tick actions-runs blob, run before stall recovery
+# builds ACTIVE_WORKFLOW_ISSUES. The poller's own run (GITHUB_RUN_ID) is always
+# in_progress, so a blob without it that did not come from a confirmed live
+# fetch (ttl_hit / etag_304 / fallback) is stale and cannot prove "no active
+# runs". In that case the blob is refetched live ONCE (TTL bypassed, no
+# If-None-Match). If the refetch is not confirmed live either,
+# STALL_ACTIVE_SET_UNVERIFIABLE=true holds escalate_human for this tick.
+#
+# MUST be called directly in the parent shell (never inside `$(...)`) so the
+# memo globals, the source global and the flag survive.
+#
+# API-call contract (GitHub §15): 0 extra calls unless the check fails on a
+# non-live blob; then exactly one forced _load_actions_runs_cached (3 REST
+# reads on success, 1 on failure). Guarded by _ACTIONS_RUNS_SELF_CHECK_DONE so
+# it runs at most once per tick even though both stall consumers (tracking
+# block and run_standalone_stall_recovery) call it. Audited existing calls: the
+# memoised blob and ACTIVE_WORKFLOW_ISSUES cannot show whether the blob is
+# stale, and no other call in the tick lists actions runs.
+#
+# Fail open for everything except escalation: missing run id, unknown source
+# (stubbed loader), no_repo, or a live blob without the self run (eventual
+# consistency / 50-item page cap) are logged and the blob is used as-is.
+_ensure_actions_runs_blob_has_self_run() {
+  if [ "${_ACTIONS_RUNS_SELF_CHECK_DONE:-false}" = "true" ]; then
+    return 0
+  fi
+  _ACTIONS_RUNS_SELF_CHECK_DONE='true'
+
+  _load_actions_runs_cached >/dev/null || true
+
+  local _arsc_run_id="${GITHUB_RUN_ID:-}"
+  local _arsc_source="${_ACTIONS_RUNS_BLOB_SOURCE:-}"
+  if ! [[ "${_arsc_run_id}" =~ ^[0-9]+$ ]]; then
+    echo "ACTIONS_RUNS_SELF_CHECK result=skipped source=${_arsc_source:-unknown} prior_source=none run_id=none reason=no_run_id"
+    return 0
+  fi
+  if [ -z "${_arsc_source}" ]; then
+    echo "ACTIONS_RUNS_SELF_CHECK result=skipped source=unknown prior_source=none run_id=${_arsc_run_id} reason=source_unknown"
+    return 0
+  fi
+  if [ "${_arsc_source}" = "no_repo" ]; then
+    echo "ACTIONS_RUNS_SELF_CHECK result=skipped source=no_repo prior_source=none run_id=${_arsc_run_id} reason=no_repo"
+    return 0
+  fi
+  if printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE:-}" | jq -e --argjson id "${_arsc_run_id}" 'any(.workflow_runs[]?; (.id // 0) == $id)' >/dev/null 2>&1; then
+    echo "ACTIONS_RUNS_SELF_CHECK result=present source=${_arsc_source} prior_source=none run_id=${_arsc_run_id} reason=none"
+    return 0
+  fi
+  if [ "${_arsc_source}" = "live" ]; then
+    echo "::warning::ACTIONS_RUNS_SELF_CHECK result=absent_live source=live prior_source=none run_id=${_arsc_run_id} reason=self_run_missing_from_live_blob"
+    return 0
+  fi
+
+  local _arsc_prior_source="${_arsc_source}"
+  _ACTIONS_RUNS_BLOB_READY='false'
+  _ACTIONS_RUNS_FORCE_LIVE='true'
+  _load_actions_runs_cached >/dev/null || true
+  _ACTIONS_RUNS_FORCE_LIVE='false'
+  _arsc_source="${_ACTIONS_RUNS_BLOB_SOURCE:-}"
+
+  if [ "${_arsc_source}" = "live" ]; then
+    local _arsc_self='absent'
+    if printf '%s' "${_ACTIONS_RUNS_BLOB_CACHE:-}" | jq -e --argjson id "${_arsc_run_id}" 'any(.workflow_runs[]?; (.id // 0) == $id)' >/dev/null 2>&1; then
+      _arsc_self='present'
+    fi
+    # A confirmed live blob that still lacks this run (eventual consistency /
+    # 50-item page cap) is used as-is but logged as a warning annotation.
+    local _arsc_annotation=''
+    [ "${_arsc_self}" = "present" ] || _arsc_annotation='::warning::'
+    echo "${_arsc_annotation}ACTIONS_RUNS_SELF_CHECK result=refetched source=live prior_source=${_arsc_prior_source} run_id=${_arsc_run_id} reason=self_run_missing self_run=${_arsc_self}"
+    return 0
+  fi
+
+  STALL_ACTIVE_SET_UNVERIFIABLE='true'
+  echo "::warning::ACTIONS_RUNS_SELF_CHECK result=unverifiable source=${_arsc_source:-unknown} prior_source=${_arsc_prior_source} run_id=${_arsc_run_id} reason=refetch_failed"
   return 0
 }
 
@@ -19456,6 +19739,10 @@ prime_phase_concurrency_snapshot() {
   if _load_actions_runs_cached >"${actions_runs_blob_file}" 2>"${actions_runs_fetch_err_file}"; then
     actions_runs_blob="$(cat "${actions_runs_blob_file}" 2>/dev/null || true)"
     [ -n "${actions_runs_blob}" ] || actions_runs_blob="${_ACTIONS_RUNS_BLOB_CACHE:-${empty_actions_runs}}"
+    # This is usually the first loader call of the tick: forward its
+    # diagnostics (ACTIONS_RUNS_SOURCE, rate_limit_audit_fallback ...
+    # reason=fetch_unconfirmed) instead of discarding them with the temp file.
+    cat "${actions_runs_fetch_err_file}" >&2 || true
   else
     actions_runs_fetch_rc=$?
     actions_runs_fetch_error="$(tr '\n' ' ' < "${actions_runs_fetch_err_file}" | sed 's/[[:space:]]\+/ /g' | cut -c1-200)"
@@ -19468,8 +19755,17 @@ prime_phase_concurrency_snapshot() {
   if [ -n "${STALL_THRESHOLD_IMPLEMENTING_MINUTES:-}" ]; then
     caps_cmd+=(--implementing-threshold-minutes "${STALL_THRESHOLD_IMPLEMENTING_MINUTES}")
   fi
-  if ! snapshot_json="$("${caps_cmd[@]}" 2>/dev/null <<<"${actions_runs_blob}")"; then
+  # Issue #9473: keep the builder's other stderr out of the log, but forward
+  # its ZOMBIE_RUN_IGNORED lines (guard=concurrency_snapshot) and the
+  # invalid ZOMBIE_RUN_MAX_QUEUED_HOURS warning so they stay searchable.
+  local caps_err_file=""
+  caps_err_file="$(mktemp "${TMPDIR:-/tmp}/phase_caps_snapshot_err.XXXXXX" 2>/dev/null || true)"
+  if ! snapshot_json="$("${caps_cmd[@]}" 2>"${caps_err_file:-/dev/null}" <<<"${actions_runs_blob}")"; then
     snapshot_json='{"enabled":false,"status":"invalid","error":"snapshot_build_failed","global_max_concurrent":null,"max_concurrent_by_state":{},"running_by_state":{},"global_running":0}'
+  fi
+  if [ -n "${caps_err_file}" ]; then
+    grep -E '^(ZOMBIE_RUN_IGNORED |::warning::ZOMBIE_RUN_MAX_QUEUED_HOURS )' "${caps_err_file}" >&2 2>/dev/null || true
+    rm -f "${caps_err_file}" 2>/dev/null || true
   fi
   [ -n "${snapshot_json}" ] || snapshot_json='{"enabled":false,"status":"invalid","error":"empty_snapshot","global_max_concurrent":null,"max_concurrent_by_state":{},"running_by_state":{},"global_running":0}'
   if [ "${actions_runs_fetch_rc}" -ne 0 ] && jq -e '.enabled == true' <<<"${snapshot_json}" >/dev/null 2>&1; then
@@ -19604,13 +19900,24 @@ _direct_inflight_review_run_on_branch()
 		return 0
 	fi
 	_di_runs_total="$(printf '%s' "${_di_runs_json}" | jq -r 'length' 2>/dev/null || echo "invalid")"
-	_di_runs_live="$(printf '%s' "${_di_runs_json}" | jq -r '[.[]? | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")] | length' 2>/dev/null || echo "invalid")"
+	# Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is
+	# wedged (zero jobs, cannot be cancelled) and is not live.
+	local _di_zq_cutoff _di_zq_def
+	_di_zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+	[[ "${_di_zq_cutoff}" =~ ^[0-9]+$ ]] || _di_zq_cutoff=0
+	_di_zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
+	if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+		zombie_queued_log_ignored stall_inflight_direct_check "${_di_zq_cutoff}" <<< "${_di_runs_json}"
+	fi
+	_di_runs_live="$(printf '%s' "${_di_runs_json}" | jq -r --argjson zq_cutoff "${_di_zq_cutoff}" "${_di_zq_def}"'[.[]? | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending") | select(is_wedged_queued($zq_cutoff) | not)] | length' 2>/dev/null || echo "invalid")"
 	_di_match="$(printf '%s' "${_di_runs_json}" | jq -r \
 		--argjson now "${_di_now_epoch}" \
-		--argjson threshold "${_di_stall_secs}" '
+		--argjson zq_cutoff "${_di_zq_cutoff}" \
+		--argjson threshold "${_di_stall_secs}" "${_di_zq_def}"'
 		(if type == "array" then . else [] end)
 		| [ .[]?
 			| select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
+			| select(is_wedged_queued($zq_cutoff) | not)
 			| select(
 				((.name // "") == "AI Review" or (.name // "") == "Internal Review" or (.name // "") == "Review Autofix"
 				 or (.name // "") == "Internal: AI Review & Autofix" or (.name // "") == "Codex PR Self-Healing Semantic Agent")
@@ -19632,12 +19939,17 @@ _direct_inflight_review_run_on_branch()
 			printf '%s\n' "listing-incomplete"
 			return 0
 		fi
+		if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+			zombie_queued_log_ignored stall_inflight_direct_check "${_di_zq_cutoff}" <<< "${_di_pr_named_json}"
+		fi
 		_di_match="$(printf '%s' "${_di_pr_named_json}" | jq -r \
 			--argjson now "${_di_now_epoch}" \
-			--argjson threshold "${_di_stall_secs}" '
+			--argjson zq_cutoff "${_di_zq_cutoff}" \
+			--argjson threshold "${_di_stall_secs}" "${_di_zq_def}"'
 			(if type == "array" then . else [] end)
 			| [ .[]?
 				| select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
+				| select(is_wedged_queued($zq_cutoff) | not)
 				| ([.startedAt, .createdAt] | map(select(type == "string" and . != ""))[0] // "") as $ts
 				| (if $ts != ""
 				   then (try ($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch $now)
@@ -19806,8 +20118,17 @@ build_active_issue_set() {
   local runs_json
   runs_json="$(printf '%s' "${actions_runs_blob}" | jq -c '[.workflow_runs[]? | select((.status // "") == "in_progress")] | .[:50]' 2>/dev/null || echo '[]')"
   [ -n "${runs_json}" ] || runs_json='[]'
+  # Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is
+  # wedged (zero jobs, cannot be cancelled). Drop it before the 50-run
+  # window so wedged runs cannot crowd out live queued runs.
+  local bais_zq_cutoff
+  bais_zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+  [[ "${bais_zq_cutoff}" =~ ^[0-9]+$ ]] || bais_zq_cutoff=0
+  if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+    zombie_queued_log_ignored build_active_issue_set "${bais_zq_cutoff}" <<< "${actions_runs_blob}"
+  fi
   local queued_json
-  queued_json="$(printf '%s' "${actions_runs_blob}" | jq -c '[.workflow_runs[]? | select((.status // "") == "queued")] | .[:50]' 2>/dev/null || echo '[]')"
+  queued_json="$(printf '%s' "${actions_runs_blob}" | jq -c --argjson zq_cutoff "${bais_zq_cutoff}" "$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"'[.workflow_runs[]? | select((.status // "") == "queued") | select(is_wedged_queued($zq_cutoff) | not)] | .[:50]' 2>/dev/null || echo '[]')"
   [ -n "${queued_json}" ] || queued_json='[]'
 
 
@@ -21653,6 +21974,14 @@ execute_stall_recovery_action() {
     return 1
   fi
 
+  # The actions-runs blob behind ACTIVE_WORKFLOW_ISSUES could not be verified
+  # this tick (_ensure_actions_runs_blob_has_self_run): do not escalate to a
+  # human over runs that may still be in flight. Other actions are unchanged.
+  if [ "${action}" = "escalate_human" ] && [ "${STALL_ACTIVE_SET_UNVERIFIABLE:-false}" = "true" ]; then
+    echo "STALL_SKIP issue=${issue_num} reason=active_set_unverifiable phase=${phase} action=${action}"
+    return 1
+  fi
+
   case "${action}" in
     retrigger_pipeline)
       echo "  Re-triggering pipeline for issue #${issue_num}..."
@@ -22114,6 +22443,15 @@ STALL_EOF
           local _rtr_inflight_blob _rtr_inflight_id _rtr_direct_inflight_id _rtr_now_epoch _rtr_stall_secs _rtr_origin_head_sha _rtr_push_succeeded
           _rtr_inflight_blob="$(_load_actions_runs_cached 2>/dev/null || echo '{"workflow_runs":[]}')"
           _rtr_now_epoch="$(date +%s 2>/dev/null || echo "")"
+          # Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS
+          # is wedged (zero jobs, cannot be cancelled) and is not in flight.
+          local _rtr_zq_cutoff _rtr_zq_def
+          _rtr_zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+          _rtr_zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
+          [[ "${_rtr_zq_cutoff}" =~ ^[0-9]+$ ]] || _rtr_zq_cutoff=0
+          if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+            zombie_queued_log_ignored retrigger_review_inflight "${_rtr_zq_cutoff}" <<< "$(printf '%s' "${_rtr_inflight_blob}" | jq -c --arg br "${head_ref}" --arg pr "${pr_num}" '[.workflow_runs[]? | select(type == "object" and ((.path // "") | test("(^|/)(ai-review|internal-review|review_autofix)\\.yml(@.*)?$")) and ((.head_branch // "") == $br or ($pr != "" and ((.display_title // "") | tostring | contains("[pr:" + $pr + "]")))))]' 2>/dev/null || echo '[]')"
+          fi
           # This block selects only review-family runs (name/path filter
           # below), so the freshness window is the review-run budget, not the
           # generic stall threshold — see REVIEW_RUN_MAX_RUNTIME_MINUTES.
@@ -22137,9 +22475,11 @@ STALL_EOF
               --arg db "${_rtr_review_default_branch}" \
               --arg repo "${GITHUB_REPOSITORY:-}" \
               --argjson now "${_rtr_now_epoch}" \
-              --argjson threshold "${_rtr_stall_secs}" "$(_pr_named_review_trust_jq_def)"'
+              --argjson zq_cutoff "${_rtr_zq_cutoff}" \
+              --argjson threshold "${_rtr_stall_secs}" "${_rtr_zq_def}""$(_pr_named_review_trust_jq_def)"'
               [.workflow_runs[]?
                | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
+               | select(is_wedged_queued($zq_cutoff) | not)
                | select(
                    ((.head_branch // "") == $br)
                    or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
@@ -24050,7 +24390,21 @@ invoke_stall_judge() {
   # Threshold reuses MAX_JUDGE_REPLAY for parity with the input-hash cap.
   local _judge_escalate_streak=0
   if [ "${_judge_state_file_ready}" = "true" ]; then
-    if [ "${judge_action}" = "escalate_human" ]; then
+    if [ "${judge_action}" = "escalate_human" ] && [ "${STALL_ACTIVE_SET_UNVERIFIABLE:-false}" = "true" ]; then
+      # Active set unverifiable this tick: compute the streak this verdict
+      # would reach so the MAX_JUDGE_REPLAY backstop still yields
+      # effective_action=escalate_human (then held by
+      # execute_stall_recovery_action as STALL_SKIP
+      # reason=active_set_unverifiable) instead of falling through to the
+      # ladder action. The stored streak is NOT written, so a held tick does not
+      # count toward the backstop. Below the cap, in the default configuration
+      # (ENABLE_STALL_HUMAN_TERMINALIZATION=false), the verdict is still
+      # normalized to the ladder action as on a verified tick, and no STALL_SKIP
+      # line is printed.
+      _judge_escalate_streak="$(jq -r --arg n "${issue_num}" '.judge_escalate_streak[$n] // 0' "${_judge_state_file}" 2>/dev/null || echo "0")"
+      [[ "${_judge_escalate_streak}" =~ ^[0-9]+$ ]] || _judge_escalate_streak=0
+      _judge_escalate_streak=$(( _judge_escalate_streak + 1 ))
+    elif [ "${judge_action}" = "escalate_human" ]; then
       _judge_escalate_streak="$(jq -r --arg n "${issue_num}" '.judge_escalate_streak[$n] // 0' "${_judge_state_file}" 2>/dev/null || echo "0")"
       [[ "${_judge_escalate_streak}" =~ ^[0-9]+$ ]] || _judge_escalate_streak=0
       _judge_escalate_streak=$(( _judge_escalate_streak + 1 ))
@@ -24121,11 +24475,20 @@ invoke_stall_judge() {
       "${_judge_state_file}" > "${_judge_state_file}.tmp" 2>/dev/null && mv "${_judge_state_file}.tmp" "${_judge_state_file}" || rm -f "${_judge_state_file}.tmp" 2>/dev/null || true
   fi
 
+  # Human-facing label only: when this tick's active set is unverifiable,
+  # execute_stall_recovery_action holds escalate_human (STALL_SKIP
+  # reason=active_set_unverifiable), so the comment and Telegram line must not
+  # claim an escalation ran. effective_action and the dispatch are unchanged.
+  local _judge_effective_label="${effective_action}"
+  if [ "${effective_action}" = "escalate_human" ] && [ "${STALL_ACTIVE_SET_UNVERIFIABLE:-false}" = "true" ]; then
+    _judge_effective_label="${effective_action} (held: active_set_unverifiable)"
+  fi
+
   local judge_comment
   judge_comment="## 🧑‍⚖️ Stall Judge — Issue #${issue_num} attempt $((recovery_count + 1))
 
 **Decision (judge):** ${judge_action}
-**Decision (effective):** ${effective_action}
+**Decision (effective):** ${_judge_effective_label}
 **Justification:** ${judge_justification}
 
 **Diagnostics snapshot:**
@@ -24139,7 +24502,7 @@ ${diagnostics}
   else
     gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${judge_comment}" >/dev/null 2>&1 || true
   fi
-  tg_notify "Stall judge evaluated issue #${issue_num}: judged=${judge_action}, effective=${effective_action}. ${judge_justification}"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
+  tg_notify "Stall judge evaluated issue #${issue_num}: judged=${judge_action}, effective=${_judge_effective_label}. ${judge_justification}"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
 
   if [ "${effective_action}" != "${judge_action}" ]; then
     echo "::notice::Stall judge action '${judge_action}' normalized to '${effective_action}' for issue #${issue_num}."
@@ -26927,6 +27290,47 @@ run_unblock_scan() {
     return 0
   fi
   printf '%s' "${runs}" > "${work_dir}/runs.json"
+  # Issue #9730: the security-audit tracker (label ai:security-audit) is not a
+  # work item, so it never reaches the unblock judge. Its block/phase labels
+  # are released (only with the tracker body marker from the GraphQL batch
+  # above; no new read) and it leaves search.json before selection. A failed
+  # project gets the same label release but stays in search.json with its
+  # labels, so the selector (scripts/unblock_scan.py) skips it as
+  # security_audit_tracker (dropping it here would make select re-add it as a
+  # label-less failed project and judge it). A filter failure skips this tick.
+  if _security_audit_tracker_exclude_enabled; then
+    local _scan_sat_item _scan_sat_failed _scan_sat_labels _scan_sat_marker _scan_sat_items="[]"
+    while IFS=' ' read -r _scan_sat_item _scan_sat_failed; do
+      [[ "${_scan_sat_item}" =~ ^[1-9][0-9]*$ ]] || continue
+      _scan_sat_labels="$(jq -c --argjson n "${_scan_sat_item}" '[.[]? | select(.number == $n) | .labels[]?] | unique' "${work_dir}/search.json" 2>/dev/null || echo '[]')"
+      _scan_sat_marker="false"
+      if jq -e --arg id "${_scan_sat_item}" '(.[$id].body | type) == "string" and (.[$id].body | test("(^|\n)[ \t]*<!-- ai:security-audit-tracker:v1 -->[ \t]*\r?(\n|$)"))' \
+        "${work_dir}/details.json" >/dev/null 2>&1; then
+        _scan_sat_marker="true"
+      fi
+      _security_audit_tracker_release_pipeline_labels "${_scan_sat_item}" "${_scan_sat_labels}" "${_scan_sat_marker}" "unblock_scan"
+      if [ "${_scan_sat_failed}" = "true" ]; then
+        # Kept in search.json: select skips it by its label.
+        echo "UNBLOCK_SCAN item=${_scan_sat_item} kind=project outcome=skip reason=security_audit_tracker"
+        continue
+      fi
+      echo "UNBLOCK_SCAN item=${_scan_sat_item} kind=issue outcome=skip reason=security_audit_tracker"
+      _scan_sat_items="$(printf '%s' "${_scan_sat_items}" | jq -c --argjson n "${_scan_sat_item}" '. + [$n]')"
+    done < <(jq -r --slurpfile failed "${work_dir}/failed_projects.json" '
+        .[]? | select(((.pull_request // false) != true) and ((.number | type) == "number"))
+        | .number as $n
+        | select(any((.labels // [])[]?; . == "ai:security-audit"))
+        | "\($n) \(any(($failed[0] // [])[]?; . == $n))"' "${work_dir}/search.json" 2>/dev/null || true)
+    if [ "${_scan_sat_items}" != "[]" ]; then
+      if ! jq -c --argjson held "${_scan_sat_items}" '[.[]? | select(.number as $n | any($held[]; . == $n) | not)]' \
+        "${work_dir}/search.json" > "${work_dir}/search_sat_excluded.json" 2>/dev/null \
+        || ! mv -f "${work_dir}/search_sat_excluded.json" "${work_dir}/search.json"; then
+        rm -f "${work_dir}/search_sat_excluded.json"
+        echo "UNBLOCK_SCAN candidates=${count} outcome=skip reason=security_audit_filter_failed"
+        return 0
+      fi
+    fi
+  fi
   # An issue held by its pull-request dependency (issue #7228) must not
   # consume unblock rounds, even when clarify could not remove its block
   # label. It is dropped from the search results before selection: the
@@ -27240,6 +27644,263 @@ _Orchestrator: released the \`ai:needs-human\` latch that the staged-support res
     echo "STAGED_SUPPORT_LATCH_RELEASED issue=${issue_num} engine_sha=${ORCHESTRATOR_ENGINE_SHA}"
     tg_notify_issue "${issue_num}" "Released the ai:needs-human latch on issue #${issue_num}: the staged-support re-base conflict that halted it is fixed in workflow engine ${ORCHESTRATOR_ENGINE_SHA}. Re-approved for implementation." "DEBUG"
   done
+}
+
+# release_head_bound_needs_human_latches
+#
+# Releases a pull request's ai:needs-human latch once the head it was set
+# for is gone. Two PR latches are bound to one head and say so in their own
+# text, but nothing removed the label when the head moved, so a PR whose new
+# head was green and judged "merge" still waited for a person to remove a
+# label (PR #9839: latched 2026-11-20 11:15 for head 27dd193, judged "merge"
+# five times on head bcd1d378 by 22:14):
+#   non_retryable_head_moved   scripts/workflow_failure_heal_intake.sh
+#     `_non_retryable_route_apply` posts
+#     `<!-- ai:workflow-heal-non-retryable:v1 pr=<n> head=<sha> reason=<r> -->`
+#     and adds the label; its resume is "push a new head, then remove
+#     ai:needs-human". A repeat failure on the new head latches again (its
+#     dedup is keyed on head).
+#   review_round_cap_head_moved   scripts/review_sweep_round_cap.sh
+#     `review_sweep_round_cap_escalate` posts `<!-- ai:review-round-cap:v1 -->`
+#     plus `<!-- ai:review-round-cap-head:v1 head=<sha> -->` and adds the
+#     label. The round count is already scoped to the current head, so a new
+#     head starts at zero; a PR still over the cap is labelled again by the
+#     next sweep tick. A cap comment without the head marker (posted before
+#     it existed) is never released here.
+# A latch is released only when all of these hold: the newest trusted latch
+# comment (a `[bot]` login or OWNER/MEMBER/COLLABORATOR) is one of the two
+# above and names a 40-hex head; the newest ai:needs-human label event is a
+# `labeled` event by the same login, at or after that comment and at most
+# 30 minutes later (the fixed local `hl_bind_minutes`, not an env var), which
+# binds the label to that latch (both writers comment first, then label); no
+# later trusted comment other than a release comment mentions
+# `ai:needs-human` (another path re-asserting the hold; a label re-added by
+# hand after a release fails the label binding above instead); no trusted
+# release marker (a `[bot]` login or OWNER/MEMBER/COLLABORATOR comment) exists
+# for the current head; the PR carries neither ai:destructive-blocked nor
+# ai:scope-blocked; a fresh PR read shows the PR open, still labelled, with a
+# 40-hex head different from the latch head; and a re-read of the comments,
+# label events and `pulls/<n>` right before the write shows no newer trusted
+# latch or needs-human comment, the same newest label event, and the PR still
+# open, labelled, on the same head, without ai:scope-blocked or
+# ai:destructive-blocked (otherwise `latch_changed_during_release`). The
+# release removes ai:needs-human,
+# then posts one comment ending in
+# `<!-- ai:needs-human-auto-release reason=<r> pr=<n> head=<current sha> -->`.
+# The release-once rule is per head, so a latch that comes back on the new
+# head stays parked until the head moves again.
+#
+# Unlike release_staged_support_needs_human_latches (issues only, this source
+# repository only), this runs in every repository: both latches are applied by
+# consumers' own review and heal runs. It runs after the per-project loop and
+# on idle ticks from the unblock-scan sweep step.
+#
+# API calls (§15): one paginated `issues?labels=ai:needs-human` read per tick,
+# filtered to PRs (the staged-support sweep's listing drops PRs and runs only
+# in this repository, so it cannot be reused); per PR with a head-bound latch
+# one paginated comments read and one `pulls/<n>` read (head and labels,
+# fresh), taken before the events read so a PR parked on its latched head
+# costs no events read; per PR whose head moved one paginated events read
+# (the poller's caches carry neither the full marker history nor label-event
+# provenance); per release candidate one comments, one events and one
+# `pulls/<n>` re-read (revalidation), one label removal, one comments read
+# after the removal (a latch that raced the removal gets its label back: one
+# label add, no release comment) and one comment write. PRs without a
+# head-bound latch cost only the comments read. Every read failure skips that PR for the tick
+# (fail open: the label stays). NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED=false
+# skips the sweep.
+release_head_bound_needs_human_latches() {
+  if ! _is_truthy "${NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED:-true}"; then
+    echo "NEEDS_HUMAN_HEAD_LATCH outcome=skip reason=disabled"
+    return 0
+  fi
+  local hl_bind_minutes=30
+  local hl_prs hl_count hl_idx hl_pr hl_labels hl_comments hl_latch hl_latch_idx
+  local hl_latch_at hl_latch_login hl_latch_head hl_reason hl_events hl_event
+  local hl_pull hl_head hl_release_marker hl_body hl_refreshed_comments hl_refreshed_events hl_refreshed_event hl_refreshed_pull
+  local hl_post_delete_comments
+  if ! hl_prs="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues?state=open&labels=ai%3Aneeds-human&per_page=100" \
+    | jq -s 'add // [] | map(select(.pull_request != null))' 2>/dev/null)" \
+    || ! hl_count="$(printf '%s' "${hl_prs}" | jq 'length' 2>/dev/null)" \
+    || ! [[ "${hl_count}" =~ ^[0-9]+$ ]]; then
+    echo "NEEDS_HUMAN_HEAD_LATCH outcome=skip reason=list_unavailable repository=${GITHUB_REPOSITORY}"
+    return 0
+  fi
+  echo "NEEDS_HUMAN_HEAD_LATCH outcome=listed prs=${hl_count} repository=${GITHUB_REPOSITORY}"
+  for ((hl_idx=0; hl_idx<hl_count; hl_idx++)); do
+    hl_pr="$(printf '%s' "${hl_prs}" | jq -r ".[${hl_idx}].number // empty" 2>/dev/null || true)"
+    [[ "${hl_pr}" =~ ^[0-9]+$ ]] || continue
+    hl_labels="$(printf '%s' "${hl_prs}" | jq -c ".[${hl_idx}].labels // [] | map(if type == \"object\" then (.name // \"\") else . end)" 2>/dev/null || echo '[]')"
+    if printf '%s' "${hl_labels}" | jq -e 'index("ai:destructive-blocked") != null or index("ai:scope-blocked") != null' >/dev/null 2>&1; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=other_human_gated_latch_present"
+      continue
+    fi
+    if ! hl_comments="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${hl_pr}/comments?sort=created&direction=asc&per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=comments_unavailable"
+      continue
+    fi
+    # Newest trusted latch comment of either kind, with its head.
+    hl_latch="$(printf '%s' "${hl_comments}" | jq -c '
+      def trusted: ((.user.login // "") | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"));
+      [to_entries[]
+        | .value as $c
+        | select($c | trusted)
+        | ($c.body // "") as $b
+        | if ($b | contains("<!-- ai:workflow-heal-non-retryable:v1 ")) then
+            {idx: .key, created_at: ($c.created_at // ""), login: ($c.user.login // ""), reason: "non_retryable_head_moved",
+             head: (($b | capture("<!-- ai:workflow-heal-non-retryable:v1 [^>]*head=(?<h>[0-9a-f]{40})") // {h: ""}).h)}
+          elif ($b | contains("<!-- ai:review-round-cap:v1 -->")) then
+            {idx: .key, created_at: ($c.created_at // ""), login: ($c.user.login // ""), reason: "review_round_cap_head_moved",
+             head: (($b | capture("<!-- ai:review-round-cap-head:v1 head=(?<h>[0-9a-f]{40}) -->") // {h: ""}).h)}
+          else empty end]
+      | last // null' 2>/dev/null || echo null)"
+    hl_latch_idx="$(printf '%s' "${hl_latch}" | jq -r '.idx // -1' 2>/dev/null || echo -1)"
+    if ! [[ "${hl_latch_idx}" =~ ^[0-9]+$ ]]; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=no_head_bound_latch"
+      continue
+    fi
+    hl_latch_at="$(printf '%s' "${hl_latch}" | jq -r '.created_at')"
+    hl_latch_login="$(printf '%s' "${hl_latch}" | jq -r '.login')"
+    hl_latch_head="$(printf '%s' "${hl_latch}" | jq -r '.head')"
+    hl_reason="$(printf '%s' "${hl_latch}" | jq -r '.reason')"
+    if ! [[ "${hl_latch_head}" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=latch_head_missing latch=${hl_reason}"
+      continue
+    fi
+    # Only a well-formed release comment of this sweep for this PR (the full
+    # marker, ending the body) is exempt; a bare or malformed marker prefix
+    # in a comment that re-asserts ai:needs-human keeps the hold.
+    if printf '%s' "${hl_comments}" | jq -e --argjson i "${hl_latch_idx}" --arg pr "${hl_pr}" '
+        any(to_entries[];
+          .key > $i
+          and ((((.value.user.login // "") | test("\\[bot\\]$")) or ((.value.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))))
+          and ((.value.body // "") | contains("ai:needs-human") and (test("<!-- ai:needs-human-auto-release reason=(non_retryable_head_moved|review_round_cap_head_moved) pr=" + $pr + " head=[0-9a-f]{40} -->\\s*$") | not)))' >/dev/null 2>&1; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=later_needs_human_comment latch=${hl_reason}"
+      continue
+    fi
+    if ! hl_pull="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${hl_pr}" --jq '{state, head: (.head.sha // ""), labels: [.labels[]?.name]}' 2>/dev/null)" \
+      || ! hl_head="$(printf '%s' "${hl_pull}" | jq -r '.head' 2>/dev/null)"; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=pull_unavailable"
+      continue
+    fi
+    if ! printf '%s' "${hl_pull}" | jq -e '.state == "open" and (.labels | index("ai:needs-human") != null) and (.labels | index("ai:destructive-blocked") == null) and (.labels | index("ai:scope-blocked") == null)' >/dev/null 2>&1 \
+      || ! [[ "${hl_head}" =~ ^[0-9a-f]{40}$ ]]; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=pull_changed latch=${hl_reason}"
+      continue
+    fi
+    if [ "${hl_head}" = "${hl_latch_head}" ]; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=head_unchanged latch=${hl_reason} head=${hl_head:0:12}"
+      continue
+    fi
+    hl_release_marker="<!-- ai:needs-human-auto-release reason=${hl_reason} pr=${hl_pr} head=${hl_head} -->"
+    if printf '%s' "${hl_comments}" | jq -e --arg m "${hl_release_marker}" '
+        any(.[];
+          ((((.user.login // "") | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))))
+          and ((.body // "") | contains($m)))' >/dev/null 2>&1; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=already_released latch=${hl_reason} head=${hl_head:0:12}"
+      continue
+    fi
+    if ! hl_events="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${hl_pr}/events?per_page=100" | jq -s 'add // []' 2>/dev/null)"; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=label_events_unavailable"
+      continue
+    fi
+    hl_event="$(printf '%s' "${hl_events}" | jq -c '
+      [.[]
+        | select((.event == "labeled" or .event == "unlabeled") and (.label.name // "") == "ai:needs-human")
+        | {event, created_at: (.created_at // ""), login: (.actor.login // "")}]
+      | sort_by(.created_at) | last // null' 2>/dev/null || echo null)"
+    if ! printf '%s' "${hl_event}" | jq -e --arg at "${hl_latch_at}" --arg login "${hl_latch_login}" --argjson bind "${hl_bind_minutes}" '
+        .event == "labeled"
+        and .login != "" and .login == $login
+        and .created_at != "" and $at != ""
+        and (.created_at >= $at)
+        and (((.created_at | fromdateiso8601) - ($at | fromdateiso8601)) <= ($bind * 60))' >/dev/null 2>&1; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=label_not_bound_to_latch latch=${hl_reason}"
+      continue
+    fi
+    # Revalidate right before the write, like the staged-support release's
+    # latch_changed_during_release guard: a writer that commented a new latch
+    # (or re-labelled) after the snapshots above keeps its hold. Both writers
+    # comment first, and adding a label the PR already carries records no
+    # event, so the comment re-read is what catches a re-latch.
+    if ! hl_refreshed_comments="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${hl_pr}/comments?sort=created&direction=asc&per_page=100" | jq -s 'add // []' 2>/dev/null)" \
+      || ! hl_refreshed_events="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${hl_pr}/events?per_page=100" | jq -s 'add // []' 2>/dev/null)" \
+      || ! hl_refreshed_event="$(printf '%s' "${hl_refreshed_events}" | jq -c '
+        [.[]
+          | select((.event == "labeled" or .event == "unlabeled") and (.label.name // "") == "ai:needs-human")
+          | {event, created_at: (.created_at // ""), login: (.actor.login // "")}]
+        | sort_by(.created_at) | last // null' 2>/dev/null)"; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=latch_revalidation_unavailable latch=${hl_reason}"
+      continue
+    fi
+    if [ "${hl_refreshed_event}" != "${hl_event}" ] \
+      || printf '%s' "${hl_refreshed_comments}" | jq -e --arg at "${hl_latch_at}" --arg pr "${hl_pr}" '
+        any(.[];
+          (.created_at // "") > $at
+          and ((((.user.login // "") | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))))
+          and ((.body // "") | (contains("ai:needs-human") or contains("<!-- ai:workflow-heal-non-retryable:v1 ") or contains("<!-- ai:review-round-cap:v1 -->"))
+            and (test("<!-- ai:needs-human-auto-release reason=(non_retryable_head_moved|review_round_cap_head_moved) pr=" + $pr + " head=[0-9a-f]{40} -->\\s*$") | not)))' >/dev/null 2>&1; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=latch_changed_during_release latch=${hl_reason}"
+      continue
+    fi
+    # The head and labels were checked on the first pulls/<n> read; read them
+    # again so a push back to the latched head (or any other head change) or a
+    # newly added ai:scope-blocked / ai:destructive-blocked keeps the hold.
+    if ! hl_refreshed_pull="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${hl_pr}" --jq '{state, head: (.head.sha // ""), labels: [.labels[]?.name]}' 2>/dev/null)"; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=latch_revalidation_unavailable latch=${hl_reason}"
+      continue
+    fi
+    if ! printf '%s' "${hl_refreshed_pull}" | jq -e --arg h "${hl_head}" '.state == "open" and .head == $h and (.labels | index("ai:needs-human") != null) and (.labels | index("ai:destructive-blocked") == null) and (.labels | index("ai:scope-blocked") == null)' >/dev/null 2>&1; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=latch_changed_during_release latch=${hl_reason}"
+      continue
+    fi
+    if ! gh_retry gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/${hl_pr}/labels/ai:needs-human" >/dev/null 2>&1; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=label_write_failed latch=${hl_reason}"
+      continue
+    fi
+    # GitHub has no conditional label delete. A writer whose latch comment and
+    # label add both land between the re-reads above and the DELETE added a
+    # label that was already there (no event), so the DELETE removed its hold
+    # and the next tick's listing would never see the PR again. Both writers
+    # comment first, so one comments read after the DELETE sees that latch;
+    # put the label back for it. A read failure keeps the release (fail open):
+    # re-adding the label blind would record a fresh `labeled` event that no
+    # longer binds to any latch, so the PR could never be released again. The
+    # skipped check is logged so the release is not mistaken for a checked one.
+    if ! hl_post_delete_comments="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${hl_pr}/comments?sort=created&direction=asc&per_page=100" | jq -s 'add // []' 2>/dev/null)" \
+      || ! printf '%s' "${hl_post_delete_comments}" | jq -e 'type == "array"' >/dev/null 2>&1; then
+      echo "::warning::Removed ai:needs-human on PR #${hl_pr}, but the comments read after the removal failed, so a latch that raced the removal could not be checked."
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=post_release_check_unavailable latch=${hl_reason} head=${hl_head:0:12}"
+    elif printf '%s' "${hl_post_delete_comments}" | jq -e --arg at "${hl_latch_at}" --arg pr "${hl_pr}" '
+        any(.[];
+          (.created_at // "") > $at
+          and ((((.user.login // "") | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))))
+          and ((.body // "") | (contains("ai:needs-human") or contains("<!-- ai:workflow-heal-non-retryable:v1 ") or contains("<!-- ai:review-round-cap:v1 -->"))
+            and (test("<!-- ai:needs-human-auto-release reason=(non_retryable_head_moved|review_round_cap_head_moved) pr=" + $pr + " head=[0-9a-f]{40} -->\\s*$") | not)))' >/dev/null 2>&1; then
+      if GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${hl_pr}/labels" -f "labels[]=ai:needs-human" >/dev/null 2>&1; then
+        echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=relatched_after_release latch=${hl_reason} head=${hl_head:0:12}"
+      else
+        echo "::warning::Removed ai:needs-human on PR #${hl_pr}, then found a newer latch and could not add the label back; a person should re-add it."
+        echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=relatch_failed latch=${hl_reason} head=${hl_head:0:12}"
+      fi
+      continue
+    fi
+    if [ "${hl_reason}" = "non_retryable_head_moved" ]; then
+      hl_body="_Orchestrator: removed \`ai:needs-human\`. It was set because a review/autofix run on head \`${hl_latch_head:0:12}\` failed in a way another run on that head could not fix. The PR is now on head \`${hl_head:0:12}\`, so that diagnosis no longer applies and the review runs on the new head as usual. If the same failure happens on this head, the label comes back._"
+    else
+      hl_body="_Orchestrator: removed \`ai:needs-human\`. The review sweep set it when head \`${hl_latch_head:0:12}\` reached the review-round cap. The PR is now on head \`${hl_head:0:12}\` and the round count starts again for it, so the sweep reviews it as usual. If this head reaches the cap too, the sweep labels it again._"
+    fi
+    hl_body="${hl_body}
+
+${hl_release_marker}"
+    if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${hl_pr}/comments" -f body="${hl_body}" >/dev/null 2>&1; then
+      echo "::warning::Released ai:needs-human on PR #${hl_pr}, but the explanation comment could not be posted."
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=released_comment_failed latch=${hl_reason} from=${hl_latch_head:0:12} head=${hl_head:0:12}"
+      continue
+    fi
+    echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=released latch=${hl_reason} from=${hl_latch_head:0:12} head=${hl_head:0:12}"
+  done
+  return 0
 }
 
 # ---------------------------------------------------------------
@@ -27685,6 +28346,12 @@ run_standalone_stall_recovery() {
   local candidates
   candidates="$(jq -s 'add | unique_by(.number)' <(printf '%s\n' "${labeled_issues}") <(printf '%s\n' "${marker_issues}"))"
 
+  # Verify the shared actions-runs blob contains this run before building the
+  # active set (parent shell; at most one live refetch per tick, shared with
+  # the tracking stall block).
+  if declare -F _ensure_actions_runs_blob_has_self_run >/dev/null 2>&1; then
+    _ensure_actions_runs_blob_has_self_run || true
+  fi
   ACTIVE_WORKFLOW_ISSUES="$(build_active_issue_set)"
 
   local _candidate_details_json
@@ -27772,6 +28439,20 @@ run_standalone_stall_recovery() {
       else
         _standalone_staged_support_cache_available="complete"
       fi
+    fi
+    # Issue #9730: the security-audit tracker is not a work item; never
+    # recover, answer or reissue it. Release its block/phase labels (only
+    # with the tracker body marker) and move on. No new API read: labels and
+    # body come from the candidate batch.
+    if _security_audit_tracker_exclude_enabled \
+      && printf '%s' "${labels_json}" | jq -e 'any(.[]?; (if type == "object" then .name else . end) == "ai:security-audit")' >/dev/null 2>&1; then
+      local _sat_marker_present="false"
+      if printf '%s' "${_candidate_details_json}" | jq -e --arg n "${issue_num}" \
+        '(.[$n].body | type) == "string" and (.[$n].body | test("(^|\n)[ \t]*<!-- ai:security-audit-tracker:v1 -->[ \t]*\r?(\n|$)"))' >/dev/null 2>&1; then
+        _sat_marker_present="true"
+      fi
+      _security_audit_tracker_release_pipeline_labels "${issue_num}" "${labels_json}" "${_sat_marker_present}" "standalone_stall"
+      continue
     fi
     if _security_audit_tracker_stall_guard "${issue_num}" "${labels_json}" "${pipeline_labels}"; then
       continue
@@ -28606,6 +29287,16 @@ PY
       continue
     fi
 
+    # Hold a direct escalate_human while this tick's actions-runs blob is
+    # unverifiable (_ensure_actions_runs_blob_has_self_run refetch failed).
+    if [ "${action}" = "escalate_human" ] && [ "${STALL_ACTIVE_SET_UNVERIFIABLE:-false}" = "true" ]; then
+      echo "STALL_SKIP issue=${issue_num} reason=active_set_unverifiable phase=${phase} action=${action}"
+      if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+        write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+      fi
+      continue
+    fi
+
     took_action="false"
     STALL_RECOVERY_SHOULD_INCREMENT="false"
     STALL_RECOVERY_EFFECTIVE_ACTION="${action}"
@@ -28866,6 +29557,15 @@ STALL_EOF
 			_std_rtr_inflight_blob="$(_load_actions_runs_cached 2>/dev/null || echo '{"workflow_runs":[]}')"
 			_std_rtr_now_epoch="$(date +%s 2>/dev/null || echo "")"
 			_std_rtr_stall_secs=$(( REVIEW_RUN_MAX_RUNTIME_MINUTES * 60 ))
+			# Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS
+			# is wedged (zero jobs, cannot be cancelled) and is not in flight.
+			local _std_rtr_zq_cutoff _std_rtr_zq_def
+			_std_rtr_zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+			_std_rtr_zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
+			[[ "${_std_rtr_zq_cutoff}" =~ ^[0-9]+$ ]] || _std_rtr_zq_cutoff=0
+			if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+				zombie_queued_log_ignored std_retrigger_review_inflight "${_std_rtr_zq_cutoff}" <<< "$(printf '%s' "${_std_rtr_inflight_blob}" | jq -c --arg br "${head_ref}" --arg pr "${pr_num}" '[.workflow_runs[]? | select(type == "object" and ((.path // "") | test("(^|/)(ai-review|internal-review|review_autofix)\\.yml(@.*)?$")) and ((.head_branch // "") == $br or ($pr != "" and ((.display_title // "") | tostring | contains("[pr:" + $pr + "]")))))]' 2>/dev/null || echo '[]')"
+			fi
 			# Provenance (issue #6629): see _pr_named_review_trust_jq_def. An
 			# empty value trusts no PR-named run; the push is then skipped
 			# below as for an incomplete listing.
@@ -28878,9 +29578,11 @@ STALL_EOF
                 --arg db "${_std_rtr_review_default_branch}" \
                 --arg repo "${GITHUB_REPOSITORY:-}" \
                 --argjson now "${_std_rtr_now_epoch}" \
-                --argjson threshold "${_std_rtr_stall_secs}" "$(_pr_named_review_trust_jq_def)"'
+                --argjson zq_cutoff "${_std_rtr_zq_cutoff}" \
+                --argjson threshold "${_std_rtr_stall_secs}" "${_std_rtr_zq_def}""$(_pr_named_review_trust_jq_def)"'
                 [.workflow_runs[]?
                  | select((.status // "") == "in_progress" or (.status // "") == "queued" or (.status // "") == "pending")
+                 | select(is_wedged_queued($zq_cutoff) | not)
                  | select(
                      ((.head_branch // "") == $br)
                      or ((.head_branch // "") == "" and $sha != "" and (.head_sha // "") == $sha)
@@ -29004,6 +29706,10 @@ STALL_EOF
         ;;
       attempt_merge)
         local merge_pr
+        # Assigned explicitly: this arm runs once per issue inside the loop,
+        # and a bare re-declaration would keep the previous issue's value.
+        local _std_merge_refusal_reason=""
+        local _std_merge_log_head="invalid"
         # Same implementation-PR discipline as retrigger_review: merging is
         # the most destructive mis-target of all, so never resolve the merge
         # candidate from a bare mention-only cross-reference (issue #3816 /
@@ -29029,11 +29735,28 @@ STALL_EOF
           # block-on-any filter). Reset so a merge-lease wait below is read
           # from this PR's gate, never from an earlier PR's.
           PR_BASE_FRESHNESS_OUTCOME=""
-          if [ "${merge_state}" = "open" ] && [ "${merge_mergeable}" = "true" ] \
-            && [[ "${merge_head_sha}" =~ ^[0-9a-f]{40}$ ]] \
-            && _pr_checks_completed "${merge_pr}" "${merge_head_sha}" \
-            && _pr_base_fresh_for_merge "${merge_pr}" "${merge_head_sha}" "${merge_base_ref}"; then
-            _orch_squash_merge_bound "${merge_pr}" "${merge_head_sha}" auto || true
+          # Record the first gate that refused the merge (#9715, follow-up of
+          # #9520). The gates, their order and their arguments match the
+          # previous single && chain; an empty or failed PR fetch leaves
+          # merge_state empty and maps to state_not_open, and mergeable:null
+          # (GitHub still computing) maps to not_mergeable. `elif !` keeps
+          # each helper's failure safe under set -e.
+          if [ "${merge_state}" != "open" ]; then
+            _std_merge_refusal_reason="state_not_open"
+          elif [ "${merge_mergeable}" != "true" ]; then
+            _std_merge_refusal_reason="not_mergeable"
+          elif ! [[ "${merge_head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            _std_merge_refusal_reason="bad_head_sha"
+          elif ! _pr_checks_completed "${merge_pr}" "${merge_head_sha}"; then
+            _std_merge_refusal_reason="checks_incomplete"
+          elif ! _pr_base_fresh_for_merge "${merge_pr}" "${merge_head_sha}" "${merge_base_ref}"; then
+            _std_merge_refusal_reason="base_not_fresh"
+          elif ! _orch_squash_merge_bound "${merge_pr}" "${merge_head_sha}" auto; then
+            _std_merge_refusal_reason="merge_call_failed"
+          fi
+          # Never echo a malformed head into the log line.
+          if [[ "${merge_head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+            _std_merge_log_head="${merge_head_sha}"
           fi
         fi
         if ! [[ "${merge_pr}" =~ ^[0-9]+$ ]]; then
@@ -29052,8 +29775,16 @@ STALL_EOF
           # failed merge: the lease tick re-dispatches the PR when the lease
           # is granted, so the recovery budget is not spent.
           echo "  [standalone-stall] Issue #${issue_num}: PR #${merge_pr} waits for the merge lease (PR #${MERGE_LEASE_BLOCKER:-?}); not counting a recovery attempt."
+          echo "STANDALONE_STALL_MERGE issue=${issue_num} pr=${merge_pr} head=${_std_merge_log_head} outcome=lease_wait reason=merge_lease_wait"
           STALL_RECOVERY_EFFECTIVE_ACTION="attempt_merge_skipped_merge_lease_wait"
+        elif [ -n "${_std_merge_refusal_reason}" ]; then
+          echo "STANDALONE_STALL_MERGE issue=${issue_num} pr=${merge_pr} head=${_std_merge_log_head} outcome=refused reason=${_std_merge_refusal_reason}"
+          STALL_RECOVERY_EFFECTIVE_ACTION="attempt_merge_refused_${_std_merge_refusal_reason}"
+          tg_notify_issue "${issue_num}" "Standalone stall recovery: attempted merge retry for ready-to-merge issue (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1))). Merge refused: ${_std_merge_refusal_reason}." "DEBUG"
+          STALL_RECOVERY_SHOULD_INCREMENT="true"
+          took_action="true"
         else
+          echo "STANDALONE_STALL_MERGE issue=${issue_num} pr=${merge_pr} head=${_std_merge_log_head} outcome=merge_requested reason=none merge_outcome=${ORCH_MERGE_BOUND_OUTCOME:-unknown}"
           tg_notify_issue "${issue_num}" "Standalone stall recovery: attempted merge retry for ready-to-merge issue (stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "DEBUG"
           STALL_RECOVERY_SHOULD_INCREMENT="true"
           took_action="true"
@@ -29998,16 +30729,29 @@ _has_active_autofix_run()
 	local pr_number="$1"
 	local head_ref="$2"
 	local log_prefix="[conflict-dispatch] PR #${pr_number}"
+	# Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is
+	# wedged (zero jobs, cannot be cancelled) and is not active. The same
+	# listing call now returns createdAt so it can be filtered locally.
+	local aar_zq_cutoff aar_zq_def
+	aar_zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+	[[ "${aar_zq_cutoff}" =~ ^[0-9]+$ ]] || aar_zq_cutoff=0
+	aar_zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
 
 	for wf_candidate in ai-review.yml internal-review.yml review_autofix.yml; do
-		local active
-		active="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
+		local active aar_runs_json
+		aar_runs_json="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
 			--workflow "${wf_candidate}" \
 			--branch "${head_ref}" \
 			--limit 5 \
-			--json status \
-			--jq '[.[] | select(.status == "in_progress" or .status == "queued" or .status == "pending")] | length' \
+			--json status,createdAt,databaseId,workflowName \
+			2>/dev/null || echo "[]")"
+		if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+			zombie_queued_log_ignored conflict_dispatch_active_autofix "${aar_zq_cutoff}" <<< "${aar_runs_json}"
+		fi
+		active="$(printf '%s' "${aar_runs_json}" \
+			| jq -r --argjson zq_cutoff "${aar_zq_cutoff}" "${aar_zq_def}"'[.[] | select(.status == "in_progress" or .status == "queued" or .status == "pending") | select(is_wedged_queued($zq_cutoff) | not)] | length' \
 			2>/dev/null || echo "0")"
+		[[ "${active}" =~ ^[0-9]+$ ]] || active=0
 		if [ "${active}" -gt 0 ]; then
 			echo "  ${log_prefix} Active autofix run found (workflow=${wf_candidate}, count=${active}). Skipping dispatch."
 			return 0
@@ -30031,8 +30775,11 @@ _has_active_autofix_run()
 			echo "  ${log_prefix} Review dispatch run listing incomplete (PR-named lookup); treating a review run as possibly active. Skipping; the next poll cycle retries."
 			return 0
 		fi
+		if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+			zombie_queued_log_ignored conflict_dispatch_active_autofix "${aar_zq_cutoff}" <<< "${pr_named_json}"
+		fi
 		pr_named_active="$(printf '%s' "${pr_named_json}" \
-			| jq -r '[.[] | select(.status == "in_progress" or .status == "queued" or .status == "pending")] | length' \
+			| jq -r --argjson zq_cutoff "${aar_zq_cutoff}" "${aar_zq_def}"'[.[] | select(.status == "in_progress" or .status == "queued" or .status == "pending") | select(is_wedged_queued($zq_cutoff) | not)] | length' \
 			2>/dev/null || echo "0")"
 		if [ "${pr_named_active:-0}" -gt 0 ] 2>/dev/null; then
 			echo "  ${log_prefix} Active autofix run found (workflow_dispatch run named for PR #${pr_number}, count=${pr_named_active}). Skipping dispatch."
@@ -30756,6 +31503,8 @@ fi
 # only path that scans blocked standalone items on those ticks. The workflow's
 # complementary has_work gates keep it exclusive with the post-loop scan.
 if _is_truthy "${UNBLOCK_SCAN_SWEEP_ONLY:-false}"; then
+  # Before the scan, so a released PR is not judged as still blocked.
+  release_head_bound_needs_human_latches || echo "NEEDS_HUMAN_HEAD_LATCH outcome=skip reason=error rc=$?"
   run_unblock_scan || echo "UNBLOCK_SCAN outcome=skip reason=error rc=$?"
   # Check after merge (#8427 P5) on idle ticks. This step runs on every idle
   # tick, unlike the standalone-recovery sweep, which
@@ -35613,7 +36362,13 @@ ${RB_FIX_DESC}
                 # the merge is always bound — no concurrent-push
                 # window between judge decision and merge.
                 _rb_mwf_match_arg=(--match-head-commit "${_rb_mwf_sha}")
-                if gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash "${_rb_mwf_match_arg[@]}" 2>/dev/null; then
+                # #9939: never merge synchronously while GitHub reports
+                # the PR blocked (the admin GH_PAT would bypass the
+                # ruleset). Reuses _rb_mwf_json: no extra call.
+                if ! declare -F _pr_sync_merge_blocked_guard >/dev/null 2>&1 \
+                  || ! _pr_sync_merge_blocked_guard "${_rb_mwf_json}" "${_rb_mwf_base}"; then
+                  echo "::warning::PR #${RB_PR} sync merge deferred: GitHub reports mergeable_state=${SYNC_MERGE_BLOCKED_GUARD_STATE:-unknown} (blockers: ${SYNC_MERGE_BLOCKED_GUARD_BLOCKERS:-unknown}). Leaving issue in ai:review-blocked — next poll cycle will re-fire the judge."
+                elif gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash "${_rb_mwf_match_arg[@]}" 2>/dev/null; then
                   echo "  PR #${RB_PR} merged synchronously."
                   MERGE_CONFIRMED="true"
                 else
@@ -36499,6 +37254,11 @@ fi
       # assignments stay trapped in the subshell and the diagnostic branch
       # cannot inspect the same payload.
       _load_actions_runs_cached >/dev/null || true
+      # Self-run check: refetch live once when the blob is stale (TTL/304/
+      # fallback without this run); parent shell so the memo survives.
+      if declare -F _ensure_actions_runs_blob_has_self_run >/dev/null 2>&1; then
+        _ensure_actions_runs_blob_has_self_run || true
+      fi
 
       # Build the set of issues with active workflows (reusing the one API
       # call batch primed above to avoid per-issue API calls).
@@ -37897,6 +38657,7 @@ if [ "${STANDALONE_PR_SWEEP_ONLY_ACTIVE}" != "true" ]; then
   run_persist_postmerge_verify || echo "PERSIST postmerge outcome=error reason=rc_$?"
 
   release_staged_support_needs_human_latches
+  release_head_bound_needs_human_latches || echo "NEEDS_HUMAN_HEAD_LATCH outcome=skip reason=error rc=$?"
 
   # Never ends the tick: a failure inside is logged and the sweeps below run.
   run_unblock_scan || echo "UNBLOCK_SCAN outcome=skip reason=error rc=$?"
