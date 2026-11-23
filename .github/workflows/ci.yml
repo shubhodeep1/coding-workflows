@@ -1594,6 +1594,246 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_evidence_pack.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_evidence_broker.py
 
+      # Moved from tests-heal-plan-and-validation, which took 15m35s of its 20
+      # minutes on main (run 43314513853, budget-watch issue #9420, re-issued as
+      # #9684). That run's step timings could not be read, so the pick is an
+      # estimate from planning-sandbox timings and test and subprocess counts,
+      # not a measurement. The heal job's own heal step cannot move whole
+      # (#7387). These six steps need only the checkout, Python 3.12 and the
+      # job's pip set: no Node, no git history and no prepared .claude/ live
+      # copies; this job's extra base history is harmless to them. Names and
+      # bodies unchanged; each step runs once per CI run. Why this job: every
+      # single-leg test job has been flagged near 15 of its 20 minutes, and this
+      # one lost its largest step to orchestrate-poll after its last flag
+      # (#9391). The never-flagged tests-system-python (24 shards) and
+      # tests-sandbox-python (3 image families) are matrix jobs, where an
+      # unguarded step would run once per leg. If budget-watch flags this job
+      # next, measure step timings before moving anything again.
+      - name: Merge probe unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_merge_probe.py
+
+      - name: Validation shell-quoting and credential-scrub tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_render_validation_templates_shell_quoting.py tests/test_validate_driver_credential_scrub.py tests/test_validation_streaming_output.py
+          # Scheduled validation (issue #7553): wrapper schedule, deterministic mode and failure sink.
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validate_scheduled_mode.py tests/test_validate_scheduled_sink.py
+          # Validate job cleanup steps when authorization or runtime setup fails.
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validate_presetup_cleanup_contract.py
+
+      - name: Shared PR check-runs merge gate (pr_checks_lib) tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_pr_checks_lib_required_filter.py
+
+      # Moved from tests-release-and-log-analysis, which took 15m01s of its 20
+      # minutes on main (run 40368173231, budget-watch issue #8208). The run's
+      # step timings could not be read, so these steps were chosen by their
+      # subprocess and test counts; the savings are an estimate. When #8208
+      # moved these steps, tests-heal-plan-and-validation had had no steps moved
+      # in since #7690. Names and bodies unchanged.
+      #
+      # The paragraph above describes tests-heal-plan-and-validation, where these
+      # three steps ran until budget-watch issue #9420 (re-issued as #9684) moved
+      # them on to this job with the three steps above. Names and bodies unchanged.
+      - name: Mark-stable release-tag refspec contract test
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mark_stable_release_tag_refspec_contract.py
+
+      - name: Release CI gate tests (stubbed gh; both release workflows)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_release_ci_gate.py
+          # Security finding release-gate-ignores-actions-ci (#6797, Refs
+          # #6532): both stable-tag writers must require a successful
+          # github-actions `lint` check-run from ci.yml on the exact commit
+          # they release. Runs scripts/release_ci_gate.sh against a stub `gh`
+          # for every pass/fail path, then checks that both release jobs call
+          # the gate before any changelog push or tag write.
+          work="$(mktemp -d)"
+          trap 'rm -rf "${work}"' EXIT
+          mkdir -p "${work}/bin" "${work}/fx"
+          cat > "${work}/bin/gh" <<'STUB'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          fx="${RCG_TEST_FIXTURE_DIR:?}"
+          if [ -f "${fx}/fail" ]; then
+            echo "stub gh: forced failure" >&2
+            exit 1
+          fi
+          case "$*" in
+            *actions/workflows/ci.yml/runs*) cat "${fx}/runs.json" ;;
+            *check-runs*)
+              n=0
+              if [ -f "${fx}/counter" ]; then n="$(cat "${fx}/counter")"; fi
+              echo "$((n + 1))" > "${fx}/counter"
+              if [ -f "${fx}/checks.${n}.json" ]; then
+                cat "${fx}/checks.${n}.json"
+              else
+                cat "${fx}/checks.json"
+              fi
+              ;;
+            *) echo "stub gh: unexpected call: $*" >&2; exit 1 ;;
+          esac
+          STUB
+          chmod +x "${work}/bin/gh"
+
+          sha="$(printf 'a%.0s' $(seq 1 40))"
+          other_sha="$(printf 'b%.0s' $(seq 1 40))"
+          RCG_FX="${work}/fx" RCG_SHA="${sha}" RCG_OTHER="${other_sha}" python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RCG_FX"])
+          sha = os.environ["RCG_SHA"]
+          other = os.environ["RCG_OTHER"]
+          CI_RUN = {"head_sha": sha, "path": ".github/workflows/ci.yml", "check_suite_id": 100}
+
+
+          def check(run_id=1, status="completed", conclusion="success", head=sha, app="github-actions", suite=100, name="lint"):
+              return {"id": run_id, "name": name, "head_sha": head, "status": status,
+                      "conclusion": conclusion, "app": {"slug": app}, "check_suite": {"id": suite}}
+
+
+          def write(case, runs, checks, extra=None):
+              d = root / case
+              d.mkdir()
+              (d / "runs.json").write_text(json.dumps([{"workflow_runs": runs}]))
+              (d / "checks.json").write_text(checks if isinstance(checks, str) else json.dumps([{"check_runs": checks}]))
+              for name, body in (extra or {}).items():
+                  (d / name).write_text(body)
+
+
+          write("success", [CI_RUN], [check()])
+          write("success_ref_suffix", [dict(CI_RUN, path=".github/workflows/ci.yml@refs/heads/stable")], [check()])
+          write("missing", [], [])
+          write("pending", [CI_RUN], [check(status="in_progress", conclusion=None)])
+          write("cancelled", [CI_RUN], [check(conclusion="cancelled")])
+          write("failure", [CI_RUN], [check(conclusion="failure")])
+          write("timed_out", [CI_RUN], [check(conclusion="timed_out")])
+          write("skipped", [CI_RUN], [check(conclusion="skipped")])
+          write("gh_fail", [CI_RUN], [check()], {"fail": ""})
+          write("malformed_shape", [CI_RUN], json.dumps({"check_runs": [check()]}))
+          write("malformed_json", [CI_RUN], "not json")
+          write("non_actions_app", [CI_RUN], [check(app="evil-app")])
+          write("non_ci_suite", [CI_RUN], [check(suite=999)])
+          write("ci_run_other_sha", [dict(CI_RUN, head_sha=other)], [check()])
+          write("other_workflow", [dict(CI_RUN, path=".github/workflows/lint.yml")], [check()])
+          write("sha_mismatch", [CI_RUN], [check(head=other)])
+          write("newest_cancelled", [CI_RUN], [check(run_id=10), check(run_id=11, conclusion="cancelled")])
+          write("newest_success", [CI_RUN], [check(run_id=10, conclusion="failure"), check(run_id=11)])
+          write("pending_then_success", [CI_RUN], [check()],
+                {"checks.0.json": json.dumps([{"check_runs": [check(status="queued", conclusion=None)]}])})
+          PY
+
+          failures=0
+          run_case() {
+            # $1 case, $2 expected exit code, $3 expected output regex,
+            # remaining args: extra env assignments.
+            local case_name="$1" want_rc="$2" want_re="$3"
+            shift 3
+            local out rc=0
+            out="$(env PATH="${work}/bin:${PATH}" GH_RETRY_MAX_ATTEMPTS=1 \
+              RCG_TEST_FIXTURE_DIR="${work}/fx/${case_name}" \
+              RELEASE_CI_GATE_WAIT_SECS=0 RELEASE_CI_GATE_POLL_SECS=1 "$@" \
+              bash scripts/release_ci_gate.sh "${GATE_REPO:-owner/repo}" "${GATE_SHA:-${sha}}" 2>&1)" || rc=$?
+            # Flatten to one line so a pattern can span several log lines.
+            if [ "${rc}" -ne "${want_rc}" ] || ! grep -Eq "${want_re}" <<<"$(tr '\n' ' ' <<<"${out}")"; then
+              echo "::error::release CI gate case '${case_name}': rc=${rc} (want ${want_rc}), output does not match /${want_re}/"
+              printf '%s\n' "${out}"
+              failures=$((failures + 1))
+            else
+              echo "OK: ${case_name} (rc=${rc})"
+            fi
+          }
+
+          run_case success 0 'RELEASE_CI_GATE .*outcome=pass reason=success check_run_id=1 '
+          run_case success_ref_suffix 0 'outcome=pass reason=success'
+          run_case missing 1 'outcome=fail reason=wait_timeout .*last_state=missing'
+          run_case pending 1 'outcome=fail reason=wait_timeout .*status=in_progress .*last_state=pending'
+          run_case cancelled 1 'outcome=fail reason=conclusion_cancelled'
+          run_case failure 1 'outcome=fail reason=conclusion_failure'
+          run_case timed_out 1 'outcome=fail reason=conclusion_timed_out'
+          run_case skipped 1 'outcome=fail reason=conclusion_skipped'
+          run_case gh_fail 1 'outcome=fail reason=api_unreadable'
+          run_case malformed_shape 1 'outcome=fail reason=api_unreadable'
+          run_case malformed_json 1 'outcome=fail reason=api_unreadable'
+          run_case non_actions_app 1 'outcome=fail reason=wait_timeout .*last_state=non_actions_app'
+          run_case non_ci_suite 1 'outcome=fail reason=wait_timeout .*last_state=non_actions_app'
+          run_case ci_run_other_sha 1 'outcome=fail reason=wait_timeout .*last_state=non_actions_app'
+          run_case other_workflow 1 'outcome=fail reason=wait_timeout .*last_state=non_actions_app'
+          run_case sha_mismatch 1 'outcome=fail reason=sha_mismatch'
+          run_case newest_cancelled 1 'outcome=fail reason=conclusion_cancelled check_run_id=11 '
+          run_case newest_success 0 'outcome=pass reason=success check_run_id=11 '
+          run_case pending_then_success 0 'outcome=waiting reason=pending.*outcome=pass reason=success' \
+            RELEASE_CI_GATE_WAIT_SECS=5
+          run_case success 0 '::warning::RELEASE_CI_GATE RELEASE_CI_GATE_WAIT_SECS.*outcome=pass' \
+            RELEASE_CI_GATE_WAIT_SECS=abc
+          GATE_SHA="${sha:0:39}" run_case success 2 'outcome=fail reason=invalid_input'
+          GATE_SHA="${other_sha^^}" run_case success 2 'outcome=fail reason=invalid_input'
+          GATE_REPO='owner/repo;id' run_case success 2 'outcome=fail reason=invalid_input'
+          GATE_REPO='../..' run_case success 2 'outcome=fail reason=invalid_input'
+
+          if [ "${failures}" -ne 0 ]; then
+            echo "::error::${failures} release CI gate case(s) failed."
+            exit 1
+          fi
+
+          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+          import sys
+          from pathlib import Path
+
+          import yaml
+
+          GATE = "Require CI / lint success on the tested commit"
+          # Built at runtime: a literal expression opener here would be
+          # evaluated by GitHub inside this run block.
+          EXPR_OPEN = "$" + "{" + "{"
+          errors = []
+          for wf in (".github/workflows/test-and-mark-stable.yml", ".github/workflows/mark-stable.yml"):
+              doc = yaml.safe_load(Path(wf).read_text(encoding="utf-8"))
+              job = doc["jobs"]["release"]
+              names = [step.get("name") for step in job["steps"]]
+              if GATE not in names:
+                  errors.append(f"{wf}: release job has no '{GATE}' step")
+                  continue
+              gate_index = names.index(GATE)
+              for earlier in ("Record the tested commit",):
+                  if earlier not in names or names.index(earlier) > gate_index:
+                      errors.append(f"{wf}: '{earlier}' must run before the gate")
+              for later in ("Assemble changelog fragments", "Tag version and update stable pointer", "Create GitHub Release"):
+                  if later not in names or names.index(later) < gate_index:
+                      errors.append(f"{wf}: '{later}' must run after the gate")
+              step = job["steps"][gate_index]
+              run = step.get("run", "")
+              if "scripts/release_ci_gate.sh" not in run or '"${RELEASE_TESTED_SHA}"' not in run:
+                  errors.append(f"{wf}: gate must run scripts/release_ci_gate.sh on the RELEASE_TESTED_SHA env value")
+              if EXPR_OPEN in run:
+                  errors.append(f"{wf}: gate run body must not contain workflow expressions; pass values through env")
+              if step.get("if") is not None or step.get("continue-on-error"):
+                  errors.append(f"{wf}: gate step must not be conditional or continue-on-error")
+              if "GH_TOKEN" not in (step.get("env") or {}):
+                  errors.append(f"{wf}: gate step must set GH_TOKEN")
+              perms = job.get("permissions") or {}
+              want = {"contents": "write", "checks": "read", "actions": "read"}
+              if any(perms.get(k) != v for k, v in want.items()):
+                  errors.append(f"{wf}: release job permissions must include {want}, got {perms}")
+          if errors:
+              for line in errors:
+                  print(f"::error::{line}")
+              sys.exit(1)
+          print("OK: both release jobs gate on CI / lint before tagging")
+          PY
+
+      - name: Cancelled CI sweep recovery tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_cancelled_rerun.py
+
   tests-heal-plan-and-validation:
     # Unit and contract tests, a contiguous slice of the old `lint` job's
     # step order. Each test job measured 2-8 minutes (#4707); 20 leaves
@@ -1803,11 +2043,7 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_integration_pr_readiness.py
 
-      - name: Merge probe unit tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_merge_probe.py
-
+      # `Merge probe unit tests` moved on to tests-hooks-and-orchestrator in #9420.
       - name: Overlap validation fallback unit tests
         run: |
           set -euo pipefail
@@ -1846,225 +2082,16 @@ jobs:
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_consumer_health_check.py
 
-      - name: Validation shell-quoting and credential-scrub tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_render_validation_templates_shell_quoting.py tests/test_validate_driver_credential_scrub.py tests/test_validation_streaming_output.py
-          # Scheduled validation (issue #7553): wrapper schedule, deterministic mode and failure sink.
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validate_scheduled_mode.py tests/test_validate_scheduled_sink.py
-          # Validate job cleanup steps when authorization or runtime setup fails.
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_validate_presetup_cleanup_contract.py
-
+      # `Validation shell-quoting and credential-scrub tests` moved on to
+      # tests-hooks-and-orchestrator in #9420.
       - name: Implement leftover issue-branch replacement tests
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_stale_branch_check.py
 
-      - name: Shared PR check-runs merge gate (pr_checks_lib) tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_pr_checks_lib_required_filter.py
-
-      # Moved from tests-release-and-log-analysis, which took 15m01s of its 20
-      # minutes on main (run 40368173231, budget-watch issue #8208). The run's
-      # step timings could not be read, so these steps were chosen by their
-      # subprocess and test counts; the savings are an estimate. This job has
-      # had no steps moved in since #7690. Names and bodies unchanged.
-      - name: Mark-stable release-tag refspec contract test
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mark_stable_release_tag_refspec_contract.py
-
-      - name: Release CI gate tests (stubbed gh; both release workflows)
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_release_ci_gate.py
-          # Security finding release-gate-ignores-actions-ci (#6797, Refs
-          # #6532): both stable-tag writers must require a successful
-          # github-actions `lint` check-run from ci.yml on the exact commit
-          # they release. Runs scripts/release_ci_gate.sh against a stub `gh`
-          # for every pass/fail path, then checks that both release jobs call
-          # the gate before any changelog push or tag write.
-          work="$(mktemp -d)"
-          trap 'rm -rf "${work}"' EXIT
-          mkdir -p "${work}/bin" "${work}/fx"
-          cat > "${work}/bin/gh" <<'STUB'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          fx="${RCG_TEST_FIXTURE_DIR:?}"
-          if [ -f "${fx}/fail" ]; then
-            echo "stub gh: forced failure" >&2
-            exit 1
-          fi
-          case "$*" in
-            *actions/workflows/ci.yml/runs*) cat "${fx}/runs.json" ;;
-            *check-runs*)
-              n=0
-              if [ -f "${fx}/counter" ]; then n="$(cat "${fx}/counter")"; fi
-              echo "$((n + 1))" > "${fx}/counter"
-              if [ -f "${fx}/checks.${n}.json" ]; then
-                cat "${fx}/checks.${n}.json"
-              else
-                cat "${fx}/checks.json"
-              fi
-              ;;
-            *) echo "stub gh: unexpected call: $*" >&2; exit 1 ;;
-          esac
-          STUB
-          chmod +x "${work}/bin/gh"
-
-          sha="$(printf 'a%.0s' $(seq 1 40))"
-          other_sha="$(printf 'b%.0s' $(seq 1 40))"
-          RCG_FX="${work}/fx" RCG_SHA="${sha}" RCG_OTHER="${other_sha}" python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          root = Path(os.environ["RCG_FX"])
-          sha = os.environ["RCG_SHA"]
-          other = os.environ["RCG_OTHER"]
-          CI_RUN = {"head_sha": sha, "path": ".github/workflows/ci.yml", "check_suite_id": 100}
-
-
-          def check(run_id=1, status="completed", conclusion="success", head=sha, app="github-actions", suite=100, name="lint"):
-              return {"id": run_id, "name": name, "head_sha": head, "status": status,
-                      "conclusion": conclusion, "app": {"slug": app}, "check_suite": {"id": suite}}
-
-
-          def write(case, runs, checks, extra=None):
-              d = root / case
-              d.mkdir()
-              (d / "runs.json").write_text(json.dumps([{"workflow_runs": runs}]))
-              (d / "checks.json").write_text(checks if isinstance(checks, str) else json.dumps([{"check_runs": checks}]))
-              for name, body in (extra or {}).items():
-                  (d / name).write_text(body)
-
-
-          write("success", [CI_RUN], [check()])
-          write("success_ref_suffix", [dict(CI_RUN, path=".github/workflows/ci.yml@refs/heads/stable")], [check()])
-          write("missing", [], [])
-          write("pending", [CI_RUN], [check(status="in_progress", conclusion=None)])
-          write("cancelled", [CI_RUN], [check(conclusion="cancelled")])
-          write("failure", [CI_RUN], [check(conclusion="failure")])
-          write("timed_out", [CI_RUN], [check(conclusion="timed_out")])
-          write("skipped", [CI_RUN], [check(conclusion="skipped")])
-          write("gh_fail", [CI_RUN], [check()], {"fail": ""})
-          write("malformed_shape", [CI_RUN], json.dumps({"check_runs": [check()]}))
-          write("malformed_json", [CI_RUN], "not json")
-          write("non_actions_app", [CI_RUN], [check(app="evil-app")])
-          write("non_ci_suite", [CI_RUN], [check(suite=999)])
-          write("ci_run_other_sha", [dict(CI_RUN, head_sha=other)], [check()])
-          write("other_workflow", [dict(CI_RUN, path=".github/workflows/lint.yml")], [check()])
-          write("sha_mismatch", [CI_RUN], [check(head=other)])
-          write("newest_cancelled", [CI_RUN], [check(run_id=10), check(run_id=11, conclusion="cancelled")])
-          write("newest_success", [CI_RUN], [check(run_id=10, conclusion="failure"), check(run_id=11)])
-          write("pending_then_success", [CI_RUN], [check()],
-                {"checks.0.json": json.dumps([{"check_runs": [check(status="queued", conclusion=None)]}])})
-          PY
-
-          failures=0
-          run_case() {
-            # $1 case, $2 expected exit code, $3 expected output regex,
-            # remaining args: extra env assignments.
-            local case_name="$1" want_rc="$2" want_re="$3"
-            shift 3
-            local out rc=0
-            out="$(env PATH="${work}/bin:${PATH}" GH_RETRY_MAX_ATTEMPTS=1 \
-              RCG_TEST_FIXTURE_DIR="${work}/fx/${case_name}" \
-              RELEASE_CI_GATE_WAIT_SECS=0 RELEASE_CI_GATE_POLL_SECS=1 "$@" \
-              bash scripts/release_ci_gate.sh "${GATE_REPO:-owner/repo}" "${GATE_SHA:-${sha}}" 2>&1)" || rc=$?
-            # Flatten to one line so a pattern can span several log lines.
-            if [ "${rc}" -ne "${want_rc}" ] || ! grep -Eq "${want_re}" <<<"$(tr '\n' ' ' <<<"${out}")"; then
-              echo "::error::release CI gate case '${case_name}': rc=${rc} (want ${want_rc}), output does not match /${want_re}/"
-              printf '%s\n' "${out}"
-              failures=$((failures + 1))
-            else
-              echo "OK: ${case_name} (rc=${rc})"
-            fi
-          }
-
-          run_case success 0 'RELEASE_CI_GATE .*outcome=pass reason=success check_run_id=1 '
-          run_case success_ref_suffix 0 'outcome=pass reason=success'
-          run_case missing 1 'outcome=fail reason=wait_timeout .*last_state=missing'
-          run_case pending 1 'outcome=fail reason=wait_timeout .*status=in_progress .*last_state=pending'
-          run_case cancelled 1 'outcome=fail reason=conclusion_cancelled'
-          run_case failure 1 'outcome=fail reason=conclusion_failure'
-          run_case timed_out 1 'outcome=fail reason=conclusion_timed_out'
-          run_case skipped 1 'outcome=fail reason=conclusion_skipped'
-          run_case gh_fail 1 'outcome=fail reason=api_unreadable'
-          run_case malformed_shape 1 'outcome=fail reason=api_unreadable'
-          run_case malformed_json 1 'outcome=fail reason=api_unreadable'
-          run_case non_actions_app 1 'outcome=fail reason=wait_timeout .*last_state=non_actions_app'
-          run_case non_ci_suite 1 'outcome=fail reason=wait_timeout .*last_state=non_actions_app'
-          run_case ci_run_other_sha 1 'outcome=fail reason=wait_timeout .*last_state=non_actions_app'
-          run_case other_workflow 1 'outcome=fail reason=wait_timeout .*last_state=non_actions_app'
-          run_case sha_mismatch 1 'outcome=fail reason=sha_mismatch'
-          run_case newest_cancelled 1 'outcome=fail reason=conclusion_cancelled check_run_id=11 '
-          run_case newest_success 0 'outcome=pass reason=success check_run_id=11 '
-          run_case pending_then_success 0 'outcome=waiting reason=pending.*outcome=pass reason=success' \
-            RELEASE_CI_GATE_WAIT_SECS=5
-          run_case success 0 '::warning::RELEASE_CI_GATE RELEASE_CI_GATE_WAIT_SECS.*outcome=pass' \
-            RELEASE_CI_GATE_WAIT_SECS=abc
-          GATE_SHA="${sha:0:39}" run_case success 2 'outcome=fail reason=invalid_input'
-          GATE_SHA="${other_sha^^}" run_case success 2 'outcome=fail reason=invalid_input'
-          GATE_REPO='owner/repo;id' run_case success 2 'outcome=fail reason=invalid_input'
-          GATE_REPO='../..' run_case success 2 'outcome=fail reason=invalid_input'
-
-          if [ "${failures}" -ne 0 ]; then
-            echo "::error::${failures} release CI gate case(s) failed."
-            exit 1
-          fi
-
-          PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
-          import sys
-          from pathlib import Path
-
-          import yaml
-
-          GATE = "Require CI / lint success on the tested commit"
-          # Built at runtime: a literal expression opener here would be
-          # evaluated by GitHub inside this run block.
-          EXPR_OPEN = "$" + "{" + "{"
-          errors = []
-          for wf in (".github/workflows/test-and-mark-stable.yml", ".github/workflows/mark-stable.yml"):
-              doc = yaml.safe_load(Path(wf).read_text(encoding="utf-8"))
-              job = doc["jobs"]["release"]
-              names = [step.get("name") for step in job["steps"]]
-              if GATE not in names:
-                  errors.append(f"{wf}: release job has no '{GATE}' step")
-                  continue
-              gate_index = names.index(GATE)
-              for earlier in ("Record the tested commit",):
-                  if earlier not in names or names.index(earlier) > gate_index:
-                      errors.append(f"{wf}: '{earlier}' must run before the gate")
-              for later in ("Assemble changelog fragments", "Tag version and update stable pointer", "Create GitHub Release"):
-                  if later not in names or names.index(later) < gate_index:
-                      errors.append(f"{wf}: '{later}' must run after the gate")
-              step = job["steps"][gate_index]
-              run = step.get("run", "")
-              if "scripts/release_ci_gate.sh" not in run or '"${RELEASE_TESTED_SHA}"' not in run:
-                  errors.append(f"{wf}: gate must run scripts/release_ci_gate.sh on the RELEASE_TESTED_SHA env value")
-              if EXPR_OPEN in run:
-                  errors.append(f"{wf}: gate run body must not contain workflow expressions; pass values through env")
-              if step.get("if") is not None or step.get("continue-on-error"):
-                  errors.append(f"{wf}: gate step must not be conditional or continue-on-error")
-              if "GH_TOKEN" not in (step.get("env") or {}):
-                  errors.append(f"{wf}: gate step must set GH_TOKEN")
-              perms = job.get("permissions") or {}
-              want = {"contents": "write", "checks": "read", "actions": "read"}
-              if any(perms.get(k) != v for k, v in want.items()):
-                  errors.append(f"{wf}: release job permissions must include {want}, got {perms}")
-          if errors:
-              for line in errors:
-                  print(f"::error::{line}")
-              sys.exit(1)
-          print("OK: both release jobs gate on CI / lint before tagging")
-          PY
-
-      - name: Cancelled CI sweep recovery tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_cancelled_rerun.py
+      # `Shared PR check-runs merge gate (pr_checks_lib) tests` and the three
+      # #8208 steps (mark-stable refspec, release CI gate, cancelled CI sweep)
+      # moved on to tests-hooks-and-orchestrator in #9420.
 
       # Moved from tests-release-and-log-analysis, which took 15m13s of its 20
       # minutes on main (run 40716905879, budget-watch issue #8268). That run's
@@ -2988,6 +3015,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_core_modes.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_review_judge_modes.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_render_prompt_validate_analytics_modes.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_prompt_invalid_utf8.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mode_workflow_analysis_prompt_findings_first.py
 
       # Moved again from tests-heal-plan-and-validation, which took 16m08s of
@@ -4248,6 +4276,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_pr_tree_python_isolation.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_merge_precheck.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_checkout_head_diagnostics.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_pr_closed_gate.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_autofix_terminal_same_head_gate.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_slop_scan_local.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_autofix_editor_noop_cascade_contract.py
@@ -4733,7 +4762,25 @@ jobs:
           # tests tests/test_sandbox_python_coverage.py registers for the family.
           # The test container gets no network, no credential, no capability and
           # no root: uid 65534, read-only root and checkout (/src), tmpfs /tmp.
+          #
+          # Each phase (image resolution, derived python3-pytest build, pytest
+          # run) is timed and bounded on its own (#9560: the review leg ran past
+          # the job's 20-minute timeout in run 43771105041 and was cancelled with
+          # no message). Budget: 300 + 180 + 480 = 960 s, plus 3 x 10 s kill-after,
+          # plus about 2 minutes for checkout, setup-python, pip install and the
+          # coverage guard: about 18 minutes, under timeout-minutes: 20. The step
+          # env: deliberately maps no repository variable for these limits, so in
+          # CI they change only by editing the defaults below (keeping the sum
+          # under the job budget); the env names exist for local runs of this
+          # body (1-9999 s; anything else falls back to the default).
           set -euo pipefail
+
+          image_limit="${CI_SANDBOX_PYTHON_IMAGE_TIMEOUT_SECS:-300}"
+          [[ "${image_limit}" =~ ^[1-9][0-9]{0,3}$ ]] || image_limit=300
+          derive_limit="${CI_SANDBOX_PYTHON_DERIVE_TIMEOUT_SECS:-180}"
+          [[ "${derive_limit}" =~ ^[1-9][0-9]{0,3}$ ]] || derive_limit=180
+          pytest_limit="${CI_SANDBOX_PYTHON_PYTEST_TIMEOUT_SECS:-480}"
+          [[ "${pytest_limit}" =~ ^[1-9][0-9]{0,3}$ ]] || pytest_limit=480
 
           family="${CI_SANDBOX_PYTHON_FAMILY:-}"
           codex_version="${CODEX_VERSION:-v0.114.0}"
@@ -4754,22 +4801,47 @@ jobs:
             exit 1
           fi
 
+          # One timing line per phase; GNU timeout exits 124 (TERM was enough) or
+          # 137 (kill-after fired), and either names the family and the phase.
+          # 137 is also an OOM kill, so it counts as a limit hit only once the
+          # limit has elapsed (as scripts/run_workspace_hook.sh and
+          # scripts/review_untrusted_sandbox.sh do); an earlier 137 is reported
+          # by the caller as an ordinary phase failure with its rc.
+          ci_sandbox_phase_done()
+          {
+            local phase="$1" start="$2" rc="$3" limit="$4" limit_var="$5"
+            echo "sandbox-python timing family=${family} phase=${phase} elapsed_secs=$(( SECONDS - start )) rc=${rc}"
+            if [ "${rc}" -eq 124 ] || { [ "${rc}" -eq 137 ] && [ "$(( SECONDS - start ))" -ge "${limit}" ]; }; then
+              echo "::error::Sandbox family ${family} phase ${phase} hit its ${limit}s limit (${limit_var}); see the sandbox-python timing lines above."
+              return 1
+            fi
+            return 0
+          }
+
           # No credential reaches the image helpers; GHCR pulls are anonymous.
+          # timeout (without --foreground) signals its whole process group, so a
+          # hanging local-build fallback's docker CLI is stopped too.
+          image_start="${SECONDS}"
+          image_rc=0
           case "${family}" in
             clarify)
-              image_id="$(env -u GH_TOKEN -u GITHUB_TOKEN bash scripts/sandbox_image.sh build --family clarify \
-                --build-arg "CODEX_VERSION=${codex_version}" -f scripts/clarify_sandbox/Dockerfile scripts/clarify_sandbox)" || image_id=""
+              image_id="$(env -u GH_TOKEN -u GITHUB_TOKEN timeout --signal=TERM --kill-after=10s "${image_limit}s" bash scripts/sandbox_image.sh build --family clarify \
+                --build-arg "CODEX_VERSION=${codex_version}" -f scripts/clarify_sandbox/Dockerfile scripts/clarify_sandbox)" || image_rc=$?
               ;;
             review)
-              image_id="$(env -u GH_TOKEN -u GITHUB_TOKEN bash scripts/sandbox_image.sh build --family review \
-                --build-arg "OPENCODE_VERSION=${opencode_version}" -f scripts/review_sandbox/Dockerfile scripts/review_sandbox)" || image_id=""
+              image_id="$(env -u GH_TOKEN -u GITHUB_TOKEN timeout --signal=TERM --kill-after=10s "${image_limit}s" bash scripts/sandbox_image.sh build --family review \
+                --build-arg "OPENCODE_VERSION=${opencode_version}" -f scripts/review_sandbox/Dockerfile scripts/review_sandbox)" || image_rc=$?
               ;;
             codex-isolated-codex)
-              image_id="$(env -u GH_TOKEN -u GITHUB_TOKEN CODEX_VERSION="${codex_version}" bash scripts/codex_isolated_exec.sh image | tail -n 1)" || image_id=""
+              image_id="$(env -u GH_TOKEN -u GITHUB_TOKEN CODEX_VERSION="${codex_version}" timeout --signal=TERM --kill-after=10s "${image_limit}s" bash scripts/codex_isolated_exec.sh image | tail -n 1)" || image_rc=$?
               ;;
           esac
+          ci_sandbox_phase_done image_resolve "${image_start}" "${image_rc}" "${image_limit}" CI_SANDBOX_PYTHON_IMAGE_TIMEOUT_SECS || exit 1
+          if [ "${image_rc}" -ne 0 ]; then
+            image_id=""
+          fi
           if ! [[ "${image_id}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "::error::Could not resolve the ${family} sandbox image (got '${image_id}')."
+            echo "::error::Could not resolve the ${family} sandbox image (got '${image_id}', rc=${image_rc})."
             exit 1
           fi
           echo "sandbox family=${family} image=${image_id}"
@@ -4777,19 +4849,35 @@ jobs:
           run_tag="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-$$"
           base_ref="ci-sandbox-python-base:${family}-${run_tag}"
           derived_ref="ci-sandbox-python:${family}-${run_tag}"
+          # Named so a timed-out run is killed on the daemon, not just its CLI.
+          pytest_container="ci-sandbox-python-${family}-${run_tag}"
           cleanup()
           {
+            docker rm -f "${pytest_container}" >/dev/null 2>&1 || true
             docker image rm -f "${derived_ref}" "${base_ref}" >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
 
           docker tag "${image_id}" "${base_ref}"
+          derive_start="${SECONDS}"
+          derive_rc=0
           printf 'FROM %s\nUSER root\nRUN apt-get update \\\n && apt-get install -y --no-install-recommends python3-pytest \\\n && rm -rf /var/lib/apt/lists/*\n' "${base_ref}" \
-            | docker build -q -t "${derived_ref}" - >/dev/null
+            | timeout --signal=TERM --kill-after=10s "${derive_limit}s" docker build -q -t "${derived_ref}" - >/dev/null || derive_rc=$?
+          ci_sandbox_phase_done derive_build "${derive_start}" "${derive_rc}" "${derive_limit}" CI_SANDBOX_PYTHON_DERIVE_TIMEOUT_SECS || exit 1
+          if [ "${derive_rc}" -ne 0 ]; then
+            echo "::error::Sandbox family ${family} phase derive_build failed (rc=${derive_rc})."
+            exit 1
+          fi
 
           # Git identity and safe.directory live in the throwaway HOME, so tests that
           # commit in temp repos or read the read-only /src checkout work as uid 65534.
-          docker run --rm --network none --user 65534:65534 --cap-drop ALL \
+          # faulthandler_timeout (300 s, below the pytest phase limit) and
+          # --durations name a hanging or slow test, as tests-system-python does
+          # (run 43085524213); see #9560 / run 43771105041.
+          pytest_start="${SECONDS}"
+          set +e
+          timeout --signal=TERM --kill-after=10s "${pytest_limit}s" \
+            docker run --name "${pytest_container}" --rm --network none --user 65534:65534 --cap-drop ALL \
             --security-opt no-new-privileges --read-only \
             --tmpfs /tmp:rw,exec,size=512m \
             -e HOME=/tmp/home -e TMPDIR=/tmp -e PYTHONDONTWRITEBYTECODE=1 \
@@ -4808,9 +4896,16 @@ jobs:
               # Template/live-copy parity is not interpreter-specific; the 3.12 jobs and
               # tests-system-python check it with the PR-base drift tolerance this
               # shallow, base-SHA-free container cannot provide.
-              python3 -m pytest -q -p no:cacheprovider \
+              python3 -m pytest -q -p no:cacheprovider -o faulthandler_timeout=300 --durations=15 \
                 --deselect tests/test_gh_api_write_guard.py::test_template_parity "$@"
             ' _ "${family_tests[@]}"
+          pytest_rc=$?
+          set -e
+          if ! ci_sandbox_phase_done pytest_run "${pytest_start}" "${pytest_rc}" "${pytest_limit}" CI_SANDBOX_PYTHON_PYTEST_TIMEOUT_SECS; then
+            docker kill "${pytest_container}" >/dev/null 2>&1 || true
+            exit 1
+          fi
+          exit "${pytest_rc}"
 
   tests-sync-quick:
     # Sync-quick final CI (merge-base sync churn, 2026-11-17): runs only in a
