@@ -5787,7 +5787,7 @@ jobs:
       # A failed attestation fails the job here, before any tag is pushed.
       - name: Attest sync manifest
         if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: ${{ steps.sync_manifest.outputs.path }}
 
@@ -5984,7 +5984,7 @@ jobs:
 
       - name: Attest release manifest
         if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: ${{ steps.release_manifest.outputs.manifest_path }}
 
