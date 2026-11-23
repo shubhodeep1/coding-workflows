@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:2605-2615 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The regular expressions in _gh_pr_cache_evict_for_cmd do not match the real comment-post and check-run endpoint paths, so the cache is not evicted after those writes.\n  WHY: The regexes ^repos/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(issues|pulls)/comments/ and ^repos/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(check-runs|statuses/) fail to match the actual API endpoint paths used by the caching mechanism (e.g., repos/o/r/issues/number/comments, repos/o/r/commits/sha/check-runs), causing the cache to become stale after comment posts and check-run updates; the source severity MAJOR is mapped to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Every PR write evicts the affected kinds: push, label change, comment post, update-branch.\"\n  expected_change_site: scripts/gh_helpers.sh within _gh_pr_cache_evict_for_cmd\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The regex for identifying comment-related endpoints does not match the actual list of API endpoints for comment posts, as demonstrated in the CORRECTNESS & LOGIC finding.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/gh_helpers.sh:2605-2615 | severity=MAJOR | confidence=5\n  PROBLEM: Incorrect regular expressions in _gh_pr_cache_evict_for_cmd prevent cache eviction after comment posts and check-run status updates.\n  WHY: The regexes ^repos/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(issues|pulls)/comments/ and ^repos/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(check-runs|statuses/) fail to match the actual API endpoint paths used by the caching mechanism (e.g., repos/o/r/issues/number/comments, repos/o/r/commits/sha/check-runs), causing the cache to become stale after comment posts and check-run updates.\n- TASK_GAP | severity=MAJOR | confidence=5\n  Requirement: \"Every PR write evicts the affected kinds: push, label change, comment post, update-branch.\"\n  Expected change site: scripts/gh_helpers.sh within _gh_pr_cache_evict_for_cmd\n  Evidence of absence: The regex for identifying comment-related endpoints does not match the actual list of API endpoints for comment posts, as demonstrated in the CORRECTNESS & LOGIC finding.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ed7adc9bdd26e813777b859be3a61b252e36ae87a77bba8fd93f601cbf20c46f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9935,
+    "run_id": "45180396454",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45180396454",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123144457_f445a6cadd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9935,
+    "run_id": "45180396454"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-23T14:44:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
