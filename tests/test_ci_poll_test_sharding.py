@@ -2596,8 +2596,9 @@ class MovedPromote9363StepsContractTest(unittest.TestCase):
 # Steps moved out of tests-release-and-log-analysis, which took 19m01s of its
 # 20 minutes (run 45035315687, budget-watch issue #9966): step name -> module
 # paths its body names. The run's step timings were not readable; the pick is
-# an estimate from test and subprocess counts (the two steps #9363 added after
-# the job measured 15m19s). Both go to orchestrate-poll group 1, the job with
+# an estimate from test and subprocess counts; both steps were already in the
+# job when it measured 15m19s (run 43352637124), so the cause of the rise to
+# 19m01s is not identified. Both go to orchestrate-poll group 1, the job with
 # the only 30-minute budget. The wiring guard part 1 modules are pinned by
 # WIRING_PART1_MODULES.
 RELEASE_9966_SOURCE_JOB_ID = "tests-release-and-log-analysis"

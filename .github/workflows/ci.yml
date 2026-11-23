@@ -4045,9 +4045,11 @@ jobs:
       # Moved on from tests-release-and-log-analysis, which took 19m01s of its
       # 20 minutes on main (run 45035315687, budget-watch issue #9966), to
       # group 1. The run's step timings were not readable, so the pick is an
-      # estimate from test and subprocess counts: this step and the wiring
-      # guard part 1 step below were the only arrivals since that job measured
-      # 15m19s. This job has the only 30-minute budget. Group choice: the
+      # estimate from test and subprocess counts (wiring guard part 1 is the
+      # release job's heaviest step). Both steps were already in that job when
+      # it measured 15m19s (run 43352637124, #9450, later than #9363's run), so
+      # what raised it to 19m01s is not identified. This job has the only
+      # 30-minute budget. Group choice: the
       # newest recorded overruns (#9916 above) name shards 0 and 3, which hit
       # 20.2 minutes; group 1 has not been named by budget-watch since #8805
       # moved a step out after it took 16m44s (its 20m12s in #8396 predates
