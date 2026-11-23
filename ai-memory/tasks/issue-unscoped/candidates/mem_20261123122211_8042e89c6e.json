@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"codex-agent call sites read through it: ... review_enable_auto_merge.sh:119 (reuse the cache) and :242\", while \"Exactly one live pulls/N read stays before gh pr merge --auto\".\n  expected_change_site: scripts/review_enable_auto_merge.sh, `reviewed_head_is_current_for_labels()` (head read at about line 119)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  EVIDENCE: The file has no gh_pr_cached_read call and no diff hunk touches the file, tests/test_gh_pr_cached_read.py::test_auto_merge_keeps_one_live_head_read_before_merge asserts that the file never uses the cache, line 119 still fetches `pulls/${PR_NUMBER}` through `gh_retry gh api` so this read is not cached (the separate pre-merge read stays live as required), the deferral is recorded in agents.d/9928-review-pr-read-cache.md and the changelog because these reads authorise labelling and merging, and the file is not in the plan grant's files_touched list, so this needs a scope-widening follow-up issue (severity NIT from both reviewers)\n- requirement: \"Invalidation. Every PR write in the job evicts the affected kinds: push, label change, comment post, update-branch.\"\n  expected_change_site: scripts/review_autofix_step_prepush_test_gate.sh, `review_prepush_test_gate_final_ci_marker()` (final-CI marker comment POST at about line 1237)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  EVIDENCE: Line 1237 posts the final-CI marker through bare `gh api -X POST` and returns after success without calling `gh_pr_cache_evict`, no diff hunk modifies this file, the agents fragment's \"Eviction\" bullet records the gap, and the file is outside the plan grant's files_touched list. Impact today is nil because the posted comment carries the ai:final-ci-repair:v1 marker, which neither filter in _pr_base_sync_count (scripts/pr_checks_lib.sh, around line 1630) matches, so this needs a scope-widening follow-up (severity NIT from both reviewers)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"codex-agent call sites read through it: ... review_enable_auto_merge.sh:119 (reuse the cache) and :242\", while \"Exactly one live pulls/N read stays before gh pr merge --auto\".\n  Expected change site: scripts/review_enable_auto_merge.sh, the head read in reviewed_head_is_current_for_labels at about line 119.\n  Evidence of absence: The file has no gh_pr_cached_read call, and no diff hunk touches it. tests/test_gh_pr_cached_read.py::test_auto_merge_keeps_one_live_head_read_before_merge asserts that the file never uses the cache. Keeping these reads live is a deliberate choice, recorded in agents.d/9928-review-pr-read-cache.md and the changelog, because they authorise labelling and merging. The file is not in the plan grant's files_touched list. The issue does not mark this as a follow-up, so it remains an unmet item that needs a follow-up issue. No change is possible in this PR.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- TASK_GAP\n  Requirement: \"Invalidation. Every PR write in the job evicts the affected kinds: push, label change, comment post, update-branch.\"\n  Expected change site: scripts/review_autofix_step_prepush_test_gate.sh, the final-CI marker comment POST at about line 1237.\n  Evidence of absence: No diff hunk adds gh_pr_cache_evict after that bare gh api -X POST. The agents fragment's \"Eviction\" bullet records the gap, and the file is outside the plan grant's files_touched list. Impact today is nil: the ai:final-ci-repair:v1 marker is not matched by either filter in _pr_base_sync_count (scripts/pr_checks_lib.sh, around line 1630). This needs a scope-widening follow-up.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"`review_enable_auto_merge.sh:119` (reuse the cache)\" while \"Exactly one live `pulls/N` read stays before `gh pr merge --auto`.\"\n  Expected change site: `scripts/review_enable_auto_merge.sh`, `reviewed_head_is_current_for_labels()`.\n  Evidence of absence: The PR diff does not modify this file. Its line 119 still fetches `pulls/${PR_NUMBER}` through `gh_retry gh api`, so this read is not cached. The separate pre-merge read remains live as required.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"Every PR write in the job evicts the affected kinds,\" including comment posts.\n  Expected change site: `scripts/review_autofix_step_prepush_test_gate.sh`, `review_prepush_test_gate_final_ci_marker()`.\n  Evidence of absence: Line 1237 posts the final-CI marker through bare `gh api -X POST` and returns after success without calling `gh_pr_cache_evict`. The PR diff does not modify this file.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fbf44f0ce4834e7380e16ef99219ee9bd540abcf41f7ab9eeb1412c79bf89215",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9935,
+    "run_id": "45161779902",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45161779902",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123122211_8042e89c6e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9935,
+    "run_id": "45161779902"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T12:22:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
