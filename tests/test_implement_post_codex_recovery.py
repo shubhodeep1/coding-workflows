@@ -50,7 +50,7 @@ def test_generated_manifest_staging_excludes_modifications_but_accepts_deletion(
 	preflight_stage = preflight[preflight.index(start):preflight.index('while IFS= read -r -d \'\' untracked_candidate', preflight.index(start))]
 	for stage in (commit_stage, preflight_stage):
 		assert stage.count(f"':!{path}'") == 2
-		assert f'git add -u -- "${{add_u_excludes[@]}}"' in stage
+		assert 'git add -u -- "${add_u_excludes[@]}"' in stage
 		assert f'git rm --cached --quiet -- {path}' in stage
 		assert f'IMPLEMENT_GENERATED_MANIFEST_UNTRACKED path={path}' in stage
 
@@ -1702,6 +1702,76 @@ def test_commit_helper_treats_unset_fetched_manifest_as_empty() -> None:
 		assert "did_commit=false" in github_output.read_text(encoding="utf-8")
 
 
+def _run_commit_helper_with_tracked_symlink(tmp_path: Path, *, remove_link: bool, manifest_lists_link: bool, link_name: str = "CLAUDE.md") -> subprocess.CompletedProcess:
+	"""#9940: commit docs/<link_name> -> ../README.md, then run the commit helper."""
+	repo_dir = tmp_path / "repo"
+	_bootstrap_git_repo(repo_dir)
+	(repo_dir / "scripts").mkdir()
+	shutil.copy2(IMPLEMENT_COMMIT_SCRIPT, repo_dir / "scripts" / "implement_commit_changes.sh")
+	(repo_dir / "docs").mkdir()
+	os.symlink("../README.md", repo_dir / "docs" / link_name)
+	_git(["git", "add", "scripts/implement_commit_changes.sh", f"docs/{link_name}"], cwd=repo_dir)
+	_git(["git", "commit", "-m", "add helper and link"], cwd=repo_dir)
+	if remove_link:
+		(repo_dir / "docs" / link_name).unlink()
+	github_output = tmp_path / "github_output.txt"
+	github_output.write_text("", encoding="utf-8")
+	runtime_dir = tmp_path / "runtime"
+	runtime_dir.mkdir()
+	env_overrides = {
+		"ENFORCE_FILES_TOUCHED": "false",
+		"GITHUB_OUTPUT": str(github_output),
+		"GITHUB_REPOSITORY": "owner/repo",
+		"ISSUE_NUMBER": "9940",
+		"RUNTIME_DIR": str(runtime_dir),
+		"SERENA_PROJECT_BOOTSTRAP_HASH": "",
+		"SERENA_PROJECT_PREEXISTED": "false",
+		"TMPDIR": str(runtime_dir),
+	}
+	if manifest_lists_link:
+		fetched_manifest = tmp_path / "fetched_manifest.txt"
+		fetched_manifest.write_text("docs/CLAUDE.md\n", encoding="utf-8")
+		env_overrides["FETCHED_MANIFEST"] = str(fetched_manifest)
+	env = _isolated_test_env(env_overrides, cwd=repo_dir)
+	return subprocess.run(
+		["bash", "scripts/implement_commit_changes.sh"],
+		cwd=str(repo_dir),
+		env=env,
+		text=True,
+		capture_output=True,
+		timeout=60,
+	)
+
+
+def test_commit_helper_logs_tracked_symlink_delete_stages() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_symlink_delete_") as td:
+		proc = _run_commit_helper_with_tracked_symlink(Path(td), remove_link=True, manifest_lists_link=False)
+		assert "IMPLEMENT_SYMLINK_DELETE path=docs/CLAUDE.md stage=pre_cleanup" in proc.stdout, proc.stdout + proc.stderr
+		assert "IMPLEMENT_SYMLINK_DELETE path=docs/CLAUDE.md stage=post_cleanup" in proc.stdout, proc.stdout + proc.stderr
+
+
+def test_commit_helper_logs_symlink_removed_by_artifact_cleanup() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_symlink_cleanup_") as td:
+		proc = _run_commit_helper_with_tracked_symlink(Path(td), remove_link=False, manifest_lists_link=True)
+		assert "stage=pre_cleanup" not in proc.stdout, proc.stdout + proc.stderr
+		assert "IMPLEMENT_SYMLINK_DELETE path=docs/CLAUDE.md stage=post_cleanup" in proc.stdout, proc.stdout + proc.stderr
+
+
+def test_commit_helper_symlink_delete_path_masks_whitespace_and_control_chars() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_symlink_sanitize_") as td:
+		proc = _run_commit_helper_with_tracked_symlink(Path(td), remove_link=True, manifest_lists_link=False, link_name="my link\x1bx")
+		assert "IMPLEMENT_SYMLINK_DELETE path=docs/my?link?x stage=pre_cleanup" in proc.stdout, proc.stdout + proc.stderr
+		assert "IMPLEMENT_SYMLINK_DELETE path=docs/my?link?x stage=post_cleanup" in proc.stdout, proc.stdout + proc.stderr
+		assert "\x1b" not in proc.stdout
+
+
+def test_commit_helper_logs_no_symlink_delete_for_intact_links() -> None:
+	with tempfile.TemporaryDirectory(prefix="test_commit_symlink_intact_") as td:
+		proc = _run_commit_helper_with_tracked_symlink(Path(td), remove_link=False, manifest_lists_link=False)
+		assert proc.returncode == 0, proc.stdout + proc.stderr
+		assert "IMPLEMENT_SYMLINK_DELETE" not in proc.stdout
+
+
 def test_commit_helper_rolls_back_post_commit_scope_lock_violation() -> None:
 	with tempfile.TemporaryDirectory(prefix="test_commit_scope_lock_") as td:
 		tmp_path = Path(td)
@@ -2547,7 +2617,9 @@ def test_stage_workflow_support_step_records_self_repo_staged_support_ledger() -
 	assert 'echo "STAGED_SUPPORT_LEDGER=${STAGED_SUPPORT_LEDGER}"' in stage_block
 	assert 'echo "STAGED_SUPPORT_BASE_DIR=${STAGED_SUPPORT_BASE_DIR}"' in stage_block
 	assert 'echo "IMPLEMENT_STAGED_SUPPORT_RUN_DIR=${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}"' in stage_block
-	assert 'install -m 0755 "scripts/${_staged_support_runtime_script}" "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/${_staged_support_runtime_script}"' in stage_block
+	# P2b: the run dir copies from the bundle (or scripts/ under the kill switch).
+	assert 'install -m 0755 "${support_run_src}/${_staged_support_runtime_script}" "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR}/${_staged_support_runtime_script}"' in stage_block
+	assert 'support_run_src="scripts"' in stage_block
 	assert 'for _staged_support_path in "${_staged_support_installed_paths[@]}"; do' in stage_block
 	assert 'git diff --quiet HEAD -- "${_staged_support_path}"' in stage_block
 	assert "IMPLEMENT_STAGED_SUPPORT_LEDGER ref=${SCRIPT_REF} overwritten_tracked_files=" in stage_block
@@ -3012,9 +3084,9 @@ def test_guard_handler_fails_open_without_gh_helpers() -> None:
 def test_guard_handler_gh_retry_wiring_contract() -> None:
 	stage_block = _step_block_text("Stage workflow support files")
 	handler = _implement_guard_handler_text()
-	assert 'install -m 0644 scripts/gh_helpers.sh "${RUNTIME_DIR}/gh_helpers.sh"' in stage_block
-	assert stage_block.index('install -m 0755 scripts/implement_handle_guard_block.sh "${RUNTIME_DIR}/implement_handle_guard_block.sh"') < stage_block.index(
-		'install -m 0644 scripts/gh_helpers.sh "${RUNTIME_DIR}/gh_helpers.sh"'
+	assert 'install -m 0644 "${support_run_src}/gh_helpers.sh" "${RUNTIME_DIR}/gh_helpers.sh"' in stage_block
+	assert stage_block.index('install -m 0755 "${support_run_src}/implement_handle_guard_block.sh" "${RUNTIME_DIR}/implement_handle_guard_block.sh"') < stage_block.index(
+		'install -m 0644 "${support_run_src}/gh_helpers.sh" "${RUNTIME_DIR}/gh_helpers.sh"'
 	)
 	assert 'GUARD_BLOCK_GH_HELPERS_FILE="$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh"' in handler
 	assert 'source "${GUARD_BLOCK_GH_HELPERS_FILE}" && declare -F gh_retry' in handler
@@ -3034,7 +3106,7 @@ def test_guard_handler_runtime_wiring_and_expression_size_contract() -> None:
 	assert "/tmp/scope_comment.md" not in _implement_guard_handler_text()
 	assert "/tmp/destructive_comment.md" not in _implement_guard_handler_text()
 	assert "implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh" in stage_block
-	assert 'install -m 0755 scripts/implement_handle_guard_block.sh "${RUNTIME_DIR}/implement_handle_guard_block.sh"' in stage_block
+	assert 'install -m 0755 "${support_run_src}/implement_handle_guard_block.sh" "${RUNTIME_DIR}/implement_handle_guard_block.sh"' in stage_block
 	assert workflow.find("- name: Stage workflow support files") < workflow.find("- name: Commit changes") < workflow.find("- name: Destructive-commit guard — label + alert on rejection")
 	assert _extract_run_script("Destructive-commit guard — label + alert on rejection") == (
 		'set -euo pipefail\nbash "${RUNTIME_DIR}/implement_handle_guard_block.sh"\n'
