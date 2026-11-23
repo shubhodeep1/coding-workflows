@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/9728-prepush-repair-passing-change-erased.md:2 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The rewritten sentence \"an unreadable list or status, or status `unverified`, skips the guard\" leaves out a parseable `skipped` status, which also skips the guard: scripts/review_autofix_step_prepush_test_gate.sh:765 accepts `pass|fail|unverified|skipped`, and the guard at :840 fires only for `pass`.\n  WHY: Nothing breaks at runtime; this is drift in a registered doc fragment, and a reader could wrongly conclude that a `skipped` result fires the guard. Both reviewers rated it NIT, mapped here to low. minimax_minimax-m3 filed it under NAMING / BACKWARD COMPATIBILITY and z-ai_glm-5_3-flash under CORRECTNESS & LOGIC. anthropic_claude-sonnet-5_5 explicitly declined to raise it because the sentence already says the guard fires only on status `pass`.\n- agents.d/prepush-gate-passing-change-erased.md:2-3 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The skip conditions documented for the new repair-reversion guard (\"when a list or the pre-repair status cannot be read, or the status is `unverified`\") leave out the `skipped` status, which also skips the guard because it fails the `= pass` check.\n  WHY: The mismatch between doc and code could lead an auditor to conclude that a change erased while the status is `skipped` would fire the guard, which it does not. Both sources rated it NIT, mapped here to low. minimax_minimax-m3 noted this file only as a parallel drift that the last run did not touch.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- agents.d/prepush-gate-passing-change-erased.md:Line 2 | severity=NIT | confidence=4\n  PROBLEM: The documentation of skip conditions for the new repair-reversion guard is incomplete.\n  WHY: The doc says \"an unreadable list or status, or status `unverified`, skips the guard\", but a `skipped` status also skips the guard because it fails the `= pass` check. This could mislead an auditor.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.d/9728-prepush-repair-passing-change-erased.md:line 2, the sentence \"an unreadable list or status, or status `unverified`, skips the guard\" | severity=NIT | confidence=4\n  PROBLEM: The fragment lists two skip conditions but leaves out `skipped`. scripts/review_autofix_step_prepush_test_gate.sh:765 accepts `pass|fail|unverified|skipped`, and the guard at line 840 fires only when `[ \"${rpg_pre_repair_status}\" = pass ]`.\n  WHY: Nothing breaks at runtime. The registered agents.d fragment is the operator contract, and the previous wording \"An unreadable status skips the guard\" was accurate; the new list leaves out `skipped`. The same drift appears in agents.d/prepush-gate-passing-change-erased.md line 3, which the last run did not touch.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.d/9728-prepush-repair-passing-change-erased.md:line 2, sentence \"an unreadable list or status, or status `unverified`, skips the guard\" | severity=NIT | confidence=4\n  PROBLEM: The skip-condition list is incomplete. `scripts/review_autofix_step_prepush_test_gate.sh:765` accepts `pass|fail|unverified|skipped`, and the guard at `scripts/review_autofix_step_prepush_test_gate.sh:840` fires only when the status is `pass`, so a parseable `skipped` status also skips the guard.\n  WHY: Nothing fails at runtime; this is drift in a registered doc. A reader could wrongly conclude that a `skipped` status fires the guard, and the last run introduced this drift.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cb2b7769c7ec74f43fd11f7ba1f247a9e39940e0dba04497be6df8baa520528d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9562,
+    "run_id": "45275556541",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45275556541",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123232258_ebdfa82686",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9562,
+    "run_id": "45275556541"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T23:22:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
