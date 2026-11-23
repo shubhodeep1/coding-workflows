@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_prepush_test_gate.sh:610-612, 739-740, 842-851 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: If the pre-repair untracked-file archive cannot be created, the repair still runs, `review_prepush_test_gate_revert all` has nothing to restore, and the guard logs `passing_change_restore_empty` but still sets `rpg_repair` to reverted and returns.\n  WHY: The editor's untracked change is lost even though the guard reports the repair as reverted, and the repair loop stops without another gate run. openai_gpt-6-luna rated it MAJOR; google_gemini-3_1-flash-lite gave no severity, so the higher rating is used. anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash rejected this as pre-existing, documented best-effort behaviour, not a regression from this PR.\n- tests/test_review_prepush_test_gate.py:416-427 | severity=medium | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: According to the reviewer, `test_review_loop_restore_that_brings_nothing_back_logs_restore_empty` never triggers the guard it tests, because the repair only removes `lib/new.py` and leaves `lib/a.py` modified and tracked.\n  WHY: According to the reviewer, `review_prepush_test_gate_changed_checked` then returns a non-empty list, `[ -z \"${rpg_post_repair_changed}\" ]` is false, the guard does not fire, and the log assertions fail. The reviewer gave no severity, so medium here is a placeholder. anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash rejected this: line 418 writes back the committed `X = 1`, so the guard fires.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add one diagnostic log line with the repair's changed-file count and paths (bounded).\" (to be logged after stray rollback and symlink restore)\n  expected_change_site: scripts/review_autofix_step_prepush_test_gate.sh in review_prepush_test_gate_repair\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: `review_prepush_test_gate_repair_diag` emits the diagnostic before the `passing_change_erased` guard (lines 782-784). That is before the later `review_prepush_test_gate_changed_checked` read at line 775 and the validator rewrite at line 806, so it may not capture the post-rollback state (SEVERITY: NIT).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_prepush_test_gate.py:416-427 | confidence=5\n  PROBLEM: Test logic in `test_review_loop_restore_that_brings_nothing_back_logs_restore_empty` is flawed; it does not trigger the guard it intends to test.\n  WHY: The repair script in the test only removes `lib/new.py`, leaving `lib/a.py` modified and tracked. So `review_prepush_test_gate_changed_checked` returns a non-empty list, the guard condition `[ -z \"${rpg_post_repair_changed}\" ]` fails, the guard does not trigger, and the log assertions fail.\n- scripts/review_autofix_step_prepush_test_gate.sh:842-850 | confidence=4\n  PROBLEM: If untracked-file backup creation fails, `review_prepush_test_gate_revert all` is called with no data to restore, but the guard still flags the repair as `reverted`, causing the repair loop to stop prematurely.\n  WHY: The script wrongly reports the editor's change as restored while the tree stays incomplete, so the loop ends without fixing the issue or restoring the editor's changes.\n- TASK_GAP\n  Requirement: \"Add one diagnostic log line with the repair's changed-file count and paths (bounded).\"\n  Expected change site: scripts/review_autofix_step_prepush_test_gate.sh in review_prepush_test_gate_repair\n  Evidence of absence: The diagnostic is emitted via `review_prepush_test_gate_repair_diag` before the `passing_change_erased` guard (lines 782-784), but the requirement says \"after stray rollback and symlink restore\". It comes before the later `review_prepush_test_gate_changed_checked` read (line 775) and the validator rewrite (line 806).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_autofix_step_prepush_test_gate.sh:739-740, 610-612, 847-851 | severity=MAJOR | confidence=4\n  PROBLEM: If the pre-repair untracked-file archive cannot be created, the repair still proceeds. When the repair deletes the untracked editor change, `review_prepush_test_gate_revert all` has no archive to restore it from, and the guard logs `passing_change_restore_empty` but unconditionally sets `rpg_repair` to reverted and returns.\n  WHY: The editor's untracked change is lost even though the guard claims to have reverted the repair, and the loop stops without another gate run, which breaks change preservation when archive creation fails.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "73e936aa21756ffd7768db08d3209ebfb349573d21e3c636d195f3f1e02b8a1b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9562,
+    "run_id": "45181766538",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45181766538",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123152148_dd2d949312",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9562,
+    "run_id": "45181766538"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T15:21:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
