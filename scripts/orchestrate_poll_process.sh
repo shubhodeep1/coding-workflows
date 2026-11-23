@@ -21285,11 +21285,15 @@ _heal_counterfactual_hold_expiry_check()
       # reopen would be closed again. Undo the close so the next tick retries
       # the whole expiry; marker-first would let a failed close block expiry.
       if gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" -f state=open >/dev/null 2>&1; then
-        echo "::warning::Could not post the hold-expired comment on heal issue #${issue_num}; reopened it so the next tick retries the expiry."
+        # The POST makes one attempt (gh_retry, #6634): if GitHub created the
+        # comment but the response was lost, the marker is on a reopened issue
+        # and later ticks log kept reason=reopened, so tell operators.
+        echo "::warning::Could not post the hold-expired comment on heal issue #${issue_num}; reopened it so the next tick retries the expiry. If an ai:heal-counterfactual-hold-expired:v1 comment appears anyway, the hold counts as reopened and will not expire on its own."
+        tg_notify_issue "${issue_num}" "Heal counterfactual hold: the hold-expired comment failed to post, so the issue was reopened and the expiry retries next tick. If the hold-expired comment appears anyway, the hold will not expire on its own; close or answer it by hand." "WARNING" || true
         reason="expired_marker_post_failed"; break
       fi
       echo "::warning::Closed heal issue #${issue_num} but could not post the hold-expired comment, and reopening it failed; a later reopen may be closed again."
-      tg_notify_issue "${issue_num}" "Heal counterfactual hold closed as not planned, but the hold-expired marker could not be posted and the issue could not be reopened." "WARNING" || true
+      tg_notify_issue "${issue_num}" "Heal counterfactual hold closed as not planned, but the hold-expired marker could not be posted and the issue could not be reopened. Before reopening it, post /approved or /reclarify, or the next tick closes it again." "WARNING" || true
       outcome="expired"; reason="reopen_failed"; break
     fi
     tg_notify_issue "${issue_num}" "Heal counterfactual hold closed as not planned after ${age_days} days (limit ${max_days} days)." "DEBUG" || true

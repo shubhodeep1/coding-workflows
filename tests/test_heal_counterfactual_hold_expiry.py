@@ -262,7 +262,9 @@ def test_failed_expired_comment_reopens_and_retries_next_tick():
 	assert len(gh) == 3, gh
 	assert gh[0][:3] == ["api", "-X", "PATCH"] and "state=closed" in gh[0], gh[0]
 	assert gh[2] == ["api", "-X", "PATCH", f"repos/owner/repo/issues/{ISSUE}", "-f", "state=open"], gh[2]
-	assert tg == []
+	# A lost response may have left the marker behind: operators are told.
+	assert "appears anyway" in proc.stdout
+	assert len(tg) == 1 and tg[0][2] == "WARNING" and "appears anyway" in tg[0][1], tg
 
 
 def test_failed_expired_comment_and_reopen_stays_expired_and_warns():
@@ -271,6 +273,7 @@ def test_failed_expired_comment_and_reopen_stays_expired_and_warns():
 	assert "reopening it failed" in proc.stdout
 	assert len(gh) == 3, gh
 	assert len(tg) == 1 and tg[0][2] == "WARNING", tg
+	assert "/approved or /reclarify" in tg[0][1], tg
 
 
 # --- answers and trust ------------------------------------------------------
