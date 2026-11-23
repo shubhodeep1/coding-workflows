@@ -2038,16 +2038,24 @@ class HolderRunsActive(unittest.TestCase):
 
 	def test_a_review_dispatched_by_the_release_pass_keeps_the_holder(self) -> None:
 		# The holder is also merge-queued: the release pass lists the runs,
-		# then dispatches its review, so the tick must list again (#9983).
-		st = self._holder(updated=OLD, extra={"active_runs": [], "dispatch_adds_run": True})
-		st["labels"] = {"4": ["ai:merge-queued"]}
-		h = _Harness(st)
-		res = h.train_fn("_mt_release", {"MT_REPO": "owner/repo"})
-		out = res.stdout + res.stderr
-		self.assertIn("MERGE_TRAIN_RELEASED pr=4 source=release", out)
-		self.assertIn("MERGE_LEASE pr=4 base=main mode=tick outcome=held reason=holder_runs_active\n", out)
-		self.assertNotIn("reason=revoked_idle", out)
-		self.assertEqual(h.state["refs"][REF], "c" * 40)
+		# then dispatches its review. GitHub creates the dispatched run after
+		# the 204, so the run may or may not be listed yet: either way the
+		# holder is kept and the tick reuses the release pass's listing (#9983).
+		h0, _ = _p2_tick(self._holder(updated=OLD, extra={"active_runs": []}))
+		one_pass = _calls_with(h0, "actions/runs?status=")
+		self.assertGreater(one_pass, 0, h0.calls)
+		for visible in (True, False):
+			with self.subTest(run_visible=visible):
+				st = self._holder(updated=OLD, extra={"active_runs": [], "dispatch_adds_run": visible})
+				st["labels"] = {"4": ["ai:merge-queued"]}
+				h = _Harness(st)
+				res = h.train_fn("_mt_release", {"MT_REPO": "owner/repo"})
+				out = res.stdout + res.stderr
+				self.assertIn("MERGE_TRAIN_RELEASED pr=4 source=release", out)
+				self.assertIn("MERGE_LEASE pr=4 base=main mode=tick outcome=held reason=holder_runs_active\n", out)
+				self.assertNotIn("reason=revoked_idle", out)
+				self.assertEqual(h.state["refs"][REF], "c" * 40)
+				self.assertEqual(_calls_with(h, "actions/runs?status="), one_pass, h.calls)
 
 	def test_revocation_off_is_unchanged(self) -> None:
 		h, out = _p2_tick(self._holder(gate=None, updated=OLD), env={"MERGE_LEASE_REVOKE_ENABLED": "false"})

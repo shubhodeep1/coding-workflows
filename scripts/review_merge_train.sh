@@ -1708,13 +1708,17 @@ _mt_merge_lease_queue_log()
 # `GET repos/<repo>`), cached in _MT_LEASE_RUNS_STATE / _MT_LEASE_RUNS_JSON,
 # which _mt_merge_lease_tick resets unless _mt_release already seeded them
 # from its own listing pass in this invocation (_MT_LEASE_RUNS_SEEDED=1, set
-# only for an "ok" seed and cleared when that pass dispatched a review); none
-# after the first call of a tick. Runs in the caller's shell (not $(...)) so
+# only for an "ok" seed); none after the first call of a tick. A PR whose
+# review that release pass just dispatched (_MT_LEASE_DISPATCHED_PRS, space-
+# separated, set by _mt_release around its tick call only) returns 0 with no
+# listing read: GitHub creates a dispatched run after the 204, so a listing
+# taken right after it may not show the run yet. Runs in the caller's shell (not $(...)) so
 # the cache persists. The listing's MERGE_TRAIN_RUNS_LISTING lines stay on
 # stderr. An incomplete listing (non-zero return) caches "failed" (return 2).
 _MT_LEASE_RUNS_STATE=""
 _MT_LEASE_RUNS_JSON=""
 _MT_LEASE_RUNS_SEEDED=""
+_MT_LEASE_DISPATCHED_PRS=""
 # _mt_lease_runs_seed <listing rc>: fills the lease cache from the
 # _mt_inflight_review_branches call just made in this shell: "ok" with its raw
 # runs only when it returned 0 with a JSON array, "failed" otherwise. No API.
@@ -1733,6 +1737,10 @@ _mt_lease_pr_runs_active()
 {
 	local lra_pr="${1:-}" lra_head="${2:-}" lra_now lra_wedged lra_hit lra_rc=0
 	[[ "${lra_pr}" =~ ^[1-9][0-9]*$ ]] || return 2
+	# Its `[pr:<n>]` review was dispatched by this release pass (#9983).
+	case " ${_MT_LEASE_DISPATCHED_PRS:-} " in
+		*" ${lra_pr} "*) return 0 ;;
+	esac
 	[[ "${lra_head}" =~ ^[0-9a-f]{40}$ ]] || lra_head=""
 	declare -F _merge_lease_wedged_queued_seconds >/dev/null 2>&1 || return 2
 	if [ -z "${_MT_LEASE_RUNS_STATE}" ]; then
@@ -1859,7 +1867,8 @@ _mt_lease_pr_runs_active()
 # per tick (only after the grace, or for the idle test when no read was made)
 # and at most one listing pass per tick (only for a holder past the grace or
 # the idle time with no live run on its head; none when _mt_release already
-# seeded the cache from its own listing and dispatched no review). G5 adds no
+# seeded the cache from its own listing; a holder whose review that pass
+# dispatched counts as active with no listing read). G5 adds no
 # call: it reuses the candidate's statuses read inside the 10-candidate cap,
 # and grants a soft
 # entry's waiter only on a confirmed success (MERGE_LEASE_GATE_CONFIRMED).
@@ -2817,10 +2826,13 @@ _mt_release() {
 	# Lease hand-off first (a closed holder frees its lease), then the
 	# final-CI resume, whose merge-mode lease check then sees the freed lease.
 	# Issue #9983: a review dispatched by this pass is not in the listing taken
-	# before it, so the tick lists again after any dispatch (a holder whose
-	# `[pr:<n>]` review was just dispatched must not be revoked as idle).
-	[ "${released}" -eq 0 ] || _MT_LEASE_RUNS_SEEDED=""
+	# before it, and GitHub creates the run after the dispatch returns, so a
+	# second listing could miss it too. The tick instead counts a holder whose
+	# `[pr:<n>]` review this pass dispatched as active (holder_runs_active),
+	# and reuses the seeded listing for every other holder (one pass).
+	_MT_LEASE_DISPATCHED_PRS="${release_released_prs}"
 	_mt_merge_lease_tick "${prs_json}" "${base_filter}" || true
+	_MT_LEASE_DISPATCHED_PRS=""
 	_mt_final_ci_merge_resume "${prs_json}" "${base_filter}" || true
 	if [ -n "${release_oldest_created_epoch}" ]; then
 		release_oldest_age=$((release_now_epoch - release_oldest_created_epoch))
