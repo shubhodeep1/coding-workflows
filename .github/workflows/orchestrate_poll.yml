@@ -1082,6 +1082,7 @@ jobs:
       - name: Replay failed trusted reclarify commands
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED: ${{ vars.SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED || 'true' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
@@ -1465,6 +1466,7 @@ jobs:
         if: steps.find_tracking.outputs.has_work == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED: ${{ vars.SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED || 'true' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
@@ -1727,6 +1729,7 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED: ${{ vars.SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED || 'true' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
@@ -1933,6 +1936,7 @@ jobs:
         if: ${{ !cancelled() && steps.find_tracking.outcome == 'success' && steps.find_tracking.outputs.has_work != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED: ${{ vars.SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED || 'true' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}

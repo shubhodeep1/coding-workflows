@@ -291,6 +291,75 @@ _fetch_blocked_issue_routing_graphql() {
   rm -rf "${page_dir}"
 }
 
+# Issue #9730: the long-lived security-audit tracker (label ai:security-audit,
+# body marker `<!-- ai:security-audit-tracker:v1 -->`) is not a work item.
+# clarify.yml and internal-clarify.yml already skip it; the poller's standalone
+# stall recovery, unblock scan and unrouted-blocked detector skip it too while
+# SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED is on. Unset, empty or `true`
+# (any case) is on; `false` is off; any other value is off with one warning.
+# Defined here because the reclarify-only early exit below runs before the
+# main flag block. No trimming, matching scripts/unblock_scan.py.
+_SECURITY_AUDIT_TRACKER_EXCLUDE_WARNED="${_SECURITY_AUDIT_TRACKER_EXCLUDE_WARNED:-false}"
+readonly SECURITY_AUDIT_TRACKER_RELEASE_LABELS_JSON='["ai:blocked","ai:clarification","ai:planning","ai:awaiting-approval","ai:implementing","ai:done","ai:ready-to-merge","ai:review-blocked"]' 2>/dev/null || true
+_security_audit_tracker_exclude_enabled() {
+  local _sat_raw="${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED-}"
+  local _sat_value
+  _sat_value="$(printf '%s' "${_sat_raw}" | tr '[:upper:]' '[:lower:]')"
+  case "${_sat_value}" in
+    ""|true) return 0 ;;
+    false) return 1 ;;
+  esac
+  if [ "${_SECURITY_AUDIT_TRACKER_EXCLUDE_WARNED}" != "true" ]; then
+    echo "::warning::SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED=${_sat_raw} is not true/false; tracker exclusion is off"
+    _SECURITY_AUDIT_TRACKER_EXCLUDE_WARNED="true"
+  fi
+  return 1
+}
+
+# Releases ai:blocked and the pipeline phase labels from a security-audit
+# tracker and logs one STALL_RECOVERY_SKIP line. Labels are removed only when
+# the caller saw the tracker body marker (fail closed for a work item labelled
+# ai:security-audit by mistake). Never closes the tracker, never edits its body
+# and never reads or writes comments (its ai:security-audit-last-sha: marker
+# stays untouched). Only names from SECURITY_AUDIT_TRACKER_RELEASE_LABELS_JSON
+# reach --remove-label. Always returns 0.
+# Args: <issue_num> <labels_json (array of names)> <marker_present true|false> <source>
+_security_audit_tracker_release_pipeline_labels() {
+  local _sat_issue="${1-}" _sat_labels_json="${2-}" _sat_marker="${3-false}" _sat_source="${4-unknown}"
+  local _sat_present _sat_outcome _sat_removed="none" _sat_name
+  local -a _sat_args=()
+  [[ "${_sat_issue}" =~ ^[1-9][0-9]*$ ]] || return 0
+  case "${_sat_source}" in
+    standalone_stall|unblock_scan) ;;
+    *) _sat_source="unknown" ;;
+  esac
+  _sat_present="$(printf '%s' "${_sat_labels_json:-[]}" | jq -r --argjson allowed "${SECURITY_AUDIT_TRACKER_RELEASE_LABELS_JSON}" '
+    [(if type == "array" then . else [] end)[]? | (if type == "object" then .name else . end) | select(type == "string")] as $have
+    | $allowed[] | select(. as $l | $have | index($l))' 2>/dev/null || true)"
+  while IFS= read -r _sat_name; do
+    [ -n "${_sat_name}" ] || continue
+    _sat_args+=(--remove-label "${_sat_name}")
+    if [ "${_sat_removed}" = "none" ]; then
+      _sat_removed="${_sat_name}"
+    else
+      _sat_removed="${_sat_removed},${_sat_name}"
+    fi
+  done <<<"${_sat_present}"
+  if [ "${#_sat_args[@]}" -eq 0 ]; then
+    _sat_outcome="nothing_to_remove"
+  elif [ "${_sat_marker}" != "true" ]; then
+    _sat_outcome="marker_missing"
+    _sat_removed="none"
+  elif gh_retry gh issue edit "${_sat_issue}" --repo "${GITHUB_REPOSITORY}" "${_sat_args[@]}" >/dev/null 2>&1 </dev/null; then
+    _sat_outcome="labels_removed"
+  else
+    _sat_outcome="label_remove_failed"
+    _sat_removed="none"
+  fi
+  echo "STALL_RECOVERY_SKIP issue=${_sat_issue} reason=security_audit_tracker source=${_sat_source} removed=${_sat_removed} outcome=${_sat_outcome}"
+  return 0
+}
+
 # Defence in depth for issue #6630: flag an open ai:blocked issue whose newest
 # trusted human comment never resumed the pipeline within the grace period (a
 # /reclarify the intake skipped, or an answer without a command). One advisory
@@ -304,12 +373,20 @@ _fetch_blocked_issue_routing_graphql() {
 # restores the previous filter. Input: the `gh issue list --json number,labels`
 # array; output: a JSON array of issue numbers. No API calls.
 _unrouted_blocked_candidate_numbers() {
-  # The sweep-only path exits before is_truthy is defined, so the same
-  # 1|true|yes|on vocabulary is parsed inline here.
+  # The sweep-only path runs before the main flag block normalises the
+  # switch, so the raw value is read here with the strict #9730 rule (unset,
+  # empty or `true` in any case is on; anything else is off). The helper's
+  # warning for an unknown value goes to stderr: stdout carries the JSON.
   local exclude_tracker="false"
-  case "$(printf '%s' "${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
-    1|true|yes|on) exclude_tracker="true" ;;
-  esac
+  if declare -F _security_audit_tracker_exclude_enabled >/dev/null 2>&1; then
+    if _security_audit_tracker_exclude_enabled >&2; then
+      exclude_tracker="true"
+    fi
+  else
+    case "$(printf '%s' "${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+      true) exclude_tracker="true" ;;
+    esac
+  fi
   printf '%s' "${1:-[]}" | jq -c --argjson exclude_tracker "${exclude_tracker}" '[.[]? | select(any(.labels[]?; .name == "ai:orchestrator-tracking" or .name == "ai:reclarify-requeue") | not)
     | select(($exclude_tracker and any(.labels[]?; .name == "ai:security-audit")) | not)
     | .number | select(type == "number" and . > 0)] | unique' 2>/dev/null
@@ -3284,8 +3361,12 @@ fi
 # standalone stall recovery, the unblock scan and the unrouted-comment detector.
 # Exported so scripts/unblock_scan.py sees the same value; false restores the
 # previous behaviour.
+# Issue #9730: normalised with the strict rule of
+# _security_audit_tracker_exclude_enabled (unset, empty or `true` in any case is
+# on; `false` is off; any other value is off with one ::warning::), not the
+# wider is_truthy vocabulary, so every later reader sees the same true/false.
 SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED="${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED:-true}"
-if is_truthy "${SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED}"; then
+if _security_audit_tracker_exclude_enabled; then
   SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED="true"
 else
   SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED="false"
@@ -27023,6 +27104,47 @@ run_unblock_scan() {
     return 0
   fi
   printf '%s' "${runs}" > "${work_dir}/runs.json"
+  # Issue #9730: the security-audit tracker (label ai:security-audit) is not a
+  # work item, so it never reaches the unblock judge. Its block/phase labels
+  # are released (only with the tracker body marker from the GraphQL batch
+  # above; no new read) and it leaves search.json before selection. A failed
+  # project gets the same label release but stays in search.json with its
+  # labels, so the selector (scripts/unblock_scan.py) skips it as
+  # security_audit_tracker (dropping it here would make select re-add it as a
+  # label-less failed project and judge it). A filter failure skips this tick.
+  if _security_audit_tracker_exclude_enabled; then
+    local _scan_sat_item _scan_sat_failed _scan_sat_labels _scan_sat_marker _scan_sat_items="[]"
+    while IFS=' ' read -r _scan_sat_item _scan_sat_failed; do
+      [[ "${_scan_sat_item}" =~ ^[1-9][0-9]*$ ]] || continue
+      _scan_sat_labels="$(jq -c --argjson n "${_scan_sat_item}" '[.[]? | select(.number == $n) | .labels[]?] | unique' "${work_dir}/search.json" 2>/dev/null || echo '[]')"
+      _scan_sat_marker="false"
+      if jq -e --arg id "${_scan_sat_item}" '(.[$id].body | type) == "string" and (.[$id].body | test("(^|\n)[ \t]*<!-- ai:security-audit-tracker:v1 -->[ \t]*\r?(\n|$)"))' \
+        "${work_dir}/details.json" >/dev/null 2>&1; then
+        _scan_sat_marker="true"
+      fi
+      _security_audit_tracker_release_pipeline_labels "${_scan_sat_item}" "${_scan_sat_labels}" "${_scan_sat_marker}" "unblock_scan"
+      if [ "${_scan_sat_failed}" = "true" ]; then
+        # Kept in search.json: select skips it by its label.
+        echo "UNBLOCK_SCAN item=${_scan_sat_item} kind=project outcome=skip reason=security_audit_tracker"
+        continue
+      fi
+      echo "UNBLOCK_SCAN item=${_scan_sat_item} kind=issue outcome=skip reason=security_audit_tracker"
+      _scan_sat_items="$(printf '%s' "${_scan_sat_items}" | jq -c --argjson n "${_scan_sat_item}" '. + [$n]')"
+    done < <(jq -r --slurpfile failed "${work_dir}/failed_projects.json" '
+        .[]? | select(((.pull_request // false) != true) and ((.number | type) == "number"))
+        | .number as $n
+        | select(any((.labels // [])[]?; . == "ai:security-audit"))
+        | "\($n) \(any(($failed[0] // [])[]?; . == $n))"' "${work_dir}/search.json" 2>/dev/null || true)
+    if [ "${_scan_sat_items}" != "[]" ]; then
+      if ! jq -c --argjson held "${_scan_sat_items}" '[.[]? | select(.number as $n | any($held[]; . == $n) | not)]' \
+        "${work_dir}/search.json" > "${work_dir}/search_sat_excluded.json" 2>/dev/null \
+        || ! mv -f "${work_dir}/search_sat_excluded.json" "${work_dir}/search.json"; then
+        rm -f "${work_dir}/search_sat_excluded.json"
+        echo "UNBLOCK_SCAN candidates=${count} outcome=skip reason=security_audit_filter_failed"
+        return 0
+      fi
+    fi
+  fi
   # An issue held by its pull-request dependency (issue #7228) must not
   # consume unblock rounds, even when clarify could not remove its block
   # label. It is dropped from the search results before selection: the
@@ -27868,6 +27990,20 @@ run_standalone_stall_recovery() {
       else
         _standalone_staged_support_cache_available="complete"
       fi
+    fi
+    # Issue #9730: the security-audit tracker is not a work item; never
+    # recover, answer or reissue it. Release its block/phase labels (only
+    # with the tracker body marker) and move on. No new API read: labels and
+    # body come from the candidate batch.
+    if _security_audit_tracker_exclude_enabled \
+      && printf '%s' "${labels_json}" | jq -e 'any(.[]?; (if type == "object" then .name else . end) == "ai:security-audit")' >/dev/null 2>&1; then
+      local _sat_marker_present="false"
+      if printf '%s' "${_candidate_details_json}" | jq -e --arg n "${issue_num}" \
+        '(.[$n].body | type) == "string" and (.[$n].body | test("(^|\n)[ \t]*<!-- ai:security-audit-tracker:v1 -->[ \t]*\r?(\n|$)"))' >/dev/null 2>&1; then
+        _sat_marker_present="true"
+      fi
+      _security_audit_tracker_release_pipeline_labels "${issue_num}" "${labels_json}" "${_sat_marker_present}" "standalone_stall"
+      continue
     fi
     if _security_audit_tracker_stall_guard "${issue_num}" "${labels_json}" "${pipeline_labels}"; then
       continue
