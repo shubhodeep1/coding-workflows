@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:4048-4093 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The comments at lines 4048-4049 and 4092-4093 claim wiring guard part 1 is the release job's heaviest step, but the repo's own records (lines 4106-4107, 4314, 4318-4319, 3975) name part 2 as the larger step.\n  WHY: Only comments are affected, so CI does not fail. A future budget-watch triage could be misled into moving the wrong step. All four reviewers rated this NIT, which is mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom\"\n  expected_change_site: .github/workflows/ci.yml\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The step timings for run 45035315687 were unreadable, so the moved steps are an estimate and were not verified as the slowest. The reviewer called the fallback reasonable. Severity NIT.\n- requirement: \"Move its slowest steps ... into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  expected_change_site: .github/workflows/ci.yml (orchestrate-poll matrix group 1) and the tests pinning the new location\n  confidence=1\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The reviewer found the requirement met and said no action is required. The caveat about the unreadable step timings is recorded in the comment, the changelog and the test docstring. Severity NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:4048-4049, 4092-4093 | severity=NIT | confidence=3\n  PROBLEM: Both comments say wiring guard part 1 is \"the release job's heaviest step\". The repo's own records contradict this: line 4314 and line 3975 name part 2 as the larger step, and part 2 still runs in tests-release-and-log-analysis (line 3048).\n  WHY: Only comments are affected. The next budget-watch triage would read part 1 as the dominant cost.\n- TASK COMPLETENESS / INTENT GAPS: NONE.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom\"\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The step timings for run 45035315687 were unreadable, so the moved steps are an estimate and were not verified as the slowest. The fallback is reasonable. | severity=NIT | confidence=4\n- All other categories: NONE.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml:4049 | severity=NIT | confidence=3\n  PROBLEM: The claim that \"wiring guard part 1 is the release job's heaviest step\" is unverified, because the step timings were unreadable. Part 2 was already in the same job, and module-count proxies suggest part 2 may be heavier.\n  WHY: CI is not broken. A future triage might move the wrong step.\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: .github/workflows/ci.yml (orchestrate-poll matrix group 1) and the tests pinning the new location\n  Evidence of absence: The requirement is met. The steps moved unchanged, names are kept, `timeout-minutes` is untouched, and the timing caveat is documented. No action required. | severity=NIT | confidence=1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:4048-4049, 4092-4093 (estimates at 4106-4107 and 4318-4319) | severity=NIT | confidence=4\n  PROBLEM: Both comments describe part 1 as the heaviest step, but the documented estimates show part 1 at about 604 test functions and 146 subprocess sites, versus part 2 at 658 test functions and 155 subprocess call sites.\n  WHY: CI is unaffected, but future budget-watch triage gets a misleading basis for choosing which step to move.\n- TASK COMPLETENESS / INTENT GAPS: NONE.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:4048-4049, 4092-4093 | severity=NIT | confidence=4\n  PROBLEM: The \"heaviest step\" claims for part 1 are contradicted by the repo's records. Part 2 has about 639 test functions in 53 modules and was the heaviest step in #7690's sandbox at 37.2s (ci.yml lines 3022-3024). #9450's comment gives part 2 as 658 test functions and 155 subprocess call sites (lines 4317-4319), against part 1's 604 and 146 (lines 4105-4106).\n  WHY: Nothing breaks in CI. The next triage would be pointed at part 1 instead of the heavier part 2.\n- TASK COMPLETENESS / INTENT GAPS: NONE.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "34f04233b29d09fae1344e42098244336165bc05026a8fc43ee0c52dfe040811",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9968,
+    "run_id": "45093854672",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45093854672",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123030509_012597d31a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9968,
+    "run_id": "45093854672"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T03:05:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
