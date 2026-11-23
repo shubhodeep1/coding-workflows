@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- CLAUDE.md:1632-1675 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The \u00a734 intro (lines 1632-1635) says an oversized prevention fix becomes a \u00a734.B issue and never a follow-up PR. The \u00a734.B \"Anything larger\" bullet (lines 1672-1675) sends a multi-PR fix to \u00a731.B steps 2 and 3 (open the plan PR, then wait for the user's go). In PR review mode, \u00a712.A forbids a new PR and \u00a731.B step 4 limits issues to the single-PR path, so these instructions conflict.\n  WHY: A session cannot follow all of these routes at once, and it will stall or fall back to the \u00a712.A stop-and-ask. Severity disagreement: gemini-3_1-flash-lite rated it MAJOR (confidence 4). The other three rated it NIT (confidence 2-3). The highest is used. gemini-3_1-flash-lite described the conflict differently, as the plan-PR/go ordering within \u00a731.B steps 2 and 3 at lines 1672-1675, so it may be a distinct root cause.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- CLAUDE.md:1635, 1672-1675 | severity=NIT | confidence=2\n  PROBLEM: In PR review mode, the \u00a734 intro says an oversized fix becomes a \u00a734.B issue and never a follow-up PR. The \u00a734.B \"Anything larger\" bullet says to open a plan PR. \u00a712.A (lines 306-310) forbids new PRs and \u00a731.B step 4 (line 1492) limits issues to the single-PR path.\n  WHY: The session cannot follow both instructions and will fall back to the \u00a712.A stop-and-ask, which is safe. The effect is unclear wording. The previous autofix run's change introduced the extra conflict with the intro.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- CLAUDE.md:1672-1675 | severity=MAJOR | confidence=4\n  PROBLEM: The multi-PR prevention-fix instruction says to follow \u00a731.B steps 2 and 3, but also says to wait for the user's go before opening the plan PR or dispatching. \u00a731.B step 2 creates the plan PR before the user reviews it, and step 3 makes the go apply to the dispatch.\n  WHY: The session may stall waiting for an approval it never requested because it has not opened the plan PR. Alternatively, it may open the plan PR and be told it violated the instruction.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- CLAUDE.md:1632-1635, 1672-1675 | severity=NIT | confidence=3\n  PROBLEM: The \u00a734 intro says an oversized prevention fix in PR review mode becomes a \u00a734.B issue and never a follow-up PR. The \u00a734.B \"Anything larger\" bullet routes a multi-PR fix to \u00a731.B steps 2 and 3 (open the plan PR, then wait for the go). \u00a712.A and the \u00a734 intro forbid follow-up PRs, so the two instructions cannot both be followed.\n  WHY: A session that opens the plan PR violates \u00a712.A, and one that refuses stalls on \u00a731.B step 2. This forces a stop-and-ask round trip. The \u00a734.B bullet has no PR-review-mode carve-out. The contradiction is pre-existing, and the last run's edit left it intact.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- CLAUDE.md:1633-1635, 1672-1675 | severity=NIT | confidence=2\n  PROBLEM: The \u00a734 intro routes a too-large fix to a \u00a734.B issue and never a follow-up PR. The last run's rewrite of \u00a734.B routes a multi-PR fix to \u00a731.B steps 2 and 3 (open the plan PR, then wait). In PR review mode this collides with \u00a712.A (CLAUDE.md:306-310) and with \u00a731.B step 4 (CLAUDE.md:1492-1494), which limits \u00a734.B issues to the single-PR path.\n  WHY: A session sees three routes that cannot all apply: \u00a712.A stop-and-ask, a \u00a734.B issue, and a \u00a734.B plan PR. The \u00a712.A ask is a safe fallback, so the result is a stall or contradiction, not data loss.\n- TASK_GAP: none emitted. The reviewer checked the requirements \"A changelog fragment follows in the next commit\" and \"CLAUDE.md only (workflow-templates/CLAUDE.md is a symlink to it...)\". It found both deliverables present, in CLAUDE.md:1630-1695 and changelog.d/9992-claude-md-prevent-recurrence.md.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6a17e6d496b1ce4a0c24ed7fe2e3efd761a9cbaea0eb390036df9532e760b893",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9992,
+    "run_id": "45225650932",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45225650932",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123191757_26b6f8f2ca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9992,
+    "run_id": "45225650932"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T19:17:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
