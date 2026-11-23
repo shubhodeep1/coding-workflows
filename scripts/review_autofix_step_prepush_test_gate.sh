@@ -697,11 +697,13 @@ review_prepush_test_gate_repair_diag()
 # One review editor turn. Sets rpg_repair to ran | skipped (...) | reverted (syntax)
 # | reverted (it removed the whole change for lint findings only)
 # | reverted (it removed the whole change though no test failed); the gate re-runs only for ran.
+# Logs one outcome=repair_diff line per editor turn.
 review_prepush_test_gate_repair()
 {
 	local result="$1" prompt rc editor editor_timeout validator sd
 	local rpg_pre_repair_changed="" rpg_pre_repair_ok=false rpg_pre_repair_status=unknown rpg_pre_repair_failures=unknown
 	local rpg_post_repair_changed="" rpg_post_repair_ok=false rpg_pre_repair_line=""
+	local repair_changed_before="" repair_changed_after="" repair_diff_paths
 	sd="$(review_prepush_test_gate_abs "${SUPPORT_SCRIPTS_DIR:-}")"
 	editor="$(review_prepush_test_gate_pick "${sd:+${sd}/review_apply_fixes.sh}")" || editor=""
 	if [ -z "${editor}" ] || ! grep -qxF '# supports: --repair-turn' "${editor}"; then
@@ -764,6 +766,7 @@ review_prepush_test_gate_repair()
 	if [ "${rpg_pre_repair_status}" = unknown ] || ! [[ "${rpg_pre_repair_failures}" =~ ^[0-9]+$ ]]; then
 		rpg_pre_repair_status=unknown rpg_pre_repair_failures=unknown
 	fi
+	repair_changed_before="$(review_prepush_test_gate_changed || true)"
 	rc=0
 	timeout --kill-after=30s "${editor_timeout}" bash "${editor}" --repair-turn "${prompt}" "${RUNTIME_DIR}/prepush_gate_repair_output.txt" || rc=$?
 	if review_prepush_test_gate_revert strays; then
@@ -777,6 +780,11 @@ review_prepush_test_gate_repair()
 	fi
 	review_prepush_test_gate_repair_diag "${rc}" "${rpg_pre_repair_ok}" "${rpg_pre_repair_changed}" \
 		"${rpg_post_repair_ok}" "${rpg_post_repair_changed}"
+	# One line per editor turn: what the editor left behind (#9519). Paths are
+	# untrusted worktree names, so keep [A-Za-z0-9._/-] only and at most 10.
+	repair_changed_after="$(review_prepush_test_gate_changed || true)"
+	repair_diff_paths="$(printf '%s\n' "${repair_changed_after}" | head -n 10 | tr -cd 'A-Za-z0-9._/\n-' | sed '/^$/d' | paste -sd, - || true)"
+	review_prepush_test_gate_log "outcome=repair_diff before=$(printf '%s\n' "${repair_changed_before}" | awk 'NF{n++} END{print n+0}' || true) after=$(printf '%s\n' "${repair_changed_after}" | awk 'NF{n++} END{print n+0}' || true) paths=${repair_diff_paths}"
 	if [ "${rc}" -ne 0 ]; then
 		# The sandbox writes edits back even after a failed attempt;
 		# unvalidated partial edits must not reach "Commit changes".

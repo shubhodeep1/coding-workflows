@@ -1151,6 +1151,74 @@ def test_review_loop_uses_the_fetched_done_check(tmp_path):
 	assert "turns=1 stop=clean acceptance=not_run" in proc.stderr
 
 
+def _done_check_only_setup(tmp_path: Path, edit: str) -> tuple[Path, dict[str, str]]:
+	# Same setup as test_review_loop_uses_the_fetched_done_check: pr_caused=0,
+	# only the done-check target is unmet, so the repair loop runs one turn.
+	unmet = dict(PASS, acceptance={"tests/test_a.py": {"head": "fail", "base": "not_run"}})
+	repo, env = _setup(tmp_path, [unmet, PASS])
+	_with_fake_gh(tmp_path, env)
+	env["PERSIST_REPAIR_LOOP_ENABLED"] = "true"
+	gate_dir = tmp_path / "runtime" / "prepush_gate"
+	gate_dir.mkdir(parents=True)
+	(gate_dir / "acceptance.json").write_text(json.dumps({"schema": "acceptance.v1", "state": "valid", "source": "plan",
+		"errors": [], "checks": [], "tests": [{"path": "tests/test_a.py", "name": "", "red_on_base": False}],
+		"post_merge": None, "post_merge_none": "library only"}), encoding="utf-8")
+	(_work(tmp_path) / "edit.sh").write_text(edit, encoding="utf-8")
+	return repo, env
+
+
+def test_review_loop_reverts_a_repair_that_erases_a_passing_change(tmp_path):
+	# #9519 / PR #9562: a done-check-only repair turn put the file back to HEAD,
+	# erasing the PR's whole change while no failure was caused by it.
+	repo, env = _done_check_only_setup(tmp_path, "printf 'X = 1\\n' > lib/a.py\n")
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert (repo / "lib" / "a.py").read_text(encoding="utf-8") == "X = 2\n"
+	assert "outcome=repair_reverted reason=passing_change_erased" in proc.stderr
+	assert "outcome=repair_diff before=1 after=0 paths=\n" in proc.stderr
+	assert _editor_calls(tmp_path) == 1
+	assert _docker_runs(tmp_path) == 1
+	assert "stop=reverted" in proc.stderr
+	text = _summary(tmp_path).read_text(encoding="utf-8")
+	assert "Repair turn: reverted (it removed the whole change while no failure was caused by it)" in text
+
+
+def test_review_loop_keeps_a_repair_that_leaves_a_change(tmp_path):
+	repo, env = _done_check_only_setup(tmp_path, "printf 'X = 3\\n' > lib/a.py\n")
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert "passing_change_erased" not in proc.stderr
+	assert "outcome=repair_diff before=1 after=1 paths=lib/a.py" in proc.stderr
+	assert (repo / "lib" / "a.py").read_text(encoding="utf-8") == "X = 3\n"
+
+
+def test_pr_caused_repair_that_erases_the_change_is_not_reverted_by_the_passing_guard(tmp_path):
+	repo, env = _setup(tmp_path, [FAIL, PASS])
+	(_work(tmp_path) / "edit.sh").write_text("printf 'X = 1\\n' > lib/a.py\n", encoding="utf-8")
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert "passing_change_erased" not in proc.stderr
+	assert "repair=ran" in proc.stderr
+	assert "outcome=repair_diff before=1 after=0" in proc.stderr
+
+
+def test_repair_diff_line_caps_and_sanitises_paths(tmp_path):
+	repo, env = _setup(tmp_path, [FAIL, PASS])
+	for index in range(12):
+		(repo / "lib" / f"n{index:02d}.txt").write_text("n\n", encoding="utf-8")
+	(repo / "lib" / "0 odd;$x.txt").write_text("odd\n", encoding="utf-8")
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	match = re.search(r"outcome=repair_diff before=(\d+) after=(\d+) paths=(\S*)", proc.stderr)
+	assert match, proc.stderr
+	assert match.group(1) == "14" and match.group(2) == "14"
+	paths = match.group(3)
+	assert re.fullmatch(r"[A-Za-z0-9._/,-]*", paths)
+	entries = paths.split(",")
+	assert len(entries) == 10
+	assert "lib/0oddx.txt" in entries
+
+
 def test_review_loop_off_changes_nothing(tmp_path):
 	repo, env = _setup(tmp_path, [_fail_n(2), _fail_n(1)])
 	log = _with_fake_gh(tmp_path, env)
