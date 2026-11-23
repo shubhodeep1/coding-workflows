@@ -1564,21 +1564,23 @@ jobs:
       # that, it was the step group 3 was cancelled in, mid-step, in runs
       # 44648184781, 44671393907, 44770429815, 44802155801, 44860778326 and
       # 44865403277 (analysis/workflow-optimization-2026-11-20.md, -11-21.md,
-      # -11-21-2.md). The target is the 20-minute job with the most recorded
-      # room for this step. This job is the only one with a recorded total that
-      # includes it: 15m32s with the step (run 43220859648, #9391), and no step
-      # has moved in since, so about 4.5 minutes remain with it.
-      # tests-heal-plan-and-validation was rejected: it took 17m00s without the
-      # step (run 42445170048, #9045) and then gained three steps (#9363), so
-      # 3 minutes or less remain there. tests-release-and-log-analysis took
-      # 15m19s (#9450) before losing the triage step, but its total with this
-      # step is unmeasured; tests-promote-stall-and-review took 21m25s (#9363).
-      # This reverses #9391, so budget-watch may flag this job again above its
-      # 15-minute line; that is a warning, not a timeout. If it does, read that
-      # run's step timings before moving anything again. The run's step results
-      # carry statuses only, so these are recorded job totals, not step
-      # timings. Name and body unchanged; the step runs once per CI run, with
-      # no matrix guard here.
+      # -11-21-2.md). No candidate job's current total with this step is
+      # measured. This job ran 15m32s with it (run 43220859648, #9391), but
+      # that total predates #9420 (re-issued as #9684), which later moved the
+      # six steps below into this job, so its total now is 15m32s plus those
+      # six steps, unmeasured, against its 20-minute timeout.
+      # tests-heal-plan-and-validation last took 15m35s (run 43314513853,
+      # #9420, after #9363's move-ins) and then lost those six steps; its total
+      # with this step is unmeasured too. tests-release-and-log-analysis took
+      # 15m19s (#9450) before losing the triage step, also unmeasured with this
+      # step; tests-promote-stall-and-review took 21m25s (#9363). This job was
+      # kept because it is the only single-leg job that has run this step
+      # inside its cap; that is a judgment, not a measured margin. This
+      # reverses #9391, so budget-watch will likely flag this job above its
+      # 15-minute line (a warning, not a timeout). If it does, read that run's
+      # step timings before moving anything again: the heal job is the first
+      # candidate. Name and body unchanged; the step runs once per CI run,
+      # with no matrix guard here.
       - name: Pre-push affected-test gate tests
         run: |
           set -euo pipefail

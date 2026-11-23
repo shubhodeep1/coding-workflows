@@ -4272,14 +4272,16 @@ class MovedPollGroupThree9639StepsContractTest(unittest.TestCase):
 # its 20 minutes on main (run 44909097036, budget-watch issue #9895), so it
 # was cancelled at its timeout. The step arrived in group 0 with #9639 the
 # same day; before that, six CI runs were cancelled mid-step while it sat in
-# group 3. The run's step results carry statuses only, so the pick uses
-# recorded job totals, not step timings. The target is the 20-minute job with
-# the most recorded room for this step: tests-hooks-and-orchestrator is the
-# only job with a recorded total that includes it (15m32s, run 43220859648,
-# #9391), and no step has moved in since. tests-heal-plan-and-validation was
-# rejected: it took 17m00s without the step (#9045) and then gained three
-# steps (#9363). Name and body unchanged; the target job has no matrix, so the
-# step runs unguarded, once per CI run, after the same pip install.
+# group 3. The run's step results carry statuses only, and no candidate job's
+# current total with this step is measured. tests-hooks-and-orchestrator ran
+# 15m32s with it (run 43220859648, #9391), but #9420 later moved six steps
+# (MOVED_HEAL_9420_STEPS) into that job, so its total now is unmeasured and
+# above 15m32s. tests-heal-plan-and-validation last took 15m35s (run
+# 43314513853, #9420) and then lost those six steps. The target was kept as
+# the only single-leg job that has run this step inside its cap, a judgment,
+# not a measured margin. Name and body unchanged; the target job has no
+# matrix, so the step runs unguarded, once per CI run, after the same pip
+# install.
 POLL_GROUP_ZERO_9895_SOURCE_JOB_ID = POLL_JOB_ID
 POLL_GROUP_ZERO_9895_TARGET_JOB_ID = "tests-hooks-and-orchestrator"
 POLL_GROUP_ZERO_9895_SETUP_STEP = "Install Python CI dependencies"
