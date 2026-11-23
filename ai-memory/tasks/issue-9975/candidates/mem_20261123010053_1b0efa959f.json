@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan for #9975\n\nPlanning ref: `main` @ `a9985a9e48d9fc778b59f009db9724c529cda5f3` (the Integration branch mismatch line reads `unknown`, not `true`).\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: check CI\nACCEPTANCE: post-merge none: this is a canary content update with no post-merge workflow to check\n\n## Functions or modules to implement\nNone. Replace the whole content of `tests/e2e_smoke_canary.txt` with these three lines, ending with a trailing newline:\n```\nstatus: ok\nrun_id: 45088792772\nupdated-by: ai-pipeline\n```\nThis gives the same result as `printf 'status: ok\\nrun_id: 45088792772\\nupdated-by: ai-pipeline\\n' > tests/e2e_smoke_canary.txt`.\n\n## Data structures affected\nNone.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Overwrite the file in full\n- Chosen: replace the entire file content.\n- Alternatives considered: editing only the `run_id` line.\n- Why: the issue asks for exactly three lines, so a full overwrite guarantees nothing else is left in the file.\n\n## Security considerations\nNo trust boundaries, endpoints, external input or secrets are involved. The run ID is public data from the issue.\n\n## Potential risks or edge cases\n- A missing trailing newline or an extra blank line at the end would break the \"exactly three lines\" requirement.\n- No other file may change. A diff stat showing only `tests/e2e_smoke_canary.txt` confirms this.\n\n## Testing considerations\n- Byte-compare the file with the `printf` output above using `cmp`.\n- Run `git diff --stat` and confirm it lists only the one file.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies one file and its exact content. Holding scope matches the constraints, and there is no more complete option to weigh.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "f28960ccfffc2c121ce7a18a36bf41e6324b417b7785e013527c457412d065f2",
+  "lineage": {
+    "issue_number": 9975,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45091027357",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45091027357",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9975"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261123010053_1b0efa959f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9975,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45091027357"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #9975",
+  "timestamps": {
+    "created_at": "2026-11-23T01:00:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
