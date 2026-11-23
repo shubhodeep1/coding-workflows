@@ -60,7 +60,7 @@ findings.
 | **D1** line ownership via `git blame` (`SECURITY_AUDIT_LINE_OWNERSHIP`, `advisory_findings`) | **not implemented** | no identifier exists in `scripts/security_audit.sh` or the poller |
 | **D2** per-line "older than last audit" suppression, `verified_fixed_finding_ids`, `SECURITY_PASS_VERIFIED_FIXED` | **not implemented; suppression dropped by this refresh (D2′)** | prior-id re-emission is live through `SECURITY_AUDIT_PRIOR_FINDINGS`; the verified-fixed log is kept as remaining work |
 | **D3** pre-existing findings routed to advisories at audit time (uncapped; the planned `SECURITY_PASS_ADVISORY_FOLLOWUP_CAP` was dropped on 2026-09-25) | **not implemented** | advisories today come only from the judge or a waive, after the budget is spent |
-| **D4** rebind a clean pass across a clean sync merge (`SECURITY_PASS_REBOUND`) | **not implemented** | the budget-reset path (PR #4013) re-audits instead |
+| **D4** rebind a clean pass across a clean sync merge (`SECURITY_PASS_REBOUND`) | shipped (stuck-states P13B) | `security_pass_rebind_if_no_new_project_lines`, called in `run_security_pass_inline` after the merge base is resolved (after the budget reset); kill switch `SECURITY_PASS_REBIND_ENABLED`; skip log `SECURITY_PASS_REBIND_SKIPPED` |
 
 ## Context
 

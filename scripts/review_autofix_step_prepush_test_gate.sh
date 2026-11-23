@@ -633,10 +633,13 @@ review_prepush_test_gate_restore_symlinks()
 }
 
 # One review editor turn. Sets rpg_repair to ran | skipped (...) | reverted (syntax)
-# | reverted (it removed the whole change for lint findings only); the gate re-runs only for ran.
+# | reverted (it removed the whole change for lint findings only)
+# | reverted (it removed the whole change while no failure was caused by it);
+# the gate re-runs only for ran. Logs one outcome=repair_diff line per editor turn.
 review_prepush_test_gate_repair()
 {
 	local result="$1" prompt rc editor editor_timeout validator sd
+	local repair_changed_before="" repair_changed_after="" repair_status_line="" repair_pr_caused="" repair_diff_paths
 	sd="$(review_prepush_test_gate_abs "${SUPPORT_SCRIPTS_DIR:-}")"
 	editor="$(review_prepush_test_gate_pick "${sd:+${sd}/review_apply_fixes.sh}")" || editor=""
 	if [ -z "${editor}" ] || ! grep -qxF '# supports: --repair-turn' "${editor}"; then
@@ -684,12 +687,18 @@ review_prepush_test_gate_repair()
 		rpg_repair="skipped (step time budget)"
 		return 0
 	fi
+	repair_changed_before="$(review_prepush_test_gate_changed || true)"
 	rc=0
 	timeout --kill-after=30s "${editor_timeout}" bash "${editor}" --repair-turn "${prompt}" "${RUNTIME_DIR}/prepush_gate_repair_output.txt" || rc=$?
 	if review_prepush_test_gate_revert strays; then
 		review_prepush_test_gate_log "outcome=warning reason=stray_edits_rolled_back"
 	fi
 	review_prepush_test_gate_restore_symlinks
+	# One line per editor turn: what the editor left behind (#9519). Paths are
+	# untrusted worktree names, so keep [A-Za-z0-9._/-] only and at most 10.
+	repair_changed_after="$(review_prepush_test_gate_changed || true)"
+	repair_diff_paths="$(printf '%s\n' "${repair_changed_after}" | head -n 10 | tr -cd 'A-Za-z0-9._/\n-' | sed '/^$/d' | paste -sd, - || true)"
+	review_prepush_test_gate_log "outcome=repair_diff before=$(printf '%s\n' "${repair_changed_before}" | awk 'NF{n++} END{print n+0}' || true) after=$(printf '%s\n' "${repair_changed_after}" | awk 'NF{n++} END{print n+0}' || true) paths=${repair_diff_paths}"
 	if [ "${rc}" -ne 0 ]; then
 		# The sandbox writes edits back even after a failed attempt;
 		# unvalidated partial edits must not reach "Commit changes".
@@ -718,6 +727,27 @@ review_prepush_test_gate_repair()
 		review_prepush_test_gate_log "outcome=repair_reverted reason=lint_only_change_erased"
 		rpg_repair="reverted (it removed the whole change for lint findings only)"
 		return 0
+	fi
+	# #9519 / PR #9562: a done-check-only repair turn (pr_caused=0) erased the
+	# PR's whole change. Restore it; an unreadable status skips this guard.
+	# `status` prints "unverified 0 0" when load() falls back to {} for a
+	# missing or corrupt result, so require a parseable JSON object with a
+	# known `status` first ({} or no status counts as unreadable); a genuine
+	# status=unverified result still reaches the guard.
+	if PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if isinstance(d, dict) and d.get("status") in ("pass", "fail", "unverified", "skipped") else 1)' "${result}" 2>/dev/null \
+		&& repair_status_line="$(review_prepush_test_gate_py status "${result}" 2>/dev/null)" && [ -n "${repair_status_line}" ]; then
+		read -r _ repair_pr_caused _ <<< "${repair_status_line}" || repair_pr_caused=""
+		case "${repair_pr_caused}" in
+			''|*[!0-9]*) ;;
+			*)
+				if [ -z "${repair_changed_after}" ] && [ -n "${repair_changed_before}" ] && [ "$((10#${repair_pr_caused}))" -eq 0 ]; then
+					review_prepush_test_gate_revert all || true
+					review_prepush_test_gate_log "outcome=repair_reverted reason=passing_change_erased"
+					rpg_repair="reverted (it removed the whole change while no failure was caused by it)"
+					return 0
+				fi
+				;;
+		esac
 	fi
 	rpg_repair="ran"
 	return 0

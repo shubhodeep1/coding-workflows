@@ -674,3 +674,29 @@ def test_workflows_default_the_repair_loop_switches_off():
 		assert "  PERSIST_REPAIR_MAX_TURNS: ${{ vars.PERSIST_REPAIR_MAX_TURNS || '3' }}\n" in text
 	script = STEP_SCRIPT.read_text(encoding="utf-8")
 	assert '"${PERSIST_REPAIR_LOOP_ENABLED:-false}"' in script and '"${PERSIST_REPAIR_MAX_TURNS:-3}"' in script
+
+
+# #9775: the inline implement prompt files_touched-scope cases live in
+# tests/test_implement_inline_prompt_files_touched_scope.py and are collected
+# here, since CI already runs this file and ci.yml was outside that issue's
+# file grant. A name clash would hide a test, so it fails loudly.
+def _collect_inline_prompt_files_touched_scope_cases() -> None:
+	import importlib.util
+
+	spec = importlib.util.spec_from_file_location(
+		"implement_inline_prompt_files_touched_scope_cases",
+		Path(__file__).resolve().parent / "test_implement_inline_prompt_files_touched_scope.py",
+	)
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	collected = 0
+	for case_name in dir(cases):
+		if case_name.startswith("test_") and callable(getattr(cases, case_name)):
+			assert case_name not in globals(), case_name
+			globals()[case_name] = getattr(cases, case_name)
+			collected += 1
+	# A renamed or emptied cases module must fail loudly, not collect nothing.
+	assert collected >= 5, f"only {collected} inline prompt files_touched scope cases collected"
+
+
+_collect_inline_prompt_files_touched_scope_cases()
