@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/update_workflows.yml:2577 (verify_head_gate) | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The verify_head_gate poll window (6 reads, 20 s apart) can run out while workflow-integrity is still pending.\n  WHY: The gate can stay pending after workflow-integrity has succeeded, which delays the PR until the next review check; the step now logs a ::warning::, but slower pipelines can still stall (the source said SEVERITY: NIT, shown here as low; anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash call this an already-accepted residual risk and do not flag it).\n- scripts/review_head_gate.sh:102 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: verify_head_gate duplicates the integrity context and the updater-branch regex instead of reusing the constants defined earlier in scripts/review_head_gate.sh.\n  WHY: This is a maintenance risk: a future change to the regex or context could land in one place but not the other and make head-gate behaviour inconsistent (the source said SEVERITY: NIT, shown here as low; anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash rejected it because the new last-run test pins both copies, so drift fails CI).\n- scripts/review_head_gate.sh:106 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The head-gate exemption trusts commit statuses without checking who created them.\n  WHY: Not checking that the status came from a trusted pipeline relaxes a trust boundary, though this was accepted as residual risk because anyone with push access and statuses: write can already post the gate directly (the source said SEVERITY: NIT, shown here as low; anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash note it was already accepted and that fork and moved heads fail closed).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- Notes, not findings: verified test_head_gate_step_constants_match_the_review_helper in tests/test_update_workflows_template_gate.py; REPO_ROOT is at line 37; the regex matches lines 104-106 of scripts/review_head_gate.sh; VERIFY_STATUS_CONTEXT: ai-update-workflows/verify is at update_workflows.yml line 2174; the test passes on the current tree and fails on drift.\n- Pass-1 items checked: regex/context duplication (scripts/review_head_gate.sh:102) rejected because the test pins both copies; poll-window expiry and the unverified status creator (scripts/review_head_gate.sh:106) are already-accepted residuals; the pin-age main() task gap is stale (main() calls the tests at line 1832 and later, and _DirectRunEnvPatch is at line 1851).\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/update_workflows.yml:2577 (verify_head_gate) | severity=NIT | confidence=4\n  PROBLEM: The verify_head_gate poll window (6 reads, 20 s apart) can run out while workflow-integrity is still pending.\n  WHY: The gate stays pending after success and delays the PR until the next review check; the ::warning:: makes it visible, but slower pipelines can still stall.\n- scripts/review_head_gate.sh:102 | severity=NIT | confidence=4\n  PROBLEM: verify_head_gate duplicates the integrity context and the updater-branch regex instead of reusing the constants defined earlier in scripts/review_head_gate.sh.\n  WHY: Maintenance risk: a future update could change one location but not the other, leading to inconsistent head-gate behaviour.\n- scripts/review_head_gate.sh:106 | severity=NIT | confidence=4\n  PROBLEM: The head-gate exemption trusts commit statuses without checking who created them.\n  WHY: Accepted as residual risk because anyone with push access and statuses: write can already post the gate, but it still relaxes a trust boundary by not checking that the status came from a trusted pipeline.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- The output was a single line of narration (\"I'll review this PR systematically, starting with the last run diff and verifying against the repository.\") with no review content.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- Notes, not findings: verified the drift-guard test at `tests/test_update_workflows_template_gate.py:832-842` against `scripts/review_head_gate.sh:104-106` and `.github/workflows/update_workflows.yml:2653`, `:2692` and `:2174`; CI on head 3fc2a8b shows 0 failed check-runs across 69 runs.\n- Cross-checks: the pin-age main() TASK_GAP is stale (lines 1832-1854, _DirectRunEnvPatch at line 1858); the three NITs (duplication, poll-window, status-creator) are either mitigated by the new test or already accepted as residual risk, so they are not re-flagged.\n- All four deliverables from issue #9483 are present: the REST PATCH refresh (`.github/workflows/update_workflows.yml:1695-1707`), the verify_merge_blocked step, the head-gate exemption (`scripts/review_head_gate.sh:106-190`, review_enable_auto_merge.sh, `review_rb_judge.sh:2249-2260`, verify_head_gate) and the 24-hour pin-age alarm (`scripts/audit_consumer_drift.py` plus the 6-hour cron in `audit_consumer_drift.yml`).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4002cf661fec2546142ad0a344158e8c9e9003ca92cf53e45ec7a35cdde3dd8b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9505,
+    "run_id": "45211434097",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45211434097",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123175958_3b1c2f095c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9505,
+    "run_id": "45211434097"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-23T17:59:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
