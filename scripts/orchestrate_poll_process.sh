@@ -21248,6 +21248,9 @@ _heal_counterfactual_hold_expiry_check()
       outcome="kept"; reason="below_half_limit"; break
     fi
     if [ -z "${esc_epoch}" ]; then
+      # The notices name only /approved and /reclarify on purpose: a
+      # maintainer /answer also restarts the clock, but it does not resume
+      # the held plan.
       note_body="$(printf '%s\n' \
         "**Heal counterfactual hold open for ${age_days} days.** The plan's automatic approval is still withheld and no maintainer has answered." \
         "" \
@@ -21288,8 +21291,11 @@ _heal_counterfactual_hold_expiry_check()
         # The POST makes one attempt (gh_retry, #6634): if GitHub created the
         # comment but the response was lost, the marker is on a reopened issue
         # and later ticks log kept reason=reopened, so tell operators.
+        # This branch writes no marker, so it repeats every tick while the
+        # POST keeps failing: the Telegram send is DEBUG (filtered by
+        # ALERT_MSG_LEVEL) and the ::warning:: line is the operator signal.
         echo "::warning::Could not post the hold-expired comment on heal issue #${issue_num}; reopened it so the next tick retries the expiry. If an ai:heal-counterfactual-hold-expired:v1 comment appears anyway, the hold counts as reopened and will not expire on its own."
-        tg_notify_issue "${issue_num}" "Heal counterfactual hold: the hold-expired comment failed to post, so the issue was reopened and the expiry retries next tick. If the hold-expired comment appears anyway, the hold will not expire on its own; close or answer it by hand." "WARNING" || true
+        tg_notify_issue "${issue_num}" "Heal counterfactual hold: the hold-expired comment failed to post, so the issue was reopened and the expiry retries next tick. If the hold-expired comment appears anyway, the hold will not expire on its own; close or answer it by hand." "DEBUG" || true
         reason="expired_marker_post_failed"; break
       fi
       echo "::warning::Closed heal issue #${issue_num} but could not post the hold-expired comment, and reopening it failed; a later reopen may be closed again."

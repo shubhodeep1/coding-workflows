@@ -264,7 +264,9 @@ def test_failed_expired_comment_reopens_and_retries_next_tick():
 	assert gh[2] == ["api", "-X", "PATCH", f"repos/owner/repo/issues/{ISSUE}", "-f", "state=open"], gh[2]
 	# A lost response may have left the marker behind: operators are told.
 	assert "appears anyway" in proc.stdout
-	assert len(tg) == 1 and tg[0][2] == "WARNING" and "appears anyway" in tg[0][1], tg
+	# This branch repeats every tick while the POST fails, so the Telegram
+	# send is DEBUG (filtered by ALERT_MSG_LEVEL), not a per-tick WARNING.
+	assert len(tg) == 1 and tg[0][2] == "DEBUG" and "appears anyway" in tg[0][1], tg
 
 
 def test_failed_expired_comment_and_reopen_stays_expired_and_warns():
