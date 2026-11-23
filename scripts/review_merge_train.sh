@@ -1504,11 +1504,14 @@ _mt_dispatch_review() {
 # shape as _dispatch_rb_judge_for_pr (scripts/orchestrate_poll_process.sh):
 # default-branch workflow, validated PR number only, allow_workflow_edits left
 # at its default (false).
-# API: one workflow dispatch per grant; only when it fails, the fallback
-# _mt_dispatch_review (consumers whose install profile lacks the judge
-# wrapper), so the grant still dispatches a run as before.
+# API: one workflow dispatch per grant. When it fails (e.g. the `core`
+# install profile ships no review_rb_judge_dispatch.yml), the review wrappers
+# that accept force_rb_judge (ai-review.yml, internal-review.yml) are
+# dispatched with force_rb_judge=true, which still runs only the judge; only
+# when none of those can be dispatched, the plain _mt_dispatch_review, so the
+# grant still dispatches a run as before. At most 1 + 2 + the review list.
 _mt_dispatch_rb_judge() {
-	local mt_rbj_pr="$1" mt_rbj_head="$2"
+	local mt_rbj_pr="$1" mt_rbj_head="$2" mt_rbj_wf
 	if ! [[ "${mt_rbj_pr}" =~ ^[1-9][0-9]*$ ]]; then
 		_mt_warn "merge-train release: invalid PR number '${mt_rbj_pr}' for head ${mt_rbj_head}; not dispatching."
 		return 1
@@ -1518,7 +1521,15 @@ _mt_dispatch_rb_judge() {
 		_mt_log "MERGE_TRAIN_DISPATCHED pr=${mt_rbj_pr} workflow=review_rb_judge_dispatch.yml ref=default head=${mt_rbj_head}"
 		return 0
 	fi
-	_mt_warn "merge-train release: could not dispatch review_rb_judge_dispatch.yml for PR #${mt_rbj_pr}; falling back to the review dispatch."
+	# allow_workflow_edits stays at each wrapper's default, as above.
+	for mt_rbj_wf in ai-review.yml internal-review.yml; do
+		if gh_retry gh workflow run "${mt_rbj_wf}" --repo "${MT_REPO}" \
+			-f pr_number="${mt_rbj_pr}" -f force_rb_judge=true >/dev/null 2>&1; then
+			_mt_log "MERGE_TRAIN_DISPATCHED pr=${mt_rbj_pr} workflow=${mt_rbj_wf} ref=default head=${mt_rbj_head}"
+			return 0
+		fi
+	done
+	_mt_warn "merge-train release: could not dispatch review_rb_judge_dispatch.yml or a force_rb_judge review wrapper for PR #${mt_rbj_pr}; falling back to the review dispatch."
 	_mt_dispatch_review "${mt_rbj_pr}" "${mt_rbj_head}"
 }
 

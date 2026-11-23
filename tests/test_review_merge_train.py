@@ -3456,7 +3456,7 @@ def test_merge_lease_queue_ranks_forward_merge_rows_from_the_train_listing():
 	assert _merge_lease_queue_first_from_train_rows(listing, {"MERGE_LEASE_PRIORITY_HEAD_PREFIXES": "none"}) == "5"
 
 
-def _mt_dispatch_rb_judge_run(tmp_path: Path, pr: str, fail_judge: bool = False) -> tuple[subprocess.CompletedProcess, list[str]]:
+def _mt_dispatch_rb_judge_run(tmp_path: Path, pr: str, fail_judge: bool = False, fail_force: bool = False) -> tuple[subprocess.CompletedProcess, list[str]]:
 	"""Source the train script without its subcommand dispatch and call
 	_mt_dispatch_rb_judge with a logging `gh` stub (issue #9987)."""
 	text = SCRIPT.read_text()
@@ -3468,6 +3468,8 @@ def _mt_dispatch_rb_judge_run(tmp_path: Path, pr: str, fail_judge: bool = False)
 	log = tmp_path / "rbj_gh.log"
 	gh = bindir / "gh"
 	fail_line = 'case "$*" in *review_rb_judge_dispatch.yml*) exit 1 ;; esac\n' if fail_judge else ""
+	if fail_force:
+		fail_line += 'case "$*" in *force_rb_judge=true*) exit 1 ;; esac\n'
 	gh.write_text("#!/usr/bin/env bash\n"
 		f"printf '%s\\n' \"$*\" >> {str(log)!r}\n"
 		+ fail_line
@@ -3497,12 +3499,27 @@ def test_judge_dispatch_rejects_an_invalid_pr_number(tmp_path: Path) -> None:
 
 
 def test_failed_judge_dispatch_falls_back_to_the_review_dispatch(tmp_path: Path) -> None:
+	"""The fallback first tries the review wrappers with force_rb_judge=true
+	(judge only, no reviewer/editor round; G3 of #9987)."""
 	res, calls = _mt_dispatch_rb_judge_run(tmp_path, "5", fail_judge=True)
 	out = res.stdout + res.stderr
 	assert "rc=0" in out, out
 	assert calls[0].startswith("workflow run review_rb_judge_dispatch.yml ")
-	assert calls[1].startswith("workflow run ai-review.yml --repo o/r -f pr_number=5 ")
+	assert calls[1] == "workflow run ai-review.yml --repo o/r -f pr_number=5 -f force_rb_judge=true"
 	assert len(calls) == 2
+	assert "MERGE_TRAIN_DISPATCHED pr=5 workflow=ai-review.yml ref=default head=ai/issue-5" in out
+
+
+def test_no_force_wrapper_falls_back_to_the_plain_review_dispatch(tmp_path: Path) -> None:
+	res, calls = _mt_dispatch_rb_judge_run(tmp_path, "5", fail_judge=True, fail_force=True)
+	out = res.stdout + res.stderr
+	assert "rc=0" in out, out
+	assert calls[0].startswith("workflow run review_rb_judge_dispatch.yml ")
+	assert calls[1] == "workflow run ai-review.yml --repo o/r -f pr_number=5 -f force_rb_judge=true"
+	assert calls[2] == "workflow run internal-review.yml --repo o/r -f pr_number=5 -f force_rb_judge=true"
+	assert calls[3].startswith("workflow run ai-review.yml --repo o/r -f pr_number=5 -f allow_workflow_edits=")
+	assert len(calls) == 4
+	assert "falling back to the review dispatch" in out
 
 
 def test_both_tick_loops_route_judge_decision_grants_to_the_judge() -> None:
