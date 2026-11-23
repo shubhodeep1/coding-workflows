@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:141-149 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The new permissions block on the static-checks job grants `actions: read`, which the job may not need: no step in static-checks calls the actions API, and the comment's citation of scripts/ci_final_merge_ref_fresh.sh points at a script that only runs in the lint job.\n  WHY: The block is over-scoped but not unsafe, because the extra scope is read-only and the change still tightens the job compared with the old implicit inheritance; the source rated it SEVERITY: NIT, recorded here as low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"No pipeline merge path merges a PR GitHub reports as `mergeable_state: blocked`\" (Issue #9939, Goals item 2).\n  expected_change_site: .github/workflows/update_workflows.yml:1340 and .github/workflows/workflow-log-analysis.yml:2207 \u2014 both are direct (non `--auto`) `gh pr merge` calls executed with the pipeline's admin GH_PAT\n  confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: The PR diff has no hunk in either file (pr_changed_files.txt lists neither), and neither file references `_pr_sync_merge_blocked_guard` or `mergeable_state`, so both merge paths can still merge a blocked PR through admin bypass. Editors deferred these sites every round as outside the `files_touched` grant, and the deferral is documented (\"must land before owner step O3\"). It is a scoped residual, not a defect from the last run, but Goal 2 is unmet in this delivery. The source rated it SEVERITY: MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml:lines 141-149 (static-checks job permissions block) | severity=NIT | confidence=2\n  PROBLEM: The new explicit permissions block on the static-checks job grants only read scopes (contents/pulls/actions: read), but the job might not need `actions: read`: no step in it uses /actions/runs/<id>, and the comment cites scripts/ci_final_merge_ref_fresh.sh, which only runs in the lint job.\n  WHY: Over-scoped, not unsafe. The extra `actions: read` is read-only, and the block improves on the old implicit inheritance rather than regressing it.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: \"No pipeline merge path merges a PR GitHub reports as `mergeable_state: blocked`\" (Issue #9939, Goals item 2).\n  Expected change site: .github/workflows/update_workflows.yml:1340 and .github/workflows/workflow-log-analysis.yml:2207 \u2014 both are direct (non `--auto`) `gh pr merge` calls executed with the pipeline's admin GH_PAT.\n  Evidence of absence: Neither file has a hunk in the PR diff, and neither references `_pr_sync_merge_blocked_guard` or `mergeable_state`, so both paths can still merge a blocked PR through admin bypass. Editors deferred the sites as outside the `files_touched` grant (\"must land before owner step O3\"). It is a scoped residual, not a last-run defect, but Goal 2 is unmet.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4303b8e25a4fc4f717cc6e9ea8e62298802094a180db506310adf5d3547c62e3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9956,
+    "run_id": "45080150436",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45080150436",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123004854_204994cbae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9956,
+    "run_id": "45080150436"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-23T00:48:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
