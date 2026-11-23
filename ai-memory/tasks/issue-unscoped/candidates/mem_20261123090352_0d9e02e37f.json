@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:4093-4094 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The rationale comment above part 1 omits the figures (658 vs about 604 test functions) that the parallel comment at lines 4048-4050 gives.\n  WHY: This is a documentation asymmetry with no runtime effect, and the figures can be checked at lines 4108 and 4320 (reviewer severity NIT).\n- .github/workflows/review_autofix.yml:support-ref step (gh_api_retry repos/shubhodeep1/coding-workflows/branches/main) | severity=low | confidence=1\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The `review / gate` check-run (job 137466263126) failed on a GitHub primary rate-limit 403, and the retry helper gave up with exit 75 (`GH_API_RETRY outcome=gave_up kind=primary bucket=core status=403 wait_secs=658`).\n  WHY: This is a quota failure on a path the PR does not change, and a re-run after the rate limit resets should clear it (reviewer severity NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml, the selection of steps moved out of `tests-release-and-log-analysis` (rationale comments at lines 4045-4063 and 4090-4098)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The comments at lines 4047-4050 state that the run's step timings were unreadable and that the pick was estimated from test and subprocess counts, not measured durations. The diff therefore does not show the moved steps were the slowest. The limitation is disclosed in the ci.yml comments, the changelog fragment and `MovedRelease9966StepsContractTest`, and budget-watch will reopen the issue if the job stays over budget. Severity disagreement: MAJOR (minimax_minimax-m3, openai_gpt-6-luna), NIT (anthropic_claude-sonnet-5_5). z-ai_glm-5_3-flash noted the residual in prose but did not re-flag it as an accepted residual.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/review_autofix.yml:support-ref step (gh_api_retry repos/shubhodeep1/coding-workflows/branches/main) | severity=low | confidence=1\n  PROBLEM: The `review / gate` check-run (job 137466263126) failed on a GitHub primary rate-limit 403, and the retry helper gave up with exit 75 (`GH_API_RETRY outcome=gave_up kind=primary bucket=core status=403 wait_secs=658`).\n  WHY: This is a quota failure on a path the PR does not change, and a re-run after the rate limit resets should clear it (reviewer severity NIT).\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, the choice of steps moved out of `tests-release-and-log-analysis`.\n  Evidence of absence: Everything else in the requirement is delivered (names and bodies unchanged, no new jobs, `timeout-minutes` untouched). The steps were picked from test and subprocess counts, not from the run's step timings, because the timings for run 45035315687 were not readable. This is a disclosed residual, not a new defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml:4093-4094 | severity=low | confidence=3\n  PROBLEM: The rationale comment above part 1 omits the figures (658 vs about 604 test functions) that the parallel comment at lines 4048-4050 gives.\n  WHY: This is a documentation asymmetry with no runtime effect, and the figures can be checked at lines 4108 and 4320 (reviewer severity NIT).\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml, the selection of steps moved out of tests-release-and-log-analysis (the two rationale comments at lines 4045-4063 and 4090-4098).\n  Evidence of absence: The comments state the run's step timings were not readable, so the pick is an estimate from test and subprocess counts. The PR discloses this, and budget-watch will reopen if the job stays over budget. Prior autofix rounds classified it as TASK_GAP_DEFERRED.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: `.github/workflows/ci.yml`, the selection of steps moved out of `tests-release-and-log-analysis`.\n  Evidence of absence: The workflow comments at lines 4047\u20134050 state that the run's step timings were unreadable and the selection was estimated from test and subprocess counts. The diff therefore does not establish that the moved steps were the slowest by the specified run timings.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "703cf4b5d127c7a63605dc86e46a983483e54208c72344931ebffe83aa53b45a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9968,
+    "run_id": "45141071800",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45141071800",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261123090352_0d9e02e37f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9968,
+    "run_id": "45141071800"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-23T09:03:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
