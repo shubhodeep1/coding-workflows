@@ -545,6 +545,10 @@ def build_concurrency_snapshot(
 		not isinstance(implementing_threshold_minutes, int) or implementing_threshold_minutes < 1
 	):
 		implementing_threshold_minutes = None
+	# Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is
+	# wedged (zero jobs, cannot be cancelled) and never takes a cap slot, even
+	# when the threshold above is configured past 24 hours. Read once per call.
+	zombie_hours = zombie_run_max_queued_hours()
 
 	for run in runs:
 		if not isinstance(run, dict):
@@ -559,6 +563,9 @@ def build_concurrency_snapshot(
 			threshold_minutes=threshold_minutes,
 			implementing_threshold_minutes=implementing_threshold_minutes,
 		):
+			continue
+		if is_wedged_queued_run(run, effective_now_ts, zombie_hours):
+			log_zombie_run_ignored(run, "concurrency_snapshot", effective_now_ts)
 			continue
 		counts[state] += 1
 		global_running += 1
@@ -1514,6 +1521,10 @@ PHASE_LABELS_PRIORITY: list[str] = [
 	# work and the poller closes the source issue when it completes.
 	"ai:split-to-project",
 	"ai:blocked",
+	# Dependency wait (stuck-states P8 / confine plan Phase 4a): the item waits
+	# on a PR, issue or release. Human latches (ai:needs-human, ai:blocked)
+	# outrank it; it outranks every failure and stage label.
+	"ai:waiting-on-dependency",
 	"ai:clarify-failed",
 	"ai:clarify-respond-failed",
 	"ai:plan-failed",
@@ -1584,6 +1595,9 @@ DEDICATED_HANDLER_PHASES: set[str] = {
 	# Plan split source issue (Q152): close_plan_split_source_if_needed owns it.
 	"ai:split-to-project",
 	"ai:blocked",
+	# Dependency wait (stuck-states P8): the dependency-wait resume scan owns
+	# it, so detect_stalls and the failure-fingerprint breaker skip it.
+	"ai:waiting-on-dependency",
 	"ai:implementation-failed",
 	"ai:validating",
 	"ai:validation-fixing",
@@ -2548,6 +2562,94 @@ def _parse_iso8601_to_epoch(iso_str: Any) -> int | None:
 		return int(dt.timestamp())
 	except (ValueError, TypeError, OverflowError, OSError):
 		return None
+
+
+# Wedged queued workflow runs (issue #9473). Python twin of
+# zombie_queued_cutoff_epoch / zombie_queued_jq_def in scripts/gh_helpers.sh:
+# a run is wedged when its status is "queued" and its created_at is at least
+# ZOMBIE_RUN_MAX_QUEUED_HOURS (default 24; 0 or invalid disables) old.
+# GitHub refuses to cancel or delete such zero-job runs, so guards ignore them
+# instead. A missing or unparseable created_at keeps the run active.
+_ZOMBIE_RUN_MAX_QUEUED_HOURS_RE = re.compile(r"^[0-9]{1,5}$")
+_ZOMBIE_RUN_IGNORED_SEEN: set[tuple[str, str]] = set()
+
+
+def zombie_run_max_queued_hours(env: Any = None) -> int:
+	"""Return ZOMBIE_RUN_MAX_QUEUED_HOURS (default 24); 0 means disabled.
+
+	A value that is not a whole number of hours warns on stderr and
+	returns 0 (filter disabled), matching the Bash helper.
+	"""
+	source = os.environ if env is None else env
+	raw = source.get("ZOMBIE_RUN_MAX_QUEUED_HOURS", "")
+	raw = "" if raw is None else str(raw)
+	if raw == "":
+		return 24
+	if not _ZOMBIE_RUN_MAX_QUEUED_HOURS_RE.match(raw):
+		print(
+			"::warning::ZOMBIE_RUN_MAX_QUEUED_HOURS is not a whole number of hours; wedged-queued filter disabled",
+			file=sys.stderr,
+		)
+		return 0
+	return int(raw, 10)
+
+
+def _zombie_run_created_epoch(run: Any) -> int | None:
+	if not isinstance(run, dict):
+		return None
+	created = run.get("created_at")
+	if created is None:
+		created = run.get("createdAt")
+	# Same parse rule as the jq twin (fromdateiso8601): only Z-suffixed UTC
+	# values parse; offset or naive timestamps keep the run active.
+	if not isinstance(created, str) or not created.endswith("Z"):
+		return None
+	return _parse_iso8601_to_epoch(created)
+
+
+def is_wedged_queued_run(run: Any, now_epoch: int, max_hours: int) -> bool:
+	"""True when ``run`` is a queued run older than ``max_hours`` hours."""
+	if not isinstance(run, dict):
+		return False
+	if not isinstance(max_hours, int) or isinstance(max_hours, bool) or max_hours <= 0:
+		return False
+	if not isinstance(now_epoch, int) or isinstance(now_epoch, bool) or now_epoch <= 0:
+		return False
+	status = run.get("status")
+	if not isinstance(status, str) or status.lower() != "queued":
+		return False
+	created = _zombie_run_created_epoch(run)
+	if created is None:
+		return False
+	return created <= now_epoch - max_hours * 3600
+
+
+def _zombie_log_token(value: Any, allowed: str) -> str:
+	text = "-" if value is None or value == "" else str(value)
+	return re.sub(f"[^{allowed}]", "_", text)
+
+
+def log_zombie_run_ignored(run: Any, guard: str, now_epoch: int, *, stream: Any = None) -> None:
+	"""Emit one ZOMBIE_RUN_IGNORED line per (guard, run id) per process."""
+	if not isinstance(run, dict):
+		return
+	run_id = run.get("id")
+	if run_id is None:
+		run_id = run.get("databaseId")
+	run_token = _zombie_log_token(run_id, "A-Za-z0-9_.-")
+	guard_token = _zombie_log_token(guard, "A-Za-z0-9_.-")
+	key = (guard_token, run_token)
+	if key in _ZOMBIE_RUN_IGNORED_SEEN:
+		return
+	_ZOMBIE_RUN_IGNORED_SEEN.add(key)
+	workflow = run.get("path") or run.get("workflowName") or run.get("name")
+	workflow_token = _zombie_log_token(workflow, "A-Za-z0-9_./@-")
+	created = _zombie_run_created_epoch(run)
+	age = "-" if created is None or now_epoch <= 0 else str(max(0, (now_epoch - created) // 3600))
+	print(
+		f"ZOMBIE_RUN_IGNORED run={run_token} workflow={workflow_token} age_h={age} guard={guard_token}",
+		file=stream if stream is not None else sys.stderr,
+	)
 
 
 def detect_stalls(
@@ -3891,6 +3993,151 @@ def cmd_extract_integration_branch(args: argparse.Namespace) -> int:
 	return 0
 
 
+# Failure-signature breaker (stuck-states P3b). Plan/clarify failure
+# handlers (P3a) append one AI_FAILURE_FINGERPRINT_V1 marker to their failure
+# comment; the poller trips a phase-failure label once the same (phase, fp)
+# repeats STALL_FINGERPRINT_REPEAT_MAX times in a row, so a failing plan that
+# flips the issue back to ai:clarification cannot loop forever. Only comments
+# authored by the pipeline's own verified login count, and the newest trusted
+# AI_FAILURE_FINGERPRINT_BREAKER_V1 comment (the breaker's own trip comment)
+# is the consumption point: markers at or before it never count again.
+FAILURE_FINGERPRINT_MARKER_PREFIX = "<!-- AI_FAILURE_FINGERPRINT_V1 "
+FAILURE_FINGERPRINT_MARKER_RE = re.compile(
+	r"<!-- AI_FAILURE_FINGERPRINT_V1 phase=([a-z][a-z0-9-]{0,31}) fp=([0-9a-f]{12}) run=([1-9][0-9]{0,19}) -->"
+)
+FAILURE_FINGERPRINT_BREAKER_MARKER = "AI_FAILURE_FINGERPRINT_BREAKER_V1"
+FAILURE_FINGERPRINT_PHASE_LABELS: dict[str, str] = {
+	"plan": "ai:plan-failed",
+	"clarify": "ai:clarify-failed",
+}
+FAILURE_FINGERPRINT_DEFAULT_LABEL = "ai:needs-human"
+FAILURE_FINGERPRINT_RECENT_MAX = 5
+
+
+def failure_fingerprint_label_for_phase(phase: str) -> str:
+	"""Map a fingerprint phase to the label the breaker applies."""
+	return FAILURE_FINGERPRINT_PHASE_LABELS.get(phase, FAILURE_FINGERPRINT_DEFAULT_LABEL)
+
+
+def evaluate_failure_fingerprint_breaker(
+	comments: Any,
+	trusted_login: Any,
+	repeat_max: Any,
+	comments_complete: bool,
+) -> dict[str, Any]:
+	"""Decide whether the failure-signature breaker trips. No I/O.
+
+	Returns ``{"decision": ...}`` where decision is one of ``trip``,
+	``needs_full_history``, ``none`` or ``identity_unavailable``. Any
+	uncertainty resolves to "no trip" so the legacy stall ladder keeps
+	running (fail closed toward the existing behaviour).
+	"""
+	login = trusted_login.strip() if isinstance(trusted_login, str) else ""
+	if not login:
+		return {"decision": "identity_unavailable"}
+	if isinstance(repeat_max, bool):
+		raise ValueError("repeat_max must be an integer")
+	repeat = int(repeat_max)
+	if repeat < 2:
+		raise ValueError(f"repeat_max must be >= 2, got {repeat}")
+	if not isinstance(comments, list):
+		raise ValueError("comments must be a JSON array")
+
+	trusted: list[tuple[str, int, str]] = []
+	for comment in comments:
+		if not isinstance(comment, dict):
+			continue
+		user = comment.get("user")
+		author = user.get("login") if isinstance(user, dict) else None
+		if not isinstance(author, str) or author != login:
+			continue
+		comment_id = comment.get("id")
+		if isinstance(comment_id, bool) or not isinstance(comment_id, int) or comment_id <= 0:
+			continue
+		body = comment.get("body")
+		if not isinstance(body, str):
+			continue
+		created_at = comment.get("created_at")
+		trusted.append((created_at if isinstance(created_at, str) else "", comment_id, body))
+	trusted.sort(key=lambda item: (item[0], item[1]))
+
+	window_start = 0
+	breaker_token = "<!-- " + FAILURE_FINGERPRINT_BREAKER_MARKER + " "
+	for idx, (_created_at, _comment_id, body) in enumerate(trusted):
+		if breaker_token in body:
+			window_start = idx + 1
+
+	markers: list[dict[str, Any]] = []
+	seen_runs: set[str] = set()
+	for _created_at, comment_id, body in trusted[window_start:]:
+		# Exactly one marker per comment; zero is "not a marker", more than
+		# one is malformed and skipped.
+		if body.count(FAILURE_FINGERPRINT_MARKER_PREFIX) != 1:
+			continue
+		match = FAILURE_FINGERPRINT_MARKER_RE.search(body)
+		if match is None:
+			continue
+		phase, fingerprint, run_id = match.group(1), match.group(2), match.group(3)
+		if run_id in seen_runs:
+			# A re-run of the same workflow run is never counted twice.
+			continue
+		seen_runs.add(run_id)
+		markers.append({"phase": phase, "fp": fingerprint, "run": run_id, "id": comment_id})
+
+	recent = markers[-FAILURE_FINGERPRINT_RECENT_MAX:]
+	streak = 0
+	if markers:
+		tail_key = (markers[-1]["phase"], markers[-1]["fp"])
+		for marker in reversed(markers):
+			if (marker["phase"], marker["fp"]) != tail_key:
+				break
+			streak += 1
+
+	if streak >= repeat:
+		tail = markers[-streak:]
+		phase = tail[-1]["phase"]
+		return {
+			"decision": "trip",
+			"phase": phase,
+			"fp": tail[-1]["fp"],
+			"runs": [marker["run"] for marker in tail],
+			"label": failure_fingerprint_label_for_phase(phase),
+			"tail_comment_id": tail[-1]["id"],
+			"streak": streak,
+			"recent": recent,
+		}
+	if (
+		not comments_complete
+		and streak >= 1
+		and window_start == 0
+		and streak == len(markers)
+	):
+		# The streak reaches the oldest comment in a truncated window, so
+		# older history could extend it (or hold a breaker comment).
+		return {"decision": "needs_full_history", "streak": streak, "recent": recent}
+	return {"decision": "none", "streak": streak, "recent": recent}
+
+
+def cmd_failure_fingerprint_breaker(args: argparse.Namespace) -> int:
+	"""Print the breaker decision as one JSON line; always exits 0."""
+	try:
+		with open(args.comments_file, "r", encoding="utf-8") as handle:
+			comments = json.load(handle)
+		complete_raw = str(args.comments_complete).strip().lower()
+		if complete_raw not in ("true", "false"):
+			raise ValueError("comments_complete must be true or false")
+		result = evaluate_failure_fingerprint_breaker(
+			comments,
+			args.trusted_login,
+			args.repeat_max,
+			complete_raw == "true",
+		)
+	except (OSError, ValueError, TypeError):
+		result = {"decision": "unavailable"}
+	print(json.dumps(result, separators=(",", ":"), sort_keys=True))
+	return 0
+
+
 def cmd_check_triage_target_pr(args: argparse.Namespace) -> int:
 	"""Print the failing PR number an ai:check-triage issue names, or nothing.
 
@@ -4824,6 +5071,16 @@ def build_parser() -> argparse.ArgumentParser:
 		),
 	)
 	p_stalls.set_defaults(func=cmd_check_stalls)
+
+	p_ffb = subparsers.add_parser(
+		"failure-fingerprint-breaker",
+		help="Evaluate the poller failure-signature breaker over an issue's comments",
+	)
+	p_ffb.add_argument("--comments-file", required=True, help="Path to a JSON array of issue comments")
+	p_ffb.add_argument("--trusted-login", default="", help="Pipeline login whose comments are trusted")
+	p_ffb.add_argument("--repeat-max", default="2", help="Identical consecutive fingerprints needed to trip (>= 2)")
+	p_ffb.add_argument("--comments-complete", default="false", help="true when the comments list is the full history")
+	p_ffb.set_defaults(func=cmd_failure_fingerprint_breaker)
 
 	p_ts = subparsers.add_parser("update-timestamps", help="Update issue phase timestamps in state")
 	p_ts.add_argument("--state-file", required=True)
