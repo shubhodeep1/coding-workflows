@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The repository confirms the question's premise. None of the `.github/workflows/*.yml` files mention `MERGE_LEASE_MAX_HOLD_MINUTES`, `MERGE_LEASE_REF_PREFIX` or `MERGE_LEASE_METRICS_ENABLED`. The script reads all three with built-in defaults: `scripts/pr_checks_lib.sh:2860` uses `${MERGE_LEASE_MAX_HOLD_MINUTES:-720}`, `:3048` uses `${MERGE_LEASE_REF_PREFIX:-refs/merge-lease/}` and `:3920` uses `${MERGE_LEASE_METRICS_ENABLED:-true}`. README.md:169 says outright that metrics is \"not wired as a repo variable\". The issue already says to leave `MAX_HOLD_MINUTES` alone if it is not a variable today, and it lists \"Changing lease behaviour\" as a non-goal. Option A applies that same rule to all three settings. Options B and C would add new operator-controlled settings, which goes beyond the issue's scope; a wrong `MERGE_LEASE_REF_PREFIX` value, for example, would move lease storage. The binding required set is the 8 settings that are already wired: `MERGE_LEASE_ENABLED`, `MERGE_LEASE_TTL_MINUTES`, `MERGE_LEASE_WAIT_LABEL`, `MERGE_LEASE_REVOKE_ENABLED`, `MERGE_LEASE_IDLE_MINUTES`, `MERGE_LEASE_PRIORITY_HEAD_PREFIXES`, `MERGE_LEASE_SOFT_PATHS` and `MERGE_LEASE_MAX_HOLDERS`. The contract test also keeps an explicit list of the three unwired names (`MERGE_LEASE_MAX_HOLD_MINUTES`, `MERGE_LEASE_REF_PREFIX`, `MERGE_LEASE_METRICS_ENABLED`). Any step or job `env:` block that passes one of them fails the test, with a message saying that wiring it is a separate, deliberate change that must also update the README row and this list. The literal `MERGE_LEASE_SOFT_PATHS: none` exception and the rule that workflow defaults equal the `scripts/pr_checks_lib.sh` defaults still apply, but only to the 8 required settings. Reversibility: if a human later wants B or C, they add the env lines, move the names from the unwired list into the required set, and update README rows 164/169/172. No data or behaviour has to be migrated.",
+  "fingerprint": "3ef79402e1bf73f7d172e3cc9b94788d9b167f9c9c4c3d07e5805e11431b1c84",
+  "lineage": {
+    "issue_number": 10078,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45506685558",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45506685558",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10078"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261124231236_889e7b9d26",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10078,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45506685558"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #10078",
+  "timestamps": {
+    "created_at": "2026-11-24T23:12:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
