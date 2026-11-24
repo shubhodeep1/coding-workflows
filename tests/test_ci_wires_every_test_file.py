@@ -83,16 +83,38 @@ def _test_files() -> list[str]:
 	)
 
 
+def _catch_all_job_text_without_yaml(text: str) -> list[str]:
+	"""The catch-all job's own lines (2-space job key under `jobs:`), for hosts without PyYAML.
+
+	The rest of this guard reads workflows as text, and the pre-push gate runs
+	it on a host Python that may lack PyYAML, so the catch-all check must not
+	depend on it. Only the job's own block counts: the next job key ends it.
+	"""
+	lines = text.splitlines()
+	try:
+		start = lines.index(f"  {CATCH_ALL_JOB}:")
+	except ValueError:
+		return []
+	block: list[str] = []
+	for line in lines[start + 1:]:
+		if re.match(r"^ {0,2}\S", line) and not line.lstrip().startswith("#"):
+			break
+		block.append(line)
+	return ["\n".join(block)]
+
+
 def _catch_all_collects_python_tests() -> bool:
 	"""True while ci.yml's catch-all job collects all of tests/ and pytest collects every test_*.py there."""
 	workflow_text = CI_WORKFLOW.read_text(encoding="utf-8")
 	try:
 		import yaml
 	except ImportError:
-		# PyYAML is installed in CI; without it (an offline container), read the
-		# job's block from the text: from `  <job>:` to the next 2-space job key.
-		block = re.search(rf"^  {re.escape(CATCH_ALL_JOB)}:[ \t]*\n(.*?)(?=^  \S|\Z)", workflow_text, re.MULTILINE | re.DOTALL)
-		runs = [block.group(1)] if block else []
+		# PyYAML is installed in CI; without it (an offline container or a
+		# host Python), read the job's own block from the text.
+		yaml = None
+
+	if yaml is None:
+		runs = _catch_all_job_text_without_yaml(workflow_text)
 	else:
 		workflow = yaml.safe_load(workflow_text)
 		job = (workflow.get("jobs") or {}).get(CATCH_ALL_JOB) or {}

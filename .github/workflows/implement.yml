@@ -2778,6 +2778,41 @@ jobs:
 
           if [ ! -s "${PLAN_FILE}" ] || ! grep -qiE '^[[:space:]]*implementation[[:space:]]+plan\b' "${PLAN_FILE}"; then
             echo "Unable to locate approved Implementation Plan in issue comments."
+            # Diagnostics only (#9724): say why no plan was accepted. Reads the
+            # comments file already fetched; never prints comment bodies; every
+            # comment-derived value is reduced to a safe charset. The selection
+            # above and the exit status are unchanged.
+            jq -r --arg approval_comment_id "${APPROVAL_COMMENT_ID}" '
+              def heading: ((.body // "") | test("(?im)^\\s*implementation\\s+plan\\b"));
+              def marker: ((.body // "") | contains("<!-- ai:plan-proposal:v1 -->"));
+              def trusted: (
+                (
+                  (.user.type == "Bot") and
+                  ((.user.login // "") as $bot_login | ["github-actions[bot]", "codex-bot[bot]"] | index($bot_login))
+                ) or
+                ((.author_association // "") as $assoc | ["OWNER", "MEMBER", "COLLABORATOR"] | index($assoc))
+              );
+              def clean: tostring | gsub("[^A-Za-z0-9_.:\\[\\]-]"; "_");
+              sort_by(.created_at) as $all |
+              ([$all[] | select(
+                ((.id | tostring) == $approval_comment_id) and
+                ((.body // "") | test("(?i)/approved"))
+              )] | if length > 0 then .[0] else null end) as $approval |
+              (if $approval == null then null else $approval.created_at end) as $approval_at |
+              [$all[] | select(heading or marker)] as $cands |
+              [$all[] | select(heading)] as $heads |
+              (if $approval == null then "approval_not_found"
+               elif ($heads | length) == 0 then "no_plan_comment"
+               elif ([$heads[] | select(.created_at <= $approval_at)] | length) == 0 then "plan_after_approval"
+               elif ([$heads[] | select(.created_at <= $approval_at) | select(trusted)] | length) == 0 then "plan_author_untrusted"
+               else "plan_body_mismatch" end) as $reason |
+              # Candidate lines first, error line last: the heal log filter
+              # keeps the tail when it cuts, so the reason token survives.
+              ($cands[] |
+                "::warning::IMPLEMENT_PLAN_CANDIDATE id=\(.id | clean) created_at=\(.created_at | clean) login=\(.user.login // "none" | clean) type=\(.user.type // "none" | clean) association=\(.author_association // "none" | clean) heading=\(heading) marker=\(marker) after_approval=\(if $approval_at == null then "unknown" else (.created_at > $approval_at) end) trusted=\(trusted)"),
+              "::error::IMPLEMENT_PLAN_NOT_FOUND reason=\($reason) approval_id=\($approval_comment_id | clean) approval_created_at=\(if $approval_at == null then "none" else ($approval_at | clean) end) comments_total=\($all | length) plan_candidates=\($cands | length)"
+            ' "${ISSUE_COMMENTS_FILE}" \
+              || echo "::warning::IMPLEMENT_PLAN_DIAGNOSTICS_UNAVAILABLE reason=jq_failed"
             exit 1
           fi
 

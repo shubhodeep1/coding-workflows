@@ -4267,6 +4267,102 @@ def main() -> int:
 	return 1 if failed > 0 else 0
 
 
+def _zq_iso_hours_ago(now_epoch, hours):
+	from datetime import datetime, timezone
+	return datetime.fromtimestamp(now_epoch - int(hours * 3600), tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_zombie_run_max_queued_hours_parsing():
+	import contextlib
+	import io
+	assert orchestrate_lib.zombie_run_max_queued_hours({}) == 24
+	assert orchestrate_lib.zombie_run_max_queued_hours({"ZOMBIE_RUN_MAX_QUEUED_HOURS": ""}) == 24
+	assert orchestrate_lib.zombie_run_max_queued_hours({"ZOMBIE_RUN_MAX_QUEUED_HOURS": "0"}) == 0
+	assert orchestrate_lib.zombie_run_max_queued_hours({"ZOMBIE_RUN_MAX_QUEUED_HOURS": "48"}) == 48
+	for bad in ("abc", "-1", "1.5", "123456"):
+		err = io.StringIO()
+		with contextlib.redirect_stderr(err):
+			assert orchestrate_lib.zombie_run_max_queued_hours({"ZOMBIE_RUN_MAX_QUEUED_HOURS": bad}) == 0
+		assert "ZOMBIE_RUN_MAX_QUEUED_HOURS is not a whole number of hours" in err.getvalue()
+
+
+def test_is_wedged_queued_run_matrix():
+	now = 1794650000
+	wedged = orchestrate_lib.is_wedged_queued_run
+	assert wedged({"status": "queued", "created_at": _zq_iso_hours_ago(now, 25)}, now, 24) is True
+	assert wedged({"status": "queued", "created_at": _zq_iso_hours_ago(now, 23)}, now, 24) is False
+	assert wedged({"status": "QUEUED", "createdAt": _zq_iso_hours_ago(now, 30)}, now, 24) is True
+	for status in ("in_progress", "pending", "waiting", "requested"):
+		assert wedged({"status": status, "created_at": _zq_iso_hours_ago(now, 100)}, now, 24) is False
+	for created in (None, "", "garbage", 12345):
+		run = {"status": "queued"}
+		if created is not None:
+			run["created_at"] = created
+		assert wedged(run, now, 24) is False
+	assert wedged({"status": "queued", "created_at": _zq_iso_hours_ago(now, 500)}, now, 0) is False
+	assert wedged({"status": "queued", "created_at": _zq_iso_hours_ago(now, 500)}, 0, 24) is False
+	assert wedged("not-a-run", now, 24) is False
+
+
+def test_log_zombie_run_ignored_dedupes_per_guard():
+	import io
+	now = 1794650000
+	stream = io.StringIO()
+	run = {"id": 43095142301, "status": "queued", "created_at": _zq_iso_hours_ago(now, 25),
+		"path": ".github/workflows/implement.yml"}
+	orchestrate_lib._ZOMBIE_RUN_IGNORED_SEEN.discard(("lib_test_guard", "43095142301"))
+	orchestrate_lib._ZOMBIE_RUN_IGNORED_SEEN.discard(("lib_test_guard_b", "43095142301"))
+	orchestrate_lib.log_zombie_run_ignored(run, "lib_test_guard", now, stream=stream)
+	orchestrate_lib.log_zombie_run_ignored(run, "lib_test_guard", now, stream=stream)
+	orchestrate_lib.log_zombie_run_ignored(run, "lib_test_guard_b", now, stream=stream)
+	assert stream.getvalue().splitlines() == [
+		"ZOMBIE_RUN_IGNORED run=43095142301 workflow=.github/workflows/implement.yml age_h=25 guard=lib_test_guard",
+		"ZOMBIE_RUN_IGNORED run=43095142301 workflow=.github/workflows/implement.yml age_h=25 guard=lib_test_guard_b",
+	]
+
+
+def test_wedged_queued_run_needs_a_z_suffixed_created_at():
+	now = 1794650000
+	stamp = _zq_iso_hours_ago(now, 30)
+	assert orchestrate_lib.is_wedged_queued_run({"status": "queued", "created_at": stamp}, now, 24) is True
+	for other in (stamp[:-1] + "+00:00", stamp[:-1]):
+		assert orchestrate_lib.is_wedged_queued_run({"status": "queued", "created_at": other}, now, 24) is False
+
+
+def test_concurrency_snapshot_skips_wedged_queued_runs_under_a_long_threshold():
+	now = 1794650000
+	# This file runs under its own main() (no pytest fixtures), so the env
+	# override is saved and restored by hand.
+	previous_hours = os.environ.pop("ZOMBIE_RUN_MAX_QUEUED_HOURS", None)
+	try:
+		_check_concurrency_snapshot_skips_wedged_queued_runs(now)
+	finally:
+		if previous_hours is None:
+			os.environ.pop("ZOMBIE_RUN_MAX_QUEUED_HOURS", None)
+		else:
+			os.environ["ZOMBIE_RUN_MAX_QUEUED_HOURS"] = previous_hours
+
+
+def _check_concurrency_snapshot_skips_wedged_queued_runs(now):
+	import contextlib
+	import io
+	runs = {"workflow_runs": [
+		{"id": 71, "status": "queued", "name": "Internal: AI Implement", "path": ".github/workflows/internal-implement.yml",
+			"created_at": _zq_iso_hours_ago(now, 25)},
+		{"id": 72, "status": "queued", "name": "Internal: AI Implement", "path": ".github/workflows/internal-implement.yml",
+			"created_at": _zq_iso_hours_ago(now, 23)},
+		{"id": 73, "status": "in_progress", "name": "Internal: AI Implement", "path": ".github/workflows/internal-implement.yml",
+			"created_at": _zq_iso_hours_ago(now, 30), "run_started_at": _zq_iso_hours_ago(now, 30)},
+	]}
+	err = io.StringIO()
+	with contextlib.redirect_stderr(err):
+		snapshot = orchestrate_lib.build_concurrency_snapshot(runs, caps={}, threshold_minutes=3000, now_ts=now)
+	assert snapshot["running_by_state"]["ai:implementing"] == 2
+	assert "ZOMBIE_RUN_IGNORED run=71 " in err.getvalue() and "guard=concurrency_snapshot" in err.getvalue()
+	os.environ["ZOMBIE_RUN_MAX_QUEUED_HOURS"] = "0"
+	snapshot = orchestrate_lib.build_concurrency_snapshot(runs, caps={}, threshold_minutes=3000, now_ts=now)
+	assert snapshot["running_by_state"]["ai:implementing"] == 3
+
 
 # ---------------------------------------------------------------
 # Stuck-states P3b: failure-signature breaker evaluator

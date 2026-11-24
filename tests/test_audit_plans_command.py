@@ -79,3 +79,43 @@ def test_retired_session_chain_is_not_screened(text):
 	# The session-driven /implement-plan-claude chain and its progress logs were retired.
 	assert "docs/implement-plan/" not in text
 	assert "claude/implement-plan-" not in text
+
+
+def test_bundle_rule_lives_in_the_gate_after_the_pick(step6):
+	# Bundles of related plans run as ONE orchestrator project, anchored on the
+	# conflict-screened pick, so they inherit the merge-conflict gate.
+	assert "**Bundle related plans into one project when appropriate.**" in step6
+	assert step6.index("**Pick.**") < step6.index("**Bundle related plans into one project when appropriate.**")
+	assert "never an in-flight or screened-out plan" in step6
+
+
+def test_bundle_requires_relatedness_and_caps(step6, text):
+	assert "Unrelated plans are never bundled" in step6
+	assert "at most **3 plans** and at most **8 phases**" in step6
+	assert "Bundling never applies to an UNSCREENED pick" in step6
+	assert "**Bundles are earned by relatedness, not size.**" in text
+	assert "never recommend several separate projects at once" in text
+
+
+def test_bundle_output_names_a_single_hand_off(text):
+	assert "bundle of N related plans as ONE orchestrator project" in text
+	assert "Hand off: /implement-plan-claude <plan path> <plan path>" in text
+
+
+@pytest.mark.parametrize("base", [ROOT / ".claude", ROOT / "workflow-templates" / ".claude"])
+def test_implement_plan_ai_dispatches_a_bundle_once(base):
+	ipa = " ".join((base / "commands" / "implement-plan-ai.md").read_text(encoding="utf-8").split())
+	assert "## Bundles" in ipa
+	assert "exactly one dispatch and one tracking issue for the whole bundle — never one dispatch per plan" in ipa
+	assert "never merge phases from different plans into one PR" in ipa
+	assert "A bundle is only ever built from explicitly named paths" in ipa
+	assert "more than 8 phases in total" in ipa
+	ipc = " ".join((base / "commands" / "implement-plan-claude.md").read_text(encoding="utf-8").split())
+	assert "or name a bundle of 2–3 plan paths dispatched as one project" in ipc
+
+
+def test_implement_plan_template_parity():
+	for name in ("implement-plan-ai", "implement-plan-claude"):
+		live = ROOT / ".claude" / "commands" / f"{name}.md"
+		template = ROOT / "workflow-templates" / ".claude" / "commands" / f"{name}.md"
+		assert template.read_text(encoding="utf-8") == live.read_text(encoding="utf-8"), name
