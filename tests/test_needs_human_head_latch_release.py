@@ -655,6 +655,30 @@ def test_a_hold_between_the_bound_latch_and_the_autofix_cap_comment_is_kept(tmp_
 	assert "outcome=skip reason=label_not_bound_to_latch latch=autofix_cap_head_moved" in newest_bound["stdout"]
 
 
+def test_repeated_latches_on_the_stale_head_do_not_keep_the_hold(tmp_path: Path) -> None:
+	# The writer re-fires on the same head: a labelled autofix-cap comment, then
+	# more on the same (now stale) head whose label add was a no-op. They hold
+	# nothing on the PR's current head, so the label is released.
+	first = _autofix_cap_comment(created_at="2026-11-20T11:15:10Z")
+	second = _autofix_cap_comment(created_at="2026-11-20T12:00:00Z")
+	third = _autofix_cap_comment(created_at="2026-11-20T12:30:00Z")
+	result = _run(tmp_path / "same_head", comments=[first, second, third], events=[_labeled()])
+	assert result["rc"] == 0, result["stderr"]
+	assert result["deleted"] == ["5 ai:needs-human"]
+	assert "reason=autofix_cap_head_moved pr=5" in result["posted"][0]["body"]
+	# A stale latch of another kind (whose body names ai:needs-human) between
+	# them does not hold either.
+	stale_round_cap = _round_cap_comment(created_at="2026-11-20T12:00:00Z")
+	mixed = _run(tmp_path / "mixed", comments=[first, stale_round_cap, third], events=[_labeled()])
+	assert mixed["rc"] == 0, mixed["stderr"]
+	assert mixed["deleted"] == ["5 ai:needs-human"]
+	# A legacy latch between them whose head is not resolved fails closed.
+	legacy = _autofix_cap_comment(head=None, created_at="2026-11-20T12:00:00Z")
+	unresolved = _run(tmp_path / "legacy_between", comments=[first, legacy, third], events=[_labeled()])
+	assert unresolved["deleted"] == [] and unresolved["posted"] == []
+	assert "outcome=skip reason=later_needs_human_comment latch=autofix_cap_head_moved" in unresolved["stdout"]
+
+
 def test_untrusted_autofix_cap_heading_is_not_a_latch(tmp_path: Path) -> None:
 	quoted = _autofix_cap_comment(author_association="NONE")
 	quoted["user"] = {"login": "drive-by"}

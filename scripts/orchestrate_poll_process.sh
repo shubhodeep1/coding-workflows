@@ -27505,8 +27505,8 @@ _Orchestrator: released the \`ai:needs-human\` latch that the staged-support res
 # an autofix-cap latch, whose writer does not always label, also binds when
 # the newest older trusted latch comment the label is bound to that way has
 # a head that is not the PR's current head and no trusted comment between it
-# and the autofix-cap comment re-asserts the hold or latches again, issue
-# #9917); no
+# and the autofix-cap comment re-asserts the hold or latches again on the
+# current head or an unresolved head, issue #9917); no
 # later trusted comment other than a release comment mentions
 # `ai:needs-human` (another path re-asserting the hold; a label re-added by
 # hand after a release fails the label binding above instead); no trusted
@@ -27724,13 +27724,19 @@ release_head_bound_needs_human_latches() {
         continue
       fi
       # The re-assertion check above starts after the newest latch. With the
-      # label bound to an older latch, any trusted comment between the two that
-      # re-asserts ai:needs-human or is itself a latch (e.g. one on the PR's
-      # current head whose label add was a no-op) keeps the hold.
-      if printf '%s' "${hl_comments}" | jq -e --argjson b "${hl_bound_idx}" --argjson i "${hl_latch_idx}" --arg pr "${hl_pr}" '
+      # label bound to an older latch, a trusted comment between the two keeps
+      # the hold when it is itself a latch on the PR's current head (its label
+      # add was a no-op) or on a head that cannot be resolved (fail closed), or
+      # when it is not a latch and re-asserts ai:needs-human. A latch between
+      # them on a head the PR has left (e.g. the same writer re-firing on the
+      # stale head) holds nothing on the current head.
+      if printf '%s' "${hl_comments}" | jq -e --argjson b "${hl_bound_idx}" --argjson i "${hl_latch_idx}" --arg pr "${hl_pr}" --argjson c "${hl_latch_candidates}" --arg cur "${hl_head}" '
           any(to_entries[];
-            .key > $b and .key < $i
+            .key as $k
+            | .key > $b and .key < $i
             and ((((.value.user.login // "") | test("\\[bot\\]$")) or ((.value.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))))
+            and (([$c[] | select(.idx == $k)] | first // null) as $between_latch
+              | if $between_latch != null then (($between_latch.head // "") | (test("^[0-9a-f]{40}$") | not) or . == $cur) else true end)
             and ((.value.body // "") | (contains("ai:needs-human") or contains("<!-- ai:workflow-heal-non-retryable:v1 ") or contains("<!-- ai:review-round-cap:v1 -->") or contains("<!-- ai:autofix-cap-head:v1 ") or contains("**AI review/autofix blocked — needs human intervention**") or contains("**AI review/autofix — judge omitted follow-up issue details**") or contains("**AI review/autofix — judge approved merge but auto-merge is disabled**"))
               and (test("<!-- ai:needs-human-auto-release reason=(non_retryable_head_moved|review_round_cap_head_moved|autofix_cap_head_moved) pr=" + $pr + " head=[0-9a-f]{40} -->\\s*$") | not)))' >/dev/null 2>&1; then
         echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=later_needs_human_comment latch=${hl_reason}"
