@@ -1200,6 +1200,7 @@ class LeaseRecordCompat(unittest.TestCase):
 			(f"4:{HEAD}:expired", [f"4:{HEAD}:expired_unparked"]),
 			(f"4:{HEAD}:revoked_idle", [f"4:{HEAD}:revoked_idle_unparked"]),
 			(f"4:{HEAD}:expired_unparked", [f"4:{HEAD}:expired_unparked"]),
+			(f"4:{HEAD}:revoked_no_head_gate_unparked", [f"4:{HEAD}:expired_unparked"]),
 			(f"4:{HEAD}:revoked_draft", []),
 			(f"4:{HEAD}:revoked_no_head_gate", []),
 			(f"4:{HEAD}", []),
@@ -2185,6 +2186,45 @@ class SoftSkipEntries(unittest.TestCase):
 		self.assertIn("outcome=released reason=expired", out)
 		self.assertEqual(_skips(h.record()), [f"4:{_sha(4)}:expired"], "a marker on an old head is pruned")
 
+	def test_a_no_head_gate_release_keeps_the_marker_through_the_next_grant(self) -> None:
+		# G2: a head-gate revocation of a marker head must not reset the
+		# once-per-head budget. The release stays soft (#9983) but carries the
+		# marker, the next grant keeps it, and a later expired / revoked_idle
+		# release of that head is hard.
+		for prev in ("expired", "revoked_idle"):
+			with self.subTest(prev=prev, step="release"):
+				st = {"pulls": [_pull(4)]}
+				_seed_lease(st, _record(4, updated=OLD, acquired=OLD, skips=[f"4:{_sha(4)}:{prev}_unparked"]))
+				h, out = _p2_tick(st)
+				self.assertIn("outcome=released reason=revoked_no_head_gate", out)
+				self.assertEqual(_skips(h.record()), [f"4:{_sha(4)}:revoked_no_head_gate_unparked"])
+		entry = f"5:{_sha(5)}:revoked_no_head_gate_unparked"
+		with self.subTest(step="pending"):
+			st = self._free([entry])
+			_head_gate(st, _sha(5), "pending")
+			h, out = _p2_tick(st)
+			self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=skipped reason=skip_head_unchanged\n", out)
+			self.assertEqual(_skips(h.record()), [entry])
+		with self.subTest(step="grant"):
+			st = self._free([entry])
+			_head_gate(st, _sha(5))
+			h, out = _p2_tick(st)
+			self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=granted", out)
+			self.assertNotIn("outcome=unparked", out)
+			self.assertEqual(_skips(h.record()), [f"5:{_sha(5)}:expired_unparked"])
+		for why in ("expired", "revoked_idle"):
+			with self.subTest(why=why, step="re-release"):
+				st = {"pulls": [_pull(4)]}
+				marker = f"4:{_sha(4)}:expired_unparked"
+				if why == "expired":
+					_seed_lease(st, _record(4, expires=int(time.time()) - 5, skips=[marker]))
+				else:
+					_seed_lease(st, _record(4, updated=OLD, acquired=OLD, skips=[marker]))
+				_head_gate(st, _sha(4))
+				h, out = _p2_tick(st)
+				self.assertIn(f"outcome=released reason={why}", out)
+				self.assertEqual(_skips(h.record()), [f"4:{_sha(4)}:{why}_unparked"])
+
 	def test_an_unparked_marker_clears_once_the_head_changes(self) -> None:
 		for why in ("expired", "revoked_idle"):
 			with self.subTest(why=why):
@@ -2244,7 +2284,8 @@ class SoftSkipEntries(unittest.TestCase):
 		# Issue #10044: expired and revoked_idle join the soft set; the
 		# `_unparked` tokens and every reason about the PR itself are hard.
 		h = _Harness({})
-		soft = [f"1:{_sha(1)}", f"2:{_sha(2)}:revoked_no_head_gate", f"3:{_sha(3)}:expired", f"4:{_sha(4)}:revoked_idle"]
+		soft = [f"1:{_sha(1)}", f"2:{_sha(2)}:revoked_no_head_gate", f"3:{_sha(3)}:expired", f"4:{_sha(4)}:revoked_idle",
+			f"11:{_sha(11)}:revoked_no_head_gate_unparked"]
 		hard = [f"5:{_sha(5)}:expired_unparked", f"6:{_sha(6)}:revoked_idle_unparked", f"7:{_sha(7)}:revoked_draft",
 			f"8:{_sha(8)}:revoked_skip_ai", f"9:{_sha(9)}:revoked_final_ci_failed", f"10:{_sha(10)}:some_future_reason"]
 		listing = "$'\\n'".join(f'"{e}"' for e in soft + hard)
@@ -2260,9 +2301,11 @@ class SoftSkipEntries(unittest.TestCase):
 		# un-park, and only for expired / revoked_idle.
 		res = h.lib(f'MERGE_LEASE_SKIPS="4:{_sha(4)}:expired_unparked"$\'\\n\'"5:{_sha(5)}:expired"; '
 			f'for a in "4 {_sha(4)} expired" "4 {_sha(4)} revoked_idle" "4 {_sha(4)} revoked_draft" "4 {"e" * 40} expired" '
-			f'"5 {_sha(5)} expired" "6 {_sha(6)} revoked_idle"; do set -- $a; echo "T $(_merge_lease_skip_release_token "$1" "$2" "$3")"; done')
+			f'"5 {_sha(5)} expired" "6 {_sha(6)} revoked_idle" "4 {_sha(4)} revoked_no_head_gate" "5 {_sha(5)} revoked_no_head_gate"; '
+			'do set -- $a; echo "T $(_merge_lease_skip_release_token "$1" "$2" "$3")"; done')
 		self.assertEqual([ln for ln in res.stdout.splitlines() if ln.startswith("T ")],
-			["T expired_unparked", "T revoked_idle_unparked", "T revoked_draft", "T expired", "T expired", "T revoked_idle"], res.stderr)
+			["T expired_unparked", "T revoked_idle_unparked", "T revoked_draft", "T expired", "T expired", "T revoked_idle",
+				"T revoked_no_head_gate_unparked", "T revoked_no_head_gate"], res.stderr)
 
 	def test_soft_entry_with_an_unreadable_head_gate_stays_skip_held(self) -> None:
 		# A failed head-gate read keeps the soft entry (#9983 G5): the

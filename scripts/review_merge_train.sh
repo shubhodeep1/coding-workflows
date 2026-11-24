@@ -1911,7 +1911,9 @@ _mt_lease_pr_runs_active()
 #   head-gate passes on the skip head.
 # - G2: the grant write keeps the new holder's own entry on its head as
 #   `<reason>_unparked` (hard; _merge_lease_skip_block), and a release of
-#   that head for expired or revoked_idle writes the `_unparked` token
+#   that head for expired, revoked_idle or revoked_no_head_gate writes the
+#   `_unparked` token (the last stays soft and is kept as the marker on the
+#   next grant, so a head-gate failure cannot reset the budget)
 #   (_merge_lease_skip_release_token), so each head is un-parked at most
 #   once. A head change prunes the entry as before.
 # - G3: such a grant logs outcome=unparked
@@ -2487,9 +2489,14 @@ _mt_merge_lease_tick_multi()
 		[ "${tm_skip3}" = 1 ] && tm_queue_skips="$(_merge_lease_skips_hard "${MERGE_LEASE_SKIPS}")"
 		# #10044: a live holder's retained `_unparked` marker never makes it a
 		# skip-held waiter (holders are excluded from the queue anyway).
+		# An awk failure keeps the unfiltered list (fail closed: parked waiters
+		# stay parked).
 		if [ -n "${tm_queue_skips}" ] && [ -n "${tm_rows}" ]; then
-			tm_queue_skips="$(awk -F: 'NR == FNR { if ($1 != "") held[$1] = 1; next } $0 != "" && !($1 in held)' \
-				<(printf '%s\n' "${tm_rows}" | awk 'NF { print $1 }') - <<< "${tm_queue_skips}" 2>/dev/null || true)"
+			local tm_queue_unheld=""
+			if tm_queue_unheld="$(awk -F: 'NR == FNR { if ($1 != "") held[$1] = 1; next } $0 != "" && !($1 in held)' \
+				<(printf '%s\n' "${tm_rows}" | awk 'NF { print $1 }') - <<< "${tm_queue_skips}" 2>/dev/null)"; then
+				tm_queue_skips="${tm_queue_unheld}"
+			fi
 		fi
 		while IFS= read -r tm_skip_pr; do
 			[[ "${tm_skip_pr}" =~ ^[1-9][0-9]*$ ]] || continue

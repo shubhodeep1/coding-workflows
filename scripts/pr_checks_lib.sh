@@ -2939,13 +2939,18 @@ _merge_lease_skips_normalize()
 # (revoked_draft, revoked_skip_ai, revoked_final_ci_failed, the `_unparked`
 # tokens, any unknown one) stays hard; older libraries read every reason but
 # revoked_no_head_gate as hard (the safe direction).
+# `revoked_no_head_gate_unparked` (a head-gate revocation of a head that
+# already used its un-park) stays soft like revoked_no_head_gate, but carries
+# the marker through that release so the once-per-head budget is not reset
+# (_merge_lease_skip_release_token, _merge_lease_skip_block). Older libraries
+# read it as hard (the safe direction).
 # No API call in any of these.
 # _merge_lease_skip_reason_is_soft <reason>: 0 when <reason> (the third
 # field; empty for a two-field entry) is a soft reason.
 _merge_lease_skip_reason_is_soft()
 {
 	case "${1:-}" in
-		""|revoked_no_head_gate|expired|revoked_idle) return 0 ;;
+		""|revoked_no_head_gate|revoked_no_head_gate_unparked|expired|revoked_idle) return 0 ;;
 	esac
 	return 1
 }
@@ -2964,29 +2969,32 @@ _merge_lease_skip_is_soft()
 _merge_lease_skips_hard()
 {
 	{ printf '%s\n' "${1:-}" | grep -E '^[1-9][0-9]*:[0-9a-f]{40}(:[a-z][a-z_]{0,39})?$' || true; } \
-		| awk -F: 'NF == 3 && $3 != "revoked_no_head_gate" && $3 != "expired" && $3 != "revoked_idle"'
+		| awk -F: 'NF == 3 && $3 != "revoked_no_head_gate" && $3 != "revoked_no_head_gate_unparked" && $3 != "expired" && $3 != "revoked_idle"'
 	return 0
 }
 
 _merge_lease_skips_soft()
 {
 	{ printf '%s\n' "${1:-}" | grep -E '^[1-9][0-9]*:[0-9a-f]{40}(:[a-z][a-z_]{0,39})?$' || true; } \
-		| awk -F: 'NF == 2 || $3 == "revoked_no_head_gate" || $3 == "expired" || $3 == "revoked_idle"'
+		| awk -F: 'NF == 2 || $3 == "revoked_no_head_gate" || $3 == "revoked_no_head_gate_unparked" || $3 == "expired" || $3 == "revoked_idle"'
 	return 0
 }
 
 # _merge_lease_skip_release_token <pr> <head> <reason> (issue #10044, G2):
 # the reason token of a release entry for <pr>:<head>. `<reason>_unparked`
-# when <reason> is expired or revoked_idle and the newest MERGE_LEASE_SKIPS
-# entry for <pr>:<head> is an `_unparked` marker (that head already used its
-# one un-park, whatever the earlier reason was); <reason> otherwise. No API
+# when <reason> is expired, revoked_idle or revoked_no_head_gate and the
+# newest MERGE_LEASE_SKIPS entry for <pr>:<head> is an `_unparked` marker
+# (that head already used its one un-park, whatever the earlier reason was);
+# <reason> otherwise. `revoked_no_head_gate_unparked` stays soft, so a failed
+# head-gate still clears once it passes (#9983), but the next grant keeps the
+# marker, so a head-gate failure cannot reset the once-per-head budget. No API
 # call. The tick also uses its presence as the version guard for writing
 # `_unparked` tokens.
 _merge_lease_skip_release_token()
 {
 	local rt_pr="${1:-}" rt_head="${2:-}" rt_reason="${3:-}" rt_prev=""
 	case "${rt_reason}" in
-		expired|revoked_idle)
+		expired|revoked_idle|revoked_no_head_gate)
 			if [[ "${rt_pr}" =~ ^[1-9][0-9]*$ && "${rt_head}" =~ ^[0-9a-f]{40}$ ]]; then
 				rt_prev="$(_merge_lease_skips_normalize "${MERGE_LEASE_SKIPS:-}" | { grep -E "^${rt_pr}:${rt_head}:[a-z][a-z_]{0,39}\$" || true; } | tail -n1 | cut -d: -f3)"
 				case "${rt_prev}" in
@@ -3295,7 +3303,9 @@ ${lease_paths}"
 # PR's entries are dropped too, but its entry for exactly that head is kept
 # as the un-park marker when its reason is expired or revoked_idle (rewritten
 # to `<reason>_unparked`, hard) or already `expired_unparked` /
-# `revoked_idle_unparked` (kept unchanged). The kept entry is appended as the
+# `revoked_idle_unparked` (kept unchanged), or `revoked_no_head_gate_unparked`
+# (soft; kept as the hard `expired_unparked` marker so a head-gate failure
+# never resets the once-per-head budget). The kept entry is appended as the
 # newest, so the 50-entry cap evicts it last. No API call.
 _merge_lease_skip_block()
 {
@@ -3311,6 +3321,7 @@ _merge_lease_skip_block()
 			case "${skip_keep_why}" in
 				expired|revoked_idle) skip_keep="${skip_drop_pr}:${skip_drop_head}:${skip_keep_why}_unparked" ;;
 				expired_unparked|revoked_idle_unparked) skip_keep="${skip_drop_pr}:${skip_drop_head}:${skip_keep_why}" ;;
+				revoked_no_head_gate_unparked) skip_keep="${skip_drop_pr}:${skip_drop_head}:expired_unparked" ;;
 			esac
 			skip_drop="${skip_drop_pr}"
 		fi
