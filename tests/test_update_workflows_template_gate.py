@@ -835,6 +835,7 @@ def test_head_gate_step_constants_match_the_review_helper() -> None:
 	# than leave updater PRs pending again (#9483).
 	helper = (REPO_ROOT / "scripts" / "review_head_gate.sh").read_text(encoding="utf-8")
 	consts = dict(re.findall(r"^(REVIEW_HEAD_GATE_UPDATER_[A-Z_]+)=['\"]([^'\"]+)['\"]$", helper, re.MULTILINE))
+	assert {"REVIEW_HEAD_GATE_UPDATER_BRANCH_RE", "REVIEW_HEAD_GATE_UPDATER_VERIFY_CONTEXT", "REVIEW_HEAD_GATE_UPDATER_INTEGRITY_CONTEXT"} <= set(consts), consts
 	run = _verify_step("verify_head_gate")["run"]
 	assert f"--arg re '{consts['REVIEW_HEAD_GATE_UPDATER_BRANCH_RE']}'" in run
 	assert f'--arg i "{consts["REVIEW_HEAD_GATE_UPDATER_INTEGRITY_CONTEXT"]}"' in run
