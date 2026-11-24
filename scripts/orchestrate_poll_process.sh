@@ -111,9 +111,28 @@ _orch_poll_cycle_project_begin()
 	return 0
 }
 
+# Issue #9927: records one per-cycle cache hit (pr_json, default_branch or
+# labels) in the run's hit ledger. A file, like the sleep ledger, so hits
+# inside $(...) subshells are counted; a no-op without a ledger.
+_orch_poll_cycle_cache_hit()
+{
+	local _orch_poll_cycle_hit_ledger="${_ORCH_POLL_CYCLE_CACHE_HITS_LEDGER:-}"
+	case "${1:-}" in
+		pr_json|default_branch|labels) ;;
+		*) return 0 ;;
+	esac
+	if [ -n "${_orch_poll_cycle_hit_ledger}" ] && [ -f "${_orch_poll_cycle_hit_ledger}" ] && [ ! -L "${_orch_poll_cycle_hit_ledger}" ]; then
+		printf '%s\n' "${1}" 2>/dev/null >> "${_orch_poll_cycle_hit_ledger}" || true
+	fi
+	return 0
+}
+
 _orch_poll_cycle_on_exit()
 {
 	local _orch_poll_cycle_exit_code="${1:-}" _orch_poll_cycle_exit_now="" _orch_poll_cycle_exit_elapsed="unknown"
+	local _orch_poll_cycle_exit_hits_ledger="${_ORCH_POLL_CYCLE_CACHE_HITS_LEDGER:-}" _orch_poll_cycle_exit_hits=""
+	local _orch_poll_cycle_exit_hits_pr="unknown" _orch_poll_cycle_exit_hits_branch="unknown" _orch_poll_cycle_exit_hits_labels="unknown"
+	local _orch_poll_cycle_exit_cache_dir="${ORCH_POLL_PR_JSON_CACHE_DIR:-}"
 	local _orch_poll_cycle_exit_sleep="unknown" _orch_poll_cycle_exit_ledger="${_ORCH_POLL_CYCLE_SLEEP_LEDGER:-}"
 	local _orch_poll_cycle_exit_seen="${_ORCH_POLL_CYCLE_PROJECTS_SEEN:-unknown}" _orch_poll_cycle_exit_processed="${_ORCH_POLL_CYCLE_PROJECTS_PROCESSED:-unknown}"
 	local _orch_poll_cycle_exit_reason="completed"
@@ -135,6 +154,17 @@ _orch_poll_cycle_on_exit()
 	if [ -n "${_orch_poll_cycle_exit_ledger}" ]; then
 		rm -f "${_orch_poll_cycle_exit_ledger}" 2>/dev/null || true
 	fi
+	if [ -n "${_orch_poll_cycle_exit_hits_ledger}" ] && [ -f "${_orch_poll_cycle_exit_hits_ledger}" ] && [ -r "${_orch_poll_cycle_exit_hits_ledger}" ] && [ ! -L "${_orch_poll_cycle_exit_hits_ledger}" ]; then
+		_orch_poll_cycle_exit_hits="$(awk 'BEGIN { p = 0; d = 0; l = 0 } $0 == "pr_json" { p++ } $0 == "default_branch" { d++ } $0 == "labels" { l++ } END { printf "%d %d %d\n", p, d, l }' "${_orch_poll_cycle_exit_hits_ledger}" 2>/dev/null || true)"
+		if [[ "${_orch_poll_cycle_exit_hits}" =~ ^([0-9]+)\ ([0-9]+)\ ([0-9]+)$ ]]; then
+			_orch_poll_cycle_exit_hits_pr="${BASH_REMATCH[1]}"
+			_orch_poll_cycle_exit_hits_branch="${BASH_REMATCH[2]}"
+			_orch_poll_cycle_exit_hits_labels="${BASH_REMATCH[3]}"
+		fi
+	fi
+	if [ -n "${_orch_poll_cycle_exit_hits_ledger}" ]; then
+		rm -f "${_orch_poll_cycle_exit_hits_ledger}" 2>/dev/null || true
+	fi
 	[[ "${_orch_poll_cycle_exit_seen}" =~ ^[0-9]+$ ]] || _orch_poll_cycle_exit_seen="unknown"
 	[[ "${_orch_poll_cycle_exit_processed}" =~ ^[0-9]+$ ]] || _orch_poll_cycle_exit_processed="unknown"
 	if [ "${_orch_poll_cycle_exit_code}" != "0" ]; then
@@ -142,7 +172,13 @@ _orch_poll_cycle_on_exit()
 	elif [ "${_orch_poll_cycle_exit_seen}" = "0" ]; then
 		_orch_poll_cycle_exit_reason="no_projects"
 	fi
-	echo "ORCH_POLL_CYCLE_SUMMARY elapsed_ms=${_orch_poll_cycle_exit_elapsed} projects_seen=${_orch_poll_cycle_exit_seen} projects_processed=${_orch_poll_cycle_exit_processed} sleep_ms=${_orch_poll_cycle_exit_sleep} exit_code=${_orch_poll_cycle_exit_code} terminal_reason=${_orch_poll_cycle_exit_reason}" 2>/dev/null || true
+	echo "ORCH_POLL_CYCLE_SUMMARY elapsed_ms=${_orch_poll_cycle_exit_elapsed} projects_seen=${_orch_poll_cycle_exit_seen} projects_processed=${_orch_poll_cycle_exit_processed} sleep_ms=${_orch_poll_cycle_exit_sleep} exit_code=${_orch_poll_cycle_exit_code} terminal_reason=${_orch_poll_cycle_exit_reason} cache_hits_pr_json=${_orch_poll_cycle_exit_hits_pr} cache_hits_default_branch=${_orch_poll_cycle_exit_hits_branch} cache_hits_labels=${_orch_poll_cycle_exit_hits_labels}" 2>/dev/null || true
+	# The PR JSON cache directory (issue #9927) is removed only when this run
+	# created it, after the summary line.
+	if [ "${_ORCH_POLL_PR_JSON_CACHE_OWNED:-false}" = "true" ] && [ -n "${_orch_poll_cycle_exit_cache_dir}" ] \
+		&& [ -d "${_orch_poll_cycle_exit_cache_dir}" ] && [ ! -L "${_orch_poll_cycle_exit_cache_dir}" ]; then
+		rm -rf -- "${_orch_poll_cycle_exit_cache_dir}" 2>/dev/null || true
+	fi
 	return 0
 }
 
@@ -162,10 +198,12 @@ _ORCH_POLL_CYCLE_EMITTED="false"
 _ORCH_POLL_CYCLE_ENABLED="false"
 _ORCH_POLL_CYCLE_SLEEP_LEDGER=""
 _ORCH_POLL_CYCLE_SLEEP_CMD="sleep"
+_ORCH_POLL_CYCLE_CACHE_HITS_LEDGER=""
 if [ "${BASH_SOURCE[0]:-}" = "${0:-}" ]; then
 	_ORCH_POLL_CYCLE_ENABLED="true"
 	_ORCH_POLL_CYCLE_SLEEP_LEDGER="$(mktemp "${TMPDIR:-/tmp}/orch_poll_cycle_sleep.XXXXXX" 2>/dev/null || true)"
 	_ORCH_POLL_CYCLE_SLEEP_CMD="_orch_poll_cycle_sleep"
+	_ORCH_POLL_CYCLE_CACHE_HITS_LEDGER="$(mktemp "${TMPDIR:-/tmp}/orch_poll_cycle_cache_hits.XXXXXX" 2>/dev/null || true)"
 fi
 _orch_poll_cycle_install_exit_trap || true
 # --- ORCH_POLL_CYCLE_SUMMARY helpers (end) ---
@@ -178,6 +216,364 @@ if [ -f "scripts/gh_helpers.sh" ]; then
   # shellcheck disable=SC1091
   source scripts/gh_helpers.sh
 fi
+
+# --- ORCH_POLL_PR_JSON_CACHE helpers (issue #9927; begin) ---
+# Per-run cache of `_fetch_pr_json` results so repeat reads of the same PR in
+# one poll cycle cost one GET (GH_PAT budget, part D).
+#
+# Contract:
+#   * Enabled only when the poller runs directly (not when sourced by a test
+#     harness), ORCH_POLL_PR_JSON_CACHE_TTL_SECS is a positive integer
+#     (default 60; 0 is the kill switch) and gh_helpers.sh runs the gh_retry
+#     call hook (GH_RETRY_AFTER_CALL_HOOK_SUPPORTED=1).
+#   * Storage: a 0700 `mktemp -d` directory, ORCH_POLL_PR_JSON_CACHE_DIR, one
+#     `<owner>__<repo>__<n>.json` file per PR (line 1 `ts <epoch> gen <token>`,
+#     then the JSON) and a `gen` token file. Removed by the EXIT trap.
+#   * Invalidation: every gh_retry call that is not a read runs
+#     _orch_poll_pr_json_cache_after_gh_call, which changes the token of the
+#     one PR an issue/PR-numbered write targets (`<owner>__<repo>__<n>.gen`),
+#     or else (merges, update-branch, mutations, unnumbered writes) flushes
+#     the whole cache and changes the global gen token. `git push`, the
+#     gh_retry_to_file PR-body PATCH and unwrapped PR writes call
+#     _invalidate_pr_json_cache explicitly; the RB race-guard and post-judge
+#     reads invalidate their PR immediately before reading, so they stay live.
+#   * An entry is served only when its gen token equals the current one, it
+#     is younger than the TTL and its JSON is an object whose .number is the
+#     requested PR. A failed read ({}) is never stored.
+#   * Fail open: every cache read or write error falls back to the live GET.
+#   * API calls: none; the cache only removes repeat GETs.
+ORCH_POLL_PR_JSON_CACHE_TTL_SECS="${ORCH_POLL_PR_JSON_CACHE_TTL_SECS:-60}"
+ORCH_POLL_PR_JSON_CACHE_DIR=""
+_ORCH_POLL_PR_JSON_CACHE_OWNED="false"
+GH_RETRY_AFTER_CALL_HOOK="${GH_RETRY_AFTER_CALL_HOOK:-}"
+
+# Prints the cache entry path for PR <n>; returns 1 (no output) when the cache
+# is off or the repo or number is not safe to use in a file name.
+_orch_poll_pr_json_cache_entry_path()
+{
+	local _opjc_dir="${ORCH_POLL_PR_JSON_CACHE_DIR:-}" _opjc_num="${1:-}" _opjc_repo="${GITHUB_REPOSITORY:-}"
+	[ -n "${_opjc_dir}" ] && [ -d "${_opjc_dir}" ] && [ ! -L "${_opjc_dir}" ] || return 1
+	[[ "${_opjc_num}" =~ ^[1-9][0-9]{0,9}$ ]] || return 1
+	[[ "${_opjc_repo}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || return 1
+	printf '%s/%s__%s__%s.json\n' "${_opjc_dir}" "${_opjc_repo%%/*}" "${_opjc_repo##*/}" "${_opjc_num}"
+}
+
+# _orch_poll_pr_json_cache_gen [<entry>]
+# Prints the current gen token; nothing when it is missing or malformed.
+# With an entry path, the token also carries that PR's own token
+# (`<entry minus .json>.gen`, written by a per-PR _invalidate_pr_json_cache),
+# so invalidating one PR does not discard the other PRs' entries.
+_orch_poll_pr_json_cache_gen()
+{
+	local _opjg_dir="${ORCH_POLL_PR_JSON_CACHE_DIR:-}" _opjg_line="" _opjg_entry="${1:-}" _opjg_num_file="" _opjg_num_line=""
+	[ -n "${_opjg_dir}" ] && [ -f "${_opjg_dir}/gen" ] && [ ! -L "${_opjg_dir}/gen" ] || return 0
+	IFS= read -r _opjg_line < "${_opjg_dir}/gen" 2>/dev/null || true
+	[[ "${_opjg_line}" =~ ^[A-Za-z0-9]{1,128}$ ]] || return 0
+	if [ -n "${_opjg_entry}" ]; then
+		_opjg_num_file="${_opjg_entry%.json}.gen"
+		if [ -L "${_opjg_num_file}" ]; then
+			return 0
+		fi
+		if [ -f "${_opjg_num_file}" ]; then
+			IFS= read -r _opjg_num_line < "${_opjg_num_file}" 2>/dev/null || true
+			[[ "${_opjg_num_line}" =~ ^[A-Za-z0-9]{1,60}$ ]] || return 0
+			_opjg_line="${_opjg_line}n${_opjg_num_line}"
+			[ "${#_opjg_line}" -le 128 ] || return 0
+		fi
+	fi
+	printf '%s\n' "${_opjg_line}"
+	return 0
+}
+
+# _orch_poll_pr_json_cache_lookup <entry> <n> <gen>: prints a valid, fresh
+# entry body and returns 0; returns 1 on any miss.
+_orch_poll_pr_json_cache_lookup()
+{
+	local _opjl_entry="${1:-}" _opjl_num="${2:-}" _opjl_gen="${3:-}" _opjl_header="" _opjl_ts="" _opjl_now="" _opjl_age="" _opjl_body=""
+	local _opjl_ttl="${ORCH_POLL_PR_JSON_CACHE_TTL_SECS:-60}"
+	[ -n "${_opjl_gen}" ] && [ -n "${_opjl_entry}" ] && [ -f "${_opjl_entry}" ] && [ ! -L "${_opjl_entry}" ] || return 1
+	[[ "${_opjl_ttl}" =~ ^[0-9]{1,6}$ ]] && [ "$(( 10#${_opjl_ttl} ))" -gt 0 ] || return 1
+	IFS= read -r _opjl_header < "${_opjl_entry}" 2>/dev/null || return 1
+	[[ "${_opjl_header}" =~ ^ts\ ([0-9]{1,12})\ gen\ ([A-Za-z0-9]{1,128})$ ]] || return 1
+	_opjl_ts="${BASH_REMATCH[1]}"
+	[ "${BASH_REMATCH[2]}" = "${_opjl_gen}" ] || return 1
+	printf -v _opjl_now '%(%s)T' -1 2>/dev/null || return 1
+	[[ "${_opjl_now}" =~ ^[0-9]+$ ]] || return 1
+	_opjl_age="$(( _opjl_now - 10#${_opjl_ts} ))"
+	[ "${_opjl_age}" -ge 0 ] && [ "${_opjl_age}" -lt "$(( 10#${_opjl_ttl} ))" ] || return 1
+	_opjl_body="$(tail -n +2 "${_opjl_entry}" 2>/dev/null)" || return 1
+	printf '%s' "${_opjl_body}" | jq -e --argjson n "${_opjl_num}" 'type == "object" and .number == $n' >/dev/null 2>&1 || return 1
+	printf '%s\n' "${_opjl_body}"
+}
+
+# _orch_poll_pr_json_cache_store <entry> <n> <gen> <body>: stores a valid live
+# result unless the gen token changed since the read began. Never fails.
+_orch_poll_pr_json_cache_store()
+{
+	local _opjs_entry="${1:-}" _opjs_num="${2:-}" _opjs_gen="${3:-}" _opjs_body="${4:-}" _opjs_tmp="" _opjs_now=""
+	[ -n "${_opjs_gen}" ] && [ -n "${_opjs_entry}" ] || return 0
+	printf '%s' "${_opjs_body}" | jq -e --argjson n "${_opjs_num}" 'type == "object" and .number == $n' >/dev/null 2>&1 || return 0
+	[ "$(_orch_poll_pr_json_cache_gen "${_opjs_entry}")" = "${_opjs_gen}" ] || return 0
+	printf -v _opjs_now '%(%s)T' -1 2>/dev/null || return 0
+	[[ "${_opjs_now}" =~ ^[0-9]+$ ]] || return 0
+	_opjs_tmp="$(mktemp "${_opjs_entry%/*}/.entry.XXXXXX" 2>/dev/null)" || return 0
+	if printf 'ts %s gen %s\n%s\n' "${_opjs_now}" "${_opjs_gen}" "${_opjs_body}" > "${_opjs_tmp}" 2>/dev/null \
+		&& [ "$(_orch_poll_pr_json_cache_gen "${_opjs_entry}")" = "${_opjs_gen}" ] \
+		&& mv -f "${_opjs_tmp}" "${_opjs_entry}" 2>/dev/null; then
+		return 0
+	fi
+	rm -f "${_opjs_tmp}" 2>/dev/null || true
+	return 0
+}
+
+# _invalidate_pr_json_cache <repo> [<number>]
+# With a number: changes that PR's own token (`<owner>__<repo>__<n>.gen`) so
+# no read of it that began earlier can store, then removes its entry; other
+# PRs' entries stay. Without a number (or one not safe as a file name), or
+# when the PR token cannot be written: changes the global gen token and
+# removes every entry. Never fails and makes no API call.
+_invalidate_pr_json_cache()
+{
+	local _ipjc_dir="${ORCH_POLL_PR_JSON_CACHE_DIR:-}" _ipjc_repo="${1:-}" _ipjc_num="${2:-}" _ipjc_tok="" _ipjc_rt="${EPOCHREALTIME:-}" _ipjc_tmp=""
+	local _ipjc_base=""
+	[ -n "${_ipjc_dir}" ] && [ -d "${_ipjc_dir}" ] && [ ! -L "${_ipjc_dir}" ] || return 0
+	_ipjc_rt="${_ipjc_rt//[^0-9]/}"
+	_ipjc_tok="g${BASHPID:-$$}x${RANDOM}x${RANDOM}x${_ipjc_rt}"
+	if [[ "${_ipjc_repo}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] && [[ "${_ipjc_num}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+		_ipjc_base="${_ipjc_dir}/${_ipjc_repo%%/*}__${_ipjc_repo##*/}__${_ipjc_num}"
+		if [ ! -L "${_ipjc_base}.gen" ] \
+			&& _ipjc_tmp="$(mktemp "${_ipjc_dir}/.gen.XXXXXX" 2>/dev/null)" \
+			&& printf '%s\n' "${_ipjc_tok}" > "${_ipjc_tmp}" 2>/dev/null \
+			&& mv -f "${_ipjc_tmp}" "${_ipjc_base}.gen" 2>/dev/null; then
+			rm -f "${_ipjc_base}.json" 2>/dev/null || true
+			return 0
+		fi
+		[ -z "${_ipjc_tmp}" ] || rm -f "${_ipjc_tmp}" 2>/dev/null || true
+		_ipjc_tmp=""
+		# The PR token could not be changed: fall through to a full flush.
+		_ipjc_num=""
+	fi
+	if _ipjc_tmp="$(mktemp "${_ipjc_dir}/.gen.XXXXXX" 2>/dev/null)" \
+		&& printf '%s\n' "${_ipjc_tok}" > "${_ipjc_tmp}" 2>/dev/null \
+		&& mv -f "${_ipjc_tmp}" "${_ipjc_dir}/gen" 2>/dev/null; then
+		:
+	else
+		# Without a fresh token no entry may be served or stored again.
+		[ -z "${_ipjc_tmp}" ] || rm -f "${_ipjc_tmp}" 2>/dev/null || true
+		rm -f "${_ipjc_dir}/gen" 2>/dev/null || true
+	fi
+	if [[ "${_ipjc_repo}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] && [[ "${_ipjc_num}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+		rm -f "${_ipjc_dir}/${_ipjc_repo%%/*}__${_ipjc_repo##*/}__${_ipjc_num}.json" 2>/dev/null || true
+	else
+		rm -f "${_ipjc_dir}"/*.json 2>/dev/null || true
+	fi
+	return 0
+}
+
+# True (0) when a gh_retry argv is a read that cannot change a PR: a
+# `_safe_gh_jq` / `gh api` call with no method other than GET that
+# _gh_api_args_unsafe_post does not treat as a POST (no fields; a graphql
+# query, not a mutation), or `gh <noun> view|list|status|checks|diff`.
+# Anything else, including an unknown command, counts as a write.
+_orch_poll_pr_json_cache_gh_call_is_read()
+{
+	local _opjr_a="" _opjr_next="" _opjr_method=""
+	case "${1:-}" in
+		_safe_gh_jq) shift ;;
+		gh)
+			shift
+			if [ "${1:-}" != "api" ]; then
+				case "${2:-}" in
+					view|list|status|checks|diff) return 0 ;;
+					*) return 1 ;;
+				esac
+			fi
+			shift
+			;;
+		*) return 1 ;;
+	esac
+	for _opjr_a in "$@"; do
+		if [ "${_opjr_next}" = "method" ]; then
+			_opjr_method="$(printf '%s' "${_opjr_a}" | tr '[:lower:]' '[:upper:]')"
+			_opjr_next=""
+			[ "${_opjr_method}" = "GET" ] || return 1
+			continue
+		fi
+		case "${_opjr_a}" in
+			-X|--method) _opjr_next="method" ;;
+			--method=*|-X?*)
+				_opjr_method="${_opjr_a#--method=}"
+				_opjr_method="${_opjr_method#-X}"
+				_opjr_method="$(printf '%s' "${_opjr_method}" | tr '[:lower:]' '[:upper:]')"
+				[ "${_opjr_method}" = "GET" ] || return 1
+				;;
+		esac
+	done
+	[ "${_opjr_next}" != "method" ] || return 1
+	declare -F _gh_api_args_unsafe_post >/dev/null 2>&1 || return 1
+	if [ -z "${_opjr_method}" ] && _gh_api_args_unsafe_post "$@"; then
+		return 1
+	fi
+	return 0
+}
+
+# Prints the one issue/PR number of GITHUB_REPOSITORY that a gh_retry write
+# can change, and returns 0; returns 1 (the caller flushes everything) for
+# any other write. Only these are narrowed: `gh issue <verb> <n>` and
+# `gh pr <verb> <n>` for the verbs listed below, and `gh api` /
+# `_safe_gh_jq` on `repos/<repo>/issues/<n>[/...]` or
+# `repos/<repo>/pulls/<n>[/...]`. Merges and update-branch move a branch that
+# other PRs may use as their base, so they, graphql mutations and every
+# unnumbered or unknown write still flush the whole cache.
+_orch_poll_pr_json_cache_gh_write_number()
+{
+	local _opjw_a="" _opjw_repo="${GITHUB_REPOSITORY:-}" _opjw_ep=""
+	[[ "${_opjw_repo}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || return 1
+	case "${1:-}" in
+		_safe_gh_jq) shift ;;
+		gh)
+			shift
+			case "${1:-}:${2:-}" in
+				issue:edit|issue:comment|issue:close|issue:reopen|issue:lock|issue:unlock|issue:pin|issue:unpin|pr:edit|pr:comment|pr:ready|pr:review|pr:lock|pr:unlock)
+					[[ "${3:-}" =~ ^[1-9][0-9]{0,9}$ ]] || return 1
+					printf '%s\n' "${3}"
+					return 0
+					;;
+				api:*) shift ;;
+				*) return 1 ;;
+			esac
+			;;
+		*) return 1 ;;
+	esac
+	for _opjw_a in "$@"; do
+		case "${_opjw_a}" in
+			repos/*|/repos/*) _opjw_ep="${_opjw_a#/}"; break ;;
+		esac
+	done
+	_opjw_ep="${_opjw_ep%%\?*}"
+	case "${_opjw_ep}" in
+		"repos/${_opjw_repo}/"*) _opjw_ep="${_opjw_ep#"repos/${_opjw_repo}/"}" ;;
+		*) return 1 ;;
+	esac
+	[[ "${_opjw_ep}" =~ ^(issues|pulls)/([1-9][0-9]{0,9})(/.*)?$ ]] || return 1
+	case "${BASH_REMATCH[1]}${BASH_REMATCH[3]}" in
+		pulls/merge*|pulls/update-branch*) return 1 ;;
+	esac
+	printf '%s\n' "${BASH_REMATCH[2]}"
+	return 0
+}
+
+# gh_retry call hook (GH_RETRY_AFTER_CALL_HOOK): for every call that is not
+# a read, invalidates the one PR the write targets (see
+# _orch_poll_pr_json_cache_gh_write_number) or else flushes the whole PR JSON
+# cache. Makes no API call.
+_orch_poll_pr_json_cache_after_gh_call()
+{
+	local _opjh_num=""
+	[ -n "${ORCH_POLL_PR_JSON_CACHE_DIR:-}" ] || return 0
+	if _orch_poll_pr_json_cache_gh_call_is_read "$@"; then
+		return 0
+	fi
+	if _opjh_num="$(_orch_poll_pr_json_cache_gh_write_number "$@" 2>/dev/null)" && [[ "${_opjh_num}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+		_invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" "${_opjh_num}" || true
+		return 0
+	fi
+	_invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
+	return 0
+}
+
+if [ "${_ORCH_POLL_CYCLE_ENABLED:-false}" = "true" ]; then
+	GH_RETRY_AFTER_CALL_HOOK=""
+	_orch_poll_pr_json_cache_new_dir=""
+	if [[ "${ORCH_POLL_PR_JSON_CACHE_TTL_SECS}" =~ ^[0-9]{1,6}$ ]] && [ "$(( 10#${ORCH_POLL_PR_JSON_CACHE_TTL_SECS} ))" -gt 0 ] \
+		&& [ "${GH_RETRY_AFTER_CALL_HOOK_SUPPORTED:-}" = "1" ] \
+		&& [[ "$(declare -f gh_retry 2>/dev/null || true)" == *GH_RETRY_AFTER_CALL_HOOK* ]]; then
+		_orch_poll_pr_json_cache_new_dir="$(mktemp -d "${TMPDIR:-/tmp}/orch_poll_pr_json_cache.XXXXXX" 2>/dev/null || true)"
+		if [ -n "${_orch_poll_pr_json_cache_new_dir}" ] && [ -d "${_orch_poll_pr_json_cache_new_dir}" ] && [ ! -L "${_orch_poll_pr_json_cache_new_dir}" ] \
+			&& chmod 700 "${_orch_poll_pr_json_cache_new_dir}" 2>/dev/null \
+			&& printf 'g%sx%sx%s\n' "$$" "${RANDOM}" "${RANDOM}" > "${_orch_poll_pr_json_cache_new_dir}/gen" 2>/dev/null; then
+			ORCH_POLL_PR_JSON_CACHE_DIR="${_orch_poll_pr_json_cache_new_dir}"
+			_ORCH_POLL_PR_JSON_CACHE_OWNED="true"
+			GH_RETRY_AFTER_CALL_HOOK="_orch_poll_pr_json_cache_after_gh_call"
+		elif [ -n "${_orch_poll_pr_json_cache_new_dir}" ] && [ -d "${_orch_poll_pr_json_cache_new_dir}" ] && [ ! -L "${_orch_poll_pr_json_cache_new_dir}" ]; then
+			rm -rf -- "${_orch_poll_pr_json_cache_new_dir}" 2>/dev/null || true
+		fi
+	fi
+	unset _orch_poll_pr_json_cache_new_dir
+fi
+
+# _orch_poll_default_branch_or_live <fallback> [quiet]
+# The repo's default branch for the many sites that used to GET repos/<repo>
+# each time: served by the per-process memo _review_run_default_branch (one
+# GET per poller process, shared with subshells). When the memo is missing
+# or fails, runs the site's original live call with the site's fallback
+# (`quiet` keeps its stderr redirect). A memo hit is counted in the cycle
+# summary as cache_hits_default_branch.
+#
+# The memo is only read here, never asked to resolve: while it is unresolved
+# (or the review-run matchers recorded `failed`), the site makes its own one
+# live GET exactly as before, so a transient failure here can neither leave
+# the matchers failing closed for the rest of the poll nor cost a second GET.
+# A successful live read that passes the memo's own branch-name check seeds
+# an unresolved memo, so later sites (and the matchers) reuse it.
+_orch_poll_default_branch_or_live()
+{
+	local _odbl_fallback="${1:-}" _odbl_quiet="${2:-}" _odbl_value="" _odbl_cached="false" _odbl_memo_line=""
+	local _odbl_memo_file="${RUNTIME_DIR:-${TMPDIR:-/tmp}}/review_run_default_branch.${GITHUB_RUN_ID:-0}.$$"
+	local _odbl_memo_state="${_REVIEW_RUN_DEFAULT_BRANCH_STATE:-}" _odbl_live_rc=0 _odbl_memo_tmp=""
+	if declare -F _review_run_default_branch >/dev/null 2>&1; then
+		if [ "${_odbl_memo_state}" = "ok" ]; then
+			_odbl_cached="true"
+		elif [ -L "${_odbl_memo_file}" ]; then
+			_odbl_memo_state="failed"
+		elif [ -f "${_odbl_memo_file}" ]; then
+			IFS= read -r _odbl_memo_line < "${_odbl_memo_file}" 2>/dev/null || true
+			case "${_odbl_memo_line}" in
+				"ok "*)
+					if [[ "${_odbl_memo_line#ok }" =~ ^[A-Za-z0-9._/-]+$ ]] && [ "${_odbl_memo_line#ok }" != "null" ]; then
+						_odbl_cached="true"
+					else
+						_odbl_memo_state="failed"
+					fi
+					;;
+				*) _odbl_memo_state="failed" ;;
+			esac
+		fi
+		if [ "${_odbl_cached}" = "true" ] && _odbl_value="$(_review_run_default_branch 2>/dev/null)" && [ -n "${_odbl_value}" ]; then
+			printf '%s\n' "${_odbl_value}"
+			_orch_poll_cycle_cache_hit default_branch || true
+			return 0
+		fi
+		[ "${_odbl_cached}" != "true" ] || _odbl_memo_state="failed"
+	else
+		_odbl_memo_state="failed"
+	fi
+	_odbl_value=""
+	if [ "${_odbl_quiet}" = "quiet" ]; then
+		_odbl_value="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null)" || _odbl_live_rc=$?
+	else
+		_odbl_value="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch')" || _odbl_live_rc=$?
+	fi
+	if [ "${_odbl_live_rc}" -ne 0 ]; then
+		[ -z "${_odbl_value}" ] || printf '%s\n' "${_odbl_value}"
+		echo "${_odbl_fallback}"
+		return 0
+	fi
+	printf '%s\n' "${_odbl_value}"
+	if [ -z "${_odbl_memo_state}" ] && [ ! -e "${_odbl_memo_file}" ] \
+		&& [[ "${_odbl_value}" =~ ^[A-Za-z0-9._/-]+$ ]] && [ "${_odbl_value}" != "null" ] \
+		&& _odbl_memo_tmp="$(mktemp "${_odbl_memo_file}.XXXXXX" 2>/dev/null)"; then
+		if printf 'ok %s\n' "${_odbl_value}" > "${_odbl_memo_tmp}" 2>/dev/null \
+			&& mv -f "${_odbl_memo_tmp}" "${_odbl_memo_file}" 2>/dev/null; then
+			_REVIEW_RUN_DEFAULT_BRANCH="${_odbl_value}"
+			_REVIEW_RUN_DEFAULT_BRANCH_STATE="ok"
+		else
+			rm -f "${_odbl_memo_tmp}" 2>/dev/null || true
+		fi
+	fi
+	return 0
+}
+# --- ORCH_POLL_PR_JSON_CACHE helpers (issue #9927; end) ---
 
 # Same rule as clarify.yml's jobs.clarify.if (issue #6630): /reclarify on the
 # first line, or on a later line of a comment without an automation marker or
@@ -537,6 +933,16 @@ elif [ -f "scripts/pr_checks_lib.sh" ]; then
   source scripts/pr_checks_lib.sh
 fi
 unset _OPP_LIB_DIR
+# Issue #9732: the two stall-recovery poller steps set REVIEW_FINAL_CI_WORKFLOW
+# (ci.yml in this repository) only for the standalone attempt_merge
+# required-checks chain. Capture it here and clear it for the rest of the
+# poller, so every existing caller of the shared helpers (noop-suspicious
+# gate D, the base-freshness branch update, the legacy attempt_merge chain
+# with STALL_MERGE_REQUIRED_CHECKS_ENABLED=false) runs exactly as it did
+# before the steps set it. _standalone_attempt_merge_required_checks passes
+# the captured value to its own calls only.
+_OPP_STALL_MERGE_FINAL_CI_WORKFLOW="${REVIEW_FINAL_CI_WORKFLOW:-}"
+unset REVIEW_FINAL_CI_WORKFLOW
 # Merge-base freshness gate (scripts/pr_checks_lib.sh, operator decision
 # Q35: A): before a direct merge, a PR whose base moved under files it
 # touches is updated from the base instead and re-validated by its
@@ -2430,6 +2836,7 @@ _record_merge_conflict_telemetry()
 			fi
 			git commit --quiet -m "orchestrator: merge-conflict telemetry (${project}/${pr_a}↔${pr_b})" 2>/dev/null || exit 1
 			git push --quiet origin "${branch}:${branch}" 2>/dev/null || exit 2
+			_invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
 		) || push_rc=$?
 		worktree_registry_deregister "$(basename -- "${wt}")"
 		git worktree remove --force "${wt}" 2>/dev/null || true
@@ -2563,6 +2970,7 @@ _sync_integration_and_rebase_subissue()
 				merged_sha="$(git -C "${_ws}" rev-parse HEAD)"
 				if git push --force-with-lease="${integration_branch}:${int_sha}" \
 				    origin "${merged_sha}:refs/heads/${integration_branch}" >/dev/null 2>&1; then
+					_invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
 					echo "  [premerge-rebase] ${integration_branch}: merged ${default_branch}@${main_sha:0:7} (pre-merge alignment)."
 					int_sha="${merged_sha}"
 					_did_push=1
@@ -2610,6 +3018,7 @@ _sync_integration_and_rebase_subissue()
 		rebased_sha="$(git -C "${_wh}" rev-parse HEAD)"
 		if git push --force-with-lease="${head_ref}:${head_sha}" \
 		    origin "${rebased_sha}:refs/heads/${head_ref}" >/dev/null 2>&1; then
+			_invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
 			echo "  [premerge-rebase] PR #${pr_num}: rebased ${head_ref} onto ${integration_branch}@${int_sha:0:7}."
 			_did_push=1
 		else
@@ -2643,10 +3052,28 @@ _sync_integration_and_rebase_subissue()
 #   PR_STATE="$(_jq_field "${pr_json}" '.state' 'open|closed|merged')"
 #   PR_MERGEABLE="$(_jq_field "${pr_json}" '.mergeable' 'true|false')"
 # ---------------------------------------------------------------
+#
+# Issue #9927: repeat reads of the same PR within one poll cycle are served
+# from the per-run cache (see "ORCH_POLL_PR_JSON_CACHE helpers"). With the
+# cache off, or a repo/number unsafe as a file name, this is the live call.
 _fetch_pr_json()
 {
 	local pr_number="$1"
-	gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" || echo '{}'
+	local _fpj_entry="" _fpj_gen="" _fpj_body=""
+	if ! _fpj_entry="$(_orch_poll_pr_json_cache_entry_path "${pr_number}" 2>/dev/null)" || [ -z "${_fpj_entry}" ]; then
+		gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" || echo '{}'
+		return
+	fi
+	_fpj_gen="$(_orch_poll_pr_json_cache_gen "${_fpj_entry}" 2>/dev/null || true)"
+	if [ -n "${_fpj_gen}" ] && _fpj_body="$(_orch_poll_pr_json_cache_lookup "${_fpj_entry}" "${pr_number}" "${_fpj_gen}" 2>/dev/null)"; then
+		printf '%s\n' "${_fpj_body}"
+		_orch_poll_cycle_cache_hit pr_json || true
+		return 0
+	fi
+	_fpj_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" || echo '{}')"
+	printf '%s\n' "${_fpj_body}"
+	_orch_poll_pr_json_cache_store "${_fpj_entry}" "${pr_number}" "${_fpj_gen}" "${_fpj_body}" 2>/dev/null || true
+	return 0
 }
 
 # _jq_field — Extract a field from JSON, optionally validating against
@@ -2720,6 +3147,127 @@ _orch_squash_merge_bound()
 	ORCH_MERGE_BOUND_OUTCOME="failed"
 	echo "ORCH_MERGE_HEAD_BOUND pr=${pr} head_sha=${head_sha} mode=${mode} outcome=failed"
 	return 1
+}
+
+# Issue #9732 (unblock fix-up for #9520): off switch for the required-checks
+# chain in run_standalone_stall_recovery's attempt_merge arm. Unset, empty or
+# "true" (any case) keeps the new chain on; "false" turns it off; any other
+# value also turns it off and logs a warning (unlike the heal flags, which
+# treat an invalid value as true). Default lives here, not only in the
+# workflow env, so a helper staged ahead of its YAML stays on (§8).
+_stall_merge_required_checks_enabled()
+{
+	local flag_norm=""
+	# sed, not xargs: xargs fails on an unmatched quote in the flag value.
+	flag_norm="$(printf '%s' "${STALL_MERGE_REQUIRED_CHECKS_ENABLED-}" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')" || flag_norm=""
+	case "${flag_norm}" in
+		""|true)
+			return 0
+			;;
+		false)
+			return 1
+			;;
+		*)
+			echo "::warning::STALL_MERGE_REQUIRED_CHECKS_ENABLED has invalid value; treating as false"
+			return 1
+			;;
+	esac
+}
+
+# Issue #9732: the standalone attempt_merge chain under the review auto-merge
+# rule. Since #9528 Phase 4 ci.yml has no pull_request trigger, so the named
+# CI check (lint) exists on a head only after a final-CI dispatch; the wait
+# helper (scripts/pr_checks_lib.sh) makes that dispatch when
+# REVIEW_FINAL_CI_WORKFLOW is set (here, the value captured at startup in
+# _OPP_STALL_MERGE_FINAL_CI_WORKFLOW). Stops at the first refusal so the recorded
+# reason is always the first one.
+#
+#   _standalone_attempt_merge_required_checks <issue> <pr> <state> <mergeable> <head_sha> <base_ref> [head_ref]
+#   Sets STALL_MERGE_REFUSAL_REASON (empty when the merge was accepted):
+#     state_not_open|not_mergeable|bad_head_sha|base_not_fresh|
+#     checks_incomplete|merge_call_failed
+#   Sets STALL_MERGE_CHECKS_IN_FLIGHT=true only when the wait timed out
+#   because final CI is in flight (dispatched now, a CI run pending, or the
+#   CI check pending), so the caller does not count the miss.
+#   Leaves PR_BASE_FRESHNESS_OUTCOME (for example lease_wait) for the caller.
+#   Returns 0 only when _orch_squash_merge_bound returned 0.
+_standalone_attempt_merge_required_checks()
+{
+	local issue="$1"
+	local pr="$2"
+	local state="${3:-}"
+	local mergeable="${4:-}"
+	local head_sha="${5:-}"
+	local base_ref="${6:-}"
+	local head_ref="${7:-}"
+	local wait_rc=0
+	STALL_MERGE_REFUSAL_REASON=""
+	STALL_MERGE_CHECKS_IN_FLIGHT="false"
+	PR_BASE_FRESHNESS_OUTCOME=""
+	if [ "${state}" != "open" ]; then
+		STALL_MERGE_REFUSAL_REASON="state_not_open"
+		return 1
+	fi
+	if [ "${mergeable}" != "true" ]; then
+		STALL_MERGE_REFUSAL_REASON="not_mergeable"
+		return 1
+	fi
+	if ! [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+		STALL_MERGE_REFUSAL_REASON="bad_head_sha"
+		return 1
+	fi
+	# The final-CI workflow the poller captured at startup (see the source
+	# block); a caller that never sourced the poller falls back to the env.
+	local stall_step_final_ci_wf="${_OPP_STALL_MERGE_FINAL_CI_WORKFLOW-${REVIEW_FINAL_CI_WORKFLOW:-}}"
+	if ! REVIEW_FINAL_CI_WORKFLOW="${stall_step_final_ci_wf}" \
+		_pr_base_fresh_for_merge "${pr}" "${head_sha}" "${base_ref}"; then
+		STALL_MERGE_REFUSAL_REASON="base_not_fresh"
+		return 1
+	fi
+	# Fail closed when the shared wait helper is not loaded, as noop gate
+	# D_helper does: never merge without the review auto-merge rule.
+	if ! command -v _pr_wait_for_required_checks >/dev/null 2>&1; then
+		echo "::warning::Standalone attempt_merge for issue #${issue}: _pr_wait_for_required_checks is not loaded; refusing to merge PR #${pr}."
+		STALL_MERGE_REFUSAL_REASON="checks_incomplete"
+		return 1
+	fi
+	# §14: the PR JSON (state, mergeable, head, refs) is the one
+	# _resolve_issue_implementation_pr already read; the wait does the
+	# check-runs, branch-protection and actions/runs reads that no earlier
+	# call in the arm makes. A zero-minute budget evaluates once and never
+	# sleeps (same call shape as noop-suspicious gate D). Reset the shared
+	# globals so an earlier issue's values in this tick are never read.
+	PR_CHECKS_WAIT_OUTCOME=""
+	PR_CHECKS_LAST_TOTAL=""
+	PR_CHECKS_RUNS_READ=""
+	PR_CHECKS_RUNS_PENDING=""
+	PR_CHECKS_LAST_CI_STATE=""
+	PR_FINAL_CI_OUTCOME=""
+	PR_FINAL_CI_REASON=""
+	# An empty head_ref means the caller could not confirm a same-repository
+	# head (fork head, or a deleted fork whose head.repo is null, which
+	# _pr_ensure_final_ci's own fork check lets through). Evaluate the
+	# checks without any final-CI dispatch then; a missing check refuses.
+	local merge_final_ci_wf="${stall_step_final_ci_wf}"
+	[ -n "${head_ref}" ] || merge_final_ci_wf=""
+	PR_CHECKS_HEAD_REF="${head_ref}" REVIEW_FINAL_CI_WORKFLOW="${merge_final_ci_wf}" \
+		_pr_wait_for_required_checks "${pr}" "${head_sha}" "${base_ref}" 0 || wait_rc=$?
+	if [ "${wait_rc}" -ne 0 ]; then
+		STALL_MERGE_REFUSAL_REASON="checks_incomplete"
+		if [ "${PR_CHECKS_WAIT_OUTCOME:-}" = "timeout" ]; then
+			if [ "${PR_FINAL_CI_OUTCOME:-}" = "dispatched" ] \
+				|| { [[ "${PR_CHECKS_RUNS_PENDING:-}" =~ ^[0-9]+$ ]] && [ "${PR_CHECKS_RUNS_PENDING}" -gt 0 ]; } \
+				|| [ "${PR_CHECKS_LAST_CI_STATE:-}" = "pending" ]; then
+				STALL_MERGE_CHECKS_IN_FLIGHT="true"
+			fi
+		fi
+		return 1
+	fi
+	if ! _orch_squash_merge_bound "${pr}" "${head_sha}" auto; then
+		STALL_MERGE_REFUSAL_REASON="merge_call_failed"
+		return 1
+	fi
+	return 0
 }
 
 ENABLE_VALIDATION_RAW="${ENABLE_VALIDATION:-true}"
@@ -4566,7 +5114,7 @@ refresh_validation_dispatch_wave_gate() {
   integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
   [ "${integration_branch}" = "null" ] && integration_branch=""
   if [ -n "${integration_branch}" ]; then
-    default_branch="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "")"
+    default_branch="$(_orch_poll_default_branch_or_live "")"
     if [ -z "${default_branch}" ]; then
       ahead_by=""
     elif ahead_by="$(_integration_branch_ahead_of_default "${integration_branch}" "${default_branch}")"; then
@@ -5057,6 +5605,66 @@ PY
 	fi
 
 	rm -f "${desired_body_file}" "${render_err_file}" "${issue_json_file}" "${template_body_file}"
+	return 0
+}
+
+# _orch_poll_labels_fill_missing <labels_json> <issue numbers…>
+# Issue #9927. Adds the labels of every numeric issue not yet a key of
+# <labels_json> ({"<n>":[names]}) and prints the result.
+#   * 1+ missing numbers: one _fetch_issue_labels_batch_graphql call
+#     (ceil(N/25) GraphQL requests, billed outside the REST core budget);
+#     each issue it serves counts as a `labels` cache hit in the cycle
+#     summary.
+#   * Numbers the batch did not return (including a failed batch): the
+#     legacy per-issue REST read with its '[]' fallback, so REST is spent
+#     only on batch misses.
+#   * <labels_json> that is not a JSON object is printed unchanged with no
+#     call (the legacy per-key merge could not have changed it either).
+_orch_poll_labels_fill_missing()
+{
+	local _olfm_json="${1:-}" _olfm_n="" _olfm_batch="" _olfm_labels="" _olfm_missing_json="" _olfm_hits="" _olfm_merged=""
+	local -a _olfm_missing=()
+	shift || true
+	if ! printf '%s' "${_olfm_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+		printf '%s\n' "${_olfm_json}"
+		return 0
+	fi
+	for _olfm_n in "$@"; do
+		[[ "${_olfm_n}" =~ ^[0-9]+$ ]] || continue
+		case " ${_olfm_missing[*]:-} " in
+			*" ${_olfm_n} "*) continue ;;
+		esac
+		if printf '%s' "${_olfm_json}" | jq -e --arg key "${_olfm_n}" 'has($key)' >/dev/null 2>&1; then
+			continue
+		fi
+		_olfm_missing+=("${_olfm_n}")
+	done
+	if [ "${#_olfm_missing[@]}" -ge 1 ]; then
+		_olfm_missing_json="$(printf '%s\n' "${_olfm_missing[@]}" | jq -R 'tonumber' | jq -s -c '.' 2>/dev/null || echo '[]')"
+		_olfm_batch="$(_fetch_issue_labels_batch_graphql "${_olfm_missing_json}" 2>/dev/null || echo '{}')"
+		if printf '%s' "${_olfm_batch}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+			if _olfm_merged="$(printf '%s' "${_olfm_json}" | jq -c --argjson b "${_olfm_batch}" --argjson m "${_olfm_missing_json}" \
+				'($m | map(tostring)) as $want | . + ($b | with_entries(select(.key as $k | ($want | index($k)) != null and (.value | type) == "array")))' 2>/dev/null)" \
+				&& [ -n "${_olfm_merged}" ]; then
+				_olfm_json="${_olfm_merged}"
+				_olfm_hits="$(jq -n --argjson b "${_olfm_batch}" --argjson m "${_olfm_missing_json}" '[$m[] | tostring | select(. as $k | $b | has($k) and ((.[$k] | type) == "array"))] | length' 2>/dev/null || echo 0)"
+				[[ "${_olfm_hits}" =~ ^[0-9]+$ ]] || _olfm_hits=0
+				while [ "${_olfm_hits}" -gt 0 ]; do
+					_orch_poll_cycle_cache_hit labels || true
+					_olfm_hits=$(( _olfm_hits - 1 ))
+				done
+			fi
+		fi
+	fi
+	for _olfm_n in "${_olfm_missing[@]+"${_olfm_missing[@]}"}"; do
+		if printf '%s' "${_olfm_json}" | jq -e --arg key "${_olfm_n}" 'has($key)' >/dev/null 2>&1; then
+			continue
+		fi
+		_olfm_labels="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${_olfm_n}/labels" --jq '[.[].name]' || echo '[]')"
+		[ -n "${_olfm_labels}" ] || _olfm_labels='[]'
+		_olfm_json="$(printf '%s' "${_olfm_json}" | jq -c --arg key "${_olfm_n}" --argjson labels "${_olfm_labels}" '. + {($key): $labels}' 2>/dev/null || printf '%s' "${_olfm_json}")"
+	done
+	printf '%s\n' "${_olfm_json}"
 	return 0
 }
 
@@ -5927,7 +6535,7 @@ close_merged_issues_sweep() {
   local _sweep_default_branch=""
   _sweep_default_branch="${CWS_DEFAULT_BRANCH:-}"
   if [ -z "${_sweep_default_branch}" ]; then
-    _sweep_default_branch="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "")"
+    _sweep_default_branch="$(_orch_poll_default_branch_or_live "" quiet)"
   fi
   _sweep_default_branch="$(printf '%s' "${_sweep_default_branch}" | tr -d '\r\n')"
   if [ -z "${_sweep_default_branch}" ] || [ "${_sweep_default_branch}" = "null" ]; then
@@ -6501,7 +7109,7 @@ compute_cycle_integration_ahead_by() {
 	CWS_DEFAULT_BRANCH=""
 	CWS_WORK_AHEAD_BY=""
 	if [ -n "${CWS_INTEGRATION_BRANCH}" ]; then
-		CWS_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "")"
+		CWS_DEFAULT_BRANCH="$(_orch_poll_default_branch_or_live "")"
 		if [ -z "${CWS_DEFAULT_BRANCH}" ]; then
 			CWS_AHEAD_BY=""
 			echo "::warning::  [check-wave-status] Could not resolve default branch via GitHub API; passing empty ahead_by so check-wave-status fails closed and keeps project_complete=false."
@@ -7313,7 +7921,7 @@ external_finalize_delivery_check() {
             EXTFIN_DELIVERY_OUTCOME="unverified"
             EXTFIN_DELIVERY_REASON="content_check_unavailable"
             if [ -z "${default_branch}" ]; then
-              default_branch="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "")"
+              default_branch="$(_orch_poll_default_branch_or_live "" quiet)"
               EXTFIN_DEFAULT_BRANCH="${default_branch}"
             fi
             if [ -n "${default_branch}" ] \
@@ -11612,6 +12220,8 @@ else:
     rm -f "${body_payload_file}" "${response_file}"
     return 1
   fi
+  # gh_retry_to_file does not run the gh_retry call hook (issue #9927).
+  _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${pr_number}" || true
   rm -f "${body_payload_file}" "${response_file}"
   return 0
 }
@@ -12815,6 +13425,7 @@ _integration_judge_commit_and_push() {
   if git -C "${wt}" -c credential.helper= \
       -c 'credential.helper=!f() { printf "username=x-access-token\npassword=%s\n" "$GH_TOKEN"; }; f' \
       push "https://github.com/${GITHUB_REPOSITORY}" "HEAD:refs/heads/${integration_branch}" >/dev/null 2>&1; then
+    _invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
     echo "  [integration-heal] Pushed the judge resolution to ${integration_branch} for PR #${final_pr}."
     return 0
   fi
@@ -13136,6 +13747,7 @@ _refresh_integration_resolver_tooling() {
       if ! git push --quiet origin "HEAD:refs/heads/${integration_branch}" 2>/dev/null; then
         exit 2
       fi
+      _invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
       echo "  ${log_prefix} pushed [ai-maint] refresh: ${refreshed_count} file(s) updated from ${default_branch}."
       exit 0
 	# Keep cleanup reachable under the script's global `set -e`.
@@ -13372,6 +13984,7 @@ sync_contract_list_union_merge() {
         printf 'push' > "${tmpdir}/reason"
         exit 2
       fi
+      _invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
       exit 0
     # Keep cleanup reachable under the script's global `set -e`.
     ) || subshell_rc=$?
@@ -14339,6 +14952,7 @@ _attempt_branch_rebuild_after_escalation() {
     done < <(printf '%s' "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" | jq -c '.[]' 2>/dev/null)
 
     git push origin "HEAD:refs/heads/${integration_branch}" >>"${replay_log}" 2>&1 || exit 24
+    _invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
     exit 0
 	# Capture replay-specific exit codes without letting `set -e` bypass
 	# the deregister/remove cleanup and structured failure handling.
@@ -18981,7 +19595,7 @@ mark_validation_complete() {
   local validation_history_conclusion="${LAST_VAL_CONCLUSION:-}"
 
   integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
-  default_branch="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+  default_branch="$(_orch_poll_default_branch_or_live "main")"
   project_title="$(jq -r '.project_title // "Orchestrator project"' "${STATE_FILE}")"
   _final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
   if [ "${ENABLE_SECURITY_PASS}" = "true" ] && [[ "${_final_pr}" =~ ^[0-9]+$ ]]; then
@@ -22570,6 +23184,7 @@ STALL_EOF
               git config user.email "codex-bot@users.noreply.invalid"
               git commit --allow-empty -m "[orchestrator] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
               if git push origin "HEAD:${head_ref}" 2>/dev/null; then
+                _invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
                 STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_empty_commit_fallback"
                 echo "  Issue #${issue_num} PR #${pr_num} pushed the empty-commit fallback (action=retrigger_review_empty_commit_fallback)."
                 tg_notify "Stall recovery: re-triggered review for PR #${pr_num} (issue #${issue_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"PR: $(_gh_url "pull/${pr_num}")"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
@@ -26052,7 +26667,7 @@ _stall_standalone_default_branch_resolve() {
     _STALL_STANDALONE_DEFAULT_BRANCH_TRIED=true
     _STALL_STANDALONE_DEFAULT_BRANCH="${CWS_DEFAULT_BRANCH:-}"
     if [ -z "${_STALL_STANDALONE_DEFAULT_BRANCH}" ]; then
-      _STALL_STANDALONE_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "")"
+      _STALL_STANDALONE_DEFAULT_BRANCH="$(_orch_poll_default_branch_or_live "" quiet)"
     fi
     _STALL_STANDALONE_DEFAULT_BRANCH="$(printf '%s' "${_STALL_STANDALONE_DEFAULT_BRANCH}" | tr -d '\r\n')"
     [ "${_STALL_STANDALONE_DEFAULT_BRANCH}" = "null" ] && _STALL_STANDALONE_DEFAULT_BRANCH=""
@@ -29137,6 +29752,10 @@ PY
         fi
         if [[ "${_std_conflict_pr_num_try}" =~ ^[0-9]+$ ]]; then
           for _std_attempt in 0 1 2 3 4; do
+            # Issue #9927: every attempt must be a live GET (the GET is what
+            # starts GitHub's mergeability recomputation), so never serve the
+            # cached unsettled payload here.
+            _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${_std_conflict_pr_num_try}" || true
             _std_conflict_pr_json_try="$(_fetch_pr_json "${_std_conflict_pr_num_try}")"
             if [ -n "${_std_conflict_pr_json_try}" ] && [ "${_std_conflict_pr_json_try}" != "{}" ]; then
               _STD_ITER_PR_NUM_CACHED="${_std_conflict_pr_num_try}"
@@ -29663,6 +30282,7 @@ STALL_EOF
                   git config user.email "codex-bot@users.noreply.invalid"
                   git commit --allow-empty -m "[standalone] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
                   if git push origin "HEAD:${head_ref}" 2>/dev/null; then
+                    _invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
                     _std_rtr_push_succeeded="true"
                     STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_empty_commit_fallback"
                     echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} pushed the empty-commit fallback (action=retrigger_review_empty_commit_fallback)."
@@ -29706,6 +30326,11 @@ STALL_EOF
         ;;
       attempt_merge)
         local merge_pr
+        # Issue #9732: "true" when the required-checks chain ran for this
+        # issue (STALL_MERGE_REQUIRED_CHECKS_ENABLED on and a PR resolved).
+        local merge_required_checks_on="false"
+        STALL_MERGE_REFUSAL_REASON=""
+        STALL_MERGE_CHECKS_IN_FLIGHT="false"
         # Assigned explicitly: this arm runs once per issue inside the loop,
         # and a bare re-declaration would keep the previous issue's value.
         local _std_merge_refusal_reason=""
@@ -29730,18 +30355,41 @@ STALL_EOF
           local merge_head_sha merge_base_ref
           merge_head_sha="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)"
           merge_base_ref="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .base.ref?) then .base.ref else empty end' 2>/dev/null | tail -n1)"
+          local merge_head_ref
+          # Same PR JSON, no extra API call: lets the final-CI dispatch skip
+          # its own pulls/<pr> read.
+          merge_head_ref="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .head.ref?) then .head.ref else empty end' 2>/dev/null | tail -n1)"
+          # The resolver binds by head-ref name without checking .head.repo,
+          # and _pr_ensure_final_ci rejects a fork head only when it reads
+          # the PR itself. Pass the ref only for a same-repository head;
+          # otherwise leave it empty, which makes the merge chain skip the
+          # final-CI dispatch (a null head.repo passes the helper's check).
+          local merge_head_repo
+          merge_head_repo="$(printf '%s' "${merge_pr_json}" | jq -r 'if type == "object" then (.head.repo.full_name? // "") else "" end' 2>/dev/null | tail -n1)"
+          if [ -z "${merge_head_repo}" ] || [ "${merge_head_repo}" != "${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" ]; then
+            merge_head_ref=""
+          fi
           # One observed head feeds the checks, the freshness gate and the
           # bound merge (two-argument checks call keeps the legacy
           # block-on-any filter). Reset so a merge-lease wait below is read
           # from this PR's gate, never from an earlier PR's.
           PR_BASE_FRESHNESS_OUTCOME=""
+          if _stall_merge_required_checks_enabled; then
+            # Issue #9732: the review auto-merge rule. The wait helper
+            # dispatches the missing final CI (lint) once, the merge runs
+            # only on rc 0 and the first refusal is recorded instead of
+            # being swallowed. With the flag off the legacy chain below
+            # runs unchanged.
+            merge_required_checks_on="true"
+            _standalone_attempt_merge_required_checks "${issue_num}" "${merge_pr}" "${merge_state}" "${merge_mergeable}" \
+              "${merge_head_sha}" "${merge_base_ref}" "${merge_head_ref}" || true
           # Record the first gate that refused the merge (#9715, follow-up of
           # #9520). The gates, their order and their arguments match the
           # previous single && chain; an empty or failed PR fetch leaves
           # merge_state empty and maps to state_not_open, and mergeable:null
           # (GitHub still computing) maps to not_mergeable. `elif !` keeps
           # each helper's failure safe under set -e.
-          if [ "${merge_state}" != "open" ]; then
+          elif [ "${merge_state}" != "open" ]; then
             _std_merge_refusal_reason="state_not_open"
           elif [ "${merge_mergeable}" != "true" ]; then
             _std_merge_refusal_reason="not_mergeable"
@@ -29774,9 +30422,27 @@ STALL_EOF
           # Waiting for the merge lease (scripts/pr_checks_lib.sh) is not a
           # failed merge: the lease tick re-dispatches the PR when the lease
           # is granted, so the recovery budget is not spent.
+          if [ "${merge_required_checks_on}" = "true" ]; then
+            echo "STALL_MERGE_REFUSAL issue=${issue_num} pr=${merge_pr} head=${merge_head_sha:-unknown} reason=${STALL_MERGE_REFUSAL_REASON:-base_not_fresh}"
+          fi
           echo "  [standalone-stall] Issue #${issue_num}: PR #${merge_pr} waits for the merge lease (PR #${MERGE_LEASE_BLOCKER:-?}); not counting a recovery attempt."
           echo "STANDALONE_STALL_MERGE issue=${issue_num} pr=${merge_pr} head=${_std_merge_log_head} outcome=lease_wait reason=merge_lease_wait"
           STALL_RECOVERY_EFFECTIVE_ACTION="attempt_merge_skipped_merge_lease_wait"
+        elif [ "${merge_required_checks_on}" = "true" ] && [ -n "${STALL_MERGE_REFUSAL_REASON:-}" ]; then
+          # Issue #9732: record the first refusal. A wait that timed out
+          # because final CI is in flight is not a failed merge (the next
+          # tick re-checks the head), so the recovery budget is not spent;
+          # every other refusal counts so the ladder can still escalate.
+          STALL_RECOVERY_EFFECTIVE_ACTION="attempt_merge_refused_${STALL_MERGE_REFUSAL_REASON}"
+          echo "STALL_MERGE_REFUSAL issue=${issue_num} pr=${merge_pr} head=${merge_head_sha:-unknown} reason=${STALL_MERGE_REFUSAL_REASON}"
+          echo "STANDALONE_STALL_MERGE issue=${issue_num} pr=${merge_pr} head=${_std_merge_log_head} outcome=refused reason=${STALL_MERGE_REFUSAL_REASON}"
+          if [ "${STALL_MERGE_CHECKS_IN_FLIGHT:-false}" = "true" ]; then
+            echo "  [standalone-stall] Issue #${issue_num}: PR #${merge_pr} final CI is in flight on the head; not counting a recovery attempt."
+          else
+            tg_notify_issue "${issue_num}" "Standalone stall recovery: merge of PR #${merge_pr} refused (reason=${STALL_MERGE_REFUSAL_REASON}; stuck ${elapsed_minutes}m, attempt $((recovery_count + 1)))." "DEBUG"
+            STALL_RECOVERY_SHOULD_INCREMENT="true"
+            took_action="true"
+          fi
         elif [ -n "${_std_merge_refusal_reason}" ]; then
           echo "STANDALONE_STALL_MERGE issue=${issue_num} pr=${merge_pr} head=${_std_merge_log_head} outcome=refused reason=${_std_merge_refusal_reason}"
           STALL_RECOVERY_EFFECTIVE_ACTION="attempt_merge_refused_${_std_merge_refusal_reason}"
@@ -31841,7 +32507,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 		TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
 	fi
 	if [ "${PROJECT_STATUS}" = "security-pass" ] || [ "${PROJECT_STATUS}" = "security-pass-fixing" ]; then
-		DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+		DEFAULT_BRANCH_TRACKING="$(_orch_poll_default_branch_or_live "main")"
 		# The tick-level sync below skips both states; heal a final PR that
 		# main made unmergeable now instead of after the pass (Q41: A).
 		if [ -n "${INTEGRATION_BRANCH_TRACKING}" ]; then
@@ -32013,7 +32679,7 @@ ${SECURITY_PASS_WAIVE_LINES}
 The bounded security-pass fix loop was reset. Re-running the mandatory current-head audit."
           tg_notify "/security-pass-waive: project #${TRACKING_NUM} waived $(printf '%s' "${SECURITY_PASS_WAIVE_IDS_JSON}" | jq -r 'length') finding(s) (by ${SECURITY_PASS_WAIVE_AUTHOR}); security-pass state reset and re-running the audit." "DEBUG"
           if [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
-            DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+            DEFAULT_BRANCH_TRACKING="$(_orch_poll_default_branch_or_live "main")"
           fi
           ensure_security_pass_before_completion "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" || true
           continue
@@ -32310,7 +32976,7 @@ Security-pass fix issue #${SECURITY_FIX_ISSUE} was closed by orchestrator stall 
             continue
           fi
           if [ "${ENABLE_SECURITY_PASS}" = "true" ] && [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
-            DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+            DEFAULT_BRANCH_TRACKING="$(_orch_poll_default_branch_or_live "main")"
           fi
           if ! ensure_security_pass_before_completion "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" "${_orch_extfin_pr_json}"; then
             continue
@@ -32487,7 +33153,7 @@ ${_orch_extfin_validation_line}"
   # can own externally merged/deleted final-PR completion without the
   # integration-branch missing/conflict path preempting it.
   if [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
-    DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+    DEFAULT_BRANCH_TRACKING="$(_orch_poll_default_branch_or_live "main")"
   fi
   # Retry advisory creation on every later merged-state tick. The transition
   # arms attempt filing immediately, but a transient create failure leaves the
@@ -32532,7 +33198,7 @@ ${_orch_extfin_validation_line}"
 
   if [ "${PROJECT_STATUS}" = "merge_conflict" ]; then
     FINAL_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
-    FINAL_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+    FINAL_DEFAULT_BRANCH="$(_orch_poll_default_branch_or_live "main")"
     FINAL_PROJECT_TITLE="$(jq -r '.project_title // "Orchestrator project"' "${STATE_FILE}")"
     FINAL_PR_FOR_TRACKING_BODY="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
 
@@ -32938,7 +33604,7 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
 The bounded security-pass fix loop was reset by \`/re-security-pass\`. Re-running the mandatory current-head audit."
       tg_notify "/re-security-pass: project #${TRACKING_NUM} security-pass state reset; re-running the audit." "DEBUG"
       if [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
-        DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+        DEFAULT_BRANCH_TRACKING="$(_orch_poll_default_branch_or_live "main")"
       fi
       ensure_security_pass_before_completion "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" || true
       continue
@@ -33008,7 +33674,7 @@ The bounded security-pass fix loop was reset by \`/re-security-pass\`. Re-runnin
 The security pass that parked this project ran on workflow engine \`${SP_AUTO_RESET_FAILED_ENGINE_SHA:-unknown}\`; this poll runs on \`${SP_AUTO_RESET_ENGINE_SHA}\`. The bounded fix loop is reset once for the new engine and the mandatory current-head audit re-runs. Comment \`/re-security-pass\` to reset it again by hand, or set \`SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE=false\` to keep exhausted projects parked."
       tg_notify "Project #${TRACKING_NUM} security pass reset automatically: workflow engine ${SP_AUTO_RESET_ENGINE_SHA} replaced ${SP_AUTO_RESET_FAILED_ENGINE_SHA:-unknown}; re-running the audit." "DEBUG"
       if [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
-        DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+        DEFAULT_BRANCH_TRACKING="$(_orch_poll_default_branch_or_live "main")"
       fi
       ensure_security_pass_before_completion "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" || true
       continue
@@ -33101,7 +33767,7 @@ PY
 
       REVALIDATE_MEMORY_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
       if [ -z "${REVALIDATE_MEMORY_BRANCH}" ] || [ "${REVALIDATE_MEMORY_BRANCH}" = "null" ]; then
-        REVALIDATE_MEMORY_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "")"
+        REVALIDATE_MEMORY_BRANCH="$(_orch_poll_default_branch_or_live "" quiet)"
       fi
       REVALIDATE_INTEGRATION_SHA=""
       if [ -n "${REVALIDATE_MEMORY_BRANCH}" ]; then
@@ -35196,6 +35862,7 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
         _rb_prev_pr_state="${RB_PR_STATE:-}"
         _rb_prev_pr_merged="${RB_PR_MERGED:-false}"
         _rb_fix_refreshed="false"
+        _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${RB_PR}" || true
         _rb_pr_json_refetched="$(_fetch_pr_json "${RB_PR}")"
         if printf '%s' "${_rb_pr_json_refetched}" | jq -e 'type == "object" and ((.state // "") | IN("open","closed","merged"))' >/dev/null 2>&1; then
           _rb_fix_refreshed="true"
@@ -35791,6 +36458,7 @@ sys.exit(1)
           # Attempt squash merge (with branch update if needed)
           # Re-fetch PR data (state may have changed since the judge ran)
           RB_MERGED="false"
+          _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${RB_PR}" || true
           _rb_merge_json="$(_fetch_pr_json "${RB_PR}")"
           PR_STATE="$(_jq_field "${_rb_merge_json}" '.state' 'open|closed|merged')"
           PR_MERGEABLE="$(_jq_field "${_rb_merge_json}" '.mergeable' 'true|false')"
@@ -35811,6 +36479,7 @@ sys.exit(1)
 		    && _pr_checks_completed "${RB_PR}" "${_rb_merge_sha}" "${_rb_merge_base}" \
 		    && _pr_base_fresh_for_merge "${RB_PR}" "${_rb_merge_sha}" "${_rb_merge_base}"; then
 		    if _orch_squash_merge_bound "${RB_PR}" "${_rb_merge_sha}" auto; then
+		      _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${RB_PR}" || true
 		      if [ "${ORCH_MERGE_BOUND_OUTCOME}" = "merged" ]; then
 		        echo "  PR #${RB_PR} merged directly."
 		      else
@@ -35825,6 +36494,7 @@ sys.exit(1)
             if gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/update-branch" \
               -X PUT -f expected_head_sha="${_rb_merge_sha}" \
               2>/dev/null; then
+              _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${RB_PR}" || true
               echo "  PR #${RB_PR} branch updated. Synchronize event will re-trigger review + conflict resolution."
             else
               echo "  API branch update failed for review-blocked PR #${RB_PR}. Dispatching review workflow for conflict resolution..."
@@ -35860,6 +36530,7 @@ sys.exit(1)
             gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
               --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
             RB_FORCE_MERGED="false"
+            _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${RB_PR}" || true
             _rb_fm_json="$(_fetch_pr_json "${RB_PR}")"
             PR_STATE="$(_jq_field "${_rb_fm_json}" '.state' 'open|closed|merged')"
             PR_MERGEABLE="$(_jq_field "${_rb_fm_json}" '.mergeable' 'true|false')"
@@ -35875,6 +36546,7 @@ sys.exit(1)
 				  && _pr_checks_completed "${RB_PR}" "${_rb_fm_sha}" "${_rb_fm_base}" \
 				  && _pr_base_fresh_for_merge "${RB_PR}" "${_rb_fm_sha}" "${_rb_fm_base}"; then
 				  if _orch_squash_merge_bound "${RB_PR}" "${_rb_fm_sha}" auto; then
+				    _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${RB_PR}" || true
 				    RB_FORCE_MERGED="true"
 				  else
 				    echo "::warning::Could not merge PR #${RB_PR} in force-merge path."
@@ -35884,6 +36556,7 @@ sys.exit(1)
               if gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/update-branch" \
                 -X PUT -f expected_head_sha="${_rb_fm_sha}" \
                 2>/dev/null; then
+                _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${RB_PR}" || true
                 echo "  PR #${RB_PR} branch updated. Will retry force-merge on next poll cycle."
               else
                 echo "  API branch update failed for force-merge PR #${RB_PR}. Dispatching review workflow for conflict resolution..."
@@ -35910,6 +36583,7 @@ sys.exit(1)
           else
             echo "  Judge is applying fixes to PR #${RB_PR}..."
             # Re-check PR state before expensive fix+push (race condition safety net)
+            _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${RB_PR}" || true
             _rb_recheck_json="$(_fetch_pr_json "${RB_PR}")"
             RB_PR_STATE_NOW="$(_jq_field "${_rb_recheck_json}" '.state' 'open|closed|merged')"
             RB_PR_MERGED_NOW="$(_jq_field "${_rb_recheck_json}" '.merged_at != null' 'true|false')"
@@ -36087,6 +36761,7 @@ ${RB_FIX_DESC}" || true
                   elif git -C "${RB_COMBINED_WORKDIR}" -c credential.helper= \
                       -c 'credential.helper=!f() { printf "username=x-access-token\npassword=%s\n" "$GH_TOKEN"; }; f' \
                       push "https://github.com/${GITHUB_REPOSITORY}" "HEAD:${FOLLOWUP_BRANCH}" 2>/dev/null; then
+                    _invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
                     echo "  Pushed follow-up branch ${FOLLOWUP_BRANCH}."
 
                     if [ "${STATE_FOLLOWUP_INTEGRATION_BRANCH_EXISTS}" = "true" ] && [ -n "${STATE_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
@@ -36151,6 +36826,7 @@ ${RB_FIX_DESC}
                   if git -C "${RB_COMBINED_WORKDIR}" -c credential.helper= \
                       -c 'credential.helper=!f() { printf "username=x-access-token\npassword=%s\n" "$GH_TOKEN"; }; f' \
                       push "https://github.com/${GITHUB_REPOSITORY}" "HEAD:${HEAD_REF}" 2>/dev/null; then
+                    _invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
                     echo "  Pushed [orchestrator-fix] commit to ${HEAD_REF}."
                     # Remove review-blocked label — the push triggers synchronize
                     # which re-runs review_autofix with a reset autofix counter.
@@ -36199,6 +36875,7 @@ ${RB_FIX_DESC}
                   ensure_label_exists "ai:ready-to-merge"
                   gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                     --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
+                  _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${RB_PR}" || true
                   _rb_nofix_json="$(_fetch_pr_json "${RB_PR}")"
                   PR_STATE="$(_jq_field "${_rb_nofix_json}" '.state' 'open|closed|merged')"
                   PR_MERGEABLE="$(_jq_field "${_rb_nofix_json}" '.mergeable' 'true|false')"
@@ -36214,6 +36891,7 @@ ${RB_FIX_DESC}
                     && _pr_checks_completed "${RB_PR}" "${_rb_nofix_sha}" "${_rb_nofix_base}" \
                     && _pr_base_fresh_for_merge "${RB_PR}" "${_rb_nofix_sha}" "${_rb_nofix_base}"; then
                     if _orch_squash_merge_bound "${RB_PR}" "${_rb_nofix_sha}" auto; then
+                      _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${RB_PR}" || true
                       tg_notify "Orchestrator judge merged PR #${RB_PR} (no fix changes needed, issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "DEBUG"
                     else
                       echo "::warning::Could not merge PR #${RB_PR} in no-fix merge path."
@@ -36270,6 +36948,7 @@ ${RB_FIX_DESC}
             # ran) and run the MERGE_CONFIRMED ladder. Mirrors the
             # standalone review_rb_judge.sh script's merge_with_followup
             # branch — see that file for the rationale on each gate.
+            _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${RB_PR}" || true
             _rb_mwf_json="$(_fetch_pr_json "${RB_PR}")"
             # GitHub's REST /pulls/{N} returns .state as one of `open`
             # or `closed` (never `merged` — merged PRs are state=closed
@@ -36369,9 +37048,12 @@ ${RB_FIX_DESC}
                   || ! _pr_sync_merge_blocked_guard "${_rb_mwf_json}" "${_rb_mwf_base}"; then
                   echo "::warning::PR #${RB_PR} sync merge deferred: GitHub reports mergeable_state=${SYNC_MERGE_BLOCKED_GUARD_STATE:-unknown} (blockers: ${SYNC_MERGE_BLOCKED_GUARD_BLOCKERS:-unknown}). Leaving issue in ai:review-blocked — next poll cycle will re-fire the judge."
                 elif gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash "${_rb_mwf_match_arg[@]}" 2>/dev/null; then
+                  # A merge can change other PRs' mergeability: flush all.
+                  _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" || true
                   echo "  PR #${RB_PR} merged synchronously."
                   MERGE_CONFIRMED="true"
                 else
+                  _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" || true
                   echo "::warning::PR #${RB_PR} sync merge failed (typically: required checks still pending, branch protection rules, merge queue, permissions, or 422). Leaving issue in ai:review-blocked — next poll cycle will re-fire the judge after merge lands; that run hits the PR_MERGED_NOW=true short path and creates the follow-up."
                 fi
               else
@@ -36526,34 +37208,12 @@ ${RB_FIX_DESC}
       # Re-check wave status after handling review-blocked issues
       # (some may have been merged or reissued)
       echo "Re-checking wave status after review-blocked handling..."
-      LABELS_JSON="{"
-      first=true
-      for inum in ${ISSUE_NUMS}; do
-        if [ -z "${inum}" ] || [ "${inum}" = "null" ]; then
-          continue
-        fi
-        # Re-read labels since we may have changed them
-        LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}/labels" --jq '[.[].name]' || echo '[]')"
-        if [ "${first}" = true ]; then
-          first=false
-        else
-          LABELS_JSON+=","
-        fi
-        LABELS_JSON+="\"${inum}\":${LABELS}"
-      done
-      LABELS_JSON+="}"
-
-      # Also check any reissued issue numbers
+      # Re-read labels since we may have changed them (issue #9927: one
+      # batched GraphQL read for this wave's issues plus any reissued
+      # numbers; per-issue REST only for numbers the batch did not return).
       REISSUED_NUMS="$(jq -r '.waves['"${WAVE_IDX}"'].issues[].github_issue' "${STATE_FILE}" 2>/dev/null | sort -u)"
-      for rnum in ${REISSUED_NUMS}; do
-        if [ -z "${rnum}" ] || [ "${rnum}" = "null" ]; then continue; fi
-        if echo "${LABELS_JSON}" | jq -e --arg key "${rnum}" 'has($key)' >/dev/null 2>&1; then
-          continue
-        fi
-        LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rnum}/labels" --jq '[.[].name]' || echo '[]')"
-        [ -z "${LABELS}" ] && LABELS='[]'
-        LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${rnum}" --argjson labels "${LABELS}" '. + {($key): $labels}' 2>/dev/null || echo "${LABELS_JSON}")"
-      done
+      # shellcheck disable=SC2086
+      LABELS_JSON="$(_orch_poll_labels_fill_missing '{}' ${ISSUE_NUMS} ${REISSUED_NUMS})"
 
       WAVE_STATUS="$(python3 scripts/orchestrate_lib.py check-wave-status \
         --state-file "${STATE_FILE}" \
@@ -36983,13 +37643,9 @@ if [ "${IMPL_FAILED_STATE_CHANGED}" = "true" ]; then
 
   # Add labels for any replacement issues created in this cycle.
   REISSUED_NUMS="$(jq -r '.waves['"${WAVE_IDX}"'].issues[].github_issue' "${STATE_FILE}" 2>/dev/null | sort -u)"
-  for rnum in ${REISSUED_NUMS}; do
-    if [ -z "${rnum}" ] || [ "${rnum}" = "null" ]; then continue; fi
-    if echo "${LABELS_JSON}" | jq -e --arg key "${rnum}" 'has($key)' >/dev/null 2>&1; then continue; fi
-    LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rnum}/labels" --jq '[.[].name]' || echo '[]')"
-    [ -z "${LABELS}" ] && LABELS='[]'
-    LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${rnum}" --argjson labels "${LABELS}" '. + {($key): $labels}' 2>/dev/null || echo "${LABELS_JSON}")"
-  done
+  # Issue #9927: the numbers missing from LABELS_JSON share one batched read.
+  # shellcheck disable=SC2086
+  LABELS_JSON="$(_orch_poll_labels_fill_missing "${LABELS_JSON}" ${REISSUED_NUMS})"
 fi
 
   INVOKE_JUDGE_FOR_STUCK=false
@@ -37640,7 +38296,7 @@ ${PR_DIFF}
   unset _sorted_issue_nums _issue_status _judge_diff_pass _judge_pr_diff_budget_left
 
   # Fetch CI status on default branch
-  DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+  DEFAULT_BRANCH="$(_orch_poll_default_branch_or_live "main")"
   CI_STATUS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/commits/${DEFAULT_BRANCH}/check-runs" \
     --jq '[.check_runs[] | {name: .name, conclusion: .conclusion}]' || echo "[]")"
 
@@ -37997,7 +38653,7 @@ PRs to revert: ${REVERT_COUNT}"
   case "${JUDGE_STATUS}" in
     complete)
       FINAL_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
-      FINAL_DEFAULT_BRANCH="${DEFAULT_BRANCH_TRACKING:-$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")}"
+      FINAL_DEFAULT_BRANCH="${DEFAULT_BRANCH_TRACKING:-$(_orch_poll_default_branch_or_live "main")}"
       # Run-volume plan item 3: the per-tick sync is throttled, so bring the
       # integration branch up to main once here, before the security pass
       # binds to its head and validation / the final merge test it. Like the
@@ -38211,6 +38867,7 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
                 git checkout -b "${REVERT_BRANCH}" "${DEFAULT_BRANCH}"
                 if git revert --no-edit "${MERGE_SHA}"; then
                   git push -u origin "${REVERT_BRANCH}"
+                  _invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
                   mapfile -t _engine_label_args < <(engine_label_create_args)
                   gh_retry gh pr create "${_engine_label_args[@]}" \
                     --repo "${GITHUB_REPOSITORY}" \
@@ -38837,7 +39494,7 @@ CONFLICT_SWEEP_DISPATCHED=0
 CONFLICT_SWEEP_DISPATCH_INFLIGHT=0
 CONFLICT_SWEEP_DISPATCH_FAILED=0
 CONFLICT_SWEEP_UNRESOLVED_SAME_HEAD=0
-DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+DEFAULT_BRANCH="$(_orch_poll_default_branch_or_live "main")"
 
 # Input: the open-PR snapshot, in bounded 30-PR batches. Output: numbers
 # mapped to a verified CLEAN state at the snapshot head. One GraphQL request

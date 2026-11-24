@@ -34,6 +34,15 @@ SMOKE_CANCEL_WAIT_SECS="${SMOKE_CANCEL_WAIT_SECS:-120}"
 SMOKE_CANCEL_POLL_SECS="${SMOKE_CANCEL_POLL_SECS:-10}"
 SMOKE_CANCEL_FORCE_WAIT_SECS="${SMOKE_CANCEL_FORCE_WAIT_SECS:-60}"
 
+# The status poll tries the job token first (issue #9888) through the
+# release-gate helper, when it sits beside this script; the cancel and
+# force-cancel stay on the PAT.
+SMOKE_CANCEL_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || echo "")"
+if [ -n "${SMOKE_CANCEL_SCRIPT_DIR}" ] && [ -r "${SMOKE_CANCEL_SCRIPT_DIR}/comprehensive_test_and_release_gh_api.sh" ]; then
+	# shellcheck source=./comprehensive_test_and_release_gh_api.sh
+	. "${SMOKE_CANCEL_SCRIPT_DIR}/comprehensive_test_and_release_gh_api.sh"
+fi
+
 _smoke_cancel_log()
 {
 	echo "ORCHESTRATE_SMOKE_DISPATCH_CANCEL $*" >&2
@@ -44,6 +53,14 @@ _smoke_cancel_status()
 {
 	local attempt status
 	for attempt in 1 2 3; do
+		status=""
+		if type gh_api_safe_job_token_read >/dev/null 2>&1; then
+			status="$(gh_api_safe_job_token_read "repos/${TEST_REPO}/actions/runs/${1}" --jq '.status // ""')" || status=""
+			if [ -n "${status}" ]; then
+				printf '%s' "${status}"
+				return 0
+			fi
+		fi
 		if status="$(gh api "repos/${TEST_REPO}/actions/runs/${1}" --jq '.status // ""' 2>/dev/null)" && [ -n "${status}" ]; then
 			printf '%s' "${status}"
 			return 0

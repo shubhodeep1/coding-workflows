@@ -104,7 +104,7 @@ env:
 
 jobs:
   poll:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
     concurrency:
       # Only one poller per repo at a time; newer runs queue instead of
       # killing the active run (which may be mid-way through conflict
@@ -305,6 +305,7 @@ jobs:
           PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED: ${{ vars.PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED || 'true' }}
           AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
+          FORWARD_MERGE_FALLBACK_AUTO_MERGE: ${{ vars.FORWARD_MERGE_FALLBACK_AUTO_MERGE || 'true' }}
           AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
           MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}
           MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
@@ -369,7 +370,11 @@ jobs:
         # GraphQL lists only waiting/blocked issues; neither returns the
         # ai:operator-step tracker or its comments, so this step makes its own
         # single listing (nothing else when no tracker is open). Fail-open.
+        # The step timeout (issue #9393): a hung gh call would otherwise hold
+        # the poll job until GitHub's 360-minute job limit and fail it;
+        # continue-on-error turns the step timeout into a warning.
         continue-on-error: true
+        timeout-minutes: 5
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           GITHUB_REPOSITORY: ${{ github.repository }}
@@ -1548,6 +1553,13 @@ jobs:
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
           HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}
+          # Issue #9732: standalone attempt_merge waits on the review auto-merge rule;
+          # self-repo ci.yml has no pull_request trigger, so the wait dispatches final CI (same value as the sweep).
+          STALL_MERGE_REQUIRED_CHECKS_ENABLED: ${{ vars.STALL_MERGE_REQUIRED_CHECKS_ENABLED || 'true' }}
+          REVIEW_FINAL_CI_WORKFLOW: ${{ github.repository == 'shubhodeep1/coding-workflows' && 'ci.yml' || '' }}
+          # Same required-check resolution as the review auto-merge path (review_autofix.yml).
+          AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
+          AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
           # Gap cap between main -> integration syncs (run-volume plan item 3); 0 syncs every tick.
           INTEGRATION_SYNC_MIN_INTERVAL_SECS: ${{ vars.INTEGRATION_SYNC_MIN_INTERVAL_SECS || '86400' }}
           HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED: ${{ vars.HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED || 'true' }}
@@ -1805,6 +1817,13 @@ jobs:
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
           HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}
+          # Issue #9732: standalone attempt_merge waits on the review auto-merge rule;
+          # self-repo ci.yml has no pull_request trigger, so the wait dispatches final CI (same value as the sweep).
+          STALL_MERGE_REQUIRED_CHECKS_ENABLED: ${{ vars.STALL_MERGE_REQUIRED_CHECKS_ENABLED || 'true' }}
+          REVIEW_FINAL_CI_WORKFLOW: ${{ github.repository == 'shubhodeep1/coding-workflows' && 'ci.yml' || '' }}
+          # Same required-check resolution as the review auto-merge path (review_autofix.yml).
+          AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
+          AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
           # Gap cap between main -> integration syncs (run-volume plan item 3); 0 syncs every tick.
           INTEGRATION_SYNC_MIN_INTERVAL_SECS: ${{ vars.INTEGRATION_SYNC_MIN_INTERVAL_SECS || '86400' }}
           HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED: ${{ vars.HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED || 'true' }}
@@ -2458,7 +2477,7 @@ jobs:
   claude_pool_daily_usage:
     needs: poll
     if: ${{ !cancelled() && needs.poll.outputs.claude_pool_daily_due == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
     timeout-minutes: 15
     concurrency:
       # A queued poll run can finish before this job saves the day's marker;
