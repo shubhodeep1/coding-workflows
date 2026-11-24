@@ -96,6 +96,20 @@
 # failed read skips the PR this tick.
 # Log: `REVIEW_FINAL_CI_BASE_SYNC pr=<n> head=<sha> outcome=synced|skipped|failed|dry_run reason=<token>`
 # (skip reasons include gate_untrusted and review_in_flight).
+#
+# Priority lane (issue #10048; helpers in scripts/pr_checks_lib.sh). With
+# PRIORITY_LANE_ENABLED on, snapshot rows marked `priority_lane: true` (a
+# verified linked-issue priority label, written by
+# scripts/review_sweep_head_gate.sh) are checked first among the known
+# gate-success heads, so the per-tick cap reaches them first. The hold file
+# FINAL_CI_SWEEP_PRIORITY_LANE_FILE (written by the enumerate step; lines
+# `hold=true|false` and `priority=<csv>|-`; missing or malformed = no hold)
+# says whether a priority PR's run has been queued past
+# PRIORITY_LANE_WAIT_MINUTES; while it does, the final-CI ensure and the
+# base sync of every other head wait (_pr_priority_lane_decide, at most
+# PRIORITY_LANE_MAX_DEFER_MINUTES from the PR's updated_at). No API call.
+# Log: `PRIORITY_LANE pr=<n> outcome=... surface=final_ci`; the summary lines
+# gain `deferred_priority_lane=<n>`.
 
 set -uo pipefail
 
@@ -262,6 +276,9 @@ review_final_ci_sweep_main()
 {
 	local helpers_dir wf max listing candidates count checked=0 ensured=0 skipped_gate=0 number sha ref state known_state
 	local base_sync_switch base_sync_queue="" failed_candidates base_sync_checked=0 failed_at
+	# Priority lane (issue #10048; header).
+	local fci_lane_on=false fci_lane_hold=false fci_lane_deferred=0 fci_lane_line fci_lane_rows="" fci_lane_n fci_lane_p fci_lane_u
+	local -A fci_lane_prio=() fci_lane_updated=()
 	wf="${REVIEW_FINAL_CI_WORKFLOW:-}"
 	if [ -z "${wf}" ]; then
 		echo "REVIEW_FINAL_CI_SWEEP outcome=disabled"
@@ -292,6 +309,25 @@ review_final_ci_sweep_main()
 		return 0
 	fi
 
+	if declare -F _pr_priority_lane_enabled >/dev/null 2>&1 && declare -F _pr_priority_lane_decide >/dev/null 2>&1 \
+		&& _pr_priority_lane_enabled; then
+		fci_lane_on=true
+		if [ -n "${FINAL_CI_SWEEP_PRIORITY_LANE_FILE:-}" ] && [ -f "${FINAL_CI_SWEEP_PRIORITY_LANE_FILE}" ] \
+			&& grep -qx 'hold=true' "${FINAL_CI_SWEEP_PRIORITY_LANE_FILE}" 2>/dev/null \
+			&& grep -Eqx 'priority=([1-9][0-9]*(,[1-9][0-9]*)*|-)' "${FINAL_CI_SWEEP_PRIORITY_LANE_FILE}" 2>/dev/null \
+			&& ! grep -Evqx 'hold=(true|false)|priority=([1-9][0-9]*(,[1-9][0-9]*)*|-)' "${FINAL_CI_SWEEP_PRIORITY_LANE_FILE}" 2>/dev/null; then
+			fci_lane_hold=true
+		fi
+		fci_lane_rows="$(jq -r '.[]? | select(type == "object" and ((.number | tostring) | test("^[1-9][0-9]*$")))
+			| "\(.number) \(if .priority_lane == true then "true" else "false" end) \((.updated_at // "") | tostring | if test("^[0-9T:.Z-]+$") then . else "-" end | if . == "" then "-" else . end)"' \
+			"${FINAL_CI_SWEEP_PR_SNAPSHOT}" 2>/dev/null || true)"
+		while read -r fci_lane_n fci_lane_p fci_lane_u; do
+			[[ "${fci_lane_n:-}" =~ ^[1-9][0-9]*$ ]] || continue
+			fci_lane_prio["${fci_lane_n}"]="${fci_lane_p}"
+			fci_lane_updated["${fci_lane_n}"]="${fci_lane_u}"
+		done <<< "${fci_lane_rows}"
+	fi
+
 	listing="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/actions/workflows/${wf}/runs?per_page=100" 2>/dev/null || echo "")"
 	if ! printf '%s' "${listing}" | jq -e 'type == "object" and (.workflow_runs | type) == "array"' >/dev/null 2>&1; then
 		echo "REVIEW_FINAL_CI_SWEEP outcome=skip reason=listing_failed"
@@ -300,7 +336,7 @@ review_final_ci_sweep_main()
 	# Candidates: snapshot heads with no run of the workflow in the listing
 	# (a run that is only cancelled / timed out / startup_failure does not
 	# count), outside orchestrator/project-*, matching HEAD_REF_FILTER.
-	candidates="$(jq -r --slurpfile listing <(printf '%s' "${listing}") --arg filter "${HEAD_REF_FILTER:-}" '
+	candidates="$(jq -r --slurpfile listing <(printf '%s' "${listing}") --arg filter "${HEAD_REF_FILTER:-}" --argjson lane_on "${fci_lane_on}" '
 		([$listing[0].workflow_runs[]
 			| select((.status // "") != "completed" or ((.conclusion // "") | IN("success", "failure")))
 			| .head_sha] | unique) as $covered
@@ -310,7 +346,13 @@ review_final_ci_sweep_main()
 			| select($filter == "" or ((.head_ref // "") | contains($filter)))
 			| select(.head_sha as $s | ($covered | index($s)) == null)
 			| . + {known_gate: (.head_gate_state // "unknown" | if type == "string" and test("^[a-z]{1,16}$") then . else "unknown" end)}]
-		| (map(select(.known_gate == "success")) + map(select(.known_gate != "success")))
+		| if $lane_on then
+			(map(select(.known_gate == "success" and .priority_lane == true))
+				+ map(select(.known_gate == "success" and .priority_lane != true))
+				+ map(select(.known_gate != "success")))
+		else
+			(map(select(.known_gate == "success")) + map(select(.known_gate != "success")))
+		end
 		| .[] | "\(.number) \(.head_sha) \(.known_gate) \(.head_ref // "")"' "${FINAL_CI_SWEEP_PR_SNAPSHOT}" 2>/dev/null || true)"
 	count=0
 	[ -n "${candidates}" ] && count="$(printf '%s\n' "${candidates}" | grep -c .)"
@@ -333,6 +375,13 @@ review_final_ci_sweep_main()
 			skipped_gate=$((skipped_gate + 1))
 			continue
 		fi
+		# Priority lane (issue #10048): hold back other heads while a
+		# priority PR's run waits; the PR is checked again next tick.
+		if [ "${fci_lane_on}" = "true" ] && ! _pr_priority_lane_decide final_ci "${number}" \
+			"${fci_lane_prio[${number}]:-false}" "${fci_lane_hold}" "${fci_lane_updated[${number}]:-}"; then
+			fci_lane_deferred=$((fci_lane_deferred + 1))
+			continue
+		fi
 		if [ "${DRY_RUN:-false}" = "true" ]; then
 			echo "REVIEW_FINAL_CI pr=${number} head=${sha} outcome=dry_run"
 			continue
@@ -345,7 +394,7 @@ review_final_ci_sweep_main()
 			base_sync_queue+="${number} ${sha} ${ref:--} ${PR_FINAL_CI_FAILED_AT:--}"$'\n'
 		fi
 	done <<< "${candidates}"
-	echo "REVIEW_FINAL_CI_SWEEP outcome=done candidates=${count} checked=${checked} gate_not_success=${skipped_gate} ensured=${ensured} cap=${max}"
+	echo "REVIEW_FINAL_CI_SWEEP outcome=done candidates=${count} checked=${checked} gate_not_success=${skipped_gate} ensured=${ensured} cap=${max} deferred_priority_lane=${fci_lane_deferred}"
 
 	# Base-sync pass (header: "Base sync after a failed final CI run").
 	base_sync_switch="$(printf '%s' "${FINAL_CI_SWEEP_BASE_SYNC_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
@@ -389,11 +438,18 @@ review_final_ci_sweep_main()
 	while read -r number sha ref failed_at; do
 		[ -n "${number:-}" ] || continue
 		[ "${base_sync_checked}" -lt "${max}" ] || break
+		# Priority lane (issue #10048): a base sync dispatches a final CI run
+		# too, so it waits under the same hold.
+		if [ "${fci_lane_on}" = "true" ] && [ "${fci_lane_hold}" = "true" ] && ! _pr_priority_lane_decide final_ci "${number}" \
+			"${fci_lane_prio[${number}]:-false}" "${fci_lane_hold}" "${fci_lane_updated[${number}]:-}"; then
+			fci_lane_deferred=$((fci_lane_deferred + 1))
+			continue
+		fi
 		review_final_ci_sweep_base_sync "${number}" "${sha}" "${ref}" "${failed_at}"
 		[ "$?" -eq 2 ] || base_sync_checked=$((base_sync_checked + 1))
 	done < <(printf '%s' "${base_sync_queue}" | grep . | sort -k4,4)
 	rm -f "${FINAL_CI_SWEEP_LISTING_FILE}"
-	echo "REVIEW_FINAL_CI_SWEEP_BASE_SYNC outcome=done candidates=$(printf '%s' "${base_sync_queue}" | grep -c .) checked=${base_sync_checked} cap=${max}"
+	echo "REVIEW_FINAL_CI_SWEEP_BASE_SYNC outcome=done candidates=$(printf '%s' "${base_sync_queue}" | grep -c .) checked=${base_sync_checked} cap=${max} deferred_priority_lane=${fci_lane_deferred}"
 	return 0
 }
 

@@ -2566,7 +2566,7 @@ def test_merge_train_conflict_aware_settings_are_wired_in_every_caller() -> None
 	expected = {
 		"MERGE_TRAIN_CONFLICT_CHECK_ENABLED": "${{ vars.MERGE_TRAIN_CONFLICT_CHECK_ENABLED || 'true' }}",
 		"MERGE_TRAIN_HEAD_MAX_AGE_HOURS": "${{ vars.MERGE_TRAIN_HEAD_MAX_AGE_HOURS || '6' }}",
-		"MERGE_TRAIN_PRIORITY_LABELS": "${{ vars.MERGE_TRAIN_PRIORITY_LABELS || 'ai:workflow-heal,ai:security' }}",
+		"MERGE_TRAIN_PRIORITY_LABELS": "${{ vars.MERGE_TRAIN_PRIORITY_LABELS || 'ai:workflow-heal,ai:security,ai:priority' }}",
 	}
 	workflows = REPO_ROOT / ".github" / "workflows"
 	review = yaml.safe_load((workflows / "review_autofix.yml").read_text(encoding="utf-8"))
@@ -3449,7 +3449,7 @@ def test_list_open_prs_emits_the_title_for_the_merge_lease():
 	rows = [json.loads(line) for line in res.stdout.splitlines()]
 	assert len(rows) == 2
 	assert rows[0] == {"number": 5, "head": "ai/issue-5", "head_repo": "o/r", "head_sha": "a" * 40,
-		"created_at": "2026-11-19T00:00:00Z", "base": "main", "draft": False, "labels": ["ai:merge-lease-wait"],
+		"created_at": "2026-11-19T00:00:00Z", "updated_at": "", "base": "main", "draft": False, "labels": ["ai:merge-lease-wait"],
 		"title": 'Fix [skip ai] "quoted"'}
 	assert rows[1]["title"] == ""
 	assert rows[1]["head_repo"] == ""

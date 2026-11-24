@@ -52,7 +52,7 @@
 #   MERGE_TRAIN_CONFLICT_CHECK_ENABLED     default true (true/1/yes/on); other = off
 #   MERGE_TRAIN_HEAD_MAX_AGE_HOURS         default 6; 0 disables the age bypass;
 #                                          a non-integer warns and falls back to 6
-#   MERGE_TRAIN_PRIORITY_LABELS            default ai:workflow-heal,ai:security
+#   MERGE_TRAIN_PRIORITY_LABELS            default ai:workflow-heal,ai:security,ai:priority
 #                                          (comma-separated); empty, none or off
 #                                          disables the priority lane
 # Env (gate):
@@ -226,7 +226,7 @@ MT_HEAD_MAX_AGE_HOURS=$((10#${MT_HEAD_MAX_AGE_HOURS}))
 # Unset means the default; an explicitly empty value disables the lane. A repo
 # variable cannot pass an empty string through `vars.X || 'default'`, so
 # `none` / `off` also disable it.
-MT_PRIORITY_LABELS_RAW="${MERGE_TRAIN_PRIORITY_LABELS-ai:workflow-heal,ai:security}"
+MT_PRIORITY_LABELS_RAW="${MERGE_TRAIN_PRIORITY_LABELS-ai:workflow-heal,ai:security,ai:priority}"
 case "$(printf '%s' "${MT_PRIORITY_LABELS_RAW}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
 	''|none|off) MT_PRIORITY_LABELS_JSON='[]' ;;
 	*)
@@ -359,7 +359,7 @@ _mt_list_open_prs() {
 		endpoint="${endpoint}&base=${base}"
 	fi
 	gh_retry gh api --paginate "${endpoint}" \
-		--jq '.[] | {number: .number, head: .head.ref, head_repo: (.head.repo.full_name // ""), head_sha: (.head.sha // ""), created_at: (.created_at // ""), base: .base.ref, draft: .draft, labels: [.labels[].name], title: (.title // "")} | tojson' 2>/dev/null
+		--jq '.[] | {number: .number, head: .head.ref, head_repo: (.head.repo.full_name // ""), head_sha: (.head.sha // ""), created_at: (.created_at // ""), updated_at: (.updated_at // ""), base: .base.ref, draft: .draft, labels: [.labels[].name], title: (.title // "")} | tojson' 2>/dev/null
 }
 
 # Older open same-repository ai/issue-* PRs (same base, lower number, not
@@ -596,8 +596,9 @@ _mt_pr_meta_prefetch()
 		done
 		return 0
 	fi
+	# `$queue_label`, not `$label`: jq 1.6 reads `label` as a keyword.
 	for meta_num in "${fetch_nums[@]}"; do
-		if parsed="$(printf '%s' "${response}" | jq -ce --arg k "p${meta_num}" --argjson n "${meta_num}" --arg label "${MT_LABEL}" '
+		if parsed="$(printf '%s' "${response}" | jq -ce --arg k "p${meta_num}" --argjson n "${meta_num}" --arg queue_label "${MT_LABEL}" '
 			.data.repository[$k] as $p
 			| if ($p | type) != "object" or $p.number != $n then error("unverified") else
 				{head_ref: ($p.headRefName // ""),
@@ -605,7 +606,7 @@ _mt_pr_meta_prefetch()
 				 closing: [($p.closingIssuesReferences.nodes // [])[] | select(type == "object") | {number: .number, labels: [(.labels.nodes // [])[] | .name? // empty]}],
 				 timeline: (if ($p.timelineItems | type) == "object" then
 					{complete: ($p.timelineItems.pageInfo.hasPreviousPage == false),
-					 events: [($p.timelineItems.nodes // [])[] | select(type == "object" and (.label.name? // "") == $label) | {type: .__typename, created_at: (.createdAt // "")}]}
+					 events: [($p.timelineItems.nodes // [])[] | select(type == "object" and (.label.name? // "") == $queue_label) | {type: .__typename, created_at: (.createdAt // "")}]}
 					else null end)}
 			end' 2>/dev/null)"; then
 			_MT_META_CACHE[${meta_num}]="${parsed}"
@@ -1714,13 +1715,122 @@ _mt_merge_lease_queue_log()
 	declare -F _merge_lease_queue_order >/dev/null 2>&1 || return 0
 	lq_base_prs="$(printf '%s\n' "${lq_prs_json}" | jq -sc --arg b "${lq_base}" '[ .[] | select(type == "object" and .base == $b) ]' 2>/dev/null)" || lq_base_prs="[]"
 	[ -n "${lq_base_prs}" ] || lq_base_prs="[]"
-	lq_order="$(_merge_lease_queue_order "${lq_base_prs}" "" "${lq_exclude}" 2>/dev/null)" || lq_order=""
+	lq_order="$(_merge_lease_queue_order "${lq_base_prs}" "" "${lq_exclude}" "${_MT_PRIORITY_LANE_PRS:-}" 2>/dev/null)" || lq_order=""
 	[[ "${lq_holder}" =~ ^[1-9][0-9]*$ ]] || lq_holder="-"
 	if [ "${lq_holder}" != "-" ]; then
 		lq_held="$(_merge_lease_metric_hold_seconds "${lq_acquired}" 2>/dev/null)" || lq_held=""
 		[ -n "${lq_held}" ] || lq_held="-"
 	fi
 	_mt_log "MERGE_LEASE_QUEUE base=${lq_base} holder=${lq_holder} held_s=${lq_held} waiters=$(_mt_merge_lease_queue_len "${lq_order}") order=${lq_order:--}"
+	return 0
+}
+
+# Priority lane at the lease grant (issue #10048; helpers and env in
+# scripts/pr_checks_lib.sh). Before this, the lease queue ranked only by the
+# PR's own labels and MERGE_LEASE_PRIORITY_HEAD_PREFIXES; a priority label on
+# the linked issue did not count.
+# _mt_priority_lane_prepare <open-PR rows (JSONL)>: once per process, and only
+# when the lane is on, the label list is not empty and some row waits for the
+# lease, sets _MT_PRIORITY_LANE_PRS to the comma-separated open, non-draft,
+# same-repository `${MT_PREFIX}<M>` PRs (at most 100) that _mt_pr_is_priority
+# verifies (0 only; 1 or 2 give no priority). API: one aliased GraphQL query
+# through _mt_pr_meta_prefetch (PRs already cached cost nothing); a failed
+# read leaves the list empty, so the queue order is as before. Runs in the
+# caller's shell so the cache persists.
+# _mt_priority_lane_defer_for_base <base rows (JSON array)>: sets
+# _MT_PRIORITY_LANE_DEFER_CSV to the labelled lease waiters that are not
+# priority and are held back this tick: a priority PR's review, security-audit
+# or final-CI run has been queued (not wedged) for PRIORITY_LANE_WAIT_MINUTES
+# (_pr_priority_lane_pressure over the tick's run cache, _MT_LEASE_RUNS_JSON),
+# and the waiter's updated_at is within PRIORITY_LANE_MAX_DEFER_MINUTES
+# (_pr_priority_lane_decide, `PRIORITY_LANE ... surface=lease`). The run cache
+# is the one _mt_lease_pr_runs_active uses (at most one listing pass per
+# tick); a cache that is not "ok" holds nothing back. No other API call.
+_MT_PRIORITY_LANE_PRS=""
+_MT_PRIORITY_LANE_PREPARED=""
+_MT_PRIORITY_LANE_HOLD=""
+_MT_PRIORITY_LANE_DEFER_CSV=""
+_mt_priority_lane_on()
+{
+	declare -F _pr_priority_lane_enabled >/dev/null 2>&1 || return 1
+	_pr_priority_lane_enabled || return 1
+	[ "${MT_PRIORITY_LABELS_JSON:-[]}" != "[]" ]
+}
+_mt_priority_lane_prepare()
+{
+	local plp_rows="${1:-}" plp_num plp_head plp_rc plp_idx plp_repo
+	local -a plp_nums=() plp_heads=()
+	[ -z "${_MT_PRIORITY_LANE_PREPARED}" ] || return 0
+	_mt_priority_lane_on || return 0
+	plp_repo="$(printf '%s' "${MT_REPO}" | tr '[:upper:]' '[:lower:]')"
+	[ -n "${plp_repo}" ] || return 0
+	# Nothing waits for a lease: no grant decision, no read.
+	printf '%s\n' "${plp_rows}" | jq -se --arg l "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" \
+		'any(.[]; type == "object" and (.draft // false) == false and ([(.labels // [])[] | if type == "object" then .name else . end] | index($l) != null))' >/dev/null 2>&1 || return 0
+	_MT_PRIORITY_LANE_PREPARED=1
+	_MT_PRIORITY_LANE_PRS=""
+	while read -r plp_num plp_head; do
+		[[ "${plp_num:-}" =~ ^[1-9][0-9]*$ ]] || continue
+		plp_nums+=("${plp_num}")
+		plp_heads+=("${plp_head}")
+	done < <(printf '%s\n' "${plp_rows}" | jq -r --arg repo "${plp_repo}" --arg p "${MT_PREFIX}" '
+		select(type == "object" and (.draft // false) == false)
+		| select(((.head_repo // "") | tostring | ascii_downcase) == $repo)
+		| select(((.head // "") | tostring) as $h | $p != "" and ($h | startswith($p)) and (($h | ltrimstr($p)) | test("^[1-9][0-9]*$")))
+		| "\(.number) \(.head)"' 2>/dev/null | head -n 100)
+	[ "${#plp_nums[@]}" -gt 0 ] || return 0
+	_mt_pr_meta_prefetch "${plp_nums[@]}"
+	for plp_idx in "${!plp_nums[@]}"; do
+		plp_rc=0
+		_mt_pr_is_priority "${plp_nums[${plp_idx}]}" "${plp_heads[${plp_idx}]}" || plp_rc=$?
+		if [ "${plp_rc}" -eq 0 ]; then
+			_MT_PRIORITY_LANE_PRS="${_MT_PRIORITY_LANE_PRS:+${_MT_PRIORITY_LANE_PRS},}${plp_nums[${plp_idx}]}"
+		fi
+	done
+	return 0
+}
+_mt_priority_lane_defer_for_base()
+{
+	local pld_rows="${1:-[]}" pld_rc=0 pld_now pld_wedged pld_cutoff=0 pld_hit pld_n pld_u
+	_MT_PRIORITY_LANE_DEFER_CSV=""
+	_mt_priority_lane_on || return 0
+	[ -n "${_MT_PRIORITY_LANE_PRS}" ] || return 0
+	declare -F _pr_priority_lane_pressure >/dev/null 2>&1 && declare -F _pr_priority_lane_decide >/dev/null 2>&1 || return 0
+	[ -n "${PRIORITY_LANE_MAX_DEFER_S:-}" ] || _pr_priority_lane_settings
+	[ "${PRIORITY_LANE_MAX_DEFER_S:-0}" -gt 0 ] 2>/dev/null || return 0
+	if [ -z "${_MT_PRIORITY_LANE_HOLD}" ]; then
+		if [ -z "${_MT_LEASE_RUNS_STATE}" ]; then
+			_mt_inflight_review_branches >/dev/null || pld_rc=$?
+			_mt_lease_runs_seed "${pld_rc}"
+		fi
+		_MT_PRIORITY_LANE_HOLD=false
+		if [ "${_MT_LEASE_RUNS_STATE}" = "ok" ]; then
+			pld_now="$(date -u +%s 2>/dev/null)" || pld_now=0
+			[[ "${pld_now}" =~ ^[0-9]+$ ]] || pld_now=0
+			pld_wedged="$(_merge_lease_wedged_queued_seconds 2>/dev/null)" || pld_wedged=0
+			[[ "${pld_wedged}" =~ ^[0-9]+$ ]] || pld_wedged=0
+			[ "${pld_wedged}" -gt 0 ] && [ "${pld_now}" -gt "${pld_wedged}" ] && pld_cutoff=$((pld_now - pld_wedged))
+			pld_hit="$(_pr_priority_lane_pressure "${_MT_LEASE_RUNS_JSON}" "${_MT_PRIORITY_LANE_PRS}" "${pld_cutoff}" "${pld_now}" "${MT_DEFAULT_BRANCH}")"
+			if [[ "${pld_hit}" =~ ^([1-9][0-9]*)\ ([0-9]+)$ ]]; then
+				_MT_PRIORITY_LANE_HOLD=true
+				_mt_log "PRIORITY_LANE_HOLD outcome=active pr=${BASH_REMATCH[1]} age_min=${BASH_REMATCH[2]} surface=lease"
+			else
+				_mt_log "PRIORITY_LANE_HOLD outcome=none surface=lease"
+			fi
+		else
+			_mt_log "PRIORITY_LANE_HOLD outcome=read_failed surface=lease"
+		fi
+	fi
+	[ "${_MT_PRIORITY_LANE_HOLD}" = "true" ] || return 0
+	while read -r pld_n pld_u; do
+		[[ "${pld_n:-}" =~ ^[1-9][0-9]*$ ]] || continue
+		printf ',%s,' "${_MT_PRIORITY_LANE_PRS}" | grep -Fq ",${pld_n}," && continue
+		if ! _pr_priority_lane_decide lease "${pld_n}" false true "${pld_u}"; then
+			_MT_PRIORITY_LANE_DEFER_CSV="${_MT_PRIORITY_LANE_DEFER_CSV:+${_MT_PRIORITY_LANE_DEFER_CSV},}${pld_n}"
+		fi
+	done < <(jq -r --arg l "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" '.[]? | select(type == "object" and (.draft // false) == false)
+		| select([(.labels // [])[] | if type == "object" then .name else . end] | index($l) != null)
+		| "\(.number) \((.updated_at // "") | tostring | if test("^[0-9T:.Z-]+$") then . else "-" end)"' <<< "${pld_rows}" 2>/dev/null)
 	return 0
 }
 
@@ -1917,6 +2027,9 @@ _mt_merge_lease_tick()
 	local tick_p2_lib=0 tick_p2=0 tick_login="" tick_login_tried=0 tick_open_heads tick_holder_row tick_holder_head tick_holder_title
 	local tick_holder_draft tick_since tick_idle_s tick_ci_active tick_skip_head tick_excluded tick_skipped_any tick_cand_n tick_skip_pr
 	local tick_first_row tick_skip_why tick_skip_held tick_queue_skips tick_skip_held_prs tick_queue_empty
+	# Priority lane (issue #10048): waiters held back this tick, and whether
+	# the queue was empty only because of them.
+	local tick_lane_exclude tick_priority_deferred
 	# Issue #9983: the held reason, three-field skip entries (tick_skip3), and
 	# whether the candidate has a soft skip entry on its head.
 	local tick_held_why="holder_open" tick_skip3=0 tick_first_soft=0 tick_cand_head="" tick_runs_rc=0
@@ -2137,6 +2250,10 @@ _mt_merge_lease_tick()
 		tick_skip_held=0
 		tick_skip_held_prs=""
 		tick_queue_empty=0
+		tick_priority_deferred=0
+		_mt_priority_lane_prepare "${tick_prs_json}"
+		_MT_PRIORITY_LANE_DEFER_CSV=""
+		[ "${tick_p2}" = 1 ] && _mt_priority_lane_defer_for_base "${tick_base_prs}"
 		tick_queue_skips="${MERGE_LEASE_SKIPS:-}"
 		# #9983 G5: only hard entries pass a waiter over; a soft one is reached
 		# as a candidate below.
@@ -2157,12 +2274,23 @@ _mt_merge_lease_tick()
 		fi
 		while :; do
 			if [ "${tick_p2}" = 1 ]; then
-				tick_first="$(_merge_lease_queue_first "${tick_base_prs}" "" "${tick_queue_skips}" "${tick_excluded}")"
+				tick_lane_exclude="${tick_excluded}"
+				[ -z "${_MT_PRIORITY_LANE_DEFER_CSV}" ] || tick_lane_exclude="${tick_excluded:+${tick_excluded},}${_MT_PRIORITY_LANE_DEFER_CSV}"
+				tick_first="$(_merge_lease_queue_first "${tick_base_prs}" "" "${tick_queue_skips}" "${tick_lane_exclude}" "${_MT_PRIORITY_LANE_PRS}")"
 				# Empty: every waiter in the queue was checked or skip-held (not
-				# the 10-candidate cap).
-				[ -n "${tick_first}" ] || tick_queue_empty=1
+				# the 10-candidate cap). Empty only because of priority-lane
+				# deferrals (issue #10048): the lease stays free, the waiters
+				# keep their label, and the queue-empty handling does not run.
+				if [ -z "${tick_first}" ]; then
+					if [ -n "${_MT_PRIORITY_LANE_DEFER_CSV}" ] \
+						&& [ -n "$(_merge_lease_queue_first "${tick_base_prs}" "" "${tick_queue_skips}" "${tick_excluded}" "${_MT_PRIORITY_LANE_PRS}")" ]; then
+						tick_priority_deferred=1
+					else
+						tick_queue_empty=1
+					fi
+				fi
 			else
-				tick_first="$(_merge_lease_queue_first "${tick_base_prs}" "")"
+				tick_first="$(_merge_lease_queue_first "${tick_base_prs}" "" "" "" "${_MT_PRIORITY_LANE_PRS}")"
 			fi
 			[ -n "${tick_first}" ] && [ "${tick_p2}" = 1 ] || break
 			# Grant-time eligibility (Phase 2): waiters need a pipeline head-gate success.
@@ -2207,6 +2335,10 @@ _mt_merge_lease_tick()
 			tick_first=""
 			[ "${tick_cand_n}" -lt "${tick_max_candidates}" ] || break
 		done
+		if [ -z "${tick_first}" ] && [ "${tick_priority_deferred}" = 1 ]; then
+			_mt_merge_lease_queue_log "${tick_base}" "${tick_prs_json}" - 0 "${tick_excluded}${tick_q_gone}" || true
+			continue
+		fi
 		if [ -z "${tick_first}" ]; then
 			if [ "${tick_p2}" = 1 ] && [ "${tick_queue_empty}" = 1 ] && [ "${tick_skip_held}" = 1 ]; then
 				# D4: a skip entry blocks a re-grant on the same head, so the tick
@@ -2234,7 +2366,7 @@ _mt_merge_lease_tick()
 		# skip-held and ineligible waiters left out). No API call.
 		tick_queue_len_field=""
 		if [ "${tick_queue_ok}" = 1 ]; then
-			tick_queue_len_field=" queue_len=$(_mt_merge_lease_queue_len "$(_merge_lease_queue_order "${tick_base_prs}" "${tick_queue_skips}" "${tick_excluded}" 2>/dev/null || true)")"
+			tick_queue_len_field=" queue_len=$(_mt_merge_lease_queue_len "$(_merge_lease_queue_order "${tick_base_prs}" "${tick_queue_skips}" "${tick_excluded}" "${_MT_PRIORITY_LANE_PRS}" 2>/dev/null || true)")"
 		fi
 		tick_first_head="$(jq -r --argjson n "${tick_first}" '[ .[] | select(.number == $n) | .head_sha // "" ][0] // ""' <<< "${tick_base_prs}" 2>/dev/null)"
 		tick_paths="$(_merge_lease_pr_paths "${tick_first}" 2>/dev/null || true)"
@@ -2306,6 +2438,8 @@ _mt_merge_lease_tick_multi()
 	local tm_queue_skips tm_skip_pr tm_skip_held=0 tm_skip_held_prs="" tm_skipped_any=0 tm_cand_n=0 tm_granted=0 tm_queue_empty=0
 	local tm_first tm_first_row tm_first_head tm_first_paths tm_blocker tm_skip_why tm_grant_ts tm_new_row
 	local tm_max_candidates=10 tm_queue_len_field="" tm_rel_held=""
+	# Priority lane (issue #10048), as in _mt_merge_lease_tick.
+	local tm_lane_exclude tm_priority_deferred=0
 	# Issue #9983: holders kept by a live run, three-field skip entries, and
 	# the candidate's soft-entry flag.
 	local tm_runs_active_prs=" " tm_runs_rc=0 tm_skip3=0 tm_first_soft=0 tm_held_why
@@ -2444,10 +2578,21 @@ _mt_merge_lease_tick_multi()
 			| select([ (.labels // [])[] | if type == "object" then .name else . end ] | index($l) != null)
 			| .number as $n | (.head_sha // "") as $hs | select(($sk | index("\($n):\($hs)")) != null) | $n' <<< "${tm_base_prs}" 2>/dev/null)
 	fi
+	_mt_priority_lane_prepare "${tm_prs_json}"
+	_MT_PRIORITY_LANE_DEFER_CSV=""
+	[ "${tm_p2}" = 1 ] && _mt_priority_lane_defer_for_base "${tm_base_prs}"
 	while [ "${tm_count}" -lt "${tm_max}" ] && [ "${tm_cand_n}" -lt "${tm_max_candidates}" ]; do
-		tm_first="$(_merge_lease_queue_first "${tm_base_prs}" "" "${tm_queue_skips}" "${tm_excluded}")"
+		tm_lane_exclude="${tm_excluded}"
+		[ -z "${_MT_PRIORITY_LANE_DEFER_CSV}" ] || tm_lane_exclude="${tm_excluded:+${tm_excluded},}${_MT_PRIORITY_LANE_DEFER_CSV}"
+		tm_first="$(_merge_lease_queue_first "${tm_base_prs}" "" "${tm_queue_skips}" "${tm_lane_exclude}" "${_MT_PRIORITY_LANE_PRS}")"
 		if [ -z "${tm_first}" ]; then
-			tm_queue_empty=1
+			# Empty only because of priority-lane deferrals: no queue-empty handling.
+			if [ -n "${_MT_PRIORITY_LANE_DEFER_CSV}" ] \
+				&& [ -n "$(_merge_lease_queue_first "${tm_base_prs}" "" "${tm_queue_skips}" "${tm_excluded}" "${_MT_PRIORITY_LANE_PRS}")" ]; then
+				tm_priority_deferred=1
+			else
+				tm_queue_empty=1
+			fi
 			break
 		fi
 		tm_cand_n=$((tm_cand_n + 1))
@@ -2506,7 +2651,7 @@ _mt_merge_lease_tick_multi()
 		tm_queue_len_field=""
 		if declare -F _merge_lease_queue_order >/dev/null 2>&1; then
 			tm_queue_len_field=" queue_len=$(_mt_merge_lease_queue_len "$(_merge_lease_queue_order "${tm_base_prs}" "${tm_queue_skips}" \
-				"$(printf '%s\n' "${tm_rows}" | awk 'NF { print $1 }' | paste -sd, -)${_MT_LEASE_QUEUE_GONE}" 2>/dev/null || true)")"
+				"$(printf '%s\n' "${tm_rows}" | awk 'NF { print $1 }' | paste -sd, -)${_MT_LEASE_QUEUE_GONE}" "${_MT_PRIORITY_LANE_PRS}" 2>/dev/null || true)")"
 		fi
 		tm_now="$(date -u +%s)"
 		[[ "${tm_first_head}" =~ ^[0-9a-f]{40}$ ]] && tm_new_row="${tm_first} ${tm_first_head}" || tm_new_row="${tm_first} -"
@@ -2550,6 +2695,8 @@ _mt_merge_lease_tick_multi()
 		done
 	fi
 	[ "${tm_count}" -eq 0 ] || return 0
+	# Waiters held back by the priority lane: the lease stays free (issue #10048).
+	[ "${tm_priority_deferred}" = 0 ] || return 0
 	if [ "${tm_skipped_any}" = 0 ]; then
 		_mt_log "MERGE_LEASE pr=- base=${tm_base} mode=tick outcome=no_waiter reason=lease_free"
 		[ "${tm_metric_ok}" = 1 ] && _merge_lease_metric no_waiter "${tm_base}" "" tick lease_free "" 0 - || true

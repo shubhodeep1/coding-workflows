@@ -264,6 +264,14 @@ jobs:
           SWEEP_REVIEW_ROUND_CAP_ENABLED: ${{ vars.SWEEP_REVIEW_ROUND_CAP_ENABLED || 'true' }}
           SWEEP_REVIEW_MAX_ROUNDS: ${{ vars.SWEEP_REVIEW_MAX_ROUNDS || '10' }}
           SWEEP_REVIEW_ROUND_WINDOW_HOURS: ${{ vars.SWEEP_REVIEW_ROUND_WINDOW_HOURS || '48' }}
+          # Priority lane (issue #10048; scripts/pr_checks_lib.sh): a PR whose
+          # verified linked issue carries a priority label is dispatched first,
+          # and while its run waits in `queued` other dispatches are held back
+          # for at most PRIORITY_LANE_MAX_DEFER_MINUTES. 'false' turns it off.
+          MERGE_TRAIN_PRIORITY_LABELS: ${{ vars.MERGE_TRAIN_PRIORITY_LABELS || 'ai:workflow-heal,ai:security,ai:priority' }}
+          PRIORITY_LANE_ENABLED: ${{ vars.PRIORITY_LANE_ENABLED || 'true' }}
+          PRIORITY_LANE_WAIT_MINUTES: ${{ vars.PRIORITY_LANE_WAIT_MINUTES || '15' }}
+          PRIORITY_LANE_MAX_DEFER_MINUTES: ${{ vars.PRIORITY_LANE_MAX_DEFER_MINUTES || '120' }}
         run: |
           set -euo pipefail
           # Classified retry for the active-run snapshot (issue #6634): the
@@ -290,6 +298,7 @@ jobs:
               body: (.body // ""),
               labels: [.labels[]?.name // empty],
               created_at: (.created_at // ""),
+              updated_at: (.updated_at // ""),
               author: (.user.login // "")
             })')"
 
@@ -349,6 +358,7 @@ jobs:
           skipped_merge_queued=0
           skipped_approved_final_ci_failed=0
           skipped_round_cap=0
+          skipped_priority_lane=0
           failures=0
           # Smoke-PR backstop (issue #8953): release-gate smoke PRs whose
           # Implement run started after the gate gave up stayed open for days
@@ -661,6 +671,15 @@ jobs:
             round_cap_counts_json="$(GH_TOKEN="${READ_TOKEN}" review_sweep_round_counts "${REPOSITORY}" "${sweep_default_branch}" "${round_cap_window_hours}")"
           fi
 
+          # Priority lane hold (issue #10048, scripts/review_sweep_head_gate.sh):
+          # one queued-runs read, only while a priority PR is open. Fail-open:
+          # a missing helper or a failed read holds nothing back.
+          priority_lane_hold=false
+          priority_lane_prs=-
+          if [ "${active_snapshot_incomplete}" != "true" ] && type review_sweep_priority_lane_hold >/dev/null 2>&1; then
+            read -r priority_lane_hold priority_lane_prs < <(GH_TOKEN="${READ_TOKEN}" review_sweep_priority_lane_hold "${REPOSITORY}" "${sweep_default_branch}" "${prs_json}" "${RUNNER_TEMP}/priority-lane-hold.txt" || echo "false -") || true
+          fi
+
           # Read into an array so counters survive the loop (no subshell pipe).
           mapfile -t rows < <(printf '%s' "${prs_json}" | jq -c '.[]')
 
@@ -849,6 +868,14 @@ jobs:
               fi
             fi
 
+            # Priority lane (issue #10048): a priority PR logs `first`; any
+            # other PR is held back while the hold is active, until the cap.
+            if type _pr_priority_lane_decide >/dev/null 2>&1 \
+              && ! _pr_priority_lane_decide sweep "${pr_number}" "$(printf '%s' "${row}" | jq -r '.priority_lane == true')" "${priority_lane_hold:-false}" "$(printf '%s' "${row}" | jq -r '.updated_at // ""')"; then
+              skipped_priority_lane=$((skipped_priority_lane + 1))
+              continue
+            fi
+
             if [ "${DRY_RUN}" = "true" ]; then
               echo "AUTOFIX_SWEEP_DRY_RUN pr=#${pr_number} head_ref=${head_ref}"
               continue
@@ -882,7 +909,7 @@ jobs:
             fi
           done
 
-          echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} skipped_merge_queued=${skipped_merge_queued} failures=${failures} candidates=${total} snapshot_incomplete=${active_snapshot_incomplete} closed_smoke=${closed_smoke} skipped_approved_final_ci_failed=${skipped_approved_final_ci_failed} skipped_round_cap=${skipped_round_cap}"
+          echo "AUTOFIX_SWEEP_END dispatched=${dispatched} skipped_active=${skipped_active} skipped_filter=${skipped_filter} skipped_skip_ai=${skipped_skip_ai} skipped_merge_queued=${skipped_merge_queued} failures=${failures} candidates=${total} snapshot_incomplete=${active_snapshot_incomplete} closed_smoke=${closed_smoke} skipped_approved_final_ci_failed=${skipped_approved_final_ci_failed} skipped_round_cap=${skipped_round_cap} skipped_priority_lane=${skipped_priority_lane}"
 
       # Non-retryable failure backfill (issue #7291): re-send a review/autofix
       # failure whose trusted current-head marker names a non-retryable reason
@@ -970,6 +997,13 @@ jobs:
           # merge-tree probe (private repository plus a fetch per PR) could
           # never change its decision.
           MERGE_LEASE_SOFT_PATHS: none
+          # Priority lane (issue #10048): priority heads first; the hold file
+          # the enumerate step wrote defers other heads (missing file: no hold).
+          MERGE_TRAIN_PRIORITY_LABELS: ${{ vars.MERGE_TRAIN_PRIORITY_LABELS || 'ai:workflow-heal,ai:security,ai:priority' }}
+          PRIORITY_LANE_ENABLED: ${{ vars.PRIORITY_LANE_ENABLED || 'true' }}
+          PRIORITY_LANE_WAIT_MINUTES: ${{ vars.PRIORITY_LANE_WAIT_MINUTES || '15' }}
+          PRIORITY_LANE_MAX_DEFER_MINUTES: ${{ vars.PRIORITY_LANE_MAX_DEFER_MINUTES || '120' }}
+          FINAL_CI_SWEEP_PRIORITY_LANE_FILE: ${{ runner.temp }}/priority-lane-hold.txt
         run: bash .ci-rerun-support/scripts/review_final_ci_sweep.sh
 
       - name: Re-dispatch stale security holds

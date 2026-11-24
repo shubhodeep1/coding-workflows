@@ -3458,11 +3458,15 @@ _merge_lease_paths_intersect()
 # comma-separated literal prefixes, no globs; empty, none or off turns it
 # off) also gives "0". The caller passes the ref only for a same-repository
 # head. Without it, or with an empty ref, the key is as before.
+# Optional <linked_priority> (issue #10048): only the literal `1` gives "0";
+# the merge train passes it for a PR whose linked issue it verified as
+# priority (_mt_pr_is_priority). Absent or any other value: the key is as
+# before.
 _merge_lease_order_key()
 {
 	local lease_pr="$1" lease_labels="$2" lease_prio_raw lease_label lease_prio=1
 	local lease_head_ref="${3:-}" lease_head_prefixes_raw lease_head_prefix
-	lease_prio_raw="${MERGE_TRAIN_PRIORITY_LABELS-ai:workflow-heal,ai:security}"
+	lease_prio_raw="${MERGE_TRAIN_PRIORITY_LABELS-ai:workflow-heal,ai:security,ai:priority}"
 	case "$(printf '%s' "${lease_prio_raw}" | tr '[:upper:]' '[:lower:]')" in
 		""|none|off) lease_prio_raw="" ;;
 	esac
@@ -3489,6 +3493,7 @@ _merge_lease_order_key()
 			fi
 		done < <(printf '%s\n' "${lease_head_prefixes_raw}" | tr ',' '\n')
 	fi
+	[ "${4:-}" = "1" ] && lease_prio=0
 	printf '%s%012d' "${lease_prio}" "${lease_pr}"
 }
 
@@ -3509,10 +3514,16 @@ _merge_lease_order_key()
 # filters) and MERGE_LEASE_QUEUE_PRS (their numbers in queue order, comma-
 # separated; empty when none). Callers that read the line through `$(...)`
 # lose them; _merge_lease_queue_order prints the list instead.
+# Optional <priority_csv> (issue #10048): comma-separated PR numbers whose
+# linked issue the merge train verified as priority; each gets
+# _merge_lease_order_key's <linked_priority> 1. A value that is not a list of
+# positive numbers is ignored; empty gives exactly the order as before.
 _merge_lease_queue_first()
 {
 	local lease_pulls_json="$1" lease_candidate="${2:-}" lease_label="${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}"
 	local lease_skips="${3:-}" lease_exclude="${4:-}" lease_row_head lease_row_rest lease_row_ref
+	local lease_linked_csv="${5:-}" lease_linked_flag
+	[[ "${lease_linked_csv}" =~ ^[1-9][0-9]*(,[1-9][0-9]*)*$ ]] || lease_linked_csv=""
 	local lease_row_repo
 	lease_row_repo="$(printf '%s' "${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" | tr '[:upper:]' '[:lower:]')"
 	local lease_best="" lease_best_key="" lease_row lease_num lease_labels lease_key lease_queue_keys=""
@@ -3540,7 +3551,15 @@ _merge_lease_queue_first()
 			&& printf '%s\n' "${lease_skips}" | grep -Eq -- "^${lease_num}:${lease_row_head}(:|\$)"; then
 			continue
 		fi
-		lease_key="$(_merge_lease_order_key "${lease_num}" "${lease_labels}" "${lease_row_ref}")"
+		lease_linked_flag=""
+		if [ -n "${lease_linked_csv}" ] && printf ',%s,' "${lease_linked_csv}" | grep -Fq ",${lease_num},"; then
+			lease_linked_flag=1
+		fi
+		if [ -n "${lease_linked_flag}" ]; then
+			lease_key="$(_merge_lease_order_key "${lease_num}" "${lease_labels}" "${lease_row_ref}" 1)"
+		else
+			lease_key="$(_merge_lease_order_key "${lease_num}" "${lease_labels}" "${lease_row_ref}")"
+		fi
 		lease_queue_keys+="${lease_key} ${lease_num}"$'\n'
 		if [ -z "${lease_best_key}" ] || [[ "${lease_key}" < "${lease_best_key}" ]]; then
 			lease_best_key="${lease_key}"
@@ -3564,11 +3583,187 @@ _merge_lease_queue_first()
 # #9781): the labelled waiters of a `pulls` listing in queue order, comma-
 # separated (empty when none), with the same skip and exclude filters as
 # _merge_lease_queue_first. No API call; prints only digits and commas.
+# Optional <priority_csv> (issue #10048) is forwarded to _merge_lease_queue_first.
 _merge_lease_queue_order()
 {
-	_merge_lease_queue_first "${1:-}" "" "${2:-}" "${3:-}" >/dev/null 2>&1 || true
+	_merge_lease_queue_first "${1:-}" "" "${2:-}" "${3:-}" "${4:-}" >/dev/null 2>&1 || true
 	[[ "${MERGE_LEASE_QUEUE_PRS:-}" =~ ^[1-9][0-9]*(,[1-9][0-9]*)*$ ]] || return 0
 	printf '%s' "${MERGE_LEASE_QUEUE_PRS}"
+}
+
+# ---------------------------------------------------------------------------
+# Priority lane (issue #10048). An operator label (default `ai:priority`, any
+# MERGE_TRAIN_PRIORITY_LABELS entry) on a PR's verified linked issue puts the
+# PR first in the review sweep, the final-CI sweep and the merge-lease grant.
+# While a priority PR's review, security-audit or final-CI run has waited in
+# `queued` for PRIORITY_LANE_WAIT_MINUTES (wedged runs, the #9473 rule, never
+# count), new review / final-CI dispatches and lease grants for other PRs are
+# held back, each for at most PRIORITY_LANE_MAX_DEFER_MINUTES measured from
+# the PR's `updated_at`. Runs already queued or running are never cancelled.
+# None of these helpers makes an API call.
+# Env: PRIORITY_LANE_ENABLED (default true; only true/1/yes/on turn it on, any
+# other value restores the behaviour from before), PRIORITY_LANE_WAIT_MINUTES
+# (default 15, 1-1440), PRIORITY_LANE_MAX_DEFER_MINUTES (default 120,
+# 0-10080; 0 keeps the ordering and turns the hold off).
+# Log: `PRIORITY_LANE pr=<n> outcome=first|deferred|released reason=<token>
+# surface=<sweep|final_ci|lease>` on stdout.
+# ---------------------------------------------------------------------------
+_pr_priority_lane_enabled()
+{
+	case "$(printf '%s' "${PRIORITY_LANE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+		true|1|yes|on) return 0 ;;
+	esac
+	return 1
+}
+
+# _pr_priority_lane_settings: sets PRIORITY_LANE_WAIT_S,
+# PRIORITY_LANE_MAX_DEFER_S and PRIORITY_LANE_LABELS_JSON (the
+# MERGE_TRAIN_PRIORITY_LABELS list parsed as scripts/review_merge_train.sh
+# parses it; empty, none or off give []). An invalid number warns on stderr
+# (the value is not echoed) and uses the default.
+_pr_priority_lane_settings()
+{
+	local pl_wait="${PRIORITY_LANE_WAIT_MINUTES:-15}" pl_cap="${PRIORITY_LANE_MAX_DEFER_MINUTES:-120}" pl_raw pl_json
+	if ! [[ "${pl_wait}" =~ ^[0-9]{1,4}$ ]] || [ "$((10#${pl_wait}))" -lt 1 ] || [ "$((10#${pl_wait}))" -gt 1440 ]; then
+		echo "::warning::PRIORITY_LANE_WAIT_MINUTES is not a whole number from 1 to 1440; using 15" >&2
+		pl_wait=15
+	fi
+	if ! [[ "${pl_cap}" =~ ^[0-9]{1,5}$ ]] || [ "$((10#${pl_cap}))" -gt 10080 ]; then
+		echo "::warning::PRIORITY_LANE_MAX_DEFER_MINUTES is not a whole number from 0 to 10080; using 120" >&2
+		pl_cap=120
+	fi
+	PRIORITY_LANE_WAIT_S=$((10#${pl_wait} * 60))
+	PRIORITY_LANE_MAX_DEFER_S=$((10#${pl_cap} * 60))
+	pl_raw="${MERGE_TRAIN_PRIORITY_LABELS-ai:workflow-heal,ai:security,ai:priority}"
+	case "$(printf '%s' "${pl_raw}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+		''|none|off) PRIORITY_LANE_LABELS_JSON='[]' ;;
+		*)
+			if pl_json="$(printf '%s' "${pl_raw}" | jq -Rsc 'split(",") | map(gsub("^\\s+|\\s+$"; "")) | map(select(length > 0)) | unique' 2>/dev/null)" \
+				&& [[ "${pl_json}" == \[* ]]; then
+				PRIORITY_LANE_LABELS_JSON="${pl_json}"
+			else
+				PRIORITY_LANE_LABELS_JSON='[]'
+			fi
+			;;
+	esac
+	return 0
+}
+
+# PR_PRIORITY_LANE_JQ_DEF (issue #10048): jq definitions.
+#   pr_priority_lane_verified($prefix; $wanted) over
+#     {head_ref, gh_head_ref, cross_repo, closing: [{number, labels: [name]}]}
+#   gives true, false or null (unknown) by the rules of _mt_pr_is_priority in
+#   scripts/review_merge_train.sh: head `$prefix<M>`, GitHub's headRefName
+#   equal to it, not a cross-repository (fork) head, M among GitHub's
+#   closingIssuesReferences, and issue M carrying a label from $wanted. A PR
+#   title, body or branch name alone never gives priority.
+#   pr_priority_lane_run_pr($default_branch) maps a workflow run to the PR its
+#   `workflow_dispatch` title names, or "": `Internal: AI Review & Autofix
+#   [pr:N]` / `AI Review [pr:N]` (only from the default branch or with no
+#   head branch, as the sweep dispatches them), `Security Audit (PR #N)` and
+#   `CI [pr:N]` (optionally ` [<mode>]`).
+PR_PRIORITY_LANE_JQ_DEF='
+	def pr_priority_lane_verified($prefix; $wanted):
+		if type != "object" then null
+		else ((.head_ref // "") | tostring) as $h
+			| (if $prefix != "" and ($h | startswith($prefix)) then ($h | ltrimstr($prefix)) else "" end) as $m
+			| if ($m | test("^[1-9][0-9]*$") | not) then false
+			elif .cross_repo == true then false
+			elif .cross_repo != false then null
+			elif ((.gh_head_ref // null) | type) != "string" or .gh_head_ref != $h then null
+			elif (.closing | type) != "array" then null
+			else any(.closing[]; type == "object" and .number == ($m | tonumber)
+				and any((.labels // [])[]; . as $l | any($wanted[]; . == $l)))
+			end
+		end;
+	def pr_priority_lane_title_pr:
+		if type != "string" then ""
+		else ([capture("^(Internal: AI Review & Autofix|AI Review) \\[pr:(?<n>[1-9][0-9]*)\\]$")? | "review:" + .n] | first)
+			// ([capture("^Security Audit \\(PR #(?<n>[1-9][0-9]*)\\)$")? | "run:" + .n] | first)
+			// ([capture("^CI \\[pr:(?<n>[1-9][0-9]*)\\]( \\[[a-z0-9-]+\\])?$")? | "run:" + .n] | first)
+			// ""
+		end;
+	def pr_priority_lane_run_pr($default_branch):
+		if type != "object" or (.event // "") != "workflow_dispatch" then ""
+		else . as $run
+			| ([(.display_title // ""), (.name // "")] | map(pr_priority_lane_title_pr) | map(select(. != "")) | first // "") as $hit
+			| if $hit == "" then ""
+			elif ($hit | startswith("review:")) then
+				(if $run.head_branch == null or ($default_branch != "" and $run.head_branch == $default_branch)
+					then ($hit | ltrimstr("review:")) else "" end)
+			else ($hit | ltrimstr("run:")) end
+		end;
+'
+
+# _pr_priority_lane_pressure <runs_json> <priority_csv> <wedged_cutoff_epoch>
+# <now_epoch> [<default_branch>]: prints `<pr> <age_minutes>` for the oldest
+# run whose status is `queued`, whose pr_priority_lane_run_pr is in
+# <priority_csv>, that was created at least PRIORITY_LANE_WAIT_S ago, and
+# that is not wedged (created after <wedged_cutoff_epoch>; 0 turns that
+# filter off, the #9473 rule). <runs_json> is an array of runs, a runs page
+# ({workflow_runs: [...]}) or an array of pages. Prints nothing when no run
+# qualifies or the input is malformed (fail-open: no hold). No API call.
+_pr_priority_lane_pressure()
+{
+	local plp_runs="${1:-}" plp_csv="${2:-}" plp_cutoff="${3:-0}" plp_now="${4:-}" plp_db="${5:-}"
+	[[ "${plp_csv}" =~ ^[1-9][0-9]*(,[1-9][0-9]*)*$ ]] || return 0
+	[[ "${plp_cutoff}" =~ ^[0-9]+$ ]] || plp_cutoff=0
+	[[ "${plp_now}" =~ ^[0-9]+$ ]] || plp_now="$(date -u +%s 2>/dev/null)"
+	[[ "${plp_now}" =~ ^[0-9]+$ ]] || return 0
+	[ -n "${PRIORITY_LANE_WAIT_S:-}" ] || _pr_priority_lane_settings
+	printf '%s' "${plp_runs}" | jq -r --arg csv "${plp_csv}" --arg db "${plp_db}" --argjson cutoff "${plp_cutoff}" \
+		--argjson now "${plp_now}" --argjson wait_s "${PRIORITY_LANE_WAIT_S:-900}" "${PR_PRIORITY_LANE_JQ_DEF}"'
+		($csv | split(",")) as $prio
+		| [(if type == "array" then .[] else . end)
+			| if type == "object" and (.workflow_runs | type) == "array" then .workflow_runs[] else . end
+			| select(type == "object" and (.status // "") == "queued")
+			| pr_priority_lane_run_pr($db) as $p
+			| select($p != "" and ($prio | index($p)) != null)
+			| (.created_at | if type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$")
+				then (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) else null end) as $c
+			| select($c != null and ($now - $c) >= $wait_s and ($cutoff == 0 or $c > $cutoff))
+			| {p: $p, c: $c}]
+		| sort_by(.c) | first
+		| if . == null then empty else "\(.p) \((($now - .c) / 60) | floor)" end' 2>/dev/null | head -n1
+	return 0
+}
+
+# _pr_priority_lane_decide <surface> <pr> <is_priority:true|false>
+# <hold:true|false> <since_iso> [<now_epoch>]: returns 0 to dispatch (or
+# grant), 1 to defer. Prints at most one PRIORITY_LANE line:
+#   priority PR: outcome=first reason=verified_label, 0;
+#   other PR, no hold, lane off or deferral off (cap 0): no line, 0;
+#   other PR, hold, held for less than the cap since <since_iso>:
+#     outcome=deferred reason=priority_run_queued, 1;
+#   other PR, hold, past the cap or <since_iso> unparseable:
+#     outcome=released reason=max_defer|since_unknown, 0.
+_pr_priority_lane_decide()
+{
+	local pld_surface pld_pr="${2:-}" pld_prio="${3:-false}" pld_hold="${4:-false}" pld_since="${5:-}" pld_now="${6:-}" pld_since_epoch
+	pld_surface="$(printf '%s' "${1:-}" | tr -cd 'a-z_')"
+	[ -n "${pld_surface}" ] || pld_surface="unknown"
+	[[ "${pld_pr}" =~ ^[1-9][0-9]*$ ]] || return 0
+	_pr_priority_lane_enabled || return 0
+	if [ "${pld_prio}" = "true" ]; then
+		echo "PRIORITY_LANE pr=${pld_pr} outcome=first reason=verified_label surface=${pld_surface}"
+		return 0
+	fi
+	[ "${pld_hold}" = "true" ] || return 0
+	[ -n "${PRIORITY_LANE_MAX_DEFER_S:-}" ] || _pr_priority_lane_settings
+	[ "${PRIORITY_LANE_MAX_DEFER_S:-0}" -gt 0 ] 2>/dev/null || return 0
+	[[ "${pld_now}" =~ ^[0-9]+$ ]] || pld_now="$(date -u +%s 2>/dev/null)"
+	# GNU date reads "" as today's midnight, so only an ISO timestamp counts.
+	if ! [[ "${pld_since}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]] \
+		|| ! pld_since_epoch="$(date -u -d "${pld_since}" +%s 2>/dev/null)" || ! [[ "${pld_now}" =~ ^[0-9]+$ ]]; then
+		echo "PRIORITY_LANE pr=${pld_pr} outcome=released reason=since_unknown surface=${pld_surface}"
+		return 0
+	fi
+	if [ $(( pld_now - pld_since_epoch )) -ge "${PRIORITY_LANE_MAX_DEFER_S}" ]; then
+		echo "PRIORITY_LANE pr=${pld_pr} outcome=released reason=max_defer surface=${pld_surface}"
+		return 0
+	fi
+	echo "PRIORITY_LANE pr=${pld_pr} outcome=deferred reason=priority_run_queued surface=${pld_surface}"
+	return 1
 }
 
 # _merge_lease_pr_eligible <pr> <head_sha> <title> <draft> [<base>] [<trusted_login>] [<hold_since_epoch>]
