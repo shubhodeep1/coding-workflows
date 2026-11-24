@@ -3307,6 +3307,10 @@ ${lease_paths}"
 # (soft; kept as the hard `expired_unparked` marker so a head-gate failure
 # never resets the once-per-head budget). The kept entry is appended as the
 # newest, so the 50-entry cap evicts it last. No API call.
+# Known residual: the marker is still an ordinary capped entry, so 50 newer
+# entries from other PRs before the same head is released again evict it
+# (_merge_lease_skips_normalize's `tail -n 50`), and that head can then be
+# un-parked once more (one extra queue cycle, never a permanent park).
 _merge_lease_skip_block()
 {
 	local skip_lines="${MERGE_LEASE_SKIPS:-}" skip_drop skip_drop_pr skip_drop_head skip_keep skip_keep_why
