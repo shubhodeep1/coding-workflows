@@ -320,6 +320,7 @@ deployment fallback.
 | `COMPREHENSIVE_RELEASE_WORKFLOW_FILE` | No | `promote-main-to-stable.yml` | orchestrate_poll | Workflow the comprehensive release callback (12f) dispatches when a tracking issue labelled `ai:comprehensive-test-pending` completes. The default fast-forwards `stable` to the default branch and runs the full release gate; set `test-and-mark-stable.yml` (with `COMPREHENSIVE_RELEASE_WORKFLOW_REF=stable`) to restore the stable-only patch path. |
 | `COMPREHENSIVE_RELEASE_WORKFLOW_REF` | No | `main` | orchestrate_poll | `--ref` passed with `COMPREHENSIVE_RELEASE_WORKFLOW_FILE`. |
 | `PROMOTE_CYCLE_ENABLED` | No | `true` | promote-main-to-stable (cycle job) | Kill switch for the daily promote cycle in `.github/workflows/promote-main-to-stable.yml` (schedule `0 0 * * *`). The cycle promotes `main` only after a code change since the `stable` tag, a passing `gate_only` smoke gate, and two apply-analysis orchestrator runs (proving, then verifying). `false` logs `PROMOTE_CYCLE_SKIPPED reason=disabled`. Manual `workflow_dispatch` promotion is unaffected. |
+| `GH_READ_TOKEN_ENABLED` | No | `true` | promote-main-to-stable (Run the promote cycle), test-and-mark-stable (polling steps), review_autofix (codex-agent reviewer/editor steps), workflow-failure-heal-intake (intake, recovery-scan) | Kill switch for polling reads on the job token (issue #9888). When on, these steps export `GH_READ_TOKEN` (the job's `GITHUB_TOKEN`), and `gh_read` (`scripts/gh_helpers.sh`) / `gh_api_safe_quiet_print_read` (`scripts/comprehensive_test_and_release_gh_api.sh`) make the loops' same-repository reads with it instead of `GH_PAT`; a 401/403/404 or rate limit falls back once to the PAT and logs `GH_READ_FALLBACK reason=<code> caller=<script>`. Writes always use `GH_PAT`. `false` exports an empty `GH_READ_TOKEN`, so every read uses `GH_PAT` as before; the same value in a step's shell env does the same. |
 | `PROMOTE_CYCLE_PIN_ENABLED` | No | `true` | promote-candidate-follow, promote-main-to-stable (cycle), orchestrate_poll | Read by `scripts/promote_candidate_follow.sh` (`.github/workflows/promote-candidate-follow.yml`). `true` keeps the `promote-candidate` branch on the cycle's candidate while the `promote-cycle-frozen` tag exists (`PROMOTE_CANDIDATE_FOLLOW outcome=frozen`); `false` ignores the tag and fast-forwards the branch to the `main` tip anyway (`outcome=unfrozen_disabled`). Also read by `scripts/promote_main_cycle.sh`, where `false` runs the cycle unpinned (`PROMOTE_CYCLE_PIN outcome=skipped reason=disabled`), and by the poller, where `false` abandons the promotion of a pinned cycle on its next tick (`COMPREHENSIVE_PROMOTION_PIN_RELEASED ... detail=pin_disabled`) and deletes the tag. A release already dispatched cannot be recalled: it finishes, and the tag is deleted when it ends. Only `false` (any letter case) turns it off. |
 | `PROMOTE_CYCLE_FREEZE_MAX_SECS` | No | `172800` | promote-candidate-follow | Age in seconds after which the follower treats a `promote-cycle-frozen` tag whose annotated message carries `frozen_at=<epoch>` as stale: it deletes the tag, sends a CRITICAL alert and fast-forwards the branch (`outcome=stale_tag_deleted`). A lightweight or unparsable tag counts as fresh. Non-integer or zero values fall back to `172800` with a warning. The promote cycle (`scripts/promote_main_cycle.sh`) reads it too and reports a stale tag's age against it when it deletes the tag before a freeze. |
 | `PROMOTE_CYCLE_HOLD_RELEASE_ENABLED` | No | `true` | promote-main-to-stable (cycle job) | Bounded hold for human-latched tracking issues (stuck-states P4). While `true`, an open `ai:comprehensive-test-pending` tracking issue that carries a human latch label (`ai:harness-broken`, `ai:validation-failed`, `ai:security-pass-failed`, `ai:blocked` or `ai:needs-human`) stops holding the daily cycle once its newest latch label event is at least `PROMOTE_CYCLE_HOLD_MAX_HOURS` old: the tick logs `PROMOTE_CYCLE_HOLD_RELEASED tracking_issue=<n> reason=<label> latch_age_secs=<n> max_hours=<n>`, sends a Telegram WARNING and goes on to the remaining guards. Latch ages come from one batched GraphQL read of `LabeledEvent` history, made only when a listed issue carries a latch label; a failed, unverified, incomplete or unparseable history keeps the issue holding. Issues without a latch label hold as before. Any truthy value (`1`, `true`, `yes`, `on`, any letter case) keeps the bounded hold on; any other value (for example `false`) restores the previous unbounded hold exactly (same output, no extra API call). While the `promote-cycle-frozen` tag exists (and `PROMOTE_CYCLE_PIN_ENABLED` is not `false`), an issue past the cap still holds (`PROMOTE_CYCLE_SKIPPED reason=cycle_in_flight ... tag=promote-cycle-frozen`), because the tag keeps `promote-candidate` frozen on the parked cycle's candidate. A tick that released an issue runs the cycle unpinned (`PROMOTE_CYCLE_PIN outcome=skipped reason=released_cycle_holds_pin`), because the released cycle may still own the pipeline's freeze. |
@@ -5018,6 +5019,142 @@ container (no network, read-only root, no runner environment, the gate module
 taken from the trusted support checkout). The AI pipelines (implement, review
 autofix, conflict resolver, heal, integration-branch repair) start using it in
 later phases of `docs/plans/prepush-affected-test-gate-plan.md`.
+
+## DigitalOcean runners for consumer pipelines
+
+`tools/runner_scaler/` is a small service that runs consumer pipeline jobs on
+single-use DigitalOcean droplets, so those jobs leave the account's GitHub-hosted
+runner pool. A consumer opts in with the repo variable `PIPELINE_RUNS_ON=do-runner`
+(see the Variables table); coding-workflows itself never does. Plan:
+`docs/plans/digitalocean-runners-for-consumer-pipelines-plan.md`.
+
+**How it works.**
+
+1. A GitHub App sends `workflow_job` webhooks to the service's `POST /webhook`.
+   Deliveries are verified with HMAC-SHA256.
+2. Every pass compares queued `do-runner` jobs with supply: droplets still
+   booting plus online idle runners. A droplet stays "booting" until its runner
+   first comes online or picks up a job, because GitHub lists a just-in-time
+   runner as `offline` from the moment it is created. It creates one droplet per missing
+   runner, up to `RUNNER_SCALER_MAX_DROPLETS` at once.
+3. Each droplet boots the stock `ubuntu-26-04-x64` image with
+   `tools/runner_scaler/bootstrap/runner-boot.sh` as user data. The script
+   installs the pipeline's tools, runs a self-check, then runs exactly one job
+   as an unprivileged `runner` user with a single-use just-in-time runner
+   configuration, and powers off.
+4. Passes run on every webhook and every `RUNNER_SCALER_RECONCILE_SECONDS`. A
+   full scan of queued and in-progress runs every
+   `RUNNER_SCALER_FULL_SCAN_SECONDS` recovers missed webhooks. The service
+   keeps no state of its own: droplets carry the tags `gh-runner` and
+   `gh-runner-repo-<slug>`, so a restart picks up where it stopped.
+
+**Cleanup.** A droplet is destroyed when:
+
+- its job completes;
+- it powered off after its job;
+- its self-check failed: it powered off while its runner never came online, and this counts as a boot failure;
+- its runner did not come online within `RUNNER_SCALER_REGISTER_TIMEOUT_SECONDS` (also a boot failure);
+- it stayed idle with no queued job for the same period;
+- it outlived `RUNNER_SCALER_MAX_LIFETIME_MINUTES`.
+
+Offline `do-runner-*` runners with no droplet are deleted, at most 10 per pass.
+
+**Failure handling, bounded so nothing can loop.**
+
+- **Circuit breaker.** It opens after `RUNNER_SCALER_BREAKER_CONSECUTIVE` boot
+  failures in a row, or when more than `RUNNER_SCALER_BREAKER_FAIL_RATIO` of the
+  boots in `RUNNER_SCALER_BREAKER_WINDOW_MINUTES` failed. While open it creates
+  no droplets, then allows one trial droplet after
+  `RUNNER_SCALER_BREAKER_COOLDOWN_MINUTES`.
+- **Lost runners.** A job whose droplet was lost, shown by GitHub's
+  lost-runner annotation, is re-run once, only at `run_attempt` 1. GitHub
+  accepts the re-run only after the whole run completes, so it is retried at
+  most every 5 minutes for up to 6 hours. The heal
+  intake files no heal issue for it (`skip reason=runner_lost`).
+- **Repair path.** The heal and check-failure triage workflows always run on
+  GitHub-hosted runners.
+- **Alerts.** These go to Telegram (`TG_BOT_SECRET`, `TG_ADMIN_CHAT_ID`), at most
+  once per incident per `RUNNER_SCALER_ALERT_COOLDOWN_MINUTES`:
+  - `breaker_open`;
+  - `queued_without_supply:<repo>`: a job queued longer than `RUNNER_SCALER_QUEUE_ALERT_MINUTES` with no droplet booting for it;
+  - `cap_reached`;
+  - `destroy_failed`: a droplet delete failed; it is retried every pass and counts against the cap;
+  - `do_api_error`;
+  - `rerun_given_up:<repo>`.
+- **Health.** `GET /healthz` fails when no pass has completed within 3
+  intervals or 15 minutes, whichever is longer, so App Platform restarts the
+  service. A DigitalOcean Uptime check
+  on it alerts by email when the service is down.
+
+**Onboarding a consumer.** `/seed-repo` offers the fleet for a new private
+consumer once the rollout has recorded the app as the `runner-scaler` row of the
+agents file's `## DigitalOcean resources` table. The order is fixed:
+
+1. Add the repository to the GitHub App `shubhodeep1-runner-scaler`. This is a
+   browser step.
+2. Add it to `RUNNER_SCALER_REPOS`, and check that the redeploy's
+   `RUNNER_SCALER outcome=started` line shows `dry_run=false`: in dry run the
+   service creates no droplets and raises no queue alert.
+3. Only then set `PIPELINE_RUNS_ON=do-runner` on it.
+
+The same order applies to an existing consumer that opts in later. If the
+`started` line still shows `dry_run=true`, leave `PIPELINE_RUNS_ON` unset:
+turning dry run off is a fleet-wide app spec change
+(`RUNNER_SCALER_DRY_RUN=false`, ask-first), and step 3 follows only once a
+later `started` line shows `dry_run=false`.
+
+**Rollback.** Unset `PIPELINE_RUNS_ON` on the consumer: new jobs go back to
+GitHub-hosted runners at once. Jobs already queued keep their `do-runner`
+label: leave the repository in `RUNNER_SCALER_REPOS` until they have run, or
+cancel and re-run them so they pick up a GitHub-hosted runner. The service
+does not cancel them.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `RUNNER_SCALER_REPOS` | (empty: serve no repository) | Comma- or space-separated `owner/name` list the service creates droplets for. Invalid entries and slug collisions are skipped and logged. `shubhodeep1/coding-workflows` is always skipped (`reason=excluded_repo`): this repository's own jobs stay on GitHub-hosted runners. |
+| `RUNNER_SCALER_VPC_UUID` | (empty) | The dedicated VPC every runner droplet is created in, so runners never share the region's default VPC with the account's other droplets. Required while `RUNNER_SCALER_REPOS` is set: without it the service refuses to start. |
+| `RUNNER_SCALER_DRY_RUN` | `false` (`true` in `app.yaml` for the first deploy) | `true` logs every decision (`outcome=dry_run`) and calls no write endpoint. |
+| `RUNNER_SCALER_LABEL` | `do-runner` | Runner label; must match the `runs-on` expression in the reusable workflows. |
+| `RUNNER_SCALER_DROPLET_SIZE` | `s-4vcpu-8gb` | Droplet size slug. |
+| `RUNNER_SCALER_REGION` | `nyc3` | Droplet region. |
+| `RUNNER_SCALER_IMAGE` | `ubuntu-26-04-x64` | Droplet image; keep it on the Ubuntu release `ubuntu-latest` uses. |
+| `RUNNER_SCALER_MAX_DROPLETS` | `60` | Cap on scaler droplets at once (60 × $0.07143/hr is at most $4.29/hr). `0` stops creating. |
+| `RUNNER_SCALER_RECONCILE_SECONDS` | `120` | Interval between passes when no webhook arrives (30–3600). |
+| `RUNNER_SCALER_FULL_SCAN_SECONDS` | `600` | Interval between full scans of queued and in-progress runs (60–86400). |
+| `RUNNER_SCALER_SCAN_MAX_RUNS` | `20` | Runs read per status per repository per full scan (1–100). |
+| `RUNNER_SCALER_REGISTER_TIMEOUT_SECONDS` | `900` | Time a droplet's runner may take to come online; also the idle window. |
+| `RUNNER_SCALER_MAX_LIFETIME_MINUTES` | `300` | Hard droplet lifetime (the longest job timeout is 240 minutes). |
+| `RUNNER_SCALER_QUEUE_ALERT_MINUTES` | `10` | Queue wait before a `queued_without_supply` alert. |
+| `RUNNER_SCALER_BREAKER_CONSECUTIVE` / `_WINDOW_MINUTES` / `_FAIL_RATIO` / `_MIN_BOOTS` / `_COOLDOWN_MINUTES` | `3` / `15` / `0.5` / `4` / `15` | Circuit breaker settings. |
+| `RUNNER_SCALER_ALERT_COOLDOWN_MINUTES` | `60` | Minimum time between two alerts with the same key. |
+| `RUNNER_SCALER_RERUN_ENABLED` | `true` | `false` turns off the lost-runner re-run. |
+| `PORT` | `8080` | HTTP port (App Platform's `http_port`). |
+
+Secrets (encrypted App Platform env vars; the service refuses to start, exit 2
+with `outcome=config_error reason=missing_required`, when `RUNNER_SCALER_REPOS`
+is set and one of them or `RUNNER_SCALER_VPC_UUID` is missing):
+`RUNNER_SCALER_DO_TOKEN`, `RUNNER_SCALER_GH_APP_ID`,
+`RUNNER_SCALER_GH_APP_PRIVATE_KEY` and `RUNNER_SCALER_WEBHOOK_SECRET`.
+
+- `RUNNER_SCALER_DO_TOKEN` is a custom-scoped DigitalOcean token: droplet
+  create, read and delete, plus tag create and read.
+- `RUNNER_SCALER_GH_APP_ID` and `RUNNER_SCALER_GH_APP_PRIVATE_KEY` belong to a
+  GitHub App installed only on the consumer repositories. Its repository
+  permissions are Actions read and write, Administration read and write,
+  Checks read (the lost-runner re-run reads the job's check-run annotations),
+  and Metadata read, and its webhook event is Workflow job. The service keeps
+  one installation token per repository owner.
+- `RUNNER_SCALER_WEBHOOK_SECRET` is the App's webhook secret.
+
+Droplets hold none of these. They are created in the dedicated VPC named by
+`RUNNER_SCALER_VPC_UUID`, and a cloud firewall on the tag `gh-runner` allows no
+inbound traffic.
+
+Every decision is one `RUNNER_SCALER outcome=<...> reason=<...> repo=<...> droplet=<...>`
+log line. Deployment: `tools/runner_scaler/app.yaml` builds `tools/runner_scaler/Dockerfile`
+from the `stable` branch and redeploys on every push to it. Creating the app,
+setting its secrets, and the VPC, firewall and Uptime check are ask-first
+operations (CLAUDE.md §22.B), done once at rollout.
 
 ## Repository Structure
 
