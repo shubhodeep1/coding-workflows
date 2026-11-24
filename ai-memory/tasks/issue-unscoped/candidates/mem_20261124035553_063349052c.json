@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"For a waiter ... when head-gate is absent or pending, accept the newest status of the new context when its state is success and its creator is <trusted_login>.\" A head-gate failure or error must remain ineligible.\n  expected_change_site: `scripts/pr_checks_lib.sh`, `_merge_lease_pr_eligible`\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: At line 3360, the pending head-gate case is accepted only when its creator matches `elig_login`. A pending head-gate from another login is rejected even when the trusted judge-decision status is present, and `tests/test_merge_lease.py::test_pending_head_gate_from_another_login_ignores_the_judge_decision` asserts that rejection. Disputed: anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash say this narrowing is a deliberate G2 trust tightening and not a gap.\n- requirement: \"After the grant, the PR reaches a merge or a normal lease release without a person. The granted holder is taken through the judge's merge path ... It must not end in another review round that only labels the PR `ai:review-blocked` again and waits for stall recovery.\"\n  expected_change_site: `scripts/review_merge_train.sh`, `_mt_dispatch_rb_judge`\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: Lines 1536-1537 fall back to `_mt_dispatch_review` when the judge workflow and both `force_rb_judge` wrappers fail to dispatch. That fallback starts a plain review round instead of the judge's merge path, and `tests/test_merge_lease.py::test_no_judge_wrapper_falls_back_to_one_plain_review_dispatch` explicitly exercises it. Disputed: z-ai_glm-5_3-flash says this is a documented degraded last resort that keeps pre-#9987 behavior and is not a gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION (not a finding): File: `scripts/review_merge_train.sh`; Location: `_mt_dispatch_rb_judge`, after the failed `review_rb_judge_dispatch.yml` attempt and inside the fallback loop on each failed wrapper attempt\n  PROBLEM: Each failed dispatch is silenced with `>/dev/null 2>&1`, and only the final \"falling back to the review dispatch\" warning is logged.\n  WHY: When a consumer's wrappers have drifted, the log does not show which wrapper failed. Suggested fix: add one `_mt_log` line per failed attempt (e.g. `MERGE_TRAIN_DISPATCH_ATTEMPT_FAILED pr=<n> workflow=<wf>`). Estimated lines changed: 2-3. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"For a waiter ... when head-gate is absent or pending, accept the newest status of the new context when its state is success and its creator is <trusted_login>.\" A head-gate failure or error must remain ineligible.\n  Expected change site: `scripts/pr_checks_lib.sh`, `_merge_lease_pr_eligible`.\n  Evidence of absence: At line 3360, the pending head-gate case is accepted only when its creator matches `elig_login`. A pending head-gate from another login is rejected even when the trusted judge-decision status is present; `tests/test_merge_lease.py::test_pending_head_gate_from_another_login_ignores_the_judge_decision` asserts that rejection.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"After the grant, the PR reaches a merge or a normal lease release without a person. The granted holder is taken through the judge's merge path ... It must not end in another review round that only labels the PR `ai:review-blocked` again and waits for stall recovery.\"\n  Expected change site: `scripts/review_merge_train.sh`, `_mt_dispatch_rb_judge`.\n  Evidence of absence: Lines 1536-1537 fall back to `_mt_dispatch_review` when the judge workflow and both `force_rb_judge` wrappers fail to dispatch. That fallback starts a plain review round rather than the judge's merge path; `tests/test_merge_lease.py::test_no_judge_wrapper_falls_back_to_one_plain_review_dispatch` explicitly exercises it.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- NOTE (deviation judged not a gap; NIT, no change requested): the implementation restricts the pending arm to `\"pending ${elig_login}\"` (scripts/pr_checks_lib.sh:3360), so a waiter with a trusted judge-decision status and a pending head-gate posted by another login is skipped with no_head_gate. The reviewer says this state cannot be reached by the pipeline and that the narrowing is a trust tightening that keeps the \u00a71 constraint.\n- NOTE (not a gap): the last-resort `_mt_dispatch_review` (scripts/review_merge_train.sh:1536-1537) is a documented degraded fallback that keeps pre-#9987 behavior. It is covered by test_no_judge_wrapper_falls_back_to_one_plain_review_dispatch and test_no_force_wrapper_falls_back_to_the_plain_review_dispatch. HARDENING_SUGGESTIONS: NONE\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "497f1124a204cdd16099dd75ab9bbc56c3250e2b64ebfed658bbbfd72ad70730",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9996,
+    "run_id": "45305130263",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45305130263",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124035553_063349052c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9996,
+    "run_id": "45305130263"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-24T03:55:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
