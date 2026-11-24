@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION (advisory, not a finding): scripts/pr_checks_lib.sh:3591-3594 (_merge_lease_hold_labels) | HARDENING_RISK_SCORE=1\n  PROBLEM: The off switch fires only when the whole value is exactly `none` or `off`, so a value like `none,` or `off,ai:needs-human` makes `none` or `off` a literal hold label and the check stays on.\n  WHY: The README and changelog only promise that a bare `none` or `off` turns it off, so the reviewer says this is not a defect in documented behaviour. Suggested fix: in the per-entry loop, after trimming and lower-casing, return 0 when an entry is `none` or `off` (about 2 lines).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- HARDENING_SUGGESTION (advisory, not a finding): scripts/pr_checks_lib.sh:3590-3604 (_merge_lease_hold_labels) | HARDENING_RISK_SCORE=2\n  PROBLEM: The off switch compares only the whole raw value (after whitespace removal and lower-casing) against `''`, `none` or `off`, so `MERGE_LEASE_HOLD_LABELS=none,custom:hold` treats both `none` and `custom:hold` as literal hold labels.\n  WHY: The README and the issue say \"`none` or `off` turns the test off\", so a user could reasonably expect `none,extra` to turn it off too. Suggested fix: in the existing for loop, before the wait-label drop, check each trimmed lower-cased entry against the off tokens and `return 0` on a match (about 5 lines).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING_SUGGESTION (advisory, not a finding): scripts/pr_checks_lib.sh:3591-3604 (_merge_lease_hold_labels) | HARDENING_RISK_SCORE=1\n  PROBLEM: The off switch fires only when the whole value is `none` or `off` after whitespace removal, so a mixed value like `none,` or `foo,none` is not caught by the case branch and emits `none` as a literal hold label.\n  WHY: The reviewer calls this advisory, previously surfaced, and not a runtime defect, because the README documents plain `none`/`off`. Suggested fix: in the per-entry loop, also skip an entry whose lower-cased trimmed form is `none` or `off` (about 3 lines).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "eaade1935c373fc5db6412b292d9867e535eef9bbb14a052af0f87b4ffeef5b1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9970,
+    "run_id": "45348264211",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45348264211",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124093924_bf5c24b187",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9970,
+    "run_id": "45348264211"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-24T09:39:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
