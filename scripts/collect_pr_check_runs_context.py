@@ -53,7 +53,11 @@ NO_RESULT_CONCLUSIONS = {"cancelled", "timed_out"}
 
 
 def _no_result_split_enabled() -> bool:
-	return os.environ.get("REVIEW_UNREACHABLE_FOLLOWUP_ENABLED", "false").strip().lower() == "true"
+	# Same parsing as scripts/review_issue_ledger.sh (false/0/no/off is off),
+	# except that unset or empty stays off: callers that never set the switch
+	# (check_failure_triage.sh) keep their output unchanged.
+	value = os.environ.get("REVIEW_UNREACHABLE_FOLLOWUP_ENABLED", "").strip().lower()
+	return value not in ("", "false", "0", "no", "off")
 
 
 # Full commit SHA accepted for PR_CHECK_RUNS_HEAD_SHA_OVERRIDE (#6918).

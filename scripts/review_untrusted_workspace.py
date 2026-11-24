@@ -817,6 +817,11 @@ def editor_reachable(host, paths_file, report_file):
 			reason = "not_admitted_command"
 		else:
 			reason = _path_rejection_reason(name)
+		if reason == "unsupported_type" and not ((host / name).is_file() or (host / name).is_symlink()):
+			# A FILE: value that is no file on the host (a directory, "N/A",
+			# "PR-body") cannot be decided by this rule: leave it out so the
+			# caller keeps the finding reachable.
+			continue
 		unreachable += 1
 		report.append(f"unreachable\t{reason}\t{name}")
 	report_file.write_text("".join(line + "\n" for line in report), encoding="utf-8")

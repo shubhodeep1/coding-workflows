@@ -53,11 +53,11 @@ def _issue_block(block_id: str, file_path: str, lens: str, evidence: str = "Miss
 		SEVERITY: high
 		CLASSIFICATION: must-fix
 		EVIDENCE:
-		  reviewer_1> "{evidence}"
+		\x20\x20reviewer_1> "{evidence}"
 		CURRENT_CODE:
-		  run: echo hi
+		\x20\x20run: echo hi
 		SUGGESTED_APPROACH:
-		  Add the guard.
+		\x20\x20Add the guard.
 		=== END ISSUE {block_id} ===
 		"""
 	)
@@ -131,8 +131,8 @@ def _fake_gh(root: Path) -> Path:
 			printf '%s\\n' "$*" >> "{log}"
 			prev=""
 			for arg in "$@"; do
-			  if [ "$prev" = "--body-file" ]; then cat "$arg" >> "{root}/gh_bodies.log"; fi
-			  prev="$arg"
+			\x20\x20if [ "$prev" = "--body-file" ]; then cat "$arg" >> "{root}/gh_bodies.log"; fi
+			\x20\x20prev="$arg"
 			done
 			if [ "$1 $2" = "issue create" ]; then echo "https://github.com/octo/repo/issues/777"; fi
 			if [ "$1 $2" = "issue comment" ]; then echo "https://github.com/octo/repo/issues/777#issuecomment-1"; fi
@@ -412,3 +412,103 @@ def test_editor_reachable_subcommand(tmp_path: Path) -> None:
 	]
 	assert "REVIEW_EDITOR_REACHABLE checked=3 unreachable=2" in result.stderr
 	assert "foo.md" not in result.stderr
+
+
+def _run_rb_judge_render(root: Path, ledger: Path, **overrides: str) -> str:
+	driver = root / "rb_render_driver.sh"
+	driver.write_text(
+		"set -euo pipefail\n"
+		+ _extract_shell_function(RB_JUDGE, "flag_enabled")
+		+ _extract_shell_function(RB_JUDGE, "render_review_rb_prior_round_decisions_file")
+		+ 'render_review_rb_prior_round_decisions_file "$1" "$2"\n',
+		encoding="utf-8",
+	)
+	out = root / "rb_prior.txt"
+	env = os.environ.copy()
+	for key in ("REVIEW_LEDGER_ENABLED", "REVIEW_LEDGER_REREVIEW_ENABLED", "REVIEW_UNREACHABLE_FOLLOWUP_ENABLED"):
+		env.pop(key, None)
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	env.update(overrides)
+	subprocess.run(["bash", str(driver), str(ledger), str(out)], cwd=root, env=env, capture_output=True, text=True, check=True)
+	return out.read_text(encoding="utf-8")
+
+
+def test_judge_sees_unreachable_rows_with_rereview_off(tmp_path: Path) -> None:
+	_seed_repo(tmp_path)
+	reachable = _issue_block("001", "scripts/x.sh", "CORRECTNESS & LOGIC")
+	# Consumer protected path: decided without the write-guard config.
+	held = _issue_block("002", "prompts/mode-x.txt", "SECURITY & INPUT VALIDATION")
+	_run_ledger(tmp_path, reachable + held, 1, IS_WORKFLOW_SOURCE_REPO="false")
+	ledger = tmp_path / LEDGER_REL
+	# Rereview off (the workflow default): only the unreachable row is rendered.
+	text = _run_rb_judge_render(tmp_path, ledger, REVIEW_LEDGER_REREVIEW_ENABLED="false")
+	rows = [line for line in text.splitlines() if line]
+	assert len(rows) == 1
+	assert "prior_decision=unreachable-followup" in rows[0]
+	assert "security_hold=true" in rows[0]
+	assert "file=prompts/mode-x.txt" in rows[0]
+	# Switch off: the earlier empty output.
+	assert _run_rb_judge_render(tmp_path, ledger, REVIEW_LEDGER_REREVIEW_ENABLED="false", REVIEW_UNREACHABLE_FOLLOWUP_ENABLED="false") == ""
+	# Rereview on: every entry, as before.
+	full = _run_rb_judge_render(tmp_path, ledger, REVIEW_LEDGER_REREVIEW_ENABLED="true")
+	assert len([line for line in full.splitlines() if line]) == 2
+
+
+def test_security_hold_blocks_clean_marker() -> None:
+	text = (SCRIPTS / "review_autofix_step_post_editor_summary.sh").read_text(encoding="utf-8")
+	branch = text.index('clean_marker_reason="unreachable_security_hold"')
+	assert "review_unreachable_all.tsv" in text[branch - 400:branch]
+	assert "$5 == \"true\"" in text[branch - 400:branch]
+	# The hold is checked before the branch that writes the marker.
+	assert branch < text.index("clean_marker_suffix=$'\\n\\n'\"<!-- review-autofix-clean:v1")
+
+
+def test_editor_prompt_restates_unreachable_paths(tmp_path: Path) -> None:
+	runtime = tmp_path / "runtime"
+	runtime.mkdir()
+	(runtime / "review_unreachable_all.tsv").write_text(
+		"iss_a\t.github/workflows/ci.yml\t3\tX\tfalse\twrite_guard\t#5\niss_b\tbad path\t3\tX\tfalse\twrite_guard\tpending\n",
+		encoding="utf-8",
+	)
+	driver = tmp_path / "note_driver.sh"
+	driver.write_text(
+		_extract_shell_function(APPLY_FIXES, "_review_unreachable_editor_scope_note")
+		+ 'printf "A%s\\nB\\n" "$(_review_unreachable_editor_scope_note)"\n',
+		encoding="utf-8",
+	)
+	env = os.environ.copy()
+	env["RUNTIME_DIR"] = str(runtime)
+	env.pop("REVIEW_UNREACHABLE_FOLLOWUP_ENABLED", None)
+	on = subprocess.run(["bash", str(driver)], env=env, capture_output=True, text=True, check=True).stdout
+	assert "- .github/workflows/ci.yml" in on
+	assert "bad path" not in on
+	env["REVIEW_UNREACHABLE_FOLLOWUP_ENABLED"] = "false"
+	off = subprocess.run(["bash", str(driver)], env=env, capture_output=True, text=True, check=True).stdout
+	assert off == "A\nB\n"
+	assert "authoritative findings source.$(_review_unreachable_editor_scope_note)\n" in APPLY_FIXES.read_text(encoding="utf-8")
+
+
+def test_editor_reachable_leaves_non_file_names_reachable(tmp_path: Path) -> None:
+	(tmp_path / "scripts").mkdir()
+	(tmp_path / "blob.bin").write_bytes(b"\0")
+	paths = tmp_path / "paths.txt"
+	report = tmp_path / "report.tsv"
+	paths.write_text("scripts\nN-A\nblob.bin\n", encoding="utf-8")
+	env = os.environ.copy()
+	env.pop("GITHUB_WORKSPACE", None)
+	env["PYTHONDONTWRITEBYTECODE"] = "1"
+	subprocess.run(
+		[sys.executable, "-I", "-B", str(WORKSPACE_PY), "editor-reachable", str(tmp_path), str(paths), str(report)],
+		env=env, capture_output=True, text=True, check=True,
+	)
+	assert report.read_text(encoding="utf-8").splitlines() == ["unreachable\tunsupported_type\tblob.bin"]
+
+
+@pytest.mark.parametrize("value, split", [("true", True), ("1", True), ("yes", True), ("On", True), ("false", False), ("0", False), ("off", False), ("", False)])
+def test_no_result_switch_parsing_matches_ledger(monkeypatch: pytest.MonkeyPatch, value: str, split: bool) -> None:
+	spec = importlib.util.spec_from_file_location("collect_pr_check_runs_context_10057b", COLLECT_PY)
+	module = importlib.util.module_from_spec(spec)
+	assert spec.loader is not None
+	spec.loader.exec_module(module)
+	monkeypatch.setenv("REVIEW_UNREACHABLE_FOLLOWUP_ENABLED", value)
+	assert module._no_result_split_enabled() is split

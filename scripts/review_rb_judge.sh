@@ -703,11 +703,27 @@ render_review_rb_prior_round_decisions_file() {
   local out_path="$2"
   local tmp_path=""
 
+  local rb_unreachable_only=0
+
   : > "${out_path}"
-  if ! flag_enabled "${REVIEW_LEDGER_ENABLED:-1}" || ! flag_enabled "${REVIEW_LEDGER_REREVIEW_ENABLED:-0}"; then
+  if ! flag_enabled "${REVIEW_LEDGER_ENABLED:-1}"; then
     return 0
   fi
+  if ! flag_enabled "${REVIEW_LEDGER_REREVIEW_ENABLED:-0}"; then
+    # Issue #10057: the judge must see unreachable findings (and their
+    # security hold) even with rereview off, so in that case only the
+    # status=unreachable rows are rendered. Switch off restores the empty file.
+    case "$(printf '%s' "${REVIEW_UNREACHABLE_FOLLOWUP_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+      false|0|no|off)
+        return 0
+        ;;
+    esac
+    rb_unreachable_only=1
+  fi
   if [ ! -s "${ledger_path}" ]; then
+    return 0
+  fi
+  if [ "${rb_unreachable_only}" = "1" ] && ! grep -q '^STATUS: unreachable$' "${ledger_path}" 2>/dev/null; then
     return 0
   fi
   if ! command -v python3 >/dev/null 2>&1; then
@@ -716,12 +732,13 @@ render_review_rb_prior_round_decisions_file() {
   fi
 
   tmp_path="$(mktemp)" || return 0
-  if PYTHONDONTWRITEBYTECODE=1 python3 - "${ledger_path}" > "${tmp_path}" <<'PY'
+  if PYTHONDONTWRITEBYTECODE=1 python3 - "${ledger_path}" "${rb_unreachable_only}" > "${tmp_path}" <<'PY'
 from pathlib import Path
 import re
 import sys
 
 ledger_path = Path(sys.argv[1])
+unreachable_only = len(sys.argv) > 2 and sys.argv[2] == "1"
 raw = ledger_path.read_text(encoding="utf-8", errors="replace").splitlines()
 
 entries = []
@@ -775,6 +792,8 @@ flush_current()
 
 for entry in sorted(entries, key=lambda item: item.get("ISSUE_ID", "")):
     status = clean(entry.get("STATUS", ""))
+    if unreachable_only and status != "unreachable":
+        continue
     editor_text = entry.get("EDITOR_OUTCOMES", "")
     editor_lower = editor_text.lower()
     prior_decision = ""

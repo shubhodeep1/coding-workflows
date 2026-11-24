@@ -64,6 +64,8 @@ Optional carry-over input:
   is tracked in a follow-up issue. Treat it as sticky, like
   `already-rejected-with-evidence`: never re-raise it as `must-fix`. A
   re-emitted copy is matched by the ledger and kept out of fix rounds.
+  Exception: with `security_hold=true` it is a security finding that keeps
+  the PR blocked; keep it as a block when reviewers raise it, never suppress.
 
 Slop-scan heuristic input:
 - The prompt may include a `=== BEGIN UNTRUSTED SLOP SCAN FINDINGS ===` block.

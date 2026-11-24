@@ -469,6 +469,12 @@ elif [ "${sandbox_excluded_nothing_committed}" != "1" ] || [ "${DID_COMMIT:-}" =
   clean_marker_reason="committed"
 elif [ -n "${sandbox_excluded_marker_suffix}" ] || [ "${sandbox_excluded_findings:-0}" != "0" ]; then
   clean_marker_reason="sandbox_excluded"
+elif [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/review_unreachable_all.tsv" ] \
+  && awk -F '\t' '$5 == "true" { found = 1 } END { exit !found }' "${RUNTIME_DIR}/review_unreachable_all.tsv" 2>/dev/null; then
+  # Issue #10057: an unreachable security finding (ledger UNREACHABLE_SECURITY
+  # true, kept across rounds even when no reviewer re-raises it) keeps the PR
+  # blocked, so the head is never marked clean while it stands.
+  clean_marker_reason="unreachable_security_hold"
 elif ! [[ "${clean_marker_head}" =~ ^[0-9a-f]{40}$ ]]; then
   clean_marker_reason="head_unavailable"
 elif ! [[ "${clean_marker_base}" =~ ^[0-9a-f]{40}$ ]]; then
