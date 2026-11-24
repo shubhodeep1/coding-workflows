@@ -1103,6 +1103,250 @@ class LeaseGrantEligibility(unittest.TestCase):
 		self.assertNotIn("skip=", h.record())
 
 
+JUDGE_CTX = "ai-review/judge-merge-pending"
+MAXH_ENV = "MERGE_LEASE_MAX_HOLDERS"
+
+
+def _judge_status(st: dict, sha: str, state: str = "success", login: str = "pipeline-bot") -> None:
+	"""Seed the review-blocked judge's merge-decision status (issue #9987)."""
+	st.setdefault("statuses", {}).setdefault(sha, []).insert(0,
+		{"context": JUDGE_CTX, "state": state, "creator": {"login": login}})
+
+
+def _dispatched_workflows(h: _Harness) -> list[str]:
+	return [d[2] for d in h.state.get("dispatched", [])]
+
+
+class JudgeDecisionLeaseGrant(unittest.TestCase):
+	"""Issue #9987: a waiter whose head carries the pipeline's judge
+	merge-decision status is eligible without head-gate success, and its grant
+	dispatches the judge instead of a review run."""
+
+	def _free(self, waiting: list[int], extra_pulls: list[dict] | None = None) -> dict:
+		pulls = [_pull(n) for n in waiting] + (extra_pulls or [])
+		st = {"pulls": pulls, "labels": {str(n): [WAIT] for n in waiting}, "files": {str(n): [f"f{n}.py"] for n in waiting}}
+		_seed_lease(st, _record(3, state="released", paths=""))
+		return st
+
+	def test_waiter_with_a_judge_decision_status_is_granted(self) -> None:
+		st = self._free([5, 6])
+		_head_gate(st, _sha(5), "pending")
+		_judge_status(st, _sha(5))
+		_gates_ok(st, 6)
+		h, out = _p2_tick(st)
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=granted reason=first_in_queue queue_len=2 gate=judge_decision\n", out)
+		self.assertNotIn("outcome=skipped", out)
+		self.assertIn("pr=5", h.record())
+		self.assertIn(WAIT, h.state["labels"]["6"])
+		self.assertIn(("granted", "first_in_queue"), [(r["event"], r["reason"]) for r in _metrics(out)])
+
+	def test_absent_head_gate_with_a_judge_decision_status_is_granted(self) -> None:
+		st = self._free([5])
+		_judge_status(st, _sha(5))
+		_, out = _p2_tick(st)
+		self.assertIn("pr=5 base=main mode=tick outcome=granted reason=first_in_queue queue_len=1 gate=judge_decision\n", out)
+
+	def test_judge_decision_status_from_another_login_is_skipped(self) -> None:
+		for login, sha in (("someone-else", _sha(5)), ("pipeline-bot", "e" * 40)):
+			with self.subTest(login=login, sha=sha):
+				st = self._free([5])
+				_head_gate(st, _sha(5), "pending")
+				_judge_status(st, sha, login=login)
+				h, out = _p2_tick(st)
+				self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=skipped reason=no_head_gate\n", out)
+				self.assertNotIn("outcome=granted", out)
+				self.assertNotIn(WAIT, h.state["labels"]["5"])
+				self.assertNotIn("dispatched", h.state)
+
+	def test_judge_decision_status_not_success_is_skipped(self) -> None:
+		st = self._free([5])
+		_judge_status(st, _sha(5), state="pending")
+		_, out = _p2_tick(st)
+		self.assertIn("pr=5 base=main mode=tick outcome=skipped reason=no_head_gate", out)
+
+	def test_head_gate_failure_wins_over_a_judge_decision(self) -> None:
+		for gate in ("failure", "error"):
+			with self.subTest(gate=gate):
+				st = self._free([5])
+				_head_gate(st, _sha(5), gate)
+				_judge_status(st, _sha(5))
+				h, out = _p2_tick(st)
+				self.assertIn("pr=5 base=main mode=tick outcome=skipped reason=no_head_gate", out)
+				self.assertNotIn("dispatched", h.state)
+
+	def test_pending_head_gate_without_a_judge_decision_is_skipped_as_before(self) -> None:
+		st = self._free([5])
+		_head_gate(st, _sha(5), "pending")
+		h, out = _p2_tick(st)
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=skipped reason=no_head_gate\n", out)
+		self.assertNotIn(WAIT, h.state["labels"]["5"])
+
+	def test_failed_final_ci_still_wins_over_a_judge_decision(self) -> None:
+		st = self._free([5])
+		_judge_status(st, _sha(5))
+		st["check_runs"] = {_sha(5): [{"id": 1, "name": "tests", "status": "completed", "conclusion": "failure"}]}
+		_, out = _p2_tick(st, env={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "tests"})
+		self.assertIn("pr=5 base=main mode=tick outcome=skipped reason=final_ci_failed", out)
+
+	def test_judge_decision_grant_dispatches_the_judge_workflow(self) -> None:
+		st = self._free([5])
+		_head_gate(st, _sha(5), "pending")
+		_judge_status(st, _sha(5))
+		h, out = _p2_tick(st)
+		# A `[pr:<n>]`-titled review wrapper with force_rb_judge=true first, so
+		# the #9983 holder check sees the judge run as live work.
+		self.assertEqual(h.state.get("dispatched"), [["workflow", "run", "ai-review.yml", "--repo", "owner/repo", "-f", "pr_number=5", "-f", "force_rb_judge=true", "-f", "allow_workflow_edits=false"]])
+		self.assertIn("MERGE_TRAIN_DISPATCHED pr=5 workflow=ai-review.yml ref=default head=ai/issue-5", out)
+
+	def test_head_gate_grant_still_dispatches_a_review(self) -> None:
+		st = self._free([5])
+		_gates_ok(st, 5)
+		_judge_status(st, _sha(5))
+		h, out = _p2_tick(st)
+		self.assertIn("pr=5 base=main mode=tick outcome=granted reason=first_in_queue queue_len=1\n", out)
+		self.assertEqual(_dispatched_workflows(h), ["ai-review.yml"])
+
+	def test_failed_judge_dispatch_falls_back_to_one_review_dispatch(self) -> None:
+		st = self._free([5])
+		_judge_status(st, _sha(5))
+		st["fail"] = ["force_rb_judge=true"]
+		h, out = _p2_tick(st)
+		# No force_rb_judge wrapper: the judge-only dispatch workflow.
+		self.assertEqual(h.state.get("dispatched"), [["workflow", "run", "review_rb_judge_dispatch.yml", "--repo", "owner/repo", "-f", "pr_number=5"]])
+		self.assertIn("MERGE_TRAIN_DISPATCHED pr=5 workflow=review_rb_judge_dispatch.yml ref=default head=ai/issue-5", out)
+		self.assertIn("pr=5 base=main mode=tick outcome=granted reason=first_in_queue queue_len=1 gate=judge_decision\n", out)
+		self.assertNotIn("falling back to the review dispatch", out)
+
+	def test_no_judge_wrapper_falls_back_to_one_plain_review_dispatch(self) -> None:
+		st = self._free([5])
+		_judge_status(st, _sha(5))
+		st["fail"] = ["review_rb_judge_dispatch.yml", "force_rb_judge=true"]
+		h, out = _p2_tick(st)
+		self.assertEqual(_dispatched_workflows(h), ["ai-review.yml"])
+		self.assertNotIn("force_rb_judge", " ".join(h.state["dispatched"][0]))
+		self.assertIn("pr=5 base=main mode=tick outcome=granted reason=first_in_queue queue_len=1 gate=judge_decision\n", out)
+		self.assertIn("falling back to the review dispatch", out)
+
+	def test_head_gate_success_from_another_login_ignores_the_judge_decision(self) -> None:
+		st = self._free([5])
+		_head_gate(st, _sha(5), "success", login="someone-else")
+		_judge_status(st, _sha(5))
+		h, out = _p2_tick(st)
+		self.assertIn("pr=5 base=main mode=tick outcome=skipped reason=no_head_gate", out)
+		self.assertNotIn("dispatched", h.state)
+
+	def test_pending_head_gate_from_another_login_ignores_the_judge_decision(self) -> None:
+		for login in ("someone-else", ""):
+			with self.subTest(login=login):
+				st = self._free([5])
+				_head_gate(st, _sha(5), "pending", login=login)
+				_judge_status(st, _sha(5))
+				h, out = _p2_tick(st)
+				self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=skipped reason=no_head_gate\n", out)
+				self.assertNotIn(WAIT, h.state["labels"]["5"])
+				self.assertNotIn("dispatched", h.state)
+
+	def test_revocation_off_grants_as_before_without_the_field(self) -> None:
+		st = self._free([5])
+		_head_gate(st, _sha(5), "pending")
+		_judge_status(st, _sha(5))
+		h, out = _p2_tick(st, env={"MERGE_LEASE_REVOKE_ENABLED": "false"})
+		self.assertIn("pr=5 base=main mode=tick outcome=granted reason=first_in_queue queue_len=1\n", out)
+		self.assertNotIn("gate=", out)
+		self.assertEqual(_dispatched_workflows(h), ["ai-review.yml"])
+
+	def test_tick_reads_are_unchanged(self) -> None:
+		with_judge = self._free([5])
+		_head_gate(with_judge, _sha(5), "pending")
+		_judge_status(with_judge, _sha(5))
+		with_gate = self._free([5])
+		_gates_ok(with_gate, 5)
+		h1, _ = _p2_tick(with_judge)
+		h2, _ = _p2_tick(with_gate)
+		def reads(h: _Harness) -> list[str]:
+			return [c for c in _stable_calls(h.calls) if not c.startswith("gh workflow run")]
+		self.assertEqual(reads(h1), reads(h2))
+		self.assertEqual(sum("/statuses" in c for c in h1.calls), 1, h1.calls)
+
+	def test_multi_holder_grant_carries_the_field_after_holders(self) -> None:
+		st = {"pulls": [_pull(4), _pull(6)], "labels": {"6": [WAIT]}, "files": {"6": ["b.py"]}}
+		_seed_lease(st, _record(4, paths="a.py").replace(f"head={'b' * 40}", f"head={_sha(4)}"))
+		_gates_ok(st, 4)
+		_head_gate(st, _sha(6), "pending")
+		_judge_status(st, _sha(6))
+		h, out = _p2_tick(st, env={MAXH_ENV: "2"})
+		self.assertIn("MERGE_LEASE pr=6 base=main mode=tick outcome=granted reason=first_in_queue queue_len=1 holders=2 gate=judge_decision\n", out)
+		self.assertIn(["workflow", "run", "ai-review.yml", "--repo", "owner/repo", "-f", "pr_number=6", "-f", "force_rb_judge=true", "-f", "allow_workflow_edits=false"], h.state["dispatched"])
+
+	def test_multi_holder_waiter_without_a_judge_decision_is_skipped(self) -> None:
+		st = {"pulls": [_pull(4), _pull(6)], "labels": {"6": [WAIT]}, "files": {"6": ["b.py"]}}
+		_seed_lease(st, _record(4, paths="a.py").replace(f"head={'b' * 40}", f"head={_sha(4)}"))
+		_gates_ok(st, 4)
+		_head_gate(st, _sha(6), "pending")
+		_judge_status(st, _sha(6), login="someone-else")
+		h, out = _p2_tick(st, env={MAXH_ENV: "2"})
+		self.assertIn("pr=6 base=main mode=tick outcome=skipped reason=no_head_gate", out)
+		self.assertNotIn("dispatched", h.state)
+
+	def test_marked_head_is_granted_end_to_end(self) -> None:
+		"""The judge's mark (posted with the pipeline token) is what the tick reads."""
+		st = self._free([5])
+		_head_gate(st, _sha(5), "pending")
+		h = _Harness(st)
+		res = h.lib(f"_pr_judge_merge_pending_mark 5 {_sha(5)} merge_with_followup")
+		self.assertIn(f"JUDGE_MERGE_PENDING pr=5 head={_sha(5)} decision=merge_with_followup outcome=marked reason=lease_wait", res.stdout, res.stderr)
+		res = h.train_fn('_mt_merge_lease_tick "${PRS_JSONL}" ""', {"PRS_JSONL": _p2_jsonl(h.state["pulls"], h.state["labels"])})
+		self.assertIn("pr=5 base=main mode=tick outcome=granted reason=first_in_queue queue_len=1 gate=judge_decision", res.stdout + res.stderr)
+
+
+class JudgeMergePendingMark(unittest.TestCase):
+	"""Issue #9987: _pr_judge_merge_pending_mark posts one head-bound status."""
+
+	def test_posts_one_success_status_with_the_decision(self) -> None:
+		h = _Harness({})
+		res = h.lib(f"_pr_judge_merge_pending_mark 7 {HEAD} merge; echo rc=$?")
+		self.assertIn("rc=0", res.stdout, res.stderr)
+		self.assertIn(f"JUDGE_MERGE_PENDING pr=7 head={HEAD} decision=merge outcome=marked reason=lease_wait", res.stdout)
+		self.assertEqual(h.state["statuses"][HEAD], [{"context": JUDGE_CTX, "state": "success", "creator": {"login": "pipeline-bot"}}])
+		self.assertEqual(len(h.calls), 1, h.calls)
+		self.assertIn("description=Review-blocked judge decided merge; waiting for the merge lease", h.calls[0])
+		self.assertNotIn("target_url", h.calls[0])
+
+	def test_target_url_only_for_a_run_url(self) -> None:
+		good = "https://github.com/owner/repo/actions/runs/123"
+		h = _Harness({})
+		h.lib(f"_pr_judge_merge_pending_mark 7 {HEAD} terminal", {"RUN_URL": good})
+		self.assertIn(f"target_url={good}", h.calls[0])
+		h2 = _Harness({})
+		h2.lib(f"_pr_judge_merge_pending_mark 7 {HEAD} terminal", {"RUN_URL": "https://evil.example/x"})
+		self.assertNotIn("target_url", h2.calls[0])
+
+	def test_invalid_input_posts_nothing(self) -> None:
+		for args in (f"0 {HEAD} merge", "7 abc merge", f"7 {HEAD} fix", f"7 {HEAD} 'merge; x'"):
+			with self.subTest(args=args):
+				h = _Harness({})
+				res = h.lib(f"_pr_judge_merge_pending_mark {args}; echo rc=$?")
+				self.assertIn("outcome=skipped reason=invalid_input", res.stdout)
+				self.assertIn("rc=0", res.stdout)
+				self.assertEqual(h.calls, [])
+
+	def test_revocation_off_posts_nothing(self) -> None:
+		h = _Harness({})
+		res = h.lib(f"_pr_judge_merge_pending_mark 7 {HEAD} merge", {"MERGE_LEASE_REVOKE_ENABLED": "false"})
+		self.assertIn("outcome=disabled reason=switch_off", res.stdout)
+		self.assertEqual(h.calls, [])
+
+	def test_failed_post_warns_and_returns_zero(self) -> None:
+		h = _Harness({"fail": ["/statuses/"]})
+		res = h.lib(f"set -e; _pr_judge_merge_pending_mark 7 {HEAD} merge; echo rc=$?")
+		self.assertIn("rc=0", res.stdout, res.stderr)
+		self.assertIn("::warning::JUDGE_MERGE_PENDING pr=7", res.stdout)
+		self.assertIn("outcome=failed reason=status_post_failed", res.stdout)
+
+	def test_context_name_is_the_contract(self) -> None:
+		self.assertIn('MERGE_LEASE_JUDGE_DECISION_CONTEXT="ai-review/judge-merge-pending"', LIB.read_text())
+
+
 class LeaseSkipList(unittest.TestCase):
 	"""Phase 2: a released PR is passed over until its head SHA changes."""
 

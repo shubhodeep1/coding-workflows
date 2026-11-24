@@ -1450,3 +1450,114 @@ def test_materiality_advisory_posts_with_the_job_token_and_refreshes_with_gh_tok
 	assert "(job token, not resent)." in step
 	# The in-place refresh of an existing PAT-authored advisory keeps GH_TOKEN.
 	assert 'if gh_retry gh api -X PATCH "repos/${{ github.repository }}/issues/comments/${existing_comment_id}"' in step
+
+
+# --- #9987: a lease_wait deferral marks the judge's merge decision ---------
+
+
+JMP_BEGIN = "# BEGIN rb-judge judge-decision lease mark (#9987)"
+JMP_END = "# END rb-judge judge-decision lease mark (#9987)"
+LEASE_WAIT_ELIF = re.compile(r'^([ \t]*)elif \[ "\$\{PR_BASE_FRESHNESS_OUTCOME:-\}" = "lease_wait" \]; then\n', re.MULTILINE)
+JMP_STUB = (
+	"_pr_judge_merge_pending_mark() {\n"
+	'  printf \'%s|%s|%s|%s\\n\' "${PR_CHECKS_REPOSITORY:-}" "$1" "$2" "$3" >> "${JMP_LOG}"\n'
+	'  return "${JMP_RC:-0}"\n'
+	"}\n"
+)
+
+
+def _jmp_helper() -> str:
+	text = _script_text()
+	start = text.index(JMP_BEGIN)
+	return text[start:text.index(JMP_END, start) + len(JMP_END)] + "\n"
+
+
+def _lease_wait_bodies() -> list[str]:
+	"""Each `lease_wait` elif body of the judge's merge sites, in script order."""
+	text = _script_text()
+	bodies = []
+	for m in LEASE_WAIT_ELIF.finditer(text):
+		indent = m.group(1)
+		end = re.compile(rf"^{re.escape(indent)}else\n", re.MULTILINE).search(text, m.end())
+		assert end is not None
+		bodies.append(text[m.end():end.start()])
+	return bodies
+
+
+def _run_jmp(body: str, *, outcome: str = "lease_wait", stub: bool = True, stub_rc: int = 0) -> tuple[subprocess.CompletedProcess[str], list[str], str]:
+	with tempfile.TemporaryDirectory(prefix="test_rb_judge_jmp_") as td:
+		tmp = Path(td)
+		log = tmp / "jmp.log"
+		out = tmp / "github_output.txt"
+		out.write_text("", encoding="utf-8")
+		harness = tmp / "harness.sh"
+		harness.write_text("set -euo pipefail\n" + (JMP_STUB if stub else "") + _jmp_helper() + body + "echo DONE\n", encoding="utf-8")
+		env = {"PATH": os.environ.get("PATH", ""), "JMP_LOG": str(log), "JMP_RC": str(stub_rc), "GITHUB_OUTPUT": str(out),
+			"PR_NUMBER": "42", "REPOSITORY": "o/r", "RB_JUDGED_HEAD_SHA": JUDGED, "PR_BASE_FRESHNESS_OUTCOME": outcome,
+			"MERGE_LEASE_BLOCKER": "7"}
+		proc = subprocess.run(["bash", str(harness)], env=env, text=True, capture_output=True, timeout=60)
+		calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+		return proc, calls, out.read_text(encoding="utf-8")
+
+
+def test_lease_wait_deferral_marks_the_judge_decision_once() -> None:
+	bodies = _lease_wait_bodies()
+	assert len(bodies) == 5, len(bodies)
+	expected = ["merge", "merge", "terminal", "terminal", "merge_with_followup"]
+	for body, decision in zip(bodies, expected):
+		proc, calls, _ = _run_jmp(body + body)
+		assert proc.returncode == 0, proc.stderr
+		assert calls == [f"o/r|42|{JUDGED}|{decision}"], (decision, calls)
+
+
+def test_mark_helper_acts_only_on_lease_wait() -> None:
+	for outcome in ("overlap", "unknown", ""):
+		proc, calls, _ = _run_jmp("rb_judge_mark_merge_pending merge\n", outcome=outcome)
+		assert proc.returncode == 0, proc.stderr
+		assert calls == [], outcome
+
+
+def test_mark_helper_is_called_only_in_lease_wait_branches() -> None:
+	text = _script_text()
+	calls = [m.start() for m in re.finditer(r"^[ \t]+rb_judge_mark_merge_pending ", text, re.MULTILINE)]
+	assert len(calls) == 5
+	in_branches = sum(body.count("rb_judge_mark_merge_pending ") for body in _lease_wait_bodies())
+	assert in_branches == 5
+	# The head-gate status is still posted only right before a merge request.
+	for body in _lease_wait_bodies():
+		assert "review_head_gate_post_status" not in body
+	assert len(re.findall(r"^[ \t]+rb_judge_merge_err_open$", text, re.MULTILINE)) == 3
+
+
+def test_failed_or_missing_mark_never_fails_the_judge() -> None:
+	body = _lease_wait_bodies()[0]
+	proc, calls, _ = _run_jmp(body, stub_rc=1)
+	assert proc.returncode == 0, proc.stderr
+	assert "DONE" in proc.stdout
+	assert len(calls) == 1
+	proc, calls, _ = _run_jmp(body, stub=False)
+	assert proc.returncode == 0, proc.stderr
+	assert "DONE" in proc.stdout
+	assert calls == []
+
+
+def test_merge_with_followup_lease_wait_keeps_its_skip_reason() -> None:
+	body = _lease_wait_bodies()[4]
+	proc, calls, output = _run_jmp(body)
+	assert proc.returncode == 0, proc.stderr
+	assert output.splitlines() == ["judge_skip_reason=base_freshness_unknown"]
+	assert "waits for the merge lease held by or queued for PR #7" in proc.stdout
+	assert len(calls) == 1
+
+
+def test_lease_wait_branches_keep_their_merge_status() -> None:
+	for body in _lease_wait_bodies()[:4]:
+		proc, _, _ = _run_jmp(body + 'echo "RB_MERGE_STATUS=${RB_MERGE_STATUS:-}"\n')
+		assert proc.returncode == 0, proc.stderr
+		assert "RB_MERGE_STATUS=mergeability_pending" in proc.stdout.splitlines()
+
+
+def test_a_deferral_never_counts_as_a_judge_retry() -> None:
+	"""G4 (#9987): the retry count comes only from [judge-fix] commits."""
+	assigned = re.findall(r"^\s*RETRY_COUNT=.*$", _script_text(), re.MULTILINE)
+	assert [a.strip() for a in assigned] == ['RETRY_COUNT="${JUDGE_FIX_COUNT:-0}"']
