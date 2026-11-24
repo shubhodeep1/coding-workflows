@@ -1,0 +1,19 @@
+{
+  "discovered_at": "2026-11-24T19:57:39Z",
+  "issue_number": 10062,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=README.md:473; cited_path=README.md, agents.d/9920-github-ai-plan-grant-write.md; files_touched=.github/workflows/unblock_judge.yml, agents.d/10062-unblock-nothing-to-implement-verified-close.md, changelog.d/10062-unblock-nothing-to-implement-verified-close.md, scripts/unblock_judge.sh, tests/test_unblock_judge.py.",
+  "phase": "review_autofix",
+  "pr_number": 10068,
+  "record_id": "lesson_20261124195739_fb3579b952",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "README.md, agents.d/9920-github-ai-plan-grant-write.md",
+    "README.md",
+    ".github/workflows/unblock_judge.yml",
+    "agents.d/10062-unblock-nothing-to-implement-verified-close.md",
+    "changelog.d/10062-unblock-nothing-to-implement-verified-close.md",
+    "scripts/unblock_judge.sh",
+    "tests/test_unblock_judge.py"
+  ]
+}
