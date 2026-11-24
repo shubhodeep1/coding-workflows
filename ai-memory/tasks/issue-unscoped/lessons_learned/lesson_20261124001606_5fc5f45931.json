@@ -1,0 +1,26 @@
+{
+  "discovered_at": "2026-11-24T00:16:06Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=.github/actions/install-claude/action.yml:32; cited_path=.github/actions/install-claude/action.yml; files_touched=.github/workflows/ci.yml, .github/workflows/clarify.yml, .github/workflows/implement.yml, .github/workflows/orchestrate_clarify_respond.yml, .github/workflows/orchestrate_poll.yml, .github/workflows/plan.yml, .github/workflows/review_autofix.yml, .github/workflows/validate.yml, .github/workflows/workflow-log-analysis.yml, probably_unnecessary_but_read_if_stuck.md, tests/test_ci_actionlint_cache.py, tests/test_workspace_cache_maintenance.py, tests/test_workspace_init.py.",
+  "phase": "review_autofix",
+  "pr_number": 10002,
+  "record_id": "lesson_20261124001606_5fc5f45931",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/actions/install-claude/action.yml",
+    ".github/workflows/ci.yml",
+    ".github/workflows/clarify.yml",
+    ".github/workflows/implement.yml",
+    ".github/workflows/orchestrate_clarify_respond.yml",
+    ".github/workflows/orchestrate_poll.yml",
+    ".github/workflows/plan.yml",
+    ".github/workflows/review_autofix.yml",
+    ".github/workflows/validate.yml",
+    ".github/workflows/workflow-log-analysis.yml",
+    "probably_unnecessary_but_read_if_stuck.md",
+    "tests/test_ci_actionlint_cache.py",
+    "tests/test_workspace_cache_maintenance.py",
+    "tests/test_workspace_init.py"
+  ]
+}
