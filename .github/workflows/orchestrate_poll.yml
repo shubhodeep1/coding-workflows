@@ -1095,6 +1095,7 @@ jobs:
       - name: Replay failed trusted reclarify commands
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED: ${{ vars.SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED || 'true' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
@@ -1478,6 +1479,7 @@ jobs:
         if: steps.find_tracking.outputs.has_work == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED: ${{ vars.SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED || 'true' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
@@ -1522,6 +1524,8 @@ jobs:
           ORCH_IMPLEMENTS_MARKER_ENABLED: ${{ vars.ORCH_IMPLEMENTS_MARKER_ENABLED || 'true' }}
           PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}
           NEEDS_HUMAN_DIGEST_ENABLED: ${{ vars.NEEDS_HUMAN_DIGEST_ENABLED || 'true' }}
+          # PR #9839: release a PR's head-bound ai:needs-human latch once its head moved; false turns it off.
+          NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED: ${{ vars.NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED || 'true' }}
           UNBLOCK_MAX_ROUNDS_PER_ITEM: ${{ vars.UNBLOCK_MAX_ROUNDS_PER_ITEM || '3' }}
           # Closes open unblock fix-ups whose source issue is closed (scripts/orphan_fixup_close.py); false turns it off.
           ORPHAN_FIXUP_CLOSE_ENABLED: ${{ vars.ORPHAN_FIXUP_CLOSE_ENABLED || 'true' }}
@@ -1557,6 +1561,13 @@ jobs:
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
           HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}
+          # Issue #9732: standalone attempt_merge waits on the review auto-merge rule;
+          # self-repo ci.yml has no pull_request trigger, so the wait dispatches final CI (same value as the sweep).
+          STALL_MERGE_REQUIRED_CHECKS_ENABLED: ${{ vars.STALL_MERGE_REQUIRED_CHECKS_ENABLED || 'true' }}
+          REVIEW_FINAL_CI_WORKFLOW: ${{ github.repository == 'shubhodeep1/coding-workflows' && 'ci.yml' || '' }}
+          # Same required-check resolution as the review auto-merge path (review_autofix.yml).
+          AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
+          AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
           # Gap cap between main -> integration syncs (run-volume plan item 3); 0 syncs every tick.
           INTEGRATION_SYNC_MIN_INTERVAL_SECS: ${{ vars.INTEGRATION_SYNC_MIN_INTERVAL_SECS || '86400' }}
           HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED: ${{ vars.HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED || 'true' }}
@@ -1740,6 +1751,7 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED: ${{ vars.SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED || 'true' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
@@ -1778,6 +1790,8 @@ jobs:
           ORCH_IMPLEMENTS_MARKER_ENABLED: ${{ vars.ORCH_IMPLEMENTS_MARKER_ENABLED || 'true' }}
           PREPUSH_TEST_GATE_MODE: ${{ vars.PREPUSH_TEST_GATE_MODE || 'repair' }}
           NEEDS_HUMAN_DIGEST_ENABLED: ${{ vars.NEEDS_HUMAN_DIGEST_ENABLED || 'true' }}
+          # PR #9839: release a PR's head-bound ai:needs-human latch once its head moved; false turns it off.
+          NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED: ${{ vars.NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED || 'true' }}
           UNBLOCK_MAX_ROUNDS_PER_ITEM: ${{ vars.UNBLOCK_MAX_ROUNDS_PER_ITEM || '3' }}
           # Closes open unblock fix-ups whose source issue is closed (scripts/orphan_fixup_close.py); false turns it off.
           ORPHAN_FIXUP_CLOSE_ENABLED: ${{ vars.ORPHAN_FIXUP_CLOSE_ENABLED || 'true' }}
@@ -1811,6 +1825,13 @@ jobs:
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
           HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}
+          # Issue #9732: standalone attempt_merge waits on the review auto-merge rule;
+          # self-repo ci.yml has no pull_request trigger, so the wait dispatches final CI (same value as the sweep).
+          STALL_MERGE_REQUIRED_CHECKS_ENABLED: ${{ vars.STALL_MERGE_REQUIRED_CHECKS_ENABLED || 'true' }}
+          REVIEW_FINAL_CI_WORKFLOW: ${{ github.repository == 'shubhodeep1/coding-workflows' && 'ci.yml' || '' }}
+          # Same required-check resolution as the review auto-merge path (review_autofix.yml).
+          AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
+          AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
           # Gap cap between main -> integration syncs (run-volume plan item 3); 0 syncs every tick.
           INTEGRATION_SYNC_MIN_INTERVAL_SECS: ${{ vars.INTEGRATION_SYNC_MIN_INTERVAL_SECS || '86400' }}
           HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED: ${{ vars.HEAL_TEST_ONLY_AUTO_APPROVE_ENABLED || 'true' }}
@@ -1946,6 +1967,7 @@ jobs:
         if: ${{ !cancelled() && steps.find_tracking.outcome == 'success' && steps.find_tracking.outputs.has_work != 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED: ${{ vars.SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED || 'true' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
@@ -1954,6 +1976,8 @@ jobs:
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           UNBLOCK_JUDGE_ENABLED: ${{ vars.UNBLOCK_JUDGE_ENABLED || 'true' }}
           NEEDS_HUMAN_DIGEST_ENABLED: ${{ vars.NEEDS_HUMAN_DIGEST_ENABLED || 'true' }}
+          # PR #9839: release a PR's head-bound ai:needs-human latch once its head moved; false turns it off.
+          NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED: ${{ vars.NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED || 'true' }}
           UNBLOCK_MAX_ROUNDS_PER_ITEM: ${{ vars.UNBLOCK_MAX_ROUNDS_PER_ITEM || '3' }}
           # Closes open unblock fix-ups whose source issue is closed (scripts/orphan_fixup_close.py); false turns it off.
           ORPHAN_FIXUP_CLOSE_ENABLED: ${{ vars.ORPHAN_FIXUP_CLOSE_ENABLED || 'true' }}
