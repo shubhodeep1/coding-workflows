@@ -434,6 +434,31 @@ def test_release_run_started_during_drain_is_cancelled(fx: Fixture) -> None:
 	assert fx.remote_peel("stable") == fx.sha["v1.45.0"]
 
 
+def test_wedged_queued_release_run_does_not_block_the_drain(fx: Fixture) -> None:
+	# Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS cannot
+	# be cancelled and never starts; it must not end the rollback in
+	# release_still_running. A fresh queued run is still cancelled.
+	from datetime import datetime, timedelta, timezone
+
+	def iso(hours: int) -> str:
+		return (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+	wedged = {"id": 43095142301, "status": "queued", "created_at": iso(25), "path": ".github/workflows/mark-stable.yml"}
+	fresh = {"id": 908, "status": "queued", "created_at": iso(1), "path": ".github/workflows/mark-stable.yml"}
+	fx.state["runs"] = {"mark-stable.yml": [[wedged, fresh], [wedged]]}
+	proc, state, _ = fx.run({"STABLE_ROLLBACK_TARGET_VERSION": "v1.45.0", "STABLE_ROLLBACK_CANCEL_WAIT_SECS": "2"})
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert state["cancels"] == ["908"]
+	assert "guard=rollback_stable_drain" in proc.stderr
+	assert fx.remote_peel("stable") == fx.sha["v1.45.0"]
+	# The filter's kill switch restores the strict drain.
+	fx.state["runs"] = {"mark-stable.yml": [[wedged]]}
+	fx.state.pop("hold_file", None)
+	proc, _, _ = fx.run({"STABLE_ROLLBACK_TARGET_VERSION": "v1.44.0", "STABLE_ROLLBACK_CANCEL_WAIT_SECS": "1", "ZOMBIE_RUN_MAX_QUEUED_HOURS": "0"})
+	assert proc.returncode == 1
+	assert "STABLE_ROLLBACK outcome=release_still_running active_runs=1" in proc.stdout
+
+
 def test_dry_run_changes_nothing(fx: Fixture) -> None:
 	proc, state, events = fx.run({"STABLE_ROLLBACK_DRY_RUN": "true"})
 	assert proc.returncode == 0, proc.stdout + proc.stderr

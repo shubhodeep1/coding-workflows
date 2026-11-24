@@ -37,6 +37,8 @@ GUARD_SITES = {
 	"scripts/promote_main_cycle.sh": ["promote_cycle_self", "promote_cycle_gate_idle"],
 	"scripts/apply_analysis_on_main.sh": ["apply_analysis_orchestrate_in_flight"],
 	"scripts/worktree_registry.sh": ["worktree_registry_active_runs"],
+	# Drain of in-flight release runs before a stable rollback (#9342).
+	"scripts/rollback_stable.sh": ["rollback_stable_drain"],
 	# Body of test-and-mark-stable.yml "Phase 2: Wait for plan to complete".
 	"scripts/stable_e2e_step_wait_plan.sh": ["stable_gate_plan_runs"],
 }

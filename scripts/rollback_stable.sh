@@ -69,6 +69,8 @@
 #   STABLE_ROLLBACK_CANCEL_POLL_SECS    default 10
 #   STABLE_ROLLBACK_MAX_CANDIDATES      default 10
 #   STABLE_ROLLBACK_CONSUMER_FILE       default .github/ai/consumer_repos.json
+#   ZOMBIE_RUN_MAX_QUEUED_HOURS         default 24 (gh_helpers.sh); queued release
+#                                       runs older than this are not drained (#9473)
 #   STABLE_HOLD_TOKEN                   default '' (falls back to GH_TOKEN); the
 #                                       workflow passes github.token so hold
 #                                       writes trigger no workflow
@@ -79,6 +81,21 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/gh_helpers.sh" 2>/dev/null || true
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+# Issue #9473: wedged-queued run filter from gh_helpers.sh. When the helpers
+# could not be sourced, these no-op fallbacks keep every queued run active.
+declare -F zombie_queued_cutoff_epoch >/dev/null 2>&1 || zombie_queued_cutoff_epoch()
+{
+	printf '0'
+}
+declare -F zombie_queued_jq_def >/dev/null 2>&1 || zombie_queued_jq_def()
+{
+	printf '%s\n' 'def is_wedged_queued($cutoff): false;'
+}
+declare -F zombie_queued_log_ignored >/dev/null 2>&1 || zombie_queued_log_ignored()
+{
+	cat >/dev/null 2>&1 || true
+	return 0
+}
 source "${SCRIPT_DIR}/tg_helpers.sh" 2>/dev/null || true
 type tg_send_msg >/dev/null 2>&1 || tg_send_msg() { :; }
 
@@ -370,11 +387,19 @@ if ! hold set --from "${ROLLBACK_FROM}" --to "${ROLLBACK_TO}" --reason "${ROLLBA
 fi
 
 # active_release_run_ids <workflow_file>: prints active run ids; 1 on error.
+# A queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is wedged: GitHub
+# refuses to cancel it and it never starts (issue #9473), so it is left out
+# (ZOMBIE_RUN_IGNORED ... guard=rollback_stable_drain). Counting it would end
+# every rollback in release_still_running.
+rollback_zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+[[ "${rollback_zq_cutoff}" =~ ^[0-9]+$ ]] || rollback_zq_cutoff=0
+rollback_zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
 active_release_run_ids()
 {
 	local runs_json
 	runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/$1/runs?per_page=30")" || return 1
-	printf '%s' "${runs_json}" | jq -r '.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending") | .id | tostring'
+	zombie_queued_log_ignored rollback_stable_drain "${rollback_zq_cutoff}" <<< "${runs_json}"
+	printf '%s' "${runs_json}" | jq -r --argjson zq_cutoff "${rollback_zq_cutoff}" "${rollback_zq_def}"'[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending") | select(is_wedged_queued($zq_cutoff) | not) | .id | tostring] | .[]'
 }
 
 # cancel_new_release_runs <workflow_file> <ids>: one cancel POST per run id
