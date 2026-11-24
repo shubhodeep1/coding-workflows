@@ -400,6 +400,22 @@ def test_poller_replays_automated_release_source_as_source_zero() -> None:
 	assert _comment_posts(writes) == ["/reclarify [auto-requeued-by-poller]\n<!-- ai:clarify-rate-limit-replay:v1 run=900 source=11 -->"], result.stdout
 
 
+def test_poller_chained_automated_rate_limit_replay_keeps_source_zero() -> None:
+	now = time.time()
+	# Replay 1 (source=0) was itself rate-limited: the new marker names it.
+	rows = [_user(11, "/reclarify [auto-requeued-by-poller]\n<!-- ai:clarify-rate-limit-replay:v1 run=800 source=0 -->", now - 7300, login=LOGIN),
+		_rl_marker(12, now - 7200, now - 7000)]
+	result, writes = _run_poller(rows, extra_env={"FAKE_USER_LOGIN": LOGIN})
+	assert _comment_posts(writes) == ["/reclarify [auto-requeued-by-poller]\n<!-- ai:clarify-rate-limit-replay:v1 run=900 source=0 -->"], result.stdout
+	assert "outcome=requeued attempt=2/3" in result.stdout
+	# A chained replay of a human source keeps human semantics.
+	rows = [_user(10, "/reclarify", now - 7400),
+		_user(11, "/reclarify [auto-requeued-by-poller]\n<!-- ai:clarify-rate-limit-replay:v1 run=800 source=10 -->", now - 7300, login=LOGIN),
+		_rl_marker(12, now - 7200, now - 7000)]
+	result, writes = _run_poller(rows, extra_env={"FAKE_USER_LOGIN": LOGIN})
+	assert _comment_posts(writes) == ["/reclarify [auto-requeued-by-poller]\n<!-- ai:clarify-rate-limit-replay:v1 run=900 source=11 -->"], result.stdout
+
+
 def test_clarify_route_classifies_rate_limit_replay() -> None:
 	text = CLARIFY.read_text(encoding="utf-8")
 	block = text[text.index("# BEGIN rate-limit replay classification (#10031)"):text.index("# END rate-limit replay classification (#10031)")]
@@ -695,6 +711,22 @@ def test_review_requeue_counts_gate_reruns_without_requeue_markers() -> None:
 	run = _run_pass([_row(9)], [_node(9, comments)])
 	assert run["dispatches"] == []
 	assert "outcome=escalated" in run["lines"][0] and "attempts=3/3" in run["lines"][0]
+
+
+def test_review_requeue_counts_unknown_head_reruns_without_requeue_markers() -> None:
+	past = time.time() - 3600
+	# Re-dispatched (workflow_dispatch) gate runs have no PR head SHA and write
+	# head=unknown; with every requeue marker write failed they still count.
+	comments = [("github-actions", _gate_body(1, past))] + [("github-actions", _gate_body(r, past, head="unknown")) for r in (2, 3, 4)]
+	run = _run_pass([_row(9)], [_node(9, comments)])
+	assert run["dispatches"] == []
+	assert "outcome=escalated" in run["lines"][0] and "attempts=3/3" in run["lines"][0]
+	# Unknown-head markers before a marker that names another head do not count.
+	older = [("github-actions", _gate_body(r, past, head="unknown")) for r in (1, 2, 3)]
+	comments = older + [("github-actions", _gate_body(4, past, head=HEAD_B)), ("github-actions", _gate_body(5, past, head="unknown"))]
+	run = _run_pass([_row(9)], [_node(9, comments)])
+	assert run["dispatches"] == ["9 feature/9"]
+	assert "attempts=0/3" in run["lines"][0]
 
 
 def test_review_requeue_ignores_out_of_range_reset() -> None:

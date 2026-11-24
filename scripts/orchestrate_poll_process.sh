@@ -266,6 +266,8 @@ _replay_rate_limited_clarify() {
   # partial-delivery release, the poller replay of one, or a source=none
   # capacity-wait replay) replays as source=0, which clarify.yml clarify_route
   # restarts without the human-answer marker; a human /reclarify keeps its id.
+  # The poller's own earlier source=0 rate-limit replay is automated as well,
+  # so a chained rate limit keeps the automated semantics on every attempt.
   rl_replay_source="${source}"
   if [ "${event}" != "issue_comment" ] || [ "${source}" = "0" ]; then
     rl_replay_source=0
@@ -278,7 +280,8 @@ _replay_rate_limited_clarify() {
       or ($l[0] == "/reclarify [auto-requeued-by-capacity-wait]" and ($l[-1] | test("^<!-- ai:claude-capacity-wait-replay:v1 source=none run=[0-9]+ -->$")))
       or (($l | length) == 2 and $l[0] == "/reclarify [auto-requeued-by-poller]" and ($l[1] | test("^<!-- ai:reclarify-replay:v1 source=[1-9][0-9]* -->$"))
         and (($l[1] | ltrimstr("<!-- ai:reclarify-replay:v1 source=") | rtrimstr(" -->") | tonumber) as $s
-        | any($all[]; .id == $s and .user.login == $login and (.body | norm | rel))))))' >/dev/null 2>&1; then
+        | any($all[]; .id == $s and .user.login == $login and (.body | norm | rel))))
+      or (($l | length) == 2 and $l[0] == "/reclarify [auto-requeued-by-poller]" and ($l[1] | test("^<!-- ai:clarify-rate-limit-replay:v1 run=[1-9][0-9]* source=0 -->$")))))' >/dev/null 2>&1; then
     rl_replay_source=0
   fi
   now="$(date -u +%s)"
@@ -40450,8 +40453,14 @@ _review_gate_rate_limit_requeue_decide() {
 		| $c[($i + 1):] as $after
 		| ([$c[] | select((.a // "") == $login and (.gate_retry | type) == "object" and ($e.oid | sha) and .gate_retry.head == $e.oid)] | length) as $retries
 		# Each further rc=75 gate marker on this head also counts, so a requeue
-		# whose marker write failed still uses up an attempt.
-		| ([$c[] | select((.a // "") == "github-actions" and (.gate | valid_gate) and ($e.oid | sha) and .gate.head == $e.oid)] | length - 1) as $gate_reruns
+		# whose marker write failed still uses up an attempt. Re-dispatched
+		# (workflow_dispatch) gate runs have no PR head SHA and write
+		# head=unknown, so those count too, but only after the newest marker
+		# that names a different head (over-counting escalates early: fail safe).
+		| ([range(0; $c | length) | select(
+			((($c[.].a // "") == "github-actions") and ($c[.].gate | valid_gate) and ($c[.].gate.head | sha) and $c[.].gate.head != $e.oid)
+			or ((($c[.].a // "") == $login) and ($c[.].gate_retry | type) == "object" and ($c[.].gate_retry.head | sha) and $c[.].gate_retry.head != $e.oid))] | last // -1) as $head_start
+		| ([$c[($head_start + 1):][] | select((.a // "") == "github-actions" and (.gate | valid_gate) and ($e.oid | sha) and ((.gate.head == $e.oid) or (.gate.head | sha | not)))] | length - 1) as $gate_reruns
 		| ([$retries, $gate_reruns, 0] | max) as $attempts
 		| "|\($g.run)|\($g.reset)|\($attempts)" as $tail
 		| if any($after[]; (.a // "") == $login and (.gate_retry | type) == "object" and .gate_retry.run == $g.run) then "already_requeued|\($tail)"
