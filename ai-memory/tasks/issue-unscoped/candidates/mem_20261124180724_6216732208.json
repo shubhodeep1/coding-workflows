@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/claude_pool_daily_usage.sh:daily_usage_send retry_hours validation (and daily_usage_start_hour by symmetry), lines ~167 and ~71 | HARDENING_SUGGESTION (not a finding; HARDENING_RISK_SCORE: 1)\n  PROBLEM: The regex `^0*[0-9]{1,2}$` limits the value to 1-2 significant digits but does not limit the total string length, so a value with 30+ leading zeros still matches.\n  WHY: The reviewer says bash arithmetic `$((10#...))` \"could overflow on a 64-bit bash without `--enable-arb-int`, potentially wrapping to a negative number that passes both `-gt 23` and the `[ retry_hours -gt 0 ]` deferral guard\". Suggested fix: `[[ ${#retry_hours} -le 6 ]] && [[ \"${retry_hours}\" =~ ^0*[0-9]{1,2}$ ]] && [ \"$((10#${retry_hours}))\" -le 23 ]`, about 2 lines per function. The reviewer rates it \"minor improvement; depends on bash compile flags and env var from trusted workflow var; not a real production trigger\". No issues were reported in any review category.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "06d81cd9cc1cb6ba403602c0bdc0416d71a977ed06babfd9f31a101ad163e6ea",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9995,
+    "run_id": "45431547423",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45431547423",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124180724_6216732208",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9995,
+    "run_id": "45431547423"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-24T18:07:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
