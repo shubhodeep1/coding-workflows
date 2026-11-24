@@ -114,6 +114,11 @@ def test_template_runs_from_base_branch_and_forwards_only_gh_pat() -> None:
 	triggers = template[True]
 	assert set(triggers) == {"pull_request_target", "push"}
 	assert triggers["push"]["branches"] == ["**"]
+	# A push starts a run only when it changes a workflow file; the
+	# pull_request_target run posts the required status and is never filtered.
+	assert triggers["push"]["paths"] == [".github/workflows/**"]
+	assert set(triggers["push"]) == {"branches", "paths"}
+	assert triggers["pull_request_target"] == {"types": ["opened", "synchronize", "reopened"]}
 	assert template["permissions"] == {"contents": "read", "statuses": "write"}
 	job = template["jobs"]["integrity"]
 	assert job["uses"] == "shubhodeep1/coding-workflows/.github/workflows/workflow_integrity.yml@stable"
@@ -155,12 +160,87 @@ def test_reusable_workflow_wiring() -> None:
 	assert compare["if"] == "steps.verify_manifest.outcome == 'success'"
 
 
+FETCH_BEGIN = "          # BEGIN sync manifest fetch (byte-identical in update_workflows.yml and workflow_integrity.yml; tests pin it)\n"
+FETCH_END = "          # END sync manifest fetch\n"
+
+
+def _fetch_block(text: str) -> str:
+	assert text.count(FETCH_BEGIN) == 1 and text.count(FETCH_END) == 1
+	return text.split(FETCH_BEGIN, 1)[1].split(FETCH_END, 1)[0]
+
+
+def test_manifest_fetch_block_is_a_copy_of_the_sync_fetch_block() -> None:
+	# The rate-limit aware manifest fetch (#9937) is the same inline shell in
+	# both workflows; neither may source upstream code before verification.
+	ours = _fetch_block(WORKFLOW.read_text(encoding="utf-8"))
+	sync = _fetch_block(UPDATE_WORKFLOWS.read_text(encoding="utf-8"))
+	assert ours.strip()
+	assert ours == sync
+	assert "ERR_SYNC_MANIFEST_FETCH_FAILED" in ours
+	assert "source " not in ours
+	text = WORKFLOW.read_text(encoding="utf-8")
+	verify = text[text.index("      - name: Verify signed sync manifest"):text.index("      - name: Compare managed wrappers")]
+	assert FETCH_BEGIN in verify
+	assert "gh release download" not in verify
+
+
+def test_integrity_job_timeout_covers_rate_limit_wait() -> None:
+	text = WORKFLOW.read_text(encoding="utf-8")
+	minutes = int(re.search(r"^    timeout-minutes: (\d+)$", text, re.M).group(1))
+	assert 30 <= minutes <= 360
+
+
 def test_push_runs_never_post_the_pull_request_status() -> None:
 	text = WORKFLOW.read_text(encoding="utf-8")
 	publish = text[text.index("      - name: Publish integrity result"):]
 	assert 'if [ "${MODE}" = "pull_request" ]' in publish
 	resolve = text[text.index("      - name: Resolve integrity inputs"):text.index("      - name: Read consumer workflow trees")]
 	assert 'if [ "${MODE}" = "pull_request" ]; then' in resolve
+
+
+def test_push_path_filter_covers_every_managed_candidate(checker, consumer, tmp_path) -> None:
+	"""The wrapper's push trigger is filtered to `.github/workflows/**`. That
+	is safe only while the checker can never report a managed candidate
+	outside that directory: a push to an existing branch that changes none of
+	its files must be one the unfiltered run would have ended at
+	`no_managed_wrapper_changed`. This test covers that same-branch case only.
+	A push that creates a branch, or whose old tip is gone, is compared with
+	the default branch, so the filter can skip a push run that would have
+	reported a stale wrapper; the unfiltered pull_request_target run still
+	judges that branch."""
+	text = WORKFLOW.read_text(encoding="utf-8")
+	# The checker lists one directory of the tree and keeps its top-level files.
+	assert text.count('"ls-tree"') == 1
+	assert 'git(repo, "ls-tree", "-z", "--full-tree", sha, "--", ".github/workflows/")' in text
+	assert 'if path.decode("utf-8", "replace") != f".github/workflows/{name}" or not NAME_RE.match(name):' in text
+
+	upstream_caller = "jobs:\n  x:\n    uses: shubhodeep1/coding-workflows/.github/workflows/review.yml@main\n"
+	base = _commit(consumer, _pristine(), "base")
+	# Upstream callers and wrapper-named files everywhere except the top
+	# level of .github/workflows/: none of them is a candidate.
+	for outside in (
+		"ai-plan.yml",
+		"ai-workflow-integrity.yml",
+		".github/ai-update-workflows.yml",
+		".github/workflows/nested/ai-plan.yml",
+		"workflows/mine.yml",
+	):
+		target = consumer / outside
+		target.parent.mkdir(parents=True, exist_ok=True)
+		target.write_text(upstream_caller, encoding="utf-8")
+	head = _commit(consumer, {}, "files outside the workflows directory")
+	changed_paths = _git(consumer, "diff", "--name-only", base, head).splitlines()
+	assert len(changed_paths) == 5
+	assert not [p for p in changed_paths if p.startswith(".github/workflows/") and p.count("/") == 2]
+	result = _run(checker, "detect", str(_extract(checker, consumer, base, tmp_path / "b")), str(_extract(checker, consumer, head, tmp_path / "h")))
+	assert result.returncode == 0, result.stderr
+	assert result.stdout.strip() == ""
+
+	# A managed wrapper change is always a path the filter matches.
+	tampered = _commit(consumer, {"ai-plan.yml": _pristine()["ai-plan.yml"] + "# local tweak\n"}, "tamper")
+	result = _run(checker, "detect", str(_extract(checker, consumer, head, tmp_path / "h2")), str(_extract(checker, consumer, tampered, tmp_path / "t")))
+	assert result.stdout.strip() == "ai-plan.yml"
+	assert _git(consumer, "diff", "--name-only", head, tampered).splitlines() == [".github/workflows/ai-plan.yml"]
 
 
 # ── Behaviour of the inline checker ──────────────────────────────────────

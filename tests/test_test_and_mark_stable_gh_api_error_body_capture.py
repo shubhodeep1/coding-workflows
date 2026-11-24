@@ -22,9 +22,13 @@ import tempfile
 import sys
 from pathlib import Path
 
-import pytest
-
-yaml = pytest.importorskip("yaml")
+# PyYAML is optional: without it `_step` reads the step's `run: |` block
+# from the workflow text, so these tests still run in a container that has
+# no PyYAML (instead of the whole module being skipped).
+try:
+	import yaml
+except ImportError:  # pragma: no cover - depends on the environment
+	yaml = None
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
@@ -57,7 +61,42 @@ exit 1
 '''
 
 
+def _step_from_text(job: str, step_id: str) -> str:
+	"""Return a step's literal `run: |` body by scanning the workflow text.
+
+	Jobs sit at 2-space indent, steps at `      - `, step keys at 8 spaces
+	and the run body at 10 spaces, as in the shipped workflow.
+	"""
+	lines = WORKFLOW.read_text(encoding="utf-8").split("\n")
+	try:
+		start = lines.index(f"  {job}:")
+	except ValueError:
+		raise AssertionError(f"job {job} not found") from None
+	end = next(
+		(k for k in range(start + 1, len(lines)) if re.match(r"^  [A-Za-z0-9_-]+:\s*$", lines[k])),
+		len(lines),
+	)
+	try:
+		id_line = lines.index(f"        id: {step_id}", start, end)
+	except ValueError:
+		raise AssertionError(f"step {job}.{step_id} not found") from None
+	k = id_line + 1
+	while k < end and not lines[k].startswith("      - ") and lines[k] != "        run: |":
+		k += 1
+	assert k < end and lines[k] == "        run: |", f"step {job}.{step_id} has no literal run block"
+	body = []
+	for line in lines[k + 1:end]:
+		if line.strip() and not line.startswith(" " * 10):
+			break
+		body.append(line[10:])
+	while body and not body[-1].strip():
+		body.pop()
+	return "\n".join(body) + "\n"
+
+
 def _step(job: str, step_id: str) -> str:
+	if yaml is None:
+		return _step_from_text(job, step_id)
 	doc = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
 	for step in doc["jobs"][job]["steps"]:
 		if step.get("id") == step_id:
@@ -109,10 +148,9 @@ def test_clarify_negative_create_keeps_real_run_id():
 
 
 def test_alt_model_create_leaves_baseline_empty_on_error_body():
-	# A failed read leaves the baseline empty, not "0": the capture step
-	# treats an empty clarify/plan baseline as "read failed" and skips that
-	# phase, because `id > 0` could match an older, unrelated run on main
-	# (#9797). The error body must never reach the output either way.
+	# Stable keeps #9800's (#9797) rule for the alt-model baselines: a failed
+	# read leaves pre_<wf>_run_id empty, never 0, so the capture step skips
+	# instead of matching an older, unrelated run with `id > 0`.
 	outputs = _run_step(_step("e2e-alt-model-test", "create"), "error")
 	for wf in ("clarify", "plan", "implement", "review_autofix"):
 		assert outputs[f"pre_{wf}_run_id"] == ""

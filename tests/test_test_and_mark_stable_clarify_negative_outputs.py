@@ -19,7 +19,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-import yaml
+# PyYAML is optional: without it `_step_script` reads the step's `run: |`
+# block from the workflow text, so these tests still run in a container
+# that has no PyYAML.
+try:
+	import yaml
+except ImportError:  # pragma: no cover - depends on the environment
+	yaml = None
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -90,7 +96,43 @@ STUB_FAKES = (
 OUTPUT_LINE_RE = re.compile(r"^[a-z_]+=[0-9]+$")
 
 
+def _step_script_from_text(step_id: str, job: str) -> str:
+	"""Return a step's literal `run: |` body by scanning the workflow text.
+
+	Jobs sit at 2-space indent, steps at `      - `, step keys at 8 spaces
+	and the run body at 10 spaces, as in the shipped workflow.
+	"""
+	lines = WORKFLOW.read_text(encoding="utf-8").split("\n")
+	try:
+		start = lines.index(f"  {job}:")
+	except ValueError:
+		raise AssertionError(f"job {job!r} not found") from None
+	end = next(
+		(k for k in range(start + 1, len(lines)) if re.match(r"^  [A-Za-z0-9_-]+:\s*$", lines[k])),
+		len(lines),
+	)
+	try:
+		id_line = lines.index(f"        id: {step_id}", start, end)
+	except ValueError:
+		raise AssertionError(f"step {step_id!r} not found in job {job!r}") from None
+	k = id_line + 1
+	while k < end and not lines[k].startswith("      - ") and lines[k] != "        run: |":
+		k += 1
+	if not (k < end and lines[k] == "        run: |"):
+		raise AssertionError(f"step {step_id!r} in job {job!r} has no literal run block")
+	body = []
+	for line in lines[k + 1:end]:
+		if line.strip() and not line.startswith(" " * 10):
+			break
+		body.append(line[10:])
+	while body and not body[-1].strip():
+		body.pop()
+	return "\n".join(body) + "\n"
+
+
 def _step_script(step_id: str, job: str = JOB) -> str:
+	if yaml is None:
+		return _step_script_from_text(step_id, job)
 	workflow = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))
 	for step in workflow["jobs"][job]["steps"]:
 		if step.get("id") == step_id:
@@ -270,12 +312,13 @@ class ClarifyNegativeOutputsTest(unittest.TestCase):
 		)
 		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 		outputs = self._outputs()
-		# The step also writes non-numeric `created_after` and `title` lines,
-		# so only run ids and the issue number must be digits. Every line must
-		# still be `key=value`, which a multi-line error body would break.
+		# The step also writes non-numeric `created_after=` and `title=`, so
+		# every line must be a `key=value` line (a leaked multi-line error
+		# body would add lines without one), and only the run-id and issue
+		# number keys guarded by #9797 must hold digits or nothing.
 		for line in outputs:
 			self.assertRegex(line, r"^[a-z_]+=")
-			if line.startswith(("pre_", "issue_number=")):
+			if line.startswith("pre_") or line.startswith("issue_number="):
 				self.assertRegex(line, r"^[a-z_]+=[0-9]*$")
 		self.assertIn("pre_clarify_run_id=", outputs)
 		self.assertIn("issue_number=9790", outputs)

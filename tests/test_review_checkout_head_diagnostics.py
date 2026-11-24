@@ -327,6 +327,17 @@ FAKE_SHORT_DATE = """date() {
 """
 
 
+# A `date` that goes backwards on every call, like `date +%s%3N` on the
+# ubuntu-26.04 runners (Rust uutils coreutils, #9240 / #9375).
+BACKWARDS_DATE_FUNCTION = """date() {
+  local fake_date_now=1800000000000
+  if [ -f "${FAKE_DATE_COUNTER}" ]; then fake_date_now="$(cat "${FAKE_DATE_COUNTER}")"; fi
+  echo "$((fake_date_now - 100000))" > "${FAKE_DATE_COUNTER}"
+  printf '%s\\n' "${fake_date_now}"
+}
+"""
+
+
 def _now_ms_function() -> str:
 	src = SCRIPT_PATH.read_text(encoding="utf-8")
 	match = re.search(r"^review_head_checkout_now_ms\(\)\n\{\n.*?^\}\n", src, re.M | re.S)
@@ -347,6 +358,38 @@ def test_now_ms_prefers_epochrealtime_over_short_date_reading() -> None:
 	# Without EPOCHREALTIME a short `date +%s%3N` reading is rejected and the
 	# whole-seconds fallback is used.
 	assert _run_now_ms("unset EPOCHREALTIME\n") == "1700000000000"
+
+
+def test_elapsed_fields_ignore_a_date_clock_that_goes_backwards(layout: Layout) -> None:
+	# #9375: the timers read bash's EPOCHREALTIME first, so a `date` clock that
+	# goes backwards can no longer make fetch_ms / switch_ms negative (reported
+	# as na). `date` stays only as the fallback for bash < 5.
+	probe = subprocess.run(["bash", "-c", 'printf "%s" "${EPOCHREALTIME:-}"'], capture_output=True, text=True)
+	if not re.fullmatch(r"[0-9]+[.,][0-9]{6}", probe.stdout):
+		pytest.skip("bash has no EPOCHREALTIME (bash < 5)")
+	date_counter = layout.root / "fake_date_counter"
+	layout.github_env.write_text("")
+	cmd = [
+		"bash", "-c",
+		FAKE_FUNCTIONS + BACKWARDS_DATE_FUNCTION
+		+ review_autofix_step_script_body("review_autofix_step_checkout_pr_head_branch.sh"),
+	]
+	result = subprocess.run(
+		cmd,
+		cwd=layout.split,
+		env=layout.env(FAKE_DATE_COUNTER=str(date_counter)),
+		capture_output=True,
+		text=True,
+	)
+	assert result.returncode == 0, result.stderr
+	_, fields = _summary(result)
+	assert (fields["stage"], fields["outcome"]) == ("done", "ok")
+	assert fields["fetch_ms"].isdigit(), fields
+	assert fields["switch_ms"].isdigit(), fields
+	assert fields["duration_ms"].isdigit(), fields
+	# The backwards clock was never consulted.
+	assert not date_counter.exists()
+	_assert_no_temp_files(layout)
 
 
 def test_script_contract_is_additive() -> None:

@@ -491,3 +491,32 @@ def test_repository_change_does_not_reuse_the_snapshot() -> None:
 	)
 	assert len(branch_calls) == 2, branch_calls
 	assert "/repos/other/repo/actions/runs" in branch_calls[1], branch_calls
+
+
+# The wedged-queued helper cases (issue #9473) live in
+# tests/test_gh_helpers_zombie_queued.py and are collected here, since CI
+# already runs this file and ci.yml was outside that issue's file grant. The
+# module's pytestmark (skip without jq) is applied to each collected case. A
+# name clash would hide a test, so it fails loudly.
+def _collect_gh_helpers_zombie_queued_cases() -> None:
+	import importlib.util
+
+	spec = importlib.util.spec_from_file_location(
+		"gh_helpers_zombie_queued_cases",
+		Path(__file__).resolve().parent / "test_gh_helpers_zombie_queued.py",
+	)
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	module_marks = getattr(cases, "pytestmark", [])
+	if not isinstance(module_marks, list):
+		module_marks = [module_marks]
+	for case_name, case in sorted(vars(cases).items()):
+		if not case_name.startswith("test_") or not callable(case):
+			continue
+		assert case_name not in globals(), case_name
+		for mark in module_marks:
+			case = mark(case)
+		globals()[case_name] = case
+
+
+_collect_gh_helpers_zombie_queued_cases()
