@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"After a rollback, neither `auto-release-stable.yml` nor the `promote-main-to-stable.yml` cycle releases until a release is cut deliberately.\" (Issue #9342 Goals section.)\n  expected_change_site: .github/workflows/promote-main-to-stable.yml \u2014 the poller-dispatched `promote` job (dispatched with `target_sha` from scripts/orchestrate_poll_process.sh).\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The PR adds the hold check only to scripts/promote_main_cycle.sh (the scheduled cycle job, right after the kill switch and before guard 1), while the poller-dispatched `promote` job in .github/workflows/promote-main-to-stable.yml (job around line 155, no `stable_hold` reference in the file per multiple reviewer audits) is not gated. The README (\"Roll back @stable\") and agents.d/9342-stable-rollback.md document the gap as a residual with an operator workaround (remove the `ai:comprehensive-test-pending` label). The reviewer notes that four of five reviewers in an earlier cross-review accepted the gap as a documented follow-up, and the judge chose merge_with_followup in three review rounds. anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite and z-ai_glm-5_3-flash explicitly chose not to raise this gap. They cite \u00a718.E, which names only scripts/promote_main_cycle.sh as the promote-side hold reader; the Approach exemption for deliberately dispatched releases; the fix site being outside the files_touched grant; and the follow-up the judge accepted.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- Notes (no findings): the last run changed one line in agents.d/9473-ignore-wedged-queued-runs.md, adding `rollback_stable_drain` to the \"Guard labels\" list. The reviewer checked it against scripts/rollback_stable.sh:401, tests/test_zombie_queued_guard_contract.py:41, agents.d/9342-stable-rollback.md:6 and README.md:2900. The edit does not touch the parts checked by tests/test_zombie_queued_guard_contract.py:113-118, and `_PROGRAM_RE` (line 132) still matches. The gap in the poller-dispatched `promote` job (.github/workflows/promote-main-to-stable.yml) was deliberately not raised as a TASK_GAP: it is documented, and the judge accepted it as a follow-up (merge_with_followup). CI: no failures, but `lint` is still queued and check collection timed out, so CI has not yet confirmed a pass.\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n- Note: the requirement to gate the poller-dispatched `promote` job is documented as a residual issue for a follow-up issue, consistent with the approved approach and PR grant scope.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"After a rollback, neither `auto-release-stable.yml` nor the `promote-main-to-stable.yml` cycle releases until a release is cut deliberately.\" (Issue #9342 Goals section.)\n  Expected change site: .github/workflows/promote-main-to-stable.yml \u2014 the poller-dispatched `promote` job (dispatched with `target_sha` from scripts/orchestrate_poll_process.sh).\n  Evidence of absence: The PR adds the hold check only to scripts/promote_main_cycle.sh. The poller-dispatched `promote` job in .github/workflows/promote-main-to-stable.yml (job around line 155, no `stable_hold` reference in the file) is not gated. The README and agents.d/9342-stable-rollback.md document the gap as a residual with an operator workaround (remove the `ai:comprehensive-test-pending` label). The judge chose merge_with_followup in three review rounds.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- Notes (no findings): the last-run diff is a single documentation line in agents.d/9473-ignore-wedged-queued-runs.md that adds `rollback_stable_drain` to the guard-label registry. The reviewer verified it against scripts/rollback_stable.sh:401, tests/test_zombie_queued_guard_contract.py:41, .github/workflows/rollback-stable.yml, tests/test_rollback_stable.py:452, README.md:2900 and agents.d/9342-stable-rollback.md:6. The run introduced no code changes. The poller-dispatched `promote` job gap (.github/workflows/promote-main-to-stable.yml) was deliberately not raised again: \u00a718.E names only `scripts/promote_main_cycle.sh`, the Approach exempts deliberately dispatched releases, the gap is documented, the fix site is outside files_touched, and the judge recorded it as a tracked follow-up (merge_with_followup).\n- HARDENING_SUGGESTIONS: none; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8412037a739713f8f84f92d284da45a434dfad786f9867e4f69532da24ad128f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9359,
+    "run_id": "45405226506",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45405226506",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124164336_da159a3255",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9359,
+    "run_id": "45405226506"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-24T16:43:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
