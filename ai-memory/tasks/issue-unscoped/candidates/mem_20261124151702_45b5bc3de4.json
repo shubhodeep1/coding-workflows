@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/pr_checks_lib.sh:2924,2999,3322-3324 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The `tail -n 50` cap in `_merge_lease_skips_normalize` can drop the once-per-head `_unparked` marker that `_merge_lease_skip_block` keeps; `_merge_lease_skip_release_token` then finds no `_unparked` suffix and writes the plain soft reason, which allows a second un-park on the same head (G2 forbids this).\n  WHY: The reviewer rated this NIT, mapped here to low. On a busy repo, 50 releases of other PRs between two releases of one head can happen, so `outcome=unparked` is logged twice for one head; the failure is soft (one extra queue cycle) and limited by the existing 50-entry design.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/pr_checks_lib.sh: `_merge_lease_skips_normalize` 50-entry cap (scripts/pr_checks_lib.sh:2924) interacting with the retained `_unparked` marker written by `_merge_lease_skip_block` (scripts/pr_checks_lib.sh:3322-3324) | severity=NIT | confidence=3\n  PROBLEM: The once-per-head marker is an ordinary entry in the capped skip list. Once 50 newer valid entries build up before the same head is released again as `expired`/`revoked_idle`, `tail -n 50` drops the marker. `_merge_lease_skip_release_token` (scripts/pr_checks_lib.sh:2999) then finds no `_unparked` suffix and writes the plain soft reason, which allows a second un-park on the same head.\n  WHY: On a busy repo, 50 releases across other PRs between two releases of one head can happen, so `outcome=unparked` is logged twice for one head. The failure is soft and limited by the existing 50-entry design. The mixed-version constraint makes a cap exemption non-trivial, so recording this as a documented residual is acceptable.\n- HARDENING_SUGGESTION: scripts/pr_checks_lib.sh `_merge_lease_skips_normalize` tail -n 50 (line 2924) / `_merge_lease_skip_block` keep-case (line 3322)\n  PROBLEM: The 50-entry cap can drop the `_unparked` marker without any signal, which resets the anti-cycling budget.\n  WHY: Suggested minimal fix: document the residual in the `_merge_lease_skip_block` header comment next to the existing mixed-version caveat (about 2 lines); a cap exemption is not warranted at NIT severity. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0e208bc125fdf61cf00d642168e4c848b9f7438c4fbddc672bb35c1b91c363a4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10045,
+    "run_id": "45404405259",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45404405259",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124151702_45b5bc3de4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10045,
+    "run_id": "45404405259"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-24T15:17:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
