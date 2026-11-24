@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"After a rollback, neither auto-release-stable.yml nor the promote-main-to-stable.yml cycle releases until a release is cut deliberately.\" The poller-dispatched `promote` job must check the stable rollback hold so a comprehensive promote cycle cannot fast-forward `stable` and release over a rollback.\n  expected_change_site: .github/workflows/promote-main-to-stable.yml:155-258 (poller-dispatched `promote` job) and scripts/orchestrate_poll_process.sh:15864 (dispatch path)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: No diff hunk in this PR adds a hold check to the poller-dispatched `promote` job or its poller dispatch, the PR gates only the scheduled cycle through scripts/promote_main_cycle.sh, README.md:5151 documents that this job is not gated, the README and agents fragment only point to an operator workaround as an interim measure, and a remaining comprehensive-test-pending cycle can therefore dispatch promote after the rollback drain, move stable forward, and clear the hold without a deliberately cut release (severity MAJOR from both reviewers; anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash treated this as an accepted, documented residual outside the files_touched grant and did not raise it)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: The poller-dispatched `promote` job (.github/workflows/promote-main-to-stable.yml:155 onward, dispatched with target_sha from scripts/orchestrate_poll_process.sh) must check the stable rollback hold to prevent a comprehensive promote cycle from fast-forwarding `stable` and releasing over a rollback.\n  Expected change site: .github/workflows/promote-main-to-stable.yml:155-258 and scripts/orchestrate_poll_process.sh:15864 (dispatched reference).\n  Evidence of absence: No diff hunk in this PR adds a hold check to the poller-dispatched `promote` job, and the documentation in README and agents fragment only points to an operator workaround as an interim measure.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"After a rollback, neither auto-release-stable.yml nor the promote-main-to-stable.yml cycle releases until a release is cut deliberately.\"\n  Expected change site: The poller-dispatched promote job in .github/workflows/promote-main-to-stable.yml, with the dispatch path in scripts/orchestrate_poll_process.sh.\n  Evidence of absence: The PR gates the scheduled cycle through scripts/promote_main_cycle.sh, but adds no hold check to the promote job or its poller dispatch. README.md:5151 documents that this job is not gated. A remaining comprehensive-test-pending cycle can therefore dispatch promote after the rollback drain, move stable forward, and clear the hold without a deliberately cut release.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "25b690f1e1d155adf0c8314f37fdd569e887f93444158873f027177f91ec192a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9359,
+    "run_id": "45318116845",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45318116845",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124064919_0360c3560f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9359,
+    "run_id": "45318116845"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T06:49:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
