@@ -1400,6 +1400,18 @@ jobs:
             echo "::warning::pr_checks_lib.sh unavailable; refusing auto-merge for PR #${1:-unknown} (required checks cannot be verified)."
             return 1
           }
+          # Merge-time PR state guard (#10049). Without the library the start
+          # check only warns (the checks-wait stub above already refuses the
+          # merge); the pre-merge check fails closed.
+          _pr_merge_state_check() {
+            PR_MERGE_STATE_OUTCOME="unavailable"
+            if [ "${3:-pre_merge}" = "start" ]; then
+              echo "::warning::pr_checks_lib.sh unavailable; PR state start check skipped for PR #${1:-unknown} (the required-checks wait refuses the merge)."
+              return 0
+            fi
+            echo "AUTOFIX_MERGE_SKIPPED pr=${1:-unknown} head_sha=${2:-unknown} reason=pr_state_unavailable closed_at=- stage=pre_merge"
+            return 1
+          }
           freshness_helper_verified=false
           if [ "${FRESHNESS_HELPER_CHECKOUT_OUTCOME:-}" = "success" ] \
             && [ -f .codex-freshness-src/scripts/pr_checks_lib.sh ] \
@@ -1436,8 +1448,16 @@ jobs:
             # The gate snapshot cannot prove freshness on paths that
             # intentionally skip gh pr merge, so those paths refresh only the
             # head SHA instead of adding another call to the normal merge path.
-            if ! ready_label_current_head_sha="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null)"; then
+            # The same read carries state and draft (#10049): a closed or
+            # draft PR gets no merge-authorization labels.
+            local ready_label_pr_fields="" ready_label_pr_state="" ready_label_pr_draft=""
+            if ! ready_label_pr_fields="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '"\(.state // "") \(if .draft == true then "true" else "false" end) \(.head.sha // "")"' 2>/dev/null)"; then
               echo "::warning::Could not refresh the current head for PR #${PR_NUMBER}; refusing deterministic-skip merge-authorization labels."
+              return 1
+            fi
+            read -r ready_label_pr_state ready_label_pr_draft ready_label_current_head_sha <<< "${ready_label_pr_fields}"
+            if [ "${ready_label_pr_state}" != "open" ] || [ "${ready_label_pr_draft}" != "false" ]; then
+              echo "::warning::PR #${PR_NUMBER} is not an open, ready PR (state=${ready_label_pr_state:-unknown} draft=${ready_label_pr_draft:-unknown}); refusing deterministic-skip merge-authorization labels."
               return 1
             fi
             if [ -z "${ready_label_current_head_sha}" ] || [ "${ready_label_current_head_sha}" != "${PR_HEAD_SHA}" ]; then
@@ -1491,6 +1511,10 @@ jobs:
             auto_merge_summary="REFUSED (gate-observed head SHA unavailable or malformed)"
             echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA:-unknown} action=refuse reason=head_sha_unavailable"
             echo "::warning::Gate-observed head SHA is unavailable or malformed for PR #${PR_NUMBER}. Failing closed: refusing deterministic-skip auto-merge enablement without a --match-head-commit guard."
+          elif ! _pr_merge_state_check "${PR_NUMBER}" "${PR_HEAD_SHA}" start; then
+            # #10049: a PR closed (or turned draft, or pushed) after the gate
+            # takes no lease, gets no branch update, no checks wait, no labels.
+            auto_merge_summary="SKIPPED (PR not open: ${PR_MERGE_STATE_OUTCOME:-unavailable})"
           elif [ -n "${PR_HEAD_REF}" ] && printf '%s\n' "${PR_HEAD_REF}" | grep -Eq '^auto/forward-merge-stable-'; then
             # Mirror of the forward-merge-fallback handling in the codex-agent
             # "Enable auto-merge on PR" step. Defense in depth: a tiny
@@ -1531,6 +1555,8 @@ jobs:
                   auto_merge_summary="DEFERRED (base freshness could not be verified; no branch update requested, the review sweep retries)"
                   echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_freshness_unknown"
                 fi
+              elif ! _pr_merge_state_check "${PR_NUMBER}" "${PR_HEAD_SHA}" pre_merge; then
+                auto_merge_summary="SKIPPED (PR not open at merge time: ${PR_MERGE_STATE_OUTCOME:-unavailable})"
               elif gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --merge --auto --match-head-commit "${PR_HEAD_SHA}"; then
                 auto_merge_ready_labels_allowed="true"
                 auto_merge_summary="ENABLED (merge commit)"
@@ -1574,6 +1600,8 @@ jobs:
                 auto_merge_summary="DEFERRED (base freshness could not be verified; no branch update requested, the review sweep retries)"
                 echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_freshness_unknown"
               fi
+            elif ! _pr_merge_state_check "${PR_NUMBER}" "${PR_HEAD_SHA}" pre_merge; then
+              auto_merge_summary="SKIPPED (PR not open at merge time: ${PR_MERGE_STATE_OUTCOME:-unavailable})"
             elif gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${PR_HEAD_SHA}"; then
               auto_merge_ready_labels_allowed="true"
               auto_merge_summary="ENABLED (squash)"

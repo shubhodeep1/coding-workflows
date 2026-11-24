@@ -66,6 +66,16 @@ if ! type _pr_wait_for_required_checks >/dev/null 2>&1; then
 		return 1
 	}
 fi
+if ! type _pr_merge_state_check >/dev/null 2>&1; then
+	# Merge-time PR state guard (#10049). Fail closed: without the library
+	# the PR's state cannot be verified, so nothing merges.
+	_pr_merge_state_check()
+	{
+		PR_MERGE_STATE_OUTCOME="unavailable"
+		echo "AUTOFIX_MERGE_SKIPPED pr=${1:-unknown} head_sha=${2:-unknown} reason=pr_state_unavailable closed_at=- stage=${3:-pre_merge}"
+		return 1
+	}
+fi
 
 # Final CI at the end of review (cut-ci-runner-time Phase 4): once this step
 # has posted ai-review/head-gate success for the reviewed head, make sure that
@@ -116,8 +126,16 @@ reviewed_head_is_current_for_labels()
 	fi
 	# The full PR-metadata call below is unreachable on these intentional
 	# early-exit paths, so this is the smallest non-duplicative freshness read.
-	if ! ready_label_current_head_sha="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha // ""' 2>/dev/null)"; then
+	# The same read carries state and draft (#10049): a closed or draft PR
+	# gets no success status and no merge-authorization labels.
+	local ready_label_pr_fields="" ready_label_pr_state="" ready_label_pr_draft=""
+	if ! ready_label_pr_fields="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '"\(.state // "") \(if .draft == true then "true" else "false" end) \(.head.sha // "")"' 2>/dev/null)"; then
 		echo "::warning::Could not refresh the current head for PR #${PR_NUMBER}; refusing merge-authorization labels."
+		return 1
+	fi
+	read -r ready_label_pr_state ready_label_pr_draft ready_label_current_head_sha <<< "${ready_label_pr_fields}"
+	if [ "${ready_label_pr_state}" != "open" ] || [ "${ready_label_pr_draft}" != "false" ]; then
+		echo "::warning::PR #${PR_NUMBER} is not an open, ready PR (state=${ready_label_pr_state:-unknown} draft=${ready_label_pr_draft:-unknown}); refusing merge-authorization labels."
 		return 1
 	fi
 	if [ -z "${ready_label_current_head_sha}" ] || [ "${ready_label_current_head_sha}" != "${INITIAL_HEAD_SHA}" ]; then
@@ -273,6 +291,15 @@ if [ -z "${_orch_pr_head_sha}" ] || [ "${_orch_pr_head_sha}" != "${INITIAL_HEAD_
 	exit 0
 fi
 
+# Merge-time PR state guard, start check (#10049): reuses the PR read above
+# (no API call). A PR closed or turned draft after the review gate takes no
+# lease, gets no branch update, no checks wait, no success status and no
+# merge-authorization labels; a closed PR releases a lease it holds.
+if ! _pr_merge_state_check "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" start "${_ORCH_PR_META_JSON}"; then
+	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=skip reason=pr_${PR_MERGE_STATE_OUTCOME:-unavailable}"
+	exit 0
+fi
+
 # Superseded security follow-up guard (#9479): a PR whose base is a standalone
 # PR's head branch must not merge once that branch's current head passed its
 # single-issue security audit (the merge would move the clean head). On this
@@ -415,6 +442,11 @@ if printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq '^auto/forward-merge-stable-'
 	if [ "${FORWARD_MERGE_FALLBACK_AUTO_MERGE}" = "true" ]; then
 		echo "Enabling auto-merge (merge commit) on forward-merge fallback PR #${PR_NUMBER} (head ref '${_orch_pr_head_ref}')..."
 		echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=merge_commit"
+		# Pre-merge PR state read (#10049): one call, right before the merge.
+		if ! _pr_merge_state_check "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" pre_merge; then
+			echo "Auto-merge not enabled for PR #${PR_NUMBER}: the PR is not open at merge time (${PR_MERGE_STATE_OUTCOME:-unavailable})."
+			exit 0
+		fi
 		if gh_retry gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --merge --auto --match-head-commit "${INITIAL_HEAD_SHA}"; then
 			record_auto_merge_ready_labels_allowed "true"
 			echo "Auto-merge (merge commit) enabled. PR will merge once all required checks pass, preserving stable's ancestry on main."
@@ -466,6 +498,11 @@ fi
 
 echo "Enabling auto-merge (squash) on PR #${PR_NUMBER}..."
 echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=squash"
+# Pre-merge PR state read (#10049): one call, right before the merge.
+if ! _pr_merge_state_check "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" pre_merge; then
+	echo "Auto-merge not enabled for PR #${PR_NUMBER}: the PR is not open at merge time (${PR_MERGE_STATE_OUTCOME:-unavailable})."
+	exit 0
+fi
 if gh_retry gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --squash --auto --match-head-commit "${INITIAL_HEAD_SHA}"; then
 	record_auto_merge_ready_labels_allowed "true"
 	echo "Auto-merge enabled. PR will merge once all required checks pass."

@@ -435,6 +435,7 @@ def test_merge_arm_dispatches_gh_pr_merge_only_for_a_complete_context(tmp_path: 
 		"_safe_gh_jq() { printf '%s' '{\"state\":\"open\",\"mergeable\":true}'; }\n"
 		"_pr_base_fresh_for_merge() { return 0; }\n"
 		"_pr_wait_for_required_checks() { return 0; }\n"
+		"_pr_merge_state_check() { PR_MERGE_STATE_OUTCOME=open; return 0; }\n"
 		'review_head_gate_post_status() { printf \'status %s\\n\' "$*" >> "${CALL_LOG}"; return 0; }\n'
 		'ensure_label_exists() { printf \'ensure_label %s\\n\' "$*" >> "${CALL_LOG}"; return 0; }\n'
 		'_resilient_phase_swap() { printf \'phase_swap %s\\n\' "$*" >> "${CALL_LOG}"; return 0; }\n'

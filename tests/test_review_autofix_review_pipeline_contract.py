@@ -7904,7 +7904,7 @@ def _run_auto_merge_helper_with_fake_gh(
 			        sys.stdout.write("")
 			        sys.exit(0)
 			    if path.endswith("/pulls/42"):
-			        sys.stdout.write(json.dumps({{"head": {{"ref": {head_ref!r}, "sha": {expected_head_sha!r}}}, "base": {{"ref": "main"}}, "body": ""}}))
+			        sys.stdout.write(json.dumps({{"state": "open", "draft": False, "head": {{"ref": {head_ref!r}, "sha": {expected_head_sha!r}}}, "base": {{"ref": "main"}}, "body": ""}}))
 			        sys.exit(0)
 			    # Merge-base freshness gate: the base did not move.
 			    if "/compare/" in path:

@@ -2673,6 +2673,14 @@ _mt_final_ci_merge_resume()
 			_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=deferred reason=${PR_BASE_FRESHNESS_OUTCOME:-unknown}"
 			continue
 		fi
+		# Merge-time PR state guard (#10049): one PR read right before the
+		# merge; a PR closed (or turned draft, or pushed) is not merged. Fails
+		# closed when the guard or the read is unavailable.
+		if ! declare -F _pr_merge_state_check >/dev/null 2>&1 \
+			|| ! PR_CHECKS_REPOSITORY="${MT_REPO}" _pr_merge_state_check "${resume_num}" "${resume_sha}" pre_merge; then
+			_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=deferred reason=pr_${PR_MERGE_STATE_OUTCOME:-unavailable}"
+			continue
+		fi
 		if ! gh_retry gh pr merge "${resume_num}" --repo "${MT_REPO}" --squash --auto --match-head-commit "${resume_sha}" >/dev/null 2>&1; then
 			_mt_warn "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=failed reason=auto_merge_refused"
 			continue

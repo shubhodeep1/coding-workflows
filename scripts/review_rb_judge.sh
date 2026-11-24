@@ -278,6 +278,16 @@ if ! type _pr_wait_for_required_checks >/dev/null 2>&1; then
     return 1
   }
 fi
+# Merge-time PR state guard (#10049). Fail closed when the library did not
+# load: the PR's state cannot be verified, so nothing merges.
+if ! type _pr_merge_state_check >/dev/null 2>&1; then
+  _pr_merge_state_check()
+  {
+    PR_MERGE_STATE_OUTCOME="unavailable"
+    echo "AUTOFIX_MERGE_SKIPPED pr=${1:-unknown} head_sha=${2:-unknown} reason=pr_state_unavailable closed_at=- stage=${3:-pre_merge}"
+    return 1
+  }
+fi
 if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   # Keep prompt sanitization available even when gh_helpers.sh was not
   # sourced. Large-diff truncation can still fall back to a raw byte prefix,
@@ -2744,6 +2754,14 @@ case "${RB_ACTION}" in
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
           fi
+        elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_merge_state_check "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" pre_merge; then
+          # #10049: re-read the PR right before the merge; a PR closed (or
+          # turned draft, or pushed) since the judge started is not merged.
+          echo "::warning::Review-blocked judge: PR #${PR_NUMBER} is not open on the judged head at merge time (${PR_MERGE_STATE_OUTCOME:-unavailable}); not merging and withholding ai:ready-to-merge."
+          case "${PR_MERGE_STATE_OUTCOME:-}" in
+            closed|draft) RB_MERGE_STATUS="not_open" ;;
+            *) RB_MERGE_STATUS="mergeability_pending" ;;
+          esac
         else
           rb_judge_merge_err_open
           # Auto-merge first; the direct fallback runs only when GitHub does
@@ -2857,6 +2875,14 @@ case "${RB_ACTION}" in
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
           fi
+        elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_merge_state_check "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" pre_merge; then
+          # #10049: re-read the PR right before the merge; a PR closed (or
+          # turned draft, or pushed) since the judge started is not merged.
+          echo "::warning::Review-blocked judge: PR #${PR_NUMBER} is not open on the judged head at merge time (${PR_MERGE_STATE_OUTCOME:-unavailable}); not merging and withholding ai:ready-to-merge."
+          case "${PR_MERGE_STATE_OUTCOME:-}" in
+            closed|draft) RB_MERGE_STATUS="not_open" ;;
+            *) RB_MERGE_STATUS="mergeability_pending" ;;
+          esac
         else
           rb_judge_merge_err_open
           # Auto-merge first; the direct fallback runs only when GitHub does
@@ -3408,6 +3434,16 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
               echo "::warning::PR #${PR_NUMBER} base freshness could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}) — merge_with_followup deferred, no branch update requested. Leaving linked issues in ai:review-blocked."
               echo "judge_skip_reason=base_freshness_unknown" >> "$GITHUB_OUTPUT"
             fi
+          elif [ "${ENABLE_AUTO_MERGE}" = "true" ] \
+            && ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_merge_state_check "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" pre_merge; then
+            # #10049: re-read the PR right before the success status and the
+            # merge; a PR closed since the judge started is not merged.
+            echo "::warning::PR #${PR_NUMBER} is not open on the judged head at merge time (${PR_MERGE_STATE_OUTCOME:-unavailable}) — merge_with_followup not merged. Leaving linked issues in ai:review-blocked."
+            case "${PR_MERGE_STATE_OUTCOME:-}" in
+              closed) echo "judge_skip_reason=pr_not_open" >> "$GITHUB_OUTPUT" ;;
+              draft) echo "judge_skip_reason=draft_pr" >> "$GITHUB_OUTPUT" ;;
+              *) echo "judge_skip_reason=pr_state_unavailable" >> "$GITHUB_OUTPUT" ;;
+            esac
           elif [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
             # Sync merge only — NEVER --auto enrollment. The whole point
             # of the conservative ladder is to ensure follow-up creation

@@ -39,6 +39,7 @@ jobs:
       EVENT_NAME: ${{ github.event_name }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
       PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
+      PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       REPOSITORY: ${{ github.repository }}
       CURRENT_RUN_ID: ${{ github.run_id }}
     steps:
@@ -345,15 +346,25 @@ jobs:
               "for ${REPOSITORY}" \
               "(head ref: ${PR_HEAD_REF})"
             _cpr_fetch_active_runs "${PR_HEAD_REF}" > "${active_runs_file}"
+            # GitHub links a run only to PRs that are open now, so after the
+            # close a review run for this head can list no PR at all (#10049:
+            # tele-funtoken-msg-scoring PR #5800 merged 22 minutes after its
+            # close). Such an unlinked run on this branch at the closed PR's
+            # exact head SHA is cancelled too; runs linked to another PR stay.
             mapfile -t target_run_ids < <(
               jq -r \
                 --arg head_ref "${PR_HEAD_REF}" \
+                --arg head_sha "${PR_HEAD_SHA:-}" \
                 --arg pr_number "${PR_NUMBER}" \
                 --arg current_run_id "${CURRENT_RUN_ID}" \
                 '.workflow_runs[]
                 | select(.head_branch == $head_ref)
-                | select((.pull_requests // [])
-                  | any(.number == ($pr_number | tonumber)))
+                | select(
+                    ((.pull_requests // [])
+                      | any(.number == ($pr_number | tonumber)))
+                    or (((.pull_requests // []) | length) == 0
+                      and ($head_sha | test("^[0-9a-f]{40}$"))
+                      and .head_sha == $head_sha))
                 | select(.event == "pull_request")
                 | select((.id | tostring) != $current_run_id)
                 | select(

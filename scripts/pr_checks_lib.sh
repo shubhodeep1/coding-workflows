@@ -1712,7 +1712,16 @@ _pr_base_freshness()
 	esac
 	if [ -z "${head_sha}" ] || [ "${head_sha}" = "null" ] || [ -z "${base_ref}" ] || [ "${base_ref}" = "null" ]; then
 		local pr_json
-		pr_json="$(gh_retry _safe_gh_jq "repos/${repo}/pulls/${pr_number}" 2>/dev/null || echo "")"
+		# One-shot reuse of the PR object a `start` _pr_merge_state_check just
+		# read for this PR (issue #10049); cleared here so a later call (the
+		# re-check after the checks wait) reads the PR again as before.
+		if [ -n "${PR_MERGE_STATE_PR_JSON:-}" ] && [ "${PR_MERGE_STATE_PR_FOR:-}" = "${pr_number}" ]; then
+			pr_json="${PR_MERGE_STATE_PR_JSON}"
+		else
+			pr_json="$(gh_retry _safe_gh_jq "repos/${repo}/pulls/${pr_number}" 2>/dev/null || echo "")"
+		fi
+		PR_MERGE_STATE_PR_JSON=""
+		PR_MERGE_STATE_PR_FOR=""
 		if [ -z "${head_sha}" ] || [ "${head_sha}" = "null" ]; then
 			head_sha="$(printf '%s' "${pr_json}" | jq -r 'if (type == "object" and .head.sha?) then .head.sha else empty end' 2>/dev/null | tail -n1)"
 		fi
@@ -4292,6 +4301,162 @@ _merge_lease_gate()
 	MERGE_LEASE_REASON="contended"
 	echo "::warning::$(_merge_lease_log "${lease_pr}" "${lease_base}" "${lease_mode}" unavailable contended) (fail-open)"
 	_merge_lease_metric unavailable "${lease_base}" "${lease_pr}" "${lease_mode}" contended || true
+	return 0
+}
+
+# ---------------------------------------------------------------------------
+# Merge-time PR state guard (issue #10049).
+#
+# Why: on 2026-11-24 a review run squash-merged tele-funtoken-msg-scoring
+# PR #5800 22 minutes after a maintainer had closed it without merging. The
+# gate passed while the PR was open, the merge job started after the close,
+# and nothing re-read the PR's state: `--match-head-commit` binds only the
+# head, and GitHub accepts a merge of a closed, unmerged PR whose branch
+# still exists.
+#
+# _pr_merge_state_check <pr> <bound_head_sha> <stage> [<pr_json>]
+#   <stage> is `start` (when the merge job starts, before the lease, any
+#   branch update or checks wait) or `pre_merge` (immediately before the
+#   merge call). <pr_json> reuses a PR object the caller already read;
+#   without it the helper makes exactly one `pulls/<pr>` read.
+#   Returns 0 only when the PR is open, not a draft and on the bound head.
+#   Sets PR_MERGE_STATE_OUTCOME (open|closed|draft|head_moved|unavailable),
+#   PR_MERGE_STATE_CLOSED_AT and PR_MERGE_STATE_BASE_REF. Any other outcome
+#   prints one line:
+#     AUTOFIX_MERGE_SKIPPED pr=<n> head_sha=<sha> reason=<pr_closed|pr_draft|head_moved|pr_state_unavailable> closed_at=<iso|-> stage=<start|pre_merge>
+#   and a closed PR releases the merge lease it holds on its base
+#   (_merge_lease_release_for_pr). Fails closed: a read that fails (rate
+#   limit, 5xx) or returns no `.state` is `unavailable` and never merges.
+#   A `start` check that made its own read hands the PR object once to the
+#   next _pr_base_freshness call for the same PR (PR_MERGE_STATE_PR_JSON /
+#   PR_MERGE_STATE_PR_FOR), so the start check adds no REST call there.
+# ---------------------------------------------------------------------------
+_pr_merge_state_check()
+{
+	local ms_pr="${1:-}" ms_head="${2:-}" ms_stage="${3:-pre_merge}" ms_json="${4:-}"
+	local ms_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	local ms_read=0 ms_state="" ms_draft="" ms_live_head="" ms_reason="" ms_log_pr ms_log_head ms_log_closed
+	PR_MERGE_STATE_OUTCOME="unavailable"
+	PR_MERGE_STATE_CLOSED_AT=""
+	PR_MERGE_STATE_BASE_REF=""
+	case "${ms_stage}" in
+		start|pre_merge) ;;
+		*) ms_stage="pre_merge" ;;
+	esac
+	# Empty input counts as "no object" (`jq -e` exits 0 on no input).
+	if [ -z "${ms_json}" ] || ! jq -e 'type == "object"' >/dev/null 2>&1 <<< "${ms_json}"; then
+		ms_json=""
+		if [[ "${ms_pr}" =~ ^[1-9][0-9]*$ ]] && [ -n "${ms_repo}" ]; then
+			ms_json="$(gh_retry _safe_gh_jq "repos/${ms_repo}/pulls/${ms_pr}" 2>/dev/null)" || ms_json=""
+			ms_read=1
+		fi
+	fi
+	if [ -n "${ms_json}" ] && jq -e 'type == "object" and (.state | type) == "string" and .state != ""' >/dev/null 2>&1 <<< "${ms_json}"; then
+		ms_state="$(jq -r '.state' <<< "${ms_json}" 2>/dev/null | tail -n1)"
+		ms_draft="$(jq -r 'if .draft == true then "true" else "false" end' <<< "${ms_json}" 2>/dev/null | tail -n1)"
+		ms_live_head="$(jq -r '.head.sha? // "" | tostring' <<< "${ms_json}" 2>/dev/null | tail -n1)"
+		PR_MERGE_STATE_CLOSED_AT="$(jq -r '.closed_at? // "" | tostring' <<< "${ms_json}" 2>/dev/null | tail -n1)"
+		PR_MERGE_STATE_BASE_REF="$(jq -r '.base.ref? // "" | tostring' <<< "${ms_json}" 2>/dev/null | tail -n1)"
+		[[ "${PR_MERGE_STATE_CLOSED_AT}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]] || PR_MERGE_STATE_CLOSED_AT=""
+		_merge_lease_valid_base "${PR_MERGE_STATE_BASE_REF}" || PR_MERGE_STATE_BASE_REF=""
+		if [ "$(printf '%s' "${ms_state}" | tr '[:upper:]' '[:lower:]')" != "open" ]; then
+			PR_MERGE_STATE_OUTCOME="closed"
+		elif [ "${ms_draft}" = "true" ]; then
+			PR_MERGE_STATE_OUTCOME="draft"
+		elif ! [[ "${ms_head}" =~ ^[0-9a-f]{40}$ ]] || [ "${ms_live_head}" != "${ms_head}" ]; then
+			PR_MERGE_STATE_OUTCOME="head_moved"
+		else
+			PR_MERGE_STATE_OUTCOME="open"
+		fi
+	fi
+	if [ "${ms_stage}" = "start" ] && [ "${ms_read}" = 1 ] && [ "${PR_MERGE_STATE_OUTCOME}" = "open" ]; then
+		PR_MERGE_STATE_PR_JSON="${ms_json}"
+		PR_MERGE_STATE_PR_FOR="${ms_pr}"
+	fi
+	[ "${PR_MERGE_STATE_OUTCOME}" = "open" ] && return 0
+	case "${PR_MERGE_STATE_OUTCOME}" in
+		closed) ms_reason="pr_closed" ;;
+		draft) ms_reason="pr_draft" ;;
+		head_moved) ms_reason="head_moved" ;;
+		*) ms_reason="pr_state_unavailable" ;;
+	esac
+	ms_log_pr="${ms_pr}"
+	[[ "${ms_log_pr}" =~ ^[0-9]+$ ]] || ms_log_pr="unknown"
+	ms_log_head="${ms_head}"
+	[[ "${ms_log_head}" =~ ^[0-9a-f]{7,40}$ ]] || ms_log_head="unknown"
+	ms_log_closed="-"
+	[ "${ms_reason}" != "pr_closed" ] || ms_log_closed="${PR_MERGE_STATE_CLOSED_AT:--}"
+	echo "AUTOFIX_MERGE_SKIPPED pr=${ms_log_pr} head_sha=${ms_log_head} reason=${ms_reason} closed_at=${ms_log_closed} stage=${ms_stage}"
+	if [ "${PR_MERGE_STATE_OUTCOME}" = "closed" ] && [ -n "${PR_MERGE_STATE_BASE_REF}" ]; then
+		_merge_lease_release_for_pr "${ms_pr}" "${PR_MERGE_STATE_BASE_REF}" pr_closed || true
+	fi
+	return 1
+}
+
+# _merge_lease_release_for_pr <pr> <base> <reason> (issue #10049): drops <pr>
+# from the merge lease on <base> when it holds it (a live holder row, or the
+# single-holder record naming it). Other holders keep their rows; with none
+# left the record becomes `released`. No API call when the lease is disabled
+# or <base> is invalid; otherwise one lease read and one write, and a lost
+# compare-and-swap gets one re-read and one retry. Logs
+# `MERGE_LEASE ... mode=release outcome=released|not_held|unavailable` and a
+# `released` metric. Fails open (warning only); `review_merge_train.sh
+# release` (cancel-on-close, poll tick) frees the lease as holder_closed.
+_merge_lease_release_for_pr()
+{
+	local rl_pr="${1:-}" rl_base="${2:-}" rl_reason="${3:-pr_closed}"
+	local rl_attempt rl_rc rl_row rl_new_rows rl_head="" rl_acq="0" rl_outcome="unavailable"
+	local MERGE_LEASE_BLOCKER=""
+	[[ "${rl_reason}" =~ ^[a-z_]+$ ]] || rl_reason="pr_closed"
+	_merge_lease_enabled || return 0
+	[[ "${rl_pr}" =~ ^[1-9][0-9]*$ ]] || return 0
+	_merge_lease_valid_base "${rl_base}" || return 0
+	for rl_attempt in 1 2; do
+		rl_rc=0
+		_merge_lease_read "${rl_base}" || rl_rc=$?
+		if [ "${rl_rc}" -eq 2 ]; then
+			rl_outcome="not_held"
+			break
+		elif [ "${rl_rc}" -ne 0 ]; then
+			rl_outcome="unavailable"
+			break
+		fi
+		rl_row="$(_merge_lease_holder_row "${rl_pr}" "${MERGE_LEASE_HOLDER_ROWS:-}")"
+		if [ -z "${rl_row}" ] && ! { [ "${MERGE_LEASE_STATE:-}" = "held" ] && [ "${MERGE_LEASE_PR:-}" = "${rl_pr}" ]; }; then
+			rl_outcome="not_held"
+			break
+		fi
+		if [ -n "${rl_row}" ]; then
+			read -r _ rl_head _ rl_acq _ <<< "${rl_row}"
+		else
+			rl_head="${MERGE_LEASE_HEAD:-}"
+			rl_acq="${MERGE_LEASE_ACQUIRED:-0}"
+		fi
+		[[ "${rl_head}" =~ ^[0-9a-f]{40}$ ]] || rl_head=""
+		rl_new_rows="$(_merge_lease_rows_without "${rl_pr}" "${MERGE_LEASE_HOLDER_ROWS:-}")"
+		rl_rc=0
+		if [ -z "${rl_new_rows}" ]; then
+			_merge_lease_write "${rl_base}" released "${rl_pr}" "${rl_head}" "" || rl_rc=$?
+		else
+			_merge_lease_write_holders "${rl_base}" "${rl_new_rows}" || rl_rc=$?
+		fi
+		if [ "${rl_rc}" -eq 0 ]; then
+			rl_outcome="released"
+			break
+		fi
+		rl_outcome="unavailable"
+		[ "${rl_rc}" -eq 3 ] && [ "${rl_attempt}" -eq 1 ] && continue
+		break
+	done
+	_merge_lease_log "${rl_pr}" "${rl_base}" release "${rl_outcome}" "${rl_reason}"
+	case "${rl_outcome}" in
+		released)
+			_merge_lease_metric released "${rl_base}" "${rl_pr}" release "${rl_reason}" "$(_merge_lease_metric_hold_seconds "${rl_acq:-0}" 2>/dev/null)" "" "${rl_pr}" || true
+			;;
+		unavailable)
+			echo "::warning::MERGE_LEASE pr=${rl_pr} base=${rl_base}: could not release the merge lease for the closed PR; the merge-train release frees it as holder_closed."
+			;;
+	esac
 	return 0
 }
 
