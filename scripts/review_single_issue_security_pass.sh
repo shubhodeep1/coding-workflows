@@ -573,6 +573,10 @@ single_pass_lease_holder_exempt()
 		return 0
 	fi
 	lease_check_token="$(
+		# The det-skip gate runs from the PR-head checkout; cd keeps
+		# gh_helpers.sh's cwd-relative scripts/emit_event.sh fallback inside
+		# the trusted support directory, like single_pass_inherited_clean.
+		cd "${lease_check_dir}" || { echo unreadable; exit 0; }
 		# shellcheck source=/dev/null
 		source "${lease_check_dir}/gh_helpers.sh" >/dev/null 2>&1 || true
 		type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }

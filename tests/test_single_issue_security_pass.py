@@ -2440,6 +2440,27 @@ def test_lease_is_not_read_below_the_limit(tmp_path: Path) -> None:
 	assert _lease_reads(calls) == 0
 
 
+def test_lease_check_never_sources_the_pr_checkouts_emit_event(tmp_path: Path) -> None:
+	# Issue #10017 review: the det-skip gate runs from the PR-head checkout with
+	# a sparse support copy that lacks emit_event.sh. gh_helpers.sh falls back
+	# to a cwd-relative scripts/emit_event.sh, so the lease check must cd into
+	# the support directory before sourcing it.
+	support = tmp_path / "support"
+	support.mkdir()
+	for name in ("gh_helpers.sh", "pr_checks_lib.sh"):
+		(support / name).write_text((ROOT / "scripts" / name).read_text(encoding="utf-8"), encoding="utf-8")
+	pr_head = tmp_path / "pr_head"
+	(pr_head / "scripts").mkdir(parents=True)
+	sentinel = tmp_path / "pr_code_ran"
+	(pr_head / "scripts" / "emit_event.sh").write_text(f"touch {str(sentinel)!r}\n", encoding="utf-8")
+	env = {"FAKE_GH_RUNS": _throttle_runs(tmp_path, 3), "MERGE_LEASE_ENABLED": "true", "GH_RETRY_MAX_ATTEMPTS": "1", **_lease(42)}
+	result, calls, output = _run(tmp_path, "gate", env=env, cwd=pr_head)
+	assert output == "hold=true\nhold_reason=audit_dispatched\n", result.stdout + result.stderr
+	assert "throttle=lease_holder_exempt" in result.stdout
+	assert _lease_reads(calls) == 1
+	assert not sentinel.exists()
+
+
 def test_throttle_fails_open_when_runs_cannot_be_listed(tmp_path: Path) -> None:
 	result, calls, output = _run(tmp_path, "gate", env={"FAKE_GH_RUNS": _runs(tmp_path, []), "FAKE_GH_FAIL": "runs"})
 	assert output == "hold=true\nhold_reason=audit_dispatched\n" and "outcome=dispatched cycle=1" in result.stdout
