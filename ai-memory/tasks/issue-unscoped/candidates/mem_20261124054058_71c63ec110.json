@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/plan_nothing_to_implement_verify.sh:215-236 | severity=high | confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: When `gh issue close` fails and the `--remove-label ai:closed` rollback also fails, the issue stays open with `ai:closed` (and `ai:blocked` already removed). `scripts/orchestrate_lib.py:2437-2438` (`reconcile_wave_issue_status`) then returns `(\"closed\", \"label_ai_closed\")`, so the orchestrator advances the wave past an issue that is still open and blocked.\n  WHY: The `close_failed_label_stale` detail and the `::warning::` line make this state visible but do not prevent it. Reviewers disagreed on severity: minimax_minimax-m3 and openai_gpt-6-luna rated it MAJOR; z-ai_glm-5_3-flash rated it NIT as a known residual accepted in a prior round (both writes already go through `gh_retry`, and Phase 8b is the follow-up). The highest rating (MAJOR, mapped to high) is used. anthropic_claude-sonnet-5_5 agreed the state can occur but did not count it as a defect. minimax_minimax-m3 notes that `check_failure_triage.sh:288-293` avoids this by closing first and adding the terminal label only after the close succeeds.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION: scripts/plan_nothing_to_implement_verify.sh | step-6 label swap (`gh issue edit ... --add-label 'ai:closed'`) and the `gh issue close` call after it\n  PROBLEM: The script adds `ai:closed` before it closes the issue. If the close and the best-effort rollback both fail, an open issue is left labelled `ai:closed`.\n  WHY: Running `gh issue close --reason completed` first and swapping labels only after it succeeds removes this state. The rollback edit and the `close_failed_label_stale` branch would no longer be needed. The `kinds.index(\"edit\") < kinds.index(\"close\")` assertion in `test_passing_tests_close_the_issue` and the two close-failure tests would need updating. Estimated change: about 8 lines in the script and about 6 in the tests. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/plan_nothing_to_implement_verify.sh:lines 215-235 (the close-then-rollback branch introduced in the LAST RUN DIFF) | severity=MAJOR | confidence=5\n  PROBLEM: If both `gh issue close` and the rollback `gh issue edit --remove-label ai:closed` fail, the script emits `outcome=blocked` / `close_failed_label_stale` and a `::warning::` line, but leaves the issue open, labelled `ai:closed`, with `ai:blocked` removed. `scripts/orchestrate_lib.py:2437-2438` (with the priority ordering at lines 1514-1518) treats this as terminal \"closed\".\n  WHY: A sustained GitHub outage or rate limit can make both writes fail. The orchestrator then advances the wave past a still-open issue. The script comment at lines 225-227 acknowledges this. `check_failure_triage.sh:288-293` avoids the problem by closing first and adding the label afterwards.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/plan_nothing_to_implement_verify.sh:231-235; scripts/orchestrate_lib.py:2435-2438 | severity=MAJOR | confidence=5\n  PROBLEM: If the close fails and removing `ai:closed` also fails, the script reports `outcome=blocked` but leaves the terminal `ai:closed` label on the open issue. The warning makes the state visible but does not prevent it.\n  WHY: Orchestrator reconciliation checks `ai:closed` as terminal before phase labels, so it can mark the wave issue closed and stop it from staying blocked.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/plan_nothing_to_implement_verify.sh:lines 225-236 (close-failure branch, `pnti_close_detail` / `close_failed_label_stale`) | severity=NIT | confidence=4\n  PROBLEM: If both the close and the `--remove-label ai:closed` rollback fail, the issue stays open with `ai:closed`. `scripts/orchestrate_lib.py:2437-2438` (`reconcile_wave_issue_status`) then reports it as `closed` via `label_ai_closed`, and the wave advances while a blocked comment asks a human for input.\n  WHY: Two consecutive GitHub write failures leave the stale label, and the new detail and warning do not change the transition. The reviewer calls this a known residual accepted in the prior editor round (both writes use `gh_retry`, and Phase 8b is the follow-up) and reports it only so the aggregator does not treat it as a new defect.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5696d1db5614d9bf0687fa68c5940e4cbe0b5bf2de11c21fd9b6eea5cc7d9c35",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10016,
+    "run_id": "45316763038",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45316763038",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124054058_71c63ec110",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10016,
+    "run_id": "45316763038"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T05:40:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
