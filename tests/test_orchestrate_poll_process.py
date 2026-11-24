@@ -685,7 +685,13 @@ import time as _mock_store_time
 
 _MOCK_STORE_LOCK_HANDLE = None
 # Test-only override so the fail-open path can be exercised quickly; 30s default.
-_MOCK_STORE_LOCK_WAIT_SECONDS = float(_mock_store_os.environ.get("GH_MOCK_STORE_LOCK_WAIT_SECONDS", "30") or "30")
+try:
+	_mock_store_wait_override = float(_mock_store_os.environ.get("GH_MOCK_STORE_LOCK_WAIT_SECONDS", "30") or "30")
+except ValueError:
+	_mock_store_wait_override = 30.0
+# A non-numeric, non-positive, nan or inf value would crash every fake or
+# defeat the bounded wait; fall back to the 30s default instead.
+_MOCK_STORE_LOCK_WAIT_SECONDS = _mock_store_wait_override if 0 < _mock_store_wait_override < float("inf") else 30.0
 
 
 def _mock_store_lock_acquire(store_path):
