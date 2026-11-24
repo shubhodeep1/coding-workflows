@@ -667,8 +667,10 @@ def _extract_latest_standalone_state(comments: list[dict]) -> dict | None:
 
 # #10019: the fake `gh`, `git` and `python3` that `_run_poller` writes, and
 # its `tg_cleanup_msgs` / `tg_send_tracked` helpers, all read-modify-write the
-# shared GH_MOCK_STORE JSON. Unlocked, two overlapping fakes (process
-# substitution, background calls, parallel shards on a busy runner) could lose
+# shared GH_MOCK_STORE JSON. Each `_run_poller` call keeps that store in its own
+# temp directory, so separate tests and shards never share it; the race is
+# inside one poller run. Unlocked, two overlapping fakes there (process
+# substitution, background calls, a fake that starts another fake) could lose
 # a counter update (`pr_get_calls`, `git_fetch_calls`) or read a half-written
 # store. Every one of them prepends this snippet: it takes an exclusive flock on
 # `<store>.lock` before the load, holds it until the fake exits (or calls
