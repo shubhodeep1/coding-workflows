@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nCheckpoint:\n- Read `scripts/pr_checks_lib.sh` 2912-2956 (how skip entries are read and which count as soft) and 3239-3250 (`_merge_lease_skip_block`, which drops a holder's entries on every write).\n- Read `scripts/review_merge_train.sh` 1838-1907 (tick contract, #9983 G5/G6) and the places a release writes a skip entry (lines 2110 and 2392).\n- No files changed.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The code confirms the problem the question describes. `_merge_lease_skip_block` (`scripts/pr_checks_lib.sh` lines 3239-3250) removes all of a holder's entries on every write (\"a holder is never on the skip list\"). So a \"used once on this head\" marker can only survive the grant if one retained entry is allowed. Older readers already treat any unknown three-field reason as hard: `_merge_lease_skips_hard` uses `NF == 3 && $3 != \"revoked_no_head_gate\"` and `_merge_lease_skip_is_soft` only accepts an empty reason or `revoked_no_head_gate`. That means tokens like `expired_unparked` and `revoked_idle_unparked` fail safe to hard, which meets the \u00a76 constraint, and they fit the existing `[a-z][a-z_]{0,39}` pattern. Option B adds the extra record state that G2 rules out, and an older writer would drop it. Option C drops G2.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1 picked a letter, so no execution plan is required. These are binding notes for the planner on how to carry out option A:\n  - New tokens: `expired_unparked` and `revoked_idle_unparked`. Both are hard in `_merge_lease_skip_is_soft`, `_merge_lease_skips_hard` and `_merge_lease_skips_soft`. `expired` and `revoked_idle` join `revoked_no_head_gate` as soft. Every other reason stays hard (G4).\n  - Grant write: `_merge_lease_skip_block`, or the grant call sites in `scripts/review_merge_train.sh`, keeps exactly one entry for the new holder: the one whose head equals the granted head, rewritten to `<old reason>_unparked`. This happens only when the grant un-parked a soft `expired`/`revoked_idle` entry. All of the holder's other entries are still dropped, so no record gains a retained entry in any other case.\n  - Release write (lines ~2110 and ~2392): if the record already has `<pr>:<same head>:<reason>_unparked`, write or keep the `_unparked` (hard) token, not the plain soft reason. `_merge_lease_skips_normalize` collapses duplicates of the same `pr:head` to the last line, so a plain reason written after it would undo the marker. A head change prunes the entry through the existing open-PR or head filter (line ~1997).\n  - The holder logic (revocation, idle test, TTL, held logging, and the multi-holder path in `_mt_merge_lease_tick_multi`) must ignore a retained `_unparked` entry on the holder's own head. It must not change whether the holder is revoked or held.\n  - Logging (G3): `MERGE_LEASE pr=<n> base=<ref> mode=tick outcome=unparked reason=head_gate_passed_after_<expired|revoked_idle>`. It reuses the candidate's existing statuses read (\u00a715, no new call), and the grant happens only on a confirmed success (`MERGE_LEASE_GATE_CONFIRMED`).\n  - Keep the existing guard: write `_unparked` tokens only when the staged library has the new classifier, so an older library never writes them.\n  - Known mixed-version gap, to document in the README and `agents.d/` docs: if an older library rewrites the record during a hold, it drops the retained entry. That allows at most one extra un-park on that head, never a permanent park.\n  - Tests: cover the cases the issue lists, plus a round-trip of records in the two- and three-field formats, plus a test that the holder is still not on the skip list except for the one retained `_unparked` entry.",
+  "fingerprint": "1513a7f18b101cccf564f59c4573f71d72abe3203be7dc4ea49411d8c22d8bf7",
+  "lineage": {
+    "issue_number": 10044,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45353269117",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45353269117",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10044"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261124083513_f185419068",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10044,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45353269117"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #10044",
+  "timestamps": {
+    "created_at": "2026-11-24T08:35:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
