@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:3475 | severity=high | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The roughly nine poller-subprocess integration tests added to tests/test_orchestrate_poll_process.py push the orchestrate-poll shards (groups 1 and 2) past the 20-minute `timeout-minutes`, so they end `cancelled`.\n  WHY: A cancelled shard fails the `lint` roll-up and blocks the merge. Severity disagreement: anthropic_claude-sonnet-5_5 rated it NIT with confidence 2 and said the cause is unconfirmed, while z-ai_glm-5_3-flash rated it MAJOR with confidence 3.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:3475 | severity=low | confidence=2\n  PROBLEM: The `orchestrate-poll` job has `timeout-minutes: 20`. On head 918beae2, check-runs `orchestrate-poll (1)` and `orchestrate-poll (2)` ended `cancelled`. The new poller-subprocess tests (`_managed_held_pr_run`, `_standalone_exhausted_run`) may push the shards over the limit.\n  WHY: A cancelled shard fails the `lint` roll-up and blocks the merge. The reviewer could not confirm the cause, and no code defect is shown. If a rerun does not clear it, rebalance the new tests into a lighter shard. Source severity: NIT.\n- TASK_GAP (reported as NIT, confidence 1; reviewer concluded no deliverable is missing):\n  Requirement: \"`close_and_reissue` arms re-check the hold before the replacement is created\" (documented fail-open: a failed `_resolve_issue_implementation_pr` lookup falls back to the legacy flow).\n  Expected change site: `scripts/orchestrate_poll_process.sh`, the managed `close_and_reissue` arm (about line 22307) and the standalone arm (about line 29163).\n  Evidence of absence: The implementation matches the documented intent, and `close_linked_pr` still leaves the held PR open. This is an accepted trade-off recorded in the changelog fragment, `agents.d/9733` and the PR description.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_orchestrate_poll_process.py (nine test functions added after line 16844, interacting with .github/workflows/ci.yml:3475) | severity=high | confidence=3\n  PROBLEM: The roughly nine full-poller subprocess integration tests (`_managed_held_pr_run` / `_standalone_exhausted_run`) push the orchestrate-poll matrix groups 1 and 2 past the 20-minute timeout. On head 918beae2 they ended `cancelled` (runs/45343694485). ci.yml's own history notes group (1) previously took 20m12s (ci.yml:3926) and group (2) 19m28s (ci.yml:2196).\n  WHY: A shard that exceeds 20 minutes is cancelled and fails the `lint` roll-up (ci.yml:4812/4854), so the PR cannot merge. Reruns will reproduce it whenever the added tests push groups 1 and 2 past the budget. Source severity: MAJOR.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "df2f0f3aca6b0a828e03299765ae8d9f1b7fde96e38c83407c56eaa143a3c838",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9832,
+    "run_id": "45321370293",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45321370293",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124084020_e376436654",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9832,
+    "run_id": "45321370293"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T08:40:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
