@@ -29962,16 +29962,16 @@ STALL_EOF
         # candidate from a bare mention-only cross-reference (issue #3816 /
         # PR #3828 incident — the last cross-reference was an unrelated PR).
         local merge_pr_json=""
-        if [[ "${_std_prefetched_impl_pr_num}" =~ ^[0-9]+$ ]]; then
+        if [[ "${_std_prefetched_impl_pr_num:-}" =~ ^[0-9]+$ ]]; then
           # Issue #9482: the merged-guard fallback already resolved (and
           # verified) the implementation PR this tick; reuse it.
-          merge_pr="${_std_prefetched_impl_pr_num}"
-          merge_pr_json="${_std_prefetched_impl_pr_json}"
-        elif [ -n "${_std_prefetched_impl_pr_miss_reason}" ]; then
+          merge_pr="${_std_prefetched_impl_pr_num:-}"
+          merge_pr_json="${_std_prefetched_impl_pr_json:-}"
+        elif [ -n "${_std_prefetched_impl_pr_miss_reason:-}" ]; then
           # The fallback already ran the resolver this tick and missed; reuse
           # its failure reason rather than repeating discovery and fetches.
           merge_pr=""
-          STALL_IMPL_PR_FAILURE_REASON="${_std_prefetched_impl_pr_miss_reason}"
+          STALL_IMPL_PR_FAILURE_REASON="${_std_prefetched_impl_pr_miss_reason:-}"
         elif _resolve_issue_implementation_pr "${issue_num}"; then
           merge_pr="${STALL_IMPL_PR_NUM}"
           merge_pr_json="${STALL_IMPL_PR_JSON:-}"
