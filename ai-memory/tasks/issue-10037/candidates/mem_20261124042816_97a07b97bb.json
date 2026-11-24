@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should a promote cycle skipped with `runner_wait_long` be retried on the same day? Today nothing re-runs the cycle before the next daily cron.\nChoices:\nA) The orchestrator poller (`orchestrate_poll.yml`, which already runs often) dispatches the cycle again, at most once an hour, only after the latest cycle skipped with `runner_wait_long` and main's tip is still unpromoted. This needs a new `workflow_dispatch` input that routes to the `cycle` job, without changing the existing `target_sha` \u2192 `promote` path. (RECOMMENDED)\nB) Add more cron entries to `promote-main-to-stable.yml` (for example every 2 hours). An extra tick exits at once unless the day's last cycle skipped with `runner_wait_long`. This is simpler, but every tick takes a runner slot even when it does nothing (\u00a726).\nC) No same-day retry: drop G2 and let the next daily schedule pick the cycle up.\nQ2: Should the new runner-wait skip (G1) be bounded, so that a queue that stays long cannot hold a release (including a hotfix) forever?\nChoices:\nA) Not bounded: skip every tick while the oldest live queued run is older than `RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES`. `0` is the only way to turn it off.\nB) Bounded: once the same tip has been skipped for `runner_wait_long` for longer than the existing `AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS` window, dispatch one cycle whatever the wait, as `runner_queue_deep` does today. The promote cycle uses the same rule. (RECOMMENDED)\nC) Bounded by a new variable (for example `RELEASE_GATE_RUNNER_WAIT_MAX_SKIP_HOURS`, default 24) instead of reusing the existing window.",
+  "fingerprint": "8450fccb1d99c7fd168058107f9fde0965dbe07d120e407646eb8d2a113e1027",
+  "lineage": {
+    "issue_number": 10037,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45324828612",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45324828612",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261124042816_97a07b97bb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10037,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45324828612"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #10037 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-24T04:28:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
