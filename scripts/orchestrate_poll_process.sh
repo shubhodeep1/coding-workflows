@@ -184,6 +184,119 @@ fi
 # the plan-comment trailer. Case-insensitive like GitHub's startsWith/contains.
 RECLARIFY_COMMAND_JQ_DEF='def is_reclarify_command: (. // "" | ascii_downcase) as $b | ($b | startswith("/reclarify")) or ((("\n" + $b) | contains("\n/reclarify")) and ($b | contains("<!-- ai:") | not) and ($b | contains("to restart clarification reply:") | not));'
 
+# Rate-limit requeue (issue #10031). Fixed constants, no env surface: at most
+# this many automatic re-entries per item (issues: replays since the last
+# successful clarify; PRs: requeues per head), then ai:needs-human. The grace
+# period is added to the recorded reset epoch; the per-cycle cap bounds PR
+# re-dispatches. Defined here so the reclarify-only early exit can use them.
+RATE_LIMIT_REQUEUE_MAX_ATTEMPTS=3
+RATE_LIMIT_REQUEUE_GRACE_SECS=60
+REVIEW_GATE_RATE_LIMIT_REQUEUE_MAX_PER_CYCLE=5
+CLARIFY_RATE_LIMIT_MARKER_RE='^<!-- ai:clarify-rate-limited:v1 run=[1-9][0-9]* reset=[1-9][0-9]{9} event=(issues|issue_comment|other) source=(0|[1-9][0-9]*) -->$'
+
+# _replay_rate_limited_clarify <issue> <issue_json> <comments_json> <trusted_login>
+# Called by replay_failed_reclarify_commands when the newest trusted Actions
+# marker on a labelled issue is `ai:clarify-rate-limited:v1` (clarify.yml
+# "Queue rate-limited clarify for poller"). Uses only the caller's issue and
+# comment reads; writes only on replay, escalation or label removal. The
+# marker is data, not authorization: a replay needs a live trusted source
+# /reclarify comment, or (source=0) a trusted issue author. Log prefix:
+# CLARIFY_RATE_LIMIT_REQUEUE. Always returns 0.
+_replay_rate_limited_clarify() {
+  local issue_num="$1" issue_json="$2" comments_json="$3" trusted_login="$4"
+  local marker marker_id="" run="" reset="" event="" source="" created="" created_epoch now attempts body log
+  marker="$(printf '%s' "${comments_json}" | jq -r --arg re "${CLARIFY_RATE_LIMIT_MARKER_RE}" '
+    [.[] | select(.user.login == "github-actions[bot]" and .user.type == "Bot" and ((.body // "") | test($re)))]
+    | max_by(.id) // empty
+    | (.body | capture("run=(?<run>[0-9]+) reset=(?<reset>[0-9]+) event=(?<event>[a-z_]+) source=(?<source>[0-9]+)")) as $m
+    | [(.id | tostring), $m.run, $m.reset, $m.event, $m.source, (.created_at // "")] | @tsv' 2>/dev/null)" || marker=""
+  IFS=$'\t' read -r marker_id run reset event source created <<< "${marker}" || true
+  if ! [[ "${marker_id}" =~ ^[1-9][0-9]*$ && "${run}" =~ ^[1-9][0-9]*$ && "${reset}" =~ ^[1-9][0-9]{9}$ && "${source}" =~ ^(0|[1-9][0-9]*)$ ]]; then
+    echo "CLARIFY_RATE_LIMIT_REQUEUE issue=${issue_num} outcome=skipped reason=marker_invalid"
+    return 0
+  fi
+  log="issue=${issue_num} run=${run}"
+  # A forged or skewed far-future reset cannot park the issue: clamp it to the
+  # marker's own creation time plus 3900 s (the writer's accepted maximum).
+  created_epoch="$(jq -rn --arg t "${created}" '$t | fromdateiso8601' 2>/dev/null)" || created_epoch=""
+  if ! [[ "${created_epoch}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "CLARIFY_RATE_LIMIT_REQUEUE ${log} outcome=skipped reason=marker_invalid"
+    return 0
+  fi
+  [ "${reset}" -le $((created_epoch + 3900)) ] || reset=$((created_epoch + 3900))
+  # Obsolete: a newer trusted success outcome, this run's replay, or this
+  # run's escalation already exists (a previous label removal may have failed).
+  if printf '%s' "${comments_json}" | jq -e --argjson id "${marker_id}" --arg login "${trusted_login}" '
+    any(.[]; .id > $id and .user.login == $login and
+      ((.body // "") | startswith("/answer [auto-answered-by-clarify]") or contains("<!-- ai:clarification-questions -->") or contains("<!-- ai:claude-issue-routed:v1 -->")))' >/dev/null 2>&1; then
+    gh_retry gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels/ai%3Areclarify-requeue" >/dev/null 2>&1 || true
+    echo "CLARIFY_RATE_LIMIT_REQUEUE ${log} outcome=obsolete"
+    return 0
+  fi
+  if printf '%s' "${comments_json}" | jq -e --argjson id "${marker_id}" --arg login "${trusted_login}" --arg run "${run}" '
+    any(.[]; .id > $id and .user.login == $login and
+      ((.body // "") | contains("<!-- ai:clarify-rate-limit-replay:v1 run=" + $run + " -->") or contains("<!-- ai:clarify-rate-limit-escalated:v1 run=" + $run + " -->")))' >/dev/null 2>&1; then
+    gh_retry gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels/ai%3Areclarify-requeue" >/dev/null 2>&1 || true
+    echo "CLARIFY_RATE_LIMIT_REQUEUE ${log} outcome=already_requeued"
+    return 0
+  fi
+  # A newer human /reclarify is in flight: keep the label until it resolves.
+  if printf '%s' "${comments_json}" | jq -e --argjson id "${marker_id}" "${RECLARIFY_COMMAND_JQ_DEF}"'
+    any(.[]; .id > $id and .user.type == "User" and
+      (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")) and
+      ((.body // "") | is_reclarify_command and (contains("<!-- ai:reclarify-replay:v1 source=") | not) and (contains("<!-- ai:clarify-rate-limit-replay:v1 ") | not)))' >/dev/null 2>&1; then
+    echo "CLARIFY_RATE_LIMIT_REQUEUE ${log} outcome=skipped reason=newer_request"
+    return 0
+  fi
+  # Authorization from live data, never from the marker alone.
+  if [ "${event}" = "issue_comment" ] && [ "${source}" != "0" ]; then
+    printf '%s' "${comments_json}" | jq -e --argjson id "${source}" "${RECLARIFY_COMMAND_JQ_DEF}"'
+      any(.[]; .id == $id and .user.type == "User" and
+        (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")) and ((.body // "") | is_reclarify_command))' >/dev/null 2>&1 || source="untrusted"
+  else
+    printf '%s' "${issue_json}" | jq -e '(.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")' >/dev/null 2>&1 || source="untrusted"
+  fi
+  if [ "${source}" = "untrusted" ]; then
+    gh_retry gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels/ai%3Areclarify-requeue" >/dev/null 2>&1 || true
+    echo "CLARIFY_RATE_LIMIT_REQUEUE ${log} outcome=skipped reason=untrusted_source"
+    return 0
+  fi
+  now="$(date -u +%s)"
+  if [ "${now}" -lt $((reset + RATE_LIMIT_REQUEUE_GRACE_SECS)) ]; then
+    echo "CLARIFY_RATE_LIMIT_REQUEUE ${log} reset=${reset} outcome=waiting_for_reset"
+    return 0
+  fi
+  attempts="$(printf '%s' "${comments_json}" | jq -r --arg login "${trusted_login}" '
+    ([.[] | select(.user.login == $login and ((.body // "") | startswith("/answer [auto-answered-by-clarify]") or contains("<!-- ai:clarification-questions -->") or contains("<!-- ai:claude-issue-routed:v1 -->"))) | .id] | max // 0) as $ok
+    | [.[] | select(.id > $ok and .user.login == $login and ((.body // "") | contains("<!-- ai:clarify-rate-limit-replay:v1 ")))] | length' 2>/dev/null)" || attempts=""
+  [[ "${attempts}" =~ ^[0-9]+$ ]] || attempts="${RATE_LIMIT_REQUEUE_MAX_ATTEMPTS}"
+  if [ "${attempts}" -ge "${RATE_LIMIT_REQUEUE_MAX_ATTEMPTS}" ]; then
+    local label_state="added" comment_state="written"
+    GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels" \
+      -f 'labels[]=ai:needs-human' >/dev/null 2>&1 || label_state="failed"
+    body="AI clarification stopped retrying this issue. The GitHub API primary rate limit of GH_PAT stopped clarification ${attempts} times (last run ${run}), so automatic re-entry has stopped. A maintainer can reply with the reclarify command once the rate limit has recovered.
+
+<!-- ai:clarify-rate-limit-escalated:v1 run=${run} -->"
+    gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${body}" >/dev/null 2>&1 || comment_state="write_failed"
+    if [ "${label_state}" = "added" ] && [ "${comment_state}" = "written" ]; then
+      gh_retry gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels/ai%3Areclarify-requeue" >/dev/null 2>&1 || true
+    fi
+    echo "CLARIFY_RATE_LIMIT_REQUEUE ${log} outcome=escalated attempts=${attempts}/${RATE_LIMIT_REQUEUE_MAX_ATTEMPTS} label=${label_state} marker=${comment_state}"
+    return 0
+  fi
+  # A failed POST is left labelled for the next tick; a posted replay carries
+  # this run's id so a later label-removal failure cannot replay twice.
+  if gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
+    -f body="/reclarify [auto-requeued-by-poller]
+<!-- ai:clarify-rate-limit-replay:v1 run=${run} -->" >/dev/null 2>&1; then
+    echo "CLARIFY_RATE_LIMIT_REQUEUE ${log} outcome=requeued attempt=$((attempts + 1))/${RATE_LIMIT_REQUEUE_MAX_ATTEMPTS}"
+    gh_retry gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels/ai%3Areclarify-requeue" >/dev/null 2>&1 || true
+  else
+    echo "CLARIFY_RATE_LIMIT_REQUEUE ${log} outcome=skipped reason=replay_post_failed"
+  fi
+  return 0
+}
+
 # Cron entry point, including ticks with no active tracking project. Only a
 # trusted Actions marker AND its original live trusted User command may cause
 # a replay. The marker is data, not authorization. One bounded issue listing,
@@ -208,6 +321,15 @@ replay_failed_reclarify_commands() {
     comments_json="$(gh_retry gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?per_page=100" 2>/dev/null)" || continue
     # Incomplete or malformed comment history never authorizes replay.
     comments_json="$(printf '%s' "${comments_json}" | jq -ce 'if type == "array" and all(.[]; type == "array") then add // [] else error("invalid pages") end' 2>/dev/null)" || continue
+    # Issue #10031: the newest trusted Actions marker of either kind decides
+    # the path; a rate-limited clarify run has its own reset-aware replay.
+    if printf '%s' "${comments_json}" | jq -e --arg re "${CLARIFY_RATE_LIMIT_MARKER_RE}" '
+      [.[] | select(.user.login == "github-actions[bot]" and .user.type == "Bot" and
+        ((.body // "") | test("^<!-- ai:reclarify-requeue:v1 source=[1-9][0-9]* -->$") or test($re)))]
+      | max_by(.id) | (.body // "") | startswith("<!-- ai:clarify-rate-limited:v1 ")' >/dev/null 2>&1; then
+      _replay_rate_limited_clarify "${issue_num}" "${issue_json}" "${comments_json}" "${trusted_login}" || true
+      continue
+    fi
     source_id="$(printf '%s' "${comments_json}" | jq -r '
       [.[] | select(.user.login == "github-actions[bot]" and .user.type == "Bot" and
         ((.body // "") | test("^<!-- ai:reclarify-requeue:v1 source=[1-9][0-9]* -->$")))]
@@ -236,7 +358,7 @@ replay_failed_reclarify_commands() {
     if printf '%s' "${comments_json}" | jq -e --argjson id "${source_id}" "${RECLARIFY_COMMAND_JQ_DEF}"'
       any(.[]; .id > $id and .user.type == "User" and
         (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")) and
-        ((.body // "") | is_reclarify_command and (contains("<!-- ai:reclarify-replay:v1 source=") | not)))' >/dev/null 2>&1; then
+        ((.body // "") | is_reclarify_command and (contains("<!-- ai:reclarify-replay:v1 source=") | not) and (contains("<!-- ai:clarify-rate-limit-replay:v1 ") | not)))' >/dev/null 2>&1; then
       continue
     fi
     # A failed POST is left labelled for the next tick. A successful POST
@@ -39041,6 +39163,11 @@ declare -A _STANDALONE_CONFLICT_STATE_LOADED=()
 # oldest first). Only own-line markers are parsed; author trust is applied
 # later by run_issueless_review_retry_pass. A failed list or batch leaves
 # its PRs out and sets _STANDALONE_ISSUELESS_RETRY_PREFETCH_FAILED (fail open).
+# Issue #10031: a comment item also carries gate ({head, reset, run}),
+# gate_retry ({run, head}) and gate_escalated ({run}) only when its body holds
+# the matching own-line ai:review-gate-rate-limited:v1,
+# ai:review-gate-rate-limit-requeue:v1 or ai:review-gate-rate-limit-escalated:v1
+# marker; run_review_gate_rate_limit_requeue_pass reads them.
 declare -A _STANDALONE_ISSUELESS_RETRY_STATE=()
 _STANDALONE_ISSUELESS_RETRY_PREFETCH_FAILED="false"
 if [ "${_conflict_sweep_list_failed:-false}" = "true" ]; then
@@ -39100,7 +39227,9 @@ if [[ "${GITHUB_REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
 				[ -n "${_standalone_issueless_row}" ] || _standalone_issueless_row='{}'
 				_standalone_issueless_entry="$(printf '%s' "${_standalone_response}" | jq -c --arg key "p${_standalone_num}" --arg ref "${_standalone_head}" --arg oid "${_standalone_list_oid}" --argjson num "${_standalone_num}" \
 					--argjson row "${_standalone_issueless_row}" --argjson pipeline "${ISSUELESS_REVIEW_RETRY_PIPELINE_LABELS_JSON}" \
-					--arg fail_tag "review-autofix-failure:v1" --arg retry_tag "${ISSUELESS_REVIEW_RETRY_MARKER_TAG}" '
+					--arg fail_tag "review-autofix-failure:v1" --arg retry_tag "${ISSUELESS_REVIEW_RETRY_MARKER_TAG}" \
+					--arg gate_tag "ai:review-gate-rate-limited:v1" --arg gate_retry_tag "ai:review-gate-rate-limit-requeue:v1" \
+					--arg gate_esc_tag "ai:review-gate-rate-limit-escalated:v1" '
 					def own_marker($tag):
 						[capture("(^|\n)<!-- " + $tag + " (?<f>[^>\n]*?) -->[ \r]*(\n|$)"; "g") | .f] | last
 						| if . == null then null else
@@ -39120,11 +39249,14 @@ if [[ "${GITHUB_REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
 							closing_total: ($n.closingIssuesReferences.totalCount | if type == "number" then . else 2147483647 end),
 							closing_seen: ($closing | length),
 							linked_pipeline: any($closing[]; any((.labels.nodes // [])[]?; (.name? // "") as $l | $pipeline | index($l) != null)),
-							comments: [($n.comments.nodes // [])[]? | (.body // "" | if type == "string" then . else "" end) as $b | {
+							comments: [($n.comments.nodes // [])[]? | (.body // "" | if type == "string" then . else "" end) as $b | ({
 								a: ((.author.login // "") | if type == "string" then . else "" end),
 								fail: ($b | own_marker($fail_tag) | if . == null then null else {head: (.head // ""), reason: (.reason // ""), support: (.support // ""), fp: (.fp // "")} end),
 								retry: ($b | own_marker($retry_tag) | if . == null then null else {head: (.head // ""), support: (.support // "")} end)
-							}]
+							}
+							+ ($b | own_marker($gate_tag) | if . == null then {} else {gate: {head: (.head // ""), reset: (.reset // ""), run: (.run // "")}} end)
+							+ ($b | own_marker($gate_retry_tag) | if . == null then {} else {gate_retry: {run: (.run // ""), head: (.head // "")}} end)
+							+ ($b | own_marker($gate_esc_tag) | if . == null then {} else {gate_escalated: {run: (.run // "")}} end))]
 						}
 					else empty end' 2>/dev/null || true)"
 				if [ -n "${_standalone_issueless_entry}" ]; then
@@ -40253,4 +40385,152 @@ run_issueless_review_retry_pass() {
 }
 
 run_issueless_review_retry_pass || echo "ISSUELESS_REVIEW_RETRY outcome=skipped reason=error rc=$?"
+
+# ---------------------------------------------------------------
+# Review gate rate-limit requeue pass (issue #10031)
+# ---------------------------------------------------------------
+# When the review gate's PR read gives up on a GH_PAT primary rate limit
+# (AUTOFIX_GATE_PR_READ_FAILED rc=75), scripts/review_autofix_step_evaluate_gate.sh
+# posts a job-token comment ending in
+# `<!-- ai:review-gate-rate-limited:v1 head=<sha|unknown> reset=<epoch> run=<id> -->`.
+# Nothing re-entered the PR afterwards (binance-blessings PR #716 and
+# tele-funtoken-msg-scoring PR #5718 sat two days). This pass reads the same
+# _STANDALONE_ISSUELESS_RETRY_STATE the issue-less pass reads (no extra read)
+# and re-dispatches the review through _dispatch_review_for_conflicts (default
+# branch only; in-flight guard) once the reset has passed, at most
+# RATE_LIMIT_REQUEUE_MAX_ATTEMPTS times per head, then adds ai:needs-human.
+# Gate markers count only from `github-actions` (the job token); requeue and
+# escalation markers only from unblock_trusted_login. PRs with a linked
+# pipeline issue are included. Log prefix: REVIEW_GATE_RATE_LIMIT_REQUEUE.
+
+# _review_gate_rate_limit_requeue_decide <entry_json> <trusted_login> <now_epoch>
+# Pure: prints "<decision>|<reason>|<run>|<reset>|<attempts>" where decision is
+# none, skipped, already_requeued, already_escalated, waiting_for_reset,
+# escalate or eligible. Malformed input prints "none||||" (fail closed).
+_review_gate_rate_limit_requeue_decide() {
+	local entry="${1:-}" login="${2:-}" now="${3:-0}" result
+	[[ "${now}" =~ ^[0-9]+$ ]] || now=0
+	result="$(printf '%s' "${entry}" | jq -r --arg login "${login}" --argjson now "${now}" --arg repo_owner "${GITHUB_REPOSITORY%%/*}" \
+		--argjson grace "${RATE_LIMIT_REQUEUE_GRACE_SECS}" --argjson max "${RATE_LIMIT_REQUEUE_MAX_ATTEMPTS}" \
+		--argjson exclude "${ISSUELESS_REVIEW_RETRY_EXCLUDE_LABELS_JSON}" '
+		def sha: (type == "string") and test("^[0-9a-f]{40}$");
+		def valid_gate: (type == "object") and ((.run // "") | type == "string" and test("^[1-9][0-9]*$")) and ((.reset // "") | type == "string" and test("^[1-9][0-9]{9}$"));
+		. as $e
+		| if ($e | type) != "object" or $login == "" or ($e.comments | type) != "array" then "none||||" else
+		$e.comments as $c
+		| ([range(0; $c | length) | select((($c[.].a // "") == "github-actions") and ($c[.].gate | valid_gate))] | last) as $i
+		| if $i == null then "none||||" else
+		$c[$i].gate as $g
+		| $c[($i + 1):] as $after
+		| ([$c[] | select((.a // "") == $login and (.gate_retry | type) == "object" and ($e.oid | sha) and .gate_retry.head == $e.oid)] | length) as $attempts
+		| "|\($g.run)|\($g.reset)|\($attempts)" as $tail
+		| if any($after[]; (.a // "") == $login and (.gate_retry | type) == "object" and .gate_retry.run == $g.run) then "already_requeued|\($tail)"
+		elif any($after[]; (.a // "") == $login and (.gate_escalated | type) == "object" and .gate_escalated.run == $g.run) then "already_escalated|\($tail)"
+		elif any($after[]; ((.a // "") == $login) or ((.a // "") == "github-actions")) then "skipped|later_review|\($g.run)|\($g.reset)|\($attempts)"
+		elif ($e.cross != "false") or (($e.owner // "") == "") or (($e.owner | ascii_downcase) != ($repo_owner | ascii_downcase)) then "skipped|fork_or_unknown_head|\($g.run)|\($g.reset)|\($attempts)"
+		elif $e.draft != false then "skipped|draft|\($g.run)|\($g.reset)|\($attempts)"
+		elif any(($e.labels // [])[]; . as $l | $exclude | index($l) != null) then "skipped|excluded_label|\($g.run)|\($g.reset)|\($attempts)"
+		elif ($e.oid | sha | not) or (($g.head | sha) and $g.head != $e.oid) then "skipped|head_moved|\($g.run)|\($g.reset)|\($attempts)"
+		elif $now < (($g.reset | tonumber) + $grace) then "waiting_for_reset|\($tail)"
+		elif $attempts >= $max then "escalate|\($tail)"
+		else "eligible|\($tail)" end
+		end end' 2>/dev/null || true)"
+	[ -n "${result}" ] || result="none||||"
+	printf '%s\n' "${result}"
+}
+
+# run_review_gate_rate_limit_requeue_pass: one pass per cycle; always returns 0.
+run_review_gate_rate_limit_requeue_pass() {
+	local repo="${GITHUB_REPOSITORY:-}" login now pr entry decision reason run reset attempts head head_ref
+	local dispatch_rc body dispatched=0 requeued=0 log_head log_line label_state comment_state
+	echo ""
+	echo "========================================"
+	echo "Review gate rate-limit requeue pass"
+	echo "========================================"
+	if [ "${_STANDALONE_ISSUELESS_RETRY_PREFETCH_FAILED:-false}" = "true" ]; then
+		echo "REVIEW_GATE_RATE_LIMIT_REQUEUE outcome=skipped reason=prefetch_unavailable repo=${repo}"
+	fi
+	if [ "${#_STANDALONE_ISSUELESS_RETRY_STATE[@]}" -eq 0 ]; then
+		echo "Review gate rate-limit requeue pass complete. Requeued: 0."
+		return 0
+	fi
+	unblock_trusted_login >/dev/null || true
+	login="${UNBLOCK_TRUSTED_LOGIN:-}"
+	if [ -z "${login}" ]; then
+		echo "REVIEW_GATE_RATE_LIMIT_REQUEUE outcome=skipped reason=trusted_login_unresolved repo=${repo}"
+		echo "Review gate rate-limit requeue pass complete. Requeued: 0."
+		return 0
+	fi
+	now="$(date -u +%s)"
+	while IFS= read -r pr; do
+		[[ "${pr}" =~ ^[1-9][0-9]*$ ]] || continue
+		entry="${_STANDALONE_ISSUELESS_RETRY_STATE["${pr}"]:-}"
+		decision="" reason="" run="" reset="" attempts=""
+		IFS='|' read -r decision reason run reset attempts < <(_review_gate_rate_limit_requeue_decide "${entry}" "${login}" "${now}") || true
+		if [ "${decision:-none}" = "none" ]; then
+			continue
+		fi
+		[[ "${run}" =~ ^[1-9][0-9]*$ ]] || continue
+		[[ "${attempts}" =~ ^[0-9]+$ ]] || attempts=0
+		head="$(printf '%s' "${entry}" | jq -r '.oid // ""' 2>/dev/null || true)"
+		log_head="${head}"; [[ "${log_head}" =~ ^[0-9a-f]{40}$ ]] || log_head="unknown"
+		log_line="pr=${pr} repo=${repo} head=${log_head} run=${run} reset=${reset:-unknown} attempts=${attempts}/${RATE_LIMIT_REQUEUE_MAX_ATTEMPTS}"
+		case "${decision}" in
+			skipped)
+				echo "REVIEW_GATE_RATE_LIMIT_REQUEUE outcome=skipped ${log_line} reason=${reason:-unknown}"
+				continue
+				;;
+			waiting_for_reset|already_requeued|already_escalated)
+				echo "REVIEW_GATE_RATE_LIMIT_REQUEUE outcome=${decision} ${log_line}"
+				continue
+				;;
+			escalate)
+				label_state="added"; comment_state="written"
+				# gh-loop-ok: escalation writes only, once per (PR, gate run); reads come from the batch cache
+				GH_RETRY_IDEMPOTENT=true gh_retry gh api "repos/${repo}/issues/${pr}/labels" -f 'labels[]=ai:needs-human' >/dev/null 2>&1 || label_state="failed"
+				body="Review gate rate-limit requeue stopped: the GitHub API primary rate limit of GH_PAT stopped the AI review gate on head \`${log_head}\` ${attempts} times after automatic re-dispatch (last run ${run}). Automatic re-entry has stopped and \`ai:needs-human\` was added; re-run the review once the rate limit has recovered.
+
+<!-- ai:review-gate-rate-limit-escalated:v1 run=${run} -->"
+				# gh-loop-ok: escalation marker write, once per (PR, gate run)
+				gh_retry gh api "repos/${repo}/issues/${pr}/comments" -f body="${body}" >/dev/null 2>&1 || comment_state="write_failed"
+				echo "REVIEW_GATE_RATE_LIMIT_REQUEUE outcome=escalated ${log_line} label=${label_state} marker=${comment_state}"
+				continue
+				;;
+			eligible) ;;
+			*) continue ;;
+		esac
+		if [ "${dispatched}" -ge "${REVIEW_GATE_RATE_LIMIT_REQUEUE_MAX_PER_CYCLE}" ]; then
+			echo "REVIEW_GATE_RATE_LIMIT_REQUEUE outcome=skipped ${log_line} reason=cycle_cap"
+			continue
+		fi
+		dispatched=$((dispatched + 1))
+		head_ref="$(printf '%s' "${entry}" | jq -r '.ref // ""' 2>/dev/null || true)"
+		dispatch_rc=0
+		_dispatch_review_for_conflicts "${pr}" "${head_ref}" || dispatch_rc=$?
+		case "${dispatch_rc}" in
+			0)
+				requeued=$((requeued + 1))
+				body="Review gate rate-limit requeue: re-dispatched the review after the GitHub API rate limit reset (attempt $((attempts + 1)) of ${RATE_LIMIT_REQUEUE_MAX_ATTEMPTS}).
+
+<!-- ai:review-gate-rate-limit-requeue:v1 run=${run} head=${log_head} -->"
+				# gh-loop-ok: requeue marker write after a dispatch, capped by REVIEW_GATE_RATE_LIMIT_REQUEUE_MAX_PER_CYCLE
+				if gh_retry gh api "repos/${repo}/issues/${pr}/comments" -f body="${body}" >/dev/null 2>&1; then
+					echo "REVIEW_GATE_RATE_LIMIT_REQUEUE outcome=requeued ${log_line} attempt=$((attempts + 1))/${RATE_LIMIT_REQUEUE_MAX_ATTEMPTS}"
+				else
+					echo "REVIEW_GATE_RATE_LIMIT_REQUEUE outcome=requeued ${log_line} attempt=$((attempts + 1))/${RATE_LIMIT_REQUEUE_MAX_ATTEMPTS} marker=write_failed"
+				fi
+				;;
+			2)
+				echo "REVIEW_GATE_RATE_LIMIT_REQUEUE outcome=in_flight ${log_line}"
+				;;
+			*)
+				echo "REVIEW_GATE_RATE_LIMIT_REQUEUE outcome=skipped ${log_line} reason=dispatch_failed"
+				;;
+		esac
+	done < <(printf '%s\n' "${!_STANDALONE_ISSUELESS_RETRY_STATE[@]}" | sort -n)
+	echo "Review gate rate-limit requeue pass complete. Requeued: ${requeued}."
+	return 0
+}
+
+run_review_gate_rate_limit_requeue_pass || echo "REVIEW_GATE_RATE_LIMIT_REQUEUE outcome=skipped reason=error rc=$?"
 _standalone_sweep_alert_level_restore

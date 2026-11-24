@@ -349,6 +349,8 @@ jobs:
             exit 1
           elif [ "${resolver_rc}" -eq 75 ] && [ "${resolver_ci_triage_routing_on}" = "true" ]; then
             echo "::error::INTEGRATION_REF_RESOLVE outcome=rate_limited rc=${resolver_rc} ci_triage_routing=on; refusing to fall back to the default branch."
+            # Issue #10031: "Queue rate-limited clarify for poller" reads this.
+            echo "rate_limited=true" >> "$GITHUB_OUTPUT"
             exit 1
           elif [ "${resolver_rc}" -eq 2 ] && [ "${resolver_ci_triage_routing_on}" = "true" ]; then
             # Exit 2 = resolver API failure (retries exhausted or permanent error).
@@ -2816,6 +2818,80 @@ jobs:
           done
           echo '::error::Failed to label reclarify request for poller replay.'
           exit 1
+
+      # Issue #10031: a GH_PAT primary rate limit in "Resolve integration ref"
+      # (resolver rc=75) used to leave the issue idle until a person noticed.
+      # Record the reset time in a job-token marker (own rate budget; starts no
+      # workflow) and add ai:reclarify-requeue; the poller's
+      # replay_failed_reclarify_commands re-enters clarify after the reset, at
+      # most RATE_LIMIT_REQUEUE_MAX_ATTEMPTS times, then adds ai:needs-human.
+      # The marker is data, not authorization: the poller re-checks the source
+      # comment or issue author. Always exits 0 so the real failure stays visible.
+      - name: Queue rate-limited clarify for poller
+        if: env.CLAUDE_CAPACITY_WAIT != 'true' && failure() && steps.refctx.outputs.rate_limited == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RATE_LIMIT_READ_TOKEN: ${{ secrets.GH_PAT }}
+          REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          SOURCE_COMMENT_ID: ${{ github.event.comment.id || '0' }}
+        run: |
+          set -uo pipefail
+          if ! [[ "${ISSUE_NUMBER:-}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "CLARIFY_RATE_LIMIT_MARKER issue=unknown run=${GITHUB_RUN_ID:-unknown} outcome=skipped reason=invalid_issue"
+            exit 0
+          fi
+          rl_run="${GITHUB_RUN_ID:-}"
+          if ! [[ "${rl_run}" =~ ^[1-9][0-9]*$ ]]; then
+            echo "CLARIFY_RATE_LIMIT_MARKER issue=${ISSUE_NUMBER} run=unknown outcome=skipped reason=invalid_run"
+            exit 0
+          fi
+          case "${EVENT_NAME:-}" in
+            issues|issue_comment) rl_event="${EVENT_NAME}" ;;
+            *) rl_event="other" ;;
+          esac
+          rl_source="${SOURCE_COMMENT_ID:-0}"
+          { [ "${rl_event}" = "issue_comment" ] && [[ "${rl_source}" =~ ^[1-9][0-9]*$ ]]; } || rl_source=0
+          # GET /rate_limit does not count against the limit. Accept only a
+          # plausible epoch no later than now+3900 s; otherwise now+3600.
+          rl_now="$(date -u +%s)"
+          rl_reset=""
+          if [ -n "${RATE_LIMIT_READ_TOKEN:-}" ]; then
+            rl_reset="$(GH_TOKEN="${RATE_LIMIT_READ_TOKEN}" gh api rate_limit --jq '.resources.core.reset' 2>/dev/null || true)"
+          fi
+          if ! [[ "${rl_reset}" =~ ^[1-9][0-9]{9}$ ]] || [ "${rl_reset}" -gt $((rl_now + 3900)) ]; then
+            rl_reset=$((rl_now + 3600))
+          fi
+          rl_outcome="written"
+          if ! gh api -X POST "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
+            -f body="<!-- ai:clarify-rate-limited:v1 run=${rl_run} reset=${rl_reset} event=${rl_event} source=${rl_source} -->" >/dev/null; then
+            rl_outcome="write_failed"
+          fi
+          if [ "${rl_outcome}" = "written" ]; then
+            rl_labelled="false"
+            for rl_label_attempt in 1 2 3; do
+              # gh-loop-ok: bounded 3-attempt retry of one label write with the job token
+              if gh api -X POST "repos/${REPOSITORY}/issues/${ISSUE_NUMBER}/labels" \
+                -f 'labels[]=ai:reclarify-requeue' >/dev/null; then
+                rl_labelled="true"
+                break
+              fi
+              if [ "${rl_label_attempt}" -eq 1 ]; then
+                # A newly deployed consumer may not have synced this label yet.
+                gh label create 'ai:reclarify-requeue' --repo "${REPOSITORY}" \
+                  --color fbca04 \
+                  --description 'Trusted /reclarify failed before routing; poller will retry after PAT budget recovers' \
+                  >/dev/null 2>&1 || true
+              fi
+              [ "${rl_label_attempt}" -eq 3 ] || sleep 2
+            done
+            [ "${rl_labelled}" = "true" ] || rl_outcome="write_failed"
+          fi
+          echo "CLARIFY_RATE_LIMIT_MARKER issue=${ISSUE_NUMBER} run=${rl_run} reset=${rl_reset} outcome=${rl_outcome}"
+          if [ "${rl_outcome}" != "written" ]; then
+            echo "::warning::CLARIFY_RATE_LIMIT_MARKER could not queue issue #${ISSUE_NUMBER} for the poller; reply /reclarify after the rate limit resets."
+          fi
+          exit 0
 
       - name: Telegram failure notification
         if: env.CLAUDE_CAPACITY_WAIT != 'true' && (failure() || cancelled())
