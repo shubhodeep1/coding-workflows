@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/prepush-gate-passing-change-erased.md:4 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The changelog fragment says the fail-safe applies only when \"the result was `unverified`\". The guard requires `rpg_pre_repair_status = pass` (scripts/review_autofix_step_prepush_test_gate.sh:839-841), so it also skips on `fail` or `skipped`. This contradicts the updated agents.d fragments (agents.d/9728-prepush-repair-passing-change-erased.md:2, agents.d/prepush-gate-passing-change-erased.md:2), which say \"any status other than `pass` (`fail`, `unverified` or `skipped`)\".\n  WHY: This is documentation only and causes no runtime failure, but the fragment is folded verbatim into CHANGELOG.md at release (scripts/assemble_changelog.py) and reaches consumer repos on the `@stable` sync with an incomplete, contradictory fail-safe description. All three reviewers rated it SEVERITY: NIT, mapped here to low; they did not disagree on severity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The changelog fragment must accurately describe the fail-safe behavior for statuses other than `pass`.\n  expected_change_site: changelog.d/prepush-gate-passing-change-erased.md\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The fragment only describes `unverified` as the fallback condition, while the actual code in scripts/review_autofix_step_prepush_test_gate.sh explicitly recognizes `pass`, `fail`, `unverified`, and `skipped` as valid statuses and treats others as `unknown` to skip the guard.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/prepush-gate-passing-change-erased.md:line 4, \"When the before or after state cannot be read, or the result was `unverified`, the gate behaves as before.\" | severity=NIT | confidence=4\n  PROBLEM: The last autofix run changed agents.d/9728-prepush-repair-passing-change-erased.md line 2 and agents.d/prepush-gate-passing-change-erased.md line 2 to say \"any status other than `pass` (`fail`, `unverified` or `skipped`)\", but the changelog fragment still names only `unverified`. The code requires `[ \"${rpg_pre_repair_status}\" = pass ] && [ \"${rpg_pre_repair_failures}\" = 0 ]` in review_prepush_test_gate_repair in scripts/review_autofix_step_prepush_test_gate.sh, so the three documents now disagree.\n  WHY: This is documentation only and nothing fails at runtime. The fragment is folded into CHANGELOG.md at release and reaches consumers with the `@stable` sync, so it publishes an incomplete fail-safe description. Suggested fix: change \"or the result was `unverified`\" to \"or the result's status is anything other than `pass` (`fail`, `unverified` or `skipped`)\".\n- Task completeness: NONE. The reviewer states that the PR delivers every requirement in issue #9519 and confirmed that tests/test_review_prepush_test_gate.py:1170 and :1205 and scripts/review_autofix_step_prepush_test_gate.sh:787 still exist.\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP | severity=NIT | confidence=4\n  Requirement: The changelog fragment must accurately describe the fail-safe behavior for statuses other than `pass`.\n  Expected change site: changelog.d/prepush-gate-passing-change-erased.md\n  Evidence of absence: The fragment only describes `unverified` as the fallback condition, while the actual code in scripts/review_autofix_step_prepush_test_gate.sh explicitly recognizes `pass`, `fail`, `unverified`, and `skipped` as valid statuses and treats others as `unknown` to skip the guard.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- changelog.d/prepush-gate-passing-change-erased.md:second paragraph, the sentence \"When the before or after state cannot be read, or the result was `unverified`, the gate behaves as before.\" | severity=NIT | confidence=4\n  PROBLEM: The fragment lists only `unverified` as a fail-safe case. The guard at scripts/review_autofix_step_prepush_test_gate.sh:839-841 requires `rpg_pre_repair_status = pass`, so it also does not fire for `fail` or `skipped`. This contradicts the agents.d fragments (\"any status other than `pass` (`fail`, `unverified` or `skipped`)\") and the code.\n  WHY: There is no runtime failure. The fragment is folded verbatim into CHANGELOG.md at release (scripts/assemble_changelog.py) and reaches consumers on the next @stable sync, so a reader would expect `fail` or `skipped` to trigger the guard, which is the opposite of the code's behavior.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/prepush-gate-passing-change-erased.md:line 4, sentence \"When the before or after state cannot be read, or the result was `unverified`, the gate behaves as before.\" | severity=NIT | confidence=4\n  PROBLEM: The fragment describes the fail-safe as excluding only `unverified`, but the guard requires `rpg_pre_repair_status = pass` (scripts/review_autofix_step_prepush_test_gate.sh:839-841), so the turn also ends as `ran` on `fail` or `skipped`. The agents.d fragments were updated to match (agents.d/9728-prepush-repair-passing-change-erased.md:2, agents.d/prepush-gate-passing-change-erased.md:2) and the changelog was not.\n  WHY: There is no runtime failure, but the fragment is folded verbatim into CHANGELOG.md at release (`scripts/assemble_changelog.py`) and reaches consumers on the next `@stable` sync, leaving operators with a wrong description of when the guard fires.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "52e087168dbb0df3b0425b9671c2bf5dcd602aec15ed5e5a0d5a9b1339043bbc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9562,
+    "run_id": "45304142690",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45304142690",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124062047_70d892180f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9562,
+    "run_id": "45304142690"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T06:20:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
