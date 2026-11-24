@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Behavior changes an operator or consumer would notice are documented in agents.md via an agents.d fragment (repo contract); agents.md:5618-5621 describes only the old EXPECTED FILES (ADVISORY) output\n  expected_change_site: agents.d/9775-expected-files-scope-filter.md (section holding the pre-push gate description near agents.md:5618-5621; README.md line 3636 also noted)\n  confidence=[3]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  EVIDENCE: PR diff touches only changelog.d/9775-expected-files-scope-filter.md, scripts/implement_step_prepush_test_gate.sh and tests/test_implement_prepush_test_gate.py, no agents.d fragment and no agents.md/README hunk exists, so the new OUT-OF-SCOPE EXPECTED FILES (DO NOT EDIT) section at scripts/implement_step_prepush_test_gate.sh:1013-1019 is undocumented (severity NIT)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: (repo contract, not a named issue deliverable) Operator-visible behavior changes are documented through an `agents.d/` fragment (system \u00a725). `agents.md` around lines 5618-5621 describes only the old `EXPECTED FILES (ADVISORY)` output.\nExpected change site: `agents.d/9775-expected-files-scope-filter.md`, with `<!-- agents: section=\"...\" -->` pointing at the section that holds the pre-push gate description.\nEvidence of absence: The PR changes only the changelog fragment, the script and the test file. No `agents.d` fragment exists for the new `OUT-OF-SCOPE EXPECTED FILES (DO NOT EDIT)` section. The linked issue's specification names only three files, and `agents.d/*` is granted but not required. This is a documentation nicety, not an unmet deliverable.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: Behavior changes documented in agents.md via an agents.d fragment (repo contract).\nExpected change site: agents.d/9775-expected-files-scope-filter.md\nEvidence of absence: PR diff contains no agents.d fragment and no hunk updating agents.md/README; the new OUT-OF-SCOPE EXPECTED FILES (DO NOT EDIT) section in scripts/implement_step_prepush_test_gate.sh is undocumented.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: Behavior changes that an operator or consumer would notice should be documented in agents.md via an agents.d fragment; agents.md line 5619 and README.md line 3636 currently describe only the pre-change EXPECTED FILES (ADVISORY) output, while the linked issue asks for a new OUT-OF-SCOPE EXPECTED FILES (DO NOT EDIT) section.\nExpected change site: agents.d/9775-expected-files-scope-filter.md folding into the pre-push gate description near agents.md:5618-5621 (and a corresponding README.md line 3636 update).\nEvidence of absence: PR diff (changelog.d/9775-expected-files-scope-filter.md, scripts/implement_step_prepush_test_gate.sh, tests/test_implement_prepush_test_gate.py) contains no agents.d fragment and no hunk updating agents.md/README; the new section added at scripts/implement_step_prepush_test_gate.sh:1013-1019 is undocumented.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n\nNote (cosmetic, no finding): two blank lines at tests/test_implement_prepush_test_gate.py:433-434 before the new separator.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n\nTASK_GAP: agents.md's pre-push gate description documents only the pre-change output.\nRequirement: repo contract; agents.md (agents.md:5618-5621, mirrored in README.md's pre-push gate section) documents the `expected-files` output, and the PR adds the `OUT-OF-SCOPE EXPECTED FILES (DO NOT EDIT)` section; behavior changes are documented via an agents.d fragment.\nExpected change site: agents.d/<issue>-expected-files-scope-split.md (near agents.md:5618-5621).\nEvidence of absence: PR diff touches only changelog.d/9775-expected-files-scope-filter.md, scripts/implement_step_prepush_test_gate.sh and tests/test_implement_prepush_test_gate.py; no agents.d fragment and no agents.md/README hunk exists, so the new section at scripts/implement_step_prepush_test_gate.sh:1013-1019 is undocumented.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "dd7ff8e05a3c25a1214309273af66e96e346c659662dd7fd0fb22e9a2e348d08",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10055,
+    "run_id": "45419649858",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45419649858",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124164405_ecd1439ce7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10055,
+    "run_id": "45419649858"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T16:44:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
