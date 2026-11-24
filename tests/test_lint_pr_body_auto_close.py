@@ -188,7 +188,7 @@ def test_markdown_double_backtick_code_examples_are_ignored():
 
 
 def test_workflow_lints_pr_title_and_body_together():
-	workflow = (REPO_ROOT / ".github/workflows/lint-pr-body-auto-close.yml").read_text(encoding="utf-8")
+	workflow = (REPO_ROOT / ".github/workflows/pr-checks.yml").read_text(encoding="utf-8")
 	assert 'PR_TITLE: ${{ github.event.pull_request.title }}' in workflow
 	assert 'PR_BODY: ${{ github.event.pull_request.body }}' in workflow
 	assert "printf '%s\\n\\n%s' \"${PR_TITLE:-}\" \"${PR_BODY:-}\" > /tmp/pr-body-lint/body.txt" in workflow
@@ -363,7 +363,7 @@ def test_pr_body_violation_has_no_commit_reword_advice():
 def _lint_workflow_step(name: str) -> str:
 	# Plain-text step lookup: this file also runs as a bare `python3` script
 	# in release jobs that do not install PyYAML.
-	workflow = (REPO_ROOT / ".github/workflows/lint-pr-body-auto-close.yml").read_text(encoding="utf-8")
+	workflow = (REPO_ROOT / ".github/workflows/pr-checks.yml").read_text(encoding="utf-8")
 	start = workflow.index(f"      - name: {name}\n")
 	end = workflow.find("\n      - name: ", start + 1)
 	return workflow[start:] if end == -1 else workflow[start:end]
@@ -373,9 +373,11 @@ def test_workflow_job_is_not_named_like_the_ci_aggregate():
 	"""The `main` ruleset requires a check named `lint`, meaning ci.yml's
 	aggregate job. A job id is its check-run name, so this workflow's one
 	job must not be `lint` (PR #9570: its success stood in for CI's), and
-	the pipeline's merge gate must still list the name it reports."""
+	the pipeline's merge gate must still list the name it reports. The job
+	kept the id `pr-body-lint` when the readiness check was folded into it
+	(pr-checks.yml, 2026-11-18)."""
 	import re
-	workflow = (REPO_ROOT / ".github/workflows/lint-pr-body-auto-close.yml").read_text(encoding="utf-8")
+	workflow = (REPO_ROOT / ".github/workflows/pr-checks.yml").read_text(encoding="utf-8")
 	jobs_block = workflow[workflow.index("\njobs:\n") + len("\njobs:\n"):]
 	pr_body_lint_job_ids = re.findall(r"^  ([A-Za-z0-9_-]+):", jobs_block, flags=re.M)
 	assert pr_body_lint_job_ids == ["pr-body-lint"], pr_body_lint_job_ids
@@ -401,9 +403,17 @@ def test_only_known_workflows_have_a_job_named_lint():
 
 
 def test_workflow_lints_commit_messages_for_default_branch_prs():
-	workflow = (REPO_ROOT / ".github/workflows/lint-pr-body-auto-close.yml").read_text(encoding="utf-8")
+	workflow = (REPO_ROOT / ".github/workflows/pr-checks.yml").read_text(encoding="utf-8")
 	collect = _lint_workflow_step("Write PR commit messages to file")
-	assert "        if: github.event.pull_request.base.ref == github.event.repository.default_branch\n" in collect
+	# Folded into pr-checks.yml: the condition keeps its default-branch test
+	# and gains the `!cancelled()` prefix every step of the folded job has.
+	assert (
+		"        if: >-\n"
+		"          ${{ !cancelled() && steps.pr_body_file.outcome == 'success'\n"
+		"          && github.event.pull_request.base.ref == github.event.repository.default_branch }}\n"
+	) in collect
+	# A failed commit read must not be followed by a lint of the body alone.
+	assert "steps.pr_commit_messages.outcome != 'failure'" in _lint_workflow_step("Run auto-close keyword lint")
 	assert 'gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/commits?per_page=100"' in collect
 	assert "--paginate --jq '.[].commit.message | @json'" in collect
 	assert collect.index("set -euo pipefail") < collect.index("gh api")

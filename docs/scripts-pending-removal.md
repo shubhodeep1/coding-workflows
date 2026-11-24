@@ -124,6 +124,7 @@ Copy this block when adding a new entry:
   - `gh api "repos/shubhodeep1/coding-workflows/issues?state=open&labels=ai:orchestrator-tracking,ai:comprehensive-test-pending"` returns `[]` (no proving or verifying run in flight).
   - `git ls-remote origin refs/heads/main 'refs/tags/stable^{}'` shows no code change on `main` since the tag, or a replacement promotion path is live.
   - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_promote_main_cycle.py tests/test_apply_analysis_on_main.py tests/test_orchestrate_poll_promote_cycle.py` returns exit code 0.
+  - `gh issue list -R shubhodeep1/coding-workflows --label ai:workflow-heal --state open --search 'in:title "Release blocker: cycle_"' --json number,title` returns no issue whose title starts with `Release blocker: cycle_` (no cycle release-blocker report from `promote_main_cycle.sh` is still open).
 - **Owner:** @shubhodeep1
 
 ### `scripts/auto_release_stable.sh` + `.github/workflows/auto-release-stable.yml`
@@ -135,6 +136,7 @@ Copy this block when adding a new entry:
   - `gh workflow view auto-release-stable.yml -R shubhodeep1/coding-workflows` confirms the 6-hourly schedule still exists and still runs `scripts/auto_release_stable.sh`.
   - `git ls-remote origin refs/heads/stable 'refs/tags/stable^{}'` prints the same commit for both refs (nothing on the `stable` branch is waiting for a release).
   - `gh api "repos/shubhodeep1/coding-workflows/actions/workflows/test-and-mark-stable.yml/runs?per_page=1"` shows the latest run was not dispatched by the schedule, i.e. a replacement release path is live.
+  - `gh issue list -R shubhodeep1/coding-workflows --label ai:workflow-heal --state open --search "Release blocker in:title"` returns no issue titled `Release blocker: last_gate_failed on stable`, `Release blocker: release_in_flight on stable` or `Release blocker: stable_release_stale on stable` (no release-blocker report from this script is still being healed).
   - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest tests/test_auto_release_stable.py` returns exit code 0.
 - **Owner:** @shubhodeep1
 
@@ -193,6 +195,17 @@ Copy this block when adding a new entry:
   - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_semble_contract.py` returns `OK: review_autofix Semble contract assertions hold`.
   - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_validate_workflow_validate_bootstrap.py` returns exit code 0 after the validate bootstrap contract assertions pass.
   - `PYTHONDONTWRITEBYTECODE=1 python3 tests/test_workflow_overlay_core.py` returns exit code 0 after the shared-helper overlay staging assertions pass.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py` returns `All workflow script references resolve to existing files.`
+- **Owner:** @shubhodeep1
+
+### `scripts/stage_support_for_phase.sh`
+
+- **Introduced in:** ai/issue-8292 (2026-10-29)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually
+- **Removal preflight checks:**
+  - `rg -n 'stage_support_for_phase\.sh' .github/workflows` returns no live caller matches.
+  - `PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_support_script_single_source.py` passes after its fixtures are removed with the helper.
   - `PYTHONDONTWRITEBYTECODE=1 python3 scripts/check_workflow_script_refs.py` returns `All workflow script references resolve to existing files.`
 - **Owner:** @shubhodeep1
 
@@ -402,4 +415,17 @@ Copy this block when adding a new entry:
   - `rg -n "cs_bridge_query" .github scripts` returns only the lines being removed in the same PR (the `cs_investigate.sh` caller and its `source` line).
   - `gh run list -R shubhodeep1/tele-funtoken-msg-scoring --workflow ai-cs-investigate.yml --created ">=$(date -u -d '30 days ago' +%F)" --json databaseId --jq length` prints `0` (no `cs_investigate.yml` run in the last 30 days), for every caller repo.
   - `tests/test_cs_bridge_query.py` (and its `ci.yml` entry) is removed in the same PR.
+- **Owner:** @shubhodeep1
+
+### `tools/runner_scaler/` (the `runner_scaler` service, `tools/runner_scaler/app.yaml`, `tools/runner_scaler/bootstrap/runner-boot.sh`)
+
+- **Introduced in:** PR for Phase 2 of `docs/plans/digitalocean-runners-for-consumer-pipelines-plan.md` (2026-11-18), Refs #9722
+- **Type:** supervisor
+- **Removal trigger:** when no repository has set `PIPELINE_RUNS_ON=do-runner` for 30 days; otherwise permanent — review annually.
+- **Removal preflight checks:**
+  - For every repository in the app's `RUNNER_SCALER_REPOS`, `gh api repos/<repo>/actions/variables/PIPELINE_RUNS_ON` returns HTTP 404 (variable unset).
+  - `curl -sS -H "Authorization: Bearer ${DIGITALOCEAN_ACCESS_TOKEN}" "https://api.digitalocean.com/v2/droplets?tag_name=gh-runner&per_page=1"` reports `meta.total` `0`.
+  - The Actions jobs of those repositories over the last 30 days include no job with the label `do-runner` (jobs API, `labels` field).
+  - The App Platform app and the Uptime check recorded in the agents file's `## DigitalOcean resources` table are deleted in the same change (ask-first, CLAUDE.md §22.B), and their rows are removed.
+  - `tests/test_runner_scaler_*.py` and `tests/runner_scaler_fakes.py` are removed in the same PR.
 - **Owner:** @shubhodeep1

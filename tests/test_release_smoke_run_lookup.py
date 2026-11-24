@@ -21,9 +21,14 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 import tempfile
 import textwrap
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_test_and_mark_stable_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -372,7 +377,9 @@ def test_gh_api_safe_quiet_transient_exhaustion() -> None:
 
 
 def _workflow() -> str:
-	return WORKFLOW.read_text(encoding="utf-8")
+	# Expanded text: the Phase 2 body lives in
+	# scripts/stable_e2e_step_wait_plan.sh (#9473).
+	return expanded_test_and_mark_stable_text()
 
 
 def test_capture_sites_use_the_paged_lookup() -> None:
