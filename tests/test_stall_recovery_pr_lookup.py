@@ -200,6 +200,8 @@ def _bootstrap(tmp_dir: Path) -> Path:
 	echo                                       >> helpers.sh
 	extract_fn '_linked_pr_is_issue_implementation' >> helpers.sh
 	echo                                       >> helpers.sh
+	extract_fn '_stall_pr_ai_hold_reason'      >> helpers.sh
+	echo                                       >> helpers.sh
 	extract_fn 'close_linked_pr'               >> helpers.sh
 	echo                                       >> helpers.sh
 	extract_fn 'surface_reissue_closed_without_pr' >> helpers.sh
