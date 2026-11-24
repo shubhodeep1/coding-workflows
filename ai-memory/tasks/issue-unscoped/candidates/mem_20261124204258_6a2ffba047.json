@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The default of `MERGE_LEASE_IDLE_MINUTES` is `180` everywhere it is defined: the same three workflow files (nine places in all).\"\n  expected_change_site: .github/workflows/review_autofix.yml, .github/workflows/orchestrate_poll.yml, .github/workflows/cancel_on_pr_close.yml, and the contract test in tests/test_merge_lease.py\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The three workflow files contain eight idle-default assignments in total, not nine: three in review_autofix.yml (lines 1224, 4762, 4890), four in orchestrate_poll.yml (lines 300, 1606, 1863, 2026) and one in cancel_on_pr_close.yml (line 426), `test_lease_ttl_and_idle_defaults_agree_at_every_site` (`tests/test_merge_lease.py:1618-1621`) asserts these eight sites (3+4+1), and the reviewers call this likely a counting error or typo in the issue that still differs from the stated requirement (SEVERITY: NIT), while anthropic_claude-sonnet-5_5 explicitly disputes that this is a gap because a repo-wide search finds exactly eight sites, all already at '180'\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"The default of `MERGE_LEASE_IDLE_MINUTES` is `180` everywhere it is defined: the same three workflow files (nine places in all).\"\n  Expected change site: .github/workflows/review_autofix.yml, .github/workflows/orchestrate_poll.yml, .github/workflows/cancel_on_pr_close.yml\n  Evidence of absence: The three workflow files contain eight idle-default assignments in total (three in review_autofix.yml, four in orchestrate_poll.yml, one in cancel_on_pr_close.yml), not nine. `test_lease_ttl_and_idle_defaults_agree_at_every_site` correctly asserts these eight sites. This is likely a counting error in the issue, but it is still a technical gap against the stated requirement.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"The default of `MERGE_LEASE_IDLE_MINUTES` is `180` everywhere it is defined: the same three workflow files (nine places in all).\"\n  Expected change site: `.github/workflows/review_autofix.yml`, `.github/workflows/orchestrate_poll.yml`, `.github/workflows/cancel_on_pr_close.yml`.\n  Evidence of absence: The three workflow files contain eight idle-default assignments in total (`MERGE_LEASE_IDLE_MINUTES` at lines 1224, 4762, 4890 in review_autofix.yml; 300, 1606, 1863, 2026 in orchestrate_poll.yml; 426 in cancel_on_pr_close.yml), not nine. `test_lease_ttl_and_idle_defaults_agree_at_every_site` (`tests/test_merge_lease.py:1618-1621`) correctly asserts the eight actual sites (3+4+1). The implementation updates every actual site, and \"nine\" in the issue looks like a typo. The TTL count has the same shape (3+1+1=5).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"The default of MERGE_LEASE_IDLE_MINUTES is 180 everywhere it is defined: the same three workflow files (nine places in all).\"\n  Expected change site: .github/workflows/review_autofix.yml, .github/workflows/orchestrate_poll.yml, .github/workflows/cancel_on_pr_close.yml, and the contract test in tests/test_merge_lease.py.\n  Evidence of absence: The workflow files contain eight idle-default assignments in total: three in review_autofix.yml, four in orchestrate_poll.yml and one in cancel_on_pr_close.yml. The contract test also asserts these counts, eight in total rather than the nine specified.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "14ec8ab201c7c86b5e2a2a299f91459ebd12e7e6f49b254f4913fae87ccc3ca9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10051,
+    "run_id": "45459422779",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45459422779",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124204258_6a2ffba047",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10051,
+    "run_id": "45459422779"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T20:42:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
