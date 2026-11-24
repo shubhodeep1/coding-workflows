@@ -317,20 +317,35 @@ def test_non_crash_runs_add_no_marker_and_no_read():
 # ---------------------------------------------------------------------------
 
 
-def _judge_alert(env: dict[str, str]) -> tuple[list[tuple[str, str]], str]:
+def _judge_alert(env: dict[str, str], tg_prelude: str = "", gh_calls: list[str] | None = None) -> tuple[list[tuple[str, str]], str]:
 	"""Run the "Telegram review-blocked judge decision" step body; return
-	the (level, message) sends and stdout."""
+	the (level, message) sends and stdout. tg_prelude runs before the
+	tg_send_tracked stub (e.g. the comment helpers); gh calls are appended
+	to gh_calls when given."""
 	step = _step(_workflow_text(), ALERT_STEP_NAME)
 	body = step[step.index("        run: |\n") + len("        run: |\n"):]
 	body = "\n".join(line[10:] for line in body.splitlines())
 	body = re.sub(r"\$\{\{[^}]*\}\}", "x", body)
 	with tempfile.TemporaryDirectory() as tmp:
 		log = Path(tmp) / "tg.log"
+		gh_log = Path(tmp) / "gh.log"
+		bindir = Path(tmp) / "bin"
+		bindir.mkdir()
+		(bindir / "gh").write_text(GH_STUB, encoding="utf-8")
+		(bindir / "gh").chmod(0o755)
 		(Path(tmp) / "tg_helpers.sh").write_text(
-			'tg_send_tracked() { printf \'%s\\t%s\\n\' "$3" "${2//$\'\\n\'/ }" >> "${TG_LOG}"; }\n', encoding="utf-8"
+			tg_prelude
+			+ 'tg_send_tracked() { printf \'%s\\t%s\\n\' "$3" "${2//$\'\\n\'/ }" >> "${TG_LOG}"; }\n'
+			# The first security-hold page sends directly to read the message id;
+			# TG_FAKE_MSG_ID="" simulates a send Telegram did not confirm.
+			+ 'tg_send_msg() { printf \'%s\\t%s\\n\' "$2" "${1//$\'\\n\'/ }" >> "${TG_LOG}"; printf \'%s\' "${TG_FAKE_MSG_ID-42}"; }\n'
+			+ 'tg_store_msg_id() { :; }\n',
+			encoding="utf-8",
 		)
 		run_env = {
-			"PATH": "/usr/bin:/bin",
+			"PATH": f"{bindir}:/usr/bin:/bin",
+			"GH_LOG": str(gh_log),
+			"GITHUB_REPOSITORY": "o/r",
 			"SUPPORT_SCRIPTS_DIR": tmp,
 			"TG_LOG": str(log),
 			"PR_NUMBER": "7",
@@ -350,6 +365,8 @@ def _judge_alert(env: dict[str, str]) -> tuple[list[tuple[str, str]], str]:
 			for line in log.read_text(encoding="utf-8").splitlines():
 				level, message = line.split("\t", 1)
 				sends.append((level, message))
+		if gh_calls is not None and gh_log.exists():
+			gh_calls.extend(gh_log.read_text(encoding="utf-8").splitlines())
 		return sends, result.stdout
 
 
@@ -571,6 +588,191 @@ def test_crash_condition_parity():
 		alert_match = re.search(r"RB_JUDGE_CRASH_ALERT .* reason=(\S+) repeat=", stdout)
 		alert_reason = alert_match.group(1) if alert_match else None
 		assert comment_reason == alert_reason, (env, comment_reason, alert_reason)
+
+
+# ---------------------------------------------------------------------------
+# (e) Issue #9942: the unaudited exhausted-head security hold pages once per head
+# ---------------------------------------------------------------------------
+
+
+SECURITY_HOLD_ENV = {
+	"JUDGE_HANDLED": "true",
+	"JUDGE_ACTION": "security_hold",
+	"JUDGE_SKIP_REASON": "security_hold_exhausted_without_completed_audit",
+	"RB_JUDGE_STATUS": "ok",
+	"AUTOFIX_ITERATION": "5",
+}
+
+
+def _security_hold_marker(head: str) -> str:
+	return f"<!-- rb-judge-security-hold:v1 head={head} reason=exhausted_without_completed_audit -->"
+
+
+def _dedupe_prelude(comments: list[dict] | None, tg_alert_configured_rc: int = 0) -> str:
+	"""The real trust definitions from tg_helpers.sh, with the newest-page
+	read stubbed (None = the read fails), the author login cached and
+	Telegram reported as able to send (tg_alert_configured_rc=1: it cannot)."""
+	prelude = (
+		f"source {str(TG_HELPERS)!r}\n_TG_TRACKING_AUTHOR_LOGIN=bot\n"
+		f"tg_alert_configured() {{ return {tg_alert_configured_rc}; }}\n"
+	)
+	if comments is None:
+		return prelude + "_tg_newest_comments_json() { return 1; }\n"
+	payload = json.dumps(comments).replace("'", "'\\''")
+	return prelude + f"_tg_newest_comments_json() {{ printf '%s' '{payload}'; }}\n"
+
+
+def _posted_security_markers(gh_calls: list[str]) -> list[str]:
+	return [call for call in gh_calls if "issues/7/comments" in call and "rb-judge-security-hold:v1" in call]
+
+
+def test_security_hold_exhausted_unaudited_alerts_once_per_head():
+	_require_jq()
+	gh_calls: list[str] = []
+	sends, stdout = _judge_alert(SECURITY_HOLD_ENV, tg_prelude=_dedupe_prelude([]), gh_calls=gh_calls)
+	assert len(sends) == 1 and sends[0][0] == "CRITICAL"
+	assert "(exhausted_without_completed_audit)" in sends[0][1]
+	assert f"RB_JUDGE_SECURITY_HOLD_ALERT pr=7 head={HEAD_A} reason=exhausted_without_completed_audit repeat=false level=CRITICAL" in stdout
+	posted = _posted_security_markers(gh_calls)
+	assert len(posted) == 1 and posted[0].endswith(_security_hold_marker(HEAD_A))
+	# A marker for another head does not silence this one.
+	gh_calls = []
+	sends, stdout = _judge_alert(
+		SECURITY_HOLD_ENV, tg_prelude=_dedupe_prelude([_trusted_comment("held\n\n" + _security_hold_marker(HEAD_B))]), gh_calls=gh_calls
+	)
+	assert len(sends) == 1 and sends[0][0] == "CRITICAL"
+	assert len(_posted_security_markers(gh_calls)) == 1
+
+
+def test_security_hold_exhausted_unaudited_repeat_is_debug():
+	_require_jq()
+	gh_calls: list[str] = []
+	comments = [_trusted_comment("held\n\n" + _security_hold_marker(HEAD_A) + "\n  ")]
+	sends, stdout = _judge_alert(SECURITY_HOLD_ENV, tg_prelude=_dedupe_prelude(comments), gh_calls=gh_calls)
+	assert len(sends) == 1 and sends[0][0] == "DEBUG"
+	assert "repeat=true level=DEBUG" in stdout
+	assert _posted_security_markers(gh_calls) == []
+
+
+def test_security_hold_dedupe_read_failure_pages():
+	_require_jq()
+	gh_calls: list[str] = []
+	sends, stdout = _judge_alert(SECURITY_HOLD_ENV, tg_prelude=_dedupe_prelude(None), gh_calls=gh_calls)
+	assert len(sends) == 1 and sends[0][0] == "CRITICAL"
+	assert "repeat=unchecked level=CRITICAL" in stdout
+	assert len(_posted_security_markers(gh_calls)) == 1
+	# Without the comment helpers (an older support bundle) it still pages.
+	sends, stdout = _judge_alert(SECURITY_HOLD_ENV)
+	assert len(sends) == 1 and sends[0][0] == "CRITICAL"
+	assert "repeat=unchecked level=CRITICAL" in stdout
+
+
+def test_security_hold_untrusted_or_quoted_marker_still_pages():
+	_require_jq()
+	for comment in (
+		_trusted_comment("held\n\n" + _security_hold_marker(HEAD_A), login="mallory"),
+		_trusted_comment("quoting " + _security_hold_marker(HEAD_A) + "\nand more"),
+		_trusted_comment("inline " + _security_hold_marker(HEAD_A)),
+	):
+		sends, stdout = _judge_alert(SECURITY_HOLD_ENV, tg_prelude=_dedupe_prelude([comment]))
+		assert len(sends) == 1 and sends[0][0] == "CRITICAL", comment
+		assert "repeat=false level=CRITICAL" in stdout, comment
+
+
+def test_security_hold_unconfirmed_page_posts_no_marker():
+	_require_jq()
+	gh_calls: list[str] = []
+	env = dict(SECURITY_HOLD_ENV, TG_FAKE_MSG_ID="")
+	sends, stdout = _judge_alert(env, tg_prelude=_dedupe_prelude([]), gh_calls=gh_calls)
+	assert len(sends) == 1 and sends[0][0] == "CRITICAL"
+	assert "repeat=false level=CRITICAL" in stdout
+	assert _posted_security_markers(gh_calls) == []
+
+
+def test_security_hold_marker_post_bypasses_comment_signing():
+	# The dedupe reads raw comments and trusts only the GH_TOKEN author with
+	# the marker as the last line, so the marker must not be signed (the
+	# signing shim would post it as github-actions[bot] with a sig line).
+	step = _step(_workflow_text(), ALERT_STEP_NAME)
+	post = [line.strip() for line in step.splitlines() if "issues/${PR_NUMBER}/comments" in line and "RB_SECURITY_HOLD_BODY" in line]
+	assert len(post) == 1 and post[0].startswith('AI_COMMENT_SIGNING_SECRET="" gh api '), post
+
+
+def test_security_hold_dedupe_skips_reads_when_telegram_cannot_send():
+	# No marker is ever posted without a confirmed send, so the comment read
+	# is skipped (§14): a matching marker in the stub is never seen.
+	_require_jq()
+	gh_calls: list[str] = []
+	comments = [_trusted_comment("held\n\n" + _security_hold_marker(HEAD_A))]
+	env = dict(SECURITY_HOLD_ENV, TG_FAKE_MSG_ID="")
+	sends, stdout = _judge_alert(env, tg_prelude=_dedupe_prelude(comments, tg_alert_configured_rc=1), gh_calls=gh_calls)
+	assert len(sends) == 1 and sends[0][0] == "CRITICAL"
+	assert "dedupe skipped for PR #7: Telegram cannot send CRITICAL" in stdout
+	assert "repeat=unchecked level=CRITICAL" in stdout
+	assert _posted_security_markers(gh_calls) == []
+	# Nothing can page, so no false "the next round pages again" warning.
+	assert "page not sent for PR #7: Telegram cannot send CRITICAL; no marker." in stdout
+	assert "::warning::rb-judge-security-hold page not confirmed" not in stdout
+
+
+def test_security_hold_marker_post_reaches_real_gh_unsigned_through_active_shim():
+	# Behavioural guard for the line above: with the signing shim active
+	# (gh_helpers.sh, secret set), the workflow's marker POST with an emptied
+	# AI_COMMENT_SIGNING_SECRET must reach the real gh with the body intact,
+	# so the marker stays the last line the dedupe read matches.
+	_require_jq()
+	if shutil.which("python3") is None:
+		raise unittest.SkipTest("python3 not available in test environment")
+	step = _step(_workflow_text(), ALERT_STEP_NAME)
+	post = [line.strip() for line in step.splitlines() if "issues/${PR_NUMBER}/comments" in line and "RB_SECURITY_HOLD_BODY" in line]
+	assert len(post) == 1, post
+	post_line = post[0].rstrip("\\").strip()
+	with tempfile.TemporaryDirectory() as tmp:
+		bindir = Path(tmp) / "bin"
+		bindir.mkdir()
+		(bindir / "gh").write_text(GH_STUB, encoding="utf-8")
+		(bindir / "gh").chmod(0o755)
+		runner_temp = Path(tmp) / "runner"
+		runner_temp.mkdir()
+		gh_log = Path(tmp) / "gh.log"
+		script = (
+			f"source {str(REPO_ROOT / 'scripts' / 'gh_helpers.sh')!r}\n"
+			'case "$(command -v gh)" in */ai_comment_sig_shim.*/gh) ;; *) echo "shim inactive: $(command -v gh)"; exit 3 ;; esac\n'
+			f"RB_SECURITY_HOLD_BODY=$'held\\n\\n{_security_hold_marker(HEAD_A)}'\n"
+			f"{post_line}\n"
+		)
+		run_env = {
+			"PATH": f"{bindir}:/usr/bin:/bin",
+			"HOME": tmp,
+			"RUNNER_TEMP": str(runner_temp),
+			"GH_LOG": str(gh_log),
+			"GITHUB_REPOSITORY": "o/r",
+			"PR_NUMBER": "7",
+			"GH_TOKEN": "pat",
+			"AI_COMMENT_SIGNING_SECRET": "s" * 32,
+			"AI_COMMENT_JOB_TOKEN": "job",
+		}
+		result = subprocess.run(["bash", "-c", script], env=run_env, capture_output=True, text=True, check=False)
+		assert result.returncode == 0, (result.stdout, result.stderr)
+		calls = gh_log.read_text(encoding="utf-8").splitlines() if gh_log.exists() else []
+	posted = _posted_security_markers(calls)
+	assert len(posted) == 1, calls
+	assert posted[0].endswith(_security_hold_marker(HEAD_A)), posted
+	assert "ai-comment-sig:" not in posted[0], posted
+
+
+def test_other_security_hold_reasons_unchanged():
+	_require_jq()
+	for reason in ("cycles_exhausted", "dispatch_failed", "followups_missing"):
+		gh_calls: list[str] = []
+		env = dict(SECURITY_HOLD_ENV, JUDGE_SKIP_REASON=f"security_hold_{reason}")
+		sends, stdout = _judge_alert(env, tg_prelude=_dedupe_prelude([_trusted_comment("x\n" + _security_hold_marker(HEAD_A))]), gh_calls=gh_calls)
+		assert len(sends) == 1 and sends[0][0] == "CRITICAL", reason
+		assert "RB_JUDGE_SECURITY_HOLD_ALERT" not in stdout, reason
+		assert gh_calls == [], reason
+	for reason in ("audit_dispatched", "audit_pending", "audit_throttled", "awaiting_followups"):
+		sends, _ = _judge_alert(dict(SECURITY_HOLD_ENV, JUDGE_SKIP_REASON=f"security_hold_{reason}"))
+		assert sends == [], reason
 
 
 if __name__ == "__main__":

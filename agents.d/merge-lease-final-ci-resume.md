@@ -7,7 +7,7 @@
 <!-- agents: section="Stable log prefixes (contractual)" -->
 - `MERGE_LEASE` (`_merge_lease_gate` in `scripts/pr_checks_lib.sh` and `_mt_merge_lease_tick` in `scripts/review_merge_train.sh`: `pr= base= mode=update|merge|tick outcome=acquired|renewed|proceed|wait|retry|unavailable|held|released|granted|no_waiter|lost_race|write_failed reason= holder= blocker=`)
 - `FINAL_CI_MERGE_PENDING` (`_pr_final_ci_merge_pending_mark` in `scripts/pr_checks_lib.sh`: `pr= head= outcome=marked|failed|disabled|skipped reason=`)
-- `FINAL_CI_MERGE_RESUME` (`_mt_final_ci_merge_resume` in `scripts/review_merge_train.sh`: `pr= head= outcome=auto_merge_enabled|waiting|deferred|dropped|failed reason=`)
+- `FINAL_CI_MERGE_RESUME` (`_mt_final_ci_merge_resume` in `scripts/review_merge_train.sh`: `pr= head= outcome=auto_merge_enabled|waiting|deferred|dropped|failed reason=`; the `auto_merge_enabled` line and the `reason=auto_merge_refused` warning end with `method=squash|merge`, #9919)
 LOG_PREFIX.name=MERGE_LEASE
 LOG_PREFIX.name=FINAL_CI_MERGE_PENDING
 LOG_PREFIX.name=FINAL_CI_MERGE_RESUME

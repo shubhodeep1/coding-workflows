@@ -2053,6 +2053,19 @@ if args[:1] == ["api"]:
 		if jobs is None:
 			fail("HTTP 404")
 		out(json.dumps({"jobs": jobs}))
+	if "/check-runs/" in path and path.endswith("/annotations"):
+		if method != "GET":
+			fail("HTTP method must be GET for check-run annotations")
+		annotations = state.get("annotations", {}).get(path.split("/")[-2])
+		if annotations is None:
+			fail("HTTP 404")
+		out(json.dumps(annotations))
+	if "/actions/runs/" in path and path.split("/")[-2] == "attempts" and path.split("/")[-1].isdigit():
+		# The intake's own run attempt (report age credit); unset is a 404.
+		started_at = state.get("run_attempt_started_at", {}).get(path)
+		if method != "GET" or started_at is None:
+			fail("HTTP 404")
+		out(started_at + "\n" if "--jq" in rest else json.dumps({"run_started_at": started_at}))
 	if "/actions/runs/" in path and path.split("/")[-1].isdigit():
 		if method != "GET":
 			fail("HTTP method must be GET for run details")
@@ -2227,6 +2240,33 @@ def test_reporter_does_not_reheal_pipeline_scope_refusal() -> None:
 		assert result.returncode == 0, result.stderr
 		assert "skip reason=heal_scope_unverified" in result.stdout
 		assert "dispatches" not in _state(state_file)
+
+
+def test_reporter_skips_remediation_no_code_park() -> None:
+	"""A deliberate ai:scope-blocked park by the remediation no-code guard is not healed."""
+	marker = "<!-- ai:guard-rejection:v1 item=42 guard=scope reason={reason} run=500 count=1 truncated=false paths=WyJSRUFETUUubWQiXQ== -->"
+	comments_key = f"repos/{CONSUMER_REPO}/issues/42/comments"
+	cases = [
+		# (comment author, reason, expected stdout text, dispatched)
+		("workflow-bot", "remediation-no-code", "skip reason=remediation_no_code_park issue=42 label=ai:scope-blocked", False),
+		("someone-else", "remediation-no-code", "WORKFLOW_HEAL_REPORT dispatched issue=42 kind=issue label=ai:scope-blocked", True),
+		("workflow-bot", "out-of-scope", "WORKFLOW_HEAL_REPORT dispatched issue=42 kind=issue label=ai:scope-blocked", True),
+	]
+	for author, reason, expected, dispatched in cases:
+		with tempfile.TemporaryDirectory(prefix="heal-reporter-remediation-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage(tmp, with_codex=False, wrapper_pin=SHA_A)
+			state = _report_state()
+			state["comments"][comments_key].append({
+				"body": "Guard rejected this run.\n\n" + marker.format(reason=reason),
+				"user": {"login": author}, "created_at": "2026-09-20T00:00:00Z",
+			})
+			state_file.write_text(json.dumps(state), encoding="utf-8")
+			env.update({"GITHUB_REPOSITORY": CONSUMER_REPO, "WORKFLOW_HEAL_ISSUE_NUMBER": "42", "WORKFLOW_HEAL_LABEL": "ai:scope-blocked"})
+			result = _run(REPORT_SCRIPT, work, env)
+			assert result.returncode == 0, (author, reason, result.stderr, result.stdout)
+			assert expected in result.stdout, (author, reason, result.stdout)
+			assert ("dispatches" in _state(state_file)) is dispatched, (author, reason)
 
 
 def test_report_script_dispatches_thin_payload() -> None:
@@ -2502,6 +2542,149 @@ def test_intake_opens_upstream_hotfix_issue_for_workflow_defect() -> None:
 	for call in state["calls"]:
 		if any(part.endswith("/jobs") or part.endswith("/issues") for part in call):
 			assert "--method" in call and call[call.index("--method") + 1] == "GET"
+
+
+RUNNER_LOST_MESSAGE = "The self-hosted runner: do-runner-digital-pa-1a2b3c4d lost communication with the server. Verify the machine is running and has a healthy network connection."
+
+
+def _runner_lost_jobs(*, labels: list[str] | None = None) -> list[dict]:
+	jobs = _intake_state()["jobs"]["500"]
+	jobs = json.loads(json.dumps(jobs))
+	for job in jobs:
+		job["labels"] = list(labels if labels is not None else ["do-runner"])
+	return jobs
+
+
+def test_runner_lost_candidates_need_every_failed_job_on_do_runner() -> None:
+	jobs = {"jobs": _runner_lost_jobs()}
+	assert heal.runner_lost_candidate_job_ids(jobs) == [9001]
+	# A failed job on a GitHub-hosted runner makes the failure a mixed one: report it.
+	mixed = {"jobs": _runner_lost_jobs() + [{"id": 9003, "name": "other", "conclusion": "failure", "labels": ["ubuntu-latest"]}]}
+	assert heal.runner_lost_candidate_job_ids(mixed) == []
+	assert heal.runner_lost_candidate_job_ids({"jobs": _runner_lost_jobs(labels=["ubuntu-latest"])}) == []
+	# Bounded annotation reads (§15): more failed jobs than the limit report as usual.
+	many = {"jobs": [{"id": 100 + n, "conclusion": "failure", "labels": ["do-runner"]} for n in range(heal.RUNNER_LOST_MAX_JOBS + 1)]}
+	assert heal.runner_lost_candidate_job_ids(many) == []
+	assert heal.runner_lost_candidate_job_ids(None) == []
+	assert heal.runner_lost_candidate_job_ids({"jobs": "x"}) == []
+	# The annotations read uses the job id as the check-run id: a check_run_url naming another id is no candidate.
+	with_url = _runner_lost_jobs()
+	with_url[0]["check_run_url"] = "https://api.github.com/repos/o/r/check-runs/9001"
+	assert heal.runner_lost_candidate_job_ids({"jobs": with_url}) == [9001]
+	with_url[0]["check_run_url"] = "https://api.github.com/repos/o/r/check-runs/19001"
+	assert heal.runner_lost_candidate_job_ids({"jobs": with_url}) == []
+
+
+@pytest.mark.parametrize(
+	("annotations", "expected"),
+	(
+		({9001: [{"annotation_level": "failure", "message": RUNNER_LOST_MESSAGE}]}, True),
+		({9001: [{"annotation_level": "failure", "message": "The runner has received a shutdown signal. This can happen when the runner service is stopped."}]}, True),
+		({9001: [{"annotation_level": "failure", "message": "Process completed with exit code 1."}]}, False),
+		({9001: []}, False),
+		# A real failure next to the lost-runner one: the job also failed for real.
+		({9001: [{"annotation_level": "failure", "message": RUNNER_LOST_MESSAGE}, {"annotation_level": "failure", "message": "Process completed with exit code 1."}]}, False),
+		# GitHub's companion annotation does not count as a real failure.
+		({9001: [{"annotation_level": "failure", "message": RUNNER_LOST_MESSAGE}, {"annotation_level": "failure", "message": "The operation was canceled."}]}, True),
+		# Lost-runner wording at a non-failure level, or not at the start, is no evidence.
+		({9001: [{"annotation_level": "warning", "message": RUNNER_LOST_MESSAGE}]}, False),
+		({9001: [{"annotation_level": "failure", "message": "step said: " + RUNNER_LOST_MESSAGE}]}, False),
+		({9001: [{"message": RUNNER_LOST_MESSAGE}]}, False),
+		({9001: {"message": RUNNER_LOST_MESSAGE}}, False),
+		({}, False),
+	),
+)
+def test_runner_lost_failure_needs_the_lost_runner_annotation(annotations: dict, expected: bool) -> None:
+	assert heal.runner_lost_failure({"jobs": _runner_lost_jobs()}, annotations) is expected
+
+
+def test_intake_skips_a_run_whose_do_runner_droplet_was_lost() -> None:
+	state = _intake_state(jobs={"500": _runner_lost_jobs()}, annotations={"9001": [{"annotation_level": "failure", "message": RUNNER_LOST_MESSAGE}]})
+	result, state_after, prompt = _run_intake(_consumer_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL runner_lost outcome=skipped run=500 " in result.stdout
+	assert f"WORKFLOW_HEAL skip reason=runner_lost source={CONSUMER_REPO} kind=issue issue=42 runs=1" in result.stdout
+	assert not state_after.get("composed_issue") and not prompt
+	# No job log was read for the lost run, and the annotations read was a GET.
+	assert not any(any(part.endswith("/logs") for part in call) for call in state_after["calls"])
+	annotation_calls = [call for call in state_after["calls"] if any(part.endswith("/check-runs/9001/annotations") for part in call)]
+	assert len(annotation_calls) == 1 and annotation_calls[0][annotation_calls[0].index("--method") + 1] == "GET"
+
+
+@pytest.mark.parametrize("case", ("droplet_real_failure", "annotations_unreadable", "github_hosted", "rerun_lost_again"))
+def test_intake_reports_failures_that_are_not_lost_runners(case: str) -> None:
+	state_overrides: dict = {}
+	if case == "droplet_real_failure":
+		# A real failure on a droplet: the annotation names the exit code, not a lost runner.
+		state_overrides = {"jobs": {"500": _runner_lost_jobs()}, "annotations": {"9001": [{"annotation_level": "failure", "message": "Process completed with exit code 1."}]}}
+	elif case == "annotations_unreadable":
+		# The annotations read failed (HTTP 404): no evidence, so report as before.
+		state_overrides = {"jobs": {"500": _runner_lost_jobs()}}
+	elif case == "rerun_lost_again":
+		# The scaler's one re-run lost its droplet too: a job that kills its runner is reported.
+		state_overrides = {"jobs": {"500": _runner_lost_jobs()}, "annotations": {"9001": [{"annotation_level": "failure", "message": RUNNER_LOST_MESSAGE}]}, "run_details": {"500": {
+			"id": 500, "repository": {"full_name": CONSUMER_REPO}, "head_sha": SHA_A, "html_url": f"https://github.com/{CONSUMER_REPO}/actions/runs/500",
+			"status": "completed", "conclusion": "failure", "path": ".github/workflows/ai-review.yml", "pull_requests": [{"number": 42}], "run_attempt": 2,
+		}}}
+	result, state_after, _ = _run_intake(_consumer_payload(), _intake_state(**state_overrides), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "skip reason=runner_lost" not in result.stdout
+	assert len(_composed_issues(state_after)) == 1
+	reads = [call for call in state_after["calls"] if any(part.endswith("/annotations") for part in call)]
+	# GitHub-hosted jobs and re-run attempts never cost an annotations read (§15).
+	assert len(reads) == (0 if case in ("github_hosted", "rerun_lost_again") else 1)
+
+
+@pytest.mark.parametrize("case", ("bind_dropped", "loop_rejected", "beyond_max_runs"))
+def test_intake_reports_when_another_run_was_not_examined(case: str) -> None:
+	# Run 500 lost its droplet, but run 501's failure was never examined, so the
+	# report is not skipped as runner_lost (fail-open towards filing).
+	payload = _consumer_payload()
+	run_501_url = f"https://github.com/{CONSUMER_REPO}/actions/runs/501"
+	payload["run_refs"] = [*payload["run_refs"], {"repo": CONSUMER_REPO, "run_id": "501", "url": run_501_url}]
+	jobs = {"500": _runner_lost_jobs()}
+	overrides: dict = {}
+	if case == "loop_rejected":
+		# Run 501's jobs are readable (so binding keeps it), but its run GET
+		# fails, so the evidence loop drops it as run_ref_rejected.
+		jobs["501"] = [{"id": 9101, "name": "review", "workflow_name": "AI Review", "conclusion": "failure", "labels": ["ubuntu-latest"], "steps": []}]
+		overrides["run_details"] = {"500": {
+			"id": 500, "repository": {"full_name": CONSUMER_REPO}, "head_sha": SHA_A, "html_url": f"https://github.com/{CONSUMER_REPO}/actions/runs/500",
+			"status": "completed", "conclusion": "failure", "path": ".github/workflows/ai-review.yml", "pull_requests": [{"number": 42}],
+		}}
+	extra_env: dict[str, str | None] | None = None
+	if case == "beyond_max_runs":
+		# Run 501's jobs are readable and it really failed, but it lies past
+		# WORKFLOW_HEAL_MAX_RUNS=1: binding never reads it and drops it as
+		# run_not_in_source_repo. Capping the examined total at MAX_RUNS would
+		# erase it and skip the report as runner_lost.
+		jobs["501"] = [{"id": 9101, "name": "review", "workflow_name": "AI Review", "conclusion": "failure", "labels": ["ubuntu-latest"], "steps": []}]
+		extra_env = {"WORKFLOW_HEAL_MAX_RUNS": "1"}
+	# For bind_dropped, run 501 has no jobs fixture: its jobs read 404s at
+	# binding and bind_report_claims drops it (run_not_in_source_repo) before
+	# the evidence loop.
+	state = _intake_state(jobs=jobs, annotations={"9001": [{"annotation_level": "failure", "message": RUNNER_LOST_MESSAGE}]}, **overrides)
+	result, _, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=extra_env)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "WORKFLOW_HEAL runner_lost outcome=skipped run=500 " in result.stdout
+	if case in ("bind_dropped", "beyond_max_runs"):
+		assert "runs_kept=1 runs_dropped=1" in result.stdout, result.stdout
+	else:
+		assert "run_ref_rejected run=501 reason=unverified" in result.stdout, result.stdout
+	assert "skip reason=runner_lost" not in result.stdout
+	assert "WORKFLOW_HEAL fingerprint " in result.stdout
+
+
+def test_intake_validation_failure_runner_lost_skip_is_routed() -> None:
+	jobs = _validation_intake_state()["jobs"]["500"]
+	jobs = json.loads(json.dumps(jobs))
+	for job in jobs:
+		job["labels"] = ["do-runner"]
+	state = _validation_intake_state(jobs={"500": jobs}, annotations={"9201": [{"annotation_level": "failure", "message": RUNNER_LOST_MESSAGE}]})
+	result, state_after, _ = _run_intake(_validation_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert "WORKFLOW_HEAL skip reason=runner_lost " in result.stdout, result.stdout
+	comment = _assert_validation_route(result, state_after, "skipped", classification="none")
+	assert "`runner_lost`" in comment["body"]
 
 
 @pytest.mark.parametrize("status", ("behind", "diverged"))
@@ -6297,6 +6480,129 @@ def test_intake_verifies_report_identity_and_rejects_a_forged_repository() -> No
 	result, state, _ = _run_intake(payload, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT, extra_env={"WORKFLOW_HEAL_REPORT_IDENTITY_STATE": "malformed"})
 	assert "report_auth=rejected reason=identity_malformed" in result.stdout
 	assert _api_writes(state) == []
+
+
+def _iso_utc(epoch: int) -> str:
+	return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
+
+
+def test_intake_identity_report_reads_its_run_only_after_a_stale_rejection() -> None:
+	"""A report that carries an identity is credited for the runner wait only by
+	the identity_stale retry (PR #9516), never by the up-front attempt credit:
+	a fresh identity reads no run at all (§15), and a report without one never
+	reads it either."""
+	payload = _consumer_payload(reporter_run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/{_ID_RUN_ID}")
+	attempt_path = f"repos/{SELF_REPO}/actions/runs/777/attempts/1"
+	own_run_path = f"repos/{SELF_REPO}/actions/runs/777"
+	now = int(time.time())
+	with tempfile.TemporaryDirectory(prefix="heal-identity-fresh-") as tmp_name:
+		token_file, jwks_file, token = _fresh_identity(Path(tmp_name))
+		state = _intake_state(extra_run_details={own_run_path: {"id": 777, "run_attempt": 1, "run_started_at": _iso_utc(now - 7190)}})
+		state["run_attempt_started_at"] = {attempt_path: _iso_utc(now - 7190)}
+		result, state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=_identity_env(token_file, jwks_file))
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"WORKFLOW_HEAL report_auth=verified reason=bound source={CONSUMER_REPO}" in result.stdout
+		assert "report_age_credit" not in result.stdout
+		assert "report_identity_age_credit" not in result.stdout
+		assert not any(any(part in (attempt_path, own_run_path) for part in call) for call in state_after.get("calls", []))
+		assert token not in result.stdout + result.stderr
+	# A report without an identity never reads the run.
+	result, state_after, _ = _run_intake(payload, _intake_state(), diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert "report_age_credit" not in result.stdout
+	assert not any(any("/attempts/" in part for part in call) for call in state_after.get("calls", []))
+
+
+def _engine_completed_run(updated_epoch: int) -> dict:
+	return _engine_run(status="completed", conclusion="failure", updated_at=_iso_utc(updated_epoch))
+
+
+def test_intake_credits_runner_wait_against_engine_reporter_run_age(tmp_path: Path) -> None:
+	"""Runs 43439048054, 43496779526, 43498856864: the intake job waited 1h54m to
+	3h25m for a runner (heal queue wait: seconds). An engine_fallback report's
+	reporting-run age check (verify-engine-reporter-run --max-age) now counts
+	the time since this run attempt started as wait."""
+	attempt_path = f"repos/{SELF_REPO}/actions/runs/777/attempts/1"
+	now = int(time.time())
+	# The reporting run finished two hours ago; this attempt started right after.
+	state = _intake_state(run_details={ENGINE_RUN_ID: _engine_completed_run(now - 7200)})
+	state["run_attempt_started_at"] = {attempt_path: _iso_utc(now - 7190)}
+	result, state_after, _ = _run_intake(_engine_scoped_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT,
+		setup_git=_engine_intake_setup(tmp_path / "tg-wait.log"), extra_env={"HEAL_INTAKE_QUEUE_WAITED_SECONDS": "2"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert re.search(r"^WORKFLOW_HEAL report_age_credit outcome=applied attempt_elapsed_seconds=(7[1-9]\d\d) queue_waited_seconds=2 max_age=(1[01]\d\d\d)$", result.stdout, re.MULTILINE), result.stdout
+	assert f"WORKFLOW_HEAL engine_reporter_run outcome=verified run={CONSUMER_REPO}:{ENGINE_RUN_ID} " in result.stdout, result.stdout
+	assert len([call for call in state_after.get("calls", []) if any(part == attempt_path for part in call)]) == 1
+	# A reporting run already two hours old when the report arrived (the
+	# attempt started a minute ago) stays stale: the credit covers waiting.
+	state = _intake_state(run_details={ENGINE_RUN_ID: _engine_completed_run(now - 7200)})
+	state["run_attempt_started_at"] = {attempt_path: _iso_utc(now - 60)}
+	result, _, _ = _run_intake(_engine_scoped_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT,
+		setup_git=_engine_intake_setup(tmp_path / "tg-replay.log"))
+	assert "report_age_credit outcome=applied" in result.stdout
+	assert "WORKFLOW_HEAL engine_reporter_run outcome=rejected reason=run_stale " in result.stdout, result.stdout
+	# An unreadable attempt keeps the queue-only credit (the old behaviour).
+	result, _, _ = _run_intake(_engine_scoped_payload(), _intake_state(run_details={ENGINE_RUN_ID: _engine_completed_run(now - 7200)}),
+		diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=_engine_intake_setup(tmp_path / "tg-unread.log"))
+	assert "WORKFLOW_HEAL report_age_credit outcome=unavailable queue_waited_seconds=0 max_age=3600" in result.stdout
+	assert "WORKFLOW_HEAL engine_reporter_run outcome=rejected reason=run_stale " in result.stdout, result.stdout
+
+
+def test_intake_runner_wait_credit_not_needed_when_queue_wait_covers_it(tmp_path: Path) -> None:
+	"""The queue wait already credited is larger than this attempt's elapsed
+	time: max_age is unchanged, so the log must not say outcome=applied."""
+	attempt_path = f"repos/{SELF_REPO}/actions/runs/777/attempts/1"
+	now = int(time.time())
+	state = _intake_state(run_details={ENGINE_RUN_ID: _engine_completed_run(now - 7200)})
+	state["run_attempt_started_at"] = {attempt_path: _iso_utc(now - 60)}
+	result, _, _ = _run_intake(_engine_scoped_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT,
+		setup_git=_engine_intake_setup(tmp_path / "tg.log"), extra_env={"HEAL_INTAKE_QUEUE_WAITED_SECONDS": "600"})
+	assert re.search(r"^WORKFLOW_HEAL report_age_credit outcome=not_needed attempt_elapsed_seconds=\d+ queue_waited_seconds=600 max_age=4200$", result.stdout, re.MULTILINE), result.stdout
+	assert "report_age_credit outcome=applied" not in result.stdout
+	assert "WORKFLOW_HEAL engine_reporter_run outcome=rejected reason=run_stale " in result.stdout, result.stdout
+
+
+def test_intake_does_not_credit_the_runner_wait_twice() -> None:
+	"""The attempt credit and the identity_stale retry measure the same runner
+	wait. A token 3700 s old on arrival after a 600 s wait (limit 3600) must be
+	rejected: the identity path credits the wait once (base + wait), never
+	twice (base + 2 * wait)."""
+	payload = _consumer_payload(reporter_run_url=f"https://github.com/{CONSUMER_REPO}/actions/runs/{_ID_RUN_ID}")
+	attempt_path = f"repos/{SELF_REPO}/actions/runs/777/attempts/1"
+	own_run_path = f"repos/{SELF_REPO}/actions/runs/777"
+	now = int(time.time())
+	with tempfile.TemporaryDirectory(prefix="heal-identity-no-double-credit-") as tmp_name:
+		token_file, jwks_file, _ = _fresh_identity(Path(tmp_name), iat=now - 4300, nbf=now - 4300)
+		state = _intake_state(extra_run_details={own_run_path: {"id": 777, "run_attempt": 1, "run_started_at": _iso_utc(now - 600)}})
+		state["run_attempt_started_at"] = {attempt_path: _iso_utc(now - 600)}
+		result, state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=_identity_env(token_file, jwks_file))
+		assert "report_age_credit" not in result.stdout, result.stdout
+		assert "WORKFLOW_HEAL report_identity_age_credit arrival_waited_seconds=" in result.stdout, result.stdout
+		assert "report_auth=rejected reason=identity_stale" in result.stdout
+		assert _api_writes(state_after) == []
+		# One read of this run, by the retry; the attempt endpoint is not read.
+		assert not any(any(part == attempt_path for part in call) for call in state_after.get("calls", []))
+
+
+def test_intake_engine_fallback_identity_skips_the_identity_stale_retry() -> None:
+	"""An engine_fallback report that also carries an identity gets the up-front
+	attempt credit, so the identity_stale retry must not add the same runner
+	wait again. Token 4300 s old, 600 s wait: base + wait (4200) still rejects
+	it as identity_stale; base + 2 * wait (4800) would pass the age check."""
+	attempt_path = f"repos/{SELF_REPO}/actions/runs/777/attempts/1"
+	own_run_path = f"repos/{SELF_REPO}/actions/runs/777"
+	now = int(time.time())
+	with tempfile.TemporaryDirectory(prefix="heal-engine-identity-no-double-credit-") as tmp_name:
+		token_file, jwks_file, _ = _fresh_identity(Path(tmp_name), iat=now - 4300, nbf=now - 4300)
+		state = _intake_state(extra_run_details={own_run_path: {"id": 777, "run_attempt": 1, "run_started_at": _iso_utc(now - 600)}})
+		state["run_attempt_started_at"] = {attempt_path: _iso_utc(now - 600)}
+		result, state_after, _ = _run_intake(_engine_scoped_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT, extra_env=_identity_env(token_file, jwks_file))
+		assert len(re.findall(r"^WORKFLOW_HEAL report_age_credit outcome=applied ", result.stdout, re.MULTILINE)) == 1, result.stdout
+		assert "report_identity_age_credit" not in result.stdout, result.stdout
+		assert "report_auth=rejected reason=identity_stale" in result.stdout, result.stdout
+		assert _api_writes(state_after) == []
+		calls = state_after.get("calls", [])
+		assert len([call for call in calls if any(part == attempt_path for part in call)]) == 1
+		assert not any(any(part == own_run_path for part in call) for call in calls)
 
 
 def test_intake_credits_runner_queue_wait_against_a_stale_identity() -> None:
