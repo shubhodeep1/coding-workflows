@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_prepush_test_gate.sh:1298-1299 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: `review_prepush_test_gate_final_ci_now_green()` returns `green` whenever the newest `ci/final` status is `success` and any older status is `failure`, but it never checks that the success came after the `ai:final-ci-failed:v1` hand-back marker.\n  WHY: When a later final-CI failure's status POST fails, the earlier success on that SHA is still the newest status (see `scripts/ci_final_status.sh` lines 104-117). The gate compares `created_at` with `marker_at` and correctly picks a repair, but this helper returns `green`, so `review_prepush_test_gate_final_ci_finish` resets the repair and skips the reviewer/editor path on every dispatch, and the failure is never fixed. Two reviewers rated this MAJOR and one gave no severity. anthropic_claude-sonnet-5_5 made it a hardening suggestion only, because it needs unlikely preconditions. minimax_minimax-m3 confirmed it is technically correct but did not raise it, because the file is outside the last run's changed files.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION: scripts/review_autofix_step_prepush_test_gate.sh | review_prepush_test_gate_final_ci_now_green, jq filter at line 1299 | HARDENING_RISK_SCORE: 1\n  PROBLEM: The helper accepts \"a success after an older failure\" without the timestamp-versus-marker check the gate uses. A failed status POST that leaves an old success in place can make the gate and the repair step disagree.\n  WHY: Suggested fix: also require the newest success's `created_at` to be later than the newest failure's `created_at`, in the same jq filter (about 2 lines). The reviewer did not adopt this as a defect: it needs unlikely preconditions, the change does not make it worse, and the `::error::` annotation at `ci_final_status.sh` line 116 already makes it visible.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_autofix_step_prepush_test_gate.sh:1298-1299 (helper `review_prepush_test_gate_final_ci_now_green`) | confidence=4\n  PROBLEM: The helper treats any success status that follows an older failure as a recovery, without checking that the success is newer than the hand-back marker.\n  WHY: If a new final-CI failure's status POST fails, an older `success` stays as the newest `ci/final` status. The helper then counts that as recovery from the new failure, so the repair step skips the repair and reviewer path and the new failure is left unaddressed.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_autofix_step_prepush_test_gate.sh:1298-1299, `review_prepush_test_gate_final_ci_now_green()` | severity=MAJOR | confidence=4\n  PROBLEM: The helper treats the newest `ci/final=success` as a recovery whenever any older `ci/final` status is `failure`, and does not check that the success was posted after the hand-back marker.\n  WHY: If a later final-CI run fails but posting its failure status fails, `scripts/ci_final_status.sh` says an earlier success on the same SHA still stands (lines 104-117). The helper reports `green` even though the gate correctly picked a repair, so the repair is reset and skipped and the newer failure is left unaddressed.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_autofix_step_prepush_test_gate.sh:review_prepush_test_gate_final_ci_now_green(), lines 1298-1299 | severity=MAJOR | confidence=4\n  PROBLEM: The helper marks the approved head green whenever the newest trusted `ci/final` status is `success` and any older status is `failure`, without checking that the success is newer than the `ai:final-ci-failed:v1` hand-back marker. `scripts/ci_final_status.sh:115-117` says that when a failure POST fails, an earlier success on the SHA still stands.\n  WHY: The gate (scripts/review_autofix_step_evaluate_gate.sh, lines 1940-1949) compares `created_at` with `marker_at` and picks a repair. The helper then reads the stale success and prints `green`. `review_prepush_test_gate_final_ci_finish` (lines 1328-1341) resets the repair commit, sets `INTEGRATION_TEST_REPAIRED=false` and `INTEGRATION_TEST_REPAIR_ACTIVE=true`, posts no marker, and skips the reviewer/editor path. The same thing repeats on every dispatch.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6dc81d1a7ae4daeabed5fe7a4d5a5552d2982ee5b824b3b3cf2450eafb6cd053",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10034,
+    "run_id": "45391772039",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45391772039",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124150958_e46fb71ad4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10034,
+    "run_id": "45391772039"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T15:09:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
