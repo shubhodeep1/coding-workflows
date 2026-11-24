@@ -2864,6 +2864,14 @@ _merge_lease_max_hold_seconds()
 	echo $((lease_hold_minutes * 60))
 }
 
+# Judge-decision grant signal (issue #9987): the review-blocked judge posts a
+# `success` commit status under this context on the judged head when it decided
+# to merge but deferred for the lease (_pr_judge_merge_pending_mark). The tick
+# counts it, for a waiter only, in place of a pending or absent head-gate
+# (_merge_lease_pr_eligible). Not an env input: a fixed contract name, like
+# REVIEW_HEAD_GATE_CONTEXT in scripts/review_head_gate.sh.
+MERGE_LEASE_JUDGE_DECISION_CONTEXT="ai-review/judge-merge-pending"
+
 # Phase 2 kill switch: MERGE_LEASE_REVOKE_ENABLED (default true; true/1/yes/on).
 _merge_lease_revoke_enabled()
 {
@@ -2930,28 +2938,83 @@ _merge_lease_skips_normalize()
 # #9983 is read that way, so PRs parked by the old rule are released once):
 # it stops blocking once the PR's pipeline head-gate is `success` on the
 # entry head. Any other reason is "hard": it blocks until the head changes.
+# Issue #10044: `expired` and `revoked_idle` are soft too (a hold spent
+# waiting for runners leaves a healthy PR on an unchanged head). Each is
+# soft once per head: the grant write turns the new holder's own entry into
+# `expired_unparked` / `revoked_idle_unparked` (_merge_lease_skip_block), and
+# a later expired/revoked_idle release on that head keeps the `_unparked`
+# token (_merge_lease_skip_release_token), which is hard. Every other reason
+# (revoked_draft, revoked_skip_ai, revoked_final_ci_failed, the `_unparked`
+# tokens, any unknown one) stays hard; older libraries read every reason but
+# revoked_no_head_gate as hard (the safe direction).
+# `revoked_no_head_gate_unparked` (a head-gate revocation of a head that
+# already used its un-park) stays soft like revoked_no_head_gate, but carries
+# the marker through that release so the once-per-head budget is not reset
+# (_merge_lease_skip_release_token, _merge_lease_skip_block). Older libraries
+# read it as hard (the safe direction).
 # No API call in any of these.
+# _merge_lease_skip_reason_is_soft <reason>: 0 when <reason> (the third
+# field; empty for a two-field entry) is a soft reason.
+_merge_lease_skip_reason_is_soft()
+{
+	case "${1:-}" in
+		""|revoked_no_head_gate|revoked_no_head_gate_unparked|expired|revoked_idle) return 0 ;;
+	esac
+	return 1
+}
+
 # _merge_lease_skip_is_soft <entry>: 0 when <entry> is a valid soft entry.
 _merge_lease_skip_is_soft()
 {
 	local lease_soft_entry="${1:-}"
 	[[ "${lease_soft_entry}" =~ ^[1-9][0-9]*:[0-9a-f]{40}(:([a-z][a-z_]{0,39}))?$ ]] || return 1
-	[ -z "${BASH_REMATCH[2]:-}" ] || [ "${BASH_REMATCH[2]}" = "revoked_no_head_gate" ]
+	_merge_lease_skip_reason_is_soft "${BASH_REMATCH[2]:-}"
 }
 
 # _merge_lease_skips_hard <skips> / _merge_lease_skips_soft <skips>: the valid
-# entries of one class, in list order (newline-separated, may be empty).
+# entries of one class, in list order (newline-separated, may be empty). The
+# soft set is _merge_lease_skip_reason_is_soft's.
 _merge_lease_skips_hard()
 {
 	{ printf '%s\n' "${1:-}" | grep -E '^[1-9][0-9]*:[0-9a-f]{40}(:[a-z][a-z_]{0,39})?$' || true; } \
-		| awk -F: 'NF == 3 && $3 != "revoked_no_head_gate"'
+		| awk -F: 'NF == 3 && $3 != "revoked_no_head_gate" && $3 != "revoked_no_head_gate_unparked" && $3 != "expired" && $3 != "revoked_idle"'
 	return 0
 }
 
 _merge_lease_skips_soft()
 {
 	{ printf '%s\n' "${1:-}" | grep -E '^[1-9][0-9]*:[0-9a-f]{40}(:[a-z][a-z_]{0,39})?$' || true; } \
-		| awk -F: 'NF == 2 || $3 == "revoked_no_head_gate"'
+		| awk -F: 'NF == 2 || $3 == "revoked_no_head_gate" || $3 == "revoked_no_head_gate_unparked" || $3 == "expired" || $3 == "revoked_idle"'
+	return 0
+}
+
+# _merge_lease_skip_release_token <pr> <head> <reason> (issue #10044, G2):
+# the reason token of a release entry for <pr>:<head>. `<reason>_unparked`
+# when <reason> is expired, revoked_idle or revoked_no_head_gate and the
+# newest MERGE_LEASE_SKIPS entry for <pr>:<head> is an `_unparked` marker
+# (that head already used its one un-park, whatever the earlier reason was);
+# <reason> otherwise. `revoked_no_head_gate_unparked` stays soft, so a failed
+# head-gate still clears once it passes (#9983), but the next grant keeps the
+# marker, so a head-gate failure cannot reset the once-per-head budget. No API
+# call. The tick also uses its presence as the version guard for writing
+# `_unparked` tokens.
+_merge_lease_skip_release_token()
+{
+	local rt_pr="${1:-}" rt_head="${2:-}" rt_reason="${3:-}" rt_prev=""
+	case "${rt_reason}" in
+		expired|revoked_idle|revoked_no_head_gate)
+			if [[ "${rt_pr}" =~ ^[1-9][0-9]*$ && "${rt_head}" =~ ^[0-9a-f]{40}$ ]]; then
+				rt_prev="$(_merge_lease_skips_normalize "${MERGE_LEASE_SKIPS:-}" | { grep -E "^${rt_pr}:${rt_head}:[a-z][a-z_]{0,39}\$" || true; } | tail -n1 | cut -d: -f3)"
+				case "${rt_prev}" in
+					*_unparked)
+						printf '%s_unparked\n' "${rt_reason}"
+						return 0
+						;;
+				esac
+			fi
+			;;
+	esac
+	printf '%s\n' "${rt_reason}"
 	return 0
 }
 
@@ -3220,7 +3283,11 @@ _merge_lease_write()
 	fi
 	[ "${lease_state}" = "released" ] && lease_paths=""
 	local lease_skip_lines="" lease_skip_block="" lease_skip_drop=""
-	[ "${lease_state}" = "held" ] && lease_skip_drop="${lease_pr}"
+	if [ "${lease_state}" = "held" ]; then
+		# Issue #10044: `<pr>:<head>` keeps the holder's own un-park marker.
+		lease_skip_drop="${lease_pr}"
+		[[ "${lease_head}" =~ ^[0-9a-f]{40}$ ]] && lease_skip_drop="${lease_pr}:${lease_head}"
+	fi
 	lease_skip_lines="$(_merge_lease_skip_block "${lease_skip_drop}")"
 	[ -z "${lease_skip_lines}" ] || lease_skip_block="${lease_skip_lines}"$'\n'
 	lease_msg="merge-lease v1
@@ -3236,15 +3303,42 @@ ${lease_paths}"
 	_merge_lease_cas_commit "${lease_base}" "${lease_msg}"
 }
 
-# _merge_lease_skip_block <drop_pr>...: the `skip=` lines of the next write
+# _merge_lease_skip_block <drop>...: the `skip=` lines of the next write
 # (no trailing newline; empty with MERGE_LEASE_REVOKE_ENABLED off), with each
-# <drop_pr>'s own entries removed (a holder is never on the skip list).
+# <drop>'s own entries removed (a holder is never on the skip list, except
+# its one `_unparked` marker on its own head). <drop> is `<pr>` (drop all of
+# that PR's entries) or, since issue #10044, `<pr>:<40-hex head>`: all of the
+# PR's entries are dropped too, but its entry for exactly that head is kept
+# as the un-park marker when its reason is expired or revoked_idle (rewritten
+# to `<reason>_unparked`, hard) or already `expired_unparked` /
+# `revoked_idle_unparked` (kept unchanged), or `revoked_no_head_gate_unparked`
+# (soft; kept as the hard `expired_unparked` marker so a head-gate failure
+# never resets the once-per-head budget). The kept entry is appended as the
+# newest, so the 50-entry cap evicts it last. No API call.
+# Known residual: the marker is still an ordinary capped entry, so 50 newer
+# entries from other PRs before the same head is released again evict it
+# (_merge_lease_skips_normalize's `tail -n 50`), and that head can then be
+# un-parked once more (one extra queue cycle, never a permanent park).
 _merge_lease_skip_block()
 {
-	local skip_lines="${MERGE_LEASE_SKIPS:-}" skip_drop
+	local skip_lines="${MERGE_LEASE_SKIPS:-}" skip_drop skip_drop_pr skip_drop_head skip_keep skip_keep_why
 	_merge_lease_revoke_enabled || return 0
+	skip_lines="$(_merge_lease_skips_normalize "${skip_lines}")"
 	for skip_drop in "$@"; do
+		skip_keep=""
+		if [[ "${skip_drop}" =~ ^([1-9][0-9]*):([0-9a-f]{40})$ ]]; then
+			skip_drop_pr="${BASH_REMATCH[1]}"
+			skip_drop_head="${BASH_REMATCH[2]}"
+			skip_keep_why="$(printf '%s\n' "${skip_lines}" | { grep -E "^${skip_drop_pr}:${skip_drop_head}:[a-z][a-z_]{0,39}\$" || true; } | tail -n1 | cut -d: -f3)"
+			case "${skip_keep_why}" in
+				expired|revoked_idle) skip_keep="${skip_drop_pr}:${skip_drop_head}:${skip_keep_why}_unparked" ;;
+				expired_unparked|revoked_idle_unparked) skip_keep="${skip_drop_pr}:${skip_drop_head}:${skip_keep_why}" ;;
+				revoked_no_head_gate_unparked) skip_keep="${skip_drop_pr}:${skip_drop_head}:expired_unparked" ;;
+			esac
+			skip_drop="${skip_drop_pr}"
+		fi
 		skip_lines="$(_merge_lease_skips_normalize "${skip_lines}" "${skip_drop}")"
+		[ -z "${skip_keep}" ] || skip_lines="$(_merge_lease_skips_normalize "$(printf '%s\n%s\n' "${skip_lines}" "${skip_keep}")")"
 	done
 	[ -z "${skip_lines}" ] || printf '%s\n' "${skip_lines}" | sed 's/^/skip=/'
 }
@@ -3313,7 +3407,8 @@ _merge_lease_paths_record_form()
 # shape with that row's own times, byte-identical to a single-holder record,
 # so releasing the other holder never extends this one's lease. Two or more
 # rows write pr=/head=/acquired=/updated= of the primary, expires= the latest
-# expiry, the skip lines (every holder's own entries dropped), one `holder=`
+# expiry, the skip lines (every holder's own entries dropped, but for its
+# `_unparked` marker on its own head, issue #10044), one `holder=`
 # line per row, the `holder_path=` lines, then `paths:` with the union (`*`
 # when a holder is `*` or the union exceeds MERGE_LEASE_MAX_PATHS). Same
 # compare-and-swap and return codes as _merge_lease_write (1 also for
@@ -3334,7 +3429,12 @@ _merge_lease_write_holders()
 		[[ "${wh_pr}" =~ ^[1-9][0-9]*$ && "${wh_exp}" =~ ^[0-9]+$ && "${wh_acq}" =~ ^[0-9]+$ && "${wh_upd}" =~ ^[0-9]+$ ]] || return 1
 		[[ "${wh_head}" =~ ^[0-9a-f]{40}$ ]] || wh_head=""
 		wh_n=$((wh_n + 1))
-		wh_drop+=("${wh_pr}")
+		# Issue #10044: `<pr>:<head>` keeps the holder's own un-park marker.
+		if [ -n "${wh_head}" ]; then
+			wh_drop+=("${wh_pr}:${wh_head}")
+		else
+			wh_drop+=("${wh_pr}")
+		fi
 		[ "${wh_exp}" -le "${wh_max_exp}" ] || wh_max_exp="${wh_exp}"
 		wh_paths="$(_merge_lease_paths_record_form "$(_merge_lease_holder_paths "${wh_pr}")" "${wh_max_paths}")"
 		if [ "${wh_n}" -eq 1 ]; then
@@ -3584,6 +3684,13 @@ _merge_lease_queue_order()
 # MERGE_LEASE_IDLE_MINUTES have passed since it, so a holder whose updated
 # head is still being reviewed keeps the lease), then the required checks
 # with a 0-minute budget (no final-CI dispatch, no pending marker).
+# Judge decision (issue #9987): a waiter whose head-gate is absent or pending
+# is still eligible when the newest MERGE_LEASE_JUDGE_DECISION_CONTEXT status
+# on the head is `success` and <trusted_login> created it (the review-blocked
+# judge decided to merge and deferred for the lease). A head-gate failure or
+# error still wins; holders are unchanged. Sets MERGE_LEASE_ELIGIBLE_GATE to
+# head_gate|judge_decision (empty when eligibility did not rest on a status,
+# e.g. fail-open or no valid login/head).
 # Issue #9983 (G1, G3): once a holder's grace has passed with the head-gate
 # still absent or pending, the runs on its head are read once (the
 # AUTO_MERGE_WAIT_WORKFLOWS list, default CI, plus the review workflows in
@@ -3604,13 +3711,15 @@ _merge_lease_queue_order()
 # API: 1 statuses read plus the reads of _pr_wait_for_required_checks; none
 # for draft or `[skip ai]`, or without a valid login or head; +1
 # actions/runs?head_sha read for a holder past the grace with a pending
-# head-gate (that path makes no required-checks read).
+# head-gate (that path makes no required-checks read). The judge status is
+# read from the same statuses response (no extra call).
 _merge_lease_pr_eligible()
 {
 	local elig_pr="$1" elig_head="$2" elig_title="$3" elig_draft="$4" elig_base="${5:-}" elig_login="${6:-}" elig_since="${7:-}"
 	local elig_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" elig_statuses elig_gate elig_idle elig_now elig_rc=0
 	local elig_run_names
 	MERGE_LEASE_INELIGIBLE_REASON=""
+	MERGE_LEASE_ELIGIBLE_GATE=""
 	MERGE_LEASE_CI_ACTIVE="unknown"
 	MERGE_LEASE_HEAD_RUNS_READ="false"
 	MERGE_LEASE_GATE_CONFIRMED="false"
@@ -3631,7 +3740,10 @@ _merge_lease_pr_eligible()
 	# Newest first: the latest head-gate status decides.
 	elig_gate="$(jq -r '[ .[] | select(type == "object" and .context == "ai-review/head-gate") ][0] | if . == null then "" else "\(.state) \((.creator.login // "") | ascii_downcase)" end' <<< "${elig_statuses}" 2>/dev/null)" || return 0
 	case "${elig_gate}" in
-		"success ${elig_login}") MERGE_LEASE_GATE_CONFIRMED="true" ;;
+		"success ${elig_login}")
+			MERGE_LEASE_ELIGIBLE_GATE="head_gate"
+			MERGE_LEASE_GATE_CONFIRMED="true"
+			;;
 		"failure ${elig_login}"|"error ${elig_login}")
 			MERGE_LEASE_INELIGIBLE_REASON="no_head_gate"
 			return 1
@@ -3669,8 +3781,24 @@ _merge_lease_pr_eligible()
 				fi
 				return 0
 			fi
-			MERGE_LEASE_INELIGIBLE_REASON="no_head_gate"
-			return 1
+			# Waiter (issue #9987): a pipeline judge-decision status on this
+			# head stands in for an absent head-gate or a pending one from
+			# <trusted_login> only (a head-gate in any state from another
+			# login keeps no_head_gate; the pipeline posts its pending
+			# head-gate with the same token); a jq failure counts as no judge
+			# status (today's no_head_gate).
+			case "${elig_gate}" in
+				""|"pending ${elig_login}") ;;
+				*)
+					MERGE_LEASE_INELIGIBLE_REASON="no_head_gate"
+					return 1
+					;;
+			esac
+			if [ "$(jq -r --arg c "${MERGE_LEASE_JUDGE_DECISION_CONTEXT:-ai-review/judge-merge-pending}" '[ .[] | select(type == "object" and .context == $c) ][0] | if . == null then "" else "\(.state) \((.creator.login // "") | ascii_downcase)" end' <<< "${elig_statuses}" 2>/dev/null)" != "success ${elig_login}" ]; then
+				MERGE_LEASE_INELIGIBLE_REASON="no_head_gate"
+				return 1
+			fi
+			MERGE_LEASE_ELIGIBLE_GATE="judge_decision"
 			;;
 	esac
 	PR_CHECKS_RUNS_READ=""
@@ -4347,5 +4475,59 @@ _pr_final_ci_merge_pending_mark()
 		return 0
 	fi
 	echo "FINAL_CI_MERGE_PENDING pr=${pending_pr} head=${pending_head} outcome=marked reason=checks_wait_timeout"
+	return 0
+}
+
+# ---------------------------------------------------------------------------
+# _pr_judge_merge_pending_mark <pr> <head_sha> <decision> (issue #9987)
+#
+# Why: the review-blocked judge waits for the merge lease before it posts
+# ai-review/head-gate ("gates first"), and the lease tick refused a waiter
+# without head-gate success (reason=no_head_gate), so a judge-approved PR on
+# a busy lease never merged without a person (#9956 on 2026-11-23).
+#
+# When the judge defers a merge decision (merge, merge_with_followup or the
+# terminal fix merge) with PR_BASE_FRESHNESS_OUTCOME=lease_wait, this posts a
+# `success` commit status MERGE_LEASE_JUDGE_DECISION_CONTEXT on the judged
+# head with the pipeline token. It only makes the waiter eligible for a lease
+# grant (_merge_lease_pr_eligible); the merge itself still runs the judge's
+# gates. ai-review/head-gate is not posted here.
+#
+# Off with MERGE_LEASE_REVOKE_ENABLED=false (Phase 2 off: no grant-time
+# eligibility check reads it). API: one status POST per call, none when off
+# or on invalid input. Fail-open: every outcome returns 0. Log:
+# `JUDGE_MERGE_PENDING pr=<n> head=<sha> decision=<token>
+# outcome=marked|failed|disabled|skipped reason=<token>`.
+# ---------------------------------------------------------------------------
+_pr_judge_merge_pending_mark()
+{
+	local jmp_pr="${1:-}" jmp_head="${2:-}" jmp_decision="${3:-}" jmp_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	local -a jmp_url_args=()
+	if ! _merge_lease_revoke_enabled; then
+		echo "JUDGE_MERGE_PENDING pr=${jmp_pr:-?} head=${jmp_head:-?} decision=${jmp_decision:-?} outcome=disabled reason=switch_off"
+		return 0
+	fi
+	if ! [[ "${jmp_pr}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${jmp_head}" =~ ^[0-9a-f]{40}$ ]]; then
+		echo "JUDGE_MERGE_PENDING pr=? head=? decision=? outcome=skipped reason=invalid_input"
+		return 0
+	fi
+	case "${jmp_decision}" in
+		merge|merge_with_followup|terminal) ;;
+		*)
+			echo "JUDGE_MERGE_PENDING pr=${jmp_pr} head=${jmp_head} decision=? outcome=skipped reason=invalid_input"
+			return 0
+			;;
+	esac
+	if [[ "${RUN_URL:-}" =~ ^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/runs/[0-9]+$ ]]; then
+		jmp_url_args=(-f "target_url=${RUN_URL}")
+	fi
+	if ! gh_retry _safe_gh_jq -X POST "repos/${jmp_repo}/statuses/${jmp_head}" \
+		-f state=success -f "context=${MERGE_LEASE_JUDGE_DECISION_CONTEXT:-ai-review/judge-merge-pending}" \
+		-f "description=Review-blocked judge decided ${jmp_decision}; waiting for the merge lease" \
+		${jmp_url_args[@]+"${jmp_url_args[@]}"} >/dev/null 2>&1; then
+		echo "::warning::JUDGE_MERGE_PENDING pr=${jmp_pr} head=${jmp_head} decision=${jmp_decision} outcome=failed reason=status_post_failed (stall recovery still re-runs the judge)"
+		return 0
+	fi
+	echo "JUDGE_MERGE_PENDING pr=${jmp_pr} head=${jmp_head} decision=${jmp_decision} outcome=marked reason=lease_wait"
 	return 0
 }
