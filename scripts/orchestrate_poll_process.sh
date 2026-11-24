@@ -40457,9 +40457,14 @@ _review_gate_rate_limit_requeue_decide() {
 		# (workflow_dispatch) gate runs have no PR head SHA and write
 		# head=unknown, so those count too, but only after the newest marker
 		# that names a different head (over-counting escalates early: fail safe).
+		# A later non-marker pipeline comment (a completed review) also closes
+		# the window, so gate markers of an episode it resolved stop counting;
+		# $retries never resets, so the cap still holds.
 		| ([range(0; $c | length) | select(
 			((($c[.].a // "") == "github-actions") and ($c[.].gate | valid_gate) and ($c[.].gate.head | sha) and $c[.].gate.head != $e.oid)
-			or ((($c[.].a // "") == $login) and ($c[.].gate_retry | type) == "object" and ($c[.].gate_retry.head | sha) and $c[.].gate_retry.head != $e.oid))] | last // -1) as $head_start
+			or ((($c[.].a // "") == $login) and ($c[.].gate_retry | type) == "object" and ($c[.].gate_retry.head | sha) and $c[.].gate_retry.head != $e.oid)
+			or ((($c[.].a // "") == $login) and ($c[.].gate_retry | type) != "object" and ($c[.].gate_escalated | type) != "object")
+			or ((($c[.].a // "") == "github-actions") and ($c[.].gate | type) != "object"))] | last // -1) as $head_start
 		| ([$c[($head_start + 1):][] | select((.a // "") == "github-actions" and (.gate | valid_gate) and ($e.oid | sha) and ((.gate.head == $e.oid) or (.gate.head | sha | not)))] | length - 1) as $gate_reruns
 		| ([$retries, $gate_reruns, 0] | max) as $attempts
 		| "|\($g.run)|\($g.reset)|\($attempts)" as $tail

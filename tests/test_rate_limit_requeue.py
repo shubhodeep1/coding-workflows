@@ -729,6 +729,27 @@ def test_review_requeue_counts_unknown_head_reruns_without_requeue_markers() -> 
 	assert "attempts=0/3" in run["lines"][0]
 
 
+def test_review_requeue_completed_review_resets_unknown_head_count() -> None:
+	past = time.time() - 3600
+	# Unknown-head gate markers from episodes a later review resolved do not
+	# count against the current head.
+	comments: list[tuple[str, str]] = []
+	for r in (1, 2, 3):
+		comments += [("github-actions", _gate_body(r, past, head="unknown")), (LOGIN, "AI review summary")]
+	comments.append(("github-actions", _gate_body(4, past)))
+	run = _run_pass([_row(9)], [_node(9, comments)])
+	assert run["dispatches"] == ["9 feature/9"]
+	assert "outcome=requeued" in run["lines"][0] and "attempts=0/3" in run["lines"][0]
+	# Requeue markers on this head still count across a completed review.
+	comments = []
+	for r in (1, 2, 3):
+		comments += [("github-actions", _gate_body(r, past)), (LOGIN, _requeue_body(r)), (LOGIN, "AI review summary")]
+	comments.append(("github-actions", _gate_body(4, past)))
+	run = _run_pass([_row(9)], [_node(9, comments)])
+	assert run["dispatches"] == []
+	assert "outcome=escalated" in run["lines"][0] and "attempts=3/3" in run["lines"][0]
+
+
 def test_review_requeue_ignores_out_of_range_reset() -> None:
 	far = time.time() + 999999
 	run = _run_pass([_row(5)], [_node(5, [("github-actions", _gate_body(5, far))])])
