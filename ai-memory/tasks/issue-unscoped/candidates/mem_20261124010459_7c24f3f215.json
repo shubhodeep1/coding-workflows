@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_stall_recovery_pr_lookup.py:195-216 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `_bootstrap` harness extracts `close_linked_pr` (line 203) but not `_stall_pr_ai_hold_reason`, which `close_linked_pr` now calls. The call returns 127, the hold reason is empty, and the new hold branch is never exercised.\n  WHY: `_invoke` runs without `set -e`, so nothing fails today and PRs close as before. The tests do not cover the hold behavior and would break if `set -e` were added. All three reviewers rated this NIT. glm-5_3-flash also notes the `_safe_gh_jq` stub lacks `draft`/`title`.\n- scripts/orchestrate_poll_process.sh:22399-22407,29203-29208 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: Both re-issue arms call `close_linked_pr` and then label and close the source issue without checking `CLOSE_LINKED_PR_HELD_PRS`.\n  WHY: A hold applied after the pre-check leaves the PR open but the source issue is still closed. Severity disagreement: luna rated it MAJOR, glm-5_3-flash rated it NIT because the residual is documented and deliberately accepted. anthropic_claude-sonnet-5_5 reviewed the same ledger item and chose not to report it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_stall_recovery_pr_lookup.py:195-205 (`_bootstrap`, `extract_fn 'close_linked_pr'` at line 203) | severity=NIT | confidence=3\n  PROBLEM: `close_linked_pr` now calls `_stall_pr_ai_hold_reason`, but the harness never extracts that helper.\n  WHY: The call exits 127 in a command substitution and the hold reason is empty. It works only without `set -e` and never tests the hold branch. Fix: add `extract_fn '_stall_pr_ai_hold_reason' >> helpers.sh` after line 203.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:22399-22407,29203-29208 | severity=MAJOR | confidence=4\n  PROBLEM: Both re-issue paths ignore `CLOSE_LINKED_PR_HELD_PRS` after `close_linked_pr` detects a held PR.\n  WHY: If an owner holds the PR after the pre-check at lines 22310-22318 or 29165-29176, `close_linked_pr` leaves the PR open, but both callers still label and close the source issue.\n- tests/test_stall_recovery_pr_lookup.py:203,214-225 | severity=NIT | confidence=4\n  PROBLEM: The harness extracts `close_linked_pr` but not `_stall_pr_ai_hold_reason`, and `_invoke` uses `set -uo pipefail` without `-e`.\n  WHY: The helper call reports \"command not found\" and the PR closes as if unheld, so the tests do not verify the new hold behavior.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:22399-22407,29203-29208 | severity=NIT | confidence=3\n  PROBLEM: Both re-issue arms call `close_linked_pr` and then close the source issue without checking `CLOSE_LINKED_PR_HELD_PRS`, unlike the four close-out arms (e.g. line 22541).\n  WHY: The owner's hold is only partially honored (the PR survives, its issue is closed). The reviewer notes this is the documented, deliberately accepted residual, and only the TOCTOU variant is undocumented.\n- tests/test_stall_recovery_pr_lookup.py:195-206,96-108,216 | severity=NIT | confidence=4\n  PROBLEM: The harness extracts `close_linked_pr` without `_stall_pr_ai_hold_reason`, and its `_safe_gh_jq` stub emits no `draft`/`title`.\n  WHY: The undefined-function call returns 127 and the hold branch is silently skipped, so the PR's behavior is untested. Fix: extract the helper and add `draft`/`title` to the stub payload.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "38eb2a0fdf1108ae643cee5ac303cba94fc1acf5e6115000efe3e3c0abeb29b2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9832,
+    "run_id": "45292795731",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45292795731",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124010459_7c24f3f215",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9832,
+    "run_id": "45292795731"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T01:04:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
