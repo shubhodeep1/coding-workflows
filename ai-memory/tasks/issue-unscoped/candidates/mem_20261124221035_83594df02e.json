@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1855-1857 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The added comment cites the six-step move as \"#9702\", but every other reference in the repo names it \"#9420 (re-issued as #9684)\".\n  WHY: There is no runtime effect, but maintainers searching for #9420 or #9684 won't find this note. All four reviewers rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Issue #9697: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  expected_change_site: .github/workflows/ci.yml, job `tests-heal-plan-and-validation` (moving steps into another existing CI job)\n  confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  EVIDENCE: The diff adds only five comment lines and moves no step. The claim that run 44214045174 was measured before the earlier six-step move is not verifiable from the repo, because it has no step timings for that run. Severity disagreement: google_gemini-3_1-flash-lite rated it MAJOR, and the other two rated it NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:1856 | severity=low | confidence=2\n  PROBLEM: The comment names the six-step move \"#9702\", while other comments (lines 1578, 1609-1610, 1652, 2064, 2104, 2112) call it \"#9420 (re-issued as #9684)\".\n  WHY: No runtime effect, but maintainers searching for #9420 or #9684 won't find this note.\n- TASK_GAP (severity=NIT, ISSUE_CONFIDENCE: 2)\n  Requirement: Issue #9697: \"Move its slowest steps ... into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: .github/workflows/ci.yml, where steps of `tests-heal-plan-and-validation` would be moved into another existing job.\n  Evidence of absence: The diff only adds five comment lines and moves no step. The comment says the run was measured before the earlier six-step move, so a new move may be unnecessary. The repo has no step timings for that run. The constraints are met, and the reviewer could not confirm either way.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:1855-1857 | severity=low | confidence=4\n  PROBLEM: The comment references #9702 for the six-step move, while the repo consistently uses #9420 (re-issued as #9684).\n  WHY: No runtime impact, but it hurts searchability and is inconsistent with ci.yml lines 1578, 1609-1610, 1652, 2064, 2104, 2112.\n- TASK_GAP (severity=MAJOR, ISSUE_CONFIDENCE: 4)\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: .github/workflows/ci.yml, moving one or more steps from `tests-heal-plan-and-validation` into another existing CI job.\n  Evidence of absence: The diff contains five comment lines and moves no steps. The issue reports a timeout for the job (run 44214045174, 15m24s of 20m), which implies the headroom is insufficient. The author gives no step-timing or headroom evidence to show the job can't be optimized further.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml:1855-1856 | severity=low | confidence=4\n  PROBLEM: The comment attributes the prior six-step move to \"#9702\", but the repo uses \"#9420 (re-issued as #9684)\" at ci.yml:1578, 1609-1610, 1652, 2064, 2104, 2112, `changelog.d/9420-ci-heal-job-steps-to-hooks-job.md`, and `tests/test_ci_poll_test_sharding.py:4802` and lines 4807-4900.\n  WHY: No runtime effect, but a maintainer searching for #9420 or #9684 won't find it referenced here, and the cross-reference drifts from every other cite of the same move.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:1855-1857 | severity=low | confidence=4\n  PROBLEM: The comment cites the move as \"#9702\", which appears nowhere else. Every other reference (ci.yml:1578, 1609-1610, 1652, 2064, changelog.d/9420-ci-heal-job-steps-to-hooks-job.md, tests/test_ci_poll_test_sharding.py:4802) says \"#9420 (re-issued as #9684)\", and `MovedHeal9420StepsContractTest` (tests/test_ci_poll_test_sharding.py:4838) pins the move.\n  WHY: No runtime effect, but it causes maintainer confusion, and the fix is a one-line citation change.\n- TASK_GAP (severity=NIT, ISSUE_CONFIDENCE: 2)\n  Requirement: Issue #9697: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: .github/workflows/ci.yml, `tests-heal-plan-and-validation` job (moving steps into another existing CI job).\n  Evidence of absence: The diff is five comment lines (ci.yml:1855-1859) and moves no step. The merged #9420/#9684 change already moved the six heaviest steps (ci.yml:1625-1660). The run's 15m24s is within 11s of the 15m35s measured with those steps (run 43314513853), which is consistent with the run predating the move. No step timings for run 44214045174 exist in the repo to confirm this, so the premise is unverifiable.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1d487b0e4fa11afb079ea54db74476221d46a9ac15e3730a8d4d8f937466e55e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10074,
+    "run_id": "45480170755",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45480170755",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124221035_83594df02e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10074,
+    "run_id": "45480170755"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T22:10:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
