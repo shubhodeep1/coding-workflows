@@ -27555,7 +27555,7 @@ release_head_bound_needs_human_latches() {
   local hl_prs hl_count hl_idx hl_pr hl_labels hl_comments hl_latch hl_latch_idx
   local hl_latch_at hl_latch_login hl_latch_head hl_reason hl_events hl_event
   local hl_pull hl_head hl_release_marker hl_body hl_refreshed_comments hl_refreshed_events hl_refreshed_event hl_refreshed_pull
-  local hl_post_delete_comments hl_latch_run hl_latch_legacy hl_run_info hl_run_branch hl_run_repo hl_latch_candidates hl_bound_idx hl_bound_head
+  local hl_post_delete_comments hl_latch_run hl_latch_legacy hl_run_info hl_run_branch hl_run_repo hl_latch_candidates hl_bound_idx hl_bound_head hl_bound_reason
   # Per-tick cache of legacy autofix-cap run reads (issue #9917): run id ->
   # projected run JSON, or "unavailable" when the read failed.
   local -A hl_run_head_cache=()
@@ -27816,13 +27816,25 @@ release_head_bound_needs_human_latches() {
       hl_body="_Orchestrator: removed \`ai:needs-human\`. It was set because a review/autofix run on head \`${hl_latch_head:0:12}\` failed in a way another run on that head could not fix. The PR is now on head \`${hl_head:0:12}\`, so that diagnosis no longer applies and the review runs on the new head as usual. If the same failure happens on this head, the label comes back._"
     elif [ "${hl_reason}" = "autofix_cap_head_moved" ]; then
       # When the label was bound to an older latch (fallback above), name
-      # that latch's head, not the newest autofix-cap comment's.
+      # that latch's head and cause, not the newest autofix-cap comment's.
       hl_bound_head="${hl_latch_head}"
+      hl_bound_reason="autofix_cap_head_moved"
       if [[ "${hl_bound_idx}" =~ ^[0-9]+$ ]]; then
         hl_bound_head="$(printf '%s' "${hl_latch_candidates}" | jq -r --argjson b "${hl_bound_idx}" '[.[] | select(.idx == $b) | .head] | first // ""' 2>/dev/null || true)"
-        [[ "${hl_bound_head}" =~ ^[0-9a-f]{40}$ ]] || hl_bound_head="${hl_latch_head}"
+        if [[ "${hl_bound_head}" =~ ^[0-9a-f]{40}$ ]]; then
+          hl_bound_reason="$(printf '%s' "${hl_latch_candidates}" | jq -r --argjson b "${hl_bound_idx}" '[.[] | select(.idx == $b) | .reason] | first // ""' 2>/dev/null || true)"
+        else
+          hl_bound_head="${hl_latch_head}"
+        fi
       fi
-      hl_body="_Orchestrator: removed \`ai:needs-human\`. It was set when review/autofix stopped on head \`${hl_bound_head:0:12}\` (autofix iteration cap, or a review-blocked judge that gave up). The PR is now on head \`${hl_head:0:12}\`, so the review runs on the new head as usual. If review/autofix stops on this head too, the label comes back._"
+      case "${hl_bound_reason}" in
+        non_retryable_head_moved)
+          hl_body="_Orchestrator: removed \`ai:needs-human\`. It was set because a review/autofix run on head \`${hl_bound_head:0:12}\` failed in a way another run on that head could not fix. The PR is now on head \`${hl_head:0:12}\`, so that diagnosis no longer applies and the review runs on the new head as usual. If the same failure happens on this head, the label comes back._" ;;
+        review_round_cap_head_moved)
+          hl_body="_Orchestrator: removed \`ai:needs-human\`. The review sweep set it when head \`${hl_bound_head:0:12}\` reached the review-round cap. The PR is now on head \`${hl_head:0:12}\` and the round count starts again for it, so the sweep reviews it as usual. If this head reaches the cap too, the sweep labels it again._" ;;
+        *)
+          hl_body="_Orchestrator: removed \`ai:needs-human\`. It was set when review/autofix stopped on head \`${hl_bound_head:0:12}\` (autofix iteration cap, or a review-blocked judge that gave up). The PR is now on head \`${hl_head:0:12}\`, so the review runs on the new head as usual. If review/autofix stops on this head too, the label comes back._" ;;
+      esac
     else
       hl_body="_Orchestrator: removed \`ai:needs-human\`. The review sweep set it when head \`${hl_latch_head:0:12}\` reached the review-round cap. The PR is now on head \`${hl_head:0:12}\` and the round count starts again for it, so the sweep reviews it as usual. If this head reaches the cap too, the sweep labels it again._"
     fi

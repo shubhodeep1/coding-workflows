@@ -636,6 +636,15 @@ def test_a_release_through_an_older_bound_latch_names_that_latchs_head(tmp_path:
 	assert result["deleted"] == ["5 ai:needs-human"]
 	body = result["posted"][0]["body"]
 	assert OLD_HEAD[:12] in body and other_head[:12] not in body
+	# ...and that latch's cause: the round cap, not the autofix iteration cap.
+	assert "reached the review-round cap" in body and "autofix iteration cap" not in body
+	# The release marker still carries the newest latch's reason.
+	assert f"reason=autofix_cap_head_moved pr=5 head={NEW_HEAD}" in body
+	# A bound non-retryable latch gets the non-retryable wording.
+	nr = _run(tmp_path / "non_retryable", comments=[_non_retryable_comment(), newer], events=[_labeled()])
+	assert nr["deleted"] == ["5 ai:needs-human"]
+	nr_body = nr["posted"][0]["body"]
+	assert "could not fix" in nr_body and "autofix iteration cap" not in nr_body and OLD_HEAD[:12] in nr_body
 
 
 def test_a_hold_between_the_bound_latch_and_the_autofix_cap_comment_is_kept(tmp_path: Path) -> None:
