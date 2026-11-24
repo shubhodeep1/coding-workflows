@@ -61,13 +61,15 @@ if args[:2] == ["api", "rate_limit"]:
 		out(os.environ.get("FAKE_BUDGET", "700") + "\n")
 	out(os.environ.get("FAKE_RESET", "") + "\n")
 if args[:2] == ["api", "user"]:
-	out("owner\n")
+	out(os.environ.get("FAKE_USER_LOGIN", "owner") + "\n")
 if args[:2] == ["issue", "list"]:
 	out('[{"number":7}]\n')
 if args[:2] == ["api", "--paginate"]:
 	out(open(os.environ["FAKE_COMMENTS"], encoding="utf-8").read())
 if args[:2] == ["api", "repos/o/r/issues/7"]:
 	out(open(os.environ["FAKE_ISSUE"], encoding="utf-8").read())
+if args[:2] == ["api", "-X"] and len(args) > 3 and args[3].endswith("/labels") and os.environ.get("FAKE_LABEL_RC"):
+	sys.exit(int(os.environ["FAKE_LABEL_RC"]))
 if args[:2] == ["api", "-X"]:
 	sys.exit(int(os.environ.get("FAKE_WRITE_RC", "0")))
 if args[:2] == ["label", "create"]:
@@ -246,7 +248,7 @@ def _rl_marker(cid: int, created: float, reset: float, run: int = 900, event: st
 	return _bot(cid, f"<!-- ai:clarify-rate-limited:v1 run={run} reset={int(reset)} event={event} source={source} -->", created)
 
 
-def _run_poller(rows: list[dict], issue_association: str = "OWNER") -> tuple[subprocess.CompletedProcess, list[dict]]:
+def _run_poller(rows: list[dict], issue_association: str = "OWNER", extra_env: dict[str, str] | None = None) -> tuple[subprocess.CompletedProcess, list[dict]]:
 	_require_jq()
 	with tempfile.TemporaryDirectory() as tmp:
 		tmp_path = Path(tmp)
@@ -261,6 +263,7 @@ def _run_poller(rows: list[dict], issue_association: str = "OWNER") -> tuple[sub
 		env.update({"GITHUB_REPOSITORY": "o/r", "RECLARIFY_REQUEUE_SWEEP_ONLY": "true",
 			"RECLARIFY_UNROUTED_DETECT_ENABLED": "false", "GH_TOKEN": "test", "FAKE_COMMENTS": str(comments),
 			"FAKE_ISSUE": str(issue), "FAKE_BUDGET": "700"})
+		env.update(extra_env or {})
 		result = subprocess.run(["bash", str(POLLER)], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=120)
 		assert result.returncode == 0, result.stderr
 		writes = [c for c in _calls(log) if c["args"][:2] == ["api", "-X"]]
@@ -279,7 +282,7 @@ def test_poller_replays_rate_limited_clarify_after_reset() -> None:
 	source = _user(11, "/reclarify", now - 7300)
 	marker = _rl_marker(12, now - 7200, now - 7200 + 600)
 	result, writes = _run_poller([source, marker])
-	assert _comment_posts(writes) == ["/reclarify [auto-requeued-by-poller]\n<!-- ai:clarify-rate-limit-replay:v1 run=900 -->"]
+	assert _comment_posts(writes) == ["/reclarify [auto-requeued-by-poller]\n<!-- ai:clarify-rate-limit-replay:v1 run=900 source=11 -->"]
 	assert any(c["args"][:4] == DELETE_LABEL for c in writes)
 	assert "CLARIFY_RATE_LIMIT_REQUEUE issue=7 run=900 outcome=requeued attempt=1/3" in result.stdout
 
@@ -327,7 +330,7 @@ def test_poller_cap_resets_after_successful_clarify() -> None:
 	rows.append(_user(18, "/reclarify", now - 7300))
 	rows.append(_rl_marker(20, now - 7200, now - 7000, source=18))
 	result, writes = _run_poller(rows)
-	assert _comment_posts(writes) == ["/reclarify [auto-requeued-by-poller]\n<!-- ai:clarify-rate-limit-replay:v1 run=900 -->"]
+	assert _comment_posts(writes) == ["/reclarify [auto-requeued-by-poller]\n<!-- ai:clarify-rate-limit-replay:v1 run=900 source=18 -->"]
 	assert "outcome=requeued attempt=1/3" in result.stdout
 
 
@@ -357,7 +360,7 @@ def test_poller_refuses_untrusted_source_or_forged_marker() -> None:
 	result, writes = _run_poller(rows, issue_association="NONE")
 	assert _comment_posts(writes) == [] and "reason=untrusted_source" in result.stdout
 	result, writes = _run_poller(rows, issue_association="MEMBER")
-	assert len(_comment_posts(writes)) == 1
+	assert _comment_posts(writes) == ["/reclarify [auto-requeued-by-poller]\n<!-- ai:clarify-rate-limit-replay:v1 run=900 source=0 -->"]
 	# A forged non-Bot marker is never read.
 	forged = {**_rl_marker(12, now - 7200, now - 7000), "user": {"type": "User", "login": "attacker"}}
 	result, writes = _run_poller([_user(11, "/reclarify", now - 7300), forged])
@@ -366,6 +369,48 @@ def test_poller_refuses_untrusted_source_or_forged_marker() -> None:
 	inline = _bot(12, f"x <!-- ai:clarify-rate-limited:v1 run=900 reset={int(now - 7000)} event=issue_comment source=11 -->", now - 7200)
 	result, writes = _run_poller([_user(11, "/reclarify", now - 7300), inline])
 	assert writes == []
+
+
+def test_poller_escalation_label_failure_keeps_requeue_label_and_posts_no_marker() -> None:
+	now = time.time()
+	rows = [_user(11, "/reclarify", now - 9000)]
+	for idx, run in enumerate((801, 802, 803)):
+		rows.append(_user(13 + idx, f"/reclarify [auto-requeued-by-poller]\n<!-- ai:clarify-rate-limit-replay:v1 run={run} source=11 -->", now - 8000 + idx))
+	rows.append(_rl_marker(20, now - 7200, now - 7000))
+	result, writes = _run_poller(rows, extra_env={"FAKE_LABEL_RC": "1"})
+	assert _comment_posts(writes) == []
+	assert not any(c["args"][:4] == DELETE_LABEL for c in writes)
+	assert "outcome=escalated attempts=3/3 label=failed marker=skipped" in result.stdout
+
+
+def test_poller_replays_automated_release_source_as_source_zero() -> None:
+	now = time.time()
+	for body in ("/reclarify\n<!-- ai:pr-dependency-released:7 -->", "/reclarify\n<!-- ai:partial-delivery-restart:7 -->"):
+		rows = [_user(11, body, now - 7300, login=LOGIN), _rl_marker(12, now - 7200, now - 7000)]
+		result, writes = _run_poller(rows, extra_env={"FAKE_USER_LOGIN": LOGIN})
+		assert _comment_posts(writes) == ["/reclarify [auto-requeued-by-poller]\n<!-- ai:clarify-rate-limit-replay:v1 run=900 source=0 -->"], result.stdout
+	# The poller's replay of a release is automated too; a human source keeps its id.
+	rows = [_user(10, "/reclarify\n<!-- ai:pr-dependency-released:7 -->", now - 7400, login=LOGIN),
+		_user(11, "/reclarify [auto-requeued-by-poller]\n<!-- ai:reclarify-replay:v1 source=10 -->", now - 7300, login=LOGIN),
+		_rl_marker(12, now - 7200, now - 7000)]
+	result, writes = _run_poller(rows, extra_env={"FAKE_USER_LOGIN": LOGIN})
+	assert _comment_posts(writes) == ["/reclarify [auto-requeued-by-poller]\n<!-- ai:clarify-rate-limit-replay:v1 run=900 source=0 -->"], result.stdout
+	rows = [_user(11, "/reclarify\n<!-- ai:pr-dependency-released:7 -->", now - 7300), _rl_marker(12, now - 7200, now - 7000)]
+	result, writes = _run_poller(rows, extra_env={"FAKE_USER_LOGIN": LOGIN})
+	assert _comment_posts(writes) == ["/reclarify [auto-requeued-by-poller]\n<!-- ai:clarify-rate-limit-replay:v1 run=900 source=11 -->"], result.stdout
+
+
+def test_clarify_route_classifies_rate_limit_replay() -> None:
+	text = CLARIFY.read_text(encoding="utf-8")
+	block = text[text.index("# BEGIN rate-limit replay classification (#10031)"):text.index("# END rate-limit replay classification (#10031)")]
+	assert '"/reclarify [auto-requeued-by-poller]"' in block
+	assert "ai:clarify-rate-limit-replay:v1" in block and "source=(0|[1-9][0-9]{0,19})" in block
+	assert '"${_rel_login,,}" = "${COMMENT_USER_LOGIN,,}"' in block
+	assert '[ "${_rl_reason}" = "verified" ] && [ "${_rl_source}" = "0" ]' in block
+	assert 'IS_FORCED_RECLARIFY="false"' in block and 'IS_AUTOMATED_RELEASE="true"' in block
+	assert "gate=rate_limit_replay" in block
+	# Classified before the orchestrator fast-path defer reads IS_FORCED_RECLARIFY.
+	assert text.index("# END rate-limit replay classification (#10031)") < text.index("reason=orchestrator_fast_path outcome=defer")
 
 
 def test_poller_newer_human_request_keeps_label() -> None:
@@ -495,7 +540,7 @@ def _node(number: int, comments: list[tuple[str, str]], head: str = HEAD_A, labe
 	}
 
 
-def _run_pass(rows: list[dict], nodes: list[dict], dispatch_rc: dict[int, int] | None = None, dump_map: bool = False) -> dict:
+def _run_pass(rows: list[dict], nodes: list[dict], dispatch_rc: dict[int, int] | None = None, dump_map: bool = False, fail_label: bool = False) -> dict:
 	_require_jq()
 	script = POLLER.read_text(encoding="utf-8")
 	batch = script[script.index(BATCH_START):script.index(BATCH_END)]
@@ -526,6 +571,7 @@ def _run_pass(rows: list[dict], nodes: list[dict], dispatch_rc: dict[int, int] |
 			f"POST_DIR={shlex.quote(str(post_dir))}",
 			"gh() {",
 			"  if [ \"${2:-}\" = graphql ]; then cat \"${GRAPHQL_FILE}\"; return 0; fi",
+			f"  if [ {1 if fail_label else 0} = 1 ] && [[ \"${{2:-}}\" == */labels ]]; then return 1; fi",
 			"  local prev='' arg n",
 			"  n=\"$(ls \"${POST_DIR}\" | wc -l | tr -d ' ')\"",
 			"  for arg in \"$@\"; do",
@@ -633,9 +679,28 @@ def test_review_requeue_escalates_after_cap() -> None:
 	run = _run_pass([_row(9)], [_node(9, comments + [(LOGIN, "stopped\n\n<!-- ai:review-gate-rate-limit-escalated:v1 run=4 -->")])])
 	assert run["posts"] == [] and "outcome=already_escalated" in run["lines"][0]
 	# Requeues on another head do not count toward this head's cap.
-	moved = [(a, b.replace(HEAD_A, HEAD_B)) if a == LOGIN else (a, b) for a, b in comments[:-1]] + [comments[-1]]
+	moved = [(a, b.replace(HEAD_A, HEAD_B)) for a, b in comments[:-1]] + [comments[-1]]
 	run = _run_pass([_row(9)], [_node(9, moved)])
 	assert run["dispatches"] == ["9 feature/9"]
+	# A failed ai:needs-human label write posts no terminal marker.
+	run = _run_pass([_row(9)], [_node(9, comments)], fail_label=True)
+	assert run["posts"] == [] and run["dispatches"] == []
+	assert "outcome=escalated" in run["lines"][0] and "label=failed marker=skipped" in run["lines"][0]
+
+
+def test_review_requeue_counts_gate_reruns_without_requeue_markers() -> None:
+	past = time.time() - 3600
+	# Three requeues whose marker writes failed still leave three later gate markers.
+	comments = [("github-actions", _gate_body(r, past)) for r in (1, 2, 3, 4)]
+	run = _run_pass([_row(9)], [_node(9, comments)])
+	assert run["dispatches"] == []
+	assert "outcome=escalated" in run["lines"][0] and "attempts=3/3" in run["lines"][0]
+
+
+def test_review_requeue_ignores_out_of_range_reset() -> None:
+	far = time.time() + 999999
+	run = _run_pass([_row(5)], [_node(5, [("github-actions", _gate_body(5, far))])])
+	assert run["dispatches"] == ["5 feature/5"]
 
 
 def test_review_requeue_dispatch_outcomes_and_cycle_cap() -> None:

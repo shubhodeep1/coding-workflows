@@ -952,6 +952,45 @@ jobs:
           fi
           # END capacity-wait replay classification (#7370)
 
+          # BEGIN rate-limit replay classification (#10031)
+          # The poller's _replay_rate_limited_clarify posts exactly
+          # "/reclarify [auto-requeued-by-poller]" + newline +
+          # "<!-- ai:clarify-rate-limit-replay:v1 run=<id> source=<0|id> -->".
+          # Only the GH_PAT login's replay counts (read live, fail closed; one
+          # GET /user only for this shape, as above). source=0 replays an
+          # automated trigger and restarts clarify automatically; a replay of a
+          # human /reclarify keeps its human semantics.
+          _rl_body="${COMMENT_BODY//$'\r'/}"
+          _rl_body="${_rl_body%"${_rl_body##*[![:space:]]}"}"
+          _rl_first="${_rl_body%%$'\n'*}"
+          _rl_last="${_rl_body##*$'\n'}"
+          if [ "${EVENT_NAME}" = "issue_comment" ] && [ "${_rl_first}" = "/reclarify [auto-requeued-by-poller]" ] \
+            && [ "${_rl_body}" = "${_rl_first}"$'\n'"${_rl_last}" ] \
+            && [[ "${_rl_last}" =~ ^\<\!--\ ai:clarify-rate-limit-replay:v1\ run=[1-9][0-9]{0,19}\ source=(0|[1-9][0-9]{0,19})\ --\>$ ]]; then
+            _rl_source="${BASH_REMATCH[1]}"
+            _rl_reason="identity_unavailable"
+            if [ -z "${_rel_login:-}" ]; then
+              _rel_login="$(source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" && gh_retry gh api user --jq .login 2>/dev/null)" || _rel_login=""
+            fi
+            if [[ "${_rel_login:-}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+              if [ -n "${COMMENT_USER_LOGIN:-}" ] && [ "${_rel_login,,}" = "${COMMENT_USER_LOGIN,,}" ]; then
+                _rl_reason="verified"
+              else
+                _rl_reason="author_mismatch"
+              fi
+            fi
+            if [ "${_rl_reason}" = "verified" ] && [ "${_rl_source}" = "0" ]; then
+              IS_AUTOMATED_RELEASE="true"
+              IS_FORCED_RECLARIFY="false"
+              COMMENT_ROUTE_TRUSTED="true"
+              echo "AI_PHASE_GATE_V1 phase=clarify gate=rate_limit_replay reason=verified outcome=restart issue=${ISSUE_NUMBER}"
+            else
+              [ "${_rl_reason}" != "verified" ] || _rl_reason="human_source"
+              echo "AI_PHASE_GATE_V1 phase=clarify gate=rate_limit_replay reason=${_rl_reason} outcome=human_reclarify issue=${ISSUE_NUMBER}"
+            fi
+          fi
+          # END rate-limit replay classification (#10031)
+
           # State gate: a closed issue should not produce side effects (label
           # changes, /answer auto-post that triggers plan→implement). The
           # orchestrate-decompose-test smoke (test-and-mark-stable.yml:3127)
