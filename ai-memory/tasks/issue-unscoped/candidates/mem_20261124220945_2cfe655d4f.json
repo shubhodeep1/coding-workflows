@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1859-1864 | severity=high | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The new comment attributes the six-step move out of tests-heal-plan-and-validation to PR #9702 and run 44214045174 (15m24s), while existing comments in the same file attribute that move to #9420 (re-issued as #9684) and run 43314513853.\n  WHY: Severity disagreement: gemini rated it MAJOR, minimax rated it NIT, and sonnet rated it NIT with confidence 2 and judged the attributions consistent. The highest severity is used. The change is comment-only with no runtime effect, but it could mislead later budget-watch fixers.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:1859-1863 | severity=NIT | confidence=2\n  PROBLEM: The reviewer checked the pass-1 finding that the new comment attributes the six-step move to #9702 while the rest of the file attributes it to #9420 (re-issued as #9684). It found no file evidence that the run is stale or that #9702 is wrong, and judged the attributions most likely consistent. At most, one more cross-reference to #9420/#9684 would make the note clearer.\n  WHY: The change is a YAML comment with no runtime effect.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:1860-1864 | severity=MAJOR | confidence=3\n  PROBLEM: The new comment attributes the six-step move to PR #9702 and run 44214045174 (15m24s). Existing documentation at lines 1608-1610, 1651-1653, 2064, 2103-2104 and 2110-2112 attributes the same move to PR #9420 (re-issued as #9684) and run 43314513853.\n  WHY: This is not a runtime failure, but the factual inconsistency in the documentation will mislead future maintainers investigating budget-watch issues.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml:1859-1863 | severity=NIT | confidence=3\n  PROBLEM: The new comment attributes the move to PR #9702 and says run 44214045174 (15m24s) was measured before it. The existing comment at lines 1608-1610 attributes the same move to #9420 (re-issued as #9684) and run 43314513853 (15m35s). The later run showing a lower time means both claims cannot hold if the move was the one already documented.\n  WHY: This is a documentation defect only. A later fixer would inherit the wrong attribution and look up the wrong step timings.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fb9f978343be181b296a4d1bd6ab8cfddad1b7a2fb9f19c1799936a1e0ab3c5b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10075,
+    "run_id": "45480340475",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45480340475",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124220945_2cfe655d4f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10075,
+    "run_id": "45480340475"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T22:09:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
