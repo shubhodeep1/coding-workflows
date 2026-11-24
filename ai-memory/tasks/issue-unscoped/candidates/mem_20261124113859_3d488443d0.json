@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_actions.py:317 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: _check_triage_base_keyed_ref, called from ci_owner_candidate at line 317 before the conflicting-pr reconciliation (lines 319-335), returns {\"pr\": null, \"reason\": \"base_keyed\"} for a body with a valid base header plus conflicting or foreign PR markers, where the reference rule CI_TRIAGE_PARSE_PY (scripts/resolve_integration_ref.sh:321-347) reports conflicting_pr/foreign_repo.\n  WHY: Only the reason token in the `op=ci_owner outcome=none` log line differs, and only for hand-tampered bodies. Both outcomes give pr: null. The reviewer rated it NIT, mapped here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/unblock_actions.py:317 | severity=low | confidence=3\n  PROBLEM: _check_triage_base_keyed_ref, called from ci_owner_candidate at line 317 before the conflicting-pr reconciliation (lines 319-335), returns {\"pr\": null, \"reason\": \"base_keyed\"} for a body with a valid base header plus conflicting or foreign PR markers, where the reference rule CI_TRIAGE_PARSE_PY (scripts/resolve_integration_ref.sh:321-347) reports conflicting_pr/foreign_repo.\n  WHY: Only the reason token in the `op=ci_owner outcome=none` log line differs, and only for hand-tampered bodies. Both outcomes give pr: null. The reviewer rated it NIT, mapped here to low.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "80513d50be715a6eef7142cbfa0e5d206795561f9266b01c31fcd54b0f0bbd90",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10043,
+    "run_id": "45366093504",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45366093504",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124113859_3d488443d0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10043,
+    "run_id": "45366093504"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-24T11:38:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
