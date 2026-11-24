@@ -1,0 +1,17 @@
+{
+  "discovered_at": "2026-11-24T12:45:28Z",
+  "issue_number": 9966,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=.github/workflows/ci.yml:4103-4110; cited_path=step timings of run 45035315687 (not part of the repository or the diff); files_touched=.github/workflows/ci.yml, changelog.d/9966-ci-release-job-budget-move.md, tests/test_ci_poll_test_sharding.py, tests/test_review_chatgpt_reviewer_slot.py.",
+  "phase": "review_autofix",
+  "pr_number": 9968,
+  "record_id": "lesson_20261124124528_a0ed691dad",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "step timings of run 45035315687 (not part of the repository or the diff)",
+    ".github/workflows/ci.yml",
+    "changelog.d/9966-ci-release-job-budget-move.md",
+    "tests/test_ci_poll_test_sharding.py",
+    "tests/test_review_chatgpt_reviewer_slot.py"
+  ]
+}
