@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nCheckpoint:\n- Read `scripts/pr_checks_lib.sh` (`_merge_lease_order_key`, `_merge_lease_queue_first`) and `scripts/review_merge_train.sh` (`_mt_pr_is_priority`, `_MT_META_CACHE`); no edits.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The code confirms the issue's premise is wrong. `_merge_lease_order_key` (`scripts/pr_checks_lib.sh` L3461-3493) ranks a PR first only if the PR itself carries a `MERGE_TRAIN_PRIORITY_LABELS` label, or if its same-repository head ref starts with `MERGE_LEASE_PRIORITY_HEAD_PREFIXES`. So adding `ai:priority` to that default does not give lease priority to a PR whose linked issue has the label. Option A keeps the issue's security rule that \"only a label on the linked issue, verified as the merge train verifies it today\" counts. It does this by reusing the checks in `_mt_pr_is_priority` (`scripts/review_merge_train.sh` L620-642) and the `_MT_META_CACHE` filled at L611, so there is no new per-PR read in a loop (\u00a715). Option B adds label writes and a PR label that can drift out of sync with the issue. Option C drops one of the issue's stated goals (\"puts its PR in the existing priority group \u2026 of the merge-lease queue\").\n\nBinding details for the planner, all inside Option A:\n- The lease grant points that run in `scripts/review_merge_train.sh` must give the verified linked-issue result to `_merge_lease_order_key` / `_merge_lease_queue_first`. These are the calls at L2160/L2165, L2448, and the `_merge_lease_queue_order` calls at L1717, L2237 and L2508. Pass it as an extra optional input, for example a comma-separated list of verified-priority PR numbers worked out once per tick from `_MT_META_CACHE` through `_mt_pr_is_priority`. When that input is missing or empty, the order key must be byte-for-byte what it is today.\n- Callers in `scripts/pr_checks_lib.sh` that have no merge-train metadata cache (L4053, L4217/L4219) pass nothing. They keep today's ordering: no linked-issue priority and no new API read. That is the fail-closed path the option describes. `_mt_pr_is_priority` returning 2 (unknown) also means no priority.\n- Ranking by the PR's own labels and by `MERGE_LEASE_PRIORITY_HEAD_PREFIXES` stays as it is, and both names and defaults are kept (\u00a76/\u00a710).\n- Implementation step 4 of the issue changes from \"test only\" to a small ordering change plus these tests:\n  - a PR whose verified linked issue carries `ai:priority` ranks in the priority group at the merge-train lease grant;\n  - a fork head, a missing closing reference, or the label on a different issue gives no priority;\n  - with no priority input, the queue order and `MERGE_LEASE_QUEUE_PRS` are the same as today on the existing fixtures.\n- Record the corrected premise (\"the lease queue ranked only PR labels\") in the `changelog.d/` and `agents.d/` fragments the issue already requires.",
+  "fingerprint": "e5cc652703845ee095c5fff52954ab7a07a09e41957862c5acb4aced0f1bf07b",
+  "lineage": {
+    "issue_number": 10048,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45400908342",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45400908342",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10048"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261124132223_79eda317de",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10048,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45400908342"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #10048",
+  "timestamps": {
+    "created_at": "2026-11-24T13:22:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
