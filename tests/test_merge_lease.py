@@ -1878,7 +1878,7 @@ class LeaseHoldLabels(unittest.TestCase):
 		self.assertNotIn("statuses", " ".join(h.calls), "a hold label costs no API read")
 
 	def test_off_switch_restores_the_old_behaviour(self) -> None:
-		for value in ("none", "", " OFF "):
+		for value in ("none", "", " OFF ", "none,", " NONE , OFF "):
 			env = {"MERGE_LEASE_HOLD_LABELS": value}
 			h, out = _p2_tick(self._free(), env=env)
 			self.assertIn("pr=5 base=main mode=tick outcome=granted", out, repr(value))
