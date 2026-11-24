@@ -168,6 +168,9 @@ def _record_fn() -> str:
 
 @pytest.mark.parametrize("token, pr_view, env, expected", [
 	("lease_wait", f"open\t{BASE}\tblocked\t{HEAD}\tpending\tai:merge-lease-wait", "", f"base={BASE} ms=blocked"),
+	# A head without a check rollup leaves the 5th field empty; the labels
+	# must not shift into it (empty fields must not collapse).
+	("lease_wait", f"open\t{BASE}\tblocked\t{HEAD}\t\tai:merge-lease-wait", "", f"base={BASE} ms=blocked"),
 	# An unlabelled lease wait (holder_shares_paths) would read as a granted
 	# lease on every tick, so it is not recorded (issue #9991).
 	("lease_wait", f"open\t{BASE}\tblocked\t{HEAD}\tpending\tai:review-blocked", "", "reason=lease_unlabelled"),

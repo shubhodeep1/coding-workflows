@@ -2689,7 +2689,10 @@ rb_judge_record_verdict_wait() {
     echo "RB_JUDGE_VERDICT_STATUS outcome=skipped reason=read_failed ${verdict_fields}"
     return 0
   fi
-  IFS=$'\t' read -r verdict_state verdict_base verdict_ms verdict_head verdict_rollup verdict_labels <<< "${verdict_view}" || true
+  # Split on a non-whitespace separator: tab is IFS whitespace, so an empty
+  # field (a head with no statusCheckRollup) would collapse and shift the
+  # labels into verdict_rollup. @tsv escapes tabs inside values.
+  IFS=$'\x1e' read -r verdict_state verdict_base verdict_ms verdict_head verdict_rollup verdict_labels <<< "${verdict_view//$'\t'/$'\x1e'}" || true
   if [ "${verdict_state}" != "open" ]; then
     echo "RB_JUDGE_VERDICT_STATUS outcome=skipped reason=not_open ${verdict_fields}"
     return 0
