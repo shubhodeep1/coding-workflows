@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: G3 of issue #9987 (\"After the grant, the PR reaches a merge or a normal lease release without a person. The granted holder is taken through the judge's merge path (branch update when the base moved, security merge gate, head-gate, required checks and final CI). It must not end in another review round that only labels the PR `ai:review-blocked` again and waits for stall recovery.\") and the issue's required-test \"after a grant on this path the judge's merge path is reached without a new blocked review round (G3), with the dispatch counted in the budget\".\n  expected_change_site: `scripts/review_merge_train.sh:_mt_dispatch_rb_judge`; for the judge-dispatch fallback, `.github/workflows/review_rb_judge_dispatch.yml`, `workflow-templates/review_rb_judge_dispatch.yml`, and the active-run detection in `scripts/review_merge_train.sh` (`_mt_inflight_review_branches` branch filter at lines 1463-1474 / `_mt_lease_pr_runs_active`)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: `scripts/review_merge_train.sh` lines 1577-1584 (`scripts/review_merge_train.sh:1579-1582`) dispatch `review_rb_judge_dispatch.yml -f pr_number=<pr>` only after `ai-review.yml` and `internal-review.yml` reject `force_rb_judge=true`, and that workflow and its template have no PR-specific `run-name`, so the holder is invisible to `_mt_lease_pr_runs_active` (matches `[pr:<n>]` titles, `scripts/review_merge_train.sh:1844-1849`) and to `_mt_inflight_review_branches` (only `review_autofix`, `internal-review`, `ai-review`, `scripts/review_merge_train.sh:1463-1474`), so a run lasting longer than `MERGE_LEASE_IDLE_MINUTES` leads to `_merge_lease_pr_eligible` returning `no_head_gate`, `MERGE_LEASE ... outcome=revoked_no_head_gate` and a soft `skip=<pr>:<head>:revoked_no_head_gate` entry, which is the same deadlock class #9987 was filed to break; the regression test `test_judge_dispatch_prefers_wrappers_the_holder_check_can_see` locks the gap in (asserts `\"[pr:\" not in rbj.read_text()` for `.github/workflows/review_rb_judge_dispatch.yml`); if that dispatch also fails, the function calls `_mt_dispatch_review` without `force_rb_judge` (`scripts/review_merge_train.sh:1584-1585`) and starts a regular review round, so the judge merge path is not guaranteed; the implementation records the gap as deferred to a follow-up PR because the needed workflow files are outside this PR's `files_touched` grant. All three reviewers rated it SEVERITY: MAJOR; anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash chose not to re-raise it as already-recorded TASK_GAP_DEFERRED.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: G3: \"After the grant, the PR reaches a merge or a normal lease release without a person\" and \"must not end in another review round that only labels the PR `ai:review-blocked` again.\"\n  Expected change site: `scripts/review_merge_train.sh:_mt_dispatch_rb_judge`; for the judge-dispatch fallback, `.github/workflows/review_rb_judge_dispatch.yml`, `workflow-templates/review_rb_judge_dispatch.yml`, and the active-run detection in `scripts/review_merge_train.sh`.\n  Evidence of absence: The fallback `review_rb_judge_dispatch.yml` lacks a PR-specific run-name, so the lease holder check `_mt_inflight_review_branches` cannot see it; the implementation notes this as deferred to a follow-up PR that can modify the workflow files.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: G3 of issue #9987 (merge or normal lease release without a person through the judge's merge path, with no new review round that only labels the PR `ai:review-blocked`) and the required-test \"after a grant on this path the judge's merge path is reached without a new blocked review round (G3), with the dispatch counted in the budget\".\n  Expected change site: `scripts/review_merge_train.sh:_mt_dispatch_rb_judge`; for the judge-dispatch fallback, `.github/workflows/review_rb_judge_dispatch.yml`, `workflow-templates/review_rb_judge_dispatch.yml`, and the active-run detection in `scripts/review_merge_train.sh` (around the `_mt_inflight_review_branches` branch filter at lines 1463-1474).\n  Evidence of absence: `scripts/review_merge_train.sh` lines 1577-1584 dispatch `review_rb_judge_dispatch.yml -f pr_number=<pr>` after both wrappers reject `force_rb_judge=true`. That workflow has no PR-specific `run-name`, so the holder is invisible to `_mt_lease_pr_runs_active` and `_mt_inflight_review_branches`. A run longer than `MERGE_LEASE_IDLE_MINUTES` leads to `no_head_gate`, `MERGE_LEASE ... outcome=revoked_no_head_gate` and a soft `skip=<pr>:<head>:revoked_no_head_gate` entry. The test `test_judge_dispatch_prefers_wrappers_the_holder_check_can_see` locks the gap in (asserts `\"[pr:\" not in rbj.read_text()`). The fix lies in workflow files outside the `files_touched` grant, but the requirement is still unmet.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: G3: \"After the grant, the PR reaches a merge or a normal lease release without a person\" and \"must not end in another review round that only labels the PR `ai:review-blocked` again and waits for stall recovery.\"\n  Expected change site: `scripts/review_merge_train.sh:_mt_dispatch_rb_judge`, plus the judge-dispatch run identification in `scripts/review_merge_train.sh:_mt_inflight_review_branches` / `_mt_lease_pr_runs_active`.\n  Evidence of absence: `_mt_dispatch_rb_judge` dispatches `review_rb_judge_dispatch.yml` (`scripts/review_merge_train.sh:1579-1582`), which has no PR-specific `run-name`. The classifier includes only `review_autofix`, `internal-review` and `ai-review` (`scripts/review_merge_train.sh:1463-1474`), and the holder check matches `[pr:<n>]` titles (`scripts/review_merge_train.sh:1844-1849`), so the holder can be revoked after the idle threshold. If that dispatch fails, `_mt_dispatch_review` runs without `force_rb_judge` (`scripts/review_merge_train.sh:1584-1585`) and starts a regular review round.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e5e09daa592af93958774ea881404352c0e9f05618e55c9eba14eeeccf7d945a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9996,
+    "run_id": "45398606303",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45398606303",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124160142_ea78c45f22",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9996,
+    "run_id": "45398606303"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T16:01:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
