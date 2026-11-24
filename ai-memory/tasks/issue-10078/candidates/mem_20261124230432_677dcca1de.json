@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Three settings in the issue's \"full set\" are passed by no workflow today: `MERGE_LEASE_MAX_HOLD_MINUTES` (README.md:164, script default `720`), `MERGE_LEASE_REF_PREFIX` (README.md:172, default `refs/merge-lease/`) and `MERGE_LEASE_METRICS_ENABLED` (README.md:169, which says \"not wired as a repo variable\", default `true`). How should the new env lines and the contract test treat them?\nChoices:\n- A) Apply the issue's own `MAX_HOLD_MINUTES` rule to all three: a setting that no workflow passes today stays out of the required set and out of the env blocks. The test requires the 8 settings that are already wired (`ENABLED`, `TTL_MINUTES`, `WAIT_LABEL`, `REVOKE_ENABLED`, `IDLE_MINUTES`, `PRIORITY_HEAD_PREFIXES`, `SOFT_PATHS`, `MAX_HOLDERS`) and keeps a short list of the unwired names, so a block that passes one of them fails the test. (RECOMMENDED)\n- B) Newly expose `MERGE_LEASE_REF_PREFIX` and `MERGE_LEASE_METRICS_ENABLED` as repo variables in every lease step, written as `${{ vars.X || '<script default>' }}`, and update their README rows. `MERGE_LEASE_MAX_HOLD_MINUTES` stays unwired, as the issue says. The test requires 10 settings.\n- C) Newly expose all three, `MERGE_LEASE_MAX_HOLD_MINUTES` included (default `'720'`), in every lease step, with README updates. The test requires all 11.",
+  "fingerprint": "3e30b8d4b669721699438d43931180f1457a85b353275a4050798ac2743ea5a3",
+  "lineage": {
+    "issue_number": 10078,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45503978243",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45503978243",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261124230432_677dcca1de",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10078,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45503978243"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #10078 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-24T23:04:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
