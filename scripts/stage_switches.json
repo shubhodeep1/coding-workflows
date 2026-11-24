@@ -276,6 +276,12 @@
 			"stage": "When deterministic-skip-merge refuses to merge a freshness-update head (det_skip_reason=freshness_sync) because its CI failed, scripts/review_freshness_ci_failed.sh posts a PR comment ending in <!-- ai:freshness-ci-fa..."
 		},
 		{
+			"name": "GH_READ_TOKEN_ENABLED",
+			"default": "true",
+			"stage": "Kill switch for polling reads on the job token (issue #9888): exports GH_READ_TOKEN so gh_read reads with GITHUB_TOKEN instead of GH_PAT (promote-main-to-stable.yml, test-and-mark-stable.yml, review_autofix.yml, workflow-failure-heal-intake.yml).",
+			"on_values": ["1", "yes", "on"]
+		},
+		{
 			"name": "HARNESS_HEAL_AUTO_REVALIDATE_ENABLED",
 			"default": "true",
 			"stage": "Harness heal auto-revalidate (stuck-states P7b, Refs #8291)."
@@ -410,6 +416,11 @@
 			"name": "NEEDS_HUMAN_DIGEST_ENABLED",
 			"default": "true",
 			"stage": "Needs-human digest (plan item 4a, decision D6 of docs/plans/unattended-claude-pipeline-completion-plan.md)."
+		},
+		{
+			"name": "NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED",
+			"default": "true",
+			"stage": "Releases a PR's head-bound ai:needs-human latch once the PR moves to another head (release_head_bound_needs_human_latches in scripts/orchestrate_poll_process.sh, orchestrate_poll.yml)."
 		},
 		{
 			"name": "OPERATOR_STEP_AUTO_RESOLVE_ENABLED",
@@ -548,6 +559,11 @@
 			"stage": "Switch for the release tag credential preflight (scripts/release_tag_preflight.sh, step \"Preflight release tag credential\")."
 		},
 		{
+			"name": "REMEDIATION_NO_CODE_GUARD_ENABLED",
+			"default": "true",
+			"stage": "Auto-heal remediation no-code guard in implement.yml: refuses a remediation commit whose staged paths are all docs/tests/fragments."
+		},
+		{
 			"name": "RESOLVER_NON_RETRYABLE_ESCALATE_ENABLED",
 			"default": "true",
 			"stage": "When true (default), an integration-sync resolver failure the sandbox will repeat on every run (sandbox_path_host_only, sandbox_path_unsupported, sandbox_support_missing) marks the final PR's AUTOFIX_RESOLVER_RETRY_ST..."
@@ -605,6 +621,11 @@
 			"stage": "Turns on review resolve threads (review_autofix.yml); false turns that stage off."
 		},
 		{
+			"name": "REVIEW_RUN_READ_CACHE_ENABLED",
+			"default": "true",
+			"stage": "Kill switch for the codex-agent job's run-local PR read cache (gh_pr_cached_read in scripts/gh_helpers.sh, issue #9928, review_autofix.yml)."
+		},
+		{
 			"name": "REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED",
 			"default": "true",
 			"stage": "Withdraw any existing auto-merge enrollment on pull_request.synchronize; a failed withdrawal fails the gate job."
@@ -623,6 +644,11 @@
 			"name": "SECURITY_AUDIT_ENABLED",
 			"default": "true",
 			"stage": "Default-on gate for .github/workflows/security-audit.yml / scripts/security_audit.sh (consumers run it through the synced workflow-templates/ai-security-audit.yml wrapper, which needs OPENROUTER_API_KEY and optionally..."
+		},
+		{
+			"name": "SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED",
+			"default": "true",
+			"stage": "Keeps the ai:security-audit tracker out of the poller's stall recovery, unblock scan and unrouted-reply detector (issue #9730, orchestrate_poll.yml)."
 		},
 		{
 			"name": "SECURITY_AUDIT_UPSTREAM_REPORT_ENABLED",
@@ -693,6 +719,11 @@
 			"name": "STALL_FINGERPRINT_BREAKER_ENABLED",
 			"default": "true",
 			"stage": "Failure-signature breaker and exhaustion escalation (stuck-states P3b)."
+		},
+		{
+			"name": "STALL_MERGE_REQUIRED_CHECKS_ENABLED",
+			"default": "true",
+			"stage": "Issue #9732: the stall-recovery attempt_merge arm merges only under the review auto-merge rule (fresh base, required checks) (orchestrate_poll.yml)."
 		},
 		{
 			"name": "STALL_RETIRED_CONFLICT_REISSUE_ENABLED",
