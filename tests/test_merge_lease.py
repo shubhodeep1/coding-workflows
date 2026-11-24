@@ -897,8 +897,9 @@ class LeaseRevocation(unittest.TestCase):
 
 	def test_idle_minutes_zero_keeps_the_no_head_gate_revocation(self) -> None:
 		# 0 turns off only the idle test: a holder without a pipeline head-gate
-		# is still revoked once the default 60-minute grace has passed.
-		h, out = _p2_tick(self._holder(gate=None, updated=OLD), env={"MERGE_LEASE_IDLE_MINUTES": "0"})
+		# is still revoked once the 180-minute grace (the fallback for 0) has
+		# passed; the 4 h age keeps a clear margin past that grace (#10046).
+		h, out = _p2_tick(self._holder(gate=None, updated=int(time.time()) - 4 * 3600), env={"MERGE_LEASE_IDLE_MINUTES": "0"})
 		self._assert_revoked(h, out, "revoked_no_head_gate")
 
 	def test_cancelled_ci_run_is_not_a_final_ci_failure(self) -> None:
