@@ -17,6 +17,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 STEP_SCRIPT = REPO_ROOT / "scripts" / "implement_step_prepush_test_gate.sh"
 WRAPPER = REPO_ROOT / "scripts" / "prepush_test_gate_run.sh"
@@ -428,6 +430,58 @@ def test_expected_files_is_silent_for_orchestrator_children_and_mode_off(tmp_pat
 	proc = subprocess.run(["bash", str(STEP_SCRIPT), "expected-files", str(_plan(tmp_path)), str(body)], cwd=repo, env=env,
 		capture_output=True, text=True, timeout=60)
 	assert proc.returncode == 0 and proc.stdout == ""
+
+
+
+# --- expected-files scope split (Refs #9775) ----------------------------------------
+
+EXPECTED_TODAY = ("EXPECTED FILES (ADVISORY)\n"
+	"Tests and registries the pre-push gate expects this change to affect. This is not a scope.\n")
+OUT_OF_SCOPE_HEADING = "OUT-OF-SCOPE EXPECTED FILES (DO NOT EDIT)"
+
+
+def _expected_files(tmp_path: Path, env: dict[str, str], repo: Path, body_text: str) -> subprocess.CompletedProcess:
+	body = tmp_path / "body.txt"
+	body.write_text(body_text, encoding="utf-8")
+	return subprocess.run(["bash", str(STEP_SCRIPT), "expected-files", str(_plan(tmp_path)), str(body)], cwd=repo, env=env,
+		capture_output=True, text=True, timeout=60)
+
+
+def test_expected_files_moves_out_of_scope_paths_to_a_do_not_edit_section(tmp_path):
+	repo, env = _setup(tmp_path, [PASS])
+	proc = _expected_files(tmp_path, env, repo, "Fix.\n\nfiles_touched:\n  - lib/a.py\n")
+	assert proc.returncode == 0
+	assert OUT_OF_SCOPE_HEADING in proc.stdout, proc.stdout + proc.stderr
+	before, after = proc.stdout.split(OUT_OF_SCOPE_HEADING, 1)
+	assert "- tests/test_a.py" in after and "- tests/test_a.py" not in before
+	assert "do not edit them" in after and "in your summary" in after
+	assert "reason=expected_files_out_of_scope count=1" in proc.stderr
+	assert "reason=expected_files_out_of_scope" not in proc.stdout
+
+
+def test_expected_files_unchanged_without_a_files_touched_list(tmp_path):
+	repo, env = _setup(tmp_path, [PASS])
+	proc = _expected_files(tmp_path, env, repo, "Fix a thing.\n")
+	assert proc.returncode == 0
+	assert proc.stdout.startswith(EXPECTED_TODAY)
+	assert "- tests/test_a.py\n" in proc.stdout and proc.stdout.endswith("\n\n")
+	assert "OUT-OF-SCOPE" not in proc.stdout
+
+
+@pytest.mark.parametrize("case", ["guard_missing", "enforce_off", "allow_out_of_scope"])
+def test_expected_files_fails_open_when_the_scope_guard_is_missing_or_off(tmp_path, case):
+	repo, env = _setup(tmp_path, [PASS])
+	if case == "guard_missing":
+		(Path(env["IMPLEMENT_STAGED_SUPPORT_RUN_DIR"]) / "files_touched_scope_guard.py").unlink()
+	elif case == "enforce_off":
+		env["ENFORCE_FILES_TOUCHED"] = "false"
+	else:
+		env["ALLOW_OUT_OF_SCOPE_FILES"] = "true"
+	proc = _expected_files(tmp_path, env, repo, "Fix.\n\nfiles_touched:\n  - lib/a.py\n")
+	assert proc.returncode == 0
+	assert proc.stdout.startswith(EXPECTED_TODAY)
+	assert "- tests/test_a.py" in proc.stdout
+	assert "OUT-OF-SCOPE" not in proc.stdout
 
 
 # --- workflow wiring ------------------------------------------------------------
