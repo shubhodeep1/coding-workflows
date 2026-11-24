@@ -1181,6 +1181,7 @@ jobs:
     if: ${{ needs.gate.outputs.deterministic_skip == 'true' }}
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
+      GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
       AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
       AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       REPOSITORY: ${{ github.repository }}
@@ -1213,6 +1214,7 @@ jobs:
       # without branch protection, auto-merge lands the PR immediately.
       AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
       AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
+      AUTO_MERGE_CHECKS_POLL_MAX_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_MAX_SECONDS || '180' }}
       AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
       AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
       MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
@@ -2070,6 +2072,9 @@ jobs:
       # (or its workspace copy) when running -c, -, or -m.
       PYTHONSAFEPATH: "1"
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
+      # Issue #9928: run-local PR read cache kill switch and job key.
+      REVIEW_RUN_READ_CACHE_ENABLED: ${{ vars.REVIEW_RUN_READ_CACHE_ENABLED || 'true' }}
+      GH_PR_READ_CACHE_JOB: codex-agent
       # Head the gate evaluated; the review-autofix-failure:v1 marker on every
       # failure comment records it so the gate's identical-failure cap can
       # match markers to the current head.
@@ -2458,8 +2463,9 @@ jobs:
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          type gh_pr_cached_read >/dev/null 2>&1 || gh_pr_cached_read() { gh_retry _safe_gh_jq "repos/$2/pulls/$3"; }
 
-          pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" || echo 'null')"
+          pr_meta="$(gh_pr_cached_read pull "${REPOSITORY}" "${PR_NUMBER}" || echo 'null')"
           # An unavailable label snapshot must not override an explicit ai:codex
           # label by selecting Claude from the role default.
           AI_ENGINE_LABELS="$(printf '%s\n' "${pr_meta}" | jq -ce 'if (.labels | type) == "array" then [.labels[] | .name | select(type == "string")] else error("labels unavailable") end' 2>/dev/null || printf '%s' '["ai:codex"]')"
@@ -4732,6 +4738,7 @@ jobs:
         if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true' && steps.single_issue_security_pass.outputs.hold != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
@@ -4745,6 +4752,7 @@ jobs:
           MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
           AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
           AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
+          AUTO_MERGE_CHECKS_POLL_MAX_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_MAX_SECONDS || '180' }}
           AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
           AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
           MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
@@ -4855,6 +4863,7 @@ jobs:
         env:
           DEPENDENCY_PROXY_ALLOWED_HOSTS: ${{ vars.DEPENDENCY_PROXY_ALLOWED_HOSTS || '' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           # Judge comments are informational, so they post with the job token
@@ -4871,6 +4880,7 @@ jobs:
           MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
           AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
           AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
+          AUTO_MERGE_CHECKS_POLL_MAX_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_MAX_SECONDS || '180' }}
           AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
           AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
           MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
@@ -5368,6 +5378,7 @@ jobs:
             fi
             : > "${push_stderr_file}"
           done
+          ( source "${SUPPORT_SCRIPTS_DIR:-}/gh_helpers.sh" && gh_pr_cache_evict "${GITHUB_REPOSITORY}" "${PR_NUMBER:-}" ) >/dev/null 2>&1 || true
 
       - name: Resolve addressed PR review threads
         # The editor stage audits every PR review comment it saw (the
@@ -6505,3 +6516,4 @@ jobs:
             fi
           fi
           echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=codex-agent remaining=${remaining} reset=${reset} used_in_job=${used}"
+          gpc_stats="${RUNNER_TEMP:-/nonexistent}/gh_pr_read_cache/${GITHUB_RUN_ID:-local}_${GITHUB_RUN_ATTEMPT:-1}.stats"; [ -r "${gpc_stats}" ] || gpc_stats=/dev/null; echo "GH_PR_READ_CACHE hits=$(awk '$1=="hit"{n++} END{print n+0}' "${gpc_stats}" 2>/dev/null || echo 0) misses=$(awk '$1=="miss"{n++} END{print n+0}' "${gpc_stats}" 2>/dev/null || echo 0) job=codex-agent"
