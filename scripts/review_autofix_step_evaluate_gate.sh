@@ -1946,6 +1946,10 @@ PY
           SHOULD_RUN="false"
           SKIP_REASON="final_ci_now_green"
           echo "FINAL_CI_REPAIR pr=${PR_NUMBER} head=${pr_head_sha_gate} outcome=skipped reason=final_ci_now_green"
+          # The catch-all AUTOFIX_GATE_SKIP line above already ran; keep the
+          # "one searchable line per skip" contract (issue #4985).
+          GATE_SKIP_RECORDED="true"
+          echo "AUTOFIX_GATE_SKIP reason=final_ci_now_green pr=${PR_NUMBER} head_sha=${pr_head_sha_gate}"
         elif [ "${final_ci_head_gate_state}" = "success" ] \
           && [ "$(printf '%s' "${final_ci_head_gate_creator}" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "${gate_marker_author_login}" | tr '[:upper:]' '[:lower:]')" ]; then
           FINAL_CI_REPAIR="true"
