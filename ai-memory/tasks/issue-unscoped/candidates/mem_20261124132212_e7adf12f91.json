@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_prepush_test_gate.sh:1327-1341 (review_prepush_test_gate_final_ci_finish); .github/workflows/review_autofix.yml:4383, 4418, 4474, 5183 | severity=high | confidence=4\n  flagged_by: [openai_gpt-6-luna, google_gemini-3_1-flash-lite]\n  PROBLEM: The final-CI green-status re-check in review_prepush_test_gate_final_ci_finish is not at the push boundary. A later conflict-resolver run (`review_conflict_resolve.sh`, up to 170 minutes) can run between the check and the push while the repair commit is still eligible to push.\n  WHY: If ci/final turns `success` on the approved head while the resolver runs, the workflow does not check again, so the push step can still publish the repair and replace the now-green head. Severity: openai_gpt-6-luna said MAJOR, mapped here to high; google_gemini-3_1-flash-lite gave no severity for this finding. Two reviewers disputed it and did not re-raise it. anthropic_claude-sonnet-5_5 said the long window needs MERGE_CONFLICT=true, a conflicting head would be replaced anyway, and the finding is outside LAST RUN DIFF. z-ai_glm-5_3-flash said the resolver runs first (scripts/review_conflict_resolve.sh:2000 writes INTEGRATION_TEST_REPAIRED=true, which finish() reads at line 1321) and finish() runs at line 1380, right before the push step (review_autofix.yml:5183).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: G3. The repair step checks again right before it commits and pushes... when ci/final is success on the approved head by then, it makes no commit.\n  expected_change_site: The final step immediately before the git push in the integration-repair pipeline.\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The status re-check is performed in `review_prepush_test_gate_final_ci_finish`, which runs *before* the conflict-resolution commit and push steps. There is no re-check of `ci/final` status *after* the conflict-resolution commit is created and *before* the final push.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_autofix_step_prepush_test_gate.sh:review_prepush_test_gate_final_ci_finish | confidence=4\n  PROBLEM: The final CI green-status re-check is performed before the conflict-resolution process, not at the final push boundary.\n  WHY: The conflict resolver (`review_conflict_resolve.sh`) can take up to 170 minutes to run. If the final CI status turns `success` after `review_prepush_test_gate_final_ci_finish` has run but before the final `git push`, the repair commit is still pushed and replaces the now-approved head, even though the CI is already green.\n- TASK_GAP | severity=MAJOR | confidence=4\n  Requirement: G3. The repair step checks again right before it commits and pushes... when ci/final is success on the approved head by then, it makes no commit.\n  Expected change site: The final step immediately before the git push in the integration-repair pipeline.\n  Evidence of absence: The status re-check is performed in `review_prepush_test_gate_final_ci_finish`, which runs *before* the conflict-resolution commit and push steps. There is no re-check of `ci/final` status *after* the conflict-resolution commit is created and *before* the final push.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_autofix_step_prepush_test_gate.sh:1327-1341; .github/workflows/review_autofix.yml:4383, 4418, 4474, 5183 | severity=MAJOR | confidence=4\n  PROBLEM: The green-status recheck is not at the push boundary. A later conflict-resolver run can take up to 170 minutes, while the repair remains eligible to push.\n  WHY: If the sweep rerun posts a successful ci/final status on the approved head during that resolver run, the workflow does not check the status again. The push step can still publish the repair and replace the now-green head.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ca9df938532ddb9713c3a0b7199a0b3fb4392bf42f2ac1d7277c50b0f70037bd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10034,
+    "run_id": "45387469229",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45387469229",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124132212_e7adf12f91",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10034,
+    "run_id": "45387469229"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T13:22:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
