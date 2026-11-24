@@ -3282,6 +3282,17 @@ def _clone_for_memory_branch(repo_root: Path, memory_branch: str) -> Path:
                 shutil.rmtree(temp_dir, ignore_errors=True)
                 raise
             return temp_dir
+        # A transient failure (bare 403, 429, network) raises instead of
+        # falling back, so each retry attempt in _run_memory_read_with_retry
+        # is one clone command and a throttled host sees at most 3 clones,
+        # not 6, two of them full clones (issue #10052). The retry wrapper
+        # (the only caller) re-runs this fast path after its backoff.
+        if _is_transient_memory_read_failure(fast_clone.stderr or fast_clone.stdout or ""):
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise MemoryGitError(
+                f"git clone --single-branch {memory_branch} failed with exit {fast_clone.returncode}\n"
+                f"stderr:\n{_redact_memory_push_stderr(fast_clone.stderr or fast_clone.stdout or '')}"
+            )
         # Fall back to the full clone below, in a fresh empty directory. With
         # AI_MEMORY_CLONE_DIAGNOSTICS=1, say so on stderr (credentials and URLs
         # redacted).

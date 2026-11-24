@@ -536,3 +536,87 @@ def test_claim_cli_persistent_403_makes_three_clone_attempts_in_total(monkeypatc
 	assert "recovery duplicate-check failed" in stderr
 	assert "https://" not in stderr
 	assert FAKE_TOKEN not in stderr
+
+
+def test_write_clone_persistent_403_issues_three_clone_commands_in_total(monkeypatch) -> None:
+	# The real _clone_for_memory_branch runs under the retry wrapper: the probe
+	# passes and every shallow clone gets a bare 403. A transient shallow-clone
+	# failure must not fall back to a full clone inside the same attempt, so
+	# the step stops after 3 `git clone` commands, not 6.
+	monkeypatch.setenv("GH_TOKEN", FAKE_TOKEN)
+	monkeypatch.delenv("AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED", raising=False)
+	monkeypatch.delenv("AI_MEMORY_CLONE_DIAGNOSTICS", raising=False)
+	clone_calls: list[list[str]] = []
+	counters = {"sleep": 0, "push": 0}
+
+	def fake_run_git(cwd, args, check: bool = True, **_kwargs):
+		if args and args[0] == "ls-remote":
+			return _FakeProc(returncode=0, stdout="0123456789abcdef\trefs/heads/ai-memory\n")
+		if args and args[0] == "clone":
+			clone_calls.append(list(args))
+			if check:
+				raise ai_memory_lib.MemoryGitError(_write_clone_error(BARE_403_STDERR))
+			return _FakeProc(returncode=128, stderr=BARE_403_STDERR)
+		if args and args[0] == "push":
+			counters["push"] += 1
+		return _FakeProc(returncode=0)
+
+	def fake_sleep(_seconds):
+		counters["sleep"] += 1
+
+	created: list[Path] = []
+	real_mkdtemp = tempfile.mkdtemp
+
+	def tracking_mkdtemp(*args, **kwargs):
+		path = real_mkdtemp(*args, **kwargs)
+		created.append(Path(path))
+		return path
+
+	with _patched_module_attrs(
+		ai_memory_lib,
+		_run_git=fake_run_git,
+		_resolve_origin_url=lambda _repo_root: TOKEN_URL,
+	), _patched_module_attrs(ai_memory_lib.time, sleep=fake_sleep), _patched_module_attrs(
+		ai_memory_lib.tempfile, mkdtemp=tracking_mkdtemp
+	), pytest.raises(ai_memory_lib.MemoryGitError) as excinfo:
+		ai_memory_lib.persist_memory_operation(
+			REPO_ROOT,
+			memory_branch="ai-memory",
+			memory_root_relative="ai-memory",
+			push_retries=16,
+			commit_message="ai-memory: read retry test",
+			operation=lambda _clone_dir: {"value": 1},
+		)
+	assert len(clone_calls) == 3
+	assert all("--depth" in call for call in clone_calls)
+	assert counters["sleep"] == 2
+	assert counters["push"] == 0
+	message = str(excinfo.value)
+	assert message.startswith("git clone")
+	assert "returned error: 403" in message
+	assert "https://" not in message
+	assert FAKE_TOKEN not in message
+	assert created
+	assert not any(p.exists() for p in created)
+
+
+def test_fast_clone_non_transient_failure_still_falls_back_to_full_clone(monkeypatch) -> None:
+	monkeypatch.delenv("AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED", raising=False)
+
+	def handler(args):
+		if args[0] == "ls-remote":
+			return 0, "0123456789abcdef\trefs/heads/ai-memory\n", ""
+		if args[0] == "clone" and "--depth" in args:
+			return 128, "", "fatal: dumb http transport does not support shallow capabilities"
+		return 0, "", ""
+
+	path, exc, _created, calls = _run_clone_with_script(handler)
+	try:
+		assert exc is None, exc
+		clones = [call for call in calls if call[0] == "clone"]
+		assert len(clones) == 2
+		assert "--depth" in clones[0]
+		assert "--depth" not in clones[1]
+	finally:
+		if path is not None:
+			shutil.rmtree(path, ignore_errors=True)
