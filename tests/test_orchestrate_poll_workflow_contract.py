@@ -217,8 +217,12 @@ def test_unblock_scan_runs_without_tracking_issues() -> None:
 		("UNBLOCK_JUDGE_ESCALATED_RECHECK_HOURS", "24"),
 	):
 		assert f"{name}: ${{{{ vars.{name} || '{default}' }}}}" in step
+	# PR #9839: the head-bound needs-human latch release runs first, so a
+	# released PR is not judged as still blocked by the scan.
 	unblock_head = (
 		'if _is_truthy "${UNBLOCK_SCAN_SWEEP_ONLY:-false}"; then\n'
+		'  # Before the scan, so a released PR is not judged as still blocked.\n'
+		'  release_head_bound_needs_human_latches || echo "NEEDS_HUMAN_HEAD_LATCH outcome=skip reason=error rc=$?"\n'
 		'  run_unblock_scan || echo "UNBLOCK_SCAN outcome=skip reason=error rc=$?"\n'
 	)
 	assert unblock_head in poller

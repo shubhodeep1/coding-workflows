@@ -405,6 +405,154 @@ def test_bad_date_argument_is_rejected() -> None:
 
 
 # ──────────────────────────────────────────────────────────────────
+# assemble --notes-out — release notes from the folded fragments (#9846)
+# ──────────────────────────────────────────────────────────────────
+
+
+def test_notes_out_groups_categories_in_canonical_order() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "CHANGELOG.md").write_text(KAC_CHANGELOG, encoding="utf-8")
+		_fragment(root, "10-fix.md", "<!-- changelog: fixed -->\n- Fixed thing.\n")
+		_fragment(root, "11-add.md", "- Added thing.\n")
+		_fragment(root, "12-bogus.md", "<!-- changelog: bogus -->\n- Typo thing.\n")
+		notes = root / "notes.md"
+
+		result = _run("assemble", "--repo-root", str(root), "--notes-out", str(notes))
+
+		assert result.returncode == 0, result.stderr
+		assert "notes_written=3" in result.stdout
+		assert notes.read_text(encoding="utf-8") == (
+			"### Added\n\n- Added thing.\n\n- Typo thing.\n\n### Fixed\n\n- Fixed thing.\n"
+		)
+		# The changelog itself is folded exactly as without the flag.
+		text = (root / "CHANGELOG.md").read_text(encoding="utf-8")
+		assert _removed_lines(KAC_CHANGELOG, text) == []
+		assert "<!-- changelog:" not in notes.read_text(encoding="utf-8")
+
+
+def test_notes_out_date_layout_is_plain_list() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "CHANGELOG.md").write_text(DATE_CHANGELOG, encoding="utf-8")
+		_fragment(root, "10-one.md", "<!-- changelog: security -->\n- First.\n")
+		_fragment(root, "20-two.md", "- Second.\n")
+		notes = root / "notes.md"
+
+		result = _run(
+			"assemble", "--repo-root", str(root), "--date", "2026-08-06", "--notes-out", str(notes)
+		)
+
+		assert result.returncode == 0, result.stderr
+		assert "notes_written=2" in result.stdout
+		assert notes.read_text(encoding="utf-8") == "- First.\n\n- Second.\n"
+
+
+def test_notes_out_written_under_dry_run() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "CHANGELOG.md").write_text(KAC_CHANGELOG, encoding="utf-8")
+		fragment = _fragment(root, "10-fix.md", "<!-- changelog: fixed -->\n- Fixed thing.\n")
+		notes = root / "notes.md"
+
+		result = _run(
+			"assemble", "--repo-root", str(root), "--dry-run", "--notes-out", str(notes)
+		)
+
+		assert result.returncode == 0, result.stderr
+		assert notes.read_text(encoding="utf-8") == "### Fixed\n\n- Fixed thing.\n"
+		assert (root / "CHANGELOG.md").read_text(encoding="utf-8") == KAC_CHANGELOG
+		assert fragment.exists()
+
+
+def test_notes_out_empty_when_no_usable_fragment() -> None:
+	for scenario in ("no-fragments", "empty-fragments"):
+		with tempfile.TemporaryDirectory() as tmp:
+			root = Path(tmp)
+			(root / "CHANGELOG.md").write_text(KAC_CHANGELOG, encoding="utf-8")
+			if scenario == "empty-fragments":
+				_fragment(root, "10-empty.md", "\n\n")
+			notes = root / "notes.md"
+			notes.write_text("stale notes from an earlier run\n", encoding="utf-8")
+
+			result = _run("assemble", "--repo-root", str(root), "--notes-out", str(notes))
+
+			assert result.returncode == 0, result.stderr
+			assert "notes_written=0" in result.stdout
+			assert notes.read_bytes() == b"", scenario
+			assert (root / "CHANGELOG.md").read_text(encoding="utf-8") == KAC_CHANGELOG
+
+
+def test_notes_out_truncates_oversized_notes() -> None:
+	import importlib.util
+
+	spec = importlib.util.spec_from_file_location("assemble_changelog_notes", ASSEMBLER)
+	assert spec is not None and spec.loader is not None
+	module = importlib.util.module_from_spec(spec)
+	sys.dont_write_bytecode = True
+	spec.loader.exec_module(module)
+
+	big = ["- " + "x" * 50000]
+	entries = [("Added", big), ("Fixed", big), ("Fixed", big), ("Security", ["- small"])]
+	text, included = module._render_release_notes(module.LAYOUT_KEEP_A_CHANGELOG, entries)
+
+	assert included == 2
+	assert text.endswith("...and 2 more; see CHANGELOG.md.")
+	body = text.rsplit("\n\n...and", 1)[0]
+	assert len(body) <= module.RELEASE_NOTES_CHAR_LIMIT
+	assert len(text) < 125000
+	assert module._render_release_notes(module.LAYOUT_DATE_HEADINGS, []) == ("", 0)
+
+	# A single fragment over the cap publishes its truncated head, not only
+	# the trailer, and is counted as written.
+	huge = ["- " + "y" * 130000]
+	text, included = module._render_release_notes(
+		module.LAYOUT_KEEP_A_CHANGELOG, [("Fixed", huge), ("Fixed", ["- small"])]
+	)
+	assert included == 1
+	assert text.startswith("### Fixed\n\n- yyy")
+	assert "...(truncated; see CHANGELOG.md)" in text
+	assert text.endswith("...and 1 more; see CHANGELOG.md.")
+	assert len(text) < 125000
+
+
+def test_notes_out_failed_write_only_warns() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "CHANGELOG.md").write_text(DATE_CHANGELOG, encoding="utf-8")
+		_fragment(root, "10-one.md", "- Entry.\n")
+		unwritable = root / "missing-dir" / "notes.md"
+
+		result = _run(
+			"assemble", "--repo-root", str(root), "--date", "2026-08-06", "--notes-out", str(unwritable)
+		)
+
+		assert result.returncode == 0, result.stderr
+		assert "::warning::Could not write --notes-out" in result.stderr
+		assert "- Entry." in (root / "CHANGELOG.md").read_text(encoding="utf-8")
+
+
+def test_notes_out_absent_keeps_consumer_behaviour() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		root = Path(tmp)
+		(root / "CHANGELOG.md").write_text(DATE_CHANGELOG, encoding="utf-8")
+		_fragment(root, "10-one.md", "- Entry.\n")
+		before = set(root.rglob("*"))
+
+		result = _run("assemble", "--repo-root", str(root), "--date", "2026-08-06")
+
+		assert result.returncode == 0, result.stderr
+		assert "notes_written=" not in result.stdout
+		after = set(root.rglob("*"))
+		# Only the folded fragment disappeared; no notes file was created.
+		assert after == before - {root / "changelog.d" / "10-one.md"}
+		assert (root / "CHANGELOG.md").read_text(encoding="utf-8") == (
+			"# Changelog\n\n## 2026-08-06\n\n- Existing same-day entry.\n\n- Entry.\n\n"
+			"## 2026-08-05\n\n- Older entry.\n"
+		)
+
+
+# ──────────────────────────────────────────────────────────────────
 # ensure-assets
 # ──────────────────────────────────────────────────────────────────
 
