@@ -1021,7 +1021,10 @@ jobs:
           # next release. A release must never fail because of changelog
           # bookkeeping.
 
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_changelog.py assemble --repo-root .
+          # --notes-out (#9846): the folded fragments' text, read by "Extract
+          # changelog for this version" as the release body. RUNNER_TEMP sits
+          # outside the worktree, so the fail-open reset below leaves it alone.
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_changelog.py assemble --repo-root . --notes-out "${RUNNER_TEMP:-/tmp}/release_fragment_notes.md"
           # agents.d/ fragments (CLAUDE.md §30) fold into agents.md in the same
           # commit. Fail open: a fragment that cannot fold stays in agents.d/
           # for the next release, and a missing script (an older ref) is a no-op.
@@ -1091,8 +1094,15 @@ jobs:
           NOTES=$(awk \
             "/^## \\[${VERSION}\\]/{found=1; next} /^## \\[/{if(found) exit} found{print}" \
             CHANGELOG.md)
+          # Fallback order (#9846): a hand-written ## [VERSION] section, then
+          # the notes the assemble step wrote from the folded fragments, then
+          # a placeholder. A missing notes file only means the placeholder.
+          FRAGMENT_NOTES_FILE="${RUNNER_TEMP:-/tmp}/release_fragment_notes.md"
+          if [ -z "$NOTES" ] && [ -s "${FRAGMENT_NOTES_FILE}" ]; then
+            NOTES=$(cat "${FRAGMENT_NOTES_FILE}")
+          fi
           if [ -z "$NOTES" ]; then
-            NOTES="No changelog entry found for ${VERSION}."
+            NOTES="No changelog fragments were folded for ${VERSION}."
           fi
           # Write to file to avoid quoting issues
           echo "$NOTES" > /tmp/release_notes.md
