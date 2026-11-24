@@ -1384,7 +1384,10 @@ No completed audit exists for \`${head_sha}\`. Auto-merge stays off. A new push 
 			# Issue #10017: a PR holding its base's merge lease skips the
 			# limit (bounded by MERGE_LEASE_MAX_HOLDERS extra audits). The
 			# lease is read only here, at the limit; anything but `exempt`
-			# throttles as before.
+			# throttles as before. Like the base throttle, the bound is
+			# best-effort: count and dispatch are not atomic across PRs, so
+			# gates of different holders racing at the limit can each add
+			# one; the next gate run counts them.
 			lease_exempt="$(single_pass_lease_holder_exempt "${base}" "${active_audits}" "${max_concurrent}")"
 			if [ "${lease_exempt}" = "exempt" ]; then
 				lease_throttle_note=" throttle=lease_holder_exempt"
