@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix_sweep.yml:83-86, 806-827, 851-876 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The 30-minute review sweep does not check the new rate-limit marker or reset time, and it does not skip PRs labeled ai:needs-human; its own review-round cap defaults to 10, not the new retry cap of 3.\n  WHY: The sweep can dispatch another review before the recorded reset, and it can keep dispatching a PR that the poller escalated after three attempts until its own round cap is reached, which bypasses the new retry limit. The source severity was MAJOR. anthropic_claude-sonnet-5_5 noted that this sweep behaviour predates this PR and is unchanged by it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A review gate that exits on AUTOFIX_GATE_PR_READ_FAILED rc=75 is picked up again by the next scheduled review sweep,\" with the \u00a718.E entry point specifying \"the scheduled AI Review sweep for PRs.\"\n  expected_change_site: .github/workflows/review_autofix_sweep.yml, in its scheduled candidate selection and dispatch path.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR adds the PR requeue pass to scripts/orchestrate_poll_process.sh but has no diff in .github/workflows/review_autofix_sweep.yml, and that sweep still dispatches candidates under its own review-round cap without checking the rate-limit marker, the reset time or the ai:needs-human label.\n- requirement: \"Entry point: the existing scheduled poller (AI Orchestrate Poller) for issues and the scheduled `AI Review` sweep for PRs. The implementer names the exact files.\" / \"A review gate that exits on `AUTOFIX_GATE_PR_READ_FAILED rc=75` is picked up again by the next scheduled review sweep instead of being treated as handled.\"\n  expected_change_site: `.github/workflows/review_autofix_sweep.yml` (per openai_gpt-6-luna) or the implementer-named poller entry.\n  confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: Not a gap, because the issue's own \u00a718.E wording defers it (\"The implementer names the exact files\"). The implementer named `scripts/orchestrate_poll_process.sh`, `review_autofix_sweep.yml` is outside the plan's `files_touched` grant, the requeue pass runs on every scheduled poller tick and reuses the existing PR batch, and three prior editor rounds accepted this deferral. The source severity was NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING (not a finding): scripts/orchestrate_poll_process.sh | `_review_gate_rate_limit_requeue_decide`, comment block at lines 40455-40462 and the third `select` condition at line 40466\n  PROBLEM: The comment says a \"non-marker pipeline comment (a completed review)\" closes the unknown-head window, but the code closes it at any trusted-login comment with no requeue or escalation field. The GH_PAT login can be a maintainer's personal account, so that person's ordinary comments also reset the window.\n  WHY: The suggested fix is to add 1-2 comment lines saying such a comment resets only the `$gate_reruns` window and never `$retries`, or to limit condition 3 to bodies with a known review-outcome marker. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- ADVISORY (not a finding): scripts/orchestrate_poll_process.sh:40466-40467\n  PROBLEM: Condition (4), `github-actions AND no gate field`, is broader than the intended \"completed review\".\n  WHY: The 3-requeue cap still holds because `$retries` never resets; only the number of gate failures per escalation can rise in edge cases. The reviewer also judged the review_autofix_sweep.yml TASK_GAP consistent with the plan grant, and the shellcheck failure out of scope.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/review_autofix_sweep.yml:83-86, 806-827, 851-876 | severity=MAJOR | confidence=5\n  PROBLEM: The 30-minute review sweep does not check the new rate-limit marker or reset time and does not skip ai:needs-human PRs; its review-round cap defaults to 10, not the new retry cap of 3.\n  WHY: The sweep can dispatch before the recorded reset, and it can keep dispatching an escalated PR until its own round cap is reached, which bypasses the new retry limit.\n- TASK_GAP | severity=MAJOR | confidence=5\n  Requirement: \u201cA review gate that exits on AUTOFIX_GATE_PR_READ_FAILED rc=75 is picked up again by the next scheduled review sweep,\u201d with the \u00a718.E entry point specifying \u201cthe scheduled AI Review sweep for PRs.\u201d\n  Expected change site: .github/workflows/review_autofix_sweep.yml, in its scheduled candidate selection and dispatch path.\n  Evidence of absence: The PR has no diff in .github/workflows/review_autofix_sweep.yml, and the sweep still dispatches without checking the rate-limit marker, the reset time or ai:needs-human.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP | severity=NIT | confidence=5\n  Requirement: \"Entry point: the existing scheduled poller (AI Orchestrate Poller) for issues and the scheduled `AI Review` sweep for PRs. The implementer names the exact files.\" / \"A review gate that exits on `AUTOFIX_GATE_PR_READ_FAILED rc=75` is picked up again by the next scheduled review sweep instead of being treated as handled.\"\n  Expected change site: `.github/workflows/review_autofix_sweep.yml` (per openai_gpt-6-luna) or the implementer-named poller entry.\n  Evidence of absence: Not a gap, because \u00a718.E defers the choice of files to the implementer. The implementer named `scripts/orchestrate_poll_process.sh`, the sweep is outside `files_touched`, and three prior editor rounds adjudicated this deferral.\n- HARDENING (not a finding): scripts/orchestrate_poll_process.sh | `_review_gate_rate_limit_requeue_decide`, comment block at lines 40460-40462\n  PROBLEM: The comment says only a completed review closes the window, but condition 3 (line 40466) fires for any trusted-login comment, human ones included. Condition 4 (line 40467) fires for any github-actions comment without a gate field.\n  WHY: The reset is safe only because `$retries` is never windowed, and the comment does not say so. The suggested fix is a 1-2 line comment extension. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c5157b0b718a75aaabf73d7b4774afd863eb349e8ded2190ec8971bbc467e3ac",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10039,
+    "run_id": "45397515962",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45397515962",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124143420_c43ae034e0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10039,
+    "run_id": "45397515962"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-24T14:34:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
