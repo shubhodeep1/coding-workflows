@@ -5,13 +5,31 @@
   "entry_id": "processed_command_10063_7139724936_approved",
   "issue_number": 10063,
   "metadata": {
+    "branch": "ai/issue-10063",
+    "changed_files": [
+      ".github/workflows/review_autofix.yml",
+      "README.md",
+      "agents.d/10063-red-final-ci-judge-repair.md",
+      "changelog.d/10063-red-final-ci-judge-repair.md",
+      "prompts/mode-judge-review-blocked.txt",
+      "scripts/review_autofix_step_evaluate_gate.sh",
+      "scripts/review_rb_judge.sh",
+      "tests/test_review_autofix_clean_same_head_gate.py",
+      "tests/test_review_freshness_ci_failed.py",
+      "tests/test_review_rb_judge_red_check_repair.py"
+    ],
+    "issue_number": 10063,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/10063",
+    "pr_number": 10067,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/10067",
+    "run_attempt": "1",
+    "run_id": "45452571187",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/45452571187"
   },
   "run_attempt": 1,
   "run_id": "45452571187",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-24T17:52:56Z",
+  "status": "completed",
+  "timestamp": "2026-11-24T18:36:46Z",
   "workflow": "implement"
 }
