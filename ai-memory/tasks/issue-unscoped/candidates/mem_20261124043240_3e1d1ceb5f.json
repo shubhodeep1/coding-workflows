@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_single_issue_security_pass.sh:588-606, 1381-1507 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, minimax_minimax-m3]\n  PROBLEM: The lease-holder throttle exemption is a non-atomic check-then-act: the active-audit count from `single_pass_active_audits` is checked against `active < max + holders` separately from the later `workflow run` dispatch, and the per-PR concurrency group in .github/workflows/review_autofix.yml does not serialize gates across PRs or bases.\n  WHY: Two holder gates running at the same time can both see the same count (for example 3), both pass the check and both dispatch, which gives 5 active audits against the documented bound of 4; all three flagging reviewers rated it MAJOR; anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash examined the same path and judged it a pre-existing, bounded, best-effort-throttle residual that this run did not change, so they did not report it.\n- scripts/review_single_issue_security_pass.sh:588 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: `GH_RETRY_MAX_ATTEMPTS=\"${GH_RETRY_MAX_ATTEMPTS:-2}\"` inside the `lease_check_token=\"$( ... )\"` subshell of `single_pass_lease_holder_exempt` was checked and found correct and effective (NIT, no runtime failure).\n  WHY: `gh_retry` reads `GH_RETRY_MAX_ATTEMPTS` at call time (scripts/gh_helpers.sh:2153), `_merge_lease_read` calls it (scripts/pr_checks_lib.sh:2922/2929), the subshell scope prevents leakage, and the `:-` form keeps an operator-set value and the test fixture's value of 1.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_single_issue_security_pass.sh:1381-1401 | severity=MAJOR | confidence=4\n  PROBLEM: The lease-holder throttle exemption check is non-atomic. The active audit count is queried at line 1381, and the dispatch occurs much later at line 1490.\n  WHY: Concurrent gate runs for different lease-holding PRs can both observe the same `active_audits` count, both conclude they satisfy the exemption condition (active < limit + holders), and both dispatch, which exceeds the documented concurrency bound (limit + holders).\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_single_issue_security_pass.sh:line 588 (`GH_RETRY_MAX_ATTEMPTS=\"${GH_RETRY_MAX_ATTEMPTS:-2}\"` inside `single_pass_lease_holder_exempt`) | severity=NIT | confidence=2\n  PROBLEM: Verified against `scripts/gh_helpers.sh:2153` and `scripts/pr_checks_lib.sh:2922/2929`: the new line sits inside the `lease_check_token=\"$( ... )\"` subshell after the helpers are sourced and before `_merge_lease_read`, so the `:-` default of 2 applies when the variable is unset and an operator-set value passes through.\n  WHY: It does not fail at runtime. The change is correct and cuts lease-read retries from 5 to 2, and the test fixture's `GH_RETRY_MAX_ATTEMPTS=1` is preserved (`_lease_reads(calls) == 1`).\n- scripts/review_single_issue_security_pass.sh:lines 588\u2013606 inside `single_pass_lease_holder_exempt`, paired with the dispatch at lines 1431\u20131507 | severity=MAJOR | confidence=3\n  PROBLEM: The holder-allowance path is a non-atomic check-then-act. Line 602 evaluates `active < limit + MERGE_LEASE_MAX_HOLDERS` against a global count from `single_pass_active_audits`, then the caller dispatches at line 1431+. The per-PR concurrency groups in `.github/workflows/review_autofix.yml` do not serialize across PRs.\n  WHY: With `MERGE_LEASE_MAX_HOLDERS=1`, two PRs holding leases on different bases can both pass the check and both dispatch. That breaks the bound of 4 documented in README.md and agents.d/10017-security-pass-lease-holder-exempt.md (5 are possible). The autofix did not address it.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_single_issue_security_pass.sh:1381-1401, where active audits are counted and the holder allowance is checked; 1443-1444, where the audit is dispatched. The per-PR concurrency group is .github/workflows/review_autofix.yml:2063-2064. | severity=MAJOR | confidence=4\n  PROBLEM: The holder allowance check and the audit dispatch are separate, non-atomic operations, and the per-PR concurrency group does not serialize concurrent gates for different PRs.\n  WHY: With 3 active audits and the default allowance of 1, two concurrent holder gates can each observe 3, pass the `active < max + holders` check and dispatch, which gives 5 active audits against the documented bound of 4.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "740de3c9f8bd5da61be5355c235f707c6650f6e49def054a7524d4770ccf083a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10021,
+    "run_id": "45309891266",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45309891266",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124043240_3e1d1ceb5f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10021,
+    "run_id": "45309891266"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T04:32:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
