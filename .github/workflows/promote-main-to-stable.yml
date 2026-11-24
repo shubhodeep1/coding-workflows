@@ -147,6 +147,7 @@ jobs:
       - name: Run the promote cycle
         id: cycle
         env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
           PROMOTE_CYCLE_ENABLED: ${{ vars.PROMOTE_CYCLE_ENABLED || 'true' }}
           PROMOTE_CYCLE_MIN_DOCS: ${{ vars.PROMOTE_CYCLE_MIN_DOCS || '2' }}

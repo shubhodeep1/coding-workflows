@@ -90,6 +90,11 @@ gh_api_safe_stderr_is_transient()
 #   also in quiet mode (the line carries no arguments, endpoint or token).
 # Any other failure, and a transient failure on a write, fails at once.
 #
+# With GH_API_SAFE_USE_READ_TOKEN=1 (default 0, set inline by polling call
+# sites, e.g. through gh_api_safe_quiet_print_read), a read is first tried
+# once with the job token (gh_api_safe_job_token_read, issue #9888); when
+# that does not succeed, the PAT loop above runs exactly as before.
+#
 # This helper stays self-contained on purpose and does not source
 # scripts/gh_helpers.sh (gh_retry_to_file / gh_api_retry): it is sourced by
 # release jobs and scripts/dispatch_and_watch_workflow_run.sh, where
@@ -108,6 +113,14 @@ gh_api_safe()
 	gh_api_safe_call_is_read "$@" || is_read=0
 	if [ -z "${RATE_LIMIT_BACKOFF+x}" ] || [[ ! "${RATE_LIMIT_BACKOFF}" =~ ^[0-9]+$ ]]; then
 		RATE_LIMIT_BACKOFF=0
+	fi
+	# Opt-in (issue #9888): try a read once with the job token first.
+	if [ "${GH_API_SAFE_USE_READ_TOKEN:-0}" = "1" ] && [ "${is_read}" = "1" ]; then
+		if output="$(gh_api_safe_job_token_read "$@")"; then
+			RATE_LIMIT_BACKOFF=0
+			GH_API_SAFE_OUTPUT="${output}"
+			return 0
+		fi
 	fi
 	err_file="$(mktemp)"
 	while true; do
@@ -182,6 +195,138 @@ gh_api_safe_quiet_print()
 	fi
 
 	return 1
+}
+
+# gh_api_safe_job_token_read ARGS...
+#
+# The release-gate twin of gh_read in scripts/gh_helpers.sh (issue #9888);
+# this file stays self-contained (see gh_api_safe). Runs `gh api ARGS...`
+# once with the job's GITHUB_TOKEN (GH_READ_TOKEN) and prints its stdout,
+# with the same rules as gh_read:
+# - reads only (gh_api_safe_call_is_read; the graphql endpoint is refused);
+# - same repository only, judged from the `repos/<owner>/<repo>` endpoint;
+# - the GH_READ_TOKEN_ENABLED kill switch (default true) and the same
+#   per-job latch file, written on a 401 or a non-rate-limit 403;
+# - xtrace off while the token is in use; gh's stderr is never replayed;
+# - one `GH_READ_FALLBACK reason=<401|403|404|rate_limit> caller=<script>`
+#   line to stderr when the job token is refused or rate limited.
+# Returns 0 with the output on success; 2 for a call that is not a read
+# (gh is not run); 3 when the caller should use the PAT (feature off, no
+# token, latch set, another repository, or a logged fallback); 1 on any
+# other failure. Makes at most one API call. xtrace is switched off before
+# anything reads GH_READ_TOKEN and restored on return.
+gh_api_safe_job_token_read()
+{
+	local job_token_read_xtrace=0 job_token_read_rc=0
+	case "$-" in
+		*x*) job_token_read_xtrace=1 ;;
+	esac
+	{ set +x; } 2>/dev/null
+	_gh_api_safe_job_token_read_run "$@" || job_token_read_rc=$?
+	if [ "${job_token_read_xtrace}" = "1" ]; then
+		set -x
+	fi
+	return "${job_token_read_rc}"
+}
+
+_gh_api_safe_job_token_read_run()
+{
+	local arg="" endpoint="" target_repo="" skip_value=0 rc=0 xtrace_was_on=0 reason=""
+	local out_file="" err_file="" latch_key="" latch_file="" caller="" caller_idx=1
+	if ! gh_api_safe_call_is_read "$@"; then
+		echo "gh_api_safe_job_token_read: refused a call that is not a read" >&2
+		return 2
+	fi
+	for arg in "$@"; do
+		if [ "${skip_value}" = "1" ]; then
+			skip_value=0
+			continue
+		fi
+		case "${arg}" in
+			-X|--method|-q|--jq|-t|--template|-H|--header|-p|--preview|--hostname|--cache)
+				skip_value=1
+				;;
+			-*)
+				;;
+			*)
+				endpoint="${arg}"
+				break
+				;;
+		esac
+	done
+	case "${endpoint#/}" in
+		graphql|graphql\?*)
+			echo "gh_api_safe_job_token_read: refused a call that is not a read" >&2
+			return 2
+			;;
+	esac
+	local read_token_enabled="${GH_READ_TOKEN_ENABLED:-true}"
+	case "${read_token_enabled,,}" in
+		false|0|no|off) return 3 ;;
+	esac
+	[ -n "${GH_READ_TOKEN:-}" ] || return 3
+	latch_key="${GITHUB_RUN_ID:-local}_${GITHUB_RUN_ATTEMPT:-1}_${GITHUB_JOB:-job}"
+	latch_key="${latch_key//[^A-Za-z0-9_.-]/_}"
+	latch_file="${RUNNER_TEMP:-${TMPDIR:-/tmp}}/gh_read_refused_${latch_key}"
+	[ ! -e "${latch_file}" ] || return 3
+	if [[ "${endpoint}" =~ ^/?repos/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)([/?#]|$) ]]; then
+		target_repo="${BASH_REMATCH[1]}/${BASH_REMATCH[2]}"
+	fi
+	if [ -z "${target_repo}" ] || [ -z "${GITHUB_REPOSITORY:-}" ] || [ "${target_repo,,}" != "${GITHUB_REPOSITORY,,}" ]; then
+		return 3
+	fi
+	out_file="$(mktemp)" || return 3
+	if ! err_file="$(mktemp)"; then
+		rm -f "${out_file}"
+		return 3
+	fi
+	case "$-" in
+		*x*) xtrace_was_on=1 ;;
+	esac
+	{ set +x; } 2>/dev/null
+	GH_TOKEN="${GH_READ_TOKEN}" GITHUB_TOKEN="${GH_READ_TOKEN}" gh api "$@" >"${out_file}" 2>"${err_file}" || rc=$?
+	if [ "${xtrace_was_on}" = "1" ]; then
+		set -x
+	fi
+	if [ "${rc}" -eq 0 ]; then
+		cat "${out_file}"
+		rm -f "${out_file}" "${err_file}"
+		return 0
+	fi
+	if grep -qiE 'rate limit|abuse detection|secondary rate|HTTP 429' "${err_file}" 2>/dev/null; then
+		reason="rate_limit"
+	elif grep -q 'HTTP 401' "${err_file}" 2>/dev/null; then
+		reason="401"
+	elif grep -q 'HTTP 403' "${err_file}" 2>/dev/null; then
+		reason="403"
+	elif grep -q 'HTTP 404' "${err_file}" 2>/dev/null; then
+		reason="404"
+	fi
+	rm -f "${out_file}" "${err_file}"
+	[ -n "${reason}" ] || return 1
+	if [ "${reason}" = "401" ] || [ "${reason}" = "403" ]; then
+		: > "${latch_file}" 2>/dev/null || true
+	fi
+	while [ "${caller_idx}" -lt "${#BASH_SOURCE[@]}" ]; do
+		caller="$(basename -- "${BASH_SOURCE[${caller_idx}]:-}" 2>/dev/null || true)"
+		if [ -n "${caller}" ] && [ "${caller}" != "comprehensive_test_and_release_gh_api.sh" ]; then
+			break
+		fi
+		caller=""
+		caller_idx=$((caller_idx + 1))
+	done
+	caller="${caller//[^A-Za-z0-9_.-]/}"
+	echo "GH_READ_FALLBACK reason=${reason} caller=${caller:-unknown}" >&2
+	return 3
+}
+
+# gh_api_safe_quiet_print_read ARGS...
+#
+# gh_api_safe_quiet_print for a polling read: tries the job token first
+# (GH_API_SAFE_USE_READ_TOKEN=1, issue #9888), then the PAT as before.
+gh_api_safe_quiet_print_read()
+{
+	GH_API_SAFE_USE_READ_TOKEN=1 gh_api_safe_quiet_print "$@"
 }
 
 list_dispatch_runs()

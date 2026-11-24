@@ -2870,6 +2870,14 @@ _merge_lease_max_hold_seconds()
 	echo $((lease_hold_minutes * 60))
 }
 
+# Judge-decision grant signal (issue #9987): the review-blocked judge posts a
+# `success` commit status under this context on the judged head when it decided
+# to merge but deferred for the lease (_pr_judge_merge_pending_mark). The tick
+# counts it, for a waiter only, in place of a pending or absent head-gate
+# (_merge_lease_pr_eligible). Not an env input: a fixed contract name, like
+# REVIEW_HEAD_GATE_CONTEXT in scripts/review_head_gate.sh.
+MERGE_LEASE_JUDGE_DECISION_CONTEXT="ai-review/judge-merge-pending"
+
 # Phase 2 kill switch: MERGE_LEASE_REVOKE_ENABLED (default true; true/1/yes/on).
 _merge_lease_revoke_enabled()
 {
@@ -3636,6 +3644,13 @@ _merge_lease_has_hold_label()
 # MERGE_LEASE_IDLE_MINUTES have passed since it, so a holder whose updated
 # head is still being reviewed keeps the lease), then the required checks
 # with a 0-minute budget (no final-CI dispatch, no pending marker).
+# Judge decision (issue #9987): a waiter whose head-gate is absent or pending
+# is still eligible when the newest MERGE_LEASE_JUDGE_DECISION_CONTEXT status
+# on the head is `success` and <trusted_login> created it (the review-blocked
+# judge decided to merge and deferred for the lease). A head-gate failure or
+# error still wins; holders are unchanged. Sets MERGE_LEASE_ELIGIBLE_GATE to
+# head_gate|judge_decision (empty when eligibility did not rest on a status,
+# e.g. fail-open or no valid login/head).
 # Issue #9983 (G1, G3): once a holder's grace has passed with the head-gate
 # still absent or pending, the runs on its head are read once (the
 # AUTO_MERGE_WAIT_WORKFLOWS list, default CI, plus the review workflows in
@@ -3656,7 +3671,8 @@ _merge_lease_has_hold_label()
 # API: 1 statuses read plus the reads of _pr_wait_for_required_checks; none
 # for draft, `[skip ai]` or a hold label, or without a valid login or head; +1
 # actions/runs?head_sha read for a holder past the grace with a pending
-# head-gate (that path makes no required-checks read).
+# head-gate (that path makes no required-checks read). The judge status is
+# read from the same statuses response (no extra call).
 _merge_lease_pr_eligible()
 {
 	local elig_pr="$1" elig_head="$2" elig_title="$3" elig_draft="$4" elig_base="${5:-}" elig_login="${6:-}" elig_since="${7:-}"
@@ -3664,6 +3680,7 @@ _merge_lease_pr_eligible()
 	local elig_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" elig_statuses elig_gate elig_idle elig_now elig_rc=0
 	local elig_run_names
 	MERGE_LEASE_INELIGIBLE_REASON=""
+	MERGE_LEASE_ELIGIBLE_GATE=""
 	MERGE_LEASE_CI_ACTIVE="unknown"
 	MERGE_LEASE_HEAD_RUNS_READ="false"
 	MERGE_LEASE_GATE_CONFIRMED="false"
@@ -3688,7 +3705,10 @@ _merge_lease_pr_eligible()
 	# Newest first: the latest head-gate status decides.
 	elig_gate="$(jq -r '[ .[] | select(type == "object" and .context == "ai-review/head-gate") ][0] | if . == null then "" else "\(.state) \((.creator.login // "") | ascii_downcase)" end' <<< "${elig_statuses}" 2>/dev/null)" || return 0
 	case "${elig_gate}" in
-		"success ${elig_login}") MERGE_LEASE_GATE_CONFIRMED="true" ;;
+		"success ${elig_login}")
+			MERGE_LEASE_ELIGIBLE_GATE="head_gate"
+			MERGE_LEASE_GATE_CONFIRMED="true"
+			;;
 		"failure ${elig_login}"|"error ${elig_login}")
 			MERGE_LEASE_INELIGIBLE_REASON="no_head_gate"
 			return 1
@@ -3726,8 +3746,24 @@ _merge_lease_pr_eligible()
 				fi
 				return 0
 			fi
-			MERGE_LEASE_INELIGIBLE_REASON="no_head_gate"
-			return 1
+			# Waiter (issue #9987): a pipeline judge-decision status on this
+			# head stands in for an absent head-gate or a pending one from
+			# <trusted_login> only (a head-gate in any state from another
+			# login keeps no_head_gate; the pipeline posts its pending
+			# head-gate with the same token); a jq failure counts as no judge
+			# status (today's no_head_gate).
+			case "${elig_gate}" in
+				""|"pending ${elig_login}") ;;
+				*)
+					MERGE_LEASE_INELIGIBLE_REASON="no_head_gate"
+					return 1
+					;;
+			esac
+			if [ "$(jq -r --arg c "${MERGE_LEASE_JUDGE_DECISION_CONTEXT:-ai-review/judge-merge-pending}" '[ .[] | select(type == "object" and .context == $c) ][0] | if . == null then "" else "\(.state) \((.creator.login // "") | ascii_downcase)" end' <<< "${elig_statuses}" 2>/dev/null)" != "success ${elig_login}" ]; then
+				MERGE_LEASE_INELIGIBLE_REASON="no_head_gate"
+				return 1
+			fi
+			MERGE_LEASE_ELIGIBLE_GATE="judge_decision"
 			;;
 	esac
 	PR_CHECKS_RUNS_READ=""
@@ -4404,5 +4440,59 @@ _pr_final_ci_merge_pending_mark()
 		return 0
 	fi
 	echo "FINAL_CI_MERGE_PENDING pr=${pending_pr} head=${pending_head} outcome=marked reason=checks_wait_timeout"
+	return 0
+}
+
+# ---------------------------------------------------------------------------
+# _pr_judge_merge_pending_mark <pr> <head_sha> <decision> (issue #9987)
+#
+# Why: the review-blocked judge waits for the merge lease before it posts
+# ai-review/head-gate ("gates first"), and the lease tick refused a waiter
+# without head-gate success (reason=no_head_gate), so a judge-approved PR on
+# a busy lease never merged without a person (#9956 on 2026-11-23).
+#
+# When the judge defers a merge decision (merge, merge_with_followup or the
+# terminal fix merge) with PR_BASE_FRESHNESS_OUTCOME=lease_wait, this posts a
+# `success` commit status MERGE_LEASE_JUDGE_DECISION_CONTEXT on the judged
+# head with the pipeline token. It only makes the waiter eligible for a lease
+# grant (_merge_lease_pr_eligible); the merge itself still runs the judge's
+# gates. ai-review/head-gate is not posted here.
+#
+# Off with MERGE_LEASE_REVOKE_ENABLED=false (Phase 2 off: no grant-time
+# eligibility check reads it). API: one status POST per call, none when off
+# or on invalid input. Fail-open: every outcome returns 0. Log:
+# `JUDGE_MERGE_PENDING pr=<n> head=<sha> decision=<token>
+# outcome=marked|failed|disabled|skipped reason=<token>`.
+# ---------------------------------------------------------------------------
+_pr_judge_merge_pending_mark()
+{
+	local jmp_pr="${1:-}" jmp_head="${2:-}" jmp_decision="${3:-}" jmp_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	local -a jmp_url_args=()
+	if ! _merge_lease_revoke_enabled; then
+		echo "JUDGE_MERGE_PENDING pr=${jmp_pr:-?} head=${jmp_head:-?} decision=${jmp_decision:-?} outcome=disabled reason=switch_off"
+		return 0
+	fi
+	if ! [[ "${jmp_pr}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${jmp_head}" =~ ^[0-9a-f]{40}$ ]]; then
+		echo "JUDGE_MERGE_PENDING pr=? head=? decision=? outcome=skipped reason=invalid_input"
+		return 0
+	fi
+	case "${jmp_decision}" in
+		merge|merge_with_followup|terminal) ;;
+		*)
+			echo "JUDGE_MERGE_PENDING pr=${jmp_pr} head=${jmp_head} decision=? outcome=skipped reason=invalid_input"
+			return 0
+			;;
+	esac
+	if [[ "${RUN_URL:-}" =~ ^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/runs/[0-9]+$ ]]; then
+		jmp_url_args=(-f "target_url=${RUN_URL}")
+	fi
+	if ! gh_retry _safe_gh_jq -X POST "repos/${jmp_repo}/statuses/${jmp_head}" \
+		-f state=success -f "context=${MERGE_LEASE_JUDGE_DECISION_CONTEXT:-ai-review/judge-merge-pending}" \
+		-f "description=Review-blocked judge decided ${jmp_decision}; waiting for the merge lease" \
+		${jmp_url_args[@]+"${jmp_url_args[@]}"} >/dev/null 2>&1; then
+		echo "::warning::JUDGE_MERGE_PENDING pr=${jmp_pr} head=${jmp_head} decision=${jmp_decision} outcome=failed reason=status_post_failed (stall recovery still re-runs the judge)"
+		return 0
+	fi
+	echo "JUDGE_MERGE_PENDING pr=${jmp_pr} head=${jmp_head} decision=${jmp_decision} outcome=marked reason=lease_wait"
 	return 0
 }
