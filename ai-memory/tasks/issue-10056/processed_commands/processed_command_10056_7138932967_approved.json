@@ -5,13 +5,33 @@
   "entry_id": "processed_command_10056_7138932967_approved",
   "issue_number": 10056,
   "metadata": {
+    "branch": "ai/issue-10056",
+    "changed_files": [
+      ".github/workflows/review_autofix.yml",
+      "README.md",
+      "agents.d/10056-review-convergence-rule.md",
+      "changelog.d/10056-review-convergence-rule.md",
+      "prompts/mode-judge-review-blocked.txt",
+      "prompts/review-consolidator.txt",
+      "scripts/review_apply_fixes.sh",
+      "scripts/review_autofix_step_post_editor_summary.sh",
+      "scripts/review_issue_ledger.sh",
+      "scripts/review_rb_judge.sh",
+      "tests/test_review_autofix_review_pipeline_contract.py",
+      "tests/test_review_issue_ledger.py"
+    ],
+    "issue_number": 10056,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/10056",
+    "pr_number": 10066,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/10066",
+    "run_attempt": "1",
+    "run_id": "45446633265",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/45446633265"
   },
   "run_attempt": 1,
   "run_id": "45446633265",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-24T17:27:39Z",
+  "status": "completed",
+  "timestamp": "2026-11-24T18:30:06Z",
   "workflow": "implement"
 }
