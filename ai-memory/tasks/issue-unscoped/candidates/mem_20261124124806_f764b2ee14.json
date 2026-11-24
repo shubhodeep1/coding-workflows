@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/rollback_stable.sh:410-413 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The drain loop stops at the first clean poll (`[ \"${still_active}\" -eq 0 ] && break`), so the orchestrator can dispatch new release-workflow runs between the final poll and the hold re-write (line 420) or the tag push (lines 485-502).\n  WHY: A promote cycle that starts in that window can publish a release, clear the hold and re-release the regression, which defeats the rollback; severity is source MAJOR, shown as high (anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash treat this as an accepted, documented residual and did not re-flag it).\n- scripts/rollback_stable.sh:301-305 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: When a hold exists for the current stable version but cannot be read (e.g., `hold_read_error`), the explicit current-version target check refuses the rollback with `reason=hold_unknown`.\n  WHY: The operator is told the hold is unknown and the rollback is refused even though the target is the current version (a re-run case), so read failures should be handled more clearly; severity is source NIT, shown as low (anthropic_claude-sonnet-5_5 considers this intended fail-closed behaviour, covered by `test_explicit_current_version_with_unreadable_hold_is_hold_unknown`).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"After a rollback, neither `auto-release-stable.yml` nor the `promote-main-to-stable.yml` cycle releases until a release is cut deliberately. The release job clears the hold when it publishes.\" (linked issue #9342, Summary/Goals)\n  expected_change_site: the poller-dispatched `promote` job in `.github/workflows/promote-main-to-stable.yml` (job handling `target_sha`) and its dispatch path in `scripts/orchestrate_poll_process.sh`\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  EVIDENCE: The promote job in .github/workflows/promote-main-to-stable.yml (job at line 155, target_sha handling at lines 211-258) never reads the hold and has no stable_hold reference, the poller can dispatch it with target_sha from scripts/orchestrate_poll_process.sh without checking the hold, the PR gates only the scheduled `cycle` job (hold read in `scripts/promote_main_cycle.sh:1595-1610`) and drains active runs (`scripts/rollback_stable.sh:388-421`), and neither file is touched by the PR, so a promote run dispatched after the drain can fast-forward `stable`, release and clear the hold while the hold is active (severity MAJOR from both reviewers; z-ai_glm-5_3-flash notes the gap was deferred in eight prior editor rounds as outside the `files_touched` grant, is documented in `README.md:5130-5140` and `agents.d/9342-stable-rollback.md:5`, and was ruled a follow-up by the review judge; anthropic_claude-sonnet-5_5 and minimax_minimax-m3 did not re-raise it for the same reasons)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/rollback_stable.sh:lines 410-413 (in scripts/rollback_stable.sh, the end of the drain loop) | severity=MAJOR | confidence=4\n  PROBLEM: The drain loop breaks at the first clean poll (`[ \"${still_active}\" -eq 0 ] && break`), but the orchestrator could dispatch new release-workflow runs between the final poll and the hold re-write (line 420) or the tag push (lines 485-502).\n  WHY: An in-flight promote cycle may publish a release and clear the hold after the rollback finishes, which re-releases the regression despite the hold.\n- scripts/rollback_stable.sh:lines 301-305 | severity=NIT | confidence=3\n  PROBLEM: When a hold exists for the current stable version but cannot be read (e.g., `hold_read_error`), the explicit current-version target check refuses the rollback with `reason=hold_unknown`.\n  WHY: The operator is told the hold is unknown and the rollback is refused even for a re-run to the current version; read failures should be handled more clearly.\n- TASK_GAP:\n  Requirement: \"After a rollback, neither auto-release-stable.yml nor the promote-main-to-stable.yml cycle releases until a release is cut deliberately.\"\n  Expected change site: The poller-dispatched promote job in .github/workflows/promote-main-to-stable.yml (and its dispatch path in scripts/orchestrate_poll_process.sh)\n  Evidence of absence: The promote job in .github/workflows/promote-main-to-stable.yml (job at line 155, target_sha handling at lines 211-258) never reads the hold and has no stable_hold reference. The poller can dispatch that job with target_sha at scripts/orchestrate_poll_process.sh without checking the hold, so an already-running comprehensive cycle can promote after the rollback drain, fast-forward stable, release and clear the hold while the hold is active.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP:\n  Requirement: \"After a rollback, neither `auto-release-stable.yml` nor the `promote-main-to-stable.yml` cycle releases until a release is cut deliberately. The release job clears the hold when it publishes.\" (linked issue #9342, Summary/Goals)\n  Expected change site: the poller-dispatched `promote` job in `.github/workflows/promote-main-to-stable.yml` (job handling `target_sha`) and its dispatch path in `scripts/orchestrate_poll_process.sh`.\n  Evidence of absence: the PR gates only the scheduled `cycle` job (via the hold read in `scripts/promote_main_cycle.sh:1595-1610`) and drains active workflow runs (`scripts/rollback_stable.sh:388-421`). Neither `.github/workflows/promote-main-to-stable.yml` nor `scripts/orchestrate_poll_process.sh` is touched, and the promote job has no `stable_hold` reference, so a promote run dispatched after the drain can fast-forward `stable`, release and clear the hold while the hold is active. The gap was deferred in eight prior editor rounds because both files are outside the `files_touched` plan grant and \u00a718.E names only `promote_main_cycle.sh`. It is documented in `README.md:5130-5140` and `agents.d/9342-stable-rollback.md:5` with an operator workaround (remove `ai:comprehensive-test-pending`), and the review judge ruled it a follow-up. The issue text never explicitly defers the gate.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "82713677f16f522c1ebc783a4f5ee806e4aef4bbc0fa33664e8b28f7d581d7af",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9359,
+    "run_id": "45382146009",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45382146009",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124124806_f764b2ee14",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9359,
+    "run_id": "45382146009"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T12:48:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
