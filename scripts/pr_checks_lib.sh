@@ -1086,7 +1086,12 @@ _pr_head_ci_runs_pending()
 # scripts/review_enable_auto_merge.sh sets PR_FINAL_CI_WIRING_NO_UPDATE=true
 # on its two exits that never merge (auto-merge off, e2e-smoke-test): the
 # check still runs and a behind head is held (no dispatch on the stale
-# workflow), but it takes no merge lease and gets no new head mid-gate. The base ref is
+# workflow), but it takes no merge lease and gets no new head mid-gate. The
+# helper sets the same mode itself when its PR read carries the
+# `e2e-smoke-test` label, but that read is made only when no head ref or no
+# base ref (below) was known (the sweep); a caller that passes both, such as
+# _pr_wait_for_required_checks, must set PR_FINAL_CI_WIRING_NO_UPDATE itself
+# for such a PR. The base ref is
 # the optional PR_FINAL_CI_BASE_REF, else PR_BASE_FRESHNESS_BASE_REF when the
 # freshness side channel is for <sha>, else `.base.ref` of the PR read (made
 # only on this dispatch path, and shared with the head-ref read). When that
