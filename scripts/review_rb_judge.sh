@@ -813,6 +813,80 @@ PY
   fi
 }
 
+# Review convergence rule (issue #10056): lists the ledger entries the review
+# stage marked `CONVERGENCE: advisory-lone` (a finding one reviewer raised that
+# did not block a round) as compact informational notes for the judge. Runs
+# when the ledger and REVIEW_CONVERGENCE_ENABLED are on; unlike the prior-round
+# decisions it does not need REVIEW_LEDGER_REREVIEW_ENABLED. Fail-open: any
+# error leaves the output file empty.
+render_review_rb_convergence_advisory_file() {
+  local ledger_path="$1"
+  local out_path="$2"
+  local tmp_path=""
+
+  : > "${out_path}"
+  if ! flag_enabled "${REVIEW_LEDGER_ENABLED:-1}" || ! flag_enabled "${REVIEW_CONVERGENCE_ENABLED:-true}"; then
+    return 0
+  fi
+  if [ ! -s "${ledger_path}" ] || ! command -v python3 >/dev/null 2>&1; then
+    return 0
+  fi
+
+  tmp_path="$(mktemp)" || return 0
+  if PYTHONDONTWRITEBYTECODE=1 python3 - "${ledger_path}" > "${tmp_path}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+raw = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").splitlines()
+
+def clean(value: str) -> str:
+    value = re.sub(r"[\x00-\x1f\x7f]", " ", value)
+    return " ".join(value.replace(";", ",").split())[:300]
+
+entries = []
+current = None
+for line in raw:
+    if line.startswith("=== ENTRY ") and line.endswith(" ==="):
+        current = {"ISSUE_ID": line[len("=== ENTRY "):-len(" ===")].strip()}
+        continue
+    if line == "=== END ENTRY ===":
+        if current is not None:
+            entries.append(current)
+        current = None
+        continue
+    if current is None or line.startswith("  ") or ":" not in line:
+        continue
+    key, value = line.split(":", 1)
+    current.setdefault(key.strip(), value.strip())
+
+for entry in sorted(entries, key=lambda item: item.get("ISSUE_ID", "")):
+    if clean(entry.get("CONVERGENCE", "")) != "advisory-lone":
+        continue
+    parts = [
+        f'issue_id={clean(entry.get("ISSUE_ID", "")) or "unknown"}',
+        f'file={clean(entry.get("FILE", "")) or "unknown"}',
+        f'lines={clean(entry.get("LINES", "")) or "unknown"}',
+        f'lens={clean(entry.get("LENS", "")) or "unknown"}',
+        f'severity={clean(entry.get("SEVERITY", "")) or "unknown"}',
+        f'status={clean(entry.get("STATUS", "")) or "unknown"}',
+        f'reviewers={clean(entry.get("CONVERGENCE_REVIEWERS", "")) or "none"}',
+        f'round={clean(entry.get("CONVERGENCE_ROUND", "")) or "unknown"}',
+    ]
+    print("; ".join(parts))
+PY
+  then
+    mv "${tmp_path}" "${out_path}" 2>/dev/null || {
+      rm -f "${tmp_path}"
+      : > "${out_path}"
+    }
+  else
+    printf '%s\n' "::warning::review_blocked_judge convergence_advisory_skipped=1 reason=ledger_parse_failed ledger_path=${ledger_path}" >&2
+    rm -f "${tmp_path}"
+    : > "${out_path}"
+  fi
+}
+
 normalize_review_state() {
   case "${1:-}" in
     APPROVE|APPROVE_WITH_COMMENTS|COMMENT|REQUEST_CHANGES)
@@ -1543,6 +1617,10 @@ RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE="${RUNTIME_DIR}/rb_judge_prior_round_decisio
 if command -v render_review_rb_prior_round_decisions_file >/dev/null 2>&1; then
   render_review_rb_prior_round_decisions_file "${REVIEW_LEDGER_PATH}" "${RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE}"
 fi
+RB_JUDGE_CONVERGENCE_ADVISORY_FILE="${RUNTIME_DIR}/rb_judge_convergence_advisory.txt"
+if command -v render_review_rb_convergence_advisory_file >/dev/null 2>&1; then
+  render_review_rb_convergence_advisory_file "${REVIEW_LEDGER_PATH}" "${RB_JUDGE_CONVERGENCE_ADVISORY_FILE}"
+fi
 
 # -----------------------------------------------------------
 # Build judge prompt
@@ -1558,7 +1636,7 @@ RB_JUDGE_SEMBLE_PREFETCH=""
 # #7659: the merge-error temp dir (set by rb_judge_merge_err_open) is also
 # removed here, so an abnormal exit between open and close leaves nothing.
 RB_MERGE_ERR_DIR=""
-trap 'case "${RB_MERGE_ERR_DIR:-}" in */rb-merge-err.*) rm -rf -- "${RB_MERGE_ERR_DIR}" 2>/dev/null || true ;; esac; _cleanup_prompt_budget; rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE:-}" "${RB_JUDGE_REQUIREMENT_FILE:-}" "${RB_JUDGE_PR_META_RENDER_FILE:-}" "${RB_JUDGE_PR_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE:-}" "${RB_JUDGE_PR_DIFF_FILE:-}" "${RB_JUDGE_PR_DIFF_TMP_FILE:-}"' EXIT
+trap 'case "${RB_MERGE_ERR_DIR:-}" in */rb-merge-err.*) rm -rf -- "${RB_MERGE_ERR_DIR}" 2>/dev/null || true ;; esac; _cleanup_prompt_budget; rm -f "${RB_JUDGE_SEMBLE_QUERY_FILE:-}" "${RB_JUDGE_REQUIREMENT_FILE:-}" "${RB_JUDGE_PR_META_RENDER_FILE:-}" "${RB_JUDGE_PR_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PR_REVIEW_COMMENTS_RENDER_FILE:-}" "${RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE:-}" "${RB_JUDGE_CONVERGENCE_ADVISORY_FILE:-}" "${RB_JUDGE_PR_DIFF_FILE:-}" "${RB_JUDGE_PR_DIFF_TMP_FILE:-}"' EXIT
 
 {
   printf '%s\n' 'Review-blocked judge context.'
@@ -1609,6 +1687,7 @@ RB_JUDGE_PR_META_MAX_BYTES=50000
 RB_JUDGE_PR_COMMENTS_MAX_BYTES=150000
 RB_JUDGE_PR_REVIEW_COMMENTS_MAX_BYTES=100000
 RB_JUDGE_PRIOR_ROUND_DECISIONS_MAX_BYTES=50000
+RB_JUDGE_CONVERGENCE_ADVISORY_MAX_BYTES=20000
 _init_prompt_budget "${RB_JUDGE_CONTEXT_BUDGET_BYTES}"
 
 {
@@ -1704,6 +1783,14 @@ _init_prompt_budget "${RB_JUDGE_CONTEXT_BUDGET_BYTES}"
       printf 'UNTRUSTED_DATA: %s\n' "${line}"
     done < <(_embed_input_file "${RB_JUDGE_PRIOR_ROUND_DECISIONS_FILE}" "${RB_JUDGE_PRIOR_ROUND_DECISIONS_MAX_BYTES}")
     echo "=== END PRIOR ROUND DECISIONS ==="
+    echo
+  fi
+  if [ -s "${RB_JUDGE_CONVERGENCE_ADVISORY_FILE:-}" ]; then
+    echo "=== BEGIN CONVERGENCE ADVISORY NOTES ==="
+    while IFS= read -r line || [ -n "${line}" ]; do
+      printf 'UNTRUSTED_DATA: %s\n' "${line}"
+    done < <(_embed_input_file "${RB_JUDGE_CONVERGENCE_ADVISORY_FILE}" "${RB_JUDGE_CONVERGENCE_ADVISORY_MAX_BYTES}")
+    echo "=== END CONVERGENCE ADVISORY NOTES ==="
     echo
   fi
   echo "=== REVIEW-BLOCKED CONTEXT ==="

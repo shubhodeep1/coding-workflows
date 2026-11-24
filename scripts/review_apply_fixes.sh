@@ -1440,7 +1440,14 @@ $(_embed_input_file "${SYMBOL_DIFF_SUMMARY_FILE}" 80000)
 
 === BEGIN ${RUNTIME_DIR}/floor_tags.txt (optional; non-skippable floor findings) ===
 $(_embed_input_file "${RUNTIME_DIR}/floor_tags.txt" 50000)
-=== END ${RUNTIME_DIR}/floor_tags.txt ===
+=== END ${RUNTIME_DIR}/floor_tags.txt ===$(if [ -s "${RUNTIME_DIR}/review_convergence_advisory.txt" ]; then
+	# Review convergence rule (issue #10056): rendered only when the ledger
+	# stage listed advisory-lone findings, so the prompt is unchanged otherwise.
+	printf '\n\n=== BEGIN %s (not blocking this round; one reviewer) ===\n' "${RUNTIME_DIR}/review_convergence_advisory.txt"
+	printf '%s\n' "Columns (tab-separated): issue block id, file:lines, lens, severity, verified reviewers, convergence round, summary."
+	_embed_input_file "${RUNTIME_DIR}/review_convergence_advisory.txt" 20000
+	printf '=== END %s ===' "${RUNTIME_DIR}/review_convergence_advisory.txt"
+fi)
 
 $(if [ -s "${JUDGE_INTERIM_PRIORS_FILE:-}" ]; then
 	printf '=== BEGIN %s (advisory carry-over from the prior round interim judge) ===\n' "${JUDGE_INTERIM_PRIORS_FILE}"
@@ -1490,7 +1497,10 @@ Do not let advisory artifacts reduce or replace raw reviewer signal from ${RUNTI
 CONSOLIDATOR + LEDGER CONTEXT
 Treat ${RUNTIME_DIR}/reviewer_bundle.txt as the authoritative findings source.
 Treat ${RUNTIME_DIR}/review_issues.txt as advisory only; it may be incomplete.
-Treat ${RUNTIME_DIR}/floor_tags.txt as non-skippable floor findings that must be addressed or explicitly rejected with reason.
+Treat ${RUNTIME_DIR}/floor_tags.txt as non-skippable floor findings that must be addressed or explicitly rejected with reason.$(if [ -s "${RUNTIME_DIR}/review_convergence_advisory.txt" ]; then
+	review_convergence_prompt_round="$(awk -F '\t' 'NR == 1 { print $6 }' "${RUNTIME_DIR}/review_convergence_advisory.txt" 2>/dev/null | tr -cd '0-9')"
+	printf '\n%s' "REVIEW CONVERGENCE: the findings listed in ${RUNTIME_DIR}/review_convergence_advisory.txt and every \`=== ADVISORY ISSUE\` stub in ${RUNTIME_DIR}/review_issues.txt are NOT blocking in this round (only one reviewer raised each one). Make no edits for them. List each one under \"Ignored suggestions (with short reason):\" with the fixed reason \`not blocking: one reviewer (convergence round ${review_convergence_prompt_round:-unknown})\`. For these findings this overrides the non-skippable wording for a FLOOR_HIGH_CONFIDENCE-only row at the same place and overrides the raw reviewer files in ${RUNTIME_DIR}/reviewer_bundle.txt."
+fi)
 Treat ${RUNTIME_DIR}/ledger_status.txt as retry history for issue persistence across iterations.
 For issues marked PERSISTING or RESURGENT, prior fix attempts failed: use a materially different approach or explicitly accept residual risk with rationale.
 When you intentionally diverge from consolidator guidance, include a summary line in this exact format:

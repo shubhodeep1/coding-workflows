@@ -241,6 +241,45 @@ fi
   echo
 } > "${PR_EDITOR_COMMENT_FILE}"
 
+# Review convergence rule (issue #10056). Findings the ledger stage marked
+# advisory-lone (one reviewer, no FLOOR_CRITICAL_KEYWORD tag, not a security
+# lens, from round REVIEW_CONVERGENCE_FROM_ROUND on) did not block this round;
+# list them here so they are never dropped silently. Rides on this step's
+# existing comment (no extra API call). Every field is re-sanitised: no
+# control characters, backticks, @, < or >, and the summary is capped.
+review_convergence_comment_file="${RUNTIME_DIR:-}/review_convergence_advisory.txt"
+if [ -n "${RUNTIME_DIR:-}" ] && [ -f "${review_convergence_comment_file}" ] && [ ! -L "${review_convergence_comment_file}" ] \
+  && [ -s "${review_convergence_comment_file}" ]; then
+  review_convergence_comment_bullets="$(LC_ALL=C awk -F '\t' '
+    function clean(s, maxlen) {
+      gsub(/[[:cntrl:]]/, " ", s)
+      gsub(/[`@<>]/, "", s)
+      gsub(/[[:space:]]+/, " ", s)
+      sub(/^ /, "", s)
+      sub(/ $/, "", s)
+      if (maxlen > 0 && length(s) > maxlen) {
+        s = substr(s, 1, maxlen)
+        sub(/[\300-\377][\200-\277]*$/, "", s)
+      }
+      return s
+    }
+    NF >= 7 && n < 50 {
+      n++
+      printf "- `%s` (%s, %s) — raised by %s in round %s: %s\n", clean($2, 300), clean($3, 80), clean($4, 20), clean($5, 200), clean($6, 6), clean($7, 200)
+    }
+  ' "${review_convergence_comment_file}" 2>/dev/null || true)"
+  if [ -n "${review_convergence_comment_bullets}" ]; then
+    {
+      echo "### Not blocking (one reviewer)"
+      echo
+      echo "From this review round on, a finding raised by only one reviewer (no critical floor tag, not a security finding) does not start another fix round. It is recorded in the review ledger and passed to the review-blocked judge."
+      echo
+      printf '%s\n' "${review_convergence_comment_bullets}"
+      echo
+    } >> "${PR_EDITOR_COMMENT_FILE}"
+  fi
+fi
+
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
 # Sandbox-excluded escalation (#8321). PR #8250 was re-reviewed 29 times on

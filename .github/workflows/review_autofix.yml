@@ -2102,6 +2102,10 @@ jobs:
       REVIEW_LEDGER_ENABLED: ${{ vars.REVIEW_LEDGER_ENABLED || '1' }}
       REVIEW_LEDGER_REREVIEW_ENABLED: ${{ vars.REVIEW_LEDGER_REREVIEW_ENABLED || 'false' }}
       REVIEW_LEDGER_PERSIST_LIMIT: ${{ vars.REVIEW_LEDGER_PERSIST_LIMIT || '2' }}
+      # Review convergence rule (issue #10056); defaults also live in scripts/review_issue_ledger.sh.
+      REVIEW_CONVERGENCE_ENABLED: ${{ vars.REVIEW_CONVERGENCE_ENABLED || 'true' }}
+      REVIEW_CONVERGENCE_FROM_ROUND: ${{ vars.REVIEW_CONVERGENCE_FROM_ROUND || '3' }}
+      REVIEW_CONVERGENCE_MIN_REVIEWERS: ${{ vars.REVIEW_CONVERGENCE_MIN_REVIEWERS || '2' }}
       REVIEW_LEDGER_PATH: ${{ vars.REVIEW_LEDGER_PATH || format('.ai/review_issue_ledger/pr-{0}.txt', inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || '0') }}
       REVIEW_APPROVAL_RUBRIC_ENABLED: ${{ vars.REVIEW_APPROVAL_RUBRIC_ENABLED || 'false' }}
       REVIEW_BREAK_GLASS_ENABLED: ${{ vars.REVIEW_BREAK_GLASS_ENABLED || 'false' }}
@@ -3545,6 +3549,7 @@ jobs:
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
+          REVIEW_CONVERGENCE_AUTOFIX_COUNT: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
           REVIEW_EDITOR_PREFLIGHT_ENABLED: ${{ vars.REVIEW_EDITOR_PREFLIGHT_ENABLED || 'true' }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_preflight_required_files.sh"
@@ -3999,6 +4004,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
+          REVIEW_CONVERGENCE_AUTOFIX_COUNT: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_apply_fixes_editor.sh"
           [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_apply_fixes_editor.sh"

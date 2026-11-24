@@ -8277,7 +8277,8 @@ def test_editor_preflight_step_wiring() -> None:
 	preflight = _step_block('"Preflight: Verify required files before reviewer invocation"')
 	editor_env = _step_explicit_env_names("Apply fixes with editor model")
 	# GH_READ_TOKEN is the read-only job-token value for polling reads (#9888).
-	assert editor_env == ["GH_READ_TOKEN", "GH_TOKEN", "REPOSITORY", "TOOL_CALL_BUDGET_JUDGE"], editor_env
+	# REVIEW_CONVERGENCE_AUTOFIX_COUNT carries the review round for the convergence rule (#10056).
+	assert editor_env == ["GH_READ_TOKEN", "GH_TOKEN", "REPOSITORY", "TOOL_CALL_BUDGET_JUDGE", "REVIEW_CONVERGENCE_AUTOFIX_COUNT"], editor_env
 	editor = _step_block("Apply fixes with editor model")
 	for name in editor_env:
 		line = next(line.strip() for line in editor.splitlines() if line.strip().startswith(f"{name}:"))
@@ -11301,6 +11302,166 @@ def test_repeated_reviewer_failure_labels_fallback_issue_before_the_pr(tmp_path:
 	else:
 		assert "/labels" not in calls
 		assert "No linked issues found for PR #9356" in result.stdout
+
+
+# ── Review convergence rule (issue #10056) ─────────────────────────
+
+_CONV_POST_SUMMARY = REPO_ROOT / "scripts" / "review_autofix_step_post_editor_summary.sh"
+_CONV_RB_JUDGE = REPO_ROOT / "scripts" / "review_rb_judge.sh"
+_CONV_CONSOLIDATOR_PROMPT = REPO_ROOT / "prompts" / "review-consolidator.txt"
+
+
+def test_review_convergence_workflow_env_defaults() -> None:
+	text = WORKFLOW.read_text(encoding="utf-8")
+	assert "      REVIEW_CONVERGENCE_ENABLED: ${{ vars.REVIEW_CONVERGENCE_ENABLED || 'true' }}\n" in text
+	assert "      REVIEW_CONVERGENCE_FROM_ROUND: ${{ vars.REVIEW_CONVERGENCE_FROM_ROUND || '3' }}\n" in text
+	assert "      REVIEW_CONVERGENCE_MIN_REVIEWERS: ${{ vars.REVIEW_CONVERGENCE_MIN_REVIEWERS || '2' }}\n" in text
+	step_start = text.index("      - name: Apply fixes with editor model\n")
+	step_end = text.index("\n      - name: ", step_start + 10)
+	step = text[step_start:step_end]
+	assert "          REVIEW_CONVERGENCE_AUTOFIX_COUNT: ${{ steps.retrigger_guard.outputs.autofix_iteration }}\n" in step
+	# The editor preflight mirrors the editor step's explicit env entries.
+	preflight_start = text.index('      - name: "Preflight: Verify required files before reviewer invocation"\n')
+	preflight_end = text.index("\n      - name: ", preflight_start + 10)
+	preflight = text[preflight_start:preflight_end]
+	assert "          REVIEW_CONVERGENCE_AUTOFIX_COUNT: ${{ steps.retrigger_guard.outputs.autofix_iteration }}\n" in preflight
+	assert "REVIEW_CONVERGENCE_AUTOFIX_COUNT" not in text.replace(step, "").replace(preflight, "")
+
+
+def _conv_render_editor_fragment(tmp_path: Path, advisory: str) -> str:
+	source = APPLY_FIXES.read_text(encoding="utf-8")
+	block_match = re.search(
+		r"^=== END \$\{RUNTIME_DIR\}/floor_tags\.txt ===\$\(if \[ -s \"\$\{RUNTIME_DIR\}/review_convergence_advisory\.txt\" \]; then\n.*?^fi\)\n",
+		source,
+		re.S | re.M,
+	)
+	directive_match = re.search(
+		r"^Treat \$\{RUNTIME_DIR\}/floor_tags\.txt as non-skippable floor findings.*?^fi\)\n",
+		source,
+		re.S | re.M,
+	)
+	assert block_match and directive_match
+	runtime_dir = tmp_path / "rt"
+	runtime_dir.mkdir(exist_ok=True)
+	(runtime_dir / "review_convergence_advisory.txt").write_text(advisory, encoding="utf-8")
+	script = (
+		f"RUNTIME_DIR={runtime_dir}\n"
+		"_embed_input_file() { cat \"$1\"; }\n"
+		"cat <<__EDITOR_PROMPT__\n"
+		+ block_match.group(0)
+		+ directive_match.group(0)
+		+ "END\n__EDITOR_PROMPT__\n"
+	)
+	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30, check=False)
+	assert result.returncode == 0, result.stderr
+	return result.stdout
+
+
+def test_review_convergence_editor_prompt_only_when_advisory_present(tmp_path: Path) -> None:
+	empty = _conv_render_editor_fragment(tmp_path, "")
+	assert "review_convergence_advisory.txt" not in empty
+	assert "REVIEW CONVERGENCE" not in empty
+	assert empty.endswith("floor_tags.txt ===\nTreat " + str(tmp_path / "rt") + "/floor_tags.txt as non-skippable floor findings that must be addressed or explicitly rejected with reason.\nEND\n")
+	rendered = _conv_render_editor_fragment(
+		tmp_path, "001\tsrc/a.py:2\tCORRECTNESS & LOGIC\thigh\talpha\t3\tsummary\n"
+	)
+	assert "(not blocking this round; one reviewer) ===" in rendered
+	assert "001\tsrc/a.py:2\tCORRECTNESS & LOGIC" in rendered
+	assert "`not blocking: one reviewer (convergence round 3)`" in rendered
+	assert "`=== ADVISORY ISSUE` stub" in rendered
+	assert "Make no edits for them." in rendered
+
+
+def test_review_convergence_post_editor_summary_section(tmp_path: Path) -> None:
+	source = _CONV_POST_SUMMARY.read_text(encoding="utf-8")
+	start = source.index("# Review convergence rule (issue #10056).")
+	end = source.index("type gh_retry >/dev/null 2>&1 || gh_retry() { \"$@\"; }", start)
+	block = source[start:end]
+	runtime_dir = tmp_path / "rt"
+	runtime_dir.mkdir()
+	comment = tmp_path / "comment.md"
+	comment.write_text("AI autofix editor summary\n", encoding="utf-8")
+	(runtime_dir / "review_convergence_advisory.txt").write_text(
+		"001\tsrc/a.py:2\tCORRECTNESS & LOGIC\thigh\talpha\t3\tbad `code` @team <!-- x -->\n", encoding="utf-8"
+	)
+	env = {"PATH": os.environ.get("PATH", ""), "RUNTIME_DIR": str(runtime_dir), "PR_EDITOR_COMMENT_FILE": str(comment)}
+	result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + block], capture_output=True, text=True, env=env, timeout=30, check=False)
+	assert result.returncode == 0, result.stderr
+	body = comment.read_text(encoding="utf-8")
+	assert "### Not blocking (one reviewer)" in body
+	bullet = [line for line in body.splitlines() if line.startswith("- `src/a.py:2`")]
+	assert bullet == ["- `src/a.py:2` (CORRECTNESS & LOGIC, high) — raised by alpha in round 3: bad code team !-- x --"]
+	(runtime_dir / "review_convergence_advisory.txt").write_text("", encoding="utf-8")
+	comment.write_text("AI autofix editor summary\n", encoding="utf-8")
+	result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + block], capture_output=True, text=True, env=env, timeout=30, check=False)
+	assert result.returncode == 0, result.stderr
+	assert comment.read_text(encoding="utf-8") == "AI autofix editor summary\n"
+
+
+def test_review_convergence_rb_judge_notes(tmp_path: Path) -> None:
+	source = _CONV_RB_JUDGE.read_text(encoding="utf-8")
+	flag_fn = re.search(r"^flag_enabled\(\) \{\n.*?^\}\n", source, re.S | re.M).group(0)
+	render_fn = re.search(r"^render_review_rb_convergence_advisory_file\(\) \{\n.*?^\}\n", source, re.S | re.M).group(0)
+	ledger = tmp_path / "ledger.txt"
+	ledger.write_text(
+		"=== LEDGER v1 ===\nPR_NUMBER: 1\nFIRST_SEEN_ITERATION: 1\nLAST_UPDATED_ITERATION: 1\n=== END HEADER ===\n\n"
+		"=== ENTRY iss_a ===\nFILE: src/a.py\nLINES: 2\nLENS: CORRECTNESS & LOGIC\nSEVERITY: high\nSTATUS: NEW\n"
+		"FIRST_SEEN_ITERATION: 1\nLAST_SEEN_ITERATION: 1\nPERSIST_COUNT: 1\nCONVERGENCE: advisory-lone\n"
+		"CONVERGENCE_ROUND: 3\nCONVERGENCE_REVIEWERS: alpha\nEDITOR_OUTCOMES:\n=== END ENTRY ===\n\n"
+		"=== ENTRY iss_b ===\nFILE: src/b.py\nLINES: 9\nLENS: SECURITY & INPUT VALIDATION\nSEVERITY: high\nSTATUS: NEW\n"
+		"FIRST_SEEN_ITERATION: 1\nLAST_SEEN_ITERATION: 1\nPERSIST_COUNT: 1\nEDITOR_OUTCOMES:\n=== END ENTRY ===\n",
+		encoding="utf-8",
+	)
+	out = tmp_path / "out.txt"
+	for enabled, expected in (
+		("true", "issue_id=iss_a; file=src/a.py; lines=2; lens=CORRECTNESS & LOGIC; severity=high; status=NEW; reviewers=alpha; round=3\n"),
+		("false", ""),
+	):
+		env = {"PATH": os.environ.get("PATH", ""), "REVIEW_CONVERGENCE_ENABLED": enabled}
+		script = flag_fn + render_fn + f'render_review_rb_convergence_advisory_file "{ledger}" "{out}"\n'
+		result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, timeout=30, check=False)
+		assert result.returncode == 0, result.stderr
+		assert out.read_text(encoding="utf-8") == expected
+	assert "REVIEW_LEDGER_REREVIEW_ENABLED" not in render_fn
+	embed = source[source.index('echo "=== BEGIN CONVERGENCE ADVISORY NOTES ==="'):source.index('echo "=== END CONVERGENCE ADVISORY NOTES ==="')]
+	assert "printf 'UNTRUSTED_DATA: %s\\n' \"${line}\"" in embed
+	assert '"${RB_JUDGE_CONVERGENCE_ADVISORY_MAX_BYTES}"' in embed
+	assert "RB_JUDGE_CONVERGENCE_ADVISORY_MAX_BYTES=20000" in source
+	assert '"${RB_JUDGE_CONVERGENCE_ADVISORY_FILE:-}"' in source  # removed by the EXIT trap
+	judge_prompt = (REPO_ROOT / "prompts" / "mode-judge-review-blocked.txt").read_text(encoding="utf-8")
+	assert "`=== BEGIN CONVERGENCE ADVISORY NOTES ===`" in judge_prompt
+
+
+def test_review_convergence_ci_gates_untouched() -> None:
+	for name in ("review_head_gate.sh", "review_final_ci_failed.sh"):
+		assert "REVIEW_CONVERGENCE" not in (REPO_ROOT / "scripts" / name).read_text(encoding="utf-8")
+
+
+def test_review_convergence_consolidator_prompt_lenses_and_attribution() -> None:
+	text = _CONV_CONSOLIDATOR_PROMPT.read_text(encoding="utf-8")
+	lenses = (
+		"1. SECURITY & INPUT VALIDATION\n"
+		"2. CORRECTNESS & LOGIC\n"
+		"3. CONCURRENCY / RACES / IDEMPOTENCY\n"
+		"4. ERROR PATHS & EDGE CASES\n"
+		"5. PERFORMANCE & RESOURCE USE\n"
+		"6. INDEX-CONTRACT / DB RULES\n"
+		"7. NAMING / BACKWARD COMPATIBILITY\n"
+		"8. DOCS COVERAGE (DIATAXIS)\n"
+		"9. IMPLICIT-EXECUTION & TRUST-BOUNDARY RISKS\n"
+	)
+	assert lenses in text
+	assert "- CLASSIFICATION: must-fix | nice-to-have | unclassified | duplicate-of:<issue_id> | non-actionable.\n" in text
+	assert "Never emit `CLASSIFICATION: advisory-lone`" in text
+	assert "`FLAGGED_BY` must name every reviewer that raised the finding" in text
+	ledger = (REPO_ROOT / "scripts" / "review_issue_ledger.sh").read_text(encoding="utf-8")
+	assert 'lens == "SECURITY & INPUT VALIDATION" || lens == "IMPLICIT-EXECUTION & TRUST-BOUNDARY RISKS"' in ledger
+
+
+def test_review_convergence_log_prefix_registered() -> None:
+	text = _agents_text_with_fragments()
+	assert "LOG_PREFIX.name=REVIEW_CONVERGENCE" in text
+	assert "- `REVIEW_CONVERGENCE`" in text
 
 
 if __name__ == "__main__":
