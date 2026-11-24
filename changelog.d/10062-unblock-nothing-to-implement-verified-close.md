@@ -1,0 +1,8 @@
+<!-- changelog: changed -->
+- **The unblock judge now closes a verified "nothing to implement" block without a fix-up.** Refs #9650 (plan `docs/plans/pipeline-human-wait-elimination-plan.md`, Phase 8b; issue #10062).
+
+  - When a plan run's verify passed the listed tests and posted its `ai:implement-success-noop:v1` comment but could not close the issue, the issue stayed blocked. On its next run the unblock judge now closes such a standalone issue as completed, adds `ai:closed`, and posts one comment ending in `<!-- ai:unblock-nothing-to-implement:v1 item=<n> verified -->`. It does not post `/answer` and does not wait for a fix-up.
+  - Only a comment from the pipeline login whose last line is exactly the marker for this issue counts, and only when it belongs to the newest "Planning blocked" comment. A later block (for example a failed verify) or a later implementation plan keeps today's flow. Orchestrator-managed items resume as before.
+  - Switches: `PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED` (default `true`, now also forwarded by `unblock_judge.yml`) and the existing `UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED`. Setting either one to `false` keeps today's judging.
+
+What this means for consumer repos: after the next `@stable` sync, issues whose plan run verified the work but failed to close them are closed by the unblock judge on its next run. Set the repository variable `PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED` to `false` to keep them blocked.

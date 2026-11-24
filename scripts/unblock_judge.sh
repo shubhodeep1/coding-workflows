@@ -80,6 +80,16 @@
 # UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED (default true; #8470): once a
 # fix-up is done, a standalone issue whose planning stop was "nothing to
 # implement" is closed as completed instead of resumed; `false` resumes it.
+# It also turns off the verified close below.
+# PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED (default true; #10062, Phase 8b):
+# a standalone issue whose newest trusted "Planning blocked" comment gives the
+# nothing-to-implement reason, and which carries a trusted
+# `ai:implement-success-noop:v1 issue=<n>` marker from that plan run's verify
+# (scripts/plan_nothing_to_implement_verify.sh passed the listed tests but
+# could not close the issue), is closed as completed without a fix-up (no new
+# reads; at most three writes, as the fix-up close). Parsed like that script:
+# unset, empty, 1, true, yes or on (any case) is on; anything else restores
+# today's flow. Forwarded by unblock_judge.yml.
 # UNBLOCK_FIXUP_DELIVERED_CLOSE_ENABLED (default true; #8530): once a fix-up
 # merged into the default branch and changed every file a standalone
 # pipeline-authored ai:workflow-heal issue lists under `## Affected files`,
@@ -148,6 +158,7 @@
 #      UNBLOCK_JUDGE item= op=ci_owner outcome= reason=|pr=
 #      UNBLOCK_JUDGE item= op=heal_already_fixed outcome=closed|judge|skip sibling= pr= status=|reason=
 #      UNBLOCK_JUDGE item= kind= stop= fixup= op=nothing_to_implement outcome=closed|skip reason=comment_failed|label_failed|close_failed
+#      UNBLOCK_JUDGE item= kind= stop= fixup=none op=nothing_to_implement outcome=closed reason=verified_noop|outcome=skip reason=comment_failed|label_failed|close_failed
 #      UNBLOCK_JUDGE item= kind= stop= fixup= op=fixup_delivered outcome=closed|resume|skip reason=|pr=
 #      UNBLOCK_JUDGE item= kind= stop= fixup= op=fixup_delivered outcome=warn reason=wait_update_failed
 #      UNBLOCK_JUDGE item= op=heal_report issue= label= outcome=sent|failed|skip reason=
@@ -874,6 +885,28 @@ unblock_nothing_to_implement_blocked()
 	' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1
 }
 
+# unblock_nothing_to_implement_verified (#10062, Phase 8b): 0 when a comment by
+# the pipeline login ends (last non-blank line, CR removed; the
+# unblock_fixup_success_noop rule) with exactly
+# `<!-- ai:implement-success-noop:v1 issue=<item> -->` and was posted after the
+# second-newest trusted "Planning blocked" comment (or there is only one).
+# The plan run's verify posts that marker just before its own block comment,
+# so the marker belongs to the newest block; a later plan run that blocked
+# again (its verify failed or was off) makes it stale. 1 otherwise. Reads only
+# the item_comments.json this run already fetched; no API calls.
+unblock_nothing_to_implement_verified()
+{
+	jq -e --arg login "${UNBLOCK_LOGIN}" --arg marker "<!-- ai:implement-success-noop:v1 issue=${ITEM} -->" '
+		([.[] | select((.user.login // "") == $login)
+			| select(((.body // "") | split("\n") | map(rtrimstr("\r")) | map(select(test("\\S"))) | first // "") == "Planning blocked: human input required.")
+			| (.created_at // "")] | sort) as $blocks
+		| (if ($blocks | length) > 1 then $blocks[-2] else "" end) as $floor
+		| any(.[]; (.user.login // "") == $login
+			and (.created_at // "") > $floor
+			and (((.body // "") | split("\n") | map(select(test("\\S"))) | last // "" | rtrimstr("\r")) == $marker))
+	' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1
+}
+
 # unblock_nothing_to_implement_close <fixup> <done text> (#8470): when the
 # newest trusted "Planning blocked" comment on a standalone issue gives the
 # nothing-to-implement reason, the issue is closed as completed once its
@@ -885,40 +918,65 @@ unblock_nothing_to_implement_blocked()
 # as usual; it sets UNBLOCK_NOTHING_TO_IMPLEMENT_RESULT to `closed` after a
 # close. UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED=false (default true)
 # restores the resume.
+# Verified mode (#10062, Phase 8b): an empty <fixup> closes the issue without
+# a fix-up when unblock_nothing_to_implement_verified finds the plan run's
+# trusted success-no-op marker; marker
+# `<!-- ai:unblock-nothing-to-implement:v1 item=<n> verified -->`, logged as
+# `fixup=none ... reason=verified_noop`. Gated by both
+# UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED and
+# PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED (default true); either off returns 1.
 # API budget: at most three writes (comment, label, close), no reads; the
 # caller then marks the fix-up wait `done` (one more write, not retried).
 unblock_nothing_to_implement_close()
 {
-	local fixup="$1" done_text="$2" tracking_issue="$3" marker
+	local fixup="$1" done_text="$2" tracking_issue="$3" marker close_text log_fixup log_reason=""
 	UNBLOCK_NOTHING_TO_IMPLEMENT_RESULT=""
 	if [ "$(printf '%s' "${UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" = "false" ]; then
 		return 1
+	fi
+	if [ -z "${fixup}" ]; then
+		# Parsed exactly as scripts/plan_nothing_to_implement_verify.sh parses it.
+		case "$(printf '%s' "${PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+			""|1|true|yes|on) ;;
+			*) return 1 ;;
+		esac
 	fi
 	[ "${ITEM_KIND}" = "issue" ] && [ "${ITEM_STOP}" = "blocked" ] && [ -z "${tracking_issue}" ] || return 1
 	# A trusted implementation plan (the has_plan rule in unblock_main) posted
 	# after that block means planning moved on, so the stale block never closes
 	# the issue: it resumes as usual (`/approved`).
 	unblock_nothing_to_implement_blocked || return 1
-	marker="<!-- ai:unblock-nothing-to-implement:v1 item=${ITEM} fixup=${fixup} -->"
+	if [ -n "${fixup}" ]; then
+		log_fixup="${fixup}"
+		marker="<!-- ai:unblock-nothing-to-implement:v1 item=${ITEM} fixup=${fixup} -->"
+		close_text="Closing as completed: planning found nothing to implement for this issue (\`${UNBLOCK_NOTHING_TO_IMPLEMENT_REASON}\`), and fix-up #${fixup} ${done_text}. A resume command would only stop planning again, so the unblock judge closed the issue instead. Reopen it and reply with \`/reclarify\` if work is still missing."
+	else
+		# Phase 8b: only a trusted success-no-op marker bound to the newest block closes.
+		unblock_nothing_to_implement_verified || return 1
+		log_fixup="none"
+		log_reason=" reason=verified_noop"
+		marker="<!-- ai:unblock-nothing-to-implement:v1 item=${ITEM} verified -->"
+		close_text="Closing as completed: planning found nothing to implement for this issue (\`${UNBLOCK_NOTHING_TO_IMPLEMENT_REASON}\`), and the plan run's verify passed the listed tests on the planning ref (the comment ending in the \`ai:implement-success-noop:v1\` marker) but could not close the issue. A resume command would only stop planning again, so the unblock judge closed the issue instead. Reopen it and reply with \`/reclarify\` if work is still missing."
+	fi
 	if jq -e --arg login "${UNBLOCK_LOGIN}" --arg marker "${marker}" \
 		'any(.[]; (.user.login // "") == $login and ((.body // "") | sub("\\s+$"; "") | endswith($marker)))' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1; then
 		:
-	elif ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="Closing as completed: planning found nothing to implement for this issue (\`${UNBLOCK_NOTHING_TO_IMPLEMENT_REASON}\`), and fix-up #${fixup} ${done_text}. A resume command would only stop planning again, so the unblock judge closed the issue instead. Reopen it and reply with \`/reclarify\` if work is still missing.
+	elif ! gh api "repos/${REPOSITORY}/issues/${ITEM}/comments" -f body="${close_text}
 
 ${marker}" >/dev/null 2>&1; then
-		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup} op=nothing_to_implement outcome=skip reason=comment_failed"
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${log_fixup} op=nothing_to_implement outcome=skip reason=comment_failed"
 		return 0
 	fi
 	if ! gh api -X POST "repos/${REPOSITORY}/issues/${ITEM}/labels" -f "labels[]=ai:closed" >/dev/null 2>&1; then
-		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup} op=nothing_to_implement outcome=skip reason=label_failed"
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${log_fixup} op=nothing_to_implement outcome=skip reason=label_failed"
 		return 0
 	fi
 	if ! gh api -X PATCH "repos/${REPOSITORY}/issues/${ITEM}" -f state=closed -f state_reason=completed >/dev/null 2>&1; then
-		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup} op=nothing_to_implement outcome=skip reason=close_failed"
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${log_fixup} op=nothing_to_implement outcome=skip reason=close_failed"
 		return 0
 	fi
 	UNBLOCK_NOTHING_TO_IMPLEMENT_RESULT="closed"
-	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${fixup} op=nothing_to_implement outcome=closed"
+	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fixup=${log_fixup} op=nothing_to_implement outcome=closed${log_reason}"
 	return 0
 }
 
@@ -2668,6 +2726,13 @@ ${step_escalation_marker}" >/dev/null 2>&1; then
 	if [ "${ITEM_KIND}" = "issue" ] && [ -f "${SUPPORT_DIR}/scripts/check_triage_resolution.py" ] \
 		&& jq -e 'index("ai:check-triage") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1 \
 		&& unblock_check_triage_resolved; then
+		return 0
+	fi
+
+	# Phase 8b (#10062): a nothing-to-implement block whose plan run verified
+	# the listed tests (trusted success-no-op marker) but could not close the
+	# issue is closed without a fix-up; a pending fix-up above still comes first.
+	if [ "${ITEM_KIND}" = "issue" ] && [ -z "${tracking}" ] && unblock_nothing_to_implement_close "" "" "${tracking}"; then
 		return 0
 	fi
 

@@ -202,6 +202,8 @@ jobs:
           UNBLOCK_HEAL_ALREADY_FIXED_ENABLED: ${{ vars.UNBLOCK_HEAL_ALREADY_FIXED_ENABLED || 'true' }}
           # #8470: close a standalone nothing-to-implement issue after its fix-up instead of resuming it.
           UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED: ${{ vars.UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED || 'true' }}
+          # #10062 (Phase 8b): close a verified nothing-to-implement block from 8a's no-op marker.
+          PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED: ${{ vars.PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED || 'true' }}
           # #9659: note a nothing-to-implement check-triage issue once instead of resuming planning.
           UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED: ${{ vars.UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED || 'true' }}
           UNBLOCK_PROTECTED_HANDOFF_ENABLED: ${{ vars.UNBLOCK_PROTECTED_HANDOFF_ENABLED || 'false' }}
