@@ -1,0 +1,21 @@
+{
+  "discovered_at": "2026-11-24T11:45:15Z",
+  "issue_number": 10032,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=scripts/check_stale_queued.sh:1-1; cited_path=scripts/check_stale_queued.sh; files_touched=CLAUDE.md, README.md, agents.d/10032-release-backoff-live-queue.md, changelog.d/10032-release-backoff-live-queue.md, scripts/auto_release_stable.sh, scripts/gh_helpers.sh, tests/test_auto_release_stable.py, tests/test_claude_md_section_numbers.py.",
+  "phase": "review_autofix",
+  "pr_number": 10038,
+  "record_id": "lesson_20261124114515_1a8fbe0e82",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/check_stale_queued.sh",
+    "CLAUDE.md",
+    "README.md",
+    "agents.d/10032-release-backoff-live-queue.md",
+    "changelog.d/10032-release-backoff-live-queue.md",
+    "scripts/auto_release_stable.sh",
+    "scripts/gh_helpers.sh",
+    "tests/test_auto_release_stable.py",
+    "tests/test_claude_md_section_numbers.py"
+  ]
+}
