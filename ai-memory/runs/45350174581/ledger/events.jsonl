@@ -1,0 +1,1 @@
+{"actor": "github-actions[bot]", "entry_id": "run_event_20261124104925_80f821da55", "event_type": "phase_started", "issue_number": null, "message": "review_autofix run started", "metadata": {"run_attempt": 1}, "pr_number": 9999, "run_id": "45350174581", "schema_version": "run_ledger_entry.v1", "status": "ok", "timestamp": "2026-11-24T10:49:25Z", "workflow": "review_autofix"}
