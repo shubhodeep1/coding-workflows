@@ -13,6 +13,8 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_implement_text  # noqa: E402
 import review_untrusted_workspace as workspace  # noqa: E402
 
 
@@ -39,7 +41,7 @@ def test_heal_transfer_rejects_out_of_scope_before_writing(tmp_path: Path) -> No
 
 def test_editor_container_and_post_editor_host_contract() -> None:
 	runner = (ROOT / "scripts/heal_isolated_implement.sh").read_text()
-	workflow = (ROOT / ".github/workflows/implement.yml").read_text()
+	workflow = expanded_implement_text()
 	for option in ("--rm --init", "--network none", "--read-only", "--scope-file", "docker rm -f", "container_survived", "env -i"):
 		assert option in runner
 	assert "docker.sock" not in runner
@@ -547,7 +549,7 @@ def test_heal_transfer_cli_scope_entry_shapes(tmp_path: Path, entry: str, accept
 def test_heal_host_steps_never_run_editor_writable_helpers() -> None:
 	runner = (ROOT / "scripts/heal_isolated_implement.sh").read_text()
 	commit = (ROOT / "scripts/implement_commit_changes.sh").read_text()
-	workflow = (ROOT / ".github/workflows/implement.yml").read_text()
+	workflow = expanded_implement_text()
 	# The validator and the transfer run from the trusted support copy, not the
 	# editor's snapshot.
 	assert 'src=${support}/validate_changed_files_syntax.sh,dst=/validator.sh,readonly' in runner
@@ -605,7 +607,8 @@ def test_generated_plan_files_touched_cannot_widen_heal_scope(tmp_path: Path) ->
 	assert not (host / "scripts/outside.py").exists()
 	# Both host-side guards read the scope file, never the issue body, on the heal route.
 	for path in ("scripts/implement_commit_changes.sh", ".github/workflows/implement.yml"):
-		text = (ROOT / path).read_text()
+		# implement.yml sources the preflight guard from scripts/ (#9678); inline it.
+		text = expanded_implement_text() if path.endswith("implement.yml") else (ROOT / path).read_text()
 		assert '''"$(if [ "${HEAL_ROUTE:-false}" = true ]; then printf '%s' "${HEAL_SCOPE_FILE:?}"; else printf '%s' "${ISSUE_BODY_FILE:-}"; fi)"''' in text
 
 
@@ -1171,8 +1174,7 @@ def test_repro_without_marker_runs_nothing_even_with_switch_on(tmp_path: Path) -
 
 
 def test_implement_workflow_maps_exit_43_to_repro_not_fixed() -> None:
-	workflow_path = ROOT / ".github/workflows/implement.yml"
-	workflow = workflow_path.read_text()
+	workflow = expanded_implement_text()
 	support = '"${HEAL_TRUSTED_SUPPORT_DIR:-${GITHUB_WORKSPACE}/.codex-workflow-src/scripts}'
 	block_42 = ('if [ "${cmd_rc}" -eq 42 ]; then\n                bash ' + support + '/implement_heal_preflight.sh" refuse out_of_heal_scope\n'
 		"                exit 0\n              fi\n")

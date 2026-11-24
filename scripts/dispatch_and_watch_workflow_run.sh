@@ -6,6 +6,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./comprehensive_test_and_release_gh_api.sh
 . "${SCRIPT_DIR}/comprehensive_test_and_release_gh_api.sh"
 GITHUB_OUTPUT="${GITHUB_OUTPUT:-/dev/null}"
+# The registration and completion polls read through
+# gh_api_safe_quiet_print_read (issue #9888): the job token when the step
+# exports GH_READ_TOKEN, the PAT otherwise. The dispatch, the one-off reads
+# and the cancel stay on the PAT.
 
 usage()
 {
@@ -252,7 +256,7 @@ else
 	REGISTRATION_JQ='[.workflow_runs[]] | sort_by(.created_at) | last | .id // empty'
 fi
 while [ "$(date +%s)" -lt "${REGISTRATION_DEADLINE}" ]; do
-	NEW_ID="$(gh_api_safe_quiet_print "${REGISTRATION_QUERY}" --jq "${REGISTRATION_JQ}" || echo "")"
+	NEW_ID="$(gh_api_safe_quiet_print_read "${REGISTRATION_QUERY}" --jq "${REGISTRATION_JQ}" || echo "")"
 	[ -n "${NEW_ID}" ] && break
 	sleep "${REGISTRATION_POLL_INTERVAL_SECS}"
 done
@@ -314,7 +318,7 @@ WATCH_STATUS_READS=0
 WATCH_QUEUED_READS=0
 WATCH_SAW_IN_PROGRESS=0
 while [ "$(date +%s)" -lt "${COMPLETION_DEADLINE}" ]; do
-	RUN_JSON="$(gh_api_safe_quiet_print "repos/${TARGET_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' || echo "")"
+	RUN_JSON="$(gh_api_safe_quiet_print_read "repos/${TARGET_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' || echo "")"
 	if [ -n "${RUN_JSON}" ]; then
 		STATUS="$(printf '%s' "${RUN_JSON}" | jq -r '.status // ""' 2>/dev/null || echo "")"
 		CONCLUSION="$(printf '%s' "${RUN_JSON}" | jq -r '.conclusion // ""' 2>/dev/null || echo "")"

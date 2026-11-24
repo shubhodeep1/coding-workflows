@@ -73,6 +73,10 @@
 #                                          queue-age note (_mt_release_stall_alert)
 #   MERGE_TRAIN_STALL_ALERT_HOUR_UTC       default 1 (09:00 SGT); first UTC hour of the
 #                                          3-hour slot in which the note may be sent
+#   FORWARD_MERGE_FALLBACK_AUTO_MERGE      default true; only literal true lets the
+#                                          final-CI resume enable merge-commit
+#                                          auto-merge on an auto/forward-merge-stable-*
+#                                          head (_mt_final_ci_merge_resume)
 #   MERGE_TRAIN_TG_HELPERS                 path of scripts/tg_helpers.sh from the trusted
 #                                          support checkout; unset = no queue-age note
 #   TG_BOT_SECRET, TG_ADMIN_CHAT_ID, ALERT_MSG_LEVEL   scripts/tg_helpers.sh
@@ -1538,6 +1542,53 @@ _mt_dispatch_review() {
 	return 1
 }
 
+# Judge dispatch for a lease grant that rested on the review-blocked judge's
+# merge decision (issue #9987, MERGE_LEASE_ELIGIBLE_GATE=judge_decision): the
+# judge had decided to merge and deferred only for the lease, so the granted
+# PR goes straight back to the judge's merge path (force_rb_judge=true: no
+# reviewer/editor round) instead of a review run that would end
+# ai:review-blocked again. Default-branch workflow, validated PR number only
+# (as _dispatch_rb_judge_for_pr in scripts/orchestrate_poll_process.sh).
+# Order: the review wrappers that accept force_rb_judge (ai-review.yml,
+# internal-review.yml) first, with force_rb_judge=true and
+# allow_workflow_edits=false. Their dispatched runs are titled
+# `<workflow> [pr:<n>]`, so the #9983 holder check (_mt_lease_pr_runs_active)
+# sees the granted holder's judge run as live work and does not revoke it as
+# revoked_no_head_gate while the judge is still queued or running.
+# review_rb_judge_dispatch.yml has no `[pr:<n>]` run name and runs on the
+# default-branch head, so that check cannot see its run; it is the second
+# tier (e.g. a consumer whose review wrapper predates force_rb_judge). Only
+# when none of those can be dispatched, the plain _mt_dispatch_review (a
+# degraded last resort: a review round, as before this change, rather than
+# leaving the granted lease with no run at all).
+# API: one workflow dispatch per grant when the first wrapper exists (the
+# source repo has no ai-review.yml, so one failed dispatch first). At most
+# 2 + 1 + the review list.
+_mt_dispatch_rb_judge() {
+	local mt_rbj_pr="$1" mt_rbj_head="$2" mt_rbj_wf
+	if ! [[ "${mt_rbj_pr}" =~ ^[1-9][0-9]*$ ]]; then
+		_mt_warn "merge-train release: invalid PR number '${mt_rbj_pr}' for head ${mt_rbj_head}; not dispatching."
+		return 1
+	fi
+	# allow_workflow_edits=false explicitly: internal-review.yml defaults the
+	# input to true, and a judge-only run must not get workflow-edit capability
+	# (review_rb_judge_dispatch.yml keeps it off by default).
+	for mt_rbj_wf in ai-review.yml internal-review.yml; do
+		if gh_retry gh workflow run "${mt_rbj_wf}" --repo "${MT_REPO}" \
+			-f pr_number="${mt_rbj_pr}" -f force_rb_judge=true -f allow_workflow_edits=false >/dev/null 2>&1; then
+			_mt_log "MERGE_TRAIN_DISPATCHED pr=${mt_rbj_pr} workflow=${mt_rbj_wf} ref=default head=${mt_rbj_head}"
+			return 0
+		fi
+	done
+	if gh_retry gh workflow run review_rb_judge_dispatch.yml --repo "${MT_REPO}" \
+		-f pr_number="${mt_rbj_pr}" >/dev/null 2>&1; then
+		_mt_log "MERGE_TRAIN_DISPATCHED pr=${mt_rbj_pr} workflow=review_rb_judge_dispatch.yml ref=default head=${mt_rbj_head}"
+		return 0
+	fi
+	_mt_warn "merge-train release: could not dispatch a force_rb_judge review wrapper or review_rb_judge_dispatch.yml for PR #${mt_rbj_pr}; falling back to the review dispatch."
+	_mt_dispatch_review "${mt_rbj_pr}" "${mt_rbj_head}"
+}
+
 # Queue-age note: one Telegram WARNING a day while the oldest still-queued PR
 # is older than MERGE_TRAIN_STALL_ALERT_HOURS (default 24, 0 = off).
 #
@@ -1936,6 +1987,9 @@ _mt_merge_lease_tick()
 	local tick_p2_lib=0 tick_p2=0 tick_login="" tick_login_tried=0 tick_open_heads tick_holder_row tick_holder_head tick_holder_title
 	local tick_holder_draft tick_since tick_idle_s tick_ci_active tick_skip_head tick_excluded tick_skipped_any tick_cand_n tick_skip_pr
 	local tick_first_row tick_skip_why tick_skip_held tick_queue_skips tick_skip_held_prs tick_queue_empty
+	# Issue #9987: the gate the granted waiter's eligibility rested on
+	# (MERGE_LEASE_ELIGIBLE_GATE); judge_decision routes the grant to the judge.
+	local tick_first_gate="" tick_gate_field="" tick_dispatch_fn=""
 	# Issue #9983: the held reason, three-field skip entries (tick_skip3), and
 	# whether the candidate has a soft skip entry on its head.
 	local tick_held_why="holder_open" tick_skip3=0 tick_first_soft=0 tick_cand_head="" tick_runs_rc=0
@@ -2194,8 +2248,10 @@ _mt_merge_lease_tick()
 			else
 				tick_first="$(_merge_lease_queue_first "${tick_base_prs}" "")"
 			fi
+			tick_first_gate=""
 			[ -n "${tick_first}" ] && [ "${tick_p2}" = 1 ] || break
-			# Grant-time eligibility (Phase 2): waiters need a pipeline head-gate success.
+			# Grant-time eligibility (Phase 2): waiters need a pipeline head-gate
+			# success, or a pipeline judge-decision status (issue #9987).
 			tick_cand_n=$((tick_cand_n + 1))
 			tick_first_row="$(jq -c --argjson n "${tick_first}" '[ .[] | select(.number == $n) ][0] // {}' <<< "${tick_base_prs}" 2>/dev/null)" || tick_first_row="{}"
 			tick_cand_head="$(jq -r '.head_sha // ""' <<< "${tick_first_row}" 2>/dev/null)" || tick_cand_head=""
@@ -2217,6 +2273,7 @@ _mt_merge_lease_tick()
 			if _merge_lease_pr_eligible "${tick_first}" "${tick_cand_head}" \
 				"$(jq -r '.title // ""' <<< "${tick_first_row}" 2>/dev/null)" "$(jq -r '.draft // false' <<< "${tick_first_row}" 2>/dev/null)" \
 				"${tick_base}" "${tick_login}"; then
+				tick_first_gate="${MERGE_LEASE_ELIGIBLE_GATE:-}"
 				# #9983 G5: a soft entry clears only on a confirmed head-gate
 				# success; a fail-open eligible (failed login or statuses read)
 				# keeps it, so the waiter stays skip-held below.
@@ -2296,11 +2353,17 @@ _mt_merge_lease_tick()
 		# Unlabel before the dispatch: if the dispatch fails, the sweep (which
 		# skips labelled waiters) picks the PR up again within 30 minutes.
 		_merge_lease_unlabel_wait "${tick_first}"
-		if _mt_dispatch_review "${tick_first}" "$(jq -r --argjson n "${tick_first}" '[ .[] | select(.number == $n) | .head // "" ][0] // ""' <<< "${tick_base_prs}" 2>/dev/null)"; then
-			_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=first_in_queue${tick_queue_len_field}"
+		tick_gate_field=""
+		tick_dispatch_fn="_mt_dispatch_review"
+		if [ "${tick_first_gate}" = "judge_decision" ]; then
+			tick_gate_field=" gate=judge_decision"
+			tick_dispatch_fn="_mt_dispatch_rb_judge"
+		fi
+		if "${tick_dispatch_fn}" "${tick_first}" "$(jq -r --argjson n "${tick_first}" '[ .[] | select(.number == $n) | .head // "" ][0] // ""' <<< "${tick_base_prs}" 2>/dev/null)"; then
+			_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=first_in_queue${tick_queue_len_field}${tick_gate_field}"
 			[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric granted "${tick_base}" "${tick_first}" tick first_in_queue 0 "${tick_waiters}" "${tick_first}" "${tick_grant_ts}" || true
 		else
-			_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=dispatch_failed_sweep_retries${tick_queue_len_field}"
+			_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=dispatch_failed_sweep_retries${tick_queue_len_field}${tick_gate_field}"
 			[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric granted "${tick_base}" "${tick_first}" tick dispatch_failed_sweep_retries 0 "${tick_waiters}" "${tick_first}" "${tick_grant_ts}" || true
 		fi
 		_mt_merge_lease_queue_log "${tick_base}" "${tick_prs_json}" "${tick_first}" "${tick_grant_ts:-0}" "${tick_excluded:+${tick_excluded},}${tick_first}" || true
@@ -2351,6 +2414,8 @@ _mt_merge_lease_tick_multi()
 	local tm_queue_skips tm_skip_pr tm_skip_held=0 tm_skip_held_prs="" tm_skipped_any=0 tm_cand_n=0 tm_granted=0 tm_queue_empty=0
 	local tm_first tm_first_row tm_first_head tm_first_paths tm_blocker tm_skip_why tm_grant_ts tm_new_row
 	local tm_max_candidates=10 tm_queue_len_field="" tm_rel_held=""
+	# Issue #9987: as tick_first_gate in _mt_merge_lease_tick.
+	local tm_first_gate="" tm_gate_field="" tm_dispatch_fn=""
 	# Issue #9983: holders kept by a live run, three-field skip entries, and
 	# the candidate's soft-entry flag.
 	local tm_runs_active_prs=" " tm_runs_rc=0 tm_skip3=0 tm_first_soft=0 tm_held_why
@@ -2520,6 +2585,7 @@ _mt_merge_lease_tick_multi()
 		tm_excluded="${tm_excluded:+${tm_excluded},}${tm_first}"
 		tm_first_row="$(jq -c --argjson n "${tm_first}" '[ .[] | select(.number == $n) ][0] // {}' <<< "${tm_base_prs}" 2>/dev/null)" || tm_first_row="{}"
 		tm_first_head="$(jq -r '.head_sha // ""' <<< "${tm_first_row}" 2>/dev/null)" || tm_first_head=""
+		tm_first_gate=""
 		tm_first_soft=0
 		tm_unpark_why=""
 		if [ "${tm_p2}" = 1 ] && [ "${tm_skip3}" = 1 ] && [[ "${tm_first_head}" =~ ^[0-9a-f]{40}$ ]] \
@@ -2557,6 +2623,7 @@ _mt_merge_lease_tick_multi()
 			[ "${tm_metric_ok}" = 1 ] && _merge_lease_metric skipped "${tm_base}" "${tm_first}" tick "${tm_skip_why}" "" "${tm_waiters}" - || true
 			continue
 		fi
+		if [ "${tm_p2}" = 1 ]; then tm_first_gate="${MERGE_LEASE_ELIGIBLE_GATE:-}"; fi
 		tm_first_paths="$(_merge_lease_pr_paths "${tm_first}" 2>/dev/null)" || tm_first_paths="*"
 		[ -n "${tm_first_paths}" ] || tm_first_paths="*"
 		tm_blocker=""
@@ -2612,11 +2679,17 @@ _mt_merge_lease_tick_multi()
 		tm_count=$((tm_count + 1))
 		tm_granted=$((tm_granted + 1))
 		_merge_lease_unlabel_wait "${tm_first}"
-		if _mt_dispatch_review "${tm_first}" "$(jq -r '.head // ""' <<< "${tm_first_row}" 2>/dev/null)"; then
-			_mt_log "MERGE_LEASE pr=${tm_first} base=${tm_base} mode=tick outcome=granted reason=first_in_queue${tm_queue_len_field} holders=${tm_count}"
+		tm_gate_field=""
+		tm_dispatch_fn="_mt_dispatch_review"
+		if [ "${tm_first_gate}" = "judge_decision" ]; then
+			tm_gate_field=" gate=judge_decision"
+			tm_dispatch_fn="_mt_dispatch_rb_judge"
+		fi
+		if "${tm_dispatch_fn}" "${tm_first}" "$(jq -r '.head // ""' <<< "${tm_first_row}" 2>/dev/null)"; then
+			_mt_log "MERGE_LEASE pr=${tm_first} base=${tm_base} mode=tick outcome=granted reason=first_in_queue${tm_queue_len_field} holders=${tm_count}${tm_gate_field}"
 			[ "${tm_metric_ok}" = 1 ] && _merge_lease_metric granted "${tm_base}" "${tm_first}" tick first_in_queue 0 "${tm_waiters}" "${tm_first}" "${tm_grant_ts}" || true
 		else
-			_mt_log "MERGE_LEASE pr=${tm_first} base=${tm_base} mode=tick outcome=granted reason=dispatch_failed_sweep_retries${tm_queue_len_field} holders=${tm_count}"
+			_mt_log "MERGE_LEASE pr=${tm_first} base=${tm_base} mode=tick outcome=granted reason=dispatch_failed_sweep_retries${tm_queue_len_field} holders=${tm_count}${tm_gate_field}"
 			[ "${tm_metric_ok}" = 1 ] && _merge_lease_metric granted "${tm_base}" "${tm_first}" tick dispatch_failed_sweep_retries 0 "${tm_waiters}" "${tm_first}" "${tm_grant_ts}" || true
 		fi
 	done
@@ -2646,10 +2719,21 @@ _mt_merge_lease_tick_multi()
 # green now (_pr_wait_for_required_checks with a 0-minute budget: one read,
 # no final-CI dispatch, no new marker), and the base is fresh and the merge
 # lease allows it (_pr_base_fresh_for_merge), this enables head-bound
-# auto-merge (squash), marks the status success, labels the linked issues
+# auto-merge, marks the status success, labels the linked issues
 # ai:ready-to-merge and removes the PR label. A head without the marker (the
-# branch moved), a fork or draft, an integration or forward-merge head, or a
-# failed required check removes the label: the normal review path owns it.
+# branch moved), a fork or draft, an integration head, or a failed required
+# check removes the label: the normal review path owns it.
+#
+# Merge method: squash, except for forward-merge fallback heads
+# (auto/forward-merge-stable-*), which get a merge commit (--merge, the same
+# method as review_enable_auto_merge.sh). A squash or rebase would strip
+# stable's commits from main's ancestry and promote-main-to-stable.yml's
+# ancestry pre-flight would refuse. The review path does not own these heads
+# once its required-checks wait timed out, so this tick is their only
+# automatic merge (incident: #9891 sat green until a human merged it). They
+# pass every gate below and are gated by FORWARD_MERGE_FALLBACK_AUTO_MERGE
+# (default true; any other value drops them with
+# reason=forward_merge_auto_merge_disabled before the statuses read).
 #
 # Input: as _mt_merge_lease_tick.
 # API calls per labelled PR: 1 statuses read, the checks read(s) of
@@ -2658,7 +2742,8 @@ _mt_merge_lease_tick_multi()
 # and 1 label DELETE. Plus one cached `GET user`.
 # Fail-open: never merges on an unreadable state; logs and leaves the label.
 # Log: FINAL_CI_MERGE_RESUME pr=<n> head=<sha> outcome=auto_merge_enabled|
-# waiting|deferred|dropped|failed reason=<token>
+# waiting|deferred|dropped|failed reason=<token>; the auto_merge_enabled line
+# and the auto_merge_refused warning end with method=squash|merge.
 _mt_final_ci_merge_resume()
 {
 	local resume_prs_json="$1" resume_base_filter="$2"
@@ -2667,7 +2752,7 @@ _mt_final_ci_merge_resume()
 	local resume_line resume_num resume_head_ref resume_sha resume_head_repo resume_base resume_draft resume_statuses
 	local resume_marker resume_gate resume_issue resume_issues resume_block_candidate
 	local resume_owner="${MT_REPO%%/*}" resume_name="${MT_REPO#*/}"
-	local resume_auto_merge_on="true" resume_labels resume_block_label
+	local resume_auto_merge_on="true" resume_labels resume_block_label resume_merge_method
 	[ "${MT_PR_CHECKS_LIB_LOADED}" = "true" ] || return 0
 	case "$(printf '%s' "${FINAL_CI_MERGE_RESUME_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
 		true|1|yes|on) ;;
@@ -2693,11 +2778,16 @@ _mt_final_ci_merge_resume()
 			return 0
 		fi
 		if [ "${resume_head_repo}" != "${MT_REPO}" ] || [ "${resume_draft}" = "true" ] || ! [[ "${resume_sha}" =~ ^[0-9a-f]{40}$ ]] \
-			|| [[ "${resume_head_ref}" =~ ^auto/forward-merge-stable- ]] \
 			|| printf '%s\n' "${resume_head_ref}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}"; then
 			_mt_final_ci_pending_unlabel "${resume_num}" "${resume_label}"
 			_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha:-?} outcome=dropped reason=not_eligible"
 			continue
+		fi
+		# Forward-merge fallback heads must keep stable's ancestry: merge
+		# commit only (never squash or rebase). One place decides the flag.
+		resume_merge_method="squash"
+		if [[ "${resume_head_ref}" =~ ^auto/forward-merge-stable- ]]; then
+			resume_merge_method="merge"
 		fi
 		# A hold placed after the head was marked wins: drop the label and
 		# leave the PR to the review path (auto-merge off, a human hold, a
@@ -2713,6 +2803,13 @@ _mt_final_ci_merge_resume()
 		if [ "${resume_auto_merge_on}" != "true" ] || [ -n "${resume_block_label}" ]; then
 			_mt_final_ci_pending_unlabel "${resume_num}" "${resume_label}"
 			_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=dropped reason=$([ "${resume_auto_merge_on}" != "true" ] && echo auto_merge_disabled || echo "blocked_by_${resume_block_label}")"
+			continue
+		fi
+		# The forward-merge fallback's own kill switch (same exact `true`
+		# comparison as review_autofix.yml); checked before the statuses read.
+		if [ "${resume_merge_method}" = "merge" ] && [ "${FORWARD_MERGE_FALLBACK_AUTO_MERGE:-true}" != "true" ]; then
+			_mt_final_ci_pending_unlabel "${resume_num}" "${resume_label}"
+			_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=dropped reason=forward_merge_auto_merge_disabled"
 			continue
 		fi
 		if ! resume_statuses="$(gh_retry _safe_gh_jq "repos/${MT_REPO}/commits/${resume_sha}/statuses?per_page=100" 2>/dev/null)" \
@@ -2752,8 +2849,8 @@ _mt_final_ci_merge_resume()
 			_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=deferred reason=${PR_BASE_FRESHNESS_OUTCOME:-unknown}"
 			continue
 		fi
-		if ! gh_retry gh pr merge "${resume_num}" --repo "${MT_REPO}" --squash --auto --match-head-commit "${resume_sha}" >/dev/null 2>&1; then
-			_mt_warn "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=failed reason=auto_merge_refused"
+		if ! gh_retry gh pr merge "${resume_num}" --repo "${MT_REPO}" "--${resume_merge_method}" --auto --match-head-commit "${resume_sha}" >/dev/null 2>&1; then
+			_mt_warn "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=failed reason=auto_merge_refused method=${resume_merge_method}"
 			continue
 		fi
 		gh_retry _safe_gh_jq -X POST "repos/${MT_REPO}/statuses/${resume_sha}" -f state=success -f "context=${resume_context}" \
@@ -2766,7 +2863,7 @@ _mt_final_ci_merge_resume()
 			GH_RETRY_IDEMPOTENT=true gh_retry _safe_gh_jq -X POST "repos/${MT_REPO}/issues/${resume_issue}/labels" -f "labels[]=ai:ready-to-merge" >/dev/null 2>&1 \
 				|| _mt_warn "FINAL_CI_MERGE_RESUME pr=${resume_num} issue=${resume_issue} outcome=label_failed"
 		done <<< "${resume_issues}"
-		_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=auto_merge_enabled reason=final_ci_green"
+		_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=auto_merge_enabled reason=final_ci_green method=${resume_merge_method}"
 	done < <(printf '%s\n' "${resume_prs_json}" | jq -c --arg l "${resume_label}" 'select(type == "object" and ((.labels // []) | index($l)) != null)' 2>/dev/null)
 	return 0
 }
