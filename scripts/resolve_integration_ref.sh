@@ -224,7 +224,8 @@ ci_triage_refuse() {
 # "1" when the prose-marker skip is on (missing or "0" keeps it off). Prints
 # one line:
 # `skip` (not a triage issue), `refuse <reason> <pr|none>`,
-# `verify <pr> <ref>` or `reissue <pr>` (an unblock-judge CI-failure reissue
+# `verify <pr> <ref>`, `base <pr> <ref>` (a base-keyed triage issue, #9674)
+# or `reissue <pr>` (an unblock-judge CI-failure reissue
 # whose PR may have merged into a non-default branch, #9170). Mirrors the header check in check_failure_triage.sh.
 CI_TRIAGE_PARSE_PY='
 import json
@@ -335,6 +336,15 @@ ref = match.group(2)
 if (not re.fullmatch(r"[A-Za-z0-9._/-]+", ref) or ".." in ref or "//" in ref
 		or ref.startswith(("-", "/")) or ref.endswith(("/", ".lock")) or ref == "HEAD"):
 	refuse("head_ref_invalid")
+# Issue #9674: a triage issue keyed on a failing default branch carries a
+# fifth header line naming it. Its fix belongs on the default branch, not on
+# the head of the PR it was first seen on. Read only at line 5, only after
+# every check above passed; `base <pr> <ref>` keeps the default branch.
+if len(lines) > 4:
+	base_marker = re.fullmatch(r"<!-- check-failure-triage:base=([A-Za-z0-9._/-]{1,200}) -->", lines[4])
+	if base_marker and ".." not in base_marker.group(1):
+		print(f"base {pr} {base_marker.group(1)}")
+		sys.exit(0)
 print(f"verify {pr} {ref}")
 '
 
@@ -468,6 +478,12 @@ resolve_ci_triage_branch() {
 			return "${CI_TRIAGE_REFUSED_RC}"
 			;;
 		verify)
+			;;
+		base)
+			# `base <pr> <ref>` (#9674): a base-keyed triage issue; print
+			# nothing so the caller keeps the default branch.
+			echo "CI_TRIAGE_PR_BRANCH_ROUTING issue=${ISSUE} pr=${pr} outcome=skipped reason=base_keyed branch=${ref}" >&2
+			return 0
 			;;
 		reissue)
 			# `reissue <pr>`: the PR number is the second word.

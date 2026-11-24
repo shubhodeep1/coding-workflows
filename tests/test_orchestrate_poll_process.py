@@ -4079,6 +4079,11 @@ sys.exit(proc.returncode)
 		# Exercise the script default of the automation-path plan gate (#7181)
 		# unless a test sets the flag through env_overrides.
 		env.pop("AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED", None)
+		# An Actions runner's real GITHUB_RUN_ID is never in the mocked
+		# actions-runs fixtures, so the stall self-run check
+		# (_ensure_actions_runs_blob_has_self_run) would force an extra live
+		# fetch only in CI. Tests that need a run id set it via env_overrides.
+		env.pop("GITHUB_RUN_ID", None)
 		# A CI runner's own Actions identity must not turn on the poller's
 		# release-blocker reporter (producer gate, OIDC) unless a test asks.
 		for actions_identity_var in ("GITHUB_WORKFLOW_REF", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "RELEASE_BLOCKER_HEAL_ENABLED", "RELEASE_BLOCKER_HEAL_PY"):
@@ -6343,6 +6348,10 @@ def test_staged_support_latch_release_is_source_only_and_compensates_comment_fai
 		env_overrides={
 			"GITHUB_REPOSITORY": "owner/consumer",
 			"ORCHESTRATE_ENGINE_SHA": engine_sha,
+			# The PR-only head-bound latch release (PR #9839) lists
+			# ai:needs-human in every repository; off here so the listing
+			# check below still proves the staged-support sweep is source-only.
+			"NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED": "false",
 		},
 	)
 	assert "ai:needs-human" in consumer["issues"]["700"]["labels"]
@@ -21726,7 +21735,12 @@ def test_stall_judge_keeps_escalation_when_linked_pr_merged_into_non_target_base
 	body = script[start:script.index("\n}\n", start)]
 	normalize = body.index('effective_action="$(normalize_stall_recovery_action')
 	keep = body.index('_stall_judge_linked_pr_keeps_escalation "${issue_num}" "${linked_pr_json}"')
-	assert normalize < keep < body.index("**Decision (effective):** ${effective_action}")
+	# Issue #9520 renders the effective decision through _judge_effective_label
+	# (so a held escalation reads "escalate_human (held: ...)"); the label must
+	# still be computed from effective_action after the keep-escalation override.
+	label = body.index('local _judge_effective_label="${effective_action}"')
+	decision = body.index("**Decision (effective):** ${_judge_effective_label}")
+	assert normalize < keep < label < decision
 	assert '[ "${judge_action}" = "escalate_human" ] && [ "${effective_action}" = "attempt_merge" ]' in body
 	assert '"${_keep_escalation_managed}" "${_keep_escalation_declared}"; then' in body
 	assert "extract-integration-branch" in body[normalize:keep]
@@ -34738,6 +34752,314 @@ def test_final_merge_auto_resume_ignores_other_failed_projects() -> None:
 	assert "Project already failed, skipping." in log
 	assert result["latest_state"]["status"] == "failed"
 
+
+
+# --- Issue #9732: standalone attempt_merge waits on the review auto-merge rule ---
+
+_STALL_MERGE_SHA = "a" * 40
+_STALL_MERGE_ORCH_POLL_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml"
+
+
+def _run_stall_merge_required_checks(
+	tmp_path: Path,
+	*,
+	state: str = "open",
+	mergeable: str = "true",
+	head_sha: str = _STALL_MERGE_SHA,
+	fresh_rc: int = 0,
+	wait_rc: int = 0,
+	wait_outcome: str = "ok",
+	final_ci_outcome: str = "",
+	runs_pending: str = "0",
+	ci_state: str = "success",
+	merge_rc: int = 0,
+	head_ref: str = "ai/issue-501",
+) -> tuple[str, list[str]]:
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	helper = _extract_bash_function(source, "_standalone_attempt_merge_required_checks()\n{")
+	log = tmp_path / "calls.log"
+	log.write_text("", encoding="utf-8")
+	q = shlex.quote
+	script = (
+		"set -euo pipefail\n"
+		f"LOG={q(str(log))}\n"
+		"export REVIEW_FINAL_CI_WORKFLOW=ci.yml\n"
+		f"_pr_base_fresh_for_merge() {{ echo \"fresh $*\" >> \"$LOG\"; return {fresh_rc}; }}\n"
+		"_pr_wait_for_required_checks() {\n"
+		"  echo \"wait $* head_ref=${PR_CHECKS_HEAD_REF:-} wf=${REVIEW_FINAL_CI_WORKFLOW:-}\" >> \"$LOG\"\n"
+		f"  PR_CHECKS_WAIT_OUTCOME={q(wait_outcome)}\n"
+		f"  PR_FINAL_CI_OUTCOME={q(final_ci_outcome)}\n"
+		f"  PR_CHECKS_RUNS_PENDING={q(runs_pending)}\n"
+		f"  PR_CHECKS_LAST_CI_STATE={q(ci_state)}\n"
+		f"  return {wait_rc}\n"
+		"}\n"
+		f"_orch_squash_merge_bound() {{ echo \"merge $*\" >> \"$LOG\"; return {merge_rc}; }}\n"
+		+ helper
+		+ "rc=0\n"
+		+ "_standalone_attempt_merge_required_checks 501 416 "
+		+ " ".join(q(v) for v in (state, mergeable, head_sha, "main", head_ref))
+		+ " || rc=$?\n"
+		# Caller-shell state after the helper returns (prefix assignments must not leak).
+		+ f'echo "wf_after=${{REVIEW_FINAL_CI_WORKFLOW:-}} head_ref_after=${{PR_CHECKS_HEAD_REF:-}}" > {q(str(tmp_path / "after.log"))}\n'
+		+ 'echo "rc=${rc} reason=${STALL_MERGE_REFUSAL_REASON} in_flight=${STALL_MERGE_CHECKS_IN_FLIGHT}"\n'
+	)
+	res = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+	assert res.returncode == 0, res.stdout + res.stderr
+	calls = [line for line in log.read_text(encoding="utf-8").splitlines() if line]
+	return res.stdout.strip().splitlines()[-1], calls
+
+
+def test_stall_merge_required_checks_flag_parsing():
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	fn = _extract_bash_function(source, "_stall_merge_required_checks_enabled()\n{")
+	script = fn + 'rc=0\n_stall_merge_required_checks_enabled || rc=$?\necho "rc=${rc}"\n'
+
+	def run(value):
+		env = {k: v for k, v in os.environ.items() if k != "STALL_MERGE_REQUIRED_CHECKS_ENABLED"}
+		if value is not None:
+			env["STALL_MERGE_REQUIRED_CHECKS_ENABLED"] = value
+		res = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, check=False)
+		assert res.returncode == 0, res.stderr
+		return res.stdout
+
+	for value in (None, "", "TRUE", "true", " True "):
+		out = run(value)
+		assert out.strip().endswith("rc=0"), (value, out)
+		assert "::warning::" not in out
+	for value in ("false", "False", " FALSE "):
+		out = run(value)
+		assert out.strip().endswith("rc=1"), (value, out)
+		assert "::warning::" not in out
+	out = run("maybe")
+	assert out.strip().endswith("rc=1"), out
+	assert "::warning::STALL_MERGE_REQUIRED_CHECKS_ENABLED" in out
+
+
+def test_standalone_attempt_merge_required_checks_merges_only_on_rc0() -> None:
+	# No arguments: this module's custom runner calls every test as func()
+	# (test_custom_runner_tests_need_no_pytest_arguments).
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		_check_standalone_attempt_merge_required_checks_merges_only_on_rc0(Path(tmp_dir))
+
+
+def _check_standalone_attempt_merge_required_checks_merges_only_on_rc0(tmp_path: Path) -> None:
+	result, calls = _run_stall_merge_required_checks(tmp_path)
+	assert result == "rc=0 reason= in_flight=false"
+	assert calls == [
+		f"fresh 416 {_STALL_MERGE_SHA} main",
+		f"wait 416 {_STALL_MERGE_SHA} main 0 head_ref=ai/issue-501 wf=ci.yml",
+		f"merge 416 {_STALL_MERGE_SHA} auto",
+	]
+	# Wait rc != 0: never merge.
+	result, calls = _run_stall_merge_required_checks(tmp_path, wait_rc=1, wait_outcome="failed", ci_state="failure")
+	assert result == "rc=1 reason=checks_incomplete in_flight=false"
+	assert not any(call.startswith("merge ") for call in calls)
+
+
+def test_standalone_attempt_merge_required_checks_no_dispatch_without_same_repo_head_ref() -> None:
+	# No arguments: this module's custom runner calls every test as func()
+	# (test_custom_runner_tests_need_no_pytest_arguments).
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		_check_standalone_attempt_merge_required_checks_no_dispatch_without_same_repo_head_ref(Path(tmp_dir))
+
+
+def _check_standalone_attempt_merge_required_checks_no_dispatch_without_same_repo_head_ref(tmp_path: Path) -> None:
+	# Empty head_ref (fork or deleted-fork head): the wait runs with no final-CI
+	# workflow, so _pr_ensure_final_ci (whose fork check misses a null
+	# head.repo) is never reached; a missing check still refuses the merge.
+	result, calls = _run_stall_merge_required_checks(
+		tmp_path, head_ref="", wait_rc=1, wait_outcome="timeout", ci_state="absent",
+	)
+	assert result == "rc=1 reason=checks_incomplete in_flight=false"
+	assert calls == [
+		f"fresh 416 {_STALL_MERGE_SHA} main",
+		f"wait 416 {_STALL_MERGE_SHA} main 0 head_ref= wf=",
+	]
+	# The empty final-CI workflow is scoped to the wait call: the step-wide
+	# value survives for later PRs in the same tick.
+	after = (tmp_path / "after.log").read_text(encoding="utf-8").strip()
+	assert after == "wf_after=ci.yml head_ref_after=", after
+
+
+def test_standalone_attempt_merge_required_checks_dispatch_in_flight_refuses_without_merge() -> None:
+	# No arguments: this module's custom runner calls every test as func()
+	# (test_custom_runner_tests_need_no_pytest_arguments).
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		_check_standalone_attempt_merge_required_checks_dispatch_in_flight_refuses_without_merge(Path(tmp_dir))
+
+
+def _check_standalone_attempt_merge_required_checks_dispatch_in_flight_refuses_without_merge(tmp_path: Path) -> None:
+	result, calls = _run_stall_merge_required_checks(
+		tmp_path, wait_rc=1, wait_outcome="timeout", final_ci_outcome="dispatched", ci_state="absent",
+	)
+	assert result == "rc=1 reason=checks_incomplete in_flight=true"
+	assert [c.split(" ", 1)[0] for c in calls] == ["fresh", "wait"]
+	# A CI run already pending on the head is in flight too.
+	result, calls = _run_stall_merge_required_checks(
+		tmp_path, wait_rc=1, wait_outcome="timeout", final_ci_outcome="exists", runs_pending="2", ci_state="absent",
+	)
+	assert result == "rc=1 reason=checks_incomplete in_flight=true"
+	# A refused dispatch (nothing in flight) is counted.
+	result, calls = _run_stall_merge_required_checks(
+		tmp_path, wait_rc=1, wait_outcome="timeout", final_ci_outcome="dispatch_failed", ci_state="absent",
+	)
+	assert result == "rc=1 reason=checks_incomplete in_flight=false"
+	# A failed head is never in flight.
+	result, calls = _run_stall_merge_required_checks(
+		tmp_path, wait_rc=1, wait_outcome="failed", final_ci_outcome="dispatched", ci_state="failure",
+	)
+	assert result == "rc=1 reason=checks_incomplete in_flight=false"
+	assert not any(call.startswith("merge ") for call in calls)
+
+
+def test_standalone_attempt_merge_required_checks_first_refusal_reasons() -> None:
+	# No arguments: this module's custom runner calls every test as func()
+	# (test_custom_runner_tests_need_no_pytest_arguments).
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		_check_standalone_attempt_merge_required_checks_first_refusal_reasons(Path(tmp_dir))
+
+
+def _check_standalone_attempt_merge_required_checks_first_refusal_reasons(tmp_path: Path) -> None:
+	for kwargs, reason in (
+		({"state": "closed", "mergeable": "false", "head_sha": "abc"}, "state_not_open"),
+		({"mergeable": "false", "head_sha": "abc"}, "not_mergeable"),
+		({"mergeable": "", "head_sha": _STALL_MERGE_SHA}, "not_mergeable"),
+		({"head_sha": "abc1234"}, "bad_head_sha"),
+	):
+		result, calls = _run_stall_merge_required_checks(tmp_path, **kwargs)
+		assert result == f"rc=1 reason={reason} in_flight=false", (kwargs, result)
+		assert calls == [], (kwargs, calls)
+	result, calls = _run_stall_merge_required_checks(tmp_path, fresh_rc=1)
+	assert result == "rc=1 reason=base_not_fresh in_flight=false"
+	assert [c.split(" ", 1)[0] for c in calls] == ["fresh"]
+	result, calls = _run_stall_merge_required_checks(tmp_path, merge_rc=1)
+	assert result == "rc=1 reason=merge_call_failed in_flight=false"
+	assert [c.split(" ", 1)[0] for c in calls] == ["fresh", "wait", "merge"]
+
+
+def test_standalone_attempt_merge_arm_gates_new_chain_and_keeps_legacy():
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	body = _extract_bash_function(source, "run_standalone_stall_recovery() {")
+	start = body.index("      attempt_merge)\n")
+	arm = body[start:body.index("\n        ;;\n", start)]
+	assert "if _stall_merge_required_checks_enabled; then" in arm
+	assert '_standalone_attempt_merge_required_checks "${issue_num}" "${merge_pr}"' in arm
+	# Flag off: the legacy chain (#9715 first-refusal ladder, same gates,
+	# order and arguments) runs unchanged.
+	legacy_gates = (
+		'elif ! _pr_checks_completed "${merge_pr}" "${merge_head_sha}"; then',
+		'elif ! _pr_base_fresh_for_merge "${merge_pr}" "${merge_head_sha}" "${merge_base_ref}"; then',
+		'elif ! _orch_squash_merge_bound "${merge_pr}" "${merge_head_sha}" auto; then',
+	)
+	for gate in legacy_gates:
+		assert gate in arm, gate
+	assert [arm.index(gate) for gate in legacy_gates] == sorted(arm.index(gate) for gate in legacy_gates)
+	assert arm.index("_stall_merge_required_checks_enabled") < arm.index("_pr_checks_completed")
+	# Refusals are recorded; lease wait keeps its action and no increment.
+	assert "STALL_MERGE_REFUSAL issue=${issue_num} pr=${merge_pr}" in arm
+	assert 'STALL_RECOVERY_EFFECTIVE_ACTION="attempt_merge_refused_${STALL_MERGE_REFUSAL_REASON}"' in arm
+	assert 'STALL_RECOVERY_EFFECTIVE_ACTION="attempt_merge_skipped_merge_lease_wait"' in arm
+	lease = arm[arm.index('= "lease_wait" ]; then'):arm.index("attempt_merge_skipped_merge_lease_wait")]
+	assert "STALL_RECOVERY_SHOULD_INCREMENT" not in lease
+	refused = arm[arm.index('attempt_merge_refused_${STALL_MERGE_REFUSAL_REASON}'):]
+	# The #9732 refused branch ends where the #9715 legacy-refusal branch starts.
+	refused = refused[:refused.index("\n        elif ")]
+	in_flight = refused[refused.index('"${STALL_MERGE_CHECKS_IN_FLIGHT:-false}" = "true"'):refused.index("          else\n")]
+	assert "STALL_RECOVERY_SHOULD_INCREMENT" not in in_flight
+	assert 'STALL_RECOVERY_SHOULD_INCREMENT="true"' in refused
+	# The head ref comes from the PR JSON already read (no extra API call).
+	assert "merge_head_ref=\"$(printf '%s' \"${merge_pr_json}\" | jq -r" in arm
+
+
+def test_standalone_attempt_merge_head_ref_only_for_same_repo_head():
+	# A fork head must not pre-supply PR_CHECKS_HEAD_REF: _pr_ensure_final_ci
+	# runs its fork_head rejection only when it reads the PR itself.
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	body = _extract_bash_function(source, "run_standalone_stall_recovery() {")
+	start = body.index("      attempt_merge)\n")
+	arm = body[start:body.index("\n        ;;\n", start)]
+	ref_at = arm.index("merge_head_ref=\"$(printf '%s' \"${merge_pr_json}\" | jq -r")
+	guard_at = arm.index("merge_head_repo=\"$(printf '%s' \"${merge_pr_json}\" | jq -r")
+	call_at = arm.index("_standalone_attempt_merge_required_checks \"${issue_num}\"")
+	assert ref_at < guard_at < call_at
+	guard = arm[guard_at:call_at]
+	assert '"${merge_head_repo}" != "${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"' in guard
+	assert 'merge_head_ref=""' in guard
+	snippet = guard[guard.index("if [ -z"):guard.index("fi\n") + 3]
+	for head_repo, expected in (("o/r", "ai/issue-501"), ("fork/r", ""), ("", "")):
+		pr_json = json.dumps({"head": {"ref": "ai/issue-501", "repo": {"full_name": head_repo} if head_repo else None}})
+		script = (
+			"GITHUB_REPOSITORY=o/r\n"
+			"merge_head_ref=ai/issue-501\n"
+			f"merge_pr_json={shlex.quote(pr_json)}\n"
+			"merge_head_repo=\"$(printf '%s' \"${merge_pr_json}\" | jq -r 'if type == \"object\" then (.head.repo.full_name? // \"\") else \"\" end' 2>/dev/null | tail -n1)\"\n"
+			+ snippet
+			+ 'printf "ref=%s\\n" "${merge_head_ref}"\n'
+		)
+		res = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+		assert res.returncode == 0, res.stderr
+		assert res.stdout.strip() == f"ref={expected}", (head_repo, res.stdout)
+
+
+def test_orchestrate_poll_steps_carry_stall_merge_final_ci_env():
+	wf = _STALL_MERGE_ORCH_POLL_WF.read_text(encoding="utf-8")
+	lines = (
+		"          STALL_MERGE_REQUIRED_CHECKS_ENABLED: ${{ vars.STALL_MERGE_REQUIRED_CHECKS_ENABLED || 'true' }}\n",
+		"          REVIEW_FINAL_CI_WORKFLOW: ${{ github.repository == 'shubhodeep1/coding-workflows' && 'ci.yml' || '' }}\n",
+		"          AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}\n",
+		"          AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}\n",
+	)
+	for step in ("Process each tracking issue", "Run standalone stall recovery without active projects"):
+		start = wf.index(f"      - name: {step}\n")
+		end = wf.find("\n      - name:", start + 1)
+		block = wf[start:end if end != -1 else len(wf)]
+		for line in lines:
+			assert block.count(line) == 1, (step, line)
+
+
+def test_stall_merge_final_ci_workflow_is_captured_and_cleared_for_other_paths() -> None:
+	# No arguments: this module's custom runner calls every test as func()
+	# (test_custom_runner_tests_need_no_pytest_arguments).
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		_check_stall_merge_final_ci_workflow_is_captured_and_cleared_for_other_paths(Path(tmp_dir))
+
+
+def _check_stall_merge_final_ci_workflow_is_captured_and_cleared_for_other_paths(tmp_path: Path) -> None:
+	# The step-wide REVIEW_FINAL_CI_WORKFLOW is for the new attempt_merge chain
+	# only: the poller captures it right after sourcing pr_checks_lib.sh and
+	# clears it, so gate D, the base-freshness branch update and the legacy
+	# flag-off chain never see it (their dispatch behaviour is unchanged).
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	capture = (
+		"unset _OPP_LIB_DIR\n"
+		"# Issue #9732: the two stall-recovery poller steps set REVIEW_FINAL_CI_WORKFLOW\n"
+	)
+	assert capture in source
+	block = source[source.index(capture):]
+	block = block[:block.index("unset REVIEW_FINAL_CI_WORKFLOW\n") + len("unset REVIEW_FINAL_CI_WORKFLOW\n")]
+	assert '_OPP_STALL_MERGE_FINAL_CI_WORKFLOW="${REVIEW_FINAL_CI_WORKFLOW:-}"\n' in block
+	helper = _extract_bash_function(source, "_standalone_attempt_merge_required_checks()\n{")
+	# Outside the helper and its header comment, nothing in the poller reads it.
+	rest = source.replace(helper, "")
+	assert "${REVIEW_FINAL_CI_WORKFLOW" not in rest.replace('"${REVIEW_FINAL_CI_WORKFLOW:-}"\nunset REVIEW_FINAL_CI_WORKFLOW', "")
+	log = tmp_path / "calls.log"
+	q = shlex.quote
+	script = (
+		"set -euo pipefail\n"
+		f"LOG={q(str(log))}\n"
+		"unset REVIEW_FINAL_CI_WORKFLOW\n"
+		"_OPP_STALL_MERGE_FINAL_CI_WORKFLOW=ci.yml\n"
+		"_pr_base_fresh_for_merge() { echo \"fresh wf=${REVIEW_FINAL_CI_WORKFLOW:-}\" >> \"$LOG\"; return 0; }\n"
+		"_pr_wait_for_required_checks() { echo \"wait wf=${REVIEW_FINAL_CI_WORKFLOW:-}\" >> \"$LOG\"; PR_CHECKS_WAIT_OUTCOME=ok; return 0; }\n"
+		"_orch_squash_merge_bound() { echo \"merge wf=${REVIEW_FINAL_CI_WORKFLOW:-}\" >> \"$LOG\"; return 0; }\n"
+		+ helper
+		+ f"_standalone_attempt_merge_required_checks 501 416 open true {_STALL_MERGE_SHA} main ai/issue-501\n"
+		+ 'echo "after=${REVIEW_FINAL_CI_WORKFLOW:-unset}"\n'
+	)
+	res = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+	assert res.returncode == 0, res.stdout + res.stderr
+	assert res.stdout.strip().splitlines()[-1] == "after=unset"
+	assert log.read_text(encoding="utf-8").splitlines() == ["fresh wf=ci.yml", "wait wf=ci.yml", "merge wf="]
 
 if __name__ == "__main__":
 	raise SystemExit(main())

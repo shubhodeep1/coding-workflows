@@ -257,7 +257,7 @@ def _run(subcommand: str, tmp_path: Path, bin_dir: Path, fixtures: Path, log: Pa
 	# opt in explicitly rather than inherit the live PR's paths or base branch.
 	for inherited_name in ("BASE_BRANCH", "PR_DIFF_FILE", "PR_NUMBER", "TARGET_BRANCH", "IS_SMOKE_TEST",
 			"MERGE_TRAIN_CONFLICT_CHECK_ENABLED", "MERGE_TRAIN_HEAD_MAX_AGE_HOURS", "MERGE_TRAIN_PRIORITY_LABELS",
-			"MERGE_TRAIN_IGNORE_PATHS"):
+			"MERGE_TRAIN_IGNORE_PATHS", "ZOMBIE_RUN_MAX_QUEUED_HOURS"):
 		run_env.pop(inherited_name, None)
 	run_env.update({
 		"PATH": f"{bin_dir}:{os.environ['PATH']}",
@@ -1266,7 +1266,9 @@ def test_release_holds_pr_for_review_run_that_changes_status_mid_listing(tmp_pat
 		(fixtures / "actions_runs_after_switch.json").write_text(
 			json.dumps({"workflow_runs": [dict(run, status=after)]}), encoding="utf-8")
 		(fixtures / "actions_runs_switch_at").write_text(str(switch_at), encoding="utf-8")
-		result, log_text, _env = _run("release", case_dir, bin_dir, fixtures, log)
+		# The fixed-date fixture is far older than 24h, so the wedged-queued
+		# rule (issue #9473) is switched off to observe the status flip alone.
+		result, log_text, _env = _run("release", case_dir, bin_dir, fixtures, log, ZOMBIE_RUN_MAX_QUEUED_HOURS="0")
 		assert result.returncode == 0, (switch_at, result.stderr)
 		assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr, (switch_at, result.stderr)
 		assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout, (switch_at, result.stdout)
@@ -1305,7 +1307,8 @@ def test_release_holds_pr_for_review_run_that_changes_status_twice_mid_listing(t
 			(fixtures / "actions_runs_after_switch2.json").write_text(
 				json.dumps({"workflow_runs": [dict(run, status=third)]}), encoding="utf-8")
 			(fixtures / "actions_runs_switch2_at").write_text(str(switch2_at), encoding="utf-8")
-			result, log_text, _env = _run("release", case_dir, bin_dir, fixtures, log)
+			# See the single-switch test: the wedged-queued rule (issue #9473) is off here.
+			result, log_text, _env = _run("release", case_dir, bin_dir, fixtures, log, ZOMBIE_RUN_MAX_QUEUED_HOURS="0")
 			case = (statuses, switch_at, switch2_at)
 			assert result.returncode == 0, (case, result.stderr)
 			assert "MERGE_TRAIN_RUNS_LISTING" not in result.stderr, (case, result.stderr)
@@ -3097,11 +3100,49 @@ def test_release_stale_untitled_rule_can_be_turned_off(tmp_path: Path) -> None:
 	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
 	_queued_pr_4077(fixtures)
 	_write_runs(fixtures, [_untitled_dispatch_run(6105, "queued", 200)])
+	# Issue #9473: the wedged-queued rule would also drop a 200-hour queued
+	# run, so it is switched off too to observe the stale rule alone.
 	result, log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
-		MERGE_TRAIN_STALE_UNATTRIBUTED_RUN_HOURS="0")
+		MERGE_TRAIN_STALE_UNATTRIBUTED_RUN_HOURS="0", ZOMBIE_RUN_MAX_QUEUED_HOURS="0")
 	assert result.returncode == 0, result.stderr
 	assert "MERGE_TRAIN_RUNS_LISTING outcome=incomplete reason=unattributed_run" in result.stderr
 	assert "MERGE_TRAIN_RELEASED" not in result.stdout
+
+
+def test_release_drops_wedged_queued_review_run_even_with_stale_rule_off(tmp_path: Path) -> None:
+	"""Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS never holds the train."""
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	_write_runs(fixtures, [_untitled_dispatch_run(6107, "queued", 200)])
+	result, _log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log,
+		MERGE_TRAIN_STALE_UNATTRIBUTED_RUN_HOURS="0")
+	assert result.returncode == 0, result.stderr
+	assert ("ZOMBIE_RUN_IGNORED run=6107 workflow=.github/workflows/internal-review.yml age_h=200 guard=merge_train_release"
+		in result.stderr)
+	assert "outcome=incomplete" not in result.stderr
+	assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
+
+
+@pytest.mark.parametrize("hours_ago,status,held", [
+	(25, "queued", False),
+	(23, "queued", True),
+	(100, "in_progress", True),
+])
+def test_release_wedged_rule_only_ages_out_old_queued_runs(tmp_path: Path, hours_ago: int, status: str, held: bool) -> None:
+	bin_dir, fixtures, log = _install_fake_gh(tmp_path)
+	_queued_pr_4077(fixtures)
+	run = {"id": 6200, "status": status, "event": "workflow_dispatch", "head_branch": "main",
+		"display_title": "Internal: AI Review & Autofix [pr:4077]", "path": ".github/workflows/internal-review.yml",
+		"created_at": _iso(hours_ago)}
+	_write_runs(fixtures, [run])
+	result, _log_text, _env = _run("release", tmp_path, bin_dir, fixtures, log)
+	assert result.returncode == 0, result.stderr
+	if held:
+		assert "MERGE_TRAIN_RELEASE_ACTIVE pr=4077" in result.stdout
+		assert "ZOMBIE_RUN_IGNORED" not in result.stderr
+	else:
+		assert "ZOMBIE_RUN_IGNORED run=6200 " in result.stderr
+		assert "MERGE_TRAIN_RELEASED pr=4077 source=release" in result.stdout
 
 
 def test_release_stale_untitled_limit_is_configurable_and_validated(tmp_path: Path) -> None:
@@ -3338,13 +3379,16 @@ def test_merge_lease_tick_metrics_are_additive_and_guarded():
 	assert "declare -F _merge_lease_metric >/dev/null 2>&1 && tick_metric_ok=1" in body
 	calls = [line.strip() for line in body.splitlines() if "_merge_lease_metric " in line and "declare -F" not in line]
 	# 9 Phase 1 calls plus Phase 2's skipped (skip_head_unchanged, ineligible)
-	# and no_waiter reason=no_eligible_waiter.
-	assert len(calls) == 12, calls
+	# and no_waiter reason=no_eligible_waiter, plus #9983's skipped
+	# skip_head_unchanged for a candidate still held by a soft skip entry.
+	assert len(calls) == 13, calls
 	for call in calls:
 		assert call.startswith('[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric '), call
 		assert call.endswith("|| true"), call
 	for fmt in (
-		'_mt_log "MERGE_LEASE pr=${MERGE_LEASE_PR} base=${tick_base} mode=tick outcome=held reason=holder_open"',
+		# #9983 G4: the held reason is holder_open or holder_runs_active.
+		'_mt_log "MERGE_LEASE pr=${MERGE_LEASE_PR} base=${tick_base} mode=tick outcome=held reason=${tick_held_why}"',
+		'tick_held_why="holder_open"',
 		# Phase 1 step 1.1 appends held_s= and merged= to the release line and
 		# queue_len= to the grant lines; the existing fields are unchanged.
 		'_mt_log "MERGE_LEASE pr=${MERGE_LEASE_PR} base=${tick_base} mode=tick outcome=released reason=${tick_reason} held_s=${tick_rel_held:--} merged=${tick_merged}"',
@@ -3363,6 +3407,30 @@ def test_merge_lease_tick_metrics_are_additive_and_guarded():
 	# No new GitHub call: the tick's gh reads are the matching-refs listing and
 	# the live holder-state read, as before the metrics.
 	assert body.count("gh_retry _safe_gh_jq") == 2
+
+
+def test_merge_lease_holder_runs_active_wiring_is_in_both_ticks():
+	"""Issue #9983 static contract. The behavioural scenarios run in
+	tests/test_merge_lease.py (HolderRunsActive, SoftSkipEntries, RunsHelpers),
+	whose fake gh models the lease ref. This file's fake does not, so this
+	test only checks the wiring. In both ticks, the cached active-run check
+	runs before revoked_no_head_gate and before revoked_idle. Three-field skip
+	entries and the hard-only pass-over list sit behind the `declare -F` guard.
+	_mt_release scopes the dispatched-PR list to its tick call."""
+	text = SCRIPT.read_text()
+	for fn, holder in (("_mt_merge_lease_tick", '"${MERGE_LEASE_PR}"'), ("_mt_merge_lease_tick_multi", '"${tm_h}"')):
+		start = text.index(f"{fn}()\n{{")
+		body = text[start:text.index("\n}\n", start)]
+		assert body.count(f"_mt_lease_pr_runs_active {holder}") == 2, fn
+		assert "declare -F _merge_lease_skips_hard >/dev/null 2>&1 && declare -F _merge_lease_skips_soft" in body, fn
+		assert "_merge_lease_skips_hard " in body, fn
+		assert "MERGE_LEASE_GATE_CONFIRMED" in body, fn
+	start = text.index("_mt_release() {")
+	body = text[start:text.index("\n}\n", start)]
+	set_at = body.index('_MT_LEASE_DISPATCHED_PRS="${release_released_prs}"')
+	tick_at = body.index('_mt_merge_lease_tick "${prs_json}" "${base_filter}"')
+	clear_at = body.index('_MT_LEASE_DISPATCHED_PRS=""')
+	assert set_at < tick_at < clear_at
 
 
 def test_list_open_prs_emits_the_title_for_the_merge_lease():

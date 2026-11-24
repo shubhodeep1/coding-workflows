@@ -868,6 +868,11 @@ GAME_GLOBS = "docs/plans/**,docs/game-sources/**,ft.games/templates/Game-pages/*
 	(["docs/plans/fixup.md"], ""),
 	(["ft.games/templates/Game-pages/boxing/index.html", "ft.games/templates/Game-pages/boxing/assets/a.png"], GAME_GLOBS),
 	(["docs/game-sources/boxing.js", "docs/plans/boxing-phase-4.md"], GAME_GLOBS),
+	# /deploy-activate activation logs (hylifegroup.com PRs #147/#148) are
+	# exempt by default: their runbook lines read as unmet operator steps.
+	(["docs/deploy-activation/activation-batch-x.md"], None),
+	(["docs/deploy-activation/pr-12.md", "docs/plans/a.md"], None),
+	(["docs/deploy-activation/pr-12.md"], ""),
 ])
 def test_exempt_only_pr_is_skipped_without_model_comment_or_fix_issue(tmp_path: Path, files: list, globs: str | None) -> None:
 	env_extra = {"FAKE_GH_FILES": json.dumps(files)}
@@ -886,6 +891,13 @@ def test_custom_globs_replace_the_default(tmp_path: Path) -> None:
 		env_extra={"FAKE_GH_FILES": '["docs/plans/a.md"]', "ACTIVATION_VERIFY_EXEMPT_GLOBS": "docs/game-sources/**"})
 	assert "reason=exempt_paths" not in result.stdout
 	assert state["comments"][-1]["body"].endswith("<!-- ai:activation:v1 verdict=LIVE source=pr-42 -->")
+	# A set value drops the activation-log pattern as well.
+	logs_dir = tmp_path / "deploy-activation-run"
+	logs_dir.mkdir()
+	result, state = _verify(logs_dir, {"verdict": "LIVE", "trigger": "push", "summary": "Runs.", "gaps": []},
+		env_extra={"FAKE_GH_FILES": '["docs/deploy-activation/a.md"]', "ACTIVATION_VERIFY_EXEMPT_GLOBS": "docs/game-sources/**"})
+	assert "reason=exempt_paths" not in result.stdout
+	assert state["comments"][-1]["body"].endswith("<!-- ai:activation:v1 verdict=LIVE source=pr-42 -->")
 
 
 @pytest.mark.parametrize("files", [
@@ -900,6 +912,29 @@ def test_near_miss_paths_are_not_exempt(tmp_path: Path, files: list) -> None:
 	assert "reason=exempt_paths" not in result.stdout
 	assert _context(tmp_path)["changed_files"] == files
 	assert "exempt_changed_files" not in _context(tmp_path)
+
+
+@pytest.mark.parametrize("files", [
+	["docs/deploy-activation"],
+	["docs/deploy-activation.md"],
+	["src/docs/deploy-activation/a.md"],
+])
+def test_near_miss_deploy_activation_paths_are_not_exempt_by_default(tmp_path: Path, files: list) -> None:
+	result, state = _verify(tmp_path, {"verdict": "LIVE", "trigger": "push", "summary": "Runs.", "gaps": []},
+		env_extra={"FAKE_GH_FILES": json.dumps(files)})
+	assert "reason=exempt_paths" not in result.stdout
+	assert _context(tmp_path)["changed_files"] == files
+	assert "exempt_changed_files" not in _context(tmp_path)
+
+
+def test_mixed_deploy_activation_pr_is_verified_on_its_other_files_only(tmp_path: Path) -> None:
+	files = ["docs/deploy-activation/pr-1.md", "src/app.ts"]
+	result, state = _verify(tmp_path, DORMANT, env_extra={"FAKE_GH_FILES": json.dumps(files)})
+	assert "reason=exempt_paths" not in result.stdout
+	context = _context(tmp_path)
+	assert context["changed_files"] == ["src/app.ts"]
+	assert context["exempt_changed_files"] == ["docs/deploy-activation/pr-1.md"]
+	assert state["comments"][-1]["body"].endswith("<!-- ai:activation:v1 verdict=DORMANT source=pr-42 -->")
 
 
 def test_mixed_pr_is_verified_on_its_other_files_only(tmp_path: Path) -> None:
@@ -952,7 +987,7 @@ def test_status_workflow_wires_exempt_globs_and_skip_label() -> None:
 	assert "!contains(github.event.pull_request.labels.*.name, 'ai:skip-activation-verify')" in job["if"]
 	verify_env = next(step for step in job["steps"] if step["name"] == "Verify activation")["env"]
 	assert verify_env["PR_LABELS"] == "${{ toJSON(github.event.pull_request.labels.*.name) }}"
-	assert verify_env["ACTIVATION_VERIFY_EXEMPT_GLOBS"] == "${{ vars.ACTIVATION_VERIFY_EXEMPT_GLOBS || 'docs/plans/**' }}"
+	assert verify_env["ACTIVATION_VERIFY_EXEMPT_GLOBS"] == "${{ vars.ACTIVATION_VERIFY_EXEMPT_GLOBS || 'docs/plans/**,docs/deploy-activation/**' }}"
 	contract = json.loads((ROOT / ".github/ai/label_contract.v1.json").read_text(encoding="utf-8"))
 	assert "ai:skip-activation-verify" in contract["labels"]
 
