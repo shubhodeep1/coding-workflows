@@ -47,6 +47,11 @@
 #               (3; 0 = off) audit runs already queued or running: hold
 #               with hold_reason=audit_throttled, no marker and no cycle
 #               used; the next review run (sweep tick) tries again.
+#               Issue #10017: a PR that holds its base's merge lease
+#               (MERGE_LEASE_ENABLED set and true) skips the limit and is
+#               dispatched, logged `throttle=lease_holder_exempt`; at most
+#               MERGE_LEASE_MAX_HOLDERS extra audits run this way. The lease
+#               is read once, only at the limit; a failed read throttles.
 #             - `status=findings` for the current head: hold=true until the
 #               follow-up fixes change the head.
 #             - otherwise, with fewer than MAX_SECURITY_PASS_CYCLES cycles
@@ -531,6 +536,79 @@ single_pass_active_audits()
 	jq -r '[.workflow_runs[] | select(.status != "completed")] | length' <<< "${SINGLE_PASS_AUDIT_RUNS}" 2>/dev/null || true
 }
 
+# Issue #10017: may this PR skip the audit throttle because it holds the
+# merge lease of its base? Input: <base> <active audits> <throttle limit>.
+# Prints exactly one token and always returns 0:
+#   exempt      the PR is a live holder (expired holder rows do not count) and
+#               active < limit + MERGE_LEASE_MAX_HOLDERS, so at most
+#               MERGE_LEASE_MAX_HOLDERS extra audits run this way;
+#   not_holder  no lease ref yet, or the PR is not among the live holders;
+#   over_cap    the PR holds, but the extended bound is reached too;
+#   disabled    MERGE_LEASE_ENABLED is unset, empty or not true (no read);
+#   unreadable  the lease read failed or the lease helpers are missing.
+# API calls: none unless enabled; then one _merge_lease_read (at most two
+# GETs: git/matching-refs, then git/commits). The caller asks only at the
+# limit. Every token but `exempt` keeps the throttle (fail safe). Unset
+# MERGE_LEASE_ENABLED counts as disabled, unlike the lib default, so a
+# helper staged under an older workflow without the variable throttles as
+# before. The lib runs in a subshell, like single_pass_base_sync_carry, so
+# sourcing the full helpers cannot redefine this gate's functions or options.
+single_pass_lease_holder_exempt()
+{
+	local lease_check_base="$1" lease_check_active="$2" lease_check_max="$3" lease_check_dir lease_check_token
+	if [ -z "${MERGE_LEASE_ENABLED:-}" ]; then
+		echo disabled
+		return 0
+	fi
+	if [ -n "${SUPPORT_SCRIPTS_DIR:-}" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/pr_checks_lib.sh" ] && [ -f "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" ]; then
+		lease_check_dir="${SUPPORT_SCRIPTS_DIR}"
+	else
+		lease_check_dir="$(cd "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)" || lease_check_dir=""
+	fi
+	if [ -z "${lease_check_dir}" ] || [ ! -f "${lease_check_dir}/pr_checks_lib.sh" ] \
+		|| ! [[ "${lease_check_active}" =~ ^[0-9]+$ ]] || ! [[ "${lease_check_max}" =~ ^[0-9]+$ ]]; then
+		echo unreadable
+		return 0
+	fi
+	lease_check_token="$(
+		# shellcheck source=/dev/null
+		source "${lease_check_dir}/gh_helpers.sh" >/dev/null 2>&1 || true
+		type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+		type _safe_gh_jq >/dev/null 2>&1 || _safe_gh_jq() { gh api "$@"; }
+		# shellcheck source=/dev/null
+		source "${lease_check_dir}/pr_checks_lib.sh" >/dev/null 2>&1 || { echo unreadable; exit 0; }
+		set +e
+		declare -F _merge_lease_read _merge_lease_enabled _merge_lease_holder_row _merge_lease_max_holders _merge_lease_valid_base >/dev/null 2>&1 \
+			|| { echo unreadable; exit 0; }
+		_merge_lease_enabled || { echo disabled; exit 0; }
+		_merge_lease_valid_base "${lease_check_base}" || { echo unreadable; exit 0; }
+		PR_CHECKS_REPOSITORY="${REPOSITORY}"
+		lease_check_rc=0
+		_merge_lease_read "${lease_check_base}" >/dev/null 2>&1 || lease_check_rc=$?
+		if [ "${lease_check_rc}" = "2" ]; then
+			echo not_holder
+			exit 0
+		fi
+		[ "${lease_check_rc}" = "0" ] || { echo unreadable; exit 0; }
+		if [ -z "$(_merge_lease_holder_row "${PR_NUMBER}" 2>/dev/null)" ]; then
+			echo not_holder
+			exit 0
+		fi
+		lease_check_holders="$(_merge_lease_max_holders 2>/dev/null)"
+		[[ "${lease_check_holders}" =~ ^[0-9]+$ ]] || lease_check_holders=1
+		if [ "$((10#${lease_check_active}))" -lt $((10#${lease_check_max} + 10#${lease_check_holders})) ]; then
+			echo exempt
+		else
+			echo over_cap
+		fi
+	)" || lease_check_token=""
+	case "${lease_check_token}" in
+		exempt|not_holder|over_cap|disabled|unreadable) echo "${lease_check_token}" ;;
+		*) echo unreadable ;;
+	esac
+	return 0
+}
+
 single_pass_review_workflow()
 {
 	if [ "${REPOSITORY}" = "shubhodeep1/coding-workflows" ]; then
@@ -961,6 +1039,8 @@ single_pass_gate()
 	local delta_source="" delta_since="" delta_comment_id="" delta_status="" delta_note="" dispatch_ok="false"
 	local -a dispatch_args=() delta_dispatch_args=()
 	local attempts_used cap_cycle effective_attempts pending_state="" active_audits
+	# Issue #10017: merge-lease holder exception to the audit throttle.
+	local lease_exempt="" lease_throttle_note=""
 	local max_attempts="${SECURITY_PASS_MAX_AUDIT_ATTEMPTS:-}" max_concurrent="${SECURITY_PASS_MAX_CONCURRENT_AUDITS:-3}"
 	local cancel_check_minutes="${SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES:-20}"
 	[[ "${max_cycles}" =~ ^[1-9][0-9]*$ ]] || max_cycles=5
@@ -1298,9 +1378,21 @@ No completed audit exists for \`${head_sha}\`. Auto-merge stays off. A new push 
 		single_pass_audit_runs || true
 		active_audits="$(single_pass_active_audits)"
 		if [[ "${active_audits}" =~ ^[0-9]+$ ]] && [ "${active_audits}" -ge "${max_concurrent}" ]; then
-			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=audit_throttled active=${active_audits} max=${max_concurrent} cycle=${cycles_used}"
-			single_pass_output true audit_throttled
-			return 0
+			# Issue #10017: a PR holding its base's merge lease skips the
+			# limit (bounded by MERGE_LEASE_MAX_HOLDERS extra audits). The
+			# lease is read only here, at the limit; anything but `exempt`
+			# throttles as before.
+			lease_exempt="$(single_pass_lease_holder_exempt "${base}" "${active_audits}" "${max_concurrent}")"
+			if [ "${lease_exempt}" = "exempt" ]; then
+				lease_throttle_note=" throttle=lease_holder_exempt"
+			else
+				single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=audit_throttled active=${active_audits} max=${max_concurrent} cycle=${cycles_used}$([ "${lease_exempt}" = "over_cap" ] && printf ' throttle=lease_holder_over_cap')"
+				if [ "${lease_exempt}" = "unreadable" ]; then
+					single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} lease_check=read_failed"
+				fi
+				single_pass_output true audit_throttled
+				return 0
+			fi
 		fi
 	fi
 	dispatch_args=(workflow run "${workflow}" -R "${REPOSITORY}" --ref "${default_branch}" -f ref="${head_ref}" -f pr_number="${PR_NUMBER}")
@@ -1409,7 +1501,7 @@ $(single_pass_marker pending "${head_sha}" "${next_cycle}")"
 		single_pass_output true pending_marker_failed
 		return 1
 	fi
-	single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=dispatched cycle=${next_cycle} workflow=${workflow}$([ "${exhausted_retry}" = "true" ] && printf ' reason=exhausted_retry')$([ -n "${delta_note}" ] && printf ' delta_since=%s' "${delta_since}")"
+	single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=dispatched cycle=${next_cycle} workflow=${workflow}$([ "${exhausted_retry}" = "true" ] && printf ' reason=exhausted_retry')$([ -n "${delta_note}" ] && printf ' delta_since=%s' "${delta_since}")${lease_throttle_note}"
 	single_pass_output true audit_dispatched
 }
 

@@ -112,6 +112,15 @@ if args[0] == "api" and any("/actions/workflows/" in arg for arg in args):
 		sys.exit(1)
 	print(open(os.environ["FAKE_GH_RUNS"]).read())
 	sys.exit(0)
+# Issue #10017: the merge-lease read (git/matching-refs, then git/commits).
+if args[0] == "api" and len(args) > 1 and args[1] == "repos/o/r/git/matching-refs/merge-lease/main":
+	if "lease" in fail:
+		sys.exit(1)
+	print(os.environ.get("FAKE_GH_LEASE_REFS", "[]"))
+	sys.exit(0)
+if args[0] == "api" and len(args) > 1 and args[1].startswith("repos/o/r/git/commits/"):
+	print(os.environ.get("FAKE_GH_LEASE_COMMIT", "{}"))
+	sys.exit(0)
 if args[0] == "api" and "--paginate" in args:
 	if "comments_once" in fail and sum('"--paginate"' in line for line in open(os.environ["FAKE_GH_LOG"])) == 1:
 		sys.exit(1)
@@ -232,6 +241,8 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 	for name in ("SINGLE_ISSUE_SECURITY_PASS_ENABLED", "MAX_SECURITY_PASS_CYCLES", "ORCH_INTEGRATION_BRANCH_PATTERN", "SECURITY_PASS_PENDING_STALE_HOURS", "SECURITY_PASS_FOLLOWUP_STALE_HOURS", "SECURITY_PASS_PENDING_MARKER_ATTEMPTS", "SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS", "SECURITY_PASS_AUTHOR_LOGIN_FALLBACK", "FAKE_GIT_ANCESTORS", "FAKE_GIT_SHALLOW", "FAKE_GIT_FETCH_FAIL", "FAKE_GIT_UNSHALLOW_MARKER", "FAKE_GIT_INCOMPLETE_ANCESTRY", "FAKE_GIT_DIFF_FILES", "GITHUB_ENV", "SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED", "SECURITY_PASS_DELTA_SINCE", "SECURITY_PASS_PRIOR_FINDINGS_FILE", "SECURITY_PASS_FINDINGS_FILE", "SECURITY_PASS_DELTA_SINCE_INPUT", "SECURITY_PASS_PRIOR_FINDINGS_INPUT", "SECURITY_PASS_AUDIT_CHECKOUT"):
 		run_env.pop(name, None)
 	for name in ("FAKE_GH_RUNS", "SECURITY_PASS_MAX_AUDIT_ATTEMPTS", "SECURITY_PASS_MAX_CONCURRENT_AUDITS", "SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES"):
+		run_env.pop(name, None)
+	for name in ("MERGE_LEASE_ENABLED", "MERGE_LEASE_MAX_HOLDERS", "MERGE_LEASE_REF_PREFIX", "PR_CHECKS_REPOSITORY", "FAKE_GH_LEASE_REFS", "FAKE_GH_LEASE_COMMIT"):
 		run_env.pop(name, None)
 	run_env["SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS"] = "0"
 	# The pass defaults to off; tests that exercise it opt in, and None unsets a name.
@@ -1032,6 +1043,9 @@ def test_review_wiring() -> None:
 	assert _steps(REVIEW, "codex-agent")["Review-blocked judge decision"]["env"]["SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS"] == gate["env"]["SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS"]
 	assert _steps(REVIEW, "codex-agent")["Review-blocked judge decision"]["env"]["SECURITY_PASS_FOLLOWUP_STALE_HOURS"] == gate["env"]["SECURITY_PASS_FOLLOWUP_STALE_HOURS"]
 	assert gate["env"]["SECURITY_PASS_AUTHOR_LOGIN_FALLBACK"] == "${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}"
+	# Issue #10017: the merge-lease holder exception to the audit throttle.
+	assert gate["env"]["MERGE_LEASE_ENABLED"] == "${{ vars.MERGE_LEASE_ENABLED || 'true' }}"
+	assert gate["env"]["MERGE_LEASE_MAX_HOLDERS"] == "${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}"
 	assert gate["if"] == steps["Enable auto-merge on PR"]["if"].replace(" && steps.single_issue_security_pass.outputs.hold != 'true'", "")
 	for name in ("Enable auto-merge on PR", "Mark linked issues ready to merge"):
 		assert steps[name]["if"].endswith("&& steps.single_issue_security_pass.outputs.hold != 'true'")
@@ -2350,6 +2364,80 @@ def test_concurrent_audits_are_throttled_without_using_a_cycle(tmp_path: Path, a
 		assert not any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
 	else:
 		assert output == "hold=true\nhold_reason=audit_dispatched\n" and "outcome=dispatched cycle=1" in result.stdout
+
+
+def _lease(holder_pr: int, expires_in: int = 3600) -> dict:
+	# Issue #10017: a held single-holder `merge-lease v1` record for main,
+	# built at test time so its expiry is relative to now.
+	now = int(dt.datetime.now(dt.timezone.utc).timestamp())
+	message = "\n".join([
+		"merge-lease v1", "state=held", f"pr={holder_pr}", f"head={HEAD}", f"expires={now + expires_in}",
+		f"acquired={now - 600}", f"updated={now - 60}", "paths:", "scripts/x.sh",
+	])
+	return {
+		"FAKE_GH_LEASE_REFS": json.dumps([{"ref": "refs/merge-lease/main", "object": {"sha": "a" * 40}}]),
+		"FAKE_GH_LEASE_COMMIT": json.dumps({"tree": {"sha": "b" * 40}, "message": message}),
+	}
+
+
+def _lease_reads(calls: list) -> int:
+	return sum(1 for call in calls if any("git/matching-refs/merge-lease" in arg for arg in call))
+
+
+def _throttle_runs(tmp_path: Path, active: int) -> str:
+	runs = [_audit_run("in_progress" if n % 2 else "queued", None, 5, 1, pr=100 + n) for n in range(active)]
+	return _runs(tmp_path, runs)
+
+
+def test_lease_holder_skips_the_audit_throttle(tmp_path: Path) -> None:
+	env = {"FAKE_GH_RUNS": _throttle_runs(tmp_path, 3), "MERGE_LEASE_ENABLED": "true", "GH_RETRY_MAX_ATTEMPTS": "1", **_lease(42)}
+	result, calls, output = _run(tmp_path, "gate", env=env)
+	assert output == "hold=true\nhold_reason=audit_dispatched\n", result.stdout + result.stderr
+	assert sum(call[:2] == ["workflow", "run"] for call in calls) == 1
+	assert any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
+	assert "outcome=dispatched cycle=1 " in result.stdout and "throttle=lease_holder_exempt" in result.stdout
+	assert "audit_throttled" not in result.stdout
+	assert _lease_reads(calls) == 1
+
+
+@pytest.mark.parametrize(
+	"case, active, extra, note, reads",
+	[
+		("other_holder", 3, {}, "", 1),
+		("no_ref", 3, {}, "", 1),
+		("read_fails", 3, {"FAKE_GH_FAIL": "lease"}, "lease_check=read_failed", 1),
+		("expired", 3, {}, "", 1),
+		("disabled_false", 3, {"MERGE_LEASE_ENABLED": "false"}, "", 0),
+		("disabled_unset", 3, {"MERGE_LEASE_ENABLED": None}, "", 0),
+		("over_cap", 4, {"MERGE_LEASE_MAX_HOLDERS": "1"}, "throttle=lease_holder_over_cap", 1),
+	],
+)
+def test_lease_holder_exemption_falls_back_to_the_throttle(tmp_path: Path, case: str, active: int, extra: dict, note: str, reads: int) -> None:
+	lease = {
+		"other_holder": _lease(77),
+		"no_ref": {"FAKE_GH_LEASE_REFS": "[]"},
+		"expired": _lease(42, expires_in=-60),
+	}.get(case, _lease(42))
+	env = {"FAKE_GH_RUNS": _throttle_runs(tmp_path, active), "MERGE_LEASE_ENABLED": "true", "GH_RETRY_MAX_ATTEMPTS": "1", **lease, **extra}
+	result, calls, output = _run(tmp_path, "gate", env=env)
+	assert output == "hold=true\nhold_reason=audit_throttled\n", result.stdout + result.stderr
+	assert f"reason=audit_throttled active={active} max=3 cycle=0" in result.stdout
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+	assert not any(call[:2] == ["api", "repos/o/r/issues/42/comments"] for call in calls)
+	assert "throttle=lease_holder_exempt" not in result.stdout
+	if note:
+		assert note in result.stdout
+	else:
+		assert "throttle=" not in result.stdout and "lease_check=" not in result.stdout
+	assert _lease_reads(calls) == reads
+
+
+def test_lease_is_not_read_below_the_limit(tmp_path: Path) -> None:
+	env = {"FAKE_GH_RUNS": _throttle_runs(tmp_path, 2), "MERGE_LEASE_ENABLED": "true", "GH_RETRY_MAX_ATTEMPTS": "1", **_lease(42)}
+	result, calls, output = _run(tmp_path, "gate", env=env)
+	assert output == "hold=true\nhold_reason=audit_dispatched\n" and "outcome=dispatched cycle=1" in result.stdout
+	assert "throttle=" not in result.stdout
+	assert _lease_reads(calls) == 0
 
 
 def test_throttle_fails_open_when_runs_cannot_be_listed(tmp_path: Path) -> None:
