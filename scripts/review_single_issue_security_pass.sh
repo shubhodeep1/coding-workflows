@@ -583,6 +583,9 @@ single_pass_lease_holder_exempt()
 		_merge_lease_enabled || { echo disabled; exit 0; }
 		_merge_lease_valid_base "${lease_check_base}" || { echo unreadable; exit 0; }
 		PR_CHECKS_REPOSITORY="${REPOSITORY}"
+		# A failed read only keeps the throttle, so cap retries here (subshell
+		# only; an operator-set GH_RETRY_MAX_ATTEMPTS still wins).
+		GH_RETRY_MAX_ATTEMPTS="${GH_RETRY_MAX_ATTEMPTS:-2}"
 		lease_check_rc=0
 		_merge_lease_read "${lease_check_base}" >/dev/null 2>&1 || lease_check_rc=$?
 		if [ "${lease_check_rc}" = "2" ]; then
