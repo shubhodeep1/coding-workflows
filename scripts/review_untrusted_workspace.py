@@ -398,6 +398,28 @@ def enumerate_workspace(root, host=None, commands=None, strict=False):
 			yield name, data, mode
 
 
+def _review_editor_admitted_inventory(host):
+	"""Return the .claude/commands and .claude/docs names the editor may write.
+
+	Moved verbatim out of snapshot() (issue #10057) so editor-reachable uses
+	the exact same admission rule.
+	"""
+	# The PR worktree can add twins before snapshot; only names present in the
+	# verified workflow-support checkout may authorize a command for this run.
+	trusted_checkout = os.environ.get("GITHUB_WORKSPACE")
+	commands = frozenset()
+	if trusted_checkout:
+		commands = (template_command_inventory(Path(trusted_checkout) / ".codex-workflow-src") &
+			template_command_inventory(host))
+		docs_names = (template_command_inventory(Path(trusted_checkout) / ".codex-workflow-src", twin_dir=DOCS_TWIN_DIR, live_prefix=".claude/docs/") &
+			template_command_inventory(host, twin_dir=DOCS_TWIN_DIR, live_prefix=".claude/docs/"))
+		# A docs name is admitted only while its live copy already exists as a
+		# regular file on the host, so the editor can edit an existing
+		# reference file but never create a new one (#8321).
+		commands |= frozenset(name for name in docs_names if (host / name).is_file() and not (host / name).is_symlink())
+	return commands
+
+
 def snapshot(host, workspace, manifest, host_git_dir=None, skip_oversized=False):
 	paths = set()
 	env = git_env(manifest)
@@ -414,19 +436,7 @@ def snapshot(host, workspace, manifest, host_git_dir=None, skip_oversized=False)
 		if is_tracked:
 			tracked = listed
 		paths.update(listed)
-	# The PR worktree can add twins before snapshot; only names present in the
-	# verified workflow-support checkout may authorize a command for this run.
-	trusted_checkout = os.environ.get("GITHUB_WORKSPACE")
-	commands = frozenset()
-	if trusted_checkout:
-		commands = (template_command_inventory(Path(trusted_checkout) / ".codex-workflow-src") &
-			template_command_inventory(host))
-		docs_names = (template_command_inventory(Path(trusted_checkout) / ".codex-workflow-src", twin_dir=DOCS_TWIN_DIR, live_prefix=".claude/docs/") &
-			template_command_inventory(host, twin_dir=DOCS_TWIN_DIR, live_prefix=".claude/docs/"))
-		# A docs name is admitted only while its live copy already exists as a
-		# regular file on the host, so the editor can edit an existing
-		# reference file but never create a new one (#8321).
-		commands |= frozenset(name for name in docs_names if (host / name).is_file() and not (host / name).is_symlink())
+	commands = _review_editor_admitted_inventory(host)
 	baseline = {}
 	total = 0
 	oversized = 0
@@ -780,6 +790,39 @@ def check_paths(host, paths_file, report_file=None):
 		raise SystemExit(1)
 
 
+def editor_reachable(host, paths_file, report_file):
+	"""Report, per cited path, whether the sandboxed review editor may write it.
+
+	Issue #10057. Read-only: the host is never written. Each input line is a
+	repository-relative path. A plainly named path gets one report line,
+	``reachable<TAB><path>`` or ``unreachable<TAB><reason><TAB><path>``; any
+	other name is left out of the report, and the caller treats a missing
+	line as reachable (it never marks a path it cannot decide). The decision
+	is allowed() with the snapshot's frozen .claude/ inventory, the same rule
+	that limits what transfer copies back. Only counts reach stderr.
+	"""
+	commands = _review_editor_admitted_inventory(host)
+	with paths_file.open(encoding="utf-8", newline="") as handle:
+		names = list(dict.fromkeys(name for name in handle.read().split("\n") if name))
+	report = []
+	unreachable = 0
+	for name in names:
+		parts = PurePosixPath(name).parts
+		if not REPORTABLE_PATH_RE.fullmatch(name) or ".." in parts or "//" in name or name.startswith("/"):
+			continue
+		if allowed(name, commands=commands):
+			report.append(f"reachable\t{name}")
+			continue
+		if len(parts) == 3 and parts[:2] in ((".claude", "commands"), (".claude", "docs")) and parts[2].endswith(".md") and not parts[2].startswith("."):
+			reason = "not_admitted_command"
+		else:
+			reason = _path_rejection_reason(name)
+		unreachable += 1
+		report.append(f"unreachable\t{reason}\t{name}")
+	report_file.write_text("".join(line + "\n" for line in report), encoding="utf-8")
+	print(f"REVIEW_EDITOR_REACHABLE checked={len(report)} unreachable={unreachable}", file=sys.stderr)
+
+
 # Fixed, path-free causes of an ``unsafe`` conflict-path rejection (#7059).
 # The resolver re-validates every token against this closed set before it
 # prints one, so the report cannot carry other text into the workflow log.
@@ -971,6 +1014,16 @@ def main():
 			note = ""
 		if note:
 			print(note)
+		return
+	# Issue #10057: read-only reachability report for cited review paths.
+	if sys.argv[1:2] == ["editor-reachable"]:
+		if len(sys.argv) != 5:
+			raise SystemExit(2)
+		try:
+			editor_reachable(Path(sys.argv[2]), Path(sys.argv[3]), Path(sys.argv[4]))
+		except Exception:  # noqa: BLE001 - caller fails open (treats paths as reachable)
+			print("editor reachability check failed", file=sys.stderr)
+			raise SystemExit(1) from None
 		return
 	# check-paths takes an optional fourth argument: the rejection report.
 	if sys.argv[1:2] == ["check-paths"] and len(sys.argv) in (4, 5):

@@ -682,7 +682,15 @@ review_blocked_stale_clear_after_clean()
   return 0
 }
 
-if gh_retry gh api repos/${AUTOFIX_STEP_REPOSITORY}/issues/"${PR_NUMBER}"/comments -f body="$(cat "${PR_EDITOR_COMMENT_FILE}")${sandbox_excluded_marker_suffix}${clean_marker_suffix}" >/dev/null; then
+# Issue #10057: list findings on paths the editor cannot change (written by
+# review_apply_fixes.sh) under their own heading. Same comment, no extra API
+# call; it goes before the trailing markers so the clean marker stays last.
+unreachable_summary_section=""
+if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/review_unreachable_summary.md" ]; then
+  unreachable_summary_section=$'\n\n'"$(head -c 20000 "${RUNTIME_DIR}/review_unreachable_summary.md")"
+fi
+
+if gh_retry gh api repos/${AUTOFIX_STEP_REPOSITORY}/issues/"${PR_NUMBER}"/comments -f body="$(cat "${PR_EDITOR_COMMENT_FILE}")${unreachable_summary_section}${sandbox_excluded_marker_suffix}${clean_marker_suffix}" >/dev/null; then
   echo "Posted editor summary comment."
   # Signal to the failure-comment step (line ~3269) that the
   # editor summary already landed on the PR thread. The generic

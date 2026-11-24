@@ -718,6 +718,7 @@ render_review_rb_prior_round_decisions_file() {
   tmp_path="$(mktemp)" || return 0
   if PYTHONDONTWRITEBYTECODE=1 python3 - "${ledger_path}" > "${tmp_path}" <<'PY'
 from pathlib import Path
+import re
 import sys
 
 ledger_path = Path(sys.argv[1])
@@ -779,6 +780,10 @@ for entry in sorted(entries, key=lambda item: item.get("ISSUE_ID", "")):
     prior_decision = ""
     if status == "accepted-residual":
         prior_decision = "accepted-residual"
+    elif status == "unreachable":
+        # Issue #10057: a finding on a path the review editor cannot change,
+        # tracked in the PR's follow-up issue.
+        prior_decision = "unreachable-followup"
     elif (
         "won't fix" in editor_lower
         or "wont fix" in editor_lower
@@ -799,6 +804,10 @@ for entry in sorted(entries, key=lambda item: item.get("ISSUE_ID", "")):
         f'persist_count={clean(entry.get("PERSIST_COUNT", "")) or "0"}',
         f'editor_outcomes={editor_text or "none"}',
     ]
+    if status == "unreachable":
+        followup = clean(entry.get("UNREACHABLE_FOLLOWUP", ""))
+        parts.append(f'followup={followup if re.fullmatch(r"#[1-9][0-9]{0,9}", followup) else "pending"}')
+        parts.append(f'security_hold={"true" if clean(entry.get("UNREACHABLE_SECURITY", "")) == "true" else "false"}')
     print("; ".join(parts))
 PY
   then

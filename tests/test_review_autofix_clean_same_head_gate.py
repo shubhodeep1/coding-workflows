@@ -133,7 +133,9 @@ def test_gate_script_wiring() -> None:
 
 def test_summary_script_appends_the_marker_last() -> None:
 	text = SUMMARY_SCRIPT.read_text(encoding="utf-8")
-	assert '-f body="$(cat "${PR_EDITOR_COMMENT_FILE}")${sandbox_excluded_marker_suffix}${clean_marker_suffix}"' in text
+	# Issue #10057 inserts the unreachable-findings section before the
+	# markers; the clean marker still comes last.
+	assert '-f body="$(cat "${PR_EDITOR_COMMENT_FILE}")${unreachable_summary_section}${sandbox_excluded_marker_suffix}${clean_marker_suffix}"' in text
 	assert "AUTOFIX_CLEAN_MARKER_BASE_SHA:-" in text
 
 

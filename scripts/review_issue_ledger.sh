@@ -304,6 +304,15 @@ normalize_ledger_status()
 		NEW|PERSISTING|FIXED|RESURGENT|accepted-residual)
 			printf '%s' "${status}"
 			;;
+		unreachable)
+			# Issue #10057: sticky only while the switch is on; switched off
+			# it maps to PERSISTING, exactly as code without the status did.
+			if [ "${REVIEW_UNREACHABLE_ACTIVE:-0}" = "1" ]; then
+				printf '%s' "${status}"
+			else
+				printf '%s' "PERSISTING"
+			fi
+			;;
 		*)
 			printf '%s' "PERSISTING"
 			;;
@@ -347,6 +356,9 @@ write_current_entry()
 	local last_seen="$9"
 	local persist_count="${10}"
 	local editor_outcomes="${11}"
+	local unreachable_reason="${12:-}"
+	local unreachable_security="${13:-}"
+	local unreachable_followup="${14:-}"
 	{
 		echo "=== ENTRY ${issue_id} ==="
 		echo "FILE: ${file_path}"
@@ -357,6 +369,13 @@ write_current_entry()
 		echo "FIRST_SEEN_ITERATION: ${first_seen}"
 		echo "LAST_SEEN_ITERATION: ${last_seen}"
 		echo "PERSIST_COUNT: ${persist_count}"
+		# Issue #10057: written only for unreachable entries, so a ledger
+		# without them stays byte-identical to the format before the feature.
+		if [ "${status}" = "unreachable" ]; then
+			echo "UNREACHABLE_REASON: ${unreachable_reason:-unknown}"
+			echo "UNREACHABLE_SECURITY: ${unreachable_security:-false}"
+			echo "UNREACHABLE_FOLLOWUP: ${unreachable_followup:-pending}"
+		fi
 		echo "EDITOR_OUTCOMES:"
 		while IFS= read -r outcome_line || [ -n "${outcome_line}" ]; do
 			echo "  ${outcome_line}"
@@ -381,6 +400,9 @@ parse_prior_ledger()
 			sub(/[[:space:]]+$/, "", s)
 			return s
 		}
+		function dash(v) {
+			return (v == "") ? "-" : v
+		}
 		function flush_entry(    encoded_outcomes) {
 			if (entry_id == "") {
 				return
@@ -394,7 +416,7 @@ parse_prior_ledger()
 			gsub(/\\/, "\\\\", encoded_outcomes)
 			gsub(/\t/, "\\t", encoded_outcomes)
 			gsub(/\n/, "\\n", encoded_outcomes)
-			print entry_id "\t" file "\t" lines "\t" lens "\t" severity "\t" status "\t" first_seen "\t" last_seen "\t" persist_count "\t" encoded_outcomes >> out_file
+			print entry_id "\t" file "\t" lines "\t" lens "\t" severity "\t" status "\t" first_seen "\t" last_seen "\t" persist_count "\t" dash(u_reason) "\t" dash(u_security) "\t" dash(u_followup) "\t" encoded_outcomes >> out_file
 		}
 		BEGIN {
 			err = 0
@@ -413,6 +435,10 @@ parse_prior_ledger()
 			pr_number = ""
 			first_seen_iteration = ""
 			last_updated_iteration = ""
+			unreachable_followup_issue = ""
+			u_reason = ""
+			u_security = ""
+			u_followup = ""
 		}
 		{
 			line = $0
@@ -440,6 +466,10 @@ parse_prior_ledger()
 					last_updated_iteration = trim(substr(line, index(line, ":") + 1))
 					next
 				}
+				if (line ~ /^UNREACHABLE_FOLLOWUP_ISSUE:[[:space:]]*/) {
+					unreachable_followup_issue = trim(substr(line, index(line, ":") + 1))
+					next
+				}
 				if (line ~ /^=== END HEADER ===$/) {
 					state = "body"
 					next
@@ -464,6 +494,9 @@ parse_prior_ledger()
 				last_seen = ""
 				persist_count = ""
 				editor_outcomes = ""
+				u_reason = ""
+				u_security = ""
+				u_followup = ""
 				in_editor_outcomes = 0
 				next
 			}
@@ -513,6 +546,21 @@ parse_prior_ledger()
 				in_editor_outcomes = 0
 				next
 			}
+			if (line ~ /^UNREACHABLE_REASON:[[:space:]]*/) {
+				u_reason = trim(substr(line, index(line, ":") + 1))
+				in_editor_outcomes = 0
+				next
+			}
+			if (line ~ /^UNREACHABLE_SECURITY:[[:space:]]*/) {
+				u_security = trim(substr(line, index(line, ":") + 1))
+				in_editor_outcomes = 0
+				next
+			}
+			if (line ~ /^UNREACHABLE_FOLLOWUP:[[:space:]]*/) {
+				u_followup = trim(substr(line, index(line, ":") + 1))
+				in_editor_outcomes = 0
+				next
+			}
 			if (line ~ /^EDITOR_OUTCOMES:[[:space:]]*$/) {
 				editor_outcomes = ""
 				in_editor_outcomes = 1
@@ -549,6 +597,9 @@ parse_prior_ledger()
 			print "PR_NUMBER=" pr_number >> header_file
 			print "FIRST_SEEN_ITERATION=" first_seen_iteration >> header_file
 			print "LAST_UPDATED_ITERATION=" last_updated_iteration >> header_file
+			if (unreachable_followup_issue != "") {
+				print "UNREACHABLE_FOLLOWUP_ISSUE=" unreachable_followup_issue >> header_file
+			}
 		}
 	' "${ledger_file}"; then
 		return 1
@@ -562,7 +613,12 @@ rewrite_review_issues_without_residuals()
 	local keep_ids_file="$2"
 	local residual_ids_file="$3"
 	local out_file="$4"
-	gawk -v keep_file="${keep_ids_file}" -v residual_file="${residual_ids_file}" '
+	# Issue #10057: optional unreachable stubs (block<TAB>issue_id<TAB>followup)
+	# and security-hold block ids. Both default to empty, which leaves the
+	# output exactly as before.
+	local unreachable_ids_file="${5:-/dev/null}"
+	local hold_ids_file="${6:-/dev/null}"
+	gawk -v keep_file="${keep_ids_file}" -v residual_file="${residual_ids_file}" -v unreach_file="${unreachable_ids_file}" -v hold_file="${hold_ids_file}" '
 		function trim(s) {
 			sub(/^[[:space:]]+/, "", s)
 			sub(/[[:space:]]+$/, "", s)
@@ -595,6 +651,29 @@ rewrite_review_issues_without_residuals()
 			printf "LEDGER_ISSUE_ID: %s\n", issue_id
 			printf "=== END RESIDUAL ISSUE %s ===\n", block_id
 		}
+		function emit_unreachable_stub(    issue_id) {
+			issue_id = unreach[block_id]
+			if (issue_id == "") {
+				return
+			}
+			if (file_value == "") {
+				file_value = "unknown"
+			}
+			if (lines_value == "") {
+				lines_value = "unknown"
+			}
+			if (lens_value == "") {
+				lens_value = "UNKNOWN_LENS"
+			}
+			printf "=== UNREACHABLE ISSUE %s ===\n", block_id
+			printf "FILE: %s\n", file_value
+			printf "LINES: %s\n", lines_value
+			printf "LENS: %s\n", lens_value
+			print "STATUS: unreachable"
+			printf "LEDGER_ISSUE_ID: %s\n", issue_id
+			printf "FOLLOWUP: %s\n", unreach_followup[block_id]
+			printf "=== END UNREACHABLE ISSUE %s ===\n", block_id
+		}
 		BEGIN {
 			while ((getline line < keep_file) > 0) {
 				line = trim(line)
@@ -614,6 +693,25 @@ rewrite_review_issues_without_residuals()
 				}
 			}
 			close(residual_file)
+			while ((getline line < unreach_file) > 0) {
+				n = split(line, fields, "\t")
+				if (n >= 3) {
+					block = trim(fields[1])
+					issue_id = trim(fields[2])
+					if (block != "" && issue_id != "") {
+						unreach[block] = issue_id
+						unreach_followup[block] = trim(fields[3])
+					}
+				}
+			}
+			close(unreach_file)
+			while ((getline line < hold_file) > 0) {
+				line = trim(line)
+				if (line != "") {
+					hold[line] = 1
+				}
+			}
+			close(hold_file)
 			in_block = 0
 			buffer = ""
 			block_id = ""
@@ -624,9 +722,14 @@ rewrite_review_issues_without_residuals()
 				return
 			}
 			if (keep[block_id]) {
+				if (hold[block_id]) {
+					sub(/\n/, "\nUNREACHABLE: security-hold\n", buffer)
+				}
 				printf "%s", buffer
 			} else if (residual[block_id] != "") {
 				emit_residual_stub()
+			} else if (unreach[block_id] != "") {
+				emit_unreachable_stub()
 			}
 		}
 		{
@@ -667,6 +770,155 @@ rewrite_review_issues_without_residuals()
 	' "${review_issues_file}" > "${out_file}"
 }
 
+# Issue #10057: consumer protected-path rule, copied verbatim from the
+# unstage guard in scripts/review_commit_changes.sh. A parity test keeps the
+# two copies identical.
+REVIEW_UNREACHABLE_PROTECTED_PREFIX_RE='^(prompts/|\.github/scripts/|\.github/prompts/|ai-memory/|\.codex-workflow-src/|\.codex-workflow-src-main/)'
+
+ledger_support_file()
+{
+	local support_name="$1"
+	local support_dir
+	for support_dir in "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" "${SUPPORT_SCRIPTS_DIR:-}"; do
+		if [ -n "${support_dir}" ] && [ -f "${support_dir}/${support_name}" ]; then
+			printf '%s' "${support_dir}/${support_name}"
+			return 0
+		fi
+	done
+	return 1
+}
+
+unreachable_path_candidate()
+{
+	local candidate_path="$1"
+	[ -n "${candidate_path}" ] || return 1
+	[ "${candidate_path}" != "unknown" ] || return 1
+	[[ "${candidate_path}" =~ ^[A-Za-z0-9._][A-Za-z0-9._/-]*$ ]] || return 1
+	[[ ! "${candidate_path}" =~ (^|/)\.\.(/|$) ]] || return 1
+	[[ "${candidate_path}" != *//* ]] || return 1
+	return 0
+}
+
+# Issue #10057: decide from the editor's own write rules which cited paths it
+# cannot change in this PR. Writes "<path><TAB><reason>" per unreachable path.
+# Any helper that is missing or fails leaves its paths reachable (today's
+# behaviour): a path is never marked unreachable when the rule cannot decide.
+classify_unreachable_paths()
+{
+	local paths_file="$1"
+	local out_file="$2"
+	local work_dir="$3"
+	local raw_file="${work_dir}/unreachable_raw.tsv"
+	local wg_helper="" wg_out="" wg_rc=0
+	local ws_helper="" host_root="" reach_report="${work_dir}/editor_reachable.tsv"
+	: > "${out_file}"
+	: > "${raw_file}"
+	if [ ! -s "${paths_file}" ]; then
+		return 0
+	fi
+	# (a) write guard, phase review_editor (.git/**, and .github/workflows/**
+	# unless ALLOW_WORKFLOW_EDITS=true). One batched call for every path.
+	if wg_helper="$(ledger_support_file write_guard.sh)"; then
+		set +e
+		wg_out="$( (source "${wg_helper}" && write_guard_check review_editor "${paths_file}") 2>&1)"
+		wg_rc=$?
+		set -e
+		if [ "${wg_rc}" -eq 1 ]; then
+			printf '%s\n' "${wg_out}" \
+				| sed -n -E 's/^WRITE_GUARD_BLOCK: phase=review_editor path=([A-Za-z0-9._/-]+) reason=(blocked_glob|conditional_blocked_glob)( .*)?$/\1\twrite_guard/p' \
+				>> "${raw_file}" || true
+		fi
+	fi
+	# (b) consumer protected paths, unstaged by review_commit_changes.sh.
+	if [ "${IS_WORKFLOW_SOURCE_REPO:-false}" != "true" ]; then
+		{ grep -E "${REVIEW_UNREACHABLE_PROTECTED_PREFIX_RE}" "${paths_file}" || true; } \
+			| sed 's/$/\tconsumer_protected_path/' >> "${raw_file}"
+	fi
+	# (c) review sandbox admission (allowed() + frozen .claude/ inventory).
+	if ws_helper="$(ledger_support_file review_untrusted_workspace.py)"; then
+		host_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+		if PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${ws_helper}" editor-reachable "${host_root}" "${paths_file}" "${reach_report}"; then
+			awk -F '\t' '$1 == "unreachable" && NF == 3 { print $3 "\t" $2 }' "${reach_report}" >> "${raw_file}"
+		else
+			review_log "pr=${PR_NUMBER} iteration=${ITERATION} unreachable_check=error helper=editor-reachable"
+		fi
+	fi
+	awk -F '\t' 'NF >= 2 && $1 != "" && !seen[$1]++' "${raw_file}" > "${out_file}"
+}
+
+# Issue #10057: a finding that names a failing check on the PR head (as
+# listed in PR_CHECK_RUNS_CONTEXT_FILE) is never unreachable. Writes the ids
+# of review_issues blocks whose text names such a check.
+collect_ci_exempt_blocks()
+{
+	local issues_file="$1"
+	local context_file="$2"
+	local out_file="$3"
+	: > "${out_file}"
+	if [ ! -s "${issues_file}" ] || [ -z "${context_file}" ] || [ ! -s "${context_file}" ]; then
+		return 0
+	fi
+	gawk -v ctx="${context_file}" '
+		function trim(s) {
+			sub(/^[[:space:]]+/, "", s)
+			sub(/[[:space:]]+$/, "", s)
+			return s
+		}
+		BEGIN {
+			while ((getline line < ctx) > 0) {
+				if (match(line, /^failed\[([0-9]+)\]\.name: (.*)$/, m)) {
+					names[m[1]] = trim(m[2])
+				} else if (match(line, /^failed\[([0-9]+)\]\.conclusion: (.*)$/, m)) {
+					conclusions[m[1]] = trim(m[2])
+				}
+			}
+			close(ctx)
+			for (i in names) {
+				c = conclusions[i]
+				if ((c == "failure" || c == "action_required" || c == "startup_failure" || c == "stale") && length(names[i]) >= 3) {
+					failing[names[i]] = 1
+				}
+			}
+			block = ""
+		}
+		{
+			line = $0
+			if (match(line, /^=== ISSUE[[:space:]]+(.+)[[:space:]]+===$/, m)) {
+				block = trim(m[1])
+				text = ""
+				next
+			}
+			if (line ~ /^=== END ISSUE[[:space:]]+/) {
+				if (block != "") {
+					for (n in failing) {
+						if (index(text, n) > 0) {
+							print block
+							break
+						}
+					}
+				}
+				block = ""
+				next
+			}
+			if (block != "") {
+				text = text "\n" line
+			}
+		}
+	' "${issues_file}" > "${out_file}"
+}
+
+unreachable_lens_is_security()
+{
+	local lens_upper
+	lens_upper="$(printf '%s' "$1" | tr '[:lower:]' '[:upper:]')"
+	case "${lens_upper}" in
+		SECURITY*|*IMPLICIT-EXECUTION*|*TRUST-BOUNDARY*)
+			return 0
+			;;
+	esac
+	[ "${2:-}" = "SECURITY" ]
+}
+
 RUNTIME_DIR="${RUNTIME_DIR:?RUNTIME_DIR is required}"
 PR_NUMBER="${PR_NUMBER:-0}"
 PR_NUMBER="${PR_NUMBER//[^0-9]/}"
@@ -693,6 +945,22 @@ FLOOR_TAGS_FILE="${FLOOR_TAGS_FILE:-${RUNTIME_DIR}/floor_tags.txt}"
 # PR context land on .ai/review_issue_ledger/pr-0.txt — still covered by the
 # .ai/review_issue_ledger/ gitignore rule.
 REVIEW_LEDGER_PATH="${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger/pr-${PR_NUMBER}.txt}"
+# Issue #10057: record findings on paths the review editor cannot change,
+# keep them sticky, and hand them to the follow-up issue step. Default on;
+# "false" (or 0/no/off) restores the behaviour before the feature exactly.
+REVIEW_UNREACHABLE_FOLLOWUP_ENABLED="${REVIEW_UNREACHABLE_FOLLOWUP_ENABLED:-true}"
+case "$(printf '%s' "${REVIEW_UNREACHABLE_FOLLOWUP_ENABLED}" | tr '[:upper:]' '[:lower:]')" in
+	false|0|no|off)
+		REVIEW_UNREACHABLE_ACTIVE=0
+		;;
+	*)
+		REVIEW_UNREACHABLE_ACTIVE=1
+		;;
+esac
+UNREACHABLE_NEW_FILE="${UNREACHABLE_NEW_FILE:-${RUNTIME_DIR}/review_unreachable_new.tsv}"
+UNREACHABLE_ALL_FILE="${UNREACHABLE_ALL_FILE:-${RUNTIME_DIR}/review_unreachable_all.tsv}"
+UNREACHABLE_PRE_ISSUES_FILE="${UNREACHABLE_PRE_ISSUES_FILE:-${RUNTIME_DIR}/review_issues.pre_unreachable.txt}"
+rm -f "${UNREACHABLE_NEW_FILE}" "${UNREACHABLE_ALL_FILE}" "${UNREACHABLE_PRE_ISSUES_FILE}"
 
 mkdir -p "$(dirname "${LEDGER_STATUS_FILE}")"
 
@@ -724,6 +992,11 @@ status_tmp_file="${tmp_dir}/ledger_status.txt"
 keep_block_ids_file="${tmp_dir}/keep_block_ids.txt"
 residual_block_ids_file="${tmp_dir}/residual_block_ids.tsv"
 filtered_review_issues_file="${tmp_dir}/review_issues.filtered.txt"
+unreachable_paths_file="${tmp_dir}/unreachable_paths.txt"
+unreachable_result_file="${tmp_dir}/unreachable_result.tsv"
+ci_exempt_blocks_file="${tmp_dir}/ci_exempt_blocks.txt"
+unreachable_block_ids_file="${tmp_dir}/unreachable_block_ids.tsv"
+hold_block_ids_file="${tmp_dir}/hold_block_ids.txt"
 
 parse_review_issues "${REVIEW_ISSUES_FILE}" "${parsed_current_file}"
 capture_floor_map "${FLOOR_TAGS_FILE}" "${floor_map_file}"
@@ -743,6 +1016,7 @@ fi
 
 header_first_seen="${ITERATION}"
 header_last_updated="${ITERATION}"
+header_unreachable_followup=""
 if [ -s "${prior_header_file}" ]; then
 	while IFS='=' read -r key value; do
 		case "${key}" in
@@ -754,6 +1028,11 @@ if [ -s "${prior_header_file}" ]; then
 			LAST_UPDATED_ITERATION)
 				if [[ "${value}" =~ ^[0-9]+$ ]] && [ "${value}" -gt "${header_last_updated}" ]; then
 					header_last_updated="${value}"
+				fi
+				;;
+			UNREACHABLE_FOLLOWUP_ISSUE)
+				if [[ "${value}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+					header_unreachable_followup="${value}"
 				fi
 				;;
 		esac
@@ -821,9 +1100,12 @@ declare -A PRIOR_FIRST_SEEN=()
 declare -A PRIOR_LAST_SEEN=()
 declare -A PRIOR_PERSIST=()
 declare -A PRIOR_OUTCOMES=()
+declare -A PRIOR_U_REASON=()
+declare -A PRIOR_U_SECURITY=()
+declare -A PRIOR_U_FOLLOWUP=()
 
 if [ -s "${prior_entries_file}" ]; then
-	while IFS=$'\t' read -r issue_id file_path lines lens severity status first_seen last_seen persist_count editor_outcomes || [ -n "${issue_id}" ]; do
+	while IFS=$'\t' read -r issue_id file_path lines lens severity status first_seen last_seen persist_count u_reason u_security u_followup editor_outcomes || [ -n "${issue_id}" ]; do
 		[ -n "${issue_id}" ] || continue
 		PRIOR_FILE["${issue_id}"]="${file_path}"
 		PRIOR_LINES["${issue_id}"]="${lines}"
@@ -849,6 +1131,14 @@ if [ -s "${prior_entries_file}" ]; then
 		editor_outcomes="${editor_outcomes//\\n/$'\n'}"
 		editor_outcomes="${editor_outcomes//\\\\/\\}"
 		PRIOR_OUTCOMES["${issue_id}"]="${editor_outcomes}"
+		[ "${u_reason}" != "-" ] || u_reason=""
+		[ "${u_security}" = "true" ] || u_security="false"
+		if [[ ! "${u_followup}" =~ ^#[1-9][0-9]{0,9}$ ]]; then
+			u_followup="pending"
+		fi
+		PRIOR_U_REASON["${issue_id}"]="${u_reason}"
+		PRIOR_U_SECURITY["${issue_id}"]="${u_security}"
+		PRIOR_U_FOLLOWUP["${issue_id}"]="${u_followup}"
 	done < "${prior_entries_file}"
 fi
 
@@ -858,6 +1148,7 @@ declare -A CURRENT_LENS=()
 declare -A CURRENT_SEVERITY=()
 declare -A CURRENT_CLASSIFICATION=()
 declare -A CURRENT_BLOCK_ID=()
+declare -A CURRENT_FLOOR=()
 declare -A CURRENT_PRESENT=()
 declare -A ISSUE_ID_COLLISION_COUNT=()
 
@@ -908,7 +1199,30 @@ if [ -s "${current_with_ids_file}" ]; then
 		CURRENT_SEVERITY["${issue_id}"]="${severity}"
 		CURRENT_CLASSIFICATION["${issue_id}"]="${classification}"
 		CURRENT_BLOCK_ID["${issue_id}"]="${block_id}"
+		CURRENT_FLOOR["${issue_id}"]="${floor_cat}"
 	done < "${current_with_ids_file}"
+fi
+
+declare -A UNREACHABLE_PATH_REASON=()
+declare -A CI_EXEMPT_BLOCK=()
+if [ "${REVIEW_UNREACHABLE_ACTIVE}" = "1" ] && [ "${#CURRENT_PRESENT[@]}" -gt 0 ]; then
+	: > "${unreachable_paths_file}"
+	for issue_id in "${!CURRENT_PRESENT[@]}"; do
+		if unreachable_path_candidate "${CURRENT_FILE["${issue_id}"]}"; then
+			printf '%s\n' "${CURRENT_FILE["${issue_id}"]}" >> "${unreachable_paths_file}"
+		fi
+	done
+	LC_ALL=C sort -u -o "${unreachable_paths_file}" "${unreachable_paths_file}"
+	classify_unreachable_paths "${unreachable_paths_file}" "${unreachable_result_file}" "${tmp_dir}"
+	while IFS=$'\t' read -r u_path u_reason || [ -n "${u_path}" ]; do
+		[ -n "${u_path}" ] && [ -n "${u_reason}" ] || continue
+		UNREACHABLE_PATH_REASON["${u_path}"]="${u_reason}"
+	done < "${unreachable_result_file}"
+	collect_ci_exempt_blocks "${REVIEW_ISSUES_FILE}" "${PR_CHECK_RUNS_CONTEXT_FILE:-}" "${ci_exempt_blocks_file}"
+	while IFS= read -r exempt_block || [ -n "${exempt_block}" ]; do
+		[ -n "${exempt_block}" ] || continue
+		CI_EXEMPT_BLOCK["${exempt_block}"]=1
+	done < "${ci_exempt_blocks_file}"
 fi
 
 declare -A FINAL_FILE=()
@@ -920,8 +1234,15 @@ declare -A FINAL_FIRST_SEEN=()
 declare -A FINAL_LAST_SEEN=()
 declare -A FINAL_PERSIST=()
 declare -A FINAL_OUTCOMES=()
+declare -A FINAL_U_REASON=()
+declare -A FINAL_U_SECURITY=()
+declare -A FINAL_U_FOLLOWUP=()
 declare -A SEEN_FINAL=()
-declare -A COUNT_TRANSITIONS=([NEW]=0 [PERSISTING]=0 [FIXED]=0 [RESURGENT]=0 [accepted-residual]=0)
+declare -A COUNT_TRANSITIONS=([NEW]=0 [PERSISTING]=0 [FIXED]=0 [RESURGENT]=0 [accepted-residual]=0 [unreachable]=0)
+: > "${unreachable_block_ids_file}"
+: > "${hold_block_ids_file}"
+unreachable_new_rows=""
+unreachable_all_rows=""
 
 accepted_residual_added=0
 
@@ -931,7 +1252,19 @@ for issue_id in "${!CURRENT_PRESENT[@]}"; do
 	if ! [[ "${prior_persist}" =~ ^[0-9]+$ ]]; then
 		prior_persist=0
 	fi
-	if [ -z "${prior_status}" ]; then
+	current_block="${CURRENT_BLOCK_ID["${issue_id}"]:-}"
+	u_reason=""
+	u_security="false"
+	u_followup=""
+	if [ "${prior_status}" = "unreachable" ] && [ -z "${CI_EXEMPT_BLOCK["${current_block:-_}"]:-}" ]; then
+		# Issue #10057: sticky; no persist-count growth, no re-check.
+		status="unreachable"
+		persist_count="${prior_persist}"
+		first_seen="${PRIOR_FIRST_SEEN["${issue_id}"]:-${ITERATION}}"
+		u_reason="${PRIOR_U_REASON["${issue_id}"]:-}"
+		u_security="${PRIOR_U_SECURITY["${issue_id}"]:-false}"
+		u_followup="${PRIOR_U_FOLLOWUP["${issue_id}"]:-pending}"
+	elif [ -z "${prior_status}" ]; then
 		status="NEW"
 		persist_count=1
 		first_seen="${ITERATION}"
@@ -956,11 +1289,24 @@ for issue_id in "${!CURRENT_PRESENT[@]}"; do
 				;;
 		esac
 	fi
-	if [ "${status}" != "accepted-residual" ] && [ "${persist_count}" -ge "${REVIEW_LEDGER_PERSIST_LIMIT}" ]; then
+	if [ "${REVIEW_UNREACHABLE_ACTIVE}" = "1" ] && [ "${status}" != "unreachable" ] && [ "${status}" != "accepted-residual" ] \
+		&& [ -n "${UNREACHABLE_PATH_REASON["${CURRENT_FILE["${issue_id}"]}"]:-}" ] \
+		&& [ -z "${CI_EXEMPT_BLOCK["${current_block:-_}"]:-}" ]; then
+		status="unreachable"
+		u_reason="${UNREACHABLE_PATH_REASON["${CURRENT_FILE["${issue_id}"]}"]}"
+		if unreachable_lens_is_security "${CURRENT_LENS["${issue_id}"]}" "${CURRENT_FLOOR["${issue_id}"]:-}"; then
+			u_security="true"
+		fi
+		u_followup="pending"
+	fi
+	if [ "${status}" != "accepted-residual" ] && [ "${status}" != "unreachable" ] && [ "${persist_count}" -ge "${REVIEW_LEDGER_PERSIST_LIMIT}" ]; then
 		status="accepted-residual"
 		accepted_residual_added=$((accepted_residual_added + 1))
 	fi
 	case "${status}" in
+		unreachable)
+			COUNT_TRANSITIONS[unreachable]=$((COUNT_TRANSITIONS[unreachable] + 1))
+			;;
 		NEW)
 			COUNT_TRANSITIONS[NEW]=$((COUNT_TRANSITIONS[NEW] + 1))
 			;;
@@ -991,8 +1337,26 @@ for issue_id in "${!CURRENT_PRESENT[@]}"; do
 	FINAL_LAST_SEEN["${issue_id}"]="${last_seen}"
 	FINAL_PERSIST["${issue_id}"]="${persist_count}"
 	FINAL_OUTCOMES["${issue_id}"]="${PRIOR_OUTCOMES["${issue_id}"]:-}"
+	FINAL_U_REASON["${issue_id}"]="${u_reason}"
+	FINAL_U_SECURITY["${issue_id}"]="${u_security}"
+	FINAL_U_FOLLOWUP["${issue_id}"]="${u_followup}"
 	SEEN_FINAL["${issue_id}"]=1
-	if [ "${status}" != "accepted-residual" ] && [ -n "${CURRENT_BLOCK_ID["${issue_id}"]:-}" ]; then
+	if [ "${status}" = "unreachable" ]; then
+		unreachable_all_rows+="${issue_id}"$'\t'"${CURRENT_FILE["${issue_id}"]}"$'\t'"${CURRENT_LINES["${issue_id}"]:--}"$'\t'"${CURRENT_LENS["${issue_id}"]}"$'\t'"${u_security}"$'\t'"${u_reason:-unknown}"$'\t'"${u_followup}"$'\n'
+		if [ "${u_followup}" = "pending" ]; then
+			unreachable_new_rows+="${issue_id}"$'\t'"${CURRENT_FILE["${issue_id}"]}"$'\t'"${CURRENT_LINES["${issue_id}"]:--}"$'\t'"${CURRENT_LENS["${issue_id}"]}"$'\t'"${u_security}"$'\t'"${u_reason:-unknown}"$'\t'"${current_block:--}"$'\n'
+		fi
+	fi
+	if [ "${status}" = "unreachable" ] && [ -n "${current_block}" ]; then
+		if [ "${u_security}" = "true" ]; then
+			# Security findings keep blocking (issue §1): the block stays
+			# in the editor input, annotated, and the existing path runs.
+			printf '%s\n' "${current_block}" >> "${keep_block_ids_file}"
+			printf '%s\n' "${current_block}" >> "${hold_block_ids_file}"
+		else
+			printf '%s\t%s\t%s\n' "${current_block}" "${issue_id}" "${u_followup}" >> "${unreachable_block_ids_file}"
+		fi
+	elif [ "${status}" != "accepted-residual" ] && [ -n "${CURRENT_BLOCK_ID["${issue_id}"]:-}" ]; then
 		printf '%s\n' "${CURRENT_BLOCK_ID["${issue_id}"]}" >> "${keep_block_ids_file}"
 	elif [ "${status}" = "accepted-residual" ] && [ -n "${CURRENT_BLOCK_ID["${issue_id}"]:-}" ]; then
 		printf '%s\t%s\n' "${CURRENT_BLOCK_ID["${issue_id}"]}" "${issue_id}" >> "${residual_block_ids_file}"
@@ -1009,7 +1373,7 @@ for issue_id in "${!PRIOR_STATUS[@]}"; do
 		continue
 	fi
 	prior_status="${PRIOR_STATUS["${issue_id}"]}"
-	if [ "${prior_status}" = "FIXED" ] || [ "${prior_status}" = "accepted-residual" ]; then
+	if [ "${prior_status}" = "FIXED" ] || [ "${prior_status}" = "accepted-residual" ] || [ "${prior_status}" = "unreachable" ]; then
 		status="${prior_status}"
 	else
 		status="FIXED"
@@ -1037,7 +1401,16 @@ for issue_id in "${!PRIOR_STATUS[@]}"; do
 	FINAL_LAST_SEEN["${issue_id}"]="${last_seen}"
 	FINAL_PERSIST["${issue_id}"]="${persist_count}"
 	FINAL_OUTCOMES["${issue_id}"]="${PRIOR_OUTCOMES["${issue_id}"]}"
+	FINAL_U_REASON["${issue_id}"]="${PRIOR_U_REASON["${issue_id}"]:-}"
+	FINAL_U_SECURITY["${issue_id}"]="${PRIOR_U_SECURITY["${issue_id}"]:-false}"
+	FINAL_U_FOLLOWUP["${issue_id}"]="${PRIOR_U_FOLLOWUP["${issue_id}"]:-pending}"
 	SEEN_FINAL["${issue_id}"]=1
+	if [ "${status}" = "unreachable" ]; then
+		unreachable_all_rows+="${issue_id}"$'\t'"${PRIOR_FILE["${issue_id}"]}"$'\t'"${PRIOR_LINES["${issue_id}"]:--}"$'\t'"${PRIOR_LENS["${issue_id}"]}"$'\t'"${FINAL_U_SECURITY["${issue_id}"]}"$'\t'"${FINAL_U_REASON["${issue_id}"]:-unknown}"$'\t'"${FINAL_U_FOLLOWUP["${issue_id}"]}"$'\n'
+		if [ "${FINAL_U_FOLLOWUP["${issue_id}"]}" = "pending" ]; then
+			unreachable_new_rows+="${issue_id}"$'\t'"${PRIOR_FILE["${issue_id}"]}"$'\t'"${PRIOR_LINES["${issue_id}"]:--}"$'\t'"${PRIOR_LENS["${issue_id}"]}"$'\t'"${FINAL_U_SECURITY["${issue_id}"]}"$'\t'"${FINAL_U_REASON["${issue_id}"]:-unknown}"$'\t-\n'
+		fi
+	fi
 	display_outcomes="$(format_editor_outcomes_for_status "${PRIOR_OUTCOMES["${issue_id}"]}")"
 	printf '%s\t%s\t%s\t%s:%s\t%s\t%s\n' \
 		"${issue_id}" "${status}" "${persist_count}" \
@@ -1050,6 +1423,9 @@ done
 	echo "PR_NUMBER: ${PR_NUMBER}"
 	echo "FIRST_SEEN_ITERATION: ${header_first_seen}"
 	echo "LAST_UPDATED_ITERATION: ${header_last_updated}"
+	if [ "${REVIEW_UNREACHABLE_ACTIVE}" = "1" ] && [ -n "${header_unreachable_followup}" ]; then
+		echo "UNREACHABLE_FOLLOWUP_ISSUE: ${header_unreachable_followup}"
+	fi
 	echo "=== END HEADER ==="
 	echo
 } > "${new_entries_file}"
@@ -1066,7 +1442,10 @@ while IFS= read -r issue_id || [ -n "${issue_id}" ]; do
 		"${FINAL_FIRST_SEEN["${issue_id}"]}" \
 		"${FINAL_LAST_SEEN["${issue_id}"]}" \
 		"${FINAL_PERSIST["${issue_id}"]}" \
-		"${FINAL_OUTCOMES["${issue_id}"]}"
+		"${FINAL_OUTCOMES["${issue_id}"]}" \
+		"${FINAL_U_REASON["${issue_id}"]:-}" \
+		"${FINAL_U_SECURITY["${issue_id}"]:-}" \
+		"${FINAL_U_FOLLOWUP["${issue_id}"]:-}"
 	echo >> "${new_entries_file}"
 done < <(printf '%s\n' "${!SEEN_FINAL[@]}" | LC_ALL=C sort)
 
@@ -1078,9 +1457,25 @@ else
 	: > "${LEDGER_STATUS_FILE}"
 fi
 
-rewrite_review_issues_without_residuals "${REVIEW_ISSUES_FILE}" "${keep_block_ids_file}" "${residual_block_ids_file}" "${filtered_review_issues_file}"
+if [ "${REVIEW_UNREACHABLE_ACTIVE}" = "1" ]; then
+	# Issue #10057: hand-off for review_apply_fixes.sh (follow-up issue) and
+	# the editor-summary comment. The pre-rewrite copy keeps the reviewer
+	# text of stubbed blocks for the follow-up issue body.
+	if [ -n "${unreachable_new_rows}" ]; then
+		cp "${REVIEW_ISSUES_FILE}" "${UNREACHABLE_PRE_ISSUES_FILE}"
+	fi
+	printf '%s' "${unreachable_new_rows}" | LC_ALL=C sort > "${UNREACHABLE_NEW_FILE}"
+	printf '%s' "${unreachable_all_rows}" | LC_ALL=C sort > "${UNREACHABLE_ALL_FILE}"
+	rewrite_review_issues_without_residuals "${REVIEW_ISSUES_FILE}" "${keep_block_ids_file}" "${residual_block_ids_file}" "${filtered_review_issues_file}" "${unreachable_block_ids_file}" "${hold_block_ids_file}"
+else
+	rewrite_review_issues_without_residuals "${REVIEW_ISSUES_FILE}" "${keep_block_ids_file}" "${residual_block_ids_file}" "${filtered_review_issues_file}"
+fi
 mv "${filtered_review_issues_file}" "${REVIEW_ISSUES_FILE}"
 
-review_log "pr=${PR_NUMBER} iteration=${ITERATION} ledger_prior_entries=${prior_entries_count} transitions=NEW:${COUNT_TRANSITIONS[NEW]},PERSISTING:${COUNT_TRANSITIONS[PERSISTING]},FIXED:${COUNT_TRANSITIONS[FIXED]},RESURGENT:${COUNT_TRANSITIONS[RESURGENT]},accepted-residual:${COUNT_TRANSITIONS[accepted-residual]} accepted_residual_added=${accepted_residual_added} ledger_reset=${ledger_reset} hash_collision=${auto_collision_count}"
+ledger_unreachable_transition=""
+if [ "${REVIEW_UNREACHABLE_ACTIVE}" = "1" ]; then
+	ledger_unreachable_transition=",unreachable:${COUNT_TRANSITIONS[unreachable]}"
+fi
+review_log "pr=${PR_NUMBER} iteration=${ITERATION} ledger_prior_entries=${prior_entries_count} transitions=NEW:${COUNT_TRANSITIONS[NEW]},PERSISTING:${COUNT_TRANSITIONS[PERSISTING]},FIXED:${COUNT_TRANSITIONS[FIXED]},RESURGENT:${COUNT_TRANSITIONS[RESURGENT]},accepted-residual:${COUNT_TRANSITIONS[accepted-residual]}${ledger_unreachable_transition} accepted_residual_added=${accepted_residual_added} ledger_reset=${ledger_reset} hash_collision=${auto_collision_count}"
 
 exit 0

@@ -59,6 +59,11 @@ Optional carry-over input:
   diff change that materially strengthens the evidence.
 - When you suppress a repeated prior-round decision, emit
   `RE_REVIEW_SKIP: <issue_id> <prior_decision>` outside issue blocks.
+- If `prior_decision` is `unreachable-followup` (ledger `status=unreachable`),
+  the finding names a file the autofix editor may not change in this PR and
+  is tracked in a follow-up issue. Treat it as sticky, like
+  `already-rejected-with-evidence`: never re-raise it as `must-fix`. A
+  re-emitted copy is matched by the ledger and kept out of fix rounds.
 
 Slop-scan heuristic input:
 - The prompt may include a `=== BEGIN UNTRUSTED SLOP SCAN FINDINGS ===` block.

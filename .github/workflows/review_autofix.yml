@@ -2103,6 +2103,9 @@ jobs:
       REVIEW_LEDGER_REREVIEW_ENABLED: ${{ vars.REVIEW_LEDGER_REREVIEW_ENABLED || 'false' }}
       REVIEW_LEDGER_PERSIST_LIMIT: ${{ vars.REVIEW_LEDGER_PERSIST_LIMIT || '2' }}
       REVIEW_LEDGER_PATH: ${{ vars.REVIEW_LEDGER_PATH || format('.ai/review_issue_ledger/pr-{0}.txt', inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || '0') }}
+      # Issue #10057: record findings on paths the editor cannot change, open one
+      # follow-up issue per PR, and stop them from starting fix rounds.
+      REVIEW_UNREACHABLE_FOLLOWUP_ENABLED: ${{ vars.REVIEW_UNREACHABLE_FOLLOWUP_ENABLED || 'true' }}
       REVIEW_APPROVAL_RUBRIC_ENABLED: ${{ vars.REVIEW_APPROVAL_RUBRIC_ENABLED || 'false' }}
       REVIEW_BREAK_GLASS_ENABLED: ${{ vars.REVIEW_BREAK_GLASS_ENABLED || 'false' }}
       REVIEW_REVIEWER_CHECKLIST_ENABLED: ${{ vars.REVIEW_REVIEWER_CHECKLIST_ENABLED || '1' }}

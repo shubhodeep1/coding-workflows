@@ -48,6 +48,14 @@ LOG_TAIL_STEP_ERROR_MARKER = "##[error]"
 LOG_TAIL_STEP_EXIT_MARKER = "##[error]Process completed with exit code"
 LOG_TAIL_STEP_ERROR_AFTER_LINES = 5
 FAILURE_CONCLUSIONS = {"failure", "timed_out", "action_required", "cancelled", "stale", "startup_failure"}
+# Issue #10057: conclusions that mean "the job produced no result".
+NO_RESULT_CONCLUSIONS = {"cancelled", "timed_out"}
+
+
+def _no_result_split_enabled() -> bool:
+	return os.environ.get("REVIEW_UNREACHABLE_FOLLOWUP_ENABLED", "false").strip().lower() == "true"
+
+
 # Full commit SHA accepted for PR_CHECK_RUNS_HEAD_SHA_OVERRIDE (#6918).
 _HEAD_SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
 # Cap on check identities listed per CHECK_RUNS_WAIT_PENDING line.
@@ -581,6 +589,21 @@ def _build_context_text(*, raw_text: str, head_sha: str, final_status: str) -> s
 		if run.get("status") == "completed"
 		and (run.get("conclusion") or "") in FAILURE_CONCLUSIONS
 	]
+	# Issue #10057: a cancelled or timed-out job produced no result, so in
+	# reviewer/editor context it is listed under no_result[] instead of
+	# failed[]. Off unless the caller sets REVIEW_UNREACHABLE_FOLLOWUP_ENABLED
+	# to "true" (review_autofix.yml does, default on): check_failure_triage.sh
+	# runs this collector too and keeps its output unchanged. Never applied to
+	# the clean-result merge probe (CHECK_RUNS_EXCLUDE_SELF_FROM_CONTEXT), so a
+	# cancelled required check still blocks merge; FAILURE_CONCLUSIONS is
+	# unchanged.
+	no_result: list[dict[str, Any]] = []
+	if (
+		_no_result_split_enabled()
+		and os.environ.get("CHECK_RUNS_EXCLUDE_SELF_FROM_CONTEXT", "false") != "true"
+	):
+		no_result = [run for run in failed if (run.get("conclusion") or "") in NO_RESULT_CONCLUSIONS]
+		failed = [run for run in failed if (run.get("conclusion") or "") not in NO_RESULT_CONCLUSIONS]
 	log_tail_bytes = _clamp_log_tail_bytes(os.environ.get("CHECK_RUNS_LOG_TAIL_BYTES", str(DEFAULT_LOG_TAIL_BYTES)))
 	repository = os.environ.get("GITHUB_REPOSITORY", "")
 	token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
@@ -592,6 +615,8 @@ def _build_context_text(*, raw_text: str, head_sha: str, final_status: str) -> s
 	buf.write(f"total_check_runs: {len(runs)}\n")
 	buf.write(f"failed_count: {len(failed)}\n")
 	buf.write(f"incomplete_count: {len(incomplete)}\n")
+	if no_result:
+		buf.write(f"no_result_count: {len(no_result)}\n")
 	buf.write("\n")
 	if not failed and not incomplete and final_status not in ("api_error",):
 		buf.write("No failed or incomplete check-runs detected on the PR head SHA.\n")
@@ -630,6 +655,11 @@ def _build_context_text(*, raw_text: str, head_sha: str, final_status: str) -> s
 		buf.write(f"incomplete[{idx}].name: {_short(run.get('name'))}\n")
 		buf.write(f"incomplete[{idx}].status: {_short(run.get('status'))}\n")
 		buf.write(f"incomplete[{idx}].html_url: {_short(run.get('html_url'))}\n")
+		buf.write("\n")
+	for idx, run in enumerate(no_result):
+		buf.write(f"no_result[{idx}].name: {_short(run.get('name'))}\n")
+		buf.write(f"no_result[{idx}].conclusion: {_short(run.get('conclusion'))}\n")
+		buf.write(f"no_result[{idx}].html_url: {_short(run.get('html_url'))}\n")
 		buf.write("\n")
 	return buf.getvalue()
 
