@@ -4109,7 +4109,8 @@ jobs:
       # it measured 15m19s (run 43352637124, #9450, later than #9363's run), so
       # what raised it to 19m01s is not identified. This job has the only
       # 30-minute budget. Group choice: the
-      # newest recorded overruns (#9916 above) name shards 0 and 3, which hit
+      # newest recorded overruns (#9839 and #9854 above; #9916 then raised the
+      # timeout to 30 minutes) name shards 0 and 3, which hit
       # 20.2 minutes; group 1 has not been named by budget-watch since #8805
       # moved a step out after it took 16m44s (its 20m12s in #8396 predates
       # that and the step it carried then now runs in group 3). Groups 2 and 4
@@ -4119,6 +4120,11 @@ jobs:
       # measure the step timings before moving anything again. Name and body
       # unchanged; only the group guard is new.
       # In the older text below, "this job" means tests-release-and-log-analysis.
+      # Its bounded base-commit fetch is that job's own step: orchestrate-poll
+      # checks out at depth 1 and fetches no base commit on push and
+      # pull_request runs (its merge-ref check runs only on workflow_dispatch),
+      # the shape both steps had in tests-promote-stall-and-review and
+      # tests-heal-plan-and-validation before #9363.
       # Moved from tests-promote-stall-and-review, which took 21m25s of its 20
       # minutes on main (run 43138350536, budget-watch issue #9363). The run's
       # step timings were not readable; the pick is an estimate from test and
@@ -4153,7 +4159,9 @@ jobs:
       # there). The 4 local shards run after the poll shard step, so
       # they do not compete with it. Name and body unchanged; only the group
       # guard is new. In the older text below, "this job" means the job named
-      # at each move.
+      # at each move; the base-commit fetch it names is
+      # tests-release-and-log-analysis's, not orchestrate-poll's (see the step
+      # above).
       # Moved on from tests-promote-stall-and-review with the step above
       # (budget-watch issue #9363). In the #9018 text below, "this job" means
       # tests-promote-stall-and-review; the Node pair it mentions now runs in
