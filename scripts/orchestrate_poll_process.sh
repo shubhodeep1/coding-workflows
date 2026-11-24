@@ -40459,7 +40459,11 @@ _review_gate_rate_limit_requeue_decide() {
 		# that names a different head (over-counting escalates early: fail safe).
 		# A later non-marker pipeline comment (a completed review) also closes
 		# the window, so gate markers of an episode it resolved stop counting;
-		# $retries never resets, so the cap still holds.
+		# $retries never resets, so the cap still holds. In practice any
+		# trusted-login comment without a requeue/escalation marker (a plain
+		# human comment from a PAT account included) and any github-actions
+		# comment without a gate marker close this $gate_reruns window; that
+		# is safe only because $retries counts every requeue on this head.
 		| ([range(0; $c | length) | select(
 			((($c[.].a // "") == "github-actions") and ($c[.].gate | valid_gate) and ($c[.].gate.head | sha) and $c[.].gate.head != $e.oid)
 			or ((($c[.].a // "") == $login) and ($c[.].gate_retry | type) == "object" and ($c[.].gate_retry.head | sha) and $c[.].gate_retry.head != $e.oid)
