@@ -47,7 +47,7 @@ env:
 
 jobs:
   unblock-judge:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
     timeout-minutes: 45
     steps:
       - name: Resolve trusted unblock support commit

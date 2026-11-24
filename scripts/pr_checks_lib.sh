@@ -1031,8 +1031,15 @@ _pr_auto_merge_required_ci_check_name()
 # the final run's `lint` binds and a queued final run counts as pending.
 # Without this, a head whose only CI run is its final run never binds
 # `lint` and the wait always timed out (`ci_state=absent`).
-# Input: head SHA. Output: PR_CHECKS_RUNS_PENDING, PR_CHECKS_RUNS_UNRUN
-# (integers), PR_CHECKS_RUNS_IDS (comma-separated run ids of the listed
+# Issue #9983: PR_CHECKS_RUNS_PENDING_LIVE is PR_CHECKS_RUNS_PENDING minus
+# the wedged runs: a run whose status is queued, requested, pending or
+# waiting and whose created_at is at least ZOMBIE_RUN_MAX_QUEUED_HOURS old
+# (_merge_lease_wedged_queued_seconds, the #9473 rule; default 24). A run
+# with a missing or malformed created_at, or an unreadable clock, stays live
+# (fail-open). Only the merge-lease activity decisions read it; every other
+# caller keeps PR_CHECKS_RUNS_PENDING. Same jq pass, no extra call.
+# Input: head SHA. Output: PR_CHECKS_RUNS_PENDING, PR_CHECKS_RUNS_UNRUN,
+# PR_CHECKS_RUNS_PENDING_LIVE (integers), PR_CHECKS_RUNS_IDS (comma-separated run ids of the listed
 # workflows on the head, self excluded) and PR_CHECKS_RUNS_READ
 # (true | false when the read failed or was skipped | disabled), return 0.
 # API calls: one REST `actions/runs?head_sha=` read (per_page=100); none
@@ -1056,6 +1063,7 @@ _pr_head_ci_runs_pending()
 	local head_sha="$1" repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" names_csv runs_json self_run
 	PR_CHECKS_RUNS_PENDING=0
 	PR_CHECKS_RUNS_UNRUN=0
+	PR_CHECKS_RUNS_PENDING_LIVE=0
 	PR_CHECKS_RUNS_READ="false"
 	PR_CHECKS_RUNS_IDS=""
 	PR_CHECKS_RUNS_RAW_JSON=""
@@ -1070,21 +1078,37 @@ _pr_head_ci_runs_pending()
 	# final-CI check in _pr_wait_for_required_checks reuses this listing
 	# instead of reading the runs again (§15).
 	PR_CHECKS_RUNS_RAW_JSON="${runs_json}"
-	local counts
-	counts="$(printf '%s' "${runs_json}" | jq -r --arg names "${names_csv}" --arg self_run "${self_run}" "${PR_CHECKS_JQ_WAIT_WORKFLOW_KEY_DEF}"'
+	local counts runs_now runs_wedged_s
+	runs_now="$(date -u +%s 2>/dev/null)" || runs_now=0
+	[[ "${runs_now}" =~ ^[0-9]+$ ]] || runs_now=0
+	runs_wedged_s="$(_merge_lease_wedged_queued_seconds 2>/dev/null)" || runs_wedged_s=0
+	[[ "${runs_wedged_s}" =~ ^[0-9]+$ ]] || runs_wedged_s=0
+	counts="$(printf '%s' "${runs_json}" | jq -r --arg names "${names_csv}" --arg self_run "${self_run}" \
+		--argjson now "${runs_now}" --argjson wedged_s "${runs_wedged_s}" "${PR_CHECKS_JQ_WAIT_WORKFLOW_KEY_DEF}"'
+		def _runs_wedged:
+			$wedged_s > 0 and $now > 0
+			and ((.status // "") as $s | $s == "queued" or $s == "requested" or $s == "pending" or $s == "waiting")
+			and (.created_at
+				| if type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$")
+					then ((sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) <= ($now - $wedged_s))
+					else false
+					end);
 		($names | split(",") | map(gsub("^\\s+|\\s+$"; "") | ascii_downcase) | map(select(length > 0))) as $wanted
 		| [(.workflow_runs // [])[]
 			| select((.id | tostring) != $self_run)
 			| select(_wait_wf_key($wanted) != "")] as $runs
 		| ($runs | map(select(.status != "completed")) | length) as $pending
+		| ($runs | map(select(.status != "completed" and (_runs_wedged | not))) | length) as $live
 		| ($runs | group_by(_wait_wf_key($wanted))
 			| map(select(all(.[]; .status == "completed" and (.conclusion == "cancelled" or .conclusion == "startup_failure"))))
 			| length) as $unrun
-		| "\($pending) \($unrun)"' 2>/dev/null | tail -n1)"
-	PR_CHECKS_RUNS_PENDING="${counts%% *}"
-	PR_CHECKS_RUNS_UNRUN="${counts##* }"
+		| "\($pending) \($unrun) \($live)"' 2>/dev/null | tail -n1)"
+	# Three fields since #9983: read them by position, so the live count never
+	# lands in PR_CHECKS_RUNS_UNRUN.
+	read -r PR_CHECKS_RUNS_PENDING PR_CHECKS_RUNS_UNRUN PR_CHECKS_RUNS_PENDING_LIVE _ <<< "${counts}" || true
 	[[ "${PR_CHECKS_RUNS_PENDING}" =~ ^[0-9]+$ ]] || PR_CHECKS_RUNS_PENDING=0
 	[[ "${PR_CHECKS_RUNS_UNRUN}" =~ ^[0-9]+$ ]] || PR_CHECKS_RUNS_UNRUN=0
+	[[ "${PR_CHECKS_RUNS_PENDING_LIVE}" =~ ^[0-9]+$ ]] || PR_CHECKS_RUNS_PENDING_LIVE="${PR_CHECKS_RUNS_PENDING}"
 	# Run ids of the listed workflows on this head (self excluded), for the
 	# named CI check binding (issue #6963). Same listing, no extra call.
 	local run_ids
@@ -1751,7 +1775,13 @@ _pr_base_freshness()
 	# The PR's own paths: `--paginate --slurp` yields an array of pages,
 	# each an array of file objects; renames count under both names.
 	local pr_files_json tmp_compare tmp_pr_files overlap freshness_soft_input=""
-	pr_files_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${repo}/pulls/${pr_number}/files?per_page=100" 2>/dev/null || echo "{}")"
+	# Issue #9928: in the review job (GH_PR_READ_CACHE_JOB set) the files list
+	# comes from the run-local PR read cache, one flat array keyed by head.
+	if [ -n "${GH_PR_READ_CACHE_JOB:-}" ] && type gh_pr_cached_read >/dev/null 2>&1; then
+		pr_files_json="$(gh_pr_cached_read files "${repo}" "${pr_number}" "${head_sha}" 2>/dev/null || echo "{}")"
+	else
+		pr_files_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${repo}/pulls/${pr_number}/files?per_page=100" 2>/dev/null || echo "{}")"
+	fi
 	if ! tmp_compare="$(mktemp "${TMPDIR:-/tmp}/pr_base_compare.XXXXXX" 2>/dev/null)"; then
 		PR_BASE_FRESHNESS_LAST_REASON="tmp_failed"
 		PR_BASE_FRESHNESS_OUTCOME="unknown"
@@ -1912,7 +1942,9 @@ _pr_base_sync_for_fresh_ci()
 # API budget (§15): one `user` read and one paginated issue-comments read,
 # only on the overlap path. No earlier call in this file reads comments or
 # the token's login; the review gate's own comments read happens in another
-# job and cannot be shared.
+# job and cannot be shared. In the review job (GH_PR_READ_CACHE_JOB set) the
+# comments read goes through the run-local PR read cache (issue #9928; keyed
+# with no head SHA, so it expires after 120 s and PR writes evict it).
 _pr_base_sync_count()
 {
 	local pr_number="$1"
@@ -1926,7 +1958,11 @@ _pr_base_sync_count()
 	# Kept for the review sweep's base sync, which trusts only this login's
 	# ai-review/head-gate status (scripts/review_final_ci_sweep.sh).
 	PR_BASE_SYNC_LOGIN="${sync_login}"
-	sync_comments_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${repo}/issues/${pr_number}/comments?per_page=100" 2>/dev/null)" || return 1
+	if [ -n "${GH_PR_READ_CACHE_JOB:-}" ] && type gh_pr_cached_read >/dev/null 2>&1; then
+		sync_comments_json="$(gh_pr_cached_read issue_comments "${repo}" "${pr_number}" 2>/dev/null)" || return 1
+	else
+		sync_comments_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${repo}/issues/${pr_number}/comments?per_page=100" 2>/dev/null)" || return 1
+	fi
 	PR_BASE_SYNC_COUNT="$(printf '%s' "${sync_comments_json}" | jq -r --arg login "${sync_login}" --arg pr "${pr_number}" '
 		[ .[]? | if type == "array" then .[] else . end
 		  | select(type == "object" and ((.user.login // "") == $login))
@@ -2082,6 +2118,11 @@ _pr_base_sync_marker_post()
 		echo "MERGE_BASE_SYNC_MARKER pr=${pr_number} head_sha=${head_sha} sync=${sync_number} merge=${sync_merge_sha} outcome=posted"
 	else
 		echo "::warning::MERGE_BASE_SYNC_MARKER pr=${pr_number} head_sha=${head_sha} sync=${sync_number} outcome=failed (the synchronize run reviews normally)"
+	fi
+	# Issue #9928: this bare POST bypasses the gh_retry eviction hook, so drop
+	# the run-local cached comments (a failed attempt may still have posted).
+	if type gh_pr_cache_evict >/dev/null 2>&1; then
+		gh_pr_cache_evict "${repo}" "${pr_number}" issue_comments >/dev/null 2>&1 || true
 	fi
 	return 0
 }
@@ -2869,17 +2910,74 @@ _merge_lease_max_holders()
 }
 
 # _merge_lease_skips_normalize <skips> [<drop pr>]: the skip list (newline-
-# separated `pr:head`) with malformed entries and <drop pr>'s entries removed,
-# duplicates collapsed to their last position, and only the newest 50 kept.
+# separated `pr:head` or, since #9983, `pr:head:reason`) with malformed
+# entries and <drop pr>'s entries removed, duplicates (same `pr:head`)
+# collapsed to their last position (so a newer reason replaces an older one),
+# and only the newest 50 kept. The reason is `[a-z][a-z_]{0,39}`, never
+# evaluated.
 _merge_lease_skips_normalize()
 {
 	local lease_skip_drop="${2:-}"
-	{ printf '%s\n' "${1:-}" | grep -E '^[1-9][0-9]*:[0-9a-f]{40}$' || true; } \
-		| awk -F: -v drop="${lease_skip_drop}" '$1 != drop { line[NR] = $0; last[$0] = NR }
-			END { for (i = 1; i <= NR; i++) if ((i in line) && last[line[i]] == i) print line[i] }' \
+	{ printf '%s\n' "${1:-}" | grep -E '^[1-9][0-9]*:[0-9a-f]{40}(:[a-z][a-z_]{0,39})?$' || true; } \
+		| awk -F: -v drop="${lease_skip_drop}" '$1 != drop { key = $1 ":" $2; line[NR] = $0; lkey[NR] = key; last[key] = NR }
+			END { for (i = 1; i <= NR; i++) if ((i in line) && last[lkey[i]] == i) print line[i] }' \
 		| tail -n 50
 	return 0
 }
+
+# Skip-entry classes (issue #9983, G5/G6). A "soft" entry was written for
+# revoked_no_head_gate, or has no reason field (every entry written before
+# #9983 is read that way, so PRs parked by the old rule are released once):
+# it stops blocking once the PR's pipeline head-gate is `success` on the
+# entry head. Any other reason is "hard": it blocks until the head changes.
+# No API call in any of these.
+# _merge_lease_skip_is_soft <entry>: 0 when <entry> is a valid soft entry.
+_merge_lease_skip_is_soft()
+{
+	local lease_soft_entry="${1:-}"
+	[[ "${lease_soft_entry}" =~ ^[1-9][0-9]*:[0-9a-f]{40}(:([a-z][a-z_]{0,39}))?$ ]] || return 1
+	[ -z "${BASH_REMATCH[2]:-}" ] || [ "${BASH_REMATCH[2]}" = "revoked_no_head_gate" ]
+}
+
+# _merge_lease_skips_hard <skips> / _merge_lease_skips_soft <skips>: the valid
+# entries of one class, in list order (newline-separated, may be empty).
+_merge_lease_skips_hard()
+{
+	{ printf '%s\n' "${1:-}" | grep -E '^[1-9][0-9]*:[0-9a-f]{40}(:[a-z][a-z_]{0,39})?$' || true; } \
+		| awk -F: 'NF == 3 && $3 != "revoked_no_head_gate"'
+	return 0
+}
+
+_merge_lease_skips_soft()
+{
+	{ printf '%s\n' "${1:-}" | grep -E '^[1-9][0-9]*:[0-9a-f]{40}(:[a-z][a-z_]{0,39})?$' || true; } \
+		| awk -F: 'NF == 2 || $3 == "revoked_no_head_gate"'
+	return 0
+}
+
+# _merge_lease_wedged_queued_seconds (issue #9983, G3): the age in seconds at
+# which a queued run counts as wedged, not as activity. Reuses the #9473
+# reaper's ZOMBIE_RUN_MAX_QUEUED_HOURS (default 24 here, as in
+# scripts/review_autofix_sweep_reaper.sh); a value that is not a positive
+# whole number of at most six digits uses 24 and prints one ::warning:: to
+# stderr (the value itself is not echoed). No API call.
+_merge_lease_wedged_queued_seconds()
+{
+	local lease_wedged_hours="${ZOMBIE_RUN_MAX_QUEUED_HOURS:-24}"
+	if ! [[ "${lease_wedged_hours}" =~ ^[1-9][0-9]{0,5}$ ]]; then
+		echo "::warning::ZOMBIE_RUN_MAX_QUEUED_HOURS is not a positive whole number of hours; using 24" >&2
+		lease_wedged_hours=24
+	fi
+	echo $((lease_wedged_hours * 3600))
+}
+
+# Review workflow names whose runs on a holder's head count as activity for
+# the head-gate grace (issue #9983, G1): `name:` of
+# .github/workflows/internal-review.yml ("Internal: AI Review & Autofix") and
+# of workflow-templates/ai-review.yml ("AI Review"). A library constant, not
+# an env var. Their `[pr:<n>]` dispatch runs also match through
+# PR_CHECKS_JQ_WAIT_WORKFLOW_KEY_DEF when they run on the head.
+_MERGE_LEASE_REVIEW_RUN_NAMES="Internal: AI Review & Autofix,AI Review"
 
 # Ref name without the leading "refs/" (the git/ref API path form).
 _merge_lease_ref_name()
@@ -3435,7 +3533,11 @@ _merge_lease_queue_first()
 		if [ -n "${lease_exclude}" ] && printf ',%s,' "${lease_exclude}" | grep -Fq ",${lease_num},"; then
 			continue
 		fi
-		if [ -n "${lease_skips}" ] && [ -n "${lease_row_head}" ] && printf '%s\n' "${lease_skips}" | grep -Fxq -- "${lease_num}:${lease_row_head}"; then
+		# An entry matches on its first two fields, so `pr:head` and
+		# `pr:head:reason` (issue #9983) both apply. Both values are validated
+		# (digits, 40 hex) before they go into the pattern.
+		if [ -n "${lease_skips}" ] && [[ "${lease_row_head}" =~ ^[0-9a-f]{40}$ ]] \
+			&& printf '%s\n' "${lease_skips}" | grep -Eq -- "^${lease_num}:${lease_row_head}(:|\$)"; then
 			continue
 		fi
 		lease_key="$(_merge_lease_order_key "${lease_num}" "${lease_labels}" "${lease_row_ref}")"
@@ -3482,14 +3584,36 @@ _merge_lease_queue_order()
 # MERGE_LEASE_IDLE_MINUTES have passed since it, so a holder whose updated
 # head is still being reviewed keeps the lease), then the required checks
 # with a 0-minute budget (no final-CI dispatch, no pending marker).
+# Issue #9983 (G1, G3): once a holder's grace has passed with the head-gate
+# still absent or pending, the runs on its head are read once (the
+# AUTO_MERGE_WAIT_WORKFLOWS list, default CI, plus the review workflows in
+# _MERGE_LEASE_REVIEW_RUN_NAMES). A queued or in-progress run that is not
+# wedged (PR_CHECKS_RUNS_PENDING_LIVE > 0) keeps the holder eligible with
+# MERGE_LEASE_CI_ACTIVE=true; a failed read keeps it eligible with
+# MERGE_LEASE_CI_ACTIVE=unknown (fail-open; the TTL and maximum hold still
+# end the hold); no live run gives no_head_gate as before. Sets
+# MERGE_LEASE_HEAD_RUNS_READ=true when that read was made, so the tick's idle
+# test does not read the head runs a second time. The CI-activity reads below
+# also use the live count, so a wedged run never counts as activity.
+# That read sees only runs on the head; the tick also checks its cached
+# active-run listing for a `[pr:<n>]` review dispatch on the default branch
+# before it revokes for no_head_gate (scripts/review_merge_train.sh).
+# MERGE_LEASE_GATE_CONFIRMED=true only when the newest head-gate status was
+# read as `success` by <login>; every fail-open return leaves it false, so a
+# soft skip entry (#9983 G5) is cleared only on a confirmed success.
 # API: 1 statuses read plus the reads of _pr_wait_for_required_checks; none
-# for draft or `[skip ai]`, or without a valid login or head.
+# for draft or `[skip ai]`, or without a valid login or head; +1
+# actions/runs?head_sha read for a holder past the grace with a pending
+# head-gate (that path makes no required-checks read).
 _merge_lease_pr_eligible()
 {
 	local elig_pr="$1" elig_head="$2" elig_title="$3" elig_draft="$4" elig_base="${5:-}" elig_login="${6:-}" elig_since="${7:-}"
 	local elig_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" elig_statuses elig_gate elig_idle elig_now elig_rc=0
+	local elig_run_names
 	MERGE_LEASE_INELIGIBLE_REASON=""
 	MERGE_LEASE_CI_ACTIVE="unknown"
+	MERGE_LEASE_HEAD_RUNS_READ="false"
+	MERGE_LEASE_GATE_CONFIRMED="false"
 	if [ "${elig_draft}" = "true" ]; then
 		MERGE_LEASE_INELIGIBLE_REASON="draft"
 		return 1
@@ -3507,7 +3631,7 @@ _merge_lease_pr_eligible()
 	# Newest first: the latest head-gate status decides.
 	elig_gate="$(jq -r '[ .[] | select(type == "object" and .context == "ai-review/head-gate") ][0] | if . == null then "" else "\(.state) \((.creator.login // "") | ascii_downcase)" end' <<< "${elig_statuses}" 2>/dev/null)" || return 0
 	case "${elig_gate}" in
-		"success ${elig_login}") ;;
+		"success ${elig_login}") MERGE_LEASE_GATE_CONFIRMED="true" ;;
 		"failure ${elig_login}"|"error ${elig_login}")
 			MERGE_LEASE_INELIGIBLE_REASON="no_head_gate"
 			return 1
@@ -3521,6 +3645,25 @@ _merge_lease_pr_eligible()
 				[ "${elig_idle}" -gt 0 ] || elig_idle=3600
 				elig_now="$(date -u +%s)"
 				if [ "$((10#${elig_since}))" -gt 0 ] && [ "${elig_idle}" -gt 0 ] && [ $((elig_now - 10#${elig_since})) -ge "${elig_idle}" ]; then
+					# Issue #9983 G1: a review or CI run still queued or running
+					# on the head (not wedged) keeps the holder; one read.
+					elig_run_names="${AUTO_MERGE_WAIT_WORKFLOWS-CI}"
+					case "$(printf '%s' "${elig_run_names}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+						""|none|off) elig_run_names="" ;;
+					esac
+					elig_run_names="${elig_run_names:+${elig_run_names},}${_MERGE_LEASE_REVIEW_RUN_NAMES}"
+					AUTO_MERGE_WAIT_WORKFLOWS="${elig_run_names}" PR_CHECKS_REPOSITORY="${elig_repo}" \
+						_pr_head_ci_runs_pending "${elig_head}" || true
+					MERGE_LEASE_HEAD_RUNS_READ="true"
+					if [ "${PR_CHECKS_RUNS_READ:-}" != "true" ]; then
+						MERGE_LEASE_CI_ACTIVE="unknown"
+						return 0
+					fi
+					if [ "${PR_CHECKS_RUNS_PENDING_LIVE:-0}" -gt 0 ]; then
+						MERGE_LEASE_CI_ACTIVE="true"
+						return 0
+					fi
+					MERGE_LEASE_CI_ACTIVE="false"
 					MERGE_LEASE_INELIGIBLE_REASON="no_head_gate"
 					return 1
 				fi
@@ -3532,6 +3675,7 @@ _merge_lease_pr_eligible()
 	esac
 	PR_CHECKS_RUNS_READ=""
 	PR_CHECKS_RUNS_PENDING=0
+	PR_CHECKS_RUNS_PENDING_LIVE=0
 	PR_CHECKS_LAST_PENDING=0
 	PR_CHECKS_RUNS_UNRUN=0
 	PR_CHECKS_WAIT_OUTCOME=""
@@ -3547,7 +3691,7 @@ _merge_lease_pr_eligible()
 		# test does not read actions/runs again (section 14 budget).
 		if [ "${PR_CHECKS_RUNS_READ:-}" = "true" ]; then
 			MERGE_LEASE_CI_ACTIVE="false"
-			[ "${PR_CHECKS_RUNS_PENDING:-0}" -eq 0 ] || MERGE_LEASE_CI_ACTIVE="true"
+			[ "${PR_CHECKS_RUNS_PENDING_LIVE:-0}" -eq 0 ] || MERGE_LEASE_CI_ACTIVE="true"
 		fi
 		return 0
 	fi
@@ -3557,7 +3701,7 @@ _merge_lease_pr_eligible()
 	fi
 	case "${PR_CHECKS_WAIT_OUTCOME:-}" in
 		ok|allow_all|timeout)
-			if [ "${PR_CHECKS_RUNS_READ:-}" = "true" ] && [ "${PR_CHECKS_RUNS_PENDING:-0}" -gt 0 ]; then
+			if [ "${PR_CHECKS_RUNS_READ:-}" = "true" ] && [ "${PR_CHECKS_RUNS_PENDING_LIVE:-0}" -gt 0 ]; then
 				MERGE_LEASE_CI_ACTIVE="true"
 			elif [ "${PR_CHECKS_WAIT_OUTCOME}" = "timeout" ] && [ "${PR_CHECKS_LAST_PENDING:-0}" -gt 0 ]; then
 				MERGE_LEASE_CI_ACTIVE="true"
@@ -3566,6 +3710,68 @@ _merge_lease_pr_eligible()
 			fi
 			;;
 	esac
+	return 0
+}
+
+# _merge_lease_skips_effective <skips> <pulls_json> <candidate> (issue #9983,
+# G5 in the update-mode gates): sets MERGE_LEASE_SKIPS_EFFECTIVE to <skips>
+# without each soft entry (_merge_lease_skip_is_soft) whose PR is open in
+# <pulls_json> on the entry head, is <candidate> or carries
+# MERGE_LEASE_WAIT_LABEL, and whose newest ai-review/head-gate status on that
+# head is `success` created by the pipeline login. Hard entries always stay.
+# Runs in the caller's shell (not $(...)) so the login cache persists.
+# API: none when no soft entry qualifies; otherwise one `GET user` per
+# process and token (cached in _MERGE_LEASE_GATE_LOGIN and the token-keyed
+# PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE) and at most 10 commit-statuses
+# reads per call (entries past the cap stay). Fail-closed for the skip: a
+# failed login or statuses read keeps the entry (today's rule). Returns 0.
+_MERGE_LEASE_GATE_LOGIN=""
+_merge_lease_skips_effective()
+{
+	local eff_skips="${1:-}" eff_pulls="${2:-}" eff_cand="${3:-}" eff_label="${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}"
+	local eff_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" eff_rows eff_entry eff_pair eff_head eff_reads=0
+	local eff_statuses eff_gate eff_login="" eff_drop="" eff_token_fp=""
+	MERGE_LEASE_SKIPS_EFFECTIVE="${eff_skips}"
+	[ -n "${eff_skips}" ] || return 0
+	[[ "${eff_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 0
+	eff_rows="$(jq -r --arg l "${eff_label}" --arg c "${eff_cand}" '[ .[]? | if type == "array" then .[] else . end | select(type == "object")
+		| ((if (.head | type) == "object" then .head.sha else .head_sha end) // "" | tostring) as $hs
+		| select(((.number // "") | tostring) == $c or ([ (.labels // [])[] | if type == "object" then .name else . end ] | index($l) != null))
+		| "\(.number):\($hs)" ] | .[]' <<< "${eff_pulls}" 2>/dev/null)" || eff_rows=""
+	[ -n "${eff_rows}" ] || return 0
+	while IFS= read -r eff_entry; do
+		_merge_lease_skip_is_soft "${eff_entry}" || continue
+		eff_pair="${eff_entry%%:*}:$(printf '%s' "${eff_entry#*:}" | cut -d: -f1)"
+		printf '%s\n' "${eff_rows}" | grep -Fxq -- "${eff_pair}" || continue
+		[ "${eff_reads}" -lt 10 ] || break
+		if [ -z "${eff_login}" ]; then
+			# Once per call, from the token-keyed login cache of the head-gate
+			# supersede check (PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE), so a token
+			# switch reads the login again and one token reads `user` once.
+			eff_token_fp="$(printf '%s|%s' "${GH_TOKEN:-}" "${GITHUB_TOKEN:-}" | sha256sum 2>/dev/null | cut -c1-64)"
+			if [ -n "${eff_token_fp}" ] && [ "${PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE_KEY:-}" = "${eff_token_fp}" ]; then
+				eff_login="${PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE:-}"
+			fi
+			if [ -z "${eff_login}" ]; then
+				eff_login="$(gh_retry _safe_gh_jq user 2>/dev/null | jq -r 'if type == "object" then (.login // "") else "" end' 2>/dev/null | tail -n1)" || eff_login=""
+				if [ -n "${eff_token_fp}" ] && [[ "${eff_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+					PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE="${eff_login}"
+					PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE_KEY="${eff_token_fp}"
+				fi
+			fi
+			eff_login="$(printf '%s' "${eff_login}" | tr '[:upper:]' '[:lower:]')"
+			[[ "${eff_login}" =~ ^[a-z0-9][a-z0-9-]*(\[bot\])?$ ]] || return 0
+			_MERGE_LEASE_GATE_LOGIN="${eff_login}"
+		fi
+		eff_head="${eff_pair#*:}"
+		eff_reads=$((eff_reads + 1))
+		eff_statuses="$(gh_retry _safe_gh_jq "repos/${eff_repo}/commits/${eff_head}/statuses?per_page=100" 2>/dev/null)" || continue
+		eff_gate="$(jq -r '[ .[]? | select(type == "object" and .context == "ai-review/head-gate") ][0] | if . == null then "" else "\(.state) \((.creator.login // "") | ascii_downcase)" end' <<< "${eff_statuses}" 2>/dev/null)" || continue
+		[ "${eff_gate}" = "success ${_MERGE_LEASE_GATE_LOGIN}" ] || continue
+		eff_drop+="${eff_entry}"$'\n'
+	done < <(printf '%s\n' "${eff_skips}" | sed '/^$/d')
+	[ -n "${eff_drop}" ] || return 0
+	MERGE_LEASE_SKIPS_EFFECTIVE="$(printf '%s\n' "${eff_skips}" | sed '/^$/d' | grep -Fxv -f <(printf '%s' "${eff_drop}") || true)"
 	return 0
 }
 
@@ -3834,7 +4040,11 @@ _merge_lease_gate_multi()
 	# goes first. The listing is the single-holder path's call.
 	gm_pulls_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${gm_repo}/pulls?state=open&base=$(printf '%s' "${gm_base}" | jq -sRr @uri)&per_page=100" 2>/dev/null)" || gm_pulls_json=""
 	if jq -e 'type == "array"' >/dev/null 2>&1 <<< "${gm_pulls_json}"; then
-		_merge_lease_revoke_enabled && gm_skips="${MERGE_LEASE_SKIPS:-}"
+		if _merge_lease_revoke_enabled; then
+			# Issue #9983 G5: a soft entry whose head-gate passed no longer blocks.
+			_merge_lease_skips_effective "${MERGE_LEASE_SKIPS:-}" "${gm_pulls_json}" "${gm_pr}"
+			gm_skips="${MERGE_LEASE_SKIPS_EFFECTIVE:-}"
+		fi
 		if printf '%s' "${gm_pulls_json}" | jq -e --argjson n "${gm_pr}" --arg l "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" \
 			'[ .[]? | if type == "array" then .[] else . end | select(type == "object" and .number == $n) | (.labels // [])[] | (if type == "object" then .name else . end) | select(. == $l) ] | length > 0' >/dev/null 2>&1; then
 			gm_was_waiting=1
@@ -4001,8 +4211,10 @@ _merge_lease_gate()
 				if _merge_lease_revoke_enabled; then
 					# Phase 2: a PR on the record's skip list (unchanged head) does
 					# not jump ahead of another waiter; with no other waiter it
-					# still acquires, and its write drops its own entry.
-					lease_first="$(_merge_lease_queue_first "${lease_pulls_json}" "${lease_pr}" "${MERGE_LEASE_SKIPS:-}")"
+					# still acquires, and its write drops its own entry. Issue #9983
+					# G5: a soft entry whose head-gate passed no longer blocks.
+					_merge_lease_skips_effective "${MERGE_LEASE_SKIPS:-}" "${lease_pulls_json}" "${lease_pr}"
+					lease_first="$(_merge_lease_queue_first "${lease_pulls_json}" "${lease_pr}" "${MERGE_LEASE_SKIPS_EFFECTIVE:-}")"
 				else
 					lease_first="$(_merge_lease_queue_first "${lease_pulls_json}" "${lease_pr}")"
 				fi
