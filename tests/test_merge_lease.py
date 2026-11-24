@@ -98,6 +98,12 @@ class _Harness:
 			"MERGE_BASE_SYNC_HEAD_POLL_SECONDS": "1",
 			"GH_RETRY_MAX_ATTEMPTS": "1",
 			"TMPDIR": str(self.dir),
+			# Issue #10046 raised the shipped defaults to 480 / 180. The lease
+			# tests were timed against 240 / 60 (OLD = now - 3h would sit exactly
+			# on the new idle edge), so pin those values here instead of relying
+			# on the default; a test's own env still overrides them.
+			"MERGE_LEASE_TTL_MINUTES": "240",
+			"MERGE_LEASE_IDLE_MINUTES": "60",
 		}
 
 	def lib(self, body: str, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
@@ -174,7 +180,7 @@ class LeaseGate(unittest.TestCase):
 		self.assertEqual(rc, 0, out)
 		self.assertIn("outcome=renewed", out)
 		expires = int(re.search(r"^expires=(\d+)$", h.record(), re.M).group(1))
-		self.assertGreater(expires, int(time.time()) + 3600, "renewal extends to a full TTL (240 min default)")
+		self.assertGreater(expires, int(time.time()) + 3600, "renewal extends to a full TTL (240 min, pinned in the harness)")
 		self.assertEqual(h.state["commits"][h.state["refs"][REF]]["parents"], ["c" * 40])
 
 	def test_holder_past_the_max_hold_stops_renewing(self) -> None:
@@ -1285,6 +1291,50 @@ class LeaseForwardMergePriority(unittest.TestCase):
 
 
 class Wiring(unittest.TestCase):
+	def test_lease_ttl_and_idle_defaults_agree_at_every_site(self) -> None:
+		"""Issue #10046: the shipped defaults are TTL 480 and idle 180 at every
+		site that defines them, so two steps of one workflow cannot disagree."""
+		pattern = re.compile(r"vars\.MERGE_LEASE_(TTL|IDLE)_MINUTES \|\| '(\d+)'")
+		expected = {"TTL": "480", "IDLE": "180"}
+		counts: dict[tuple[str, str], int] = {}
+		sites = sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml")) + sorted((REPO_ROOT / "workflow-templates").glob("*.yml"))
+		for path in sites:
+			for match in pattern.finditer(path.read_text()):
+				kind, value = match.group(1), match.group(2)
+				self.assertEqual(value, expected[kind], f"{path.relative_to(REPO_ROOT)}: MERGE_LEASE_{kind}_MINUTES default {value}")
+				counts[(path.name, kind)] = counts.get((path.name, kind), 0) + 1
+		self.assertEqual(counts, {
+			(REVIEW.name, "TTL"): 3, (POLL.name, "TTL"): 1, (CLOSE.name, "TTL"): 1,
+			(REVIEW.name, "IDLE"): 3, (POLL.name, "IDLE"): 4, (CLOSE.name, "IDLE"): 1,
+		})
+		lib = LIB.read_text()
+		for needle in ("${MERGE_LEASE_TTL_MINUTES:-480}", "lease_ttl_minutes=480",
+				"${MERGE_LEASE_IDLE_MINUTES:-180}", "lease_idle_minutes=180", "elig_idle=10800"):
+			self.assertIn(needle, lib)
+		for stale in ("${MERGE_LEASE_TTL_MINUTES:-240}", "${MERGE_LEASE_IDLE_MINUTES:-60}",
+				"lease_ttl_minutes=240", "lease_idle_minutes=60", "elig_idle=3600"):
+			self.assertNotIn(stale, lib)
+		readme = (REPO_ROOT / "README.md").read_text()
+		self.assertRegex(readme, r"(?m)^\| `MERGE_LEASE_TTL_MINUTES` \| No \| `480` \|")
+		self.assertRegex(readme, r"(?m)^\| `MERGE_LEASE_IDLE_MINUTES` \| No \| `180` \|")
+
+	def test_lease_ttl_and_idle_helper_defaults(self) -> None:
+		"""Issue #10046: unset or non-numeric values use 480 / 180 minutes, and a
+		repository variable still overrides either one within its clamp."""
+		h = _Harness({"pulls": []})
+		def run(fn: str, var: str, value: str) -> str:
+			res = h.lib(fn, {var: value})
+			self.assertEqual(res.returncode, 0, res.stderr)
+			return res.stdout.strip()
+		# An empty value is what the `:-` expansion treats as unset.
+		self.assertEqual(run("_merge_lease_ttl_seconds", "MERGE_LEASE_TTL_MINUTES", ""), "28800")
+		self.assertEqual(run("_merge_lease_ttl_seconds", "MERGE_LEASE_TTL_MINUTES", "abc"), "28800")
+		self.assertEqual(run("_merge_lease_ttl_seconds", "MERGE_LEASE_TTL_MINUTES", "90"), "5400")
+		self.assertEqual(run("_merge_lease_idle_seconds", "MERGE_LEASE_IDLE_MINUTES", ""), "10800")
+		self.assertEqual(run("_merge_lease_idle_seconds", "MERGE_LEASE_IDLE_MINUTES", "abc"), "10800")
+		self.assertEqual(run("_merge_lease_idle_seconds", "MERGE_LEASE_IDLE_MINUTES", "0"), "0")
+		self.assertEqual(run("_merge_lease_idle_seconds", "MERGE_LEASE_IDLE_MINUTES", "99999"), "86400")
+
 	def test_sweep_skips_lease_waiters_only_while_the_train_releases_them(self) -> None:
 		text = SWEEP.read_text()
 		self.assertIn("reason=merge_lease_wait", text)
@@ -1295,7 +1345,7 @@ class Wiring(unittest.TestCase):
 		for wf in (POLL, CLOSE):
 			text = wf.read_text()
 			self.assertIn("for helper in review_merge_train.sh label_helpers.sh pr_checks_lib.sh; do", text, wf.name)
-			self.assertIn("MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '240' }}", text, wf.name)
+			self.assertIn("MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '480' }}", text, wf.name)
 
 	def test_merge_paths_get_the_lease_switches(self) -> None:
 		self.assertEqual(REVIEW.read_text().count("MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}"), 3)
@@ -1313,7 +1363,7 @@ class Wiring(unittest.TestCase):
 		defaults identical to the helper's."""
 		wired = (
 			"MERGE_LEASE_REVOKE_ENABLED: ${{ vars.MERGE_LEASE_REVOKE_ENABLED || 'true' }}",
-			"MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '60' }}",
+			"MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '180' }}",
 			"MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars.MERGE_LEASE_PRIORITY_HEAD_PREFIXES || 'auto/forward-merge-stable-' }}",
 		)
 		review = REVIEW.read_text()
@@ -1324,7 +1374,7 @@ class Wiring(unittest.TestCase):
 			self.assertEqual(POLL.read_text().count(line), 4, f"{POLL.name}: {line}")
 			self.assertIn(line, CLOSE.read_text(), f"{CLOSE.name}: {line}")
 		lib = LIB.read_text()
-		for expansion in ("${MERGE_LEASE_REVOKE_ENABLED:-true}", "${MERGE_LEASE_IDLE_MINUTES:-60}",
+		for expansion in ("${MERGE_LEASE_REVOKE_ENABLED:-true}", "${MERGE_LEASE_IDLE_MINUTES:-180}",
 				"${MERGE_LEASE_PRIORITY_HEAD_PREFIXES-auto/forward-merge-stable-}"):
 			self.assertIn(expansion, lib)
 		# The sweep reads only MERGE_LEASE_ENABLED / MERGE_LEASE_WAIT_LABEL; if it

@@ -1839,7 +1839,7 @@ _mt_lease_pr_runs_active()
 # - Revocation: a held, unexpired holder found in $1 is released when
 #   _merge_lease_pr_eligible says it can no longer merge
 #   (reason=revoked_draft|revoked_skip_ai|revoked_no_head_gate|
-#   revoked_final_ci_failed), or when MERGE_LEASE_IDLE_MINUTES (default 60)
+#   revoked_final_ci_failed), or when MERGE_LEASE_IDLE_MINUTES (default 180)
 #   have passed since the record's updated=/acquired= and no CI run or
 #   required check is running on its head (reason=revoked_idle). A holder
 #   missing from $1 keeps today's closed-check only.
