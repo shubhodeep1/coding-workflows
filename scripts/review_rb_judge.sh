@@ -2526,8 +2526,10 @@ rb_judge_sync_merge_guard() {
 #   - returns 0 when the PR is merged, or (auto mode) auto-merge is enabled
 #     on the judged head: the failed call may have landed server-side;
 #   - returns 1 when the PR is closed or its head moved off the judged head;
-#   - otherwise repeats the same head-bound attempts (unreadable PR state
-#     also repeats them: --match-head-commit still binds the head).
+#   - otherwise repeats the same head-bound attempts. An unreadable PR state
+#     sends no merge call (#10049: fail closed, --match-head-commit binds
+#     only the head): auto mode logs outcome=state_unavailable and waits for
+#     the next bounded attempt, direct mode defers through the guard.
 # At most 3 retries. Each prints one RB_JUDGE_MERGE_RETRY line. The retried
 # attempts overwrite the stderr files, so a final failure reports the last
 # error through rb_judge_merge_err_report as before.
@@ -2594,6 +2596,12 @@ rb_judge_merge_retry_transient() {
     if [ "${_rb_retry_mode}" = "auto" ] && [ "${_rb_retry_auto}" = "true" ] && [ "${_rb_retry_head}" = "${RB_JUDGED_HEAD_SHA:-}" ]; then
       echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=auto_merge_enabled"
       return 0
+    fi
+    if [ "${_rb_retry_mode}" = "auto" ] && [ -z "${_rb_retry_state}" ]; then
+      # #10049: the PR's state is unreadable, so no merge request goes out on
+      # this attempt; the loop re-reads after the next delay (bounded).
+      echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=state_unavailable"
+      continue
     fi
     if [ "${_rb_retry_mode}" = "auto" ]; then
       gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_AUTO_FILE}" && return 0
@@ -2746,7 +2754,15 @@ case "${RB_ACTION}" in
         # instead; other failures still fall through at once.
         # Gates first: the head-gate success status is posted only for a
         # merge request that actually follows it, right before it.
-        if ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
+        # #10049 start check: reuses the PR read above (no API call), so a
+        # draft or moved-head PR takes no lease, no branch update, no wait.
+        if ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_merge_state_check "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" start "${_pr_json}"; then
+          echo "::warning::Review-blocked judge: PR #${PR_NUMBER} is not open and ready on the judged head (${PR_MERGE_STATE_OUTCOME:-unavailable}); not merging and withholding ai:ready-to-merge."
+          case "${PR_MERGE_STATE_OUTCOME:-}" in
+            closed|draft) RB_MERGE_STATUS="not_open" ;;
+            *) RB_MERGE_STATUS="mergeability_pending" ;;
+          esac
+        elif ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
           if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
             echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, merge deferred to the synchronize run."
             RB_MERGE_STATUS="deferred_base_moved"
@@ -3448,6 +3464,16 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
               echo "::warning::PR #${PR_NUMBER} has blocking required check-run(s) for SHA ${RB_JUDGED_HEAD_SHA:0:7} — refusing merge_with_followup until required checks complete with success/neutral/skipped (a cancelled required check blocks; re-run it; non-required/advisory failures are ignored). Leaving linked issues in ai:review-blocked; stall recovery will re-fire the judge after checks settle."
               echo "judge_skip_reason=blocking_check_runs" >> "$GITHUB_OUTPUT"
             fi
+          elif [ "${ENABLE_AUTO_MERGE}" = "true" ] \
+            && ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_merge_state_check "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" start "${_pr_json}"; then
+            # #10049 start check: reuses the PR read above (no API call), so
+            # a draft or moved-head PR takes no lease and no branch update.
+            echo "::warning::PR #${PR_NUMBER} is not open and ready on the judged head (${PR_MERGE_STATE_OUTCOME:-unavailable}) — merge_with_followup not merged. Leaving linked issues in ai:review-blocked."
+            case "${PR_MERGE_STATE_OUTCOME:-}" in
+              closed) echo "judge_skip_reason=pr_not_open" >> "$GITHUB_OUTPUT" ;;
+              draft) echo "judge_skip_reason=draft_pr" >> "$GITHUB_OUTPUT" ;;
+              *) echo "judge_skip_reason=pr_state_unavailable" >> "$GITHUB_OUTPUT" ;;
+            esac
           elif [ "${ENABLE_AUTO_MERGE}" = "true" ] \
             && ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}"; then
             # Merge-base freshness gate (Q35: A): the base moved under files

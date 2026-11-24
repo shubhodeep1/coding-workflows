@@ -18,8 +18,12 @@ of every merge call in the review workflow and its helpers.
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
+import subprocess
 import sys
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -194,6 +198,118 @@ def _step_body(text: str, name: str) -> str:
 	return text[start:nxt if nxt != -1 else len(text)]
 
 
+DET_SKIP_STEP = "Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge"
+LIB_SOURCE_LINE = "source .codex-freshness-src/scripts/pr_checks_lib.sh"
+LINKED_ISSUE = 5797
+PR_READ_CALL = f"gh api repos/owner/repo/pulls/{PR}"
+FRESH_STUB = "_pr_base_fresh_for_merge() { PR_BASE_FRESHNESS_OUTCOME=fresh; return 0; }\n"
+CHECKS_OK_STUB = "_pr_wait_for_required_checks() { PR_CHECKS_WAIT_OUTCOME=ok; PR_CHECKS_WAIT_WAITED_S=0; return 0; }\n"
+# The checks wait closes the PR (state file rewrite) before the pre-merge read.
+CHECKS_OK_THEN_CLOSE_STUB = (
+	"_pr_wait_for_required_checks() { PR_CHECKS_WAIT_OUTCOME=ok; PR_CHECKS_WAIT_WAITED_S=0; "
+	"jq --arg c \"${CLOSED_AT}\" '.pulls[0].state = \"closed\" | .pulls[0].closed_at = $c' \"${FAKE_GH_STATE}\" > \"${FAKE_GH_STATE}.tmp\" "
+	"&& mv \"${FAKE_GH_STATE}.tmp\" \"${FAKE_GH_STATE}\"; return 0; }\n"
+)
+
+
+def _det_skip_run_body(overrides: str = "") -> str:
+	lines = _step_body(REVIEW.read_text(encoding="utf-8"), DET_SKIP_STEP).splitlines()
+	run_at = next(i for i, ln in enumerate(lines) if ln.strip() == "run: |")
+	body: list[str] = []
+	for ln in lines[run_at + 1:]:
+		if ln.strip() and (len(ln) - len(ln.lstrip(" "))) <= 8:
+			break
+		body.append(ln)
+	text = textwrap.dedent("\n".join(body)) + "\n"
+	assert text.count(LIB_SOURCE_LINE) == 1
+	# Test-only helper stubs go right after the verified library is sourced.
+	return text.replace(LIB_SOURCE_LINE, LIB_SOURCE_LINE + "\n" + overrides, 1)
+
+
+class DeterministicSkipStepReplay(unittest.TestCase):
+	"""Runs the deterministic-skip step body of review_autofix.yml (the path
+	that merged tele-funtoken-msg-scoring PR #5800, run 45386407946) with the
+	shipped pr_checks_lib.sh as the verified support library and the stateful
+	fake `gh`."""
+
+	def _state(self, pr: dict) -> dict:
+		st = {"pulls": [pr], "labels": {}, "user": "pipeline-bot",
+			"graphql": {"data": {"repository": {"pullRequest": {"closingIssuesReferences": {"nodes": [{"number": LINKED_ISSUE}]}}}}}}
+		ml._seed_lease(st, ml._record(PR))
+		return st
+
+	def _run_step(self, h: "ml._Harness", overrides: str = "") -> subprocess.CompletedProcess:
+		work = h.dir / "work"
+		src = work / ".codex-freshness-src"
+		(src / "scripts").mkdir(parents=True)
+		shutil.copy(ml.LIB, src / "scripts" / "pr_checks_lib.sh")
+		git_env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(h.dir), "GIT_CONFIG_GLOBAL": os.devnull,
+			"GIT_CONFIG_NOSYSTEM": "1", "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+			"GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
+		for cmd in (["git", "init", "-q"], ["git", "add", "-A"], ["git", "commit", "-q", "-m", "support"]):
+			subprocess.run(cmd, cwd=src, env=git_env, check=True, capture_output=True)
+		support_sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=src, env=git_env, check=True,
+			capture_output=True, text=True).stdout.strip()
+		# The inline gh_retry sleeps between attempts; keep the test fast.
+		sleep = h.dir / "bin" / "sleep"
+		sleep.write_text("#!/usr/bin/env bash\nexit 0\n")
+		sleep.chmod(0o755)
+		self.summary = h.dir / "summary.md"
+		env = dict(h.env)
+		env.update({k: v for k, v in git_env.items() if k.startswith("GIT_")})
+		env.update({
+			"HOME": str(h.dir), "PR_NUMBER": str(PR), "PR_HEAD_REF": "ai/issue-5797", "PR_HEAD_SHA": SHA,
+			"PR_BASE_REF": "main", "REPOSITORY": "owner/repo", "ENABLE_AUTO_MERGE": "true",
+			"ORCH_INTEGRATION_BRANCH_PATTERN": "^orchestrator/project-", "FORWARD_MERGE_FALLBACK_AUTO_MERGE": "true",
+			"DET_SKIP_REASON": "small_diff", "FRESHNESS_HELPER_CHECKOUT_OUTCOME": "success",
+			"REVIEW_SUPPORT_SHA": support_sha, "GITHUB_STEP_SUMMARY": str(self.summary),
+			"GITHUB_OUTPUT": str(h.dir / "output.txt"), "CLOSED_AT": CLOSED_AT,
+		})
+		return subprocess.run(["bash", "-c", _det_skip_run_body(overrides)], cwd=work, env=env,
+			capture_output=True, text=True, timeout=180)
+
+	def _assert_nothing_merged_or_labelled(self, h: "ml._Harness") -> None:
+		self.assertNotIn("merged", h.state)
+		self.assertFalse([c for c in h.calls if c.startswith("gh pr merge")])
+		self.assertFalse([c for c in h.calls if "/labels" in c])
+		self.assertEqual(h.state.get("labels", {}).get(str(PR), []), [])
+		self.assertEqual(h.state.get("labels", {}).get(str(LINKED_ISSUE), []), [])
+
+	def test_replay_5800_pr_closed_before_the_merge_job_starts(self) -> None:
+		# Gate saw the PR open at 11:58; it closed at 12:04:00; the merge job
+		# started at 12:20 and squash-merged it. Now: success, nothing merged,
+		# one skip line at stage=start, lease released, no labels.
+		h = ml._Harness(self._state(_pr("closed", closed_at=CLOSED_AT)))
+		res = self._run_step(h)
+		out = res.stdout + res.stderr
+		self.assertEqual(res.returncode, 0, out)
+		self.assertEqual(_skip_lines(out), [f"AUTOFIX_MERGE_SKIPPED pr={PR} head_sha={SHA} reason=pr_closed closed_at={CLOSED_AT} stage=start"])
+		self.assertIn(f"MERGE_LEASE pr={PR} base=main mode=release outcome=released reason=pr_closed", out)
+		self.assertIn("state=released", h.record())
+		self._assert_nothing_merged_or_labelled(h)
+		self.assertIn("SKIPPED (PR not open: closed)", self.summary.read_text())
+
+	def test_pr_closed_between_start_and_pre_merge_read(self) -> None:
+		h = ml._Harness(self._state(_pr("open")))
+		res = self._run_step(h, FRESH_STUB + CHECKS_OK_THEN_CLOSE_STUB)
+		out = res.stdout + res.stderr
+		self.assertEqual(res.returncode, 0, out)
+		self.assertEqual(_skip_lines(out), [f"AUTOFIX_MERGE_SKIPPED pr={PR} head_sha={SHA} reason=pr_closed closed_at={CLOSED_AT} stage=pre_merge"])
+		self.assertIn("state=released", h.record())
+		self._assert_nothing_merged_or_labelled(h)
+		self.assertEqual(len([c for c in h.calls if c == PR_READ_CALL]), 2)
+
+	def test_open_pr_on_the_gate_head_merges_as_before(self) -> None:
+		h = ml._Harness(self._state(_pr("open")))
+		res = self._run_step(h, FRESH_STUB + CHECKS_OK_STUB)
+		out = res.stdout + res.stderr
+		self.assertEqual(res.returncode, 0, out)
+		self.assertEqual(_skip_lines(out), [])
+		self.assertEqual(h.state.get("merged"), [["pr", "merge", str(PR), "--repo", "owner/repo", "--squash", "--auto", "--match-head-commit", SHA]])
+		self.assertIn("ai:review-skipped", h.state["labels"].get(str(PR), []))
+		self.assertIn("state=held", h.record())
+
+
 def _assert_guard_before_each_merge(test: unittest.TestCase, text: str, merge_marker: str, window: int, expected: int) -> None:
 	positions = [m.start() for m in re.finditer(re.escape(merge_marker), text)]
 	test.assertEqual(len(positions), expected, merge_marker)
@@ -248,8 +364,25 @@ class Wiring(unittest.TestCase):
 		text = TRAIN.read_text(encoding="utf-8")
 		merge = text.index('gh_retry gh pr merge "${resume_num}"')
 		guard = text.rindex('_pr_merge_state_check "${resume_num}" "${resume_sha}" pre_merge', 0, merge)
-		self.assertGreater(guard, text.rindex("_pr_base_fresh_for_merge", 0, merge))
-		self.assertIn("outcome=deferred reason=pr_${PR_MERGE_STATE_OUTCOME:-unavailable}", text[guard:merge])
+		fresh = text.rindex("_pr_base_fresh_for_merge", 0, merge)
+		# The state read precedes the freshness gate (which can take the merge
+		# lease or request a branch update) and stays the last PR read before
+		# the merge.
+		self.assertLess(guard, fresh)
+		self.assertNotIn("_pr_wait_for_required_checks", text[guard:merge])
+		self.assertIn("outcome=deferred reason=pr_${PR_MERGE_STATE_OUTCOME:-unavailable}", text[guard:fresh])
+
+	def test_rb_judge_start_checks_reuse_the_pr_read_before_the_freshness_gate(self) -> None:
+		text = RB_JUDGE.read_text(encoding="utf-8")
+		case_text = text[text.index("# END rb-judge merge error capture (#7659)"):]
+		starts = [m.start() for m in re.finditer(re.escape('_pr_merge_state_check "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" start "${_pr_json}"'), case_text)]
+		# merge and merge_with_followup reuse their own `_pr_json` read (no
+		# API call); terminal reads `.state` right before its chain.
+		self.assertEqual(len(starts), 2)
+		for pos in starts:
+			nxt_fresh = case_text.index("_pr_base_fresh_for_merge", pos)
+			self.assertNotIn("_pr_wait_for_required_checks", case_text[pos:nxt_fresh])
+			self.assertNotIn("_merge_lease", case_text[pos:nxt_fresh])
 
 
 if __name__ == "__main__":

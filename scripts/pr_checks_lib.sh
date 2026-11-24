@@ -877,6 +877,14 @@ _pr_sync_merge_blocked_guard()
 		guard_state="$(printf '%s' "${guard_pr_json}" | jq -r '.mergeable_state // empty' 2>/dev/null || true)"
 		[[ "${guard_state}" =~ ^[a-z_]+$ ]] || guard_state=""
 		[ -n "${guard_state}" ] || guard_state="none"
+		# #10049: this read is often the last one before a direct merge, so
+		# a PR that reports a `.state` other than open defers (same JSON, no
+		# extra call). JSON without `.state` keeps the mergeable_state rule.
+		local guard_pr_open_state=""
+		guard_pr_open_state="$(printf '%s' "${guard_pr_json}" | jq -r 'if (.state | type) == "string" then .state else empty end' 2>/dev/null || true)"
+		if [ -n "${guard_pr_open_state}" ] && [ "$(printf '%s' "${guard_pr_open_state}" | tr '[:upper:]' '[:lower:]')" != "open" ]; then
+			guard_state="not_open"
+		fi
 	fi
 
 	case "${guard_state}" in
@@ -895,7 +903,7 @@ _pr_sync_merge_blocked_guard()
 				guard_blockers="unknown"
 			fi
 			;;
-		unknown|none|unreadable)
+		unknown|none|unreadable|not_open)
 			guard_blockers="unknown"
 			;;
 		*)

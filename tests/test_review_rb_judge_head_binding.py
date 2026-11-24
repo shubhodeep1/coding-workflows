@@ -819,8 +819,10 @@ def test_retry_guard_deferral_is_mergeability_pending(path: str) -> None:
 	null_state = {"code": 0, "stdout": f"open\tfalse\tfalse\t{JUDGED}\tnone\t-\n"}
 	responses = _first_failure(path) + [null_state]
 	if path != "sync":
-		# The auto-mode retry re-tries --auto first; it keeps failing.
-		responses.append(_fail())
+		# The auto-mode retry re-tries --auto first; it keeps failing. Each
+		# later per-attempt read shows the PR open (#10049: an unreadable
+		# read would send no --auto request on that attempt).
+		responses += [_fail(), null_state, _fail(), null_state, _fail()]
 	proc, output, calls, sleeps = _run_merge_site_scripted(path, responses)
 	assert proc.returncode == 0, proc.stderr
 	direct = [c for c in calls if c[:2] == ["pr", "merge"] and "--auto" not in c]
@@ -1017,9 +1019,16 @@ def test_moved_head_or_closed_pr_stops_the_retry(path: str, state: dict, outcome
 	assert len(_error_lines(proc.stdout)) == 1
 
 
+def _after_unreadable_read(path: str) -> list[dict]:
+	# #10049: an auto-mode retry sends no merge call on an unreadable PR
+	# state; it merges only after a later read shows the PR open. The direct
+	# (sync) retry is guarded by the blocked-merge guard's `{}` input instead.
+	return [_ok()] if path == "sync" else [_pr_state(), _ok()]
+
+
 @pytest.mark.parametrize("path", MERGE_SITE_ORDER)
 def test_unreadable_pr_state_still_retries_head_bound_merge(path: str) -> None:
-	responses = _first_failure(path) + [{"code": 1, "stderr": "HTTP 500"}, _ok()]
+	responses = _first_failure(path) + [{"code": 1, "stderr": "HTTP 500"}] + _after_unreadable_read(path)
 	proc, output, calls, _sleeps = _run_merge_site_scripted(path, responses)
 	assert proc.returncode == 0, proc.stderr
 	assert calls[-1] == _expected_calls(path)[0]
@@ -1027,14 +1036,27 @@ def test_unreadable_pr_state_still_retries_head_bound_merge(path: str) -> None:
 	_assert_merge_succeeded(path, output, proc.stdout)
 
 
+@pytest.mark.parametrize("path", ("merge", "terminal"))
+def test_unreadable_pr_state_sends_no_auto_merge_call(path: str) -> None:
+	"""#10049: a retry never asks to merge a PR whose state it cannot read."""
+	unreadable = {"code": 1, "stderr": "HTTP 500"}
+	responses = _first_failure(path) + [unreadable]
+	proc, _output, calls, sleeps = _run_merge_site_scripted(path, responses)
+	assert proc.returncode == 0, proc.stderr
+	merge_calls = [c for c in calls if c[:2] == ["pr", "merge"]]
+	assert len(merge_calls) == len(_expected_calls(path))
+	assert sleeps == ["10", "20", "40"]
+	assert [ln.rsplit("outcome=", 1)[-1] for ln in _retry_lines(proc.stdout) if "outcome=" in ln] == ["state_unavailable"] * 3
+
+
 @pytest.mark.parametrize("path", MERGE_SITE_ORDER)
 @pytest.mark.parametrize("body", ['{"message":"Server Error"}', "<html>502 Bad Gateway</html>", "garbage\tfalse\tfalse\t" + OTHER])
 def test_error_body_on_stdout_counts_as_unreadable_pr_state(path: str, body: str) -> None:
 	"""gh api prints an HTTP error's body to stdout; it must not read as not_open or head_moved."""
-	responses = _first_failure(path) + [{"code": 1, "stdout": body + "\n", "stderr": "gh: Server Error (HTTP 500)"}, _ok()]
+	responses = _first_failure(path) + [{"code": 1, "stdout": body + "\n", "stderr": "gh: Server Error (HTTP 500)"}] + _after_unreadable_read(path)
 	proc, output, calls, _sleeps = _run_merge_site_scripted(path, responses)
 	assert proc.returncode == 0, proc.stderr
-	assert not any("outcome=" in line for line in _retry_lines(proc.stdout))
+	assert not any(("outcome=" in line and "outcome=state_unavailable" not in line) for line in _retry_lines(proc.stdout))
 	assert calls[-1] == _expected_calls(path)[0]
 	_assert_merge_succeeded(path, output, proc.stdout)
 

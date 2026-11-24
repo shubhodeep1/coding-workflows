@@ -36,6 +36,8 @@ PR = 5800
 BRANCH = "ai/issue-5797"
 SHA = "fee7005234cc58358be7a9eaddb29c3e3e8ac3d1"
 OTHER_SHA = "1" * 40
+CLOSED_AT = "2026-11-24T12:04:00Z"
+BEFORE_CLOSE = "2026-11-24T11:57:40Z"
 
 FAKE_GH = r'''#!/usr/bin/env python3
 import json, os, sys
@@ -68,7 +70,8 @@ def _step_run_body() -> str:
 
 def _run(pr_links: list[int], **overrides) -> dict:
 	run = {"id": 0, "status": "in_progress", "event": "pull_request", "head_branch": BRANCH, "head_sha": SHA,
-		"path": ".github/workflows/ai-review.yml", "pull_requests": [{"number": n} for n in pr_links]}
+		"path": ".github/workflows/ai-review.yml", "created_at": BEFORE_CLOSE,
+		"pull_requests": [{"number": n} for n in pr_links]}
 	run.update(overrides)
 	return run
 
@@ -90,7 +93,7 @@ class CancelClosedPrRuns(unittest.TestCase):
 	def tearDown(self) -> None:
 		shutil.rmtree(self.tmp, ignore_errors=True)
 
-	def _cancelled(self, runs: list[dict], head_sha: str = SHA) -> tuple[list[int], str]:
+	def _cancelled(self, runs: list[dict], head_sha: str = SHA, closed_at: str = CLOSED_AT) -> tuple[list[int], str]:
 		self.runs.write_text(json.dumps(runs), encoding="utf-8")
 		self.calls.write_text("", encoding="utf-8")
 		env = {
@@ -101,6 +104,7 @@ class CancelClosedPrRuns(unittest.TestCase):
 			"PR_NUMBER": str(PR),
 			"PR_HEAD_REF": BRANCH,
 			"PR_HEAD_SHA": head_sha,
+			"PR_CLOSED_AT": closed_at,
 			"REPOSITORY": "owner/repo",
 			"CURRENT_RUN_ID": "1",
 			"TMPDIR": str(self.tmp),
@@ -138,6 +142,26 @@ class CancelClosedPrRuns(unittest.TestCase):
 		cancelled, _ = self._cancelled([_run([], id=15)], head_sha="")
 		self.assertEqual(cancelled, [])
 
+	def test_unlinked_runs_started_by_the_close_event_are_kept(self) -> None:
+		# The `closed` event itself starts AI Issue PR Status and, on a merge,
+		# the post-merge AI Review on the same branch and SHA; GitHub lists
+		# them unlinked. They are created at or after closed_at and must run.
+		cancelled, _ = self._cancelled([
+			_run([], id=21, created_at=CLOSED_AT, path=".github/workflows/ai-issue-pr-status.yml"),
+			_run([], id=22, created_at="2026-11-24T12:04:03Z"),
+			_run([], id=23),
+		])
+		self.assertEqual(cancelled, [23])
+
+	def test_without_a_valid_closed_at_unlinked_runs_are_kept(self) -> None:
+		for closed_at in ("", "not-a-time"):
+			cancelled, _ = self._cancelled([_run([], id=24), _run([PR], id=25)], closed_at=closed_at)
+			self.assertEqual(cancelled, [25], closed_at)
+
+	def test_unlinked_run_without_created_at_is_kept(self) -> None:
+		cancelled, _ = self._cancelled([_run([], id=26, created_at=None)])
+		self.assertEqual(cancelled, [])
+
 	def test_cancel_workflows_and_the_current_run_are_never_cancelled(self) -> None:
 		cancelled, _ = self._cancelled([
 			_run([], id=1),
@@ -150,6 +174,7 @@ class CancelClosedPrRuns(unittest.TestCase):
 	def test_job_env_exposes_the_closed_head_sha(self) -> None:
 		text = WORKFLOW.read_text(encoding="utf-8")
 		self.assertIn("      PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}\n", text)
+		self.assertIn("      PR_CLOSED_AT: ${{ github.event.pull_request.closed_at }}\n", text)
 
 
 if __name__ == "__main__":

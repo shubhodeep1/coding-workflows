@@ -172,6 +172,29 @@ def test_unknown_or_missing_state_defers_without_extra_calls(tmp_path: Path, sta
 	]
 
 
+@pytest.mark.parametrize("pr_state", ["closed", "CLOSED"])
+def test_closed_pr_defers_even_when_mergeable_without_extra_calls(tmp_path: Path, pr_state: str) -> None:
+	"""#10049: the guard's read is the last before a direct merge; a PR that
+	closed meanwhile is not merged, whatever its mergeable_state."""
+	payload = dict(_pr("clean"))
+	payload["state"] = pr_state
+	proc, calls = _run(_quoted(payload), tmp_path=tmp_path)
+	assert _field(proc, "RC") == "1"
+	assert calls == []
+	assert _guard_lines(proc) == [
+		f"SYNC_MERGE_BLOCKED_GUARD outcome=deferred pr=42 head={HEAD} state=not_open blockers=unknown"
+	]
+
+
+def test_open_pr_state_keeps_the_mergeable_state_rule(tmp_path: Path) -> None:
+	payload = dict(_pr("clean"))
+	payload["state"] = "open"
+	proc, calls = _run(_quoted(payload), tmp_path=tmp_path)
+	assert _field(proc, "RC") == "0"
+	assert _guard_lines(proc) == []
+	assert calls == []
+
+
 @pytest.mark.parametrize("value", ["false", "0", "OFF", "No"])
 def test_disabled_proceeds_without_api_calls(tmp_path: Path, value: str) -> None:
 	proc, calls = _run("42", tmp_path=tmp_path, env={"PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED": value})

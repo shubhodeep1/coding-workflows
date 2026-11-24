@@ -40,6 +40,7 @@ jobs:
       PR_NUMBER: ${{ github.event.pull_request.number }}
       PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
       PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_CLOSED_AT: ${{ github.event.pull_request.closed_at }}
       REPOSITORY: ${{ github.repository }}
       CURRENT_RUN_ID: ${{ github.run_id }}
     steps:
@@ -351,10 +352,15 @@ jobs:
             # tele-funtoken-msg-scoring PR #5800 merged 22 minutes after its
             # close). Such an unlinked run on this branch at the closed PR's
             # exact head SHA is cancelled too; runs linked to another PR stay.
+            # Only unlinked runs created before the close match: the same
+            # `closed` event starts AI Issue PR Status and the post-merge AI
+            # Review on this branch and SHA, and those must keep running. A
+            # missing or malformed PR_CLOSED_AT turns the unlinked match off.
             mapfile -t target_run_ids < <(
               jq -r \
                 --arg head_ref "${PR_HEAD_REF}" \
                 --arg head_sha "${PR_HEAD_SHA:-}" \
+                --arg closed_at "${PR_CLOSED_AT:-}" \
                 --arg pr_number "${PR_NUMBER}" \
                 --arg current_run_id "${CURRENT_RUN_ID}" \
                 '.workflow_runs[]
@@ -364,7 +370,10 @@ jobs:
                       | any(.number == ($pr_number | tonumber)))
                     or (((.pull_requests // []) | length) == 0
                       and ($head_sha | test("^[0-9a-f]{40}$"))
-                      and .head_sha == $head_sha))
+                      and .head_sha == $head_sha
+                      and ($closed_at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"))
+                      and ((.created_at // "") | test("^[0-9]{4}-"))
+                      and (.created_at < $closed_at)))
                 | select(.event == "pull_request")
                 | select((.id | tostring) != $current_run_id)
                 | select(
