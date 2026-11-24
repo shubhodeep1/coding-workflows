@@ -1541,6 +1541,78 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_scope_mode_contract.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_phase_skip_gate_telemetry_contract.py
 
+      # Moved from tests-hooks-and-orchestrator, which took 15m32s of its 20
+      # minutes on main (run 43220859648, budget-watch issue #9391). The run's
+      # step timings could not be read, so this step was picked by test and
+      # subprocess counts (about 472 tests and 57 subprocess sites, the largest
+      # step in that job that had never moved and is not split), an estimate,
+      # not a measurement. Group 3 carried the lightest pinned load (the
+      # single-file module step) after #9037 moved two steps to group 4. The
+      # step needs only temp git repos, no Node, no git history beyond HEAD and
+      # no prepared .claude/ live copies (it lints and tests the
+      # workflow-templates/ hook copy); ruff comes from this job's Install
+      # Python CI dependencies step. Name and body unchanged; the step runs once
+      # per CI run.
+      # Then moved from group 3 to group 0: orchestrate-poll (3) took 15m17s of
+      # its 20 minutes on main (run 43993691500, budget-watch issue #9639). The
+      # run's step results gave statuses only, with no durations, so this pick
+      # is an estimate from test and subprocess counts, not a measurement. This
+      # step was group 3's newest load (group 3 was not flagged after #9037
+      # until #9391 added it), and likely the heavier of group 3's two pinned
+      # steps: about 472 tests in 10 serial pytest runs, against the
+      # single-file step's three modules, which run at the same time. The
+      # target is the group whose pinned steps weigh least, not the one that
+      # pins fewest: group 0 pins the fast-fail subset (11 tests) and the
+      # triage step (about 162s in the #9450 planning sandbox). Group 1 pins
+      # the review-pipeline plumbing step (about 367 tests and 145 subprocess
+      # sites, the largest unsplit step here), and #8805 kept it apart from
+      # another heavy step after group 1 took 16m44s, so this step does not
+      # join it. Group 2 pins four steps (one of 13 modules), group 4 three
+      # (the sharded unblock step among them), and group 3 keeps the
+      # single-file step. The step needs nothing group 0 lacks: the same
+      # checkout, Python 3.12 and pip set (ruff included), and no Node, history
+      # or .claude/ live copies. Name and body unchanged; the step still runs
+      # once per CI run. If budget-watch flags group 0 next, measure the step
+      # timings before moving anything again.
+      # Then moved out of the poll matrix and back to this job:
+      # orchestrate-poll (0) took 20m02s of its 20 minutes on main (run
+      # 44909097036, budget-watch issue #9895), so it was cancelled at its
+      # timeout. This step arrived in group 0 with #9639 the same day; before
+      # that, it was the step group 3 was cancelled in, mid-step, in runs
+      # 44648184781, 44671393907, 44770429815, 44802155801, 44860778326 and
+      # 44865403277 (analysis/workflow-optimization-2026-11-20.md, -11-21.md,
+      # -11-21-2.md). No candidate job's current total with this step is
+      # measured. This job ran 15m32s with it (run 43220859648, #9391), but
+      # that total predates #9420 (re-issued as #9684), which later moved the
+      # six steps below into this job, so its total now is 15m32s plus those
+      # six steps, unmeasured, against its 20-minute timeout.
+      # tests-heal-plan-and-validation last took 15m35s (run 43314513853,
+      # #9420, after #9363's move-ins) and then lost those six steps; its total
+      # with this step is unmeasured too. tests-release-and-log-analysis took
+      # 15m19s (#9450) before losing the triage step, also unmeasured with this
+      # step; tests-promote-stall-and-review took 21m25s (#9363). This job was
+      # kept because it is the only single-leg job that has run this step
+      # inside its cap; that is a judgment, not a measured margin. This
+      # reverses #9391, so budget-watch will likely flag this job above its
+      # 15-minute line (a warning, not a timeout). If it does, read that run's
+      # step timings before moving anything again: the heal job is the first
+      # candidate. Name and body unchanged; the step runs once per CI run,
+      # with no matrix guard here.
+      - name: Pre-push affected-test gate tests
+        run: |
+          set -euo pipefail
+          ruff check --select E,F --ignore E501 workflow-templates/.claude/hooks/prepush_affected_tests.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_prepush_affected_tests.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_implement_prepush_test_gate.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_prepush_test_gate.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_attempt_journal.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_acceptance_check.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_persist_postmerge_verify.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_persist_budget.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_persist_orchestrator.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_evidence_pack.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_evidence_broker.py
+
       # Moved from tests-heal-plan-and-validation, which took 15m35s of its 20
       # minutes on main (run 43314513853, budget-watch issue #9420, re-issued as
       # #9684). That run's step timings could not be read, so the pick is an
@@ -1552,7 +1624,9 @@ jobs:
       # bodies unchanged; each step runs once per CI run. Why this job: every
       # single-leg test job has been flagged near 15 of its 20 minutes, and this
       # one lost its largest step to orchestrate-poll after its last flag
-      # (#9391). The never-flagged tests-system-python (24 shards) and
+      # (#9391); #9895 later moved that step (Pre-push affected-test gate
+      # tests) back into this job, so this job now holds it as well as these
+      # six. The never-flagged tests-system-python (24 shards) and
       # tests-sandbox-python (3 image families) are matrix jobs, where an
       # unguarded step would run once per leg. If budget-watch flags this job
       # next, measure step timings before moving anything again.
@@ -2313,9 +2387,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_conflict_manifest_union_contract.py
-          # Stable-only wiring (backport of #9666): main runs this file through a
-          # catch-all step that stable does not have.
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_conflict_gitleaksignore_union.py
 
       - name: Review conflict guard-hook template merge tests
         run: |
@@ -2824,9 +2895,6 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_test_and_mark_stable_cancel_on_close_single_fetch.py
-          # Stable-only wiring (backport of #9794): main runs these through a
-          # catch-all step that stable does not have.
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_test_and_mark_stable_gh_api_error_body_capture.py tests/test_test_and_mark_stable_phase7_queue_wait.py
 
       - name: Alt-model cleanup PR-selector contract test
         run: |
@@ -3540,6 +3608,8 @@ jobs:
     # (moved from tests-hooks-and-orchestrator).
     # Since #9639, group 0 pins the pre-push affected-test gate step (moved
     # from group 3).
+    # Since #9895, the pre-push affected-test gate step runs in
+    # tests-hooks-and-orchestrator instead of group 0.
     # On 2026-11-21, after #9641 moved the pre-push gate step out of group
     # 3, shards still ran 15.0-17.1 minutes on a passing run (#9867, run
     # 44914391485) and were cancelled at the 20-minute cap in runs
@@ -4141,55 +4211,6 @@ jobs:
             exit 1
           fi
 
-      # Moved from tests-hooks-and-orchestrator, which took 15m32s of its 20
-      # minutes on main (run 43220859648, budget-watch issue #9391). The run's
-      # step timings could not be read, so this step was picked by test and
-      # subprocess counts (about 472 tests and 57 subprocess sites, the largest
-      # step in that job that had never moved and is not split), an estimate,
-      # not a measurement. Group 3 carried the lightest pinned load (the
-      # single-file module step) after #9037 moved two steps to group 4. The
-      # step needs only temp git repos, no Node, no git history beyond HEAD and
-      # no prepared .claude/ live copies (it lints and tests the
-      # workflow-templates/ hook copy); ruff comes from this job's Install
-      # Python CI dependencies step. Name and body unchanged; the step runs once
-      # per CI run.
-      # Then moved from group 3 to group 0: orchestrate-poll (3) took 15m17s of
-      # its 20 minutes on main (run 43993691500, budget-watch issue #9639). The
-      # run's step results gave statuses only, with no durations, so this pick
-      # is an estimate from test and subprocess counts, not a measurement. This
-      # step was group 3's newest load (group 3 was not flagged after #9037
-      # until #9391 added it), and likely the heavier of group 3's two pinned
-      # steps: about 472 tests in 10 serial pytest runs, against the
-      # single-file step's three modules, which run at the same time. The
-      # target is the group whose pinned steps weigh least, not the one that
-      # pins fewest: group 0 pins the fast-fail subset (11 tests) and the
-      # triage step (about 162s in the #9450 planning sandbox). Group 1 pins
-      # the review-pipeline plumbing step (about 367 tests and 145 subprocess
-      # sites, the largest unsplit step here), and #8805 kept it apart from
-      # another heavy step after group 1 took 16m44s, so this step does not
-      # join it. Group 2 pins four steps (one of 13 modules), group 4 three
-      # (the sharded unblock step among them), and group 3 keeps the
-      # single-file step. The step needs nothing group 0 lacks: the same
-      # checkout, Python 3.12 and pip set (ruff included), and no Node, history
-      # or .claude/ live copies. Name and body unchanged; the step still runs
-      # once per CI run. If budget-watch flags group 0 next, measure the step
-      # timings before moving anything again.
-      - name: Pre-push affected-test gate tests
-        if: strategy.job-index == 0
-        run: |
-          set -euo pipefail
-          ruff check --select E,F --ignore E501 workflow-templates/.claude/hooks/prepush_affected_tests.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_prepush_affected_tests.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_implement_prepush_test_gate.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_review_prepush_test_gate.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_attempt_journal.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_acceptance_check.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_persist_postmerge_verify.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_persist_budget.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_persist_orchestrator.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_evidence_pack.py
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_evidence_broker.py
-
       # Moved from tests-release-and-log-analysis, which took 17m51s of its 20
       # minutes on main (run 39230958248, budget-watch issue #7689). Earlier
       # they moved there from tests-heal-plan-and-validation (#7383: the Claude
@@ -4385,8 +4406,10 @@ jobs:
       fail-fast: false
       matrix:
         # 12 shards ran ~970 functions each and hit the 20-minute timeout on
-        # 3.14 (run 43053071771); 24 keeps each shard near half the budget.
-        system-python-shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23]
+        # 3.14 (run 43053071771), so the count went to 24. At 24 shards,
+        # shard 11 still took 15m16s of 20 minutes (run 43412753795, #9469);
+        # 32 brings the slowest shard to roughly 11-12 minutes.
+        system-python-shard: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
     permissions:
       contents: read
       # The fetch step reads the PR's base branch in final-CI runs (Phase 4).

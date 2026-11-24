@@ -48,6 +48,14 @@ Inputs:
                           (re-issue, unblock fix-up) is granted only when its
                           whole source chain is trusted; --origin-repo lets
                           the guard read those source issues (Q82).
+  --remediation-no-code-check --issue-body-file PATH --staged-file PATH
+                          Auto-heal remediation no-code guard. Prints one JSON
+                          line. Exit 40 only when an unfenced line of the
+                          issue body opens with the
+                          `<!-- auto-heal-remediation:v1` marker and every
+                          staged path is a doc, test, fragment or DB contract
+                          path; exit 0 otherwise, including an unreadable body
+                          or an empty path list (fail open).
   --check-automation-paths --automation-grant-file PATH --staged-file PATH
                           --allow-workflow-edits VALUE --issue-number NUMBER
                           Verify staged automation paths against the snapshot.
@@ -138,6 +146,7 @@ EXIT_IN_SCOPE = 0
 EXIT_SKIP_NO_ALLOWLIST = 10
 EXIT_OUT_OF_SCOPE = 20
 EXIT_AUTOMATION_UNGRANTED = 30
+EXIT_REMEDIATION_NO_CODE = 40
 
 # Keep this prefix set in sync with _rb_fix_scope_is_protected in
 # scripts/orchestrate_poll_process.sh. Case variants are denied here too.
@@ -665,6 +674,81 @@ def auto_heal_companions_allowed(issue_body: object, author_login: object, pipel
 	if author_login != pipeline_login:
 		return False
 	return bool(_AUTO_HEAL_REMEDIATION_RE.search(issue_body if isinstance(issue_body, str) else ""))
+
+
+# Auto-heal remediation no-code guard. A remediation issue asks for a code fix
+# to a live alert (a slow route, a failing job). In the 2026-11-10..17 audit,
+# consumer tele-funtoken-msg-scoring merged remediation PRs that changed only
+# README and tests (its PRs 5343, 5345, 5346, 5347), which closed the alert
+# without fixing it. When the issue body starts with the marker and every
+# staged path is one of the shapes below, implement stops before the commit,
+# so no PR is opened. This check only restricts, so it needs no author check:
+# copying the marker into an issue can make that issue stricter, never looser.
+# The marker counts when it opens a line (up to 3 leading spaces) outside a
+# ``` / ~~~ fenced block: the monitor writes it as the body's first line, and
+# a re-issue that copies the body verbatim keeps it at a line start. A
+# backticked, quoted or mid-sentence mention is not a remediation.
+_REMEDIATION_MARKER_LINE_RE = re.compile(r"^ {0,3}<!-- auto-heal-remediation:v1(?=[\s>-])")
+_REMEDIATION_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+_REMEDIATION_NON_CODE_DIRS = ("tests/", "docs/", "changelog.d/", "agents.d/", "db/contracts/")
+
+
+def is_auto_heal_remediation_body(issue_body: object) -> bool:
+	"""True when an unfenced line of the body opens with the remediation marker."""
+	if not isinstance(issue_body, str):
+		return False
+	fence = ""
+	for line in issue_body.lstrip("\ufeff").splitlines():
+		opener = _REMEDIATION_FENCE_RE.match(line)
+		if fence:
+			# A fence closes on a run of the same character at least as long.
+			if opener and opener.group(1)[0] == fence[0] and len(opener.group(1)) >= len(fence) \
+					and not line.strip().strip(fence[0]):
+				fence = ""
+			continue
+		if opener:
+			fence = opener.group(1)
+			continue
+		if _REMEDIATION_MARKER_LINE_RE.match(line):
+			return True
+	return False
+
+
+def is_remediation_non_code_path(path: object) -> bool:
+	"""True for ``*.md`` anywhere, or a path under ``tests/``, ``docs/``,
+	``changelog.d/``, ``agents.d/`` or ``db/contracts/`` at the repo root.
+
+	Anything the guard cannot classify (not a string, empty, ``..`` segment,
+	absolute) counts as code, so an odd path never blocks a run.
+	"""
+	if not isinstance(path, str):
+		return False
+	value = normalize_path(path)
+	if not value or value.startswith("/") or ".." in value.split("/"):
+		return False
+	if value.lower().endswith(".md"):
+		return True
+	return value.startswith(_REMEDIATION_NON_CODE_DIRS)
+
+
+def evaluate_remediation_no_code(issue_body: object, staged_paths: object) -> dict:
+	"""Decide the remediation no-code guard for one staged change set.
+
+	Returns ``{"outcome": "block"|"allow", "reason": <token>, "count": N,
+	"paths": [...]}``. ``block`` (reason ``no_code_change``) needs the marker
+	at the start of an unfenced body line, at least one staged path, and every staged path
+	non-code. Every other case allows: ``not_remediation``, ``no_paths``,
+	``code_changed``.
+	"""
+	paths = [normalize_path(p) for p in staged_paths if isinstance(p, str) and p.strip()] \
+		if isinstance(staged_paths, list) else []
+	if not is_auto_heal_remediation_body(issue_body):
+		return {"outcome": "allow", "reason": "not_remediation", "count": len(paths), "paths": []}
+	if not paths:
+		return {"outcome": "allow", "reason": "no_paths", "count": 0, "paths": []}
+	if not all(is_remediation_non_code_path(p) for p in paths):
+		return {"outcome": "allow", "reason": "code_changed", "count": len(paths), "paths": []}
+	return {"outcome": "block", "reason": "no_code_change", "count": len(paths), "paths": paths}
 
 
 def _issue_meta_author_login(meta: object) -> str:
@@ -2037,6 +2121,8 @@ def main(argv: list[str] | None = None) -> int:
 	parser.add_argument("--pipeline-login", default="")
 	parser.add_argument("--origin-repo", default="", help="owner/name to read source issues from (Q82)")
 	parser.add_argument("--check-automation-paths", action="store_true")
+	parser.add_argument("--remediation-no-code-check", action="store_true",
+		help="Auto-heal remediation no-code guard: exit 40 when a remediation issue's staged paths are all non-code")
 	parser.add_argument("--automation-grant-file", default="")
 	parser.add_argument("--allow-workflow-edits", default="false")
 	parser.add_argument("--issue-number", default="")
@@ -2060,6 +2146,14 @@ def main(argv: list[str] | None = None) -> int:
 	parser.add_argument("--base-dir", default="")
 	parser.add_argument("--edited-dir", default="")
 	args = parser.parse_args(argv)
+	if args.remediation_no_code_check:
+		# Fail open: a missing body file reads as "" (not a remediation), and
+		# the path list is read only from --staged-file, never from stdin.
+		record = evaluate_remediation_no_code(
+			_read_text_file(args.issue_body_file) if args.issue_body_file else "",
+			_read_staged(args.staged_file) if args.staged_file else [])
+		sys.stdout.write(json.dumps(record) + "\n")
+		return EXIT_REMEDIATION_NO_CODE if record["outcome"] == "block" else EXIT_IN_SCOPE
 	if args.heal_test_only_check:
 		record, code = run_heal_test_only_check(args.plan_file, args.heal_scope_file, args.flag_enabled,
 			args.issue_number, args.plan_comment_id)

@@ -56,6 +56,19 @@ Subcommands
                    mechanism reaches every repo in
                    ``.github/ai/consumer_repos.json``.
 
+Release notes (``assemble --notes-out PATH``)
+---------------------------------------------
+Optional, and passed only by the two upstream release workflows.  Writes the
+bodies of exactly the fragments being folded to PATH (grouped under
+``### <Category>`` in Keep a Changelog repos, a plain list in date-heading
+repos) so the release step can publish them as the GitHub release body.  The
+file is written under ``--dry-run`` too, is always (re)written — empty when no
+usable fragment exists — and is capped at RELEASE_NOTES_CHAR_LIMIT
+characters at whole-fragment boundaries, except that a first fragment longer
+than the cap on its own is cut to the cap and marked
+``...(truncated; see CHANGELOG.md)``.  Without the flag nothing about the
+output changes, which keeps the consumer sync path byte-identical.
+
 Exit codes
 ----------
 0 — success (including the no-fragments no-op).
@@ -105,6 +118,10 @@ BRACKET_H2 = re.compile(r"^##\s+\[")
 DATE_HEADING = re.compile(r"^##\s+(\d{4}-\d{2}-\d{2})\s*$")
 ANY_H2 = re.compile(r"^##\s")
 SUBSECTION_HEADING = re.compile(r"^###\s+([A-Za-z][A-Za-z ]*?)\s*$")
+
+# GitHub rejects a release body above 125,000 characters; stay well under it
+# so the truncation trailer always fits.
+RELEASE_NOTES_CHAR_LIMIT = 120000
 
 DEFAULT_NEW_CHANGELOG = "# Changelog\n\nAll notable changes to this project are documented in this file.\n"
 
@@ -389,6 +406,7 @@ def assemble(
 			"changed": False,
 			"created": False,
 			"changelog": relative,
+			"notes_entries": [],
 		}
 
 	parsed = [parse_fragment(path) for path in fragment_paths]
@@ -411,6 +429,7 @@ def assemble(
 			"created": False,
 			"changelog": relative,
 			"empty_fragments": [path.name for path in fragment_paths],
+			"notes_entries": [],
 		}
 
 	lines = original.split("\n")
@@ -440,7 +459,70 @@ def assemble(
 		"created": created,
 		"changelog": relative,
 		"text": text,
+		# Filename order, the same set that was folded above (dry run too).
+		"notes_entries": [(category, list(body)) for _path, category, body in usable],
 	}
+
+
+def _render_release_notes(
+	layout: str, entries: list[tuple[str, list[str]]]
+) -> tuple[str, int]:
+	"""Return ``(notes_text, fragments_included)`` for ``--notes-out``.
+
+	Keep a Changelog repos get one ``### <Category>`` block per non-empty
+	category in CATEGORY_ORDER (the shape ``_plan_keep_a_changelog`` folds);
+	date-heading repos get the bodies as a plain list. Fragments are dropped
+	whole once the text would pass RELEASE_NOTES_CHAR_LIMIT, and an ASCII
+	trailer names how many were left out. The one exception is a first
+	fragment that alone passes the cap: it is cut to the cap, marked
+	``...(truncated; see CHANGELOG.md)`` and counted as included.
+	"""
+	if not entries:
+		return "", 0
+
+	if layout == LAYOUT_KEEP_A_CHANGELOG:
+		ordered: list[tuple[str, list[str]]] = []
+		for category in CATEGORY_ORDER:
+			ordered.extend(
+				(category, body) for entry_category, body in entries if entry_category == category
+			)
+	else:
+		ordered = [(category, body) for category, body in entries]
+
+	parts: list[str] = []
+	length = 0
+	included = 0
+	current_category: str | None = None
+	for category, body in ordered:
+		chunk_lines: list[str] = []
+		if layout == LAYOUT_KEEP_A_CHANGELOG and category != current_category:
+			if parts:
+				chunk_lines.append("")
+			chunk_lines.extend([f"### {category}", ""])
+		elif parts:
+			chunk_lines.append("")
+		chunk_lines.extend(body)
+		chunk = "\n".join(chunk_lines)
+		separator = 1 if parts else 0
+		if length + separator + len(chunk) > RELEASE_NOTES_CHAR_LIMIT:
+			if not parts:
+				# One fragment alone passes the cap: publish its head, marked as
+				# cut, rather than a trailer-only body (and count it as written).
+				head = chunk[:RELEASE_NOTES_CHAR_LIMIT].rstrip()
+				parts.append(f"{head}\n\n...(truncated; see CHANGELOG.md)")
+				included = 1
+			break
+		parts.append(chunk)
+		length += separator + len(chunk)
+		included += 1
+		current_category = category
+
+	text = "\n".join(parts)
+	omitted = len(ordered) - included
+	if omitted:
+		trailer = f"...and {omitted} more; see CHANGELOG.md."
+		text = f"{text}\n\n{trailer}" if text else trailer
+	return text, included
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -562,6 +644,15 @@ def build_parser() -> argparse.ArgumentParser:
 		help="Write one changed repo-relative path per line to this file.",
 	)
 	parser.add_argument(
+		"--notes-out",
+		default=None,
+		help=(
+			"assemble only: write release notes built from the fragments being "
+			"folded to this file (written under --dry-run too; empty when no "
+			"usable fragment exists)."
+		),
+	)
+	parser.add_argument(
 		"--dry-run",
 		action="store_true",
 		help="Report what would change without writing or deleting anything.",
@@ -622,11 +713,29 @@ def main(argv: list[str] | None = None) -> int:
 		fragments = result["fragments"]
 		assert isinstance(fragments, list)
 		changed = bool(result["changed"])
+		notes_suffix = ""
+		if args.notes_out:
+			notes_entries = result.get("notes_entries") or []
+			assert isinstance(notes_entries, list)
+			notes_text, notes_count = _render_release_notes(str(result["layout"]), notes_entries)
+			try:
+				# Always (re)write, even when empty, so a stale file can never be
+				# read as this release's notes. A failed write only warns: the
+				# fragments are already folded, and a release must never fail
+				# because of changelog bookkeeping (the extractor falls back to
+				# its placeholder).
+				Path(args.notes_out).write_text(
+					f"{notes_text}\n" if notes_text else "", encoding="utf-8"
+				)
+			except OSError as exc:
+				print(f"::warning::Could not write --notes-out: {exc}", file=sys.stderr)
+				notes_count = 0
+			notes_suffix = f" notes_written={notes_count}"
 		print(
 			"CHANGELOG_ASSEMBLE_V1: "
 			f"layout={result['layout']} fragments={len(fragments)} "
 			f"changed={str(changed).lower()} dry_run={str(args.dry_run).lower()} "
-			f"changelog={result['changelog']}"
+			f"changelog={result['changelog']}{notes_suffix}"
 		)
 		for name in fragments:
 			print(f"CHANGELOG_ASSEMBLE_V1: fragment={name}")
