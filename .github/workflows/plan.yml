@@ -2595,6 +2595,9 @@ jobs:
           # Issue #9534: set by the "Route planning scope block" step.
           SCOPE_ROUTED: ${{ steps.route_scope_block.outputs.scope_routed }}
           SCOPE_MARKER: ${{ steps.route_scope_block.outputs.scope_marker }}
+          # Issue #9812: the check-triage text promises closure only while the
+          # unblock judge's resolution gate runs (same default as unblock_judge.yml).
+          CHECK_TRIAGE_RESOLVED_GATE_ENABLED: ${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
@@ -2686,6 +2689,13 @@ jobs:
           if [ -s "${ISSUE_META_FILE:-}" ] &&
             jq -e 'any(.labels[]?.name; . == "ai:check-triage")' "${ISSUE_META_FILE}" >/dev/null 2>&1; then
             BLOCKED_CHECK_TRIAGE=true
+          fi
+          # Issue #9812: with the unblock judge or its check-triage resolution
+          # gate off, nothing closes the issue, so keep the human-input comment
+          # and CRITICAL page. Parsed like scripts/unblock_judge.sh reads them.
+          if [ "${UNBLOCK_JUDGE_ENABLED:-true}" = "false" ] ||
+            [ "$(printf '%s' "${CHECK_TRIAGE_RESOLVED_GATE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" = "false" ]; then
+            BLOCKED_CHECK_TRIAGE=false
           fi
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
