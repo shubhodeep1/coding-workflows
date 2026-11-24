@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The release-download payload bounds match `ci_cancelled_rerun.py`, with no remaining drift.\" (issue #9812 Goals; Approach (f): \"removing the drift\".)\n  expected_change_site: scripts/check_failure_triage.sh, the jq validator inside triage_release_download_rerun_gate that classifies `total_count` and per-job `id` (the .id | floor check at line 619 and the .total_count check at line 617).\n  confidence=4\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: At `scripts/check_failure_triage.sh:616-619`, jq accepts whole-number floats such as `5.0` for `total_count` and job `id`, because `type == \"number\"` matches and `(.id | floor) == .id` is true. Python rejects these values: `scripts/ci_cancelled_rerun.py:363` (`type(count) is not int or count != len(jobs) or len(jobs) >= 100`) and `scripts/ci_cancelled_rerun.py:363, 368-369`, where line 368 calls `positive_number(...)` (`type(value) is int and value > 0`). The last run diff adds a comment about this difference at scripts/check_failure_triage.sh:610-613 but does not remove it. Both reviewers rated it SEVERITY: NIT. Not raised by anthropic_claude-sonnet-5_5 or z-ai_glm-5_3-flash, which say earlier rounds accepted it as a known remaining difference.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"The release-download payload bounds match `ci_cancelled_rerun.py`, with no remaining drift.\" (issue #9812 Goals; Approach (f): \"removing the drift\".)\n  Expected change site: scripts/check_failure_triage.sh, the jq validator inside triage_release_download_rerun_gate that classifies `total_count` and per-job `id` (the .id | floor check at line 619 and the .total_count check at line 617).\n  Evidence of absence: The shell validator accepts whole-number floats such as `total_count: 5.0` or job `id: 5.0`, which pass the jq checks `type == \"number\"`, `5.0 < 100`, `.id > 0` and `(.id | floor) == .id`. In scripts/ci_cancelled_rerun.py:363 the equivalent check is `type(count) is not int or count != len(jobs) or len(jobs) >= 100`, and at line 368 the id check routes through `positive_number(...)` (`type(value) is int and value > 0`). Both reject `5.0`. The LAST RUN DIFF adds a comment about the difference at scripts/check_failure_triage.sh:610-613 but does not remove it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"The release-download payload bounds match `ci_cancelled_rerun.py`, with no remaining drift.\"\n  Expected change site: `scripts/check_failure_triage.sh`, `triage_release_download_rerun_gate` jobs-payload validator.\n  Evidence of absence: At `scripts/check_failure_triage.sh:616-619`, jq accepts integral floats for `total_count` and job `id`; `scripts/ci_cancelled_rerun.py:363, 368-369` rejects them because it requires exact integers. The latest diff documents this remaining discrepancy but does not eliminate it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5cc60ad7f6d23a0362c44a8dae2b527a96539c57a06694906eaa20f01a5835dc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9813,
+    "run_id": "45292603993",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45292603993",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124010050_f5e3c67f48",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9813,
+    "run_id": "45292603993"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T01:00:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
