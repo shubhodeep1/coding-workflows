@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A clone that returns 403 on every attempt: the step fails after 3 attempts.\"\n  expected_change_site: `scripts/ai_memory_lib.py`, the retry path around `_clone_for_memory_branch`\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: `_run_memory_read_with_retry` calls its callback at most three times, but `_clone_for_memory_branch` can run a fast clone and then a full-clone fallback when the fast clone fails, so when the branch probe succeeds and both clone commands return 403, one callback call makes two clone attempts; the added claim test replaces `_clone_for_memory_branch` with a stub, so the test does not check the real limit on clone commands\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION: scripts/ai_memory_lib.py | location: _run_memory_read_with_retry, the skip branch (`if 0.0 <= exhausted_age < _MEMORY_READ_RETRY_SKIP_WINDOW_SECONDS: raise MemoryGitError(...)`) | HARDENING_RISK_SCORE: 1\n  PROBLEM: A skipped read writes no AI_MEMORY_TELEMETRY line, and its message leaves out the branch name that the normal \"Unable to read memory branch {memory_branch}:\" prefix carries.\n  WHY: Log analysis cannot tell a deliberately skipped read from a real clone failure. Suggested fix: before the raise, print one AI_MEMORY_TELEMETRY line built only from fixed tokens (op \"memory-read-retry\", ok false, target \"read-clone\", skipped true, max_attempts). Estimated lines changed: 5.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- HARDENING_SUGGESTION: scripts/ai_memory_lib.py | location: _run_memory_read_with_retry, the read-clone skip branch (after `if target == \"read-clone\" and _memory_write_clone_exhausted_at is not None:`) | HARDENING_RISK_SCORE: 1\n  PROBLEM: The skipped read raises MemoryGitError without any AI_MEMORY_TELEMETRY line; the only trace is the `recovery duplicate-check failed: Unable to read memory branch: skipped, ...` warning at scripts/ai_memory.py:2317, which leaves out the branch name.\n  WHY: Log analysis that counts `memory-read-retry` events cannot see a skipped read. Suggested fix: emit one stderr telemetry line with fixed tokens only, and add an optional `branch: str = \"\"` parameter so the message matches the normal prefix. Estimated lines changed: 6-8.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"A clone that returns 403 on every attempt: the step fails after 3 attempts.\"\n  Expected change site: `scripts/ai_memory_lib.py`, the retry path around `_clone_for_memory_branch`.\n  Evidence of absence: `_run_memory_read_with_retry` limits calls to its callback to three, but `_clone_for_memory_branch` can issue a fast clone and then a full-clone fallback when the fast clone fails. When the branch probe succeeds but both clone commands return 403, one callback call issues two clone attempts. The added claim test stubs `_clone_for_memory_branch`, so it does not verify the actual clone-command limit.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- HARDENING_SUGGESTION: scripts/ai_memory_lib.py | location: `_run_memory_read_with_retry`, lines 3556-3560 | HARDENING_RISK_SCORE: 1\n  PROBLEM: A read skipped after the write-clone retry budget runs out emits no `AI_MEMORY_TELEMETRY` event; the caller emits only a free-form warning.\n  WHY: Suggested fix: emit a telemetry event with fixed fields showing that the read was skipped, with no git output, URLs or credentials. Estimated lines changed: 5.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING_SUGGESTION: scripts/ai_memory_lib.py | location: _run_memory_read_with_retry, skip branch (lines 3553-3560) | HARDENING_RISK_SCORE: 1\n  PROBLEM: A read-clone skipped by the one-budget-per-step marker raises with no AI_MEMORY_TELEMETRY line, and the skip message drops the branch name used in `Unable to read memory branch {memory_branch}:`.\n  WHY: Log analysis cannot tell a skipped read from a real clone failure. Suggested fix: before the raise, print one AI_MEMORY_TELEMETRY line with fixed tokens only (`op`: `memory-read-retry`, `ok`: false, `target`: `read-clone`, `skipped`: true) and optionally include the branch name; fail-open behaviour and control flow are unchanged. Estimated lines changed: 6.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "51615e71bb884c8da56edcf81adb35d03b8840b5e447374f09fc7b0a20c5bbb7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10060,
+    "run_id": "45482867758",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45482867758",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124222733_5ba5586a84",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10060,
+    "run_id": "45482867758"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-24T22:27:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
