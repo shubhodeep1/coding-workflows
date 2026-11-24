@@ -2109,6 +2109,39 @@ the way to a fix PR without human action.
   `ai:check-triage-escalated` and sends a Telegram CRITICAL for human
   attention. The triage workflow also skips its own check-run by name to
   prevent self-triggering.
+- **One issue per failing base branch (Refs #9674):** when the base gate reads a
+  completed failing result (`failure`, `timed_out`, `cancelled`,
+  `startup_failure`, `action_required`) for the same check on the PR's base
+  branch, and that base is the repository's default branch, the issue is keyed
+  on the base branch (`sha256("<repo>|base=<ref>|check=<check>")`) instead of
+  the PR. If an open `ai:check-triage` issue already carries that fingerprint,
+  nothing is filed (`CHECK_TRIAGE skip reason=base_triage_tracked base=<ref>
+  issue=<n> pr=<n> check=<name>`); otherwise one issue is filed
+  (`base_keyed outcome=file`), titled `CI failure: <check> on <ref> (first seen
+  on PR #<n>)`, with a fifth header line `<!-- check-failure-triage:base=<ref> -->`
+  that makes `scripts/resolve_integration_ref.sh` keep the default branch
+  (`CI_TRIAGE_PR_BRANCH_ROUTING … outcome=skipped reason=base_keyed`) instead of
+  the example PR's head. A green or pending base, an unknown base result, a
+  non-default base and the routed paths (integration branch, PR-head and
+  target-branch routes) keep the per-PR fingerprint; historical mode is
+  unchanged. The heal-issue skip (`CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED`) runs
+  first. With `CHECK_TRIAGE_BRANCH_GUARD_ENABLED=true` the branch guard blocks a
+  base-keyed issue, because it carries no branch line.
+  Because runs for different PRs are not serialized, the post step lists open
+  `ai:check-triage` issues once more just before filing a base-keyed issue (one
+  read, base-keyed filings only) and files nothing when one already carries the
+  fingerprint (`CHECK_TRIAGE skip reason=base_triage_tracked … stage=post`); a
+  failed read files as before (`base_keyed recheck=read_failed outcome=file`).
+  If the base-keyed metadata handed to the diagnose stage fails its re-check
+  (unsafe ref, fingerprint mismatch, a routing line beside it, or historical
+  mode), nothing is filed: the run logs `CHECK_TRIAGE error
+  base_keyed_metadata_invalid`, sends one Telegram CRITICAL and fails.
+- **Open-issue cap (Refs #9674):** once `CHECK_FAILURE_TRIAGE_MAX_OPEN_ISSUES`
+  (default 5, `0` = no cap) `ai:check-triage` issues are open, the collect stage
+  files nothing, logs `CHECK_TRIAGE skip reason=open_issue_cap open=<n> cap=<cap>
+  pr=<n> check=<name>` and sends one Telegram WARNING. It counts the existing
+  open-triage listing (no extra API call); historical mode and a supersede
+  replacement are exempt.
 - **Routing to the PR branch (opt-in):** with
   `CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED=true`, the collect step checks the PR
   it already fetched (open, head and base in this repository, head not the
@@ -2960,6 +2993,7 @@ through `clarify → plan → implement → review`.
 | `CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED` | `true` | On when unset, empty or `true` (any case); `false` turns it off, and any other value turns it off with a `::warning::`. When on, `scripts/resolve_integration_ref.sh` treats an issue with no `ai:check-triage` label whose body does not open with a `check-failure-triage` marker as an ordinary issue, instead of refusing it as `reason=label_missing` because its prose mentions the markers (#8671). Issues filed by `scripts/check_failure_triage.sh` always open with the `fp=` header, so a label-stripped real triage issue is still refused. Off restores that refusal. The resolver reads the variable from its own environment; no workflow forwards a repository variable for it, so in Actions it stays at its default. |
 | `CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED` | `true` | On when unset, empty or `true` (any case); `false` turns it off, and any other value turns it off with a `::warning::`. While `CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED` is on, `scripts/resolve_integration_ref.sh` resolves an unblock-judge CI-failure re-issue (a lone `check-failure-triage:pr=<n>` marker on line 1, `Re-issued by the unblock judge from #N.` on line 2, a trusted author, no label) to the base branch of its PR when that PR merged into a non-default branch of this repository that still exists (#9170). Anything it cannot verify keeps the default branch and logs `::warning::CI_TRIAGE_PR_BRANCH_ROUTING ... outcome=skipped reason=<token>`; it never fails the phase, except that a rate-limited read exits `75`. Off keeps the default branch for every such re-issue (`reason=flag_off`) and leaves the labelled `ai:check-triage` routing unchanged. The clarify, plan, implement, orchestrate_clarify_respond and validate workflows forward the repository variable to the resolver in their "Resolve integration ref" step (default `true`), so setting it to `false` turns this routing off without touching `CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED`. |
 | `CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH` | `3` | Max auto-fix generations in a single failure lineage before the chain is escalated (`ai:check-triage-escalated` + Telegram) instead of opening another issue. |
+| `CHECK_FAILURE_TRIAGE_MAX_OPEN_ISSUES` | `5` | Open `ai:check-triage` issues at which check-failure triage stops filing new ones (`CHECK_TRIAGE skip reason=open_issue_cap`, one Telegram WARNING per run). `0` turns the cap off; any value that is not a non-negative integer warns and uses `5`. Counted from the open-triage listing the duplicate check already reads; historical mode and supersede replacements are exempt (Refs #9674). |
 | `CHECK_TRIAGE_BRANCH_GUARD_ENABLED` | `false` | When on, planning of an `ai:check-triage` issue is blocked (`ai:blocked`, with the existing BLOCKED comment and alert) unless its body has an explicit `Target branch:` or `Integration branch:` line naming an existing branch, instead of planning it on the default branch. The branch is never inferred from issue prose; reply `/answer` after fixing the metadata. A branch from verified PR-head routing (`CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED`) also passes, logged as `reason=pr_head_routed`. Other issues are unaffected. Log prefix `CHECK_TRIAGE_BRANCH_GUARD`. Triage issues get a branch line only when `CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED`, `CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED` or `TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED` adds one; with none of those on, turning this on blocks new triage issues until their bodies name a branch. |
 | `CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED` | `false` | Set to `true` to give a new triage issue a `Target branch: <head ref>` line, so its fix PR targets the failing PR's own branch instead of the default branch. Only an open PR whose head and base are this repository, whose head is not the default branch and whose branch name passes a strict check gets the line; anything else is filed without it (`CHECK_TRIAGE routing outcome=skip reason=…`). Model and log text cannot supply routing lines. |
 | `CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED` | `false` | When `true`, the triage issue gets one ``- **Integration branch:** `<head ref>` `` line naming the failing PR's head branch, so the fix is planned and implemented on that branch. The line is added only for an open, same-repository PR whose head SHA equals the failing check's SHA and whose head ref is a valid branch name. A verified route also skips the base-branch gate (`CHECK_TRIAGE base_gate outcome=file reason=pr_head_route`), because the fix lands on the PR's own branch. Otherwise the run logs `CHECK_TRIAGE skip reason=routing_unverified detail=<reason>`, sends a Telegram WARNING and files no issue. The body validator admits only that one script-generated line. |
