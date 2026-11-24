@@ -1873,7 +1873,7 @@ class LeaseHoldLabels(unittest.TestCase):
 		self.assertRegex(out, r"MERGE_LEASE pr=4 base=main mode=tick outcome=released reason=revoked_hold_label held_s=(\d+|-) merged=false\n")
 		rec = h.record()
 		self.assertIn("state=released", rec)
-		self.assertEqual(_skips(rec), [f"4:{_sha(4)}"])
+		self.assertEqual(_skips(rec), [f"4:{_sha(4)}:revoked_hold_label"])
 		self.assertIn(("released", "revoked_hold_label"), [(r["event"], r["reason"]) for r in _metrics(out)])
 		self.assertNotIn("statuses", " ".join(h.calls), "a hold label costs no API read")
 
@@ -1936,7 +1936,7 @@ class LeaseHoldLabels(unittest.TestCase):
 		h, out = _p2_tick(st, env={MAXH: "2"})
 		self.assertRegex(out, r"MERGE_LEASE pr=6 base=main mode=tick outcome=released reason=revoked_hold_label held_s=\d+ merged=false\n")
 		self.assertIn("pr=4 base=main mode=tick outcome=held reason=holder_open holders=1", out)
-		self.assertEqual(_skips(h.record()), [f"6:{_sha(6)}"])
+		self.assertEqual(_skips(h.record()), [f"6:{_sha(6)}:revoked_hold_label"])
 
 	def test_multi_holder_skips_a_hold_labelled_waiter(self) -> None:
 		st = {"pulls": [_pull(5), _pull(6)], "labels": {"5": [WAIT, "ai:scope-blocked"], "6": [WAIT]},

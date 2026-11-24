@@ -3582,7 +3582,8 @@ _merge_lease_queue_order()
 # MERGE_LEASE_HOLD_LABELS (unset gives the default list; empty, none or off
 # prints nothing), split on commas and trimmed. An entry equal to the wait
 # label is dropped, so a misconfiguration never makes every waiter
-# ineligible. No API call.
+# ineligible. A `none`/`off` entry inside a list is dropped too (so `none,`
+# prints nothing; `off,<label>` keeps <label>). No API call.
 _merge_lease_hold_labels()
 {
 	local hold_raw hold_entry hold_wait_lc hold_entry_lc
@@ -3599,6 +3600,8 @@ _merge_lease_hold_labels()
 		hold_entry="${hold_entry%"${hold_entry##*[![:space:]]}"}"
 		[ -n "${hold_entry}" ] || continue
 		hold_entry_lc="$(printf '%s' "${hold_entry}" | tr '[:upper:]' '[:lower:]')"
+		# A stray off token inside a list (`none,`) is never a label name.
+		case "${hold_entry_lc}" in none|off) continue ;; esac
 		[ "${hold_entry_lc}" != "${hold_wait_lc}" ] || continue
 		printf '%s\n' "${hold_entry}"
 	done
