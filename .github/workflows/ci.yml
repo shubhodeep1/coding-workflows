@@ -1856,6 +1856,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      # Budget-watch issue #9697 (run 44214045174, 15m24s of 20 minutes) was
+      # measured before #9702 moved six steps from this job to the job that
+      # now holds `Merge probe unit tests` (tests-hooks-and-orchestrator), so
+      # no further steps were moved. If budget-watch flags this job again, the
+      # next fix must read that run's step timings before moving anything.
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
