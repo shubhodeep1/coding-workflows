@@ -754,7 +754,9 @@ review_convergence_load_config()
 review_convergence_log()
 {
 	local blocking="$1" advisory="$2" applied="$3" reason="$4" outcome="continue"
-	if [ "${blocking}" = "0" ]; then
+	# A failed classification applied nothing and every finding still blocks,
+	# so it never reports an approval.
+	if [ "${blocking}" = "0" ] && [ "${reason}" != "error" ]; then
 		outcome="approve"
 	fi
 	printf 'REVIEW_CONVERGENCE pr=%s round=%s blocking=%s advisory_lone=%s outcome=%s applied=%s reason=%s\n' \
@@ -947,7 +949,7 @@ review_convergence_classify()
 				print l
 			}
 		}
-		function process_block(    i, l, cls, cls_l, prior, p, has_round, file, lines, lens, sev, flagged, in_ev, nev, ev, r, lo, hi, t, has_range, s, k, q, sup, named, named_any, ntok, toks, tk, cnt, reviewers, exempt, eff, summary, extra) {
+		function process_block(    i, l, cls, cls_l, prior, p, has_round, file, lines, lens, sev, flagged, in_ev, nev, ev, r, lo, hi, t, has_range, s, k, q, sup, cnt, reviewers, exempt, ulens, eff, summary, extra) {
 			cls = ""
 			prior = ""
 			has_round = 0
@@ -1043,27 +1045,23 @@ review_convergence_classify()
 						}
 					}
 				}
-				named_any = 0
-				ntok = split(flagged, toks, /[,;[:space:]]+/)
-				for (k = 1; k <= ntok; k++) {
-					tk = tolower(trim(toks[k]))
-					if (tk == "") {
-						continue
-					}
-					for (s = 1; s <= nsec; s++) {
-						if (sec_nonempty[s] && (tk == tolower(sec_name[s]) || tk == tolower(sec_full[s]))) {
-							named[s] = 1
-							named_any = 1
-						}
-					}
-				}
+				# Every reviewer section whose own file supports the finding
+				# counts, whether or not FLAGGED_BY names it: the count comes
+				# from the per-reviewer files, so an incomplete model
+				# attribution never demotes a finding (safe direction), and a
+				# FLAGGED_BY name without file support never adds one.
 				for (s = 1; s <= nsec; s++) {
-					if (sup[s] && (!named_any || named[s])) {
+					if (sup[s]) {
 						cnt++
 						reviewers = reviewers (reviewers == "" ? "" : ",") clean_name(sec_name[s])
 					}
 				}
-				if (lens == "SECURITY & INPUT VALIDATION" || lens == "IMPLICIT-EXECUTION & TRUST-BOUNDARY RISKS" || file == "") {
+				# Security lenses (lens 1 and lens 9) always block. LENS is
+				# model-written and passed through verbatim, so match by keyword,
+				# case-insensitively; an empty or UNKNOWN_LENS lens cannot be
+				# shown to be non-security and also keeps blocking.
+				ulens = toupper(trim(lens))
+				if (ulens ~ /SECURITY|TRUST-BOUNDARY|IMPLICIT-EXECUTION/ || ulens == "" || ulens == "UNKNOWN_LENS" || file == "") {
 					exempt = 1
 				}
 				for (k = 1; !exempt && k <= ncrit; k++) {

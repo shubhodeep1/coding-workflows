@@ -790,8 +790,14 @@ def test_convergence_floor_and_security_exemptions() -> None:
 		("src/other.py:2\tFLOOR_CRITICAL_KEYWORD:SECURITY\treview_alpha\televsewhere\n", "CORRECTNESS & LOGIC", False),
 		("", "SECURITY & INPUT VALIDATION", True),
 		("", "IMPLICIT-EXECUTION & TRUST-BOUNDARY RISKS", True),
-		("", None, False),
-		("", "security & input validation", False),
+		# LENS is model-written: a missing lens or a case / wording variant of a
+		# security lens keeps blocking (safe direction).
+		("", None, True),
+		("", "UNKNOWN_LENS", True),
+		("", "security & input validation", True),
+		("", "1. Security & Input Validation", True),
+		("", "Implicit-Execution & Trust-Boundary Risks ", True),
+		("", "PERFORMANCE & RESOURCE USE", False),
 	]
 	for floor_text, lens, blocks in cases:
 		with tempfile.TemporaryDirectory() as td:
@@ -839,6 +845,44 @@ def test_convergence_claimed_second_reviewer_without_file_support_is_lone() -> N
 		assert "blocking=0 advisory_lone=1" in _conv_log(result)
 		rows = _parse_status_rows(workspace / "runtime" / "review_convergence_advisory.txt")
 		assert rows[0][4] == "alpha"
+
+
+def test_convergence_unnamed_supporting_reviewer_still_counts() -> None:
+	# FLAGGED_BY names only alpha, but beta's own file anchors the finding
+	# and gamma's quotes its evidence: both are counted from the files.
+	for name, content in (
+		("beta", "FILE: src/module.py\nLINE: 3\nSame concern.\n"),
+		("gamma", "Arithmetic is wrong for the edge case in sample, too.\n"),
+	):
+		reviewers = dict(_CONV_DEFAULT_REVIEWERS)
+		reviewers[name] = content
+		with tempfile.TemporaryDirectory() as td:
+			workspace = _conv_workspace(td)
+			result = _run_convergence(workspace, _conv_issue("001", flagged_by="alpha"), reviewers=reviewers)
+			assert result.returncode == 0, result.stderr
+			assert "blocking=1 advisory_lone=0 outcome=continue applied=1" in _conv_log(result), name
+			assert "=== ISSUE 001 ===" in (workspace / "runtime" / "review_issues.txt").read_text(encoding="utf-8")
+
+
+def test_convergence_error_path_never_logs_approve() -> None:
+	# mktemp fails under an unusable TMPDIR, so classification applies nothing
+	# and every finding still blocks: the log line must not report approve.
+	with tempfile.TemporaryDirectory() as td:
+		workspace = _conv_workspace(td)
+		issues_text = _conv_issue("001")
+		old_tmpdir = os.environ.get("TMPDIR")
+		os.environ["TMPDIR"] = str(workspace / "missing-tmpdir")
+		try:
+			result = _run_convergence(workspace, issues_text)
+		finally:
+			if old_tmpdir is None:
+				os.environ.pop("TMPDIR", None)
+			else:
+				os.environ["TMPDIR"] = old_tmpdir
+		log = _conv_log(result)
+		assert "outcome=continue applied=0 reason=error" in log, log
+		assert "outcome=approve" not in log
+		assert "=== ISSUE 001 ===" in (workspace / "runtime" / "review_issues.txt").read_text(encoding="utf-8")
 
 
 def test_convergence_forged_bundle_section_is_not_counted() -> None:

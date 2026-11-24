@@ -11370,6 +11370,23 @@ def test_review_convergence_editor_prompt_only_when_advisory_present(tmp_path: P
 	assert "`not blocking: one reviewer (convergence round 3)`" in rendered
 	assert "`=== ADVISORY ISSUE` stub" in rendered
 	assert "Make no edits for them." in rendered
+	# A CI failure on the head always blocks, in every round (#10056).
+	assert "This never applies to a failure listed in the CI / lint check-run snapshot: a CI failure on the head always blocks" in rendered
+
+
+def test_review_convergence_editor_prompt_on_resume_from_stubs(tmp_path: Path) -> None:
+	# A same-head resume restores the stubbed review_issues.txt without the
+	# advisory TSV; the directive still renders, with the round from the stub.
+	(tmp_path / "rt").mkdir()
+	(tmp_path / "rt" / "review_issues.txt").write_text(
+		"=== ADVISORY ISSUE 001 ===\nFILE: src/a.py\nCLASSIFICATION: advisory-lone\nCONVERGENCE_ROUND: 4\n"
+		"SUMMARY: x\n=== END ADVISORY ISSUE 001 ===\n",
+		encoding="utf-8",
+	)
+	rendered = _conv_render_editor_fragment(tmp_path, "")
+	assert "(not blocking this round; one reviewer) ===" not in rendered
+	assert "`not blocking: one reviewer (convergence round 4)`" in rendered
+	assert "a CI failure on the head always blocks" in rendered
 
 
 def test_review_convergence_post_editor_summary_section(tmp_path: Path) -> None:
@@ -11396,6 +11413,18 @@ def test_review_convergence_post_editor_summary_section(tmp_path: Path) -> None:
 	result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + block], capture_output=True, text=True, env=env, timeout=30, check=False)
 	assert result.returncode == 0, result.stderr
 	assert comment.read_text(encoding="utf-8") == "AI autofix editor summary\n"
+	# Rows past the 50-row cap are counted, never dropped silently, and
+	# markdown link characters are stripped.
+	(runtime_dir / "review_convergence_advisory.txt").write_text(
+		"".join(f"{i:03d}\tsrc/a.py:{i}\tCORRECTNESS & LOGIC\thigh\talpha\t3\tsee [x](https://e.invalid)\n" for i in range(1, 54)),
+		encoding="utf-8",
+	)
+	result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + block], capture_output=True, text=True, env=env, timeout=30, check=False)
+	assert result.returncode == 0, result.stderr
+	body = comment.read_text(encoding="utf-8")
+	assert len([line for line in body.splitlines() if line.startswith("- `src/a.py:")]) == 50
+	assert "- ... and 3 more not shown here (see the review ledger)" in body
+	assert "[x](" not in body and "see xhttps://e.invalid" in body
 
 
 def test_review_convergence_rb_judge_notes(tmp_path: Path) -> None:
@@ -11455,7 +11484,8 @@ def test_review_convergence_consolidator_prompt_lenses_and_attribution() -> None
 	assert "Never emit `CLASSIFICATION: advisory-lone`" in text
 	assert "`FLAGGED_BY` must name every reviewer that raised the finding" in text
 	ledger = (REPO_ROOT / "scripts" / "review_issue_ledger.sh").read_text(encoding="utf-8")
-	assert 'lens == "SECURITY & INPUT VALIDATION" || lens == "IMPLICIT-EXECUTION & TRUST-BOUNDARY RISKS"' in ledger
+	# The ledger matches lens 1 and lens 9 by keyword, case-insensitively.
+	assert "ulens ~ /SECURITY|TRUST-BOUNDARY|IMPLICIT-EXECUTION/" in ledger
 
 
 def test_review_convergence_log_prefix_registered() -> None:

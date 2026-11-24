@@ -1497,9 +1497,14 @@ Do not let advisory artifacts reduce or replace raw reviewer signal from ${RUNTI
 CONSOLIDATOR + LEDGER CONTEXT
 Treat ${RUNTIME_DIR}/reviewer_bundle.txt as the authoritative findings source.
 Treat ${RUNTIME_DIR}/review_issues.txt as advisory only; it may be incomplete.
-Treat ${RUNTIME_DIR}/floor_tags.txt as non-skippable floor findings that must be addressed or explicitly rejected with reason.$(if [ -s "${RUNTIME_DIR}/review_convergence_advisory.txt" ]; then
+Treat ${RUNTIME_DIR}/floor_tags.txt as non-skippable floor findings that must be addressed or explicitly rejected with reason.$(if [ -s "${RUNTIME_DIR}/review_convergence_advisory.txt" ] || grep -qs '^=== ADVISORY ISSUE ' "${RUNTIME_DIR}/review_issues.txt"; then
+	# The stub check keeps the directive on a same-head resume, which restores
+	# the stubbed review_issues.txt without the advisory TSV.
 	review_convergence_prompt_round="$(awk -F '\t' 'NR == 1 { print $6 }' "${RUNTIME_DIR}/review_convergence_advisory.txt" 2>/dev/null | tr -cd '0-9')"
-	printf '\n%s' "REVIEW CONVERGENCE: the findings listed in ${RUNTIME_DIR}/review_convergence_advisory.txt and every \`=== ADVISORY ISSUE\` stub in ${RUNTIME_DIR}/review_issues.txt are NOT blocking in this round (only one reviewer raised each one). Make no edits for them. List each one under \"Ignored suggestions (with short reason):\" with the fixed reason \`not blocking: one reviewer (convergence round ${review_convergence_prompt_round:-unknown})\`. For these findings this overrides the non-skippable wording for a FLOOR_HIGH_CONFIDENCE-only row at the same place and overrides the raw reviewer files in ${RUNTIME_DIR}/reviewer_bundle.txt."
+	if [ -z "${review_convergence_prompt_round}" ]; then
+		review_convergence_prompt_round="$(sed -n 's/^CONVERGENCE_ROUND:[[:space:]]*//p' "${RUNTIME_DIR}/review_issues.txt" 2>/dev/null | head -n 1 | tr -cd '0-9')"
+	fi
+	printf '\n%s' "REVIEW CONVERGENCE: the findings listed in ${RUNTIME_DIR}/review_convergence_advisory.txt and every \`=== ADVISORY ISSUE\` stub in ${RUNTIME_DIR}/review_issues.txt are NOT blocking in this round (only one reviewer raised each one). Make no edits for them. List each one under \"Ignored suggestions (with short reason):\" with the fixed reason \`not blocking: one reviewer (convergence round ${review_convergence_prompt_round:-unknown})\`. For these findings this overrides the non-skippable wording for a FLOOR_HIGH_CONFIDENCE-only row at the same place and overrides the raw reviewer files in ${RUNTIME_DIR}/reviewer_bundle.txt. This never applies to a failure listed in ${PR_CHECK_RUNS_CONTEXT_FILE:-the CI / lint check-run snapshot}: a CI failure on the head always blocks, so fix it in this run even when the only finding that covers it is listed above."
 fi)
 Treat ${RUNTIME_DIR}/ledger_status.txt as retry history for issue persistence across iterations.
 For issues marked PERSISTING or RESURGENT, prior fix attempts failed: use a materially different approach or explicitly accept residual risk with rationale.

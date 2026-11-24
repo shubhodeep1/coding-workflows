@@ -246,7 +246,8 @@ fi
 # lens, from round REVIEW_CONVERGENCE_FROM_ROUND on) did not block this round;
 # list them here so they are never dropped silently. Rides on this step's
 # existing comment (no extra API call). Every field is re-sanitised: no
-# control characters, backticks, @, < or >, and the summary is capped.
+# control characters, backticks, @, < or >, [ ] ( ) (no markdown links),
+# and the summary is capped.
 review_convergence_comment_file="${RUNTIME_DIR:-}/review_convergence_advisory.txt"
 if [ -n "${RUNTIME_DIR:-}" ] && [ -f "${review_convergence_comment_file}" ] && [ ! -L "${review_convergence_comment_file}" ] \
   && [ -s "${review_convergence_comment_file}" ]; then
@@ -254,6 +255,7 @@ if [ -n "${RUNTIME_DIR:-}" ] && [ -f "${review_convergence_comment_file}" ] && [
     function clean(s, maxlen) {
       gsub(/[[:cntrl:]]/, " ", s)
       gsub(/[`@<>]/, "", s)
+      gsub(/[\[\]()]/, "", s)
       gsub(/[[:space:]]+/, " ", s)
       sub(/^ /, "", s)
       sub(/ $/, "", s)
@@ -263,9 +265,19 @@ if [ -n "${RUNTIME_DIR:-}" ] && [ -f "${review_convergence_comment_file}" ] && [
       }
       return s
     }
+    NF >= 7 {
+      total++
+    }
     NF >= 7 && n < 50 {
       n++
       printf "- `%s` (%s, %s) — raised by %s in round %s: %s\n", clean($2, 300), clean($3, 80), clean($4, 20), clean($5, 200), clean($6, 6), clean($7, 200)
+    }
+    END {
+      # The list is capped at 50 rows; say how many more there are so none
+      # is dropped silently.
+      if (total > n) {
+        printf "- ... and %d more not shown here (see the review ledger)\n", total - n
+      }
     }
   ' "${review_convergence_comment_file}" 2>/dev/null || true)"
   if [ -n "${review_convergence_comment_bullets}" ]; then
