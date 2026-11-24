@@ -42,6 +42,31 @@ capture_step_failure() {
   } >> "${CAPTURE_FILE}" || true
 }
 
+# Diagnostics only (#9940, Refs #9937): print one IMPLEMENT_SYMLINK_DELETE
+# line for every symlink tracked in HEAD that no longer exists in the
+# worktree. Called before and after the artifact cleanup below, so the log
+# shows whether the editor result (both stages) or the cleanup (post_cleanup
+# only) removed it. Fails open: never changes behaviour or the exit status.
+implement_log_tracked_symlink_deletes() {
+  local symlink_stage="${1:-unknown}"
+  local symlink_record symlink_meta symlink_path symlink_safe_path
+  while IFS= read -r -d '' symlink_record; do
+    symlink_meta="${symlink_record%%$'\t'*}"
+    if [ "${symlink_meta%% *}" != "120000" ]; then
+      continue
+    fi
+    symlink_path="${symlink_record#*$'\t'}"
+    if [ -z "${symlink_path}" ]; then
+      continue
+    fi
+    if [ ! -L "${symlink_path}" ] && [ ! -e "${symlink_path}" ]; then
+      symlink_safe_path="${symlink_path//[[:space:][:cntrl:]]/?}"
+      echo "IMPLEMENT_SYMLINK_DELETE path=${symlink_safe_path} stage=${symlink_stage}"
+    fi
+  done < <(git ls-tree -r -z --full-tree HEAD 2>/dev/null | grep -z '^120000 ' || true)
+  return 0
+}
+
 FAILED_COMMAND=""
 LAST_COMMAND=""
 trap 'LAST_COMMAND="${BASH_COMMAND}"' DEBUG
@@ -63,6 +88,8 @@ on_step_exit() {
 trap on_step_exit EXIT
 exec 3>&2
 exec 2> >(tee "${STEP_STDERR_FILE}" >&3)
+
+implement_log_tracked_symlink_deletes pre_cleanup || true
 
 # Remove workflow-generated/fetched artifacts BEFORE checking for
 # changes so they don't cause false-positive "file changes" detection.
@@ -297,6 +324,8 @@ if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -n "${SERENA_PROJECT
     fi
   fi
 fi
+
+implement_log_tracked_symlink_deletes post_cleanup || true
 
 porcelain_status="$(git status --porcelain)"
 if [ -z "${porcelain_status}" ]; then
@@ -735,6 +764,77 @@ else
   fi
 fi
 # <<< files_touched scope-enforcement guard (commit) <<<
+
+# >>> auto-heal remediation no-code guard (commit) >>>
+# An auto-heal remediation issue (a body line opens with the
+# `<!-- auto-heal-remediation:v1` marker) asks for a code fix to a live alert.
+# When every staged path is a doc, test, fragment or DB contract path, the
+# change cannot fix the alert, and merging it closes the alert unfixed
+# (2026-11 audit: consumer remediation PRs that changed only README and
+# tests). Stop before the commit so no PR is opened and no review runs; the
+# "Destructive-commit guard — label + alert on rejection" step parks the issue
+# with ai:scope-blocked and one comment (scope_violation_blocked=
+# remediation-no-code). Reads only the issue body already on disk
+# (ISSUE_BODY_FILE), no API call. Fails OPEN: toggle off, heal route, no body
+# file, a failed mktemp, a missing helper or any helper exit other than 40 all
+# log-and-allow. A run that started from a prior PR's branch
+# (PRIOR_PR_BASELINE_BRANCH) is skipped too: that branch may already hold the
+# code change, and this run's staged set is only the delta on top of it.
+if [ "${REMEDIATION_NO_CODE_GUARD_ENABLED:-true}" != "true" ]; then
+  echo "::notice::Remediation no-code guard disabled (REMEDIATION_NO_CODE_GUARD_ENABLED='${REMEDIATION_NO_CODE_GUARD_ENABLED:-true}')."
+elif [ -n "${PRIOR_PR_BASELINE_BRANCH:-}" ]; then
+  echo "IMPLEMENT_REMEDIATION_NO_CODE_GUARD outcome=allow reason=prior_pr_baseline issue=${ISSUE_NUMBER:-}"
+elif [ "${HEAL_ROUTE:-false}" != true ] && [ -n "${ISSUE_BODY_FILE:-}" ] && [ -f "${ISSUE_BODY_FILE}" ]; then
+  # Same query as the automation-path guard: core.quotePath=false keeps
+  # non-ASCII names literal (a C-quoted name would read as code), and
+  # --no-renames plus T lists a moved-away code path and type changes.
+  remediation_staged="$(git -c core.quotePath=false diff --cached --name-only --no-renames --diff-filter=ACMDT || true)"
+  if [ -n "${remediation_staged}" ]; then
+    remediation_staged_file="$(mktemp "${TMPDIR:-/tmp}/implement-remediation-staged.XXXXXX" 2>/dev/null || true)"
+    remediation_record=""
+    remediation_rc=0
+    if [ -z "${remediation_staged_file}" ] || ! printf '%s\n' "${remediation_staged}" > "${remediation_staged_file}"; then
+      remediation_rc=126
+    elif [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" ]; then
+      set +e
+      remediation_record="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
+        --remediation-no-code-check \
+        --issue-body-file "${ISSUE_BODY_FILE}" \
+        --staged-file "${remediation_staged_file}")"
+      remediation_rc=$?
+      set -e
+    else
+      remediation_rc=127
+    fi
+    [ -z "${remediation_staged_file}" ] || rm -f "${remediation_staged_file}"
+    remediation_reason="$(printf '%s' "${remediation_record}" | jq -r '.reason // ""' 2>/dev/null || true)"
+    [[ "${remediation_reason}" =~ ^[a-z_]+$ ]] || remediation_reason="unknown"
+    case "${remediation_rc}" in
+      0)
+        echo "IMPLEMENT_REMEDIATION_NO_CODE_GUARD outcome=allow reason=${remediation_reason} issue=${ISSUE_NUMBER:-}"
+        ;;
+      40)
+        remediation_count="$(printf '%s\n' "${remediation_staged}" | sed '/^$/d' | wc -l | tr -d ' ')"
+        echo "::error::Refusing to commit: issue #${ISSUE_NUMBER:-} is an auto-heal remediation and all ${remediation_count} staged path(s) are docs, tests, fragments or DB contracts. A remediation must change code."
+        printf '%s\n' "${remediation_staged}" | sed '/^$/d;s/^/  - /'
+        echo "IMPLEMENT_REMEDIATION_NO_CODE_GUARD outcome=block reason=no_code_change issue=${ISSUE_NUMBER:-} count=${remediation_count}"
+        {
+          echo "scope_violation_blocked=remediation-no-code"
+          echo "scope_violation_count=${remediation_count}"
+          echo 'scope_violation_files<<__SVF_EOF__'
+          printf '%s\n' "${remediation_staged}" | sed '/^$/d'
+          echo '__SVF_EOF__'
+        } >> "$GITHUB_OUTPUT"
+        exit 1
+        ;;
+      *)
+        echo "::warning::Remediation no-code guard failed open (helper exit ${remediation_rc}); staged change set not checked this run."
+        echo "IMPLEMENT_REMEDIATION_NO_CODE_GUARD outcome=allow reason=helper_error issue=${ISSUE_NUMBER:-}"
+        ;;
+    esac
+  fi
+fi
+# <<< auto-heal remediation no-code guard (commit) <<<
 
 # If every Codex-produced change was filtered out by the path exclusions
 # above (or stripped by the fetched-manifest cleanup earlier in this step),

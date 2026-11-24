@@ -1013,7 +1013,8 @@ command whose documented job is to dispatch a workflow (`/implement-plan-ai`,
 `/apply-analysis`, and any successor that says so in its own file), that
 invocation is the approval for the dispatch it describes. Likewise, the
 user's go on a §31 plan approves opening the issues (or the orchestrator
-dispatch) that plan names.
+dispatch) that plan names, and §34.B approves opening a prevention issue in
+the repository the session works in.
 
 ### D) Transport & Tool Precedence
 
@@ -1486,7 +1487,8 @@ not change:
 3. **Show the plan and wait for the user's go.** Open nothing else before
    it: no issue, no `/implement-plan-claude` dispatch, no implementation PR.
    The go is the approval §23.C requires for opening the issues or
-   dispatching the orchestrator.
+   dispatching the orchestrator. The one exception is a §34.B prevention
+   issue in the repository the session works in: §34.B is its go.
 4. **Open the issues** (single-PR path only; the multi-PR path ends at the
    `/implement-plan-claude` dispatch, and the orchestrator opens its own
    tracking and wave issues). One issue per repository that needs a change,
@@ -1622,6 +1624,87 @@ on fewer runners. Delivery speed must not suffer.
   splitting the work into more jobs or workflows.
 - §15: one job that does the work of several also shares their API results;
   reuse them instead of fetching again.
+
+---
+
+## §34. Prevent Recurrence (MANDATORY)
+
+This applies in this repo and in every consumer repo that receives this file
+via the `@stable` sync, and it is not superseded by §12. In PR review mode
+(§12), a prevention fix that fits the PR lands in the PR under review
+(§12.A); one too large for it becomes a §34.B issue, never a follow-up PR.
+One that needs several PRs cannot be a §34.B issue (§31.B step 4): ask in
+the §2 format, as §12.A requires, and open no plan PR before the answer.
+
+Fixing one instance of a problem is half the job. Whenever a session solves a
+problem, it MUST check whether the same problem can happen again and, if it
+can, put a lasting fix in place as part of the same work. A problem is solved
+when the session unsticks a PR, issue or run by hand, repairs a failed check,
+works around a pipeline defect, corrects data or configuration, or finds out
+why something stalled.
+
+### A) The check
+
+For every problem solved, answer three questions:
+
+1. **Cause.** What made the problem possible, from evidence (logs, code, run
+   history), not from a guess (§8).
+2. **Recurrence.** Can it happen again without a person noticing? Look for
+   other PRs, issues, runs or repos that are in the same state now (one
+   bounded search, §15) and list them.
+3. **Prevention.** What stops it: a code or workflow fix, a test, a guard or
+   an alert, a safer default, or a correction to a document that misled.
+
+### B) Put the fix in place
+
+- **It cannot recur, or a fix is already merged or tracked:** say so and name
+  the PR or issue. Search before opening anything, so the same cause never
+  gets two issues.
+- **A small fix (§31.A):** implement it in the session, with a test, and run
+  the test locally before committing. This rule is the go for it under §0
+  and §2 only while every §31.A condition holds; any doubt about the cause,
+  the fix or its effect on the user's work makes it a §2 ask.
+- **Anything larger:** write the plan (§31.B step 2) and open the issue for
+  the pipeline in the same turn, following §31.B step 4 (`ai:engine-claude`
+  at creation, `Refs` links, never auto-close keywords, §19). This rule is
+  the user's standing go for that issue (§23.C, §31.B step 3) only in the
+  repository the session works in: show the plan in the reply and open the
+  issue without waiting. An issue in any other repository, consumer repos
+  included, still needs the named §2 ask §23.C requires. One issue per cause
+  per repository. The user can close or change it. A fix that needs several
+  PRs (the multi-PR path of §31.B step 2) is not covered: follow §31.B steps
+  2 and 3 (open the plan PR, then wait for the user's go before the
+  `/implement-plan-claude` dispatch, §23.C). In PR review mode, the §2 ask in
+  the §34 intro comes first instead: open no plan PR before the answer.
+- **The fix needs an action only the user can take** (a variable, setting,
+  ruleset, secret, billing change or any other ask-first action in this
+  file): ask in the §2 format, name the exact change, and keep the item open
+  until it is done.
+
+### C) What counts as a lasting fix
+
+- Remove the cause where that is possible. Where it is not, detect it and
+  alert. A note in a document is the last resort.
+- A fix that depends on a person remembering something is not a fix (§18).
+- The workaround the session used (a hand merge, a hand dispatch, a pushed
+  test fix, a re-run) is never the fix.
+- A prevention fix follows every other rule in this file (§5, §6, §10, §12,
+  §15, §18, §19, §23, §27, §31, §33). It is not a licence for unrelated
+  refactors.
+
+### D) Reporting
+
+The final reply lists each problem the session solved with its cause, whether
+it can recur, and the fix: a PR, an issue, or the user's pending action. "No
+lasting fix needed" must come with the reason. Track the items like a §11
+checklist: an item stays open until its fix is merged, is tracked in an open
+issue, or the user drops it.
+
+### E) Interactive Sessions Only
+
+The unattended pipelines read `unattended_system_instructions.md` and never
+see this file. Their own recurrence handling (workflow log analysis, the
+workflow-failure heal intake) is unchanged.
 
 ---
 
