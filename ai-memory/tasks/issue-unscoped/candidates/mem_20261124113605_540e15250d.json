@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:3436-3475 | severity=critical | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: On head 918beae2, CI run 45343694485 cancelled `orchestrate-poll (1)` and `(2)` with no failing test, which failed the `lint` rollup. The cause is possibly the 8 new full-poller hold tests in `tests/test_orchestrate_poll_process.py` (about lines 16844-17033) pushing a shard past `timeout-minutes: 20` at line 3475.\n  WHY: A cancelled `orchestrate-poll` fails the required `lint` check and blocks the merge. The cause is unconfirmed, because it could also be a newer run replacing this one. Severity disagreement: sonnet and luna said NIT, and glm said MAJOR. The highest is used, mapped to critical.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:3436-3475 | severity=low (source: NIT) | confidence=2\n  PROBLEM: On head 918beae2, CI run 45343694485 cancelled `orchestrate-poll (1)` and `(2)`, which failed the `lint` rollup. No test failed. The 8 new full-poller tests in `tests/test_orchestrate_poll_process.py` may push a shard past its 20-minute budget (`timeout-minutes: 20`, line 3475).\n  WHY: The cancellation blocks the merge. The cause is unconfirmed, and a re-run (45366166694) was in progress. If it recurs, rebalance the shards or trim the tests.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_orchestrate_poll_process.py:16847-17028 | severity=low (source: NIT) | confidence=3\n  PROBLEM: On head 918beae2, CI run 45343694485 cancelled `orchestrate-poll (1)` and `(2)`, and `lint` failed as a result. The 8 added full-poller tests (lines 16847-17028) increase the work in the sharded module. The `orchestrate-poll` job has a 20-minute timeout at `.github/workflows/ci.yml:3475`.\n  WHY: Cancelled matrix jobs fail the required CI gate. The logs do not establish whether the new tests caused the cancellations.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:3436-3475 | severity=medium (source: MAJOR) | confidence=2\n  PROBLEM: On head 918beae2 (run 45343694485), `orchestrate-poll (1)` and `(2)` were cancelled with no failing test, which failed the `lint` rollup. The 8 new tests each run the real poller sandbox (9-15s each locally). The shard budget is already tight (20-minute cap, group 0 previously at 16m45s per the comment at lines 3441-3442).\n  WHY: The cancellation blocks the merge. If the cause is the shard time budget, the same legs will flake on every future change to this test file. The cancellation could also come from run supersession.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cdf2f6211e6eac0eb3cb5b15248602688383e46237220ef536ed9db361a8763a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9832,
+    "run_id": "45363609053",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "github-actions[bot]",
+    "run_attempt": 1,
+    "run_id": "45363609053",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124113605_540e15250d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9832,
+    "run_id": "45363609053"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T11:36:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
