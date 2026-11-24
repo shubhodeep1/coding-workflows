@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/auto_release_stable.sh:181-190 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: When gh_helpers.sh cannot be sourced (`source ... 2>/dev/null || true` at line 163), the fallback zombie_queued_live_count ignores its limit and cutoff arguments and returns the raw queued-run total with wedged=0 and exit code 0, so the caller treats the raw count as a valid live count.\n  WHY: With 245 queued runs (240 wedged, 5 live) and a limit of 100, the degraded path compares 245 against AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS and skips the release with reason=runner_queue_deep, against Goal G1, and nothing in the logs tells this decision apart from a correct live-count one. Severity disagreement: gemini, openai and glm said MAJOR; minimax said NIT, calling it a documented, intentional degradation that matches the #9473 fallbacks. anthropic_claude-sonnet-5_5 checked this finding and rejected it as intended behaviour, citing lines 165-171 and 181-182 and the issue's G1 (\"the count is the raw one, as today\").\n- scripts/auto_release_stable.sh:181-190 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The fallback zombie_queued_live_count does not check `${1}` against `^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$` the way the main helper does (line 4485), so an empty or malformed repo argument builds a `repos//actions/runs?...` URL.\n  WHY: This path runs only when gh_helpers.sh fails to source; the main helper covers the problem on the common path. Reported as SEVERITY: NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/auto_release_stable.sh:lines 181-189 (fallback zombie_queued_live_count) | severity=MAJOR | confidence=4\n  PROBLEM: When gh_helpers.sh cannot be sourced, the fallback zombie_queued_live_count returns the raw queued-run total as a valid live count with exit code 0.\n  WHY: The caller takes the raw total, wedged runs included, as accurate; if it reaches AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS the release is wrongly blocked, against G1. The fallback should return exit code 1 so the caller takes the fail-open dispatch path.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/auto_release_stable.sh:lines 181-190 (the in-script fallback `zombie_queued_live_count`); cf. last-run edit at line 188 | severity=NIT | confidence=3\n  PROBLEM: The fallback runs only when `source \"${SCRIPT_DIR}/gh_helpers.sh\"` at line 163 fails, and it emits `<total>\\t0` (the raw pre-#10032 count with wedged=0), so 245 queued runs (240 wedged) still trigger runner_queue_deep. It also does not check `${1}` against the repo regex the main helper uses (line 4485), so a malformed repo argument builds `repos//actions/runs?...`.\n  WHY: This only happens when gh_helpers.sh cannot be sourced. The behaviour is intentional and documented (lines 181-182) and matches the #9473 fallbacks, so it is a documented degradation rather than a strict defect. The last autofix turn did not address it; it only tightened the regex to `^[0-9]{1,12}$`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/auto_release_stable.sh:163, 181-189 | severity=MAJOR | confidence=4\n  PROBLEM: When `gh_helpers.sh` cannot be sourced, the fallback returns the raw queued-run total with `wedged=0` and treats that count as valid.\n  WHY: With 245 queued runs, 240 of them wedged, this path compares 245 against the release limit instead of the 5 live runs and skips the release cycle.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/auto_release_stable.sh:lines 183-190 (fallback zombie_queued_live_count), sourced at line 163, consumed at lines 771-781 | severity=MAJOR | confidence=4\n  PROBLEM: When gh_helpers.sh cannot be sourced, the fallback ignores the limit (arg 2) and cutoff (arg 3) and returns the raw total with wedged=0 after one per_page=1 read. The caller compares that total with the limit at line 779 and calls skip_release runner_queue_deep at line 781. Nothing in the logs marks the degraded path, and wedged=0 is reported even though wedged runs were not excluded.\n  WHY: Whenever gh_helpers.sh fails to load and wedged runs push the raw total over the limit, the release cycle is skipped with AUTO_RELEASE_SKIPPED reason=runner_queue_deep queued=<raw total>. This reproduces the 2026-11-23 stall, and the log line looks the same as a correct live-count decision. Suggested fix: when the limit and cutoff are > 0, do the second `created=<=cutoff` read and subtract, clamped to [0, total].\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c6db832e9b9bb7ab5f650455ce77793a8354155c93392b538438602268218f1f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10038,
+    "run_id": "45349744884",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45349744884",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124094226_38e7a8a3cf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10038,
+    "run_id": "45349744884"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T09:42:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
