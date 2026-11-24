@@ -225,13 +225,23 @@ class SweepPriorityLaneTest(unittest.TestCase):
 				self.assertIn("skipped_priority_lane=0", result.stdout)
 
 	def test_pr_held_past_the_cap_is_dispatched(self) -> None:
+		# The cap counts from the hold start (queued run created_at + wait),
+		# not from updated_at: a stale PR is still held when the hold begins.
 		prs = [_rest_pr(10, updated_at="2020-01-01T00:00:00Z"), _rest_pr(11, updated_at=""), _rest_pr(12)]
 		_, nodes = self._three()
 		result = self.run_sweep(prs, nodes, queued=[_queued_run("CI [pr:12]", 30 * 60)])
 		self.assertEqual(result.returncode, 0, result.stderr)
+		self.assertEqual(self.dispatched(), ["12"])
+		self.assertIn("PRIORITY_LANE pr=10 outcome=deferred reason=priority_run_queued surface=sweep", result.stdout)
+		self.assertIn("PRIORITY_LANE pr=11 outcome=deferred reason=priority_run_queued surface=sweep", result.stdout)
+		self.assertRegex((self.tmp / "priority-lane-hold.txt").read_text(), r"since=[1-9][0-9]*\n")
+		# Hold started more than PRIORITY_LANE_MAX_DEFER_MINUTES ago: released.
+		(self.tmp / "dispatches.log").unlink(missing_ok=True)
+		result = self.run_sweep(prs, nodes, queued=[_queued_run("CI [pr:12]", 140 * 60)])
+		self.assertEqual(result.returncode, 0, result.stderr)
 		self.assertEqual(self.dispatched(), ["12", "10", "11"])
 		self.assertIn("PRIORITY_LANE pr=10 outcome=released reason=max_defer surface=sweep", result.stdout)
-		self.assertIn("PRIORITY_LANE pr=11 outcome=released reason=since_unknown surface=sweep", result.stdout)
+		self.assertIn("PRIORITY_LANE pr=11 outcome=released reason=max_defer surface=sweep", result.stdout)
 
 	def test_failed_queue_read_holds_nothing(self) -> None:
 		prs, nodes = self._three()
@@ -412,8 +422,13 @@ class LeaseTickPriorityLaneTest(unittest.TestCase):
 	def test_hold_releases_a_waiter_past_the_cap_and_ignores_wedged_runs(self) -> None:
 		pulls = [_pull(5), _pull(6)]
 		labels = {"5": ["ai:merge-lease-wait"]}
+		# A stale updated_at alone does not release the waiter: the cap counts
+		# from the hold start.
 		h, out = self._tick(pulls, labels, {6: (6, ["ai:priority"])}, active_runs=[self._queued_review(6, 30 * 60)],
 			updated={5: "2020-01-01T00:00:00Z"})
+		self.assertIn("PRIORITY_LANE pr=5 outcome=deferred reason=priority_run_queued surface=lease", out)
+		self.assertNotIn("outcome=granted", out)
+		h, out = self._tick(pulls, labels, {6: (6, ["ai:priority"])}, active_runs=[self._queued_review(6, 140 * 60)])
 		self.assertIn("PRIORITY_LANE pr=5 outcome=released reason=max_defer surface=lease", out)
 		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=granted", out)
 		h, out = self._tick(pulls, labels, {6: (6, ["ai:priority"])}, active_runs=[self._queued_review(6, 30 * 3600)])

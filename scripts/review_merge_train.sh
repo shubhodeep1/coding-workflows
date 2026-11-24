@@ -1793,13 +1793,16 @@ _mt_merge_lease_queue_log()
 # priority and are held back this tick: a priority PR's review, security-audit
 # or final-CI run has been queued (not wedged) for PRIORITY_LANE_WAIT_MINUTES
 # (_pr_priority_lane_pressure over the tick's run cache, _MT_LEASE_RUNS_JSON),
-# and the waiter's updated_at is within PRIORITY_LANE_MAX_DEFER_MINUTES
-# (_pr_priority_lane_decide, `PRIORITY_LANE ... surface=lease`). The run cache
+# and the hold started less than PRIORITY_LANE_MAX_DEFER_MINUTES ago (the
+# waiter's updated_at only when the hold start is unknown;
+# _pr_priority_lane_decide, `PRIORITY_LANE ... surface=lease`). The run cache
 # is the one _mt_lease_pr_runs_active uses (at most one listing pass per
 # tick); a cache that is not "ok" holds nothing back. No other API call.
 _MT_PRIORITY_LANE_PRS=""
 _MT_PRIORITY_LANE_PREPARED=""
 _MT_PRIORITY_LANE_HOLD=""
+# When the active hold started (epoch; the starvation-cap origin).
+_MT_PRIORITY_LANE_HOLD_SINCE=""
 _MT_PRIORITY_LANE_DEFER_CSV=""
 _mt_priority_lane_on()
 {
@@ -1862,8 +1865,9 @@ _mt_priority_lane_defer_for_base()
 			[[ "${pld_wedged}" =~ ^[0-9]+$ ]] || pld_wedged=0
 			[ "${pld_wedged}" -gt 0 ] && [ "${pld_now}" -gt "${pld_wedged}" ] && pld_cutoff=$((pld_now - pld_wedged))
 			pld_hit="$(_pr_priority_lane_pressure "${_MT_LEASE_RUNS_JSON}" "${_MT_PRIORITY_LANE_PRS}" "${pld_cutoff}" "${pld_now}" "${MT_DEFAULT_BRANCH}")"
-			if [[ "${pld_hit}" =~ ^([1-9][0-9]*)\ ([0-9]+)$ ]]; then
+			if [[ "${pld_hit}" =~ ^([1-9][0-9]*)\ ([0-9]+)(\ ([1-9][0-9]*))?$ ]]; then
 				_MT_PRIORITY_LANE_HOLD=true
+				_MT_PRIORITY_LANE_HOLD_SINCE="${BASH_REMATCH[4]}"
 				_mt_log "PRIORITY_LANE_HOLD outcome=active pr=${BASH_REMATCH[1]} age_min=${BASH_REMATCH[2]} surface=lease"
 			else
 				_mt_log "PRIORITY_LANE_HOLD outcome=none surface=lease"
@@ -1876,7 +1880,7 @@ _mt_priority_lane_defer_for_base()
 	while read -r pld_n pld_u; do
 		[[ "${pld_n:-}" =~ ^[1-9][0-9]*$ ]] || continue
 		printf ',%s,' "${_MT_PRIORITY_LANE_PRS}" | grep -Fq ",${pld_n}," && continue
-		if ! _pr_priority_lane_decide lease "${pld_n}" false true "${pld_u}"; then
+		if ! _pr_priority_lane_decide lease "${pld_n}" false true "${pld_u}" "" "${_MT_PRIORITY_LANE_HOLD_SINCE}"; then
 			_MT_PRIORITY_LANE_DEFER_CSV="${_MT_PRIORITY_LANE_DEFER_CSV:+${_MT_PRIORITY_LANE_DEFER_CSV},}${pld_n}"
 		fi
 	done < <(jq -r --arg l "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" '.[]? | select(type == "object" and (.draft // false) == false)

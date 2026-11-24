@@ -1131,6 +1131,27 @@ def test_sweep_hold_file_defers_other_heads_until_the_cap(fake_gh, tmp_path: Pat
 		{"FINAL_CI_SWEEP_PRIORITY_LANE_FILE": str(hold)})
 	assert sorted(_dispatched_prs(calls)) == ["1", "2", "3"], result.stdout + result.stderr
 	assert "PRIORITY_LANE pr=1 outcome=released reason=max_defer surface=final_ci" in result.stdout
+	# With the hold start in the file, the cap counts from it, not updated_at.
+	hold.write_text(f"hold=true\npriority=3\nsince={int(time.time()) - 60}\n", encoding="utf-8")
+	result, calls = _sweep(fake_gh, tmp_path, _lane_snapshot("2020-01-01T00:00:00Z"), LANE_FIXTURES,
+		{"FINAL_CI_SWEEP_PRIORITY_LANE_FILE": str(hold)})
+	assert _dispatched_prs(calls) == ["3"], result.stdout + result.stderr
+	hold.write_text(f"hold=true\npriority=3\nsince={int(time.time()) - 3 * 3600}\n", encoding="utf-8")
+	result, calls = _sweep(fake_gh, tmp_path, _lane_snapshot(), LANE_FIXTURES, {"FINAL_CI_SWEEP_PRIORITY_LANE_FILE": str(hold)})
+	assert sorted(_dispatched_prs(calls)) == ["1", "2", "3"], result.stdout + result.stderr
+
+
+def test_sweep_deferred_heads_spend_no_per_tick_slot(fake_gh, tmp_path: Path) -> None:
+	# PRs 1 and 2 are held; PR 4 is past the cap (stale updated_at, no since=)
+	# and must still be reached under a cap of 2 after priority PR 3.
+	hold = tmp_path / "hold.txt"
+	hold.write_text("hold=true\npriority=3\n", encoding="utf-8")
+	snapshot = _lane_snapshot() + [{"number": 4, "head_ref": "ai/issue-4", "head_sha": f"{4:040x}",
+		"head_gate_state": "success", "priority_lane": False, "updated_at": "2020-01-01T00:00:00Z"}]
+	result, calls = _sweep(fake_gh, tmp_path, snapshot, LANE_FIXTURES,
+		{"FINAL_CI_SWEEP_PRIORITY_LANE_FILE": str(hold), "FINAL_CI_SWEEP_MAX_PER_TICK": "2"})
+	assert sorted(_dispatched_prs(calls)) == ["3", "4"], result.stdout + result.stderr
+	assert "PRIORITY_LANE pr=4 outcome=released reason=max_defer surface=final_ci" in result.stdout
 
 
 def test_sweep_missing_or_malformed_hold_file_holds_nothing(fake_gh, tmp_path: Path) -> None:

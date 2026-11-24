@@ -3704,13 +3704,16 @@ PR_PRIORITY_LANE_JQ_DEF='
 '
 
 # _pr_priority_lane_pressure <runs_json> <priority_csv> <wedged_cutoff_epoch>
-# <now_epoch> [<default_branch>]: prints `<pr> <age_minutes>` for the oldest
-# run whose status is `queued`, whose pr_priority_lane_run_pr is in
+# <now_epoch> [<default_branch>]: prints `<pr> <age_minutes> <hold_since_epoch>`
+# for the oldest run whose status is `queued`, whose pr_priority_lane_run_pr is in
 # <priority_csv>, that was created at least PRIORITY_LANE_WAIT_S ago, and
 # that is not wedged (created after <wedged_cutoff_epoch>; 0 turns that
 # filter off, the #9473 rule). <runs_json> is an array of runs, a runs page
 # ({workflow_runs: [...]}) or an array of pages. Prints nothing when no run
 # qualifies or the input is malformed (fail-open: no hold). No API call.
+# <hold_since_epoch> is the moment that run reached PRIORITY_LANE_WAIT_S in
+# the queue (its created_at plus the wait), i.e. when the hold started; the
+# callers pass it to _pr_priority_lane_decide as the starvation-cap origin.
 _pr_priority_lane_pressure()
 {
 	local plp_runs="${1:-}" plp_csv="${2:-}" plp_cutoff="${3:-0}" plp_now="${4:-}" plp_db="${5:-}"
@@ -3732,13 +3735,18 @@ _pr_priority_lane_pressure()
 			| select($c != null and ($now - $c) >= $wait_s and ($cutoff == 0 or $c > $cutoff))
 			| {p: $p, c: $c}]
 		| sort_by(.c) | first
-		| if . == null then empty else "\(.p) \((($now - .c) / 60) | floor)" end' 2>/dev/null | head -n1
+		| if . == null then empty else "\(.p) \((($now - .c) / 60) | floor) \(.c + $wait_s)" end' 2>/dev/null | head -n1
 	return 0
 }
 
 # _pr_priority_lane_decide <surface> <pr> <is_priority:true|false>
-# <hold:true|false> <since_iso> [<now_epoch>]: returns 0 to dispatch (or
-# grant), 1 to defer. Prints at most one PRIORITY_LANE line:
+# <hold:true|false> <since_iso> [<now_epoch>] [<hold_since_epoch>]: returns 0
+# to dispatch (or grant), 1 to defer. The cap is counted from
+# <hold_since_epoch> (when the current hold started, from
+# _pr_priority_lane_pressure) when it is a positive number, so a PR whose
+# updated_at is already old is still held and later PR activity does not
+# restart the clock; without it the cap is counted from <since_iso> (the PR's
+# updated_at). Prints at most one PRIORITY_LANE line:
 #   priority PR: outcome=first reason=verified_label, 0;
 #   other PR, no hold, lane off or deferral off (cap 0): no line, 0;
 #   other PR, hold, held for less than the cap since <since_iso>:
@@ -3748,6 +3756,7 @@ _pr_priority_lane_pressure()
 _pr_priority_lane_decide()
 {
 	local pld_surface pld_pr="${2:-}" pld_prio="${3:-false}" pld_hold="${4:-false}" pld_since="${5:-}" pld_now="${6:-}" pld_since_epoch
+	local pld_hold_since="${7:-}"
 	pld_surface="$(printf '%s' "${1:-}" | tr -cd 'a-z_')"
 	[ -n "${pld_surface}" ] || pld_surface="unknown"
 	[[ "${pld_pr}" =~ ^[1-9][0-9]*$ ]] || return 0
@@ -3761,7 +3770,9 @@ _pr_priority_lane_decide()
 	[ "${PRIORITY_LANE_MAX_DEFER_S:-0}" -gt 0 ] 2>/dev/null || return 0
 	[[ "${pld_now}" =~ ^[0-9]+$ ]] || pld_now="$(date -u +%s 2>/dev/null)"
 	# GNU date reads "" as today's midnight, so only an ISO timestamp counts.
-	if ! [[ "${pld_since}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]] \
+	if [[ "${pld_hold_since}" =~ ^[1-9][0-9]{0,11}$ ]] && [[ "${pld_now}" =~ ^[0-9]+$ ]]; then
+		pld_since_epoch="${pld_hold_since}"
+	elif ! [[ "${pld_since}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]] \
 		|| ! pld_since_epoch="$(date -u -d "${pld_since}" +%s 2>/dev/null)" || ! [[ "${pld_now}" =~ ^[0-9]+$ ]]; then
 		echo "PRIORITY_LANE pr=${pld_pr} outcome=released reason=since_unknown surface=${pld_surface}"
 		return 0

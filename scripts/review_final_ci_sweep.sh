@@ -103,11 +103,15 @@
 # scripts/review_sweep_head_gate.sh) are checked first among the known
 # gate-success heads, so the per-tick cap reaches them first. The hold file
 # FINAL_CI_SWEEP_PRIORITY_LANE_FILE (written by the enumerate step; lines
-# `hold=true|false` and `priority=<csv>|-`; missing or malformed = no hold)
+# `hold=true|false`, `priority=<csv>|-` and optional `since=<epoch>|-`, when
+# the hold started; missing or malformed = no hold)
 # says whether a priority PR's run has been queued past
 # PRIORITY_LANE_WAIT_MINUTES; while it does, the final-CI ensure and the
 # base sync of every other head wait (_pr_priority_lane_decide, at most
-# PRIORITY_LANE_MAX_DEFER_MINUTES from the PR's updated_at). No API call.
+# PRIORITY_LANE_MAX_DEFER_MINUTES from the hold start, or from the PR's
+# updated_at when the file has no `since=`). A head deferred this way spends
+# no FINAL_CI_SWEEP_MAX_PER_TICK slot, and the base-sync pass also takes
+# priority heads first. No API call.
 # Log: `PRIORITY_LANE pr=<n> outcome=... surface=final_ci`; the summary lines
 # gain `deferred_priority_lane=<n>`.
 
@@ -278,6 +282,7 @@ review_final_ci_sweep_main()
 	local base_sync_switch base_sync_queue="" failed_candidates base_sync_checked=0 failed_at
 	# Priority lane (issue #10048; header).
 	local fci_lane_on=false fci_lane_hold=false fci_lane_deferred=0 fci_lane_line fci_lane_rows="" fci_lane_n fci_lane_p fci_lane_u
+	local fci_lane_since="" fci_lane_done fci_lane_sorted fci_lane_first fci_lane_rest fci_lane_qline
 	local -A fci_lane_prio=() fci_lane_updated=()
 	wf="${REVIEW_FINAL_CI_WORKFLOW:-}"
 	if [ -z "${wf}" ]; then
@@ -315,8 +320,11 @@ review_final_ci_sweep_main()
 		if [ -n "${FINAL_CI_SWEEP_PRIORITY_LANE_FILE:-}" ] && [ -f "${FINAL_CI_SWEEP_PRIORITY_LANE_FILE}" ] \
 			&& grep -qx 'hold=true' "${FINAL_CI_SWEEP_PRIORITY_LANE_FILE}" 2>/dev/null \
 			&& grep -Eqx 'priority=([1-9][0-9]*(,[1-9][0-9]*)*|-)' "${FINAL_CI_SWEEP_PRIORITY_LANE_FILE}" 2>/dev/null \
-			&& ! grep -Evqx 'hold=(true|false)|priority=([1-9][0-9]*(,[1-9][0-9]*)*|-)' "${FINAL_CI_SWEEP_PRIORITY_LANE_FILE}" 2>/dev/null; then
+			&& ! grep -Evqx 'hold=(true|false)|priority=([1-9][0-9]*(,[1-9][0-9]*)*|-)|since=([1-9][0-9]{0,11}|-)' "${FINAL_CI_SWEEP_PRIORITY_LANE_FILE}" 2>/dev/null; then
 			fci_lane_hold=true
+			# When the hold started (the starvation-cap origin); absent or `-`:
+			# the cap is counted from each PR's updated_at.
+			fci_lane_since="$(grep -Ex 'since=[1-9][0-9]{0,11}' "${FINAL_CI_SWEEP_PRIORITY_LANE_FILE}" 2>/dev/null | head -n1 | cut -d= -f2)"
 		fi
 		fci_lane_rows="$(jq -r '.[]? | select(type == "object" and ((.number | tostring) | test("^[1-9][0-9]*$")))
 			| "\(.number) \(if .priority_lane == true then "true" else "false" end) \((.updated_at // "") | tostring | if test("^[0-9T:.Z-]+$") then . else "-" end | if . == "" then "-" else . end)"' \
@@ -363,6 +371,19 @@ review_final_ci_sweep_main()
 			skipped_gate=$((skipped_gate + 1))
 			continue
 		fi
+		# Priority lane (issue #10048): a head already known as success is held
+		# back before the cap check, so a deferred head spends no slot and a
+		# later head past the cap is still reached this tick.
+		fci_lane_done=false
+		if [ "${fci_lane_on}" = "true" ] && [ "${known_state}" = "success" ] \
+			&& [ "${fci_lane_prio[${number}]:-false}" != "true" ]; then
+			fci_lane_done=true
+			if ! _pr_priority_lane_decide final_ci "${number}" \
+				"${fci_lane_prio[${number}]:-false}" "${fci_lane_hold}" "${fci_lane_updated[${number}]:-}" "" "${fci_lane_since}"; then
+				fci_lane_deferred=$((fci_lane_deferred + 1))
+				continue
+			fi
+		fi
 		[ "${checked}" -lt "${max}" ] || continue
 		checked=$((checked + 1))
 		if [ "${known_state}" = "success" ]; then
@@ -377,8 +398,8 @@ review_final_ci_sweep_main()
 		fi
 		# Priority lane (issue #10048): hold back other heads while a
 		# priority PR's run waits; the PR is checked again next tick.
-		if [ "${fci_lane_on}" = "true" ] && ! _pr_priority_lane_decide final_ci "${number}" \
-			"${fci_lane_prio[${number}]:-false}" "${fci_lane_hold}" "${fci_lane_updated[${number}]:-}"; then
+		if [ "${fci_lane_on}" = "true" ] && [ "${fci_lane_done}" != "true" ] && ! _pr_priority_lane_decide final_ci "${number}" \
+			"${fci_lane_prio[${number}]:-false}" "${fci_lane_hold}" "${fci_lane_updated[${number}]:-}" "" "${fci_lane_since}"; then
 			fci_lane_deferred=$((fci_lane_deferred + 1))
 			continue
 		fi
@@ -435,19 +456,37 @@ review_final_ci_sweep_main()
 	PR_CHECKS_REPOSITORY="${REPOSITORY}"
 	# Oldest failure first, so a long-red PR is not starved by newer ones; a
 	# candidate that stopped before any API call (return 2) is not counted.
+	# Priority lane (issue #10048): with the lane on, priority heads come
+	# first (each group still oldest failure first), and the summary line
+	# counts only this pass's deferrals.
+	fci_lane_deferred=0
+	fci_lane_sorted="$(printf '%s' "${base_sync_queue}" | grep . | sort -k4,4)"
+	if [ "${fci_lane_on}" = "true" ] && [ -n "${fci_lane_sorted}" ]; then
+		fci_lane_first=""
+		fci_lane_rest=""
+		while IFS= read -r fci_lane_qline; do
+			[ -n "${fci_lane_qline}" ] || continue
+			if [ "${fci_lane_prio[${fci_lane_qline%% *}]:-false}" = "true" ]; then
+				fci_lane_first+="${fci_lane_qline}"$'\n'
+			else
+				fci_lane_rest+="${fci_lane_qline}"$'\n'
+			fi
+		done <<< "${fci_lane_sorted}"
+		fci_lane_sorted="${fci_lane_first}${fci_lane_rest}"
+	fi
 	while read -r number sha ref failed_at; do
 		[ -n "${number:-}" ] || continue
 		[ "${base_sync_checked}" -lt "${max}" ] || break
 		# Priority lane (issue #10048): a base sync dispatches a final CI run
 		# too, so it waits under the same hold.
 		if [ "${fci_lane_on}" = "true" ] && [ "${fci_lane_hold}" = "true" ] && ! _pr_priority_lane_decide final_ci "${number}" \
-			"${fci_lane_prio[${number}]:-false}" "${fci_lane_hold}" "${fci_lane_updated[${number}]:-}"; then
+			"${fci_lane_prio[${number}]:-false}" "${fci_lane_hold}" "${fci_lane_updated[${number}]:-}" "" "${fci_lane_since}"; then
 			fci_lane_deferred=$((fci_lane_deferred + 1))
 			continue
 		fi
 		review_final_ci_sweep_base_sync "${number}" "${sha}" "${ref}" "${failed_at}"
 		[ "$?" -eq 2 ] || base_sync_checked=$((base_sync_checked + 1))
-	done < <(printf '%s' "${base_sync_queue}" | grep . | sort -k4,4)
+	done < <(printf '%s' "${fci_lane_sorted}" | grep .)
 	rm -f "${FINAL_CI_SWEEP_LISTING_FILE}"
 	echo "REVIEW_FINAL_CI_SWEEP_BASE_SYNC outcome=done candidates=$(printf '%s' "${base_sync_queue}" | grep -c .) checked=${base_sync_checked} cap=${max} deferred_priority_lane=${fci_lane_deferred}"
 	return 0

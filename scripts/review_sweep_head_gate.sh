@@ -71,8 +71,9 @@
 #
 # review_sweep_priority_lane_hold <owner/repo> <default branch> <snapshot
 # json> <hold file>
-#   stdout: `<true|false> <priority csv|->`; the same values go to <hold file>
-#           as `hold=<true|false>` and `priority=<csv|->` lines (read by
+#   stdout: `<true|false> <priority csv|-> <hold since epoch|->`; the same
+#           values go to <hold file> as `hold=<true|false>`, `priority=<csv|->`
+#           and `since=<epoch|->` lines (read by
 #           scripts/review_final_ci_sweep.sh through
 #           FINAL_CI_SWEEP_PRIORITY_LANE_FILE).
 #   API (§14): one paginated `GET actions/runs?status=queued` read, made only
@@ -243,7 +244,7 @@ review_sweep_final_ci_state()
 review_sweep_priority_lane_hold()
 {
 	local plh_repo="${1:-}" plh_db="${2:-}" plh_snapshot="${3:-}" plh_file="${4:-}"
-	local plh_csv="" plh_now plh_cutoff=0 plh_upper plh_lower plh_runs plh_hit plh_hold=false
+	local plh_csv="" plh_now plh_cutoff=0 plh_upper plh_lower plh_runs plh_hit plh_hold=false plh_since=""
 	if [ -z "${PR_PRIORITY_LANE_JQ_DEF:-}" ] || ! declare -F _pr_priority_lane_enabled >/dev/null 2>&1 || ! _pr_priority_lane_enabled; then
 		echo "PRIORITY_LANE_HOLD outcome=disabled reason=lane_off" >&2
 		review_sweep_priority_lane_hold_out false "" "${plh_file}"
@@ -272,6 +273,9 @@ review_sweep_priority_lane_hold()
 	[[ "${plh_now}" =~ ^[0-9]+$ ]] || plh_now=0
 	if declare -F zombie_queued_cutoff_epoch >/dev/null 2>&1; then
 		plh_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+	elif [[ "${ZOMBIE_RUN_MAX_QUEUED_HOURS:-24}" =~ ^0+$ ]]; then
+		# As zombie_queued_cutoff_epoch: 0 hours turns the wedged filter off.
+		plh_cutoff=0
 	elif declare -F _merge_lease_wedged_queued_seconds >/dev/null 2>&1; then
 		plh_cutoff=$(( plh_now - $(_merge_lease_wedged_queued_seconds 2>/dev/null || echo "${plh_now}") ))
 	fi
@@ -296,24 +300,28 @@ review_sweep_priority_lane_hold()
 		return 0
 	fi
 	plh_hit="$(_pr_priority_lane_pressure "${plh_runs}" "${plh_csv}" "${plh_cutoff}" "${plh_now}" "${plh_db}")"
-	if [[ "${plh_hit}" =~ ^([1-9][0-9]*)\ ([0-9]+)$ ]]; then
+	if [[ "${plh_hit}" =~ ^([1-9][0-9]*)\ ([0-9]+)(\ ([1-9][0-9]*))?$ ]]; then
 		plh_hold=true
+		plh_since="${BASH_REMATCH[4]}"
 		echo "PRIORITY_LANE_HOLD outcome=active pr=${BASH_REMATCH[1]} age_min=${BASH_REMATCH[2]}" >&2
 	else
 		echo "PRIORITY_LANE_HOLD outcome=none reason=no_queued_priority_run" >&2
 	fi
-	review_sweep_priority_lane_hold_out "${plh_hold}" "${plh_csv}" "${plh_file}"
+	review_sweep_priority_lane_hold_out "${plh_hold}" "${plh_csv}" "${plh_file}" "${plh_since}"
 	return 0
 }
 
-# review_sweep_priority_lane_hold_out <hold> <csv> <file>: prints the hold
-# line and writes the hold file (a failed write only loses the final-CI hold).
+# review_sweep_priority_lane_hold_out <hold> <csv> <file> [<since_epoch>]:
+# prints the hold line (`<hold> <csv|-> <since_epoch|->`) and writes the hold
+# file (a failed write only loses the final-CI hold). <since_epoch> is when
+# the hold started; the starvation cap is counted from it.
 review_sweep_priority_lane_hold_out()
 {
-	local plo_hold="${1:-false}" plo_csv="${2:-}"
+	local plo_hold="${1:-false}" plo_csv="${2:-}" plo_since="${4:-}"
 	[ -n "${plo_csv}" ] || plo_csv="-"
+	[[ "${plo_since}" =~ ^[1-9][0-9]{0,11}$ ]] || plo_since="-"
 	if [ -n "${3:-}" ]; then
-		printf 'hold=%s\npriority=%s\n' "${plo_hold}" "${plo_csv}" > "$3" 2>/dev/null || true
+		printf 'hold=%s\npriority=%s\nsince=%s\n' "${plo_hold}" "${plo_csv}" "${plo_since}" > "$3" 2>/dev/null || true
 	fi
-	echo "${plo_hold} ${plo_csv}"
+	echo "${plo_hold} ${plo_csv} ${plo_since}"
 }

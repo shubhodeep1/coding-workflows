@@ -674,10 +674,12 @@ jobs:
           # Priority lane hold (issue #10048, scripts/review_sweep_head_gate.sh):
           # one queued-runs read, only while a priority PR is open. Fail-open:
           # a missing helper or a failed read holds nothing back.
+          # priority_lane_since: when the hold started (the starvation-cap origin).
           priority_lane_hold=false
           priority_lane_prs=-
+          priority_lane_since=-
           if [ "${active_snapshot_incomplete}" != "true" ] && type review_sweep_priority_lane_hold >/dev/null 2>&1; then
-            read -r priority_lane_hold priority_lane_prs < <(GH_TOKEN="${READ_TOKEN}" review_sweep_priority_lane_hold "${REPOSITORY}" "${sweep_default_branch}" "${prs_json}" "${RUNNER_TEMP}/priority-lane-hold.txt" || echo "false -") || true
+            read -r priority_lane_hold priority_lane_prs priority_lane_since < <(GH_TOKEN="${READ_TOKEN}" review_sweep_priority_lane_hold "${REPOSITORY}" "${sweep_default_branch}" "${prs_json}" "${RUNNER_TEMP}/priority-lane-hold.txt" || echo "false - -") || true
           fi
 
           # Read into an array so counters survive the loop (no subshell pipe).
@@ -871,7 +873,7 @@ jobs:
             # Priority lane (issue #10048): a priority PR logs `first`; any
             # other PR is held back while the hold is active, until the cap.
             if type _pr_priority_lane_decide >/dev/null 2>&1 \
-              && ! _pr_priority_lane_decide sweep "${pr_number}" "$(printf '%s' "${row}" | jq -r '.priority_lane == true')" "${priority_lane_hold:-false}" "$(printf '%s' "${row}" | jq -r '.updated_at // ""')"; then
+              && ! _pr_priority_lane_decide sweep "${pr_number}" "$(printf '%s' "${row}" | jq -r '.priority_lane == true')" "${priority_lane_hold:-false}" "$(printf '%s' "${row}" | jq -r '.updated_at // ""')" "" "${priority_lane_since:-}"; then
               skipped_priority_lane=$((skipped_priority_lane + 1))
               continue
             fi
