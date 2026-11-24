@@ -56,6 +56,8 @@ WIRED_WORKFLOWS = [
 	"review_autofix_sweep.yml",
 	# The merge-train release step only; the cancel step stays unfiltered.
 	"cancel_on_pr_close.yml",
+	# Drain of in-flight release runs before a stable rollback (#9342).
+	"rollback-stable.yml",
 ]
 WIRING = "ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}"
 

@@ -114,7 +114,7 @@ def _git(cwd: Path, *args: str, env: dict[str, str]) -> str:
 def _base_env(tmp: Path) -> dict[str, str]:
 	env = os.environ.copy()
 	for key in list(env):
-		if key.startswith("GIT_") or key.startswith("TG_") or key.startswith("STABLE_") or key in ("BASH_ENV", "ENV"):
+		if key.startswith("GIT_") or key.startswith("TG_") or key.startswith("STABLE_") or key in ("BASH_ENV", "ENV", "ZOMBIE_RUN_MAX_QUEUED_HOURS"):
 			env.pop(key)
 	env.update(
 		{

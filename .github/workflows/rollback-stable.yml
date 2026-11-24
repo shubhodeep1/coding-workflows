@@ -69,6 +69,8 @@ jobs:
           STABLE_ROLLBACK_TARGET_VERSION: ${{ inputs.target_version }}
           STABLE_ROLLBACK_REASON: ${{ inputs.reason }}
           STABLE_ROLLBACK_DRY_RUN: ${{ inputs.dry_run }}
+          # Wedged-queued filter of the drain (#9473); 0 restores the strict drain.
+          ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
         run: |
