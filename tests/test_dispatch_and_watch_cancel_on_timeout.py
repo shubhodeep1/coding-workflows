@@ -547,7 +547,12 @@ def test_alt_model_hold_behind_an_early_runner_wait_is_still_a_runner_wait() -> 
 	# A queued run with a held job counts with the holds, never as the early run.
 	state = {"queued": [_alt_run(51, "queued", -4000), _alt_run(52, "queued", -4000)], "in_progress": [], "jobs": {"51": held_jobs, "52": queued_jobs}}
 	out, _, _ = _run_alt_check(state)
-	assert "ALT_MODEL_RUNNER_WAIT outcome=runner_wait reason=never_assigned runs=51,52 held_behind_runner_wait=51" in out, out
+	assert "ALT_MODEL_RUNNER_WAIT outcome=runner_wait reason=never_assigned runs=52 held_behind_runner_wait=51" in out, out
+	# On a stop the held queued run is cancelled once and is not the watched run.
+	state["jobs"]["9999"] = json.loads(_jobs({"id": 7, "status": "in_progress", "conclusion": None, "steps": []}))
+	out, calls, _ = _run_alt_check(state, stop=True)
+	assert calls.count("api -X POST repos/owner/repo/actions/runs/51/cancel") == 1, calls
+	assert "RELEASE_GATE_RUNNER_WAIT outcome=cancel_requested gate_run=9999 watched_run=52 " in out, out
 	# On a stop the held peer is cancelled too.
 	state = {"queued": [_alt_run(51, "queued", -4000)], "in_progress": [], "pending": [_alt_run(54, "pending", -1000)],
 		"jobs": {"51": queued_jobs, "9999": json.loads(_jobs({"id": 7, "status": "in_progress", "conclusion": None, "steps": []}))}}
@@ -581,10 +586,16 @@ def test_gate_workflow_wires_the_alt_model_check_and_child_cancels() -> None:
 	assert text.count("      - name: Cancel dispatched child runs when the gate is cancelled\n        if: cancelled()\n") == 2
 	# The e2e-smoke-test and e2e-alt-model-test jobs cancel their test issue's runs.
 	issue_cancel = "      - name: Cancel the test issue's runs when the gate is cancelled\n        if: cancelled()\n"
-	assert text.count(issue_cancel) == 2
+	# clarify-rejects-unsolvable-test cancels its negative-test issue's runs too.
+	assert text.count(issue_cancel) == 3
 	assert text.index(issue_cancel) < text.index("      - name: Cleanup test artifacts\n")
+	clarify_wait = text.index("      - name: Wait for clarify to flag for clarification\n")
+	assert clarify_wait < text.index(issue_cancel, clarify_wait) < text.index('      - name: "Soft-error analyser (clarify negative test)"\n')
+	assert 'echo "created_after_epoch=$(date +%s)"' in text[text.index("  clarify-rejects-unsolvable-test:\n"):clarify_wait]
+	# The alt-model step runs before that job's always() capture and analysers.
+	assert wait < text.rindex(issue_cancel) < text.index("      - name: Capture alt-model phase run ids\n")
 	assert text.rindex(issue_cancel) < text.index("      - name: Cleanup alt-model artifacts\n")
-	assert text.count("bash ./scripts/dispatch_and_watch_workflow_run.sh --cancel-issue-runs || true") == 2
+	assert text.count("bash ./scripts/dispatch_and_watch_workflow_run.sh --cancel-issue-runs || true") == 3
 	assert "steps.dispatch_memory_maintenance.outputs.dispatched_run_id" in text
 
 

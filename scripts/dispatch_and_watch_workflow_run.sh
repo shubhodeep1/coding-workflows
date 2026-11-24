@@ -285,9 +285,11 @@ dispatch_watch_alt_model_runner_wait()
 	while read -r alt_rw_id alt_rw_created; do
 		[[ "${alt_rw_id:-}" =~ ^[0-9]+$ ]] || continue
 		alt_rw_read_count=$((alt_rw_read_count + 1))
-		alt_rw_ids="${alt_rw_ids:+${alt_rw_ids},}${alt_rw_id}"
+		# The id joins alt_rw_ids only after the held check below, so a held
+		# queued run is listed (and cancelled) once, with the held runs, and
+		# is never passed to the gate stop as the watched run.
 		if [ "${alt_rw_read_count}" -gt "${ALT_RW_MAX_RUNS}" ]; then
-			alt_rw_result timeout too_many_runs "${alt_rw_ids}"
+			alt_rw_result timeout too_many_runs "${alt_rw_ids:+${alt_rw_ids},}${alt_rw_id}"
 			return 0
 		fi
 		# A queued run has no job with a runner, but one of its jobs can be
@@ -304,9 +306,10 @@ dispatch_watch_alt_model_runner_wait()
 			continue
 		fi
 		if [ "${alt_rw_verdict}" != "wait" ]; then
-			alt_rw_result timeout jobs_unreadable "${alt_rw_ids}"
+			alt_rw_result timeout jobs_unreadable "${alt_rw_ids:+${alt_rw_ids},}${alt_rw_id}"
 			return 0
 		fi
+		alt_rw_ids="${alt_rw_ids:+${alt_rw_ids},}${alt_rw_id}"
 		if [[ "${alt_rw_created:-}" =~ ^[1-9][0-9]*$ ]] && [ "${alt_rw_created}" -le "${ALT_RW_TWO_THIRDS}" ]; then
 			alt_rw_early=1
 		fi
@@ -376,14 +379,18 @@ dispatch_watch_alt_model_runner_wait()
 # cancelled" (if: cancelled()) in .github/workflows/test-and-mark-stable.yml.
 # Cancels every run of TEST_REPO created after CANCEL_ISSUE_CREATED_AFTER whose
 # display_title equals CANCEL_ISSUE_TITLE and whose status is queued,
-# in_progress, pending or waiting, so the test issue's pipeline runs (clarify,
-# plan, implement, review) do not keep holding or queueing runners after the
-# gate ends. Same title + created-after scope as the alt-model check above.
+# in_progress, pending or waiting, so the test issue's issue-triggered pipeline
+# runs (clarify, plan, implement) do not keep holding or queueing runners after
+# the gate ends. Review runs carry the PR title, not the issue title, so they
+# never match here; cancel_on_pr_close cancels them once the job's always()
+# cleanup closes the PR. Same title + created-after scope as the alt-model
+# check above. Each listing reads one page of 100 runs; a listing with more
+# matches warns that some runs may stay queued.
 # Best effort: a missing input skips it, a failed listing or cancel only warns.
 # API calls: 4 listings, plus 1 cancel per matching run. Always returns 0.
 dispatch_watch_cancel_issue_runs()
 {
-	local ci_status="" ci_json="" ci_ids="" ci_id=""
+	local ci_status="" ci_json="" ci_ids="" ci_id="" ci_total=""
 	if ! [[ "${TEST_REPO:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || [ -z "${CANCEL_ISSUE_TITLE:-}" ] \
 		|| ! [[ "${CANCEL_ISSUE_CREATED_AFTER:-}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
 		echo "Cancel of the test issue's runs skipped: no issue title or creation time"
@@ -394,6 +401,10 @@ dispatch_watch_cancel_issue_runs()
 			|| ! ci_ids="$(printf '%s' "${ci_json}" | jq -er --arg title "${CANCEL_ISSUE_TITLE}" 'if (.workflow_runs | type) != "array" then error("no runs") else [.workflow_runs[] | select(type == "object") | select(((.display_title // "") | tostring) == $title) | select(((.status // "") | tostring) != "completed") | (.id | tostring)] | join(" ") end' 2>/dev/null)"; then
 			echo "::warning::Could not list the test issue's ${ci_status} runs after the gate was cancelled"
 			continue
+		fi
+		ci_total="$(printf '%s' "${ci_json}" | jq -r '.total_count // 0 | numbers' 2>/dev/null || echo 0)"
+		if [[ "${ci_total}" =~ ^[0-9]+$ ]] && [ "${ci_total}" -gt 100 ]; then
+			echo "::warning::The ${ci_status} run listing was cut off at 100 of ${ci_total} runs; some runs of the test issue may stay queued"
 		fi
 		for ci_id in ${ci_ids}; do
 			[[ "${ci_id}" =~ ^[0-9]+$ ]] || continue

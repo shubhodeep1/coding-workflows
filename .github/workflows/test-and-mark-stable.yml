@@ -4755,6 +4755,9 @@ jobs:
           echo "pre_clarify_run_id=${PRE_CLARIFY_RUN_ID}" >> "$GITHUB_OUTPUT"
           TITLE="[E2E Clarify Negative Test] under-specified task (run ${GITHUB_RUN_ID})"
           BODY="Make it better."
+          # Issue #10037 (G3): the creation time (epoch digits only, #9797)
+          # scopes the gate-cancel step below to this issue's runs.
+          echo "created_after_epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
           NUMBER=$(gh api "repos/${TEST_REPO}/issues" \
             -f title="${TITLE}" -f body="${BODY}" --jq '.number')
           if ! [[ "${NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
@@ -4902,6 +4905,29 @@ jobs:
           fi
           echo "::error::Clarify did not act on the under-specified issue within timeout"
           exit 1
+
+      # Issue #10037 (G3): when the gate run is cancelled (the runner-wait
+      # stop in scripts/dispatch_and_watch_workflow_run.sh, or an operator),
+      # cancel this job's test-issue runs that have not completed (title and
+      # created-after scoped, logic in the script's --cancel-issue-runs mode),
+      # so they do not keep holding or queueing runners after the gate ends.
+      # It sits right after the wait step, the job's last step that is not
+      # always(), so it runs before the soft-error analyser.
+      - name: Cancel the test issue's runs when the gate is cancelled
+        if: cancelled()
+        env:
+          CANCEL_ISSUE_CREATED_EPOCH: ${{ steps.create.outputs.created_after_epoch }}
+        run: |
+          # Same title as the "Create unsolvable issue" step.
+          CANCEL_ISSUE_TITLE="[E2E Clarify Negative Test] under-specified task (run ${GITHUB_RUN_ID})"
+          CANCEL_ISSUE_CREATED_AFTER=""
+          if [[ "${CANCEL_ISSUE_CREATED_EPOCH:-}" =~ ^[0-9]+$ ]]; then
+            CANCEL_ISSUE_CREATED_AFTER="$(date -u -d "@${CANCEL_ISSUE_CREATED_EPOCH}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+          fi
+          export CANCEL_ISSUE_TITLE CANCEL_ISSUE_CREATED_AFTER
+          if grep -q -- '--cancel-issue-runs)' ./scripts/dispatch_and_watch_workflow_run.sh 2>/dev/null; then
+            bash ./scripts/dispatch_and_watch_workflow_run.sh --cancel-issue-runs || true
+          fi
 
       - name: "Soft-error analyser (clarify negative test)"
         if: always() && steps.capture_clarify_run.outputs.run_id != ''
@@ -5182,6 +5208,23 @@ jobs:
           echo "  Issue: ${GITHUB_SERVER_URL:-https://github.com}/${TEST_REPO}/issues/${ISSUE_NUMBER}"
           exit 1
 
+      # Issue #10037 (G3): when the gate run is cancelled (the runner-wait
+      # stop in scripts/dispatch_and_watch_workflow_run.sh, or an operator),
+      # cancel this job's test-issue runs that have not completed (title and
+      # created-after scoped, logic in the script's --cancel-issue-runs mode),
+      # so they do not keep holding or queueing runners after the gate ends.
+      # It sits right after the wait step, the job's last step that is not
+      # always(), so it runs before the capture and soft-error analyser steps.
+      - name: Cancel the test issue's runs when the gate is cancelled
+        if: cancelled()
+        env:
+          CANCEL_ISSUE_TITLE: ${{ steps.create.outputs.title }}
+          CANCEL_ISSUE_CREATED_AFTER: ${{ steps.create.outputs.created_after }}
+        run: |
+          if grep -q -- '--cancel-issue-runs)' ./scripts/dispatch_and_watch_workflow_run.sh 2>/dev/null; then
+            bash ./scripts/dispatch_and_watch_workflow_run.sh --cancel-issue-runs || true
+          fi
+
       - name: Capture alt-model phase run ids
         id: capture_alt_runs
         if: always() && steps.create.outputs.issue_number != ''
@@ -5281,21 +5324,6 @@ jobs:
           gh_token: ${{ secrets.GH_PAT }}
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
-
-      # Issue #10037 (G3): when the gate run is cancelled (the runner-wait
-      # stop in scripts/dispatch_and_watch_workflow_run.sh, or an operator),
-      # cancel this job's test-issue runs that have not completed (title and
-      # created-after scoped, logic in the script's --cancel-issue-runs mode),
-      # so they do not keep holding or queueing runners after the gate ends.
-      - name: Cancel the test issue's runs when the gate is cancelled
-        if: cancelled()
-        env:
-          CANCEL_ISSUE_TITLE: ${{ steps.create.outputs.title }}
-          CANCEL_ISSUE_CREATED_AFTER: ${{ steps.create.outputs.created_after }}
-        run: |
-          if grep -q -- '--cancel-issue-runs)' ./scripts/dispatch_and_watch_workflow_run.sh 2>/dev/null; then
-            bash ./scripts/dispatch_and_watch_workflow_run.sh --cancel-issue-runs || true
-          fi
 
       - name: Cleanup alt-model artifacts
         if: always() && steps.create.outputs.issue_number != ''
