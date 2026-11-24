@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Run the test 20 times in the sharded runner\" on 5b2a57d, and rerun it on that SHA and the promote-candidate tip (89f18ce)\n  expected_change_site: Validation evidence for tests/test_orchestrate_poll_process.py::test_security_pass_external_finalize_uses_verified_pr_head_when_integration_branch_is_deleted (operational validation, not a repository file)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  EVIDENCE: The PR adds assertion diagnostics but includes no results for those runs, and its acceptance table marks the target test \"not run\". The deferred-scope paragraph defers the root-cause fix, not these runs. Severity NIT. anthropic_claude-sonnet-5_5 rated confidence 2 and openai_gpt-6-luna rated confidence 5.\n- requirement: \"Log status=retry_rate_limited instead of retry_timeout when the deadline expires during wait_for_gh_rate_limit,\" without raising the timeout or budget\n  expected_change_site: scripts/stable_e2e_step_verify_bait_removed.sh, rate-limit wait failure handling (around lines 535\u2013541)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: scripts/stable_e2e_step_verify_bait_removed.sh is not modified. At lines 535\u2013541 the rate-limit wait failure path still calls retry_report_timeout when a retry run is registered, and the PR diff does not change this classification. Severity disagreement: google_gemini-3_1-flash-lite said MAJOR, anthropic_claude-sonnet-5_5 and openai_gpt-6-luna said NIT. Highest is MAJOR. anthropic_claude-sonnet-5_5 noted the script is outside the issue's heal scope and the issue lists the change as optional hardening.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nTASK_GAP:\n- Requirement: \"Run the test 20 times in the sharded runner on 5b2a57d\" and rerun it on 5b2a57d and 89f18ce.\n  Expected change site: operational validation, not a file in the repository.\n  Evidence of absence: no code change can deliver this. The PR description lists the root-cause fix under \"Deferred scope\", and its acceptance table keeps the target test at \"not run\" on purpose.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n- Requirement: log `status=retry_rate_limited` instead of `retry_timeout` in `scripts/stable_e2e_step_verify_bait_removed.sh`.\n  Expected change site: `scripts/stable_e2e_step_verify_bait_removed.sh`, the rate-limit wait failure handling.\n  Evidence of absence: the script is outside the issue's heal scope (`.github/workflows/test-and-mark-stable.yml`, `scripts/orchestrate_poll_process.sh`, `tests/**`, `changelog.d/*.md`). The approved plan treats Phase 4b as transient and makes no code change for it. The issue also lists the change as optional hardening, not a required deliverable.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\nTASK_GAP:\n- Requirement: \"Log status=retry_rate_limited instead of retry_timeout when the deadline expires during wait_for_gh_rate_limit,\" without raising the timeout or budget.\n  Expected change site: scripts/stable_e2e_step_verify_bait_removed.sh, in the rate-limit wait failure handling (around lines 535\u2013541).\n  Evidence of absence: The script scripts/stable_e2e_step_verify_bait_removed.sh is not modified by the PR. Its rate-limit wait failure path still calls retry_report_timeout() when a retry run is registered; the PR diff contains no change to this classification.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\nTASK_GAP:\n- Requirement: \"Run the test 20 times in the sharded runner\" on `5b2a57d` and rerun it on that SHA and the promote-candidate tip.\n  Expected change site: Validation evidence for `tests/test_orchestrate_poll_process.py::test_security_pass_external_finalize_uses_verified_pr_head_when_integration_branch_is_deleted`.\n  Evidence of absence: The PR adds assertion diagnostics but includes no results for those runs. Its acceptance table marks the test \"not run.\" The deferred-scope paragraph defers the root-cause fix, not these requested runs.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- Requirement: \"Log `status=retry_rate_limited` instead of `retry_timeout` when the deadline expires during `wait_for_gh_rate_limit`,\" without raising the timeout or budget.\n  Expected change site: `scripts/stable_e2e_step_verify_bait_removed.sh`, the rate-limit wait failure handling.\n  Evidence of absence: The script is unchanged. At lines 535\u2013541, when `wait_for_gh_rate_limit` fails and a retry run is registered, the code still calls `retry_report_timeout`; the PR contains no change to this classification.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "312c10230edfb05e105a41ec1381006534b647d5bf58c435ae4af5c0340d7bcc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10008,
+    "run_id": "45280033212",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45280033212",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124000349_2b626857e4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10008,
+    "run_id": "45280033212"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T00:03:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
