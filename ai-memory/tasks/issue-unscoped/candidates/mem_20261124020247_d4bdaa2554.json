@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_actionlint_cache.py:218 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The test method name test_cache_step_uses_actions_cache_v5 still references v5, while its assertion at line 222 checks actions/cache@v6.\n  WHY: It does not fail at runtime and is only misleading; renaming would break naming immutability (\u00a710), so it is reported as a NIT. minimax_minimax-m3 mentioned it only as a note, not as a finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Bumps actions/cache from 4 to 6.\" The PR is meant to move the repo's cache action pins to v6.\n  expected_change_site: .github/actions/install-claude/action.yml:32\n  confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: .github/actions/install-claude/action.yml:32 still reads `uses: actions/cache@v5`, the PR has no hunk for that file, it is the only actions/cache pin not on v6 (10 of 11 are on v6), and earlier autofix rounds deferred it because v5 still works and Dependabot can bump it separately. Severity was given as NIT by all three reviewers.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_ci_actionlint_cache.py:218 | severity=NIT | confidence=3\n  PROBLEM: The method name test_cache_step_uses_actions_cache_v5 still says v5, but its assertion at line 222 checks actions/cache@v6.\n  WHY: It does not fail at runtime and only the name is misleading; renaming would break \u00a710, so the earlier autofix run left it alone.\n- TASK_GAP:\n  Requirement: \"Bumps actions/cache from 4 to 6.\" The Dependabot PR is meant to move the repo's cache action pins to v6.\n  Expected change site: .github/actions/install-claude/action.yml:32\n  Evidence of absence: Line 32 still reads `uses: actions/cache@v5` and the PR has no hunk for that file. It is the only actions/cache pin left in .github/ or tests/ that is not on v6, so the repo runs two major versions. The pin still works, and earlier autofix runs deferred it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_ci_actionlint_cache.py:218 | severity=NIT | confidence=3\n  PROBLEM: The test method name test_cache_step_uses_actions_cache_v5 incorrectly references v5.\n  WHY: It does not fail at runtime (the assertion checks v6) but is misleading; it is kept as a NIT to comply with naming immutability (\u00a710).\n- TASK_GAP:\n  Requirement: \"Bumps actions/cache from 4 to 6.\"\n  Expected change site: .github/actions/install-claude/action.yml\n  Evidence of absence: .github/actions/install-claude/action.yml:32 still pins actions/cache@v5. It was deferred in previous autofix rounds because of infrastructure-protection rules and because Dependabot would handle it separately.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP:\n  Requirement: \"Bumps actions/cache from 4 to 6.\" (every `uses: actions/cache*` reference in the repo should move to v6)\n  Expected change site: .github/actions/install-claude/action.yml line 32 (`uses: actions/cache@v5`)\n  Evidence of absence: A grep of `uses: actions/cache@` finds 11 lines. 10 are on @v6 (workflow-log-analysis.yml x4, review_autofix.yml, ci.yml, plan.yml, validate.yml x2, implement.yml). The 11th, .github/actions/install-claude/action.yml:32, is still on @v5, and the PR diff has no hunk for it. The prior autofix pass deferred it. This is not a runtime failure but it is an incomplete delivery of the stated bump.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- Note, not a separate finding: tests/test_ci_actionlint_cache.py:218 still has \"v5\" in the method name while the assertion at line 222 checks actions/cache@v6; it is correctly deferred as a NIT under \u00a710.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "b8572ae7906a47a078f889e55cbf5f05a307b796c00fb9d198eb20739246b632",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10002,
+    "run_id": "45296828689",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45296828689",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124020247_d4bdaa2554",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10002,
+    "run_id": "45296828689"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T02:02:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
