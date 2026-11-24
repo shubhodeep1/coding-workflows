@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_findings_record.py:632-639 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: In `_parser_found_no_issue_markers`, any non-blank consolidator output is accepted as proof that `parse_error=no_issue_markers` means a clean round, but the output's contents are never checked. Prose, a refusal, or output cut off at TRUNCATED_BY_OUTPUT_CAP before the first block would all count as clean.\n  WHY: If there are no passthrough blocks, the issues file stays empty and clean_round becomes True. All counts then come out as zero instead of outcome=unavailable. That understates lone counts and inflates runs_with_lines in the Reviewer Findings table. The reviewers disagree on severity: openai_gpt-6-luna rated it MAJOR and anthropic_claude-sonnet-5_5 rated it NIT, so the higher rating is used. z-ai_glm-5_3-flash and minimax_minimax-m3 disputed the finding in their verification notes.\n- tests/test_review_chatgpt_findings_record.py:759-771 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  PROBLEM: The `parse_error=other` and `REVIEW_PARSER_FAILOPEN=0` cases in `test_reviewer_findings_clean_round_parser_no_issue_markers_gives_zeros` never write `consolidator_raw.txt`. The missing raw file returns False on its own, so the cases pass whether or not their guards work.\n  WHY: CI would not catch a regression in either guard, such as deleting the FAILOPEN=0 early return or loosening the `^parse_error=no_issue_markers$` check. With the normal non-blank raw output in production, that regression would print all-zero counts instead of `consolidator_missing`. z-ai_glm-5_3-flash and minimax_minimax-m3 disputed this in their verification notes.\n- scripts/review_findings_record.py:638 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_read_bounded(raw_path)` is called without an explicit size limit.\n  WHY: A very large consolidator raw output file could be read fully into memory and cause an OOM. anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash all say the default limit is READ_LIMIT_BYTES (4 MiB).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_findings_record.py:_parser_found_no_issue_markers, the new tail (lines 632-639): raw_text, _ = _read_bounded(raw_path); return bool(raw_text and raw_text.strip()) | severity=NIT | confidence=3\n  PROBLEM: Non-blank consolidator output with no \"=== ISSUE\" markers still counts as a clean round with all-zero counts. The prompt defines no clean-round sentinel, so a real zero-finding round cannot be told apart from a refusal, chatter, or output truncated at TRUNCATED_BY_OUTPUT_CAP. The passthrough backstop (review_parse_consolidator.sh:948-969) only applies to anchored findings. The anchor extractor (review_parse_consolidator.sh:498-509) does not match the \"File:\" + \"Line or code reference:\" format.\n  WHY: The parser writes parse_error=no_issue_markers with fail-open on, review_issues.txt stays empty, and clean_round is True. Every reviewer then gets raised=0 lone=0 ... shared=0, so lone counts are understated and runs_with_lines is inflated. The agents.d fragment does not document this gap. Suggested fixes: list it as a known limitation in agents.d, or require that no slot that ran reported findings.\n- tests/test_review_chatgpt_findings_record.py:test_reviewer_findings_clean_round_parser_no_issue_markers_gives_zeros, the loop \"for stats, failopen in ((\"parse_failed=1\\nparse_error=other\\n\", None), (\"parse_failed=1\\nparse_error=no_issue_markers\\n\", \"0\")):\" (about lines 759-771) | severity=NIT | confidence=4\n  PROBLEM: Both cases write only parser_stats.txt and never write consolidator_raw.txt, so they pass whether or not their own guards work. That covers both the FAILOPEN=0 early return and the `^parse_error=no_issue_markers$` check.\n  WHY: A later regression in either guard would go uncaught, and all-zero REVIEWER_FINDINGS lines would be printed instead of outcome=unavailable reason=consolidator_missing. Fix: _write(Path(case_env[\"RUNTIME_DIR\"]) / \"consolidator_raw.txt\", \"No consolidated findings this round.\\n\").\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_findings_record.py:638 | severity=NIT | confidence=2\n  PROBLEM: _read_bounded(raw_path) is called without an explicit size limit.\n  WHY: A very large consolidator raw output file could be read entirely into memory, potentially leading to OOM.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_findings_record.py:634-639, especially 638-639 | severity=MAJOR | confidence=4\n  PROBLEM: A non-blank consolidator output is treated as proof that `parse_error=no_issue_markers` represents a clean round, and its contents are never validated.\n  WHY: A non-blank response without issue markers leaves the issues file empty but passes the non-blank check. `compute_reviewer_findings` then emits zero counts instead of unavailable counts, which publishes a misleading measurement.\n- tests/test_review_chatgpt_findings_record.py:761-771 | severity=NIT | confidence=5\n  PROBLEM: The `REVIEW_PARSER_FAILOPEN=0` case does not create `consolidator_raw.txt`, so the test passes even if the fail-closed guard is removed.\n  WHY: CI would not catch a regression that treats a parser failure as a clean round when the raw output is non-blank, and that regression could emit misleading zero counts.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "64dec549df2191d82bc06b6e257bbf2082fdea116aefe26da9d6552c23caafe4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10065,
+    "run_id": "45479889681",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45479889681",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124221145_e96a6b1a9e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10065,
+    "run_id": "45479889681"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T22:11:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
