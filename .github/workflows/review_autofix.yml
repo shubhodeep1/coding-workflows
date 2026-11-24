@@ -2072,6 +2072,9 @@ jobs:
       # (or its workspace copy) when running -c, -, or -m.
       PYTHONSAFEPATH: "1"
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
+      # Issue #9928: run-local PR read cache kill switch and job key.
+      REVIEW_RUN_READ_CACHE_ENABLED: ${{ vars.REVIEW_RUN_READ_CACHE_ENABLED || 'true' }}
+      GH_PR_READ_CACHE_JOB: codex-agent
       # Head the gate evaluated; the review-autofix-failure:v1 marker on every
       # failure comment records it so the gate's identical-failure cap can
       # match markers to the current head.
@@ -2460,8 +2463,9 @@ jobs:
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          type gh_pr_cached_read >/dev/null 2>&1 || gh_pr_cached_read() { gh_retry _safe_gh_jq "repos/$2/pulls/$3"; }
 
-          pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" || echo 'null')"
+          pr_meta="$(gh_pr_cached_read pull "${REPOSITORY}" "${PR_NUMBER}" || echo 'null')"
           # An unavailable label snapshot must not override an explicit ai:codex
           # label by selecting Claude from the role default.
           AI_ENGINE_LABELS="$(printf '%s\n' "${pr_meta}" | jq -ce 'if (.labels | type) == "array" then [.labels[] | .name | select(type == "string")] else error("labels unavailable") end' 2>/dev/null || printf '%s' '["ai:codex"]')"
@@ -5371,6 +5375,7 @@ jobs:
             fi
             : > "${push_stderr_file}"
           done
+          ( source "${SUPPORT_SCRIPTS_DIR:-}/gh_helpers.sh" && gh_pr_cache_evict "${GITHUB_REPOSITORY}" "${PR_NUMBER:-}" ) >/dev/null 2>&1 || true
 
       - name: Resolve addressed PR review threads
         # The editor stage audits every PR review comment it saw (the
@@ -6508,3 +6513,4 @@ jobs:
             fi
           fi
           echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=codex-agent remaining=${remaining} reset=${reset} used_in_job=${used}"
+          gpc_stats="${RUNNER_TEMP:-/nonexistent}/gh_pr_read_cache/${GITHUB_RUN_ID:-local}_${GITHUB_RUN_ATTEMPT:-1}.stats"; [ -r "${gpc_stats}" ] || gpc_stats=/dev/null; echo "GH_PR_READ_CACHE hits=$(awk '$1=="hit"{n++} END{print n+0}' "${gpc_stats}" 2>/dev/null || echo 0) misses=$(awk '$1=="miss"{n++} END{print n+0}' "${gpc_stats}" 2>/dev/null || echo 0) job=codex-agent"
