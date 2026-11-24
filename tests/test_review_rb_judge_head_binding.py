@@ -673,8 +673,9 @@ def test_no_merge_command_discards_stderr() -> None:
 			assert "2>/dev/null" not in line, line
 	reports = re.findall(r"^\s+rb_judge_merge_err_report (\S+)$", text, re.MULTILINE)
 	# #9939: the merge and terminal deferral branches report the failed --auto
-	# request too (it was the only merge path left).
-	assert reports == ["merge", "merge", "terminal", "terminal", "sync"]
+	# request too (it was the only merge path left). #10049: so do the
+	# branches for a PR closed during the merge retry.
+	assert reports == ["merge", "merge", "merge", "terminal", "terminal", "terminal", "sync"]
 
 
 # --- transient GitHub errors on the judge merge are retried ----------------
@@ -902,7 +903,8 @@ def test_non_transient_auto_error_on_the_last_retry_is_a_failure(path: str) -> N
 @pytest.mark.parametrize("pr_read", ["head_moved", "not_open"])
 def test_head_moved_or_closed_after_a_site_deferral_is_a_failure(path: str, pr_read: str) -> None:
 	"""#9939: the retry stopped because the PR can no longer merge at the
-	judged head; that is merge_failed, not a blocked-mergeability wait."""
+	judged head; that is not a blocked-mergeability wait. A moved head is
+	merge_failed; a PR closed meanwhile is not_open (#10049)."""
 	read = _pr_state(head=OTHER) if pr_read == "head_moved" else _pr_state(state="closed")
 	responses = [_fail(), read]
 	proc, _output, calls, sleeps = _run_merge_site_scripted(path, responses, extra_env={"GUARD_STUB_DEFER": "1"})
@@ -910,7 +912,8 @@ def test_head_moved_or_closed_after_a_site_deferral_is_a_failure(path: str, pr_r
 	assert sleeps == ["10"]
 	assert [c for c in calls if c[:2] == ["pr", "merge"]] == _expected_calls(path)[:1], calls
 	assert f"outcome={pr_read}" in proc.stdout
-	assert "RB_MERGE_STATUS=merge_failed" in proc.stdout.splitlines()
+	expected_status = "merge_failed" if pr_read == "head_moved" else "not_open"
+	assert f"RB_MERGE_STATUS={expected_status}" in proc.stdout.splitlines()
 	assert "RB_MERGE_STATUS=mergeability_pending" not in proc.stdout.splitlines()
 
 
@@ -1047,6 +1050,8 @@ def test_unreadable_pr_state_sends_no_auto_merge_call(path: str) -> None:
 	assert len(merge_calls) == len(_expected_calls(path))
 	assert sleeps == ["10", "20", "40"]
 	assert [ln.rsplit("outcome=", 1)[-1] for ln in _retry_lines(proc.stdout) if "outcome=" in ln] == ["state_unavailable"] * 3
+	# Running out of unreadable reads is a wait, not a failed merge.
+	assert "RB_MERGE_STATUS=mergeability_pending" in proc.stdout.splitlines()
 
 
 @pytest.mark.parametrize("path", MERGE_SITE_ORDER)

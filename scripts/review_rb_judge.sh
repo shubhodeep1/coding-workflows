@@ -2599,8 +2599,12 @@ rb_judge_merge_retry_transient() {
     fi
     if [ "${_rb_retry_mode}" = "auto" ] && [ -z "${_rb_retry_state}" ]; then
       # #10049: the PR's state is unreadable, so no merge request goes out on
-      # this attempt; the loop re-reads after the next delay (bounded).
+      # this attempt; the loop re-reads after the next delay (bounded). Mark
+      # it deferred, so running out of attempts here is a wait
+      # (mergeability_pending through rb_judge_deferred_merge_pending), not
+      # merge_failed; a later guard call resets the flag.
       echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=state_unavailable"
+      RB_SYNC_MERGE_DEFERRED="true"
       continue
     fi
     if [ "${_rb_retry_mode}" = "auto" ]; then
@@ -2815,6 +2819,18 @@ case "${RB_ACTION}" in
             rb_judge_merge_err_close
             RB_MERGE_READY_LABEL_ALLOWED="true"
             RB_MERGE_STATUS="merge_requested"
+          elif [ "${RB_MERGE_RETRY_GIVEUP:-}" = "not_open" ]; then
+            # #10049: the retry's PR read found the PR closed (not merged).
+            # Same outcome as the pre-merge check: one AUTOFIX_MERGE_SKIPPED
+            # line and the lease released, from that read (no extra call).
+            rb_judge_merge_err_report merge
+            rb_judge_merge_err_close
+            if declare -F _pr_merge_state_check >/dev/null 2>&1; then
+              PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_merge_state_check "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" pre_merge \
+                "$(jq -cn --arg sha "${RB_JUDGED_HEAD_SHA:-}" --arg base "${PR_BASE_REF:-}" '{state: "closed", draft: false, head: {sha: $sha}, base: {ref: $base}}' 2>/dev/null)" || true
+            fi
+            echo "::warning::Review-blocked judge: PR #${PR_NUMBER} closed during the merge retry; not merging and withholding ai:ready-to-merge."
+            RB_MERGE_STATUS="not_open"
           elif [ "${RB_SYNC_MERGE_DEFERRED:-false}" = "true" ] && rb_judge_deferred_merge_pending; then
             # The --auto request failed too (#9939): it was the only merge
             # path left, so record why before the stderr files go away.
@@ -2938,6 +2954,18 @@ case "${RB_ACTION}" in
             rb_judge_merge_err_close
             RB_MERGE_READY_LABEL_ALLOWED="true"
             RB_MERGE_STATUS="merge_requested"
+          elif [ "${RB_MERGE_RETRY_GIVEUP:-}" = "not_open" ]; then
+            # #10049: the retry's PR read found the PR closed (not merged).
+            # Same outcome as the pre-merge check: one AUTOFIX_MERGE_SKIPPED
+            # line and the lease released, from that read (no extra call).
+            rb_judge_merge_err_report terminal
+            rb_judge_merge_err_close
+            if declare -F _pr_merge_state_check >/dev/null 2>&1; then
+              PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_merge_state_check "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" pre_merge \
+                "$(jq -cn --arg sha "${RB_JUDGED_HEAD_SHA:-}" --arg base "${PR_BASE_REF:-}" '{state: "closed", draft: false, head: {sha: $sha}, base: {ref: $base}}' 2>/dev/null)" || true
+            fi
+            echo "::warning::Review-blocked judge: PR #${PR_NUMBER} closed during the merge retry; not merging and withholding ai:ready-to-merge."
+            RB_MERGE_STATUS="not_open"
           elif [ "${RB_SYNC_MERGE_DEFERRED:-false}" = "true" ] && rb_judge_deferred_merge_pending; then
             # The --auto request failed too (#9939): it was the only merge
             # path left, so record why before the stderr files go away.

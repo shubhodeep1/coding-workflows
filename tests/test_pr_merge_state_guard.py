@@ -365,12 +365,13 @@ class Wiring(unittest.TestCase):
 		merge = text.index('gh_retry gh pr merge "${resume_num}"')
 		guard = text.rindex('_pr_merge_state_check "${resume_num}" "${resume_sha}" pre_merge', 0, merge)
 		fresh = text.rindex("_pr_base_fresh_for_merge", 0, merge)
-		# The state read precedes the freshness gate (which can take the merge
-		# lease or request a branch update) and stays the last PR read before
-		# the merge.
-		self.assertLess(guard, fresh)
+		# The state read follows the freshness gate (its compare and lease
+		# calls) and is the last call before the merge; --match-head-commit
+		# binds only the head.
+		self.assertGreater(guard, fresh)
 		self.assertNotIn("_pr_wait_for_required_checks", text[guard:merge])
-		self.assertIn("outcome=deferred reason=pr_${PR_MERGE_STATE_OUTCOME:-unavailable}", text[guard:fresh])
+		self.assertNotIn("_merge_lease", text[guard:merge])
+		self.assertIn("outcome=deferred reason=pr_${PR_MERGE_STATE_OUTCOME:-unavailable}", text[guard:merge])
 
 	def test_rb_judge_start_checks_reuse_the_pr_read_before_the_freshness_gate(self) -> None:
 		text = RB_JUDGE.read_text(encoding="utf-8")

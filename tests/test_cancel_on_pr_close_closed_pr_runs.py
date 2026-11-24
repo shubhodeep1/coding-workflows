@@ -93,7 +93,7 @@ class CancelClosedPrRuns(unittest.TestCase):
 	def tearDown(self) -> None:
 		shutil.rmtree(self.tmp, ignore_errors=True)
 
-	def _cancelled(self, runs: list[dict], head_sha: str = SHA, closed_at: str = CLOSED_AT) -> tuple[list[int], str]:
+	def _cancelled(self, runs: list[dict], head_sha: str = SHA, closed_at: str = CLOSED_AT, merged: str = "false") -> tuple[list[int], str]:
 		self.runs.write_text(json.dumps(runs), encoding="utf-8")
 		self.calls.write_text("", encoding="utf-8")
 		env = {
@@ -105,6 +105,7 @@ class CancelClosedPrRuns(unittest.TestCase):
 			"PR_HEAD_REF": BRANCH,
 			"PR_HEAD_SHA": head_sha,
 			"PR_CLOSED_AT": closed_at,
+			"PR_MERGED": merged,
 			"REPOSITORY": "owner/repo",
 			"CURRENT_RUN_ID": "1",
 			"TMPDIR": str(self.tmp),
@@ -162,6 +163,12 @@ class CancelClosedPrRuns(unittest.TestCase):
 		cancelled, _ = self._cancelled([_run([], id=26, created_at=None)])
 		self.assertEqual(cancelled, [])
 
+	def test_merged_pr_keeps_its_unlinked_runs(self) -> None:
+		# The review run that merged the PR is unlinked, at the head SHA and
+		# created before the close; it still runs its post-merge labelling.
+		cancelled, _ = self._cancelled([_run([], id=27), _run([PR], id=28)], merged="true")
+		self.assertEqual(cancelled, [28])
+
 	def test_cancel_workflows_and_the_current_run_are_never_cancelled(self) -> None:
 		cancelled, _ = self._cancelled([
 			_run([], id=1),
@@ -175,6 +182,7 @@ class CancelClosedPrRuns(unittest.TestCase):
 		text = WORKFLOW.read_text(encoding="utf-8")
 		self.assertIn("      PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}\n", text)
 		self.assertIn("      PR_CLOSED_AT: ${{ github.event.pull_request.closed_at }}\n", text)
+		self.assertIn("      PR_MERGED: ${{ github.event.pull_request.merged }}\n", text)
 
 
 if __name__ == "__main__":
