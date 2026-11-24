@@ -148,6 +148,11 @@ env:
 
 permissions:
   contents: write
+  # Read-only scopes for the polling reads that use the job token
+  # (GH_READ_TOKEN, issue #9888). Writes stay on GH_PAT.
+  actions: read
+  pull-requests: read
+  issues: read
 
 jobs:
   # ──────────────────────────────────────────────────────────────────
@@ -1983,6 +1988,7 @@ jobs:
       - name: "Phase 4: Wait for review & autofix to complete"
         id: wait-review
         env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
           PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
           # When inject-bait pushed a bait commit, pin the wait loop to
           # review runs whose head_sha matches the bait commit. Without
@@ -3662,6 +3668,7 @@ jobs:
         # during healthy runs.
         timeout-minutes: 265
         env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
           WF_FILE: workflow-log-analysis.yml
           # Plan P4: with the switch on (default) and TEST_REPO being this
           # repository, the gate analyses the full repo roster since the last
@@ -3830,6 +3837,8 @@ jobs:
       - name: Dispatch & watch — validation-refresh
         id: dispatch_validation_refresh
         timeout-minutes: 95
+        env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
         run: |
           set -euo pipefail
           sleep 4
@@ -3921,6 +3930,8 @@ jobs:
       - name: Dispatch & watch — update_workflows (allow_workflow_edits=false)
         id: dispatch_update_workflows
         timeout-minutes: 18
+        env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
         run: |
           set -euo pipefail
           sleep 4
@@ -4001,6 +4012,8 @@ jobs:
       - name: Dispatch & watch — internal-memory-maintenance
         id: dispatch_memory_maintenance
         timeout-minutes: 45
+        env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
         run: |
           set -euo pipefail
           sleep 4
@@ -4128,6 +4141,8 @@ jobs:
 
       - name: Dispatch internal-orchestrate.yml with multi-issue project
         id: dispatch
+        env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
         run: |
           set -euo pipefail
           WF_FILE="internal-orchestrate.yml"
@@ -4371,6 +4386,7 @@ jobs:
       - name: Cleanup orchestrate test issues
         if: always()
         env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
           TRACKING_NUMBER: ${{ steps.dispatch.outputs.tracking_issue }}
           CHILDREN: ${{ steps.dispatch.outputs.child_issues }}
           RUN_ID: ${{ github.run_id }}
@@ -4540,6 +4556,8 @@ jobs:
         id: dispatch
         # 1800s watcher wait + one 20s poll + gh retry backoff headroom.
         timeout-minutes: 35
+        env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
         run: |
           set -euo pipefail
           WF_FILE="internal-validate.yml"
