@@ -225,8 +225,14 @@ if ! gh_retry gh issue close "${pnti_issue}" --repo "${pnti_repo}" --reason comp
 	# The marker comment exists; the Phase 8b judge closes the issue from it.
 	# Drop the terminal ai:closed label so the open issue reads as blocked
 	# (orchestrate_lib.py checks ai:closed before phase labels).
-	gh_retry gh issue edit "${pnti_issue}" --repo "${pnti_repo}" --remove-label 'ai:closed' >/dev/null 2>&1 || true
-	pnti_finish blocked passed "${pnti_count}" close_failed "${pnti_note_failed_pass}"
+	# A failed rollback leaves an open issue labelled ai:closed; report it
+	# as close_failed_label_stale so the stale state is visible in the log.
+	pnti_close_detail="close_failed"
+	if ! gh_retry gh issue edit "${pnti_issue}" --repo "${pnti_repo}" --remove-label 'ai:closed' >/dev/null 2>&1; then
+		pnti_close_detail="close_failed_label_stale"
+		echo "::warning::issue #${pnti_issue} is open but still labelled ai:closed (close and label rollback both failed)"
+	fi
+	pnti_finish blocked passed "${pnti_count}" "${pnti_close_detail}" "${pnti_note_failed_pass}"
 fi
 
 if [[ "${pnti_progress_id}" =~ ^[0-9]+$ ]]; then

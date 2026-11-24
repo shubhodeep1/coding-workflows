@@ -53,6 +53,11 @@ if [ -n "${STUB_GH_FAIL:-}" ]; then
 		*"${STUB_GH_FAIL}"*) exit 1 ;;
 	esac
 fi
+if [ -n "${STUB_GH_FAIL2:-}" ]; then
+	case "$*" in
+		*"${STUB_GH_FAIL2}"*) exit 1 ;;
+	esac
+fi
 exit 0
 """
 
@@ -143,7 +148,7 @@ class ScriptHarness:
 		self.runner_temp.mkdir()
 
 	def run(self, *, reason: str = REASON, plan: str = "", issue_body: str = "", enabled: str | None = None,
-			repro_json: str | None = None, repro_rc: str = "", gh_fail: str = "", reproduce: Path | None = None) -> dict:
+			repro_json: str | None = None, repro_rc: str = "", gh_fail: str = "", reproduce: Path | None = None, gh_fail2: str = "") -> dict:
 		plan_file = self.root / "plan.txt"
 		plan_file.write_text(plan, encoding="utf-8")
 		issue_file = self.root / "issue.json"
@@ -173,6 +178,7 @@ class ScriptHarness:
 			"STUB_REPRO_JSON": repro_json or "",
 			"STUB_REPRO_RC": repro_rc,
 			"STUB_GH_FAIL": gh_fail,
+			"STUB_GH_FAIL2": gh_fail2,
 			"PYTHONDONTWRITEBYTECODE": "1",
 		})
 		if enabled is not None:
@@ -390,6 +396,19 @@ class PlanNothingToImplementVerifyScriptTests(unittest.TestCase):
 		gh_lines = r["gh"].splitlines()
 		close_at = next(i for i, line in enumerate(gh_lines) if line.startswith("issue close 42"))
 		self.assertIn("issue edit 42 --repo o/r --remove-label ai:closed", gh_lines[close_at + 1:])
+		self.assertNotIn("close_failed_label_stale", r["stdout"])
+
+	def test_close_and_label_rollback_failure_is_reported_as_stale(self) -> None:
+		r = self.h.run(
+			plan=_plan_with_acceptance("tests/test_ok.py"), repro_json=_passing(["tests/test_ok.py"]),
+			gh_fail="issue close", gh_fail2="--remove-label ai:closed",
+		)
+		self.assertEqual(
+			self._log_line(r["stdout"]),
+			"PLAN_NOTHING_TO_IMPLEMENT issue=42 outcome=blocked reason=passed tests=1 detail=close_failed_label_stale",
+		)
+		self.assertIn("::warning::issue #42 is open but still labelled ai:closed", r["stdout"])
+		self.assertEqual(r["outputs"]["outcome"], "blocked")
 
 	def test_missing_reproduce_script_is_failed(self) -> None:
 		r = self.h.run(
