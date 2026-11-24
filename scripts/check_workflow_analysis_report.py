@@ -25,7 +25,9 @@ error.
 ``--insert-reviewer-findings --context <analysis_context.json>`` mode appends a
 code-built "Reviewer Findings" section (Refs #10058) from the context's
 ``reviewer_findings`` aggregate, so the table is never a model tally. It is
-idempotent (marker ``<!-- reviewer-findings-table v1 -->``) and writes
+idempotent when the report already ends with the same rendered section
+(marker ``<!-- reviewer-findings-table v1 -->``); a marker elsewhere in the
+model-written report draws a warning and the table is still appended. It writes
 atomically. Exit 0, or 2 when the report or context cannot be read or parsed.
 
 Stdlib only. No network, no GitHub API calls.
@@ -361,9 +363,10 @@ def render_reviewer_findings_section(context: Any) -> str:
 		REVIEWER_FINDINGS_MARKER,
 		REVIEWER_FINDINGS_HEADING,
 		"",
-		f"Counts come from REVIEWER_FINDINGS lines in {runs_with_lines} of {review_runs} review runs whose logs"
-		" this analysis read; 'lone' depends on the consolidator's merge of duplicate findings;"
-		f" runs reporting outcome=unavailable: {unavailable_runs}.",
+		f"Counts come from REVIEWER_FINDINGS lines in {runs_with_lines} of {review_runs} review runs in the window;"
+		" lines are read only from the capped sample of run logs this analysis downloaded, which favours failed"
+		" and slow runs, so this is a sample, not every review run; 'lone' depends on the consolidator's merge of"
+		f" duplicate findings; runs reporting outcome=unavailable: {unavailable_runs}.",
 		"",
 		f"Percentages (of lone findings) are shown only for reviewers with at least {REVIEWER_FINDINGS_PERCENT_MIN_LONE}"
 		" lone findings in the window; below that, only the counts are shown.",
@@ -382,8 +385,6 @@ def insert_reviewer_findings(report_path: str, context_path: str) -> int:
 	except OSError:
 		print(f"::warning::{LOG_PREFIX}: the report file could not be read; reviewer findings table not added.", file=sys.stderr)
 		return 2
-	if REVIEWER_FINDINGS_MARKER.encode("utf-8") in raw:
-		return 0
 	try:
 		with open(context_path, encoding="utf-8") as handle:
 			context = json.load(handle)
@@ -394,6 +395,13 @@ def insert_reviewer_findings(report_path: str, context_path: str) -> int:
 		print(f"::warning::{LOG_PREFIX}: the analysis context is not a JSON object; reviewer findings table not added.", file=sys.stderr)
 		return 2
 	section = render_reviewer_findings_section(context).encode("utf-8")
+	# Idempotent only when the report already ends with this exact code-built
+	# section. The report body is model-written, so a marker anywhere else is
+	# untrusted: warn and still append the code-built table.
+	if raw.endswith(section):
+		return 0
+	if REVIEWER_FINDINGS_MARKER.encode("utf-8") in raw:
+		print(f"::warning::{LOG_PREFIX}: the report already contains the reviewer findings marker; appending the code-built table.", file=sys.stderr)
 	prefix = raw if not raw or raw.endswith(b"\n") else raw + b"\n"
 	data = prefix + (b"\n" if prefix else b"") + section
 

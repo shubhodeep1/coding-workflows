@@ -615,6 +615,23 @@ def _issue_number(issue_id: str) -> int | None:
 	return int(issue_id) if ISSUE_ID_RE.match(issue_id or "") else None
 
 
+def _parser_found_no_issue_markers() -> bool:
+	"""True when parser_stats.txt reports parse_error=no_issue_markers with fail-open on.
+
+	With REVIEW_PARSER_FAILOPEN unset or 1 (the parser's default) an empty
+	issues file plus no_issue_markers means the consolidator merged nothing
+	and no reviewer anchor was left uncovered: a clean round, not a failure.
+	"""
+	if _env("REVIEW_PARSER_FAILOPEN") == "0":
+		return False
+	runtime_dir = _env("RUNTIME_DIR")
+	stats_path = _env("PARSER_STATS_FILE") or (os.path.join(runtime_dir, "parser_stats.txt") if runtime_dir else "")
+	if not stats_path:
+		return False
+	stats_text, _ = _read_bounded(stats_path, STATUS_READ_LIMIT_BYTES)
+	return bool(stats_text and re.search(r"(?m)^parse_error=no_issue_markers$", stats_text))
+
+
 def compute_reviewer_findings(record: dict) -> dict:
 	"""Count each reviewer's consolidated findings (Refs #10058).
 
@@ -645,7 +662,15 @@ def compute_reviewer_findings(record: dict) -> dict:
 	if tier_name == "lite" or _env("REVIEW_CONSOLIDATOR_ENABLED") == "0":
 		result["reason"] = "consolidator_disabled"
 		return result
-	if REVIEWER_FINDINGS_MISSING_WARNINGS.intersection(record.get("warnings") or []):
+	record_warnings = set(record.get("warnings") or [])
+	missing_warnings = REVIEWER_FINDINGS_MISSING_WARNINGS.intersection(record_warnings)
+	clean_round = (
+		missing_warnings == {"consolidator_parse_failed"}
+		and "issues_file_empty" in record_warnings
+		and not record.get("issues")
+		and _parser_found_no_issue_markers()
+	)
+	if missing_warnings and not clean_round:
 		result["reason"] = "consolidator_missing"
 		return result
 
@@ -661,10 +686,14 @@ def compute_reviewer_findings(record: dict) -> dict:
 
 	issues = record.get("issues") or []
 	sets: list[set[str]] = []
+	# An entry matching no reviewer that ran (e.g. reviewer_N) makes the
+	# issue's attribution incomplete, so it cannot be classed lone or shared.
+	has_unmatched: list[bool] = []
 	index_by_number: dict[int, int] = {}
 	for position, issue in enumerate(issues):
-		matched = {name for name in (match(entry) for entry in issue.get("flagged_by") or [] if entry != FLAGGED_BY_UNVERIFIED_VALUE) if name}
-		sets.append(matched)
+		names = [match(entry) for entry in issue.get("flagged_by") or [] if entry != FLAGGED_BY_UNVERIFIED_VALUE]
+		sets.append({name for name in names if name})
+		has_unmatched.append(any(name is None for name in names))
 		number = _issue_number(issue.get("id") or "")
 		if number is not None and number not in index_by_number:
 			index_by_number[number] = position
@@ -689,6 +718,7 @@ def compute_reviewer_findings(record: dict) -> dict:
 		target = duplicate_target(position)
 		if target is not None:
 			sets[target] |= sets[position]
+			has_unmatched[target] = has_unmatched[target] or has_unmatched[position]
 			folded.add(position)
 
 	per_reviewer = {name: dict.fromkeys(REVIEWER_FINDINGS_COUNT_KEYS, 0) for name in reviewers}
@@ -696,7 +726,7 @@ def compute_reviewer_findings(record: dict) -> dict:
 		if position in folded:
 			continue
 		matched = sets[position]
-		if not matched:
+		if not matched or has_unmatched[position]:
 			result["reason"] = "flagged_by_missing"
 			return result
 		lone = len(matched) == 1

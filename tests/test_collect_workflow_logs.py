@@ -3715,32 +3715,6 @@ def test_build_report_omits_coverage_when_not_supplied() -> None:
 	assert set(with_coverage) - set(report) == {"coverage"}
 
 
-def main() -> int:
-	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
-	passed = 0
-	failed = 0
-	for func in test_funcs:
-		name = func.__name__
-		try:
-			if func is test_pat_budget_daily_main_collects_wrapper_runs_without_duplicate_archives:
-				with tempfile.TemporaryDirectory() as test_dir:
-					func(Path(test_dir))
-			else:
-				func()
-			print(f"  PASS  {name}")
-			passed += 1
-		except Exception as exc:  # noqa: BLE001
-			print(f"  FAIL  {name}: {exc}")
-			failed += 1
-
-	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
-	return 1 if failed > 0 else 0
-
-
-if __name__ == "__main__":
-	raise SystemExit(main())
-
-
 # --- REVIEWER_FINDINGS lines (Refs #10058) ---
 
 _RF_COUNTED = "REVIEWER_FINDINGS pr=42 round=3 reviewer=google/gemini-4-pro raised=2 lone=1 lone_rejected=1 lone_accepted=0 shared=1"
@@ -3805,3 +3779,29 @@ def test_main_reviewer_findings_on_trusted_run_only():
 	rc, report, _fetched, _stderr = _run_main_with_runs([_api_run(3, "pull_request", "owner/repo")])
 	assert rc == 0
 	assert "reviewer_findings" not in report["runs"][0]
+
+
+def main() -> int:
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			if func is test_pat_budget_daily_main_collects_wrapper_runs_without_duplicate_archives:
+				with tempfile.TemporaryDirectory() as test_dir:
+					func(Path(test_dir))
+			else:
+				func()
+			print(f"  PASS  {name}")
+			passed += 1
+		except Exception as exc:  # noqa: BLE001
+			print(f"  FAIL  {name}: {exc}")
+			failed += 1
+
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total")
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

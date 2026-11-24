@@ -342,6 +342,8 @@ def aggregate_reviewer_findings(runs: list[dict[str, Any]]) -> dict[str, Any]:
 	unavailable_runs, unavailable_lines and reviewers (sorted by name, each
 	{reviewer, runs, raised, lone, lone_rejected, lone_accepted, shared}).
 	Counts are clamped to >= 0; unavailable lines add no reviewer counts.
+	Only review_autofix runs contribute, so a matching line echoed by any
+	other trusted workflow cannot add to the totals.
 	"""
 	review_runs = 0
 	runs_with_lines = 0
@@ -349,8 +351,9 @@ def aggregate_reviewer_findings(runs: list[dict[str, Any]]) -> dict[str, Any]:
 	unavailable_lines = 0
 	per_reviewer: dict[str, dict[str, Any]] = {}
 	for run in runs:
-		if str(run.get("workflow_family") or "") == "review_autofix":
-			review_runs += 1
+		if str(run.get("workflow_family") or "") != "review_autofix":
+			continue
+		review_runs += 1
 		entries = run.get("reviewer_findings")
 		if not isinstance(entries, list):
 			continue

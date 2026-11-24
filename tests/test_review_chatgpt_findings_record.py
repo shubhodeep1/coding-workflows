@@ -740,6 +740,47 @@ def test_reviewer_findings_lines_zero_findings(tmp_path: Path) -> None:
 	]
 
 
+def test_reviewer_findings_clean_round_parser_no_issue_markers_gives_zeros(tmp_path: Path) -> None:
+	# Production shape of a clean round: the parser truncates the issues file
+	# and writes parse_failed=1 / parse_error=no_issue_markers.
+	env = _three_fixture(tmp_path, issues_text="")
+	_write(Path(env["RUNTIME_DIR"]) / "parser_stats.txt", "parsed_blocks=0\nparse_failed=1\nparse_error=no_issue_markers\n")
+	output = Path(env["PREVIOUS_REVIEWS_DIR"]) / "review_findings_record.json"
+	result = _run(env, output)
+	assert result.returncode == 0
+	assert _findings_lines(result.stdout) == [
+		f"REVIEWER_FINDINGS pr=42 round=3 reviewer={name} raised=0 lone=0 lone_rejected=0 lone_accepted=0 shared=0"
+		for name in ("anthropic/claude-opus-5", "google/gemini-4-pro", "x-ai/grok-5")
+	]
+	# The record's warnings are unchanged.
+	assert "consolidator_parse_failed" in json.loads(output.read_text(encoding="utf-8"))["warnings"]
+
+	# Any other parse failure, or fail-open off, stays unavailable.
+	for stats, failopen in (("parse_failed=1\nparse_error=other\n", None), ("parse_failed=1\nparse_error=no_issue_markers\n", "0")):
+		case_dir = tmp_path / f"case_{failopen}_{len(stats)}"
+		case_dir.mkdir()
+		case_env = _three_fixture(case_dir, issues_text="")
+		_write(Path(case_env["RUNTIME_DIR"]) / "parser_stats.txt", stats)
+		if failopen is not None:
+			case_env["REVIEW_PARSER_FAILOPEN"] = failopen
+		case_output = Path(case_env["PREVIOUS_REVIEWS_DIR"]) / "review_findings_record.json"
+		case_result = _run(case_env, case_output)
+		assert case_result.returncode == 0
+		assert all(line.endswith(" reason=consolidator_missing") for line in _findings_lines(case_result.stdout))
+
+
+def test_reviewer_findings_partial_flagged_by_match_is_unavailable(tmp_path: Path) -> None:
+	# One matched reviewer plus an unmatched reviewer_N token is not a lone finding.
+	text = THREE_ISSUES_TEXT.replace("FLAGGED_BY: review_x-ai_grok-5\n", "FLAGGED_BY: review_x-ai_grok-5, reviewer_2\n")
+	env = _three_fixture(tmp_path, issues_text=text)
+	output = Path(env["PREVIOUS_REVIEWS_DIR"]) / "review_findings_record.json"
+	result = _run(env, output)
+	assert result.returncode == 0
+	lines = _findings_lines(result.stdout)
+	assert len(lines) == 3
+	assert all(line.endswith(" outcome=unavailable reason=flagged_by_missing") for line in lines)
+
+
 def test_reviewer_findings_unavailable_without_flagged_by(tmp_path: Path) -> None:
 	env = _three_fixture(tmp_path, issues_text=THREE_ISSUES_TEXT.replace("FLAGGED_BY: review_x-ai_grok-5\n", ""))
 	output = Path(env["PREVIOUS_REVIEWS_DIR"]) / "review_findings_record.json"
