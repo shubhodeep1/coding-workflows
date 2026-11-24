@@ -35665,6 +35665,8 @@ def test_completion_status_closed_not_planned_keeps_critical() -> None:
 		assert len(_closed_without_merge_criticals(result)) == 1
 		assert _delivered_warnings(result) == []
 		assert result["latest_state"].get("completion_status_failure_alert_sent") is True
+		# The judge is invoked as today for every blocking variant.
+		assert result["judge_prompt"], (reasons, labels)
 
 
 def test_completion_status_mixed_closed_kinds_keeps_critical() -> None:
@@ -35681,6 +35683,8 @@ def test_completion_status_mixed_closed_kinds_keeps_critical() -> None:
 	assert "closed as already delivered" not in comment
 	assert len(_closed_without_merge_criticals(result)) == 1
 	assert _delivered_warnings(result) == []
+	# The judge is invoked as today for the mixed case too.
+	assert result["judge_prompt"]
 
 
 if __name__ == "__main__":
