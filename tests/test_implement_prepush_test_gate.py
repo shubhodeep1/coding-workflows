@@ -128,6 +128,10 @@ def _setup(tmp_path: Path, queue: list[dict], with_module: bool = True) -> tuple
 		"CODEX_ISOLATED_IMPLEMENT_ROOT": str(work / "sandbox"),
 		"GITHUB_WORKSPACE": str(repo),
 		"MODEL_EDITOR": "openai/test-model",
+		# Pin the scope-guard switches to their production defaults so an exported developer
+		# shell value cannot change the expected-files scope split (Refs #9775).
+		"ENFORCE_FILES_TOUCHED": "true",
+		"ALLOW_OUT_OF_SCOPE_FILES": "false",
 	})
 	return repo, env
 
@@ -430,7 +434,6 @@ def test_expected_files_is_silent_for_orchestrator_children_and_mode_off(tmp_pat
 	proc = subprocess.run(["bash", str(STEP_SCRIPT), "expected-files", str(_plan(tmp_path)), str(body)], cwd=repo, env=env,
 		capture_output=True, text=True, timeout=60)
 	assert proc.returncode == 0 and proc.stdout == ""
-
 
 
 # --- expected-files scope split (Refs #9775) ----------------------------------------
