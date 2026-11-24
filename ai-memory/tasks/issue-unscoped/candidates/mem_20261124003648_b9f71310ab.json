@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/stage_switch_watch.sh:83-84 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The `gh api --jq` filter pretty-prints object results, but `build_snapshot` in scripts/stage_switch_watch.py:154-158 parses each input line as a complete JSON object.\n  WHY: The first line of a pretty-printed object is just `{`, which `json.loads(line)` rejects, so the snapshot command errors and the wrapper logs `read_failed reason=parse` and skips reporting; `scripts/review_merge_train.sh:352-354` notes that `gh api --jq` pretty-prints objects and uses `tojson` for line-by-line readers (source severity MAJOR).\n- tests/test_stage_switch_registry.py:3-5 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The module docstring says the scan covers only `.github/workflows/*.yml`, but both workflow scans (line 63 in `_workflow_true_switches` and line 265 in `test_no_workflow_passes_tojson_vars`) now also read `*.yaml`.\n  WHY: Nothing fails at runtime, but the docstring describes less than the test checks, so a reader could wrongly think a `.yaml` workflow is not covered and ship one without a registry entry; the suggested fix is a 1-line docstring change (all reviewers rated it NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_stage_switch_registry.py:line 5, the module docstring: \"'false'` test in .github/workflows/*.yml, and every `_ENABLED` row whose\". The last run changed lines 63 and 265 to sorted([*workflows_dir.glob(\"*.yml\"), *workflows_dir.glob(\"*.yaml\")]). | severity=NIT | confidence=5\n  PROBLEM: Both scans now also read `*.yaml` workflow files, but the module docstring still says the scan covers only `.github/workflows/*.yml`.\n  WHY: Nothing fails at runtime because no `.github/workflows/*.yaml` files exist, but a reader could wrongly think a `.yaml` workflow is not covered. Fix: change \"*.yml\" to \"*.yml / *.yaml\" in the docstring. This agrees with the pass-1 consensus finding.\n- HARDENING_SUGGESTION: tests/test_stage_switch_registry.py module docstring, line 5 \u2014 change \".github/workflows/*.yml\" to \".github/workflows/*.yml and *.yaml\" (1 line); HARDENING_RISK_SCORE: 0\n- TASK COMPLETENESS: NONE. The reviewer checked G1\u2013G5 and the issue's constraints against the diff, found a matching hunk for each, and found a test for every scenario in the issue's Tests section in tests/test_stage_switch_watch.py or tests/test_stage_switch_registry.py.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_stage_switch_registry.py:lines 3-5 | severity=NIT | confidence=5\n  PROBLEM: The module docstring says the scan covers only .github/workflows/*.yml files, but the last run widened the scan to include .yaml files (lines 63 and 265).\n  WHY: This is documentation drift, not a runtime failure, but it misstates the scope of the registry scan to future developers.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_stage_switch_registry.py:module docstring lines 3-5; the glob changes at lines 63 and 265 | severity=NIT | confidence=5\n  PROBLEM: The docstring says the scan covers \"every `vars.<NAME>_ENABLED != 'false'` test in .github/workflows/*.yml\", but `_workflow_true_switches` (line 63) and `test_no_workflow_passes_tojson_vars` (line 265) now also scan `*.yaml`.\n  WHY: Nothing fails at runtime, but a reader adding a default-on switch in a `.yaml` workflow could trust the docstring's narrower claim and ship a PR without a registry entry.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/stage_switch_watch.sh:83-84; scripts/stage_switch_watch.py:154-158 | severity=MAJOR | confidence=5\n  PROBLEM: The `gh api --jq` filter emits object results in pretty-printed form, but `build_snapshot` parses each input line as a complete JSON object.\n  WHY: `json.loads(line)` rejects a first line of just `{`, so the snapshot command errors and the wrapper logs `read_failed reason=parse` and skips reporting; `scripts/review_merge_train.sh:352-354` documents the pretty-printing and uses `tojson` for line-by-line readers.\n- tests/test_stage_switch_registry.py:3-5; workflow scan at line 63 | severity=NIT | confidence=5\n  PROBLEM: The module docstring says the registry check scans `.github/workflows/*.yml`, but the latest change also scans `*.yaml`.\n  WHY: Nothing fails at runtime, but the docstring misstates the test's coverage and can mislead maintainers.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_stage_switch_registry.py:lines 3-5 (module docstring) vs. lines 63 and 265 (scan loops) | severity=NIT | confidence=5\n  PROBLEM: The last run widened both workflow scans to include `.yaml` files (`for workflow in sorted([*workflows_dir.glob(\"*.yml\"), *workflows_dir.glob(\"*.yaml\")]):` at line 63 and the same pattern in `test_no_workflow_passes_tojson_vars` at line 265), but the docstring still says only `.github/workflows/*.yml`.\n  WHY: Nothing fails at runtime, but the docstring understates what the scan enforces, so a reader wiring a `.yaml` workflow could wrongly conclude the registry check does not cover it.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d35c51b880627c11ad67e4b77a8a0e934c18f967a6a73bdf93747508750e6a60",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9999,
+    "run_id": "45281649420",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45281649420",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124003648_b9f71310ab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9999,
+    "run_id": "45281649420"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T00:36:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
