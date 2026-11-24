@@ -108,7 +108,12 @@
 # `@stable contains <merge commit>` (this run's own commit, never a model
 # value) and reroutes a model `operator` gap carrying that condition to `code`
 # (`rerouted`), so promoting `main`, tagging `stable` and the consumer sync
-# never reach a person. Release-pending gaps appear only in the verdict
+# never reach a person. An `operator` gap with no condition whose title is a
+# release verb naming `stable` or the consumer sync, and that names no secret,
+# token, setting or similar, is rerouted the same way (issue #9393), matching
+# `_is_release_entry` in scripts/operator_step_issue.py (RELEASE_STEP_TITLE_RE
+# and HUMAN_OBJECT_TITLE_RE match the writer's; a test checks parity).
+# Release-pending gaps appear only in the verdict
 # comment: no fix issue, no operator step, no WARNING. The poller's
 # `operator_step_issue.py resolve` step ticks older release entries once
 # `stable` contains their merge. Log: op=release_pending_gaps count= rerouted=
@@ -156,6 +161,10 @@ activation_normalise_verdict()
 import json, os, re, sys
 # Keep in sync with RELEASE_CONDITION_RE in scripts/operator_step_issue.py.
 RELEASE_CONDITION_RE = re.compile(r"^@?stable\s+contains\b", re.I)
+# Keep in sync with RELEASE_STEP_TITLE_RE in scripts/operator_step_issue.py (a test checks parity).
+RELEASE_STEP_TITLE_RE = re.compile(r"^(?:promote|tag|release|publish|cut|sync|propagate|roll out)\b[^\n]{0,200}?(?:@stable|\bstable\b|ai update workflows|update[ _-]workflows|wrapper sync|consumer sync)", re.I)
+# Keep in sync with HUMAN_OBJECT_TITLE_RE in scripts/operator_step_issue.py (a test checks parity).
+HUMAN_OBJECT_TITLE_RE = re.compile(r"(?<![A-Za-z])(?:secrets?|tokens?|credentials?|passwords?|variables?|settings?|permissions?|accounts?|keys?)(?![A-Za-z])", re.I)
 raw = open(sys.argv[1], encoding="utf-8", errors="replace").read()
 source_sha = sys.argv[3] if len(sys.argv) > 3 and re.fullmatch(r"[0-9a-f]{40}", sys.argv[3]) else ""
 open_pr_numbers = set()
@@ -190,12 +199,24 @@ for gap in match["gaps"]:
 	if not isinstance(gap, dict) or gap.get("kind") not in ("code", "operator"):
 		sys.exit(1)
 	dormant_until = clean(gap.get("dormant_until"), 200)
-	release_pending = bool(RELEASE_CONDITION_RE.match(dormant_until))
+	title = clean(gap.get("title"), 200) or "Activation gap"
+	# A condition-less operator gap titled as a release or consumer sync is a
+	# release step too, exactly as _is_release_entry in operator_step_issue.py
+	# classifies it: never when the title names a secret, token, setting or
+	# similar (a `_` goes in at each camelCase boundary first), and never when
+	# the gap carries its own condition.
+	release_pending = bool(RELEASE_CONDITION_RE.match(dormant_until)) or (
+		gap["kind"] == "operator" and not dormant_until and bool(RELEASE_STEP_TITLE_RE.match(title))
+		and not HUMAN_OBJECT_TITLE_RE.search(re.sub(r"(?<=[a-z])(?=[A-Z])", "_", title)))
+	# Deliberately not gated on source_sha: without a valid merge commit the
+	# writer's resolve skips an entry (outcome=no_source_sha), so keeping the
+	# gap as an operator step would leave a step nobody auto-ticks. Like the
+	# `@stable contains` path, the gap stays release-pending (verdict only).
 	if release_pending and source_sha:
 		dormant_until = "@stable contains " + source_sha
 	gaps.append({
 		"kind": "code" if release_pending else gap["kind"],
-		"title": clean(gap.get("title"), 200) or "Activation gap",
+		"title": title,
 		"evidence": clean(gap.get("evidence"), 600),
 		"fix": clean(gap.get("fix"), 1500),
 		"dormant_until": dormant_until,

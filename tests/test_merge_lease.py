@@ -396,11 +396,16 @@ class ReleaseTick(unittest.TestCase):
 		self.assertNotIn("dispatched", h.state)
 
 	def _resume(self, statuses: list[dict], checks_rc: int = 0, checks_outcome: str = "ok", fresh_rc: int = 0,
-			ci_state: str = "success", extra_labels: list[str] | None = None, env: dict[str, str] | None = None) -> _Harness:
-		pulls = [_pull(7, sha=HEAD)]
+			ci_state: str = "success", extra_labels: list[str] | None = None, env: dict[str, str] | None = None,
+			head_ref: str | None = None, head_repo: str | None = None, fail: list[str] | None = None) -> _Harness:
+		pulls = [_pull(7, head_ref=head_ref, sha=HEAD)]
+		if head_repo is not None:
+			pulls[0]["head"]["repo"]["full_name"] = head_repo
 		labels = {"7": ["ai:final-ci-merge-pending"] + (extra_labels or [])}
 		st = {"pulls": pulls, "labels": labels, "user": "pipeline-bot", "statuses": {HEAD: statuses},
 			"graphql": {"data": {"repository": {"pullRequest": {"closingIssuesReferences": {"nodes": [{"number": 70}]}}}}}}
+		if fail:
+			st["fail"] = fail
 		h = _Harness(st)
 		stubs = (f"_pr_wait_for_required_checks() {{ PR_CHECKS_WAIT_OUTCOME={checks_outcome}; PR_CHECKS_LAST_CI_STATE={ci_state}; echo \"WAIT_ARGS=$*\"; return {checks_rc}; }}\n"
 			f"_pr_base_fresh_for_merge() {{ PR_BASE_FRESHNESS_OUTCOME=lease_wait; return {fresh_rc}; }}\n")
@@ -419,9 +424,71 @@ class ReleaseTick(unittest.TestCase):
 		self.assertIn("--match-head-commit", merged)
 		self.assertIn(HEAD, merged)
 		self.assertIn("--squash", merged)
+		self.assertNotIn("--merge", merged)
+		self.assertIn("outcome=auto_merge_enabled reason=final_ci_green method=squash", h.out)  # type: ignore[attr-defined]
 		self.assertNotIn("ai:final-ci-merge-pending", h.state["labels"]["7"])
 		self.assertIn("ai:ready-to-merge", h.state["labels"]["70"])
 		self.assertEqual(h.state["statuses"][HEAD][0]["state"], "success")
+
+	FORWARD_MERGE_HEAD = "auto/forward-merge-stable-44903621347-1"
+
+	def test_forward_merge_head_resumes_with_a_merge_commit(self) -> None:
+		"""#9891: a forward-merge fallback PR whose checks wait timed out gets a merge commit, never a squash."""
+		h = self._resume([self.MARK, self.GATE], head_ref=self.FORWARD_MERGE_HEAD)
+		self.assertIn("outcome=auto_merge_enabled reason=final_ci_green method=merge", h.out)  # type: ignore[attr-defined]
+		merged = h.state["merged"][0]
+		for flag in ("--merge", "--auto", "--match-head-commit", HEAD):
+			self.assertIn(flag, merged)
+		self.assertNotIn("--squash", merged)
+		self.assertNotIn("--rebase", merged)
+		self.assertNotIn("ai:final-ci-merge-pending", h.state["labels"]["7"])
+		self.assertEqual(h.state["statuses"][HEAD][0]["state"], "success")
+
+	def test_forward_merge_refused_warning_names_the_method(self) -> None:
+		"""#9919: the auto_merge_refused warning ends with method=, as the log registry says."""
+		h = self._resume([self.MARK, self.GATE], head_ref=self.FORWARD_MERGE_HEAD, fail=["pr merge"])
+		self.assertIn("outcome=failed reason=auto_merge_refused method=merge", h.out)  # type: ignore[attr-defined]
+		self.assertIn("ai:final-ci-merge-pending", h.state["labels"]["7"])
+		self.assertEqual(h.state["statuses"][HEAD][0]["state"], "pending")
+
+	def test_forward_merge_head_dropped_when_fallback_auto_merge_off(self) -> None:
+		for value in ("false", "False", "0"):
+			h = self._resume([self.MARK, self.GATE], head_ref=self.FORWARD_MERGE_HEAD,
+				env={"FORWARD_MERGE_FALLBACK_AUTO_MERGE": value})
+			self.assertIn("outcome=dropped reason=forward_merge_auto_merge_disabled", h.out)  # type: ignore[attr-defined]
+			self.assertNotIn("merged", h.state)
+			self.assertNotIn("ai:final-ci-merge-pending", h.state["labels"]["7"])
+			self.assertFalse([c for c in h.calls if "/statuses" in c], value)
+		# The switch never touches an ordinary head.
+		h = self._resume([self.MARK, self.GATE], env={"FORWARD_MERGE_FALLBACK_AUTO_MERGE": "false"})
+		self.assertIn("method=squash", h.out)  # type: ignore[attr-defined]
+
+	def test_forward_merge_head_respects_hold_marker_and_checks(self) -> None:
+		h = self._resume([self.MARK, self.GATE], head_ref=self.FORWARD_MERGE_HEAD, extra_labels=["ai:needs-human"])
+		self.assertIn("reason=blocked_by_ai:needs-human", h.out)  # type: ignore[attr-defined]
+		self.assertNotIn("merged", h.state)
+		forged = dict(self.MARK, creator={"login": "someone-else"})
+		h = self._resume([forged, self.GATE], head_ref=self.FORWARD_MERGE_HEAD)
+		self.assertIn("reason=no_marker_on_head", h.out)  # type: ignore[attr-defined]
+		self.assertNotIn("merged", h.state)
+		h = self._resume([self.MARK, self.GATE], head_ref=self.FORWARD_MERGE_HEAD, checks_rc=1, checks_outcome="failed")
+		self.assertIn("reason=required_checks_failed", h.out)  # type: ignore[attr-defined]
+		self.assertNotIn("merged", h.state)
+		h = self._resume([self.MARK, self.GATE], head_ref=self.FORWARD_MERGE_HEAD, checks_rc=1, checks_outcome="timeout")
+		self.assertIn("outcome=waiting reason=required_checks_timeout", h.out)  # type: ignore[attr-defined]
+		self.assertIn("ai:final-ci-merge-pending", h.state["labels"]["7"])
+		self.assertNotIn("merged", h.state)
+		h = self._resume([self.MARK, self.GATE], head_ref=self.FORWARD_MERGE_HEAD, env={"ENABLE_AUTO_MERGE": "false"})
+		self.assertIn("reason=auto_merge_disabled", h.out)  # type: ignore[attr-defined]
+		self.assertNotIn("merged", h.state)
+
+	def test_integration_and_fork_heads_stay_not_eligible(self) -> None:
+		for kwargs in ({"head_ref": "orchestrator/project-1"},
+				{"head_ref": self.FORWARD_MERGE_HEAD, "head_repo": "attacker/repo"},
+				{"head_repo": "attacker/repo"}):
+			h = self._resume([self.MARK, self.GATE], **kwargs)  # type: ignore[arg-type]
+			self.assertIn("outcome=dropped reason=not_eligible", h.out, kwargs)  # type: ignore[attr-defined]
+			self.assertNotIn("merged", h.state)
 
 	def test_marker_from_another_login_authorizes_nothing(self) -> None:
 		forged = dict(self.MARK, creator={"login": "someone-else"})
@@ -1304,7 +1371,8 @@ class Wiring(unittest.TestCase):
 		for wf in (POLL, CLOSE):
 			text = wf.read_text()
 			for name in ("ENABLE_AUTO_MERGE", "AUTO_MERGE_REQUIRED_CI_CHECK", "MERGE_BASE_FRESHNESS_ENABLED",
-					"MERGE_BASE_FRESHNESS_MAX_SYNCS", "ORCH_INTEGRATION_BRANCH_PATTERN", "AUTO_MERGE_WAIT_WORKFLOWS"):
+					"MERGE_BASE_FRESHNESS_MAX_SYNCS", "ORCH_INTEGRATION_BRANCH_PATTERN", "AUTO_MERGE_WAIT_WORKFLOWS",
+					"FORWARD_MERGE_FALLBACK_AUTO_MERGE"):
 				self.assertIn(f"          {name}: ${{{{ vars.{name}", text, f"{wf.name}: {name}")
 
 	def test_lease_revocation_and_priority_switches_reach_every_lease_path(self) -> None:
