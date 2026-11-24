@@ -1566,18 +1566,26 @@ fi
 # hand-over. Log key: RB_JUDGE_RED_CHECK pr= head= outcome=...
 # API cost (§14): the CI section reuses the "Collect PR check-run failures"
 # snapshot (PR_CHECK_RUNS_CONTEXT_FILE); that snapshot has no step names and
-# no existing judge read returns them, so at most
-# RB_JUDGE_CI_FAILURES_MAX_RUNS (3) GET actions/runs/<id>/jobs run, and only
-# when the snapshot lists failed check-runs for the judged head. The caps and
+# no existing judge read returns them, so at most 3 (fixed)
+# GET actions/runs/<id>/jobs run, and only when the switch is on and the
+# snapshot lists failed check-runs for the judged head. The caps and
 # the guard read the PR comments this script already holds (PR_COMMENTS); one
-# GET /user runs only when a hand-over marker by another author must be
+# GET /user runs only when a marker by a non-bot author must be
 # authenticated. The red-check path adds one comment POST plus one workflow
-# dispatch, or one comment POST plus one label edit per linked issue.
+# dispatch (plus one comment DELETE when the dispatch fails), or one comment
+# POST plus one label edit per linked issue.
+# Trust: hand-over and request markers count only from the Actions bot (REST
+# `github-actions[bot]`, GraphQL `github-actions`, `app/github-actions`) or
+# the GH_PAT login; repair markers only from the GH_PAT login, as in the
+# gate's final-CI repair decision. A trusted request younger than
+# RB_JUDGE_RED_CHECK_INFLIGHT_MINUTES (a fixed 180, not a repo variable) with
+# no repair marker for the head is an in-flight repair (no post, no hand-over).
 RB_JUDGE_CI_FAILURES_FILE="${RUNTIME_DIR}/rb_judge_ci_failures.txt"
 RB_JUDGE_CI_FAILURE_NAMES_FILE="${RUNTIME_DIR}/rb_judge_ci_failure_names.txt"
 RB_JUDGE_RED_CHECK_COMMENTS_FILE="${RUNTIME_DIR}/rb_judge_red_check_comments.json"
 RB_JUDGE_CI_FAILURE_SUMMARY=""
 RB_JUDGE_RED_CHECK_PIPELINE_LOGIN=""
+RB_JUDGE_RED_CHECK_INFLIGHT_MINUTES=180
 
 rb_judge_red_check_switch()
 {
@@ -1614,7 +1622,7 @@ render_review_rb_ci_failures_file()
   fi
   if ! RB_CI_SNAPSHOT_FILE="${PR_CHECK_RUNS_CONTEXT_FILE:-}" RB_CI_HEAD_SHA="${head}" RB_CI_REPOSITORY="${REPOSITORY:-}" \
     RB_CI_HEAL_PY="${heal_py}" RB_CI_OUT="${out}" RB_CI_NAMES_OUT="${names_out}" \
-    RB_CI_MAX_RUNS="${RB_JUDGE_CI_FAILURES_MAX_RUNS:-3}" PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' 2>/dev/null
+    RB_CI_MAX_RUNS=3 PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY' 2>/dev/null
 import json
 import os
 import re
@@ -1630,7 +1638,7 @@ ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 TEST_ID = re.compile(r"[A-Za-z0-9_./:\[\]-]{1,200}")
 NAME_UNSAFE = re.compile(r"[^A-Za-z0-9 _./:()\[\],#+=@-]")
-SECTION = re.compile(r"^(failed|incomplete)\[(\d+)\]\.([a-z_]+)(?: \([0-9]+ chars\))?:(?: (.*))?$")
+SECTION = re.compile(r"^(failed|incomplete)\[(\d+)\]\.([a-z_]+)(?: \(([0-9]+) chars\))?:(?: (.*))?$")
 
 out_path = os.environ["RB_CI_OUT"]
 names_path = os.environ.get("RB_CI_NAMES_OUT") or ""
@@ -1664,25 +1672,35 @@ def write(lines: list[str], names: list[str]) -> None:
 if not snapshot_path or not os.path.isfile(snapshot_path):
     write(["No CI check-run snapshot is available for this run; the failed jobs of the judged head are unknown."], [])
     raise SystemExit(0)
-with open(snapshot_path, encoding="utf-8", errors="replace") as handle:
-    raw_lines = handle.read().splitlines()
+# newline="" keeps the collector's character counts exact (no \r\n folding).
+with open(snapshot_path, encoding="utf-8", errors="replace", newline="") as handle:
+    raw_lines = handle.read().split("\n")
 
 snapshot_head = ""
 failed: dict[int, dict[str, object]] = {}
 current = None
+tail_left = 0
 for line in raw_lines:
+    # The collector writes `log_tail (N chars):` and then N characters of raw,
+    # untrusted log text: consume exactly that much as log text, so a log line
+    # shaped like a snapshot header cannot set fields or add jobs.
+    if current is not None and tail_left > 0:
+        current["log_tail"].append(line)
+        tail_left -= len(line) + 1
+        continue
     if line.startswith("head_sha: ") and not snapshot_head:
         snapshot_head = line[len("head_sha: "):].strip().lower()
         continue
     match = SECTION.match(line)
     if match:
-        kind, index, field, value = match.group(1), int(match.group(2)), match.group(3), match.group(4) or ""
+        kind, index, field, value = match.group(1), int(match.group(2)), match.group(3), match.group(5) or ""
         if kind != "failed":
             current = None
             continue
         entry = failed.setdefault(index, {"log_tail": []})
         if field == "log_tail":
             current = entry
+            tail_left = int(match.group(4) or "0")
         else:
             current = None
             entry[field] = value
@@ -1778,10 +1796,15 @@ PY
   return 0
 }
 
-# Prints `handover_trusted=<n> handover_untrusted=<n> request=<n> tried=<0|1>
-# repaired=<n>` for the judged head from PR_COMMENTS ([{author, body}]).
-# Repair and request markers count from any author: a forged one can only
-# tighten the caps, which hands the PR to a person sooner (the safe side).
+# Prints `handover_trusted=<n> handover_untrusted=<n> request=<n>
+# request_unverified=<n> request_age_min=<n> tried=<0|1> repaired=<n>
+# repair_unverified=<n>` for the judged head from PR_COMMENTS
+# ([{author, body, created_at}]). Hand-over and request markers count only
+# from the Actions bot or <login>; repair markers only from <login> (the
+# gate's rule). With <login> empty, markers by other non-bot authors are
+# reported as *_unverified so the caller can authenticate them with one
+# GET /user. request_age_min is the age of the newest trusted request
+# (999999 when its time is unknown).
 rb_judge_red_check_scan()
 {
   local login="${1:-}"
@@ -1791,6 +1814,7 @@ rb_judge_red_check_scan()
 import json
 import os
 import re
+from datetime import datetime, timezone
 
 pr = (os.environ.get("RB_RC_PR") or "").strip()
 head = (os.environ.get("RB_RC_HEAD") or "").strip().lower()
@@ -1804,7 +1828,12 @@ if not isinstance(comments, list):
 handover_re = re.compile("<!-- ai:final-ci-handover:v1 pr=" + re.escape(pr) + " head=" + re.escape(head) + r" -->\s*$")
 request_re = re.compile("<!-- ai:final-ci-repair-request:v1 pr=" + re.escape(pr) + " head=" + re.escape(head) + r" -->\s*$")
 repair_re = re.compile(r"<!-- ai:final-ci-repair:v1 pr=" + re.escape(pr) + r" from=([0-9a-f]{40}) repair=([0-9a-f]{40}|none) attempt=([1-9][0-9]*) -->\s*$")
-trusted = untrusted = request = 0
+# The Actions bot reads back as `github-actions` through GraphQL
+# (gh_pr_with_all_comments) and as `github-actions[bot]` through REST.
+BOT_AUTHORS = ("github-actions[bot]", "github-actions", "app/github-actions")
+trusted = untrusted = request = request_unverified = repair_unverified = 0
+request_at = None
+request_time_unknown = False
 tried = set()
 repaired = set()
 for comment in comments:
@@ -1815,19 +1844,39 @@ for comment in comments:
     if isinstance(author, dict):
         author = author.get("login")
     author = str(author or comment.get("author_login") or "").strip().lower()
+    is_bot = author in BOT_AUTHORS
+    is_login = bool(login) and author == login
     if handover_re.search(body):
-        if author in ("github-actions[bot]", "app/github-actions") or (login and author == login):
+        if is_bot or is_login:
             trusted += 1
         else:
             untrusted += 1
     if request_re.search(body):
-        request += 1
+        if is_bot or is_login:
+            request += 1
+            try:
+                created = datetime.fromisoformat(str(comment.get("created_at") or "").replace("Z", "+00:00"))
+                if created.tzinfo is None:
+                    raise ValueError
+                request_at = created if request_at is None or created > request_at else request_at
+            except ValueError:
+                request_time_unknown = True
+        elif not login and author:
+            request_unverified += 1
     match = repair_re.search(body)
     if match:
-        tried.add(match.group(1))
-        if match.group(2) != "none":
-            repaired.add(match.group(1))
-print(f"handover_trusted={trusted} handover_untrusted={untrusted} request={request} tried={1 if head in tried else 0} repaired={len(repaired)}")
+        if is_login:
+            tried.add(match.group(1))
+            if match.group(2) != "none":
+                repaired.add(match.group(1))
+        elif not login and author and not is_bot:
+            repair_unverified += 1
+if request and request_at is not None and not request_time_unknown:
+    age = max(0, int((datetime.now(timezone.utc) - request_at).total_seconds() // 60))
+else:
+    age = 999999
+print(f"handover_trusted={trusted} handover_untrusted={untrusted} request={request} request_unverified={request_unverified} "
+      f"request_age_min={age} tried={1 if head in tried else 0} repaired={len(repaired)} repair_unverified={repair_unverified}")
 PY
 }
 
@@ -1872,6 +1921,8 @@ rb_judge_red_check_failure_list()
 rb_judge_route_red_checks()
 {
   local mode="${1:-merge}" scan="" request="" tried="" repaired="" final_switch="" reason="" body="" candidate="" short_head=""
+  local request_age="" decision="merge" request_id=""
+  [ "${mode}" = "merge_with_followup" ] && decision="merge_with_followup"
   [ "${RB_MERGE_STATUS:-}" = "checks_failed" ] || return 0
   if [ "$(rb_judge_red_check_switch)" != "true" ]; then
     rb_judge_red_check_log disabled "mode=${mode}"
@@ -1887,24 +1938,43 @@ rb_judge_route_red_checks()
     RB_MERGE_STATUS="final_ci_handover_posted"
     return 0
   fi
+  if [ "$(rb_judge_red_check_field "${scan}" request_unverified)" != "0" ] \
+    || [ "$(rb_judge_red_check_field "${scan}" repair_unverified)" != "0" ]; then
+    # Markers by a non-bot author count only when it is the GH_PAT login.
+    if [ -z "${RB_JUDGE_RED_CHECK_PIPELINE_LOGIN}" ]; then
+      RB_JUDGE_RED_CHECK_PIPELINE_LOGIN="$(gh api user --jq '.login // ""' 2>/dev/null || true)"
+    fi
+    if [ -z "${RB_JUDGE_RED_CHECK_PIPELINE_LOGIN}" ] \
+      || ! scan="$(rb_judge_red_check_scan "${RB_JUDGE_RED_CHECK_PIPELINE_LOGIN}")" || [ -z "${scan}" ]; then
+      rb_judge_red_check_log caps_unknown "mode=${mode}"
+      return 0
+    fi
+  fi
   request="$(rb_judge_red_check_field "${scan}" request)"
+  request_age="$(rb_judge_red_check_field "${scan}" request_age_min)"
   tried="$(rb_judge_red_check_field "${scan}" tried)"
   repaired="$(rb_judge_red_check_field "${scan}" repaired)"
   short_head="${RB_JUDGED_HEAD_SHA:0:12}"
   final_switch="$(printf '%s' "${FINAL_CI_REPAIR_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
   if [ -n "${final_switch}" ] && [ "${final_switch}" != "true" ]; then
     reason="repair_disabled"
-  elif [ "${request:-0}" != "0" ]; then
-    reason="head_requested"
   elif [ "${tried:-0}" != "0" ]; then
     reason="head_cap"
+  elif [ "${request:-0}" != "0" ] && [ "${request_age:-999999}" -lt "${RB_JUDGE_RED_CHECK_INFLIGHT_MINUTES}" ] 2>/dev/null; then
+    # The requested repair has not posted its marker yet: it is queued or
+    # running, so this run neither asks again nor hands over.
+    rb_judge_red_check_log repair_in_flight "mode=${mode} request_age_min=${request_age}"
+    RB_MERGE_STATUS="final_ci_repair_requested"
+    return 0
+  elif [ "${request:-0}" != "0" ]; then
+    reason="head_requested"
   elif [ "${repaired:-0}" -ge 2 ] 2>/dev/null; then
     reason="pr_cap"
   fi
   if [ -z "${reason}" ]; then
-    body="$(printf '**Final CI is red on head `%s`, so the review-blocked judge'"'"'s merge was not made.**\n\nThe judge chose `merge`, but required check-runs failed on this head. This asks for the final-CI repair (one CI-fix attempt for this head) and dispatches a review run to make it.\n\nFailing:\n%s\n\n<!-- ai:final-ci-repair-request:v1 pr=%s head=%s -->' \
-      "${short_head}" "$(rb_judge_red_check_failure_list)" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}")"
-    if ! rb_judge_post_issue_comment -f body="${body}" >/dev/null 2>&1; then
+    body="$(printf '**Final CI is red on head `%s`, so the review-blocked judge'"'"'s merge was not made.**\n\nThe judge chose `%s`, but required check-runs failed on this head. This asks for the final-CI repair (one CI-fix attempt for this head) and dispatches a review run to make it.\n\nFailing:\n%s\n\n<!-- ai:final-ci-repair-request:v1 pr=%s head=%s -->' \
+      "${short_head}" "${decision}" "$(rb_judge_red_check_failure_list)" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}")"
+    if ! request_id="$(rb_judge_post_issue_comment -f body="${body}" --jq '.id // ""' 2>/dev/null)"; then
       echo "::warning::Review-blocked judge could not post the final-CI repair request on PR #${PR_NUMBER}; keeping checks_failed."
       rb_judge_red_check_log request_post_failed "mode=${mode}"
       return 0
@@ -1920,11 +1990,19 @@ rb_judge_route_red_checks()
     else
       echo "::warning::Review-blocked judge could not dispatch a review run for the final-CI repair of PR #${PR_NUMBER}; keeping checks_failed."
       rb_judge_red_check_log dispatch_failed "mode=${mode}"
+      # Withdraw the request so the next judge run asks again instead of
+      # reading it as a used-up repair (it would otherwise hand over).
+      request_id="$(printf '%s' "${request_id}" | tail -n 1 | tr -cd '0-9')"
+      if [ -z "${request_id}" ] \
+        || { ! { [ -n "${RB_JUDGE_COMMENT_TOKEN:-}" ] && GH_TOKEN="${RB_JUDGE_COMMENT_TOKEN}" gh api -X DELETE "repos/${REPOSITORY}/issues/comments/${request_id}" >/dev/null 2>&1; } \
+          && ! gh api -X DELETE "repos/${REPOSITORY}/issues/comments/${request_id}" >/dev/null 2>&1; }; then
+        echo "::warning::Could not withdraw the final-CI repair request on PR #${PR_NUMBER}; it counts as in flight for ${RB_JUDGE_RED_CHECK_INFLIGHT_MINUTES} minutes."
+      fi
     fi
     return 0
   fi
-  body="$(printf '**Final CI is red on head `%s` and the final-CI repair cannot run again (%s), so this PR is handed to a person.**\n\nThe review-blocked judge chose `merge`, but required check-runs failed on this head, so no merge was made. Failing:\n%s\n\nA new push to the branch starts the pipeline again.\n\n<!-- ai:final-ci-handover:v1 pr=%s head=%s -->' \
-    "${short_head}" "${reason}" "$(rb_judge_red_check_failure_list)" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}")"
+  body="$(printf '**Final CI is red on head `%s` and the final-CI repair cannot run again (%s), so this PR is handed to a person.**\n\nThe review-blocked judge chose `%s`, but required check-runs failed on this head, so no merge was made. Failing:\n%s\n\nA new push to the branch starts the pipeline again.\n\n<!-- ai:final-ci-handover:v1 pr=%s head=%s -->' \
+    "${short_head}" "${reason}" "${decision}" "$(rb_judge_red_check_failure_list)" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}")"
   if ! rb_judge_post_issue_comment -f body="${body}" >/dev/null 2>&1; then
     echo "::warning::Review-blocked judge could not post the final-CI hand-over on PR #${PR_NUMBER}; keeping checks_failed."
     rb_judge_red_check_log handover_post_failed "mode=${mode} reason=${reason}"
@@ -1957,7 +2035,13 @@ if [ "$(rb_judge_red_check_switch 2>/dev/null)" = "true" ] && [[ "${RB_JUDGED_HE
   echo "judge_skip_reason=final_ci_handover_posted" >> "$GITHUB_OUTPUT"
   exit 0
 fi
-render_review_rb_ci_failures_file "${RB_JUDGE_CI_FAILURES_FILE}" "${RB_JUDGED_HEAD_SHA:-}" "${RB_JUDGE_CI_FAILURE_NAMES_FILE}"
+# The switch also gates the CI section and its jobs reads: false restores the
+# pre-#10063 prompt and API use (empty files leave the section out).
+: > "${RB_JUDGE_CI_FAILURES_FILE}" 2>/dev/null || true
+: > "${RB_JUDGE_CI_FAILURE_NAMES_FILE}" 2>/dev/null || true
+if [ "$(rb_judge_red_check_switch 2>/dev/null)" = "true" ]; then
+  render_review_rb_ci_failures_file "${RB_JUDGE_CI_FAILURES_FILE}" "${RB_JUDGED_HEAD_SHA:-}" "${RB_JUDGE_CI_FAILURE_NAMES_FILE}"
+fi
 if [ -s "${RB_JUDGE_CI_FAILURE_NAMES_FILE}" ]; then
   RB_JUDGE_CI_FAILURE_SUMMARY="$(tr '\n' ';' < "${RB_JUDGE_CI_FAILURE_NAMES_FILE}" | sed 's/;$//; s/;/; /g' | cut -c1-500)"
 fi
@@ -3853,8 +3937,24 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
               echo "::warning::PR #${PR_NUMBER} could not query check-runs for SHA ${RB_JUDGED_HEAD_SHA:0:7} — refusing merge_with_followup to avoid creating a follow-up against unvalidated code. Leaving linked issues in ai:review-blocked."
               echo "judge_skip_reason=check_runs_query_failed" >> "$GITHUB_OUTPUT"
             else
-              echo "::warning::PR #${PR_NUMBER} has blocking required check-run(s) for SHA ${RB_JUDGED_HEAD_SHA:0:7} — refusing merge_with_followup until required checks complete with success/neutral/skipped (a cancelled required check blocks; re-run it; non-required/advisory failures are ignored). Leaving linked issues in ai:review-blocked; stall recovery will re-fire the judge after checks settle."
-              echo "judge_skip_reason=blocking_check_runs" >> "$GITHUB_OUTPUT"
+              # #10063: nothing pending and failed check-runs listed for the
+              # judged head: a red head goes to the final-CI repair or a
+              # hand-over, like the `merge` path, instead of a stall.
+              _rb_mwf_red_status=""
+              if [ "${PR_CHECKS_LAST_PENDING:-0}" = "0" ] && [ -s "${RB_JUDGE_CI_FAILURE_NAMES_FILE}" ]; then
+                RB_MERGE_STATUS="checks_failed"
+                rb_judge_route_red_checks merge_with_followup || true
+                case "${RB_MERGE_STATUS}" in
+                  final_ci_repair_requested|final_ci_handover|final_ci_handover_posted) _rb_mwf_red_status="${RB_MERGE_STATUS}" ;;
+                esac
+              fi
+              if [ -n "${_rb_mwf_red_status}" ]; then
+                echo "::warning::PR #${PR_NUMBER} has failed required check-run(s) for SHA ${RB_JUDGED_HEAD_SHA:0:7} — refusing merge_with_followup (${_rb_mwf_red_status}). Leaving linked issues in ai:review-blocked."
+                echo "judge_skip_reason=${_rb_mwf_red_status}" >> "$GITHUB_OUTPUT"
+              else
+                echo "::warning::PR #${PR_NUMBER} has blocking required check-run(s) for SHA ${RB_JUDGED_HEAD_SHA:0:7} — refusing merge_with_followup until required checks complete with success/neutral/skipped (a cancelled required check blocks; re-run it; non-required/advisory failures are ignored). Leaving linked issues in ai:review-blocked; stall recovery will re-fire the judge after checks settle."
+                echo "judge_skip_reason=blocking_check_runs" >> "$GITHUB_OUTPUT"
+              fi
             fi
           elif [ "${ENABLE_AUTO_MERGE}" = "true" ] \
             && ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}"; then

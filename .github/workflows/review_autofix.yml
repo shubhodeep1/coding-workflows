@@ -6031,6 +6031,17 @@ jobs:
               blocking_check_runs)
                 MSG="$(printf 'PR review blocked — merge_with_followup approved but check-runs are still in flight\nStall recovery will retry automatically')"
                 JUDGE_ALERT_LEVEL="DEBUG" ;;
+              final_ci_repair_requested)
+                # #10063: merge_with_followup on a red head goes to the final-CI repair.
+                MSG="$(printf 'PR review blocked — merge_with_followup approved but required check-runs failed\nThe final-CI repair was requested automatically')"
+                JUDGE_ALERT_LEVEL="DEBUG" ;;
+              final_ci_handover_posted)
+                MSG="PR review blocked — the final-CI hand-over for this head was already posted"
+                JUDGE_ALERT_LEVEL="DEBUG" ;;
+              final_ci_handover)
+                # #10063: the repair is used up; one hand-over per head.
+                MSG="$(printf 'PR review blocked — merge_with_followup approved but required check-runs failed and the final-CI repair is used up\nFailing: %s\nHanded to a person (ai:needs-human)' "${JUDGE_CI_FAILURE_SUMMARY:-see the PR checks}")"
+                JUDGE_ALERT_LEVEL="ERROR" ;;
               base_moved_overlap)
                 # review_rb_judge.sh requested a branch update; its
                 # synchronize run re-validates the PR without a person.
