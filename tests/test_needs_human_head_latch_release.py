@@ -625,6 +625,19 @@ def test_an_unlabelled_autofix_cap_comment_does_not_shadow_an_older_bound_latch(
 	assert "outcome=skip reason=label_not_bound_to_latch latch=autofix_cap_head_moved" in other["stdout"]
 
 
+def test_a_release_through_an_older_bound_latch_names_that_latchs_head(tmp_path: Path) -> None:
+	# The label came from the round-cap latch on OLD_HEAD; the newer unlabelled
+	# autofix-cap comment is on another left head. The comment names OLD_HEAD.
+	other_head = "c" * 40
+	older = _round_cap_comment(created_at="2026-11-20T11:15:10Z")
+	newer = _autofix_cap_comment(head=other_head, created_at="2026-11-20T12:30:00Z")
+	result = _run(tmp_path, comments=[older, newer], events=[_labeled()])
+	assert result["rc"] == 0, result["stderr"]
+	assert result["deleted"] == ["5 ai:needs-human"]
+	body = result["posted"][0]["body"]
+	assert OLD_HEAD[:12] in body and other_head[:12] not in body
+
+
 def test_a_hold_between_the_bound_latch_and_the_autofix_cap_comment_is_kept(tmp_path: Path) -> None:
 	older = _round_cap_comment(created_at="2026-11-20T11:15:10Z")
 	newer = _autofix_cap_comment(created_at="2026-11-20T12:30:00Z")
