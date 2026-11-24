@@ -16844,6 +16844,12 @@ def test_managed_skip_retries_timeline_discovery_failure_without_closing_issue()
 	)
 
 
+# Issue #9733 owner-hold cases. Their `test_zz_pr_ai_hold_` prefix sorts them
+# after every other test in this module. CI's orchestrate-poll job deals the
+# sorted names round-robin (`NR % total`) to groups and then to shards.
+# Names inserted mid-list moved 626 of 896 existing tests to another group or
+# shard, and orchestrate-poll (1) and (2) hit their 20-minute timeout.
+# Appended names leave every existing test's group and shard unchanged.
 def _managed_held_pr_run(phase: str, recovery_count: int, pr_extra: dict, **extra) -> dict:
 	"""Issue #9733: managed issue #10 in `phase` with implementation PR #91."""
 	state = _base_state(status="in_progress")
@@ -16896,7 +16902,7 @@ def _assert_managed_held_pr_left_alone(result: dict, detail: str, phase: str, re
 	assert issue_entry["status_since_ts"] == 1
 
 
-def test_managed_skip_leaves_held_pr_in_awaiting_approval_open():
+def test_zz_pr_ai_hold_managed_skip_leaves_held_pr_in_awaiting_approval_open():
 	# Issue #9733 / PR #9744: an exhausted ai:awaiting-approval issue took
 	# `skip` and close_linked_pr closed the owner-held PR.
 	result = _managed_held_pr_run(
@@ -16907,7 +16913,7 @@ def test_managed_skip_leaves_held_pr_in_awaiting_approval_open():
 	_assert_managed_held_pr_left_alone(result, "draft", "ai:awaiting-approval", "skip", 5)
 
 
-def test_managed_skip_leaves_held_pr_open_when_cache_lacks_hold_fields():
+def test_zz_pr_ai_hold_managed_skip_leaves_held_pr_open_when_cache_lacks_hold_fields():
 	# Cache without isDraft/title: the guard in recover_stalled_issue fails
 	# open, and the skip arm's REST implementation-PR payload catches the hold.
 	result = _managed_held_pr_run(
@@ -16919,7 +16925,7 @@ def test_managed_skip_leaves_held_pr_open_when_cache_lacks_hold_fields():
 	_assert_managed_held_pr_left_alone(result, "skip_ai_title", "ai:awaiting-approval", "skip", 5)
 
 
-def test_managed_implementing_held_pr_skips_dispatch_action():
+def test_zz_pr_ai_hold_managed_implementing_held_pr_skips_dispatch_action():
 	result = _managed_held_pr_run("ai:implementing", 0, {"draft": True})
 	assert "STALL_SKIP issue=10 reason=pr_ai_hold" in result["stdout"], result["stdout"]
 	# Pin the stall detector's action for a fresh ai:implementing stall so a
@@ -16929,7 +16935,7 @@ def test_managed_implementing_held_pr_skips_dispatch_action():
 	assert "reason=open_linked_pr" not in result["stdout"]
 
 
-def test_managed_implementing_held_conflicted_pr_gets_no_resolver_when_cache_lacks_hold_fields():
+def test_zz_pr_ai_hold_managed_implementing_held_conflicted_pr_gets_no_resolver_when_cache_lacks_hold_fields():
 	# Cache without isDraft/title: the pre-action hold guard fails open, and
 	# the early-phase open-PR guard's REST payload must catch the hold before
 	# routing the merge conflict to the resolver.
@@ -16943,7 +16949,7 @@ def test_managed_implementing_held_conflicted_pr_gets_no_resolver_when_cache_lac
 	assert "reason=open_pr_merge_conflict" not in result["stdout"]
 
 
-def test_managed_skip_still_closes_unheld_pr_in_awaiting_approval():
+def test_zz_pr_ai_hold_managed_skip_still_closes_unheld_pr_in_awaiting_approval():
 	result = _managed_held_pr_run("ai:awaiting-approval", 5, {"draft": False})
 	assert "Action: skip" in result["stdout"], result["stdout"]
 	assert "reason=pr_ai_hold" not in result["stdout"]
@@ -17005,11 +17011,11 @@ def _assert_standalone_exhausted_held(result: dict, detail: str) -> None:
 	assert standalone_state is None or standalone_state.get("status_since_ts") == 1
 
 
-def test_standalone_exhausted_close_leaves_held_pr_open():
+def test_zz_pr_ai_hold_standalone_exhausted_close_leaves_held_pr_open():
 	_assert_standalone_exhausted_held(_standalone_exhausted_run({"draft": True}), "draft")
 
 
-def test_standalone_exhausted_close_leaves_held_pr_open_when_cache_lacks_hold_fields():
+def test_zz_pr_ai_hold_standalone_exhausted_close_leaves_held_pr_open_when_cache_lacks_hold_fields():
 	# Batched linked_pr without isDraft/title: close_linked_pr's REST payload
 	# catches the hold and the issue stays open.
 	result = _standalone_exhausted_run(
@@ -17021,7 +17027,7 @@ def test_standalone_exhausted_close_leaves_held_pr_open_when_cache_lacks_hold_fi
 	_assert_standalone_exhausted_held(result, "skip_ai_title")
 
 
-def test_standalone_exhausted_close_still_closes_unheld_pr():
+def test_zz_pr_ai_hold_standalone_exhausted_close_still_closes_unheld_pr():
 	result = _standalone_exhausted_run({"draft": False})
 	assert "reason=pr_ai_hold" not in result["stdout"]
 	assert "close_linked_pr: closing linked PR #420 for issue #501" in result["stdout"], result["stdout"]
