@@ -1019,8 +1019,15 @@ esac
 				"CHECK_TRIAGE_HISTORICAL_RUN_ID",
 				"CHECK_TRIAGE_HISTORICAL_JOB_ID",
 				"CHECK_TRIAGE_HISTORICAL_REPRO_DIR",
+				# Issue #9812: the final-CI run's display title (dispatch runs only).
+				"CHECK_TRIAGE_RUN_TITLE",
 			},
 		)
+		self.assertEqual(
+			run_env["CHECK_TRIAGE_RUN_TITLE"],
+			"${{ github.event_name == 'workflow_run' && github.event.workflow_run.event == 'workflow_dispatch' && github.event.workflow_run.display_title || '' }}",
+		)
+		self.assertNotIn("CHECK_TRIAGE_RUN_TITLE", _step(triage_job, name="Diagnose check failure")["env"])
 		self.assertNotIn("GH_TOKEN", triage_job.get("env", {}))
 		self.assertNotIn("OPENROUTER_API_KEY", triage_job.get("env", {}))
 		self.assertNotIn("TG_BOT_SECRET", triage_job.get("env", {}))
@@ -1376,6 +1383,11 @@ case "$*" in
     [ -f "${rd_annotation_file}" ] || { echo 'gh: Not Found (HTTP 404)' >&2; exit 1; }
     cat "${rd_annotation_file}" ;;
   "api -i -X POST repos/owner/repo/actions/runs/1/rerun-failed-jobs")
+    rd_rerun_status="${MOCK_RD_RERUN_STATUS:-201}"
+    printf 'HTTP/2.0 %s Mock\\r\\n\\r\\n{"message":"rerun-secret-body"}\\n' "${rd_rerun_status}"
+    [ "${rd_rerun_status}" = 201 ] && exit 0
+    exit "${MOCK_RD_RERUN_EXIT:-1}" ;;
+  "api -i -X POST repos/owner/repo/actions/jobs/"*"/rerun")
     rd_rerun_status="${MOCK_RD_RERUN_STATUS:-201}"
     printf 'HTTP/2.0 %s Mock\\r\\n\\r\\n{"message":"rerun-secret-body"}\\n' "${rd_rerun_status}"
     [ "${rd_rerun_status}" = 201 ] && exit 0
@@ -2263,6 +2275,38 @@ class CheckFailureTriageBaseTrackedTests(unittest.TestCase):
 				self.assertNotIn("base_failure_tracked", outputs)
 				self.assertEqual(outputs.get("ready"), "true")
 				self.assertEqual(metadata.get("generation"), "1")
+				self.assertEqual(tracked, {})
+
+	def test_cancelled_pr_job_does_not_make_the_jobs_differ(self) -> None:
+		# Issue #9812: a PR job cancelled by a newer push is not a failure, so
+		# the PR's real failure that main shares is still folded into the heal
+		# issue; a timed_out job keeps counting as failed on either side.
+		for pr_jobs, base_jobs in (
+			(_jobs(("lint", "success"), ("tests (ubuntu)", "failure"), ("e2e", "cancelled")), BASE_JOBS),
+			(_jobs(("tests (ubuntu)", "timed_out"), ("e2e", "cancelled")), _jobs(("tests (ubuntu)", "timed_out"))),
+			(_jobs(("tests (ubuntu)", "failure"), ("e2e", None), ("x", "action_required")), BASE_JOBS),
+		):
+			with self.subTest(pr_jobs=pr_jobs):
+				proc, outputs, _metadata, _calls, tracked = self._collect(
+					TRACKED_BASE, [_heal_issue(9215)], MOCK_PR_JOBS=pr_jobs, MOCK_BASE_JOBS=base_jobs,
+				)
+				self.assertIn("skip reason=base_failure_tracked heal_issue=9215", proc.stdout)
+				self.assertNotIn("failed_jobs_differ", proc.stdout)
+				self.assertEqual(outputs.get("base_failure_tracked"), "9215")
+				self.assertEqual(tracked.get("heal_issue"), "9215")
+
+	def test_timed_out_pr_job_that_main_does_not_fail_still_files(self) -> None:
+		for pr_jobs, base_jobs in (
+			(_jobs(("tests (ubuntu)", "failure"), ("e2e", "timed_out")), BASE_JOBS),
+			# A base job that was only cancelled does not cover a PR failure.
+			(_jobs(("tests (ubuntu)", "failure")), _jobs(("tests (ubuntu)", "cancelled"))),
+		):
+			with self.subTest(pr_jobs=pr_jobs, base_jobs=base_jobs):
+				proc, outputs, _metadata, _calls, tracked = self._collect(
+					TRACKED_BASE, [_heal_issue(9215)], MOCK_PR_JOBS=pr_jobs, MOCK_BASE_JOBS=base_jobs,
+				)
+				self.assertIn("base_tracked outcome=file reason=failed_jobs_differ heal_issue=9215", proc.stdout)
+				self.assertEqual(outputs.get("ready"), "true")
 				self.assertEqual(tracked, {})
 
 	def test_unreadable_jobs_file_as_before(self) -> None:

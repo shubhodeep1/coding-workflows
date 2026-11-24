@@ -73,6 +73,12 @@
 #                                             run (`CI [pr:<n>]`) even while the final-CI
 #                                             hand-back owns it (default true: skip
 #                                             reason=final_ci_repair_owns)
+#   CHECK_TRIAGE_RUN_TITLE                    the failing workflow run's display title
+#                                             (issue #9812; default empty). The final-CI
+#                                             skip matches `CI [pr:<n>]` against it, and
+#                                             against CHECK_TRIAGE_CHECK_NAME when empty:
+#                                             a workflow_run caller's check name is the
+#                                             workflow name (`CI`), not the run title
 #   FINAL_CI_FAILED_REDISPATCH_ENABLED        the final-CI hand-back's own switch (repo
 #                                             variable; unset/empty/true = on); when
 #                                             it is off, final CI runs are triaged again
@@ -517,13 +523,19 @@ esac
 # instead of reading the same run a second time.
 RELEASE_DOWNLOAD_RERUN_RUN_ID=""
 RELEASE_DOWNLOAD_RERUN_WORKFLOW_ID=""
+# Issue #9812: the gate's validated attempt-1 jobs payload for the run above
+# (workflow_run path only). triage_run_failed_job_names reuses it instead of
+# reading the same run's jobs a second time.
+RELEASE_DOWNLOAD_RERUN_JOBS_FILE=""
+RELEASE_DOWNLOAD_RERUN_JOBS_RUN_ID=""
 
 # Returns 0 when the annotations JSON array in $1 shows a github.com release
 # download that failed with HTTP 502/503/504. Annotation text is untrusted: it
 # is only pattern-matched here, never executed or used as a value. The
-# patterns live in this one place. A full per_page=100 page is accepted: the
-# match is an any(), so a match on a truncated page is also a match on the
-# whole list.
+# patterns live in this one place. A full per_page=100 page is rejected, as
+# failure_annotations() in scripts/ci_cancelled_rerun.py rejects it: the list
+# may be truncated, so the failure is triaged instead of re-run. The bounds
+# mirror that function; a change to either copy must update both.
 triage_release_download_classify()
 {
 	local rd_status_re='\b50[234]\b'
@@ -539,7 +551,7 @@ triage_release_download_classify()
 		--arg codeql_failure_re "${rd_codeql_failure_re}" \
 		--arg codeql_url_re "${rd_codeql_url_re}" \
 		--arg codeql_status_re "${rd_codeql_status_re}" '
-		if type == "array" and length <= 100
+		if type == "array" and length < 100
 			and all(.[]; type == "object" and (.message | type) == "string" and (.annotation_level | type) == "string")
 		then
 			[.[] | select(.annotation_level == "failure")] as $failures
@@ -620,12 +632,19 @@ triage_release_download_rerun_gate()
 	if [ -n "${CHECK_RUN_ID}" ]; then
 		rd_ids="${CHECK_RUN_ID}"
 	else
-		# Validated like list_run_jobs() in scripts/ci_cancelled_rerun.py.
+		# Validated like list_run_jobs() in scripts/ci_cancelled_rerun.py,
+		# including its bound (a page of 100 or more jobs is rejected); a
+		# change to either copy must update both. Known residual difference:
+		# jq has one number type, so an integral float (`5.0`) for `id` or
+		# `total_count` passes here while Python's `type(...) is int` rejects
+		# it. GitHub sends JSON integers, and fractional values fail both.
 		rd_jobs_json="$(gh_retry gh api -X GET "repos/${REPO}/actions/runs/${rd_run}/attempts/1/jobs" -f per_page=100 2>/dev/null || true)"
 		if [ -z "${rd_jobs_json}" ] || ! rd_ids="$(printf '%s' "${rd_jobs_json}" | jq -r '
 			if type == "object" and (.jobs | type) == "array" and (.total_count | type) == "number"
-				and .total_count == (.jobs | length) and .total_count <= 100
+				and .total_count == (.jobs | length) and .total_count < 100
 				and all(.jobs[]; type == "object" and .status == "completed"
+					and (.id | type) == "number" and .id > 0 and (.id | floor) == .id
+					and (.name | type) == "string"
 					and (.conclusion | type) == "string"
 					and (.check_run_url | type) == "string"
 					and (.check_run_url | test("/check-runs/[1-9][0-9]*$")))
@@ -633,6 +652,14 @@ triage_release_download_rerun_gate()
 			else error("invalid jobs payload") end' 2>/dev/null)"; then
 			echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=jobs_unreadable run=${rd_run}"
 			return 0
+		fi
+		# Issue #9812: keep the validated payload for triage_run_failed_job_names.
+		# Attempt 1 is the latest attempt here: run_attempt == 1 and
+		# status == completed were checked above. A failed write leaves the
+		# memo empty, so that function reads the jobs itself (fail open).
+		if printf '%s\n' "${rd_jobs_json}" > "${RUNTIME_DIR}/release_download_jobs_${rd_run}.json" 2>/dev/null; then
+			RELEASE_DOWNLOAD_RERUN_JOBS_FILE="${RUNTIME_DIR}/release_download_jobs_${rd_run}.json"
+			RELEASE_DOWNLOAD_RERUN_JOBS_RUN_ID="${rd_run}"
 		fi
 	fi
 	read -r -a rd_id_list <<< "${rd_ids}" || true
@@ -664,13 +691,22 @@ triage_release_download_rerun_gate()
 
 	# A write is never retried. The response (headers and body) goes to a
 	# private file that is never printed; success means exit 0 and HTTP 201,
-	# as rerun_failed_jobs() in scripts/ci_cancelled_rerun.py checks.
+	# as rerun_failed_jobs() in scripts/ci_cancelled_rerun.py checks (keep the
+	# two in sync). On the check_run path only CHECK_RUN_ID's job was
+	# classified, so only that job is re-run (POST actions/jobs/<id>/rerun,
+	# which also re-runs its dependents but never a sibling failed job; issue
+	# #9812). On the workflow_run path every failed job was classified, so
+	# rerun-failed-jobs re-runs exactly those.
 	if ! rd_post_file="$(mktemp "${RUNTIME_DIR}/release_download_rerun.XXXXXX" 2>/dev/null)"; then
 		echo "RELEASE_DOWNLOAD_RERUN outcome=skip reason=rerun_failed run=${rd_run}"
 		return 0
 	fi
 	rd_post_rc=0
-	gh api -i -X POST "repos/${REPO}/actions/runs/${rd_run}/rerun-failed-jobs" > "${rd_post_file}" 2>&1 || rd_post_rc=$?
+	if [ -n "${CHECK_RUN_ID}" ]; then
+		gh api -i -X POST "repos/${REPO}/actions/jobs/${CHECK_RUN_ID}/rerun" > "${rd_post_file}" 2>&1 || rd_post_rc=$?
+	else
+		gh api -i -X POST "repos/${REPO}/actions/runs/${rd_run}/rerun-failed-jobs" > "${rd_post_file}" 2>&1 || rd_post_rc=$?
+	fi
 	if [ "${rd_post_rc}" -eq 0 ] && head -n 1 "${rd_post_file}" 2>/dev/null | grep -qE '^HTTP/[^[:space:]]+ 201([^0-9]|$)'; then
 		rm -f "${rd_post_file}"
 		echo "RELEASE_DOWNLOAD_RERUN outcome=rerun run=${rd_run} job=${rd_id_list[0]} jobs=${rd_count} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
@@ -1050,23 +1086,34 @@ triage_base_failure_heal_issue()
 
 # triage_run_failed_job_names <run id>
 #
-# Prints the names of the run's latest-attempt jobs whose conclusion is not
-# success, skipped or neutral, one per line. The tracked-failure skip compares
-# the PR run's list with the default branch run's, so a PR job that main runs
-# green is never folded into main's heal issue. API cost: one REST read (100
-# jobs). Returns 1 when the read fails or the page does not hold every job, so
-# the caller files as before.
+# Prints the names of the run's latest-attempt jobs whose conclusion is
+# failure or timed_out, one per line (issue #9812: cancelled, skipped,
+# neutral, success, action_required and a null conclusion do not count, so a
+# PR job cancelled by a newer push does not make the lists differ). The
+# tracked-failure skip compares the PR run's list with the default branch
+# run's, so a PR job that main runs green is never folded into main's heal
+# issue. API cost: one REST read (100 jobs), or none when the release-download
+# gate already read this run's jobs (RELEASE_DOWNLOAD_RERUN_JOBS_FILE; that
+# read is attempt 1, which the gate verified is the latest attempt). Returns 1
+# when the read fails or the page does not hold every job, so the caller files
+# as before.
 triage_run_failed_job_names()
 {
 	local failed_jobs_run_id="$1" failed_jobs_listing=""
 	[[ "${failed_jobs_run_id}" =~ ^[1-9][0-9]{0,19}$ ]] || return 1
-	if ! failed_jobs_listing="$(gh_retry gh api "repos/${REPO}/actions/runs/${failed_jobs_run_id}/jobs?filter=latest&per_page=100" 2>/dev/null)"; then
+	if [ "${failed_jobs_run_id}" = "${RELEASE_DOWNLOAD_RERUN_JOBS_RUN_ID}" ] &&
+		[ -n "${RELEASE_DOWNLOAD_RERUN_JOBS_FILE}" ] && [ -s "${RELEASE_DOWNLOAD_RERUN_JOBS_FILE}" ] &&
+		[ -r "${RELEASE_DOWNLOAD_RERUN_JOBS_FILE}" ] &&
+		failed_jobs_listing="$(cat "${RELEASE_DOWNLOAD_RERUN_JOBS_FILE}" 2>/dev/null)" && [ -n "${failed_jobs_listing}" ]; then
+		# Reused read; the jq filter below validates it like a fresh one.
+		:
+	elif ! failed_jobs_listing="$(gh_retry gh api "repos/${REPO}/actions/runs/${failed_jobs_run_id}/jobs?filter=latest&per_page=100" 2>/dev/null)"; then
 		return 1
 	fi
 	printf '%s' "${failed_jobs_listing}" | jq -r '
 		if type != "object" or (.jobs | type) != "array" or (.total_count // 0) > (.jobs | length) then error("incomplete") else . end
 		| .jobs[]
-		| select((.conclusion // "") as $c | ["success", "skipped", "neutral"] | index($c) | not)
+		| select((.conclusion // "") as $c | ["failure", "timed_out"] | index($c))
 		| (.name // "" | tostring)
 		| select(. != "")' 2>/dev/null || return 1
 }
@@ -1560,11 +1607,21 @@ if [ "${HISTORICAL_MODE}" != "true" ]; then
 		exit 0
 	fi
 	triage_final_ci_handback="$(printf '%s' "${FINAL_CI_FAILED_REDISPATCH_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
+	# Issue #9812: a workflow_run caller passes the workflow name (`CI`) as the
+	# check name; `CI [pr:<n>]` is the run's display title, which the reusable
+	# workflow passes as CHECK_TRIAGE_RUN_TITLE (workflow_dispatch runs only).
+	# Untrusted text: only regex-tested, and the PR number must still match.
+	triage_final_ci_title="${CHECK_TRIAGE_RUN_TITLE:-}"
+	triage_final_ci_title_source=run_title
+	if [ -z "${triage_final_ci_title}" ]; then
+		triage_final_ci_title="${CHECK_NAME}"
+		triage_final_ci_title_source=check_name
+	fi
 	if [ "$(printf '%s' "${CHECK_TRIAGE_SKIP_FINAL_CI_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" = "true" ] &&
 		{ [ -z "${triage_final_ci_handback}" ] || [ "${triage_final_ci_handback}" = "true" ]; } &&
-		[[ "${CHECK_NAME}" =~ ^CI\ \[pr:([1-9][0-9]*)\](\ \[[a-z0-9-]+\])?$ ]] &&
+		[[ "${triage_final_ci_title}" =~ ^CI\ \[pr:([1-9][0-9]*)\](\ \[[a-z0-9-]+\])?$ ]] &&
 		[ "${BASH_REMATCH[1]}" = "${PR_NUMBER}" ]; then
-		log "skip reason=final_ci_repair_owns pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+		log "skip reason=final_ci_repair_owns pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY} title_source=${triage_final_ci_title_source}"
 		exit 0
 	fi
 fi
