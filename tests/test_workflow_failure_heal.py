@@ -2954,6 +2954,17 @@ def test_intake_runner_wait_marker_counts_only_on_a_watch_step_at_line_start() -
 		assert _composed_issues(state_after), (job, result.stdout)
 
 
+def test_intake_files_a_runner_wait_job_with_a_second_failed_step() -> None:
+	"""A later always() step that failed in the same job is a real failure (G4 is per step)."""
+	job = _runner_wait_job(9001, "orphan-workflows-test", "Dispatch & watch — internal-memory-maintenance")
+	job["steps"].append({"name": "Soft-error analyser (memory_maintenance)", "conclusion": "failure"})
+	state = _intake_state(jobs={"500": [job]}, job_logs={"9001": _RUNNER_WAIT_LOG})
+	result, state_after, _ = _run_intake(_runner_wait_gate_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "release_gate_runner_wait" not in result.stdout
+	assert _composed_issues(state_after), result.stdout
+
+
 def test_intake_runner_wait_skip_is_limited_to_the_release_gate() -> None:
 	jobs = [_runner_wait_job(9001, "orphan-workflows-test", "Dispatch & watch — internal-memory-maintenance")]
 	state = _intake_state(jobs={"500": jobs}, job_logs={"9001": _RUNNER_WAIT_LOG})

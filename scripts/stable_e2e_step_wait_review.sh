@@ -1023,8 +1023,9 @@ while true; do
       REVIEW_RUNNER_WAIT_QUEUED_SEEN=0
       REVIEW_RUNNER_WAIT_HELD_SEEN=0
     fi
-    # Issue #10037: jobs read this poll first; without one, the run status.
-    rw_poll_kind="$(printf '%s' "${E2E_REVIEW_LAST_JOBS_JSON:-}" | jq -r 'if (.jobs | type) == "array" then ((if any(.jobs[]; ((.status // "") == "waiting" or (.status // "") == "pending") and ((.runner_name // "") == "")) then "held" else "" end) + " " + (if any(.jobs[]; (.status // "") == "queued" and ((.runner_name // "") == "")) then "queued" else "" end)) else "none" end' 2>/dev/null || echo none)"
+    # Issue #10037: jobs read this poll first; without one (or with an empty
+    # jobs list, as the watcher treats it), the run status.
+    rw_poll_kind="$(printf '%s' "${E2E_REVIEW_LAST_JOBS_JSON:-}" | jq -r 'if (.jobs | type) == "array" and (.jobs | length) > 0 then ((if any(.jobs[]; ((.status // "") == "waiting" or (.status // "") == "pending") and ((.runner_name // "") == "")) then "held" else "" end) + " " + (if any(.jobs[]; (.status // "") == "queued" and ((.runner_name // "") == "")) then "queued" else "" end)) else "none" end' 2>/dev/null || echo none)"
     if [ "${rw_poll_kind:-none}" = "none" ]; then
       case "${RUN_STATUS}" in
         queued) rw_poll_kind=" queued" ;;

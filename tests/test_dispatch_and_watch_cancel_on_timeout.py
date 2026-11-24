@@ -483,12 +483,14 @@ def _run_alt_check(state: dict, stop: bool = False) -> tuple[str, list[str], str
 
 
 def test_alt_model_runs_queued_since_early_are_a_runner_wait_and_stop_the_gate() -> None:
-	state = {"queued": [_alt_run(51, "queued", -4000), _alt_run(52, "queued", -300), _alt_run(53, "queued", -4000, title="other")], "in_progress": []}
+	queued_jobs = json.loads(_jobs(QUEUED_JOB))
+	state = {"queued": [_alt_run(51, "queued", -4000), _alt_run(52, "queued", -300), _alt_run(53, "queued", -4000, title="other")], "in_progress": [],
+		"jobs": {"51": queued_jobs, "52": queued_jobs}}
 	out, calls, github_output = _run_alt_check(state)
 	assert "ALT_MODEL_RUNNER_WAIT outcome=runner_wait reason=never_assigned runs=51,52" in out, out
 	assert "runner_wait=true" in github_output.splitlines()
 	assert not [c for c in calls if "/cancel" in c], calls
-	state["jobs"] = {"9999": json.loads(_jobs({"id": 7, "status": "in_progress", "conclusion": None, "steps": []}))}
+	state["jobs"]["9999"] = json.loads(_jobs({"id": 7, "status": "in_progress", "conclusion": None, "steps": []}))
 	out, calls, _ = _run_alt_check(state, stop=True)
 	assert "api -X POST repos/owner/repo/actions/runs/51/cancel" in calls, calls
 	assert "api -X POST repos/owner/repo/actions/runs/52/cancel" in calls, calls
@@ -506,12 +508,19 @@ def test_alt_model_late_runner_with_queued_sibling_is_late_assigned() -> None:
 
 def test_alt_model_real_slowness_or_unreadable_state_stays_a_timeout() -> None:
 	early = {"61": json.loads(_jobs(EARLY_JOB))}
+	queued_jobs = {"51": json.loads(_jobs(QUEUED_JOB))}
+	held_jobs = {"51": json.loads(_jobs({"id": 5, "status": "waiting", "runner_name": "", "steps": []}))}
 	failed_late = {"61": json.loads(_jobs(dict(LATE_JOB, conclusion="failure", steps=[{"name": "Set up job", "started_at": _iso(-300)}])))}
 	cases = (
 		({"queued": [], "in_progress": [_alt_run(61, "in_progress", -4000)], "jobs": early}, "reason=ran_early runs=61"),
 		({"queued": [], "in_progress": [_alt_run(61, "in_progress", -4000)], "jobs": failed_late}, "reason=ran_early runs=61"),
 		({"queued": [], "in_progress": [_alt_run(61, "in_progress", -4000)]}, "reason=jobs_unreadable runs=61"),
-		({"queued": [_alt_run(51, "queued", -600)], "in_progress": []}, "reason=queued_late runs=51"),
+		({"queued": [_alt_run(51, "queued", -600)], "in_progress": [], "jobs": queued_jobs}, "reason=queued_late runs=51"),
+		# Held runs (concurrency group or environment) are not a runner wait.
+		({"queued": [_alt_run(51, "queued", -4000)], "in_progress": [], "pending": [_alt_run(54, "pending", -4000)], "jobs": queued_jobs}, "reason=held runs=54"),
+		({"queued": [_alt_run(51, "queued", -4000)], "in_progress": [], "waiting": [_alt_run(55, "waiting", -4000)], "jobs": queued_jobs}, "reason=held runs=55"),
+		({"queued": [_alt_run(51, "queued", -4000)], "in_progress": [], "jobs": held_jobs}, "reason=held runs=51"),
+		({"queued": [_alt_run(51, "queued", -4000)], "in_progress": []}, "reason=jobs_unreadable runs=51"),
 		({"queued": [_alt_run(53, "queued", -4000, title="other")], "in_progress": []}, "reason=no_runs_in_flight runs=-"),
 		({"fail": True}, "reason=listing_unreadable runs=-"),
 		({"queued": [_alt_run(51, "queued", -4000)], "in_progress": [], "in_progress_total": 150}, "reason=listing_truncated runs=-"),

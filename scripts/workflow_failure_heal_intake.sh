@@ -2063,8 +2063,13 @@ while IFS=$'\t' read -r run_id run_url; do
 			# dispatch_and_watch_workflow_run.sh, plus Phase 4 and the alt-model
 			# wait (dispatch_and_watch_workflow_run.sh --alt-model-runner-wait); exact names), so
 			# text echoed from a model or an issue cannot suppress a report.
+			# The watch step must also be the job's only failed step (read from
+			# the run's jobs file already on disk): a real failure in a later
+			# always() step of the same job (soft-error analyser, cleanup) is
+			# filed as before. An unreadable jobs file never matches (fail closed).
 			if [ "${SOURCE_KIND}" = "workflow_run" ] \
-				&& grep -qE '^[^ ]+ RELEASE_GATE_RUNNER_WAIT outcome=(cancel_requested|stop_failed) ' "${RAW_LOG}" 2>/dev/null; then
+				&& grep -qE '^[^ ]+ RELEASE_GATE_RUNNER_WAIT outcome=(cancel_requested|stop_failed) ' "${RAW_LOG}" 2>/dev/null \
+				&& [ "$(jq -r --arg jid "${job_id}" --arg step "${failing_step}" '[.jobs[]? | select((.id | tostring) == $jid) | .steps[]? | select(.conclusion == "failure" or .conclusion == "timed_out") | (.name // "")] | if length == 1 and .[0] == $step then "only" else "other" end' "${JOBS_FILE}" 2>/dev/null || echo other)" = "only" ]; then
 				case "${failing_step}" in
 					"Phase 4: Wait for review & autofix to complete"|"Dispatch & watch — "*|"Dispatch internal-orchestrate.yml with multi-issue project"|"Dispatch internal-validate.yml standalone"|"Wait for clarify→plan→implement (alt-model)")
 						HEAL_RUNNER_WAIT_MATCHED="${HEAL_RUNNER_WAIT_MATCHED} ${run_id}:${job_id}"

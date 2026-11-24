@@ -169,17 +169,21 @@ dispatch_watch_stop_release_gate()
 #
 # runner_wait only when ALL of these hold, otherwise timeout (fail closed):
 #   - the in_progress listing is complete (at most 100 runs) and readable;
-#   - at least one candidate exists and at most ALT_RUNNER_WAIT_MAX_RUNS of
-#     them are in_progress;
+#   - no run of this issue is pending or waiting (held by a concurrency group
+#     or an environment), and no job of a queued candidate is waiting/pending
+#     (reason=held otherwise);
+#   - at least one candidate exists and at most ALT_RUNNER_WAIT_MAX_RUNS
+#     candidates (queued and in_progress together) are found;
 #   - at least one candidate was created at or before the two-thirds point of
 #     the budget, so it waited at least a third of the budget;
 #   - every job of every in_progress candidate is status=queued with no
 #     runner_name, or started its first step in the last third of the budget
 #     and has no failed conclusion or step. An in_progress candidate whose
 #     jobs cannot be read, or that has no jobs, gives timeout.
-# A queued candidate has no job with a runner, so its jobs are not read. A
-# truncated queued listing only leaves out more queued runs, which cannot
-# turn a timeout into runner_wait.
+# A queued candidate has no job with a runner; its jobs are read only to rule
+# out a held job (an unreadable list gives timeout). A truncated queued
+# listing only leaves out more queued runs, which cannot turn a timeout into
+# runner_wait.
 #
 # On runner_wait it writes runner_wait=true to GITHUB_OUTPUT. With
 # DISPATCH_WATCH_STOP_RELEASE_GATE=true it cancels the candidates and stops
@@ -190,8 +194,9 @@ dispatch_watch_stop_release_gate()
 # (epoch the wait began), ALT_WAIT_BUDGET_SECS (default 4500),
 # ALT_RUNNER_WAIT_MAX_RUNS (default 5), DISPATCH_WATCH_STOP_RELEASE_GATE
 # (default false).
-# API calls: 2 listings (in_progress, queued), 1 jobs read per in_progress
-# candidate (at most ALT_RUNNER_WAIT_MAX_RUNS), plus the cancels on a stop.
+# API calls: 4 listings (in_progress, queued, pending, waiting), 1 jobs read
+# per queued or in_progress candidate (at most ALT_RUNNER_WAIT_MAX_RUNS), plus
+# the cancels on a stop.
 # Log line (stable prefix):
 #   ALT_MODEL_RUNNER_WAIT outcome=runner_wait|timeout reason=<r> runs=<ids|->
 # Always returns 0: the caller fails the step as before.
@@ -247,22 +252,55 @@ dispatch_watch_alt_model_runner_wait()
 		alt_rw_result timeout listing_unreadable
 		return 0
 	fi
+	# A run of this issue held in `pending`/`waiting` (a concurrency group or
+	# an environment) is not a runner wait: fail closed with reason=held, as
+	# the watcher does.
+	for alt_rw_held_status in pending waiting; do
+		if ! alt_rw_held_json="$(alt_rw_list "${alt_rw_held_status}")" || ! alt_rw_held="$(alt_rw_candidates "${alt_rw_held_json}")"; then
+			alt_rw_result timeout listing_unreadable
+			return 0
+		fi
+		if [ -n "${alt_rw_held//[[:space:]]/}" ]; then
+			alt_rw_result timeout held "$(printf '%s\n' "${alt_rw_held}" | awk '{print $1}' | paste -sd, -)"
+			return 0
+		fi
+	done
 
 	alt_rw_ids=""
 	alt_rw_early=0
 	alt_rw_in_progress_count=0
+	alt_rw_read_count=0
 	while read -r alt_rw_id alt_rw_created; do
 		[[ "${alt_rw_id:-}" =~ ^[0-9]+$ ]] || continue
+		alt_rw_read_count=$((alt_rw_read_count + 1))
 		alt_rw_ids="${alt_rw_ids:+${alt_rw_ids},}${alt_rw_id}"
+		if [ "${alt_rw_read_count}" -gt "${ALT_RW_MAX_RUNS}" ]; then
+			alt_rw_result timeout too_many_runs "${alt_rw_ids}"
+			return 0
+		fi
 		if [[ "${alt_rw_created:-}" =~ ^[1-9][0-9]*$ ]] && [ "${alt_rw_created}" -le "${ALT_RW_TWO_THIRDS}" ]; then
 			alt_rw_early=1
+		fi
+		# A queued run has no job with a runner, but one of its jobs can be
+		# held in waiting/pending (job-level concurrency or an environment):
+		# that is not a runner wait. An unreadable jobs list fails closed.
+		alt_rw_jobs="$(timeout 30 gh api "repos/${TEST_REPO}/actions/runs/${alt_rw_id}/jobs?per_page=100" 2>/dev/null || true)"
+		alt_rw_verdict="$(printf '%s' "${alt_rw_jobs}" | jq -r '
+			if (.jobs | type) != "array" then "unreadable"
+			elif any(.jobs[] | select(type == "object"); ((.status // "") | tostring | IN("waiting", "pending")) and (((.runner_name // "") | tostring) == "")) then "held"
+			else "wait" end' 2>/dev/null || echo unreadable)"
+		if [ "${alt_rw_verdict}" != "wait" ]; then
+			case "${alt_rw_verdict}" in held) ;; *) alt_rw_verdict="jobs_unreadable" ;; esac
+			alt_rw_result timeout "${alt_rw_verdict}" "${alt_rw_ids}"
+			return 0
 		fi
 	done <<< "${alt_rw_queued}"
 	while read -r alt_rw_id alt_rw_created; do
 		[[ "${alt_rw_id:-}" =~ ^[0-9]+$ ]] || continue
 		alt_rw_in_progress_count=$((alt_rw_in_progress_count + 1))
+		alt_rw_read_count=$((alt_rw_read_count + 1))
 		alt_rw_ids="${alt_rw_ids:+${alt_rw_ids},}${alt_rw_id}"
-		if [ "${alt_rw_in_progress_count}" -gt "${ALT_RW_MAX_RUNS}" ]; then
+		if [ "${alt_rw_read_count}" -gt "${ALT_RW_MAX_RUNS}" ]; then
 			alt_rw_result timeout too_many_runs "${alt_rw_ids}"
 			return 0
 		fi
