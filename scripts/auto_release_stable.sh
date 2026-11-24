@@ -185,7 +185,7 @@ declare -F zombie_queued_live_count >/dev/null 2>&1 || zombie_queued_live_count(
 	local zq_fallback_json zq_fallback_total
 	zq_fallback_json="$(gh_retry gh api "repos/${1}/actions/runs?status=queued&per_page=1" 2>/dev/null || true)"
 	zq_fallback_total="$(printf '%s' "${zq_fallback_json}" | jq -r 'if (.total_count | type) == "number" then .total_count else empty end' 2>/dev/null || true)"
-	[[ "${zq_fallback_total}" =~ ^[0-9]+$ ]] || return 1
+	[[ "${zq_fallback_total}" =~ ^[0-9]{1,12}$ ]] || return 1
 	printf '%s\t0\n' "${zq_fallback_total}"
 }
 source "${SCRIPT_DIR}/tg_helpers.sh" 2>/dev/null || true
