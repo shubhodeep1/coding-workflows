@@ -369,7 +369,11 @@ jobs:
         # GraphQL lists only waiting/blocked issues; neither returns the
         # ai:operator-step tracker or its comments, so this step makes its own
         # single listing (nothing else when no tracker is open). Fail-open.
+        # The step timeout (issue #9393): a hung gh call would otherwise hold
+        # the poll job until GitHub's 360-minute job limit and fail it;
+        # continue-on-error turns the step timeout into a warning.
         continue-on-error: true
+        timeout-minutes: 5
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           GITHUB_REPOSITORY: ${{ github.repository }}
