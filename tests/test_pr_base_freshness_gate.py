@@ -238,9 +238,10 @@ class Wiring(unittest.TestCase):
 		self.assertEqual(len(retry_calls), 3)
 		# 3600: the #9939 blocked-merge guard and its deferral branch sit
 		# between merge_with_followup's gate and its merge call (3404 chars).
-		# 4600: the #10049 pre-merge PR state branch sits there too.
+		# 4600: the #10049 pre-merge PR state branch sits there too. 5400:
+		# the #9987 `lease_wait` branch (judge-decision mark) sits there as well.
 		for call in retry_calls:
-			self.assertIn("_pr_base_fresh_for_merge", case_text[max(0, call.start() - 4600):call.start()])
+			self.assertIn("_pr_base_fresh_for_merge", case_text[max(0, call.start() - 5400):call.start()])
 		# merge_with_followup's synchronous merge is gated too.
 		self.assertIn('_pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}"; then', text)
 
