@@ -6040,13 +6040,15 @@ def test_nothing_to_implement_close_failure_keeps_the_wait_and_posts_the_marker_
 # closes it from that marker without a fix-up.
 VERIFIED_NOOP_MARKER = "<!-- ai:implement-success-noop:v1 issue=7 -->"
 VERIFIED_CLOSE_MARKER = "<!-- ai:unblock-nothing-to-implement:v1 item=7 verified -->"
+# pnti_note_failed_pass in scripts/plan_nothing_to_implement_verify.sh, which plan.yml writes into the block.
+VERIFIED_PASS_NOTE = "Verify: 1 test(s) passed on the planning ref, but the issue could not be closed automatically; the block stays."
 
 
 def _verified_noop_comments(marker_body: str | None = None, marker_login: str = BOT, extra: list | None = None) -> list:
 	body = marker_body if marker_body is not None else "Already implemented - verified.\n\n- `tests/test_x.py`\n\n" + VERIFIED_NOOP_MARKER + "\n"
 	return [
 		_comment(body, marker_login, "2026-10-04T08:59:00Z"),
-		_comment(NOTHING_TO_IMPLEMENT_BLOCK + "\n\nVerify: 1 listed test(s) passed but the issue could not be closed.", BOT, "2026-10-04T09:00:00Z"),
+		_comment(NOTHING_TO_IMPLEMENT_BLOCK + "\n\n" + VERIFIED_PASS_NOTE, BOT, "2026-10-04T09:00:00Z"),
 		*(extra or []),
 	]
 
@@ -6075,7 +6077,7 @@ def test_verified_noop_marker_closes_a_nothing_to_implement_issue_without_a_fixu
 
 
 @pytest.mark.parametrize("case", ["verify_false_padded", "verify_off", "close_disabled", "untrusted_marker", "other_issue",
-	"marker_not_last", "stale_marker", "newer_plan", "project_item", "no_marker"])
+	"marker_not_last", "stale_marker", "single_block_failed_verify", "single_block_no_note", "newer_plan", "project_item", "no_marker"])
 def test_verified_noop_close_keeps_today_otherwise(tmp_path: Path, case: str) -> None:
 	item, env, comments = ISSUE, {}, _verified_noop_comments()
 	if case == "verify_false_padded":
@@ -6093,6 +6095,14 @@ def test_verified_noop_close_keeps_today_otherwise(tmp_path: Path, case: str) ->
 	elif case == "stale_marker":
 		# A later plan run blocked again (its verify failed): the old marker is stale.
 		comments = _verified_noop_comments(extra=[_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T10:00:00Z")])
+	elif case in ("single_block_failed_verify", "single_block_no_note"):
+		# An older trusted marker (e.g. implement.yml Guard 0, before a reopen) does not vouch for the
+		# only block when that block's verify failed or left no pass note.
+		note = "\n\nVerify: 1 listed test(s) did not all pass on the planning ref (failed); the block stays." if case == "single_block_failed_verify" else ""
+		comments = [
+			_comment("Already implemented.\n\n" + VERIFIED_NOOP_MARKER, BOT, "2026-09-01T08:00:00Z"),
+			_comment(NOTHING_TO_IMPLEMENT_BLOCK + note, BOT, "2026-10-04T09:00:00Z"),
+		]
 	elif case == "newer_plan":
 		comments = _verified_noop_comments(extra=[_comment("Implementation Plan\n\n1. Do the thing.", BOT, "2026-10-04T10:00:00Z")])
 	elif case == "project_item":

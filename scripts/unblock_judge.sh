@@ -892,16 +892,24 @@ unblock_nothing_to_implement_blocked()
 # second-newest trusted "Planning blocked" comment (or there is only one).
 # The plan run's verify posts that marker just before its own block comment,
 # so the marker belongs to the newest block; a later plan run that blocked
-# again (its verify failed or was off) makes it stale. 1 otherwise. Reads only
-# the item_comments.json this run already fetched; no API calls.
+# again (its verify failed or was off) makes it stale. The newest trusted block
+# must also carry that verify's pass-but-close-failed note (pnti_note_failed_pass
+# in scripts/plan_nothing_to_implement_verify.sh, written into the block by
+# plan.yml), so an older marker (for example implement.yml Guard 0's) never
+# vouches for a single block whose verify failed, timed out or was off.
+# 1 otherwise. Reads only the item_comments.json this run already fetched; no
+# API calls.
 unblock_nothing_to_implement_verified()
 {
-	jq -e --arg login "${UNBLOCK_LOGIN}" --arg marker "<!-- ai:implement-success-noop:v1 issue=${ITEM} -->" '
+	jq -e --arg login "${UNBLOCK_LOGIN}" --arg marker "<!-- ai:implement-success-noop:v1 issue=${ITEM} -->" \
+		--arg pass_note "passed on the planning ref, but the issue could not be closed automatically" '
 		([.[] | select((.user.login // "") == $login)
-			| select(((.body // "") | split("\n") | map(rtrimstr("\r")) | map(select(test("\\S"))) | first // "") == "Planning blocked: human input required.")
-			| (.created_at // "")] | sort) as $blocks
+			| select(((.body // "") | split("\n") | map(rtrimstr("\r")) | map(select(test("\\S"))) | first // "") == "Planning blocked: human input required.")]
+			| sort_by(.created_at // "")) as $block_comments
+		| ($block_comments | map(.created_at // "")) as $blocks
 		| (if ($blocks | length) > 1 then $blocks[-2] else "" end) as $floor
-		| any(.[]; (.user.login // "") == $login
+		| ((($block_comments | last // {}) | .body // "") | contains($pass_note))
+		and any(.[]; (.user.login // "") == $login
 			and (.created_at // "") > $floor
 			and (((.body // "") | split("\n") | map(select(test("\\S"))) | last // "" | rtrimstr("\r")) == $marker))
 	' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1
