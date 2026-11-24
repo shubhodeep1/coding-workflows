@@ -14,14 +14,16 @@ the candidates and hands them to this script, which decides offline:
 Inputs:
   --search-file           `items` of one REST `search/issues` call for open
                           issues and PRs carrying any block label
-                          (`unblock_ledger.py labels`): number, labels,
-                          pull_request, created_at, updated_at.
+                          (`unblock_ledger.py labels`): number, title
+                          (optional), labels, pull_request, created_at,
+                          updated_at.
   --details-file          JSON object keyed by item number (string): each
                           `{"labeled": [{"label", "created_at"}],
                           "comments": [{"login", "body", "created_at"}]}`,
                           from one batched GraphQL query. A missing entry is
                           judged from `updated_at` alone and is never picked
-                          on a fresh-marker guess.
+                          on a fresh-marker guess. An optional `title` is read
+                          when the search item carries none.
   --runs-file             `workflow_runs` of unblock_judge_dispatch.yml (its
                           run name is `Unblock judge #<n>`).
   --failed-projects-file  JSON array of tracking issue numbers whose project
@@ -31,9 +33,20 @@ Inputs:
                           lists this tick (`items` of
                           `operator_step_issue.py needs-human prune`).
 
+An item whose title matches the E2E test-title pattern (`[E2E Smoke Test`,
+`[E2E Orchestrate Smoke`, `[E2E Clarify Negative Test`, case-insensitive; the
+same pattern as `_SMOKE_TITLE_RE` in scripts/workflow_failure_heal.py) is a
+pipeline fixture whose block is the expected test result (#9782), so it is
+skipped as `e2e_test_item` before any other check. The title comes from the
+search item, else from its details entry; a missing title never skips.
+UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED is the off switch: unset, empty or `true`
+(any case) keeps the skip on, `false` turns it off, and any other value also
+turns it off and logs a warning on stderr.
+
 An item labelled `ai:security-audit` (the long-lived security-audit tracker,
-issue #3576) is skipped as `security_audit_tracker` unless it is a failed
-project; SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED=false turns that off.
+issue #3576) is skipped as `security_audit_tracker`, also when it is a failed
+project (issue #9730, see below); SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED=false
+turns that off.
 An item that carries `ai:needs-human` and whose newest trusted
 `ai:unblock:v1` marker is a `close` verdict is parked in the needs-human
 digest (scripts/operator_step_issue.py) and skipped as `parked`. With
@@ -59,6 +72,15 @@ Two terminal states are not judged again while nothing material changed:
     as `terminal_unchanged`. Pull requests are not covered (their fingerprint
     holds failing check names the scan cannot see), nor failed projects, nor
     the kill switch NEEDS_HUMAN_DIGEST_ENABLED=false (the judge then closes it).
+An issue labelled `ai:security-audit` (the long-lived security-audit tracker,
+issue #9730) is not a work item and is skipped as `security_audit_tracker`,
+also when it is in the failed-project set, so the judge can never close it;
+SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED (unset, empty or `true` in any
+case is on; `false` is off; any other value is off with one stderr warning)
+turns it off. A failed project the search did not return (its block label
+was released) carries no labels here; it gets `ai:security-audit` back when
+its fetched body carries `<!-- ai:security-audit-tracker:v1 -->` on its own
+line, so it is still skipped, and otherwise keeps the project path.
 An item is picked when all hold:
   - it has been blocked for at least --min-blocked-minutes (the newest
     `labeled` event of a block label it still carries; for a failed project
@@ -99,15 +121,59 @@ unblock_ledger = importlib.util.module_from_spec(_LEDGER_SPEC)
 sys.modules.setdefault("unblock_ledger", unblock_ledger)
 _LEDGER_SPEC.loader.exec_module(unblock_ledger)
 
+
+# Issue #9473: wedged-queued run filter. A queued run older than
+# ZOMBIE_RUN_MAX_QUEUED_HOURS (default 24; 0 or invalid disables) has zero
+# jobs and cannot be cancelled, so it must not count as active. The shared
+# predicate lives in orchestrate_lib.py, loaded from this script's own
+# directory only (never the cwd or a PR checkout). If it cannot be loaded,
+# every queued run stays active (pre-#9473 behaviour).
+_ZOMBIE_LIB_STATE: dict = {"loaded": False, "lib": None, "hours": 0}
+
+
+def _zombie_lib() -> object:
+	if not _ZOMBIE_LIB_STATE["loaded"]:
+		_ZOMBIE_LIB_STATE["loaded"] = True
+		name = "_unblock_scan_orchestrate_lib"
+		try:
+			spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name("orchestrate_lib.py"))
+			if spec is None or spec.loader is None:
+				return None
+			module = importlib.util.module_from_spec(spec)
+			sys.modules[name] = module
+			spec.loader.exec_module(module)
+			if callable(getattr(module, "is_wedged_queued_run", None)) and callable(getattr(module, "log_zombie_run_ignored", None)):
+				_ZOMBIE_LIB_STATE["lib"] = module
+				_ZOMBIE_LIB_STATE["hours"] = int(module.zombie_run_max_queued_hours())
+		except Exception:
+			sys.modules.pop(name, None)
+			_ZOMBIE_LIB_STATE["lib"] = None
+	return _ZOMBIE_LIB_STATE["lib"]
+
+
+def _is_wedged_queued(run: object, now_epoch: int, guard: str) -> bool:
+	"""True (and logs ZOMBIE_RUN_IGNORED once) when ``run`` is wedged."""
+	lib = _zombie_lib()
+	if lib is None:
+		return False
+	try:
+		if not lib.is_wedged_queued_run(run, int(now_epoch), _ZOMBIE_LIB_STATE["hours"]):
+			return False
+		lib.log_zombie_run_ignored(run, guard, int(now_epoch))
+		return True
+	except Exception:
+		return False
+
 TRACKING_LABEL = "ai:orchestrator-tracking"
 # Issue #3576: the long-lived security-audit tracker is not a work item; the
-# scan skips it unless its project failed. SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED=false
-# restores the previous selection.
+# scan skips it, also when its project failed (issue #9730).
+# SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED=false restores the previous selection.
 SECURITY_AUDIT_LABEL = "ai:security-audit"
 CLOSED_LABEL = "ai:unblock-closed"
 MARKER_PREFIXES = ("<!-- ai:unblock:v1 ", "<!-- ai:unblock-wait:v1 ")
 STATE_PREFIX = "<!-- ORCHESTRATOR_STATE_V"
 NEEDS_HUMAN_LABEL = "ai:needs-human"
+SECURITY_AUDIT_TRACKER_MARKER_RE = re.compile(r"^[ \t]*<!-- ai:security-audit-tracker:v1 -->[ \t]*\r?$", re.M)
 VERDICT_PREFIX = "<!-- ai:unblock:v1 "
 VERDICT_RE = re.compile(r" verdict=([a-z_]+) ")
 RUN_NAME_RE = re.compile(r"^Unblock judge #([1-9][0-9]*)$")
@@ -117,6 +183,11 @@ VERDICT_MARKER_RE = re.compile(
 	r"verdict=(?P<verdict>[a-z_]+) round=[1-9][0-9]*(?: override=[a-z_]+)? -->$"
 )
 ESCALATED_MARKER_RE = re.compile(r"^<!-- ai:unblock-fixup-escalated:v1 item=(?P<item>[1-9][0-9]*) -->$")
+# Verbatim copy of `_SMOKE_TITLE_RE` in scripts/workflow_failure_heal.py
+# (copied rather than imported: that module is large and this scan runs every
+# tick). tests/test_unblock_scan.py keeps the two copies identical.
+E2E_TEST_TITLE_RE = re.compile(r"\[E2E (?:Smoke Test|Orchestrate Smoke|Clarify Negative Test)\b", re.IGNORECASE)
+E2E_SKIP_FLAG = "UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED"
 # Comments the judge's evidence ignores (unblock_judge.sh `unblock_evidence`).
 LEDGER_BODY_MARKERS = ("ai:unblock", "ORCHESTRATOR_STATE")
 
@@ -153,6 +224,26 @@ def _time(value: object) -> dt.datetime | None:
 	return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.timezone.utc)
 
 
+_SECURITY_AUDIT_EXCLUDE_WARNED = False
+
+
+def _security_audit_exclude_enabled() -> bool:
+	"""Issue #9730 switch; same rule as the poller's shell reader (no trimming).
+
+	An unrecognised value turns the exclusion off and warns once per process on
+	stderr (stdout carries the selection JSON).
+	"""
+	global _SECURITY_AUDIT_EXCLUDE_WARNED
+	raw = os.environ.get("SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED", "")
+	value = raw.lower()
+	if value in ("", "true"):
+		return True
+	if value != "false" and not _SECURITY_AUDIT_EXCLUDE_WARNED:
+		_SECURITY_AUDIT_EXCLUDE_WARNED = True
+		print(f"::warning::SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED={raw} is not true/false; tracker exclusion is off", file=sys.stderr)
+	return False
+
+
 def _label_names(item: dict) -> set[str]:
 	names = set()
 	for label in item.get("labels") or []:
@@ -160,6 +251,30 @@ def _label_names(item: dict) -> set[str]:
 		if isinstance(name, str):
 			names.add(name)
 	return names
+
+
+def _skip_e2e_test_items_enabled() -> bool:
+	"""The E2E fixture skip's off switch: unset, empty or `true` keep it on; anything else turns it off."""
+	raw = os.environ.get(E2E_SKIP_FLAG)
+	value = (raw or "").strip().lower()
+	if value in ("", "true"):
+		return True
+	if value != "false":
+		# stderr only: the poller parses stdout as the single JSON result line.
+		print(f"UNBLOCK_SCAN warning=invalid_flag name={E2E_SKIP_FLAG} value={repr(raw)[:40]} e2e_skip=off", file=sys.stderr)
+	return False
+
+
+def _item_title(item: dict, info: dict | None) -> str:
+	"""The item's title from the search payload, else from its details entry, else ''."""
+	title = item.get("title")
+	if isinstance(title, str) and title:
+		return title
+	if isinstance(info, dict):
+		title = info.get("title")
+		if isinstance(title, str) and title:
+			return title
+	return ""
 
 
 def _latest_marker(comments: object, trusted_login: str) -> dt.datetime | None:
@@ -297,7 +412,11 @@ def _busy_items(runs: object, now: dt.datetime, inflight: dt.timedelta) -> set[i
 		created = _time(run.get("created_at"))
 		if run.get("status") in ("cancelled", "skipped"):
 			continue
-		if run.get("status") in ACTIVE_RUN_STATES or (created and now - created < inflight):
+		# Issue #9473: a wedged queued run is never busy, not even through the
+		# recency window below (UNBLOCK_JUDGE_INFLIGHT_MINUTES may exceed 24h).
+		run_is_wedged = _is_wedged_queued(run, int(now.timestamp()), "unblock_scan_busy")
+		status_active = run.get("status") in ACTIVE_RUN_STATES and not run_is_wedged
+		if not run_is_wedged and (status_active or (created and now - created < inflight)):
 			busy.add(int(match.group(1)))
 	return busy
 
@@ -326,6 +445,7 @@ def select(
 	candidates: list[tuple[dt.datetime, int, str]] = []
 	unverified: list[tuple[dt.datetime, int]] = []
 	seen: set[int] = set()
+	skip_e2e = _skip_e2e_test_items_enabled()
 
 	def skip(reason: str) -> None:
 		skipped[reason] = skipped.get(reason, 0) + 1
@@ -334,7 +454,16 @@ def select(
 	known = {int(item["number"]) for item in items if str(item.get("number", "")).isdigit()}
 	# A failed project the search did not return (no block label on it) is
 	# still judged; its labels are unknown here, so it is a project by origin.
-	items += [{"number": number, "labels": [TRACKING_LABEL], "updated_at": ""} for number in sorted(failed - known)]
+	# Issue #9730: a tracker whose block label was released drops out of the
+	# search but stays a failed project; its body marker (same rule as the
+	# poller) restores its label so the skip below still holds on later ticks.
+	def _rebuilt_labels(number: int) -> list[str]:
+		info = details.get(str(number))
+		body = info.get("body") if isinstance(info, dict) else None
+		if isinstance(body, str) and SECURITY_AUDIT_TRACKER_MARKER_RE.search(body):
+			return [TRACKING_LABEL, SECURITY_AUDIT_LABEL]
+		return [TRACKING_LABEL]
+	items += [{"number": number, "labels": _rebuilt_labels(number), "updated_at": ""} for number in sorted(failed - known)]
 	for item in items:
 		if not str(item.get("number", "")).isdigit():
 			continue
@@ -342,10 +471,16 @@ def select(
 		if number in seen:
 			continue
 		seen.add(number)
+		# E2E fixture issues (e.g. the clarify negative test) are blocked by design.
+		if skip_e2e:
+			e2e_info = details.get(str(number)) if isinstance(details.get(str(number)), dict) else None
+			if E2E_TEST_TITLE_RE.search(_item_title(item, e2e_info)):
+				skip("e2e_test_item")
+				continue
 		labels = _label_names(item)
-		# Same vocabulary as the poller's is_truthy; unset or empty means on.
-		if ((os.environ.get("SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED") or "true").strip().lower() in ("1", "true", "yes", "on")
-				and SECURITY_AUDIT_LABEL in labels and number not in failed):
+		# Issue #9730: no failed-project exemption. A tracker must never reach the
+		# judge, whose project path can give it a close verdict.
+		if SECURITY_AUDIT_LABEL in labels and _security_audit_exclude_enabled():
 			skip("security_audit_tracker")
 			continue
 		if CLOSED_LABEL in labels and number not in failed:
@@ -416,6 +551,7 @@ def select(
 		isinstance(run, dict)
 		and RUN_NAME_RE.match(str(run.get("display_title") or run.get("name") or ""))
 		and run.get("status") in ACTIVE_RUN_STATES
+		and not _is_wedged_queued(run, int(now.timestamp()), "unblock_scan_active_judge")
 		for run in (runs if isinstance(runs, list) else [])
 	)
 	effective_limit = 0 if active_judge else min(limit, 1)
