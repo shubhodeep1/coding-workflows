@@ -2375,6 +2375,12 @@ if args[0] == 'api':
 				issue_payload['number'] = issue_num
 			if re.search(r'(?m)^\s*state\s*$', query):
 				issue_payload['state'] = issue_state
+			# Issue #10059: issue stateReason (opt-in via issue_extra_fields[n].state_reason
+			# or the issue's own state_reason); null when neither is set.
+			if re.search(r'(?m)^\s*stateReason\s*$', query):
+				sr_ext = (store.get('issue_extra_fields') or {}).get(str(issue_num), {}) or {}
+				sr_val = sr_ext.get('state_reason', issue.get('state_reason'))
+				issue_payload['stateReason'] = str(sr_val).upper() if sr_val else None
 			# Issue #8808: issue createdAt (opt-in per issue via issue_created_at).
 			if re.search(r'(?m)^\s*createdAt\s*$', query):
 				issue_payload['createdAt'] = str((store.get('issue_created_at') or {}).get(str(issue_num), '2026-01-01T00:00:00Z'))
@@ -34266,7 +34272,8 @@ def test_heal_stale_close_wiring() -> None:
 	assert hold.index("_heal_stale_close_check ") < hold.index("_heal_counterfactual_hold_notify ")
 	assert 'if [ "${HEAL_STALE_CLOSE_OUTCOME:-}" != "closed" ]; then' in hold
 	# The batched details map carries the issue createdAt (no new call).
-	assert "          state\n          createdAt\n          body\n" in poller
+	# Issue #10059 added stateReason between state and createdAt (same call).
+	assert "          state\n          stateReason\n          createdAt\n          body\n" in poller
 	assert "created_at: (.value.createdAt // null)," in poller
 	body = poller.split("_heal_stale_close_check()\n{", 1)[1].split("\n}\n", 1)[0]
 	assert "-f state=closed -f state_reason=completed" in body
@@ -35063,3 +35070,128 @@ def _check_stall_merge_final_ci_workflow_is_captured_and_cleared_for_other_paths
 
 if __name__ == "__main__":
 	raise SystemExit(main())
+
+
+# ---------------------------------------------------------------------------
+# Issue #10059: a wave item closed as already delivered (closed as completed,
+# ai:closed, no blocking failure label) gets a WARNING and its own completion
+# comment heading instead of `State: failed` and the CRITICAL page.
+# ---------------------------------------------------------------------------
+
+_CLOSED_DELIVERED_JUDGE_JSON = {
+	"status": "in_progress",
+	"justification": "closed item delivered by another PR",
+	"assessment": "judge reviews the wave",
+	"new_issues": [],
+	"issues_to_revert": [],
+}
+
+
+def _closed_kind_state(issue_nums: list[int]) -> dict:
+	state = _base_state(status="in_progress")
+	state["waves"][0]["issues"] = [
+		{"id": f"issue-{n}", "github_issue": n, "status": "pending"} for n in issue_nums
+	]
+	state["issue_number_map"] = {f"issue-{n}": n for n in issue_nums}
+	state["total_issues"] = len(issue_nums)
+	return state
+
+
+def _run_closed_kind_poller(state: dict, reasons: dict[int, str | None], labels: dict[int, list[str]]) -> dict:
+	extra_fields = {str(n): {"state_reason": r} for n, r in reasons.items() if r}
+	return _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels=labels,
+		issue_closed={n: True for n in labels},
+		capture_telegram_calls=True,
+		codex_json=_CLOSED_DELIVERED_JUDGE_JSON,
+		mock_store_extra={"issue_extra_fields": extra_fields},
+	)
+
+
+def _completion_comment(result: dict) -> str:
+	bodies = [c.get("body", "") for c in result["issues"]["192"]["comments"]]
+	return next(body for body in bodies if "<!-- orchestrator:completion-status -->" in body)
+
+
+def _closed_without_merge_criticals(result: dict) -> list[dict]:
+	return [
+		n for n in result["telegram_notifications"]
+		if n.get("level") == "CRITICAL" and "closed without merge" in n.get("message", "")
+	]
+
+
+def _delivered_warnings(result: dict) -> list[dict]:
+	return [
+		n for n in result["telegram_notifications"]
+		if n.get("level") == "WARNING" and "closed as already delivered" in n.get("message", "")
+	]
+
+
+def test_completion_status_closed_as_delivered_warns_once() -> None:
+	first = _run_closed_kind_poller(_closed_kind_state([10]), {10: "completed"}, {10: ["ai:closed"]})
+	comment = _completion_comment(first)
+	assert "<!-- status:failed -->" not in comment
+	assert "**State:** `failed`" not in comment
+	assert "Wave issues closed without merge / implementation-failed" not in comment
+	assert "Project cannot complete until these are resolved" not in comment
+	assert "**Wave issues closed as already delivered:**" in comment
+	assert "- #10: closed (" in comment
+	assert _closed_without_merge_criticals(first) == []
+	warnings = _delivered_warnings(first)
+	assert len(warnings) == 1
+	assert "#10" in warnings[0]["message"]
+	assert "project judge will decide" in warnings[0]["message"]
+	latest = first["latest_state"]
+	assert latest.get("completion_status_delivered_closed_alerted") == [10]
+	assert latest.get("completion_status_failure_alert_sent") is not True
+	combined = first["stdout"] + first["stderr"]
+	assert "COMPLETION_DELIVERED_CLOSED tracking_issue=192 items=10 alert=sent" in combined
+	assert '"any_failed": true' in combined or '"any_failed":true' in combined
+	assert '"any_failed_blocking": false' in combined or '"any_failed_blocking":false' in combined
+
+	second = _run_closed_kind_poller(latest, {10: "completed"}, {10: ["ai:closed"]})
+	assert _delivered_warnings(second) == []
+	assert _closed_without_merge_criticals(second) == []
+	assert "COMPLETION_DELIVERED_CLOSED tracking_issue=192 items=10 alert=already_sent" in second["stdout"] + second["stderr"]
+
+	# The judge path is unchanged: same invocation as the blocking case.
+	blocking = _run_closed_kind_poller(_closed_kind_state([10]), {10: "not_planned"}, {10: ["ai:closed"]})
+	assert first["judge_prompt"]
+	assert bool(first["judge_prompt"]) == bool(blocking["judge_prompt"])
+	assert first["latest_state"].get("judge_cycle") == blocking["latest_state"].get("judge_cycle")
+
+
+def test_completion_status_closed_not_planned_keeps_critical() -> None:
+	for reasons, labels in (
+		({10: "not_planned"}, {10: ["ai:closed"]}),
+		({10: None}, {10: ["ai:closed"]}),
+		({10: "completed"}, {10: ["ai:closed", "ai:plan-failed"]}),
+	):
+		result = _run_closed_kind_poller(_closed_kind_state([10]), reasons, labels)
+		comment = _completion_comment(result)
+		assert "<!-- status:failed -->" in comment
+		assert "**Wave issues closed without merge / implementation-failed:**" in comment
+		assert "Project cannot complete until these are resolved" in comment
+		assert "closed as already delivered" not in comment
+		assert len(_closed_without_merge_criticals(result)) == 1
+		assert _delivered_warnings(result) == []
+		assert result["latest_state"].get("completion_status_failure_alert_sent") is True
+
+
+def test_completion_status_mixed_closed_kinds_keeps_critical() -> None:
+	result = _run_closed_kind_poller(
+		_closed_kind_state([10, 11]),
+		{10: "completed", 11: "not_planned"},
+		{10: ["ai:closed"], 11: ["ai:closed"]},
+	)
+	comment = _completion_comment(result)
+	assert "<!-- status:failed -->" in comment
+	assert "**Wave issues closed without merge / implementation-failed:**" in comment
+	assert "- #10: closed (" in comment and "- #11: closed (" in comment
+	assert "Project cannot complete until these are resolved" in comment
+	assert "closed as already delivered" not in comment
+	assert len(_closed_without_merge_criticals(result)) == 1
+	assert _delivered_warnings(result) == []

@@ -3821,6 +3821,19 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 			if value in ("open", "closed"):
 				issue_states[str(key)] = str(value)
 
+	# Issue #10059: optional close reasons (GitHub Issue.stateReason, lowercased)
+	# used only to tell a wave item "closed as already delivered" apart from a
+	# real loss of work. A missing reason fails closed (the item stays blocking).
+	issue_state_reasons: dict[str, str] = {}
+	if getattr(args, "issue_state_reasons_json", None):
+		issue_state_reasons_raw = json.loads(args.issue_state_reasons_json)
+		if not isinstance(issue_state_reasons_raw, dict):
+			_print_json({"ok": False, "error": "issue_state_reasons_json must be an object mapping issue numbers to issue state reasons"})
+			return 1
+		for key, value in issue_state_reasons_raw.items():
+			if isinstance(value, str):
+				issue_state_reasons[str(key)] = value.strip().lower()
+
 	pr_states: dict[str, dict[str, Any]] = {}
 	if getattr(args, "pr_states_json", None):
 		pr_states_raw = json.loads(args.pr_states_json)
@@ -3842,6 +3855,10 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 	wave_id = wave.get("wave", current_wave_idx + 1)
 	all_merged = True
 	any_failed = False
+	# Issue #10059: true only when at least one closed / implementation-failed
+	# item is NOT "closed as already delivered". The completion comment and the
+	# completion alert read this; every other gate keeps reading any_failed.
+	any_failed_blocking = False
 	validation_dispatch_safe_despite_failures = True
 	any_review_blocked = False
 	statuses: list[dict[str, Any]] = []
@@ -3856,7 +3873,7 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 			source = "no_github_issue"
 			any_not_created = True
 			all_merged = False
-			statuses.append({"id": issue["id"], "github_issue": raw_gh_num, "status": status, "decision_source": source})
+			statuses.append({"id": issue["id"], "github_issue": raw_gh_num, "status": status, "decision_source": source, "closed_as_delivered": False})
 			continue
 
 		gh_num_str = str(raw_gh_num)
@@ -3888,12 +3905,21 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 			_maybe_unblock_task_state_dependents(wave_id, task_state_issue)
 		if status == "review-blocked":
 			any_review_blocked = True
+		has_blocking_failure_label = any(
+			label in VALIDATION_DISPATCH_BLOCKING_FAILURE_LABELS
+			for label in labels
+		)
+		closed_as_delivered = (
+			status == "closed"
+			and issue_state_for_status == "closed"
+			and issue_state_reasons.get(gh_num_str) == "completed"
+			and "ai:closed" in labels
+			and not has_blocking_failure_label
+		)
 		if status in ("closed", "implementation-failed"):
 			any_failed = True
-			has_blocking_failure_label = any(
-				label in VALIDATION_DISPATCH_BLOCKING_FAILURE_LABELS
-				for label in labels
-			)
+			if not closed_as_delivered:
+				any_failed_blocking = True
 			failure_is_safe_for_validation_dispatch = (
 				status == "closed"
 				and (issue_state_for_status == "closed" or "ai:closed" in labels)
@@ -3911,6 +3937,7 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 			"github_issue": raw_gh_num,
 			"status": status,
 			"decision_source": source,
+			"closed_as_delivered": closed_as_delivered,
 		})
 
 	# Gate project_complete on the default branch containing the integration
@@ -3937,6 +3964,7 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 		"wave": current_wave_idx + 1,
 		"wave_complete": all_merged,
 		"any_failed": any_failed,
+		"any_failed_blocking": any_failed_blocking,
 		"validation_dispatch_safe_despite_failures": any_failed and validation_dispatch_safe_despite_failures,
 		"any_review_blocked": any_review_blocked,
 		"any_not_created": any_not_created,
@@ -5013,6 +5041,7 @@ def build_parser() -> argparse.ArgumentParser:
 	p_check.add_argument("--labels-json", required=True, help='JSON: {"issue_num": ["label1", ...]}')
 	p_check.add_argument("--issue-states-json", default=None, help='Optional JSON: {"issue_num": "open|closed", ...}')
 	p_check.add_argument("--pr-states-json", default=None, help='Optional JSON: {"issue_num": {"state":"open|closed","merged":bool}, ...}')
+	p_check.add_argument("--issue-state-reasons-json", default=None, help='Optional JSON: {"issue_num": "completed|not_planned|reopened|duplicate", ...}')
 	p_check.add_argument(
 		"--integration-ahead-by",
 		default="0",

@@ -24902,6 +24902,7 @@ _fetch_candidate_issue_details_graphql() {
           number
           title
           state
+          stateReason
           createdAt
           body
           author { login }
@@ -24960,6 +24961,7 @@ _fetch_candidate_issue_details_graphql() {
           key: (.value.number | tostring),
           value: {
             state: (((.value.state // "OPEN") | ascii_downcase) | if . == "closed" then "closed" else "open" end),
+            state_reason: ((.value.stateReason // "") | ascii_downcase),
             created_at: (.value.createdAt // null),
             body: .value.body,
             title: (.value.title // ""),
@@ -34219,6 +34221,10 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   # Reconcile managed issue labels + truth signals before status/stall checks
   # ---------------------------------------------------------------
   ISSUE_STATES_JSON='{}'
+  # Issue #10059: close reasons (GitHub stateReason, lowercased) read from the
+  # same GraphQL batch as the state; no extra API call. Only filled when the
+  # batch supplied the item, so the REST fallback fails closed (blocking).
+  ISSUE_STATE_REASONS_JSON='{}'
   PR_STATES_JSON='{}'
   # Merged PR per issue for persist_merged_pr (issue #8427, P7); filled only
   # with PERSIST_ORCH_CONTEXT_ENABLED, never persisted (PR_STATES_JSON unchanged).
@@ -34232,9 +34238,17 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     fi
 
     ISSUE_STATE=""
+    _iss_state_reason=""
     if printf '%s' "${_current_wave_details_json}" | jq -e --arg key "${inum}" 'has($key)' >/dev/null 2>&1; then
       ISSUE_STATE="$(printf '%s' "${_current_wave_details_json}" | jq -r --arg key "${inum}" '.[$key].state // empty' 2>/dev/null | grep -xE 'open|closed' || true)"
+      if [ -n "${ISSUE_STATE}" ]; then
+        _iss_state_reason="$(printf '%s' "${_current_wave_details_json}" | jq -r --arg key "${inum}" '.[$key].state_reason // empty' 2>/dev/null | grep -xE '[a-z_]{1,32}' || true)"
+      fi
     fi
+    if [ -n "${_iss_state_reason}" ]; then
+      ISSUE_STATE_REASONS_JSON="$(printf '%s' "${ISSUE_STATE_REASONS_JSON}" | jq -c --arg key "${inum}" --arg reason "${_iss_state_reason}" '. + {($key): $reason}' 2>/dev/null || printf '%s' "${ISSUE_STATE_REASONS_JSON}")"
+    fi
+    unset _iss_state_reason
     if [ -z "${ISSUE_STATE}" ]; then
       ISSUE_STATE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}" --jq '.state' | grep -xE 'open|closed' || echo "open")"
     fi
@@ -34370,6 +34384,9 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     fi
     LABELS_JSON="$(printf '%s' "${LABELS_JSON}" | jq -c --arg key "${_rb_reissue_num}" --argjson succ "${_rb_reissue_json}" '. + {($key): $succ.labels}' 2>/dev/null || printf '%s' "${LABELS_JSON}")"
     ISSUE_STATES_JSON="$(printf '%s' "${ISSUE_STATES_JSON}" | jq -c --arg key "${_rb_reissue_num}" --argjson succ "${_rb_reissue_json}" '. + {($key): $succ.state}' 2>/dev/null || printf '%s' "${ISSUE_STATES_JSON}")"
+    # Issue #10059: no reliable close reason for the adopted successor this
+    # tick; drop any stale one so the item fails closed (blocking).
+    ISSUE_STATE_REASONS_JSON="$(printf '%s' "${ISSUE_STATE_REASONS_JSON}" | jq -c --arg key "${_rb_reissue_num}" 'del(.[$key])' 2>/dev/null || echo '{}')"
     # A failed PR lookup must not read as merged:false (closed-without-merge
     # would let the wave judge open a duplicate redo).  Treat the successor as
     # open for this tick only; the next tick's reconcile reads its real state.
@@ -34409,6 +34426,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     --state-file "${STATE_FILE}" \
     --labels-json "${LABELS_JSON}" \
     --issue-states-json "${ISSUE_STATES_JSON}" \
+    --issue-state-reasons-json "${ISSUE_STATE_REASONS_JSON}" \
     --pr-states-json "${PR_STATES_JSON}" \
     --integration-ahead-by "${CWS_AHEAD_BY}")"
 
@@ -34417,6 +34435,9 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   echo "Wave status: ${WAVE_STATUS}"
   WAVE_COMPLETE="$(echo "${WAVE_STATUS}" | jq -r '.wave_complete')"
   ANY_FAILED="$(echo "${WAVE_STATUS}" | jq -r '.any_failed')"
+  # Issue #10059: read only by the completion-status comment and alert. Falls
+  # back to any_failed when the field is absent (older helper).
+  ANY_FAILED_BLOCKING="$(echo "${WAVE_STATUS}" | jq -r 'if has("any_failed_blocking") then .any_failed_blocking else .any_failed end' 2>/dev/null || echo "${ANY_FAILED}")"
   PROJECT_COMPLETE="$(echo "${WAVE_STATUS}" | jq -r '.project_complete')"
 
   # Ensure the integration→default PR exists as soon as the integration
@@ -34467,7 +34488,9 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     _csc_validation_recovery_count=0
   fi
   _completion_status_text="in-progress"
-  if [ "${ANY_FAILED}" = "true" ]; then
+  # Issue #10059: only blocking failures mark the project failed; items closed
+  # as already delivered fall through so the judge decides completion.
+  if [ "${ANY_FAILED_BLOCKING:-${ANY_FAILED}}" = "true" ]; then
     _completion_status_text="failed"
   elif [ "${PROJECT_STATUS:-}" = "in_progress" ] && [ "${_csc_validation_recovery_count}" -gt 0 ]; then
     _completion_status_text="in-progress"
@@ -34503,6 +34526,21 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       | select(.status == "closed" or .status == "implementation-failed")
       | "- #\(.github_issue // "?"): \(.status) (\(.decision_source // "unknown"))"]
     | join("\n")')"
+  # Issue #10059: when every closed/failed item was closed as already
+  # delivered, list them under their own heading instead of the failed one.
+  # A mix keeps today's failed list (all items) and wording.
+  _csc_delivered_lines=""
+  _csc_delivered_nums_json='[]'
+  if [ "${ANY_FAILED}" = "true" ] && [ "${ANY_FAILED_BLOCKING:-${ANY_FAILED}}" != "true" ]; then
+    _csc_delivered_lines="${_csc_failed_lines}"
+    _csc_delivered_lines="$(echo "${WAVE_STATUS}" | jq -r '
+      [.issues[]
+        | select(.closed_as_delivered == true)
+        | "- #\(.github_issue // "?"): \(.status) (\(.decision_source // "unknown"))"]
+      | join("\n")' 2>/dev/null || printf '%s' "${_csc_delivered_lines}")"
+    _csc_delivered_nums_json="$(echo "${WAVE_STATUS}" | jq -c '[.issues[] | select(.closed_as_delivered == true) | .github_issue | select(type == "number")] | unique' 2>/dev/null || echo '[]')"
+    _csc_failed_lines=""
+  fi
 
   _csc_body="## Completion status"$'\n\n'
   _csc_body+="**State:** \`${_completion_status_text}\`"$'\n'
@@ -34534,6 +34572,10 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     _csc_body+=$'\n'"**Wave issues closed without merge / implementation-failed:**"$'\n'"${_csc_failed_lines}"$'\n'
     _csc_body+=$'\n'"Project cannot complete until these are resolved (re-open, re-merge, or skip)."$'\n'
   fi
+  if [ -n "${_csc_delivered_lines}" ]; then
+    _csc_body+=$'\n'"**Wave issues closed as already delivered:**"$'\n'"${_csc_delivered_lines}"$'\n'
+    _csc_body+=$'\n'"These were closed as completed with \`ai:closed\` and no failure label; the project judge decides whether the project can complete."$'\n'
+  fi
   if [ -n "${_csc_skipped_lines}" ]; then
     _csc_body+=$'\n'"**Wave issues skipped:**"$'\n'"${_csc_skipped_lines}"$'\n'
     _csc_body+=$'\n'"Skipped issues are already accounted for and do not block completion."$'\n'
@@ -34549,7 +34591,12 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   # so the operator sees the alert as soon as ANY_FAILED first goes
   # true. Guarded by a state-file flag so we never alert more than once
   # per project for the same condition.
-  if [ "${ANY_FAILED}" = "true" ]; then
+  #
+  # Issue #10059: gated on ANY_FAILED_BLOCKING so items closed as already
+  # delivered (closed as completed, ai:closed, no blocking failure label) get
+  # the WARNING below instead. That path never sets
+  # completion_status_failure_alert_sent, so a later real failure still pages.
+  if [ "${ANY_FAILED_BLOCKING:-${ANY_FAILED}}" = "true" ]; then
     _csc_alert_sent="$(jq -r '.completion_status_failure_alert_sent // false' "${STATE_FILE}" 2>/dev/null || echo false)"
     if [ "${_csc_alert_sent}" != "true" ]; then
       tg_notify "Project #${TRACKING_NUM}: one or more wave PR(s) closed without merge — see the pinned 'Completion status' comment on the tracking issue for the full list. The project cannot complete until these are resolved." "CRITICAL"
@@ -34562,10 +34609,34 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       fi
     fi
     unset _csc_alert_sent
+  elif [ "${ANY_FAILED}" = "true" ]; then
+    # Issue #10059: one WARNING per project and delivered-closed item, deduped
+    # via completion_status_delivered_closed_alerted (array of issue numbers).
+    _csc_delivered_alerted_json="$(jq -c '(.completion_status_delivered_closed_alerted // []) | if type == "array" then [.[] | select(type == "number")] else [] end' "${STATE_FILE}" 2>/dev/null || echo '[]')"
+    [ -n "${_csc_delivered_alerted_json}" ] || _csc_delivered_alerted_json='[]'
+    _csc_delivered_new_json="$(jq -cn --argjson cur "${_csc_delivered_nums_json:-[]}" --argjson seen "${_csc_delivered_alerted_json}" '$cur - $seen' 2>/dev/null || echo '[]')"
+    _csc_delivered_csv="$(printf '%s' "${_csc_delivered_nums_json:-[]}" | jq -r 'map(tostring) | join(",")' 2>/dev/null || echo "")"
+    if [ "$(printf '%s' "${_csc_delivered_new_json}" | jq -r 'length' 2>/dev/null || echo 0)" -gt 0 ]; then
+      _csc_delivered_new_refs="$(printf '%s' "${_csc_delivered_new_json}" | jq -r 'map("#" + tostring) | join(", ")' 2>/dev/null || echo "")"
+      tg_notify "Project #${TRACKING_NUM}: wave item(s) ${_csc_delivered_new_refs} closed as already delivered (closed as completed, ai:closed, no failure label) without a merged PR. The project judge will decide whether the project can complete; see the pinned 'Completion status' comment." "WARNING"
+      if jq --argjson add "${_csc_delivered_new_json}" '.completion_status_delivered_closed_alerted = (((.completion_status_delivered_closed_alerted // []) | if type == "array" then [.[] | select(type == "number")] else [] end) + $add | unique)' "${STATE_FILE}" > "${STATE_FILE}.tmp" \
+        && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+        COMPLETION_STATUS_STATE_CHANGED="true"
+        echo "COMPLETION_DELIVERED_CLOSED tracking_issue=${TRACKING_NUM:-?} items=${_csc_delivered_csv} alert=sent"
+      else
+        rm -f "${STATE_FILE}.tmp" || true
+        echo "::warning::[completion-status] failed to persist completion_status_delivered_closed_alerted for issue #${TRACKING_NUM:-?}; the delivered-closed warning may repeat on a later tick."
+        echo "COMPLETION_DELIVERED_CLOSED tracking_issue=${TRACKING_NUM:-?} items=${_csc_delivered_csv} alert=persist_failed"
+      fi
+    else
+      echo "COMPLETION_DELIVERED_CLOSED tracking_issue=${TRACKING_NUM:-?} items=${_csc_delivered_csv} alert=already_sent"
+    fi
+    unset _csc_delivered_alerted_json _csc_delivered_new_json _csc_delivered_new_refs _csc_delivered_csv
   fi
 
   unset _completion_status_text _csc_integration_ahead_by _csc_integration_contained
   unset _csc_total_waves _csc_current_wave _csc_pending_lines _csc_failed_lines _csc_skipped_lines _csc_body _csc_validation_recovery_count _csc_effective_threshold
+  unset _csc_delivered_lines _csc_delivered_nums_json
 
   # Persist reconciled status decisions every cycle (not only narrow branches).
   RECONCILE_STATE_CHANGED=false
