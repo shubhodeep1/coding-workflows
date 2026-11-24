@@ -80,8 +80,11 @@ stage_switch_read()
 	# step's log header and has no `updated_at` for the wait time. One
 	# paginated listing (ceil(N/30) calls) per run is the smallest call that
 	# gives both; the raw listing is deleted right after the snapshot.
+	# `tojson` keeps one compact object per line: `gh api --jq` pretty-prints
+	# object results across several lines (see scripts/review_merge_train.sh),
+	# and the snapshot command parses the listing line by line.
 	gh api --paginate "repos/${GITHUB_REPOSITORY}/actions/variables?per_page=30" \
-		--jq '.variables[] | {name, value, updated_at}' > "${listing}" 2>"${stage_switch_dir}/listing.err"
+		--jq '.variables[] | {name, value, updated_at} | tojson' > "${listing}" 2>"${stage_switch_dir}/listing.err"
 	rc=$?
 	if [ "${rc}" -ne 0 ]; then
 		local gh_error=""

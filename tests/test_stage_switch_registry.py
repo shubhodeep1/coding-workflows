@@ -2,7 +2,7 @@
 
 Every `vars.<NAME>_ENABLED || 'true'` expression (also the chained form
 `vars.<NAME>_ENABLED || (...) || 'true'`) and every `vars.<NAME>_ENABLED !=
-'false'` test in .github/workflows/*.yml, and every `_ENABLED` row whose
+'false'` test in .github/workflows/*.yml and *.yaml, and every `_ENABLED` row whose
 default is `true` in the README "#### Variables" and "## Required Variables"
 tables, must be listed in the registry, so a new switch cannot be added without the stage switch
 watch covering it. Also locks the workflow wiring in workflow-log-analysis.yml.

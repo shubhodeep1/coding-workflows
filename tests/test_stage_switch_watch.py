@@ -231,6 +231,14 @@ def _wrapper(tmp_path: Path, command: str, env: dict):
 GH_OFF = "printf '%s\\n' '{\"name\":\"ALPHA_ENABLED\",\"value\":\"false\",\"updated_at\":\"2026-11-20T00:00:00Z\"}' '{\"name\":\"OTHER\",\"value\":\"hidden-value\",\"updated_at\":\"2026-11-20T00:00:00Z\"}'"
 
 
+def test_wrapper_listing_filter_emits_one_compact_object_per_line():
+	# `gh api --jq` pretty-prints object results across several lines; the
+	# snapshot command reads the listing line by line, so the filter must
+	# end in `tojson`.
+	text = SCRIPT_SH.read_text(encoding="utf-8")
+	assert "--jq '.variables[] | {name, value, updated_at} | tojson'" in text
+
+
 def test_wrapper_alerts_once_and_not_again_same_day(tmp_path):
 	env = _wrapper_env(tmp_path, GH_OFF)
 	read = _wrapper(tmp_path, "read", env)
