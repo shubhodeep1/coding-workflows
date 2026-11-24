@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":10062,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/10062\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/10068\",\"pr_number\":10068,\"branch\":\"ai/issue-10062\",\"run_id\":\"45450816833\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/45450816833\",\"changed_files\":[\".github/workflows/unblock_judge.yml\",\"agents.d/10062-unblock-nothing-to-implement-verified-close.md\",\"changelog.d/10062-unblock-nothing-to-implement-verified-close.md\",\"scripts/unblock_judge.sh\",\"tests/test_unblock_judge.py\"]}",
+  "fingerprint": "437caf38d36265289e00d5bab9e50ebef6cf7eeb7668a9c524908fc9889b2d14",
+  "lineage": {
+    "issue_number": 10062,
+    "parent_ids": [],
+    "pr_number": 10068,
+    "run_id": "45450816833",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45450816833",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/10068"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261124183811_5eea606b79",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10062,
+    "level": "run",
+    "pr_number": 10068,
+    "run_id": "45450816833"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #10062: https://github.com/shubhodeep1/coding-workflows/pull/10068",
+  "timestamps": {
+    "created_at": "2026-11-24T18:38:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
