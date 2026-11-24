@@ -477,6 +477,7 @@ if ! command -v _embed_input_file >/dev/null 2>&1; then
     local _cap="${2:-100000}"
     local _mode="${3:-head}"
     local _state _used _budget_remaining _effective_cap _size _emit_bytes
+    local _trim_count_file _shown_bytes _trim_py_ok
     if [ -z "${_p}" ] || [ ! -e "${_p}" ]; then printf '(missing)\n'; return 0; fi
     if [ ! -s "${_p}" ]; then printf '(empty)\n'; return 0; fi
 
@@ -508,23 +509,58 @@ if ! command -v _embed_input_file >/dev/null 2>&1; then
       cat "${_p}"
       _emit_bytes="${_size}"
     else
-      PYTHONDONTWRITEBYTECODE=1 python3 - "${_p}" "${_effective_cap}" 2>/dev/null <<'PY' || head -c "${_effective_cap}" "${_p}"
+      # Cut at a UTF-8 character boundary (#9261/#9949). python writes the
+      # number of bytes it emitted to a run-local temp file, so the marker and
+      # the prompt budget count the bytes actually shown. Fail open: when
+      # python3 fails, or mktemp cannot create the count file, keep the plain
+      # byte cut and count the cap; when python succeeds but reports no valid
+      # count, count the cap (its bytes are already out, so never re-emit them).
+      _trim_count_file="$(mktemp "${TMPDIR:-/tmp}/_embed_trim_count.XXXXXX" 2>/dev/null || true)"
+      _shown_bytes=""
+      _trim_py_ok=false
+      if [ -n "${_trim_count_file}" ] && PYTHONDONTWRITEBYTECODE=1 python3 - "${_p}" "${_effective_cap}" "${_trim_count_file}" 2>/dev/null <<'PY'
 import sys
 
 cap = int(sys.argv[2])
+count_path = sys.argv[3] if len(sys.argv) > 3 else ""
 read_cap = cap + 1 if cap > 0 else 0
 with open(sys.argv[1], 'rb') as fh:
     data = fh.read(read_cap)
 if cap > 0 and len(data) > cap:
     i = cap
-    while i > 0 and (data[i] & 0xC0) == 0x80:
+    steps = 0
+    # Step back over continuation bytes (0x80..0xBF), at most 3, the same
+    # bound as _embed_utf8_safe_cut in gh_helpers.sh. A longer run is
+    # malformed input: keep the byte cut so the prefix is never emptied.
+    while i > 0 and steps < 3 and (data[i] & 0xC0) == 0x80:
         i -= 1
+        steps += 1
+    if (data[i] & 0xC0) == 0x80:
+        i = cap
     data = data[:i]
+if count_path:
+    with open(count_path, 'w', encoding='ascii') as count_fh:
+        count_fh.write(f"{len(data)}\n")
 sys.stdout.buffer.write(data)
+sys.stdout.buffer.flush()
 PY
+      then
+        _trim_py_ok=true
+        if [ -n "${_trim_count_file}" ]; then
+          _shown_bytes="$(tr -d '[:space:]' < "${_trim_count_file}" 2>/dev/null || true)"
+        fi
+      else
+        head -c "${_effective_cap}" "${_p}"
+      fi
+      if [ -n "${_trim_count_file}" ]; then
+        rm -f "${_trim_count_file}" 2>/dev/null || true
+      fi
+      if [ "${_trim_py_ok}" != "true" ] || ! [[ "${_shown_bytes}" =~ ^[0-9]+$ ]] || [ "${_shown_bytes}" -gt "${_effective_cap}" ]; then
+        _shown_bytes="${_effective_cap}"
+      fi
       printf '\n[... TRUNCATED — file is %s bytes; first %s bytes shown above (mode=%s, per-file cap=%s, budget remaining was %s; fallback embedder) ...]\n' \
-        "${_size}" "${_effective_cap}" "${_mode}" "${_cap}" "${_budget_remaining}"
-      _emit_bytes="${_effective_cap}"
+        "${_size}" "${_shown_bytes}" "${_mode}" "${_cap}" "${_budget_remaining}"
+      _emit_bytes="${_shown_bytes}"
     fi
 
     if [[ "${_emit_bytes:-}" =~ ^[0-9]+$ ]] && [ "${_emit_bytes}" -gt 0 ]; then
@@ -2448,6 +2484,30 @@ rb_judge_merge_err_is_transient() {
     < <(head -c 65536 -- "${_rb_transient_file}" 2>/dev/null)
 }
 
+# Blocked-merge guard (#9939) before every direct (non --auto) merge. The
+# judge merges with the owner's admin GH_PAT, so a direct merge of a PR
+# GitHub reports as mergeable_state=blocked is a ruleset bypass. Wraps
+# _pr_sync_merge_blocked_guard (scripts/pr_checks_lib.sh): $1 is the PR's
+# REST JSON when the caller already holds a fresh copy, else the PR number
+# is passed (1 GET). Returns 1 and sets RB_SYNC_MERGE_DEFERRED=true when the
+# merge must wait; fails closed (defers) when the library did not load.
+rb_judge_sync_merge_guard() {
+  RB_SYNC_MERGE_DEFERRED="false"
+  if ! declare -F _pr_sync_merge_blocked_guard >/dev/null 2>&1; then
+    echo "SYNC_MERGE_BLOCKED_GUARD outcome=deferred pr=${PR_NUMBER:-unknown} head=${RB_JUDGED_HEAD_SHA:-unknown} state=unreadable blockers=unknown (pr_checks_lib.sh unavailable)"
+    echo "::warning::scripts/pr_checks_lib.sh is not loaded; the direct merge of PR #${PR_NUMBER:-unknown} is deferred (fail closed)."
+    SYNC_MERGE_BLOCKED_GUARD_STATE="unreadable"
+    SYNC_MERGE_BLOCKED_GUARD_BLOCKERS="unknown"
+    RB_SYNC_MERGE_DEFERRED="true"
+    return 1
+  fi
+  if ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_sync_merge_blocked_guard "${1:-${PR_NUMBER}}" "${PR_BASE_REF:-}"; then
+    RB_SYNC_MERGE_DEFERRED="true"
+    return 1
+  fi
+  return 0
+}
+
 # Called only after the site's own `gh pr merge` attempts all failed
 # (`<attempts> || rb_judge_merge_retry_transient <auto|direct> <path>`).
 # Non-transient failures return 1 at once with no extra API call, so the
@@ -2461,27 +2521,55 @@ rb_judge_merge_err_is_transient() {
 # At most 3 retries. Each prints one RB_JUDGE_MERGE_RETRY line. The retried
 # attempts overwrite the stderr files, so a final failure reports the last
 # error through rb_judge_merge_err_report as before.
+# #9939: guards its own direct retry with the mergeable_state / base ref read
+# by the same per-attempt PR read (no extra call). Once the blocked-merge
+# guard has deferred the direct merge (at the site or inside this loop),
+# --auto is the only merge path left: auto mode then retries only --auto,
+# and only while the --auto stderr is transient; direct mode returns 1.
+# Sets RB_MERGE_RETRY_GIVEUP to why it returned 1: non_transient, head_moved,
+# not_open, deferred (direct mode only) or exhausted; read by
+# rb_judge_deferred_merge_pending.
 rb_judge_merge_retry_transient() {
   local _rb_retry_mode="${1:-direct}" _rb_retry_path="${2:-unknown}"
   local _rb_retry_attempt=0 _rb_retry_delay="" _rb_retry_pr=""
   local _rb_retry_state="" _rb_retry_merged="" _rb_retry_auto="" _rb_retry_head=""
+  local _rb_retry_mergeable_state="" _rb_retry_base_ref="" _rb_retry_guard_json=""
+  local _rb_retry_auto_only="false"
+  RB_MERGE_RETRY_GIVEUP=""
+  if [ "${RB_SYNC_MERGE_DEFERRED:-false}" = "true" ]; then
+    RB_MERGE_RETRY_GIVEUP="deferred"
+    [ "${_rb_retry_mode}" = "auto" ] || return 1
+    _rb_retry_auto_only="true"
+  fi
   for _rb_retry_delay in 10 20 40; do
-    rb_judge_merge_err_is_transient || return 1
+    RB_MERGE_RETRY_GIVEUP="non_transient"
+    if [ "${_rb_retry_auto_only}" = "true" ]; then
+      # The direct merge never ran: judge the --auto attempt's stderr.
+      RB_MERGE_ERR_DIRECT_FILE="${RB_MERGE_ERR_AUTO_FILE:-/dev/null}" rb_judge_merge_err_is_transient || return 1
+    else
+      rb_judge_merge_err_is_transient || return 1
+    fi
     _rb_retry_attempt=$((_rb_retry_attempt + 1))
     echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 delay_s=${_rb_retry_delay} reason=transient"
     sleep "${_rb_retry_delay}"
-    _rb_retry_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.state, (.merged // false), (.auto_merge != null), .head.sha] | @tsv' 2>/dev/null)" || _rb_retry_pr=""
-    IFS=$'\t' read -r _rb_retry_state _rb_retry_merged _rb_retry_auto _rb_retry_head <<< "${_rb_retry_pr}" || true
+    _rb_retry_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.state, (.merged // false), (.auto_merge != null), .head.sha, (.mergeable_state // "none"), (.base.ref // "-")] | @tsv' 2>/dev/null)" || _rb_retry_pr=""
+    _rb_retry_mergeable_state=""; _rb_retry_base_ref=""
+    # Non-empty placeholders ("none", "-"): tab is IFS whitespace, so an
+    # empty field would collapse and shift .base.ref into the mergeable
+    # state (#9939). "none" lands in the guard's defer arm.
+    IFS=$'\t' read -r _rb_retry_state _rb_retry_merged _rb_retry_auto _rb_retry_head _rb_retry_mergeable_state _rb_retry_base_ref <<< "${_rb_retry_pr}" || true
+    [ "${_rb_retry_base_ref}" != "-" ] || _rb_retry_base_ref=""
     # gh api prints an HTTP error's response body to stdout (--jq is skipped),
     # so a failed read or a state other than open/closed counts as unreadable.
     case "${_rb_retry_state}" in
       open|closed) ;;
-      *) _rb_retry_state=""; _rb_retry_merged=""; _rb_retry_auto=""; _rb_retry_head="" ;;
+      *) _rb_retry_state=""; _rb_retry_merged=""; _rb_retry_auto=""; _rb_retry_head=""; _rb_retry_mergeable_state=""; _rb_retry_base_ref="" ;;
     esac
     # Head first: a PR merged at a head other than the judged one is not the
     # judge's merge, so it stays a failure (head_moved).
     if [ -n "${_rb_retry_head}" ] && [ "${_rb_retry_head}" != "${RB_JUDGED_HEAD_SHA:-}" ]; then
       echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=head_moved"
+      RB_MERGE_RETRY_GIVEUP="head_moved"
       return 1
     fi
     if [ "${_rb_retry_merged}" = "true" ]; then
@@ -2490,6 +2578,7 @@ rb_judge_merge_retry_transient() {
     fi
     if [ -n "${_rb_retry_state}" ] && [ "${_rb_retry_state}" != "open" ]; then
       echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=not_open"
+      RB_MERGE_RETRY_GIVEUP="not_open"
       return 1
     fi
     if [ "${_rb_retry_mode}" = "auto" ] && [ "${_rb_retry_auto}" = "true" ] && [ "${_rb_retry_head}" = "${RB_JUDGED_HEAD_SHA:-}" ]; then
@@ -2498,10 +2587,61 @@ rb_judge_merge_retry_transient() {
     fi
     if [ "${_rb_retry_mode}" = "auto" ]; then
       gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_AUTO_FILE}" && return 0
+      # Deferred: never a direct merge, only the bounded --auto retries.
+      [ "${_rb_retry_auto_only}" != "true" ] || continue
+    fi
+    # Guard the direct retry with this attempt's PR read (#9939). An
+    # unreadable read passes `{}`, so the guard fails closed (defers).
+    _rb_retry_guard_json="{}"
+    if [ -n "${_rb_retry_state}" ]; then
+      _rb_retry_guard_json="$(jq -cn --arg n "${PR_NUMBER}" --arg sha "${_rb_retry_head}" --arg ms "${_rb_retry_mergeable_state}" --arg base "${_rb_retry_base_ref:-${PR_BASE_REF:-}}" \
+        '{number: ($n | tonumber? // $n), head: {sha: $sha}, base: {ref: $base}, mergeable_state: (if $ms == "" then null else $ms end)}' 2>/dev/null)" || _rb_retry_guard_json="{}"
+    fi
+    if ! rb_judge_sync_merge_guard "${_rb_retry_guard_json:-"{}"}"; then
+      RB_MERGE_RETRY_GIVEUP="deferred"
+      [ "${_rb_retry_mode}" = "auto" ] || return 1
+      _rb_retry_auto_only="true"
+      continue
     fi
     gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_DIRECT_FILE}" && return 0
   done
+  # The last --auto attempt is never re-checked inside the loop: a
+  # non-transient refusal there is non_transient, not exhausted (#9939).
+  if [ "${_rb_retry_auto_only}" = "true" ] \
+    && ! RB_MERGE_ERR_DIRECT_FILE="${RB_MERGE_ERR_AUTO_FILE:-/dev/null}" rb_judge_merge_err_is_transient; then
+    RB_MERGE_RETRY_GIVEUP="non_transient"
+    return 1
+  fi
+  RB_MERGE_RETRY_GIVEUP="exhausted"
   return 1
+}
+
+# #9939: the `merge` / `terminal` chains call this only after the
+# blocked-merge guard deferred the direct merge and the --auto request (the
+# only merge path left) failed too. Returns 0 when that is a wait
+# (RB_MERGE_STATUS=mergeability_pending, stall recovery re-fires the judge):
+# the retry ran out on transient --auto errors, the --auto request left no
+# stderr, or GitHub had not computed mergeable_state yet. Returns 1 (the
+# site's merge_failed branch and its warning) when the PR closed or its head
+# moved during the retry, or GitHub refused --auto for a non-transient
+# reason while it reported the PR blocked: no later pass can merge it then.
+# Empties the direct stderr first: a direct attempt before a deferral inside
+# the retry is stale, so the error report names only the --auto refusal.
+rb_judge_deferred_merge_pending() {
+  if [ -n "${RB_MERGE_ERR_DIR:-}" ] && [ -f "${RB_MERGE_ERR_DIRECT_FILE:-/dev/null}" ] && [ ! -L "${RB_MERGE_ERR_DIRECT_FILE}" ]; then
+    : > "${RB_MERGE_ERR_DIRECT_FILE}" 2>/dev/null || true
+  fi
+  case "${RB_MERGE_RETRY_GIVEUP:-}" in
+    head_moved|not_open)
+      return 1
+      ;;
+    non_transient)
+      if [ "${SYNC_MERGE_BLOCKED_GUARD_STATE:-}" = "blocked" ] && [ -s "${RB_MERGE_ERR_AUTO_FILE:-/dev/null}" ]; then
+        return 1
+      fi
+      ;;
+  esac
+  return 0
 }
 # END rb-judge merge error capture (#7659)
 
@@ -2606,13 +2746,27 @@ case "${RB_ACTION}" in
           fi
         else
           rb_judge_merge_err_open
+          # Auto-merge first; the direct fallback runs only when GitHub does
+          # not report the PR blocked (#9939 blocked-merge guard), so the
+          # admin GH_PAT never bypasses a ruleset rule. The head-gate status
+          # post stays the line right before the merge (pipeline contract).
+          RB_SYNC_MERGE_DEFERRED="false"
           review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
           if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_AUTO_FILE}" \
-            || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_DIRECT_FILE}" \
+            || { rb_judge_sync_merge_guard && gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_DIRECT_FILE}"; } \
             || rb_judge_merge_retry_transient auto merge; then
             rb_judge_merge_err_close
             RB_MERGE_READY_LABEL_ALLOWED="true"
             RB_MERGE_STATUS="merge_requested"
+          elif [ "${RB_SYNC_MERGE_DEFERRED:-false}" = "true" ] && rb_judge_deferred_merge_pending; then
+            # The --auto request failed too (#9939): it was the only merge
+            # path left, so record why before the stderr files go away.
+            if [ -s "${RB_MERGE_ERR_AUTO_FILE:-/dev/null}" ]; then
+              rb_judge_merge_err_report merge
+            fi
+            rb_judge_merge_err_close
+            echo "Review-blocked judge: PR #${PR_NUMBER} merge deferred and auto-merge not enabled; GitHub reports mergeable_state=${SYNC_MERGE_BLOCKED_GUARD_STATE:-unknown} (blockers: ${SYNC_MERGE_BLOCKED_GUARD_BLOCKERS:-unknown}). Re-dispatched when it can merge."
+            RB_MERGE_STATUS="mergeability_pending"
           else
             rb_judge_merge_err_report merge
             echo "::warning::Review-blocked judge merge failed for evaluated head ${RB_JUDGED_HEAD_SHA}; withholding ai:ready-to-merge from linked issues.${RB_MERGE_ERROR_TEXT:+ gh error: ${RB_MERGE_ERROR_TEXT}}"
@@ -2705,13 +2859,27 @@ case "${RB_ACTION}" in
           fi
         else
           rb_judge_merge_err_open
+          # Auto-merge first; the direct fallback runs only when GitHub does
+          # not report the PR blocked (#9939 blocked-merge guard), so the
+          # admin GH_PAT never bypasses a ruleset rule. The head-gate status
+          # post stays the line right before the merge (pipeline contract).
+          RB_SYNC_MERGE_DEFERRED="false"
           review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
           if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_AUTO_FILE}" \
-            || gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_DIRECT_FILE}" \
+            || { rb_judge_sync_merge_guard && gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_DIRECT_FILE}"; } \
             || rb_judge_merge_retry_transient auto terminal; then
             rb_judge_merge_err_close
             RB_MERGE_READY_LABEL_ALLOWED="true"
             RB_MERGE_STATUS="merge_requested"
+          elif [ "${RB_SYNC_MERGE_DEFERRED:-false}" = "true" ] && rb_judge_deferred_merge_pending; then
+            # The --auto request failed too (#9939): it was the only merge
+            # path left, so record why before the stderr files go away.
+            if [ -s "${RB_MERGE_ERR_AUTO_FILE:-/dev/null}" ]; then
+              rb_judge_merge_err_report terminal
+            fi
+            rb_judge_merge_err_close
+            echo "Review-blocked judge: PR #${PR_NUMBER} merge deferred and auto-merge not enabled; GitHub reports mergeable_state=${SYNC_MERGE_BLOCKED_GUARD_STATE:-unknown} (blockers: ${SYNC_MERGE_BLOCKED_GUARD_BLOCKERS:-unknown}). Re-dispatched when it can merge."
+            RB_MERGE_STATUS="mergeability_pending"
           else
             rb_judge_merge_err_report terminal
             echo "::warning::Review-blocked judge terminal merge failed for evaluated head ${RB_JUDGED_HEAD_SHA}; withholding ai:ready-to-merge from linked issues.${RB_MERGE_ERROR_TEXT:+ gh error: ${RB_MERGE_ERROR_TEXT}}"
@@ -3266,11 +3434,23 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
             rb_judge_merge_err_open
             _match_head_arg=(--match-head-commit "${RB_JUDGED_HEAD_SHA}")
             review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
-            if gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" "${_match_head_arg[@]}" 2>"${RB_MERGE_ERR_DIRECT_FILE}" \
+            # #9939: never merge synchronously while GitHub reports the PR
+            # blocked (an admin GH_PAT merge would bypass the ruleset).
+            RB_SYNC_MERGE_DEFERRED="false"
+            if ! rb_judge_sync_merge_guard; then
+              rb_judge_merge_err_close
+              echo "::warning::PR #${PR_NUMBER} sync merge deferred: GitHub reports mergeable_state=${SYNC_MERGE_BLOCKED_GUARD_STATE:-unknown} (blockers: ${SYNC_MERGE_BLOCKED_GUARD_BLOCKERS:-unknown}). Leaving linked issues in ai:review-blocked — stall recovery will re-fire the judge."
+              echo "judge_skip_reason=mergeability_pending" >> "$GITHUB_OUTPUT"
+            elif gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" "${_match_head_arg[@]}" 2>"${RB_MERGE_ERR_DIRECT_FILE}" \
               || rb_judge_merge_retry_transient direct sync; then
               rb_judge_merge_err_close
               echo "PR #${PR_NUMBER} merged synchronously."
               MERGE_CONFIRMED="true"
+            elif [ "${RB_SYNC_MERGE_DEFERRED:-false}" = "true" ]; then
+              # The guard inside the transient retry deferred (#9939).
+              rb_judge_merge_err_close
+              echo "::warning::PR #${PR_NUMBER} sync merge deferred: GitHub reports mergeable_state=${SYNC_MERGE_BLOCKED_GUARD_STATE:-unknown} (blockers: ${SYNC_MERGE_BLOCKED_GUARD_BLOCKERS:-unknown}). Leaving linked issues in ai:review-blocked — stall recovery will re-fire the judge."
+              echo "judge_skip_reason=mergeability_pending" >> "$GITHUB_OUTPUT"
             else
               rb_judge_merge_err_report sync
               echo "::warning::PR #${PR_NUMBER} sync merge failed despite passing check-runs (typically: branch protection rules / merge queue / permissions / 422 / concurrent push changing HEAD). Leaving linked issues in ai:review-blocked — stall recovery will re-fire the judge.${RB_MERGE_ERROR_TEXT:+ gh error: ${RB_MERGE_ERROR_TEXT}}"

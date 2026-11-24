@@ -284,7 +284,11 @@ jobs:
     # in test-and-mark-stable run 39526632477 (2026-10-21, v1.37.0 attempt):
     # orchestrate-poll took 39.5 minutes and unit tests had run 19 more. The
     # prior release (run 39213880700, 2026-10-19) already used 56 of 60.
-    timeout-minutes: 90
+    # 135, not 90: run 44689548109 (2026-11-20, v1.47.6) timed out at 90 in
+    # Unit tests: orchestrate-poll 52.7 min, unit tests ~45 min, ~100 min
+    # total; the 2026-11-17 run 44093205767 already used 88 of 90. 135 keeps
+    # at least 25% headroom (CLAUDE.md §33).
+    timeout-minutes: 135
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5

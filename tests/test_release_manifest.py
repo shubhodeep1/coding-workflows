@@ -46,7 +46,7 @@ def _fixture(tmp_path: Path) -> Path:
 	_write(root, "workflow-templates/audit-gate/contract.json", "{}\n")
 	_write(root, "workflow-templates/validation-harness/ignored.txt", "not attested\n")
 	(root / "workflow-templates" / "CLAUDE.md").symlink_to("../CLAUDE.md")
-	for name in ("workflow_wrapper_refs.py", "apply_audit_gate_assets.py", "assemble_changelog.py", "assemble_agents.py", "verify_release_manifest.py", "release_manifest.py", "lint_pr_body_auto_close.py"):
+	for name in ("workflow_wrapper_refs.py", "apply_audit_gate_assets.py", "assemble_changelog.py", "assemble_agents.py", "verify_release_manifest.py", "release_manifest.py", "lint_pr_body_auto_close.py", "sync_dependabot_exclusions.py"):
 		_write(root, f"scripts/{name}", f"# {name}\n", 0o755)
 	_write(root, "scripts/tg_helpers.sh", "# tg\n")
 	_write(root, "scripts/unrelated.py", "# not attested\n")
@@ -284,6 +284,7 @@ def test_real_repo_tree(tmp_path: Path) -> None:
 		"scripts/release_manifest.py",
 		"scripts/lint_pr_body_auto_close.py",
 		"scripts/tg_helpers.sh",
+		"scripts/sync_dependabot_exclusions.py",
 		"workflow-templates/audit-gate/contract.json",
 	):
 		assert required in paths, required
@@ -304,6 +305,7 @@ def test_surface_rules_track_the_updater() -> None:
 		"Assemble agents.md fragments",
 		"Verify attested release manifest",
 		"Send Telegram notification",
+		"Sync Dependabot exclusions for managed wrappers",
 	):
 		assert f"name: {step}" in text, step
 	for needle in (
@@ -322,5 +324,6 @@ def test_surface_rules_track_the_updater() -> None:
 		"scripts/release_manifest.py",
 		"scripts/lint_pr_body_auto_close.py",
 		"scripts/tg_helpers.sh",
+		"scripts/sync_dependabot_exclusions.py",
 	):
 		assert needle in text, needle
