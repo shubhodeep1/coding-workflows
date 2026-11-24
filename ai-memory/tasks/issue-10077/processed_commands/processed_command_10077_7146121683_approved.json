@@ -5,13 +5,25 @@
   "entry_id": "processed_command_10077_7146121683_approved",
   "issue_number": 10077,
   "metadata": {
+    "branch": "ai/issue-10077",
+    "changed_files": [
+      "agents.d/10077-stall-escalate-human-comment.md",
+      "changelog.d/10077-stall-escalate-human-comment.md",
+      "scripts/orchestrate_poll_process.sh",
+      "tests/test_orchestrate_poll_process.py"
+    ],
+    "issue_number": 10077,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/10077",
+    "pr_number": 10079,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/10079",
+    "run_attempt": "1",
+    "run_id": "45500108983",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/45500108983"
   },
   "run_attempt": 1,
   "run_id": "45500108983",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-24T22:24:34Z",
+  "status": "completed",
+  "timestamp": "2026-11-24T22:58:36Z",
   "workflow": "implement"
 }
