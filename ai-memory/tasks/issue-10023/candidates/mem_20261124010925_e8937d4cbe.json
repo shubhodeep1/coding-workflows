@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\n\nRATIONALE:\nQ1: The hand-back should defer only when the sweep is certain to re-run the attempt. `scripts/review_final_ci_failed.sh` (`review_final_ci_failed_infra_verdict`, lines 72-98) already gets that decision from `ci_cancelled_rerun.py classify-run`, the same classifier the sweep uses. That classifier returns `abandoned` only for cancelled jobs with no timeout annotation (`shutdown_only_annotations`, `scripts/ci_cancelled_rerun.py` lines 195-200), so keying G4 on that verdict keeps the two automations in agreement. Option B breaks the issue's non-goal \"Changing what `ci_cancelled_rerun.py` re-runs\". Option C drops an explicit goal, while G1\u2013G3 already stop the #9725 failure (a repair on a head that turned green) no matter how the attempt failed.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/review_final_ci_failed.sh (`review_final_ci_failed_infra_verdict`, the deferral block around lines 177-183, the log contract at line 57)\n    - scripts/ci_cancelled_rerun.py (`INFRA_VERDICTS` line 147, `shutdown_only_annotations` lines 195-200, `classify_runner_shutdown` returning `abandoned` around line 535, `classify-run` CLI line 682)\n    - tests/test_review_final_ci.py (existing hand-back tests to extend)\n  steps:\n    - Keep the deferral condition the existing classifier verdict on attempt 1 (`shutdown|action_resolution|checkout_fetch|abandoned`); do not change `classify-run` or what the sweep re-runs.\n    - When the verdict is `abandoned` (only cancelled jobs, no timeout annotation, no failed test), also emit `REVIEW_FINAL_CI_FAILED pr=<n> head=<sha> outcome=deferred reason=cancelled_jobs_rerun`. Keep the existing `outcome=infra_rerun_deferred reason=abandoned` line and its tokens unchanged (\u00a76, add alongside). Add `deferred` to the outcome list in the header log contract.\n    - A job cancelled at its `timeout-minutes` limit carries a timeout annotation, so its verdict is `genuine` and it keeps today's hand-back. So do attempt >= 2, a classifier error or timeout, and switches set to off.\n    - Use the jobs and annotation reads `classify-run` already makes. Add no new API call, job or workflow, and put all logic in `scripts/`, not in `ci.yml`.\n    - Tests: attempt 1 with only abandoned (no-timeout) cancelled jobs logs `outcome=deferred reason=cancelled_jobs_rerun` and dispatches nothing. A timed-out job, a failed test job, attempt 2, or a classifier failure each hand back as today.\n    - G1\u2013G3 (the gate skip with `reason=final_ci_now_green`, and the repair step's re-check before the push) are unchanged and are what cover the timed-out #9725 case.\n  replaces_acceptance_criterion: G4's \"only jobs that were cancelled or timed out\" narrows to \"only jobs the shared classifier reports as `abandoned` (cancelled without a timeout annotation)\". Timed-out jobs hand back as today.\n  equivalence_argument: G4 wants the two automations not to both act on one failed attempt. Deferring on exactly the verdict the sweep re-runs on means a deferral always has a matching re-run and a hand-back always means the sweep skips. When a timed-out attempt is handed back and later turns green some other way, G1\u2013G3 stop the repair from replacing the green head.\n  reversibility: If a human later wants timeouts deferred too, adding a timeout verdict to `classify-run` (option B) is purely additive. The new `deferred` log line can be removed without touching the existing `infra_rerun_deferred` contract.",
+  "fingerprint": "052e69cc8d41823469e8f819c23d19e518575974ab11d048cc7675115a76b86b",
+  "lineage": {
+    "issue_number": 10023,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45299997350",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45299997350",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10023"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261124010925_e8937d4cbe",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10023,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45299997350"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #10023",
+  "timestamps": {
+    "created_at": "2026-11-24T01:09:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
