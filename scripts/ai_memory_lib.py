@@ -3349,6 +3349,16 @@ _MEMORY_READ_RETRY_ATTEMPTS = 3
 _MEMORY_READ_RETRY_BACKOFF_BASE_SECONDS = 5.0
 _MEMORY_READ_RETRY_BACKOFF_CAP_SECONDS = 20.0
 _MEMORY_READ_RETRY_TRANSIENT_REASONS = frozenset({"rate_limited", "network"})
+# One budget per step: when the write clone ("write-clone") has just used all
+# its attempts on a transient failure, the next read clone ("read-clone") in
+# this process within the window fails at once without cloning. That keeps a
+# claim whose recovery duplicate-check follows an exhausted write clone at 3
+# clone attempts in total, as issue #10052 asks, instead of 6. The skipped
+# read raises MemoryGitError, so the claim still fails closed. The marker is
+# consumed by that one read and cleared by any successful clone, so a
+# long-running process is never left unable to read.
+_MEMORY_READ_RETRY_SKIP_WINDOW_SECONDS = 60.0
+_memory_write_clone_exhausted_at: float | None = None
 
 
 def _push_retry_backoff_seconds(
@@ -3539,13 +3549,27 @@ def _run_memory_read_with_retry(read: Callable[[], Any], *, target: str) -> Any:
     and integers (no git output, URL or credential). The final error is
     re-raised with URLs and token values redacted.
     """
+    global _memory_write_clone_exhausted_at
+    if target == "read-clone" and _memory_write_clone_exhausted_at is not None:
+        exhausted_age = time.monotonic() - _memory_write_clone_exhausted_at
+        _memory_write_clone_exhausted_at = None
+        if 0.0 <= exhausted_age < _MEMORY_READ_RETRY_SKIP_WINDOW_SECONDS:
+            raise MemoryGitError(
+                "Unable to read memory branch: skipped, the memory-branch clone in this step "
+                f"already used all {_MEMORY_READ_RETRY_ATTEMPTS} attempts on a transient failure"
+            )
     attempt = 1
     while True:
         try:
-            return read()
+            result = read()
+            _memory_write_clone_exhausted_at = None
+            return result
         except MemoryGitError as exc:
             detail = str(exc)
-            if attempt >= _MEMORY_READ_RETRY_ATTEMPTS or not _is_transient_memory_read_failure(detail):
+            transient = _is_transient_memory_read_failure(detail)
+            if attempt >= _MEMORY_READ_RETRY_ATTEMPTS or not transient:
+                if transient and target == "write-clone":
+                    _memory_write_clone_exhausted_at = time.monotonic()
                 raise MemoryGitError(_redact_memory_push_stderr(detail)) from None
             telemetry = {
                 "op": "memory-read-retry",

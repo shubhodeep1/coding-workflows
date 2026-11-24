@@ -34,6 +34,21 @@ ai_memory_lib = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = ai_memory_lib
 spec.loader.exec_module(ai_memory_lib)
 
+# The claim CLI binds its ai_memory_lib names at import time, so load it now,
+# while sys.modules["ai_memory_lib"] is this file's module instance.
+CLI_MODULE_PATH = REPO_ROOT / "scripts" / "ai_memory.py"
+cli_spec = importlib.util.spec_from_file_location("ai_memory_read_retry_cli", CLI_MODULE_PATH)
+assert cli_spec is not None and cli_spec.loader is not None
+ai_memory_cli = importlib.util.module_from_spec(cli_spec)
+cli_spec.loader.exec_module(ai_memory_cli)
+
+
+@pytest.fixture(autouse=True)
+def _reset_write_clone_exhausted_marker():
+	ai_memory_lib._memory_write_clone_exhausted_at = None
+	yield
+	ai_memory_lib._memory_write_clone_exhausted_at = None
+
 
 FAKE_TOKEN = "ghs_FAKEtoken10052abcdef"
 TOKEN_URL = f"https://x-access-token:{FAKE_TOKEN}@github.com/o/r"
@@ -416,3 +431,108 @@ def test_fast_clone_checkout_failure_removes_temp_dir() -> None:
 	assert [call[0] for call in calls].count("clone") == 1
 	assert created
 	assert not any(p.exists() for p in created)
+
+
+def test_read_after_exhausted_write_clone_is_skipped(monkeypatch) -> None:
+	# The claim's recovery duplicate-check runs read_memory_root_from_branch
+	# right after the write clone used its 3 attempts: it must not add 3 more.
+	monkeypatch.setenv("GH_TOKEN", FAKE_TOKEN)
+	_result, exc, counters = _run_persist([BARE_403_STDERR] * 5)
+	assert exc is not None
+	assert counters["clone"] == 3
+	path, read_exc, read_counters = _run_read([(128, BARE_403_STDERR)] * 5)
+	assert path is None
+	assert read_exc is not None
+	assert read_counters["clone"] == 0
+	assert read_counters["sleep"] == 0
+	assert str(read_exc).startswith("Unable to read memory branch")
+	# The marker is consumed: the next read clones (and retries) again.
+	path, read_exc, read_counters = _run_read([(128, BARE_403_STDERR), (0, "")])
+	try:
+		assert read_exc is None, read_exc
+		assert read_counters["clone"] == 2
+	finally:
+		if path is not None:
+			shutil.rmtree(path, ignore_errors=True)
+
+
+def test_read_after_permanent_write_failure_still_clones() -> None:
+	_result, exc, counters = _run_persist([PERMISSION_DENIED_STDERR])
+	assert exc is not None
+	assert counters["clone"] == 1
+	assert ai_memory_lib._memory_write_clone_exhausted_at is None
+	_path, read_exc, read_counters = _run_read([(128, PERMISSION_DENIED_STDERR)])
+	assert read_exc is not None
+	assert read_counters["clone"] == 1
+
+
+def test_read_skip_marker_expires_after_window() -> None:
+	ai_memory_lib._memory_write_clone_exhausted_at = (
+		ai_memory_lib.time.monotonic() - ai_memory_lib._MEMORY_READ_RETRY_SKIP_WINDOW_SECONDS - 1.0
+	)
+	path, exc, counters = _run_read([(0, "")])
+	try:
+		assert exc is None, exc
+		assert counters["clone"] == 1
+	finally:
+		if path is not None:
+			shutil.rmtree(path, ignore_errors=True)
+
+
+def test_claim_cli_persistent_403_makes_three_clone_attempts_in_total(monkeypatch, capsys) -> None:
+	import argparse
+
+	monkeypatch.setenv("GH_TOKEN", FAKE_TOKEN)
+	counters = {"write_clone": 0, "read_clone": 0, "sleep": 0, "push": 0}
+
+	def fake_clone(_repo_root, _memory_branch):
+		counters["write_clone"] += 1
+		raise ai_memory_lib.MemoryGitError(_write_clone_error(BARE_403_STDERR))
+
+	def fake_run_git(cwd, args, check: bool = True, **_kwargs):
+		if args and args[0] == "clone":
+			counters["read_clone"] += 1
+			return _FakeProc(returncode=128, stderr=BARE_403_STDERR)
+		if args and args[0] == "push":
+			counters["push"] += 1
+		return _FakeProc(returncode=0)
+
+	def fake_sleep(_seconds):
+		counters["sleep"] += 1
+
+	args = argparse.Namespace(
+		repo_root=str(REPO_ROOT),
+		memory_branch="ai-memory",
+		memory_root="ai-memory",
+		push_retries=16,
+		enabled=True,
+		retrieval_profiles="ai-memory/config/retrieval_profiles.v1.json",
+		issue_number=10048,
+		comment_id=123456,
+		command="/approved",
+		workflow="implement",
+		actor="someone",
+		run_id="45408016593",
+		run_attempt=1,
+		metadata_json=None,
+	)
+	with _patched_module_attrs(
+		ai_memory_lib,
+		_clone_for_memory_branch=fake_clone,
+		_run_git=fake_run_git,
+		_resolve_origin_url=lambda _repo_root: TOKEN_URL,
+	), _patched_module_attrs(ai_memory_lib.time, sleep=fake_sleep), pytest.raises(ai_memory_lib.MemoryGitError) as excinfo:
+		ai_memory_cli.cmd_processed_command_claim(args)
+	assert counters["write_clone"] + counters["read_clone"] == 3
+	assert counters["read_clone"] == 0
+	assert counters["sleep"] == 2
+	assert counters["push"] == 0
+	message = str(excinfo.value)
+	assert message.startswith("git clone")
+	assert "returned error: 403" in message
+	assert "https://" not in message
+	assert FAKE_TOKEN not in message
+	stderr = capsys.readouterr().err
+	assert "recovery duplicate-check failed" in stderr
+	assert "https://" not in stderr
+	assert FAKE_TOKEN not in stderr
