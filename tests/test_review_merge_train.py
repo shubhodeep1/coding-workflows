@@ -3393,8 +3393,8 @@ def test_merge_lease_tick_metrics_are_additive_and_guarded():
 		# queue_len= to the grant lines; the existing fields are unchanged.
 		'_mt_log "MERGE_LEASE pr=${MERGE_LEASE_PR} base=${tick_base} mode=tick outcome=released reason=${tick_reason} held_s=${tick_rel_held:--} merged=${tick_merged}"',
 		'_mt_log "MERGE_LEASE pr=- base=${tick_base} mode=tick outcome=no_waiter reason=lease_free"',
-		'_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=first_in_queue${tick_queue_len_field}"',
-		'_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=dispatch_failed_sweep_retries${tick_queue_len_field}"',
+		'_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=first_in_queue${tick_queue_len_field}${tick_gate_field}"',
+		'_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=dispatch_failed_sweep_retries${tick_queue_len_field}${tick_gate_field}"',
 		'_mt_warn "MERGE_LEASE mode=tick outcome=unavailable reason=refs_list_failed (no lease freed or granted this tick)"',
 		'_mt_warn "MERGE_LEASE base=${tick_base} mode=tick outcome=unavailable reason=read_failed"',
 	):
@@ -3480,7 +3480,7 @@ def test_merge_lease_tick_phase_5_is_guarded_and_keeps_the_single_holder_lines()
 	assert ('if [ "${tick_p5_lib}" = 1 ] && { [ "${tick_max_holders}" -gt 1 ] || [ "${MERGE_LEASE_HOLDER_COUNT:-0}" -gt 1 ]; }; then'
 		in body)
 	assert body.index("_mt_merge_lease_tick_multi ") < body.index('if [ "${MERGE_LEASE_STATE}" = "held" ]; then')
-	assert '_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=first_in_queue${tick_queue_len_field}"' in body
+	assert '_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=first_in_queue${tick_queue_len_field}${tick_gate_field}"' in body
 	assert " holders=" not in body
 	multi_start = text.index("_mt_merge_lease_tick_multi()\n{")
 	multi = text[multi_start:text.index("\n}\n", multi_start)]
@@ -3522,3 +3522,96 @@ def test_merge_lease_queue_ranks_forward_merge_rows_from_the_train_listing():
 	assert _merge_lease_queue_first_from_train_rows([pr(5, "ai/issue-5"), pr(12, "auto/forward-merge-stable-1-1", "x/r")]) == "5"
 	# The kill switch restores number order.
 	assert _merge_lease_queue_first_from_train_rows(listing, {"MERGE_LEASE_PRIORITY_HEAD_PREFIXES": "none"}) == "5"
+
+
+def _mt_dispatch_rb_judge_run(tmp_path: Path, pr: str, fail_judge: bool = False, fail_force: bool = False) -> tuple[subprocess.CompletedProcess, list[str]]:
+	"""Source the train script without its subcommand dispatch and call
+	_mt_dispatch_rb_judge with a logging `gh` stub (issue #9987)."""
+	text = SCRIPT.read_text()
+	cut = text.index('case "${MT_SUBCOMMAND}" in\n\tgate) _mt_gate ;;')
+	lib = tmp_path / "train_lib.sh"
+	lib.write_text(text[:cut])
+	bindir = tmp_path / "rbj_bin"
+	bindir.mkdir()
+	log = tmp_path / "rbj_gh.log"
+	gh = bindir / "gh"
+	fail_line = 'case "$*" in *review_rb_judge_dispatch.yml*) exit 1 ;; esac\n' if fail_judge else ""
+	if fail_force:
+		fail_line += 'case "$*" in *force_rb_judge=true*) exit 1 ;; esac\n'
+	gh.write_text("#!/usr/bin/env bash\n"
+		f"printf '%s\\n' \"$*\" >> {str(log)!r}\n"
+		+ fail_line
+		+ "exit 0\n")
+	gh.chmod(0o755)
+	env = {"PATH": f"{bindir}:{os.environ.get('PATH', '/usr/bin:/bin')}", "GITHUB_REPOSITORY": "o/r",
+		"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"), "GH_RETRY_MAX_ATTEMPTS": "1"}
+	res = subprocess.run(["bash", "-c", f"source {str(lib)!r}\nset +e\ngh_retry() {{ \"$@\"; }}\n"
+		f"_mt_dispatch_rb_judge {pr} ai/issue-5; echo rc=$?"], env=env, capture_output=True, text=True, timeout=60)
+	return res, (log.read_text().splitlines() if log.exists() else [])
+
+
+def test_judge_decision_grant_dispatches_the_judge_workflow_once(tmp_path: Path) -> None:
+	"""Issue #9987: a judge-decision grant dispatches one judge-only run: a
+	`[pr:<n>]`-titled review wrapper with force_rb_judge=true and
+	allow_workflow_edits=false, with only the validated PR number."""
+	res, calls = _mt_dispatch_rb_judge_run(tmp_path, "5")
+	out = res.stdout + res.stderr
+	assert "rc=0" in out, out
+	assert calls == ["workflow run ai-review.yml --repo o/r -f pr_number=5 -f force_rb_judge=true -f allow_workflow_edits=false"]
+	assert "MERGE_TRAIN_DISPATCHED pr=5 workflow=ai-review.yml ref=default head=ai/issue-5" in out
+
+
+def test_judge_dispatch_rejects_an_invalid_pr_number(tmp_path: Path) -> None:
+	res, calls = _mt_dispatch_rb_judge_run(tmp_path, "0")
+	assert "rc=1" in res.stdout, res.stdout + res.stderr
+	assert calls == []
+
+
+def test_failed_judge_dispatch_falls_back_to_the_review_dispatch(tmp_path: Path) -> None:
+	"""No wrapper accepts force_rb_judge: review_rb_judge_dispatch.yml still
+	runs only the judge (no reviewer/editor round; G3 of #9987)."""
+	res, calls = _mt_dispatch_rb_judge_run(tmp_path, "5", fail_force=True)
+	out = res.stdout + res.stderr
+	assert "rc=0" in out, out
+	assert calls == ["workflow run ai-review.yml --repo o/r -f pr_number=5 -f force_rb_judge=true -f allow_workflow_edits=false", "workflow run internal-review.yml --repo o/r -f pr_number=5 -f force_rb_judge=true -f allow_workflow_edits=false", "workflow run review_rb_judge_dispatch.yml --repo o/r -f pr_number=5"]
+	assert "MERGE_TRAIN_DISPATCHED pr=5 workflow=review_rb_judge_dispatch.yml ref=default head=ai/issue-5" in out
+	assert "falling back to the review dispatch" not in out
+
+
+def test_no_force_wrapper_falls_back_to_the_plain_review_dispatch(tmp_path: Path) -> None:
+	res, calls = _mt_dispatch_rb_judge_run(tmp_path, "5", fail_judge=True, fail_force=True)
+	out = res.stdout + res.stderr
+	assert "rc=0" in out, out
+	assert calls[:3] == ["workflow run ai-review.yml --repo o/r -f pr_number=5 -f force_rb_judge=true -f allow_workflow_edits=false", "workflow run internal-review.yml --repo o/r -f pr_number=5 -f force_rb_judge=true -f allow_workflow_edits=false", "workflow run review_rb_judge_dispatch.yml --repo o/r -f pr_number=5"]
+	assert calls[3].startswith("workflow run ai-review.yml --repo o/r -f pr_number=5 -f allow_workflow_edits=")
+	assert len(calls) == 4
+	assert "falling back to the review dispatch" in out
+
+
+def test_judge_dispatch_prefers_wrappers_the_holder_check_can_see() -> None:
+	"""#9987 G3 with the #9983 holder rules: the force_rb_judge wrappers tried
+	first name a dispatched run `<workflow> [pr:<n>]`, which
+	_mt_lease_pr_runs_active counts as live work on the holder, so a granted
+	holder is not revoked while its judge run is queued or running.
+	review_rb_judge_dispatch.yml has no such run name, so it comes after them."""
+	for wf in (REPO_ROOT / "workflow-templates" / "ai-review.yml", REPO_ROOT / ".github" / "workflows" / "internal-review.yml"):
+		if wf.exists():
+			text = wf.read_text()
+			assert re.search(r"^run-name: .*\[pr:\{0\}\]", text, re.MULTILINE), wf
+			assert "force_rb_judge:" in text, wf
+	body = SCRIPT.read_text()
+	fn = body[body.index("_mt_dispatch_rb_judge() {"):]
+	fn = fn[:fn.index("\n}\n")]
+	assert fn.index("for mt_rbj_wf in ai-review.yml internal-review.yml; do") < fn.index("review_rb_judge_dispatch.yml --repo")
+	rbj = REPO_ROOT / ".github" / "workflows" / "review_rb_judge_dispatch.yml"
+	if rbj.exists():
+		assert "[pr:" not in rbj.read_text()
+
+
+def test_both_tick_loops_route_judge_decision_grants_to_the_judge() -> None:
+	text = SCRIPT.read_text()
+	for gate_var, fn_var in (("tick_first_gate", "tick_dispatch_fn"), ("tm_first_gate", "tm_dispatch_fn")):
+		assert f'if [ "${{{gate_var}}}" = "judge_decision" ]; then' in text
+		assert f'{fn_var}="_mt_dispatch_rb_judge"' in text
+		assert f'if "${{{fn_var}}}" ' in text
+	assert text.count('gate=judge_decision"') == 2
