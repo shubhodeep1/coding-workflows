@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- Note (non-finding): entry[18] (github-actions bot comment) claims the final CI run failed on head `9d4937b2`, but the check-run context for that same head reports `collection_status: ready` with `failed_count: 0` and `incomplete_count: 0`, and I have no log access to map any failure to a diff site.\n  No concrete failing check could be mapped to the last-run diff; flagging for awareness only, not as an editor action item.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5157a19a703ef0bf4d81ee007d59a0a6853b3ccfbfa827e7abe08595c99e1d93",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10021,
+    "run_id": "45475999776",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "github-actions[bot]",
+    "run_attempt": 1,
+    "run_id": "45475999776",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124215110_a1a52bc6c5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10021,
+    "run_id": "45475999776"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-24T21:51:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
