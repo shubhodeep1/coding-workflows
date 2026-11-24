@@ -21,8 +21,8 @@
 #   4. heal_reproduce.sh runs them in the credential-free gate container
 #      with the planning HEAD as both tested commit and baseline.
 #   5. Every listed test must be not_reproduced/passes_at_failing_sha.
-#   6. On pass: marker comment, label swap (as implement.yml Guard 0), close
-#      as completed, delete the progress comment. No Telegram page.
+#   6. On pass: marker comment, close as completed, then the label swap (as
+#      implement.yml Guard 0), delete the progress comment. No Telegram page.
 #
 # Env (each defaulted here):
 #   PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED  default true; 1/true/yes/on = on
@@ -180,7 +180,7 @@ case "${pnti_kind}" in
 	*) pnti_finish blocked failed "${pnti_count}" "${pnti_detail}" "$(pnti_note_failed "${pnti_count}" failed)" ;;
 esac
 
-# 6. Close on pass: comment, labels, close.
+# 6. Close on pass: comment, close, labels.
 pnti_note_failed_pass="Verify: ${pnti_count} test(s) passed on the planning ref, but the issue could not be closed automatically; the block stays."
 if [ -z "${pnti_repo}" ] || [ "${pnti_issue}" = "0" ]; then
 	pnti_finish blocked passed "${pnti_count}" comment_failed "${pnti_note_failed_pass}"
@@ -209,9 +209,20 @@ if ! gh_retry gh api "repos/${pnti_repo}/issues/${pnti_issue}/comments" -f body=
 	pnti_finish blocked passed "${pnti_count}" comment_failed "${pnti_note_failed_pass}"
 fi
 
+# Close before labelling (as scripts/check_failure_triage.sh does): a failed
+# close leaves the labels untouched, so an open issue never carries the
+# terminal ai:closed label (orchestrate_lib.py checks ai:closed before phase
+# labels and would read the still-blocked issue as closed).
+if ! gh_retry gh issue close "${pnti_issue}" --repo "${pnti_repo}" --reason completed >/dev/null 2>&1; then
+	# The marker comment exists; the Phase 8b judge closes the issue from it.
+	pnti_finish blocked passed "${pnti_count}" close_failed "${pnti_note_failed_pass}"
+fi
+
 gh_retry gh label create 'ai:closed' --repo "${pnti_repo}" \
 	--color '6b7280' --description 'Issue closed by automation (superseded, duplicated, or already complete)' \
 	>/dev/null 2>&1 || true
+# The issue is already closed (terminal for the orchestrator); a failed label
+# swap is only a warning.
 gh_retry gh issue edit "${pnti_issue}" --repo "${pnti_repo}" \
 	--remove-label 'ai:done' --remove-label 'ai:implementing' \
 	--remove-label 'ai:planning' --remove-label 'ai:clarification' \
@@ -219,21 +230,8 @@ gh_retry gh issue edit "${pnti_issue}" --repo "${pnti_repo}" \
 	--remove-label 'ai:implementation-failed' --remove-label 'ai:blocked' \
 	--add-label 'ai:closed' >/dev/null 2>&1 || \
 gh_retry gh issue edit "${pnti_issue}" --repo "${pnti_repo}" \
-	--add-label 'ai:closed' >/dev/null 2>&1 || true
-
-if ! gh_retry gh issue close "${pnti_issue}" --repo "${pnti_repo}" --reason completed >/dev/null 2>&1; then
-	# The marker comment exists; the Phase 8b judge closes the issue from it.
-	# Drop the terminal ai:closed label so the open issue reads as blocked
-	# (orchestrate_lib.py checks ai:closed before phase labels).
-	# A failed rollback leaves an open issue labelled ai:closed; report it
-	# as close_failed_label_stale so the stale state is visible in the log.
-	pnti_close_detail="close_failed"
-	if ! gh_retry gh issue edit "${pnti_issue}" --repo "${pnti_repo}" --remove-label 'ai:closed' >/dev/null 2>&1; then
-		pnti_close_detail="close_failed_label_stale"
-		echo "::warning::issue #${pnti_issue} is open but still labelled ai:closed (close and label rollback both failed)"
-	fi
-	pnti_finish blocked passed "${pnti_count}" "${pnti_close_detail}" "${pnti_note_failed_pass}"
-fi
+	--add-label 'ai:closed' >/dev/null 2>&1 || \
+echo "::warning::issue #${pnti_issue} is closed but its labels could not be swapped to ai:closed"
 
 if [[ "${pnti_progress_id}" =~ ^[0-9]+$ ]]; then
 	gh_retry gh api -X DELETE "repos/${pnti_repo}/issues/comments/${pnti_progress_id}" >/dev/null 2>&1 || true

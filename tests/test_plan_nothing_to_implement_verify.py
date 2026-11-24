@@ -233,11 +233,12 @@ class PlanNothingToImplementVerifyScriptTests(unittest.TestCase):
 		self.assertIn("--add-label ai:closed", edit)
 		self.assertIn("issue close 42 --repo o/r --reason completed", r["gh"])
 		self.assertIn("api -X DELETE repos/o/r/issues/comments/777", r["gh"])
-		# Order: comment, labels, close.
+		# Order: comment, close, labels (a failed close never leaves ai:closed).
 		order = [i for i, line in enumerate(gh_lines) if line.startswith(("api repos", "issue edit", "issue close"))]
 		kinds = [gh_lines[i].split()[1] if gh_lines[i].startswith("issue") else "comment" for i in order]
 		self.assertEqual(kinds[0], "comment")
-		self.assertLess(kinds.index("edit"), kinds.index("close"))
+		self.assertLess(kinds.index("close"), kinds.index("edit"))
+		self.assertNotIn("::warning::", r["stdout"])
 		# Planning HEAD is both tested commit and baseline; the 600 s cap is set.
 		self.assertIn(f"--sha {self.h.head} --baseline {self.h.head}", r["repro"])
 		self.assertIn(f"--repo {self.h.repo}", r["repro"])
@@ -392,23 +393,24 @@ class PlanNothingToImplementVerifyScriptTests(unittest.TestCase):
 		self.assertIn("outcome=blocked reason=passed tests=1 detail=close_failed", r["stdout"])
 		self.assertEqual(r["outputs"]["outcome"], "blocked")
 		self.assertIn("<!-- ai:implement-success-noop:v1 issue=42 -->", r["body"])
-		# The open issue must not keep the terminal ai:closed label.
-		gh_lines = r["gh"].splitlines()
-		close_at = next(i for i, line in enumerate(gh_lines) if line.startswith("issue close 42"))
-		self.assertIn("issue edit 42 --repo o/r --remove-label ai:closed", gh_lines[close_at + 1:])
-		self.assertNotIn("close_failed_label_stale", r["stdout"])
+		# Close runs before the label swap, so the open issue never gets the
+		# terminal ai:closed label and keeps its phase labels.
+		self.assertNotIn("issue edit", r["gh"])
+		self.assertNotIn("ai:closed", r["gh"])
+		self.assertNotIn("api -X DELETE", r["gh"])
 
-	def test_close_and_label_rollback_failure_is_reported_as_stale(self) -> None:
+	def test_label_swap_failure_after_close_is_only_a_warning(self) -> None:
 		r = self.h.run(
 			plan=_plan_with_acceptance("tests/test_ok.py"), repro_json=_passing(["tests/test_ok.py"]),
-			gh_fail="issue close", gh_fail2="--remove-label ai:closed",
+			gh_fail="issue edit",
 		)
 		self.assertEqual(
-			self._log_line(r["stdout"]),
-			"PLAN_NOTHING_TO_IMPLEMENT issue=42 outcome=blocked reason=passed tests=1 detail=close_failed_label_stale",
+			self._log_line(r["stdout"]), "PLAN_NOTHING_TO_IMPLEMENT issue=42 outcome=closed reason=passed tests=1",
 		)
-		self.assertIn("::warning::issue #42 is open but still labelled ai:closed", r["stdout"])
-		self.assertEqual(r["outputs"]["outcome"], "blocked")
+		self.assertIn("::warning::issue #42 is closed but its labels could not be swapped to ai:closed", r["stdout"])
+		self.assertEqual(r["outputs"]["outcome"], "closed")
+		self.assertIn("issue close 42 --repo o/r --reason completed", r["gh"])
+		self.assertIn("api -X DELETE repos/o/r/issues/comments/777", r["gh"])
 
 	def test_missing_reproduce_script_is_failed(self) -> None:
 		r = self.h.run(
