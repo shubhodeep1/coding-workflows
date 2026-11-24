@@ -22,6 +22,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO_ROOT / "scripts"
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 sys.path.insert(0, str(SCRIPTS))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_implement_text  # noqa: E402
 
 
 def _load(name: str):
@@ -36,6 +38,9 @@ po = _load("provider_outage")
 
 
 def _text(path: Path) -> str:
+	# implement.yml sources two step bodies from scripts/ (#9678); inline them.
+	if path.resolve() == (WORKFLOWS / "implement.yml").resolve():
+		return expanded_implement_text()
 	return path.read_text(encoding="utf-8")
 
 

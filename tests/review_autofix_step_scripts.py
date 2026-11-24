@@ -34,6 +34,16 @@ largest ``e2e-smoke-test`` step bodies (#7991): ``scripts/stable_e2e_step_*.sh``
 are read from a ``github.sha``-pinned sparse checkout, copied to
 ``RUNNER_TEMP`` and ``source``d once ``STABLE_E2E_STEP_SCRIPTS_VERIFIED=true``.
 :func:`expanded_test_and_mark_stable_text` inlines them again for tests.
+
+``.github/workflows/implement.yml`` moves the "Preflight destructive-commit
+guard" and "Attempt post-Codex syntax repair" step bodies into
+``scripts/implement_step_*.sh`` (#9678). Both steps run after the isolated
+editor's writes are copied back into the workspace, so their wrapper sources
+the script only from the trusted pre-editor copy in
+``IMPLEMENT_STAGED_SUPPORT_RUN_DIR`` and fails closed when it is missing; it
+never falls back to ``scripts/`` or ``.codex-workflow-src``. The steps are
+listed in :data:`IMPLEMENT_STEP_SCRIPTS` and
+:func:`expanded_implement_text` inlines them again for tests.
 """
 
 from __future__ import annotations
@@ -46,6 +56,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 REVIEW_AUTOFIX_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 REVIEW_AUTOFIX_STEP_SCRIPTS_DIR = REPO_ROOT / "scripts"
 TEST_AND_MARK_STABLE_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
+IMPLEMENT_WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 
 # Step name -> script under scripts/, and whether a missing script fails the
 # step ("error") or skips it ("warning"). The always() steps fail open
@@ -111,6 +122,14 @@ TEST_AND_MARK_STABLE_STEP_SCRIPTS: dict[str, str] = {
 	"Phase 7: Close PR and verify cancel_on_pr_close fires": "stable_e2e_step_verify_cancel_on_close.sh",
 }
 
+# implement.yml step name -> script under scripts/ (#9678). The wrapper reads
+# only the trusted IMPLEMENT_STAGED_SUPPORT_RUN_DIR copy; a missing or
+# symlinked script always fails the step.
+IMPLEMENT_STEP_SCRIPTS: dict[str, str] = {
+	"Preflight destructive-commit guard": "implement_step_preflight_destructive_guard.sh",
+	"Attempt post-Codex syntax repair": "implement_step_post_codex_syntax_repair.sh",
+}
+
 _WRAPPER_START_RE = re.compile(
 	r'^(?P<indent> *)REVIEW_AUTOFIX_STEP_SCRIPT="(?:\$\{SUPPORT_SCRIPTS_DIR:-\}|\$\{GITHUB_WORKSPACE\}/\.codex-head-gate-src/scripts|\$\{GITHUB_WORKSPACE\}/\.codex-freshness-src/scripts)/(?P<script>review_autofix_step_[a-z0-9_]+\.sh)"$'
 )
@@ -119,6 +138,10 @@ _STABLE_E2E_WRAPPER_START_RE = re.compile(
 	r'^(?P<indent> *)STABLE_E2E_STEP_SCRIPT="\$\{RUNNER_TEMP\}/stable-e2e-step-scripts/(?P<script>stable_e2e_step_[a-z0-9_]+\.sh)"$'
 )
 _STABLE_E2E_WRAPPER_END = 'source "${STABLE_E2E_STEP_SCRIPT}"'
+_IMPLEMENT_WRAPPER_START_RE = re.compile(
+	r'^(?P<indent> *)IMPLEMENT_STEP_SCRIPT="\$\{IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-\}/(?P<script>implement_step_[a-z0-9_]+\.sh)"$'
+)
+_IMPLEMENT_WRAPPER_END = 'source "${IMPLEMENT_STEP_SCRIPT}"'
 
 
 def _step_script_body(path: Path) -> str:
@@ -181,3 +204,13 @@ def expand_test_and_mark_stable_step_scripts(workflow_text: str) -> str:
 def expanded_test_and_mark_stable_text() -> str:
 	"""test-and-mark-stable.yml with each moved step body inlined again."""
 	return expand_test_and_mark_stable_step_scripts(TEST_AND_MARK_STABLE_WORKFLOW_PATH.read_text(encoding="utf-8"))
+
+
+def expand_implement_step_scripts(workflow_text: str) -> str:
+	"""Replace every implement_step wrapper in *workflow_text* with its body."""
+	return _expand_step_scripts(workflow_text, _IMPLEMENT_WRAPPER_START_RE, _IMPLEMENT_WRAPPER_END)
+
+
+def expanded_implement_text() -> str:
+	"""implement.yml with each moved step body inlined again."""
+	return expand_implement_step_scripts(IMPLEMENT_WORKFLOW_PATH.read_text(encoding="utf-8"))
