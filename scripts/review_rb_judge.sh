@@ -1992,7 +1992,10 @@ rb_judge_route_red_checks()
       rb_judge_red_check_log dispatch_failed "mode=${mode}"
       # Withdraw the request so the next judge run asks again instead of
       # reading it as a used-up repair (it would otherwise hand over).
-      request_id="$(printf '%s' "${request_id}" | tail -n 1 | tr -cd '0-9')"
+      # Only a bare numeric last line is this run's comment id; anything else
+      # skips the DELETE (the warning below) rather than guessing an id.
+      request_id="$(printf '%s\n' "${request_id}" | tail -n 1 | tr -d '\r')"
+      [[ "${request_id}" =~ ^[0-9]+$ ]] || request_id=""
       if [ -z "${request_id}" ] \
         || { ! { [ -n "${RB_JUDGE_COMMENT_TOKEN:-}" ] && GH_TOKEN="${RB_JUDGE_COMMENT_TOKEN}" gh api -X DELETE "repos/${REPOSITORY}/issues/comments/${request_id}" >/dev/null 2>&1; } \
           && ! gh api -X DELETE "repos/${REPOSITORY}/issues/comments/${request_id}" >/dev/null 2>&1; }; then
