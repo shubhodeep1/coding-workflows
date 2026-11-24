@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: How should an `ai:priority` label on the linked issue give the PR priority in the merge-lease queue? Today the lease queue only looks at labels on the PR itself.\nChoices:\nA) Extend the lease ordering so a PR whose verified linked issue carries a `MERGE_TRAIN_PRIORITY_LABELS` label also ranks in the priority group. It uses the same checks as `_mt_pr_is_priority`: head `${MT_PREFIX}<M>`, `headRefName` match, `M` in `closingIssuesReferences`, same-repository head. It reuses the linked-issue labels the merge train already reads, with no new per-PR read in a loop. If those labels can't be read, the PR gets no priority. Ranking by the PR's own labels and by `MERGE_LEASE_PRIORITY_HEAD_PREFIXES` stays as it is. (RECOMMENDED)\nB) Leave the lease ordering as it is, and have the pipeline copy `ai:priority` from the verified linked issue onto the PR, so the existing PR-label check ranks it. This adds label writes and a PR label that can drift out of sync with the issue.\nC) Take lease priority out of scope. `ai:priority` only affects the merge train, review and final-CI ordering, and the pressure hold. Implementation step 4 is replaced by a test showing the lease ordering is unchanged.",
+  "fingerprint": "ee0e1392c61f852a46f03312faf99a26d773aef5c51ebf43fd4f572a71ec64e9",
+  "lineage": {
+    "issue_number": 10048,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45394311028",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45394311028",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261124131206_bca1849109",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10048,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45394311028"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #10048 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-24T13:12:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
