@@ -22,6 +22,12 @@ than 1 as "accept the report" (fail open).
 line is one). It is idempotent and writes atomically. Exit 0, or 2 on an I/O
 error.
 
+``--insert-reviewer-findings --context <analysis_context.json>`` mode appends a
+code-built "Reviewer Findings" section (Refs #10058) from the context's
+``reviewer_findings`` aggregate, so the table is never a model tally. It is
+idempotent (marker ``<!-- reviewer-findings-table v1 -->``) and writes
+atomically. Exit 0, or 2 when the report or context cannot be read or parsed.
+
 Stdlib only. No network, no GitHub API calls.
 """
 
@@ -67,6 +73,15 @@ MAX_RUNS_MESSAGE_PREFIX = "Run collection stopped after max-runs="
 DATA_GAP_LINE = "> Data gap: full workflow logs were unavailable for this run."
 WINDOW_MARKER_RE = re.compile(r"^<!-- workflow-log-analysis:.*-->$")
 DATA_GAP_IDEMPOTENCY_LINES = 3
+
+REVIEWER_FINDINGS_MARKER = "<!-- reviewer-findings-table v1 -->"
+REVIEWER_FINDINGS_HEADING = "## Reviewer Findings"
+REVIEWER_FINDINGS_PERCENT_MIN_LONE = 20
+# Same character set as the collector's REVIEWER_FINDINGS reviewer field: no
+# `|`, backticks or angle brackets, so a name cannot break the table.
+REVIEWER_FINDINGS_NAME_RE = re.compile(r"^[A-Za-z0-9_./:-]{1,160}$")
+REVIEWER_FINDINGS_MAX_ROWS = 200
+REVIEWER_FINDINGS_MAX_COUNT = 10**9
 
 
 def _fence_marker(line: str) -> str:
@@ -302,6 +317,108 @@ def insert_data_gap(report_path: str) -> int:
 	return 0
 
 
+def _bounded_count(value: Any) -> int | None:
+	if isinstance(value, bool) or not isinstance(value, int):
+		return None
+	if value < 0 or value > REVIEWER_FINDINGS_MAX_COUNT:
+		return None
+	return value
+
+
+def _percent_cell(count: int, lone: int) -> str:
+	if lone >= REVIEWER_FINDINGS_PERCENT_MIN_LONE:
+		return f"{count} ({count * 100 / lone:.0f}%)"
+	return str(count)
+
+
+def render_reviewer_findings_section(context: Any) -> str:
+	"""Build the Reviewer Findings section from the analysis context."""
+	aggregate = context.get("reviewer_findings") if isinstance(context, dict) else None
+	if not isinstance(aggregate, dict):
+		aggregate = {}
+	review_runs = _bounded_count(aggregate.get("review_runs")) or 0
+	runs_with_lines = _bounded_count(aggregate.get("runs_with_lines")) or 0
+	unavailable_runs = _bounded_count(aggregate.get("unavailable_runs")) or 0
+	rows: list[str] = []
+	raw_rows = aggregate.get("reviewers")
+	for entry in raw_rows[:REVIEWER_FINDINGS_MAX_ROWS] if isinstance(raw_rows, list) else []:
+		if not isinstance(entry, dict):
+			continue
+		name = entry.get("reviewer")
+		if not isinstance(name, str) or not REVIEWER_FINDINGS_NAME_RE.match(name):
+			continue
+		values = {key: _bounded_count(entry.get(key)) for key in ("runs", "raised", "lone", "lone_rejected", "lone_accepted")}
+		if any(value is None for value in values.values()):
+			continue
+		lone = values["lone"]
+		rows.append(
+			f"| `{name}` | {values['runs']} | {values['raised']} | {lone}"
+			f" | {_percent_cell(values['lone_rejected'], lone)} | {_percent_cell(values['lone_accepted'], lone)} |"
+		)
+	if not rows:
+		rows.append("| No REVIEWER_FINDINGS lines in the window | - | - | - | - | - |")
+	lines = [
+		REVIEWER_FINDINGS_MARKER,
+		REVIEWER_FINDINGS_HEADING,
+		"",
+		f"Counts come from REVIEWER_FINDINGS lines in {runs_with_lines} of {review_runs} review runs whose logs"
+		" this analysis read; 'lone' depends on the consolidator's merge of duplicate findings;"
+		f" runs reporting outcome=unavailable: {unavailable_runs}.",
+		"",
+		f"Percentages (of lone findings) are shown only for reviewers with at least {REVIEWER_FINDINGS_PERCENT_MIN_LONE}"
+		" lone findings in the window; below that, only the counts are shown.",
+		"",
+		"| Reviewer | Runs | Findings raised | Lone | Lone rejected | Lone accepted |",
+		"|---|---|---|---|---|---|",
+		*rows,
+	]
+	return "\n".join(lines) + "\n"
+
+
+def insert_reviewer_findings(report_path: str, context_path: str) -> int:
+	try:
+		with open(report_path, "rb") as handle:
+			raw = handle.read()
+	except OSError:
+		print(f"::warning::{LOG_PREFIX}: the report file could not be read; reviewer findings table not added.", file=sys.stderr)
+		return 2
+	if REVIEWER_FINDINGS_MARKER.encode("utf-8") in raw:
+		return 0
+	try:
+		with open(context_path, encoding="utf-8") as handle:
+			context = json.load(handle)
+	except (OSError, ValueError):
+		print(f"::warning::{LOG_PREFIX}: the analysis context could not be read; reviewer findings table not added.", file=sys.stderr)
+		return 2
+	if not isinstance(context, dict):
+		print(f"::warning::{LOG_PREFIX}: the analysis context is not a JSON object; reviewer findings table not added.", file=sys.stderr)
+		return 2
+	section = render_reviewer_findings_section(context).encode("utf-8")
+	prefix = raw if not raw or raw.endswith(b"\n") else raw + b"\n"
+	data = prefix + (b"\n" if prefix else b"") + section
+
+	directory = os.path.dirname(os.path.abspath(report_path))
+	tmp_path = ""
+	try:
+		mode = stat.S_IMODE(os.stat(report_path).st_mode)
+		fd, tmp_path = tempfile.mkstemp(prefix=".wla-report-", suffix=".tmp", dir=directory)
+		with os.fdopen(fd, "wb") as handle:
+			handle.write(data)
+		os.chmod(tmp_path, mode)
+		os.replace(tmp_path, report_path)
+		tmp_path = ""
+	except OSError:
+		print(f"::warning::{LOG_PREFIX}: the reviewer findings table could not be written.", file=sys.stderr)
+		return 2
+	finally:
+		if tmp_path:
+			try:
+				os.unlink(tmp_path)
+			except OSError:
+				pass
+	return 0
+
+
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 	parser = argparse.ArgumentParser(description="Check the structure of a workflow log analysis report.")
 	parser.add_argument("--report", required=True, help="Path to the analysis markdown report.")
@@ -321,9 +438,22 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 		action="store_true",
 		help="Add the fixed data-gap line to the top of the report instead of checking it.",
 	)
+	parser.add_argument(
+		"--insert-reviewer-findings",
+		action="store_true",
+		help="Append the code-built Reviewer Findings table (needs --context) instead of checking the report.",
+	)
+	parser.add_argument(
+		"--context",
+		help="Path to analysis_context.json (used by --insert-reviewer-findings).",
+	)
 	args = parser.parse_args(argv)
 	if args.min_bytes < 0:
 		parser.error("--min-bytes must be zero or a positive integer")
+	if args.insert_data_gap and args.insert_reviewer_findings:
+		parser.error("--insert-data-gap and --insert-reviewer-findings cannot be combined")
+	if args.insert_reviewer_findings and not args.context:
+		parser.error("--insert-reviewer-findings requires --context")
 	return args
 
 
@@ -331,6 +461,8 @@ def main(argv: list[str] | None = None) -> int:
 	args = _parse_args(argv)
 	if args.insert_data_gap:
 		return insert_data_gap(args.report)
+	if args.insert_reviewer_findings:
+		return insert_reviewer_findings(args.report, args.context)
 	return run_check(args.report, args.collect_report, args.min_bytes)
 
 

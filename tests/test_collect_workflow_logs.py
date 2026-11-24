@@ -3739,3 +3739,69 @@ def main() -> int:
 
 if __name__ == "__main__":
 	raise SystemExit(main())
+
+
+# --- REVIEWER_FINDINGS lines (Refs #10058) ---
+
+_RF_COUNTED = "REVIEWER_FINDINGS pr=42 round=3 reviewer=google/gemini-4-pro raised=2 lone=1 lone_rejected=1 lone_accepted=0 shared=1"
+_RF_UNAVAILABLE = "REVIEWER_FINDINGS pr=unknown round=unknown reviewer=x-ai_grok-5 outcome=unavailable reason=flagged_by_missing"
+
+
+def test_reviewer_findings_parsed_from_full_logs():
+	full_logs = [
+		{"step_name": "job", "content": f"2026-04-10T12:00:00.1234567Z {_RF_COUNTED}\n{_RF_UNAVAILABLE}\n"},
+		# Step-level copy of the same line (different timestamp) counts once.
+		{"step_name": "step", "content": f"2026-04-10T12:00:00.9999999Z {_RF_COUNTED}\n"},
+		{"step_name": "noise", "content": "\n".join([
+			"echo 'REVIEWER_FINDINGS pr=1 round=1 reviewer=a raised=1 lone=1 lone_rejected=0 lone_accepted=0 shared=0'",
+			"::warning::REVIEWER_FINDINGS outcome=failed reason=RuntimeError",
+			"REVIEWER_FINDINGS pr=1 round=1 reviewer=bad|name raised=1 lone=1 lone_rejected=0 lone_accepted=0 shared=0",
+			"REVIEWER_FINDINGS pr=1 round=1 reviewer=a raised=12345678 lone=1 lone_rejected=0 lone_accepted=0 shared=0",
+			"REVIEWER_FINDINGS pr=1 round=1 reviewer=a outcome=unavailable reason=Bad",
+			"REVIEWER_FINDINGS pr=12345678901 round=1 reviewer=a raised=1 lone=1 lone_rejected=0 lone_accepted=0 shared=0",
+		])},
+	]
+	entries = collector._reviewer_findings_from_full_logs(full_logs)
+	assert entries == [
+		{"pr": 42, "round": "3", "reviewer": "google/gemini-4-pro", "outcome": "counted", "raised": 2, "lone": 1, "lone_rejected": 1, "lone_accepted": 0, "shared": 1},
+		{"pr": None, "round": "unknown", "reviewer": "x-ai_grok-5", "outcome": "unavailable", "reason": "flagged_by_missing"},
+	]
+	assert collector._reviewer_findings_from_full_logs(None) == []
+	many = [{"step_name": "s", "content": "\n".join(
+		f"REVIEWER_FINDINGS pr=1 round={n} reviewer=a raised=1 lone=1 lone_rejected=0 lone_accepted=0 shared=0" for n in range(100)
+	)}]
+	assert len(collector._reviewer_findings_from_full_logs(many)) == collector.REVIEWER_FINDINGS_MAX_PER_RUN
+
+	trusted = {"origin_trust": "trusted"}
+	collector._apply_reviewer_findings_from_full_logs(trusted, full_logs)
+	assert trusted["reviewer_findings"] == entries
+	fork = {"origin_trust": "fork", "reviewer_findings": [{"stale": True}]}
+	collector._apply_reviewer_findings_from_full_logs(fork, full_logs)
+	assert "reviewer_findings" not in fork
+	quiet = {"origin_trust": "trusted"}
+	collector._apply_reviewer_findings_from_full_logs(quiet, [{"step_name": "s", "content": "nothing\n"}])
+	assert "reviewer_findings" not in quiet
+	row = {"origin_trust": "fork", "reviewer_findings": entries}
+	assert collector._apply_untrusted_origin_exclusion(row) is True
+	assert "reviewer_findings" not in row
+	assert collector._cached_reviewer_findings({"reviewer_findings": entries}) == entries
+	assert collector._cached_reviewer_findings({"reviewer_findings": "x"}) is None
+	assert collector._cached_reviewer_findings(None) is None
+
+
+def test_main_reviewer_findings_on_trusted_run_only():
+	log_text = f"2026-04-10T12:00:00.0000000Z {_RF_COUNTED}\n"
+	rc, report, _fetched, _stderr = _run_main_with_runs(
+		[_api_run(3, "pull_request", "owner/repo")], log_text_by_run={3: log_text},
+	)
+	assert rc == 0
+	assert report["runs"][0]["reviewer_findings"][0]["reviewer"] == "google/gemini-4-pro"
+	rc, report, fetched, _stderr = _run_main_with_runs(
+		[_api_run(1, "pull_request", "attacker/repo")], log_text_by_run={1: log_text},
+	)
+	assert rc == 0
+	assert fetched == []
+	assert "reviewer_findings" not in report["runs"][0]
+	rc, report, _fetched, _stderr = _run_main_with_runs([_api_run(3, "pull_request", "owner/repo")])
+	assert rc == 0
+	assert "reviewer_findings" not in report["runs"][0]

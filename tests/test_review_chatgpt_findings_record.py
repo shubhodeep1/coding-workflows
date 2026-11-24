@@ -654,3 +654,159 @@ def test_hyphenated_path_with_sk_is_kept(tmp_path: Path) -> None:
 	record = json.loads(output.read_text(encoding="utf-8"))
 	assert record["issues"][1]["file"] == "src/task-management-overview.ts"
 	assert "issue_header_redacted" not in record["warnings"]
+
+
+# --- REVIEWER_FINDINGS per-reviewer counts (Refs #10058) ---
+
+THREE_PANEL = "\n".join(["anthropic/claude-opus-5", "google/gemini-4-pro", "x-ai/grok-5"])
+THREE_ISSUES_TEXT = """=== ISSUE 001 ===
+FILE: scripts/foo.sh
+LINES: 1-2
+SEVERITY: high
+FLAGGED_BY: anthropic/claude-opus-5, review_google_gemini-4-pro
+CLASSIFICATION: must-fix
+=== END ISSUE 001 ===
+=== ISSUE 002 ===
+FILE: scripts/bar.sh
+LINES: 3
+SEVERITY: high
+FLAGGED_BY: review_x-ai_grok-5
+CLASSIFICATION: must-fix
+=== END ISSUE 002 ===
+=== ISSUE 003 ===
+FILE: scripts/baz.sh
+LINES: 4
+SEVERITY: medium
+FLAGGED_BY: google_gemini-4-pro
+CLASSIFICATION: non-actionable
+REJECTION_KIND: reviewer-wrong
+=== END ISSUE 003 ===
+"""
+THREE_EDITOR_TEXT = """Changes made:
+- Fixed the guard (issue 001).
+- Fixed the loop (issue 002).
+Change status:
+- edited
+Already satisfied (suggested but already present):
+- none
+Ignored suggestions (with short reason):
+- ISSUE 003: reviewer misread the code
+"""
+
+
+def _three_fixture(tmp_path: Path, issues_text: str | None = THREE_ISSUES_TEXT, editor_text: str = THREE_EDITOR_TEXT) -> dict:
+	env = _fixture(tmp_path, issues=False, editor=False)
+	prev = Path(env["PREVIOUS_REVIEWS_DIR"])
+	for path in prev.glob("status_review_*.txt"):
+		path.unlink()
+	for safe in ("anthropic_claude-opus-5", "google_gemini-4-pro", "x-ai_grok-5"):
+		_write(prev / f"status_review_{safe}.txt", "success\n")
+	runtime = Path(env["RUNTIME_DIR"])
+	if issues_text is not None:
+		_write(runtime / "review_issues.txt", issues_text)
+	_write(runtime / "editor_summary.txt", editor_text)
+	env["REVIEWER_MODELS"] = THREE_PANEL
+	env["REVIEWER_CHATGPT_SLOT_RESOLVED"] = "false"
+	return env
+
+
+def _findings_lines(stdout: str) -> list[str]:
+	return [line for line in stdout.splitlines() if line.startswith("REVIEWER_FINDINGS ")]
+
+
+def test_reviewer_findings_lines_three_reviewers(tmp_path: Path) -> None:
+	env = _three_fixture(tmp_path)
+	output = Path(env["PREVIOUS_REVIEWS_DIR"]) / "review_findings_record.json"
+	result = _run(env, output)
+	assert result.returncode == 0, result.stderr
+	assert _findings_lines(result.stdout) == [
+		"REVIEWER_FINDINGS pr=42 round=3 reviewer=anthropic/claude-opus-5 raised=1 lone=0 lone_rejected=0 lone_accepted=0 shared=1",
+		"REVIEWER_FINDINGS pr=42 round=3 reviewer=google/gemini-4-pro raised=2 lone=1 lone_rejected=1 lone_accepted=0 shared=1",
+		"REVIEWER_FINDINGS pr=42 round=3 reviewer=x-ai/grok-5 raised=1 lone=1 lone_rejected=0 lone_accepted=1 shared=0",
+	]
+	# The record itself keeps schema v1 and is still written.
+	assert set(json.loads(output.read_text(encoding="utf-8"))) == TOP_LEVEL_KEYS
+	assert "REVIEW_FINDINGS_RECORD: outcome=written" in result.stdout
+
+
+def test_reviewer_findings_lines_zero_findings(tmp_path: Path) -> None:
+	env = _three_fixture(tmp_path, issues_text="")
+	output = Path(env["PREVIOUS_REVIEWS_DIR"]) / "review_findings_record.json"
+	result = _run(env, output)
+	assert result.returncode == 0
+	assert _findings_lines(result.stdout) == [
+		f"REVIEWER_FINDINGS pr=42 round=3 reviewer={name} raised=0 lone=0 lone_rejected=0 lone_accepted=0 shared=0"
+		for name in ("anthropic/claude-opus-5", "google/gemini-4-pro", "x-ai/grok-5")
+	]
+
+
+def test_reviewer_findings_unavailable_without_flagged_by(tmp_path: Path) -> None:
+	env = _three_fixture(tmp_path, issues_text=THREE_ISSUES_TEXT.replace("FLAGGED_BY: review_x-ai_grok-5\n", ""))
+	output = Path(env["PREVIOUS_REVIEWS_DIR"]) / "review_findings_record.json"
+	result = _run(env, output)
+	assert result.returncode == 0
+	lines = _findings_lines(result.stdout)
+	assert len(lines) == 3
+	assert all(line.endswith(" outcome=unavailable reason=flagged_by_missing") for line in lines)
+	assert output.exists()
+	assert "REVIEW_FINDINGS_RECORD: outcome=" in result.stdout
+
+
+def test_reviewer_findings_out_of_scope_and_duplicate_of(tmp_path: Path) -> None:
+	text = THREE_ISSUES_TEXT.replace("REJECTION_KIND: reviewer-wrong", "REJECTION_KIND: out-of-scope") + (
+		"=== ISSUE 004 ===\nFILE: scripts/bar.sh\nLINES: 3\nFLAGGED_BY: anthropic_claude-opus-5\n"
+		"CLASSIFICATION: duplicate-of:002\n=== END ISSUE 004 ===\n"
+	)
+	env = _three_fixture(tmp_path, issues_text=text, editor_text=THREE_EDITOR_TEXT.replace("- ISSUE 003: reviewer misread the code", "- none"))
+	output = Path(env["PREVIOUS_REVIEWS_DIR"]) / "review_findings_record.json"
+	result = _run(env, output)
+	assert result.returncode == 0
+	assert _findings_lines(result.stdout) == [
+		# Issue 004 folds into 002, which becomes shared.
+		"REVIEWER_FINDINGS pr=42 round=3 reviewer=anthropic/claude-opus-5 raised=2 lone=0 lone_rejected=0 lone_accepted=0 shared=2",
+		# Out-of-scope is not a rejection: lone, neither rejected nor accepted.
+		"REVIEWER_FINDINGS pr=42 round=3 reviewer=google/gemini-4-pro raised=2 lone=1 lone_rejected=0 lone_accepted=0 shared=1",
+		"REVIEWER_FINDINGS pr=42 round=3 reviewer=x-ai/grok-5 raised=1 lone=0 lone_rejected=0 lone_accepted=0 shared=1",
+	]
+
+
+def test_reviewer_findings_lite_tier_is_unavailable(tmp_path: Path) -> None:
+	env = _three_fixture(tmp_path, issues_text=None)
+	env["REVIEW_TIER"] = "lite"
+	output = Path(env["PREVIOUS_REVIEWS_DIR"]) / "review_findings_record.json"
+	result = _run(env, output)
+	assert result.returncode == 0
+	lines = _findings_lines(result.stdout)
+	assert len(lines) == 3
+	assert all(line.endswith(" outcome=unavailable reason=consolidator_disabled") for line in lines)
+
+
+def test_reviewer_findings_missing_issues_file_is_unavailable(tmp_path: Path) -> None:
+	env = _three_fixture(tmp_path, issues_text=None)
+	output = Path(env["PREVIOUS_REVIEWS_DIR"]) / "review_findings_record.json"
+	result = _run(env, output)
+	assert result.returncode == 0
+	assert all(line.endswith(" reason=consolidator_missing") for line in _findings_lines(result.stdout))
+
+
+def test_reviewer_findings_emitter_failure_fails_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+	import importlib.util
+
+	spec = importlib.util.spec_from_file_location("review_findings_record_under_test", SCRIPT)
+	module = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(module)
+	env = _three_fixture(tmp_path)
+	for key, value in env.items():
+		monkeypatch.setenv(key, value)
+
+	def boom(_record: dict) -> dict:
+		raise RuntimeError("secret detail " + SENTINEL)
+
+	monkeypatch.setattr(module, "compute_reviewer_findings", boom)
+	output = Path(env["PREVIOUS_REVIEWS_DIR"]) / "review_findings_record.json"
+	assert module.main(["write", "--output", str(output)]) == 0
+	out = capsys.readouterr().out
+	assert "::warning::REVIEWER_FINDINGS outcome=failed reason=RuntimeError" in out
+	assert SENTINEL not in out
+	assert output.exists()
+	assert "REVIEW_FINDINGS_RECORD: outcome=written" in out
