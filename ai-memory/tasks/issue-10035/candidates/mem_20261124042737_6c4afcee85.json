@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: A\n\nRATIONALE:\nQ1: The ban on retries is there for failures that repeat every time. This one is a \"could not verify\" answer: `compareStatus` in `tools/claude-pool-broker/src/index.ts` (lines 650-690) returns `unavailable` on a fetch error, a timeout, or any status other than 200, 404 or 422. `claude_pool_token.sh` (lines 189-195) then treats that 403 as final. The real defect is that the client cannot tell a temporary refusal from a final one, and a retry limited to that one reason fixes exactly that. It follows the accepted OIDC retry from #8481 (lines 146-163). A test where the broker answers 403 `workflow_sha_unverifiable` once and then 200 fails on the current head and passes with the fix. B fixes nothing in scope, and if the broker is rate limited, all three of its compare calls fail anyway.\nQ2: The heal-scope allowlist covers `scripts/claude_pool_token.sh`, `tests/**` and `changelog.d/*.md`, and leaves out `tools/claude-pool-broker/**`. GITHUB FACTS show that the open PR #9995 (issue #9990) already edits the broker, adding a durable verified-SHA cache and compare logging. A broker change also needs a manual Worker redeploy, because no workflow deploys it. So the broker work, the `stable` fallback and the stale \"job runs codex\" comments stay with #9990 / #9995.\n\nEXECUTION PLAN (required for any non-letter decision):\nQ1:\n  strategy: derive_from_repo\n  inputs:\n    - scripts/claude_pool_token.sh lines 146-163 (the OIDC retry pattern: `oidc_retry_on`, `oidc_retry_sleeps`, at most 3 attempts) and lines 184-196 (the single broker call)\n    - tests/test_claude_pool_token.py line 236 (existing parametrized case: 403 `workflow_sha_unverifiable` gives `broker_refused_workflow_sha_unverifiable`) and lines 299-352 (OIDC retry tests and the \"2,5\" sleep fallback)\n  steps:\n    - Wrap the broker `curl` in a loop of at most 3 attempts, reusing `oidc_retry_on` and `oidc_retry_sleeps`; use new loop variables that do not clash with existing ones. Keep the request-header file until the loop ends.\n    - Read the 403 reason inside the loop. Retry only on `000`, `429`, `5xx`, or `403` with reason `workflow_sha_unverifiable`. Every other 403 reason, and every other code, fails on the first attempt, as today.\n    - Before each retry, log `CLAUDE_POOL broker_retry attempt=<n> code=<code> reason=<reason>`, with no URL and no token.\n    - When the attempts run out, keep today's final reasons (`broker_refused_${reason}` / `broker_unavailable_${code}`), so the classification in `ai_engine.sh` and the existing line-236 case are unchanged.\n    - Add tests:\n      - 403 `workflow_sha_unverifiable` once, then 200: accounts are selected.\n      - 403 `workflow_sha_unverified`: exactly one broker call, then failure.\n      - 403 `workflow_sha_unverifiable` on every call: 3 calls, reason `broker_refused_workflow_sha_unverifiable`.\n      - With `oidc_retry_on` false: one call.\n    - Run the new tests against the current head (fail) and with the fix (pass), and record both runs in the PR.\n    - Add a `changelog.d/*.md` entry.\n    - In the PR body:\n      - list as follow-ups for #9990 / PR #9995: the broker falls back to `stable` when the `main` check is `unavailable`, and the comments in `wrangler.toml` (lines 6-9) and `index.ts` (lines 23-25) are stale;\n      - note that an operator should confirm the existing optional Worker secret `BROKER_GITHUB_READ_TOKEN` is set;\n      - reference the issues with `Refs`.\n  replaces_acceptance_criterion: The heal boilerplate's \"a retry is not an accepted fix\" does not apply, because the failure is a temporary \"could not verify\" answer and not a repeating defect.\n  equivalence_argument: The broker still fails closed and grants nothing it has not verified. The client retries only the single refusal code that means \"could not check\", within the existing limit and sleep settings. Final refusals, the `capacity` fallback policy and the refusal report are untouched. The regression test reproduces the reported condition.\n  reversibility: Setting `oidc_retry_on` to false brings back the single-attempt behaviour without a code change. The change is small enough to revert in one commit.\n\nESCALATION (required for any ESCALATE decision):\nNone.",
+  "fingerprint": "713efb55f9d038165bb8a144c83a5d540a01a0a0497dd00f0039670bc5633f50",
+  "lineage": {
+    "issue_number": 10035,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45323730621",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45323730621",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10035"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261124042737_6c4afcee85",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10035,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45323730621"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #10035",
+  "timestamps": {
+    "created_at": "2026-11-24T04:27:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
