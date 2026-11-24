@@ -1904,6 +1904,23 @@ _mt_lease_pr_runs_active()
 # call: it reuses the candidate's statuses read inside the 10-candidate cap,
 # and grants a soft
 # entry's waiter only on a confirmed success (MERGE_LEASE_GATE_CONFIRMED).
+# Issue #10044 (un-park expired and idle holders once per head):
+# - G1: skip entries with reason expired or revoked_idle are soft too (the
+#   staged library's _merge_lease_skip_reason_is_soft), so a holder whose
+#   hold ran out waiting for runners takes its queue place again once its
+#   head-gate passes on the skip head.
+# - G2: the grant write keeps the new holder's own entry on its head as
+#   `<reason>_unparked` (hard; _merge_lease_skip_block), and a release of
+#   that head for expired or revoked_idle writes the `_unparked` token
+#   (_merge_lease_skip_release_token), so each head is un-parked at most
+#   once. A head change prunes the entry as before.
+# - G3: such a grant logs outcome=unparked
+#   reason=head_gate_passed_after_<expired|revoked_idle> before the granted
+#   line. No metric event.
+# - G4: every other reason keeps the hard rule.
+# `_unparked` tokens are written only when the staged library has both
+# helpers (tick_unpark_lib). No API call is added: the un-park reuses the
+# candidate's statuses read.
 _mt_merge_lease_tick()
 {
 	local tick_prs_json="$1" tick_base_filter="$2"
@@ -1921,6 +1938,11 @@ _mt_merge_lease_tick()
 	# whether the candidate has a soft skip entry on its head.
 	local tick_held_why="holder_open" tick_skip3=0 tick_first_soft=0 tick_cand_head="" tick_runs_rc=0
 	declare -F _merge_lease_skips_hard >/dev/null 2>&1 && declare -F _merge_lease_skips_soft >/dev/null 2>&1 && tick_skip3=1
+	# Issue #10044: the staged library un-parks expired/revoked_idle entries
+	# once per head (tick_unpark_lib), and the candidate's un-parked reason.
+	local tick_unpark_lib=0 tick_unpark_why="" tick_rel_token=""
+	[ "${tick_skip3}" = 1 ] && declare -F _merge_lease_skip_release_token >/dev/null 2>&1 \
+		&& declare -F _merge_lease_skip_reason_is_soft >/dev/null 2>&1 && tick_unpark_lib=1
 	# One active-run listing pass per tick (_mt_lease_pr_runs_active); the
 	# release pass's listing, when it seeded the cache, is that pass.
 	if [ "${_MT_LEASE_RUNS_SEEDED:-}" != "1" ]; then
@@ -2107,7 +2129,13 @@ _mt_merge_lease_tick()
 				# revoked_no_head_gate, until its head-gate passes; #9983 G5).
 				tick_skip_head="${tick_holder_head:-${MERGE_LEASE_HEAD}}"
 				if [[ "${tick_skip_head}" =~ ^[0-9a-f]{40}$ ]]; then
-					MERGE_LEASE_SKIPS="$(printf '%s\n%s\n' "${MERGE_LEASE_SKIPS:-}" "${MERGE_LEASE_PR}:${tick_skip_head}$([ "${tick_skip3}" = 1 ] && printf ':%s' "${tick_reason}")" | sed '/^$/d')"
+					if [ "${tick_unpark_lib}" = 1 ]; then
+						# #10044 G2: a head that already used its un-park stays hard.
+						tick_rel_token="$(_merge_lease_skip_release_token "${MERGE_LEASE_PR}" "${tick_skip_head}" "${tick_reason}")" || tick_rel_token="${tick_reason}"
+						MERGE_LEASE_SKIPS="$(printf '%s\n%s\n' "${MERGE_LEASE_SKIPS:-}" "${MERGE_LEASE_PR}:${tick_skip_head}:${tick_rel_token:-${tick_reason}}" | sed '/^$/d')"
+					else
+						MERGE_LEASE_SKIPS="$(printf '%s\n%s\n' "${MERGE_LEASE_SKIPS:-}" "${MERGE_LEASE_PR}:${tick_skip_head}$([ "${tick_skip3}" = 1 ] && printf ':%s' "${tick_reason}")" | sed '/^$/d')"
+					fi
 				fi
 			fi
 			tick_rc=0
@@ -2171,9 +2199,18 @@ _mt_merge_lease_tick()
 			tick_cand_head="$(jq -r '.head_sha // ""' <<< "${tick_first_row}" 2>/dev/null)" || tick_cand_head=""
 			# #9983 G5: does a soft skip entry hold this candidate's head?
 			tick_first_soft=0
+			tick_unpark_why=""
 			if [ "${tick_skip3}" = 1 ] && [[ "${tick_cand_head}" =~ ^[0-9a-f]{40}$ ]] \
 				&& grep -Eq -- "^${tick_first}:${tick_cand_head}(:|\$)" <<< "$(_merge_lease_skips_soft "${MERGE_LEASE_SKIPS:-}")"; then
 				tick_first_soft=1
+				# #10044 G3: the soft entry's reason, for the un-park log line.
+				if [ "${tick_unpark_lib}" = 1 ]; then
+					tick_unpark_why="$({ grep -E -- "^${tick_first}:${tick_cand_head}:" <<< "$(_merge_lease_skips_soft "${MERGE_LEASE_SKIPS:-}")" || true; } | tail -n1 | cut -d: -f3)"
+					case "${tick_unpark_why}" in
+						expired|revoked_idle) ;;
+						*) tick_unpark_why="" ;;
+					esac
+				fi
 			fi
 			if _merge_lease_pr_eligible "${tick_first}" "${tick_cand_head}" \
 				"$(jq -r '.title // ""' <<< "${tick_first_row}" 2>/dev/null)" "$(jq -r '.draft // false' <<< "${tick_first_row}" 2>/dev/null)" \
@@ -2248,6 +2285,12 @@ _mt_merge_lease_tick()
 		fi
 		# Grant time for the metric: the write above, not after unlabel/dispatch.
 		tick_grant_ts="$(date -u +%s 2>/dev/null)" || tick_grant_ts=""
+		# #10044 G3: the grant un-parked a soft expired/revoked_idle entry (only
+		# reached on a confirmed head-gate success); the write kept it as the
+		# `_unparked` marker.
+		if [ "${tick_unpark_lib}" = 1 ] && [ -n "${tick_unpark_why}" ]; then
+			_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=unparked reason=head_gate_passed_after_${tick_unpark_why}"
+		fi
 		# Unlabel before the dispatch: if the dispatch fails, the sweep (which
 		# skips labelled waiters) picks the PR up again within 30 minutes.
 		_merge_lease_unlabel_wait "${tick_first}"
@@ -2310,6 +2353,10 @@ _mt_merge_lease_tick_multi()
 	# the candidate's soft-entry flag.
 	local tm_runs_active_prs=" " tm_runs_rc=0 tm_skip3=0 tm_first_soft=0 tm_held_why
 	declare -F _merge_lease_skips_hard >/dev/null 2>&1 && declare -F _merge_lease_skips_soft >/dev/null 2>&1 && tm_skip3=1
+	# Issue #10044: as the single-holder tick's tick_unpark_lib.
+	local tm_unpark_lib=0 tm_unpark_why="" tm_rel_token=""
+	[ "${tm_skip3}" = 1 ] && declare -F _merge_lease_skip_release_token >/dev/null 2>&1 \
+		&& declare -F _merge_lease_skip_reason_is_soft >/dev/null 2>&1 && tm_unpark_lib=1
 	local -a tm_row_arr=()
 	[ "${MERGE_LEASE_STATE}" = "held" ] && tm_rows="${MERGE_LEASE_HOLDER_ALL_ROWS:-}"
 	# Phase 1 MERGE_LEASE_QUEUE line (written by the caller from these).
@@ -2389,7 +2436,13 @@ _mt_merge_lease_tick_multi()
 		if [ "${tm_p2}" = 1 ] && [ "${tm_reason}" != "holder_closed" ]; then
 			tm_skip_head="${tm_listed_head:-${tm_h_head}}"
 			if [[ "${tm_skip_head}" =~ ^[0-9a-f]{40}$ ]]; then
-				MERGE_LEASE_SKIPS="$(printf '%s\n%s\n' "${MERGE_LEASE_SKIPS:-}" "${tm_h}:${tm_skip_head}$([ "${tm_skip3}" = 1 ] && printf ':%s' "${tm_reason}")" | sed '/^$/d')"
+				if [ "${tm_unpark_lib}" = 1 ]; then
+					# #10044 G2: a head that already used its un-park stays hard.
+					tm_rel_token="$(_merge_lease_skip_release_token "${tm_h}" "${tm_skip_head}" "${tm_reason}")" || tm_rel_token="${tm_reason}"
+					MERGE_LEASE_SKIPS="$(printf '%s\n%s\n' "${MERGE_LEASE_SKIPS:-}" "${tm_h}:${tm_skip_head}:${tm_rel_token:-${tm_reason}}" | sed '/^$/d')"
+				else
+					MERGE_LEASE_SKIPS="$(printf '%s\n%s\n' "${MERGE_LEASE_SKIPS:-}" "${tm_h}:${tm_skip_head}$([ "${tm_skip3}" = 1 ] && printf ':%s' "${tm_reason}")" | sed '/^$/d')"
+				fi
 			fi
 		fi
 		tm_new_rows="$(_merge_lease_rows_without "${tm_h}" "${tm_rows}")"
@@ -2432,6 +2485,12 @@ _mt_merge_lease_tick_multi()
 		tm_queue_skips="${MERGE_LEASE_SKIPS}"
 		# #9983 G5: only hard entries pass a waiter over.
 		[ "${tm_skip3}" = 1 ] && tm_queue_skips="$(_merge_lease_skips_hard "${MERGE_LEASE_SKIPS}")"
+		# #10044: a live holder's retained `_unparked` marker never makes it a
+		# skip-held waiter (holders are excluded from the queue anyway).
+		if [ -n "${tm_queue_skips}" ] && [ -n "${tm_rows}" ]; then
+			tm_queue_skips="$(awk -F: 'NR == FNR { if ($1 != "") held[$1] = 1; next } $0 != "" && !($1 in held)' \
+				<(printf '%s\n' "${tm_rows}" | awk 'NF { print $1 }') - <<< "${tm_queue_skips}" 2>/dev/null || true)"
+		fi
 		while IFS= read -r tm_skip_pr; do
 			[[ "${tm_skip_pr}" =~ ^[1-9][0-9]*$ ]] || continue
 			tm_skipped_any=1
@@ -2455,9 +2514,18 @@ _mt_merge_lease_tick_multi()
 		tm_first_row="$(jq -c --argjson n "${tm_first}" '[ .[] | select(.number == $n) ][0] // {}' <<< "${tm_base_prs}" 2>/dev/null)" || tm_first_row="{}"
 		tm_first_head="$(jq -r '.head_sha // ""' <<< "${tm_first_row}" 2>/dev/null)" || tm_first_head=""
 		tm_first_soft=0
+		tm_unpark_why=""
 		if [ "${tm_p2}" = 1 ] && [ "${tm_skip3}" = 1 ] && [[ "${tm_first_head}" =~ ^[0-9a-f]{40}$ ]] \
 			&& grep -Eq -- "^${tm_first}:${tm_first_head}(:|\$)" <<< "$(_merge_lease_skips_soft "${MERGE_LEASE_SKIPS:-}")"; then
 			tm_first_soft=1
+			# #10044 G3: the soft entry's reason, for the un-park log line.
+			if [ "${tm_unpark_lib}" = 1 ]; then
+				tm_unpark_why="$({ grep -E -- "^${tm_first}:${tm_first_head}:" <<< "$(_merge_lease_skips_soft "${MERGE_LEASE_SKIPS:-}")" || true; } | tail -n1 | cut -d: -f3)"
+				case "${tm_unpark_why}" in
+					expired|revoked_idle) ;;
+					*) tm_unpark_why="" ;;
+				esac
+			fi
 		fi
 		# #9983 G5: a soft entry clears only on a confirmed head-gate success.
 		if [ "${tm_p2}" = 1 ] && { ! _merge_lease_pr_eligible "${tm_first}" "${tm_first_head}" \
@@ -2526,6 +2594,10 @@ _mt_merge_lease_tick_multi()
 			return 0
 		fi
 		tm_grant_ts="$(date -u +%s 2>/dev/null)" || tm_grant_ts=""
+		# #10044 G3: as the single-holder tick.
+		if [ "${tm_unpark_lib}" = 1 ] && [ -n "${tm_unpark_why}" ]; then
+			_mt_log "MERGE_LEASE pr=${tm_first} base=${tm_base} mode=tick outcome=unparked reason=head_gate_passed_after_${tm_unpark_why}"
+		fi
 		_merge_lease_holder_paths_set "${tm_first}" "${tm_first_paths}"
 		tm_rows="$(printf '%s\n%s\n' "${tm_rows}" "${tm_new_row}" | sed '/^$/d')"
 		_MT_LEASE_QUEUE_ROWS="${tm_rows}"
