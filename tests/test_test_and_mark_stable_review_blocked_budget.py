@@ -1274,7 +1274,8 @@ def test_phase4_active_step_without_state_change_still_stalls() -> None:
 		{"until": _RW_START + 99999, "run": _rw_run("in_progress"), "jobs": _rw_jobs(_rw_active_job(_RW_START))},
 	])
 	assert result.returncode == 1, result.stderr + result.stdout
-	assert output.splitlines() == ["status=timeout"]
+	# The inactivity-stall path also writes timeout_reason (#9619); a started run is inactivity.
+	assert output.splitlines() == ["status=timeout", "timeout_reason=inactivity"]
 	assert "Review phase stalled" in result.stdout
 	assert "E2E_REVIEW_RUNNER_WAIT" not in result.stdout
 
@@ -1284,7 +1285,8 @@ def test_phase4_runner_wait_missing_jobs_json_keeps_inactivity_rules() -> None:
 		{"until": _RW_START + 99999, "run": _rw_run("in_progress"), "jobs": None},
 	])
 	assert result.returncode == 1, result.stderr + result.stdout
-	assert output.splitlines() == ["status=timeout"]
+	# The inactivity-stall path also writes timeout_reason (#9619); a started run is inactivity.
+	assert output.splitlines() == ["status=timeout", "timeout_reason=inactivity"]
 	assert "Review phase stalled" in result.stdout
 	assert "E2E_REVIEW_RUNNER_WAIT" not in result.stdout
 
@@ -1427,6 +1429,32 @@ def test_gate_workflow_enables_the_runner_wait_stop() -> None:
 	raw = WORKFLOW.read_text(encoding="utf-8")
 	env_block = raw[raw.index("\nenv:\n"):raw.index("\npermissions:\n")]
 	assert '  DISPATCH_WATCH_STOP_RELEASE_GATE: "true"\n' in env_block
+
+
+# The Phase 4 review timeout_reason cases (#9619) live in
+# tests/test_test_and_mark_stable_review_timeout_reason.py and are collected
+# here, since CI already runs this file and ci.yml was outside that issue's
+# file grant. A name clash would hide a test, so it fails loudly.
+def _collect_review_timeout_reason_cases() -> None:
+	import importlib.util
+
+	spec = importlib.util.spec_from_file_location(
+		"review_timeout_reason_cases",
+		Path(__file__).resolve().parent / "test_test_and_mark_stable_review_timeout_reason.py",
+	)
+	assert spec is not None and spec.loader is not None
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	collected = 0
+	for case_name in dir(cases):
+		if case_name.startswith("test_") and callable(getattr(cases, case_name)):
+			assert case_name not in globals(), case_name
+			globals()[case_name] = getattr(cases, case_name)
+			collected += 1
+	assert collected, "no review timeout_reason cases collected"
+
+
+_collect_review_timeout_reason_cases()
 
 
 def main() -> int:

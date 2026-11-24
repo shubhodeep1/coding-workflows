@@ -466,6 +466,7 @@ deployment fallback.
 | `ENFORCE_FILES_TOUCHED` | No | `true` | implement, plan, orchestrate_poll | Master toggle for the general `files_touched` scope-enforcement guard. When `true`, the AI implementation commit is refused if any staged path falls outside the issue's declared allowlist. Set to `false` to skip this general guard; the automation-path grant guard remains active. Issues with no list can still edit ordinary files, but not automation paths. See "files_touched scope guard" below. A value other than `true` (unset or empty counts as `true`) also turns off the plan-time `files_touched` auto-approval hold (`PLAN_FILES_TOUCHED_GATE_ENABLED`). |
 | `IMPLEMENT_SELF_REPO_GITHUB_AI_ADDS_ENABLED` | No | `true` | implement | Off switch for the self-repo-only step in `scripts/implement_commit_changes.sh` that stages a new, untracked regular file under `.github/ai/` when the issue's `files_touched` list (the same input the `files_touched` scope guard reads) names that exact path. A glob or directory entry never stages anything, and neither does an issue with no list. Every other new `.github/ai/` file stays excluded, and staged paths still need the automation-path grant. Each staged file logs `IMPLEMENT_SELF_REPO_GITHUB_AI_ADD path=<path>`. Unset, empty or `true` (any case) keeps it on; `false` turns it off; any other value also turns it off and logs a warning. The switch is read only from the script's environment: `implement.yml` does not forward it from a repository variable, so a repository variable alone does not reach it. Consumer repos never run this step. |
 | `ALLOW_OUT_OF_SCOPE_FILES` | No | `false` | implement, plan, orchestrate_poll | Per-run escape hatch for the general `files_touched` scope guard, mirroring `ALLOW_BULK_DELETE`. When `true`, out-of-scope ordinary paths warn but can commit; it cannot bypass the automation-path grant guard. Dependency lockfiles (`package-lock.json`, `pnpm-lock.yaml`, `yarn.lock`, `Cargo.lock`, `poetry.lock`, `uv.lock`, `go.sum`, `composer.lock`) are auto-allowed only by the general guard; compiled build outputs are not. `true` also turns off the plan-time `files_touched` auto-approval hold (`PLAN_FILES_TOUCHED_GATE_ENABLED`). |
+| `REMEDIATION_NO_CODE_GUARD_ENABLED` | No | `true` | implement | Auto-heal remediation no-code guard. When `true`, the AI implementation commit is refused for an issue whose body has an unfenced line opening with `<!-- auto-heal-remediation:v1` when every staged path is a doc, test, fragment or DB contract path (`*.md`, `tests/**`, `docs/**`, `changelog.d/**`, `agents.d/**`, `db/contracts/**`). Nothing is committed, no PR is opened, and the issue is parked with `ai:scope-blocked` and one comment. Fails open (unreadable issue body, missing helper, heal route). Set to `false` to let such changes through. Log prefix `IMPLEMENT_REMEDIATION_NO_CODE_GUARD`. |
 | `SCOPE_GUARD_AUTO_ALLOW_PATHS` | No | `changelog.d/*.md,tests/fixtures/**` | implement, plan, orchestrate_poll | Comma-separated globs the general `files_touched` scope guard auto-allows, like lockfiles, when the issue's list (or `ai:scope:` scope) omits them: by default top-level `changelog.d/*.md` fragments and anything under `tests/fixtures/`. Unset or empty uses the default; `none`, `off`, `false`, `0` or `no` turns the allowance off. Entries that start with a glob, contain `..` or an empty segment, are absolute, longer than 200 characters, past the 20th, or start with an automation prefix or `.git` (any letter case) are ignored and logged as `SCOPE_GUARD_AUTO_ALLOW_IGNORED`; automation and `.git` paths are never auto-allowed. Each auto-allowed path logs `SCOPE_GUARD_AUTO_ALLOWED path=<p> glob=<g>` to stderr. Strict callers (`--strict-allowlist`: the workflow-heal route and heal plan gate, the conflict host-only check) never get it. The plan-time `files_touched` hold (`PLAN_FILES_TOUCHED_GATE_ENABLED`) uses the same allowance. |
 | `SCOPE_LOCK_LABEL_ENABLED` | No | `false` | implement | Master toggle for per-issue `ai:scope:<glob>` scope locks. When `true`, `implement.yml` reads at most one active issue label of that form, passes the glob into the implementation context, and rolls back any local AI commit whose changed paths fall outside the glob before push (dependency lockfiles and `SCOPE_GUARD_AUTO_ALLOW_PATHS` matches excepted). Glob syntax follows Bash with `globstar` semantics (for example `scripts/**/*.py` or `prompts/mode-*.txt`). Multiple `ai:scope:` labels are not merged; the workflow enforces only the first matching label from the issue metadata and logs a warning. |
 | `WORKFLOW_LOG_ANALYSIS_REPORT_RETENTION_DAYS` | No | `30` | workflow-log-analysis | Age (in days) above which dated `analysis/workflow-optimization-<date>.md` reports are git-removed in the same commit as a new report. Filename date stamps are authoritative; the just-written report is always preserved. Invalid values fail open to `30` with a warning. Only docs listed in the recommendation processing report (`APPLY_ANALYSIS_REPORT_PATH`, default `analysis/recommendation-processing-report.md`) are removed: an unprocessed doc past the window is kept and logged `WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED doc=<path> reason=unprocessed`, and when that report is missing or unreadable nothing is removed (`reason=processing_report_unavailable`). |
@@ -502,6 +503,7 @@ deployment fallback.
 | `RETARGET_MERGED_BASE_ENABLED` | No | `true` | implement, review_autofix | Retarget after a merged base (port P6 of `docs/plans/replace-claude-sessions-with-cli-engine-plan.md`). `scripts/retarget_merged_base.sh` treats an existing branch as finished when a merged PR has it as its head and the tip is still that PR's head commit (a reused branch name is never touched); it also follows a confirmed deleted branch. Before checkout, `implement.yml` maps the issue's integration branch through it, so new work targets the merged PR's base. The review gate retargets an open PR whose base is such a branch with one `PATCH` (it reads the base from the PR fetch it already makes; no call when the base is the default branch). A missing optional helper checkout skips retargeting with a warning; an identity mismatch after checkout fails the gate. Every other lookup or PATCH failure keeps the branch and warns. Legacy partial-resume markers without `base_ref` are ignored because their base cannot be verified. Logs `RETARGET_MERGED_BASE mode= repo= pr= from= to= merged_pr= outcome= reason=`. Set `false` to disable both. |
 | `RETARGET_MERGED_BASE_MAX_HOPS` | No | `3` | implement, review_autofix | Positive integer limiting the number of merged-base links followed. Invalid or non-positive values fall back to `3`. A deleted head ref is followed only when its read returns HTTP 404; other ref-read errors keep the original branch. A retargeted PR receives a full review against its new base, not a same-head or deterministic skip. |
 | `SANDBOX_SOLC_VERSIONS` | No | (empty: off) | implement | Opt-in Solidity compilers for the isolated implement sandbox (`scripts/codex_isolated_exec.sh`). Up to 5 comma- or space-separated versions, each matching `^0\.[0-9]{1,2}\.[0-9]{1,3}$` (for example `0.8.24, 0.8.20`). Each is downloaded at image build time from `binaries.soliditylang.org`, its sha256 checked against the official `linux-amd64/list.json` (a mismatch fails the image build), and installed as `/usr/local/bin/solc-<version>` (`/usr/local/bin/solc` is the first listed) plus a Hardhat `compilers-v2` cache that the agent container links into `$HOME/.cache` at start, so Hardhat compiles with no network. An invalid value, or a runner that is not x86-64, logs a `CODEX_ISOLATION solc_versions_invalid` warning and builds without solc. When empty or invalid, the image inputs are unchanged and the prebuilt image is used; when set, the image is built locally (x86-64 runners only). Foundry is not installed. |
+| `PIPELINE_RUNS_ON` | No | (unset: GitHub-hosted) | every reusable workflow consumers call except `ci.yml`, `workflow_failure_heal.yml` and `check_failure_triage.yml` | Runner for the consumer's pipeline jobs (`docs/plans/digitalocean-runners-for-consumer-pipelines-plan.md`). Only the exact value `do-runner` routes those jobs to single-use DigitalOcean droplets started by the runner scaler; unset or any other value keeps each job's previous GitHub-hosted runner (`ubuntu-latest`, or `ubuntu-24.04` for `security-audit.yml`), so a typo can never strand a job in the queue. Set it on a consumer only after the runner scaler serves that repository, or its jobs wait until the variable is unset. The heal and check-failure triage workflows always stay on GitHub-hosted runners, so a broken droplet fleet can never break the heal intake itself. The per-phase `heal-report` jobs inside `clarify.yml`, `plan.yml`, `implement.yml` and `validate.yml` do follow the variable, so while the fleet is down a failed phase's report waits with the rest of that run; unsetting the variable is the recovery. A job that fails because its droplet was lost is not filed as a heal issue (`WORKFLOW_HEAL skip reason=runner_lost`). Rollback: unset the variable; new jobs go back to GitHub-hosted runners at once. |
 
 Review-blocked reissues carry parent orchestrator metadata only when its tracking issue and integration branch agree with the PR's GitHub-reported `orchestrator/project-<n>` base. Inconsistent or malformed parent metadata is discarded; the replacement receives only base-derived tracking and branch lines, never an unverified local ID that could make another project adopt it as a security-pass successor. Canonical tracking-issue, integration-branch, and local-ID lines are also removed from the judge-generated issue prose before the validated metadata block is appended, so duplicate model output cannot redirect successor adoption.
 
@@ -2111,6 +2113,39 @@ the way to a fix PR without human action.
   `ai:check-triage-escalated` and sends a Telegram CRITICAL for human
   attention. The triage workflow also skips its own check-run by name to
   prevent self-triggering.
+- **One issue per failing base branch (Refs #9674):** when the base gate reads a
+  completed failing result (`failure`, `timed_out`, `cancelled`,
+  `startup_failure`, `action_required`) for the same check on the PR's base
+  branch, and that base is the repository's default branch, the issue is keyed
+  on the base branch (`sha256("<repo>|base=<ref>|check=<check>")`) instead of
+  the PR. If an open `ai:check-triage` issue already carries that fingerprint,
+  nothing is filed (`CHECK_TRIAGE skip reason=base_triage_tracked base=<ref>
+  issue=<n> pr=<n> check=<name>`); otherwise one issue is filed
+  (`base_keyed outcome=file`), titled `CI failure: <check> on <ref> (first seen
+  on PR #<n>)`, with a fifth header line `<!-- check-failure-triage:base=<ref> -->`
+  that makes `scripts/resolve_integration_ref.sh` keep the default branch
+  (`CI_TRIAGE_PR_BRANCH_ROUTING … outcome=skipped reason=base_keyed`) instead of
+  the example PR's head. A green or pending base, an unknown base result, a
+  non-default base and the routed paths (integration branch, PR-head and
+  target-branch routes) keep the per-PR fingerprint; historical mode is
+  unchanged. The heal-issue skip (`CHECK_TRIAGE_BASE_TRACKED_SKIP_ENABLED`) runs
+  first. With `CHECK_TRIAGE_BRANCH_GUARD_ENABLED=true` the branch guard blocks a
+  base-keyed issue, because it carries no branch line.
+  Because runs for different PRs are not serialized, the post step lists open
+  `ai:check-triage` issues once more just before filing a base-keyed issue (one
+  read, base-keyed filings only) and files nothing when one already carries the
+  fingerprint (`CHECK_TRIAGE skip reason=base_triage_tracked … stage=post`); a
+  failed read files as before (`base_keyed recheck=read_failed outcome=file`).
+  If the base-keyed metadata handed to the diagnose stage fails its re-check
+  (unsafe ref, fingerprint mismatch, a routing line beside it, or historical
+  mode), nothing is filed: the run logs `CHECK_TRIAGE error
+  base_keyed_metadata_invalid`, sends one Telegram CRITICAL and fails.
+- **Open-issue cap (Refs #9674):** once `CHECK_FAILURE_TRIAGE_MAX_OPEN_ISSUES`
+  (default 5, `0` = no cap) `ai:check-triage` issues are open, the collect stage
+  files nothing, logs `CHECK_TRIAGE skip reason=open_issue_cap open=<n> cap=<cap>
+  pr=<n> check=<name>` and sends one Telegram WARNING. It counts the existing
+  open-triage listing (no extra API call); historical mode and a supersede
+  replacement are exempt.
 - **Routing to the PR branch (opt-in):** with
   `CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED=true`, the collect step checks the PR
   it already fetched (open, head and base in this repository, head not the
@@ -2962,6 +2997,7 @@ through `clarify → plan → implement → review`.
 | `CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED` | `true` | On when unset, empty or `true` (any case); `false` turns it off, and any other value turns it off with a `::warning::`. When on, `scripts/resolve_integration_ref.sh` treats an issue with no `ai:check-triage` label whose body does not open with a `check-failure-triage` marker as an ordinary issue, instead of refusing it as `reason=label_missing` because its prose mentions the markers (#8671). Issues filed by `scripts/check_failure_triage.sh` always open with the `fp=` header, so a label-stripped real triage issue is still refused. Off restores that refusal. The resolver reads the variable from its own environment; no workflow forwards a repository variable for it, so in Actions it stays at its default. |
 | `CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED` | `true` | On when unset, empty or `true` (any case); `false` turns it off, and any other value turns it off with a `::warning::`. While `CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED` is on, `scripts/resolve_integration_ref.sh` resolves an unblock-judge CI-failure re-issue (a lone `check-failure-triage:pr=<n>` marker on line 1, `Re-issued by the unblock judge from #N.` on line 2, a trusted author, no label) to the base branch of its PR when that PR merged into a non-default branch of this repository that still exists (#9170). Anything it cannot verify keeps the default branch and logs `::warning::CI_TRIAGE_PR_BRANCH_ROUTING ... outcome=skipped reason=<token>`; it never fails the phase, except that a rate-limited read exits `75`. Off keeps the default branch for every such re-issue (`reason=flag_off`) and leaves the labelled `ai:check-triage` routing unchanged. The clarify, plan, implement, orchestrate_clarify_respond and validate workflows forward the repository variable to the resolver in their "Resolve integration ref" step (default `true`), so setting it to `false` turns this routing off without touching `CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED`. |
 | `CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH` | `3` | Max auto-fix generations in a single failure lineage before the chain is escalated (`ai:check-triage-escalated` + Telegram) instead of opening another issue. |
+| `CHECK_FAILURE_TRIAGE_MAX_OPEN_ISSUES` | `5` | Open `ai:check-triage` issues at which check-failure triage stops filing new ones (`CHECK_TRIAGE skip reason=open_issue_cap`, one Telegram WARNING per run). `0` turns the cap off; any value that is not a non-negative integer warns and uses `5`. Counted from the open-triage listing the duplicate check already reads; historical mode and supersede replacements are exempt (Refs #9674). |
 | `CHECK_TRIAGE_BRANCH_GUARD_ENABLED` | `false` | When on, planning of an `ai:check-triage` issue is blocked (`ai:blocked`, with the existing BLOCKED comment and alert) unless its body has an explicit `Target branch:` or `Integration branch:` line naming an existing branch, instead of planning it on the default branch. The branch is never inferred from issue prose; reply `/answer` after fixing the metadata. A branch from verified PR-head routing (`CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED`) also passes, logged as `reason=pr_head_routed`. Other issues are unaffected. Log prefix `CHECK_TRIAGE_BRANCH_GUARD`. Triage issues get a branch line only when `CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED`, `CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED` or `TRIAGE_PR_HEAD_BRANCH_METADATA_ENABLED` adds one; with none of those on, turning this on blocks new triage issues until their bodies name a branch. |
 | `CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED` | `false` | Set to `true` to give a new triage issue a `Target branch: <head ref>` line, so its fix PR targets the failing PR's own branch instead of the default branch. Only an open PR whose head and base are this repository, whose head is not the default branch and whose branch name passes a strict check gets the line; anything else is filed without it (`CHECK_TRIAGE routing outcome=skip reason=…`). Model and log text cannot supply routing lines. |
 | `CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED` | `false` | When `true`, the triage issue gets one ``- **Integration branch:** `<head ref>` `` line naming the failing PR's head branch, so the fix is planned and implemented on that branch. The line is added only for an open, same-repository PR whose head SHA equals the failing check's SHA and whose head ref is a valid branch name. A verified route also skips the base-branch gate (`CHECK_TRIAGE base_gate outcome=file reason=pr_head_route`), because the fix lands on the PR's own branch. Otherwise the run logs `CHECK_TRIAGE skip reason=routing_unverified detail=<reason>`, sends a Telegram WARNING and files no issue. The body validator admits only that one script-generated line. |
@@ -4980,6 +5016,142 @@ container (no network, read-only root, no runner environment, the gate module
 taken from the trusted support checkout). The AI pipelines (implement, review
 autofix, conflict resolver, heal, integration-branch repair) start using it in
 later phases of `docs/plans/prepush-affected-test-gate-plan.md`.
+
+## DigitalOcean runners for consumer pipelines
+
+`tools/runner_scaler/` is a small service that runs consumer pipeline jobs on
+single-use DigitalOcean droplets, so those jobs leave the account's GitHub-hosted
+runner pool. A consumer opts in with the repo variable `PIPELINE_RUNS_ON=do-runner`
+(see the Variables table); coding-workflows itself never does. Plan:
+`docs/plans/digitalocean-runners-for-consumer-pipelines-plan.md`.
+
+**How it works.**
+
+1. A GitHub App sends `workflow_job` webhooks to the service's `POST /webhook`.
+   Deliveries are verified with HMAC-SHA256.
+2. Every pass compares queued `do-runner` jobs with supply: droplets still
+   booting plus online idle runners. A droplet stays "booting" until its runner
+   first comes online or picks up a job, because GitHub lists a just-in-time
+   runner as `offline` from the moment it is created. It creates one droplet per missing
+   runner, up to `RUNNER_SCALER_MAX_DROPLETS` at once.
+3. Each droplet boots the stock `ubuntu-26-04-x64` image with
+   `tools/runner_scaler/bootstrap/runner-boot.sh` as user data. The script
+   installs the pipeline's tools, runs a self-check, then runs exactly one job
+   as an unprivileged `runner` user with a single-use just-in-time runner
+   configuration, and powers off.
+4. Passes run on every webhook and every `RUNNER_SCALER_RECONCILE_SECONDS`. A
+   full scan of queued and in-progress runs every
+   `RUNNER_SCALER_FULL_SCAN_SECONDS` recovers missed webhooks. The service
+   keeps no state of its own: droplets carry the tags `gh-runner` and
+   `gh-runner-repo-<slug>`, so a restart picks up where it stopped.
+
+**Cleanup.** A droplet is destroyed when:
+
+- its job completes;
+- it powered off after its job;
+- its self-check failed: it powered off while its runner never came online, and this counts as a boot failure;
+- its runner did not come online within `RUNNER_SCALER_REGISTER_TIMEOUT_SECONDS` (also a boot failure);
+- it stayed idle with no queued job for the same period;
+- it outlived `RUNNER_SCALER_MAX_LIFETIME_MINUTES`.
+
+Offline `do-runner-*` runners with no droplet are deleted, at most 10 per pass.
+
+**Failure handling, bounded so nothing can loop.**
+
+- **Circuit breaker.** It opens after `RUNNER_SCALER_BREAKER_CONSECUTIVE` boot
+  failures in a row, or when more than `RUNNER_SCALER_BREAKER_FAIL_RATIO` of the
+  boots in `RUNNER_SCALER_BREAKER_WINDOW_MINUTES` failed. While open it creates
+  no droplets, then allows one trial droplet after
+  `RUNNER_SCALER_BREAKER_COOLDOWN_MINUTES`.
+- **Lost runners.** A job whose droplet was lost, shown by GitHub's
+  lost-runner annotation, is re-run once, only at `run_attempt` 1. GitHub
+  accepts the re-run only after the whole run completes, so it is retried at
+  most every 5 minutes for up to 6 hours. The heal
+  intake files no heal issue for it (`skip reason=runner_lost`).
+- **Repair path.** The heal and check-failure triage workflows always run on
+  GitHub-hosted runners.
+- **Alerts.** These go to Telegram (`TG_BOT_SECRET`, `TG_ADMIN_CHAT_ID`), at most
+  once per incident per `RUNNER_SCALER_ALERT_COOLDOWN_MINUTES`:
+  - `breaker_open`;
+  - `queued_without_supply:<repo>`: a job queued longer than `RUNNER_SCALER_QUEUE_ALERT_MINUTES` with no droplet booting for it;
+  - `cap_reached`;
+  - `destroy_failed`: a droplet delete failed; it is retried every pass and counts against the cap;
+  - `do_api_error`;
+  - `rerun_given_up:<repo>`.
+- **Health.** `GET /healthz` fails when no pass has completed within 3
+  intervals or 15 minutes, whichever is longer, so App Platform restarts the
+  service. A DigitalOcean Uptime check
+  on it alerts by email when the service is down.
+
+**Onboarding a consumer.** `/seed-repo` offers the fleet for a new private
+consumer once the rollout has recorded the app as the `runner-scaler` row of the
+agents file's `## DigitalOcean resources` table. The order is fixed:
+
+1. Add the repository to the GitHub App `shubhodeep1-runner-scaler`. This is a
+   browser step.
+2. Add it to `RUNNER_SCALER_REPOS`, and check that the redeploy's
+   `RUNNER_SCALER outcome=started` line shows `dry_run=false`: in dry run the
+   service creates no droplets and raises no queue alert.
+3. Only then set `PIPELINE_RUNS_ON=do-runner` on it.
+
+The same order applies to an existing consumer that opts in later. If the
+`started` line still shows `dry_run=true`, leave `PIPELINE_RUNS_ON` unset:
+turning dry run off is a fleet-wide app spec change
+(`RUNNER_SCALER_DRY_RUN=false`, ask-first), and step 3 follows only once a
+later `started` line shows `dry_run=false`.
+
+**Rollback.** Unset `PIPELINE_RUNS_ON` on the consumer: new jobs go back to
+GitHub-hosted runners at once. Jobs already queued keep their `do-runner`
+label: leave the repository in `RUNNER_SCALER_REPOS` until they have run, or
+cancel and re-run them so they pick up a GitHub-hosted runner. The service
+does not cancel them.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `RUNNER_SCALER_REPOS` | (empty: serve no repository) | Comma- or space-separated `owner/name` list the service creates droplets for. Invalid entries and slug collisions are skipped and logged. `shubhodeep1/coding-workflows` is always skipped (`reason=excluded_repo`): this repository's own jobs stay on GitHub-hosted runners. |
+| `RUNNER_SCALER_VPC_UUID` | (empty) | The dedicated VPC every runner droplet is created in, so runners never share the region's default VPC with the account's other droplets. Required while `RUNNER_SCALER_REPOS` is set: without it the service refuses to start. |
+| `RUNNER_SCALER_DRY_RUN` | `false` (`true` in `app.yaml` for the first deploy) | `true` logs every decision (`outcome=dry_run`) and calls no write endpoint. |
+| `RUNNER_SCALER_LABEL` | `do-runner` | Runner label; must match the `runs-on` expression in the reusable workflows. |
+| `RUNNER_SCALER_DROPLET_SIZE` | `s-4vcpu-8gb` | Droplet size slug. |
+| `RUNNER_SCALER_REGION` | `nyc3` | Droplet region. |
+| `RUNNER_SCALER_IMAGE` | `ubuntu-26-04-x64` | Droplet image; keep it on the Ubuntu release `ubuntu-latest` uses. |
+| `RUNNER_SCALER_MAX_DROPLETS` | `60` | Cap on scaler droplets at once (60 × $0.07143/hr is at most $4.29/hr). `0` stops creating. |
+| `RUNNER_SCALER_RECONCILE_SECONDS` | `120` | Interval between passes when no webhook arrives (30–3600). |
+| `RUNNER_SCALER_FULL_SCAN_SECONDS` | `600` | Interval between full scans of queued and in-progress runs (60–86400). |
+| `RUNNER_SCALER_SCAN_MAX_RUNS` | `20` | Runs read per status per repository per full scan (1–100). |
+| `RUNNER_SCALER_REGISTER_TIMEOUT_SECONDS` | `900` | Time a droplet's runner may take to come online; also the idle window. |
+| `RUNNER_SCALER_MAX_LIFETIME_MINUTES` | `300` | Hard droplet lifetime (the longest job timeout is 240 minutes). |
+| `RUNNER_SCALER_QUEUE_ALERT_MINUTES` | `10` | Queue wait before a `queued_without_supply` alert. |
+| `RUNNER_SCALER_BREAKER_CONSECUTIVE` / `_WINDOW_MINUTES` / `_FAIL_RATIO` / `_MIN_BOOTS` / `_COOLDOWN_MINUTES` | `3` / `15` / `0.5` / `4` / `15` | Circuit breaker settings. |
+| `RUNNER_SCALER_ALERT_COOLDOWN_MINUTES` | `60` | Minimum time between two alerts with the same key. |
+| `RUNNER_SCALER_RERUN_ENABLED` | `true` | `false` turns off the lost-runner re-run. |
+| `PORT` | `8080` | HTTP port (App Platform's `http_port`). |
+
+Secrets (encrypted App Platform env vars; the service refuses to start, exit 2
+with `outcome=config_error reason=missing_required`, when `RUNNER_SCALER_REPOS`
+is set and one of them or `RUNNER_SCALER_VPC_UUID` is missing):
+`RUNNER_SCALER_DO_TOKEN`, `RUNNER_SCALER_GH_APP_ID`,
+`RUNNER_SCALER_GH_APP_PRIVATE_KEY` and `RUNNER_SCALER_WEBHOOK_SECRET`.
+
+- `RUNNER_SCALER_DO_TOKEN` is a custom-scoped DigitalOcean token: droplet
+  create, read and delete, plus tag create and read.
+- `RUNNER_SCALER_GH_APP_ID` and `RUNNER_SCALER_GH_APP_PRIVATE_KEY` belong to a
+  GitHub App installed only on the consumer repositories. Its repository
+  permissions are Actions read and write, Administration read and write,
+  Checks read (the lost-runner re-run reads the job's check-run annotations),
+  and Metadata read, and its webhook event is Workflow job. The service keeps
+  one installation token per repository owner.
+- `RUNNER_SCALER_WEBHOOK_SECRET` is the App's webhook secret.
+
+Droplets hold none of these. They are created in the dedicated VPC named by
+`RUNNER_SCALER_VPC_UUID`, and a cloud firewall on the tag `gh-runner` allows no
+inbound traffic.
+
+Every decision is one `RUNNER_SCALER outcome=<...> reason=<...> repo=<...> droplet=<...>`
+log line. Deployment: `tools/runner_scaler/app.yaml` builds `tools/runner_scaler/Dockerfile`
+from the `stable` branch and redeploys on every push to it. Creating the app,
+setting its secrets, and the VPC, firewall and Uptime check are ask-first
+operations (CLAUDE.md §22.B), done once at rollout.
 
 ## Repository Structure
 
