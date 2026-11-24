@@ -6,6 +6,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 ## Phase prompts
 
 - `prompts/mode-activation-verify.txt` — Role: activation verifier. Goal: grade work that just merged LIVE or DORMANT and list each gap as code or operator (port P4).
+- `prompts/mode-alert-triage.txt` — Role: ALERT TRIAGE investigator of the coding-workflows automation (alert triage plan Phase 2). Goal: classify one group of captured workflow alerts as noise, environmental, healable, pipeline_blocked or unsure, from the evidence and the code, and reply with the JSON the host routes.
 - `prompts/mode-check-failure-triage.txt` — Role: CI failure triager. Goal: analyze a failing pull-request check and write a GitHub issue body describing the likely root cause and suggested fix.
 - `prompts/mode-clarify-respond.txt` — You are an AI assistant resolving clarification questions on behalf of the project orchestrator.
 - `prompts/mode-clarify.txt` — Role: clarify-phase auditor. Goal: emit `STATUS: CLEAR` or a `Q1`/`Q2` batch of blocking clarification questions.
@@ -48,6 +49,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 ## Workflows
 
 - `.github/workflows/alert-inbox-intake.yml` — GitHub Actions workflow: Alert Inbox Intake (stores one `repository_dispatch` `alert-inbox` record on the `ai/alert-inbox` branch; alert triage Phase 1).
+- `.github/workflows/alert-triage.yml` — GitHub Actions workflow: Alert Triage.
 - `.github/workflows/audit_consumer_drift.yml` — GitHub Actions workflow: Audit Consumer Drift.
 - `.github/workflows/auto-release-stable.yml` — GitHub Actions workflow: Auto release stable.
 - `.github/workflows/cancel_on_pr_close.yml` — GitHub Actions workflow: AI Cancel Runs on PR Close.
@@ -122,6 +124,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/ai_memory_lib.py` — Shared AI memory helpers for GitHub workflows.
 - `scripts/alert_inbox_capture.sh` — Sourced by `tg_helpers.sh`: reads the trusted `.github/ai/alert_inbox.json` switches and sends one `alert-inbox` `repository_dispatch` per captured WARNING/ERROR/CRITICAL alert (alert triage Phase 1, default off).
 - `scripts/alert_inbox_store.sh` — Body of `alert-inbox-intake.yml`: validates an `alert_inbox.v1` record and writes it to `ai/alert-inbox` with the Contents API (up to 3 jittered 409 retries, branch bootstrap).
+- `scripts/alert_triage.py` — Hourly alert triage, the deterministic half: groups captured alerts, applies the ledger and tracking checks, collects bounded evidence, renders the model input, parses the reply and decides each group's route (alert triage Phase 2, default off).
+- `scripts/alert_triage_route.sh` — Body of `alert-triage.yml`: fetches the alert inbox, runs the triage model per group and performs the routes `scripts/alert_triage.py` decides (heal report, self-fix dispatch, escalation; dry-run by default).
 - `scripts/analyze_soft_errors.py` — Soft-error log analyzer for the release-gate smoke test.
 - `scripts/analyze_workflow_logs.py` — Prepare aggregated workflow telemetry context for the Codex analysis pass.
 - `scripts/apply_analysis_on_main.sh` — Dispatch one pending workflow-analysis document to the orchestrator.

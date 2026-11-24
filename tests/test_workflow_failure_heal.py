@@ -3395,9 +3395,9 @@ def test_intake_report_without_runs_skips_quietly_instead_of_paging(tmp_path: Pa
 		assert "skip reason=scope_marker_unresolved" not in result.stdout
 	# A report that named a run still pages: there the unresolved scope is a fault.
 	intake = INTAKE_SCRIPT.read_text(encoding="utf-8")
-	# Four call sites: the engine_fallback and release_blocker pre-diagnosis
-	# skips, the marker guard and the creation gate.
-	assert intake.count("_heal_report_claimed_no_runs; then") == 4
+	# Five call sites: the engine_fallback, alert_triage and release_blocker
+	# pre-diagnosis skips, the marker guard and the creation gate.
+	assert intake.count("_heal_report_claimed_no_runs; then") == 5
 	# Claimed runs that validate-payload drops (here a foreign repository) still
 	# page: the raw report named runs, so the missing scope is a fault.
 	tg_log = tmp_path / "tg-dropped.log"
