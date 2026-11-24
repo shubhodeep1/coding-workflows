@@ -5,13 +5,28 @@
   "entry_id": "processed_command_10031_7121215785_approved",
   "issue_number": 10031,
   "metadata": {
+    "branch": "ai/issue-10031",
+    "changed_files": [
+      ".github/workflows/clarify.yml",
+      "agents.d/10031-rate-limit-requeue.md",
+      "changelog.d/10031-rate-limit-requeue.md",
+      "scripts/orchestrate_poll_process.sh",
+      "scripts/review_autofix_step_evaluate_gate.sh",
+      "tests/test_rate_limit_requeue.py",
+      "tests/test_workflow_checkout_integration_ref_audit.py"
+    ],
+    "issue_number": 10031,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/10031",
+    "pr_number": 10039,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/10039",
+    "run_attempt": "1",
+    "run_id": "45320397264",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/45320397264"
   },
   "run_attempt": 1,
   "run_id": "45320397264",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-24T04:08:25Z",
+  "status": "completed",
+  "timestamp": "2026-11-24T05:27:54Z",
   "workflow": "implement"
 }
