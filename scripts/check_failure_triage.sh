@@ -40,6 +40,9 @@
 # Optional env (have defaults):
 #   CHECK_FAILURE_TRIAGE_ENABLED             "false" to disable; default on
 #   CHECK_FAILURE_TRIAGE_MAX_LINEAGE_DEPTH   max auto-fix generations (default 3)
+#   CHECK_FAILURE_TRIAGE_MAX_OPEN_ISSUES     open ai:check-triage issues at which new
+#                                            filings stop (default 5; 0 = no cap; other
+#                                            values warn and use 5; issue #9674)
 #   MODEL_EDITOR                             diagnosis model (default openai/gpt-6-sol)
 #   MODEL_VERBOSITY                          codex verbosity (default low)
 #   CHECK_RUNS_WAIT_TIMEOUT_SECS             context collector wait (default 60)
@@ -423,6 +426,16 @@ case "${MAX_DEPTH}" in
 		MAX_DEPTH=3
 		;;
 esac
+# Issue #9674: stop new filings once this many ai:check-triage issues are open
+# (0 = no cap). Counted from the existing open-triage listing, no extra call.
+TRIAGE_OPEN_ISSUE_CAP=5
+if [ -n "${CHECK_FAILURE_TRIAGE_MAX_OPEN_ISSUES:-}" ]; then
+	if [[ "${CHECK_FAILURE_TRIAGE_MAX_OPEN_ISSUES}" =~ ^[0-9]{1,6}$ ]]; then
+		TRIAGE_OPEN_ISSUE_CAP=$((10#${CHECK_FAILURE_TRIAGE_MAX_OPEN_ISSUES}))
+	else
+		echo "::warning::CHECK_FAILURE_TRIAGE_MAX_OPEN_ISSUES is not a non-negative integer; using 5"
+	fi
+fi
 
 TRIAGE_LABEL="ai:check-triage"
 ESCALATED_LABEL="ai:check-triage-escalated"
@@ -663,6 +676,9 @@ triage_release_download_rerun_gate()
 SUPERSEDE_OLD_ISSUE=""
 SUPERSEDE_OLD_HEAD=""
 SUPERSEDE_NEW_HEAD=""
+# Issue #9674: the default branch this issue is keyed on while it fails the
+# same check (empty = the per-PR fingerprint).
+BASE_KEYED_REF=""
 # Skip a PR's CI failure that the default branch already has when an open
 # workflow-heal issue tracks that workflow there (issues #9224, #9228, #9230,
 # #9231 and #9232 were all filed for the ubuntu-26.04 breakage heal issue
@@ -1196,6 +1212,8 @@ if [ "${TRIAGE_STAGE}" = "diagnose" ]; then
 	PR_URL="$(jq -er '.url' "${TRIAGE_METADATA_FILE}")"
 	# Older metadata files have no routing field: no routing line.
 	ROUTING_TARGET_BRANCH="$(jq -r 'if (.routing_target_branch | type) == "string" then .routing_target_branch else "" end' "${TRIAGE_METADATA_FILE}")"
+	# Issue #9674: older metadata files have no base_keyed_ref: per-PR issue.
+	BASE_KEYED_REF="$(jq -r 'if (.base_keyed_ref | type) == "string" then .base_keyed_ref else "" end' "${TRIAGE_METADATA_FILE}")"
 	FP_MARKER="<!-- ${MARKER_PREFIX}fp=${FP} -->"
 	# The collect stage's metadata is authoritative for historical mode here.
 	HISTORICAL_MODE=false
@@ -1849,6 +1867,37 @@ else
 			fi
 		fi
 	fi
+	# Issue #9674: while the default branch itself fails this check, every PR
+	# into it fails the same way, so key the issue on the base branch instead
+	# of the PR: one breakage files one issue. Only a completed failing
+	# conclusion on the repository's default branch counts (read from the PR
+	# payload, no API call); an unknown result, a non-default base and every
+	# routed path above keep the per-PR fingerprint.
+	case "${base_gate_conclusion}" in
+		failure|timed_out|cancelled|startup_failure|action_required)
+			base_keyed_default_branch="$(printf '%s' "${PR_JSON}" | jq -r '.base.repo.default_branch // ""' 2>/dev/null || true)"
+			if [ -n "${base_keyed_default_branch}" ] && [ "${BASE_REF}" = "${base_keyed_default_branch}" ]; then
+				base_keyed_fp="$(printf '%s' "${REPO}|base=${BASE_REF}|check=${CHECK_NAME}" | sha256sum | awk '{print $1}')"
+				base_keyed_existing="$(printf '%s' "${OPEN_TRIAGE}" | jq -r --arg fp "fp=${base_keyed_fp}" '[.[] | select((.body // "") | contains($fp)) | .number] | first // empty' 2>/dev/null || echo '')"
+				if [ -n "${base_keyed_existing}" ]; then
+					log "skip reason=base_triage_tracked base=${BASE_REF} issue=${base_keyed_existing} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+					# A stale per-PR issue recorded for supersede above is not
+					# replaced (nothing is filed here), so it stays open; say so.
+					if [ -n "${SUPERSEDE_OLD_ISSUE}" ]; then
+						log "op=supersede outcome=skip reason=base_triage_tracked old=${SUPERSEDE_OLD_ISSUE}"
+					fi
+					if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ]; then
+						triage_report_routing_unverified
+					fi
+					exit 0
+				fi
+				FP="${base_keyed_fp}"
+				FP_MARKER="<!-- ${MARKER_PREFIX}fp=${FP} -->"
+				BASE_KEYED_REF="${BASE_REF}"
+				log "base_keyed outcome=file base=${BASE_REF} fp=${FP} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+			fi
+			;;
+	esac
 	log "base_gate outcome=file base=${BASE_REF} base_conclusion=${base_gate_conclusion:-unknown}${base_gate_reason:+ reason=${base_gate_reason}} pr=${PR_NUMBER}"
 fi
 
@@ -1885,6 +1934,21 @@ if [ "${PR_HEAD_ROUTING_ENABLED}" = "true" ]; then
 		log "routing=pr_head pr=${PR_NUMBER} ref=${ROUTING_REF}"
 	else
 		triage_report_routing_unverified
+		exit 0
+	fi
+fi
+
+# --- Open-issue cap (issue #9674) ------------------------------------------
+# A backstop against a flood of triage issues: once CHECK_FAILURE_TRIAGE_MAX_OPEN_ISSUES
+# ai:check-triage issues are open, file no new one. Counts the open-triage
+# listing read above (no API call). Historical mode and a supersede
+# replacement (it files one issue and closes one) are exempt; 0 = no cap.
+if [ "${HISTORICAL_MODE}" != "true" ] && [ -z "${SUPERSEDE_OLD_ISSUE}" ] && [ "${TRIAGE_OPEN_ISSUE_CAP}" -gt 0 ]; then
+	triage_open_issue_count="$(printf '%s' "${OPEN_TRIAGE}" | jq 'length' 2>/dev/null || echo 0)"
+	[[ "${triage_open_issue_count}" =~ ^[0-9]+$ ]] || triage_open_issue_count=0
+	if [ "${triage_open_issue_count}" -ge "${TRIAGE_OPEN_ISSUE_CAP}" ]; then
+		log "skip reason=open_issue_cap open=${triage_open_issue_count} cap=${TRIAGE_OPEN_ISSUE_CAP} pr=${PR_NUMBER} check=${CHECK_NAME_DISPLAY}"
+		tg_send_msg "Check-failure auto-triage skipped ${REPO} PR #${PR_NUMBER}, check '${CHECK_NAME_DISPLAY}': ${triage_open_issue_count} open ai:check-triage issues reached CHECK_FAILURE_TRIAGE_MAX_OPEN_ISSUES=${TRIAGE_OPEN_ISSUE_CAP}. No issue was filed."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
 		exit 0
 	fi
 fi
@@ -2361,7 +2425,8 @@ if [ "${TRIAGE_STAGE}" = "collect" ]; then
 		--arg supersede_issue "${SUPERSEDE_OLD_ISSUE}" \
 		--arg supersede_old_head_sha "${SUPERSEDE_OLD_HEAD}" \
 		--arg supersede_new_head_sha "${SUPERSEDE_NEW_HEAD}" \
-		'{pr_number: $pr_number, check_name: $check_name, fingerprint: $fingerprint, generation: $generation, root: $root, head_ref: $head_ref, title: $title, url: $url, routing_target_branch: $routing_target_branch, routing_ref: $routing_ref, integration_branch: $integration_branch, supersede_issue: $supersede_issue, supersede_old_head_sha: $supersede_old_head_sha, supersede_new_head_sha: $supersede_new_head_sha}' > "${TRIAGE_METADATA_FILE}"
+		--arg base_keyed_ref "${BASE_KEYED_REF}" \
+		'{pr_number: $pr_number, check_name: $check_name, fingerprint: $fingerprint, generation: $generation, root: $root, head_ref: $head_ref, title: $title, url: $url, routing_target_branch: $routing_target_branch, routing_ref: $routing_ref, integration_branch: $integration_branch, supersede_issue: $supersede_issue, supersede_old_head_sha: $supersede_old_head_sha, supersede_new_head_sha: $supersede_new_head_sha, base_keyed_ref: $base_keyed_ref}' > "${TRIAGE_METADATA_FILE}"
 	if [ "${HISTORICAL_MODE}" = "true" ]; then
 		jq --argjson hist "${HIST_META_JSON}" '. + $hist' "${TRIAGE_METADATA_FILE}" > "${TRIAGE_METADATA_FILE}.tmp"
 		mv "${TRIAGE_METADATA_FILE}.tmp" "${TRIAGE_METADATA_FILE}"
@@ -2386,6 +2451,21 @@ if [ -n "${ROUTING_TARGET_BRANCH}" ]; then
 		# The route must name the PR head recorded beside it.
 		log "routing outcome=skip reason=handoff_mismatch"
 		ROUTING_TARGET_BRANCH=""
+	fi
+fi
+
+# Issue #9674: the base-keyed ref crossed the same file hand-off. It must be a
+# safe ref, the fingerprint must be the base-keyed one for this repository,
+# ref and check, and no routing line may sit beside it; otherwise fail closed.
+if [ -n "${BASE_KEYED_REF}" ]; then
+	base_keyed_expected_fp="$(printf '%s' "${REPO}|base=${BASE_KEYED_REF}|check=${CHECK_NAME}" | sha256sum | awk '{print $1}')"
+	if ! [[ "${BASE_KEYED_REF}" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || [[ "${BASE_KEYED_REF}" == *..* ]] ||
+		[ "${FP}" != "${base_keyed_expected_fp}" ] ||
+		[ -n "${ROUTING_TARGET_BRANCH}${ROUTING_REF}${INTEGRATION_BRANCH}" ] ||
+		[ "${HISTORICAL_MODE}" = "true" ]; then
+		log "error base_keyed_metadata_invalid"
+		tg_send_msg "Check-failure auto-triage rejected invalid base-keyed metadata for ${REPO} PR #${PR_NUMBER}. No issue was filed."$'\n'"Run: ${RUN_URL}" "CRITICAL" >/dev/null 2>&1 || true
+		exit 1
 	fi
 fi
 
@@ -2639,6 +2719,9 @@ fi
 # --- Compose and open the issue --------------------------------------------
 
 TITLE="CI failure: ${CHECK_NAME_DISPLAY} on PR #${PR_NUMBER}"
+if [ -n "${BASE_KEYED_REF}" ]; then
+	TITLE="CI failure: ${CHECK_NAME_DISPLAY} on ${BASE_KEYED_REF} (first seen on PR #${PR_NUMBER})"
+fi
 if [ -n "${ROUTING_REF}" ]; then
 	# The only routing line the body validator admits; the ref was verified
 	# against the PR payload by triage_verify_pr_head_route.
@@ -2654,12 +2737,24 @@ BODY_FILE="${RUNTIME_DIR}/issue_body.md"
 	echo "<!-- ${MARKER_PREFIX}gen=${GEN} -->"
 	echo "<!-- ${MARKER_PREFIX}root=${ROOT} -->"
 	echo "<!-- ${MARKER_PREFIX}pr=${PR_NUMBER} -->"
+	if [ -n "${BASE_KEYED_REF}" ]; then
+		# Issue #9674: read by scripts/resolve_integration_ref.sh (line 5 only),
+		# which then keeps the default branch instead of the PR's head branch.
+		echo "<!-- ${MARKER_PREFIX}base=${BASE_KEYED_REF} -->"
+	fi
 	echo
 	echo "## Automated CI failure triage (generation ${GEN} of max ${MAX_DEPTH})"
 	echo
-	echo "A check failed on PR #${PR_NUMBER}. This issue was filed automatically so the AI pipeline can implement a fix through the normal clarify -> plan -> implement -> review path."
+	if [ -n "${BASE_KEYED_REF}" ]; then
+		echo "Check \`${CHECK_NAME_DISPLAY}\` fails on the base branch \`${BASE_KEYED_REF}\`: its newest run there did not succeed. It was first seen on PR #${PR_NUMBER}; other pull requests that fail the same check while \`${BASE_KEYED_REF}\` is failing are folded into this issue. Fix the failure on \`${BASE_KEYED_REF}\`."
+	else
+		echo "A check failed on PR #${PR_NUMBER}. This issue was filed automatically so the AI pipeline can implement a fix through the normal clarify -> plan -> implement -> review path."
+	fi
 	echo
 	echo "- **Repository:** \`${REPO}\`"
+	if [ -n "${BASE_KEYED_REF}" ]; then
+		echo "- **Base branch:** \`${BASE_KEYED_REF}\` (failing; first seen on PR #${PR_NUMBER})"
+	fi
 	echo "- **Pull request:** ${PR_URL_DISPLAY} (\`${HEAD_REF_DISPLAY}\`)"
 	if [ -n "${ROUTING_LINE}" ]; then
 		# The one routing line this body may carry: verified in collect,
@@ -2711,7 +2806,11 @@ BODY_FILE="${RUNTIME_DIR}/issue_body.md"
 	echo
 	echo "---"
 	echo
-	echo "_Filed by the AI check-failure-triage workflow. Auto-fix lineage generation ${GEN} (cap ${MAX_DEPTH}); the chain escalates to a human at the cap. Re-runs for the same PR + check are de-duplicated while this issue stays open._"
+	if [ -n "${BASE_KEYED_REF}" ]; then
+		echo "_Filed by the AI check-failure-triage workflow. Auto-fix lineage generation ${GEN} (cap ${MAX_DEPTH}); the chain escalates to a human at the cap. Failures of this check on any pull request into \`${BASE_KEYED_REF}\` are de-duplicated while this issue stays open._"
+	else
+		echo "_Filed by the AI check-failure-triage workflow. Auto-fix lineage generation ${GEN} (cap ${MAX_DEPTH}); the chain escalates to a human at the cap. Re-runs for the same PR + check are de-duplicated while this issue stays open._"
+	fi
 } > "${BODY_FILE}"
 
 if ! PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${BODY_FILE}" <<'PY'
@@ -2736,7 +2835,7 @@ then
 	exit 1
 fi
 
-if ! body_validation_reason="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${BODY_FILE}" "${FP_MARKER}" "${GEN}" "${ROOT}" "${PR_NUMBER}" "${ROUTING_LINE}" "${ROUTING_TARGET_BRANCH}" <<'PY'
+if ! body_validation_reason="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B - "${BODY_FILE}" "${FP_MARKER}" "${GEN}" "${ROOT}" "${PR_NUMBER}" "${ROUTING_LINE}" "${ROUTING_TARGET_BRANCH}" "${BASE_KEYED_REF}" <<'PY'
 import pathlib
 import re
 import sys
@@ -2744,6 +2843,7 @@ import sys
 body = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
 lines = body.split("\n")
 expected_branch = sys.argv[7] if len(sys.argv) > 7 else ""
+base_keyed_ref = sys.argv[8] if len(sys.argv) > 8 else ""
 
 
 def routing_ref_is_safe(ref):
@@ -2755,11 +2855,15 @@ def routing_ref_is_safe(ref):
 expected = [sys.argv[2], f"<!-- check-failure-triage:gen={sys.argv[3]} -->",
             f"<!-- check-failure-triage:root={sys.argv[4]} -->",
             f"<!-- check-failure-triage:pr={sys.argv[5]} -->"]
+# Issue #9674: a base-keyed issue carries one more header line, the base marker.
+if base_keyed_ref:
+	expected.append(f"<!-- check-failure-triage:base={base_keyed_ref} -->")
 if (not re.fullmatch(r"<!-- check-failure-triage:fp=[0-9a-f]{64} -->", expected[0])
         or not re.fullmatch(r"[0-9]+", sys.argv[3])
         or not re.fullmatch(r"[0-9a-f]{64}", sys.argv[4])
         or not re.fullmatch(r"[1-9][0-9]*", sys.argv[5])
-        or lines[:4] != expected or "<!--" in "\n".join(lines[4:])
+        or (base_keyed_ref and (re.fullmatch(r"[A-Za-z0-9._/-]{1,200}", base_keyed_ref) is None or ".." in base_keyed_ref))
+        or lines[:len(expected)] != expected or "<!--" in "\n".join(lines[len(expected):])
         or (expected_branch and not routing_ref_is_safe(expected_branch))):
 	print("marker")
 elif re.search(r"Re-issued from\s*#|review-blocked-reissue", body, re.IGNORECASE):

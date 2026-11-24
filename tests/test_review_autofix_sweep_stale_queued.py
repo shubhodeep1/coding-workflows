@@ -63,7 +63,7 @@ def run_sweep_reduce(runs: list[dict], cutoff: int, default_branch: str = "main"
 	payload = json.dumps({"workflow_runs": runs})
 	result = subprocess.run(
 		["jq", "-c", "-s", "--argjson", "cutoff", str(cutoff), "--arg", "default_branch", default_branch,
-		 extract_jq_program()],
+		extract_jq_program()],
 		input=payload,
 		capture_output=True,
 		text=True,
@@ -334,6 +334,64 @@ class SweepWorkflowContractTest(unittest.TestCase):
 		self.assertIn("wedge a run in `queued` with zero jobs", self.text)
 
 
+GH_HELPERS = REPO_ROOT / "scripts" / "gh_helpers.sh"
+
+
+def sweep_cutoff_block() -> str:
+	"""The bash lines that compute stale_cutoff_epoch, including the #9473 floor."""
+	text = SWEEP_WF.read_text(encoding="utf-8")
+	start = text.index("            local stale_cutoff_epoch=0\n")
+	end_marker = 'stale_snapshot_epoch="$(date -u +%s 2>/dev/null || echo 0)"\n            fi\n'
+	end = text.index(end_marker, start) + len(end_marker)
+	return "\n".join(line[12:] if line.startswith(" " * 12) else line for line in text[start:end].splitlines())
+
+
+def compute_sweep_cutoff(minutes: str, zombie_hours: str | None) -> int:
+	env = {"PATH": "/usr/bin:/bin", "SWEEP_STALE_QUEUED_MINUTES": minutes}
+	if zombie_hours is not None:
+		env["ZOMBIE_RUN_MAX_QUEUED_HOURS"] = zombie_hours
+	script = (f'source "{GH_HELPERS}" >/dev/null 2>&1 || true\n'
+		f'compute() {{\n{sweep_cutoff_block()}\nprintf "%s" "${{stale_cutoff_epoch}}"\n}}\ncompute\n')
+	result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=True)
+	return int(result.stdout.strip())
+
+
+@unittest.skipUnless(shutil.which("jq"), "jq is required")
+class SweepZombieQueuedFloorTest(unittest.TestCase):
+	"""Issue #9473: ZOMBIE_RUN_MAX_QUEUED_HOURS is a floor beneath the minutes rule."""
+
+	def test_minutes_rule_off_still_ages_out_a_25h_queued_run(self) -> None:
+		cutoff = compute_sweep_cutoff("0", None)
+		self.assertGreater(cutoff, 0)
+		out = run_sweep_reduce(
+			[{"id": 43095142301, "head_branch": "ai/issue-1", "status": "queued", "created_at": iso(-25 * 60)}],
+			cutoff,
+		)
+		self.assertEqual(out["active"], {})
+		self.assertEqual(out["stale"][0].split("\t")[1], "43095142301")
+
+	def test_minutes_rule_off_keeps_a_23h_queued_run_active(self) -> None:
+		cutoff = compute_sweep_cutoff("0", None)
+		out = run_sweep_reduce(
+			[{"id": 7, "head_branch": "ai/issue-2", "status": "queued", "created_at": iso(-23 * 60)}],
+			cutoff,
+		)
+		self.assertEqual(out["active"], {"ai/issue-2": 1})
+
+	def test_zombie_rule_off_restores_the_previous_behaviour(self) -> None:
+		self.assertEqual(compute_sweep_cutoff("0", "0"), 0)
+
+	def test_shorter_minutes_rule_still_wins(self) -> None:
+		cutoff = compute_sweep_cutoff("120", None)
+		self.assertAlmostEqual(cutoff, cutoff_epoch(120), delta=30)
+
+	def test_floor_logs_zombie_run_ignored_after_the_stale_line(self) -> None:
+		text = SWEEP_WF.read_text(encoding="utf-8")
+		stale = text.index("::warning::AUTOFIX_SWEEP_STALE_QUEUED workflow=")
+		zombie = text.index("ZOMBIE_RUN_IGNORED run=${stale_run_id}", stale)
+		self.assertIn("guard=review_autofix_sweep", text[zombie:zombie + 200])
+		self.assertIn("ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}", text)
+
 
 def _write_stale_queued_fake_gh(tmp: Path, *, jobs_reply: str, jobs_rc: int = 0) -> Path:
 	"""Fake `gh` for one open PR whose review run has been queued for 200 min.
@@ -456,9 +514,6 @@ class SweepStaleQueuedRequiresNoJobsTest(unittest.TestCase):
 		text = SWEEP_WF.read_text(encoding="utf-8")
 		self.assertIn("SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS: ${{ vars.SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS || 'true' }}", text)
 
-if __name__ == "__main__":
-	unittest.main()
-
 
 class SweepDefaultBranchProvenanceContractTest(unittest.TestCase):
 	"""Issue #6629: one default-branch read per tick with candidates, no
@@ -482,3 +537,7 @@ class SweepDefaultBranchProvenanceContractTest(unittest.TestCase):
 		self.assertIn("AUTOFIX_SWEEP_END dispatched=", block)
 		self.assertIn("exit 0", block)
 		self.assertNotIn("main", block.split("AUTOFIX_SWEEP_SKIPPED")[0].replace("default_branch", ""))
+
+
+if __name__ == "__main__":
+	unittest.main()
