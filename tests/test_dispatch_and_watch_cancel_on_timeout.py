@@ -453,7 +453,7 @@ def _alt_run(run_id: int, status: str, created_delta: int, title: str = ALT_TITL
 	return {"id": run_id, "status": status, "display_title": title, "created_at": _iso(created_delta)}
 
 
-def _run_alt_check(state: dict, stop: bool = False) -> tuple[str, list[str], str]:
+def _run_alt_check(state: dict, stop: bool = False, mode: str = "--alt-model-runner-wait", extra_env: dict[str, str] | None = None) -> tuple[str, list[str], str]:
 	bash = shutil.which("bash")
 	assert bash is not None
 	with tempfile.TemporaryDirectory() as tmp_name:
@@ -475,7 +475,8 @@ def _run_alt_check(state: dict, stop: bool = False) -> tuple[str, list[str], str
 		}
 		if stop:
 			env["DISPATCH_WATCH_STOP_RELEASE_GATE"] = "true"
-		proc = subprocess.run([bash, str(REPO_ROOT / "scripts" / "dispatch_and_watch_workflow_run.sh"), "--alt-model-runner-wait"], cwd=tmp, env=env,
+		env.update(extra_env or {})
+		proc = subprocess.run([bash, str(REPO_ROOT / "scripts" / "dispatch_and_watch_workflow_run.sh"), mode], cwd=tmp, env=env,
 			capture_output=True, text=True, check=False, timeout=60)
 		assert proc.returncode == 0, proc.stdout + proc.stderr
 		calls = [line for line in (tmp / "gh.log").read_text(encoding="utf-8").splitlines() if line]
@@ -516,9 +517,11 @@ def test_alt_model_real_slowness_or_unreadable_state_stays_a_timeout() -> None:
 		({"queued": [], "in_progress": [_alt_run(61, "in_progress", -4000)], "jobs": failed_late}, "reason=ran_early runs=61"),
 		({"queued": [], "in_progress": [_alt_run(61, "in_progress", -4000)]}, "reason=jobs_unreadable runs=61"),
 		({"queued": [_alt_run(51, "queued", -600)], "in_progress": [], "jobs": queued_jobs}, "reason=queued_late runs=51"),
-		# Held runs (concurrency group or environment) are not a runner wait.
-		({"queued": [_alt_run(51, "queued", -4000)], "in_progress": [], "pending": [_alt_run(54, "pending", -4000)], "jobs": queued_jobs}, "reason=held runs=54"),
-		({"queued": [_alt_run(51, "queued", -4000)], "in_progress": [], "waiting": [_alt_run(55, "waiting", -4000)], "jobs": queued_jobs}, "reason=held runs=55"),
+		# Held runs (concurrency group or environment) with no candidate that
+		# waited early for a runner are not a runner wait.
+		({"queued": [_alt_run(51, "queued", -600)], "in_progress": [], "pending": [_alt_run(54, "pending", -4000)], "jobs": queued_jobs}, "reason=held runs=54"),
+		({"queued": [_alt_run(51, "queued", -600)], "in_progress": [], "waiting": [_alt_run(55, "waiting", -4000)], "jobs": queued_jobs}, "reason=held runs=55"),
+		({"queued": [], "in_progress": [], "pending": [_alt_run(54, "pending", -4000)]}, "reason=held runs=54"),
 		({"queued": [_alt_run(51, "queued", -4000)], "in_progress": [], "jobs": held_jobs}, "reason=held runs=51"),
 		({"queued": [_alt_run(51, "queued", -4000)], "in_progress": []}, "reason=jobs_unreadable runs=51"),
 		({"queued": [_alt_run(53, "queued", -4000, title="other")], "in_progress": []}, "reason=no_runs_in_flight runs=-"),
@@ -532,12 +535,56 @@ def test_alt_model_real_slowness_or_unreadable_state_stays_a_timeout() -> None:
 		assert not [c for c in calls if "/cancel" in c], (expected, calls)
 
 
+def test_alt_model_hold_behind_an_early_runner_wait_is_still_a_runner_wait() -> None:
+	"""The /approved re-post queues an implement peer behind the issue's own run
+	(ai-implement-<repo>-<issue>); that hold must not hide the runner wait."""
+	queued_jobs = json.loads(_jobs(QUEUED_JOB))
+	held_jobs = json.loads(_jobs({"id": 5, "status": "pending", "runner_name": "", "steps": []}))
+	state = {"queued": [_alt_run(51, "queued", -4000)], "in_progress": [], "pending": [_alt_run(54, "pending", -1000)], "jobs": {"51": queued_jobs}}
+	out, calls, github_output = _run_alt_check(state)
+	assert "ALT_MODEL_RUNNER_WAIT outcome=runner_wait reason=never_assigned runs=51 held_behind_runner_wait=54" in out, out
+	assert "runner_wait=true" in github_output.splitlines()
+	# A queued run with a held job counts with the holds, never as the early run.
+	state = {"queued": [_alt_run(51, "queued", -4000), _alt_run(52, "queued", -4000)], "in_progress": [], "jobs": {"51": held_jobs, "52": queued_jobs}}
+	out, _, _ = _run_alt_check(state)
+	assert "ALT_MODEL_RUNNER_WAIT outcome=runner_wait reason=never_assigned runs=51,52 held_behind_runner_wait=51" in out, out
+	# On a stop the held peer is cancelled too.
+	state = {"queued": [_alt_run(51, "queued", -4000)], "in_progress": [], "pending": [_alt_run(54, "pending", -1000)],
+		"jobs": {"51": queued_jobs, "9999": json.loads(_jobs({"id": 7, "status": "in_progress", "conclusion": None, "steps": []}))}}
+	out, calls, _ = _run_alt_check(state, stop=True)
+	assert "api -X POST repos/owner/repo/actions/runs/51/cancel" in calls, calls
+	assert "api -X POST repos/owner/repo/actions/runs/54/cancel" in calls, calls
+	assert GATE_CANCEL_CALL in calls, calls
+
+
+def test_cancel_issue_runs_mode_cancels_only_the_issue_runs_in_flight() -> None:
+	state = {"queued": [_alt_run(51, "queued", -100), _alt_run(53, "queued", -100, title="other")],
+		"in_progress": [_alt_run(61, "in_progress", -100)], "pending": [_alt_run(54, "pending", -100)]}
+	env = {"CANCEL_ISSUE_TITLE": ALT_TITLE, "CANCEL_ISSUE_CREATED_AFTER": _iso(-4600)}
+	out, calls, _ = _run_alt_check(state, mode="--cancel-issue-runs", extra_env=env)
+	cancels = sorted(c for c in calls if "/cancel" in c)
+	assert cancels == [f"api -X POST repos/owner/repo/actions/runs/{n}/cancel" for n in (51, 54, 61)], calls
+	assert "Cancel requested for run #61 of the test issue (gate cancelled)" in out, out
+	# A missing title or creation time makes no call; a failed listing only warns.
+	out, calls, _ = _run_alt_check(state, mode="--cancel-issue-runs", extra_env={"CANCEL_ISSUE_TITLE": ""})
+	assert not calls, calls
+	out, calls, _ = _run_alt_check({"fail": True}, mode="--cancel-issue-runs", extra_env=env)
+	assert "::warning::Could not list the test issue's queued runs" in out, out
+	assert not [c for c in calls if "/cancel" in c], calls
+
+
 def test_gate_workflow_wires_the_alt_model_check_and_child_cancels() -> None:
 	text = (REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml").read_text(encoding="utf-8")
 	wait = text.index("      - name: Wait for clarify→plan→implement (alt-model)\n")
 	check = text.index("bash ./scripts/dispatch_and_watch_workflow_run.sh --alt-model-runner-wait", wait)
 	assert check < text.index("Alt-model run timed out before reaching review stage", wait)
 	assert text.count("      - name: Cancel dispatched child runs when the gate is cancelled\n        if: cancelled()\n") == 2
+	# The e2e-smoke-test and e2e-alt-model-test jobs cancel their test issue's runs.
+	issue_cancel = "      - name: Cancel the test issue's runs when the gate is cancelled\n        if: cancelled()\n"
+	assert text.count(issue_cancel) == 2
+	assert text.index(issue_cancel) < text.index("      - name: Cleanup test artifacts\n")
+	assert text.rindex(issue_cancel) < text.index("      - name: Cleanup alt-model artifacts\n")
+	assert text.count("bash ./scripts/dispatch_and_watch_workflow_run.sh --cancel-issue-runs || true") == 2
 	assert "steps.dispatch_memory_maintenance.outputs.dispatched_run_id" in text
 
 

@@ -3014,6 +3014,21 @@ jobs:
           fi
 
       # ── Cleanup ─────────────────────────────────────────────────
+      # Issue #10037 (G3): when the gate run is cancelled (the runner-wait
+      # stop in scripts/dispatch_and_watch_workflow_run.sh, or an operator),
+      # cancel this job's test-issue runs that have not completed (title and
+      # created-after scoped, logic in the script's --cancel-issue-runs mode),
+      # so they do not keep holding or queueing runners after the gate ends.
+      - name: Cancel the test issue's runs when the gate is cancelled
+        if: cancelled()
+        env:
+          CANCEL_ISSUE_TITLE: ${{ steps.create-issue.outputs.title }}
+          CANCEL_ISSUE_CREATED_AFTER: ${{ steps.create-issue.outputs.created_after }}
+        run: |
+          if grep -q -- '--cancel-issue-runs)' ./scripts/dispatch_and_watch_workflow_run.sh 2>/dev/null; then
+            bash ./scripts/dispatch_and_watch_workflow_run.sh --cancel-issue-runs || true
+          fi
+
       - name: Cleanup test artifacts
         if: always()
         env:
@@ -5266,6 +5281,21 @@ jobs:
           gh_token: ${{ secrets.GH_PAT }}
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+
+      # Issue #10037 (G3): when the gate run is cancelled (the runner-wait
+      # stop in scripts/dispatch_and_watch_workflow_run.sh, or an operator),
+      # cancel this job's test-issue runs that have not completed (title and
+      # created-after scoped, logic in the script's --cancel-issue-runs mode),
+      # so they do not keep holding or queueing runners after the gate ends.
+      - name: Cancel the test issue's runs when the gate is cancelled
+        if: cancelled()
+        env:
+          CANCEL_ISSUE_TITLE: ${{ steps.create.outputs.title }}
+          CANCEL_ISSUE_CREATED_AFTER: ${{ steps.create.outputs.created_after }}
+        run: |
+          if grep -q -- '--cancel-issue-runs)' ./scripts/dispatch_and_watch_workflow_run.sh 2>/dev/null; then
+            bash ./scripts/dispatch_and_watch_workflow_run.sh --cancel-issue-runs || true
+          fi
 
       - name: Cleanup alt-model artifacts
         if: always() && steps.create.outputs.issue_number != ''

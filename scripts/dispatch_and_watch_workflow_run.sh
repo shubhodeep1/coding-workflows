@@ -39,6 +39,9 @@ Usage: dispatch_and_watch_workflow_run.sh \
 
        dispatch_and_watch_workflow_run.sh --alt-model-runner-wait
 	(env: TEST_REPO, ALT_ISSUE_TITLE, ALT_CREATED_AFTER, ALT_WAIT_STARTED_AT)
+
+       dispatch_and_watch_workflow_run.sh --cancel-issue-runs
+	(env: TEST_REPO, CANCEL_ISSUE_TITLE, CANCEL_ISSUE_CREATED_AFTER)
 EOF
 }
 
@@ -150,6 +153,9 @@ dispatch_watch_stop_release_gate()
 	while [ "${stop_waited}" -lt "${stop_wait_secs}" ]; do
 		sleep 10
 		stop_waited=$((stop_waited + 10))
+		# Progress line every 30 s; deliberately not a RELEASE_GATE_RUNNER_WAIT
+		# line, which the heal intake matches at line start.
+		[ $((stop_waited % 30)) -ne 0 ] || echo "Waiting for gate run #${GITHUB_RUN_ID} to be cancelled (waited_secs=${stop_waited})"
 	done
 	echo "RELEASE_GATE_RUNNER_WAIT outcome=stop_failed detail=still_running gate_run=${GITHUB_RUN_ID} watched_run=${stop_watched} reason=${stop_reason:-unknown} waited_secs=${stop_waited} display_name=${stop_display:-unknown}"
 	return 1
@@ -169,9 +175,14 @@ dispatch_watch_stop_release_gate()
 #
 # runner_wait only when ALL of these hold, otherwise timeout (fail closed):
 #   - the in_progress listing is complete (at most 100 runs) and readable;
-#   - no run of this issue is pending or waiting (held by a concurrency group
-#     or an environment), and no job of a queued candidate is waiting/pending
-#     (reason=held otherwise);
+#   - a run of this issue that is pending or waiting (held by a concurrency
+#     group or an environment), or a queued candidate with a waiting/pending
+#     job, is held. A hold alone gives timeout reason=held. It does not block
+#     runner_wait when another candidate qualifies below: the wait step
+#     re-posts /approved every 600 s and the extra implement run queues in
+#     the issue's ai-implement-<repo>-<issue> group behind the issue's own
+#     run, so that hold is a side effect of the runner wait
+#     (held_behind_runner_wait=<ids> on the result line);
 #   - at least one candidate exists and at most ALT_RUNNER_WAIT_MAX_RUNS
 #     candidates (queued and in_progress together) are found;
 #   - at least one candidate was created at or before the two-thirds point of
@@ -181,12 +192,14 @@ dispatch_watch_stop_release_gate()
 #     and has no failed conclusion or step. An in_progress candidate whose
 #     jobs cannot be read, or that has no jobs, gives timeout.
 # A queued candidate has no job with a runner; its jobs are read only to rule
-# out a held job (an unreadable list gives timeout). A truncated queued
+# out a held job (an unreadable list gives timeout). A held queued candidate
+# never counts as the early candidate. A truncated queued
 # listing only leaves out more queued runs, which cannot turn a timeout into
 # runner_wait.
 #
 # On runner_wait it writes runner_wait=true to GITHUB_OUTPUT. With
-# DISPATCH_WATCH_STOP_RELEASE_GATE=true it cancels the candidates and stops
+# DISPATCH_WATCH_STOP_RELEASE_GATE=true it cancels the candidates and the
+# held runs, and stops
 # the gate (dispatch_watch_stop_release_gate), which prints the
 # RELEASE_GATE_RUNNER_WAIT lines the heal intake matches.
 #
@@ -198,14 +211,14 @@ dispatch_watch_stop_release_gate()
 # per queued or in_progress candidate (at most ALT_RUNNER_WAIT_MAX_RUNS), plus
 # the cancels on a stop.
 # Log line (stable prefix):
-#   ALT_MODEL_RUNNER_WAIT outcome=runner_wait|timeout reason=<r> runs=<ids|->
+#   ALT_MODEL_RUNNER_WAIT outcome=runner_wait|timeout reason=<r> runs=<ids|-> [held_behind_runner_wait=<ids>]
 # Always returns 0: the caller fails the step as before.
 ALT_RW_BUDGET="${ALT_WAIT_BUDGET_SECS:-4500}"
 ALT_RW_MAX_RUNS="${ALT_RUNNER_WAIT_MAX_RUNS:-5}"
 
 alt_rw_result()
 {
-	echo "ALT_MODEL_RUNNER_WAIT outcome=$1 reason=$2 runs=${3:--}"
+	echo "ALT_MODEL_RUNNER_WAIT outcome=$1 reason=$2 runs=${3:--}${4:+ held_behind_runner_wait=$4}"
 }
 
 # Prints the runs listing for one status, or fails.
@@ -252,18 +265,17 @@ dispatch_watch_alt_model_runner_wait()
 		alt_rw_result timeout listing_unreadable
 		return 0
 	fi
-	# A run of this issue held in `pending`/`waiting` (a concurrency group or
-	# an environment) is not a runner wait: fail closed with reason=held, as
-	# the watcher does.
+	# Runs of this issue held in `pending`/`waiting` (a concurrency group or
+	# an environment). Kept, not returned at once: the result is held only
+	# when no candidate below qualifies as a runner wait (see the header).
+	alt_rw_held_ids=""
 	for alt_rw_held_status in pending waiting; do
 		if ! alt_rw_held_json="$(alt_rw_list "${alt_rw_held_status}")" || ! alt_rw_held="$(alt_rw_candidates "${alt_rw_held_json}")"; then
 			alt_rw_result timeout listing_unreadable
 			return 0
 		fi
-		if [ -n "${alt_rw_held//[[:space:]]/}" ]; then
-			alt_rw_result timeout held "$(printf '%s\n' "${alt_rw_held}" | awk '{print $1}' | paste -sd, -)"
-			return 0
-		fi
+		alt_rw_held_part="$(printf '%s\n' "${alt_rw_held}" | awk '$1 ~ /^[0-9]+$/ {print $1}' | paste -sd, -)"
+		[ -z "${alt_rw_held_part}" ] || alt_rw_held_ids="${alt_rw_held_ids:+${alt_rw_held_ids},}${alt_rw_held_part}"
 	done
 
 	alt_rw_ids=""
@@ -278,9 +290,6 @@ dispatch_watch_alt_model_runner_wait()
 			alt_rw_result timeout too_many_runs "${alt_rw_ids}"
 			return 0
 		fi
-		if [[ "${alt_rw_created:-}" =~ ^[1-9][0-9]*$ ]] && [ "${alt_rw_created}" -le "${ALT_RW_TWO_THIRDS}" ]; then
-			alt_rw_early=1
-		fi
 		# A queued run has no job with a runner, but one of its jobs can be
 		# held in waiting/pending (job-level concurrency or an environment):
 		# that is not a runner wait. An unreadable jobs list fails closed.
@@ -289,10 +298,17 @@ dispatch_watch_alt_model_runner_wait()
 			if (.jobs | type) != "array" then "unreadable"
 			elif any(.jobs[] | select(type == "object"); ((.status // "") | tostring | IN("waiting", "pending")) and (((.runner_name // "") | tostring) == "")) then "held"
 			else "wait" end' 2>/dev/null || echo unreadable)"
+		if [ "${alt_rw_verdict}" = "held" ]; then
+			# Kept with the held runs; it never counts as the early candidate.
+			alt_rw_held_ids="${alt_rw_held_ids:+${alt_rw_held_ids},}${alt_rw_id}"
+			continue
+		fi
 		if [ "${alt_rw_verdict}" != "wait" ]; then
-			case "${alt_rw_verdict}" in held) ;; *) alt_rw_verdict="jobs_unreadable" ;; esac
-			alt_rw_result timeout "${alt_rw_verdict}" "${alt_rw_ids}"
+			alt_rw_result timeout jobs_unreadable "${alt_rw_ids}"
 			return 0
+		fi
+		if [[ "${alt_rw_created:-}" =~ ^[1-9][0-9]*$ ]] && [ "${alt_rw_created}" -le "${ALT_RW_TWO_THIRDS}" ]; then
+			alt_rw_early=1
 		fi
 	done <<< "${alt_rw_queued}"
 	while read -r alt_rw_id alt_rw_created; do
@@ -324,6 +340,12 @@ dispatch_watch_alt_model_runner_wait()
 		fi
 	done <<< "${alt_rw_in_progress}"
 
+	# A hold with no candidate that waited early for a runner stays a
+	# timeout (fail closed).
+	if [ -n "${alt_rw_held_ids}" ] && { [ -z "${alt_rw_ids}" ] || [ "${alt_rw_early}" != "1" ]; }; then
+		alt_rw_result timeout held "${alt_rw_held_ids}"
+		return 0
+	fi
 	if [ -z "${alt_rw_ids}" ]; then
 		alt_rw_result timeout no_runs_in_flight
 		return 0
@@ -336,16 +358,52 @@ dispatch_watch_alt_model_runner_wait()
 	# never_assigned when no candidate got a runner, late_assigned otherwise.
 	alt_rw_reason="never_assigned"
 	[ "${alt_rw_in_progress_count}" -eq 0 ] || alt_rw_reason="late_assigned"
-	alt_rw_result runner_wait "${alt_rw_reason}" "${alt_rw_ids}"
+	alt_rw_result runner_wait "${alt_rw_reason}" "${alt_rw_ids}" "${alt_rw_held_ids}"
 	echo "runner_wait=true" >> "${GITHUB_OUTPUT}"
 	if [ "$(printf '%s' "${DISPATCH_WATCH_STOP_RELEASE_GATE:-false}" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
-		IFS=',' read -r -a alt_rw_all <<< "${alt_rw_ids}"
+		IFS=',' read -r -a alt_rw_all <<< "${alt_rw_ids}${alt_rw_held_ids:+,${alt_rw_held_ids}}"
 		for alt_rw_id in "${alt_rw_all[@]}"; do
 			timeout 20 gh api -X POST "repos/${TEST_REPO}/actions/runs/${alt_rw_id}/cancel" >/dev/null 2>&1 \
 				|| echo "::warning::Could not cancel alt-model run #${alt_rw_id} after the runner wait"
 		done
 		dispatch_watch_stop_release_gate "${alt_rw_ids%%,*}" alt-model "${alt_rw_reason}" || true
 	fi
+	return 0
+}
+
+# --cancel-issue-runs (issue #10037, G3). Run by the e2e-smoke-test and
+# e2e-alt-model-test jobs' step "Cancel the test issue's runs when the gate is
+# cancelled" (if: cancelled()) in .github/workflows/test-and-mark-stable.yml.
+# Cancels every run of TEST_REPO created after CANCEL_ISSUE_CREATED_AFTER whose
+# display_title equals CANCEL_ISSUE_TITLE and whose status is queued,
+# in_progress, pending or waiting, so the test issue's pipeline runs (clarify,
+# plan, implement, review) do not keep holding or queueing runners after the
+# gate ends. Same title + created-after scope as the alt-model check above.
+# Best effort: a missing input skips it, a failed listing or cancel only warns.
+# API calls: 4 listings, plus 1 cancel per matching run. Always returns 0.
+dispatch_watch_cancel_issue_runs()
+{
+	local ci_status="" ci_json="" ci_ids="" ci_id=""
+	if ! [[ "${TEST_REPO:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || [ -z "${CANCEL_ISSUE_TITLE:-}" ] \
+		|| ! [[ "${CANCEL_ISSUE_CREATED_AFTER:-}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+		echo "Cancel of the test issue's runs skipped: no issue title or creation time"
+		return 0
+	fi
+	for ci_status in queued in_progress pending waiting; do
+		if ! ci_json="$(timeout 30 gh api -X GET "repos/${TEST_REPO}/actions/runs" -f "status=${ci_status}" -f "created=>${CANCEL_ISSUE_CREATED_AFTER}" -f per_page=100 2>/dev/null)" \
+			|| ! ci_ids="$(printf '%s' "${ci_json}" | jq -er --arg title "${CANCEL_ISSUE_TITLE}" 'if (.workflow_runs | type) != "array" then error("no runs") else [.workflow_runs[] | select(type == "object") | select(((.display_title // "") | tostring) == $title) | select(((.status // "") | tostring) != "completed") | (.id | tostring)] | join(" ") end' 2>/dev/null)"; then
+			echo "::warning::Could not list the test issue's ${ci_status} runs after the gate was cancelled"
+			continue
+		fi
+		for ci_id in ${ci_ids}; do
+			[[ "${ci_id}" =~ ^[0-9]+$ ]] || continue
+			if timeout 20 gh api -X POST "repos/${TEST_REPO}/actions/runs/${ci_id}/cancel" >/dev/null 2>&1; then
+				echo "Cancel requested for run #${ci_id} of the test issue (gate cancelled)"
+			else
+				echo "::warning::Could not cancel run #${ci_id} of the test issue after the gate was cancelled"
+			fi
+		done
+	done
 	return 0
 }
 
@@ -366,6 +424,7 @@ REGISTRATION_FAIL_OPEN=0
 DISPATCH_FIELDS=()
 STOP_RELEASE_GATE_MODE=0
 ALT_MODEL_RUNNER_WAIT_MODE=0
+CANCEL_ISSUE_RUNS_MODE=0
 WATCHED_RUN_ID=""
 RUNNER_WAIT_REASON=""
 
@@ -451,6 +510,10 @@ while [ "$#" -gt 0 ]; do
 			ALT_MODEL_RUNNER_WAIT_MODE=1
 			shift
 			;;
+		--cancel-issue-runs)
+			CANCEL_ISSUE_RUNS_MODE=1
+			shift
+			;;
 		--watched-run-id)
 			require_option_argument "$@"
 			WATCHED_RUN_ID="$2"
@@ -477,6 +540,13 @@ done
 # (see dispatch_watch_alt_model_runner_wait). Always exits 0.
 if [ "${ALT_MODEL_RUNNER_WAIT_MODE}" = "1" ]; then
 	dispatch_watch_alt_model_runner_wait || true
+	exit 0
+fi
+
+# --cancel-issue-runs (issue #10037): inputs come from the environment (see
+# dispatch_watch_cancel_issue_runs). Always exits 0.
+if [ "${CANCEL_ISSUE_RUNS_MODE}" = "1" ]; then
+	dispatch_watch_cancel_issue_runs || true
 	exit 0
 fi
 
