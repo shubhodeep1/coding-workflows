@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/prepush-gate-passing-change-erased.md:4 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: Line 4 of the changelog lists when the guard does not fire as \"unreadable state\" or \"status other than `pass`\". It leaves out a third case: a `pass` result with nonzero `rpg_pre_repair_failures`, which the guard in scripts/review_autofix_step_prepush_test_gate.sh:839-841 also rejects (`[ \"${rpg_pre_repair_failures}\" = 0 ]`).\n  WHY: There is no runtime failure, only documentation drift. A reader of CHANGELOG.md would expect the guard to fire on any readable `pass` result with an empty post-repair tree. The headline sentence at line 2 (\"passed with no PR-caused failure\") is accurate. The source rated this NIT, mapped here to low. anthropic_claude-sonnet-5_5 checked this finding and did not report it: line 2 already states the full firing condition, and a well-formed result cannot be `pass` with a nonzero failure count.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The changelog fragment should describe the conditions under which the passing_change_erased guard fires and when the gate behaves as before.\n  expected_change_site: changelog.d/prepush-gate-passing-change-erased.md line 4\n  confidence=3\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: changelog.d/prepush-gate-passing-change-erased.md line 4 (\"When the before or after state cannot be read, or the result's status is anything other than `pass` (`fail`, `unverified` or `skipped`), the gate behaves as before.\") leaves out the case where the status is `pass` but `rpg_pre_repair_failures > 0`. The code requires it (scripts/review_autofix_step_prepush_test_gate.sh:837: `&& [ \"${rpg_pre_repair_failures}\" = 0 ]`). agents.d/prepush-gate-passing-change-erased.md:2 states the full condition correctly.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP changelog.d/prepush-gate-passing-change-erased.md:line 4 | severity=NIT | confidence=3\n  PROBLEM: The fallback clause lists two of the three conditions that stop the guard from firing. It leaves out a `pass` status with `rpg_pre_repair_failures > 0` (scripts/review_autofix_step_prepush_test_gate.sh:837: `&& [ \"${rpg_pre_repair_failures}\" = 0 ]`).\n  WHY: The changelog has drifted from the code. agents.d/prepush-gate-passing-change-erased.md:2 states the full condition (\"status `pass` with zero PR-caused failures\"), but the user-visible changelog fallback clause is incomplete.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/prepush-gate-passing-change-erased.md:line 4 | severity=NIT | confidence=4\n  PROBLEM: Line 4 lists when the guard does not fire as unreadable state or a status other than `pass`. It omits that the guard at scripts/review_autofix_step_prepush_test_gate.sh:839-841 also requires `rpg_pre_repair_failures` to be `0`.\n  WHY: There is no runtime failure; the drift is informational. Readers would expect the guard to fire on any readable `pass` result with an empty post-repair tree. The headline sentence at line 2 is accurate.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5cb4fb81719e9f8bf5d4a17aec15f3a3874f68a260336b5d37f26da49b8d8ac2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9562,
+    "run_id": "45340007106",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45340007106",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124084829_03753d06c6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9562,
+    "run_id": "45340007106"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-24T08:48:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
