@@ -34628,8 +34628,12 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
         echo "::warning::[completion-status] failed to persist completion_status_delivered_closed_alerted for issue #${TRACKING_NUM:-?}; the delivered-closed warning may repeat on a later tick."
         echo "COMPLETION_DELIVERED_CLOSED tracking_issue=${TRACKING_NUM:-?} items=${_csc_delivered_csv} alert=persist_failed"
       fi
-    else
+    elif [ -n "${_csc_delivered_csv}" ]; then
       echo "COMPLETION_DELIVERED_CLOSED tracking_issue=${TRACKING_NUM:-?} items=${_csc_delivered_csv} alert=already_sent"
+    else
+      # No delivered item could be listed (e.g. jq failed); no alert went out.
+      echo "::warning::[completion-status] delivered-closed items could not be enumerated for issue #${TRACKING_NUM:-?}; no warning sent."
+      echo "COMPLETION_DELIVERED_CLOSED tracking_issue=${TRACKING_NUM:-?} items= alert=none"
     fi
     unset _csc_delivered_alerted_json _csc_delivered_new_json _csc_delivered_new_refs _csc_delivered_csv
   fi

@@ -35068,9 +35068,6 @@ def _check_stall_merge_final_ci_workflow_is_captured_and_cleared_for_other_paths
 	assert res.stdout.strip().splitlines()[-1] == "after=unset"
 	assert log.read_text(encoding="utf-8").splitlines() == ["fresh wf=ci.yml", "wait wf=ci.yml", "merge wf="]
 
-if __name__ == "__main__":
-	raise SystemExit(main())
-
 
 # ---------------------------------------------------------------------------
 # Issue #10059: a wave item closed as already delivered (closed as completed,
@@ -35195,3 +35192,7 @@ def test_completion_status_mixed_closed_kinds_keeps_critical() -> None:
 	assert "closed as already delivered" not in comment
 	assert len(_closed_without_merge_criticals(result)) == 1
 	assert _delivered_warnings(result) == []
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

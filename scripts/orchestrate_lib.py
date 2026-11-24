@@ -3826,7 +3826,11 @@ def cmd_check_wave_status(args: argparse.Namespace) -> int:
 	# real loss of work. A missing reason fails closed (the item stays blocking).
 	issue_state_reasons: dict[str, str] = {}
 	if getattr(args, "issue_state_reasons_json", None):
-		issue_state_reasons_raw = json.loads(args.issue_state_reasons_json)
+		try:
+			issue_state_reasons_raw = json.loads(args.issue_state_reasons_json)
+		except json.JSONDecodeError:
+			_print_json({"ok": False, "error": "issue_state_reasons_json must be valid JSON"})
+			return 1
 		if not isinstance(issue_state_reasons_raw, dict):
 			_print_json({"ok": False, "error": "issue_state_reasons_json must be an object mapping issue numbers to issue state reasons"})
 			return 1
