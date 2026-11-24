@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:4112-4114 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The comment credits both #9839 and #9854 with naming \"shards 0 and 3, which hit 20.2 minutes\", but the file's own record at lines 3411-3412 shows only #9839 did. #9854 named shard 0 only, with no duration.\n  WHY: This is a comment-only imprecision that could mislead later budget-watch triage. Reviewers rated it NIT, so the severity is low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings)\" out of tests-release-and-log-analysis into the CI job with the most headroom, keeping job and step names.\n  expected_change_site: .github/workflows/ci.yml, selection of the steps moved out of tests-release-and-log-analysis\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The rationale comments (ci.yml lines 4103-4110 and 4155-4157) and changelog.d/9966-ci-release-job-budget-move.md say the run's step timings were unreadable. The two moved steps were picked by estimate from test and subprocess counts, so the PR does not show they were the slowest. Sonnet rated this a NIT with confidence 2, because the move itself is delivered and there is nothing further to implement. The other reviewers rated it MAJOR, so the highest severity is MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:4112-4113 | severity=low (NIT) | confidence=4\n  PROBLEM: The comment attributes \"shards 0 and 3, which hit 20.2 minutes\" to both #9839 and #9854. Lines 3411-3412 record #9839 as \"shards 0 and 3 at 20.2 min\" and #9854 as \"shard 0\" only.\n  WHY: No runtime effect. The comment could mislead later budget-watch triage.\n- TASK_GAP (severity=NIT, confidence=2)\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  Expected change site: .github/workflows/ci.yml, the choice of steps moved out of tests-release-and-log-analysis.\n  Evidence of absence: The move is delivered. Two steps sit in orchestrate-poll group 1 with names and bodies unchanged, no job was added and no timeout-minutes changed. The one shortfall is that the step timings were unreadable, so the pick is an estimate, and the ci.yml comment and the changelog fragment say so. Choosing other steps without timing data would be a guess.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP (severity=MAJOR, confidence=5)\n  Requirement: \"Move its slowest steps (see the run's step timings)\"\n  Expected change site: .github/workflows/ci.yml, selection of steps moved from tests-release-and-log-analysis\n  Evidence of absence: The comments in ci.yml and changelog.d/9966-ci-release-job-budget-move.md state that step timings for the triggering run could not be read. The steps were selected from estimates based on test function and subprocess counts, not by timing.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml:4112-4114 | severity=low (NIT) | confidence=3\n  PROBLEM: The comment says \"(#9839 and #9854 above; #9916 then raised the timeout to 30 minutes) name shards 0 and 3, which hit 20.2 minutes\". The record at lines 3410-3412 shows only #9839 (run 44915291684) had shards 0 and 3 at 20.2 min. #9854 (run 44917124015) is recorded as shard 0 with no duration.\n  WHY: No runtime impact, since it is a YAML comment. It gives a misleading rationale for future budget-watch triage.\n- TASK_GAP (severity=MAJOR, confidence=5)\n  Requirement: \"Move its slowest steps (see the run's step timings)\" out of tests-release-and-log-analysis into the CI job with the most headroom, keeping job and step names, per issue #9966.\n  Expected change site: The selection of steps moved out of tests-release-and-log-analysis in .github/workflows/ci.yml (rationale comments at lines 4103-4110 and 4155-4157).\n  Evidence of absence: The PR moves \"Judge Semble prefetch contract test\" and \"Regression tests wired by the CI wiring guard (part 1)\" into orchestrate-poll group 1. The rationale comments at lines 4105-4106 and 4156-4157 and the changelog fragment say the step timings were not readable and the pick is an estimate. No measured timings from run 45035315687 informed the selection.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP (severity=MAJOR, confidence=5)\n  Requirement: \"Move its slowest steps (see the run's step timings)\" out of tests-release-and-log-analysis.\n  Expected change site: .github/workflows/ci.yml, selection of the steps moved from tests-release-and-log-analysis.\n  Evidence of absence: The rationale at lines 4103-4110 says the step timings were unreadable and the selection was estimated from test and subprocess counts. It also says the cause of the increase from 15m19s to 19m01s is unidentified. The PR does not establish that the moved steps were the slowest in the cited run.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:4112-4114 | severity=low (NIT) | confidence=4\n  PROBLEM: The comment says \"the newest recorded overruns (#9839 and #9854 above; #9916 then raised the timeout to 30 minutes) name shards 0 and 3, which hit 20.2 minutes\". The record at lines 3411-3412 attributes shards 0 and 3 at 20.2 min to run 44915291684 (#9839) only. Run 44917124015 (#9854) named shard 0 alone, with no duration.\n  WHY: Comment-only, with no execution effect. It states a broader overrun basis than the recorded evidence, and future budget-watch triage reads this block. The #9916 clause is accurate.\n- Lines 4123-4126 (the orchestrate-poll checkout-shape claim) were verified accurate against ci.yml:3428-3433 and ci.yml:3442. No finding was raised.\n- Task gaps: none reported. The \"run's step timings\" gap was raised in earlier passes and accepted as a residual limitation, and the other deliverables of #9966 are delivered.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1787f1346245dba586c1389f42b77b320bd448b61f8129ed14789e9ed7e4a72e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9968,
+    "run_id": "45382102106",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45382102106",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124124404_babf457f87",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9968,
+    "run_id": "45382102106"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T12:44:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
