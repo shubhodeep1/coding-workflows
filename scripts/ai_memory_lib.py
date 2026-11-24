@@ -3276,7 +3276,11 @@ def _clone_for_memory_branch(repo_root: Path, memory_branch: str) -> Path:
             check=False,
         )
         if fast_clone.returncode == 0:
-            _run_git(temp_dir, ["checkout", "-B", memory_branch, f"refs/remotes/origin/{memory_branch}"])
+            try:
+                _run_git(temp_dir, ["checkout", "-B", memory_branch, f"refs/remotes/origin/{memory_branch}"])
+            except MemoryGitError:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                raise
             return temp_dir
         # Fall back to the full clone below, in a fresh empty directory. With
         # AI_MEMORY_CLONE_DIAGNOSTICS=1, say so on stderr (credentials and URLs
@@ -3300,11 +3304,16 @@ def _full_repo_clone_for_memory_branch(temp_dir: Path, origin_url: str, memory_b
     # exist yet, or when the shallow memory-branch clone fails.
     _run_git(temp_dir.parent, ["clone", "--no-tags", "--quiet", origin_url, str(temp_dir)])
 
-    branch_exists = (
-        _run_git(temp_dir, ["ls-remote", "--heads", "origin", memory_branch], check=False)
-        .stdout.strip()
-        != ""
-    )
+    heads_probe = _run_git(temp_dir, ["ls-remote", "--heads", "origin", memory_branch], check=False)
+    if heads_probe.returncode != 0:
+        # A failed probe (e.g. a throttled bare 403) is not "branch absent":
+        # raise so the read retry (issue #10052) retries or fails the step,
+        # instead of checking out the default branch for a claim.
+        raise MemoryGitError(
+            f"git ls-remote --heads origin {memory_branch} failed with exit {heads_probe.returncode}\n"
+            f"stderr:\n{heads_probe.stderr}"
+        )
+    branch_exists = heads_probe.stdout.strip() != ""
     if branch_exists:
         _run_git(temp_dir, ["fetch", "--no-tags", "origin", f"refs/heads/{memory_branch}:refs/remotes/origin/{memory_branch}"])
         _run_git(temp_dir, ["checkout", "-B", memory_branch, f"refs/remotes/origin/{memory_branch}"])

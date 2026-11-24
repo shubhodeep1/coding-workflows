@@ -349,3 +349,70 @@ def test_backoff_accepts_read_retry_bounds() -> None:
 		assert 0.0 <= ai_memory_lib._push_retry_backoff_seconds(9, base_seconds=5.0, cap_seconds=20.0) <= 20.0
 		assert 0.0 <= ai_memory_lib._push_retry_backoff_seconds(1) <= ai_memory_lib._PUSH_RETRY_BACKOFF_BASE_SECONDS
 		assert 0.0 <= ai_memory_lib._push_retry_backoff_seconds(99) <= ai_memory_lib._PUSH_RETRY_BACKOFF_CAP_SECONDS
+
+
+def _run_clone_with_script(handler):
+	"""Drive _clone_for_memory_branch with a scripted _run_git; return (path, exc, created, calls)."""
+	created: list[Path] = []
+	calls: list[list[str]] = []
+	real_mkdtemp = tempfile.mkdtemp
+
+	def tracking_mkdtemp(*args, **kwargs):
+		path = real_mkdtemp(*args, **kwargs)
+		created.append(Path(path))
+		return path
+
+	def fake_run_git(cwd, args, check: bool = True, **_kwargs):  # noqa: ANN001 - test stub
+		calls.append(list(args))
+		rc, stdout, stderr = handler(args)
+		if rc == 0 and args and args[0] == "clone":
+			Path(args[-1]).mkdir(parents=True, exist_ok=True)
+		if rc != 0 and check:
+			raise ai_memory_lib.MemoryGitError(f"git {' '.join(args[:2])} failed with exit {rc}\nstderr:\n{stderr}")
+		return _FakeProc(returncode=rc, stdout=stdout, stderr=stderr)
+
+	with _patched_module_attrs(
+		ai_memory_lib,
+		_run_git=fake_run_git,
+		_resolve_origin_url=lambda _repo_root: TOKEN_URL,
+	), _patched_module_attrs(ai_memory_lib.tempfile, mkdtemp=tracking_mkdtemp):
+		try:
+			return ai_memory_lib._clone_for_memory_branch(REPO_ROOT, "ai-memory"), None, created, calls
+		except ai_memory_lib.MemoryGitError as exc:
+			return None, exc, created, calls
+
+
+def test_full_clone_failed_heads_probe_is_not_branch_absent() -> None:
+	# The first probe (against the origin URL) fails, so the full clone runs;
+	# its `ls-remote --heads origin` probe then fails with a bare 403. That
+	# must raise (so the read retry applies), not check out the default
+	# branch as a fresh memory branch.
+	def handler(args):
+		if args[0] == "ls-remote":
+			return 128, "", BARE_403_STDERR
+		return 0, "", ""
+
+	path, exc, created, calls = _run_clone_with_script(handler)
+	assert path is None
+	assert exc is not None
+	assert "returned error: 403" in str(exc)
+	assert ai_memory_lib._is_transient_memory_read_failure(str(exc))
+	assert not any(call[0] == "checkout" for call in calls)
+	assert created
+	assert not any(p.exists() for p in created)
+
+
+def test_fast_clone_checkout_failure_removes_temp_dir() -> None:
+	def handler(args):
+		if args[0] == "ls-remote":
+			return 0, "0123456789abcdef\trefs/heads/ai-memory\n", ""
+		if args[0] == "checkout":
+			return 128, "", "fatal: checkout failed"
+		return 0, "", ""
+
+	path, exc, created, calls = _run_clone_with_script(handler)
+	assert path is None
+	assert exc is not None
+	assert [call[0] for call in calls].count("clone") == 1
+	assert created
+	assert not any(p.exists() for p in created)
