@@ -750,6 +750,26 @@ def test_review_requeue_completed_review_resets_unknown_head_count() -> None:
 	assert "outcome=escalated" in run["lines"][0] and "attempts=3/3" in run["lines"][0]
 
 
+def test_review_requeue_interleaved_comments_do_not_reset_rerun_count() -> None:
+	past = time.time() - 3600
+	# Every requeue marker write failed; a non-marker comment from either
+	# pipeline author lands between the re-dispatched (head=unknown) gate runs.
+	for author in ("github-actions", LOGIN):
+		comments: list[tuple[str, str]] = [("github-actions", _gate_body(1, past))]
+		for r in (2, 3, 4):
+			comments += [(author, "status update"), ("github-actions", _gate_body(r, past, head="unknown"))]
+		run = _run_pass([_row(9)], [_node(9, comments)])
+		assert run["dispatches"] == [], author
+		assert "outcome=escalated" in run["lines"][0] and "attempts=3/3" in run["lines"][0], run["lines"]
+	# A comment followed by a gate run that names the current head (a fresh PR
+	# event) still starts a new episode.
+	comments = [("github-actions", _gate_body(r, past, head="unknown")) for r in (1, 2, 3)]
+	comments += [(LOGIN, "status update"), ("github-actions", _gate_body(4, past))]
+	run = _run_pass([_row(9)], [_node(9, comments)])
+	assert run["dispatches"] == ["9 feature/9"]
+	assert "attempts=0/3" in run["lines"][0]
+
+
 def test_review_requeue_ignores_out_of_range_reset() -> None:
 	far = time.time() + 999999
 	run = _run_pass([_row(5)], [_node(5, [("github-actions", _gate_body(5, far))])])

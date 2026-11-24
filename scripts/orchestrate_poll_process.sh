@@ -40457,18 +40457,24 @@ _review_gate_rate_limit_requeue_decide() {
 		# (workflow_dispatch) gate runs have no PR head SHA and write
 		# head=unknown, so those count too, but only after the newest marker
 		# that names a different head (over-counting escalates early: fail safe).
-		# A later non-marker pipeline comment (a completed review) also closes
-		# the window, so gate markers of an episode it resolved stop counting;
-		# $retries never resets, so the cap still holds. In practice any
-		# trusted-login comment without a requeue/escalation marker (a plain
-		# human comment from a PAT account included) and any github-actions
-		# comment without a gate marker close this $gate_reruns window; that
-		# is safe only because $retries counts every requeue on this head.
+		# A later non-marker pipeline comment (a trusted-login comment without a
+		# requeue/escalation marker, or a github-actions comment without a gate
+		# marker) closes the window only when the next gate marker after it
+		# names the current head SHA: that gate run came from a fresh PR event,
+		# so the earlier episode was resolved and its markers stop counting.
+		# Poller re-dispatches write head=unknown, so a comment that lands
+		# between them never resets the count. This matters when requeue
+		# marker writes fail: $retries then stays 0 and $gate_reruns is the
+		# only cap left. Unknown-head markers of episodes that a review
+		# resolved without a later SHA-named gate run still count, which only
+		# escalates early (fail safe).
 		| ([range(0; $c | length) | select(
 			((($c[.].a // "") == "github-actions") and ($c[.].gate | valid_gate) and ($c[.].gate.head | sha) and $c[.].gate.head != $e.oid)
 			or ((($c[.].a // "") == $login) and ($c[.].gate_retry | type) == "object" and ($c[.].gate_retry.head | sha) and $c[.].gate_retry.head != $e.oid)
-			or ((($c[.].a // "") == $login) and ($c[.].gate_retry | type) != "object" and ($c[.].gate_escalated | type) != "object")
-			or ((($c[.].a // "") == "github-actions") and ($c[.].gate | type) != "object"))] | last // -1) as $head_start
+			or ((((($c[.].a // "") == $login) and ($c[.].gate_retry | type) != "object" and ($c[.].gate_escalated | type) != "object")
+				or ((($c[.].a // "") == "github-actions") and ($c[.].gate | type) != "object"))
+				and (. as $k | [range($k + 1; $c | length) | select((($c[.].a // "") == "github-actions") and ($c[.].gate | valid_gate)) | $c[.].gate.head] | first
+					| . == null or ((. | sha) and . == $e.oid))))] | last // -1) as $head_start
 		| ([$c[($head_start + 1):][] | select((.a // "") == "github-actions" and (.gate | valid_gate) and ($e.oid | sha) and ((.gate.head == $e.oid) or (.gate.head | sha | not)))] | length - 1) as $gate_reruns
 		| ([$retries, $gate_reruns, 0] | max) as $attempts
 		| "|\($g.run)|\($g.reset)|\($attempts)" as $tail
