@@ -185,6 +185,7 @@ case "${stage_support_phase}" in
 			render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh
 			label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py
 			openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh
+			implement_step_preflight_destructive_guard.sh implement_step_post_codex_syntax_repair.sh
 			implement_stale_branch_check.sh implement_commit_changes.sh implement_handle_guard_block.sh
 			build_static_context.sh assemble_agents.py unblock_ledger.py targeted_file_context.py
 			write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh
