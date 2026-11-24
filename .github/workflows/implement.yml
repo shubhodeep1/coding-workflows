@@ -156,7 +156,7 @@ jobs:
           contains(github.event.comment.body, '[auto-approved-by-plan]')
         )
       )
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
     timeout-minutes: 180
     outputs:
       # Read by the heal-report job: "true" when this failed run should reach
@@ -2778,6 +2778,41 @@ jobs:
 
           if [ ! -s "${PLAN_FILE}" ] || ! grep -qiE '^[[:space:]]*implementation[[:space:]]+plan\b' "${PLAN_FILE}"; then
             echo "Unable to locate approved Implementation Plan in issue comments."
+            # Diagnostics only (#9724): say why no plan was accepted. Reads the
+            # comments file already fetched; never prints comment bodies; every
+            # comment-derived value is reduced to a safe charset. The selection
+            # above and the exit status are unchanged.
+            jq -r --arg approval_comment_id "${APPROVAL_COMMENT_ID}" '
+              def heading: ((.body // "") | test("(?im)^\\s*implementation\\s+plan\\b"));
+              def marker: ((.body // "") | contains("<!-- ai:plan-proposal:v1 -->"));
+              def trusted: (
+                (
+                  (.user.type == "Bot") and
+                  ((.user.login // "") as $bot_login | ["github-actions[bot]", "codex-bot[bot]"] | index($bot_login))
+                ) or
+                ((.author_association // "") as $assoc | ["OWNER", "MEMBER", "COLLABORATOR"] | index($assoc))
+              );
+              def clean: tostring | gsub("[^A-Za-z0-9_.:\\[\\]-]"; "_");
+              sort_by(.created_at) as $all |
+              ([$all[] | select(
+                ((.id | tostring) == $approval_comment_id) and
+                ((.body // "") | test("(?i)/approved"))
+              )] | if length > 0 then .[0] else null end) as $approval |
+              (if $approval == null then null else $approval.created_at end) as $approval_at |
+              [$all[] | select(heading or marker)] as $cands |
+              [$all[] | select(heading)] as $heads |
+              (if $approval == null then "approval_not_found"
+               elif ($heads | length) == 0 then "no_plan_comment"
+               elif ([$heads[] | select(.created_at <= $approval_at)] | length) == 0 then "plan_after_approval"
+               elif ([$heads[] | select(.created_at <= $approval_at) | select(trusted)] | length) == 0 then "plan_author_untrusted"
+               else "plan_body_mismatch" end) as $reason |
+              # Candidate lines first, error line last: the heal log filter
+              # keeps the tail when it cuts, so the reason token survives.
+              ($cands[] |
+                "::warning::IMPLEMENT_PLAN_CANDIDATE id=\(.id | clean) created_at=\(.created_at | clean) login=\(.user.login // "none" | clean) type=\(.user.type // "none" | clean) association=\(.author_association // "none" | clean) heading=\(heading) marker=\(marker) after_approval=\(if $approval_at == null then "unknown" else (.created_at > $approval_at) end) trusted=\(trusted)"),
+              "::error::IMPLEMENT_PLAN_NOT_FOUND reason=\($reason) approval_id=\($approval_comment_id | clean) approval_created_at=\(if $approval_at == null then "none" else ($approval_at | clean) end) comments_total=\($all | length) plan_candidates=\($cands | length)"
+            ' "${ISSUE_COMMENTS_FILE}" \
+              || echo "::warning::IMPLEMENT_PLAN_DIAGNOSTICS_UNAVAILABLE reason=jq_failed"
             exit 1
           fi
 
@@ -3263,7 +3298,13 @@ jobs:
           - For `npm test`, treat "Missing script" errors as a pass; treat any
             other test failure as a real error.
           - Update the tests and registries listed under Expected files together
-            with the code; a pre-push gate re-runs them.
+            with the code, but only those inside the issue's scope (see the
+            files_touched and heal-scope rule under Restrictions); a pre-push
+            gate re-runs them.
+            When a listed test, or a test your change breaks, falls outside
+            that scope, do not edit it: the commit-time scope guard refuses
+            out-of-scope paths. Leave it unchanged and report the conflict in
+            your final summary (the path and why it needs changing).
 
           Pinned-SHA test discipline: never write a test that asserts a specific
           upstream commit SHA in a file the workflow sync manages, such as a wrapper's
@@ -3278,6 +3319,14 @@ jobs:
           - Do not ask clarification questions (unattended runtime).
           {{WORKFLOW_EDIT_RESTRICTION}}
           - Do not modify ai_pipeline.md, unattended_system_instructions.md, or CLAUDE.md.
+          - If the issue body lists `files_touched:` (machine or prose form),
+            stay inside that set plus this issue's own `changelog.d/` and
+            `agents.d/` fragments. On a workflow heal issue, the
+            `ai:workflow-heal-scope:v1` marker's `paths=` list is the scope
+            instead, plus only this issue's own `agents.d/` fragment. If the
+            issue names files only in its scope or acceptance criteria, stay
+            inside those files. The Expected files list is advisory and is
+            not a scope.
 
           <completeness_contract>
           The deliverable is a worktree change set — modifications written to
@@ -5626,6 +5675,10 @@ jobs:
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
           WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
           SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}
+          REMEDIATION_NO_CODE_GUARD_ENABLED: ${{ vars.REMEDIATION_NO_CODE_GUARD_ENABLED || 'true' }}
+          # Only when the baseline checkout succeeded: on failure the run fell back
+          # to the default ref, so the staged set is the whole change set.
+          PRIOR_PR_BASELINE_BRANCH: ${{ steps.checkout_baseline.outcome == 'success' && steps.baseline_refctx.outputs.branch || '' }}
         run: |
           set -euo pipefail
           bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"
@@ -7475,7 +7528,7 @@ jobs:
       always() && needs.implement.result == 'failure' &&
       needs.implement.outputs.heal_report == 'true' &&
       !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       id-token: write

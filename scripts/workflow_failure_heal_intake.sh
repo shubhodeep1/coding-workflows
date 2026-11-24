@@ -191,6 +191,10 @@
 #                                         carries an identity is always verified (issue #6559).
 #   WORKFLOW_HEAL_REPORT_MAX_AGE_SECONDS  max age of the identity's iat (default 3600), plus
 #                                         HEAL_INTAKE_QUEUE_WAITED_SECONDS (set by the queue step)
+#                                         or, when larger, the time since this run attempt
+#                                         started (runner wait included; one run read): for an
+#                                         engine_fallback report up front, for an identity only
+#                                         after it first failed as identity_stale
 #   WORKFLOW_HEAL_REPORT_ORIGIN           repository_dispatch | workflow_run | workflow_dispatch |
 #                                         recovery_scan (default GITHUB_EVENT_NAME, else
 #                                         repository_dispatch). recovery_scan is set only by
@@ -541,6 +545,51 @@ _report_auth_reject()
 	exit 0
 }
 
+# Runner wait. The intake job can wait for a GitHub-hosted runner long after
+# the dispatch arrived: on 2026-11-13 runs 43439048054, 43496779526 and
+# 43498856864 started 1h54m to 3h25m after they were queued. The age limit
+# applies at arrival, so the credit is the time since this run attempt started
+# (GitHub's run_started_at, which covers the runner wait and the heal queue
+# wait) when that exceeds the queue wait already added above. A re-run attempt
+# starts its own clock, so a replayed report gains nothing.
+# Only an engine_fallback report reads it here, for the reporting-run age
+# check (verify-engine-reporter-run --max-age). A report that carries an
+# identity is credited by the identity_stale retry below (PR #9516), which
+# reads the run only when the first verification failed as stale; reading it
+# here as well cost a second GET of the same run (§15) and credited the same
+# wait twice.
+# CLAUDE.md §15 audit: no earlier call in this script or the workflow's earlier
+# steps reads this run, so this is one GET per engine_fallback
+# repository_dispatch report. A failed read or an unparseable time keeps the
+# queue-only credit; the result is clamped to GitHub's 24-hour queue limit.
+RUN_ATTEMPT_ELAPSED_SECONDS=""
+if [ "${REPORT_ORIGIN}" = "repository_dispatch" ] && [ "${SOURCE_KIND}" = "engine_fallback" ] \
+	&& [[ "${GITHUB_RUN_ID:-}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+	run_attempt_number="${GITHUB_RUN_ATTEMPT:-1}"
+	[[ "${run_attempt_number}" =~ ^[1-9][0-9]{0,5}$ ]] || run_attempt_number=1
+	RUN_ATTEMPT_STARTED_AT="$(gh_retry gh api --method GET "repos/${SELF_REPO}/actions/runs/${GITHUB_RUN_ID}/attempts/${run_attempt_number}" --jq '.run_started_at // ""' 2>/dev/null | tr -d '[:space:]' || true)"
+	if [[ "${RUN_ATTEMPT_STARTED_AT}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+		run_attempt_started_epoch="$(date -u -d "${RUN_ATTEMPT_STARTED_AT}" +%s 2>/dev/null || true)"
+		if [[ "${run_attempt_started_epoch}" =~ ^[0-9]+$ ]]; then
+			RUN_ATTEMPT_ELAPSED_SECONDS=$(( $(date -u +%s) - run_attempt_started_epoch ))
+			[ "${RUN_ATTEMPT_ELAPSED_SECONDS}" -ge 0 ] || RUN_ATTEMPT_ELAPSED_SECONDS=0
+			[ "${RUN_ATTEMPT_ELAPSED_SECONDS}" -le 86400 ] || RUN_ATTEMPT_ELAPSED_SECONDS=86400
+		fi
+	fi
+	if [[ "${RUN_ATTEMPT_ELAPSED_SECONDS}" =~ ^[0-9]+$ ]]; then
+		# not_needed: the queue wait already credited covers this attempt's
+		# elapsed time, so max_age is unchanged (the label must not say applied).
+		run_attempt_credit_outcome="not_needed"
+		if [ "${RUN_ATTEMPT_ELAPSED_SECONDS}" -gt "$((10#${QUEUE_WAITED_SECONDS}))" ]; then
+			REPORT_MAX_AGE=$((REPORT_MAX_AGE + RUN_ATTEMPT_ELAPSED_SECONDS - 10#${QUEUE_WAITED_SECONDS}))
+			run_attempt_credit_outcome="applied"
+		fi
+		log "report_age_credit outcome=${run_attempt_credit_outcome} attempt_elapsed_seconds=${RUN_ATTEMPT_ELAPSED_SECONDS} queue_waited_seconds=$((10#${QUEUE_WAITED_SECONDS})) max_age=${REPORT_MAX_AGE}"
+	else
+		log "report_age_credit outcome=unavailable queue_waited_seconds=$((10#${QUEUE_WAITED_SECONDS})) max_age=${REPORT_MAX_AGE}"
+	fi
+fi
+
 REPORT_AUTH=""
 # recovery_scan (#7333): the hourly scan rebuilt this autofix_failure report
 # from a pipeline-authored, never-edited markerless heal issue. It is not a new
@@ -601,7 +650,13 @@ case "${REPORT_ORIGIN}" in
 					# this script or the queue step reads this run, and the read
 					# is made only on this path. Fails closed: when the read fails
 					# the rejection stands.
-					if [ "${IDENTITY_REJECT_REASON}" = "identity_stale" ]; then
+					# Skipped when the report_age_credit block above already
+					# measured this attempt's elapsed time (an engine_fallback
+					# report that also carries an identity): REPORT_MAX_AGE then
+					# carries that wait, and adding the arrival wait again would
+					# credit the same runner wait twice and accept a report that
+					# was already stale on arrival.
+					if [ "${IDENTITY_REJECT_REASON}" = "identity_stale" ] && ! [[ "${RUN_ATTEMPT_ELAPSED_SECONDS}" =~ ^[0-9]+$ ]]; then
 						INTAKE_SELF_RUN_FILE="${RUNTIME_DIR}/intake_self_run.json"
 						INTAKE_ARRIVAL_WAITED_SECONDS=0
 						if [[ "${GITHUB_RUN_ID:-}" =~ ^[1-9][0-9]{0,19}$ ]] \
@@ -611,6 +666,7 @@ case "${REPORT_ORIGIN}" in
 							if [[ "${INTAKE_RUN_STARTED_AT}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]{8}Z$ ]] && [[ "${INTAKE_RUN_STARTED_EPOCH}" =~ ^[0-9]+$ ]]; then
 								INTAKE_ARRIVAL_WAITED_SECONDS=$(( $(date -u +%s) - INTAKE_RUN_STARTED_EPOCH ))
 								[ "${INTAKE_ARRIVAL_WAITED_SECONDS}" -ge 0 ] || INTAKE_ARRIVAL_WAITED_SECONDS=0
+								[ "${INTAKE_ARRIVAL_WAITED_SECONDS}" -le 86400 ] || INTAKE_ARRIVAL_WAITED_SECONDS=86400
 							fi
 						fi
 						log "report_identity_age_credit arrival_waited_seconds=${INTAKE_ARRIVAL_WAITED_SECONDS} queue_waited_seconds=${QUEUE_WAITED_SECONDS} source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none}"
@@ -1858,6 +1914,10 @@ LOG_FILES=()
 # Job logs actually fetched (placeholders for unreadable logs do not count).
 READ_JOB_LOG_COUNT=0
 RUN_COUNT=0
+# Runs whose every failed job lost its do-runner droplet (DigitalOcean runners
+# plan, goal G6); they are left out of the evidence below.
+RUNNER_LOST_RUN_COUNT=0
+RUNNER_LOST_DIR="${RUNTIME_DIR}/runner-lost"
 
 while IFS=$'\t' read -r run_id run_url; do
 	[ -n "${run_id}" ] || continue
@@ -1932,6 +1992,40 @@ while IFS=$'\t' read -r run_id run_url; do
 		log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=current_run_no_failed_job"
 		exit 0
 	fi
+	# Lost DigitalOcean runner (docs/plans/digitalocean-runners-for-consumer-pipelines-plan.md,
+	# goal G6): when every failed job of this run ran on a do-runner droplet and
+	# GitHub annotated it as a lost runner, the runner scaler re-runs the job, so
+	# this run is no code evidence. CLAUDE.md §15 audit: the jobs response above
+	# carries labels but no annotations, and no earlier intake call reads check-run
+	# annotations, so one annotations read per candidate job is added, at most
+	# RUNNER_LOST_MAX_JOBS (10) per run and only for runs whose every failed job
+	# ran on do-runner (none for a consumer that never set PIPELINE_RUNS_ON). Any
+	# read failure leaves that job without evidence, so the run is reported as
+	# before (fail-open towards filing).
+	# Only a first attempt is checked: the scaler re-runs a lost job once, so a
+	# re-run that lost its droplet again (a job that kills its runner) is reported.
+	runner_lost_job_ids=""
+	if [ "$(jq -r '.run_attempt // 1' "${RUN_INFO_FILE}" 2>/dev/null || echo 1)" = "1" ]; then
+		runner_lost_job_ids="$(python3 "${HEAL_PY}" runner-lost-candidates --jobs-json "${JOBS_FILE}" 2>/dev/null || true)"
+	fi
+	if [ -n "${runner_lost_job_ids}" ]; then
+		run_lost_dir="${RUNNER_LOST_DIR}/run-${run_id}"
+		mkdir -p "${run_lost_dir}"
+		while IFS= read -r lost_job_id; do
+			[[ "${lost_job_id}" =~ ^[0-9]+$ ]] || continue
+			# One attempt per read, so the bound above is a request count: a failed
+			# read already reports the run. An Actions job's check-run id is its job
+			# id; runner-lost-candidates drops a job whose check_run_url says otherwise.
+			GH_RETRY_MAX_ATTEMPTS=1 gh_api_json_to_file "${run_lost_dir}/${lost_job_id}.json" gh api --method GET "repos/${SOURCE_REPO}/check-runs/${lost_job_id}/annotations" -F per_page=100 2>/dev/null \
+				|| rm -f "${run_lost_dir}/${lost_job_id}.json"
+		done <<< "${runner_lost_job_ids}"
+		if [ "$(python3 "${HEAL_PY}" runner-lost --jobs-json "${JOBS_FILE}" --annotations-dir "${run_lost_dir}" 2>/dev/null || echo false)" = "true" ]; then
+			RUNNER_LOST_RUN_COUNT=$((RUNNER_LOST_RUN_COUNT + 1))
+			log "runner_lost outcome=skipped run=${run_id} source=${SOURCE_REPO}"
+			continue
+		fi
+		log "runner_lost outcome=not_runner_lost run=${run_id} source=${SOURCE_REPO}"
+	fi
 	SELECTED_JOBS_FILE="${LOG_DIR}/run-${run_id}-selected.json"
 	python3 "${HEAL_PY}" select-evidence-jobs --jobs-json "${JOBS_FILE}" --kind "${SOURCE_KIND}" --limit "${MAX_FAILED_JOBS}" > "${SELECTED_JOBS_FILE}"
 	JOB_COUNT=0
@@ -1977,6 +2071,30 @@ while IFS=$'\t' read -r run_id run_url; do
 	done < <(jq -r '.[] | [(.id|tostring), (.name // ""), (.workflow_name // ""), ((.steps // []) | map(select((.conclusion // "") | IN("failure","timed_out","cancelled"))) | first | .name // ""), .selection]
 		| map(gsub("[\\t\\n\\r]"; " ")) | @tsv' "${SELECTED_JOBS_FILE}")
 done < <(jq -r '.run_refs[] | [.run_id, .url] | @tsv' "${PAYLOAD_FILE}")
+
+# Every examined run lost its do-runner droplet: an
+# infrastructure failure the runner scaler handles, not a heal case. A run
+# dropped for any other reason (unverified, jobs unreadable) keeps the report
+# on the normal path (fail-open towards filing). That includes a claimed run of
+# an issue / pull_request report dropped at binding because its jobs could not
+# be read (`run_not_in_source_repo`): it never reaches the loop, so it is added
+# to the counted total here. The total is deliberately not capped at MAX_RUNS:
+# a claimed run past that cap (dropped at binding as `run_not_in_source_repo`
+# because binding never read its jobs, or counted by the loop just before its
+# `break`) was never examined, so it must keep the total above the lost count
+# and the report on the normal path.
+RUNNER_LOST_BIND_DROPPED=0
+if [ -s "${BIND_RESULT_FILE:-}" ]; then
+	RUNNER_LOST_BIND_DROPPED="$(jq '[.dropped[]? | select(.reason == "run_not_in_source_repo")] | length' "${BIND_RESULT_FILE}" 2>/dev/null || echo 1)"
+	[[ "${RUNNER_LOST_BIND_DROPPED}" =~ ^[0-9]+$ ]] || RUNNER_LOST_BIND_DROPPED=1
+fi
+RUNNER_LOST_EXAMINED_RUNS=$((RUN_COUNT + RUNNER_LOST_BIND_DROPPED))
+if [ "${RUNNER_LOST_RUN_COUNT}" -gt 0 ] && [ "${RUNNER_LOST_RUN_COUNT}" -eq "${RUNNER_LOST_EXAMINED_RUNS}" ] \
+	&& [ "$(jq 'length' "${SUMMARIES_FILE}" 2>/dev/null || echo 0)" = "0" ]; then
+	VALIDATION_ROUTE_SKIP_REASON="runner_lost"
+	log "skip reason=runner_lost source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} runs=${RUNNER_LOST_RUN_COUNT}"
+	exit 0
+fi
 
 if { [ "${SOURCE_KIND}" = "phase_failure" ] || [ "${SOURCE_KIND}" = "validation_failure" ]; } && [ -n "${PENDING_CURRENT_RUN}" ] \
 	&& ! jq -e --arg run_id "${PENDING_CURRENT_RUN}" 'any(.[]; .run_id == $run_id)' "${SUMMARIES_FILE}" >/dev/null 2>&1; then

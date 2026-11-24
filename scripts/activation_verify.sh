@@ -58,11 +58,17 @@
 #   - a PR labelled ai:skip-activation-verify is skipped before any GitHub
 #     call (reason=skip_label);
 #   - when every changed file matches ACTIVATION_VERIFY_EXEMPT_GLOBS
-#     (comma-separated, default docs/plans/**; a value replaces the default;
-#     `**` spans folders, `*` stays inside one), the merge is skipped without
-#     a model call or comment (reason=exempt_paths);
+#     (comma-separated, default docs/plans/**,docs/deploy-activation/**; a
+#     value replaces the default; `**` spans folders, `*` stays inside one),
+#     the merge is skipped without a model call or comment
+#     (reason=exempt_paths);
 #   - a mixed PR is verified on its other files only; the exempt ones go to
 #     the model as exempt_changed_files, which it must never turn into a gap.
+# Activation logs written by /deploy-activate (docs/deploy-activation/) are
+# exempt too (hylifegroup.com PRs #147/#148): the model read their open
+# runbook lines as unmet operator steps, so each log merge filed a new
+# ai:operator-step entry, the daily routine worked that entry and wrote
+# another log.
 # Project mode is unchanged: a project was ordered explicitly.
 #
 # Model text never starts a comment line ("Summary: ", "Trigger: ", "Fix: "):
@@ -388,7 +394,7 @@ activation_split_exempt_files()
 import fnmatch, json, os, sys
 from functools import lru_cache
 from pathlib import PurePosixPath
-raw = os.environ.get("ACTIVATION_VERIFY_EXEMPT_GLOBS", "") or "docs/plans/**"
+raw = os.environ.get("ACTIVATION_VERIFY_EXEMPT_GLOBS", "") or "docs/plans/**,docs/deploy-activation/**"
 patterns = [item.strip().lstrip("/") for item in raw.split(",") if item.strip().lstrip("/")]
 if not patterns:
 	# A set value such as "," names no pattern: nothing is exempt, so every file is verified.

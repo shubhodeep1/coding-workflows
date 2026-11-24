@@ -640,7 +640,8 @@ def test_both_guard_sites_invoke_script_and_emit_outputs() -> None:
 	combined_text = text + "\n" + commit_text
 	assert text.count("files_touched scope-enforcement guard (preflight)") >= 1
 	assert commit_text.count("files_touched scope-enforcement guard (commit)") >= 1
-	assert combined_text.count('python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py"') == 6
+	assert combined_text.count('python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py"') == 7
+	assert commit_text.count("scope_violation_blocked=remediation-no-code") == 1
 	assert combined_text.count("scope_violation_blocked=out-of-scope") == 2
 	assert "scope_violation_blocked=scope-lock-label" in commit_text
 
@@ -1537,7 +1538,11 @@ def test_build_pipeline_plan_grant_body_appends_a_canonical_block() -> None:
 	assert guard.extract_files_touched(body) == ["a/b.py", "tests/**", "changelog.d/*", "agents.d/*"]
 
 
-def _run_grant_cli(plan: str, meta: dict, flag: str = "true", allow_edits: str = "true") -> tuple[int, dict, str | None]:
+def _run_grant_cli(plan: str, meta: dict, flag: str = "true", allow_edits: str = "true",
+	cwd: str | Path | None = None) -> tuple[int, dict, str | None]:
+	# The gate reads extensionless plan paths from its current directory, the
+	# planning checkout (#9387). Without ``cwd`` it runs from the empty temp
+	# dir, so the repository's own files never change these cases.
 	with tempfile.TemporaryDirectory() as td:
 		tdp = Path(td)
 		(tdp / "plan.md").write_text(plan, encoding="utf-8")
@@ -1546,7 +1551,8 @@ def _run_grant_cli(plan: str, meta: dict, flag: str = "true", allow_edits: str =
 		proc = subprocess.run([sys.executable, str(GUARD_SCRIPT), "--plan-auto-approval-gate",
 			"--plan-file", str(tdp / "plan.md"), "--flag-enabled", flag, "--pipeline-login", "pipeline[bot]",
 			"--allow-workflow-edits", allow_edits, "--issue-number", "42", "--issue-meta-file", str(tdp / "meta.json"),
-			"--pipeline-grant-body-out", str(out)], capture_output=True, text=True, check=False)
+			"--pipeline-grant-body-out", str(out)], capture_output=True, text=True, check=False,
+			cwd=str(cwd) if cwd is not None else td)
 		body = out.read_text(encoding="utf-8") if out.exists() and out.stat().st_size else None
 		return proc.returncode, json.loads(proc.stdout), body
 
@@ -2334,6 +2340,474 @@ def test_implement_scope_callers_pass_auto_heal_identity() -> None:
 	assert text.count(export) == 1
 	check = 'if [[ "${pipeline_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\\[bot\\])?$ ]]; then'
 	assert text.index(check) < text.index(export) < text.index(check) + len(check) + 120
+
+
+# --------------------------------------------------------------------------
+# Auto-heal remediation no-code guard
+# --------------------------------------------------------------------------
+
+REMEDIATION_BODY = "<!-- auto-heal-remediation:v1 route=/api/slow -->\nFix the slow route.\n"
+REPORT_SCRIPT_FOR_REMEDIATION = REPO_ROOT / "scripts" / "workflow_failure_heal_report.sh"
+
+
+def test_remediation_body_marker_must_open_an_unfenced_line() -> None:
+	assert guard.is_auto_heal_remediation_body(REMEDIATION_BODY)
+	assert guard.is_auto_heal_remediation_body("﻿\n  \n<!-- auto-heal-remediation:v1 -->\nx")
+	assert guard.is_auto_heal_remediation_body("<!-- auto-heal-remediation:v1-->")
+	# A re-issue that copies the body under its own header keeps the marker.
+	assert guard.is_auto_heal_remediation_body("Re-issue header\n\n" + REMEDIATION_BODY + "\n---\nRe-issued from #5\n")
+	assert guard.is_auto_heal_remediation_body("```\ncode\n```\n" + REMEDIATION_BODY)
+	# Quoted, backticked, mid-sentence, indented code or fenced: not a remediation.
+	assert not guard.is_auto_heal_remediation_body("> " + REMEDIATION_BODY)
+	assert not guard.is_auto_heal_remediation_body("The marker `<!-- auto-heal-remediation:v1 ` is copied.\n")
+	assert not guard.is_auto_heal_remediation_body("See <!-- auto-heal-remediation:v1 --> here\n")
+	assert not guard.is_auto_heal_remediation_body("    <!-- auto-heal-remediation:v1 -->\n")
+	assert not guard.is_auto_heal_remediation_body("```md\n" + REMEDIATION_BODY + "```\nExample above.\n")
+	assert not guard.is_auto_heal_remediation_body("````\n```\n" + REMEDIATION_BODY + "````\n")
+	assert not guard.is_auto_heal_remediation_body("~~~\n" + REMEDIATION_BODY)
+	assert not guard.is_auto_heal_remediation_body("<!-- auto-heal-remediation:v10 -->")
+	assert not guard.is_auto_heal_remediation_body("<!-- auto-heal-remediation:v1x -->")
+	assert not guard.is_auto_heal_remediation_body("")
+	assert not guard.is_auto_heal_remediation_body(None)
+
+
+def test_remediation_non_code_path_shapes() -> None:
+	for path in ("README.md", "./README.md", "src/notes/DESIGN.MD", "tests/test_a.py", "tests/unit/deep/x.js",
+			"docs/guide.txt", "changelog.d/1-a.md", "agents.d/1-a.md", "db/contracts/users.yml"):
+		assert guard.is_remediation_non_code_path(path), path
+	for path in ("app/routes.py", "src/tests/test_a.py", "db/migrate.py", "testsuite/x.py", "docs", "tests",
+			"README.mdx", "", "/tests/x.py", "tests/../app.py", '"tests/\\303\\251.py"', None, 7):
+		assert not guard.is_remediation_non_code_path(path), path
+
+
+def test_remediation_no_code_evaluation() -> None:
+	blocked = guard.evaluate_remediation_no_code(REMEDIATION_BODY, ["README.md", "tests/test_a.py"])
+	assert blocked == {"outcome": "block", "reason": "no_code_change", "count": 2, "paths": ["README.md", "tests/test_a.py"]}
+	cases = [
+		(REMEDIATION_BODY, ["README.md", "app/routes.py"], "code_changed"),
+		(REMEDIATION_BODY, [], "no_paths"),
+		(REMEDIATION_BODY, None, "no_paths"),
+		("Ordinary issue.\n", ["README.md"], "not_remediation"),
+		(None, ["README.md"], "not_remediation"),
+	]
+	for body, paths, reason in cases:
+		record = guard.evaluate_remediation_no_code(body, paths)
+		assert record["outcome"] == "allow" and record["reason"] == reason, (body, paths, record)
+
+
+def _run_remediation_cli(body: str | None, staged: list[str] | None) -> tuple[int, dict]:
+	with tempfile.TemporaryDirectory() as td:
+		tdp = Path(td)
+		args = [sys.executable, str(GUARD_SCRIPT), "--remediation-no-code-check"]
+		if body is not None:
+			(tdp / "body.txt").write_text(body, encoding="utf-8")
+			args += ["--issue-body-file", str(tdp / "body.txt")]
+		else:
+			args += ["--issue-body-file", str(tdp / "missing.txt")]
+		if staged is not None:
+			(tdp / "staged.txt").write_text("\n".join(staged) + "\n", encoding="utf-8")
+			args += ["--staged-file", str(tdp / "staged.txt")]
+		proc = subprocess.run(args, capture_output=True, text=True, check=False, stdin=subprocess.DEVNULL)
+		return proc.returncode, json.loads(proc.stdout)
+
+
+def test_remediation_no_code_cli_exit_codes() -> None:
+	assert guard.EXIT_REMEDIATION_NO_CODE == 40
+	code, record = _run_remediation_cli(REMEDIATION_BODY, ["docs/a.md", "tests/test_a.py"])
+	assert code == 40 and record["reason"] == "no_code_change"
+	code, record = _run_remediation_cli(REMEDIATION_BODY, ["docs/a.md", "app.py"])
+	assert code == 0 and record["reason"] == "code_changed"
+	# Fail open: unreadable body, or no path list.
+	code, record = _run_remediation_cli(None, ["docs/a.md"])
+	assert code == 0 and record["reason"] == "not_remediation"
+	code, record = _run_remediation_cli(REMEDIATION_BODY, None)
+	assert code == 0 and record["reason"] == "no_paths"
+
+
+def _remediation_fragment() -> str:
+	lines = _implement_commit_text().splitlines()
+	start_idx = lines.index("# >>> auto-heal remediation no-code guard (commit) >>>")
+	end_idx = lines.index("# <<< auto-heal remediation no-code guard (commit) <<<")
+	return "\n".join(lines[start_idx : end_idx + 1])
+
+
+def _run_remediation_fragment(body: str | None, staged: list[str], *, extra_env: dict | None = None,
+		with_helper: bool = True) -> tuple[int, str, str]:
+	with tempfile.TemporaryDirectory() as td:
+		tdp = Path(td)
+		(tdp / "scripts").mkdir()
+		if with_helper:
+			shutil.copy(GUARD_SCRIPT, tdp / "scripts" / "files_touched_scope_guard.py")
+		git_env = {
+			key: value
+			for key, value in os.environ.items()
+			if key not in {"BASH_ENV", "ENV", "WORKSPACE_PATH", "GIT_DIR", "GIT_INDEX_FILE", "GIT_PREFIX", "GIT_WORK_TREE",
+				"GIT_COMMON_DIR", "REMEDIATION_NO_CODE_GUARD_ENABLED", "HEAL_ROUTE", "IMPLEMENT_STAGED_SUPPORT_RUN_DIR",
+				"PRIOR_PR_BASELINE_BRANCH"}
+		}
+		subprocess.run(["git", "init", "-q"], cwd=tdp, check=True, env=git_env)
+		for rel in staged:
+			path = tdp / rel
+			path.parent.mkdir(parents=True, exist_ok=True)
+			path.write_text("x\n", encoding="utf-8")
+			subprocess.run(["git", "add", "--", rel], cwd=tdp, check=True, env=git_env)
+		gh_output = tdp / "gh_output.txt"
+		gh_output.write_text("", encoding="utf-8")
+		env = dict(git_env)
+		env.update({"GITHUB_OUTPUT": str(gh_output), "TMPDIR": str(tdp), "ISSUE_NUMBER": "77"})
+		if body is not None:
+			(tdp / "issue_body.txt").write_text(body, encoding="utf-8")
+			env["ISSUE_BODY_FILE"] = str(tdp / "issue_body.txt")
+		env.update(extra_env or {})
+		proc = subprocess.run(["bash", "-c", "set -euo pipefail\n" + _remediation_fragment() + "\necho FRAGMENT_CONTINUED\n"],
+			cwd=tdp, env=env, capture_output=True, text=True, check=False)
+		return proc.returncode, proc.stdout + proc.stderr, gh_output.read_text(encoding="utf-8")
+
+
+def test_remediation_fragment_blocks_docs_and_tests_only_change() -> None:
+	code, out, gh_output = _run_remediation_fragment(REMEDIATION_BODY, ["README.md", "tests/test_route.py"])
+	assert code == 1, out
+	assert "FRAGMENT_CONTINUED" not in out
+	assert "IMPLEMENT_REMEDIATION_NO_CODE_GUARD outcome=block reason=no_code_change issue=77 count=2" in out
+	assert "scope_violation_blocked=remediation-no-code\n" in gh_output
+	assert "scope_violation_count=2\n" in gh_output
+	assert "scope_violation_files<<__SVF_EOF__\nREADME.md\ntests/test_route.py\n__SVF_EOF__\n" in gh_output
+	# Nothing else is written, and did_commit is never set on this path.
+	assert "did_commit" not in gh_output and "scope_violation_allowlist" not in gh_output
+
+
+def test_remediation_fragment_blocks_non_ascii_doc_only_change() -> None:
+	# core.quotePath=false keeps the name literal; a C-quoted name would read as code.
+	code, out, gh_output = _run_remediation_fragment(REMEDIATION_BODY, ["docs/caf\u00e9.md", "tests/test_na\u00efve.py"])
+	assert code == 1, out
+	assert "outcome=block reason=no_code_change issue=77 count=2" in out
+	assert "docs/caf\u00e9.md" in gh_output and "\\303" not in gh_output
+
+
+def test_remediation_fragment_allows_and_fails_open() -> None:
+	cases = [
+		# (body, staged, extra_env, with_helper, expected log text)
+		(REMEDIATION_BODY, ["README.md", "app/route.py"], {}, True, "outcome=allow reason=code_changed"),
+		("Ordinary issue\n", ["README.md"], {}, True, "outcome=allow reason=not_remediation"),
+		("```\n" + REMEDIATION_BODY + "```\n", ["README.md"], {}, True, "outcome=allow reason=not_remediation"),
+		(REMEDIATION_BODY, ["README.md"], {"PRIOR_PR_BASELINE_BRANCH": "ai/issue-5"}, True, "outcome=allow reason=prior_pr_baseline"),
+		(REMEDIATION_BODY, ["README.md"], {"TMPDIR": "/nonexistent-remediation-tmp"}, True, "failed open (helper exit 126)"),
+		(REMEDIATION_BODY, ["README.md"], {"REMEDIATION_NO_CODE_GUARD_ENABLED": "false"}, True, "guard disabled"),
+		(REMEDIATION_BODY, ["README.md"], {"HEAL_ROUTE": "true"}, True, "FRAGMENT_CONTINUED"),
+		(None, ["README.md"], {}, True, "FRAGMENT_CONTINUED"),
+		(REMEDIATION_BODY, [], {}, True, "FRAGMENT_CONTINUED"),
+		(REMEDIATION_BODY, ["README.md"], {}, False, "failed open (helper exit 127)"),
+	]
+	for body, staged, extra_env, with_helper, expected in cases:
+		code, out, gh_output = _run_remediation_fragment(body, staged, extra_env=extra_env, with_helper=with_helper)
+		assert code == 0, (expected, out)
+		assert expected in out, (expected, out)
+		assert "FRAGMENT_CONTINUED" in out
+		assert gh_output == "", (expected, gh_output)
+
+
+def test_remediation_fragment_fails_open_on_helper_crash() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		broken = Path(td) / "files_touched_scope_guard.py"
+		broken.write_text("raise SystemExit(3)\n", encoding="utf-8")
+		code, out, gh_output = _run_remediation_fragment(REMEDIATION_BODY, ["README.md"],
+			extra_env={"IMPLEMENT_STAGED_SUPPORT_RUN_DIR": td})
+	assert code == 0, out
+	assert "failed open (helper exit 3)" in out and "outcome=allow reason=helper_error" in out
+	assert gh_output == ""
+
+
+def test_remediation_guard_runs_after_scope_guard_and_before_commit() -> None:
+	text = _implement_commit_text()
+	scope_end = text.index("# <<< files_touched scope-enforcement guard (commit) <<<")
+	start = text.index("# >>> auto-heal remediation no-code guard (commit) >>>")
+	commit = text.index('git commit -m "AI implementation for issue #${ISSUE_NUMBER}"')
+	assert scope_end < start < commit
+	implement = _implement_text()
+	step = implement[implement.index("        id: commit_changes\n"):]
+	step = step[: step.index("      - name: ")]
+	assert "REMEDIATION_NO_CODE_GUARD_ENABLED: ${{ vars.REMEDIATION_NO_CODE_GUARD_ENABLED || 'true' }}" in step
+	# A failed baseline checkout falls back to the default ref, so the skip must not apply.
+	assert "PRIOR_PR_BASELINE_BRANCH: ${{ steps.checkout_baseline.outcome == 'success' && steps.baseline_refctx.outputs.branch || '' }}" in step
+
+
+_HANDLER_GH_STUB = r"""#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${GH_STUB_LOG}"
+if [ "$1 $2" = "issue comment" ]; then
+	while [ "$#" -gt 0 ]; do
+		if [ "$1" = "--body-file" ]; then cat "$2" > "${GH_STUB_COMMENT}"; fi
+		shift
+	done
+	exit 0
+fi
+if [ "$1 $2" = "issue view" ]; then
+	printf 'ai:scope-blocked\n'
+	exit 0
+fi
+exit 0
+"""
+
+
+def _run_guard_handler(reason: str, files: str, count: str, allowlist: str = "") -> tuple[int, str, str, str]:
+	with tempfile.TemporaryDirectory() as td:
+		tdp = Path(td)
+		(tdp / "bin").mkdir()
+		stub = tdp / "bin" / "gh"
+		stub.write_text(_HANDLER_GH_STUB, encoding="utf-8")
+		stub.chmod(0o755)
+		shutil.copy(IMPLEMENT_GUARD_HANDLER, tdp / "implement_handle_guard_block.sh")
+		env = {
+			"PATH": f"{tdp / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}",
+			"HOME": str(tdp), "TMPDIR": str(tdp), "RUNNER_TEMP": str(tdp),
+			"GH_STUB_LOG": str(tdp / "gh.log"), "GH_STUB_COMMENT": str(tdp / "comment.md"),
+			"GITHUB_REPOSITORY": "octo/consumer", "GITHUB_RUN_ID": "4242", "ISSUE_NUMBER": "77",
+			"SVB_REASON": reason, "SVB_FILES": files, "SVB_COUNT": count, "SVB_ALLOWLIST": allowlist,
+		}
+		proc = subprocess.run(["bash", str(tdp / "implement_handle_guard_block.sh")], cwd=tdp, env=env,
+			capture_output=True, text=True, check=False)
+		comment = (tdp / "comment.md").read_text(encoding="utf-8") if (tdp / "comment.md").exists() else ""
+		log = (tdp / "gh.log").read_text(encoding="utf-8") if (tdp / "gh.log").exists() else ""
+		return proc.returncode, proc.stdout + proc.stderr, comment, log
+
+
+def test_guard_handler_parks_remediation_no_code_with_one_comment() -> None:
+	import base64
+
+	import unblock_ledger
+
+	code, out, comment, log = _run_guard_handler("remediation-no-code", "README.md\ntests/test_route.py", "2")
+	assert code == 1, out
+	lines = comment.splitlines()
+	assert lines[0] == "🚨 **Auto-heal remediation guard rejected this implementation run: no code change.**"
+	assert lines[0] in unblock_ledger.GUARD_REJECTION_HEADERS
+	assert "no pull request was opened" in comment
+	assert "README.md\ntests/test_route.py" in comment
+	assert "REMEDIATION_NO_CODE_GUARD_ENABLED=false" in comment
+	assert "allowlist" not in comment
+	# The marker is the last line; guard=scope with this reason is never
+	# override_guard-eligible in the unblock ledger.
+	match = unblock_ledger.REJECTION_RE.fullmatch(lines[-1])
+	assert match is not None, lines[-1]
+	assert (match.group("item"), match.group("guard"), match.group("reason"), match.group("run")) == \
+		("77", "scope", "remediation-no-code", "4242")
+	assert json.loads(base64.b64decode(match.group("paths"))) == ["README.md", "tests/test_route.py"]
+	assert log.count("issue comment") == 1
+	assert "--add-label ai:scope-blocked" in log and "--remove-label ai:implementing" in log
+	# The marker comment lands before the label, so the `issues: labeled` heal
+	# reporter can already read reason=remediation-no-code and skip.
+	assert log.index("issue comment") < log.index("--add-label ai:scope-blocked")
+	assert "labels this issue `ai:scope-blocked` right after posting this comment" in comment
+
+
+def test_guard_handler_out_of_scope_comment_keeps_allowlist_block() -> None:
+	code, out, comment, log = _run_guard_handler("out-of-scope", "app/x.py", "1", "frontend/")
+	assert code == 1, out
+	# Other scope reasons keep label-then-comment, so the comment reports the read-back latch.
+	assert log.index("--add-label ai:scope-blocked") < log.index("issue comment")
+	assert "confirmed labeled `ai:scope-blocked`" in comment
+	assert comment.splitlines()[0] == "🚨 **files_touched scope guard rejected this implementation run.**"
+	assert "Declared `files_touched` allowlist:\n\n```\nfrontend/\n```\n" in comment
+	assert "guard=scope reason=out-of-scope" in comment.splitlines()[-1]
+
+
+def test_unblock_ledger_never_offers_override_for_remediation_no_code() -> None:
+	import base64
+
+	import unblock_ledger
+
+	paths = base64.b64encode(json.dumps(["README.md"]).encode()).decode()
+	marker = f"<!-- ai:guard-rejection:v1 item=77 guard=scope reason=remediation-no-code run=4242 count=1 truncated=false paths={paths} -->"
+	text = Path(unblock_ledger.__file__).read_text(encoding="utf-8")
+	assert unblock_ledger.REJECTION_RE.fullmatch(marker)
+	# Both override gates key on reason == "out-of-scope" for scope-blocked.
+	assert text.count('stop == "scope-blocked" and match.group("reason") != "out-of-scope"') >= 1
+	assert text.count('stop == "scope-blocked" and rejection.get("reason") != "out-of-scope"') >= 1
+
+
+def test_heal_reporter_skips_remediation_no_code_park() -> None:
+	text = REPORT_SCRIPT_FOR_REMEDIATION.read_text(encoding="utf-8")
+	block = text[text.index("# The auto-heal remediation no-code guard"):]
+	block = block[: block.index("PAYLOAD_FILE=")]
+	assert 'if [ "${LABEL}" = "ai:scope-blocked" ] && [ -n "${HEAL_REPORTER_LOGIN}" ]' in block
+	assert "skip reason=remediation_no_code_park" in block
+	# The skip adds no GitHub read of its own.
+	assert "gh " not in block.replace("gh_retry", "")
+	filter_start = block.index("--arg item \"${ISSUE_NUMBER}\" '") + len("--arg item \"${ISSUE_NUMBER}\" '")
+	jq_filter = block[filter_start : block.index("' \"${COMMENTS_JSON_FILE}\"")]
+	assert "remediation-no-code" in jq_filter
+
+	def decide(comments: list[dict], login: str = "workflow-bot", item: str = "77") -> bool:
+		proc = subprocess.run(["jq", "-e", "--arg", "login", login, "--arg", "item", item, jq_filter],
+			input=json.dumps(comments), capture_output=True, text=True, check=False)
+		return proc.returncode == 0
+
+	def marker(reason: str, item: str = "77") -> str:
+		return f"header\n\n<!-- ai:guard-rejection:v1 item={item} guard=scope reason={reason} run=9 count=1 truncated=false paths=WyJhIl0= -->"
+
+	park = {"author": "workflow-bot", "body": marker("remediation-no-code")}
+	older = {"author": "workflow-bot", "body": marker("out-of-scope")}
+	assert decide([older, park])
+	assert decide([{"author": "workflow-bot", "body": marker("remediation-no-code").replace("\n", "\r\n") + "\r\n"}])
+	# A newer ordinary rejection, another author's marker, another issue's
+	# marker, a mid-comment mention or no comments: report as before.
+	assert not decide([park, older])
+	# A later rejection whose marker failed to encode is the newest one.
+	assert not decide([park, {"author": "workflow-bot", "body": "🚨 **files_touched scope guard rejected this implementation run.**\n\nno marker"}])
+	assert not decide([{"author": "eve", "body": marker("remediation-no-code")}])
+	assert not decide([{"author": "workflow-bot", "body": marker("remediation-no-code", item="78")}])
+	assert not decide([{"author": "workflow-bot", "body": marker("remediation-no-code") + "\ntrailing text"}])
+	assert not decide([])
+
+
+def test_plan_grant_path_grants_extensionless_checkout_file() -> None:
+	# #9387: an extensionless path is granted only when it is a regular file in
+	# the planning checkout (the current directory); never a directory or a
+	# symlink, and a missing one is reported, not silently dropped.
+	previous = os.getcwd()
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		(root / "bin").mkdir()
+		(root / "bin" / "tool").write_text("#!/bin/sh\n", encoding="utf-8")
+		(root / "VERSION").write_text("1.0\n", encoding="utf-8")
+		(root / ".env").write_text("X=1\n", encoding="utf-8")
+		(root / "docs" / "sub").mkdir(parents=True)
+		os.symlink("tool", root / "bin" / "link")
+		os.symlink("bin", root / "alias")
+		try:
+			os.chdir(td)
+			assert guard._plan_grant_path("bin/tool") == "bin/tool"
+			assert guard._plan_grant_path("VERSION") == "VERSION"
+			# alias/tool reaches bin/tool through a symlinked parent.
+			for bad in ("docs/sub", "docs", "bin/link", "bin/missing", "MISSING", ".env", "bin", "alias/tool"):
+				assert guard._plan_grant_path(bad) == "", bad
+			# Named bare files keep their grant without being in the checkout.
+			assert guard._plan_grant_path("_headers") == "_headers"
+			assert guard._plan_grant_path("public/_redirects") == "public/_redirects"
+			assert guard._plan_grant_checkout_state("bin/tool") == "file"
+			assert guard._plan_grant_checkout_state("bin/link") == "other"
+			assert guard._plan_grant_checkout_state("docs/sub") == "other"
+			assert guard._plan_grant_checkout_state("bin/missing") == "missing"
+			assert guard._plan_grant_checkout_state("alias/tool") == "other"
+			assert guard._plan_grant_missing_path("alias/new") == ""
+			missing: list[str] = []
+			plan = ("## Files likely to change\n- `bin/tool`\n- `docs/sub`\n- `bin/new`\n- `bin/new`\n"
+				"- `owner/repo`\n- `bin/link`\n")
+			assert guard.extract_plan_file_paths(plan, missing_out=missing) == ["bin/tool"]
+			assert missing == ["bin/new"]
+			assert guard.extract_plan_missing_file_paths(plan) == ["bin/new"]
+			# Callers without missing_out see the same paths.
+			assert guard.extract_plan_file_paths(plan) == ["bin/tool"]
+		finally:
+			os.chdir(previous)
+
+
+def test_plan_gate_missing_extensionless_path_hold_is_replannable() -> None:
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		(root / "scripts" / "subdir").mkdir(parents=True)
+		(root / "lib").mkdir()
+		plan = "## Files likely to change\n- `scripts/a.sh`\n- `scripts/new-tool`\n"
+		code, record, body = _run_grant_cli(plan, _pipeline_meta(), cwd=root)
+		assert code != 0 and record["decision"] == "hold" and record["reason"] == "path_not_granted", record
+		assert record["denied_paths"] == ["scripts/new-tool"] and record.get("replannable") is True, record
+		assert body is None and "pipeline_grant_body" not in record
+		# On the heal route the same hold is not replannable.
+		healed = dict(_pipeline_meta(), labels=[{"name": "ai:workflow-heal"}])
+		code, record, body = _run_grant_cli(plan, healed, cwd=root)
+		assert record["decision"] == "hold" and record["reason"] == "path_not_granted", record
+		assert record["denied_paths"] == ["scripts/new-tool"] and "replannable" not in record and body is None, record
+		# With the file in the checkout the plan gets its pipeline grant.
+		(root / "scripts" / "new-tool").write_text("#!/bin/sh\n", encoding="utf-8")
+		code, record, body = _run_grant_cli(plan, _pipeline_meta(), cwd=root)
+		assert code == 0 and record["reason"] == "pipeline_plan_grant", record
+		assert body is not None and "  - scripts/new-tool\n" in body
+		# A missing non-protected file under an existing directory holds too.
+		code, record, body = _run_grant_cli("## Files likely to change\n- `lib/run`\n", _owner_meta(), cwd=root)
+		assert record["decision"] == "hold" and record["reason"] == "path_not_granted", record
+		assert record["denied_paths"] == ["lib/run"] and record.get("replannable") is True, record
+		# A directory is never granted and is not replannable.
+		code, record, body = _run_grant_cli("## Files likely to change\n- `scripts/a.sh`\n- `scripts/subdir`\n",
+			_pipeline_meta(), cwd=root)
+		assert record["decision"] == "hold" and "replannable" not in record and body is None, record
+		# A prose token whose first segment is not a checkout directory is ignored.
+		code, record, body = _run_grant_cli("## Files likely to change\n- `scripts/a.sh`\n- `owner/repo`\n",
+			_pipeline_meta(), cwd=root)
+		assert code == 0 and record["reason"] == "pipeline_plan_grant", record
+
+
+def test_plan_gate_missing_root_extensionless_path_hold_is_replannable() -> None:
+	# #9387: a root-level extensionless file the checkout lacks, listed as a
+	# Files bullet's leading backticked token, holds the plan as replannable.
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		(root / "scripts").mkdir()
+		plan = "## Files likely to change\n- `scripts/a.sh`\n- `VERSION` - bump the version\n"
+		# Not a git checkout: nothing is reported, as before.
+		code, record, body = _run_grant_cli(plan, _pipeline_meta(), cwd=root)
+		assert code == 0 and record["reason"] == "pipeline_plan_grant", record
+		(root / ".git").mkdir()
+		code, record, body = _run_grant_cli(plan, _pipeline_meta(), cwd=root)
+		assert record["decision"] == "hold" and record["reason"] == "path_not_granted", record
+		assert record["denied_paths"] == ["VERSION"] and record.get("replannable") is True, record
+		assert body is None
+		# Prose naming a root token, or a token that is not the bullet's lead, never counts.
+		for prose in ("- Update `VERSION` notes\n", "- `scripts/a.sh` reads `VERSION`\n", "- `VERSION` is read\n"):
+			code, record, body = _run_grant_cli("## Files likely to change\n- `scripts/a.sh`\n" + prose,
+				_pipeline_meta(), cwd=root)
+			assert code == 0 and record["reason"] == "pipeline_plan_grant", (prose, record)
+		# The unbackticked top-level bullet form holds the same way.
+		for bare in ("- VERSION\n", "- VERSION - bump the version\n", "- VERSION: bump the version\n"):
+			code, record, body = _run_grant_cli("## Files likely to change\n- `scripts/a.sh`\n" + bare,
+				_pipeline_meta(), cwd=root)
+			assert record["decision"] == "hold" and record["denied_paths"] == ["VERSION"], (bare, record)
+			assert record.get("replannable") is True and body is None, (bare, record)
+		# An unbackticked prose bullet or an indented sub-bullet never counts.
+		for prose in ("- Update VERSION notes\n", "- `scripts/a.sh`\n  - `build_payload`: wraps the call\n",
+				"- `scripts/a.sh`\n  - VERSION\n", "- Tests: add cases for the new tool\n",
+				"- Docs - explain the schema\n", "- Notes (see below)\n", "- None\n", "- NONE\n",
+				"- None - no files need edits\n", "- `None` - no files need edits\n", "1. TODO: decide later\n"):
+			code, record, body = _run_grant_cli("## Files likely to change\n- `scripts/a.sh`\n" + prose,
+				_pipeline_meta(), cwd=root)
+			assert code == 0 and record["reason"] == "pipeline_plan_grant", (prose, record)
+		# An existing root directory is never missing; an existing file is granted.
+		(root / "bin").mkdir()
+		code, record, body = _run_grant_cli("## Files likely to change\n- `scripts/a.sh`\n- `bin`\n",
+			_pipeline_meta(), cwd=root)
+		assert record.get("denied_paths") != ["bin"], record
+		(root / "VERSION").write_text("1.0\n", encoding="utf-8")
+		code, record, body = _run_grant_cli(plan, _pipeline_meta(), cwd=root)
+		assert code == 0 and record["reason"] == "pipeline_plan_grant", record
+		assert body is not None and "  - VERSION\n" in body
+
+
+def test_plan_gate_missing_extensionless_hold_without_loaded_metadata_fails_closed() -> None:
+	# #9387: no protected path and the files_touched gate off leave the issue
+	# metadata unread; the heal-route check still runs, and unknown metadata
+	# is never replannable.
+	previous_cwd = os.getcwd()
+	previous_flag = os.environ.get("PLAN_FILES_TOUCHED_GATE_ENABLED")
+	with tempfile.TemporaryDirectory() as td:
+		root = Path(td)
+		(root / "lib").mkdir()
+		(root / "plan.md").write_text("## Files likely to change\n- `lib/run`\n", encoding="utf-8")
+		healed = dict(_owner_meta(), labels=[{"name": "ai:workflow-heal"}])
+		(root / "heal.json").write_text(json.dumps(healed), encoding="utf-8")
+		(root / "owner.json").write_text(json.dumps(_owner_meta()), encoding="utf-8")
+		try:
+			os.chdir(td)
+			os.environ["PLAN_FILES_TOUCHED_GATE_ENABLED"] = "false"
+			for meta_file, expected in (("heal.json", None), ("owner.json", True), ("", None), ("absent.json", None)):
+				record, _ = guard.run_plan_auto_approval_gate("plan.md", "true", meta_file, "pipeline[bot]",
+					"true", "42")
+				assert record["decision"] == "hold" and record["reason"] == "path_not_granted", (meta_file, record)
+				assert record["denied_paths"] == ["lib/run"], (meta_file, record)
+				assert record.get("replannable") is expected, (meta_file, record)
+		finally:
+			os.chdir(previous_cwd)
+			if previous_flag is None:
+				os.environ.pop("PLAN_FILES_TOUCHED_GATE_ENABLED", None)
+			else:
+				os.environ["PLAN_FILES_TOUCHED_GATE_ENABLED"] = previous_flag
 
 
 def _run_all() -> int:

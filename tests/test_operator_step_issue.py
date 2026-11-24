@@ -194,6 +194,55 @@ def test_needs_human_digest_prune_removes_closed_items_and_promotes_overflow(fak
 	assert len(fake.patches()) == 1 and len(fake.calls) == calls + 2  # Unchanged: no second PATCH.
 
 
+def test_needs_human_digest_lists_unparked_items_without_parking_them(fake: FakeGitHub) -> None:
+	"""2026-11-20: the digest read "Nothing is waiting." while #9283, #9261,
+	#9839 and #9821 carried ai:needs-human. Items that carry the label without
+	being parked are now listed in a separate, marker-free section, which
+	parse_digest (and the unblock scan's parked list) never sees."""
+	fake.issues.append({"number": 5, "body": writer.render_digest({}, []), "user": {"login": BOT}})
+	fake.open_needs_human = [
+		{"number": 9839, "labels": [{"name": "ai:needs-human"}], "pull_request": {}},
+		{"number": 9261, "labels": [{"name": "ai:needs-human"}]},
+	]
+	result = writer.needs_human_prune(REPO, BOT, now=NOW)
+	assert result["items"] == []  # The scan's parked list is unchanged.
+	body = fake.issues[0]["body"]
+	assert "_Nothing is parked._" in body and "_Nothing is waiting._" not in body
+	assert writer.NEEDS_HUMAN_UNPARKED_MARKER in body
+	assert "- #9261 (issue)\n- #9839 (pr)" in body
+	assert writer.parse_digest(body) == ({}, [], 0)
+	assert writer.parse_unparked(body) == [(9261, "issue"), (9839, "pr")]
+	# No-change guard: an identical listing writes nothing.
+	patches = len(fake.patches())
+	assert writer.needs_human_prune(REPO, BOT, now=NOW)["reason"] == "empty"
+	assert len(fake.patches()) == patches
+	# Once nothing carries the label, the section goes away again.
+	fake.open_needs_human = []
+	writer.needs_human_prune(REPO, BOT, now=NOW)
+	assert fake.issues[0]["body"] == writer.render_digest({}, [])
+
+
+def test_needs_human_digest_parked_items_are_not_repeated_as_unparked(fake: FakeGitHub) -> None:
+	entries = {7: {"kind": "issue", "parked": NOW, "line": writer.render_digest_entry(7, "issue", "blocked", "item_cap", "", NOW)}}
+	fake.issues.append({"number": 5, "body": writer.render_digest(entries, []), "user": {"login": BOT}})
+	fake.open_needs_human = [{"number": 7, "labels": [{"name": "ai:needs-human"}]}, {"number": 8, "labels": [{"name": "ai:needs-human"}]}]
+	result = writer.needs_human_prune(REPO, BOT, now=NOW)
+	assert result["items"] == [7]
+	assert writer.parse_unparked(fake.issues[0]["body"]) == [(8, "issue")]
+	# A later park of the listed item moves it from the section into the entries.
+	_park(8, item_labeled=True)
+	parsed, _, _ = writer.parse_digest(fake.issues[0]["body"])
+	assert sorted(parsed) == [7, 8]
+	assert writer.parse_unparked(fake.issues[0]["body"]) == []
+
+
+def test_needs_human_digest_unparked_section_is_capped() -> None:
+	unparked = [(n, "issue") for n in range(1, writer.NEEDS_HUMAN_UNPARKED_MAX + 6)]
+	body = writer.render_digest({}, [], 0, unparked)
+	assert len(writer.parse_unparked(body)) == writer.NEEDS_HUMAN_UNPARKED_MAX
+	assert "...and 5 more." in body
+
+
 def test_needs_human_digest_prune_without_entries_reads_only_the_digest(fake: FakeGitHub) -> None:
 	assert writer.needs_human_prune(REPO, BOT)["reason"] == "no_digest"
 	assert fake.calls == [["api", f"repos/{REPO}/issues?labels=ai:operator-step&state=open&per_page=30"]]
