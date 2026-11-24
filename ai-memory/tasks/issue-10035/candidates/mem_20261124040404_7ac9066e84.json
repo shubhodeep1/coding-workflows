@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which fix should this issue ship, given that its own constraints say \"a retry, backoff, re-run, or longer timeout is not an accepted fix\"?\nChoices:\nA) Allow the bounded client retry anyway. The cause is that a temporary \"could not verify\" 403 is read as a final refusal. In `scripts/claude_pool_token.sh`, retry the broker call at most 3 times, using the existing `oidc_retry_sleeps` intervals and `oidc_retry_on` switch. Retry only on `000`, `429`, `5xx`, or `403` with `workflow_sha_unverifiable`; every other 403 reason still fails at once. The regression test in `tests/test_claude_pool_token.py` sends one `403 workflow_sha_unverifiable` and then a 200. It fails on the current head and passes with the fix. (RECOMMENDED)\nB) No client retry. Ship only the broker change: when the `main` check is `unavailable`, still check `stable`, and grant if either says yes. **Note:** this needs Q2:B. Selecting it with Q2:A leaves nothing in scope to change.\nC) Both the client retry (A) and the broker change (B). **Note:** this needs Q2:B.\nQ2: Should this PR edit the broker files under `tools/claude-pool-broker/`?\nChoices:\nA) No. Keep to the heal-scope allowlist: `scripts/claude_pool_token.sh`, `tests/**` and a `changelog.d/*.md` entry. Leave the broker code and its stale \"job runs codex\" comments to #9990 / PR #9995, which already edits those files, and list them in the PR body as follow-ups. Note in the PR body that an operator needs to confirm `BROKER_GITHUB_READ_TOKEN` is set on the Worker. (RECOMMENDED)\nB) Yes. Widen scope to `tools/claude-pool-broker/src/index.ts` (the `verifyTrustedSha` change and the header comment), `wrangler.toml` (the comment) and `tools/claude-pool-broker/test/broker.test.ts`. This may conflict with PR #9995. The Worker change only takes effect once someone redeploys the Worker, because no workflow deploys it.",
+  "fingerprint": "9602402967e409ecbbc23a09b1ebd07db0d822a5f1f981cf71531d3871c9dfe9",
+  "lineage": {
+    "issue_number": 10035,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45319627490",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45319627490",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261124040404_7ac9066e84",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10035,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45319627490"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #10035 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-24T04:04:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
