@@ -240,6 +240,7 @@ jobs:
           # runs every tick. P11b (Refs #8291) first shipped it default-on as
           # `ZOMBIE_RUN_REAPER_ENABLED: ${{ vars.ZOMBIE_RUN_REAPER_ENABLED || 'true' }}`;
           # setting the repo variable to true restores that.
+          # The same knob is the wedged-queued floor (issue #9473); 0 disables it.
           ZOMBIE_RUN_REAPER_ENABLED: ${{ vars.ZOMBIE_RUN_REAPER_ENABLED || 'false' }}
           # Also the wedged-queued floor beneath SWEEP_STALE_QUEUED_MINUTES
           # (issue #9473); 0 disables it. Defined once: a second key in this
@@ -895,7 +896,8 @@ jobs:
               round_cap_rounds="$(printf '%s' "${round_cap_counts_json}" | jq -r --arg n "${pr_number}" '(.[$n] // 0) | if type == "number" then . else 0 end' 2>/dev/null || echo 0)"
               if [[ "${round_cap_rounds}" =~ ^[0-9]+$ ]] && [ "${round_cap_rounds}" -ge "${round_cap_max}" ]; then
                 review_sweep_round_cap_escalate "${REPOSITORY}" "${pr_number}" "${round_cap_rounds}" "${round_cap_max}" "${round_cap_window_hours}" \
-                  "$(printf '%s' "${row}" | jq -c '.labels // []' 2>/dev/null || echo '[]')" "${DRY_RUN:-false}" || true
+                  "$(printf '%s' "${row}" | jq -c '.labels // []' 2>/dev/null || echo '[]')" "${DRY_RUN:-false}" \
+                  "$(printf '%s' "${row}" | jq -r '.head_sha // ""' 2>/dev/null || true)" || true
                 echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=review_round_cap rounds=${round_cap_rounds} max=${round_cap_max} window_hours=${round_cap_window_hours} head_ref=${head_ref}"
                 skipped_round_cap=$((skipped_round_cap + 1))
                 continue

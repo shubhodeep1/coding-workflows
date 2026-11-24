@@ -258,6 +258,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/post_review_comment.sh` — a single pull-request review when `--review-state` is supplied.
 - `scripts/pr_checks_lib.sh` — Shared PR check-runs merge gate.
 - `scripts/implement_step_prepush_test_gate.sh` — Implement's pre-push affected-test gate step: runs the gate before commit, gives PR-caused failures one repair turn and writes the PR-body summary (issue #8190).
+- `scripts/implement_step_preflight_destructive_guard.sh` — Body of implement's "Preflight destructive-commit guard" step (`id: preflight_destructive_guard`): projects the staged deletion set, automation-path grants and files_touched scope onto a temporary index and blocks before the commit tail. Sourced only from the trusted `IMPLEMENT_STAGED_SUPPORT_RUN_DIR` copy (issue #9678).
+- `scripts/implement_step_post_codex_syntax_repair.sh` — Body of implement's "Attempt post-Codex syntax repair" step (`id: post_codex_syntax_repair`): runs the isolated repair agent when changed-file syntax validation failed and writes `repaired=true|false`. Sourced only from the trusted `IMPLEMENT_STAGED_SUPPORT_RUN_DIR` copy (issue #9678).
 - `scripts/prepush_test_gate_run.sh` — Run the pre-push affected-test gate in a credential-free container and copy back only its result (issue #7137).
 - `scripts/promote_candidate_follow.sh` — Fast-forward the `promote-candidate` branch to the main tip unless the `promote-cycle-frozen` tag freezes it (log prefix `PROMOTE_CANDIDATE_FOLLOW`).
 - `scripts/promote_main_cycle.sh` — Run the scheduled, proof-gated main-to-stable promotion cycle.
@@ -371,6 +373,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/summarize_unselected_runs.py` — Summarize unselected workflow runs via gpt-6-luna to widen analysis coverage.
 - `scripts/sync_claude_live_copies.py` — Keep coding-workflows' live `.claude/` copies in step with their templates.
 - `scripts/sync_contract_list_union.py` — Merge a `db/contracts/*.yml` integration-sync conflict whose hunks only append to `read_entrypoints` / `write_entrypoints`, or report it ineligible so the LLM resolver runs (stuck-states P12; log prefix `SYNC_LIST_UNION_INELIGIBLE_V1`).
+- `scripts/sync_dependabot_exclusions.py` — Add the sync-managed wrappers to `exclude-paths` of a consumer's own root `github-actions` Dependabot entries (run by update_workflows.yml "Sync Dependabot exclusions for managed wrappers" and the verify job's `verify_reproduce`, only when the attested release manifest lists it; issue #9485).
 - `scripts/targeted_file_context.py` — Inline likely-to-be-edited files into the Codex prompt as a reference block so the editor doesn't waste budget reading them.
 - `scripts/task_state.py` — Mirror orchestrator wave-issue state into per-task JSON files and unblock mirrored dependents.
 - `scripts/templates/serena_project.yml.j2` — Template asset for serena_project.yml.j2.

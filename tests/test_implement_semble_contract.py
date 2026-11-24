@@ -12,12 +12,15 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_implement_text  # noqa: E402
 DIAGNOSE_SCRIPT = REPO_ROOT / "scripts" / "implement_diagnose_post_codex_failure.sh"
 COMMIT_HELPER = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
 
 
 def _workflow_text() -> str:
-	return IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
+	# Two step bodies live in scripts/implement_step_*.sh (#9678); inline them.
+	return expanded_implement_text()
 
 
 def _diagnose_text() -> str:

@@ -321,8 +321,20 @@ def test_pr_at_the_cap_is_escalated_once_and_not_dispatched(tmp_path: Path) -> N
 	assert "10 dispatched review rounds in the last 48 hours (limit 10)" in body
 	assert "its head is still not approved" in body and "The label stays until a person removes it" in body
 	assert "`ai:needs-human`" in body and body.rstrip().endswith("<!-- ai:review-round-cap:v1 -->")
+	# PR #9839 follow-up: the head the cap was hit on, so the poller can
+	# release the label once the head moves.
+	assert f"<!-- ai:review-round-cap-head:v1 head={'0' * 40} -->\n<!-- ai:review-round-cap:v1 -->" in body
+	assert "or the PR moves to a new head" in body
 	# CLAUDE.md §19: the comment names no issue or PR number.
 	assert not re.search(r"#[0-9]", body)
+
+
+def test_escalate_head_marker_is_optional_and_wired_from_the_sweep() -> None:
+	text = (REPO_ROOT / "scripts" / "review_sweep_round_cap.sh").read_text(encoding="utf-8")
+	assert 'cap_head_sha="${8:-}"' in text
+	assert '[[ "${cap_head_sha}" =~ ^[0-9a-f]{40}$ ]]' in text
+	sweep = (REPO_ROOT / ".github" / "workflows" / "review_autofix_sweep.yml").read_text(encoding="utf-8")
+	assert "\"$(printf '%s' \"${row}\" | jq -r '.head_sha // \"\"' 2>/dev/null || true)\" || true" in sweep
 
 
 def test_already_escalated_pr_costs_no_write(tmp_path: Path) -> None:
