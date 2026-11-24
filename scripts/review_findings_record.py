@@ -629,7 +629,14 @@ def _parser_found_no_issue_markers() -> bool:
 	if not stats_path:
 		return False
 	stats_text, _ = _read_bounded(stats_path, STATUS_READ_LIMIT_BYTES)
-	return bool(stats_text and re.search(r"(?m)^parse_error=no_issue_markers$", stats_text))
+	if not (stats_text and re.search(r"(?m)^parse_error=no_issue_markers$", stats_text)):
+		return False
+	# scripts/review_consolidate.sh empties consolidator_raw.txt on every
+	# fail-open failure (and treats empty output as a failure), so only a
+	# non-blank raw output with no ISSUE markers is a clean round.
+	raw_path = _env("CONSOLIDATOR_RAW_FILE") or (os.path.join(runtime_dir, "consolidator_raw.txt") if runtime_dir else "")
+	raw_text, _ = _read_bounded(raw_path)
+	return bool(raw_text and raw_text.strip())
 
 
 def compute_reviewer_findings(record: dict) -> dict:

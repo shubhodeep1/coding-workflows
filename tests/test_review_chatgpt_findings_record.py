@@ -741,10 +741,12 @@ def test_reviewer_findings_lines_zero_findings(tmp_path: Path) -> None:
 
 
 def test_reviewer_findings_clean_round_parser_no_issue_markers_gives_zeros(tmp_path: Path) -> None:
-	# Production shape of a clean round: the parser truncates the issues file
-	# and writes parse_failed=1 / parse_error=no_issue_markers.
+	# Production shape of a clean round: the consolidator wrote output with no
+	# ISSUE markers, so the parser truncates the issues file and writes
+	# parse_failed=1 / parse_error=no_issue_markers.
 	env = _three_fixture(tmp_path, issues_text="")
 	_write(Path(env["RUNTIME_DIR"]) / "parser_stats.txt", "parsed_blocks=0\nparse_failed=1\nparse_error=no_issue_markers\n")
+	_write(Path(env["RUNTIME_DIR"]) / "consolidator_raw.txt", "No consolidated findings this round.\n")
 	output = Path(env["PREVIOUS_REVIEWS_DIR"]) / "review_findings_record.json"
 	result = _run(env, output)
 	assert result.returncode == 0
@@ -767,6 +769,22 @@ def test_reviewer_findings_clean_round_parser_no_issue_markers_gives_zeros(tmp_p
 		case_result = _run(case_env, case_output)
 		assert case_result.returncode == 0
 		assert all(line.endswith(" reason=consolidator_missing") for line in _findings_lines(case_result.stdout))
+
+	# A failed consolidator: review_consolidate.sh empties consolidator_raw.txt
+	# (or it was never written), and the parser then reports no_issue_markers.
+	for raw_text in ("", " \n", None):
+		case_dir = tmp_path / f"raw_{'missing' if raw_text is None else len(raw_text)}"
+		case_dir.mkdir()
+		case_env = _three_fixture(case_dir, issues_text="")
+		_write(Path(case_env["RUNTIME_DIR"]) / "parser_stats.txt", "parsed_blocks=0\nparse_failed=1\nparse_error=no_issue_markers\n")
+		if raw_text is not None:
+			_write(Path(case_env["RUNTIME_DIR"]) / "consolidator_raw.txt", raw_text)
+		case_output = Path(case_env["PREVIOUS_REVIEWS_DIR"]) / "review_findings_record.json"
+		case_result = _run(case_env, case_output)
+		assert case_result.returncode == 0
+		lines = _findings_lines(case_result.stdout)
+		assert len(lines) == 3
+		assert all(line.endswith(" outcome=unavailable reason=consolidator_missing") for line in lines)
 
 
 def test_reviewer_findings_partial_flagged_by_match_is_unavailable(tmp_path: Path) -> None:
