@@ -1497,9 +1497,13 @@ Do not let advisory artifacts reduce or replace raw reviewer signal from ${RUNTI
 CONSOLIDATOR + LEDGER CONTEXT
 Treat ${RUNTIME_DIR}/reviewer_bundle.txt as the authoritative findings source.
 Treat ${RUNTIME_DIR}/review_issues.txt as advisory only; it may be incomplete.
-Treat ${RUNTIME_DIR}/floor_tags.txt as non-skippable floor findings that must be addressed or explicitly rejected with reason.$(if [ -s "${RUNTIME_DIR}/review_convergence_advisory.txt" ] || grep -qs '^=== ADVISORY ISSUE ' "${RUNTIME_DIR}/review_issues.txt"; then
+Treat ${RUNTIME_DIR}/floor_tags.txt as non-skippable floor findings that must be addressed or explicitly rejected with reason.$(if ! printf '%s' "${REVIEW_CONVERGENCE_ENABLED:-true}" | grep -qixE '0|false|no|off' \
+	&& { [ -s "${RUNTIME_DIR}/review_convergence_advisory.txt" ] || grep -qs '^=== ADVISORY ISSUE ' "${RUNTIME_DIR}/review_issues.txt"; }; then
 	# The stub check keeps the directive on a same-head resume, which restores
-	# the stubbed review_issues.txt without the advisory TSV.
+	# the stubbed review_issues.txt without the advisory TSV. The kill switch
+	# is parsed as in review_issue_ledger.sh (0|false|no|off, any case): with
+	# the rule off, stubs restored from an earlier enabled run never render
+	# the directive, so switching off restores the previous editor prompt.
 	review_convergence_prompt_round="$(awk -F '\t' 'NR == 1 { print $6 }' "${RUNTIME_DIR}/review_convergence_advisory.txt" 2>/dev/null | tr -cd '0-9')"
 	if [ -z "${review_convergence_prompt_round}" ]; then
 		review_convergence_prompt_round="$(sed -n 's/^CONVERGENCE_ROUND:[[:space:]]*//p' "${RUNTIME_DIR}/review_issues.txt" 2>/dev/null | head -n 1 | tr -cd '0-9')"

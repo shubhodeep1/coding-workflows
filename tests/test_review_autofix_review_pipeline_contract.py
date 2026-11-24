@@ -11328,7 +11328,7 @@ def test_review_convergence_workflow_env_defaults() -> None:
 	assert "REVIEW_CONVERGENCE_AUTOFIX_COUNT" not in text.replace(step, "").replace(preflight, "")
 
 
-def _conv_render_editor_fragment(tmp_path: Path, advisory: str) -> str:
+def _conv_render_editor_fragment(tmp_path: Path, advisory: str, enabled: str | None = None) -> str:
 	source = APPLY_FIXES.read_text(encoding="utf-8")
 	block_match = re.search(
 		r"^=== END \$\{RUNTIME_DIR\}/floor_tags\.txt ===\$\(if \[ -s \"\$\{RUNTIME_DIR\}/review_convergence_advisory\.txt\" \]; then\n.*?^fi\)\n",
@@ -11352,7 +11352,10 @@ def _conv_render_editor_fragment(tmp_path: Path, advisory: str) -> str:
 		+ directive_match.group(0)
 		+ "END\n__EDITOR_PROMPT__\n"
 	)
-	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30, check=False)
+	env = {k: v for k, v in os.environ.items() if k != "REVIEW_CONVERGENCE_ENABLED"}
+	if enabled is not None:
+		env["REVIEW_CONVERGENCE_ENABLED"] = enabled
+	result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, timeout=30, check=False)
 	assert result.returncode == 0, result.stderr
 	return result.stdout
 
@@ -11387,6 +11390,13 @@ def test_review_convergence_editor_prompt_on_resume_from_stubs(tmp_path: Path) -
 	assert "(not blocking this round; one reviewer) ===" not in rendered
 	assert "`not blocking: one reviewer (convergence round 4)`" in rendered
 	assert "a CI failure on the head always blocks" in rendered
+	# With the kill switch off, stubs restored from an earlier enabled run
+	# never render the directive, so the editor prompt is the previous one.
+	for off in ("false", "FALSE", "0", "off", "no"):
+		disabled = _conv_render_editor_fragment(tmp_path, "", enabled=off)
+		assert "REVIEW CONVERGENCE" not in disabled, off
+		assert disabled.endswith("/floor_tags.txt as non-skippable floor findings that must be addressed or explicitly rejected with reason.\nEND\n")
+	assert "REVIEW CONVERGENCE" in _conv_render_editor_fragment(tmp_path, "", enabled="true")
 
 
 def test_review_convergence_post_editor_summary_section(tmp_path: Path) -> None:
@@ -11424,7 +11434,50 @@ def test_review_convergence_post_editor_summary_section(tmp_path: Path) -> None:
 	body = comment.read_text(encoding="utf-8")
 	assert len([line for line in body.splitlines() if line.startswith("- `src/a.py:")]) == 50
 	assert "- ... and 3 more not shown here (see the review ledger)" in body
-	assert "[x](" not in body and "see xhttps://e.invalid" in body
+	# URL schemes and # are stripped too, so no autolink or cross-reference.
+	assert "[x](" not in body and "https://" not in body and "see e.invalid" in body
+
+
+def test_review_convergence_post_editor_summary_from_resumed_stubs(tmp_path: Path) -> None:
+	# A same-head resume restores the stubbed review_issues.txt without the
+	# advisory TSV; the section is rebuilt from the stubs, and the kill
+	# switch off renders nothing.
+	source = _CONV_POST_SUMMARY.read_text(encoding="utf-8")
+	start = source.index("# Review convergence rule (issue #10056).")
+	end = source.index("type gh_retry >/dev/null 2>&1 || gh_retry() { \"$@\"; }", start)
+	block = source[start:end]
+	runtime_dir = tmp_path / "rt"
+	runtime_dir.mkdir()
+	(runtime_dir / "review_issues.txt").write_text(
+		"=== ISSUE 002 ===\nFILE: src/b.py\nLINES: 5\nCLASSIFICATION: must-fix\n=== END ISSUE 002 ===\n\n"
+		"=== ADVISORY ISSUE 001 ===\nFILE: src/a.py\nLINES: 7-9\nLENS: CORRECTNESS & LOGIC\nSEVERITY: high\n"
+		"FLAGGED_BY: alpha\nCLASSIFICATION: advisory-lone\nCONVERGENCE_PRIOR_CLASSIFICATION: must-fix\n"
+		"CONVERGENCE_REVIEWERS: alpha\nCONVERGENCE_ROUND: 4\nSUMMARY: see #12 at https://e.invalid @x\n"
+		"=== END ADVISORY ISSUE 001 ===\n",
+		encoding="utf-8",
+	)
+	comment = tmp_path / "comment.md"
+	tmp_dir = tmp_path / "tmp"
+	tmp_dir.mkdir()
+	for enabled, expected in (
+		("true", ["- `src/a.py:7-9` (CORRECTNESS & LOGIC, high) — raised by alpha in round 4: see 12 at e.invalid x"]),
+		("false", []),
+	):
+		comment.write_text("AI autofix editor summary\n", encoding="utf-8")
+		env = {
+			"PATH": os.environ.get("PATH", ""),
+			"RUNTIME_DIR": str(runtime_dir),
+			"PR_EDITOR_COMMENT_FILE": str(comment),
+			"REVIEW_CONVERGENCE_ENABLED": enabled,
+			"TMPDIR": str(tmp_dir),
+		}
+		result = subprocess.run(["bash", "-c", "set -euo pipefail\n" + block], capture_output=True, text=True, env=env, timeout=30, check=False)
+		assert result.returncode == 0, result.stderr
+		body = comment.read_text(encoding="utf-8")
+		assert [line for line in body.splitlines() if line.startswith("- `")] == expected, body
+		assert ("### Not blocking (one reviewer)" in body) == bool(expected)
+		# The temporary TSV built from the stubs is removed.
+		assert list(tmp_dir.iterdir()) == []
 
 
 def test_review_convergence_rb_judge_notes(tmp_path: Path) -> None:

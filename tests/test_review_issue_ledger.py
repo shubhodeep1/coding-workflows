@@ -826,6 +826,38 @@ def test_convergence_two_verified_reviewers_block() -> None:
 		assert not (workspace / "runtime" / "review_convergence_advisory.txt").read_text(encoding="utf-8")
 
 
+def test_convergence_reviewer_template_shape_counts_as_support() -> None:
+	# The reviewer template emits `File:` then `Line or code reference:` (or
+	# `Code:`), with no path:line token; two such reviewers, neither quoted in
+	# EVIDENCE, still make the finding block (#10056).
+	for label in ("Line or code reference: lines 1-4 (sample)", "Code: line 3"):
+		reviewers = {
+			"alpha": f"CORRECTNESS & LOGIC\nFile: src/module.py\n{label}\nProblem: wrong total.\n\n",
+			"beta": f"CORRECTNESS & LOGIC\nFile: src/module.py\n{label}\nProblem: the sum is off.\n\n",
+			"gamma": "No findings.\n",
+		}
+		with tempfile.TemporaryDirectory() as td:
+			workspace = _conv_workspace(td)
+			issue = _conv_issue("001", flagged_by="alpha", evidence='alpha> "wrong total"')
+			result = _run_convergence(workspace, issue, reviewers=reviewers)
+			assert result.returncode == 0, result.stderr
+			assert "blocking=1 advisory_lone=0 outcome=continue applied=1" in _conv_log(result), label
+			assert "=== ISSUE 001 ===" in (workspace / "runtime" / "review_issues.txt").read_text(encoding="utf-8")
+			assert not (workspace / "runtime" / "review_convergence_advisory.txt").read_text(encoding="utf-8")
+	# A reference far from LINES adds no support: one reviewer is still lone.
+	reviewers = {
+		"alpha": "File: src/module.py\nLine or code reference: line 2\n",
+		"beta": "File: src/module.py\nLine or code reference: line 90\n",
+		"gamma": "No findings.\n",
+	}
+	with tempfile.TemporaryDirectory() as td:
+		workspace = _conv_workspace(td)
+		issue = _conv_issue("001", flagged_by="alpha, beta", evidence='alpha> "wrong total"')
+		result = _run_convergence(workspace, issue, reviewers=reviewers)
+		assert result.returncode == 0, result.stderr
+		assert "blocking=0 advisory_lone=1" in _conv_log(result)
+
+
 def test_convergence_quote_support_counts_and_unnamed_fallback() -> None:
 	reviewers = dict(_CONV_DEFAULT_REVIEWERS)
 	reviewers["gamma"] = "I agree: Arithmetic is wrong for the   edge case in sample.\n"

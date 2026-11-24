@@ -870,7 +870,13 @@ review_convergence_classify()
 		# Same anchor shapes as review_parse_consolidator.sh emit_anchor
 		# (path:line, and a FILE: line followed by a LINE: line); path:line is
 		# also accepted mid-line, which can only add support (toward blocking).
-		function scan_content_line(s, line,    rest, hit, f, l) {
+		# The shape the reviewer template asks for (scripts/review_run_reviewers.sh:
+		# `File: <path>` then `Line or code reference: <ref>`, or `Code: <ref>`,
+		# as scripts/review_floor_rules.sh reads it) anchors every integer in the
+		# reference (at most 20). A stray number can only add support (toward
+		# blocking); a reference with no number adds no anchor and falls back to
+		# the EVIDENCE quote match.
+		function scan_content_line(s, line,    rest, hit, f, l, ref, nref) {
 			if (line ~ /[^[:space:]]/) {
 				sec_nonempty[s] = 1
 			}
@@ -887,6 +893,17 @@ review_convergence_classify()
 			}
 			if (pending_file[s] != "" && match(line, /^[[:space:]]*[Ll][Ii][Nn][Ee]:[[:space:]]*([0-9]+)/, l)) {
 				add_anchor(s, pending_file[s], l[1])
+				pending_file[s] = ""
+				return
+			}
+			if (pending_file[s] != "" && tolower(line) ~ /^[[:space:]]*(line or code reference|code)[[:space:]]*:/) {
+				ref = substr(line, index(line, ":") + 1)
+				nref = 0
+				while (nref < 20 && match(ref, /[0-9]+/)) {
+					add_anchor(s, pending_file[s], substr(ref, RSTART, RLENGTH))
+					ref = substr(ref, RSTART + RLENGTH)
+					nref++
+				}
 				pending_file[s] = ""
 				return
 			}
@@ -949,7 +966,7 @@ review_convergence_classify()
 				print l
 			}
 		}
-		function process_block(    i, l, cls, cls_l, prior, p, has_round, file, lines, lens, sev, flagged, in_ev, nev, ev, r, lo, hi, t, has_range, s, k, q, sup, cnt, reviewers, exempt, ulens, eff, summary, extra) {
+		function process_block(    i, l, cls, cls_l, prior, p, has_round, file, lines, lens, sev, in_ev, nev, ev, r, lo, hi, t, has_range, s, k, q, sup, cnt, reviewers, exempt, ulens, eff, summary, extra) {
 			cls = ""
 			prior = ""
 			has_round = 0
@@ -957,7 +974,6 @@ review_convergence_classify()
 			lines = ""
 			lens = ""
 			sev = ""
-			flagged = ""
 			in_ev = 0
 			nev = 0
 			for (i = 2; i < nb; i++) {
@@ -982,8 +998,6 @@ review_convergence_classify()
 					lens = value_of(l)
 				} else if (l ~ /^SEVERITY:/) {
 					sev = value_of(l)
-				} else if (l ~ /^FLAGGED_BY:/) {
-					flagged = value_of(l)
 				} else if (l ~ /^CLASSIFICATION:/) {
 					cls = value_of(l)
 				} else if (l ~ /^CONVERGENCE_PRIOR_CLASSIFICATION:/) {
@@ -1023,7 +1037,6 @@ review_convergence_classify()
 			if (applied) {
 				for (s = 1; s <= nsec; s++) {
 					sup[s] = 0
-					named[s] = 0
 					if (!sec_nonempty[s]) {
 						continue
 					}
