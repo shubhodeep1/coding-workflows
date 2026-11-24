@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/9775-expected-files-scope-filter.md:second block (bullet starting \"- `PREPUSH_TEST_GATE` also logs phase=implement outcome=info reason=expected_files_out_of_scope count=<n>\") | severity=low | confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  PROBLEM: The fragment adds a `PREPUSH_TEST_GATE` bullet under \"Stable log prefixes (contractual)\" although the prefix is already registered (agents.md:4543, agents.md:4618, `LOG_PREFIX.name` at agents.md:5002). The same log line is also described in the fragment's first block.\n  WHY: This is documentation duplication only, with no runtime failure. Sonnet rated it NIT with confidence 2, and minimax gave it a hardening risk score of 1. z-ai_glm-5_3-flash examined the same bullet and concluded it follows the existing convention at agents.md:4618, so it reported no finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.d/9775-expected-files-scope-filter.md:second block (bullet starting \"- `PREPUSH_TEST_GATE` also logs phase=implement outcome=info reason=expected_files_out_of_scope count=<n>\") | severity=low (source: NIT) | confidence=2\n  PROBLEM: The prefix is already in the registry (agents.md line 4543, `LOG_PREFIX.name=PREPUSH_TEST_GATE` at line 5002), so after the fragment is folded it appears twice with different descriptions. The new log line is also described in the fragment's first block.\n  WHY: There is no runtime failure, and nothing is keyed on bullet uniqueness. This is documentation duplication only.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.d/9775-expected-files-scope-filter.md:second block (line 5) under section=\"Stable log prefixes (contractual)\" | HARDENING_RISK_SCORE=1\n  PROBLEM: The fragment adds a third \"- PREPUSH_TEST_GATE\" bullet to a section that already documents the prefix at agents.md:4543 and agents.md:4618. The bullet repeats information from the fragment's first block and from agents.md:5620.\n  WHY: The descriptive bullet is redundant with the existing registry entries. No `LOG_PREFIX.name=` line is added, which is correct. Suggested fix: drop the second block (lines 4-5) (-1 line).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c675837487fdc27cf13f7a4926a434002fc03a25881a62ee5eba0ddbc91fff36",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10055,
+    "run_id": "45441005790",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45441005790",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124181733_eb1a966af5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10055,
+    "run_id": "45441005790"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T18:17:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
