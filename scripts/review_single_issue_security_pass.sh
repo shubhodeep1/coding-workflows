@@ -50,8 +50,10 @@
 #               Issue #10017: a PR that holds its base's merge lease
 #               (MERGE_LEASE_ENABLED set and true) skips the limit and is
 #               dispatched, logged `throttle=lease_holder_exempt`; at most
-#               MERGE_LEASE_MAX_HOLDERS extra audits run this way. The lease
-#               is read once, only at the limit; a failed read throttles.
+#               MERGE_LEASE_MAX_HOLDERS extra audits run this way, a
+#               best-effort bound like the limit itself (count and dispatch
+#               are not atomic across PRs). The lease is read once, only at
+#               the limit; a failed read throttles.
 #             - `status=findings` for the current head: hold=true until the
 #               follow-up fixes change the head.
 #             - otherwise, with fewer than MAX_SECURITY_PASS_CYCLES cycles
