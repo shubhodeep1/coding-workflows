@@ -896,7 +896,9 @@ unblock_nothing_to_implement_blocked()
 # must also carry that verify's pass-but-close-failed note (pnti_note_failed_pass
 # in scripts/plan_nothing_to_implement_verify.sh, written into the block by
 # plan.yml), so an older marker (for example implement.yml Guard 0's) never
-# vouches for a single block whose verify failed, timed out or was off.
+# vouches for a single block whose verify failed, timed out or was off. The
+# note must sit on its own `Verify: ` line, so the model-derived `Reason:`
+# text cannot satisfy it.
 # 1 otherwise. Reads only the item_comments.json this run already fetched; no
 # API calls.
 unblock_nothing_to_implement_verified()
@@ -908,7 +910,8 @@ unblock_nothing_to_implement_verified()
 			| sort_by(.created_at // "")) as $block_comments
 		| ($block_comments | map(.created_at // "")) as $blocks
 		| (if ($blocks | length) > 1 then $blocks[-2] else "" end) as $floor
-		| ((($block_comments | last // {}) | .body // "") | contains($pass_note))
+		| any((($block_comments | last // {}) | .body // "") | split("\n")[] | rtrimstr("\r");
+			startswith("Verify: ") and contains($pass_note))
 		and any(.[]; (.user.login // "") == $login
 			and (.created_at // "") > $floor
 			and (((.body // "") | split("\n") | map(select(test("\\S"))) | last // "" | rtrimstr("\r")) == $marker))
@@ -2740,7 +2743,12 @@ ${step_escalation_marker}" >/dev/null 2>&1; then
 	# Phase 8b (#10062): a nothing-to-implement block whose plan run verified
 	# the listed tests (trusted success-no-op marker) but could not close the
 	# issue is closed without a fix-up; a pending fix-up above still comes first.
-	if [ "${ITEM_KIND}" = "issue" ] && [ -z "${tracking}" ] && unblock_nothing_to_implement_close "" "" "${tracking}"; then
+	# An ai:check-triage issue is skipped: planning-ref tests are not evidence
+	# that its failing check passes, so it stays with Q129 above and the #9659
+	# note below (plan.yml promises those issues close with check evidence).
+	if [ "${ITEM_KIND}" = "issue" ] && [ -z "${tracking}" ] \
+		&& ! jq -e 'index("ai:check-triage") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1 \
+		&& unblock_nothing_to_implement_close "" "" "${tracking}"; then
 		return 0
 	fi
 

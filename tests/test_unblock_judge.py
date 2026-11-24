@@ -6077,7 +6077,7 @@ def test_verified_noop_marker_closes_a_nothing_to_implement_issue_without_a_fixu
 
 
 @pytest.mark.parametrize("case", ["verify_false_padded", "verify_off", "close_disabled", "untrusted_marker", "other_issue",
-	"marker_not_last", "stale_marker", "single_block_failed_verify", "single_block_no_note", "newer_plan", "project_item", "no_marker"])
+	"marker_not_last", "stale_marker", "single_block_failed_verify", "single_block_no_note", "note_in_reason_only", "newer_plan", "project_item", "no_marker"])
 def test_verified_noop_close_keeps_today_otherwise(tmp_path: Path, case: str) -> None:
 	item, env, comments = ISSUE, {}, _verified_noop_comments()
 	if case == "verify_false_padded":
@@ -6103,6 +6103,10 @@ def test_verified_noop_close_keeps_today_otherwise(tmp_path: Path, case: str) ->
 			_comment("Already implemented.\n\n" + VERIFIED_NOOP_MARKER, BOT, "2026-09-01T08:00:00Z"),
 			_comment(NOTHING_TO_IMPLEMENT_BLOCK + note, BOT, "2026-10-04T09:00:00Z"),
 		]
+	elif case == "note_in_reason_only":
+		# The pass phrase only inside other (model-derived) text, not on its own `Verify: ` line.
+		comments = _verified_noop_comments()
+		comments[1] = _comment(NOTHING_TO_IMPLEMENT_BLOCK + "\n\nNote: tests passed on the planning ref, but the issue could not be closed automatically.", BOT, "2026-10-04T09:00:00Z")
 	elif case == "newer_plan":
 		comments = _verified_noop_comments(extra=[_comment("Implementation Plan\n\n1. Do the thing.", BOT, "2026-10-04T10:00:00Z")])
 	elif case == "project_item":
@@ -6130,6 +6134,27 @@ def test_verified_noop_close_failure_retries_without_reposting(tmp_path: Path) -
 	assert "fixup=none op=nothing_to_implement outcome=closed reason=verified_noop" in result.stdout, result.stdout + result.stderr
 	assert not any(comment["body"].endswith(VERIFIED_CLOSE_MARKER) for comment in state["comments"])
 	assert _closed_completed(state)
+
+
+@pytest.mark.parametrize("gate", ["on", "q129_off"])
+def test_verified_noop_close_skips_check_triage_issues(tmp_path: Path, gate: str) -> None:
+	# #10062: planning-ref tests are not evidence that a check-triage issue's failing
+	# check passes, so the verified close leaves it to Q129 and the #9659 note, even
+	# when CHECK_TRIAGE_RESOLVED_GATE_ENABLED is off.
+	import os
+
+	env = {"FAKE_TRIAGE_STATUS": "unverified"}
+	if gate == "q129_off":
+		env["CHECK_TRIAGE_RESOLVED_GATE_ENABLED"] = "false"
+	saved = os.environ.pop("PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED", None)
+	try:
+		result, state = _judge_triage_superseded(tmp_path, comments=_verified_noop_comments(), **env)
+	finally:
+		if saved is not None:
+			os.environ["PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED"] = saved
+	assert "op=nothing_to_implement" not in result.stdout, result.stdout + result.stderr
+	assert not _closed_completed(state)
+	assert not any(comment["body"].endswith(VERIFIED_CLOSE_MARKER) for comment in state["comments"])
 
 
 def test_unblock_workflow_forwards_plan_nothing_to_implement_verify_switch() -> None:
