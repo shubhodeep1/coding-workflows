@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"tests/test_workflow_file_size_limit.py and tests/test_ci_wires_every_test_file.py pass.\"\n  expected_change_site: The affected workflow files and the pre-push test gate.\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR description marks the workflow-size test unmet, and the later pre-push results list it as an inherited failure. The PR diff does not resolve that status. (Severity stated as NIT. anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash each examined this gap and rejected it. Their reasons: the failure is an inherited baseline_timeout also seen on the merge-base, both workflow files are well under 480,000 bytes, and the head check-run snapshot shows failed_count: 0.)\n- requirement: \"a release-gate run's polling steps succeed with their reads on GITHUB_TOKEN, and no GH_READ_FALLBACK is caused by a missing permission.\"\n  expected_change_site: End-to-end validation of the polling steps in `.github/workflows/test-and-mark-stable.yml`.\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff adds mocked helper tests and workflow permission assertions, but no release-gate run or end-to-end test evidence demonstrating successful job-token reads without a missing-permission fallback. (Severity stated as NIT.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"tests/test_workflow_file_size_limit.py and tests/test_ci_wires_every_test_file.py pass.\"\n  Expected change site: The affected workflow files and the pre-push test gate.\n  Evidence of absence: The PR description marks the workflow-size test unmet, and the later pre-push results list it as an inherited failure. The PR diff does not resolve that status.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- TASK_GAP\n  Requirement: \"a release-gate run's polling steps succeed with their reads on GITHUB_TOKEN, and no GH_READ_FALLBACK is caused by a missing permission.\"\n  Expected change site: End-to-end validation of the polling steps in `.github/workflows/test-and-mark-stable.yml`.\n  Evidence of absence: The PR diff adds mocked helper tests and workflow permission assertions, but no release-gate run or end-to-end test evidence demonstrating successful job-token reads without a missing-permission fallback.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "18f2e60eeacf35ccc137b1dbd66b035a6a618895a8925ff7c5410177fefa7c05",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9897,
+    "run_id": "45335483780",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45335483780",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124081232_fcf1993901",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9897,
+    "run_id": "45335483780"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-24T08:12:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
