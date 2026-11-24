@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should this heal issue deliver?\nChoices:\nA) No code change. Record the cause as transient or environmental, re-trigger `/approved` on #10048, and close this issue. Pick this if the run-window check under Q3 shows other runs recovered.\nB) Add a bounded retry to the memory clone reads only: the fast-path clone in `_clone_for_memory_branch`, `_full_repo_clone_for_memory_branch` and `read_memory_root_from_branch`. Retry on a bare `returned error: 403` and on `returned error: 5xx`, at most 3 attempts with jittered backoff and about 30 s in total. After the last attempt, still raise `MemoryGitError` so the claim fails closed. The push policy that never retries a bare 403 stays unchanged. Add regression tests for \"403 once, then success\" and \"403 every time, claim still exits non-zero\". (RECOMMENDED)\nC) Same as B, but retry only on 5xx and on a 403 whose text names a rate limit or abuse, matching the push policy. Note: this would not have recovered run 45408016593, because its log has no rate-limit text.\nD) Diagnostics only: when a memory clone fails, always print the first stderr line of the single-branch probe (with credentials and URLs removed), even without `AI_MEMORY_CLONE_DIAGNOSTICS=1`. Add no retry.\nQ2: Q1:B, C and D all need edits to `scripts/ai_memory_lib.py`, which is outside the heal-scope `paths=` list. How should scope be handled?\nChoices:\nA) Widen the scope for this issue to add `scripts/ai_memory_lib.py`. The existing `tests/**` and `changelog.d/*.md` entries already cover tests and changelog. (RECOMMENDED)\nB) Keep the current scope. Put any hardening only in `.github/workflows/implement.yml`, for example a bounded step-level retry around `memory_processed_command_claim` in the \"Claim /approved command\" step. Note: incompatible with Q1:D, which can only be done in `scripts/ai_memory_lib.py`.\nC) Not applicable. Q1:A was chosen and no files change.\nQ3: What did the operator check of `GH_PAT` and of the runs around 14:00\u201314:15 UTC on 2026-11-24 show?\nChoices:\nA) Other runs using `GH_PAT` for git also got 403s in that window and later runs recovered, so it was throttling. The PAT was not changed. Pair with Q1:A or Q1:B. (RECOMMENDED)\nB) `GH_PAT` was rotated, revoked or narrowed that day. This needs an operator fix to the secret, and no code change would have helped. Pair with Q1:A. Note: incompatible with Q1:B and Q1:C, because a retry cannot fix a bad credential.\nC) Not checked or unknown. Go ahead with the Q1 choice as a defensive change, and state in the plan that the root cause is still unconfirmed.",
+  "fingerprint": "19ad566939da9b6c397c9e9f300ff3641116fa2851272bacf060df60b2f07ab6",
+  "lineage": {
+    "issue_number": 10053,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45417694685",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45417694685",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261124150433_5a74f8f45b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10053,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45417694685"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #10053 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-24T15:04:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
