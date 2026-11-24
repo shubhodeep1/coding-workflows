@@ -1,0 +1,22 @@
+{
+  "discovered_at": "2026-11-24T00:39:20Z",
+  "issue_number": 10015,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=agents.d/9920-github-ai-plan-grant-write.md:10; cited_path=agents.d/9920-github-ai-plan-grant-write.md; files_touched=.github/workflows/ci.yml, .github/workflows/plan.yml, README.md, agents.d/10015-plan-nothing-to-implement-verify.md, changelog.d/10015-plan-nothing-to-implement-verify.md, docs/INVENTORY.md, scripts/acceptance_check.py, scripts/plan_nothing_to_implement_verify.sh, tests/test_plan_nothing_to_implement_verify.py.",
+  "phase": "review_autofix",
+  "pr_number": 10016,
+  "record_id": "lesson_20261124003920_a608071a04",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "agents.d/9920-github-ai-plan-grant-write.md",
+    ".github/workflows/ci.yml",
+    ".github/workflows/plan.yml",
+    "README.md",
+    "agents.d/10015-plan-nothing-to-implement-verify.md",
+    "changelog.d/10015-plan-nothing-to-implement-verify.md",
+    "docs/INVENTORY.md",
+    "scripts/acceptance_check.py",
+    "scripts/plan_nothing_to_implement_verify.sh",
+    "tests/test_plan_nothing_to_implement_verify.py"
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "discovered_at": "2026-11-24T00:39:20Z",
+  "issue_number": 10015,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=scripts/implement_commit_changes.sh:538-541; cited_path=scripts/implement_commit_changes.sh; files_touched=.github/workflows/ci.yml, .github/workflows/plan.yml, README.md, agents.d/10015-plan-nothing-to-implement-verify.md, changelog.d/10015-plan-nothing-to-implement-verify.md, docs/INVENTORY.md, scripts/acceptance_check.py, scripts/plan_nothing_to_implement_verify.sh, tests/test_plan_nothing_to_implement_verify.py.",
+  "phase": "review_autofix",
+  "pr_number": 10016,
+  "record_id": "lesson_20261124003920_8cd305f132",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/implement_commit_changes.sh",
+    ".github/workflows/ci.yml",
+    ".github/workflows/plan.yml",
+    "README.md",
+    "agents.d/10015-plan-nothing-to-implement-verify.md",
+    "changelog.d/10015-plan-nothing-to-implement-verify.md",
+    "docs/INVENTORY.md",
+    "scripts/acceptance_check.py",
+    "scripts/plan_nothing_to_implement_verify.sh",
+    "tests/test_plan_nothing_to_implement_verify.py"
+  ]
+}
