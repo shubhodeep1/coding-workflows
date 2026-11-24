@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:4103-4108 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The reviewer examined the rationale comment above the \"Judge Semble prefetch contract test\" step for a possibly incomplete sentence, then concluded the earlier broken sentence was fixed in the last run.\n  WHY: The reviewer describes it as a comment-only change with no runtime failure, and rates it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  expected_change_site: .github/workflows/ci.yml, where steps are chosen to move out of tests-release-and-log-analysis (the \"Judge Semble prefetch contract test\" and \"Regression tests wired by the CI wiring guard (part 1)\" steps)\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: Step timings for run 45035315687 were unreadable, so the moved steps were picked by estimate from test and subprocess counts, as stated in ci.yml comments (lines 4103-4108 and 4148-4153), changelog.d/9966-ci-release-job-budget-move.md and MovedRelease9966StepsContractTest. Wiring guard part 2 (658 test functions against about 604 for part 1) stays in the source job. Severity disagreement: sonnet and glm rated it NIT, while gemini, minimax and luna rated it MAJOR. The highest rating is MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, in the choice of steps moved out of `tests-release-and-log-analysis`.\n  Evidence of absence: Step timings for run 45035315687 were unreadable, so the two moved steps were picked by estimate. Part 2, recorded as larger (658 test functions against about 604 for part 1), stays in the source job. The other requirements are met. The reviewer did not treat it as a blocker.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml, where the selection of steps to move occurs.\n  Evidence of absence: The PR comments, changelog fragment and repository history confirm that step timings for run 45035315687 were not readable, and the steps were chosen from test and subprocess count estimates.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml:4103-4108 | severity=low (NIT) | confidence=2\n  PROBLEM: The reviewer checked the rationale comment above the \"Judge Semble prefetch contract test\" step for an incomplete sentence, then found the earlier broken sentence fixed in the last run.\n  WHY: This is a comment-only change with no runtime failure.\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, where the two moved steps are selected.\n  Evidence of absence: The comments at lines 4103-4108 and 4148-4153, the changelog fragment and MovedRelease9966StepsContractTest all say the timings were unreadable and the pick is an estimate. Part 2 (658 test functions, line 4320) ranks above part 1 (about 604) yet stays in the source job. The gap is concentrated in the \"slowest steps\" criterion.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, where the steps selected from `tests-release-and-log-analysis` are moved.\n  Evidence of absence: The comments at `.github/workflows/ci.yml:4103-4108` and `:4148-4152` state the timings were unreadable and the selection was estimated. Part 2 is larger by test-function count (658 versus about 604) but stays in the source job.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, where the two moved steps are selected.\n  Evidence of absence: The timings were unreadable, and the PR discloses this in ci.yml lines 4105-4110 and 4150-4153, changelog.d/9966-ci-release-job-budget-move.md line 2, and MovedRelease9966StepsContractTest in tests/test_ci_poll_test_sharding.py lines 2600-2610. Part 2 stays in the source job. The deferral reason is unchanged across prior passes, and the pick is an estimate consistent with the issue's fallback practice.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c082dd9445184f8000f8c30d1b2da5f75c9391c25cc3fb3a99737549bb980720",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9968,
+    "run_id": "45347350485",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45347350485",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124093750_a477f6a891",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9968,
+    "run_id": "45347350485"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T09:37:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
