@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: A\nQ2: B\n\nRATIONALE:\nQ1: The orchestrator poller already dispatches `promote-main-to-stable.yml` (header lines 38-41 of the workflow), and it runs often. A poller-side retry therefore adds no runner slot on ticks where nothing needs doing. Option B would add cron runs that each take a runner even when idle, which makes the runner-wait problem this issue is fixing worse (\u00a726). Option C drops goal G2. The retry must stay bounded, and the existing `target_sha` \u2192 `promote` path must stay unchanged. The cycle job currently runs only on `schedule` (`if: github.event_name == 'schedule'`, line 129), so the new dispatch input must route to it explicitly. The `promote` job (line 180, `if: github.event_name == 'workflow_dispatch'`) must exclude that input, so a retry dispatch never fast-forwards `stable`. Bound: the poller re-dispatches at most once an hour. It does so only when the newest `promote-main-to-stable.yml` cycle run is at least 60 minutes old and logged `PROMOTE_CYCLE_SKIPPED reason=runner_wait_long`. It runs the cheap run-list read first and reads the log only when that passes, the same way `promote_main_cycle.sh` already greps earlier cycle logs for skip reasons (around line 1353). Whether main's tip is still unpromoted is left to the re-dispatched cycle's own guards (`no_code_changes*`, `cycle_in_flight`, `another_run_active`). A retry that skips again simply becomes the newest cycle run, so the hourly cadence repeats until the wait drops, the Q2 bound forces a dispatch, or the next daily cron runs.\nQ2: Option B reuses an existing mechanism. `scripts/auto_release_stable.sh` already computes `last_gate_age_hours` against `AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS` (default 24, lines 188 and 735-756) and lets a cycle through once that window has passed, so it needs no new variable (\u00a79). A long queue therefore cannot hold a release for more than one window. Concretely: while the newest `test-and-mark-stable.yml` run is younger than the window, or there is none, `runner_wait_long` skips the tick. Once the newest gate run is at least the window old, the tick dispatches whatever the wait is and logs that the bound was reached. The promote cycle applies the same rule to its newest gate-only gate run. Hotfix patch releases dispatched by hand from `stable` (workflow header lines 15-17) do not go through either script and are not affected.\n\nEXECUTION PLAN (required for any non-letter decision):\n(none: both decisions are lettered)\n\nESCALATION (required for any ESCALATE decision):\n(none)",
+  "fingerprint": "095bc6da15bc1950b9ce8f8582076327edf39663001fa9cb46d5cb4cb6c17371",
+  "lineage": {
+    "issue_number": 10037,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45326575132",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45326575132",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10037"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261124043512_3db4a9f456",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10037,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45326575132"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #10037",
+  "timestamps": {
+    "created_at": "2026-11-24T04:35:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
