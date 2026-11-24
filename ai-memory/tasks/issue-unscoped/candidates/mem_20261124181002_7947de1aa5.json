@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_prepush_test_gate.sh:1317 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `review_prepush_test_gate_final_ci_now_green` jq filter requires an older `ci/final` `failure` (`(length > 1) and ... and any(.[1:][]; .state == \"failure\")`) as well as a success newer than the hand-back marker, so its green check is stricter than the gate's rule in `scripts/review_autofix_step_evaluate_gate.sh` (newest `github-actions[bot]` `ci/final` is `success` and newer than the marker).\n  WHY: When the history holds no older failure (for example success-then-success after a failed `failure` POST, or the failure record falls outside the 100 fetched statuses), the helper returns `not_green` and the repair commit is pushed over a head that is already green, which is the #9725 recurrence that G3 exists to prevent. Severity disagreement: anthropic_claude-sonnet-5_5 rated it NIT (confidence 2) because the history needs an unlikely sequence on one SHA. The other three reviewers rated it MAJOR (confidence 4, 5 and 4). The highest rating, MAJOR, is used here and mapped to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_autofix_step_prepush_test_gate.sh:line 1317, the `--jq` filter `if (length > 1) and (.[0].state == \"success\") and (.[0].at > \"<marker>\") and any(.[1:][]; .state == \"failure\") then \"green\" ...` | severity=NIT | confidence=2\n  PROBLEM: The repair step's green check is stricter than the gate's `final_ci_now_green` rule. Now that the marker-time comparison already rejects a stale success, the older-failure requirement only turns a real post-marker success into `not_green`.\n  WHY: On a success-then-success history, the helper returns `not_green` and the repair commit is pushed over a head the gate would call green. The reviewer downgraded this from the pass-1 high/MAJOR because the history needs three things on one SHA: an earlier passing final CI, a later failing re-run (`_pr_ensure_final_ci` does not re-dispatch after a completed success), and `scripts/ci_final_status.sh` (lines 107-117) failing to POST `failure` even after `gh_retry` retries.\n- HARDENING: scripts/review_autofix_step_prepush_test_gate.sh, review_prepush_test_gate_final_ci_now_green, the `--jq` filter at line 1317. Remove `(length > 1) and` and `and any(.[1:][]; .state == \"failure\")`, update the two comment sentences, and change the `no_older_failure` test to expect `green`. Estimated 4 lines changed. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_autofix_step_prepush_test_gate.sh:1317, condition any(.[1:][]; .state == \"failure\") | severity=MAJOR | confidence=4\n  PROBLEM: The pre-push check needs an older `ci/final` failure in the statuses history before it treats a head as green and skips, which is too strict.\n  WHY: If the failure record is missing from the 100 fetched statuses (overwritten by newer statuses, or never posted), the helper returns `not_green` and goes ahead with an unnecessary repair commit even when the newest status is a success newer than the marker.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_autofix_step_prepush_test_gate.sh:1317, condition `any(.[1:]; .state == \"failure\")` | severity=MAJOR | confidence=5\n  PROBLEM: The pre-push green check needs an older `ci/final` failure in addition to a success newer than the hand-back marker. G3 only requires `ci/final` to be success on the approved head; it does not require the earlier failure to have been recorded.\n  WHY: If the gate sees an older success from before the marker and selects the repair, and a newer success then appears after the marker but the failed attempt's status was never recorded, the condition returns `not_green` and the repair commit goes ahead although final CI is green.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_autofix_step_prepush_test_gate.sh:line 1317 (`review_prepush_test_gate_final_ci_now_green`), the clause `any(.[1:][]; .state == \"failure\")` in the jq filter | severity=MAJOR | confidence=4\n  PROBLEM: The repair-step green check needs an older `ci/final` `failure`, while the gate's rule in scripts/review_autofix_step_evaluate_gate.sh does not. Example history: success@11:00 (stale, left by a failed `ci/final=failure` POST, the history cited at lines 1295-1297), marker@12:00, then success@13:00. The helper returns `not_green` for it.\n  WHY: The gate selects the repair (older_than_marker), the sweep's re-run turns the head green, and the re-check still returns `not_green`, so the repair commit replaces the green approved head: the #9725 recurrence. The gate and the repair step therefore disagree on this history. The clause adds nothing for the stale-success case, because the `success_older_than_marker` test at tests/test_review_prepush_test_gate.py:856-857 shows the marker-time check alone rejects it. No test covers `(\"success\", \"success\")` newer than the marker.\n- HARDENING: scripts/review_autofix_step_prepush_test_gate.sh, line 1317, the jq filter in `review_prepush_test_gate_final_ci_now_green`. Drop `any(.[1:][]; .state == \"failure\")` so the condition matches the gate's rule. Add a `(\"success\", \"success\")` case to `test_final_ci_repair_commits_when_final_ci_is_not_green` that asserts `outcome=skipped reason=final_ci_now_green`. Estimated 2 + ~4 lines changed. HARDENING_RISK_SCORE: 4.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1ed481b0ca680fdfb9335d78e0265463578eca8512fd5e737afe82c8be1f7557",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10034,
+    "run_id": "45430725949",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45430725949",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124181002_7947de1aa5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10034,
+    "run_id": "45430725949"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T18:10:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
