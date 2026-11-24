@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: What should G4 do when a cancelled job hit its time limit (e.g. `tests-release-and-log-analysis` hitting its 20-minute limit), given that the sweep won't re-run it?\nChoices:\nA) Keep the non-goal. Defer only when the run would actually be re-run: a cancelled job with no timeout annotation, which the classifier already calls `abandoned`. That case logs `outcome=deferred reason=cancelled_jobs_rerun` next to the existing `infra_rerun_deferred`. A timed-out job is handed back as today. In the #9725 case, G1\u2013G3 then stop the repair on the green head. (RECOMMENDED)\nB) Drop the non-goal. Add a new opt-out verdict for timeouts (with its own `CI_*_RERUN_ENABLED`-style switch, default on) to `classify-run`. The sweep then re-runs a final-CI attempt-1 run once when its only non-success jobs timed out, and the hand-back defers on the same verdict, so the two always agree.\nC) Drop G4 entirely and rely on G1\u2013G3: the hand-back always dispatches as today, and the gate and repair step skip once `ci/final` turns green.",
+  "fingerprint": "cf7e2f8ed13b7309b6283d560a6fea6c185d518587b5e9dfe17c746fda9af545",
+  "lineage": {
+    "issue_number": 10023,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45299000163",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45299000163",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261124004748_ece63a4673",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10023,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45299000163"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #10023 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-24T00:47:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
