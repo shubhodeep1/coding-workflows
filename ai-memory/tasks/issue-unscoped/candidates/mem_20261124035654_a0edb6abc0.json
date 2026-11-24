@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cRe-run\u201d the latch-release and workflow-size tests listed in the acceptance criteria.\n  expected_change_site: Acceptance verification for `tests/test_needs_human_head_latch_release.py` and `tests/test_workflow_file_size_limit.py`.\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR acceptance table marks the latch-release test \u201cnot run\u201d and the workflow-size test \u201cunmet.\u201d Those verification requirements remain incomplete. (Reviewer severity: NIT; anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash reported no task gaps and said all of the issue's deliverables, including the tests, are present.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION (not a finding): scripts/orchestrate_poll_process.sh | release_head_bound_needs_human_latches, the `elif [ \"${hl_reason}\" = \"autofix_cap_head_moved\" ]` release body (about line 27815) | HARDENING_RISK_SCORE: 1\n  PROBLEM: When the label binds to an older latch through the fallback (`hl_bound_idx` is set), the release comment says the label was set at `${hl_latch_head:0:12}`. That is the newest autofix-cap comment's head, not the head of the latch that actually set the label.\n  WHY: Release behaviour is unaffected. Only the text operators read is misattributed. Fix: when `hl_bound_idx` is non-empty, read the bound candidate's head from `hl_latch_candidates`, or use neutral wording (est. 4-6 lines).\n- NOTE: The pre-push gate reports a `shellcheck` failure caused by this change, but it names no file or rule. The CI check-run snapshot for head 5349947f shows failed_count 0. The reviewer could not map the failure to code.\n- NOTE: The reviewer rejected gemini's three pass-1 findings as false or intended: the \"Please hold ai:needs-human\" re-assert, the reason-grep parsing, and the `_review_round_infra_readable` fail-open path. It also rejected gemini's log-prefix task gap, because agents.d/9917-needs-human-latch-autofix-cap.md uses the required fragment format.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cRe-run\u201d the latch-release and workflow-size tests listed in the acceptance criteria.\n  Expected change site: Acceptance verification for `tests/test_needs_human_head_latch_release.py` and `tests/test_workflow_file_size_limit.py`.\n  Evidence of absence: The PR acceptance table marks the latch-release test \u201cnot run\u201d and the workflow-size test \u201cunmet.\u201d Those verification requirements remain incomplete.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- HARDENING_SUGGESTION (not a finding): `scripts/orchestrate_poll_process.sh` | `release_head_bound_needs_human_latches`, lines 27815-27816 | HARDENING_RISK_SCORE: 1\n  PROBLEM: When the label is bound to an older latch through the fallback, the release comment reports the newest autofix-cap comment\u2019s head (`hl_latch_head`) as the head that set the label.\n  WHY: Those heads can differ, so the explanation can misattribute the latch. Fix: use the bound candidate\u2019s head from `hl_latch_candidates` when `hl_bound_idx` is set, or use neutral wording (est. 4-6 lines).\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING_SUGGESTION (not a finding): scripts/orchestrate_poll_process.sh | lines 27813-27819, the release-body branches (specifically the `autofix_cap_head_moved` branch at line 27816) | HARDENING_RISK_SCORE: 1\n  PROBLEM: When the release goes through the fallback binding (label bound to an older latch via `hl_bound_idx`, scripts/orchestrate_poll_process.sh:27711-27730), the posted explanation names `${hl_latch_head:0:12}`, the newest autofix-cap comment's head, even though the label came from the older bound latch's head.\n  WHY: This affects operator clarity only. Release behaviour, the idempotency marker and the head-moved safety checks are unaffected. Fix: take the displayed head from the bound candidate in `hl_latch_candidates`, or phrase the fallback body neutrally (est. 3-6 lines).\n- NOTE: The reviewer checked the between-check (lines 27733-27742), the pre-write and relatch re-reads (scripts/orchestrate_poll_process.sh:27795-27812), the fail-closed paths (line 27632, lines 27639/27674) and `hl_run_head_cache` (scripts/orchestrate_poll_process.sh:27562), and found no defects. It also rejected the pass-1 gemini concerns and the log-prefix task gap as unsupported or already satisfied.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c9a9f98d8bdb22205481c3b7de5ad545782d1b5c8ea6763d6750f4914792655a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10007,
+    "run_id": "45305045423",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45305045423",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124035654_a0edb6abc0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10007,
+    "run_id": "45305045423"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-24T03:56:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
