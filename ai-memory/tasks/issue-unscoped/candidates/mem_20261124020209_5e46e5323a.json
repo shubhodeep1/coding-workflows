@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:support-ref step (gh_api_retry repos/shubhodeep1/coding-workflows/branches/main lookup) | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The `review / gate` check-run fails on a GitHub primary rate-limit give-up (`GH_API_RETRY outcome=gave_up kind=primary bucket=core status=403 wait_secs=658`, exit 75), not on any hunk of this PR.\n  WHY: The PR does not touch `review_autofix.yml` or the support-ref code path, so a re-run after the rate limit resets should clear it. Severity is NIT in the source.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\" (issue #9966)\n  expected_change_site: `.github/workflows/ci.yml`, the selection of steps moved out of `tests-release-and-log-analysis`\n  confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The step timings for run 45035315687 were not readable, so the moved steps were picked from test and subprocess counts, not measured timings (rationale comments at .github/workflows/ci.yml:4045-4052 and 4089-4098, and `changelog.d/9966-ci-release-job-budget-move.md`). The diff does not establish that the moved steps were the slowest by the run's timings. Names, bodies, `timeout-minutes` and the `strategy.job-index == 1` guards are unchanged, and no new job names were added. Severity disagreement: NIT (anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash) vs MAJOR (minimax_minimax-m3, openai_gpt-6-luna); the highest is MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/review_autofix.yml:support-ref step | severity=low\n  PROBLEM: The `review / gate` check-run failed on a GitHub primary rate limit (`GH_API_RETRY outcome=gave_up kind=primary bucket=core status=403`, exit 75) on the `repos/shubhodeep1/coding-workflows/branches/main` lookup.\n  WHY: This PR does not change that file or code path, and a re-run after the limit resets should clear it. It was reported under ERROR PATHS with no severity label, so the severity is inferred and low.\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, the choice of steps moved out of `tests-release-and-log-analysis`.\n  Evidence of absence: The step timings for run 45035315687 could not be read, so the moved steps were picked from test and subprocess counts. The comments above both steps and `changelog.d/9966-ci-release-job-budget-move.md` disclose this. The other constraints are met. `budget-watch` reopens an issue if the job stays over budget.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\" (issue #9966)\n  Expected change site: `.github/workflows/ci.yml`, selection of which steps to move out of `tests-release-and-log-analysis`\n  Evidence of absence: The step timings for run 45035315687 were not readable, so the moved steps were picked from test and subprocess counts. The PR discloses this at `.github/workflows/ci.yml:4045-4052`, `.github/workflows/ci.yml:4089-4098` and `changelog.d/9966-ci-release-job-budget-move.md`. Both steps are pinned to `orchestrate-poll (1)` with `if: strategy.job-index == 1`, and names and `timeout-minutes` are unchanged. The residual is that the \"slowest by measured timing\" criterion cannot be met without timing data, and budget-watch will reopen an issue if the job stays over budget.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings)\" into the CI job with the most headroom.\n  Expected change site: .github/workflows/ci.yml, the selection of steps moved out of tests-release-and-log-analysis.\n  Evidence of absence: The rationale at .github/workflows/ci.yml:4047-4050 says the moved steps were selected by test and subprocess counts, not measured timings. The diff does not establish that they were the job's slowest steps by the run's timings.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/review_autofix.yml:support-ref step (gh_api_retry repos/shubhodeep1/coding-workflows/branches/main lookup) | severity=low | confidence=4\n  PROBLEM: The `review / gate` check-run fails on a GitHub primary rate-limit give-up (`GH_API_RETRY outcome=gave_up kind=primary bucket=core status=403 wait_secs=658`, exit 75), not on any hunk of this PR.\n  WHY: The PR does not touch `review_autofix.yml` or the support-ref code path, so a re-run after the rate limit resets should clear it. The source rates it NIT.\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings)\" into the CI job with the most headroom (issue #9966, `<!-- ai:ci-budget:v1 kind=job_duration subject=tests-release-and-log-analysis -->`).\n  Expected change site: `.github/workflows/ci.yml`, the selection of steps moved out of `tests-release-and-log-analysis` (rationale comments at lines 4045-4052 and 4090-4098).\n  Evidence of absence: The step timings for run 45035315687 were not readable. The rationale comments and `changelog.d/9966-ci-release-job-budget-move.md` disclose that the pick is an estimate from test and subprocess counts. The diff nowhere identifies the two moved steps as the slowest measured steps. The file's own record at lines 4315-4317 names part 2, which stays, as the largest step.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "68b5db2d3918c773ed5ec6e6aee988581e94bec570712c6c9d023a7919514e37",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9968,
+    "run_id": "45295738390",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45295738390",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124020209_5e46e5323a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9968,
+    "run_id": "45295738390"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T02:02:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
