@@ -5,13 +5,23 @@
   "entry_id": "processed_command_10019_7118005065_approved",
   "issue_number": 10019,
   "metadata": {
+    "branch": "ai/issue-10019",
+    "changed_files": [
+      "changelog.d/10019-poller-mock-store-lock.md",
+      "tests/test_orchestrate_poll_process.py"
+    ],
+    "issue_number": 10019,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/10019",
+    "pr_number": 10030,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/10030",
+    "run_attempt": "1",
+    "run_id": "45296665799",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/45296665799"
   },
   "run_attempt": 1,
   "run_id": "45296665799",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-24T00:24:45Z",
+  "status": "completed",
+  "timestamp": "2026-11-24T01:24:04Z",
   "workflow": "implement"
 }
