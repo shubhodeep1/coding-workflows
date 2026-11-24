@@ -23,6 +23,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_implement_text  # noqa: E402
 from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 IMPLEMENT_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
@@ -32,7 +33,8 @@ FILES_TOUCHED_SCOPE_GUARD = REPO_ROOT / "scripts" / "files_touched_scope_guard.p
 
 
 def _workflow_text() -> str:
-	return IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
+	# Two step bodies live in scripts/implement_step_*.sh (#9678); inline them.
+	return expanded_implement_text()
 
 
 def _implement_commit_script_text() -> str:
