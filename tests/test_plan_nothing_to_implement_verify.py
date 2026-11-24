@@ -386,6 +386,10 @@ class PlanNothingToImplementVerifyScriptTests(unittest.TestCase):
 		self.assertIn("outcome=blocked reason=passed tests=1 detail=close_failed", r["stdout"])
 		self.assertEqual(r["outputs"]["outcome"], "blocked")
 		self.assertIn("<!-- ai:implement-success-noop:v1 issue=42 -->", r["body"])
+		# The open issue must not keep the terminal ai:closed label.
+		gh_lines = r["gh"].splitlines()
+		close_at = next(i for i, line in enumerate(gh_lines) if line.startswith("issue close 42"))
+		self.assertIn("issue edit 42 --repo o/r --remove-label ai:closed", gh_lines[close_at + 1:])
 
 	def test_missing_reproduce_script_is_failed(self) -> None:
 		r = self.h.run(

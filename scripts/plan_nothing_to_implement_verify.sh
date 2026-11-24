@@ -223,6 +223,9 @@ gh_retry gh issue edit "${pnti_issue}" --repo "${pnti_repo}" \
 
 if ! gh_retry gh issue close "${pnti_issue}" --repo "${pnti_repo}" --reason completed >/dev/null 2>&1; then
 	# The marker comment exists; the Phase 8b judge closes the issue from it.
+	# Drop the terminal ai:closed label so the open issue reads as blocked
+	# (orchestrate_lib.py checks ai:closed before phase labels).
+	gh_retry gh issue edit "${pnti_issue}" --repo "${pnti_repo}" --remove-label 'ai:closed' >/dev/null 2>&1 || true
 	pnti_finish blocked passed "${pnti_count}" close_failed "${pnti_note_failed_pass}"
 fi
 
