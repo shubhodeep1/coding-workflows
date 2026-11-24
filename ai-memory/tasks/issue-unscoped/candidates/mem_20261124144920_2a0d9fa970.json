@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/rollback_stable.sh:399-421 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The drain loop that cancels in-flight release runs stops at the first poll that finds no active runs and makes no further cancellation passes.\n  WHY: A release run dispatched right after the last poll (for example, between the last poll and the hold write) is not cancelled, so it can publish tags and clear the hold early. The source rated this SEVERITY: NIT, which maps to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"After a rollback, neither auto-release-stable.yml nor the promote-main-to-stable.yml cycle releases until a release is cut deliberately.\"\n  expected_change_site: .github/workflows/promote-main-to-stable.yml, the poller-dispatched `promote` job (around lines 155\u2013162 and 211\u2013258), reached via the `target_sha` dispatch in `scripts/orchestrate_poll_process.sh`\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The poller-dispatched promote job (lines 155-162 and 211-258 of .github/workflows/promote-main-to-stable.yml) does not check the stable rollback hold, so a poller-dispatched cycle can fast-forward stable and release while the hold is active, `promote-main-to-stable.yml` contains no `stable_hold` reference, the job runs on workflow_dispatch and fast-forwards stable without checking the hold (the hold check exists only for the scheduled cycle via scripts/promote_main_cycle.sh), neither file is in the issue's `files_touched` plan grant or in this PR's diff, agents.d/9342-stable-rollback.md (line 5) and the README \"Roll back @stable\" section record this as a deferred gap with a manual `ai:comprehensive-test-pending` label-removal workaround. All three reporters rated it SEVERITY: MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/rollback_stable.sh:lines 399-421 | severity=NIT | confidence=4\n  PROBLEM: The script uses a drain loop to cancel in-flight release runs but breaks at the first clean poll.\n  WHY: The loop ends as soon as one poll finds no active runs, and no further cancellation passes are made. A release run dispatched right after the last poll (for example, between the last poll and the hold write) is not cancelled and can publish tags and clear the hold early.\n- TASK_GAP\n  Requirement: After a rollback, neither auto-release-stable.yml nor the promote-main-to-stable.yml cycle releases until a release is cut deliberately.\n  Expected change site: .github/workflows/promote-main-to-stable.yml (poller-dispatched job)\n  Evidence of absence: The poller-dispatched promote job (lines 155-162 and 211-258 of .github/workflows/promote-main-to-stable.yml) does not check the stable rollback hold, so a poller-dispatched cycle can fast-forward stable and release while the hold is active. The agents.d/9342-stable-rollback.md fragment documents this as a known gap deferred to a follow-up issue, and the README documents a manual workaround.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"After a rollback, neither auto-release-stable.yml nor the promote-main-to-stable.yml cycle releases until a release is cut deliberately.\"\n  Expected change site: `.github/workflows/promote-main-to-stable.yml` \u2014 the poller-dispatched `promote` job (around lines 155\u2013162 and 211\u2013258), reached via the `target_sha` dispatch in `scripts/orchestrate_poll_process.sh`.\n  Evidence of absence: `promote-main-to-stable.yml` contains no `stable_hold` reference. Neither file is in the issue's `files_touched` plan grant, and this PR's diff touches neither. The agents fragment (`agents.d/9342-stable-rollback.md` line 5) and the README \"Roll back @stable\" section record this as a deferred gap with a manual `ai:comprehensive-test-pending` label-removal workaround.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"After a rollback, neither auto-release-stable.yml nor the promote-main-to-stable.yml cycle releases until a release is cut deliberately.\"\n  Expected change site: .github/workflows/promote-main-to-stable.yml, the poller-dispatched promote job.\n  Evidence of absence: The promote job at .github/workflows/promote-main-to-stable.yml runs on workflow_dispatch and fast-forwards stable without checking the rollback hold. The hold check exists for the scheduled cycle via scripts/promote_main_cycle.sh but not for this poller-dispatched promotion path.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6268dab97d3e8bc6f2522c8b911ce557d80043b2e2d5a3028a1ab0d475d160aa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9359,
+    "run_id": "45400924899",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45400924899",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124144920_2a0d9fa970",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9359,
+    "run_id": "45400924899"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T14:49:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
