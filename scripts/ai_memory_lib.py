@@ -3235,7 +3235,13 @@ def _clone_for_memory_branch(repo_root: Path, memory_branch: str) -> Path:
     if not _memory_single_branch_clone_enabled():
         # Off switch (#8295): skip the single-branch fast path below and run
         # the pre-#8287 full clone (clone, ls-remote, fetch/checkout).
-        return _full_repo_clone_for_memory_branch(temp_dir, origin_url, memory_branch)
+        try:
+            return _full_repo_clone_for_memory_branch(temp_dir, origin_url, memory_branch)
+        except MemoryGitError:
+            # Remove the temp dir so a retried clone (issue #10052) does not
+            # leave one behind per attempt.
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise
 
     # Fast path: clone only the memory branch tip. A full clone fetched every
     # branch plus the whole ai-memory history (260k+ commits) on each write,
@@ -3281,7 +3287,11 @@ def _clone_for_memory_branch(repo_root: Path, memory_branch: str) -> Path:
         shutil.rmtree(temp_dir, ignore_errors=True)
         temp_dir = Path(tempfile.mkdtemp(prefix="ai-memory-branch-"))
 
-    return _full_repo_clone_for_memory_branch(temp_dir, origin_url, memory_branch)
+    try:
+        return _full_repo_clone_for_memory_branch(temp_dir, origin_url, memory_branch)
+    except MemoryGitError:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise
 
 
 def _full_repo_clone_for_memory_branch(temp_dir: Path, origin_url: str, memory_branch: str) -> Path:
@@ -3318,22 +3328,44 @@ def _full_repo_clone_for_memory_branch(temp_dir: Path, origin_url: str, memory_b
 _PUSH_RETRY_BACKOFF_BASE_SECONDS = 0.5
 _PUSH_RETRY_BACKOFF_CAP_SECONDS = 8.0
 
+# Memory-branch read/clone retries (issue #10052). GitHub answers
+# git-over-HTTPS with a bare `returned error: 403` (no `rate limit` text) when
+# it throttles a token: run 45408016593 lost an `/approved` claim to one such
+# 403 on the clone, while the same credential worked seconds before and after.
+# The read and clone paths therefore retry a bare 403, a 429 and the network
+# classes a small, fixed number of times. Permanent credential/permission
+# failures (`could not read Username`, `Permission to <repo> denied`, 401)
+# still fail at once. A constant on purpose: no env var surface.
+_MEMORY_READ_RETRY_ATTEMPTS = 3
+_MEMORY_READ_RETRY_BACKOFF_BASE_SECONDS = 5.0
+_MEMORY_READ_RETRY_BACKOFF_CAP_SECONDS = 20.0
+_MEMORY_READ_RETRY_TRANSIENT_REASONS = frozenset({"rate_limited", "network"})
 
-def _push_retry_backoff_seconds(attempt: int) -> float:
+
+def _push_retry_backoff_seconds(
+    attempt: int,
+    *,
+    base_seconds: float | None = None,
+    cap_seconds: float | None = None,
+) -> float:
     """Return a randomized delay (seconds) to wait before the next push retry.
 
     ``attempt`` is the 1-based number of the push attempt that just failed.
     Full-jitter exponential backoff: the delay is drawn uniformly from
     ``[0, min(cap, base * 2 ** (attempt - 1))]`` so concurrent pushers
     spread across the retry window instead of colliding in lockstep.
+    ``base_seconds`` / ``cap_seconds`` default to the push-retry constants
+    (resolved at call time); the memory read retry passes its own.
     """
+    base = _PUSH_RETRY_BACKOFF_BASE_SECONDS if base_seconds is None else base_seconds
+    cap = _PUSH_RETRY_BACKOFF_CAP_SECONDS if cap_seconds is None else cap_seconds
     if attempt < 1:
         attempt = 1
-    ceiling = min(_PUSH_RETRY_BACKOFF_BASE_SECONDS, _PUSH_RETRY_BACKOFF_CAP_SECONDS)
+    ceiling = min(base, cap)
     for _ in range(1, attempt):
-        if ceiling >= _PUSH_RETRY_BACKOFF_CAP_SECONDS:
+        if ceiling >= cap:
             break
-        ceiling = min(_PUSH_RETRY_BACKOFF_CAP_SECONDS, ceiling * 2.0)
+        ceiling = min(cap, ceiling * 2.0)
     return random.uniform(0.0, ceiling)
 
 
@@ -3467,6 +3499,67 @@ def _redact_memory_push_stderr(stderr: str) -> str:
     return text.strip()
 
 
+def _is_transient_memory_read_failure(output: str) -> bool:
+    """Return True when a failed memory-branch read/clone is worth retrying.
+
+    A bare `returned error: 403` (GitHub throttling a token), a 429 /
+    rate-limit and the network classes are transient (issue #10052). A
+    credential or permission failure stays permanent: the 403 span is removed
+    first, so `Permission to <repo> denied`, `could not read Username`, 401 and
+    the other auth patterns still match and are never retried. URLs are removed
+    before any matching so a host or repo name cannot decide the class.
+    """
+    text = output or ""
+    if not text.strip():
+        return False
+    without_urls = _MEMORY_PUSH_URL_RE.sub(" ", text)
+    if _MEMORY_PUSH_AUTH_FAILURE_RE.search(_MEMORY_PUSH_HTTP_403_RE.sub(" ", without_urls)):
+        return False
+    if _MEMORY_PUSH_HTTP_403_RE.search(without_urls):
+        return True
+    return _classify_memory_push_retry_reason(text) in _MEMORY_READ_RETRY_TRANSIENT_REASONS
+
+
+def _run_memory_read_with_retry(read: Callable[[], Any], *, target: str) -> Any:
+    """Run a memory-branch read/clone, retrying transient failures (issue #10052).
+
+    At most _MEMORY_READ_RETRY_ATTEMPTS attempts with full-jitter backoff.
+    Only the read is repeated: callers run any write (e.g. a processed-command
+    claim) after this returns, so a retry can never claim twice. Each retry
+    writes one AI_MEMORY_TELEMETRY line on stderr holding only fixed tokens
+    and integers (no git output, URL or credential). The final error is
+    re-raised with URLs and token values redacted.
+    """
+    attempt = 1
+    while True:
+        try:
+            return read()
+        except MemoryGitError as exc:
+            detail = str(exc)
+            if attempt >= _MEMORY_READ_RETRY_ATTEMPTS or not _is_transient_memory_read_failure(detail):
+                raise MemoryGitError(_redact_memory_push_stderr(detail)) from None
+            telemetry = {
+                "op": "memory-read-retry",
+                "ok": False,
+                "attempt": attempt,
+                "max_attempts": _MEMORY_READ_RETRY_ATTEMPTS,
+                "retry_reason": _classify_memory_push_retry_reason(detail),
+                "target": target,
+            }
+            print(
+                f"AI_MEMORY_TELEMETRY: {json.dumps(telemetry, ensure_ascii=True, sort_keys=True)}",
+                file=sys.stderr,
+            )
+            time.sleep(
+                _push_retry_backoff_seconds(
+                    attempt,
+                    base_seconds=_MEMORY_READ_RETRY_BACKOFF_BASE_SECONDS,
+                    cap_seconds=_MEMORY_READ_RETRY_BACKOFF_CAP_SECONDS,
+                )
+            )
+            attempt += 1
+
+
 def _memory_persist_elapsed_ms(started: float) -> int:
     """Milliseconds since a time.monotonic() start, never negative."""
     return max(0, int((time.monotonic() - started) * 1000))
@@ -3489,7 +3582,12 @@ def persist_memory_operation(
         # Phase timings (clone_ms / write_ms / push_ms) are additive telemetry
         # only; they never change control flow, retries or exceptions.
         clone_started = time.monotonic()
-        clone_dir = _clone_for_memory_branch(repo_root, memory_branch)
+        # Bounded retry of the clone only (issue #10052); operation() and
+        # the push loop below still run at most once per call.
+        clone_dir = _run_memory_read_with_retry(
+            lambda: _clone_for_memory_branch(repo_root, memory_branch),
+            target="write-clone",
+        )
         clone_ms = _memory_persist_elapsed_ms(clone_started)
         try:
             write_started = time.monotonic()
@@ -3623,27 +3721,33 @@ def read_memory_root_from_branch(
 
     repo_root = repo_root.resolve()
     origin_url = _resolve_origin_url(repo_root)
-    temp_dir = Path(tempfile.mkdtemp(prefix="ai-memory-read-"))
 
-    clone = _run_git(
-        temp_dir.parent,
-        [
-            "clone",
-            "--no-tags",
-            "--depth",
-            "1",
-            "--branch",
-            memory_branch,
-            origin_url,
-            str(temp_dir),
-        ],
-        check=False,
-    )
-    if clone.returncode != 0:
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        raise MemoryGitError(
-            f"Unable to read memory branch {memory_branch}: {clone.stderr.strip() or clone.stdout.strip()}"
+    def _clone_memory_branch_for_read() -> Path:
+        clone_temp_dir = Path(tempfile.mkdtemp(prefix="ai-memory-read-"))
+        clone = _run_git(
+            clone_temp_dir.parent,
+            [
+                "clone",
+                "--no-tags",
+                "--depth",
+                "1",
+                "--branch",
+                memory_branch,
+                origin_url,
+                str(clone_temp_dir),
+            ],
+            check=False,
         )
+        if clone.returncode != 0:
+            shutil.rmtree(clone_temp_dir, ignore_errors=True)
+            raise MemoryGitError(
+                f"Unable to read memory branch {memory_branch}: "
+                f"{_redact_memory_push_stderr(clone.stderr.strip() or clone.stdout.strip())}"
+            )
+        return clone_temp_dir
+
+    # Bounded retry of the clone only (issue #10052); the steps below run once.
+    temp_dir = _run_memory_read_with_retry(_clone_memory_branch_for_read, target="read-clone")
 
     memory_root = resolve_memory_root_dir(temp_dir, memory_root_relative)
     source_memory_root = resolve_memory_reference_source_dir(repo_root, memory_root_relative)
