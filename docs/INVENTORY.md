@@ -223,6 +223,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/git_ref_health_check.sh` — Shell helper for git ref health check.
 - `scripts/heal_isolated_implement.sh` — Run a heal editor and validator in disposable credential-free containers and scope-check transfer.
 - `scripts/heal_reproduce.sh` — Run a heal's listed failing tests at a SHA and its baseline in the credential-free pre-push gate container and write heal_repro.v1.
+- `scripts/plan_nothing_to_implement_verify.sh` — Body of plan.yml "Verify nothing-to-implement block": runs a nothing-to-implement plan's listed tests on the planning ref through `heal_reproduce.sh` and closes the issue as completed when all pass (issue #10015; log prefix `PLAN_NOTHING_TO_IMPLEMENT`).
 - `scripts/implement_commit_changes.sh` — implement_commit_changes.sh — stage + commit implement-phase editor output.
 - `scripts/implement_heal_preflight.sh` — Verify the pipeline-authored heal scope before granting an isolated editor access to an issue.
 - `scripts/implement_diagnose_post_codex_failure.sh` — validation failures in implement.yml and file fix-up issues.
