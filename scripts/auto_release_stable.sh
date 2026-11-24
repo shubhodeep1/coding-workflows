@@ -28,7 +28,28 @@
 #                                                 recently and the Actions
 #                                                 queue is deep; a new cycle
 #                                                 would wait on the same queue
+#   AUTO_RELEASE_SKIPPED reason=runner_wait_long  the oldest live queued run of
+#                                                 this repository has waited
+#                                                 RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES
+#                                                 or longer; a new cycle would
+#                                                 time out on the same wait
+#                                                 (issue #10037; no attempt used)
 #   AUTO_RELEASE_DISPATCHED sha=<tip>
+#
+# Runner-wait check (issue #10037): after every check above and before the
+# dispatch, the script measures the current runner wait as the age of the
+# oldest live `queued` run of this repository (runs older than
+# ZOMBIE_RUN_MAX_QUEUED_HOURS are wedged and left out) and skips the tick
+# with runner_wait_long while it is RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES or
+# longer (0 turns the check off). Bound (AD-2): once the newest gate run on
+# the stable branch (any status) is at least
+# AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS old, or there is none in the
+# listing, the tick dispatches whatever the wait
+# (AUTO_RELEASE_RUNNER_WAIT_CHECK outcome=bound_reached), so a long queue
+# holds a release for at most one window. Costs 0 reads when disabled or the
+# bound is reached, otherwise 1 (2 when more than 100 runs are queued in the
+# window). Fail open: a failed read dispatches as before
+# (AUTO_RELEASE_RUNNER_WAIT_CHECK outcome=read_failed).
 #
 # Runner-queue back-off: every gate cycle files five to nine fixture issues and
 # PRs and starts their clarify / plan / implement / review runs. Between
@@ -148,6 +169,10 @@
 #                                       default true
 #   AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX
 #                                       default 30 (fixtures closed per tick)
+#   RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES
+#                                       default 30 (oldest live queued run age
+#                                       at or above which the tick skips with
+#                                       runner_wait_long; 0 disables the check)
 #   GITHUB_OUTPUT                       receives dispatched=/sha=
 
 set -euo pipefail
@@ -171,6 +196,12 @@ declare -F zombie_queued_log_ignored >/dev/null 2>&1 || zombie_queued_log_ignore
 	cat >/dev/null 2>&1 || true
 	return 0
 }
+# Issue #10037: runner-wait reader from gh_helpers.sh. Without the helpers the
+# check fails open (dispatch as before).
+declare -F release_gate_oldest_queued_wait >/dev/null 2>&1 || release_gate_oldest_queued_wait()
+{
+	echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=0"
+}
 source "${SCRIPT_DIR}/tg_helpers.sh" 2>/dev/null || true
 type tg_send_msg >/dev/null 2>&1 || tg_send_msg() { return 0; }
 
@@ -188,6 +219,7 @@ AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS="${AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS:-100}
 AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS="${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS:-24}"
 AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_ENABLED="${AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_ENABLED:-true}"
 AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX="${AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX:-30}"
+RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES="${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES:-30}"
 
 for required_env in GITHUB_REPOSITORY GH_TOKEN; do
 	if [ -z "${!required_env:-}" ]; then
@@ -229,6 +261,11 @@ if ! [[ "${AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX}" =~ ^[0-9]{1,3}$ ]]; then
 	AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX=30
 fi
 AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX=$((10#${AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX}))
+if ! [[ "${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}" =~ ^[0-9]{1,5}$ ]]; then
+	echo "::warning::RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES is not a non-negative integer of at most 5 digits; using 30."
+	RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES=30
+fi
+RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES=$((10#${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}))
 
 emit_output()
 {
@@ -754,6 +791,47 @@ if [ "${AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS}" -gt 0 ] && [[ "${last_gate_run_id:
 			skip_release runner_queue_deep "sha=${branch_tip} queued=${queued_runs} max=${AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS} last_run=${last_gate_run_id} last_age_hours=${last_gate_age_hours} window_hours=${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS}"
 		else
 			echo "AUTO_RELEASE_QUEUE_CHECK outcome=clear queued=${queued_runs} max=${AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS} last_run=${last_gate_run_id} last_age_hours=${last_gate_age_hours}"
+		fi
+	fi
+fi
+
+# Runner-wait check (issue #10037, see the header). Every exit above keeps
+# priority; a skip here spends no attempt.
+if [ "${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}" -eq 0 ]; then
+	echo "AUTO_RELEASE_RUNNER_WAIT_CHECK outcome=disabled"
+else
+	# Bound (AD-2): the newest gate run on the stable branch, any status or
+	# conclusion (cancelled included), from the listing already read.
+	rw_last_gate="$(printf '%s' "${runs_json}" | jq -r --arg branch "${AUTO_RELEASE_STABLE_BRANCH}" '[.workflow_runs[]? | select(.head_branch == $branch)] | sort_by(.created_at) | last | if . == null then "" else "\(.id)\t\((.created_at // "") | (try (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch 0))" end' 2>/dev/null || true)"
+	rw_last_run_id=""
+	rw_last_created_epoch=""
+	IFS=$'\t' read -r rw_last_run_id rw_last_created_epoch <<< "${rw_last_gate}" || true
+	[[ "${rw_last_run_id:-}" =~ ^[1-9][0-9]*$ ]] || rw_last_run_id=""
+	rw_last_age_hours="unknown"
+	if [ -n "${rw_last_run_id}" ] && [[ "${rw_last_created_epoch:-}" =~ ^[1-9][0-9]*$ ]]; then
+		rw_now_epoch="$(date -u +%s)"
+		if [ "${rw_now_epoch}" -ge "${rw_last_created_epoch}" ]; then
+			rw_last_age_hours=$(( (rw_now_epoch - rw_last_created_epoch) / 3600 ))
+		fi
+	fi
+	# No stable-branch gate run in the listing (D6), or one at least a window
+	# old: the bound is reached and the tick dispatches whatever the wait. An
+	# undatable newest run is treated the same way (fail open).
+	if [ -z "${rw_last_run_id}" ] || [ "${rw_last_age_hours}" = "unknown" ] \
+		|| [ "${rw_last_age_hours}" -ge "${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS}" ]; then
+		echo "AUTO_RELEASE_RUNNER_WAIT_CHECK outcome=bound_reached last_run=${rw_last_run_id:-none} last_age_hours=${rw_last_age_hours} window_hours=${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS}"
+	else
+		rw_result="$(release_gate_oldest_queued_wait "${GITHUB_REPOSITORY}" "${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}" "${zq_cutoff}" 2>/dev/null || true)"
+		rw_outcome="$(printf '%s' "${rw_result}" | sed -n 's/^outcome=\([a-z_]*\) .*/\1/p' | head -n 1)"
+		rw_oldest_min="$(printf '%s' "${rw_result}" | sed -n 's/.* oldest_queued_min=\([0-9]*\) .*/\1/p' | head -n 1)"
+		rw_calls="$(printf '%s' "${rw_result}" | sed -n 's/.* calls=\([0-9]*\)$/\1/p' | head -n 1)"
+		if [ "${rw_outcome}" = "long" ] && [[ "${rw_oldest_min}" =~ ^[0-9]+$ ]] && [ "${rw_oldest_min}" -ge "${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}" ]; then
+			echo "::warning::The oldest live queued run of ${GITHUB_REPOSITORY} has waited ${rw_oldest_min} minute(s) for a runner (limit ${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}); not starting a gate cycle that would time out on the same wait."
+			skip_release runner_wait_long "oldest_queued_min=${rw_oldest_min} max=${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES} sha=${branch_tip} last_run=${rw_last_run_id} last_age_hours=${rw_last_age_hours} window_hours=${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS}"
+		elif [ "${rw_outcome}" = "short" ] || [ "${rw_outcome}" = "long" ]; then
+			echo "AUTO_RELEASE_RUNNER_WAIT_CHECK outcome=clear max=${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES} calls=${rw_calls:-0}"
+		else
+			echo "::warning::AUTO_RELEASE_RUNNER_WAIT_CHECK outcome=read_failed calls=${rw_calls:-0} — dispatching without the runner-wait check."
 		fi
 	fi
 fi

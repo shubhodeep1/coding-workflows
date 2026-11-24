@@ -395,7 +395,8 @@ def test_promote_workflow_cycle_job_runs_the_cycle_script_daily() -> None:
 	assert wf["on"]["workflow_dispatch"]["inputs"]["target_sha"]["default"] == ""
 	assert "concurrency" not in wf, "workflow-level concurrency would queue promotions behind a waiting cycle"
 	cycle = wf["jobs"]["cycle"]
-	assert cycle["if"] == "github.event_name == 'schedule'"
+	# Issue #10037: a poller retry (cycle_retry=true) runs the cycle job too.
+	assert cycle["if"] == "github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.cycle_retry == true)"
 	assert cycle["timeout-minutes"] == 340
 	assert "concurrency" not in cycle, "job-level concurrency would queue a later scheduled tick"
 	run_step = next(s for s in cycle["steps"] if "run" in s)
@@ -408,7 +409,7 @@ def test_promote_workflow_cycle_job_runs_the_cycle_script_daily() -> None:
 	assert 18000 + 1800 < cycle["timeout-minutes"] * 60
 	assert run_step["env"]["GH_TOKEN"] == "${{ secrets.GH_PAT || github.token }}"
 	promote = wf["jobs"]["promote"]
-	assert promote["if"] == "github.event_name == 'workflow_dispatch'"
+	assert promote["if"] == "github.event_name == 'workflow_dispatch' && inputs.cycle_retry != true"
 	assert promote["concurrency"] == {"group": "promote-main-to-stable", "cancel-in-progress": False}
 	ff_step = next(s for s in promote["steps"] if s.get("id") == "ff")
 	assert ff_step["env"]["TARGET_SHA_INPUT"] == "${{ inputs.target_sha }}"

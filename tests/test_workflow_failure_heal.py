@@ -2683,6 +2683,85 @@ def test_intake_workflow_run_targets_failed_branch_and_skips_downstream_gate() -
 	assert "issues_created" not in state_after
 
 
+def _runner_wait_gate_payload(name: str = "Test & Mark Stable Release") -> dict:
+	return heal.build_workflow_run_payload(
+		repo=SELF_REPO,
+		workflow_run={"id": 500, "name": name, "conclusion": "failure", "head_sha": SHA_B, "head_branch": "stable", "html_url": f"https://github.com/{SELF_REPO}/actions/runs/500", "display_title": name},
+	)
+
+
+_RUNNER_WAIT_LOG = (
+	"2026-11-24T02:18:00.0000000Z ::warning::internal-memory-maintenance run #45306352148 watch diagnosis: status=queued the whole time (no runner was assigned); status_reads=160\n"
+	"2026-11-24T02:18:01.0000000Z DISPATCH_WATCH_RESULT outcome=runner_wait run=45306352148 reason=never_assigned jobs=1 queued_without_runner=1\n"
+	"2026-11-24T02:18:02.0000000Z RELEASE_GATE_RUNNER_WAIT outcome=stop_failed detail=still_running gate_run=500 watched_run=45306352148 reason=never_assigned waited_secs=240 display_name=internal-memory-maintenance\n"
+	"2026-11-24T02:18:03.0000000Z ::error::internal-memory-maintenance run #45306352148 timed out\n"
+)
+_PHASE4_RUNNER_WAIT_LOG = (
+	"2026-11-24T15:19:00.0000000Z E2E_REVIEW_RUNNER_WAIT run=30 outcome=runner_wait reason=never_assigned\n"
+	"2026-11-24T15:19:01.0000000Z RELEASE_GATE_RUNNER_WAIT outcome=cancel_requested gate_run=500 watched_run=30 reason=never_assigned display_name=review\n"
+)
+
+
+def _runner_wait_job(job_id: int, name: str, step: str) -> dict:
+	return {"id": job_id, "name": name, "workflow_name": "Test & Mark Stable Release", "conclusion": "failure", "steps": [{"name": step, "conclusion": "failure"}]}
+
+
+def test_intake_skips_a_release_gate_run_whose_only_failures_are_runner_waits() -> None:
+	"""Issue #10037 (G4): a gate whose watch steps only waited for a runner is not a heal issue."""
+	jobs = [
+		_runner_wait_job(9001, "orphan-workflows-test", "Dispatch & watch — internal-memory-maintenance"),
+		_runner_wait_job(9002, "e2e-smoke-test", "Phase 4: Wait for review & autofix to complete"),
+	]
+	for name in ("Test & Mark Stable Release", "Test & Mark Stable Release [cycle:45296434662]"):
+		state = _intake_state(jobs={"500": jobs}, job_logs={"9001": _RUNNER_WAIT_LOG, "9002": _PHASE4_RUNNER_WAIT_LOG})
+		result, state_after, _ = _run_intake(_runner_wait_gate_payload(name), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "skip reason=release_gate_runner_wait run=500 jobs=2" in result.stdout, result.stdout
+		assert "issues_created" not in state_after
+		assert not _composed_issues(state_after)
+
+
+def test_intake_files_a_release_gate_run_with_a_real_failure_next_to_a_runner_wait() -> None:
+	jobs = [
+		_runner_wait_job(9001, "orphan-workflows-test", "Dispatch & watch — internal-memory-maintenance"),
+		_runner_wait_job(9003, "validate-scripts", "Run pytest"),
+	]
+	logs = {"9001": _RUNNER_WAIT_LOG, "9003": "2026-11-24T02:00:00.0000000Z ##[error]Process completed with exit code 1.\n"}
+	state = _intake_state(jobs={"500": jobs}, job_logs=logs)
+	result, state_after, _ = _run_intake(_runner_wait_gate_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "release_gate_runner_wait" not in result.stdout
+	assert _composed_issues(state_after), result.stdout
+
+
+def test_intake_runner_wait_marker_counts_only_on_a_watch_step_at_line_start() -> None:
+	cases = (
+		# The marker on a step that is not a gate watch step.
+		(_runner_wait_job(9001, "e2e-smoke-test", "Phase 4b: Verify editor restored canary (pytest + retry)"), _RUNNER_WAIT_LOG),
+		# Echoed text: the marker does not start the line.
+		(_runner_wait_job(9001, "orphan-workflows-test", "Dispatch & watch — internal-memory-maintenance"),
+			"2026-11-24T02:18:00.0000000Z issue body said RELEASE_GATE_RUNNER_WAIT outcome=cancel_requested gate_run=500\n"),
+		# Any other outcome does not count.
+		(_runner_wait_job(9001, "orphan-workflows-test", "Dispatch & watch — internal-memory-maintenance"),
+			"2026-11-24T02:18:00.0000000Z RELEASE_GATE_RUNNER_WAIT outcome=real_failure_present gate_run=500 watched_run=1\n"),
+	)
+	for job, log in cases:
+		state = _intake_state(jobs={"500": [job]}, job_logs={"9001": log})
+		result, state_after, _ = _run_intake(_runner_wait_gate_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "release_gate_runner_wait" not in result.stdout, (job, log)
+		assert _composed_issues(state_after), (job, result.stdout)
+
+
+def test_intake_runner_wait_skip_is_limited_to_the_release_gate() -> None:
+	jobs = [_runner_wait_job(9001, "orphan-workflows-test", "Dispatch & watch — internal-memory-maintenance")]
+	state = _intake_state(jobs={"500": jobs}, job_logs={"9001": _RUNNER_WAIT_LOG})
+	result, state_after, _ = _run_intake(_runner_wait_gate_payload("Mark Stable Release"), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "release_gate_runner_wait" not in result.stdout
+	assert _composed_issues(state_after)
+
+
 def test_intake_workflow_run_preserves_slash_bearing_target_branch() -> None:
 	branch_name = "release/2026-09"
 	run_payload = heal.build_workflow_run_payload(

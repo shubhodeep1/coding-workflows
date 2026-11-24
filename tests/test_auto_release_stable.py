@@ -74,6 +74,15 @@ if args[:1] == ["api"]:
         if state.get("queued_error"):
             save(); sys.stderr.write("HTTP 503\n"); sys.exit(1)
         respond({"total_count": state.get("queued_runs", 0), "workflow_runs": []})
+    if path.endswith("/actions/runs") and fields.get("status") == "queued":
+        # Issue #10037: the created-range read of queued runs.
+        state.setdefault("window_reads", []).append(fields)
+        if state.get("window_error"):
+            save(); sys.stderr.write("HTTP 503\n"); sys.exit(1)
+        if fields.get("page"):
+            respond({"total_count": state.get("window_total", 0), "workflow_runs": state.get("window_last_page", [])})
+        runs = state.get("window_runs", [])
+        respond({"total_count": state.get("window_total", len(runs)), "workflow_runs": runs})
     if "/git/ref/heads/" in path:
         respond({"object": {"type": "commit", "sha": state["branch_tip"]}})
     if path.endswith("/git/ref/tags/stable"):
@@ -698,7 +707,7 @@ def test_queue_back_off_reads_nothing_when_the_last_gate_did_not_fail() -> None:
 		with tempfile.TemporaryDirectory() as tmp:
 			proc, final = _run(Path(tmp), _state(tag_commit="3" * 40, runs=runs, queued_runs=900))
 		assert proc.returncode == 0, proc.stderr
-		assert not any("status=queued" in path for path in _api_paths(final)), runs
+		assert not any("actions/runs?status=queued" in path for path in _api_paths(final)), runs
 		assert len(final["dispatches"]) == 1, runs
 
 
@@ -849,6 +858,156 @@ def test_workflow_passes_the_back_off_and_cleanup_knobs() -> None:
 	assert run_step["env"]["AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS"] == "${{ vars.AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS || '24' }}"
 	assert run_step["env"]["AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_ENABLED"] == "${{ vars.AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_ENABLED || 'true' }}"
 	assert run_step["env"]["AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX"] == "${{ vars.AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX || '30' }}"
+
+
+# --- Runner-wait check (issue #10037) ---
+
+
+def _minutes_ago(minutes: float) -> str:
+	return (datetime.now(timezone.utc) - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _recent_stable_gate(hours_ago: float = 2, run_id: int = 9100) -> dict:
+	# A recent successful gate on another tip: keeps the AD-2 bound open
+	# without spending an attempt or starting the queue back-off.
+	return {"id": run_id, "status": "completed", "conclusion": "success", "head_sha": "7" * 40, "head_branch": "stable",
+		"created_at": _minutes_ago(hours_ago * 60), "updated_at": _minutes_ago(hours_ago * 60 - 30)}
+
+
+def _queued(run_id: int, minutes_ago: float) -> dict:
+	return {"id": run_id, "status": "queued", "conclusion": None, "path": ".github/workflows/internal-plan.yml", "created_at": _minutes_ago(minutes_ago)}
+
+
+def test_runner_wait_long_skips_without_spending_an_attempt() -> None:
+	state = _state(tag_commit="3" * 40, runs=[_recent_stable_gate()], window_runs=[_queued(11, 50), _queued(12, 40)])
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state)
+	assert proc.returncode == 0, proc.stderr
+	assert f"AUTO_RELEASE_SKIPPED reason=runner_wait_long oldest_queued_min=50 max=30 sha={TIP} last_run=9100 last_age_hours=2 window_hours=24" in proc.stdout
+	assert not final.get("dispatches")
+	assert "dispatched=false" in final["github_output"]
+	read = final["window_reads"][0]
+	assert read["status"] == "queued" and read["per_page"] == "100"
+	lower, upper = read["created"].split("..")
+	assert lower.endswith("Z") and upper.endswith("Z") and lower < upper
+	assert len(final["window_reads"]) == 1
+
+
+def test_runner_wait_short_dispatches() -> None:
+	# A run younger than the limit is outside the created range; the helper
+	# re-checks the upper bound too.
+	state = _state(tag_commit="3" * 40, runs=[_recent_stable_gate()], window_runs=[_queued(11, 10)])
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state)
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTO_RELEASE_RUNNER_WAIT_CHECK outcome=clear max=30 calls=1" in proc.stdout
+	assert f"AUTO_RELEASE_DISPATCHED sha={TIP}" in proc.stdout
+	assert len(final["dispatches"]) == 1
+
+
+def test_runner_wait_only_wedged_queued_runs_dispatches() -> None:
+	state = _state(tag_commit="3" * 40, runs=[_recent_stable_gate()], window_runs=[_queued(11, 30 * 60)])
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state)
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTO_RELEASE_RUNNER_WAIT_CHECK outcome=clear" in proc.stdout
+	assert len(final["dispatches"]) == 1
+	# The lower bound of the range is the wedged cutoff (24 h), not the epoch.
+	assert not final["window_reads"][0]["created"].startswith("1970-")
+
+
+def test_runner_wait_read_failure_dispatches_with_a_warning() -> None:
+	state = _state(tag_commit="3" * 40, runs=[_recent_stable_gate()], window_error=True)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state)
+	assert proc.returncode == 0, proc.stderr
+	assert "::warning::AUTO_RELEASE_RUNNER_WAIT_CHECK outcome=read_failed" in proc.stdout
+	assert len(final["dispatches"]) == 1
+
+
+def test_runner_wait_limit_zero_makes_no_read() -> None:
+	state = _state(tag_commit="3" * 40, runs=[_recent_stable_gate()], window_runs=[_queued(11, 50)])
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, env={"RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES": "0"})
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTO_RELEASE_RUNNER_WAIT_CHECK outcome=disabled" in proc.stdout
+	assert not final.get("window_reads")
+	assert len(final["dispatches"]) == 1
+
+
+def test_runner_wait_invalid_limit_warns_and_uses_the_default() -> None:
+	state = _state(tag_commit="3" * 40, runs=[_recent_stable_gate()], window_runs=[_queued(11, 50)])
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, env={"RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES": "soon"})
+	assert "RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES is not a non-negative integer" in proc.stdout
+	assert "reason=runner_wait_long oldest_queued_min=50 max=30" in proc.stdout
+	assert not final.get("dispatches")
+
+
+def test_runner_wait_bound_reached_dispatches_without_a_read() -> None:
+	# No stable-branch gate run in the listing (D6), a main-branch run only,
+	# or a newest stable gate run a full window old: dispatch whatever the wait.
+	main_only = dict(_recent_stable_gate(), head_branch="main")
+	for runs, last in (([], "none"), ([main_only], "none"), ([_recent_stable_gate(hours_ago=30)], "9100")):
+		state = _state(tag_commit="3" * 40, runs=runs, window_runs=[_queued(11, 500)])
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, final = _run(Path(tmp), state)
+		assert proc.returncode == 0, proc.stderr
+		assert f"AUTO_RELEASE_RUNNER_WAIT_CHECK outcome=bound_reached last_run={last}" in proc.stdout, runs
+		assert "window_hours=24" in proc.stdout
+		assert not final.get("window_reads"), runs
+		assert len(final["dispatches"]) == 1, runs
+
+
+def test_runner_wait_reads_the_last_page_when_more_than_100_match() -> None:
+	first_page = [_queued(100 + i, 35) for i in range(100)]
+	state = _state(tag_commit="3" * 40, runs=[_recent_stable_gate()], window_runs=first_page, window_total=250,
+		window_last_page=[_queued(9, 120), _queued(10, 90)])
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state)
+	assert "reason=runner_wait_long oldest_queued_min=120 max=30" in proc.stdout
+	assert len(final["window_reads"]) == 2
+	assert final["window_reads"][1]["page"] == "3"
+	assert not final.get("dispatches")
+
+
+def test_runner_wait_last_page_is_capped_at_ten() -> None:
+	state = _state(tag_commit="3" * 40, runs=[_recent_stable_gate()], window_runs=[_queued(1, 35)], window_total=5000,
+		window_last_page=[_queued(9, 120)])
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state)
+	assert final["window_reads"][1]["page"] == "10"
+	assert "reason=runner_wait_long oldest_queued_min=120" in proc.stdout
+
+
+def test_runner_queue_deep_still_takes_precedence_over_runner_wait() -> None:
+	state = _state(tag_commit="3" * 40, runs=[_queue_failed_gate()], queued_runs=375, window_runs=[_queued(11, 50)])
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state)
+	assert "AUTO_RELEASE_SKIPPED reason=runner_queue_deep" in proc.stdout
+	assert "runner_wait_long" not in proc.stdout
+	assert not final.get("window_reads")
+
+
+def test_runner_wait_skip_after_a_recent_failed_gate_with_a_short_queue() -> None:
+	# The queue back-off clears (few queued runs) but those runs waited long.
+	state = _state(tag_commit="3" * 40, runs=[_queue_failed_gate()], queued_runs=5, window_runs=[_queued(11, 45)])
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state)
+	assert "AUTO_RELEASE_QUEUE_CHECK outcome=clear" in proc.stdout
+	assert f"AUTO_RELEASE_SKIPPED reason=runner_wait_long oldest_queued_min=45 max=30 sha={TIP} last_run={GATE_RUN}" in proc.stdout
+	assert not final.get("dispatches")
+
+
+def test_workflow_passes_the_runner_wait_limit() -> None:
+	text = WORKFLOW.read_text(encoding="utf-8")
+	assert "RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES: ${{ vars.RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES || '30' }}" in text
+
+
+def test_runner_wait_helper_fallback_is_declared() -> None:
+	text = SCRIPT.read_text(encoding="utf-8")
+	assert "declare -F release_gate_oldest_queued_wait >/dev/null 2>&1 || release_gate_oldest_queued_wait()" in text
+	assert 'skip_release runner_wait_long "oldest_queued_min=' in text
 
 
 # The wedged-queued guard contract cases (issue #9473) live in

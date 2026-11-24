@@ -128,6 +128,22 @@
 #   TG_BOT_SECRET, TG_ADMIN_CHAT_ID / TG_CHAT_ID, ALERT_MSG_LEVEL
 #                                       Telegram settings for the WARNING sent when a
 #                                       hold is released (best effort, via tg_helpers.sh)
+#   RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES
+#                                       default 30 (issue #10037): before the smoke
+#                                       gate, skip with runner_wait_long while the
+#                                       oldest live queued run of this repository has
+#                                       waited this long; 0 disables the check
+#   AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS
+#                                       default 24: the runner-wait bound. Once the
+#                                       newest gate-only gate run is this old (or
+#                                       there is none in the listing) the cycle runs
+#                                       whatever the wait
+#   PROMOTE_CYCLE_RETRY_CHECK_ONLY      default false. The orchestrator poller sets it
+#                                       to true: the script then only decides whether
+#                                       to re-dispatch a cycle skipped with
+#                                       runner_wait_long (`-f cycle_retry=true`, at
+#                                       most once an hour) and exits 0 (log prefix
+#                                       PROMOTE_CYCLE_RETRY). It never runs the cycle.
 #                                       and when a release-blocker report is not delivered
 #   RELEASE_BLOCKER_HEAL_ENABLED        default true (kill switch for the
 #                                       release-blocker reporters below)
@@ -231,6 +247,12 @@ declare -F zombie_queued_log_ignored >/dev/null 2>&1 || zombie_queued_log_ignore
 	cat >/dev/null 2>&1 || true
 	return 0
 }
+# Issue #10037: runner-wait reader from gh_helpers.sh. Without the helpers the
+# check fails open (the cycle runs as before).
+declare -F release_gate_oldest_queued_wait >/dev/null 2>&1 || release_gate_oldest_queued_wait()
+{
+	echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=0"
+}
 if [ -r "${SCRIPT_DIR}/tg_helpers.sh" ]; then
 	# shellcheck source=tg_helpers.sh
 	# shellcheck disable=SC1091
@@ -249,6 +271,25 @@ PROMOTE_CYCLE_GATE_POLL_SECS="${PROMOTE_CYCLE_GATE_POLL_SECS:-60}"
 PROMOTE_CYCLE_MIN_DOCS="${PROMOTE_CYCLE_MIN_DOCS:-2}"
 PROMOTE_CYCLE_MAX_ATTEMPTS="${PROMOTE_CYCLE_MAX_ATTEMPTS:-3}"
 PROMOTE_CYCLE_TRACKING_LABEL="${PROMOTE_CYCLE_TRACKING_LABEL:-ai:comprehensive-test-pending}"
+# Runner-wait check (issue #10037). A bad value warns and falls back: the
+# check is an addition to the cycle and must not stop it.
+RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES="${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES:-30}"
+if ! [[ "${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}" =~ ^[0-9]{1,5}$ ]]; then
+	echo "::warning::RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES is not a non-negative integer of at most 5 digits; using 30."
+	RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES=30
+fi
+RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES=$((10#${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}))
+AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS="${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS:-24}"
+if ! [[ "${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS}" =~ ^[0-9]{1,5}$ ]]; then
+	echo "::warning::AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS is not a non-negative integer of at most 5 digits; using 24."
+	AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS=24
+fi
+AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS=$((10#${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS}))
+PROMOTE_CYCLE_RETRY_CHECK_ONLY="${PROMOTE_CYCLE_RETRY_CHECK_ONLY:-false}"
+# Display title of a poller retry run (run-name in promote-main-to-stable.yml).
+PROMOTE_CYCLE_RETRY_TITLE="Promote main to stable [cycle-retry]"
+# Name of the cycle job's marker step; a contract with the workflow YAML.
+PROMOTE_CYCLE_RETRY_MARKER_STEP="Record runner-wait skip for the poller retry"
 APPLY_ANALYSIS_DISPATCHER="${APPLY_ANALYSIS_DISPATCHER:-${SCRIPT_DIR}/apply_analysis_on_main.sh}"
 PROMOTE_CYCLE_OPERATOR_STEP_HELPER="${PROMOTE_CYCLE_OPERATOR_STEP_HELPER:-${SCRIPT_DIR}/operator_step_issue.py}"
 PROMOTE_CYCLE_PIN_ENABLED="${PROMOTE_CYCLE_PIN_ENABLED:-true}"
@@ -1580,6 +1621,93 @@ release_blocker_on_skip()
 	return 0
 }
 
+# Poller retry check (issue #10037, G2 / AD-1). The orchestrator poller runs
+# this script with PROMOTE_CYCLE_RETRY_CHECK_ONLY=true every tick. It only
+# re-dispatches the cycle (`-f cycle_retry=true`, which the workflow routes to
+# the guarded `cycle` job, never to `promote`) when the newest cycle run is a
+# successful runner_wait_long skip (its marker step ran) that ended 60 minutes
+# to 24 hours ago. A retry becomes the newest cycle run, so retries come at
+# most once an hour; whether main still needs a cycle is left to the
+# dispatched cycle's own guards. API calls: 0 when disabled, 1 runs listing,
+# +1 jobs read only for a due candidate, +1 dispatch. Always exits 0.
+promote_cycle_retry_check()
+{
+	local rc_runs="" rc_active="" rc_fields="" rc_id="" rc_status="" rc_conclusion="" rc_updated="" rc_age="" rc_jobs="" rc_marker=""
+	local rc_cutoff="0" rc_def=""
+	if ! is_truthy "${PROMOTE_CYCLE_ENABLED}"; then
+		echo "PROMOTE_CYCLE_RETRY outcome=disabled reason=cycle_disabled"
+		return 0
+	fi
+	if [ "${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}" -eq 0 ]; then
+		echo "PROMOTE_CYCLE_RETRY outcome=disabled reason=runner_wait_check_off"
+		return 0
+	fi
+	if ! rc_runs="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_WORKFLOW_FILE}/runs?per_page=20" 2>/dev/null)" \
+		|| ! printf '%s' "${rc_runs}" | jq -e '(.workflow_runs | type) == "array"' >/dev/null 2>&1; then
+		echo "PROMOTE_CYCLE_RETRY outcome=read_failed lookup=runs"
+		return 0
+	fi
+	rc_cutoff="$(zombie_queued_cutoff_epoch || echo 0)"
+	[[ "${rc_cutoff}" =~ ^[0-9]+$ ]] || rc_cutoff=0
+	rc_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
+	zombie_queued_log_ignored promote_cycle_retry "${rc_cutoff}" <<< "${rc_runs}"
+	rc_active="$(printf '%s' "${rc_runs}" | jq -r --argjson zq_cutoff "${rc_cutoff}" "${rc_def}"'[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending") | select(is_wedged_queued($zq_cutoff) | not)] | length' 2>/dev/null || echo "")"
+	if ! [[ "${rc_active}" =~ ^[0-9]+$ ]]; then
+		echo "PROMOTE_CYCLE_RETRY outcome=read_failed lookup=runs"
+		return 0
+	fi
+	if [ "${rc_active}" -gt 0 ]; then
+		echo "PROMOTE_CYCLE_RETRY outcome=cycle_active active_runs=${rc_active}"
+		return 0
+	fi
+	rc_fields="$(printf '%s' "${rc_runs}" | jq -r --arg retry_title "${PROMOTE_CYCLE_RETRY_TITLE}" '[.workflow_runs[]? | select(.event == "schedule" or (.event == "workflow_dispatch" and (.display_title // "") == $retry_title))] | sort_by(.created_at) | last // empty | ((.id // "") | tostring), ((.status // "") | tostring), ((.conclusion // "") | tostring), ((.updated_at // "") | tostring)' 2>/dev/null || true)"
+	{ IFS= read -r rc_id; IFS= read -r rc_status; IFS= read -r rc_conclusion; IFS= read -r rc_updated; } <<< "${rc_fields}" || true
+	if ! [[ "${rc_id:-}" =~ ^[0-9]{1,20}$ ]]; then
+		echo "PROMOTE_CYCLE_RETRY outcome=no_cycle_run"
+		return 0
+	fi
+	if [ "${rc_status}" != "completed" ] || [ "${rc_conclusion}" != "success" ]; then
+		echo "PROMOTE_CYCLE_RETRY outcome=not_runner_wait run=${rc_id} conclusion=$(printf '%s' "${rc_conclusion:-none}" | tr -cd 'a-z_')"
+		return 0
+	fi
+	rc_age="$(jq -rn --arg ts "${rc_updated:-}" '($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601?) as $t | if $t == null then empty else ([((now - $t) / 60 | floor), 0] | max) end' 2>/dev/null || true)"
+	if ! [[ "${rc_age}" =~ ^[0-9]+$ ]]; then
+		echo "PROMOTE_CYCLE_RETRY outcome=read_failed lookup=updated_at run=${rc_id}"
+		return 0
+	fi
+	if [ "${rc_age}" -lt 60 ]; then
+		echo "PROMOTE_CYCLE_RETRY outcome=not_due run=${rc_id} age_min=${rc_age}"
+		return 0
+	fi
+	if [ "${rc_age}" -ge 1440 ]; then
+		# The daily schedule owns a skip this old.
+		echo "PROMOTE_CYCLE_RETRY outcome=stale run=${rc_id} age_min=${rc_age}"
+		return 0
+	fi
+	if ! rc_jobs="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${rc_id}/jobs?per_page=100" 2>/dev/null)" \
+		|| ! printf '%s' "${rc_jobs}" | jq -e '(.jobs | type) == "array"' >/dev/null 2>&1; then
+		echo "PROMOTE_CYCLE_RETRY outcome=read_failed lookup=jobs run=${rc_id}"
+		return 0
+	fi
+	rc_marker="$(printf '%s' "${rc_jobs}" | jq -r --arg step "${PROMOTE_CYCLE_RETRY_MARKER_STEP}" '[.jobs[]? | .steps[]? | select((.name // "") == $step and (.conclusion // "") == "success")] | length' 2>/dev/null || echo 0)"
+	if ! [[ "${rc_marker}" =~ ^[0-9]+$ ]] || [ "${rc_marker}" -eq 0 ]; then
+		echo "PROMOTE_CYCLE_RETRY outcome=not_runner_wait run=${rc_id}"
+		return 0
+	fi
+	# One attempt, no gh_retry: a retried dispatch is not idempotent. The
+	# dispatched run's another_run_active guard covers a race.
+	if gh workflow run "${PROMOTE_CYCLE_WORKFLOW_FILE}" --repo "${GITHUB_REPOSITORY}" --ref "${PROMOTE_CYCLE_DEFAULT_BRANCH}" -f cycle_retry=true >/dev/null 2>&1; then
+		echo "PROMOTE_CYCLE_RETRY outcome=dispatched after_run=${rc_id} age_min=${rc_age}"
+	else
+		echo "::warning::PROMOTE_CYCLE_RETRY outcome=dispatch_failed after_run=${rc_id}"
+	fi
+	return 0
+}
+if is_truthy "${PROMOTE_CYCLE_RETRY_CHECK_ONLY}"; then
+	promote_cycle_retry_check || true
+	exit 0
+fi
+
 if ! is_truthy "${PROMOTE_CYCLE_ENABLED}"; then
 	skip_cycle disabled
 fi
@@ -1671,7 +1799,9 @@ fi
 #    change separates from the tip (older runs predate that change). The
 #    newest failed run keeps the pre-budget handling of a diverged head
 #    (skip base_not_ancestor) and of a compare failure (skip guard_unavailable).
-failed_cycle_heads="$(printf '%s' "${self_runs_json}" | jq -r --argjson max "${PROMOTE_CYCLE_MAX_ATTEMPTS}" '[.workflow_runs[]? | select(.event == "schedule" and .status == "completed" and (.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out"))] | sort_by(.created_at) | reverse | .[:$max] | .[].head_sha // empty')"
+# A poller retry run (workflow_dispatch with the retry display title, issue
+# #10037) is a cycle run too, so a failed retry spends an attempt.
+failed_cycle_heads="$(printf '%s' "${self_runs_json}" | jq -r --argjson max "${PROMOTE_CYCLE_MAX_ATTEMPTS}" --arg retry_title "${PROMOTE_CYCLE_RETRY_TITLE}" '[.workflow_runs[]? | select((.event == "schedule" or (.event == "workflow_dispatch" and (.display_title // "") == $retry_title)) and .status == "completed" and (.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out"))] | sort_by(.created_at) | reverse | .[:$max] | .[].head_sha // empty')"
 failed_attempts_on_tip=0
 last_failed_head=""
 while IFS= read -r failed_cycle_head; do
@@ -1760,6 +1890,45 @@ while :; do
 	echo "Waiting: ${active_gate_runs} ${PROMOTE_CYCLE_GATE_WORKFLOW_FILE} run(s) active (a stable release gate must not be cancelled by ours)."
 	sleep "${PROMOTE_CYCLE_GATE_POLL_SECS}"
 done
+# Runner-wait check (issue #10037, G1). Before the freeze, so a
+# runner_wait_long skip never touches the promote-cycle-frozen tag. The skip
+# spends no attempt (the run ends success) and the workflow's marker step lets
+# the orchestrator poller retry the cycle later the same day. Bound (AD-2):
+# once the newest gate-only gate run (from the idle listing above, no extra
+# call) is AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS old, or there is none, the
+# cycle runs whatever the wait. Fail open on a failed read.
+if [ "${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}" -eq 0 ]; then
+	echo "PROMOTE_CYCLE_RUNNER_WAIT_CHECK outcome=disabled"
+else
+	rw_last_gate="$(printf '%s' "${gate_runs_json}" | jq -r '[.workflow_runs[]? | select((.display_title // "") | startswith("Test & Mark Stable Release [cycle:"))] | sort_by(.created_at) | last | if . == null then "" else "\(.id)\t\((.created_at // "") | (try (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch 0))" end' 2>/dev/null || true)"
+	rw_last_run_id=""
+	rw_last_created_epoch=""
+	IFS=$'\t' read -r rw_last_run_id rw_last_created_epoch <<< "${rw_last_gate}" || true
+	[[ "${rw_last_run_id:-}" =~ ^[1-9][0-9]*$ ]] || rw_last_run_id=""
+	rw_last_age_hours="unknown"
+	if [ -n "${rw_last_run_id}" ] && [[ "${rw_last_created_epoch:-}" =~ ^[1-9][0-9]*$ ]]; then
+		rw_now_epoch="$(date -u +%s)"
+		if [ "${rw_now_epoch}" -ge "${rw_last_created_epoch}" ]; then
+			rw_last_age_hours=$(( (rw_now_epoch - rw_last_created_epoch) / 3600 ))
+		fi
+	fi
+	if [ -z "${rw_last_run_id}" ] || [ "${rw_last_age_hours}" = "unknown" ] \
+		|| [ "${rw_last_age_hours}" -ge "${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS}" ]; then
+		echo "PROMOTE_CYCLE_RUNNER_WAIT_CHECK outcome=bound_reached last_run=${rw_last_run_id:-none} last_age_hours=${rw_last_age_hours} window_hours=${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS}"
+	else
+		rw_result="$(release_gate_oldest_queued_wait "${GITHUB_REPOSITORY}" "${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}" "${zq_cutoff}" 2>/dev/null || true)"
+		rw_outcome="$(printf '%s' "${rw_result}" | sed -n 's/^outcome=\([a-z_]*\) .*/\1/p' | head -n 1)"
+		rw_oldest_min="$(printf '%s' "${rw_result}" | sed -n 's/.* oldest_queued_min=\([0-9]*\) .*/\1/p' | head -n 1)"
+		rw_calls="$(printf '%s' "${rw_result}" | sed -n 's/.* calls=\([0-9]*\)$/\1/p' | head -n 1)"
+		if [ "${rw_outcome}" = "long" ] && [[ "${rw_oldest_min}" =~ ^[0-9]+$ ]] && [ "${rw_oldest_min}" -ge "${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}" ]; then
+			skip_cycle runner_wait_long "oldest_queued_min=${rw_oldest_min} max=${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES} last_run=${rw_last_run_id} last_age_hours=${rw_last_age_hours} window_hours=${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS}"
+		elif [ "${rw_outcome}" = "short" ] || [ "${rw_outcome}" = "long" ]; then
+			echo "PROMOTE_CYCLE_RUNNER_WAIT_CHECK outcome=clear max=${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES} calls=${rw_calls:-0}"
+		else
+			echo "::warning::PROMOTE_CYCLE_RUNNER_WAIT_CHECK outcome=read_failed calls=${rw_calls:-0} — running the cycle without the runner-wait check."
+		fi
+	fi
+fi
 # Freeze after the idle wait, right before the gate, so a gate_busy skip never
 # touches the tag and the freeze window stays short.
 gate_ref="${PROMOTE_CYCLE_DEFAULT_BRANCH}"

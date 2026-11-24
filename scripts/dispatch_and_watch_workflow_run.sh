@@ -26,6 +26,12 @@ Usage: dispatch_and_watch_workflow_run.sh \
 	[--dispatch-fail-open] \
 	[--registration-fail-open] \
 	[--field key=value]...
+
+       dispatch_and_watch_workflow_run.sh --stop-release-gate \
+	--repo <child owner/repo> \
+	--watched-run-id <id> \
+	[--display-name <name>] \
+	[--runner-wait-reason <never_assigned|late_assigned>]
 EOF
 }
 
@@ -90,6 +96,57 @@ dispatch_workflow()
 	done
 }
 
+# Release-gate runner wait (issue #10037, G3).
+#
+# dispatch_watch_stop_release_gate <watched_run_id> <display_name> <reason>
+# Stops the release gate run this step belongs to (GITHUB_RUN_ID in
+# GITHUB_REPOSITORY) after a watched child ended as runner_wait: the child
+# never got a runner, or got one only in the last third of its budget. The
+# gate cancels itself so the run ends `cancelled`, which both release scripts
+# already read as "no attempt used". It never hides a real failure: when any
+# gate job already ended failure or timed_out it does not cancel
+# (outcome=real_failure_present). A job of the gate that fails in the few
+# seconds between that read and the cancel landing may show as cancelled.
+# Log lines (stable prefix, matched by the heal intake):
+#   RELEASE_GATE_RUNNER_WAIT outcome=cancel_requested|real_failure_present|stop_failed ...
+# API calls: 1 gate-jobs read, 1 cancel. Returns 1 when the gate is not
+# stopped (the caller then fails the step as before).
+dispatch_watch_stop_release_gate()
+{
+	local stop_watched="${1:-}" stop_display="${2:-}" stop_reason="${3:-}"
+	local stop_jobs="" stop_real="" stop_waited=0 stop_wait_secs="${DISPATCH_WATCH_STOP_WAIT_SECS:-240}"
+	stop_display="$(printf '%s' "${stop_display}" | tr '[:space:]' '_' | tr -cd 'A-Za-z0-9._:()/-' | cut -c1-60)"
+	stop_reason="$(printf '%s' "${stop_reason}" | tr -cd 'a-z_' | cut -c1-40)"
+	[[ "${stop_watched}" =~ ^[0-9]+$ ]] || stop_watched="none"
+	[[ "${stop_wait_secs}" =~ ^[0-9]{1,5}$ ]] || stop_wait_secs=240
+	if ! [[ "${GITHUB_RUN_ID:-}" =~ ^[0-9]+$ ]] || ! [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+		echo "RELEASE_GATE_RUNNER_WAIT outcome=stop_failed detail=no_gate_run watched_run=${stop_watched} reason=${stop_reason:-unknown} display_name=${stop_display:-unknown}"
+		return 1
+	fi
+	if ! stop_jobs="$(gh_api_safe_quiet_print "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100")" \
+		|| ! stop_real="$(printf '%s' "${stop_jobs}" | jq -er '.jobs | if type == "array" then [.[] | select(.conclusion == "failure" or .conclusion == "timed_out")] | length else error("no jobs") end' 2>/dev/null)"; then
+		echo "RELEASE_GATE_RUNNER_WAIT outcome=stop_failed detail=gate_jobs_unreadable gate_run=${GITHUB_RUN_ID} watched_run=${stop_watched} reason=${stop_reason:-unknown} display_name=${stop_display:-unknown}"
+		return 1
+	fi
+	if [ "${stop_real}" != "0" ]; then
+		echo "RELEASE_GATE_RUNNER_WAIT outcome=real_failure_present gate_run=${GITHUB_RUN_ID} watched_run=${stop_watched} reason=${stop_reason:-unknown} failed_jobs=${stop_real} display_name=${stop_display:-unknown}"
+		return 1
+	fi
+	echo "RELEASE_GATE_RUNNER_WAIT outcome=cancel_requested gate_run=${GITHUB_RUN_ID} watched_run=${stop_watched} reason=${stop_reason:-unknown} display_name=${stop_display:-unknown}"
+	if ! timeout 20 gh api -X POST "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/cancel" >/dev/null 2>&1; then
+		echo "RELEASE_GATE_RUNNER_WAIT outcome=stop_failed detail=cancel_failed gate_run=${GITHUB_RUN_ID} watched_run=${stop_watched} reason=${stop_reason:-unknown} display_name=${stop_display:-unknown}"
+		return 1
+	fi
+	# The runner kills this step once the cancel lands, so the job ends
+	# cancelled, not failed.
+	while [ "${stop_waited}" -lt "${stop_wait_secs}" ]; do
+		sleep 10
+		stop_waited=$((stop_waited + 10))
+	done
+	echo "RELEASE_GATE_RUNNER_WAIT outcome=stop_failed detail=still_running gate_run=${GITHUB_RUN_ID} watched_run=${stop_watched} reason=${stop_reason:-unknown} waited_secs=${stop_waited} display_name=${stop_display:-unknown}"
+	return 1
+}
+
 TARGET_REPO=""
 WORKFLOW_FILE=""
 DISPLAY_NAME=""
@@ -105,6 +162,9 @@ SNAPSHOT_ONLY=0
 DISPATCH_FAIL_OPEN=0
 REGISTRATION_FAIL_OPEN=0
 DISPATCH_FIELDS=()
+STOP_RELEASE_GATE_MODE=0
+WATCHED_RUN_ID=""
+RUNNER_WAIT_REASON=""
 
 while [ "$#" -gt 0 ]; do
 	case "$1" in
@@ -180,6 +240,20 @@ while [ "$#" -gt 0 ]; do
 			DISPATCH_FIELDS+=("$2")
 			shift 2
 			;;
+		--stop-release-gate)
+			STOP_RELEASE_GATE_MODE=1
+			shift
+			;;
+		--watched-run-id)
+			require_option_argument "$@"
+			WATCHED_RUN_ID="$2"
+			shift 2
+			;;
+		--runner-wait-reason)
+			require_option_argument "$@"
+			RUNNER_WAIT_REASON="$2"
+			shift 2
+			;;
 		-h|--help)
 			usage
 			exit 0
@@ -191,6 +265,24 @@ while [ "$#" -gt 0 ]; do
 			;;
 	esac
 done
+
+# --stop-release-gate (issue #10037): used by the gate's Phase 4 wait when its
+# watched review run ended as runner_wait. Cancels the watched child run, then
+# stops the gate run (see dispatch_watch_stop_release_gate). Exits 1 when the
+# gate is still alive afterwards.
+if [ "${STOP_RELEASE_GATE_MODE}" = "1" ]; then
+	if ! [[ "${TARGET_REPO}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || ! [[ "${WATCHED_RUN_ID}" =~ ^[0-9]+$ ]]; then
+		echo "::error::--stop-release-gate requires --repo <owner/repo> and a numeric --watched-run-id" >&2
+		exit 2
+	fi
+	if timeout 20 gh api -X POST "repos/${TARGET_REPO}/actions/runs/${WATCHED_RUN_ID}/cancel" >/dev/null 2>&1; then
+		echo "Cancel requested for watched run #${WATCHED_RUN_ID} (runner wait)"
+	else
+		echo "::warning::Could not cancel watched run #${WATCHED_RUN_ID} after the runner wait"
+	fi
+	dispatch_watch_stop_release_gate "${WATCHED_RUN_ID}" "${DISPLAY_NAME:-review}" "${RUNNER_WAIT_REASON:-never_assigned}" || true
+	exit 1
+fi
 
 if [ -z "${TARGET_REPO}" ] || [ -z "${WORKFLOW_FILE}" ] || [ -z "${REGISTRATION_TIMEOUT_SECS}" ]; then
 	echo "::error::--repo, --workflow, and --registration-timeout-secs are required" >&2
@@ -313,6 +405,7 @@ CONCLUSION=""
 WATCH_STATUS_READS=0
 WATCH_QUEUED_READS=0
 WATCH_SAW_IN_PROGRESS=0
+WATCH_DIAG_QUEUED_WHOLE_TIME=0
 while [ "$(date +%s)" -lt "${COMPLETION_DEADLINE}" ]; do
 	RUN_JSON="$(gh_api_safe_quiet_print "repos/${TARGET_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' || echo "")"
 	if [ -n "${RUN_JSON}" ]; then
@@ -360,10 +453,64 @@ if [ "${WATCH_SAW_IN_PROGRESS}" = "1" ]; then
 # A trailing failed read leaves STATUS empty: the watcher then cannot claim
 # "the whole time" and falls through to the could-not-tell line.
 elif [ "${WATCH_STATUS_READS}" -gt 0 ] && [ "${WATCH_QUEUED_READS}" -eq "${WATCH_STATUS_READS}" ] && [ "${STATUS}" = "queued" ]; then
+	WATCH_DIAG_QUEUED_WHOLE_TIME=1
 	echo "::warning::${DISPLAY_NAME} run #${NEW_ID} watch diagnosis: status=queued the whole time (no runner was assigned); status_reads=${WATCH_STATUS_READS}"
 else
 	echo "::warning::${DISPLAY_NAME} run #${NEW_ID} watch diagnosis: last status=${STATUS:-unknown} (could not tell queued from in_progress); status_reads=${WATCH_STATUS_READS}"
 fi
+
+# Runner-wait classification (issue #10037, G3). One jobs read of the watched
+# run. The result is runner_wait only when every job either still waits for a
+# runner (queued/waiting/pending, no runner_name) or started its first step
+# in the last third of the completion budget; an empty jobs list counts only
+# when the run was queued the whole time. A job with a runner but no readable
+# step start counts as early, and a failed read gives timeout: both fail
+# closed, so a child that ran early and then failed or overran still fails
+# the gate. Printed as DISPATCH_WATCH_RESULT and written as watch_result=.
+WATCH_RESULT="timeout"
+WATCH_RESULT_REASON="jobs_unreadable"
+WATCH_JOBS_COUNT="-"
+WATCH_JOBS_QUEUED_NO_RUNNER="-"
+WATCH_TWO_THIRDS_EPOCH=$(( DISPATCH_STARTED_AT + COMPLETION_TIMEOUT_SECS * 2 / 3 ))
+WATCH_JOBS_SUMMARY=""
+if WATCH_JOBS_JSON="$(gh_api_safe_quiet_print "repos/${TARGET_REPO}/actions/runs/${NEW_ID}/jobs?per_page=100")"; then
+	WATCH_JOBS_SUMMARY="$(printf '%s' "${WATCH_JOBS_JSON}" | jq -r --argjson two_thirds "${WATCH_TWO_THIRDS_EPOCH}" '
+		if (.jobs | type) != "array" then empty else
+		[.jobs[] | select(type == "object") | {
+			queued_no_runner: (((.status // "") | tostring | IN("queued", "waiting", "pending")) and (((.runner_name // "") | tostring) == "")),
+			has_runner: (((.runner_name // "") | tostring) != ""),
+			start: ([.steps[]? | (.started_at // empty) | tostring | sub("\\.[0-9]+Z$"; "Z") | (try fromdateiso8601 catch empty)] | min)
+		}] as $js
+		| [($js | length),
+		   ([$js[] | select(.queued_no_runner)] | length),
+		   (if ($js | length) > 0 and all($js[]; .queued_no_runner or (.start != null and .start >= $two_thirds)) then 1 else 0 end),
+		   ([$js[] | select(.has_runner or .start != null)] | length)]
+		| map(tostring) | join(" ")
+		end' 2>/dev/null || true)"
+fi
+if [[ "${WATCH_JOBS_SUMMARY}" =~ ^([0-9]+)\ ([0-9]+)\ ([01])\ ([0-9]+)$ ]]; then
+	WATCH_JOBS_COUNT="${BASH_REMATCH[1]}"
+	WATCH_JOBS_QUEUED_NO_RUNNER="${BASH_REMATCH[2]}"
+	if [ "${WATCH_JOBS_COUNT}" -eq 0 ]; then
+		if [ "${WATCH_DIAG_QUEUED_WHOLE_TIME}" = "1" ]; then
+			WATCH_RESULT="runner_wait"
+			WATCH_RESULT_REASON="never_assigned"
+		else
+			WATCH_RESULT_REASON="no_jobs"
+		fi
+	elif [ "${BASH_REMATCH[3]}" = "1" ]; then
+		WATCH_RESULT="runner_wait"
+		if [ "${BASH_REMATCH[4]}" -eq 0 ]; then
+			WATCH_RESULT_REASON="never_assigned"
+		else
+			WATCH_RESULT_REASON="late_assigned"
+		fi
+	else
+		WATCH_RESULT_REASON="ran_early"
+	fi
+fi
+echo "DISPATCH_WATCH_RESULT outcome=${WATCH_RESULT} run=${NEW_ID} reason=${WATCH_RESULT_REASON} jobs=${WATCH_JOBS_COUNT} queued_without_runner=${WATCH_JOBS_QUEUED_NO_RUNNER}"
+echo "watch_result=${WATCH_RESULT}" >> "${GITHUB_OUTPUT}"
 
 WATCH_CANCEL_SWITCH="$(printf '%s' "${DISPATCH_WATCH_CANCEL_ON_TIMEOUT:-true}" | tr '[:upper:]' '[:lower:]')"
 case "${WATCH_CANCEL_SWITCH}" in
@@ -394,6 +541,14 @@ case "${WATCH_CANCEL_SWITCH}" in
 		echo "Cancel of watched run #${NEW_ID} skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT unrecognised)"
 		;;
 esac
+
+# Stop the release gate on a runner wait (issue #10037). Off unless the gate
+# sets DISPATCH_WATCH_STOP_RELEASE_GATE=true, so other callers are unchanged.
+# When the stop lands, the runner kills this step (the job ends cancelled);
+# otherwise the step fails below as before.
+if [ "${WATCH_RESULT}" = "runner_wait" ] && [ "$(printf '%s' "${DISPATCH_WATCH_STOP_RELEASE_GATE:-false}" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
+	dispatch_watch_stop_release_gate "${NEW_ID}" "${DISPLAY_NAME}" "${WATCH_RESULT_REASON}" || true
+fi
 
 echo "::error::${DISPLAY_NAME} run #${NEW_ID} timed out"
 exit 1

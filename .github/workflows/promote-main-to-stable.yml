@@ -1,5 +1,9 @@
 ---
 name: Promote main to stable
+# A poller retry of the daily cycle (issue #10037) carries its own title so the
+# cycle's attempt budget and the poller can tell it from a promotion; schedule
+# and target_sha runs keep the workflow name as their title.
+run-name: ${{ inputs.cycle_retry && 'Promote main to stable [cycle-retry]' || 'Promote main to stable' }}
 
 # Use this workflow when `main` is ready to become the new stable
 # baseline (typically a minor or major version bump). It does two
@@ -52,6 +56,14 @@ name: Promote main to stable
     - cron: "0 0 * * *"
   workflow_dispatch:
     inputs:
+      cycle_retry:
+        description: >
+          Poller-only: re-run the daily cycle after a runner_wait_long skip
+          (issue #10037); never promotes. Routes the run to the `cycle` job
+          instead of the `promote` job.
+        required: false
+        type: boolean
+        default: false
       target_sha:
         description: >
           Optional commit on `main` to fast-forward `stable` to instead of
@@ -126,7 +138,9 @@ permissions:
 
 jobs:
   cycle:
-    if: github.event_name == 'schedule'
+    # A poller retry (cycle_retry=true, issue #10037) runs the same guarded
+    # cycle; it never reaches the promote job below.
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.cycle_retry == true)
     runs-on: ubuntu-latest
     # The smoke gate alone can take ~2-3h. The default 30m idle wait plus 5h
     # smoke wait leaves 10m for setup and cleanup under this job cap.
@@ -172,12 +186,23 @@ jobs:
           APPLY_ANALYSIS_ON_MAIN_ENABLED: ${{ vars.APPLY_ANALYSIS_ON_MAIN_ENABLED || 'true' }}
           COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS: ${{ vars.COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS || 'OWNER,MEMBER,COLLABORATOR' }}
           ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}
+          # Runner-wait check before the smoke gate (issue #10037); 0 turns it
+          # off. The bound reuses the auto-release back-off window.
+          RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES: ${{ vars.RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES || '30' }}
+          AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS: ${{ vars.AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS || '24' }}
         run: |
           set -euo pipefail
           bash scripts/promote_main_cycle.sh
 
+      # Marker the orchestrator poller reads (one jobs read) to retry a cycle
+      # skipped with runner_wait_long later the same day (issue #10037). The
+      # step name is a contract with scripts/promote_main_cycle.sh.
+      - name: Record runner-wait skip for the poller retry
+        if: steps.cycle.outputs.outcome == 'skipped:runner_wait_long'
+        run: echo "PROMOTE_CYCLE_RETRY_MARKER run=${GITHUB_RUN_ID}"
+
   promote:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.cycle_retry != true
     runs-on: ubuntu-latest
     timeout-minutes: 10
     concurrency:

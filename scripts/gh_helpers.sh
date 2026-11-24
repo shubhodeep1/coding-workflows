@@ -4454,3 +4454,96 @@ zombie_queued_log_ignored()
 	done <<< "${_zq_rows}"
 	return 0
 }
+
+# ---------------------------------------------------------------
+# Release-gate runner wait (issue #10037)
+#
+# release_gate_oldest_queued_wait <repo> <limit_minutes> <zq_cutoff_epoch>
+#
+# Measures how long the oldest live queued run of <repo> has waited for a
+# runner, for the release scripts' runner_wait_long skip
+# (scripts/auto_release_stable.sh, scripts/promote_main_cycle.sh).
+# Only runs created between the wedged-queued cutoff (zombie_queued_cutoff_epoch,
+# 0 = no lower bound) and now - <limit_minutes> are read, so the answer is
+# "is any live run queued for at least the limit, and the oldest one's age".
+#
+# Output: exactly one line on stdout, always exit 0 (fail open):
+#   outcome=<long|short|read_failed> oldest_queued_min=<n|-> queued_in_window=<n|-> calls=<0|1|2>
+#
+# API calls (§14): no existing call in the callers returns queued runs'
+# created_at (they list workflow-scoped runs or a queued count), so:
+#   call 1  GET repos/<repo>/actions/runs?status=queued&created=<lower>..<upper>&per_page=100
+#   call 2  only when total_count > 100: the last page (newest first, so the
+#           oldest runs are there), capped at page 10 (the API's 1,000-result
+#           limit).
+# Any failed or unparseable read prints outcome=read_failed.
+# ---------------------------------------------------------------
+release_gate_oldest_queued_wait()
+{
+	local _rgw_repo="${1:-}" _rgw_limit="${2:-}" _rgw_cutoff="${3:-0}"
+	local _rgw_now="" _rgw_upper_epoch="" _rgw_upper="" _rgw_lower="" _rgw_json="" _rgw_total="" _rgw_page="" _rgw_calls=0 _rgw_oldest=""
+	local _rgw_jq_def=""
+	if ! [[ "${_rgw_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || ! [[ "${_rgw_limit}" =~ ^[0-9]{1,6}$ ]]; then
+		echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=0"
+		return 0
+	fi
+	[[ "${_rgw_cutoff}" =~ ^[0-9]+$ ]] || _rgw_cutoff=0
+	_rgw_now="$(date -u +%s 2>/dev/null || true)"
+	if ! [[ "${_rgw_now}" =~ ^[0-9]+$ ]]; then
+		echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=0"
+		return 0
+	fi
+	_rgw_upper_epoch=$(( _rgw_now - 10#${_rgw_limit} * 60 ))
+	_rgw_upper="$(date -u -d "@${_rgw_upper_epoch}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+	if [ "${_rgw_cutoff}" -gt 0 ]; then
+		_rgw_lower="$(date -u -d "@$(( _rgw_cutoff + 1 ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+	else
+		_rgw_lower="1970-01-01T00:00:00Z"
+	fi
+	if [ -z "${_rgw_upper}" ] || [ -z "${_rgw_lower}" ]; then
+		echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=0"
+		return 0
+	fi
+	if declare -F zombie_queued_jq_def >/dev/null 2>&1; then
+		_rgw_jq_def="$(zombie_queued_jq_def 2>/dev/null || true)"
+	fi
+	[ -n "${_rgw_jq_def}" ] || _rgw_jq_def='def is_wedged_queued($cutoff): false;'
+	_rgw_calls=1
+	if ! _rgw_json="$(gh_retry gh api -X GET "repos/${_rgw_repo}/actions/runs" -f status=queued -f "created=${_rgw_lower}..${_rgw_upper}" -f per_page=100 2>/dev/null)"; then
+		echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=${_rgw_calls}"
+		return 0
+	fi
+	_rgw_total="$(printf '%s' "${_rgw_json}" | jq -r 'if (.total_count | type) == "number" and (.workflow_runs | type) == "array" then .total_count else empty end' 2>/dev/null || true)"
+	if ! [[ "${_rgw_total}" =~ ^[0-9]+$ ]]; then
+		echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=${_rgw_calls}"
+		return 0
+	fi
+	if [ "${_rgw_total}" -gt 100 ]; then
+		_rgw_page=$(( (_rgw_total + 99) / 100 ))
+		[ "${_rgw_page}" -le 10 ] || _rgw_page=10
+		_rgw_calls=2
+		if ! _rgw_json="$(gh_retry gh api -X GET "repos/${_rgw_repo}/actions/runs" -f status=queued -f "created=${_rgw_lower}..${_rgw_upper}" -f per_page=100 -f "page=${_rgw_page}" 2>/dev/null)" \
+			|| ! printf '%s' "${_rgw_json}" | jq -e '(.workflow_runs | type) == "array"' >/dev/null 2>&1; then
+			echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=${_rgw_calls}"
+			return 0
+		fi
+	fi
+	# Oldest created_at among live queued runs at or before the upper bound
+	# (the server-side range is re-checked here).
+	_rgw_oldest="$(printf '%s' "${_rgw_json}" | jq -r --argjson zq_cutoff "${_rgw_cutoff}" --argjson upper "${_rgw_upper_epoch}" "${_rgw_jq_def}"'
+		[.workflow_runs[]? | select(type == "object")
+			| select(((.status // "") | tostring | ascii_downcase) == "queued")
+			| select(is_wedged_queued($zq_cutoff) | not)
+			| ((.created_at // "") | tostring | sub("\\.[0-9]+Z$"; "Z") | (try fromdateiso8601 catch null)) as $c
+			| select($c != null and $c <= $upper) | $c] | min // empty' 2>/dev/null || true)"
+	if [ -z "${_rgw_oldest}" ]; then
+		echo "outcome=short oldest_queued_min=- queued_in_window=${_rgw_total} calls=${_rgw_calls}"
+		return 0
+	fi
+	if ! [[ "${_rgw_oldest}" =~ ^[0-9]+$ ]]; then
+		echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=${_rgw_calls}"
+		return 0
+	fi
+	echo "outcome=long oldest_queued_min=$(( (_rgw_now - _rgw_oldest) / 60 )) queued_in_window=${_rgw_total} calls=${_rgw_calls}"
+	return 0
+}

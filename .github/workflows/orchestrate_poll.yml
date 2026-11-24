@@ -2043,6 +2043,31 @@ jobs:
       - name: Run worktree registry GC
         run: bash scripts/worktree_gc.sh
 
+      # Same-day retry of a promote cycle skipped with runner_wait_long
+      # (issue #10037, G2): scripts/promote_main_cycle.sh in check-only mode
+      # dispatches promote-main-to-stable.yml with cycle_retry=true at most
+      # once an hour. A step in this existing job, not a new job or cron (§26);
+      # this repository only.
+      - name: Retry a promote cycle skipped for a long runner wait
+        if: github.repository == 'shubhodeep1/coding-workflows'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PROMOTE_CYCLE_RETRY_CHECK_ONLY: "true"
+          PROMOTE_CYCLE_ENABLED: ${{ vars.PROMOTE_CYCLE_ENABLED || 'true' }}
+          RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES: ${{ vars.RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES || '30' }}
+          ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          src=".codex-workflow-src/scripts/promote_main_cycle.sh"
+          if [ ! -f "${src}" ] || ! grep -q 'PROMOTE_CYCLE_RETRY_CHECK_ONLY' "${src}"; then
+            echo "::warning::Promote cycle retry support is not yet staged; the retry check is skipped."
+            exit 0
+          fi
+          install -m 0755 "${src}" scripts/promote_main_cycle.sh
+          bash scripts/promote_main_cycle.sh
+
       # Daily consumer health check (scripts/consumer_health_check.sh), this
       # repository only. The cache entry keyed on the UTC date records that
       # today's check succeeded, so later ticks skip it without an API call;

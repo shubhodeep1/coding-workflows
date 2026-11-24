@@ -1123,7 +1123,7 @@ def _rw_active_job(started_epoch: int) -> dict:
 		"steps": [{"name": "Run reviewer models", "status": "in_progress", "conclusion": None, "started_at": started}]}
 
 
-def _run_phase4_runner_wait(timeline: list[dict]) -> tuple[subprocess.CompletedProcess[str], str]:
+def _run_phase4_runner_wait(timeline: list[dict], extra_env: dict[str, str] | None = None, captured: dict | None = None) -> tuple[subprocess.CompletedProcess[str], str]:
 	"""Run the real Phase 4 body against a fake clock; ``timeline`` entries apply until ``until``."""
 	step = _phase4_step(_read_workflow())
 	body = textwrap.dedent(step.split("        run: |\n", 1)[1])
@@ -1135,10 +1135,19 @@ def _run_phase4_runner_wait(timeline: list[dict]) -> tuple[subprocess.CompletedP
 		env = os.environ.copy()
 		for name in ("BAIT_SHA", "BAIT_CREATED_AT", "E2E_JOB_STARTED_EPOCH", "JOBS_JSON", "RUN_ID", "RUN_STATUS"):
 			env.pop(name, None)
+		for name in ("DISPATCH_WATCH_STOP_RELEASE_GATE", "E2E_RUNNER_WAIT_STOP_HELPER"):
+			env.pop(name, None)
 		env.update({"RUNNER_TEMP": temp, "GITHUB_OUTPUT": str(root / "output"), "TEST_REPO": "owner/repo",
 			"ISSUE_NUMBER": "12", "PR_NUMBER": "13", "TZ": "UTC", **_RW_ENV})
+		# Issue #10037: a stub for the gate-stop helper records its arguments.
+		stop_stub = root / "stop_stub.sh"
+		stop_stub.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$@" > "${RUNNER_TEMP}/stop_args"\nexit 1\n', encoding="utf-8")
+		env["E2E_RUNNER_WAIT_STOP_HELPER"] = str(stop_stub)
+		env.update(extra_env or {})
 		result = subprocess.run(["bash", "-c", body], cwd=REPO_ROOT, env=env, capture_output=True, text=True, timeout=60, check=False)
 		output = (root / "output").read_text(encoding="utf-8") if (root / "output").exists() else ""
+		if captured is not None and (root / "stop_args").exists():
+			captured["stop_args"] = (root / "stop_args").read_text(encoding="utf-8").splitlines()
 		return result, output
 
 
@@ -1193,7 +1202,8 @@ def test_phase4_runner_wait_past_ceiling_names_the_queue() -> None:
 		{"until": _RW_START + 99999, "run": _rw_run("pending"), "jobs": _rw_jobs(_rw_queued_job())},
 	])
 	assert result.returncode == 1, result.stderr + result.stdout
-	assert output.splitlines() == ["status=timeout"]
+	assert output.splitlines() == ["status=timeout", "runner_wait=true"]
+	assert "E2E_REVIEW_RUNNER_WAIT run=30 outcome=runner_wait reason=never_assigned" in result.stdout
 	assert re.search(r"E2E_REVIEW_RUNNER_WAIT run=30 outcome=ceiling waited_seconds=\d+", result.stdout)
 	assert re.search(r"::error::Review run 30 was still waiting for a runner after 2\d minutes \(ceiling reached\); "
 		r"the hosted-runner queue, not the review, blocked the release", result.stdout)
@@ -1211,7 +1221,8 @@ def test_phase4_runner_wait_ceiling_after_unanswered_poll_still_names_the_queue(
 		{"until": _RW_START + 99999, "run": _rw_run("in_progress"), "jobs": None},
 	])
 	assert result.returncode == 1, result.stderr + result.stdout
-	assert output.splitlines() == ["status=timeout"]
+	# The runs lookup still answered, so the open stretch is a runner wait.
+	assert output.splitlines() == ["status=timeout", "runner_wait=true"]
 	assert re.search(r"E2E_REVIEW_RUNNER_WAIT run=30 outcome=ceiling waited_seconds=\d+", result.stdout)
 	assert re.search(r"::error::Review run 30 had been waiting for a runner for 2\d minutes when the ceiling was reached "
 		r"\(the last poll did not answer, so the wait is unconfirmed\); the hosted-runner queue", result.stdout)
@@ -1375,3 +1386,56 @@ def main() -> int:
 
 if __name__ == "__main__":
 	raise SystemExit(main())
+
+
+# ── Phase 4 runner_wait result and gate stop (issue #10037) ──────────────
+
+
+def test_phase4_runner_wait_stops_the_gate_when_enabled() -> None:
+	captured: dict = {}
+	result, output = _run_phase4_runner_wait([
+		{"until": _RW_START + 99999, "run": _rw_run("pending"), "jobs": _rw_jobs(_rw_queued_job())},
+	], extra_env={"DISPATCH_WATCH_STOP_RELEASE_GATE": "true"}, captured=captured)
+	assert result.returncode == 1, result.stderr + result.stdout
+	assert output.splitlines() == ["status=timeout", "runner_wait=true"]
+	assert captured["stop_args"] == ["--stop-release-gate", "--repo", "owner/repo", "--watched-run-id", "30",
+		"--display-name", "review", "--runner-wait-reason", "never_assigned"]
+
+
+def test_phase4_runner_wait_does_not_stop_the_gate_by_default() -> None:
+	captured: dict = {}
+	result, output = _run_phase4_runner_wait([
+		{"until": _RW_START + 99999, "run": _rw_run("pending"), "jobs": _rw_jobs(_rw_queued_job())},
+	], captured=captured)
+	assert result.returncode == 1
+	assert "runner_wait=true" in output.splitlines()
+	assert "stop_args" not in captured
+
+
+def test_phase4_runner_assigned_in_the_last_third_is_late_assigned() -> None:
+	# Pending past the base deadline (extension holds), then the run gets a
+	# runner at about start+1505; the wall budget then ends the phase.
+	captured: dict = {}
+	result, output = _run_phase4_runner_wait([
+		{"until": _RW_START + 1500, "run": _rw_run("pending"), "jobs": _rw_jobs(_rw_queued_job())},
+		{"until": _RW_START + 99999, "run": _rw_run("in_progress"), "jobs": _rw_jobs(_rw_active_job(_RW_START + 1500))},
+	], extra_env={"DISPATCH_WATCH_STOP_RELEASE_GATE": "true"}, captured=captured)
+	assert result.returncode == 1, result.stderr + result.stdout
+	assert output.splitlines() == ["status=timeout", "runner_wait=true"], result.stdout
+	assert "E2E_REVIEW_RUNNER_WAIT run=30 outcome=runner_wait reason=late_assigned" in result.stdout
+	assert captured["stop_args"][-1] == "late_assigned"
+
+
+def test_phase4_unconfirmed_long_empty_lookup_is_not_a_runner_wait() -> None:
+	result, output = _run_phase4_runner_wait([
+		{"until": _RW_START + 700, "run": _rw_run("pending"), "jobs": _rw_jobs(_rw_queued_job())},
+		{"until": _RW_START + 99999, "run": None, "jobs": None},
+	], extra_env={"DISPATCH_WATCH_STOP_RELEASE_GATE": "true"})
+	assert output.splitlines() == ["status=timeout"]
+	assert "outcome=runner_wait" not in result.stdout
+
+
+def test_gate_workflow_enables_the_runner_wait_stop() -> None:
+	raw = WORKFLOW.read_text(encoding="utf-8")
+	env_block = raw[raw.index("\nenv:\n"):raw.index("\npermissions:\n")]
+	assert '  DISPATCH_WATCH_STOP_RELEASE_GATE: "true"\n' in env_block

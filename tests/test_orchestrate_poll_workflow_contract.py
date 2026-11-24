@@ -872,3 +872,23 @@ def main() -> int:
 
 if __name__ == "__main__":
 	raise SystemExit(main())
+
+
+def test_promote_cycle_runner_wait_retry_step_is_wired() -> None:
+	"""Issue #10037 (G2): the poller retries a runner_wait_long promote skip."""
+	wf = _workflow()
+	step = _step_block(wf, "Retry a promote cycle skipped for a long runner wait")
+	assert wf.index("      - name: Run worktree registry GC\n") < wf.index("      - name: Retry a promote cycle skipped for a long runner wait\n")
+	assert "        if: github.repository == 'shubhodeep1/coding-workflows'\n" in step
+	assert "        continue-on-error: true\n" in step
+	assert "          GH_TOKEN: ${{ secrets.GH_PAT }}\n" in step
+	assert '          PROMOTE_CYCLE_RETRY_CHECK_ONLY: "true"\n' in step
+	assert "          PROMOTE_CYCLE_ENABLED: ${{ vars.PROMOTE_CYCLE_ENABLED || 'true' }}\n" in step
+	assert "          RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES: ${{ vars.RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES || '30' }}\n" in step
+	assert "          ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}\n" in step
+	assert 'src=".codex-workflow-src/scripts/promote_main_cycle.sh"' in step
+	assert "grep -q 'PROMOTE_CYCLE_RETRY_CHECK_ONLY' \"${src}\"" in step
+	assert 'install -m 0755 "${src}" scripts/promote_main_cycle.sh' in step
+	assert step.index("install -m 0755") < step.index("          bash scripts/promote_main_cycle.sh\n")
+	script = (REPO_ROOT / "scripts" / "promote_main_cycle.sh").read_text(encoding="utf-8")
+	assert 'PROMOTE_CYCLE_RETRY_CHECK_ONLY="${PROMOTE_CYCLE_RETRY_CHECK_ONLY:-false}"' in script

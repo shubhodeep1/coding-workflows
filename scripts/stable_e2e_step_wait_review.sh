@@ -64,6 +64,10 @@ REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED=0
 # runner, cleared when it starts, completes or is replaced.
 REVIEW_RUNNER_WAIT_SINCE=""
 REVIEW_RUNNER_WAIT_RUN_ID=""
+# When and for which run the last stretch closed (issue #10037): a runner
+# assigned only in the last third of the budget is a late assignment.
+REVIEW_RUNNER_WAIT_CLOSED_AT=""
+REVIEW_RUNNER_WAIT_CLOSED_RUN_ID=""
 # Consecutive polls whose runs lookup came back empty (#9480).
 REVIEW_RUNNER_WAIT_EMPTY_POLLS=0
 if [[ "${E2E_JOB_STARTED_EPOCH:-}" =~ ^[0-9]+$ ]] \
@@ -377,7 +381,34 @@ while true; do
         fi
       fi
       echo "::error::Review phase exceeded its ${REVIEW_PHASE_WALL_BUDGET_MINUTES}-minute total wall-clock budget$(e2e_watched_run_urls)"
+      # Runner wait (issue #10037, G3): the watched review run never got a
+      # runner (the stretch is still open and the runs lookup still answers),
+      # or got one only in the last third of the time spent here. status
+      # stays timeout (Phase 4d reads it); runner_wait=true is added, and with
+      # DISPATCH_WATCH_STOP_RELEASE_GATE=true the gate stops itself so the run
+      # ends cancelled instead of failed. Anything else fails as before.
+      rw_result_reason=""
+      rw_result_run=""
+      if [ -n "$REVIEW_RUNNER_WAIT_SINCE" ] && [[ "${REVIEW_RUNNER_WAIT_RUN_ID}" =~ ^[0-9]+$ ]] \
+          && [ "${REVIEW_RUNNER_WAIT_EMPTY_POLLS:-0}" -le 2 ]; then
+        rw_result_reason="never_assigned"
+        rw_result_run="${REVIEW_RUNNER_WAIT_RUN_ID}"
+      elif [[ "${REVIEW_RUNNER_WAIT_CLOSED_RUN_ID}" =~ ^[0-9]+$ ]] && [ "${REVIEW_RUNNER_WAIT_CLOSED_RUN_ID}" = "${RUN_ID:-}" ] \
+          && [[ "${REVIEW_RUNNER_WAIT_CLOSED_AT}" =~ ^[0-9]+$ ]] \
+          && [ "${REVIEW_RUNNER_WAIT_CLOSED_AT}" -ge $(( REVIEW_PHASE_STARTED_AT + 2 * (NOW - REVIEW_PHASE_STARTED_AT) / 3 )) ]; then
+        rw_result_reason="late_assigned"
+        rw_result_run="${REVIEW_RUNNER_WAIT_CLOSED_RUN_ID}"
+      fi
       echo "status=timeout" >> "$GITHUB_OUTPUT"
+      if [ -n "${rw_result_reason}" ]; then
+        echo "E2E_REVIEW_RUNNER_WAIT run=${rw_result_run} outcome=runner_wait reason=${rw_result_reason}"
+        echo "runner_wait=true" >> "$GITHUB_OUTPUT"
+        if [ "$(printf '%s' "${DISPATCH_WATCH_STOP_RELEASE_GATE:-false}" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
+          bash "${E2E_RUNNER_WAIT_STOP_HELPER:-./scripts/dispatch_and_watch_workflow_run.sh}" --stop-release-gate \
+            --repo "${TEST_REPO}" --watched-run-id "${rw_result_run}" --display-name review \
+            --runner-wait-reason "${rw_result_reason}" || true
+        fi
+      fi
       exit 1
     fi
   fi
@@ -539,6 +570,8 @@ while true; do
     # the wait here, before the completed-run exits below.
     if [ "$RUN_STATUS" = "completed" ] && [ -n "${REVIEW_RUNNER_WAIT_RUN_ID}" ] && [ "${REVIEW_RUNNER_WAIT_RUN_ID}" = "${RUN_ID}" ]; then
       echo "E2E_REVIEW_RUNNER_WAIT run=${RUN_ID} outcome=started waited_seconds=$((NOW - REVIEW_RUNNER_WAIT_SINCE))"
+      REVIEW_RUNNER_WAIT_CLOSED_AT="$NOW"
+      REVIEW_RUNNER_WAIT_CLOSED_RUN_ID="${REVIEW_RUNNER_WAIT_RUN_ID}"
       REVIEW_RUNNER_WAIT_SINCE=""
       REVIEW_RUNNER_WAIT_RUN_ID=""
     fi
@@ -888,6 +921,8 @@ while true; do
     if [ "${REVIEW_RUNNER_WAIT_RUN_ID}" = "${RUN_ID}" ]; then
       echo "E2E_REVIEW_RUNNER_WAIT run=${RUN_ID} outcome=started waited_seconds=$((NOW - REVIEW_RUNNER_WAIT_SINCE))"
     fi
+    REVIEW_RUNNER_WAIT_CLOSED_AT="$NOW"
+    REVIEW_RUNNER_WAIT_CLOSED_RUN_ID="${REVIEW_RUNNER_WAIT_RUN_ID}"
     REVIEW_RUNNER_WAIT_SINCE=""
     REVIEW_RUNNER_WAIT_RUN_ID=""
   fi

@@ -59,6 +59,15 @@ while [ "$#" -gt 0 ]; do
 	esac
 done
 case "${path}" in
+	*"/actions/runs/4242/jobs"*)
+		[ -n "${STUB_JOBS_BODY:-}" ] || exit 1
+		body="${STUB_JOBS_BODY}" ;;
+	*"/actions/runs/9999/jobs"*)
+		[ -n "${STUB_GATE_JOBS_BODY:-}" ] || exit 1
+		body="${STUB_GATE_JOBS_BODY}" ;;
+	*"/actions/runs/9999/cancel")
+		[ "${STUB_GATE_CANCEL_FAIL:-0}" = "1" ] && exit 1
+		body='{}' ;;
 	*"/runs?event=workflow_dispatch&per_page=1") body='{"workflow_runs":[]}' ;;
 	*"/runs?event=workflow_dispatch&"*) body='{"workflow_runs":[{"id":4242,"created_at":"2026-11-15T01:26:16Z"}]}' ;;
 	*"/actions/runs/4242/cancel")
@@ -95,6 +104,8 @@ def _run_watcher(
 	cancel_switch: str | None = None,
 	status_fail: bool = False,
 	cancel_fail: bool = False,
+	extra_env: dict[str, str] | None = None,
+	args: list[str] | None = None,
 ) -> tuple[int, str, list[str], str]:
 	bash = shutil.which("bash")
 	assert bash is not None
@@ -124,17 +135,20 @@ def _run_watcher(
 		}
 		if cancel_switch is not None:
 			env["DISPATCH_WATCH_CANCEL_ON_TIMEOUT"] = cancel_switch
+		env.update(extra_env or {})
 		proc = subprocess.run(
 			[
 				bash,
 				"scripts/dispatch_and_watch_workflow_run.sh",
-				"--repo", "owner/repo",
-				"--workflow", "internal-validate.yml",
-				"--display-name", "validate",
-				"--registration-timeout-secs", "30",
-				"--registration-poll-interval-secs", "1",
-				"--completion-timeout-secs", "2",
-				"--completion-poll-interval-secs", "1",
+				*(args if args is not None else [
+					"--repo", "owner/repo",
+					"--workflow", "internal-validate.yml",
+					"--display-name", "validate",
+					"--registration-timeout-secs", "30",
+					"--registration-poll-interval-secs", "1",
+					"--completion-timeout-secs", "2",
+					"--completion-poll-interval-secs", "1",
+				]),
 			],
 			cwd=tmp,
 			env=env,
@@ -239,6 +253,129 @@ def test_failed_completion_makes_no_cancel() -> None:
 	assert not _cancels(calls), calls
 	assert "watch diagnosis" not in out, out
 	assert "timed out" not in out, out
+
+
+# --- Runner-wait classification and gate stop (issue #10037) ---
+
+import json
+from datetime import datetime, timedelta, timezone
+
+GATE_CANCEL_CALL = "api -X POST repos/owner/gate/actions/runs/9999/cancel"
+GATE_ENV = {"GITHUB_RUN_ID": "9999", "GITHUB_REPOSITORY": "owner/gate", "DISPATCH_WATCH_STOP_WAIT_SECS": "0"}
+
+
+def _iso(delta_seconds: int) -> str:
+	return (datetime.now(timezone.utc) + timedelta(seconds=delta_seconds)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _jobs(*jobs: dict) -> str:
+	return json.dumps({"total_count": len(jobs), "jobs": list(jobs)})
+
+
+QUEUED_JOB = {"id": 1, "status": "queued", "runner_name": "", "steps": []}
+LATE_JOB = {"id": 2, "status": "in_progress", "runner_name": "GitHub Actions 7", "steps": [{"name": "Set up job", "started_at": _iso(3600)}]}
+EARLY_JOB = {"id": 3, "status": "in_progress", "runner_name": "GitHub Actions 8", "steps": [{"name": "Set up job", "started_at": "2020-01-01T00:00:00Z"}]}
+RUNNER_NO_STEPS_JOB = {"id": 4, "status": "in_progress", "runner_name": "GitHub Actions 9", "steps": []}
+
+
+def _result_line(out: str) -> str:
+	return next(line for line in out.splitlines() if line.startswith("DISPATCH_WATCH_RESULT "))
+
+
+def _gate_calls(calls: list[str]) -> list[str]:
+	return [c for c in calls if "owner/gate" in c]
+
+
+def test_never_assigned_job_is_runner_wait() -> None:
+	rc, out, calls, github_output = _run_watcher(extra_env={"STUB_JOBS_BODY": _jobs(QUEUED_JOB)})
+	assert rc == 1, out
+	assert _result_line(out) == "DISPATCH_WATCH_RESULT outcome=runner_wait run=4242 reason=never_assigned jobs=1 queued_without_runner=1"
+	assert "watch_result=runner_wait" in github_output.splitlines(), github_output
+	assert _cancels(calls) == [CANCEL_CALL], calls
+	# Stop is off by default: no gate calls, the timeout line stays last.
+	assert not _gate_calls(calls), calls
+	assert out.splitlines()[-1] == TIMEOUT_LINE, out
+
+
+def test_empty_jobs_list_counts_only_when_queued_the_whole_time() -> None:
+	rc, out, _, _ = _run_watcher(extra_env={"STUB_JOBS_BODY": _jobs()})
+	assert "outcome=runner_wait run=4242 reason=never_assigned jobs=0" in _result_line(out), out
+	rc, out, _, github_output = _run_watcher(run_status="in_progress", extra_env={"STUB_JOBS_BODY": _jobs()})
+	assert "outcome=timeout run=4242 reason=no_jobs" in _result_line(out), out
+	assert "watch_result=timeout" in github_output.splitlines()
+
+
+def test_late_assigned_job_is_runner_wait() -> None:
+	rc, out, _, _ = _run_watcher(run_status="in_progress", extra_env={"STUB_JOBS_BODY": _jobs(LATE_JOB, QUEUED_JOB)})
+	assert rc == 1, out
+	assert _result_line(out) == "DISPATCH_WATCH_RESULT outcome=runner_wait run=4242 reason=late_assigned jobs=2 queued_without_runner=1"
+
+
+def test_job_that_ran_early_and_overran_is_a_timeout() -> None:
+	for jobs in ((EARLY_JOB,), (LATE_JOB, EARLY_JOB), (RUNNER_NO_STEPS_JOB,)):
+		rc, out, calls, github_output = _run_watcher(run_status="in_progress", extra_env={"STUB_JOBS_BODY": _jobs(*jobs), **GATE_ENV, "DISPATCH_WATCH_STOP_RELEASE_GATE": "true"})
+		assert rc == 1, out
+		assert "outcome=timeout run=4242 reason=ran_early" in _result_line(out), (jobs, out)
+		assert "watch_result=timeout" in github_output.splitlines()
+		assert not _gate_calls(calls), calls
+		assert out.splitlines()[-1] == TIMEOUT_LINE, out
+
+
+def test_unreadable_jobs_is_a_timeout() -> None:
+	rc, out, calls, _ = _run_watcher(extra_env={**GATE_ENV, "DISPATCH_WATCH_STOP_RELEASE_GATE": "true"})
+	assert rc == 1, out
+	assert "outcome=timeout run=4242 reason=jobs_unreadable jobs=- queued_without_runner=-" in _result_line(out), out
+	assert not _gate_calls(calls), calls
+
+
+def test_runner_wait_with_stop_enabled_cancels_the_gate() -> None:
+	env = {"STUB_JOBS_BODY": _jobs(QUEUED_JOB), "STUB_GATE_JOBS_BODY": _jobs({"id": 7, "conclusion": None}, {"id": 8, "conclusion": "success"}), **GATE_ENV, "DISPATCH_WATCH_STOP_RELEASE_GATE": "TRUE"}
+	rc, out, calls, _ = _run_watcher(extra_env=env)
+	assert rc == 1, out
+	assert "RELEASE_GATE_RUNNER_WAIT outcome=cancel_requested gate_run=9999 watched_run=4242 reason=never_assigned display_name=validate" in out, out
+	assert GATE_CANCEL_CALL in calls, calls
+	# The child is cancelled before the gate.
+	assert calls.index(CANCEL_CALL) < calls.index(GATE_CANCEL_CALL)
+	# The stub runner never kills the step: the stop is reported as failed
+	# and the timeout line stays last for the workflow's parser.
+	assert "RELEASE_GATE_RUNNER_WAIT outcome=stop_failed detail=still_running gate_run=9999" in out, out
+	assert out.splitlines()[-1] == TIMEOUT_LINE, out
+
+
+def test_runner_wait_does_not_cancel_a_gate_with_a_real_failure() -> None:
+	env = {"STUB_JOBS_BODY": _jobs(QUEUED_JOB), "STUB_GATE_JOBS_BODY": _jobs({"id": 7, "conclusion": "failure"}), **GATE_ENV, "DISPATCH_WATCH_STOP_RELEASE_GATE": "true"}
+	rc, out, calls, _ = _run_watcher(extra_env=env)
+	assert rc == 1, out
+	assert "RELEASE_GATE_RUNNER_WAIT outcome=real_failure_present gate_run=9999 watched_run=4242" in out, out
+	assert GATE_CANCEL_CALL not in calls, calls
+	assert out.splitlines()[-1] == TIMEOUT_LINE, out
+
+
+def test_runner_wait_stop_failures_keep_the_timeout_line_last() -> None:
+	cases = (
+		({"STUB_GATE_JOBS_BODY": _jobs()}, "detail=cancel_failed", {"STUB_GATE_CANCEL_FAIL": "1"}),
+		({}, "detail=gate_jobs_unreadable", {}),
+		({"STUB_GATE_JOBS_BODY": _jobs(), "GITHUB_RUN_ID": "abc"}, "detail=no_gate_run", {}),
+	)
+	for env_extra, detail, more in cases:
+		env = {"STUB_JOBS_BODY": _jobs(QUEUED_JOB), **GATE_ENV, "DISPATCH_WATCH_STOP_RELEASE_GATE": "true", **env_extra, **more}
+		rc, out, _, _ = _run_watcher(extra_env=env)
+		assert rc == 1, out
+		assert f"RELEASE_GATE_RUNNER_WAIT outcome=stop_failed {detail}" in out, (detail, out)
+		assert out.splitlines()[-1] == TIMEOUT_LINE, out
+
+
+def test_stop_release_gate_cli_mode_cancels_child_and_gate() -> None:
+	env = {"STUB_GATE_JOBS_BODY": _jobs({"id": 7, "conclusion": None}), **GATE_ENV}
+	args = ["--stop-release-gate", "--repo", "owner/repo", "--watched-run-id", "4242", "--display-name", "review", "--runner-wait-reason", "late_assigned"]
+	rc, out, calls, _ = _run_watcher(extra_env=env, args=args)
+	assert rc == 1, out
+	assert calls[0] == CANCEL_CALL, calls
+	assert GATE_CANCEL_CALL in calls, calls
+	assert "RELEASE_GATE_RUNNER_WAIT outcome=cancel_requested gate_run=9999 watched_run=4242 reason=late_assigned display_name=review" in out, out
+	# Bad arguments never call the API.
+	rc, out, calls, _ = _run_watcher(extra_env=env, args=["--stop-release-gate", "--repo", "owner/repo", "--watched-run-id", "x"])
+	assert rc == 2 and not calls, (out, calls)
 
 
 def main() -> int:
