@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION (not a finding; HARDENING_RISK_SCORE: 1): scripts/review_single_issue_security_pass.sh | location: single_pass_lease_holder_exempt, inside the `lease_check_token=\"$( ... )\"` subshell, just before `_merge_lease_read \"${lease_check_base}\"`\n  PROBLEM: `_merge_lease_read` goes through gh_helpers' `gh_retry`, which defaults to `GH_RETRY_MAX_ATTEMPTS=5` with backoff (scripts/gh_helpers.sh:2153). A lease read that keeps failing retries several times before the gate falls back to the throttle. The hold outcome is correct, but the gate loses time. The new tests set `GH_RETRY_MAX_ATTEMPTS=1`, which hides the delay.\n  WHY: suggested minimal fix: inside the subshell, set `GH_RETRY_MAX_ATTEMPTS=\"${GH_RETRY_MAX_ATTEMPTS:-2}\"` before the read (estimated lines changed: 1).\n- NOTE: rejected the pass-1 TASK_GAP \"deterministic-skip step does not pass MERGE_LEASE_ENABLED or MERGE_LEASE_MAX_HOLDERS\". The job env at .github/workflows/review_autofix.yml line 1220 and line 1227 is inherited by the step at line 1306. scripts/review_autofix_step_deterministic_skip_security_pass.sh:191-200 only adds variables.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n- HARDENING_SUGGESTION (not a finding; HARDENING_RISK_SCORE: 1): scripts/review_single_issue_security_pass.sh | location: `single_pass_lease_holder_exempt`, inside the subshell (around line 588)\n  PROBLEM: The lease read uses `gh_retry` from `gh_helpers.sh`, which defaults to 5 retries with backoff. If the lease read keeps failing, the gate hangs for a long time before falling back to the throttle.\n  WHY: suggested minimal fix: inside the subshell, set `GH_RETRY_MAX_ATTEMPTS=\"${GH_RETRY_MAX_ATTEMPTS:-2}\"` before calling `_merge_lease_read` (estimated lines changed: 1).\n- NOTE: called the deterministic-skip env-var TASK_GAP a false positive. `test_review_wiring` in `tests/test_single_issue_security_pass.py` confirms the variables are injected.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- NOTE: rejected the pass-1 TASK_GAP from openai_gpt-6-luna about the step at `.github/workflows/review_autofix.yml:1283` as incorrect. `MERGE_LEASE_ENABLED` (line 1220) and `MERGE_LEASE_MAX_HOLDERS` (line 1227) are set in the job-level env and inherited, because the step env at lines 1291-1318 does not redefine them. `scripts/review_autofix_step_deterministic_skip_security_pass.sh:191-201` inline assignments only add vars. Reported the implementation as complete against the linked issue.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n- NOTE: HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING_SUGGESTION (not a finding; HARDENING_RISK_SCORE: 1): scripts/review_single_issue_security_pass.sh | location: `single_pass_lease_holder_exempt`, inside the subshell before `_merge_lease_read` (around line 588)\n  PROBLEM: the lease read goes through `gh_retry`, whose default `GH_RETRY_MAX_ATTEMPTS` is 5 with backoff. A lease read that keeps failing delays the fail-safe throttle hold by several retries with backoff on every gate run. The new tests hide this by setting `GH_RETRY_MAX_ATTEMPTS=1`, but production does not cap it.\n  WHY: suggested minimal fix: inside the subshell before the read, add `GH_RETRY_MAX_ATTEMPTS=\"${GH_RETRY_MAX_ATTEMPTS:-2}\"` (estimated lines changed: 1).\n- NOTE: refuted the pass-1 CONSENSUS TASK GAP. Lease vars reach the deterministic-skip gate through the job-level env at review_autofix.yml:1220/1227, and the new lines 4705-4706 cover the codex-agent gate step. The reviewer also confirmed these points:\n  - Lease helper semantics: pr_checks_lib.sh:2900-2928, 3013, 3073-3076.\n  - The `max_concurrent -gt 0` guard is at line 1377.\n  - `base` is defined at line 1072.\n  - The test_merge_lease.py counts hold.\n  - The pre-push gate failures are baseline-timeout artifacts, and CI on the head SHA shows `failed_count: 0`.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "41fdce77b3f8fb64e08c9e6ea46b9a10efaba643d012eba7ccebcde1d88437ff",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10021,
+    "run_id": "45295602835",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45295602835",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124020000_2325594fd7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10021,
+    "run_id": "45295602835"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-24T02:00:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
