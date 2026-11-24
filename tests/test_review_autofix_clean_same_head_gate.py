@@ -893,6 +893,9 @@ def test_gate_final_ci_repair_skips_a_head_whose_final_ci_turned_green(tmp_path:
 	assert outputs["final_ci_repair"] == "false" and outputs["final_ci_repair_attempt"] == ""
 	assert outputs["should_run"] == "false" and outputs["skip_reason"] == "final_ci_now_green"
 	assert "outcome=selected" not in result.stdout
+	# One searchable skip line per skip (issue #4985).
+	assert f"AUTOFIX_GATE_SKIP reason=final_ci_now_green pr=42 head_sha={HEAD}" in result.stdout
+	assert result.stdout.count("AUTOFIX_GATE_SKIP ") == 1
 	assert _statuses_calls(calls) == 1
 
 
