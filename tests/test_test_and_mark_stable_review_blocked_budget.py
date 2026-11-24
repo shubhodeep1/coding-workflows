@@ -1263,7 +1263,8 @@ def test_phase4_active_step_without_state_change_still_stalls() -> None:
 		{"until": _RW_START + 99999, "run": _rw_run("in_progress"), "jobs": _rw_jobs(_rw_active_job(_RW_START))},
 	])
 	assert result.returncode == 1, result.stderr + result.stdout
-	assert output.splitlines() == ["status=timeout"]
+	# The inactivity-stall path also writes timeout_reason (#9619); a started run is inactivity.
+	assert output.splitlines() == ["status=timeout", "timeout_reason=inactivity"]
 	assert "Review phase stalled" in result.stdout
 	assert "E2E_REVIEW_RUNNER_WAIT" not in result.stdout
 
@@ -1273,7 +1274,8 @@ def test_phase4_runner_wait_missing_jobs_json_keeps_inactivity_rules() -> None:
 		{"until": _RW_START + 99999, "run": _rw_run("in_progress"), "jobs": None},
 	])
 	assert result.returncode == 1, result.stderr + result.stdout
-	assert output.splitlines() == ["status=timeout"]
+	# The inactivity-stall path also writes timeout_reason (#9619); a started run is inactivity.
+	assert output.splitlines() == ["status=timeout", "timeout_reason=inactivity"]
 	assert "Review phase stalled" in result.stdout
 	assert "E2E_REVIEW_RUNNER_WAIT" not in result.stdout
 
