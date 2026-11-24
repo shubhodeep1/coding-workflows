@@ -684,7 +684,8 @@ import tempfile as _mock_store_tempfile
 import time as _mock_store_time
 
 _MOCK_STORE_LOCK_HANDLE = None
-_MOCK_STORE_LOCK_WAIT_SECONDS = 30.0
+# Test-only override so the fail-open path can be exercised quickly; 30s default.
+_MOCK_STORE_LOCK_WAIT_SECONDS = float(_mock_store_os.environ.get("GH_MOCK_STORE_LOCK_WAIT_SECONDS", "30") or "30")
 
 
 def _mock_store_lock_acquire(store_path):
@@ -703,7 +704,7 @@ def _mock_store_lock_acquire(store_path):
 			if _mock_store_time.monotonic() >= lock_deadline:
 				lock_handle.close()
 				_mock_store_sys.stderr.write(
-					f"poller mock store: lock wait exceeded {_MOCK_STORE_LOCK_WAIT_SECONDS:.0f}s for {store_path}; continuing unlocked\n"
+					f"poller mock store: lock wait exceeded {_MOCK_STORE_LOCK_WAIT_SECONDS:g}s for {store_path}; continuing unlocked\n"
 				)
 				return
 			_mock_store_time.sleep(0.005)
@@ -10516,8 +10517,20 @@ def test_poller_mock_store_concurrent_writers_keep_every_update() -> None:
 				check=False,
 				timeout=20,
 			)
+			# Past the bounded wait a fake must say on stderr that it continues
+			# unlocked, so a degraded run is visible rather than a silent race.
+			timed_out_result = subprocess.run(
+				[sys.executable, str(writer_script)],
+				env={**writer_env, "GH_MOCK_STORE_LOCK_WAIT_SECONDS": "0.2"},
+				capture_output=True,
+				text=True,
+				check=False,
+				timeout=20,
+			)
 		assert nested_result.returncode == 0, nested_result.stderr
-		assert json.loads(store_file.read_text(encoding="utf-8"))["pr_get_calls"]["395"] == writer_count + 1
+		assert timed_out_result.returncode == 0, timed_out_result.stderr
+		assert "lock wait exceeded" in timed_out_result.stderr and "continuing unlocked" in timed_out_result.stderr
+		assert json.loads(store_file.read_text(encoding="utf-8"))["pr_get_calls"]["395"] == writer_count + 2
 		assert not list(tmp_dir.glob(".mock-store-*.tmp"))
 
 	run_poller_source = inspect.getsource(_run_poller)
