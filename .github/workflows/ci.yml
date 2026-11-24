@@ -4109,9 +4109,9 @@ jobs:
       # it measured 15m19s (run 43352637124, #9450, later than #9363's run), so
       # what raised it to 19m01s is not identified. This job has the only
       # 30-minute budget. Group choice: the
-      # newest recorded overruns (#9839 and #9854 above; #9916 then raised the
-      # timeout to 30 minutes) name shards 0 and 3, which hit
-      # 20.2 minutes; group 1 has not been named by budget-watch since #8805
+      # newest recorded overruns above name only shards 0 and 3 (#9839: shards
+      # 0 and 3 at 20.2 minutes; #9854: shard 0, no duration recorded; #9916
+      # then raised the timeout to 30 minutes); group 1 has not been named by budget-watch since #8805
       # moved a step out after it took 16m44s (its 20m12s in #8396 predates
       # that and the step it carried then now runs in group 3). Groups 2 and 4
       # pin four and three steps. Group 1 still pins the review-pipeline
