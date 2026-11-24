@@ -713,8 +713,10 @@ def _post_lines(tmp_path: Path) -> str:
 		if line.startswith("api -X POST "))
 
 
-def _ci_final_statuses(*states: str, creator: str = "github-actions[bot]") -> str:
-	return json.dumps([{"context": "ci/final", "state": state, "creator": {"login": creator}} for state in states]
+def _ci_final_statuses(*states: str, creator: str = "github-actions[bot]", newest_hour: int = 13) -> str:
+	# Newest first, one hour apart; the hand-back marker (_setup_final_ci) is at 12:00.
+	return json.dumps([{"context": "ci/final", "state": state, "created_at": f"2026-11-06T{newest_hour - i:02d}:00:00Z", "creator": {"login": creator}}
+		for i, state in enumerate(states)]
 		+ [{"context": "ai-review/head-gate", "state": "success", "creator": {"login": "pipeline"}}])
 
 
@@ -728,9 +730,17 @@ def _setup_final_ci(tmp_path: Path, queue: list[dict]) -> tuple[Path, dict[str, 
 	gh.write_text(FAKE_GH_LOGGER.replace("__WORK__", str(work)), encoding="utf-8")
 	gh.chmod(0o755)
 	head = _git(repo, "rev-parse", "HEAD").strip()
+	# The "Collect PR metadata" snapshot with the hand-back marker (issue #10023).
+	comments = tmp_path / "pr_issue_comments.json"
+	comments.write_text(json.dumps([
+		{"id": 1, "user": {"login": "github-actions[bot]", "type": "Bot"}, "created_at": "2026-11-06T11:30:00Z",
+			"body": f"<!-- ai:final-ci-failed:v1 pr=7 head={'f' * 40} -->"},
+		{"id": 2, "user": {"login": "github-actions[bot]", "type": "Bot"}, "created_at": "2026-11-06T12:00:00Z",
+			"body": f"**The final CI run failed.**\n\n<!-- ai:final-ci-failed:v1 pr=7 head={head} -->"},
+	]), encoding="utf-8")
 	env.update({"POST_SYNC_TEST_REPAIR": "false", "FINAL_CI_REPAIR": "true", "FINAL_CI_REPAIR_FROM_SHA": head,
 		"FINAL_CI_REPAIR_ATTEMPT": "2", "TARGET_BRANCH": "ai/issue-7", "PR_NUMBER": "7", "GITHUB_REPOSITORY": "o/r",
-		"FINAL_CI_REPAIR_MARKER_RETRY_SLEEP_SECS": "0"})
+		"FINAL_CI_REPAIR_MARKER_RETRY_SLEEP_SECS": "0", "PR_ISSUE_COMMENTS_FILE": str(comments)})
 	return repo, env, github_env, head
 
 
@@ -841,7 +851,13 @@ def test_final_ci_repair_skips_a_fallback_when_final_ci_turned_green(tmp_path):
 	(_ci_final_statuses("success", "failure", creator="mallory"), {}),
 	(_ci_final_statuses("success", "failure"), {"FAKE_GH_STATUSES_RC": "1"}),
 	("not json", {}),
-], ids=["newest_failure", "no_older_failure", "untrusted_creator", "read_failed", "unparseable"])
+	# A stale success (older than the hand-back marker) that a failed
+	# ci/final=failure POST left in place is not green.
+	(_ci_final_statuses("success", "failure", newest_hour=11), {}),
+	# Without the comments snapshot there is no marker time: repair as before.
+	(_ci_final_statuses("success", "failure"), {"PR_ISSUE_COMMENTS_FILE": "/nonexistent/pr_issue_comments.json"}),
+], ids=["newest_failure", "no_older_failure", "untrusted_creator", "read_failed", "unparseable", "success_older_than_marker",
+	"no_comments_snapshot"])
 def test_final_ci_repair_commits_when_final_ci_is_not_green(tmp_path, statuses, extra):
 	repo, env, github_env, head = _setup_final_ci(tmp_path, [FAIL, PASS])
 	env["FAKE_GH_STATUSES_JSON"] = statuses

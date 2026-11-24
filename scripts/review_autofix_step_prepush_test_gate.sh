@@ -107,7 +107,8 @@
 # The head must still be FINAL_CI_REPAIR_FROM_SHA (the gate's head).
 # Before either outcome (except head_moved) one GET commits/<head>/statuses
 # re-checks ci/final (issue #10023): when the newest github-actions[bot]
-# ci/final is success after an older failure, any repair commit is reset,
+# ci/final is success after an older failure and newer than the hand-back
+# marker (read from PR_ISSUE_COMMENTS_FILE), any repair commit is reset,
 # INTEGRATION_TEST_REPAIRED=false and INTEGRATION_TEST_REPAIR_ACTIVE=true are
 # written (nothing is pushed, no full review), no marker is posted, and it logs
 # `FINAL_CI_REPAIR pr= head= outcome=skipped reason=final_ci_now_green`.
@@ -1285,18 +1286,35 @@ review_prepush_test_gate_final_ci_marker()
 # green after the failure that caused the hand-back, else not_green. One
 # GET commits/<from>/statuses (statuses come newest first): green only when
 # the newest ci/final posted by github-actions[bot] (scripts/ci_final_status.sh
-# posts it with github.token) is success and an older one in the same
-# response is failure. Any invalid input, failed read or other output is
-# not_green, so the repair goes on as before (fail open).
+# posts it with github.token) is success, an older one in the same response
+# is failure, and that success is newer than the newest
+# ai:final-ci-failed:v1 marker for this head (the gate's rule). The marker
+# time comes from the PR comments snapshot "Collect PR metadata" already
+# wrote (PR_ISSUE_COMMENTS_FILE; no API call). Every comment naming the head
+# counts, whoever posted it: a later forged or quoted marker only makes green
+# harder, never easier. Without the time check, a stale success left in
+# place by a failed ci/final=failure POST (scripts/ci_final_status.sh) would
+# drop a repair the gate selected. Any invalid input, missing marker time,
+# failed read or other output is not_green, so the repair goes on as before
+# (fail open).
 review_prepush_test_gate_final_ci_now_green()
 {
-	local green_from="$1" green_out=""
-	if ! [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || ! [[ "${green_from}" =~ ^[0-9a-f]{40}$ ]]; then
+	local green_from="$1" green_out="" green_marker_at=""
+	if ! [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || ! [[ "${green_from}" =~ ^[0-9a-f]{40}$ ]] \
+		|| ! [[ "${PR_NUMBER:-}" =~ ^[1-9][0-9]*$ ]] || ! [ -r "${PR_ISSUE_COMMENTS_FILE:-}" ]; then
+		echo not_green
+		return 0
+	fi
+	green_marker_at="$(jq -r --arg m "<!-- ai:final-ci-failed:v1 pr=${PR_NUMBER} head=${green_from} -->" \
+		'[.[]? | objects | select((.body // "") | tostring | contains($m)) | (.created_at // "") | tostring] | max // ""' \
+		"${PR_ISSUE_COMMENTS_FILE}" 2>/dev/null)" || green_marker_at=""
+	# Strict ISO form: the value is spliced into the jq filter below.
+	if ! [[ "${green_marker_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
 		echo not_green
 		return 0
 	fi
 	green_out="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${green_from}/statuses?per_page=100" \
-		--jq '[.[] | select(.context == "ci/final" and (.creator.login // "") == "github-actions[bot]") | .state] | if (length > 1) and (.[0] == "success") and any(.[1:][]; . == "failure") then "green" else "not_green" end' 2>/dev/null)" || green_out=""
+		--jq '[.[] | select(.context == "ci/final" and (.creator.login // "") == "github-actions[bot]") | {state, at: ((.created_at // "") | tostring)}] | if (length > 1) and (.[0].state == "success") and (.[0].at > "'"${green_marker_at}"'") and any(.[1:][]; .state == "failure") then "green" else "not_green" end' 2>/dev/null)" || green_out=""
 	if [ "${green_out}" = green ]; then
 		echo green
 	else
