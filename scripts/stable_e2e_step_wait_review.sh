@@ -389,8 +389,12 @@ while true; do
       # ends cancelled instead of failed. Anything else fails as before.
       rw_result_reason=""
       rw_result_run=""
-      if [ -n "$REVIEW_RUNNER_WAIT_SINCE" ] && [[ "${REVIEW_RUNNER_WAIT_RUN_ID}" =~ ^[0-9]+$ ]] \
-          && [ "${REVIEW_RUNNER_WAIT_EMPTY_POLLS:-0}" -le 2 ]; then
+      # never_assigned also needs the open stretch to have started in the
+      # first third of the time spent here: a replacement run queued late,
+      # after an earlier review run overran, stays a real timeout.
+      if [[ "${REVIEW_RUNNER_WAIT_SINCE}" =~ ^[0-9]+$ ]] && [[ "${REVIEW_RUNNER_WAIT_RUN_ID}" =~ ^[0-9]+$ ]] \
+          && [ "${REVIEW_RUNNER_WAIT_EMPTY_POLLS:-0}" -le 2 ] \
+          && [ "${REVIEW_RUNNER_WAIT_SINCE}" -le $(( REVIEW_PHASE_STARTED_AT + (NOW - REVIEW_PHASE_STARTED_AT) / 3 )) ]; then
         rw_result_reason="never_assigned"
         rw_result_run="${REVIEW_RUNNER_WAIT_RUN_ID}"
       elif [[ "${REVIEW_RUNNER_WAIT_CLOSED_RUN_ID}" =~ ^[0-9]+$ ]] && [ "${REVIEW_RUNNER_WAIT_CLOSED_RUN_ID}" = "${RUN_ID:-}" ] \

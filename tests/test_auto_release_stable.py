@@ -999,6 +999,17 @@ def test_runner_wait_skip_after_a_recent_failed_gate_with_a_short_queue() -> Non
 	assert not final.get("dispatches")
 
 
+def test_runner_wait_limit_beyond_the_wedged_cutoff_makes_no_read() -> None:
+	# 2000 minutes > 24 h wedged cutoff: the created range would be inverted.
+	state = _state(tag_commit="3" * 40, runs=[_recent_stable_gate()], window_runs=[_queued(11, 50)])
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, env={"RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES": "2000"})
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTO_RELEASE_RUNNER_WAIT_CHECK outcome=clear max=2000 calls=0" in proc.stdout
+	assert not final.get("window_reads")
+	assert len(final["dispatches"]) == 1
+
+
 def test_workflow_passes_the_runner_wait_limit() -> None:
 	text = WORKFLOW.read_text(encoding="utf-8")
 	assert "RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES: ${{ vars.RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES || '30' }}" in text

@@ -1628,12 +1628,15 @@ release_blocker_on_skip()
 # successful runner_wait_long skip (its marker step ran) that ended 60 minutes
 # to 24 hours ago. A retry becomes the newest cycle run, so retries come at
 # most once an hour; whether main still needs a cycle is left to the
-# dispatched cycle's own guards. API calls: 0 when disabled, 1 runs listing,
-# +1 jobs read only for a due candidate, +1 dispatch. Always exits 0.
+# dispatched cycle's own guards. A due candidate is dispatched only when the
+# current runner wait is below RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES
+# (outcome=wait_long otherwise). API calls: 0 when disabled, 1 runs listing,
+# +1 jobs read and +1 runner-wait read (2 when more than 100 runs are queued)
+# only for a due candidate, +1 dispatch. Always exits 0.
 promote_cycle_retry_check()
 {
 	local rc_runs="" rc_active="" rc_fields="" rc_id="" rc_status="" rc_conclusion="" rc_updated="" rc_age="" rc_jobs="" rc_marker=""
-	local rc_cutoff="0" rc_def=""
+	local rc_cutoff="0" rc_def="" rc_wait="" rc_wait_outcome="" rc_wait_min=""
 	if ! is_truthy "${PROMOTE_CYCLE_ENABLED}"; then
 		echo "PROMOTE_CYCLE_RETRY outcome=disabled reason=cycle_disabled"
 		return 0
@@ -1693,6 +1696,20 @@ promote_cycle_retry_check()
 	if ! [[ "${rc_marker}" =~ ^[0-9]+$ ]] || [ "${rc_marker}" -eq 0 ]; then
 		echo "PROMOTE_CYCLE_RETRY outcome=not_runner_wait run=${rc_id}"
 		return 0
+	fi
+	# Retry only when the wait has dropped (G2): a retry dispatched into a
+	# long wait takes a runner slot just to skip again (§26). Same reader and
+	# limit as the cycle's own check; a failed read dispatches (fail open). A
+	# skip still held here past 24 h goes back to the daily schedule.
+	rc_wait="$(release_gate_oldest_queued_wait "${GITHUB_REPOSITORY}" "${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}" "${rc_cutoff}" 2>/dev/null || true)"
+	rc_wait_outcome="$(printf '%s' "${rc_wait}" | sed -n 's/^outcome=\([a-z_]*\) .*/\1/p' | head -n 1)"
+	rc_wait_min="$(printf '%s' "${rc_wait}" | sed -n 's/.* oldest_queued_min=\([0-9]*\) .*/\1/p' | head -n 1)"
+	if [ "${rc_wait_outcome}" = "long" ] && [[ "${rc_wait_min}" =~ ^[0-9]+$ ]] && [ "${rc_wait_min}" -ge "${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}" ]; then
+		echo "PROMOTE_CYCLE_RETRY outcome=wait_long after_run=${rc_id} oldest_queued_min=${rc_wait_min} max=${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}"
+		return 0
+	fi
+	if [ "${rc_wait_outcome}" != "short" ] && [ "${rc_wait_outcome}" != "long" ]; then
+		echo "::warning::PROMOTE_CYCLE_RETRY wait_check=read_failed after_run=${rc_id} — dispatching without the runner-wait check."
 	fi
 	# One attempt, no gh_retry: a retried dispatch is not idempotent. The
 	# dispatched run's another_run_active guard covers a race.

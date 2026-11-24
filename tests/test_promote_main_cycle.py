@@ -1919,7 +1919,22 @@ def test_retry_check_dispatches_once_after_a_runner_wait_skip() -> None:
 	# Check-only: none of the cycle's guards ran.
 	assert "PROMOTE_CYCLE_SKIPPED" not in proc.stdout
 	api_paths = [c for c in final["calls"] if c[:1] == ["api"]]
-	assert len(api_paths) == 2, api_paths
+	# Runs listing, marker jobs read, current runner-wait read.
+	assert len(api_paths) == 3, api_paths
+	assert len(final["window_reads"]) == 1
+
+
+def test_retry_check_holds_while_the_runner_wait_is_still_long() -> None:
+	proc, final = _retry_check({"self_runs": [_retry_run()], "self_run_jobs": {"880": _marker_jobs()}, "window_runs": [_rw_queued(1, 70)]})
+	assert "PROMOTE_CYCLE_RETRY outcome=wait_long after_run=880 oldest_queued_min=70 max=30" in proc.stdout
+	assert not final.get("dispatches")
+
+
+def test_retry_check_dispatches_when_the_runner_wait_read_fails() -> None:
+	proc, final = _retry_check({"self_runs": [_retry_run()], "self_run_jobs": {"880": _marker_jobs()}, "window_error": True})
+	assert "::warning::PROMOTE_CYCLE_RETRY wait_check=read_failed after_run=880" in proc.stdout
+	assert "PROMOTE_CYCLE_RETRY outcome=dispatched after_run=880" in proc.stdout
+	assert len(final["dispatches"]) == 1
 
 
 def test_retry_check_newest_retry_run_is_the_candidate() -> None:

@@ -4494,6 +4494,13 @@ release_gate_oldest_queued_wait()
 		return 0
 	fi
 	_rgw_upper_epoch=$(( _rgw_now - 10#${_rgw_limit} * 60 ))
+	# A limit at or beyond the wedged-queued cutoff leaves an empty (inverted)
+	# created range: every run queued that long is wedged, so no live run can
+	# reach the limit. Answer short without a read instead of a 422.
+	if [ "${_rgw_cutoff}" -gt 0 ] && [ "${_rgw_upper_epoch}" -le "${_rgw_cutoff}" ]; then
+		echo "outcome=short oldest_queued_min=- queued_in_window=0 calls=0"
+		return 0
+	fi
 	_rgw_upper="$(date -u -d "@${_rgw_upper_epoch}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
 	if [ "${_rgw_cutoff}" -gt 0 ]; then
 		_rgw_lower="$(date -u -d "@$(( _rgw_cutoff + 1 ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"

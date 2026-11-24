@@ -461,7 +461,8 @@ fi
 
 # Runner-wait classification (issue #10037, G3). One jobs read of the watched
 # run. The result is runner_wait only when every job either still waits for a
-# runner (queued/waiting/pending, no runner_name) or started its first step
+# runner (status=queued, no runner_name; a job waiting on an environment or
+# concurrency group is not a runner wait) or started its first step
 # in the last third of the completion budget; an empty jobs list counts only
 # when the run was queued the whole time. A job with a runner but no readable
 # step start counts as early, and a failed read gives timeout: both fail
@@ -477,7 +478,7 @@ if WATCH_JOBS_JSON="$(gh_api_safe_quiet_print "repos/${TARGET_REPO}/actions/runs
 	WATCH_JOBS_SUMMARY="$(printf '%s' "${WATCH_JOBS_JSON}" | jq -r --argjson two_thirds "${WATCH_TWO_THIRDS_EPOCH}" '
 		if (.jobs | type) != "array" then empty else
 		[.jobs[] | select(type == "object") | {
-			queued_no_runner: (((.status // "") | tostring | IN("queued", "waiting", "pending")) and (((.runner_name // "") | tostring) == "")),
+			queued_no_runner: (((.status // "") | tostring) == "queued" and (((.runner_name // "") | tostring) == "")),
 			has_runner: (((.runner_name // "") | tostring) != ""),
 			start: ([.steps[]? | (.started_at // empty) | tostring | sub("\\.[0-9]+Z$"; "Z") | (try fromdateiso8601 catch empty)] | min)
 		}] as $js

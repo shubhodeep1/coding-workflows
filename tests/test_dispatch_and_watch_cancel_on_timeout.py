@@ -13,11 +13,13 @@ exit 1.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
 import subprocess
 import tempfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -257,9 +259,6 @@ def test_failed_completion_makes_no_cancel() -> None:
 
 # --- Runner-wait classification and gate stop (issue #10037) ---
 
-import json
-from datetime import datetime, timedelta, timezone
-
 GATE_CANCEL_CALL = "api -X POST repos/owner/gate/actions/runs/9999/cancel"
 GATE_ENV = {"GITHUB_RUN_ID": "9999", "GITHUB_REPOSITORY": "owner/gate", "DISPATCH_WATCH_STOP_WAIT_SECS": "0"}
 
@@ -326,6 +325,16 @@ def test_unreadable_jobs_is_a_timeout() -> None:
 	assert rc == 1, out
 	assert "outcome=timeout run=4242 reason=jobs_unreadable jobs=- queued_without_runner=-" in _result_line(out), out
 	assert not _gate_calls(calls), calls
+
+
+def test_job_waiting_on_an_environment_or_concurrency_group_is_a_timeout() -> None:
+	# G3 names status=queued only; a waiting/pending job is not blocked on a runner.
+	for status in ("waiting", "pending"):
+		job = {"id": 5, "status": status, "runner_name": "", "steps": []}
+		rc, out, calls, _ = _run_watcher(run_status="in_progress", extra_env={"STUB_JOBS_BODY": _jobs(job), **GATE_ENV, "DISPATCH_WATCH_STOP_RELEASE_GATE": "true"})
+		assert rc == 1, out
+		assert "outcome=timeout run=4242 reason=ran_early jobs=1 queued_without_runner=0" in _result_line(out), (status, out)
+		assert not _gate_calls(calls), calls
 
 
 def test_runner_wait_with_stop_enabled_cancels_the_gate() -> None:

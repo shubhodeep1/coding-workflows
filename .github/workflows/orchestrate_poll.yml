@@ -2049,7 +2049,7 @@ jobs:
       # once an hour. A step in this existing job, not a new job or cron (§26);
       # this repository only.
       - name: Retry a promote cycle skipped for a long runner wait
-        if: github.repository == 'shubhodeep1/coding-workflows'
+        if: ${{ !cancelled() && github.repository == 'shubhodeep1/coding-workflows' }}
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}

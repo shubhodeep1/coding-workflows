@@ -2721,6 +2721,19 @@ def test_intake_skips_a_release_gate_run_whose_only_failures_are_runner_waits() 
 		assert not _composed_issues(state_after)
 
 
+def test_intake_skips_runner_waits_on_the_orchestrate_and_standalone_validate_watch_steps() -> None:
+	"""Both steps run dispatch_and_watch_workflow_run.sh without the "Dispatch & watch — " title."""
+	jobs = [
+		_runner_wait_job(9001, "orchestrate-decompose-test", "Dispatch internal-orchestrate.yml with multi-issue project"),
+		_runner_wait_job(9002, "validate-standalone-test", "Dispatch internal-validate.yml standalone"),
+	]
+	state = _intake_state(jobs={"500": jobs}, job_logs={"9001": _RUNNER_WAIT_LOG, "9002": _RUNNER_WAIT_LOG})
+	result, state_after, _ = _run_intake(_runner_wait_gate_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "skip reason=release_gate_runner_wait run=500 jobs=2" in result.stdout, result.stdout
+	assert not _composed_issues(state_after)
+
+
 def test_intake_files_a_release_gate_run_with_a_real_failure_next_to_a_runner_wait() -> None:
 	jobs = [
 		_runner_wait_job(9001, "orphan-workflows-test", "Dispatch & watch — internal-memory-maintenance"),

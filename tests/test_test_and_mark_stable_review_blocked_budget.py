@@ -335,85 +335,85 @@ def _run_phase4b_with_pr_states(
 	begin = body.index("run_pytest() {")
 	end = body.index("# When pytest fails", begin)
 	body = body[:begin] + textwrap.dedent("""\
-	run_pytest() {
-	  if [ ! -f "${RUNNER_TEMP}/pytest_first" ]; then
-	    touch "${RUNNER_TEMP}/pytest_first"
-	    echo 'FAILED tests/test_e2e_editor_smoke_canary.py::test_canary_matches_issue_spec_byte_for_byte'
-	    return 1
-	  fi
-	  return 0
-	}
+run_pytest() {
+  if [ ! -f "${RUNNER_TEMP}/pytest_first" ]; then
+    touch "${RUNNER_TEMP}/pytest_first"
+    echo 'FAILED tests/test_e2e_editor_smoke_canary.py::test_canary_matches_issue_spec_byte_for_byte'
+    return 1
+  fi
+  return 0
+}
 	""") + body[end:]
 	stub = textwrap.dedent("""\
-	date() { cat "${RUNNER_TEMP}/clock"; }
-	sleep() {
-	  echo "$1" >> "${RUNNER_TEMP}/sleeps"
-	  echo $(( $(cat "${RUNNER_TEMP}/clock") + $1 )) > "${RUNNER_TEMP}/clock"
-	}
-	gh() {
-	  if [ "$1" = workflow ]; then return 0; fi
-	  if [ "$1" = api ] && [ "$2" = /rate_limit ]; then
-	    echo probe >> "${RUNNER_TEMP}/requests"
-	    printf '%s\\n' "${PROBE_RESET}"
-	    return 0
-	  fi
-	  if [ "$1" != api ] || [ "$2" != -i ]; then return 1; fi
-	  case "$3" in
-	    */contents/*)
-	      printf 'HTTP/2 200\\n\\n{"content":"%s"}\\n' "$(printf 'restored' | base64 -w0)" ;;
-	    */git/refs/heads/*)
-	      printf 'HTTP/2 200\\n\\n%s\\n' "${BAIT_SHA}" ;;
-	    */actions/workflows/*/runs?*)
-	      if [ "${ADOPT}" = 1 ]; then
-	        printf 'HTTP/2 200\\n\\n{"workflow_runs":[{"id":20,"head_sha":"%s","status":"in_progress","created_at":"2026-10-03T00:00:00Z","conclusion":null}]}\\n' "${BAIT_SHA}"
-	      else
-	        printf 'HTTP/2 200\\n\\n{"workflow_runs":[]}\\n'
-	      fi ;;
-	    */actions/runs/20)
-	      echo run >> "${RUNNER_TEMP}/requests"
-	      local run_count
-	      run_count=$(wc -l < "${RUNNER_TEMP}/run_reads")
-	      echo x >> "${RUNNER_TEMP}/run_reads"
-	      local run_state
-	      run_state=$(sed -n "$((run_count + 1))p" "${RUNNER_TEMP}/run_states")
-	      if [ "${run_state}" = limit ]; then
-	        printf 'HTTP/2 403\\n%s\\n\\n{"message":"API rate limit exceeded"}\\n' "${RESET_HEADER}"
-	        echo 'gh: API rate limit exceeded (HTTP 403)' >&2
-	        return 1
-	      fi
-	      case "${run_state}" in
-	        queued|in_progress)
-	          printf 'HTTP/2 200\\n\\n{"id":20,"status":"%s","conclusion":null,"run_started_at":"2026-10-03T00:00:00Z"}\\n' "${run_state}"
-	          return 0 ;;
-	      esac
-	      printf 'HTTP/2 200\\n\\n{"id":20,"status":"completed","conclusion":"success"}\\n' ;;
-	    */pulls/*)
-	      echo pr >> "${RUNNER_TEMP}/requests"
-	      local count
-	      count=$(wc -l < "${RUNNER_TEMP}/pr_reads")
-	      echo x >> "${RUNNER_TEMP}/pr_reads"
-	      local state
-	      state=$(sed -n "$((count + 1))p" "${RUNNER_TEMP}/states")
-	      case "${state}" in
-	        limit)
-	          printf 'HTTP/2 403\\n%s\\n\\n{"message":"API rate limit exceeded"}\\n' "${RESET_HEADER}"
-	          echo 'gh: API rate limit exceeded (HTTP 403)' >&2
-	          return 1 ;;
-	        unknown)
-	          printf 'HTTP/2 403\\n\\n{"message":"Forbidden"}\\n'
-	          echo 'gh: Forbidden (HTTP 403)' >&2
-	          return 1 ;;
-	        open|closed)
-	          if [ "${4:-}" = --jq ]; then
-	            printf 'HTTP/2 200\\n\\n%s\\n' "${state}"
-	          else
-	            printf 'HTTP/2 200\\n\\n{"head":{"sha":"%s"}}\\n' "${FIX_SHA}"
-	          fi ;;
-	        *) return 1 ;;
-	      esac ;;
-	    *) return 1 ;;
-	  esac
-	}
+date() { cat "${RUNNER_TEMP}/clock"; }
+sleep() {
+  echo "$1" >> "${RUNNER_TEMP}/sleeps"
+  echo $(( $(cat "${RUNNER_TEMP}/clock") + $1 )) > "${RUNNER_TEMP}/clock"
+}
+gh() {
+  if [ "$1" = workflow ]; then return 0; fi
+  if [ "$1" = api ] && [ "$2" = /rate_limit ]; then
+    echo probe >> "${RUNNER_TEMP}/requests"
+    printf '%s\\n' "${PROBE_RESET}"
+    return 0
+  fi
+  if [ "$1" != api ] || [ "$2" != -i ]; then return 1; fi
+  case "$3" in
+    */contents/*)
+      printf 'HTTP/2 200\\n\\n{"content":"%s"}\\n' "$(printf 'restored' | base64 -w0)" ;;
+    */git/refs/heads/*)
+      printf 'HTTP/2 200\\n\\n%s\\n' "${BAIT_SHA}" ;;
+    */actions/workflows/*/runs?*)
+      if [ "${ADOPT}" = 1 ]; then
+        printf 'HTTP/2 200\\n\\n{"workflow_runs":[{"id":20,"head_sha":"%s","status":"in_progress","created_at":"2026-10-03T00:00:00Z","conclusion":null}]}\\n' "${BAIT_SHA}"
+      else
+        printf 'HTTP/2 200\\n\\n{"workflow_runs":[]}\\n'
+      fi ;;
+    */actions/runs/20)
+      echo run >> "${RUNNER_TEMP}/requests"
+      local run_count
+      run_count=$(wc -l < "${RUNNER_TEMP}/run_reads")
+      echo x >> "${RUNNER_TEMP}/run_reads"
+      local run_state
+      run_state=$(sed -n "$((run_count + 1))p" "${RUNNER_TEMP}/run_states")
+      if [ "${run_state}" = limit ]; then
+        printf 'HTTP/2 403\\n%s\\n\\n{"message":"API rate limit exceeded"}\\n' "${RESET_HEADER}"
+        echo 'gh: API rate limit exceeded (HTTP 403)' >&2
+        return 1
+      fi
+      case "${run_state}" in
+        queued|in_progress)
+          printf 'HTTP/2 200\\n\\n{"id":20,"status":"%s","conclusion":null,"run_started_at":"2026-10-03T00:00:00Z"}\\n' "${run_state}"
+          return 0 ;;
+      esac
+      printf 'HTTP/2 200\\n\\n{"id":20,"status":"completed","conclusion":"success"}\\n' ;;
+    */pulls/*)
+      echo pr >> "${RUNNER_TEMP}/requests"
+      local count
+      count=$(wc -l < "${RUNNER_TEMP}/pr_reads")
+      echo x >> "${RUNNER_TEMP}/pr_reads"
+      local state
+      state=$(sed -n "$((count + 1))p" "${RUNNER_TEMP}/states")
+      case "${state}" in
+        limit)
+          printf 'HTTP/2 403\\n%s\\n\\n{"message":"API rate limit exceeded"}\\n' "${RESET_HEADER}"
+          echo 'gh: API rate limit exceeded (HTTP 403)' >&2
+          return 1 ;;
+        unknown)
+          printf 'HTTP/2 403\\n\\n{"message":"Forbidden"}\\n'
+          echo 'gh: Forbidden (HTTP 403)' >&2
+          return 1 ;;
+        open|closed)
+          if [ "${4:-}" = --jq ]; then
+            printf 'HTTP/2 200\\n\\n%s\\n' "${state}"
+          else
+            printf 'HTTP/2 200\\n\\n{"head":{"sha":"%s"}}\\n' "${FIX_SHA}"
+          fi ;;
+        *) return 1 ;;
+      esac ;;
+    *) return 1 ;;
+  esac
+}
 	""")
 	body = body.replace('PYTEST_OUTPUT="${RUNNER_TEMP:-/tmp}/e2e_pytest_output.txt"', 'PYTEST_OUTPUT="${RUNNER_TEMP:-/tmp}/e2e_pytest_output.txt"\n' + stub, 1)
 	with tempfile.TemporaryDirectory() as temp:
@@ -786,34 +786,34 @@ def _run_phase4_wait_review(
 	step = _slice_between(workflow, '      - name: "Phase 4: Wait for review & autofix to complete"', '      # Per-phase soft-error analysis: review_autofix.')
 	body = textwrap.dedent(step.split("        run: |\n", 1)[1])
 	stub = textwrap.dedent('''\
-	date() { printf '%s\\n' "$(<"${RUNNER_TEMP}/clock")"; }
-	sleep() { printf '%s\\n' "$(( $(<"${RUNNER_TEMP}/clock") + $1 ))" > "${RUNNER_TEMP}/clock"; }
-	gh_api_safe_quiet_print() {
-	  local response=""
-	  case "$1" in
-	    */actions/runs?branch=*)
-	      if [ -n "$BAIT_UNCOVERED_RUN_IDS" ]; then
-	        response="$(<"${RUNNER_TEMP}/after.json")"
-	      else
-	        response="$(<"${RUNNER_TEMP}/before.json")"
-	      fi ;;
-	    */actions/runs/10/jobs?*) response='{"total_count":1,"jobs":[{"id":100,"status":"completed","conclusion":"success","steps":[{"conclusion":"failure"}]}]}' ;;
-	    */actions/jobs/100/logs)
-	      local count
-	      count=$(wc -l < "${RUNNER_TEMP}/log_reads")
-	      echo x >> "${RUNNER_TEMP}/log_reads"
-	      if [ "${FAIL_FIRST_LOG}" = 1 ] && [ "$count" = 0 ]; then return 1; fi
-	      if [ "${FAIL_ALL_LOGS}" = 1 ]; then return 1; fi
-	      response="$(<"${RUNNER_TEMP}/job.log")" ;;
-	    */compare/*) response="{\\"status\\":\\"${COMPARE_STATUS}\\"}" ;;
-	    *) echo "Unexpected API read: $1" >&2; return 1 ;;
-	  esac
-	  if [ "${2:-}" = --jq ]; then
-	    printf '%s' "$response" | jq -cr "$3"
-	  else
-	    printf '%s' "$response"
-	  fi
-	}
+date() { printf '%s\\n' "$(<"${RUNNER_TEMP}/clock")"; }
+sleep() { printf '%s\\n' "$(( $(<"${RUNNER_TEMP}/clock") + $1 ))" > "${RUNNER_TEMP}/clock"; }
+gh_api_safe_quiet_print() {
+  local response=""
+  case "$1" in
+    */actions/runs?branch=*)
+      if [ -n "$BAIT_UNCOVERED_RUN_IDS" ]; then
+        response="$(<"${RUNNER_TEMP}/after.json")"
+      else
+        response="$(<"${RUNNER_TEMP}/before.json")"
+      fi ;;
+    */actions/runs/10/jobs?*) response='{"total_count":1,"jobs":[{"id":100,"status":"completed","conclusion":"success","steps":[{"conclusion":"failure"}]}]}' ;;
+    */actions/jobs/100/logs)
+      local count
+      count=$(wc -l < "${RUNNER_TEMP}/log_reads")
+      echo x >> "${RUNNER_TEMP}/log_reads"
+      if [ "${FAIL_FIRST_LOG}" = 1 ] && [ "$count" = 0 ]; then return 1; fi
+      if [ "${FAIL_ALL_LOGS}" = 1 ]; then return 1; fi
+      response="$(<"${RUNNER_TEMP}/job.log")" ;;
+    */compare/*) response="{\\"status\\":\\"${COMPARE_STATUS}\\"}" ;;
+    *) echo "Unexpected API read: $1" >&2; return 1 ;;
+  esac
+  if [ "${2:-}" = --jq ]; then
+    printf '%s' "$response" | jq -cr "$3"
+  else
+    printf '%s' "$response"
+  fi
+}
 	''')
 	body = body.replace('. ./scripts/comprehensive_test_and_release_gh_api.sh', stub, 1)
 	bait = "a" * 40
@@ -1376,18 +1376,6 @@ def test_validate_standalone_job_budget_exceeds_watcher_wait() -> None:
 	assert job_timeout >= step_timeout + 10
 
 
-def main() -> int:
-	tests = [value for name, value in sorted(globals().items()) if name.startswith("test_") and callable(value)]
-	for test in tests:
-		test()
-	print(f"{len(tests)} passed")
-	return 0
-
-
-if __name__ == "__main__":
-	raise SystemExit(main())
-
-
 # ── Phase 4 runner_wait result and gate stop (issue #10037) ──────────────
 
 
@@ -1439,3 +1427,15 @@ def test_gate_workflow_enables_the_runner_wait_stop() -> None:
 	raw = WORKFLOW.read_text(encoding="utf-8")
 	env_block = raw[raw.index("\nenv:\n"):raw.index("\npermissions:\n")]
 	assert '  DISPATCH_WATCH_STOP_RELEASE_GATE: "true"\n' in env_block
+
+
+def main() -> int:
+	tests = [value for name, value in sorted(globals().items()) if name.startswith("test_") and callable(value)]
+	for test in tests:
+		test()
+	print(f"{len(tests)} passed")
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
