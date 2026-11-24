@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/10019-poller-mock-store-lock.md:2 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The changelog (and the fixture comment at tests/test_orchestrate_poll_process.py lines 670-672) says the lock protects parallel test shards. `_run_poller` uses a per-run temp store, so shards never share GH_MOCK_STORE.\n  WHY: The lock only serializes overlapping fakes inside one poller run, so the stated cause is wrong and misleads maintainers. Severity disagreement: sonnet-5_5 said NIT, gemini and glm said MAJOR. The highest is used.\n- tests/test_orchestrate_poll_process.py:670-672 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The code comment \"parallel shards on a busy runner\" repeats the incorrect cross-shard claim.\n  WHY: The per-run temp store (line 1226) means shards never contend, so the comment documents an impossible cause. Severity disagreement: NIT versus MAJOR. The highest is used.\n- tests/test_orchestrate_poll_process.py:709-718 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The timeout branch of `_mock_store_lock_acquire` returns at line 715 without setting GH_MOCK_STORE_LOCK_HELD. Child fakes, such as the git fake re-invoking itself per refspec at line 3570, each re-wait the full timeout.\n  WHY: The wait is bounded, but the fail-open path can stack repeated 30-second stalls.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Issue step 1: \"Run that single test with pytest at least 10 times ... and record which assertion fails and its message.\"\n  expected_change_site: changelog.d/10019-poller-mock-store-lock.md or the PR body\n  confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The only run record is the AI issue summary comment (\"passed 10 of 10 local runs\"), which sits outside the diff, and the changelog and PR body record no failing assertion or message, and the acceptance table still shows the target tests as \"not run\". Reviewers noted this is missing run evidence rather than missing code. Severity disagreement: sonnet-5_5 said NIT, gemini and minimax said MAJOR. The highest is used.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/10019-poller-mock-store-lock.md, tests/test_orchestrate_poll_process.py:670-672 | severity=low (NIT) | confidence=4\n  PROBLEM: The changelog and comment name the wrong mechanism (parallel shards). `_run_poller` uses a per-run temp store at line 1226, so the lock only protects overlap within one poller run.\n  WHY: The fix is harmless and correct, but the stated cause is inaccurate and no run shows that within-run overlap caused the shard-3 failure.\n- TASK_GAP: Requirement: Issue step 1: \"Run that single test with pytest at least 10 times ... and record which assertion fails and its message.\" | Expected change site: a recorded run result in the PR (changelog or PR body) | Evidence of absence: Only the AI issue summary comment records \"passed 10 of 10 local runs\", and the acceptance table still shows \"not run\". This is missing run evidence, not missing code. | severity=NIT | confidence=3\n- Reviewed lines 688-694 (the `GH_MOCK_STORE_LOCK_WAIT_SECONDS` parsing) and found no defect. No finding was reported for the `GH_MOCK_STORE_LOCK_HELD` hardening suggestion or the promote_cycle baseline_timeout claim. HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/10019-poller-mock-store-lock.md:2 | severity=MAJOR | confidence=4\n  PROBLEM: The changelog says the lock prevents contention between parallel shards, but each run has its own temp mock store.\n  WHY: The explanation is misleading, because the lock only protects within-process contention.\n- tests/test_orchestrate_poll_process.py:670-671 | severity=MAJOR | confidence=4\n  PROBLEM: The code comment repeats the incorrect cross-shard claim.\n  WHY: It gives a misleading justification and could confuse future maintainers.\n- TASK_GAP: Requirement: Issue step 1: \"Run that single test with pytest at least 10 times and record which assertion fails and its message.\" | Expected change site: a record of the failure message in the PR description, issue comment, or changelog | Evidence of absence: The PR only records \"passed 10 of 10 local runs\" after the fix, and no original failure message is recorded. | severity=MAJOR | confidence=4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: Requirement: Issue #10019 step 1: \"Run that single test with pytest at least 10 times on the checked-out branch and record which assertion fails and its message.\" | Expected change site: changelog.d/10019-poller-mock-store-lock.md or the PR body, recording the 10-run result and its conclusion | Evidence of absence: The diff (tests/test_orchestrate_poll_process.py lines 688-694) only hardens the timeout parsing, and the changelog records no diagnostic. The only record is the AI issue summary comment outside the diff, and the acceptance table still shows the target test as \"not run\". | severity=MAJOR | confidence=4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- changelog.d/10019-poller-mock-store-lock.md:2 (corroborated by tests/test_orchestrate_poll_process.py:670-671) | severity=MAJOR | confidence=4\n  PROBLEM: The changelog claims the lock fixes a cross-shard race. `_run_poller` creates a per-run temp store (lines 1226 and 1232), so shards never share GH_MOCK_STORE. The same framing appears in the fixture comment at line 671.\n  WHY: The documented cause cannot happen, which misleads maintainers and could justify removing the lock later. The code fix is still valid for intra-run overlap.\n- tests/test_orchestrate_poll_process.py:709-718 (and line 3570) | severity=NIT | confidence=3\n  PROBLEM: The timeout branch of `_mock_store_lock_acquire` returns at line 715 without setting GH_MOCK_STORE_LOCK_HELD. Child fakes, such as the git fake re-invoking itself per refspec at line 3570, each re-wait the full timeout.\n  WHY: The wait is bounded, but the fail-open path serializes into repeated 30-second stalls.\n- Reviewed the last-run edit at lines 688-694 and found no defect. No finding was emitted for the promote_cycle baseline_timeout gate signal. HARDENING_RISK_SCORE: 2, with a hardening suggestion to set GH_MOCK_STORE_LOCK_HELD=1 before the return at line 715.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "714acb33f69876723bd05e34cd18bd02fcc60f285c2fb0da113fa8bad08ebbc1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10030,
+    "run_id": "45376413759",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45376413759",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124121243_c76d88ba24",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10030,
+    "run_id": "45376413759"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T12:12:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
