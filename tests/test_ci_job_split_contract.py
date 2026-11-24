@@ -222,6 +222,15 @@ class SystemPythonJobTest(unittest.TestCase):
 		self.assertIn("'NR % total == n'", shard_step["run"])
 		self.assertIn('-v n="${shard_index}" -v total="${shard_total}"', shard_step["run"])
 
+	def test_system_python_shard_count_covers_budget(self) -> None:
+		# 24 shards let shard 11 take 15m16s of 20 minutes (run 43412753795, #9469).
+		shards = _ci_jobs()[self.SYSTEM_PYTHON_JOB_ID]["strategy"]["matrix"]["system-python-shard"]
+		self.assertGreaterEqual(
+			len(shards),
+			32,
+			"run 43412753795 (#9469): 24 shards left shard 11 at 15m16s of its 20-minute timeout",
+		)
+
 	def test_system_python_shard_keeps_default_tmpdir(self) -> None:
 		"""Regression guard for run 43053071771 (#9313).
 

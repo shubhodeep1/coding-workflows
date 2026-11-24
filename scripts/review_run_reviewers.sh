@@ -454,14 +454,27 @@ fi
 # unset — downstream watchdog polling remains the fallback.
 if [ -n "${PR_NUMBER:-}" ] && [ -n "${REPOSITORY:-}" ] && command -v gh >/dev/null 2>&1; then
   preflight_state=""
-  if [ -s "${PR_PAYLOAD_FILE:-/dev/null}" ]; then
+  # Issue #9928: with the run-local PR read cache on, PR_PAYLOAD_FILE may be
+  # rewritten from a cached entry, so its mtime no longer bounds the payload's
+  # age. Read the state through the cache instead: its entries expire 120 s
+  # after their live fetch, the same bound the mtime check gave before.
+  preflight_use_cache=false
+  if type gh_pr_cached_read >/dev/null 2>&1 && type _gh_pr_cache_enabled >/dev/null 2>&1 && _gh_pr_cache_enabled; then
+    preflight_use_cache=true
+  fi
+  if [ "${preflight_use_cache}" != "true" ] && [ -s "${PR_PAYLOAD_FILE:-/dev/null}" ]; then
     preflight_age=$(( $(date +%s) - $(stat -c %Y "${PR_PAYLOAD_FILE}" 2>/dev/null || echo 0) ))
     if [ "${preflight_age}" -ge 0 ] && [ "${preflight_age}" -le 120 ]; then
       preflight_state="$(jq -r '.state // ""' "${PR_PAYLOAD_FILE}" 2>/dev/null || true)"
     fi
   fi
   if [[ ! "${preflight_state}" =~ ^(open|closed|merged)$ ]]; then
-    preflight_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
+    # Issue #9928: the run-local PR read cache (fail-open) when available.
+    if type gh_pr_cached_read >/dev/null 2>&1; then
+      preflight_state="$(gh_pr_cached_read pull "${REPOSITORY}" "${PR_NUMBER}" 2>/dev/null | jq -r '.state // ""' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
+    else
+      preflight_state="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed|merged' || echo "open")"
+    fi
   fi
   if [ "${preflight_state}" != "open" ]; then
     echo "Pre-flight: PR #${PR_NUMBER} is ${preflight_state} — skipping reviewer fan-out."
