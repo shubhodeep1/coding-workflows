@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:704-709 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: After the lock wait expires, the fake continues without holding the lock, and the timeout test covers only one timed-out writer. Several writers that time out together can still lose updates.\n  WHY: Atomic replacement prevents partial JSON but not a read-modify-write overwrite, so the lost-update race can still happen on the timeout path. Severity disagreement: minimax rated it NIT (confidence 2) and luna rated it MAJOR (confidence 4). The highest, MAJOR, is mapped to high. The reviewers cited slightly different line ranges (~684-685 and ~10517-10528 from minimax, 704-709 and 10520-10533 from luna).\n- .github/workflows/review_autofix.yml:529-535 | severity=low | confidence=5\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The `review / gate` check-run failed because the `branches/main` lookup returned status=403 (GH_API_RETRY gave_up, exit 75).\n  WHY: The failure is environmental and not caused by the diff. The fail-closed behavior is correct, and the gate needs a re-run, not a code edit. The reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR acceptance table lists `test_poller_mock_store_concurrent_writers_keep_every_update` and `test_security_pass_external_finalize_uses_verified_pr_head_when_integration_branch_is_deleted` as acceptance targets.\n  expected_change_site: Validation evidence for those tests in the PR gate results (tests/test_orchestrate_poll_process.py gate run)\n  confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The PR description marks both targets \"not run\". The pre-push gate timed out `tests/test_orchestrate_poll_process.py` and listed the targeted test as unverified. minimax attributes this to a sandbox exclusion and says the gap is deferred verification, not a code defect.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrate_poll_process.py:~684-685, ~10517-10528 | severity=NIT | confidence=2\n  PROBLEM: The bounded-wait fallback that drops the lock after 30s is tested with only one writer. If several writers exceed the wait together, they can still race in degraded mode.\n  WHY: The new test exercises the message path, not the racy write path. This is a documented design choice, but the fail-open path is covered only at message-emission depth.\n- TASK_GAP: Requirement: The linked issue requires fixing the flakiness of `test_security_pass_external_finalize_uses_verified_pr_head_when_integration_branch_is_deleted` and adding a changelog fragment. The acceptance table lists `test_poller_mock_store_concurrent_writers_keep_every_update` and that test as acceptance checks.\n  Expected change site: Test fixture changes in `tests/test_orchestrate_poll_process.py` (delivered) plus gate-run evidence that the targeted test passes (not delivered).\n  Evidence of absence: The acceptance table marks both tests \"not run\". The pre-push gate timed out `tests/test_orchestrate_poll_process.py` and listed the targeted test as unverified. The description attributes this to a sandbox exclusion, and the change is test-only.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_orchestrate_poll_process.py:704-709; 10520-10533 | severity=MAJOR | confidence=4\n  PROBLEM: After the lock wait expires, the fake continues without holding the lock. The timeout test verifies this with only one timed-out writer.\n  WHY: Several fakes that time out while the store is locked can concurrently load and replace the shared store. A read-modify-write update can then overwrite another fake's update, so the lost-update race remains on the timeout path.\n- TASK_GAP: Requirement: The PR acceptance table lists `test_poller_mock_store_concurrent_writers_keep_every_update` and `test_security_pass_external_finalize_uses_verified_pr_head_when_integration_branch_is_deleted` as acceptance targets.\n  Expected change site: Validation evidence for those tests in the PR gate results.\n  Evidence of absence: The PR description marks both targets \"not run\". The pre-push gate reports `tests/test_orchestrate_poll_process.py` timed out and unverified.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/review_autofix.yml:529-535 | severity=NIT | confidence=5\n  PROBLEM: The `review / gate` check-run (run 45323581321, job 138208075241) failed with `GH_API_RETRY outcome=gave_up kind=primary bucket=core status=403 attempt=1/5 wait_secs=1112`, exit 75, on the `branches/main` lookup.\n  WHY: The failure is an infrastructure or API issue, not a diff defect. The fail-closed behavior at lines 531-533 is correct, and the gate needs a re-run, not an edit.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "035515f53beb562e358ad9d210eec21f208f5e028393c7f134048c5cd906a187",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10030,
+    "run_id": "45332854277",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45332854277",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124073516_67ec67e313",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10030,
+    "run_id": "45332854277"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T07:35:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
