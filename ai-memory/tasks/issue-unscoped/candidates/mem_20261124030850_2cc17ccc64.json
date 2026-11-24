@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_prepush_test_gate.sh:809 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `passing_change_erased` guard decides whether to revert a repair from the status of the turn just before it, not from the gate's initial run.\n  WHY: Suppose the initial run fails (PR-caused) and a first repair turn makes the re-run pass. A later repair turn that erases the changes is then reverted, because the guard sees `pass` from the previous turn. That breaks the requirement to \"retain the existing behavior\" when the initial run failed, and `test_review_loop_later_turn_that_erases_a_repaired_passing_tree_keeps_it` enforces this deviation. The source said SEVERITY: MAJOR, mapped here to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A repair turn that removes the editor's whole change is reverted, keeping the editor's change, whenever the gate's initial run had no PR-caused failures (`initial=pass`), not only for lint-only failures.\" (issue #9519 Goals); \"Initial PR-caused failure + repair erases the change \u2192 unchanged behaviour (not reverted unless lint-only, as today).\"\n  expected_change_site: `review_prepush_test_gate_repair` in `scripts/review_autofix_step_prepush_test_gate.sh`, the passing-change guard condition\n  confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The guard at lines 839-841 checks `rpg_pre_repair_status` / `rpg_pre_repair_failures`, read from `${result}` at lines 762-768, the result passed to the current repair turn. The repair loop passes its changing `final` result at line 961 and replaces it after every re-run at lines 973-980, so a later repair can fire the guard even when the initial run failed. `test_review_loop_later_turn_that_erases_a_repaired_passing_tree_keeps_it` (`tests/test_review_prepush_test_gate.py:448-472`) explicitly expects the guard to fire when the initial run failed (PR-caused failure on `tests/test_b.py`). The last run's edit to `agents.d/9728-prepush-repair-passing-change-erased.md` ties the guard to \"the gate result the repair was fixing\" rather than to the initial result. minimax notes that the per-turn `git stash create` baseline still preserves the editor's earlier fixes, but says the literal spec deviation remains.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_autofix_step_prepush_test_gate.sh:809 | severity=MAJOR | confidence=5\n  PROBLEM: The `passing_change_erased` guard reverts repairs based on the status of the immediately preceding turn, not the initial gate run.\n  WHY: If an initial run fails (PR-caused) and a first repair turn fixes it, a later repair turn that erases changes is reverted because the guard sees the previous turn's `pass`. This violates the requirement to \"retain the existing behavior\" when the initial run failed, and `test_review_loop_later_turn_that_erases_a_repaired_passing_tree_keeps_it` explicitly enforces the deviation.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP | severity=MAJOR | confidence=4\n  Requirement: \"A repair turn that removes the editor's whole change is reverted, keeping the editor's change, whenever the gate's initial run had no PR-caused failures (`initial=pass`), not only for lint-only failures.\" (issue #9519 Goals); Tests: \"Initial PR-caused failure + repair erases the change \u2192 unchanged behaviour (not reverted unless lint-only, as today).\"\n  Expected change site: `review_prepush_test_gate_repair` in `scripts/review_autofix_step_prepush_test_gate.sh`, the passing-change guard condition.\n  Evidence of absence: The guard keys on `rpg_pre_repair_status` / `rpg_pre_repair_failures`, read from `${result}` at lines 762-768, and fires only on `pass` with 0 PR-caused failures (lines 839-841). `${result}` is the per-turn `final`, replaced after every re-run (lines 961, 973-980). `test_review_loop_later_turn_that_erases_a_repaired_passing_tree_keeps_it` (`tests/test_review_prepush_test_gate.py:448-472`) asserts the guard fires when the initial run failed, which contradicts the issue's third test case. The doc edit in `agents.d/9728-prepush-repair-passing-change-erased.md` reinforces the deviation. The author defended it earlier (issue_comment 7047074874), and the per-turn `git stash create` baseline still meets the \"Editor changes lost\" goal, but the literal spec deviation remains.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP | severity=MAJOR | confidence=5\n  Requirement: \"A repair turn that removes the editor's whole change is reverted \u2026 whenever the gate's initial run had no PR-caused failures (`initial=pass`),\" while an initial PR-caused failure followed by an erasing repair retains existing behavior.\n  Expected change site: `review_prepush_test_gate_repair` in `scripts/review_autofix_step_prepush_test_gate.sh`.\n  Evidence of absence: The guard at lines 839-841 checks `rpg_pre_repair_status`, read from the result passed to the current repair turn at lines 762-768. The repair loop passes its changing `final` result at line 961 and replaces it with each rerun at lines 973-980, so a later repair can trigger the guard even when the initial run failed. `test_review_loop_later_turn_that_erases_a_repaired_passing_tree_keeps_it` at `tests/test_review_prepush_test_gate.py:448-472` explicitly expects that behavior.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "15196365180d620ad878b468df5dcb87668672b6e8970d70219ea97418260556",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9562,
+    "run_id": "45303018289",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45303018289",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124030850_2cc17ccc64",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9562,
+    "run_id": "45303018289"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T03:08:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
