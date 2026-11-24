@@ -5,13 +5,69 @@ from __future__ import annotations
 
 import re
 
-import yaml
+try:
+	import yaml
+except ImportError:  # pragma: no cover - CI installs PyYAML; the offline pre-push gate container has none
+	yaml = None
 
 from runner_scaler_fakes import BOOT_SCRIPT, SCALER_ROOT
 from runner_scaler.config import Config, from_env, repo_slug
 from runner_scaler.reconcile import JIT_PLACEHOLDER
 
 TEXT = BOOT_SCRIPT.read_text(encoding="utf-8")
+
+
+def _fallback_scalar(raw: str) -> object:
+	raw = raw.strip()
+	if raw in ("true", "false"):
+		return raw == "true"
+	if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in "\"'":
+		return raw[1:-1]
+	return raw
+
+
+def _load_app_spec_service(text: str) -> dict:
+	"""Return services[0] of app.yaml, parsed by PyYAML when it is installed.
+
+	Without PyYAML, a minimal parser reads the same block-style layout so the
+	assertions below still check the parsed contract instead of erroring.
+	"""
+	if yaml is not None:
+		return yaml.safe_load(text)["services"][0]
+	service: dict = {}
+	section: str | None = None
+	item: dict | None = None
+	for line in text.splitlines():
+		if not line.strip() or line.lstrip().startswith("#"):
+			continue
+		indent = len(line) - len(line.lstrip(" "))
+		body = line.strip()
+		if indent < 4:
+			if service and indent <= 2 and not body.startswith("- "):
+				break
+			if body.startswith("- "):
+				body = body[2:]
+				indent = 4
+			else:
+				continue
+		key, _, value = body.partition(":")
+		if indent == 4:
+			section, item = None, None
+			if value.strip():
+				service[key] = _fallback_scalar(value)
+			else:
+				section = key
+				service[key] = [] if key == "envs" else {}
+		elif section == "envs":
+			if key.startswith("- "):
+				item = {}
+				service["envs"].append(item)
+				key = key[2:]
+			assert item is not None
+			item[key] = _fallback_scalar(value)
+		elif section is not None:
+			service[section][key] = _fallback_scalar(value)
+	return service
 
 
 def test_runner_release_is_pinned_and_checksummed() -> None:
@@ -52,8 +108,7 @@ def test_script_uses_tabs_for_indentation() -> None:
 
 
 def test_app_spec_builds_from_stable_with_health_check_and_secret_placeholders() -> None:
-	spec = yaml.safe_load((SCALER_ROOT / "app.yaml").read_text(encoding="utf-8"))
-	service = spec["services"][0]
+	service = _load_app_spec_service((SCALER_ROOT / "app.yaml").read_text(encoding="utf-8"))
 	assert service["github"] == {"repo": "shubhodeep1/coding-workflows", "branch": "stable", "deploy_on_push": True}
 	assert service["source_dir"] == "tools/runner_scaler"
 	assert service["dockerfile_path"] == "tools/runner_scaler/Dockerfile"
