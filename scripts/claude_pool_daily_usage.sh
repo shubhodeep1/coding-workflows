@@ -27,11 +27,17 @@
 #   CLAUDE_POOL_REASON                send: the action's `reason` output, shown when no probes ran
 #   CLAUDE_POOL_DAILY_USAGE_GATE      send: override of claude_engine.json gate_utilization (tests)
 #   CLAUDE_ENGINE_CONFIG              send: claude_engine.json to read the gate from
+#   CHATGPT_POOL_STATUS               send: `status` JSON of .github/actions/chatgpt-pool-token
+#                                     (mode: status; never a token); appends a "ChatGPT accounts"
+#                                     section (ChatGPT trial plan Phase 4)
+#   CHATGPT_POOL_STATUS_REASON        send: that action's `reason` output, shown as
+#                                     "ChatGPT accounts: unavailable (<reason>)." when no status was read
+#   CHATGPT_POOL_ALERT_STALE_HOURS    send: a last refresh at least this old is stale (default 12)
 #   TG_BOT_SECRET / TG_ADMIN_CHAT_ID / ALERT_MSG_LEVEL   scripts/tg_helpers.sh
 #
 # Log: CLAUDE_POOL_DAILY_USAGE op=slot in_slot=true|false reason=... date=... hour=...
 #      CLAUDE_POOL_DAILY_USAGE op=send accounts=N usable=N gated=N auth_failed=N probe_failed=N
-#          outcome=sent|not_delivered truncated=true|false
+#          outcome=sent|not_delivered truncated=true|false chatgpt_accounts=N chatgpt_alerts=N
 # Never fails the job.
 set -uo pipefail
 
@@ -84,7 +90,7 @@ daily_usage_send()
 	fi
 	type tg_send_report_msg >/dev/null 2>&1 || tg_send_report_msg() { :; }
 
-	local probes_json report_args=() report text counts message_id outcome err_file err_detail truncated=false
+	local probes_json report_args=() report text counts message_id outcome err_file err_detail truncated=false chatgpt_stale_hours chatgpt_counts text_head
 	probes_json="${CLAUDE_POOL_PROBES:-}"
 	[ -n "${probes_json}" ] || probes_json="[]"
 	if [ -n "${CLAUDE_POOL_DAILY_USAGE_GATE:-}" ]; then
@@ -92,21 +98,49 @@ daily_usage_send()
 	elif [ -n "${CLAUDE_ENGINE_CONFIG:-}" ]; then
 		report_args+=(--config "${CLAUDE_ENGINE_CONFIG}")
 	fi
+	# ChatGPT section (trial plan Phase 4). The `=` form keeps a value that
+	# starts with `-` from being read as a flag; the engine re-validates it.
+	chatgpt_stale_hours="${CHATGPT_POOL_ALERT_STALE_HOURS:-12}"
+	[[ "${chatgpt_stale_hours}" =~ ^[0-9]+([.][0-9]+)?$ ]] || chatgpt_stale_hours=12
+	# An oversized status (over one argv element's limit) would fail the whole
+	# engine call; report it as unavailable instead of losing the Claude text.
+	local chatgpt_status="${CHATGPT_POOL_STATUS:-}" chatgpt_reason="${CHATGPT_POOL_STATUS_REASON:-}"
+	if [ "${#chatgpt_status}" -gt 100000 ]; then
+		chatgpt_status=""
+		chatgpt_reason="status_too_large"
+	fi
+	report_args+=(
+		"--chatgpt-status=${chatgpt_status}"
+		"--chatgpt-reason=${chatgpt_reason}"
+		--chatgpt-stale-hours "${chatgpt_stale_hours}"
+	)
 	err_file="$(mktemp 2>/dev/null)" || err_file=/dev/null
 	if report="$(printf '%s' "${probes_json}" | PYTHONDONTWRITEBYTECODE=1 python3 "${script_dir}/claude_engine.py" pool-usage "${report_args[@]}" 2>"${err_file}")"; then
 		text="$(printf '%s' "${report}" | python3 -c 'import json, sys; print(json.load(sys.stdin)["text"])')"
 		counts="$(printf '%s' "${report}" | python3 -c '
 import json, sys
-print("accounts=%(accounts)s usable=%(usable)s gated=%(gated)s auth_failed=%(auth_failed)s probe_failed=%(probe_failed)s" % json.load(sys.stdin))
+r = json.load(sys.stdin)
+r.setdefault("chatgpt_accounts", 0)
+r.setdefault("chatgpt_alerts", 0)
+print("accounts=%(accounts)s usable=%(usable)s gated=%(gated)s auth_failed=%(auth_failed)s probe_failed=%(probe_failed)s" % r)
+print("chatgpt_accounts=%(chatgpt_accounts)s chatgpt_alerts=%(chatgpt_alerts)s" % r)
 ')"
 	else
 		err_detail="$(tail -n 1 "${err_file}" 2>/dev/null | tr -cd '[:print:]' | cut -c1-200)"
 		echo "::warning::CLAUDE_POOL_DAILY_USAGE op=send reason=pool_usage_failed detail=${err_detail:-none}; sending the fallback text"
 		text="Claude pool daily usage: probe results unreadable."
-		counts="accounts=0 usable=0 gated=0 auth_failed=0 probe_failed=0"
+		counts="accounts=0 usable=0 gated=0 auth_failed=0 probe_failed=0
+chatgpt_accounts=0 chatgpt_alerts=0"
 	fi
+	# Line 1: the Claude counts (before outcome=); line 2: the ChatGPT counts (appended last).
+	chatgpt_counts="${counts#*$'\n'}"
+	counts="${counts%%$'\n'*}"
+	[ "${chatgpt_counts}" != "${counts}" ] || chatgpt_counts="chatgpt_accounts=0 chatgpt_alerts=0"
 	if [ "${probes_json}" = "[]" ] && [ -n "${CLAUDE_POOL_REASON:-}" ]; then
-		text="${text%.} (pool: ${CLAUDE_POOL_REASON})."
+		# The reason belongs to the Claude headline (the first line), not to the
+		# end of the text, which may hold the ChatGPT section.
+		text_head="${text%%$'\n'*}"
+		text="${text_head%.} (pool: ${CLAUDE_POOL_REASON}).${text#"${text_head}"}"
 	fi
 	[ "${err_file}" = /dev/null ] || rm -f "${err_file}"
 	text="📊 ${text}"
@@ -137,7 +171,7 @@ Probed by ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID
 		outcome=not_delivered
 		daily_usage_output "sent=false"
 	fi
-	echo "CLAUDE_POOL_DAILY_USAGE op=send ${counts} outcome=${outcome} truncated=${truncated}"
+	echo "CLAUDE_POOL_DAILY_USAGE op=send ${counts} outcome=${outcome} truncated=${truncated} ${chatgpt_counts}"
 }
 
 case "${1:-}" in

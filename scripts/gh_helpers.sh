@@ -26,6 +26,945 @@ if [ "${_GH_HELPERS_LOADED:-}" = "1" ]; then
 fi
 _GH_HELPERS_LOADED=1
 
+# ---------------------------------------------------------------
+# Signed job-token comments (run-volume plan item 15, decision D16).
+#
+# Opt-in by the repository secret AI_COMMENT_SIGNING_SECRET (env of the
+# same name, unset = no change at all). When set, a `gh` shim goes first on
+# PATH for this process and every child: comment creates that cannot start
+# an `issue_comment` wrapper are signed and posted with AI_COMMENT_JOB_TOKEN,
+# and comment reads return verified signed comments as if the PAT wrote
+# them. See scripts/comment_signature.py. Every other `gh` call execs the
+# real binary directly.
+#
+# The shim and the signer are written from this file into a temp dir under
+# RUNNER_TEMP, so they travel wherever gh_helpers.sh is staged (the embedded
+# signer is kept byte-identical to scripts/comment_signature.py by
+# tests/test_comment_signature.py). Inside Actions the first activation in a
+# job also appends the shim dir (and nothing else) to GITHUB_PATH, so every
+# later step of the job (Python scripts run straight from a workflow step
+# included) goes through the shim. The hardened check-failure triage job
+# never gets the secret, so it never activates there.
+# ---------------------------------------------------------------
+_ai_comment_sig_activate()
+{
+	[ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || return 0
+	if [ -n "${AI_COMMENT_SIG_SHIM_DIR:-}" ] && [ -x "${AI_COMMENT_SIG_SHIM_DIR}/gh" ]; then
+		case ":${PATH}:" in
+			*":${AI_COMMENT_SIG_SHIM_DIR}:"*) return 0 ;;
+		esac
+	fi
+	local _acs_real _acs_dir _acs_prev _acs_prev_oldifs="${IFS}"
+	# A later step of the job: an earlier step's shim dir is already on PATH
+	# (through GITHUB_PATH). Reuse it rather than writing another one.
+	IFS=":"
+	for _acs_prev in ${PATH}; do
+		case "${_acs_prev}" in
+			*/ai_comment_sig_shim.*)
+				if [ -x "${_acs_prev}/gh" ] && [ -f "${_acs_prev}/comment_signature.py" ]; then
+					IFS="${_acs_prev_oldifs}"
+					export AI_COMMENT_SIG_SHIM_DIR="${_acs_prev}"
+					export AI_COMMENT_SIG_PY="${_acs_prev}/comment_signature.py"
+					return 0
+				fi
+				;;
+		esac
+	done
+	IFS="${_acs_prev_oldifs}"
+	if ! command -v python3 >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1; then
+		echo "::warning::AI_COMMENT_SIG outcome=inactive reason=python3_or_jq_missing" >&2
+		return 0
+	fi
+	# Resolve the real gh, never a shim from an outer activation (that would
+	# make the shim exec itself).
+	_acs_real=""
+	local _acs_entry _acs_oldifs="${IFS}"
+	IFS=":"
+	for _acs_entry in ${PATH}; do
+		case "${_acs_entry}" in
+			*/ai_comment_sig_shim.*) continue ;;
+		esac
+		if [ -n "${_acs_entry}" ] && [ -x "${_acs_entry}/gh" ] && [ ! -d "${_acs_entry}/gh" ]; then
+			_acs_real="${_acs_entry}/gh"
+			break
+		fi
+	done
+	IFS="${_acs_oldifs}"
+	if [ -z "${_acs_real}" ]; then
+		return 0
+	fi
+	if ! _acs_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/ai_comment_sig_shim.XXXXXX" 2>/dev/null)"; then
+		echo "::warning::AI_COMMENT_SIG outcome=inactive reason=mktemp_failed" >&2
+		return 0
+	fi
+	if ! cat > "${_acs_dir}/gh" 2>/dev/null <<'AI_COMMENT_SIG_SHIM'
+#!/usr/bin/env bash
+# gh shim written by scripts/gh_helpers.sh (_ai_comment_sig_activate).
+if [ -z "${AI_COMMENT_SIG_REAL_GH:-}" ] || [ ! -x "${AI_COMMENT_SIG_REAL_GH}" ]; then
+	# Environment stripped (e.g. `env -i PATH=...`): find the next gh on PATH.
+	_shim_self_dir="$(cd "$(dirname "$0")" && pwd)"
+	AI_COMMENT_SIG_REAL_GH=""
+	_shim_oldifs="${IFS}"
+	IFS=":"
+	for _shim_entry in ${PATH}; do
+		case "${_shim_entry}" in
+			"${_shim_self_dir}"|*/ai_comment_sig_shim.*) continue ;;
+		esac
+		if [ -n "${_shim_entry}" ] && [ -x "${_shim_entry}/gh" ]; then
+			AI_COMMENT_SIG_REAL_GH="${_shim_entry}/gh"
+			break
+		fi
+	done
+	IFS="${_shim_oldifs}"
+	[ -n "${AI_COMMENT_SIG_REAL_GH}" ] || { echo "gh: not found (AI_COMMENT_SIG shim)" >&2; exit 127; }
+	export AI_COMMENT_SIG_REAL_GH
+fi
+case "${1:-}" in
+	api)
+		case " $* " in
+			*comments*|*" graphql "*) ;;
+			*) exec "${AI_COMMENT_SIG_REAL_GH}" "$@" ;;
+		esac
+		;;
+	issue|pr)
+		[ "${2:-}" = "comment" ] || exec "${AI_COMMENT_SIG_REAL_GH}" "$@"
+		;;
+	*) exec "${AI_COMMENT_SIG_REAL_GH}" "$@" ;;
+esac
+if [ ! -f "${AI_COMMENT_SIG_PY:-}" ]; then
+	# Later step of the job (reached through GITHUB_PATH): the signer sits next to the shim.
+	AI_COMMENT_SIG_PY="$(cd "$(dirname "$0")" && pwd)/comment_signature.py"
+	export AI_COMMENT_SIG_PY
+fi
+if [ -z "${AI_COMMENT_SIGNING_SECRET:-}" ] || [ ! -f "${AI_COMMENT_SIG_PY}" ]; then
+	exec "${AI_COMMENT_SIG_REAL_GH}" "$@"
+fi
+exec python3 -I -B "${AI_COMMENT_SIG_PY}" gh-shim -- "$@"
+AI_COMMENT_SIG_SHIM
+	then
+		echo "::warning::AI_COMMENT_SIG outcome=inactive reason=shim_write_failed" >&2
+		return 0
+	fi
+	chmod 0755 "${_acs_dir}/gh" || return 0
+	_ai_comment_sig_write_signer "${_acs_dir}/comment_signature.py" || {
+		echo "::warning::AI_COMMENT_SIG outcome=inactive reason=signer_write_failed" >&2
+		return 0
+	}
+	export AI_COMMENT_SIG_REAL_GH="${_acs_real}"
+	export AI_COMMENT_SIG_PY="${_acs_dir}/comment_signature.py"
+	export AI_COMMENT_SIG_SHIM_DIR="${_acs_dir}"
+	export PATH="${_acs_dir}:${PATH}"
+	hash -r 2>/dev/null || true
+	# Only the shim dir is persisted (no variables, no credentials): the shim
+	# finds the real gh and its signer itself, and passes every call through
+	# in a later step that does not hold AI_COMMENT_SIGNING_SECRET.
+	if [ -n "${GITHUB_PATH:-}" ] && [ -w "${GITHUB_PATH}" ]; then
+		printf '%s\n' "${_acs_dir}" >> "${GITHUB_PATH}" || true
+	fi
+	echo "AI_COMMENT_SIG outcome=active shim=${_acs_dir}" >&2
+}
+# Embedded copy of scripts/comment_signature.py (kept identical by
+# tests/test_comment_signature.py; edit the .py file, then re-embed).
+_ai_comment_sig_write_signer()
+{
+	cat > "$1" <<'AI_COMMENT_SIGNER_PY'
+#!/usr/bin/env python3
+"""Signed job-token comments (run-volume plan item 15, decision D16).
+
+A comment posted with `GH_PAT` starts the four `issue_comment` wrappers
+(`internal-implement.yml`, `internal-clarify.yml`, `internal-plan.yml`,
+`internal-orchestrate-clarify-respond.yml`, or the consumer `ai-*` copies);
+one posted with the job's `GITHUB_TOKEN` (`github-actions[bot]`) starts none.
+Most pipeline comments are trusted by author: readers keep only comments
+written by the PAT login. This module lets those comments move to the job
+token without weakening that check.
+
+Opt-in: everything here is inert unless the repository secret
+`AI_COMMENT_SIGNING_SECRET` is set (env of the same name). Rollback without
+losing trust in comments already signed: set the repository variable
+`AI_COMMENT_SIGNING_POST=false` (env of the same name, default `true`); new
+comments then go out with the caller's token again, unsigned, while reads keep
+verifying. Deleting the secret instead makes every signed comment read as an
+untrusted `github-actions[bot]` comment. With the secret set:
+
+* **Post.** A new issue/PR comment that cannot start a wrapper is signed
+  (HMAC-SHA256 over repository, issue number, PAT login, PAT account type,
+  PAT user id and the body) and posted with `AI_COMMENT_JOB_TOKEN`. The
+  signature is one hidden line appended to the body:
+  `<!-- ai-comment-sig:v1 repo=<owner/repo> issue=<n> as=<login> type=<User|Bot> uid=<id> sig=<64 hex> -->`.
+  A body that could start a wrapper (`/approved`, `/answer`, `/reclarify`,
+  `Clarification required`) or that the hardened plan-approval readers match
+  (`Implementation Plan`) is posted unchanged with the caller's token.
+* **Edit.** A body edit of a comment that `github-actions[bot]` wrote is
+  re-signed, so an in-place refresh keeps the comment trusted.
+* **Read.** Every `issues/.../comments` read and every `gh api graphql`
+  response is normalized: a comment by `github-actions[bot]` whose signature
+  verifies is returned as the PAT would have written it (`user.login` = the
+  signed login, `user.type` = the signed type, `user.id` = the signed id,
+  `author_association` = `OWNER` for the repository owner, else
+  `COLLABORATOR`), with the signature line removed from `body`. The signed
+  repository and issue must match the comment's own `issue_url` / `url`
+  when it carries one; a GraphQL node that selects neither is not
+  location-checked. An
+  unsigned or badly signed bot comment is returned unchanged, so it stays
+  untrusted. Readers need no change.
+
+Entry points
+------------
+gh-shim -- <gh args...>
+    Run by the `gh` shim that `scripts/gh_helpers.sh` puts first on `PATH`
+    when the secret is set. Calls the real `gh` (`AI_COMMENT_SIG_REAL_GH`)
+    and returns its exit status. Anything that is not a comment create, a
+    comment body edit or a comments read is passed through untouched.
+sign --repo R --issue N --as LOGIN [--type User|Bot]
+    Read a body on stdin, print the signed body (tests and diagnostics).
+normalize
+    Read a JSON stream (one value or `--paginate` pages) on stdin, print it
+    normalized, one compact value per input value.
+
+API calls (§15)
+---------------
+* One `GET /user` per job for the PAT identity (login, type, id), cached in
+  `${RUNNER_TEMP:-${TMPDIR:-/tmp}}/ai_comment_sig_identity_<token hash>.json`.
+* Create: the one POST, with the job token. When GitHub refuses the job
+  token (401/403, `Resource not accessible by integration`), the original
+  command is re-run once with the caller's token, unsigned, and the refusal
+  is cached for the job so later posts skip the job token. Any other failure
+  is returned as is and never resent: a timeout may already have created the
+  comment (gh_retry sends a POST once, issue #6634).
+* Edit: one extra `GET issues/comments/<id>` to learn the author and issue.
+* Read: no extra call.
+
+Fail-open: any parse error, a missing identity, a `{owner}/{repo}`
+placeholder endpoint, an unsupported flag (`--template`, nested `-f key[]=`
+fields) or a body over 65,536 characters falls back to running the original
+command unchanged.
+
+Log prefix: `AI_COMMENT_SIG` (`outcome=`), on stderr.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import hmac
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+from typing import Any
+
+SIG_VERSION = "v1"
+BOT_LOGIN = "github-actions[bot]"
+MAX_BODY_CHARS = 65_536
+SECRET_ENV = "AI_COMMENT_SIGNING_SECRET"
+JOB_TOKEN_ENV = "AI_COMMENT_JOB_TOKEN"
+POST_SWITCH_ENV = "AI_COMMENT_SIGNING_POST"
+REAL_GH_ENV = "AI_COMMENT_SIG_REAL_GH"
+LOG_PREFIX = "AI_COMMENT_SIG"
+
+_LOGIN = r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\[bot\])?"
+_REPO = r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+"
+# The line names the repository and issue it is bound to, so a reader that
+# has no issue context of its own (a GraphQL node) can still verify it.
+SIG_LINE_RE = re.compile(
+	r"\n<!-- ai-comment-sig:v1 repo=(?P<repo>" + _REPO + r") issue=(?P<issue>[0-9]+) as=(?P<login>" + _LOGIN
+	+ r") type=(?P<type>User|Bot)(?: uid=(?P<uid>[0-9]+))? sig=(?P<sig>[0-9a-f]{64}) -->\Z"
+)
+_ISSUE_URL_RE = re.compile(r"/repos/(?P<repo>[^/]+/[^/]+)/issues/(?P<num>[0-9]+)/?$")
+_HTML_URL_RE = re.compile(r"^https://github\.com/(?P<repo>[^/]+/[^/]+)/(?:issues|pull)/(?P<num>[0-9]+)(?:[#/?].*)?$")
+_CREATE_RE = re.compile(r"^repos/(?P<repo>[^/{}]+/[^/{}]+)/issues/(?P<num>[0-9]+)/comments$")
+_EDIT_RE = re.compile(r"^repos/(?P<repo>[^/{}]+/[^/{}]+)/issues/comments/(?P<id>[0-9]+)$")
+_READ_RE = re.compile(r"^repos/[^/]+/[^/]+/issues/(?:[0-9]+/comments|comments(?:/[0-9]+)?)$")
+# GraphQL reports the Actions bot as `github-actions` (type Bot).
+_GRAPHQL_BOT_LOGINS = ("github-actions", BOT_LOGIN)
+
+# Bodies that must keep the caller's (PAT) author. The first four are what the
+# `issue_comment` wrappers start on; the plan heading is what the hardened
+# plan-approval jobs in workflow-templates/ai-implement.yml and ai-plan.yml
+# read by the approver login. Matched anywhere in the body and ignoring case
+# (the wrappers' contains/startsWith ignore case), so a body that could match
+# a wrapper predicate is never moved.
+_KEEP_SUBSTRINGS = ("/approved", "/answer", "/reclarify", "clarification required")
+_KEEP_PLAN_RE = re.compile(r"(?im)^\s*implementation\s+plan\b")
+
+_REFUSED_RE = re.compile(
+	r"HTTP 40[13]|Resource not accessible by integration|Bad credentials|Requires authentication",
+	re.IGNORECASE,
+)
+_RATE_LIMITED_RE = re.compile(r"rate limit", re.IGNORECASE)
+
+# `gh api` flags that take a value (short and long forms).
+_API_VALUE_FLAGS = {
+	"-X": "method", "--method": "method",
+	"-H": "header", "--header": "header",
+	"-f": "raw", "--raw-field": "raw",
+	"-F": "typed", "--field": "typed",
+	"--input": "input",
+	"-q": "jq", "--jq": "jq",
+	"-t": "template", "--template": "template",
+	"--hostname": "other", "--cache": "other", "-p": "other", "--preview": "other",
+}
+_API_BOOL_FLAGS = {"-i", "--include", "--paginate", "--slurp", "--silent", "--verbose"}
+
+
+def log(outcome: str, **fields: object) -> None:
+	extra = " ".join(f"{k}={v}" for k, v in fields.items())
+	print(f"{LOG_PREFIX} outcome={outcome} {extra}".rstrip(), file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# Signing and verification
+# ---------------------------------------------------------------------------
+
+def canonical(repo: str, issue: int, login: str, account_type: str, body: str, uid: int | None = None) -> bytes:
+	digest = hashlib.sha256(body.encode("utf-8")).hexdigest()
+	return (
+		f"ai-comment-sig:{SIG_VERSION}\nrepo={repo.lower()}\nissue={int(issue)}"
+		f"\nas={login}\ntype={account_type}\nuid={'' if uid is None else int(uid)}\nbody_sha256={digest}"
+	).encode("utf-8")
+
+
+def signature(secret: str, repo: str, issue: int, login: str, account_type: str, body: str, uid: int | None = None) -> str:
+	return hmac.new(secret.encode("utf-8"), canonical(repo, issue, login, account_type, body, uid), hashlib.sha256).hexdigest()
+
+
+def strip_signature(body: str) -> str:
+	"""Remove a trailing signature line, if any (used before re-signing)."""
+	match = SIG_LINE_RE.search(body)
+	return body[: match.start()] if match else body
+
+
+def sign_body(secret: str, repo: str, issue: int, login: str, account_type: str, body: str, uid: int | None = None) -> str:
+	body = strip_signature(body)
+	sig = signature(secret, repo, issue, login, account_type, body, uid)
+	uid_field = "" if uid is None else f" uid={int(uid)}"
+	return (
+		f"{body}\n<!-- ai-comment-sig:{SIG_VERSION} repo={repo.lower()} issue={int(issue)} "
+		f"as={login} type={account_type}{uid_field} sig={sig} -->"
+	)
+
+
+def keep_caller_author(body: str) -> bool:
+	"""True when the body could start a wrapper or is a plan comment."""
+	lowered = body.lower()
+	return any(token in lowered for token in _KEEP_SUBSTRINGS) or bool(_KEEP_PLAN_RE.search(body))
+
+
+def _comment_location(comment: dict) -> tuple[str, int] | None:
+	"""Repository and issue a comment object itself says it belongs to."""
+	match = _ISSUE_URL_RE.search(str(comment.get("issue_url") or ""))
+	if match:
+		return match.group("repo"), int(match.group("num"))
+	for key in ("url", "html_url"):
+		match = _HTML_URL_RE.match(str(comment.get(key) or ""))
+		if match:
+			return match.group("repo"), int(match.group("num"))
+	return None
+
+
+def verify_body(body: str, secret: str, location: tuple[str, int] | None, comment_id: object = None):
+	"""Return (original_body, login, account_type, repo, uid) when the signature holds.
+
+	The signed repository and issue must match the comment's own location
+	when the object carries one (REST `issue_url`, GraphQL `url`).
+	"""
+	match = SIG_LINE_RE.search(body)
+	if not match:
+		return None
+	repo, issue = match.group("repo"), int(match.group("issue"))
+	if location is not None and (location[0].lower() != repo.lower() or location[1] != issue):
+		log("invalid", comment_id=comment_id, reason="location_mismatch")
+		return None
+	original = body[: match.start()]
+	uid = int(match.group("uid")) if match.group("uid") else None
+	expected = signature(secret, repo, issue, match.group("login"), match.group("type"), original, uid)
+	if not hmac.compare_digest(expected, match.group("sig")):
+		log("invalid", comment_id=comment_id)
+		return None
+	return original, match.group("login"), match.group("type"), repo, uid
+
+
+def _association(login: str, repo: str) -> str:
+	return "OWNER" if login.lower() == repo.split("/", 1)[0].lower() else "COLLABORATOR"
+
+
+def normalize_comment(comment: Any, secret: str) -> Any:
+	"""Rewrite a validly signed bot comment (REST or GraphQL shape)."""
+	if not isinstance(comment, dict) or not isinstance(comment.get("body"), str):
+		return comment
+	user = comment.get("user")
+	author = comment.get("author")
+	if isinstance(user, dict) and user.get("login") == BOT_LOGIN:
+		verified = verify_body(comment["body"], secret, _comment_location(comment), comment.get("id"))
+		if verified is None:
+			return comment
+		original, login, account_type, repo, uid = verified
+		normalized = dict(comment)
+		normalized["body"] = original
+		normalized["user"] = dict(user, login=login, type=account_type)
+		if uid is not None:
+			# Readers that trust the PAT by numeric id (`.user.id == $actor`).
+			normalized["user"]["id"] = uid
+		normalized["author_association"] = _association(login, repo)
+		normalized["ai_comment_sig"] = {"poster": BOT_LOGIN}
+		return normalized
+	if isinstance(author, dict) and author.get("login") in _GRAPHQL_BOT_LOGINS:
+		verified = verify_body(comment["body"], secret, _comment_location(comment), comment.get("id") or comment.get("databaseId"))
+		if verified is None:
+			return comment
+		original, login, account_type, repo, uid = verified
+		normalized = dict(comment)
+		normalized["body"] = original
+		normalized_author = dict(author, login=login)
+		if "__typename" in normalized_author:
+			normalized_author["__typename"] = account_type
+		if uid is not None and "databaseId" in normalized_author:
+			normalized_author["databaseId"] = uid
+		normalized["author"] = normalized_author
+		if "authorAssociation" in normalized:
+			normalized["authorAssociation"] = _association(login, repo)
+		return normalized
+	return comment
+
+
+def normalize_value(value: Any, secret: str) -> Any:
+	"""Normalize every comment object anywhere in a REST or GraphQL response."""
+	if isinstance(value, list):
+		return [normalize_value(item, secret) for item in value]
+	if isinstance(value, dict):
+		value = normalize_comment(value, secret)
+		return {key: normalize_value(item, secret) if isinstance(item, (dict, list)) else item for key, item in value.items()}
+	return value
+
+
+def iter_json_stream(text: str):
+	decoder = json.JSONDecoder()
+	index = 0
+	length = len(text)
+	while True:
+		while index < length and text[index].isspace():
+			index += 1
+		if index >= length:
+			return
+		value, index = decoder.raw_decode(text, index)
+		yield value
+
+
+# ---------------------------------------------------------------------------
+# gh command parsing
+# ---------------------------------------------------------------------------
+
+class Unsupported(Exception):
+	pass
+
+
+_STDIN_CONSUMED = False
+
+
+def _read_source(source: str) -> str:
+	"""Read `-` (stdin) or a file; remember stdin so the original command is not re-run."""
+	global _STDIN_CONSUMED
+	if source == "-":
+		_STDIN_CONSUMED = True
+		return sys.stdin.read()
+	with open(source, encoding="utf-8") as handle:
+		return handle.read()
+
+
+def parse_api_args(args: list[str]) -> dict:
+	"""Parse `gh api` arguments (without the leading `api`)."""
+	parsed: dict[str, Any] = {"endpoint": None, "method": None, "fields": [], "input": None,
+		"jq": None, "template": None, "flags": [], "include": False}
+	index = 0
+	while index < len(args):
+		arg = args[index]
+		name, value = arg, None
+		if arg.startswith("--") and "=" in arg:
+			name, value = arg.split("=", 1)
+		elif len(arg) > 2 and arg[:2] in _API_VALUE_FLAGS and not arg.startswith("--"):
+			name, value = arg[:2], arg[2:]
+		kind = _API_VALUE_FLAGS.get(name)
+		if kind:
+			if value is None:
+				index += 1
+				if index >= len(args):
+					raise Unsupported(f"{name} without a value")
+				value = args[index]
+			if kind == "method":
+				parsed["method"] = value.upper()
+			elif kind in ("raw", "typed"):
+				parsed["fields"].append((kind, value))
+			elif kind == "input":
+				parsed["input"] = value
+			elif kind == "jq":
+				parsed["jq"] = value
+			elif kind == "template":
+				parsed["template"] = value
+			else:
+				parsed["flags"] += [name, value]
+		elif arg in _API_BOOL_FLAGS:
+			if arg in ("-i", "--include"):
+				parsed["include"] = True
+			parsed["flags"].append(arg)
+		elif arg.startswith("-") and arg != "-":
+			raise Unsupported(f"unknown flag {arg}")
+		elif parsed["endpoint"] is None:
+			parsed["endpoint"] = arg
+		else:
+			raise Unsupported("second positional argument")
+		index += 1
+	if parsed["endpoint"] is None:
+		raise Unsupported("no endpoint")
+	if parsed["method"] is None:
+		parsed["method"] = "POST" if (parsed["fields"] or parsed["input"]) else "GET"
+	return parsed
+
+
+def endpoint_path(endpoint: str) -> str:
+	path = endpoint.split("?", 1)[0]
+	if path.startswith("https://api.github.com/"):
+		path = path[len("https://api.github.com/"):]
+	return path.lstrip("/")
+
+
+def _typed_value(raw: str) -> Any:
+	if raw == "true":
+		return True
+	if raw == "false":
+		return False
+	if raw == "null":
+		return None
+	if re.fullmatch(r"-?[0-9]+", raw):
+		return int(raw)
+	if raw.startswith("@"):
+		return _read_source(raw[1:])
+	return raw
+
+
+def build_payload(parsed: dict) -> dict:
+	"""The JSON body gh would send. Raises Unsupported for shapes we do not rebuild."""
+	if parsed["input"] is not None:
+		if parsed["fields"]:
+			raise Unsupported("--input with fields")
+		source = parsed["input"]
+		text = _read_source(source)
+		payload = json.loads(text)
+		if not isinstance(payload, dict):
+			raise Unsupported("--input is not an object")
+		return payload
+	payload: dict[str, Any] = {}
+	for kind, item in parsed["fields"]:
+		if "=" not in item:
+			raise Unsupported("field without =")
+		key, raw = item.split("=", 1)
+		if "[" in key or key in payload:
+			raise Unsupported("nested or repeated field")
+		payload[key] = raw if kind == "raw" else _typed_value(raw)
+	return payload
+
+
+def parse_comment_cli(args: list[str]) -> dict:
+	"""Parse `gh issue|pr comment <n|url> ...` into an api-shaped request."""
+	kind, rest = args[0], args[1:]
+	target = None
+	body = None
+	repo = os.environ.get("GH_REPO") or None
+	index = 0
+	while index < len(rest):
+		arg = rest[index]
+		if arg in ("-b", "--body", "-F", "--body-file", "-R", "--repo"):
+			index += 1
+			if index >= len(rest):
+				raise Unsupported(f"{arg} without a value")
+			value = rest[index]
+			if arg in ("-b", "--body"):
+				body = value
+			elif arg in ("-F", "--body-file"):
+				body = _read_source(value)
+			else:
+				repo = value
+		elif arg.startswith(("--body=", "--body-file=", "--repo=")):
+			name, value = arg.split("=", 1)
+			if name == "--body":
+				body = value
+			elif name == "--body-file":
+				body = _read_source(value)
+			else:
+				repo = value
+		elif arg.startswith("-"):
+			raise Unsupported(f"unsupported {kind} comment flag {arg}")
+		elif target is None:
+			target = arg
+		else:
+			raise Unsupported("second positional argument")
+		index += 1
+	if target is None or body is None:
+		raise Unsupported("missing target or body")
+	url = re.fullmatch(r"https://github\.com/([^/]+/[^/]+)/(?:issues|pull)/([0-9]+)/?", target)
+	if url:
+		repo, number = url.group(1), url.group(2)
+	elif re.fullmatch(r"#?[0-9]+", target):
+		number = target.lstrip("#")
+	else:
+		raise Unsupported("unrecognised target")
+	if not repo:
+		raise Unsupported("repository unknown")
+	return {"repo": repo, "issue": int(number), "body": body}
+
+
+# ---------------------------------------------------------------------------
+# Running gh
+# ---------------------------------------------------------------------------
+
+def real_gh() -> str:
+	path = os.environ.get(REAL_GH_ENV, "")
+	if not path or not os.access(path, os.X_OK):
+		raise SystemExit(f"{LOG_PREFIX} outcome=error reason=real_gh_unknown")
+	return path
+
+
+def run_gh(args: list[str], env: dict | None = None, stdin_data: str | None = None) -> subprocess.CompletedProcess:
+	return subprocess.run(
+		[real_gh(), *args], capture_output=True, text=True, check=False,
+		env=env if env is not None else os.environ.copy(), input=stdin_data,
+	)
+
+
+def passthrough(args: list[str]) -> int:
+	os.execv(real_gh(), [real_gh(), *args])
+	return 127  # pragma: no cover
+
+
+def emit(proc: subprocess.CompletedProcess) -> int:
+	sys.stdout.write(proc.stdout)
+	sys.stderr.write(proc.stderr)
+	return proc.returncode
+
+
+def _state_dir() -> str:
+	return os.environ.get("RUNNER_TEMP") or os.environ.get("TMPDIR") or "/tmp"
+
+
+def _token_key(token: str) -> str:
+	return hashlib.sha256(token.encode("utf-8")).hexdigest()[:16]
+
+
+def caller_identity() -> tuple[str, str, int] | None:
+	"""(login, type, id) of the caller's token, cached per job (one GET /user)."""
+	token = os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
+	if not token:
+		return None
+	cache = os.path.join(_state_dir(), f"ai_comment_sig_identity_{_token_key(token)}.json")
+	try:
+		with open(cache, encoding="utf-8") as handle:
+			cached = json.load(handle)
+		if (re.fullmatch(_LOGIN, cached.get("login", "")) and cached.get("type") in ("User", "Bot")
+				and isinstance(cached.get("id"), int) and not isinstance(cached.get("id"), bool)):
+			return cached["login"], cached["type"], cached["id"]
+	except (OSError, ValueError, AttributeError):
+		pass
+	proc = run_gh(["api", "user", "--jq", "{login: .login, type: .type, id: .id}"])
+	if proc.returncode != 0:
+		return None
+	try:
+		identity = json.loads(proc.stdout)
+	except ValueError:
+		return None
+	if not isinstance(identity, dict):
+		return None
+	login, account_type, uid = identity.get("login", ""), identity.get("type", ""), identity.get("id")
+	if login == BOT_LOGIN or not re.fullmatch(_LOGIN, str(login)) or account_type not in ("User", "Bot"):
+		return None
+	if not isinstance(uid, int) or isinstance(uid, bool):
+		return None
+	try:
+		with open(cache, "w", encoding="utf-8") as handle:
+			json.dump({"login": login, "type": account_type, "id": uid}, handle)
+	except OSError:
+		pass
+	return login, account_type, uid
+
+
+def _refusal_flag() -> str:
+	return os.path.join(_state_dir(), f"ai_comment_sig_job_token_refused_{_token_key(os.environ.get(JOB_TOKEN_ENV, ''))}")
+
+
+def _output_args(parsed: dict) -> list[str]:
+	out = list(parsed["flags"])
+	if parsed["jq"] is not None:
+		out += ["--jq", parsed["jq"]]
+	if parsed["template"] is not None:
+		out += ["--template", parsed["template"]]
+	return out
+
+
+def send_plain(original: list[str], endpoint: str, method: str, payload: dict, output_args: list[str]) -> int:
+	"""Run the request unchanged with the caller's token.
+
+	Re-executes the original command unless its body came from stdin, which
+	this process has already read; then the rebuilt payload is sent instead.
+	"""
+	if not _STDIN_CONSUMED:
+		return passthrough(original)
+	with tempfile.NamedTemporaryFile("w", suffix=".json", dir=_state_dir(), delete=False, encoding="utf-8") as handle:
+		json.dump(payload, handle)
+		payload_path = handle.name
+	try:
+		return emit(run_gh(["api", endpoint, "--method", method, "--input", payload_path, *output_args]))
+	finally:
+		os.unlink(payload_path)
+
+
+def post_signed(original: list[str], repo: str, issue: int, payload: dict, output_args: list[str], secret: str) -> int:
+	endpoint = f"repos/{repo}/issues/{issue}/comments"
+
+	def plain() -> int:
+		return send_plain(original, endpoint, "POST", payload, output_args)
+
+	body = payload.get("body")
+	if not isinstance(body, str) or keep_caller_author(body):
+		return plain()
+	current = os.environ.get("GITHUB_REPOSITORY", "")
+	job_token = os.environ.get(JOB_TOKEN_ENV, "")
+	if os.environ.get(POST_SWITCH_ENV, "true").strip().lower() == "false":
+		return plain()
+	if not job_token or repo.lower() != current.lower() or os.path.exists(_refusal_flag()):
+		return plain()
+	identity = caller_identity()
+	if identity is None:
+		log("skip", reason="identity_unknown", issue=issue)
+		return plain()
+	signed = sign_body(secret, repo, issue, identity[0], identity[1], body, identity[2])
+	if len(signed) > MAX_BODY_CHARS:
+		log("skip", reason="body_too_long", issue=issue)
+		return plain()
+	with tempfile.NamedTemporaryFile("w", suffix=".json", dir=_state_dir(), delete=False, encoding="utf-8") as handle:
+		json.dump(dict(payload, body=signed), handle)
+		payload_path = handle.name
+	env = os.environ.copy()
+	env["GH_TOKEN"] = job_token
+	env["GITHUB_TOKEN"] = job_token
+	try:
+		proc = run_gh(["api", endpoint, "--method", "POST", "--input", payload_path, *_strip_jq(output_args)], env=env)
+	finally:
+		os.unlink(payload_path)
+	if proc.returncode == 0:
+		log("posted", issue=issue, token="job")
+		sys.stderr.write(proc.stderr)
+		jq_filter = None
+		if "--jq" in output_args:
+			jq_filter = output_args[output_args.index("--jq") + 1]
+		head, text = "", proc.stdout
+		if "-i" in output_args or "--include" in output_args:
+			parts = _split_include(text)
+			if parts is not None:
+				head, text = parts
+		return write_normalized(text, head, jq_filter, secret)
+	if _REFUSED_RE.search(proc.stderr or ""):
+		if _RATE_LIMITED_RE.search(proc.stderr or ""):
+			# A rate-limit 403 created nothing and says nothing about the
+			# token's permissions: fall back for this comment only.
+			log("fallback", reason="job_token_rate_limited", issue=issue)
+			return plain()
+		log("fallback", reason="job_token_refused", issue=issue)
+		try:
+			open(_refusal_flag(), "w").close()
+		except OSError:
+			pass
+		return plain()
+	# Ambiguous failure: the comment may exist already. Never resend.
+	log("failed", issue=issue, rc=proc.returncode)
+	return emit(proc)
+
+
+def edit_signed(original: list[str], parsed: dict, repo: str, comment_id: str, secret: str) -> int:
+	payload = build_payload(parsed)
+	endpoint = f"repos/{repo}/issues/comments/{comment_id}"
+
+	def plain() -> int:
+		return send_plain(original, endpoint, "PATCH", payload, _output_args(parsed))
+
+	body = payload.get("body")
+	if not isinstance(body, str):
+		return plain()
+	proc = run_gh(["api", endpoint])
+	try:
+		current = json.loads(proc.stdout) if proc.returncode == 0 else None
+	except ValueError:
+		current = None
+	if not isinstance(current, dict) or (current.get("user") or {}).get("login") != BOT_LOGIN:
+		return plain()
+	location = _comment_location(current)
+	verified = verify_body(str(current.get("body") or ""), secret, location, comment_id) if location else None
+	if verified is None:
+		# Never sign an edit of a comment that was not validly signed: that
+		# would turn an untrusted bot comment into a trusted one.
+		return plain()
+	# Re-sign for the same issue and account as the original, so an edit
+	# cannot change where or whose comment it is.
+	_, login, account_type, _, uid = verified
+	signed = sign_body(secret, location[0], location[1], login, account_type, body, uid)
+	if len(signed) > MAX_BODY_CHARS:
+		return plain()
+	with tempfile.NamedTemporaryFile("w", suffix=".json", dir=_state_dir(), delete=False, encoding="utf-8") as handle:
+		json.dump(dict(payload, body=signed), handle)
+		payload_path = handle.name
+	try:
+		proc = run_gh(["api", endpoint, "--method", "PATCH", "--input", payload_path, *_output_args(parsed)])
+	finally:
+		os.unlink(payload_path)
+	log("edited" if proc.returncode == 0 else "edit_failed", comment_id=comment_id)
+	return emit(proc)
+
+
+def _apply_jq(stream: str, jq_filter: str) -> int:
+	"""Run a --jq filter the way gh does: per input value, raw strings, exit 1 on error."""
+	filtered = subprocess.run(["jq", "-rcS", jq_filter], input=stream, capture_output=True, text=True, check=False)
+	sys.stdout.write(filtered.stdout)
+	sys.stderr.write(filtered.stderr)
+	return 0 if filtered.returncode == 0 else 1
+
+
+def write_normalized(text: str, head: str, jq_filter: str | None, secret: str) -> int:
+	"""Print a response body normalized, then filtered by --jq when given."""
+	try:
+		values = [normalize_value(value, secret) for value in iter_json_stream(text)]
+	except ValueError:
+		# Not JSON: nothing to normalize. gh would hand the same text to jq.
+		sys.stdout.write(head)
+		if jq_filter is None:
+			sys.stdout.write(text)
+			return 0
+		return _apply_jq(text, jq_filter)
+	sys.stdout.write(head)
+	if jq_filter is None:
+		sys.stdout.write("".join(json.dumps(value, ensure_ascii=False, separators=(",", ":")) for value in values))
+		return 0
+	return _apply_jq("\n".join(json.dumps(value, ensure_ascii=False) for value in values), jq_filter)
+
+
+def _split_include(text: str) -> tuple[str, str] | None:
+	split = re.search(r"\r?\n\r?\n", text)
+	if split is None:
+		return None
+	return text[: split.end()], text[split.end():]
+
+
+def read_normalized(args: list[str], parsed: dict, secret: str) -> int:
+	if parsed["template"] is not None:
+		return passthrough(args)
+	proc = run_gh(["api", *_strip_jq(args[1:])])
+	if proc.returncode != 0:
+		# gh prints the error body and exits non-zero without running --jq.
+		return emit(proc)
+	text = proc.stdout
+	head = ""
+	if parsed["include"]:
+		parts = _split_include(text)
+		if parts is None:
+			# Unexpected shape: re-run the original command so --jq still applies.
+			return passthrough(args)
+		head, text = parts
+	sys.stderr.write(proc.stderr)
+	return write_normalized(text, head, parsed["jq"], secret)
+
+
+def _strip_jq(args: list[str]) -> list[str]:
+	out = []
+	index = 0
+	while index < len(args):
+		arg = args[index]
+		if arg in ("-q", "--jq"):
+			index += 2
+			continue
+		if arg.startswith("--jq=") or (arg.startswith("-q") and len(arg) > 2):
+			index += 1
+			continue
+		out.append(arg)
+		index += 1
+	return out
+
+
+def gh_shim(args: list[str]) -> int:
+	secret = os.environ.get(SECRET_ENV, "")
+	if not secret or not args:
+		return passthrough(args)
+	try:
+		if args[0] in ("issue", "pr") and len(args) > 1 and args[1] == "comment":
+			request = parse_comment_cli([args[0], *args[2:]])
+			return post_signed(args, request["repo"], request["issue"], {"body": request["body"]}, ["--jq", ".html_url"], secret)
+		if args[0] != "api":
+			return passthrough(args)
+		parsed = parse_api_args(args[1:])
+		path = endpoint_path(parsed["endpoint"])
+		create = _CREATE_RE.match(path)
+		if create and parsed["method"] == "POST":
+			if parsed["template"] is not None:
+				return passthrough(args)
+			payload = build_payload(parsed)
+			return post_signed(args, create.group("repo"), int(create.group("num")), payload, _output_args(parsed), secret)
+		edit = _EDIT_RE.match(path)
+		if edit and parsed["method"] == "PATCH":
+			return edit_signed(args, parsed, edit.group("repo"), edit.group("id"), secret)
+		if _READ_RE.match(path) and parsed["method"] == "GET":
+			return read_normalized(args, parsed, secret)
+		if path == "graphql":
+			return read_normalized(args, parsed, secret)
+	except (Unsupported, OSError, ValueError, UnicodeDecodeError) as exc:
+		if _STDIN_CONSUMED:
+			# The body was read from stdin, so the original command cannot be
+			# re-run with it. Fail loudly rather than post an empty comment.
+			log("error", reason=type(exc).__name__, stdin="consumed")
+			print(f"gh: comment request could not be parsed ({exc})", file=sys.stderr)
+			return 1
+		log("passthrough", reason=type(exc).__name__)
+	return passthrough(args)
+
+
+def main(argv: list[str]) -> int:
+	if argv and argv[0] == "gh-shim":
+		rest = argv[1:]
+		if rest and rest[0] == "--":
+			rest = rest[1:]
+		return gh_shim(rest)
+	parser = argparse.ArgumentParser(description=__doc__.split("\n\n", 1)[0])
+	sub = parser.add_subparsers(dest="cmd", required=True)
+	p_sign = sub.add_parser("sign")
+	p_sign.add_argument("--repo", required=True)
+	p_sign.add_argument("--issue", required=True, type=int)
+	p_sign.add_argument("--as", dest="login", required=True)
+	p_sign.add_argument("--type", default="User", choices=("User", "Bot"))
+	sub.add_parser("normalize")
+	args = parser.parse_args(argv)
+	secret = os.environ.get(SECRET_ENV, "")
+	if not secret:
+		print(f"{SECRET_ENV} is not set", file=sys.stderr)
+		return 2
+	if args.cmd == "sign":
+		sys.stdout.write(sign_body(secret, args.repo, args.issue, args.login, args.type, sys.stdin.read()))
+		return 0
+	for value in iter_json_stream(sys.stdin.read()):
+		print(json.dumps(normalize_value(value, secret), ensure_ascii=False, separators=(",", ":")))
+	return 0
+
+
+if __name__ == "__main__":
+	sys.exit(main(sys.argv[1:]))
+AI_COMMENT_SIGNER_PY
+}
+_ai_comment_sig_activate
+# Activate-only mode: a script that posts comments but does not otherwise use
+# these helpers runs `AI_COMMENT_SIG_ACTIVATE_ONLY=1 source .../gh_helpers.sh`
+# to put the shim on PATH without defining the rest of the library (so none of
+# its own functions are overridden). A later full source still loads it.
+if [ "${AI_COMMENT_SIG_ACTIVATE_ONLY:-}" = "1" ]; then
+	unset _GH_HELPERS_LOADED AI_COMMENT_SIG_ACTIVATE_ONLY
+	return 0 2>/dev/null || true
+fi
+
 # Shared PAT counters are only an estimate of job usage: other jobs may run
 # concurrently. /rate_limit does not debit the primary REST allowance.
 gh_pat_budget()
@@ -115,6 +1054,332 @@ gh_review_pr_state()
 			printf 'open\n'
 		fi
 	) 9>"${cache_file}.lock"
+}
+
+# ---------------------------------------------------------------
+# Run-local PR read cache (issue #9928, GH_PAT budget part E).
+#
+# gh_pr_cached_read <kind> <repo> <number> [<head_sha>]
+#   kind: pull | issue_comments | reviews | review_comments | files | check_runs
+#   Prints the JSON for the PR resource (an object for pull and check_runs,
+#   one flat array for the paginated list kinds) and returns 0; returns 1 with
+#   no stdout on invalid input or when the live read fails.
+#   One fetch per kind, PR, head SHA and job: entries live under
+#   ${RUNNER_TEMP}/gh_pr_read_cache (mode 700) and are keyed
+#   <run_id>_<attempt>_<job>_<repo>_<number>_<kind>_<sha|na>. Each entry has a
+#   sidecar .meta line "<repo> <number> <kind> <sha|na> <fetched_epoch>" and a
+#   .lock file (holding the same identity) that one flock covers check, fetch
+#   and write with, so concurrent reviewer subshells make a single call.
+#   Freshness: pull, check_runs and every entry with no head SHA (na) expire
+#   after 120 s; SHA-keyed list kinds stay valid until evicted. A pull payload
+#   whose state is not "open" is never stored (as in gh_review_pr_state), and a
+#   pull entry whose head differs from the requested SHA is a miss.
+#   Fail-open: with REVIEW_RUN_READ_CACHE_ENABLED=false|0|no|off (any case),
+#   no RUNNER_TEMP, no flock, or an unusable cache directory or lock, the read
+#   is a plain live call; a cache write failure still prints the live result.
+#   Each cached read appends "hit <kind>" or "miss <kind>" to
+#   ${RUNNER_TEMP}/gh_pr_read_cache/<run_id>_<attempt>.stats, which the
+#   codex-agent end step summarises as GH_PR_READ_CACHE hits=<n> misses=<n>.
+#   Never a merge authorisation: merge paths keep their live head read.
+#
+# gh_pr_cache_evict <repo> <number> [kind…]
+#   Removes this run's entries for the PR (all kinds when none are given),
+#   under each entry's lock so an in-flight fetch cannot store stale data
+#   after the eviction. Always returns 0.
+#
+# _gh_pr_cache_evict_for_cmd <command…>
+#   Called by gh_retry, gh_retry_to_file and gh_api_retry after every attempt
+#   of their command, so a PR write made through them (label add/remove,
+#   comment post, update-branch, edit, merge) evicts that PR's entries. Returns
+#   at once when the cache directory does not exist (every job that never
+#   called gh_pr_cached_read). Never writes to stdout.
+# ---------------------------------------------------------------
+_gh_pr_cache_enabled()
+{
+	case "$(printf '%s' "${REVIEW_RUN_READ_CACHE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+		false|0|no|off) return 1 ;;
+	esac
+	return 0
+}
+
+_gh_pr_cache_dir()
+{
+	[ -n "${RUNNER_TEMP:-}" ] || return 1
+	printf '%s/gh_pr_read_cache\n' "${RUNNER_TEMP}"
+}
+
+_gh_pr_cache_run_prefix()
+{
+	local run_id="${GITHUB_RUN_ID:-local}" attempt="${GITHUB_RUN_ATTEMPT:-1}"
+	[[ "${run_id}" =~ ^[A-Za-z0-9_-]+$ ]] || run_id="local"
+	[[ "${attempt}" =~ ^[0-9]+$ ]] || attempt="1"
+	printf '%s_%s\n' "${run_id}" "${attempt}"
+}
+
+# _gh_pr_cache_fetch <kind> <repo> <number> <sha> <outfile> — live read,
+# normalised to compact JSON of the expected type in <outfile>.
+_gh_pr_cache_fetch()
+{
+	local kind="$1" repo="$2" number="$3" sha="$4" outfile="$5" raw rc=0 filter
+	raw="$(mktemp "${TMPDIR:-/tmp}/gh_pr_cache_fetch.XXXXXX" 2>/dev/null)" || return 1
+	case "${kind}" in
+		pull) gh_retry_to_file "${raw}" gh api "repos/${repo}/pulls/${number}" || rc=$? ;;
+		issue_comments) gh_retry_to_file "${raw}" gh api --paginate "repos/${repo}/issues/${number}/comments?per_page=100" || rc=$? ;;
+		reviews) gh_retry_to_file "${raw}" gh api --paginate "repos/${repo}/pulls/${number}/reviews?per_page=100" || rc=$? ;;
+		review_comments) gh_retry_to_file "${raw}" gh api --paginate "repos/${repo}/pulls/${number}/comments?per_page=100" || rc=$? ;;
+		files) gh_retry_to_file "${raw}" gh api --paginate "repos/${repo}/pulls/${number}/files?per_page=100" || rc=$? ;;
+		check_runs) gh_retry_to_file "${raw}" gh api --paginate "repos/${repo}/commits/${sha}/check-runs?per_page=100" || rc=$? ;;
+		*) rc=1 ;;
+	esac
+	if [ "${rc}" -ne 0 ]; then
+		rm -f "${raw}"
+		return 1
+	fi
+	case "${kind}" in
+		pull) filter='if length == 1 and (.[0] | type) == "object" then .[0] else error("not one object") end' ;;
+		check_runs) filter='if length > 0 and all(.[]; type == "object") then {total_count: (.[0].total_count // 0), check_runs: (map(.check_runs // []) | add // [])} else error("not check-run pages") end' ;;
+		*) filter='if all(.[]; type == "array") then (add // []) else error("not array pages") end' ;;
+	esac
+	jq -c -s "${filter}" "${raw}" > "${outfile}" 2>/dev/null || rc=1
+	rm -f "${raw}"
+	return "${rc}"
+}
+
+# _gh_pr_cache_live <kind> <repo> <number> <sha> — uncached read to stdout.
+_gh_pr_cache_live()
+{
+	local out rc=0
+	out="$(mktemp "${TMPDIR:-/tmp}/gh_pr_cache_live.XXXXXX" 2>/dev/null)" || return 1
+	if _gh_pr_cache_fetch "$1" "$2" "$3" "$4" "${out}"; then
+		cat "${out}" || rc=$?
+	else
+		rc=1
+	fi
+	rm -f "${out}"
+	return "${rc}"
+}
+
+# _gh_pr_cache_entry_fresh <entry> <repo> <number> <kind> <sha|na> <now>
+_gh_pr_cache_entry_fresh()
+{
+	local entry="$1" repo="$2" number="$3" kind="$4" sha_key="$5" now="$6"
+	local m_repo="" m_number="" m_kind="" m_sha="" m_epoch="" age type_filter
+	[ -r "${entry}" ] && [ -r "${entry}.meta" ] || return 1
+	read -r m_repo m_number m_kind m_sha m_epoch < "${entry}.meta" 2>/dev/null || return 1
+	[ "${m_repo}" = "${repo}" ] && [ "${m_number}" = "${number}" ] && [ "${m_kind}" = "${kind}" ] && [ "${m_sha}" = "${sha_key}" ] || return 1
+	[[ "${m_epoch}" =~ ^[0-9]+$ ]] || return 1
+	if [ "${kind}" = "pull" ] || [ "${kind}" = "check_runs" ] || [ "${sha_key}" = "na" ]; then
+		age=$(( now - m_epoch ))
+		[ "${age}" -ge 0 ] && [ "${age}" -lt 120 ] || return 1
+	fi
+	case "${kind}" in
+		pull) type_filter='type == "object" and .state == "open" and ($sha == "na" or .head.sha == $sha)' ;;
+		check_runs) type_filter='type == "object" and (.check_runs | type) == "array"' ;;
+		*) type_filter='type == "array"' ;;
+	esac
+	jq -e --arg sha "${sha_key}" "${type_filter}" "${entry}" >/dev/null 2>&1
+}
+
+gh_pr_cached_read()
+{
+	local kind="${1:-}" repo="${2:-}" number="${3:-}" sha="${4:-}"
+	local dir="" job sha_key entry stats
+	case "${kind}" in
+		pull|issue_comments|reviews|review_comments|files|check_runs) ;;
+		*) return 1 ;;
+	esac
+	if [[ ! "${repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || [[ ! "${number}" =~ ^[1-9][0-9]*$ ]] \
+		|| [[ "${repo}" =~ (^|/)\.\.?(/|$) ]]; then
+		return 1
+	fi
+	[[ "${sha}" =~ ^[0-9a-f]{40}$ ]] || sha=""
+	if [ "${kind}" = "check_runs" ] && [ -z "${sha}" ]; then
+		return 1
+	fi
+	sha_key="${sha:-na}"
+	if ! _gh_pr_cache_enabled || ! command -v flock >/dev/null 2>&1 \
+		|| ! dir="$(_gh_pr_cache_dir)" || ! { [ -d "${dir}" ] || mkdir -m 700 "${dir}" 2>/dev/null || [ -d "${dir}" ]; } \
+		|| [ ! -d "${dir}" ] || [ ! -w "${dir}" ]; then
+		_gh_pr_cache_live "${kind}" "${repo}" "${number}" "${sha}"
+		return $?
+	fi
+	job="$(printf '%s' "${GH_PR_READ_CACHE_JOB:-${GITHUB_JOB:-job}}" | tr -cd 'A-Za-z0-9_-')"
+	[ -n "${job}" ] || job="job"
+	entry="${dir}/$(_gh_pr_cache_run_prefix)_${job}_${repo//\//_}_${number}_${kind}_${sha_key}.json"
+	stats="${dir}/$(_gh_pr_cache_run_prefix).stats"
+	# The lock file carries the entry identity so eviction can find entries
+	# whose first fetch is still in flight.
+	if ! { [ -s "${entry}.lock" ] || printf '%s %s %s %s\n' "${repo}" "${number}" "${kind}" "${sha_key}" >> "${entry}.lock"; } 2>/dev/null; then
+		_gh_pr_cache_live "${kind}" "${repo}" "${number}" "${sha}"
+		return $?
+	fi
+	(
+		if ! flock -x -w 300 9; then
+			_gh_pr_cache_live "${kind}" "${repo}" "${number}" "${sha}"
+			exit $?
+		fi
+		now="$(date +%s)"
+		if _gh_pr_cache_entry_fresh "${entry}" "${repo}" "${number}" "${kind}" "${sha_key}" "${now}"; then
+			printf 'hit %s\n' "${kind}" >> "${stats}" 2>/dev/null || true
+			cat "${entry}"
+			exit $?
+		fi
+		printf 'miss %s\n' "${kind}" >> "${stats}" 2>/dev/null || true
+		fetched="$(mktemp "${entry}.tmp.XXXXXX" 2>/dev/null)" || fetched=""
+		if [ -z "${fetched}" ]; then
+			_gh_pr_cache_live "${kind}" "${repo}" "${number}" "${sha}"
+			exit $?
+		fi
+		if ! _gh_pr_cache_fetch "${kind}" "${repo}" "${number}" "${sha}" "${fetched}"; then
+			rm -f "${fetched}"
+			exit 1
+		fi
+		store=1
+		if [ "${kind}" = "pull" ] && ! jq -e --arg sha "${sha_key}" '.state == "open" and ($sha == "na" or .head.sha == $sha)' "${fetched}" >/dev/null 2>&1; then
+			store=0
+		fi
+		out="${fetched}"
+		if [ "${store}" = "1" ] && mv -f "${fetched}" "${entry}" 2>/dev/null; then
+			out="${entry}"
+			meta_tmp="$(mktemp "${entry}.meta.tmp.XXXXXX" 2>/dev/null)" || meta_tmp=""
+			if [ -z "${meta_tmp}" ] \
+				|| ! printf '%s %s %s %s %s\n' "${repo}" "${number}" "${kind}" "${sha_key}" "${now}" > "${meta_tmp}" 2>/dev/null \
+				|| ! mv -f "${meta_tmp}" "${entry}.meta" 2>/dev/null; then
+				rm -f "${entry}.meta" ${meta_tmp:+"${meta_tmp}"} 2>/dev/null || true
+			fi
+		fi
+		rc=0
+		cat "${out}" || rc=$?
+		[ "${out}" = "${entry}" ] || rm -f "${out}"
+		exit "${rc}"
+	) 9>>"${entry}.lock"
+}
+
+# _gh_pr_cache_evict_match <repo|""> <number|""> [kind…] — evict this run's
+# entries matching the repo and number (empty = any).
+_gh_pr_cache_evict_match()
+{
+	local want_repo="${1:-}" want_number="${2:-}" dir prefix lock entry l_repo l_number l_kind k matched
+	shift 2 2>/dev/null || set --
+	dir="$(_gh_pr_cache_dir)" || return 0
+	[ -d "${dir}" ] || return 0
+	prefix="$(_gh_pr_cache_run_prefix)_"
+	for lock in "${dir}/${prefix}"*.json.lock; do
+		[ -f "${lock}" ] || continue
+		l_repo=""; l_number=""; l_kind=""
+		read -r l_repo l_number l_kind _ < "${lock}" 2>/dev/null || true
+		[ -n "${l_repo}" ] || continue
+		[ -z "${want_repo}" ] || [ "${l_repo}" = "${want_repo}" ] || continue
+		[ -z "${want_number}" ] || [ "${l_number}" = "${want_number}" ] || continue
+		if [ "$#" -gt 0 ]; then
+			matched=0
+			for k in "$@"; do
+				[ "${k}" = "${l_kind}" ] && matched=1
+			done
+			[ "${matched}" = "1" ] || continue
+		fi
+		entry="${lock%.lock}"
+		if command -v flock >/dev/null 2>&1; then
+			# Wait for an in-flight fetch of this entry; remove it regardless
+			# after 60 s so a hung read cannot keep a stale entry alive.
+			( flock -x -w 60 9 || true; rm -f "${entry}" "${entry}.meta" ) 9>>"${lock}" 2>/dev/null \
+				|| rm -f "${entry}" "${entry}.meta" 2>/dev/null || true
+		else
+			rm -f "${entry}" "${entry}.meta" 2>/dev/null || true
+		fi
+	done
+	return 0
+}
+
+gh_pr_cache_evict()
+{
+	local repo="${1:-}" number="${2:-}"
+	if [[ ! "${repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || [[ ! "${number}" =~ ^[1-9][0-9]*$ ]]; then
+		return 0
+	fi
+	shift 2
+	_gh_pr_cache_evict_match "${repo}" "${number}" "$@" || true
+	return 0
+}
+
+_gh_pr_cache_evict_for_cmd()
+{
+	[ -n "${RUNNER_TEMP:-}" ] && [ -d "${RUNNER_TEMP}/gh_pr_read_cache" ] || return 0
+	local -a gpce_args=()
+	local gpce_a gpce_next="" gpce_method="" gpce_fields=0 gpce_ep gpce_repo="" gpce_num
+	local -a gpce_nums=()
+	local gpce_repo_re='^repos/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(issues|pulls)/([1-9][0-9]*)(/|$)'
+	local gpce_url_re='^https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(pull|issues)/([1-9][0-9]*)'
+	case "${1:-} ${2:-}" in
+		"_safe_gh_jq "*) gpce_args=("${@:2}") ;;
+		"gh api") gpce_args=("${@:3}") ;;
+		"gh pr"|"gh issue")
+			case "${3:-}" in
+				edit|comment|close|reopen|merge|ready|review|lock|unlock) ;;
+				*) return 0 ;;
+			esac
+			# Over-eviction only costs a re-read, so every numeric or PR-URL
+			# positional counts.
+			for gpce_a in "${@:4}"; do
+				if [ "${gpce_next}" = "repo" ]; then
+					gpce_repo="${gpce_a}"
+					gpce_next=""
+					continue
+				fi
+				case "${gpce_a}" in
+					-R|--repo) gpce_next="repo" ;;
+					--repo=*) gpce_repo="${gpce_a#--repo=}" ;;
+					-*) ;;
+					*)
+						if [[ "${gpce_a}" =~ ^#?([1-9][0-9]*)$ ]]; then
+							gpce_nums+=("${BASH_REMATCH[1]}")
+						elif [[ "${gpce_a}" =~ ${gpce_url_re} ]]; then
+							_gh_pr_cache_evict_match "${BASH_REMATCH[1]}" "${BASH_REMATCH[3]}" || true
+						fi
+						;;
+				esac
+			done
+			[[ "${gpce_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || gpce_repo=""
+			for gpce_num in ${gpce_nums[@]+"${gpce_nums[@]}"}; do
+				_gh_pr_cache_evict_match "${gpce_repo}" "${gpce_num}" || true
+			done
+			return 0
+			;;
+		*) return 0 ;;
+	esac
+	for gpce_a in ${gpce_args[@]+"${gpce_args[@]}"}; do
+		case "${gpce_next}" in
+			method) gpce_method="${gpce_a}"; gpce_next=""; continue ;;
+			value) gpce_next=""; continue ;;
+		esac
+		case "${gpce_a}" in
+			-X|--method) gpce_next="method" ;;
+			--method=*) gpce_method="${gpce_a#--method=}" ;;
+			-X*) gpce_method="${gpce_a#-X}" ;;
+			-f|-F|--field|--raw-field|--input) gpce_fields=1; gpce_next="value" ;;
+			--field=*|--raw-field=*|--input=*|-f?*|-F?*) gpce_fields=1 ;;
+			*) if _gh_api_flag_takes_value "${gpce_a}"; then gpce_next="value"; fi ;;
+		esac
+	done
+	gpce_method="$(printf '%s' "${gpce_method}" | tr '[:lower:]' '[:upper:]')"
+	if [ "${gpce_method}" = "GET" ] || { [ -z "${gpce_method}" ] && [ "${gpce_fields}" != "1" ]; }; then
+		return 0
+	fi
+	gpce_ep="$(_gh_api_endpoint ${gpce_args[@]+"${gpce_args[@]}"})"
+	gpce_ep="${gpce_ep#/}"
+	gpce_ep="${gpce_ep%%\?*}"
+	if [ "${gpce_ep}" = "graphql" ]; then
+		if _gh_api_args_unsafe_post ${gpce_args[@]+"${gpce_args[@]}"}; then
+			_gh_pr_cache_evict_match "" "" || true
+		fi
+	elif [[ "${gpce_ep}" =~ ${gpce_repo_re} ]]; then
+		_gh_pr_cache_evict_match "${BASH_REMATCH[1]}" "${BASH_REMATCH[3]}" || true
+	elif [[ "${gpce_ep}" =~ ^repos/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(issues|pulls)/comments/ ]]; then
+		_gh_pr_cache_evict_match "${BASH_REMATCH[1]}" "" issue_comments review_comments || true
+	elif [[ "${gpce_ep}" =~ ^repos/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(check-runs|statuses/) ]]; then
+		_gh_pr_cache_evict_match "${BASH_REMATCH[1]}" "" check_runs || true
+	fi
+	return 0
 }
 
 _GH_HELPERS_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "scripts")"
@@ -1100,6 +2365,8 @@ gh_api_retry()
 				cp "${_dir}/raw" "${_dir}/body"
 			fi
 		fi
+		# Issue #9928: a PR write evicts the run-local read cache.
+		_gh_pr_cache_evict_for_cmd gh api "$@" || true
 		_status="$(sed -n '1s/^HTTP\/[0-9.]* \([0-9][0-9][0-9]\).*/\1/p' "${_dir}/headers" 2>/dev/null || true)"
 		GH_API_RETRY_LAST_STATUS="${_status}"
 		if [ "${_rc}" -eq 0 ]; then
@@ -1228,7 +2495,12 @@ gh_retry()
 	fi
 
 	while [ "${attempt}" -le "${max_attempts}" ]; do
-		if "$@" >"${stdout_file}" 2>"${stderr_file}"; then
+		local _gh_retry_cmd_rc=0
+		"$@" >"${stdout_file}" 2>"${stderr_file}" || _gh_retry_cmd_rc=$?
+		# Issue #9928: a PR write evicts the run-local read cache, whatever
+		# its status (a failed attempt may still have been applied).
+		_gh_pr_cache_evict_for_cmd "$@" || true
+		if [ "${_gh_retry_cmd_rc}" -eq 0 ]; then
 			local _gh_retry_replay_rc=0
 			# Replay with builtin printf, not cat (issues #9225, #9227): the
 			# ubuntu-26.04 runner's cat exited 0 after the reader closed the
@@ -1334,7 +2606,11 @@ gh_retry_to_file()
 	fi
 
 	while [ "${attempt}" -le "${max_attempts}" ]; do
-		if "$@" > "${attempt_file}" 2>"${stderr_file}"; then
+		local _ghr_cmd_rc=0
+		"$@" > "${attempt_file}" 2>"${stderr_file}" || _ghr_cmd_rc=$?
+		# Issue #9928: a PR write evicts the run-local read cache.
+		_gh_pr_cache_evict_for_cmd "$@" || true
+		if [ "${_ghr_cmd_rc}" -eq 0 ]; then
 			local _ghr_copy_rc=0
 			cat "${attempt_file}" > "${outfile}" || _ghr_copy_rc=$?
 			rm -f "${stderr_file}" "${attempt_file}"
@@ -2406,11 +3682,22 @@ autofix_retrigger_has_inflight_peer()
 	# running one of the review/autofix workflow files. Match by
 	# workflow file path so renamed jobs in consumer repos still count
 	# as peers. The first matched run in API order is surfaced in logs.
-	local peer_info
-	if ! peer_info=$(printf '%s' "${response}" | jq -r --arg current "${current_run_id}" '
+	local peer_info peer_zq_cutoff peer_zq_def
+	# Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is
+	# wedged (zero jobs, cannot be cancelled) and is not a peer.
+	peer_zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+	[[ "${peer_zq_cutoff}" =~ ^[0-9]+$ ]] || peer_zq_cutoff=0
+	peer_zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
+	if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+		# Log only runs this guard would otherwise count: review-family
+		# workflow paths, never the current run.
+		zombie_queued_log_ignored autofix_inflight_peer "${peer_zq_cutoff}" <<< "$(printf '%s' "${response}" | jq -c --arg current "${current_run_id}" '[.workflow_runs[]? | select(type == "object" and ((.id | tostring) != $current) and ((.path // "") | tostring | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$")))]' 2>/dev/null || echo '[]')"
+	fi
+	if ! peer_info=$(printf '%s' "${response}" | jq -r --arg current "${current_run_id}" --argjson zq_cutoff "${peer_zq_cutoff}" "${peer_zq_def}"'
 		[
 			.workflow_runs[]?
 			| select(.status == "queued" or .status == "pending" or .status == "in_progress")
+			| select(is_wedged_queued($zq_cutoff) | not)
 			| select((.id | tostring) != $current)
 			| select(.path | test("(^|/)(review_autofix|internal-review|ai-review)\\.ya?ml$"))
 		]
@@ -2431,10 +3718,12 @@ autofix_retrigger_has_inflight_peer()
 		local pr_named_runs pr_named_info
 		declare -F _autofix_review_default_branch_prime >/dev/null && _autofix_review_default_branch_prime
 		if pr_named_runs=$(_autofix_pr_named_review_runs "${pr_number}") \
-			&& pr_named_info=$(printf '%s' "${pr_named_runs}" | jq -r --arg current "${current_run_id}" '
+			&& { ! declare -F zombie_queued_log_ignored >/dev/null 2>&1 || zombie_queued_log_ignored autofix_inflight_peer "${peer_zq_cutoff}" <<< "${pr_named_runs}"; } \
+			&& pr_named_info=$(printf '%s' "${pr_named_runs}" | jq -r --arg current "${current_run_id}" --argjson zq_cutoff "${peer_zq_cutoff}" "${peer_zq_def}"'
 				[
 					.[]
 					| select(.status == "queued" or .status == "in_progress" or .status == "pending" or .status == "waiting" or .status == "requested")
+					| select(is_wedged_queued($zq_cutoff) | not)
 					| select((.id | tostring) != $current)
 				]
 				| {count: length, first_id: (.[0].id // "-"), first_path: (.[0].path // "-")}
@@ -2776,6 +4065,76 @@ _cleanup_prompt_budget()
 	rm -f "${_state}" 2>/dev/null || true
 }
 
+# _embed_utf8_safe_cut <path> <n>
+#
+# Print <n> reduced (by at most 3 bytes) so that `head -c <n> <path>`
+# never ends inside a multi-byte UTF-8 sequence.  A byte cut mid-character
+# leaves invalid UTF-8 in the prompt, which the Codex CLI's strict stdin
+# reader rejects (#9261).  Only the up-to-4 bytes before offset <n> are
+# inspected with `od`; ASCII or a complete sequence returns <n> unchanged.
+# Fails open: any `od` failure or unexpected output returns <n> unchanged
+# (the pre-#9261 behaviour); `sanitize_codex_prompt_file` remains the
+# last line of defence downstream.
+_embed_utf8_safe_cut()
+{
+	local _cut_path="${1:-}"
+	local _cut_n="${2:-0}"
+	if ! [[ "${_cut_n}" =~ ^[0-9]+$ ]] || [ "${_cut_n}" -le 0 ] || [ -z "${_cut_path}" ]; then
+		printf '%s\n' "${_cut_n}"
+		return 0
+	fi
+	local _cut_window=4
+	if [ "${_cut_n}" -lt 4 ]; then
+		_cut_window="${_cut_n}"
+	fi
+	local _cut_raw
+	if ! _cut_raw="$(od -An -tu1 -j "$(( _cut_n - _cut_window ))" -N "${_cut_window}" -- "${_cut_path}" 2>/dev/null)"; then
+		printf '%s\n' "${_cut_n}"
+		return 0
+	fi
+	local -a _cut_bytes=()
+	read -r -a _cut_bytes <<< "$(printf '%s' "${_cut_raw}" | tr '\n' ' ')" || true
+	if [ "${#_cut_bytes[@]}" -ne "${_cut_window}" ]; then
+		printf '%s\n' "${_cut_n}"
+		return 0
+	fi
+	local _cut_byte
+	for _cut_byte in "${_cut_bytes[@]}"; do
+		if ! [[ "${_cut_byte}" =~ ^[0-9]+$ ]]; then
+			printf '%s\n' "${_cut_n}"
+			return 0
+		fi
+	done
+	# Step back over trailing continuation bytes (0x80..0xBF), at most 3.
+	local _cut_idx=$(( ${#_cut_bytes[@]} - 1 ))
+	local _cut_cont=0
+	while [ "${_cut_idx}" -ge 0 ] && [ "${_cut_cont}" -lt 3 ] \
+		&& [ "${_cut_bytes[${_cut_idx}]}" -ge 128 ] && [ "${_cut_bytes[${_cut_idx}]}" -le 191 ]; do
+		_cut_cont=$(( _cut_cont + 1 ))
+		_cut_idx=$(( _cut_idx - 1 ))
+	done
+	if [ "${_cut_idx}" -lt 0 ]; then
+		printf '%s\n' "${_cut_n}"
+		return 0
+	fi
+	local _cut_lead="${_cut_bytes[${_cut_idx}]}"
+	local _cut_seq_len=0
+	if [ "${_cut_lead}" -ge 192 ] && [ "${_cut_lead}" -le 223 ]; then
+		_cut_seq_len=2
+	elif [ "${_cut_lead}" -ge 224 ] && [ "${_cut_lead}" -le 239 ]; then
+		_cut_seq_len=3
+	elif [ "${_cut_lead}" -ge 240 ] && [ "${_cut_lead}" -le 247 ]; then
+		_cut_seq_len=4
+	fi
+	# Lead byte plus its continuation bytes before <n> do not complete the
+	# sequence: cut before the lead byte instead.
+	if [ "${_cut_seq_len}" -gt 0 ] && [ "${_cut_seq_len}" -gt $(( _cut_cont + 1 )) ]; then
+		printf '%s\n' "$(( _cut_n - _cut_cont - 1 ))"
+		return 0
+	fi
+	printf '%s\n' "${_cut_n}"
+}
+
 # _embed_input_file <path> [byte_cap] [truncate_mode]
 #
 #   byte_cap        — defaults to 100000.  Caller can pass a larger
@@ -2836,7 +4195,7 @@ _embed_input_file()
 		# command substitution `$(...)` strips trailing newlines and the
 		# enclosing heredoc places its own \n after the substitution, so
 		# the closing fence always lands on its own line.
-		cat "${_path}"
+		cat -- "${_path}"
 		_emit_bytes="${_size}"
 	else
 		# File would overflow the effective cap.  In `diff` mode, walk
@@ -2852,14 +4211,18 @@ _embed_input_file()
 			# skip offset 0 because truncating before the first hunk would
 			# emit nothing (head mode handles that case correctly).
 			local _boundary
-			_boundary="$(grep -bE '^diff --git ' "${_path}" 2>/dev/null \
+			_boundary="$(grep -bE -- '^diff --git ' "${_path}" 2>/dev/null \
 				| awk -F: -v cap="${_effective_cap}" \
 					'($1+0) > 0 && ($1+0) <= cap { last=$1+0 } END { print last+0 }')"
 			if [ -n "${_boundary}" ] && [ "${_boundary}" -gt 0 ]; then
 				_head_bytes="${_boundary}"
 			fi
 		fi
-		head -c "${_head_bytes}" "${_path}"
+		# Never end the shown head inside a multi-byte UTF-8 character
+		# (#9261).  The marker and budget accounting below use the trimmed
+		# count.  A `diff`-mode boundary is a line start, so it is unchanged.
+		_head_bytes="$(_embed_utf8_safe_cut "${_path}" "${_head_bytes}")"
+		head -c "${_head_bytes}" -- "${_path}"
 		printf '\n[... TRUNCATED — file is %s bytes; first %s bytes shown above (mode=%s, per-file cap=%s, budget remaining was %s) ...]\n' \
 			"${_size}" "${_head_bytes}" "${_mode}" "${_cap}" "${_budget_remaining}"
 		_emit_bytes="${_head_bytes}"
@@ -2990,4 +4353,104 @@ extract_repo_scoped_issue_refs_from_text()
 		| grep -oiE "((^|[^[:alnum:]_])github\\.com/${_repository_escaped}/issues/[0-9]+([^[:alnum:]_#?]|$)|(^|[^[:alnum:]_])${_repository_escaped}/issues/[0-9]+([^[:alnum:]_#?]|$)|(^|[^[:alnum:]_/-])(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved)[[:space:]]+#[[:space:]]*[0-9]+([^[:alnum:]_]|$))" \
 		| sed -nE 's/.*[^0-9]([0-9]+)[^0-9]*$/\1/p' \
 		| sort -un || true
+}
+
+# ---------------------------------------------------------------
+# Wedged queued workflow runs (issue #9473)
+#
+# GitHub can leave a workflow run in status=queued with zero jobs.
+# The API refuses to clear it (run 43095142301: cancel 409,
+# force-cancel 409, DELETE 403), so every "is a run already active?"
+# guard would treat it as active forever. These helpers generalise the
+# sweep's `is_stale_queued` rule (review_autofix_sweep.yml) into one
+# shared age-based filter:
+#
+#   a run is wedged when status == "queued" and
+#   created_at <= now - ZOMBIE_RUN_MAX_QUEUED_HOURS hours.
+#
+# ZOMBIE_RUN_MAX_QUEUED_HOURS: default 24 (the same knob the P11b
+# reaper reads); 0 or any value that is not a whole number disables
+# the filter. Only `queued` ages out: in_progress, pending, waiting
+# and requested never do. A missing or unparseable created_at keeps
+# the run active (fail-safe). Callers filter the JSON they already
+# fetched, so the helpers add no API calls (CLAUDE.md §14).
+#
+# zombie_queued_cutoff_epoch: prints the cutoff epoch, or 0 when the
+#   filter is disabled (invalid value, 0, or unreadable clock).
+# zombie_queued_jq_def: prints jq definitions for embedding at the
+#   front of a caller's program; `is_wedged_queued($cutoff)` takes the
+#   cutoff as a number (pass it with --argjson).
+# zombie_queued_log_ignored <guard> <cutoff>: reads one JSON document
+#   on stdin (an array of runs or {workflow_runs:[...]}) and prints,
+#   on stderr, one line per wedged run:
+#     ZOMBIE_RUN_IGNORED run=<id> workflow=<path> age_h=<n> guard=<guard>
+#   at most once per run per guard per shell process. Always returns 0.
+# ---------------------------------------------------------------
+zombie_queued_cutoff_epoch()
+{
+	local _zq_hours="${ZOMBIE_RUN_MAX_QUEUED_HOURS:-24}" _zq_now=""
+	if ! [[ "${_zq_hours}" =~ ^[0-9]{1,5}$ ]]; then
+		echo "::warning::ZOMBIE_RUN_MAX_QUEUED_HOURS is not a whole number of hours; wedged-queued filter disabled" >&2
+		printf '0'
+		return 0
+	fi
+	_zq_hours=$((10#${_zq_hours}))
+	if [ "${_zq_hours}" -le 0 ]; then
+		printf '0'
+		return 0
+	fi
+	_zq_now="$(date -u +%s 2>/dev/null || true)"
+	if ! [[ "${_zq_now}" =~ ^[0-9]+$ ]] || [ "${_zq_now}" -le $((_zq_hours * 3600)) ]; then
+		printf '0'
+		return 0
+	fi
+	printf '%s' "$((_zq_now - _zq_hours * 3600))"
+}
+
+zombie_queued_jq_def()
+{
+	cat <<'JQ_DEF'
+def zq_created_epoch:
+  ((.created_at // .createdAt) as $zq_ts
+   | if ($zq_ts | type) == "string" and ($zq_ts | length) > 0
+     then (try ($zq_ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch null)
+     else null end);
+def zq_run_id: (.id // .databaseId // "-");
+def zq_workflow: (.path // .workflowName // .name // "-");
+def is_wedged_queued($cutoff):
+  type == "object"
+  and ($cutoff | type) == "number" and $cutoff > 0
+  and ((.status // "") | if type == "string" then ascii_downcase else "" end) == "queued"
+  and (zq_created_epoch as $zq_c | $zq_c != null and $zq_c <= $cutoff);
+JQ_DEF
+}
+
+zombie_queued_log_ignored()
+{
+	local _zq_guard="${1:-unknown}" _zq_cutoff="${2:-0}" _zq_now="" _zq_rows="" _zq_id _zq_wf _zq_age
+	_zq_guard="$(printf '%s' "${_zq_guard}" | tr -c 'A-Za-z0-9_.-' '_')"
+	if ! [[ "${_zq_cutoff}" =~ ^[0-9]+$ ]] || [ "${_zq_cutoff}" -le 0 ]; then
+		cat >/dev/null 2>&1 || true
+		return 0
+	fi
+	_zq_now="$(date -u +%s 2>/dev/null || true)"
+	[[ "${_zq_now}" =~ ^[0-9]+$ ]] || _zq_now=0
+	_zq_rows="$(jq -r --argjson zq_cutoff "${_zq_cutoff}" --argjson zq_now "${_zq_now}" "$(zombie_queued_jq_def)"'
+		(if type == "array" then .[] elif type == "object" then ((.workflow_runs // []) | if type == "array" then .[] else empty end) else empty end)
+		| select(is_wedged_queued($zq_cutoff))
+		| [(zq_run_id | tostring | gsub("[^A-Za-z0-9_.-]"; "_")),
+		   (zq_workflow | tostring | gsub("[^A-Za-z0-9_./@-]"; "_")),
+		   (if $zq_now > 0 then (((($zq_now - zq_created_epoch) / 3600) | floor) | tostring) else "-" end)]
+		| @tsv' 2>/dev/null || true)"
+	[ -n "${_zq_rows}" ] || return 0
+	if ! declare -p _ZOMBIE_RUN_IGNORED_SEEN >/dev/null 2>&1; then
+		declare -gA _ZOMBIE_RUN_IGNORED_SEEN=()
+	fi
+	while IFS=$'\t' read -r _zq_id _zq_wf _zq_age; do
+		[ -n "${_zq_id}" ] || continue
+		[ -z "${_ZOMBIE_RUN_IGNORED_SEEN["${_zq_guard}:${_zq_id}"]+x}" ] || continue
+		_ZOMBIE_RUN_IGNORED_SEEN["${_zq_guard}:${_zq_id}"]=1
+		echo "ZOMBIE_RUN_IGNORED run=${_zq_id} workflow=${_zq_wf} age_h=${_zq_age} guard=${_zq_guard}" >&2
+	done <<< "${_zq_rows}"
+	return 0
 }

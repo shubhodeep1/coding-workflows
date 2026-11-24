@@ -33,12 +33,16 @@ Runner time is what jams the account. Skipped runs take no runner, but they floo
 - Item 8: the poller cron runs every 15 minutes and the closed-PR sweep runs hourly, here and in consumers.
 - Item 9: the review sweep no longer treats a review run that is merely waiting for a runner as wedged.
 - Item 12: the one-off `check-failure-triage-historical.yml` and its references are removed.
+- Item 10: `Integration PR readiness check` takes a runner on a label change only when the label is `ai:override-incomplete-merge`.
+- Item 14: push CI keeps at most one running and one waiting run per branch; a newer push replaces the waiting run.
+- Item 15: with the opt-in secret `AI_COMMENT_SIGNING_SECRET` set, every pipeline comment that cannot start an `issue_comment` wrapper is signed and posted with the job token, and readers still trust it as a `GH_PAT` comment.
 
 ## Non-goals
 
 - Item 2 (duplicate `push` + `pull_request` CI on `orchestrator/project-*`): delivered by #9528 Phase 4 (decision D4 there).
 - A single `issue_comment` router workflow. Run path and name are read by the poller's concurrency caps (`scripts/orchestrate_lib.py`), heal provenance (`scripts/workflow_failure_heal.py`), `scripts/unblock_ledger.py`, the hardened approval check in `workflow-templates/ai-implement.yml`, and the release e2e matchers. The sync also never deletes old wrappers.
-- Moving comments that readers trust by author login (attempt journal, autofix editor summary, orchestrator state, merge-base sync, phase markers) off the PAT.
+- Moving comments that readers trust by author login (attempt journal, autofix editor summary, orchestrator state, merge-base sync, phase markers) off the PAT without a signature. Item 15 moves them only when they are signed (D17).
+- Editing status comments in place or compressing orchestrator state (D18), and a comment router (D19).
 - Runner capacity (plan, larger or self-hosted runners) and ghost-run cleanup.
 
 ## Constraints
@@ -131,6 +135,54 @@ User answers, 2026-11-16. Q9 to Q11 were taken as clear-winner assumptions and n
 - **Alternatives considered:** also gate pushes and teach triage and heal to ignore runs with skipped tests.
 - **Why:** `scripts/check_failure_triage.sh`'s base gate and heal's `HEAL_STALE_GREEN_RUNS` both read push-run conclusions; a green docs-only push would hide a broken base.
 
+### D14 — Push CI coalesces per branch (item 14)
+
+- **Chosen:** push runs share the concurrency group `ci-push-<ref>` with `cancel-in-progress: false` (Q3 A, 2026-11-16).
+- **Alternatives considered:** keep one group per run (every pushed commit gets its own 37-job run); cancel the running push run too.
+- **Why:** on 2026-11-16 four `main` push runs (148 jobs) sat queued at once, and every commit had already passed its PR's own CI. The running run is never cancelled, so check-failure triage's base gate (`workflow_runs[0]` of the base's push runs) always reads a run that finishes. A replaced run ends `cancelled`, which `internal-check-failure-triage.yml` and `workflow-failure-heal-intake.yml` ignore, and `scripts/ci_cancelled_rerun.py` never re-runs, because the replaced commit is never a PR's current head. Heal's stale auto-close (`heal_stale_decision` in `scripts/workflow_failure_heal.py`) used to keep a heal issue open for any post-anchor push run that was not `success`; it now skips `cancelled` runs, which count neither as green nor as red (Q5 A, 2026-11-16). Without that, one replaced run would keep a CI heal issue open until the next occurrence.
+
+### D15 — Readiness check filters label events (item 10)
+
+- **Chosen:** a job-level `if` that skips `labeled` / `unlabeled` events for every label except `ai:override-incomplete-merge` (Q4 A, 2026-11-16).
+- **Alternatives considered:** drop the `labeled` / `unlabeled` triggers; keep running on every label.
+- **Why:** `scripts/check_integration_pr_readiness.py` reads no other PR label, a label change never moves the head SHA, so the status already posted for it stands, and the poller refreshes the status itself when the tracking issue changes (`TRACKING_BODY_READINESS_REFRESH`).
+
+### D16 — Which comment kinds move to the job token (item 15)
+
+- **Chosen:** every pipeline comment that cannot start work (Q1 C, 2026-11-17).
+- **Alternatives considered:** only the kinds whose readers already accept `github-actions[bot]` (about −280 runs a day); those plus the author-trusted kinds (about −1,600).
+- **Why:** measured 2026-11-15 23:47 to 2026-11-16 23:47 UTC, 622 of 687 comments came from the `GH_PAT` and made 2,500 `issue_comment` runs, of which 59 did work. About 55 PAT comments a day are commands. The rest, about 567, are about 2,270 wasted runs a day.
+
+### D17 — How a moved comment stays trusted (item 15)
+
+- **Chosen:** an HMAC-signed hidden line, with a new opt-in secret (Q2 B, 2026-11-17).
+- **Alternatives considered:** accept any `github-actions[bot]` comment; accept the bot only in this repository.
+- **Why:** user decision. Any workflow with an `issues: write` job token, including a consumer's own unrelated workflows, can write as `github-actions[bot]`; only a holder of the secret can sign.
+
+### D18 — Dedupe and edit-in-place (item 15 scope)
+
+- **Chosen:** neither (Q3 A, 2026-11-17).
+- **Alternatives considered:** compress orchestrator state (project #8291 alone posted 36 of 70 state comments as 12-part chains); edit the security-pass `pending` comment into its result (26 a day).
+- **Why:** once those comments move to the job token they start nothing anyway. Editing in place would break the readers that order markers by `created_at` and the torn-write protection of the state chain.
+
+### D19 — Comment router workflow
+
+- **Chosen:** stays a non-goal (Q4 A, 2026-11-17).
+- **Alternatives considered:** a router here only; a router here and in consumers.
+- **Why:** after D16 about 55 runs a day remain, all of them useful, and the readers of run path and name listed in Non-goals would all need compatibility mappings.
+
+### D20 — Delivery
+
+- **Chosen:** add item 15 to this plan and deliver it in the session (Q5 A, Q6 A), as one PR pushed only after the local CI checks and a local review pass (user instruction, 2026-11-17).
+- **Alternatives considered:** a separate plan handed to the orchestrator.
+- **Why:** user decision; the shared runner pool is congested.
+
+### D21 — Consumers share one secret value (item 15)
+
+- **Chosen:** `scripts/propagate_consumer_secrets.sh` copies `AI_COMMENT_SIGNING_SECRET` to every consumer when it is set here (`CONSUMER_OPTIONAL_SECRET_NAMES`), and leaves it out silently while it is unset (assumed, 2026-11-17).
+- **Alternatives considered:** each repository sets its own value by hand.
+- **Why:** readers here verify comments in consumer repositories with this repository's value, so the values must match, and the propagation workflow already exists to avoid 13 manual secret writes (§18). The cost is that consumers opt in together with this repository, not one at a time.
+
 ## Phases & Merge Strategy
 
 1. **PR (a): items 7 and 8.** Files:
@@ -147,6 +199,9 @@ User answers, 2026-11-16. Q9 to Q11 were taken as clear-winner assumptions and n
    - registry, inventory and docs
 3. **PR (c): item 6.** The posting sites of the three comment kinds that passed the reader audit, changed per call.
 4. **PR (d): item 4.** `ci.yml`, `scripts/pr_checks_lib.sh` (`_pr_ensure_final_ci`) and the new `scripts/ci_docs_only_paths.sh`, built on top of #9528's `ci.yml` (#9563).
+5. **PR (e): items 10 and 14.** `ci.yml`'s concurrency block, `integration-pr-readiness.yml`, heal's stale auto-close window (`scripts/workflow_failure_heal.py`), and their tests.
+
+6. **PR (f): item 15.** `scripts/comment_signature.py`, its embedded copy and the shim activation in `scripts/gh_helpers.sh`, the env and `workflow_call` secret lines in the workflows that post or read comments, the secret line in the consumer templates, `scripts/propagate_consumer_secrets.sh`, `tests/conftest.py`, and tests and docs.
 
 Each PR is independently revertable.
 
@@ -205,6 +260,18 @@ The seven test jobs skip when `inputs.docs_only == 'true'`; `static-checks` alwa
 
 Push runs (`main`, `stable`, `orchestrator/project-*`) are never gated: check-failure triage reads the newest push run on a PR's base as the base result, and heal's stale auto-close counts green push runs, so a docs-only push that skipped the tests would make a broken branch look green to both.
 
+**Item 14.** `ci.yml`'s concurrency group gains a `push` arm, `format('ci-push-{0}', github.ref)`, ahead of the per-run fallback; `cancel-in-progress` is unchanged and stays `false` for pushes. GitHub keeps one running and one pending run per group, so pushes to the same branch now run one after another instead of side by side, and only the newest waiting commit is tested. Each branch has its own group, so `main`, `stable` and every `orchestrator/project-*` branch are independent.
+
+**Item 10.** The `readiness` job runs on `opened`, `synchronize`, `reopened` and `ready_for_review` as before, and on `labeled` / `unlabeled` only for `ai:override-incomplete-merge`. A skipped job takes no runner, and its check run reports `skipped`.
+
+**Item 15.** Inert until the repository secret `AI_COMMENT_SIGNING_SECRET` exists. With it set, sourcing `scripts/gh_helpers.sh` writes a `gh` shim and the embedded signer into `RUNNER_TEMP`, puts the shim first on `PATH`, and, inside Actions, adds the shim dir (no variables) to `GITHUB_PATH` for the rest of the job; the shim finds the real `gh` and the signer itself. The hardened check-failure triage workflow never gets the secret, so its rule that the PAT-holding collect stage exports nothing to later steps still holds. The shim execs the real `gh` for anything that is not one of these three calls:
+
+- **Create** on this repository whose body contains none of `/approved`, `/answer`, `/reclarify`, `Clarification required` and no plan heading: posted with `AI_COMMENT_JOB_TOKEN` (`github.token`), with a last line `<!-- ai-comment-sig:v1 repo=<owner/repo> issue=<n> as=<login> type=<User|Bot> uid=<id> sig=<hmac> -->`. The match on the body ignores case, like the wrappers. The HMAC-SHA256 covers repository, issue number, the `GH_PAT` login and account type (one cached `GET /user` per job) and the body. A refused job token (401/403) falls back once to the caller's token, unsigned, and is remembered for the job. Any other failure is not resent, because the comment may exist.
+- **Read** of issue comments over REST, and every `gh api graphql` response (the attempt-journal prefetch, capacity-wait markers, heal scans and the security hold sweep read comments that way): before `--jq` runs, a `github-actions[bot]` comment with a valid signature is rewritten to the signed login and type, with `author_association` `OWNER` or `COLLABORATOR` and the signature line removed, so it is exactly what the PAT would have written. Readers are unchanged. Unsigned or badly signed bot comments are returned as they are.
+- **Edit** of a validly signed bot comment: re-signed for the same account.
+
+`AI_COMMENT_SIGNING_POST=false` (repository variable, default `true`) returns new posts to `GH_PAT` while reads keep verifying. That switch is the rollback; deleting the secret would make every signed comment untrusted. The secret and the job token sit in every step `env` map that holds `GH_PAT`, and nowhere else, so their exposure is the PAT's. The workflows that run pull-request code (`ci.yml`, the `pull_request` workflows) never get the secret, the model engines run in the `env -i` container, and `test-and-mark-stable.yml` sources the helpers right after checkout in its e2e jobs, because their wait loops read pipeline comments early.
+
 ## Tests
 
 - Item 7: the template trigger and the job condition (`tests/test_ci_failure_workflow_run_triggers.py`).
@@ -213,12 +280,23 @@ Push runs (`main`, `stable`, `orchestrator/project-*`) are never gated: check-fa
 - Item 12: the full test set that references the file, run before and after the removal.
 - Item 6: per-kind tests that the call uses the job token, and that readers still find the comment.
 - Item 4: `tests/test_ci_docs_only_final_ci.py`: the path list, `verify` against real merge commits, the workflow structure, a matrix over `lint`'s decision logic, and the dispatcher against a fake `gh`.
+- Item 14: `tests/test_ci_concurrency.py` evaluates the group for push runs on `main`, `stable` and an integration branch, and pins that the running push run is never cancelled; `tests/test_workflow_failure_heal.py` pins that heal's stale auto-close skips `cancelled` runs without counting them as green.
+- Item 10: `tests/test_check_integration_pr_readiness.py` pins the job condition and checks its label matches the script's `OVERRIDE_LABEL`.
+- Item 15: `tests/test_comment_signature.py` drives the real shim against a fake `gh`. It covers signing and tamper cases (body, issue, repository, login, type, secret), the keep-on-PAT bodies, every body form, the 401/403 fallback and its cache, no resend after an ambiguous failure, paginated `--jq` and `-i` reads, edits, the post switch, a stripped environment, job-wide activation, a Python child process, and that the embedded signer matches the source file. `tests/test_propagate_consumer_secrets.py` covers the optional secret.
 
 ## Risks & Mitigations
 
 - Later conflict detection on integration branches (item 3): the PR-mergeable trigger and the 24-hour cap still surface conflicts, and `INTEGRATION_SYNC_MIN_INTERVAL_SECS=0` restores the old behaviour.
 - A skipped test job satisfying a required check (item 4): `lint` runs with `always()`, verifies the merged tree itself before it accepts `skipped`, and anything the dispatcher cannot read runs everything.
 - Slower recovery of orphaned runs on conflicted closed PRs (item 8): bounded at one hour.
+- Intermediate commits on a branch get no push CI of their own (item 14): each passed its PR's CI before it merged, and the newest commit is always tested. A breakage introduced by one of them surfaces in the next run that does start. Heal's `HEAL_STALE_GREEN_RUNS` counts fewer green push runs, so its stale auto-close can take longer.
+- Pushes to one branch now wait for that branch's running CI (item 14): the newest waiting commit starts as soon as the running run finishes.
+- A run cancelled mid-failure is skipped by heal's stale auto-close (item 14, Q5 A): a failure that comes back posts an occurrence comment, which moves the anchor and keeps the issue open.
+- The release CI gate (`test-and-mark-stable.yml` `ci_lint_gate`, `scripts/release_ci_gate.sh`) needs `lint` on the exact `stable` SHA. If two pushes reach `stable` while its CI runs, the middle commit gets no run, and a release dispatched for it waits out the gate and fails closed; the `RELEASE_STALE_TIP` guard rejects that commit anyway, and the next dispatch targets the newer tip.
+
+- Item 15, a reader that runs where the shim is not active (a `curl` call, or a step before the job's first `gh_helpers.sh` source) sees signed comments as untrusted `github-actions[bot]` comments: those paths post and read their own comments with the PAT, and the e2e jobs activate right after checkout. The `AI_COMMENT_SIG outcome=invalid|unverifiable` log lines show a miss.
+- Item 15, a signed comment can be copied verbatim onto the same issue by anyone who can post as `github-actions[bot]`: it then reads as a newer trusted copy of something the pipeline once wrote there. Moving it to another issue or repository breaks the signature for REST readers and for GraphQL readers that select the comment `url`; a GraphQL reader that selects neither `url` nor `issue_url` cannot tell.
+- Item 15, the secret sits only in the step `env` maps that already hold `GH_PAT`. Check-failure triage is left out on purpose: its collect stage must leave no state for its later steps, one of which holds the Issues token.
 
 ## Rollout
 
@@ -227,10 +305,11 @@ Each PR is effective on merge in this repository. Consumers pick up the template
 ## §18.E Automation
 
 - No new script, supervisor or scheduled workflow; every change edits an existing workflow, template or the poller.
-- Entry points: `.github/workflows/internal-orchestrate-poll.yml` (cron) via `orchestrate_poll.yml`; `.github/workflows/internal-cancel-on-pr-close.yml` (cron and `pull_request: closed`); `.github/workflows/review_autofix_sweep.yml` (cron); `.github/workflows/ci.yml` (`push` / PR); consumer wrappers via `update_workflows.yml`.
+- Entry points: `.github/workflows/internal-orchestrate-poll.yml` (cron) via `orchestrate_poll.yml`; `.github/workflows/internal-cancel-on-pr-close.yml` (cron and `pull_request: closed`); `.github/workflows/review_autofix_sweep.yml` (cron); `.github/workflows/ci.yml` (`push` / PR); `.github/workflows/integration-pr-readiness.yml` (`pull_request`); consumer wrappers via `update_workflows.yml`.
 - No long-running supervisor is needed.
 - No DB work.
 - `docs/scripts-pending-removal.md`: no new entry; item 12 deletes one.
+- Item 15 adds `scripts/comment_signature.py`, a library the `gh` shim runs, not a script anyone invokes. It is activated by `scripts/gh_helpers.sh`, which every pipeline script already sources, and needs no scheduler entry or registry entry. It is permanent while the secret is in use.
 
 ## References
 

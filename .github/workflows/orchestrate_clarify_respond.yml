@@ -33,6 +33,9 @@ name: AI Orchestrate Clarify Respond (Reusable)
         required: true
       TG_BOT_SECRET:
         required: false
+      # Signed job-token comments (run-volume plan item 15): optional; see scripts/comment_signature.py.
+      AI_COMMENT_SIGNING_SECRET:
+        required: false
 
 env:
   # Claude capacity wait (issue #7370): a capacity fallback waits for the
@@ -41,6 +44,12 @@ env:
   # waiting work; repo variable CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false rolls back.
   CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # Signed job-token comments (run-volume plan item 15, D16; see
+  # scripts/comment_signature.py). The opt-in secret and the job token sit
+  # next to each step's GH_PAT, never here, so a step without the PAT never
+  # sees them. Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false
+  # posts with GH_PAT again while signed comments already posted still verify.
+  AI_COMMENT_SIGNING_POST: ${{ vars.AI_COMMENT_SIGNING_POST || 'true' }}
 
 jobs:
   respond:
@@ -61,7 +70,7 @@ jobs:
         )
       ) &&
       contains(github.event.comment.body, 'Clarification required')
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
     timeout-minutes: 30
     concurrency:
       group: ai-orchestrate-clarify-respond-${{ github.event.issue.number }}
@@ -92,6 +101,8 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
         run: |
           # Trusted pre-support copy of scripts/gh_helpers.sh for gh_api_retry
@@ -142,6 +153,8 @@ jobs:
         id: check_orchestrator
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           CLARIFY_RESPOND_COMMENT_BODY: ${{ github.event.comment.body }}
           STANDALONE_AUTO_DECIDE_ENABLED: ${{ vars.STANDALONE_AUTO_DECIDE_ENABLED || 'true' }}
           STANDALONE_CLARIFY_RESPOND_ENABLED: ${{ vars.STANDALONE_CLARIFY_RESPOND_ENABLED || 'true' }}
@@ -242,7 +255,10 @@ jobs:
         env:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'true' }}
+          CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED: ${{ vars.CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           issue_number="${ISSUE_NUMBER:-}"
@@ -347,6 +363,7 @@ jobs:
             ISSUE="${issue_number}" \
             GH_TOKEN="${GH_TOKEN}" \
             CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED:-true}" \
+            CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED="${CI_TRIAGE_REISSUE_BASE_BRANCH_ROUTING_ENABLED:-true}" \
             bash "${resolver_script}"
           })" || resolver_rc=$?
           if [ "${resolver_rc}" -eq 0 ]; then
@@ -394,6 +411,8 @@ jobs:
         if: steps.check_orchestrator.outputs.respond == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           [ -n "${GH_TOKEN:-}" ] || { echo "::error::GH_PAT is empty"; exit 1; }
@@ -413,6 +432,8 @@ jobs:
         env:
           SUPPORT_REF_WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
@@ -502,12 +523,56 @@ jobs:
 
       - name: Stage workflow support files
         if: steps.check_orchestrator.outputs.respond == 'true'
+        env:
+          # Kill switch for the one-source support bundle
+          # (docs/plans/remove-unattended-pipeline-stuck-states-plan.md P2a):
+          # `false` restores the legacy copy loop below and the bare
+          # scripts/ paths (SUPPORT_SCRIPTS_DIR stays unset).
+          SUPPORT_SCRIPTS_UNIFIED_ENABLED: ${{ vars.SUPPORT_SCRIPTS_UNIFIED_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           wf_source="shubhodeep1/coding-workflows"
           mkdir -p scripts
 
           _fetched_scripts=()
+          # One source for support scripts (P2a): stage_support_for_phase.sh
+          # verifies the support checkout, stages a bundle from that one commit
+          # under RUNNER_TEMP (SUPPORT_SCRIPTS_DIR) and never writes executables
+          # into the issue checkout, so a heal issue on `stable` cannot run
+          # stable's helpers under main's YAML (run 37406961564). Later steps
+          # call "${SUPPORT_SCRIPTS_DIR:-scripts}/<helper>".
+          support_unified="${SUPPORT_SCRIPTS_UNIFIED_ENABLED:-true}"
+          support_helper_path=".codex-workflow-src/scripts/stage_support_for_phase.sh"
+          support_list_names=""
+          if [ "${support_unified}" = "true" ] && { [ ! -f "${support_helper_path}" ] || [ -L "${support_helper_path}" ]; }; then
+            echo "::warning::stage_support_for_phase.sh is not in ${wf_source}@${SCRIPT_REF}; using the legacy support staging."
+            support_unified="false"
+          fi
+          # Capability probe: the read-only --list prints the clarify_respond
+          # phase's staged names. An older support ref (e.g. `stable`) whose
+          # helper has no clarify_respond case exits 2 here, so the run keeps
+          # the legacy staging instead of failing. The names also feed the
+          # consumer scripts/.gitignore.
+          if [ "${support_unified}" = "true" ] && ! support_list_names="$(bash "${support_helper_path}" clarify_respond --list)"; then
+            echo "::warning::stage_support_for_phase.sh in ${wf_source}@${SCRIPT_REF} cannot stage the clarify_respond phase; using the legacy support staging."
+            support_unified="false"
+          fi
+          if [ "${support_unified}" = "true" ]; then
+            bash .codex-workflow-src/scripts/stage_support_for_phase.sh clarify_respond
+            # As in implement.yml: a listed optional helper the bundle skipped
+            # must not hide a consumer-owned scripts/<name> via scripts/.gitignore.
+            support_bundle_dir="$(sed -n 's/^SUPPORT_SCRIPTS_DIR=//p' "${GITHUB_ENV}" | tail -n 1)"
+            while IFS= read -r support_list_name; do
+              [ -n "${support_list_name}" ] || continue
+              if [ -d "${support_bundle_dir}" ] && { [ ! -f "${support_bundle_dir}/${support_list_name}" ] || [ -L "${support_bundle_dir}/${support_list_name}" ]; }; then continue; fi
+              _fetched_scripts+=("${support_list_name}")
+            done <<< "${support_list_names}"
+            _fetched_scripts+=(codex_model_catalog.json)
+            # SUPPORT_SCRIPTS_DIR is only visible from the next step; the
+            # helper has just verified this checkout is the bundle's commit.
+            support_overlay_loader=".codex-workflow-src/scripts/load_workflow_overlay.py"
+          else
+          # support-scripts-legacy:begin
           for f in gh_helpers.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py semantic_cache.py build_static_context.sh assemble_agents.py install_semble.sh build_semble_wrapper.sh write_codex_config.sh codex_stall_guard.sh orchestrate_parse_and_post_answer.sh clarify_isolated_run.sh clarify_base_image_preseed.sh sandbox_image.sh clarify_openrouter_broker.py ai_engine.sh claude_engine.py claude_anthropic_relay.py claude_settings.json.tmpl auto_decisions.py clarify_github_facts.py clarify_data_provision_guard.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
@@ -553,6 +618,21 @@ jobs:
             _fetched_scripts+=("${f}")
           done
 
+          # Model catalog: try script_ref first, fall back to local copy from checkout.
+          catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"
+          if [ ! -f "${catalog_src}" ] && [ -f ".codex-workflow-src-main/scripts/codex_model_catalog.json" ]; then
+            catalog_src=".codex-workflow-src-main/scripts/codex_model_catalog.json"
+          fi
+          if [ -f "${catalog_src}" ]; then
+            install -m 0644 "${catalog_src}" scripts/codex_model_catalog.json
+            _fetched_scripts+=(codex_model_catalog.json)
+          else
+            echo "Model catalog not on ${SCRIPT_REF} yet; using local copy."
+          fi
+          support_overlay_loader="scripts/load_workflow_overlay.py"
+          # support-scripts-legacy:end
+          fi
+
           # Fetch AI memory schema files so consumer repos that lack
           # schemas on their default branch can bootstrap the ai-memory
           # branch (schemas are validated during memory operations).
@@ -569,25 +649,13 @@ jobs:
 
           # WORKFLOW.md overlay is opt-in by file presence; absent file must
           # stay a no-op while valid prompt overrides flow through render_prompt.py.
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/load_workflow_overlay.py \
+          PYTHONDONTWRITEBYTECODE=1 python3 "${support_overlay_loader}" \
             --repo-root "${GITHUB_WORKSPACE}" \
             --schema-path "ai-memory/schemas/workflow_overlay.v1.json" \
             --github-env "${GITHUB_ENV}"
 
           echo "PROMPT_PRELUDE_REFACTOR_ENABLED=${{ vars.PROMPT_PRELUDE_REFACTOR_ENABLED || 'false' }}" >> "$GITHUB_ENV"
           echo "UNATTENDED_IDENTITY_REINJECT_ENABLED=${{ vars.UNATTENDED_IDENTITY_REINJECT_ENABLED || 'false' }}" >> "$GITHUB_ENV"
-
-          # Model catalog: try script_ref first, fall back to local copy from checkout.
-          catalog_src=".codex-workflow-src/scripts/codex_model_catalog.json"
-          if [ ! -f "${catalog_src}" ] && [ -f ".codex-workflow-src-main/scripts/codex_model_catalog.json" ]; then
-            catalog_src=".codex-workflow-src-main/scripts/codex_model_catalog.json"
-          fi
-          if [ -f "${catalog_src}" ]; then
-            install -m 0644 "${catalog_src}" scripts/codex_model_catalog.json
-            _fetched_scripts+=(codex_model_catalog.json)
-          else
-            echo "Model catalog not on ${SCRIPT_REF} yet; using local copy."
-          fi
 
           # Block fetched scripts from being committed in consumer repos.
           if [ "${{ github.repository }}" != "${wf_source}" ]; then
@@ -652,12 +720,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ ! -f scripts/memory_helpers.sh ]; then
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR:-scripts}/memory_helpers.sh" ]; then
             echo "::warning::memory_helpers.sh unavailable; skipping run-start memory event"
             exit 0
           fi
 
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/memory_helpers.sh"
           memory_ensure_branch
 
           METADATA_JSON="$(jq -cn \
@@ -696,6 +764,8 @@ jobs:
         if: steps.check_orchestrator.outputs.respond == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           CLARIFICATION_COMMENT: ${{ github.event.comment.body }}
           CLARIFICATION_COMMENT_ID: ${{ github.event.comment.id }}
           CLARIFICATION_COMMENT_AUTHOR: ${{ github.event.comment.user.login }}
@@ -705,7 +775,7 @@ jobs:
           CLARIFY_RESPOND_MODE: ${{ steps.check_orchestrator.outputs.mode }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
           # Reuse the earlier metadata-gate fetch when it is still valid, but
@@ -822,7 +892,7 @@ jobs:
         run: |
           set -euo pipefail
           LOOKUP_JSON="${RUNTIME_DIR}/semantic_cache_lookup.json"
-          if python3 scripts/semantic_cache.py lookup \
+          if python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/semantic_cache.py" lookup \
             --phase "orchestrate_clarify_respond" \
             --issue-number "${ISSUE_NUMBER}" \
             --issue-body-file "${RUNTIME_DIR}/issue_body.txt" \
@@ -858,12 +928,14 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
           : > "${RUNTIME_DIR}/github_facts.txt"
           : > "${RUNTIME_DIR}/heal_evidence_pack.txt"
-          if [ ! -f scripts/clarify_github_facts.py ]; then
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_github_facts.py" ]; then
             echo "::notice::clarify_github_facts.py not staged; continuing without GitHub facts."
             exit 0
           fi
@@ -874,10 +946,10 @@ jobs:
           # P1 step 6: a heal issue's `## Evidence pack`, read from the body
           # already fetched (no API call). Only when the staged script knows it.
           HEAL_PACK_ARGS=()
-          if grep -q -- '--heal-evidence-pack-output' scripts/clarify_github_facts.py; then
+          if grep -q -- '--heal-evidence-pack-output' "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_github_facts.py"; then
             HEAL_PACK_ARGS=(--issue-body-file "${RUNTIME_DIR}/issue_body.txt" --issue-labels-file "${RUNTIME_DIR}/issue_labels.json" --heal-evidence-pack-output "${RUNTIME_DIR}/heal_evidence_pack.txt")
           fi
-          python3 scripts/clarify_github_facts.py \
+          python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_github_facts.py" \
             --repo "${{ github.repository }}" \
             --issue-number "${ISSUE_NUMBER}" \
             --text-file "${RUNTIME_DIR}/issue_body.txt" \
@@ -894,9 +966,11 @@ jobs:
           # Centralised in scripts/write_codex_config.sh — see that
           # script's header for the apply_patch / trust / elevation
           # rationale.
-          bash scripts/write_codex_config.sh \
+          # In unified mode the model catalog lives only in the support bundle.
+          bash "${SUPPORT_SCRIPTS_DIR:-scripts}/write_codex_config.sh" \
             --model "${MODEL_EDITOR}" \
-            --reasoning "${MODEL_REASONING_EFFORT}"
+            --reasoning "${MODEL_REASONING_EFFORT}" \
+            --catalog-path "${SUPPORT_SCRIPTS_DIR:-${PWD}/scripts}/codex_model_catalog.json"
           echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
 
       - name: Pre-assemble static context (cacheable across runs)
@@ -919,7 +993,7 @@ jobs:
             exit 1
           fi
           clarify_respond_readme_context="$(mktemp "${RUNNER_TEMP}/clarify-respond-readme.XXXXXX")"
-          bash scripts/build_static_context.sh readme "${clarify_respond_readme_context}"
+          bash "${SUPPORT_SCRIPTS_DIR:-scripts}/build_static_context.sh" readme "${clarify_respond_readme_context}"
           # Issue #8269: index the agents file instead of inlining it unless
           # STATIC_CONTEXT_AGENTS_MODE says inline (same rules as build_static_context.sh).
           clarify_respond_agents_mode="$(printf '%s' "${STATIC_CONTEXT_AGENTS_MODE:-}" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
@@ -959,7 +1033,7 @@ jobs:
             clarify_respond_agents_indexed=false
             if [ -n "${clarify_respond_agents_file}" ] && [ "${clarify_respond_agents_mode}" = index ]; then
               if clarify_respond_agents_index_tmp="$(mktemp "${RUNNER_TEMP}/clarify-respond-agents-index.XXXXXX" 2>/dev/null)"; then
-                if bash scripts/build_static_context.sh agents-index "${clarify_respond_agents_index_tmp}" "${clarify_respond_agents_file}" && [ -s "${clarify_respond_agents_index_tmp}" ]; then
+                if bash "${SUPPORT_SCRIPTS_DIR:-scripts}/build_static_context.sh" agents-index "${clarify_respond_agents_index_tmp}" "${clarify_respond_agents_file}" && [ -s "${clarify_respond_agents_index_tmp}" ]; then
                   cat "${clarify_respond_agents_index_tmp}"
                   echo
                   clarify_respond_agents_indexed=true
@@ -981,7 +1055,7 @@ jobs:
             if [ -n "${clarify_respond_agents_file}" ] && [ "${clarify_respond_agents_indexed}" != true ]; then
               echo "=== AGENTS.MD ==="
               # CLAUDE.md §30: fold pending agents.d/ fragments in; plain file on any failure.
-              if [ -d agents.d ] && [ ! -L agents.d ] && clarify_respond_agents_render="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/assemble_agents.py render --repo-root . --agents-file "${clarify_respond_agents_file}" 2>/dev/null)"; then
+              if [ -d agents.d ] && [ ! -L agents.d ] && clarify_respond_agents_render="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${SUPPORT_SCRIPTS_DIR:-scripts}/assemble_agents.py" render --repo-root . --agents-file "${clarify_respond_agents_file}" 2>/dev/null)"; then
                 printf '%s\n' "${clarify_respond_agents_render}"
               else
                 cat "${clarify_respond_agents_file}"
@@ -1012,13 +1086,13 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ ! -f scripts/memory_helpers.sh ]; then
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR:-scripts}/memory_helpers.sh" ]; then
             echo "::warning::memory_helpers.sh unavailable; using empty memory context"
             : > "${RUNTIME_DIR}/memory_context.txt"
             exit 0
           fi
 
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/memory_helpers.sh"
 
           memory_retrieve "${RUNTIME_DIR}/memory_context.txt" \
             --role "clarify" \
@@ -1051,9 +1125,9 @@ jobs:
         run: |
           set -euo pipefail
           engine="codex"
-          if [ -f scripts/ai_engine.sh ]; then
+          if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/ai_engine.sh" ]; then
             # shellcheck disable=SC1091
-            source scripts/ai_engine.sh
+            source "${SUPPORT_SCRIPTS_DIR:-scripts}/ai_engine.sh"
             AI_ENGINE_LABELS="$(jq -c '[.labels[]?.name]' "${ISSUE_PAYLOAD_FILE}")"
             export AI_ENGINE_LABELS
             engine="$(ai_engine_for_role CLARIFY_RESPOND || echo codex)"
@@ -1086,6 +1160,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TOOL_CALL_BUDGET: ${{ vars.TOOL_CALL_BUDGET_CLARIFY_RESPOND || '25' }}
           CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED: ${{ vars.CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED || 'true' }}
           CLARIFY_RESPOND_ENGINE: ${{ steps.ai_engine.outputs.engine || 'codex' }}
         run: |
           set -euo pipefail
@@ -1093,7 +1168,7 @@ jobs:
           # Source sanitize_codex_prompt_file (best-effort) so the
           # clarify-respond prompt is UTF-8-clean before piping.
           # shellcheck source=/dev/null
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
 
           # Keep static context first for cache reuse, then append run-specific
           # data so issue/comment changes do not invalidate the cached prefix.
@@ -1103,7 +1178,7 @@ jobs:
             echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET}"
             echo
             echo "=== CLARIFY RESPOND TASK ==="
-            bash scripts/render_prompt.sh prompts/mode-clarify-respond.txt
+            bash "${SUPPORT_SCRIPTS_DIR:-scripts}/render_prompt.sh" prompts/mode-clarify-respond.txt
             echo
             echo "=== MEMORY CONTEXT ==="
             cat "${RUNTIME_DIR}/memory_context.txt"
@@ -1131,8 +1206,8 @@ jobs:
           # Inject prior clarify-cycle context if available.
           # NOTE: memory_clarify_cycle_history should be implemented in
           # scripts/memory_helpers.sh as a follow-up.
-          if [ -f scripts/memory_helpers.sh ]; then
-            source scripts/memory_helpers.sh
+          if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/memory_helpers.sh" ]; then
+            source "${SUPPORT_SCRIPTS_DIR:-scripts}/memory_helpers.sh"
             PRIOR_CYCLES="$(memory_clarify_cycle_history \
               --issue-number "${ISSUE_NUMBER}" \
               --max-cycles 5 2>/dev/null || true)"
@@ -1157,7 +1232,7 @@ jobs:
             fi
             rc=0
             if [ "${CLARIFY_RESPOND_ENGINE}" = "claude" ]; then
-              bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" claude CLARIFY_RESPOND || rc=$?
+              bash "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_isolated_run.sh" "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" claude CLARIFY_RESPOND || rc=$?
               if [ "${rc}" -eq 80 ]; then
                 # Claude capacity wait (issue #7370): no codex, no answer posted;
                 # the report step records the wait for the capacity-resume pass.
@@ -1174,7 +1249,7 @@ jobs:
               fi
             fi
             if [ "${CLARIFY_RESPOND_ENGINE}" != "claude" ]; then
-              bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" || rc=$?
+              bash "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_isolated_run.sh" "${CODEX_PROMPT_FILE}" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" || rc=$?
             fi
             if [ "${rc}" -eq 0 ]; then
               if grep -q '[^[:space:]]' "${CODEX_OUTPUT_FILE}"; then
@@ -1201,6 +1276,7 @@ jobs:
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           CLARIFY_CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED: ${{ vars.CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED || 'true' }}
           CLARIFY_RESPOND_ENGINE: ${{ steps.run_codex.outputs.engine || steps.ai_engine.outputs.engine || 'codex' }}
         run: |
           set -euo pipefail
@@ -1208,7 +1284,7 @@ jobs:
           # Source sanitize_codex_prompt_file (best-effort) so the
           # critic + revised prompts are UTF-8-clean before piping.
           # shellcheck source=/dev/null
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
 
           # Self-critique pass for non-letter decisions
           HAS_NON_LETTER="false"
@@ -1248,7 +1324,7 @@ jobs:
             fi
             critic_rc=0
             if [ "${CLARIFY_RESPOND_ENGINE}" = "claude" ]; then
-              bash scripts/clarify_isolated_run.sh "${RUNTIME_DIR}/critic_prompt.txt" "${RUNTIME_DIR}/critic_output.txt" "${RUNTIME_DIR}/codex_log.txt" claude CLARIFY_RESPOND || critic_rc=$?
+              bash "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_isolated_run.sh" "${RUNTIME_DIR}/critic_prompt.txt" "${RUNTIME_DIR}/critic_output.txt" "${RUNTIME_DIR}/codex_log.txt" claude CLARIFY_RESPOND || critic_rc=$?
               if [ "${critic_rc}" -eq 80 ]; then
                 # Claude capacity wait (issue #7370): no codex, no answer posted;
                 # the report step records the wait for the capacity-resume pass.
@@ -1262,7 +1338,7 @@ jobs:
               fi
             fi
             if [ "${CLARIFY_RESPOND_ENGINE}" != "claude" ]; then
-              bash scripts/clarify_isolated_run.sh "${RUNTIME_DIR}/critic_prompt.txt" "${RUNTIME_DIR}/critic_output.txt" "${RUNTIME_DIR}/codex_log.txt" || critic_rc=$?
+              bash "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_isolated_run.sh" "${RUNTIME_DIR}/critic_prompt.txt" "${RUNTIME_DIR}/critic_output.txt" "${RUNTIME_DIR}/codex_log.txt" || critic_rc=$?
             fi
             if [ "${critic_rc}" -eq 0 ]; then
               if grep -q 'VERDICT: REJECT' "${RUNTIME_DIR}/critic_output.txt"; then
@@ -1281,7 +1357,7 @@ jobs:
                 fi
                 revise_rc=0
                 if [ "${CLARIFY_RESPOND_ENGINE}" = "claude" ]; then
-                  bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}.v2" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" claude CLARIFY_RESPOND || revise_rc=$?
+                  bash "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_isolated_run.sh" "${CODEX_PROMPT_FILE}.v2" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" claude CLARIFY_RESPOND || revise_rc=$?
                   if [ "${revise_rc}" -eq 80 ]; then
                     # Claude capacity wait (issue #7370): no codex, no answer posted;
                     # the report step records the wait for the capacity-resume pass.
@@ -1295,7 +1371,7 @@ jobs:
                   fi
                 fi
                 if [ "${CLARIFY_RESPOND_ENGINE}" != "claude" ]; then
-                  bash scripts/clarify_isolated_run.sh "${CODEX_PROMPT_FILE}.v2" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" || revise_rc=$?
+                  bash "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_isolated_run.sh" "${CODEX_PROMPT_FILE}.v2" "${CODEX_OUTPUT_FILE}" "${RUNTIME_DIR}/codex_log.txt" || revise_rc=$?
                 fi
                 if [ "${revise_rc}" -eq 0 ]; then
                   echo "Revised decision produced after self-critique."
@@ -1325,7 +1401,7 @@ jobs:
         run: |
           set -euo pipefail
           STORE_JSON="${RUNTIME_DIR}/semantic_cache_store.json"
-          if python3 scripts/semantic_cache.py store \
+          if python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/semantic_cache.py" store \
             --phase "orchestrate_clarify_respond" \
             --issue-number "${ISSUE_NUMBER}" \
             --issue-body-file "${RUNTIME_DIR}/issue_body.txt" \
@@ -1358,6 +1434,8 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
@@ -1365,7 +1443,7 @@ jobs:
           FALLBACK_FILE="${RUNTIME_DIR}/standalone_fallback.json"
           FALLBACK_COUNT=0
           FALLBACK_UNDECIDED="parse_failed"
-          if python3 scripts/auto_decisions.py parse --questions-file "${RUNTIME_DIR}/clarification_comment.txt" > "${FALLBACK_FILE}"; then
+          if python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/auto_decisions.py" parse --questions-file "${RUNTIME_DIR}/clarification_comment.txt" > "${FALLBACK_FILE}"; then
             FALLBACK_COUNT="$(jq -r '.decisions | length' "${FALLBACK_FILE}")"
             FALLBACK_UNDECIDED="$(jq -r '.undecided | join(",")' "${FALLBACK_FILE}")"
           fi
@@ -1377,7 +1455,7 @@ jobs:
           fi
           echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=skip reason=worker_failed_undecided decisions=${FALLBACK_COUNT} undecided=${FALLBACK_UNDECIDED:-none}"
           echo "ready=false" >> "$GITHUB_OUTPUT"
-          source scripts/tg_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh"
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           MSG="Clarification required for #${ISSUE_NUMBER}: ${ISSUE_TITLE:-}"
           MSG+=$'\n'
@@ -1394,7 +1472,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          if [ ! -f scripts/clarify_data_provision_guard.py ]; then
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_data_provision_guard.py" ]; then
             echo "::notice::clarify_data_provision_guard.py not found; skipping data-provision guard."
             exit 0
           fi
@@ -1404,7 +1482,7 @@ jobs:
           fi
 
           GUARDED_OUTPUT="${RUNTIME_DIR}/codex_output_guarded.txt"
-          if python3 scripts/clarify_data_provision_guard.py \
+          if python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_data_provision_guard.py" \
             --clarification-file "${RUNTIME_DIR}/clarification_comment.txt" \
             --answers-file "${CODEX_OUTPUT_FILE}" > "${GUARDED_OUTPUT}"; then
             if ! diff -q "${CODEX_OUTPUT_FILE}" "${GUARDED_OUTPUT}" >/dev/null 2>&1; then
@@ -1426,6 +1504,8 @@ jobs:
         if: env.CLAUDE_CAPACITY_WAIT != 'true' && (steps.check_orchestrator.outputs.respond == 'true' && (steps.run_codex.outcome != 'failure' || steps.standalone_fallback.outputs.ready == 'true'))
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
@@ -1433,7 +1513,11 @@ jobs:
           PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          bash scripts/orchestrate_parse_and_post_answer.sh
+          # The poster cds to its own parent directory; from the support
+          # bundle that is not the checkout, so GIT_DIR keeps its memory
+          # dedup reading this repository's origin. Unset SUPPORT_SCRIPTS_DIR
+          # (kill switch) adds nothing and runs scripts/ as before.
+          env ${SUPPORT_SCRIPTS_DIR:+"GIT_DIR=${GITHUB_WORKSPACE}/.git"} bash "${SUPPORT_SCRIPTS_DIR:-scripts}/orchestrate_parse_and_post_answer.sh"
 
       # Standalone mode: record every decision, with who took it and any
       # placeholder setup items, in the issue's single trusted
@@ -1445,6 +1529,8 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           PYTHONDONTWRITEBYTECODE: "1"
           CLARIFICATION_COMMENT_ID: ${{ github.event.comment.id }}
           CLARIFY_RESPOND_FALLBACK_READY: ${{ steps.standalone_fallback.outputs.ready || 'false' }}
@@ -1452,7 +1538,7 @@ jobs:
           CLARIFY_RESPOND_ENGINE: ${{ steps.run_codex.outputs.engine || steps.ai_engine.outputs.engine || 'codex' }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           if [ "${CLARIFY_RESPOND_FALLBACK_READY}" = "true" ]; then
             AD_DECIDER="RECOMMENDED fallback"
@@ -1462,14 +1548,14 @@ jobs:
             AD_DECIDER="clarify-respond on ${CLARIFY_RESPOND_ENGINE}"
           fi
           AD_DECISIONS_FILE="${RUNTIME_DIR}/standalone_decisions.json"
-          if ! python3 scripts/auto_decisions.py from-answers \
+          if ! python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/auto_decisions.py" from-answers \
             --questions-file "${RUNTIME_DIR}/clarification_comment.txt" \
             --answers-file "${CODEX_OUTPUT_FILE}" > "${AD_DECISIONS_FILE}"; then
             echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=answered reason=ad_parse_failed"
             exit 0
           fi
           AD_RENDER_FILE="${RUNTIME_DIR}/standalone_decisions_comment.json"
-          if ! python3 scripts/auto_decisions.py render --comments-file "${RUNTIME_DIR}/issue_all_comments.json" \
+          if ! python3 "${SUPPORT_SCRIPTS_DIR:-scripts}/auto_decisions.py" render --comments-file "${RUNTIME_DIR}/issue_all_comments.json" \
             --decisions-file "${AD_DECISIONS_FILE}" \
             --source "clarify comment ${CLARIFICATION_COMMENT_ID}, ${AD_DECIDER}" > "${AD_RENDER_FILE}"; then
             echo "STANDALONE_AUTO_DECIDE issue=${ISSUE_NUMBER} outcome=answered reason=ad_render_failed"
@@ -1491,6 +1577,8 @@ jobs:
         if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always() && steps.check_orchestrator.outputs.respond == 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if [ ! -d .git ]; then
@@ -1511,12 +1599,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ ! -f scripts/memory_helpers.sh ]; then
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR:-scripts}/memory_helpers.sh" ]; then
             echo "::warning::memory_helpers.sh unavailable; skipping memory candidate recording"
             exit 0
           fi
 
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/memory_helpers.sh"
 
           MAX_DETAILS_CHARS=12000
           if [ -f "${RUNTIME_DIR}/answer_comment.md" ]; then
@@ -1569,12 +1657,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ ! -f scripts/memory_helpers.sh ]; then
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR:-scripts}/memory_helpers.sh" ]; then
             echo "::warning::memory_helpers.sh unavailable; skipping run-end success memory event"
             exit 0
           fi
 
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/memory_helpers.sh"
 
           METADATA_JSON="$(jq -cn \
             --arg repository "${{ github.repository }}" \
@@ -1596,12 +1684,12 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ ! -f scripts/memory_helpers.sh ]; then
+          if [ ! -f "${SUPPORT_SCRIPTS_DIR:-scripts}/memory_helpers.sh" ]; then
             echo "::warning::memory_helpers.sh unavailable; skipping run-end failure memory event"
             exit 0
           fi
 
-          source scripts/memory_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/memory_helpers.sh"
 
           METADATA_JSON="$(jq -cn \
             --arg repository "${{ github.repository }}" \
@@ -1622,9 +1710,11 @@ jobs:
         if: env.CLAUDE_CAPACITY_WAIT != 'true' && (failure() && steps.check_orchestrator.outputs.respond == 'true')
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          source scripts/gh_helpers.sh 2>/dev/null || true
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           gh_retry gh api "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments" \
@@ -1636,10 +1726,12 @@ jobs:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           set -euo pipefail
-          source scripts/tg_helpers.sh
+          source "${SUPPORT_SCRIPTS_DIR:-scripts}/tg_helpers.sh"
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           MSG="Orchestrator clarify-respond failed for #${ISSUE_NUMBER}: ${ISSUE_TITLE:-}"
@@ -1667,6 +1759,8 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           WORKFLOW_HEAL_ENABLED: ${{ vars.WORKFLOW_HEAL_ENABLED || 'true' }}
           REPORT_WORKFLOW_NAME: ${{ github.workflow }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}

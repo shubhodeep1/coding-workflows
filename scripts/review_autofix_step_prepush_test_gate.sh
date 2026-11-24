@@ -74,7 +74,8 @@
 # fetch-plan; one comments read plus one cached identity read) and
 # acceptance_label (adds or removes ai:acceptance-unmet after a commit; one
 # write, plus one label create and one retry POST only after a failed POST).
-# Only these two modes call the GitHub API.
+# Only these two modes, and the final-CI repair marker below, call the
+# GitHub API.
 #
 # Never blocks the push: the sourced step ends with status 0 on every path.
 # Log prefix: PREPUSH_TEST_GATE phase=review|resolver|heal|integration.
@@ -86,6 +87,24 @@
 # to GITHUB_ENV (the reviewer/editor steps skip), gates the PR head against its
 # merge-base with BASE_BRANCH and, on failures that head caused, runs
 # `review_conflict_resolve.sh --test-repair <result.json>` once.
+#
+# Final-CI repair (docs/plans/final-ci-failure-ci-fix-plan.md Phase 2): with
+# FINAL_CI_REPAIR=true (the gate's final_ci_repair output) on any head that
+# is not orchestrator/project-*, the same step gates the head against its
+# merge-base and, on failures the head caused, writes
+# INTEGRATION_TEST_REPAIR_ACTIVE=true and runs
+# `review_conflict_resolve.sh --test-repair <result.json> --final-ci` once.
+# A repair that commits and passes the re-run posts one comment ending in
+#   <!-- ai:final-ci-repair:v1 pr=<n> from=<approved head> repair=<new head> attempt=<k> -->
+# (up to 3 POST attempts, before the "Push all pending commits" step pushes
+# it; a push that then fails leaves a marker for a head that never landed,
+# which only uses up that head's one repair). A repair whose re-run was
+# skipped for step time is withheld. Every other outcome resets any repair
+# commit, writes INTEGRATION_TEST_REPAIR_ACTIVE=false so the same run falls
+# back to the full review round, posts the same marker with `repair=none`
+# (the head's one attempt is used up, the PR's two repairs are not), and logs
+# `FINAL_CI_REPAIR pr= head= outcome=fallback reason=not_reproduced|no_change|withheld|head_moved|skipped marker=posted|failed`.
+# The head must still be FINAL_CI_REPAIR_FROM_SHA (the gate's head).
 set -euo pipefail
 
 review_prepush_test_gate_log()
@@ -614,10 +633,13 @@ review_prepush_test_gate_restore_symlinks()
 }
 
 # One review editor turn. Sets rpg_repair to ran | skipped (...) | reverted (syntax)
-# | reverted (it removed the whole change for lint findings only); the gate re-runs only for ran.
+# | reverted (it removed the whole change for lint findings only)
+# | reverted (it removed the whole change while no failure was caused by it);
+# the gate re-runs only for ran. Logs one outcome=repair_diff line per editor turn.
 review_prepush_test_gate_repair()
 {
 	local result="$1" prompt rc editor editor_timeout validator sd
+	local repair_changed_before="" repair_changed_after="" repair_status_line="" repair_pr_caused="" repair_diff_paths
 	sd="$(review_prepush_test_gate_abs "${SUPPORT_SCRIPTS_DIR:-}")"
 	editor="$(review_prepush_test_gate_pick "${sd:+${sd}/review_apply_fixes.sh}")" || editor=""
 	if [ -z "${editor}" ] || ! grep -qxF '# supports: --repair-turn' "${editor}"; then
@@ -665,12 +687,18 @@ review_prepush_test_gate_repair()
 		rpg_repair="skipped (step time budget)"
 		return 0
 	fi
+	repair_changed_before="$(review_prepush_test_gate_changed || true)"
 	rc=0
 	timeout --kill-after=30s "${editor_timeout}" bash "${editor}" --repair-turn "${prompt}" "${RUNTIME_DIR}/prepush_gate_repair_output.txt" || rc=$?
 	if review_prepush_test_gate_revert strays; then
 		review_prepush_test_gate_log "outcome=warning reason=stray_edits_rolled_back"
 	fi
 	review_prepush_test_gate_restore_symlinks
+	# One line per editor turn: what the editor left behind (#9519). Paths are
+	# untrusted worktree names, so keep [A-Za-z0-9._/-] only and at most 10.
+	repair_changed_after="$(review_prepush_test_gate_changed || true)"
+	repair_diff_paths="$(printf '%s\n' "${repair_changed_after}" | head -n 10 | tr -cd 'A-Za-z0-9._/\n-' | sed '/^$/d' | paste -sd, - || true)"
+	review_prepush_test_gate_log "outcome=repair_diff before=$(printf '%s\n' "${repair_changed_before}" | awk 'NF{n++} END{print n+0}' || true) after=$(printf '%s\n' "${repair_changed_after}" | awk 'NF{n++} END{print n+0}' || true) paths=${repair_diff_paths}"
 	if [ "${rc}" -ne 0 ]; then
 		# The sandbox writes edits back even after a failed attempt;
 		# unvalidated partial edits must not reach "Commit changes".
@@ -699,6 +727,27 @@ review_prepush_test_gate_repair()
 		review_prepush_test_gate_log "outcome=repair_reverted reason=lint_only_change_erased"
 		rpg_repair="reverted (it removed the whole change for lint findings only)"
 		return 0
+	fi
+	# #9519 / PR #9562: a done-check-only repair turn (pr_caused=0) erased the
+	# PR's whole change. Restore it; an unreadable status skips this guard.
+	# `status` prints "unverified 0 0" when load() falls back to {} for a
+	# missing or corrupt result, so require a parseable JSON object with a
+	# known `status` first ({} or no status counts as unreadable); a genuine
+	# status=unverified result still reaches the guard.
+	if PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if isinstance(d, dict) and d.get("status") in ("pass", "fail", "unverified", "skipped") else 1)' "${result}" 2>/dev/null \
+		&& repair_status_line="$(review_prepush_test_gate_py status "${result}" 2>/dev/null)" && [ -n "${repair_status_line}" ]; then
+		read -r _ repair_pr_caused _ <<< "${repair_status_line}" || repair_pr_caused=""
+		case "${repair_pr_caused}" in
+			''|*[!0-9]*) ;;
+			*)
+				if [ -z "${repair_changed_after}" ] && [ -n "${repair_changed_before}" ] && [ "$((10#${repair_pr_caused}))" -eq 0 ]; then
+					review_prepush_test_gate_revert all || true
+					review_prepush_test_gate_log "outcome=repair_reverted reason=passing_change_erased"
+					rpg_repair="reverted (it removed the whole change while no failure was caused by it)"
+					return 0
+				fi
+				;;
+		esac
 	fi
 	rpg_repair="ran"
 	return 0
@@ -1061,12 +1110,17 @@ review_prepush_test_gate_integration_main()
 	# The step has timeout-minutes 120; keep 300 s for the push and summary.
 	local step_started="${SECONDS}" step_budget=6900 left
 	rpg_phase=integration
-	if [ "${POST_SYNC_TEST_REPAIR:-false}" != "true" ] || ! [[ "${branch}" =~ ^orchestrator/project-[1-9][0-9]*$ ]]; then
+	if [ "${FINAL_CI_REPAIR:-false}" = "true" ] && ! [[ "${branch}" =~ ^orchestrator/project- ]] \
+		&& [[ "${branch}" =~ ^[A-Za-z0-9._/-]+$ ]]; then
+		# Final-CI repair (see the header): the reviewer/editor steps keep
+		# running unless the gate reproduces a failure the head caused.
+		rpg_final_ci=true
+	elif [ "${POST_SYNC_TEST_REPAIR:-false}" != "true" ] || ! [[ "${branch}" =~ ^orchestrator/project-[1-9][0-9]*$ ]]; then
 		review_prepush_test_gate_log "outcome=skipped reason=not_requested"
 		return 0
 	fi
 	# First, so the reviewer/editor steps skip even when the gate cannot run.
-	if [ -n "${GITHUB_ENV:-}" ]; then
+	if [ -n "${GITHUB_ENV:-}" ] && [ "${rpg_final_ci}" != true ]; then
 		echo "INTEGRATION_TEST_REPAIR_ACTIVE=true" >> "${GITHUB_ENV}"
 	fi
 	review_prepush_test_gate_mode
@@ -1085,6 +1139,15 @@ review_prepush_test_gate_integration_main()
 	cd "${WORKSPACE_PATH:-${GITHUB_WORKSPACE:-$PWD}}" 2>/dev/null || return 0
 	rpg_worktree="$(git rev-parse --show-toplevel 2>/dev/null)" || rpg_worktree=""
 	[ -n "${rpg_worktree}" ] && cd "${rpg_worktree}" || { review_prepush_test_gate_log "outcome=skipped reason=no_git_checkout"; return 0; }
+	if [ "${rpg_final_ci}" = true ]; then
+		# Repair only the head the gate selected (the approved head).
+		rpg_final_ci_from="$(git rev-parse HEAD 2>/dev/null || true)"
+		if ! [[ "${rpg_final_ci_from}" =~ ^[0-9a-f]{40}$ ]] || [ "${rpg_final_ci_from}" != "${FINAL_CI_REPAIR_FROM_SHA:-}" ]; then
+			rpg_final_ci_reason=head_moved
+			review_prepush_test_gate_log "outcome=skipped reason=final_ci_head_moved"
+			return 0
+		fi
+	fi
 	if [[ "${base_branch}" =~ ^[A-Za-z0-9._/-]+$ ]]; then
 		git rev-parse --verify --quiet "refs/remotes/origin/${base_branch}" >/dev/null 2>&1 \
 			|| git fetch --no-tags --quiet origin "+refs/heads/${base_branch}:refs/remotes/origin/${base_branch}" 2>/dev/null || true
@@ -1139,7 +1202,13 @@ review_prepush_test_gate_integration_main()
 			rc=0
 			left=$(( step_budget - (SECONDS - step_started) ))
 			[ "${left}" -gt 0 ] || left=0
-			RESOLVER_TEST_REPAIR_BUDGET_SECS="${left}" bash "${resolver}" --test-repair "${gate_dir}/run1/result.json" || rc=$?
+			if [ "${rpg_final_ci}" = true ]; then
+				# Reproduced: the reviewer/editor steps skip from here on.
+				[ -z "${GITHUB_ENV:-}" ] || echo "INTEGRATION_TEST_REPAIR_ACTIVE=true" >> "${GITHUB_ENV}"
+				RESOLVER_TEST_REPAIR_BUDGET_SECS="${left}" bash "${resolver}" --test-repair "${gate_dir}/run1/result.json" --final-ci || rc=$?
+			else
+				RESOLVER_TEST_REPAIR_BUDGET_SECS="${left}" bash "${resolver}" --test-repair "${gate_dir}/run1/result.json" || rc=$?
+			fi
 			repair="resolver exit ${rc}"
 			if [ -n "${GITHUB_ENV:-}" ] && grep -qx 'INTEGRATION_TEST_REPAIRED=true' "${GITHUB_ENV}" 2>/dev/null; then
 				repair="committed"
@@ -1165,6 +1234,102 @@ review_prepush_test_gate_integration_main()
 		REVIEW_SANDBOX_ROOT="${root}" bash "${sd}/review_untrusted_sandbox.sh" cleanup >/dev/null 2>&1 || true
 	fi
 	review_prepush_test_gate_log "outcome=${status:-unverified} failures=${pr_caused:-0} inherited=${inherited:-0} mode=${rpg_mode} repair=$(printf '%s' "${repair}" | tr ' ()' '_  ' | tr -d ' ')"
+	if [ "${rpg_final_ci}" = true ]; then
+		if [ "${repair}" = committed ]; then
+			# Committed and the re-run found no PR-caused failure.
+			rpg_final_ci_reason=committed
+		elif [[ "${repair}" == withheld* ]] || [[ "${repair}" == "committed (re-run skipped"* ]]; then
+			# A repair the re-run rejected, or never re-ran, is not pushed.
+			rpg_final_ci_reason=withheld
+		elif [ "${status}" != fail ] || ! [ "${pr_caused:-0}" -gt 0 ] 2>/dev/null; then
+			rpg_final_ci_reason=not_reproduced
+		else
+			rpg_final_ci_reason=no_change
+		fi
+	fi
+	return 0
+}
+
+# Post one ai:final-ci-repair:v1 marker (up to 3 POST attempts; the gate
+# counts distinct `from` heads, so a duplicate from a retried POST is
+# harmless). Args: <from sha> <repair sha|none> <attempt> <lead text>.
+# Prints posted|failed.
+review_prepush_test_gate_final_ci_marker()
+{
+	local from="$1" repair="$2" attempt="$3" lead="$4" body try=1
+	if ! [[ "${PR_NUMBER:-}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
+		|| ! [[ "${from}" =~ ^[0-9a-f]{40}$ ]]; then
+		echo failed
+		return 0
+	fi
+	body="$(printf '%s\n\n<!-- ai:final-ci-repair:v1 pr=%s from=%s repair=%s attempt=%s -->' "${lead}" "${PR_NUMBER}" "${from}" "${repair}" "${attempt}")"
+	while [ "${try}" -le 3 ]; do
+		if gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${body}" >/dev/null 2>&1; then
+			echo posted
+			return 0
+		fi
+		[ "${try}" -lt 3 ] && sleep "${FINAL_CI_REPAIR_MARKER_RETRY_SLEEP_SECS:-5}"
+		try=$((try + 1))
+	done
+	echo failed
+	return 0
+}
+
+# Final-CI repair epilogue (see the header). After a committed repair it
+# posts the ai:final-ci-repair:v1 marker; otherwise it resets any repair
+# commit and hands the run back to the full review round. Always returns 0.
+review_prepush_test_gate_final_ci_finish()
+{
+	set +eu
+	set +o pipefail
+	local repaired="" head="" attempt="${FINAL_CI_REPAIR_ATTEMPT:-}" marker reason="${rpg_final_ci_reason:-skipped}"
+	local from="${rpg_final_ci_from:-}" log_head="${FINAL_CI_REPAIR_FROM_SHA:-?}"
+	if [ -n "${GITHUB_ENV:-}" ]; then
+		repaired="$(grep -E '^INTEGRATION_TEST_REPAIRED=' "${GITHUB_ENV}" 2>/dev/null | tail -n 1 | cut -d= -f2)"
+	fi
+	if [ -n "${rpg_worktree:-}" ]; then
+		head="$(git -C "${rpg_worktree}" rev-parse HEAD 2>/dev/null || true)"
+	fi
+	[[ "${attempt}" =~ ^[1-9][0-9]*$ ]] || attempt=1
+	if [ "${repaired}" = true ] && [ "${reason}" = committed ] && [[ "${from}" =~ ^[0-9a-f]{40}$ ]] \
+		&& [[ "${head}" =~ ^[0-9a-f]{40}$ ]] && [ "${head}" != "${from}" ]; then
+		# The backticks are Markdown code spans, not command substitution.
+		# shellcheck disable=SC2016
+		marker="$(review_prepush_test_gate_final_ci_marker "${from}" "${head}" "${attempt}" "$(printf '**Final CI repair.** The final CI run failed on approved head `%s`; the test-repair path committed `%s` to fix the failures it reproduced (repair %s of at most 2 for this PR). The repair head is reviewed and gets its own final CI run.' \
+			"${from:0:12}" "${head:0:12}" "${attempt}")")"
+		[ "${marker}" = posted ] || echo "::warning::Could not post the final-CI repair marker on PR #${PR_NUMBER:-?}; the repair head still gets a full review."
+		echo "FINAL_CI_REPAIR pr=${PR_NUMBER:-?} head=${from} outcome=committed repair=${head} attempt=${attempt} marker=${marker}"
+		return 0
+	fi
+	[ "${reason}" != committed ] || reason=no_change
+	# Drop a withheld or unverified repair commit so the full review starts
+	# from the approved head, and let the reviewer/editor steps run.
+	if [[ "${from}" =~ ^[0-9a-f]{40}$ ]] && [ -n "${head}" ] && [ "${head}" != "${from}" ]; then
+		git -C "${rpg_worktree}" reset -q --hard "${from}" 2>/dev/null \
+			|| echo "::warning::FINAL_CI_REPAIR could not reset the repair commit; the full review runs on ${head}."
+	fi
+	if [ -n "${GITHUB_ENV:-}" ]; then
+		echo "INTEGRATION_TEST_REPAIRED=false" >> "${GITHUB_ENV}"
+		echo "INTEGRATION_TEST_REPAIR_ACTIVE=false" >> "${GITHUB_ENV}"
+	fi
+	# Record the attempt (repair=none) so this head is not tried again even
+	# when the fallback review that follows posts nothing.
+	# shellcheck disable=SC2016
+	marker="$(review_prepush_test_gate_final_ci_marker "${log_head}" none "${attempt}" "$(printf '**Final CI repair not applied** (`%s`) on head `%s`. This run continues with the full review round.' \
+		"${reason}" "${log_head:0:12}")")"
+	echo "FINAL_CI_REPAIR pr=${PR_NUMBER:-?} head=${log_head} outcome=fallback reason=${reason} marker=${marker}"
+	return 0
+}
+
+# Integration-mode entry: the orchestrator test repair, plus the final-CI
+# repair epilogue. Always returns 0.
+review_prepush_test_gate_integration_entry()
+{
+	rpg_final_ci=false rpg_final_ci_reason="" rpg_final_ci_from=""
+	review_prepush_test_gate_integration_main
+	if [ "${rpg_final_ci}" = true ]; then
+		review_prepush_test_gate_final_ci_finish
+	fi
 	return 0
 }
 
@@ -1219,7 +1384,7 @@ rpg_script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -
 
 if [ "${BASH_SOURCE[0]}" != "$0" ]; then
 	if [ "${PREPUSH_TEST_GATE_STEP_MODE:-}" = "integration" ]; then
-		( review_prepush_test_gate_integration_main ) || true
+		( review_prepush_test_gate_integration_entry ) || true
 	elif [ "${PREPUSH_TEST_GATE_STEP_MODE:-}" = "acceptance_fetch" ]; then
 		( review_prepush_test_gate_acceptance_fetch_main ) || true
 	elif [ "${PREPUSH_TEST_GATE_STEP_MODE:-}" = "acceptance_label" ]; then

@@ -670,8 +670,8 @@ Rules:
   session.
 - The rule is enforced by **two** mechanisms, both anchored on
   `scripts/lint_pr_body_auto_close.py`:
-  1. The `Lint PR body for auto-close keywords against orchestrator-tracking
-     issues` GitHub workflow (`.github/workflows/lint-pr-body-auto-close.yml`)
+  1. The `pr-body-lint` job of the `PR checks` GitHub workflow
+     (`.github/workflows/pr-checks.yml`)
      runs on every pull request and fails the check when a violation
      is found.
   2. The unattended pipelines' PR-body composition paths invoke the
@@ -1013,7 +1013,8 @@ command whose documented job is to dispatch a workflow (`/implement-plan-ai`,
 `/apply-analysis`, and any successor that says so in its own file), that
 invocation is the approval for the dispatch it describes. Likewise, the
 user's go on a §31 plan approves opening the issues (or the orchestrator
-dispatch) that plan names.
+dispatch) that plan names, and §34.B approves opening a prevention issue in
+the repository the session works in.
 
 ### D) Transport & Tool Precedence
 
@@ -1486,7 +1487,8 @@ not change:
 3. **Show the plan and wait for the user's go.** Open nothing else before
    it: no issue, no `/implement-plan-claude` dispatch, no implementation PR.
    The go is the approval §23.C requires for opening the issues or
-   dispatching the orchestrator.
+   dispatching the orchestrator. The one exception is a §34.B prevention
+   issue in the repository the session works in: §34.B is its go.
 4. **Open the issues** (single-PR path only; the multi-PR path ends at the
    `/implement-plan-claude` dispatch, and the orchestrator opens its own
    tracking and wave issues). One issue per repository that needs a change,
@@ -1543,6 +1545,166 @@ work that does not depend on it. No retry loops (§18).
 Bridges are read-only. Writes and DB mutations still go through code paths
 under §10 and §18.D. Never echo, log or commit a bridge URL or token. A repo
 whose agents file documents no bridge is unaffected.
+
+---
+
+## §33. GitHub Runner Concurrency (MANDATORY)
+
+This applies in this repo and in every consumer repo that receives this file
+via the `@stable` sync, and it is not superseded by §12.
+
+The account's concurrent-job limit is a shared resource, like the API rate
+limit in §15. Every job, matrix leg and reusable-workflow job holds one runner
+slot while it runs, and every workflow in every repo on the account draws from
+the same pool. A burst of small jobs queues the pipeline's real work behind
+them. Incident: from 2026-11-11 the account's Actions queue was jammed, with
+487 queued runs in coding-workflows alone on 2026-11-15
+(`docs/plans/reduce-actions-run-volume-plan.md`).
+
+When you add or change a workflow (`.github/workflows/*.yml`,
+`workflow-templates/*.yml`), or plan one, check first whether the work can run
+on fewer runners. Delivery speed must not suffer.
+
+### A) Rules
+
+- **Fold before you add.** Before you add a job, look for an existing job in
+  the same workflow, or on the same trigger, that already runs at that point.
+  Give it the work as extra steps, or as a script one step calls.
+- **Split only for a reason**, and name the reason in a comment above the job:
+  - running in parallel shortens the critical path to a result someone is
+    waiting on (independent reviewers, long test shards);
+  - the combined job would come within 25% of its `timeout-minutes` or of the
+    360-minute GitHub-hosted job limit;
+  - the work needs different `permissions:`, secrets, environment or runner
+    image, and must stay isolated for security (§1 outranks this rule);
+  - a `needs:` gate, a different trigger condition, or failure isolation
+    requires it (one job's failure must not hide another's result).
+- **Filter at the trigger, then at the job.** Use trigger filters (`paths:`,
+  `types:`, `branches:`) so a run that would do nothing is never created. A
+  job-level `if:` that is false takes no runner, but the skipped run still
+  floods the queue and the API, and in consumers it fires another
+  `workflow_run` event. Avoid a job whose only purpose is to decide whether
+  other jobs run; fold that check into a trigger filter or into the first
+  step of the job that needs it.
+- **Coalesce superseded runs.** Give workflows that re-run on every push, sync
+  or schedule a `concurrency:` group, so a newer run replaces the one still
+  waiting. Set `cancel-in-progress: true` only for runs that write no state
+  (lint, tests, read-only reports). Runs that merge, release, push, label or
+  write a DB keep `cancel-in-progress: false`.
+- **Bound fan-out.** Batch N items into `ceil(N / batch_size)` jobs instead of
+  one job per item, and set `max-parallel` on matrices, so one event cannot
+  take most of the pool. This is the runner counterpart of §15's batched
+  GraphQL. Starting one run per item from inside a loop (`gh workflow run`,
+  `repository_dispatch`) when one run could take the batch is a
+  review-blocker.
+- **Keep delivery fast.** Merging jobs that run one after another is always
+  allowed: it saves the setup and the queue wait between them. Merge parallel
+  jobs only when the merged job stays inside its time limits and no result
+  someone is waiting on arrives later. Otherwise keep them parallel and say
+  why.
+- **Respect time limits.** Set the merged job's `timeout-minutes` to the sum
+  of the work it now runs plus headroom, never above 360, and keep each
+  step's own timeouts.
+
+### B) Justification and Review
+
+- A PR or plan that adds a job, a workflow or a matrix leg that runs on every
+  PR, push, comment or schedule MUST say in its body why the work could not
+  join an existing job, and give the jobs per triggering event before and
+  after. An unexplained new job of that kind is a review-blocker. Rarely
+  triggered jobs (manual dispatch, release) need a one-line reason.
+- Merging or removing a job that is a required status check, or that a
+  `needs:`, a log parser or a heal rule cites by id or name, is a §6 removal:
+  ask first (§2, §12.D).
+
+### C) Relationship to Other Rules
+
+- §27: steps folded into a job grow the workflow file. Stay under the
+  480,000-byte guard by moving `run:` bodies into `scripts/`, never by
+  splitting the work into more jobs or workflows.
+- §15: one job that does the work of several also shares their API results;
+  reuse them instead of fetching again.
+
+---
+
+## §34. Prevent Recurrence (MANDATORY)
+
+This applies in this repo and in every consumer repo that receives this file
+via the `@stable` sync, and it is not superseded by §12. In PR review mode
+(§12), a prevention fix that fits the PR lands in the PR under review
+(§12.A); one too large for it becomes a §34.B issue, never a follow-up PR.
+One that needs several PRs cannot be a §34.B issue (§31.B step 4): ask in
+the §2 format, as §12.A requires, and open no plan PR before the answer.
+
+Fixing one instance of a problem is half the job. Whenever a session solves a
+problem, it MUST check whether the same problem can happen again and, if it
+can, put a lasting fix in place as part of the same work. A problem is solved
+when the session unsticks a PR, issue or run by hand, repairs a failed check,
+works around a pipeline defect, corrects data or configuration, or finds out
+why something stalled.
+
+### A) The check
+
+For every problem solved, answer three questions:
+
+1. **Cause.** What made the problem possible, from evidence (logs, code, run
+   history), not from a guess (§8).
+2. **Recurrence.** Can it happen again without a person noticing? Look for
+   other PRs, issues, runs or repos that are in the same state now (one
+   bounded search, §15) and list them.
+3. **Prevention.** What stops it: a code or workflow fix, a test, a guard or
+   an alert, a safer default, or a correction to a document that misled.
+
+### B) Put the fix in place
+
+- **It cannot recur, or a fix is already merged or tracked:** say so and name
+  the PR or issue. Search before opening anything, so the same cause never
+  gets two issues.
+- **A small fix (§31.A):** implement it in the session, with a test, and run
+  the test locally before committing. This rule is the go for it under §0
+  and §2 only while every §31.A condition holds; any doubt about the cause,
+  the fix or its effect on the user's work makes it a §2 ask.
+- **Anything larger:** write the plan (§31.B step 2) and open the issue for
+  the pipeline in the same turn, following §31.B step 4 (`ai:engine-claude`
+  at creation, `Refs` links, never auto-close keywords, §19). This rule is
+  the user's standing go for that issue (§23.C, §31.B step 3) only in the
+  repository the session works in: show the plan in the reply and open the
+  issue without waiting. An issue in any other repository, consumer repos
+  included, still needs the named §2 ask §23.C requires. One issue per cause
+  per repository. The user can close or change it. A fix that needs several
+  PRs (the multi-PR path of §31.B step 2) is not covered: follow §31.B steps
+  2 and 3 (open the plan PR, then wait for the user's go before the
+  `/implement-plan-claude` dispatch, §23.C). In PR review mode, the §2 ask in
+  the §34 intro comes first instead: open no plan PR before the answer.
+- **The fix needs an action only the user can take** (a variable, setting,
+  ruleset, secret, billing change or any other ask-first action in this
+  file): ask in the §2 format, name the exact change, and keep the item open
+  until it is done.
+
+### C) What counts as a lasting fix
+
+- Remove the cause where that is possible. Where it is not, detect it and
+  alert. A note in a document is the last resort.
+- A fix that depends on a person remembering something is not a fix (§18).
+- The workaround the session used (a hand merge, a hand dispatch, a pushed
+  test fix, a re-run) is never the fix.
+- A prevention fix follows every other rule in this file (§5, §6, §10, §12,
+  §15, §18, §19, §23, §27, §31, §33). It is not a licence for unrelated
+  refactors.
+
+### D) Reporting
+
+The final reply lists each problem the session solved with its cause, whether
+it can recur, and the fix: a PR, an issue, or the user's pending action. "No
+lasting fix needed" must come with the reason. Track the items like a §11
+checklist: an item stays open until its fix is merged, is tracked in an open
+issue, or the user drops it.
+
+### E) Interactive Sessions Only
+
+The unattended pipelines read `unattended_system_instructions.md` and never
+see this file. Their own recurrence handling (workflow log analysis, the
+workflow-failure heal intake) is unchanged.
 
 ---
 

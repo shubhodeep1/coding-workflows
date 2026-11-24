@@ -110,7 +110,7 @@ def test_gate_script_wiring() -> None:
 	assert 'base_ref: (.base.ref // ""), base_sha: (.base.sha // ""), head_repo:' in text
 	assert '"${AUTOFIX_SKIP_CLEAN_SAME_HEAD:-true}" = "false"' in text
 	assert 'echo "base_sha=${pr_base_sha_gate}" >> "${GITHUB_OUTPUT}"' in text
-	assert 'or ($b | contains("<!-- review-autofix-clean:v1 ")) or ($b | contains("<!-- ai:single-issue-security-pass:v1 ")) or ($b | contains("<!-- ai:freshness-ci-failed:v1 "))) |' in text
+	assert 'or ($b | contains("<!-- review-autofix-clean:v1 ")) or ($b | contains("<!-- ai:single-issue-security-pass:v1 ")) or ($b | contains("<!-- ai:freshness-ci-failed:v1 ")) or ($b | contains("<!-- ai:final-ci-failed:v1 ")) or ($b | contains("<!-- ai:final-ci-repair:v1 "))) |' in text
 	assert 'body: "", activity_only: true}))]' in text
 	# Order: terminal same-head skip, clean same-head skip, fingerprint cap.
 	block_start = text.index("# ----- Clean same-head skip (issue #8952) -----")
@@ -261,6 +261,38 @@ def test_parser_exits_2_on_garbage(tmp_path: Path) -> None:
 	assert _run_parser(tmp_path, {"not": "a list"})[0] == 2
 
 
+def _final_ci_comment(*, created_at: str, author: str = "github-actions[bot]", author_type: str = "Bot", head: str = HEAD, pr: str = "42", comment_id: int = 30) -> dict[str, object]:
+	return {"id": comment_id, "author_login": author, "author_type": author_type, "created_at": created_at,
+		"body": f"**The final CI run failed on head `{head[:12]}`.**\n\n<!-- ai:final-ci-failed:v1 pr={pr} head={head} -->"}
+
+
+def test_parser_final_ci_failed_marker_at_or_after_the_clean_marker_rearms(tmp_path: Path) -> None:
+	# Final-CI hand-back (final-ci-failure-ci-fix plan, Phase 1).
+	for created_at in (MARKER_TIME, "2026-11-06T12:00:00Z"):
+		for author, author_type in (("github-actions[bot]", "Bot"), (PIPELINE, "User")):
+			comments = [_summary_comment(), _final_ci_comment(created_at=created_at, author=author, author_type=author_type)]
+			decision = _run_parser(tmp_path, comments)[1]
+			assert decision["decision"] == "no_skip" and decision["reason"] == "final_ci_failed", (created_at, author, decision)
+
+
+def test_parser_final_ci_failed_marker_that_cannot_rearm(tmp_path: Path) -> None:
+	cases = [
+		# Older than the clean marker: a review already ran after the failure.
+		_final_ci_comment(created_at="2026-11-05T00:00:00Z"),
+		# Untrusted authors.
+		_final_ci_comment(created_at="2026-11-06T12:00:00Z", author="mallory", author_type="Bot"),
+		_final_ci_comment(created_at="2026-11-06T12:00:00Z", author="github-actions[bot]", author_type="User"),
+		# Another head or PR.
+		_final_ci_comment(created_at="2026-11-06T12:00:00Z", head=OTHER_HEAD),
+		_final_ci_comment(created_at="2026-11-06T12:00:00Z", pr="43"),
+	]
+	for comment in cases:
+		decision = _run_parser(tmp_path, [_summary_comment(), comment])[1]
+		# A newer non-Bot comment still re-arms through newer_human_comment.
+		expected = "newer_human_comment" if comment["author_type"] == "User" else "none"
+		assert decision["reason"] == expected, (comment, decision)
+
+
 # ---------------------------------------------------------------------------
 # Whole gate step with a fake gh
 # ---------------------------------------------------------------------------
@@ -275,7 +307,9 @@ endpoint = next((arg for arg in args[1:] if arg.startswith("repos/") or arg == "
 jq = args[args.index("--jq") + 1] if "--jq" in args else None
 def emit(value):
 	if jq:
-		value = json.loads(subprocess.run(["jq", "-c", jq], input=json.dumps(value), text=True, capture_output=True, check=True).stdout)
+		# Like gh --jq: a string result prints raw, anything else as JSON.
+		print(subprocess.run(["jq", "-r", "-c", jq], input=json.dumps(value), text=True, capture_output=True, check=True).stdout, end="")
+		sys.exit(0)
 	print(json.dumps(value))
 	sys.exit(0)
 if endpoint == "user":
@@ -289,6 +323,12 @@ if endpoint.endswith("/pulls/42/reviews"):
 	if fixture.get("reviews_fail"):
 		sys.exit(1)
 	emit(fixture.get("reviews", []))
+if "/commits/" in endpoint and "/statuses" not in endpoint and "commit" in fixture:
+	emit(fixture["commit"])
+if "/commits/" in endpoint and "/statuses" in endpoint:
+	if fixture.get("statuses_fail"):
+		sys.exit(1)
+	emit(fixture.get("statuses", []))
 if endpoint.endswith("/pulls/42/files"):
 	emit([{"filename": "scripts/tool.sh", "status": "modified"}])
 sys.exit(2)
@@ -442,6 +482,16 @@ def test_gate_freshness_ci_failed_marker_rearms(tmp_path: Path) -> None:
 	assert "outcome=no_skip reason=freshness_ci_failed" in result.stdout
 
 
+def test_gate_final_ci_failed_marker_rearms(tmp_path: Path) -> None:
+	fixture = _gate_fixture()
+	fixture["comments"].append({"id": 40, "user": {"login": "github-actions[bot]", "type": "Bot"}, "created_at": "2026-11-06T12:00:00Z",
+		"author_association": "NONE", "body": f"**The final CI run failed on head `x`.**\n\n<!-- ai:final-ci-failed:v1 pr=42 head={HEAD} -->"})
+	result, outputs, calls = _run_gate(tmp_path, fixture)
+	assert outputs["should_run"] == "true", result.stdout + result.stderr
+	assert "AUTOFIX_GATE_CLEAN_SAME_HEAD_CHECK outcome=no_skip reason=final_ci_failed pr=42" in result.stdout
+	assert _reviews_calls(calls) == 0
+
+
 # ---------------------------------------------------------------------------
 # Marker writer
 # ---------------------------------------------------------------------------
@@ -472,10 +522,10 @@ def _editor_summary(status: str = "not-edited", ignored: str = "- none") -> str:
 	)
 
 
-def _run_writer(tmp_path: Path, summary: str, *, committed: str = "- none\n", **env_overrides: str) -> tuple[subprocess.CompletedProcess, str]:
+def _run_writer(tmp_path: Path, summary: str, *, committed: str = "- none\n", gh_func: str = FAKE_GH_FUNC, **env_overrides: str) -> tuple[subprocess.CompletedProcess, str]:
 	support_dir = tmp_path / "support"
 	support_dir.mkdir(exist_ok=True)
-	(support_dir / "gh_helpers.sh").write_text(FAKE_GH_FUNC, encoding="utf-8")
+	(support_dir / "gh_helpers.sh").write_text(gh_func, encoding="utf-8")
 	summary_file = tmp_path / "editor_summary.txt"
 	summary_file.write_text(summary, encoding="utf-8")
 	committed_file = tmp_path / "committed.txt"
@@ -537,3 +587,343 @@ def test_writer_skips_the_marker_for_the_fallback_summary(tmp_path: Path) -> Non
 	assert result.returncode == 0, result.stderr
 	assert "review-autofix-clean:v1" not in body
 	assert "AUTOFIX_CLEAN_SAME_HEAD_MARKER outcome=not_written reason=fallback" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Stale ai:review-blocked clear after a clean review (issue #9369 / #9716)
+# ---------------------------------------------------------------------------
+
+FAKE_GH_STALE_FUNC = """gh() {
+  local prev="" arg
+  printf '%s ' "${@//$'\\n'/ }" >> "${FAKE_GH_LOG}"
+  printf '\\n' >> "${FAKE_GH_LOG}"
+  for arg in "$@"; do
+    if [ "${prev}" = "-f" ] && [ "${arg#body=}" != "${arg}" ]; then
+      printf '%s' "${arg#body=}" > "${FAKE_GH_BODY_FILE}"
+    fi
+    prev="${arg}"
+  done
+  if [ "${1:-}" = "api" ] && [ "${2:-}" = "user" ]; then
+    [ -n "${FAKE_GH_USER_LOGIN:-}" ] || return 1
+    printf '%s\\n' "${FAKE_GH_USER_LOGIN}"
+    return 0
+  fi
+  if [ "${2:-}" = "-X" ] && [ "${3:-}" = "DELETE" ]; then
+    case "${FAKE_GH_DELETE_MODE:-ok}" in
+      ok) return 0 ;;
+      404) echo "gh: Not Found (HTTP 404)" >&2; return 1 ;;
+      notfound) echo "gh: not found (AI_COMMENT_SIG shim)" >&2; return 127 ;;
+      *) printf '%s\\n' "::error::gh command failed after 5 attempts: api -X DELETE" "::warning::  stderr: gh: Server Error (HTTP 500)" >&2; return 1 ;;
+    esac
+  fi
+  return 0
+}
+gh_retry() { "$@"; }
+"""
+
+STALE_LINE = "REVIEW_BLOCKED_STALE_CLEAR "
+DELETE_URL = "repos/o/r/issues/42/labels/ai%3Areview-blocked"
+
+
+def _cap_comment(head: str = OTHER_HEAD, support: str | None = SUPPORT, *, comment_id: int = 20, author: str = PIPELINE,
+		pr_label: bool = True, inline: bool = False) -> dict[str, object]:
+	support_field = f" support={support}" if support else ""
+	marker = f"<!-- review-autofix-failure-cap:v1 head={head} fp={'b' * 16} reason=reviewers_failed count=3{support_field} -->"
+	labeled = "this pull request (no linked issue found)" if pr_label else "linked issue(s) #7"
+	body = f"**AI review/autofix stopped: identical failure repeated**\n\nLabeled `ai:review-blocked`: {labeled}.\n\n"
+	body += f"Quoted from an older run: {marker} (see above)" if inline else marker
+	return {"id": comment_id, "user": {"login": author, "type": "User"}, "body": body}
+
+
+def _run_stale_clear(tmp_path: Path, comments: list[dict[str, object]], *, labels: tuple[str, ...] = ("ai:review-blocked",),
+		user_login: str = PIPELINE, delete_mode: str = "ok", **env_overrides: str) -> tuple[subprocess.CompletedProcess, list[str], list[str]]:
+	payload = tmp_path / "pr_payload.json"
+	payload.write_text(json.dumps({"number": 42, "labels": [{"name": name} for name in labels]}), encoding="utf-8")
+	comments_file = tmp_path / "pr_issue_comments.json"
+	comments_file.write_text(json.dumps(comments), encoding="utf-8")
+	log = tmp_path / "gh_calls.log"
+	log.write_text("", encoding="utf-8")
+	env = {"PR_PAYLOAD_FILE": str(payload), "PR_ISSUE_COMMENTS_FILE": str(comments_file), "FAKE_GH_LOG": str(log),
+		"FAKE_GH_USER_LOGIN": user_login, "FAKE_GH_DELETE_MODE": delete_mode}
+	env.update(env_overrides)
+	result, _ = _run_writer(tmp_path, _editor_summary(), gh_func=FAKE_GH_STALE_FUNC, **env)
+	stale_lines = [line for line in result.stdout.splitlines() if line.startswith(STALE_LINE)]
+	calls = [line for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
+	return result, stale_lines, calls
+
+
+def _stale_line(outcome: str, reason: str, *, cap_head: str = "none", cap_support: str = "none", clean_support: str = SUPPORT) -> str:
+	return (f"{STALE_LINE}pr=42 outcome={outcome} reason={reason} cap_head={cap_head} cap_support={cap_support} "
+		f"clean_head={HEAD} clean_support={clean_support}")
+
+
+def _user_calls(calls: list[str]) -> int:
+	return sum(1 for call in calls if call.startswith("api user "))
+
+
+def _delete_calls(calls: list[str]) -> int:
+	return sum(1 for call in calls if call.startswith("api -X DELETE ") and DELETE_URL in call)
+
+
+def test_stale_clear_removes_label_after_head_change(tmp_path: Path) -> None:
+	result, lines, calls = _run_stale_clear(tmp_path, [_cap_comment()])
+	assert result.returncode == 0, result.stderr
+	assert lines == [_stale_line("removed", "cap_head_mismatch", cap_head=OTHER_HEAD, cap_support=SUPPORT)], result.stdout
+	assert _user_calls(calls) == 1 and _delete_calls(calls) == 1, calls
+	# The clean marker still ends the posted comment.
+	assert "AUTOFIX_CLEAN_SAME_HEAD_MARKER outcome=written" in result.stdout
+	# A trusted author differing only in case still matches.
+	_, lines, calls = _run_stale_clear(tmp_path, [_cap_comment(author=PIPELINE.upper())])
+	assert lines[0].split(" ")[2] == "outcome=removed" and _delete_calls(calls) == 1
+
+
+def test_stale_clear_removes_label_on_support_mismatch(tmp_path: Path) -> None:
+	result, lines, calls = _run_stale_clear(tmp_path, [_cap_comment(head=HEAD, support=OTHER_SUPPORT)])
+	assert result.returncode == 0, result.stderr
+	assert lines == [_stale_line("removed", "cap_support_mismatch", cap_head=HEAD, cap_support=OTHER_SUPPORT)], result.stdout
+	assert _user_calls(calls) == 1 and _delete_calls(calls) == 1
+
+
+def test_stale_clear_removes_label_when_cap_support_missing(tmp_path: Path) -> None:
+	result, lines, calls = _run_stale_clear(tmp_path, [_cap_comment(head=HEAD, support=None)])
+	assert result.returncode == 0, result.stderr
+	assert lines == [_stale_line("removed", "cap_support_mismatch", cap_head=HEAD)], result.stdout
+	assert _delete_calls(calls) == 1
+	# With no review-support SHA the clean marker says support=none: heads only.
+	result, lines, calls = _run_stale_clear(tmp_path, [_cap_comment(head=HEAD, support=None)], REVIEW_SUPPORT_SHA="")
+	assert lines == [_stale_line("kept", "same_head_same_support", cap_head=HEAD, clean_support="none")], result.stdout
+	assert _user_calls(calls) == 0 and _delete_calls(calls) == 0
+
+
+def test_stale_clear_keeps_label_same_head_same_support(tmp_path: Path) -> None:
+	result, lines, calls = _run_stale_clear(tmp_path, [_cap_comment(head=HEAD, support=SUPPORT)])
+	assert result.returncode == 0, result.stderr
+	assert lines == [_stale_line("kept", "same_head_same_support", cap_head=HEAD, cap_support=SUPPORT)], result.stdout
+	assert _user_calls(calls) == 0 and _delete_calls(calls) == 0
+
+
+def test_stale_clear_keeps_label_without_cap_marker(tmp_path: Path) -> None:
+	result, lines, calls = _run_stale_clear(tmp_path, [_summary_comment(comment_id=5)])
+	assert result.returncode == 0, result.stderr
+	assert lines == [_stale_line("kept", "no_cap_marker")], result.stdout
+	assert _user_calls(calls) == 0 and _delete_calls(calls) == 0
+	# A marker quoted inline, not on its own line, does not count.
+	_, lines, calls = _run_stale_clear(tmp_path, [_cap_comment(inline=True)])
+	assert lines == [_stale_line("kept", "no_cap_marker")]
+	assert _user_calls(calls) == 0 and _delete_calls(calls) == 0
+
+
+def test_stale_clear_keeps_label_for_untrusted_cap_author(tmp_path: Path) -> None:
+	result, lines, calls = _run_stale_clear(tmp_path, [_cap_comment(author="intruder")])
+	assert result.returncode == 0, result.stderr
+	assert lines == [_stale_line("kept", "untrusted_cap_author", cap_head=OTHER_HEAD, cap_support=SUPPORT)], result.stdout
+	assert _user_calls(calls) == 1 and _delete_calls(calls) == 0
+	# The newest trusted marker wins: a newer marker from another author does
+	# not shadow the older trusted stale one.
+	_, lines, calls = _run_stale_clear(tmp_path, [_cap_comment(comment_id=20), _cap_comment(comment_id=30, author="intruder")])
+	assert lines == [_stale_line("removed", "cap_head_mismatch", cap_head=OTHER_HEAD, cap_support=SUPPORT)]
+	assert _user_calls(calls) == 1 and _delete_calls(calls) == 1
+	# A newer stale forged marker cannot remove a label the trusted marker holds.
+	_, lines, calls = _run_stale_clear(tmp_path, [_cap_comment(head=HEAD, comment_id=20), _cap_comment(comment_id=30, author="intruder")])
+	assert lines == [_stale_line("kept", "same_head_same_support", cap_head=HEAD, cap_support=SUPPORT)]
+	assert _user_calls(calls) == 1 and _delete_calls(calls) == 0
+	# Without a trusted login nothing is removed.
+	_, lines, calls = _run_stale_clear(tmp_path, [_cap_comment()], user_login="")
+	assert lines[0].split(" ")[2:4] == ["outcome=kept", "reason=marker_author_unavailable"] and _delete_calls(calls) == 0
+
+
+def test_stale_clear_delete_failure_logs_error_and_exits_zero(tmp_path: Path) -> None:
+	result, lines, calls = _run_stale_clear(tmp_path, [_cap_comment()], delete_mode="fail")
+	assert result.returncode == 0, result.stderr
+	assert lines == [_stale_line("error", "delete_failed", cap_head=OTHER_HEAD, cap_support=SUPPORT)], result.stdout
+	assert "::warning::Could not remove stale ai:review-blocked from PR #42: gh: Server Error (HTTP 500)" in result.stdout
+	assert _delete_calls(calls) == 1
+	assert "EDITOR_SUMMARY_POSTED=true" in (tmp_path / "github_env").read_text(encoding="utf-8")
+	# A 404 means the label is already gone.
+	result, lines, _ = _run_stale_clear(tmp_path, [_cap_comment()], delete_mode="404")
+	assert result.returncode == 0 and lines == [_stale_line("removed", "cap_head_mismatch", cap_head=OTHER_HEAD, cap_support=SUPPORT)]
+	# Other "not found" text without HTTP 404 is a failure, not "already gone".
+	result, lines, _ = _run_stale_clear(tmp_path, [_cap_comment()], delete_mode="notfound")
+	assert result.returncode == 0 and lines == [_stale_line("error", "delete_failed", cap_head=OTHER_HEAD, cap_support=SUPPORT)]
+
+
+def test_stale_clear_keeps_label_when_absent_or_from_another_path(tmp_path: Path) -> None:
+	result, lines, calls = _run_stale_clear(tmp_path, [_cap_comment()], labels=("bug",))
+	assert result.returncode == 0, result.stderr
+	assert lines == [_stale_line("kept", "label_absent")], result.stdout
+	assert calls == [call for call in calls if "/comments" in call]
+	# A cap that labelled linked issues did not put the label on this PR.
+	_, lines, calls = _run_stale_clear(tmp_path, [_cap_comment(pr_label=False)])
+	assert lines == [_stale_line("kept", "cap_not_pr_label", cap_head=OTHER_HEAD, cap_support=SUPPORT)]
+	assert _user_calls(calls) == 0 and _delete_calls(calls) == 0
+
+
+def test_stale_clear_runs_only_after_a_clean_marker(tmp_path: Path) -> None:
+	result, lines, calls = _run_stale_clear(tmp_path, [_cap_comment()], DID_COMMIT="true")
+	assert result.returncode == 0, result.stderr
+	assert "AUTOFIX_CLEAN_SAME_HEAD_MARKER outcome=not_written reason=committed" in result.stdout
+	assert lines == [] and _user_calls(calls) == 0 and _delete_calls(calls) == 0
+
+
+def test_stale_clear_falls_back_to_one_read_without_a_snapshot(tmp_path: Path) -> None:
+	result, lines, calls = _run_stale_clear(tmp_path, [_cap_comment()], PR_PAYLOAD_FILE=str(tmp_path / "missing.json"))
+	assert result.returncode == 0, result.stderr
+	# The stub's PR read returns no labels.
+	assert lines == [_stale_line("kept", "label_absent")], result.stdout
+	assert sum(1 for call in calls if call.startswith("api repos/o/r/pulls/42 ")) == 1
+
+
+# ---------------------------------------------------------------------------
+# Final-CI repair gate output (final-ci-failure-ci-fix plan, Phase 2)
+# ---------------------------------------------------------------------------
+
+def _repair_fixture(*extra_comments: dict, head_ref: str = "ai/issue-42", statuses: list | None = None) -> dict:
+	fixture = _gate_fixture(pr={"head": {"ref": head_ref, "sha": HEAD, "repo": {"full_name": "o/r"}}})
+	fixture["comments"].append({"id": 40, "user": {"login": "github-actions[bot]", "type": "Bot"}, "created_at": "2026-11-06T12:00:00Z",
+		"author_association": "NONE", "body": f"**The final CI run failed.**\n\n<!-- ai:final-ci-failed:v1 pr=42 head={HEAD} -->"})
+	fixture["comments"].extend(extra_comments)
+	fixture["statuses"] = statuses if statuses is not None else [
+		{"context": "ai-review/head-gate", "state": "success", "creator": {"login": PIPELINE}},
+		{"context": "ai-review/head-gate", "state": "pending", "creator": {"login": PIPELINE}},
+	]
+	return fixture
+
+
+def _repair_marker(source: str, comment_id: int, author: str = PIPELINE, attempt: int = 1, repair: str = "9" * 40) -> dict:
+	return {"id": comment_id, "user": {"login": author, "type": "User"}, "created_at": "2026-11-06T13:00:00Z", "author_association": "OWNER",
+		"body": f"**Final CI repair.**\n\n<!-- ai:final-ci-repair:v1 pr=42 from={source} repair={repair} attempt={attempt} -->"}
+
+
+def _statuses_calls(calls: list[list[str]]) -> int:
+	return sum(1 for call in calls if any("/statuses" in arg for arg in call))
+
+
+def test_gate_selects_the_final_ci_repair(tmp_path: Path) -> None:
+	result, outputs, calls = _run_gate(tmp_path, _repair_fixture())
+	assert outputs["should_run"] == "true", result.stdout + result.stderr
+	assert outputs["final_ci_repair"] == "true" and outputs["final_ci_repair_attempt"] == "1"
+	assert f"FINAL_CI_REPAIR pr=42 head={HEAD} outcome=selected attempt=1" in result.stdout
+	assert _statuses_calls(calls) == 1
+	# A repair of another head counts toward the PR cap and sets the ordinal.
+	result, outputs, _ = _run_gate(tmp_path, _repair_fixture(_repair_marker(OTHER_HEAD, 50)))
+	assert outputs["final_ci_repair"] == "true" and outputs["final_ci_repair_attempt"] == "2"
+	# An untrusted repair marker does not count.
+	result, outputs, _ = _run_gate(tmp_path, _repair_fixture(_repair_marker(HEAD, 51, author="mallory")))
+	assert outputs["final_ci_repair"] == "true" and outputs["final_ci_repair_attempt"] == "1"
+
+
+def test_gate_final_ci_repair_caps(tmp_path: Path) -> None:
+	result, outputs, calls = _run_gate(tmp_path, _repair_fixture(_repair_marker(HEAD, 50)))
+	assert outputs["final_ci_repair"] == "false"
+	assert f"FINAL_CI_REPAIR pr=42 head={HEAD} outcome=skipped reason=head_cap repairs=1" in result.stdout
+	assert _statuses_calls(calls) == 0
+	result, outputs, _ = _run_gate(tmp_path, _repair_fixture(_repair_marker(OTHER_HEAD, 50), _repair_marker(BASE, 51, attempt=2)))
+	assert outputs["final_ci_repair"] == "false"
+	assert "outcome=skipped reason=pr_cap repairs=2" in result.stdout
+
+
+def test_gate_final_ci_repair_needs_every_condition(tmp_path: Path) -> None:
+	newer_failure = {"id": 60, "user": {"login": PIPELINE, "type": "User"}, "created_at": "2026-11-06T14:00:00Z", "author_association": "OWNER",
+		"body": f"**AI review/autofix failed**\n<!-- review-autofix-failure:v1 head={HEAD} reason=r fp={'a' * 64} degraded=0 run=9 -->"}
+	cases = [
+		(_repair_fixture(head_ref="orchestrator/project-9"), {}, "reason=orchestrator_head", 0),
+		(_repair_fixture(newer_failure), {}, "reason=already_reviewed", 0),
+		(_repair_fixture(statuses=[{"context": "ai-review/head-gate", "state": "pending", "creator": {"login": PIPELINE}}]), {},
+			"reason=head_gate_not_success state=pending", 1),
+		(_repair_fixture(statuses=[{"context": "ai-review/head-gate", "state": "success", "creator": {"login": "mallory"}}]), {},
+			"reason=head_gate_not_success state=success", 1),
+		(_repair_fixture(statuses=[]), {}, "reason=head_gate_not_success state=none", 1),
+		(dict(_repair_fixture(), statuses_fail=True), {}, "reason=head_gate_not_success state=unreadable", 1),
+		(_repair_fixture(), {"FINAL_CI_REPAIR_ENABLED": "false"}, None, 0),
+		(_repair_fixture(), {"FINAL_CI_REPAIR_ENABLED": "maybe"}, "FINAL_CI_REPAIR_ENABLED has an unrecognised value", 0),
+	]
+	for fixture, env, expected, statuses in cases:
+		result, outputs, calls = _run_gate(tmp_path, fixture, **env)
+		assert outputs["should_run"] == "true", (expected, result.stdout + result.stderr)
+		assert outputs["final_ci_repair"] == "false", expected
+		if expected:
+			assert expected in result.stdout, (expected, result.stdout)
+		else:
+			assert "FINAL_CI_REPAIR " not in result.stdout
+		assert _statuses_calls(calls) == statuses, expected
+
+
+def test_gate_without_a_final_ci_marker_makes_no_repair_read(tmp_path: Path) -> None:
+	fixture = _gate_fixture()
+	fixture["comments"].append({"id": 70, "user": {"login": "alice", "type": "User"}, "created_at": "2026-11-06T12:00:00Z",
+		"author_association": "OWNER", "body": "please look again"})
+	result, outputs, calls = _run_gate(tmp_path, fixture)
+	assert outputs["should_run"] == "true"
+	assert outputs["final_ci_repair"] == "false" and outputs["final_ci_repair_attempt"] == ""
+	assert "FINAL_CI_REPAIR " not in result.stdout and _statuses_calls(calls) == 0
+
+
+def test_gate_final_ci_repair_counts_fallbacks_per_head_only(tmp_path: Path) -> None:
+	# A fallback (repair=none) on this head uses up its one attempt.
+	result, outputs, _ = _run_gate(tmp_path, _repair_fixture(_repair_marker(HEAD, 50, repair="none")))
+	assert outputs["final_ci_repair"] == "false" and "reason=head_cap repairs=0" in result.stdout
+	# Fallbacks on other heads, and a duplicated marker, do not use up the PR's two repairs.
+	result, outputs, _ = _run_gate(tmp_path, _repair_fixture(_repair_marker(OTHER_HEAD, 50, repair="none"),
+		_repair_marker(BASE, 51), _repair_marker(BASE, 52)))
+	assert outputs["final_ci_repair"] == "true" and outputs["final_ci_repair_attempt"] == "2", result.stdout
+
+
+def test_gate_final_ci_repair_ignores_a_provider_pause_notice(tmp_path: Path) -> None:
+	pause = {"id": 61, "user": {"login": PIPELINE, "type": "User"}, "created_at": "2026-11-06T14:00:00Z", "author_association": "OWNER",
+		"body": "**AI review/autofix paused — model provider unavailable**"}
+	result, outputs, _ = _run_gate(tmp_path, _repair_fixture(pause))
+	assert outputs["final_ci_repair"] == "true", result.stdout
+
+
+# ---------------------------------------------------------------------------
+# Final-CI repair delta review output (final-ci-failure-ci-fix plan, Phase 3)
+# ---------------------------------------------------------------------------
+
+def _delta_fixture(*, parents: list[str] | None = None, committer: str = "codex-bot", repair: str = HEAD) -> dict:
+	fixture = _gate_fixture()
+	fixture["comments"] = [{"id": 80, "user": {"login": PIPELINE, "type": "User"}, "created_at": "2026-11-06T13:00:00Z", "author_association": "OWNER",
+		"body": f"**Final CI repair.** x\n\n<!-- ai:final-ci-repair:v1 pr=42 from={OTHER_HEAD} repair={repair} attempt=1 -->"}]
+	fixture["commit"] = {"sha": HEAD, "parents": [{"sha": sha} for sha in (parents if parents is not None else [OTHER_HEAD])],
+		"commit": {"committer": {"name": committer, "email": f"{committer}@users.noreply.invalid"}}}
+	fixture["statuses"] = [{"context": "ai-review/head-gate", "state": "success", "creator": {"login": PIPELINE}}]
+	return fixture
+
+
+def _stage_head_gate_src(tmp_path: Path) -> None:
+	src = tmp_path / "work" / ".codex-head-gate-src" / "scripts"
+	src.mkdir(parents=True, exist_ok=True)
+	for name in ("review_head_gate.sh", "gh_helpers.sh"):
+		(src / name).write_text((REPO_ROOT / "scripts" / name).read_text(encoding="utf-8"), encoding="utf-8")
+
+
+def _commit_calls(calls: list[list[str]]) -> int:
+	return sum(1 for call in calls if any("/commits/" in arg and "/statuses" not in arg for arg in call))
+
+
+def test_gate_outputs_the_delta_base_for_a_verified_repair_head(tmp_path: Path) -> None:
+	_stage_head_gate_src(tmp_path)
+	result, outputs, calls = _run_gate(tmp_path, _delta_fixture(), HEAD_GATE_HELPER_VERIFIED="true", GH_RETRY_MAX_ATTEMPTS="1")
+	assert outputs["should_run"] == "true", result.stdout + result.stderr
+	assert outputs["review_diff_base_sha"] == OTHER_HEAD, result.stdout + result.stderr
+	assert f"REVIEW_HEAD_GATE mode=final_ci_repair pr=42 head={HEAD} outcome=delta reason=final_ci_repair from={OTHER_HEAD}" in result.stdout
+	assert _commit_calls(calls) == 1 and _statuses_calls(calls) == 1
+
+
+def test_gate_keeps_the_full_review_when_the_delta_check_fails(tmp_path: Path) -> None:
+	_stage_head_gate_src(tmp_path)
+	cases = [
+		(_delta_fixture(parents=[OTHER_HEAD, BASE]), {"HEAD_GATE_HELPER_VERIFIED": "true"}, "reason=head_is_not_the_repair", 1),
+		(_delta_fixture(committer="mallory"), {"HEAD_GATE_HELPER_VERIFIED": "true"}, "reason=committer_not_pipeline", 1),
+		(_delta_fixture(repair=BASE), {"HEAD_GATE_HELPER_VERIFIED": "true"}, None, 0),
+		(_delta_fixture(), {}, None, 0),
+		(_delta_fixture(), {"HEAD_GATE_HELPER_VERIFIED": "true", "FINAL_CI_REPAIR_DELTA_REVIEW_ENABLED": "false"}, None, 0),
+		(_delta_fixture(), {"HEAD_GATE_HELPER_VERIFIED": "true", "FINAL_CI_REPAIR_DELTA_REVIEW_ENABLED": "on"},
+			"FINAL_CI_REPAIR_DELTA_REVIEW_ENABLED has an unrecognised value", 0),
+	]
+	for fixture, env, expected, commit_reads in cases:
+		result, outputs, calls = _run_gate(tmp_path, fixture, GH_RETRY_MAX_ATTEMPTS="1", **env)
+		assert outputs["should_run"] == "true", (expected, result.stdout + result.stderr)
+		assert outputs["review_diff_base_sha"] == "", (expected, result.stdout)
+		if expected:
+			assert expected in result.stdout, (expected, result.stdout)
+		assert _commit_calls(calls) == commit_reads, expected

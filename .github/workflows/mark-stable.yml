@@ -19,6 +19,12 @@ name: Mark Stable Release
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  # Signed job-token comments (run-volume plan item 15, D16; see
+  # scripts/comment_signature.py). The opt-in secret and the job token sit
+  # next to each step's GH_PAT, never here, so a step without the PAT never
+  # sees them. Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false
+  # posts with GH_PAT again while signed comments already posted still verify.
+  AI_COMMENT_SIGNING_POST: ${{ vars.AI_COMMENT_SIGNING_POST || 'true' }}
 
 permissions:
   contents: write
@@ -241,6 +247,8 @@ jobs:
         if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           RELEASE_TAG_PREFLIGHT_ENABLED: ${{ vars.RELEASE_TAG_PREFLIGHT_ENABLED || 'true' }}
           STABLE_RELEASE_ENABLED: ${{ vars.STABLE_RELEASE_ENABLED || 'true' }}
           RELEASE_TAGGING_ENABLED: ${{ vars.RELEASE_TAGGING_ENABLED || 'true' }}
@@ -276,7 +284,11 @@ jobs:
     # in test-and-mark-stable run 39526632477 (2026-10-21, v1.37.0 attempt):
     # orchestrate-poll took 39.5 minutes and unit tests had run 19 more. The
     # prior release (run 39213880700, 2026-10-19) already used 56 of 60.
-    timeout-minutes: 90
+    # 135, not 90: run 44689548109 (2026-11-20, v1.47.6) timed out at 90 in
+    # Unit tests: orchestrate-poll 52.7 min, unit tests ~45 min, ~100 min
+    # total; the 2026-11-17 run 44093205767 already used 88 of 90. 135 keeps
+    # at least 25% headroom (CLAUDE.md §33).
+    timeout-minutes: 135
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -952,6 +964,8 @@ jobs:
       - name: Require CI / lint success on the tested commit
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           GATE_REPO: ${{ github.repository }}
           RELEASE_CI_GATE_WAIT_SECS: ${{ vars.RELEASE_CI_GATE_WAIT_SECS || '1800' }}
           RELEASE_CI_GATE_POLL_SECS: ${{ vars.RELEASE_CI_GATE_POLL_SECS || '30' }}
@@ -1007,7 +1021,10 @@ jobs:
           # next release. A release must never fail because of changelog
           # bookkeeping.
 
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_changelog.py assemble --repo-root .
+          # --notes-out (#9846): the folded fragments' text, read by "Extract
+          # changelog for this version" as the release body. RUNNER_TEMP sits
+          # outside the worktree, so the fail-open reset below leaves it alone.
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_changelog.py assemble --repo-root . --notes-out "${RUNNER_TEMP:-/tmp}/release_fragment_notes.md"
           # agents.d/ fragments (CLAUDE.md §30) fold into agents.md in the same
           # commit. Fail open: a fragment that cannot fold stays in agents.d/
           # for the next release, and a missing script (an older ref) is a no-op.
@@ -1077,8 +1094,15 @@ jobs:
           NOTES=$(awk \
             "/^## \\[${VERSION}\\]/{found=1; next} /^## \\[/{if(found) exit} found{print}" \
             CHANGELOG.md)
+          # Fallback order (#9846): a hand-written ## [VERSION] section, then
+          # the notes the assemble step wrote from the folded fragments, then
+          # a placeholder. A missing notes file only means the placeholder.
+          FRAGMENT_NOTES_FILE="${RUNNER_TEMP:-/tmp}/release_fragment_notes.md"
+          if [ -z "$NOTES" ] && [ -s "${FRAGMENT_NOTES_FILE}" ]; then
+            NOTES=$(cat "${FRAGMENT_NOTES_FILE}")
+          fi
           if [ -z "$NOTES" ]; then
-            NOTES="No changelog entry found for ${VERSION}."
+            NOTES="No changelog fragments were folded for ${VERSION}."
           fi
           # Write to file to avoid quoting issues
           echo "$NOTES" > /tmp/release_notes.md
@@ -1310,6 +1334,8 @@ jobs:
         if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
         run: |
           set -euo pipefail
@@ -1375,6 +1401,8 @@ jobs:
         if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.GH_PAT || github.token }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.resolve-version.outputs.version }}
           SYNC_MANIFEST_PATH: ${{ steps.sync_manifest.outputs.path }}
         run: |

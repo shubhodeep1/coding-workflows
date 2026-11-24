@@ -10,6 +10,9 @@ name: AI Issue PR Status Sync
         required: false
       OPENROUTER_API_KEY:
         required: false
+      # Signed job-token comments (run-volume plan item 15): optional; see scripts/comment_signature.py.
+      AI_COMMENT_SIGNING_SECRET:
+        required: false
 
 env:
   # Claude capacity wait (issue #7370): a capacity fallback waits for the
@@ -18,10 +21,16 @@ env:
   # waiting work; repo variable CLAUDE_POOL_CAPACITY_WAIT_ENABLED=false rolls back.
   CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
   FINAL_LABEL: ${{ github.event.pull_request.merged && 'ai:merged' || 'ai:closed' }}
+  # Signed job-token comments (run-volume plan item 15, D16; see
+  # scripts/comment_signature.py). The opt-in secret and the job token sit
+  # next to each step's GH_PAT, never here, so a step without the PAT never
+  # sees them. Rollback switch: repo variable AI_COMMENT_SIGNING_POST=false
+  # posts with GH_PAT again while signed comments already posted still verify.
+  AI_COMMENT_SIGNING_POST: ${{ vars.AI_COMMENT_SIGNING_POST || 'true' }}
 
 jobs:
   sync-issue-status:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:
       linked_issue: ${{ steps.linked_issue.outputs.number }}
@@ -34,6 +43,8 @@ jobs:
       - name: Configure git auth for memory helper clones
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           [ -n "${GH_TOKEN:-}" ] || { echo "::error::GH_PAT is empty"; exit 1; }
@@ -50,6 +61,8 @@ jobs:
       - name: Fetch memory helper scripts
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           PERSIST_POSTMERGE_VERIFY_ENABLED: ${{ vars.PERSIST_POSTMERGE_VERIFY_ENABLED || 'false' }}
         run: |
           set -euo pipefail
@@ -230,6 +243,8 @@ jobs:
       - name: Update linked issue labels when PR closes
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_HEAD_REF: ${{ github.event.pull_request.head.ref }}
@@ -903,6 +918,8 @@ jobs:
         timeout-minutes: 3
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
@@ -931,6 +948,8 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
@@ -980,6 +999,8 @@ jobs:
       - name: Finalize linked issue lineage state
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           AI_MEMORY_ENABLED: ${{ vars.AI_MEMORY_ENABLED || 'true' }}
           REPOSITORY: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -1053,6 +1074,8 @@ jobs:
         if: github.event.pull_request.merged == true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           ALERT_MSG_LEVEL: SILENT
@@ -1157,6 +1180,8 @@ jobs:
         if: always() && github.event.pull_request.merged == true
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           REPOSITORY: ${{ github.repository }}
@@ -1237,11 +1262,12 @@ jobs:
     # wrappers (the script repeats the check as ACTIVATION_VERIFY ...
     # reason=workflow_sync_pr). A PR labelled ai:skip-activation-verify is
     # skipped as well (reason=skip_label); a PR whose every changed file
-    # matches ACTIVATION_VERIFY_EXEMPT_GLOBS (plans, raw design drops) is
-    # skipped by the script (reason=exempt_paths). Never fails the workflow.
+    # matches ACTIVATION_VERIFY_EXEMPT_GLOBS (plans, raw design drops,
+    # /deploy-activate activation logs) is skipped by the script
+    # (reason=exempt_paths). Never fails the workflow.
     needs: sync-issue-status
     if: always() && github.event.pull_request.merged == true && github.event.pull_request.base.ref == github.event.repository.default_branch && !startsWith(github.event.pull_request.head.ref, 'orchestrator/project-') && !(github.event.pull_request.head.repo.full_name == github.repository && (startsWith(github.event.pull_request.head.ref, 'auto/update-workflows-') || github.event.pull_request.head.ref == 'ai-sync/stable')) && !contains(github.event.pull_request.labels.*.name, 'ai:skip-activation-verify') && vars.ACTIVATION_VERIFY_ENABLED != 'false'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
     timeout-minutes: 40
     continue-on-error: true
     steps:
@@ -1251,6 +1277,8 @@ jobs:
           WORKFLOW_JOB_JSON: ${{ toJSON(job) }}
           CALLER_REPOSITORY: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           support_workflow_repository="$(jq -r '.workflow_repository // ""' <<< "${WORKFLOW_JOB_JSON}")"
@@ -1400,6 +1428,8 @@ jobs:
       - name: Verify activation
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -1417,7 +1447,7 @@ jobs:
           PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
           # Merges whose every changed file matches are not verified (plans, raw
           # design drops); a mixed PR is verified on its other files only.
-          ACTIVATION_VERIFY_EXEMPT_GLOBS: ${{ vars.ACTIVATION_VERIFY_EXEMPT_GLOBS || 'docs/plans/**' }}
+          ACTIVATION_VERIFY_EXEMPT_GLOBS: ${{ vars.ACTIVATION_VERIFY_EXEMPT_GLOBS || 'docs/plans/**,docs/deploy-activation/**' }}
           LINKED_ISSUE: ${{ needs.sync-issue-status.outputs.linked_issue }}
           ACTIVATION_VERIFY_MODEL: ${{ vars.ACTIVATION_VERIFY_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
           ACTIVATION_VERIFY_REASONING: ${{ vars.THINKING_LEVEL_ACTIVATION_VERIFY || 'high' }}

@@ -745,3 +745,59 @@ integration self-heal gave up.
 
 In coding-workflows, `scripts/check_agents_md_direct_edits.py` fails a pull
 request's CI when it adds to the agents file directly.
+
+---
+
+## §26. GitHub Runner Concurrency
+
+The account's concurrent-job limit is a shared resource, like the API rate
+limit in §14. Every job, matrix leg and reusable-workflow job holds one runner
+slot while it runs, and every workflow in every repo on the account draws from
+the same pool. A burst of small jobs queues the pipeline's real work behind
+them. Incident: from 2026-11-11 the account's Actions queue was jammed, with
+487 queued runs in coding-workflows alone on 2026-11-15
+(`docs/plans/reduce-actions-run-volume-plan.md`).
+
+When you add or change a workflow (`.github/workflows/*.yml`,
+`workflow-templates/*.yml`), or plan one, check first whether the work can run
+on fewer runners. Delivery speed must not suffer.
+
+- **Fold before you add.** Before you add a job, look for an existing job in
+  the same workflow, or on the same trigger, that already runs at that point.
+  Give it the work as extra steps, or as a script one step calls.
+- **Split only for a reason**, and name the reason in a comment above the job:
+  parallel runs shorten the critical path to a result someone is waiting on;
+  the combined job would come within 25% of its `timeout-minutes` or of the
+  360-minute GitHub-hosted job limit; the work needs different
+  `permissions:`, secrets, environment or runner image and must stay isolated
+  for security (§6 puts security first); or a `needs:` gate, a different
+  trigger condition, or failure isolation requires it.
+- **Filter at the trigger, then at the job.** Use trigger filters (`paths:`,
+  `types:`, `branches:`) so a run that would do nothing is never created. A
+  false job-level `if:` takes no runner, but the skipped run still floods the
+  queue and the API, and in consumers it fires another `workflow_run` event.
+- **Coalesce superseded runs.** Give workflows that re-run on every push, sync
+  or schedule a `concurrency:` group, so a newer run replaces the one still
+  waiting. Set `cancel-in-progress: true` only for runs that write no state;
+  runs that merge, release, push, label or write a DB keep
+  `cancel-in-progress: false`.
+- **Bound fan-out.** Batch N items into `ceil(N / batch_size)` jobs instead of
+  one job per item, and set `max-parallel` on matrices. Starting one run per
+  item from inside a loop (`gh workflow run`, `repository_dispatch`) when one
+  run could take the batch is a review-blocker.
+- **Keep delivery fast.** Merging jobs that run one after another is always
+  allowed. Merge parallel jobs only when the merged job stays inside its time
+  limits and no awaited result arrives later; otherwise keep them parallel.
+  Set the merged job's `timeout-minutes` to the sum of its work plus
+  headroom, never above 360.
+- **Justify new jobs.** A PR or plan that adds a job, a workflow or a matrix
+  leg that runs on every PR, push, comment or schedule states in its body why
+  the work could not join an existing job, and the jobs per triggering event
+  before and after. Reviewers treat an unexplained new job of that kind as a
+  review-blocker.
+- **Keep cited jobs.** Do not merge or remove a job that is a required status
+  check, or that a `needs:`, a log parser or a heal rule cites by id or name
+  (§10). Leave it, and say in the PR body which consolidation it blocked.
+- **Workflow size (§24).** Steps folded into a job grow the workflow file.
+  Stay under the 480,000-byte guard by moving `run:` bodies into `scripts/`,
+  never by splitting the work into more jobs or workflows.

@@ -24,6 +24,13 @@ TRIAGE_SCRIPT_PATH = REPO_ROOT / "scripts" / "check_failure_triage.sh"
 ISOLATED_HELPER_PATH = REPO_ROOT / "scripts" / "clarify_isolated_run.sh"
 
 
+# Cases that simulate a failing commit other than the PR head to test another
+# path (routing sha_mismatch, supersede not_current_head, failing-SHA context
+# collection, #6918) turn the stale-head gate off; it is covered on its own in
+# tests/test_check_failure_triage_owned_failures.py.
+HEAD_ADVANCED_GATE_OFF = {"CHECK_TRIAGE_SKIP_HEAD_ADVANCED_ENABLED": "false"}
+
+
 def _workflow() -> dict:
 	# Imported here, not at module level (issue #9120): the pre-push gate's
 	# container has no PyYAML, and tests/test_check_failure_triage_release_download_rerun.py
@@ -293,10 +300,12 @@ esac
 			prompt = root / "prompt"
 			prompt.write_text("diagnose\n", encoding="utf-8")
 			env = os.environ.copy()
-			for name in ("BASH_ENV", "ENV", "CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS"):
+			for name in ("BASH_ENV", "ENV", "CLARIFY_SNAPSHOT_OMIT_AGENT_INSTRUCTIONS", "CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED"):
 				env.pop(name, None)
 			env.update({
 				"CLARIFY_SOURCE_ROOT": str(checkout),
+				# Legacy roots/suffix filter; the all-text variant is in tests/test_clarify_isolated_run.py.
+				"CLARIFY_SNAPSHOT_ALL_TEXT_ENABLED": "false",
 				"MODEL_EDITOR": "openai/gpt-6-sol", "MODEL_REASONING_EFFORT": "high",
 				"OPENROUTER_API_KEY": "test-key",
 				"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
@@ -1024,8 +1033,15 @@ esac
 		self.assertEqual(diagnose["if"], "${{ steps.collect_triage.outputs.ready == 'true' }}")
 		post = _step(triage_job, name="Post check-failure triage issue")
 		self.assertLess(post["run"].index("triage_post_check_name="), post["run"].index("gh_retry gh issue create"))
-		self.assertIn('--title "CI failure: ${triage_post_check_name} on PR #${PR_NUMBER}"', post["run"])
+		# Issue #9674: the title is built in triage_post_title; the per-PR title
+		# stays the default and a base-keyed issue names its base branch.
+		self.assertIn('triage_post_title="CI failure: ${triage_post_check_name} on PR #${PR_NUMBER}"', post["run"])
+		self.assertIn('triage_post_title="CI failure: ${triage_post_check_name} on ${triage_post_base_ref} (first seen on PR #${PR_NUMBER})"', post["run"])
+		self.assertIn('--title "${triage_post_title}"', post["run"])
+		self.assertLess(post["run"].index("triage_post_check_name="), post["run"].index("triage_post_title="))
 		self.assertNotIn('--title "CI failure: ${CHECK_NAME}', post["run"])
+		self.assertNotIn("CHECK_NAME}", post["run"].split("triage_post_title=", 1)[1].split("--title", 1)[0])
+		self.assertEqual(triage_job["env"]["CHECK_FAILURE_TRIAGE_MAX_OPEN_ISSUES"], "${{ vars.CHECK_FAILURE_TRIAGE_MAX_OPEN_ISSUES || '5' }}")
 		self.assertEqual(post["if"], "${{ steps.diagnose_triage.outputs.ready == 'true' && steps.upstream_route.outputs.routed != 'true' }}")
 		self.assertEqual(post["env"]["GH_TOKEN"], "${{ secrets.CHECK_TRIAGE_ISSUES_TOKEN }}")
 		self.assertIn('cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}"', post["run"])
@@ -1642,6 +1658,7 @@ class CheckFailureTriageFailingShaContextTests(unittest.TestCase):
 		capture: dict = {}
 		proc, outputs, _metadata = _run_collect_stage(
 			parent_body="", pr_head_sha="b" * 40, check_runs_enabled=True, capture=capture,
+			extra_env=HEAD_ADVANCED_GATE_OFF,
 		)
 		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 		self.assertEqual(outputs.get("ready"), "true")
@@ -2738,7 +2755,7 @@ class CheckFailureTriageHistoricalModeTests(unittest.TestCase):
 		checkout = _step(triage, step_id="checkout_pr_head")
 		self.assertEqual(checkout["continue-on-error"], "${{ inputs.historical_run_id != '' }}")
 		staging = _step(triage, name="Stage workflow support files")["run"]
-		self.assertIn("clarify_openrouter_broker.py workflow_failure_heal.py; do", staging)
+		self.assertIn("clarify_openrouter_broker.py workflow_failure_heal.py ci_cancelled_rerun.py; do", staging)
 		self.assertIn('"${trusted_dir}/scripts/workflow_failure_heal.py"', staging)
 
 
@@ -2849,7 +2866,7 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 		no_state = json.loads(json.dumps(base))
 		del no_state["state"]
 		cases = [
-			("sha_mismatch", base, {"CHECK_TRIAGE_HEAD_SHA": "c" * 40}),
+			("sha_mismatch", base, {"CHECK_TRIAGE_HEAD_SHA": "c" * 40, **HEAD_ADVANCED_GATE_OFF}),
 			("check_sha_missing", base, {"CHECK_TRIAGE_HEAD_SHA": ""}),
 			("pr_sha_missing", no_sha, {}),
 			("pr_not_open", no_state, {}),
@@ -2892,7 +2909,7 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 		proc, outputs, metadata = _run_collect_stage(
 			parent_body="plain issue\n",
 			base={"ref": "main", "workflow_id": "9", "conclusion": "success"},
-			extra_env={"CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED": "true", "CHECK_TRIAGE_HEAD_SHA": "c" * 40},
+			extra_env={"CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED": "true", "CHECK_TRIAGE_HEAD_SHA": "c" * 40, **HEAD_ADVANCED_GATE_OFF},
 		)
 		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 		self.assertIn("CHECK_TRIAGE skip reason=pr_specific_failure", proc.stdout)
@@ -2904,7 +2921,7 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 	def test_collect_lineage_cap_reports_unverified_route(self) -> None:
 		proc, outputs, metadata = _run_collect_stage(
 			parent_body="<!-- check-failure-triage:gen=3 -->\n",
-			extra_env={"CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED": "true", "CHECK_TRIAGE_HEAD_SHA": "c" * 40},
+			extra_env={"CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED": "true", "CHECK_TRIAGE_HEAD_SHA": "c" * 40, **HEAD_ADVANCED_GATE_OFF},
 		)
 		self.assertIn("CHECK_TRIAGE escalate reason=lineage_cap", proc.stdout)
 		self.assertIn("CHECK_TRIAGE skip reason=routing_unverified detail=sha_mismatch pr=17", proc.stdout)
@@ -2916,7 +2933,7 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 		open_triage = json.dumps([{"number": 99, "body": f"<!-- check-failure-triage:fp={fp} -->"}])
 		proc, outputs, metadata = _run_collect_stage(
 			parent_body="plain issue\n",
-			extra_env={"CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED": "true", "CHECK_TRIAGE_HEAD_SHA": "c" * 40, "MOCK_OPEN_TRIAGE": open_triage},
+			extra_env={"CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED": "true", "CHECK_TRIAGE_HEAD_SHA": "c" * 40, **HEAD_ADVANCED_GATE_OFF, "MOCK_OPEN_TRIAGE": open_triage},
 		)
 		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 		self.assertIn("CHECK_TRIAGE skip reason=duplicate_open_issue issue=99", proc.stdout)
@@ -2934,7 +2951,7 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 	def test_collect_flag_off_never_routes_or_blocks(self) -> None:
 		for flag_env in ({}, {"CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED": "false"}, {"CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED": "nope"}):
 			with self.subTest(env=flag_env):
-				env = {"CHECK_TRIAGE_HEAD_SHA": "c" * 40, **flag_env}
+				env = {"CHECK_TRIAGE_HEAD_SHA": "c" * 40, **HEAD_ADVANCED_GATE_OFF, **flag_env}
 				os_flag = os.environ.pop("CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED", None)
 				try:
 					proc, outputs, metadata = _run_collect_stage(parent_body="plain\n", extra_env=env)
@@ -3002,14 +3019,18 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 		self.assertIn("triage_report_routing_unverified\n\t\texit 0", gate)
 		dedup = script_text.split("skip reason=duplicate_open_issue issue=${EXISTING}", 1)[1].split("exit 0", 1)[0]
 		self.assertIn("triage_report_routing_unverified", dedup)
-		# Base-gate skips (success, pending, the #7283 routed-head base and a
-		# base failure an open heal issue tracks) also report an unverified route.
+		# Base-gate skips (success, pending, the #7283 routed-head base, a
+		# base failure an open heal issue tracks and, #9674, an open base-keyed
+		# triage issue) also report an unverified route.
 		base_gate = script_text.split("--- Base-branch gate (#7020)", 1)[1].split("--- Lineage cap / escalation", 1)[0]
-		self.assertEqual(base_gate.count("triage_report_routing_unverified"), 4)
+		self.assertEqual(base_gate.count("triage_report_routing_unverified"), 5)
 		lineage_cap = script_text.split("--- Lineage cap / escalation", 1)[1].split("--- PR-head routing gate", 1)[0]
 		self.assertEqual(lineage_cap.count("triage_report_routing_unverified"), 1)
-		self.assertIn('"${PR_NUMBER}" "${ROUTING_LINE}" "${ROUTING_TARGET_BRANCH}" <<\'PY\'', script_text)
+		self.assertIn('"${PR_NUMBER}" "${ROUTING_LINE}" "${ROUTING_TARGET_BRANCH}" "${BASE_KEYED_REF}" <<\'PY\'', script_text)
 		self.assertLess(script_text.index("# --- PR-head routing gate"), script_text.index("# --- Collect failing check-run context"))
+		# Issue #9674: the open-issue cap runs after the PR-head routing gate, so
+		# an unverified route is still reported when the cap files nothing.
+		self.assertLess(script_text.index("# --- PR-head routing gate"), script_text.index("# --- Open-issue cap (issue #9674)"))
 		triage_env = _workflow()["jobs"]["triage"]["env"]
 		self.assertEqual(
 			triage_env["CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED"],
@@ -3088,7 +3109,7 @@ def _run_target_branch_diagnose_stage(
 def _run_body_validator(body: str, expected_branch: str) -> str:
 	"""Run the script's final issue-body validator heredoc on ``body``."""
 	script_text = TRIAGE_SCRIPT_PATH.read_text(encoding="utf-8")
-	start_token = '"${ROUTING_TARGET_BRANCH}" <<\'PY\'\n'
+	start_token = '"${ROUTING_TARGET_BRANCH}" "${BASE_KEYED_REF}" <<\'PY\'\n'
 	validator = script_text.split(start_token, 1)[1].split("\nPY\n)\"; then", 1)[0]
 	with tempfile.TemporaryDirectory(prefix="check-triage-validator-") as temp_dir:
 		body_path = Path(temp_dir) / "body.md"
@@ -3716,7 +3737,7 @@ class CheckFailureTriageSupersedeTests(unittest.TestCase):
 			"old_head_unreadable": ([_stale_triage_issue(extra="- **Head SHA:** `" + "c" * 40 + "`")], {}),
 			"multiple_open": ([_stale_triage_issue(), _stale_triage_issue(number=100)], {}),
 			"disabled": ([_stale_triage_issue()], {"CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED": "false"}),
-			"not_current_head": ([_stale_triage_issue()], {"CHECK_TRIAGE_HEAD_SHA": "c" * 40}),
+			"not_current_head": ([_stale_triage_issue()], {"CHECK_TRIAGE_HEAD_SHA": "c" * 40, **HEAD_ADVANCED_GATE_OFF}),
 		}
 		for reason, (issues, env) in cases.items():
 			with self.subTest(reason=reason):

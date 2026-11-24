@@ -479,7 +479,10 @@ def test_resolve_step_wiring():
 	assert step["id"] == "ai_engine"
 	assert step["env"]["CLAUDE_FIXER_ENABLED"] == "${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}"
 	state = AGENT_STEPS["Check PR state (defense-in-depth)"]["run"]
-	assert 'pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" || echo \'null\')"' in state
+	# Issue #9928: the read goes through the run-local PR read cache, with a
+	# live-read stub when the staged gh_helpers.sh predates the helper.
+	assert 'pr_meta="$(gh_pr_cached_read pull "${REPOSITORY}" "${PR_NUMBER}" || echo \'null\')"' in state
+	assert 'type gh_pr_cached_read >/dev/null 2>&1 || gh_pr_cached_read() { gh_retry _safe_gh_jq "repos/$2/pulls/$3"; }' in state
 	assert 'echo "AI_ENGINE_LABELS=${AI_ENGINE_LABELS}" >> "$GITHUB_ENV"' in state
 	assert '["ai:codex"]' in state
 	for role in FIXER_ROLES:
@@ -559,7 +562,7 @@ def test_sandbox_prepare_follows_both_roles_with_an_opencode_fallback():
 
 def test_engine_files_ride_the_optional_bootstrap():
 	text = (REPO_ROOT / "scripts" / "stage_workflow_support.sh").read_text(encoding="utf-8")
-	line = next(l for l in text.splitlines() if l.startswith("OPTIONAL_BOOTSTRAP_SCRIPTS="))
+	line = next(src_line for src_line in text.splitlines() if src_line.startswith("OPTIONAL_BOOTSTRAP_SCRIPTS="))
 	for name in ("ai_engine.sh", "claude_engine.py", "claude_anthropic_relay.py", "claude_settings.json.tmpl"):
 		assert name in line.split("=", 1)[1].strip("\"").split(), name
 

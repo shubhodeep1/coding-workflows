@@ -42,6 +42,31 @@ capture_step_failure() {
   } >> "${CAPTURE_FILE}" || true
 }
 
+# Diagnostics only (#9940, Refs #9937): print one IMPLEMENT_SYMLINK_DELETE
+# line for every symlink tracked in HEAD that no longer exists in the
+# worktree. Called before and after the artifact cleanup below, so the log
+# shows whether the editor result (both stages) or the cleanup (post_cleanup
+# only) removed it. Fails open: never changes behaviour or the exit status.
+implement_log_tracked_symlink_deletes() {
+  local symlink_stage="${1:-unknown}"
+  local symlink_record symlink_meta symlink_path symlink_safe_path
+  while IFS= read -r -d '' symlink_record; do
+    symlink_meta="${symlink_record%%$'\t'*}"
+    if [ "${symlink_meta%% *}" != "120000" ]; then
+      continue
+    fi
+    symlink_path="${symlink_record#*$'\t'}"
+    if [ -z "${symlink_path}" ]; then
+      continue
+    fi
+    if [ ! -L "${symlink_path}" ] && [ ! -e "${symlink_path}" ]; then
+      symlink_safe_path="${symlink_path//[[:space:][:cntrl:]]/?}"
+      echo "IMPLEMENT_SYMLINK_DELETE path=${symlink_safe_path} stage=${symlink_stage}"
+    fi
+  done < <(git ls-tree -r -z --full-tree HEAD 2>/dev/null | grep -z '^120000 ' || true)
+  return 0
+}
+
 FAILED_COMMAND=""
 LAST_COMMAND=""
 trap 'LAST_COMMAND="${BASH_COMMAND}"' DEBUG
@@ -63,6 +88,8 @@ on_step_exit() {
 trap on_step_exit EXIT
 exec 3>&2
 exec 2> >(tee "${STEP_STDERR_FILE}" >&3)
+
+implement_log_tracked_symlink_deletes pre_cleanup || true
 
 # Remove workflow-generated/fetched artifacts BEFORE checking for
 # changes so they don't cause false-positive "file changes" detection.
@@ -298,6 +325,8 @@ if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -n "${SERENA_PROJECT
   fi
 fi
 
+implement_log_tracked_symlink_deletes post_cleanup || true
+
 porcelain_status="$(git status --porcelain)"
 if [ -z "${porcelain_status}" ]; then
   echo "No repository changes were produced by Codex implementation (worktree clean after artifact cleanup)."
@@ -377,6 +406,85 @@ if git ls-files --error-unmatch -- .ai/.workspace_source_manifest.txt >/dev/null
   echo "IMPLEMENT_GENERATED_MANIFEST_UNTRACKED path=.ai/.workspace_source_manifest.txt"
 fi
 git ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}" | xargs -0 -r git add --
+# Self-repo exact-path .github/ai additions (unblock fix-up for #9111).
+# add_o_excludes keeps ':!.github/ai' in every case so no new file under
+# .github/ai/ is ever staged wholesale, but that also dropped the one new
+# file an issue's files_touched list named (#9111 committed its test, not
+# .github/ai/chatgpt_pool.json). In this repository only, stage each new
+# regular file under .github/ai/ whose path is listed exactly (no glob, no
+# directory entry) in the same allowlist the files_touched scope guard
+# reads. The automation-path grant guard and the files_touched guard below
+# still check every staged path. Off switch:
+# IMPLEMENT_SELF_REPO_GITHUB_AI_ADDS_ENABLED=false (unset/empty/true = on;
+# any other value = off with a warning), read only from this script's
+# environment: implement.yml does not forward it from a repository variable.
+# Consumer repos never run this.
+if [ "${is_self_repo}" = "true" ]; then
+  self_repo_github_ai_flag_raw="${IMPLEMENT_SELF_REPO_GITHUB_AI_ADDS_ENABLED-}"
+  self_repo_github_ai_flag="${self_repo_github_ai_flag_raw,,}"
+  self_repo_github_ai_enabled="false"
+  case "${self_repo_github_ai_flag}" in
+    ''|true) self_repo_github_ai_enabled="true" ;;
+    false) ;;
+    *)
+      self_repo_github_ai_flag_safe="$(printf '%s' "${self_repo_github_ai_flag_raw}" | tr -cd '[:print:]' | sed 's/::/: :/g' | cut -c1-64 || true)"
+      echo "::warning::IMPLEMENT_SELF_REPO_GITHUB_AI_ADDS_ENABLED='${self_repo_github_ai_flag_safe}' is not true/false; self-repo .github/ai additions disabled."
+      ;;
+  esac
+  if [ "${self_repo_github_ai_enabled}" = "true" ]; then
+    self_repo_github_ai_guard="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py"
+    if [ "${HEAL_ROUTE:-false}" = true ]; then
+      self_repo_github_ai_input_flag="--allowlist-file"
+      self_repo_github_ai_input="${HEAL_SCOPE_FILE:-}"
+    else
+      self_repo_github_ai_input_flag="--issue-body-file"
+      self_repo_github_ai_input="${ISSUE_BODY_FILE:-}"
+    fi
+    if [ ! -f "${self_repo_github_ai_guard}" ]; then
+      echo "::notice::self-repo .github/ai additions skipped (reason=helper_unavailable)"
+    elif [ -z "${self_repo_github_ai_input}" ] || [ ! -s "${self_repo_github_ai_input}" ]; then
+      echo "::notice::self-repo .github/ai additions skipped (reason=no_allowlist)"
+    else
+      self_repo_github_ai_staged_file="$(mktemp "${TMPDIR:-/tmp}/implement-github-ai-staged.XXXXXX")"
+      self_repo_github_ai_allowlist_file="$(mktemp "${TMPDIR:-/tmp}/implement-github-ai-allowlist.XXXXXX")"
+      self_repo_github_ai_stderr_file="$(mktemp "${TMPDIR:-/tmp}/implement-github-ai-stderr.XXXXXX")"
+      self_repo_github_ai_rc=0
+      set +e
+      python3 "${self_repo_github_ai_guard}" \
+        "${self_repo_github_ai_input_flag}" "${self_repo_github_ai_input}" \
+        --issue-number "${ISSUE_NUMBER:-}" \
+        --staged-file "${self_repo_github_ai_staged_file}" \
+        --allowlist-out "${self_repo_github_ai_allowlist_file}" >/dev/null 2>"${self_repo_github_ai_stderr_file}"
+      self_repo_github_ai_rc=$?
+      set -e
+      cat -- "${self_repo_github_ai_stderr_file}" >&2 || true
+      if [ "${self_repo_github_ai_rc}" -ne 0 ]; then
+        if [ "${self_repo_github_ai_rc}" -eq 10 ]; then
+          echo "::notice::self-repo .github/ai additions skipped (reason=no_allowlist)"
+        else
+          self_repo_github_ai_err="$(head -n1 -- "${self_repo_github_ai_stderr_file}" 2>/dev/null | tr -cd '[:print:]' | sed 's/::/: :/g' | cut -c1-200 || true)"
+          echo "::notice::self-repo .github/ai additions skipped (reason=helper_rc_${self_repo_github_ai_rc})${self_repo_github_ai_err:+ error=${self_repo_github_ai_err}}"
+        fi
+      elif [ ! -s "${self_repo_github_ai_allowlist_file}" ]; then
+        echo "::notice::self-repo .github/ai additions skipped (reason=no_allowlist)"
+      else
+        while IFS= read -r -d '' self_repo_github_ai_path; do
+          [ -n "${self_repo_github_ai_path}" ] || continue
+          case "${self_repo_github_ai_path}" in
+            # Globs and directory entries never stage; a newline would split
+            # the grep -F pattern below into several patterns.
+            *'*'*|*'?'*|*'['*|*/|*$'\n'*|*$'\r'*) continue ;;
+          esac
+          [ -f "${self_repo_github_ai_path}" ] && [ ! -L "${self_repo_github_ai_path}" ] || continue
+          grep -Fxq -- "${self_repo_github_ai_path}" "${self_repo_github_ai_allowlist_file}" || continue
+          git add -- "${self_repo_github_ai_path}"
+          echo "IMPLEMENT_SELF_REPO_GITHUB_AI_ADD path=${self_repo_github_ai_path}"
+        done < <(git ls-files --others --exclude-standard -z -- .github/ai)
+      fi
+      rm -f -- "${self_repo_github_ai_staged_file}" "${self_repo_github_ai_allowlist_file}" "${self_repo_github_ai_stderr_file}"
+    fi
+  fi
+fi
 if [ "${is_self_repo}" = "false" ] && [ -f scripts/.gitignore ]; then
   while IFS= read -r fetched_script; do
     case "${fetched_script}" in ''|'#'*|'.gitignore') continue ;; esac

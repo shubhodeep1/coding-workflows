@@ -51,8 +51,9 @@ env:
 
 jobs:
   update-wrappers:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
+    # 5 min of work + up to 25 min manifest-fetch rate-limit wait (1500 s clamp) + headroom (#9937).
+    timeout-minutes: 35
     # allow_workflow_edits (vars.ALLOW_WORKFLOW_EDITS) no longer skips this
     # job: managed wrappers always follow the release (the consumer's
     # ai-workflow-integrity.yml locks them). With it false, only the
@@ -161,6 +162,8 @@ jobs:
           UPSTREAM_DIR: ${{ steps.fetch.outputs.upstream_dir }}
           UPSTREAM_SHA: ${{ steps.fetch.outputs.upstream_sha }}
           SYNC_UPSTREAM_REPO: shubhodeep1/coding-workflows
+          # Caller repo variable; the fetch block clamps it to 0..1500 (#9937).
+          SYNC_MANIFEST_RATE_LIMIT_MAX_WAIT_SECONDS: ${{ vars.SYNC_MANIFEST_RATE_LIMIT_MAX_WAIT_SECONDS || '1200' }}
         run: |
           set -euo pipefail
 
@@ -302,11 +305,134 @@ jobs:
           MANIFEST_DIR="${RUNNER_TEMP}/sync-manifest"
           rm -rf "${MANIFEST_DIR}"
           mkdir -p "${MANIFEST_DIR}"
-          gh release download "${SYNC_VERSION}" --repo "${SYNC_UPSTREAM_REPO}" \
-            --pattern sync-manifest.json --dir "${MANIFEST_DIR}" >/dev/null 2>&1 \
-            || reject ERR_SYNC_MANIFEST_MISSING
+          # BEGIN sync manifest fetch (byte-identical in update_workflows.yml and workflow_integrity.yml; tests pin it)
+          # REST only (the release download subcommand adds a GraphQL query), with a
+          # bounded wait when GH_PAT is out of core budget (#9937). Kept inline: no upstream code may
+          # run before the manifest is verified. ERR_SYNC_MANIFEST_MISSING means the
+          # release or its asset is absent; ERR_SYNC_MANIFEST_FETCH_FAILED means the API
+          # call failed (detail=rate_limited|http_<status>|unknown).
           MANIFEST_FILE="${MANIFEST_DIR}/sync-manifest.json"
+          SMF_MAX_WAIT="${SYNC_MANIFEST_RATE_LIMIT_MAX_WAIT_SECONDS:-1200}"
+          [[ "${SMF_MAX_WAIT}" =~ ^[0-9]{1,6}$ ]] || SMF_MAX_WAIT=1200
+          # Ceiling leaves 10 min of both 35-min job timeouts (update-wrappers, integrity) for
+          # the rest of the job, so the step ends in a classified rejection, not a job timeout.
+          [ "$(( 10#${SMF_MAX_WAIT} ))" -le 1500 ] || SMF_MAX_WAIT=1500
+          SMF_MAX_WAIT="$(( 10#${SMF_MAX_WAIT} ))"
+          SMF_WAITED=0
+          SMF_RESULT=""
+          smf_redact() {
+            head -c 300 "$1" 2>/dev/null | tr '\r\n"' "  '" | sed -E \
+              -e 's/(gh[pousr]_|github_pat_)[A-Za-z0-9_]{16,}/[REDACTED]/g' \
+              -e 's/(bearer|basic)[ ]+[^ ]+/\1 [REDACTED]/Ig' \
+              -e 's/(token|authorization)[=: ]+[^ ]+/\1=[REDACTED]/Ig' || true
+          }
+          smf_http_status() {
+            grep -oE '\(HTTP [0-9]{3}\)' "$1" 2>/dev/null | tail -n 1 | tr -dc '0-9' || true
+          }
+          # Drops the header block that gh api --include prints before the body
+          # (status line, header lines ending in CR LF, then an empty CR LF line).
+          smf_strip_headers() {
+            local smf_len
+            smf_len="$(LC_ALL=C awk 'NR == 1 && !/^HTTP\// { exit } /^\r$/ { print n + length($0) + 1; exit } { n += length($0) + 1 }' "$1" 2>/dev/null || true)"
+            [[ "${smf_len}" =~ ^[0-9]+$ ]] || return 1
+            tail -c +"$(( smf_len + 1 ))" "$1" >"$2"
+          }
+          # Prints the seconds to wait, or nothing when the error is not a rate limit.
+          # $3 holds the --include output, read for a numeric Retry-After header.
+          # GET /rate_limit does not debit the core allowance.
+          smf_rate_limit_wait() {
+            local smf_text=0 smf_remaining="" smf_reset="" smf_wait smf_retry_after=""
+            if grep -qi 'rate limit' "$1" 2>/dev/null; then
+              smf_text=1
+            elif [ "$2" != "403" ] && [ "$2" != "429" ]; then
+              return 0
+            fi
+            smf_retry_after="$(LC_ALL=C sed -nE 's/^retry-after:[[:space:]]*([0-9]{1,6})[[:space:]]*$/\1/Ip' "$3" 2>/dev/null | head -n 1 || true)"
+            if [ -n "${smf_retry_after}" ]; then
+              echo $(( 10#${smf_retry_after} + 1 ))
+              return 0
+            fi
+            if gh api rate_limit >"${MANIFEST_DIR}/rate_limit.json" 2>/dev/null; then
+              smf_remaining="$(jq -r '.resources.core.remaining // empty' "${MANIFEST_DIR}/rate_limit.json" 2>/dev/null || true)"
+              smf_reset="$(jq -r '.resources.core.reset // empty' "${MANIFEST_DIR}/rate_limit.json" 2>/dev/null || true)"
+            fi
+            if [ "${smf_remaining}" = "0" ] && [[ "${smf_reset}" =~ ^[0-9]+$ ]]; then
+              smf_wait=$(( smf_reset - $(date +%s) ))
+              [ "${smf_wait}" -ge 1 ] || smf_wait=1
+              echo $(( smf_wait + 5 ))
+            elif [ "${smf_text}" = "1" ]; then
+              # Secondary limit without Retry-After: GitHub asks for >= 60 s.
+              echo 60
+            fi
+          }
+          # smf_fetch <release|asset> <outfile> <errfile> <gh api args...>
+          # At most 3 attempts; rate-limit waits share SMF_MAX_WAIT; any other error
+          # gets one retry after 10 s. Sets SMF_RESULT on failure. --include keeps the
+          # response headers (Retry-After) in <outfile>.raw; only the body is kept.
+          smf_fetch() {
+            local smf_call="$1" smf_out="$2" smf_err="$3" smf_attempt=0 smf_retried=0
+            local smf_status smf_wait smf_sleep smf_outcome
+            shift 3
+            SMF_RESULT=""
+            while [ "${smf_attempt}" -lt 3 ]; do
+              smf_attempt=$(( smf_attempt + 1 ))
+              if gh api --include "$@" >"${smf_out}.raw" 2>"${smf_err}" \
+                && smf_strip_headers "${smf_out}.raw" "${smf_out}.part"; then
+                rm -f "${smf_out}.raw"
+                mv -f "${smf_out}.part" "${smf_out}"
+                echo "SYNC_MANIFEST_FETCH attempt=${smf_attempt} call=${smf_call} outcome=ok http=200 wait_s=0"
+                return 0
+              fi
+              smf_status="$(smf_http_status "${smf_err}")"
+              smf_wait="$(smf_rate_limit_wait "${smf_err}" "${smf_status}" "${smf_out}.raw")"
+              rm -f "${smf_out}.part" "${smf_out}.raw"
+              smf_sleep=0
+              if [ -n "${smf_wait}" ]; then
+                smf_outcome=rate_limited
+                if [ "${smf_attempt}" -lt 3 ] && [ $(( SMF_WAITED + smf_wait )) -le "${SMF_MAX_WAIT}" ]; then
+                  smf_sleep="${smf_wait}"
+                else
+                  SMF_RESULT=rate_limited
+                fi
+              else
+                smf_outcome=error
+                if [ "${smf_call}" = "release" ] && [ "${smf_status}" = "404" ]; then
+                  SMF_RESULT=missing
+                elif [ "${smf_retried}" = "0" ] && [ "${smf_attempt}" -lt 3 ]; then
+                  smf_retried=1
+                  smf_sleep=10
+                else
+                  SMF_RESULT="http_${smf_status:-}"
+                  [ -n "${smf_status}" ] || SMF_RESULT=unknown
+                fi
+              fi
+              echo "SYNC_MANIFEST_FETCH attempt=${smf_attempt} call=${smf_call} outcome=${smf_outcome} http=${smf_status:-none} wait_s=${smf_sleep} stderr=\"$(smf_redact "${smf_err}")\""
+              [ -z "${SMF_RESULT}" ] || return 1
+              sleep "${smf_sleep}"
+              if [ "${smf_outcome}" = "rate_limited" ]; then
+                SMF_WAITED=$(( SMF_WAITED + smf_sleep ))
+              fi
+            done
+            SMF_RESULT="${SMF_RESULT:-unknown}"
+            return 1
+          }
+          if ! smf_fetch release "${MANIFEST_DIR}/release.json" "${MANIFEST_DIR}/release.err" \
+            "repos/${SYNC_UPSTREAM_REPO}/releases/tags/${SYNC_VERSION}"; then
+            if [ "${SMF_RESULT}" = "missing" ]; then
+              reject ERR_SYNC_MANIFEST_MISSING "detail=release_not_found"
+            fi
+            reject ERR_SYNC_MANIFEST_FETCH_FAILED "detail=${SMF_RESULT}"
+          fi
+          # A 200 whose body is not a JSON object is a fetch failure, not a missing asset.
+          jq -e 'type == "object"' "${MANIFEST_DIR}/release.json" >/dev/null 2>&1 || reject ERR_SYNC_MANIFEST_FETCH_FAILED "detail=unknown"
+          SMF_ASSET_ID="$(jq -r '[.assets[]? | select(.name == "sync-manifest.json" and .state == "uploaded") | .id] | if length == 1 then .[0] else empty end' "${MANIFEST_DIR}/release.json" 2>/dev/null || true)"
+          [[ "${SMF_ASSET_ID}" =~ ^[0-9]+$ ]] || reject ERR_SYNC_MANIFEST_MISSING
+          if ! smf_fetch asset "${MANIFEST_FILE}" "${MANIFEST_DIR}/asset.err" \
+            -H 'Accept: application/octet-stream' "repos/${SYNC_UPSTREAM_REPO}/releases/assets/${SMF_ASSET_ID}"; then
+            reject ERR_SYNC_MANIFEST_FETCH_FAILED "detail=${SMF_RESULT}"
+          fi
           { [ -f "${MANIFEST_FILE}" ] && [ ! -L "${MANIFEST_FILE}" ]; } || reject ERR_SYNC_MANIFEST_MISSING
+          # END sync manifest fetch
 
           # 3. Its Sigstore attestation. No --source-digest: the signing run's
           # source is the tested commit, which can differ from the release
@@ -495,6 +621,21 @@ jobs:
             [ "${actual_sha256}" = "${expected_sha256}" ] || reject bootstrap verifier_hash_mismatch
           done
 
+          # Issue #9485: "Sync Dependabot exclusions for managed wrappers" runs
+          # scripts/sync_dependabot_exclusions.py only when this release's
+          # attested manifest lists it. The PR-delivery verify job applies the
+          # same rule to the same manifest, so both jobs reproduce the same
+          # consumer change; when listed, its hash is verified below with the
+          # other release paths.
+          DEPENDABOT_HELPER_REL="scripts/sync_dependabot_exclusions.py"
+          dependabot_helper_sha256="$(jq -r --arg p "${DEPENDABOT_HELPER_REL}" \
+            '[(.files // [])[] | select(type == "object" and .path == $p and .mode != "120000")] | if length == 1 then (.[0].sha256 // "") else "" end' \
+            "${MANIFEST}" 2>/dev/null)" || dependabot_helper_sha256=""
+          dependabot_helper_attested=false
+          if [[ "${dependabot_helper_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
+            dependabot_helper_attested=true
+          fi
+
           # Every path the later steps read, relative to the release root.
           # Whole directories are enumerated so an injected file is reported
           # as unlisted_path.
@@ -502,6 +643,9 @@ jobs:
           (
             cd "${UPSTREAM_ROOT}"
             shopt -s nullglob
+            if [ "${dependabot_helper_attested}" = "true" ]; then
+              printf '%s\n' "${DEPENDABOT_HELPER_REL}"
+            fi
             for listed in workflow-templates/*.yml workflow-templates/profiles/*.txt; do
               printf '%s\n' "${listed}"
             done
@@ -546,6 +690,7 @@ jobs:
           echo "verified=true" >> "${VERIFY_OUT}"
           echo "reason=ok" >> "${VERIFY_OUT}"
           echo "tag=${TAG}" >> "${VERIFY_OUT}"
+          echo "dependabot_helper_attested=${dependabot_helper_attested}" >> "${VERIFY_OUT}"
 
       - name: Prepare immutable workflow wrappers
         id: render_wrappers
@@ -835,6 +980,57 @@ jobs:
             --repo-root . \
             --changed-paths-file /tmp/changelog_asset_files.txt
 
+      - name: Sync Dependabot exclusions for managed wrappers
+        id: dependabot_sync
+        if: ${{ inputs.allow_workflow_edits != false }}
+        env:
+          UPSTREAM_DIR: ${{ steps.fetch.outputs.upstream_dir }}
+          SELECTED_PROFILE: ${{ vars.WORKFLOW_PROFILE != '' && vars.WORKFLOW_PROFILE || 'full' }}
+          RELEASE_MANIFEST_VERIFIED: ${{ steps.verify_release_manifest.outputs.verified }}
+          DEPENDABOT_HELPER_ATTESTED: ${{ steps.verify_release_manifest.outputs.dependabot_helper_attested }}
+        run: |
+          set -euo pipefail
+
+          # Issue #9485: Dependabot github-actions bump PRs against the managed
+          # wrappers fail coding-workflows/workflow-integrity by design and
+          # pile up. ADDITIVE ONLY, like the changelog assets step above: the
+          # upstream helper adds the managed set (profile entries, the
+          # integrity wrapper, and the updater wrapper when present) to
+          # exclude-paths of the consumer's own root github-actions entries in
+          # .github/dependabot.y(a)ml. It never creates the file or an entry
+          # and leaves every consumer setting and comment as written. It runs
+          # before "Compare and update workflow wrappers" so it sees the same
+          # tree the PR-delivery verify job reproduces on (the PR's parent).
+          # Fails open: a helper failure never fails the wrapper update.
+
+          UPSTREAM_SCRIPTS_DIR="$(dirname "${UPSTREAM_DIR}")/scripts"
+          DEPENDABOT_HELPER="${UPSTREAM_SCRIPTS_DIR}/sync_dependabot_exclusions.py"
+
+          echo "dependabot_has_changes=false" >> "$GITHUB_OUTPUT"
+          rm -f /tmp/dependabot_changed_files.txt
+
+          if [ ! -f "${DEPENDABOT_HELPER}" ]; then
+            echo "Upstream has no scripts/sync_dependabot_exclusions.py at this ref — nothing to sync."
+            exit 0
+          fi
+          # The verify job runs the helper only when the attested release
+          # manifest lists it; mirror that so its reproduction matches. This
+          # includes verified=skipped (UPDATER_VERIFY_RELEASE_MANIFEST=false):
+          # there the attestation output is empty, verify_reproduce does not
+          # run the helper, and an edit staged here would be rejected by
+          # verify-pr-tree as unlisted_path.
+          if [ "${DEPENDABOT_HELPER_ATTESTED:-}" != "true" ]; then
+            echo "DEPENDABOT_EXCLUDE_SYNC outcome=skipped reason=helper_unattested file=none entries=0 managed=0"
+            exit 0
+          fi
+
+          PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${DEPENDABOT_HELPER}" \
+            --repo-root . \
+            --templates-dir "${UPSTREAM_DIR}" \
+            --profile "${SELECTED_PROFILE}" \
+            --changed-paths-file /tmp/dependabot_changed_files.txt \
+            || echo "::warning::DEPENDABOT_EXCLUDE_SYNC helper failed; the Dependabot config is left as it was."
+
       - name: Assemble changelog fragments
         id: changelog_assemble
         if: ${{ inputs.allow_workflow_edits != false }}
@@ -1068,7 +1264,7 @@ jobs:
       # contents: write grant, and asking for more fails the run at startup.
       - name: Commit and push updates
         id: commit_push
-        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.retired_files.outputs.retired_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || steps.changelog_assemble.outputs.changelog_assembled == 'true' || steps.agents_assemble.outputs.agents_assembled == 'true'
+        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.retired_files.outputs.retired_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || steps.dependabot_sync.outputs.dependabot_has_changes == 'true' || steps.changelog_assemble.outputs.changelog_assembled == 'true' || steps.agents_assemble.outputs.agents_assembled == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           UPDATE_VIA_PR: ${{ inputs.update_via_pull_request != false }}
@@ -1135,6 +1331,12 @@ jobs:
               [ -n "$changed_path" ] || continue
               git add -- "$changed_path"
             done < /tmp/changelog_asset_files.txt
+          fi
+          if [ -f /tmp/dependabot_changed_files.txt ] && [ -s /tmp/dependabot_changed_files.txt ]; then
+            while IFS= read -r changed_path; do
+              [ -n "$changed_path" ] || continue
+              git add -- "$changed_path"
+            done < /tmp/dependabot_changed_files.txt
           fi
           # Assembly both rewrites CHANGELOG.md and deletes the folded
           # fragments, so stage with -A to pick up the removals.
@@ -1228,6 +1430,16 @@ jobs:
           fi
           if [ -n "$CHANGELOG_ASSET_LIST" ]; then
             COMMIT_BODY="${COMMIT_BODY}Changelog fragment assets:\n${CHANGELOG_ASSET_LIST}\n"
+          fi
+          DEPENDABOT_CHANGED_LIST=""
+          if [ -f /tmp/dependabot_changed_files.txt ] && [ -s /tmp/dependabot_changed_files.txt ]; then
+            while IFS= read -r changed_path; do
+              [ -n "$changed_path" ] || continue
+              DEPENDABOT_CHANGED_LIST="${DEPENDABOT_CHANGED_LIST}• ${changed_path}\n"
+            done < /tmp/dependabot_changed_files.txt
+          fi
+          if [ -n "$DEPENDABOT_CHANGED_LIST" ]; then
+            COMMIT_BODY="${COMMIT_BODY}Dependabot exclusions:\n${DEPENDABOT_CHANGED_LIST}\n"
           fi
           if [ "${CHANGELOG_ASSEMBLED:-}" = "true" ]; then
             COMMIT_BODY="${COMMIT_BODY}Changelog fragments assembled into CHANGELOG.md (${CHANGELOG_FRAGMENT_COUNT:-} fragment(s), layout ${CHANGELOG_LAYOUT:-}).\n"
@@ -1378,7 +1590,10 @@ jobs:
           # lookup, 1 compare + 1 user read + 1 branch-activity read (only when the
           # branch already exists), 1 create or edit, 1 stale-PR list, 1 user read
           # (only when stale candidates exist and the login is not yet known),
-          # one close per stale PR, 1 auto-merge enable.
+          # one close per stale PR, 1 auto-merge enable. A rewrite-refused
+          # resend adds 1 close (the refused branch's PR); a refused refresh
+          # whose cached mergeable is UNKNOWN or missing adds 1 PR read.
+          # Otherwise it reuses the head+base lookup and the pusher check's login.
           BASE="${DEFAULT_BRANCH:-}"
           if [ -z "${BASE}" ]; then
             BASE="$(gh api "repos/${GITHUB_REPOSITORY}" --jq .default_branch 2>/dev/null)" || pr_fail default_branch_lookup_failed
@@ -1388,6 +1603,38 @@ jobs:
 
           BRANCH="auto/update-workflows-${UPSTREAM_SHA:0:12}"
           [[ "${BRANCH}" =~ ^auto/update-workflows-[0-9a-f]{12}$ ]] || pr_fail invalid_branch_name
+          # Rewrite-refused resend: a consumer ruleset (non_fast_forward on
+          # ~ALL, GH013) or a protected-branch hook can refuse the
+          # lease-checked refresh of an existing sync branch, which leaves a
+          # stale or conflicted sync PR stuck until the next release. The
+          # refresh push below then moves the rebuilt sync to
+          # <branch>-r2 .. -r${UPDATER_RESEND_MAX} (one new branch per run at
+          # most) and closes the old PR. Later runs for the same release pick
+          # up the highest -rN already on the remote. One git-protocol read,
+          # no GitHub API call (§15).
+          # UPDATER_RESEND_MAX must match the -r[2-5] suffix in the branch
+          # regexes here, in the stale sweep, in the review guards
+          # (review_autofix.yml, scripts/review_*.sh) and in
+          # scripts/audit_consumer_drift.py.
+          UPDATER_RELEASE_BRANCH="${BRANCH}"
+          UPDATER_RESEND_MAX=5
+          UPDATER_RESEND_FROM_BRANCH=""
+          UPDATER_RESEND_FROM_PR=""
+          # Prints the highest -r2..-rMAX suffix among ls-remote lines (0: none).
+          # shellcheck disable=SC2016 # awk program text: $2 is awk's field.
+          UPDATER_RESEND_AWK='
+            index($2, prefix) == 1 {
+              suffix = substr($2, length(prefix) + 1)
+              value = suffix + 0
+              if (suffix ~ /^[2-9]$/ && value <= max && value > best) best = value
+            }
+            END { print best + 0 }'
+          UPDATER_RESEND_REFS="$(git ls-remote origin "refs/heads/${UPDATER_RELEASE_BRANCH}-r*")" || pr_fail remote_lookup_failed
+          UPDATER_RESEND_ACTIVE="$(printf '%s\n' "${UPDATER_RESEND_REFS}" | awk -v prefix="refs/heads/${UPDATER_RELEASE_BRANCH}-r" -v max="${UPDATER_RESEND_MAX}" "${UPDATER_RESEND_AWK}")"
+          if [ "${UPDATER_RESEND_ACTIVE}" -ge 2 ]; then
+            BRANCH="${UPDATER_RELEASE_BRANCH}-r${UPDATER_RESEND_ACTIVE}"
+          fi
+          [[ "${BRANCH}" =~ ^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$ ]] || pr_fail invalid_branch_name
 
           # Release trailer: the foreign-commit check below accepts only commits
           # that carry it. The direct path above keeps its message unchanged.
@@ -1490,7 +1737,7 @@ jobs:
 
           # One lookup scoped to head and base. The list API (not search) sees a
           # pull request created seconds earlier.
-          PR_LIST_JSON="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "${BRANCH}" --base "${BASE}" --state all --limit 20 --json number,url,state,isCrossRepository,headRefName,mergedAt,id,autoMergeRequest)" || pr_fail pr_lookup_failed
+          PR_LIST_JSON="$(gh pr list --repo "${GITHUB_REPOSITORY}" --head "${BRANCH}" --base "${BASE}" --state all --limit 20 --json number,url,state,isCrossRepository,headRefName,mergedAt,id,autoMergeRequest,author,mergeable)" || pr_fail pr_lookup_failed
           OPEN_PR="$(printf '%s' "${PR_LIST_JSON}" | jq -r --arg b "${BRANCH}" '[.[] | select(.isCrossRepository == false and .headRefName == $b and .state == "OPEN")] | .[0] | if . == null then "" else "\(.number) \(.url)" end')" || pr_fail pr_lookup_failed
           CLOSED_UNMERGED="$(printf '%s' "${PR_LIST_JSON}" | jq -r --arg b "${BRANCH}" '[.[] | select(.isCrossRepository == false and .headRefName == $b and .state == "CLOSED" and .mergedAt == null)] | length')" || pr_fail pr_lookup_failed
           [[ "${CLOSED_UNMERGED}" =~ ^[0-9]+$ ]] || pr_fail pr_lookup_failed
@@ -1584,8 +1831,78 @@ jobs:
             if [ "$(git rev-parse 'FETCH_HEAD^{tree}')" = "$(git rev-parse 'HEAD^{tree}')" ]; then
               PUSHED_SHA="${REMOTE_SHA}"
               PUSH_REASON="branch_up_to_date"
-            else
-              git push --force-with-lease="refs/heads/${BRANCH}:${REMOTE_SHA}" origin "HEAD:refs/heads/${BRANCH}" || pr_fail lease_mismatch_or_push_rejected
+            elif ! UPDATER_REFRESH_PUSH_ERR="$(git push --force-with-lease="refs/heads/${BRANCH}:${REMOTE_SHA}" origin "HEAD:refs/heads/${BRANCH}" 2>&1)"; then
+              printf '%s\n' "${UPDATER_REFRESH_PUSH_ERR}" >&2
+              # Only a refusal to rewrite the branch moves the sync. A lease
+              # mismatch (someone else pushed: client-side "stale info"),
+              # a network or an auth error keeps the fail-closed exit. A bare
+              # GH013 is not matched: GitHub prints it for every ruleset
+              # violation (signatures, status checks, paths); the
+              # non_fast_forward rule adds "Cannot force-push to this branch".
+              if ! printf '%s\n' "${UPDATER_REFRESH_PUSH_ERR}" | grep -Eqi 'cannot force-push|protected branch hook declined|denying non-fast-forward|\[remote rejected\].*non-fast-forward'; then
+                pr_fail lease_mismatch_or_push_rejected
+              fi
+              # Under such a rule every refresh is refused, because the commit
+              # is rebuilt on the current default branch. Move only a PR that
+              # GitHub reports as conflicting (the stuck case); otherwise keep
+              # its head, which carries the same release, and let the verify
+              # job re-check it. Reads the head+base lookup first (§15); an
+              # UNKNOWN or missing value is re-read once below, and only a
+              # value still unknown after that keeps the head (the next run
+              # looks again).
+              updater_resend_mergeable=""
+              if [ -n "${PR_NUMBER}" ]; then
+                updater_resend_mergeable="$(printf '%s' "${PR_LIST_JSON}" | jq -r --arg n "${PR_NUMBER}" '[.[] | select((.number | tostring) == $n)] | .[0].mergeable // ""' 2>/dev/null)" || updater_resend_mergeable=""
+              fi
+              # GitHub computes mergeable lazily, and the head+base lookup above
+              # started that computation. An UNKNOWN or missing value is read
+              # once more (1 PR read, only on this refused path, §15: the
+              # head+base lookup is the only earlier read of it). A failed or
+              # empty re-read keeps the cached value (fail open: kept_head).
+              if [ -n "${PR_NUMBER}" ] && { [ -z "${updater_resend_mergeable}" ] || [ "${updater_resend_mergeable}" = "UNKNOWN" ]; }; then
+                if updater_resend_mergeable_reread="$(gh pr view "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --json mergeable --jq '.mergeable // ""' 2>/dev/null)" && [ -n "${updater_resend_mergeable_reread}" ]; then
+                  updater_resend_mergeable="${updater_resend_mergeable_reread}"
+                fi
+              fi
+              if [ -n "${PR_NUMBER}" ] && [ "${updater_resend_mergeable}" != "CONFLICTING" ]; then
+                echo "UPDATER_PR_RESEND outcome=kept_head branch=${BRANCH} pr=${PR_NUMBER} mergeable=${updater_resend_mergeable:-unknown}"
+                PUSHED_SHA="${REMOTE_SHA}"
+                PUSH_REASON="rewrite_refused_kept_head"
+              else
+                UPDATER_RESEND_FROM_BRANCH="${BRANCH}"
+                UPDATER_RESEND_FROM_PR="${PR_NUMBER}"
+                updater_resend_current=1
+                if [ "${BRANCH}" != "${UPDATER_RELEASE_BRANCH}" ]; then
+                  updater_resend_current="${BRANCH##*-r}"
+                fi
+                # Fresh read: the next name above both the current branch and
+                # every -rN already on the remote.
+                UPDATER_RESEND_REFS="$(git ls-remote origin "refs/heads/${UPDATER_RELEASE_BRANCH}-r*")" || pr_fail remote_lookup_failed
+                updater_resend_highest="$(printf '%s\n' "${UPDATER_RESEND_REFS}" | awk -v prefix="refs/heads/${UPDATER_RELEASE_BRANCH}-r" -v max="${UPDATER_RESEND_MAX}" "${UPDATER_RESEND_AWK}")"
+                if [ "${updater_resend_highest}" -gt "${updater_resend_current}" ]; then
+                  updater_resend_current="${updater_resend_highest}"
+                fi
+                updater_resend_target=""
+                if [ $((updater_resend_current + 1)) -le "${UPDATER_RESEND_MAX}" ]; then
+                  updater_resend_target="${UPDATER_RELEASE_BRANCH}-r$((updater_resend_current + 1))"
+                fi
+                if [ -z "${updater_resend_target}" ]; then
+                  echo "::error::UPDATER_PR_RESEND outcome=cap_reached from=${UPDATER_RESEND_FROM_BRANCH} max=-r${UPDATER_RESEND_MAX} old_pr=${UPDATER_RESEND_FROM_PR:-none}"
+                  pr_fail resend_cap_reached
+                fi
+                BRANCH="${updater_resend_target}"
+                # Empty lease value: the push succeeds only if the branch still
+                # does not exist. A failure here ends the run: never a second
+                # new branch in one run.
+                if ! git push --force-with-lease="refs/heads/${BRANCH}:" origin "HEAD:refs/heads/${BRANCH}"; then
+                  echo "::error::UPDATER_PR_RESEND outcome=push_failed from=${UPDATER_RESEND_FROM_BRANCH} branch=${BRANCH} old_pr=${UPDATER_RESEND_FROM_PR:-none}"
+                  pr_fail resend_push_failed
+                fi
+                echo "UPDATER_PR_RESEND outcome=pushed from=${UPDATER_RESEND_FROM_BRANCH} branch=${BRANCH} old_pr=${UPDATER_RESEND_FROM_PR:-none}"
+                PR_NUMBER=""
+                PR_URL=""
+                PUSH_REASON="resent_rewrite_refused"
+              fi
             fi
           fi
 
@@ -1599,11 +1916,35 @@ jobs:
             PR_ACTION="created"
           fi
 
+          # Rewrite-refused resend: close the PR on the refused branch with one
+          # comment linking its replacement. Only a PR the GH_PAT account
+          # opened (PAT_LOGIN is set: the resend runs only after the pusher
+          # check above). The old branch is left alone: rulesets of this shape
+          # also block deletion, and deleting branches is not the updater's call.
+          if [ -n "${UPDATER_RESEND_FROM_BRANCH}" ]; then
+            updater_resend_old_closed="none"
+            if [ -n "${UPDATER_RESEND_FROM_PR}" ]; then
+              updater_resend_old_author="$(printf '%s' "${PR_LIST_JSON}" | jq -r --arg n "${UPDATER_RESEND_FROM_PR}" '[.[] | select((.number | tostring) == $n)] | .[0].author.login // ""' 2>/dev/null)" || updater_resend_old_author=""
+              if [ -n "${PAT_LOGIN:-}" ] && [ "${updater_resend_old_author}" = "${PAT_LOGIN}" ]; then
+                if gh pr close "${UPDATER_RESEND_FROM_PR}" --repo "${GITHUB_REPOSITORY}" --comment "Superseded by ${PR_URL}: this repository refuses rewrites of \`${UPDATER_RESEND_FROM_BRANCH}\`, so the updater rebuilt release ${TAG_TEXT} (${UPSTREAM_SHA}) on the current default branch and pushed it to \`${BRANCH}\`. The old branch is left in place." >/dev/null; then
+                  updater_resend_old_closed="true"
+                else
+                  updater_resend_old_closed="false"
+                  echo "::warning::UPDATER_PR_RESEND could not close #${UPDATER_RESEND_FROM_PR}; close it by hand."
+                fi
+              else
+                updater_resend_old_closed="not_pat_author"
+              fi
+            fi
+            echo "UPDATER_PR_RESEND outcome=opened from=${UPDATER_RESEND_FROM_BRANCH} branch=${BRANCH} pr=${PR_NUMBER} old_pr=${UPDATER_RESEND_FROM_PR:-none} old_pr_closed=${updater_resend_old_closed}"
+          fi
+
           # Best effort: close earlier updater pull requests for older releases.
           # Only same-repository PRs on a strict auto/update-workflows-<sha12>
-          # branch authored by the GH_PAT account are touched.
+          # branch (or its -r2..-r5 resend) authored by the GH_PAT account are
+          # touched; the PR the resend above already handled is skipped.
           if STALE_JSON="$(gh pr list --repo "${GITHUB_REPOSITORY}" --base "${BASE}" --state open --search "head:auto/update-workflows-" --limit 50 --json number,url,headRefName,isCrossRepository,author 2>/dev/null)"; then
-            STALE_CANDIDATES="$(printf '%s' "${STALE_JSON}" | jq -r --arg b "${BRANCH}" '.[] | select(.isCrossRepository == false and (.headRefName | test("^auto/update-workflows-[0-9a-f]{12}$")) and .headRefName != $b) | "\(.number) \(.author.login // "")"' 2>/dev/null)" || STALE_CANDIDATES=""
+            STALE_CANDIDATES="$(printf '%s' "${STALE_JSON}" | jq -r --arg b "${BRANCH}" --arg skip "${UPDATER_RESEND_FROM_PR}" '.[] | select(.isCrossRepository == false and (.headRefName | test("^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$")) and .headRefName != $b and (.number | tostring) != $skip) | "\(.number) \(.author.login // "")"' 2>/dev/null)" || STALE_CANDIDATES=""
             if [ -n "${STALE_CANDIDATES}" ]; then
               if { [ -n "${PAT_LOGIN:-}" ] || PAT_LOGIN="$(gh api user --jq .login 2>/dev/null)"; } && [ -n "${PAT_LOGIN}" ]; then
                 while read -r stale_number stale_author; do
@@ -1651,7 +1992,7 @@ jobs:
           fi
 
       - name: Send Telegram notification
-        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.retired_files.outputs.retired_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || steps.changelog_assemble.outputs.changelog_assembled == 'true' || steps.agents_assemble.outputs.agents_assembled == 'true'
+        if: steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || steps.claude_sync.outputs.claude_has_changes == 'true' || steps.retired_files.outputs.retired_has_changes == 'true' || steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || steps.dependabot_sync.outputs.dependabot_has_changes == 'true' || steps.changelog_assemble.outputs.changelog_assembled == 'true' || steps.agents_assemble.outputs.agents_assembled == 'true'
         env:
           TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
@@ -1708,6 +2049,10 @@ jobs:
           if [ -f /tmp/changelog_asset_files.txt ] && [ -s /tmp/changelog_asset_files.txt ]; then
             CHANGELOG_ASSET_LIST=$(cat /tmp/changelog_asset_files.txt)
           fi
+          DEPENDABOT_CHANGED_LIST=""
+          if [ -f /tmp/dependabot_changed_files.txt ] && [ -s /tmp/dependabot_changed_files.txt ]; then
+            DEPENDABOT_CHANGED_LIST=$(cat /tmp/dependabot_changed_files.txt)
+          fi
           CHANGELOG_ASSEMBLED="${{ steps.changelog_assemble.outputs.changelog_assembled }}"
           CHANGELOG_FRAGMENT_COUNT="${{ steps.changelog_assemble.outputs.changelog_fragment_count }}"
           CHANGELOG_LAYOUT="${{ steps.changelog_assemble.outputs.changelog_layout }}"
@@ -1747,6 +2092,11 @@ jobs:
             MSG="${MSG}
           Changelog fragment assets changed:
           ${CHANGELOG_ASSET_LIST}"
+          fi
+          if [ -n "$DEPENDABOT_CHANGED_LIST" ]; then
+            MSG="${MSG}
+          Dependabot exclusions for managed wrappers updated:
+          ${DEPENDABOT_CHANGED_LIST}"
           fi
           if [ "${CHANGELOG_ASSEMBLED}" = "true" ]; then
             MSG="${MSG}
@@ -2031,7 +2381,7 @@ jobs:
   verify:
     needs: update-wrappers
     if: ${{ !cancelled() && needs.update-wrappers.outputs.delivery == 'pr' && (needs.update-wrappers.outputs.pr_action == 'created' || needs.update-wrappers.outputs.pr_action == 'refreshed') }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
     timeout-minutes: 15
     env:
       GIT_LFS_SKIP_SMUDGE: "1"
@@ -2222,10 +2572,31 @@ jobs:
             [ "${actual_sha256}" = "${expected_sha256}" ] || reject bootstrap verifier_hash_mismatch
           done
 
+          # Issue #9485: the Dependabot exclusion helper is executed only when
+          # this release's attested manifest lists it (the update job applies
+          # the same rule), and then only after the same hash check.
+          DEPENDABOT_HELPER_REL="scripts/sync_dependabot_exclusions.py"
+          dependabot_helper_sha256="$(jq -r --arg p "${DEPENDABOT_HELPER_REL}" \
+            '[(.files // [])[] | select(type == "object" and .path == $p and .mode != "120000")] | if length == 1 then (.[0].sha256 // "") else "" end' \
+            "${MANIFEST}" 2>/dev/null)" || dependabot_helper_sha256=""
+          dependabot_helper_attested=false
+          if [[ "${dependabot_helper_sha256}" =~ ^[0-9a-f]{64}$ ]]; then
+            dependabot_helper_path="${RELEASE_ROOT}/${DEPENDABOT_HELPER_REL}"
+            if [ ! -f "${dependabot_helper_path}" ] || [ -L "${dependabot_helper_path}" ]; then
+              reject bootstrap verifier_hash_mismatch
+            fi
+            dependabot_helper_actual="$(sha256sum -- "${dependabot_helper_path}" | awk '{print $1}')"
+            [ "${dependabot_helper_actual}" = "${dependabot_helper_sha256}" ] || reject bootstrap verifier_hash_mismatch
+            dependabot_helper_attested=true
+          fi
+
           PATHS_FILE="${WORK}/paths.txt"
           (
             cd "${RELEASE_ROOT}"
             shopt -s nullglob
+            if [ "${dependabot_helper_attested}" = "true" ]; then
+              printf '%s\n' "${DEPENDABOT_HELPER_REL}"
+            fi
             for listed in workflow-templates/*.yml workflow-templates/profiles/*.txt; do
               printf '%s\n' "${listed}"
             done
@@ -2269,6 +2640,7 @@ jobs:
             echo "release_root=${RELEASE_ROOT}"
             echo "manifest=${MANIFEST}"
             echo "tag=${TAG}"
+            echo "dependabot_helper_attested=${dependabot_helper_attested}"
           } >> "${VERIFY_OUT}"
 
       - name: Check updater pull request topology
@@ -2331,6 +2703,9 @@ jobs:
           # Mirrors the update job: with allow_workflow_edits false the
           # derived asset steps were skipped, so nothing is reproduced.
           SYNC_NON_WRAPPER_ASSETS: ${{ inputs.allow_workflow_edits != false }}
+          # Same profile expression as the update job (issue #9485).
+          WORKFLOW_PROFILE_SELECTED: ${{ vars.WORKFLOW_PROFILE != '' && vars.WORKFLOW_PROFILE || 'full' }}
+          DEPENDABOT_HELPER_ATTESTED: ${{ steps.verify_release.outputs.dependabot_helper_attested }}
         run: |
           set -euo pipefail
 
@@ -2364,6 +2739,21 @@ jobs:
           GITHUB_OUTPUT=/dev/null python3 -I -B "${RELEASE_ROOT}/scripts/assemble_changelog.py" ensure-assets \
             --repo-root "${BASE_TREE}" \
             --changed-paths-file "${WORK}/changelog_asset_files.txt" >/dev/null || reject reproduce changelog_assets_failed
+          # Same fail-open as the update job's "Sync Dependabot exclusions for
+          # managed wrappers", and run only when verify_release attested and
+          # hash-checked the helper (the update job's rule too). The update job
+          # reads the attestation from its own verification, which is empty
+          # when UPDATER_VERIFY_RELEASE_MANIFEST=false (verified=skipped), while
+          # verify_release always attests; require VERIFIED=true as well so the
+          # two jobs skip the helper in exactly the same cases and
+          # verify-pr-tree never reports derived_missing for the config.
+          if [ "${VERIFIED:-}" = "true" ] && [ "${DEPENDABOT_HELPER_ATTESTED:-}" = "true" ]; then
+            GITHUB_OUTPUT=/dev/null python3 -I -B "${RELEASE_ROOT}/scripts/sync_dependabot_exclusions.py" \
+              --repo-root "${BASE_TREE}" \
+              --templates-dir "${RELEASE_ROOT}/workflow-templates" \
+              --profile "${WORKFLOW_PROFILE_SELECTED}" \
+              --changed-paths-file "${WORK}/dependabot_changed_files.txt" >/dev/null || echo "::warning::UPDATER_PR_VERIFY dependabot exclusion sync failed on the parent tree; the config stays as in the update job."
+          fi
           GITHUB_OUTPUT=/dev/null python3 -I -B "${RELEASE_ROOT}/scripts/assemble_changelog.py" assemble \
             --repo-root "${BASE_TREE}" \
             --date "${COMMIT_DATE}" >/dev/null || reject reproduce changelog_assemble_failed

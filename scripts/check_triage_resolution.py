@@ -19,7 +19,7 @@ and prints one JSON object:
    "merge_sha": ..., "evidence_sha": ..., "evidence_url": ..., "check_name": ...,
    "evidence_ref": "default" | "integration_pr:<n>",
    "failed_jobs": [...], "traceback_posted": [...], "writes": [...],
-   "path": "merged" | "open_head" (only when resolved),
+   "path": "merged" | "open_head" | "open_head_rerun" (only when resolved),
    "pr_state": "merged" | "open" | "closed" (when the PR was readable)}
 
 (the integration path also adds "integration_pr" and, once that PR merged,
@@ -49,6 +49,20 @@ open and whose head has moved past the trusted header's Head SHA:
   blocks) completed with ``success``, and every failed job name of the
   triaged run is present exactly once and ``success``.
 No compare read is made on this path; the marker's sha is the current head.
+Resolved (``path=open_head_rerun``, issue #9387) covers an open PR whose head
+is still the trusted header's Head SHA, after a re-run of the failure on that
+same head passed (the check-triage ``transient-rerun`` stage requests one):
+- the same PR checks as ``open_head``, on the unchanged head;
+- check-run triage: every latest run of the exact check name on that head
+  completed with ``success``;
+  workflow-run triage: the newest ``pull_request`` run of the same workflow on
+  that head is the triaged run itself (same run id), completed with
+  ``success`` and has ``run_attempt`` above 1; its latest jobs are all
+  completed, none failed (``success``, ``skipped`` or ``neutral``) and at
+  least one ``success``. A passing re-run of another run on that head never
+  counts, and the triaged run's latest-attempt failed job names (if any) must
+  each be present exactly once and ``success``.
+Any miss on an unchanged head keeps the reason ``open_head_unchanged``.
 
 Integration-branch rule (issue #8685): a PR merged into
 ``orchestrator/project-<N>`` reaches the default branch only inside the
@@ -64,6 +78,22 @@ contain the PR's merge commit. Once the integration PR merged, the existing
 default-branch check runs, the integration PR head must contain the PR's merge
 commit, and the default-branch evidence commit must contain the integration
 PR's merge commit. An integration PR closed without merging is ``unverified``.
+When no integration PR exists (issue #9481: the project reached the default
+branch another way, for example an activation re-issue) and
+``CHECK_TRIAGE_INTEGRATION_FALLBACK_ENABLED`` (default ``true``) is not
+``false``, the gate falls back to the default branch, only after the tracking
+label check passed: the existing default-branch check rule must pass, and the
+triaged PR's content must be on that evidence commit, either because its merge
+commit is an ancestor (compare ``ahead``/``identical``, ``content_check=ancestor``)
+or because every file the PR changed has the same blob SHA in both recursive
+trees and every removed file is absent (``content_check=tree_match``). Success
+resolves with ``evidence_ref=default_branch_content:<sha>``; otherwise the
+reason is ``integration_fallback_default_check_failed`` (with
+``fallback_detail``), ``integration_fallback_content_absent`` or
+``integration_fallback_unreadable``. The fallback checks the triaged PR, not
+a separate fix PR: a fix PR merges into the triaged PR's head before that PR
+merges into the project branch, so the triaged PR's merge commit already
+contains the fix.
 Every other base keeps the default-branch path (``evidence_ref=default``).
 Any other conclusion (``neutral``, ``skipped``, pending, ...) or any read
 failure is ``unverified``: a failed check is never treated as passed.
@@ -84,9 +114,13 @@ API calls (only for a trusted ai:check-triage issue): 1 user read, 1 paginated
 comment read, 1 PR read, 1-4 run/job/check reads, 1 compare read, up to 3 job
 log reads on the unverified path, and up to 3 writes. The open-head path
 replaces the default-branch and compare reads with at most 2 reads (1 for
-check-run triage), made only for an open PR whose head moved. The
+check-run triage), made only for an open PR whose head moved; an unchanged
+head (``open_head_rerun``, #9387) makes the same 1-2 reads. The
 integration-branch path adds 1 issue read, 1 PR list read and 1-2 run/check
-reads, plus 1 more compare read once the integration PR merged. ``CHECK_TRIAGE_RESOLVED_GATE_ENABLED``
+reads, plus 1 more compare read once the integration PR merged. The
+integration fallback (only after ``integration_pr_missing``) adds the
+default-branch reads, 1 compare read and, when that is not an ancestor, 1-3
+PR file pages, 2 commit reads and 2 tree reads. ``CHECK_TRIAGE_RESOLVED_GATE_ENABLED``
 (default ``true``) set to ``false`` disables the gate with no API call.
 Log prefix: ``CHECK_TRIAGE_RESOLVED``.
 """
@@ -145,14 +179,48 @@ STEP_ERROR_RE = re.compile(r"##\[error\]")
 PY_TRACEBACK_RE = re.compile(r"Traceback \(most recent call last\)")
 EXCERPT_ANCHORS = ("test_failure", "step_error", "traceback", "legacy")
 GH_TIMEOUT_SECONDS = 120
+# Issue #9481: the integration fallback's tree-match check reads at most this
+# many changed files of the triaged PR; more counts as unreadable.
+MAX_FALLBACK_FILES = 300
 
 
 class GhApiError(RuntimeError):
 	"""A gh api call failed, timed out or returned unparseable output."""
 
 
+_SIGNED_COMMENTS_CHECKED = False
+
+
+def _activate_signed_comments() -> None:
+	"""Put the signed job-token comment shim on PATH, once (run-volume plan item 15).
+
+	With AI_COMMENT_SIGNING_SECRET set, runs `AI_COMMENT_SIG_ACTIVATE_ONLY=1
+	source gh_helpers.sh` from this script's directory, so the `gh` comment
+	calls of this process are signed even when no earlier step of the job
+	loaded the shim. No API call. Fail-open: any error leaves PATH unchanged.
+	"""
+	global _SIGNED_COMMENTS_CHECKED
+	if _SIGNED_COMMENTS_CHECKED:
+		return
+	_SIGNED_COMMENTS_CHECKED = True
+	helpers = Path(__file__).resolve().with_name("gh_helpers.sh")
+	if not os.environ.get("AI_COMMENT_SIGNING_SECRET") or not helpers.is_file():
+		return
+	try:
+		shim_dir = subprocess.run(
+			["bash", "-c", 'AI_COMMENT_SIG_ACTIVATE_ONLY=1 source "$1" >/dev/null 2>&1; printf "%s" "${AI_COMMENT_SIG_SHIM_DIR:-}"', "_", str(helpers)],
+			capture_output=True, text=True, check=False, timeout=60,
+		).stdout.strip()
+	except (OSError, subprocess.SubprocessError):
+		return
+	path_entries = os.environ.get("PATH", "").split(os.pathsep)
+	if shim_dir and os.path.isdir(shim_dir) and shim_dir not in path_entries:
+		os.environ["PATH"] = os.pathsep.join([shim_dir, *path_entries])
+
+
 def _gh_api(args: list[str], *, input_obj: Any = None, raw: bool = False) -> Any:
 	"""Run ``gh api`` once (no retries, so writes are never repeated)."""
+	_activate_signed_comments()
 	stdin = json.dumps(input_obj) if input_obj is not None else None
 	command = ["gh", "api", *args]
 	if input_obj is not None:
@@ -546,7 +614,12 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 		]
 		if not candidates:
 			_fail("integration_pr_missing")
-			return None
+			# Issue #9481: the project reached the default branch without an
+			# integration PR (for example an activation re-issue). The tracking
+			# label check above already passed.
+			if os.environ.get("CHECK_TRIAGE_INTEGRATION_FALLBACK_ENABLED", "true").strip().lower() == "false":
+				return None
+			return _default_branch_content_fallback()
 		integration = max(candidates, key=lambda item: item["created_at"])
 		integration_number = integration["number"]
 		int_head = integration["head"]
@@ -638,6 +711,79 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 		verdict["matched"] = [f"{name}: success" for name in names]
 		return merge_sha, evidence
 
+	def _tree_match(evidence: str) -> str:
+		"""``match``, ``content_absent`` or ``unreadable`` for the triaged PR's
+		changed files at its merge commit versus the evidence commit."""
+		try:
+			pages = _gh_api(["--paginate", "--slurp", f"repos/{repo}/pulls/{triage['pr']}/files?per_page=100"])
+		except GhApiError:
+			return "unreadable"
+		if not isinstance(pages, list) or not all(isinstance(page, list) for page in pages):
+			return "unreadable"
+		files = [item for page in pages for item in page]
+		if not files or len(files) > MAX_FALLBACK_FILES or not all(
+			isinstance(item, dict) and isinstance(item.get("filename"), str) and item["filename"] for item in files
+		):
+			return "unreadable"
+		trees: list[dict[str, tuple[str, Any]]] = []
+		for sha in (merge_sha, evidence):
+			try:
+				commit = _gh_api([f"repos/{repo}/git/commits/{sha}"])
+				tree_ref = commit.get("tree") if isinstance(commit, dict) else None
+				tree_sha = tree_ref.get("sha") if isinstance(tree_ref, dict) else None
+				if not isinstance(tree_sha, str) or not SHA_RE.match(tree_sha):
+					return "unreadable"
+				tree = _gh_api([f"repos/{repo}/git/trees/{tree_sha}?recursive=1"])
+			except GhApiError:
+				return "unreadable"
+			if not isinstance(tree, dict) or tree.get("truncated") is True or not isinstance(tree.get("tree"), list):
+				return "unreadable"
+			trees.append({
+				entry["path"]: (entry.get("type"), entry.get("sha"))
+				for entry in tree["tree"] if isinstance(entry, dict) and isinstance(entry.get("path"), str)
+			})
+		merge_tree, evidence_tree = trees
+		for item in files:
+			name = item["filename"]
+			previous = item.get("previous_filename")
+			if isinstance(previous, str) and previous and previous not in merge_tree and previous in evidence_tree:
+				return "content_absent"
+			if item.get("status") == "removed":
+				if name in evidence_tree:
+					return "content_absent"
+				continue
+			merged_entry = merge_tree.get(name)
+			if merged_entry is None or merged_entry[0] != "blob" or not isinstance(merged_entry[1], str):
+				return "unreadable"
+			if evidence_tree.get(name) != merged_entry:
+				return "content_absent"
+		return "match"
+
+	def _default_branch_content_fallback() -> tuple[str | None, str] | None:
+		"""(None, evidence) when the default branch is green and holds the
+		triaged PR's content (issue #9481), else None after _fail."""
+		evidence = _default_branch_evidence()
+		if evidence is None:
+			verdict["fallback_detail"] = verdict.get("reason")
+			_fail("integration_fallback_default_check_failed")
+			return None
+		try:
+			ancestry = _gh_api([f"repos/{repo}/compare/{merge_sha}...{evidence}"])
+		except GhApiError:
+			ancestry = None
+		ancestry_status = ancestry.get("status") if isinstance(ancestry, dict) else None
+		if ancestry_status in ("ahead", "identical"):
+			verdict["content_check"] = "ancestor"
+			verdict["compare_status"] = ancestry_status
+		else:
+			outcome = _tree_match(evidence)
+			if outcome != "match":
+				_fail(f"integration_fallback_{outcome}")
+				return None
+			verdict["content_check"] = "tree_match"
+		verdict["evidence_ref"] = f"default_branch_content:{evidence}"
+		return None, evidence
+
 	# A PR merged into an orchestrator project branch reaches the default
 	# branch only inside the project's squash commit, so its own merge commit
 	# is never an ancestor of the default tip (issue #8685). Every other base
@@ -657,6 +803,10 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 		if bound is None:
 			return verdict
 		compare_base, evidence_sha = bound
+		if compare_base is None:
+			# Issue #9481: the integration fallback already verified the content.
+			verdict.update({"status": "resolved", "reason": "verified", "path": "merged", "evidence_sha": evidence_sha})
+			return verdict
 
 	try:
 		compare = _gh_api([f"repos/{repo}/compare/{compare_base}...{evidence_sha}"])
@@ -691,8 +841,13 @@ def _verify_open_head(
 	triage_head = triage.get("head_sha")
 	if not isinstance(triage_head, str) or not SHA_RE.match(triage_head):
 		return _fail("triage_head_unavailable")
-	if current == triage_head:
-		return _fail("open_head_unchanged")
+	# Issue #9387: an unchanged head resolves only through a passing re-run on
+	# that head (path=open_head_rerun); every miss there keeps the reason
+	# open_head_unchanged exactly as before.
+	same_head = current == triage_head
+
+	def _fail_head(reason: str) -> dict[str, Any]:
+		return _fail("open_head_unchanged" if same_head else reason)
 
 	if workflow_id is None:
 		try:
@@ -700,48 +855,65 @@ def _verify_open_head(
 				f"repos/{repo}/commits/{current}/check-runs?check_name={quote(triage['check_name'], safe='')}&filter=latest&per_page=100",
 			])
 		except GhApiError:
-			return _fail("open_head_checks_unreadable")
+			return _fail_head("open_head_checks_unreadable")
 		outcome = classify_check_runs(checks, current)
 		if outcome != "success":
-			return _fail(f"open_head_check_{outcome}")
+			return _fail_head(f"open_head_check_{outcome}")
 		verdict["evidence_url"] = f"https://github.com/{repo}/commit/{current}"
 		verdict["matched"] = [f"{triage['check_name']}: success"]
 	else:
-		if not verdict["failed_jobs"]:
-			return _fail("no_failed_jobs")
+		# A passing re-run of the triaged run leaves no failed job in its
+		# latest attempt, so an unchanged head goes on without names (#9387).
+		if not verdict["failed_jobs"] and not same_head:
+			return _fail_head("no_failed_jobs")
 		try:
 			# No status filter: a newer run still in progress must block.
 			runs = _gh_api([
 				f"repos/{repo}/actions/workflows/{workflow_id}/runs?head_sha={current}&event=pull_request&per_page=1",
 			])
 		except GhApiError:
-			return _fail("open_head_run_unreadable")
+			return _fail_head("open_head_run_unreadable")
 		head_runs = runs.get("workflow_runs") if isinstance(runs, dict) else None
 		if not isinstance(head_runs, list):
-			return _fail("open_head_run_unreadable")
+			return _fail_head("open_head_run_unreadable")
 		head_run = head_runs[0] if head_runs else None
 		if (
 			not isinstance(head_run, dict) or head_run.get("head_sha") != current
 			or head_run.get("event") != "pull_request" or head_run.get("workflow_id") != workflow_id
 			or not isinstance(head_run.get("id"), int)
 		):
-			return _fail("open_head_run_missing")
+			return _fail_head("open_head_run_missing")
 		if head_run.get("status") != "completed":
-			return _fail("open_head_run_pending")
+			return _fail_head("open_head_run_pending")
 		if head_run.get("conclusion") != "success":
-			return _fail("open_head_run_not_success")
+			return _fail_head("open_head_run_not_success")
+		if same_head and not (type(head_run.get("run_attempt")) is int and head_run["run_attempt"] > 1):
+			# The newest run on the unchanged head is the failed attempt itself.
+			return _fail("open_head_unchanged")
+		if same_head and head_run["id"] != triage.get("run_id"):
+			# Only a re-run of the triaged run itself is evidence for it.
+			return _fail("open_head_unchanged")
 		try:
 			head_jobs = _jobs_of(_gh_api([f"repos/{repo}/actions/runs/{head_run['id']}/jobs?filter=latest&per_page=100"]))
 		except GhApiError:
-			return _fail("open_head_run_jobs_unreadable")
+			return _fail_head("open_head_run_jobs_unreadable")
 		names = [job["name"] for job in verdict["failed_jobs"]]
-		if not shard_jobs_resolved(names, head_jobs):
-			return _fail("failed_jobs_not_resolved")
+		if names:
+			if not shard_jobs_resolved(names, head_jobs):
+				return _fail_head("failed_jobs_not_resolved")
+		elif not (
+			same_head and head_jobs
+			and all(job.get("status") == "completed" and job.get("conclusion") in ("success", "skipped", "neutral") for job in head_jobs)
+			and any(job.get("conclusion") == "success" for job in head_jobs)
+		):
+			return _fail_head("failed_jobs_not_resolved")
+		else:
+			names = [triage["check_name"]]
 		verdict["evidence_url"] = head_run.get("html_url") if isinstance(head_run.get("html_url"), str) else f"https://github.com/{repo}/actions/runs/{head_run['id']}"
 		verdict["matched"] = [f"{name}: success" for name in names]
 
 	verdict.update({
-		"status": "resolved", "reason": "verified", "path": "open_head",
+		"status": "resolved", "reason": "verified", "path": "open_head_rerun" if same_head else "open_head",
 		"evidence_sha": current, "triage_head_sha": triage_head,
 	})
 	return verdict
@@ -883,6 +1055,26 @@ def fetch_failing_tracebacks(repo: str, failed_jobs: list[dict[str, Any]]) -> li
 
 
 def render_evidence_comment(issue_number: int, verdict: dict[str, Any]) -> str:
+	if verdict.get("path") == "open_head_rerun":
+		# Issue #9387: the PR is still open on the same head, and a re-run of
+		# the failing check on that head passed.
+		lines = [
+			"## Check-triage failure already resolved",
+			"",
+			f"The PR this issue was filed for, #{verdict['pr']}, is still open on the same head "
+			f"`{verdict['evidence_sha']}`, and a re-run of the failing check on that head passed.",
+			"",
+			f"- **Evidence commit (PR head, re-run):** `{verdict['evidence_sha']}` ({verdict['evidence_url']})",
+		]
+		for item in verdict.get("matched") or []:
+			lines.append(f"- **Passed:** `{_neutralize(item).replace('`', chr(39))}`")
+		lines += [
+			"",
+			"Closing this issue as completed. The PR is left unchanged, and no clarification answer or implementation is needed.",
+			"",
+			f"<!-- ai:check-triage-resolved:v1 issue={issue_number} pr={verdict['pr']} sha={verdict['evidence_sha']} -->",
+		]
+		return "\n".join(lines)
 	if verdict.get("path") == "open_head":
 		lines = [
 			"## Check-triage failure already resolved",
@@ -903,7 +1095,14 @@ def render_evidence_comment(issue_number: int, verdict: dict[str, Any]) -> str:
 		]
 		return "\n".join(lines)
 	evidence_ref = verdict.get("evidence_ref") or "default"
-	if evidence_ref == "default":
+	content_check = verdict.get("content_check")
+	if content_check in ("ancestor", "tree_match"):
+		summary = (
+			f"The PR this issue was filed for, #{verdict['pr']}, merged into an orchestrator project branch "
+			f"(merge commit `{verdict['merge_sha']}`) that has no integration PR. The failing check now passes on "
+			"the default branch, and that commit holds the PR's content."
+		)
+	elif evidence_ref == "default":
 		summary = (
 			f"The PR this issue was filed for, #{verdict['pr']}, has merged (merge commit `{verdict['merge_sha']}`), "
 			"and the failing check now passes on the default branch at a commit that contains that merge."
@@ -927,7 +1126,11 @@ def render_evidence_comment(issue_number: int, verdict: dict[str, Any]) -> str:
 		"",
 		f"- **Evidence commit:** `{verdict['evidence_sha']}` ({verdict['evidence_url']})",
 	]
-	if verdict.get("integration_compare_status"):
+	if content_check in ("ancestor", "tree_match"):
+		lines.append(f"- **Content check:** `{content_check}`")
+		if verdict.get("compare_status"):
+			lines.append(f"- **Compare (merge commit...evidence commit):** `{verdict['compare_status']}`")
+	elif verdict.get("integration_compare_status"):
 		lines.append(f"- **Compare (merge commit...integration PR head):** `{verdict['integration_compare_status']}`")
 		lines.append(f"- **Compare (integration PR merge commit...evidence commit):** `{verdict['compare_status']}`")
 	else:
@@ -1055,6 +1258,11 @@ def gate(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
 	# Unverified: keep the normal fix path and attach the failing job's traceback.
 	if verdict.get("reason") in ("run_identity_mismatch",):
 		return result, 0
+	# Issue #9481: the orchestrator close sweep gates issues in any phase on a
+	# rotating window; it passes --no-traceback so it neither re-downloads job
+	# logs every rotation nor posts tracebacks outside the clarify/plan path.
+	if getattr(args, "no_traceback", False):
+		return result, 0
 	already = traceback_jobs_posted(comments, pipeline_login, issue_number)
 	pending = [job for job in verdict.get("failed_jobs") or [] if job.get("id") not in already]
 	for traceback in fetch_failing_tracebacks(args.repo, pending):
@@ -1086,6 +1294,7 @@ def main(argv: list[str] | None = None) -> int:
 	p_gate.add_argument("--issue-number", type=int, required=True)
 	p_gate.add_argument("--default-branch", required=True)
 	p_gate.add_argument("--dry-run", action="store_true")
+	p_gate.add_argument("--no-traceback", action="store_true", help="skip the unverified-path failing-job traceback (issue #9481)")
 	args = parser.parse_args(argv)
 	if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.repo) or not re.fullmatch(r"[A-Za-z0-9._/-]{1,200}", args.default_branch) or ".." in args.default_branch:
 		print(json.dumps({"status": "unverified", "reason": "invalid_arguments"}))

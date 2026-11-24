@@ -44,6 +44,7 @@ EXPECTED_PREDICATE = (
 	"steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || "
 	"steps.claude_sync.outputs.claude_has_changes == 'true' || steps.retired_files.outputs.retired_has_changes == 'true' || "
 	"steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || "
+	"steps.dependabot_sync.outputs.dependabot_has_changes == 'true' || "
 	"steps.changelog_assemble.outputs.changelog_assembled == 'true' || steps.agents_assemble.outputs.agents_assembled == 'true'"
 )
 AUTO_CLOSE_RE = re.compile(r"(?i)(?<![\w-])(close[sd]?|fix(e[sd])?|resolve[sd]?)\s+(?:[\w.-]+/[\w.-]+)?#\d+")
@@ -131,7 +132,9 @@ def test_bare_push_only_on_the_flag_off_path() -> None:
 	assert len(sync_pushes) == 1
 	assert '--force-with-lease="refs/heads/${SYNC_BRANCH}:${SYNC_REMOTE_SHA}"' in sync_pushes[0]
 	pushes = [line for line in lines if "git push" in line and line != "git push" and "${SYNC_BRANCH}" not in line]
-	assert len(pushes) == 2
+	# Fresh branch, lease-checked refresh, and the rewrite-refused resend to
+	# <branch>-rN (tests/test_update_workflows_resend_branch.py).
+	assert len(pushes) == 3
 	for line in pushes:
 		assert '--force-with-lease="refs/heads/${BRANCH}:' in line
 		assert 'origin "HEAD:refs/heads/${BRANCH}"' in line

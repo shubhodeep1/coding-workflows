@@ -718,6 +718,45 @@ def test_transfer_applies_new_changed_deleted_files_and_modes(repo, tmp_path):
 	assert (repo / "deep" / "er" / "f.txt").exists()
 	assert TOKEN in (repo / ".git" / "config").read_text(), "host .git must never be touched"
 	assert "written=4 deleted=1" in proc.stderr
+	assert "transfer_symlink_delete" not in proc.stderr, "an untouched symlink is not a deletion"
+
+
+def test_transfer_logs_symlink_delete_with_hidden_target(repo, tmp_path):
+	"""#9940: a deleted link to a hidden top-level file is logged with target_hidden=true."""
+	(repo / "CLAUDE.md").write_text("repository instructions\n")
+	(repo / "docs").mkdir()
+	os.symlink("../CLAUDE.md", repo / "docs" / "CLAUDE.md")
+	git(repo, "add", "-A")
+	git(repo, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "claude link")
+	dest = tmp_path / "work"
+	manifest = tmp_path / "manifest.json"
+	run("snapshot-workspace", repo, dest, manifest, hide="CLAUDE.md")
+	assert (dest / "docs" / "CLAUDE.md").is_symlink() and not (dest / "docs" / "CLAUDE.md").exists()
+	(dest / "docs" / "CLAUDE.md").unlink()
+	proc = run("transfer", repo, dest, manifest, hide="CLAUDE.md")
+	assert "CODEX_ISOLATION transfer_symlink_delete path=docs/CLAUDE.md target=../CLAUDE.md target_hidden=true" in proc.stderr
+	assert proc.stderr.count("transfer_symlink_delete") == 1
+	assert "deleted=1" in proc.stderr
+	assert not (repo / "docs" / "CLAUDE.md").is_symlink()
+	assert (repo / "CLAUDE.md").read_text() == "repository instructions\n"
+
+
+def test_transfer_logs_symlink_delete_with_visible_target(repo, tmp_path):
+	dest, manifest = snapshot_ws(repo, tmp_path)
+	(dest / "link").unlink()
+	proc = run("transfer", repo, dest, manifest)
+	assert "CODEX_ISOLATION transfer_symlink_delete path=link target=/etc/passwd target_hidden=false" in proc.stderr
+	assert "deleted=1" in proc.stderr
+	assert not (repo / "link").is_symlink()
+
+
+def test_transfer_symlink_delete_log_fields_are_sanitized(repo, tmp_path):
+	os.symlink("a b\n::error::forged", repo / "odd")
+	dest, manifest = snapshot_ws(repo, tmp_path)
+	(dest / "odd").unlink()
+	proc = run("transfer", repo, dest, manifest)
+	assert "transfer_symlink_delete path=odd target=a?b?::error::forged target_hidden=false" in proc.stderr
+	assert "\n::error::forged" not in proc.stderr
 
 
 @pytest.mark.parametrize("kind", ["symlink", "fifo"])

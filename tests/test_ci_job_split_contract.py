@@ -13,7 +13,8 @@ keeps that split honest:
      unless every needed job succeeded. Without `always()` it would be
      skipped, and GitHub counts a skipped required check as passing;
   3. no test step runs in more than one job, and every job has a budget
-     that keeps CI well under 20 minutes.
+     that keeps CI well under 20 minutes, except the single pinned
+     exception in `JOB_TIMEOUT_EXCEPTIONS_MINUTES` (#9916).
 
 The aggregate step's shell is run for real against simulated `needs`
 results, so the tests cover what it does, not only what it says.
@@ -36,8 +37,18 @@ CI_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 AGGREGATE_JOB_ID = "lint"
 AGGREGATE_STEP_NAME = "Require every CI job to succeed"
 # Steps every job repeats to set itself up; everything else runs exactly once.
-PER_JOB_SETUP_STEPS = ("Checkout repository", "Setup Python", "Install Python CI dependencies")
+# "Verify the final-CI merge ref is current" follows every final-CI checkout
+# (scripts/ci_final_merge_ref_fresh.sh; tests/test_ci_final_merge_ref_fresh.py).
+PER_JOB_SETUP_STEPS = ("Checkout repository", "Verify the final-CI merge ref is current", "Setup Python", "Install Python CI dependencies")
 MAX_JOB_TIMEOUT_MINUTES = 20
+# Per-job exceptions to MAX_JOB_TIMEOUT_MINUTES. Adding or widening an entry
+# here is a reviewed decision. #9916: the repository owner raised
+# `orchestrate-poll` to 30 minutes after its shards were cancelled at the
+# 20-minute cap on 2026-11-21 (runs 44915291684 and 44917124015).
+JOB_TIMEOUT_EXCEPTIONS_MINUTES = {"orchestrate-poll": 30}
+# The single `lint` job's budget before the #4707 split; no exception may
+# reach it.
+OLD_SINGLE_JOB_BUDGET_MINUTES = 45
 # Jobs deliberately outside the aggregate: they run only on pushes to main,
 # wait for the worker jobs so they can read their durations, and must never
 # gate merges. Their own predicate and `lint.needs` exclusion are pinned in
@@ -166,10 +177,15 @@ class FinalCiFailedJobTest(unittest.TestCase):
 			with self.subTest(job=job_id):
 				if job_id == "static-checks":
 					self.assertNotIn("if", jobs[job_id])
+				elif job_id == "tests-sync-quick":
+					# Runs only in a sync-quick final-CI dispatch, never in quick
+					# mode; tests/test_ci_sync_quick.py pins that gate.
+					self.assertEqual(jobs[job_id]["if"], "inputs.mode != 'quick' && github.event_name == 'workflow_dispatch' && inputs.sync_quick == 'true'")
 				else:
-					# Docs-only final CI (run-volume plan item 4) also skips them;
-					# tests/test_ci_docs_only_final_ci.py pins that gate.
-					self.assertEqual(jobs[job_id]["if"], "inputs.mode != 'quick' && inputs.docs_only != 'true'")
+					# Docs-only and sync-quick final CI also skip them;
+					# tests/test_ci_docs_only_final_ci.py and
+					# tests/test_ci_sync_quick.py pin those gates.
+					self.assertEqual(jobs[job_id]["if"], "inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'")
 
 
 class SystemPythonJobTest(unittest.TestCase):
@@ -293,7 +309,19 @@ class JobLayoutTest(unittest.TestCase):
 			with self.subTest(job=job_id):
 				self.assertIsInstance(job.get("timeout-minutes"), int)
 				self.assertGreater(job["timeout-minutes"], 0)
-				self.assertLessEqual(job["timeout-minutes"], MAX_JOB_TIMEOUT_MINUTES)
+				self.assertLessEqual(
+					job["timeout-minutes"],
+					JOB_TIMEOUT_EXCEPTIONS_MINUTES.get(job_id, MAX_JOB_TIMEOUT_MINUTES),
+				)
+
+	def test_timeout_exceptions_are_pinned(self) -> None:
+		jobs = _ci_jobs()
+		for job_id, exception_minutes in JOB_TIMEOUT_EXCEPTIONS_MINUTES.items():
+			with self.subTest(job=job_id):
+				self.assertIn(job_id, jobs)
+				self.assertEqual(jobs[job_id].get("timeout-minutes"), exception_minutes)
+				self.assertGreater(exception_minutes, MAX_JOB_TIMEOUT_MINUTES)
+				self.assertLess(exception_minutes, OLD_SINGLE_JOB_BUDGET_MINUTES)
 
 	def test_no_step_runs_in_more_than_one_job(self) -> None:
 		seen: dict[str, str] = {}

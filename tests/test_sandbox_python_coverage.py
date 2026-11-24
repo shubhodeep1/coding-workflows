@@ -53,6 +53,15 @@ SCANNED_LAUNCH_SCRIPTS = (
 # writer is plain shell (its own tests run on the host).
 NON_PYTHON_ENTRY_POINTS = frozenset({"/support/write_codex_config.sh"})
 
+# In-image files that run only during `docker build`, never in an agent
+# container, so no sandbox test family can run them: the opt-in solc installer
+# (scripts/codex_isolated_exec.sh write_image_context, SANDBOX_SOLC_VERSIONS)
+# downloads from binaries.soliditylang.org, which the no-network sandbox test
+# step cannot reach. Its host-side tests are in tests/test_codex_isolated_exec.py
+# (_load_solc_installer). test_no_stale_registry_entries still requires the
+# scanner to find each one.
+BUILD_TIME_ONLY_ENTRY_POINTS = frozenset({"/tmp/solc_install.py"})
+
 _GUARD_TESTS = ["tests/test_gh_api_write_guard.py"]
 _RELAY_TESTS = ["tests/test_claude_anthropic_relay.py"]
 _BRIDGE_TESTS = ["tests/test_clarify_openrouter_broker_bridge.py"]
@@ -76,6 +85,13 @@ SANDBOX_PYTHON_ENTRY_POINTS: dict[str, dict] = {
 		"host": "scripts/claude_anthropic_relay.py",
 		"tests": _RELAY_TESTS,
 		"families": ["clarify", "review"],
+	},
+	# ChatGPT account reviewer slot's relay bridge (review engine chatgpt,
+	# Refs #8969): its own container path, since /relay.py is the Claude relay.
+	"/chatgpt_relay.py": {
+		"host": "scripts/chatgpt_codex_relay.py",
+		"tests": ["tests/test_review_chatgpt_reviewer_slot.py"],
+		"families": ["review"],
 	},
 	# codex-isolated-claude is the same bookworm base and Python as
 	# codex-isolated-codex plus the Claude CLI, so its files run there (D4).
@@ -265,7 +281,7 @@ class RegistryCoverageTest(unittest.TestCase):
 		found = scan_entry_points()
 		self.assertTrue(found, "the scanner found no entry point; the launch scripts or the patterns changed")
 		for path, sites in sorted(found.items()):
-			if path in NON_PYTHON_ENTRY_POINTS:
+			if path in NON_PYTHON_ENTRY_POINTS or path in BUILD_TIME_ONLY_ENTRY_POINTS:
 				continue
 			with self.subTest(entry_point=path):
 				self.assertIn(
@@ -313,6 +329,10 @@ class RegistryCoverageTest(unittest.TestCase):
 		for path in sorted(NON_PYTHON_ENTRY_POINTS):
 			with self.subTest(non_python=path):
 				self.assertIn(path, found)
+		for path in sorted(BUILD_TIME_ONLY_ENTRY_POINTS):
+			with self.subTest(build_time_only=path):
+				self.assertIn(path, found)
+				self.assertNotIn(path, SANDBOX_PYTHON_ENTRY_POINTS)
 
 	def test_registry_files_exist_and_families_are_known(self) -> None:
 		for path, entry in sorted(SANDBOX_PYTHON_ENTRY_POINTS.items()):
@@ -373,11 +393,100 @@ class SandboxJobWiringTest(unittest.TestCase):
 
 	def test_test_container_gets_no_network_root_or_credential(self) -> None:
 		run = self._test_step()["run"]
-		for flag in ("--network none", "--user 65534:65534", "--cap-drop ALL", "--read-only", "dst=/src,readonly"):
+		for flag in (
+			"--network none",
+			"--user 65534:65534",
+			"--cap-drop ALL",
+			"--security-opt no-new-privileges",
+			"--read-only",
+			"dst=/src,readonly",
+		):
 			with self.subTest(flag=flag):
 				self.assertIn(flag, run)
 		self.assertNotRegex(run, r"-e\s+\"?(GH_TOKEN|GITHUB_TOKEN)")
 		self.assertNotIn("--env-file", run)
+
+	# (env var, shell variable holding the limit, phase name in the timing line)
+	# for the three bounded phases of the test step (#9560).
+	SANDBOX_PHASE_LIMITS = (
+		("CI_SANDBOX_PYTHON_IMAGE_TIMEOUT_SECS", "image_limit", "image_resolve"),
+		("CI_SANDBOX_PYTHON_DERIVE_TIMEOUT_SECS", "derive_limit", "derive_build"),
+		("CI_SANDBOX_PYTHON_PYTEST_TIMEOUT_SECS", "pytest_limit", "pytest_run"),
+	)
+
+	def test_each_sandbox_phase_has_its_own_limit(self) -> None:
+		run = self._test_step()["run"]
+		for env_name, shell_var, phase in self.SANDBOX_PHASE_LIMITS:
+			with self.subTest(phase=phase):
+				default = re.search(r'\b' + shell_var + r'="\$\{' + env_name + r':-([1-9][0-9]*)\}"', run)
+				self.assertIsNotNone(default, f"{shell_var} must read {env_name} with a numeric default")
+				# A malformed override falls back to the same default.
+				self.assertIn(f"|| {shell_var}={default.group(1)}", run)
+				self.assertIn(f'timeout --signal=TERM --kill-after=10s "${{{shell_var}}}s"', run)
+				self.assertRegex(
+					run,
+					r"ci_sandbox_phase_done " + phase + r' "\$\{[a-z_]+\}" "\$\{[a-z_]+\}" "\$\{' + shell_var + r'\}" ' + env_name,
+				)
+		self.assertIn(
+			"sandbox-python timing family=${family} phase=${phase} elapsed_secs=$(( SECONDS - start )) rc=${rc}",
+			run,
+		)
+		self.assertIn("::error::Sandbox family ${family} phase ${phase} hit its ${limit}s limit (${limit_var})", run)
+		# 137 is a limit hit only once the limit elapsed; earlier it is an OOM kill.
+		self.assertIn(
+			'[ "${rc}" -eq 124 ] || { [ "${rc}" -eq 137 ] && [ "$(( SECONDS - start ))" -ge "${limit}" ]; }',
+			run,
+		)
+
+	def test_sandbox_phase_limits_fit_the_job_timeout(self) -> None:
+		job = _ci_jobs()[SANDBOX_JOB_ID]
+		run = self._test_step()["run"]
+		self.assertEqual(job["timeout-minutes"], 20)
+		defaults = re.findall(r"\$\{CI_SANDBOX_PYTHON_(IMAGE|DERIVE|PYTEST)_TIMEOUT_SECS:-(\d+)\}", run)
+		self.assertEqual(sorted(name for name, _ in defaults), ["DERIVE", "IMAGE", "PYTEST"])
+		kill_after_total = 3 * 10
+		# Two minutes stay free for checkout, setup-python, pip install and the guard.
+		self.assertLessEqual(
+			sum(int(value) for _, value in defaults) + kill_after_total,
+			job["timeout-minutes"] * 60 - 120,
+		)
+		# The faulthandler dump must come before the pytest phase is killed.
+		pytest_default = int(dict(defaults)["PYTEST"])
+		self.assertLess(300, pytest_default)
+
+	def test_sandbox_pytest_names_hangs_and_kills_its_container(self) -> None:
+		run = self._test_step()["run"]
+		for needle in (
+			'pytest_container="ci-sandbox-python-${family}-${run_tag}"',
+			'docker run --name "${pytest_container}" --rm',
+			'docker kill "${pytest_container}"',
+			'docker rm -f "${pytest_container}"',
+			"-o faulthandler_timeout=300",
+			"--durations=15",
+			"--deselect tests/test_gh_api_write_guard.py::test_template_parity",
+			'exit "${pytest_rc}"',
+		):
+			with self.subTest(needle=needle):
+				self.assertIn(needle, run)
+		# The kill happens only after the pytest phase hit its limit.
+		self.assertLess(run.index("ci_sandbox_phase_done pytest_run"), run.index('docker kill "${pytest_container}"'))
+
+	def test_sandbox_job_and_step_names_unchanged(self) -> None:
+		job = _ci_jobs()[SANDBOX_JOB_ID]
+		self.assertEqual(
+			[step.get("name") for step in job["steps"]],
+			[
+				"Checkout repository",
+				"Verify the final-CI merge ref is current",
+				"Setup Python",
+				"Install Python CI dependencies",
+				"Sandbox Python coverage guard",
+				SANDBOX_TEST_STEP_NAME,
+			],
+		)
+		self.assertEqual(set(self._test_step()["env"]), {"CI_SANDBOX_PYTHON_FAMILY", "CODEX_VERSION", "OPENCODE_VERSION"})
+		self.assertEqual(job["strategy"]["matrix"]["sandbox-family"], list(SANDBOX_FAMILIES))
+		self.assertEqual(job["timeout-minutes"], 20)
 
 
 def _main(argv: list[str]) -> int:

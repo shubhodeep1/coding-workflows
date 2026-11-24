@@ -109,6 +109,10 @@
       "color": "b60205",
       "description": "Orchestrator auto-answer loop blocked pending human intervention"
     },
+    "ai:waiting-on-dependency": {
+      "color": "fbca04",
+      "description": "Waiting on a PR, issue or release dependency; the poller resumes it when the dependency lands"
+    },
     "ai:merged": {
       "color": "5319e7",
       "description": "Linked PR merged"
@@ -188,6 +192,14 @@
     "ai:merge-queued": {
       "color": "c5def5",
       "description": "Review queued behind an older open PR that edits the same files (merge train)"
+    },
+    "ai:merge-lease-wait": {
+      "color": "c5def5",
+      "description": "Approved; waits for the merge lease on its base before updating or merging (merge lease)"
+    },
+    "ai:final-ci-merge-pending": {
+      "color": "c5def5",
+      "description": "Approved; the poll tick enables auto-merge when this head's final CI run passes"
     },
     "ai:security-audit": {
       "color": "5319e7",
@@ -278,6 +290,7 @@
         "ai:done",
         "ai:ready-to-merge",
         "ai:needs-human",
+        "ai:waiting-on-dependency",
         "ai:blocked",
         "ai:review-blocked",
         "ai:implementation-failed",

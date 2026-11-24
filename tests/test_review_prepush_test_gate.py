@@ -679,6 +679,141 @@ def test_integration_and_resolver_steps_forward_the_dependency_allow_list():
 	assert line in resolver_env[:400]
 
 
+# --- final-CI repair (final-ci-failure-ci-fix plan, Phase 2) ----------------------
+
+FAKE_FINAL_CI_RESOLVER = r'''#!/usr/bin/env bash
+printf '%s\n' "$*" >> "__WORK__/resolver.log"
+[ "${FAKE_RESOLVER_NO_CHANGE:-0}" = 1 ] && exit 0
+git -c user.email=r@example.invalid -c user.name=r commit -q --allow-empty -m "[ai-merge-resolve] repair final CI failures"
+echo "INTEGRATION_TEST_REPAIRED=true" >> "${GITHUB_ENV:?}"
+exit 0
+'''
+
+FAKE_GH_LOGGER = r'''#!/usr/bin/env bash
+printf '%s\n' "$*" >> "__WORK__/gh.log"
+exit "${FAKE_GH_RC:-0}"
+'''
+
+
+def _setup_final_ci(tmp_path: Path, queue: list[dict]) -> tuple[Path, dict[str, str], Path, str]:
+	repo, env, github_env = _setup_integration(tmp_path, queue)
+	_git(repo, "checkout", "-q", "-b", "ai/issue-7")
+	work = _work(tmp_path)
+	resolver = tmp_path / "support" / "scripts" / "review_conflict_resolve.sh"
+	resolver.write_text(FAKE_FINAL_CI_RESOLVER.replace("__WORK__", str(work)), encoding="utf-8")
+	gh = tmp_path / "bin" / "gh"
+	gh.write_text(FAKE_GH_LOGGER.replace("__WORK__", str(work)), encoding="utf-8")
+	gh.chmod(0o755)
+	head = _git(repo, "rev-parse", "HEAD").strip()
+	env.update({"POST_SYNC_TEST_REPAIR": "false", "FINAL_CI_REPAIR": "true", "FINAL_CI_REPAIR_FROM_SHA": head,
+		"FINAL_CI_REPAIR_ATTEMPT": "2", "TARGET_BRANCH": "ai/issue-7", "PR_NUMBER": "7", "GITHUB_REPOSITORY": "o/r",
+		"FINAL_CI_REPAIR_MARKER_RETRY_SLEEP_SECS": "0"})
+	return repo, env, github_env, head
+
+
+def _env_lines(github_env: Path, key: str) -> list[str]:
+	return [line.split("=", 1)[1] for line in github_env.read_text(encoding="utf-8").splitlines() if line.startswith(key + "=")]
+
+
+def test_final_ci_repair_commits_and_posts_the_marker(tmp_path):
+	repo, env, github_env, head = _setup_final_ci(tmp_path, [FAIL, PASS])
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert _env_lines(github_env, "INTEGRATION_TEST_REPAIR_ACTIVE") == ["true"]
+	assert _env_lines(github_env, "INTEGRATION_TEST_REPAIRED")[-1] == "true"
+	resolver = (_work(tmp_path) / "resolver.log").read_text(encoding="utf-8").splitlines()
+	assert len(resolver) == 1 and resolver[0].startswith("--test-repair ") and resolver[0].endswith("/run1/result.json --final-ci")
+	repair = _git(repo, "rev-parse", "HEAD").strip()
+	assert repair != head
+	gh_log = (_work(tmp_path) / "gh.log").read_text(encoding="utf-8")
+	assert gh_log.startswith("api -X POST repos/o/r/issues/7/comments -f body=**Final CI repair.**")
+	assert gh_log.rstrip("\n").endswith(f"<!-- ai:final-ci-repair:v1 pr=7 from={head} repair={repair} attempt=2 -->")
+	assert f"FINAL_CI_REPAIR pr=7 head={head} outcome=committed repair={repair} attempt=2 marker=posted" in proc.stdout
+
+
+@pytest.mark.parametrize("queue, extra, reason", [
+	([PASS], {}, "not_reproduced"),
+	([FAIL, FAIL], {}, "withheld"),
+	([FAIL], {"FAKE_RESOLVER_NO_CHANGE": "1"}, "no_change"),
+	([FAIL], {"PREPUSH_TEST_GATE_MODE": "report"}, "no_change"),
+])
+def test_final_ci_repair_falls_back_to_the_full_review(tmp_path, queue, extra, reason):
+	repo, env, github_env, head = _setup_final_ci(tmp_path, queue)
+	env.update(extra)
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert _env_lines(github_env, "INTEGRATION_TEST_REPAIR_ACTIVE")[-1] == "false"
+	assert _env_lines(github_env, "INTEGRATION_TEST_REPAIRED")[-1] == "false"
+	assert f"FINAL_CI_REPAIR pr=7 head={head} outcome=fallback reason={reason} marker=posted" in proc.stdout
+	# The full review starts from the approved head; the attempt is recorded
+	# with repair=none so the head is not tried again.
+	assert _git(repo, "rev-parse", "HEAD").strip() == head
+	gh_log = (_work(tmp_path) / "gh.log").read_text(encoding="utf-8")
+	assert gh_log.count("api -X POST ") == 1 and gh_log.startswith("api -X POST repos/o/r/issues/7/comments -f body=**Final CI repair not applied**")
+	assert (_work(tmp_path) / "gh.log").read_text(encoding="utf-8").rstrip("\n").endswith(
+		f"<!-- ai:final-ci-repair:v1 pr=7 from={head} repair=none attempt=2 -->")
+
+
+def test_final_ci_repair_withholds_a_repair_whose_re_run_was_skipped(tmp_path):
+	# The gate timeout is clamped, so the step-budget skip is driven directly:
+	# the mapping names it withheld, and the epilogue then drops the commit.
+	text = STEP_SCRIPT.read_text(encoding="utf-8")
+	assert 'elif [[ "${repair}" == withheld* ]] || [[ "${repair}" == "committed (re-run skipped"* ]]; then' in text
+	repo, env, github_env, head = _setup_final_ci(tmp_path, [PASS])
+	_git(repo, "-c", "user.email=r@example.invalid", "-c", "user.name=r", "commit", "-q", "--allow-empty", "-m", "repair")
+	github_env.write_text("INTEGRATION_TEST_REPAIR_ACTIVE=true\nINTEGRATION_TEST_REPAIRED=true\n", encoding="utf-8")
+	functions = text[text.index("# Post one ai:final-ci-repair:v1 marker"):text.index("# Integration-mode entry:")]
+	script = (functions + f'rpg_final_ci=true rpg_final_ci_reason=withheld rpg_final_ci_from={head} rpg_worktree="{repo}"\n'
+		"review_prepush_test_gate_final_ci_finish\n")
+	proc = subprocess.run(["bash", "-c", script], cwd=repo, env=env, capture_output=True, text=True, timeout=60)
+	assert "outcome=fallback reason=withheld marker=posted" in proc.stdout, proc.stdout + proc.stderr
+	assert _git(repo, "rev-parse", "HEAD").strip() == head
+	assert _env_lines(github_env, "INTEGRATION_TEST_REPAIRED")[-1] == "false"
+	assert _env_lines(github_env, "INTEGRATION_TEST_REPAIR_ACTIVE")[-1] == "false"
+
+
+def test_final_ci_repair_marker_post_is_retried(tmp_path):
+	repo, env, github_env, head = _setup_final_ci(tmp_path, [PASS])
+	env["FAKE_GH_RC"] = "1"
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert "outcome=fallback reason=not_reproduced marker=failed" in proc.stdout
+	assert (_work(tmp_path) / "gh.log").read_text(encoding="utf-8").count("api -X POST ") == 3
+
+
+def test_final_ci_repair_refuses_a_moved_head(tmp_path):
+	repo, env, github_env, head = _setup_final_ci(tmp_path, [FAIL])
+	env["FINAL_CI_REPAIR_FROM_SHA"] = "f" * 40
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert "outcome=fallback reason=head_moved marker=posted" in proc.stdout
+	assert _docker_runs(tmp_path) == 0
+	assert _env_lines(github_env, "INTEGRATION_TEST_REPAIR_ACTIVE") == ["false"]
+
+
+def test_final_ci_repair_never_takes_an_orchestrator_head(tmp_path):
+	repo, env, github_env = _setup_integration(tmp_path, [FAIL])
+	env.update({"POST_SYNC_TEST_REPAIR": "false", "FINAL_CI_REPAIR": "true"})
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert "reason=not_requested" in proc.stderr and "FINAL_CI_REPAIR" not in proc.stdout
+	assert github_env.read_text(encoding="utf-8") == ""
+
+
+def test_final_ci_repair_step_wiring():
+	text = REVIEW_YML.read_text(encoding="utf-8")
+	step = text[text.index("      - name: Integration post-sync test repair\n"):]
+	step = step[:step.index("\n      - name: ", 10)]
+	assert ("if: ((inputs.post_sync_test_repair && startsWith(env.TARGET_BRANCH, 'orchestrator/project-')) "
+		"|| needs.gate.outputs.final_ci_repair == 'true') && env.CAN_PUSH == 'true'") in step
+	assert "FINAL_CI_REPAIR: ${{ needs.gate.outputs.final_ci_repair == 'true' && 'true' || 'false' }}" in step
+	assert "FINAL_CI_REPAIR_ATTEMPT: ${{ needs.gate.outputs.final_ci_repair_attempt }}" in step
+	assert "FINAL_CI_REPAIR_FROM_SHA: ${{ needs.gate.outputs.head_sha }}" in step
+	assert "      final_ci_repair: ${{ steps.evaluate.outputs.final_ci_repair }}" in text
+	assert "      final_ci_repair_attempt: ${{ steps.evaluate.outputs.final_ci_repair_attempt }}" in text
+	assert "FINAL_CI_REPAIR_ENABLED: ${{ vars.FINAL_CI_REPAIR_ENABLED || 'true' }}" in text
+
+
 # --- attempt journal (issue #8428, P1) ----------------------------------------------
 
 PROMOTE_FIXTURE = '@pytest.fixture()\ndef promote_cycle_state(tmp_path):\n\treturn {"cycle": 1}\n'
@@ -834,6 +969,74 @@ def test_review_loop_uses_the_fetched_done_check(tmp_path):
 	assert "--tests-file /inputs/tests.txt" in (_work(tmp_path) / "docker.log").read_text(encoding="utf-8")
 	assert _editor_calls(tmp_path) == 1
 	assert "turns=1 stop=clean acceptance=not_run" in proc.stderr
+
+
+def _done_check_only_setup(tmp_path: Path, edit: str) -> tuple[Path, dict[str, str]]:
+	# Same setup as test_review_loop_uses_the_fetched_done_check: pr_caused=0,
+	# only the done-check target is unmet, so the repair loop runs one turn.
+	unmet = dict(PASS, acceptance={"tests/test_a.py": {"head": "fail", "base": "not_run"}})
+	repo, env = _setup(tmp_path, [unmet, PASS])
+	_with_fake_gh(tmp_path, env)
+	env["PERSIST_REPAIR_LOOP_ENABLED"] = "true"
+	gate_dir = tmp_path / "runtime" / "prepush_gate"
+	gate_dir.mkdir(parents=True)
+	(gate_dir / "acceptance.json").write_text(json.dumps({"schema": "acceptance.v1", "state": "valid", "source": "plan",
+		"errors": [], "checks": [], "tests": [{"path": "tests/test_a.py", "name": "", "red_on_base": False}],
+		"post_merge": None, "post_merge_none": "library only"}), encoding="utf-8")
+	(_work(tmp_path) / "edit.sh").write_text(edit, encoding="utf-8")
+	return repo, env
+
+
+def test_review_loop_reverts_a_repair_that_erases_a_passing_change(tmp_path):
+	# #9519 / PR #9562: a done-check-only repair turn put the file back to HEAD,
+	# erasing the PR's whole change while no failure was caused by it.
+	repo, env = _done_check_only_setup(tmp_path, "printf 'X = 1\\n' > lib/a.py\n")
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert (repo / "lib" / "a.py").read_text(encoding="utf-8") == "X = 2\n"
+	assert "outcome=repair_reverted reason=passing_change_erased" in proc.stderr
+	assert "outcome=repair_diff before=1 after=0 paths=\n" in proc.stderr
+	assert _editor_calls(tmp_path) == 1
+	assert _docker_runs(tmp_path) == 1
+	assert "stop=reverted" in proc.stderr
+	text = _summary(tmp_path).read_text(encoding="utf-8")
+	assert "Repair turn: reverted (it removed the whole change while no failure was caused by it)" in text
+
+
+def test_review_loop_keeps_a_repair_that_leaves_a_change(tmp_path):
+	repo, env = _done_check_only_setup(tmp_path, "printf 'X = 3\\n' > lib/a.py\n")
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert "passing_change_erased" not in proc.stderr
+	assert "outcome=repair_diff before=1 after=1 paths=lib/a.py" in proc.stderr
+	assert (repo / "lib" / "a.py").read_text(encoding="utf-8") == "X = 3\n"
+
+
+def test_pr_caused_repair_that_erases_the_change_is_not_reverted_by_the_passing_guard(tmp_path):
+	repo, env = _setup(tmp_path, [FAIL, PASS])
+	(_work(tmp_path) / "edit.sh").write_text("printf 'X = 1\\n' > lib/a.py\n", encoding="utf-8")
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert "passing_change_erased" not in proc.stderr
+	assert "repair=ran" in proc.stderr
+	assert "outcome=repair_diff before=1 after=0" in proc.stderr
+
+
+def test_repair_diff_line_caps_and_sanitises_paths(tmp_path):
+	repo, env = _setup(tmp_path, [FAIL, PASS])
+	for index in range(12):
+		(repo / "lib" / f"n{index:02d}.txt").write_text("n\n", encoding="utf-8")
+	(repo / "lib" / "0 odd;$x.txt").write_text("odd\n", encoding="utf-8")
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	match = re.search(r"outcome=repair_diff before=(\d+) after=(\d+) paths=(\S*)", proc.stderr)
+	assert match, proc.stderr
+	assert match.group(1) == "14" and match.group(2) == "14"
+	paths = match.group(3)
+	assert re.fullmatch(r"[A-Za-z0-9._/,-]*", paths)
+	entries = paths.split(",")
+	assert len(entries) == 10
+	assert "lib/0oddx.txt" in entries
 
 
 def test_review_loop_off_changes_nothing(tmp_path):
