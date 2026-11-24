@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:16844-17033 | severity=critical | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: About 8 new full-poller tests (plus the expanded close_linked_pr harness case near line 30599) leave orchestrate-poll (1) and (2) cancelled on head 918beae2, which fails the required lint roll-up.\n  WHY: The likely cause is the 20-minute job timeout (.github/workflows/ci.yml:3475) after the added tests re-deal the shard split; severity disagreement: sonnet said MAJOR (confidence 3), luna and glm said BLOCKER (confidence 4); the cause is inferred, and a concurrency cancel (ci.yml line 96) was not ruled out.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_orchestrate_poll_process.py:16847-17030 (plus the close_linked_pr harness case near line 30599) | severity=high (source: MAJOR) | confidence=3\n  PROBLEM: The new full-poller tests may push the orchestrate-poll shards past the 20-minute timeout (.github/workflows/ci.yml line 3475). The check-runs for head 918beae2 show orchestrate-poll (1) and (2) cancelled, and the lint roll-up fails.\n  WHY: The added tests change the shard split, and ci.yml records these shards at 19m30s, 19m28s and 15m34s. The cause is inferred, and a superseded-run cancel (ci.yml line 96) was not ruled out.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_orchestrate_poll_process.py:16899-17024 (also .github/workflows/ci.yml:3475) | severity=critical (source: BLOCKER) | confidence=4\n  PROBLEM: orchestrate-poll (1) and (2) are cancelled on head 918beae2, and the required lint check fails because orchestrate-poll did not succeed. The changed tests exercise the full poller under a 20-minute timeout.\n  WHY: The required CI check is red, so the PR cannot pass its merge gate. The logs do not establish why the jobs were cancelled.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_orchestrate_poll_process.py:16844-17033 (also the close_linked_pr harness test at 30585-30661 and .github/workflows/ci.yml:3436-3475) | severity=critical (source: BLOCKER) | confidence=4\n  PROBLEM: orchestrate-poll (1) and (2) are cancelled on head 918beae2, which matches the 20-minute job timeout, and the lint roll-up fails. The PR added 8 full-poller tests, and they re-deal the round-robin shard membership.\n  WHY: The earlier head 5dfa5bae failed the same way, and the ci.yml budget comments put groups 1 and 2 at 19m28s-20m12s. The required lint check stays red until the tests' wall time or group placement changes.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8db84497281b5400e55a90a29be8fb9c4cafbbb15cc630bd99357b01b449c6a2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9832,
+    "run_id": "45422126163",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45422126163",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124165314_3328edfcd0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9832,
+    "run_id": "45422126163"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T16:53:14Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
