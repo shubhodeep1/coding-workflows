@@ -278,7 +278,7 @@
 		{
 			"name": "GH_READ_TOKEN_ENABLED",
 			"default": "true",
-			"stage": "Kill switch for polling reads on the job token (issue #9888): exports GH_READ_TOKEN so gh_read reads with GITHUB_TOKEN instead of GH_PAT (promote-main-to-stable.yml, test-and-mark-stable.yml, review_autofix.yml, workflow-failure-heal-intake.yml).",
+			"stage": "Kill switch for polling reads on the job token (issue #9888): exports GH_READ_TOKEN so gh_read reads with GITHUB_TOKEN instead of GH_PAT (promote-main-to-stable.yml, test-and-mark-stable.yml, review_autofix.yml, workflow-failure-heal-intake.yml). The workflows test only != 'false', so 0/no/off are reported as off but keep the job token on: set false or delete the variable.",
 			"on_values": ["1", "yes", "on"]
 		},
 		{
@@ -420,7 +420,8 @@
 		{
 			"name": "NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED",
 			"default": "true",
-			"stage": "Releases a PR's head-bound ai:needs-human latch once the PR moves to another head (release_head_bound_needs_human_latches in scripts/orchestrate_poll_process.sh, orchestrate_poll.yml)."
+			"stage": "Releases a PR's head-bound ai:needs-human latch once the PR moves to another head (release_head_bound_needs_human_latches in scripts/orchestrate_poll_process.sh, orchestrate_poll.yml).",
+			"on_values": ["1", "yes", "on"]
 		},
 		{
 			"name": "OPERATOR_STEP_AUTO_RESOLVE_ENABLED",
@@ -623,7 +624,8 @@
 		{
 			"name": "REVIEW_RUN_READ_CACHE_ENABLED",
 			"default": "true",
-			"stage": "Kill switch for the codex-agent job's run-local PR read cache (gh_pr_cached_read in scripts/gh_helpers.sh, issue #9928, review_autofix.yml)."
+			"stage": "Kill switch for the codex-agent job's run-local PR read cache (gh_pr_cached_read in scripts/gh_helpers.sh, issue #9928, review_autofix.yml).",
+			"on_values": ["1", "yes", "on"]
 		},
 		{
 			"name": "REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED",
