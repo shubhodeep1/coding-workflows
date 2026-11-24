@@ -226,7 +226,7 @@ review_sweep_final_ci_state()
 #           REVIEW_SWEEP_VERDICT_CHANGE_PR (that row's PR number). A caller
 #           that reads them must not run this in a command substitution.
 #
-# review_sweep_verdict_round_cap_exempt <row json>
+# review_sweep_verdict_round_cap_exempt <row json> [<latest counted round time>]
 #   Returns 0 when the last review_sweep_verdict_wait_reason call for this
 #   row found the judge merge verdict changed in a way that means the PR may
 #   merge now: `lease` (lease granted), or `checks` with the current merge
@@ -236,6 +236,11 @@ review_sweep_final_ci_state()
 #   success and not round-capped. Every other answer (base, base_unknown,
 #   parse, disabled, auto_merge, a merge state that moved to dirty, behind,
 #   unknown or empty, no evaluation) returns 1: the round cap applies.
+#   Bounded to one answering dispatch: <latest counted round time> (the PR's
+#   newest dispatched round from review_sweep_round_counts'
+#   REVIEW_SWEEP_ROUND_LATEST_FILE) must be older than the verdict status
+#   (rb_judge_verdict_at); a missing or newer round time returns 1, so a
+#   verdict nothing re-posts cannot skip the cap tick after tick.
 #   No API call.
 #
 # review_sweep_verdict_merge_wait_alert <owner/repo> <row json> <reason> <dry run>
@@ -336,16 +341,25 @@ review_sweep_verdict_wait_reason()
 
 review_sweep_verdict_round_cap_exempt()
 {
-	local ce_fields ce_pr="" ce_ms="" ce_rollup=""
+	local ce_fields ce_pr="" ce_ms="" ce_rollup="" ce_verdict_at="" ce_latest="${2:-}"
 	review_sweep_verdict_wait_enabled || return 1
 	[ -n "${REVIEW_SWEEP_VERDICT_CHANGE:-}" ] || return 1
 	ce_fields="$(printf '%s' "${1:-}" | jq -r --arg sep "${REVIEW_SWEEP_VERDICT_SEP}" '
 		if type == "object" then
-			[((.number // "") | tostring), (.merge_state_status // ""), (.checks_rollup // "")]
+			[((.number // "") | tostring), (.merge_state_status // ""), (.checks_rollup // ""), (.rb_judge_verdict_at // "")]
 			| map(tostring | gsub("[[:cntrl:]]"; "") | ascii_downcase) | join($sep)
 		else empty end' 2>/dev/null)" || return 1
-	IFS="${REVIEW_SWEEP_VERDICT_SEP}" read -r ce_pr ce_ms ce_rollup <<< "${ce_fields}" || true
+	IFS="${REVIEW_SWEEP_VERDICT_SEP}" read -r ce_pr ce_ms ce_rollup ce_verdict_at <<< "${ce_fields}" || true
 	[[ "${ce_pr}" =~ ^[1-9][0-9]*$ ]] && [ "${ce_pr}" = "${REVIEW_SWEEP_VERDICT_CHANGE_PR:-}" ] || return 1
+	# Bounded: only the dispatch that answers the change is exempt. A counted
+	# round newer than the verdict status already answered it (a stale verdict
+	# left by a re-run that posted none, or an unlabelled lease wait, would
+	# otherwise read as changed on every tick). Unknown times: no exemption.
+	ce_verdict_at="$(printf '%s' "${ce_verdict_at}" | tr '[:lower:]' '[:upper:]')"
+	ce_latest="$(printf '%s' "${ce_latest}" | tr '[:lower:]' '[:upper:]')"
+	[[ "${ce_verdict_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || return 1
+	[[ "${ce_latest}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || return 1
+	[[ "${ce_latest}" < "${ce_verdict_at}" ]] || return 1
 	case "${ce_rollup}" in
 		failure|error) return 1 ;;
 	esac

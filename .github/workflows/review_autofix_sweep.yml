@@ -659,6 +659,11 @@ jobs:
           # tick, so the counts would not be read. Fail-open: an empty result
           # (helper missing, cap off, failed listing) applies no cap this tick.
           round_cap_counts_json=""
+          # Newest counted round per PR (same listing), for the verdict
+          # round-cap bound below (issue #9991).
+          round_cap_latest_json="{}"
+          round_cap_latest_file="${RUNNER_TEMP:-/tmp}/sweep-round-latest.json"
+          rm -f -- "${round_cap_latest_file}"
           round_cap_max="${SWEEP_REVIEW_MAX_ROUNDS:-10}"
           round_cap_window_hours="${SWEEP_REVIEW_ROUND_WINDOW_HOURS:-48}"
           if ! [[ "${round_cap_max}" =~ ^[1-9][0-9]{0,3}$ ]]; then
@@ -672,7 +677,9 @@ jobs:
           if [ "${SWEEP_REVIEW_ROUND_CAP_ENABLED:-true}" != "false" ] \
             && [ "${active_snapshot_incomplete}" != "true" ] \
             && type review_sweep_round_counts >/dev/null 2>&1; then
-            round_cap_counts_json="$(GH_TOKEN="${READ_TOKEN}" review_sweep_round_counts "${REPOSITORY}" "${sweep_default_branch}" "${round_cap_window_hours}")"
+            round_cap_counts_json="$(GH_TOKEN="${READ_TOKEN}" REVIEW_SWEEP_ROUND_LATEST_FILE="${round_cap_latest_file}" review_sweep_round_counts "${REPOSITORY}" "${sweep_default_branch}" "${round_cap_window_hours}")"
+            round_cap_latest_json="$(jq -c 'if type == "object" then . else {} end' "${round_cap_latest_file}" 2>/dev/null || echo '{}')"
+            [ -n "${round_cap_latest_json}" ] || round_cap_latest_json="{}"
           fi
 
           # Read into an array so counters survive the loop (no subshell pipe).
@@ -874,10 +881,13 @@ jobs:
             # on a head whose check rollup is not failing is exempt
             # (review_sweep_verdict_round_cap_exempt); base moves, unknown
             # base answers, a merge state now dirty/behind/unknown and
-            # anything unevaluated stay capped (fail-open path).
+            # anything unevaluated stay capped (fail-open path). The exemption
+            # covers one answering dispatch: once a counted round is newer than
+            # the verdict status, the cap applies again.
             round_cap_verdict_exempt=false
             if type review_sweep_verdict_round_cap_exempt >/dev/null 2>&1 \
-              && review_sweep_verdict_round_cap_exempt "${row}"; then
+              && review_sweep_verdict_round_cap_exempt "${row}" \
+                "$(printf '%s' "${round_cap_latest_json}" | jq -r --arg n "${pr_number}" '(.[$n] // "") | if type == "string" then . else "" end' 2>/dev/null || true)"; then
               round_cap_verdict_exempt=true
             fi
             if [ -n "${round_cap_counts_json}" ] && [ "${round_cap_verdict_exempt}" != "true" ] \

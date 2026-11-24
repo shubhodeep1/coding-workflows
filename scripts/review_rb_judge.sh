@@ -2663,6 +2663,8 @@ rb_judge_deferred_merge_pending() {
 # The recorded base is the one the judge's freshness check evaluated
 # (PR_BASE_FRESHNESS_EVAL_BASE_SHA for the judged head), not a later read, so
 # a base that moved during the checks wait is still seen as a base move.
+# A lease_wait verdict is recorded only while the PR carries the lease-wait
+# label (same read): an unlabelled wait would read as a granted lease.
 # VERDICT_WAIT_DISPATCH_SKIP_ENABLED=false posts nothing (only where the
 # judge's workflow passes the switch). Never fails the judge.
 # API: 1 PR read + 1 status POST, only for a deferred merge verdict.
@@ -2679,15 +2681,15 @@ rb_judge_record_verdict_wait() {
     echo "RB_JUDGE_VERDICT_STATUS outcome=skipped reason=helper_unavailable ${verdict_fields}"
     return 0
   fi
-  local verdict_head="" verdict_rollup=""
+  local verdict_head="" verdict_rollup="" verdict_labels="" verdict_lease_labelled=false verdict_label=""
   verdict_view="$(gh_retry gh api graphql -F number="${PR_NUMBER}" -f owner="${REPOSITORY%%/*}" -f name="${REPOSITORY#*/}" \
-    -f query='query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { state baseRefOid mergeStateStatus commits(last: 1) { nodes { commit { oid statusCheckRollup { state } } } } } } }' \
-    --jq '.data.repository.pullRequest as $p | ((($p.commits.nodes // [])[0].commit) // {}) as $c | [(($p.state // "") | ascii_downcase), ($p.baseRefOid // ""), (($p.mergeStateStatus // "") | ascii_downcase), ($c.oid // ""), ((($c.statusCheckRollup.state) // "") | ascii_downcase)] | @tsv' 2>/dev/null)" || verdict_view=""
+    -f query='query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { state baseRefOid mergeStateStatus labels(first: 100) { nodes { name } } commits(last: 1) { nodes { commit { oid statusCheckRollup { state } } } } } } }' \
+    --jq '.data.repository.pullRequest as $p | ((($p.commits.nodes // [])[0].commit) // {}) as $c | [(($p.state // "") | ascii_downcase), ($p.baseRefOid // ""), (($p.mergeStateStatus // "") | ascii_downcase), ($c.oid // ""), ((($c.statusCheckRollup.state) // "") | ascii_downcase), ([($p.labels.nodes // [])[]? | .name // empty | strings] | join("\u001f"))] | @tsv' 2>/dev/null)" || verdict_view=""
   if [ -z "${verdict_view}" ]; then
     echo "RB_JUDGE_VERDICT_STATUS outcome=skipped reason=read_failed ${verdict_fields}"
     return 0
   fi
-  IFS=$'\t' read -r verdict_state verdict_base verdict_ms verdict_head verdict_rollup <<< "${verdict_view}" || true
+  IFS=$'\t' read -r verdict_state verdict_base verdict_ms verdict_head verdict_rollup verdict_labels <<< "${verdict_view}" || true
   if [ "${verdict_state}" != "open" ]; then
     echo "RB_JUDGE_VERDICT_STATUS outcome=skipped reason=not_open ${verdict_fields}"
     return 0
@@ -2702,6 +2704,19 @@ rb_judge_record_verdict_wait() {
       return 0
       ;;
   esac
+  # A lease wait the gate did not label (a live holder waiting on an earlier
+  # holder, holder_shares_paths, or a failed label write) reads as "lease
+  # granted" to every reader on every tick, so it is not recorded: the sweep
+  # retries such a PR under the round cap, as before.
+  if [ "${RB_MERGE_WAIT_TOKEN}" = "lease_wait" ]; then
+    while IFS= read -r -d $'\x1f' verdict_label; do
+      [ "${verdict_label}" = "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" ] && verdict_lease_labelled=true
+    done <<< "${verdict_labels}"$'\x1f'
+    if [ "${verdict_lease_labelled}" != "true" ]; then
+      echo "RB_JUDGE_VERDICT_STATUS outcome=skipped reason=lease_unlabelled ${verdict_fields}"
+      return 0
+    fi
+  fi
   # The base the freshness check evaluated for this head; the read above is
   # the fallback (no freshness check on this path, or a truncated compare).
   if [ "${PR_BASE_FRESHNESS_HEAD_SHA:-}" = "${RB_JUDGED_HEAD_SHA:-}" ] \

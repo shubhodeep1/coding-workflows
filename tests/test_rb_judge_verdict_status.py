@@ -167,7 +167,11 @@ def _record_fn() -> str:
 
 
 @pytest.mark.parametrize("token, pr_view, env, expected", [
-	("lease_wait", f"open\t{BASE}\tblocked\t{HEAD}\tpending", "", f"base={BASE} ms=blocked"),
+	("lease_wait", f"open\t{BASE}\tblocked\t{HEAD}\tpending\tai:merge-lease-wait", "", f"base={BASE} ms=blocked"),
+	# An unlabelled lease wait (holder_shares_paths) would read as a granted
+	# lease on every tick, so it is not recorded (issue #9991).
+	("lease_wait", f"open\t{BASE}\tblocked\t{HEAD}\tpending\tai:review-blocked", "", "reason=lease_unlabelled"),
+	("lease_wait", f"open\t{BASE}\tblocked\t{HEAD}\tpending", "", "reason=lease_unlabelled"),
 	("auto_merge", f"closed\t{BASE}\tunknown\t{HEAD}\tsuccess", "", "reason=not_open"),
 	("", f"open\t{BASE}\tblocked\t{HEAD}\tpending", "", ""),
 	# A rollup that already fails would read as a change on every tick.

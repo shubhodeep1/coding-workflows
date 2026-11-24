@@ -563,3 +563,18 @@ def test_unevaluated_judge_merge_verdict_head_stays_capped(tmp_path: Path, switc
 	assert ("reason=review_round_cap" in result.stdout) is capped, result.stdout
 	assert bool(_lines(tmp_path, "labels.log")) is capped
 	assert (_dispatched(tmp_path) == ["5"]) is (not capped)
+
+
+def test_counts_write_the_latest_round_per_pr_only_when_asked(tmp_path: Path) -> None:
+	# Issue #9991: the newest counted round per PR bounds the verdict round-cap
+	# exemption; stdout keeps the counts shape, and nothing is written by default.
+	pages = [_page(_round(5, created_at="2026-11-17T12:00:00Z"), _round(5, created_at="2026-11-17T14:00:00Z"), _round(6))]
+	bin_dir = _setup(tmp_path, helper=False, rounds=pages)
+	latest = tmp_path / "latest.json"
+	script = f'source "{HELPER}"; REVIEW_SWEEP_ROUND_LATEST_FILE="$1" review_sweep_round_counts o/r main 72 ""'
+	result = subprocess.run(["bash", "-c", script, "counts", str(latest)], env=_env(tmp_path, bin_dir),
+		capture_output=True, text=True, cwd=tmp_path, check=False)
+	assert result.returncode == 0, result.stderr
+	assert json.loads(result.stdout) == {"5": 2, "6": 1}
+	assert json.loads(latest.read_text(encoding="utf-8"))["5"] == "2026-11-17T14:00:00Z"
+	assert set(json.loads(latest.read_text(encoding="utf-8"))) == {"5", "6"}

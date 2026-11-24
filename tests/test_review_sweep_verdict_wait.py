@@ -501,3 +501,22 @@ def test_changed_verdict_round_cap_follows_the_change_reason(tmp_path: Path, cha
 	assert "reason=verdict_waiting" not in result.stdout
 	assert ("AUTOFIX_SWEEP_SKIP pr=#36 reason=review_round_cap" in result.stdout) is capped, result.stdout
 	assert (_dispatched(tmp_path) == ["36"]) is (not capped)
+
+
+def test_changed_verdict_exemption_covers_one_answering_dispatch(tmp_path: Path) -> None:
+	# A changed verdict skips the round cap only until a counted round is
+	# newer than the verdict status; a verdict nothing re-posts (a re-run that
+	# ended merge_failed, or an unlabelled lease wait) is then capped again.
+	meta = {"37": {"gate": "PENDING", "verdict": _verdict(wait="lease_wait"), "ms": "BLOCKED",
+		"verdict_at": "2026-11-22T00:00:00Z"}}
+	result = _run_sweep(tmp_path, [_pr(37)], meta, rounds=_rounds(**{"37": 40}))
+	assert result.returncode == 0, result.stderr
+	assert _dispatched(tmp_path) == []
+	assert "AUTOFIX_SWEEP_SKIP pr=#37 reason=review_round_cap" in result.stdout
+	# The same verdict newer than every counted round is still exempt.
+	_reset(tmp_path)
+	meta["37"]["verdict_at"] = "2026-11-23T06:00:00Z"
+	result = _run_sweep(tmp_path, [_pr(37)], meta, rounds=_rounds(**{"37": 40}))
+	assert result.returncode == 0, result.stderr
+	assert _dispatched(tmp_path) == ["37"]
+	assert "reason=review_round_cap" not in result.stdout

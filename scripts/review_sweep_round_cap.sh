@@ -56,7 +56,13 @@
 #           clean/has_hooks/unstable, counts as approved and is not capped
 #           (the judge posts gate success only right before a merge
 #           request) unless its check rollup fails; any other change and an
-#           unevaluated verdict stay capped.
+#           unevaluated verdict stay capped. That exemption covers only the
+#           dispatch that answers the change: once a counted round is newer
+#           than the verdict status, the cap applies again.
+#   Optional: REVIEW_SWEEP_ROUND_LATEST_FILE (default empty: not written).
+#           When set, the newest counted round's created_at per PR is written
+#           there as a JSON object (`{"<pr>": "<UTC time>"}`), from the same
+#           listing; a failed read writes nothing.
 #   API:    one paginated listing per tick for all PRs, never one per PR (§15):
 #           `GET actions/workflows/internal-review.yml/runs?event=workflow_dispatch
 #           &created=>=<cutoff>&per_page=100`, ceil(runs in window / 100) calls
@@ -156,21 +162,23 @@ review_sweep_round_counts()
 		if length == 0 or (all(.[]; type == "object" and (.workflow_runs | type) == "array") | not) then error("bad page") else . end
 		| (([.[].total_count | select(type == "number")] | max) // 0) as $total
 		| ([.[].workflow_runs[]] | length) as $received
+		| ([ .[].workflow_runs[]
+			| select(type == "object")
+			| select((.event // "") == "workflow_dispatch")
+			| select((.conclusion // "") != "cancelled")
+			| select(.head_branch == null or .head_branch == "" or .head_branch == $default_branch)
+			| select((((.path // "") | if type == "string" then . else "" end) | sub("@.*$"; "")) == ".github/workflows/internal-review.yml")
+			| ((.created_at // "") | if type == "string" then . else "" end) as $created
+			| ((.display_title // "") | if type == "string" then . else "" end
+				| [match("^Internal: AI Review & Autofix \\[pr:([1-9][0-9]*)\\]$").captures[0].string] | first // "")
+			| select(. != "")
+			| select(($scoped | not) or (($since[.] // null) != null and $created >= $since[.]))
+			| {pr: ., created: $created} ]) as $rows
 		| {
 			truncated: ($total > $received),
-			counts: (
-				[ .[].workflow_runs[]
-					| select(type == "object")
-					| select((.event // "") == "workflow_dispatch")
-					| select((.conclusion // "") != "cancelled")
-					| select(.head_branch == null or .head_branch == "" or .head_branch == $default_branch)
-					| select((((.path // "") | if type == "string" then . else "" end) | sub("@.*$"; "")) == ".github/workflows/internal-review.yml")
-					| ((.created_at // "") | if type == "string" then . else "" end) as $created
-					| ((.display_title // "") | if type == "string" then . else "" end
-						| [match("^Internal: AI Review & Autofix \\[pr:([1-9][0-9]*)\\]$").captures[0].string] | first // "")
-					| select(. != "")
-					| select(($scoped | not) or (($since[.] // null) != null and $created >= $since[.])) ]
-				| group_by(.) | map({key: .[0], value: length}) | from_entries)
+			counts: ($rows | group_by(.pr) | map({key: .[0].pr, value: length}) | from_entries),
+			# Newest counted round per PR (issue #9991 verdict round-cap bound).
+			latest: ($rows | group_by(.pr) | map({key: .[0].pr, value: ([.[].created] | max)}) | from_entries)
 		}' "${cap_raw}" 2>/dev/null || true)"
 	rm -f -- "${cap_raw}"
 	# The empty check matters: jq 1.6 `-e` exits 0 on empty input.
@@ -180,6 +188,11 @@ review_sweep_round_counts()
 	fi
 	cap_summary="$(printf '%s' "${cap_counts}" | jq -r '"runs=\([.counts[]] | add // 0) prs=\(.counts | length) truncated=\(.truncated)"')"
 	echo "REVIEW_SWEEP_ROUND_CAP outcome=counted window_hours=${cap_window_hours} ${cap_summary}" >&2
+	# Optional (issue #9991): the newest counted round's created_at per PR,
+	# written where the caller asks; nothing is written by default.
+	if [ -n "${REVIEW_SWEEP_ROUND_LATEST_FILE:-}" ]; then
+		printf '%s' "${cap_counts}" | jq -c '.latest // {}' > "${REVIEW_SWEEP_ROUND_LATEST_FILE}" 2>/dev/null || true
+	fi
 	printf '%s' "${cap_counts}" | jq -c '.counts'
 	return 0
 }
