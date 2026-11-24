@@ -74,8 +74,8 @@
 # fetch-plan; one comments read plus one cached identity read) and
 # acceptance_label (adds or removes ai:acceptance-unmet after a commit; one
 # write, plus one label create and one retry POST only after a failed POST).
-# Only these two modes, and the final-CI repair marker below, call the
-# GitHub API.
+# Only these two modes, and the final-CI repair marker and its ci/final
+# re-check below, call the GitHub API.
 #
 # Never blocks the push: the sourced step ends with status 0 on every path.
 # Log prefix: PREPUSH_TEST_GATE phase=review|resolver|heal|integration.
@@ -105,6 +105,12 @@
 # (the head's one attempt is used up, the PR's two repairs are not), and logs
 # `FINAL_CI_REPAIR pr= head= outcome=fallback reason=not_reproduced|no_change|withheld|head_moved|skipped marker=posted|failed`.
 # The head must still be FINAL_CI_REPAIR_FROM_SHA (the gate's head).
+# Before either outcome (except head_moved) one GET commits/<head>/statuses
+# re-checks ci/final (issue #10023): when the newest github-actions[bot]
+# ci/final is success after an older failure, any repair commit is reset,
+# INTEGRATION_TEST_REPAIRED=false and INTEGRATION_TEST_REPAIR_ACTIVE=true are
+# written (nothing is pushed, no full review), no marker is posted, and it logs
+# `FINAL_CI_REPAIR pr= head= outcome=skipped reason=final_ci_now_green`.
 set -euo pipefail
 
 review_prepush_test_gate_log()
@@ -1275,9 +1281,36 @@ review_prepush_test_gate_final_ci_marker()
 	return 0
 }
 
+# Issue #10023 (G3): prints green when the approved head's final CI turned
+# green after the failure that caused the hand-back, else not_green. One
+# GET commits/<from>/statuses (statuses come newest first): green only when
+# the newest ci/final posted by github-actions[bot] (scripts/ci_final_status.sh
+# posts it with github.token) is success and an older one in the same
+# response is failure. Any invalid input, failed read or other output is
+# not_green, so the repair goes on as before (fail open).
+review_prepush_test_gate_final_ci_now_green()
+{
+	local green_from="$1" green_out=""
+	if ! [[ "${GITHUB_REPOSITORY:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || ! [[ "${green_from}" =~ ^[0-9a-f]{40}$ ]]; then
+		echo not_green
+		return 0
+	fi
+	green_out="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${green_from}/statuses?per_page=100" \
+		--jq '[.[] | select(.context == "ci/final" and (.creator.login // "") == "github-actions[bot]") | .state] | if (length > 1) and (.[0] == "success") and any(.[1:][]; . == "failure") then "green" else "not_green" end' 2>/dev/null)" || green_out=""
+	if [ "${green_out}" = green ]; then
+		echo green
+	else
+		echo not_green
+	fi
+	return 0
+}
+
 # Final-CI repair epilogue (see the header). After a committed repair it
 # posts the ai:final-ci-repair:v1 marker; otherwise it resets any repair
-# commit and hands the run back to the full review round. Always returns 0.
+# commit and hands the run back to the full review round. Either way it
+# first re-checks the approved head's ci/final (issue #10023): when that
+# turned green, it drops any repair commit, keeps the reviewer/editor steps
+# skipped, pushes nothing and posts no marker. Always returns 0.
 review_prepush_test_gate_final_ci_finish()
 {
 	set +eu
@@ -1291,6 +1324,22 @@ review_prepush_test_gate_final_ci_finish()
 		head="$(git -C "${rpg_worktree}" rev-parse HEAD 2>/dev/null || true)"
 	fi
 	[[ "${attempt}" =~ ^[1-9][0-9]*$ ]] || attempt=1
+	# Re-check right before the push (the job can start long after the gate).
+	if [[ "${from}" =~ ^[0-9a-f]{40}$ ]] && [ "${reason}" != head_moved ] \
+		&& [ "$(review_prepush_test_gate_final_ci_now_green "${from}")" = green ]; then
+		if [ -n "${head}" ] && [ "${head}" != "${from}" ]; then
+			git -C "${rpg_worktree}" reset -q --hard "${from}" 2>/dev/null \
+				|| echo "::warning::FINAL_CI_REPAIR could not reset the repair commit; nothing is pushed (INTEGRATION_TEST_REPAIRED=false)."
+		fi
+		if [ -n "${GITHUB_ENV:-}" ]; then
+			echo "INTEGRATION_TEST_REPAIRED=false" >> "${GITHUB_ENV}"
+			echo "INTEGRATION_TEST_REPAIR_ACTIVE=true" >> "${GITHUB_ENV}"
+		fi
+		# No marker: a later dispatch on this head ends at the gate's
+		# final_ci_now_green skip instead of head_cap and a full review.
+		echo "FINAL_CI_REPAIR pr=${PR_NUMBER:-?} head=${from} outcome=skipped reason=final_ci_now_green"
+		return 0
+	fi
 	if [ "${repaired}" = true ] && [ "${reason}" = committed ] && [[ "${from}" =~ ^[0-9a-f]{40}$ ]] \
 		&& [[ "${head}" =~ ^[0-9a-f]{40}$ ]] && [ "${head}" != "${from}" ]; then
 		# The backticks are Markdown code spans, not command substitution.
