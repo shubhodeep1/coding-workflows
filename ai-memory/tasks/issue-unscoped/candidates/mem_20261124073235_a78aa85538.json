@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:zombie_queued_live_count() function | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `repo` argument used to build the API URL is not validated before it is passed to `gh api`.\n  WHY: The reviewer says a tampered or misinterpreted repo string from `GITHUB_REPOSITORY` could add parameters to the `gh api` command or change the target URL (reviewer said MAJOR); anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash each say the regex at gh_helpers.sh:4485 disproves this.\n- scripts/auto_release_stable.sh:183-190 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The fallback `zombie_queued_live_count` regex for `zq_fallback_total` has no limit on digit count, while the main implementation enforces `{1,12}`.\n  WHY: An unexpectedly large number from the API could cause problems when the script parses or uses it later (reviewer said NIT); anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash make the same point as a hardening suggestion.\n- scripts/auto_release_stable.sh:779-781 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The handling of `rc=1` (read 1 fails) could separate the error types for `lookup=queued_runs` and `lookup=wedged_runs` more clearly in the warning message.\n  WHY: The warning is somewhat generic, but the reviewer says it causes no runtime correctness failure because the script still dispatches safely (reviewer said NIT).\n- scripts/gh_helpers.sh:zombie_queued_live_count() | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The two API reads of `actions/runs` are not atomic, so the total queued count can change between the first read and the second (wedged filter) read.\n  WHY: The live queued count can be slightly off; the reviewer says this is acceptable for an estimate but undocumented (reviewer said NIT); anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash say the clamp and the code comment at gh_helpers.sh:4518 cover it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- scripts/auto_release_stable.sh:fallback `zombie_queued_live_count`, line 188, `[[ \"${zq_fallback_total}\" =~ ^[0-9]+$ ]] || return 1` | HARDENING_SUGGESTION (HARDENING_RISK_SCORE: 1)\n  PROBLEM: The fallback accepts a total of any length, while the main helper limits it to `{1,12}` digits, so a huge value would reach the `-ge` comparison at line 779 without a bound (only when gh_helpers.sh cannot be sourced).\n  WHY: Suggested fix: change the regex to `^[0-9]{1,12}$` to match the helper (1 line).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/gh_helpers.sh:zombie_queued_live_count() function | severity=high | confidence=4\n  PROBLEM: The `repo` argument used to build the API URL is not validated before it is passed to `gh api`.\n  WHY: A malicious repo name taken from `GITHUB_REPOSITORY` could add parameters to the `gh api` command or change the target URL (SEVERITY: MAJOR).\n- scripts/auto_release_stable.sh:fallback block at line 183-190 | severity=low | confidence=3\n  PROBLEM: The `zq_fallback_total` regex has no upper limit on digits, unlike the main implementation's `{1,12}`.\n  WHY: An unexpectedly large number from the API could cause problems when the script parses or processes it later (SEVERITY: NIT).\n- scripts/auto_release_stable.sh:Line 779-781 | severity=low | confidence=3\n  PROBLEM: The handling of `rc=1` could separate the `lookup=queued_runs` and `lookup=wedged_runs` error types more clearly in the warning.\n  WHY: The warning is generic, but it causes no runtime correctness failure because the script still dispatches safely (SEVERITY: NIT).\n- scripts/gh_helpers.sh:zombie_queued_live_count() | severity=low | confidence=3\n  PROBLEM: The two API reads of `actions/runs` are not atomic, so the total can change between them.\n  WHY: The live queued count can be slightly off; acceptable for an estimate but the limitation is undocumented (SEVERITY: NIT).\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- scripts/auto_release_stable.sh:lines 184-189 (the inline fallback `zombie_queued_live_count` body) | HARDENING_SUGGESTION (HARDENING_RISK_SCORE: 1)\n  PROBLEM: The fallback validates the total with `^[0-9]+$` (any length), while `scripts/gh_helpers.sh:4497` caps it at `^[0-9]{1,12}$`, so an oversized value reaches the `queued_runs -ge limit` comparison and the `printf` output unbounded.\n  WHY: Suggested fix: tighten the fallback regex to `^[0-9]{1,12}$` (1 line).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- scripts/auto_release_stable.sh:lines 185-190, the fallback `zombie_queued_live_count` | HARDENING_SUGGESTION (HARDENING_RISK_SCORE: 1)\n  PROBLEM: The fallback accepts a `total_count` of any digit length (`^[0-9]+$`), while the main helper caps it at 12 digits (`^[0-9]{1,12}$`, gh_helpers.sh:4497), so a very wide value would reach the unguarded `[ -ge ]` comparison at line 779.\n  WHY: Suggested fix: change the fallback regex to `^[0-9]{1,12}$` to match the main helper (1 line).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6a942ff077ec4dc7d40b3cbd1bfa28aaef87a888f4f2d5d82f70b4bf9b5b6516",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10038,
+    "run_id": "45330823924",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45330823924",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124073235_a78aa85538",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10038,
+    "run_id": "45330823924"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-24T07:32:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
