@@ -4454,3 +4454,71 @@ zombie_queued_log_ignored()
 	done <<< "${_zq_rows}"
 	return 0
 }
+
+# zombie_queued_live_count <repo> <limit> [cutoff_epoch]  (issue #10032)
+#
+# Queue depth with wedged queued runs left out: the number of this
+# repository's `queued` runs minus those created at or before the
+# wedged cutoff (the same `created_at <= cutoff` rule as
+# is_wedged_queued). A caller that needs queue depth uses this instead
+# of reading the raw `actions/runs?status=queued` total.
+#
+# Batching contract (CLAUDE.md §15):
+#   input   repo (owner/name), limit (non-negative integer), optional
+#           cutoff epoch (the caller's zombie_queued_cutoff_epoch value;
+#           computed here when missing or not numeric).
+#   calls   read 1, always: actions/runs?status=queued&per_page=1
+#           (.total_count). Read 2, only when limit > 0, total >= limit
+#           and cutoff > 0: the same with &created=<=<ISO cutoff>.
+#           Both are per_page=1; nothing is paginated. At most 2 calls.
+#   output  "<live>\t<wedged>" on stdout, exit 0. wedged is clamped to
+#           [0, total], so live never goes negative. When read 2 is
+#           skipped the output is "<total>\t0".
+#   exit    1: bad repo or read 1 unreadable (nothing on stdout).
+#           2: read 2 unreadable (nothing on stdout).
+#           Fail-open handling is left to the caller.
+# ---------------------------------------------------------------
+zombie_queued_live_count()
+{
+	local _zq_repo="${1:-}" _zq_limit="${2:-0}" _zq_cutoff="${3:-}"
+	local _zq_total="" _zq_wedged="" _zq_iso="" _zq_json=""
+	if ! [[ "${_zq_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+		return 1
+	fi
+	[[ "${_zq_limit}" =~ ^[0-9]{1,9}$ ]] || _zq_limit=0
+	_zq_limit=$((10#${_zq_limit}))
+	if ! [[ "${_zq_cutoff}" =~ ^[0-9]{1,12}$ ]]; then
+		_zq_cutoff="$(zombie_queued_cutoff_epoch || echo 0)"
+		[[ "${_zq_cutoff}" =~ ^[0-9]{1,12}$ ]] || _zq_cutoff=0
+	fi
+	_zq_cutoff=$((10#${_zq_cutoff}))
+	_zq_json="$(gh_retry gh api "repos/${_zq_repo}/actions/runs?status=queued&per_page=1" 2>/dev/null || true)"
+	_zq_total="$(printf '%s' "${_zq_json}" | jq -r 'if (.total_count | type) == "number" then .total_count else empty end' 2>/dev/null || true)"
+	if ! [[ "${_zq_total}" =~ ^[0-9]{1,12}$ ]]; then
+		return 1
+	fi
+	_zq_total=$((10#${_zq_total}))
+	if [ "${_zq_limit}" -le 0 ] || [ "${_zq_total}" -lt "${_zq_limit}" ] || [ "${_zq_cutoff}" -le 0 ]; then
+		printf '%s\t0\n' "${_zq_total}"
+		return 0
+	fi
+	_zq_iso="$(jq -nr --argjson c "${_zq_cutoff}" '$c | todate' 2>/dev/null || true)"
+	if ! [[ "${_zq_iso}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+		# Cannot express the cutoff: compare the raw count, as before #10032.
+		echo "::warning::zombie_queued_live_count could not format the wedged cutoff; using the raw queued count" >&2
+		printf '%s\t0\n' "${_zq_total}"
+		return 0
+	fi
+	_zq_json="$(gh_retry gh api "repos/${_zq_repo}/actions/runs?status=queued&per_page=1&created=%3C%3D${_zq_iso}" 2>/dev/null || true)"
+	_zq_wedged="$(printf '%s' "${_zq_json}" | jq -r 'if (.total_count | type) == "number" then .total_count else empty end' 2>/dev/null || true)"
+	if ! [[ "${_zq_wedged}" =~ ^[0-9]{1,12}$ ]]; then
+		return 2
+	fi
+	_zq_wedged=$((10#${_zq_wedged}))
+	# The two reads are not atomic: clamp so live stays in [0, total].
+	if [ "${_zq_wedged}" -gt "${_zq_total}" ]; then
+		_zq_wedged="${_zq_total}"
+	fi
+	printf '%s\t%s\n' "$((_zq_total - _zq_wedged))" "${_zq_wedged}"
+	return 0
+}
