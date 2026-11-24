@@ -1126,8 +1126,10 @@ class JudgeDecisionLeaseGrant(unittest.TestCase):
 		_head_gate(st, _sha(5), "pending")
 		_judge_status(st, _sha(5))
 		h, out = _p2_tick(st)
-		self.assertEqual(h.state.get("dispatched"), [["workflow", "run", "review_rb_judge_dispatch.yml", "--repo", "owner/repo", "-f", "pr_number=5"]])
-		self.assertIn("MERGE_TRAIN_DISPATCHED pr=5 workflow=review_rb_judge_dispatch.yml ref=default head=ai/issue-5", out)
+		# A `[pr:<n>]`-titled review wrapper with force_rb_judge=true first, so
+		# the #9983 holder check sees the judge run as live work.
+		self.assertEqual(h.state.get("dispatched"), [["workflow", "run", "ai-review.yml", "--repo", "owner/repo", "-f", "pr_number=5", "-f", "force_rb_judge=true", "-f", "allow_workflow_edits=false"]])
+		self.assertIn("MERGE_TRAIN_DISPATCHED pr=5 workflow=ai-review.yml ref=default head=ai/issue-5", out)
 
 	def test_head_gate_grant_still_dispatches_a_review(self) -> None:
 		st = self._free([5])
@@ -1140,10 +1142,11 @@ class JudgeDecisionLeaseGrant(unittest.TestCase):
 	def test_failed_judge_dispatch_falls_back_to_one_review_dispatch(self) -> None:
 		st = self._free([5])
 		_judge_status(st, _sha(5))
-		st["fail"] = ["review_rb_judge_dispatch.yml"]
+		st["fail"] = ["force_rb_judge=true"]
 		h, out = _p2_tick(st)
-		# The review wrapper still runs only the judge (force_rb_judge=true).
-		self.assertEqual(h.state.get("dispatched"), [["workflow", "run", "ai-review.yml", "--repo", "owner/repo", "-f", "pr_number=5", "-f", "force_rb_judge=true", "-f", "allow_workflow_edits=false"]])
+		# No force_rb_judge wrapper: the judge-only dispatch workflow.
+		self.assertEqual(h.state.get("dispatched"), [["workflow", "run", "review_rb_judge_dispatch.yml", "--repo", "owner/repo", "-f", "pr_number=5"]])
+		self.assertIn("MERGE_TRAIN_DISPATCHED pr=5 workflow=review_rb_judge_dispatch.yml ref=default head=ai/issue-5", out)
 		self.assertIn("pr=5 base=main mode=tick outcome=granted reason=first_in_queue queue_len=1 gate=judge_decision\n", out)
 		self.assertNotIn("falling back to the review dispatch", out)
 
@@ -1206,7 +1209,7 @@ class JudgeDecisionLeaseGrant(unittest.TestCase):
 		_judge_status(st, _sha(6))
 		h, out = _p2_tick(st, env={MAXH_ENV: "2"})
 		self.assertIn("MERGE_LEASE pr=6 base=main mode=tick outcome=granted reason=first_in_queue queue_len=1 holders=2 gate=judge_decision\n", out)
-		self.assertIn("review_rb_judge_dispatch.yml", _dispatched_workflows(h))
+		self.assertIn(["workflow", "run", "ai-review.yml", "--repo", "owner/repo", "-f", "pr_number=6", "-f", "force_rb_judge=true", "-f", "allow_workflow_edits=false"], h.state["dispatched"])
 
 	def test_multi_holder_waiter_without_a_judge_decision_is_skipped(self) -> None:
 		st = {"pulls": [_pull(4), _pull(6)], "labels": {"6": [WAIT]}, "files": {"6": ["b.py"]}}

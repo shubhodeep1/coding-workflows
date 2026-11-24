@@ -3551,13 +3551,14 @@ def _mt_dispatch_rb_judge_run(tmp_path: Path, pr: str, fail_judge: bool = False,
 
 
 def test_judge_decision_grant_dispatches_the_judge_workflow_once(tmp_path: Path) -> None:
-	"""Issue #9987: a judge-decision grant dispatches review_rb_judge_dispatch.yml
-	with only the validated PR number, and falls back to the review dispatch."""
+	"""Issue #9987: a judge-decision grant dispatches one judge-only run: a
+	`[pr:<n>]`-titled review wrapper with force_rb_judge=true and
+	allow_workflow_edits=false, with only the validated PR number."""
 	res, calls = _mt_dispatch_rb_judge_run(tmp_path, "5")
 	out = res.stdout + res.stderr
 	assert "rc=0" in out, out
-	assert calls == ["workflow run review_rb_judge_dispatch.yml --repo o/r -f pr_number=5"]
-	assert "MERGE_TRAIN_DISPATCHED pr=5 workflow=review_rb_judge_dispatch.yml ref=default head=ai/issue-5" in out
+	assert calls == ["workflow run ai-review.yml --repo o/r -f pr_number=5 -f force_rb_judge=true -f allow_workflow_edits=false"]
+	assert "MERGE_TRAIN_DISPATCHED pr=5 workflow=ai-review.yml ref=default head=ai/issue-5" in out
 
 
 def test_judge_dispatch_rejects_an_invalid_pr_number(tmp_path: Path) -> None:
@@ -3567,27 +3568,44 @@ def test_judge_dispatch_rejects_an_invalid_pr_number(tmp_path: Path) -> None:
 
 
 def test_failed_judge_dispatch_falls_back_to_the_review_dispatch(tmp_path: Path) -> None:
-	"""The fallback first tries the review wrappers with force_rb_judge=true
-	(judge only, no reviewer/editor round; G3 of #9987)."""
-	res, calls = _mt_dispatch_rb_judge_run(tmp_path, "5", fail_judge=True)
+	"""No wrapper accepts force_rb_judge: review_rb_judge_dispatch.yml still
+	runs only the judge (no reviewer/editor round; G3 of #9987)."""
+	res, calls = _mt_dispatch_rb_judge_run(tmp_path, "5", fail_force=True)
 	out = res.stdout + res.stderr
 	assert "rc=0" in out, out
-	assert calls[0].startswith("workflow run review_rb_judge_dispatch.yml ")
-	assert calls[1] == "workflow run ai-review.yml --repo o/r -f pr_number=5 -f force_rb_judge=true -f allow_workflow_edits=false"
-	assert len(calls) == 2
-	assert "MERGE_TRAIN_DISPATCHED pr=5 workflow=ai-review.yml ref=default head=ai/issue-5" in out
+	assert calls == ["workflow run ai-review.yml --repo o/r -f pr_number=5 -f force_rb_judge=true -f allow_workflow_edits=false", "workflow run internal-review.yml --repo o/r -f pr_number=5 -f force_rb_judge=true -f allow_workflow_edits=false", "workflow run review_rb_judge_dispatch.yml --repo o/r -f pr_number=5"]
+	assert "MERGE_TRAIN_DISPATCHED pr=5 workflow=review_rb_judge_dispatch.yml ref=default head=ai/issue-5" in out
+	assert "falling back to the review dispatch" not in out
 
 
 def test_no_force_wrapper_falls_back_to_the_plain_review_dispatch(tmp_path: Path) -> None:
 	res, calls = _mt_dispatch_rb_judge_run(tmp_path, "5", fail_judge=True, fail_force=True)
 	out = res.stdout + res.stderr
 	assert "rc=0" in out, out
-	assert calls[0].startswith("workflow run review_rb_judge_dispatch.yml ")
-	assert calls[1] == "workflow run ai-review.yml --repo o/r -f pr_number=5 -f force_rb_judge=true -f allow_workflow_edits=false"
-	assert calls[2] == "workflow run internal-review.yml --repo o/r -f pr_number=5 -f force_rb_judge=true -f allow_workflow_edits=false"
+	assert calls[:3] == ["workflow run ai-review.yml --repo o/r -f pr_number=5 -f force_rb_judge=true -f allow_workflow_edits=false", "workflow run internal-review.yml --repo o/r -f pr_number=5 -f force_rb_judge=true -f allow_workflow_edits=false", "workflow run review_rb_judge_dispatch.yml --repo o/r -f pr_number=5"]
 	assert calls[3].startswith("workflow run ai-review.yml --repo o/r -f pr_number=5 -f allow_workflow_edits=")
 	assert len(calls) == 4
 	assert "falling back to the review dispatch" in out
+
+
+def test_judge_dispatch_prefers_wrappers_the_holder_check_can_see() -> None:
+	"""#9987 G3 with the #9983 holder rules: the force_rb_judge wrappers tried
+	first name a dispatched run `<workflow> [pr:<n>]`, which
+	_mt_lease_pr_runs_active counts as live work on the holder, so a granted
+	holder is not revoked while its judge run is queued or running.
+	review_rb_judge_dispatch.yml has no such run name, so it comes after them."""
+	for wf in (REPO_ROOT / "workflow-templates" / "ai-review.yml", REPO_ROOT / ".github" / "workflows" / "internal-review.yml"):
+		if wf.exists():
+			text = wf.read_text()
+			assert re.search(r"^run-name: .*\[pr:\{0\}\]", text, re.MULTILINE), wf
+			assert "force_rb_judge:" in text, wf
+	body = SCRIPT.read_text()
+	fn = body[body.index("_mt_dispatch_rb_judge() {"):]
+	fn = fn[:fn.index("\n}\n")]
+	assert fn.index("for mt_rbj_wf in ai-review.yml internal-review.yml; do") < fn.index("review_rb_judge_dispatch.yml --repo")
+	rbj = REPO_ROOT / ".github" / "workflows" / "review_rb_judge_dispatch.yml"
+	if rbj.exists():
+		assert "[pr:" not in rbj.read_text()
 
 
 def test_both_tick_loops_route_judge_decision_grants_to_the_judge() -> None:

@@ -1541,30 +1541,30 @@ _mt_dispatch_review() {
 # Judge dispatch for a lease grant that rested on the review-blocked judge's
 # merge decision (issue #9987, MERGE_LEASE_ELIGIBLE_GATE=judge_decision): the
 # judge had decided to merge and deferred only for the lease, so the granted
-# PR goes straight back to the judge's merge path (review_rb_judge_dispatch.yml
-# runs the review workflow with force_rb_judge=true: no reviewer/editor round)
-# instead of a review run that would end ai:review-blocked again. Same call
-# shape as _dispatch_rb_judge_for_pr (scripts/orchestrate_poll_process.sh):
-# default-branch workflow, validated PR number only, allow_workflow_edits left
-# at its default (false).
-# API: one workflow dispatch per grant. When it fails (e.g. the `core`
-# install profile ships no review_rb_judge_dispatch.yml), the review wrappers
-# that accept force_rb_judge (ai-review.yml, internal-review.yml) are
-# dispatched with force_rb_judge=true and allow_workflow_edits=false, which
-# still runs only the judge; only when none of those can be dispatched, the
-# plain _mt_dispatch_review (a degraded last resort: a review round, as before
-# this change, rather than leaving the granted lease with no run at all). At
-# most 1 + 2 + the review list.
+# PR goes straight back to the judge's merge path (force_rb_judge=true: no
+# reviewer/editor round) instead of a review run that would end
+# ai:review-blocked again. Default-branch workflow, validated PR number only
+# (as _dispatch_rb_judge_for_pr in scripts/orchestrate_poll_process.sh).
+# Order: the review wrappers that accept force_rb_judge (ai-review.yml,
+# internal-review.yml) first, with force_rb_judge=true and
+# allow_workflow_edits=false. Their dispatched runs are titled
+# `<workflow> [pr:<n>]`, so the #9983 holder check (_mt_lease_pr_runs_active)
+# sees the granted holder's judge run as live work and does not revoke it as
+# revoked_no_head_gate while the judge is still queued or running.
+# review_rb_judge_dispatch.yml has no `[pr:<n>]` run name and runs on the
+# default-branch head, so that check cannot see its run; it is the second
+# tier (e.g. a consumer whose review wrapper predates force_rb_judge). Only
+# when none of those can be dispatched, the plain _mt_dispatch_review (a
+# degraded last resort: a review round, as before this change, rather than
+# leaving the granted lease with no run at all).
+# API: one workflow dispatch per grant when the first wrapper exists (the
+# source repo has no ai-review.yml, so one failed dispatch first). At most
+# 2 + 1 + the review list.
 _mt_dispatch_rb_judge() {
 	local mt_rbj_pr="$1" mt_rbj_head="$2" mt_rbj_wf
 	if ! [[ "${mt_rbj_pr}" =~ ^[1-9][0-9]*$ ]]; then
 		_mt_warn "merge-train release: invalid PR number '${mt_rbj_pr}' for head ${mt_rbj_head}; not dispatching."
 		return 1
-	fi
-	if gh_retry gh workflow run review_rb_judge_dispatch.yml --repo "${MT_REPO}" \
-		-f pr_number="${mt_rbj_pr}" >/dev/null 2>&1; then
-		_mt_log "MERGE_TRAIN_DISPATCHED pr=${mt_rbj_pr} workflow=review_rb_judge_dispatch.yml ref=default head=${mt_rbj_head}"
-		return 0
 	fi
 	# allow_workflow_edits=false explicitly: internal-review.yml defaults the
 	# input to true, and a judge-only run must not get workflow-edit capability
@@ -1576,7 +1576,12 @@ _mt_dispatch_rb_judge() {
 			return 0
 		fi
 	done
-	_mt_warn "merge-train release: could not dispatch review_rb_judge_dispatch.yml or a force_rb_judge review wrapper for PR #${mt_rbj_pr}; falling back to the review dispatch."
+	if gh_retry gh workflow run review_rb_judge_dispatch.yml --repo "${MT_REPO}" \
+		-f pr_number="${mt_rbj_pr}" >/dev/null 2>&1; then
+		_mt_log "MERGE_TRAIN_DISPATCHED pr=${mt_rbj_pr} workflow=review_rb_judge_dispatch.yml ref=default head=${mt_rbj_head}"
+		return 0
+	fi
+	_mt_warn "merge-train release: could not dispatch a force_rb_judge review wrapper or review_rb_judge_dispatch.yml for PR #${mt_rbj_pr}; falling back to the review dispatch."
 	_mt_dispatch_review "${mt_rbj_pr}" "${mt_rbj_head}"
 }
 
