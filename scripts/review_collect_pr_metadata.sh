@@ -221,23 +221,43 @@ if [ "${CLAUDE_BRANCH_REVIEW_MODE:-}" = "true" ] && [ -z "${PR_NUMBER:-}" ]; the
 		> "${PR_META_FILE}"
 	echo "AUTOFIX_NO_PR_METADATA_SYNTHESIZED head_ref=${HEAD_REF_OVERRIDE} head_sha=${HEAD_SHA_OVERRIDE} base_ref=${BASE_REF_OVERRIDE}"
 else
-	gh_retry_to_file "${PR_PAYLOAD_FILE}" gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"
 	issue_comments_raw="${TMP_RUNTIME_DIR}/gh_issue_comments_raw.json"
 	reviews_raw="${TMP_RUNTIME_DIR}/gh_reviews_raw.json"
 	review_comments_raw="${TMP_RUNTIME_DIR}/gh_review_comments_raw.json"
-	gh_retry_to_file "${issue_comments_raw}" gh api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100"
+	# Issue #9928: read through the run-local PR read cache when the staged
+	# gh_helpers.sh provides it (fail-open: the helper makes a live call on
+	# any cache error); an older staged helper keeps the direct reads.
+	if type gh_pr_cached_read >/dev/null 2>&1; then
+		gh_pr_cached_read pull "${REPOSITORY}" "${PR_NUMBER}" > "${PR_PAYLOAD_FILE}"
+		pr_cache_head_sha="$(jq -r '.head.sha // ""' "${PR_PAYLOAD_FILE}" 2>/dev/null || true)"
+		gh_pr_cached_read issue_comments "${REPOSITORY}" "${PR_NUMBER}" "${pr_cache_head_sha}" > "${issue_comments_raw}"
+	else
+		gh_retry_to_file "${PR_PAYLOAD_FILE}" gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"
+		gh_retry_to_file "${issue_comments_raw}" gh api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments?per_page=100"
+	fi
 	jq -s 'add // []' "${issue_comments_raw}" > "${PR_ISSUE_COMMENTS_FILE}"
 	printf '[]\n' > "${PR_REVIEWS_FILE}"
 	case "$(printf '%s' "${REVIEW_BREAK_GLASS_ENABLED:-false}" | tr '[:upper:]' '[:lower:]')" in
 		1|true|yes|on)
-			if gh_retry_to_file "${reviews_raw}" gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100"; then
+			if type gh_pr_cached_read >/dev/null 2>&1; then
+				reviews_fetch_ok=false
+				gh_pr_cached_read reviews "${REPOSITORY}" "${PR_NUMBER}" "${pr_cache_head_sha:-}" > "${reviews_raw}" && reviews_fetch_ok=true
+			else
+				reviews_fetch_ok=false
+				gh_retry_to_file "${reviews_raw}" gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" && reviews_fetch_ok=true
+			fi
+			if [ "${reviews_fetch_ok}" = "true" ]; then
 				jq -s 'add // []' "${reviews_raw}" > "${PR_REVIEWS_FILE}"
 			else
 				echo "::warning::Optional top-level PR reviews fetch failed; continuing with PR_REVIEWS_FILE=[] for break-glass/advisory consumers."
 			fi
 			;;
 	esac
-	gh_retry_to_file "${review_comments_raw}" gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments?per_page=100"
+	if type gh_pr_cached_read >/dev/null 2>&1; then
+		gh_pr_cached_read review_comments "${REPOSITORY}" "${PR_NUMBER}" "${pr_cache_head_sha:-}" > "${review_comments_raw}"
+	else
+		gh_retry_to_file "${review_comments_raw}" gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/comments?per_page=100"
+	fi
 	jq -s 'add // []' "${review_comments_raw}" > "${PR_REVIEW_COMMENTS_FILE}"
 
 	jq '{
