@@ -481,7 +481,7 @@ class ReleaseValidateScriptsShardContractTest(unittest.TestCase):
 		for workflow_name, workflow_path in RELEASE_WORKFLOWS.items():
 			with self.subTest(workflow=workflow_name):
 				self.assertEqual(
-					load_release_validate_scripts_job(workflow_path)["timeout-minutes"], 90
+					load_release_validate_scripts_job(workflow_path)["timeout-minutes"], 135
 				)
 
 
@@ -3579,15 +3579,16 @@ MOVED_POLL_GROUP_TWO_8772_STEPS = {
 }
 # The body's first and last module, the module count and the sha256 below pin
 # the step's module set, which #9021's in-place sharding kept. #9056 added
-# tests/test_ci_actionlint_cache.py (53 -> 54 modules).
+# tests/test_ci_actionlint_cache.py (53 -> 54 modules). #9485 added
+# tests/test_sync_dependabot_exclusions.py (54 -> 55 modules).
 POLL_GROUP_TWO_8772_BOUNDARY_MODULES = (
 	"tests/test_ai_memory_sync_reference_files.py",
 	"tests/test_workflow_untrusted_input_contract.py",
 )
-POLL_GROUP_TWO_8772_MODULE_COUNT = 54
+POLL_GROUP_TWO_8772_MODULE_COUNT = 55
 # sha256 of the sorted, newline-joined module paths, so swapping an interior
 # module for another one is caught too.
-POLL_GROUP_TWO_8772_MODULE_SET_SHA256 = "7a3ed25f8f1aaca89c28d47d55b31abcfac8fe8fae5096a7796ae615e888dc80"
+POLL_GROUP_TWO_8772_MODULE_SET_SHA256 = "db4ba29afc92a8a0d4aa231c1d7222566427053b460b92addb52b79617e8119c"
 
 
 class MovedPollGroupTwo8772StepsContractTest(unittest.TestCase):
