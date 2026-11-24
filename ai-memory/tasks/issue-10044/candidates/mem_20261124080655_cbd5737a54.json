@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Where should the \"already un-parked once on this head\" marker be kept, given a PR's skip entries are deleted when it is granted the lease?\nChoices:\nA) Keep it in the skip entry by changing that one rule. When the tick un-parks an `expired` or `revoked_idle` entry, it rewrites the reason to a distinct \"already used\" token (for example `expired_unparked` or `revoked_idle_unparked`). That token is hard for every reader, because older readers treat any unknown reason as hard. Granting the lease keeps that one entry for the holder's current head and still deletes all its other entries. The next release on the same head then writes a hard entry, and a head change prunes it as today. No fourth field and no new record line are needed. (RECOMMENDED)\nB) Add a new line to the lease record for the holder, for example `unparked=<head>:<reason>`, and read it at release time to decide hard or soft. **Note:** this adds the extra state the issue says to avoid, and an older library writing the record would drop the unknown line, so the once-per-head limit would be lost.\nC) Keep deleting the holder's entries as today and accept a weaker rule: a healthy head can be un-parked again after each `expired` or `revoked_idle` release. G2 and its \"same head released again\" tests are dropped. **Note:** this allows the cycling that G2 is meant to prevent.",
+  "fingerprint": "33f5428680ad0a7efbe1d7cf4bc21de2eb3cb4dbef73a76b8d2a969a7c09a205",
+  "lineage": {
+    "issue_number": 10044,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45349989096",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45349989096",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261124080655_cbd5737a54",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10044,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45349989096"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #10044 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-24T08:06:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
