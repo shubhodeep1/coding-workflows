@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-11-24T00:05:34Z",
+  "issue_number": 9869,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=scripts/stable_e2e_step_verify_bait_removed.sh:535-541; cited_path=scripts/stable_e2e_step_verify_bait_removed.sh; files_touched=changelog.d/9869-external-finalize-test-assert-messages.md, tests/test_orchestrate_poll_process.py.",
+  "phase": "review_autofix",
+  "pr_number": 10008,
+  "record_id": "lesson_20261124000534_757c1482c1",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/stable_e2e_step_verify_bait_removed.sh",
+    "changelog.d/9869-external-finalize-test-assert-messages.md",
+    "tests/test_orchestrate_poll_process.py"
+  ]
+}
