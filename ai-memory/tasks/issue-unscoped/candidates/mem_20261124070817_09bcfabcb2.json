@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: G2 requires recording a clear reason on the PR and in the log when a branch update is refused.\n  expected_change_site: `scripts/pr_checks_lib.sh`, `_pr_final_ci_wiring_behind_update` refused-update path.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: When `_pr_final_ci_wiring_note_seen` cannot read the login or comments, the refused-update path skips posting a PR comment at lines 2824-2827 and only emits a warning. The update remains refused, but the PR has no recorded reason.\n- requirement: G4 requires avoiding an extra API call per PR per tick in the common case by reusing caller data or caching base workflow data per cycle.\n  expected_change_site: `scripts/review_final_ci_sweep.sh` candidate call and `scripts/pr_checks_lib.sh` base/workflow comparison.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The sweep calls `_pr_ensure_final_ci` without a base ref at line 340. When no freshness side channel is available, `_pr_ensure_final_ci` reads the PR at `scripts/pr_checks_lib.sh:1283-1285`, and the helper then reads `compare/<head>...<base>` at lines 2676-2677. There is no per-cycle base workflow cache; the helper's own documentation at lines 2568-2569 confirms repeated reads for a held sweep candidate. (Disagreement: anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash treat the G4 sweep cost as residual accepted by earlier editor passes and do not report it as a gap.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: G2 requires recording a clear reason on the PR and in the log when a branch update is refused.\n  Expected change site: `scripts/pr_checks_lib.sh`, `_pr_final_ci_wiring_behind_update` refused-update path.\n  Evidence of absence: When `_pr_final_ci_wiring_note_seen` cannot read the login or comments, the refused-update path skips posting a PR comment at lines 2824-2827 and only emits a warning. The update remains refused, but the PR has no recorded reason.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: G4 requires avoiding an extra API call per PR per tick in the common case by reusing caller data or caching base workflow data per cycle.\n  Expected change site: `scripts/review_final_ci_sweep.sh` candidate call and `scripts/pr_checks_lib.sh` base/workflow comparison.\n  Evidence of absence: The sweep calls `_pr_ensure_final_ci` without a base ref at line 340. When no freshness side channel is available, `_pr_ensure_final_ci` reads the PR at `scripts/pr_checks_lib.sh:1283-1285`, and the helper then reads `compare/<head>...<base>` at lines 2676-2677. There is no per-cycle base workflow cache; the helper's own documentation at lines 2568-2569 confirms repeated reads for a held sweep candidate.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "efe70dc15cc5f49920cb7fc6b0f8e8312ae660ddab36ed098f9d25edd9690f8e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9997,
+    "run_id": "45319677825",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45319677825",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124070817_09bcfabcb2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9997,
+    "run_id": "45319677825"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-24T07:08:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
