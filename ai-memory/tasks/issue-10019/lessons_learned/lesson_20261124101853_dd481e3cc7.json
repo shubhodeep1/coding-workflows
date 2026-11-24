@@ -1,0 +1,15 @@
+{
+  "discovered_at": "2026-11-24T10:18:53Z",
+  "issue_number": 10019,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=tests/test_orchestrate_poll_process.py:10458-10541; cited_path=scripts/orchestrate_poll_process.sh; files_touched=changelog.d/10019-poller-mock-store-lock.md, tests/test_orchestrate_poll_process.py.",
+  "phase": "review_autofix",
+  "pr_number": 10030,
+  "record_id": "lesson_20261124101853_dd481e3cc7",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/orchestrate_poll_process.sh",
+    "tests/test_orchestrate_poll_process.py",
+    "changelog.d/10019-poller-mock-store-lock.md"
+  ]
+}
