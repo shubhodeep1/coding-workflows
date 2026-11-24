@@ -512,3 +512,76 @@ def test_no_result_switch_parsing_matches_ledger(monkeypatch: pytest.MonkeyPatch
 	spec.loader.exec_module(module)
 	monkeypatch.setenv("REVIEW_UNREACHABLE_FOLLOWUP_ENABLED", value)
 	assert module._no_result_split_enabled() is split
+
+
+ENABLE_AUTO_MERGE = SCRIPTS / "review_enable_auto_merge.sh"
+
+
+def _extract_brace_newline_function(script: Path, name: str) -> str:
+	text = script.read_text(encoding="utf-8")
+	start = text.index(f"{name}()\n{{\n")
+	end = text.index("\n}\n", start) + 3
+	return text[start:end]
+
+
+def test_resume_rebuilds_unreachable_tsv_from_ledger(tmp_path: Path) -> None:
+	# A same-head partial resume skips the ledger stage and the partial
+	# snapshot does not carry the TSVs; they are rebuilt from the ledger.
+	_seed_repo(tmp_path)
+	held = _issue_block("002", "prompts/mode-x.txt", "SECURITY & INPUT VALIDATION")
+	_run_ledger(tmp_path, held, 1, IS_WORKFLOW_SOURCE_REPO="false")
+	runtime = tmp_path / "runtime"
+	expected = (runtime / "review_unreachable_all.tsv").read_text(encoding="utf-8")
+	assert "\tprompts/mode-x.txt\t" in expected
+	for name in ("review_unreachable_all.tsv", "review_unreachable_new.tsv"):
+		(runtime / name).unlink()
+	driver = tmp_path / "rebuild_driver.sh"
+	driver.write_text(
+		"set -euo pipefail\n"
+		+ _extract_shell_function(APPLY_FIXES, "_review_unreachable_rebuild_from_ledger")
+		+ "_review_unreachable_rebuild_from_ledger\n",
+		encoding="utf-8",
+	)
+	result = subprocess.run(["bash", str(driver)], cwd=tmp_path, env=_env(tmp_path), capture_output=True, text=True, check=True)
+	assert "rebuilt review_unreachable_all.tsv from the ledger (1 row(s))" in result.stdout
+	assert (runtime / "review_unreachable_all.tsv").read_text(encoding="utf-8") == expected
+	new_rows = (runtime / "review_unreachable_new.tsv").read_text(encoding="utf-8").splitlines()
+	assert len(new_rows) == 1 and new_rows[0].split("\t")[4:] == ["true", "consumer_protected_path", "-"]
+	# Switched off: nothing is rebuilt.
+	for name in ("review_unreachable_all.tsv", "review_unreachable_new.tsv"):
+		(runtime / name).unlink()
+	subprocess.run(["bash", str(driver)], cwd=tmp_path, env=_env(tmp_path, REVIEW_UNREACHABLE_FOLLOWUP_ENABLED="false"), capture_output=True, text=True, check=True)
+	assert not (runtime / "review_unreachable_all.tsv").exists()
+
+
+def _hold_active(root: Path, **overrides: str) -> bool:
+	driver = root / "hold_driver.sh"
+	driver.write_text(
+		"set -euo pipefail\n"
+		+ _extract_brace_newline_function(ENABLE_AUTO_MERGE, "review_unreachable_security_hold_active")
+		+ "if review_unreachable_security_hold_active; then echo HOLD; else echo NONE; fi\n",
+		encoding="utf-8",
+	)
+	env = _env(root, **overrides)
+	env.pop("RUNTIME_DIR", None)
+	out = subprocess.run(["bash", str(driver)], cwd=root, env=env, capture_output=True, text=True, check=True).stdout
+	return out.strip() == "HOLD"
+
+
+def test_unreachable_security_hold_refuses_auto_merge(tmp_path: Path) -> None:
+	# The hold is read from the durable ledger (no runtime TSV needed).
+	held_root = tmp_path / "held"
+	_seed_repo(held_root)
+	_run_ledger(held_root, _issue_block("002", "prompts/mode-x.txt", "SECURITY & INPUT VALIDATION"), 1, IS_WORKFLOW_SOURCE_REPO="false")
+	assert _hold_active(held_root)
+	assert not _hold_active(held_root, REVIEW_UNREACHABLE_FOLLOWUP_ENABLED="false")
+	plain_root = tmp_path / "plain"
+	_seed_repo(plain_root)
+	_run_ledger(plain_root, _issue_block("002", "prompts/mode-x.txt", "CORRECTNESS & LOGIC"), 1, IS_WORKFLOW_SOURCE_REPO="false")
+	assert not _hold_active(plain_root)
+	assert not _hold_active(tmp_path)
+	text = ENABLE_AUTO_MERGE.read_text(encoding="utf-8")
+	gate = text.index("if review_unreachable_security_hold_active; then")
+	# Checked before the first head-gate success / merge-label path.
+	assert gate < text.index('if [ "${ENABLE_AUTO_MERGE}" != "true" ]; then')
+	assert "action=refuse reason=unreachable_security_hold" in text[gate:gate + 400]

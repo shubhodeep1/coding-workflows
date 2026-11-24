@@ -127,6 +127,33 @@ reviewed_head_is_current_for_labels()
 	return 0
 }
 
+# Issue #10057: a security finding on a path the review editor may not change
+# (ledger STATUS: unreachable with UNREACHABLE_SECURITY: true, written by
+# scripts/review_issue_ledger.sh) keeps the PR blocked. Checked before every
+# path that posts the head-gate success, allows merge labels or enables
+# auto-merge. The durable ledger is the source, so a same-head partial resume
+# keeps the hold; the runtime TSV is read too. Off with
+# REVIEW_UNREACHABLE_FOLLOWUP_ENABLED=false (the ledger then has no such
+# entries either). A missing ledger means no hold was ever recorded.
+review_unreachable_security_hold_active()
+{
+	local hold_ledger="${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger/pr-${PR_NUMBER:-0}.txt}"
+	case "$(printf '%s' "${REVIEW_UNREACHABLE_FOLLOWUP_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+		false|0|no|off) return 1 ;;
+	esac
+	if [ -n "${RUNTIME_DIR:-}" ] && [ -s "${RUNTIME_DIR}/review_unreachable_all.tsv" ] \
+		&& awk -F '\t' '$5 == "true" { found = 1 } END { exit !found }' "${RUNTIME_DIR}/review_unreachable_all.tsv" 2>/dev/null; then
+		return 0
+	fi
+	[ -f "${hold_ledger}" ] || return 1
+	awk '/^=== ENTRY / { st = 0; sec = 0 } /^STATUS: unreachable$/ { st = 1 } /^UNREACHABLE_SECURITY: true$/ { sec = 1 } /^=== END ENTRY ===$/ { if (st && sec) found = 1 } END { exit !found }' "${hold_ledger}" 2>/dev/null
+}
+if review_unreachable_security_hold_active; then
+	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA:-unknown} action=refuse reason=unreachable_security_hold"
+	echo "::warning::Auto-merge not enabled for PR #${PR_NUMBER}: a security finding on a file the review editor may not change is still open (review ledger status unreachable, security hold). It is tracked in the PR's follow-up issue; the PR stays open."
+	exit 0
+fi
+
 if [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
 	if reviewed_head_is_current_for_labels; then
 		review_head_gate_post_status "${GITHUB_REPOSITORY}" "${INITIAL_HEAD_SHA}" success "review and security gate passed"

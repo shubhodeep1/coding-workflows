@@ -1194,7 +1194,7 @@ for raw in pathlib.Path(new_path).read_text(encoding="utf-8").splitlines():
 	out.append(f"- Why unreachable: {safe(reason, 60)}")
 	out.append(f"- Ledger issue id: {safe(issue_id, 60)}")
 	if security == "true":
-		out.append("- Security finding: it still keeps the PR blocked until a judge or a human clears it.")
+		out.append("- Security finding: it still keeps the PR blocked; the review loop will not auto-merge the PR while it stands.")
 	text = neutral(blocks.get(block_id, ""))
 	if text.strip():
 		fence = "`" * max(3, max((len(run) for run in re.findall(r"`+", text)), default=0) + 1)
@@ -1354,9 +1354,52 @@ _review_unreachable_editor_scope_note() {
   printf '%s\n' "${ru_scope_paths}"
 }
 
+# Issue #10057: a same-head partial resume reuses the ledger stage, but the
+# partial snapshot does not carry review_unreachable_{all,new}.tsv, which the
+# editor scope note, the follow-up sync and the clean-marker security hold
+# read. Rebuild them from the durable ledger (STATUS: unreachable entries);
+# rows still "pending" go to the new file so the sync can record them. An
+# existing file is never overwritten; a missing ledger leaves both absent.
+_review_unreachable_rebuild_from_ledger() {
+  local rb_ledger="${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger/pr-${PR_NUMBER:-0}.txt}"
+  local rb_all="${RUNTIME_DIR}/review_unreachable_all.tsv"
+  local rb_new="${RUNTIME_DIR}/review_unreachable_new.tsv"
+  case "$(printf '%s' "${REVIEW_UNREACHABLE_FOLLOWUP_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+    false|0|no|off) return 0 ;;
+  esac
+  [ -f "${rb_ledger}" ] && [ ! -e "${rb_all}" ] || return 0
+  awk -v all_out="${rb_all}.tmp" -v new_out="${rb_new}.tmp" '
+    function flush(    row, sec) {
+      if (id != "" && st == "unreachable") {
+        sec = (us == "true") ? "true" : "false"
+        if (uf !~ /^#[1-9][0-9]*$/) uf = "pending"
+        row = id "\t" f "\t" (ln == "" ? "-" : ln) "\t" lens "\t" sec "\t" (ur == "" ? "unknown" : ur)
+        print row "\t" uf > all_out
+        if (uf == "pending") print row "\t-" > new_out
+      }
+      id = ""
+    }
+    BEGIN { printf "" > all_out; printf "" > new_out }
+    /^=== ENTRY .* ===$/ { flush(); id = substr($0, 11, length($0) - 14); f = ln = lens = st = ur = us = uf = ""; next }
+    /^=== END ENTRY ===$/ { flush(); next }
+    id != "" && /^FILE: / { f = substr($0, 7); next }
+    id != "" && /^LINES: / { ln = substr($0, 8); next }
+    id != "" && /^LENS: / { lens = substr($0, 7); next }
+    id != "" && /^STATUS: / { st = substr($0, 9); next }
+    id != "" && /^UNREACHABLE_REASON: / { ur = substr($0, 21); next }
+    id != "" && /^UNREACHABLE_SECURITY: / { us = substr($0, 23); next }
+    id != "" && /^UNREACHABLE_FOLLOWUP: / { uf = substr($0, 23); next }
+    END { flush() }
+  ' "${rb_ledger}" 2>/dev/null || { rm -f "${rb_all}.tmp" "${rb_new}.tmp"; return 0; }
+  LC_ALL=C sort "${rb_all}.tmp" > "${rb_all}" && LC_ALL=C sort "${rb_new}.tmp" > "${rb_new}"
+  rm -f "${rb_all}.tmp" "${rb_new}.tmp"
+  echo "Resume: rebuilt review_unreachable_all.tsv from the ledger ($(wc -l < "${rb_all}" | tr -d " ") row(s))."
+}
+
 ledger_script=""
 if autofix_resume_can_reuse_stage "ledger" "${LEDGER_STATUS_FILE}"; then
 	echo "Resume: reusing cached ledger_status.txt from same-head partial state."
+	_review_unreachable_rebuild_from_ledger || echo "::warning::review_unreachable rebuild from ledger failed; continuing"
 elif ledger_script="$(resolve_support_script review_issue_ledger.sh)"; then
   if ! bash "${ledger_script}"; then
     echo "::warning::review_issue_ledger.sh failed; continuing without ledger context"
