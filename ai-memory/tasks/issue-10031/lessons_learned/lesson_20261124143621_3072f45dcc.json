@@ -1,0 +1,20 @@
+{
+  "discovered_at": "2026-11-24T14:36:21Z",
+  "issue_number": 10031,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=.github/workflows/review_autofix_sweep.yml:806-876; cited_path=.github/workflows/review_autofix_sweep.yml; files_touched=.github/workflows/clarify.yml, agents.d/10031-rate-limit-requeue.md, changelog.d/10031-rate-limit-requeue.md, scripts/orchestrate_poll_process.sh, scripts/review_autofix_step_evaluate_gate.sh, tests/test_rate_limit_requeue.py, tests/test_workflow_checkout_integration_ref_audit.py.",
+  "phase": "review_autofix",
+  "pr_number": 10039,
+  "record_id": "lesson_20261124143621_3072f45dcc",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/review_autofix_sweep.yml",
+    ".github/workflows/clarify.yml",
+    "agents.d/10031-rate-limit-requeue.md",
+    "changelog.d/10031-rate-limit-requeue.md",
+    "scripts/orchestrate_poll_process.sh",
+    "scripts/review_autofix_step_evaluate_gate.sh",
+    "tests/test_rate_limit_requeue.py",
+    "tests/test_workflow_checkout_integration_ref_audit.py"
+  ]
+}
