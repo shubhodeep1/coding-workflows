@@ -1296,8 +1296,8 @@ review_prepush_test_gate_final_ci_marker()
 # harder, never easier. Without the time check, a stale success left in
 # place by a failed ci/final=failure POST (scripts/ci_final_status.sh) would
 # drop a repair the gate selected. Any invalid input, missing marker time,
-# failed read or other output is not_green, so the repair goes on as before
-# (fail open).
+# failed read, status time not in the gate's strict ISO form, or other
+# output is not_green, so the repair goes on as before (fail open).
 review_prepush_test_gate_final_ci_now_green()
 {
 	local green_from="$1" green_out="" green_marker_at=""
@@ -1315,7 +1315,7 @@ review_prepush_test_gate_final_ci_now_green()
 		return 0
 	fi
 	green_out="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${green_from}/statuses?per_page=100" \
-		--jq '[.[] | select(.context == "ci/final" and (.creator.login // "") == "github-actions[bot]") | {state, at: ((.created_at // "") | tostring)}] | if (length > 0) and (.[0].state == "success") and (.[0].at > "'"${green_marker_at}"'") then "green" else "not_green" end' 2>/dev/null)" || green_out=""
+		--jq '[.[] | select(.context == "ci/final" and (.creator.login // "") == "github-actions[bot]") | {state, at: ((.created_at // "") | tostring)}] | if (length > 0) and (.[0].state == "success") and (.[0].at | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")) and (.[0].at > "'"${green_marker_at}"'") then "green" else "not_green" end' 2>/dev/null)" || green_out=""
 	if [ "${green_out}" = green ]; then
 		echo green
 	else

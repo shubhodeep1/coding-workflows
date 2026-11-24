@@ -868,8 +868,12 @@ def test_final_ci_repair_skips_a_fallback_when_final_ci_turned_green(tmp_path):
 	(_ci_final_statuses("success", "failure", newest_hour=11), {}),
 	# Without the comments snapshot there is no marker time: repair as before.
 	(_ci_final_statuses("success", "failure"), {"PR_ISSUE_COMMENTS_FILE": "/nonexistent/pr_issue_comments.json"}),
+	# A status time outside the gate's strict ISO form is not green, even when
+	# it sorts after the marker (the gate's rule).
+	(json.dumps([{"context": "ci/final", "state": "success", "created_at": "2026-11-06T13:00:00+00:00",
+		"creator": {"login": "github-actions[bot]"}}]), {}),
 ], ids=["newest_failure", "untrusted_creator", "read_failed", "unparseable", "success_older_than_marker",
-	"no_comments_snapshot"])
+	"no_comments_snapshot", "non_iso_status_time"])
 def test_final_ci_repair_commits_when_final_ci_is_not_green(tmp_path, statuses, extra):
 	repo, env, github_env, head = _setup_final_ci(tmp_path, [FAIL, PASS])
 	env["FAKE_GH_STATUSES_JSON"] = statuses
