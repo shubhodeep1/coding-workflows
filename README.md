@@ -2708,6 +2708,15 @@ through `clarify → plan → implement → review`.
   the issue with the raw context; an empty model response files an
   `inconclusive` issue with a fallback body; a failed `gh issue create` or a
   crash of either workflow sends a Telegram CRITICAL.
+- **Hourly alert triage reports (`alert_triage`, alert triage Phase 2, Refs #9394):**
+  `.github/workflows/alert-triage.yml` sends a `healable` alert group as
+  `source_kind: alert_triage`. The intake accepts it only from this repository
+  with a verified OIDC identity of `alert-triage.yml` (manual, binding-only and
+  identity-less reports are rejected), keys the fingerprint on the alert group
+  (`alert-triage:<fp>`), scopes the issue to the host-resolved
+  `alert_workflow_path` plus the reporting run, labels it `ai:workflow-heal` and
+  `ai:alert-triage`, and passes the triage diagnosis to the prompt only as
+  untrusted evidence. Kill switch: `HEAL_ALERT_TRIAGE_KIND_ENABLED=false`.
 
 ### Alert inbox capture (Phase 1)
 
@@ -3100,6 +3109,17 @@ only, both `false` by default) through `scripts/alert_inbox_capture.sh`:
 | `capture_enabled` (`.github/ai/alert_inbox.json`) | `false` | coding-workflows config, not a repository variable. Alert inbox capture (alert triage Phase 1): when `true`, `tg_send_msg` sends WARNING, ERROR and CRITICAL alerts to the `alert-inbox` intake as well as Telegram. Read only from the trusted support checkout; a missing or invalid file means off. |
 | `route_warning_error_to_inbox` (`.github/ai/alert_inbox.json`) | `false` | coding-workflows config. With `capture_enabled`, WARNING and ERROR alerts go only to the inbox (Telegram when capture fails); CRITICAL still goes to Telegram. |
 | `SCOPE_GUARD_AUTO_ALLOW_PATHS` | `changelog.d/*.md,tests/fixtures/**` | Globs the general `files_touched` scope guard auto-allows outside the issue's list (automation and `.git` paths never); `none` turns it off. See main table above. |
+| `ALERT_TRIAGE_ENABLED` | `false` | Run the hourly alert triage (`.github/workflows/alert-triage.yml`, alert triage Phase 2, Refs #9394); the job is skipped unless `true` |
+| `ALERT_TRIAGE_DRY_RUN` | `true` | Alert triage logs its decisions (`ALERT_TRIAGE` prefix) and commits done markers and ledger occurrences, but dispatches nothing and sends no Telegram; `false` acts |
+| `ALERT_TRIAGE_MAX_ALERTS` | `30` | Unprocessed inbox records read per alert triage run, oldest first |
+| `ALERT_TRIAGE_MAX_EVIDENCE_GETS` | `5` | GitHub GETs (jobs list and job log) alert triage spends on evidence per run, largest and oldest groups first |
+| `ALERT_TRIAGE_SELF_FIX_ENABLED` | `false` | Dispatch `alert-self-fix.yml` for a host-decided `pipeline_blocked` alert group; off (or the workflow missing) escalates instead |
+| `ALERT_TRIAGE_HEAL_STALL_HOURS` | `6` | An `ai:alert-triage` heal issue for the same fingerprint open longer than this makes the group `pipeline_blocked` |
+| `ALERT_TRIAGE_ISSUE_ESCALATE_HOURS` | `24` | Escalate (once) an `ai:alert-triage` issue open longer than this |
+| `ALERT_TRIAGE_PR_ESCALATE_HOURS` | `6` | Escalate (once) an `ai:alert-self-fix` pull request open longer than this |
+| `ALERT_TRIAGE_MODEL` | `WORKFLOW_EDITOR_MODEL`, then `openai/gpt-6-sol` | Codex model of the `ALERT_TRIAGE` role's fallback (the Claude model comes from `.github/ai/claude_engine.json`) |
+| `THINKING_LEVEL_ALERT_TRIAGE` | `high` | Codex reasoning effort of the `ALERT_TRIAGE` role |
+| `HEAL_ALERT_TRIAGE_KIND_ENABLED` | `true` | Heal intake accepts `alert_triage` reports (only from this repository's `alert-triage.yml` OIDC identity); `false` skips them |
 
 ## Semantic Cache (Clarification Only)
 

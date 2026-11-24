@@ -176,6 +176,11 @@
       "engine": "claude",
       "claude_model": "claude-opus-5-5",
       "profile": "read"
+    },
+    "ALERT_TRIAGE": {
+      "engine": "claude",
+      "claude_model": "claude-opus-5-5",
+      "profile": "read"
     }
   }
 }

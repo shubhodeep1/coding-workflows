@@ -2019,7 +2019,7 @@ jobs:
       - name: Alert inbox capture and store tests
         run: |
           set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_tg_helpers_alert_inbox.py tests/test_alert_inbox_store.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_tg_helpers_alert_inbox.py tests/test_alert_inbox_store.py tests/test_alert_triage.py tests/test_alert_triage_route.py tests/test_workflow_failure_heal_alert_triage_kind.py
 
       - name: Daily consumer health check tests
         run: |

@@ -479,6 +479,24 @@ if [ "${RAW_SOURCE_KIND}" = "synced_security_finding" ]; then
 	esac
 	unset SYNCED_SECURITY_SWITCH
 fi
+# Hourly alert triage reports (HEAL_ALERT_TRIAGE_KIND_ENABLED, #9394 phase 2):
+# same switch semantics as HEAL_SYNCED_SECURITY_FINDING_ENABLED above.
+if [ "${RAW_SOURCE_KIND}" = "alert_triage" ]; then
+	ALERT_TRIAGE_KIND_SWITCH="${HEAL_ALERT_TRIAGE_KIND_ENABLED:-true}"
+	case "${ALERT_TRIAGE_KIND_SWITCH,,}" in
+		true) ;;
+		false)
+			log "skip reason=alert_triage_disabled"
+			exit 0
+			;;
+		*)
+			log "warn invalid_switch name=HEAL_ALERT_TRIAGE_KIND_ENABLED"
+			log "skip reason=alert_triage_disabled"
+			exit 0
+			;;
+	esac
+	unset ALERT_TRIAGE_KIND_SWITCH
+fi
 
 PAYLOAD_FILE="${RUNTIME_DIR}/payload.json"
 if ! python3 "${HEAL_PY}" validate-payload --payload-json "${PAYLOAD_RAW_FILE}" > "${PAYLOAD_FILE}" 2> "${RUNTIME_DIR}/payload_error.txt"; then
@@ -711,6 +729,24 @@ if [ "${SOURCE_KIND}" = "synced_security_finding" ] || [ "${SOURCE_KIND}" = "syn
 	if [ -z "${WRAPPER_SHA}" ] || [ "${SYNCED_SECURITY_WORKFLOW_REF##*@}" != "${WRAPPER_SHA}" ]; then
 		_report_auth_reject "release_mismatch"
 	fi
+fi
+# An alert_triage report (#9394 phase 2) comes only from this repository's own
+# alert-triage.yml run: the source must be this repository and the report must
+# carry a verified OIDC identity (verify-report-identity binds it to
+# <self>/.github/workflows/alert-triage.yml@ and the reporting run), whatever
+# WORKFLOW_HEAL_REQUIRE_REPORT_AUTH says. Manual, event and binding-only
+# acceptance are refused (WARNING, exit 0, nothing filed).
+ALERT_TRIAGE_REPORTER_RUN_ID=""
+if [ "${SOURCE_KIND}" = "alert_triage" ]; then
+	if [ "${SOURCE_REPO}" != "${SELF_REPO}" ]; then
+		log "skip reason=alert_triage_not_self source=${SOURCE_REPO}"
+		exit 0
+	fi
+	if [ "${REPORT_AUTH}" != "verified" ]; then
+		_report_auth_reject "alert_triage_identity_required"
+	fi
+	ALERT_TRIAGE_REPORTER_RUN_ID="$(jq -r '.claims.run_id // ""' "${VERIFY_FILE}" 2>/dev/null || echo "")"
+	[[ "${ALERT_TRIAGE_REPORTER_RUN_ID}" =~ ^[1-9][0-9]{0,19}$ ]] || _report_auth_reject "alert_triage_identity_required"
 fi
 rm -f "${REPORT_IDENTITY_FILE}" 2>/dev/null || true
 
@@ -1011,6 +1047,7 @@ _heal_report_claimed_no_runs()
 		&& [ "${SOURCE_KIND:-}" != "synced_check_failure" ] \
 		&& [ -z "${ENGINE_REPORTER_RUN_REF:-}" ] \
 		&& [ -z "${RELEASE_BLOCKER_REPORTER_RUN_REF:-}" ] \
+		&& [ -z "${ALERT_TRIAGE_SCOPE_PATH:-}" ] \
 		&& [ "${HEAL_SCOPE_RECOVERY_ACTIVE:-}" != "true" ] \
 		&& [ "$(jq -r '(.run_refs // []) | if type == "array" then length else -1 end' "${PAYLOAD_FILE}" 2>/dev/null || echo unknown)" = "0" ] \
 		&& [ "$(jq -r '(.run_refs // []) | if type == "array" then length else -1 end' "${PAYLOAD_RAW_FILE}" 2>/dev/null || echo unknown)" = "0" ]
@@ -2160,6 +2197,14 @@ elif [ "${SOURCE_KIND}" = "validation_failure" ]; then
 	FIRST_WORKFLOW_NAME="validation-harness"
 	FIRST_FAILING_STEP="${VALIDATION_STAGE}:${VALIDATION_REASON}"
 	SIGNATURE="${VALIDATION_SIGNATURE}"
+elif [ "${SOURCE_KIND}" = "alert_triage" ]; then
+	# An hourly alert triage report (#9394 phase 2): one heal issue per alert
+	# group fingerprint (validated 64-hex). These three inputs give the same
+	# hash as heal_fp() in scripts/alert_triage.py, so its already_tracked
+	# check finds the issue this opens.
+	FIRST_WORKFLOW_NAME="${PAYLOAD_WORKFLOW_NAME}"
+	FIRST_FAILING_STEP="alert_triage"
+	SIGNATURE="alert-triage:${PAYLOAD_FAILURE_FINGERPRINT}"
 elif [ "${SOURCE_KIND}" = "autofix_failure" ]; then
 	# The review job's log ends the same way for every failure class
 	# ("Process completed with exit code 1"), so the reporter's own reason and
@@ -3058,6 +3103,34 @@ if [ "${SOURCE_KIND}" = "engine_fallback" ]; then
 	fi
 fi
 
+# An alert_triage report (#9394 phase 2) names no failed run either. Its scope
+# is the host-resolved alert_workflow_path (validated by validate-payload and
+# present as a regular file in this checkout) plus the verified reporting run
+# of this repository's alert-triage.yml (from the OIDC claims). The triage
+# diagnosis never reaches these inputs. Without a resolvable path the report
+# stays run-less and is skipped before the diagnosis below.
+ALERT_TRIAGE_SCOPE_PATH=""
+ALERT_TRIAGE_SCOPE_PATHS_JSON='[]'
+ALERT_TRIAGE_SCOPE_RUNS_JSON='[]'
+if [ "${SOURCE_KIND}" = "alert_triage" ]; then
+	ALERT_TRIAGE_PATH_CANDIDATE="$(_pf '.alert_workflow_path // ""')"
+	if [[ "${ALERT_TRIAGE_PATH_CANDIDATE}" =~ ^\.github/workflows/[A-Za-z0-9._-]{1,100}\.ya?ml$ ]] \
+		&& [ -f "${ALERT_TRIAGE_PATH_CANDIDATE}" ] && [ ! -L "${ALERT_TRIAGE_PATH_CANDIDATE}" ] \
+		&& [[ "${ALERT_TRIAGE_REPORTER_RUN_ID}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+		ALERT_TRIAGE_SCOPE_PATH="${ALERT_TRIAGE_PATH_CANDIDATE}"
+		ALERT_TRIAGE_SCOPE_PATHS_JSON="$(jq -cn --arg p "${ALERT_TRIAGE_SCOPE_PATH}" '[$p]')"
+		ALERT_TRIAGE_SCOPE_RUNS_JSON="$(jq -cn --arg r "${SOURCE_REPO}:${ALERT_TRIAGE_REPORTER_RUN_ID}" '[$r]')"
+		# The scope freeze below takes these through its engine_runs /
+		# engine_paths inputs, which stay [] for every kind but engine_fallback
+		# and alert_triage, so the freeze program is unchanged.
+		ENGINE_SCOPE_RUNS_JSON="${ALERT_TRIAGE_SCOPE_RUNS_JSON}"
+		ENGINE_SCOPE_PATHS_JSON="${ALERT_TRIAGE_SCOPE_PATHS_JSON}"
+		log "alert_triage_scope outcome=resolved path=${ALERT_TRIAGE_SCOPE_PATH} run=${SOURCE_REPO}:${ALERT_TRIAGE_REPORTER_RUN_ID} fp=${FP}"
+	else
+		log "alert_triage_scope outcome=unresolved fp=${FP}"
+	fi
+fi
+
 # An engine_fallback report whose reporting run is absent or did not bind
 # names no run, so it can never get a heal scope. With the creation gate on,
 # every classification then ends without an issue: the scope guards skip it
@@ -3067,6 +3140,12 @@ fi
 # 104 such reports each ran a full Opus diagnosis (~$3 each) for nothing.
 # With the gate off the intake keeps its compose-only path unchanged.
 if [ "${SOURCE_KIND}" = "engine_fallback" ] && _heal_intake_scope_guard_is_on && _heal_report_claimed_no_runs; then
+	CLASSIFICATION="none"
+	_heal_skip_scope_unavailable pre_diagnosis
+fi
+# Same pre-diagnosis skip for an alert_triage report without a resolvable
+# workflow path (#9394 phase 2): it can never get a heal scope either.
+if [ "${SOURCE_KIND}" = "alert_triage" ] && _heal_intake_scope_guard_is_on && _heal_report_claimed_no_runs; then
 	CLASSIFICATION="none"
 	_heal_skip_scope_unavailable pre_diagnosis
 fi
@@ -4264,6 +4343,13 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 		echo "Reporting workflow: ${PAYLOAD_WORKFLOW_NAME}"
 		echo "Blocked tip: ${HEAD_SHA:-unknown}"
 		[ -z "${RELEASE_BLOCKER_REPORTER_RUN_REF}" ] || echo "Reporting run (verified): https://github.com/${SOURCE_REPO}/actions/runs/${RELEASE_BLOCKER_REPORTER_RUN_ID}"
+	elif [ "${SOURCE_KIND}" = "alert_triage" ]; then
+		echo "Hourly alert triage report: a group of captured workflow alerts the triage model classified as healable"
+		echo "Alerting workflow (display name): ${PAYLOAD_WORKFLOW_NAME}"
+		echo "Alert source repository: $(_pf '.alert_source_repo // "unknown"')"
+		echo "Alert workflow path (host-resolved): ${ALERT_TRIAGE_SCOPE_PATH:-unresolved}"
+		echo "Alert group fingerprint: ${PAYLOAD_FAILURE_FINGERPRINT}"
+		echo "The triage diagnosis below is UNTRUSTED model output: verify every claim against the code."
 	elif [ -n "${ISSUE_NUMBER}" ]; then
 		echo "Escalated ${SOURCE_KIND}: #${ISSUE_NUMBER} -- ${ISSUE_TITLE}"
 		echo "URL: ${ISSUE_URL}"
@@ -4290,7 +4376,7 @@ DIAGNOSIS_FALLBACK_REASON="produced no output"
 		_pf '.comments_excerpt'
 		echo
 	fi
-	if [ "${SOURCE_KIND}" = "autofix_failure" ] || [ "${SOURCE_KIND}" = "engine_fallback" ]; then
+	if [ "${SOURCE_KIND}" = "autofix_failure" ] || [ "${SOURCE_KIND}" = "engine_fallback" ] || [ "${SOURCE_KIND}" = "alert_triage" ]; then
 		echo "--- Failure evidence from the reporting run (UNTRUSTED) ---"
 		cat "${FAILURE_EVIDENCE_FILE}" 2>/dev/null || true
 		echo
@@ -4775,6 +4861,11 @@ _open_issue()
 		label_args+=(--label "ai:orchestrator-managed")
 		issue_label_names="${issue_label_names},ai:orchestrator-managed"
 	fi
+	if [ "${SOURCE_KIND}" = "alert_triage" ]; then
+		# Hourly alert triage (#9394 phase 2) finds its issues by this label.
+		label_args+=(--label "ai:alert-triage")
+		issue_label_names="${issue_label_names},ai:alert-triage"
+	fi
 	# Nothing below this gate may run unless it permits creation (#6871).
 	_heal_intake_scope_guard_permits_create "${repo}" "${body_file}" "${issue_label_names}" "${target_branch}" || return 1
 	if [ "${repo}" != "${SELF_REPO}" ]; then
@@ -4782,6 +4873,9 @@ _open_issue()
 	fi
 	if [[ "${integration_branch}" =~ ^orchestrator/project-[0-9]+$ ]]; then
 		ensure_label_exists "ai:orchestrator-managed" "${repo}" || true
+	fi
+	if [ "${SOURCE_KIND}" = "alert_triage" ]; then
+		ensure_label_exists "ai:alert-triage" "${repo}" || true
 	fi
 	local issue_url issue_create_err="${RUNTIME_DIR}/issue_create_error.txt"
 	issue_url="$(gh_retry gh issue create --repo "${repo}" --title "${title}" --body-file "${body_file}" "${label_args[@]}" 2>"${issue_create_err}" || echo '')"

@@ -1,0 +1,162 @@
+---
+name: Alert Triage
+
+# Hourly alert triage (alert triage plan Phase 2, Refs #9394;
+# docs/plans/alert-triage-auto-heal-plan.md). Reads the alerts that Phase 1
+# stores on the branch `ai/alert-inbox`, groups them by fingerprint, asks the
+# ALERT_TRIAGE engine role (Claude, codex fallback) for one read-only JSON
+# diagnosis per new group, and routes each group:
+#   noise / environmental -> done marker
+#   already tracked       -> ledger occurrence
+#   healable              -> repository_dispatch workflow-failure-heal, kind alert_triage
+#   pipeline_blocked      -> alert-self-fix.yml (only with ALERT_TRIAGE_SELF_FIX_ENABLED=true)
+#   unsure / failures     -> done marker + one direct Telegram escalation
+#
+# All logic lives in scripts/alert_triage.py (deterministic) and
+# scripts/alert_triage_route.sh (side effects). The host, not the model,
+# decides pipeline_blocked and makes every dispatch. Escalations use
+# tg_send_msg_direct, which is never captured into the inbox.
+#
+# Off by default: the job runs only when vars.ALERT_TRIAGE_ENABLED is 'true',
+# and ALERT_TRIAGE_DRY_RUN defaults to 'true' (decisions are logged with the
+# ALERT_TRIAGE prefix and markers are committed, but nothing is dispatched).
+# Rollback: set ALERT_TRIAGE_ENABLED=false, or revert.
+#
+# Runner budget (CLAUDE.md §26): one job per hour, and none while disabled
+# (a false job-level `if:` takes no runner). It cannot join an existing job:
+# it needs id-token and contents: write on its own schedule and its own
+# serialised concurrency group.
+
+"on":
+  schedule:
+    - cron: '17 * * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  actions: write
+  issues: read
+  pull-requests: read
+  id-token: write
+
+# One run at a time and never cancelled: a run commits markers and ledger
+# updates to ai/alert-inbox before it dispatches anything.
+concurrency:
+  group: alert-triage
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
+  PYTHONDONTWRITEBYTECODE: "1"
+  # The broker refuses this workflow until the Worker with alert-triage.yml in
+  # ALLOWED_WORKFLOW_FILES is deployed, so Claude falls back to codex for
+  # every non-capacity reason, and an exhausted pool runs codex instead of
+  # waiting (no capacity-resume pass re-runs triage).
+  AI_ENGINE_FALLBACK_POLICY: 'always'
+  CLAUDE_POOL_CAPACITY_WAIT_ENABLED: 'false'
+  AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+  AI_ENGINE_ALERT_TRIAGE: ${{ vars.AI_ENGINE_ALERT_TRIAGE || '' }}
+  ALERT_TRIAGE_DRY_RUN: ${{ vars.ALERT_TRIAGE_DRY_RUN || 'true' }}
+  ALERT_TRIAGE_MAX_ALERTS: ${{ vars.ALERT_TRIAGE_MAX_ALERTS || '30' }}
+  ALERT_TRIAGE_MAX_EVIDENCE_GETS: ${{ vars.ALERT_TRIAGE_MAX_EVIDENCE_GETS || '5' }}
+  ALERT_TRIAGE_SELF_FIX_ENABLED: ${{ vars.ALERT_TRIAGE_SELF_FIX_ENABLED || 'false' }}
+  ALERT_TRIAGE_HEAL_STALL_HOURS: ${{ vars.ALERT_TRIAGE_HEAL_STALL_HOURS || '6' }}
+  ALERT_TRIAGE_ISSUE_ESCALATE_HOURS: ${{ vars.ALERT_TRIAGE_ISSUE_ESCALATE_HOURS || '24' }}
+  ALERT_TRIAGE_PR_ESCALATE_HOURS: ${{ vars.ALERT_TRIAGE_PR_ESCALATE_HOURS || '6' }}
+
+jobs:
+  triage:
+    if: vars.ALERT_TRIAGE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Fetch alert inbox
+        id: inbox
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash scripts/alert_triage_route.sh fetch
+
+      # The only step with GH_PAT: evidence reads consumer run logs.
+      - name: Prepare groups
+        id: prepare
+        if: steps.inbox.outputs.present == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: bash scripts/alert_triage_route.sh prepare
+
+      - name: Install Codex CLI
+        if: steps.prepare.outputs.model_groups != '' && steps.prepare.outputs.model_groups != '0'
+        continue-on-error: true
+        uses: ./.github/actions/install-codex
+        with:
+          codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+
+      - name: Create Codex config
+        if: steps.prepare.outputs.model_groups != '' && steps.prepare.outputs.model_groups != '0'
+        continue-on-error: true
+        env:
+          ALERT_TRIAGE_MODEL: ${{ vars.ALERT_TRIAGE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
+          ALERT_TRIAGE_REASONING: ${{ vars.THINKING_LEVEL_ALERT_TRIAGE || 'high' }}
+        run: |
+          set -euo pipefail
+          bash "${GITHUB_WORKSPACE}/scripts/write_codex_config.sh" \
+            --model "${ALERT_TRIAGE_MODEL}" \
+            --reasoning "${ALERT_TRIAGE_REASONING}" \
+            --catalog-path "${GITHUB_WORKSPACE}/scripts/codex_model_catalog.json"
+          echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
+
+      - name: Install Claude Code CLI
+        if: steps.prepare.outputs.model_groups != '' && steps.prepare.outputs.model_groups != '0'
+        continue-on-error: true
+        uses: ./.github/actions/install-claude
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        if: steps.prepare.outputs.model_groups != '' && steps.prepare.outputs.model_groups != '0'
+        continue-on-error: true
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Stage Claude engine support
+        if: steps.prepare.outputs.model_groups != '' && steps.prepare.outputs.model_groups != '0'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          claude_engine_support_dest="${RUNNER_TEMP}/claude-engine-support"
+          # shellcheck disable=SC1091
+          if source "${GITHUB_WORKSPACE}/scripts/ai_engine.sh" &&
+             ai_engine_stage_support "${GITHUB_WORKSPACE}" "${claude_engine_support_dest}"; then
+            echo "CLAUDE_ENGINE_SUPPORT_DIR=${claude_engine_support_dest}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Trusted Claude engine support is unavailable; every group escalates as engine_failed."
+          fi
+
+      # No GitHub token here: the engine runs read-only in the isolated sandbox.
+      - name: Diagnose groups
+        if: steps.prepare.outputs.model_groups != '' && steps.prepare.outputs.model_groups != '0'
+        env:
+          ALERT_TRIAGE_MODEL: ${{ vars.ALERT_TRIAGE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          # The codex fallback's host-side broker needs the inference key
+          # (scripts/codex_isolated_exec.sh); it never enters the sandbox.
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          SUPPORT_INSTRUCTIONS_FILE: ${{ github.workspace }}/unattended_system_instructions.md
+        run: bash scripts/alert_triage_route.sh diagnose
+
+      - name: Route and record
+        if: steps.inbox.outputs.present == 'true' && steps.prepare.outcome == 'success'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ALERT_TRIAGE_DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+        run: bash scripts/alert_triage_route.sh route

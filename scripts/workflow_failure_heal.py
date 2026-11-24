@@ -81,7 +81,7 @@ MAIN_CI_WORKFLOW_NAMES: tuple[str, ...] = ("CI",)
 # project validations fail on it.
 SCHEDULED_CHECK_WORKFLOW_NAMES: tuple[str, ...] = ("Nightly Validation Self-Test",)
 
-SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure", "engine_fallback", "synced_security_finding", "validation_failure", "synced_check_failure", "release_blocker")
+SOURCE_KINDS = ("issue", "pull_request", "workflow_run", "autofix_failure", "phase_failure", "engine_fallback", "synced_security_finding", "validation_failure", "synced_check_failure", "release_blocker", "alert_triage")
 
 # A refused AI engine fallback (plan item 3e, D1): Claude was unavailable for a
 # non-capacity reason and the role failed instead of running codex. The report
@@ -241,6 +241,26 @@ SYNCED_CHECK_PAYLOAD_KEYS = frozenset({
 	"schema_version", "source_repo", "source_kind", "pr_number", "check_name", "check_run_ids", "paths",
 	"cause_path", "head_sha", "wrapper_sha", "reporter_run_url", "reporter_run_id", "reported_at", "run_refs",
 })
+# Hourly alert triage reports (alert triage plan Phase 2, Refs #9394): sent
+# only by this repository's alert-triage.yml (scripts/alert_triage_route.sh)
+# for a `healable` alert group. The heal scope comes only from the
+# host-resolved alert_workflow_path; the diagnosis is untrusted evidence.
+ALERT_TRIAGE_FAILURE_REASON = "alert_triage"
+ALERT_TRIAGE_PAYLOAD_KEYS = frozenset({
+	"schema_version", "source_repo", "source_kind", "workflow_name", "failure_fingerprint", "failure_evidence",
+	"alert_source_repo", "alert_workflow_path", "reporter_run_url", "reporter_run_id", "reported_at",
+})
+# Keys validate_payload itself adds to a normalised alert_triage report: the
+# intake re-validates its own normalised payload (compose-issue), so these are
+# accepted too. The alert_triage branch forces or overwrites every one of them
+# (run_refs must stay empty), so no reporter-supplied value survives.
+ALERT_TRIAGE_NORMALIZED_KEYS = frozenset({
+	"comments_excerpt", "conclusion", "failure_reason", "failure_streak", "head_branch", "head_sha", "issue_excerpt",
+	"issue_number", "issue_title", "issue_url", "label", "labels", "run_refs", "source_gen", "source_root", "wrapper_sha",
+})
+ALERT_TRIAGE_EVIDENCE_MAX_BYTES = 12000
+_ALERT_TRIAGE_WORKFLOW_PATH_RE = re.compile(r"^\.github/workflows/[A-Za-z0-9._-]{1,100}\.ya?ml$")
+_ALERT_TRIAGE_WORKFLOW_NAME_RE = re.compile(r"^[A-Za-z0-9 ._:/()\[\]#@+-]{1,200}$")
 _SYNCED_CHECK_NAME_DROP_RE = re.compile(r"[^A-Za-z0-9 ._:/()-]")
 AFFECTED_FILES_BEGIN = "AFFECTED_FILES_BEGIN"
 AFFECTED_FILES_END = "AFFECTED_FILES_END"
@@ -474,6 +494,8 @@ REPORT_IDENTITY_WORKFLOW_BY_KIND = {
 	# Release-health blocker producers (stuck-states P4, Phases 2 and 3): the
 	# auto-release / promotion workflows and the reusable poller.
 	"release_blocker": ("auto-release-stable.yml", "promote-main-to-stable.yml", "orchestrate_poll.yml"),
+	# This repository's hourly alert triage run (#9394 phase 2).
+	"alert_triage": ("alert-triage.yml",),
 }
 # Kinds whose run_refs the intake's provenance gate already binds to the
 # source repository (run repository, workflow path, failure, issue/PR link);
@@ -3181,6 +3203,33 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 		failure_reason = VALIDATION_FAILURE_REASON
 		failure_streak = 1
 		failure_fingerprint = None
+	elif kind == "alert_triage":
+		extra_keys = sorted(key for key in payload if key not in ALERT_TRIAGE_PAYLOAD_KEYS and key not in ALERT_TRIAGE_NORMALIZED_KEYS)
+		if extra_keys:
+			raise ValueError("alert_triage reports carry no other fields: " + ", ".join(safe_token(key, 40) or "?" for key in extra_keys[:5]))
+		if payload.get("run_refs"):
+			raise ValueError("alert_triage reports carry no run references")
+		if failure_fingerprint is None:
+			raise ValueError("failure_fingerprint must be a 64-hex alert triage fingerprint")
+		raw_workflow_name = payload.get("workflow_name")
+		if not (isinstance(raw_workflow_name, str) and _ALERT_TRIAGE_WORKFLOW_NAME_RE.match(raw_workflow_name)):
+			raise ValueError("workflow_name is missing or malformed for alert_triage reports")
+		if not is_valid_repo_slug(payload.get("alert_source_repo")):
+			raise ValueError("alert_source_repo must be an owner/name slug")
+		raw_workflow_path = payload.get("alert_workflow_path")
+		if raw_workflow_path is not None and not (isinstance(raw_workflow_path, str) and _ALERT_TRIAGE_WORKFLOW_PATH_RE.match(raw_workflow_path)):
+			raise ValueError("alert_workflow_path must be a .github/workflows/<file>.yml path")
+		if not isinstance(payload.get("failure_evidence", ""), str):
+			raise ValueError("failure_evidence must be a string")
+		raw_reporter_run_id = payload.get("reporter_run_id")
+		if not (isinstance(raw_reporter_run_id, (str, int)) and not isinstance(raw_reporter_run_id, bool) and re.fullmatch(r"[1-9][0-9]{0,19}", str(raw_reporter_run_id))):
+			raise ValueError("reporter_run_id must be a positive integer")
+		if payload.get("reporter_run_url") != f"https://github.com/{repo}/actions/runs/{raw_reporter_run_id}":
+			raise ValueError("reporter_run_url must be the canonical URL of reporter_run_id in source_repo")
+		issue_number = None
+		label = None
+		failure_reason = ALERT_TRIAGE_FAILURE_REASON
+		failure_streak = 1
 	elif kind == "phase_failure":
 		if issue_number is None:
 			raise ValueError("issue_number is required for phase_failure reports")
@@ -3312,6 +3361,30 @@ def validate_payload(payload: Any) -> dict[str, Any]:
 			"failure_evidence": "",
 			"reported_at": _iso(_utc_now()),
 			"findings": validate_synced_security_findings(payload.get("findings")),
+		})
+	if kind == "alert_triage":
+		# The triage diagnosis is untrusted evidence for the diagnosis prompt
+		# only: redacted, byte-capped, never a scope input.
+		alert_evidence = redact_secrets(sanitize_text(payload.get("failure_evidence"), ALERT_TRIAGE_EVIDENCE_MAX_BYTES))
+		alert_evidence = alert_evidence.encode("utf-8")[:ALERT_TRIAGE_EVIDENCE_MAX_BYTES].decode("utf-8", "ignore")
+		normalized.update({
+			"issue_title": "",
+			"issue_url": None,
+			"labels": [],
+			"source_gen": None,
+			"source_root": None,
+			"issue_excerpt": "",
+			"comments_excerpt": "",
+			"workflow_name": payload["workflow_name"],
+			"head_branch": None,
+			"head_sha": None,
+			"conclusion": None,
+			"wrapper_sha": None,
+			"failure_evidence": alert_evidence,
+			"alert_source_repo": payload["alert_source_repo"],
+			"alert_workflow_path": payload.get("alert_workflow_path"),
+			"reporter_run_id": str(payload["reporter_run_id"]),
+			"reported_at": _iso(_utc_now()),
 		})
 	if kind == "synced_check_failure":
 		# Only validated pointers reach the public issue (no log or diagnosis text).
@@ -6720,6 +6793,11 @@ def _context_lines(payload: dict[str, Any], *, run_summaries: list[dict[str, Any
 		reporter_run = _engine_reporter_run(payload.get("reporter_run"))
 		if reporter_run:
 			lines.append(f"- **Reporting run:** https://github.com/{payload['source_repo']}/actions/runs/{reporter_run['run_id']}/attempts/{reporter_run['run_attempt']}")
+	if kind == "alert_triage":
+		lines.append(f"- **Alert triage fingerprint:** `{safe_token(payload.get('failure_fingerprint'), 64)}`")
+		lines.append(f"- **Alert source repository:** `{payload.get('alert_source_repo')}`")
+		if payload.get("alert_workflow_path"):
+			lines.append(f"- **Alert workflow path (host-resolved):** `{payload['alert_workflow_path']}`")
 	if kind == "release_blocker":
 		lines.append(f"- **Blocker reason:** `{safe_token(payload.get('blocker_reason'), 80) or 'unknown'}`")
 		blocker_age = _release_blocker_age(payload.get("blocker_age_secs"))
