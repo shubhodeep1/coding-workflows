@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION (advisory, not a finding): scripts/review_autofix_step_prepush_test_gate.sh | location: `review_prepush_test_gate_final_ci_now_green`, the `--jq` filter of the statuses read (about line 1317)\n  ISSUE: the helper compares the status `created_at` (`.[0].at`) against the marker time without first checking that it is ISO, while the gate checks the same field with a strict ISO regex. A malformed value that sorts above the marker time would read as green and drop a repair. There is no evidence GitHub ever returns such a value.\n  FIX: add `and (.[0].at | test(\"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$\"))` to the jq `if` condition; estimated lines changed: 1; HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n- HARDENING_SUGGESTION (advisory, not a finding): scripts/review_autofix_step_prepush_test_gate.sh | location: line 1318 (review_prepush_test_gate_final_ci_now_green, jq filter)\n  ISSUE: The jq filter does not explicitly validate the format of the `ci/final` `created_at` timestamp.\n  FIX: add timestamp format validation to the jq filter, e.g., `and (.[0].at | test(\"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$\"))`; estimated lines changed: 1-2; HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- HARDENING_SUGGESTION (advisory, not a finding): scripts/review_autofix_step_prepush_test_gate.sh | location: review_prepush_test_gate_final_ci_now_green, the gh api call near line 1317\n  ISSUE: The helper validates the marker time with a strict ISO regex before splicing it into the jq filter, but does not validate the API-returned `created_at`. The gate's equivalent check (`scripts/review_autofix_step_evaluate_gate.sh` around line 1937 per the LAST RUN DIFF context) applies the same strict ISO regex to both. A malformed `created_at` that sorts lexically above the marker time would report `green` and drop a repair the gate had selected.\n  FIX: add `and (.[0].at | test(\"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$\"))` to the jq `if` condition; estimated lines changed: 1-2; HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n- HARDENING_SUGGESTION (advisory, not a finding): scripts/review_autofix_step_prepush_test_gate.sh | location: Line 1318, `review_prepush_test_gate_final_ci_now_green`\n  ISSUE: The filter compares the status's `created_at` lexically without validating its format. A malformed value that sorts after the valid marker timestamp returns `green` and skips the repair. The gate validates this timestamp before comparing it.\n  FIX: require `.[0].at` to match the gate's timestamp pattern before comparing it with the marker time; estimated lines changed: 1-2; HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING_SUGGESTION (advisory, not a finding; the reviewer explicitly did not raise it as a lens finding): scripts/review_autofix_step_prepush_test_gate.sh | location: line ~1317-1318, the jq filter in `review_prepush_test_gate_final_ci_now_green`\n  ISSUE: The status `created_at` (`.[0].at`) is compared to the strictly-validated marker time without itself being validated as ISO. The gate validates the same field with a regex (scripts/review_autofix_step_evaluate_gate.sh:1937); the helper does not.\n  FIX: add `and (.[0].at | test(\"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$\"))` to the jq condition; estimated lines changed: 1-2; HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b29c435211b9c1118f63c56738693af5541118b2556f3001324a5990d4cc5d27",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10034,
+    "run_id": "45465806080",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45465806080",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124204823_c675b76ef9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10034,
+    "run_id": "45465806080"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-24T20:48:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
