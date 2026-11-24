@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_orchestrate_poll_process.py:16905-17032 | severity=high | confidence=3\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The renamed `test_zz_pr_ai_hold_*` poller-spawning tests are appended to the tail of the CI-sorted list, adding runtime to orchestrate-poll groups (two land in group 4), and `orchestrate-poll (4)` ended cancelled, which fails the aggregate `lint` check.\n  WHY: Group 4 has a 20-minute `timeout-minutes` and is the most step-pinned group, so the added runtime may push it over budget and leave the required merge gate red. Severity disagreement: minimax_minimax-m3 said NIT, and openai_gpt-6-luna and z-ai_glm-5_3-flash said MAJOR; the highest is used. The cause is unproven, because the cancellation may instead come from a superseding run (45506845534).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_orchestrate_poll_process.py:16844-17032 | severity=NIT | confidence=3\n  PROBLEM: The renames keep existing shard assignments, but two new tests (`test_zz_pr_ai_hold_managed_skip_leaves_held_pr_in_awaiting_approval_open` and `test_zz_pr_ai_hold_standalone_exhausted_close_still_closes_unheld_pr`) land in group 4, which was already near its 20-minute budget, so `orchestrate-poll (4)` was cancelled and the aggregate `lint` check failed.\n  WHY: If `orchestrate-poll (4)` hits `timeout-minutes: 20`, the lint aggregator rolls up the failure and the required checks stay red. The renames are the best available fix under the constraints but not a complete resolution.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_orchestrate_poll_process.py:16905-17032 | severity=MAJOR | confidence=3\n  PROBLEM: The `zz` names append the tests to the sorted CI list, placing two more full-poller tests in `orchestrate-poll (4)`, which already runs extra pinned steps under a 20-minute timeout (`.github/workflows/ci.yml:3436-3475`); that shard was cancelled and the aggregate `lint` check failed.\n  WHY: The shard does not complete within the CI budget, leaving the required aggregate check failed.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_orchestrate_poll_process.py:16905-17032 | severity=MAJOR | confidence=3\n  PROBLEM: The rename places all eight poller-spawning `test_zz_pr_ai_hold_*` tests at the tail of the CI-sorted list, adding their runtime to the groups they are dealt into. `orchestrate-poll (4)` ended cancelled with no failing assertion, which fails the aggregate `lint` check (\"CI jobs that did not succeed: orchestrate-poll\"). Cited config: `.github/workflows/ci.yml:3475` (`timeout-minutes: 20`), 3473-3474 (matrix `poll-group: [0,1,2,3,4]`), 3459-3460 (group 4 pins extra steps).\n  WHY: If the cancellation was the 20-minute timeout, every later CI run on this head reproduces it. If it was a superseding-run cancellation, in-progress run 45506845534 will show it. The failure on the head is proven either way, but the timeout cause is not.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d9788df26ae05d1c317d6f9c4d028b3916a3b0f14e92bdf46949e67ea7c08e11",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9832,
+    "run_id": "45497660671",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "github-actions[bot]",
+    "run_attempt": 1,
+    "run_id": "45497660671",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124235750_dd1f1706af",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9832,
+    "run_id": "45497660671"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-24T23:57:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
