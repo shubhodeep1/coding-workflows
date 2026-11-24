@@ -301,6 +301,11 @@ declare -A BAIT_REVIEW_COVERAGE_CACHE=()
 declare -A BAIT_REVIEW_UNKNOWN_COUNTS=()
 
 . ./scripts/comprehensive_test_and_release_gh_api.sh
+# Every gh_api_safe read below is a per-poll read of the wait loop, so this
+# step opts them all in to the job token (issue #9888). gh_api_safe uses it
+# only for reads of this repository and only when the step exports
+# GH_READ_TOKEN; otherwise (and on a 401/403/404/rate limit) it uses the PAT.
+GH_API_SAFE_USE_READ_TOKEN="${GH_API_SAFE_USE_READ_TOKEN:-1}"
 
 # The runs API reports the trigger SHA, not the SHA checked out by
 # codex-agent. Only a completed job log can prove leg (b) coverage.

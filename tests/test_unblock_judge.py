@@ -1226,6 +1226,67 @@ def test_ci_owner_candidate_refuses_conflicting_pr_numbers_and_the_plan_stays_as
 	assert actions.plan(_verdict("reissue", instructions="spec"), _ctx(ci_owner={"state": "unverified", "number": 6786})) == baseline
 
 
+BASE_KEYED_HEADER = [
+	"<!-- check-failure-triage:fp=" + "a" * 64 + " -->",
+	"<!-- check-failure-triage:gen=1 -->",
+	"<!-- check-failure-triage:root=" + "b" * 64 + " -->",
+	"<!-- check-failure-triage:pr=6786 -->",
+]
+BASE_KEYED_REST = [
+	"## CI failure on `main`",
+	"",
+	"- **Pull request:** https://github.com/o/r/pull/6786 (`ai/issue-6789`)",
+	"- **Base branch:** `main`",
+]
+BASE_KEYED_BODY = "\n".join(BASE_KEYED_HEADER + ["<!-- check-failure-triage:base=main -->"] + BASE_KEYED_REST)
+
+
+def test_ci_owner_candidate_returns_base_keyed_for_a_line5_base_marker() -> None:
+	# #10040: a triage issue keyed on a failing default branch (#9674) names
+	# its PR only as an example; it has no owner, so the default branch is kept.
+	for labels in (["ai:check-triage"], ["ai:check-triage-escalated"], []):
+		assert actions.ci_owner_candidate(BASE_KEYED_BODY, labels, "o/r") == {"pr": None, "reason": "base_keyed"}
+	crlf = BASE_KEYED_BODY.replace("\n", "\r\n")
+	assert actions.ci_owner_candidate(crlf, ["ai:check-triage"], "o/r") == {"pr": None, "reason": "base_keyed"}
+	nested = "\n".join(BASE_KEYED_HEADER + ["<!-- check-failure-triage:base=release/v2.1 -->"] + BASE_KEYED_REST)
+	assert actions.ci_owner_candidate(nested, [], "o/r") == {"pr": None, "reason": "base_keyed"}
+	assert actions._check_triage_base_keyed_ref(nested) == "release/v2.1"
+	# A non-CI body keeps its own reason.
+	assert actions.ci_owner_candidate("plain body", [], "o/r")["reason"] == "not_ci_failure"
+
+
+def _base_keyed_variant(case: str) -> str:
+	base = "<!-- check-failure-triage:base=main -->"
+	if case == "line6":
+		return "\n".join(BASE_KEYED_HEADER + ["", base] + BASE_KEYED_REST)
+	if case == "line1":
+		return "\n".join([base] + BASE_KEYED_HEADER + BASE_KEYED_REST)
+	if case == "dotdot":
+		return "\n".join(BASE_KEYED_HEADER + ["<!-- check-failure-triage:base=a..b -->"] + BASE_KEYED_REST)
+	if case == "space":
+		return "\n".join(BASE_KEYED_HEADER + ["<!-- check-failure-triage:base=ma in -->"] + BASE_KEYED_REST)
+	if case == "tilde":
+		return "\n".join(BASE_KEYED_HEADER + ["<!-- check-failure-triage:base=main~1 -->"] + BASE_KEYED_REST)
+	if case == "too_long":
+		return "\n".join(BASE_KEYED_HEADER + ["<!-- check-failure-triage:base=" + "m" * 201 + " -->"] + BASE_KEYED_REST)
+	if case == "bad_fp":
+		header = ["<!-- check-failure-triage:fp=" + "a" * 63 + " -->"] + BASE_KEYED_HEADER[1:]
+		return "\n".join(header + [base] + BASE_KEYED_REST)
+	if case == "leading_space":
+		return "\n".join(BASE_KEYED_HEADER + [" " + base] + BASE_KEYED_REST)
+	raise AssertionError(case)
+
+
+@pytest.mark.parametrize("case", ["line6", "line1", "dotdot", "space", "tilde", "too_long", "bad_fp", "leading_space"])
+def test_ci_owner_candidate_ignores_a_misplaced_or_invalid_base_marker(case: str) -> None:
+	without_base = "\n".join(BASE_KEYED_HEADER + BASE_KEYED_REST)
+	expected = {"pr": 6786, "reason": "marker"}
+	assert actions.ci_owner_candidate(without_base, ["ai:check-triage"], "o/r") == expected
+	body = _base_keyed_variant(case)
+	assert actions._check_triage_base_keyed_ref(body) is None
+	assert actions.ci_owner_candidate(body, ["ai:check-triage"], "o/r") == expected
+
+
 def test_merged_green_owner_supersedes_the_reissue() -> None:
 	ops = actions.plan(_verdict("reissue", instructions="spec"), _ctx(ci_owner=_owner("superseded")))
 	assert [op["op"] for op in ops] == ["comment", "close"]
@@ -1279,6 +1340,14 @@ def test_ci_owner_cli_reports_the_pr_and_declared_branch(tmp_path: Path) -> None
 	result = subprocess.run([sys.executable, str(ACTIONS), "ci-owner", "--item-file", str(item), "--repo", "o/r"], capture_output=True, text=True, check=False)
 	assert result.returncode == 0, result.stderr
 	assert json.loads(result.stdout) == {"pr": 6786, "reason": "marker", "declared_branch": "orchestrator/project-9"}
+
+
+def test_ci_owner_cli_reports_base_keyed(tmp_path: Path) -> None:
+	item = tmp_path / "item.json"
+	item.write_text(json.dumps({"body": BASE_KEYED_BODY, "labels": [{"name": "ai:check-triage"}, {"name": "ai:blocked"}]}), encoding="utf-8")
+	result = subprocess.run([sys.executable, str(ACTIONS), "ci-owner", "--item-file", str(item), "--repo", "o/r"], capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert json.loads(result.stdout) == {"pr": None, "reason": "base_keyed", "declared_branch": None}
 
 
 def test_followup_posts_the_reset_for_the_stop() -> None:
@@ -3635,6 +3704,35 @@ def test_open_owner_pr_reissue_records_its_head_branch(tmp_path: Path) -> None:
 	body = state["created"][0]["body"]
 	assert body.startswith("<!-- check-failure-triage:pr=6786 -->\n")
 	assert body.endswith("- Integration branch: `ai/issue-6789`")
+
+
+def _owner_pr_reads(state: dict) -> list[list[str]]:
+	return [call for call in state["calls"] if "repos/o/r/pulls/6786" in call]
+
+
+def test_base_keyed_ci_issue_reissue_stays_on_the_default_branch(tmp_path: Path) -> None:
+	# #10040: the example PR is open, but a base-keyed issue's fix belongs on
+	# the default branch; the re-issue carries no owner marker or branch line.
+	item = dict(CI_ISSUE, body=BASE_KEYED_BODY, labels=[{"name": "ai:blocked"}, {"name": "ai:check-triage"}])
+	open_pr = _owner_pr(state="open", merged=False)
+	result, state = _judge(tmp_path, item, verdict=REISSUE, FAKE_GH_OWNER_PR=json.dumps(open_pr), FAKE_GH_OWNER_REF="1")
+	assert "op=ci_owner outcome=none reason=base_keyed" in result.stdout, result.stdout + result.stderr
+	assert "op=ci_owner outcome=open" not in result.stdout
+	assert len(state["created"]) == 1
+	body = state["created"][0]["body"]
+	assert "check-failure-triage:pr=" not in body
+	assert "Integration branch" not in body
+	assert _owner_pr_reads(state) == []
+	# The example PR merged green: still no superseded close, a re-issue instead.
+	merged_dir = tmp_path / "merged"
+	merged_dir.mkdir()
+	result, state = _judge(merged_dir, item, verdict=REISSUE, FAKE_GH_OWNER_PR=json.dumps(_owner_pr()), FAKE_GH_OWNER_CHECKS=GREEN_CHECKS,
+		FAKE_GH_OWNER_RUNS=CI_RUNS, AUTO_MERGE_REQUIRED_CI_CHECK="CI", AUTO_MERGE_WAIT_WORKFLOWS="CI")
+	assert "op=ci_owner outcome=none reason=base_keyed" in result.stdout, result.stdout + result.stderr
+	assert "outcome=superseded" not in result.stdout
+	assert len(state["created"]) == 1 and "check-failure-triage:pr=" not in state["created"][0]["body"]
+	assert not any(comment["body"].startswith("Superseded:") for comment in state["comments"])
+	assert _owner_pr_reads(state) == []
 
 
 # Q54: an automation-path latch the current guard would not set is re-granted
