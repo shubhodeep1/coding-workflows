@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/auto_release_stable.sh:183-190 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The fallback `zombie_queued_live_count` does not check the repository name (`${1}`) against the pattern `^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`, which the main helper in `scripts/gh_helpers.sh` enforces.\n  WHY: Arbitrary input in the repository-name argument could cause unexpected API requests or command injection; the reviewer notes the caller currently passes `GITHUB_REPOSITORY`, which mitigates this (reviewer severity NIT, mapped to low).\n- scripts/auto_release_stable.sh:185-189 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The value read from `zq_fallback_total` is not converted to base 10 with `10#` or `printf %d`, so bash may read a leading-zero value as octal.\n  WHY: A total such as \"08\" or \"09\" could be invalid octal or give the wrong integer in expressions like `[ \"${queued_runs}\" -ge \"${AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS}\" ]` (reviewer severity NIT, mapped to low).\n- scripts/gh_helpers.sh:4522 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The clamp `if [ \"${_zq_wedged}\" -gt \"${_zq_total}\" ]; then _zq_wedged=\"${_zq_total}\"; fi` depends on two separate API calls made at different times, so the two reads are not atomic.\n  WHY: The clamp stops the `live` count from going negative, but `live` can still differ from the real state at any single moment; the reviewer accepts this for a heuristic back-off (reviewer severity NIT, mapped to low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The count comes from one helper in scripts/gh_helpers.sh, next to the #9473 helpers, so a later caller that needs queue depth does not read the raw total again.\"\n  expected_change_site: All callers of `gh api \"repos/${GITHUB_REPOSITORY}/actions/runs?status=queued&per_page=1\"` within `scripts/`.\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The raw `queued` total pattern still appears in other scripts (e.g., `scripts/check_stale_queued.sh` and related workflow context not edited in this PR); likely an intentional scope limit, but G2 is left partly unmet.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/auto_release_stable.sh:lines 183-190 (fallback `zombie_queued_live_count`) | severity=NIT | confidence=4\n  PROBLEM: The fallback `zombie_queued_live_count` function does not validate the repository name (`${1}`) against the repository-name pattern (`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`) that the main helper enforces in `scripts/gh_helpers.sh`.\n  WHY: Arbitrary input in the repository-name argument could cause unexpected API requests or command injection; the caller currently passes `GITHUB_REPOSITORY`, which mitigates this.\n- scripts/auto_release_stable.sh:185-189 (fallback `zombie_queued_live_count`) | severity=NIT | confidence=4\n  PROBLEM: The value read from `zq_fallback_total` is not converted to base 10 using `10#` or `printf %d`, so a leading zero could be read as octal.\n  WHY: A total like \"08\" or \"09\" could be invalid octal or the wrong integer in `[ \"${queued_runs}\" -ge \"${AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS}\" ]`.\n- scripts/gh_helpers.sh:4522 | severity=NIT | confidence=3\n  PROBLEM: The clamp `if [ \"${_zq_wedged}\" -gt \"${_zq_total}\" ]; then _zq_wedged=\"${_zq_total}\"; fi` relies on two separate, non-atomic API calls made at different times.\n  WHY: The clamp stops a negative `live` count, but `live` may still be inaccurate at any single moment; this is acceptable as a heuristic for the queue back-off.\n- TASK_GAP\n  Requirement: \"The count comes from one helper in scripts/gh_helpers.sh, next to the #9473 helpers, so a later caller that needs queue depth does not read the raw total again.\"\n  Expected change site: All callers of `gh api \"repos/${GITHUB_REPOSITORY}/actions/runs?status=queued&per_page=1\"` within `scripts/`.\n  Evidence of absence: The raw `queued` total pattern still appears in other scripts (e.g., `scripts/check_stale_queued.sh` and related workflow context not edited in this PR); likely an intentional scope limit, but G2 is left partly unmet.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- HARDENING 1: scripts/auto_release_stable.sh:fallback `zombie_queued_live_count`, lines 181-188 (function body, line 184 in particular)\n  PROBLEM: The fallback does not check `${1}` against the repo-shape regex the main helper enforces at scripts/gh_helpers.sh:4485 (`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`), so a bad repo value would go into the `gh api` URL.\n  WHY: The current caller passes `GITHUB_REPOSITORY`, but leaving out the shape check is inconsistent now that the length check is aligned; suggested fix `[[ \"${1}\" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 1` (1 line).\n- HARDENING 2: scripts/auto_release_stable.sh:fallback `zombie_queued_live_count`, line 187 (the `printf '%s\\t0\\n' \"${zq_fallback_total}\"`)\n  PROBLEM: The fallback passes `${zq_fallback_total}` on without the `10#` base-10 conversion that the main helper applies at scripts/gh_helpers.sh:4500.\n  WHY: The `[ ... -ge ... ]` test (line 778 of this file) reads leading-zero numbers as octal; GitHub's JSON never returns them, so this is defensive only; suggested fix `printf '%s\\t0\\n' \"$((10#${zq_fallback_total}))\"` (1 line); HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9bc8256ebe99535b28ed279ec9af25fc7e16b4ad389aa8f400cd25f0eed5e8e0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10038,
+    "run_id": "45369001629",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45369001629",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261124114320_009c6d1a57",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10038,
+    "run_id": "45369001629"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-24T11:43:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
