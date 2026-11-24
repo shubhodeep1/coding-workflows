@@ -4892,6 +4892,11 @@ jobs:
           MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || 'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}
           MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}
           FINAL_CI_MERGE_RESUME_ENABLED: ${{ vars.FINAL_CI_MERGE_RESUME_ENABLED || 'true' }}
+          # A red required check on a judge merge goes to the final-CI repair or a
+          # hand-over (issue #10063); false keeps the checks_failed page.
+          RB_JUDGE_RED_CHECK_REPAIR_ENABLED: ${{ vars.RB_JUDGE_RED_CHECK_REPAIR_ENABLED || 'true' }}
+          FINAL_CI_REPAIR_ENABLED: ${{ vars.FINAL_CI_REPAIR_ENABLED || 'true' }}
+          REVIEW_AUTOFIX_CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
           PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED: ${{ vars.PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED || 'true' }}
           REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
@@ -5843,6 +5848,7 @@ jobs:
           JUDGE_HANDLED: ${{ steps.rb_judge.outputs.judge_handled }}
           JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}
           JUDGE_MERGE_STATUS: ${{ steps.rb_judge.outputs.judge_merge_status }}
+          JUDGE_CI_FAILURE_SUMMARY: ${{ steps.rb_judge.outputs.judge_ci_failure_summary }}
           JUDGE_REISSUE_CREATED: ${{ steps.rb_judge.outputs.judge_reissue_created }}
           RB_JUDGE_STATUS: ${{ steps.rb_judge.outputs.rb_judge_status }}
           RB_JUDGE_EXIT_CODE: ${{ steps.rb_judge.outputs.rb_judge_exit_code }}
@@ -5870,6 +5876,12 @@ jobs:
           # ready_for_review event brings the judge back. Nothing for a human.
           if [ "${JUDGE_HANDLED}" = "true" ] && [ "${JUDGE_ACTION}" = "skip" ] && [ "${JUDGE_SKIP_REASON}" = "draft_pr" ]; then
             echo "Review-blocked judge skipped draft PR #${PR_NUMBER}; it runs once the PR is ready for review. Suppressing alert."
+            exit 0
+          fi
+          # #10063: the final-CI hand-over for this head was already posted and
+          # alerted; a repeat judge run on the same head stays silent.
+          if [ "${JUDGE_HANDLED}" = "true" ] && [ "${JUDGE_ACTION}" = "skip" ] && [ "${JUDGE_SKIP_REASON}" = "final_ci_handover_posted" ]; then
+            echo "Review-blocked judge skipped PR #${PR_NUMBER}: the final-CI hand-over for this head was already posted. Suppressing alert."
             exit 0
           fi
           if [ "${JUDGE_HANDLED}" = "true" ]; then
@@ -5964,6 +5976,17 @@ jobs:
                   JUDGE_ALERT_LEVEL="DEBUG"
                 elif [ "${JUDGE_MERGE_STATUS}" = "checks_failed" ]; then
                   MSG="$(printf 'Review-blocked judge approved PR as-is, but required check-runs failed\nNeeds a CI fix before the merge')"
+                elif [ "${JUDGE_MERGE_STATUS}" = "final_ci_repair_requested" ]; then
+                  # #10063: the red head goes to the final-CI repair run.
+                  MSG="$(printf 'Review-blocked judge approved PR as-is, but required check-runs failed\nThe final-CI repair was requested automatically')"
+                  JUDGE_ALERT_LEVEL="DEBUG"
+                elif [ "${JUDGE_MERGE_STATUS}" = "final_ci_handover_posted" ]; then
+                  MSG="Review-blocked judge: the final-CI hand-over for this head was already posted"
+                  JUDGE_ALERT_LEVEL="DEBUG"
+                elif [ "${JUDGE_MERGE_STATUS}" = "final_ci_handover" ]; then
+                  # #10063: the repair is used up; one hand-over per head.
+                  MSG="$(printf 'Review-blocked judge approved PR as-is, but required check-runs failed and the final-CI repair is used up\nFailing: %s\nHanded to a person (ai:needs-human)' "${JUDGE_CI_FAILURE_SUMMARY:-see the PR checks}")"
+                  JUDGE_ALERT_LEVEL="ERROR"
                 elif [ "${JUDGE_MERGE_STATUS}" = "manual_merge_required" ]; then
                   MSG="$(printf 'Review-blocked judge approved PR as-is; ENABLE_AUTO_MERGE=false\nManual merge required')"
                 fi ;;

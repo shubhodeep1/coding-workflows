@@ -110,7 +110,7 @@ def test_gate_script_wiring() -> None:
 	assert 'base_ref: (.base.ref // ""), base_sha: (.base.sha // ""), head_repo:' in text
 	assert '"${AUTOFIX_SKIP_CLEAN_SAME_HEAD:-true}" = "false"' in text
 	assert 'echo "base_sha=${pr_base_sha_gate}" >> "${GITHUB_OUTPUT}"' in text
-	assert 'or ($b | contains("<!-- review-autofix-clean:v1 ")) or ($b | contains("<!-- ai:single-issue-security-pass:v1 ")) or ($b | contains("<!-- ai:freshness-ci-failed:v1 ")) or ($b | contains("<!-- ai:final-ci-failed:v1 ")) or ($b | contains("<!-- ai:final-ci-repair:v1 "))) |' in text
+	assert 'or ($b | contains("<!-- review-autofix-clean:v1 ")) or ($b | contains("<!-- ai:single-issue-security-pass:v1 ")) or ($b | contains("<!-- ai:freshness-ci-failed:v1 ")) or ($b | contains("<!-- ai:final-ci-failed:v1 ")) or ($b | contains("<!-- ai:final-ci-repair:v1 ")) or ($b | contains("<!-- ai:final-ci-repair-request:v1 "))) |' in text
 	assert 'body: "", activity_only: true}))]' in text
 	# Order: terminal same-head skip, clean same-head skip, fingerprint cap.
 	block_start = text.index("# ----- Clean same-head skip (issue #8952) -----")
@@ -927,3 +927,106 @@ def test_gate_keeps_the_full_review_when_the_delta_check_fails(tmp_path: Path) -
 		if expected:
 			assert expected in result.stdout, (expected, result.stdout)
 		assert _commit_calls(calls) == commit_reads, expected
+
+
+# ---------------------------------------------------------------------------
+# Red final CI routed to the repair (issue #10063)
+# ---------------------------------------------------------------------------
+
+def _hand_back_fixture(body: str, *, author: str = "github-actions[bot]", author_type: str = "Bot", head_ref: str = "ai/issue-42",
+		base_ref: str = "main", statuses: list | None = None, extra: tuple = ()) -> dict:
+	fixture = _gate_fixture(pr={"head": {"ref": head_ref, "sha": HEAD, "repo": {"full_name": "o/r"}}, "base": {"ref": base_ref, "sha": BASE}})
+	fixture["comments"].append({"id": 90, "user": {"login": author, "type": author_type}, "created_at": "2026-11-06T12:00:00Z",
+		"author_association": "NONE", "body": body})
+	fixture["comments"].extend(extra)
+	fixture["statuses"] = statuses if statuses is not None else [{"context": "ai-review/head-gate", "state": "success", "creator": {"login": PIPELINE}}]
+	return fixture
+
+
+def _request_body(head: str = HEAD, pr: str = "42") -> str:
+	return f"**Final CI is red.**\n\nFailing:\n- `CI / tests`\n\n<!-- ai:final-ci-repair-request:v1 pr={pr} head={head} -->"
+
+
+def _freshness_body(head: str = HEAD) -> str:
+	return f"CI failed on the updated head.\n<!-- ai:freshness-ci-failed:v1 pr=42 head={head} -->"
+
+
+def test_final_ci_repair_accepts_freshness_ci_failed_marker(tmp_path: Path) -> None:
+	# PR #9679: a base-update head posts only the freshness marker.
+	result, outputs, calls = _run_gate(tmp_path, _hand_back_fixture(_freshness_body(), author=PIPELINE, author_type="User"))
+	assert outputs["should_run"] == "true", result.stdout + result.stderr
+	assert outputs["final_ci_repair"] == "true" and outputs["final_ci_repair_attempt"] == "1", result.stdout
+	assert f"FINAL_CI_REPAIR pr=42 head={HEAD} outcome=selected attempt=1 marker=freshness approval=head_gate" in result.stdout
+	assert _statuses_calls(calls) == 1
+	# The head-gate condition still applies to a freshness hand-back.
+	result, outputs, _ = _run_gate(tmp_path, _hand_back_fixture(_freshness_body(), author=PIPELINE, author_type="User", statuses=[]))
+	assert outputs["final_ci_repair"] == "false" and "reason=head_gate_not_success state=none" in result.stdout
+
+
+def test_final_ci_repair_accepts_judge_repair_request_marker(tmp_path: Path) -> None:
+	result, outputs, calls = _run_gate(tmp_path, _hand_back_fixture(_request_body(), statuses=[]))
+	assert outputs["should_run"] == "true", result.stdout + result.stderr
+	assert outputs["final_ci_repair"] == "true" and outputs["final_ci_repair_attempt"] == "1", result.stdout
+	assert f"FINAL_CI_REPAIR pr=42 head={HEAD} outcome=selected attempt=1 marker=judge approval=judge" in result.stdout
+	# The judge approved the head: no statuses read.
+	assert _statuses_calls(calls) == 0
+	# The dispatched run is not skipped as clean same-head.
+	assert "AUTOFIX_GATE_CLEAN_SAME_HEAD_CHECK outcome=no_skip reason=final_ci_repair_request pr=42" in result.stdout
+	# The judge posts after the round's own outputs: an older failure comment does not block it.
+	older_failure = {"id": 60, "user": {"login": PIPELINE, "type": "User"}, "created_at": "2026-11-06T11:00:00Z", "author_association": "OWNER",
+		"body": f"**AI review/autofix failed**\n<!-- review-autofix-failure:v1 head={HEAD} reason=r fp={'a' * 64} degraded=0 run=9 -->"}
+	result, outputs, _ = _run_gate(tmp_path, _hand_back_fixture(_request_body(), extra=(older_failure,)))
+	assert outputs["final_ci_repair"] == "true", result.stdout
+	# The pipeline login is trusted too.
+	result, outputs, _ = _run_gate(tmp_path, _hand_back_fixture(_request_body(), author=PIPELINE, author_type="User"))
+	assert outputs["final_ci_repair"] == "true", result.stdout
+
+
+def test_final_ci_repair_accepts_an_integration_branch_base(tmp_path: Path) -> None:
+	result, outputs, _ = _run_gate(tmp_path, _hand_back_fixture(_request_body(), head_ref="claude/issue-9669", base_ref="orchestrator/project-9394"))
+	assert outputs["final_ci_repair"] == "true", result.stdout
+	# An orchestrator/project-* HEAD keeps post_sync_test_repair.
+	result, outputs, _ = _run_gate(tmp_path, _hand_back_fixture(_request_body(), head_ref="orchestrator/project-9394"))
+	assert outputs["final_ci_repair"] == "false" and "reason=orchestrator_head" in result.stdout
+
+
+def test_final_ci_repair_ignores_forged_or_foreign_request_markers(tmp_path: Path) -> None:
+	cases = [
+		_hand_back_fixture(_request_body(), author="mallory", author_type="User"),
+		_hand_back_fixture(_request_body(), author="github-actions[bot]", author_type="User"),
+		_hand_back_fixture(_request_body(head=OTHER_HEAD)),
+		_hand_back_fixture(_request_body(pr="43")),
+		_hand_back_fixture(_freshness_body(), author="mallory", author_type="User"),
+	]
+	for fixture in cases:
+		result, outputs, calls = _run_gate(tmp_path, fixture)
+		assert outputs["final_ci_repair"] == "false", result.stdout
+		assert "FINAL_CI_REPAIR " not in result.stdout and _statuses_calls(calls) == 0
+
+
+def test_final_ci_repair_request_keeps_the_caps(tmp_path: Path) -> None:
+	result, outputs, _ = _run_gate(tmp_path, _hand_back_fixture(_request_body(), extra=(_repair_marker(HEAD, 50, repair="none"),)))
+	assert outputs["final_ci_repair"] == "false"
+	assert f"FINAL_CI_REPAIR pr=42 head={HEAD} outcome=skipped reason=head_cap repairs=0" in result.stdout
+	result, outputs, _ = _run_gate(tmp_path, _hand_back_fixture(_request_body(), extra=(_repair_marker(OTHER_HEAD, 50), _repair_marker(BASE, 51, attempt=2))))
+	assert outputs["final_ci_repair"] == "false" and "outcome=skipped reason=pr_cap repairs=2" in result.stdout
+
+
+def test_final_ci_repair_request_rearms_the_same_head_skips() -> None:
+	text = GATE_SCRIPT.read_text(encoding="utf-8")
+	# Terminal same-head: the jq pre-filter keeps the request and the regex accepts it.
+	assert 'contains("<!-- ai:final-ci-repair-request:v1 ")) or ((((.author_login' in text
+	assert '"<!-- ai:(?:final-ci-failed|final-ci-repair-request):v1 pr=" + re.escape(pr_number)' in text
+	# Deterministic skip suppression.
+	assert 'test("<!-- ai:(final-ci-failed|final-ci-repair-request):v1 pr=" + $pr + " head=" + $head' in text
+
+
+def test_clean_parser_final_ci_repair_request_rearms(tmp_path: Path) -> None:
+	request = {"id": 30, "author_login": "github-actions[bot]", "author_type": "Bot", "created_at": "2026-11-06T12:00:00Z", "body": _request_body()}
+	decision = _run_parser(tmp_path, [_summary_comment(), request])[1]
+	assert decision["decision"] == "no_skip" and decision["reason"] == "final_ci_repair_request", decision
+	# Older than the clean marker, untrusted, or another head: no re-arm.
+	for record in (dict(request, created_at="2026-11-05T00:00:00Z"), dict(request, author_login="mallory"),
+			dict(request, body=_request_body(head=OTHER_HEAD))):
+		decision = _run_parser(tmp_path, [_summary_comment(), record])[1]
+		assert decision["decision"] == "candidate", (record, decision)
