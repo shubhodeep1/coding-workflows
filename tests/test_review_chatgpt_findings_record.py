@@ -763,6 +763,8 @@ def test_reviewer_findings_clean_round_parser_no_issue_markers_gives_zeros(tmp_p
 		case_dir.mkdir()
 		case_env = _three_fixture(case_dir, issues_text="")
 		_write(Path(case_env["RUNTIME_DIR"]) / "parser_stats.txt", stats)
+		# Non-blank raw output, so only the guard under test can refuse the round.
+		_write(Path(case_env["RUNTIME_DIR"]) / "consolidator_raw.txt", "No consolidated findings this round.\n")
 		if failopen is not None:
 			case_env["REVIEW_PARSER_FAILOPEN"] = failopen
 		case_output = Path(case_env["PREVIOUS_REVIEWS_DIR"]) / "review_findings_record.json"
@@ -771,8 +773,9 @@ def test_reviewer_findings_clean_round_parser_no_issue_markers_gives_zeros(tmp_p
 		assert all(line.endswith(" reason=consolidator_missing") for line in _findings_lines(case_result.stdout))
 
 	# A failed consolidator: review_consolidate.sh empties consolidator_raw.txt
-	# (or it was never written), and the parser then reports no_issue_markers.
-	for raw_text in ("", " \n", None):
+	# (or it was never written), or output cut at the byte cap; the parser then
+	# reports no_issue_markers.
+	for raw_text in ("", " \n", None, "Partial prose\n\n... [TRUNCATED_BY_OUTPUT_CAP] ...\n"):
 		case_dir = tmp_path / f"raw_{'missing' if raw_text is None else len(raw_text)}"
 		case_dir.mkdir()
 		case_env = _three_fixture(case_dir, issues_text="")

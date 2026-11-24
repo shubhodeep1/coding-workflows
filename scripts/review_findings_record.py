@@ -117,6 +117,8 @@ OVERRIDE_RE = re.compile(r"CONSOLIDATOR_OVERRIDDEN:\s*([A-Za-z0-9_-]+)")
 # that ran, computed only from allowlisted values already in the record.
 REVIEWER_FINDINGS_PREFIX = "REVIEWER_FINDINGS"
 DUPLICATE_OF_RE = re.compile(r"^duplicate-of:([0-9]{1,6})$")
+# Appended by scripts/review_consolidate.sh when it caps the raw output.
+CONSOLIDATOR_TRUNCATED_MARKER = "[TRUNCATED_BY_OUTPUT_CAP]"
 REVIEWER_FINDINGS_COUNT_KEYS = ("raised", "lone", "lone_rejected", "lone_accepted", "shared")
 # Warning codes that mean the consolidated findings are absent or incomplete.
 REVIEWER_FINDINGS_MISSING_WARNINGS = frozenset({
@@ -636,6 +638,12 @@ def _parser_found_no_issue_markers() -> bool:
 	# non-blank raw output with no ISSUE markers is a clean round.
 	raw_path = _env("CONSOLIDATOR_RAW_FILE") or (os.path.join(runtime_dir, "consolidator_raw.txt") if runtime_dir else "")
 	raw_text, _ = _read_bounded(raw_path)
+	# review_consolidate.sh appends this marker when it cut the output at the
+	# byte cap, so the missing ISSUE markers may have been cut off: not clean.
+	# Known limit: a non-blank answer that ignores the format (prose, a
+	# refusal) still reads as clean; the record cannot tell it apart.
+	if raw_text and CONSOLIDATOR_TRUNCATED_MARKER in raw_text:
+		return False
 	return bool(raw_text and raw_text.strip())
 
 
