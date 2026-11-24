@@ -2060,12 +2060,13 @@ while IFS=$'\t' read -r run_id run_url; do
 			# Issue #10037: the marker must start a log line (after the runner
 			# timestamp) and the failing step must be a gate watch step (every
 			# step of test-and-mark-stable.yml that runs
-			# dispatch_and_watch_workflow_run.sh, plus Phase 4; exact names), so
+			# dispatch_and_watch_workflow_run.sh, plus Phase 4 and the alt-model
+			# wait (dispatch_and_watch_workflow_run.sh --alt-model-runner-wait); exact names), so
 			# text echoed from a model or an issue cannot suppress a report.
 			if [ "${SOURCE_KIND}" = "workflow_run" ] \
 				&& grep -qE '^[^ ]+ RELEASE_GATE_RUNNER_WAIT outcome=(cancel_requested|stop_failed) ' "${RAW_LOG}" 2>/dev/null; then
 				case "${failing_step}" in
-					"Phase 4: Wait for review & autofix to complete"|"Dispatch & watch — "*|"Dispatch internal-orchestrate.yml with multi-issue project"|"Dispatch internal-validate.yml standalone")
+					"Phase 4: Wait for review & autofix to complete"|"Dispatch & watch — "*|"Dispatch internal-orchestrate.yml with multi-issue project"|"Dispatch internal-validate.yml standalone"|"Wait for clarify→plan→implement (alt-model)")
 						HEAL_RUNNER_WAIT_MATCHED="${HEAL_RUNNER_WAIT_MATCHED} ${run_id}:${job_id}"
 						;;
 				esac

@@ -2911,6 +2911,17 @@ def test_intake_skips_runner_waits_on_the_orchestrate_and_standalone_validate_wa
 	assert not _composed_issues(state_after)
 
 
+def test_intake_skips_a_runner_wait_on_the_alt_model_wait_step() -> None:
+	"""The alt-model wait (dispatch_and_watch_workflow_run.sh --alt-model-runner-wait) prints the same marker."""
+	jobs = [_runner_wait_job(9001, "e2e-alt-model-test", "Wait for clarify→plan→implement (alt-model)")]
+	log = "2026-11-24T02:07:01.0000000Z RELEASE_GATE_RUNNER_WAIT outcome=stop_failed detail=still_running gate_run=500 watched_run=61 reason=never_assigned waited_secs=240 display_name=alt-model\n"
+	state = _intake_state(jobs={"500": jobs}, job_logs={"9001": log})
+	result, state_after, _ = _run_intake(_runner_wait_gate_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "skip reason=release_gate_runner_wait run=500 jobs=1" in result.stdout, result.stdout
+	assert not _composed_issues(state_after)
+
+
 def test_intake_files_a_release_gate_run_with_a_real_failure_next_to_a_runner_wait() -> None:
 	jobs = [
 		_runner_wait_job(9001, "orphan-workflows-test", "Dispatch & watch — internal-memory-maintenance"),

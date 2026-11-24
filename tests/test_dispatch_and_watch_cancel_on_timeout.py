@@ -333,7 +333,19 @@ def test_job_waiting_on_an_environment_or_concurrency_group_is_a_timeout() -> No
 		job = {"id": 5, "status": status, "runner_name": "", "steps": []}
 		rc, out, calls, _ = _run_watcher(run_status="in_progress", extra_env={"STUB_JOBS_BODY": _jobs(job), **GATE_ENV, "DISPATCH_WATCH_STOP_RELEASE_GATE": "true"})
 		assert rc == 1, out
-		assert "outcome=timeout run=4242 reason=ran_early jobs=1 queued_without_runner=0" in _result_line(out), (status, out)
+		assert "outcome=timeout run=4242 reason=held jobs=1 queued_without_runner=0" in _result_line(out), (status, out)
+		assert not _gate_calls(calls), calls
+
+
+def test_late_started_job_that_failed_is_a_timeout() -> None:
+	# A job that got a runner late and then failed is a real failure, even
+	# while another job is still queued without a runner.
+	late_failed = dict(LATE_JOB, status="completed", conclusion="failure")
+	late_failed_step = dict(LATE_JOB, steps=[{"name": "Set up job", "started_at": _iso(3600), "conclusion": "failure"}])
+	for job in (late_failed, late_failed_step):
+		rc, out, calls, _ = _run_watcher(run_status="in_progress", extra_env={"STUB_JOBS_BODY": _jobs(job, QUEUED_JOB), **GATE_ENV, "DISPATCH_WATCH_STOP_RELEASE_GATE": "true"})
+		assert rc == 1, out
+		assert "outcome=timeout run=4242 reason=ran_early" in _result_line(out), (job, out)
 		assert not _gate_calls(calls), calls
 
 
@@ -353,6 +365,18 @@ def test_runner_wait_with_stop_enabled_cancels_the_gate() -> None:
 
 def test_runner_wait_does_not_cancel_a_gate_with_a_real_failure() -> None:
 	env = {"STUB_JOBS_BODY": _jobs(QUEUED_JOB), "STUB_GATE_JOBS_BODY": _jobs({"id": 7, "conclusion": "failure"}), **GATE_ENV, "DISPATCH_WATCH_STOP_RELEASE_GATE": "true"}
+	rc, out, calls, _ = _run_watcher(extra_env=env)
+	assert rc == 1, out
+	assert "RELEASE_GATE_RUNNER_WAIT outcome=real_failure_present gate_run=9999 watched_run=4242" in out, out
+	assert GATE_CANCEL_CALL not in calls, calls
+	assert out.splitlines()[-1] == TIMEOUT_LINE, out
+
+
+def test_runner_wait_does_not_cancel_a_gate_with_a_failed_step_in_a_running_job() -> None:
+	# A gate job still running its always() steps after a failed step has
+	# conclusion null; the failed step alone blocks the cancel.
+	running_failed = {"id": 7, "status": "in_progress", "conclusion": None, "steps": [{"name": "Dispatch", "conclusion": "failure"}, {"name": "Cleanup", "conclusion": None}]}
+	env = {"STUB_JOBS_BODY": _jobs(QUEUED_JOB), "STUB_GATE_JOBS_BODY": _jobs(running_failed), **GATE_ENV, "DISPATCH_WATCH_STOP_RELEASE_GATE": "true"}
 	rc, out, calls, _ = _run_watcher(extra_env=env)
 	assert rc == 1, out
 	assert "RELEASE_GATE_RUNNER_WAIT outcome=real_failure_present gate_run=9999 watched_run=4242" in out, out
@@ -385,6 +409,127 @@ def test_stop_release_gate_cli_mode_cancels_child_and_gate() -> None:
 	# Bad arguments never call the API.
 	rc, out, calls, _ = _run_watcher(extra_env=env, args=["--stop-release-gate", "--repo", "owner/repo", "--watched-run-id", "x"])
 	assert rc == 2 and not calls, (out, calls)
+
+
+# --- Alt-model wait runner-wait check (issue #10037, G3) ---
+
+ALT_GH_STUB = """#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+with open(os.environ["STUB_GH_LOG"], "a", encoding="utf-8") as fh:
+    fh.write(" ".join(args) + "\\n")
+state = json.load(open(os.environ["STUB_ALT_STATE"], encoding="utf-8"))
+fields, path, i = {}, "", 1
+while i < len(args):
+    if args[i] == "-X":
+        i += 2
+        continue
+    if args[i] == "-f":
+        key, _, value = args[i + 1].partition("=")
+        fields[key] = value
+        i += 2
+        continue
+    path = args[i]
+    i += 1
+if path.endswith("/cancel"):
+    sys.exit(0)
+if state.get("fail"):
+    sys.exit(1)
+if path.endswith("/actions/runs"):
+    runs = state.get(fields.get("status", ""), [])
+    print(json.dumps({"total_count": state.get(fields.get("status", "") + "_total", len(runs)), "workflow_runs": runs}))
+    sys.exit(0)
+if "/jobs" in path:
+    run_id = path.split("/runs/")[1].split("/")[0]
+    if run_id in state.get("jobs", {}):
+        print(json.dumps(state["jobs"][run_id]))
+        sys.exit(0)
+sys.exit(1)
+"""
+ALT_TITLE = "[E2E alt-model] add a helper"
+
+
+def _alt_run(run_id: int, status: str, created_delta: int, title: str = ALT_TITLE) -> dict:
+	return {"id": run_id, "status": status, "display_title": title, "created_at": _iso(created_delta)}
+
+
+def _run_alt_check(state: dict, stop: bool = False) -> tuple[str, list[str], str]:
+	bash = shutil.which("bash")
+	assert bash is not None
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp = Path(tmp_name)
+		bindir = tmp / "bin"
+		bindir.mkdir()
+		gh = bindir / "gh"
+		gh.write_text(ALT_GH_STUB, encoding="utf-8")
+		gh.chmod(0o755)
+		(tmp / "state.json").write_text(json.dumps(state), encoding="utf-8")
+		for name in ("gh.log", "output"):
+			(tmp / name).write_text("", encoding="utf-8")
+		env = {
+			"PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
+			"HOME": str(tmp), "GITHUB_OUTPUT": str(tmp / "output"), "STUB_GH_LOG": str(tmp / "gh.log"),
+			"STUB_ALT_STATE": str(tmp / "state.json"), "TEST_REPO": "owner/repo", **GATE_ENV,
+			"ALT_ISSUE_TITLE": ALT_TITLE, "ALT_CREATED_AFTER": _iso(-4600),
+			"ALT_WAIT_STARTED_AT": str(int(datetime.now(timezone.utc).timestamp()) - 4500), "ALT_WAIT_BUDGET_SECS": "4500",
+		}
+		if stop:
+			env["DISPATCH_WATCH_STOP_RELEASE_GATE"] = "true"
+		proc = subprocess.run([bash, str(REPO_ROOT / "scripts" / "dispatch_and_watch_workflow_run.sh"), "--alt-model-runner-wait"], cwd=tmp, env=env,
+			capture_output=True, text=True, check=False, timeout=60)
+		assert proc.returncode == 0, proc.stdout + proc.stderr
+		calls = [line for line in (tmp / "gh.log").read_text(encoding="utf-8").splitlines() if line]
+		return proc.stdout, calls, (tmp / "output").read_text(encoding="utf-8")
+
+
+def test_alt_model_runs_queued_since_early_are_a_runner_wait_and_stop_the_gate() -> None:
+	state = {"queued": [_alt_run(51, "queued", -4000), _alt_run(52, "queued", -300), _alt_run(53, "queued", -4000, title="other")], "in_progress": []}
+	out, calls, github_output = _run_alt_check(state)
+	assert "ALT_MODEL_RUNNER_WAIT outcome=runner_wait reason=never_assigned runs=51,52" in out, out
+	assert "runner_wait=true" in github_output.splitlines()
+	assert not [c for c in calls if "/cancel" in c], calls
+	state["jobs"] = {"9999": json.loads(_jobs({"id": 7, "status": "in_progress", "conclusion": None, "steps": []}))}
+	out, calls, _ = _run_alt_check(state, stop=True)
+	assert "api -X POST repos/owner/repo/actions/runs/51/cancel" in calls, calls
+	assert "api -X POST repos/owner/repo/actions/runs/52/cancel" in calls, calls
+	assert GATE_CANCEL_CALL in calls, calls
+	assert "RELEASE_GATE_RUNNER_WAIT outcome=cancel_requested gate_run=9999 watched_run=51 reason=never_assigned display_name=alt-model" in out, out
+
+
+def test_alt_model_late_runner_with_queued_sibling_is_late_assigned() -> None:
+	jobs = {"61": json.loads(_jobs(dict(LATE_JOB, steps=[{"name": "Set up job", "started_at": _iso(-300)}]), QUEUED_JOB))}
+	state = {"queued": [], "in_progress": [_alt_run(61, "in_progress", -4000)], "jobs": jobs}
+	out, _, github_output = _run_alt_check(state)
+	assert "ALT_MODEL_RUNNER_WAIT outcome=runner_wait reason=late_assigned runs=61" in out, out
+	assert "runner_wait=true" in github_output.splitlines()
+
+
+def test_alt_model_real_slowness_or_unreadable_state_stays_a_timeout() -> None:
+	early = {"61": json.loads(_jobs(EARLY_JOB))}
+	failed_late = {"61": json.loads(_jobs(dict(LATE_JOB, conclusion="failure", steps=[{"name": "Set up job", "started_at": _iso(-300)}])))}
+	cases = (
+		({"queued": [], "in_progress": [_alt_run(61, "in_progress", -4000)], "jobs": early}, "reason=ran_early runs=61"),
+		({"queued": [], "in_progress": [_alt_run(61, "in_progress", -4000)], "jobs": failed_late}, "reason=ran_early runs=61"),
+		({"queued": [], "in_progress": [_alt_run(61, "in_progress", -4000)]}, "reason=jobs_unreadable runs=61"),
+		({"queued": [_alt_run(51, "queued", -600)], "in_progress": []}, "reason=queued_late runs=51"),
+		({"queued": [_alt_run(53, "queued", -4000, title="other")], "in_progress": []}, "reason=no_runs_in_flight runs=-"),
+		({"fail": True}, "reason=listing_unreadable runs=-"),
+		({"queued": [_alt_run(51, "queued", -4000)], "in_progress": [], "in_progress_total": 150}, "reason=listing_truncated runs=-"),
+	)
+	for state, expected in cases:
+		out, calls, github_output = _run_alt_check(state, stop=True)
+		assert f"ALT_MODEL_RUNNER_WAIT outcome=timeout {expected}" in out, (expected, out)
+		assert "runner_wait=true" not in github_output
+		assert not [c for c in calls if "/cancel" in c], (expected, calls)
+
+
+def test_gate_workflow_wires_the_alt_model_check_and_child_cancels() -> None:
+	text = (REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml").read_text(encoding="utf-8")
+	wait = text.index("      - name: Wait for clarify→plan→implement (alt-model)\n")
+	check = text.index("bash ./scripts/dispatch_and_watch_workflow_run.sh --alt-model-runner-wait", wait)
+	assert check < text.index("Alt-model run timed out before reaching review stage", wait)
+	assert text.count("      - name: Cancel dispatched child runs when the gate is cancelled\n        if: cancelled()\n") == 2
+	assert "steps.dispatch_memory_maintenance.outputs.dispatched_run_id" in text
 
 
 def main() -> int:

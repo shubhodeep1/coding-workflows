@@ -36,6 +36,9 @@ Usage: dispatch_and_watch_workflow_run.sh \
 	--watched-run-id <id> \
 	[--display-name <name>] \
 	[--runner-wait-reason <never_assigned|late_assigned>]
+
+       dispatch_and_watch_workflow_run.sh --alt-model-runner-wait
+	(env: TEST_REPO, ALT_ISSUE_TITLE, ALT_CREATED_AFTER, ALT_WAIT_STARTED_AT)
 EOF
 }
 
@@ -108,8 +111,9 @@ dispatch_workflow()
 # never got a runner, or got one only in the last third of its budget. The
 # gate cancels itself so the run ends `cancelled`, which both release scripts
 # already read as "no attempt used". It never hides a real failure: when any
-# gate job already ended failure or timed_out it does not cancel
-# (outcome=real_failure_present). A job of the gate that fails in the few
+# gate job already ended failure or timed_out, or a still-running gate job
+# already has a failed step (its always()/failure() steps still run), it does
+# not cancel (outcome=real_failure_present). A job of the gate that fails in the few
 # seconds between that read and the cancel landing may show as cancelled.
 # Log lines (stable prefix, matched by the heal intake):
 #   RELEASE_GATE_RUNNER_WAIT outcome=cancel_requested|real_failure_present|stop_failed ...
@@ -128,7 +132,7 @@ dispatch_watch_stop_release_gate()
 		return 1
 	fi
 	if ! stop_jobs="$(gh_api_safe_quiet_print "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/jobs?per_page=100")" \
-		|| ! stop_real="$(printf '%s' "${stop_jobs}" | jq -er '.jobs | if type == "array" then [.[] | select(.conclusion == "failure" or .conclusion == "timed_out")] | length else error("no jobs") end' 2>/dev/null)"; then
+		|| ! stop_real="$(printf '%s' "${stop_jobs}" | jq -er '.jobs | if type == "array" then [.[] | select(.conclusion == "failure" or .conclusion == "timed_out" or any(.steps[]?; .conclusion == "failure" or .conclusion == "timed_out"))] | length else error("no jobs") end' 2>/dev/null)"; then
 		echo "RELEASE_GATE_RUNNER_WAIT outcome=stop_failed detail=gate_jobs_unreadable gate_run=${GITHUB_RUN_ID} watched_run=${stop_watched} reason=${stop_reason:-unknown} display_name=${stop_display:-unknown}"
 		return 1
 	fi
@@ -151,6 +155,162 @@ dispatch_watch_stop_release_gate()
 	return 1
 }
 
+# --alt-model-runner-wait (issue #10037, G3). Run by the "Wait for
+# clarify→plan→implement (alt-model)" step of the e2e-alt-model-test job in
+# .github/workflows/test-and-mark-stable.yml when its wait budget runs out
+# (logic here keeps the workflow well under the 480,000-byte guard, §24).
+#
+# Decides whether the alt-model pipeline timed out only because this issue's
+# runs waited for runners (release run 45296809251: the issue's runs sat 17 to
+# 56 minutes in the runner queue). The step polls labels and has no single
+# child run id, so the candidates are this issue's runs that are not
+# completed: display_title equal to ALT_ISSUE_TITLE, created after
+# ALT_CREATED_AFTER, status in_progress or queued.
+#
+# runner_wait only when ALL of these hold, otherwise timeout (fail closed):
+#   - the in_progress listing is complete (at most 100 runs) and readable;
+#   - at least one candidate exists and at most ALT_RUNNER_WAIT_MAX_RUNS of
+#     them are in_progress;
+#   - at least one candidate was created at or before the two-thirds point of
+#     the budget, so it waited at least a third of the budget;
+#   - every job of every in_progress candidate is status=queued with no
+#     runner_name, or started its first step in the last third of the budget
+#     and has no failed conclusion or step. An in_progress candidate whose
+#     jobs cannot be read, or that has no jobs, gives timeout.
+# A queued candidate has no job with a runner, so its jobs are not read. A
+# truncated queued listing only leaves out more queued runs, which cannot
+# turn a timeout into runner_wait.
+#
+# On runner_wait it writes runner_wait=true to GITHUB_OUTPUT. With
+# DISPATCH_WATCH_STOP_RELEASE_GATE=true it cancels the candidates and stops
+# the gate (dispatch_watch_stop_release_gate), which prints the
+# RELEASE_GATE_RUNNER_WAIT lines the heal intake matches.
+#
+# Env: TEST_REPO, ALT_ISSUE_TITLE, ALT_CREATED_AFTER, ALT_WAIT_STARTED_AT
+# (epoch the wait began), ALT_WAIT_BUDGET_SECS (default 4500),
+# ALT_RUNNER_WAIT_MAX_RUNS (default 5), DISPATCH_WATCH_STOP_RELEASE_GATE
+# (default false).
+# API calls: 2 listings (in_progress, queued), 1 jobs read per in_progress
+# candidate (at most ALT_RUNNER_WAIT_MAX_RUNS), plus the cancels on a stop.
+# Log line (stable prefix):
+#   ALT_MODEL_RUNNER_WAIT outcome=runner_wait|timeout reason=<r> runs=<ids|->
+# Always returns 0: the caller fails the step as before.
+ALT_RW_BUDGET="${ALT_WAIT_BUDGET_SECS:-4500}"
+ALT_RW_MAX_RUNS="${ALT_RUNNER_WAIT_MAX_RUNS:-5}"
+
+alt_rw_result()
+{
+	echo "ALT_MODEL_RUNNER_WAIT outcome=$1 reason=$2 runs=${3:--}"
+}
+
+# Prints the runs listing for one status, or fails.
+alt_rw_list()
+{
+	timeout 30 gh api -X GET "repos/${TEST_REPO}/actions/runs" -f "status=$1" -f "created=>${ALT_CREATED_AFTER}" -f per_page=100 2>/dev/null
+}
+
+dispatch_watch_alt_model_runner_wait()
+{
+	[[ "${ALT_RW_BUDGET}" =~ ^[1-9][0-9]{0,5}$ ]] || ALT_RW_BUDGET=4500
+	[[ "${ALT_RW_MAX_RUNS}" =~ ^[1-9][0-9]?$ ]] || ALT_RW_MAX_RUNS=5
+	if ! [[ "${TEST_REPO:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || [ -z "${ALT_ISSUE_TITLE:-}" ] \
+		|| ! [[ "${ALT_CREATED_AFTER:-}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] \
+		|| ! [[ "${ALT_WAIT_STARTED_AT:-}" =~ ^[0-9]+$ ]]; then
+		alt_rw_result timeout missing_input
+		return 0
+	fi
+	ALT_RW_TWO_THIRDS=$(( ALT_WAIT_STARTED_AT + ALT_RW_BUDGET * 2 / 3 ))
+
+	# Candidate rows "<id> <created_epoch>" of one listing; fails on a bad page.
+	alt_rw_candidates()
+	{
+		printf '%s' "$1" | jq -er --arg title "${ALT_ISSUE_TITLE}" '
+			if (.workflow_runs | type) != "array" then error("no runs") else
+			[.workflow_runs[] | select(type == "object")
+				| select(((.display_title // "") | tostring) == $title)
+				| select(((.status // "") | tostring) != "completed")
+				| "\(.id) \((.created_at // "") | tostring | sub("\\.[0-9]+Z$"; "Z") | (try fromdateiso8601 catch 0))"]
+			| join("\n") end' 2>/dev/null
+	}
+
+	if ! alt_rw_in_progress_json="$(alt_rw_list in_progress)" \
+		|| ! alt_rw_in_progress_total="$(printf '%s' "${alt_rw_in_progress_json}" | jq -er '.total_count | numbers' 2>/dev/null)" \
+		|| ! alt_rw_in_progress="$(alt_rw_candidates "${alt_rw_in_progress_json}")"; then
+		alt_rw_result timeout listing_unreadable
+		return 0
+	fi
+	if [ "${alt_rw_in_progress_total}" -gt 100 ]; then
+		alt_rw_result timeout listing_truncated
+		return 0
+	fi
+	if ! alt_rw_queued_json="$(alt_rw_list queued)" || ! alt_rw_queued="$(alt_rw_candidates "${alt_rw_queued_json}")"; then
+		alt_rw_result timeout listing_unreadable
+		return 0
+	fi
+
+	alt_rw_ids=""
+	alt_rw_early=0
+	alt_rw_in_progress_count=0
+	while read -r alt_rw_id alt_rw_created; do
+		[[ "${alt_rw_id:-}" =~ ^[0-9]+$ ]] || continue
+		alt_rw_ids="${alt_rw_ids:+${alt_rw_ids},}${alt_rw_id}"
+		if [[ "${alt_rw_created:-}" =~ ^[1-9][0-9]*$ ]] && [ "${alt_rw_created}" -le "${ALT_RW_TWO_THIRDS}" ]; then
+			alt_rw_early=1
+		fi
+	done <<< "${alt_rw_queued}"
+	while read -r alt_rw_id alt_rw_created; do
+		[[ "${alt_rw_id:-}" =~ ^[0-9]+$ ]] || continue
+		alt_rw_in_progress_count=$((alt_rw_in_progress_count + 1))
+		alt_rw_ids="${alt_rw_ids:+${alt_rw_ids},}${alt_rw_id}"
+		if [ "${alt_rw_in_progress_count}" -gt "${ALT_RW_MAX_RUNS}" ]; then
+			alt_rw_result timeout too_many_runs "${alt_rw_ids}"
+			return 0
+		fi
+		if [[ "${alt_rw_created:-}" =~ ^[1-9][0-9]*$ ]] && [ "${alt_rw_created}" -le "${ALT_RW_TWO_THIRDS}" ]; then
+			alt_rw_early=1
+		fi
+		alt_rw_jobs="$(timeout 30 gh api "repos/${TEST_REPO}/actions/runs/${alt_rw_id}/jobs?per_page=100" 2>/dev/null || true)"
+		alt_rw_verdict="$(printf '%s' "${alt_rw_jobs}" | jq -r --argjson two_thirds "${ALT_RW_TWO_THIRDS}" '
+			if (.jobs | type) != "array" or (.jobs | length) == 0 then "unreadable" else
+			[.jobs[] | select(type == "object") | {
+				queued_no_runner: (((.status // "") | tostring) == "queued" and (((.runner_name // "") | tostring) == "")),
+				failed: ((((.conclusion // "") | tostring) | IN("failure", "timed_out")) or any(.steps[]?; ((.conclusion // "") | tostring) | IN("failure", "timed_out"))),
+				start: ([.steps[]? | (.started_at // empty) | tostring | sub("\\.[0-9]+Z$"; "Z") | (try fromdateiso8601 catch empty)] | min)
+			}]
+			| if all(.[]; .queued_no_runner or (.start != null and .start >= $two_thirds and (.failed | not))) then "wait" else "ran_early" end
+			end' 2>/dev/null || echo unreadable)"
+		if [ "${alt_rw_verdict}" != "wait" ]; then
+			case "${alt_rw_verdict}" in ran_early) ;; *) alt_rw_verdict="jobs_unreadable" ;; esac
+			alt_rw_result timeout "${alt_rw_verdict}" "${alt_rw_ids}"
+			return 0
+		fi
+	done <<< "${alt_rw_in_progress}"
+
+	if [ -z "${alt_rw_ids}" ]; then
+		alt_rw_result timeout no_runs_in_flight
+		return 0
+	fi
+	if [ "${alt_rw_early}" != "1" ]; then
+		alt_rw_result timeout queued_late "${alt_rw_ids}"
+		return 0
+	fi
+
+	# never_assigned when no candidate got a runner, late_assigned otherwise.
+	alt_rw_reason="never_assigned"
+	[ "${alt_rw_in_progress_count}" -eq 0 ] || alt_rw_reason="late_assigned"
+	alt_rw_result runner_wait "${alt_rw_reason}" "${alt_rw_ids}"
+	echo "runner_wait=true" >> "${GITHUB_OUTPUT}"
+	if [ "$(printf '%s' "${DISPATCH_WATCH_STOP_RELEASE_GATE:-false}" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
+		IFS=',' read -r -a alt_rw_all <<< "${alt_rw_ids}"
+		for alt_rw_id in "${alt_rw_all[@]}"; do
+			timeout 20 gh api -X POST "repos/${TEST_REPO}/actions/runs/${alt_rw_id}/cancel" >/dev/null 2>&1 \
+				|| echo "::warning::Could not cancel alt-model run #${alt_rw_id} after the runner wait"
+		done
+		dispatch_watch_stop_release_gate "${alt_rw_ids%%,*}" alt-model "${alt_rw_reason}" || true
+	fi
+	return 0
+}
+
 TARGET_REPO=""
 WORKFLOW_FILE=""
 DISPLAY_NAME=""
@@ -167,6 +327,7 @@ DISPATCH_FAIL_OPEN=0
 REGISTRATION_FAIL_OPEN=0
 DISPATCH_FIELDS=()
 STOP_RELEASE_GATE_MODE=0
+ALT_MODEL_RUNNER_WAIT_MODE=0
 WATCHED_RUN_ID=""
 RUNNER_WAIT_REASON=""
 
@@ -248,6 +409,10 @@ while [ "$#" -gt 0 ]; do
 			STOP_RELEASE_GATE_MODE=1
 			shift
 			;;
+		--alt-model-runner-wait)
+			ALT_MODEL_RUNNER_WAIT_MODE=1
+			shift
+			;;
 		--watched-run-id)
 			require_option_argument "$@"
 			WATCHED_RUN_ID="$2"
@@ -269,6 +434,13 @@ while [ "$#" -gt 0 ]; do
 			;;
 	esac
 done
+
+# --alt-model-runner-wait (issue #10037): inputs come from the environment
+# (see dispatch_watch_alt_model_runner_wait). Always exits 0.
+if [ "${ALT_MODEL_RUNNER_WAIT_MODE}" = "1" ]; then
+	dispatch_watch_alt_model_runner_wait || true
+	exit 0
+fi
 
 # --stop-release-gate (issue #10037): used by the gate's Phase 4 wait when its
 # watched review run ended as runner_wait. Cancels the watched child run, then
@@ -469,7 +641,8 @@ fi
 # concurrency group is not a runner wait) or started its first step
 # in the last third of the completion budget; an empty jobs list counts only
 # when the run was queued the whole time. A job with a runner but no readable
-# step start counts as early, and a failed read gives timeout: both fail
+# step start counts as early, a job that already failed never counts as late,
+# and a failed read gives timeout: all fail
 # closed, so a child that ran early and then failed or overran still fails
 # the gate. Printed as DISPATCH_WATCH_RESULT and written as watch_result=.
 WATCH_RESULT="timeout"
@@ -484,16 +657,19 @@ if WATCH_JOBS_JSON="$(gh_api_safe_quiet_print "repos/${TARGET_REPO}/actions/runs
 		[.jobs[] | select(type == "object") | {
 			queued_no_runner: (((.status // "") | tostring) == "queued" and (((.runner_name // "") | tostring) == "")),
 			has_runner: (((.runner_name // "") | tostring) != ""),
+			held_no_runner: (((.status // "") | tostring | IN("waiting", "pending")) and (((.runner_name // "") | tostring) == "")),
+			failed: ((((.conclusion // "") | tostring) | IN("failure", "timed_out")) or any(.steps[]?; ((.conclusion // "") | tostring) | IN("failure", "timed_out"))),
 			start: ([.steps[]? | (.started_at // empty) | tostring | sub("\\.[0-9]+Z$"; "Z") | (try fromdateiso8601 catch empty)] | min)
 		}] as $js
 		| [($js | length),
 		   ([$js[] | select(.queued_no_runner)] | length),
-		   (if ($js | length) > 0 and all($js[]; .queued_no_runner or (.start != null and .start >= $two_thirds)) then 1 else 0 end),
-		   ([$js[] | select(.has_runner or .start != null)] | length)]
+		   (if ($js | length) > 0 and all($js[]; .queued_no_runner or (.start != null and .start >= $two_thirds and (.failed | not))) then 1 else 0 end),
+		   ([$js[] | select(.has_runner or .start != null)] | length),
+		   ([$js[] | select(.held_no_runner)] | length)]
 		| map(tostring) | join(" ")
 		end' 2>/dev/null || true)"
 fi
-if [[ "${WATCH_JOBS_SUMMARY}" =~ ^([0-9]+)\ ([0-9]+)\ ([01])\ ([0-9]+)$ ]]; then
+if [[ "${WATCH_JOBS_SUMMARY}" =~ ^([0-9]+)\ ([0-9]+)\ ([01])\ ([0-9]+)\ ([0-9]+)$ ]]; then
 	WATCH_JOBS_COUNT="${BASH_REMATCH[1]}"
 	WATCH_JOBS_QUEUED_NO_RUNNER="${BASH_REMATCH[2]}"
 	if [ "${WATCH_JOBS_COUNT}" -eq 0 ]; then
@@ -510,6 +686,10 @@ if [[ "${WATCH_JOBS_SUMMARY}" =~ ^([0-9]+)\ ([0-9]+)\ ([01])\ ([0-9]+)$ ]]; then
 		else
 			WATCH_RESULT_REASON="late_assigned"
 		fi
+	elif [ "${BASH_REMATCH[4]}" -eq 0 ] && [ "${BASH_REMATCH[5]}" -gt 0 ]; then
+		# No job got a runner, but not every job is status=queued: held by an
+		# environment or a concurrency group, not a runner wait.
+		WATCH_RESULT_REASON="held"
 	else
 		WATCH_RESULT_REASON="ran_early"
 	fi

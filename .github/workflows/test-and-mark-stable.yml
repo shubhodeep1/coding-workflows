@@ -4075,6 +4075,26 @@ jobs:
           rm -f "${DW_TIMEOUT_LOG}"
           # End dispatch-watch timeout handling.
 
+      # Issue #10037 (G3): when the gate run is cancelled (the runner-wait
+      # stop in scripts/dispatch_and_watch_workflow_run.sh, or an operator),
+      # cancel this job's dispatched child runs that have not completed, so
+      # they do not keep holding runners after the gate ends.
+      - name: Cancel dispatched child runs when the gate is cancelled
+        if: cancelled()
+        env:
+          GATE_CHILD_RUN_IDS: ${{ steps.dispatch_validation_refresh.outputs.dispatched_run_id }} ${{ steps.dispatch_update_workflows.outputs.dispatched_run_id }} ${{ steps.dispatch_memory_maintenance.outputs.dispatched_run_id }}
+        run: |
+          for child_id in ${GATE_CHILD_RUN_IDS}; do
+            [[ "${child_id}" =~ ^[0-9]+$ ]] || continue
+            child_status="$(timeout 20 gh api "repos/${TEST_REPO}/actions/runs/${child_id}" --jq '.status // ""' 2>/dev/null || true)"
+            [ "${child_status}" != "completed" ] || continue
+            if timeout 20 gh api -X POST "repos/${TEST_REPO}/actions/runs/${child_id}/cancel" >/dev/null 2>&1; then
+              echo "Cancel requested for child run #${child_id} (gate cancelled)"
+            else
+              echo "::warning::Could not cancel child run #${child_id} after the gate was cancelled"
+            fi
+          done
+
       - name: "Soft-error analyser (memory_maintenance)"
         if: always() && steps.dispatch_memory_maintenance.outputs.run_id != ''
         uses: ./.github/actions/run-soft-error-analyzer
@@ -4620,6 +4640,26 @@ jobs:
           rm -f "${DW_TIMEOUT_LOG}"
           # End dispatch-watch timeout handling.
 
+      # Issue #10037 (G3): when the gate run is cancelled (the runner-wait
+      # stop in scripts/dispatch_and_watch_workflow_run.sh, or an operator),
+      # cancel this job's dispatched child runs that have not completed, so
+      # they do not keep holding runners after the gate ends.
+      - name: Cancel dispatched child runs when the gate is cancelled
+        if: cancelled()
+        env:
+          GATE_CHILD_RUN_IDS: ${{ steps.dispatch.outputs.dispatched_run_id }}
+        run: |
+          for child_id in ${GATE_CHILD_RUN_IDS}; do
+            [[ "${child_id}" =~ ^[0-9]+$ ]] || continue
+            child_status="$(timeout 20 gh api "repos/${TEST_REPO}/actions/runs/${child_id}" --jq '.status // ""' 2>/dev/null || true)"
+            [ "${child_status}" != "completed" ] || continue
+            if timeout 20 gh api -X POST "repos/${TEST_REPO}/actions/runs/${child_id}/cancel" >/dev/null 2>&1; then
+              echo "Cancel requested for child run #${child_id} (gate cancelled)"
+            else
+              echo "::warning::Could not cancel child run #${child_id} after the gate was cancelled"
+            fi
+          done
+
       - name: "Soft-error analyser (validate-standalone)"
         if: always() && steps.dispatch.outputs.run_id != ''
         uses: ./.github/actions/run-soft-error-analyzer
@@ -5114,6 +5154,14 @@ jobs:
             else
               ALT_CLARIFY_RUN_NOTE=" (no non-skipped Clarify run titled '${ALT_ISSUE_TITLE}' found)"
             fi
+          fi
+          # Issue #10037 (G3): a timeout caused only by this issue's runs waiting
+          # for runners ends as runner_wait and, with
+          # DISPATCH_WATCH_STOP_RELEASE_GATE=true, stops the gate (no attempt).
+          # The grep skips a checkout whose watcher predates the mode.
+          if grep -q -- '--alt-model-runner-wait)' ./scripts/dispatch_and_watch_workflow_run.sh 2>/dev/null; then
+            ALT_WAIT_STARTED_AT=$(( DEADLINE - 4500 )) ALT_WAIT_BUDGET_SECS=4500 \
+              bash ./scripts/dispatch_and_watch_workflow_run.sh --alt-model-runner-wait || true
           fi
           echo "::error::Alt-model run timed out before reaching review stage${ALT_CLARIFY_RUN_NOTE}"
           echo "  Issue: ${GITHUB_SERVER_URL:-https://github.com}/${TEST_REPO}/issues/${ISSUE_NUMBER}"

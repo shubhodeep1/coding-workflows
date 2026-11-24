@@ -1416,6 +1416,44 @@ def test_phase4_runner_assigned_in_the_last_third_is_late_assigned() -> None:
 	assert captured["stop_args"][-1] == "late_assigned"
 
 
+def test_phase4_held_review_run_is_not_a_runner_wait() -> None:
+	# Issue #10037: a job held in pending/waiting (concurrency group or
+	# environment) for the whole phase is not a runner wait: no stop.
+	for status in ("pending", "waiting"):
+		captured: dict = {}
+		held = {"id": 300, "name": "review / gate", "status": status, "conclusion": None, "steps": []}
+		result, output = _run_phase4_runner_wait([
+			{"until": _RW_START + 99999, "run": _rw_run("pending"), "jobs": _rw_jobs(held)},
+		], extra_env={"DISPATCH_WATCH_STOP_RELEASE_GATE": "true"}, captured=captured)
+		assert result.returncode == 1, result.stderr + result.stdout
+		assert output.splitlines() == ["status=timeout"], (status, result.stdout)
+		assert "outcome=runner_wait" not in result.stdout
+		assert "stop_args" not in captured
+
+
+def test_phase4_late_opened_short_runner_wait_is_not_late_assigned() -> None:
+	# Issue #10037: the run ran early, waited for a runner only from about
+	# start+700 (after the first third), then got one late: a real overrun.
+	captured: dict = {}
+	def step(name: str, started: int) -> dict:
+		job = _rw_active_job(started)
+		job["steps"][0]["name"] = name
+		return _rw_jobs(job)
+	result, output = _run_phase4_runner_wait([
+		{"until": _RW_START + 250, "run": _rw_run("in_progress"), "jobs": step("Step A", _RW_START)},
+		{"until": _RW_START + 500, "run": _rw_run("in_progress"), "jobs": step("Step B", _RW_START + 250)},
+		{"until": _RW_START + 750, "run": _rw_run("in_progress"), "jobs": step("Step C", _RW_START + 500)},
+		{"until": _RW_START + 1300, "run": _rw_run("in_progress"), "jobs": _rw_jobs(_rw_queued_job())},
+		{"until": _RW_START + 99999, "run": _rw_run("in_progress"), "jobs": step("Step D", _RW_START + 1300)},
+	], extra_env={"DISPATCH_WATCH_STOP_RELEASE_GATE": "true"}, captured=captured)
+	assert result.returncode == 1, result.stderr + result.stdout
+	assert "E2E_REVIEW_RUNNER_WAIT run=30 outcome=started" in result.stdout, result.stdout
+	assert "total wall-clock budget" in result.stdout, result.stdout
+	assert output.splitlines() == ["status=timeout"], result.stdout
+	assert "reason=late_assigned" not in result.stdout
+	assert "stop_args" not in captured
+
+
 def test_phase4_unconfirmed_long_empty_lookup_is_not_a_runner_wait() -> None:
 	result, output = _run_phase4_runner_wait([
 		{"until": _RW_START + 700, "run": _rw_run("pending"), "jobs": _rw_jobs(_rw_queued_job())},
