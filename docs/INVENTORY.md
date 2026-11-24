@@ -233,6 +233,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/issue_attachment_bundle.py` — Python helper for issue attachment bundle.
 - `scripts/label_helpers.sh` — label_helpers.sh — idempotent AI label creation helpers.
 - `scripts/ledger_emit_substate.sh` — Shell helper for ledger emit substate.
+- `scripts/lint_gh_calls_in_loops.py` — Warning-only lint (CLAUDE.md §15) that flags GitHub API calls a PR adds inside shell for/while/until loops; run by the pr-body-lint job in pr-checks.yml.
 - `scripts/lint_plan_archival_completeness.py` — Lint a PR that adds files under docs/completed/ for plan-archival completeness.
 - `scripts/lint_plan_decisions.py` — Advisory lint for the `## Decisions` convention in `docs/plans/*.md`.
 - `scripts/lint_pr_body_auto_close.py` — Lint PR title/body text (and optionally commit messages) for GitHub auto- close keywords that target ai:orchestrator-tracking issues.
@@ -360,6 +361,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/stable_e2e_step_deep_verify.sh` — body of the test-and-mark-stable.yml "Deep verify: inspect all workflow run steps" step (`id: deep-verify`; sourced by the step from a `github.sha`-pinned copy in `RUNNER_TEMP`; moved out to keep the workflow at or under the 430,000-byte headroom ceiling in `tests/test_test_and_mark_stable_step_scripts_contract.py`).
 - `scripts/stable_e2e_step_verify_bait_removed.sh` — body of the test-and-mark-stable.yml "Phase 4b: Verify editor restored canary (pytest + retry)" step (`id: verify-bait-removed`; sourced by the step from a `github.sha`-pinned copy in `RUNNER_TEMP`; moved out to keep the workflow under the §27 size guard, issue #7991).
 - `scripts/stable_e2e_step_verify_cancel_on_close.sh` — body of the test-and-mark-stable.yml "Phase 7: Close PR and verify cancel_on_pr_close fires" step (`id: verify-cancel-on-close`; sourced by the step from a `github.sha`-pinned copy in `RUNNER_TEMP`; moved out to keep the workflow under the 430,000-byte headroom check, PR #9794). Its wait budget starts when the cancel run leaves the queue, under `PHASE7_QUEUE_WAIT_CAP_MINUTES`.
+- `scripts/stable_e2e_step_wait_plan.sh` — body of the test-and-mark-stable.yml "Phase 2: Wait for plan to complete" step (`id: wait-plan`; sourced by the step from a `github.sha`-pinned copy in `RUNNER_TEMP`; moved out to keep the workflow under the §27 size guard, issue #9473).
 - `scripts/stable_e2e_step_wait_review.sh` — body of the test-and-mark-stable.yml "Phase 4: Wait for review & autofix to complete" step (`id: wait-review`; sourced by the step from a `github.sha`-pinned copy in `RUNNER_TEMP`; moved out to keep the workflow under the §27 size guard, issue #7991).
 - `scripts/stable_orchestrate_cancel_dispatched_run.sh` — called by the test-and-mark-stable.yml "Cleanup orchestrate test issues" step: cancels the orchestrate bootstrap the job dispatched when it is still queued or running, and finds a tracking issue it already created.
 - `scripts/stage_workflow_log_bundle.py` — Bound workflow-log artifacts before mounting them into the isolated analyzer.
@@ -369,6 +371,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/summarize_unselected_runs.py` — Summarize unselected workflow runs via gpt-6-luna to widen analysis coverage.
 - `scripts/sync_claude_live_copies.py` — Keep coding-workflows' live `.claude/` copies in step with their templates.
 - `scripts/sync_contract_list_union.py` — Merge a `db/contracts/*.yml` integration-sync conflict whose hunks only append to `read_entrypoints` / `write_entrypoints`, or report it ineligible so the LLM resolver runs (stuck-states P12; log prefix `SYNC_LIST_UNION_INELIGIBLE_V1`).
+- `scripts/sync_dependabot_exclusions.py` — Add the sync-managed wrappers to `exclude-paths` of a consumer's own root `github-actions` Dependabot entries (run by update_workflows.yml "Sync Dependabot exclusions for managed wrappers" and the verify job's `verify_reproduce`, only when the attested release manifest lists it; issue #9485).
 - `scripts/targeted_file_context.py` — Inline likely-to-be-edited files into the Codex prompt as a reference block so the editor doesn't waste budget reading them.
 - `scripts/task_state.py` — Mirror orchestrator wave-issue state into per-task JSON files and unblock mirrored dependents.
 - `scripts/templates/serena_project.yml.j2` — Template asset for serena_project.yml.j2.
