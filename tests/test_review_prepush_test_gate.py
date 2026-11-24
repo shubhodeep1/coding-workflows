@@ -834,6 +834,19 @@ def test_final_ci_repair_skips_when_final_ci_turned_green(tmp_path):
 	assert gh_log.count(f"api repos/o/r/commits/{head}/statuses?per_page=100 ") == 1
 
 
+@pytest.mark.parametrize("states", [("success",), ("success", "success")], ids=["no_older_failure", "success_after_stale_success"])
+def test_final_ci_repair_skips_without_an_older_failure(tmp_path, states):
+	# The gate's rule: a success newer than the marker is green even when the
+	# failed attempt's ci/final=failure POST never landed (newest at 13:00,
+	# a stale success at 12:00 at most, marker at 12:00).
+	repo, env, github_env, head = _setup_final_ci(tmp_path, [FAIL, PASS])
+	env["FAKE_GH_STATUSES_JSON"] = _ci_final_statuses(*states)
+	proc = _run_step(tmp_path, repo, env)
+	assert f"FINAL_CI_REPAIR pr=7 head={head} outcome=skipped reason=final_ci_now_green" in proc.stdout, proc.stdout
+	assert _git(repo, "rev-parse", "HEAD").strip() == head
+	assert "POST" not in (_work(tmp_path) / "gh.log").read_text(encoding="utf-8")
+
+
 def test_final_ci_repair_skips_a_fallback_when_final_ci_turned_green(tmp_path):
 	# Not reproduced on a green head: no marker, no full review either.
 	repo, env, github_env, head = _setup_final_ci(tmp_path, [PASS])
@@ -847,7 +860,6 @@ def test_final_ci_repair_skips_a_fallback_when_final_ci_turned_green(tmp_path):
 
 @pytest.mark.parametrize("statuses, extra", [
 	(_ci_final_statuses("failure", "success"), {}),
-	(_ci_final_statuses("success"), {}),
 	(_ci_final_statuses("success", "failure", creator="mallory"), {}),
 	(_ci_final_statuses("success", "failure"), {"FAKE_GH_STATUSES_RC": "1"}),
 	("not json", {}),
@@ -856,7 +868,7 @@ def test_final_ci_repair_skips_a_fallback_when_final_ci_turned_green(tmp_path):
 	(_ci_final_statuses("success", "failure", newest_hour=11), {}),
 	# Without the comments snapshot there is no marker time: repair as before.
 	(_ci_final_statuses("success", "failure"), {"PR_ISSUE_COMMENTS_FILE": "/nonexistent/pr_issue_comments.json"}),
-], ids=["newest_failure", "no_older_failure", "untrusted_creator", "read_failed", "unparseable", "success_older_than_marker",
+], ids=["newest_failure", "untrusted_creator", "read_failed", "unparseable", "success_older_than_marker",
 	"no_comments_snapshot"])
 def test_final_ci_repair_commits_when_final_ci_is_not_green(tmp_path, statuses, extra):
 	repo, env, github_env, head = _setup_final_ci(tmp_path, [FAIL, PASS])
