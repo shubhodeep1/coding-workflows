@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.83,
+  "details": "Many merged changes pair implementation and tests with these repository documentation artifacts, and some also update README.md. When planning a behavioral change, check the existing naming and content conventions for these files and include the applicable documentation updates.",
+  "fingerprint": "74d3b79d0ae38f7e0ce5492232e773996d6fc13e0c38cde802ebcd768abf020a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45306352148",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45306352148",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/9520",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9620",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9925",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9928",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9986",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9564",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9628",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9931",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9935",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9989"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261124024109_e3d7aef2d9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Behavior changes commonly include an agents.d note and a changelog.d fragment.",
+  "timestamps": {
+    "created_at": "2026-11-24T02:41:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
