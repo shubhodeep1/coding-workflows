@@ -1,0 +1,21 @@
+{
+  "discovered_at": "2026-11-24T08:43:16Z",
+  "issue_number": 9993,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 005 as out-of-scope; anchor=scripts/review_final_ci_sweep.sh:340; cited_path=scripts/review_final_ci_sweep.sh; files_touched=README.md, agents.d/9993-final-ci-wiring-behind.md, changelog.d/9993-final-ci-wiring-behind.md, scripts/orchestrate_poll_process.sh, scripts/pr_checks_lib.sh, scripts/review_enable_auto_merge.sh, tests/test_merge_lease.py, tests/test_review_final_ci.py.",
+  "phase": "review_autofix",
+  "pr_number": 9997,
+  "record_id": "lesson_20261124084316_139286bd48",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/review_final_ci_sweep.sh",
+    "README.md",
+    "agents.d/9993-final-ci-wiring-behind.md",
+    "changelog.d/9993-final-ci-wiring-behind.md",
+    "scripts/orchestrate_poll_process.sh",
+    "scripts/pr_checks_lib.sh",
+    "scripts/review_enable_auto_merge.sh",
+    "tests/test_merge_lease.py",
+    "tests/test_review_final_ci.py"
+  ]
+}
