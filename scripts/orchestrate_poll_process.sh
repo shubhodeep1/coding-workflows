@@ -15818,9 +15818,13 @@ Unable to create or locate the final integration PR from \`${integration_branch}
       # status may sit on a branch whose workflow copy cannot post it; route
       # it to the CI-wiring update (it acts only on a succeeded final CI run).
       # Reuses the blockers read above; the PR still waits for the next poll.
+      # A final-CI workflow set to empty (final CI off) makes no wiring call.
+      local final_wiring_wf=""
       if [ "${PR_RULESET_BLOCKERS_SUMMARY:-}" = "${FINAL_CI_WIRING_STATUS_CONTEXT:-ci/final} (missing)" ] \
-        && declare -F _pr_final_ci_wiring_behind_update >/dev/null 2>&1; then
-        _pr_final_ci_wiring_behind_update "${final_pr}" "${pr_head_sha}" "${default_branch}" "${REVIEW_FINAL_CI_WORKFLOW:-ci.yml}" blocked_status || true
+        && declare -F _pr_final_ci_wiring_behind_update >/dev/null 2>&1 \
+        && declare -F _pr_final_ci_wiring_workflow >/dev/null 2>&1 \
+        && final_wiring_wf="$(_pr_final_ci_wiring_workflow)"; then
+        _pr_final_ci_wiring_behind_update "${final_pr}" "${pr_head_sha}" "${default_branch}" "${final_wiring_wf}" blocked_status || true
       fi
       echo "  [final-merge] PR #${final_pr} is blocked by ruleset-required check(s): ${PR_RULESET_BLOCKERS_SUMMARY}. Will retry next poll."
       return 1

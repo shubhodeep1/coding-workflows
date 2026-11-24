@@ -1408,3 +1408,24 @@ def test_ci_workflow_calls_no_local_reusable_workflow() -> None:
 	"""_pr_final_ci_wiring_behind_update checks only .github/workflows/<file>."""
 	text = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
 	assert "uses: ./.github/workflows/" not in text
+
+
+def test_blocked_guard_honours_an_empty_final_ci_workflow(fake_gh) -> None:
+	"""REVIEW_FINAL_CI_WORKFLOW set to empty is the documented "final CI off": the guard's
+	G3 hook makes no wiring call, no update and no dispatch (unset still means ci.yml)."""
+	runs = _runs({"status": "completed", "conclusion": "success"})
+	result, calls = _guard(fake_gh, _wiring_fixtures(runs=runs), "ci/final (missing)", env={"REVIEW_FINAL_CI_WORKFLOW": ""})
+	out = result.stdout + result.stderr
+	assert "SYNC_MERGE_BLOCKED_GUARD outcome=deferred" in out and "guard_rc=1" in out, out
+	assert "REVIEW_FINAL_CI_WIRING" not in out
+	assert calls == []
+
+
+def test_blocked_status_hooks_do_not_turn_an_empty_workflow_into_ci_yml() -> None:
+	"""Both G3 hooks resolve the workflow through _pr_final_ci_wiring_workflow, never `:-ci.yml`."""
+	lib = (REPO_ROOT / "scripts/pr_checks_lib.sh").read_text(encoding="utf-8")
+	poller = (REPO_ROOT / "scripts/orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	assert "${REVIEW_FINAL_CI_WORKFLOW:-ci.yml}" not in lib
+	assert "${REVIEW_FINAL_CI_WORKFLOW:-ci.yml}" not in poller
+	assert 'local REVIEW_FINAL_CI_WORKFLOW="${REVIEW_FINAL_CI_WORKFLOW-${wiring_wf}}"' in lib
+	assert poller.count("_pr_final_ci_wiring_workflow") >= 1 and lib.count('="$(_pr_final_ci_wiring_workflow)"') == 1

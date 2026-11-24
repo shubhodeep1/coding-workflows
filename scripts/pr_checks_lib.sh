@@ -914,11 +914,14 @@ _pr_sync_merge_blocked_guard()
 	echo "SYNC_MERGE_BLOCKED_GUARD outcome=deferred pr=${guard_pr:-unknown} head=${guard_head:-unknown} state=${guard_state} blockers=${guard_blockers}"
 	# Issue #9993 (G3): a green head blocked only by a missing final-CI status
 	# may sit on a branch whose workflow copy cannot post it; route it to the
-	# CI-wiring update. The guard still defers.
+	# CI-wiring update. The guard still defers. A caller that set
+	# REVIEW_FINAL_CI_WORKFLOW to empty (final CI off) gets no wiring call.
+	local guard_wiring_wf=""
 	if [ "${guard_state}" = "blocked" ] && [ -n "${guard_head}" ] && [ -n "${guard_pr}" ] \
 		&& [ "${guard_blockers}" = "${FINAL_CI_WIRING_STATUS_CONTEXT:-ci/final} (missing)" ] \
-		&& declare -F _pr_final_ci_wiring_behind_update >/dev/null 2>&1; then
-		_pr_final_ci_wiring_behind_update "${guard_pr}" "${guard_head}" "${guard_base_ref}" "${REVIEW_FINAL_CI_WORKFLOW:-ci.yml}" blocked_status || true
+		&& declare -F _pr_final_ci_wiring_behind_update >/dev/null 2>&1 \
+		&& guard_wiring_wf="$(_pr_final_ci_wiring_workflow)"; then
+		_pr_final_ci_wiring_behind_update "${guard_pr}" "${guard_head}" "${guard_base_ref}" "${guard_wiring_wf}" blocked_status || true
 	fi
 	return 1
 }
@@ -2537,9 +2540,11 @@ _pr_final_ci_refused_base_update()
 #       update; one note per head ending in
 #         <!-- ai:final-ci-wiring-behind:v1 pr=<n> head=<sha> reason=no_update_path -->
 #       (only when the comment read succeeded), which is not a hold.
-#       The update chain runs with REVIEW_FINAL_CI_WORKFLOW defaulted to
-#       <workflow file>, so the poller's calls also dispatch the update
-#       head's final CI.
+#       The update chain runs with an unset REVIEW_FINAL_CI_WORKFLOW
+#       defaulted to <workflow file>, so the poller's calls also dispatch the
+#       update head's final CI; a set-but-empty value (final CI off) stays
+#       empty, and the blocked_status hooks then make no call at all
+#       (_pr_final_ci_wiring_workflow).
 #       Sets PR_FINAL_CI_WIRING_OUTCOME = current | updated | requested |
 #       held | unknown and PR_FINAL_CI_WIRING_REASON; always returns 0.
 #       Callers dispatch (or defer) as before on current and unknown.
@@ -2577,6 +2582,21 @@ _pr_final_ci_wiring_enabled()
 		true|1|yes|on) return 0 ;;
 	esac
 	return 1
+}
+
+# _pr_final_ci_wiring_workflow: prints the workflow file the blocked_status
+# hooks (_pr_sync_merge_blocked_guard, the poller's final merge) check. An
+# unset REVIEW_FINAL_CI_WORKFLOW (the poller never sets it) means ci.yml; a
+# set-but-empty one is the documented "final CI off" (README), so it prints
+# nothing and returns 1 and the hook makes no call. No API call.
+_pr_final_ci_wiring_workflow()
+{
+	if [ "${REVIEW_FINAL_CI_WORKFLOW+set}" = "set" ]; then
+		[ -n "${REVIEW_FINAL_CI_WORKFLOW}" ] || return 1
+		printf '%s\n' "${REVIEW_FINAL_CI_WORKFLOW}"
+		return 0
+	fi
+	printf '%s\n' "ci.yml"
 }
 
 # _pr_final_ci_wiring_note_seen <pr> <head sha>: 0 when the token's own login
@@ -2781,8 +2801,9 @@ _pr_final_ci_wiring_behind_update()
 	local PR_BASE_FRESHNESS_BASE_SHA="${wiring_tip}" PR_BASE_FRESHNESS_BASE_REF="${wiring_base}"
 	local PR_BASE_FRESHNESS_BEHIND_BY="${wiring_behind_by}" PR_BASE_FRESHNESS_OVERLAP=""
 	# The update chain dispatches the update head's final CI only when this
-	# is set; the poller never sets it, so default it to the workflow checked.
-	local REVIEW_FINAL_CI_WORKFLOW="${REVIEW_FINAL_CI_WORKFLOW:-${wiring_wf}}"
+	# is set; the poller never sets it, so default an unset value to the
+	# workflow checked. A set-but-empty value (final CI off) stays empty.
+	local REVIEW_FINAL_CI_WORKFLOW="${REVIEW_FINAL_CI_WORKFLOW-${wiring_wf}}"
 	if ! _pr_base_sync_for_fresh_ci "${wiring_pr}" "${wiring_head}"; then
 		if [ "${wiring_seen_rc}" -eq 1 ] || [ "${wiring_seen_rc}" -eq 3 ]; then
 			# One PR read, only before a note would be posted: a head that
