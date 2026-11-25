@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/audit-plans.md:39 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The tracking-issue listing `gh api \"repos/<owner>/<repo>/issues?labels=ai:orchestrator-tracking&state=open\"` has no `--paginate` or `per_page`, so only the first 30 items are read, yet the command treats the result as the complete set (identical copy at workflow-templates/.claude/commands/audit-plans.md).\n  WHY: With more than 30 open tracking issues, a plan that is in flight can look idle, so step 4a can edit it and step 6 can miss it in the conflict gate. The fail-closed branch never triggers because the call succeeds. Severity is MAJOR in the source reports, mapped to high.\n- .claude/commands/audit-plans.md:126,139 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The recommendation blocks carry a staleness caveat only when step 4a refreshed the plan (\"Refreshed in <maintenance PR url>\"). A plan marked STALE but not refreshed (listing unreadable, fail-closed) gets no caveat (identical copy in workflow-templates/.claude/commands/audit-plans.md).\n  WHY: In degraded mode step 6 can still pick the plan as UNSCREENED, so the operator hands off stale default-branch text believing it matches the repo, which defeats step 4a. Severity is MAJOR in the source reports, mapped to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The changelog says the tests pin \"step 4a's order, its comparisons, the intent-preserving refresh rule, the single tracking-issue fetch, and the step 9 maintenance-PR wiring\"; the PR description says plans in flight are \"reported, not edited\" with fail-closed behaviour when the listing is unreadable.\n  expected_change_site: tests/test_audit_plans_command.py (near the new step4a tests, lines 124-166)\n  confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  EVIDENCE: None of the five added tests asserts the fail-closed rule (\"make no refresh edits this run\"), the \"Stale, not refreshed \u2014 tracking-issue listing unreadable\" section, the fixed-owner rule for overlaps, or the \"merge it before handing off\" hand-off lines.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .claude/commands/audit-plans.md:39 | severity=MAJOR | confidence=4\n  PROBLEM: The call has no `--paginate` or `per_page`, so only the default 30 items are returned, and the command treats them as the complete set of open tracking issues.\n  WHY: With more than 30 open tracking issues, an in-flight plan can look idle, so step 4a can edit it and step 6 can miss it.\n- .claude/commands/audit-plans.md:126,139 | severity=MAJOR | confidence=4\n  PROBLEM: The only staleness caveat is the \"Refreshed in\" line; a plan marked STALE but not refreshed gets no caveat.\n  WHY: Step 6 degraded mode can still pick it UNSCREENED, so the operator hands off stale plan text.\n- TASK_GAP: tests/test_audit_plans_command.py | severity=NIT | confidence=3\n  Requirement: The changelog says the tests pin \"step 4a's order, its comparisons, the intent-preserving refresh rule, the single tracking-issue fetch, and the step 9 maintenance-PR wiring\". The PR description says plans in flight are \"reported, not edited\".\n  Expected change site: tests/test_audit_plans_command.py, near the new step4a tests.\n  Evidence of absence: No test asserts the fail-closed rule, the \"Stale, not refreshed\" section, the fixed-owner rule, or the \"merge it before handing off\" lines.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/commands/audit-plans.md:39 | severity=MAJOR | confidence=5\n  PROBLEM: The tracking-issue listing is treated as complete, but its `gh api` endpoint has no pagination (`--paginate` or explicit `per_page`).\n  WHY: With more than 30 open tracking issues, step 4a can miss a later issue and refresh a plan already in flight, and step 6 reuses the incomplete listing.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .claude/commands/audit-plans.md:39 | severity=MAJOR | confidence=4\n  PROBLEM: The listing call has neither `--paginate` nor `per_page`, so only the REST default of 30 items is read, yet the command treats it as complete (lines 26 and 44 consume it).\n  WHY: A plan named only by a later-page issue reads as idle, so step 4a refreshes it in place and step 6 can recommend it as conflict-free; the fail-closed branch guards only an unreadable listing, not a truncated one.\n- .claude/commands/audit-plans.md:126,139 | severity=MAJOR | confidence=4\n  PROBLEM: Both recommendation blocks warn about staleness only when step 4a refreshed the plan; on the fail-closed path a STALE plan is never refreshed, yet step 6 degraded mode can still pick it, and the hand-off has no staleness caveat.\n  WHY: The operator runs `/implement-plan-claude` against stale default-branch plan text, which defeats step 4a's purpose; the generic UNSCREENED wording on line 52 does not mention staleness.\n- TASK_GAP: tests/test_audit_plans_command.py | severity=NIT | confidence=3\n  Requirement: changelog.d/10090-audit-plans-stale-plan-refresh.md line 16 states the tests \"pin step 4a's order, its comparisons, the intent-preserving refresh rule, the single tracking-issue fetch, and the step 9 maintenance-PR wiring\", and the PR description states plans in flight are \"reported, not edited\" with fail-closed behaviour when the listing is unreadable.\n  Expected change site: tests/test_audit_plans_command.py, near the new step4a fixture and tests (lines 124-166).\n  Evidence of absence: No assertion exists for the fail-closed rule (line 26), the \"Stale, not refreshed \u2014 tracking-issue listing unreadable\" section (line 99), the fixed-owner rule for overlaps (line 27), or the \"Refreshed in <maintenance PR url> \u2014 merge it before handing off\" lines (126, 139).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d856ace50c86dad60d846803e5efa1b5144ac3ad0011274058ac9f818d4b58c6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10090,
+    "run_id": "45575053871",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45575053871",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125102224_792ca40342",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10090,
+    "run_id": "45575053871"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T10:22:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
