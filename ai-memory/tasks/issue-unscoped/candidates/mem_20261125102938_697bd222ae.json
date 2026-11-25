@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:2449-2454 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: The existing `unblock_fixup_origin` check in `unblock_main` calls `unblock_escalate_fixup` and returns 0 before control reaches the new #9946 no-wait \"nothing to implement\" close guard (lines 2457-2475). So that guard can never run for an issue with a fix-up origin, including a judge-filed fix-up issue.\n  WHY: Both reviewers rated it MAJOR, so the two agree. The escalation happens only once, and later runs log `outcome=skip reason=fixup_escalated` (lines 1775-1782) and still return 0, so a fix-up issue whose work is already on the planning ref stays open with `ai:blocked` forever and needs a manual close. That is the failure #9946 set out to fix. Note: anthropic_claude-sonnet-5_5 checked this claim and rejected it in its review notes (it calls this the existing Q56 exit, says the issue's Non-goals rule out changing the fix-up path, and says keeping the escalation is the lower-risk behaviour).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cAdd a call to the same function on the no-pending-wait path for standalone ai:blocked issues, before the judge would resume or escalate.\u201d\n  expected_change_site: scripts/unblock_judge.sh, unblock_main, before the blocked-fix-up escalation return.\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: At lines 2449-2453, when unblock_fixup_origin returns an origin, the judge calls unblock_escalate_fixup and returns. The new no-wait close call comes later, at lines 2467-2474, so a qualifying blocked fix-up with no pending wait is escalated without reaching the close helper. The existing test at tests/test_unblock_judge.py:3704-3714 confirms that a pipeline-authored fix-up marker on an ai:blocked issue takes this early-return path.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_judge.sh:lines 2450-2453 | severity=MAJOR | confidence=4\n  PROBLEM: The new no-wait close guard added at lines 2457-2474 cannot be reached for issues that have a fix-up origin, even when the fix-up wait is already marked `done`.\n  WHY: The existing `unblock_fixup_origin` check (lines 2450-2453) triggers an escalation and returns 0 before reaching the new guard. So any issue that ever had a fix-up origin is escalated instead of being checked by the new no-wait close path.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cAdd a call to the same function on the no-pending-wait path for standalone ai:blocked issues, before the judge would resume or escalate.\u201d\n  Expected change site: scripts/unblock_judge.sh, unblock_main, before the blocked-fix-up escalation return.\n  Evidence of absence: At lines 2449-2453, when unblock_fixup_origin returns an origin, the judge calls unblock_escalate_fixup and returns. The new no-wait close call is later, at lines 2467-2474, so a qualifying blocked fix-up with no pending wait is escalated without reaching the close helper. The existing test at tests/test_unblock_judge.py:3704-3714 confirms that a pipeline-authored fix-up marker on an ai:blocked issue takes this early-return path.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/unblock_judge.sh:unblock_main, lines 2449-2454 (the Q56 blocked-fixup deterministic exit) vs the #9946 guard at lines 2457-2475 | severity=MAJOR | confidence=4\n  PROBLEM: The no-wait \"nothing to implement\" close cannot be reached for a judge-filed fix-up issue. `unblock_fixup_origin` (line 1761) matches any issue whose body starts with a trusted `<!-- ai:unblock-fixup:v1 item=N round=R -->` marker. On a match, lines 2451-2453 call `unblock_escalate_fixup` and `return 0` unconditionally, so control never reaches the #9946 guard at line 2467. The escalation happens only once (lines 1775-1782 log `outcome=skip reason=fixup_escalated`), so after the first escalation the issue is skipped permanently.\n  WHY: A fix-up issue whose work turned out to be already on the planning ref is escalated to a human once and then stays open with `ai:blocked` forever, needing a manual close. This is the #9215-class failure that #9946 set out to fix. The linked issue does not authorize an escalation carve-out, even though the agents.d fragment documents the current ordering.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ab0d706424449bec136f7ec5aa9749a0786eee9d62408eeac44982fe4a51fd07",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9951,
+    "run_id": "45578090874",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45578090874",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125102938_697bd222ae",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9951,
+    "run_id": "45578090874"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T10:29:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
