@@ -11,7 +11,9 @@ Rules enforced here, for every workflow-level, job-level and step-level
 
 1. Full set. A block that passes any setting in REQUIRED_KEYS passes all of
    them. A step is checked on its effective env (workflow env, then job env,
-   then step env), so a job-level full set covers its steps.
+   then step env), so a job-level full set covers its steps. A block that
+   sets MERGE_BASE_FRESHNESS_ENABLED itself also needs the full set, because
+   _pr_base_fresh_for_merge can renew a lease.
 2. Same form and default. Each value is `${{ vars.<KEY> || '<default>' }}`
    and the default equals the script default in scripts/pr_checks_lib.sh
    (which also keeps every workflow consistent with every other one).
