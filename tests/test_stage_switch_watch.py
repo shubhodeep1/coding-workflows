@@ -328,6 +328,18 @@ def test_pending_marker_for_unknown_switch_is_ignored_quietly(tmp_path):
 	assert "::warning::" not in stderr
 
 
+def test_pending_marker_with_malformed_name_still_warns(tmp_path):
+	registry = _registry(tmp_path, [
+		{"until": "2099-01-01", "reason": "r", "pending": True},
+		{"name": 123, "until": "2099-01-01", "reason": "r", "pending": True},
+		{"name": "not a switch", "until": "2099-01-01", "reason": "r", "pending": True},
+	])
+	snapshot = _snapshot(tmp_path, registry, {"name": "ALPHA_ENABLED", "value": "false", "updated_at": "2026-11-01T00:00:00Z"})
+	result, stderr = _evaluate(registry, snapshot)
+	assert [entry["name"] for entry in result["alerts"]] == ["ALPHA_ENABLED"]
+	assert stderr.count("off_on_purpose marker for unknown switch") == 3
+
+
 def test_empty_registry_without_discovery_exits_2(tmp_path):
 	path = tmp_path / "stage_switches.json"
 	path.write_text(json.dumps({"schema": "stage_switches.v1", "switches": []}), encoding="utf-8")
