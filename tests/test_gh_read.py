@@ -171,6 +171,35 @@ def test_other_failures_fall_back_once_to_the_pat_without_latching(tmp_path: Pat
 	assert not list((tmp_path / "runner_temp").glob("gh_read_refused_*"))
 
 
+def test_other_failure_with_pat_rate_limited_returns_the_job_token_error(tmp_path: Path) -> None:
+	# Job token 502 while the PAT is exhausted: gh_retry must see the transient
+	# job-token error (backoff + retry), not the PAT's rate limit (alert, breaker,
+	# wait for the PAT reset).
+	env = _env(
+		tmp_path,
+		FAKE_JOB_STDERR="gh: Server Error (HTTP 502)",
+		FAKE_JOB_RC="1",
+		FAKE_PAT_STDERR="gh: API rate limit exceeded for user ID 1. (HTTP 403)",
+		FAKE_PAT_RC="1",
+	)
+	result = _run(tmp_path, f'gh_read api "repos/{REPO}/pulls/1"; echo "rc=$?"', env)
+	assert result.stdout == "rc=1\n"
+	assert _tokens(env) == [JOB_TOKEN, PAT]
+	assert "GH_READ_FALLBACK reason=error caller=poller.sh" in result.stderr
+	assert "HTTP 502" in result.stderr
+	assert "rate limit" not in result.stderr
+	assert not list((tmp_path / "runner_temp").glob("gh_read_refused_*"))
+
+
+def test_pr_checks_non_zero_returns_the_job_token_result(tmp_path: Path) -> None:
+	# `gh pr checks` exits 8 with a valid answer while checks are pending.
+	env = _env(tmp_path, FAKE_JOB_STDOUT="pending-checks", FAKE_JOB_RC="8")
+	result = _run(tmp_path, f'gh_read pr checks 1 -R {REPO}; echo " rc=$?"', env)
+	assert result.stdout == "pending-checks rc=8\n"
+	assert _tokens(env) == [JOB_TOKEN]
+	assert "GH_READ_FALLBACK" not in result.stderr
+
+
 @pytest.mark.parametrize(
 	"overrides",
 	(

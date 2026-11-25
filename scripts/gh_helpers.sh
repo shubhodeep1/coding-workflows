@@ -1083,8 +1083,11 @@ gh_review_pr_state()
 #   error) also drops the output, logs `GH_READ_FALLBACK reason=error
 #   caller=<script>` and runs gh once with the PAT, without latching, so
 #   a failing job token can never stop a polling read that the PAT would
-#   have answered (follow-up to #9888). Only the PAT's result reaches the
-#   caller's own retry wrapper (gh_retry).
+#   have answered (follow-up to #9888). When the PAT fails too, the
+#   job token's stderr and rc are returned instead of the PAT's, so the
+#   caller's own retry wrapper (gh_retry) treats the attempt as
+#   transient rather than as a PAT rate limit. `pr checks`, which exits
+#   non-zero with a valid answer, returns the job-token result unchanged.
 # The token value is never printed: xtrace is off while it is in use.
 # ---------------------------------------------------------------
 _gh_read_args_are_read()
@@ -1320,14 +1323,42 @@ _gh_read_run()
 	# and stderr are dropped so a wrapping gh_retry classifies only the PAT's
 	# result. No latch: the next call tries the job token again.
 	if [ -z "${reason}" ]; then
+		# `gh pr checks` exits non-zero (1/8) with a valid answer for failed or
+		# pending checks, so its job-token result is returned unchanged.
+		if [ "${1:-} ${2:-}" = "pr checks" ]; then
+			cat "${out_file}" 2>/dev/null || true
+			cat "${err_file}" >&2 2>/dev/null || true
+			rm -f "${out_file}" "${err_file}"
+			return "${rc}"
+		fi
 		reason="error"
 	fi
-	rm -f "${out_file}" "${err_file}"
 	if [ "${reason}" = "401" ] || [ "${reason}" = "403" ]; then
 		: > "$(_gh_read_latch_file)" 2>/dev/null || true
 	fi
 	echo "GH_READ_FALLBACK reason=${reason} caller=$(_gh_read_caller)" >&2
-	gh "$@"
+	if [ "${reason}" != "error" ]; then
+		rm -f "${out_file}" "${err_file}"
+		gh "$@"
+		return $?
+	fi
+	# reason=error: when the PAT fails too, return the job token's transient
+	# error, not the PAT's, so a wrapping gh_retry backs off and retries the
+	# job token instead of treating an exhausted PAT as a rate limit (alert,
+	# breaker trip, wait for the PAT reset). Each attempt then costs one
+	# job-token call plus one PAT call.
+	local pat_rc=0
+	gh "$@" >"${out_file}" 2>"${err_file}" || pat_rc=$?
+	if [ "${pat_rc}" -eq 0 ]; then
+		local pat_replay_rc=0
+		( cat "${out_file}" ) || pat_replay_rc=$?
+		cat "${err_file}" >&2 2>/dev/null || true
+		rm -f "${out_file}" "${err_file}"
+		return "${pat_replay_rc}"
+	fi
+	rm -f "${out_file}" "${err_file}"
+	[ -z "${err_text}" ] || printf '%s\n' "${err_text}" >&2
+	return "${rc}"
 }
 
 # ---------------------------------------------------------------
