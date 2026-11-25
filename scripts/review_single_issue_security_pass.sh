@@ -139,8 +139,10 @@
 # completed (clean/findings) marker is for an older head, the gate adds
 # `-f audit_diff_since=<that head>` and, for findings,
 # `-f prior_findings=<that comment id>`. A rejected delta dispatch (a consumer
-# wrapper without the inputs) is retried once with today's arguments
-# (`outcome=delta_fallback reason=dispatch_rejected`). The first cycle, the
+# wrapper without the inputs), or a transient delta failure that used up the
+# shared retry budget, is retried once with today's arguments
+# (`outcome=delta_fallback reason=dispatch_rejected dispatch_error=<class>`,
+# where the class names which cause applied; #10104). The first cycle, the
 # exhausted-head retry and the switch off keep today's exact arguments, so the
 # final exhausted-head audit stays a full merge-base..head audit.
 #
@@ -165,7 +167,10 @@
 # concurrency throttle before a dispatch), then one dispatch
 # and up to SECURITY_PASS_PENDING_MARKER_ATTEMPTS pending-marker POSTs (default 3,
 # valid range 1-10; backoff base defaults to 5s, range 0-30s), or one label
-# write. A rejected delta dispatch adds one dispatch (the legacy retry). A head
+# write. A failed delta dispatch adds one dispatch (the legacy retry). A
+# transient dispatch failure (#10104) repeats the same call at most
+# SECURITY_PASS_DISPATCH_RETRIES more times per run (default 2, range 0-5),
+# one budget shared by the delta dispatch and its fallback. A head
 # with no clean marker may add the base-sync carry's one commits/<head> and one
 # compare read (issue #9533; only when a trusted merge-base-sync marker names
 # the head).
