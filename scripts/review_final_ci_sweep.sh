@@ -116,10 +116,12 @@
 # Log: `PRIORITY_LANE pr=<n> outcome=... surface=final_ci`; the summary lines
 # gain `deferred_priority_lane=<n>`.
 # While the hold is active, a non-priority head whose gate the snapshot
-# does not know yet is decided before its status read, so its `deferred` /
-# `released` line and the `deferred_priority_lane` count can include a head
-# whose gate later reads as not success (that head is then counted in
-# `gate_not_success` too). Dispatch decisions are unaffected.
+# does not know yet is decided before its status read. A `deferred` head is
+# not read this tick, so `deferred_priority_lane` can count a head whose gate
+# is not success. A `released` head is not counted there; it goes on to the
+# status read and, if its gate is not success, is counted in
+# `gate_not_success`. The two counters never count the same head in one tick.
+# Dispatch decisions are unaffected.
 
 set -uo pipefail
 
