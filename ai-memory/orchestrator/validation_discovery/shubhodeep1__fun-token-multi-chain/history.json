@@ -467,6 +467,18 @@
       "pr_branch": null,
       "pr_url": null,
       "recorded_at": "2026-11-25T00:58:46Z"
+    },
+    {
+      "codex_attempts_used": 1,
+      "committed_type": "node-hardhat-solidity",
+      "consumer_default_branch": "main",
+      "consumer_head_sha": "60b012787d3b718bed85aa63b4eb7bf034f5bdfd",
+      "discovered_type": "node-hardhat-solidity",
+      "failure_reason": null,
+      "outcome": "success_agree",
+      "pr_branch": null,
+      "pr_url": null,
+      "recorded_at": "2026-11-25T03:08:53Z"
     }
   ],
   "repository": "shubhodeep1/fun-token-multi-chain",
