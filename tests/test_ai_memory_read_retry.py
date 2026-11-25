@@ -482,19 +482,29 @@ def test_fast_clone_checkout_failure_removes_temp_dir() -> None:
 	assert not any(p.exists() for p in created)
 
 
-def test_read_after_exhausted_write_clone_is_skipped(monkeypatch) -> None:
+def test_read_after_exhausted_write_clone_is_skipped(monkeypatch, capsys) -> None:
 	# The claim's recovery duplicate-check runs read_memory_root_from_branch
 	# right after the write clone used its 3 attempts: it must not add 3 more.
 	monkeypatch.setenv("GH_TOKEN", FAKE_TOKEN)
 	_result, exc, counters = _run_persist([BARE_403_STDERR] * 5)
 	assert exc is not None
 	assert counters["clone"] == 3
+	capsys.readouterr()
 	path, read_exc, read_counters = _run_read([(128, BARE_403_STDERR)] * 5)
 	assert path is None
 	assert read_exc is not None
 	assert read_counters["clone"] == 0
 	assert read_counters["sleep"] == 0
 	assert str(read_exc).startswith("Unable to read memory branch")
+	skip_stderr = capsys.readouterr().err
+	skip_lines = _telemetry_lines(skip_stderr)
+	assert len(skip_lines) == 1
+	assert skip_lines[0]["op"] == "memory-read-retry"
+	assert skip_lines[0]["target"] == "read-clone"
+	assert skip_lines[0]["skip_reason"] == "write_clone_exhausted"
+	assert "retry_reason" not in skip_lines[0]
+	assert "https://" not in skip_stderr
+	assert FAKE_TOKEN not in skip_stderr
 	# The marker is consumed: the next read clones (and retries) again.
 	path, read_exc, read_counters = _run_read([(128, BARE_403_STDERR), (0, "")])
 	try:

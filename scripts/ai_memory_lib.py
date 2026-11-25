@@ -3574,6 +3574,13 @@ def _run_memory_read_with_retry(read: Callable[[], Any], *, target: str) -> Any:
         exhausted_age = time.monotonic() - _memory_write_clone_exhausted_at
         _memory_write_clone_exhausted_at = None
         if 0.0 <= exhausted_age < _MEMORY_READ_RETRY_SKIP_WINDOW_SECONDS:
+            # Fixed fields only, so log analysis can see the budget-skipped
+            # read. No retry_reason: the write clone's reason is not kept here.
+            skip_telemetry = {"op": "memory-read-retry", "ok": False, "attempt": 0, "max_attempts": _MEMORY_READ_RETRY_ATTEMPTS, "target": target, "skip_reason": "write_clone_exhausted"}
+            print(
+                f"AI_MEMORY_TELEMETRY: {json.dumps(skip_telemetry, ensure_ascii=True, sort_keys=True)}",
+                file=sys.stderr,
+            )
             raise MemoryGitError(
                 "Unable to read memory branch: skipped, the memory-branch clone in this step "
                 f"already used all {_MEMORY_READ_RETRY_ATTEMPTS} attempts on a transient failure"
