@@ -2004,6 +2004,19 @@ _mt_merge_lease_tick()
 	local tick_unpark_lib=0 tick_unpark_why="" tick_rel_token=""
 	[ "${tick_skip3}" = 1 ] && declare -F _merge_lease_skip_release_token >/dev/null 2>&1 \
 		&& declare -F _merge_lease_skip_reason_is_soft >/dev/null 2>&1 && tick_unpark_lib=1
+	# Issue #10098 (ready-first grant, conflict release): on only when the
+	# staged library has the helpers and the switch is not `false`.
+	local tick_ready_on=0 tick_conflict_on=0 tick_free_at_read=0 tick_fb_pr="" tick_fb_gate="" tick_fb_unpark=""
+	local tick_fci_dispatched=0 tick_grant_reason="" tick_fb_idle=0 tick_conflict_prs=""
+	if [ "${tick_skip3}" = 1 ] && declare -F _merge_lease_pr_ready >/dev/null 2>&1 \
+		&& declare -F _merge_lease_ready_grant_enabled >/dev/null 2>&1 && _merge_lease_ready_grant_enabled; then
+		tick_ready_on=1
+	fi
+	if [ "${tick_skip3}" = 1 ] && declare -F _merge_lease_pr_ready >/dev/null 2>&1 \
+		&& declare -F _merge_lease_conflict_release_enabled >/dev/null 2>&1 && _merge_lease_conflict_release_enabled \
+		&& declare -F _merge_lease_label_conflict_released >/dev/null 2>&1; then
+		tick_conflict_on=1
+	fi
 	# One active-run listing pass per tick (_mt_lease_pr_runs_active); the
 	# release pass's listing, when it seeded the cache, is that pass.
 	if [ "${_MT_LEASE_RUNS_SEEDED:-}" != "1" ]; then
@@ -2051,6 +2064,15 @@ _mt_merge_lease_tick()
 			[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric unavailable "${tick_base}" "" tick read_failed "" "" "" || true
 			continue
 		fi
+		# Issue #10098: per-base ready-first state; ready_fallback needs a slot
+		# that was already free when the record was read.
+		tick_free_at_read=0
+		[ "${MERGE_LEASE_STATE:-}" = "held" ] || tick_free_at_read=1
+		tick_fb_pr=""
+		tick_fb_gate=""
+		tick_fb_unpark=""
+		tick_fci_dispatched=0
+		tick_grant_reason=""
 		# Waiters for this base, from the open-PR list already read (no API call).
 		tick_waiters=""
 		if [ "${tick_metric_ok}" = 1 ]; then
@@ -2169,6 +2191,23 @@ _mt_merge_lease_tick()
 								;;
 						esac
 					fi
+					# Issue #10098 step 5: a holder that conflicts with its base
+					# (mergeable == false) is released once (label first, then
+					# release; a labelled holder keeps its slot) while another
+					# waiter is ready. The pulls/<pr> read and the waiter scan
+					# run only when the listing shows a labelled waiter.
+					if [ -z "${tick_reason}" ] && [ "${tick_conflict_on}" = 1 ] \
+						&& ! _merge_lease_has_conflict_released_label "${tick_holder_labels}"; then
+						tick_conflict_prs="$(printf '%s\n' "${tick_prs_json}" | jq -sc --arg b "${tick_base}" '[ .[] | select(type == "object" and .base == $b) ]' 2>/dev/null)" || tick_conflict_prs="[]"
+						if [ -n "$(_merge_lease_queue_order "${tick_conflict_prs}" "$(_merge_lease_skips_hard "${MERGE_LEASE_SKIPS:-}")" "${MERGE_LEASE_PR}" 2>/dev/null || true)" ]; then
+							_merge_lease_pr_mergeable "${MERGE_LEASE_PR}" "${tick_holder_head}" || true
+							if [ "${MERGE_LEASE_PR_MERGEABLE:-unknown}" = "false" ] \
+								&& _mt_merge_lease_ready_waiter_exists "${tick_base}" "${tick_conflict_prs}" "${MERGE_LEASE_PR}" "${tick_login}" \
+								&& _merge_lease_label_conflict_released "${MERGE_LEASE_PR}"; then
+								tick_reason="released_conflict"
+							fi
+						fi
+					fi
 				fi
 			elif ! printf '%s\n' "${tick_prs_json}" | jq -e --argjson n "${MERGE_LEASE_PR}" 'select(type == "object" and .number == $n)' >/dev/null 2>&1; then
 				# The open-PR list was read at the start of this pass; confirm
@@ -2284,7 +2323,36 @@ _mt_merge_lease_tick()
 				# #9983 G5: a soft entry clears only on a confirmed head-gate
 				# success; a fail-open eligible (failed login or statuses read)
 				# keeps it, so the waiter stays skip-held below.
-				[ "${tick_first_soft}" = 1 ] && [ "${MERGE_LEASE_GATE_CONFIRMED:-false}" != "true" ] || break
+				if ! { [ "${tick_first_soft}" = 1 ] && [ "${MERGE_LEASE_GATE_CONFIRMED:-false}" != "true" ]; }; then
+					# Issue #10098: a confirmed waiter is granted only when ready
+					# (ci/final success, not conflicting); an unconfirmed
+					# (judge decision, fail-open) one is granted as before.
+					if [ "${tick_ready_on}" != 1 ] || [ "${MERGE_LEASE_GATE_CONFIRMED:-false}" != "true" ] \
+						|| _merge_lease_pr_ready "${tick_first}" "${tick_cand_head}" "${tick_base}"; then
+						break
+					fi
+					# Not ready: keeps its label, gets no skip entry.
+					tick_skip_why="${MERGE_LEASE_NOT_READY_REASON:-final_ci_pending}"
+					tick_skipped_any=1
+					_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=skipped reason=${tick_skip_why}"
+					[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric skipped "${tick_base}" "${tick_first}" tick "${tick_skip_why}" "" "${tick_waiters}" - || true
+					if [ -z "${tick_fb_pr}" ]; then
+						tick_fb_pr="${tick_first}"
+						tick_fb_gate="${tick_first_gate}"
+						tick_fb_unpark="${tick_unpark_why}"
+					fi
+					# Step 3: at most one final-CI dispatch per base per tick, only
+					# for a head with no final-CI run at all.
+					if [ "${tick_skip_why}" = "final_ci_pending" ] && [ "${tick_fci_dispatched}" = 0 ] \
+						&& _mt_merge_lease_ready_final_ci "${tick_first}" "${tick_cand_head}" \
+							"$(jq -r '.head // ""' <<< "${tick_first_row}" 2>/dev/null)" "$(jq -r '.head_repo // ""' <<< "${tick_first_row}" 2>/dev/null)"; then
+						tick_fci_dispatched=1
+					fi
+					tick_excluded="${tick_excluded:+${tick_excluded},}${tick_first}"
+					tick_first=""
+					[ "${tick_cand_n}" -lt "${tick_max_candidates}" ] || break
+					continue
+				fi
 			fi
 			tick_skip_why="${MERGE_LEASE_INELIGIBLE_REASON:-no_head_gate}"
 			tick_skipped_any=1
@@ -2310,6 +2378,20 @@ _mt_merge_lease_tick()
 			tick_first=""
 			[ "${tick_cand_n}" -lt "${tick_max_candidates}" ] || break
 		done
+		# Issue #10098 step 4 (liveness): no waiter was ready and the slot has
+		# been free for MERGE_LEASE_IDLE_MINUTES (0 means 60) since the record's
+		# updated= time: grant the first eligible waiter by the old rule.
+		if [ -z "${tick_first}" ] && [ -n "${tick_fb_pr}" ] && [ "${tick_free_at_read}" = 1 ]; then
+			tick_fb_idle="$(_merge_lease_idle_seconds)"
+			[ "${tick_fb_idle}" -gt 0 ] || tick_fb_idle=3600
+			if [[ "${MERGE_LEASE_UPDATED:-0}" =~ ^[0-9]+$ ]] && [ $(( $(date -u +%s) - 10#${MERGE_LEASE_UPDATED:-0} )) -ge "${tick_fb_idle}" ]; then
+				tick_first="${tick_fb_pr}"
+				tick_first_gate="${tick_fb_gate}"
+				tick_unpark_why="${tick_fb_unpark}"
+				tick_grant_reason="ready_fallback"
+				tick_excluded="$(printf '%s\n' "${tick_excluded}" | tr ',' '\n' | { grep -vxF -- "${tick_fb_pr}" || true; } | sed '/^$/d' | paste -sd, -)"
+			fi
+		fi
 		if [ -z "${tick_first}" ]; then
 			if [ "${tick_p2}" = 1 ] && [ "${tick_queue_empty}" = 1 ] && [ "${tick_skip_held}" = 1 ]; then
 				# D4: a skip entry blocks a re-grant on the same head, so the tick
@@ -2367,8 +2449,8 @@ _mt_merge_lease_tick()
 			tick_dispatch_fn="_mt_dispatch_rb_judge"
 		fi
 		if "${tick_dispatch_fn}" "${tick_first}" "$(jq -r --argjson n "${tick_first}" '[ .[] | select(.number == $n) | .head // "" ][0] // ""' <<< "${tick_base_prs}" 2>/dev/null)"; then
-			_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=first_in_queue${tick_queue_len_field}${tick_gate_field}"
-			[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric granted "${tick_base}" "${tick_first}" tick first_in_queue 0 "${tick_waiters}" "${tick_first}" "${tick_grant_ts}" || true
+			_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=${tick_grant_reason:-first_in_queue}${tick_queue_len_field}${tick_gate_field}"
+			[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric granted "${tick_base}" "${tick_first}" tick "${tick_grant_reason:-first_in_queue}" 0 "${tick_waiters}" "${tick_first}" "${tick_grant_ts}" || true
 		else
 			_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=dispatch_failed_sweep_retries${tick_queue_len_field}${tick_gate_field}"
 			[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric granted "${tick_base}" "${tick_first}" tick dispatch_failed_sweep_retries 0 "${tick_waiters}" "${tick_first}" "${tick_grant_ts}" || true
@@ -2433,12 +2515,30 @@ _mt_merge_lease_tick_multi()
 	local tm_unpark_lib=0 tm_unpark_why="" tm_rel_token=""
 	[ "${tm_skip3}" = 1 ] && declare -F _merge_lease_skip_release_token >/dev/null 2>&1 \
 		&& declare -F _merge_lease_skip_reason_is_soft >/dev/null 2>&1 && tm_unpark_lib=1
+	# Issue #10098: as the single-holder tick's tick_ready_on/tick_conflict_on.
+	local tm_ready_on=0 tm_conflict_on=0 tm_first_confirmed="false" tm_fb_pr="" tm_fb_gate="" tm_fb_paths="" tm_fb_used=0
+	local tm_fb_take=0 tm_fci_dispatched=0 tm_grant_reason="" tm_released=0 tm_read_count=0 tm_read_newest=0 tm_fb_idle=0
+	local tm_conflict_prs="" tm_fb_since=0 tm_conflict_excl=""
+	if [ "${tm_skip3}" = 1 ] && declare -F _merge_lease_pr_ready >/dev/null 2>&1 \
+		&& declare -F _merge_lease_ready_grant_enabled >/dev/null 2>&1 && _merge_lease_ready_grant_enabled; then
+		tm_ready_on=1
+	fi
+	if [ "${tm_skip3}" = 1 ] && declare -F _merge_lease_pr_ready >/dev/null 2>&1 \
+		&& declare -F _merge_lease_conflict_release_enabled >/dev/null 2>&1 && _merge_lease_conflict_release_enabled \
+		&& declare -F _merge_lease_label_conflict_released >/dev/null 2>&1; then
+		tm_conflict_on=1
+	fi
 	local -a tm_row_arr=()
 	[ "${MERGE_LEASE_STATE}" = "held" ] && tm_rows="${MERGE_LEASE_HOLDER_ALL_ROWS:-}"
 	# Phase 1 MERGE_LEASE_QUEUE line (written by the caller from these).
 	_MT_LEASE_QUEUE_ROWS="${tm_rows}"
 	_MT_LEASE_QUEUE_GONE=""
 	mapfile -t tm_row_arr < <(printf '%s\n' "${tm_rows}" | sed '/^$/d')
+	# Issue #10098 (D8): holders at read and their newest acquired/updated
+	# time, for ready_fallback (no record field is added).
+	tm_read_count="${#tm_row_arr[@]}"
+	tm_read_newest="$(printf '%s\n' "${tm_rows}" | awk '{ for (i = 4; i <= 5; i++) if ($i ~ /^[0-9]+$/ && $i + 0 > m) m = $i + 0 } END { print m + 0 }' 2>/dev/null)" || tm_read_newest=0
+	[[ "${tm_read_newest}" =~ ^[0-9]+$ ]] || tm_read_newest=0
 	for tm_line in ${tm_row_arr[@]+"${tm_row_arr[@]}"}; do
 		read -r tm_h tm_h_head tm_h_exp tm_h_acq tm_h_upd <<< "${tm_line}"
 		[[ "${tm_h}" =~ ^[1-9][0-9]*$ ]] || continue
@@ -2501,6 +2601,21 @@ _mt_merge_lease_tick_multi()
 							;;
 					esac
 				fi
+				# Issue #10098 step 5: as the single-holder tick; the waiter scan
+				# leaves out every holder.
+				if [ -z "${tm_reason}" ] && [ "${tm_conflict_on}" = 1 ] \
+					&& ! _merge_lease_has_conflict_released_label "${tm_holder_labels}"; then
+					tm_conflict_prs="$(printf '%s\n' "${tm_prs_json}" | jq -sc --arg b "${tm_base}" '[ .[] | select(type == "object" and .base == $b) ]' 2>/dev/null)" || tm_conflict_prs="[]"
+					tm_conflict_excl="$(printf '%s\n' "${tm_rows}" | awk 'NF { print $1 }' | paste -sd, -)"
+					if [ -n "$(_merge_lease_queue_order "${tm_conflict_prs}" "$(_merge_lease_skips_hard "${MERGE_LEASE_SKIPS:-}")" "${tm_conflict_excl}" 2>/dev/null || true)" ]; then
+						_merge_lease_pr_mergeable "${tm_h}" "${tm_listed_head}" || true
+						if [ "${MERGE_LEASE_PR_MERGEABLE:-unknown}" = "false" ] \
+							&& _mt_merge_lease_ready_waiter_exists "${tm_base}" "${tm_conflict_prs}" "${tm_conflict_excl}" "${tm_login}" \
+							&& _merge_lease_label_conflict_released "${tm_h}"; then
+							tm_reason="released_conflict"
+						fi
+					fi
+				fi
 			fi
 		elif ! printf '%s\n' "${tm_prs_json}" | jq -e --argjson n "${tm_h}" 'select(type == "object" and .number == $n)' >/dev/null 2>&1; then
 			tm_holder_state="$(gh_retry _safe_gh_jq "repos/${MT_REPO}/pulls/${tm_h}" --jq '"\(.state // "") \(if (.merged_at // null) != null then "true" else "false" end)"' 2>/dev/null | tail -n1)"
@@ -2538,6 +2653,7 @@ _mt_merge_lease_tick_multi()
 		fi
 		tm_rel_held="$(_merge_lease_metric_hold_seconds "${tm_h_acq:-0}" 2>/dev/null)" || tm_rel_held=""
 		_mt_log "MERGE_LEASE pr=${tm_h} base=${tm_base} mode=tick outcome=released reason=${tm_reason} held_s=${tm_rel_held:--} merged=${tm_merged}"
+		tm_released=1
 		[ "${tm_metric_ok}" = 1 ] && _merge_lease_metric released "${tm_base}" "${tm_h}" tick "${tm_reason}" "$(_merge_lease_metric_hold_seconds "${tm_h_acq:-0}" 2>/dev/null)" "${tm_waiters}" "${tm_h}" "" "${tm_merged}" || true
 		tm_rows="${tm_new_rows}"
 		_MT_LEASE_QUEUE_ROWS="${tm_rows}"
@@ -2585,11 +2701,33 @@ _mt_merge_lease_tick_multi()
 			| select([ (.labels // [])[] | if type == "object" then .name else . end ] | index($l) != null)
 			| .number as $n | (.head_sha // "") as $hs | select(($sk | index("\($n):\($hs)")) != null) | $n' <<< "${tm_base_prs}" 2>/dev/null)
 	fi
-	while [ "${tm_count}" -lt "${tm_max}" ] && [ "${tm_cand_n}" -lt "${tm_max_candidates}" ]; do
-		tm_first="$(_merge_lease_queue_first "${tm_base_prs}" "" "${tm_queue_skips}" "${tm_excluded}")"
+	while [ "${tm_count}" -lt "${tm_max}" ]; do
+		# Issue #10098: the candidate cap is checked here so an empty queue or
+		# the cap can still take the ready_fallback pick once (tm_fb_take).
+		tm_fb_take=0
+		tm_grant_reason=""
+		tm_first=""
+		if [ "${tm_cand_n}" -lt "${tm_max_candidates}" ]; then
+			tm_first="$(_merge_lease_queue_first "${tm_base_prs}" "" "${tm_queue_skips}" "${tm_excluded}")"
+			[ -n "${tm_first}" ] || tm_queue_empty=1
+		fi
 		if [ -z "${tm_first}" ]; then
-			tm_queue_empty=1
-			break
+			# Step 4 (D8): no waiter was ready, no grant or release this tick, a
+			# slot was free at read, and nothing touched the record or a holder
+			# row for MERGE_LEASE_IDLE_MINUTES (0 means 60).
+			tm_fb_since="$((10#${MERGE_LEASE_UPDATED:-0}))"
+			[ "${tm_read_newest}" -le "${tm_fb_since}" ] || tm_fb_since="${tm_read_newest}"
+			tm_fb_idle="$(_merge_lease_idle_seconds)"
+			[ "${tm_fb_idle}" -gt 0 ] || tm_fb_idle=3600
+			if [ -n "${tm_fb_pr}" ] && [ "${tm_fb_used}" = 0 ] && [ "${tm_granted}" -eq 0 ] && [ "${tm_released}" = 0 ] \
+				&& [ "${tm_read_count}" -lt "${tm_max}" ] && [ $(( $(date -u +%s) - tm_fb_since )) -ge "${tm_fb_idle}" ]; then
+				tm_fb_used=1
+				tm_fb_take=1
+				tm_grant_reason="ready_fallback"
+				tm_first="${tm_fb_pr}"
+			else
+				break
+			fi
 		fi
 		tm_cand_n=$((tm_cand_n + 1))
 		tm_excluded="${tm_excluded:+${tm_excluded},}${tm_first}"
@@ -2612,7 +2750,7 @@ _mt_merge_lease_tick_multi()
 			fi
 		fi
 		# #9983 G5: a soft entry clears only on a confirmed head-gate success.
-		if [ "${tm_p2}" = 1 ] && { ! _merge_lease_pr_eligible "${tm_first}" "${tm_first_head}" \
+		if [ "${tm_fb_take}" = 0 ] && [ "${tm_p2}" = 1 ] && { ! _merge_lease_pr_eligible "${tm_first}" "${tm_first_head}" \
 			"$(jq -r '.title // ""' <<< "${tm_first_row}" 2>/dev/null)" "$(jq -r '.draft // false' <<< "${tm_first_row}" 2>/dev/null)" \
 			"${tm_base}" "${tm_login}" "" "${tm_first_labels}" \
 			|| { [ "${tm_first_soft}" = 1 ] && [ "${MERGE_LEASE_GATE_CONFIRMED:-false}" != "true" ]; }; }; then
@@ -2634,11 +2772,19 @@ _mt_merge_lease_tick_multi()
 			[ "${tm_metric_ok}" = 1 ] && _merge_lease_metric skipped "${tm_base}" "${tm_first}" tick "${tm_skip_why}" "" "${tm_waiters}" - || true
 			continue
 		fi
-		if [ "${tm_p2}" = 1 ]; then tm_first_gate="${MERGE_LEASE_ELIGIBLE_GATE:-}"; fi
-		tm_first_paths="$(_merge_lease_pr_paths "${tm_first}" 2>/dev/null)" || tm_first_paths="*"
+		tm_first_confirmed="false"
+		if [ "${tm_fb_take}" = 1 ]; then
+			tm_first_gate="${tm_fb_gate}"
+			tm_first_paths="${tm_fb_paths}"
+		else
+			if [ "${tm_p2}" = 1 ]; then tm_first_gate="${MERGE_LEASE_ELIGIBLE_GATE:-}"; tm_first_confirmed="${MERGE_LEASE_GATE_CONFIRMED:-false}"; fi
+			tm_first_paths="$(_merge_lease_pr_paths "${tm_first}" 2>/dev/null)" || tm_first_paths="*"
+		fi
 		[ -n "${tm_first_paths}" ] || tm_first_paths="*"
 		tm_blocker=""
 		for tm_line in ${tm_row_arr[@]+"${tm_row_arr[@]}"}; do
+			# The fallback pick already passed this check this tick.
+			[ "${tm_fb_take}" = 0 ] || break
 			read -r tm_h tm_h_head _ <<< "${tm_line}"
 			[ "${tm_h_head}" != "-" ] || tm_h_head=""
 			if _merge_lease_paths_intersect "$(_merge_lease_holder_paths "${tm_h}")" "${tm_first_paths}" "${tm_first_head}" "${tm_h_head}"; then
@@ -2652,6 +2798,26 @@ _mt_merge_lease_tick_multi()
 			tm_skipped_any=1
 			_mt_log "MERGE_LEASE pr=${tm_first} base=${tm_base} mode=tick outcome=skipped reason=holder_shares_paths blocker=${tm_blocker}"
 			[ "${tm_metric_ok}" = 1 ] && _merge_lease_metric skipped "${tm_base}" "${tm_first}" tick holder_shares_paths "" "${tm_waiters}" "${tm_blocker}" || true
+			continue
+		fi
+		# Issue #10098: readiness last, so pulls/<pr> is read only for a
+		# candidate that passed every other check; as the single-holder tick.
+		if [ "${tm_fb_take}" = 0 ] && [ "${tm_ready_on}" = 1 ] && [ "${tm_p2}" = 1 ] && [ "${tm_first_confirmed}" = "true" ] \
+			&& ! _merge_lease_pr_ready "${tm_first}" "${tm_first_head}" "${tm_base}"; then
+			tm_skip_why="${MERGE_LEASE_NOT_READY_REASON:-final_ci_pending}"
+			tm_skipped_any=1
+			_mt_log "MERGE_LEASE pr=${tm_first} base=${tm_base} mode=tick outcome=skipped reason=${tm_skip_why}"
+			[ "${tm_metric_ok}" = 1 ] && _merge_lease_metric skipped "${tm_base}" "${tm_first}" tick "${tm_skip_why}" "" "${tm_waiters}" - || true
+			if [ -z "${tm_fb_pr}" ]; then
+				tm_fb_pr="${tm_first}"
+				tm_fb_gate="${tm_first_gate}"
+				tm_fb_paths="${tm_first_paths}"
+			fi
+			if [ "${tm_skip_why}" = "final_ci_pending" ] && [ "${tm_fci_dispatched}" = 0 ] \
+				&& _mt_merge_lease_ready_final_ci "${tm_first}" "${tm_first_head}" \
+					"$(jq -r '.head // ""' <<< "${tm_first_row}" 2>/dev/null)" "$(jq -r '.head_repo // ""' <<< "${tm_first_row}" 2>/dev/null)"; then
+				tm_fci_dispatched=1
+			fi
 			continue
 		fi
 		# Phase 1: eligible waiters at grant time (the candidate included;
@@ -2697,8 +2863,8 @@ _mt_merge_lease_tick_multi()
 			tm_dispatch_fn="_mt_dispatch_rb_judge"
 		fi
 		if "${tm_dispatch_fn}" "${tm_first}" "$(jq -r '.head // ""' <<< "${tm_first_row}" 2>/dev/null)"; then
-			_mt_log "MERGE_LEASE pr=${tm_first} base=${tm_base} mode=tick outcome=granted reason=first_in_queue${tm_queue_len_field} holders=${tm_count}${tm_gate_field}"
-			[ "${tm_metric_ok}" = 1 ] && _merge_lease_metric granted "${tm_base}" "${tm_first}" tick first_in_queue 0 "${tm_waiters}" "${tm_first}" "${tm_grant_ts}" || true
+			_mt_log "MERGE_LEASE pr=${tm_first} base=${tm_base} mode=tick outcome=granted reason=${tm_grant_reason:-first_in_queue}${tm_queue_len_field} holders=${tm_count}${tm_gate_field}"
+			[ "${tm_metric_ok}" = 1 ] && _merge_lease_metric granted "${tm_base}" "${tm_first}" tick "${tm_grant_reason:-first_in_queue}" 0 "${tm_waiters}" "${tm_first}" "${tm_grant_ts}" || true
 		else
 			_mt_log "MERGE_LEASE pr=${tm_first} base=${tm_base} mode=tick outcome=granted reason=dispatch_failed_sweep_retries${tm_queue_len_field} holders=${tm_count}${tm_gate_field}"
 			[ "${tm_metric_ok}" = 1 ] && _merge_lease_metric granted "${tm_base}" "${tm_first}" tick dispatch_failed_sweep_retries 0 "${tm_waiters}" "${tm_first}" "${tm_grant_ts}" || true
@@ -2721,6 +2887,62 @@ _mt_merge_lease_tick_multi()
 		[ "${tm_metric_ok}" = 1 ] && _merge_lease_metric no_waiter "${tm_base}" "" tick no_eligible_waiter "" 0 - || true
 	fi
 	return 0
+}
+
+# _mt_merge_lease_ready_final_ci <pr> <head_sha> <head_ref> <head_repo>
+# (issue #10098 step 3): for a waiter skipped with final_ci_pending whose
+# ci/final status is absent (MERGE_LEASE_FINAL_CI_STATE=absent), reads the
+# final-CI runs on its head once (the endpoint _pr_ensure_final_ci uses) and,
+# only when there is no run at all (`dispatch no_run`: none queued, running or
+# completed), calls _pr_ensure_final_ci with that listing (no second read; its
+# own dedupe and REVIEW_FINAL_CI lines apply). Fork heads (<head_repo> other
+# than MT_REPO) are never dispatched. 0 only when it dispatched; 1 otherwise
+# (fail-open: the review sweep still dispatches as before). The caller makes
+# at most one dispatch per base per tick.
+_mt_merge_lease_ready_final_ci()
+{
+	local rfc_pr="${1:-}" rfc_sha="${2:-}" rfc_ref="${3:-}" rfc_repo="${4:-}" rfc_wf="${REVIEW_FINAL_CI_WORKFLOW:-}" rfc_runs="" rfc_decision=""
+	[ -n "${rfc_wf}" ] || return 1
+	[ "${MERGE_LEASE_FINAL_CI_STATE:-}" = "absent" ] || return 1
+	[ -n "${MT_REPO:-}" ] && [ "${rfc_repo}" = "${MT_REPO}" ] || return 1
+	declare -F _pr_ensure_final_ci >/dev/null 2>&1 || return 1
+	[ -n "${PR_FINAL_CI_JQ_DECISION_DEF:-}" ] || return 1
+	[[ "${rfc_wf}" =~ ^[A-Za-z0-9._-]+\.ya?ml$ ]] || return 1
+	[[ "${rfc_pr}" =~ ^[1-9][0-9]*$ ]] && [[ "${rfc_sha}" =~ ^[0-9a-f]{40}$ ]] || return 1
+	[[ "${rfc_ref}" =~ ^[A-Za-z0-9._/-]+$ ]] && [[ "${rfc_ref}" != *..* ]] && [[ "${rfc_ref}" != -* ]] || return 1
+	rfc_runs="$(gh_retry _safe_gh_jq "repos/${MT_REPO}/actions/workflows/${rfc_wf}/runs?head_sha=${rfc_sha}&per_page=20" 2>/dev/null)" || return 1
+	rfc_decision="$(printf '%s' "${rfc_runs}" | jq -r --arg path ".github/workflows/${rfc_wf}" --arg sha "${rfc_sha}" "${PR_FINAL_CI_JQ_DECISION_DEF}"' _pr_final_ci_decision' 2>/dev/null | tail -n1)" || return 1
+	[ "${rfc_decision}" = "dispatch no_run" ] || return 1
+	PR_FINAL_CI_RUNS_JSON="${rfc_runs}" PR_CHECKS_REPOSITORY="${MT_REPO}" _pr_ensure_final_ci "${MT_REPO}" "${rfc_pr}" "${rfc_sha}" "${rfc_ref}" || return 1
+	[ "${PR_FINAL_CI_OUTCOME:-}" = "dispatched" ] || return 1
+	return 0
+}
+
+# _mt_merge_lease_ready_waiter_exists <base> <base_prs_json> <exclude_csv> <login>
+# (issue #10098 step 5): 0 when a labelled waiter of <base> in queue order
+# (hard skip entries and <exclude_csv> left out; at most 10 candidates) is
+# eligible with a confirmed head-gate (_merge_lease_pr_eligible) and ready
+# (_merge_lease_pr_ready); 1 otherwise. No unlabel, log or dispatch. Used
+# only for the conflicting-holder test. API: as the grant loop's checks.
+_mt_merge_lease_ready_waiter_exists()
+{
+	local rwe_base="${1:-}" rwe_prs="${2:-[]}" rwe_excl="${3:-}" rwe_login="${4:-}" rwe_skips="" rwe_n=0 rwe_pr rwe_row rwe_head rwe_labels
+	rwe_skips="$(_merge_lease_skips_hard "${MERGE_LEASE_SKIPS:-}")"
+	while [ "${rwe_n}" -lt 10 ]; do
+		rwe_pr="$(_merge_lease_queue_first "${rwe_prs}" "" "${rwe_skips}" "${rwe_excl}")"
+		[ -n "${rwe_pr}" ] || return 1
+		rwe_n=$((rwe_n + 1))
+		rwe_excl="${rwe_excl:+${rwe_excl},}${rwe_pr}"
+		rwe_row="$(jq -c --argjson n "${rwe_pr}" '[ .[] | select(.number == $n) ][0] // {}' <<< "${rwe_prs}" 2>/dev/null)" || rwe_row="{}"
+		rwe_head="$(jq -r '.head_sha // ""' <<< "${rwe_row}" 2>/dev/null)" || rwe_head=""
+		rwe_labels="$(jq -r '[ (.labels // [])[] | if type == "object" then .name else . end ] | join("\n")' <<< "${rwe_row}" 2>/dev/null)" || rwe_labels=""
+		_merge_lease_pr_eligible "${rwe_pr}" "${rwe_head}" "$(jq -r '.title // ""' <<< "${rwe_row}" 2>/dev/null)" \
+			"$(jq -r '.draft // false' <<< "${rwe_row}" 2>/dev/null)" "${rwe_base}" "${rwe_login}" "" "${rwe_labels}" || continue
+		[ "${MERGE_LEASE_GATE_CONFIRMED:-false}" = "true" ] || continue
+		_merge_lease_pr_ready "${rwe_pr}" "${rwe_head}" "${rwe_base}" || continue
+		return 0
+	done
+	return 1
 }
 
 # Final-CI merge resume (scripts/pr_checks_lib.sh "Final-CI merge resume").

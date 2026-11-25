@@ -3765,6 +3765,10 @@ _merge_lease_has_hold_label()
 # actions/runs?head_sha read for a holder past the grace with a pending
 # head-gate (that path makes no required-checks read). The judge status is
 # read from the same statuses response (no extra call).
+# Issue #10098 (merge-lease short critical section, Phase 1): the statuses
+# response is kept in MERGE_LEASE_ELIGIBLE_STATUSES_JSON, with the head it
+# belongs to in MERGE_LEASE_ELIGIBLE_STATUSES_HEAD (both empty when it was not
+# read), so _merge_lease_pr_ready reads `ci/final` without another call.
 _merge_lease_pr_eligible()
 {
 	local elig_pr="$1" elig_head="$2" elig_title="$3" elig_draft="$4" elig_base="${5:-}" elig_login="${6:-}" elig_since="${7:-}"
@@ -3776,6 +3780,8 @@ _merge_lease_pr_eligible()
 	MERGE_LEASE_CI_ACTIVE="unknown"
 	MERGE_LEASE_HEAD_RUNS_READ="false"
 	MERGE_LEASE_GATE_CONFIRMED="false"
+	MERGE_LEASE_ELIGIBLE_STATUSES_JSON=""
+	MERGE_LEASE_ELIGIBLE_STATUSES_HEAD=""
 	if [ "${elig_draft}" = "true" ]; then
 		MERGE_LEASE_INELIGIBLE_REASON="draft"
 		return 1
@@ -3794,6 +3800,8 @@ _merge_lease_pr_eligible()
 	[[ "${elig_pr}" =~ ^[1-9][0-9]*$ ]] || return 0
 	elig_statuses="$(gh_retry _safe_gh_jq "repos/${elig_repo}/commits/${elig_head}/statuses?per_page=100" 2>/dev/null)" || return 0
 	jq -e 'type == "array"' >/dev/null 2>&1 <<< "${elig_statuses}" || return 0
+	MERGE_LEASE_ELIGIBLE_STATUSES_JSON="${elig_statuses}"
+	MERGE_LEASE_ELIGIBLE_STATUSES_HEAD="${elig_head}"
 	# Newest first: the latest head-gate status decides.
 	elig_gate="$(jq -r '[ .[] | select(type == "object" and .context == "ai-review/head-gate") ][0] | if . == null then "" else "\(.state) \((.creator.login // "") | ascii_downcase)" end' <<< "${elig_statuses}" 2>/dev/null)" || return 0
 	case "${elig_gate}" in
@@ -3896,6 +3904,148 @@ _merge_lease_pr_eligible()
 			;;
 	esac
 	return 0
+}
+
+# Merge-lease ready-first grant (issue #10098, Phase 1 of
+# docs/plans/merge-lease-short-critical-section-plan.md). The tick grants a
+# slot only to a waiter that can merge now, and releases a holder that
+# conflicts with its base once per PR while another waiter is ready.
+# Switches (each default true; only a case-insensitive `false` turns it off;
+# the defaults live here too, so a helper run without the workflow env lines
+# behaves the same): MERGE_LEASE_READY_GRANT_ENABLED (readiness check at
+# grant time, ready_fallback) and MERGE_LEASE_CONFLICT_RELEASE_ENABLED
+# (released_conflict). Rollback: set both to false.
+_merge_lease_ready_grant_enabled()
+{
+	case "$(printf '%s' "${MERGE_LEASE_READY_GRANT_ENABLED:-true}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')" in
+		false) return 1 ;;
+	esac
+	return 0
+}
+
+_merge_lease_conflict_release_enabled()
+{
+	case "$(printf '%s' "${MERGE_LEASE_CONFLICT_RELEASE_ENABLED:-true}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')" in
+		false) return 1 ;;
+	esac
+	return 0
+}
+
+# The label a holder gets when it is released for a conflict
+# (MERGE_LEASE_CONFLICT_RELEASED_LABEL, default ai:merge-lease-conflict-released).
+# A value longer than 50 characters or holding a comma or a control character
+# (newline included) prints the default. No API call.
+_merge_lease_conflict_released_label()
+{
+	local crl_label="${MERGE_LEASE_CONFLICT_RELEASED_LABEL:-ai:merge-lease-conflict-released}"
+	if [ "${#crl_label}" -gt 50 ] || [[ "${crl_label}" == *,* ]] || [[ "${crl_label}" =~ [[:cntrl:]] ]]; then
+		crl_label="ai:merge-lease-conflict-released"
+	fi
+	printf '%s\n' "${crl_label}"
+}
+
+# _merge_lease_has_conflict_released_label <labels_nl>: 0 when a line of
+# <labels_nl> (newline-separated names from the listing) is the conflict-
+# released label (whole line, case-insensitive). No API call.
+_merge_lease_has_conflict_released_label()
+{
+	[ -n "${1:-}" ] || return 1
+	printf '%s\n' "${1}" | grep -Fxiq -- "$(_merge_lease_conflict_released_label)" 2>/dev/null
+}
+
+# _merge_lease_pr_mergeable <pr> [<head_sha>]: sets MERGE_LEASE_PR_MERGEABLE
+# to true|false|null|unknown and MERGE_LEASE_PR_MERGEABLE_STATE to the PR's
+# mergeable_state ([a-z_] only; empty when unknown). A failed read, a response
+# that is not an object, or a head other than <head_sha> gives unknown.
+# Always returns 0 (fail-open). API: one `GET pulls/<pr>`.
+_merge_lease_pr_mergeable()
+{
+	local mg_pr="${1:-}" mg_head="${2:-}" mg_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" mg_json mg_fields
+	local mg_val="" mg_state="" mg_sha=""
+	MERGE_LEASE_PR_MERGEABLE="unknown"
+	MERGE_LEASE_PR_MERGEABLE_STATE=""
+	[[ "${mg_pr}" =~ ^[1-9][0-9]*$ ]] || return 0
+	[[ "${mg_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 0
+	# The open-PR listing (_mt_list_open_prs) does not carry `mergeable`, so
+	# this is the only per-PR read of the readiness check; callers make it only
+	# for a candidate that passed every cheaper check (section 14).
+	mg_json="$(gh_retry _safe_gh_jq "repos/${mg_repo}/pulls/${mg_pr}" 2>/dev/null)" || return 0
+	mg_fields="$(jq -r 'if type == "object" then
+		"\(if .mergeable == true then "true" elif .mergeable == false then "false" elif .mergeable == null then "null" else "unknown" end) \((.mergeable_state // "") | tostring | gsub("[^a-z_]"; "") | if . == "" then "-" else .[0:40] end) \((.head.sha // "-") | tostring | gsub("[^0-9a-f]"; "") | if . == "" then "-" else . end)"
+		else empty end' <<< "${mg_json}" 2>/dev/null | tail -n1)" || return 0
+	read -r mg_val mg_state mg_sha <<< "${mg_fields}"
+	if [[ "${mg_head}" =~ ^[0-9a-f]{40}$ ]] && [ "${mg_sha}" != "${mg_head}" ]; then
+		return 0
+	fi
+	case "${mg_val}" in
+		true|false|null) MERGE_LEASE_PR_MERGEABLE="${mg_val}" ;;
+		*) return 0 ;;
+	esac
+	[ "${mg_state:--}" = "-" ] || MERGE_LEASE_PR_MERGEABLE_STATE="${mg_state}"
+	return 0
+}
+
+# _merge_lease_pr_ready <pr> <head_sha> <base>
+# Called only for a waiter _merge_lease_pr_eligible accepted with
+# MERGE_LEASE_GATE_CONFIRMED=true. 0 when the waiter is ready or a read fails
+# (fail-open); 1 with MERGE_LEASE_NOT_READY_REASON=final_ci_pending|not_mergeable.
+# - ci/final (only when REVIEW_FINAL_CI_WORKFLOW is set): the newest
+#   `ci/final` status (any creator) in the statuses response
+#   _merge_lease_pr_eligible kept for this head (no new call). success passes;
+#   absent, pending, failure or error gives final_ci_pending. A response for
+#   another head, or a jq failure, skips the check. MERGE_LEASE_FINAL_CI_STATE
+#   is that state (empty when not checked).
+# - Mergeability: _merge_lease_pr_mergeable (one `GET pulls/<pr>`, only when
+#   ci/final passed). mergeable == false or mergeable_state == dirty gives
+#   not_mergeable; null, true and unknown pass.
+_merge_lease_pr_ready()
+{
+	local rdy_pr="${1:-}" rdy_head="${2:-}" rdy_final=""
+	MERGE_LEASE_NOT_READY_REASON=""
+	MERGE_LEASE_FINAL_CI_STATE=""
+	[[ "${rdy_pr}" =~ ^[1-9][0-9]*$ ]] || return 0
+	[[ "${rdy_head}" =~ ^[0-9a-f]{40}$ ]] || return 0
+	if [ -n "${REVIEW_FINAL_CI_WORKFLOW:-}" ] && [ -n "${MERGE_LEASE_ELIGIBLE_STATUSES_JSON:-}" ] \
+		&& [ "${MERGE_LEASE_ELIGIBLE_STATUSES_HEAD:-}" = "${rdy_head}" ]; then
+		# Newest first, as the head-gate read.
+		if rdy_final="$(jq -r '[ .[] | select(type == "object" and .context == "ci/final") ][0] | if . == null then "absent" else ((.state // "") | tostring) end' <<< "${MERGE_LEASE_ELIGIBLE_STATUSES_JSON}" 2>/dev/null)"; then
+			case "${rdy_final}" in
+				success) MERGE_LEASE_FINAL_CI_STATE="success" ;;
+				absent|pending|failure|error)
+					MERGE_LEASE_FINAL_CI_STATE="${rdy_final}"
+					MERGE_LEASE_NOT_READY_REASON="final_ci_pending"
+					return 1
+					;;
+			esac
+		fi
+	fi
+	_merge_lease_pr_mergeable "${rdy_pr}" "${rdy_head}" || true
+	if [ "${MERGE_LEASE_PR_MERGEABLE:-unknown}" = "false" ] || [ "${MERGE_LEASE_PR_MERGEABLE_STATE:-}" = "dirty" ]; then
+		MERGE_LEASE_NOT_READY_REASON="not_mergeable"
+		return 1
+	fi
+	return 0
+}
+
+# _merge_lease_label_conflict_released <pr>: adds the conflict-released label
+# (ensure_label_exists first when label_helpers.sh is loaded). Returns the
+# label POST's exit code; a failure prints one ::warning:: line. The tick
+# releases a conflicting holder only after this succeeded (at most one
+# release per PR).
+_merge_lease_label_conflict_released()
+{
+	local lcr_pr="${1:-}" lcr_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" lcr_label
+	[[ "${lcr_pr}" =~ ^[1-9][0-9]*$ ]] || return 1
+	lcr_label="$(_merge_lease_conflict_released_label)"
+	if declare -F ensure_label_exists >/dev/null 2>&1; then
+		ensure_label_exists "${lcr_label}" "${lcr_repo}" >/dev/null 2>&1 || true
+	fi
+	if GH_RETRY_IDEMPOTENT=true gh_retry _safe_gh_jq -X POST "repos/${lcr_repo}/issues/${lcr_pr}/labels" \
+		-f "labels[]=${lcr_label}" >/dev/null 2>&1; then
+		return 0
+	fi
+	echo "::warning::MERGE_LEASE pr=${lcr_pr} outcome=label_failed reason=conflict_released_label (the holder keeps its slot this tick)"
+	return 1
 }
 
 # _merge_lease_skips_effective <skips> <pulls_json> <candidate> (issue #9983,
