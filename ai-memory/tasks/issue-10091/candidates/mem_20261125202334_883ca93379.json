@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":10091,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/10091\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/10133\",\"pr_number\":10133,\"branch\":\"ai/issue-10091\",\"run_id\":\"45684658343\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/45684658343\",\"changed_files\":[\".github/ai/claude_engine.json\",\".github/ai/label_contract.v1.json\",\".github/workflows/ci.yml\",\".github/workflows/clarify.yml\",\".github/workflows/internal-clarify.yml\",\".github/workflows/orchestrate_poll.yml\",\"README.md\",\"agents.d/10091-plan-autopilot.md\",\"changelog.d/10091-plan-autopilot.md\",\"docs/scripts-pending-removal.md\",\"prompts/_templates/mode-plan-audit.txt\",\"prompts/contracts/mode-plan-audit.yml\",\"prompts/mode-plan-audit.txt\",\"scripts/claude_engine.py\",\"scripts/label_helpers.sh\",\"scripts/plan_autopilot.py\",\"tests/inventory_exemptions.txt\",\"tests/test_claude_engine.py\",\"tests/test_phase_wrapper_predicate_contract.py\",\"tests/test_plan_audit_prompt_contract.py\",\"tests/test_plan_autopilot.py\",\"tests/test_plan_autopilot_workflow_contract.py\",\"tests/test_security_audit_workflow_contract.py\",\"workflow-templates/ai-clarify.yml\"]}",
+  "fingerprint": "002ae1eaf8fa1e5297749f20046a75bc72f7a77afce1d79051c686c41b9afeba",
+  "lineage": {
+    "issue_number": 10091,
+    "parent_ids": [],
+    "pr_number": 10133,
+    "run_id": "45684658343",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45684658343",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/10133"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261125202334_883ca93379",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10091,
+    "level": "run",
+    "pr_number": 10133,
+    "run_id": "45684658343"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #10091: https://github.com/shubhodeep1/coding-workflows/pull/10133",
+  "timestamps": {
+    "created_at": "2026-11-25T20:23:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
