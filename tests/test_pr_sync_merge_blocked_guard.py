@@ -186,6 +186,24 @@ def test_closed_pr_defers_even_when_mergeable_without_extra_calls(tmp_path: Path
 	]
 
 
+@pytest.mark.parametrize(("merged", "closed", "closed_at"), [(False, "true", "2026-11-24T12:04:00Z"), (True, "", "")])
+def test_closed_pr_records_closed_unmerged_and_closed_at(tmp_path: Path, merged: bool, closed: str, closed_at: str) -> None:
+	"""#10049: the guard's own read tells the judge a PR closed without
+	merging (and when), so it can log the closed-PR skip without a new call."""
+	payload = dict(_pr("clean"))
+	payload.update({"state": "closed", "merged": merged, "closed_at": "2026-11-24T12:04:00Z"})
+	proc, calls = _run("42", tmp_path=tmp_path, pr_json=json.dumps(payload),
+		env={"EXTRA": "1"})
+	assert _field(proc, "RC") == "1"
+	assert len(calls) == 1
+	probe = subprocess.run(
+		["bash", "-c", f"set -uo pipefail\ngh_retry() {{ \"$@\"; }}\n_safe_gh_jq() {{ printf '%s' \"$PR_JSON\"; }}\nsource {str(LIB)!r}\n"
+			'_pr_sync_merge_blocked_guard 42 >/dev/null; echo "CLOSED=${SYNC_MERGE_BLOCKED_GUARD_PR_CLOSED} AT=${SYNC_MERGE_BLOCKED_GUARD_CLOSED_AT}"'],
+		env={"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "GITHUB_REPOSITORY": "o/r", "PR_JSON": json.dumps(payload)},
+		text=True, capture_output=True, timeout=60)
+	assert f"CLOSED={closed} AT={closed_at}" in probe.stdout, probe.stdout + probe.stderr
+
+
 def test_open_pr_state_keeps_the_mergeable_state_rule(tmp_path: Path) -> None:
 	payload = dict(_pr("clean"))
 	payload["state"] = "open"

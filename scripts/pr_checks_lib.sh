@@ -843,6 +843,10 @@ _pr_sync_merge_blocked_guard()
 	local guard_pr_json="" guard_pr="" guard_head="" guard_state="" guard_blockers=""
 	SYNC_MERGE_BLOCKED_GUARD_STATE=""
 	SYNC_MERGE_BLOCKED_GUARD_BLOCKERS=""
+	# #10049: "true" only when this read shows the PR closed and not merged;
+	# its closed_at (ISO, else empty) lets the judge log the closed-PR skip.
+	SYNC_MERGE_BLOCKED_GUARD_PR_CLOSED=""
+	SYNC_MERGE_BLOCKED_GUARD_CLOSED_AT=""
 
 	if [[ "${guard_input}" =~ ^[0-9]+$ ]]; then
 		guard_pr="${guard_input}"
@@ -884,6 +888,11 @@ _pr_sync_merge_blocked_guard()
 		guard_pr_open_state="$(printf '%s' "${guard_pr_json}" | jq -r 'if (.state | type) == "string" then .state else empty end' 2>/dev/null || true)"
 		if [ -n "${guard_pr_open_state}" ] && [ "$(printf '%s' "${guard_pr_open_state}" | tr '[:upper:]' '[:lower:]')" != "open" ]; then
 			guard_state="not_open"
+			if printf '%s' "${guard_pr_json}" | jq -e '.merged != true and .merged_at == null' >/dev/null 2>&1; then
+				SYNC_MERGE_BLOCKED_GUARD_PR_CLOSED="true"
+				SYNC_MERGE_BLOCKED_GUARD_CLOSED_AT="$(printf '%s' "${guard_pr_json}" | jq -r '.closed_at // "" | tostring' 2>/dev/null | tail -n1)"
+				[[ "${SYNC_MERGE_BLOCKED_GUARD_CLOSED_AT}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?Z$ ]] || SYNC_MERGE_BLOCKED_GUARD_CLOSED_AT=""
+			fi
 		fi
 	fi
 

@@ -431,14 +431,22 @@ GUARD_STUB = (
 	'  if [ -n "${GUARD_STUB_LOG:-}" ]; then printf \'%s\\n\' "${1:-}" >> "${GUARD_STUB_LOG}"; fi\n'
 	'  local _stub_defer="${GUARD_STUB_DEFER:-0}"\n'
 	'  case "${1:-}" in *\'"mergeable_state":"none"\'*|*\'"mergeable_state":"blocked"\'*) _stub_defer=1 ;; esac\n'
+	'  SYNC_MERGE_BLOCKED_GUARD_PR_CLOSED=""; SYNC_MERGE_BLOCKED_GUARD_CLOSED_AT=""\n'
 	'  if [ "${_stub_defer}" = "1" ]; then\n'
 	'    SYNC_MERGE_BLOCKED_GUARD_STATE="${GUARD_STUB_STATE:-blocked}"\n'
+	'    SYNC_MERGE_BLOCKED_GUARD_PR_CLOSED="${GUARD_STUB_PR_CLOSED:-}"\n'
+	'    SYNC_MERGE_BLOCKED_GUARD_CLOSED_AT="${GUARD_STUB_CLOSED_AT:-}"\n'
 	'    SYNC_MERGE_BLOCKED_GUARD_BLOCKERS="ci/final (missing)"\n'
 	'    echo "SYNC_MERGE_BLOCKED_GUARD outcome=deferred pr=42 head=stub state=blocked blockers=ci/final (missing)"\n'
 	"    return 1\n"
 	"  fi\n"
 	"  return 0\n"
 	"}\n"
+	# #10049: with MSC_STUB=1 the closed-PR branches' state check is stubbed
+	# and prints the PR object it gets (no API call in the harness).
+	'if [ "${MSC_STUB:-0}" = "1" ]; then\n'
+	'  _pr_merge_state_check() { echo "MSC_STUB stage=$3 json=$4"; return 1; }\n'
+	"fi\n"
 )
 
 
@@ -1062,6 +1070,49 @@ def test_unreadable_read_keeps_a_blocked_guard_state(path: str) -> None:
 	assert [c for c in calls if c[:2] == ["pr", "merge"]] == _expected_calls(path)[:1] * 2, calls
 	assert "RB_MERGE_STATUS=merge_failed" in proc.stdout.splitlines()
 	assert "RB_MERGE_STATUS=mergeability_pending" not in proc.stdout.splitlines()
+
+
+GUARD_CLOSED_ENV = {"GUARD_STUB_DEFER": "1", "GUARD_STUB_STATE": "not_open", "GUARD_STUB_PR_CLOSED": "true",
+	"GUARD_STUB_CLOSED_AT": "2026-11-24T12:04:00Z", "MSC_STUB": "1"}
+
+
+@pytest.mark.parametrize("path", ("merge", "terminal"))
+def test_guard_found_closed_then_non_transient_auto_refusal_is_not_open(path: str) -> None:
+	"""#10049: the PR closed after the pre-merge check; the blocked-merge
+	guard's read shows it closed and GitHub refuses --auto non-transiently,
+	so the retry never reads the PR. The site still takes the closed-PR skip
+	(closed_at from the guard's read), not mergeability_pending."""
+	proc, _output, calls, sleeps = _run_merge_site_scripted(path, [_fail("Pull request is closed")], extra_env=GUARD_CLOSED_ENV)
+	assert proc.returncode == 0, proc.stderr
+	assert sleeps == []
+	assert calls == _expected_calls(path)[:1]
+	assert "RB_MERGE_STATUS=not_open" in proc.stdout.splitlines()
+	msc = [ln for ln in proc.stdout.splitlines() if ln.startswith("MSC_STUB ")]
+	assert len(msc) == 1 and "stage=pre_merge" in msc[0] and '"closed_at":"2026-11-24T12:04:00Z"' in msc[0], msc
+
+
+@pytest.mark.parametrize("path", ("merge", "terminal"))
+def test_guard_found_closed_but_retry_read_open_is_not_a_closed_skip(path: str) -> None:
+	"""#10049: a later retry read showing the PR open (reopened) wins over the
+	guard's earlier closed read; a non-transient refusal then is not logged
+	as a closed-PR skip."""
+	responses = [_fail(), _pr_state(), _fail(DRAFT_MESSAGE)]
+	proc, _output, _calls, _sleeps = _run_merge_site_scripted(path, responses, extra_env=GUARD_CLOSED_ENV)
+	assert proc.returncode == 0, proc.stderr
+	assert "RB_MERGE_STATUS=not_open" not in proc.stdout.splitlines()
+	assert not [ln for ln in proc.stdout.splitlines() if ln.startswith("MSC_STUB ")]
+
+
+def test_sync_guard_found_closed_is_pr_not_open() -> None:
+	"""#10049: merge_with_followup's guard read shows the PR closed (not
+	merged): no merge call, the closed-PR skip and judge_skip_reason=pr_not_open."""
+	proc, output, calls, _sleeps = _run_merge_site_scripted("sync", [_ok()], extra_env=GUARD_CLOSED_ENV)
+	assert proc.returncode == 0, proc.stderr
+	assert calls == []
+	assert "judge_skip_reason=pr_not_open" in output.splitlines()
+	assert "judge_skip_reason=mergeability_pending" not in output.splitlines()
+	msc = [ln for ln in proc.stdout.splitlines() if ln.startswith("MSC_STUB ")]
+	assert len(msc) == 1 and '"closed_at":"2026-11-24T12:04:00Z"' in msc[0], msc
 
 
 def _after_unreadable_read(path: str) -> list[dict]:

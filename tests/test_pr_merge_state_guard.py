@@ -354,10 +354,12 @@ class Wiring(unittest.TestCase):
 		self.assertGreater(guard, case_text.rindex('_pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}"', 0, followup))
 		self.assertIn('echo "judge_skip_reason=pr_state_unavailable"', case_text[guard:followup])
 		# A closed PR gets no success status: each guard precedes its status post.
-		# The closed-during-retry branches run after the merge call (they only
+		# The closed-during-retry branches run after the merge call, and the
+		# guard-found-closed branches after the blocked-merge guard (they only
 		# log the skip and release the lease), so they are not pre-merge guards.
 		for pos in [m.start() for m in re.finditer(r'_pr_merge_state_check "\$\{PR_NUMBER\}" "\$\{RB_JUDGED_HEAD_SHA\}" pre_merge', case_text)]:
-			if 'RB_MERGE_RETRY_GIVEUP:-}" = "not_open"' in case_text[max(0, pos - 800):pos]:
+			window = case_text[max(0, pos - 1200):pos]
+			if 'RB_MERGE_RETRY_GIVEUP:-}" = "not_open"' in window or 'SYNC_MERGE_BLOCKED_GUARD_PR_CLOSED:-}" = "true"' in window:
 				continue
 			nxt_status = case_text.index('review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success', pos)
 			nxt_merge = case_text.index('gh pr merge "${PR_NUMBER}"', pos)
