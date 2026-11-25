@@ -2033,10 +2033,12 @@ rb_judge_route_red_checks()
 # before they post the head-gate success and allow ai:ready-to-merge. Returns 0
 # (RB_MERGE_STATUS set by rb_judge_route_red_checks, or checks_failed when that
 # routing could not act) when a required check failed on the judged head, so the
-# caller posts no head-gate success and no ai:ready-to-merge. Returns 1 (the
-# manual-merge outcome as before) when the switch is off, the snapshot lists no
-# failed check-run for the judged head (no API read then), the checks lib is not
-# loaded, the read fails, a check is still pending, or the required checks pass.
+# caller posts no head-gate success and no ai:ready-to-merge; also returns 0 with
+# RB_MERGE_STATUS=checks_not_ready when the checks are blocking and a check-run is
+# still running (the pending count is not filtered to required checks). Returns 1
+# (the manual-merge outcome as before) when the switch is off, the snapshot lists
+# no failed check-run for the judged head (no API read then), the checks lib is
+# not loaded, the read fails, or the required checks pass.
 # API cost: one _pr_checks_completed read, only on a head the snapshot shows red.
 rb_judge_manual_merge_red_check()
 {
@@ -2049,8 +2051,18 @@ rb_judge_manual_merge_red_check()
     _pr_checks_completed "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
     return 1
   fi
-  if [ "${PR_CHECKS_LAST_REASON:-}" != "blocking" ] || [ "${PR_CHECKS_LAST_PENDING:-0}" != "0" ]; then
+  if [ "${PR_CHECKS_LAST_REASON:-}" != "blocking" ]; then
     return 1
+  fi
+  if [ "${PR_CHECKS_LAST_PENDING:-0}" != "0" ]; then
+    # PR_CHECKS_LAST_PENDING counts every running check-run, required or not,
+    # so a failed required check cannot be ruled out here. Withhold the
+    # head-gate success and ai:ready-to-merge like the auto-merge path
+    # (checks_not_ready): the PR stays ai:review-blocked and stall recovery
+    # re-runs the judge once the checks settle, which then routes a red head.
+    echo "::warning::Review-blocked judge: check-runs on ${RB_JUDGED_HEAD_SHA:0:7} are blocking with ${PR_CHECKS_LAST_PENDING} still running (ENABLE_AUTO_MERGE=false); withholding the head-gate success and ai:ready-to-merge."
+    RB_MERGE_STATUS="checks_not_ready"
+    return 0
   fi
   echo "::warning::Review-blocked judge: required check-runs failed on ${RB_JUDGED_HEAD_SHA:0:7} (ENABLE_AUTO_MERGE=false); withholding the head-gate success and ai:ready-to-merge."
   RB_MERGE_STATUS="checks_failed"

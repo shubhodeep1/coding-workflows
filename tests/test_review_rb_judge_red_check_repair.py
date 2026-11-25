@@ -506,7 +506,7 @@ def test_manual_merge_red_head_requests_the_repair(tmp_path: Path) -> None:
 def test_manual_merge_keeps_todays_outcome_unless_a_required_check_failed(tmp_path: Path) -> None:
 	cases = [
 		({"FAKE_CHECKS_OK": "1"}, 1),
-		({"FAKE_CHECKS_PENDING": "2"}, 1),
+		({"FAKE_CHECKS_OK": "1", "FAKE_CHECKS_PENDING": "2"}, 1),
 		({"FAKE_CHECKS_REASON": "query_failed"}, 1),
 		({"RB_JUDGE_RED_CHECK_REPAIR_ENABLED": "false"}, 0),
 	]
@@ -521,6 +521,16 @@ def test_manual_merge_keeps_todays_outcome_unless_a_required_check_failed(tmp_pa
 	run = _run(tmp_path, snapshot=green, tail=_manual())
 	assert "ROUTED=0" in run["result"].stdout and "CHECKS_READ" not in run["result"].stdout
 
+
+def test_manual_merge_blocking_with_pending_checks_withholds_the_head_gate(tmp_path: Path) -> None:
+	# A failed required check plus a still-running advisory check: the pending
+	# count is not filtered to required checks, so the head-gate success and
+	# ai:ready-to-merge are withheld (checks_not_ready) instead of posted.
+	run = _run(tmp_path, tail=_manual(), FAKE_CHECKS_PENDING="2")
+	assert run["result"].returncode == 0, run["result"].stderr
+	assert "ROUTED=1" in run["result"].stdout and _status(run) == "checks_not_ready"
+	assert run["result"].stdout.count("CHECKS_READ") == 1
+	assert run["posts"] == [] and run["dispatches"] == [] and _label_calls(run) == []
 
 def test_manual_merge_branches_check_before_the_head_gate_success() -> None:
 	text = SCRIPT.read_text(encoding="utf-8")
