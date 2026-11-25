@@ -907,6 +907,21 @@ collect_ci_exempt_blocks()
 	' "${issues_file}" > "${out_file}"
 }
 
+# Issue #10057: the CI exemption above can only clear a finding when the
+# check-runs context was actually collected. When the caller names a context
+# file but it is missing, empty, or reports a collection failure, a finding
+# that cites a failing head check cannot be told apart, so this round marks
+# no new finding unreachable (fail toward reachable, like the path rules).
+# Unset PR_CHECK_RUNS_CONTEXT_FILE (callers without the collector) and the
+# "disabled" status keep the classification as before.
+ci_context_undecidable()
+{
+	local context_file="$1"
+	[ -n "${context_file}" ] || return 1
+	[ -s "${context_file}" ] || return 0
+	grep -Eq '^collection_status: (api_error|unavailable|writer_error)[[:space:]]*$' "${context_file}" 2>/dev/null
+}
+
 unreachable_lens_is_security()
 {
 	local lens_upper
@@ -1215,7 +1230,14 @@ if [ "${REVIEW_UNREACHABLE_ACTIVE}" = "1" ] && [ "${#CURRENT_PRESENT[@]}" -gt 0 
 		fi
 	done
 	LC_ALL=C sort -u -o "${unreachable_paths_file}" "${unreachable_paths_file}"
-	classify_unreachable_paths "${unreachable_paths_file}" "${unreachable_result_file}" "${tmp_dir}"
+	if ci_context_undecidable "${PR_CHECK_RUNS_CONTEXT_FILE:-}"; then
+		# Sticky entries from earlier rounds stay unreachable; only new
+		# classification is skipped for this round.
+		: > "${unreachable_result_file}"
+		review_log "pr=${PR_NUMBER} iteration=${ITERATION} unreachable_check=skipped reason=ci_context_unavailable"
+	else
+		classify_unreachable_paths "${unreachable_paths_file}" "${unreachable_result_file}" "${tmp_dir}"
+	fi
 	while IFS=$'\t' read -r u_path u_reason || [ -n "${u_path}" ]; do
 		[ -n "${u_path}" ] && [ -n "${u_reason}" ] || continue
 		UNREACHABLE_PATH_REASON["${u_path}"]="${u_reason}"

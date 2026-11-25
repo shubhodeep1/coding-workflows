@@ -1144,7 +1144,10 @@ review_unreachable_followup_sync() {
     # One list call, only on the orphan path. A failed lookup skips the
     # create this round (the sentinel stays), so no second issue is opened;
     # an empty result means the issue is gone and a new one is created.
-    if ru_gh_out="$(gh_retry gh issue list --repo "${ru_repo}" --state open --label "ai:clarification" --limit 100 --json number,title,body --jq "${ru_find_jq}" 2>/dev/null)"; then
+    # No label filter: the pipeline swaps the follow-up issue's phase label
+    # (ai:clarification) as it advances, and the title plus body marker in
+    # ru_find_jq already identify the issue exactly.
+    if ru_gh_out="$(gh_retry gh issue list --repo "${ru_repo}" --state open --limit 100 --json number,title,body --jq "${ru_find_jq}" 2>/dev/null)"; then
       ru_followup="$(printf '%s\n' "${ru_gh_out}" | grep -E '^[1-9][0-9]{0,9}$' | head -n 1 || true)"
     else
       ru_skip_create=1
@@ -1258,7 +1261,7 @@ PY
             # The create output was not a URL: recover the number of the
             # issue just opened (one list call, only on this rare path) so a
             # later round comments on it instead of opening a second one.
-            ru_followup="$(gh_retry gh issue list --repo "${ru_repo}" --state open --label "ai:clarification" --limit 100 --json number,title,body \
+            ru_followup="$(gh_retry gh issue list --repo "${ru_repo}" --state open --limit 100 --json number,title,body \
               --jq "${ru_find_jq}" 2>/dev/null \
               | grep -E '^[1-9][0-9]{0,9}$' | head -n 1)" || ru_followup=""
           fi
@@ -1273,6 +1276,14 @@ PY
             ru_record_value="orphan"
             echo "::warning::review_unreachable_followup create_unparsed=1 pr=${ru_pr}"
           fi
+        else
+          # gh_retry makes one attempt for a create, and a non-zero exit may
+          # still have opened the issue (lost response). Store the "orphan"
+          # sentinel so the next round looks it up before any create.
+          ru_outcome="orphan"
+          ru_recorded=1
+          ru_record_value="orphan"
+          echo "::warning::review_unreachable_followup create_failed=1 pr=${ru_pr}"
         fi
       elif gh_retry gh issue comment "${ru_followup}" --repo "${ru_repo}" --body-file "${ru_body_file}" >/dev/null 2>&1; then
         ru_recorded=1

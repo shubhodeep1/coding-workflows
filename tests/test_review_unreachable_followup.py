@@ -752,3 +752,56 @@ def test_shared_location_fallback_omits_ambiguous_text(tmp_path: Path) -> None:
 	assert "First evidence." not in body
 	assert "Second evidence." not in body
 	assert body.count("### `prompts/mode-x.txt`") == 2
+
+
+def test_failed_create_writes_orphan_sentinel_and_lookup_ignores_phase_label(tmp_path: Path) -> None:
+	# A create that exits non-zero may still have opened the issue: the
+	# ledger gets the "orphan" sentinel, and the next round's lookup does not
+	# filter on the ai:clarification phase label (the pipeline swaps it).
+	_seed_repo(tmp_path)
+	block = _issue_block("001", "prompts/mode-x.txt", "CORRECTNESS & LOGIC")
+	_run_ledger(tmp_path, block, 1, IS_WORKFLOW_SOURCE_REPO="false")
+	bin_dir = _write_gh(tmp_path, "created", "exit 1")
+	gh = bin_dir / "gh"
+	gh.write_text(
+		gh.read_text(encoding="utf-8").replace('echo "created"; fi', 'exit 1; fi'),
+		encoding="utf-8",
+	)
+	sync = _run_sync_with(tmp_path, bin_dir, 1)
+	assert "outcome=orphan" in sync.stdout
+	assert "create_failed=1" in sync.stdout
+	assert "UNREACHABLE_FOLLOWUP_ISSUE: orphan" in _ledger_text(tmp_path)
+	assert "UNREACHABLE_FOLLOWUP: pending" in _ledger_text(tmp_path)
+
+	_run_ledger(tmp_path, block, 2, IS_WORKFLOW_SOURCE_REPO="false")
+	(tmp_path / "gh_calls.log").unlink()
+	sync = _run_sync_with(tmp_path, _write_gh(tmp_path, "created", "echo 901"), 2)
+	assert "followup=901 outcome=recorded" in sync.stdout
+	calls = _gh_calls(tmp_path)
+	assert [call.split()[:2] for call in calls] == [["issue", "list"], ["issue", "comment"]]
+	assert "ai:clarification" not in calls[0]
+
+
+def test_unavailable_ci_context_marks_no_new_finding_unreachable(tmp_path: Path) -> None:
+	# Without a collected check-runs context the CI exemption cannot decide,
+	# so the round marks nothing new unreachable (fail toward reachable).
+	_seed_repo(tmp_path)
+	context = tmp_path / "runtime" / "pr_check_runs_context.txt"
+	context.parent.mkdir(parents=True, exist_ok=True)
+	block = _issue_block("001", "prompts/mode-x.txt", "CORRECTNESS & LOGIC")
+	for text in ("", "PR_CHECK_RUNS_CONTEXT\ncollection_status: api_error\n"):
+		context.write_text(text, encoding="utf-8")
+		(tmp_path / LEDGER_REL).unlink(missing_ok=True)
+		result = _run_ledger(tmp_path, block, 1, IS_WORKFLOW_SOURCE_REPO="false", PR_CHECK_RUNS_CONTEXT_FILE=str(context))
+		assert "unreachable_check=skipped reason=ci_context_unavailable" in result.stderr
+		assert _entry_fields(tmp_path)["STATUS"] == "NEW"
+		assert _issues(tmp_path) == block
+	# A collected context keeps the classification.
+	context.write_text("PR_CHECK_RUNS_CONTEXT\ncollection_status: ready\nfailed_count: 0\n", encoding="utf-8")
+	(tmp_path / LEDGER_REL).unlink()
+	_run_ledger(tmp_path, block, 1, IS_WORKFLOW_SOURCE_REPO="false", PR_CHECK_RUNS_CONTEXT_FILE=str(context))
+	assert _entry_fields(tmp_path)["STATUS"] == "unreachable"
+	# A sticky entry stays unreachable when the context becomes unavailable.
+	context.write_text("", encoding="utf-8")
+	_run_ledger(tmp_path, block, 2, IS_WORKFLOW_SOURCE_REPO="false", PR_CHECK_RUNS_CONTEXT_FILE=str(context))
+	assert _entry_fields(tmp_path)["STATUS"] == "unreachable"
