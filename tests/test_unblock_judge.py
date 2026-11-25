@@ -1401,6 +1401,9 @@ if args[:2] == ["api", "graphql"]:
 	if os.environ.get("FAKE_GH_FAIL_OWN_PRS"):
 		json.dump(state, open(state_path, "w"))
 		sys.exit(1)
+	state["own_pr_reads"] = state.get("own_pr_reads", 0) + 1
+	if state["own_pr_reads"] > 1 and os.environ.get("FAKE_GH_OWN_PRS_AFTER_FIRST"):
+		done(os.environ["FAKE_GH_OWN_PRS_AFTER_FIRST"])
 	done(os.environ.get("FAKE_GH_OWN_PRS", '{"data": {"repository": {"pullRequests": {"nodes": []}}}}'))
 endpoint = next((a for a in args[1:] if a == "user" or a.startswith("repos/")), "")
 jq = args[args.index("--jq") + 1] if "--jq" in args else ""
@@ -6428,7 +6431,7 @@ def test_own_lease_waiting_pr_refuses_the_reissue(_own_guard_default: pytest.Mon
 	{"status": "unknown", "prs": []},
 	{"status": "ok", "prs": [dict(_own_pr_fact(), head_ref="ai/issue-8")]},
 	{"status": "ok", "prs": [dict(_own_pr_fact(), head_sha="not-a-sha")]},
-	{"status": "ok", "prs": [_own_pr_fact(n) for n in range(10, 16)]},
+	{"status": "ok", "prs": [_own_pr_fact(n) for n in range(10, 21)]},
 	{"status": "ok", "prs": [dict(_own_pr_fact(), head_gate="green")]},
 	{"status": "weird"},
 	"ok",
@@ -6535,7 +6538,8 @@ def test_case_9887_green_lease_waiting_pr_holds_instead_of_reissuing(tmp_path: P
 	assert "<!-- ai:unblock-wait:v1 item=7 hold=item_closed ref=9899 -->" in bodies[0]
 	assert "ai:unblock:v1" not in bodies[0]
 	assert "Not re-issued: pull request #9899" in bodies[0]
-	assert _graphql_calls(state) == 1
+	# One read for the judge's context, one after the model call (fresh facts).
+	assert _graphql_calls(state) == 2
 
 
 @pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required for the unblock judge fixture")
@@ -6618,3 +6622,55 @@ def test_workflows_pass_the_own_pr_guard_with_a_default() -> None:
 	for name in ("orchestrate_poll.yml", "unblock_judge.yml"):
 		text = (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
 		assert text.count(line) == text.count("UNBLOCK_JUDGE_ENABLED: ${{"), name
+
+
+@pytest.mark.parametrize("value", ["0", "no", "OFF", " false "])
+def test_guard_off_values_match_the_stage_switch_registry(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+	# scripts/stage_switches.json lists on_values 1/yes/on, so 0/no/off must be off here too.
+	monkeypatch.setenv("UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED", value)
+	assert actions.own_pr_refusal(_own_ctx(status="unknown")) is None
+	for on in ("1", "yes", "on", "TRUE"):
+		monkeypatch.setenv("UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED", on)
+		assert actions.own_pr_refusal(_own_ctx(status="unknown"))["reason"] == "own_pr_unknown"
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required for the unblock judge fixture")
+def test_shell_guard_off_values_make_no_own_pr_read(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, ISSUE, verdict=REISSUE, FAKE_GH_OWN_PRS=_own_response(_own_node(9899)),
+		UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED="off")
+	assert _graphql_calls(state) == 0
+	assert len(state["created"]) == 1, result.stdout + result.stderr
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required for the unblock judge fixture")
+def test_own_pr_page_overflow_is_unknown(tmp_path: Path) -> None:
+	response = json.loads(_own_response(_own_node(9562, gate="PENDING")))
+	response["data"]["repository"]["pullRequests"]["totalCount"] = 11
+	result, state = _judge(tmp_path, ISSUE, verdict=REISSUE, FAKE_GH_OWN_PRS=json.dumps(response))
+	out = result.stdout + result.stderr
+	assert "op=own_pr outcome=unknown count=-" in out, out
+	assert "outcome=refused reason=own_pr_unknown pr=none" in out, out
+	assert state["created"] == [] and _pr_closes(state) == []
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required for the unblock judge fixture")
+def test_repeated_unknown_refusal_is_not_posted_again(tmp_path: Path) -> None:
+	body = actions.own_pr_refusal(_ctx(own_prs={"status": "unknown", "prs": []}), env={})["body"]
+	result, state = _judge(tmp_path, ISSUE, comments=[_comment(body)], verdict=REISSUE, FAKE_GH_FAIL_OWN_PRS="1")
+	out = result.stdout + result.stderr
+	assert "outcome=refused reason=own_pr_unknown pr=none" in out, out
+	assert "UNBLOCK_JUDGE item=7 op=reissue outcome=refusal_already_posted reason=own_pr_unknown" in out, out
+	assert state["comments"] == [] and state["created"] == [] and state["patched"] == []
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required for the unblock judge fixture")
+def test_own_pr_turning_green_during_the_model_call_is_not_closed(tmp_path: Path) -> None:
+	# The first read (before the model) sees a pending head-gate; the read after
+	# the model sees it green, so the re-issue is refused and nothing is closed.
+	pending = _own_response(_own_node(9562, gate="PENDING"))
+	green = _own_response(_own_node(9562, gate="SUCCESS"))
+	result, state = _judge(tmp_path, ISSUE, verdict=REISSUE, FAKE_GH_OWN_PRS=pending, FAKE_GH_OWN_PRS_AFTER_FIRST=green)
+	out = result.stdout + result.stderr
+	assert "outcome=refused reason=own_pr_green pr=9562" in out, out
+	assert state["created"] == [] and _pr_closes(state) == []
+	assert _graphql_calls(state) == 2

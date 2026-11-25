@@ -276,7 +276,9 @@ FIXUP_DELIVERED_MAX_PATHS = 50
 # from the API, never from model text or an issue body.
 OWN_PR_STATUSES = ("ok", "unknown", "disabled")
 OWN_PR_GATE_STATES = ("success", "pending", "failure", "error", "absent")
-OWN_PR_MAX = 5
+# Same as the page size of the own-PR query in scripts/unblock_judge.sh
+# (`first: 10`), which reports a longer list as `unknown` itself.
+OWN_PR_MAX = 10
 OWN_PR_SHA_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 OWN_PR_MERGEABLE_RE = re.compile(r"^[a-z_]{0,40}$")
 OWN_PR_REFUSAL_REASONS = ("own_pr_green", "own_pr_lease_wait", "own_pr_unknown")
@@ -389,15 +391,17 @@ def _ci_owner(raw: object) -> dict | None:
 
 
 def _own_pr_guard_enabled(env: object = None) -> bool:
-	"""UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED: unset, empty or `true` is on, `false` off.
+	"""UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED: unset, empty, `true`, `1`, `yes` or `on`
+	is on; `false`, `0`, `no` or `off` is off (as scripts/unblock_judge.sh and the
+	stage-switch registry's on_values).
 
 	A safety guard, so any other value warns and keeps it on (fail closed).
 	"""
 	env = os.environ if env is None else env
 	value = str(env.get("UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED", "") or "").strip().lower()
-	if value in ("", "true"):
+	if value in ("", "true", "1", "yes", "on"):
 		return True
-	if value == "false":
+	if value in ("false", "0", "no", "off"):
 		return False
 	print("warning: UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED is not true or false; the own-PR re-issue guard stays on", file=sys.stderr)
 	return True
