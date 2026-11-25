@@ -5,13 +5,28 @@
   "entry_id": "processed_command_10137_7176974266_approved",
   "issue_number": 10137,
   "metadata": {
+    "branch": "ai/issue-10137",
+    "changed_files": [
+      "agents.d/10137-rb-judge-settled-check-diagnostics.md",
+      "changelog.d/10137-rb-judge-settled-check-diagnostics.md",
+      "scripts/pr_checks_lib.sh",
+      "scripts/review_autofix_step_post_review_blocked_comment.sh",
+      "scripts/review_rb_judge.sh",
+      "tests/test_pr_checks_lib_required_filter.py",
+      "tests/test_review_rb_judge_settled_check_diagnostics.py"
+    ],
+    "issue_number": 10137,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/10137",
+    "pr_number": 10139,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/10139",
+    "run_attempt": "1",
+    "run_id": "45717472203",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/45717472203"
   },
   "run_attempt": 1,
   "run_id": "45717472203",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-25T23:00:26Z",
+  "status": "completed",
+  "timestamp": "2026-11-25T23:28:52Z",
   "workflow": "implement"
 }
