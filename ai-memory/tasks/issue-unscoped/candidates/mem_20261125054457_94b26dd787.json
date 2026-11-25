@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"When no blocking finding remains, the round ends as an approval: the head-gate, the security pass and final CI proceed as they do today for a clean round.\" (the implementation plan also names \"the step that decides whether the editor runs\")\n  expected_change_site: `.github/workflows/review_autofix.yml`, `Apply fixes with editor model`; convergence decision handling in `scripts/review_apply_fixes.sh`\n  confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  EVIDENCE: The only code that uses the blocking=0 / outcome=approve result of review_convergence_classify is review_convergence_log in scripts/review_issue_ledger.sh, which logs it; neither the workflow nor the editor decision path reads that result, the workflow step at line 4001 has no convergence-based gate and still invokes the editor when no blocking findings remain, approval depends only on the editor obeying the prompt directive \"Make no edits for them.\" at `scripts/review_apply_fixes.sh:1500-1511`, which does not deterministically end the round as an approval; the reviewers disagree on severity (anthropic_claude-sonnet-5_5 says NIT and calls this a partial delivery with a documented safety rationale, because a hard skip would also skip fixing a CI failure on the head; openai_gpt-6-luna says MAJOR); the highest is MAJOR\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"When no blocking finding remains, the round ends as an approval: the head-gate, the security pass and final CI proceed as they do today for a clean round.\"\n  Expected change site: the editor decision path driven by scripts/review_apply_fixes.sh (the issue's \"step that decides whether the editor runs\").\n  Evidence of absence: Neither the PR diff nor the last-run diff reads the blocking=0 / outcome=approve result of review_convergence_classify. The only code that logs that result is review_convergence_log in scripts/review_issue_ledger.sh. Approval still depends on the editor obeying the prompt directive \"Make no edits for them.\" in scripts/review_apply_fixes.sh. The editor has deferred this three times because a hard skip would also skip fixing a CI failure on the head, so this is a partial delivery with a documented safety rationale.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"When no blocking finding remains, the round ends as an approval: the head-gate, the security pass and final CI proceed as they do today for a clean round.\" The implementation plan also names \"the step that decides whether the editor runs.\"\n  Expected change site: `.github/workflows/review_autofix.yml`, `Apply fixes with editor model`; convergence decision handling in `scripts/review_apply_fixes.sh`.\n  Evidence of absence: `scripts/review_issue_ledger.sh` logs `outcome=approve`, but neither the workflow nor the editor decision path uses that result. The workflow step at line 4001 has no convergence-based gate. The editor prompt at `scripts/review_apply_fixes.sh:1500-1511` tells the model not to edit those findings, but it does not deterministically end the round as an approval.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- HARDENING_SUGGESTION scripts/review_rb_judge.sh:~895 (`render_review_rb_convergence_advisory_file`, Python stub parser, `stub.setdefault(key.strip(), ...)`)\n  PROBLEM: A malformed stub missing `FILE:` or `LINES:` renders `file=unknown` / `lines=unknown` in the judge notes with no signal, and a duplicate key keeps the first value silently.\n  WHY: Suggested minimal fix: after the `=== END ADVISORY ISSUE` row build, emit one `::warning::` from the shell when a rebuilt row has an empty FILE field, or print a `stub_missing_fields=N` line to stderr from the Python block (estimated lines changed: 4; HARDENING_RISK_SCORE: 1).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "63840d8833ff718d78cc6ebf75bf9ab7a80a4985532e9f9a41463354577b384c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10066,
+    "run_id": "45542469491",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45542469491",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125054457_94b26dd787",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10066,
+    "run_id": "45542469491"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T05:44:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
