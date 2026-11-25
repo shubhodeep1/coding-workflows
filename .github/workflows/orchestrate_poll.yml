@@ -374,12 +374,18 @@ jobs:
         # The step timeout (issue #9393): a hung gh call would otherwise hold
         # the poll job until GitHub's 360-minute job limit and fail it;
         # continue-on-error turns the step timeout into a warning.
+        # The signing secret lets the helper verify signed github-actions[bot]
+        # entry comments (PR #9643); without it this step read none of them and
+        # closed tracker #9647 with 7 open entries (2026-11-23). The helper
+        # keeps the tracker open when signed entries cannot be verified.
         continue-on-error: true
         timeout-minutes: 5
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           OPERATOR_STEP_AUTO_RESOLVE_ENABLED: ${{ vars.OPERATOR_STEP_AUTO_RESOLVE_ENABLED || 'true' }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -uo pipefail
           helper=".codex-workflow-src/scripts/operator_step_issue.py"

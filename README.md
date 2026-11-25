@@ -4139,6 +4139,7 @@ The unattended-pipeline stuck-states project (Refs #8291, plan `docs/plans/remov
 
 - The poller step "Resolve released operator steps" runs `scripts/operator_step_issue.py resolve` on every tick (fail-open). It ticks an `ai:operator-step` entry whose every unticked step only waits for the next `@stable` release, once `GET compare/<merge>...stable` reports `ahead` or `identical`, at most 10 compares per tick. An entry that also holds a real human step (a secret, a setting) is never ticked.
 - When no unticked step is left, it posts one `<!-- ai:operator-step:auto-closed -->` comment and closes the tracker as completed. It never closes a tracker a person reopened during the tick, and it reopens the tracker if an entry landed during the close.
+- Entry comments signed by the job token (`github-actions[bot]`, PR #9643) count once their signature verifies against `AI_COMMENT_SIGNING_SECRET`, which the step now receives. A signed entry that cannot be verified (secret missing, or the comment was edited in place) keeps the tracker open (`reason=unverified_signed_entries`) until a newer trusted entry for its key supersedes it; `/deploy-activate` posts that newer entry instead of editing a signed one.
 - Log prefix `OPERATOR_STEP_RESOLVE`. `OPERATOR_STEP_AUTO_RESOLVE_ENABLED=false` turns the step off with no API call.
 
 #### Retired-label drain

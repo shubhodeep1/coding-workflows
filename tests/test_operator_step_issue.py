@@ -1048,6 +1048,9 @@ def test_poller_wires_operator_step_resolve_step() -> None:
 		"GH_TOKEN": "${{ secrets.GH_PAT }}",
 		"GITHUB_REPOSITORY": "${{ github.repository }}",
 		"OPERATOR_STEP_AUTO_RESOLVE_ENABLED": "${{ vars.OPERATOR_STEP_AUTO_RESOLVE_ENABLED || 'true' }}",
+		# Signed entry comments (PR #9643) must be verifiable in this step.
+		"AI_COMMENT_SIGNING_SECRET": "${{ secrets.AI_COMMENT_SIGNING_SECRET }}",
+		"AI_COMMENT_JOB_TOKEN": "${{ github.token }}",
 	}
 	run_block = re.search(r"^        run: \|\n((?:          .*\n|\n)+)", block + "\n", re.M)
 	assert run_block
@@ -1343,3 +1346,180 @@ def test_operator_step_resolve_cli_fails_open_on_api_errors(
 		# The run stops at the first failed tick: the second entry is not ticked.
 		assert len(tick_posts) == 1 and "key=pr-1" in tick_posts[0][-1].split("\n", 1)[0]
 		assert not any("ai:operator-step:resolved" in comment["body"] for comment in fake.comments[number])
+
+
+# --- signed job-token entry comments (PR #9643; tracker #9647 closed with 7 open entries) ---
+
+SIGNING_SECRET = "operator-step-test-secret-0123456789abcdef"
+SIGNED_BOT = "github-actions[bot]"
+signature_module = writer._comment_signature_module()
+
+
+def _signed_entry(fake: FakeGitHub, number: int, comment_id: int, body: str, *, tamper: bool = False) -> dict:
+	"""A `github-actions[bot]` entry comment signed for the pipeline login, as the gh shim posts it."""
+	assert signature_module is not None
+	signed = signature_module.sign_body(SIGNING_SECRET, REPO, number, BOT, "User", body, 42)
+	if tamper:
+		# A person's token ticked the box in place: the HMAC no longer matches.
+		signed = signed.replace("- [ ]", "- [x]", 1)
+	comment = {"id": comment_id, "body": signed, "user": {"login": SIGNED_BOT, "type": "Bot", "id": 41898282},
+		"issue_url": f"https://api.github.com/repos/{REPO}/issues/{number}"}
+	fake.comments.setdefault(number, []).append(comment)
+	return comment
+
+
+def _done_entry(fake: FakeGitHub, number: int, comment_id: int, key: str) -> None:
+	"""A PAT-written entry with nothing left (like #9647's pr-9643)."""
+	_entry_comment(fake, number, comment_id, writer._render_resolved(writer.render_entry(key, key, RELEASE_STEPS, RELEASE_SHA), "ahead", RELEASE_SHA))
+
+
+def _issue9647_shape(fake: FakeGitHub, *, tamper: bool = False) -> int:
+	number = _tracker(fake, 9647)
+	_done_entry(fake, number, 10, "pr-9643")
+	for offset, key in enumerate(("project-9169", "project-8969", "pr-9750", "unblock-fixup-9670")):
+		_signed_entry(fake, number, 20 + offset, writer.render_entry(key, key, [SECRET_STEP], RELEASE_SHA), tamper=tamper)
+	return number
+
+
+def test_operator_step_resolve_counts_verified_signed_bot_entries(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+	monkeypatch.setenv("AI_COMMENT_SIGNING_SECRET", SIGNING_SECRET)
+	number = _issue9647_shape(fake)
+	result = writer.resolve(REPO, BOT)
+	assert result["closed"] is False and result["unticked"] == 4 and result["unverified"] == 0
+	assert result["skipped"] == {"already_done": 1, "not_release": 4}
+	assert fake.patches() == [] and _posts(fake, number) == []
+	assert f"op=close issue={number} outcome=open reason=unticked" in capsys.readouterr().err
+
+
+def test_operator_step_resolve_ticks_and_closes_over_verified_signed_release_entries(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setenv("AI_COMMENT_SIGNING_SECRET", SIGNING_SECRET)
+	number = _tracker(fake)
+	_signed_entry(fake, number, 10, writer.render_entry("pr-1", "one", RELEASE_STEPS, RELEASE_SHA))
+	fake.compare_status[RELEASE_SHA] = "ahead"
+	result = writer.resolve(REPO, BOT)
+	assert result["ticked"] == ["pr-1"] and result["unverified"] == 0 and result["closed"] is True
+	resolved = next(comment for comment in fake.comments[number] if "ai:operator-step:resolved" in comment["body"])
+	# The superseding comment carries the verified body, not the old signature line.
+	assert "ai-comment-sig" not in resolved["body"]
+
+
+@pytest.mark.parametrize("case", ["secret_absent", "bad_signature", "module_missing"])
+def test_operator_step_resolve_fails_closed_on_unverifiable_signed_entries(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], case: str) -> None:
+	if case == "secret_absent":
+		monkeypatch.delenv("AI_COMMENT_SIGNING_SECRET", raising=False)
+	else:
+		monkeypatch.setenv("AI_COMMENT_SIGNING_SECRET", SIGNING_SECRET)
+	if case == "module_missing":
+		monkeypatch.setitem(writer._COMMENT_SIGNATURE_STATE, "loaded", True)
+		monkeypatch.setitem(writer._COMMENT_SIGNATURE_STATE, "module", None)
+	# The #9647 shape: one done PAT entry, the open ones signed by the bot.
+	number = _issue9647_shape(fake, tamper=case == "bad_signature")
+	result = writer.resolve(REPO, BOT)
+	assert result["closed"] is False and result["unverified"] == 4 and result["ticked"] == []
+	assert fake.patches() == [] and _posts(fake, number) == [] and fake.closed == []
+	err = capsys.readouterr().err
+	assert f"op=close issue={number} outcome=open reason=unverified_signed_entries" in err
+	secret = "absent" if case == "secret_absent" else "present"
+	assert (f"op=verify issue={number} outcome=unverified count=4 "
+		f"keys=pr-9750,project-8969,project-9169,unblock-fixup-9670 secret={secret}") in err
+
+
+def test_operator_step_resolve_unverifiable_entries_block_even_without_trusted_entries(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+	monkeypatch.delenv("AI_COMMENT_SIGNING_SECRET", raising=False)
+	number = _tracker(fake)
+	_signed_entry(fake, number, 10, writer.render_entry("pr-1", "one", RELEASE_STEPS, RELEASE_SHA))
+	result = writer.resolve(REPO, BOT)
+	assert result["closed"] is False and result["unverified"] == 1
+	assert "reason=unverified_signed_entries" in capsys.readouterr().err
+
+
+def test_operator_step_resolve_never_ticks_over_a_newer_unverifiable_entry(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.delenv("AI_COMMENT_SIGNING_SECRET", raising=False)
+	number = _tracker(fake)
+	_release_entry(fake, number, 10, "pr-1")  # Older trusted entry.
+	_signed_entry(fake, number, 11, writer.render_entry("pr-1", "one", [SECRET_STEP], RELEASE_SHA))
+	fake.compare_status[RELEASE_SHA] = "ahead"
+	result = writer.resolve(REPO, BOT)
+	assert result["ticked"] == [] and result["skipped"] == {"unverified": 1} and _compares(fake) == []
+	assert result["closed"] is False and _posts(fake, number) == []
+
+
+def test_operator_step_a_newer_trusted_entry_supersedes_an_unverifiable_one(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch) -> None:
+	# /deploy-activate posts a new PAT comment instead of editing the bot comment.
+	monkeypatch.delenv("AI_COMMENT_SIGNING_SECRET", raising=False)
+	number = _tracker(fake)
+	_signed_entry(fake, number, 10, writer.render_entry("pr-1", "one", [SECRET_STEP], RELEASE_SHA))
+	ticked = writer.render_entry("pr-1", "one", [SECRET_STEP], RELEASE_SHA).replace("- [ ]", "- [x]")
+	_entry_comment(fake, number, 11, ticked)
+	result = writer.resolve(REPO, BOT)
+	assert result["unverified"] == 0 and result["skipped"] == {"already_done": 1} and result["closed"] is True
+
+
+def test_operator_step_resolve_recheck_sees_a_new_unverifiable_entry(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+	monkeypatch.delenv("AI_COMMENT_SIGNING_SECRET", raising=False)
+	number = _tracker(fake)
+	_done_entry(fake, number, 10, "pr-1")
+	original = fake.__call__
+	reads = {"count": 0}
+
+	def racing(args: list[str], *, allow_existing_label: bool = False) -> str:
+		if "--slurp" in args:
+			reads["count"] += 1
+			if reads["count"] == 2:
+				_signed_entry(fake, number, 30, writer.render_entry("pr-2", "two", [SECRET_STEP], RELEASE_SHA))
+		return original(args, allow_existing_label=allow_existing_label)
+
+	monkeypatch.setattr(writer, "_gh", racing)
+	result = writer.resolve(REPO, BOT)
+	assert result["closed"] is False and fake.patches() == [] and _posts(fake, number) == []
+	assert f"op=close issue={number} outcome=open reason=unverified_signed_entries" in capsys.readouterr().err
+
+
+def test_operator_step_resolve_reopens_for_an_unverifiable_entry_after_the_close(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+	monkeypatch.delenv("AI_COMMENT_SIGNING_SECRET", raising=False)
+	number = _tracker(fake)
+	_done_entry(fake, number, 10, "pr-1")
+	original = fake.__call__
+
+	def racing(args: list[str], *, allow_existing_label: bool = False) -> str:
+		out = original(args, allow_existing_label=allow_existing_label)
+		if args[:3] == ["api", "-X", "PATCH"] and "state=closed" in args:
+			_signed_entry(fake, number, 4000, writer.render_entry("pr-9", "nine", [SECRET_STEP], RELEASE_SHA))
+		return out
+
+	monkeypatch.setattr(writer, "_gh", racing)
+	result = writer.resolve(REPO, BOT)
+	assert result["closed"] is False and fake.closed == [number] and fake.reopened == [number]
+	assert f"op=close issue={number} outcome=open reason=reopened_after_close" in capsys.readouterr().err
+
+
+def test_operator_step_tick_skips_keys_with_an_unverifiable_newer_entry(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+	monkeypatch.delenv("AI_COMMENT_SIGNING_SECRET", raising=False)
+	repo_dir, base, stable, _side = _git_repo(tmp_path)
+	number = _tracker(fake)
+	_entry_comment(fake, number, 10, writer.render_entry("pr-1", "one", STEPS, base))
+	_signed_entry(fake, number, 11, writer.render_entry("pr-1", "one", STEPS, base))
+	result = writer.tick(REPO, stable, str(repo_dir), BOT)
+	assert result["ticked"] == [] and result["skipped"] == {"unverified": 1} and _posts(fake, number) == []
+	assert "OPERATOR_STEP_TICK key=pr-1 outcome=unverified" in capsys.readouterr().err
+	# With the secret the signed entry verifies and is ticked like a PAT entry.
+	monkeypatch.setenv("AI_COMMENT_SIGNING_SECRET", SIGNING_SECRET)
+	assert writer.tick(REPO, stable, str(repo_dir), BOT)["ticked"] == ["pr-1"]
+
+
+def test_operator_step_upsert_dedupes_against_a_verified_signed_entry(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setenv("AI_COMMENT_SIGNING_SECRET", SIGNING_SECRET)
+	number = _tracker(fake)
+	_signed_entry(fake, number, 10, writer.render_entry("pr-1", "one", STEPS))
+	writer.upsert(REPO, "pr-1", "one", STEPS)
+	assert _posts(fake, number) == []

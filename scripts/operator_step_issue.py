@@ -48,8 +48,21 @@ done marker); older comments are never edited. A commit git cannot find is
 not ticked, and `tick` never creates a tracker. Output is one JSON
 line: `issue`, `stable`, `ticked` (keys), `skipped` (`{reason: count}`).
 Each key logs `OPERATOR_STEP_TICK key= outcome=ticked|already_done|
-no_source_sha|not_ancestor|unknown_commit stable=` on stderr. The
+no_source_sha|not_ancestor|unknown_commit|unverified stable=` on stderr. The
 needs-human digest (below) is a different issue and is never touched.
+
+Signed job-token comments (scripts/comment_signature.py, PR #9643). Every
+comment read here (tick, resolve, upsert, the needs-human claims) verifies
+signed `github-actions[bot]` comments in-process with the
+AI_COMMENT_SIGNING_SECRET env, the same check the gh shim makes, so a
+verified one counts as the PAT login wrote it even when the step never
+loaded the shim (no extra API call). A signed entry comment that does not
+verify (secret absent, module missing, HMAC broken by an in-place edit) and
+is newer than every trusted entry comment for its key is `unverified`: tick
+and resolve never tick that key, and resolve never closes the tracker while
+one exists (reason `unverified_signed_entries`, logged as
+`OPERATOR_STEP_RESOLVE op=verify issue= outcome=unverified count= keys=
+secret=present|absent`).
 
 Tick API budget (CLAUDE.md §15): at most one identity read (none with
 `--trusted-login`), one tracker listing, one paginated comment read, and one
@@ -96,11 +109,14 @@ narrows the close race; it does not make it atomic. A tracker the pipeline reope
 treated like one a person reopened and is never closed again. Kill switch
 `OPERATOR_STEP_AUTO_RESOLVE_ENABLED` (default `true`): `false` makes it a
 no-op with no API call. Output is one JSON line: `issue`, `ticked`,
-`skipped` (`{reason: count}`), `compares`, `unticked`, `closed`. Each key logs
+`skipped` (`{reason: count}`), `compares`, `unticked`, `closed`, `unverified`
+(count of keys held by unverified signed entries). Each key logs
 `OPERATOR_STEP_RESOLVE key= outcome=ticked|already_done|not_release|
-no_source_sha|deferred|not_contained|compare_failed status=` and the close
-decision logs `OPERATOR_STEP_RESOLVE op=close issue= outcome=closed|open
-reason=` on stderr. The needs-human digest is never touched.
+no_source_sha|deferred|not_contained|compare_failed|unverified status=` and
+the close decision logs `OPERATOR_STEP_RESOLVE op=close issue= outcome=closed|open
+reason=` on stderr (reason `unverified_signed_entries` fails closed, before
+`no_entries`, on the first read, the pre-close re-read, and as a reopen
+after the close). The needs-human digest is never touched.
 
 Resolve API budget (CLAUDE.md §14): one tracker listing (and nothing else
 when no tracker is open); with a tracker, at most one identity read (none
@@ -217,6 +233,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import importlib.util
 import json
 import os
 import re
@@ -424,7 +441,103 @@ def load_entry_comments(repo: str, issue_number: int) -> list[dict]:
 	comments = [comment for page in pages for comment in page]
 	if any(not isinstance(comment, dict) for comment in comments):
 		raise ApiError("unreadable operator-step comments: malformed comment")
-	return comments
+	return _verify_signed_entry_comments(comments)
+
+
+# --- signed job-token comments (scripts/comment_signature.py, PR #9643) --------
+
+# Resolved at import, next to this file's real location (tests repoint
+# `__file__` for the label registration only).
+_COMMENT_SIGNATURE_PATH = Path(__file__).resolve().with_name("comment_signature.py")
+COMMENT_SIGNING_SECRET_ENV = "AI_COMMENT_SIGNING_SECRET"
+SIGNED_COMMENT_BOT_LOGIN = "github-actions[bot]"
+# Looser than comment_signature.SIG_LINE_RE on purpose: anything that looks
+# signed counts, so a malformed signature line is unverifiable, not unsigned.
+SIGNED_COMMENT_LINE_RE = re.compile(r"\n<!-- ai-comment-sig:v1 [^\n]*-->[ \t\r\n]*\Z")
+_COMMENT_SIGNATURE_STATE: dict = {"loaded": False, "module": None}
+
+
+def _comment_signature_module():
+	"""comment_signature.py loaded in-process (no subprocess, no API call), or None."""
+	if not _COMMENT_SIGNATURE_STATE["loaded"]:
+		_COMMENT_SIGNATURE_STATE["loaded"] = True
+		try:
+			spec = importlib.util.spec_from_file_location("operator_step_comment_signature", _COMMENT_SIGNATURE_PATH)
+			if spec is None or spec.loader is None:
+				raise ImportError(str(_COMMENT_SIGNATURE_PATH))
+			module = importlib.util.module_from_spec(spec)
+			spec.loader.exec_module(module)
+			if callable(getattr(module, "normalize_comment", None)):
+				_COMMENT_SIGNATURE_STATE["module"] = module
+		except Exception as exc:  # noqa: BLE001 - any load failure leaves signed comments unverified
+			print(f"OPERATOR_STEP_RESOLVE op=verify outcome=error reason=signature_module_unavailable ({type(exc).__name__})", file=sys.stderr)
+	return _COMMENT_SIGNATURE_STATE["module"]
+
+
+def _is_signed_bot_comment(comment: dict) -> bool:
+	"""A `github-actions[bot]` comment whose body ends with a signature line."""
+	user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
+	return user.get("login") == SIGNED_COMMENT_BOT_LOGIN and bool(SIGNED_COMMENT_LINE_RE.search(str(comment.get("body") or "")))
+
+
+def _verify_signed_entry_comments(comments: list[dict]) -> list[dict]:
+	"""Verify signed job-token comments here, whether or not the gh shim ran.
+
+	The gh shim (scripts/gh_helpers.sh) normalizes signed comments only when
+	the step exports AI_COMMENT_SIGNING_SECRET; a step that does not (the
+	poller's "Resolve released operator steps" step closed tracker #9647 that
+	way on 2026-11-23) reads them as untrusted `github-actions[bot]` comments.
+	With the secret set, each signed bot comment is passed through
+	comment_signature.normalize_comment, which returns a verified one as the
+	signed (PAT) login wrote it and leaves anything else unchanged; comments
+	the shim already normalized carry no bot login and pass through as is.
+	Without the secret, or when the module cannot be loaded, the comments are
+	returned unchanged, and `_unverified_entry_keys` reports the signed entry
+	comments that are left, so `resolve` keeps the tracker open. No API call.
+	"""
+	secret = os.environ.get(COMMENT_SIGNING_SECRET_ENV, "")
+	if not secret or not any(_is_signed_bot_comment(comment) for comment in comments):
+		return comments
+	module = _comment_signature_module()
+	if module is None:
+		return comments
+	verified: list[dict] = []
+	for comment in comments:
+		try:
+			normalized = module.normalize_comment(comment, secret) if _is_signed_bot_comment(comment) else comment
+		except Exception:  # noqa: BLE001 - an unexpected shape stays unverified
+			normalized = comment
+		verified.append(normalized if isinstance(normalized, dict) else comment)
+	return verified
+
+
+def _unverified_entry_keys(comments: list[dict], latest: dict[str, dict]) -> list[str]:
+	"""Keys whose newest entry comment is signed but did not verify.
+
+	A signed `github-actions[bot]` entry comment that is still a bot comment
+	after `_verify_signed_entry_comments` could not be verified: the secret
+	is absent, the module is missing, or the HMAC no longer matches (a body
+	edited by a person's token). Its state is unknown, so it counts only when
+	no trusted entry comment for the same key is newer (`latest`, from
+	`_authoritative_entry_comments`). Callers fail closed on these keys.
+	"""
+	keys: set[str] = set()
+	for comment in comments:
+		if not isinstance(comment.get("id"), int) or not _is_signed_bot_comment(comment):
+			continue
+		match = ENTRY_RE.match(str(comment.get("body") or "").replace("\r\n", "\n").split("\n", 1)[0].strip())
+		if match and comment["id"] > int((latest.get(match.group(1)) or {}).get("id") or 0):
+			keys.add(match.group(1))
+	return sorted(keys)
+
+
+def _log_unverified(number: int, keys: list[str]) -> None:
+	if keys:
+		print(
+			f"OPERATOR_STEP_RESOLVE op=verify issue={number} outcome=unverified count={len(keys)} "
+			f"keys={','.join(keys)} secret={'present' if os.environ.get(COMMENT_SIGNING_SECRET_ENV) else 'absent'}",
+			file=sys.stderr,
+		)
 
 
 def load_steps(path: str) -> list[dict]:
@@ -552,7 +665,12 @@ def upsert(repo: str, key: str, source: str, steps: list[dict], source_sha: str 
 
 
 def _authoritative_entry_comments(comments: list[dict], trusted_login: str) -> dict[str, dict]:
-	"""The highest-id entry comment per key, written by the pipeline login only."""
+	"""The highest-id entry comment per key, written by the pipeline login only.
+
+	Signed job-token comments count once verified (`load_entry_comments`
+	normalizes them); an unverified one stays a `github-actions[bot]` comment
+	and is reported by `_unverified_entry_keys` instead.
+	"""
 	latest: dict[str, dict] = {}
 	for comment in comments:
 		user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
@@ -618,12 +736,19 @@ def tick(repo: str, stable_sha: str, repo_dir: str = ".", trusted_login: str | N
 	if not isinstance(number, int) or isinstance(number, bool) or number <= 0:
 		raise ApiError("unreadable issue list: operator-step tracker has no issue number")
 	result["issue"] = number
-	latest = _authoritative_entry_comments(load_entry_comments(repo, number), login)
+	comments = load_entry_comments(repo, number)
+	latest = _authoritative_entry_comments(comments, login)
+	# A newer signed entry that did not verify may hold ticks this run cannot
+	# see; a superseding tick from an older trusted comment would hide it.
+	unverified = set(_unverified_entry_keys(comments, latest))
+	_log_unverified(number, sorted(unverified))
 	for key in sorted(latest):
 		body = str(latest[key].get("body") or "").replace("\r\n", "\n")
 		lines = [line.strip() for line in body.split("\n")]
 		source_match = SOURCE_SHA_RE.match(lines[1]) if len(lines) > 1 else None
-		if any(DONE_RE.match(line) or RESOLVED_RE.match(line) for line in lines):
+		if key in unverified:
+			outcome = "unverified"
+		elif any(DONE_RE.match(line) or RESOLVED_RE.match(line) for line in lines):
 			outcome = "already_done"
 		elif not source_match:
 			outcome = "no_source_sha"
@@ -777,7 +902,7 @@ def _tracker_still_closable(repo: str, number: int) -> bool:
 def resolve(repo: str, trusted_login: str | None = None, max_compares: int = MAX_RESOLVE_COMPARES) -> dict:
 	if not REPO_RE.match(repo):
 		raise UsageError(f"--repo must be OWNER/REPO, got {repo!r}")
-	result: dict = {"issue": None, "ticked": [], "skipped": {}, "compares": 0, "unticked": None, "closed": False}
+	result: dict = {"issue": None, "ticked": [], "skipped": {}, "compares": 0, "unticked": None, "closed": False, "unverified": 0}
 	if not operator_step_auto_resolve_enabled():
 		_resolve_log(op="resolve", outcome="skip", reason="disabled")
 		result["reason"] = "disabled"
@@ -798,7 +923,13 @@ def resolve(repo: str, trusted_login: str | None = None, max_compares: int = MAX
 	login = (trusted_login or "").strip() or _gh(["api", "user", "--jq", ".login"]).strip()
 	if not login:
 		raise ApiError("operator-step resolve identity is unavailable")
-	latest = _authoritative_entry_comments(load_entry_comments(repo, number), login)
+	comments = load_entry_comments(repo, number)
+	latest = _authoritative_entry_comments(comments, login)
+	# Fail closed on signed entries that did not verify (PR #9643 signatures):
+	# they are never ticked over and they keep the tracker open.
+	unverified = _unverified_entry_keys(comments, latest)
+	result["unverified"] = len(unverified)
+	_log_unverified(number, unverified)
 	cache: dict[str, str] = {}
 	halted = False
 	resolved: set[str] = set()
@@ -808,7 +939,9 @@ def resolve(repo: str, trusted_login: str | None = None, max_compares: int = MAX
 		lines = [line.strip() for line in raw_lines]
 		source_match = SOURCE_SHA_RE.match(lines[1]) if len(lines) > 1 else None
 		status = "-"
-		if any(DONE_RE.match(line) or RESOLVED_RE.match(line) for line in lines) or not any(line.startswith("- [ ]") for line in raw_lines):
+		if key in unverified:
+			outcome = "unverified"
+		elif any(DONE_RE.match(line) or RESOLVED_RE.match(line) for line in lines) or not any(line.startswith("- [ ]") for line in raw_lines):
 			outcome = "already_done"
 		elif not RELEASE_ENTRY_KEY_RE.match(key) or not _is_release_entry(body):
 			outcome = "not_release"
@@ -840,7 +973,11 @@ def resolve(repo: str, trusted_login: str | None = None, max_compares: int = MAX
 	legacy = parse_entries(str(tracker.get("body") or ""))
 	unticked, entry_count = _resolve_open_state(latest, legacy, resolved)
 	result["unticked"] = unticked
-	if entry_count == 0:
+	if unverified:
+		# Signed entries are present but cannot be verified (secret absent,
+		# module missing, or a bad HMAC): their steps may be open.
+		reason = "unverified_signed_entries"
+	elif entry_count == 0:
 		reason = "no_entries"
 	elif unticked > 0:
 		reason = "unticked"
@@ -852,7 +989,11 @@ def resolve(repo: str, trusted_login: str | None = None, max_compares: int = MAX
 		recheck_comments = load_entry_comments(repo, number)
 		recheck_latest = _authoritative_entry_comments(recheck_comments, login)
 		recheck_unticked, _ = _resolve_open_state(recheck_latest, legacy, set())
-		if recheck_unticked != 0 or set(recheck_latest) - set(latest):
+		recheck_unverified = _unverified_entry_keys(recheck_comments, recheck_latest)
+		if recheck_unverified:
+			_log_unverified(number, recheck_unverified)
+			reason = "unverified_signed_entries"
+		elif recheck_unticked != 0 or set(recheck_latest) - set(latest):
 			reason = "recheck_changed"
 		elif not _tracker_still_closable(repo, number):
 			# The listing above is minutes of round trips old: a person who
@@ -882,7 +1023,8 @@ def resolve(repo: str, trusted_login: str | None = None, max_compares: int = MAX
 			# a post whose re-listing ran before the close PATCH and that lands
 			# after this read is not seen by either check.
 			try:
-				after_close = _authoritative_entry_comments(load_entry_comments(repo, number), login)
+				after_close_comments = load_entry_comments(repo, number)
+				after_close = _authoritative_entry_comments(after_close_comments, login)
 			except ApiError:
 				# Fail safe: without the read, a racing entry cannot be ruled
 				# out, so reopen the tracker before reporting the error.
@@ -893,7 +1035,10 @@ def resolve(repo: str, trusted_login: str | None = None, max_compares: int = MAX
 					raise
 				_resolve_log(op="close", issue=number, outcome="open", reason="after_close_read_failed")
 				raise
-			if any(key not in recheck_latest or comment["id"] != recheck_latest[key]["id"] for key, comment in after_close.items()):
+			# A signed entry that arrived after the re-read and does not verify
+			# counts as a racing entry too.
+			if (any(key not in recheck_latest or comment["id"] != recheck_latest[key]["id"] for key, comment in after_close.items())
+					or _unverified_entry_keys(after_close_comments, after_close)):
 				_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", "state=open", "-f", "state_reason=reopened"])
 				result["closed"] = False
 				reason = "reopened_after_close"
