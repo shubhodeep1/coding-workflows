@@ -2981,13 +2981,24 @@ _mt_merge_lease_ready_waiter_exists()
 # 0 when a refused conflict-release write should take the one-time label off
 # <holder_pr> again. rc 3 (lost race) left the winning record in the
 # MERGE_LEASE_* globals (_merge_lease_cas_commit re-read it): the label goes
-# only while that record still lists <holder_pr> as a holder, because a winner
-# that released it relies on the shared label (D6). Any other rc: 0.
+# when that record still lists <holder_pr> as a holder; otherwise it stays only
+# when the record carries a `<holder_pr>:<head>:released_conflict` skip entry,
+# because only a winner that released it for a conflict relies on the shared
+# label (D6). A winner that released it for another reason (expired,
+# revoked_idle, ...) leaves no such entry, so the label this tick just added
+# goes. Any other rc: 0 (an unknown outcome after a refused write and a failed
+# re-read also removes it: a wrongly kept label would keep a conflicting
+# holder's slot on every later head, a wrongly removed one allows at most one
+# more conflict release, on a changed head).
 _mt_merge_lease_conflict_unlabel_due()
 {
 	[ "${1:-}" = 3 ] || return 0
-	[ "${MERGE_LEASE_STATE:-}" = "held" ] || return 1
-	printf '%s\n' "${MERGE_LEASE_HOLDER_ALL_ROWS:-}" | awk -v p="${2:-}" 'p != "" && $1 == p { f = 1 } END { exit !f }'
+	if [ "${MERGE_LEASE_STATE:-}" = "held" ] \
+		&& printf '%s\n' "${MERGE_LEASE_HOLDER_ALL_ROWS:-}" | awk -v p="${2:-}" 'p != "" && $1 == p { f = 1 } END { exit !f }'; then
+		return 0
+	fi
+	printf '%s\n' "${MERGE_LEASE_SKIPS:-}" | awk -F: -v p="${2:-}" 'p != "" && $1 == p && length($2) == 40 && $2 ~ /^[0-9a-f]+$/ && $3 == "released_conflict" { f = 1 } END { exit !f }' && return 1
+	return 0
 }
 
 # _mt_merge_lease_pr_ready_cached <pr> <head_sha> <base> (issue #10098): as

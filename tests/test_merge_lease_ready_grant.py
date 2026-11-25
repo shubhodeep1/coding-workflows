@@ -288,13 +288,19 @@ class ConflictRelease(unittest.TestCase):
 			self.assertEqual(h.state["refs"][REF], "c" * 40, env)
 
 	def test_lost_race_keeps_the_label_a_winner_relies_on(self) -> None:
-		# rc=3: the refused write re-read the winning record. The label comes
-		# off only while that record still holds the labelled holder; a winner
-		# that released it (or moved on to another PR) relies on the label (D6).
+		# rc=3: the refused write re-read the winning record. The label stays
+		# only when that record shows the winner released the holder for a
+		# conflict (a `4:<head>:released_conflict` skip entry; D6). A record
+		# that still holds it, or that dropped it for another reason (expired,
+		# revoked_idle), takes the label this tick added off again.
+		conflict_skip = [f"4:{_sha(4)}:released_conflict"]
 		for env in ({}, {"MERGE_LEASE_MAX_HOLDERS": "2"}):
 			now = int(time.time())
-			for winner_record, label_kept in ((_record(4, state="released", paths=""), True),
-					(_record(5, acquired=now, updated=now), True),
+			for winner_record, label_kept in ((_record(4, state="released", paths="", skips=conflict_skip), True),
+					(_record(5, acquired=now, updated=now, skips=conflict_skip), True),
+					(_record(4, state="released", paths="", skips=[f"4:{_sha(4)}:expired"]), False),
+					(_record(4, state="released", paths=""), False),
+					(_record(5, acquired=now, updated=now), False),
 					(_record(4, acquired=now, updated=now), False)):
 				st = _held(dict(_pull(4), mergeable=False), [_pull(5)])
 				winner = "d" * 40
