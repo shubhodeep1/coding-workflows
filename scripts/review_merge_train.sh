@@ -1889,8 +1889,9 @@ _mt_lease_pr_runs_active()
 # default true, and only when the staged library has _merge_lease_pr_eligible):
 # - Revocation: a held, unexpired holder found in $1 is released when
 #   _merge_lease_pr_eligible says it can no longer merge
-#   (reason=revoked_draft|revoked_skip_ai|revoked_no_head_gate|
-#   revoked_final_ci_failed), or when MERGE_LEASE_IDLE_MINUTES (default 60)
+#   (reason=revoked_draft|revoked_skip_ai|revoked_hold_label|
+#   revoked_no_head_gate|revoked_final_ci_failed; revoked_hold_label when it
+#   carries a MERGE_LEASE_HOLD_LABELS label, Refs #9969), or when MERGE_LEASE_IDLE_MINUTES (default 60)
 #   have passed since the record's updated=/acquired= and no CI run or
 #   required check is running on its head (reason=revoked_idle). A holder
 #   missing from $1 keeps today's closed-check only.
@@ -1905,11 +1906,13 @@ _mt_lease_pr_runs_active()
 #   stranded.
 # - Grant-time eligibility: up to 10 candidates per base per tick, in queue
 #   order; an ineligible one is unlabelled and logs outcome=skipped
-#   reason=draft|skip_ai|no_head_gate|final_ci_failed (event=skipped). When
+#   reason=draft|skip_ai|hold_label|no_head_gate|final_ci_failed
+#   (event=skipped). When
 #   none is left after a skip: outcome=no_waiter reason=no_eligible_waiter.
-# API budget (§14): draft, title and head come from the open-PR listing $1
-# already read (no call). Per evaluated PR (the holder, and grant candidates
-# up to the first eligible one; draft and `[skip ai]` cost nothing): 1
+# API budget (§14): draft, title, labels and head come from the open-PR
+# listing $1 already read (no call). Per evaluated PR (the holder, and grant
+# candidates up to the first eligible one; draft, `[skip ai]` and a hold
+# label cost nothing): 1
 # commit-statuses read plus the required-checks reads of
 # _pr_wait_for_required_checks (0-minute budget, no dispatch), and for the
 # idle test at most one `actions/runs` read when those did not read the runs.
@@ -1987,6 +1990,8 @@ _mt_merge_lease_tick()
 	local tick_p2_lib=0 tick_p2=0 tick_login="" tick_login_tried=0 tick_open_heads tick_holder_row tick_holder_head tick_holder_title
 	local tick_holder_draft tick_since tick_idle_s tick_ci_active tick_skip_head tick_excluded tick_skipped_any tick_cand_n tick_skip_pr
 	local tick_first_row tick_skip_why tick_skip_held tick_queue_skips tick_skip_held_prs tick_queue_empty
+	# Hold labels (Refs #9969): newline-separated label names from the listing.
+	local tick_holder_labels="" tick_first_labels=""
 	# Issue #9987: the gate the granted waiter's eligibility rested on
 	# (MERGE_LEASE_ELIGIBLE_GATE); judge_decision routes the grant to the judge.
 	local tick_first_gate="" tick_gate_field="" tick_dispatch_fn=""
@@ -2113,10 +2118,11 @@ _mt_merge_lease_tick()
 				# read above, is the evidence; no closed-check is needed).
 				tick_holder_title="$(jq -r '.title // ""' <<< "${tick_holder_row}" 2>/dev/null)" || tick_holder_title=""
 				tick_holder_draft="$(jq -r '.draft // false' <<< "${tick_holder_row}" 2>/dev/null)" || tick_holder_draft="false"
+				tick_holder_labels="$(jq -r '[ (.labels // [])[] | if type == "object" then .name else . end ] | join("\n")' <<< "${tick_holder_row}" 2>/dev/null)" || tick_holder_labels=""
 				tick_since="$((10#${MERGE_LEASE_UPDATED:-0}))"
 				[ "$((10#${MERGE_LEASE_ACQUIRED:-0}))" -le "${tick_since}" ] || tick_since="$((10#${MERGE_LEASE_ACQUIRED:-0}))"
 				if ! _merge_lease_pr_eligible "${MERGE_LEASE_PR}" "${tick_holder_head}" "${tick_holder_title}" "${tick_holder_draft}" \
-					"${tick_base}" "${tick_login}" "${tick_since}"; then
+					"${tick_base}" "${tick_login}" "${tick_since}" "${tick_holder_labels}"; then
 					tick_reason="revoked_${MERGE_LEASE_INELIGIBLE_REASON:-no_head_gate}"
 					# #9983 G1: no live run on the head past the grace. The review
 					# dispatch runs on the default branch (`[pr:<n>]` title), so
@@ -2254,6 +2260,7 @@ _mt_merge_lease_tick()
 			# success, or a pipeline judge-decision status (issue #9987).
 			tick_cand_n=$((tick_cand_n + 1))
 			tick_first_row="$(jq -c --argjson n "${tick_first}" '[ .[] | select(.number == $n) ][0] // {}' <<< "${tick_base_prs}" 2>/dev/null)" || tick_first_row="{}"
+			tick_first_labels="$(jq -r '[ (.labels // [])[] | if type == "object" then .name else . end ] | join("\n")' <<< "${tick_first_row}" 2>/dev/null)" || tick_first_labels=""
 			tick_cand_head="$(jq -r '.head_sha // ""' <<< "${tick_first_row}" 2>/dev/null)" || tick_cand_head=""
 			# #9983 G5: does a soft skip entry hold this candidate's head?
 			tick_first_soft=0
@@ -2272,7 +2279,7 @@ _mt_merge_lease_tick()
 			fi
 			if _merge_lease_pr_eligible "${tick_first}" "${tick_cand_head}" \
 				"$(jq -r '.title // ""' <<< "${tick_first_row}" 2>/dev/null)" "$(jq -r '.draft // false' <<< "${tick_first_row}" 2>/dev/null)" \
-				"${tick_base}" "${tick_login}"; then
+				"${tick_base}" "${tick_login}" "" "${tick_first_labels}"; then
 				tick_first_gate="${MERGE_LEASE_ELIGIBLE_GATE:-}"
 				# #9983 G5: a soft entry clears only on a confirmed head-gate
 				# success; a fail-open eligible (failed login or statuses read)
@@ -2414,6 +2421,8 @@ _mt_merge_lease_tick_multi()
 	local tm_queue_skips tm_skip_pr tm_skip_held=0 tm_skip_held_prs="" tm_skipped_any=0 tm_cand_n=0 tm_granted=0 tm_queue_empty=0
 	local tm_first tm_first_row tm_first_head tm_first_paths tm_blocker tm_skip_why tm_grant_ts tm_new_row
 	local tm_max_candidates=10 tm_queue_len_field="" tm_rel_held=""
+	# Hold labels (Refs #9969): newline-separated label names from the listing.
+	local tm_holder_labels="" tm_first_labels=""
 	# Issue #9987: as tick_first_gate in _mt_merge_lease_tick.
 	local tm_first_gate="" tm_gate_field="" tm_dispatch_fn=""
 	# Issue #9983: holders kept by a live run, three-field skip entries, and
@@ -2448,9 +2457,10 @@ _mt_merge_lease_tick_multi()
 		elif [ "${tm_p2}" = 1 ] && [ -n "${tm_listed_row}" ]; then
 			tm_title="$(jq -r '.title // ""' <<< "${tm_listed_row}" 2>/dev/null)" || tm_title=""
 			tm_draft="$(jq -r '.draft // false' <<< "${tm_listed_row}" 2>/dev/null)" || tm_draft="false"
+			tm_holder_labels="$(jq -r '[ (.labels // [])[] | if type == "object" then .name else . end ] | join("\n")' <<< "${tm_listed_row}" 2>/dev/null)" || tm_holder_labels=""
 			tm_since="$((10#${tm_h_upd:-0}))"
 			[ "$((10#${tm_h_acq:-0}))" -le "${tm_since}" ] || tm_since="$((10#${tm_h_acq:-0}))"
-			if ! _merge_lease_pr_eligible "${tm_h}" "${tm_listed_head}" "${tm_title}" "${tm_draft}" "${tm_base}" "${tm_login}" "${tm_since}"; then
+			if ! _merge_lease_pr_eligible "${tm_h}" "${tm_listed_head}" "${tm_title}" "${tm_draft}" "${tm_base}" "${tm_login}" "${tm_since}" "${tm_holder_labels}"; then
 				tm_reason="revoked_${MERGE_LEASE_INELIGIBLE_REASON:-no_head_gate}"
 				# #9983 G1: a `[pr:<n>]` review dispatch on the default branch in
 				# the cached listing keeps it; an unknown listing keeps it too.
@@ -2585,6 +2595,7 @@ _mt_merge_lease_tick_multi()
 		tm_excluded="${tm_excluded:+${tm_excluded},}${tm_first}"
 		tm_first_row="$(jq -c --argjson n "${tm_first}" '[ .[] | select(.number == $n) ][0] // {}' <<< "${tm_base_prs}" 2>/dev/null)" || tm_first_row="{}"
 		tm_first_head="$(jq -r '.head_sha // ""' <<< "${tm_first_row}" 2>/dev/null)" || tm_first_head=""
+		tm_first_labels="$(jq -r '[ (.labels // [])[] | if type == "object" then .name else . end ] | join("\n")' <<< "${tm_first_row}" 2>/dev/null)" || tm_first_labels=""
 		tm_first_gate=""
 		tm_first_soft=0
 		tm_unpark_why=""
@@ -2603,7 +2614,7 @@ _mt_merge_lease_tick_multi()
 		# #9983 G5: a soft entry clears only on a confirmed head-gate success.
 		if [ "${tm_p2}" = 1 ] && { ! _merge_lease_pr_eligible "${tm_first}" "${tm_first_head}" \
 			"$(jq -r '.title // ""' <<< "${tm_first_row}" 2>/dev/null)" "$(jq -r '.draft // false' <<< "${tm_first_row}" 2>/dev/null)" \
-			"${tm_base}" "${tm_login}" \
+			"${tm_base}" "${tm_login}" "" "${tm_first_labels}" \
 			|| { [ "${tm_first_soft}" = 1 ] && [ "${MERGE_LEASE_GATE_CONFIRMED:-false}" != "true" ]; }; }; then
 			tm_skip_why="${MERGE_LEASE_INELIGIBLE_REASON:-no_head_gate}"
 			tm_skipped_any=1
