@@ -4036,6 +4036,7 @@ _merge_lease_label_conflict_released()
 {
 	local lcr_pr="${1:-}" lcr_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" lcr_label
 	[[ "${lcr_pr}" =~ ^[1-9][0-9]*$ ]] || return 1
+	[[ "${lcr_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 1
 	lcr_label="$(_merge_lease_conflict_released_label)"
 	if declare -F ensure_label_exists >/dev/null 2>&1; then
 		ensure_label_exists "${lcr_label}" "${lcr_repo}" >/dev/null 2>&1 || true
@@ -4046,6 +4047,19 @@ _merge_lease_label_conflict_released()
 	fi
 	echo "::warning::MERGE_LEASE pr=${lcr_pr} outcome=label_failed reason=conflict_released_label (the holder keeps its slot this tick)"
 	return 1
+}
+
+# _merge_lease_unlabel_conflict_released <pr>: removes the conflict-released
+# label again (best effort, always returns 0). The tick calls it when the
+# release write after a successful label POST failed or lost the race, so a
+# holder that was never released does not keep the one-time marker (D6).
+_merge_lease_unlabel_conflict_released()
+{
+	local ucr_pr="${1:-}" ucr_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	[[ "${ucr_pr}" =~ ^[1-9][0-9]*$ ]] || return 0
+	[[ "${ucr_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 0
+	gh_retry _safe_gh_jq -X DELETE "repos/${ucr_repo}/issues/${ucr_pr}/labels/$(_merge_lease_conflict_released_label | jq -sRr 'rtrimstr("\n") | @uri')" >/dev/null 2>&1 || true
+	return 0
 }
 
 # _merge_lease_skips_effective <skips> <pulls_json> <candidate> (issue #9983,

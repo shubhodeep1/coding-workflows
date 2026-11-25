@@ -182,6 +182,20 @@ class ReadyGrantTick(unittest.TestCase):
 		self.assertIn("reason=final_ci_pending", out)
 		self.assertEqual(_ci_dispatches(h), [])
 
+	def test_not_ready_waiter_keeps_the_skip_held_waiter_labelled(self) -> None:
+		# D4 hands a skip-held waiter back to the sweep only when no other
+		# waiter is left; a not-ready waiter keeps its label, so D4 waits.
+		for env in (FCI, {**FCI, "MERGE_LEASE_MAX_HOLDERS": "2"}):
+			st = {"pulls": [_pull(5), _pull(6)], "labels": {"5": [WAIT], "6": [WAIT]}, "files": {"5": ["f5.py"], "6": ["f6.py"]}}
+			_seed_lease(st, _record(3, state="released", paths="", skips=[f"5:{_sha(5)}:revoked_draft"]))
+			_gates_ok(st, 5, 6)
+			_ci_final(st, 6, "pending")
+			h, out = _tick(st, env)
+			self.assertIn("pr=6 base=main mode=tick outcome=skipped reason=final_ci_pending\n", out, env)
+			self.assertNotIn("outcome=granted", out, env)
+			self.assertIn(WAIT, h.state["labels"]["5"], env)
+			self.assertIn(WAIT, h.state["labels"]["6"], env)
+
 	def test_fork_head_is_never_dispatched(self) -> None:
 		fork = _pull(5)
 		fork["head"] = dict(fork["head"], repo={"full_name": "someone/fork"})
@@ -261,6 +275,26 @@ class ConflictRelease(unittest.TestCase):
 		self.assertIn("outcome=label_failed reason=conflict_released_label", out)
 		self.assertIn("outcome=held reason=holder_open", out)
 		self.assertEqual(h.state["refs"][REF], "c" * 40)
+
+	def test_release_write_failure_removes_the_label(self) -> None:
+		# The label is the one-time marker (D6): a holder whose release write
+		# failed was not released, so it must not keep it.
+		for env in ({}, {"MERGE_LEASE_MAX_HOLDERS": "2"}):
+			st = _held(dict(_pull(4), mergeable=False), [_pull(5)])
+			st["fail"] = ["git/refs/"]
+			h, out = _tick(st, env)
+			self.assertIn("pr=4 base=main mode=tick outcome=write_failed reason=released_conflict", out, env)
+			self.assertNotIn(CONFLICT_LABEL, h.state["labels"]["4"], env)
+			self.assertEqual(h.state["refs"][REF], "c" * 40, env)
+
+	def test_waiter_scan_and_grant_read_each_waiter_once(self) -> None:
+		for env in ({}, {"MERGE_LEASE_MAX_HOLDERS": "2"}):
+			st = _held(dict(_pull(4), mergeable=False), [dict(_pull(5), mergeable=False), _pull(6)])
+			h, out = _tick(st, env)
+			self.assertIn("pr=4 base=main mode=tick outcome=released reason=released_conflict", out, env)
+			self.assertIn("pr=6 base=main mode=tick outcome=granted", out, env)
+			for n in (5, 6):
+				self.assertEqual(h.calls.count(f"gh api repos/owner/repo/pulls/{n}"), 1, (env, n, h.calls))
 
 	def test_multi_holder_conflicting_holder_is_released(self) -> None:
 		st = _held(dict(_pull(4), mergeable=False), [_pull(5)])

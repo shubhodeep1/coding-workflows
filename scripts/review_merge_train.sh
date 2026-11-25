@@ -2017,6 +2017,10 @@ _mt_merge_lease_tick()
 		&& declare -F _merge_lease_label_conflict_released >/dev/null 2>&1; then
 		tick_conflict_on=1
 	fi
+	# Readiness results of this tick (_mt_merge_lease_pr_ready_cached), so the
+	# conflict-release waiter scan and the grant loop read pulls/<pr> once per
+	# waiter head.
+	_MT_LEASE_READY_CACHE=""
 	# One active-run listing pass per tick (_mt_lease_pr_runs_active); the
 	# release pass's listing, when it seeded the cache, is that pass.
 	if [ "${_MT_LEASE_RUNS_SEEDED:-}" != "1" ]; then
@@ -2242,6 +2246,11 @@ _mt_merge_lease_tick()
 			tick_rc=0
 			_merge_lease_write "${tick_base}" released "${MERGE_LEASE_PR}" "${MERGE_LEASE_HEAD}" "" || tick_rc=$?
 			if [ "${tick_rc}" -ne 0 ]; then
+				# Issue #10098: the holder was not released, so it must not keep
+				# the one-time conflict-released marker.
+				if [ "${tick_reason}" = "released_conflict" ] && declare -F _merge_lease_unlabel_conflict_released >/dev/null 2>&1; then
+					_merge_lease_unlabel_conflict_released "${MERGE_LEASE_PR}"
+				fi
 				_mt_log "MERGE_LEASE pr=${MERGE_LEASE_PR} base=${tick_base} mode=tick outcome=$([ "${tick_rc}" -eq 3 ] && echo lost_race || echo write_failed) reason=${tick_reason}"
 				[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric "$([ "${tick_rc}" -eq 3 ] && echo lost_race || echo write_failed)" "${tick_base}" "${MERGE_LEASE_PR}" tick "${tick_reason}" "" "${tick_waiters}" || true
 				_mt_merge_lease_queue_log "${tick_base}" "${tick_prs_json}" "${MERGE_LEASE_PR}" "${MERGE_LEASE_ACQUIRED:-0}" "${MERGE_LEASE_PR}" || true
@@ -2328,7 +2337,7 @@ _mt_merge_lease_tick()
 					# (ci/final success, not conflicting); an unconfirmed
 					# (judge decision, fail-open) one is granted as before.
 					if [ "${tick_ready_on}" != 1 ] || [ "${MERGE_LEASE_GATE_CONFIRMED:-false}" != "true" ] \
-						|| _merge_lease_pr_ready "${tick_first}" "${tick_cand_head}" "${tick_base}"; then
+						|| _mt_merge_lease_pr_ready_cached "${tick_first}" "${tick_cand_head}" "${tick_base}"; then
 						break
 					fi
 					# Not ready: keeps its label, gets no skip entry.
@@ -2393,7 +2402,9 @@ _mt_merge_lease_tick()
 			fi
 		fi
 		if [ -z "${tick_first}" ]; then
-			if [ "${tick_p2}" = 1 ] && [ "${tick_queue_empty}" = 1 ] && [ "${tick_skip_held}" = 1 ]; then
+			# Issue #10098: a waiter skipped as not ready (tick_fb_pr) keeps its
+			# label and is still queued, so D4 does not apply.
+			if [ "${tick_p2}" = 1 ] && [ "${tick_queue_empty}" = 1 ] && [ "${tick_skip_held}" = 1 ] && [ -z "${tick_fb_pr}" ]; then
 				# D4: a skip entry blocks a re-grant on the same head, so the tick
 				# never grants a skip-held waiter. With no other waiter left it
 				# would keep its label, and the sweep skips labelled PRs, so it
@@ -2519,6 +2530,9 @@ _mt_merge_lease_tick_multi()
 	local tm_ready_on=0 tm_conflict_on=0 tm_first_confirmed="false" tm_fb_pr="" tm_fb_gate="" tm_fb_paths="" tm_fb_used=0
 	local tm_fb_take=0 tm_fci_dispatched=0 tm_grant_reason="" tm_released=0 tm_read_count=0 tm_read_newest=0 tm_fb_idle=0
 	local tm_conflict_prs="" tm_fb_since=0 tm_conflict_excl=""
+	# The ready-waiter scan's answer for this base (0 found, 1 none, empty not
+	# run yet): computed once and reused for every conflicting holder.
+	local tm_rwe_result=""
 	if [ "${tm_skip3}" = 1 ] && declare -F _merge_lease_pr_ready >/dev/null 2>&1 \
 		&& declare -F _merge_lease_ready_grant_enabled >/dev/null 2>&1 && _merge_lease_ready_grant_enabled; then
 		tm_ready_on=1
@@ -2609,10 +2623,14 @@ _mt_merge_lease_tick_multi()
 					tm_conflict_excl="$(printf '%s\n' "${tm_rows}" | awk 'NF { print $1 }' | paste -sd, -)"
 					if [ -n "$(_merge_lease_queue_order "${tm_conflict_prs}" "$(_merge_lease_skips_hard "${MERGE_LEASE_SKIPS:-}")" "${tm_conflict_excl}" 2>/dev/null || true)" ]; then
 						_merge_lease_pr_mergeable "${tm_h}" "${tm_listed_head}" || true
-						if [ "${MERGE_LEASE_PR_MERGEABLE:-unknown}" = "false" ] \
-							&& _mt_merge_lease_ready_waiter_exists "${tm_base}" "${tm_conflict_prs}" "${tm_conflict_excl}" "${tm_login}" \
-							&& _merge_lease_label_conflict_released "${tm_h}"; then
-							tm_reason="released_conflict"
+						if [ "${MERGE_LEASE_PR_MERGEABLE:-unknown}" = "false" ]; then
+							if [ -z "${tm_rwe_result}" ]; then
+								tm_rwe_result=1
+								_mt_merge_lease_ready_waiter_exists "${tm_base}" "${tm_conflict_prs}" "${tm_conflict_excl}" "${tm_login}" && tm_rwe_result=0
+							fi
+							if [ "${tm_rwe_result}" = 0 ] && _merge_lease_label_conflict_released "${tm_h}"; then
+								tm_reason="released_conflict"
+							fi
 						fi
 					fi
 				fi
@@ -2645,6 +2663,11 @@ _mt_merge_lease_tick_multi()
 			_merge_lease_write_holders "${tm_base}" "${tm_new_rows}" || tm_rc=$?
 		fi
 		if [ "${tm_rc}" -ne 0 ]; then
+			# Issue #10098: as the single-holder tick, an unreleased holder
+			# does not keep the one-time conflict-released marker.
+			if [ "${tm_reason}" = "released_conflict" ] && declare -F _merge_lease_unlabel_conflict_released >/dev/null 2>&1; then
+				_merge_lease_unlabel_conflict_released "${tm_h}"
+			fi
 			tm_outcome="write_failed"
 			[ "${tm_rc}" -eq 3 ] && tm_outcome="lost_race"
 			_mt_log "MERGE_LEASE pr=${tm_h} base=${tm_base} mode=tick outcome=${tm_outcome} reason=${tm_reason}"
@@ -2803,7 +2826,7 @@ _mt_merge_lease_tick_multi()
 		# Issue #10098: readiness last, so pulls/<pr> is read only for a
 		# candidate that passed every other check; as the single-holder tick.
 		if [ "${tm_fb_take}" = 0 ] && [ "${tm_ready_on}" = 1 ] && [ "${tm_p2}" = 1 ] && [ "${tm_first_confirmed}" = "true" ] \
-			&& ! _merge_lease_pr_ready "${tm_first}" "${tm_first_head}" "${tm_base}"; then
+			&& ! _mt_merge_lease_pr_ready_cached "${tm_first}" "${tm_first_head}" "${tm_base}"; then
 			tm_skip_why="${MERGE_LEASE_NOT_READY_REASON:-final_ci_pending}"
 			tm_skipped_any=1
 			_mt_log "MERGE_LEASE pr=${tm_first} base=${tm_base} mode=tick outcome=skipped reason=${tm_skip_why}"
@@ -2871,8 +2894,9 @@ _mt_merge_lease_tick_multi()
 		fi
 	done
 	[ "${tm_granted}" -eq 0 ] || return 0
-	if [ "${tm_p2}" = 1 ] && [ "${tm_queue_empty}" = 1 ] && [ "${tm_skip_held}" = 1 ]; then
-		# D4, as the single-holder tick: hand skip-held waiters back to the sweep.
+	if [ "${tm_p2}" = 1 ] && [ "${tm_queue_empty}" = 1 ] && [ "${tm_skip_held}" = 1 ] && [ -z "${tm_fb_pr}" ]; then
+		# D4, as the single-holder tick: hand skip-held waiters back to the sweep
+		# (not while a not-ready waiter, tm_fb_pr, keeps its label; #10098).
 		for tm_skip_pr in ${tm_skip_held_prs}; do
 			_merge_lease_unlabel_wait "${tm_skip_pr}"
 			_MT_LEASE_QUEUE_GONE="${_MT_LEASE_QUEUE_GONE},${tm_skip_pr}"
@@ -2939,10 +2963,35 @@ _mt_merge_lease_ready_waiter_exists()
 		_merge_lease_pr_eligible "${rwe_pr}" "${rwe_head}" "$(jq -r '.title // ""' <<< "${rwe_row}" 2>/dev/null)" \
 			"$(jq -r '.draft // false' <<< "${rwe_row}" 2>/dev/null)" "${rwe_base}" "${rwe_login}" "" "${rwe_labels}" || continue
 		[ "${MERGE_LEASE_GATE_CONFIRMED:-false}" = "true" ] || continue
-		_merge_lease_pr_ready "${rwe_pr}" "${rwe_head}" "${rwe_base}" || continue
+		_mt_merge_lease_pr_ready_cached "${rwe_pr}" "${rwe_head}" "${rwe_base}" || continue
 		return 0
 	done
 	return 1
+}
+
+# _mt_merge_lease_pr_ready_cached <pr> <head_sha> <base> (issue #10098): as
+# _merge_lease_pr_ready, but a result for the same <pr>:<head_sha> earlier in
+# this tick (_MT_LEASE_READY_CACHE, reset at the start of _mt_merge_lease_tick)
+# is reused with its MERGE_LEASE_NOT_READY_REASON / MERGE_LEASE_FINAL_CI_STATE,
+# so the waiter scan and the grant loop make one pulls/<pr> read per head.
+# The caller has just run _merge_lease_pr_eligible for the same head.
+_mt_merge_lease_pr_ready_cached()
+{
+	local rdc_key="${1:-}:${2:-}" rdc_line="" rdc_rc=0 rdc_reason="" rdc_state=""
+	rdc_line="$(printf '%s\n' "${_MT_LEASE_READY_CACHE:-}" | awk -v k="${rdc_key}" '$1 == k { print; exit }' 2>/dev/null)" || rdc_line=""
+	if [ -n "${rdc_line}" ]; then
+		read -r _ rdc_rc rdc_reason rdc_state <<< "${rdc_line}"
+		if [[ "${rdc_rc}" =~ ^[01]$ ]]; then
+			MERGE_LEASE_NOT_READY_REASON="${rdc_reason#-}"
+			MERGE_LEASE_FINAL_CI_STATE="${rdc_state#-}"
+			return "${rdc_rc}"
+		fi
+		rdc_rc=0
+	fi
+	_merge_lease_pr_ready "$@" || rdc_rc=$?
+	_MT_LEASE_READY_CACHE="$(printf '%s\n%s %s %s %s\n' "${_MT_LEASE_READY_CACHE:-}" "${rdc_key}" "${rdc_rc}" \
+		"${MERGE_LEASE_NOT_READY_REASON:--}" "${MERGE_LEASE_FINAL_CI_STATE:--}" | sed '/^$/d')"
+	return "${rdc_rc}"
 }
 
 # Final-CI merge resume (scripts/pr_checks_lib.sh "Final-CI merge resume").
