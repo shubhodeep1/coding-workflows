@@ -24,7 +24,6 @@ import subprocess
 import sys
 import tempfile
 import textwrap
-import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -35,10 +34,6 @@ from review_autofix_step_scripts import expanded_test_and_mark_stable_text  # no
 REPO_ROOT = Path(__file__).resolve().parent.parent
 HELPER = REPO_ROOT / "scripts" / "comprehensive_test_and_release_gh_api.sh"
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from review_autofix_step_scripts import expanded_test_and_mark_stable_text  # noqa: E402
 
 # A fake `gh` that serves `page-<N>.json` from TEST_PAGES_DIR for
 # `gh api repos/.../actions/runs?...&page=<N>&...`, fails when that file

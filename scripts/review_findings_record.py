@@ -113,6 +113,24 @@ EDITOR_BULLET_RE = re.compile(r"^\s*[-*]\s+(.*)$")
 OVERRIDE_RE = re.compile(r"CONSOLIDATOR_OVERRIDDEN:\s*([A-Za-z0-9_-]+)")
 
 
+# Per-reviewer finding counts (Refs #10058). One stdout line per reviewer
+# that ran, computed only from allowlisted values already in the record.
+REVIEWER_FINDINGS_PREFIX = "REVIEWER_FINDINGS"
+DUPLICATE_OF_RE = re.compile(r"^duplicate-of:([0-9]{1,6})$")
+# Appended by scripts/review_consolidate.sh when it caps the raw output.
+CONSOLIDATOR_TRUNCATED_MARKER = "[TRUNCATED_BY_OUTPUT_CAP]"
+REVIEWER_FINDINGS_COUNT_KEYS = ("raised", "lone", "lone_rejected", "lone_accepted", "shared")
+# Warning codes that mean the consolidated findings are absent or incomplete.
+REVIEWER_FINDINGS_MISSING_WARNINGS = frozenset({
+	"issues_file_missing",
+	"issues_file_no_blocks",
+	"issues_file_refused",
+	"issues_file_oversized",
+	"consolidator_parse_failed",
+	"issues_truncated",
+})
+
+
 class OutputPathRefused(Exception):
 	"""The output path is a symlink or its parent is not a directory."""
 
@@ -595,6 +613,173 @@ def build_record(previous_reviews_dir: str) -> dict:
 	return record
 
 
+def _issue_number(issue_id: str) -> int | None:
+	return int(issue_id) if ISSUE_ID_RE.match(issue_id or "") else None
+
+
+def _parser_found_no_issue_markers() -> bool:
+	"""True when parser_stats.txt reports parse_error=no_issue_markers with fail-open on.
+
+	With REVIEW_PARSER_FAILOPEN unset or 1 (the parser's default) an empty
+	issues file plus no_issue_markers means the consolidator merged nothing
+	and no reviewer anchor was left uncovered: a clean round, not a failure.
+	"""
+	if _env("REVIEW_PARSER_FAILOPEN") == "0":
+		return False
+	runtime_dir = _env("RUNTIME_DIR")
+	stats_path = _env("PARSER_STATS_FILE") or (os.path.join(runtime_dir, "parser_stats.txt") if runtime_dir else "")
+	if not stats_path:
+		return False
+	stats_text, _ = _read_bounded(stats_path, STATUS_READ_LIMIT_BYTES)
+	if not (stats_text and re.search(r"(?m)^parse_error=no_issue_markers$", stats_text)):
+		return False
+	# scripts/review_consolidate.sh empties consolidator_raw.txt on every
+	# fail-open failure (and treats empty output as a failure), so only a
+	# non-blank raw output with no ISSUE markers is a clean round.
+	raw_path = _env("CONSOLIDATOR_RAW_FILE") or (os.path.join(runtime_dir, "consolidator_raw.txt") if runtime_dir else "")
+	raw_text, _ = _read_bounded(raw_path)
+	# review_consolidate.sh appends this marker when it cut the output at the
+	# byte cap, so the missing ISSUE markers may have been cut off: not clean.
+	# Known limit: a non-blank answer that ignores the format (prose, a
+	# refusal) still reads as clean; the record cannot tell it apart.
+	if raw_text and CONSOLIDATOR_TRUNCATED_MARKER in raw_text:
+		return False
+	return bool(raw_text and raw_text.strip())
+
+
+def compute_reviewer_findings(record: dict) -> dict:
+	"""Count each reviewer's consolidated findings (Refs #10058).
+
+	Reviewers are the slots whose status is ``ok``. A finding is ``lone`` when
+	exactly one of them is in its FLAGGED_BY set, otherwise ``shared``. A lone
+	finding is ``accepted`` when the editor applied it (no override), else
+	``rejected`` when the consolidator classified it non-actionable with a
+	REJECTION_KIND other than out-of-scope, or the editor listed it as already
+	satisfied or ignored. ``duplicate-of:<id>`` issues fold their reviewers
+	into the target issue when that target is in the record.
+	"""
+	reviewers: list[str] = []
+	by_slug: dict[str, str] = {}
+	by_safe: dict[str, str] = {}
+	for slot in record.get("slots") or []:
+		if slot.get("status") != "ok":
+			continue
+		name = slot.get("slug") or slot.get("safe_name")
+		if not name or name in reviewers:
+			continue
+		reviewers.append(name)
+		if slot.get("slug"):
+			by_slug[slot["slug"]] = name
+		if slot.get("safe_name"):
+			by_safe[slot["safe_name"]] = name
+	result: dict = {"state": "unavailable", "reason": None, "reviewers": reviewers, "per_reviewer": {}}
+	tier_name = (record.get("tier") or {}).get("name")
+	if tier_name == "lite" or _env("REVIEW_CONSOLIDATOR_ENABLED") == "0":
+		result["reason"] = "consolidator_disabled"
+		return result
+	record_warnings = set(record.get("warnings") or [])
+	missing_warnings = REVIEWER_FINDINGS_MISSING_WARNINGS.intersection(record_warnings)
+	clean_round = (
+		missing_warnings == {"consolidator_parse_failed"}
+		and "issues_file_empty" in record_warnings
+		and not record.get("issues")
+		and _parser_found_no_issue_markers()
+	)
+	if missing_warnings and not clean_round:
+		result["reason"] = "consolidator_missing"
+		return result
+
+	def match(entry: str) -> str | None:
+		if entry in by_slug:
+			return by_slug[entry]
+		if entry in by_safe:
+			return by_safe[entry]
+		for prefix in REVIEWER_TOKEN_PREFIXES:
+			if entry.startswith(prefix) and len(entry) > len(prefix):
+				return by_safe.get(entry[len(prefix):])
+		return None
+
+	issues = record.get("issues") or []
+	sets: list[set[str]] = []
+	# An entry matching no reviewer that ran (e.g. reviewer_N) makes the
+	# issue's attribution incomplete, so it cannot be classed lone or shared.
+	has_unmatched: list[bool] = []
+	index_by_number: dict[int, int] = {}
+	for position, issue in enumerate(issues):
+		names = [match(entry) for entry in issue.get("flagged_by") or [] if entry != FLAGGED_BY_UNVERIFIED_VALUE]
+		sets.append({name for name in names if name})
+		has_unmatched.append(any(name is None for name in names))
+		number = _issue_number(issue.get("id") or "")
+		if number is not None and number not in index_by_number:
+			index_by_number[number] = position
+
+	def duplicate_target(position: int) -> int | None:
+		# Follow duplicate-of links to a non-duplicate issue in the record;
+		# a missing target or a cycle leaves the issue counted on its own.
+		seen = {position}
+		current = position
+		while True:
+			dup = DUPLICATE_OF_RE.match((issues[current].get("classification") or "").lower())
+			if dup is None:
+				return None if current == position else current
+			target = index_by_number.get(int(dup.group(1)))
+			if target is None or target in seen:
+				return None
+			seen.add(target)
+			current = target
+
+	folded: set[int] = set()
+	for position in range(len(issues)):
+		target = duplicate_target(position)
+		if target is not None:
+			sets[target] |= sets[position]
+			has_unmatched[target] = has_unmatched[target] or has_unmatched[position]
+			folded.add(position)
+
+	per_reviewer = {name: dict.fromkeys(REVIEWER_FINDINGS_COUNT_KEYS, 0) for name in reviewers}
+	for position, issue in enumerate(issues):
+		if position in folded:
+			continue
+		matched = sets[position]
+		if not matched or has_unmatched[position]:
+			result["reason"] = "flagged_by_missing"
+			return result
+		lone = len(matched) == 1
+		for name in matched:
+			counts = per_reviewer[name]
+			counts["raised"] += 1
+			counts["lone" if lone else "shared"] += 1
+		if not lone:
+			continue
+		name = next(iter(matched))
+		editor = issue.get("editor") or {}
+		disposition = editor.get("disposition")
+		classification = (issue.get("classification") or "").lower()
+		rejection_kind = (issue.get("rejection_kind") or "").lower()
+		if disposition == "applied" and not editor.get("override"):
+			per_reviewer[name]["lone_accepted"] += 1
+		elif (classification == "non-actionable" and rejection_kind != "out-of-scope") or disposition in ("already_satisfied", "ignored"):
+			per_reviewer[name]["lone_rejected"] += 1
+	result["state"] = "counted"
+	result["per_reviewer"] = per_reviewer
+	return result
+
+
+def emit_reviewer_findings_lines(record: dict) -> None:
+	"""Print one REVIEWER_FINDINGS line per reviewer that ran (none when none ran)."""
+	findings = compute_reviewer_findings(record)
+	pr_text = str(record.get("pr_number")) if record.get("pr_number") is not None else "unknown"
+	round_text = record.get("round") or "unknown"
+	for name in findings["reviewers"]:
+		head = f"{REVIEWER_FINDINGS_PREFIX} pr={pr_text} round={round_text} reviewer={name}"
+		if findings["state"] == "counted":
+			counts = findings["per_reviewer"][name]
+			tail = " ".join(f"{key}={counts[key]}" for key in REVIEWER_FINDINGS_COUNT_KEYS)
+		else:
+			tail = f"outcome=unavailable reason={findings['reason']}"
+		print(f"{head} {tail}", flush=True)
+
+
 def write_atomic(path: str, data: dict) -> None:
 	parent = os.path.dirname(os.path.abspath(path))
 	if os.path.islink(path) or not os.path.isdir(parent) or os.path.islink(parent):
@@ -623,6 +808,10 @@ def run_write(output: str) -> None:
 		print(f"{LOG_PREFIX}: outcome=skipped reason=no_previous_reviews_dir", flush=True)
 		return
 	record = build_record(previous_reviews_dir)
+	try:
+		emit_reviewer_findings_lines(record)
+	except Exception as exc:  # noqa: BLE001 - fail open; never log the message
+		print(f"::warning::{REVIEWER_FINDINGS_PREFIX} outcome=failed reason={type(exc).__name__}", flush=True)
 	write_atomic(output, record)
 	warnings = record["warnings"]
 	outcome = "partial" if warnings else "written"

@@ -258,6 +258,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/post_review_comment.sh` — a single pull-request review when `--review-state` is supplied.
 - `scripts/pr_checks_lib.sh` — Shared PR check-runs merge gate.
 - `scripts/implement_step_prepush_test_gate.sh` — Implement's pre-push affected-test gate step: runs the gate before commit, gives PR-caused failures one repair turn and writes the PR-body summary (issue #8190).
+- `scripts/implement_step_preflight_destructive_guard.sh` — Body of implement's "Preflight destructive-commit guard" step (`id: preflight_destructive_guard`): projects the staged deletion set, automation-path grants and files_touched scope onto a temporary index and blocks before the commit tail. Sourced only from the trusted `IMPLEMENT_STAGED_SUPPORT_RUN_DIR` copy (issue #9678).
+- `scripts/implement_step_post_codex_syntax_repair.sh` — Body of implement's "Attempt post-Codex syntax repair" step (`id: post_codex_syntax_repair`): runs the isolated repair agent when changed-file syntax validation failed and writes `repaired=true|false`. Sourced only from the trusted `IMPLEMENT_STAGED_SUPPORT_RUN_DIR` copy (issue #9678).
 - `scripts/prepush_test_gate_run.sh` — Run the pre-push affected-test gate in a credential-free container and copy back only its result (issue #7137).
 - `scripts/promote_candidate_follow.sh` — Fast-forward the `promote-candidate` branch to the main tip unless the `promote-cycle-frozen` tag freezes it (log prefix `PROMOTE_CANDIDATE_FOLLOW`).
 - `scripts/promote_main_cycle.sh` — Run the scheduled, proof-gated main-to-stable promotion cycle.
@@ -364,6 +366,9 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/stable_e2e_step_wait_plan.sh` — body of the test-and-mark-stable.yml "Phase 2: Wait for plan to complete" step (`id: wait-plan`; sourced by the step from a `github.sha`-pinned copy in `RUNNER_TEMP`; moved out to keep the workflow under the §27 size guard, issue #9473).
 - `scripts/stable_e2e_step_wait_review.sh` — body of the test-and-mark-stable.yml "Phase 4: Wait for review & autofix to complete" step (`id: wait-review`; sourced by the step from a `github.sha`-pinned copy in `RUNNER_TEMP`; moved out to keep the workflow under the §27 size guard, issue #7991).
 - `scripts/stable_orchestrate_cancel_dispatched_run.sh` — called by the test-and-mark-stable.yml "Cleanup orchestrate test issues" step: cancels the orchestrate bootstrap the job dispatched when it is still queued or running, and finds a tracking issue it already created.
+- `scripts/stage_switch_watch.py` — logic half of the daily stage switch watch (#9994): builds a sanitized snapshot of the registry switches from the variables listing and evaluates which are off and which alert (`STAGE_SWITCH_OFF` lines).
+- `scripts/stage_switch_watch.sh` — wrapper for the stage switch watch in `workflow-log-analysis.yml` job `collect-logs` (#9994): `read` makes one paginated `actions/variables` listing with `GH_PAT`, `report` sends the Telegram WARNINGs; logs `STAGE_SWITCH_WATCH` and never fails the job.
+- `scripts/stage_switches.json` — registry (`stage_switches.v1`) of every default-on `<NAME>_ENABLED` stage switch plus the `off_on_purpose` markers, read by the stage switch watch and kept in step with the workflows and README by `tests/test_stage_switch_registry.py` (#9994).
 - `scripts/stage_workflow_log_bundle.py` — Bound workflow-log artifacts before mounting them into the isolated analyzer.
 - `scripts/stage_support_for_phase.sh` — Shell helper that stages one phase's support scripts from the verified support checkout into the out-of-tree runtime bundle.
 - `scripts/stage_workflow_support.sh` — Shell helper for stage workflow support.

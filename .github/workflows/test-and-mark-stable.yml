@@ -135,6 +135,10 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   # Wedged-queued run filter (issue #9473); 0 disables it.
   ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}
+  # Issue #10037: a child watch (dispatch_and_watch_workflow_run.sh, Phase 4)
+  # that times out on a runner wait stops this gate run (it ends cancelled,
+  # so no release attempt is spent) unless a job already failed.
+  DISPATCH_WATCH_STOP_RELEASE_GATE: "true"
   # Signed job-token comments (run-volume plan item 15, D16; see
   # scripts/comment_signature.py). The opt-in secret and the job token sit
   # next to each step's GH_PAT, never here, so a step without the PAT never
@@ -144,6 +148,11 @@ env:
 
 permissions:
   contents: write
+  # Read-only scopes for the polling reads that use the job token
+  # (GH_READ_TOKEN, issue #9888). Writes stay on GH_PAT.
+  actions: read
+  pull-requests: read
+  issues: read
 
 jobs:
   # ──────────────────────────────────────────────────────────────────
@@ -1979,6 +1988,7 @@ jobs:
       - name: "Phase 4: Wait for review & autofix to complete"
         id: wait-review
         env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
           PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
           # When inject-bait pushed a bait commit, pin the wait loop to
           # review runs whose head_sha matches the bait commit. Without
@@ -2030,6 +2040,7 @@ jobs:
       # workflow-level concurrency hold. Inline because scripts/ is outside
       # the #9418 heal scope. One runs call plus at most 5 jobs calls (§14);
       # read-only, fail-soft, prints ids, enums and timestamps only.
+      # #10105: also prints wait-review's timeout_reason (#9619), allowlisted.
       - name: "Phase 4d: Review-timeout run inventory"
         id: review-timeout-inventory
         if: failure() && steps.wait-review.outputs.status == 'timeout'
@@ -2039,9 +2050,19 @@ jobs:
           PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
           ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
           BAIT_SHA: ${{ steps.inject-bait.outputs.bait_sha }}
+          # #10105 / #9619: empty on the wall-clock deadline path -> unknown.
+          TIMEOUT_INV_REASON: ${{ steps.wait-review.outputs.timeout_reason }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
+          case "${TIMEOUT_INV_REASON:-}" in
+            review_run_never_started|inactivity) TIMEOUT_INV_REASON_VALUE="${TIMEOUT_INV_REASON}" ;;
+            *) TIMEOUT_INV_REASON_VALUE="unknown" ;;
+          esac
+          echo "  Review timeout reason: ${TIMEOUT_INV_REASON_VALUE}"
+          if [ "${TIMEOUT_INV_REASON_VALUE}" = "review_run_never_started" ]; then
+            echo "::warning::Phase 4 review run never started before the review timeout (runner queue or concurrency hold; cause unverified, may be environmental)"
+          fi
           if ! [[ "${ISSUE_NUMBER:-}" =~ ^[0-9]+$ ]] \
             || ! [[ "${REVIEW_WORKFLOW_FILE:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*\.yml$ ]] \
             || ! [[ "${TEST_REPO:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
@@ -3004,6 +3025,21 @@ jobs:
           fi
 
       # ── Cleanup ─────────────────────────────────────────────────
+      # Issue #10037 (G3): when the gate run is cancelled (the runner-wait
+      # stop in scripts/dispatch_and_watch_workflow_run.sh, or an operator),
+      # cancel this job's test-issue runs that have not completed (title and
+      # created-after scoped, logic in the script's --cancel-issue-runs mode),
+      # so they do not keep holding or queueing runners after the gate ends.
+      - name: Cancel the test issue's runs when the gate is cancelled
+        if: cancelled()
+        env:
+          CANCEL_ISSUE_TITLE: ${{ steps.create-issue.outputs.title }}
+          CANCEL_ISSUE_CREATED_AFTER: ${{ steps.create-issue.outputs.created_after }}
+        run: |
+          if grep -q -- '--cancel-issue-runs)' ./scripts/dispatch_and_watch_workflow_run.sh 2>/dev/null; then
+            bash ./scripts/dispatch_and_watch_workflow_run.sh --cancel-issue-runs || true
+          fi
+
       - name: Cleanup test artifacts
         if: always()
         env:
@@ -3658,6 +3694,7 @@ jobs:
         # during healthy runs.
         timeout-minutes: 265
         env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
           WF_FILE: workflow-log-analysis.yml
           # Plan P4: with the switch on (default) and TEST_REPO being this
           # repository, the gate analyses the full repo roster since the last
@@ -3826,6 +3863,8 @@ jobs:
       - name: Dispatch & watch — validation-refresh
         id: dispatch_validation_refresh
         timeout-minutes: 95
+        env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
         run: |
           set -euo pipefail
           sleep 4
@@ -3917,6 +3956,8 @@ jobs:
       - name: Dispatch & watch — update_workflows (allow_workflow_edits=false)
         id: dispatch_update_workflows
         timeout-minutes: 18
+        env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
         run: |
           set -euo pipefail
           sleep 4
@@ -3997,6 +4038,8 @@ jobs:
       - name: Dispatch & watch — internal-memory-maintenance
         id: dispatch_memory_maintenance
         timeout-minutes: 45
+        env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
         run: |
           set -euo pipefail
           sleep 4
@@ -4057,6 +4100,26 @@ jobs:
           fi
           rm -f "${DW_TIMEOUT_LOG}"
           # End dispatch-watch timeout handling.
+
+      # Issue #10037 (G3): when the gate run is cancelled (the runner-wait
+      # stop in scripts/dispatch_and_watch_workflow_run.sh, or an operator),
+      # cancel this job's dispatched child runs that have not completed, so
+      # they do not keep holding runners after the gate ends.
+      - name: Cancel dispatched child runs when the gate is cancelled
+        if: cancelled()
+        env:
+          GATE_CHILD_RUN_IDS: ${{ steps.dispatch_validation_refresh.outputs.dispatched_run_id }} ${{ steps.dispatch_update_workflows.outputs.dispatched_run_id }} ${{ steps.dispatch_memory_maintenance.outputs.dispatched_run_id }}
+        run: |
+          for child_id in ${GATE_CHILD_RUN_IDS}; do
+            [[ "${child_id}" =~ ^[0-9]+$ ]] || continue
+            child_status="$(timeout 20 gh api "repos/${TEST_REPO}/actions/runs/${child_id}" --jq '.status // ""' 2>/dev/null || true)"
+            [ "${child_status}" != "completed" ] || continue
+            if timeout 20 gh api -X POST "repos/${TEST_REPO}/actions/runs/${child_id}/cancel" >/dev/null 2>&1; then
+              echo "Cancel requested for child run #${child_id} (gate cancelled)"
+            else
+              echo "::warning::Could not cancel child run #${child_id} after the gate was cancelled"
+            fi
+          done
 
       - name: "Soft-error analyser (memory_maintenance)"
         if: always() && steps.dispatch_memory_maintenance.outputs.run_id != ''
@@ -4124,6 +4187,8 @@ jobs:
 
       - name: Dispatch internal-orchestrate.yml with multi-issue project
         id: dispatch
+        env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
         run: |
           set -euo pipefail
           WF_FILE="internal-orchestrate.yml"
@@ -4367,6 +4432,7 @@ jobs:
       - name: Cleanup orchestrate test issues
         if: always()
         env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
           TRACKING_NUMBER: ${{ steps.dispatch.outputs.tracking_issue }}
           CHILDREN: ${{ steps.dispatch.outputs.child_issues }}
           RUN_ID: ${{ github.run_id }}
@@ -4536,6 +4602,8 @@ jobs:
         id: dispatch
         # 1800s watcher wait + one 20s poll + gh retry backoff headroom.
         timeout-minutes: 35
+        env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
         run: |
           set -euo pipefail
           WF_FILE="internal-validate.yml"
@@ -4597,6 +4665,26 @@ jobs:
           fi
           rm -f "${DW_TIMEOUT_LOG}"
           # End dispatch-watch timeout handling.
+
+      # Issue #10037 (G3): when the gate run is cancelled (the runner-wait
+      # stop in scripts/dispatch_and_watch_workflow_run.sh, or an operator),
+      # cancel this job's dispatched child runs that have not completed, so
+      # they do not keep holding runners after the gate ends.
+      - name: Cancel dispatched child runs when the gate is cancelled
+        if: cancelled()
+        env:
+          GATE_CHILD_RUN_IDS: ${{ steps.dispatch.outputs.dispatched_run_id }}
+        run: |
+          for child_id in ${GATE_CHILD_RUN_IDS}; do
+            [[ "${child_id}" =~ ^[0-9]+$ ]] || continue
+            child_status="$(timeout 20 gh api "repos/${TEST_REPO}/actions/runs/${child_id}" --jq '.status // ""' 2>/dev/null || true)"
+            [ "${child_status}" != "completed" ] || continue
+            if timeout 20 gh api -X POST "repos/${TEST_REPO}/actions/runs/${child_id}/cancel" >/dev/null 2>&1; then
+              echo "Cancel requested for child run #${child_id} (gate cancelled)"
+            else
+              echo "::warning::Could not cancel child run #${child_id} after the gate was cancelled"
+            fi
+          done
 
       - name: "Soft-error analyser (validate-standalone)"
         if: always() && steps.dispatch.outputs.run_id != ''
@@ -4678,6 +4766,9 @@ jobs:
           echo "pre_clarify_run_id=${PRE_CLARIFY_RUN_ID}" >> "$GITHUB_OUTPUT"
           TITLE="[E2E Clarify Negative Test] under-specified task (run ${GITHUB_RUN_ID})"
           BODY="Make it better."
+          # Issue #10037 (G3): the creation time (epoch digits only, #9797)
+          # scopes the gate-cancel step below to this issue's runs.
+          echo "created_after_epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
           NUMBER=$(gh api "repos/${TEST_REPO}/issues" \
             -f title="${TITLE}" -f body="${BODY}" --jq '.number')
           if ! [[ "${NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
@@ -4825,6 +4916,29 @@ jobs:
           fi
           echo "::error::Clarify did not act on the under-specified issue within timeout"
           exit 1
+
+      # Issue #10037 (G3): when the gate run is cancelled (the runner-wait
+      # stop in scripts/dispatch_and_watch_workflow_run.sh, or an operator),
+      # cancel this job's test-issue runs that have not completed (title and
+      # created-after scoped, logic in the script's --cancel-issue-runs mode),
+      # so they do not keep holding or queueing runners after the gate ends.
+      # It sits right after the wait step, the job's last step that is not
+      # always(), so it runs before the soft-error analyser.
+      - name: Cancel the test issue's runs when the gate is cancelled
+        if: cancelled()
+        env:
+          CANCEL_ISSUE_CREATED_EPOCH: ${{ steps.create.outputs.created_after_epoch }}
+        run: |
+          # Same title as the "Create unsolvable issue" step.
+          CANCEL_ISSUE_TITLE="[E2E Clarify Negative Test] under-specified task (run ${GITHUB_RUN_ID})"
+          CANCEL_ISSUE_CREATED_AFTER=""
+          if [[ "${CANCEL_ISSUE_CREATED_EPOCH:-}" =~ ^[0-9]+$ ]]; then
+            CANCEL_ISSUE_CREATED_AFTER="$(date -u -d "@${CANCEL_ISSUE_CREATED_EPOCH}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+          fi
+          export CANCEL_ISSUE_TITLE CANCEL_ISSUE_CREATED_AFTER
+          if grep -q -- '--cancel-issue-runs)' ./scripts/dispatch_and_watch_workflow_run.sh 2>/dev/null; then
+            bash ./scripts/dispatch_and_watch_workflow_run.sh --cancel-issue-runs || true
+          fi
 
       - name: "Soft-error analyser (clarify negative test)"
         if: always() && steps.capture_clarify_run.outputs.run_id != ''
@@ -5093,9 +5207,34 @@ jobs:
               ALT_CLARIFY_RUN_NOTE=" (no non-skipped Clarify run titled '${ALT_ISSUE_TITLE}' found)"
             fi
           fi
+          # Issue #10037 (G3): a timeout caused only by this issue's runs waiting
+          # for runners ends as runner_wait and, with
+          # DISPATCH_WATCH_STOP_RELEASE_GATE=true, stops the gate (no attempt).
+          # The grep skips a checkout whose watcher predates the mode.
+          if grep -q -- '--alt-model-runner-wait)' ./scripts/dispatch_and_watch_workflow_run.sh 2>/dev/null; then
+            ALT_WAIT_STARTED_AT=$(( DEADLINE - 4500 )) ALT_WAIT_BUDGET_SECS=4500 \
+              bash ./scripts/dispatch_and_watch_workflow_run.sh --alt-model-runner-wait || true
+          fi
           echo "::error::Alt-model run timed out before reaching review stage${ALT_CLARIFY_RUN_NOTE}"
           echo "  Issue: ${GITHUB_SERVER_URL:-https://github.com}/${TEST_REPO}/issues/${ISSUE_NUMBER}"
           exit 1
+
+      # Issue #10037 (G3): when the gate run is cancelled (the runner-wait
+      # stop in scripts/dispatch_and_watch_workflow_run.sh, or an operator),
+      # cancel this job's test-issue runs that have not completed (title and
+      # created-after scoped, logic in the script's --cancel-issue-runs mode),
+      # so they do not keep holding or queueing runners after the gate ends.
+      # It sits right after the wait step, the job's last step that is not
+      # always(), so it runs before the capture and soft-error analyser steps.
+      - name: Cancel the test issue's runs when the gate is cancelled
+        if: cancelled()
+        env:
+          CANCEL_ISSUE_TITLE: ${{ steps.create.outputs.title }}
+          CANCEL_ISSUE_CREATED_AFTER: ${{ steps.create.outputs.created_after }}
+        run: |
+          if grep -q -- '--cancel-issue-runs)' ./scripts/dispatch_and_watch_workflow_run.sh 2>/dev/null; then
+            bash ./scripts/dispatch_and_watch_workflow_run.sh --cancel-issue-runs || true
+          fi
 
       - name: Capture alt-model phase run ids
         id: capture_alt_runs
@@ -5695,7 +5834,10 @@ jobs:
           # release notes are extracted and the version tag is cut, and fails
           # open (reset to the remote tip) if the commit cannot be pushed.
 
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_changelog.py assemble --repo-root .
+          # --notes-out (#9846): the folded fragments' text, read by "Extract
+          # changelog for this version" as the release body. RUNNER_TEMP sits
+          # outside the worktree, so the fail-open reset below leaves it alone.
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_changelog.py assemble --repo-root . --notes-out "${RUNNER_TEMP:-/tmp}/release_fragment_notes.md"
           # agents.d/ fragments (CLAUDE.md §30) fold into agents.md in the same
           # commit. Fail open: a fragment that cannot fold stays in agents.d/
           # for the next release, and a missing script (an older ref) is a no-op.
@@ -5764,8 +5906,15 @@ jobs:
           NOTES=$(awk \
             "/^## \\[${VERSION}\\]/{found=1; next} /^## \\[/{if(found) exit} found{print}" \
             CHANGELOG.md)
+          # Fallback order (#9846): a hand-written ## [VERSION] section, then
+          # the notes the assemble step wrote from the folded fragments, then
+          # a placeholder. A missing notes file only means the placeholder.
+          FRAGMENT_NOTES_FILE="${RUNNER_TEMP:-/tmp}/release_fragment_notes.md"
+          if [ -z "$NOTES" ] && [ -s "${FRAGMENT_NOTES_FILE}" ]; then
+            NOTES=$(cat "${FRAGMENT_NOTES_FILE}")
+          fi
           if [ -z "$NOTES" ]; then
-            NOTES="No changelog entry found for ${VERSION}."
+            NOTES="No changelog fragments were folded for ${VERSION}."
           fi
           echo "$NOTES" > /tmp/release_notes.md
           echo "notes_file=/tmp/release_notes.md" >> "$GITHUB_OUTPUT"
