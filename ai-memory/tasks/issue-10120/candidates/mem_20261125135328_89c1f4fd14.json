@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":10120,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/10120\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/10123\",\"pr_number\":10123,\"branch\":\"ai/issue-10120\",\"run_id\":\"45626016590\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/45626016590\",\"changed_files\":[\"agents.d/10120-fingerprint-base-deletion-supersede.md\",\"changelog.d/10120-fingerprint-base-deletion-supersede.md\",\"scripts/verify_integration_fingerprints.py\",\"tests/test_conflict_one_sided_delete_workflow_path.py\"]}",
+  "fingerprint": "285c75a5b335937e398c27e94610725aa84952c4b756a5e63cb45d95072b7177",
+  "lineage": {
+    "issue_number": 10120,
+    "parent_ids": [],
+    "pr_number": 10123,
+    "run_id": "45626016590",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45626016590",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/10123"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261125135328_89c1f4fd14",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10120,
+    "level": "run",
+    "pr_number": 10123,
+    "run_id": "45626016590"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #10120: https://github.com/shubhodeep1/coding-workflows/pull/10123",
+  "timestamps": {
+    "created_at": "2026-11-25T13:53:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
