@@ -16943,6 +16943,196 @@ def test_managed_skip_retries_timeline_discovery_failure_without_closing_issue()
 	)
 
 
+# Issue #9733 owner-hold cases. Their `test_zz_pr_ai_hold_` prefix sorts them
+# after every other test in this module. CI's orchestrate-poll job deals the
+# sorted names round-robin (`NR % total`) to groups and then to shards.
+# Names inserted mid-list moved 626 of 896 existing tests to another group or
+# shard, and orchestrate-poll (1) and (2) hit their 20-minute timeout.
+# Appended names leave every existing test's group and shard unchanged.
+def _managed_held_pr_run(phase: str, recovery_count: int, pr_extra: dict, **extra) -> dict:
+	"""Issue #9733: managed issue #10 in `phase` with implementation PR #91."""
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = phase
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = recovery_count
+	pr = {
+		"number": 91,
+		"body": "Closes #10",
+		"state": "open",
+		"mergeable": True,
+		"mergeable_state": "clean",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"headSha": "sha91",
+		"baseRefName": "main",
+		"title": "AI implementation for issue #10",
+	}
+	pr.update(pr_extra)
+	# Switch-off parity: the `skip` close-out (close_linked_pr, then the issue
+	# close) only runs with the fingerprint breaker off; with the default
+	# (`true`) exhaustion escalates to ai:needs-human and never reaches it.
+	extra.setdefault("env_overrides", {"STALL_FINGERPRINT_BREAKER_ENABLED": "false"})
+	return _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: [phase]},
+		issue_linked_prs={10: 91},
+		prs=[pr],
+		mock_git_push_success=True,
+		**extra,
+	)
+
+
+def _assert_managed_held_pr_left_alone(result: dict, detail: str, phase: str, requested: str, recovery_count: int) -> None:
+	assert (
+		f"STALL_SKIP issue=10 reason=pr_ai_hold pr=91 detail={detail} phase={phase} action=none requested_action={requested}"
+		in result["stdout"]
+	), result["stdout"]
+	assert "close_linked_pr: closing linked PR #91" not in result["stdout"]
+	assert result["issues"]["10"].get("closed", False) is False
+	assert "ai:closed" not in result["issues"]["10"]["labels"]
+	assert result.get("review_dispatches", []) == []
+	assert result.get("git_push_calls", []) == []
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == recovery_count
+	assert issue_entry["status_since_ts"] == 1
+
+
+def test_zz_pr_ai_hold_managed_skip_leaves_held_pr_in_awaiting_approval_open():
+	# Issue #9733 / PR #9744: an exhausted ai:awaiting-approval issue took
+	# `skip` and close_linked_pr closed the owner-held PR.
+	result = _managed_held_pr_run(
+		"ai:awaiting-approval", 5,
+		{"draft": True, "title": "[skip ai] AI implementation for issue #10"},
+	)
+	assert "Action: skip" in result["stdout"], result["stdout"]
+	_assert_managed_held_pr_left_alone(result, "draft", "ai:awaiting-approval", "skip", 5)
+
+
+def test_zz_pr_ai_hold_managed_skip_leaves_held_pr_open_when_cache_lacks_hold_fields():
+	# Cache without isDraft/title: the guard in recover_stalled_issue fails
+	# open, and the skip arm's REST implementation-PR payload catches the hold.
+	result = _managed_held_pr_run(
+		"ai:awaiting-approval", 5,
+		{"title": "[skip ai] AI implementation for issue #10"},
+		mock_store_extra={"graphql_omit_pr_hold_fields": True},
+	)
+	assert "Action: skip" in result["stdout"], result["stdout"]
+	_assert_managed_held_pr_left_alone(result, "skip_ai_title", "ai:awaiting-approval", "skip", 5)
+
+
+def test_zz_pr_ai_hold_managed_implementing_held_pr_skips_dispatch_action():
+	result = _managed_held_pr_run("ai:implementing", 0, {"draft": True})
+	assert "STALL_SKIP issue=10 reason=pr_ai_hold" in result["stdout"], result["stdout"]
+	# Pin the stall detector's action for a fresh ai:implementing stall so a
+	# regression to `skip` (or any other action) fails here.
+	assert "Action: retrigger_implement" in result["stdout"], result["stdout"]
+	_assert_managed_held_pr_left_alone(result, "draft", "ai:implementing", "retrigger_implement", 0)
+	assert "reason=open_linked_pr" not in result["stdout"]
+
+
+def test_zz_pr_ai_hold_managed_implementing_held_conflicted_pr_gets_no_resolver_when_cache_lacks_hold_fields():
+	# Cache without isDraft/title: the pre-action hold guard fails open, and
+	# the early-phase open-PR guard's REST payload must catch the hold before
+	# routing the merge conflict to the resolver.
+	result = _managed_held_pr_run(
+		"ai:implementing", 0,
+		{"draft": True, "mergeable": False, "mergeable_state": "dirty"},
+		mock_store_extra={"graphql_omit_pr_hold_fields": True},
+	)
+	assert "Action: retrigger_implement" in result["stdout"], result["stdout"]
+	_assert_managed_held_pr_left_alone(result, "draft", "ai:implementing", "retrigger_implement", 0)
+	assert "reason=open_pr_merge_conflict" not in result["stdout"]
+
+
+def test_zz_pr_ai_hold_managed_skip_still_closes_unheld_pr_in_awaiting_approval():
+	result = _managed_held_pr_run("ai:awaiting-approval", 5, {"draft": False})
+	assert "Action: skip" in result["stdout"], result["stdout"]
+	assert "reason=pr_ai_hold" not in result["stdout"]
+	assert "close_linked_pr: closing linked PR #91 for issue #10" in result["stdout"], result["stdout"]
+	assert "ai:closed" in result["issues"]["10"]["labels"]
+
+
+def _standalone_exhausted_run(pr_extra: dict, **extra) -> dict:
+	"""Standalone ai:awaiting-approval issue #501 past its cap, PR #420."""
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:awaiting-approval",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+			"phase_attempts": {"ai:awaiting-approval": 5},
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	pr = {
+		"number": 420,
+		"body": "Automated implementation. Closes #501",
+		"state": "open",
+		"baseRefName": "main",
+		"headRefName": "ai/issue-501",
+		"headRefFromApi": "ai/issue-501",
+		"headSha": "0000000000000000000000000000000000000420",
+		"mergeable": True,
+		"mergeable_state": "clean",
+		"title": "AI implementation for issue #501",
+	}
+	pr.update(pr_extra)
+	# Switch-off parity: the exhausted close-out only runs with the
+	# fingerprint breaker off (the default escalates to ai:needs-human).
+	extra.setdefault("env_overrides", {"STALL_FINGERPRINT_BREAKER_ENABLED": "false"})
+	return _run_poller(
+		state=_base_state(status="complete"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: 420},
+		mock_gh_issue_list_label_filter=True,
+		prs=[pr],
+		**extra,
+	)
+
+
+def _assert_standalone_exhausted_held(result: dict, detail: str) -> None:
+	assert "STALL_SKIP issue=501 reason=pr_ai_hold pr=420" in result["stdout"], result["stdout"]
+	assert f"detail={detail} phase=ai:awaiting-approval action=none requested_action=skip" in result["stdout"]
+	assert "close_linked_pr: closing linked PR #420" not in result["stdout"]
+	assert "ai:closed" not in result["issues"]["501"]["labels"]
+	assert not any(
+		close_call["issue"] == 501 for close_call in result.get("issue_close_short_comments", [])
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is None or standalone_state.get("status_since_ts") == 1
+
+
+def test_zz_pr_ai_hold_standalone_exhausted_close_leaves_held_pr_open():
+	_assert_standalone_exhausted_held(_standalone_exhausted_run({"draft": True}), "draft")
+
+
+def test_zz_pr_ai_hold_standalone_exhausted_close_leaves_held_pr_open_when_cache_lacks_hold_fields():
+	# Batched linked_pr without isDraft/title: close_linked_pr's REST payload
+	# catches the hold and the issue stays open.
+	result = _standalone_exhausted_run(
+		{"title": "[skip ai] held"},
+		mock_store_extra={"graphql_omit_pr_hold_fields": True},
+	)
+	assert "close_linked_pr: skipping PR #420 for issue #501 (owner hold: reason=pr_ai_hold detail=skip_ai_title)" in result["stdout"], result["stdout"]
+	assert "source=close_linked_pr" in result["stdout"]
+	_assert_standalone_exhausted_held(result, "skip_ai_title")
+
+
+def test_zz_pr_ai_hold_standalone_exhausted_close_still_closes_unheld_pr():
+	result = _standalone_exhausted_run({"draft": False})
+	assert "reason=pr_ai_hold" not in result["stdout"]
+	assert "close_linked_pr: closing linked PR #420 for issue #501" in result["stdout"], result["stdout"]
+	assert "ai:closed" in result["issues"]["501"]["labels"]
+
+
 def test_standalone_stall_recovery_skips_when_phase_attempts_exhausted():
 	state = _base_state(status="complete")
 	standalone_state_comment = (
@@ -30596,6 +30786,7 @@ def test_close_linked_pr_only_closes_the_issues_own_implementation_pr():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	helper = _extract_bash_function(script, "_linked_pr_is_issue_implementation()\n{")
 	closer = _extract_bash_function(script, "close_linked_pr() {")
+	hold_helper = _extract_bash_function(script, "_stall_pr_ai_hold_reason()\n{")
 	with tempfile.TemporaryDirectory() as tmp:
 		closed_log = Path(tmp) / "closed.txt"
 		api_log = Path(tmp) / "api.txt"
@@ -30614,12 +30805,15 @@ def test_close_linked_pr_only_closes_the_issues_own_implementation_pr():
 			"    103) printf '%s' '{\"state\":\"open\",\"head_ref\":\"feature/x\",\"base_ref\":\"orchestrator/project-9\",\"body\":\"Closes #77\"}' ;;\n"
 			"    104) printf '%s' '{\"state\":\"closed\",\"head_ref\":\"ai/issue-77\",\"base_ref\":\"main\",\"body\":\"\"}' ;;\n"
 			"    105) return 1 ;;\n"
+			"    106) printf '%s' '{\"state\":\"open\",\"head_ref\":\"ai/issue-77\",\"base_ref\":\"main\",\"body\":\"impl\",\"draft\":true,\"title\":\"impl\"}' ;;\n"
+			"    107) printf '%s' '{\"state\":\"open\",\"head_ref\":\"ai/issue-77\",\"base_ref\":\"main\",\"body\":\"impl\",\"draft\":false,\"title\":\"[skip ai] impl\"}' ;;\n"
 			"  esac\n"
 			"}\n"
 			'gh() { if [ "$1" = pr ] && [ "$2" = close ]; then echo "$3" >> "$CLOSED_LOG"; return 0; fi; return 1; }\n'
-			"_find_all_linked_prs() { printf '101\\n102\\n103\\n104\\n105\\n'; }\n"
-			+ helper + "\n" + closer + "\n"
-			'close_linked_pr 77 "why"\n',
+			"_find_all_linked_prs() { printf '101\\n102\\n103\\n104\\n105\\n106\\n107\\n'; }\n"
+			+ helper + "\n" + hold_helper + "\n" + closer + "\n"
+			'close_linked_pr 77 "why"\n'
+			'echo "HELD=${CLOSE_LINKED_PR_HELD_PRS} DETAIL=${CLOSE_LINKED_PR_HELD_DETAIL}"\n',
 			encoding="utf-8",
 		)
 		result = subprocess.run(
@@ -30641,10 +30835,14 @@ def test_close_linked_pr_only_closes_the_issues_own_implementation_pr():
 		assert "close_linked_pr: closing linked PR #103 for issue #77 (state=open)." in out
 		assert "close_linked_pr: skipping PR #104 for issue #77 (state=closed)." in out
 		assert "close_linked_pr: skipping PR #105 for issue #77 (state=unknown)." in out
-		assert "close_linked_pr: issue=#77 scanned=5 closed=2" in out
+		# Issue #9733: owner-held PRs are never closed and are reported back.
+		assert "close_linked_pr: skipping PR #106 for issue #77 (owner hold: reason=pr_ai_hold detail=draft)." in out
+		assert "close_linked_pr: skipping PR #107 for issue #77 (owner hold: reason=pr_ai_hold detail=skip_ai_title)." in out
+		assert "HELD=106 107 DETAIL=draft" in out
+		assert "close_linked_pr: issue=#77 scanned=7 closed=2" in out
 		# §15: exactly one pulls/<n> request per candidate, none extra.
 		api_calls = api_log.read_text(encoding="utf-8").split()
-		assert sorted(api_calls) == sorted(f"repos/o/r/pulls/{n}" for n in (101, 102, 103, 104, 105)), api_calls
+		assert sorted(api_calls) == sorted(f"repos/o/r/pulls/{n}" for n in (101, 102, 103, 104, 105, 106, 107)), api_calls
 
 
 def test_linked_pr_is_issue_implementation_predicate_contract():
