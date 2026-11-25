@@ -2806,6 +2806,12 @@ _merge_lease_split_soft()
 # eligibility, the skip list and `skip=` writes, so the record is byte-for-byte
 # the old format), MERGE_LEASE_IDLE_MINUTES (default 60, 0-1440; 0 turns the
 # idle test off). Every read failure is eligible (fail-open).
+# Hold labels (Refs #9969): a PR carrying a label listed in
+# MERGE_LEASE_HOLD_LABELS (default ai:needs-human,ai:security-pass-failed,
+# ai:review-blocked,ai:scope-blocked; comma-separated, case-insensitive exact
+# names; empty, none or off turns the test off; the wait label is never a
+# hold label) is ineligible at once (reason hold_label, revoked_hold_label
+# for a holder). Labels come from the open-PR listing already read; no call.
 # Forward-merge priority (merge-lease-parallel Phase 3, Refs #9781): the
 # order is a priority label or a same-repository head ref starting with an
 # entry of MERGE_LEASE_PRIORITY_HEAD_PREFIXES, then the lowest PR number.
@@ -2938,28 +2944,83 @@ _merge_lease_skips_normalize()
 # #9983 is read that way, so PRs parked by the old rule are released once):
 # it stops blocking once the PR's pipeline head-gate is `success` on the
 # entry head. Any other reason is "hard": it blocks until the head changes.
+# Issue #10044: `expired` and `revoked_idle` are soft too (a hold spent
+# waiting for runners leaves a healthy PR on an unchanged head). Each is
+# soft once per head: the grant write turns the new holder's own entry into
+# `expired_unparked` / `revoked_idle_unparked` (_merge_lease_skip_block), and
+# a later expired/revoked_idle release on that head keeps the `_unparked`
+# token (_merge_lease_skip_release_token), which is hard. Every other reason
+# (revoked_draft, revoked_skip_ai, revoked_final_ci_failed, the `_unparked`
+# tokens, any unknown one) stays hard; older libraries read every reason but
+# revoked_no_head_gate as hard (the safe direction).
+# `revoked_no_head_gate_unparked` (a head-gate revocation of a head that
+# already used its un-park) stays soft like revoked_no_head_gate, but carries
+# the marker through that release so the once-per-head budget is not reset
+# (_merge_lease_skip_release_token, _merge_lease_skip_block). Older libraries
+# read it as hard (the safe direction).
 # No API call in any of these.
+# _merge_lease_skip_reason_is_soft <reason>: 0 when <reason> (the third
+# field; empty for a two-field entry) is a soft reason.
+_merge_lease_skip_reason_is_soft()
+{
+	case "${1:-}" in
+		""|revoked_no_head_gate|revoked_no_head_gate_unparked|expired|revoked_idle) return 0 ;;
+	esac
+	return 1
+}
+
 # _merge_lease_skip_is_soft <entry>: 0 when <entry> is a valid soft entry.
 _merge_lease_skip_is_soft()
 {
 	local lease_soft_entry="${1:-}"
 	[[ "${lease_soft_entry}" =~ ^[1-9][0-9]*:[0-9a-f]{40}(:([a-z][a-z_]{0,39}))?$ ]] || return 1
-	[ -z "${BASH_REMATCH[2]:-}" ] || [ "${BASH_REMATCH[2]}" = "revoked_no_head_gate" ]
+	_merge_lease_skip_reason_is_soft "${BASH_REMATCH[2]:-}"
 }
 
 # _merge_lease_skips_hard <skips> / _merge_lease_skips_soft <skips>: the valid
-# entries of one class, in list order (newline-separated, may be empty).
+# entries of one class, in list order (newline-separated, may be empty). The
+# soft set is _merge_lease_skip_reason_is_soft's.
 _merge_lease_skips_hard()
 {
 	{ printf '%s\n' "${1:-}" | grep -E '^[1-9][0-9]*:[0-9a-f]{40}(:[a-z][a-z_]{0,39})?$' || true; } \
-		| awk -F: 'NF == 3 && $3 != "revoked_no_head_gate"'
+		| awk -F: 'NF == 3 && $3 != "revoked_no_head_gate" && $3 != "revoked_no_head_gate_unparked" && $3 != "expired" && $3 != "revoked_idle"'
 	return 0
 }
 
 _merge_lease_skips_soft()
 {
 	{ printf '%s\n' "${1:-}" | grep -E '^[1-9][0-9]*:[0-9a-f]{40}(:[a-z][a-z_]{0,39})?$' || true; } \
-		| awk -F: 'NF == 2 || $3 == "revoked_no_head_gate"'
+		| awk -F: 'NF == 2 || $3 == "revoked_no_head_gate" || $3 == "revoked_no_head_gate_unparked" || $3 == "expired" || $3 == "revoked_idle"'
+	return 0
+}
+
+# _merge_lease_skip_release_token <pr> <head> <reason> (issue #10044, G2):
+# the reason token of a release entry for <pr>:<head>. `<reason>_unparked`
+# when <reason> is expired, revoked_idle or revoked_no_head_gate and the
+# newest MERGE_LEASE_SKIPS entry for <pr>:<head> is an `_unparked` marker
+# (that head already used its one un-park, whatever the earlier reason was);
+# <reason> otherwise. `revoked_no_head_gate_unparked` stays soft, so a failed
+# head-gate still clears once it passes (#9983), but the next grant keeps the
+# marker, so a head-gate failure cannot reset the once-per-head budget. No API
+# call. The tick also uses its presence as the version guard for writing
+# `_unparked` tokens.
+_merge_lease_skip_release_token()
+{
+	local rt_pr="${1:-}" rt_head="${2:-}" rt_reason="${3:-}" rt_prev=""
+	case "${rt_reason}" in
+		expired|revoked_idle|revoked_no_head_gate)
+			if [[ "${rt_pr}" =~ ^[1-9][0-9]*$ && "${rt_head}" =~ ^[0-9a-f]{40}$ ]]; then
+				rt_prev="$(_merge_lease_skips_normalize "${MERGE_LEASE_SKIPS:-}" | { grep -E "^${rt_pr}:${rt_head}:[a-z][a-z_]{0,39}\$" || true; } | tail -n1 | cut -d: -f3)"
+				case "${rt_prev}" in
+					*_unparked)
+						printf '%s_unparked\n' "${rt_reason}"
+						return 0
+						;;
+				esac
+			fi
+			;;
+	esac
+	printf '%s\n' "${rt_reason}"
 	return 0
 }
 
@@ -3228,7 +3289,11 @@ _merge_lease_write()
 	fi
 	[ "${lease_state}" = "released" ] && lease_paths=""
 	local lease_skip_lines="" lease_skip_block="" lease_skip_drop=""
-	[ "${lease_state}" = "held" ] && lease_skip_drop="${lease_pr}"
+	if [ "${lease_state}" = "held" ]; then
+		# Issue #10044: `<pr>:<head>` keeps the holder's own un-park marker.
+		lease_skip_drop="${lease_pr}"
+		[[ "${lease_head}" =~ ^[0-9a-f]{40}$ ]] && lease_skip_drop="${lease_pr}:${lease_head}"
+	fi
 	lease_skip_lines="$(_merge_lease_skip_block "${lease_skip_drop}")"
 	[ -z "${lease_skip_lines}" ] || lease_skip_block="${lease_skip_lines}"$'\n'
 	lease_msg="merge-lease v1
@@ -3244,15 +3309,42 @@ ${lease_paths}"
 	_merge_lease_cas_commit "${lease_base}" "${lease_msg}"
 }
 
-# _merge_lease_skip_block <drop_pr>...: the `skip=` lines of the next write
+# _merge_lease_skip_block <drop>...: the `skip=` lines of the next write
 # (no trailing newline; empty with MERGE_LEASE_REVOKE_ENABLED off), with each
-# <drop_pr>'s own entries removed (a holder is never on the skip list).
+# <drop>'s own entries removed (a holder is never on the skip list, except
+# its one `_unparked` marker on its own head). <drop> is `<pr>` (drop all of
+# that PR's entries) or, since issue #10044, `<pr>:<40-hex head>`: all of the
+# PR's entries are dropped too, but its entry for exactly that head is kept
+# as the un-park marker when its reason is expired or revoked_idle (rewritten
+# to `<reason>_unparked`, hard) or already `expired_unparked` /
+# `revoked_idle_unparked` (kept unchanged), or `revoked_no_head_gate_unparked`
+# (soft; kept as the hard `expired_unparked` marker so a head-gate failure
+# never resets the once-per-head budget). The kept entry is appended as the
+# newest, so the 50-entry cap evicts it last. No API call.
+# Known residual: the marker is still an ordinary capped entry, so 50 newer
+# entries from other PRs before the same head is released again evict it
+# (_merge_lease_skips_normalize's `tail -n 50`), and that head can then be
+# un-parked once more (one extra queue cycle, never a permanent park).
 _merge_lease_skip_block()
 {
-	local skip_lines="${MERGE_LEASE_SKIPS:-}" skip_drop
+	local skip_lines="${MERGE_LEASE_SKIPS:-}" skip_drop skip_drop_pr skip_drop_head skip_keep skip_keep_why
 	_merge_lease_revoke_enabled || return 0
+	skip_lines="$(_merge_lease_skips_normalize "${skip_lines}")"
 	for skip_drop in "$@"; do
+		skip_keep=""
+		if [[ "${skip_drop}" =~ ^([1-9][0-9]*):([0-9a-f]{40})$ ]]; then
+			skip_drop_pr="${BASH_REMATCH[1]}"
+			skip_drop_head="${BASH_REMATCH[2]}"
+			skip_keep_why="$(printf '%s\n' "${skip_lines}" | { grep -E "^${skip_drop_pr}:${skip_drop_head}:[a-z][a-z_]{0,39}\$" || true; } | tail -n1 | cut -d: -f3)"
+			case "${skip_keep_why}" in
+				expired|revoked_idle) skip_keep="${skip_drop_pr}:${skip_drop_head}:${skip_keep_why}_unparked" ;;
+				expired_unparked|revoked_idle_unparked) skip_keep="${skip_drop_pr}:${skip_drop_head}:${skip_keep_why}" ;;
+				revoked_no_head_gate_unparked) skip_keep="${skip_drop_pr}:${skip_drop_head}:expired_unparked" ;;
+			esac
+			skip_drop="${skip_drop_pr}"
+		fi
 		skip_lines="$(_merge_lease_skips_normalize "${skip_lines}" "${skip_drop}")"
+		[ -z "${skip_keep}" ] || skip_lines="$(_merge_lease_skips_normalize "$(printf '%s\n%s\n' "${skip_lines}" "${skip_keep}")")"
 	done
 	[ -z "${skip_lines}" ] || printf '%s\n' "${skip_lines}" | sed 's/^/skip=/'
 }
@@ -3321,7 +3413,8 @@ _merge_lease_paths_record_form()
 # shape with that row's own times, byte-identical to a single-holder record,
 # so releasing the other holder never extends this one's lease. Two or more
 # rows write pr=/head=/acquired=/updated= of the primary, expires= the latest
-# expiry, the skip lines (every holder's own entries dropped), one `holder=`
+# expiry, the skip lines (every holder's own entries dropped, but for its
+# `_unparked` marker on its own head, issue #10044), one `holder=`
 # line per row, the `holder_path=` lines, then `paths:` with the union (`*`
 # when a holder is `*` or the union exceeds MERGE_LEASE_MAX_PATHS). Same
 # compare-and-swap and return codes as _merge_lease_write (1 also for
@@ -3342,7 +3435,12 @@ _merge_lease_write_holders()
 		[[ "${wh_pr}" =~ ^[1-9][0-9]*$ && "${wh_exp}" =~ ^[0-9]+$ && "${wh_acq}" =~ ^[0-9]+$ && "${wh_upd}" =~ ^[0-9]+$ ]] || return 1
 		[[ "${wh_head}" =~ ^[0-9a-f]{40}$ ]] || wh_head=""
 		wh_n=$((wh_n + 1))
-		wh_drop+=("${wh_pr}")
+		# Issue #10044: `<pr>:<head>` keeps the holder's own un-park marker.
+		if [ -n "${wh_head}" ]; then
+			wh_drop+=("${wh_pr}:${wh_head}")
+		else
+			wh_drop+=("${wh_pr}")
+		fi
 		[ "${wh_exp}" -le "${wh_max_exp}" ] || wh_max_exp="${wh_exp}"
 		wh_paths="$(_merge_lease_paths_record_form "$(_merge_lease_holder_paths "${wh_pr}")" "${wh_max_paths}")"
 		if [ "${wh_n}" -eq 1 ]; then
@@ -3579,13 +3677,59 @@ _merge_lease_queue_order()
 	printf '%s' "${MERGE_LEASE_QUEUE_PRS}"
 }
 
-# _merge_lease_pr_eligible <pr> <head_sha> <title> <draft> [<base>] [<trusted_login>] [<hold_since_epoch>]
+# _merge_lease_hold_labels
+# Prints the configured hold labels (Refs #9969), one per line:
+# MERGE_LEASE_HOLD_LABELS (unset gives the default list; empty, none or off
+# prints nothing), split on commas and trimmed. An entry equal to the wait
+# label is dropped, so a misconfiguration never makes every waiter
+# ineligible. A `none`/`off` entry inside a list is dropped too (so `none,`
+# prints nothing; `off,<label>` keeps <label>). No API call.
+_merge_lease_hold_labels()
+{
+	local hold_raw hold_entry hold_wait_lc hold_entry_lc
+	local -a hold_entries=()
+	hold_raw="${MERGE_LEASE_HOLD_LABELS-ai:needs-human,ai:security-pass-failed,ai:review-blocked,ai:scope-blocked}"
+	hold_entry_lc="$(printf '%s' "${hold_raw}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+	case "${hold_entry_lc}" in
+		''|none|off) return 0 ;;
+	esac
+	hold_wait_lc="$(printf '%s' "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" | tr '[:upper:]' '[:lower:]')"
+	IFS=',' read -r -a hold_entries <<< "${hold_raw}"
+	for hold_entry in ${hold_entries[@]+"${hold_entries[@]}"}; do
+		hold_entry="${hold_entry#"${hold_entry%%[![:space:]]*}"}"
+		hold_entry="${hold_entry%"${hold_entry##*[![:space:]]}"}"
+		[ -n "${hold_entry}" ] || continue
+		hold_entry_lc="$(printf '%s' "${hold_entry}" | tr '[:upper:]' '[:lower:]')"
+		# A stray off token inside a list (`none,`) is never a label name.
+		case "${hold_entry_lc}" in none|off) continue ;; esac
+		[ "${hold_entry_lc}" != "${hold_wait_lc}" ] || continue
+		printf '%s\n' "${hold_entry}"
+	done
+}
+
+# _merge_lease_has_hold_label <labels_nl>
+# 0 when a line of <labels_nl> (newline-separated label names) matches a
+# configured hold label exactly (fixed-string, whole-line, case-insensitive:
+# GitHub label names are case-insensitive), 1 otherwise or when the test is
+# off. Label names are never printed, logged or evaluated. No API call.
+_merge_lease_has_hold_label()
+{
+	local hold_have="${1:-}" hold_list
+	[ -n "${hold_have}" ] || return 1
+	hold_list="$(_merge_lease_hold_labels)"
+	[ -n "${hold_list}" ] || return 1
+	printf '%s\n' "${hold_have}" | grep -Fxiq -f <(printf '%s\n' "${hold_list}") 2>/dev/null
+}
+
+# _merge_lease_pr_eligible <pr> <head_sha> <title> <draft> [<base>] [<trusted_login>] [<hold_since_epoch>] [<labels_nl>]
 # Phase 2 (Refs #9781): 0 when the PR can still merge or eligibility cannot
 # be read (fail-open), 1 when it cannot (MERGE_LEASE_INELIGIBLE_REASON =
-# draft|skip_ai|no_head_gate|final_ci_failed). Also sets MERGE_LEASE_CI_ACTIVE
+# draft|skip_ai|hold_label|no_head_gate|final_ci_failed). Also sets MERGE_LEASE_CI_ACTIVE
 # (true|false|unknown): whether a CI run or required check is still running.
 # Checks, cheapest first: draft, a `[skip ai]` title (fixed-string,
-# case-insensitive; the title is never logged or evaluated), the newest
+# case-insensitive; the title is never logged or evaluated), a hold label in
+# <labels_nl> (newline-separated names from the listing; see
+# _merge_lease_has_hold_label, Refs #9969; omitted or empty skips it), the newest
 # ai-review/head-gate status on the head (counted only when <trusted_login>
 # created it; failure/error is ineligible; absent or pending is ineligible
 # for a waiter, and for a holder (<hold_since_epoch> given) only once
@@ -3617,13 +3761,14 @@ _merge_lease_queue_order()
 # read as `success` by <login>; every fail-open return leaves it false, so a
 # soft skip entry (#9983 G5) is cleared only on a confirmed success.
 # API: 1 statuses read plus the reads of _pr_wait_for_required_checks; none
-# for draft or `[skip ai]`, or without a valid login or head; +1
+# for draft, `[skip ai]` or a hold label, or without a valid login or head; +1
 # actions/runs?head_sha read for a holder past the grace with a pending
 # head-gate (that path makes no required-checks read). The judge status is
 # read from the same statuses response (no extra call).
 _merge_lease_pr_eligible()
 {
 	local elig_pr="$1" elig_head="$2" elig_title="$3" elig_draft="$4" elig_base="${5:-}" elig_login="${6:-}" elig_since="${7:-}"
+	local elig_labels="${8:-}"
 	local elig_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" elig_statuses elig_gate elig_idle elig_now elig_rc=0
 	local elig_run_names
 	MERGE_LEASE_INELIGIBLE_REASON=""
@@ -3637,6 +3782,10 @@ _merge_lease_pr_eligible()
 	fi
 	if printf '%s' "${elig_title}" | grep -Fqi -- '[skip ai]'; then
 		MERGE_LEASE_INELIGIBLE_REASON="skip_ai"
+		return 1
+	fi
+	if [ -n "${elig_labels}" ] && _merge_lease_has_hold_label "${elig_labels}"; then
+		MERGE_LEASE_INELIGIBLE_REASON="hold_label"
 		return 1
 	fi
 	elig_login="$(printf '%s' "${elig_login}" | tr '[:upper:]' '[:lower:]')"

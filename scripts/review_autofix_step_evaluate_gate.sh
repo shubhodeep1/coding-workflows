@@ -1844,12 +1844,19 @@ fi
 #     were repaired (repair=<sha>) on the PR (Q7: A); a cap logs
 #     FINAL_CI_REPAIR ... outcome=skipped reason=head_cap|pr_cap;
 #   * the head's newest ai-review/head-gate status is success and was posted
-#     by the GH_PAT login.
+#     by the GH_PAT login;
+#   * the head's newest ci/final status by github-actions[bot] is not a
+#     success newer than the ai:final-ci-failed:v1 marker (issue #10023).
+#     When it is, the run ends here (should_run=false,
+#     skip_reason=final_ci_now_green; FINAL_CI_REPAIR ... outcome=skipped
+#     reason=final_ci_now_green): the failed attempt turned green, so the
+#     marker counts as answered and the approved head is left as it is.
 # final_ci_repair_attempt carries the repair's ordinal (1 or 2) for its
 # marker. API cost (CLAUDE.md §15): the comments come from the shared
 # gate_fetch_marker_comments read; one GET commits/<head>/statuses runs only
 # when every comment-based condition holds (no other gate call reads commit
-# statuses). Any read or parse failure keeps the full review.
+# statuses); the ci/final check reuses that same single read. Any read or
+# parse failure keeps the full review (or the repair, for the ci/final check).
 FINAL_CI_REPAIR="false"
 FINAL_CI_REPAIR_ATTEMPT=""
 final_ci_repair_switch="$(printf '%s' "${FINAL_CI_REPAIR_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
@@ -1863,7 +1870,8 @@ if [ "${SHOULD_RUN}" = "true" ] && [ "${final_ci_repair_switch}" != "false" ] \
     if [ "${gate_marker_fetch_state}" = "ok" ] && [ -n "${gate_marker_author_login}" ]; then
       final_ci_repair_decision="$(FINAL_CI_REPAIR_COMMENTS_FILE="${gate_marker_comments_file}" GATE_HEAD_SHA="${pr_head_sha_gate}" GATE_HEAD_REF="${pr_head_ref}" GATE_PR_NUMBER="${PR_NUMBER}" GATE_MARKER_AUTHOR_LOGIN="${gate_marker_author_login}" python3 - 2>/dev/null <<'PY' || true
 # Final-CI repair decision from the shared marker comments (see above).
-# Prints `decision=<repair|none|skipped> reason=<token> attempt=<k>`.
+# Prints `decision=<repair|none|skipped> reason=<token> attempt=<k>`; the
+# repair decision also carries `marker_at=<ISO time of the newest marker>`.
 import json
 import os
 import re
@@ -1944,7 +1952,9 @@ elif head in tried:
 elif len(repaired) >= 2:
     print(f"decision=skipped reason=pr_cap marker={marker} approval={approval} attempt={len(repaired)}")
 else:
-    print(f"decision=repair reason=none marker={marker} approval={approval} attempt={len(repaired) + 1}")
+    # marker_at (issue #10023) sits before attempt= so the attempt parser,
+    # anchored at the end of the line, is unchanged.
+    print(f"decision=repair reason=none marker={marker} approval={approval} marker_at={final_at} attempt={len(repaired) + 1}")
 PY
 )"
     fi
@@ -1953,6 +1963,8 @@ PY
     final_ci_repair_count="$(printf '%s' "${final_ci_repair_decision}" | sed -n 's/.* attempt=\([0-9]*\)$/\1/p')"
     final_ci_repair_marker="$(printf '%s' "${final_ci_repair_decision}" | sed -n 's/.* marker=\([a-z_]*\) .*/\1/p')"
     final_ci_repair_approval="$(printf '%s' "${final_ci_repair_decision}" | sed -n 's/.* approval=\([a-z_]*\) .*/\1/p')"
+    final_ci_repair_marker_at="$(printf '%s' "${final_ci_repair_decision}" | sed -n 's/.* marker_at=\([^ ]*\) .*/\1/p')"
+    [[ "${final_ci_repair_marker_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || final_ci_repair_marker_at=""
     case "${final_ci_repair_outcome}" in
       repair)
         final_ci_head_gate=""
@@ -1963,12 +1975,33 @@ PY
           FINAL_CI_REPAIR_ATTEMPT="${final_ci_repair_count}"
           echo "FINAL_CI_REPAIR pr=${PR_NUMBER} head=${pr_head_sha_gate} outcome=selected attempt=${final_ci_repair_count} marker=${final_ci_repair_marker:-judge} approval=judge"
         else
+          # One read: the newest ai-review/head-gate (state, creator) and the
+          # newest ci/final posted by github-actions[bot] (state, created_at;
+          # scripts/ci_final_status.sh posts it with github.token).
           if ! final_ci_head_gate="$(gh api "repos/${REPOSITORY}/commits/${pr_head_sha_gate}/statuses?per_page=100" \
-            --jq '[.[] | select(.context == "ai-review/head-gate")][0] // {} | "\(.state // "none") \(.creator.login // "-")"' 2>/dev/null)"; then
+            --jq '([.[] | select(.context == "ai-review/head-gate")][0] // {}) as $g | ([.[] | select(.context == "ci/final" and (.creator.login // "") == "github-actions[bot]")][0] // {}) as $f | "\($g.state // "none") \($g.creator.login // "-") \($f.state // "none") \($f.created_at // "-")"' 2>/dev/null)"; then
             final_ci_head_gate=""
           fi
-          read -r final_ci_head_gate_state final_ci_head_gate_creator <<< "${final_ci_head_gate:-unreadable -}"
+          final_ci_status_state="none" final_ci_status_at="-"
+          read -r final_ci_head_gate_state final_ci_head_gate_creator final_ci_status_state final_ci_status_at <<< "${final_ci_head_gate:-unreadable - none -}"
+          [[ "${final_ci_status_at:-}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || final_ci_status_at=""
           if [ "${final_ci_head_gate_state}" = "success" ] \
+            && [ "$(printf '%s' "${final_ci_head_gate_creator}" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "${gate_marker_author_login}" | tr '[:upper:]' '[:lower:]')" ] \
+            && [ "${final_ci_status_state}" = "success" ] && [ -n "${final_ci_status_at}" ] && [ -n "${final_ci_repair_marker_at}" ] \
+            && [[ "${final_ci_status_at}" > "${final_ci_repair_marker_at}" ]]; then
+            # Issue #10023 (G1/G2): the failed attempt turned green after the
+            # hand-back (e.g. the sweep's cancelled-job re-run passed). The
+            # marker counts as answered: no repair, no reviewer panel, and the
+            # approved head is left as it is.
+            SHOULD_RUN="false"
+            SKIP_REASON="final_ci_now_green"
+            echo "FINAL_CI_REPAIR pr=${PR_NUMBER} head=${pr_head_sha_gate} outcome=skipped reason=final_ci_now_green"
+            # The catch-all AUTOFIX_GATE_SKIP logger ran earlier, while
+            # SHOULD_RUN was still true, so it printed nothing for this skip.
+            # This echo is the only searchable line for it (issue #4985); no
+            # GATE_SKIP_RECORDED is set because nothing reads it after that point.
+            echo "AUTOFIX_GATE_SKIP reason=final_ci_now_green pr=${PR_NUMBER} head_sha=${pr_head_sha_gate}"
+          elif [ "${final_ci_head_gate_state}" = "success" ] \
             && [ "$(printf '%s' "${final_ci_head_gate_creator}" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "${gate_marker_author_login}" | tr '[:upper:]' '[:lower:]')" ]; then
             FINAL_CI_REPAIR="true"
             FINAL_CI_REPAIR_ATTEMPT="${final_ci_repair_count}"
