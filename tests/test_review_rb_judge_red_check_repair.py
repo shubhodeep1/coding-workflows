@@ -470,3 +470,63 @@ def test_merge_with_followup_routes_a_red_head() -> None:
 	assert '[ "${PR_CHECKS_LAST_PENDING:-0}" = "0" ] && [ -s "${RB_JUDGE_CI_FAILURE_NAMES_FILE}" ]' in block
 	raw = WORKFLOW.read_text(encoding="utf-8")
 	assert "              final_ci_handover)\n" in raw and "              final_ci_repair_requested)\n" in raw
+
+
+# ---------------------------------------------------------------------------
+# ENABLE_AUTO_MERGE=false: the manual-merge branches route a red head too
+# ---------------------------------------------------------------------------
+
+CHECKS_STUB = r'''
+_pr_checks_completed()
+{
+  echo "CHECKS_READ"
+  PR_CHECKS_LAST_REASON="${FAKE_CHECKS_REASON:-blocking}"
+  PR_CHECKS_LAST_PENDING="${FAKE_CHECKS_PENDING:-0}"
+  [ "${FAKE_CHECKS_OK:-0}" = "1" ]
+}
+'''
+
+
+def _manual(mode: str = "merge") -> str:
+	return ('RB_MERGE_STATUS=""\n' + CHECKS_STUB
+		+ f'if rb_judge_manual_merge_red_check {mode}; then echo "ROUTED=1"; else echo "ROUTED=0"; fi\n'
+		+ 'echo "STATUS=${RB_MERGE_STATUS}"\n')
+
+
+def test_manual_merge_red_head_requests_the_repair(tmp_path: Path) -> None:
+	for mode in ("merge", "terminal"):
+		run = _run(tmp_path, tail=_manual(mode), ENABLE_AUTO_MERGE="false")
+		assert run["result"].returncode == 0, run["result"].stderr
+		assert "ROUTED=1" in run["result"].stdout and _status(run) == "final_ci_repair_requested"
+		assert run["result"].stdout.count("CHECKS_READ") == 1
+		assert len(run["posts"]) == 1 and run["dispatches"] == ["dispatch pr=42"]
+		assert f"outcome=repair_requested mode={mode}" in run["result"].stdout
+
+
+def test_manual_merge_keeps_todays_outcome_unless_a_required_check_failed(tmp_path: Path) -> None:
+	cases = [
+		({"FAKE_CHECKS_OK": "1"}, 1),
+		({"FAKE_CHECKS_PENDING": "2"}, 1),
+		({"FAKE_CHECKS_REASON": "query_failed"}, 1),
+		({"RB_JUDGE_RED_CHECK_REPAIR_ENABLED": "false"}, 0),
+	]
+	for env, reads in cases:
+		run = _run(tmp_path, tail=_manual(), **env)
+		assert run["result"].returncode == 0, run["result"].stderr
+		assert "ROUTED=0" in run["result"].stdout and _status(run) == "", env
+		assert run["result"].stdout.count("CHECKS_READ") == reads, env
+		assert run["posts"] == [] and run["dispatches"] == []
+	# A green snapshot for the judged head costs no checks read.
+	green = f"PR_CHECK_RUNS_CONTEXT\nhead_sha: {JUDGED}\ncollection_status: ok\ntotal_check_runs: 3\nfailed_count: 0\nincomplete_count: 0\n"
+	run = _run(tmp_path, snapshot=green, tail=_manual())
+	assert "ROUTED=0" in run["result"].stdout and "CHECKS_READ" not in run["result"].stdout
+
+
+def test_manual_merge_branches_check_before_the_head_gate_success() -> None:
+	text = SCRIPT.read_text(encoding="utf-8")
+	for call in ("elif rb_judge_manual_merge_red_check merge; then", "&& rb_judge_manual_merge_red_check terminal; then"):
+		pos = text.index(call)
+		after = text[pos:]
+		manual = after.index('RB_MERGE_STATUS="manual_merge_required"')
+		assert after.index("review_head_gate_post_status") < manual
+		assert after.index("RB_MERGE_READY_LABEL_ALLOWED=\"true\"") < manual

@@ -2028,6 +2028,36 @@ rb_judge_route_red_checks()
   return 0
 }
 
+# rb_judge_manual_merge_red_check <merge|terminal>: the ENABLE_AUTO_MERGE=false
+# branches of `merge` and of the final `fix` treated as merge read no check
+# before they post the head-gate success and allow ai:ready-to-merge. Returns 0
+# (RB_MERGE_STATUS set by rb_judge_route_red_checks, or checks_failed when that
+# routing could not act) when a required check failed on the judged head, so the
+# caller posts no head-gate success and no ai:ready-to-merge. Returns 1 (the
+# manual-merge outcome as before) when the switch is off, the snapshot lists no
+# failed check-run for the judged head (no API read then), the checks lib is not
+# loaded, the read fails, a check is still pending, or the required checks pass.
+# API cost: one _pr_checks_completed read, only on a head the snapshot shows red.
+rb_judge_manual_merge_red_check()
+{
+  local mode="${1:-merge}"
+  [ "$(rb_judge_red_check_switch 2>/dev/null)" = "true" ] || return 1
+  [[ "${RB_JUDGED_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || return 1
+  [ -s "${RB_JUDGE_CI_FAILURE_NAMES_FILE}" ] || return 1
+  command -v _pr_checks_completed >/dev/null 2>&1 || return 1
+  if PR_CHECKS_REPOSITORY="${REPOSITORY}" PR_CHECKS_SELF_RUN_ID="${GITHUB_RUN_ID:-}" \
+    _pr_checks_completed "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
+    return 1
+  fi
+  if [ "${PR_CHECKS_LAST_REASON:-}" != "blocking" ] || [ "${PR_CHECKS_LAST_PENDING:-0}" != "0" ]; then
+    return 1
+  fi
+  echo "::warning::Review-blocked judge: required check-runs failed on ${RB_JUDGED_HEAD_SHA:0:7} (ENABLE_AUTO_MERGE=false); withholding the head-gate success and ai:ready-to-merge."
+  RB_MERGE_STATUS="checks_failed"
+  rb_judge_route_red_checks "${mode}" || true
+  return 0
+}
+
 # Hand-over guard (#9991-style dedupe): after a hand-over on this head, a
 # stall-recovery or re-dispatched judge run does nothing until a new head.
 if [ "$(rb_judge_red_check_switch 2>/dev/null)" = "true" ] && [[ "${RB_JUDGED_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]] \
@@ -3316,6 +3346,10 @@ case "${RB_ACTION}" in
             RB_MERGE_STATUS="merge_failed"
           fi
         fi
+      elif rb_judge_manual_merge_red_check merge; then
+        # #10063: a red required check on a manual-merge head goes to the
+        # final-CI repair or a hand-over, not to ready-to-merge.
+        :
       else
         review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
         RB_MERGE_READY_LABEL_ALLOWED="true"
@@ -3433,6 +3467,11 @@ case "${RB_ACTION}" in
             RB_MERGE_STATUS="merge_failed"
           fi
         fi
+      elif [ "${ENABLE_AUTO_MERGE}" != "true" ] && [ "${PR_STATE}" = "open" ] \
+        && rb_judge_manual_merge_red_check terminal; then
+        # #10063: a red required check on a manual-merge head goes to the
+        # final-CI repair or a hand-over, not to ready-to-merge.
+        :
       elif [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
         if [ "${PR_STATE}" = "open" ]; then
           review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success "review-blocked judge approved"
