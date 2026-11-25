@@ -585,3 +585,86 @@ def test_unreachable_security_hold_refuses_auto_merge(tmp_path: Path) -> None:
 	# Checked before the first head-gate success / merge-label path.
 	assert gate < text.index('if [ "${ENABLE_AUTO_MERGE}" != "true" ]; then')
 	assert "action=refuse reason=unreachable_security_hold" in text[gate:gate + 400]
+
+
+def test_judge_merge_gate_holds_on_unreachable_security(tmp_path: Path) -> None:
+	# Every judge merge path (merge, merge_with_followup, final-attempt fix,
+	# no-change fix) calls rb_security_merge_gate; the wrapper holds them all.
+	text = RB_JUDGE.read_text(encoding="utf-8")
+	start = text.index("rb_unreachable_security_hold_active() {\n")
+	end = text.index("  _rb_unreachable_inner_merge_gate\n}\n", start) + len("  _rb_unreachable_inner_merge_gate\n}\n")
+	driver = tmp_path / "judge_gate_driver.sh"
+	driver.write_text(
+		"set -euo pipefail\n"
+		"rb_security_merge_gate() { echo INNER; return 0; }\n"
+		+ text[start:end]
+		+ 'if rb_security_merge_gate; then echo ALLOW; else echo "HOLD=${RB_SECURITY_HOLD_REASON}"; fi\n',
+		encoding="utf-8",
+	)
+	held_root = tmp_path / "held"
+	_seed_repo(held_root)
+	_run_ledger(held_root, _issue_block("002", "prompts/mode-x.txt", "SECURITY & INPUT VALIDATION"), 1, IS_WORKFLOW_SOURCE_REPO="false")
+	held = subprocess.run(["bash", str(driver)], cwd=held_root, env=_env(held_root), capture_output=True, text=True, check=True).stdout
+	assert "HOLD=unreachable_security_hold" in held
+	assert "action=refuse reason=unreachable_security_hold" in held
+	assert "INNER" not in held
+	off = subprocess.run(["bash", str(driver)], cwd=held_root, env=_env(held_root, REVIEW_UNREACHABLE_FOLLOWUP_ENABLED="false"), capture_output=True, text=True, check=True).stdout
+	assert "INNER" in off and "ALLOW" in off
+	plain = subprocess.run(["bash", str(driver)], cwd=tmp_path, env=_env(tmp_path), capture_output=True, text=True, check=True).stdout
+	assert "INNER" in plain and "ALLOW" in plain
+
+
+def test_orphan_create_recovers_number_without_second_issue(tmp_path: Path) -> None:
+	_seed_repo(tmp_path)
+	_run_ledger(tmp_path, _issue_block("001", "prompts/mode-x.txt", "CORRECTNESS & LOGIC"), 1, IS_WORKFLOW_SOURCE_REPO="false")
+	bin_dir = _fake_gh(tmp_path)
+	gh = bin_dir / "gh"
+	gh.write_text(
+		gh.read_text(encoding="utf-8").replace(
+			'echo "https://github.com/octo/repo/issues/777"; fi',
+			'echo "created"; fi\nif [ "$1 $2" = "issue list" ]; then echo 778; fi',
+		),
+		encoding="utf-8",
+	)
+	driver = tmp_path / "orphan_driver.sh"
+	driver.write_text(
+		"set -euo pipefail\n"
+		"gh_retry() { \"$@\"; }\n"
+		"ensure_label_exists() { :; }\n"
+		+ _extract_shell_function(APPLY_FIXES, "review_unreachable_followup_sync")
+		+ "review_unreachable_followup_sync\n",
+		encoding="utf-8",
+	)
+	env = _env(tmp_path, AUTOFIX_ITERATION="1")
+	env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+	sync = subprocess.run(["bash", str(driver)], cwd=tmp_path, env=env, capture_output=True, text=True, check=True)
+	assert "followup=778 outcome=recorded" in sync.stdout
+	assert "UNREACHABLE_FOLLOWUP_ISSUE: 778" in _ledger_text(tmp_path)
+	calls = _gh_calls(tmp_path)
+	assert [call.split()[:2] for call in calls] == [["issue", "create"], ["issue", "list"]]
+
+
+def test_resumed_rows_keep_reviewer_text(tmp_path: Path) -> None:
+	# Rows rebuilt from the ledger carry block "-"; the follow-up body finds
+	# the reviewer text in the restored pre-rewrite copy by FILE and LINES.
+	_seed_repo(tmp_path)
+	_run_ledger(tmp_path, _issue_block("001", "prompts/mode-x.txt", "CORRECTNESS & LOGIC", "Distinct reviewer evidence."), 1, IS_WORKFLOW_SOURCE_REPO="false")
+	runtime = tmp_path / "runtime"
+	rows = (runtime / "review_unreachable_new.tsv").read_text(encoding="utf-8").splitlines()
+	(runtime / "review_unreachable_new.tsv").write_text(
+		"".join("\t".join(row.split("\t")[:6] + ["-"]) + "\n" for row in rows), encoding="utf-8",
+	)
+	_run_sync(tmp_path)
+	body = (tmp_path / "gh_bodies.log").read_text(encoding="utf-8")
+	assert "Distinct reviewer evidence." in body
+	finalize = (SCRIPTS / "review_autofix_step_partial_finalize.sh").read_text(encoding="utf-8")
+	assert '"review_issues.pre_unreachable.txt",' in finalize
+
+
+def test_security_hold_withdraws_existing_auto_merge() -> None:
+	text = ENABLE_AUTO_MERGE.read_text(encoding="utf-8")
+	gate = text.index("if review_unreachable_security_hold_active; then")
+	branch = text[gate:text.index("\nfi\n", gate)]
+	assert 'review_head_gate_withdraw_auto_merge "${GITHUB_REPOSITORY}" "${PR_NUMBER}" ""' in branch
+	assert "--disable-auto" in branch
+	assert branch.rstrip().endswith("exit 0")

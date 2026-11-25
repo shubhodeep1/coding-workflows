@@ -151,6 +151,15 @@ review_unreachable_security_hold_active()
 if review_unreachable_security_hold_active; then
 	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA:-unknown} action=refuse reason=unreachable_security_hold"
 	echo "::warning::Auto-merge not enabled for PR #${PR_NUMBER}: a security finding on a file the review editor may not change is still open (review ledger status unreachable, security hold). It is tracked in the PR's follow-up issue; the PR stays open."
+	# Auto-merge armed by an earlier round would still fire once checks pass,
+	# and the head gate withdraws it only on synchronize. Withdraw it here
+	# (best effort: one PR read, plus the disable call only when armed).
+	if type review_head_gate_withdraw_auto_merge >/dev/null 2>&1; then
+		review_head_gate_withdraw_auto_merge "${GITHUB_REPOSITORY}" "${PR_NUMBER}" "" \
+			|| echo "::warning::Could not withdraw an existing auto-merge on PR #${PR_NUMBER} during the unreachable security hold."
+	elif ! gh_retry gh pr merge "${PR_NUMBER}" --repo "${GITHUB_REPOSITORY}" --disable-auto >/dev/null 2>&1; then
+		echo "::warning::Could not withdraw an existing auto-merge on PR #${PR_NUMBER} (it may not be armed)."
+	fi
 	exit 0
 fi
 
