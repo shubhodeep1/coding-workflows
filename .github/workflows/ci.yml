@@ -4250,6 +4250,7 @@ jobs:
         # (#7658).
         run: |
           set -euo pipefail
+          trap 'echo "step elapsed: ${SECONDS}s"' EXIT
           mt_shards=3
           mt_module="tests/test_review_merge_train.py"
           rm -f /tmp/merge_train_collect.log /tmp/merge_train_tests.txt \
@@ -4351,6 +4352,7 @@ jobs:
         if: strategy.job-index == 1
         run: |
           set -euo pipefail
+          trap 'echo "step elapsed: ${SECONDS}s"' EXIT
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_review_semble_contract.py
 
       # Moved from tests-hooks-and-orchestrator, which took 16m09s of its 20
@@ -4363,6 +4365,7 @@ jobs:
         if: strategy.job-index == 1
         run: |
           set -euo pipefail
+          trap 'echo "step elapsed: ${SECONDS}s"' EXIT
           # The fake docker lives in a temp dir, so TMPDIR must allow executables.
           TMPDIR="${RUNNER_TEMP}" PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_clarify_sandbox_base_image_preseed.py
 
