@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":10105,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/10105\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/10109\",\"pr_number\":10109,\"branch\":\"ai/issue-10105\",\"run_id\":\"45557530821\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/45557530821\",\"changed_files\":[\".github/workflows/test-and-mark-stable.yml\",\"changelog.d/10105-phase4d-timeout-reason.md\",\"tests/test_test_and_mark_stable_step_scripts_contract.py\"]}",
+  "fingerprint": "3f71c411d8826214baf9f38c836e0d6ca674cc656d8c4e5d8b2852f8ce4ed590",
+  "lineage": {
+    "issue_number": 10105,
+    "parent_ids": [],
+    "pr_number": 10109,
+    "run_id": "45557530821",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45557530821",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/10109"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261125064215_982adcc1a6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10105,
+    "level": "run",
+    "pr_number": 10109,
+    "run_id": "45557530821"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #10105: https://github.com/shubhodeep1/coding-workflows/pull/10109",
+  "timestamps": {
+    "created_at": "2026-11-25T06:42:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
