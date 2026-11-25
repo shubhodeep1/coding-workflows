@@ -418,6 +418,19 @@ def test_ci_static_checks_run_on_changed_workflow(harness: Harness) -> None:
 	assert "lint_skipped" not in results[2].stdout
 
 
+def test_trusted_yamllint_config_is_used_when_present(harness: Harness) -> None:
+	pytest.importorskip("yaml")
+	(harness.root / ".yamllint.yml").write_text("extends: default\nrules:\n  line-length: disable\n", encoding="utf-8")
+	_git(harness.root, "add", "-A")
+	_git(harness.root, "commit", "-q", "-m", "cfg")
+	harness.sha = _git(harness.root, "rev-parse", "HEAD")
+	results = _run_all(harness, FAKE_ENGINE_EXTRA_FILE=".github/workflows/fixed.yml")
+	assert [r.returncode for r in results] == [0, 0, 0, 0], [r.stdout + r.stderr for r in results]
+	lint = (harness.logs / "lint.log").read_text(encoding="utf-8").splitlines()
+	assert f"yamllint -s -c {harness.root / '.yamllint.yml'} -- .github/workflows/fixed.yml" in lint
+	assert not any(line.startswith("yamllint ") and "-d default" in line for line in lint)
+
+
 def test_automerge_failure_keeps_pr_and_escalates(harness: Harness) -> None:
 	results = _run_all(harness, FAKE_MERGE_RC="1")
 	assert results[-1].returncode == 1

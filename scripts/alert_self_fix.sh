@@ -375,17 +375,31 @@ asf_verify()
 		esac
 	done < "${changed}"
 	# The static checks of ci.yml the pre-push gate does not run (it covers
-	# ruff and shellcheck): `yamllint -s` with the default configuration (the
-	# repository has no yamllint config, so ci.yml's `yamllint -s` uses the
-	# same rules) and `actionlint -shellcheck=`. Both only parse. A tool
-	# missing on the runner fails closed when it has files to check: the
-	# workflow's "Install actionlint" and "Install yamllint" steps provide
-	# them, and
-	# break-glass condition 5 never runs these checks.
+	# ruff and shellcheck): `yamllint -s` and `actionlint -shellcheck=`. Both
+	# only parse. ci.yml's `yamllint -s` picks up the repository's yamllint
+	# config, so verify uses the trusted checkout's config (never the edited
+	# tree's; the lint_config guard above refuses tree changes to it) and
+	# falls back to `-d default` only when the trusted checkout has none.
+	# A tool missing on the runner fails closed when it has files to check:
+	# the workflow's "Install actionlint" and "Install yamllint" steps provide
+	# them, and break-glass condition 5 never runs these checks.
+	local yamllint_cfg="" cfg_candidate=""
+	# The files yamllint itself looks for, in its own order.
+	for cfg_candidate in "${ASF_REPO_ROOT}/.yamllint" "${ASF_REPO_ROOT}/.yamllint.yaml" "${ASF_REPO_ROOT}/.yamllint.yml"; do
+		if [ -f "${cfg_candidate}" ] && [ ! -L "${cfg_candidate}" ]; then
+			yamllint_cfg="${cfg_candidate}"
+			break
+		fi
+	done
 	if [ "${#yaml_lint_files[@]}" -gt 0 ]; then
 		command -v yamllint >/dev/null 2>&1 || _asf_fail verify failed yamllint_unavailable
-		(cd "${ASF_TREE}" && yamllint -s -d default -- "${yaml_lint_files[@]}") >/dev/null 2>&1 \
-			|| _asf_fail verify failed yamllint
+		if [ -n "${yamllint_cfg}" ]; then
+			(cd "${ASF_TREE}" && yamllint -s -c "${yamllint_cfg}" -- "${yaml_lint_files[@]}") >/dev/null 2>&1 \
+				|| _asf_fail verify failed yamllint
+		else
+			(cd "${ASF_TREE}" && yamllint -s -d default -- "${yaml_lint_files[@]}") >/dev/null 2>&1 \
+				|| _asf_fail verify failed yamllint
+		fi
 	fi
 	if [ "${#workflow_lint_files[@]}" -gt 0 ]; then
 		command -v actionlint >/dev/null 2>&1 || _asf_fail verify failed actionlint_unavailable
