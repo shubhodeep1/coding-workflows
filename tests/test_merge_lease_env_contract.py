@@ -121,7 +121,9 @@ def _literal_has_comment(text: str, key: str, literal: str) -> bool:
 	hits = [i for i, line in enumerate(lines) if pattern.match(line)]
 	if not hits:
 		return False
-	return all(i > 0 and lines[i - 1].strip().startswith("#") for i in hits)
+	# The comment must carry text: a bare `#` names no reason. A line-based
+	# check cannot judge the reason itself, so non-empty text is the bar.
+	return all(i > 0 and lines[i - 1].strip().startswith("#") and lines[i - 1].strip().lstrip("#").strip() for i in hits)
 
 
 def violations(files: dict[str, str], defaults: dict[str, str]) -> list[str]:
@@ -255,10 +257,10 @@ class MergeLeaseEnvContractTest(unittest.TestCase):
 		text = _fixture(self._full(override={"MERGE_LEASE_TTL_MINUTES": f"${{{{ vars.OTHER || '{self.defaults['MERGE_LEASE_TTL_MINUTES']}' }}}}"}))
 		self.assertEqual(len(violations({"f.yml": text}, self.defaults)), 1)
 
-	def _soft_paths_none(self, comment: bool) -> str:
+	def _soft_paths_none(self, comment: bool, comment_text: str = "Soft path class off: the base sync treats clean and overlap alike.") -> str:
 		lines = self._full(drop=("MERGE_LEASE_SOFT_PATHS",))
 		if comment:
-			lines += "\n          # Soft path class off: the base sync treats clean and overlap alike."
+			lines += ("\n          # " + comment_text).rstrip()
 		lines += "\n          MERGE_LEASE_SOFT_PATHS: none"
 		return lines
 
@@ -268,6 +270,12 @@ class MergeLeaseEnvContractTest(unittest.TestCase):
 
 	def test_fixture_soft_paths_none_without_comment_fails(self) -> None:
 		text = _fixture(self._soft_paths_none(comment=False), step_name="Ensure the final CI run on reviewed PR heads")
+		found = violations({"review_autofix_sweep.yml": text}, self.defaults)
+		self.assertEqual(len(found), 1, found)
+		self.assertIn("needs a # comment", found[0])
+
+	def test_fixture_soft_paths_none_with_bare_comment_fails(self) -> None:
+		text = _fixture(self._soft_paths_none(comment=True, comment_text=""), step_name="Ensure the final CI run on reviewed PR heads")
 		found = violations({"review_autofix_sweep.yml": text}, self.defaults)
 		self.assertEqual(len(found), 1, found)
 		self.assertIn("needs a # comment", found[0])
