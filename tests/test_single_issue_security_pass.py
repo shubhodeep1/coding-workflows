@@ -35,6 +35,16 @@ with open(os.environ["FAKE_GH_LOG"], "a") as log:
 args = sys.argv[1:]
 fail = os.environ.get("FAKE_GH_FAIL", "")
 if args[:2] == ["workflow", "run"]:
+	# Issue #10104: entry n is the stderr of the n-th dispatch (null succeeds);
+	# calls past the end reuse the last entry.
+	if os.environ.get("FAKE_GH_DISPATCH_ERRORS"):
+		errors = json.loads(os.environ["FAKE_GH_DISPATCH_ERRORS"])
+		n = sum(json.loads(line)[:2] == ["workflow", "run"] for line in open(os.environ["FAKE_GH_LOG"]))
+		error = errors[min(n, len(errors)) - 1]
+		if error is None:
+			sys.exit(0)
+		sys.stderr.write(error)
+		sys.exit(1)
 	if "reject_delta_inputs" in fail and any(arg.startswith(("audit_diff_since=", "prior_findings=")) for arg in args):
 		sys.exit(1)
 	sys.exit(1 if "dispatch" in fail else 0)
@@ -233,7 +243,10 @@ def _run(tmp_path: Path, mode: str, pr: dict | None = None, comments: list | Non
 		run_env.pop(name, None)
 	for name in ("FAKE_GH_RUNS", "SECURITY_PASS_MAX_AUDIT_ATTEMPTS", "SECURITY_PASS_MAX_CONCURRENT_AUDITS", "SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES"):
 		run_env.pop(name, None)
+	for name in ("FAKE_GH_DISPATCH_ERRORS", "SECURITY_PASS_DISPATCH_RETRIES", "SECURITY_PASS_DISPATCH_RETRY_DELAY_SECS"):
+		run_env.pop(name, None)
 	run_env["SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS"] = "0"
+	run_env["SECURITY_PASS_DISPATCH_RETRY_DELAY_SECS"] = "0"
 	# The pass defaults to off; tests that exercise it opt in, and None unsets a name.
 	run_env["SINGLE_ISSUE_SECURITY_PASS_ENABLED"] = "true"
 	run_env.update(env or {})
@@ -1031,6 +1044,12 @@ def test_review_wiring() -> None:
 	assert _steps(REVIEW, "codex-agent")["Review-blocked judge decision"]["env"]["SECURITY_PASS_PENDING_MARKER_ATTEMPTS"] == gate["env"]["SECURITY_PASS_PENDING_MARKER_ATTEMPTS"]
 	assert _steps(REVIEW, "codex-agent")["Review-blocked judge decision"]["env"]["SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS"] == gate["env"]["SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS"]
 	assert _steps(REVIEW, "codex-agent")["Review-blocked judge decision"]["env"]["SECURITY_PASS_FOLLOWUP_STALE_HOURS"] == gate["env"]["SECURITY_PASS_FOLLOWUP_STALE_HOURS"]
+	# Issue #10104: the in-run dispatch retry settings reach every gate step.
+	assert gate["env"]["SECURITY_PASS_DISPATCH_RETRIES"] == "${{ vars.SECURITY_PASS_DISPATCH_RETRIES || '2' }}"
+	assert gate["env"]["SECURITY_PASS_DISPATCH_RETRY_DELAY_SECS"] == "${{ vars.SECURITY_PASS_DISPATCH_RETRY_DELAY_SECS || '20' }}"
+	for name in ("SECURITY_PASS_DISPATCH_RETRIES", "SECURITY_PASS_DISPATCH_RETRY_DELAY_SECS"):
+		assert _steps(REVIEW, "codex-agent")["Review-blocked judge decision"]["env"][name] == gate["env"][name]
+		assert _steps(REVIEW, "deterministic-skip-merge")["Single-issue security pass (deterministic skip)"]["env"][name] == gate["env"][name]
 	assert gate["env"]["SECURITY_PASS_AUTHOR_LOGIN_FALLBACK"] == "${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}"
 	assert gate["if"] == steps["Enable auto-merge on PR"]["if"].replace(" && steps.single_issue_security_pass.outputs.hold != 'true'", "")
 	for name in ("Enable auto-merge on PR", "Mark linked issues ready to merge"):
@@ -1113,6 +1132,7 @@ def _run_skip_step(tmp_path: Path, comments: list | None = None, pr: dict | None
 		DEFAULT_BRANCH="main",
 		SINGLE_ISSUE_SECURITY_PASS_ENABLED="true",
 		SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS="0",
+		SECURITY_PASS_DISPATCH_RETRY_DELAY_SECS="0",
 		DET_SKIP_SECURITY_PASS_RETRY_SLEEP_SECS="0",
 		DET_SKIP_SECURITY_PASS_PR_JSON=json.dumps(pr or _pr()),
 		DET_SKIP_SECURITY_PASS_SUPPORT_DIR=str(support),
@@ -1402,6 +1422,151 @@ def test_double_dispatch_failure_takes_the_dispatch_failed_path(tmp_path: Path) 
 	assert "outcome=delta_fallback" in result.stdout and len(_audit_dispatches(calls)) == 2
 	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
 	assert posted[-1][-1].endswith(_marker("failed", HEAD, 2))
+
+
+# Issue #10104: record why the audit dispatch failed and retry transient failures.
+WRAPPER_HINT = "predates the `pr_number` input"
+RATE_LIMIT_403 = "HTTP 403: API rate limit exceeded for installation ID 1. (https://api.github.com/repos/o/r/actions/workflows/security-audit.yml/dispatches)"
+
+
+def _dispatch_errors(*errors: str | None) -> dict:
+	return {"FAKE_GH_DISPATCH_ERRORS": json.dumps(list(errors))}
+
+
+def _posted(calls: list) -> list:
+	return [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+
+
+def test_a_transient_dispatch_failure_is_retried_in_the_same_run(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "gate", env=_dispatch_errors("HTTP 502: Bad Gateway", None))
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert len(_audit_dispatches(calls)) == 2
+	assert "outcome=dispatch_retry attempt=1 dispatch_error=server_error" in result.stdout
+	assert "outcome=dispatched cycle=1" in result.stdout and "dispatch_attempts=2" in result.stdout
+	assert "::warning::security-audit dispatch attempt 1 failed (dispatch_error=server_error): HTTP 502: Bad Gateway" in result.stdout
+	posted = _posted(calls)
+	assert len(posted) == 1 and posted[0][-1].endswith(_marker("pending", HEAD, 1))
+	assert not any(_marker("failed", HEAD, 1) in call[-1] for call in posted)
+
+
+def test_a_first_attempt_dispatch_logs_no_attempt_count(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "gate")
+	assert output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert "outcome=dispatched" in result.stdout and "dispatch_attempts=" not in result.stdout
+
+
+def test_a_rate_limited_dispatch_failure_records_the_class_and_the_cycle(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "gate", env=_dispatch_errors(RATE_LIMIT_403))
+	assert result.returncode == 0 and output == "hold=true\nhold_reason=dispatch_failed\n"
+	assert len(_audit_dispatches(calls)) == 3
+	assert "outcome=hold reason=dispatch_failed workflow=ai-security-audit.yml cycle=1 dispatch_error=rate_limited" in result.stdout
+	posted = _posted(calls)
+	assert len(posted) == 1 and posted[0][-1].endswith(_marker("failed", HEAD, 1))
+	assert "The error class is `rate_limited`: a GitHub API rate limit." in posted[0][-1]
+	assert WRAPPER_HINT not in posted[0][-1] and "api.github.com" not in posted[0][-1]
+
+
+def test_a_rejected_dispatch_is_not_retried_and_keeps_the_wrapper_hint(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "gate", env=_dispatch_errors("HTTP 422: Unexpected inputs provided: [\"pr_number\"]"))
+	assert output == "hold=true\nhold_reason=dispatch_failed\n"
+	assert len(_audit_dispatches(calls)) == 1 and "outcome=dispatch_retry" not in result.stdout
+	assert "reason=dispatch_failed workflow=ai-security-audit.yml cycle=1 dispatch_error=rejected" in result.stdout
+	body = _posted(calls)[0][-1]
+	assert "The error class is `rejected`: GitHub rejected the workflow, ref or inputs." in body and WRAPPER_HINT in body
+
+
+@pytest.mark.parametrize(
+	"error, expected",
+	[
+		("HTTP 429: Too Many Requests", "rate_limited"),
+		("HTTP 403: You have exceeded a secondary rate limit", "rate_limited"),
+		("HTTP 403: Resource not accessible by integration", "auth"),
+		("HTTP 401: Bad credentials", "auth"),
+		("HTTP 404: Not Found", "rejected"),
+		("could not find any workflows named security-audit.yml", "rejected"),
+		("HTTP 409: Conflict", "other"),
+		("", "other"),
+		("dial tcp: lookup api.github.com: no such host", "network"),
+	],
+)
+def test_dispatch_error_classes(tmp_path: Path, error: str, expected: str) -> None:
+	result, calls, output = _run(tmp_path, "gate", env={**_dispatch_errors(error), "SECURITY_PASS_DISPATCH_RETRIES": "0"})
+	assert output == "hold=true\nhold_reason=dispatch_failed\n"
+	assert f"dispatch_error={expected}" in result.stdout and len(_audit_dispatches(calls)) == 1
+
+
+def test_zero_dispatch_retries_make_one_attempt(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "gate", env={**_dispatch_errors("HTTP 502: Bad Gateway", None), "SECURITY_PASS_DISPATCH_RETRIES": "0"})
+	assert output == "hold=true\nhold_reason=dispatch_failed\n"
+	assert len(_audit_dispatches(calls)) == 1 and "outcome=dispatch_retry" not in result.stdout
+	assert "reason=dispatch_failed workflow=ai-security-audit.yml cycle=1 dispatch_error=server_error" in result.stdout
+
+
+@pytest.mark.parametrize(
+	"settings, warning",
+	[
+		({"SECURITY_PASS_DISPATCH_RETRIES": "abc"}, "::warning::SECURITY_PASS_DISPATCH_RETRIES is not a whole number from 0 to 5; using the default 2."),
+		({"SECURITY_PASS_DISPATCH_RETRIES": "99"}, "::warning::SECURITY_PASS_DISPATCH_RETRIES is not a whole number from 0 to 5; using the default 2."),
+	],
+)
+def test_invalid_dispatch_retry_settings_fall_back_to_the_default(tmp_path: Path, settings: dict, warning: str) -> None:
+	result, calls, output = _run(tmp_path, "gate", env={**_dispatch_errors("HTTP 502: Bad Gateway"), **settings})
+	assert warning in result.stdout and "abc" not in result.stdout.split(warning)[0][-40:]
+	assert output == "hold=true\nhold_reason=dispatch_failed\n" and len(_audit_dispatches(calls)) == 3
+
+
+def test_an_invalid_dispatch_retry_delay_falls_back_to_the_default(tmp_path: Path) -> None:
+	# Zero retries, so the fallback delay of 20 seconds is never slept.
+	result, calls, output = _run(tmp_path, "gate", env={**_dispatch_errors("HTTP 502: Bad Gateway"), "SECURITY_PASS_DISPATCH_RETRIES": "0", "SECURITY_PASS_DISPATCH_RETRY_DELAY_SECS": "99"})
+	assert "::warning::SECURITY_PASS_DISPATCH_RETRY_DELAY_SECS is not a whole number from 0 to 60; using the default 20." in result.stdout
+	assert len(_audit_dispatches(calls)) == 1
+
+
+def test_the_dispatch_error_warning_never_carries_a_token(tmp_path: Path) -> None:
+	job_token = "s3cretJobTokenValue0123456789"
+	classic = "ghp_" + "A1b2C3d4E5" * 4
+	fine_grained = "github_pat_" + "11ABCDEFG0" * 6
+	jwt = "eyJ" + "hbGciOiJSUzI1NiJ9" * 2 + ".eyJzdWIiOiIxIn0.sig"
+	error = (
+		f"HTTP 502: upstream said token={job_token} auth={classic}\n::error::injected {fine_grained} "
+		f"https://user:{job_token}@example.com Authorization: Bearer abc.def {jwt} " + "x" * 300
+	)
+	result, calls, output = _run(tmp_path, "gate", env={**_dispatch_errors(error), "SECURITY_PASS_DISPATCH_RETRIES": "0", "GH_TOKEN": job_token})
+	text = result.stdout + result.stderr
+	for secret in (job_token, classic, fine_grained, classic[4:], fine_grained[11:], "abc.def", "hbGciOiJSUzI1NiJ9"):
+		assert secret not in text
+	assert not any(line.startswith("::error::injected") for line in text.splitlines())
+	warnings = [line for line in result.stdout.splitlines() if line.startswith("::warning::security-audit dispatch attempt 1 failed")]
+	assert len(warnings) == 1
+	excerpt = warnings[0].split("(dispatch_error=server_error): ", 1)[1]
+	assert 0 < len(excerpt) <= 200 and "[redacted]" in excerpt
+	assert job_token not in _posted(calls)[0][-1] and "upstream said" not in _posted(calls)[0][-1]
+
+
+def test_an_exhausted_retry_dispatch_failure_logs_the_error_class(tmp_path: Path) -> None:
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("failed", HEAD, 5))], env=_dispatch_errors("HTTP 503: Service Unavailable"))
+	assert output == "hold=true\nhold_reason=dispatch_failed\n"
+	assert "reason=dispatch_failed_exhausted cycle=6 dispatch_error=server_error" in result.stdout
+	assert len(_audit_dispatches(calls)) == 3
+	body = _posted(calls)[0][-1]
+	assert body.endswith(_marker("failed", HEAD, 6)) and "The error class is `server_error`: a GitHub server error." in body
+
+
+def test_delta_fallback_shares_the_dispatch_retry_budget(tmp_path: Path) -> None:
+	comments = [_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5, age_hours=2)]
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env=_dispatch_errors("HTTP 422: Unexpected inputs", "HTTP 502: Bad Gateway", None))
+	assert output == "hold=true\nhold_reason=audit_dispatched\n"
+	assert "outcome=delta_fallback reason=dispatch_rejected" in result.stdout and "dispatch_attempts=3" in result.stdout
+	assert _audit_dispatches(calls) == [LEGACY_DISPATCH + ["-f", f"audit_diff_since={OLD}", "-f", "prior_findings=5"], LEGACY_DISPATCH, LEGACY_DISPATCH]
+
+
+def test_delta_fallback_stops_when_the_shared_budget_is_used(tmp_path: Path) -> None:
+	comments = [_comment(_findings_result(OLD, 1, [_prior_finding()]), comment_id=5, age_hours=2)]
+	# Delta: 502, 502, 502 uses both retries; the plain fallback then gets one call.
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env=_dispatch_errors("HTTP 502: Bad Gateway"))
+	assert output == "hold=true\nhold_reason=dispatch_failed\n"
+	assert len(_audit_dispatches(calls)) == 4 and result.stdout.count("outcome=dispatch_retry") == 2
+	assert "dispatch_error=server_error" in result.stdout
 
 
 def _delta(tmp_path: Path, comments: list, env: dict | None = None):
