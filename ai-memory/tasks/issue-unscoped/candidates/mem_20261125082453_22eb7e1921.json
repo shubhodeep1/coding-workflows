@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_stage_switch_registry.py:263-265 (_collect_logs_steps_text stdlib fallback path, test_watch_steps_are_wired_in_collect_logs) | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The stdlib fallback parser's nested-mapping regex only matches eight-space keys (`^        ([A-Za-z0-9_-]+):`), but the actions/cache `with:` keys in the workflow are indented ten spaces, so under the fallback `lookup[\"with\"]`/`save[\"with\"]` are never populated and the assertions at lines 263-265 behave differently than under PyYAML.\n  WHY: When PyYAML is absent (the sandbox test environment), the with-key assertions fail or silently skip, diverging from the CI (PyYAML) result; the reviewer graded it NIT (mapped to low) and notes it is pre-existing, not part of the last-run diff.\n- scripts/stage_switch_watch.sh:155 (`read -r off_count waiting_count on_purpose_count alert_count <<< \"${counts:-0 0 0 0}\"`, stage_switch_report) | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  PROBLEM: If the counts-extraction jq call fails or returns a partial string, `counts` defaults to `0 0 0 0` (or leaves trailing fields empty), so the code proceeds with `alert_count=0` and skips the alert loop.\n  WHY: Both reviewers say this is safe and consistent with the warning that alerts are skipped and no day marker is written, so a later run retries; no runtime failure is demonstrable (both graded NIT, mapped to low; confidence 4 vs 1).\n- scripts/stage_switch_watch.sh:208-209 (`mkdir -p \"${stage_switch_alert_marker_dir}\" && date -u +%F > \"${stage_switch_alert_marker_dir}/day.txt\"`) | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Writing the day marker is not atomic with sending the Telegram alert.\n  WHY: The reviewer says the script already warns that a partly delivered run might resend alerts the next day, and the actions/cache step `Record today's stage switch alert` keeps runs idempotent, so the code follows the documented design (graded NIT, mapped to low).\n- scripts/stage_switch_watch.py:_parse_wait_hours | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_warn` could emit a warning for a value that is valid but fails `re.fullmatch(r\"\\d+(?:\\.\\d+)?\", value)`, for example because of unstripped whitespace.\n  WHY: The reviewer says `str(text).strip()` handles basic whitespace and the logic looks correct (graded NIT, mapped to low).\n- .github/workflows/workflow-log-analysis.yml:step \"Look up today's stage switch alert\" (if-condition `steps.stage_switch_read.outputs.day != ''`) | severity=low | confidence=1\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The read step writes `day=` to GITHUB_OUTPUT before any outcome is known (stage_switch_watch.sh:55, `echo \"day=$(date -u +%F)\" >> ...`), so `day != ''` is true even when the read fails.\n  WHY: The guard also requires `snapshot_ready == 'true'`, so the reviewer says it is correct as written with no defect (graded NIT, mapped to low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/stage_switch_watch.py:_parse_wait_hours function | severity=NIT | confidence=4\n  PROBLEM: The function accepts floats via `re.fullmatch(r\"\\d+(?:\\.\\d+)?\", value)`, which is correct, but `_warn` could fire for a valid value if the regex fails on unstripped whitespace.\n  WHY: The reviewer says `str(text).strip()` handles basic whitespace and the logic seems correct.\n- scripts/stage_switch_watch.sh:208-209 (`mkdir -p \"${stage_switch_alert_marker_dir}\" && date -u +%F > \"${stage_switch_alert_marker_dir}/day.txt\"`) | severity=NIT | confidence=4\n  PROBLEM: Writing the day marker is not atomic with sending the Telegram alert.\n  WHY: The script warns about possible resends after a partly delivered run, and the actions/cache step (`Record today's stage switch alert`) keeps runs idempotent, so this follows the documented design.\n- scripts/stage_switch_watch.sh:155 (`read -r off_count waiting_count on_purpose_count alert_count <<< \"${counts:-0 0 0 0}\"`) | severity=NIT | confidence=4\n  PROBLEM: If `counts` is empty (for example, jq fails), it defaults to `0 0 0 0` and the alert loop is skipped with `alert_count=0`.\n  WHY: The reviewer says this is safe and matches the design to skip when counts cannot be parsed.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_stage_switch_registry.py:_collect_logs_steps_text (stdlib fallback path), test_watch_steps_are_wired_in_collect_logs; assertions at tests/test_stage_switch_registry.py:263-265 | severity=NIT | confidence=2\n  PROBLEM: The fallback reader's nested-mapping regex only matches eight-space keys (`^        ([A-Za-z0-9_-]+):`), but the actions/cache `with:` keys are indented ten spaces (`          key: ...`, `          path: ...`), so `lookup[\"with\"]`/`save[\"with\"]` are never populated without PyYAML.\n  WHY: When PyYAML is absent (the PR-head sandbox), the with-key assertions (`lookup[\"with\"][\"key\"] == save[\"with\"][\"key\"] == \"stage-switch-off-alert-${{ ... }}\"`) fail or silently skip, diverging from CI; the reviewer notes this is pre-existing (the last-run diff only added a comment).\n- scripts/stage_switch_watch.sh:stage_switch_report, `read -r off_count waiting_count on_purpose_count alert_count <<< \"${counts:-0 0 0 0}\"` after a partial jq failure | severity=NIT | confidence=1\n  PROBLEM: When jq fails or returns a partial string, `alert_count` is 0 or empty, and `[ \"${alert_count:-0}\" != \"0\" ]` falls back to the default.\n  WHY: The reviewer verified this against the code: it matches the warning (\"alerts are skipped this run (no day marker is written, so a later run retries)\") and has no demonstrable runtime failure.\n- .github/workflows/workflow-log-analysis.yml:step \"Look up today's stage switch alert\", if-condition `steps.stage_switch_read.outputs.day != ''` | severity=NIT | confidence=1\n  PROBLEM: The read step writes `day=` first (stage_switch_watch.sh:55, `echo \"day=$(date -u +%F)\" >> ...`), so `day != ''` is true even when the read fails.\n  WHY: The guard also requires `snapshot_ready == 'true'`, so the reviewer says it is correct as written with no defect.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5838a99d26cb4300950d6f87e942dd316166e15200366e525ab3ff2a97874c66",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9999,
+    "run_id": "45552464821",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45552464821",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125082453_22eb7e1921",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9999,
+    "run_id": "45552464821"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T08:24:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
