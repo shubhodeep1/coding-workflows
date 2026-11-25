@@ -70,6 +70,11 @@ if args[:1] == ["api"]:
     if path.endswith("/comments"):
         state.setdefault("comments", []).append([path, fields.get("body", "")])
         respond({})
+    if "/actions/runs?status=queued" in path and "created=" in path:
+        state.setdefault("wedged_queries", []).append(path)
+        if state.get("wedged_error"):
+            save(); sys.stderr.write("HTTP 503\n"); sys.exit(1)
+        respond({"total_count": state.get("wedged_runs", 0), "workflow_runs": []})
     if "/actions/runs?status=queued" in path:
         if state.get("queued_error"):
             save(); sys.stderr.write("HTTP 503\n"); sys.exit(1)
@@ -375,6 +380,29 @@ def test_compare_identical_counts_as_up_to_date() -> None:
 	assert not state.get("dispatches")
 
 
+def _hours_ago(hours: int) -> str:
+	from datetime import datetime, timedelta, timezone
+	return (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def test_wedged_queued_gate_run_does_not_hold_the_release() -> None:
+	"""Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is not in flight."""
+	wedged = {"id": 43095142301, "status": "queued", "conclusion": None, "head_sha": TIP, "head_branch": "stable",
+		"path": ".github/workflows/test-and-mark-stable.yml", "created_at": _hours_ago(25)}
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[wedged]))
+	assert proc.returncode == 0, proc.stderr
+	assert f"AUTO_RELEASE_DISPATCHED sha={TIP}" in proc.stdout
+	assert "ZOMBIE_RUN_IGNORED run=43095142301 workflow=.github/workflows/test-and-mark-stable.yml age_h=25 guard=auto_release_gate" in proc.stderr
+	fresh = dict(wedged, id=7, created_at=_hours_ago(23))
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[wedged, fresh]))
+	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight active_runs=1" in proc.stdout
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, state = _run(Path(tmp), _state(tag_commit="3" * 40, runs=[wedged]), env={"ZOMBIE_RUN_MAX_QUEUED_HOURS": "0"})
+	assert "AUTO_RELEASE_SKIPPED reason=release_in_flight active_runs=1" in proc.stdout
+
+
 # --- Release-blocker reporters (stuck-states P4 / release-blocker Phase 2a) ---
 
 
@@ -635,7 +663,7 @@ def test_retry_waits_while_the_queue_is_deep_after_a_recent_failed_gate() -> Non
 		with tempfile.TemporaryDirectory() as tmp:
 			proc, final = _run(Path(tmp), state)
 		assert proc.returncode == 0, proc.stderr
-		assert f"AUTO_RELEASE_SKIPPED reason=runner_queue_deep sha={TIP} queued=375 max=100 last_run={GATE_RUN} last_age_hours=3 window_hours=24" in proc.stdout
+		assert f"AUTO_RELEASE_SKIPPED reason=runner_queue_deep sha={TIP} queued=375 wedged=0 max=100 last_run={GATE_RUN} last_age_hours=3 window_hours=24" in proc.stdout
 		assert not final.get("dispatches")
 		assert "dispatched=false" in final["github_output"]
 
@@ -645,7 +673,85 @@ def test_retry_goes_ahead_once_the_queue_has_drained() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final = _run(Path(tmp), state)
 	assert proc.returncode == 0, proc.stderr
-	assert f"AUTO_RELEASE_QUEUE_CHECK outcome=clear queued=99 max=100 last_run={GATE_RUN} last_age_hours=3" in proc.stdout
+	assert f"AUTO_RELEASE_QUEUE_CHECK outcome=clear queued=99 wedged=0 max=100 last_run={GATE_RUN} last_age_hours=3" in proc.stdout
+	assert len(final["dispatches"]) == 1
+
+
+# Issue #10032: wedged queued runs (older than ZOMBIE_RUN_MAX_QUEUED_HOURS) are
+# not load, so the back-off compares only live queued runs with the limit.
+
+
+def _queued_reads(state: dict) -> list[str]:
+	return [path for path in _api_paths(state) if "status=queued" in path]
+
+
+def test_queue_back_off_leaves_wedged_runs_out_of_the_count() -> None:
+	state = _state(tag_commit="3" * 40, runs=[_queue_failed_gate()], queued_runs=245, wedged_runs=240)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, env={"ZOMBIE_RUN_MAX_QUEUED_HOURS": "24"})
+	assert proc.returncode == 0, proc.stderr
+	assert f"AUTO_RELEASE_QUEUE_CHECK outcome=clear queued=5 wedged=240 max=100 last_run={GATE_RUN} last_age_hours=3" in proc.stdout
+	assert len(final["dispatches"]) == 1
+	reads = _queued_reads(final)
+	assert len(reads) == 2, reads
+	assert "created=" not in reads[0]
+	assert len(final["wedged_queries"]) == 1
+	query = final["wedged_queries"][0]
+	assert "per_page=1" in query and "created=%3C%3D" in query
+	cutoff = datetime.strptime(query.split("created=%3C%3D", 1)[1], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+	expected = datetime.now(timezone.utc) - timedelta(hours=24)
+	assert abs((cutoff - expected).total_seconds()) < 300
+
+
+def test_queue_back_off_still_holds_on_live_runs_over_the_limit() -> None:
+	state = _state(tag_commit="3" * 40, runs=[_queue_failed_gate()], queued_runs=150, wedged_runs=10)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, env={"ZOMBIE_RUN_MAX_QUEUED_HOURS": "24"})
+	assert proc.returncode == 0, proc.stderr
+	assert f"AUTO_RELEASE_SKIPPED reason=runner_queue_deep sha={TIP} queued=140 wedged=10 max=100 last_run={GATE_RUN} last_age_hours=3 window_hours=24" in proc.stdout
+	assert not final.get("dispatches")
+	assert "dispatched=false" in final["github_output"]
+
+
+def test_queue_under_the_limit_reads_the_total_only() -> None:
+	state = _state(tag_commit="3" * 40, runs=[_queue_failed_gate()], queued_runs=99, wedged_runs=90)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, env={"ZOMBIE_RUN_MAX_QUEUED_HOURS": "24"})
+	assert proc.returncode == 0, proc.stderr
+	assert f"AUTO_RELEASE_QUEUE_CHECK outcome=clear queued=99 wedged=0 max=100 last_run={GATE_RUN}" in proc.stdout
+	assert len(_queued_reads(final)) == 1
+	assert not final.get("wedged_queries")
+	assert len(final["dispatches"]) == 1
+
+
+def test_wedged_filter_off_compares_the_raw_count() -> None:
+	for hours in ("0", "soon"):
+		state = _state(tag_commit="3" * 40, runs=[_queue_failed_gate()], queued_runs=375, wedged_runs=370)
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, final = _run(Path(tmp), state, env={"ZOMBIE_RUN_MAX_QUEUED_HOURS": hours})
+		assert proc.returncode == 0, (hours, proc.stderr)
+		assert f"AUTO_RELEASE_SKIPPED reason=runner_queue_deep sha={TIP} queued=375 wedged=0 max=100" in proc.stdout, hours
+		assert len(_queued_reads(final)) == 1, hours
+		assert not final.get("wedged_queries"), hours
+		assert not final.get("dispatches"), hours
+
+
+def test_wedged_count_read_failure_fails_open() -> None:
+	state = _state(tag_commit="3" * 40, runs=[_queue_failed_gate()], queued_runs=375, wedged_error=True)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, env={"ZOMBIE_RUN_MAX_QUEUED_HOURS": "24"})
+	assert proc.returncode == 0, proc.stderr
+	assert f"AUTO_RELEASE_QUEUE_CHECK outcome=read_failed lookup=wedged_runs last_run={GATE_RUN}" in proc.stdout
+	assert "reason=runner_queue_deep" not in proc.stdout
+	assert len(final["dispatches"]) == 1
+
+
+def test_wedged_count_is_clamped_to_the_total() -> None:
+	state = _state(tag_commit="3" * 40, runs=[_queue_failed_gate()], queued_runs=245, wedged_runs=400)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, env={"ZOMBIE_RUN_MAX_QUEUED_HOURS": "24"})
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTO_RELEASE_QUEUE_CHECK outcome=clear queued=0 wedged=245 max=100" in proc.stdout
 	assert len(final["dispatches"]) == 1
 
 
@@ -826,3 +932,26 @@ def test_workflow_passes_the_back_off_and_cleanup_knobs() -> None:
 	assert run_step["env"]["AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS"] == "${{ vars.AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS || '24' }}"
 	assert run_step["env"]["AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_ENABLED"] == "${{ vars.AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_ENABLED || 'true' }}"
 	assert run_step["env"]["AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX"] == "${{ vars.AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX || '30' }}"
+
+
+# The wedged-queued guard contract cases (issue #9473) live in
+# tests/test_zombie_queued_guard_contract.py and are collected here, since CI
+# already runs this file and ci.yml was outside that issue's file grant. A
+# name clash would hide a test, so it fails loudly.
+def _collect_zombie_queued_guard_contract_cases() -> None:
+	import importlib.util
+
+	spec = importlib.util.spec_from_file_location(
+		"zombie_queued_guard_contract_cases",
+		Path(__file__).resolve().parent / "test_zombie_queued_guard_contract.py",
+	)
+	cases = importlib.util.module_from_spec(spec)
+	spec.loader.exec_module(cases)
+	for case_name, case in sorted(vars(cases).items()):
+		if not case_name.startswith("test_") or not callable(case):
+			continue
+		assert case_name not in globals(), case_name
+		globals()[case_name] = case
+
+
+_collect_zombie_queued_guard_contract_cases()

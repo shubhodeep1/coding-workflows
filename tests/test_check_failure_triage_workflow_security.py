@@ -1018,8 +1018,15 @@ esac
 				"CHECK_TRIAGE_HISTORICAL_RUN_ID",
 				"CHECK_TRIAGE_HISTORICAL_JOB_ID",
 				"CHECK_TRIAGE_HISTORICAL_REPRO_DIR",
+				# Issue #9812: the final-CI run's display title (dispatch runs only).
+				"CHECK_TRIAGE_RUN_TITLE",
 			},
 		)
+		self.assertEqual(
+			run_env["CHECK_TRIAGE_RUN_TITLE"],
+			"${{ github.event_name == 'workflow_run' && github.event.workflow_run.event == 'workflow_dispatch' && github.event.workflow_run.display_title || '' }}",
+		)
+		self.assertNotIn("CHECK_TRIAGE_RUN_TITLE", _step(triage_job, name="Diagnose check failure")["env"])
 		self.assertNotIn("GH_TOKEN", triage_job.get("env", {}))
 		self.assertNotIn("OPENROUTER_API_KEY", triage_job.get("env", {}))
 		self.assertNotIn("TG_BOT_SECRET", triage_job.get("env", {}))
@@ -1033,8 +1040,15 @@ esac
 		self.assertEqual(diagnose["if"], "${{ steps.collect_triage.outputs.ready == 'true' }}")
 		post = _step(triage_job, name="Post check-failure triage issue")
 		self.assertLess(post["run"].index("triage_post_check_name="), post["run"].index("gh_retry gh issue create"))
-		self.assertIn('--title "CI failure: ${triage_post_check_name} on PR #${PR_NUMBER}"', post["run"])
+		# Issue #9674: the title is built in triage_post_title; the per-PR title
+		# stays the default and a base-keyed issue names its base branch.
+		self.assertIn('triage_post_title="CI failure: ${triage_post_check_name} on PR #${PR_NUMBER}"', post["run"])
+		self.assertIn('triage_post_title="CI failure: ${triage_post_check_name} on ${triage_post_base_ref} (first seen on PR #${PR_NUMBER})"', post["run"])
+		self.assertIn('--title "${triage_post_title}"', post["run"])
+		self.assertLess(post["run"].index("triage_post_check_name="), post["run"].index("triage_post_title="))
 		self.assertNotIn('--title "CI failure: ${CHECK_NAME}', post["run"])
+		self.assertNotIn("CHECK_NAME}", post["run"].split("triage_post_title=", 1)[1].split("--title", 1)[0])
+		self.assertEqual(triage_job["env"]["CHECK_FAILURE_TRIAGE_MAX_OPEN_ISSUES"], "${{ vars.CHECK_FAILURE_TRIAGE_MAX_OPEN_ISSUES || '5' }}")
 		self.assertEqual(post["if"], "${{ steps.diagnose_triage.outputs.ready == 'true' && steps.upstream_route.outputs.routed != 'true' }}")
 		self.assertEqual(post["env"]["GH_TOKEN"], "${{ secrets.CHECK_TRIAGE_ISSUES_TOKEN }}")
 		self.assertIn('cd "${CHECK_TRIAGE_TRUSTED_SUPPORT_DIR:?trusted support is required}"', post["run"])
@@ -1368,6 +1382,11 @@ case "$*" in
     [ -f "${rd_annotation_file}" ] || { echo 'gh: Not Found (HTTP 404)' >&2; exit 1; }
     cat "${rd_annotation_file}" ;;
   "api -i -X POST repos/owner/repo/actions/runs/1/rerun-failed-jobs")
+    rd_rerun_status="${MOCK_RD_RERUN_STATUS:-201}"
+    printf 'HTTP/2.0 %s Mock\\r\\n\\r\\n{"message":"rerun-secret-body"}\\n' "${rd_rerun_status}"
+    [ "${rd_rerun_status}" = 201 ] && exit 0
+    exit "${MOCK_RD_RERUN_EXIT:-1}" ;;
+  "api -i -X POST repos/owner/repo/actions/jobs/"*"/rerun")
     rd_rerun_status="${MOCK_RD_RERUN_STATUS:-201}"
     printf 'HTTP/2.0 %s Mock\\r\\n\\r\\n{"message":"rerun-secret-body"}\\n' "${rd_rerun_status}"
     [ "${rd_rerun_status}" = 201 ] && exit 0
@@ -2257,6 +2276,38 @@ class CheckFailureTriageBaseTrackedTests(unittest.TestCase):
 				self.assertEqual(metadata.get("generation"), "1")
 				self.assertEqual(tracked, {})
 
+	def test_cancelled_pr_job_does_not_make_the_jobs_differ(self) -> None:
+		# Issue #9812: a PR job cancelled by a newer push is not a failure, so
+		# the PR's real failure that main shares is still folded into the heal
+		# issue; a timed_out job keeps counting as failed on either side.
+		for pr_jobs, base_jobs in (
+			(_jobs(("lint", "success"), ("tests (ubuntu)", "failure"), ("e2e", "cancelled")), BASE_JOBS),
+			(_jobs(("tests (ubuntu)", "timed_out"), ("e2e", "cancelled")), _jobs(("tests (ubuntu)", "timed_out"))),
+			(_jobs(("tests (ubuntu)", "failure"), ("e2e", None), ("x", "action_required")), BASE_JOBS),
+		):
+			with self.subTest(pr_jobs=pr_jobs):
+				proc, outputs, _metadata, _calls, tracked = self._collect(
+					TRACKED_BASE, [_heal_issue(9215)], MOCK_PR_JOBS=pr_jobs, MOCK_BASE_JOBS=base_jobs,
+				)
+				self.assertIn("skip reason=base_failure_tracked heal_issue=9215", proc.stdout)
+				self.assertNotIn("failed_jobs_differ", proc.stdout)
+				self.assertEqual(outputs.get("base_failure_tracked"), "9215")
+				self.assertEqual(tracked.get("heal_issue"), "9215")
+
+	def test_timed_out_pr_job_that_main_does_not_fail_still_files(self) -> None:
+		for pr_jobs, base_jobs in (
+			(_jobs(("tests (ubuntu)", "failure"), ("e2e", "timed_out")), BASE_JOBS),
+			# A base job that was only cancelled does not cover a PR failure.
+			(_jobs(("tests (ubuntu)", "failure")), _jobs(("tests (ubuntu)", "cancelled"))),
+		):
+			with self.subTest(pr_jobs=pr_jobs, base_jobs=base_jobs):
+				proc, outputs, _metadata, _calls, tracked = self._collect(
+					TRACKED_BASE, [_heal_issue(9215)], MOCK_PR_JOBS=pr_jobs, MOCK_BASE_JOBS=base_jobs,
+				)
+				self.assertIn("base_tracked outcome=file reason=failed_jobs_differ heal_issue=9215", proc.stdout)
+				self.assertEqual(outputs.get("ready"), "true")
+				self.assertEqual(tracked, {})
+
 	def test_unreadable_jobs_file_as_before(self) -> None:
 		for env in (
 			{"MOCK_PR_JOBS_FAIL": "1"},
@@ -2748,7 +2799,7 @@ class CheckFailureTriageHistoricalModeTests(unittest.TestCase):
 		checkout = _step(triage, step_id="checkout_pr_head")
 		self.assertEqual(checkout["continue-on-error"], "${{ inputs.historical_run_id != '' }}")
 		staging = _step(triage, name="Stage workflow support files")["run"]
-		self.assertIn("clarify_openrouter_broker.py workflow_failure_heal.py; do", staging)
+		self.assertIn("clarify_openrouter_broker.py workflow_failure_heal.py ci_cancelled_rerun.py; do", staging)
 		self.assertIn('"${trusted_dir}/scripts/workflow_failure_heal.py"', staging)
 
 
@@ -3012,14 +3063,18 @@ class CheckFailureTriagePrHeadRoutingTests(unittest.TestCase):
 		self.assertIn("triage_report_routing_unverified\n\t\texit 0", gate)
 		dedup = script_text.split("skip reason=duplicate_open_issue issue=${EXISTING}", 1)[1].split("exit 0", 1)[0]
 		self.assertIn("triage_report_routing_unverified", dedup)
-		# Base-gate skips (success, pending, the #7283 routed-head base and a
-		# base failure an open heal issue tracks) also report an unverified route.
+		# Base-gate skips (success, pending, the #7283 routed-head base, a
+		# base failure an open heal issue tracks and, #9674, an open base-keyed
+		# triage issue) also report an unverified route.
 		base_gate = script_text.split("--- Base-branch gate (#7020)", 1)[1].split("--- Lineage cap / escalation", 1)[0]
-		self.assertEqual(base_gate.count("triage_report_routing_unverified"), 4)
+		self.assertEqual(base_gate.count("triage_report_routing_unverified"), 5)
 		lineage_cap = script_text.split("--- Lineage cap / escalation", 1)[1].split("--- PR-head routing gate", 1)[0]
 		self.assertEqual(lineage_cap.count("triage_report_routing_unverified"), 1)
-		self.assertIn('"${PR_NUMBER}" "${ROUTING_LINE}" "${ROUTING_TARGET_BRANCH}" <<\'PY\'', script_text)
+		self.assertIn('"${PR_NUMBER}" "${ROUTING_LINE}" "${ROUTING_TARGET_BRANCH}" "${BASE_KEYED_REF}" <<\'PY\'', script_text)
 		self.assertLess(script_text.index("# --- PR-head routing gate"), script_text.index("# --- Collect failing check-run context"))
+		# Issue #9674: the open-issue cap runs after the PR-head routing gate, so
+		# an unverified route is still reported when the cap files nothing.
+		self.assertLess(script_text.index("# --- PR-head routing gate"), script_text.index("# --- Open-issue cap (issue #9674)"))
 		triage_env = _workflow()["jobs"]["triage"]["env"]
 		self.assertEqual(
 			triage_env["CHECK_TRIAGE_PR_HEAD_ROUTING_ENABLED"],
@@ -3098,7 +3153,7 @@ def _run_target_branch_diagnose_stage(
 def _run_body_validator(body: str, expected_branch: str) -> str:
 	"""Run the script's final issue-body validator heredoc on ``body``."""
 	script_text = TRIAGE_SCRIPT_PATH.read_text(encoding="utf-8")
-	start_token = '"${ROUTING_TARGET_BRANCH}" <<\'PY\'\n'
+	start_token = '"${ROUTING_TARGET_BRANCH}" "${BASE_KEYED_REF}" <<\'PY\'\n'
 	validator = script_text.split(start_token, 1)[1].split("\nPY\n)\"; then", 1)[0]
 	with tempfile.TemporaryDirectory(prefix="check-triage-validator-") as temp_dir:
 		body_path = Path(temp_dir) / "body.md"
