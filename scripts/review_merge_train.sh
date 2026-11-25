@@ -1891,7 +1891,7 @@ _mt_lease_pr_runs_active()
 #   _merge_lease_pr_eligible says it can no longer merge
 #   (reason=revoked_draft|revoked_skip_ai|revoked_hold_label|
 #   revoked_no_head_gate|revoked_final_ci_failed; revoked_hold_label when it
-#   carries a MERGE_LEASE_HOLD_LABELS label, Refs #9969), or when MERGE_LEASE_IDLE_MINUTES (default 60)
+#   carries a MERGE_LEASE_HOLD_LABELS label, Refs #9969), or when MERGE_LEASE_IDLE_MINUTES (default 180)
 #   have passed since the record's updated=/acquired= and no CI run or
 #   required check is running on its head (reason=revoked_idle). A holder
 #   missing from $1 keeps today's closed-check only.
