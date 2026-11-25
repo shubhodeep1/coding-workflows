@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: G3 \"The gate then stops early, cancels the child runs it started, and the cycle ends with a conclusion the release scripts read as 'no attempt used'.\"\n  expected_change_site: .github/workflows/test-and-mark-stable.yml, workflow-log-analysis-test job\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The job dispatches workflow-log-analysis.yml with --snapshot-only at lines 3713-3724, but the job has no cancellation step for that dispatched run before it ends at line 3760, The PR adds `if: cancelled()` cancel steps to `orphan-workflows-test` (lines 4090-4110), `validate-standalone-test` (lines 4655-4680), `e2e-smoke-test` (lines 3014-3029), `e2e-alt-model-test` (lines 5196-5230), and `clarify-rejects-unsolvable-test` (lines 4906-4934), but not to workflow-log-analysis-test, Previously deferred as a NIT because the child is short-lived (reviewers disagree on severity: gemini NIT, minimax MAJOR, openai NIT)\n- requirement: \"The workflow-failure-heal intake does not file an issue for a gate run whose only failed steps ended as runner_wait.\"\n  expected_change_site: scripts/workflow_failure_heal_intake.sh, runner-wait evidence collection and skip condition\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The intake inspects at most MAX_FAILED_JOBS logs (default 3; lines 375 and 2034-2042), and the skip condition also requires the total failed-job count to be no greater than that cap (lines 2197-2208). If four gate jobs fail only because of runner_wait, the count exceeds the cap, so the intake does not skip and files an issue.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: G3 requires the gate to stop early and cancel the child runs it started.\n  Expected change site: .github/workflows/test-and-mark-stable.yml, specifically the workflow-log-analysis-test job.\n  Evidence of absence: The job dispatches workflow-log-analysis.yml but has no cancellation step for its dispatched run when the gate is cancelled. The other child jobs have explicit cancellation steps. The reviewer previously deferred it as a NIT because the child is short-lived, but it is still an unmet requirement of the original issue.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: G3 \"The gate then stops early, cancels the child runs it started, and the cycle ends with a conclusion the release scripts read as 'no attempt used'.\"\n  Expected change site: `.github/workflows/test-and-mark-stable.yml`, the `workflow-log-analysis-test` job that dispatches `workflow-log-analysis.yml` (referenced in the consensus findings at lines ~3713-3724 of the workflow).\n  Evidence of absence: The PR adds `if: cancelled()` cancel steps to `orphan-workflows-test` (lines 4090-4110), `validate-standalone-test` (lines 4655-4680), `e2e-smoke-test` (lines 3014-3029), `e2e-alt-model-test` (lines 5196-5230), and `clarify-rejects-unsolvable-test` (lines 4906-4934). The `workflow-log-analysis-test` job has no equivalent step. The editor summary for round 5 acknowledged the gap and deferred it. The orchestrate_poll.yml retry step means a late observation of the analysis run is possible, which is the same risk profile as the children that did get cancel steps.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"The workflow-failure-heal intake does not file an issue for a gate run whose only failed steps ended as runner_wait.\"\n  Expected change site: scripts/workflow_failure_heal_intake.sh, runner-wait evidence collection and skip condition.\n  Evidence of absence: The intake inspects at most MAX_FAILED_JOBS logs (default 3; lines 375 and 2034-2042). The skip condition also requires the total failed-job count to be no greater than that cap (lines 2197-2208). If four gate jobs fail only because of runner_wait, the count exceeds the cap, so the intake does not skip and files an issue.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"The gate then stops early, cancels the child runs it started.\"\n  Expected change site: .github/workflows/test-and-mark-stable.yml, workflow-log-analysis-test job.\n  Evidence of absence: The job dispatches workflow-log-analysis.yml with --snapshot-only at lines 3713-3724, but the job has no cancellation step for that dispatched run before it ends at line 3760. If the gate stops while that run remains queued or running, the run continues independently.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ddc3a9b777fcac689354f2080e1463c8d962a5b7d80ccf1a09d804dbf05cfa40",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10042,
+    "run_id": "45640245855",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45640245855",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125161847_a2006342cd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10042,
+    "run_id": "45640245855"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T16:18:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
