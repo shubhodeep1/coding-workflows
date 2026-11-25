@@ -188,8 +188,8 @@ def violations(files: dict[str, str], defaults: dict[str, str], optional_default
 						optional_seen.setdefault(key, []).append((where, match.group(2)))
 				elif key not in REQUIRED_KEYS:
 					out.append(
-						f"{where}: unknown merge-lease setting {key}; classify it in REQUIRED_KEYS "
-						"or UNWIRED_KEYS in tests/test_merge_lease_env_contract.py"
+						f"{where}: unknown merge-lease setting {key}; classify it in REQUIRED_KEYS, "
+						"OPTIONAL_KEYS or UNWIRED_KEYS in tests/test_merge_lease_env_contract.py"
 					)
 			# A block that turns on the merge-base freshness gate runs
 			# _pr_base_fresh_for_merge, which can renew a lease, so it needs the
