@@ -118,6 +118,8 @@ jobs:
       AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
       AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       GITHUB_REPOSITORY: ${{ github.repository }}
+      # Polling reads of the heal queue use the job token (issue #9888).
+      GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
       MODEL_EDITOR: ${{ vars.WORKFLOW_HEAL_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
       MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_WORKFLOW_HEAL || 'high' }}
       MODEL_VERBOSITY: ${{ vars.VERBOSITY_WORKFLOW_HEAL || 'low' }}
@@ -436,6 +438,8 @@ jobs:
       AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
       AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       GITHUB_REPOSITORY: ${{ github.repository }}
+      # Polling reads of the heal queue use the job token (issue #9888).
+      GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
       MODEL_EDITOR: ${{ vars.WORKFLOW_HEAL_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
       MODEL_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_WORKFLOW_HEAL || 'high' }}
       MODEL_VERBOSITY: ${{ vars.VERBOSITY_WORKFLOW_HEAL || 'low' }}

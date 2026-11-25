@@ -290,5 +290,137 @@ def test_insert_data_gap_missing_report_exits_2(tmp_path: Path) -> None:
 	assert proc.returncode == 2
 
 
+# --- Reviewer Findings table (Refs #10058) ---
+
+WORKFLOW = REPO_ROOT / ".github" / "workflows" / "workflow-log-analysis.yml"
+RF_MARKER = "<!-- reviewer-findings-table v1 -->"
+
+
+def _rf_context(reviewers=None, review_runs=6, runs_with_lines=4, unavailable_runs=1) -> dict:
+	return {
+		"summary": {},
+		"reviewer_findings": {
+			"review_runs": review_runs,
+			"runs_with_lines": runs_with_lines,
+			"unavailable_runs": unavailable_runs,
+			"unavailable_lines": 3,
+			"reviewers": reviewers if reviewers is not None else [
+				{"reviewer": "google/gemini-4-pro", "runs": 4, "raised": 30, "lone": 20, "lone_rejected": 15, "lone_accepted": 3, "shared": 10},
+				{"reviewer": "x-ai/grok-5", "runs": 3, "raised": 12, "lone": 19, "lone_rejected": 7, "lone_accepted": 2, "shared": 0},
+				{"reviewer": "evil|`name`", "runs": 1, "raised": 1, "lone": 1, "lone_rejected": 1, "lone_accepted": 0, "shared": 0},
+				{"reviewer": "neg/count", "runs": 1, "raised": -1, "lone": 1, "lone_rejected": 1, "lone_accepted": 0, "shared": 0},
+			],
+		},
+	}
+
+
+def _run_insert(tmp_path: Path, report: str | None, context: dict | str | None):
+	report_path = tmp_path / "report.md"
+	if report is not None:
+		report_path.write_text(report, encoding="utf-8")
+	context_path = tmp_path / "analysis_context.json"
+	if isinstance(context, dict):
+		context_path.write_text(json.dumps(context), encoding="utf-8")
+	elif isinstance(context, str):
+		context_path.write_text(context, encoding="utf-8")
+	proc = subprocess.run(
+		[sys.executable, "-I", "-B", str(SCRIPT), "--insert-reviewer-findings", "--context", str(context_path), "--report", str(report_path)],
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+	return proc, report_path
+
+
+def test_insert_reviewer_findings_table_threshold(tmp_path: Path) -> None:
+	report = _report()
+	proc, path = _run_insert(tmp_path, report, _rf_context())
+	assert proc.returncode == 0, proc.stderr
+	text = path.read_text(encoding="utf-8")
+	assert text.startswith(report)
+	section = text[len(report):]
+	assert section.startswith("\n" + RF_MARKER + "\n## Reviewer Findings\n")
+	assert "in 4 of 6 review runs" in section
+	assert "runs reporting outcome=unavailable: 1." in section
+	assert "| Reviewer | Runs | Findings raised | Lone | Lone rejected | Lone accepted |" in section
+	# 20 lone findings: percentages shown.
+	assert "| `google/gemini-4-pro` | 4 | 30 | 20 | 15 (75%) | 3 (15%) |" in section
+	# 19 lone findings: counts only.
+	assert "| `x-ai/grok-5` | 3 | 12 | 19 | 7 | 2 |" in section
+	assert "evil" not in section
+	assert "neg/count" not in section
+	# The structure check still passes: the section is appended after the required headings.
+	proc, _ = _run(tmp_path, text, _collect())
+	assert proc.returncode == 0, proc.stdout
+
+
+def test_insert_reviewer_findings_idempotent_and_fail_open(tmp_path: Path) -> None:
+	report = _report()
+	proc, path = _run_insert(tmp_path, report, _rf_context())
+	assert proc.returncode == 0
+	first = path.read_text(encoding="utf-8")
+	proc, path = _run_insert(tmp_path, first, _rf_context())
+	assert proc.returncode == 0
+	assert path.read_text(encoding="utf-8") == first
+	assert first.count(RF_MARKER) == 1
+
+	# A marker the model wrote is untrusted: warn and still append the code-built table.
+	model_dir = tmp_path / "model_marker"
+	model_dir.mkdir()
+	forged = report + "\n" + RF_MARKER + "\n## Reviewer Findings\n\n| `x-ai/grok-5` | 1 | 99 | 99 | 0 | 99 |\n"
+	proc, path = _run_insert(model_dir, forged, _rf_context())
+	assert proc.returncode == 0
+	assert "already contains the reviewer findings marker" in proc.stderr
+	text = path.read_text(encoding="utf-8")
+	assert text.startswith(forged)
+	assert text.endswith("| `x-ai/grok-5` | 3 | 12 | 19 | 7 | 2 |\n")
+
+	# Invalid or missing context: exit 2, report unchanged.
+	for case_index, bad in enumerate(("{not json", "[1, 2]", None)):
+		target = tmp_path / f"case_{case_index}"
+		target.mkdir()
+		proc, path = _run_insert(target, report, bad)
+		assert proc.returncode == 2
+		assert path.read_text(encoding="utf-8") == report
+		assert "::warning::WORKFLOW_LOG_ANALYSIS_REPORT_CHECK" in proc.stderr
+	missing_dir = tmp_path / "missing_report"
+	missing_dir.mkdir()
+	proc, _ = _run_insert(missing_dir, None, _rf_context())
+	assert proc.returncode == 2
+
+	# A context without reviewer_findings is zero coverage, with a placeholder row.
+	empty_dir = tmp_path / "empty"
+	empty_dir.mkdir()
+	proc, path = _run_insert(empty_dir, report, {"summary": {}})
+	assert proc.returncode == 0
+	text = path.read_text(encoding="utf-8")
+	assert "in 0 of 0 review runs" in text
+	assert "| No REVIEWER_FINDINGS lines in the window | - | - | - | - | - |" in text
+	assert sorted(p.name for p in empty_dir.iterdir()) == ["analysis_context.json", "report.md"]
+
+	# --insert-reviewer-findings needs --context.
+	proc = subprocess.run(
+		[sys.executable, "-I", "-B", str(SCRIPT), "--insert-reviewer-findings", "--report", str(path)],
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+	assert proc.returncode == 2
+
+
+def test_workflow_inserts_reviewer_findings_after_data_gap() -> None:
+	text = WORKFLOW.read_text(encoding="utf-8")
+	call = (
+		'python3 -I -B scripts/check_workflow_analysis_report.py --insert-reviewer-findings'
+		' --context "${ANALYSIS_CONTEXT_FILE}" --report "${REPORT_FILE}"'
+	)
+	assert text.count(call) == 1
+	position = text.index(call)
+	data_gap = text.index('if [ "${wla_logs_missing}" = "true" ]; then\n            if ! python3 -I -B scripts/check_workflow_analysis_report.py --insert-data-gap')
+	report_file = text.index('echo "report_file=${REPORT_FILE}"', data_gap)
+	assert data_gap < position < report_file
+	assert "Could not add the reviewer findings table to the report" in text
+
+
 if __name__ == "__main__":
 	raise SystemExit(pytest.main([__file__, "-q"]))

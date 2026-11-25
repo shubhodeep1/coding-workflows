@@ -39,9 +39,13 @@
 # its child runs wait, so the signal is the queue itself: before a dispatch,
 # when the newest completed stable gate run (cancelled runs aside) failed or
 # timed out less than AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS ago, the script
-# reads the number of queued runs in this repository and skips while it is at
-# or above AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS. The skipped tick spends no
-# attempt. Once the failure is older than the window, one cycle is dispatched
+# reads the number of live queued runs in this repository and skips while it
+# is at or above AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS. Live means queued runs
+# minus those created more than ZOMBIE_RUN_MAX_QUEUED_HOURS ago: GitHub leaves
+# such zero-job runs queued for good and they are not load (issue #10032: 240
+# wedged runs alone kept the check from ever passing). With the filter off
+# (ZOMBIE_RUN_MAX_QUEUED_HOURS 0 or invalid) the raw count is compared. The
+# skipped tick spends no attempt. Once the failure is older than the window, one cycle is dispatched
 # whatever the queue, so a deep queue delays a release (a hotfix on a new tip
 # included) by at most the window (rounded up to the next 6-hour tick) and
 # never holds it for good; if that cycle
@@ -49,7 +53,8 @@
 # counted: `pending` runs wait for a concurrency group, not a runner, and other
 # repositories' queues are not readable from here.
 # Fail-open: an unreadable queue count dispatches as before
-# (AUTO_RELEASE_QUEUE_CHECK outcome=read_failed).
+# (AUTO_RELEASE_QUEUE_CHECK outcome=read_failed lookup=queued_runs, or
+# lookup=wedged_runs when the wedged count cannot be read).
 #
 # Fixture cleanup before a retry: when a completed gate run in the listing
 # (any branch, so the promote cycle's gate_only runs count too) did not
@@ -84,7 +89,8 @@
 # reporters read no extra data: they reuse the run lists, the tag object
 # (`.tagger.date`) and the compare response (commit and base-commit dates).
 # Only when the newest completed stable gate run failed inside the back-off
-# window: +1 queued-runs count. Only when a completed gate run in the listing did not succeed: +1 user
+# window: +1 queued-runs count, and +1 wedged-runs count only when that count
+# is at or above the limit and the wedged filter is on. Only when a completed gate run in the listing did not succeed: +1 user
 # read and +2 searches (open `[E2E` issues, open `[E2E` PRs; the search API
 # needs the type), then 1 PATCH per closed fixture (at most
 # AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX). The gate-run listing already
@@ -136,8 +142,9 @@
 #   RELEASE_BLOCKER_HEAL_PY             default scripts/workflow_failure_heal.py
 #   TG_BOT_SECRET / TG_ADMIN_CHAT_ID    Telegram WARNING when a report is not
 #                                       delivered (no-op when unset)
-#   AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS default 100 (queued runs in the
-#                                       repository at or above which a retry
+#   AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS default 100 (live queued runs in the
+#                                       repository, wedged runs left out,
+#                                       at or above which a retry
 #                                       after a recent failed gate waits;
 #                                       0 disables the back-off)
 #   AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS
@@ -155,6 +162,32 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/gh_helpers.sh" 2>/dev/null || true
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+# Issue #9473: wedged-queued run filter from gh_helpers.sh. When the helpers
+# could not be sourced, these no-op fallbacks keep the pre-#9473 behaviour
+# (every queued run counts as active).
+declare -F zombie_queued_cutoff_epoch >/dev/null 2>&1 || zombie_queued_cutoff_epoch()
+{
+	printf '0'
+}
+declare -F zombie_queued_jq_def >/dev/null 2>&1 || zombie_queued_jq_def()
+{
+	printf '%s\n' 'def is_wedged_queued($cutoff): false;'
+}
+declare -F zombie_queued_log_ignored >/dev/null 2>&1 || zombie_queued_log_ignored()
+{
+	cat >/dev/null 2>&1 || true
+	return 0
+}
+# Issue #10032: without gh_helpers.sh, the queue count is the raw total read
+# once (the pre-#10032 behaviour), reported as "<total>\t0".
+declare -F zombie_queued_live_count >/dev/null 2>&1 || zombie_queued_live_count()
+{
+	local zq_fallback_json zq_fallback_total
+	zq_fallback_json="$(gh_retry gh api "repos/${1}/actions/runs?status=queued&per_page=1" 2>/dev/null || true)"
+	zq_fallback_total="$(printf '%s' "${zq_fallback_json}" | jq -r 'if (.total_count | type) == "number" then .total_count else empty end' 2>/dev/null || true)"
+	[[ "${zq_fallback_total}" =~ ^[0-9]{1,12}$ ]] || return 1
+	printf '%s\t0\n' "${zq_fallback_total}"
+}
 source "${SCRIPT_DIR}/tg_helpers.sh" 2>/dev/null || true
 type tg_send_msg >/dev/null 2>&1 || tg_send_msg() { return 0; }
 
@@ -592,21 +625,30 @@ if [[ "${tag_commit}" =~ ^[0-9a-f]{40}$ ]]; then
 fi
 
 runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${AUTO_RELEASE_STABLE_WORKFLOW_FILE}/runs?per_page=30")"
+# Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is wedged
+# (zero jobs, cannot be cancelled) and does not count as in flight.
+# stderr is kept so an invalid ZOMBIE_RUN_MAX_QUEUED_HOURS warning shows.
+zq_cutoff="$(zombie_queued_cutoff_epoch || echo 0)"
+[[ "${zq_cutoff}" =~ ^[0-9]+$ ]] || zq_cutoff=0
+zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
+zombie_queued_log_ignored auto_release_gate "${zq_cutoff}" <<< "${runs_json}"
 # Any branch: the gate's e2e-smoke-test job runs under a per-repository
 # cancel-in-progress group, so dispatching a stable gate while the promote
 # cycle's gate_only run on main is active would cancel that run.
-active_count="$(printf '%s' "${runs_json}" | jq -r '[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length')"
+active_count="$(printf '%s' "${runs_json}" | jq -r --argjson zq_cutoff "${zq_cutoff}" "${zq_def}"'[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending") | select(is_wedged_queued($zq_cutoff) | not)] | length')"
 # The gate-runs endpoint above cannot report a promotion that has moved
 # `stable` but has not dispatched its gate yet, so this requires a separate
 # workflow-scoped read.
 promote_runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/promote-main-to-stable.yml/runs?per_page=30")"
 # Any event: a scheduled cycle tick is about to dispatch (or is waiting on)
 # its own gate run, which the group above would otherwise cancel.
-promote_active_count="$(printf '%s' "${promote_runs_json}" | jq -r '[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length')"
+zombie_queued_log_ignored auto_release_promote "${zq_cutoff}" <<< "${promote_runs_json}"
+promote_active_count="$(printf '%s' "${promote_runs_json}" | jq -r --argjson zq_cutoff "${zq_cutoff}" "${zq_def}"'[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending") | select(is_wedged_queued($zq_cutoff) | not)] | length')"
 active_count=$((active_count + promote_active_count))
 # The legacy manual release path (mark-stable.yml) also writes refs/tags/stable.
 legacy_runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/mark-stable.yml/runs?per_page=30")"
-legacy_active_count="$(printf '%s' "${legacy_runs_json}" | jq -r '[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length')"
+zombie_queued_log_ignored auto_release_legacy "${zq_cutoff}" <<< "${legacy_runs_json}"
+legacy_active_count="$(printf '%s' "${legacy_runs_json}" | jq -r --argjson zq_cutoff "${zq_cutoff}" "${zq_def}"'[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending") | select(is_wedged_queued($zq_cutoff) | not)] | length')"
 active_count=$((active_count + legacy_active_count))
 if [ "${active_count}" -gt 0 ]; then
 	release_blocker_check_in_flight || true
@@ -720,15 +762,25 @@ if [ "${AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS}" -gt 0 ] && [[ "${last_gate_run_id:
 		# The failure is older than the window: one cycle may test the queue again.
 		echo "AUTO_RELEASE_QUEUE_CHECK outcome=not_recent last_run=${last_gate_run_id} last_age_hours=${last_gate_age_hours} window_hours=${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS}"
 	else
-		queued_runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs?status=queued&per_page=1" 2>/dev/null || true)"
-		queued_runs="$(printf '%s' "${queued_runs_json}" | jq -r 'if (.total_count | type) == "number" then .total_count else empty end' 2>/dev/null || true)"
-		if ! [[ "${queued_runs}" =~ ^[0-9]+$ ]]; then
+		# Issue #10032: queued= is the live count (wedged runs older than
+		# ZOMBIE_RUN_MAX_QUEUED_HOURS left out); wedged= is the part left out.
+		queue_counts=""
+		queue_counts_rc=0
+		queued_runs=""
+		queued_wedged_runs=""
+		queue_counts="$(zombie_queued_live_count "${GITHUB_REPOSITORY}" "${AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS}" "${zq_cutoff:-}")" || queue_counts_rc=$?
+		if [ "${queue_counts_rc}" -eq 0 ]; then
+			IFS=$'\t' read -r queued_runs queued_wedged_runs <<< "${queue_counts}" || true
+		fi
+		if [ "${queue_counts_rc}" -eq 2 ]; then
+			echo "::warning::AUTO_RELEASE_QUEUE_CHECK outcome=read_failed lookup=wedged_runs last_run=${last_gate_run_id} — dispatching without the runner-queue back-off."
+		elif [ "${queue_counts_rc}" -ne 0 ] || ! [[ "${queued_runs}" =~ ^[0-9]+$ ]] || ! [[ "${queued_wedged_runs}" =~ ^[0-9]+$ ]]; then
 			echo "::warning::AUTO_RELEASE_QUEUE_CHECK outcome=read_failed lookup=queued_runs last_run=${last_gate_run_id} — dispatching without the runner-queue back-off."
 		elif [ "${queued_runs}" -ge "${AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS}" ]; then
-			echo "::warning::${AUTO_RELEASE_STABLE_WORKFLOW_FILE} run ${last_gate_run_id} ended '${last_gate_conclusion}' ${last_gate_age_hours} hour(s) ago and ${queued_runs} run(s) are queued now (limit ${AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS}); not starting another gate cycle until the queue drains or the failure is ${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS} hour(s) old."
-			skip_release runner_queue_deep "sha=${branch_tip} queued=${queued_runs} max=${AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS} last_run=${last_gate_run_id} last_age_hours=${last_gate_age_hours} window_hours=${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS}"
+			echo "::warning::${AUTO_RELEASE_STABLE_WORKFLOW_FILE} run ${last_gate_run_id} ended '${last_gate_conclusion}' ${last_gate_age_hours} hour(s) ago and ${queued_runs} run(s) are queued now (limit ${AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS}; ${queued_wedged_runs} wedged run(s) older than ZOMBIE_RUN_MAX_QUEUED_HOURS left out); not starting another gate cycle until the queue drains or the failure is ${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS} hour(s) old."
+			skip_release runner_queue_deep "sha=${branch_tip} queued=${queued_runs} wedged=${queued_wedged_runs} max=${AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS} last_run=${last_gate_run_id} last_age_hours=${last_gate_age_hours} window_hours=${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS}"
 		else
-			echo "AUTO_RELEASE_QUEUE_CHECK outcome=clear queued=${queued_runs} max=${AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS} last_run=${last_gate_run_id} last_age_hours=${last_gate_age_hours}"
+			echo "AUTO_RELEASE_QUEUE_CHECK outcome=clear queued=${queued_runs} wedged=${queued_wedged_runs} max=${AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS} last_run=${last_gate_run_id} last_age_hours=${last_gate_age_hours}"
 		fi
 	fi
 fi

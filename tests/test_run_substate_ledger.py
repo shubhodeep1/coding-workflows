@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -25,6 +26,8 @@ else:
 	_JSONSCHEMA_IMPORT_ERROR = None
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_implement_text  # noqa: E402
 HELPER_SCRIPT = REPO_ROOT / "scripts" / "ledger_emit_substate.sh"
 SCHEMA_PATH = REPO_ROOT / "ai-memory" / "schemas" / "run_ledger_entry.v1.json"
 
@@ -892,7 +895,8 @@ def test_workflows_export_ledger_limits_from_repository_variables() -> None:
 
 def test_scoped_callsites_reference_the_run_substate_helper() -> None:
 	for relative_path, required_snippets in STATIC_WIRING_CONTRACTS.items():
-		text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+		# implement.yml sources two step bodies from scripts/ (#9678); inline them.
+		text = expanded_implement_text() if relative_path == ".github/workflows/implement.yml" else (REPO_ROOT / relative_path).read_text(encoding="utf-8")
 		for snippet in required_snippets:
 			assert snippet in text, (relative_path, snippet)
 		forbidden = FORBIDDEN_STDERR_SUPPRESSION.get(relative_path)

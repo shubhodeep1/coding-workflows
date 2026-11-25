@@ -818,6 +818,47 @@ def test_ordinary_gaps_are_not_release_pending(tmp_path: Path) -> None:
 	assert all(gap["release_pending"] is False and gap["rerouted"] is False for gap in _normalised_verdict(tmp_path)["gaps"])
 
 
+# Condition-less release-titled operator gaps follow the resolve classifier
+# (_is_release_entry in scripts/operator_step_issue.py), so the "never reaches
+# a person" rule does not rest on the model filling in `dormant_until` (issue #9393).
+@pytest.mark.parametrize("title", ["Sync the consumer repositories with AI Update Workflows", "Promote main to stable"])
+def test_operator_gap_with_release_title_and_no_condition_is_rerouted(tmp_path: Path, title: str) -> None:
+	verdict = json.loads(json.dumps(DORMANT))
+	verdict["gaps"].append({"kind": "operator", "title": title, "evidence": "promote-main-to-stable.yml", "fix": "Run the workflow"})
+	result, state = _verify(tmp_path, verdict, env_extra={"MERGE_SHA": RELEASE_MERGE_SHA})
+	assert result.returncode == 0
+	assert "op=release_pending_gaps count=1 rerouted=1 outcome=left_to_release" in result.stdout
+	assert "code_gaps=2 operator_gaps=1 outcome=posted" in result.stdout
+	entry = next(comment for comment in state["comments"] if comment["body"].startswith("<!-- ai:operator-step:entry key=pr-42 -->"))
+	assert "Set NIGHTLY_REPORT_ENABLED" in entry["body"] and title not in entry["body"]
+	fix_issue = _fix_issues(state)[0]
+	assert "README lacks the new variable" in fix_issue["body"] and title not in fix_issue["body"]
+	body = state["comments"][-1]["body"]
+	assert f"- [code] {title} (ships with the next `@stable` release; the promote cycle does this)" in body
+	gap = _normalised_verdict(tmp_path)["gaps"][2]
+	assert gap["kind"] == "code" and gap["rerouted"] is True and gap["release_pending"] is True
+	assert gap["dormant_until"] == f"@stable contains {RELEASE_MERGE_SHA}"
+
+
+@pytest.mark.parametrize("gap", [
+	{"kind": "operator", "title": "Publish the DEPLOY_TOKEN secret to stable", "evidence": "deploy.yml:3", "fix": "gh secret set DEPLOY_TOKEN"},
+	{"kind": "operator", "title": "Sync the DEPLOY_TOKEN secret to the stable environment", "evidence": "deploy.yml:3",
+		"fix": "gh secret set DEPLOY_TOKEN --env stable", "dormant_until": "DEPLOY_TOKEN"},
+])
+def test_operator_gap_naming_a_secret_or_own_condition_stays_operator(tmp_path: Path, gap: dict) -> None:
+	verdict = json.loads(json.dumps(DORMANT))
+	verdict["gaps"].append(gap)
+	result, state = _verify(tmp_path, verdict, env_extra={"MERGE_SHA": RELEASE_MERGE_SHA})
+	assert result.returncode == 0
+	assert "op=release_pending_gaps" not in result.stdout
+	assert "code_gaps=1 operator_gaps=2 outcome=posted" in result.stdout
+	entry = next(comment for comment in state["comments"] if comment["body"].startswith("<!-- ai:operator-step:entry key=pr-42 -->"))
+	assert "Set NIGHTLY_REPORT_ENABLED" in entry["body"] and gap["title"] in entry["body"]
+	normalised = _normalised_verdict(tmp_path)["gaps"][2]
+	assert normalised["kind"] == "operator" and normalised["release_pending"] is False and normalised["rerouted"] is False
+	assert normalised["dormant_until"] == gap.get("dormant_until", "")
+
+
 def test_operator_tracker_recheck_failure_still_posts_the_verdict(tmp_path: Path) -> None:
 	# operator_step_issue.py upsert exits 3: the entry is posted, only the
 	# tracker re-check failed, so the verdict comment must still be written.
@@ -868,6 +909,11 @@ GAME_GLOBS = "docs/plans/**,docs/game-sources/**,ft.games/templates/Game-pages/*
 	(["docs/plans/fixup.md"], ""),
 	(["ft.games/templates/Game-pages/boxing/index.html", "ft.games/templates/Game-pages/boxing/assets/a.png"], GAME_GLOBS),
 	(["docs/game-sources/boxing.js", "docs/plans/boxing-phase-4.md"], GAME_GLOBS),
+	# /deploy-activate activation logs (hylifegroup.com PRs #147/#148) are
+	# exempt by default: their runbook lines read as unmet operator steps.
+	(["docs/deploy-activation/activation-batch-x.md"], None),
+	(["docs/deploy-activation/pr-12.md", "docs/plans/a.md"], None),
+	(["docs/deploy-activation/pr-12.md"], ""),
 ])
 def test_exempt_only_pr_is_skipped_without_model_comment_or_fix_issue(tmp_path: Path, files: list, globs: str | None) -> None:
 	env_extra = {"FAKE_GH_FILES": json.dumps(files)}
@@ -886,6 +932,13 @@ def test_custom_globs_replace_the_default(tmp_path: Path) -> None:
 		env_extra={"FAKE_GH_FILES": '["docs/plans/a.md"]', "ACTIVATION_VERIFY_EXEMPT_GLOBS": "docs/game-sources/**"})
 	assert "reason=exempt_paths" not in result.stdout
 	assert state["comments"][-1]["body"].endswith("<!-- ai:activation:v1 verdict=LIVE source=pr-42 -->")
+	# A set value drops the activation-log pattern as well.
+	logs_dir = tmp_path / "deploy-activation-run"
+	logs_dir.mkdir()
+	result, state = _verify(logs_dir, {"verdict": "LIVE", "trigger": "push", "summary": "Runs.", "gaps": []},
+		env_extra={"FAKE_GH_FILES": '["docs/deploy-activation/a.md"]', "ACTIVATION_VERIFY_EXEMPT_GLOBS": "docs/game-sources/**"})
+	assert "reason=exempt_paths" not in result.stdout
+	assert state["comments"][-1]["body"].endswith("<!-- ai:activation:v1 verdict=LIVE source=pr-42 -->")
 
 
 @pytest.mark.parametrize("files", [
@@ -900,6 +953,29 @@ def test_near_miss_paths_are_not_exempt(tmp_path: Path, files: list) -> None:
 	assert "reason=exempt_paths" not in result.stdout
 	assert _context(tmp_path)["changed_files"] == files
 	assert "exempt_changed_files" not in _context(tmp_path)
+
+
+@pytest.mark.parametrize("files", [
+	["docs/deploy-activation"],
+	["docs/deploy-activation.md"],
+	["src/docs/deploy-activation/a.md"],
+])
+def test_near_miss_deploy_activation_paths_are_not_exempt_by_default(tmp_path: Path, files: list) -> None:
+	result, state = _verify(tmp_path, {"verdict": "LIVE", "trigger": "push", "summary": "Runs.", "gaps": []},
+		env_extra={"FAKE_GH_FILES": json.dumps(files)})
+	assert "reason=exempt_paths" not in result.stdout
+	assert _context(tmp_path)["changed_files"] == files
+	assert "exempt_changed_files" not in _context(tmp_path)
+
+
+def test_mixed_deploy_activation_pr_is_verified_on_its_other_files_only(tmp_path: Path) -> None:
+	files = ["docs/deploy-activation/pr-1.md", "src/app.ts"]
+	result, state = _verify(tmp_path, DORMANT, env_extra={"FAKE_GH_FILES": json.dumps(files)})
+	assert "reason=exempt_paths" not in result.stdout
+	context = _context(tmp_path)
+	assert context["changed_files"] == ["src/app.ts"]
+	assert context["exempt_changed_files"] == ["docs/deploy-activation/pr-1.md"]
+	assert state["comments"][-1]["body"].endswith("<!-- ai:activation:v1 verdict=DORMANT source=pr-42 -->")
 
 
 def test_mixed_pr_is_verified_on_its_other_files_only(tmp_path: Path) -> None:
@@ -952,7 +1028,7 @@ def test_status_workflow_wires_exempt_globs_and_skip_label() -> None:
 	assert "!contains(github.event.pull_request.labels.*.name, 'ai:skip-activation-verify')" in job["if"]
 	verify_env = next(step for step in job["steps"] if step["name"] == "Verify activation")["env"]
 	assert verify_env["PR_LABELS"] == "${{ toJSON(github.event.pull_request.labels.*.name) }}"
-	assert verify_env["ACTIVATION_VERIFY_EXEMPT_GLOBS"] == "${{ vars.ACTIVATION_VERIFY_EXEMPT_GLOBS || 'docs/plans/**' }}"
+	assert verify_env["ACTIVATION_VERIFY_EXEMPT_GLOBS"] == "${{ vars.ACTIVATION_VERIFY_EXEMPT_GLOBS || 'docs/plans/**,docs/deploy-activation/**' }}"
 	contract = json.loads((ROOT / ".github/ai/label_contract.v1.json").read_text(encoding="utf-8"))
 	assert "ai:skip-activation-verify" in contract["labels"]
 

@@ -16,7 +16,11 @@ or reintroduce the four defects it was built to close:
 
 from __future__ import annotations
 
+import os
 import re
+import subprocess
+import tempfile
+import textwrap
 from pathlib import Path
 
 import sys
@@ -229,6 +233,91 @@ def test_release_assembly_fails_open() -> None:
 		assert 'git fetch origin "${SOURCE_BRANCH}"' not in step
 
 
+RELEASE_NOTES_OUT_CALL = (
+	"python3 scripts/assemble_changelog.py assemble --repo-root . "
+	'--notes-out "${RUNNER_TEMP:-/tmp}/release_fragment_notes.md"'
+)
+
+
+def test_release_assembly_writes_fragment_notes() -> None:
+	"""#9846: the release assemble step hands the folded fragments to the notes."""
+	for path in (MARK_STABLE, TEST_AND_MARK_STABLE):
+		step = _workflow_step(_read(path), "Assemble changelog fragments")
+		assert RELEASE_NOTES_OUT_CALL in step, f"{path.name}: assemble step lost --notes-out"
+		# Only the release workflows pass the flag; the consumer sync must not.
+	assert "--notes-out" not in _read(UPDATE_WORKFLOWS)
+
+
+def _extract_step_script(path: Path) -> str:
+	step = _workflow_step(_read(path), "Extract changelog for this version")
+	assert "id: changelog" in step
+	body = step.split("run: |\n", 1)[1]
+	lines: list[str] = []
+	for line in body.split("\n"):
+		if line.strip() and not line.startswith("          "):
+			break
+		lines.append(line)
+	return textwrap.dedent("\n".join(lines))
+
+
+def test_release_notes_extract_fallback_order() -> None:
+	"""Versioned section first, then fragment notes, then the placeholder."""
+	for path in (MARK_STABLE, TEST_AND_MARK_STABLE):
+		script = _extract_step_script(path)
+		assert 'echo "notes_file=/tmp/release_notes.md" >> "$GITHUB_OUTPUT"' in script
+		assert "No changelog entry found" not in script
+		with tempfile.TemporaryDirectory() as tmp:
+			root = Path(tmp)
+			notes_out = root / "release_notes.md"
+			rendered = script.replace(
+				"${{ needs.resolve-version.outputs.version }}", "v9.9.9"
+			).replace("/tmp/release_notes.md", str(notes_out))
+			script_path = root / "extract.sh"
+			script_path.write_text(rendered, encoding="utf-8")
+
+			def run(changelog: str, fragment_notes: str | None, scenario: str) -> str:
+				work = root / scenario
+				runner_temp = work / "runner_temp"
+				runner_temp.mkdir(parents=True)
+				(work / "CHANGELOG.md").write_text(changelog, encoding="utf-8")
+				if fragment_notes is not None:
+					(runner_temp / "release_fragment_notes.md").write_text(
+						fragment_notes, encoding="utf-8"
+					)
+				env = os.environ.copy()
+				env["RUNNER_TEMP"] = str(runner_temp)
+				env["GITHUB_OUTPUT"] = str(work / "gh_output")
+				result = subprocess.run(
+					["bash", str(script_path)],
+					cwd=str(work),
+					capture_output=True,
+					text=True,
+					env=env,
+					check=False,
+				)
+				assert result.returncode == 0, f"{path.name}/{scenario}: {result.stderr}"
+				assert f"notes_file={notes_out}" in (work / "gh_output").read_text(encoding="utf-8")
+				return notes_out.read_text(encoding="utf-8")
+
+			versioned = (
+				"# Changelog\n\n## [Unreleased]\n\n- Pending.\n\n"
+				"## [v9.9.9] - 2026-11-21\n\n- Hand-written entry.\n\n"
+				"## [v9.9.8] - 2026-11-20\n\n- Older.\n"
+			)
+			plain = "# Changelog\n\n## [Unreleased]\n\n- Pending.\n"
+
+			text = run(versioned, "### Fixed\n\n- Fragment entry.\n", "versioned")
+			assert "- Hand-written entry." in text
+			assert "Fragment entry" not in text and "- Older." not in text
+
+			text = run(plain, "### Fixed\n\n- Fragment entry.\n", "fragments")
+			assert text == "### Fixed\n\n- Fragment entry.\n"
+
+			placeholder = "No changelog fragments were folded for v9.9.9.\n"
+			assert run(plain, "", "empty-notes") == placeholder
+			assert run(plain, None, "missing-notes") == placeholder
+
+
 def test_consumer_sync_has_the_fifth_category_and_assembly() -> None:
 	workflow = _read(UPDATE_WORKFLOWS)
 	assert "name: Sync changelog fragment assets from upstream" in workflow
@@ -268,6 +357,7 @@ def test_consumer_sync_notification_predicate_matches_commit_predicate() -> None
 		"steps.retired_files.outputs.retired_has_changes == 'true'",
 		"steps.claude_md_sync.outputs.claude_md_changed == 'true'",
 		"steps.changelog_sync.outputs.changelog_assets_has_changes == 'true'",
+		"steps.dependabot_sync.outputs.dependabot_has_changes == 'true'",
 		"steps.changelog_assemble.outputs.changelog_assembled == 'true'",
 		"steps.agents_assemble.outputs.agents_assembled == 'true'",
 	)

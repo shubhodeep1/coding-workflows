@@ -42,6 +42,14 @@
 #                                                           candidate; detail ref=heads/
 #                                                           stable); cannot fast-forward,
 #                                                           so no cycle
+#   PROMOTE_CYCLE_FORWARD_MERGE_PENDING prs=<n,...|none|lookup_failed> base=<sha> head=<sha> ref=heads/<stable>
+#                                                           not an exit: printed before a
+#                                                           base_not_ancestor skip whose
+#                                                           detail has ref=heads/; names the
+#                                                           open same-repo forward-merge
+#                                                           fallback PR(s) into main and sends
+#                                                           one best-effort WARNING alert
+#                                                           (#9919, Refs #9891)
 #   PROMOTE_CYCLE_SKIPPED reason=insufficient_docs          fewer than PROMOTE_CYCLE_MIN_DOCS docs
 #   PROMOTE_CYCLE_SKIPPED reason=scan_capped_behind_markers available=<n> required=<m>
 #                                                           the dispatcher's doc scan was
@@ -215,6 +223,25 @@ cd "${REPO_ROOT}"
 
 source "${SCRIPT_DIR}/gh_helpers.sh" 2>/dev/null || true
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+# gh_read (issue #9888) moves polling reads to the job token; without
+# gh_helpers.sh it is plain gh on the PAT, as before.
+type gh_read >/dev/null 2>&1 || gh_read() { if [ "${1:-}" = "--same-repo-only" ]; then shift; fi; gh "$@"; }
+# Issue #9473: wedged-queued run filter from gh_helpers.sh. When the helpers
+# could not be sourced, these no-op fallbacks keep the pre-#9473 behaviour
+# (every queued run counts as active).
+declare -F zombie_queued_cutoff_epoch >/dev/null 2>&1 || zombie_queued_cutoff_epoch()
+{
+	printf '0'
+}
+declare -F zombie_queued_jq_def >/dev/null 2>&1 || zombie_queued_jq_def()
+{
+	printf '%s\n' 'def is_wedged_queued($cutoff): false;'
+}
+declare -F zombie_queued_log_ignored >/dev/null 2>&1 || zombie_queued_log_ignored()
+{
+	cat >/dev/null 2>&1 || true
+	return 0
+}
 if [ -r "${SCRIPT_DIR}/tg_helpers.sh" ]; then
 	# shellcheck source=tg_helpers.sh
 	# shellcheck disable=SC1091
@@ -315,6 +342,8 @@ skip_cycle()
 	local detail="${2:-}"
 	# Release-blocker reporters (Phase 2b): before the skip line, never fatal.
 	release_blocker_on_skip "${reason}" "${detail}" || true
+	# Stable branch diverged from main: name the forward-merge PR (#9919).
+	promote_cycle_forward_merge_pending "${reason}" "${detail}" || true
 	echo "PROMOTE_CYCLE_SKIPPED reason=${reason}${detail:+ ${detail}}"
 	emit_output outcome "skipped:${reason}"
 	exit 0
@@ -883,6 +912,72 @@ promote_cycle_hold_alert()
 	else
 		echo "::warning::promote_main_cycle: tg_helpers.sh not available; hold-release alert not sent" >&2
 	fi
+	return 0
+}
+
+# promote_cycle_forward_merge_pending <skip_reason> <skip_detail>
+# A base_not_ancestor skip on the stable BRANCH (detail ref=heads/<stable>)
+# means stable holds a commit main lacks, which the forward-merge fallback PR
+# (auto/forward-merge-stable-*, merge commit only) is meant to bring in. On
+# 2026-11-22 such a PR (#9891) sat green and unmerged while the cycle skipped
+# silently. This prints PROMOTE_CYCLE_FORWARD_MERGE_PENDING and sends one
+# best-effort WARNING naming the open PR(s). Runs at most once per tick, is
+# always called as `|| true` (errexit is off here, so every step is checked),
+# and never changes the skip, its output or the exit code.
+# API calls (§14): 1 REST read, only on this skip path. Audited: nothing else
+# in this script lists pull requests (guard 2's issues listing is
+# label-filtered tracking issues and drops PRs). One page of 100 open PRs
+# into the default branch; a forward-merge PR beyond it is missed, which is
+# acceptable for a best-effort alert. Fail open: a failed read logs
+# prs=lookup_failed and the alert says so.
+promote_cycle_forward_merge_pending_done="false"
+promote_cycle_forward_merge_pending()
+{
+	local fm_reason="${1:-}" fm_detail="${2:-}"
+	local fm_base="unknown" fm_head="unknown" fm_pulls_json="" fm_numbers="" fm_prs="" fm_num="" fm_list_text="" fm_text=""
+	[ "${fm_reason}" = "base_not_ancestor" ] || return 0
+	case " ${fm_detail}" in
+		*" ref=heads/"*) ;;
+		*) return 0 ;;
+	esac
+	[ "${promote_cycle_forward_merge_pending_done}" = "true" ] && return 0
+	promote_cycle_forward_merge_pending_done="true"
+	if [[ " ${fm_detail}" =~ \ base=([0-9a-f]{40})( |$) ]]; then
+		fm_base="${BASH_REMATCH[1]}"
+	fi
+	if [[ " ${fm_detail}" =~ \ head=([0-9a-f]{40})( |$) ]]; then
+		fm_head="${BASH_REMATCH[1]}"
+	fi
+	# Only same-repo heads: a fork can name its branch auto/forward-merge-stable-*
+	# and must never be named in an alert that asks an operator to merge it.
+	# URLs are built from the repo and the number, never copied from html_url.
+	if fm_pulls_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls?state=open&base=${PROMOTE_CYCLE_DEFAULT_BRANCH}&per_page=100" 2>/dev/null)" \
+		&& fm_numbers="$(printf '%s' "${fm_pulls_json}" | jq -r --arg repo "${GITHUB_REPOSITORY}" '
+			if type == "array" then . else error("not an array") end
+			| .[]
+			| select(type == "object")
+			| select((((.head // {}) | .ref // "") | tostring | startswith("auto/forward-merge-stable-"))
+				and ((((.head // {}) | .repo // {}) | if type == "object" then (.full_name // "") else "" end) == $repo))
+			| (.number // empty) | tostring' 2>/dev/null)"; then
+		while IFS= read -r fm_num; do
+			[[ "${fm_num}" =~ ^[1-9][0-9]{0,9}$ ]] || continue
+			fm_prs+="${fm_num},"
+			fm_list_text+=" #${fm_num} $(release_blocker_safe "${GITHUB_SERVER_URL:-https://github.com}")/${GITHUB_REPOSITORY}/pull/${fm_num};"
+		done <<< "${fm_numbers}"
+		fm_prs="${fm_prs%,}"
+		if [ -z "${fm_prs}" ]; then
+			fm_prs="none"
+			fm_list_text=" No open forward-merge PR: check forward-merge-stable-to-main.yml runs."
+		else
+			fm_list_text=" Open forward-merge PR(s):${fm_list_text}"
+		fi
+	else
+		fm_prs="lookup_failed"
+		fm_list_text=" Forward-merge PR lookup failed: check the open PRs into ${PROMOTE_CYCLE_DEFAULT_BRANCH} and forward-merge-stable-to-main.yml runs."
+	fi
+	echo "PROMOTE_CYCLE_FORWARD_MERGE_PENDING prs=${fm_prs} base=${fm_base} head=${fm_head} ref=heads/${PROMOTE_CYCLE_STABLE_BRANCH}"
+	fm_text="Promote cycle skipped in ${GITHUB_REPOSITORY}: ${PROMOTE_CYCLE_STABLE_BRANCH} (${fm_base}) is not an ancestor of ${PROMOTE_CYCLE_DEFAULT_BRANCH} (${fm_head}).${fm_list_text} Merge with 'Create a merge commit' (never squash or rebase); the promote cycle stays skipped until ${PROMOTE_CYCLE_STABLE_BRANCH} is an ancestor of ${PROMOTE_CYCLE_DEFAULT_BRANCH}."
+	promote_cycle_hold_alert "${fm_text}" || true
 	return 0
 }
 
@@ -1571,7 +1666,14 @@ fi
 # 1. Another cycle job still running (the schedule fired while a previous
 #    tick waits on its smoke gate): skip, do not queue behind it.
 self_runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_WORKFLOW_FILE}/runs?per_page=20")"
-other_active="$(printf '%s' "${self_runs_json}" | jq -r --arg me "${GITHUB_RUN_ID}" '[.workflow_runs[]? | select((.id|tostring) != $me) | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length')"
+# Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is wedged
+# (zero jobs, cannot be cancelled) and does not count as active.
+# stderr is kept so an invalid ZOMBIE_RUN_MAX_QUEUED_HOURS warning shows.
+zq_cutoff="$(zombie_queued_cutoff_epoch || echo 0)"
+[[ "${zq_cutoff}" =~ ^[0-9]+$ ]] || zq_cutoff=0
+zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
+zombie_queued_log_ignored promote_cycle_self "${zq_cutoff}" <<< "${self_runs_json}"
+other_active="$(printf '%s' "${self_runs_json}" | jq -r --arg me "${GITHUB_RUN_ID}" --argjson zq_cutoff "${zq_cutoff}" "${zq_def}"'[.workflow_runs[]? | select((.id|tostring) != $me) | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending") | select(is_wedged_queued($zq_cutoff) | not)] | length')"
 [[ "${other_active}" =~ ^[0-9]+$ ]] || other_active=0
 if [ "${other_active}" -gt 0 ]; then
 	skip_cycle another_run_active "active_runs=${other_active}"
@@ -1723,8 +1825,12 @@ fi
 # never frees within the separate idle-wait budget.
 idle_wait_deadline=$(( $(date +%s) + PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS ))
 while :; do
-	active_gate_runs="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}/runs?per_page=30" \
-		| jq -r '[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending")] | length' 2>/dev/null || echo "")"
+	# Only the contractual GH_READ_FALLBACK line (issue #9888) survives the
+	# stderr filter; other gh/gh_retry noise stays dropped, as before.
+	gate_runs_json="$(gh_retry gh_read --same-repo-only api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}/runs?per_page=30" 2> >(grep -a '^GH_READ_FALLBACK ' >&2 || true) || echo "")"
+	zombie_queued_log_ignored promote_cycle_gate_idle "${zq_cutoff}" <<< "${gate_runs_json}"
+	active_gate_runs="$(printf '%s' "${gate_runs_json}" \
+		| jq -r --argjson zq_cutoff "${zq_cutoff}" "${zq_def}"'[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending") | select(is_wedged_queued($zq_cutoff) | not)] | length' 2>/dev/null || echo "")"
 	[[ "${active_gate_runs}" =~ ^[0-9]+$ ]] || skip_cycle guard_unavailable "lookup=workflow-runs:${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}"
 	if [ "${active_gate_runs}" -eq 0 ]; then
 		break
@@ -1772,7 +1878,7 @@ gate_conclusion=""
 gate_head_sha=""
 while [ "$(date +%s)" -lt "${deadline}" ]; do
 	sleep "${PROMOTE_CYCLE_GATE_POLL_SECS}"
-	runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=50")" || continue
+	runs_json="$(gh_retry gh_read --same-repo-only api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=50")" || continue
 	if [ -z "${gate_run_id}" ]; then
 		gate_run_id="$(printf '%s' "${runs_json}" | jq -r --argjson before "${before_gate_ids}" --arg branch "${gate_ref}" --arg title "Test & Mark Stable Release [cycle:${GITHUB_RUN_ID}]" '[.workflow_runs[]? | select((.id as $id | ($before | index($id) | not)) and (.head_branch // "") == $branch and (.display_title // "") == $title)] | sort_by(.created_at) | first | .id // empty')"
 		[ -n "${gate_run_id}" ] || continue

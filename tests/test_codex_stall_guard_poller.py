@@ -16,6 +16,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 ORCHESTRATE_POLL_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml"
 POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
+GH_HELPERS_SCRIPT = REPO_ROOT / "scripts" / "gh_helpers.sh"
 THREAD_REUSE_HELPER = REPO_ROOT / "scripts" / "codex_thread_reuse.sh"
 
 
@@ -50,6 +51,16 @@ extract_fn() {
 	' "'"${POLLER_SCRIPT}"'"
 }
 
+extract_helper_fn() {
+	local fn="$1"
+	awk -v fn="${fn}" '
+		BEGIN { in_fn=0 }
+		$0 ~ "^"fn"\\(\\)" { in_fn=1 }
+		in_fn { print }
+		in_fn && /^}$/ { exit }
+	' "'"${GH_HELPERS_SCRIPT}"'"
+}
+
 mkdir -p extracted
 {
 	echo 'set -euo pipefail'
@@ -71,12 +82,20 @@ mkdir -p extracted
 	extract_fn 'build_active_issue_set'
 	echo
 	extract_fn 'cancel_zombie_runs_for_issue'
+	echo
+	# Issue #9473: wedged-queued run helpers from scripts/gh_helpers.sh.
+	extract_helper_fn 'zombie_queued_cutoff_epoch'
+	echo
+	extract_helper_fn 'zombie_queued_jq_def'
+	echo
+	extract_helper_fn 'zombie_queued_log_ignored'
 } > extracted/poller_stall.sh
 '''
 
 
 def _extract_poller_functions(repo_dir: Path) -> None:
 	script = POLLER_EXTRACT_SCRIPT.replace('"\'"${POLLER_SCRIPT}"\'"', f'"{POLLER_SCRIPT}"')
+	script = script.replace('"\'"${GH_HELPERS_SCRIPT}"\'"', f'"{GH_HELPERS_SCRIPT}"')
 	result = _run_bash(script, cwd=repo_dir)
 	if result.returncode != 0:
 		raise AssertionError(f"poller extraction failed: {result.stderr}\nstdout={result.stdout}")
@@ -267,6 +286,47 @@ def test_invalid_run_started_at_falls_back_to_created_at() -> None:
 		assert result.returncode == 0, f"bash failed: {result.stderr}"
 		assert _active_issues_from_stdout(result.stdout) == [], result.stdout
 		assert cancelled == ["repos/octo/example/actions/runs/404/cancel"], cancelled
+
+
+def test_wedged_queued_runs_cannot_crowd_out_live_queued_runs() -> None:
+	"""Issue #9473: wedged queued runs are dropped before the 50-run window."""
+	with tempfile.TemporaryDirectory(prefix="stall-guard-poller-") as td:
+		repo_dir = Path(td)
+		_extract_poller_functions(repo_dir)
+		wedged = [
+			{
+				"id": 9000 + index,
+				"status": "queued",
+				"name": "AI Implement",
+				"path": ".github/workflows/implement.yml",
+				"head_branch": "ai/issue-43",
+				"created_at": _iso_timestamp_minutes_ago(25 * 60 + index),
+			}
+			for index in range(55)
+		]
+		fresh_queued = {
+			"id": 501,
+			"status": "queued",
+			"name": "AI Implement",
+			"path": ".github/workflows/implement.yml",
+			"head_branch": "ai/issue-44",
+			"created_at": _iso_timestamp_minutes_ago(5),
+		}
+		running = {
+			"id": 502,
+			"status": "in_progress",
+			"name": "AI Implement",
+			"path": ".github/workflows/implement.yml",
+			"head_branch": "ai/issue-45",
+			"run_started_at": _iso_timestamp_minutes_ago(10),
+			"created_at": _iso_timestamp_minutes_ago(10),
+		}
+		result, _cancelled = _run_poller_contract(
+			repo_dir, runs=[*wedged, fresh_queued, running], issue_num=99, stall_guard_enabled=False)
+		assert result.returncode == 0, f"bash failed: {result.stderr}"
+		assert _active_issues_from_stdout(result.stdout) == ["44", "45"], result.stdout
+		assert "ZOMBIE_RUN_IGNORED run=9000 workflow=.github/workflows/implement.yml age_h=25 guard=build_active_issue_set" in result.stderr
+		assert "run=501 " not in result.stderr
 
 
 def main() -> int:

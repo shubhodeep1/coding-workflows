@@ -240,7 +240,11 @@ jobs:
           # runs every tick. P11b (Refs #8291) first shipped it default-on as
           # `ZOMBIE_RUN_REAPER_ENABLED: ${{ vars.ZOMBIE_RUN_REAPER_ENABLED || 'true' }}`;
           # setting the repo variable to true restores that.
+          # The same knob is the wedged-queued floor (issue #9473); 0 disables it.
           ZOMBIE_RUN_REAPER_ENABLED: ${{ vars.ZOMBIE_RUN_REAPER_ENABLED || 'false' }}
+          # Also the wedged-queued floor beneath SWEEP_STALE_QUEUED_MINUTES
+          # (issue #9473); 0 disables it. Defined once: a second key in this
+          # env mapping is a duplicate YAML key.
           ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}
           ZOMBIE_RUN_REAPER_TOKEN: ${{ github.token }}
           MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
@@ -422,6 +426,16 @@ jobs:
               stale_snapshot_epoch="$(date -u +%s 2>/dev/null || echo 0)"
               stale_cutoff_epoch="$(date -u -d "-${SWEEP_STALE_QUEUED_MINUTES} minutes" +%s 2>/dev/null || echo 0)"
             fi
+            # Issue #9473: ZOMBIE_RUN_MAX_QUEUED_HOURS (gh_helpers.sh, default
+            # 24) is a floor beneath the minutes rule: a queued run at least
+            # that old is wedged even when SWEEP_STALE_QUEUED_MINUTES=0.
+            local sweep_zq_cutoff=0
+            sweep_zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+            [[ "${sweep_zq_cutoff}" =~ ^[0-9]+$ ]] || sweep_zq_cutoff=0
+            if [ "${sweep_zq_cutoff}" -gt "${stale_cutoff_epoch}" ] 2>/dev/null; then
+              stale_cutoff_epoch="${sweep_zq_cutoff}"
+              [ "${stale_snapshot_epoch}" -gt 0 ] 2>/dev/null || stale_snapshot_epoch="$(date -u +%s 2>/dev/null || echo 0)"
+            fi
 
             # Fetch only active statuses for this workflow, then slurp the
             # page objects and reduce over their `.workflow_runs[]` entries.
@@ -573,6 +587,9 @@ jobs:
                 fi
               fi
               echo "::warning::AUTOFIX_SWEEP_STALE_QUEUED workflow=${workflow} head_ref=${cached_head_ref} run_id=${stale_run_id} queued_age_minutes=${queued_age_minutes} queued_age_threshold_minutes=${SWEEP_STALE_QUEUED_MINUTES:-0} — treating as wedged and no longer suppressing dispatch."
+              if [ "${sweep_zq_cutoff}" -gt 0 ] 2>/dev/null && [ "${stale_run_created_epoch}" -gt 0 ] 2>/dev/null && [ "${stale_run_created_epoch}" -le "${sweep_zq_cutoff}" ]; then
+                echo "ZOMBIE_RUN_IGNORED run=${stale_run_id} workflow=.github/workflows/${workflow} age_h=$(((stale_snapshot_epoch - stale_run_created_epoch) / 3600)) guard=review_autofix_sweep" >&2
+              fi
             done < <(printf '%s' "${snapshot_json}" | jq -r '(.stale // [])[]?' 2>/dev/null || true)
           }
 
@@ -804,7 +821,8 @@ jobs:
               round_cap_rounds="$(printf '%s' "${round_cap_counts_json}" | jq -r --arg n "${pr_number}" '(.[$n] // 0) | if type == "number" then . else 0 end' 2>/dev/null || echo 0)"
               if [[ "${round_cap_rounds}" =~ ^[0-9]+$ ]] && [ "${round_cap_rounds}" -ge "${round_cap_max}" ]; then
                 review_sweep_round_cap_escalate "${REPOSITORY}" "${pr_number}" "${round_cap_rounds}" "${round_cap_max}" "${round_cap_window_hours}" \
-                  "$(printf '%s' "${row}" | jq -c '.labels // []' 2>/dev/null || echo '[]')" "${DRY_RUN:-false}" || true
+                  "$(printf '%s' "${row}" | jq -c '.labels // []' 2>/dev/null || echo '[]')" "${DRY_RUN:-false}" \
+                  "$(printf '%s' "${row}" | jq -r '.head_sha // ""' 2>/dev/null || true)" || true
                 echo "AUTOFIX_SWEEP_SKIP pr=#${pr_number} reason=review_round_cap rounds=${round_cap_rounds} max=${round_cap_max} window_hours=${round_cap_window_hours} head_ref=${head_ref}"
                 skipped_round_cap=$((skipped_round_cap + 1))
                 continue
@@ -917,6 +935,7 @@ jobs:
           HEAD_REF_FILTER: ${{ inputs.head_ref_filter }}
           DRY_RUN: ${{ inputs.dry_run }}
           CI_CANCELLED_PR_SNAPSHOT: ${{ runner.temp }}/ci-cancelled-pr-snapshot.json
+          ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}
         run: PYTHONDONTWRITEBYTECODE=1 python3 .ci-rerun-support/scripts/ci_cancelled_rerun.py
 
       # Final CI safety net (cut-ci-runner-time Phase 4): a non-draft PR head
