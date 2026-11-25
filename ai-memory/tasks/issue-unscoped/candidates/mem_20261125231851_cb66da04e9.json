@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.md:5486-5487 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The \"codex-cli quirks\" bullet at line 5486 in \"## Operational lessons learned (categorised)\" still says the announce-without-emit mitigation is \"to keep patch tooling explicitly enabled rather than raising verbosity by default\". The rewritten lines 5482 and 5487 say the opposite: raise editor verbosity first, and restore neither setting, because v0.171.0 ignores `include_apply_patch_tool` and rejects `function`.\n  WHY: No code path breaks, but agents.md is the reference agents and operators use to pick a remediation, so anyone following line 5486 would re-enable patch tooling that v0.171.0 ignores or rejects. Reviewers suggest a one-for-one rewrite of line 5486 so `scripts/check_agents_md_direct_edits.py` still passes. All five reviewers rated it NIT; low is the closest allowed value.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- agents.md:line 5486, under \"**codex-cli quirks**\" in \"## Operational lessons learned (categorised)\" | severity=NIT | confidence=5\n  PROBLEM: The last autofix run rewrote lines 5482 and 5487 but left line 5486 as it was (\"...the mitigation is to keep patch tooling explicitly enabled rather than raising verbosity by default.\"), so the section contradicts itself: line 5482 says raise editor verbosity first, and line 5487 says neither setting should be restored on v0.171.0.\n  WHY: Anyone following line 5486 would turn on `include_apply_patch_tool`, which v0.171.0 ignores, or `apply_patch_tool_type = \"function\"`, which makes the catalog fail to parse. The fix is a one-for-one rewrite of line 5486, which keeps the hunk a correction under the direct-edit guard.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- agents.md:5486-5487 | severity=NIT | confidence=5\n  PROBLEM: The section \"Operational lessons learned (categorised)\" gives contradictory advice for announce-without-emit failures: it recommends raising editor verbosity (correct for v0.171.0) and also keeping patch tooling explicitly enabled (obsolete for v0.171.0).\n  WHY: An agent following the obsolete advice might try to re-enable `apply_patch_tool_type = \"function\"` or `include_apply_patch_tool`, which are no longer supported and trigger warnings or errors.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.md:line 5486, under \"## Operational lessons learned (categorised)\" -> \"**codex-cli quirks**\" | severity=NIT | confidence=5\n  PROBLEM: The previous autofix run updated lines 5482 and 5487 to describe post-v0.171.0 behavior but left line 5486 pointing to the obsolete remediation (\"keep patch tooling explicitly enabled rather than raising verbosity by default\"), so the subsection contradicts itself about what to do if #11151 recurs.\n  WHY: An agent reading line 5486 would keep `include_apply_patch_tool` or function-style patch tooling enabled. v0.171.0 ignores the first with a warning (per the agents.d/10129-codex-v0171-pin.md fragment) and rejects the second as an unknown enum (per `tests/test_write_codex_config.py::test_catalog_entries_parse_on_codex_v0171`). The fix is a one-for-one rewrite, which `scripts/check_agents_md_direct_edits.py` permits.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- agents.md:5486 | severity=NIT | confidence=5\n  PROBLEM: This bullet still says the announce-without-emit mitigation is to keep patch tooling explicitly enabled, while lines 5482 and 5487 say v0.171.0 rejects `function`, ignores `include_apply_patch_tool`, and recommend raising editor verbosity instead.\n  WHY: An operator following line 5486 will rely on settings that v0.171.0 does not honor, leaving a recurring no-edit failure without the remediation the adjacent guidance describes.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- agents.md:line 5486 (\"codex-cli quirks\" bullet under \"## Operational lessons learned (categorised)\") | severity=NIT | confidence=5\n  PROBLEM: The section contradicts itself after the last run's edits. Line 5482 says `apply_patch_tool_type` must be `freeform` or `null`, never `function`, and to raise editor verbosity first. Line 5487 says `include_apply_patch_tool` is ignored and to \"watch editor phases for no-edit turns instead of restoring either setting\". Line 5486 still says \"keep patch tooling explicitly enabled rather than raising verbosity by default\".\n  WHY: agents.md is injected as reference context into pipeline prompts, so an agent following line 5486 would try to re-enable patch tooling that v0.171.0 ignores or rejects. A one-for-one line replacement keeps `scripts/check_agents_md_direct_edits.py` satisfied.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "40e3f800483eff90f3c40c9e0b6d25b3305d31ca927fa0261f6ae9da49c4e227",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10132,
+    "run_id": "45709575052",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45709575052",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125231851_cb66da04e9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10132,
+    "run_id": "45709575052"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T23:18:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
