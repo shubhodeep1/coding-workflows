@@ -154,8 +154,9 @@ def test_clarify_wiring() -> None:
 	assert auto_step["continue-on-error"] is True
 	assert auto_step["env"]["STANDALONE_AUTO_DECIDE_ENABLED"] == "${{ vars.STANDALONE_AUTO_DECIDE_ENABLED || 'true' }}"
 	run = auto_step["run"]
-	assert "bash scripts/orchestrate_parse_and_post_answer.sh" in run
-	assert "auto_decisions.py parse" in run and "auto_decisions.py render" in run
+	# The helpers run from the support bundle (stuck-states plan P2a).
+	assert 'bash "${SUPPORT_SCRIPTS_DIR:-scripts}/orchestrate_parse_and_post_answer.sh"' in run
+	assert 'auto_decisions.py" parse' in run and 'auto_decisions.py" render' in run
 	assert 'render --comments-file "${ISSUE_ALL_COMMENTS_FILE}"' in run
 	assert 'THREAD_HISTORY_FILE="${AUTO_DECIDE_THREAD_HISTORY_FILE}"' in run
 	assert 'startswith("/answer [auto-answered-by-orchestrator]")' in run
@@ -242,7 +243,7 @@ def test_clarify_delegates_standalone_questions_to_the_clarify_respond_worker(tm
 	# The kill switch and the comment-id check still come first; the
 	# RECOMMENDED path below only runs when delegation is turned off.
 	assert run.index('if [ "${STANDALONE_AUTO_DECIDE_ENABLED}" = "false" ]; then') < delegate
-	assert run.index("reason=no_question_comment_id") < delegate < run.index("auto_decisions.py parse")
+	assert run.index("reason=no_question_comment_id") < delegate < run.index('auto_decisions.py" parse')
 	assert 'echo "delegated=true" >> "$GITHUB_OUTPUT"' in run
 	assert "reason=delegated_to_clarify_respond" in run
 	env = steps["Telegram clarification notification"]["env"]

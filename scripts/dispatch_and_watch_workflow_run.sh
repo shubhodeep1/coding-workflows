@@ -6,6 +6,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./comprehensive_test_and_release_gh_api.sh
 . "${SCRIPT_DIR}/comprehensive_test_and_release_gh_api.sh"
 GITHUB_OUTPUT="${GITHUB_OUTPUT:-/dev/null}"
+# The registration and completion polls read through
+# gh_api_safe_quiet_print_read (issue #9888): the job token when the step
+# exports GH_READ_TOKEN, the PAT otherwise. The dispatch, the one-off reads
+# and the cancel stay on the PAT.
 
 usage()
 {
@@ -252,7 +256,7 @@ else
 	REGISTRATION_JQ='[.workflow_runs[]] | sort_by(.created_at) | last | .id // empty'
 fi
 while [ "$(date +%s)" -lt "${REGISTRATION_DEADLINE}" ]; do
-	NEW_ID="$(gh_api_safe_quiet_print "${REGISTRATION_QUERY}" --jq "${REGISTRATION_JQ}" || echo "")"
+	NEW_ID="$(gh_api_safe_quiet_print_read "${REGISTRATION_QUERY}" --jq "${REGISTRATION_JQ}" || echo "")"
 	[ -n "${NEW_ID}" ] && break
 	sleep "${REGISTRATION_POLL_INTERVAL_SECS}"
 done
@@ -309,14 +313,26 @@ echo "Watching run #${NEW_ID}"
 COMPLETION_DEADLINE=$((DISPATCH_STARTED_AT + COMPLETION_TIMEOUT_SECS))
 STATUS=""
 CONCLUSION=""
+# Status-read counters for the completion-timeout diagnosis below (#9706).
+WATCH_STATUS_READS=0
+WATCH_QUEUED_READS=0
+WATCH_SAW_IN_PROGRESS=0
 while [ "$(date +%s)" -lt "${COMPLETION_DEADLINE}" ]; do
-	RUN_JSON="$(gh_api_safe_quiet_print "repos/${TARGET_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' || echo "")"
+	RUN_JSON="$(gh_api_safe_quiet_print_read "repos/${TARGET_REPO}/actions/runs/${NEW_ID}" --jq '{status, conclusion}' || echo "")"
 	if [ -n "${RUN_JSON}" ]; then
 		STATUS="$(printf '%s' "${RUN_JSON}" | jq -r '.status // ""' 2>/dev/null || echo "")"
 		CONCLUSION="$(printf '%s' "${RUN_JSON}" | jq -r '.conclusion // ""' 2>/dev/null || echo "")"
 	else
 		STATUS=""
 		CONCLUSION=""
+	fi
+	if [ -n "${STATUS}" ]; then
+		WATCH_STATUS_READS=$((WATCH_STATUS_READS + 1))
+		if [ "${STATUS}" = "queued" ]; then
+			WATCH_QUEUED_READS=$((WATCH_QUEUED_READS + 1))
+		elif [ "${STATUS}" = "in_progress" ]; then
+			WATCH_SAW_IN_PROGRESS=1
+		fi
 	fi
 	if [ -n "${STATUS_LOG_PREFIX}" ]; then
 		echo "  ${STATUS_LOG_PREFIX} status=${STATUS} conclusion=${CONCLUSION}"
@@ -334,6 +350,54 @@ while [ "$(date +%s)" -lt "${COMPLETION_DEADLINE}" ]; do
 	fi
 	sleep "${COMPLETION_POLL_INTERVAL_SECS}"
 done
+
+# Completion watch timed out (#9706, follow-up to #9532). In release run
+# 43590943288 dispatched children stayed queued for hours with no runner; the
+# watcher gave up but nothing cancelled them, so an orphaned child later
+# created issues the gate's cleanup could not see. Say whether the run never
+# got a runner or was just slow, then cancel it (unless
+# DISPATCH_WATCH_CANCEL_ON_TIMEOUT=false). Do not lengthen the timeouts as a
+# fix. The `::error::... timed out` line below must stay the last line printed:
+# the workflow steps' timeout block extracts the run id from it.
+if [ "${WATCH_SAW_IN_PROGRESS}" = "1" ]; then
+	echo "::warning::${DISPLAY_NAME} run #${NEW_ID} watch diagnosis: status=in_progress (a runner was assigned; the run was slow); status_reads=${WATCH_STATUS_READS}"
+# A trailing failed read leaves STATUS empty: the watcher then cannot claim
+# "the whole time" and falls through to the could-not-tell line.
+elif [ "${WATCH_STATUS_READS}" -gt 0 ] && [ "${WATCH_QUEUED_READS}" -eq "${WATCH_STATUS_READS}" ] && [ "${STATUS}" = "queued" ]; then
+	echo "::warning::${DISPLAY_NAME} run #${NEW_ID} watch diagnosis: status=queued the whole time (no runner was assigned); status_reads=${WATCH_STATUS_READS}"
+else
+	echo "::warning::${DISPLAY_NAME} run #${NEW_ID} watch diagnosis: last status=${STATUS:-unknown} (could not tell queued from in_progress); status_reads=${WATCH_STATUS_READS}"
+fi
+
+WATCH_CANCEL_SWITCH="$(printf '%s' "${DISPATCH_WATCH_CANCEL_ON_TIMEOUT:-true}" | tr '[:upper:]' '[:lower:]')"
+case "${WATCH_CANCEL_SWITCH}" in
+	true)
+		if [[ "${NEW_ID}" =~ ^[0-9]+$ ]]; then
+			# Bounded like the workflow steps' twin cancel (`timeout 20 gh api`):
+			# gh_api_safe retries rate-limit errors on writes for up to ~210 s,
+			# which could outlast the step's remaining time and lose the
+			# `::error::... timed out` line the workflow cleanup parses.
+			if timeout 20 gh api -X POST "repos/${TARGET_REPO}/actions/runs/${NEW_ID}/cancel" >/dev/null 2>&1; then
+				echo "Cancel requested for watched run #${NEW_ID} (completion watch timeout)"
+			else
+				# $? here is the cancel's status: 124 means the 20 s limit hit.
+				WATCH_CANCEL_RC=$?
+				echo "::warning::Could not cancel watched run #${NEW_ID} after the completion watch timeout (exit ${WATCH_CANCEL_RC})"
+			fi
+		else
+			# The id is not printed here because it is not numeric.
+			echo "::warning::Cancel of watched run skipped after the completion watch timeout: run id is not numeric"
+		fi
+		;;
+	false)
+		echo "Cancel of watched run #${NEW_ID} skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT=false)"
+		;;
+	*)
+		# The value itself is never printed.
+		echo "::warning::DISPATCH_WATCH_CANCEL_ON_TIMEOUT is neither true nor false; treating it as false"
+		echo "Cancel of watched run #${NEW_ID} skipped (DISPATCH_WATCH_CANCEL_ON_TIMEOUT unrecognised)"
+		;;
+esac
 
 echo "::error::${DISPLAY_NAME} run #${NEW_ID} timed out"
 exit 1

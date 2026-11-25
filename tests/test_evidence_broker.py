@@ -442,7 +442,7 @@ def _run_round(tmp_path: Path, persist: str | None, appended: str = "true", coun
 		"CODEX_ISOLATED_EXEC": str(engine_path), "PLAN_ENGINE": engine, "attempt_model": "m", "STUB_LOG": str(stub_log),
 		"STUB_COUNT": count, "evidence_broker_prompt_appended": appended, "PYTHONDONTWRITEBYTECODE": "1",
 		"STUB_ENGINE_FAIL": (engine_fail if isinstance(engine_fail, str) else "3") if engine_fail else "",
-		"GITHUB_ENV": str(runtime / "github_env")})
+		"GITHUB_ENV": str(runtime / "github_env"), "RUN_PLAN_CODEX_SUPPORT_DIR": str(root / "scripts")})
 	if persist is not None:
 		env["PERSIST_EVIDENCE_BROKER_ENABLED"] = persist
 	proc = subprocess.run(["bash", "-c", "set -euo pipefail\n" + prelude + block + "\nplan_evidence_broker_round\n"], cwd=root, env=env,
@@ -504,6 +504,7 @@ def _run_fragment_block(tmp_path: Path, persist: str | None, fragment: bool = Tr
 	prompt.write_text(PROMPT_FIXTURE, encoding="utf-8")
 	env = {k: v for k, v in os.environ.items() if not k.startswith(("PERSIST_", "GITHUB_"))}
 	env["CODEX_PROMPT_FILE"] = str(prompt)
+	env["RUN_PLAN_CODEX_SUPPORT_DIR"] = str(root / "scripts")
 	if persist is not None:
 		env["PERSIST_EVIDENCE_BROKER_ENABLED"] = persist
 	proc = subprocess.run(["bash", "-c", "set -euo pipefail\n" + block + '\necho "appended=${evidence_broker_prompt_appended}"\n'],

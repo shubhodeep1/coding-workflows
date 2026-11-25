@@ -518,23 +518,21 @@ def test_workflow_skips_label_events_for_every_label_but_the_override():
 
 	mod = _import()
 	workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "integration-pr-readiness.yml").read_text(encoding="utf-8"))
+	# Since 2026-11-18 this workflow receives label events only; the other
+	# pull request events run the same script in pr-checks.yml
+	# (tests/test_pr_checks_workflow.py).
 	types = workflow["on"]["pull_request"]["types"]
-	assert "labeled" in types and "unlabeled" in types
+	assert types == ["labeled", "unlabeled"]
 	condition = workflow["jobs"]["readiness"]["if"]
-	assert condition == (
-		"${{ (github.event.action != 'labeled' && github.event.action != 'unlabeled')"
-		" || github.event.label.name == 'ai:override-incomplete-merge' }}"
-	)
+	assert condition == "${{ github.event.label.name == 'ai:override-incomplete-merge' }}"
 	# The label in the expression is the one the script honours.
 	assert re.search(r"label\.name == '([^']+)'", condition).group(1) == mod.OVERRIDE_LABEL
 
-	def runs(action: str, label: str | None = None) -> bool:
-		return (action not in ("labeled", "unlabeled")) or label == mod.OVERRIDE_LABEL
+	def runs(label: str | None) -> bool:
+		return label == mod.OVERRIDE_LABEL
 
-	for action in ("opened", "synchronize", "reopened", "ready_for_review"):
-		assert runs(action)
-	assert runs("labeled", mod.OVERRIDE_LABEL) and runs("unlabeled", mod.OVERRIDE_LABEL)
-	assert not runs("labeled", "ai:review-blocked") and not runs("unlabeled", "ai:in-progress")
+	assert runs(mod.OVERRIDE_LABEL)
+	assert not runs("ai:review-blocked") and not runs("ai:in-progress")
 
 
 def main() -> int:

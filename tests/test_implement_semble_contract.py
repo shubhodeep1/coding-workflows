@@ -12,12 +12,15 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_implement_text  # noqa: E402
 DIAGNOSE_SCRIPT = REPO_ROOT / "scripts" / "implement_diagnose_post_codex_failure.sh"
 COMMIT_HELPER = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
 
 
 def _workflow_text() -> str:
-	return IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
+	# Two step bodies live in scripts/implement_step_*.sh (#9678); inline them.
+	return expanded_implement_text()
 
 
 def _diagnose_text() -> str:
@@ -167,8 +170,8 @@ def test_semble_bootstrap_steps_are_gated_and_fail_open() -> None:
 	assert install_step.get("if") == "env.SKIP_IMPLEMENT != 'true' && env.SEMBLE_ENABLED == 'true' && env.SEMBLE_BOOTSTRAP_MODE != 'lazy'"
 	assert install_step.get("continue-on-error") is True
 	assert 'if [ "${SEMBLE_ENABLED:-false}" != "true" ]; then' in install_block
-	assert "scripts/install_semble.sh" in install_block
-	assert 'if ! bash scripts/install_semble.sh; then' in install_block
+	assert "install_semble.sh" in install_block
+	assert 'if ! bash "${SUPPORT_SCRIPTS_DIR:-scripts}/install_semble.sh"; then' in install_block
 	assert 'echo "SEMBLE_AVAILABLE=false" >> "$GITHUB_ENV"' in install_block
 	assert 'echo "SEMBLE_AVAILABLE=true" >> "$GITHUB_ENV"' not in install_block
 	assert "leaving Semble disabled for this run" in install_block
@@ -182,9 +185,9 @@ def test_semble_bootstrap_steps_are_gated_and_fail_open() -> None:
 	# wrapper was unified once and re-used here). Inline `semble index . --out`
 	# was unreachable code — delegate fully to the shared script.
 	assert 'semble_index_path="${SEMBLE_INDEX_PATH:-${RUNTIME_DIR}/.semble-index}"' in index_block
-	assert 'if [ -f scripts/build_semble_wrapper.sh ]; then' in index_block
+	assert 'if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/build_semble_wrapper.sh" ]; then' in index_block
 	assert 'SEMBLE_INDEX_PATH="${semble_index_path}"' in index_block
-	assert 'bash scripts/build_semble_wrapper.sh' in index_block
+	assert 'bash "${SUPPORT_SCRIPTS_DIR:-scripts}/build_semble_wrapper.sh"' in index_block
 	assert 'echo "SEMBLE_INDEX_PATH=${semble_index_path}" >> "$GITHUB_ENV"' in index_block
 	assert 'echo "SEMBLE_INDEX_AVAILABLE=false" >> "$GITHUB_ENV"' in index_block
 	# These are now responsibilities of the shared script (delegated):
@@ -237,8 +240,8 @@ def test_setup_serena_step_runs_after_codex_config_and_emits_bootstrap_hash() ->
 	commit_step = _step_run_text("Commit changes")
 	assert setup_step.get("if") == "env.SKIP_IMPLEMENT != 'true' && env.SERENA_ENABLED == 'true'"
 	assert setup_step.get("continue-on-error") is True
-	assert 'source scripts/emit_event.sh 2>/dev/null || true' in setup_block
-	assert 'SERENA_FALLBACK_TARGET="implement" bash scripts/setup_serena.sh' in setup_block
+	assert 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/emit_event.sh" 2>/dev/null || true' in setup_block
+	assert 'SERENA_FALLBACK_TARGET="implement" bash "${SUPPORT_SCRIPTS_DIR:-scripts}/setup_serena.sh"' in setup_block
 	assert 'SERENA_FALLBACK target=implement reason=setup-failure' in setup_block
 	assert 'echo "SERENA_AVAILABLE=false" >> "$GITHUB_ENV"' in setup_block
 	assert 'echo "SERENA_PROJECT_BOOTSTRAP_HASH=${serena_project_hash}" >> "$GITHUB_ENV"' in setup_block

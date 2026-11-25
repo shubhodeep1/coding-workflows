@@ -40,11 +40,12 @@ REVIEW_HEAD_CHECKOUT_EMITTED=false
 review_head_checkout_now_ms()
 {
   local review_head_checkout_now_value="" review_head_checkout_now_realtime="${EPOCHREALTIME:-}"
-  # Bash's own clock first: on ubuntu-26.04 runners `date +%s%3N` (Rust
-  # uutils coreutils) gave readings that went backwards within a run, so
-  # switch_ms came out negative and was reported as na, and sometimes
-  # returned a reading one digit short (#9240).
-  # `date` stays as the fallback for bash < 5.
+  # Bash's own clock first (#9375): on ubuntu-26.04 runners `date +%s%3N`
+  # (Rust uutils coreutils) gave readings that went backwards within a run,
+  # so switch_ms came out negative and was reported as na, and sometimes
+  # returned a reading one digit short (#9240). EPOCHREALTIME is read inside
+  # the shell, so no external `date` is spawned per reading.
+  # `date` stays as the fallback for bash < 5, where EPOCHREALTIME is unset.
   if [[ "${review_head_checkout_now_realtime}" =~ ^([0-9]+)[.,]([0-9]{6})$ ]]; then
     printf '%s' "$(( 10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]} / 1000 ))"
     return 0

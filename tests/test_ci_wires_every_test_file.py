@@ -29,6 +29,14 @@ WORKFLOWS_DIR = ROOT / ".github" / "workflows"
 # so only `tests/test_*.sh` files can need one.
 UNWIRED_ALLOWLIST: dict[str, str] = {}
 
+# Former allowlist entry, kept as a record (stuck-states P9b, Refs #8291). The
+# catch-all now runs this file directly, so it is no longer in the allowlist;
+# its cases also still run through the file named in the reason:
+#	"tests/test_clarify_blocked_verify.py": (
+#		"ci.yml is outside the file grant of the issue that added it; its cases run in CI "
+#		"through tests/test_plan_clarify_blocked_output.py, which collects them"
+#	),
+
 # The catch-all (merge-base sync churn, 2026-11-17). `tests-system-python` in
 # ci.yml collects the whole `tests/` tree with pytest and runs every collected
 # function, so a `tests/test_*.py` file runs in CI without being named in any
@@ -75,20 +83,48 @@ def _test_files() -> list[str]:
 	)
 
 
+def _job_block_text(workflow_text: str, job_id: str) -> str:
+	"""Text of the `jobs.<job_id>` block of a workflow, read without PyYAML.
+
+	Fallback for containers without PyYAML: the block runs from the job's
+	`  <job_id>:` line under top-level `jobs:` to the next line at the same or
+	a lower indentation. Empty when the job is missing.
+	"""
+	lines = workflow_text.splitlines()
+	in_jobs = False
+	start = None
+	job_indent = 0
+	for index, line in enumerate(lines):
+		stripped = line.strip()
+		if not stripped or stripped.startswith("#"):
+			continue
+		indent = len(line) - len(line.lstrip(" "))
+		if start is not None:
+			if indent <= job_indent:
+				return "\n".join(lines[start:index])
+			continue
+		if indent == 0:
+			in_jobs = stripped.split("#", 1)[0].rstrip() == "jobs:"
+			continue
+		if in_jobs and stripped.split("#", 1)[0].rstrip() in (f"{job_id}:", f'"{job_id}":', f"'{job_id}':"):
+			start = index + 1
+			job_indent = indent
+	return "\n".join(lines[start:]) if start is not None else ""
+
+
 def _catch_all_collects_python_tests() -> bool:
 	"""True while ci.yml's catch-all job collects all of tests/ and pytest collects every test_*.py there."""
 	workflow_text = CI_WORKFLOW.read_text(encoding="utf-8")
 	try:
 		import yaml
-	except ImportError:
-		# PyYAML is installed in CI; without it (an offline container), read the
-		# job's block from the text: from `  <job>:` to the next 2-space job key.
-		block = re.search(rf"^  {re.escape(CATCH_ALL_JOB)}:[ \t]*\n(.*?)(?=^  \S|\Z)", workflow_text, re.MULTILINE | re.DOTALL)
-		runs = [block.group(1)] if block else []
-	else:
+	except ImportError:  # CI installs PyYAML; credential-free gate containers may not.
+		yaml = None
+	if yaml is not None:
 		workflow = yaml.safe_load(workflow_text)
 		job = (workflow.get("jobs") or {}).get(CATCH_ALL_JOB) or {}
 		runs = [str(step.get("run") or "") for step in job.get("steps") or [] if isinstance(step, dict)]
+	else:
+		runs = [_job_block_text(workflow_text, CATCH_ALL_JOB)]
 	collects_all = any(
 		CATCH_ALL_COLLECT_COMMAND in "\n".join(_strip_comment(line) for line in run.splitlines())
 		for run in runs

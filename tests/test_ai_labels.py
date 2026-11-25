@@ -175,6 +175,7 @@ def _run_sync_labels(
 	dry_run: bool = False,
 	token: str | None = "test-token",
 	use_main: bool = False,
+	env: dict[str, str | None] | None = None,
 	prefetch_pages: list[object] | None = None,
 	prefetch_log: list[dict[str, str]] | None = None,
 ) -> tuple[int, dict[str, object], str, list[dict[str, str]]]:
@@ -212,7 +213,9 @@ def _run_sync_labels(
 		assert hasattr(response, "read")
 		return response
 
-	previous_env = _set_env({"GH_TOKEN": token, "GITHUB_TOKEN": None})
+	# RETIRED_LABEL_DRAIN_ENABLED is cleared by default so the ambient
+	# environment cannot change which retired-label path runs.
+	previous_env = _set_env({"GH_TOKEN": token, "GITHUB_TOKEN": None, "RETIRED_LABEL_DRAIN_ENABLED": None, **(env or {})})
 	original_print = ai_labels._print_json
 	original_urlopen = ai_labels.urllib.request.urlopen
 	try:
@@ -650,6 +653,28 @@ def test_repair_labels_terminal_phase_drops_needs_human():
 	payload = _repair("ai:needs-human,ai:blocked,ai:merged")
 	assert payload["add"] == []
 	assert payload["remove"] == ["ai:blocked", "ai:needs-human"]
+
+
+WAITING_ON_DEPENDENCY_LABEL = "ai:waiting-on-dependency"
+
+
+def test_contract_declares_waiting_on_dependency_issue_phase():
+	contract = ai_labels.load_label_contract(CONTRACT_PATH)
+	assert contract["labels"][WAITING_ON_DEPENDENCY_LABEL]["color"] == "fbca04"
+	issue_phase = next(group for group in contract["phase_groups"] if group["name"] == "issue_phase")
+	members = issue_phase["members"]
+	assert WAITING_ON_DEPENDENCY_LABEL in members
+	assert members.index(WAITING_ON_DEPENDENCY_LABEL) + 1 == members.index("ai:blocked")
+
+
+def test_repair_labels_waiting_on_dependency_beats_stage_but_not_latches():
+	assert _repair(f"ai:planning,{WAITING_ON_DEPENDENCY_LABEL}")["remove"] == ["ai:planning"]
+	blocked_payload = _repair(f"ai:blocked,{WAITING_ON_DEPENDENCY_LABEL}")
+	assert blocked_payload["add"] == []
+	assert blocked_payload["remove"] == [WAITING_ON_DEPENDENCY_LABEL]
+	needs_human_payload = _repair(f"ai:needs-human,{WAITING_ON_DEPENDENCY_LABEL}")
+	assert needs_human_payload["add"] == []
+	assert needs_human_payload["remove"] == []
 
 
 def _label_page(labels: list[dict[str, str]]) -> _FakeHTTPResponse:

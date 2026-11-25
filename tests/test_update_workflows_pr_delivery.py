@@ -44,6 +44,7 @@ EXPECTED_PREDICATE = (
 	"steps.update.outputs.has_updates == 'true' || steps.audit_gate.outputs.status == 'applied' || "
 	"steps.claude_sync.outputs.claude_has_changes == 'true' || steps.retired_files.outputs.retired_has_changes == 'true' || "
 	"steps.claude_md_sync.outputs.claude_md_changed == 'true' || steps.changelog_sync.outputs.changelog_assets_has_changes == 'true' || "
+	"steps.dependabot_sync.outputs.dependabot_has_changes == 'true' || "
 	"steps.changelog_assemble.outputs.changelog_assembled == 'true' || steps.agents_assemble.outputs.agents_assembled == 'true'"
 )
 # Refresh goes through REST (#9483): `gh pr edit` needs the read:org scope.

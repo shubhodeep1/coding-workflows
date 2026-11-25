@@ -510,7 +510,8 @@ def _pass_harness(tmp_path: Path, tier: str, statuses: dict[str, str], panel: li
 def test_lite_floor_runs_one_seeded_live_reviewer(tmp_path: Path, statuses: dict[str, str]) -> None:
 	result = _pass_harness(tmp_path, "lite", statuses, PANEL)
 	floor = _seeded(1, ["minimax/minimax-m3", "z-ai/glm-5.3-flash", "google/gemini-3.1-flash-lite"])[0]
-	assert result["calls"][:2] == ["pool anthropic/claude-sonnet-5.5", f"chatgpt {SLOT}"]
+	# The pool and ChatGPT slots run as background jobs; only their set is deterministic.
+	assert sorted(result["calls"][:2]) == sorted(["pool anthropic/claude-sonnet-5.5", f"chatgpt {SLOT}"])
 	assert result["calls"][2:] == [f"openrouter {floor}"]
 	assert f"REVIEWER_CHATGPT: lite_floor model={floor} reason=account_slots_unsuccessful" in result["stderr"]
 	assert result["successful"] == "1"
@@ -518,7 +519,8 @@ def test_lite_floor_runs_one_seeded_live_reviewer(tmp_path: Path, statuses: dict
 
 def test_no_floor_when_an_account_slot_succeeded(tmp_path: Path) -> None:
 	result = _pass_harness(tmp_path, "lite", {"anthropic/claude-sonnet-5.5": "skipped_pool", SLOT: "success"}, PANEL)
-	assert [call.split()[0] for call in result["calls"]] == ["pool", "chatgpt"]
+	# Slots run as background jobs, so the call log order is not deterministic.
+	assert sorted(call.split()[0] for call in result["calls"]) == ["chatgpt", "pool"]
 	assert "lite_floor" not in result["stderr"]
 
 

@@ -1,0 +1,42 @@
+name: "Internal: Sync AI Labels"
+
+# Runs the label sync for this repository. Consumers get the same reusable
+# workflow through workflow-templates/ai-sync-labels.yml; this repo had no
+# caller, so retired labels (and the open items still carrying them) were
+# never cleaned up. The local call keeps the workflow YAML and the support
+# scripts on the same commit.
+"on":
+  schedule:
+    - cron: "23 5 * * 1"  # Mondays at 05:23 UTC
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Preview label changes without mutating labels, issues or PRs"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: internal-sync-ai-labels
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    # pull-requests: write is capped by sync_ai_labels.yml's own permissions
+    # block, so it does not reach the called job's github.token; the drain
+    # closes PRs with GH_PAT.
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    uses: ./.github/workflows/sync_ai_labels.yml
+    with:
+      dry_run: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}

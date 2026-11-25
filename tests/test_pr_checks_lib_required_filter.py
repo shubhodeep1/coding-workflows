@@ -366,7 +366,8 @@ LINT_REQUIRED_ENV = {
 def test_cancelled_ci_check_not_superseded_by_other_workflow_same_name() -> None:
 	"""The CI check name (`lint` here) is shared with lint-plan-archival
 	(and, on branches that predate its rename to `pr-body-lint`, with
-	lint-pr-body-auto-close), which re-runs on PR body edits. A newer
+	the PR-body lint, now a step group of pr-checks.yml), which re-runs on
+	PR body edits. A newer
 	`lint` from another Actions run must not hide a cancelled CI `lint`,
 	in either filter mode, when the runs are not bound to CI run ids."""
 	runs = _page([_lint_run("555", "cancelled", 1), _lint_run("777", "success", 2)])
@@ -377,7 +378,8 @@ def test_cancelled_ci_check_not_superseded_by_other_workflow_same_name() -> None
 
 
 def test_failed_pr_body_lint_blocks_under_the_default_required_set() -> None:
-	"""lint-pr-body-auto-close.yml's job is `pr-body-lint` (it was `lint`,
+	"""pr-checks.yml's job is `pr-body-lint`, the name the PR-body lint job
+	had in lint-pr-body-auto-close.yml before the fold (earlier it was `lint`,
 	and blocked only through that shared name). A failed run must still
 	block with the built-in default set; a passing one must not."""
 	ci_lint_ok = _lint_run("555", "success", 1)
@@ -775,10 +777,9 @@ def test_ci_side_channel_aggregates_every_matching_run() -> None:
 def test_ci_side_channel_rerun_supersedes_cancelled_only_when_bound() -> None:
 	"""Bound to CI run ids, a successful re-run supersedes a cancelled run so
 	the auto-merge wait agrees with the gate. Name-only matching keeps every
-	run (fail closed), and a failure is never superseded."""
+	run (fail closed)."""
 	cancelled = {**_ci_run("lint", "completed", "cancelled", run_id="555"), "id": 1}
 	rerun = {**_ci_run("lint", "completed", "success", run_id="556"), "id": 2}
-	failed = {**_ci_run("lint", "completed", "failure", run_id="555"), "id": 1}
 	bound = {**THIS_REPO_ENV, "PR_CHECKS_CI_RUN_IDS": "555,556"}
 	gate, _, state = _ci_side_channel(_page([cancelled, rerun]), bound)
 	assert gate == "0:ok" and state == "success", (gate, state)
@@ -786,8 +787,108 @@ def test_ci_side_channel_rerun_supersedes_cancelled_only_when_bound() -> None:
 	assert state == "success", state
 	_, _, state = _ci_side_channel(_page([cancelled, rerun]), THIS_REPO_ENV)
 	assert state == "failure", state
-	_, _, state = _ci_side_channel(_page([failed, rerun]), bound)
-	assert state == "failure", state
+
+
+# PR #9839: `lint` failed at 17:15 (an aggregate of a cancelled
+# `orchestrate-poll (3)`) and a later CI run passed at 18:01 on the same head,
+# yet every merge attempt read `ci_state=failure`. A completed failure is
+# superseded only by a newer completed success, both bound to the CI workflow.
+_FAILED = {**_ci_run("lint", "completed", "failure", run_id="555"), "id": 1}
+_PASSED_LATER = {**_ci_run("lint", "completed", "success", run_id="556"), "id": 2}
+_BOUND = {**THIS_REPO_ENV, "PR_CHECKS_CI_RUN_IDS": "555,556"}
+
+
+def test_bound_failure_superseded_by_newer_bound_success() -> None:
+	# (a) failure, then a later bound success on the same head -> success.
+	for order in ([_FAILED, _PASSED_LATER], [_PASSED_LATER, _FAILED]):
+		gate, _, state = _ci_side_channel(_page(order), _BOUND)
+		assert gate == "0:ok" and state == "success", (order, gate, state)
+
+
+def test_bound_success_followed_by_newer_failure_still_fails() -> None:
+	# (b) success, then a later failure -> failure.
+	older_ok = {**_ci_run("lint", "completed", "success", run_id="555"), "id": 1}
+	newer_fail = {**_ci_run("lint", "completed", "failure", run_id="556"), "id": 2}
+	gate, _, state = _ci_side_channel(_page([older_ok, newer_fail]), _BOUND)
+	assert gate == "1:blocking" and state == "failure", (gate, state)
+
+
+def test_failure_is_not_superseded_without_binding() -> None:
+	# (c) name-only (unbound) matching stays fail closed, and a success from a
+	# run outside the bound ids hides nothing.
+	gate, _, state = _ci_side_channel(_page([_FAILED, _PASSED_LATER]), THIS_REPO_ENV)
+	assert gate == "1:blocking" and state == "failure", (gate, state)
+	only_failed_bound = {**THIS_REPO_ENV, "PR_CHECKS_CI_RUN_IDS": "555"}
+	gate, _, state = _ci_side_channel(_page([_FAILED, _PASSED_LATER]), only_failed_bound)
+	assert gate == "1:blocking" and state == "failure", (gate, state)
+
+
+def test_bound_failure_not_superseded_by_running_or_failed_rerun() -> None:
+	running = {**_ci_run("lint", "in_progress", None, run_id="556"), "id": 2}
+	gate, _, state = _ci_side_channel(_page([_FAILED, running]), _BOUND)
+	assert gate == "1:blocking" and state == "failure", (gate, state)
+	failed_again = {**_ci_run("lint", "completed", "failure", run_id="556"), "id": 2}
+	gate, _, state = _ci_side_channel(_page([_FAILED, failed_again]), _BOUND)
+	assert gate == "1:blocking" and state == "failure", (gate, state)
+	# Without a strict order (equal or missing ids) nothing is superseded.
+	tied_fail = {**_ci_run("lint", "completed", "failure", run_id="555")}
+	tied_ok = {**_ci_run("lint", "completed", "success", run_id="556")}
+	gate, _, state = _ci_side_channel(_page([tied_ok, tied_fail]), _BOUND)
+	assert gate == "1:blocking" and state == "failure", (gate, state)
+	# A still-running older run is not hidden by a newer success.
+	older_running = {**_ci_run("lint", "in_progress", None, run_id="555"), "id": 1}
+	_, _, state = _ci_side_channel(_page([older_running, _PASSED_LATER]), _BOUND)
+	assert state == "pending", state
+
+
+def test_cancelled_supersession_unchanged_by_bound_success_rule() -> None:
+	# (d) a cancelled run superseded by a newer bound run, as before.
+	cancelled = {**_ci_run("lint", "completed", "cancelled", run_id="555"), "id": 1}
+	gate, _, state = _ci_side_channel(_page([cancelled, _PASSED_LATER]), _BOUND)
+	assert gate == "0:ok" and state == "success", (gate, state)
+	newer_cancelled = {**_ci_run("lint", "completed", "cancelled", run_id="556"), "id": 2}
+	older_ok = {**_ci_run("lint", "completed", "success", run_id="555"), "id": 1}
+	gate, _, state = _ci_side_channel(_page([older_ok, newer_cancelled]), _BOUND)
+	assert gate == "1:blocking" and state == "failure", (gate, state)
+
+
+def test_bound_success_rule_is_limited_to_the_ci_check_name() -> None:
+	# Another required name keeps its rule: a failure is never hidden. The
+	# environment is this repository, so the configured CI check name really
+	# resolves to `lint` (not `none`) and the new rule is active for it.
+	failed = {"id": 1, "name": "CI", "status": "completed", "conclusion": "failure",
+		"details_url": "https://github.com/o/r/actions/runs/555/job/1"}
+	passed = {"id": 2, "name": "CI", "status": "completed", "conclusion": "success",
+		"details_url": "https://github.com/o/r/actions/runs/556/job/1"}
+	env = {**_BOUND, "ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI,lint"}
+	# Control: the same shape under the CI check name is superseded.
+	gate, name, state = _ci_side_channel(_page([_FAILED, _PASSED_LATER]), env)
+	assert (gate, name, state) == ("0:ok", "lint", "success"), (gate, name, state)
+	# Another required name with the same bound shape still blocks.
+	gate, name, _ = _ci_side_channel(_page([_FAILED, _PASSED_LATER, failed, passed]), env)
+	assert gate == "1:blocking" and name == "lint", (gate, name)
+
+
+def test_bound_success_rule_applies_in_star_mode() -> None:
+	# The `*` (legacy fail-closed-on-any-failure) branch's _is_pending drops a
+	# failed CI `lint` that a newer bound CI run passed, as the required-filter
+	# branch does. The allow-all sentinel is the empty string, not `*`.
+	star = {**_BOUND, "ORCH_FINAL_MERGE_REQUIRED_CHECKS": "*"}
+	gate, _, state = _ci_side_channel(_page([_FAILED, _PASSED_LATER]), star)
+	assert gate == "0:ok" and state == "success", (gate, state)
+	# Unbound, or a failure newer than the success, keeps blocking.
+	unbound_star = {**THIS_REPO_ENV, "ORCH_FINAL_MERGE_REQUIRED_CHECKS": "*"}
+	gate, _, _ = _ci_side_channel(_page([_FAILED, _PASSED_LATER]), unbound_star)
+	assert gate == "1:blocking", gate
+	older_ok = {**_ci_run("lint", "completed", "success", run_id="555"), "id": 1}
+	newer_fail = {**_ci_run("lint", "completed", "failure", run_id="556"), "id": 2}
+	gate, _, _ = _ci_side_channel(_page([older_ok, newer_fail]), star)
+	assert gate == "1:blocking", gate
+	# Another check name in `*` mode is never hidden by a newer success.
+	other_failed = {**_ci_run("CI", "completed", "failure", run_id="555"), "id": 3}
+	other_passed = {**_ci_run("CI", "completed", "success", run_id="556"), "id": 4}
+	gate, _, _ = _ci_side_channel(_page([other_failed, other_passed]), star)
+	assert gate == "1:blocking", gate
 
 
 def test_ci_side_channel_counts_only_bound_runs_when_ids_are_given() -> None:

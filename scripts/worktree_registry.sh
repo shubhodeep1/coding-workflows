@@ -14,6 +14,14 @@ if [ -f "${_WORKTREE_REGISTRY_SCRIPT_DIR}/emit_event.sh" ]; then
 	# shellcheck disable=SC1091
 	source "${_WORKTREE_REGISTRY_SCRIPT_DIR}/emit_event.sh" 2>/dev/null || true
 fi
+# Issue #9473: the wedged-queued run helpers (zombie_queued_*) live in
+# gh_helpers.sh. Callers run this script as its own `bash` process, so the
+# poller's copy is not inherited; load the sibling here. Fail-open: without it
+# every queued run stays active (pre-#9473 behaviour).
+if [ -f "${_WORKTREE_REGISTRY_SCRIPT_DIR}/gh_helpers.sh" ]; then
+	# shellcheck disable=SC1091
+	source "${_WORKTREE_REGISTRY_SCRIPT_DIR}/gh_helpers.sh" 2>/dev/null || true
+fi
 if ! command -v emit_event >/dev/null 2>&1; then
 	emit_event()
 	{
@@ -249,7 +257,20 @@ _worktree_registry_load_active_run_ids()
 		return 1
 	fi
 
-	jq -c '[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress") | (.id | tostring)] | unique' "${active_runs_file}" 2>/dev/null
+	# Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is
+	# wedged (zero jobs, cannot be cancelled) and is not active. The helpers
+	# come from gh_helpers.sh, sourced at the top of this script; without them
+	# every queued run stays active (pre-#9473 behaviour).
+	local zq_cutoff="0" zq_def='def is_wedged_queued($cutoff): false;'
+	if declare -F zombie_queued_cutoff_epoch >/dev/null 2>&1 && declare -F zombie_queued_jq_def >/dev/null 2>&1; then
+		zq_cutoff="$(zombie_queued_cutoff_epoch 2>/dev/null || echo 0)"
+		[[ "${zq_cutoff}" =~ ^[0-9]+$ ]] || zq_cutoff=0
+		zq_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
+	fi
+	if declare -F zombie_queued_log_ignored >/dev/null 2>&1; then
+		zombie_queued_log_ignored worktree_registry_active_runs "${zq_cutoff}" < "${active_runs_file}"
+	fi
+	jq -c --argjson zq_cutoff "${zq_cutoff}" "${zq_def}"'[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress") | select(is_wedged_queued($zq_cutoff) | not) | (.id | tostring)] | unique' "${active_runs_file}" 2>/dev/null
 }
 
 worktree_registry_register()
@@ -459,7 +480,9 @@ worktree_registry_gc()
 	fi
 	if [ "${rc}" -eq 0 ]; then
 		entry_count="$(printf '%s' "${registry_json}" | jq -r '(.entries // []) | length' 2>/dev/null || echo '0')"
-		if active_run_ids="$(_worktree_registry_load_active_run_ids 2>/dev/null)"; then
+		# stderr is not discarded: the loader's only stderr is the
+		# ZOMBIE_RUN_IGNORED lines of issue #9473 (its jq calls are quiet).
+		if active_run_ids="$(_worktree_registry_load_active_run_ids)"; then
 			active_runs_available='true'
 		fi
 	fi

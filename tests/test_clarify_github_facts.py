@@ -307,7 +307,8 @@ def test_respond_workflow_wires_the_heal_evidence_pack() -> None:
 	assert "=== HEAL EVIDENCE PACK (UNTRUSTED) ===" in workflow
 	assert "--heal-evidence-pack-output" in workflow
 	assert 'issue_labels.json' in workflow
-	assert "grep -q -- '--heal-evidence-pack-output' scripts/clarify_github_facts.py" in workflow
+	# The merge resolution stages helpers through SUPPORT_SCRIPTS_DIR (default scripts/).
+	assert "grep -q -- '--heal-evidence-pack-output' \"${SUPPORT_SCRIPTS_DIR:-scripts}/clarify_github_facts.py\"" in workflow
 	assert workflow.index("=== GITHUB FACTS ===") < workflow.index("=== HEAL EVIDENCE PACK (UNTRUSTED) ===")
 
 
