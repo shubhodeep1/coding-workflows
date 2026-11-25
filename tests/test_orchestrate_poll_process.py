@@ -1027,6 +1027,9 @@ def _run_poller(
 	branch_rebuild_cooldown_hours: str = "48",
 	codex_touch_file: str | None = None,
 	mock_rb_judge_prompt_cap: int | None = None,
+	# Issue #9821: on a local jq < 1.7 (which reserves `$label`), rename the
+	# variable in the sandbox copy's has_label; a no-op on jq >= 1.7.
+	old_jq_has_label_compat: bool = False,
 	mock_orch_state_v2_pack_mode: str | None = None,
 	mock_git_push_success: bool = False,
 	mock_git_checkout_fail: bool = False,
@@ -1184,6 +1187,13 @@ def _run_poller(
 			poller_text = poller_copy.read_text(encoding="utf-8")
 			assert poller_text.count(guard) == 1
 			poller_copy.write_text(poller_text.replace(guard, f'if [ "${{RB_JUDGE_PROMPT_CHARS}}" -gt {mock_rb_judge_prompt_cap} ]; then'), encoding="utf-8")
+		if old_jq_has_label_compat and _jq_reserves_label_keyword():
+			# Same rename as tests/orchestrate_tracking_auto_close_cases.py.
+			poller_copy = sandbox / "scripts/orchestrate_poll_process.sh"
+			has_label_jq = "jq -e --arg label \"${label}\" 'index($label) != null'"
+			poller_text = poller_copy.read_text(encoding="utf-8")
+			assert poller_text.count(has_label_jq) == 1
+			poller_copy.write_text(poller_text.replace(has_label_jq, "jq -e --arg wanted \"${label}\" 'index($wanted) != null'"), encoding="utf-8")
 		# The poller's RB_JUDGE no longer invokes the host codex mock. Give
 		# review-blocked scenarios a credential-free sandbox stand-in that
 		# preserves the old verdict/combined-fix fixture semantics.
@@ -23608,6 +23618,81 @@ def test_stall_judge_escalate_human_adds_needs_human_label_and_increments_counte
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 3
 	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+
+
+def _jq_reserves_label_keyword() -> bool:
+	# jq 1.6 rejects `$label` (reserved until jq 1.7, which Actions runners ship).
+	if not shutil.which("jq"):
+		return False
+	version = subprocess.run(["jq", "--version"], text=True, capture_output=True, check=False).stdout.strip()
+	return re.fullmatch(r"jq-1\.[0-6](\.\d+)?", version) is not None
+
+
+def _run_stall_escalate_human_comment_poller(**overrides):
+	# Issue #9821: shared setup for the escalate_human issue-comment tests.
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:implementing"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 2
+	return _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		enable_stall_human_terminalization="true",
+		mock_stall_judge_json={
+			"action": "escalate_human",
+			"justification": "needs operator",
+			"target_pr": None,
+			"head_ref": None,
+		},
+		old_jq_has_label_compat=True,
+		**overrides,
+	)
+
+
+def test_stall_escalate_human_comment_posted_after_judge_escalation():
+	result = _run_stall_escalate_human_comment_poller()
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+	marker_comments = [
+		c.get("body", "")
+		for c in result["issues"]["10"]["comments"]
+		if "ai:stall-escalate-human:v1" in c.get("body", "")
+	]
+	assert len(marker_comments) == 1, result["issues"]["10"]["comments"]
+	body = marker_comments[0]
+	assert "## Stall recovery: human input needed" in body
+	assert "needs operator" in body
+	assert "#192" in body
+	assert "remove `ai:needs-human`" in body
+	assert "<!-- ai:stall-escalate-human:v1 issue=10 phase=ai:implementing -->" in body
+	assert (
+		"STALL_ESCALATE_HUMAN_COMMENT issue=10 phase=ai:implementing source=stall_judge outcome=posted"
+		in result["stdout"]
+	), result["stdout"]
+
+
+def test_stall_escalate_human_comment_skipped_when_label_unconfirmed():
+	result = _run_stall_escalate_human_comment_poller(fail_issue_edit_for=[10])
+	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
+	assert not any(
+		"ai:stall-escalate-human:v1" in c.get("body", "")
+		for c in result["issues"]["10"]["comments"]
+	)
+	assert "STALL_ESCALATE_HUMAN_COMMENT" not in result["stdout"]
+
+
+def test_stall_escalate_human_comment_write_failure_is_logged_and_nonfatal():
+	result = _run_stall_escalate_human_comment_poller(fail_issue_comment_post_for=[10])
+	assert (
+		"STALL_ESCALATE_HUMAN_COMMENT issue=10 phase=ai:implementing source=stall_judge outcome=write_failed"
+		in result["stdout"]
+	), result["stdout"]
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 3
 
 
 def test_stall_judge_escalate_human_is_downgraded_when_human_terminalization_disabled():
