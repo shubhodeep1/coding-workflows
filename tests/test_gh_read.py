@@ -521,6 +521,43 @@ RELEASE_GATE_READ_STEPS = {
 	"      - name: Dispatch internal-validate.yml standalone\n": "dispatch_and_watch_workflow_run.sh",
 }
 
+# Issue #10101: every job-token read call those steps reach, per script and
+# helper. Comment lines, `type <helper>` probes and function definitions are
+# not counted. In stable_e2e_step_wait_review.sh every gh_api_safe_quiet_print
+# runs after the GH_API_SAFE_USE_READ_TOKEN opt-in, so each one tries the job
+# token first. The two plain gh_api_safe_quiet_print calls in
+# dispatch_and_watch_workflow_run.sh stay on the PAT (no opt-in there) and are
+# not listed. A new call site changes a count and must get a fallback test.
+RELEASE_GATE_READ_CALL_SITES = {
+	"stable_e2e_step_wait_review.sh": {"gh_api_safe_quiet_print": 14},
+	"dispatch_and_watch_workflow_run.sh": {"gh_api_safe_quiet_print_read": 2},
+	"stable_orchestrate_cancel_dispatched_run.sh": {"gh_api_safe_job_token_read": 1},
+	"promote_main_cycle.sh": {"gh_read": 1, "promote_cycle_gate_runs_read": 2},
+}
+# Calls of the same helpers that stay on the PAT; listed so the counts above
+# can be exact.
+RELEASE_GATE_PAT_ONLY_CALLS = {
+	"dispatch_and_watch_workflow_run.sh": {"gh_api_safe_quiet_print": 2},
+}
+READ_HELPERS = (
+	"gh_api_safe_job_token_read",
+	"gh_api_safe_quiet_print_read",
+	"gh_api_safe_quiet_print",
+	"gh_read",
+	"promote_cycle_gate_runs_read",
+)
+
+
+def _read_helper_calls(text: str, helper: str) -> list[int]:
+	pattern = re.compile(r"(?<![\w$-])(?<!type )" + re.escape(helper) + r"(?![\w(-])")
+	return [
+		number
+		for number, line in enumerate(text.splitlines(), start=1)
+		if not line.lstrip().startswith("#")
+		for _ in pattern.finditer(line)
+	]
+
+
 WAIT_REVIEW_OPT_IN = 'GH_API_SAFE_USE_READ_TOKEN="${GH_API_SAFE_USE_READ_TOKEN:-1}"'
 DISPATCH_WATCH_REGISTRATION = 'NEW_ID="$(gh_api_safe_quiet_print_read "${REGISTRATION_QUERY}" --jq "${REGISTRATION_JQ}" || echo "")"'
 DISPATCH_WATCH_STATUS = (
@@ -565,6 +602,20 @@ def test_release_gate_read_token_step_inventory() -> None:
 		assert TOKEN_LINE in body, step
 		assert f"scripts/{script}" in body, (step, script)
 		assert (SCRIPTS / script).is_file(), script
+
+
+def test_release_gate_read_call_site_inventory() -> None:
+	assert set(RELEASE_GATE_READ_CALL_SITES) == set(RELEASE_GATE_READ_STEPS.values()) | {"promote_main_cycle.sh"}
+	for script, expected in RELEASE_GATE_READ_CALL_SITES.items():
+		text = (SCRIPTS / script).read_text(encoding="utf-8")
+		found = {helper: len(_read_helper_calls(text, helper)) for helper in READ_HELPERS}
+		listed = {**expected, **RELEASE_GATE_PAT_ONLY_CALLS.get(script, {})}
+		assert {helper: count for helper, count in found.items() if count} == listed, (script, found)
+	wait_review = (SCRIPTS / "stable_e2e_step_wait_review.sh").read_text(encoding="utf-8")
+	opt_in_line = wait_review[: wait_review.index(WAIT_REVIEW_OPT_IN)].count("\n") + 1
+	assert min(_read_helper_calls(wait_review, "gh_api_safe_quiet_print")) > opt_in_line
+	watch = (SCRIPTS / "dispatch_and_watch_workflow_run.sh").read_text(encoding="utf-8")
+	assert "GH_API_SAFE_USE_READ_TOKEN" not in watch
 
 
 @pytest.mark.parametrize("job_stderr", JOB_FAILURES)
