@@ -76,7 +76,9 @@ observe and every condition holds:
   (missing or null is not met).
 - `credentials`: the title starts with set/add/configure/provide/create and the
   step names GH_PAT or OPENROUTER_API_KEY; met when one of
-  OBSERVABLE_CREDENTIAL_WORKFLOWS has a successful run updated within
+  OBSERVABLE_CREDENTIAL_WORKFLOWS that requires every named credential
+  (OBSERVABLE_CREDENTIAL_PROOF_WORKFLOWS: `security-audit.yml` proves
+  OPENROUTER_API_KEY only) has a successful run updated within
   OBSERVABLE_CREDENTIAL_MAX_AGE_DAYS days.
 
 A step that also names any other UPPER_SNAKE identifier or rotate, revoke,
@@ -716,6 +718,13 @@ def tick(repo: str, stable_sha: str, repo_dir: str = ".", trusted_login: str | N
 # --- daily observable tick (pipeline-human-wait-elimination Phase 9, #10118) ---
 
 OBSERVABLE_CREDENTIAL_WORKFLOWS = ("review_autofix.yml", "internal-review.yml", "security-audit.yml")
+# Only a workflow that requires the named credential proves it (#10118 review):
+# security-audit.yml declares `GH_PAT: required: false` and falls back to the job
+# token, so its run proves OPENROUTER_API_KEY only. An unknown name proves nothing.
+OBSERVABLE_CREDENTIAL_PROOF_WORKFLOWS = {
+	"GH_PAT": ("review_autofix.yml", "internal-review.yml"),
+	"OPENROUTER_API_KEY": OBSERVABLE_CREDENTIAL_WORKFLOWS,
+}
 OBSERVABLE_CREDENTIAL_MAX_AGE_DAYS = 7
 MAX_OBSERVABLE_PR_READS = 10
 CONDITIONAL_STEP_RE = re.compile(
@@ -755,7 +764,9 @@ CREDENTIAL_REPO_SLUG_RE = re.compile(
 # Every `--repo`/`-R` flag must yield one captured slug: a value the slug pattern
 # cannot read (`<owner>/<app>`, `$TARGET`, a backtick-quoted value) keeps the step
 # open instead of skipping the repository check (#10118 review).
-CREDENTIAL_REPO_FLAG_RE = re.compile(r"(?<![A-Za-z0-9_-])(?:--repo|-R)(?:\s|=|$)")
+# The attached short form `-Racme/other` (pflag) counts as a flag too; the slug
+# pattern cannot read it, so the counts differ and the step stays open (#10118 review).
+CREDENTIAL_REPO_FLAG_RE = re.compile(r"(?<![A-Za-z0-9_-])(?:--repo(?:\s|=|$)|-R)")
 # An organisation, environment, app (Dependabot, Codespaces) or user secret
 # (`gh secret set --org/--repos/--env/--app/--user`, `-o`, `-e`, `-a`, `-u`) cannot be
 # proven by this repository's Actions runs either: such a step stays open (#10118 review).
@@ -863,12 +874,19 @@ def _check_allow_auto_merge(repo: str, cache: dict) -> str:
 	return "met" if data.get("allow_auto_merge") is True else "not_met"
 
 
-def _check_credentials(repo: str, cache: dict) -> str:
+def _check_credentials(repo: str, cache: dict, names: tuple[str, ...] | None = None) -> str:
 	now = _parse_utc(_now_iso())
 	if now is None:
 		return "check_failed"
+	# A workflow counts only when it requires every credential the step names.
+	proof_workflows = tuple(
+		workflow for workflow in OBSERVABLE_CREDENTIAL_WORKFLOWS
+		if all(workflow in OBSERVABLE_CREDENTIAL_PROOF_WORKFLOWS.get(name, ()) for name in (names or CREDENTIAL_NAMES))
+	)
+	if not proof_workflows:
+		return "not_met"
 	max_age = dt.timedelta(days=OBSERVABLE_CREDENTIAL_MAX_AGE_DAYS)
-	for workflow in OBSERVABLE_CREDENTIAL_WORKFLOWS:
+	for workflow in proof_workflows:
 		cache_key = f"runs:{workflow}"
 		if cache_key not in cache:
 			updated = None
@@ -885,7 +903,7 @@ def _check_credentials(repo: str, cache: dict) -> str:
 		if isinstance(updated, dt.datetime) and dt.timedelta(0) <= now - updated <= max_age:
 			return "met"
 	# No proof: an unread workflow is a failed check, not an unmet condition.
-	if any(cache.get(f"runs:{workflow}") == "error" for workflow in OBSERVABLE_CREDENTIAL_WORKFLOWS):
+	if any(cache.get(f"runs:{workflow}") == "error" for workflow in proof_workflows):
 		return "check_failed"
 	return "not_met"
 
@@ -917,11 +935,12 @@ def _observe_entry(repo: str, body: str, repo_dir: str, stable_sha: str, cache: 
 	Every unticked step is classified before any API call; one unrecognised
 	step keeps the entry open. Checks stop at the first step that is not met.
 	"""
-	classified = [_observable_condition(title, lines, repo) for title, lines in _unticked_step_blocks(body)]
+	blocks = _unticked_step_blocks(body)
+	classified = [_observable_condition(title, lines, repo) for title, lines in blocks]
 	reasons = [found[0] if found else "unrecognised" for found in classified]
 	if not classified or any(found is None for found in classified):
 		return "unrecognised", reasons, ""
-	for condition, numbers in classified:
+	for (title, lines), (condition, numbers) in zip(blocks, classified):
 		if condition == "conditional_not_a_gate":
 			status = "met"
 		elif condition == "stable_release":
@@ -929,7 +948,8 @@ def _observe_entry(repo: str, body: str, repo_dir: str, stable_sha: str, cache: 
 		elif condition == "allow_auto_merge":
 			status = _check_allow_auto_merge(repo, cache)
 		else:
-			status = _check_credentials(repo, cache)
+			step_text = "\n".join([str(title or "")] + [str(line) for line in lines])
+			status = _check_credentials(repo, cache, tuple(sorted(set(CREDENTIAL_NAME_RE.findall(step_text)))))
 		if status != "met":
 			return status, [condition], ""
 	unique = list(dict.fromkeys(reasons))

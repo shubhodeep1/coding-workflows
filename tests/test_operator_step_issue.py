@@ -1469,6 +1469,9 @@ def test_operator_step_daily_tick_keeps_a_reopened_tracker_open(daily: FakeGitHu
 	([{"title": "Add GH_PAT", "instructions": "gh secret set GH_PAT --app dependabot"}], {"runs": "recent"}, "unrecognised"),
 	([{"title": "Add GH_PAT", "instructions": "gh secret set GH_PAT -a codespaces"}], {"runs": "recent"}, "unrecognised"),
 	([{"title": "Add GH_PAT", "instructions": "gh secret set GH_PAT --user"}], {"runs": "recent"}, "unrecognised"),
+	([{"title": "Add GH_PAT", "instructions": "gh secret set GH_PAT -Racme/other"}], {"runs": "recent"}, "unrecognised"),
+	# security-audit.yml falls back to the job token: its run does not prove GH_PAT.
+	([CREDENTIAL_STEP], {"runs": "audit_only"}, "not_met"),
 	([{"title": "Set GH_PAT", "instructions": "Paste it on the consumer portal."}], {"runs": "recent"}, "unrecognised"),
 	([{"title": "Set GH_PAT in the vendor's portal", "instructions": ""}], {"runs": "recent"}, "unrecognised"),
 	([{"title": "Add OPENROUTER_API_KEY", "instructions": "Paste it at the consumer support desk."}], {"runs": "recent"}, "unrecognised"),
@@ -1488,6 +1491,9 @@ def test_operator_step_daily_tick_never_ticks_unrecognised_or_unmet_steps(
 		fake.repo_settings = setup["repo_settings"]
 	if setup.get("runs") == "none":
 		fake.workflow_runs = {name: [] for name in writer.OBSERVABLE_CREDENTIAL_WORKFLOWS}
+	elif setup.get("runs") == "audit_only":
+		fake.workflow_runs = {name: [] for name in writer.OBSERVABLE_CREDENTIAL_WORKFLOWS}
+		fake.workflow_runs["security-audit.yml"] = [{"updated_at": "2026-10-05T00:00:00Z"}]
 	elif setup.get("runs"):
 		stamp = "2026-10-05T00:00:00Z" if setup["runs"] == "recent" else "2026-09-30T00:00:00Z"
 		fake.workflow_runs = {name: [{"updated_at": stamp}] for name in writer.OBSERVABLE_CREDENTIAL_WORKFLOWS}
@@ -1508,6 +1514,18 @@ def test_operator_step_daily_tick_never_ticks_unrecognised_or_unmet_steps(
 	err = capsys.readouterr().err
 	assert f"OPERATOR_STEP_TICK key=unblock-1 outcome={outcome} reason=" in err
 	assert f"OPERATOR_STEP_TICK tracker={number} outcome=open reason=unticked" in err
+
+
+def test_operator_step_daily_tick_security_audit_run_proves_openrouter_key_only(daily: FakeGitHub, tmp_path: Path) -> None:
+	repo, _, stable, _ = _git_repo(tmp_path)
+	number = _tracker(daily)
+	_entry_comment(daily, number, 10, writer.render_entry("unblock-1", "openrouter", [
+		{"title": "Add the OPENROUTER_API_KEY secret", "instructions": "gh secret set OPENROUTER_API_KEY --repo o/r"}]))
+	_entry_comment(daily, number, 11, writer.render_entry("unblock-2", "pat", [CREDENTIAL_STEP]))
+	daily.workflow_runs = {name: [] for name in writer.OBSERVABLE_CREDENTIAL_WORKFLOWS}
+	daily.workflow_runs["security-audit.yml"] = [{"updated_at": "2026-10-05T00:00:00Z"}]
+	result = writer.tick(REPO, stable, str(repo), BOT, observable=True)
+	assert result["ticked"] == ["unblock-1"] and result["skipped"] == {"not_met": 1} and result["closed"] is False
 
 
 def test_operator_step_daily_tick_ignores_untrusted_and_forged_entries(daily: FakeGitHub, tmp_path: Path) -> None:
