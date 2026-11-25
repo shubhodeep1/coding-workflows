@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The judge is invoked in all three cases as today\" (linked issue #10059, Tests section)\n  expected_change_site: tests/test_orchestrate_poll_process.py, test_completion_status_two_delivered_items_warn_once_each (line 35710)\n  confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  EVIDENCE: test_completion_status_two_delivered_items_warn_once_each (lines 35710-35729, added in commit c5264229) exercises the two-delivered-items WARNING path but does not call _assert_wave_judge_ran(result), while the three sibling #10059 tests (test_completion_status_closed_as_delivered_warns_once, test_completion_status_closed_not_planned_keeps_critical, test_completion_status_mixed_closed_kinds_keeps_critical) call it at lines 35665, 35688 and 35707, the judge is invoked upstream of the completion-status block in scripts/orchestrate_poll_process.sh so the production path is unchanged, z-ai_glm-5_3-flash notes the three cases the issue names are already covered so this is a consistency nit rather than a literal unmet requirement (all three reviewers rated it SEVERITY: NIT), anthropic_claude-sonnet-5_5 explicitly declined to raise this gap because the two-item test is an extra case, not a fourth required case\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"the judge is invoked in all three cases as today\"\n  Expected change site: tests/test_orchestrate_poll_process.py test_completion_status_two_delivered_items_warn_once_each\n  Evidence of absence: The new test exercises the two-delivered-items path but does not invoke _assert_wave_judge_ran. The other three #10059 tests (test_completion_status_closed_as_delivered_warns_once, test_completion_status_closed_not_planned_keeps_critical, test_completion_status_mixed_closed_kinds_keeps_critical) all call _assert_wave_judge_ran. The test only checks the two WARNINGs and the log line, but the linked issue goals require verifying the judge invocation for all cases.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"The judge is invoked in all three cases as today\" (linked issue #10059, Tests section).\n  Expected change site: tests/test_orchestrate_poll_process.py, test_completion_status_two_delivered_items_warn_once_each (the new test added in the LAST RUN DIFF).\n  Evidence of absence: The new test added in commit c5264229 exercises the two-delivered-items WARNING path but does not call _assert_wave_judge_ran(result), while the three sibling #10059 tests (test_completion_status_closed_as_delivered_warns_once, test_completion_status_closed_not_planned_keeps_critical, test_completion_status_mixed_closed_kinds_keeps_critical) all do. The judge is invoked upstream of the completion-status block in scripts/orchestrate_poll_process.sh, so the production path is unchanged, but the new test is the only #10059 test that does not verify the judge still ran for its scenario.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: \"the judge is invoked in all three cases as today\" (linked issue #10059 Tests section) \u2014 consistency for the test introduced by the last run.\n  Expected change site: tests/test_orchestrate_poll_process.py, test_completion_status_two_delivered_items_warn_once_each (line 35710).\n  Evidence of absence: Verified in the working tree \u2014 _assert_wave_judge_ran is called at lines 35665, 35688 and 35707 by the other three #10059 tests but not anywhere inside test_completion_status_two_delivered_items_warn_once_each (lines 35710-35729). The three cases the issue names verbatim (delivered-only, blocking, mixed) are each already covered by a test that calls the helper, so this is not a literal unmet requirement; the last-run loop change (scripts/orchestrate_poll_process.sh:35112-35116) does not alter judge invocation. Consistency nit only: one added call would lock the contract.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1aeb394161fac69d99f8a494573ef8a206a18a4c33b0f40952ec6b7b0083aa73",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10069,
+    "run_id": "45607810650",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45607810650",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125135259_93765d6f53",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10069,
+    "run_id": "45607810650"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T13:52:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
