@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: For the \"every cancelled job lacks a timeout annotation\" check in step 1, how many API calls may the failure path make?\nContext: No cancelled job started \u2192 one jobs call is enough. Every cancelled job started (the cancel came while jobs were running, before `lint` began) \u2192 the existing classifier needs one annotation request per cancelled job. That breaks the \"at most one extra API call\" limit in the Automation section.\nChoices:\n- A: One jobs call plus at most `MAX_FAILED_JOBS_CLASSIFIED` (10) annotation requests, read through the existing `failure_annotations` / `shutdown_only_annotations` helpers. More cancelled jobs than the cap, or a failed annotation read, posts `failure` as today. Keeps both skip branches and the \"timeout annotation \u2192 failure\" test. The Automation section's \"at most one extra API call\" becomes \"one jobs call plus at most 10 annotation requests\". (RECOMMENDED)\n- B: Only one jobs call. Skip the status only when at least one cancelled job never started. Drop the annotation branch, so a run cancelled while all its jobs were running still posts `failure` (still a false red, but it never hides a timeout). The \"timeout annotation\" test becomes \"a cancelled job that ran: posts `failure`\".\n- C: One jobs call plus one annotation request per cancelled job that ran, with no cap. The full design applies, but a large matrix can mean dozens of requests.\n## Assumptions and notes\n- **Open PR #10103 (issue #10093):** it changes `scripts/ci_cancelled_rerun.py` and `.github/workflows/ci.yml`. The issue lists #10093 as out of scope and does not depend on that PR, so I did not hold this issue for it. Planning should expect possible merge conflicts in those two files.\n- **Calling the classifier from the bash script:** reusing it from `scripts/ci_final_status.sh` means calling Python from bash. I treated that as a planning detail, not a question.",
+  "fingerprint": "071603a3c1e68d2570cd518ad5d3c86dd82b7ac5d27cce3831671bbd5fcafbca",
+  "lineage": {
+    "issue_number": 10131,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45687256636",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45687256636",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261125194928_0a9c5fe72a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10131,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45687256636"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #10131 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-25T19:49:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
