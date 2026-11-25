@@ -2255,7 +2255,7 @@ _mt_merge_lease_tick()
 				# winner may have released it (and kept the shared label), so
 				# the label goes only while the re-read record still holds it.
 				if [ "${tick_reason}" = "released_conflict" ] && declare -F _merge_lease_unlabel_conflict_released >/dev/null 2>&1 \
-					&& _mt_merge_lease_conflict_unlabel_due "${tick_rc}" "${tick_rel_pr}" "${tick_skip_head:-}"; then
+					&& _mt_merge_lease_conflict_unlabel_due "${tick_rc}" "${tick_rel_pr}"; then
 					_merge_lease_unlabel_conflict_released "${tick_rel_pr}"
 				fi
 				_mt_log "MERGE_LEASE pr=${MERGE_LEASE_PR} base=${tick_base} mode=tick outcome=$([ "${tick_rc}" -eq 3 ] && echo lost_race || echo write_failed) reason=${tick_reason}"
@@ -2673,7 +2673,7 @@ _mt_merge_lease_tick_multi()
 			# Issue #10098: as the single-holder tick, an unreleased holder
 			# does not keep the one-time conflict-released marker.
 			if [ "${tm_reason}" = "released_conflict" ] && declare -F _merge_lease_unlabel_conflict_released >/dev/null 2>&1 \
-				&& _mt_merge_lease_conflict_unlabel_due "${tm_rc}" "${tm_h}" "${tm_skip_head:-}"; then
+				&& _mt_merge_lease_conflict_unlabel_due "${tm_rc}" "${tm_h}"; then
 				_merge_lease_unlabel_conflict_released "${tm_h}"
 			fi
 			tm_outcome="write_failed"
@@ -2990,21 +2990,18 @@ _mt_merge_lease_ready_waiter_exists()
 # re-read also removes it: a wrongly kept label would keep a conflicting
 # holder's slot on every later head, a wrongly removed one allows at most one
 # more conflict release, on a changed head).
-# [<skip_head>]: the head this tick wrote into its own skip entry
-# (tick_skip_head / tm_skip_head). When it is a 40-hex SHA, only a
-# released_conflict entry for that head keeps the label, so an older head's
-# entry left in the record cannot; absent or malformed keeps the head-agnostic
-# match.
+# The entry may be for any head: overlapping ticks can list the holder at
+# different heads (the winner released it on H1, this tick listed H2), and
+# any released_conflict entry for <holder_pr> proves its one conflict release
+# happened, which is what the label marks.
 _mt_merge_lease_conflict_unlabel_due()
 {
-	local cud_head="${3:-}"
-	[[ "${cud_head}" =~ ^[0-9a-f]{40}$ ]] || cud_head=""
 	[ "${1:-}" = 3 ] || return 0
 	if [ "${MERGE_LEASE_STATE:-}" = "held" ] \
 		&& printf '%s\n' "${MERGE_LEASE_HOLDER_ALL_ROWS:-}" | awk -v p="${2:-}" 'p != "" && $1 == p { f = 1 } END { exit !f }'; then
 		return 0
 	fi
-	printf '%s\n' "${MERGE_LEASE_SKIPS:-}" | awk -F: -v p="${2:-}" -v h="${cud_head}" 'p != "" && $1 == p && length($2) == 40 && $2 ~ /^[0-9a-f]+$/ && (h == "" || $2 == h) && $3 == "released_conflict" { f = 1 } END { exit !f }' && return 1
+	printf '%s\n' "${MERGE_LEASE_SKIPS:-}" | awk -F: -v p="${2:-}" 'p != "" && $1 == p && length($2) == 40 && $2 ~ /^[0-9a-f]+$/ && $3 == "released_conflict" { f = 1 } END { exit !f }' && return 1
 	return 0
 }
 
