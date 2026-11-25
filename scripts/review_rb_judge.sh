@@ -816,7 +816,8 @@ PY
 # Review convergence rule (issue #10056): lists the ledger entries the review
 # stage marked `CONVERGENCE: advisory-lone` (a finding one reviewer raised that
 # did not block a round) as compact informational notes for the judge. Runs
-# when the ledger and REVIEW_CONVERGENCE_ENABLED are on; unlike the prior-round
+# when REVIEW_CONVERGENCE_ENABLED is on (with the ledger off it reads this
+# run's review_convergence_advisory.txt instead); unlike the prior-round
 # decisions it does not need REVIEW_LEDGER_REREVIEW_ENABLED. Fail-open: any
 # error leaves the output file empty.
 render_review_rb_convergence_advisory_file() {
@@ -825,7 +826,59 @@ render_review_rb_convergence_advisory_file() {
   local tmp_path=""
 
   : > "${out_path}"
-  if ! flag_enabled "${REVIEW_LEDGER_ENABLED:-1}" || ! flag_enabled "${REVIEW_CONVERGENCE_ENABLED:-true}"; then
+  if ! flag_enabled "${REVIEW_CONVERGENCE_ENABLED:-true}"; then
+    return 0
+  fi
+  if ! flag_enabled "${REVIEW_LEDGER_ENABLED:-1}"; then
+    # Ledger off: scripts/review_issue_ledger.sh still classifies and writes
+    # this run's advisory TSV (block id, file:lines, lens, severity,
+    # reviewers, round, summary), so the notes come from it instead and a
+    # lone finding still reaches the judge.
+    local conv_tsv_path="${REVIEW_CONVERGENCE_ADVISORY_FILE:-${RUNTIME_DIR:-}/review_convergence_advisory.txt}"
+    if [ -z "${RUNTIME_DIR:-}${REVIEW_CONVERGENCE_ADVISORY_FILE:-}" ] || [ ! -f "${conv_tsv_path}" ] || [ -L "${conv_tsv_path}" ] \
+      || [ ! -s "${conv_tsv_path}" ] || ! command -v python3 >/dev/null 2>&1; then
+      return 0
+    fi
+    tmp_path="$(mktemp)" || return 0
+    if PYTHONDONTWRITEBYTECODE=1 python3 - "${conv_tsv_path}" > "${tmp_path}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+def clean(value: str) -> str:
+    value = re.sub(r"[\x00-\x1f\x7f]", " ", value)
+    return " ".join(value.replace(";", ",").split())[:300]
+
+for row in Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").splitlines()[:200]:
+    cols = row.split("\t")
+    if len(cols) < 7 or not cols[0].strip():
+        continue
+    anchor = cols[1]
+    file_part, sep, lines_part = anchor.rpartition(":")
+    if not sep:
+        file_part, lines_part = anchor, ""
+    parts = [
+        f"issue_id={clean(cols[0]) or 'unknown'}",
+        f"file={clean(file_part) or 'unknown'}",
+        f"lines={clean(lines_part) or 'unknown'}",
+        f"lens={clean(cols[2]) or 'unknown'}",
+        f"severity={clean(cols[3]) or 'unknown'}",
+        "status=advisory-lone",
+        f"reviewers={clean(cols[4]) or 'none'}",
+        f"round={clean(cols[5]) or 'unknown'}",
+    ]
+    print("; ".join(parts))
+PY
+    then
+      mv "${tmp_path}" "${out_path}" 2>/dev/null || {
+        rm -f "${tmp_path}"
+        : > "${out_path}"
+      }
+    else
+      printf '%s\n' "::warning::review_blocked_judge convergence_advisory_skipped=1 reason=advisory_tsv_parse_failed" >&2
+      rm -f "${tmp_path}"
+      : > "${out_path}"
+    fi
     return 0
   fi
   if [ ! -s "${ledger_path}" ] || ! command -v python3 >/dev/null 2>&1; then

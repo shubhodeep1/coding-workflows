@@ -11514,6 +11514,35 @@ def test_review_convergence_rb_judge_notes(tmp_path: Path) -> None:
 	assert "`=== BEGIN CONVERGENCE ADVISORY NOTES ===`" in judge_prompt
 
 
+def test_review_convergence_rb_judge_notes_with_ledger_off(tmp_path: Path) -> None:
+	# With REVIEW_LEDGER_ENABLED=0 the ledger file is never written, but the
+	# classifier still writes this run's advisory TSV; the judge notes come
+	# from it so a lone finding still reaches the judge (#10056).
+	source = _CONV_RB_JUDGE.read_text(encoding="utf-8")
+	flag_fn = re.search(r"^flag_enabled\(\) \{\n.*?^\}\n", source, re.S | re.M).group(0)
+	render_fn = re.search(r"^render_review_rb_convergence_advisory_file\(\) \{\n.*?^\}\n", source, re.S | re.M).group(0)
+	runtime_dir = tmp_path / "rt"
+	runtime_dir.mkdir()
+	(runtime_dir / "review_convergence_advisory.txt").write_text(
+		"001\tsrc/a.py:7-9\tCORRECTNESS & LOGIC\thigh\talpha\t3\tsummary; text\n", encoding="utf-8"
+	)
+	out = tmp_path / "out.txt"
+	for enabled, expected in (
+		("true", "issue_id=001; file=src/a.py; lines=7-9; lens=CORRECTNESS & LOGIC; severity=high; status=advisory-lone; reviewers=alpha; round=3\n"),
+		("false", ""),
+	):
+		env = {
+			"PATH": os.environ.get("PATH", ""),
+			"REVIEW_CONVERGENCE_ENABLED": enabled,
+			"REVIEW_LEDGER_ENABLED": "0",
+			"RUNTIME_DIR": str(runtime_dir),
+		}
+		script = flag_fn + render_fn + f'render_review_rb_convergence_advisory_file "{tmp_path / "missing-ledger.txt"}" "{out}"\n'
+		result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, timeout=30, check=False)
+		assert result.returncode == 0, result.stderr
+		assert out.read_text(encoding="utf-8") == expected
+
+
 def test_review_convergence_ci_gates_untouched() -> None:
 	for name in ("review_head_gate.sh", "review_final_ci_failed.sh"):
 		assert "REVIEW_CONVERGENCE" not in (REPO_ROOT / "scripts" / name).read_text(encoding="utf-8")

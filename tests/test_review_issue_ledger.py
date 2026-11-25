@@ -858,6 +858,45 @@ def test_convergence_reviewer_template_shape_counts_as_support() -> None:
 		assert "blocking=0 advisory_lone=1" in _conv_log(result)
 
 
+def test_convergence_reviewer_shapes_like_floor_rules_count_as_support() -> None:
+	# Shapes scripts/review_floor_rules.sh accepts: a containing range with no
+	# endpoint near LINES, a backticked or annotated `File:` value, an empty
+	# `File:` label with the path on the next line, and an empty reference
+	# label with the reference on the next line (#10056).
+	cases = (
+		("1030-1045", "File: src/module.py\nLine or code reference: lines 1020-1060\n"),
+		("50", "File: src/module.py\nLine or code reference: lines 1-100\n"),
+		("50", "Problem: see src/module.py:1-100 for the whole function\n"),
+		("2", "File: `src/module.py`\nLine or code reference: line 2\n"),
+		("2", "File: src/module.py (sample)\nCode: line 2\n"),
+		("2", "File:\nsrc/module.py\nLine or code reference: line 2\n"),
+		("2", "File: src/module.py\nLine or code reference:\n\nlines 1-4 (sample)\n"),
+	)
+	for lines, shape in cases:
+		reviewers = {"alpha": shape, "beta": shape, "gamma": "No findings.\n"}
+		with tempfile.TemporaryDirectory() as td:
+			workspace = _conv_workspace(td)
+			issue = _conv_issue("001", lines=lines, flagged_by="alpha", evidence='alpha> "wrong total"')
+			result = _run_convergence(workspace, issue, reviewers=reviewers)
+			assert result.returncode == 0, result.stderr
+			assert "blocking=1 advisory_lone=0 outcome=continue applied=1" in _conv_log(result), shape
+
+
+def test_convergence_failed_reviewer_does_not_count_toward_panel() -> None:
+	# A failed slot leaves a non-empty failure notice in its review file
+	# (scripts/review_run_reviewers.sh); it is not a reviewer in the round.
+	for notice in (
+		"Reviewer gamma failed after 3 attempts.\n",
+		"Reviewer slot gamma skipped after retryable failure (rate_limit); no same-family failback mapping is available.\n",
+	):
+		reviewers = {"alpha": _CONV_DEFAULT_REVIEWERS["alpha"], "beta": "No findings.\n", "gamma": notice}
+		with tempfile.TemporaryDirectory() as td:
+			workspace = _conv_workspace(td)
+			result = _run_convergence(workspace, _conv_issue("001"), reviewers=reviewers)
+			assert result.returncode == 0, result.stderr
+			assert "blocking=1 advisory_lone=0 outcome=continue applied=0 reason=panel_too_small" in _conv_log(result), notice
+
+
 def test_convergence_quote_support_counts_and_unnamed_fallback() -> None:
 	reviewers = dict(_CONV_DEFAULT_REVIEWERS)
 	reviewers["gamma"] = "I agree: Arithmetic is wrong for the   edge case in sample.\n"

@@ -853,61 +853,127 @@ review_convergence_classify()
 				sec_full[nsec] = base
 				sec_text[nsec] = ""
 				sec_nonempty[nsec] = 0
+				# A section whose every non-empty line is a reviewer failure
+				# notice (scripts/review_run_reviewers.sh writes
+				# `Reviewer <model> failed after ...` or
+				# `Reviewer slot <model> skipped after ...` into the output
+				# file) is not a reviewer that took part in the round.
+				sec_failed_only[nsec] = 1
 				nanc[nsec] = 0
 				pending_file[nsec] = ""
+				pending_ref[nsec] = 0
+				pending_path[nsec] = 0
 			}
 			cur = sec_index[key]
 		}
-		function add_anchor(s, f, ln) {
+		# Range anchor: a reference such as `lines 1020-1060` supports a
+		# finding whose LINES overlap it (within the tolerance), not only one
+		# that contains an endpoint.
+		function add_anchor(s, f, ln, ln_hi,    t) {
 			f = norm_path(f)
 			if (f == "" || ln == "") {
 				return
 			}
+			ln = ln + 0
+			ln_hi = (ln_hi == "") ? ln : ln_hi + 0
+			if (ln_hi < ln) {
+				t = ln
+				ln = ln_hi
+				ln_hi = t
+			}
 			nanc[s]++
 			anc_file[s, nanc[s]] = f
-			anc_line[s, nanc[s]] = ln + 0
+			anc_line[s, nanc[s]] = ln
+			anc_hi[s, nanc[s]] = ln_hi
+		}
+		function add_ref_anchors(s, ref,    nref, rm) {
+			nref = 0
+			while (nref < 20 && match(ref, /([0-9]+)([[:space:]]*-[[:space:]]*([0-9]+))?/, rm)) {
+				add_anchor(s, pending_file[s], rm[1], rm[3])
+				ref = substr(ref, RSTART + RLENGTH)
+				nref++
+			}
+		}
+		function is_label_line(lw) {
+			return (lw ~ /^[[:space:]]*(file|line|line or code reference|code|problem|why it fails at runtime|severity|issue_confidence)[[:space:]]*:/)
+		}
+		function live_section(s) {
+			return (sec_nonempty[s] && !sec_failed_only[s])
 		}
 		# Same anchor shapes as review_parse_consolidator.sh emit_anchor
 		# (path:line, and a FILE: line followed by a LINE: line); path:line is
 		# also accepted mid-line, which can only add support (toward blocking).
 		# The shape the reviewer template asks for (scripts/review_run_reviewers.sh:
 		# `File: <path>` then `Line or code reference: <ref>`, or `Code: <ref>`,
-		# as scripts/review_floor_rules.sh reads it) anchors every integer in the
-		# reference (at most 20). A stray number can only add support (toward
+		# as scripts/review_floor_rules.sh reads it) anchors every integer or
+		# `N-M` range in the reference (at most 20); a range supports any LINES
+		# it overlaps within the tolerance. A stray number can only add support (toward
 		# blocking); a reference with no number adds no anchor and falls back to
 		# the EVIDENCE quote match.
-		function scan_content_line(s, line,    rest, hit, f, l, ref, nref) {
+		# Like scripts/review_floor_rules.sh, a backticked or quoted `File:`
+		# value, a value with trailing text (`File: a.sh (fn)`), an empty
+		# `File:` label with the path on the next line, and an empty
+		# `Line or code reference:` / `Code:` label with the reference on the
+		# next line are all accepted; each can only add support.
+		function scan_content_line(s, line,    rest, hit, f, l, ref, lw, fl) {
 			if (line ~ /[^[:space:]]/) {
 				sec_nonempty[s] = 1
+				if (line !~ /^[[:space:]]*Reviewer (slot )?[^[:space:]]+ (failed|skipped) after /) {
+					sec_failed_only[s] = 0
+				}
 			}
 			sec_text[s] = sec_text[s] " " norm_text(line)
 			rest = line
 			gsub(/[`"\047]/, " ", rest)
-			while (match(rest, /([A-Za-z0-9_./-]+\.[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*):([0-9]+)/, hit)) {
-				add_anchor(s, hit[1], hit[3])
+			fl = rest
+			lw = tolower(line)
+			while (match(rest, /([A-Za-z0-9_./-]+\.[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*):([0-9]+)([[:space:]]*-[[:space:]]*([0-9]+))?/, hit)) {
+				add_anchor(s, hit[1], hit[3], hit[5])
 				rest = substr(rest, RSTART + RLENGTH)
 			}
-			if (match(line, /^[[:space:]]*[Ff][Ii][Ll][Ee]:[[:space:]]*([A-Za-z0-9_./-]+\.[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*)[[:space:]]*$/, f)) {
-				pending_file[s] = f[1]
+			if (lw ~ /^[[:space:]]*file:/) {
+				pending_file[s] = ""
+				pending_ref[s] = 0
+				pending_path[s] = 0
+				if (match(fl, /^[[:space:]]*[Ff][Ii][Ll][Ee]:[[:space:]]*([A-Za-z0-9_./-]+\.[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*)/, f)) {
+					pending_file[s] = f[1]
+				} else if (fl ~ /^[[:space:]]*[Ff][Ii][Ll][Ee]:[[:space:]]*$/) {
+					pending_path[s] = 1
+				}
 				return
+			}
+			if (pending_path[s] && line ~ /[^[:space:]]/) {
+				pending_path[s] = 0
+				if (!is_label_line(lw) && match(fl, /^[[:space:]]*([A-Za-z0-9_./-]+\.[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*)/, f)) {
+					pending_file[s] = f[1]
+					return
+				}
 			}
 			if (pending_file[s] != "" && match(line, /^[[:space:]]*[Ll][Ii][Nn][Ee]:[[:space:]]*([0-9]+)/, l)) {
 				add_anchor(s, pending_file[s], l[1])
 				pending_file[s] = ""
 				return
 			}
-			if (pending_file[s] != "" && tolower(line) ~ /^[[:space:]]*(line or code reference|code)[[:space:]]*:/) {
+			if (pending_file[s] != "" && lw ~ /^[[:space:]]*(line or code reference|code)[[:space:]]*:/) {
 				ref = substr(line, index(line, ":") + 1)
-				nref = 0
-				while (nref < 20 && match(ref, /[0-9]+/)) {
-					add_anchor(s, pending_file[s], substr(ref, RSTART, RLENGTH))
-					ref = substr(ref, RSTART + RLENGTH)
-					nref++
+				if (ref ~ /^[[:space:]]*$/) {
+					# Empty label: the reference is on the next non-empty line.
+					pending_ref[s] = 1
+					return
+				}
+				add_ref_anchors(s, ref)
+				pending_file[s] = ""
+				return
+			}
+			if (pending_ref[s] && line ~ /[^[:space:]]/) {
+				pending_ref[s] = 0
+				if (!is_label_line(lw)) {
+					add_ref_anchors(s, line)
 				}
 				pending_file[s] = ""
 				return
 			}
-			if (pending_file[s] != "" && line ~ /^[[:space:]]*$/) {
+			if (pending_file[s] != "" && !pending_ref[s] && line ~ /^[[:space:]]*$/) {
 				pending_file[s] = ""
 			}
 		}
@@ -918,7 +984,7 @@ review_convergence_classify()
 			prepared = 1
 			panel = 0
 			for (s = 1; s <= nsec; s++) {
-				if (sec_nonempty[s]) {
+				if (live_section(s)) {
 					panel++
 				}
 			}
@@ -1037,12 +1103,12 @@ review_convergence_classify()
 			if (applied) {
 				for (s = 1; s <= nsec; s++) {
 					sup[s] = 0
-					if (!sec_nonempty[s]) {
+					if (!live_section(s)) {
 						continue
 					}
 					if (has_range && file != "") {
 						for (k = 1; k <= nanc[s]; k++) {
-							if (anc_file[s, k] == file && anc_line[s, k] >= lo - tolerance && anc_line[s, k] <= hi + tolerance) {
+							if (anc_file[s, k] == file && anc_line[s, k] <= hi + tolerance && anc_hi[s, k] >= lo - tolerance) {
 								sup[s] = 1
 								break
 							}
