@@ -1539,3 +1539,18 @@ def test_operator_step_resolve_holds_a_signed_entry_with_text_after_its_signatur
 	result = writer.resolve(REPO, BOT)
 	assert result["closed"] is False and result["unverified"] == 1 and fake.patches() == []
 	assert f"op=close issue={number} outcome=open reason=unverified_signed_entries" in capsys.readouterr().err
+
+
+def test_operator_step_resolve_holds_a_signed_entry_with_a_mangled_signature_prefix(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+	# A hand edit dropped the space after `v1`: the line no longer matches the
+	# verify regex, and the entry must still keep the tracker open.
+	monkeypatch.setenv("AI_COMMENT_SIGNING_SECRET", SIGNING_SECRET)
+	number = _tracker(fake)
+	_done_entry(fake, number, 10, "pr-1")
+	comment = _signed_entry(fake, number, 11, writer.render_entry("pr-2", "two", [SECRET_STEP], RELEASE_SHA))
+	assert "<!-- ai-comment-sig:v1 repo=" in comment["body"]
+	comment["body"] = comment["body"].replace("<!-- ai-comment-sig:v1 repo=", "<!-- ai-comment-sig:v1repo=")
+	result = writer.resolve(REPO, BOT)
+	assert result["closed"] is False and result["unverified"] == 1 and fake.patches() == []
+	assert f"op=close issue={number} outcome=open reason=unverified_signed_entries" in capsys.readouterr().err

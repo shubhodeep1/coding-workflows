@@ -457,7 +457,8 @@ SIGNED_COMMENT_LINE_RE = re.compile(r"\n<!-- ai-comment-sig:v1 [^\n]*-->[ \t\r\n
 # Looser still, for the fail-closed hold only: a bot entry comment whose
 # signature line is no longer last (text appended after it by hand) can never
 # verify, but it must keep its key unverified rather than drop out of both sets.
-SIGNED_COMMENT_MARKER = "<!-- ai-comment-sig:v1 "
+# No trailing space: a mangled prefix (`<!-- ai-comment-sig:v1repo=...`) is held too.
+SIGNED_COMMENT_MARKER = "<!-- ai-comment-sig:v1"
 _COMMENT_SIGNATURE_STATE: dict = {"loaded": False, "module": None}
 
 
