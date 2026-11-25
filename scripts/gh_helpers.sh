@@ -1079,8 +1079,12 @@ gh_review_pr_state()
 #   caller=<script>` is logged to stderr, and gh runs once with the PAT.
 #   A 401 or a non-rate-limit 403 (missing scope) writes a per-job
 #   latch file so later calls go straight to the PAT.
-# - Any other failure returns the job-token result to the caller's own
-#   retry wrapper (gh_retry).
+# - Any other job-token failure (a 5xx, a network or other non-HTTP
+#   error) also drops the output, logs `GH_READ_FALLBACK reason=error
+#   caller=<script>` and runs gh once with the PAT, without latching, so
+#   a failing job token can never stop a polling read that the PAT would
+#   have answered (follow-up to #9888). Only the PAT's result reaches the
+#   caller's own retry wrapper (gh_retry).
 # The token value is never printed: xtrace is off while it is in use.
 # ---------------------------------------------------------------
 _gh_read_args_are_read()
@@ -1310,11 +1314,13 @@ _gh_read_run()
 	elif printf '%s' "${err_text}" | grep -q 'HTTP 404'; then
 		reason="404"
 	fi
+	# Any other failure (5xx, network, non-HTTP error) also falls back once
+	# to the PAT: before #9888 these reads used the PAT alone, so a job-token
+	# problem must never fail a read the PAT can answer. The job-token output
+	# and stderr are dropped so a wrapping gh_retry classifies only the PAT's
+	# result. No latch: the next call tries the job token again.
 	if [ -z "${reason}" ]; then
-		cat "${out_file}" 2>/dev/null || true
-		cat "${err_file}" >&2 2>/dev/null || true
-		rm -f "${out_file}" "${err_file}"
-		return "${rc}"
+		reason="error"
 	fi
 	rm -f "${out_file}" "${err_file}"
 	if [ "${reason}" = "401" ] || [ "${reason}" = "403" ]; then
