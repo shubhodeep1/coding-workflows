@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  expected_change_site: .github/workflows/ci.yml, job `tests-heal-plan-and-validation`\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The PR diff moves no steps and only adds or refines the comment block at ci.yml:1855-1860, and the repo holds no step timings for run 44214045174. Severity disagreement: google_gemini-3_1-flash-lite rated it MAJOR (confidence 4), while anthropic_claude-sonnet-5_5 (confidence 2) and minimax_minimax-m3 (confidence 3) rated it NIT and treated it as deferred, since #9420/#9684/PR #9702 already moved six steps to tests-hooks-and-orchestrator. z-ai_glm-5_3-flash reported no gap and cited the same deferral.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: .github/workflows/ci.yml, job `tests-heal-plan-and-validation`\n  Evidence of absence: This PR's diff moves no steps and only adds the comment block at ci.yml lines 1855-1860. Lines 1578, 1610 and 1652 record that budget-watch issue #9420 (re-issued as #9684) already moved six steps out of this job. The flagged run's 15m24s is close to the pre-move 15m35s, so the run most likely predates the move. The repo has no step timings for run 44214045174, and nothing shows which job has headroom. `timeout-minutes: 20` is unchanged and no job names were added. Treated as deferred, not a defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml, job `tests-heal-plan-and-validation`\n  Evidence of absence: The PR diff does not move any steps from `tests-heal-plan-and-validation`. It adds a comment advising future maintainers to inspect run step timings, but does not move the currently flagged slowest steps.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: .github/workflows/ci.yml, job tests-heal-plan-and-validation, the slowest steps identified in budget-watch run 44214045174.\n  Evidence of absence: The PR diff and last-run diff contain only comment changes in the six-line block at ci.yml:1855-1860, which cites #9420/#9684/#9702 like lines 1578, 1609-1610 and 1652. The six heaviest steps named in changelog.d/9420-ci-heal-job-steps-to-hooks-job.md were already moved to tests-hooks-and-orchestrator by #9420/#9684/PR #9702 before this PR. The operator's issue-summary comment redirects the expected outcome to a YAML comment only. The repo holds no step timings for run 44214045174. Treated as deferred rather than missing; the comment at ci.yml:1859-1860 tells maintainers to read step timings before moving anything.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2b791acbf4103ff4c667e7e7fb6849022354ebf773d4a2058a7b1c25b7d67307",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10074,
+    "run_id": "45520184912",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45520184912",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125023700_f1f3b2b18d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10074,
+    "run_id": "45520184912"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T02:37:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
