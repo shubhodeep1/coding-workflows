@@ -730,6 +730,14 @@ CREDENTIAL_NAME_RE = re.compile(r"(?<![A-Za-z0-9_])(?:GH_PAT|OPENROUTER_API_KEY)
 UPPER_SNAKE_RE = re.compile(r"(?<![A-Za-z0-9_])[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+(?![A-Za-z0-9_])")
 HUMAN_ACTION_RE = re.compile(r"(?<![A-Za-z])(?:rotat\w*|revok\w*|scopes?|scoped|expir\w*|permissions?)(?![A-Za-z])", re.I)
 NEGATED_ACTION_RE = re.compile(r"(?<![A-Za-z])(?:disabl\w*|turn(?:ing)?\s+off|remov\w*|delet\w*|unset\w*)(?![A-Za-z])", re.I)
+# A credential step that hands the secret to someone or somewhere else is a human
+# step: the workflow-run proof only shows this repository's own runs (#10118 review).
+CREDENTIAL_HANDOFF_RE = re.compile(
+	r"(?<![A-Za-z])(?:to|for|with|from)\s+(?:the\s+|a\s+|an\s+|our\s+|your\s+|each\s+|every\s+|all\s+)?"
+	r"(?:vendors?|consumers?|customers?|clients?|partners?|teams?|support|maintainers?|owners?|admins?|third[ -]part(?:y|ies))(?![A-Za-z])"
+	r"|(?<![A-Za-z])(?:consumer|other|every|each|all)\s+repo|(?<![A-Za-z])(?:send|email|share|forward|hand\s+(?:over|off))(?![A-Za-z])",
+	re.I,
+)
 # Human-object words a recognised step may name without becoming a human step:
 # the auto-merge toggle lives in the repository settings, and a credential
 # step necessarily names its secret/token/key.
@@ -785,6 +793,8 @@ def _observable_condition(title: str, lines: list[str]) -> tuple[str, list[int]]
 		return None
 	if condition in ("allow_auto_merge", "credentials") and NEGATED_ACTION_RE.search(text):
 		return None
+	if condition == "credentials" and CREDENTIAL_HANDOFF_RE.search(text):
+		return None
 	stripped = UPPER_SNAKE_RE.sub(" ", text)
 	allowed_words = _OBSERVABLE_ALLOWED_OBJECT_WORDS.get(condition)
 	for word_match in HUMAN_OBJECT_TITLE_RE.finditer(re.sub(r"(?<=[a-z])(?=[A-Z])", "_", stripped)):
@@ -837,10 +847,14 @@ def _check_credentials(repo: str, cache: dict) -> str:
 			runs = data.get("workflow_runs") if isinstance(data, dict) else None
 			if isinstance(runs, list) and runs and isinstance(runs[0], dict):
 				updated = _parse_utc(runs[0].get("updated_at"))
-			cache[cache_key] = updated
+			# A failed or unreadable read is cached as "error" so it fails closed below.
+			cache[cache_key] = updated if isinstance(data, dict) else "error"
 		updated = cache[cache_key]
-		if updated is not None and dt.timedelta(0) <= now - updated <= max_age:
+		if isinstance(updated, dt.datetime) and dt.timedelta(0) <= now - updated <= max_age:
 			return "met"
+	# No proof: an unread workflow is a failed check, not an unmet condition.
+	if any(cache.get(f"runs:{workflow}") == "error" for workflow in OBSERVABLE_CREDENTIAL_WORKFLOWS):
+		return "check_failed"
 	return "not_met"
 
 

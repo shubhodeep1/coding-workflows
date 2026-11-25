@@ -1451,7 +1451,10 @@ def test_operator_step_daily_tick_keeps_a_reopened_tracker_open(daily: FakeGitHu
 	([AUTO_MERGE_STEP], {"repo_settings": {"allow_auto_merge": None}}, "not_met"),
 	([AUTO_MERGE_STEP], {}, "check_failed"),
 	([CREDENTIAL_STEP], {"runs": "old"}, "not_met"),
-	([CREDENTIAL_STEP], {}, "not_met"),
+	([CREDENTIAL_STEP], {}, "check_failed"),
+	([CREDENTIAL_STEP], {"runs": "none"}, "not_met"),
+	([{"title": "Provide GH_PAT to the vendor", "instructions": ""}], {"runs": "recent"}, "unrecognised"),
+	([{"title": "Add GH_PAT", "instructions": "Set it in every consumer repo."}], {"runs": "recent"}, "unrecognised"),
 	([STABLE_PR_STEP], {"pull": "side"}, "not_met"),
 	([STABLE_PR_STEP], {"pull": "open"}, "not_met"),
 	([STABLE_PR_STEP], {}, "check_failed"),
@@ -1466,7 +1469,9 @@ def test_operator_step_daily_tick_never_ticks_unrecognised_or_unmet_steps(
 	_entry_comment(fake, number, 10, writer.render_entry("unblock-1", "entry", steps))
 	if "repo_settings" in setup:
 		fake.repo_settings = setup["repo_settings"]
-	if setup.get("runs"):
+	if setup.get("runs") == "none":
+		fake.workflow_runs = {name: [] for name in writer.OBSERVABLE_CREDENTIAL_WORKFLOWS}
+	elif setup.get("runs"):
 		stamp = "2026-10-05T00:00:00Z" if setup["runs"] == "recent" else "2026-09-30T00:00:00Z"
 		fake.workflow_runs = {name: [{"updated_at": stamp}] for name in writer.OBSERVABLE_CREDENTIAL_WORKFLOWS}
 	if setup.get("pull") == "side":
