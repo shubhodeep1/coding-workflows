@@ -36,7 +36,7 @@ $ARGUMENTS
    Ranking alone does not decide the recommendation — the pick is made in step 6, after the conflict screen.
 
 6. **Screen candidates against in-flight project work (merge-conflict gate).** The recommendation must be startable *now* without colliding with work already in flight from the **AI orchestrator** (`/implement-plan-ai` or `/implement-plan-claude`; each project is an open `ai:orchestrator-tracking` issue):
-   - **Fetch GitHub state once.** Use REST per §23.D (`gh api "repos/<owner>/<repo>/issues?labels=ai:orchestrator-tracking&state=open"`, one `state=open` pulls listing; read both to their last page with `--paginate` and `per_page=100`, since GitHub returns only 30 items by default, and count a listing not read to its last page as unreadable) and batch per §15 — one issue listing and one PR listing serve every project; do not query per candidate plan or per project. Reuse the issue listing step 4a already fetched. Fetch it here only when step 4a had no plan to check and made no fetch; when step 4a's fetch failed, this step is in degraded mode.
+   - **Fetch GitHub state once.** Use REST per §23.D (`gh api "repos/<owner>/<repo>/issues?labels=ai:orchestrator-tracking&state=open"`, one `state=open` pulls listing; read both to their last page with `--paginate` and `per_page=100`, since GitHub returns only 30 items by default, and count a listing not read to its last page as unreadable) and batch per §15 — one issue listing and one PR listing serve every project; do not query per candidate plan or per project. Reuse the issue listing step 4a already fetched. Fetch it here only when step 4a had no plan to check and made no fetch; when step 4a's tracking-issue listing could not be read, this step is in degraded mode (a failed `git fetch origin <default>` alone does not degrade it).
    - **Enumerate in-flight orchestrator work.** List **open** orchestrator tracking issues (label `ai:orchestrator-tracking`) and the **unmerged** PRs belonging to them: open PRs whose head or base branch matches the integration-branch pattern (`^orchestrator/project-`, cf. `ORCH_INTEGRATION_BRANCH_PATTERN`) plus open PRs that reference a tracking issue (`Refs #N` / `Related to #N`).
    - **Build the in-flight footprint.** Take the union of:
      - (a) the files changed by each unmerged in-flight PR (`gh api "repos/<owner>/<repo>/pulls/<n>/files"`, paginated);
@@ -128,6 +128,7 @@ with in-flight orchestrator work (or the UNSCREENED caveat). Reference
 /implement-plan-claude (Claude-engine orchestrator hand-off) or /implement-plan-ai (default-engine hand-off) as the follow-up.>
 Refreshed in <maintenance PR url> — merge it before handing off; the default branch still holds the stale text.   (only if step 4a refreshed this plan)
 Stale, not refreshed — <what drifted>; the default branch still holds the stale text, so check it against the repo before handing off.   (only if step 4a marked this plan STALE and did not refresh it)
+Drift check not run — <why the fetch or `origin/<default>` failed>; the plan was never compared with the default branch, so check it against the repo before handing off.   (only if step 4a reported this plan as drift check not run)
 ```
 
 When step 6 formed a bundle, replace the final block with the following. List the plans, and the `Hand off:` paths, in dependency order (prerequisites first): a member that is a prerequisite of the anchor goes ahead of the anchor. Write one `- <plan>` line per bundled plan; the anchor line follows any member it depends on.
@@ -142,6 +143,7 @@ no member overlaps in-flight orchestrator work.>
 Hand off: /implement-plan-claude <plan path> <plan path> …   (or /implement-plan-ai with the same paths)
 Refreshed in <maintenance PR url>: <plan>, … — merge it before handing off.   (only if step 4a refreshed a bundled plan)
 Stale, not refreshed: <plan> — <what drifted>, … — check each against the repo before handing off.   (only if step 4a marked a bundled plan STALE and did not refresh it)
+Drift check not run: <plan>, … — <why the fetch or `origin/<default>` failed>; never compared with the default branch, so check each against the repo before handing off.   (only if step 4a reported a bundled plan as drift check not run)
 ```
 
 When the conflict gate excludes every candidate, replace the final block with:
