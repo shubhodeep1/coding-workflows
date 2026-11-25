@@ -1939,6 +1939,14 @@ _pr_base_sync_for_fresh_ci()
 # after a failed final CI run (they carry `<!-- ai:final-ci-base-sync:v1 pr=<n> -->`
 # in their text; empty when unknown), and PR_BASE_SYNC_LOGIN to the token's
 # own login once the `user` read succeeded.
+# `_pr_base_sync_count <pr> <head sha>` (optional 2nd arg, issue #10093) also
+# sets PR_BASE_SYNC_STALE_WORKFLOW_MARKED from the same comments read (no
+# extra call): `true` when a Bot or an OWNER/MEMBER/COLLABORATOR comment
+# carries `<!-- ai:final-ci-stale-workflow:v1 pr=<n> head=<sha> -->`
+# (scripts/review_final_ci_failed.sh; same trust rule as its failed-marker
+# check) and no such comment carries that head's
+# `<!-- ai:final-ci-failed:v1 pr=<n> head=<sha> -->` (already handed back),
+# `false` otherwise, `""` when no valid head was given or the read failed.
 # API budget (§15): one `user` read and one paginated issue-comments read,
 # only on the overlap path. No earlier call in this file reads comments or
 # the token's login; the review gate's own comments read happens in another
@@ -1947,12 +1955,13 @@ _pr_base_sync_for_fresh_ci()
 # with no head SHA, so it expires after 120 s and PR writes evict it).
 _pr_base_sync_count()
 {
-	local pr_number="$1"
+	local pr_number="$1" sync_stale_head="${2:-}"
 	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
 	local sync_login sync_comments_json
 	PR_BASE_SYNC_COUNT=""
 	PR_BASE_SYNC_FINAL_CI_COUNT=""
 	PR_BASE_SYNC_LOGIN=""
+	PR_BASE_SYNC_STALE_WORKFLOW_MARKED=""
 	sync_login="$(gh_retry _safe_gh_jq user 2>/dev/null | jq -r 'if type == "object" then (.login // "") else "" end' 2>/dev/null | tail -n1)"
 	[[ "${sync_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]] || return 1
 	# Kept for the review sweep's base sync, which trusts only this login's
@@ -1980,6 +1989,18 @@ _pr_base_sync_count()
 		  | (.body // "") | select(type == "string" and startswith("**Branch updated from `") and contains("<!-- ai:final-ci-base-sync:v1 pr=" + $pr + " -->") and test("<!-- ai:merge-base-sync:v1 pr=" + $pr + " from=[0-9a-f]{40} sync=[0-9]+( base=[0-9a-f]{40} merge=[0-9a-f]{40})? -->\\s*$")) ]
 		| length' 2>/dev/null | tail -n1)"
 	[[ "${PR_BASE_SYNC_FINAL_CI_COUNT}" =~ ^[0-9]+$ ]] || PR_BASE_SYNC_FINAL_CI_COUNT=""
+	# Stale-workflow marker for this head (issue #10093); same read.
+	if [[ "${sync_stale_head}" =~ ^[0-9a-f]{40}$ ]]; then
+		PR_BASE_SYNC_STALE_WORKFLOW_MARKED="$(printf '%s' "${sync_comments_json}" | jq -r \
+			--arg marker "<!-- ai:final-ci-stale-workflow:v1 pr=${pr_number} head=${sync_stale_head} -->" \
+			--arg failed "<!-- ai:final-ci-failed:v1 pr=${pr_number} head=${sync_stale_head} -->" '
+			[ .[]? | if type == "array" then .[] else . end
+			  | select(type == "object")
+			  | select(((.user.type // "") == "Bot") or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")))
+			  | (.body // "") | select(type == "string") ] as $bodies
+			| any($bodies[]; contains($marker)) and (any($bodies[]; contains($failed)) | not)' 2>/dev/null | tail -n1)"
+		[[ "${PR_BASE_SYNC_STALE_WORKFLOW_MARKED}" =~ ^(true|false)$ ]] || PR_BASE_SYNC_STALE_WORKFLOW_MARKED="false"
+	fi
 }
 
 # `_pr_base_sync_observe_update_commit <pr> <from head> [<base ref>]`

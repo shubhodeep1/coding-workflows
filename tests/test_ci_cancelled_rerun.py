@@ -1224,3 +1224,160 @@ def test_classify_run_against_its_own_running_run():
 	with mock.patch.object(HELPER.subprocess, "run", side_effect=fake):
 		assert HELPER.classify_runner_shutdown(HELPER.SOURCE_REPO, 9, ignore_job_names=("final-ci-failed",)) == "shutdown"
 		assert HELPER.classify_runner_shutdown(HELPER.SOURCE_REPO, 9) == "unverified"
+
+
+# --- Stale workflow file (issue #10093) -------------------------------------
+
+STALE_TIMEOUT = "The job has exceeded the maximum execution time of 20m0s"
+STALE_HEAD_BLOB, STALE_BASE_BLOB = "1" * 40, "2" * 40
+STALE_HEAD_CI = ("jobs:\n  orchestrate-poll:\n    # matrix\n    runs-on: ubuntu-latest\n    timeout-minutes: 20\n"
+	"    steps:\n      - run: x\n        timeout-minutes: 99\n  lint:\n    timeout-minutes: 5\n")
+STALE_BASE_CI = STALE_HEAD_CI.replace("timeout-minutes: 20", "timeout-minutes: 30")
+
+
+def step(name, conclusion):
+	return {"name": name, "status": "completed", "conclusion": conclusion}
+
+
+def stale_jobs(timeout_step_conclusion="cancelled", lint_step="Require every CI job to succeed"):
+	# Mirrors run 45520845433: orchestrate-poll (0) cut off at 20 minutes with
+	# no failed step, `lint` failed only at its require step, the rest green.
+	poll = dict(job("orchestrate-poll (0)", 1, "cancelled"), steps=[
+		step("Set up job", "success"), step("Checkout repository", "success"),
+		step("Run the main poll suite", "success"),
+		step("Check-failure triage workflow security tests", timeout_step_conclusion),
+		step("Complete job", "success"),
+	])
+	lint = dict(job("lint", 9), steps=[
+		step("Set up job", "success"), step(lint_step, "failure"), step("Complete job", "success"),
+	])
+	return [job("static-checks", 2, "success"), poll, job("orchestrate-poll (1)", 3, "success"), lint]
+
+
+def stale_annotations(timeout_message=STALE_TIMEOUT):
+	return {
+		# Passing tests print ##[error] lines; step conclusions decide.
+		1: [annotation("integration fingerprint drift detected (expected in this test)"),
+			annotation(timeout_message), annotation(CANCELED)],
+		9: [annotation("CI jobs that did not succeed: orchestrate-poll"), annotation("Process completed with exit code 1.")],
+	}
+
+
+def classify_stale(jobs, annotations, files=None, head=SHA, base="main", **kwargs):
+	files = files if files is not None else {
+		SHA: (STALE_HEAD_BLOB, STALE_HEAD_CI), "main": (STALE_BASE_BLOB, STALE_BASE_CI)}
+
+	def fake_annotations(repo, check_run_id):
+		return [item for item in annotations[check_run_id - 1000] if item["annotation_level"] == "failure"]
+
+	def fake_file(repo, ref):
+		value = files[ref]
+		if isinstance(value, Exception):
+			raise value
+		return value
+	with mock.patch.object(HELPER, "list_run_jobs", return_value=jobs), \
+		mock.patch.object(HELPER, "failure_annotations", side_effect=fake_annotations) as reads, \
+		mock.patch.object(HELPER, "workflow_file_at_ref", side_effect=fake_file) as file_reads:
+		verdict = HELPER.classify_runner_shutdown(HELPER.SOURCE_REPO, 123, stale_workflow_head=head,
+			stale_workflow_base=base, **kwargs)
+	return verdict, reads, file_reads
+
+
+@pytest.mark.parametrize("message", [STALE_TIMEOUT, TIMEOUT])
+def test_stale_workflow_timeout_verdict_for_a_cut_off_job_on_an_old_workflow(message):
+	verdict, reads, file_reads = classify_stale(stale_jobs(), stale_annotations(message))
+	assert verdict == "stale_workflow_timeout"
+	assert reads.call_count == 2
+	assert [call.args[1] for call in file_reads.call_args_list] == [SHA, "main"]
+	assert "stale_workflow_timeout" not in HELPER.INFRA_VERDICTS
+	# Without the stale arguments (the sweep's own path) nothing changes.
+	verdict, _ = classify(stale_jobs(), stale_annotations(message))
+	assert verdict == "genuine"
+	# The abandoned switch does not gate the stale class.
+	verdict, _, _ = classify_stale(stale_jobs(), stale_annotations(message), abandoned_job_enabled=False)
+	assert verdict == "stale_workflow_timeout"
+
+
+def test_stale_workflow_timeout_falls_back_to_the_file_difference_when_limits_do_not_parse():
+	files = {SHA: (STALE_HEAD_BLOB, ""), "main": (STALE_BASE_BLOB, "jobs:\n  other:\n    timeout-minutes: 5\n")}
+	verdict, _, _ = classify_stale(stale_jobs(), stale_annotations(), files=files)
+	assert verdict == "stale_workflow_timeout"
+
+
+@pytest.mark.parametrize("case", [
+	"equal_files", "step_failed", "base_limit_not_higher", "lint_failed_elsewhere", "abandoned_mixed_in",
+	"other_job_red", "no_timeout_annotation",
+])
+def test_stale_workflow_timeout_is_not_returned_when_files_match_or_a_step_failed(case):
+	jobs, annotations, files = stale_jobs(), stale_annotations(), None
+	if case == "equal_files":
+		files = {SHA: (STALE_HEAD_BLOB, STALE_HEAD_CI), "main": (STALE_HEAD_BLOB, STALE_HEAD_CI)}
+	elif case == "step_failed":
+		jobs = stale_jobs(timeout_step_conclusion="failure")
+	elif case == "base_limit_not_higher":
+		files = {SHA: (STALE_HEAD_BLOB, STALE_HEAD_CI), "main": (STALE_BASE_BLOB, STALE_HEAD_CI + "# changed\n")}
+	elif case == "lint_failed_elsewhere":
+		jobs = stale_jobs(lint_step="Check out the PR")
+	elif case == "abandoned_mixed_in":
+		jobs.append(job("tests-hooks-and-orchestrator", 4, "cancelled"))
+		annotations[4] = [annotation(SHUTDOWN)]
+		annotations[9][0] = annotation("CI jobs that did not succeed: orchestrate-poll, tests-hooks-and-orchestrator")
+	elif case == "other_job_red":
+		jobs.append(job("tests-hooks-and-orchestrator", 4, "cancelled"))
+	elif case == "no_timeout_annotation":
+		annotations[1] = [annotation("Error: something broke")]
+	verdict, _, file_reads = classify_stale(jobs, annotations, files=files)
+	assert verdict == "genuine"
+	if case not in ("equal_files", "base_limit_not_higher"):
+		file_reads.assert_not_called()
+
+
+def test_stale_workflow_unreadable_file_is_unverified():
+	files = {SHA: (STALE_HEAD_BLOB, STALE_HEAD_CI), "main": ValueError("workflow_unreadable")}
+	verdict, _, _ = classify_stale(stale_jobs(), stale_annotations(), files=files)
+	assert verdict == "unverified"
+
+
+def test_stale_workflow_verdict_is_never_rerun_by_the_sweep():
+	lines, _, post = exercise(completed=[run(conclusion="failure")], classify="stale_workflow_timeout")
+	assert "action=skip reason=runner_shutdown_unverified" in lines[0]
+	post.assert_not_called()
+
+
+def test_workflow_file_at_ref_parser():
+	import base64
+	payload = {"sha": STALE_HEAD_BLOB, "encoding": "base64", "content": base64.b64encode(STALE_HEAD_CI.encode()).decode()}
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=json.dumps(payload))) as call:
+		assert HELPER.workflow_file_at_ref("o/r", "main") == (STALE_HEAD_BLOB, STALE_HEAD_CI)
+	assert call.call_args.args[0][-1] == "repos/o/r/contents/.github/workflows/ci.yml?ref=main"
+	for bad in ({"encoding": "base64"}, {"sha": "x"}, []):
+		with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=0, stdout=json.dumps(bad))):
+			with pytest.raises(ValueError, match="workflow_unreadable"):
+				HELPER.workflow_file_at_ref("o/r", "main")
+	with mock.patch.object(HELPER.subprocess, "run", return_value=mock.Mock(returncode=1, stdout="")):
+		with pytest.raises(ValueError, match="workflow_unreadable"):
+			HELPER.workflow_file_at_ref("o/r", "main")
+	assert HELPER.job_timeout_minutes(STALE_HEAD_CI, "orchestrate-poll") == 20
+	assert HELPER.job_timeout_minutes(STALE_HEAD_CI, "missing") is None
+
+
+def test_classify_run_cli_forwards_the_stale_workflow_arguments():
+	with mock.patch.object(HELPER, "classify_runner_shutdown", return_value="stale_workflow_timeout") as classifier, \
+		contextlib.redirect_stdout(io.StringIO()) as output:
+		HELPER.classify_run_cli(["--repo", "o/r", "--run-id", "7", "--stale-workflow-head", SHA,
+			"--stale-workflow-base", "ai/issue-9"])
+	assert output.getvalue() == "stale_workflow_timeout\n"
+	assert classifier.call_args.kwargs["stale_workflow_head"] == SHA
+	assert classifier.call_args.kwargs["stale_workflow_base"] == "ai/issue-9"
+
+
+@pytest.mark.parametrize("extra", [
+	["--stale-workflow-head", "nothex"], ["--stale-workflow-base", "a..b"], ["--stale-workflow-base", "-x"],
+	["--stale-workflow-base", "a b"], ["--stale-workflow-head"],
+])
+def test_classify_run_cli_rejects_bad_stale_workflow_arguments(extra):
+	with mock.patch.object(HELPER, "classify_runner_shutdown") as classifier, \
+		contextlib.redirect_stdout(io.StringIO()) as output:
+		HELPER.classify_run_cli(["--repo", "o/r", "--run-id", "7"] + extra)
+	assert output.getvalue() == "unverified\n"
+	classifier.assert_not_called()

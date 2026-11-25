@@ -96,6 +96,31 @@
 # failed read skips the PR this tick.
 # Log: `REVIEW_FINAL_CI_BASE_SYNC pr=<n> head=<sha> outcome=synced|skipped|failed|dry_run reason=<token>`
 # (skip reasons include gate_untrusted and review_in_flight).
+#
+# Stale workflow file (issue #10093). scripts/review_final_ci_failed.sh posts
+# `<!-- ai:final-ci-stale-workflow:v1 pr=<n> head=<sha> -->` instead of a
+# hand-back when the head's final run was cut off at a job time limit while
+# the base's ci.yml differs. The same comments read (`_pr_base_sync_count
+# <pr> <sha>`) finds that marker, so it costs no extra call; a head that
+# also carries its `ai:final-ci-failed:v1` marker was already handed back and
+# counts as unmarked. A marked head
+# that is behind goes through the sync above unchanged (counted against
+# FINAL_CI_SWEEP_BASE_SYNC_MAX). A marked head that cannot be synced is
+# handed back to review on a terminal skip (max_syncs, up_to_date,
+# freshness_disabled, gate_failure|error|absent|untrusted,
+# update_branch_refused, which is how a conflicting update surfaces, or
+# FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED=false at sweep time, reason
+# stale_workflow_sync_disabled): the sweep runs the default-branch
+# scripts/review_final_ci_failed.sh with the stale and infra switches off
+# (its PR read, failed-marker check, marker POST and review dispatch; the
+# failed marker caps it at one hand-back per head) and appends
+# ` stale_workflow=handed_back` to the candidate's log line
+# (` stale_workflow=dry_run` under DRY_RUN, which runs nothing). Transient
+# skips (too_recent, review_in_flight, sync_count_unknown, gate_pending,
+# gate_unknown, other freshness outcomes, base_red) retry on a later tick.
+# Env: FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED (default true; `false` or any
+# other value hands a marked head back), plus what the hand-back script
+# reads (FINAL_CI_FAILED_REDISPATCH_ENABLED, ALLOW_WORKFLOW_EDITS).
 
 set -uo pipefail
 
@@ -158,6 +183,40 @@ review_final_ci_sweep_active_review()
 		END { exit found ? 0 : 1 }' "${snapshot}"
 }
 
+# FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED at sweep time (issue #10093): returns
+# 0 when on (unset, empty or `true`); `false` is off; anything else is off
+# with a warning (the value is never echoed).
+review_final_ci_sweep_stale_sync_enabled()
+{
+	case "$(printf '%s' "${FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+		''|true) return 0 ;;
+		false) return 1 ;;
+		*)
+			echo "::warning::FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED has an unrecognised value; stale-workflow heads are handed back to review. Use true or false."
+			return 1
+			;;
+	esac
+}
+
+# `review_final_ci_sweep_stale_hand_back <pr> <head sha>` (issue #10093):
+# hands a stale-workflow-marked head back to review through the
+# default-branch scripts/review_final_ci_failed.sh, with the stale and infra
+# switches off so it cannot defer again. Sets FINAL_CI_SWEEP_STALE_NOTE to
+# the suffix the caller appends to its REVIEW_FINAL_CI_BASE_SYNC line.
+review_final_ci_sweep_stale_hand_back()
+{
+	local hand_back_dir="${FINAL_CI_SWEEP_HELPERS_DIR:-${FINAL_CI_SWEEP_SCRIPT_DIR}}"
+	if [ "${DRY_RUN:-false}" = "true" ]; then
+		FINAL_CI_SWEEP_STALE_NOTE=" stale_workflow=dry_run"
+		return 0
+	fi
+	PR_NUMBER="$1" PR_HEAD_SHA="$2" FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED=false \
+		FINAL_CI_FAILED_INFRA_RERUN_ENABLED=false FINAL_CI_FAILED_SYNC_QUICK=false \
+		timeout 120 bash "${hand_back_dir}/review_final_ci_failed.sh" || true
+	FINAL_CI_SWEEP_STALE_NOTE=" stale_workflow=handed_back"
+	return 0
+}
+
 # `review_final_ci_sweep_base_sync <pr> <head sha> <head ref> <failed at>`:
 # one candidate of the base-sync pass (see the header). The checks that need
 # no API call come first; returns 2 when it stopped there, so the caller does
@@ -166,7 +225,8 @@ review_final_ci_sweep_base_sync()
 {
 	local number="$1" sha="$2" ref="$3" failed_at="$4"
 	local min_age="${FINAL_CI_SWEEP_BASE_SYNC_MIN_AGE_MINUTES:-30}" sync_cap="${FINAL_CI_SWEEP_BASE_SYNC_MAX:-3}"
-	local failed_epoch now_epoch base_ref sync_done sync_max gate
+	local failed_epoch now_epoch base_ref sync_done sync_max gate stale_marked=""
+	FINAL_CI_SWEEP_STALE_NOTE=""
 	{ [[ "${min_age}" =~ ^[0-9]{1,4}$ ]] && [ "$((10#${min_age}))" -le 1440 ]; } || min_age=30
 	min_age=$((10#${min_age}))
 	{ [[ "${sync_cap}" =~ ^[0-9]{1,2}$ ]] && [ "$((10#${sync_cap}))" -le 20 ]; } || sync_cap=3
@@ -189,12 +249,20 @@ review_final_ci_sweep_base_sync()
 		review_final_ci_sweep_base_sync_log "${number}" "${sha}" skipped review_in_flight "head_ref=${ref}"
 		return 2
 	fi
-	if ! _pr_base_sync_count "${number}" || ! [[ "${PR_BASE_SYNC_FINAL_CI_COUNT:-}" =~ ^[0-9]+$ ]] || [ -z "${PR_BASE_SYNC_LOGIN:-}" ]; then
+	if ! _pr_base_sync_count "${number}" "${sha}" || ! [[ "${PR_BASE_SYNC_FINAL_CI_COUNT:-}" =~ ^[0-9]+$ ]] || [ -z "${PR_BASE_SYNC_LOGIN:-}" ]; then
 		review_final_ci_sweep_base_sync_log "${number}" "${sha}" skipped sync_count_unknown
 		return 0
 	fi
+	# Issue #10093: a head whose final run was cut off under an old ci.yml.
+	stale_marked="${PR_BASE_SYNC_STALE_WORKFLOW_MARKED:-false}"
+	if [ "${stale_marked}" = "true" ] && ! review_final_ci_sweep_stale_sync_enabled; then
+		review_final_ci_sweep_stale_hand_back "${number}" "${sha}"
+		review_final_ci_sweep_base_sync_log "${number}" "${sha}" skipped stale_workflow_sync_disabled "${FINAL_CI_SWEEP_STALE_NOTE# }"
+		return 0
+	fi
 	if [ "${PR_BASE_SYNC_FINAL_CI_COUNT}" -ge "${sync_cap}" ]; then
-		review_final_ci_sweep_base_sync_log "${number}" "${sha}" skipped max_syncs "syncs=${PR_BASE_SYNC_FINAL_CI_COUNT} max=${sync_cap}"
+		[ "${stale_marked}" = "true" ] && review_final_ci_sweep_stale_hand_back "${number}" "${sha}"
+		review_final_ci_sweep_base_sync_log "${number}" "${sha}" skipped max_syncs "syncs=${PR_BASE_SYNC_FINAL_CI_COUNT} max=${sync_cap}${FINAL_CI_SWEEP_STALE_NOTE}"
 		return 0
 	fi
 	# The gate status authorizes the reviewer skip the marker grants, so only
@@ -211,18 +279,26 @@ review_final_ci_sweep_base_sync()
 				  else ($s.state // "unknown") end
 			else "unknown" end' 2>/dev/null | tail -n1)"
 	if [ "${gate}" != "success" ]; then
-		review_final_ci_sweep_base_sync_log "${number}" "${sha}" skipped "gate_${gate:-unknown}"
+		case "${gate}" in
+			failure|error|absent|untrusted)
+				[ "${stale_marked}" = "true" ] && review_final_ci_sweep_stale_hand_back "${number}" "${sha}"
+				;;
+		esac
+		review_final_ci_sweep_base_sync_log "${number}" "${sha}" skipped "gate_${gate:-unknown}" "${FINAL_CI_SWEEP_STALE_NOTE# }"
 		return 0
 	fi
 	_pr_base_freshness "${number}" "${sha}" "" >/dev/null
 	case "${PR_BASE_FRESHNESS_OUTCOME:-unknown}" in
 		clean|overlap) ;;
 		fresh)
-			review_final_ci_sweep_base_sync_log "${number}" "${sha}" skipped up_to_date
+			[ "${stale_marked}" = "true" ] && review_final_ci_sweep_stale_hand_back "${number}" "${sha}"
+			review_final_ci_sweep_base_sync_log "${number}" "${sha}" skipped up_to_date "${FINAL_CI_SWEEP_STALE_NOTE# }"
 			return 0
 			;;
 		*)
-			review_final_ci_sweep_base_sync_log "${number}" "${sha}" skipped "freshness_${PR_BASE_FRESHNESS_OUTCOME:-unknown}" "detail=${PR_BASE_FRESHNESS_LAST_REASON:-none}"
+			[ "${stale_marked}" = "true" ] && [ "${PR_BASE_FRESHNESS_OUTCOME:-unknown}" = "disabled" ] \
+				&& review_final_ci_sweep_stale_hand_back "${number}" "${sha}"
+			review_final_ci_sweep_base_sync_log "${number}" "${sha}" skipped "freshness_${PR_BASE_FRESHNESS_OUTCOME:-unknown}" "detail=${PR_BASE_FRESHNESS_LAST_REASON:-none}${FINAL_CI_SWEEP_STALE_NOTE}"
 			return 0
 			;;
 	esac
@@ -236,7 +312,8 @@ review_final_ci_sweep_base_sync()
 		return 0
 	fi
 	if ! _pr_base_sync_for_fresh_ci "${number}" "${sha}"; then
-		review_final_ci_sweep_base_sync_log "${number}" "${sha}" failed update_branch_refused "base=${base_ref}"
+		[ "${stale_marked}" = "true" ] && review_final_ci_sweep_stale_hand_back "${number}" "${sha}"
+		review_final_ci_sweep_base_sync_log "${number}" "${sha}" failed update_branch_refused "base=${base_ref}${FINAL_CI_SWEEP_STALE_NOTE}"
 		return 0
 	fi
 	sync_done="${PR_BASE_SYNC_COUNT:-0}"

@@ -887,6 +887,10 @@ def test_review_autofix_exports_the_input_and_the_sweep_runs_the_helper() -> Non
 	assert step["env"]["FINAL_CI_SWEEP_BASE_SYNC_MIN_AGE_MINUTES"] == "${{ vars.FINAL_CI_SWEEP_BASE_SYNC_MIN_AGE_MINUTES || '30' }}"
 	assert step["env"]["FINAL_CI_SWEEP_BASE_SYNC_MAX"] == "${{ vars.FINAL_CI_SWEEP_BASE_SYNC_MAX || '3' }}"
 	assert step["env"]["FINAL_CI_SWEEP_ACTIVE_REVIEW_RUNS"] == "${{ runner.temp }}/final-ci-active-review-runs.txt"
+	# Issue #10093: the stale-workflow switch and what the hand-back reads.
+	assert step["env"]["FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED"] == "${{ vars.FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED || 'true' }}"
+	assert step["env"]["FINAL_CI_FAILED_REDISPATCH_ENABLED"] == "${{ vars.FINAL_CI_FAILED_REDISPATCH_ENABLED || 'true' }}"
+	assert "ALLOW_WORKFLOW_EDITS" in step["env"]
 	enumerate_step = next(s for s in sweep["jobs"]["sweep"]["steps"] if s.get("name") == "Enumerate open PRs and dispatch internal-review.yml")
 	assert '> "${RUNNER_TEMP}/final-ci-active-review-runs.txt"' in enumerate_step["run"]
 	assert enumerate_step["run"].index("final-ci-active-review-runs.txt") > enumerate_step["run"].index('snapshot_active_review_runs "${wf}"')
@@ -1110,3 +1114,199 @@ def test_refused_dispatch_marker_numbers_the_update_after_earlier_syncs(fake_gh)
 	assert f"from={SHA} sync=3 base={REFUSED_BASE_TIP} merge={UPDATE_SHA} -->" in body
 	assert "predates its `workflow_dispatch` trigger" in body
 
+
+
+# ---------------------------------------------------------------------------
+# Stale workflow file (issue #10093): a job cut off under the branch's older
+# ci.yml goes to the sweep's base sync instead of a review round.
+
+STALE_TIMEOUT_TEXT = "The job has exceeded the maximum execution time of 20m0s"
+STALE_HEAD_CI = "jobs:\n  orchestrate-poll:\n    timeout-minutes: 20\n  lint:\n    timeout-minutes: 5\n"
+STALE_BASE_CI = STALE_HEAD_CI.replace("timeout-minutes: 20", "timeout-minutes: 30")
+STALE_ENV = {**INFRA_ENV, "FINAL_CI_SWEEP_BASE_SYNC_ENABLED": "true"}
+
+
+def _blob(text: str, blob: str) -> dict:
+	return {"body": {**_contents(text)["body"], "sha": blob}}
+
+
+def _stale_step(name: str, conclusion: str) -> dict:
+	return {"name": name, "status": "completed", "conclusion": conclusion}
+
+
+def _stale_fixtures(*, base_ci: str = STALE_BASE_CI, base_blob: str = "2" * 40, poll_step: str = "cancelled",
+		head: dict | None = None) -> dict:
+	# Mirrors run 45520845433 (PR #9832): orchestrate-poll (0) cancelled at
+	# its 20-minute limit with no failed step; lint failed at its require step.
+	poll = {**_job("orchestrate-poll (0)", 1, "cancelled"), "steps": [
+		_stale_step("Set up job", "success"), _stale_step("Run the main poll suite", "success"),
+		_stale_step("Check-failure triage workflow security tests", poll_step)]}
+	lint = {**_job("lint", 2), "steps": [
+		_stale_step("Set up job", "success"), _stale_step("Require every CI job to succeed", "failure")]}
+	jobs = [poll, lint, _job("static-checks", 4, "success"), _job("final-ci-failed", 3, None, "in_progress")]
+	return {
+		f"repos/{REPO}/pulls/7": {"body": {"state": "open", "head": head or {"sha": SHA, "ref": "ai/issue-7", "repo": {"full_name": INFRA_REPO}},
+			"base": {"ref": "main"}}},
+		_comments_key(): {"body": []},
+		f"repos/{REPO}/{JOBS_KEY}": {"body": {"total_count": 4, "jobs": jobs}},
+		f"repos/{REPO}/check-runs/1001/annotations": {"body": [
+			{"message": "fingerprint drift (a passing test's ##[error] line)", "annotation_level": "failure"},
+			{"message": STALE_TIMEOUT_TEXT, "annotation_level": "failure"},
+			{"message": "The operation was canceled.", "annotation_level": "failure"}]},
+		f"repos/{REPO}/check-runs/1002/annotations": {"body": [
+			{"message": "CI jobs that did not succeed: orchestrate-poll", "annotation_level": "failure"},
+			{"message": "Process completed with exit code 1.", "annotation_level": "failure"}]},
+		f"repos/{REPO}/contents/.github/workflows/ci.yml?ref={SHA}": _blob(STALE_HEAD_CI, "1" * 40),
+		f"repos/{REPO}/contents/.github/workflows/ci.yml?ref=main": _blob(base_ci, base_blob),
+	}
+
+
+def test_stale_workflow_timeout_posts_no_failed_marker_and_defers_to_the_sweep(fake_gh) -> None:
+	result, calls = _infra_failed(fake_gh, _stale_fixtures(), STALE_ENV)
+	out = result.stdout + result.stderr
+	assert f"REVIEW_FINAL_CI_FAILED pr=7 head={SHA} outcome=stale_workflow_sync_deferred reason=stale_workflow_timeout" in result.stdout, out
+	bodies = _posted_bodies(calls)
+	assert len(bodies) == 1
+	assert bodies[0].rstrip().endswith(f"<!-- ai:final-ci-stale-workflow:v1 pr=7 head={SHA} -->")
+	assert "ai:final-ci-failed:v1" not in bodies[0]
+	assert _dispatches(calls) == []
+	reads = [" ".join(call) for call in calls]
+	assert any(f"contents/.github/workflows/ci.yml?ref={SHA}" in call for call in reads)
+	assert any("contents/.github/workflows/ci.yml?ref=main" in call for call in reads)
+	assert "infra_rerun_deferred" not in result.stdout
+
+
+@pytest.mark.parametrize("fixtures, env", [
+	# The synced head fails again under the same workflow file: handed back.
+	(_stale_fixtures(base_ci=STALE_HEAD_CI, base_blob="1" * 40), STALE_ENV),
+	# A step really failed.
+	(_stale_fixtures(poll_step="failure"), STALE_ENV),
+	# Base limit not higher than the head's.
+	(_stale_fixtures(base_ci=STALE_HEAD_CI + "# other change\n"), STALE_ENV),
+	({**_stale_fixtures(), f"repos/{REPO}/contents/.github/workflows/ci.yml?ref=main": {"rc": 1}}, STALE_ENV),
+	(_stale_fixtures(), {**STALE_ENV, "FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED": "false"}),
+	(_stale_fixtures(), {**STALE_ENV, "FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED": "maybe"}),
+	(_stale_fixtures(), {**STALE_ENV, "FINAL_CI_FAILED_RUN_ATTEMPT": "2"}),
+	(_stale_fixtures(), {**STALE_ENV, "FINAL_CI_SWEEP_BASE_SYNC_MAX": "0"}),
+	(_stale_fixtures(), {**STALE_ENV, "FINAL_CI_SWEEP_BASE_SYNC_ENABLED": "false"}),
+	(_stale_fixtures(), {**STALE_ENV, "REPOSITORY": "other/repo"}),
+	(_stale_fixtures(head={"sha": SHA, "ref": "orchestrator/project-5", "repo": {"full_name": INFRA_REPO}}), STALE_ENV),
+	(_stale_fixtures(head={"sha": SHA, "ref": "ai/issue-7", "repo": {"full_name": "fork/r"}}), STALE_ENV),
+])
+def test_stale_workflow_deferral_falls_back_to_the_hand_back(fake_gh, fixtures: dict, env: dict) -> None:
+	result, calls = _infra_failed(fake_gh, fixtures, env)
+	out = result.stdout + result.stderr
+	assert "outcome=redispatched" in result.stdout, out
+	assert "stale_workflow_sync_deferred" not in result.stdout
+	bodies = _posted_bodies(calls)
+	assert len(bodies) == 1 and f"<!-- ai:final-ci-failed:v1 pr=7 head={SHA} -->" in bodies[0]
+	if env.get("FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED") == "maybe":
+		assert "::warning::FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED has an unrecognised value" in out
+		assert "maybe" not in out
+
+
+def test_stale_marker_post_failure_falls_back_to_the_hand_back(fake_gh) -> None:
+	fixtures = {**_stale_fixtures(), _comments_key(): {"rc": 1}, f"{_comments_key()}?per_page=100": {"body": []}}
+	result, calls = _infra_failed(fake_gh, fixtures, STALE_ENV)
+	out = result.stdout + result.stderr
+	assert "::warning::Could not post the stale-workflow marker" in out, out
+	assert "stale_workflow_sync_deferred" not in result.stdout
+	# The fallback is today's hand-back (its marker POST fails the same way here).
+	assert "outcome=marker_failed" in result.stdout
+
+
+def test_ci_workflow_passes_the_stale_workflow_switches() -> None:
+	text = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+	job = text[text.index("\n  final-ci-failed:\n"):]
+	for line in (
+		"FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED: ${{ vars.FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED || 'true' }}",
+		"FINAL_CI_SWEEP_BASE_SYNC_ENABLED: ${{ vars.FINAL_CI_SWEEP_BASE_SYNC_ENABLED || 'true' }}",
+		"FINAL_CI_SWEEP_BASE_SYNC_MAX: ${{ vars.FINAL_CI_SWEEP_BASE_SYNC_MAX || '3' }}",
+	):
+		assert line in job, line
+	sweep = (REPO_ROOT / ".github/workflows/review_autofix_sweep.yml").read_text(encoding="utf-8")
+	step = sweep[sweep.index("- name: Ensure the final CI run on reviewed PR heads"):]
+	step = step[:step.index("\n      - name:")]
+	for line in (
+		"FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED: ${{ vars.FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED || 'true' }}",
+		"FINAL_CI_FAILED_REDISPATCH_ENABLED: ${{ vars.FINAL_CI_FAILED_REDISPATCH_ENABLED || 'true' }}",
+		"ALLOW_WORKFLOW_EDITS: ${{ contains(' 1 true yes on ', format(' {0} ', vars.ALLOW_WORKFLOW_EDITS || 'true')) }}",
+	):
+		assert line in step, line
+
+
+def _stale_marker_comment(head: str = SHA) -> dict:
+	return {"user": {"login": "github-actions[bot]", "type": "Bot"}, "author_association": "NONE",
+		"body": f"cut off\n\n<!-- ai:final-ci-stale-workflow:v1 pr=1 head={head} -->"}
+
+
+def _stale_sync_fixtures(comments: list, **overrides) -> dict:
+	fixtures = _base_sync_fixtures(comments=comments, **overrides)
+	# The hand-back reads the PR: still open on the marked head.
+	fixtures[f"repos/{REPO}/pulls/1"]["body"].update({"state": "open", "head": {"sha": SHA, "ref": "ai/issue-1", "repo": {"full_name": REPO}}})
+	return fixtures
+
+
+SYNC_MARKERS = [{"user": {"login": "pipeline-bot"}, "body": f"**Branch updated from `x` before merging** <!-- ai:final-ci-base-sync:v1 pr=1 -->\n\n<!-- ai:merge-base-sync:v1 pr=1 from={SHA} sync={n} base={BASE_TIP} merge={MERGE_SHA} -->"} for n in (1, 2, 3)]
+
+
+@pytest.mark.parametrize(("case", "reason"), [
+	("up_to_date", "outcome=skipped reason=up_to_date stale_workflow=handed_back"),
+	("max_syncs", "outcome=skipped reason=max_syncs syncs=3 max=3 stale_workflow=handed_back"),
+	("refused", "outcome=failed reason=update_branch_refused base=ai/issue-9 stale_workflow=handed_back"),
+	("switch_off", "outcome=skipped reason=stale_workflow_sync_disabled stale_workflow=handed_back"),
+])
+def test_sweep_hands_a_stale_marked_head_back_when_it_cannot_sync(fake_gh, tmp_path: Path, case: str, reason: str) -> None:
+	env = {}
+	if case == "up_to_date":
+		fixtures = _stale_sync_fixtures([_stale_marker_comment()], ahead_by=0)
+	elif case == "max_syncs":
+		fixtures = _stale_sync_fixtures(SYNC_MARKERS + [_stale_marker_comment()])
+	elif case == "refused":
+		fixtures = _stale_sync_fixtures([_stale_marker_comment()])
+		fixtures[f"repos/{REPO}/pulls/1/update-branch"] = {"rc": 1}
+	else:
+		fixtures = _stale_sync_fixtures([_stale_marker_comment()])
+		env["FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED"] = "false"
+	result, calls = _sweep_one(fake_gh, tmp_path, fixtures, env)
+	out = result.stdout + result.stderr
+	assert f"REVIEW_FINAL_CI_BASE_SYNC pr=1 head={SHA} {reason}" in result.stdout, out
+	assert f"REVIEW_FINAL_CI_FAILED pr=1 head={SHA} outcome=redispatched workflow=internal-review.yml" in result.stdout, out
+	bodies = _posted_bodies(calls)
+	assert len(bodies) == 1 and f"<!-- ai:final-ci-failed:v1 pr=1 head={SHA} -->" in bodies[0]
+	dispatches = _dispatches(calls)
+	assert len(dispatches) == 1 and dispatches[0][2] == "internal-review.yml" and "pr_number=1" in dispatches[0]
+	if case != "refused":
+		assert _puts(calls) == []
+
+
+def test_sweep_syncs_a_stale_marked_head_that_is_behind(fake_gh, tmp_path: Path) -> None:
+	result, calls = _sweep_one(fake_gh, tmp_path, _base_sync_fixtures(comments=[_stale_marker_comment()]))
+	out = result.stdout + result.stderr
+	assert "outcome=synced reason=behind base=ai/issue-9" in result.stdout, out
+	assert "stale_workflow=" not in result.stdout and "REVIEW_FINAL_CI_FAILED" not in result.stdout
+	assert len(_puts(calls)) == 1
+	bodies = _posted_bodies(calls)
+	assert len(bodies) == 1 and "<!-- ai:final-ci-base-sync:v1 pr=1 -->" in bodies[0]
+
+
+@pytest.mark.parametrize("comments, overrides", [
+	# A transient skip retries on a later tick.
+	([_stale_marker_comment()], {"gate": "pending"}),
+	# A marker for another head, or an untrusted author, does not count.
+	([_stale_marker_comment(OTHER_SHA)], {"ahead_by": 0}),
+	([{**_stale_marker_comment(), "user": {"login": "mallory", "type": "User"}}], {"ahead_by": 0}),
+	# Already handed back once: the failed marker is on the head.
+	([_stale_marker_comment(), {"user": {"type": "Bot"}, "body": f"<!-- ai:final-ci-failed:v1 pr=1 head={SHA} -->"}], {"ahead_by": 0}),
+])
+def test_sweep_does_not_hand_back_unmarked_or_transient_heads(fake_gh, tmp_path: Path, comments: list, overrides: dict) -> None:
+	result, calls = _sweep_one(fake_gh, tmp_path, _stale_sync_fixtures(comments, **overrides))
+	assert "REVIEW_FINAL_CI_BASE_SYNC pr=1" in result.stdout, result.stdout + result.stderr
+	assert "stale_workflow=" not in result.stdout and "REVIEW_FINAL_CI_FAILED" not in result.stdout
+	assert _dispatches(calls) == [] and _posted_bodies(calls) == []
+
+
+def test_sweep_stale_hand_back_runs_nothing_in_dry_run(fake_gh, tmp_path: Path) -> None:
+	result, calls = _sweep_one(fake_gh, tmp_path, _stale_sync_fixtures([_stale_marker_comment()], ahead_by=0), {"DRY_RUN": "true"})
+	assert "reason=up_to_date stale_workflow=dry_run" in result.stdout, result.stdout + result.stderr
+	assert _dispatches(calls) == [] and _posted_bodies(calls) == []

@@ -5253,4 +5253,8 @@ jobs:
           CI_ACTION_RESOLUTION_RERUN_ENABLED: ${{ vars.CI_ACTION_RESOLUTION_RERUN_ENABLED || 'true' }}
           CI_CHECKOUT_FETCH_RERUN_ENABLED: ${{ vars.CI_CHECKOUT_FETCH_RERUN_ENABLED || 'true' }}
           CI_ABANDONED_JOB_RERUN_ENABLED: ${{ vars.CI_ABANDONED_JOB_RERUN_ENABLED || 'true' }}
+          # A job cut off under this branch's older ci.yml goes to the sweep's base sync (issue #10093).
+          FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED: ${{ vars.FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED || 'true' }}
+          FINAL_CI_SWEEP_BASE_SYNC_ENABLED: ${{ vars.FINAL_CI_SWEEP_BASE_SYNC_ENABLED || 'true' }}
+          FINAL_CI_SWEEP_BASE_SYNC_MAX: ${{ vars.FINAL_CI_SWEEP_BASE_SYNC_MAX || '3' }}
         run: bash scripts/review_final_ci_failed.sh
