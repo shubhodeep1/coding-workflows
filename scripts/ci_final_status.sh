@@ -30,7 +30,8 @@
 #   CI_FINAL_STATUS_RUN_CANCELLED_SKIP_ENABLED  default true; only `true`
 #                                        turns the run-cancelled skip on
 #                                        (issue #10131).
-#   GITHUB_RUN_ATTEMPT                   the run attempt (GitHub sets it).
+#   GITHUB_RUN_ATTEMPT                   the run attempt (GitHub sets it);
+#                                        the jobs of that attempt are read.
 #
 # State: success only when the aggregate succeeded and, in a docs-only run,
 # the docs-only verify step succeeded too; a cancelled aggregate posts
@@ -41,18 +42,21 @@
 # starts, `lint` still runs (`always()`), its aggregate fails on the
 # cancelled needed jobs and `cancelled()` is false inside the job. So before
 # posting failure, when the switch is on, the needs include a `cancelled`
-# job and no `failure` job, and this is attempt 1, ask
-# `ci_cancelled_rerun.py classify-cancelled-run`. Only `run_cancelled` (a
+# job and no `failure` job, ask `ci_cancelled_rerun.py
+# classify-cancelled-run` about this run attempt. Only `run_cancelled` (a
 # cancelled job never started, or every cancelled job carries only
-# shutdown/cancel annotations) skips the post; a job cut off by its own
-# timeout-minutes, any error and any unclear answer post failure as before.
+# shutdown/cancel annotations, a hand cancel's "The run was canceled by @..."
+# or a concurrency replacement's "Canceling since a higher priority ...")
+# skips the post; a job cut off by its own timeout-minutes, any error, a
+# classifier timeout and any unclear answer post failure as before.
 #
 # API calls (§15): one POST repos/<repo>/statuses/<sha> through gh_retry,
 # marked idempotent so transient failures are retried (the newest status for
 # a context wins); none when cancelled or the input is invalid. On the
-# cancelled-and-no-failure path only (state failure, switch on, attempt 1),
-# one jobs GET (attempt 1) plus at most 10 check-run annotation GETs, none
-# of those annotation GETs when a cancelled job never started.
+# cancelled-and-no-failure path only (state failure, switch on), one jobs
+# GET for this run attempt (a second one only when the first read fails)
+# plus at most 10 check-run annotation GETs, none of those annotation GETs
+# when a cancelled job never started.
 #
 # Always exits 0 (fail-open for the job, fail-closed for merging): a failed
 # post logs `CI_FINAL_STATUS ... outcome=post_failed` and a warning, and the
@@ -68,7 +72,8 @@
 #   CI_FINAL_STATUS sha=<sha> outcome=skipped reason=cancelled
 #   CI_FINAL_STATUS sha=<sha|none> outcome=skipped reason=invalid_input
 #   CI_FINAL_STATUS sha=<sha> outcome=skipped reason=run_cancelled
-#   CI_FINAL_STATUS sha=<sha> check=run_cancelled verdict=run_cancelled|not_cancelled|unverified|not_attempt_1|none
+#   CI_FINAL_STATUS sha=<sha> check=run_cancelled verdict=run_cancelled|not_cancelled|unverified|none
+#   CI_FINAL_STATUS sha=<sha> check=run_cancelled verdict=none reason=timeout
 
 set -uo pipefail
 
@@ -78,7 +83,7 @@ type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
 CI_FINAL_STATUS_CONTEXT="ci/final"
 
-# Return 0 only when attempt 1 of this run was cancelled as a whole
+# Return 0 only when this run attempt was cancelled as a whole
 # (issue #10131); 1 otherwise, so the caller posts failure as before.
 # Args: <repo> <sha> (both already validated by the caller).
 ci_final_status_run_was_cancelled()
@@ -88,7 +93,7 @@ ci_final_status_run_was_cancelled()
 	local needs_json="${CI_FINAL_STATUS_NEEDS_JSON:-}"
 	local attempt="${GITHUB_RUN_ATTEMPT:-}"
 	local cancel_run_id="${GITHUB_RUN_ID:-}"
-	local needs_shape="" verdict=""
+	local needs_shape="" verdict="" classifier_rc=0
 
 	[ "${enabled}" = "true" ] || return 1
 	[ -n "${needs_json}" ] || return 1
@@ -101,11 +106,7 @@ ci_final_status_run_was_cancelled()
 		else "invalid" end' 2>/dev/null)" || return 1
 	[ "${needs_shape}" = "cancelled" ] || return 1
 
-	if [ "${attempt}" != "1" ]; then
-		echo "CI_FINAL_STATUS sha=${sha} check=run_cancelled verdict=not_attempt_1"
-		return 1
-	fi
-	if ! [[ "${cancel_run_id}" =~ ^[1-9][0-9]*$ ]]; then
+	if ! [[ "${cancel_run_id}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${attempt}" =~ ^[1-9][0-9]{0,3}$ ]]; then
 		echo "CI_FINAL_STATUS sha=${sha} check=run_cancelled verdict=unverified"
 		return 1
 	fi
@@ -113,12 +114,17 @@ ci_final_status_run_was_cancelled()
 	# `lint` is running, `final-ci-failed` waits on it and `budget-watch`
 	# runs beside it on push to main; none is in `lint.needs`.
 	verdict="$(PYTHONDONTWRITEBYTECODE=1 timeout 90 python3 "$(dirname "${BASH_SOURCE[0]}")/ci_cancelled_rerun.py" classify-cancelled-run \
-		--repo "${repo}" --run-id "${cancel_run_id}" \
-		--ignore-job lint --ignore-job final-ci-failed --ignore-job budget-watch 2>/dev/null | tail -n 1)"
+		--repo "${repo}" --run-id "${cancel_run_id}" --attempt "${attempt}" \
+		--ignore-job lint --ignore-job final-ci-failed --ignore-job budget-watch 2>/dev/null)" || classifier_rc=$?
+	verdict="$(printf '%s\n' "${verdict}" | tail -n 1)"
 	case "${verdict}" in
 		run_cancelled|not_cancelled|unverified) ;;
 		*) verdict="none" ;;
 	esac
+	if [ "${classifier_rc}" -eq 124 ]; then
+		echo "CI_FINAL_STATUS sha=${sha} check=run_cancelled verdict=none reason=timeout"
+		return 1
+	fi
 	echo "CI_FINAL_STATUS sha=${sha} check=run_cancelled verdict=${verdict}"
 	[ "${verdict}" = "run_cancelled" ]
 }

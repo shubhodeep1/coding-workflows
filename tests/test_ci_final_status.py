@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -59,7 +60,7 @@ def _run(
 		"with open(os.environ['GH_CALL_LOG'], 'a', encoding='utf-8') as fh:\n"
 		"\tfh.write(json.dumps(sys.argv[1:]) + '\\n')\n"
 		"endpoint = next((arg for arg in sys.argv[1:] if arg.startswith('repos/')), '')\n"
-		"if endpoint.endswith('/attempts/1/jobs'):\n"
+		"if re.search(r'/attempts/[0-9]+/jobs$', endpoint):\n"
 		"\tif os.environ.get('GH_STUB_JOBS_EXIT', '0') != '0':\n"
 		"\t\tsys.exit(1)\n"
 		"\tprint(os.environ.get('GH_STUB_JOBS', ''))\n"
@@ -337,7 +338,7 @@ def _cancel_env(jobs: list[dict] | None = None, annotations: dict | None = None,
 
 
 def _jobs_calls(calls: list[list[str]]) -> list[list[str]]:
-	return [call for call in calls if any(arg.endswith("/attempts/1/jobs") for arg in call)]
+	return [call for call in calls if any(re.search(r"/attempts/[0-9]+/jobs$", arg) for arg in call)]
 
 
 def _annotation_calls(calls: list[list[str]]) -> list[list[str]]:
@@ -413,7 +414,8 @@ def test_more_started_cancelled_jobs_than_the_cap_post_failure(tmp_path: Path) -
 def test_jobs_read_failure_posts_failure(tmp_path: Path) -> None:
 	proc, calls = _run(tmp_path, aggregate="failure", extra_env=_cancel_env([], GH_STUB_JOBS_EXIT="1"))
 	assert _posted_state(calls) == "failure"
-	assert len(_jobs_calls(calls)) == 1
+	# One retry of the jobs read, then fail closed.
+	assert len(_jobs_calls(calls)) == 2
 	assert f"CI_FINAL_STATUS sha={SHA} check=run_cancelled verdict=unverified" in proc.stdout.splitlines()
 
 
@@ -439,12 +441,32 @@ def test_switch_off_posts_failure_without_jobs_read(tmp_path: Path, value: str) 
 	assert "check=run_cancelled" not in proc.stdout
 
 
-def test_later_attempt_posts_failure_without_jobs_read(tmp_path: Path) -> None:
+def test_later_attempt_reads_its_own_jobs_and_skips(tmp_path: Path) -> None:
 	jobs = [_job("static-checks", 1), _lint_running()]
 	proc, calls = _run(tmp_path, aggregate="failure", extra_env=_cancel_env(jobs, GITHUB_RUN_ATTEMPT="2"))
+	assert _post_calls(calls) == []
+	jobs_calls = _jobs_calls(calls)
+	assert len(jobs_calls) == 1
+	assert jobs_calls[0][3] == "repos/o/r/actions/runs/4242/attempts/2/jobs"
+	assert proc.stdout.splitlines()[-1] == f"CI_FINAL_STATUS sha={SHA} outcome=skipped reason=run_cancelled"
+
+
+@pytest.mark.parametrize("attempt", ["", "0", "x", "12345"])
+def test_invalid_attempt_posts_failure_without_jobs_read(tmp_path: Path, attempt: str) -> None:
+	proc, calls = _run(tmp_path, aggregate="failure",
+		extra_env=_cancel_env([_job("static-checks", 1)], GITHUB_RUN_ATTEMPT=attempt))
 	assert _posted_state(calls) == "failure"
 	assert _jobs_calls(calls) == []
-	assert f"CI_FINAL_STATUS sha={SHA} check=run_cancelled verdict=not_attempt_1" in proc.stdout.splitlines()
+	assert f"CI_FINAL_STATUS sha={SHA} check=run_cancelled verdict=unverified" in proc.stdout.splitlines()
+
+
+def test_started_cancelled_jobs_with_hand_cancel_annotation_are_skipped(tmp_path: Path) -> None:
+	jobs = [_job("static-checks", 1, started=True), _job("orchestrate-poll (0)", 2, started=True), _lint_running()]
+	annotations = {key: [{"message": "The run was canceled by @someone.", "annotation_level": "failure"},
+		{"message": CANCELED_TEXT, "annotation_level": "failure"}] for key in ("1001", "1002")}
+	proc, calls = _run(tmp_path, aggregate="failure", extra_env=_cancel_env(jobs, annotations))
+	assert _post_calls(calls) == []
+	assert proc.stdout.splitlines()[-1] == f"CI_FINAL_STATUS sha={SHA} outcome=skipped reason=run_cancelled"
 
 
 @pytest.mark.parametrize("needs", ["not json", "[]", "{}", "null", ""])
