@@ -374,6 +374,23 @@ def test_ci_static_checks_on_changed_workflow_block_the_pr(harness: Harness, ext
 	assert not any(c.startswith("pr create") for c in harness.gh_calls())
 
 
+def test_missing_actionlint_fails_closed_only_for_workflow_changes(harness: Harness) -> None:
+	pytest.importorskip("yaml")
+	(harness.bin / "actionlint").unlink()
+	if shutil.which("actionlint", path=harness.env()["PATH"]):
+		pytest.skip("a real actionlint is on PATH")
+	results = _run_all(harness, FAKE_ENGINE_EXTRA_FILE=".github/workflows/fixed.yml")
+	assert [r.returncode for r in results] == [0, 0, 1]
+	assert "reason=actionlint_unavailable" in results[-1].stdout
+	assert not any(c.startswith("pr create") for c in harness.gh_calls())
+
+
+def test_missing_actionlint_does_not_block_non_workflow_fix(harness: Harness) -> None:
+	(harness.bin / "actionlint").unlink()
+	results = _run_all(harness)
+	assert [r.returncode for r in results] == [0, 0, 0, 0], [r.stdout + r.stderr for r in results]
+
+
 def test_ci_static_checks_run_on_changed_workflow(harness: Harness) -> None:
 	pytest.importorskip("yaml")
 	results = _run_all(harness, FAKE_ENGINE_EXTRA_FILE=".github/workflows/fixed.yml")
@@ -406,3 +423,9 @@ def test_workflow_contract() -> None:
 			assert "${{" not in line
 	edit_step = text.split("- name: Write the fix", 1)[1].split("- name:", 1)[0]
 	assert "GH_PAT" not in edit_step and "github.token" not in edit_step and "GITHUB_TOKEN" not in edit_step
+	# actionlint (absent from hosted runners) is installed, sha256-pinned,
+	# after the editor ran and before verify.
+	install = text.index("- name: Install actionlint")
+	assert text.index("- name: Write the fix") < install < text.index("- name: Verify the fix")
+	install_step = text[install:].split("- name:", 2)[1]
+	assert "sha256sum -c -" in install_step and "ACTIONLINT_SHA256:" in install_step

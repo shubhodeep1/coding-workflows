@@ -158,6 +158,32 @@ jobs:
           SUPPORT_INSTRUCTIONS_FILE: ${{ github.workspace }}/unattended_system_instructions.md
         run: bash scripts/alert_self_fix.sh edit
 
+      # actionlint is not on GitHub-hosted runners. Same pinned release and
+      # sha256 as ci.yml's "Install actionlint" step, installed after the
+      # editor ran so the edited tree cannot touch the binary. A failed
+      # install does not stop the job: `verify` fails closed
+      # (actionlint_unavailable) only when the fix changes workflow YAML.
+      - name: Install actionlint
+        if: steps.prepare.outputs.proceed == 'true'
+        continue-on-error: true
+        env:
+          ACTIONLINT_VERSION: "1.7.12"
+          ACTIONLINT_SHA256: "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
+        run: |
+          set -euo pipefail
+          actionlint_dir="${RUNNER_TEMP}/actionlint-bin"
+          mkdir -p "${actionlint_dir}"
+          cd "${actionlint_dir}"
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -sSLf --retry 5 --retry-all-errors --retry-delay 15 --retry-max-time 300 \
+            --connect-timeout 20 --max-time 120 -o "${tarball}" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/${tarball}"
+          echo "${ACTIONLINT_SHA256}  ${tarball}" | sha256sum -c -
+          tar -xzf "${tarball}" actionlint
+          rm -f -- "${tarball}"
+          ./actionlint -version
+          echo "${actionlint_dir}" >> "$GITHUB_PATH"
+
       # No secrets: the tests run in the network-less gate container.
       - name: Verify the fix
         id: verify
