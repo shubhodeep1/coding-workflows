@@ -361,6 +361,10 @@ def _valid_markers(registry: dict) -> dict:
 	for marker in registry.get("off_on_purpose", []):
 		name = marker.get("name")
 		if not isinstance(name, str) or name not in names:
+			# A `pending: true` marker names a switch not on the default branch
+			# yet (#10127); drop it without the daily warning.
+			if marker.get("pending") is True:
+				continue
 			_warn(f"STAGE_SWITCH_WATCH off_on_purpose marker for unknown switch {str(name)[:80]!r} ignored")
 			continue
 		until = _parse_date(marker.get("until"))
