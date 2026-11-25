@@ -5,7 +5,7 @@
 - How it runs: pull_request review (`.github/workflows/review_autofix.yml`) once the slot switch is on; accounts kept fresh by claude-workers `chatgpt-pool-refresh.yml` (cron `41 */4 * * *` from its default branch)
 - Status: IN_PROGRESS
 - Last updated: 2026-11-25
-- Last note: Step 1 verified already done; Step 2 waits on the owner adding CHATGPT_POOL_AUTH_<NAME> secrets in shubhodeep1/claude-workers (latest refresh run 45521472309 logged `accounts=0`).
+- Last note: Step 2 blocked on shubhodeep1/claude-workers#5: secret CHATGPT_POOL_AUTH_TEAM1 is set, but refresh run 45544873368 failed `broker_get_http_403` because Cloudflare's edge blocks the default Python-urllib User-Agent (error 1010). Merge #5, then confirm TEAM1 `usable=true`.
 - Human-steps issue: https://github.com/shubhodeep1/coding-workflows/issues/9647 — keys project-8969
 
 ## Runbook
@@ -16,3 +16,4 @@
 
 ## Notes
 - 2026-11-25: the session's local clone is shallow, so `git log` shows #9702 as adding the whole broker directory; the GitHub commits API shows the last broker change on main is efee99ef (#8971).
+- 2026-11-25: owner set `CHATGPT_POOL_AUTH_TEAM1` in claude-workers (the first attempt pasted the command text from the clipboard; re-saved from a `cat >` paste, verified `auth_mode: chatgpt`, access and refresh tokens present, with no values shown). Run 45544873368 then failed `outcome=broker_get_http_403`: the edge answers `Python-urllib/*` with `error code: 1010`, while a custom UA reaches the Worker. Fix: shubhodeep1/claude-workers#5 sets an explicit User-Agent in `broker_call`, tested locally against the live broker (`403 malformed_token` from the Worker with a fake token).
