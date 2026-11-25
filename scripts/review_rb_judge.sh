@@ -1790,7 +1790,9 @@ for number, job in enumerate(jobs, start=1):
 write(lines, names)
 PY
   then
-    : > "${out}" 2>/dev/null || true
+    # A non-empty section file with an empty names file means "CI state
+    # unknown" to rb_judge_manual_merge_red_check, never "green".
+    printf '%s\n' "The CI failure details of the judged head could not be rendered; treat its CI state as unknown." > "${out}" 2>/dev/null || true
     [ -z "${names_out}" ] || : > "${names_out}" 2>/dev/null || true
   fi
   return 0
@@ -2036,16 +2038,20 @@ rb_judge_route_red_checks()
 # caller posts no head-gate success and no ai:ready-to-merge; also returns 0 with
 # RB_MERGE_STATUS=checks_not_ready when the checks are blocking and a check-run is
 # still running (the pending count is not filtered to required checks). Returns 1
-# (the manual-merge outcome as before) when the switch is off, the snapshot lists
-# no failed check-run for the judged head (no API read then), the checks lib is
-# not loaded, the read fails, or the required checks pass.
-# API cost: one _pr_checks_completed read, only on a head the snapshot shows red.
+# (the manual-merge outcome as before) when the switch is off, a same-head
+# snapshot parsed with no failed check-run (both CI files empty; no API read
+# then), the checks lib is not loaded, the read fails, or the required checks
+# pass. A missing, disabled/unavailable (sentinel), other-head or unrenderable
+# snapshot leaves an explanatory line in RB_JUDGE_CI_FAILURES_FILE: the CI state
+# is unknown, not green, so the live read runs.
+# API cost: one _pr_checks_completed read, only on a head the snapshot shows red
+# or cannot show.
 rb_judge_manual_merge_red_check()
 {
   local mode="${1:-merge}"
   [ "$(rb_judge_red_check_switch 2>/dev/null)" = "true" ] || return 1
   [[ "${RB_JUDGED_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || return 1
-  [ -s "${RB_JUDGE_CI_FAILURE_NAMES_FILE}" ] || return 1
+  [ -s "${RB_JUDGE_CI_FAILURE_NAMES_FILE}" ] || [ -s "${RB_JUDGE_CI_FAILURES_FILE}" ] || return 1
   command -v _pr_checks_completed >/dev/null 2>&1 || return 1
   if PR_CHECKS_REPOSITORY="${REPOSITORY}" PR_CHECKS_SELF_RUN_ID="${GITHUB_RUN_ID:-}" \
     _pr_checks_completed "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then

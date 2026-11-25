@@ -532,6 +532,25 @@ def test_manual_merge_blocking_with_pending_checks_withholds_the_head_gate(tmp_p
 	assert run["result"].stdout.count("CHECKS_READ") == 1
 	assert run["posts"] == [] and run["dispatches"] == [] and _label_calls(run) == []
 
+
+def test_manual_merge_reads_live_checks_when_the_snapshot_cannot_show_the_head(tmp_path: Path) -> None:
+	# A disabled/unavailable collector sentinel (empty head_sha), a missing
+	# snapshot or one for another head is unknown, not green: the live checks
+	# read runs and a red required check withholds the head-gate success.
+	sentinel = "PR_CHECK_RUNS_CONTEXT\nhead_sha: \ncollection_status: disabled\ntotal_check_runs: 0\nfailed_count: 0\nincomplete_count: 0\n"
+	other = SNAPSHOT.replace(f"head_sha: {JUDGED}", f"head_sha: {OTHER}")
+	for snapshot in (sentinel, None, other):
+		run = _run(tmp_path, snapshot=snapshot, tail=_manual())
+		assert run["result"].returncode == 0, run["result"].stderr
+		assert run["result"].stdout.count("CHECKS_READ") == 1, snapshot
+		assert "ROUTED=1" in run["result"].stdout and _status(run) == "final_ci_repair_requested", snapshot
+		assert len(run["posts"]) == 1 and run["dispatches"] == ["dispatch pr=42"]
+		# Green live checks keep the manual-merge outcome.
+		run = _run(tmp_path, snapshot=snapshot, tail=_manual(), FAKE_CHECKS_OK="1")
+		assert "ROUTED=0" in run["result"].stdout and run["result"].stdout.count("CHECKS_READ") == 1, snapshot
+		assert run["posts"] == [] and run["dispatches"] == []
+
+
 def test_manual_merge_branches_check_before_the_head_gate_success() -> None:
 	text = SCRIPT.read_text(encoding="utf-8")
 	for call in ("elif rb_judge_manual_merge_red_check merge; then", "&& rb_judge_manual_merge_red_check terminal; then"):
