@@ -363,8 +363,13 @@ def _valid_markers(registry: dict) -> dict:
 		if not isinstance(name, str) or name not in names:
 			# A `pending: true` marker names a switch not on the default branch
 			# yet (#10127); drop it without the daily warning. A missing or
-			# malformed name can never be such a switch, so it still warns.
-			if marker.get("pending") is True and isinstance(name, str) and SWITCH_NAME_RE.fullmatch(name):
+			# malformed name, or one without the `_ENABLED` suffix that
+			# discover_switches requires, can never be such a switch, so it
+			# still warns.
+			if (
+				marker.get("pending") is True and isinstance(name, str)
+				and SWITCH_NAME_RE.fullmatch(name) and name.endswith("_ENABLED")
+			):
 				continue
 			_warn(f"STAGE_SWITCH_WATCH off_on_purpose marker for unknown switch {str(name)[:80]!r} ignored")
 			continue

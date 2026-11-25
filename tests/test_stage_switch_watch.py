@@ -333,11 +333,13 @@ def test_pending_marker_with_malformed_name_still_warns(tmp_path):
 		{"until": "2099-01-01", "reason": "r", "pending": True},
 		{"name": 123, "until": "2099-01-01", "reason": "r", "pending": True},
 		{"name": "not a switch", "until": "2099-01-01", "reason": "r", "pending": True},
+		# No `_ENABLED` suffix: discovery can never find it.
+		{"name": "NO_SUFFIX", "until": "2099-01-01", "reason": "r", "pending": True},
 	])
 	snapshot = _snapshot(tmp_path, registry, {"name": "ALPHA_ENABLED", "value": "false", "updated_at": "2026-11-01T00:00:00Z"})
 	result, stderr = _evaluate(registry, snapshot)
 	assert [entry["name"] for entry in result["alerts"]] == ["ALPHA_ENABLED"]
-	assert stderr.count("off_on_purpose marker for unknown switch") == 3
+	assert stderr.count("off_on_purpose marker for unknown switch") == 4
 
 
 def test_empty_registry_without_discovery_exits_2(tmp_path):
