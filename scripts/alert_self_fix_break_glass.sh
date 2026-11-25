@@ -607,6 +607,9 @@ abg_test()
 		_abg_eval "${pr}" "${head}" 5 false gate_missing
 		return 0
 	fi
+	# The non-Python suites ci.yml runs (the broker's Vitest under tools/**)
+	# cannot differ from the base: condition 3 refuses any tools/** path
+	# (denied, and absent from break_glass_allowed_paths).
 	(cd "${ABG_HEAD_DIR}" && find tests -maxdepth 1 -type f -name 'test_*.py' 2>/dev/null | LC_ALL=C sort) > "${tests_file}"
 	if [ ! -s "${tests_file}" ]; then
 		_abg_eval "${pr}" "${head}" 5 false no_tests
