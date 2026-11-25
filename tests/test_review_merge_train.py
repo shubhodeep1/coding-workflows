@@ -3433,6 +3433,34 @@ def test_merge_lease_holder_runs_active_wiring_is_in_both_ticks():
 	assert set_at < tick_at < clear_at
 
 
+def test_merge_lease_unpark_wiring_is_in_both_ticks():
+	"""Issue #10044 static contract. The behavioural scenarios run in
+	tests/test_merge_lease.py (SoftSkipEntries, LeaseRecordCompat). Both
+	ticks write `_unparked` release tokens only behind the `declare -F`
+	guard on the staged library's helpers, log the un-park under the
+	existing MERGE_LEASE prefix after the grant write, and add no GitHub
+	call (the counts in the tests above are unchanged)."""
+	text = SCRIPT.read_text()
+	for fn, var, first in (("_mt_merge_lease_tick", "tick", "tick_first"), ("_mt_merge_lease_tick_multi", "tm", "tm_first")):
+		start = text.index(f"{fn}()\n{{")
+		body = text[start:text.index("\n}\n", start)]
+		guard = (f'[ "${{{var}_skip3}}" = 1 ] && declare -F _merge_lease_skip_release_token >/dev/null 2>&1 \\\n'
+			f'\t\t&& declare -F _merge_lease_skip_reason_is_soft >/dev/null 2>&1 && {var}_unpark_lib=1')
+		assert guard in body, fn
+		assert body.count("_merge_lease_skip_release_token \"") == 1, fn
+		fmt = (f'_mt_log "MERGE_LEASE pr=${{{first}}} base=${{{var}_base}} mode=tick outcome=unparked '
+			f'reason=head_gate_passed_after_${{{var}_unpark_why}}"')
+		assert body.count(fmt) == 1, fn
+		# Logged only after a successful grant write, and no metric event.
+		assert body.index(f'{var}_grant_ts="$(date -u +%s') < body.index(fmt), fn
+		assert "_merge_lease_metric unparked" not in body, fn
+		assert f'[ "${{{var}_unpark_lib}}" = 1 ] && [ -n "${{{var}_unpark_why}}" ]' in body, fn
+	multi = text[text.index("_mt_merge_lease_tick_multi()\n{"):]
+	multi = multi[:multi.index("\n}\n")]
+	# A live holder's retained marker never logs it as a skip-held waiter.
+	assert multi.index("held[$1] = 1") < multi.index('_mt_log "MERGE_LEASE pr=${tm_skip_pr} base=${tm_base} mode=tick outcome=skipped reason=skip_head_unchanged"')
+
+
 def test_list_open_prs_emits_the_title_for_the_merge_lease():
 	"""Merge-lease Phase 2 (Refs #9781): _mt_list_open_prs adds `title` (the
 	lease tick's `[skip ai]` check) and keeps every existing field."""
