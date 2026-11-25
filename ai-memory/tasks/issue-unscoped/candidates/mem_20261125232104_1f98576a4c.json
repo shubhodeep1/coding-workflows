@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/10127-stage-switch-registry-duplicate-entries.md:13 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The claim that dropping the hand-kept list ends this class of failure is inaccurate, since the registry still retains other entries and a later PR adding an entry for a still-listed switch could trigger the duplicate-entry test failure again.\n  WHY: Readers may wrongly conclude the recurrence is prevented; reviewers rated this NIT (mapped to low). Anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash explicitly disagreed and called it wording-only with no runtime effect.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/10127-stage-switch-registry-duplicate-entries.md:13 | severity=low | confidence=5\n  PROBLEM: The claim that dropping the hand-kept list ends this class of failure is inaccurate.\n  WHY: The registry still contains other interim entries for other open pull requests, and a later pull request adding an entry already listed could trigger the same duplicate entry test failure.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/10127-stage-switch-registry-duplicate-entries.md:13 | severity=low | confidence=5\n  PROBLEM: The changelog says the hand-kept list was dropped, but the diff removes only 12 entries and explicitly retains 20 others.\n  WHY: A future pull request that adds an entry for a switch still listed in the registry can still produce the duplicate-entry test failure; readers may incorrectly conclude this recurrence is prevented.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a1435852468b49a03ed5d3bc37287a4f05c158a8703f362b142e85c64be5bd14",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10138,
+    "run_id": "45715205550",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45715205550",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125232104_1f98576a4c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10138,
+    "run_id": "45715205550"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T23:21:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
