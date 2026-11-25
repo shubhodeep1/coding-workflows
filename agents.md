@@ -5483,7 +5483,7 @@ An extracted candidate, empty or non-empty, also requires every earlier opener t
 - Keep `low` as the default gpt-6-sol verbosity across workflow entrypoints unless a specific phase re-proves the old announce-without-emit failure. Pointers: `.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, `.github/workflows/implement.yml`, `.github/workflows/orchestrate.yml`.
 
 **codex-cli quirks**
-- Announce-without-emit is a known codex-cli failure mode on patch-heavy turns; the mitigation is to keep patch tooling explicitly enabled rather than raising verbosity by default. Pointers: `scripts/codex_model_catalog.json`, `.github/workflows/implement.yml`.
+- Announce-without-emit is a known codex-cli failure mode on patch-heavy turns; on Codex CLI v0.171.0 patch tooling can no longer be forced on (`function` is gone and `include_apply_patch_tool` is ignored, #10129), so the first mitigation is to raise editor verbosity in the affected phase. Pointers: `scripts/codex_model_catalog.json`, `.github/workflows/implement.yml`.
 - The OpenRouter Responses-path regression was tied to `apply_patch_tool_type: "freeform"` before the v0.171.0 pin; on v0.171.0 `function` no longer exists and `include_apply_patch_tool` is ignored with a warning, so watch editor phases for no-edit turns instead of restoring either setting. Pointers: `scripts/codex_model_catalog.json`, `.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, `.github/workflows/implement.yml`.
 
 **OpenRouter / prompt-cache**
