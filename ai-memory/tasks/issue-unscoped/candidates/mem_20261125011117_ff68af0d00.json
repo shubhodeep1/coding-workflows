@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/unblock_judge.sh:977-990 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: `unblock_nothing_to_implement_close` posts the terminal `ai:closed` label (line 981) before the state=closed PATCH (line 985), so a failed close leaves the issue open but labelled `ai:closed`.\n  WHY: Severity disagreement: gemini and minimax rate it MAJOR (high), and glm rates it NIT (low), so the highest is used. Gemini and minimax say status resolution in scripts/orchestrate_lib.py:2437-2438 treats the label as closed, which makes the wave terminal and prevents a retry. Glm says that resolver only gates tracked wave items, which this path excludes, the ordering predates this PR (#8470), and the next judge run heals the state. anthropic_claude-sonnet-5_5 checked and rejected this finding on the same grounds and kept it only as a hardening suggestion.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- scripts/unblock_judge.sh:981-985 (HARDENING_SUGGESTION, not a finding; HARDENING_RISK_SCORE: 1)\n  PROBLEM: Labelling before closing means a failed close leaves an open issue carrying the terminal ai:closed label until the next run retries. The sibling scripts/plan_nothing_to_implement_verify.sh:212-216 closes first.\n  WHY: Rejected as a runtime finding. The verified close only runs when tracking is empty (scripts/unblock_judge.sh:2749). The resolver at scripts/orchestrate_lib.py:2435-2438 never sees these issues. scripts/unblock_scan.py does not filter on ai:closed, so the close is retried, and the order predates this PR (scripts/unblock_judge.sh:1259-1266). Optional fix: swap the label POST and the close PATCH, about 8 lines.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/unblock_judge.sh:lines 981-986 | severity=MAJOR | confidence=5\n  PROBLEM: The function `unblock_nothing_to_implement_close` applies the `ai:closed` label before attempting to close the issue.\n  WHY: If the `gh api ... state=closed` call fails, the issue stays open but labelled `ai:closed`. Status resolution in `scripts/orchestrate_lib.py` may treat it as closed, which can leave the state inconsistent or let the orchestrator wrongly conclude the task is complete.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/unblock_judge.sh:981-986 (and the equivalent pattern at scripts/unblock_judge.sh:1259-1265) | severity=MAJOR | confidence=4\n  PROBLEM: The close path adds the terminal `ai:closed` label before the close PATCH (comment POST at line 975, label POST at line 981, close PATCH at line 985). The new verified mode (empty fixup branch at line 964-970, call site at lines 2749-2752) now exercises this sequence.\n  WHY: If the close PATCH fails, scripts/orchestrate_lib.py:2437-2438 returns `closed` from the label. `TERMINAL_WAVE_STATUSES` at scripts/orchestrate_lib.py:1575 includes `closed`, so the orchestrator stops dispatching. The retry described at lines 985-988 never fires, and the issue stays open while the wave is marked complete.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/unblock_judge.sh:977-990 (verified close path of unblock_nothing_to_implement_close; label POST at line 981 before close PATCH at line 985) | severity=NIT | confidence=2\n  PROBLEM: The verified mode posts the terminal `ai:closed` label before attempting the close, so a failed close PATCH leaves the issue open but labelled `ai:closed` until the next judge run retries.\n  WHY: Terminal-label consumers can treat the issue as closed until the next run heals it. Verified mitigations:\n  - The ordering is identical to the pre-existing #8470 path.\n  - The retry is idempotent.\n  - `reconcile_wave_issue_status` (scripts/orchestrate_lib.py:2435-2438) only gates tracked wave items, which this path excludes.\n  - `check_failure_triage.sh:298` documents the open+ai:closed state.\n  This is residual, not a new defect.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8eea1529c4bd36b4ad24187b3a080dce189afea77b64046d8b8b9305801dc645",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10068,
+    "run_id": "45509606036",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45509606036",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125011117_ff68af0d00",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10068,
+    "run_id": "45509606036"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T01:11:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
