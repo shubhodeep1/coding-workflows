@@ -416,6 +416,8 @@ def test_full_clone_failed_heads_probe_is_not_branch_absent() -> None:
 	assert path is None
 	assert exc is not None
 	assert "returned error: 403" in str(exc)
+	# Redacted at the source: no URL in the raised message.
+	assert "https://" not in str(exc)
 	assert ai_memory_lib._is_transient_memory_read_failure(str(exc))
 	assert not any(call[0] == "checkout" for call in calls)
 	assert created
