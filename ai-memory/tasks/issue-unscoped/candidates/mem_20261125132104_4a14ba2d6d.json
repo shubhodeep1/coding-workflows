@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/operator_step_issue.py:460, 533-537 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: SIGNED_COMMENT_MARKER = \"<!-- ai-comment-sig:v1 \" requires a trailing space, so a bot entry with a malformed prefix such as `<!-- ai-comment-sig:v1repo=...` is neither verified nor held by _unverified_entry_keys.\n  WHY: The unheld entry leaves entry_count at 0, so resolve can close the tracker over unticked steps. This contradicts the code comment at lines 454-455 that a malformed signature is unverifiable, not unsigned. Reviewers rated it MAJOR. anthropic_claude-sonnet-5_5 did not report it as a defect and listed it only as a low-risk hardening suggestion, because the trigger needs a hand-edited bot comment.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nHardening suggestion only, not reported as a defect (HARDENING_RISK_SCORE: 1):\n- scripts/operator_step_issue.py: the SIGNED_COMMENT_MARKER constant and its use in _unverified_entry_keys\n  PROBLEM: The marker includes a trailing space, so a bot comment with a malformed prefix like `<!-- ai-comment-sig:v1repo=...` is not held.\n  WHY: The trigger needs a hand-edited bot comment. Suggested fix: drop the trailing space from the marker (1 line).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/operator_step_issue.py:460 | confidence=5\n  PROBLEM: The signature marker and verification regex require a space after `v1`, so malformed prefixes such as `<!-- ai-comment-sig:v1repo=...` are not recognized as signed bot entries.\n  WHY: Such a comment is treated as an ordinary bot comment and ignored, instead of triggering the fail-closed hold. The operator-step tracker can then be closed while entries remain unticked.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/operator_step_issue.py:460, 533-534 | severity=high (source: MAJOR) | confidence=5\n  PROBLEM: The hold check in _unverified_entry_keys requires the marker `<!-- ai-comment-sig:v1 ` with a trailing space. A bot entry with a mangled prefix such as `<!-- ai-comment-sig:v1repo=...` fails both the marker check and the strict verify regex at line 456, so it is neither verified nor held.\n  WHY: _authoritative_entry_comments (line 673) still excludes the bot comment, so entry_count stays 0 at line 988 and resolve closes with reason no_entries over an unticked entry. The marker contradicts the code comment at lines 454-455, and the last-run test covers only text appended after a well-formed signature.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/operator_step_issue.py:533-537 | severity=high (source: MAJOR) | confidence=5\n  PROBLEM: The hold check only recognizes `<!-- ai-comment-sig:v1 `, so a bot entry with a malformed prefix such as `<!-- ai-comment-sig:v1repo=... -->` is neither verified nor held.\n  WHY: The comment stays authored by github-actions[bot] and is excluded from the authoritative entries, so unverified stays empty. resolve then reaches entry_count == 0 and closes the tracker despite the unticked steps.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/operator_step_issue.py:460, 533-534 | severity=high (source: MAJOR) | confidence=4\n  PROBLEM: The fail-closed hold recognizes a signature only when a space follows `v1`. A bot entry whose prefix was mangled (e.g. `<!-- ai-comment-sig:v1repo=\u2026 -->`) matches neither the verify regex at line 456 nor the hold marker, so it drops out of both the authoritative set and the unverified hold set.\n  WHY: resolve (lines 984-989) sees no hold and can close the tracker (reason=closed) while the tampered entry's steps are still open. The comment at lines 454-455 states the opposite intent.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b98dd2cd967a3e92719828ea9386720503d7cdf34c362a8ea057f947ed10ba52",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10102,
+    "run_id": "45599317121",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45599317121",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125132104_4a14ba2d6d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10102,
+    "run_id": "45599317121"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T13:21:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
