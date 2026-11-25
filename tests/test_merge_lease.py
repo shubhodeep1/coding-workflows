@@ -1672,8 +1672,9 @@ class Wiring(unittest.TestCase):
 		for expansion in ("${MERGE_LEASE_REVOKE_ENABLED:-true}", "${MERGE_LEASE_IDLE_MINUTES:-60}",
 				"${MERGE_LEASE_PRIORITY_HEAD_PREFIXES-auto/forward-merge-stable-}"):
 			self.assertIn(expansion, lib)
-		# The sweep reads only MERGE_LEASE_ENABLED / MERGE_LEASE_WAIT_LABEL; if it
-		# ever calls the gate or tick, it needs the three lines above too.
+		# The sweep's lease-writing steps pass the full lease set (issue #10078,
+		# enforced by tests/test_merge_lease_env_contract.py), but it still
+		# never calls the gate or tick itself.
 		sweep = SWEEP.read_text()
 		for fn in ("_merge_lease_gate", "_merge_lease_queue_first", "_mt_merge_lease_tick"):
 			self.assertNotIn(fn, sweep)
@@ -1683,11 +1684,12 @@ class Wiring(unittest.TestCase):
 		that runs the freshness gate or the lease, with the helper's default."""
 		line = ("MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || "
 			"'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}")
-		for wf, expected in ((REVIEW, 3), (POLL, 4), (CLOSE, 1), (SWEEP, 0)):
+		for wf, expected in ((REVIEW, 3), (POLL, 4), (CLOSE, 1), (SWEEP, 1)):
 			text = wf.read_text()
 			self.assertEqual(text.count(line), expected, wf.name)
 			if wf is SWEEP:
-				# The sweep's base sync treats clean and overlap alike, so its
+				# The enumerate step carries the vars expression (issue #10078);
+				# the sweep's base sync treats clean and overlap alike, so its
 				# final-CI step pins the class off (no probe it cannot use).
 				step = text.split("- name: Ensure the final CI run on reviewed PR heads", 1)[1].split("\n      - name: ", 1)[0]
 				self.assertIn("          MERGE_LEASE_SOFT_PATHS: none\n", step)
@@ -2217,7 +2219,10 @@ class MultiHolderWiring(unittest.TestCase):
 	def test_max_holders_switch_reaches_every_lease_path(self) -> None:
 		line = "MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}"
 		for wf, expected, before in ((REVIEW, 3, "MERGE_LEASE_SOFT_PATHS: ${{ vars."), (POLL, 4, "MERGE_LEASE_SOFT_PATHS: ${{ vars."),
-				(CLOSE, 1, "MERGE_LEASE_SOFT_PATHS: ${{ vars."), (SWEEP, 1, "MERGE_LEASE_WAIT_LABEL: ${{ vars.")):
+				(CLOSE, 1, "MERGE_LEASE_SOFT_PATHS: ${{ vars."), (SWEEP, 2, ("MERGE_LEASE_SOFT_PATHS: ${{ vars.", "MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars."))):
+			# The sweep has two lease steps (issue #10078): the enumerate step
+			# ends with SOFT_PATHS, the final-CI step pins SOFT_PATHS: none after
+			# MAX_HOLDERS, so its MAX_HOLDERS follows PRIORITY_HEAD_PREFIXES.
 			lines = wf.read_text().splitlines()
 			hits = [i for i, ln in enumerate(lines) if ln.strip() == line]
 			self.assertEqual(len(hits), expected, wf.name)

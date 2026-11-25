@@ -27,6 +27,7 @@ Rules enforced here, for every workflow-level, job-level and step-level
 
 from __future__ import annotations
 
+import os
 import re
 import unittest
 from pathlib import Path
@@ -124,7 +125,7 @@ def _literal_has_comment(text: str, key: str, literal: str) -> bool:
 def violations(files: dict[str, str], defaults: dict[str, str]) -> list[str]:
 	out: list[str] = []
 	for name, text in sorted(files.items()):
-		if "MERGE_LEASE_" not in text:
+		if "MERGE_LEASE_" not in text and "MERGE_BASE_FRESHNESS_ENABLED" not in text:
 			continue
 		for wf, job_id, step_name, env, effective in collect_env_blocks(name, text):
 			where = f"{wf} job={job_id or '-'} step={step_name or '-'}"
@@ -141,11 +142,16 @@ def violations(files: dict[str, str], defaults: dict[str, str]) -> list[str]:
 						f"{where}: unknown merge-lease setting {key}; classify it in REQUIRED_KEYS "
 						"or UNWIRED_KEYS in tests/test_merge_lease_env_contract.py"
 					)
-			if not any(k in REQUIRED_KEYS for k in lease_keys):
+			# A block that turns on the merge-base freshness gate runs
+			# _pr_base_fresh_for_merge, which can renew a lease, so it needs the
+			# full set even when it carries no MERGE_LEASE_* key itself.
+			runs_freshness_gate = "MERGE_BASE_FRESHNESS_ENABLED" in env
+			if not any(k in REQUIRED_KEYS for k in lease_keys) and not runs_freshness_gate:
 				continue
 			missing = [k for k in REQUIRED_KEYS if k not in effective]
 			if missing:
-				out.append(f"{where}: passes some merge-lease settings but is missing {', '.join(missing)}")
+				reason = "passes some merge-lease settings" if lease_keys else "runs the merge-base freshness gate"
+				out.append(f"{where}: {reason} but is missing {', '.join(missing)}")
 			for key in lease_keys:
 				if key not in REQUIRED_KEYS:
 					continue
@@ -193,6 +199,11 @@ def _fixture(env_lines: str, step_name: str = "Lease step", job_env: str = "") -
 		+ env_lines
 		+ "\n        run: echo ok\n"
 	)
+
+
+if yaml is None and os.environ.get("GITHUB_ACTIONS") == "true":
+	# CI installs PyYAML; a silent skip there would drop the contract unnoticed.
+	raise RuntimeError("PyYAML required for the merge-lease env contract")
 
 
 @unittest.skipIf(yaml is None, "PyYAML is not installed")
@@ -281,6 +292,16 @@ class MergeLeaseEnvContractTest(unittest.TestCase):
 		job_env = "    env:\n" + self._full().replace("          ", "      ") + "\n"
 		step_env = f"          MERGE_LEASE_IDLE_MINUTES: ${{{{ vars.MERGE_LEASE_IDLE_MINUTES || '{self.defaults['MERGE_LEASE_IDLE_MINUTES']}' }}}}"
 		text = _fixture(step_env, job_env=job_env)
+		self.assertEqual(violations({"f.yml": text}, self.defaults), [])
+
+	def test_fixture_freshness_gate_without_lease_keys_fails(self) -> None:
+		text = _fixture("          MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}")
+		found = violations({"f.yml": text}, self.defaults)
+		self.assertEqual(len(found), 1, found)
+		self.assertIn("runs the merge-base freshness gate but is missing MERGE_LEASE_ENABLED", found[0])
+
+	def test_fixture_freshness_gate_with_full_set_passes(self) -> None:
+		text = _fixture(self._full() + "\n          MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}")
 		self.assertEqual(violations({"f.yml": text}, self.defaults), [])
 
 	def test_fixture_partial_job_env_fails(self) -> None:
