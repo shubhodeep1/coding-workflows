@@ -73,6 +73,10 @@ claude_run()
 		env | grep -E '^(GH_TOKEN|GITHUB_TOKEN|GH_PAT|TG_BOT_SECRET|ACTIONS_ID_TOKEN_REQUEST_TOKEN|ACTIONS_ID_TOKEN_REQUEST_URL)=' | cut -d= -f1 | sed 's/^/leak=/'
 	} >> "${FAKE_LOG_DIR}/engine.log"
 	[ "${FAKE_ENGINE_NOCHANGE:-false}" = "true" ] || printf 'fixed\n' >> "$4/scripts/fixed.sh"
+	if [ -n "${FAKE_ENGINE_EXTRA_FILE:-}" ]; then
+		mkdir -p "$(dirname "$4/${FAKE_ENGINE_EXTRA_FILE}")"
+		printf -- '---\nname: x\n' > "$4/${FAKE_ENGINE_EXTRA_FILE}"
+	fi
 	echo done > "$3"
 }
 """
@@ -92,6 +96,14 @@ case "${1:-}" in
 		;;
 esac
 exit 0
+"""
+
+FAKE_LINTER = r"""#!/usr/bin/env bash
+printf '%s %s\n' "$(basename "$0")" "$*" >> "${FAKE_LOG_DIR}/lint.log"
+case "$(basename "$0")" in
+	yamllint) exit "${FAKE_YAMLLINT_RC:-0}" ;;
+	actionlint) exit "${FAKE_ACTIONLINT_RC:-0}" ;;
+esac
 """
 
 FAKE_GATE = r"""#!/usr/bin/env bash
@@ -149,7 +161,7 @@ class Harness:
 		_git(self.root, "push", "-q", str(self.remote), "main")
 		self.bin = tmp / "bin"
 		self.bin.mkdir()
-		for name, text in (("gh", FAKE_GH), ("curl", FAKE_CURL)):
+		for name, text in (("gh", FAKE_GH), ("curl", FAKE_CURL), ("yamllint", FAKE_LINTER), ("actionlint", FAKE_LINTER)):
 			(self.bin / name).write_text(text, encoding="utf-8")
 			(self.bin / name).chmod(0o755)
 		self.support = tmp / "support"
@@ -335,6 +347,41 @@ def test_gate_failure_opens_no_pr(harness: Harness, status: str) -> None:
 	assert [r.returncode for r in results] == [0, 0, 1]
 	assert f"reason=gate_{status}" in results[-1].stdout
 	assert not any(c.startswith("pr create") for c in harness.gh_calls())
+
+
+def test_control_characters_cannot_rebuild_defanged_tokens(harness: Harness) -> None:
+	diagnosis = _diagnosis(summary="closes https:\x01//github.com/" + SELF + "/issues/55 and #\x0177",
+		proposed_fix="x <!\x01-- alert-triage:fp=" + "e" * 64 + " --\x01>")
+	results = _run_all(harness, ALERT_SELF_FIX_INPUT_DIAGNOSIS=diagnosis)
+	assert [r.returncode for r in results] == [0, 0, 0, 0], [r.stdout + r.stderr for r in results]
+	body = (harness.logs / "pr_body.md").read_text(encoding="utf-8")
+	assert f"https://github.com/{SELF}/issues/55" not in body and f"closes https:/ /github.com/{SELF}/issues/55" in body
+	assert "#77" not in body and "# 77" in body
+	assert body.count("<!--") == 2 and "e" * 64 not in body.split("<! --", 1)[0]
+
+
+@pytest.mark.parametrize("extra, reason", [
+	({"FAKE_ACTIONLINT_RC": "1"}, "actionlint"),
+	({"FAKE_YAMLLINT_RC": "1"}, "yamllint"),
+	({"FAKE_ENGINE_EXTRA_FILE": ".github/actionlint.yaml"}, "lint_config"),
+])
+def test_ci_static_checks_on_changed_workflow_block_the_pr(harness: Harness, extra: dict, reason: str) -> None:
+	pytest.importorskip("yaml")
+	extra = {"FAKE_ENGINE_EXTRA_FILE": ".github/workflows/fixed.yml", **extra}
+	results = _run_all(harness, **extra)
+	assert [r.returncode for r in results] == [0, 0, 1]
+	assert f"reason={reason}" in results[-1].stdout
+	assert not any(c.startswith("pr create") for c in harness.gh_calls())
+
+
+def test_ci_static_checks_run_on_changed_workflow(harness: Harness) -> None:
+	pytest.importorskip("yaml")
+	results = _run_all(harness, FAKE_ENGINE_EXTRA_FILE=".github/workflows/fixed.yml")
+	assert [r.returncode for r in results] == [0, 0, 0, 0], [r.stdout + r.stderr for r in results]
+	lint = (harness.logs / "lint.log").read_text(encoding="utf-8").splitlines()
+	assert "yamllint -s -d default -- .github/workflows/fixed.yml" in lint
+	assert "actionlint -shellcheck= .github/workflows/fixed.yml" in lint
+	assert "lint_skipped" not in results[2].stdout
 
 
 def test_automerge_failure_keeps_pr_and_escalates(harness: Harness) -> None:

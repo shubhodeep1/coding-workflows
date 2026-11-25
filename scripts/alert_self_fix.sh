@@ -26,8 +26,10 @@
 #               and the credential-free pre-push affected-test gate
 #               (scripts/prepush_test_gate_run.sh with the trusted
 #               .claude/hooks/prepush_affected_tests.py, whose static units
-#               run the ruff / shellcheck checks of ci.yml). Only `pass` or
-#               `skipped` continues; anything else opens no PR.
+#               run the ruff / shellcheck checks of ci.yml), plus ci.yml's
+#               `yamllint -s` and `actionlint -shellcheck=` on the changed
+#               workflow / action / template YAML. Only `pass` or `skipped`
+#               continues; anything else opens no PR.
 #   publish     commit, non-force push with GH_TOKEN (through GIT_CONFIG_*
 #               env, never argv), compose the PR body, lint it with
 #               scripts/lint_pr_body_auto_close.py (non-zero blocks the PR),
@@ -333,6 +335,8 @@ asf_verify()
 {
 	local base="" changed="${ASF_STATE_DIR}/changed.txt" path="" module="" wrapper="${ASF_REPO_ROOT}/scripts/prepush_test_gate_run.sh"
 	local minutes="${ALERT_SELF_FIX_GATE_TIMEOUT_MINUTES:-20}" image="" status="" exec_helper="${ASF_REPO_ROOT}/scripts/codex_isolated_exec.sh"
+	local -a yaml_lint_files=() workflow_lint_files=()
+	local lint_skipped=""
 	base="$(_asf_state base_sha)" || _asf_fail verify failed no_state
 	[ -d "${ASF_TREE}" ] || _asf_fail verify failed no_worktree
 	[[ "${minutes}" =~ ^[0-9]{1,3}$ ]] && [ "$((10#${minutes}))" -ge 1 ] || minutes=20
@@ -344,6 +348,17 @@ asf_verify()
 		[ -n "${path}" ] || continue
 		if [ -L "${ASF_TREE}/${path}" ]; then
 			_asf_fail verify failed symlink
+		fi
+		# The edited tree cannot bring its own lint configuration.
+		if [[ "${path}" =~ ^(\.yamllint(\.ya?ml)?|\.github/actionlint\.ya?ml)$ ]]; then
+			_asf_fail verify failed lint_config
+		fi
+		# The file sets ci.yml's "YAML lint" and actionlint steps cover.
+		if [[ "${path}" =~ ^(\.github/workflows/[^/]+\.yml|\.github/actions/[^/]+/action\.yml|workflow-templates/[^/]+\.yml)$ ]]; then
+			yaml_lint_files+=("${path}")
+		fi
+		if [[ "${path}" =~ ^(\.github/workflows/[^/]+\.yml|workflow-templates/[^/]+\.yml)$ ]]; then
+			workflow_lint_files+=("${path}")
 		fi
 		case "${path}" in
 			*.sh)
@@ -359,6 +374,26 @@ asf_verify()
 				;;
 		esac
 	done < "${changed}"
+	# The static checks of ci.yml the pre-push gate does not run (it covers
+	# ruff and shellcheck): `yamllint -s` with the default configuration and
+	# `actionlint -shellcheck=`. Both only parse. A tool missing on the runner
+	# is logged (lint_skipped=) and skipped; ci.yml still gates the merge.
+	if [ "${#yaml_lint_files[@]}" -gt 0 ]; then
+		if command -v yamllint >/dev/null 2>&1; then
+			(cd "${ASF_TREE}" && yamllint -s -d default -- "${yaml_lint_files[@]}") >/dev/null 2>&1 \
+				|| _asf_fail verify failed yamllint
+		else
+			lint_skipped="yamllint"
+		fi
+	fi
+	if [ "${#workflow_lint_files[@]}" -gt 0 ]; then
+		if command -v actionlint >/dev/null 2>&1; then
+			(cd "${ASF_TREE}" && actionlint -shellcheck= "${workflow_lint_files[@]}") >/dev/null 2>&1 \
+				|| _asf_fail verify failed actionlint
+		else
+			lint_skipped="${lint_skipped:+${lint_skipped},}actionlint"
+		fi
+	fi
 	# The gate module and wrapper come from the trusted checkout, never from
 	# the edited tree (the wrapper also refuses a module inside it).
 	for module in "${ASF_REPO_ROOT}/.claude/hooks/prepush_affected_tests.py" "${ASF_REPO_ROOT}/workflow-templates/.claude/hooks/prepush_affected_tests.py"; do
@@ -387,7 +422,7 @@ print(status if status in ("pass", "fail", "unverified", "skipped", "timeout") e
 		pass|skipped) ;;
 		*) _asf_fail verify failed "gate_${status}" ;;
 	esac
-	_asf_log verify "outcome=ok gate=${status} files=$(grep -c . "${changed}" || true)"
+	_asf_log verify "outcome=ok gate=${status} files=$(grep -c . "${changed}" || true)${lint_skipped:+ lint_skipped=${lint_skipped}}"
 }
 
 # --- ledger-put --------------------------------------------------------------------
@@ -445,11 +480,13 @@ def clean(value, limit=4000):
 	# a non-tracking issue on the squash merge; the lint blocks only tracking
 	# issues). The trusted `Refs:` lines never pass through clean().
 	text = str(value) if isinstance(value, (str, int, float)) else ""
+	# Control characters go first: stripped after the defangs, one inside
+	# `https:\x01//`, `#\x0112` or `<!\x01--` would rebuild the token.
+	text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
 	text = text.replace("`", "'").replace("<!--", "<! --").replace("-->", "-- >")
 	text = re.sub(r"#(?=[0-9])", "# ", text)
 	text = re.sub(r"(?i)\b(https?):/{2}", r"\1:/ /", text)
 	text = re.sub(r"(?i)\bwww\.", "www .", text)
-	text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
 	return text[:limit]
 
 
