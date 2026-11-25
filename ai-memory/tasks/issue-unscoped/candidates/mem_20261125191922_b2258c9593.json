@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/rollback_stable.sh:393-418 | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The earlier consensus finding is wrong. It said the release-drain loop fetches the active runs only once, at line 393.\n  WHY: The loop at lines 400-418 fetches the active runs again at line 403 (`active_ids=\"$(active_release_run_ids \"${release_workflow}\")\"`), so runs that start late are found and cancelled. No severity was stated. anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash reach the same conclusion in their notes, which are not findings.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"After a rollback, neither auto-release-stable.yml nor the promote-main-to-stable.yml cycle releases until a release is cut deliberately.\"\n  expected_change_site: `.github/workflows/promote-main-to-stable.yml` `promote` job (workflow-dispatch path at lines 180-193) and `scripts/orchestrate_poll_process.sh` `target_sha` dispatch around line 17440\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: `.github/workflows/promote-main-to-stable.yml` has no `stable_hold` reference, and its `promote` job (lines 180-193, 233-289) does not check the hold before fast-forwarding `stable`. The poller dispatches that job with `target_sha` at `scripts/orchestrate_poll_process.sh:17440`, and the release job's clear step can then clear the hold. The hold checks cover only `scripts/auto_release_stable.sh` and the scheduled cycle in `scripts/promote_main_cycle.sh`. Neither file is in the PR's `files_touched` grant. The gap is documented in the README and `agents.d/9342-stable-rollback.md`. Reviewers disagree on deferral: gemini says the issue's Approach explicitly defers it and a follow-up issue is required, while luna says the linked issue does not defer it. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash agree the gap exists but did not raise it, citing the deferral, the scope grant and the merge_with_followup judge rulings.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/rollback_stable.sh:393-418 | confidence=5\n  PROBLEM: The earlier consensus finding is wrong. It said the release-drain loop fetches the active runs only once, at line 393.\n  WHY: The loop at lines 400-418 fetches the active runs again at line 403 (`active_ids=\"$(active_release_run_ids \"${release_workflow}\")\"`), so runs that start late are found and cancelled.\n- TASK_GAP\n  Requirement: \"After a rollback, neither auto-release-stable.yml nor the promote-main-to-stable.yml cycle releases until a release is cut deliberately.\"\n  Expected change site: .github/workflows/promote-main-to-stable.yml (poller-dispatched promote job)\n  Evidence of absence: Poller-dispatched promote jobs do not gate on the hold. This is a known gap, documented in the README and the agents fragment. The issue's Approach explicitly defers it (\"a release dispatched deliberately ... is not blocked by the hold\"), and the scope grant excludes the workflow and orchestration files where the fix belongs. A follow-up issue is required.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"After a rollback, neither auto-release-stable.yml nor the promote-main-to-stable.yml cycle releases until a release is cut deliberately.\"\n  Expected change site: `.github/workflows/promote-main-to-stable.yml` `promote` job (workflow-dispatch path at lines 180-193) and `scripts/orchestrate_poll_process.sh` `target_sha` dispatch around line 17440.\n  Evidence of absence: `.github/workflows/promote-main-to-stable.yml` has no `stable_hold` reference. After the rollback drain ends, the poller can dispatch `promote` with `target_sha`, which fast-forwards `stable` and clears the hold through the release job's clear step. Neither file is in the PR's `files_touched` grant.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"After a rollback, neither `auto-release-stable.yml` nor the `promote-main-to-stable.yml` cycle releases until a release is cut deliberately.\"\n  Expected change site: `.github/workflows/promote-main-to-stable.yml`, the `promote` job, and `scripts/orchestrate_poll_process.sh` before dispatching the pinned promotion.\n  Evidence of absence: The hold checks cover `scripts/auto_release_stable.sh` and the scheduled cycle in `scripts/promote_main_cycle.sh`. The `promote` job in `.github/workflows/promote-main-to-stable.yml` (lines 180-193, 233-289) does not check the hold before fast-forwarding `stable`, and the poller dispatches it with `target_sha` at `scripts/orchestrate_poll_process.sh:17440`. The README and `agents.d/9342-stable-rollback.md` document that this path is ungated, but the linked issue does not defer it. A poller-dispatched promotion can therefore advance `stable` after a rollback, and its release can clear the hold.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9821400b70b37a5352ef32120a11c57cb60f4d965d61efb14cec692627b8fed5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9359,
+    "run_id": "45669614155",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45669614155",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125191922_b2258c9593",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9359,
+    "run_id": "45669614155"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T19:19:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
