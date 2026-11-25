@@ -138,11 +138,11 @@
 # `false`, the dispatch is not an exhausted-head retry and the latest trusted
 # completed (clean/findings) marker is for an older head, the gate adds
 # `-f audit_diff_since=<that head>` and, for findings,
-# `-f prior_findings=<that comment id>`. A rejected delta dispatch (a consumer
-# wrapper without the inputs), or a transient delta failure that used up the
-# shared retry budget, is retried once with today's arguments
+# `-f prior_findings=<that comment id>`. Any failed delta dispatch (for
+# example a consumer wrapper without the inputs, or a transient failure that
+# used up the shared retry budget) is retried once with today's arguments
 # (`outcome=delta_fallback reason=dispatch_rejected dispatch_error=<class>`,
-# where the class names which cause applied; #10104). The first cycle, the
+# where the class names the cause; #10104). The first cycle, the
 # exhausted-head retry and the switch off keep today's exact arguments, so the
 # final exhausted-head audit stays a full merge-base..head audit.
 #
@@ -356,7 +356,10 @@ single_pass_dispatch_error_excerpt()
 
 # Runs one audit dispatch (`gh <args>`), keeping its error output in memory
 # only. rate_limited, server_error and network failures are retried while the
-# run's budget lasts; each retry repeats the same single call.
+# run's budget lasts; each retry repeats the same single call. Accepted
+# residual (#10104 Risks): a `network` failure may hide a dispatch GitHub
+# already accepted, so a retry can start a second audit of the same head; the
+# per-PR concurrency group in security-audit.yml keeps at most one pending run.
 single_pass_dispatch_audit()
 {
 	local err dispatch_class
@@ -1466,10 +1469,11 @@ No completed audit exists for \`${head_sha}\`. Auto-merge stays off. A new push 
 				delta_note+="."
 			fi
 		else
-			# A consumer wrapper that predates the delta inputs rejects them, or a
-			# transient failure used up the shared retry budget (dispatch_error
-			# names which); retry once with today's arguments instead of burning
-			# a cycle. reason=dispatch_rejected keeps its historical form (#10104).
+			# Any failed delta dispatch (for example a consumer wrapper that
+			# predates the delta inputs, or a transient failure that used up the
+			# shared retry budget; dispatch_error names the cause) is retried once
+			# with today's arguments instead of burning a cycle.
+			# reason=dispatch_rejected keeps its historical form (#10104).
 			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=delta_fallback reason=dispatch_rejected cycle=${next_cycle} workflow=${workflow} dispatch_error=${SINGLE_PASS_DISPATCH_ERROR:-other}"
 			if single_pass_dispatch_audit "${dispatch_args[@]}"; then
 				dispatch_ok="true"
