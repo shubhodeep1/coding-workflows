@@ -1,0 +1,18 @@
+{
+  "discovered_at": "2026-11-25T04:12:11Z",
+  "issue_number": 10062,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=.github/workflows/unblock_judge.yml:1-1; cited_path=CI check run tests-system-python (21) (actions/checkout network step; no repo file); files_touched=.github/workflows/unblock_judge.yml, agents.d/10062-unblock-nothing-to-implement-verified-close.md, changelog.d/10062-unblock-nothing-to-implement-verified-close.md, scripts/unblock_judge.sh, tests/test_unblock_judge.py.",
+  "phase": "review_autofix",
+  "pr_number": 10068,
+  "record_id": "lesson_20261125041211_f67ceb1b8d",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "CI check run tests-system-python (21) (actions/checkout network step; no repo file)",
+    ".github/workflows/unblock_judge.yml",
+    "agents.d/10062-unblock-nothing-to-implement-verified-close.md",
+    "changelog.d/10062-unblock-nothing-to-implement-verified-close.md",
+    "scripts/unblock_judge.sh",
+    "tests/test_unblock_judge.py"
+  ]
+}
