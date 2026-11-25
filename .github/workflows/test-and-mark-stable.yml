@@ -2036,6 +2036,7 @@ jobs:
       # workflow-level concurrency hold. Inline because scripts/ is outside
       # the #9418 heal scope. One runs call plus at most 5 jobs calls (§14);
       # read-only, fail-soft, prints ids, enums and timestamps only.
+      # #10105: also prints wait-review's timeout_reason (#9619), allowlisted.
       - name: "Phase 4d: Review-timeout run inventory"
         id: review-timeout-inventory
         if: failure() && steps.wait-review.outputs.status == 'timeout'
@@ -2045,9 +2046,19 @@ jobs:
           PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
           ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
           BAIT_SHA: ${{ steps.inject-bait.outputs.bait_sha }}
+          # #10105 / #9619: empty on the wall-clock deadline path -> unknown.
+          TIMEOUT_INV_REASON: ${{ steps.wait-review.outputs.timeout_reason }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
+          case "${TIMEOUT_INV_REASON:-}" in
+            review_run_never_started|inactivity) TIMEOUT_INV_REASON_VALUE="${TIMEOUT_INV_REASON}" ;;
+            *) TIMEOUT_INV_REASON_VALUE="unknown" ;;
+          esac
+          echo "  Review timeout reason: ${TIMEOUT_INV_REASON_VALUE}"
+          if [ "${TIMEOUT_INV_REASON_VALUE}" = "review_run_never_started" ]; then
+            echo "::warning::Phase 4 review run never started before the review timeout (runner queue or concurrency hold; cause unverified, may be environmental)"
+          fi
           if ! [[ "${ISSUE_NUMBER:-}" =~ ^[0-9]+$ ]] \
             || ! [[ "${REVIEW_WORKFLOW_FILE:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*\.yml$ ]] \
             || ! [[ "${TEST_REPO:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
