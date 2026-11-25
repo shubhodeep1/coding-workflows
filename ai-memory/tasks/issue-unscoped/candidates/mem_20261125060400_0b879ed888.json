@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:4421-4430 | severity=low | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The `tests-system-python (21)` check failed before running tests because checkout could not fetch the PR merge ref.\n  WHY: The supplied check log records two failures to connect to `github.com` on port 443; this is an external CI network failure, not one mapped to the PR changes (source severity NIT, mapped to low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Allow the close without a finished fix-up when a trusted `ai:implement-success-noop:v1` or `PLAN_NOTHING_TO_IMPLEMENT ... outcome=closed`-equivalent marker exists.\"\n  expected_change_site: `scripts/unblock_judge.sh`, `unblock_nothing_to_implement_verified`\n  confidence=5\n  flagged_by: [openai_gpt-6-luna, anthropic_claude-sonnet-5_5]\n  EVIDENCE: The function recognizes only the `ai:implement-success-noop:v1` comment marker and additionally requires the newest block to contain a `Verify:` pass-but-close-failed note (`scripts/unblock_judge.sh:888-918`), it has no detection for a trusted `PLAN_NOTHING_TO_IMPLEMENT ... outcome=closed`-equivalent marker, \"No code handles a `PLAN_NOTHING_TO_IMPLEMENT ... outcome=closed`-equivalent marker\" (sources differ on severity: MAJOR from openai_gpt-6-luna, NIT from anthropic_claude-sonnet-5_5, which says earlier autofix runs accepted the narrowing as deliberate)\n- requirement: Plan Phase 8b (docs/plans/pipeline-human-wait-elimination-plan.md:332, and line 202 \"existing blocks close on the judge's next run without a fix-up\"): \"This clears blocks that existed before 8a merged.\"\n  expected_change_site: `scripts/unblock_judge.sh`, `unblock_nothing_to_implement_verified`\n  confidence=5\n  flagged_by: [openai_gpt-6-luna, anthropic_claude-sonnet-5_5]\n  EVIDENCE: Pre-8a blocks do not contain the Phase 8a `Verify:` note, but the function requires that note before closing (`scripts/unblock_judge.sh:913-914`), the agents.d fragment says \"pre-8a blocks never qualify\" and routes them through the judge's `reset` verdict instead, so the legacy-block close path in the plan is not implemented (sources differ on severity: MAJOR from openai_gpt-6-luna, NIT from anthropic_claude-sonnet-5_5, which calls this a deliberate safety narrowing that the plan owner should confirm)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: Plan Phase 8b (docs/plans/pipeline-human-wait-elimination-plan.md:332, and line 202 \"existing blocks close on the judge's next run without a fix-up\"): \"allow the close without a finished fix-up when a trusted `ai:implement-success-noop:v1` or `PLAN_NOTHING_TO_IMPLEMENT ... outcome=closed`-equivalent marker exists, under the same switch. This clears blocks that existed before 8a merged.\"\n  Expected change site: scripts/unblock_judge.sh, `unblock_nothing_to_implement_verified`\n  Evidence of absence: The function requires the newest trusted \"Planning blocked\" comment to carry a `Verify: ` line containing the 8a pass note. A pre-8a block has no Verify line, so it can never qualify, even with a trusted success-no-op marker (the agents.d fragment says \"pre-8a blocks never qualify\"). No code handles a `PLAN_NOTHING_TO_IMPLEMENT ... outcome=closed`-equivalent marker. Pre-8a blocks rely on the judge's `reset` verdict instead. Earlier autofix runs accepted this as a deliberate safety narrowing; it is recorded so the consolidator can confirm that the plan owner accepts the deviation.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:4421-4430 | severity=NIT | confidence=5\n  PROBLEM: The `tests-system-python (21)` check failed before running tests because checkout could not fetch the PR merge ref.\n  WHY: The supplied check log records two failures to connect to `github.com` on port 443. This is an external CI network failure, not one mapped to the PR changes.\n- TASK_GAP\n  Requirement: \"Allow the close without a finished fix-up when a trusted `ai:implement-success-noop:v1` or `PLAN_NOTHING_TO_IMPLEMENT ... outcome=closed`-equivalent marker exists.\"\n  Expected change site: `scripts/unblock_judge.sh`, `unblock_nothing_to_implement_verified`\n  Evidence of absence: The function recognizes only the `ai:implement-success-noop:v1` comment marker and additionally requires the newest block to contain a `Verify:` pass-but-close-failed note (`scripts/unblock_judge.sh:888-918`). It has no detection for a trusted `PLAN_NOTHING_TO_IMPLEMENT ... outcome=closed`-equivalent marker.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"This clears blocks that existed before 8a merged.\"\n  Expected change site: `scripts/unblock_judge.sh`, `unblock_nothing_to_implement_verified`\n  Evidence of absence: Pre-8a blocks do not contain the Phase 8a `Verify:` note, but the function requires that note before closing (`scripts/unblock_judge.sh:913-914`). The PR's agents fragment explicitly says such blocks instead go through the reset verdict, so the specified legacy-block close path is not implemented.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6a89fa2a94c10f6d00d2f2eb1cf330b1b564a2c6b61fb595a52ca11d7801eb06",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10068,
+    "run_id": "45544231656",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "github-actions[bot]",
+    "run_attempt": 1,
+    "run_id": "45544231656",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125060400_0b879ed888",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10068,
+    "run_id": "45544231656"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T06:04:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
