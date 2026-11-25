@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/pr_checks_lib.sh:2849-2851 | severity=low | confidence=5\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The summary comment at 2849-2851 says a value that is not a whole number \"gives 2 with a warning\", but leaves out the empty-value exception: the detailed comment at 2932-2937 and the parser at 2940-2948 trim empty and whitespace-only values and set them to 2 without a warning.\n  WHY: The change is comment-only and has no runtime effect, but an operator who trusts the summary will expect a `::warning::` for an empty setting and not get one, because `${MERGE_LEASE_MAX_HOLDERS:-2}` and the trimming at 2941-2943 skip the warning branch; both reviewers rated it SEVERITY: NIT, which is mapped to low because the scale has no NIT level, and there was no severity disagreement.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/pr_checks_lib.sh:2849-2851, compared with 2933-2946 | severity=NIT | confidence=5\n  PROBLEM: The summary comment says a non-integer value uses `2` with a warning, but the detailed comment and parser specify that empty or whitespace-only values use `2` without a warning.\n  WHY: Operators reading the summary can expect a warning for an empty setting, but `${MERGE_LEASE_MAX_HOLDERS:-2}` and the trimming logic bypass the warning branch for empty and whitespace-only values.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/pr_checks_lib.sh:2849-2851 (summary comment block), compared with the implementation at 2940-2948 and the corrected detailed comment at 2932-2937 | severity=NIT | confidence=5\n  PROBLEM: The summary comment still says \"not a whole number gives 2 with a warning\" without the empty-value exception, while the detailed comment (2933-2935) says \"An empty or whitespace-only value uses 2 without a warning\"; empty and whitespace-only values are trimmed and set to 2 at 2941-2943, before the regex check, so they produce no `::warning::`.\n  WHY: It has no runtime effect (comment-only), but the two nearby comment blocks now disagree, so an operator who relies on the summary will expect a warning for an empty value and not get one; the prior run fixed the same kind of mismatch further down and missed this one.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5f34fee235f0e264623cabf96ced59917f60ecec31aeaa01edb4d549186889a5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10126,
+    "run_id": "45656256491",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45656256491",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125174408_bdff600bdb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10126,
+    "run_id": "45656256491"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T17:44:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
