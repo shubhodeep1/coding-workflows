@@ -42,6 +42,14 @@
 #                                                           candidate; detail ref=heads/
 #                                                           stable); cannot fast-forward,
 #                                                           so no cycle
+#   PROMOTE_CYCLE_FORWARD_MERGE_PENDING prs=<n,...|none|lookup_failed> base=<sha> head=<sha> ref=heads/<stable>
+#                                                           not an exit: printed before a
+#                                                           base_not_ancestor skip whose
+#                                                           detail has ref=heads/; names the
+#                                                           open same-repo forward-merge
+#                                                           fallback PR(s) into main and sends
+#                                                           one best-effort WARNING alert
+#                                                           (#9919, Refs #9891)
 #   PROMOTE_CYCLE_SKIPPED reason=insufficient_docs          fewer than PROMOTE_CYCLE_MIN_DOCS docs
 #   PROMOTE_CYCLE_SKIPPED reason=scan_capped_behind_markers available=<n> required=<m>
 #                                                           the dispatcher's doc scan was
@@ -375,6 +383,8 @@ skip_cycle()
 	local detail="${2:-}"
 	# Release-blocker reporters (Phase 2b): before the skip line, never fatal.
 	release_blocker_on_skip "${reason}" "${detail}" || true
+	# Stable branch diverged from main: name the forward-merge PR (#9919).
+	promote_cycle_forward_merge_pending "${reason}" "${detail}" || true
 	echo "PROMOTE_CYCLE_SKIPPED reason=${reason}${detail:+ ${detail}}"
 	emit_output outcome "skipped:${reason}"
 	exit 0
@@ -943,6 +953,72 @@ promote_cycle_hold_alert()
 	else
 		echo "::warning::promote_main_cycle: tg_helpers.sh not available; hold-release alert not sent" >&2
 	fi
+	return 0
+}
+
+# promote_cycle_forward_merge_pending <skip_reason> <skip_detail>
+# A base_not_ancestor skip on the stable BRANCH (detail ref=heads/<stable>)
+# means stable holds a commit main lacks, which the forward-merge fallback PR
+# (auto/forward-merge-stable-*, merge commit only) is meant to bring in. On
+# 2026-11-22 such a PR (#9891) sat green and unmerged while the cycle skipped
+# silently. This prints PROMOTE_CYCLE_FORWARD_MERGE_PENDING and sends one
+# best-effort WARNING naming the open PR(s). Runs at most once per tick, is
+# always called as `|| true` (errexit is off here, so every step is checked),
+# and never changes the skip, its output or the exit code.
+# API calls (§14): 1 REST read, only on this skip path. Audited: nothing else
+# in this script lists pull requests (guard 2's issues listing is
+# label-filtered tracking issues and drops PRs). One page of 100 open PRs
+# into the default branch; a forward-merge PR beyond it is missed, which is
+# acceptable for a best-effort alert. Fail open: a failed read logs
+# prs=lookup_failed and the alert says so.
+promote_cycle_forward_merge_pending_done="false"
+promote_cycle_forward_merge_pending()
+{
+	local fm_reason="${1:-}" fm_detail="${2:-}"
+	local fm_base="unknown" fm_head="unknown" fm_pulls_json="" fm_numbers="" fm_prs="" fm_num="" fm_list_text="" fm_text=""
+	[ "${fm_reason}" = "base_not_ancestor" ] || return 0
+	case " ${fm_detail}" in
+		*" ref=heads/"*) ;;
+		*) return 0 ;;
+	esac
+	[ "${promote_cycle_forward_merge_pending_done}" = "true" ] && return 0
+	promote_cycle_forward_merge_pending_done="true"
+	if [[ " ${fm_detail}" =~ \ base=([0-9a-f]{40})( |$) ]]; then
+		fm_base="${BASH_REMATCH[1]}"
+	fi
+	if [[ " ${fm_detail}" =~ \ head=([0-9a-f]{40})( |$) ]]; then
+		fm_head="${BASH_REMATCH[1]}"
+	fi
+	# Only same-repo heads: a fork can name its branch auto/forward-merge-stable-*
+	# and must never be named in an alert that asks an operator to merge it.
+	# URLs are built from the repo and the number, never copied from html_url.
+	if fm_pulls_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls?state=open&base=${PROMOTE_CYCLE_DEFAULT_BRANCH}&per_page=100" 2>/dev/null)" \
+		&& fm_numbers="$(printf '%s' "${fm_pulls_json}" | jq -r --arg repo "${GITHUB_REPOSITORY}" '
+			if type == "array" then . else error("not an array") end
+			| .[]
+			| select(type == "object")
+			| select((((.head // {}) | .ref // "") | tostring | startswith("auto/forward-merge-stable-"))
+				and ((((.head // {}) | .repo // {}) | if type == "object" then (.full_name // "") else "" end) == $repo))
+			| (.number // empty) | tostring' 2>/dev/null)"; then
+		while IFS= read -r fm_num; do
+			[[ "${fm_num}" =~ ^[1-9][0-9]{0,9}$ ]] || continue
+			fm_prs+="${fm_num},"
+			fm_list_text+=" #${fm_num} $(release_blocker_safe "${GITHUB_SERVER_URL:-https://github.com}")/${GITHUB_REPOSITORY}/pull/${fm_num};"
+		done <<< "${fm_numbers}"
+		fm_prs="${fm_prs%,}"
+		if [ -z "${fm_prs}" ]; then
+			fm_prs="none"
+			fm_list_text=" No open forward-merge PR: check forward-merge-stable-to-main.yml runs."
+		else
+			fm_list_text=" Open forward-merge PR(s):${fm_list_text}"
+		fi
+	else
+		fm_prs="lookup_failed"
+		fm_list_text=" Forward-merge PR lookup failed: check the open PRs into ${PROMOTE_CYCLE_DEFAULT_BRANCH} and forward-merge-stable-to-main.yml runs."
+	fi
+	echo "PROMOTE_CYCLE_FORWARD_MERGE_PENDING prs=${fm_prs} base=${fm_base} head=${fm_head} ref=heads/${PROMOTE_CYCLE_STABLE_BRANCH}"
+	fm_text="Promote cycle skipped in ${GITHUB_REPOSITORY}: ${PROMOTE_CYCLE_STABLE_BRANCH} (${fm_base}) is not an ancestor of ${PROMOTE_CYCLE_DEFAULT_BRANCH} (${fm_head}).${fm_list_text} Merge with 'Create a merge commit' (never squash or rebase); the promote cycle stays skipped until ${PROMOTE_CYCLE_STABLE_BRANCH} is an ancestor of ${PROMOTE_CYCLE_DEFAULT_BRANCH}."
+	promote_cycle_hold_alert "${fm_text}" || true
 	return 0
 }
 

@@ -73,6 +73,10 @@
 #                                          queue-age note (_mt_release_stall_alert)
 #   MERGE_TRAIN_STALL_ALERT_HOUR_UTC       default 1 (09:00 SGT); first UTC hour of the
 #                                          3-hour slot in which the note may be sent
+#   FORWARD_MERGE_FALLBACK_AUTO_MERGE      default true; only literal true lets the
+#                                          final-CI resume enable merge-commit
+#                                          auto-merge on an auto/forward-merge-stable-*
+#                                          head (_mt_final_ci_merge_resume)
 #   MERGE_TRAIN_TG_HELPERS                 path of scripts/tg_helpers.sh from the trusted
 #                                          support checkout; unset = no queue-age note
 #   TG_BOT_SECRET, TG_ADMIN_CHAT_ID, ALERT_MSG_LEVEL   scripts/tg_helpers.sh
@@ -1538,6 +1542,53 @@ _mt_dispatch_review() {
 	return 1
 }
 
+# Judge dispatch for a lease grant that rested on the review-blocked judge's
+# merge decision (issue #9987, MERGE_LEASE_ELIGIBLE_GATE=judge_decision): the
+# judge had decided to merge and deferred only for the lease, so the granted
+# PR goes straight back to the judge's merge path (force_rb_judge=true: no
+# reviewer/editor round) instead of a review run that would end
+# ai:review-blocked again. Default-branch workflow, validated PR number only
+# (as _dispatch_rb_judge_for_pr in scripts/orchestrate_poll_process.sh).
+# Order: the review wrappers that accept force_rb_judge (ai-review.yml,
+# internal-review.yml) first, with force_rb_judge=true and
+# allow_workflow_edits=false. Their dispatched runs are titled
+# `<workflow> [pr:<n>]`, so the #9983 holder check (_mt_lease_pr_runs_active)
+# sees the granted holder's judge run as live work and does not revoke it as
+# revoked_no_head_gate while the judge is still queued or running.
+# review_rb_judge_dispatch.yml has no `[pr:<n>]` run name and runs on the
+# default-branch head, so that check cannot see its run; it is the second
+# tier (e.g. a consumer whose review wrapper predates force_rb_judge). Only
+# when none of those can be dispatched, the plain _mt_dispatch_review (a
+# degraded last resort: a review round, as before this change, rather than
+# leaving the granted lease with no run at all).
+# API: one workflow dispatch per grant when the first wrapper exists (the
+# source repo has no ai-review.yml, so one failed dispatch first). At most
+# 2 + 1 + the review list.
+_mt_dispatch_rb_judge() {
+	local mt_rbj_pr="$1" mt_rbj_head="$2" mt_rbj_wf
+	if ! [[ "${mt_rbj_pr}" =~ ^[1-9][0-9]*$ ]]; then
+		_mt_warn "merge-train release: invalid PR number '${mt_rbj_pr}' for head ${mt_rbj_head}; not dispatching."
+		return 1
+	fi
+	# allow_workflow_edits=false explicitly: internal-review.yml defaults the
+	# input to true, and a judge-only run must not get workflow-edit capability
+	# (review_rb_judge_dispatch.yml keeps it off by default).
+	for mt_rbj_wf in ai-review.yml internal-review.yml; do
+		if gh_retry gh workflow run "${mt_rbj_wf}" --repo "${MT_REPO}" \
+			-f pr_number="${mt_rbj_pr}" -f force_rb_judge=true -f allow_workflow_edits=false >/dev/null 2>&1; then
+			_mt_log "MERGE_TRAIN_DISPATCHED pr=${mt_rbj_pr} workflow=${mt_rbj_wf} ref=default head=${mt_rbj_head}"
+			return 0
+		fi
+	done
+	if gh_retry gh workflow run review_rb_judge_dispatch.yml --repo "${MT_REPO}" \
+		-f pr_number="${mt_rbj_pr}" >/dev/null 2>&1; then
+		_mt_log "MERGE_TRAIN_DISPATCHED pr=${mt_rbj_pr} workflow=review_rb_judge_dispatch.yml ref=default head=${mt_rbj_head}"
+		return 0
+	fi
+	_mt_warn "merge-train release: could not dispatch a force_rb_judge review wrapper or review_rb_judge_dispatch.yml for PR #${mt_rbj_pr}; falling back to the review dispatch."
+	_mt_dispatch_review "${mt_rbj_pr}" "${mt_rbj_head}"
+}
+
 # Queue-age note: one Telegram WARNING a day while the oldest still-queued PR
 # is older than MERGE_TRAIN_STALL_ALERT_HOURS (default 24, 0 = off).
 #
@@ -1904,6 +1955,25 @@ _mt_lease_pr_runs_active()
 # call: it reuses the candidate's statuses read inside the 10-candidate cap,
 # and grants a soft
 # entry's waiter only on a confirmed success (MERGE_LEASE_GATE_CONFIRMED).
+# Issue #10044 (un-park expired and idle holders once per head):
+# - G1: skip entries with reason expired or revoked_idle are soft too (the
+#   staged library's _merge_lease_skip_reason_is_soft), so a holder whose
+#   hold ran out waiting for runners takes its queue place again once its
+#   head-gate passes on the skip head.
+# - G2: the grant write keeps the new holder's own entry on its head as
+#   `<reason>_unparked` (hard; _merge_lease_skip_block), and a release of
+#   that head for expired, revoked_idle or revoked_no_head_gate writes the
+#   `_unparked` token (the last stays soft and is kept as the marker on the
+#   next grant, so a head-gate failure cannot reset the budget)
+#   (_merge_lease_skip_release_token), so each head is un-parked at most
+#   once. A head change prunes the entry as before.
+# - G3: such a grant logs outcome=unparked
+#   reason=head_gate_passed_after_<expired|revoked_idle> before the granted
+#   line. No metric event.
+# - G4: every other reason keeps the hard rule.
+# `_unparked` tokens are written only when the staged library has both
+# helpers (tick_unpark_lib). No API call is added: the un-park reuses the
+# candidate's statuses read.
 _mt_merge_lease_tick()
 {
 	local tick_prs_json="$1" tick_base_filter="$2"
@@ -1917,10 +1987,18 @@ _mt_merge_lease_tick()
 	local tick_p2_lib=0 tick_p2=0 tick_login="" tick_login_tried=0 tick_open_heads tick_holder_row tick_holder_head tick_holder_title
 	local tick_holder_draft tick_since tick_idle_s tick_ci_active tick_skip_head tick_excluded tick_skipped_any tick_cand_n tick_skip_pr
 	local tick_first_row tick_skip_why tick_skip_held tick_queue_skips tick_skip_held_prs tick_queue_empty
+	# Issue #9987: the gate the granted waiter's eligibility rested on
+	# (MERGE_LEASE_ELIGIBLE_GATE); judge_decision routes the grant to the judge.
+	local tick_first_gate="" tick_gate_field="" tick_dispatch_fn=""
 	# Issue #9983: the held reason, three-field skip entries (tick_skip3), and
 	# whether the candidate has a soft skip entry on its head.
 	local tick_held_why="holder_open" tick_skip3=0 tick_first_soft=0 tick_cand_head="" tick_runs_rc=0
 	declare -F _merge_lease_skips_hard >/dev/null 2>&1 && declare -F _merge_lease_skips_soft >/dev/null 2>&1 && tick_skip3=1
+	# Issue #10044: the staged library un-parks expired/revoked_idle entries
+	# once per head (tick_unpark_lib), and the candidate's un-parked reason.
+	local tick_unpark_lib=0 tick_unpark_why="" tick_rel_token=""
+	[ "${tick_skip3}" = 1 ] && declare -F _merge_lease_skip_release_token >/dev/null 2>&1 \
+		&& declare -F _merge_lease_skip_reason_is_soft >/dev/null 2>&1 && tick_unpark_lib=1
 	# One active-run listing pass per tick (_mt_lease_pr_runs_active); the
 	# release pass's listing, when it seeded the cache, is that pass.
 	if [ "${_MT_LEASE_RUNS_SEEDED:-}" != "1" ]; then
@@ -2107,7 +2185,13 @@ _mt_merge_lease_tick()
 				# revoked_no_head_gate, until its head-gate passes; #9983 G5).
 				tick_skip_head="${tick_holder_head:-${MERGE_LEASE_HEAD}}"
 				if [[ "${tick_skip_head}" =~ ^[0-9a-f]{40}$ ]]; then
-					MERGE_LEASE_SKIPS="$(printf '%s\n%s\n' "${MERGE_LEASE_SKIPS:-}" "${MERGE_LEASE_PR}:${tick_skip_head}$([ "${tick_skip3}" = 1 ] && printf ':%s' "${tick_reason}")" | sed '/^$/d')"
+					if [ "${tick_unpark_lib}" = 1 ]; then
+						# #10044 G2: a head that already used its un-park stays hard.
+						tick_rel_token="$(_merge_lease_skip_release_token "${MERGE_LEASE_PR}" "${tick_skip_head}" "${tick_reason}")" || tick_rel_token="${tick_reason}"
+						MERGE_LEASE_SKIPS="$(printf '%s\n%s\n' "${MERGE_LEASE_SKIPS:-}" "${MERGE_LEASE_PR}:${tick_skip_head}:${tick_rel_token:-${tick_reason}}" | sed '/^$/d')"
+					else
+						MERGE_LEASE_SKIPS="$(printf '%s\n%s\n' "${MERGE_LEASE_SKIPS:-}" "${MERGE_LEASE_PR}:${tick_skip_head}$([ "${tick_skip3}" = 1 ] && printf ':%s' "${tick_reason}")" | sed '/^$/d')"
+					fi
 				fi
 			fi
 			tick_rc=0
@@ -2164,20 +2248,32 @@ _mt_merge_lease_tick()
 			else
 				tick_first="$(_merge_lease_queue_first "${tick_base_prs}" "")"
 			fi
+			tick_first_gate=""
 			[ -n "${tick_first}" ] && [ "${tick_p2}" = 1 ] || break
-			# Grant-time eligibility (Phase 2): waiters need a pipeline head-gate success.
+			# Grant-time eligibility (Phase 2): waiters need a pipeline head-gate
+			# success, or a pipeline judge-decision status (issue #9987).
 			tick_cand_n=$((tick_cand_n + 1))
 			tick_first_row="$(jq -c --argjson n "${tick_first}" '[ .[] | select(.number == $n) ][0] // {}' <<< "${tick_base_prs}" 2>/dev/null)" || tick_first_row="{}"
 			tick_cand_head="$(jq -r '.head_sha // ""' <<< "${tick_first_row}" 2>/dev/null)" || tick_cand_head=""
 			# #9983 G5: does a soft skip entry hold this candidate's head?
 			tick_first_soft=0
+			tick_unpark_why=""
 			if [ "${tick_skip3}" = 1 ] && [[ "${tick_cand_head}" =~ ^[0-9a-f]{40}$ ]] \
 				&& grep -Eq -- "^${tick_first}:${tick_cand_head}(:|\$)" <<< "$(_merge_lease_skips_soft "${MERGE_LEASE_SKIPS:-}")"; then
 				tick_first_soft=1
+				# #10044 G3: the soft entry's reason, for the un-park log line.
+				if [ "${tick_unpark_lib}" = 1 ]; then
+					tick_unpark_why="$({ grep -E -- "^${tick_first}:${tick_cand_head}:" <<< "$(_merge_lease_skips_soft "${MERGE_LEASE_SKIPS:-}")" || true; } | tail -n1 | cut -d: -f3)"
+					case "${tick_unpark_why}" in
+						expired|revoked_idle) ;;
+						*) tick_unpark_why="" ;;
+					esac
+				fi
 			fi
 			if _merge_lease_pr_eligible "${tick_first}" "${tick_cand_head}" \
 				"$(jq -r '.title // ""' <<< "${tick_first_row}" 2>/dev/null)" "$(jq -r '.draft // false' <<< "${tick_first_row}" 2>/dev/null)" \
 				"${tick_base}" "${tick_login}"; then
+				tick_first_gate="${MERGE_LEASE_ELIGIBLE_GATE:-}"
 				# #9983 G5: a soft entry clears only on a confirmed head-gate
 				# success; a fail-open eligible (failed login or statuses read)
 				# keeps it, so the waiter stays skip-held below.
@@ -2248,14 +2344,26 @@ _mt_merge_lease_tick()
 		fi
 		# Grant time for the metric: the write above, not after unlabel/dispatch.
 		tick_grant_ts="$(date -u +%s 2>/dev/null)" || tick_grant_ts=""
+		# #10044 G3: the grant un-parked a soft expired/revoked_idle entry (only
+		# reached on a confirmed head-gate success); the write kept it as the
+		# `_unparked` marker.
+		if [ "${tick_unpark_lib}" = 1 ] && [ -n "${tick_unpark_why}" ]; then
+			_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=unparked reason=head_gate_passed_after_${tick_unpark_why}"
+		fi
 		# Unlabel before the dispatch: if the dispatch fails, the sweep (which
 		# skips labelled waiters) picks the PR up again within 30 minutes.
 		_merge_lease_unlabel_wait "${tick_first}"
-		if _mt_dispatch_review "${tick_first}" "$(jq -r --argjson n "${tick_first}" '[ .[] | select(.number == $n) | .head // "" ][0] // ""' <<< "${tick_base_prs}" 2>/dev/null)"; then
-			_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=first_in_queue${tick_queue_len_field}"
+		tick_gate_field=""
+		tick_dispatch_fn="_mt_dispatch_review"
+		if [ "${tick_first_gate}" = "judge_decision" ]; then
+			tick_gate_field=" gate=judge_decision"
+			tick_dispatch_fn="_mt_dispatch_rb_judge"
+		fi
+		if "${tick_dispatch_fn}" "${tick_first}" "$(jq -r --argjson n "${tick_first}" '[ .[] | select(.number == $n) | .head // "" ][0] // ""' <<< "${tick_base_prs}" 2>/dev/null)"; then
+			_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=first_in_queue${tick_queue_len_field}${tick_gate_field}"
 			[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric granted "${tick_base}" "${tick_first}" tick first_in_queue 0 "${tick_waiters}" "${tick_first}" "${tick_grant_ts}" || true
 		else
-			_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=dispatch_failed_sweep_retries${tick_queue_len_field}"
+			_mt_log "MERGE_LEASE pr=${tick_first} base=${tick_base} mode=tick outcome=granted reason=dispatch_failed_sweep_retries${tick_queue_len_field}${tick_gate_field}"
 			[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric granted "${tick_base}" "${tick_first}" tick dispatch_failed_sweep_retries 0 "${tick_waiters}" "${tick_first}" "${tick_grant_ts}" || true
 		fi
 		_mt_merge_lease_queue_log "${tick_base}" "${tick_prs_json}" "${tick_first}" "${tick_grant_ts:-0}" "${tick_excluded:+${tick_excluded},}${tick_first}" || true
@@ -2306,10 +2414,16 @@ _mt_merge_lease_tick_multi()
 	local tm_queue_skips tm_skip_pr tm_skip_held=0 tm_skip_held_prs="" tm_skipped_any=0 tm_cand_n=0 tm_granted=0 tm_queue_empty=0
 	local tm_first tm_first_row tm_first_head tm_first_paths tm_blocker tm_skip_why tm_grant_ts tm_new_row
 	local tm_max_candidates=10 tm_queue_len_field="" tm_rel_held=""
+	# Issue #9987: as tick_first_gate in _mt_merge_lease_tick.
+	local tm_first_gate="" tm_gate_field="" tm_dispatch_fn=""
 	# Issue #9983: holders kept by a live run, three-field skip entries, and
 	# the candidate's soft-entry flag.
 	local tm_runs_active_prs=" " tm_runs_rc=0 tm_skip3=0 tm_first_soft=0 tm_held_why
 	declare -F _merge_lease_skips_hard >/dev/null 2>&1 && declare -F _merge_lease_skips_soft >/dev/null 2>&1 && tm_skip3=1
+	# Issue #10044: as the single-holder tick's tick_unpark_lib.
+	local tm_unpark_lib=0 tm_unpark_why="" tm_rel_token=""
+	[ "${tm_skip3}" = 1 ] && declare -F _merge_lease_skip_release_token >/dev/null 2>&1 \
+		&& declare -F _merge_lease_skip_reason_is_soft >/dev/null 2>&1 && tm_unpark_lib=1
 	local -a tm_row_arr=()
 	[ "${MERGE_LEASE_STATE}" = "held" ] && tm_rows="${MERGE_LEASE_HOLDER_ALL_ROWS:-}"
 	# Phase 1 MERGE_LEASE_QUEUE line (written by the caller from these).
@@ -2389,7 +2503,13 @@ _mt_merge_lease_tick_multi()
 		if [ "${tm_p2}" = 1 ] && [ "${tm_reason}" != "holder_closed" ]; then
 			tm_skip_head="${tm_listed_head:-${tm_h_head}}"
 			if [[ "${tm_skip_head}" =~ ^[0-9a-f]{40}$ ]]; then
-				MERGE_LEASE_SKIPS="$(printf '%s\n%s\n' "${MERGE_LEASE_SKIPS:-}" "${tm_h}:${tm_skip_head}$([ "${tm_skip3}" = 1 ] && printf ':%s' "${tm_reason}")" | sed '/^$/d')"
+				if [ "${tm_unpark_lib}" = 1 ]; then
+					# #10044 G2: a head that already used its un-park stays hard.
+					tm_rel_token="$(_merge_lease_skip_release_token "${tm_h}" "${tm_skip_head}" "${tm_reason}")" || tm_rel_token="${tm_reason}"
+					MERGE_LEASE_SKIPS="$(printf '%s\n%s\n' "${MERGE_LEASE_SKIPS:-}" "${tm_h}:${tm_skip_head}:${tm_rel_token:-${tm_reason}}" | sed '/^$/d')"
+				else
+					MERGE_LEASE_SKIPS="$(printf '%s\n%s\n' "${MERGE_LEASE_SKIPS:-}" "${tm_h}:${tm_skip_head}$([ "${tm_skip3}" = 1 ] && printf ':%s' "${tm_reason}")" | sed '/^$/d')"
+				fi
 			fi
 		fi
 		tm_new_rows="$(_merge_lease_rows_without "${tm_h}" "${tm_rows}")"
@@ -2432,6 +2552,17 @@ _mt_merge_lease_tick_multi()
 		tm_queue_skips="${MERGE_LEASE_SKIPS}"
 		# #9983 G5: only hard entries pass a waiter over.
 		[ "${tm_skip3}" = 1 ] && tm_queue_skips="$(_merge_lease_skips_hard "${MERGE_LEASE_SKIPS}")"
+		# #10044: a live holder's retained `_unparked` marker never makes it a
+		# skip-held waiter (holders are excluded from the queue anyway).
+		# An awk failure keeps the unfiltered list (fail closed: parked waiters
+		# stay parked).
+		if [ -n "${tm_queue_skips}" ] && [ -n "${tm_rows}" ]; then
+			local tm_queue_unheld=""
+			if tm_queue_unheld="$(awk -F: 'NR == FNR { if ($1 != "") held[$1] = 1; next } $0 != "" && !($1 in held)' \
+				<(printf '%s\n' "${tm_rows}" | awk 'NF { print $1 }') - <<< "${tm_queue_skips}" 2>/dev/null)"; then
+				tm_queue_skips="${tm_queue_unheld}"
+			fi
+		fi
 		while IFS= read -r tm_skip_pr; do
 			[[ "${tm_skip_pr}" =~ ^[1-9][0-9]*$ ]] || continue
 			tm_skipped_any=1
@@ -2454,10 +2585,20 @@ _mt_merge_lease_tick_multi()
 		tm_excluded="${tm_excluded:+${tm_excluded},}${tm_first}"
 		tm_first_row="$(jq -c --argjson n "${tm_first}" '[ .[] | select(.number == $n) ][0] // {}' <<< "${tm_base_prs}" 2>/dev/null)" || tm_first_row="{}"
 		tm_first_head="$(jq -r '.head_sha // ""' <<< "${tm_first_row}" 2>/dev/null)" || tm_first_head=""
+		tm_first_gate=""
 		tm_first_soft=0
+		tm_unpark_why=""
 		if [ "${tm_p2}" = 1 ] && [ "${tm_skip3}" = 1 ] && [[ "${tm_first_head}" =~ ^[0-9a-f]{40}$ ]] \
 			&& grep -Eq -- "^${tm_first}:${tm_first_head}(:|\$)" <<< "$(_merge_lease_skips_soft "${MERGE_LEASE_SKIPS:-}")"; then
 			tm_first_soft=1
+			# #10044 G3: the soft entry's reason, for the un-park log line.
+			if [ "${tm_unpark_lib}" = 1 ]; then
+				tm_unpark_why="$({ grep -E -- "^${tm_first}:${tm_first_head}:" <<< "$(_merge_lease_skips_soft "${MERGE_LEASE_SKIPS:-}")" || true; } | tail -n1 | cut -d: -f3)"
+				case "${tm_unpark_why}" in
+					expired|revoked_idle) ;;
+					*) tm_unpark_why="" ;;
+				esac
+			fi
 		fi
 		# #9983 G5: a soft entry clears only on a confirmed head-gate success.
 		if [ "${tm_p2}" = 1 ] && { ! _merge_lease_pr_eligible "${tm_first}" "${tm_first_head}" \
@@ -2482,6 +2623,7 @@ _mt_merge_lease_tick_multi()
 			[ "${tm_metric_ok}" = 1 ] && _merge_lease_metric skipped "${tm_base}" "${tm_first}" tick "${tm_skip_why}" "" "${tm_waiters}" - || true
 			continue
 		fi
+		if [ "${tm_p2}" = 1 ]; then tm_first_gate="${MERGE_LEASE_ELIGIBLE_GATE:-}"; fi
 		tm_first_paths="$(_merge_lease_pr_paths "${tm_first}" 2>/dev/null)" || tm_first_paths="*"
 		[ -n "${tm_first_paths}" ] || tm_first_paths="*"
 		tm_blocker=""
@@ -2526,6 +2668,10 @@ _mt_merge_lease_tick_multi()
 			return 0
 		fi
 		tm_grant_ts="$(date -u +%s 2>/dev/null)" || tm_grant_ts=""
+		# #10044 G3: as the single-holder tick.
+		if [ "${tm_unpark_lib}" = 1 ] && [ -n "${tm_unpark_why}" ]; then
+			_mt_log "MERGE_LEASE pr=${tm_first} base=${tm_base} mode=tick outcome=unparked reason=head_gate_passed_after_${tm_unpark_why}"
+		fi
 		_merge_lease_holder_paths_set "${tm_first}" "${tm_first_paths}"
 		tm_rows="$(printf '%s\n%s\n' "${tm_rows}" "${tm_new_row}" | sed '/^$/d')"
 		_MT_LEASE_QUEUE_ROWS="${tm_rows}"
@@ -2533,11 +2679,17 @@ _mt_merge_lease_tick_multi()
 		tm_count=$((tm_count + 1))
 		tm_granted=$((tm_granted + 1))
 		_merge_lease_unlabel_wait "${tm_first}"
-		if _mt_dispatch_review "${tm_first}" "$(jq -r '.head // ""' <<< "${tm_first_row}" 2>/dev/null)"; then
-			_mt_log "MERGE_LEASE pr=${tm_first} base=${tm_base} mode=tick outcome=granted reason=first_in_queue${tm_queue_len_field} holders=${tm_count}"
+		tm_gate_field=""
+		tm_dispatch_fn="_mt_dispatch_review"
+		if [ "${tm_first_gate}" = "judge_decision" ]; then
+			tm_gate_field=" gate=judge_decision"
+			tm_dispatch_fn="_mt_dispatch_rb_judge"
+		fi
+		if "${tm_dispatch_fn}" "${tm_first}" "$(jq -r '.head // ""' <<< "${tm_first_row}" 2>/dev/null)"; then
+			_mt_log "MERGE_LEASE pr=${tm_first} base=${tm_base} mode=tick outcome=granted reason=first_in_queue${tm_queue_len_field} holders=${tm_count}${tm_gate_field}"
 			[ "${tm_metric_ok}" = 1 ] && _merge_lease_metric granted "${tm_base}" "${tm_first}" tick first_in_queue 0 "${tm_waiters}" "${tm_first}" "${tm_grant_ts}" || true
 		else
-			_mt_log "MERGE_LEASE pr=${tm_first} base=${tm_base} mode=tick outcome=granted reason=dispatch_failed_sweep_retries${tm_queue_len_field} holders=${tm_count}"
+			_mt_log "MERGE_LEASE pr=${tm_first} base=${tm_base} mode=tick outcome=granted reason=dispatch_failed_sweep_retries${tm_queue_len_field} holders=${tm_count}${tm_gate_field}"
 			[ "${tm_metric_ok}" = 1 ] && _merge_lease_metric granted "${tm_base}" "${tm_first}" tick dispatch_failed_sweep_retries 0 "${tm_waiters}" "${tm_first}" "${tm_grant_ts}" || true
 		fi
 	done
@@ -2567,10 +2719,21 @@ _mt_merge_lease_tick_multi()
 # green now (_pr_wait_for_required_checks with a 0-minute budget: one read,
 # no final-CI dispatch, no new marker), and the base is fresh and the merge
 # lease allows it (_pr_base_fresh_for_merge), this enables head-bound
-# auto-merge (squash), marks the status success, labels the linked issues
+# auto-merge, marks the status success, labels the linked issues
 # ai:ready-to-merge and removes the PR label. A head without the marker (the
-# branch moved), a fork or draft, an integration or forward-merge head, or a
-# failed required check removes the label: the normal review path owns it.
+# branch moved), a fork or draft, an integration head, or a failed required
+# check removes the label: the normal review path owns it.
+#
+# Merge method: squash, except for forward-merge fallback heads
+# (auto/forward-merge-stable-*), which get a merge commit (--merge, the same
+# method as review_enable_auto_merge.sh). A squash or rebase would strip
+# stable's commits from main's ancestry and promote-main-to-stable.yml's
+# ancestry pre-flight would refuse. The review path does not own these heads
+# once its required-checks wait timed out, so this tick is their only
+# automatic merge (incident: #9891 sat green until a human merged it). They
+# pass every gate below and are gated by FORWARD_MERGE_FALLBACK_AUTO_MERGE
+# (default true; any other value drops them with
+# reason=forward_merge_auto_merge_disabled before the statuses read).
 #
 # Input: as _mt_merge_lease_tick.
 # API calls per labelled PR: 1 statuses read, the checks read(s) of
@@ -2579,7 +2742,8 @@ _mt_merge_lease_tick_multi()
 # and 1 label DELETE. Plus one cached `GET user`.
 # Fail-open: never merges on an unreadable state; logs and leaves the label.
 # Log: FINAL_CI_MERGE_RESUME pr=<n> head=<sha> outcome=auto_merge_enabled|
-# waiting|deferred|dropped|failed reason=<token>
+# waiting|deferred|dropped|failed reason=<token>; the auto_merge_enabled line
+# and the auto_merge_refused warning end with method=squash|merge.
 _mt_final_ci_merge_resume()
 {
 	local resume_prs_json="$1" resume_base_filter="$2"
@@ -2588,7 +2752,7 @@ _mt_final_ci_merge_resume()
 	local resume_line resume_num resume_head_ref resume_sha resume_head_repo resume_base resume_draft resume_statuses
 	local resume_marker resume_gate resume_issue resume_issues resume_block_candidate
 	local resume_owner="${MT_REPO%%/*}" resume_name="${MT_REPO#*/}"
-	local resume_auto_merge_on="true" resume_labels resume_block_label
+	local resume_auto_merge_on="true" resume_labels resume_block_label resume_merge_method
 	[ "${MT_PR_CHECKS_LIB_LOADED}" = "true" ] || return 0
 	case "$(printf '%s' "${FINAL_CI_MERGE_RESUME_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
 		true|1|yes|on) ;;
@@ -2614,11 +2778,16 @@ _mt_final_ci_merge_resume()
 			return 0
 		fi
 		if [ "${resume_head_repo}" != "${MT_REPO}" ] || [ "${resume_draft}" = "true" ] || ! [[ "${resume_sha}" =~ ^[0-9a-f]{40}$ ]] \
-			|| [[ "${resume_head_ref}" =~ ^auto/forward-merge-stable- ]] \
 			|| printf '%s\n' "${resume_head_ref}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}"; then
 			_mt_final_ci_pending_unlabel "${resume_num}" "${resume_label}"
 			_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha:-?} outcome=dropped reason=not_eligible"
 			continue
+		fi
+		# Forward-merge fallback heads must keep stable's ancestry: merge
+		# commit only (never squash or rebase). One place decides the flag.
+		resume_merge_method="squash"
+		if [[ "${resume_head_ref}" =~ ^auto/forward-merge-stable- ]]; then
+			resume_merge_method="merge"
 		fi
 		# A hold placed after the head was marked wins: drop the label and
 		# leave the PR to the review path (auto-merge off, a human hold, a
@@ -2634,6 +2803,13 @@ _mt_final_ci_merge_resume()
 		if [ "${resume_auto_merge_on}" != "true" ] || [ -n "${resume_block_label}" ]; then
 			_mt_final_ci_pending_unlabel "${resume_num}" "${resume_label}"
 			_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=dropped reason=$([ "${resume_auto_merge_on}" != "true" ] && echo auto_merge_disabled || echo "blocked_by_${resume_block_label}")"
+			continue
+		fi
+		# The forward-merge fallback's own kill switch (same exact `true`
+		# comparison as review_autofix.yml); checked before the statuses read.
+		if [ "${resume_merge_method}" = "merge" ] && [ "${FORWARD_MERGE_FALLBACK_AUTO_MERGE:-true}" != "true" ]; then
+			_mt_final_ci_pending_unlabel "${resume_num}" "${resume_label}"
+			_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=dropped reason=forward_merge_auto_merge_disabled"
 			continue
 		fi
 		if ! resume_statuses="$(gh_retry _safe_gh_jq "repos/${MT_REPO}/commits/${resume_sha}/statuses?per_page=100" 2>/dev/null)" \
@@ -2673,8 +2849,8 @@ _mt_final_ci_merge_resume()
 			_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=deferred reason=${PR_BASE_FRESHNESS_OUTCOME:-unknown}"
 			continue
 		fi
-		if ! gh_retry gh pr merge "${resume_num}" --repo "${MT_REPO}" --squash --auto --match-head-commit "${resume_sha}" >/dev/null 2>&1; then
-			_mt_warn "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=failed reason=auto_merge_refused"
+		if ! gh_retry gh pr merge "${resume_num}" --repo "${MT_REPO}" "--${resume_merge_method}" --auto --match-head-commit "${resume_sha}" >/dev/null 2>&1; then
+			_mt_warn "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=failed reason=auto_merge_refused method=${resume_merge_method}"
 			continue
 		fi
 		gh_retry _safe_gh_jq -X POST "repos/${MT_REPO}/statuses/${resume_sha}" -f state=success -f "context=${resume_context}" \
@@ -2687,7 +2863,7 @@ _mt_final_ci_merge_resume()
 			GH_RETRY_IDEMPOTENT=true gh_retry _safe_gh_jq -X POST "repos/${MT_REPO}/issues/${resume_issue}/labels" -f "labels[]=ai:ready-to-merge" >/dev/null 2>&1 \
 				|| _mt_warn "FINAL_CI_MERGE_RESUME pr=${resume_num} issue=${resume_issue} outcome=label_failed"
 		done <<< "${resume_issues}"
-		_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=auto_merge_enabled reason=final_ci_green"
+		_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=auto_merge_enabled reason=final_ci_green method=${resume_merge_method}"
 	done < <(printf '%s\n' "${resume_prs_json}" | jq -c --arg l "${resume_label}" 'select(type == "object" and ((.labels // []) | index($l)) != null)' 2>/dev/null)
 	return 0
 }
