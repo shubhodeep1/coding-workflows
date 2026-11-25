@@ -7,7 +7,7 @@ Before this change the audit checked only whether a plan had shipped, so a plan 
 | --- | --- |
 | New audit step | 4a, between classification (step 4) and ranking (step 5) |
 | Extra GitHub API calls | 0 (step 6 reuses the tracking-issue listing step 4a fetches) |
-| New report sections | 3 (refreshed, needs decision, stale but in flight) |
+| New report sections | 4 (refreshed, needs decision, stale but in flight, not refreshed because the tracking-issue listing is unreadable) |
 
 What this means for operators: the maintenance PR from `/audit-plans` can now carry plan edits as well as archival moves and registry removals, and its body lists what was stale in each plan and what changed. A refresh never changes a plan's goals or scope. A plan that would need that is flagged NEEDS DECISION, asked as a Q-ID question, and left out of the recommendation until you answer. Plans already being implemented by an open `ai:orchestrator-tracking` project are reported but never edited. If the tracking-issue listing cannot be read, the run refreshes nothing. When the recommended plan was refreshed, the report tells you to merge the maintenance PR before you hand the plan off, because the default branch still holds the old text until then.
 
