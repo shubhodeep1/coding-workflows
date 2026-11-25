@@ -115,6 +115,11 @@
 # priority heads first. No API call.
 # Log: `PRIORITY_LANE pr=<n> outcome=... surface=final_ci`; the summary lines
 # gain `deferred_priority_lane=<n>`.
+# While the hold is active, a non-priority head whose gate the snapshot
+# does not know yet is decided before its status read, so its `deferred` /
+# `released` line and the `deferred_priority_lane` count can include a head
+# whose gate later reads as not success (that head is then counted in
+# `gate_not_success` too). Dispatch decisions are unaffected.
 
 set -uo pipefail
 
@@ -282,7 +287,7 @@ review_final_ci_sweep_main()
 	local helpers_dir wf max listing candidates count checked=0 ensured=0 skipped_gate=0 number sha ref state known_state
 	local base_sync_switch base_sync_queue="" failed_candidates base_sync_checked=0 failed_at
 	# Priority lane (issue #10048; header).
-	local fci_lane_on=false fci_lane_hold=false fci_lane_deferred=0 fci_lane_line fci_lane_rows="" fci_lane_n fci_lane_p fci_lane_u
+	local fci_lane_on=false fci_lane_hold=false fci_lane_deferred=0 fci_lane_rows="" fci_lane_n fci_lane_p fci_lane_u
 	local fci_lane_since="" fci_lane_done fci_lane_sorted fci_lane_first fci_lane_rest fci_lane_qline
 	local -A fci_lane_prio=() fci_lane_updated=()
 	wf="${REVIEW_FINAL_CI_WORKFLOW:-}"
