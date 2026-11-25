@@ -385,6 +385,23 @@ def test_missing_actionlint_fails_closed_only_for_workflow_changes(harness: Harn
 	assert not any(c.startswith("pr create") for c in harness.gh_calls())
 
 
+def test_missing_yamllint_fails_closed_only_for_workflow_changes(harness: Harness) -> None:
+	pytest.importorskip("yaml")
+	(harness.bin / "yamllint").unlink()
+	if shutil.which("yamllint", path=harness.env()["PATH"]):
+		pytest.skip("a real yamllint is on PATH")
+	results = _run_all(harness, FAKE_ENGINE_EXTRA_FILE=".github/workflows/fixed.yml")
+	assert [r.returncode for r in results] == [0, 0, 1]
+	assert "reason=yamllint_unavailable" in results[-1].stdout
+	assert not any(c.startswith("pr create") for c in harness.gh_calls())
+
+
+def test_missing_yamllint_does_not_block_non_workflow_fix(harness: Harness) -> None:
+	(harness.bin / "yamllint").unlink()
+	results = _run_all(harness)
+	assert [r.returncode for r in results] == [0, 0, 0, 0], [r.stdout + r.stderr for r in results]
+
+
 def test_missing_actionlint_does_not_block_non_workflow_fix(harness: Harness) -> None:
 	(harness.bin / "actionlint").unlink()
 	results = _run_all(harness)
@@ -429,3 +446,9 @@ def test_workflow_contract() -> None:
 	assert text.index("- name: Write the fix") < install < text.index("- name: Verify the fix")
 	install_step = text[install:].split("- name:", 2)[1]
 	assert "sha256sum -c -" in install_step and "ACTIONLINT_SHA256:" in install_step
+	# yamllint (ci.yml pip-installs it) is installed after the editor ran,
+	# before verify, into a private venv.
+	yamllint_install = text.index("- name: Install yamllint")
+	assert text.index("- name: Write the fix") < yamllint_install < text.index("- name: Verify the fix")
+	yamllint_step = text[yamllint_install:].split("- name:", 2)[1]
+	assert "python3 -m venv" in yamllint_step and "continue-on-error: true" in yamllint_step

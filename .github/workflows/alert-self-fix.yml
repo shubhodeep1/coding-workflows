@@ -184,6 +184,30 @@ jobs:
           ./actionlint -version
           echo "${actionlint_dir}" >> "$GITHUB_PATH"
 
+      # ci.yml pip-installs yamllint in every job that lints YAML, so the
+      # runner image is not trusted to ship it. Installed after the editor
+      # ran, into a private venv; only the yamllint entry point goes on PATH,
+      # so later steps keep the runner's python3. A failed install does not
+      # stop the job: `verify` fails closed (yamllint_unavailable) only when
+      # the fix changes linted YAML.
+      - name: Install yamllint
+        if: steps.prepare.outputs.proceed == 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if command -v yamllint >/dev/null 2>&1; then
+            yamllint --version
+            exit 0
+          fi
+          yamllint_venv="${RUNNER_TEMP}/yamllint-venv"
+          yamllint_bin="${RUNNER_TEMP}/yamllint-bin"
+          python3 -m venv "${yamllint_venv}"
+          "${yamllint_venv}/bin/python" -m pip install --disable-pip-version-check -q yamllint
+          mkdir -p "${yamllint_bin}"
+          ln -sf "${yamllint_venv}/bin/yamllint" "${yamllint_bin}/yamllint"
+          "${yamllint_bin}/yamllint" --version
+          echo "${yamllint_bin}" >> "$GITHUB_PATH"
+
       # No secrets: the tests run in the network-less gate container.
       - name: Verify the fix
         id: verify

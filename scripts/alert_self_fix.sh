@@ -379,7 +379,8 @@ asf_verify()
 	# repository has no yamllint config, so ci.yml's `yamllint -s` uses the
 	# same rules) and `actionlint -shellcheck=`. Both only parse. A tool
 	# missing on the runner fails closed when it has files to check: the
-	# workflow's "Install actionlint" step provides actionlint, and
+	# workflow's "Install actionlint" and "Install yamllint" steps provide
+	# them, and
 	# break-glass condition 5 never runs these checks.
 	if [ "${#yaml_lint_files[@]}" -gt 0 ]; then
 		command -v yamllint >/dev/null 2>&1 || _asf_fail verify failed yamllint_unavailable
