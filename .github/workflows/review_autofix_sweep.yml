@@ -962,6 +962,11 @@ jobs:
           FINAL_CI_SWEEP_BASE_SYNC_MIN_AGE_MINUTES: ${{ vars.FINAL_CI_SWEEP_BASE_SYNC_MIN_AGE_MINUTES || '30' }}
           FINAL_CI_SWEEP_BASE_SYNC_MAX: ${{ vars.FINAL_CI_SWEEP_BASE_SYNC_MAX || '3' }}
           FINAL_CI_SWEEP_ACTIVE_REVIEW_RUNS: ${{ runner.temp }}/final-ci-active-review-runs.txt
+          # A head whose final run was cut off under an older ci.yml is synced,
+          # or handed back to review through review_final_ci_failed.sh (issue #10093).
+          FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED: ${{ vars.FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED || 'true' }}
+          FINAL_CI_FAILED_REDISPATCH_ENABLED: ${{ vars.FINAL_CI_FAILED_REDISPATCH_ENABLED || 'true' }}
+          ALLOW_WORKFLOW_EDITS: ${{ contains(' 1 true yes on ', format(' {0} ', vars.ALLOW_WORKFLOW_EDITS || 'true')) }}
           FINAL_CI_SWEEP_HELPERS_DIR: .ci-rerun-support/scripts
           HEAD_REF_FILTER: ${{ inputs.head_ref_filter }}
           DRY_RUN: ${{ inputs.dry_run }}

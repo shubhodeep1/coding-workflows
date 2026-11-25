@@ -49,10 +49,21 @@ GITHUB_RUN_ATTEMPT, to skip a `ci/final=failure` post for a run cancelled
 as a whole. It makes one jobs GET for that attempt (a second one only when
 the first read fails) plus at most MAX_FAILED_JOBS_CLASSIFIED check-run
 annotation GETs, and none of those when a cancelled job never started.
+Stale workflow file (issue #10093): with `--stale-workflow-head <sha>
+--stale-workflow-base <ref>`, classify-run also returns
+`stale_workflow_timeout` when `lint` failed only at "Require every CI job to
+succeed" and every job it names was cancelled at its `timeout-minutes` limit
+(the timeout annotation, no step concluded `failure`) while
+`.github/workflows/ci.yml` on the head differs from the base's copy (and the
+base's limit for that job is higher, when both limits parse). That costs two
+contents GETs, only on this path. The verdict is not an infra verdict: the
+sweep never re-runs it (the branch's old limit would apply again).
+Annotation and workflow file text are never logged.
 """
 
 from __future__ import annotations
 
+import base64
 import importlib.util
 import json
 import os
@@ -154,6 +165,19 @@ CHECK_RUN_URL_PATTERN = re.compile(r"/check-runs/([1-9][0-9]*)\Z")
 # run carries a ` [sync-quick]` suffix and does not match.
 FINAL_CI_RUN_TITLE = re.compile(r"CI \[pr:([1-9][0-9]*)\]\Z")
 INFRA_VERDICTS = ("shutdown", "action_resolution", "checkout_fetch", "abandoned")
+# Stale workflow file (issue #10093). The runner's timeout annotation, in both
+# wordings seen ("The job has exceeded ..." and "The job running on runner
+# <name> has exceeded ..."); used with .match() on the stripped message.
+STALE_WORKFLOW_TIMEOUT_MESSAGE = re.compile(
+	r"The job (?:running on runner .+ )?has exceeded the maximum execution time of "
+)
+# The aggregate step of ci.yml's `lint` job.
+CI_AGGREGATE_STEP_NAME = "Require every CI job to succeed"
+STALE_WORKFLOW_PATH = ".github/workflows/ci.yml"
+# Deliberately not in INFRA_VERDICTS: a failed-jobs re-run would use the
+# branch's old workflow file again.
+STALE_WORKFLOW_VERDICT = "stale_workflow_timeout"
+STALE_WORKFLOW_REF_PATTERN = re.compile(r"[A-Za-z0-9._/-]+\Z")
 MAX_FAILED_JOBS_CLASSIFIED = 10
 MAX_FAILURE_CLASSIFICATIONS_PER_TICK = 5
 # Job conclusions that are not, by themselves, evidence of a real failure.
@@ -238,6 +262,91 @@ def checkout_fetch_annotations(annotations: list[dict]) -> bool:
 	return bool(messages) \
 		and all(any(pattern.fullmatch(message) for pattern in CHECKOUT_FETCH_MESSAGES) for message in messages) \
 		and any(any(pattern.fullmatch(message) for pattern in CHECKOUT_FETCH_STRONG) for message in messages)
+
+
+def _well_formed_steps(job: dict) -> list | None:
+	steps = job.get("steps")
+	if not isinstance(steps, list) or not steps \
+			or any(not isinstance(step, dict) or not isinstance(step.get("name"), str) for step in steps):
+		return None
+	return steps
+
+
+def job_cut_off_at_timeout(job: dict, annotations: list[dict]) -> bool:
+	# Issue #10093: a cancelled job with no failed step that carries the
+	# runner's timeout annotation. Other failure annotations are ignored:
+	# passing tests print `##[error]` lines; step conclusions decide.
+	if job.get("conclusion") != "cancelled":
+		return False
+	steps = _well_formed_steps(job)
+	if steps is None or any(step.get("conclusion") == "failure" for step in steps):
+		return False
+	return any(STALE_WORKFLOW_TIMEOUT_MESSAGE.match(item["message"].strip()) for item in annotations)
+
+
+def aggregate_failed_only_at_require_step(job: dict) -> bool:
+	# The `lint` aggregate failed at its require step and nowhere else.
+	steps = _well_formed_steps(job)
+	if steps is None:
+		return False
+	failed = [step for step in steps if step.get("conclusion") == "failure"]
+	return len(failed) == 1 and failed[0]["name"] == CI_AGGREGATE_STEP_NAME
+
+
+def workflow_file_at_ref(repo: str, ref: str) -> tuple[str, str]:
+	"""Return (blob sha, decoded text) of ci.yml at ``ref``; one contents GET.
+
+	The text is "" when the payload is not base64. Raises
+	ValueError("workflow_unreadable") on any read or shape error.
+	"""
+	result = subprocess.run(
+		["gh", "api", "-X", "GET", f"repos/{repo}/contents/{STALE_WORKFLOW_PATH}?ref={ref}"],
+		capture_output=True, text=True, timeout=30, check=False,
+	)
+	if result.returncode != 0:
+		raise ValueError("workflow_unreadable")
+	try:
+		payload = json.loads(result.stdout)
+	except ValueError as exc:
+		raise ValueError("workflow_unreadable") from exc
+	if not isinstance(payload, dict) or not isinstance(payload.get("sha"), str) \
+			or not SHA_PATTERN.fullmatch(payload["sha"]):
+		raise ValueError("workflow_unreadable")
+	text = ""
+	if payload.get("encoding") == "base64" and isinstance(payload.get("content"), str):
+		try:
+			text = base64.b64decode(payload["content"]).decode("utf-8")
+		except (ValueError, UnicodeDecodeError):
+			text = ""
+	return payload["sha"], text
+
+
+def job_timeout_minutes(text: str, job_key: str) -> int | None:
+	# Regex-only scan of a job's own `timeout-minutes` (no YAML dependency).
+	start = re.search(r"(?m)^  " + re.escape(job_key) + r":[ \t]*$", text)
+	if not start:
+		return None
+	rest = text[start.end():]
+	end = re.search(r"(?m)^  \S", rest)
+	block = rest[:end.start()] if end else rest
+	limit = re.search(r"(?m)^    timeout-minutes:[ \t]*([0-9]{1,3})[ \t]*$", block)
+	return int(limit[1]) if limit else None
+
+
+def stale_workflow_verdict(repo: str, head_sha: str, base_ref: str, timeout_jobs: list[dict]) -> str:
+	# Two contents GETs (head, then base). A read error raises ValueError,
+	# which the caller turns into "unverified".
+	head_blob, head_text = workflow_file_at_ref(repo, head_sha)
+	base_blob, base_text = workflow_file_at_ref(repo, base_ref)
+	if head_blob == base_blob:
+		return "genuine"
+	for job in timeout_jobs:
+		key = job["name"].split(" (", 1)[0]
+		head_limit = job_timeout_minutes(head_text, key)
+		base_limit = job_timeout_minutes(base_text, key)
+		if head_limit is not None and base_limit is not None and base_limit <= head_limit:
+			return "genuine"
+	return STALE_WORKFLOW_VERDICT
 
 
 def job_ran_no_steps(job: dict) -> bool:
@@ -452,8 +561,10 @@ def failure_annotations(repo: str, check_run_id: int) -> list[dict]:
 
 def classify_runner_shutdown(repo: str, run_id: int, action_resolution_enabled: bool = True,
 		checkout_fetch_enabled: bool = True, abandoned_job_enabled: bool = True,
-		ignore_job_names: tuple[str, ...] = ()) -> str:
-	"""Return "shutdown", "action_resolution", "checkout_fetch", "abandoned", "genuine", or "unverified".
+		ignore_job_names: tuple[str, ...] = (), stale_workflow_head: str = "",
+		stale_workflow_base: str = "") -> str:
+	"""Return "shutdown", "action_resolution", "checkout_fetch", "abandoned",
+	"stale_workflow_timeout", "genuine", or "unverified".
 
 	Fail closed: only a run whose every failed job was killed by a runner
 	shutdown or, when enabled, failed before any step ran with only
@@ -472,7 +583,15 @@ def classify_runner_shutdown(repo: str, run_id: int, action_resolution_enabled: 
 	len(failed) named cancelled jobs, checked before any extra read, so the
 	per-run and per-tick worst cases are unchanged. Annotation text is never
 	logged; it can be written by a PR's own steps.
+	Only when both stale_workflow_head and stale_workflow_base are given
+	(the classify-run CLI, issue #10093): on the same lint-only path, when
+	every named job was cut off at its time limit (job_cut_off_at_timeout),
+	no abandoned job is mixed in, every other non-green job is one of them
+	and `lint` failed only at its require step, the result comes from
+	stale_workflow_verdict (two contents GETs). Workflow file text is never
+	logged either.
 	"""
+	stale_enabled = bool(stale_workflow_head) and bool(stale_workflow_base)
 	try:
 		jobs = list_run_jobs(repo, run_id, ignore_job_names)
 		if any(job["conclusion"] not in BENIGN_JOB_CONCLUSIONS for job in jobs):
@@ -541,15 +660,32 @@ def classify_runner_shutdown(repo: str, run_id: int, action_resolution_enabled: 
 		if not shutdown_ids:
 			# Every failed job is the `lint` aggregate: any other failed job
 			# already returned "genuine" or joined shutdown_ids.
-			if not abandoned_job_enabled or not aggregate_cancelled:
+			if not aggregate_cancelled or (not abandoned_job_enabled and not stale_enabled):
 				return "unverified"
 			if len(failed) + len(aggregate_cancelled) > MAX_FAILED_JOBS_CLASSIFIED:
 				return "unverified"
+			abandoned_count = 0
+			timeout_jobs: list[dict] = []
 			for job in aggregate_cancelled.values():
 				check_run_id = int(CHECK_RUN_URL_PATTERN.search(job["check_run_url"])[1])
-				if not shutdown_only_annotations(failure_annotations(repo, check_run_id)):
+				annotations = failure_annotations(repo, check_run_id)
+				if shutdown_only_annotations(annotations):
+					abandoned_count += 1
+				elif stale_enabled and job_cut_off_at_timeout(job, annotations):
+					timeout_jobs.append(job)
+				else:
 					return "genuine"
-			return "abandoned"
+			if not timeout_jobs:
+				return "abandoned" if abandoned_job_enabled else "unverified"
+			# Issue #10093: only a run whose failures are all time-limit
+			# cut-offs qualifies; anything mixed in keeps today's "genuine".
+			timeout_ids = {job["id"] for job in timeout_jobs}
+			if abandoned_count \
+					or any(job["name"] != CI_AGGREGATE_JOB_NAME and job["id"] not in timeout_ids
+						and job["conclusion"] not in ("success", "skipped") for job in jobs) \
+					or any(not aggregate_failed_only_at_require_step(job) for job in failed):
+				return "genuine"
+			return stale_workflow_verdict(repo, stale_workflow_head, stale_workflow_base, timeout_jobs)
 		if checkout_fetch_ids:
 			return "checkout_fetch"
 		return "action_resolution" if action_resolution_ids == shutdown_ids else "shutdown"
@@ -762,47 +898,65 @@ def process(prs: list, repo: str, enabled: bool, dry_run: bool, head_filter: str
 			decision(number, sha, run_id, "skip", "rerun_refused", final_ci=final_ci)
 
 
-def _parse_classify_cli_args(argv: list[str]) -> tuple[str, int, list[str]] | None:
-	"""Parse `--repo <o/r> --run-id <id> [--ignore-job <name>]...`; None when invalid."""
+def _parse_classify_cli_args(argv: list[str], allow_stale: bool = False) \
+		-> tuple[str, int, list[str], str, str] | None:
+	"""Parse `--repo <o/r> --run-id <id> [--ignore-job <name>]...`; None when invalid.
+
+	With allow_stale (classify-run only), also accepts
+	`--stale-workflow-head <sha> --stale-workflow-base <ref>` (issue #10093).
+	Returns (repo, run_id, ignore, stale_head, stale_base).
+	"""
 	repo, run_id, ignore = "", "", []
+	stale_head, stale_base = "", ""
+	stale_flags = ("--stale-workflow-head", "--stale-workflow-base") if allow_stale else ()
 	args = list(argv)
 	while args:
 		flag = args.pop(0)
-		if flag in ("--repo", "--run-id", "--ignore-job") and args:
+		if flag in ("--repo", "--run-id", "--ignore-job") + stale_flags and args:
 			value = args.pop(0)
 			if flag == "--repo":
 				repo = value
 			elif flag == "--run-id":
 				run_id = value
+			elif flag == "--stale-workflow-head":
+				stale_head = value
+			elif flag == "--stale-workflow-base":
+				stale_base = value
 			else:
 				ignore.append(value)
 		else:
 			return None
 	if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) or ".." in repo \
 			or not re.fullmatch(r"[1-9][0-9]*", run_id) \
-			or any(not re.fullmatch(r"[A-Za-z0-9_. ()/-]+", name) for name in ignore):
+			or any(not re.fullmatch(r"[A-Za-z0-9_. ()/-]+", name) for name in ignore) \
+			or (stale_head and not re.fullmatch(r"[0-9a-f]{40}", stale_head)) \
+			or (stale_base and (not STALE_WORKFLOW_REF_PATTERN.match(stale_base) or ".." in stale_base
+				or stale_base.startswith("-"))):
 		return None
-	return repo, int(run_id), ignore
+	return repo, int(run_id), ignore, stale_head, stale_base
 
 
 def classify_run_cli(argv: list[str]) -> int:
-	"""`classify-run --repo <o/r> --run-id <id> [--ignore-job <name>]...`.
+	"""`classify-run --repo <o/r> --run-id <id> [--ignore-job <name>]...
+	[--stale-workflow-head <sha> --stale-workflow-base <ref>]`.
 
 	Prints one word, the classify_runner_shutdown verdict for attempt 1 of
 	the run, and returns 0. Bad arguments print `unverified`. The per-cause
 	switches are read from the same env vars as the sweep. API reads: one
-	jobs GET plus the annotation GETs classify_runner_shutdown makes.
+	jobs GET plus the annotation GETs classify_runner_shutdown makes, plus
+	two contents GETs on the stale-workflow path (issue #10093) when both
+	--stale-workflow-* values are given.
 	"""
-	parsed = _parse_classify_cli_args(argv)
+	parsed = _parse_classify_cli_args(argv, allow_stale=True)
 	if parsed is None:
 		print("unverified")
 		return 0
-	repo, run_id, ignore = parsed
+	repo, run_id, ignore, stale_head, stale_base = parsed
 	print(classify_runner_shutdown(repo, run_id,
 		action_resolution_enabled=action_resolution_rerun_enabled(os.environ.get("CI_ACTION_RESOLUTION_RERUN_ENABLED")),
 		checkout_fetch_enabled=checkout_fetch_rerun_enabled(os.environ.get("CI_CHECKOUT_FETCH_RERUN_ENABLED")),
 		abandoned_job_enabled=abandoned_job_rerun_enabled(os.environ.get("CI_ABANDONED_JOB_RERUN_ENABLED")),
-		ignore_job_names=tuple(ignore)))
+		ignore_job_names=tuple(ignore), stale_workflow_head=stale_head, stale_workflow_base=stale_base))
 	return 0
 
 
@@ -823,7 +977,7 @@ def classify_cancelled_run_cli(argv: list[str]) -> int:
 	if parsed is None or not re.fullmatch(r"[1-9][0-9]{0,3}", attempt):
 		print("unverified")
 		return 0
-	repo, run_id, ignore = parsed
+	repo, run_id, ignore, _stale_head, _stale_base = parsed
 	print(classify_cancelled_run(repo, run_id, ignore_job_names=tuple(ignore), attempt=int(attempt)))
 	return 0
 
