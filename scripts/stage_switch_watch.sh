@@ -9,7 +9,8 @@
 # Subcommands (each in its own workflow step, so GH_PAT and TG_BOT_SECRET
 # never share a step):
 #   read    one paginated `actions/variables` listing (GH_TOKEN = GH_PAT),
-#           filtered to the names in scripts/stage_switches.json and written
+#           filtered to the discovered switches and the names in
+#           scripts/stage_switches.json (#10127) and written
 #           as a sanitized snapshot (no raw values) to
 #           ${RUNNER_TEMP}/stage-switch-watch/snapshot.json.
 #           GITHUB_OUTPUT: day=<YYYY-MM-DD UTC>, snapshot_ready=true|false
@@ -30,6 +31,9 @@
 #   STAGE_SWITCH_OFF_ALERT_HOURS   hours a switch must be off before it alerts (default 24)
 #   STAGE_SWITCH_ALERTED_TODAY     `true` when today's alert marker exists (default false)
 #   STAGE_SWITCH_REGISTRY          registry path (default scripts/stage_switches.json)
+#   STAGE_SWITCH_REPO_ROOT         checkout whose .github/workflows/ and README.md
+#                                  are scanned for default-on switches (#10127;
+#                                  default: the folder above scripts/)
 #   STAGE_SWITCH_SNAPSHOT_DIR      snapshot directory (default ${RUNNER_TEMP}/stage-switch-watch)
 #   STAGE_SWITCH_NOW               ISO timestamp override (tests; default now)
 #   STAGE_SWITCH_ALERT_MARKER_DIR  day-marker directory the cache step saves
@@ -43,6 +47,9 @@ set -uo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 stage_switch_registry="${STAGE_SWITCH_REGISTRY:-${script_dir}/stage_switches.json}"
+# Discovery root (#10127): the Python helper watches every default-on switch
+# found in this checkout's workflows and README tables, plus the registry.
+stage_switch_repo_root="${STAGE_SWITCH_REPO_ROOT:-$(cd "${script_dir}/.." && pwd)}"
 stage_switch_dir="${STAGE_SWITCH_SNAPSHOT_DIR:-${RUNNER_TEMP:-/tmp}/stage-switch-watch}"
 stage_switch_snapshot="${stage_switch_dir}/snapshot.json"
 stage_switch_output="${GITHUB_OUTPUT:-/dev/null}"
@@ -99,7 +106,8 @@ stage_switch_read()
 	fi
 	rm -f "${stage_switch_dir}/listing.err"
 	PYTHONDONTWRITEBYTECODE=1 python3 "${script_dir}/stage_switch_watch.py" snapshot \
-		--registry "${stage_switch_registry}" < "${listing}" > "${stage_switch_snapshot}.tmp"
+		--registry "${stage_switch_registry}" --repo-root "${stage_switch_repo_root}" \
+		< "${listing}" > "${stage_switch_snapshot}.tmp"
 	rc=$?
 	# The raw listing holds every variable's value; never keep it.
 	rm -f "${listing}"
@@ -136,6 +144,7 @@ stage_switch_report()
 	wait_hours="${STAGE_SWITCH_OFF_ALERT_HOURS:-24}"
 	result="$(PYTHONDONTWRITEBYTECODE=1 python3 "${script_dir}/stage_switch_watch.py" evaluate \
 		--registry "${stage_switch_registry}" --snapshot "${stage_switch_snapshot}" \
+		--repo-root "${stage_switch_repo_root}" \
 		--now "${STAGE_SWITCH_NOW:-}" --wait-hours "${wait_hours}")"
 	rc=$?
 	if [ "${rc}" -ne 0 ] || [ -z "${result}" ]; then

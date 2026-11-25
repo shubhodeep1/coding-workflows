@@ -1,11 +1,16 @@
-"""scripts/stage_switches.json stays in step with the workflows and README (issue #9994).
+"""Stage switch discovery and registry contract (issues #9994, #10127).
 
-Every `vars.<NAME>_ENABLED || 'true'` expression (also the chained form
+Since #10127 the watch discovers its switches at run time
+(`scripts/stage_switch_watch.py` `discover_switches`): every
+`vars.<NAME>_ENABLED || 'true'` expression (also the chained form
 `vars.<NAME>_ENABLED || (...) || 'true'`) and every `vars.<NAME>_ENABLED !=
-'false'` test in .github/workflows/*.yml and *.yaml, and every `_ENABLED` row whose
-default is `true` in the README "#### Variables" and "## Required Variables"
-tables, must be listed in the registry, so a new switch cannot be added without the stage switch
-watch covering it. Also locks the workflow wiring in workflow-log-analysis.yml.
+'false'` test in .github/workflows/*.yml and *.yaml, and every `_ENABLED` row
+whose default is `true` in the README "#### Variables" and "## Required
+Variables" tables. A new switch therefore needs no registry edit.
+scripts/stage_switches.json keeps only detail that cannot be derived (a
+hand-written `stage`, `on_values`, `off_on_purpose`); every entry and marker
+must name a discovered switch or carry `pending: true`. Also locks the
+workflow wiring in workflow-log-analysis.yml.
 """
 
 from __future__ import annotations
@@ -13,6 +18,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import re
+import sys
 from pathlib import Path
 
 try:
@@ -21,6 +27,9 @@ except ImportError:  # credential-free gate containers ship without PyYAML
 	yaml = None
 
 ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "scripts"))
+import stage_switch_watch as ssw  # noqa: E402
+
 README = ROOT / "README.md"
 # workflow-templates/ is left out on purpose: those wrappers run in consumer
 # repositories and read the consumer's variables, while the watch lists only
@@ -29,20 +38,11 @@ WORKFLOWS_DIR = ROOT / ".github" / "workflows"
 REGISTRY = ROOT / "scripts" / "stage_switches.json"
 WATCH_WORKFLOW = WORKFLOWS_DIR / "workflow-log-analysis.yml"
 
-# Matched against each workflow's whole text (comment lines removed), with
-# `\s` between tokens, so an expression split across lines is still found.
-SWITCH_DEFAULT_RE = re.compile(r"vars\.([A-Z][A-Z0-9_]*_ENABLED)\s*\|\|\s*(?:\([^()]*\)\s*\|\|\s*)*'([^']*)'")
-# `vars.<NAME>_ENABLED != 'false'` keeps a stage on unless the variable is
-# `false`, so it is a default-on switch too.
-SWITCH_NOT_FALSE_RE = re.compile(r"vars\.([A-Z][A-Z0-9_]*_ENABLED)\s*!=\s*'false'")
-README_SWITCH_TABLES = ("#### Variables", "## Required Variables")
-# README rows with default `true` that no workflow reads from a repository
-# variable (the watch reads repository variables only). Each needs a reason.
-README_NOT_REPOSITORY_VARIABLES = {
-	"CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED": "scripts/resolve_integration_ref.sh environment only; no workflow forwards a repository variable",
-	"LESSONS_LEARNED_ENABLED": "job environment only (README Memory System); no workflow reads vars.LESSONS_LEARNED_ENABLED",
-	"WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED": "scripts/workflow_failure_heal_intake.sh environment only; not forwarded from a repository variable",
-}
+# Aliases kept for existing callers (§10); the definitions live in the script.
+SWITCH_DEFAULT_RE = ssw.SWITCH_DEFAULT_RE
+SWITCH_NOT_FALSE_RE = ssw.SWITCH_NOT_FALSE_RE
+README_SWITCH_TABLES = ssw.README_SWITCH_TABLES
+README_NOT_REPOSITORY_VARIABLES = ssw.README_NOT_REPOSITORY_VARIABLES
 WATCH_STEP_NAMES = (
 	"Read stage switch variables",
 	"Look up today's stage switch alert",
@@ -61,19 +61,7 @@ def _registry_names() -> set[str]:
 
 def _workflow_true_switches(workflows_dir: Path) -> dict[str, set[str]]:
 	"""Map each switch defaulting to 'true' in some workflow to those files."""
-	found: dict[str, set[str]] = {}
-	# `.yaml` workflows are scanned too, so a switch cannot hide in one.
-	for workflow in sorted([*workflows_dir.glob("*.yml"), *workflows_dir.glob("*.yaml")]):
-		text = "\n".join(
-			line for line in workflow.read_text(encoding="utf-8").splitlines()
-			if not line.strip().startswith("#")
-		)
-		for name, default in SWITCH_DEFAULT_RE.findall(text):
-			if default == "true":
-				found.setdefault(name, set()).add(workflow.name)
-		for name in SWITCH_NOT_FALSE_RE.findall(text):
-			found.setdefault(name, set()).add(workflow.name)
-	return found
+	return ssw._workflow_true_switches(workflows_dir)
 
 
 def _missing_from_registry(workflows_dir: Path, names: set[str]) -> list[str]:
@@ -81,38 +69,52 @@ def _missing_from_registry(workflows_dir: Path, names: set[str]) -> list[str]:
 
 
 def _readme_variables_rows(heading: str = "#### Variables") -> dict[str, list[str]]:
-	lines = README.read_text(encoding="utf-8").splitlines()
-	starts = [i for i, line in enumerate(lines) if line == heading]
-	assert len(starts) == 1
-	rows: dict[str, list[str]] = {}
-	# The tables differ ("| Variable | Required | Default |" vs
-	# "| Variable | Default |"), so take the Default column from the header.
-	default_col = None
-	for line in lines[starts[0] + 1:]:
-		if re.match(r"^#", line):
-			break
-		cells = [cell.strip() for cell in re.split(r"(?<!\\)\|", line.strip().strip("|"))]
-		if line.startswith("| Variable "):
-			default_col = cells.index("Default")
-			continue
-		if not line.startswith("| `") or default_col is None or len(cells) <= default_col:
-			continue
-		rows.setdefault(cells[0].strip("`"), []).append(cells[default_col].replace("`", "").strip())
-	assert default_col is not None, heading
+	rows = ssw._readme_variables_rows(README, heading)
+	# The repository README must keep both tables the discovery reads.
+	assert rows is not None, heading
 	return rows
 
 
-def test_every_workflow_true_switch_is_in_registry():
-	found = _workflow_true_switches(WORKFLOWS_DIR)
-	assert found, "no vars.<NAME>_ENABLED || 'true' expressions found"
+def test_discovery_finds_sample_switches():
+	found = ssw.discover_switches(ROOT)
 	assert "FINAL_CI_FAILED_REDISPATCH_ENABLED" in found
 	assert "CLAUDE_POOL_CAPACITY_WAIT_ENABLED" in found  # chained form
 	assert "E2E_ALT_MODEL_ENABLED" in found  # `!= 'false'` form
-	assert _missing_from_registry(WORKFLOWS_DIR, _registry_names()) == []
+	assert "not_false" in found["E2E_ALT_MODEL_ENABLED"]["forms"]
+	assert "HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED" in found  # Required Variables table
+	assert "readme" in found["HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED"]["forms"]
+	# Each exclusion must still name a documented default-on README row, and
+	# no excluded name is discovered.
+	readme_true = set()
+	for heading in README_SWITCH_TABLES:
+		for name, defaults in _readme_variables_rows(heading).items():
+			if name.endswith("_ENABLED") and any(d.lower().startswith("true") for d in defaults):
+				readme_true.add(name)
+	assert set(README_NOT_REPOSITORY_VARIABLES) <= readme_true
+	assert not set(README_NOT_REPOSITORY_VARIABLES) & set(found)
+
+
+def test_registry_entries_name_discovered_or_pending():
+	discovered = set(ssw.discover_switches(ROOT))
+	data = _registry()
+	stray = [
+		entry["name"] for entry in data["switches"]
+		if entry["name"] not in discovered and entry.get("pending") is not True
+	]
+	assert stray == [], "registry entries for undiscovered switches need \"pending\": true"
+	stray_markers = [
+		marker.get("name") for marker in data["off_on_purpose"]
+		if marker.get("name") not in discovered and marker.get("pending") is not True
+	]
+	assert stray_markers == [], "off_on_purpose markers for undiscovered switches need \"pending\": true"
 
 
 def test_registry_check_fails_on_unlisted_workflow_switch(tmp_path):
-	(tmp_path / "new.yml").write_text(
+	# Kept under its #9994 name: the same fixture is now discovered, not
+	# reported missing from the registry (#10127).
+	workflows = tmp_path / ".github" / "workflows"
+	workflows.mkdir(parents=True)
+	(workflows / "new.yml").write_text(
 		"jobs:\n  x:\n    env:\n"
 		"      NEW_STAGE_ENABLED: ${{ vars.NEW_STAGE_ENABLED || 'true' }}\n"
 		"      CHAINED_STAGE_ENABLED: ${{ vars.CHAINED_STAGE_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}\n"
@@ -122,25 +124,11 @@ def test_registry_check_fails_on_unlisted_workflow_switch(tmp_path):
 		"      # COMMENTED_ENABLED: ${{ vars.COMMENTED_ENABLED || 'true' }}\n",
 		encoding="utf-8",
 	)
-	assert _missing_from_registry(tmp_path, _registry_names()) == ["CHAINED_STAGE_ENABLED", "MULTI_LINE_STAGE_ENABLED", "NEW_STAGE_ENABLED", "NOT_FALSE_STAGE_ENABLED"]
-
-
-def test_every_readme_true_switch_is_in_registry():
-	names = _registry_names()
-	assert not names & set(README_NOT_REPOSITORY_VARIABLES)
-	missing = []
-	seen = set()
-	for heading in README_SWITCH_TABLES:
-		for name, defaults in _readme_variables_rows(heading).items():
-			if not name.endswith("_ENABLED") or not any(d.lower().startswith("true") for d in defaults):
-				continue
-			seen.add(name)
-			if name not in names and name not in README_NOT_REPOSITORY_VARIABLES:
-				missing.append(name)
-	assert "HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED" in seen  # Required Variables table
-	assert sorted(missing) == []
-	# An exclusion must still name a documented default-on row.
-	assert set(README_NOT_REPOSITORY_VARIABLES) <= seen
+	found = ssw.discover_switches(tmp_path)
+	assert sorted(found) == ["CHAINED_STAGE_ENABLED", "MULTI_LINE_STAGE_ENABLED", "NEW_STAGE_ENABLED", "NOT_FALSE_STAGE_ENABLED"]
+	assert "COMMENTED_ENABLED" not in found and "OPT_IN_ENABLED" not in found
+	# The legacy helper still reports them missing from the real registry.
+	assert _missing_from_registry(workflows, _registry_names()) == sorted(found)
 
 
 def test_registry_entries_are_well_formed():
@@ -149,17 +137,26 @@ def test_registry_entries_are_well_formed():
 	names = [entry["name"] for entry in data["switches"]]
 	assert len(names) == len(set(names))
 	for entry in data["switches"]:
-		assert {"name", "default", "stage"} <= set(entry) <= {"name", "default", "stage", "on_values"}, entry
+		assert {"name"} <= set(entry) <= {"name", "default", "stage", "on_values", "pending"}, entry
 		assert set(entry.get("on_values", [])) <= {"1", "yes", "on"}, entry
 		assert re.fullmatch(r"[A-Z][A-Z0-9_]*", entry["name"])
-		assert entry["default"] == "true"
-		assert entry["stage"].strip()
+		if "default" in entry:
+			assert entry["default"] == "true", entry
+		if "stage" in entry:
+			assert isinstance(entry["stage"], str) and entry["stage"].strip(), entry
+		if "pending" in entry:
+			assert isinstance(entry["pending"], bool), entry
 	assert isinstance(data["off_on_purpose"], list)
+	discovered = set(ssw.discover_switches(ROOT))
 	for marker in data["off_on_purpose"]:
-		assert marker["name"] in names
+		assert marker["name"] in discovered or marker.get("pending") is True, marker
+		if "pending" in marker:
+			assert isinstance(marker["pending"], bool), marker
 		assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", marker["until"])
 		dt.date.fromisoformat(marker["until"])
 		assert str(marker.get("reason", "")).strip(), "off_on_purpose needs a reason"
+	# The registry loads with discovery merged in (exit 0 in the watch).
+	ssw.load_registry(REGISTRY, repo_root=ROOT)
 
 
 def _scalar(text: str):

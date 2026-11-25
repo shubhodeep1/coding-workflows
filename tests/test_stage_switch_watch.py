@@ -183,6 +183,176 @@ def test_invalid_registry_exits_2(tmp_path):
 	assert "::warning::" in result.stderr
 
 
+# --- discovery (#10127) -------------------------------------------------------
+
+REAL_REGISTRY = ROOT / "scripts" / "stage_switches.json"
+
+FIXTURE_WORKFLOW = (
+	"jobs:\n  x:\n    env:\n"
+	"      PLAIN_STAGE_ENABLED: ${{ vars.PLAIN_STAGE_ENABLED || 'true' }}\n"
+	"      CHAINED_STAGE_ENABLED: ${{ vars.CHAINED_STAGE_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}\n"
+	"      OPT_IN_ENABLED: ${{ vars.OPT_IN_ENABLED || 'false' }}\n"
+	"      MULTI_LINE_STAGE_ENABLED: >-\n        ${{ vars.MULTI_LINE_STAGE_ENABLED\n          || 'true' }}\n"
+	"    if: ${{ vars.NOT_FALSE_STAGE_ENABLED != 'false' }}\n"
+	"      # COMMENTED_ENABLED: ${{ vars.COMMENTED_ENABLED || 'true' }}\n"
+)
+
+FIXTURE_README = (
+	"# Repo\n\n#### Variables\n\n"
+	"| Variable | Required | Default | Used by | Purpose |\n"
+	"| --- | --- | --- | --- | --- |\n"
+	"| `README_STAGE_ENABLED` | No | `true` (coding-workflows) | x | y |\n"
+	"| `README_OFF_ENABLED` | No | `false` | x | y |\n"
+	"| `LESSONS_LEARNED_ENABLED` | No | `true` | x | y |\n"
+	"| `PLAIN_STAGE_ENABLED` | No | `true` | x | y |\n"
+	"\n## Required Variables\n\n"
+	"| Variable | Default | Purpose |\n"
+	"| --- | --- | --- |\n"
+	"| `REQUIRED_TABLE_ENABLED` | `true` | z |\n"
+)
+
+
+def _fixture_repo(tmp_path: Path, readme: bool = True) -> Path:
+	root = tmp_path / "repo"
+	workflows = root / ".github" / "workflows"
+	workflows.mkdir(parents=True)
+	(workflows / "a.yml").write_text(FIXTURE_WORKFLOW, encoding="utf-8")
+	(workflows / "b.yaml").write_text(
+		"jobs:\n  y:\n    env:\n      PLAIN_STAGE_ENABLED: ${{ vars.PLAIN_STAGE_ENABLED || 'true' }}\n"
+		"      YAML_ONLY_ENABLED: ${{ vars.YAML_ONLY_ENABLED || 'true' }}\n",
+		encoding="utf-8",
+	)
+	(workflows / "notes.txt").write_text("${{ vars.TXT_ENABLED || 'true' }}\n", encoding="utf-8")
+	if readme:
+		(root / "README.md").write_text(FIXTURE_README, encoding="utf-8")
+	return root
+
+
+def test_discover_switches_finds_live_forms_only(tmp_path):
+	root = _fixture_repo(tmp_path, readme=False)
+	found = ssw.discover_switches(root)
+	assert sorted(found) == [
+		"CHAINED_STAGE_ENABLED", "MULTI_LINE_STAGE_ENABLED", "NOT_FALSE_STAGE_ENABLED",
+		"PLAIN_STAGE_ENABLED", "YAML_ONLY_ENABLED",
+	]
+	assert found["PLAIN_STAGE_ENABLED"] == {"files": ["a.yml", "b.yaml"], "forms": ["default_true"]}
+	assert found["NOT_FALSE_STAGE_ENABLED"] == {"files": ["a.yml"], "forms": ["not_false"]}
+	assert found["YAML_ONLY_ENABLED"]["files"] == ["b.yaml"]
+	assert ssw.discover_switches(tmp_path / "missing") == {}
+
+
+def test_discover_readme_rows_and_exclusions(tmp_path):
+	root = _fixture_repo(tmp_path)
+	found = ssw.discover_switches(root)
+	assert found["README_STAGE_ENABLED"] == {"files": ["README.md"], "forms": ["readme"]}
+	assert found["REQUIRED_TABLE_ENABLED"]["forms"] == ["readme"]
+	assert found["PLAIN_STAGE_ENABLED"] == {"files": ["a.yml", "b.yaml"], "forms": ["default_true", "readme"]}
+	assert "README_OFF_ENABLED" not in found
+	assert "LESSONS_LEARNED_ENABLED" not in found
+	assert ssw._readme_variables_rows(root / "missing.md") is None
+
+
+def test_discovered_switch_without_entry_alerts_with_generated_stage(tmp_path):
+	root = _fixture_repo(tmp_path)
+	registry = _registry(tmp_path)
+	result = _run_py(
+		["snapshot", "--registry", str(registry), "--repo-root", str(root)],
+		_listing({"name": "PLAIN_STAGE_ENABLED", "value": "false", "updated_at": "2026-11-20T00:00:00Z"}),
+	)
+	assert result.returncode == 0, result.stderr
+	snapshot = tmp_path / "snapshot.json"
+	snapshot.write_text(result.stdout, encoding="utf-8")
+	assert "PLAIN_STAGE_ENABLED" in json.loads(result.stdout)
+	result = _run_py([
+		"evaluate", "--registry", str(registry), "--snapshot", str(snapshot),
+		"--repo-root", str(root), "--now", NOW, "--wait-hours", "24",
+	])
+	assert result.returncode == 0, result.stderr
+	evaluated = json.loads(result.stdout)
+	assert [entry["name"] for entry in evaluated["alerts"]] == ["PLAIN_STAGE_ENABLED"]
+	alert = evaluated["alerts"][0]
+	assert alert["stage"] == "Turns on plain stage (a.yml, b.yaml); false turns that stage off."
+	assert alert["default"] == "true"
+	assert "STAGE_SWITCH_OFF name=PLAIN_STAGE_ENABLED value=false default=true off_since=2026-11-20T00:00:00Z hours_off=78.0 status=alert marker=none" in result.stderr
+
+
+def test_entry_detail_wins_over_discovery(tmp_path):
+	root = _fixture_repo(tmp_path)
+	path = tmp_path / "stage_switches.json"
+	path.write_text(json.dumps({
+		"schema": "stage_switches.v1",
+		"switches": [
+			{"name": "PLAIN_STAGE_ENABLED", "default": "true", "stage": "Hand-written text.", "on_values": ["1"]},
+			{"name": "YAML_ONLY_ENABLED"},
+			{"name": "NOT_MERGED_YET_ENABLED", "pending": True},
+		],
+		"off_on_purpose": [],
+	}), encoding="utf-8")
+	registry = ssw.load_registry(path, repo_root=root)
+	by_name = {entry["name"]: entry for entry in registry["switches"]}
+	assert [entry["name"] for entry in registry["switches"]] == sorted(by_name)
+	assert by_name["PLAIN_STAGE_ENABLED"]["stage"] == "Hand-written text."
+	assert by_name["YAML_ONLY_ENABLED"]["stage"] == "Turns on yaml only (b.yaml); false turns that stage off."
+	assert by_name["NOT_MERGED_YET_ENABLED"]["stage"] == "Turns on not merged yet; false turns that stage off."
+	assert by_name["README_STAGE_ENABLED"]["stage"] == "Turns on readme stage (README.md); false turns that stage off."
+	assert all(entry["default"] == "true" for entry in registry["switches"])
+	snapshot = ssw.build_snapshot(registry, [
+		json.dumps({"name": "PLAIN_STAGE_ENABLED", "value": "1", "updated_at": ""}),
+		json.dumps({"name": "CHAINED_STAGE_ENABLED", "value": "1", "updated_at": ""}),
+	])
+	assert snapshot["PLAIN_STAGE_ENABLED"]["value_class"] == "on"
+	assert snapshot["CHAINED_STAGE_ENABLED"]["value_class"] == "off"
+
+
+def test_invalid_pending_exits_2(tmp_path):
+	registry = _registry(tmp_path)
+	data = json.loads(registry.read_text(encoding="utf-8"))
+	data["switches"][1]["pending"] = "yes"
+	registry.write_text(json.dumps(data), encoding="utf-8")
+	result = _run_py(["snapshot", "--registry", str(registry)], "")
+	assert result.returncode == 2
+
+
+def test_empty_registry_without_discovery_exits_2(tmp_path):
+	path = tmp_path / "stage_switches.json"
+	path.write_text(json.dumps({"schema": "stage_switches.v1", "switches": []}), encoding="utf-8")
+	assert _run_py(["snapshot", "--registry", str(path)], "").returncode == 2
+	assert _run_py(["snapshot", "--registry", str(path), "--repo-root", str(tmp_path / "missing")], "").returncode == 2
+	root = _fixture_repo(tmp_path)
+	assert _run_py(["snapshot", "--registry", str(path), "--repo-root", str(root)], "").returncode == 0
+
+
+def test_discovery_works_without_pyyaml(tmp_path):
+	root = _fixture_repo(tmp_path)
+	registry = _registry(tmp_path)
+	snapshot = tmp_path / "snapshot.json"
+	snapshot.write_text(json.dumps({"PLAIN_STAGE_ENABLED": {"value_class": "off", "display_value": "false", "updated_at": ""}}), encoding="utf-8")
+	code = (
+		"import sys\n"
+		"sys.modules['yaml'] = None\n"
+		f"sys.path.insert(0, {str(ROOT / 'scripts')!r})\n"
+		"import stage_switch_watch as ssw\n"
+		f"assert 'PLAIN_STAGE_ENABLED' in ssw.discover_switches({str(root)!r})\n"
+		f"sys.exit(ssw.main(['evaluate', '--registry', {str(registry)!r}, '--snapshot', {str(snapshot)!r}, '--repo-root', {str(root)!r}, '--now', {NOW!r}]))\n"
+	)
+	env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
+	result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, env=env, check=False)
+	assert result.returncode == 0, result.stderr
+	assert "PLAIN_STAGE_ENABLED" in json.loads(result.stdout)["alerts"][0]["name"]
+
+
+def test_real_registry_loads_unchanged():
+	raw = json.loads(REAL_REGISTRY.read_text(encoding="utf-8"))
+	merged = ssw.load_registry(REAL_REGISTRY, repo_root=ROOT)
+	by_name = {entry["name"]: entry for entry in merged["switches"]}
+	for entry in raw["switches"]:
+		assert by_name[entry["name"]]["stage"] == entry["stage"]
+		assert by_name[entry["name"]].get("on_values") == entry.get("on_values")
+	assert merged["off_on_purpose"] == raw["off_on_purpose"]
+	# Without --repo-root the registry loads as before #10127.
+	assert [entry["name"] for entry in ssw.load_registry(REAL_REGISTRY)["switches"]] == [entry["name"] for entry in raw["switches"]]
+
+
 # --- wrapper -----------------------------------------------------------------
 
 
@@ -346,3 +516,22 @@ def test_wrapper_disabled(tmp_path):
 	read = _wrapper(tmp_path, "read", env)
 	assert read.returncode == 0
 	assert "STAGE_SWITCH_WATCH outcome=disabled" in read.stdout
+
+
+def test_wrapper_discovers_switch_from_repo_root(tmp_path):
+	gh_plain_off = "printf '%s\\n' '{\"name\":\"PLAIN_STAGE_ENABLED\",\"value\":\"false\",\"updated_at\":\"2026-11-20T00:00:00Z\"}'"
+	env = _wrapper_env(tmp_path, gh_plain_off)
+	# The wrapper's default root is the folder above its scripts/ copy.
+	workflows = tmp_path / ".github" / "workflows"
+	workflows.mkdir(parents=True)
+	(workflows / "a.yml").write_text("env:\n  X: ${{ vars.PLAIN_STAGE_ENABLED || 'true' }}\n", encoding="utf-8")
+	read = _wrapper(tmp_path, "read", env)
+	assert read.returncode == 0, read.stderr
+	assert "snapshot_ready=true" in Path(env["GITHUB_OUTPUT"]).read_text()
+	report = _wrapper(tmp_path, "report", env)
+	assert report.returncode == 0, report.stderr
+	assert "STAGE_SWITCH_WATCH outcome=ok off=1 waiting=0 on_purpose=0 alerts=1 alert=sent" in report.stdout
+	sent = (tmp_path / "sent.txt").read_text()
+	assert sent.count("---") == 1
+	assert "PLAIN_STAGE_ENABLED" in sent
+	assert "Stage: Turns on plain stage (a.yml); false turns that stage off." in sent
