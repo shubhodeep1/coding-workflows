@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":10078,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/10078\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/10081\",\"pr_number\":10081,\"branch\":\"ai/issue-10078\",\"run_id\":\"45510467889\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/45510467889\",\"changed_files\":[\".github/workflows/orchestrate_poll.yml\",\".github/workflows/review_autofix_sweep.yml\",\"changelog.d/10078-merge-lease-env-full-set.md\",\"tests/test_merge_lease_env_contract.py\"]}",
+  "fingerprint": "b234404ee63f75b0d43f014ada7f5d8d9c0c5d1ebac50f2cb6e3bdf192fb00e8",
+  "lineage": {
+    "issue_number": 10078,
+    "parent_ids": [],
+    "pr_number": 10081,
+    "run_id": "45510467889",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45510467889",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/10081"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261125001529_106d1c8c84",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10078,
+    "level": "run",
+    "pr_number": 10081,
+    "run_id": "45510467889"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #10078: https://github.com/shubhodeep1/coding-workflows/pull/10081",
+  "timestamps": {
+    "created_at": "2026-11-25T00:15:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
