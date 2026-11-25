@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/10078-merge-lease-env-full-set.md:1-4 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The changelog inaccurately claims that all poller and sweep steps now honour the full set of merge-lease repository variables.\n  WHY: The reviewer says orchestrate_poll.yml does not pass MERGE_LEASE_SOFT_PATHS and MERGE_LEASE_MAX_HOLDERS, so the changelog misleads operators; the source severity MAJOR is mapped to high; anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash dispute this and cite orchestrate_poll.yml:1611-1612.\n- tests/test_merge_lease_env_contract.py:204-206 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The contract test logic is skipped silently when PyYAML is absent in the environment, leaving the lease settings in workflows unverified.\n  WHY: The reviewer says the missing orchestrate_poll.yml settings go undetected because the test does not run its main logic or fail the PR when PyYAML is missing; the source severity MAJOR is mapped to high; anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash dispute this and say the module raises when GITHUB_ACTIONS=true.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Every step env block that passes any MERGE_LEASE_* setting, or that runs a script able to write the lease, passes the full set (MERGE_LEASE_ENABLED, MERGE_LEASE_TTL_MINUTES, MERGE_LEASE_WAIT_LABEL, MERGE_LEASE_REVOKE_ENABLED, MERGE_LEASE_IDLE_MINUTES, MERGE_LEASE_PRIORITY_HEAD_PREFIXES, MERGE_LEASE_SOFT_PATHS, MERGE_LEASE_MAX_HOLDERS).\n  expected_change_site: .github/workflows/orchestrate_poll.yml env blocks at lines 1602, 1859, 2022.\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The env blocks updated in the diff for orchestrate_poll.yml only include 6 of the 8 required lease settings; MERGE_LEASE_SOFT_PATHS and MERGE_LEASE_MAX_HOLDERS are missing in all three hunks (source severity BLOCKER; anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash dispute this and cite orchestrate_poll.yml:1611-1612, 1871-1872 and 2037-2038).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/10078-merge-lease-env-full-set.md:1-4 | severity=MAJOR | confidence=5\n  PROBLEM: The changelog inaccurately claims that all poller and sweep steps now honour the full set of merge-lease repository variables.\n  WHY: orchestrate_poll.yml has not been updated to pass MERGE_LEASE_SOFT_PATHS and MERGE_LEASE_MAX_HOLDERS, so the changelog misleads operators about the implementation status.\n- tests/test_merge_lease_env_contract.py:204-206 | severity=MAJOR | confidence=5\n  PROBLEM: The contract test logic is skipped silently when PyYAML is absent in the environment, leaving the lease settings in workflows unverified.\n  WHY: The missing orchestrate_poll.yml settings go undetected because the test does not run its main logic or fail the PR when PyYAML is missing.\n- TASK_GAP\n  Requirement: Every step env block that passes any MERGE_LEASE_* setting, or that runs a script able to write the lease, passes the full set (MERGE_LEASE_ENABLED, MERGE_LEASE_TTL_MINUTES, MERGE_LEASE_WAIT_LABEL, MERGE_LEASE_REVOKE_ENABLED, MERGE_LEASE_IDLE_MINUTES, MERGE_LEASE_PRIORITY_HEAD_PREFIXES, MERGE_LEASE_SOFT_PATHS, MERGE_LEASE_MAX_HOLDERS).\n  Expected change site: .github/workflows/orchestrate_poll.yml env blocks at lines 1602, 1859, 2022.\n  Evidence of absence: The env blocks updated in the diff for orchestrate_poll.yml only include 6 of the 8 required lease settings; MERGE_LEASE_SOFT_PATHS and MERGE_LEASE_MAX_HOLDERS are missing in all three hunks.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "261dd1f07427a7e56d4a032d2b9fdeca200acef13bb8dfb9af1e54f1962ad9ff",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10081,
+    "run_id": "45572110382",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45572110382",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125095605_dc893f422e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10081,
+    "run_id": "45572110382"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-25T09:56:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
