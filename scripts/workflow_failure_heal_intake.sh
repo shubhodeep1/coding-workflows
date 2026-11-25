@@ -373,6 +373,10 @@ MAX_OPEN="$(_positive_or_default "${WORKFLOW_HEAL_MAX_OPEN_ISSUES:-}" 10)"
 MAX_PER_DAY="$(_positive_or_default "${WORKFLOW_HEAL_MAX_ISSUES_PER_DAY:-}" 20)"
 MAX_RUNS="$(_positive_or_default "${WORKFLOW_HEAL_MAX_RUNS:-}" 3)"
 MAX_FAILED_JOBS="$(_positive_or_default "${WORKFLOW_HEAL_MAX_FAILED_JOBS:-}" 3)"
+# Release-gate runner wait (issue #10037): "<run_id>:<job_id>" of every read
+# job whose raw log carries a RELEASE_GATE_RUNNER_WAIT cancel_requested /
+# stop_failed line on one of the gate's watch steps.
+HEAL_RUNNER_WAIT_MATCHED=""
 MAX_LOG_BYTES="$(_positive_or_default "${WORKFLOW_HEAL_MAX_RUN_LOG_BYTES:-}" 60000)"
 LOG_TAIL_LINES="$(_positive_or_default "${WORKFLOW_HEAL_LOG_TAIL_LINES:-}" 400)"
 # Linked runs (#8248): runs the failed-job logs link to. 0 turns it off.
@@ -1914,6 +1918,10 @@ LOG_FILES=()
 # Job logs actually fetched (placeholders for unreadable logs do not count).
 READ_JOB_LOG_COUNT=0
 RUN_COUNT=0
+# Runs whose every failed job lost its do-runner droplet (DigitalOcean runners
+# plan, goal G6); they are left out of the evidence below.
+RUNNER_LOST_RUN_COUNT=0
+RUNNER_LOST_DIR="${RUNTIME_DIR}/runner-lost"
 
 while IFS=$'\t' read -r run_id run_url; do
 	[ -n "${run_id}" ] || continue
@@ -1988,6 +1996,40 @@ while IFS=$'\t' read -r run_id run_url; do
 		log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=current_run_no_failed_job"
 		exit 0
 	fi
+	# Lost DigitalOcean runner (docs/plans/digitalocean-runners-for-consumer-pipelines-plan.md,
+	# goal G6): when every failed job of this run ran on a do-runner droplet and
+	# GitHub annotated it as a lost runner, the runner scaler re-runs the job, so
+	# this run is no code evidence. CLAUDE.md §15 audit: the jobs response above
+	# carries labels but no annotations, and no earlier intake call reads check-run
+	# annotations, so one annotations read per candidate job is added, at most
+	# RUNNER_LOST_MAX_JOBS (10) per run and only for runs whose every failed job
+	# ran on do-runner (none for a consumer that never set PIPELINE_RUNS_ON). Any
+	# read failure leaves that job without evidence, so the run is reported as
+	# before (fail-open towards filing).
+	# Only a first attempt is checked: the scaler re-runs a lost job once, so a
+	# re-run that lost its droplet again (a job that kills its runner) is reported.
+	runner_lost_job_ids=""
+	if [ "$(jq -r '.run_attempt // 1' "${RUN_INFO_FILE}" 2>/dev/null || echo 1)" = "1" ]; then
+		runner_lost_job_ids="$(python3 "${HEAL_PY}" runner-lost-candidates --jobs-json "${JOBS_FILE}" 2>/dev/null || true)"
+	fi
+	if [ -n "${runner_lost_job_ids}" ]; then
+		run_lost_dir="${RUNNER_LOST_DIR}/run-${run_id}"
+		mkdir -p "${run_lost_dir}"
+		while IFS= read -r lost_job_id; do
+			[[ "${lost_job_id}" =~ ^[0-9]+$ ]] || continue
+			# One attempt per read, so the bound above is a request count: a failed
+			# read already reports the run. An Actions job's check-run id is its job
+			# id; runner-lost-candidates drops a job whose check_run_url says otherwise.
+			GH_RETRY_MAX_ATTEMPTS=1 gh_api_json_to_file "${run_lost_dir}/${lost_job_id}.json" gh api --method GET "repos/${SOURCE_REPO}/check-runs/${lost_job_id}/annotations" -F per_page=100 2>/dev/null \
+				|| rm -f "${run_lost_dir}/${lost_job_id}.json"
+		done <<< "${runner_lost_job_ids}"
+		if [ "$(python3 "${HEAL_PY}" runner-lost --jobs-json "${JOBS_FILE}" --annotations-dir "${run_lost_dir}" 2>/dev/null || echo false)" = "true" ]; then
+			RUNNER_LOST_RUN_COUNT=$((RUNNER_LOST_RUN_COUNT + 1))
+			log "runner_lost outcome=skipped run=${run_id} source=${SOURCE_REPO}"
+			continue
+		fi
+		log "runner_lost outcome=not_runner_lost run=${run_id} source=${SOURCE_REPO}"
+	fi
 	SELECTED_JOBS_FILE="${LOG_DIR}/run-${run_id}-selected.json"
 	python3 "${HEAL_PY}" select-evidence-jobs --jobs-json "${JOBS_FILE}" --kind "${SOURCE_KIND}" --limit "${MAX_FAILED_JOBS}" > "${SELECTED_JOBS_FILE}"
 	JOB_COUNT=0
@@ -2015,6 +2057,25 @@ while IFS=$'\t' read -r run_id run_url; do
 				# A log whose filtering failed was emptied above and is not readable evidence.
 				READ_JOB_LOG_COUNT=$((READ_JOB_LOG_COUNT + 1))
 			fi
+			# Issue #10037: the marker must start a log line (after the runner
+			# timestamp) and the failing step must be a gate watch step (every
+			# step of test-and-mark-stable.yml that runs
+			# dispatch_and_watch_workflow_run.sh, plus Phase 4 and the alt-model
+			# wait (dispatch_and_watch_workflow_run.sh --alt-model-runner-wait); exact names), so
+			# text echoed from a model or an issue cannot suppress a report.
+			# The watch step must also be the job's only failed step (read from
+			# the run's jobs file already on disk): a real failure in a later
+			# always() step of the same job (soft-error analyser, cleanup) is
+			# filed as before. An unreadable jobs file never matches (fail closed).
+			if [ "${SOURCE_KIND}" = "workflow_run" ] \
+				&& grep -qE '^[^ ]+ RELEASE_GATE_RUNNER_WAIT outcome=(cancel_requested|stop_failed) ' "${RAW_LOG}" 2>/dev/null \
+				&& [ "$(jq -r --arg jid "${job_id}" --arg step "${failing_step}" '[.jobs[]? | select((.id | tostring) == $jid) | .steps[]? | select(.conclusion == "failure" or .conclusion == "timed_out") | (.name // "")] | if length == 1 and .[0] == $step then "only" else "other" end' "${JOBS_FILE}" 2>/dev/null || echo other)" = "only" ]; then
+				case "${failing_step}" in
+					"Phase 4: Wait for review & autofix to complete"|"Dispatch & watch — "*|"Dispatch internal-orchestrate.yml with multi-issue project"|"Dispatch internal-validate.yml standalone"|"Wait for clarify→plan→implement (alt-model)")
+						HEAL_RUNNER_WAIT_MATCHED="${HEAL_RUNNER_WAIT_MATCHED} ${run_id}:${job_id}"
+						;;
+				esac
+			fi
 			rm -f "${RAW_LOG}"
 			if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${RUN_COUNT}" -eq 1 ] && [ -s "${FILTERED_LOG}" ]; then
 				LOG_FILES+=("${FILTERED_LOG}")
@@ -2033,6 +2094,30 @@ while IFS=$'\t' read -r run_id run_url; do
 	done < <(jq -r '.[] | [(.id|tostring), (.name // ""), (.workflow_name // ""), ((.steps // []) | map(select((.conclusion // "") | IN("failure","timed_out","cancelled"))) | first | .name // ""), .selection]
 		| map(gsub("[\\t\\n\\r]"; " ")) | @tsv' "${SELECTED_JOBS_FILE}")
 done < <(jq -r '.run_refs[] | [.run_id, .url] | @tsv' "${PAYLOAD_FILE}")
+
+# Every examined run lost its do-runner droplet: an
+# infrastructure failure the runner scaler handles, not a heal case. A run
+# dropped for any other reason (unverified, jobs unreadable) keeps the report
+# on the normal path (fail-open towards filing). That includes a claimed run of
+# an issue / pull_request report dropped at binding because its jobs could not
+# be read (`run_not_in_source_repo`): it never reaches the loop, so it is added
+# to the counted total here. The total is deliberately not capped at MAX_RUNS:
+# a claimed run past that cap (dropped at binding as `run_not_in_source_repo`
+# because binding never read its jobs, or counted by the loop just before its
+# `break`) was never examined, so it must keep the total above the lost count
+# and the report on the normal path.
+RUNNER_LOST_BIND_DROPPED=0
+if [ -s "${BIND_RESULT_FILE:-}" ]; then
+	RUNNER_LOST_BIND_DROPPED="$(jq '[.dropped[]? | select(.reason == "run_not_in_source_repo")] | length' "${BIND_RESULT_FILE}" 2>/dev/null || echo 1)"
+	[[ "${RUNNER_LOST_BIND_DROPPED}" =~ ^[0-9]+$ ]] || RUNNER_LOST_BIND_DROPPED=1
+fi
+RUNNER_LOST_EXAMINED_RUNS=$((RUN_COUNT + RUNNER_LOST_BIND_DROPPED))
+if [ "${RUNNER_LOST_RUN_COUNT}" -gt 0 ] && [ "${RUNNER_LOST_RUN_COUNT}" -eq "${RUNNER_LOST_EXAMINED_RUNS}" ] \
+	&& [ "$(jq 'length' "${SUMMARIES_FILE}" 2>/dev/null || echo 0)" = "0" ]; then
+	VALIDATION_ROUTE_SKIP_REASON="runner_lost"
+	log "skip reason=runner_lost source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} runs=${RUNNER_LOST_RUN_COUNT}"
+	exit 0
+fi
 
 if { [ "${SOURCE_KIND}" = "phase_failure" ] || [ "${SOURCE_KIND}" = "validation_failure" ]; } && [ -n "${PENDING_CURRENT_RUN}" ] \
 	&& ! jq -e --arg run_id "${PENDING_CURRENT_RUN}" 'any(.[]; .run_id == $run_id)' "${SUMMARIES_FILE}" >/dev/null 2>&1; then
@@ -2088,6 +2173,41 @@ if [ "${SOURCE_KIND}" = "workflow_run" ] && [ "${#LOG_FILES[@]}" -gt 0 ]; then
 			if grep -qE 'PROMOTE_CYCLE_FAILED reason=smoke_gate_(failed|timeout)' "${LOG_FILES[@]}" 2>/dev/null; then
 				log "skip reason=downstream_gate_failure workflow=${PAYLOAD_WORKFLOW_NAME}"
 				exit 0
+			fi
+			;;
+	esac
+fi
+
+# A release gate run whose only failed jobs are watch steps that ended as a
+# runner wait (issue #10037, G4): the gate tried to stop itself because a
+# child run waited for a runner, not because a test failed. Every failed job
+# of the current run (same filter as the provenance check) must have been
+# read and carry the marker on a watch step; any other mix files as before.
+if [ "${SOURCE_KIND}" = "workflow_run" ] && [ -n "${HEAL_RUNNER_WAIT_MATCHED}" ]; then
+	case "${PAYLOAD_WORKFLOW_NAME}" in
+		"Test & Mark Stable Release"|"Test & Mark Stable Release "*)
+			HEAL_RUNNER_WAIT_RUN_ID="$(jq -r '.run_refs[0].run_id // "" | tostring' "${PAYLOAD_FILE}" 2>/dev/null || echo "")"
+			HEAL_RUNNER_WAIT_JOBS_FILE="${LOG_DIR}/run-${HEAL_RUNNER_WAIT_RUN_ID}-jobs.json"
+			HEAL_RUNNER_WAIT_FAILED_IDS=""
+			if [[ "${HEAL_RUNNER_WAIT_RUN_ID}" =~ ^[0-9]+$ ]] && [ -s "${HEAL_RUNNER_WAIT_JOBS_FILE}" ]; then
+				HEAL_RUNNER_WAIT_FAILED_IDS="$(jq -r '[.jobs[]? | select((.conclusion == "failure" or .conclusion == "timed_out")
+					and (.name | type == "string") and .name != "heal-report"
+					and (.name | endswith("/ heal-report") | not)) | (.id | tostring)] | join(" ")' "${HEAL_RUNNER_WAIT_JOBS_FILE}" 2>/dev/null || echo "")"
+			fi
+			if [ -n "${HEAL_RUNNER_WAIT_FAILED_IDS}" ]; then
+				HEAL_RUNNER_WAIT_ALL=true
+				HEAL_RUNNER_WAIT_COUNT=0
+				for heal_runner_wait_job in ${HEAL_RUNNER_WAIT_FAILED_IDS}; do
+					HEAL_RUNNER_WAIT_COUNT=$((HEAL_RUNNER_WAIT_COUNT + 1))
+					case " ${HEAL_RUNNER_WAIT_MATCHED} " in
+						*" ${HEAL_RUNNER_WAIT_RUN_ID}:${heal_runner_wait_job} "*) ;;
+						*) HEAL_RUNNER_WAIT_ALL=false ;;
+					esac
+				done
+				if [ "${HEAL_RUNNER_WAIT_ALL}" = true ] && [ "${HEAL_RUNNER_WAIT_COUNT}" -le "${MAX_FAILED_JOBS}" ]; then
+					log "skip reason=release_gate_runner_wait run=${HEAL_RUNNER_WAIT_RUN_ID} jobs=${HEAL_RUNNER_WAIT_COUNT}"
+					exit 0
+				fi
 			fi
 			;;
 	esac

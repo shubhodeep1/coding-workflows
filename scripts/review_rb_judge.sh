@@ -2645,6 +2645,27 @@ rb_judge_deferred_merge_pending() {
 }
 # END rb-judge merge error capture (#7659)
 
+# BEGIN rb-judge judge-decision lease mark (#9987)
+# The judge waits for the merge lease before it posts ai-review/head-gate
+# ("gates first"), and the lease tick refused a waiter without head-gate
+# success, so a judge-approved PR on a busy lease never merged (#9956). On a
+# lease_wait deferral this posts the head-bound ai-review/judge-merge-pending
+# status (_pr_judge_merge_pending_mark, scripts/pr_checks_lib.sh), which
+# makes the waiter eligible for a lease grant only; the merge itself still
+# runs every gate below when the granted judge run comes back. At most one
+# status POST per run (RB_JUDGE_MERGE_PENDING_MARKED); fail-open: a missing
+# library or a failed POST leaves today's behaviour.
+RB_JUDGE_MERGE_PENDING_MARKED="false"
+rb_judge_mark_merge_pending() {
+  [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ] || return 0
+  [ "${RB_JUDGE_MERGE_PENDING_MARKED}" = "true" ] && return 0
+  declare -F _pr_judge_merge_pending_mark >/dev/null 2>&1 || return 0
+  RB_JUDGE_MERGE_PENDING_MARKED="true"
+  PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_judge_merge_pending_mark "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA:-}" "${1:-}" || true
+  return 0
+}
+# END rb-judge judge-decision lease mark (#9987)
+
 case "${RB_ACTION}" in
   merge)
     echo "Judge says merge PR #${PR_NUMBER} as-is."
@@ -2722,6 +2743,7 @@ case "${RB_ACTION}" in
           elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
             echo "Review-blocked judge: PR #${PR_NUMBER} waits for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; merge deferred, re-dispatched when the lease is granted."
             RB_MERGE_STATUS="mergeability_pending"
+            rb_judge_mark_merge_pending merge
           else
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
@@ -2740,6 +2762,7 @@ case "${RB_ACTION}" in
           elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
             echo "Review-blocked judge: PR #${PR_NUMBER} waits for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; merge deferred, re-dispatched when the lease is granted."
             RB_MERGE_STATUS="mergeability_pending"
+            rb_judge_mark_merge_pending merge
           else
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
@@ -2835,6 +2858,7 @@ case "${RB_ACTION}" in
           elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
             echo "Review-blocked judge: PR #${PR_NUMBER} waits for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; merge deferred, re-dispatched when the lease is granted."
             RB_MERGE_STATUS="mergeability_pending"
+            rb_judge_mark_merge_pending terminal
           else
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
@@ -2853,6 +2877,7 @@ case "${RB_ACTION}" in
           elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
             echo "Review-blocked judge: PR #${PR_NUMBER} waits for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; merge deferred, re-dispatched when the lease is granted."
             RB_MERGE_STATUS="mergeability_pending"
+            rb_judge_mark_merge_pending terminal
           else
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
@@ -3404,6 +3429,12 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
             if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
               echo "::warning::PR #${PR_NUMBER} base moved under files it touches — branch update requested; merge_with_followup deferred. Leaving linked issues in ai:review-blocked."
               echo "judge_skip_reason=base_moved_overlap" >> "$GITHUB_OUTPUT"
+            elif [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "lease_wait" ]; then
+              # #9987: waits for the merge lease; the judge-decision status
+              # lets the tick grant it. The output token stays the same.
+              echo "PR #${PR_NUMBER} waits for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?} — merge_with_followup deferred, re-dispatched when the lease is granted. Leaving linked issues in ai:review-blocked."
+              rb_judge_mark_merge_pending merge_with_followup
+              echo "judge_skip_reason=base_freshness_unknown" >> "$GITHUB_OUTPUT"
             else
               echo "::warning::PR #${PR_NUMBER} base freshness could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}) — merge_with_followup deferred, no branch update requested. Leaving linked issues in ai:review-blocked."
               echo "judge_skip_reason=base_freshness_unknown" >> "$GITHUB_OUTPUT"

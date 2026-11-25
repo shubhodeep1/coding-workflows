@@ -42,6 +42,14 @@
 #                                                           candidate; detail ref=heads/
 #                                                           stable); cannot fast-forward,
 #                                                           so no cycle
+#   PROMOTE_CYCLE_FORWARD_MERGE_PENDING prs=<n,...|none|lookup_failed> base=<sha> head=<sha> ref=heads/<stable>
+#                                                           not an exit: printed before a
+#                                                           base_not_ancestor skip whose
+#                                                           detail has ref=heads/; names the
+#                                                           open same-repo forward-merge
+#                                                           fallback PR(s) into main and sends
+#                                                           one best-effort WARNING alert
+#                                                           (#9919, Refs #9891)
 #   PROMOTE_CYCLE_SKIPPED reason=insufficient_docs          fewer than PROMOTE_CYCLE_MIN_DOCS docs
 #   PROMOTE_CYCLE_SKIPPED reason=scan_capped_behind_markers available=<n> required=<m>
 #                                                           the dispatcher's doc scan was
@@ -128,6 +136,22 @@
 #   TG_BOT_SECRET, TG_ADMIN_CHAT_ID / TG_CHAT_ID, ALERT_MSG_LEVEL
 #                                       Telegram settings for the WARNING sent when a
 #                                       hold is released (best effort, via tg_helpers.sh)
+#   RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES
+#                                       default 30 (issue #10037): before the smoke
+#                                       gate, skip with runner_wait_long while the
+#                                       oldest live queued run of this repository has
+#                                       waited this long; 0 disables the check
+#   AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS
+#                                       default 24: the runner-wait bound. Once the
+#                                       newest gate-only gate run is this old (or
+#                                       there is none in the listing) the cycle runs
+#                                       whatever the wait
+#   PROMOTE_CYCLE_RETRY_CHECK_ONLY      default false. The orchestrator poller sets it
+#                                       to true: the script then only decides whether
+#                                       to re-dispatch a cycle skipped with
+#                                       runner_wait_long (`-f cycle_retry=true`, at
+#                                       most once an hour) and exits 0 (log prefix
+#                                       PROMOTE_CYCLE_RETRY). It never runs the cycle.
 #                                       and when a release-blocker report is not delivered
 #   RELEASE_BLOCKER_HEAL_ENABLED        default true (kill switch for the
 #                                       release-blocker reporters below)
@@ -215,6 +239,9 @@ cd "${REPO_ROOT}"
 
 source "${SCRIPT_DIR}/gh_helpers.sh" 2>/dev/null || true
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+# gh_read (issue #9888) moves polling reads to the job token; without
+# gh_helpers.sh it is plain gh on the PAT, as before.
+type gh_read >/dev/null 2>&1 || gh_read() { if [ "${1:-}" = "--same-repo-only" ]; then shift; fi; gh "$@"; }
 # Issue #9473: wedged-queued run filter from gh_helpers.sh. When the helpers
 # could not be sourced, these no-op fallbacks keep the pre-#9473 behaviour
 # (every queued run counts as active).
@@ -230,6 +257,12 @@ declare -F zombie_queued_log_ignored >/dev/null 2>&1 || zombie_queued_log_ignore
 {
 	cat >/dev/null 2>&1 || true
 	return 0
+}
+# Issue #10037: runner-wait reader from gh_helpers.sh. Without the helpers the
+# check fails open (the cycle runs as before).
+declare -F release_gate_oldest_queued_wait >/dev/null 2>&1 || release_gate_oldest_queued_wait()
+{
+	echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=0"
 }
 if [ -r "${SCRIPT_DIR}/tg_helpers.sh" ]; then
 	# shellcheck source=tg_helpers.sh
@@ -249,6 +282,25 @@ PROMOTE_CYCLE_GATE_POLL_SECS="${PROMOTE_CYCLE_GATE_POLL_SECS:-60}"
 PROMOTE_CYCLE_MIN_DOCS="${PROMOTE_CYCLE_MIN_DOCS:-2}"
 PROMOTE_CYCLE_MAX_ATTEMPTS="${PROMOTE_CYCLE_MAX_ATTEMPTS:-3}"
 PROMOTE_CYCLE_TRACKING_LABEL="${PROMOTE_CYCLE_TRACKING_LABEL:-ai:comprehensive-test-pending}"
+# Runner-wait check (issue #10037). A bad value warns and falls back: the
+# check is an addition to the cycle and must not stop it.
+RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES="${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES:-30}"
+if ! [[ "${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}" =~ ^[0-9]{1,5}$ ]]; then
+	echo "::warning::RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES is not a non-negative integer of at most 5 digits; using 30."
+	RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES=30
+fi
+RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES=$((10#${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}))
+AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS="${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS:-24}"
+if ! [[ "${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS}" =~ ^[0-9]{1,5}$ ]]; then
+	echo "::warning::AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS is not a non-negative integer of at most 5 digits; using 24."
+	AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS=24
+fi
+AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS=$((10#${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS}))
+PROMOTE_CYCLE_RETRY_CHECK_ONLY="${PROMOTE_CYCLE_RETRY_CHECK_ONLY:-false}"
+# Display title of a poller retry run (run-name in promote-main-to-stable.yml).
+PROMOTE_CYCLE_RETRY_TITLE="Promote main to stable [cycle-retry]"
+# Name of the cycle job's marker step; a contract with the workflow YAML.
+PROMOTE_CYCLE_RETRY_MARKER_STEP="Record runner-wait skip for the poller retry"
 APPLY_ANALYSIS_DISPATCHER="${APPLY_ANALYSIS_DISPATCHER:-${SCRIPT_DIR}/apply_analysis_on_main.sh}"
 PROMOTE_CYCLE_OPERATOR_STEP_HELPER="${PROMOTE_CYCLE_OPERATOR_STEP_HELPER:-${SCRIPT_DIR}/operator_step_issue.py}"
 PROMOTE_CYCLE_PIN_ENABLED="${PROMOTE_CYCLE_PIN_ENABLED:-true}"
@@ -331,6 +383,8 @@ skip_cycle()
 	local detail="${2:-}"
 	# Release-blocker reporters (Phase 2b): before the skip line, never fatal.
 	release_blocker_on_skip "${reason}" "${detail}" || true
+	# Stable branch diverged from main: name the forward-merge PR (#9919).
+	promote_cycle_forward_merge_pending "${reason}" "${detail}" || true
 	echo "PROMOTE_CYCLE_SKIPPED reason=${reason}${detail:+ ${detail}}"
 	emit_output outcome "skipped:${reason}"
 	exit 0
@@ -899,6 +953,72 @@ promote_cycle_hold_alert()
 	else
 		echo "::warning::promote_main_cycle: tg_helpers.sh not available; hold-release alert not sent" >&2
 	fi
+	return 0
+}
+
+# promote_cycle_forward_merge_pending <skip_reason> <skip_detail>
+# A base_not_ancestor skip on the stable BRANCH (detail ref=heads/<stable>)
+# means stable holds a commit main lacks, which the forward-merge fallback PR
+# (auto/forward-merge-stable-*, merge commit only) is meant to bring in. On
+# 2026-11-22 such a PR (#9891) sat green and unmerged while the cycle skipped
+# silently. This prints PROMOTE_CYCLE_FORWARD_MERGE_PENDING and sends one
+# best-effort WARNING naming the open PR(s). Runs at most once per tick, is
+# always called as `|| true` (errexit is off here, so every step is checked),
+# and never changes the skip, its output or the exit code.
+# API calls (§14): 1 REST read, only on this skip path. Audited: nothing else
+# in this script lists pull requests (guard 2's issues listing is
+# label-filtered tracking issues and drops PRs). One page of 100 open PRs
+# into the default branch; a forward-merge PR beyond it is missed, which is
+# acceptable for a best-effort alert. Fail open: a failed read logs
+# prs=lookup_failed and the alert says so.
+promote_cycle_forward_merge_pending_done="false"
+promote_cycle_forward_merge_pending()
+{
+	local fm_reason="${1:-}" fm_detail="${2:-}"
+	local fm_base="unknown" fm_head="unknown" fm_pulls_json="" fm_numbers="" fm_prs="" fm_num="" fm_list_text="" fm_text=""
+	[ "${fm_reason}" = "base_not_ancestor" ] || return 0
+	case " ${fm_detail}" in
+		*" ref=heads/"*) ;;
+		*) return 0 ;;
+	esac
+	[ "${promote_cycle_forward_merge_pending_done}" = "true" ] && return 0
+	promote_cycle_forward_merge_pending_done="true"
+	if [[ " ${fm_detail}" =~ \ base=([0-9a-f]{40})( |$) ]]; then
+		fm_base="${BASH_REMATCH[1]}"
+	fi
+	if [[ " ${fm_detail}" =~ \ head=([0-9a-f]{40})( |$) ]]; then
+		fm_head="${BASH_REMATCH[1]}"
+	fi
+	# Only same-repo heads: a fork can name its branch auto/forward-merge-stable-*
+	# and must never be named in an alert that asks an operator to merge it.
+	# URLs are built from the repo and the number, never copied from html_url.
+	if fm_pulls_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls?state=open&base=${PROMOTE_CYCLE_DEFAULT_BRANCH}&per_page=100" 2>/dev/null)" \
+		&& fm_numbers="$(printf '%s' "${fm_pulls_json}" | jq -r --arg repo "${GITHUB_REPOSITORY}" '
+			if type == "array" then . else error("not an array") end
+			| .[]
+			| select(type == "object")
+			| select((((.head // {}) | .ref // "") | tostring | startswith("auto/forward-merge-stable-"))
+				and ((((.head // {}) | .repo // {}) | if type == "object" then (.full_name // "") else "" end) == $repo))
+			| (.number // empty) | tostring' 2>/dev/null)"; then
+		while IFS= read -r fm_num; do
+			[[ "${fm_num}" =~ ^[1-9][0-9]{0,9}$ ]] || continue
+			fm_prs+="${fm_num},"
+			fm_list_text+=" #${fm_num} $(release_blocker_safe "${GITHUB_SERVER_URL:-https://github.com}")/${GITHUB_REPOSITORY}/pull/${fm_num};"
+		done <<< "${fm_numbers}"
+		fm_prs="${fm_prs%,}"
+		if [ -z "${fm_prs}" ]; then
+			fm_prs="none"
+			fm_list_text=" No open forward-merge PR: check forward-merge-stable-to-main.yml runs."
+		else
+			fm_list_text=" Open forward-merge PR(s):${fm_list_text}"
+		fi
+	else
+		fm_prs="lookup_failed"
+		fm_list_text=" Forward-merge PR lookup failed: check the open PRs into ${PROMOTE_CYCLE_DEFAULT_BRANCH} and forward-merge-stable-to-main.yml runs."
+	fi
+	echo "PROMOTE_CYCLE_FORWARD_MERGE_PENDING prs=${fm_prs} base=${fm_base} head=${fm_head} ref=heads/${PROMOTE_CYCLE_STABLE_BRANCH}"
+	fm_text="Promote cycle skipped in ${GITHUB_REPOSITORY}: ${PROMOTE_CYCLE_STABLE_BRANCH} (${fm_base}) is not an ancestor of ${PROMOTE_CYCLE_DEFAULT_BRANCH} (${fm_head}).${fm_list_text} Merge with 'Create a merge commit' (never squash or rebase); the promote cycle stays skipped until ${PROMOTE_CYCLE_STABLE_BRANCH} is an ancestor of ${PROMOTE_CYCLE_DEFAULT_BRANCH}."
+	promote_cycle_hold_alert "${fm_text}" || true
 	return 0
 }
 
@@ -1580,6 +1700,110 @@ release_blocker_on_skip()
 	return 0
 }
 
+# Poller retry check (issue #10037, G2 / AD-1). The orchestrator poller runs
+# this script with PROMOTE_CYCLE_RETRY_CHECK_ONLY=true every tick. It only
+# re-dispatches the cycle (`-f cycle_retry=true`, which the workflow routes to
+# the guarded `cycle` job, never to `promote`) when the newest cycle run is a
+# successful runner_wait_long skip (its marker step ran) that ended 60 minutes
+# to 24 hours ago. A retry becomes the newest cycle run, so retries come at
+# most once an hour; whether main still needs a cycle is left to the
+# dispatched cycle's own guards. A due candidate is dispatched only when the
+# current runner wait is below RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES
+# (outcome=wait_long otherwise). API calls: 0 when disabled, 1 runs listing,
+# +1 jobs read and +1 runner-wait read (2 when more than 100 runs are queued)
+# only for a due candidate, +1 dispatch. Always exits 0.
+promote_cycle_retry_check()
+{
+	local rc_runs="" rc_active="" rc_fields="" rc_id="" rc_status="" rc_conclusion="" rc_updated="" rc_age="" rc_jobs="" rc_marker=""
+	local rc_cutoff="0" rc_def="" rc_wait="" rc_wait_outcome="" rc_wait_min=""
+	if ! is_truthy "${PROMOTE_CYCLE_ENABLED}"; then
+		echo "PROMOTE_CYCLE_RETRY outcome=disabled reason=cycle_disabled"
+		return 0
+	fi
+	if [ "${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}" -eq 0 ]; then
+		echo "PROMOTE_CYCLE_RETRY outcome=disabled reason=runner_wait_check_off"
+		return 0
+	fi
+	if ! rc_runs="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_WORKFLOW_FILE}/runs?per_page=20" 2>/dev/null)" \
+		|| ! printf '%s' "${rc_runs}" | jq -e '(.workflow_runs | type) == "array"' >/dev/null 2>&1; then
+		echo "PROMOTE_CYCLE_RETRY outcome=read_failed lookup=runs"
+		return 0
+	fi
+	rc_cutoff="$(zombie_queued_cutoff_epoch || echo 0)"
+	[[ "${rc_cutoff}" =~ ^[0-9]+$ ]] || rc_cutoff=0
+	rc_def="$(zombie_queued_jq_def 2>/dev/null || printf '%s' 'def is_wedged_queued($cutoff): false;')"
+	zombie_queued_log_ignored promote_cycle_retry "${rc_cutoff}" <<< "${rc_runs}"
+	rc_active="$(printf '%s' "${rc_runs}" | jq -r --argjson zq_cutoff "${rc_cutoff}" "${rc_def}"'[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending") | select(is_wedged_queued($zq_cutoff) | not)] | length' 2>/dev/null || echo "")"
+	if ! [[ "${rc_active}" =~ ^[0-9]+$ ]]; then
+		echo "PROMOTE_CYCLE_RETRY outcome=read_failed lookup=runs"
+		return 0
+	fi
+	if [ "${rc_active}" -gt 0 ]; then
+		echo "PROMOTE_CYCLE_RETRY outcome=cycle_active active_runs=${rc_active}"
+		return 0
+	fi
+	rc_fields="$(printf '%s' "${rc_runs}" | jq -r --arg retry_title "${PROMOTE_CYCLE_RETRY_TITLE}" '[.workflow_runs[]? | select(.event == "schedule" or (.event == "workflow_dispatch" and (.display_title // "") == $retry_title))] | sort_by(.created_at) | last // empty | ((.id // "") | tostring), ((.status // "") | tostring), ((.conclusion // "") | tostring), ((.updated_at // "") | tostring)' 2>/dev/null || true)"
+	{ IFS= read -r rc_id; IFS= read -r rc_status; IFS= read -r rc_conclusion; IFS= read -r rc_updated; } <<< "${rc_fields}" || true
+	if ! [[ "${rc_id:-}" =~ ^[0-9]{1,20}$ ]]; then
+		echo "PROMOTE_CYCLE_RETRY outcome=no_cycle_run"
+		return 0
+	fi
+	if [ "${rc_status}" != "completed" ] || [ "${rc_conclusion}" != "success" ]; then
+		echo "PROMOTE_CYCLE_RETRY outcome=not_runner_wait run=${rc_id} conclusion=$(printf '%s' "${rc_conclusion:-none}" | tr -cd 'a-z_')"
+		return 0
+	fi
+	rc_age="$(jq -rn --arg ts "${rc_updated:-}" '($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601?) as $t | if $t == null then empty else ([((now - $t) / 60 | floor), 0] | max) end' 2>/dev/null || true)"
+	if ! [[ "${rc_age}" =~ ^[0-9]+$ ]]; then
+		echo "PROMOTE_CYCLE_RETRY outcome=read_failed lookup=updated_at run=${rc_id}"
+		return 0
+	fi
+	if [ "${rc_age}" -lt 60 ]; then
+		echo "PROMOTE_CYCLE_RETRY outcome=not_due run=${rc_id} age_min=${rc_age}"
+		return 0
+	fi
+	if [ "${rc_age}" -ge 1440 ]; then
+		# The daily schedule owns a skip this old.
+		echo "PROMOTE_CYCLE_RETRY outcome=stale run=${rc_id} age_min=${rc_age}"
+		return 0
+	fi
+	if ! rc_jobs="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${rc_id}/jobs?per_page=100" 2>/dev/null)" \
+		|| ! printf '%s' "${rc_jobs}" | jq -e '(.jobs | type) == "array"' >/dev/null 2>&1; then
+		echo "PROMOTE_CYCLE_RETRY outcome=read_failed lookup=jobs run=${rc_id}"
+		return 0
+	fi
+	rc_marker="$(printf '%s' "${rc_jobs}" | jq -r --arg step "${PROMOTE_CYCLE_RETRY_MARKER_STEP}" '[.jobs[]? | .steps[]? | select((.name // "") == $step and (.conclusion // "") == "success")] | length' 2>/dev/null || echo 0)"
+	if ! [[ "${rc_marker}" =~ ^[0-9]+$ ]] || [ "${rc_marker}" -eq 0 ]; then
+		echo "PROMOTE_CYCLE_RETRY outcome=not_runner_wait run=${rc_id}"
+		return 0
+	fi
+	# Retry only when the wait has dropped (G2): a retry dispatched into a
+	# long wait takes a runner slot just to skip again (§26). Same reader and
+	# limit as the cycle's own check; a failed read dispatches (fail open). A
+	# skip still held here past 24 h goes back to the daily schedule.
+	rc_wait="$(release_gate_oldest_queued_wait "${GITHUB_REPOSITORY}" "${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}" "${rc_cutoff}" 2>/dev/null || true)"
+	rc_wait_outcome="$(printf '%s' "${rc_wait}" | sed -n 's/^outcome=\([a-z_]*\) .*/\1/p' | head -n 1)"
+	rc_wait_min="$(printf '%s' "${rc_wait}" | sed -n 's/.* oldest_queued_min=\([0-9]*\) .*/\1/p' | head -n 1)"
+	if [ "${rc_wait_outcome}" = "long" ] && [[ "${rc_wait_min}" =~ ^[0-9]+$ ]] && [ "${rc_wait_min}" -ge "${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}" ]; then
+		echo "PROMOTE_CYCLE_RETRY outcome=wait_long after_run=${rc_id} oldest_queued_min=${rc_wait_min} max=${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}"
+		return 0
+	fi
+	if [ "${rc_wait_outcome}" != "short" ] && [ "${rc_wait_outcome}" != "long" ]; then
+		echo "::warning::PROMOTE_CYCLE_RETRY wait_check=read_failed after_run=${rc_id} — dispatching without the runner-wait check."
+	fi
+	# One attempt, no gh_retry: a retried dispatch is not idempotent. The
+	# dispatched run's another_run_active guard covers a race.
+	if gh workflow run "${PROMOTE_CYCLE_WORKFLOW_FILE}" --repo "${GITHUB_REPOSITORY}" --ref "${PROMOTE_CYCLE_DEFAULT_BRANCH}" -f cycle_retry=true >/dev/null 2>&1; then
+		echo "PROMOTE_CYCLE_RETRY outcome=dispatched after_run=${rc_id} age_min=${rc_age}"
+	else
+		echo "::warning::PROMOTE_CYCLE_RETRY outcome=dispatch_failed after_run=${rc_id}"
+	fi
+	return 0
+}
+if is_truthy "${PROMOTE_CYCLE_RETRY_CHECK_ONLY}"; then
+	promote_cycle_retry_check || true
+	exit 0
+fi
+
 if ! is_truthy "${PROMOTE_CYCLE_ENABLED}"; then
 	skip_cycle disabled
 fi
@@ -1671,7 +1895,9 @@ fi
 #    change separates from the tip (older runs predate that change). The
 #    newest failed run keeps the pre-budget handling of a diverged head
 #    (skip base_not_ancestor) and of a compare failure (skip guard_unavailable).
-failed_cycle_heads="$(printf '%s' "${self_runs_json}" | jq -r --argjson max "${PROMOTE_CYCLE_MAX_ATTEMPTS}" '[.workflow_runs[]? | select(.event == "schedule" and .status == "completed" and (.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out"))] | sort_by(.created_at) | reverse | .[:$max] | .[].head_sha // empty')"
+# A poller retry run (workflow_dispatch with the retry display title, issue
+# #10037) is a cycle run too, so a failed retry spends an attempt.
+failed_cycle_heads="$(printf '%s' "${self_runs_json}" | jq -r --argjson max "${PROMOTE_CYCLE_MAX_ATTEMPTS}" --arg retry_title "${PROMOTE_CYCLE_RETRY_TITLE}" '[.workflow_runs[]? | select((.event == "schedule" or (.event == "workflow_dispatch" and (.display_title // "") == $retry_title)) and .status == "completed" and (.conclusion == "failure" or .conclusion == "cancelled" or .conclusion == "timed_out"))] | sort_by(.created_at) | reverse | .[:$max] | .[].head_sha // empty')"
 failed_attempts_on_tip=0
 last_failed_head=""
 while IFS= read -r failed_cycle_head; do
@@ -1746,7 +1972,9 @@ fi
 # never frees within the separate idle-wait budget.
 idle_wait_deadline=$(( $(date +%s) + PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS ))
 while :; do
-	gate_runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}/runs?per_page=30" 2>/dev/null || echo "")"
+	# Only the contractual GH_READ_FALLBACK line (issue #9888) survives the
+	# stderr filter; other gh/gh_retry noise stays dropped, as before.
+	gate_runs_json="$(gh_retry gh_read --same-repo-only api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}/runs?per_page=30" 2> >(grep -a '^GH_READ_FALLBACK ' >&2 || true) || echo "")"
 	zombie_queued_log_ignored promote_cycle_gate_idle "${zq_cutoff}" <<< "${gate_runs_json}"
 	active_gate_runs="$(printf '%s' "${gate_runs_json}" \
 		| jq -r --argjson zq_cutoff "${zq_cutoff}" "${zq_def}"'[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending") | select(is_wedged_queued($zq_cutoff) | not)] | length' 2>/dev/null || echo "")"
@@ -1760,6 +1988,45 @@ while :; do
 	echo "Waiting: ${active_gate_runs} ${PROMOTE_CYCLE_GATE_WORKFLOW_FILE} run(s) active (a stable release gate must not be cancelled by ours)."
 	sleep "${PROMOTE_CYCLE_GATE_POLL_SECS}"
 done
+# Runner-wait check (issue #10037, G1). Before the freeze, so a
+# runner_wait_long skip never touches the promote-cycle-frozen tag. The skip
+# spends no attempt (the run ends success) and the workflow's marker step lets
+# the orchestrator poller retry the cycle later the same day. Bound (AD-2):
+# once the newest gate-only gate run (from the idle listing above, no extra
+# call) is AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS old, or there is none, the
+# cycle runs whatever the wait. Fail open on a failed read.
+if [ "${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}" -eq 0 ]; then
+	echo "PROMOTE_CYCLE_RUNNER_WAIT_CHECK outcome=disabled"
+else
+	rw_last_gate="$(printf '%s' "${gate_runs_json}" | jq -r '[.workflow_runs[]? | select((.display_title // "") | startswith("Test & Mark Stable Release [cycle:"))] | sort_by(.created_at) | last | if . == null then "" else "\(.id)\t\((.created_at // "") | (try (sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) catch 0))" end' 2>/dev/null || true)"
+	rw_last_run_id=""
+	rw_last_created_epoch=""
+	IFS=$'\t' read -r rw_last_run_id rw_last_created_epoch <<< "${rw_last_gate}" || true
+	[[ "${rw_last_run_id:-}" =~ ^[1-9][0-9]*$ ]] || rw_last_run_id=""
+	rw_last_age_hours="unknown"
+	if [ -n "${rw_last_run_id}" ] && [[ "${rw_last_created_epoch:-}" =~ ^[1-9][0-9]*$ ]]; then
+		rw_now_epoch="$(date -u +%s)"
+		if [ "${rw_now_epoch}" -ge "${rw_last_created_epoch}" ]; then
+			rw_last_age_hours=$(( (rw_now_epoch - rw_last_created_epoch) / 3600 ))
+		fi
+	fi
+	if [ -z "${rw_last_run_id}" ] || [ "${rw_last_age_hours}" = "unknown" ] \
+		|| [ "${rw_last_age_hours}" -ge "${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS}" ]; then
+		echo "PROMOTE_CYCLE_RUNNER_WAIT_CHECK outcome=bound_reached last_run=${rw_last_run_id:-none} last_age_hours=${rw_last_age_hours} window_hours=${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS}"
+	else
+		rw_result="$(release_gate_oldest_queued_wait "${GITHUB_REPOSITORY}" "${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}" "${zq_cutoff}" 2>/dev/null || true)"
+		rw_outcome="$(printf '%s' "${rw_result}" | sed -n 's/^outcome=\([a-z_]*\) .*/\1/p' | head -n 1)"
+		rw_oldest_min="$(printf '%s' "${rw_result}" | sed -n 's/.* oldest_queued_min=\([0-9]*\) .*/\1/p' | head -n 1)"
+		rw_calls="$(printf '%s' "${rw_result}" | sed -n 's/.* calls=\([0-9]*\)$/\1/p' | head -n 1)"
+		if [ "${rw_outcome}" = "long" ] && [[ "${rw_oldest_min}" =~ ^[0-9]+$ ]] && [ "${rw_oldest_min}" -ge "${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}" ]; then
+			skip_cycle runner_wait_long "oldest_queued_min=${rw_oldest_min} max=${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES} last_run=${rw_last_run_id} last_age_hours=${rw_last_age_hours} window_hours=${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS}"
+		elif [ "${rw_outcome}" = "short" ] || [ "${rw_outcome}" = "long" ]; then
+			echo "PROMOTE_CYCLE_RUNNER_WAIT_CHECK outcome=clear max=${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES} calls=${rw_calls:-0}"
+		else
+			echo "::warning::PROMOTE_CYCLE_RUNNER_WAIT_CHECK outcome=read_failed calls=${rw_calls:-0} — running the cycle without the runner-wait check."
+		fi
+	fi
+fi
 # Freeze after the idle wait, right before the gate, so a gate_busy skip never
 # touches the tag and the freeze window stays short.
 gate_ref="${PROMOTE_CYCLE_DEFAULT_BRANCH}"
@@ -1797,7 +2064,7 @@ gate_conclusion=""
 gate_head_sha=""
 while [ "$(date +%s)" -lt "${deadline}" ]; do
 	sleep "${PROMOTE_CYCLE_GATE_POLL_SECS}"
-	runs_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=50")" || continue
+	runs_json="$(gh_retry gh_read --same-repo-only api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=50")" || continue
 	if [ -z "${gate_run_id}" ]; then
 		gate_run_id="$(printf '%s' "${runs_json}" | jq -r --argjson before "${before_gate_ids}" --arg branch "${gate_ref}" --arg title "Test & Mark Stable Release [cycle:${GITHUB_RUN_ID}]" '[.workflow_runs[]? | select((.id as $id | ($before | index($id) | not)) and (.head_branch // "") == $branch and (.display_title // "") == $title)] | sort_by(.created_at) | first | .id // empty')"
 		[ -n "${gate_run_id}" ] || continue

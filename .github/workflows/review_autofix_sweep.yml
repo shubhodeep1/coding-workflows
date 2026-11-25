@@ -240,6 +240,7 @@ jobs:
           # runs every tick. P11b (Refs #8291) first shipped it default-on as
           # `ZOMBIE_RUN_REAPER_ENABLED: ${{ vars.ZOMBIE_RUN_REAPER_ENABLED || 'true' }}`;
           # setting the repo variable to true restores that.
+          # The same knob is the wedged-queued floor (issue #9473); 0 disables it.
           ZOMBIE_RUN_REAPER_ENABLED: ${{ vars.ZOMBIE_RUN_REAPER_ENABLED || 'false' }}
           # Also the wedged-queued floor beneath SWEEP_STALE_QUEUED_MINUTES
           # (issue #9473); 0 disables it. Defined once: a second key in this

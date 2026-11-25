@@ -80,7 +80,7 @@ jobs:
           )
         )
       )
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
     timeout-minutes: 120
     env:
       AI_ENGINE_FALLBACK_POLICY: ${{ vars.AI_ENGINE_FALLBACK_POLICY || 'capacity' }}
@@ -2536,6 +2536,9 @@ jobs:
           # The pr_on_branch hold also needs the judge's `wait` verdict, which
           # UNBLOCK_JUDGE_WAIT_ENABLED=false removes (same default as unblock_judge.yml).
           UNBLOCK_JUDGE_WAIT_ENABLED: ${{ vars.UNBLOCK_JUDGE_WAIT_ENABLED || 'true' }}
+          # Issue #9812: the check-triage text promises closure only while the
+          # unblock judge's resolution gate runs (same default as unblock_judge.yml).
+          CHECK_TRIAGE_RESOLVED_GATE_ENABLED: ${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}
         run: |
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
@@ -2596,6 +2599,13 @@ jobs:
           if [ -s "${ISSUE_META_FILE:-}" ] &&
             jq -e 'any(.labels[]?.name; . == "ai:check-triage")' "${ISSUE_META_FILE}" >/dev/null 2>&1; then
             BLOCKED_CHECK_TRIAGE=true
+          fi
+          # Issue #9812: with the unblock judge or its check-triage resolution
+          # gate off, nothing closes the issue, so keep the human-input comment
+          # and CRITICAL page. Parsed like scripts/unblock_judge.sh reads them.
+          if [ "${UNBLOCK_JUDGE_ENABLED:-true}" = "false" ] ||
+            [ "$(printf '%s' "${CHECK_TRIAGE_RESOLVED_GATE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" = "false" ]; then
+            BLOCKED_CHECK_TRIAGE=false
           fi
 
           RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
@@ -4234,7 +4244,7 @@ jobs:
     if: >-
       always() && needs.plan.result == 'failure' &&
       !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       id-token: write
