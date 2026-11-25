@@ -454,6 +454,10 @@ SIGNED_COMMENT_BOT_LOGIN = "github-actions[bot]"
 # Looser than comment_signature.SIG_LINE_RE on purpose: anything that looks
 # signed counts, so a malformed signature line is unverifiable, not unsigned.
 SIGNED_COMMENT_LINE_RE = re.compile(r"\n<!-- ai-comment-sig:v1 [^\n]*-->[ \t\r\n]*\Z")
+# Looser still, for the fail-closed hold only: a bot entry comment whose
+# signature line is no longer last (text appended after it by hand) can never
+# verify, but it must keep its key unverified rather than drop out of both sets.
+SIGNED_COMMENT_MARKER = "<!-- ai-comment-sig:v1 "
 _COMMENT_SIGNATURE_STATE: dict = {"loaded": False, "module": None}
 
 
@@ -525,7 +529,9 @@ def _unverified_entry_keys(comments: list[dict], latest: dict[str, dict]) -> lis
 	"""
 	keys: set[str] = set()
 	for comment in comments:
-		if not isinstance(comment.get("id"), int) or not _is_signed_bot_comment(comment):
+		user = comment.get("user") if isinstance(comment.get("user"), dict) else {}
+		if (not isinstance(comment.get("id"), int) or user.get("login") != SIGNED_COMMENT_BOT_LOGIN
+				or SIGNED_COMMENT_MARKER not in str(comment.get("body") or "")):
 			continue
 		match = ENTRY_RE.match(str(comment.get("body") or "").replace("\r\n", "\n").split("\n", 1)[0].strip())
 		if match and comment["id"] > int((latest.get(match.group(1)) or {}).get("id") or 0):

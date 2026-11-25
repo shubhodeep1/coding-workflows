@@ -1525,3 +1525,17 @@ def test_operator_step_upsert_dedupes_against_a_verified_signed_entry(
 	_signed_entry(fake, number, 10, writer.render_entry("pr-1", "one", STEPS))
 	writer.upsert(REPO, "pr-1", "one", STEPS)
 	assert _posts(fake, number) == []
+
+
+def test_operator_step_resolve_holds_a_signed_entry_with_text_after_its_signature(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+	# A person appended a note after the signature line: it can never verify,
+	# and it must still keep the tracker open instead of dropping out.
+	monkeypatch.setenv("AI_COMMENT_SIGNING_SECRET", SIGNING_SECRET)
+	number = _tracker(fake)
+	_done_entry(fake, number, 10, "pr-1")
+	comment = _signed_entry(fake, number, 11, writer.render_entry("pr-2", "two", [SECRET_STEP], RELEASE_SHA))
+	comment["body"] += "\nticked by hand"
+	result = writer.resolve(REPO, BOT)
+	assert result["closed"] is False and result["unverified"] == 1 and fake.patches() == []
+	assert f"op=close issue={number} outcome=open reason=unverified_signed_entries" in capsys.readouterr().err
