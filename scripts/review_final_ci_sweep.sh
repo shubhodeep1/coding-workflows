@@ -100,8 +100,9 @@
 # Priority lane (issue #10048; helpers in scripts/pr_checks_lib.sh). With
 # PRIORITY_LANE_ENABLED on, snapshot rows marked `priority_lane: true` (a
 # verified linked-issue priority label, written by
-# scripts/review_sweep_head_gate.sh) are checked first among the known
-# gate-success heads, so the per-tick cap reaches them first. The hold file
+# scripts/review_sweep_head_gate.sh) are checked first (known gate-success
+# priority heads, then priority heads whose gate still needs a read), so the
+# per-tick cap reaches them first. The hold file
 # FINAL_CI_SWEEP_PRIORITY_LANE_FILE (written by the enumerate step; lines
 # `hold=true|false`, `priority=<csv>|-` and optional `since=<epoch>|-`, when
 # the hold started; missing or malformed = no hold)
@@ -110,7 +111,7 @@
 # base sync of every other head wait (_pr_priority_lane_decide, at most
 # PRIORITY_LANE_MAX_DEFER_MINUTES from the hold start, or from the PR's
 # updated_at when the file has no `since=`). A head deferred this way spends
-# no FINAL_CI_SWEEP_MAX_PER_TICK slot, and the base-sync pass also takes
+# no FINAL_CI_SWEEP_MAX_PER_TICK slot and no status read, and the base-sync pass also takes
 # priority heads first. No API call.
 # Log: `PRIORITY_LANE pr=<n> outcome=... surface=final_ci`; the summary lines
 # gain `deferred_priority_lane=<n>`.
@@ -355,9 +356,13 @@ review_final_ci_sweep_main()
 			| select(.head_sha as $s | ($covered | index($s)) == null)
 			| . + {known_gate: (.head_gate_state // "unknown" | if type == "string" and test("^[a-z]{1,16}$") then . else "unknown" end)}]
 		| if $lane_on then
+			# Priority heads whose gate still needs a read come before other
+			# heads too (issue #10048), so a non-priority head cannot take the
+			# tick slot first; known non-success heads cost no slot anywhere.
 			(map(select(.known_gate == "success" and .priority_lane == true))
+				+ map(select(.known_gate != "success" and .priority_lane == true))
 				+ map(select(.known_gate == "success" and .priority_lane != true))
-				+ map(select(.known_gate != "success")))
+				+ map(select(.known_gate != "success" and .priority_lane != true)))
 		else
 			(map(select(.known_gate == "success")) + map(select(.known_gate != "success")))
 		end
@@ -371,12 +376,14 @@ review_final_ci_sweep_main()
 			skipped_gate=$((skipped_gate + 1))
 			continue
 		fi
-		# Priority lane (issue #10048): a head already known as success is held
-		# back before the cap check, so a deferred head spends no slot and a
-		# later head past the cap is still reached this tick. Only while a slot
-		# is left, so a `released` line always means the head is checked now.
+		# Priority lane (issue #10048): a non-priority head (gate known as
+		# success, or still to be read) is held back before the cap check and
+		# the status read, so a deferred head spends neither a slot nor a read
+		# and a later head past the cap is still reached this tick. Only while
+		# a slot is left, so a `released` line always means the head is
+		# checked now.
 		fci_lane_done=false
-		if [ "${fci_lane_on}" = "true" ] && [ "${known_state}" = "success" ] \
+		if [ "${fci_lane_on}" = "true" ] \
 			&& [ "${fci_lane_prio[${number}]:-false}" != "true" ] && [ "${checked}" -lt "${max}" ]; then
 			fci_lane_done=true
 			if ! _pr_priority_lane_decide final_ci "${number}" \
@@ -397,8 +404,8 @@ review_final_ci_sweep_main()
 			skipped_gate=$((skipped_gate + 1))
 			continue
 		fi
-		# Priority lane (issue #10048): hold back other heads while a
-		# priority PR's run waits; the PR is checked again next tick.
+		# Priority lane (issue #10048): a priority head logs `first` here,
+		# once its gate is read as success (other heads were decided above).
 		if [ "${fci_lane_on}" = "true" ] && [ "${fci_lane_done}" != "true" ] && ! _pr_priority_lane_decide final_ci "${number}" \
 			"${fci_lane_prio[${number}]:-false}" "${fci_lane_hold}" "${fci_lane_updated[${number}]:-}" "" "${fci_lane_since}"; then
 			fci_lane_deferred=$((fci_lane_deferred + 1))
