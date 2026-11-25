@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_merge_train.sh:2998-3008 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: After a lost race, `_mt_merge_lease_conflict_unlabel_due` keeps the conflict label only if the winner's `released_conflict` entry matches the head this losing tick listed; ticks that overlap can list different heads, so the loser fails the awk test `(h == \"\" || $2 == h) && $3 == \"released_conflict\"` and deletes the `ai:merge-lease-conflict-released` label.\n  WHY: With the label gone and the H1 skip entry not blocking H2, the PR can be granted and released for a conflict a second time, which breaks D6 / the Phase 1 rule of at most one conflict release per PR. The poll, close and review workflows use separate concurrency groups, so their ticks can overlap. Reviewers disagree on severity: sonnet says NIT (the extra release is bounded, on a changed head, and needs a still-conflicting push between overlapping ticks, a window the agents fragment does not document); luna says MAJOR; gemini gives none. The highest (MAJOR\u2192high) is used. z-ai_glm-5_3-flash checked this finding and rejected it as unreachable, citing head-gate timing and scripts/pr_checks_lib.sh:3291-3297.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_merge_train.sh:`_mt_merge_lease_conflict_unlabel_due` lines 2998-3008 (callers line 2258 `\"${tick_skip_head:-}\"`, line 2676 `\"${tm_skip_head:-}\"`; set at lines 2236 / 2654) | severity=NIT | confidence=3\n  PROBLEM: The new head filter in the lost-race check `(h == \"\" || $2 == h) && $3 == \"released_conflict\"` drops the label when the winner released on H1 and the losing tick listed H2.\n  WHY: The PR loses its one-time marker, and the H1 skip entry does not block H2, so it can be released for a conflict a second time, which breaks D6. The head-agnostic match used before kept the label. The agents fragment does not document this new residual window. The impact is bounded: at most one extra release, on a changed head.\n- HARDENING: scripts/review_merge_train.sh `_mt_merge_lease_conflict_unlabel_due` (~line 3007): also keep the label when `rs == \"released\" && rp == p && $2 == rh`, or go back to the head-agnostic match, or document this window in the agents fragment. tests/test_merge_lease_ready_grant.py `ConflictRelease.test_lost_race_keeps_the_label_a_winner_relies_on`: add a case with an older-head plus a current-head `released_conflict` entry, and a case where the winner released on a different head. HARDENING_RISK_SCORE: 1 (2 related items)\n- TASK COMPLETENESS: NONE. The unmet `tests/test_review_merge_train.py` row is not counted: its failures are outside the lease-tick code and also fail on the merge-base. The catch-all `tests-system-python` job covers the ci.yml wiring.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_merge_train.sh:3007 (in _mt_merge_lease_conflict_unlabel_due) | confidence=4\n  PROBLEM: The head-match check `(h == \"\" || $2 == h)` is too strict and ignores valid `released_conflict` entries a concurrent winner wrote on a different head.\n  WHY: The loser on H2 rejects the winner's H1 entry and deletes `ai:merge-lease-conflict-released`. A later tick on H3 can then release the PR for a conflict again, which breaks the Phase 1 rule of at most one conflict release.\n- HARDENING: tests/test_merge_lease_ready_grant.py `ConflictRelease.test_lost_race_keeps_the_label_a_winner_relies_on`: add a winner record with both an older-head and a current-head `released_conflict` entry. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_merge_train.sh:`_mt_merge_lease_conflict_unlabel_due`, line 3007; called at lines 2258 and 2676. | severity=MAJOR | confidence=4\n  PROBLEM: The lost-race cleanup keeps the conflict label only when the winner's `released_conflict` skip entry matches the losing tick's observed head, but concurrent ticks can observe different heads.\n  WHY: The loser sees the winner's H1 entry, fails the head comparison and deletes the label. Once the H1 entry is pruned, the PR can be released for a conflict again, which breaks D6. The poll, close and review workflows use separate concurrency groups, so ticks can overlap.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- NOTE: Checked the consensus finding on `_mt_merge_lease_conflict_unlabel_due` (scripts/review_merge_train.sh:3004-3011, callers :2258 and :2676) and rejected it as unreachable. To trigger, the loser's newly pushed head needs a confirmed `ai-review/head-gate` inside the winner's seconds-wide window between listing and write. Also, scripts/pr_checks_lib.sh:3291-3297 drops the holder's own skip entries on every held write. The residual windows are accepted in agents.d/merge-lease-short-cs-p1-ready-grant.md.\n- TASK COMPLETENESS: NONE. The missing ci.yml hunk is not a gap: the `tests-system-python` catch-all (ci.yml:4411; tests/test_ci_wires_every_test_file.py:115-160) wires it. The `REVIEW_FINAL_CI_WORKFLOW` fallback to `'ci.yml'` was overridden on purpose with a documented reason.\n- HARDENING: tests/test_merge_lease_ready_grant.py `ConflictRelease.test_lost_race_keeps_the_label_a_winner_relies_on` (~line 305): add `(_record(4, state=\"released\", paths=\"\", skips=[f\"4:{'e' * 40}:released_conflict\", f\"4:{_sha(4)}:released_conflict\"]), True),`. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fc803c0e55c7cb1c5f9197ab06dfe80dc8331b44e187db730551d954b4380871",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10108,
+    "run_id": "45663255990",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45663255990",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125190957_38462642e8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10108,
+    "run_id": "45663255990"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T19:09:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
