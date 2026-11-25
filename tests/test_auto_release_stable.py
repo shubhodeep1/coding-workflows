@@ -691,7 +691,10 @@ def test_retry_goes_ahead_once_the_queue_has_drained() -> None:
 
 
 def _queued_reads(state: dict) -> list[str]:
-	return [path for path in _api_paths(state) if "status=queued" in path]
+	# The queue-count reads (`actions/runs?status=queued&per_page=1...`); the
+	# runner-wait read (issue #10037, `-f status=queued -f created=...`) is
+	# tracked separately as window_reads.
+	return [path for path in _api_paths(state) if "actions/runs?status=queued" in path]
 
 
 def test_queue_back_off_leaves_wedged_runs_out_of_the_count() -> None:
