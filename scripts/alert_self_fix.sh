@@ -216,11 +216,25 @@ text = re.sub(r"\{\{[A-Z0-9_]+\}\}", "", open(template, encoding="utf-8").read()
 diagnosis = json.load(open(diagnosis_path, encoding="utf-8"))
 
 
+def scalar(item):
+	# alert_triage.py emits each decision as {question, chosen, reason}.
+	if isinstance(item, dict):
+		parts = [str(item.get(key)) if isinstance(item.get(key), (str, int, float)) else "" for key in ("question", "chosen", "reason")]
+		return f"{parts[0]} -> {parts[1]}" + (f" ({parts[2]})" if parts[2] else "")
+	return str(item) if isinstance(item, (str, int, float)) else ""
+
+
+def defang(text):
+	# A diagnosis line starting with `===` cannot close the UNTRUSTED fence early.
+	text = text.replace("\r\n", "\n").replace("\r", "\n")
+	return re.sub(r"(?m)^[ \t]*===", "= ==", text)
+
+
 def field(name):
 	value = diagnosis.get(name)
 	if isinstance(value, list):
-		return "\n".join(f"- {item}" for item in value if isinstance(item, (str, int, float)))
-	return str(value) if isinstance(value, (str, int, float)) else ""
+		return defang("\n".join(f"- {text}" for text in (scalar(item) for item in value) if text))
+	return defang(str(value)) if isinstance(value, (str, int, float)) else ""
 
 
 plan = "\n".join([
@@ -434,9 +448,17 @@ def clean(value, limit=4000):
 	return text[:limit]
 
 
+def as_text(item):
+	# alert_triage.py emits each decision as {question, chosen, reason}.
+	if isinstance(item, dict):
+		parts = [str(item.get(key)) if isinstance(item.get(key), (str, int, float)) else "" for key in ("question", "chosen", "reason")]
+		return f"{parts[0]} -> {parts[1]}" + (f" ({parts[2]})" if parts[2] else "")
+	return item
+
+
 def items(name):
 	value = diagnosis.get(name)
-	return [clean(item, 300) for item in value[:50]] if isinstance(value, list) else []
+	return [clean(as_text(item), 300) for item in value[:50]] if isinstance(value, list) else []
 
 
 run_re = re.compile(r"\Ahttps://github\.com/" + re.escape(repo) + r"/actions/runs/[0-9]+(/job/[0-9]+)?\Z")
@@ -472,7 +494,7 @@ lines = [
 	"|---|---|",
 	f"| 1 | Engine: {engine}; verified by the credential-free pre-push affected-test gate before this PR opened. |",
 	"| 2 | Auto-merge enabled (squash, head commit pinned); the normal review pipeline still gates the merge. |",
-	*(f"| {index} | {decision.replace('|', '/')} |" for index, decision in enumerate(decisions, start=3)),
+	*(f"| {index} | {' '.join(decision.split()).replace('|', '/')} |" for index, decision in enumerate(decisions, start=3)),
 	"",
 	*(f"Refs: {ref}" for ref in refs),
 	"",

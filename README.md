@@ -3165,6 +3165,8 @@ only, both `false` by default) through `scripts/alert_inbox_capture.sh`:
 | `ALERT_SELF_FIX_EDITOR_TIMEOUT_SECS` | `3600` | Wall clock of the alert self-fix editor (`IMPLEMENT` role, Claude then codex fallback) |
 | `ALERT_SELF_FIX_GATE_TIMEOUT_MINUTES` | `20` | Timeout of the pre-push affected-test gate that verifies an alert self-fix before its PR opens |
 | `AI_ENGINE_ALERT_BREAK_GLASS_REVIEWER` | — | Per-role engine override (`claude`/`codex`) of the read-only break-glass reviewer; empty uses `.github/ai/claude_engine.json` (Claude, codex fallback) |
+| `ALERT_SELF_FIX_MODEL` | `WORKFLOW_EDITOR_MODEL`, then `openai/gpt-6-sol` | Codex model of the alert self-fix editor's fallback (`IMPLEMENT` role; the Claude model comes from `.github/ai/claude_engine.json`) |
+| `ALERT_BREAK_GLASS_MODEL` | `WORKFLOW_EDITOR_MODEL`, then `openai/gpt-6-sol` | Codex model of the `ALERT_BREAK_GLASS_REVIEWER` role's fallback (the Claude model comes from `.github/ai/claude_engine.json`) |
 
 ## Semantic Cache (Clarification Only)
 
