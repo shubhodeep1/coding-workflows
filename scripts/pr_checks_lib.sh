@@ -3607,7 +3607,15 @@ _merge_lease_queue_order()
 # `queued` for PRIORITY_LANE_WAIT_MINUTES (wedged runs, the #9473 rule, never
 # count), new review / final-CI dispatches and lease grants for other PRs are
 # held back, each for at most PRIORITY_LANE_MAX_DEFER_MINUTES measured from
-# the PR's `updated_at`. Runs already queued or running are never cancelled.
+# when the hold started (the oldest qualifying queued priority run's
+# created_at plus the wait; the PR's `updated_at` only when that start is
+# unknown). Runs already queued or running are never cancelled.
+# Known limit: no state persists between ticks, so the hold start is worked
+# out again each tick from the runs queued at that moment. When the oldest
+# priority run leaves the queue while a younger one still qualifies, a new
+# hold starts and the cap counts from it. Each such restart extends a
+# deferral by less than the time the previous priority run sat in the queue,
+# so the total is bounded by the chain of priority runs queued back to back.
 # None of these helpers makes an API call.
 # Env: PRIORITY_LANE_ENABLED (default true; only true/1/yes/on turn it on, any
 # other value restores the behaviour from before), PRIORITY_LANE_WAIT_MINUTES

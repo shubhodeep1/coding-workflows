@@ -373,10 +373,11 @@ review_final_ci_sweep_main()
 		fi
 		# Priority lane (issue #10048): a head already known as success is held
 		# back before the cap check, so a deferred head spends no slot and a
-		# later head past the cap is still reached this tick.
+		# later head past the cap is still reached this tick. Only while a slot
+		# is left, so a `released` line always means the head is checked now.
 		fci_lane_done=false
 		if [ "${fci_lane_on}" = "true" ] && [ "${known_state}" = "success" ] \
-			&& [ "${fci_lane_prio[${number}]:-false}" != "true" ]; then
+			&& [ "${fci_lane_prio[${number}]:-false}" != "true" ] && [ "${checked}" -lt "${max}" ]; then
 			fci_lane_done=true
 			if ! _pr_priority_lane_decide final_ci "${number}" \
 				"${fci_lane_prio[${number}]:-false}" "${fci_lane_hold}" "${fci_lane_updated[${number}]:-}" "" "${fci_lane_since}"; then

@@ -1169,3 +1169,16 @@ def test_sweep_workflow_passes_the_priority_lane_settings() -> None:
 	step = step[:step.index("\n      - name:")]
 	assert "FINAL_CI_SWEEP_PRIORITY_LANE_FILE: ${{ runner.temp }}/priority-lane-hold.txt" in step
 	assert "PRIORITY_LANE_ENABLED: ${{ vars.PRIORITY_LANE_ENABLED || 'true' }}" in step
+
+
+def test_sweep_released_line_only_when_a_slot_is_left(fake_gh, tmp_path: Path) -> None:
+	# Cap 1: priority PR 3 takes the only slot. PR 4 is past the defer cap but
+	# gets no check this tick, so no `released` line is logged for it.
+	hold = tmp_path / "hold.txt"
+	hold.write_text("hold=true\npriority=3\n", encoding="utf-8")
+	snapshot = _lane_snapshot() + [{"number": 4, "head_ref": "ai/issue-4", "head_sha": f"{4:040x}",
+		"head_gate_state": "success", "priority_lane": False, "updated_at": "2020-01-01T00:00:00Z"}]
+	result, calls = _sweep(fake_gh, tmp_path, snapshot, LANE_FIXTURES,
+		{"FINAL_CI_SWEEP_PRIORITY_LANE_FILE": str(hold), "FINAL_CI_SWEEP_MAX_PER_TICK": "1"})
+	assert _dispatched_prs(calls) == ["3"], result.stdout + result.stderr
+	assert "PRIORITY_LANE pr=4 outcome=released" not in result.stdout
