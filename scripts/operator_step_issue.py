@@ -469,6 +469,8 @@ def _comment_signature_module():
 			spec.loader.exec_module(module)
 			if callable(getattr(module, "normalize_comment", None)):
 				_COMMENT_SIGNATURE_STATE["module"] = module
+			else:
+				print("OPERATOR_STEP_RESOLVE op=verify outcome=error reason=signature_module_unavailable (AttributeError)", file=sys.stderr)
 		except Exception as exc:  # noqa: BLE001 - any load failure leaves signed comments unverified
 			print(f"OPERATOR_STEP_RESOLVE op=verify outcome=error reason=signature_module_unavailable ({type(exc).__name__})", file=sys.stderr)
 	return _COMMENT_SIGNATURE_STATE["module"]
@@ -992,6 +994,7 @@ def resolve(repo: str, trusted_login: str | None = None, max_compares: int = MAX
 		recheck_unverified = _unverified_entry_keys(recheck_comments, recheck_latest)
 		if recheck_unverified:
 			_log_unverified(number, recheck_unverified)
+			result["unverified"] = len(recheck_unverified)
 			reason = "unverified_signed_entries"
 		elif recheck_unticked != 0 or set(recheck_latest) - set(latest):
 			reason = "recheck_changed"
@@ -1037,8 +1040,12 @@ def resolve(repo: str, trusted_login: str | None = None, max_compares: int = MAX
 				raise
 			# A signed entry that arrived after the re-read and does not verify
 			# counts as a racing entry too.
+			after_close_unverified = _unverified_entry_keys(after_close_comments, after_close)
+			if after_close_unverified:
+				_log_unverified(number, after_close_unverified)
+				result["unverified"] = len(after_close_unverified)
 			if (any(key not in recheck_latest or comment["id"] != recheck_latest[key]["id"] for key, comment in after_close.items())
-					or _unverified_entry_keys(after_close_comments, after_close)):
+					or after_close_unverified):
 				_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", "state=open", "-f", "state_reason=reopened"])
 				result["closed"] = False
 				reason = "reopened_after_close"
