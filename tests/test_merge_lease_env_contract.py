@@ -23,8 +23,13 @@ Rules enforced here, for every workflow-level, job-level and step-level
 4. Unwired settings. UNWIRED_KEYS are read by the script with built-in
    defaults and are not repository variables (Q1=A on issue #10078). Wiring
    one is a separate, deliberate change.
-5. Unknown settings. Any other MERGE_LEASE_* env key must first be
-   classified in one of the two lists above.
+5. Optional settings. OPTIONAL_KEYS are read only by the steps that need
+   them (MERGE_LEASE_HOLD_LABELS: the merge-train release steps), so they
+   are not part of the full set. Where one is passed it uses the rule 2 form,
+   and its default equals the scripts/pr_checks_lib.sh default when the
+   script carries exactly one; otherwise every workflow site agrees.
+6. Unknown settings. Any other MERGE_LEASE_* env key must first be
+   classified in one of the three lists above.
 """
 
 from __future__ import annotations
@@ -57,6 +62,13 @@ UNWIRED_KEYS = (
 	"MERGE_LEASE_MAX_HOLD_MINUTES",
 	"MERGE_LEASE_REF_PREFIX",
 	"MERGE_LEASE_METRICS_ENABLED",
+)
+
+# Per-step settings outside the full set (rule 5). MERGE_LEASE_HOLD_LABELS is
+# passed by the merge-train release steps of cancel_on_pr_close.yml and
+# orchestrate_poll.yml on main (CI run 45608850132, shard 31).
+OPTIONAL_KEYS = (
+	"MERGE_LEASE_HOLD_LABELS",
 )
 
 # (workflow file name, step name, key) -> the only literal value accepted.
@@ -115,6 +127,23 @@ def script_defaults(lib_text: str) -> dict[str, str]:
 	return defaults
 
 
+def optional_script_defaults(lib_text: str) -> dict[str, str]:
+	"""Map each OPTIONAL_KEYS key to its scripts/pr_checks_lib.sh default.
+
+	A key is left out when the script has no default, several different ones,
+	or one built from another expansion; rule 5 then compares the workflow
+	sites with each other instead.
+	"""
+	out: dict[str, str] = {}
+	for key in OPTIONAL_KEYS:
+		found = set(re.findall(r"\$\{" + re.escape(key) + r":?-([^}]*)\}", lib_text))
+		if len(found) == 1:
+			value = found.pop()
+			if "$" not in value:
+				out[key] = value
+	return out
+
+
 def _literal_has_comment(text: str, key: str, literal: str) -> bool:
 	lines = text.splitlines()
 	pattern = re.compile(r"^\s*" + re.escape(key) + r":\s*" + re.escape(literal) + r"\s*$")
@@ -126,8 +155,11 @@ def _literal_has_comment(text: str, key: str, literal: str) -> bool:
 	return all(i > 0 and lines[i - 1].strip().startswith("#") and lines[i - 1].strip().lstrip("#").strip() for i in hits)
 
 
-def violations(files: dict[str, str], defaults: dict[str, str]) -> list[str]:
+def violations(files: dict[str, str], defaults: dict[str, str], optional_defaults: dict[str, str] | None = None) -> list[str]:
 	out: list[str] = []
+	optional_defaults = optional_defaults or {}
+	# key -> [(where, default)] for optional keys without a script default.
+	optional_seen: dict[str, list[tuple[str, str]]] = {}
 	for name, text in sorted(files.items()):
 		if "MERGE_LEASE_" not in text and "MERGE_BASE_FRESHNESS_ENABLED" not in text:
 			continue
@@ -141,6 +173,19 @@ def violations(files: dict[str, str], defaults: dict[str, str]) -> list[str]:
 						"separate, deliberate change that must also update its README row and "
 						"UNWIRED_KEYS in tests/test_merge_lease_env_contract.py"
 					)
+				elif key in OPTIONAL_KEYS:
+					value = "" if env[key] is None else str(env[key])
+					match = VALUE_RE.match(value)
+					if not match or match.group(1) != key:
+						out.append(f"{where}: {key} must be ${{{{ vars.{key} || '<default>' }}}}")
+					elif key in optional_defaults:
+						if match.group(2) != optional_defaults[key]:
+							out.append(
+								f"{where}: {key} default '{match.group(2)}' differs from the "
+								f"scripts/pr_checks_lib.sh default '{optional_defaults[key]}'"
+							)
+					else:
+						optional_seen.setdefault(key, []).append((where, match.group(2)))
 				elif key not in REQUIRED_KEYS:
 					out.append(
 						f"{where}: unknown merge-lease setting {key}; classify it in REQUIRED_KEYS "
@@ -178,6 +223,9 @@ def violations(files: dict[str, str], defaults: dict[str, str]) -> list[str]:
 					)
 				elif not _literal_has_comment(text, key, literal):
 					out.append(f"{where}: literal {key}: {literal} needs a # comment line directly above naming the reason")
+	for key, sites in sorted(optional_seen.items()):
+		if len({default for _, default in sites}) > 1:
+			out.append(f"{key}: workflow defaults disagree: " + "; ".join(f"{where} '{default}'" for where, default in sites))
 	return out
 
 
@@ -214,7 +262,9 @@ if yaml is None and os.environ.get("GITHUB_ACTIONS") == "true":
 class MergeLeaseEnvContractTest(unittest.TestCase):
 	@classmethod
 	def setUpClass(cls) -> None:
-		cls.defaults = script_defaults(LIB_PATH.read_text(encoding="utf-8"))
+		lib_text = LIB_PATH.read_text(encoding="utf-8")
+		cls.defaults = script_defaults(lib_text)
+		cls.optional_defaults = optional_script_defaults(lib_text)
 
 	def _full(self, drop: tuple[str, ...] = (), override: dict[str, str] | None = None) -> str:
 		override = override or {}
@@ -235,7 +285,7 @@ class MergeLeaseEnvContractTest(unittest.TestCase):
 		self.assertRegex(self.defaults["MERGE_LEASE_TTL_MINUTES"], r"^[1-9][0-9]*$")
 
 	def test_repo_workflows_satisfy_contract(self) -> None:
-		found = violations(_repo_workflow_files(), self.defaults)
+		found = violations(_repo_workflow_files(), self.defaults, self.optional_defaults)
 		self.assertEqual(found, [], "\n".join(found))
 
 	def test_fixture_full_set_passes(self) -> None:
@@ -297,6 +347,34 @@ class MergeLeaseEnvContractTest(unittest.TestCase):
 		found = violations({"f.yml": text}, self.defaults)
 		self.assertEqual(len(found), 1, found)
 		self.assertIn("unknown merge-lease setting", found[0])
+
+	def test_fixture_optional_key_without_full_set_passes(self) -> None:
+		text = _fixture("          MERGE_LEASE_HOLD_LABELS: ${{ vars.MERGE_LEASE_HOLD_LABELS || 'a,b' }}")
+		self.assertEqual(violations({"f.yml": text}, self.defaults, {}), [])
+
+	def test_fixture_optional_key_literal_fails(self) -> None:
+		text = _fixture("          MERGE_LEASE_HOLD_LABELS: a,b")
+		found = violations({"f.yml": text}, self.defaults, {})
+		self.assertEqual(len(found), 1, found)
+		self.assertIn("MERGE_LEASE_HOLD_LABELS must be", found[0])
+
+	def test_fixture_optional_key_script_default_mismatch_fails(self) -> None:
+		text = _fixture("          MERGE_LEASE_HOLD_LABELS: ${{ vars.MERGE_LEASE_HOLD_LABELS || 'a' }}")
+		found = violations({"f.yml": text}, self.defaults, {"MERGE_LEASE_HOLD_LABELS": "b"})
+		self.assertEqual(len(found), 1, found)
+		self.assertIn("default 'a' differs", found[0])
+
+	def test_fixture_optional_key_sites_disagree_fails(self) -> None:
+		first = _fixture("          MERGE_LEASE_HOLD_LABELS: ${{ vars.MERGE_LEASE_HOLD_LABELS || 'a' }}")
+		second = _fixture("          MERGE_LEASE_HOLD_LABELS: ${{ vars.MERGE_LEASE_HOLD_LABELS || 'b' }}")
+		found = violations({"f.yml": first, "g.yml": second}, self.defaults, {})
+		self.assertEqual(len(found), 1, found)
+		self.assertIn("workflow defaults disagree", found[0])
+
+	def test_optional_script_defaults_skip_nested_expansion(self) -> None:
+		self.assertEqual(optional_script_defaults("${MERGE_LEASE_HOLD_LABELS-x,y}"), {"MERGE_LEASE_HOLD_LABELS": "x,y"})
+		self.assertEqual(optional_script_defaults("${MERGE_LEASE_HOLD_LABELS:-${OTHER}}"), {})
+		self.assertEqual(optional_script_defaults(""), {})
 
 	def test_fixture_job_env_full_set_covers_step(self) -> None:
 		job_env = "    env:\n" + self._full().replace("          ", "      ") + "\n"
