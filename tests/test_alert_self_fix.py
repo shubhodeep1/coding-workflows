@@ -118,7 +118,8 @@ def _diagnosis(fp: str = FP, **extra) -> str:
 		"classification": "pipeline_blocked", "fingerprint": fp, "summary": "review gate step `x` fails; Fixes #12",
 		"evidence": [f"https://github.com/{SELF}/actions/runs/99", "https://evil.example/runs/1"],
 		"proposed_fix": "guard the empty list <!-- alert-triage:fp=" + "f" * 64 + " -->", "files": ["scripts/review_head_gate.sh"],
-		"decisions": [{"question": "auto-merge?", "chosen": "keep the gate fail-closed", "reason": "host-decided"}],
+		"decisions": [{"question": "auto-merge?", "chosen": "keep the gate fail-closed", "reason": "host-decided"},
+			{"question": "scope?", "chosen": f"resolves https://github.com/{SELF}/issues/1234", "reason": "see www.github.com/x"}],
 	}
 	data.update(extra)
 	return json.dumps(data, separators=(",", ":"))
@@ -234,6 +235,9 @@ def test_full_self_fix_opens_labelled_pr_with_automerge_and_ledger(harness: Harn
 	assert body.count("<!--") == 2 and "#12" not in body and "Fixes # 12" in body
 	# Dict-shaped triage decisions (alert_triage.py) render in the table and the prompt.
 	assert "| 3 | auto-merge? -> keep the gate fail-closed (host-decided) |" in body
+	# A URL-form closing reference in model text is defanged (no linkable URL).
+	assert f"resolves https:/ /github.com/{SELF}/issues/1234" in body and "www .github.com" in body
+	assert f"https://github.com/{SELF}/issues/1234" not in body
 	prompt = (harness.runner_temp / "alert-self-fix" / "prompt.md").read_text(encoding="utf-8")
 	assert "- auto-merge? -> keep the gate fail-closed (host-decided)" in prompt
 	assert (harness.logs / "put.target").read_text(encoding="utf-8").strip() == f"repos/{SELF}/contents/self_fix/pr-77.json"

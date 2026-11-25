@@ -440,10 +440,15 @@ diagnosis = json.load(open(diagnosis_path, encoding="utf-8"))
 
 def clean(value, limit=4000):
 	# Model text: no backticks (cannot break the fence), no HTML comments
-	# (cannot forge markers), no `#<n>` issue references (cannot auto-close).
+	# (cannot forge markers), no `#<n>` issue references and no linkable
+	# URLs (a URL-form `fixes https://github.com/o/r/issues/<n>` would close
+	# a non-tracking issue on the squash merge; the lint blocks only tracking
+	# issues). The trusted `Refs:` lines never pass through clean().
 	text = str(value) if isinstance(value, (str, int, float)) else ""
 	text = text.replace("`", "'").replace("<!--", "<! --").replace("-->", "-- >")
 	text = re.sub(r"#(?=[0-9])", "# ", text)
+	text = re.sub(r"(?i)\b(https?):/{2}", r"\1:/ /", text)
+	text = re.sub(r"(?i)\bwww\.", "www .", text)
 	text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
 	return text[:limit]
 
