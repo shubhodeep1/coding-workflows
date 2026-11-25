@@ -2466,6 +2466,18 @@ class LeaseSourceIssueGuard(unittest.TestCase):
 		self.assertIn("outcome=wait reason=source_issue_not_planned", out)
 		self.assertNotIn(REF, h.state.get("refs", {}), "no lease record is written for an orphan")
 
+	def test_freshness_gate_names_the_orphan_reason_not_a_blocker(self) -> None:
+		# _pr_base_fresh_for_merge prints the orphan line, never "PR #?" and a re-dispatch promise.
+		h = _Harness({"pulls": [_pull(9562, head_ref="ai/issue-9519")], "files": {"9562": [".github/workflows/ci.yml"]},
+			"compare": {"ahead_by": 2, "files": [{"filename": ".github/workflows/ci.yml"}], "commits": [{"sha": "e" * 40}, {"sha": "9" * 40}]},
+			"graphql": _issue_states(n9519=("CLOSED", "NOT_PLANNED"))})
+		res = h.lib(f'_pr_base_fresh_for_merge 9562 {HEAD} main; echo "rc=$? outcome=$PR_BASE_FRESHNESS_OUTCOME"')
+		out = res.stdout + res.stderr
+		self.assertIn("rc=1 outcome=lease_wait", res.stdout, out)
+		self.assertIn("its source issue was closed as not planned", out)
+		self.assertNotIn("is re-dispatched when the lease is granted", out)
+		self.assertNotIn("updated", h.state, "no update-branch call for an orphan")
+
 	def test_update_gate_passes_over_an_orphaned_waiter(self) -> None:
 		h = _Harness(self._update_state(_issue_states(n5=("CLOSED", "NOT_PLANNED"))))
 		rc, out = _gate(h, 6, "update")
