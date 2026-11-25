@@ -269,6 +269,111 @@ class PostStageBehaviourTests(unittest.TestCase):
 		self.assertIn("CHECK_TRIAGE created issue=https://github.com/owner/repo/issues/99 fp=", proc.stdout)
 		self.assertIn("CHECK_TRIAGE op=post stage=created pr=17", proc.stdout)
 		self.assertLess(proc.stdout.index("CHECK_TRIAGE created issue="), proc.stdout.index("stage=created"))
+		self.assertIn("--title CI failure: CI / lint on PR #17 --body-file", self.calls.read_text())
+
+	# Issue #9674: base-keyed metadata names the failing base branch in the title.
+	def _write_base_keyed_body(self, ref: str = "main") -> None:
+		(self.runtime / "issue_body.md").write_text(
+			f"<!-- check-failure-triage:fp={FINGERPRINT} -->\n<!-- check-failure-triage:gen=1 -->\n"
+			f"<!-- check-failure-triage:root={FINGERPRINT} -->\n<!-- check-failure-triage:pr=17 -->\n"
+			f"<!-- check-failure-triage:base={ref} -->\n\nTriage body\n",
+			encoding="utf-8",
+		)
+
+	def _use_listing_gh(self, listing: str, listing_rc: int = 0) -> None:
+		# The pre-create re-check reads the open listing; the create prints a URL.
+		_write_executable(
+			self.bin / "gh",
+			'#!/usr/bin/env bash\n'
+			'printf "%s\\n" "$*" >> "$STUB_GH_CALLS"\n'
+			'case "$1" in\n'
+			f"  api) printf '%s' '{listing}'; exit {listing_rc} ;;\n"
+			'  *) printf "%s" "${STUB_GH_STDOUT:-}" ;;\n'
+			'esac\n',
+		)
+
+	def test_base_keyed_metadata_titles_the_issue_after_the_base_branch(self) -> None:
+		self._write_metadata({"fingerprint": FINGERPRINT, "generation": 1, "root": FINGERPRINT, "base_keyed_ref": "main"})
+		self._write_base_keyed_body()
+		self._use_listing_gh(json.dumps([{"number": 5, "body": "<!-- check-failure-triage:fp=" + "b" * 64 + " -->"}]))
+		proc = self._run()
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE op=post stage=created pr=17", proc.stdout)
+		calls = self.calls.read_text()
+		self.assertIn("--title CI failure: CI / lint on main (first seen on PR #17) --body-file", calls)
+		# The re-check reads the open triage listing before the create.
+		self.assertLess(calls.index("api --paginate --method GET repos/owner/repo/issues"), calls.index("issue create"))
+
+	def test_base_keyed_issue_filed_meanwhile_files_nothing(self) -> None:
+		# Another PR's run filed the base-keyed issue after this run's collect stage.
+		self._write_metadata({"fingerprint": FINGERPRINT, "generation": 1, "root": FINGERPRINT, "base_keyed_ref": "main"})
+		self._write_base_keyed_body()
+		self._use_listing_gh(json.dumps([{"number": 512, "body": f"<!-- check-failure-triage:fp={FINGERPRINT} -->"}]))
+		proc = self._run()
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE skip reason=base_triage_tracked base=main issue=512 pr=17 check=CI / lint stage=post", proc.stdout)
+		self.assertIn("CHECK_TRIAGE op=post stage=base_triage_tracked pr=17", proc.stdout)
+		self.assertNotIn("issue create", self.calls.read_text())
+		self.assertNotIn("op=supersede", proc.stdout)
+
+	def test_base_keyed_skip_logs_the_supersede_candidate_it_leaves_open(self) -> None:
+		# The supersede-check passed, then another PR's run filed the base-keyed issue.
+		_write_executable(self.support / "scripts" / "check_failure_triage.sh", "#!/usr/bin/env bash\nexit 0\n")
+		self._write_metadata({
+			"fingerprint": FINGERPRINT, "generation": 1, "root": FINGERPRINT, "base_keyed_ref": "main", "supersede_issue": "99",
+		})
+		self._write_base_keyed_body()
+		self._use_listing_gh(json.dumps([{"number": 512, "body": f"<!-- check-failure-triage:fp={FINGERPRINT} -->"}]))
+		proc = self._run()
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE op=supersede outcome=skip reason=base_triage_tracked old=99 pr=17 stage=post", proc.stdout)
+		self.assertIn("CHECK_TRIAGE op=post stage=base_triage_tracked pr=17", proc.stdout)
+		self.assertNotIn("issue create", self.calls.read_text())
+
+	def test_base_keyed_recheck_read_failure_files_as_before(self) -> None:
+		self._write_metadata({"fingerprint": FINGERPRINT, "generation": 1, "root": FINGERPRINT, "base_keyed_ref": "main"})
+		self._write_base_keyed_body()
+		for listing, listing_rc in (("", 1), ("", 0), ("not json", 0)):
+			with self.subTest(listing=listing, listing_rc=listing_rc):
+				if self.calls.exists():
+					self.calls.unlink()
+				self._use_listing_gh(listing, listing_rc)
+				proc = self._run()
+				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+				self.assertIn("CHECK_TRIAGE base_keyed recheck=read_failed outcome=file pr=17", proc.stdout)
+				self.assertIn("CHECK_TRIAGE op=post stage=created pr=17", proc.stdout)
+
+	def test_base_marker_mismatch_reports_metadata_invalid(self) -> None:
+		self._write_metadata({"fingerprint": FINGERPRINT, "generation": 1, "root": FINGERPRINT, "base_keyed_ref": "main"})
+		for body_ref in ("release", None):
+			with self.subTest(body_ref=body_ref):
+				if body_ref is None:
+					(self.runtime / "issue_body.md").write_text(f"<!-- check-failure-triage:fp={FINGERPRINT} -->\nTriage body\n", encoding="utf-8")
+				else:
+					self._write_base_keyed_body(body_ref)
+				proc = self._run()
+				self.assertNotEqual(proc.returncode, 0)
+				self.assertIn("CHECK_TRIAGE op=post stage=metadata_invalid pr=17", proc.stdout)
+				self.assertFalse(self.calls.exists())
+
+	def test_empty_or_non_string_base_keyed_ref_keeps_the_per_pr_title(self) -> None:
+		for value in ("", None, 7):
+			with self.subTest(value=value):
+				if self.calls.exists():
+					self.calls.unlink()
+				self._write_metadata({"fingerprint": FINGERPRINT, "generation": 1, "root": FINGERPRINT, "base_keyed_ref": value})
+				proc = self._run()
+				self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+				self.assertIn("--title CI failure: CI / lint on PR #17 --body-file", self.calls.read_text())
+
+	def test_invalid_base_keyed_ref_reports_metadata_invalid(self) -> None:
+		for value in ("ma..in", "main; rm -rf /", "x" * 201):
+			with self.subTest(value=value):
+				self._write_metadata({"fingerprint": FINGERPRINT, "generation": 1, "root": FINGERPRINT, "base_keyed_ref": value})
+				proc = self._run()
+				self.assertNotEqual(proc.returncode, 0)
+				self.assertIn("CHECK_TRIAGE op=post stage=metadata_invalid pr=17", proc.stdout)
+				self.assertFalse(self.calls.exists())
 
 
 if __name__ == "__main__":

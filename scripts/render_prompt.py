@@ -699,6 +699,13 @@ def load_phase_c_persona_prefixes(prompt_path: Path | None) -> dict[str, str]:
 		raise PromptLoadError(
 			f"Unable to read persona source '{persona_source_path}': {exc}"
 		) from exc
+	except UnicodeDecodeError as exc:
+		# Trusted config stays strict (no errors="replace"), but a bad byte now
+		# names the path instead of escaping as a traceback (#9261/#9949).
+		# UnicodeDecodeError is not a json.JSONDecodeError subclass.
+		raise PromptLoadError(
+			f"Unable to decode persona source '{persona_source_path}' as UTF-8: {exc}"
+		) from exc
 	except json.JSONDecodeError as exc:
 		raise PromptLoadError(
 			f"Invalid JSON persona source '{persona_source_path}' at line {exc.lineno}, column {exc.colno}: {exc.msg}"
@@ -975,6 +982,10 @@ def _load_contract_payload(contract_path: Path) -> dict[str, Any]:
 		contract_text = contract_path.read_text(encoding="utf-8")
 	except OSError as exc:
 		raise ContractLoadError(f"Unable to read contract '{contract_path}': {exc}") from exc
+	except UnicodeDecodeError as exc:
+		# Contracts are trusted config and stay strict; name the path instead of
+		# letting the decode error escape as a traceback (#9261/#9949).
+		raise ContractLoadError(f"Unable to decode contract '{contract_path}': {exc}") from exc
 
 	if yaml is not None:
 		try:

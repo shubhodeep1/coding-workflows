@@ -252,6 +252,8 @@ def test_prepare_analysis_context_omits_coverage_when_absent() -> None:
 	assert set(ctx) == {
 		"source_files", "scope", "summary", "per_repo", "per_workflow_family", "failing_runs",
 		"slow_runs", "recent_runs", "errors", "insufficient_data", "analysis_guidance",
+		# Additive per-reviewer aggregate (Refs #10058).
+		"reviewer_findings",
 	}
 	bad = analyzer.prepare_analysis_context(
 		{"collector_report": {"runs": [], "coverage": ["not", "an", "object"]}}
@@ -610,6 +612,46 @@ def test_prepare_analysis_context_fallback_summary_unknown_count_null_without_ru
 	assert ctx["summary"]["unknown_duration_count"] is None
 	# _summarize_runs itself still reports 0 for its other caller.
 	assert analyzer._summarize_runs([])["unknown_duration_count"] == 0
+
+
+def test_reviewer_findings_aggregate():
+	def counted(name: str, raised: int, lone: int, rejected: int, accepted: int, shared: int) -> dict:
+		return {"pr": 1, "round": "1", "reviewer": name, "outcome": "counted", "raised": raised, "lone": lone,
+			"lone_rejected": rejected, "lone_accepted": accepted, "shared": shared}
+
+	runs = [
+		{"repository": "o/r", "run_id": 1, "workflow_family": "review_autofix", "conclusion": "success",
+			"reviewer_findings": [counted("google/gemini-4-pro", 2, 1, 1, 0, 1), counted("x-ai/grok-5", 1, 1, 0, 1, 0)]},
+		{"repository": "o/r", "run_id": 2, "workflow_family": "review_autofix", "conclusion": "success",
+			"reviewer_findings": [counted("google/gemini-4-pro", 3, 3, 2, 1, 0), counted("bad|name", 9, 9, 9, 9, 9),
+				{"reviewer": "x-ai/grok-5", "outcome": "counted", "raised": -5, "lone": "x"}]},
+		{"repository": "o/r", "run_id": 3, "workflow_family": "review_autofix", "conclusion": "success",
+			"reviewer_findings": [{"pr": None, "round": "1", "reviewer": "x-ai/grok-5", "outcome": "unavailable", "reason": "flagged_by_missing"},
+				{"pr": None, "round": "1", "reviewer": "google/gemini-4-pro", "outcome": "unavailable", "reason": "flagged_by_missing"}]},
+		{"repository": "o/r", "run_id": 4, "workflow_family": "review_autofix", "conclusion": "failure"},
+		{"repository": "o/r", "run_id": 5, "workflow_family": "ci", "conclusion": "success", "reviewer_findings": "junk"},
+		# A valid line echoed by another trusted workflow adds nothing.
+		{"repository": "o/r", "run_id": 6, "workflow_family": "ci", "conclusion": "success",
+			"reviewer_findings": [counted("x-ai/grok-5", 99, 99, 99, 0, 0)]},
+	]
+	result = analyzer.aggregate_reviewer_findings(runs)
+	assert result == {
+		"review_runs": 4,
+		"runs_with_lines": 3,
+		"unavailable_runs": 1,
+		"unavailable_lines": 2,
+		"reviewers": [
+			{"reviewer": "google/gemini-4-pro", "runs": 2, "raised": 5, "lone": 4, "lone_rejected": 3, "lone_accepted": 1, "shared": 1},
+			{"reviewer": "x-ai/grok-5", "runs": 2, "raised": 1, "lone": 1, "lone_rejected": 0, "lone_accepted": 1, "shared": 0},
+		],
+	}
+	context = analyzer.prepare_analysis_context({"collector_report": {"runs": runs}})
+	assert context["reviewer_findings"] == result
+	views = {view["run_id"]: view for view in context["recent_runs"]}
+	assert views[1]["reviewer_findings"][0]["reviewer"] == "google/gemini-4-pro"
+	assert "reviewer_findings" not in views[4]
+	empty = analyzer.prepare_analysis_context({"collector_report": {"runs": []}})
+	assert empty["reviewer_findings"] == {"review_runs": 0, "runs_with_lines": 0, "unavailable_runs": 0, "unavailable_lines": 0, "reviewers": []}
 
 
 # ---------- script-mode entry point ---------------------------------------

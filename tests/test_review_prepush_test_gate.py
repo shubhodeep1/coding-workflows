@@ -357,6 +357,186 @@ def test_mixed_failures_repair_that_erases_the_change_is_kept(tmp_path):
 	assert (repo / "lib" / "a.py").read_text(encoding="utf-8") == "X = 1\n"
 	assert "lint_only_change_erased" not in proc.stderr
 	assert "repair=ran" in proc.stderr
+	# Issue #9519: a PR-caused failure keeps today's behaviour.
+	assert "passing_change_erased" not in proc.stderr
+	diag = _repair_diag(proc.stderr)
+	assert len(diag) == 1
+	assert diag[0]["pre_status"] == "fail" and diag[0]["before"] == "1" and diag[0]["after"] == "0"
+
+
+def _repair_diag(stderr: str) -> list[dict[str, str]]:
+	lines = [line for line in stderr.splitlines() if line.startswith("PREPUSH_REPAIR_CHANGES ")]
+	return [dict(field.split("=", 1) for field in line.split()[1:]) for line in lines]
+
+
+def _seed_unmet_done_check(tmp_path: Path, env: dict[str, str]) -> None:
+	_with_fake_gh(tmp_path, env)
+	env["PERSIST_REPAIR_LOOP_ENABLED"] = "true"
+	gate_dir = tmp_path / "runtime" / "prepush_gate"
+	gate_dir.mkdir(parents=True)
+	(gate_dir / "acceptance.json").write_text(json.dumps({"schema": "acceptance.v1", "state": "valid", "source": "plan",
+		"errors": [], "checks": [], "tests": [{"path": "tests/test_a.py", "name": "", "red_on_base": False}],
+		"post_merge": None, "post_merge_none": "library only"}), encoding="utf-8")
+
+
+PASS_UNMET = dict(PASS, acceptance={"tests/test_a.py": {"head": "fail"}})
+
+
+def test_review_loop_repair_that_erases_a_passing_change_keeps_the_editor_edit(tmp_path):
+	# Issue #9519 (run 43517436284): the tests passed with the editor's change,
+	# a done-check was unmet, and the repair turn put the file back to HEAD,
+	# so nothing was committed ("Editor changes lost").
+	repo, env = _setup(tmp_path, [PASS_UNMET, PASS])
+	_seed_unmet_done_check(tmp_path, env)
+	(_work(tmp_path) / "edit.sh").write_text("printf 'X = 1\\n' > lib/a.py\n", encoding="utf-8")
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert (repo / "lib" / "a.py").read_text(encoding="utf-8") == "X = 2\n"
+	assert _editor_calls(tmp_path) == 1 and _docker_runs(tmp_path) == 1
+	assert "outcome=repair_reverted reason=passing_change_erased" in proc.stderr
+	assert "passing_change_restore_empty" not in proc.stderr
+	assert "lint_only_change_erased" not in proc.stderr
+	assert "PERSIST repair_loop outcome=pass turns=0 stop=reverted acceptance=unmet" in proc.stderr
+	assert "repair=reverted_it_removed_the_whole_change_while_no_failure_was_caused_by_it" in proc.stderr
+	assert "Repair turn: reverted (it removed the whole change while no failure was caused by it)" in _summary(tmp_path).read_text(encoding="utf-8")
+	diag = _repair_diag(proc.stderr)
+	assert len(diag) == 1
+	assert diag[0]["phase"] == "review" and diag[0]["editor_rc"] == "0"
+	assert diag[0]["before"] == "1" and diag[0]["after"] == "0"
+	assert diag[0]["before_paths"] == "lib/a.py" and diag[0]["after_paths"] == "none"
+	assert diag[0]["pre_status"] == "pass" and diag[0]["pre_failures"] == "0"
+	assert diag[0]["acceptance"] == "unmet" and diag[0]["extra_unmet"] == "1"
+	assert diag[0]["truncated"] == "0"
+
+
+def test_review_loop_restore_that_brings_nothing_back_logs_restore_empty(tmp_path):
+	# The untracked-file backup is best-effort: when the editor's only change
+	# is a new file and its backup is gone, the revert restores nothing, and
+	# the gate must say so instead of implying the change came back.
+	repo, env = _setup(tmp_path, [PASS_UNMET, PASS])
+	_seed_unmet_done_check(tmp_path, env)
+	(repo / "lib" / "a.py").write_text("X = 1\n", encoding="utf-8")
+	(repo / "lib" / "new.py").write_text("Y = 1\n", encoding="utf-8")
+	backup = tmp_path / "runtime" / "prepush_gate_pre_untracked.tar"
+	(_work(tmp_path) / "edit.sh").write_text(f"rm -f lib/new.py '{backup}'\n", encoding="utf-8")
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert "outcome=repair_reverted reason=passing_change_erased" in proc.stderr
+	assert "outcome=warning reason=passing_change_restore_empty" in proc.stderr
+	assert "stop=reverted" in proc.stderr and _docker_runs(tmp_path) == 1
+	assert not (repo / "lib" / "new.py").exists()
+
+
+def test_review_loop_repair_erased_by_the_syntax_validator_keeps_the_editor_edit(tmp_path):
+	# The syntax validator rewrites files in place (full-file fence strip), so
+	# a repair whose only change it undoes leaves a clean tree; the guard must
+	# decide from a read taken after the validator.
+	repo, env = _setup(tmp_path, [PASS_UNMET, PASS])
+	_seed_unmet_done_check(tmp_path, env)
+	(_work(tmp_path) / "edit.sh").write_text("printf 'X = 9\\n' > lib/a.py\n", encoding="utf-8")
+	validator = tmp_path / "support" / "scripts" / "validate_changed_files_syntax.sh"
+	validator.write_text("#!/usr/bin/env bash\nprintf 'X = 1\\n' > lib/a.py\nexit 0\n", encoding="utf-8")
+	validator.chmod(0o755)
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert (repo / "lib" / "a.py").read_text(encoding="utf-8") == "X = 2\n"
+	assert "outcome=repair_reverted reason=passing_change_erased" in proc.stderr
+	diag = _repair_diag(proc.stderr)
+	assert len(diag) == 1 and diag[0]["after"] == "1"
+
+
+def test_review_loop_later_turn_that_erases_a_repaired_passing_tree_keeps_it(tmp_path):
+	# Multi-turn loop: the initial run has a PR-caused failure, turn 1 fixes it
+	# (the re-run passes, done-check still unmet), and turn 2 erases the whole
+	# tree. The guard keys on the result the turn was repairing (pass, zero
+	# PR-caused failures), so it restores the tree turn 1 left, which the gate
+	# verified; it does not wipe the editor's change ("Editor changes lost").
+	# The failure is on another file, so the unmet done-check counts on top of it.
+	fail_unmet = _result("fail", failures=[{"test": "tests/test_b.py", "file": "tests/test_b.py", "names": ["test_y"],
+		"tail": "AssertionError\n"}])
+	fail_unmet["acceptance"] = {"tests/test_a.py": {"head": "fail"}}
+	repo, env = _setup(tmp_path, [fail_unmet, PASS_UNMET, PASS])
+	_seed_unmet_done_check(tmp_path, env)
+	(_work(tmp_path) / "edit.sh").write_text(
+		f"if [ \"$(wc -l < '{_work(tmp_path) / 'editor.log'}')\" -le 1 ]; then printf 'X = 3\\n' > lib/a.py;"
+		" else printf 'X = 1\\n' > lib/a.py; fi\n", encoding="utf-8")
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert _editor_calls(tmp_path) == 2 and _docker_runs(tmp_path) == 2, proc.stderr
+	assert (repo / "lib" / "a.py").read_text(encoding="utf-8") == "X = 3\n"
+	assert "outcome=repair_reverted reason=passing_change_erased" in proc.stderr
+	assert "turns=1 stop=reverted" in proc.stderr
+	diag = _repair_diag(proc.stderr)
+	assert len(diag) == 2
+	assert diag[0]["pre_status"] == "fail" and diag[0]["after"] == "1"
+	assert diag[1]["pre_status"] == "pass" and diag[1]["pre_failures"] == "0" and diag[1]["after"] == "0"
+
+
+def test_review_loop_repair_that_keeps_a_change_is_kept(tmp_path):
+	repo, env = _setup(tmp_path, [PASS_UNMET, PASS])
+	_seed_unmet_done_check(tmp_path, env)
+	(_work(tmp_path) / "edit.sh").write_text("printf 'X = 3\\n' > lib/a.py\n", encoding="utf-8")
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert (repo / "lib" / "a.py").read_text(encoding="utf-8") == "X = 3\n"
+	assert "passing_change_erased" not in proc.stderr
+	assert _editor_calls(tmp_path) == 1 and _docker_runs(tmp_path) == 2
+	assert "turns=1 stop=clean" in proc.stderr
+	diag = _repair_diag(proc.stderr)
+	assert len(diag) == 1
+	assert diag[0]["pre_status"] == "pass" and diag[0]["before"] == "1" and diag[0]["after"] == "1"
+	assert diag[0]["after_paths"] == "lib/a.py"
+
+
+def test_review_loop_repair_that_erases_an_unverified_change_is_kept(tmp_path):
+	# Fail-safe: an unverified (timed out) result is no passing evidence, so
+	# the repair's erasure stands as before.
+	timeout_unmet = dict(TIMEOUT, acceptance={"tests/test_a.py": {"head": "fail"}})
+	repo, env = _setup(tmp_path, [timeout_unmet, PASS])
+	_seed_unmet_done_check(tmp_path, env)
+	(_work(tmp_path) / "edit.sh").write_text("printf 'X = 1\\n' > lib/a.py\n", encoding="utf-8")
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert _editor_calls(tmp_path) == 1
+	assert (repo / "lib" / "a.py").read_text(encoding="utf-8") == "X = 1\n"
+	assert "passing_change_erased" not in proc.stderr
+	diag = _repair_diag(proc.stderr)
+	assert len(diag) == 1
+	assert diag[0]["pre_status"] == "unverified" and diag[0]["after"] == "0"
+
+
+def test_repair_diagnostic_line_is_bounded_and_sanitised(tmp_path):
+	repo, env = _setup(tmp_path, [FAIL, PASS])
+	(repo / "extra").mkdir()
+	for index in range(24):
+		(repo / "extra" / f"f{index:02d}.txt").write_text("x\n", encoding="utf-8")
+	# Sorts before extra/f00.txt, so it stays inside the 20-path window and
+	# reaches the sanitiser.
+	(repo / "extra" / "a odd=x,y.txt").write_text("x\n", encoding="utf-8")
+	(_work(tmp_path) / "edit.sh").write_text("printf 'X = 3\\n' > lib/a.py\n", encoding="utf-8")
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	diag = _repair_diag(proc.stderr)
+	assert len(diag) == 1, proc.stderr
+	assert diag[0]["before"] == "26" and diag[0]["truncated"] == "1"
+	assert "extra/a_odd_x_y.txt" in diag[0]["before_paths"].split(",")
+	for key in ("before_paths", "after_paths"):
+		paths = diag[0][key].split(",")
+		assert 1 <= len(paths) <= 20
+		assert all(re.fullmatch(r"[A-Za-z0-9._/+-]{1,200}", path) for path in paths), diag[0][key]
+	line = next(line for line in proc.stderr.splitlines() if line.startswith("PREPUSH_REPAIR_CHANGES "))
+	assert len(line.split()) == 12
+
+
+def test_repair_diagnostic_prefix_and_reasons_are_registered():
+	script = STEP_SCRIPT.read_text(encoding="utf-8")
+	assert "PREPUSH_REPAIR_CHANGES " in script and "reason=passing_change_erased" in script
+	# The fragment is folded into agents.md at release time; accept either.
+	docs = (REPO_ROOT / "agents.md").read_text(encoding="utf-8")
+	docs += "".join(path.read_text(encoding="utf-8") for path in sorted((REPO_ROOT / "agents.d").glob("*.md")))
+	assert "LOG_PREFIX.name=PREPUSH_REPAIR_CHANGES" in docs
+	for token in ("passing_change_erased", "lint_only_change_erased"):
+		assert token in docs
 
 
 def test_editor_without_repair_turn_marker_is_skipped(tmp_path):
@@ -691,8 +871,33 @@ exit 0
 
 FAKE_GH_LOGGER = r'''#!/usr/bin/env bash
 printf '%s\n' "$*" >> "__WORK__/gh.log"
+case "$*" in
+	*"/statuses"*)
+		# GET commits/<sha>/statuses: FAKE_GH_STATUSES_JSON through the --jq filter.
+		[ "${FAKE_GH_STATUSES_RC:-0}" = 0 ] || exit "${FAKE_GH_STATUSES_RC}"
+		jq_filter="." prev=""
+		for arg in "$@"; do
+			[ "${prev}" = "--jq" ] && jq_filter="${arg}"
+			prev="${arg}"
+		done
+		printf '%s' "${FAKE_GH_STATUSES_JSON:-[]}" | jq -r "${jq_filter}"
+		exit $?
+		;;
+esac
 exit "${FAKE_GH_RC:-0}"
 '''
+
+
+def _post_lines(tmp_path: Path) -> str:
+	return "".join(line for line in (_work(tmp_path) / "gh.log").read_text(encoding="utf-8").splitlines(keepends=True)
+		if line.startswith("api -X POST "))
+
+
+def _ci_final_statuses(*states: str, creator: str = "github-actions[bot]", newest_hour: int = 13) -> str:
+	# Newest first, one hour apart; the hand-back marker (_setup_final_ci) is at 12:00.
+	return json.dumps([{"context": "ci/final", "state": state, "created_at": f"2026-11-06T{newest_hour - i:02d}:00:00Z", "creator": {"login": creator}}
+		for i, state in enumerate(states)]
+		+ [{"context": "ai-review/head-gate", "state": "success", "creator": {"login": "pipeline"}}])
 
 
 def _setup_final_ci(tmp_path: Path, queue: list[dict]) -> tuple[Path, dict[str, str], Path, str]:
@@ -705,9 +910,17 @@ def _setup_final_ci(tmp_path: Path, queue: list[dict]) -> tuple[Path, dict[str, 
 	gh.write_text(FAKE_GH_LOGGER.replace("__WORK__", str(work)), encoding="utf-8")
 	gh.chmod(0o755)
 	head = _git(repo, "rev-parse", "HEAD").strip()
+	# The "Collect PR metadata" snapshot with the hand-back marker (issue #10023).
+	comments = tmp_path / "pr_issue_comments.json"
+	comments.write_text(json.dumps([
+		{"id": 1, "user": {"login": "github-actions[bot]", "type": "Bot"}, "created_at": "2026-11-06T11:30:00Z",
+			"body": f"<!-- ai:final-ci-failed:v1 pr=7 head={'f' * 40} -->"},
+		{"id": 2, "user": {"login": "github-actions[bot]", "type": "Bot"}, "created_at": "2026-11-06T12:00:00Z",
+			"body": f"**The final CI run failed.**\n\n<!-- ai:final-ci-failed:v1 pr=7 head={head} -->"},
+	]), encoding="utf-8")
 	env.update({"POST_SYNC_TEST_REPAIR": "false", "FINAL_CI_REPAIR": "true", "FINAL_CI_REPAIR_FROM_SHA": head,
 		"FINAL_CI_REPAIR_ATTEMPT": "2", "TARGET_BRANCH": "ai/issue-7", "PR_NUMBER": "7", "GITHUB_REPOSITORY": "o/r",
-		"FINAL_CI_REPAIR_MARKER_RETRY_SLEEP_SECS": "0"})
+		"FINAL_CI_REPAIR_MARKER_RETRY_SLEEP_SECS": "0", "PR_ISSUE_COMMENTS_FILE": str(comments)})
 	return repo, env, github_env, head
 
 
@@ -726,7 +939,7 @@ def test_final_ci_repair_commits_and_posts_the_marker(tmp_path):
 	repair = _git(repo, "rev-parse", "HEAD").strip()
 	assert repair != head
 	gh_log = (_work(tmp_path) / "gh.log").read_text(encoding="utf-8")
-	assert gh_log.startswith("api -X POST repos/o/r/issues/7/comments -f body=**Final CI repair.**")
+	assert _post_lines(tmp_path).startswith("api -X POST repos/o/r/issues/7/comments -f body=**Final CI repair.**")
 	assert gh_log.rstrip("\n").endswith(f"<!-- ai:final-ci-repair:v1 pr=7 from={head} repair={repair} attempt=2 -->")
 	assert f"FINAL_CI_REPAIR pr=7 head={head} outcome=committed repair={repair} attempt=2 marker=posted" in proc.stdout
 
@@ -749,7 +962,7 @@ def test_final_ci_repair_falls_back_to_the_full_review(tmp_path, queue, extra, r
 	# with repair=none so the head is not tried again.
 	assert _git(repo, "rev-parse", "HEAD").strip() == head
 	gh_log = (_work(tmp_path) / "gh.log").read_text(encoding="utf-8")
-	assert gh_log.count("api -X POST ") == 1 and gh_log.startswith("api -X POST repos/o/r/issues/7/comments -f body=**Final CI repair not applied**")
+	assert gh_log.count("api -X POST ") == 1 and _post_lines(tmp_path).startswith("api -X POST repos/o/r/issues/7/comments -f body=**Final CI repair not applied**")
 	assert (_work(tmp_path) / "gh.log").read_text(encoding="utf-8").rstrip("\n").endswith(
 		f"<!-- ai:final-ci-repair:v1 pr=7 from={head} repair=none attempt=2 -->")
 
@@ -779,6 +992,80 @@ def test_final_ci_repair_marker_post_is_retried(tmp_path):
 	assert "STEP_RETURNED" in proc.stdout, proc.stderr
 	assert "outcome=fallback reason=not_reproduced marker=failed" in proc.stdout
 	assert (_work(tmp_path) / "gh.log").read_text(encoding="utf-8").count("api -X POST ") == 3
+
+
+# --- issue #10023: ci/final turned green before the push --------------------------
+
+def test_final_ci_repair_skips_when_final_ci_turned_green(tmp_path):
+	repo, env, github_env, head = _setup_final_ci(tmp_path, [FAIL, PASS])
+	# Newest first: the re-run passed after the failed attempt.
+	env["FAKE_GH_STATUSES_JSON"] = _ci_final_statuses("success", "failure")
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert f"FINAL_CI_REPAIR pr=7 head={head} outcome=skipped reason=final_ci_now_green" in proc.stdout, proc.stdout
+	assert "outcome=committed" not in proc.stdout and "outcome=fallback" not in proc.stdout
+	# The resolver ran and committed, but the commit is dropped and nothing is pushed.
+	assert (_work(tmp_path) / "resolver.log").exists()
+	assert _git(repo, "rev-parse", "HEAD").strip() == head
+	assert _env_lines(github_env, "INTEGRATION_TEST_REPAIRED")[-1] == "false"
+	assert _env_lines(github_env, "INTEGRATION_TEST_REPAIR_ACTIVE")[-1] == "true"
+	gh_log = (_work(tmp_path) / "gh.log").read_text(encoding="utf-8")
+	assert "POST" not in gh_log
+	assert gh_log.count(f"api repos/o/r/commits/{head}/statuses?per_page=100 ") == 1
+
+
+@pytest.mark.parametrize("states", [("success",), ("success", "success")], ids=["no_older_failure", "success_after_stale_success"])
+def test_final_ci_repair_skips_without_an_older_failure(tmp_path, states):
+	# The gate's rule: a success newer than the marker is green even when the
+	# failed attempt's ci/final=failure POST never landed (newest at 13:00,
+	# a stale success at 12:00 at most, marker at 12:00).
+	repo, env, github_env, head = _setup_final_ci(tmp_path, [FAIL, PASS])
+	env["FAKE_GH_STATUSES_JSON"] = _ci_final_statuses(*states)
+	proc = _run_step(tmp_path, repo, env)
+	assert f"FINAL_CI_REPAIR pr=7 head={head} outcome=skipped reason=final_ci_now_green" in proc.stdout, proc.stdout
+	assert _git(repo, "rev-parse", "HEAD").strip() == head
+	assert "POST" not in (_work(tmp_path) / "gh.log").read_text(encoding="utf-8")
+
+
+def test_final_ci_repair_skips_a_fallback_when_final_ci_turned_green(tmp_path):
+	# Not reproduced on a green head: no marker, no full review either.
+	repo, env, github_env, head = _setup_final_ci(tmp_path, [PASS])
+	env["FAKE_GH_STATUSES_JSON"] = _ci_final_statuses("success", "failure")
+	proc = _run_step(tmp_path, repo, env)
+	assert f"FINAL_CI_REPAIR pr=7 head={head} outcome=skipped reason=final_ci_now_green" in proc.stdout, proc.stdout
+	assert _env_lines(github_env, "INTEGRATION_TEST_REPAIR_ACTIVE")[-1] == "true"
+	assert _env_lines(github_env, "INTEGRATION_TEST_REPAIRED") == ["false"]
+	assert "POST" not in (_work(tmp_path) / "gh.log").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("statuses, extra", [
+	(_ci_final_statuses("failure", "success"), {}),
+	(_ci_final_statuses("success", "failure", creator="mallory"), {}),
+	(_ci_final_statuses("success", "failure"), {"FAKE_GH_STATUSES_RC": "1"}),
+	("not json", {}),
+	# A stale success (older than the hand-back marker) that a failed
+	# ci/final=failure POST left in place is not green.
+	(_ci_final_statuses("success", "failure", newest_hour=11), {}),
+	# Without the comments snapshot there is no marker time: repair as before.
+	(_ci_final_statuses("success", "failure"), {"PR_ISSUE_COMMENTS_FILE": "/nonexistent/pr_issue_comments.json"}),
+	# A status time outside the gate's strict ISO form is not green, even when
+	# it sorts after the marker (the gate's rule).
+	(json.dumps([{"context": "ci/final", "state": "success", "created_at": "2026-11-06T13:00:00+00:00",
+		"creator": {"login": "github-actions[bot]"}}]), {}),
+], ids=["newest_failure", "untrusted_creator", "read_failed", "unparseable", "success_older_than_marker",
+	"no_comments_snapshot", "non_iso_status_time"])
+def test_final_ci_repair_commits_when_final_ci_is_not_green(tmp_path, statuses, extra):
+	repo, env, github_env, head = _setup_final_ci(tmp_path, [FAIL, PASS])
+	env["FAKE_GH_STATUSES_JSON"] = statuses
+	env.update(extra)
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	repair = _git(repo, "rev-parse", "HEAD").strip()
+	assert repair != head
+	assert "final_ci_now_green" not in proc.stdout
+	assert f"FINAL_CI_REPAIR pr=7 head={head} outcome=committed repair={repair} attempt=2 marker=posted" in proc.stdout
+	assert _env_lines(github_env, "INTEGRATION_TEST_REPAIRED")[-1] == "true"
+	assert _post_lines(tmp_path).count("api -X POST ") == 1
 
 
 def test_final_ci_repair_refuses_a_moved_head(tmp_path):
@@ -969,6 +1256,74 @@ def test_review_loop_uses_the_fetched_done_check(tmp_path):
 	assert "--tests-file /inputs/tests.txt" in (_work(tmp_path) / "docker.log").read_text(encoding="utf-8")
 	assert _editor_calls(tmp_path) == 1
 	assert "turns=1 stop=clean acceptance=not_run" in proc.stderr
+
+
+def _done_check_only_setup(tmp_path: Path, edit: str) -> tuple[Path, dict[str, str]]:
+	# Same setup as test_review_loop_uses_the_fetched_done_check: pr_caused=0,
+	# only the done-check target is unmet, so the repair loop runs one turn.
+	unmet = dict(PASS, acceptance={"tests/test_a.py": {"head": "fail", "base": "not_run"}})
+	repo, env = _setup(tmp_path, [unmet, PASS])
+	_with_fake_gh(tmp_path, env)
+	env["PERSIST_REPAIR_LOOP_ENABLED"] = "true"
+	gate_dir = tmp_path / "runtime" / "prepush_gate"
+	gate_dir.mkdir(parents=True)
+	(gate_dir / "acceptance.json").write_text(json.dumps({"schema": "acceptance.v1", "state": "valid", "source": "plan",
+		"errors": [], "checks": [], "tests": [{"path": "tests/test_a.py", "name": "", "red_on_base": False}],
+		"post_merge": None, "post_merge_none": "library only"}), encoding="utf-8")
+	(_work(tmp_path) / "edit.sh").write_text(edit, encoding="utf-8")
+	return repo, env
+
+
+def test_review_loop_reverts_a_repair_that_erases_a_passing_change(tmp_path):
+	# #9519 / PR #9562: a done-check-only repair turn put the file back to HEAD,
+	# erasing the PR's whole change while no failure was caused by it.
+	repo, env = _done_check_only_setup(tmp_path, "printf 'X = 1\\n' > lib/a.py\n")
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert (repo / "lib" / "a.py").read_text(encoding="utf-8") == "X = 2\n"
+	assert "outcome=repair_reverted reason=passing_change_erased" in proc.stderr
+	assert "outcome=repair_diff before=1 after=0 paths=\n" in proc.stderr
+	assert _editor_calls(tmp_path) == 1
+	assert _docker_runs(tmp_path) == 1
+	assert "stop=reverted" in proc.stderr
+	text = _summary(tmp_path).read_text(encoding="utf-8")
+	assert "Repair turn: reverted (it removed the whole change while no failure was caused by it)" in text
+
+
+def test_review_loop_keeps_a_repair_that_leaves_a_change(tmp_path):
+	repo, env = _done_check_only_setup(tmp_path, "printf 'X = 3\\n' > lib/a.py\n")
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert "passing_change_erased" not in proc.stderr
+	assert "outcome=repair_diff before=1 after=1 paths=lib/a.py" in proc.stderr
+	assert (repo / "lib" / "a.py").read_text(encoding="utf-8") == "X = 3\n"
+
+
+def test_pr_caused_repair_that_erases_the_change_is_not_reverted_by_the_passing_guard(tmp_path):
+	repo, env = _setup(tmp_path, [FAIL, PASS])
+	(_work(tmp_path) / "edit.sh").write_text("printf 'X = 1\\n' > lib/a.py\n", encoding="utf-8")
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert "passing_change_erased" not in proc.stderr
+	assert "repair=ran" in proc.stderr
+	assert "outcome=repair_diff before=1 after=0" in proc.stderr
+
+
+def test_repair_diff_line_caps_and_sanitises_paths(tmp_path):
+	repo, env = _setup(tmp_path, [FAIL, PASS])
+	for index in range(12):
+		(repo / "lib" / f"n{index:02d}.txt").write_text("n\n", encoding="utf-8")
+	(repo / "lib" / "0 odd;$x.txt").write_text("odd\n", encoding="utf-8")
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	match = re.search(r"outcome=repair_diff before=(\d+) after=(\d+) paths=(\S*)", proc.stderr)
+	assert match, proc.stderr
+	assert match.group(1) == "14" and match.group(2) == "14"
+	paths = match.group(3)
+	assert re.fullmatch(r"[A-Za-z0-9._/,-]*", paths)
+	entries = paths.split(",")
+	assert len(entries) == 10
+	assert "lib/0oddx.txt" in entries
 
 
 def test_review_loop_off_changes_nothing(tmp_path):

@@ -707,15 +707,41 @@ def test_extension_checkout_mismatch_holds_without_granting_or_merging(tmp_path:
 	assert not any(call[:2] in (["workflow", "run"], ["api", "repos/o/r/issues/42/labels"]) for call in calls)
 
 
+@pytest.mark.parametrize("mode", ["gate", "status"])
+def test_unpushed_commit_on_top_of_the_pr_head_holds_as_head_unpushed(tmp_path: Path, mode: str) -> None:
+	# PR #9283 (run 43161924339): the PR head HEAD was audited clean, then the
+	# conflict resolver committed [ai-merge-resolve] locally (OLD here) with
+	# the push deferred until after the review-blocked judge. The merge must
+	# hold (the new head is unaudited), but as head_unpushed, which the judge
+	# alert treats as self-clearing, not extensions_unverifiable. Only an
+	# extension marker needs the checkout at the PR head (no marker: #9011).
+	comments = [_comment(_marker("clean", HEAD, 6)), _comment(_extension(OLD), comment_id=9)]
+	result, calls, output = _run(tmp_path, mode, comments=comments, env={"FAKE_GIT_HEAD": OLD, "FAKE_GIT_ANCESTORS": HEAD})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "extensions_unverifiable" not in result.stdout
+	assert not any(call[:2] in (["workflow", "run"], ["api", "repos/o/r/issues/42/labels"], ["api", "repos/o/r/issues/42/comments"]) for call in calls)
+	if mode == "gate":
+		assert output == "hold=true\nhold_reason=head_unpushed\n"
+		assert "outcome=hold reason=head_unpushed" in result.stdout and f"checkout={OLD}" in result.stdout
+	else:
+		assert output == "" and "SINGLE_ISSUE_SECURITY_PASS_STATE=unverifiable" in result.stdout
+
+
+def test_head_unpushed_is_a_self_clearing_judge_hold() -> None:
+	assert "security_hold_awaiting_followups|security_hold_head_unpushed)" in REVIEW.read_text(encoding="utf-8")
+
+
 def test_unpushed_local_commit_without_extensions_does_not_hold(tmp_path: Path) -> None:
 	# PRs #9011 / #9134: the review job's deferred [ai-merge-resolve] commit
 	# moved the checkout past the PR head before the judge's merge gate ran.
 	# With no extension marker there is nothing to verify against the checkout.
+	# FAKE_GIT_ANCESTORS: the deferred commit really descends from the PR head,
+	# so a head_unpushed hold placed ahead of the marker check would fail here.
 	comments = [_comment("ok\n" + _marker("clean", HEAD, 1))]
-	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GIT_HEAD": OLD})
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env={"FAKE_GIT_HEAD": OLD, "FAKE_GIT_ANCESTORS": HEAD})
 	assert output == "hold=false\n" and "outcome=clean" in result.stdout
-	assert "extensions_unverifiable" not in result.stdout
-	result, calls, output = _run(tmp_path, "status", comments=comments, env={"FAKE_GIT_HEAD": OLD})
+	assert "extensions_unverifiable" not in result.stdout and "head_unpushed" not in result.stdout
+	result, calls, output = _run(tmp_path, "status", comments=comments, env={"FAKE_GIT_HEAD": OLD, "FAKE_GIT_ANCESTORS": HEAD})
 	assert "SINGLE_ISSUE_SECURITY_PASS_STATE=unverifiable" not in result.stdout
 
 
@@ -999,6 +1025,9 @@ def test_review_wiring() -> None:
 	assert gate["env"]["SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS"] == "${{ vars.SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS || '5' }}"
 	assert gate["env"]["SECURITY_PASS_FOLLOWUP_STALE_HOURS"] == "${{ vars.SECURITY_PASS_FOLLOWUP_STALE_HOURS || '24' }}"
 	assert _steps(REVIEW, "codex-agent")["Review-blocked judge decision"]["env"]["SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS"] == gate["env"]["SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS"]
+	# Issue #9942: the lost-attempt budget reaches the gate and status mode.
+	assert gate["env"]["SECURITY_PASS_LOST_AUDIT_RETRIES"] == "${{ vars.SECURITY_PASS_LOST_AUDIT_RETRIES || '2' }}"
+	assert _steps(REVIEW, "codex-agent")["Review-blocked judge decision"]["env"]["SECURITY_PASS_LOST_AUDIT_RETRIES"] == gate["env"]["SECURITY_PASS_LOST_AUDIT_RETRIES"]
 	assert _steps(REVIEW, "codex-agent")["Review-blocked judge decision"]["env"]["SECURITY_PASS_PENDING_MARKER_ATTEMPTS"] == gate["env"]["SECURITY_PASS_PENDING_MARKER_ATTEMPTS"]
 	assert _steps(REVIEW, "codex-agent")["Review-blocked judge decision"]["env"]["SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS"] == gate["env"]["SECURITY_PASS_PENDING_MARKER_RETRY_DELAY_SECS"]
 	assert _steps(REVIEW, "codex-agent")["Review-blocked judge decision"]["env"]["SECURITY_PASS_FOLLOWUP_STALE_HOURS"] == gate["env"]["SECURITY_PASS_FOLLOWUP_STALE_HOURS"]
@@ -2202,9 +2231,12 @@ def _iso(age_minutes: float) -> str:
 	return (dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=age_minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def _runs(tmp_path: Path, runs: list) -> str:
+def _runs(tmp_path: Path, runs: list, total_count: int | None = None) -> str:
 	path = tmp_path / "runs.json"
-	path.write_text(json.dumps({"workflow_runs": runs}), encoding="utf-8")
+	payload = {"workflow_runs": runs}
+	if total_count is not None:
+		payload["total_count"] = total_count
+	path.write_text(json.dumps(payload), encoding="utf-8")
 	return str(path)
 
 
@@ -2408,3 +2440,137 @@ def test_audit_scope_step_wires_the_delta_helper() -> None:
 	assert 'review_single_issue_security_pass.sh" since' in scope["run"]
 	assert 'echo "SECURITY_AUDIT_DIFF_SINCE=${audit_since}" >> "$GITHUB_ENV"' in scope["run"]
 	assert "SECURITY_PASS_MAX_AUDIT_ATTEMPTS" in steps["Report single-issue security pass"]["env"]
+
+
+# --- Issue #9942: lost post-cap head attempts ---------------------------------
+
+
+def _lost_attempt_comments(ages_hours: list, failed_cycles: tuple = ()) -> list:
+	# A failed cycle 5 on HEAD fills the 5-cycle budget (cycles 1-4 have no
+	# marker and still count); each age is a pending head attempt above it.
+	comments = [_comment(_marker("failed", HEAD, 5), comment_id=1, age_hours=ages_hours[0] + 1)]
+	for offset, age in enumerate(ages_hours):
+		cycle = 6 + offset
+		comments.append(_comment(_marker("pending", HEAD, cycle), comment_id=10 + cycle, age_hours=age))
+		if cycle in failed_cycles:
+			comments.append(_comment(_marker("failed", HEAD, cycle), comment_id=30 + cycle, age_hours=age - 0.01))
+	return comments
+
+
+def _lost_run(marker_age_hours: float, pr: int = 42) -> dict:
+	# Dispatched a few seconds before its marker, cancelled long ago.
+	minutes = marker_age_hours * 60
+	return _audit_run("completed", "cancelled", minutes + 0.1, minutes - 5, pr=pr)
+
+
+def _listing_calls(calls: list) -> list:
+	return [call for call in calls if any("/actions/workflows/" in arg for arg in call)]
+
+
+def test_lost_head_markers_do_not_count_toward_head_attempts(tmp_path: Path) -> None:
+	runs = [_lost_run(9), _lost_run(7)]
+	env = {"FAKE_GH_RUNS": _runs(tmp_path, runs, total_count=2)}
+	comments = _lost_attempt_comments([9, 7])
+	result, calls, output = _run(tmp_path, "gate", comments=comments, env=env)
+	assert output == "hold=true\nhold_reason=audit_dispatched\n", result.stdout
+	assert "reason=exhausted_retry" in result.stdout
+	assert "outcome=retry reason=lost_audit_not_counted head_attempts=0 lost_attempts=2" in result.stdout
+	assert any(call[:2] == ["workflow", "run"] for call in calls)
+	assert not any(call[:2] == ["api", "repos/o/r/issues/42/labels"] for call in calls)
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert "head attempt 1 of 2" in posted[-1][-1] and posted[-1][-1].endswith(_marker("pending", HEAD, 8))
+	# The lost classification and the throttle share one listing.
+	assert len(_listing_calls(calls)) == 1
+	result, calls, _ = _run(tmp_path, "status", comments=comments, env=env)
+	assert "SINGLE_ISSUE_SECURITY_PASS_STATE=needs_audit" in result.stdout
+	assert len(_listing_calls(calls)) == 1
+
+
+def test_lost_markers_beyond_budget_count_again(tmp_path: Path) -> None:
+	ages = [10, 9, 8, 7]
+	env = {"FAKE_GH_RUNS": _runs(tmp_path, [_lost_run(age) for age in ages], total_count=4)}
+	result, calls, output = _run(tmp_path, "gate", comments=_lost_attempt_comments(ages), env=env)
+	assert output == "hold=true\nhold_reason=exhausted_without_completed_audit\n", result.stdout
+	assert "reason=exhausted_without_completed_audit cycle=5 head_attempts=2 lost_attempts=4" in result.stdout
+	assert "lost_audit_not_counted" not in result.stdout
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+	assert ["api", "repos/o/r/issues/42/labels", "-f", "labels[]=ai:security-pass-failed"] in calls
+
+
+def test_later_marker_live_run_does_not_make_earlier_marker_live(tmp_path: Path) -> None:
+	# The cycle-7 audit was dispatched 10 seconds before its marker and is
+	# still running: it belongs to cycle 7, not to cycle 6's window.
+	runs = [_lost_run(9), _audit_run("in_progress", None, 7 * 60 + 10 / 60, 1)]
+	env = {"FAKE_GH_RUNS": _runs(tmp_path, runs, total_count=2)}
+	result, calls, output = _run(tmp_path, "gate", comments=_lost_attempt_comments([9, 7]), env=env)
+	assert output == "hold=true\nhold_reason=audit_dispatched\n", result.stdout
+	assert "reason=lost_audit_not_counted head_attempts=1 lost_attempts=1" in result.stdout
+	posted = [call for call in calls if call[:2] == ["api", "repos/o/r/issues/42/comments"]]
+	assert "head attempt 2 of 2" in posted[-1][-1]
+
+
+def _run_old_lost_markers(tmp_path: Path):
+	runs = [_lost_run(30), _lost_run(28)]
+	env = {"FAKE_GH_RUNS": _runs(tmp_path, runs, total_count=2)}
+	return _run(tmp_path, "gate", comments=_lost_attempt_comments([30, 28]), env=env)
+
+
+def test_listing_window_widens_to_oldest_pending_head_marker(tmp_path: Path) -> None:
+	result, calls, _ = _run_old_lost_markers(tmp_path)
+	listings = _listing_calls(calls)
+	assert len(listings) == 1, result.stdout
+	created = [arg for arg in listings[0] if arg.startswith("created=>=")]
+	assert len(created) == 1
+	start = dt.datetime.strptime(created[0][len("created=>="):], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc)
+	expected = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=30, minutes=2)
+	assert abs((start - expected).total_seconds()) < 120
+	assert start < dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=25)
+
+
+def test_two_cancelled_runs_older_than_24h_dispatch_retry(tmp_path: Path) -> None:
+	result, calls, output = _run_old_lost_markers(tmp_path)
+	assert output == "hold=true\nhold_reason=audit_dispatched\n", result.stdout
+	assert "reason=lost_audit_not_counted head_attempts=0 lost_attempts=2" in result.stdout
+	assert any(call[:2] == ["workflow", "run"] for call in calls)
+
+
+@pytest.mark.parametrize("total_count", [150, None])
+def test_truncated_listing_counts_markers_outside_returned_window(tmp_path: Path, total_count) -> None:
+	# More runs exist than were returned (or the count is missing): the oldest
+	# returned run is 8 hours old, so cycle 6's window (from 9h2m ago) is not
+	# covered and counts; cycle 7's window is covered and is lost.
+	runs = [_lost_run(7), _audit_run("completed", "success", 8 * 60, 7 * 60, pr=300)]
+	env = {"FAKE_GH_RUNS": _runs(tmp_path, runs, total_count=total_count)}
+	result, calls, output = _run(tmp_path, "gate", comments=_lost_attempt_comments([9, 7]), env=env)
+	assert output == "hold=true\nhold_reason=audit_dispatched\n", result.stdout
+	assert "reason=lost_audit_not_counted head_attempts=1 lost_attempts=1" in result.stdout
+
+
+def test_lost_audit_retries_zero_restores_counting(tmp_path: Path) -> None:
+	ages = [30, 28]
+	env = {"FAKE_GH_RUNS": _runs(tmp_path, [_lost_run(age) for age in ages], total_count=2), "SECURITY_PASS_LOST_AUDIT_RETRIES": "0"}
+	result, calls, output = _run(tmp_path, "gate", comments=_lost_attempt_comments(ages), env=env)
+	assert output == "hold=true\nhold_reason=exhausted_without_completed_audit\n", result.stdout
+	assert "head_attempts=2 lost_attempts=0" in result.stdout
+	assert not any(call[:2] == ["workflow", "run"] for call in calls)
+	# No classification, so no listing (and never a widened one).
+	assert _listing_calls(calls) == []
+
+
+def test_unavailable_run_listing_counts_lost_markers(tmp_path: Path) -> None:
+	comments = _lost_attempt_comments([9, 7])
+	for env in ({}, {"FAKE_GH_RUNS": _runs(tmp_path, [_lost_run(9), _lost_run(7)], total_count=2), "FAKE_GH_FAIL": "runs"}, {"FAKE_GH_RUNS": _runs(tmp_path, [], total_count=0)}):
+		result, calls, output = _run(tmp_path, "gate", comments=comments, env=env)
+		assert output == "hold=true\nhold_reason=exhausted_without_completed_audit\n", (env, result.stdout)
+		assert "head_attempts=2 lost_attempts=0" in result.stdout, env
+
+
+def test_failed_head_attempt_still_counts_next_to_a_lost_one(tmp_path: Path) -> None:
+	runs = [_lost_run(9), _lost_run(7)]
+	env = {"FAKE_GH_RUNS": _runs(tmp_path, runs, total_count=2)}
+	result, calls, output = _run(tmp_path, "gate", comments=_lost_attempt_comments([9, 7], failed_cycles=(6,)), env=env)
+	assert output == "hold=true\nhold_reason=audit_dispatched\n", result.stdout
+	assert "reason=lost_audit_not_counted head_attempts=1 lost_attempts=1" in result.stdout
+	result, calls, output = _run(tmp_path, "gate", comments=_lost_attempt_comments([9, 7], failed_cycles=(6, 7)), env=env)
+	assert output == "hold=true\nhold_reason=exhausted_without_completed_audit\n", result.stdout
+	assert "head_attempts=2 lost_attempts=0" in result.stdout

@@ -298,6 +298,7 @@ def test_every_git_add_source_maps_to_an_allowlist_class():
 		"/tmp/claude_md_changed_file.txt": "CLAUDE.md",
 		"/tmp/retired_removed_files.txt": "retired_files.txt first tokens",
 		"/tmp/changelog_asset_files.txt": "changelog.d/.gitkeep and .gitattributes",
+		"/tmp/dependabot_changed_files.txt": ".github/dependabot.yml or .github/dependabot.yaml",
 	}
 	for source in expected_classes:
 		assert source in sources, source
@@ -307,8 +308,23 @@ def test_every_git_add_source_maps_to_an_allowlist_class():
 	assert "git add -A -- CHANGELOG.md changelog.d" in body
 	assert 'git add -A -- "${AGENTS_FILE}" agents.d' in body
 	allowed = _load_builder().STATIC_ALLOWED_PATHS
-	for entry in ("CLAUDE.md", "CHANGELOG.md", "changelog.d/*.md", "changelog.d/.gitkeep", ".gitattributes", "agents.md", "AGENTS.md", "agents.d/*.md", "package.json"):
+	for entry in ("CLAUDE.md", "CHANGELOG.md", "changelog.d/*.md", "changelog.d/.gitkeep", ".gitattributes", "agents.md", "AGENTS.md", "agents.d/*.md", "package.json", ".github/dependabot.yml", ".github/dependabot.yaml"):
 		assert entry in allowed
+
+
+def test_dependabot_config_is_allowed_but_consumer_owned(tmp_path):
+	"""Issue #9485: the sync edits exclude-paths in place; the file stays the consumer's."""
+	repo, sha = make_upstream_repo(tmp_path)
+	allowed = run_builder("allowed-paths", "--repo-root", str(repo), "--commit", sha).stdout.splitlines()
+	managed = run_builder("managed-paths", "--repo-root", str(repo), "--commit", sha).stdout.splitlines()
+	digests = json.loads(run_builder("managed-digests", "--repo-root", str(repo), "--commit", sha).stdout)
+	for path in (".github/dependabot.yml", ".github/dependabot.yaml"):
+		assert path in allowed
+		assert path not in managed
+		assert path not in digests
+	out = tmp_path / "manifest.json"
+	assert run_builder("build", "--repo-root", str(repo), "--commit", sha, "--version", "v1.2.3", "--out", str(out)).returncode == 0
+	assert {".github/dependabot.yml", ".github/dependabot.yaml"} <= set(json.loads(out.read_text(encoding="utf-8"))["allowed_consumer_paths"])
 
 
 def test_changelog_ensure_assets_paths_are_allowed(tmp_path):

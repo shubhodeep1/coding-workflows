@@ -1090,6 +1090,35 @@ def test_descope_files_a_standalone_fixup_or_asks_the_poller_for_a_project() -> 
 	assert project_child[0]["body"].startswith("<!-- ai:unblock-fixup-request:v1 item=7 id=unblock-7-r1 -->")
 
 
+@pytest.mark.parametrize("name", ["descope", "operator_step"])
+def test_trusted_pr_fixup_targets_an_ai_issue_head_branch(name: str) -> None:
+	"""#9938: a PR fix-up is planned on the PR head, where its changes live."""
+	ops = actions.plan(_verdict(name, instructions="drop it", placeholder="NIGHTLY_TOKEN_UNSET_OPERATOR_STEP", operator_instructions="set it"), _ctx("pr", pr_head_ref="ai/issue-9261"))
+	created = [op for op in ops if op["op"] == "create_issue"]
+	assert len(created) == 1
+	body = created[0]["body"]
+	assert "\n\n- Integration branch: `ai/issue-9261`\n\n<!-- ai:unblock-provenance:v1 source_pr=7 " in body
+	assert actions.declared_integration_branch(body) == "ai/issue-9261"
+
+
+def test_pr_fixup_keeps_no_integration_branch_outside_ai_issue_heads() -> None:
+	baseline = actions.plan(_verdict("descope", instructions="drop it"), _ctx("pr"))
+	assert "Integration branch" not in baseline[0]["body"]
+	for head in ("feature/x", "ai/issue-12x", "orchestrator/project-9", "claude/ai/issue-3"):
+		assert actions.plan(_verdict("descope", instructions="drop it"), _ctx("pr", pr_head_ref=head)) == baseline
+	for bad in ("ai/issue-1/../x", "ai//issue-1", "-x", "ai/issue-1.lock", 5, None):
+		assert _ctx("pr", pr_head_ref=bad)["pr_head_ref"] is None
+	assert _ctx("pr", pr_head_ref="ai/issue-9261")["pr_head_ref"] == "ai/issue-9261"
+	untrusted = _ctx("pr", pr_trusted=False, pr_head_ref="ai/issue-9261")
+	assert untrusted["pr_head_ref"] is None
+	# An issue item never carries a PR head, even when one is sent.
+	issue_ops = actions.plan(_verdict("descope", instructions="drop it"), _ctx(pr_head_ref="ai/issue-9261"))
+	assert "Integration branch" not in issue_ops[0]["body"]
+	# A project PR's fix-up goes through the poller unchanged.
+	project = actions.plan(_verdict("descope", instructions="drop it"), _ctx("pr", tracking=40, pr_head_ref="ai/issue-12"))
+	assert project[0]["op"] == "comment" and "Integration branch" not in project[0]["body"]
+
+
 def test_operator_step_records_the_step_and_warns() -> None:
 	# A placeholder value only a person can supply is recorded and paged.
 	ops = actions.plan(
@@ -1197,6 +1226,67 @@ def test_ci_owner_candidate_refuses_conflicting_pr_numbers_and_the_plan_stays_as
 	assert actions.plan(_verdict("reissue", instructions="spec"), _ctx(ci_owner={"state": "unverified", "number": 6786})) == baseline
 
 
+BASE_KEYED_HEADER = [
+	"<!-- check-failure-triage:fp=" + "a" * 64 + " -->",
+	"<!-- check-failure-triage:gen=1 -->",
+	"<!-- check-failure-triage:root=" + "b" * 64 + " -->",
+	"<!-- check-failure-triage:pr=6786 -->",
+]
+BASE_KEYED_REST = [
+	"## CI failure on `main`",
+	"",
+	"- **Pull request:** https://github.com/o/r/pull/6786 (`ai/issue-6789`)",
+	"- **Base branch:** `main`",
+]
+BASE_KEYED_BODY = "\n".join(BASE_KEYED_HEADER + ["<!-- check-failure-triage:base=main -->"] + BASE_KEYED_REST)
+
+
+def test_ci_owner_candidate_returns_base_keyed_for_a_line5_base_marker() -> None:
+	# #10040: a triage issue keyed on a failing default branch (#9674) names
+	# its PR only as an example; it has no owner, so the default branch is kept.
+	for labels in (["ai:check-triage"], ["ai:check-triage-escalated"], []):
+		assert actions.ci_owner_candidate(BASE_KEYED_BODY, labels, "o/r") == {"pr": None, "reason": "base_keyed"}
+	crlf = BASE_KEYED_BODY.replace("\n", "\r\n")
+	assert actions.ci_owner_candidate(crlf, ["ai:check-triage"], "o/r") == {"pr": None, "reason": "base_keyed"}
+	nested = "\n".join(BASE_KEYED_HEADER + ["<!-- check-failure-triage:base=release/v2.1 -->"] + BASE_KEYED_REST)
+	assert actions.ci_owner_candidate(nested, [], "o/r") == {"pr": None, "reason": "base_keyed"}
+	assert actions._check_triage_base_keyed_ref(nested) == "release/v2.1"
+	# A non-CI body keeps its own reason.
+	assert actions.ci_owner_candidate("plain body", [], "o/r")["reason"] == "not_ci_failure"
+
+
+def _base_keyed_variant(case: str) -> str:
+	base = "<!-- check-failure-triage:base=main -->"
+	if case == "line6":
+		return "\n".join(BASE_KEYED_HEADER + ["", base] + BASE_KEYED_REST)
+	if case == "line1":
+		return "\n".join([base] + BASE_KEYED_HEADER + BASE_KEYED_REST)
+	if case == "dotdot":
+		return "\n".join(BASE_KEYED_HEADER + ["<!-- check-failure-triage:base=a..b -->"] + BASE_KEYED_REST)
+	if case == "space":
+		return "\n".join(BASE_KEYED_HEADER + ["<!-- check-failure-triage:base=ma in -->"] + BASE_KEYED_REST)
+	if case == "tilde":
+		return "\n".join(BASE_KEYED_HEADER + ["<!-- check-failure-triage:base=main~1 -->"] + BASE_KEYED_REST)
+	if case == "too_long":
+		return "\n".join(BASE_KEYED_HEADER + ["<!-- check-failure-triage:base=" + "m" * 201 + " -->"] + BASE_KEYED_REST)
+	if case == "bad_fp":
+		header = ["<!-- check-failure-triage:fp=" + "a" * 63 + " -->"] + BASE_KEYED_HEADER[1:]
+		return "\n".join(header + [base] + BASE_KEYED_REST)
+	if case == "leading_space":
+		return "\n".join(BASE_KEYED_HEADER + [" " + base] + BASE_KEYED_REST)
+	raise AssertionError(case)
+
+
+@pytest.mark.parametrize("case", ["line6", "line1", "dotdot", "space", "tilde", "too_long", "bad_fp", "leading_space"])
+def test_ci_owner_candidate_ignores_a_misplaced_or_invalid_base_marker(case: str) -> None:
+	without_base = "\n".join(BASE_KEYED_HEADER + BASE_KEYED_REST)
+	expected = {"pr": 6786, "reason": "marker"}
+	assert actions.ci_owner_candidate(without_base, ["ai:check-triage"], "o/r") == expected
+	body = _base_keyed_variant(case)
+	assert actions._check_triage_base_keyed_ref(body) is None
+	assert actions.ci_owner_candidate(body, ["ai:check-triage"], "o/r") == expected
+
+
 def test_merged_green_owner_supersedes_the_reissue() -> None:
 	ops = actions.plan(_verdict("reissue", instructions="spec"), _ctx(ci_owner=_owner("superseded")))
 	assert [op["op"] for op in ops] == ["comment", "close"]
@@ -1250,6 +1340,14 @@ def test_ci_owner_cli_reports_the_pr_and_declared_branch(tmp_path: Path) -> None
 	result = subprocess.run([sys.executable, str(ACTIONS), "ci-owner", "--item-file", str(item), "--repo", "o/r"], capture_output=True, text=True, check=False)
 	assert result.returncode == 0, result.stderr
 	assert json.loads(result.stdout) == {"pr": 6786, "reason": "marker", "declared_branch": "orchestrator/project-9"}
+
+
+def test_ci_owner_cli_reports_base_keyed(tmp_path: Path) -> None:
+	item = tmp_path / "item.json"
+	item.write_text(json.dumps({"body": BASE_KEYED_BODY, "labels": [{"name": "ai:check-triage"}, {"name": "ai:blocked"}]}), encoding="utf-8")
+	result = subprocess.run([sys.executable, str(ACTIONS), "ci-owner", "--item-file", str(item), "--repo", "o/r"], capture_output=True, text=True, check=False)
+	assert result.returncode == 0, result.stderr
+	assert json.loads(result.stdout) == {"pr": None, "reason": "base_keyed", "declared_branch": None}
 
 
 def test_followup_posts_the_reset_for_the_stop() -> None:
@@ -2444,6 +2542,24 @@ def test_untrusted_project_head_never_binds_project(tmp_path: Path, head_repo: s
 	assert any(endpoint == "repos/o/r/pulls/7" and fields.get("state") == "closed" for endpoint, fields in state["patched"])
 
 
+@pytest.mark.parametrize(("head_repo", "head_ref", "context_ref", "routed"), [
+	("o/r", "ai/issue-9261", "ai/issue-9261", True),
+	("o/r", "feature/x", "feature/x", False),
+	("evil/r", "ai/issue-9261", "", False),
+])
+def test_pr_fixup_context_carries_the_trusted_head_ref(tmp_path: Path, head_repo: str, head_ref: str, context_ref: str, routed: bool) -> None:
+	"""#9938: the judge passes a trusted PR's head ref; the fix-up routes only ai/issue-<n>."""
+	pr = dict(ISSUE, pull_request={"url": "u"})
+	result, state = _judge(tmp_path, pr, verdict={"verdict": "descope", "reason": "r", "instructions": "drop it"},
+		FAKE_GH_PR_HEAD_REPO=head_repo, FAKE_GH_PR_HEAD_REF=head_ref)
+	assert result.returncode == 0, result.stderr
+	assert json.loads((tmp_path / "rt" / "context.json").read_text(encoding="utf-8"))["pr_head_ref"] == context_ref
+	bodies = [created["body"] for created in state["created"]]
+	assert any(f"- Integration branch: `{head_ref}`" in body for body in bodies) == routed
+	if not routed:
+		assert not any("Integration branch" in body for body in bodies)
+
+
 def test_pr_project_binding_accepts_same_repo_case_insensitively(tmp_path: Path) -> None:
 	pr = dict(ISSUE, pull_request={"url": "u"})
 	result, state = _judge(tmp_path, pr, verdict={"verdict": "descope", "reason": "r", "instructions": "drop it"},
@@ -3567,6 +3683,35 @@ def test_open_owner_pr_reissue_records_its_head_branch(tmp_path: Path) -> None:
 	body = state["created"][0]["body"]
 	assert body.startswith("<!-- check-failure-triage:pr=6786 -->\n")
 	assert body.endswith("- Integration branch: `ai/issue-6789`")
+
+
+def _owner_pr_reads(state: dict) -> list[list[str]]:
+	return [call for call in state["calls"] if "repos/o/r/pulls/6786" in call]
+
+
+def test_base_keyed_ci_issue_reissue_stays_on_the_default_branch(tmp_path: Path) -> None:
+	# #10040: the example PR is open, but a base-keyed issue's fix belongs on
+	# the default branch; the re-issue carries no owner marker or branch line.
+	item = dict(CI_ISSUE, body=BASE_KEYED_BODY, labels=[{"name": "ai:blocked"}, {"name": "ai:check-triage"}])
+	open_pr = _owner_pr(state="open", merged=False)
+	result, state = _judge(tmp_path, item, verdict=REISSUE, FAKE_GH_OWNER_PR=json.dumps(open_pr), FAKE_GH_OWNER_REF="1")
+	assert "op=ci_owner outcome=none reason=base_keyed" in result.stdout, result.stdout + result.stderr
+	assert "op=ci_owner outcome=open" not in result.stdout
+	assert len(state["created"]) == 1
+	body = state["created"][0]["body"]
+	assert "check-failure-triage:pr=" not in body
+	assert "Integration branch" not in body
+	assert _owner_pr_reads(state) == []
+	# The example PR merged green: still no superseded close, a re-issue instead.
+	merged_dir = tmp_path / "merged"
+	merged_dir.mkdir()
+	result, state = _judge(merged_dir, item, verdict=REISSUE, FAKE_GH_OWNER_PR=json.dumps(_owner_pr()), FAKE_GH_OWNER_CHECKS=GREEN_CHECKS,
+		FAKE_GH_OWNER_RUNS=CI_RUNS, AUTO_MERGE_REQUIRED_CI_CHECK="CI", AUTO_MERGE_WAIT_WORKFLOWS="CI")
+	assert "op=ci_owner outcome=none reason=base_keyed" in result.stdout, result.stdout + result.stderr
+	assert "outcome=superseded" not in result.stdout
+	assert len(state["created"]) == 1 and "check-failure-triage:pr=" not in state["created"][0]["body"]
+	assert not any(comment["body"].startswith("Superseded:") for comment in state["comments"])
+	assert _owner_pr_reads(state) == []
 
 
 # Q54: an automation-path latch the current guard would not set is re-granted

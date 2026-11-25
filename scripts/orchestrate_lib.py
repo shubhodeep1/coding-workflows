@@ -545,6 +545,10 @@ def build_concurrency_snapshot(
 		not isinstance(implementing_threshold_minutes, int) or implementing_threshold_minutes < 1
 	):
 		implementing_threshold_minutes = None
+	# Issue #9473: a queued run older than ZOMBIE_RUN_MAX_QUEUED_HOURS is
+	# wedged (zero jobs, cannot be cancelled) and never takes a cap slot, even
+	# when the threshold above is configured past 24 hours. Read once per call.
+	zombie_hours = zombie_run_max_queued_hours()
 
 	for run in runs:
 		if not isinstance(run, dict):
@@ -559,6 +563,9 @@ def build_concurrency_snapshot(
 			threshold_minutes=threshold_minutes,
 			implementing_threshold_minutes=implementing_threshold_minutes,
 		):
+			continue
+		if is_wedged_queued_run(run, effective_now_ts, zombie_hours):
+			log_zombie_run_ignored(run, "concurrency_snapshot", effective_now_ts)
 			continue
 		counts[state] += 1
 		global_running += 1
@@ -2555,6 +2562,94 @@ def _parse_iso8601_to_epoch(iso_str: Any) -> int | None:
 		return int(dt.timestamp())
 	except (ValueError, TypeError, OverflowError, OSError):
 		return None
+
+
+# Wedged queued workflow runs (issue #9473). Python twin of
+# zombie_queued_cutoff_epoch / zombie_queued_jq_def in scripts/gh_helpers.sh:
+# a run is wedged when its status is "queued" and its created_at is at least
+# ZOMBIE_RUN_MAX_QUEUED_HOURS (default 24; 0 or invalid disables) old.
+# GitHub refuses to cancel or delete such zero-job runs, so guards ignore them
+# instead. A missing or unparseable created_at keeps the run active.
+_ZOMBIE_RUN_MAX_QUEUED_HOURS_RE = re.compile(r"^[0-9]{1,5}$")
+_ZOMBIE_RUN_IGNORED_SEEN: set[tuple[str, str]] = set()
+
+
+def zombie_run_max_queued_hours(env: Any = None) -> int:
+	"""Return ZOMBIE_RUN_MAX_QUEUED_HOURS (default 24); 0 means disabled.
+
+	A value that is not a whole number of hours warns on stderr and
+	returns 0 (filter disabled), matching the Bash helper.
+	"""
+	source = os.environ if env is None else env
+	raw = source.get("ZOMBIE_RUN_MAX_QUEUED_HOURS", "")
+	raw = "" if raw is None else str(raw)
+	if raw == "":
+		return 24
+	if not _ZOMBIE_RUN_MAX_QUEUED_HOURS_RE.match(raw):
+		print(
+			"::warning::ZOMBIE_RUN_MAX_QUEUED_HOURS is not a whole number of hours; wedged-queued filter disabled",
+			file=sys.stderr,
+		)
+		return 0
+	return int(raw, 10)
+
+
+def _zombie_run_created_epoch(run: Any) -> int | None:
+	if not isinstance(run, dict):
+		return None
+	created = run.get("created_at")
+	if created is None:
+		created = run.get("createdAt")
+	# Same parse rule as the jq twin (fromdateiso8601): only Z-suffixed UTC
+	# values parse; offset or naive timestamps keep the run active.
+	if not isinstance(created, str) or not created.endswith("Z"):
+		return None
+	return _parse_iso8601_to_epoch(created)
+
+
+def is_wedged_queued_run(run: Any, now_epoch: int, max_hours: int) -> bool:
+	"""True when ``run`` is a queued run older than ``max_hours`` hours."""
+	if not isinstance(run, dict):
+		return False
+	if not isinstance(max_hours, int) or isinstance(max_hours, bool) or max_hours <= 0:
+		return False
+	if not isinstance(now_epoch, int) or isinstance(now_epoch, bool) or now_epoch <= 0:
+		return False
+	status = run.get("status")
+	if not isinstance(status, str) or status.lower() != "queued":
+		return False
+	created = _zombie_run_created_epoch(run)
+	if created is None:
+		return False
+	return created <= now_epoch - max_hours * 3600
+
+
+def _zombie_log_token(value: Any, allowed: str) -> str:
+	text = "-" if value is None or value == "" else str(value)
+	return re.sub(f"[^{allowed}]", "_", text)
+
+
+def log_zombie_run_ignored(run: Any, guard: str, now_epoch: int, *, stream: Any = None) -> None:
+	"""Emit one ZOMBIE_RUN_IGNORED line per (guard, run id) per process."""
+	if not isinstance(run, dict):
+		return
+	run_id = run.get("id")
+	if run_id is None:
+		run_id = run.get("databaseId")
+	run_token = _zombie_log_token(run_id, "A-Za-z0-9_.-")
+	guard_token = _zombie_log_token(guard, "A-Za-z0-9_.-")
+	key = (guard_token, run_token)
+	if key in _ZOMBIE_RUN_IGNORED_SEEN:
+		return
+	_ZOMBIE_RUN_IGNORED_SEEN.add(key)
+	workflow = run.get("path") or run.get("workflowName") or run.get("name")
+	workflow_token = _zombie_log_token(workflow, "A-Za-z0-9_./@-")
+	created = _zombie_run_created_epoch(run)
+	age = "-" if created is None or now_epoch <= 0 else str(max(0, (now_epoch - created) // 3600))
+	print(
+		f"ZOMBIE_RUN_IGNORED run={run_token} workflow={workflow_token} age_h={age} guard={guard_token}",
+		file=stream if stream is not None else sys.stderr,
+	)
 
 
 def detect_stalls(

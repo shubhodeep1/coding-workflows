@@ -21,8 +21,10 @@ provisional names from the issue.
 
 from __future__ import annotations
 
+import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -54,6 +56,7 @@ VERIFY_EXECUTED_SCRIPTS = {
 	"apply_audit_gate_assets.py",
 	"assemble_changelog.py",
 	"assemble_agents.py",
+	"sync_dependabot_exclusions.py",
 }
 BOOTSTRAP_SCRIPTS = {
 	"scripts/verify_release_manifest.py",
@@ -63,6 +66,17 @@ BOOTSTRAP_SCRIPTS = {
 	"scripts/assemble_changelog.py",
 	"scripts/assemble_agents.py",
 }
+# Executed only when the attested release manifest lists them, after their own
+# hash check in verify_release (issue #9485): a release whose manifest predates
+# the helper must still verify.
+ATTESTATION_GATED_SCRIPTS = {
+	"scripts/sync_dependabot_exclusions.py",
+}
+DEPENDABOT_HELPER_JQ = (
+	"'[(.files // [])[] | select(type == \"object\" and .path == $p and .mode != \"120000\")] "
+	"| if length == 1 then (.[0].sha256 // \"\") else \"\" end'"
+)
+PROFILE_EXPRESSION = "${{ vars.WORKFLOW_PROFILE != '' && vars.WORKFLOW_PROFILE || 'full' }}"
 
 
 def _load(path: Path) -> dict:
@@ -294,7 +308,7 @@ def test_verify_job_runs_only_attested_release_python() -> None:
 	assert loop
 	assert set(loop.group(1).split()) == BOOTSTRAP_SCRIPTS
 	for name in VERIFY_EXECUTED_SCRIPTS:
-		assert f"scripts/{name}" in BOOTSTRAP_SCRIPTS
+		assert f"scripts/{name}" in BOOTSTRAP_SCRIPTS | ATTESTATION_GATED_SCRIPTS
 	assert release.index("gh attestation verify") < release.index("python3 -I -B")
 
 
@@ -384,6 +398,70 @@ def test_verify_job_reproduces_agents_fragment_assembly() -> None:
 	run = _verify_step("verify_reproduce")["run"]
 	assert '"${RELEASE_ROOT}/scripts/assemble_agents.py" assemble' in run
 	assert '--repo-root "${BASE_TREE}"' in run
+
+
+def test_dependabot_helper_is_hash_checked_before_the_verify_job_runs_it() -> None:
+	release = _verify_step("verify_release")["run"]
+	gate = release.index('DEPENDABOT_HELPER_REL="scripts/sync_dependabot_exclusions.py"')
+	block = release[gate:release.index('PATHS_FILE="${WORK}/paths.txt"', gate)]
+	assert DEPENDABOT_HELPER_JQ in block
+	assert 'sha256sum -- "${dependabot_helper_path}"' in block
+	assert block.count("reject bootstrap verifier_hash_mismatch") == 2
+	assert block.index("verifier_hash_mismatch") < block.index("dependabot_helper_attested=true")
+	assert release.index("gh attestation verify") < gate
+	assert 'echo "dependabot_helper_attested=${dependabot_helper_attested}"' in release
+	paths = release[release.index('PATHS_FILE="${WORK}/paths.txt"'):]
+	assert 'printf \'%s\\n\' "${DEPENDABOT_HELPER_REL}"' in paths[:paths.index("> \"${PATHS_FILE}\"")]
+	step = _verify_step("verify_reproduce")
+	assert step["env"]["DEPENDABOT_HELPER_ATTESTED"] == "${{ steps.verify_release.outputs.dependabot_helper_attested }}"
+	assert step["env"]["WORKFLOW_PROFILE_SELECTED"] == PROFILE_EXPRESSION
+	run = step["run"]
+	call = run.index('"${RELEASE_ROOT}/scripts/sync_dependabot_exclusions.py"')
+	# VERIFIED=true too: with UPDATER_VERIFY_RELEASE_MANIFEST=false the update
+	# job never attests the helper, so the verify job must skip it as well.
+	guard = run.rindex('if [ "${VERIFIED:-}" = "true" ] && [ "${DEPENDABOT_HELPER_ATTESTED:-}" = "true" ]; then', 0, call)
+	assert "fi" not in run[guard:call].split()
+	invocation = run[call:run.index("\nfi\n", call)]
+	assert '--repo-root "${BASE_TREE}"' in invocation
+	assert '--templates-dir "${RELEASE_ROOT}/workflow-templates"' in invocation
+	assert '--profile "${WORKFLOW_PROFILE_SELECTED}"' in invocation
+	assert '--changed-paths-file "${WORK}/dependabot_changed_files.txt"' in invocation
+	# Fail open like the update job, never a reject.
+	assert "reject" not in invocation
+	assert run.index("ensure-assets") < call
+
+
+def test_dependabot_sync_runs_before_the_wrapper_update_and_gates_the_commit() -> None:
+	steps = _workflow()["jobs"]["update-wrappers"]["steps"]
+	ids = [step.get("id") for step in steps]
+	assert ids.index("changelog_sync") < ids.index("dependabot_sync") < ids.index("update")
+	sync = steps[ids.index("dependabot_sync")]
+	assert sync["name"] == "Sync Dependabot exclusions for managed wrappers"
+	assert sync["if"] == "${{ inputs.allow_workflow_edits != false }}"
+	assert sync["env"]["SELECTED_PROFILE"] == PROFILE_EXPRESSION
+	assert sync["env"]["DEPENDABOT_HELPER_ATTESTED"] == "${{ steps.verify_release_manifest.outputs.dependabot_helper_attested }}"
+	assert sync["env"]["RELEASE_MANIFEST_VERIFIED"] == "${{ steps.verify_release_manifest.outputs.verified }}"
+	run = sync["run"]
+	assert '--changed-paths-file /tmp/dependabot_changed_files.txt' in run
+	assert '|| echo "::warning::DEPENDABOT_EXCLUDE_SYNC' in run
+	# The update job skips the helper whenever it is unattested, including
+	# verified=skipped, so it never stages an edit verify_reproduce cannot
+	# reproduce (verify-pr-tree would reject it as unlisted_path).
+	skip = run.index('if [ "${DEPENDABOT_HELPER_ATTESTED:-}" != "true" ]; then')
+	assert '[ "${RELEASE_MANIFEST_VERIFIED:-}" = "true" ] &&' not in run
+	assert skip < run.index('python3 -I -B "${DEPENDABOT_HELPER}"')
+	gate = "steps.dependabot_sync.outputs.dependabot_has_changes == 'true'"
+	commit = steps[ids.index("commit_push")]
+	assert gate in commit["if"]
+	notify = [step for step in steps if step.get("name") == "Send Telegram notification"][0]
+	assert gate in notify["if"]
+	assert "done < /tmp/dependabot_changed_files.txt" in commit["run"]
+	# The update job reads the attestation from its verified manifest with the
+	# verify job's exact expression, and hash-verifies the helper when listed.
+	manifest_step = steps[ids.index("verify_release_manifest")]["run"]
+	assert DEPENDABOT_HELPER_JQ in manifest_step
+	assert 'echo "dependabot_helper_attested=${dependabot_helper_attested}" >> "${VERIFY_OUT}"' in manifest_step
+	assert manifest_step.index('printf \'%s\\n\' "${DEPENDABOT_HELPER_REL}"') < manifest_step.index('--paths-file "${PATHS_FILE}"')
 
 
 def test_template_gate_is_registered_in_ci() -> None:
@@ -542,3 +620,300 @@ def test_merge_failure_is_reported_not_retried(tmp_path: Path) -> None:
 	assert result.returncode == 0, result.stderr
 	assert sum(call.startswith("pr merge") for call in calls) == 1
 	assert outputs["auto_merge"] == "failed"
+
+
+# ── Merge-blocked alarm (#9483) ──────────────────────────────────────────
+
+
+MERGE_BLOCKED_IF = "${{ !cancelled() && steps.verify_publish.outcome == 'success' && steps.verify_publish.outputs.auto_merge == 'failed' }}"
+
+
+def test_merge_blocked_step_fails_the_job_after_mark_verify_failure() -> None:
+	steps = _verify_job()["steps"]
+	names = [step.get("name") for step in steps]
+	step = _verify_step("verify_merge_blocked")
+	assert step["name"] == "Fail when auto-merge could not be enabled"
+	assert step["if"] == MERGE_BLOCKED_IF
+	assert names.index("Mark verify failure") < names.index(step["name"]) < names.index("Verify summary")
+	assert "continue-on-error" not in step
+	run = step["run"]
+	assert "${{" not in run
+	assert "::error::UPDATER_PR_VERIFY outcome=merge_blocked reason=auto_merge_failed pr=${PR_NUMBER} head=${PUSHED_SHA}" in run
+	# #9483 fix 1 removed the read:org dependency; do not send operators there.
+	assert "read:org" not in run
+	assert "curl -sS --fail -X POST" in run
+	# A hung Telegram endpoint must not hold the failure until the job timeout.
+	assert "--max-time 30" in run
+	assert step["env"]["ALERT_MSG_LEVEL"].endswith("|| vars.ALERT_MSG_LEVEL || 'WARNING' }}")
+	assert run.rstrip().endswith("exit 1")
+	# The verify status is never touched: a human can still merge the PR.
+	assert "statuses" not in run
+	assert "gh " not in run
+	assert "Telegram not configured — skipping merge-blocked alert." in run
+	assert step["env"]["TG_BOT_SECRET"] == "${{ secrets.TG_BOT_SECRET }}"
+	# "Mark verify failure" keeps its condition, so it never runs when the
+	# publish step (and its success status) succeeded.
+	failure = [s for s in steps if s.get("name") == "Mark verify failure"][0]
+	assert failure["if"] == "${{ always() && steps.verify_inputs.outputs.sha_ok == 'true' && steps.verify_publish.outcome != 'success' }}"
+
+
+FAKE_CURL = """#!/usr/bin/env bash
+printf '%s\\n' "$*" >> "${FAKE_CURL_LOG}"
+exit "${FAKE_CURL_RC:-0}"
+"""
+
+
+def _run_merge_blocked(tmp_path: Path, level: str, secret: str, curl_rc: int = 0) -> tuple[subprocess.CompletedProcess, list[str]]:
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir()
+	curl = bin_dir / "curl"
+	curl.write_text(FAKE_CURL, encoding="utf-8")
+	curl.chmod(curl.stat().st_mode | stat.S_IXUSR)
+	log = tmp_path / "curl.log"
+	env = {
+		**{k: v for k, v in os.environ.items() if not k.startswith(("GITHUB_", "GH_", "FAKE_", "TG_"))},
+		"PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+		"PR_NUMBER": "77",
+		"PUSHED_SHA": PUSHED_SHA,
+		"ALERT_MSG_LEVEL": level,
+		"TG_BOT_SECRET": secret,
+		"TG_ADMIN_CHAT_ID": "123" if secret else "",
+		"SYNC_REPO": REPO,
+		"SYNC_RUN_URL": "https://github.com/octo/consumer/actions/runs/1",
+		"FAKE_CURL_LOG": str(log),
+		"FAKE_CURL_RC": str(curl_rc),
+	}
+	result = subprocess.run(["bash", "-c", _verify_step("verify_merge_blocked")["run"]], env=env, capture_output=True, text=True)
+	calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+	return result, calls
+
+
+def test_merge_blocked_step_alerts_and_exits_nonzero(tmp_path: Path) -> None:
+	result, calls = _run_merge_blocked(tmp_path, "WARNING", "bot-secret")
+	assert result.returncode == 1
+	assert f"::error::UPDATER_PR_VERIFY outcome=merge_blocked reason=auto_merge_failed pr=77 head={PUSHED_SHA}" in result.stdout
+	sent = "\n".join(calls)
+	assert sent.count("api.telegram.org/bot") == 1
+	assert "chat_id=123" in sent
+	assert "updater PR #77 in octo/consumer" in sent
+
+
+def test_merge_blocked_step_alerts_when_no_level_is_set(tmp_path: Path) -> None:
+	# An unset or empty level means WARNING for this ERROR-class alert.
+	result, calls = _run_merge_blocked(tmp_path, "", "bot-secret")
+	assert result.returncode == 1
+	assert "\n".join(calls).count("api.telegram.org/bot") == 1
+
+
+def test_merge_blocked_step_still_fails_without_telegram(tmp_path: Path) -> None:
+	result, calls = _run_merge_blocked(tmp_path, "WARNING", "")
+	assert result.returncode == 1
+	assert "Telegram not configured" in result.stdout
+	assert calls == []
+
+
+def test_merge_blocked_step_honours_silent_alert_level(tmp_path: Path) -> None:
+	result, calls = _run_merge_blocked(tmp_path, "SILENT", "bot-secret")
+	assert result.returncode == 1
+	assert "suppresses the merge-blocked alert" in result.stdout
+	assert calls == []
+
+
+def test_merge_blocked_step_warns_when_telegram_rejects_the_alert(tmp_path: Path) -> None:
+	# curl --fail exits 22 on an HTTP 4xx/5xx reply; the warning must show
+	# and the step must still fail the job.
+	result, calls = _run_merge_blocked(tmp_path, "WARNING", "bot-secret", curl_rc=22)
+	assert result.returncode == 1
+	assert "::warning::Telegram send failed" in result.stdout
+	assert "\n".join(calls).count("api.telegram.org/bot") == 1
+
+
+# ── Head gate re-check after verify (#9483 fix 3) ────────────────────────
+
+
+UPDATER_BRANCH = "auto/update-workflows-0123456789ab"
+HEAD_GATE_IF = "${{ !cancelled() && steps.verify_publish.outcome == 'success' }}"
+FAKE_GATE_GH = '''#!/usr/bin/env python3
+import json, os, sys
+args = sys.argv[1:]
+token = os.environ.get("GH_TOKEN", "")
+with open(os.environ["FAKE_GH_LOG"], "a") as out:
+    out.write(json.dumps({"args": args, "token": token}) + "\\n")
+if args[:3] == ["api", "-X", "POST"]:
+    sys.exit(1 if token in os.environ.get("FAKE_REFUSED_TOKENS", "none").split(",") else 0)
+if len(args) >= 2 and args[0] == "api" and "/commits/" in args[1] and "/status" in args[1]:
+    seq = json.loads(os.environ["FAKE_STATUS_SEQ"])
+    counter = os.environ["FAKE_GH_LOG"] + ".n"
+    n = int(open(counter).read()) if os.path.exists(counter) else 0
+    open(counter, "w").write(str(n + 1))
+    item = seq[min(n, len(seq) - 1)]
+    if item is None:
+        sys.exit(1)
+    print(json.dumps(item))
+    sys.exit(0)
+if len(args) >= 2 and args[0] == "api" and args[1] == "repos/octo/consumer/pulls/77":
+    print(os.environ["FAKE_PR_JSON"])
+    sys.exit(0)
+sys.exit(1)
+'''
+
+
+def _gate_statuses(verify: str | None = "success", integrity: str | None = "success", total: int | None = None) -> dict:
+	statuses = []
+	if verify is not None:
+		statuses.append({"context": STATUS_CONTEXT, "state": verify})
+	if integrity is not None:
+		statuses.append({"context": "coding-workflows/workflow-integrity", "state": integrity})
+	return {"state": "pending", "total_count": len(statuses) if total is None else total, "statuses": statuses}
+
+
+def _gate_pr(**head: object) -> dict:
+	return {
+		"state": "open",
+		"head": {"ref": UPDATER_BRANCH, "sha": PUSHED_SHA, "repo": {"full_name": REPO}, **head},
+		"base": {"ref": "main", "repo": {"full_name": REPO}},
+	}
+
+
+def _run_head_gate(tmp_path: Path, seq: list | None = None, pr: dict | None = None,
+	**env_overrides: str) -> tuple[subprocess.CompletedProcess, list[dict]]:
+	if not shutil.which("jq"):
+		pytest.skip("jq is required by the head-gate step")
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir(parents=True)
+	gh = bin_dir / "gh"
+	gh.write_text(FAKE_GATE_GH, encoding="utf-8")
+	gh.chmod(gh.stat().st_mode | stat.S_IXUSR)
+	log = tmp_path / "gh.log"
+	env = {
+		**{k: v for k, v in os.environ.items() if not k.startswith(("GITHUB_", "GH_", "FAKE_", "REVIEW_HEAD_GATE_", "UPDATER_HEAD_GATE_"))},
+		"PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+		"GITHUB_REPOSITORY": REPO,
+		"GITHUB_RUN_ID": "1",
+		"PR_NUMBER": "77",
+		"PUSHED_SHA": PUSHED_SHA,
+		"VERIFY_STATUS_CONTEXT": STATUS_CONTEXT,
+		"STATUS_TOKEN": "job-token",
+		"MERGE_TOKEN": "pat-token",
+		"UPDATER_HEAD_GATE_POLL_ATTEMPTS": "3",
+		"UPDATER_HEAD_GATE_POLL_SECONDS": "0",
+		"FAKE_GH_LOG": str(log),
+		"FAKE_STATUS_SEQ": json.dumps([_gate_statuses()] if seq is None else seq),
+		"FAKE_PR_JSON": json.dumps(_gate_pr() if pr is None else pr),
+		**env_overrides,
+	}
+	result = subprocess.run(["bash", "-c", _verify_step("verify_head_gate")["run"]], env=env, capture_output=True, text=True)
+	calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()] if log.exists() else []
+	return result, calls
+
+
+def _gate_posts(calls: list[dict]) -> list[dict]:
+	return [call for call in calls if call["args"][:3] == ["api", "-X", "POST"]]
+
+
+def test_head_gate_step_follows_publish_and_never_merges() -> None:
+	steps = _verify_job()["steps"]
+	ids = [step.get("id") for step in steps]
+	names = [step.get("name") for step in steps]
+	step = _verify_step("verify_head_gate")
+	assert step["if"] == HEAD_GATE_IF
+	assert ids.index("verify_publish") < ids.index("verify_head_gate") < names.index("Mark verify failure")
+	assert step["env"]["REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED"] == "${{ vars.REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED || 'true' }}"
+	assert step["env"]["MERGE_TOKEN"] == "${{ secrets.GH_PAT }}"
+	run = step["run"]
+	assert "${{" not in run
+	assert "gh pr merge" not in run
+	assert "context=ai-review/head-gate" in run
+	assert run.rstrip().endswith("exit 0")
+
+
+def test_head_gate_posts_success_when_verify_and_integrity_are_green(tmp_path: Path) -> None:
+	result, calls = _run_head_gate(tmp_path)
+	assert result.returncode == 0, result.stderr
+	posts = _gate_posts(calls)
+	assert len(posts) == 1
+	assert posts[0]["args"][3] == f"repos/{REPO}/statuses/{PUSHED_SHA}"
+	assert "state=success" in posts[0]["args"] and "context=ai-review/head-gate" in posts[0]["args"]
+	assert posts[0]["token"] == "pat-token"
+	assert f"REVIEW_HEAD_GATE mode=updater_exempt source=verify_job pr=77 head={PUSHED_SHA} outcome=posted reason=verified" in result.stdout
+
+
+def test_head_gate_waits_for_a_late_integrity_status(tmp_path: Path) -> None:
+	seq = [_gate_statuses(integrity=None), _gate_statuses(integrity="pending"), _gate_statuses()]
+	result, calls = _run_head_gate(tmp_path, seq)
+	assert result.returncode == 0, result.stderr
+	assert sum("/status" in call["args"][1] for call in calls if call["args"][1] != "-X") == 3
+	assert len(_gate_posts(calls)) == 1
+
+
+@pytest.mark.parametrize("seq,pr,reason,reads", [
+	([_gate_statuses(integrity="failure")], None, "integrity_not_success", 1),
+	([_gate_statuses(verify="failure")], None, "verify_not_success", 1),
+	([_gate_statuses(integrity=None)], None, "integrity_missing", 3),
+	([_gate_statuses(integrity=None, total=150)], None, "status_page_incomplete", 1),
+	([None], None, "status_read_failed", 3),
+	([{"statuses": "nope"}], None, "invalid_response", 1),
+	(None, _gate_pr(sha="b" * 40), "head_moved", 1),
+	(None, _gate_pr(repo={"full_name": "evil/consumer"}), "fork_head", 1),
+	(None, _gate_pr(ref="ai/issue-1"), "not_updater_branch", 1),
+	(None, {**_gate_pr(), "state": "closed"}, "pr_not_open", 1),
+])
+def test_head_gate_fails_closed(tmp_path: Path, seq: list | None, pr: dict | None, reason: str, reads: int) -> None:
+	result, calls = _run_head_gate(tmp_path, seq, pr)
+	assert result.returncode == 0, result.stderr
+	assert not _gate_posts(calls)
+	assert f"outcome=skipped reason={reason}" in result.stdout
+	assert sum(call["args"][1].endswith("/status?per_page=100") for call in calls) == reads
+	# Only an expired wait window (still missing or pending) raises the warning.
+	assert ("left pending" in result.stdout) == (reason in {"integrity_missing", "status_read_failed"})
+
+
+@pytest.mark.parametrize("env,reason", [
+	({"REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED": "false"}, "disabled"),
+	({"REVIEW_HEAD_GATE_STATUS_ENABLED": "false"}, "status_disabled"),
+	({"REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED": "FALSE"}, "disabled"),
+	({"PR_NUMBER": "abc"}, "invalid_input"),
+])
+def test_head_gate_switches_make_no_api_call(tmp_path: Path, env: dict, reason: str) -> None:
+	result, calls = _run_head_gate(tmp_path, **env)
+	assert result.returncode == 0, result.stderr
+	assert calls == []
+	assert f"outcome=skipped reason={reason}" in result.stdout
+
+
+def test_head_gate_falls_back_to_the_job_token_and_never_fails_the_job(tmp_path: Path) -> None:
+	result, calls = _run_head_gate(tmp_path, FAKE_REFUSED_TOKENS="pat-token")
+	assert result.returncode == 0, result.stderr
+	assert [post["token"] for post in _gate_posts(calls)] == ["pat-token", "job-token"]
+	assert "outcome=posted reason=verified" in result.stdout
+	result, calls = _run_head_gate(tmp_path / "both", FAKE_REFUSED_TOKENS="pat-token,job-token")
+	assert result.returncode == 0, result.stderr
+	assert len(_gate_posts(calls)) == 2
+	assert "outcome=skipped reason=post_failed" in result.stdout
+
+
+def test_head_gate_accepts_resend_branch(tmp_path: Path) -> None:
+	# The verify step's own regex copy must accept -r2..-r5 resend branches
+	# like REVIEW_HEAD_GATE_UPDATER_BRANCH_RE, or their gate stays pending (#9483).
+	result, calls = _run_head_gate(tmp_path, pr=_gate_pr(ref=UPDATER_BRANCH + "-r3"))
+	assert result.returncode == 0, result.stderr
+	assert len(_gate_posts(calls)) == 1
+	assert "outcome=posted reason=verified" in result.stdout
+	result, calls = _run_head_gate(tmp_path / "r6", pr=_gate_pr(ref=UPDATER_BRANCH + "-r6"))
+	assert result.returncode == 0, result.stderr
+	assert not _gate_posts(calls)
+	assert "outcome=skipped reason=not_updater_branch" in result.stdout
+
+
+def test_head_gate_step_constants_match_the_review_helper() -> None:
+	# verify_head_gate copies the branch regex and status contexts of
+	# scripts/review_head_gate.sh; a rename on one side must fail CI rather
+	# than leave updater PRs pending again (#9483).
+	helper = (REPO_ROOT / "scripts" / "review_head_gate.sh").read_text(encoding="utf-8")
+	consts = dict(re.findall(r"^(REVIEW_HEAD_GATE_UPDATER_[A-Z_]+)=['\"]([^'\"]+)['\"]$", helper, re.MULTILINE))
+	assert {"REVIEW_HEAD_GATE_UPDATER_BRANCH_RE", "REVIEW_HEAD_GATE_UPDATER_VERIFY_CONTEXT", "REVIEW_HEAD_GATE_UPDATER_INTEGRITY_CONTEXT"} <= set(consts), consts
+	run = _verify_step("verify_head_gate")["run"]
+	assert f"--arg re '{consts['REVIEW_HEAD_GATE_UPDATER_BRANCH_RE']}'" in run
+	assert f'--arg i "{consts["REVIEW_HEAD_GATE_UPDATER_INTEGRITY_CONTEXT"]}"' in run
+	assert '--arg v "${VERIFY_STATUS_CONTEXT}"' in run
+	assert _verify_job()["env"]["VERIFY_STATUS_CONTEXT"] == consts["REVIEW_HEAD_GATE_UPDATER_VERIFY_CONTEXT"]

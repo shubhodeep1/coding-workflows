@@ -732,9 +732,14 @@ def test_clarify_attempt_loop_keeps_its_messages_and_adds_the_failure_line() -> 
 	assert 'echo "::warning::${clarify_engine_name} exited with code $rc on attempt ${attempt}."' in loop
 	assert 'echo "::warning::${clarify_engine_name} returned empty output on attempt ${attempt}."' in loop
 	assert 'echo "::error::${clarify_engine_name} clarify failed after ${max_attempts} attempts."' in loop
-	# Only the give-up line is an error annotation; a retry that later
-	# succeeds must not leave errors behind.
-	assert loop.count("::error::") == 1
+	# Only the two give-up lines (after the last attempt, and after a source
+	# snapshot rejection, #9837) are error annotations; a retry that later
+	# succeeds still leaves no error behind.
+	assert loop.count("::error::") == 2
+	assert (
+		'echo "::error::${clarify_engine_name} clarify stopped after attempt ${attempt}: '
+		'scripts/clarify_isolated_run.sh rejected the source snapshot, and a retry gets the same result."'
+	) in loop
 
 
 def test_crashed_clarify_attempts_name_the_pool_reason_in_heal_evidence() -> None:

@@ -34,6 +34,8 @@ permissions:
   actions: write
   # final-ci-failed reads check-run annotations (classify-run).
   checks: read
+  # lint posts the `ci/final` commit status (#9939).
+  statuses: write
 
 jobs:
   quick:

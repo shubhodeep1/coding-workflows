@@ -1,0 +1,6 @@
+<!-- changelog: fixed -->
+- **The release back-off no longer counts wedged queued runs.** The runner-queue back-off in `scripts/auto_release_stable.sh` compared the repository's raw queued-run total with `AUTO_RELEASE_STABLE_MAX_QUEUED_RUNS` (`100`). GitHub leaves some runs queued with no jobs for good, and 240 of them alone kept the check from passing while the back-off window was open (`AUTO_RELEASE_SKIPPED reason=runner_queue_deep ... queued=245 max=100`). The back-off now compares live queued runs: queued runs minus those older than `ZOMBIE_RUN_MAX_QUEUED_HOURS` (default `24`). The second `per_page=1` read that counts the wedged runs happens only when the total is at or above the limit. The log lines keep every key and gain `wedged=<n>` after `queued=<live>`; a failed wedged read logs `AUTO_RELEASE_QUEUE_CHECK outcome=read_failed lookup=wedged_runs` and dispatches. With `ZOMBIE_RUN_MAX_QUEUED_HOURS` at `0` or invalid the count is the raw one, as before. The count comes from the new `zombie_queued_live_count` helper in `scripts/gh_helpers.sh`.
+
+`CLAUDE.md` gains §33.D "Wedged Queued Runs": a session does not report, count, cancel or ask anyone to clean up queued runs older than `ZOMBIE_RUN_MAX_QUEUED_HOURS`, and quotes queue depth as live runs only.
+
+Refs #10032.

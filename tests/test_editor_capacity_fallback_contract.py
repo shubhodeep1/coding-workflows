@@ -19,6 +19,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -27,6 +28,8 @@ CATALOG = REPO_ROOT / "scripts" / "codex_model_catalog.json"
 PLAN = REPO_ROOT / ".github" / "workflows" / "plan.yml"
 PLAN_RUNNER = REPO_ROOT / "scripts" / "run_plan_codex.sh"
 IMPLEMENT = REPO_ROOT / ".github" / "workflows" / "implement.yml"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_implement_text  # noqa: E402
 REVIEW = REPO_ROOT / ".github" / "workflows" / "review_autofix.yml"
 REVIEW_APPLY_FIXES = REPO_ROOT / "scripts" / "review_apply_fixes.sh"
 
@@ -66,7 +69,7 @@ def test_fallback_model_declared_in_catalog() -> None:
 
 def test_workflows_declare_fallback_env() -> None:
 	for path in (PLAN, IMPLEMENT, REVIEW):
-		text = path.read_text(encoding="utf-8")
+		text = expanded_implement_text() if path == IMPLEMENT else path.read_text(encoding="utf-8")
 		assert FALLBACK_ENV_DEFAULT in text, (
 			f"{path} must declare MODEL_EDITOR_FALLBACK defaulting to "
 			f"{FALLBACK_SLUG} via WORKFLOW_EDITOR_FALLBACK_MODEL"
@@ -87,7 +90,7 @@ def test_plan_loop_switches_model_on_final_attempt() -> None:
 
 
 def test_implement_loop_switches_model_on_final_attempt() -> None:
-	text = IMPLEMENT.read_text(encoding="utf-8")
+	text = expanded_implement_text()
 	assert 'attempt_model="${MODEL_EDITOR}"' in text
 	assert (
 		'[ "${attempt}" -eq "${max_attempts}" ] '

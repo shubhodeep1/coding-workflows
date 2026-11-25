@@ -64,6 +64,19 @@ REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED=0
 # runner, cleared when it starts, completes or is replaced.
 REVIEW_RUNNER_WAIT_SINCE=""
 REVIEW_RUNNER_WAIT_RUN_ID=""
+# When and for which run the last stretch closed (issue #10037): a runner
+# assigned only in the last third of the budget is a late assignment.
+REVIEW_RUNNER_WAIT_CLOSED_AT=""
+REVIEW_RUNNER_WAIT_CLOSED_RUN_ID=""
+# What the open stretch saw (issue #10037, G3): a job status=queued with no
+# runner (a runner wait), or a job held in waiting/pending (an environment or
+# concurrency hold, not a runner wait). Only a stretch that saw the first and
+# never the second is reported as runner_wait. The *_CLOSED_* copies keep the
+# last closed stretch's start and verdict for the late_assigned check.
+REVIEW_RUNNER_WAIT_QUEUED_SEEN=0
+REVIEW_RUNNER_WAIT_HELD_SEEN=0
+REVIEW_RUNNER_WAIT_CLOSED_SINCE=""
+REVIEW_RUNNER_WAIT_CLOSED_QUALIFIED=0
 # Consecutive polls whose runs lookup came back empty (#9480).
 REVIEW_RUNNER_WAIT_EMPTY_POLLS=0
 if [[ "${E2E_JOB_STARTED_EPOCH:-}" =~ ^[0-9]+$ ]] \
@@ -171,6 +184,83 @@ e2e_watched_run_urls() {
   [ -z "$urls" ] || printf ' (watched runs:%s)' "$urls"
 }
 
+# BEGIN phase4 review timeout reason (#9619)
+# Refs #9418: a Phase 4 inactivity timeout whose watched review run
+# stayed queued/pending with no started job for the whole wait is
+# environmental (runner or concurrency starvation), not a review stall.
+# These helpers read only data the loop already fetched; no API call.
+# The flag is sticky per watched run: once that run or one of its jobs
+# is seen started it stays 1, so a real stall is never relabelled as
+# environmental. It resets only when the watched RUN_ID changes (e.g.
+# the cancel-and-pivot to a successor); the run-status change that
+# comes with the pivot also resets the inactivity timer, so the
+# successor alone spans the timed-out window.
+E2E_REVIEW_RUN_EVER_STARTED=0
+E2E_REVIEW_STARTED_FOR_RUN_ID=""
+E2E_REVIEW_LAST_JOBS_JSON=""
+# Poll time (NOW) at which the watched RUN_ID was first seen. A pivot
+# between runs in an identical state does not reset LAST_ACTIVITY, so
+# the reason check below also requires that this run was watched since
+# the start of the idle window; otherwise it reports inactivity.
+E2E_REVIEW_RUN_FIRST_SEEN_AT=""
+e2e_review_note_run_started() {
+  # Only jobs data fetched this poll for the current RUN_ID counts.
+  E2E_REVIEW_LAST_JOBS_JSON=""
+  if [[ "${RUN_ID:-}" =~ ^[0-9]+$ ]] && [ "$RUN_ID" != "${E2E_REVIEW_STARTED_FOR_RUN_ID:-}" ]; then
+    E2E_REVIEW_STARTED_FOR_RUN_ID="$RUN_ID"
+    E2E_REVIEW_RUN_EVER_STARTED=0
+    E2E_REVIEW_RUN_FIRST_SEEN_AT="${NOW:-}"
+  fi
+  if [ "${RUN_STATUS:-}" = "in_progress" ] && [ -n "${JOBS_JSON:-}" ]; then
+    E2E_REVIEW_LAST_JOBS_JSON="$JOBS_JSON"
+  elif [ "${E2E_REVIEW_JOBS_STEP_FRESH:-0}" = "1" ] && [ -n "${JOBS_STEP_JSON:-}" ]; then
+    E2E_REVIEW_LAST_JOBS_JSON="$JOBS_STEP_JSON"
+  fi
+  # completed alone is not proof: a run cancelled while queued is
+  # completed/cancelled with no job ever run, so completed is left to
+  # the jobs check below.
+  if [ "${RUN_STATUS:-}" = "in_progress" ]; then
+    E2E_REVIEW_RUN_EVER_STARTED=1
+    return 0
+  fi
+  if [ -n "$E2E_REVIEW_LAST_JOBS_JSON" ] \
+      && printf '%s' "$E2E_REVIEW_LAST_JOBS_JSON" | jq -e '(.jobs | type == "array") and any(.jobs[]; .status == "in_progress" or .status == "completed")' >/dev/null 2>&1; then
+    E2E_REVIEW_RUN_EVER_STARTED=1
+  fi
+  return 0
+}
+# Prints review_run_never_started or inactivity (fixed enum only).
+e2e_review_timeout_reason() {
+  if [ "${E2E_REVIEW_RUN_EVER_STARTED:-0}" = "0" ] \
+      && [[ "${RUN_ID:-}" =~ ^[0-9]+$ ]] \
+      && [[ "${RUN_STATUS:-}" =~ ^(queued|pending|waiting|requested)$ ]] \
+      && [[ "${E2E_REVIEW_RUN_FIRST_SEEN_AT:-}" =~ ^[0-9]+$ ]] \
+      && [[ "${LAST_ACTIVITY:-}" =~ ^[0-9]+$ ]] \
+      && [ "$E2E_REVIEW_RUN_FIRST_SEEN_AT" -le "$LAST_ACTIVITY" ] \
+      && [ -n "${E2E_REVIEW_LAST_JOBS_JSON:-}" ] \
+      && printf '%s' "$E2E_REVIEW_LAST_JOBS_JSON" | jq -e '(.jobs | type == "array") and (.total_count | type == "number") and (.total_count <= (.jobs | length)) and all(.jobs[]; (.status | type == "string") and (.status | test("^(queued|pending|waiting|requested)$")))' >/dev/null 2>&1; then
+    # total_count guard: the jobs page holds at most 10 entries, so a
+    # longer run (or a payload without a numeric count) is never
+    # classified from a partial list (#9619).
+    echo "review_run_never_started"
+  else
+    echo "inactivity"
+  fi
+}
+# Prints <job_id>=<status>[,...], none, or unavailable. Job names are
+# never printed, so no third-party text reaches the log.
+e2e_review_timeout_job_statuses() {
+  local statuses=""
+  if [ -z "${E2E_REVIEW_LAST_JOBS_JSON:-}" ]; then
+    echo "unavailable"
+    return 0
+  fi
+  statuses=$(printf '%s' "$E2E_REVIEW_LAST_JOBS_JSON" | jq -r 'if (.jobs | type == "array") then ([.jobs[] | select((.id | type == "number") and .id >= 0 and .id == (.id | floor) and (.status | type == "string") and (.status | test("^[a-z_]+$"))) | "\(.id)=\(.status)"] | if length == 0 then "none" else join(",") end) else "unavailable" end' 2>/dev/null || echo "unavailable")
+  [[ "$statuses" =~ ^(none|unavailable|[0-9]+=[a-z_]+(,[0-9]+=[a-z_]+)*)$ ]] || statuses="unavailable"
+  echo "$statuses"
+}
+# END phase4 review timeout reason (#9619)
+
 LAST_ACTIVITY="$REVIEW_PHASE_STARTED_AT"
 PREV_STATE=""
 LAST_STEP_GUARD_RUN_ID=""
@@ -224,6 +314,11 @@ declare -A BAIT_REVIEW_COVERAGE_CACHE=()
 declare -A BAIT_REVIEW_UNKNOWN_COUNTS=()
 
 . ./scripts/comprehensive_test_and_release_gh_api.sh
+# Every gh_api_safe read below is a per-poll read of the wait loop, so this
+# step opts them all in to the job token (issue #9888). gh_api_safe uses it
+# only for reads of this repository and only when the step exports
+# GH_READ_TOKEN; otherwise (and on a 401/403/404/rate limit) it uses the PAT.
+GH_API_SAFE_USE_READ_TOKEN="${GH_API_SAFE_USE_READ_TOKEN:-1}"
 
 # The runs API reports the trigger SHA, not the SHA checked out by
 # codex-agent. Only a completed job log can prove leg (b) coverage.
@@ -377,7 +472,42 @@ while true; do
         fi
       fi
       echo "::error::Review phase exceeded its ${REVIEW_PHASE_WALL_BUDGET_MINUTES}-minute total wall-clock budget$(e2e_watched_run_urls)"
+      # Runner wait (issue #10037, G3): the watched review run never got a
+      # runner (the stretch is still open and the runs lookup still answers),
+      # or got one only in the last third of the time spent here. status
+      # stays timeout (Phase 4d reads it); runner_wait=true is added, and with
+      # DISPATCH_WATCH_STOP_RELEASE_GATE=true the gate stops itself so the run
+      # ends cancelled instead of failed. Anything else fails as before.
+      rw_result_reason=""
+      rw_result_run=""
+      # never_assigned also needs the open stretch to have started in the
+      # first third of the time spent here: a replacement run queued late,
+      # after an earlier review run overran, stays a real timeout.
+      if [[ "${REVIEW_RUNNER_WAIT_SINCE}" =~ ^[0-9]+$ ]] && [[ "${REVIEW_RUNNER_WAIT_RUN_ID}" =~ ^[0-9]+$ ]] \
+          && [ "${REVIEW_RUNNER_WAIT_EMPTY_POLLS:-0}" -le 2 ] \
+          && [ "${REVIEW_RUNNER_WAIT_QUEUED_SEEN}" = "1" ] && [ "${REVIEW_RUNNER_WAIT_HELD_SEEN}" = "0" ] \
+          && [ "${REVIEW_RUNNER_WAIT_SINCE}" -le $(( REVIEW_PHASE_STARTED_AT + (NOW - REVIEW_PHASE_STARTED_AT) / 3 )) ]; then
+        rw_result_reason="never_assigned"
+        rw_result_run="${REVIEW_RUNNER_WAIT_RUN_ID}"
+      elif [[ "${REVIEW_RUNNER_WAIT_CLOSED_RUN_ID}" =~ ^[0-9]+$ ]] && [ "${REVIEW_RUNNER_WAIT_CLOSED_RUN_ID}" = "${RUN_ID:-}" ] \
+          && [[ "${REVIEW_RUNNER_WAIT_CLOSED_AT}" =~ ^[0-9]+$ ]] \
+          && [ "${REVIEW_RUNNER_WAIT_CLOSED_QUALIFIED}" = "1" ] \
+          && [[ "${REVIEW_RUNNER_WAIT_CLOSED_SINCE}" =~ ^[0-9]+$ ]] \
+          && [ "${REVIEW_RUNNER_WAIT_CLOSED_SINCE}" -le $(( REVIEW_PHASE_STARTED_AT + (NOW - REVIEW_PHASE_STARTED_AT) / 3 )) ] \
+          && [ "${REVIEW_RUNNER_WAIT_CLOSED_AT}" -ge $(( REVIEW_PHASE_STARTED_AT + 2 * (NOW - REVIEW_PHASE_STARTED_AT) / 3 )) ]; then
+        rw_result_reason="late_assigned"
+        rw_result_run="${REVIEW_RUNNER_WAIT_CLOSED_RUN_ID}"
+      fi
       echo "status=timeout" >> "$GITHUB_OUTPUT"
+      if [ -n "${rw_result_reason}" ]; then
+        echo "E2E_REVIEW_RUNNER_WAIT run=${rw_result_run} outcome=runner_wait reason=${rw_result_reason}"
+        echo "runner_wait=true" >> "$GITHUB_OUTPUT"
+        if [ "$(printf '%s' "${DISPATCH_WATCH_STOP_RELEASE_GATE:-false}" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
+          bash "${E2E_RUNNER_WAIT_STOP_HELPER:-./scripts/dispatch_and_watch_workflow_run.sh}" --stop-release-gate \
+            --repo "${TEST_REPO}" --watched-run-id "${rw_result_run}" --display-name review \
+            --runner-wait-reason "${rw_result_reason}" || true
+        fi
+      fi
       exit 1
     fi
   fi
@@ -539,6 +669,11 @@ while true; do
     # the wait here, before the completed-run exits below.
     if [ "$RUN_STATUS" = "completed" ] && [ -n "${REVIEW_RUNNER_WAIT_RUN_ID}" ] && [ "${REVIEW_RUNNER_WAIT_RUN_ID}" = "${RUN_ID}" ]; then
       echo "E2E_REVIEW_RUNNER_WAIT run=${RUN_ID} outcome=started waited_seconds=$((NOW - REVIEW_RUNNER_WAIT_SINCE))"
+      REVIEW_RUNNER_WAIT_CLOSED_AT="$NOW"
+      REVIEW_RUNNER_WAIT_CLOSED_RUN_ID="${REVIEW_RUNNER_WAIT_RUN_ID}"
+      REVIEW_RUNNER_WAIT_CLOSED_SINCE="${REVIEW_RUNNER_WAIT_SINCE}"
+      REVIEW_RUNNER_WAIT_CLOSED_QUALIFIED=0
+      [ "${REVIEW_RUNNER_WAIT_QUEUED_SEEN}" = "1" ] && [ "${REVIEW_RUNNER_WAIT_HELD_SEEN}" = "0" ] && REVIEW_RUNNER_WAIT_CLOSED_QUALIFIED=1
       REVIEW_RUNNER_WAIT_SINCE=""
       REVIEW_RUNNER_WAIT_RUN_ID=""
     fi
@@ -593,6 +728,7 @@ while true; do
     if [ "$RUN_STATUS" = "in_progress" ] && [ "$RUN_ID" != "unknown" ]; then
       # Fetch jobs once and reuse for failed-steps check, current step, and log size
       JOBS_JSON=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs/${RUN_ID}/jobs?per_page=10" || echo "")
+      E2E_REVIEW_JOBS_JSON_RUN_ID="$RUN_ID"
       if [ -n "$JOBS_JSON" ]; then
         FAILED_STEPS=$(echo "$JOBS_JSON" | jq '[.jobs[].steps[] | select(.conclusion == "failure")] | length' 2>/dev/null || echo "0")
       else
@@ -780,6 +916,13 @@ while true; do
   CURRENT_STEP=""
   CURRENT_STEP_STARTED_AT=""
   STEP_METADATA_FETCH_OK=0
+  E2E_REVIEW_JOBS_STEP_FRESH=0
+  # A cached JOBS_JSON belongs to the run it was fetched for. Drop it
+  # once the watched run changes so the successor's jobs are read by
+  # the existing fetch below, as for a run first seen queued (#9619).
+  if [ -n "${JOBS_JSON:-}" ] && [ "${E2E_REVIEW_JOBS_JSON_RUN_ID:-}" != "$RUN_ID" ]; then
+    JOBS_JSON=""
+  fi
   if [ "$RUN_ID" != "unknown" ]; then
     if [ -n "${JOBS_JSON:-}" ]; then
       CURRENT_STEP=$(echo "$JOBS_JSON" | jq -r '[.jobs[].steps[] | select(.status == "in_progress")] | last | .name // ""' 2>/dev/null || echo "")
@@ -789,6 +932,7 @@ while true; do
       fi
     else
       JOBS_STEP_JSON=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/actions/runs/${RUN_ID}/jobs?per_page=10" || echo "")
+      E2E_REVIEW_JOBS_STEP_FRESH=1
       if [ -n "$JOBS_STEP_JSON" ]; then
         CURRENT_STEP=$(echo "$JOBS_STEP_JSON" | jq -r '[.jobs[].steps[] | select(.status == "in_progress")] | last | .name // ""' 2>/dev/null || echo "")
         CURRENT_STEP_STARTED_AT=$(echo "$JOBS_STEP_JSON" | jq -r '[.jobs[].steps[] | select(.status == "in_progress")] | last | .started_at // ""' 2>/dev/null || echo "")
@@ -809,6 +953,9 @@ while true; do
   elif [ "${RUN_STATUS:-}" = "in_progress" ] && [ "$STEP_METADATA_FETCH_OK" != "1" ]; then
     echo "  ⚠ Jobs API returned no in-progress step timing for run ${RUN_ID}; per-step stall guard is unavailable this poll" >&2
   fi
+
+  # Record whether the watched review run ever started (#9619).
+  e2e_review_note_run_started
 
   # 2) Commit count on PR branch — editor pushes trigger changes
   PR_HEAD_SHA=$(gh_api_safe_quiet_print "repos/${TEST_REPO}/pulls/${PR_NUMBER}" \
@@ -873,7 +1020,20 @@ while true; do
       REVIEW_RUNNER_WAIT_SINCE="$NOW"
       REVIEW_RUNNER_WAIT_RUN_ID="$RUN_ID"
       echo "E2E_REVIEW_RUNNER_WAIT run=${RUN_ID} status=${RUN_STATUS} outcome=waiting since=${REVIEW_RUNNER_WAIT_SINCE} ceiling=${REVIEW_PHASE_DEADLINE_CEILING}"
+      REVIEW_RUNNER_WAIT_QUEUED_SEEN=0
+      REVIEW_RUNNER_WAIT_HELD_SEEN=0
     fi
+    # Issue #10037: jobs read this poll first; without one (or with an empty
+    # jobs list, as the watcher treats it), the run status.
+    rw_poll_kind="$(printf '%s' "${E2E_REVIEW_LAST_JOBS_JSON:-}" | jq -r 'if (.jobs | type) == "array" and (.jobs | length) > 0 then ((if any(.jobs[]; ((.status // "") == "waiting" or (.status // "") == "pending") and ((.runner_name // "") == "")) then "held" else "" end) + " " + (if any(.jobs[]; (.status // "") == "queued" and ((.runner_name // "") == "")) then "queued" else "" end)) else "none" end' 2>/dev/null || echo none)"
+    if [ "${rw_poll_kind:-none}" = "none" ]; then
+      case "${RUN_STATUS}" in
+        queued) rw_poll_kind=" queued" ;;
+        waiting|pending) rw_poll_kind="held " ;;
+      esac
+    fi
+    case "${rw_poll_kind}" in held*) REVIEW_RUNNER_WAIT_HELD_SEEN=1 ;; esac
+    case "${rw_poll_kind}" in *queued) REVIEW_RUNNER_WAIT_QUEUED_SEEN=1 ;; esac
     LAST_ACTIVITY=$NOW
     IDLE=0
   elif [ -n "${REVIEW_RUNNER_WAIT_RUN_ID}" ] \
@@ -888,6 +1048,11 @@ while true; do
     if [ "${REVIEW_RUNNER_WAIT_RUN_ID}" = "${RUN_ID}" ]; then
       echo "E2E_REVIEW_RUNNER_WAIT run=${RUN_ID} outcome=started waited_seconds=$((NOW - REVIEW_RUNNER_WAIT_SINCE))"
     fi
+    REVIEW_RUNNER_WAIT_CLOSED_AT="$NOW"
+    REVIEW_RUNNER_WAIT_CLOSED_RUN_ID="${REVIEW_RUNNER_WAIT_RUN_ID}"
+    REVIEW_RUNNER_WAIT_CLOSED_SINCE="${REVIEW_RUNNER_WAIT_SINCE}"
+    REVIEW_RUNNER_WAIT_CLOSED_QUALIFIED=0
+    [ "${REVIEW_RUNNER_WAIT_QUEUED_SEEN}" = "1" ] && [ "${REVIEW_RUNNER_WAIT_HELD_SEEN}" = "0" ] && REVIEW_RUNNER_WAIT_CLOSED_QUALIFIED=1
     REVIEW_RUNNER_WAIT_SINCE=""
     REVIEW_RUNNER_WAIT_RUN_ID=""
   fi
@@ -943,7 +1108,18 @@ while true; do
       exit 1
     fi
     echo "::error::Review phase stalled — no activity for ${REVIEW_TIMEOUT} minutes$(e2e_watched_run_urls)"
+    # timeout_reason (#9619, refs #9418) only adds detail: status stays
+    # timeout for every consumer. review_run_never_started means the
+    # watched run stayed queued/pending with no started job for the
+    # whole wait (environmental); anything else is inactivity.
+    E2E_REVIEW_TIMEOUT_REASON_VALUE=$(e2e_review_timeout_reason)
+    E2E_REVIEW_TIMEOUT_RUN_STATUS_SAFE="${RUN_STATUS:-none}"
+    [[ "$E2E_REVIEW_TIMEOUT_RUN_STATUS_SAFE" =~ ^[a-z_]+$ ]] || E2E_REVIEW_TIMEOUT_RUN_STATUS_SAFE="unknown"
+    E2E_REVIEW_TIMEOUT_RUN_ID_SAFE="${RUN_ID:-unknown}"
+    [[ "$E2E_REVIEW_TIMEOUT_RUN_ID_SAFE" =~ ^[0-9]+$ ]] || E2E_REVIEW_TIMEOUT_RUN_ID_SAFE="unknown"
+    echo "E2E_REVIEW_TIMEOUT_REASON run=${E2E_REVIEW_TIMEOUT_RUN_ID_SAFE} run_status=${E2E_REVIEW_TIMEOUT_RUN_STATUS_SAFE} reason=${E2E_REVIEW_TIMEOUT_REASON_VALUE} jobs=$(e2e_review_timeout_job_statuses)"
     echo "status=timeout" >> "$GITHUB_OUTPUT"
+    echo "timeout_reason=${E2E_REVIEW_TIMEOUT_REASON_VALUE}" >> "$GITHUB_OUTPUT"
     exit 1
   fi
 

@@ -22,11 +22,17 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
+
+try:
+	import yaml
+except ImportError:  # CI installs PyYAML; credential-free gate containers may not.
+	yaml = None
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "scripts" / "ci_sync_quick.sh"
@@ -502,11 +508,256 @@ def test_the_merge_path_dispatches_after_a_verified_update() -> None:
 # --- ci.yml ------------------------------------------------------------------
 
 
+# Fallback for containers without PyYAML: a loader for the YAML subset
+# .github/workflows/ci.yml uses (block mappings and sequences, plain and quoted
+# one-line scalars, one-line flow sequences/mappings, `|` / `>` block scalars).
+# It is used only when `import yaml` fails, so the ci.yml checks below still
+# run instead of being skipped. Anchors, tags, multi-line flow collections and
+# multi-line quoted scalars are not supported and raise ValueError.
+_SUBSET_KEY = re.compile(r"""^("(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|[^\s#'"\[\]{}\-?][^#]*?|-[^\s][^#]*?):(?:\s+(.*))?$""")
+
+
+def _subset_strip_comment(value: str) -> str:
+	quote = ""
+	for index, char in enumerate(value):
+		if quote:
+			if char == quote:
+				quote = ""
+		elif char in "'\"" and (index == 0 or value[index - 1] in " [{,"):
+			quote = char
+		elif char == "#" and (index == 0 or value[index - 1] in " \t"):
+			return value[:index].rstrip()
+	return value.rstrip()
+
+
+def _subset_quoted(value: str) -> str:
+	if value[0] == "'":
+		if len(value) < 2 or value[-1] != "'":
+			raise ValueError(f"unsupported single-quoted scalar: {value!r}")
+		return value[1:-1].replace("''", "'")
+	if len(value) < 2 or value[-1] != '"':
+		raise ValueError(f"unsupported double-quoted scalar: {value!r}")
+	escapes = {"n": "\n", "t": "\t", '"': '"', "\\": "\\", "/": "/", "0": "\0", " ": " "}
+	out, index, body = [], 0, value[1:-1]
+	while index < len(body):
+		char = body[index]
+		if char == "\\":
+			index += 1
+			if index >= len(body) or body[index] not in escapes:
+				raise ValueError(f"unsupported escape in {value!r}")
+			out.append(escapes[body[index]])
+		else:
+			out.append(char)
+		index += 1
+	return "".join(out)
+
+
+def _subset_scalar(value: str):
+	value = value.strip()
+	if not value:
+		return None
+	if value[0] in "&*!|>":
+		raise ValueError(f"unsupported YAML construct: {value!r}")
+	if value[0] in "'\"":
+		return _subset_quoted(value)
+	if value[0] == "[":
+		if value[-1] != "]":
+			raise ValueError(f"unsupported multi-line flow sequence: {value!r}")
+		inner = value[1:-1].strip()
+		return [_subset_scalar(part) for part in _subset_split_flow(inner)] if inner else []
+	if value[0] == "{":
+		if value[-1] != "}":
+			raise ValueError(f"unsupported multi-line flow mapping: {value!r}")
+		inner = value[1:-1].strip()
+		result = {}
+		for part in _subset_split_flow(inner) if inner else []:
+			key, _, item = part.partition(":")
+			result[_subset_scalar(key)] = _subset_scalar(item)
+		return result
+	if value in ("true", "True", "TRUE"):
+		return True
+	if value in ("false", "False", "FALSE"):
+		return False
+	if value in ("null", "Null", "NULL", "~"):
+		return None
+	if re.fullmatch(r"[-+]?[0-9]+", value):
+		return int(value)
+	if re.fullmatch(r"[-+]?(?:[0-9]+\.[0-9]*|\.[0-9]+)(?:[eE][-+]?[0-9]+)?", value):
+		return float(value)
+	return value
+
+
+def _subset_split_flow(inner: str) -> list[str]:
+	parts, current, quote, depth = [], [], "", 0
+	for char in inner:
+		if quote:
+			if char == quote:
+				quote = ""
+		elif char in "'\"":
+			quote = char
+		elif char in "[{":
+			depth += 1
+		elif char in "]}":
+			depth -= 1
+		elif char == "," and depth == 0:
+			parts.append("".join(current))
+			current = []
+			continue
+		current.append(char)
+	parts.append("".join(current))
+	return [part.strip() for part in parts]
+
+
+class _SubsetYamlLoader:
+	def __init__(self, text: str) -> None:
+		self.lines = text.replace("\r\n", "\n").split("\n")
+
+	@staticmethod
+	def _indent(line: str) -> int:
+		return len(line) - len(line.lstrip(" "))
+
+	def _next(self, index: int) -> int:
+		while index < len(self.lines):
+			stripped = self.lines[index].strip()
+			if stripped and not stripped.startswith("#") and stripped not in ("---", "..."):
+				if "\t" in self.lines[index][: self._indent(self.lines[index]) + 1]:
+					raise ValueError(f"tab indentation on line {index + 1}")
+				return index
+			index += 1
+		return index
+
+	def load(self):
+		index = self._next(0)
+		if index >= len(self.lines):
+			return None
+		value, index = self._block(index, self._indent(self.lines[index]))
+		if self._next(index) < len(self.lines):
+			raise ValueError(f"unparsed content on line {self._next(index) + 1}")
+		return value
+
+	@staticmethod
+	def _is_item(content: str) -> bool:
+		return content == "-" or content.startswith("- ")
+
+	def _block(self, index: int, indent: int):
+		if self._is_item(self.lines[index].strip()):
+			return self._sequence(index, indent)
+		return self._mapping(index, indent)
+
+	def _block_scalar(self, index: int, header: str, parent_indent: int):
+		style, chomp = header[0], ""
+		for flag in header[1:]:
+			if flag in "+-":
+				chomp = flag
+			else:
+				raise ValueError(f"unsupported block scalar header {header!r}")
+		body: list[str] = []
+		block_indent = None
+		while index < len(self.lines):
+			line = self.lines[index]
+			if line.strip():
+				if self._indent(line) <= parent_indent:
+					break
+				if block_indent is None:
+					block_indent = self._indent(line)
+				if self._indent(line) < block_indent:
+					raise ValueError(f"bad block scalar indentation on line {index + 1}")
+				body.append(line[block_indent:])
+			else:
+				body.append("")
+			index += 1
+		trailing = 0
+		while body and body[-1] == "":
+			body.pop()
+			trailing += 1
+		if style == "|":
+			text = "\n".join(body)
+		else:
+			text = ""
+			for position, line in enumerate(body):
+				if position == 0:
+					text = line
+				elif line == "":
+					text += "\n"
+				elif body[position - 1] == "" or line.startswith(" ") or body[position - 1].startswith(" "):
+					text += ("" if body[position - 1] == "" else "\n") + line
+				else:
+					text += " " + line
+		if not body:
+			return "", index
+		if chomp == "-":
+			return text, index
+		if chomp == "+":
+			return text + "\n" * (trailing + 1), index
+		return text + "\n", index
+
+	def _value(self, index: int, rest: str, indent: int, item_indent: int):
+		"""Value of a `key:` on line index-1 whose inline text is rest."""
+		rest = _subset_strip_comment(rest)
+		if rest and rest[0] in "|>":
+			return self._block_scalar(index, rest, indent)
+		if rest:
+			return _subset_scalar(rest), index
+		child = self._next(index)
+		if child < len(self.lines):
+			child_indent = self._indent(self.lines[child])
+			if child_indent > indent or (child_indent == indent == item_indent and self._is_item(self.lines[child].strip())):
+				return self._block(child, child_indent)
+		return None, index
+
+	def _mapping(self, index: int, indent: int):
+		result: dict = {}
+		while True:
+			index = self._next(index)
+			if index >= len(self.lines) or self._indent(self.lines[index]) != indent:
+				break
+			content = self.lines[index].strip()
+			if self._is_item(content):
+				break
+			match = _SUBSET_KEY.match(content)
+			if not match:
+				raise ValueError(f"unsupported YAML on line {index + 1}: {content!r}")
+			key = _subset_scalar(match.group(1))
+			if key in result:
+				raise ValueError(f"duplicate key {key!r} on line {index + 1}")
+			result[key], index = self._value(index + 1, match.group(2) or "", indent, indent)
+		return result, index
+
+	def _sequence(self, index: int, indent: int):
+		result: list = []
+		while True:
+			index = self._next(index)
+			if index >= len(self.lines) or self._indent(self.lines[index]) != indent:
+				break
+			content = self.lines[index].strip()
+			if not self._is_item(content):
+				break
+			item = content[1:].lstrip(" ")
+			item_indent = indent + (len(content) - len(item))
+			if not item or item.startswith("#"):
+				value, index = self._value(index + 1, "", indent, -1)
+			elif _SUBSET_KEY.match(item) and item[0] not in "[{":
+				# `- key: value` opens a mapping at the item's column.
+				self.lines[index] = " " * item_indent + item
+				value, index = self._mapping(index, item_indent)
+			else:
+				item = _subset_strip_comment(item)
+				if item[0] in "|>":
+					value, index = self._block_scalar(index + 1, item, indent)
+				else:
+					value, index = _subset_scalar(item), index + 1
+			result.append(value)
+		return result, index
+
+
+def _load_workflow(text: str):
+	if yaml is not None:
+		return yaml.safe_load(text)
+	return _SubsetYamlLoader(text).load()
+
+
 def _ci() -> dict:
-	# PyYAML is installed in CI; only the ci.yml tests need it, so a container
-	# without it still runs the classify / verify / dispatch tests above.
-	yaml = pytest.importorskip("yaml")
-	return yaml.safe_load(CI_WORKFLOW.read_text(encoding="utf-8"))
+	return _load_workflow(CI_WORKFLOW.read_text(encoding="utf-8"))
 
 
 def _on(workflow: dict) -> dict:
