@@ -124,7 +124,10 @@
 # gets the comments read (counted against the per-tick cap) so a marked head
 # is handed back: a branch's older ci.yml does not pass those switches to the
 # deferral. A hand-back whose script did not log `outcome=redispatched` or
-# `outcome=already_reported` appends ` stale_workflow=hand_back_failed`.
+# `outcome=already_reported` appends ` stale_workflow=hand_back_failed`; the
+# head retries next tick unless the script already posted its
+# `ai:final-ci-failed:v1` marker (dispatch_failed), after which a push or
+# stall recovery re-runs review.
 # Env: FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED (default true; `false` or any
 # other value hands a marked head back), plus what the hand-back script
 # reads (FINAL_CI_FAILED_REDISPATCH_ENABLED, ALLOW_WORKFLOW_EDITS).
@@ -223,8 +226,13 @@ review_final_ci_sweep_stale_hand_back()
 		timeout 120 bash "${hand_back_dir}/review_final_ci_failed.sh")" || true
 	[ -z "${hand_back_out}" ] || printf '%s\n' "${hand_back_out}"
 	# Only a hand-back that dispatched (or found one already reported) counts;
-	# read_failed, marker_failed, dispatch_failed, disabled, superseded or a
-	# timeout log `hand_back_failed`, and the marked head retries next tick.
+	# anything else logs `hand_back_failed`. read_failed, marker_failed,
+	# disabled and a timeout before the failed-marker POST leave the head
+	# marked, so it retries next tick. dispatch_failed (and a timeout after
+	# that POST) already posted `ai:final-ci-failed:v1`, so the head counts as
+	# unmarked from then on and waits for a push or stall recovery, as on the
+	# normal hand-back path; superseded means the PR head moved and the new
+	# head gets its own final run.
 	if printf '%s\n' "${hand_back_out}" | grep -Eq "^REVIEW_FINAL_CI_FAILED pr=$1 head=$2 outcome=(redispatched|already_reported)( |\$)"; then
 		FINAL_CI_SWEEP_STALE_NOTE=" stale_workflow=handed_back"
 	else
