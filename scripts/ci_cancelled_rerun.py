@@ -703,6 +703,13 @@ RUN_CANCELLED_MESSAGES = (
 )
 
 
+# classify_cancelled_run starts no annotation read later than this many
+# seconds after it began: each read may take its 30 s subprocess timeout, so
+# the classifier answers "unverified" before scripts/ci_final_status.sh's
+# `timeout 90` kills it (issue #10131).
+CLASSIFY_CANCELLED_READ_START_LIMIT_SECONDS = 55
+
+
 def run_cancel_only_annotations(annotations: list[dict]) -> bool:
 	# shutdown_only_annotations, plus the run-level cancel texts above.
 	return shutdown_only_annotations([item for item in annotations
@@ -732,8 +739,10 @@ def classify_cancelled_run(repo: str, run_id: int, ignore_job_names: tuple[str, 
 		"not_cancelled"; if none does, "run_cancelled".
 	The jobs read is tried twice (one retry after 2 s) before "unverified".
 	Reuses list_run_jobs, failure_annotations and shutdown_only_annotations
-	unchanged. Annotation text is never logged.
+	unchanged. Annotation text is never logged. No annotation read starts
+	after CLASSIFY_CANCELLED_READ_START_LIMIT_SECONDS ("unverified" instead).
 	"""
+	started_at = time.monotonic()
 	try:
 		try:
 			jobs = list_run_jobs(repo, run_id, ignore_job_names, attempt=attempt)
@@ -750,6 +759,8 @@ def classify_cancelled_run(repo: str, run_id: int, ignore_job_names: tuple[str, 
 		if len(cancelled) > MAX_FAILED_JOBS_CLASSIFIED:
 			return "unverified"
 		for job in cancelled:
+			if time.monotonic() - started_at > CLASSIFY_CANCELLED_READ_START_LIMIT_SECONDS:
+				return "unverified"
 			check_run_id = int(CHECK_RUN_URL_PATTERN.search(job["check_run_url"])[1])
 			if not run_cancel_only_annotations(failure_annotations(repo, check_run_id)):
 				return "not_cancelled"

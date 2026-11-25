@@ -469,6 +469,25 @@ def test_started_cancelled_jobs_with_hand_cancel_annotation_are_skipped(tmp_path
 	assert proc.stdout.splitlines()[-1] == f"CI_FINAL_STATUS sha={SHA} outcome=skipped reason=run_cancelled"
 
 
+def test_classifier_timeout_logs_reason_and_posts_failure(tmp_path: Path) -> None:
+	# A `timeout` stub that exits 124 with no output stands in for the 90 s
+	# limit firing, so the classifier never runs.
+	stub_dir = tmp_path / "timeout-stub"
+	stub_dir.mkdir()
+	stub = stub_dir / "timeout"
+	stub.write_text("#!/usr/bin/env bash\nexit 124\n", encoding="utf-8")
+	stub.chmod(0o755)
+	path = f"{stub_dir}:{tmp_path / 'bin'}:{os.environ.get('PATH', '/usr/bin:/bin')}"
+	proc, calls = _run(tmp_path, aggregate="failure", extra_env=_cancel_env([_job("static-checks", 1)], PATH=path))
+	assert proc.returncode == 0, proc.stderr
+	assert _posted_state(calls) == "failure"
+	assert _jobs_calls(calls) == []
+	lines = proc.stdout.splitlines()
+	assert f"CI_FINAL_STATUS sha={SHA} check=run_cancelled verdict=none reason=timeout" in lines
+	assert f"CI_FINAL_STATUS sha={SHA} check=run_cancelled verdict=none" not in lines
+	assert "outcome=skipped" not in proc.stdout
+
+
 @pytest.mark.parametrize("needs", ["not json", "[]", "{}", "null", ""])
 def test_invalid_needs_json_posts_failure_without_request(tmp_path: Path, needs: str) -> None:
 	_proc, calls = _run(tmp_path, aggregate="failure", extra_env={"CI_FINAL_STATUS_NEEDS_JSON": needs})
