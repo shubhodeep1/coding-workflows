@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_single_issue_security_pass.sh:360-363 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The new \"Accepted residual\" comment says \"the per-PR concurrency group in security-audit.yml keeps at most one pending run\", but with `cancel-in-progress: false` the group does not serialise audits for the same PR. The script itself says so at line 1423 (\"Per-PR audit concurrency groups no longer serialise audits, so bound how many run at once.\"). The mitigation actually in place is the `SECURITY_PASS_MAX_CONCURRENT_AUDITS` throttle at lines 1423-1433.\n  WHY: This is misleading documentation: readers will trust the concurrency group to bound the duplicate audits a network retry can cause, even though the residual risk is real. The source labelled it SEVERITY: NIT, which maps here to low. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash checked `.github/workflows/security-audit.yml:94-96` and judged the comment accurate, so the reviewers disagree.\n- scripts/review_single_issue_security_pass.sh:328-332 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: `single_pass_dispatch_error_class` classifies a failed dispatch with empty error output as `other`, although the issue defines `network` as a failure with no HTTP status. `single_pass_dispatch_audit` does not retry `other` failures.\n  WHY: A transient dispatch failure that produces no error text skips the requested in-run retry and goes straight to the failed-dispatch path. The source labelled it SEVERITY: NIT, which maps here to low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_single_issue_security_pass.sh:lines 360-363 (LAST RUN DIFF hunk @ -356,7 +356,10) | severity=NIT | confidence=5\n  PROBLEM: The new \"Accepted residual\" comment claims \"the per-PR concurrency group in security-audit.yml keeps at most one pending run\". The wrapper at workflow-templates/ai-security-audit.yml:40-42 uses `security-audit-<repo>-pr-<num>` with `cancel-in-progress: false`, which does not serialise audits for the same PR. Line 1423 of the same script contradicts the comment. The real mitigation is the `SECURITY_PASS_MAX_CONCURRENT_AUDITS` throttle at lines 1423-1433 (`single_pass_audit_runs`/`single_pass_active_audits`).\n  WHY: The documentation is misleading: several pending audits for the same PR can coexist, so the stated mitigation does not exist as described. Hardening suggestion: replace the concurrency-group claim with a pointer to the throttle at line 1423, or reword it to describe what `cancel-in-progress: false` actually does (about 3 lines, HARDENING_RISK_SCORE: 2). (2 related items)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_single_issue_security_pass.sh:328-332, `single_pass_dispatch_error_class` | severity=NIT | confidence=4\n  PROBLEM: A failed dispatch with empty error output is classified as `other`, although the issue defines `network` as a failure with no HTTP status. `single_pass_dispatch_audit` does not retry `other` failures.\n  WHY: A transient dispatch failure that produces no error text skips the requested in-run retry and proceeds to the failed-dispatch path.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0db1c8c88744f20311ad7e9f05b641fb2586c2bbd98b455cb808f8eaa075ccd9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10110,
+    "run_id": "45640916405",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45640916405",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125161849_d9afd38f4e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10110,
+    "run_id": "45640916405"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-25T16:18:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
