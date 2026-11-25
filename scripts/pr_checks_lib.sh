@@ -2769,7 +2769,7 @@ _merge_lease_split_soft()
 # behaves as before the lease existed.
 #
 # Env: MERGE_LEASE_ENABLED (default true; true/1/yes/on), MERGE_LEASE_TTL_MINUTES
-# (default 240, 30-1440; renewed each time the holder updates),
+# (default 480, 30-1440; renewed each time the holder updates),
 # MERGE_LEASE_MAX_HOLD_MINUTES (default 720, at least the TTL; no renewal
 # after that long since first acquisition),
 # MERGE_LEASE_REF_PREFIX (default refs/merge-lease/), MERGE_LEASE_WAIT_LABEL
@@ -2804,7 +2804,7 @@ _merge_lease_split_soft()
 # order until its head SHA changes. Env (defaults here):
 # MERGE_LEASE_REVOKE_ENABLED (default true; false turns off revocation,
 # eligibility, the skip list and `skip=` writes, so the record is byte-for-byte
-# the old format), MERGE_LEASE_IDLE_MINUTES (default 60, 0-1440; 0 turns the
+# the old format), MERGE_LEASE_IDLE_MINUTES (default 180, 0-1440; 0 turns the
 # idle test off). Every read failure is eligible (fail-open).
 # Hold labels (Refs #9969): a PR carrying a label listed in
 # MERGE_LEASE_HOLD_LABELS (default ai:needs-human,ai:security-pass-failed,
@@ -2852,8 +2852,8 @@ _merge_lease_enabled()
 
 _merge_lease_ttl_seconds()
 {
-	local lease_ttl_minutes="${MERGE_LEASE_TTL_MINUTES:-240}"
-	[[ "${lease_ttl_minutes}" =~ ^[0-9]+$ ]] || lease_ttl_minutes=240
+	local lease_ttl_minutes="${MERGE_LEASE_TTL_MINUTES:-480}"
+	[[ "${lease_ttl_minutes}" =~ ^[0-9]+$ ]] || lease_ttl_minutes=480
 	[ "${lease_ttl_minutes}" -ge 30 ] || lease_ttl_minutes=30
 	[ "${lease_ttl_minutes}" -le 1440 ] || lease_ttl_minutes=1440
 	echo $((lease_ttl_minutes * 60))
@@ -2887,12 +2887,12 @@ _merge_lease_revoke_enabled()
 	return 1
 }
 
-# Idle window in seconds (MERGE_LEASE_IDLE_MINUTES, default 60, clamped to
-# 0-1440; anything that is not a number uses 60). 0 turns the idle test off.
+# Idle window in seconds (MERGE_LEASE_IDLE_MINUTES, default 180, clamped to
+# 0-1440; anything that is not a number uses 180). 0 turns the idle test off.
 _merge_lease_idle_seconds()
 {
-	local lease_idle_minutes="${MERGE_LEASE_IDLE_MINUTES:-60}"
-	[[ "${lease_idle_minutes}" =~ ^[0-9]+$ ]] || lease_idle_minutes=60
+	local lease_idle_minutes="${MERGE_LEASE_IDLE_MINUTES:-180}"
+	[[ "${lease_idle_minutes}" =~ ^[0-9]+$ ]] || lease_idle_minutes=180
 	if [ "${#lease_idle_minutes}" -gt 4 ]; then
 		lease_idle_minutes=1440
 	fi
@@ -3810,8 +3810,8 @@ _merge_lease_pr_eligible()
 				[[ "${elig_since}" =~ ^[0-9]+$ ]] || return 0
 				elig_idle="$(_merge_lease_idle_seconds)"
 				# MERGE_LEASE_IDLE_MINUTES=0 turns off only the idle test (plan
-				# 2.3): the head-gate grace then uses the 60-minute default.
-				[ "${elig_idle}" -gt 0 ] || elig_idle=3600
+				# 2.3): the head-gate grace then uses the 180-minute default.
+				[ "${elig_idle}" -gt 0 ] || elig_idle=10800
 				elig_now="$(date -u +%s)"
 				if [ "$((10#${elig_since}))" -gt 0 ] && [ "${elig_idle}" -gt 0 ] && [ $((elig_now - 10#${elig_since})) -ge "${elig_idle}" ]; then
 					# Issue #9983 G1: a review or CI run still queued or running
