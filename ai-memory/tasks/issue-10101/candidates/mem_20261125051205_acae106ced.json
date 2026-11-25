@@ -1,0 +1,39 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "/answer [auto-answered-by-orchestrator]\n\nAuto-answered by the orchestrator clarify-respond workflow.\n\nDECISIONS:\nQ1: C\n\nRATIONALE:\nQ1: Leave `gh_read` in `scripts/gh_helpers.sh` (L1303-1317) and `gh_api_safe_job_token_read` in `scripts/comprehensive_test_and_release_gh_api.sh` (L306) unchanged, because option B would change behaviour for every workflow that uses `gh_read` and spend more of the PAT's rate limit during 5xx outages. Option A drops the issue's \"PAT output is used\" check, so C is the only choice that meets all of the issue's acceptance criteria. Two of the call sites already fall back to the PAT and need tests only: the `gh_api_safe` path (comprehensive_test_and_release_gh_api.sh L118-124, used by `gh_api_safe_quiet_print_read` in dispatch_and_watch_workflow_run.sh and by stable_e2e_step_wait_review.sh through `GH_API_SAFE_USE_READ_TOKEN`), and `_smoke_cancel_status` in stable_orchestrate_cancel_dispatched_run.sh, which retries with plain `gh api` (the PAT) at L64 after L58 fails. The only code fix is a local PAT fallback at the two `gh_retry gh_read --same-repo-only api ...` sites in scripts/promote_main_cycle.sh (L1830, L1881). Each runs one bounded `gh_retry gh api ...` with the same endpoint after the job-token attempt fails, keeps the existing L1830 stderr filter and the `|| echo \"\"` / `|| continue` handling, and leaves helper names and env defaults unchanged. The issue names promote_main_cycle.sh, so it stays in scope even though test-and-mark-stable.yml only runs its tests (L3529); at runtime it is started by promote-main-to-stable.yml L178.",
+  "fingerprint": "49ebbfb74cebda84256bd15625c0108611892f7832ec2d9d710dd6d6da801926",
+  "lineage": {
+    "issue_number": 10101,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45550831574",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45550831574",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10101"
+    ],
+    "workflow": "orchestrate_clarify_respond"
+  },
+  "record_id": "mem_20261125051205_acae106ced",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10101,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45550831574"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Orchestrator posted auto-answer for issue #10101",
+  "timestamps": {
+    "created_at": "2026-11-25T05:12:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
