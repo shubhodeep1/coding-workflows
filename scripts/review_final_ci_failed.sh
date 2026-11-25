@@ -54,7 +54,13 @@
 # are read by the classifier, as in the sweep. Extra API budget: one jobs GET
 # plus at most 10 annotation GETs, only on a non-sync-quick run on the current
 # head with no marker yet.
-# Logs: REVIEW_FINAL_CI_FAILED pr=<n> head=<sha> outcome=redispatched|already_reported|superseded|disabled|invalid_input|read_failed|marker_failed|dispatch_failed|full_suite_dispatched|full_suite_dispatch_failed|infra_rerun_deferred [workflow=<file>] [current=<sha>] [reason=<verdict>]
+# Logs: REVIEW_FINAL_CI_FAILED pr=<n> head=<sha> outcome=redispatched|already_reported|superseded|disabled|invalid_input|read_failed|marker_failed|dispatch_failed|full_suite_dispatched|full_suite_dispatch_failed|infra_rerun_deferred|deferred [workflow=<file>] [current=<sha>] [reason=<verdict>]
+# `outcome=deferred reason=cancelled_jobs_rerun` (issue #10023) follows the
+# `infra_rerun_deferred reason=abandoned` line: the failed attempt has no
+# failed test, only cancelled jobs the classifier reports as abandoned (no
+# timeout annotation), so the sweep's one re-run answers it and no hand-back
+# is dispatched. A job cancelled at its timeout-minutes limit is `genuine`
+# and is handed back as before.
 
 set -uo pipefail
 # Signed job-token comments (run-volume plan item 15): route this script's
@@ -179,6 +185,11 @@ review_final_ci_failed_main()
 	if [ -n "${final_ci_infra_reason}" ]; then
 		echo "::notice::The final CI run for PR #${PR_NUMBER} failed for an infrastructure reason (${final_ci_infra_reason}); the review sweep re-runs its failed jobs once instead of sending the PR back to review."
 		review_final_ci_failed_log infra_rerun_deferred "reason=${final_ci_infra_reason}"
+		if [ "${final_ci_infra_reason}" = "abandoned" ]; then
+			# Issue #10023 (G4): only cancelled jobs the sweep re-runs, no failed
+			# test; the re-run's attempt 2 is handed back if it fails too.
+			review_final_ci_failed_log deferred "reason=cancelled_jobs_rerun"
+		fi
 		return 0
 	fi
 
