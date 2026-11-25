@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- n/a (CI check run `tests-system-python (21)`, plus the aggregate `lint` check that only reports it):n/a | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  PROBLEM: The job failed during `actions/checkout` before any test ran: `git fetch ... +refs/pull/10068/merge` failed twice with \"Failed to connect to github.com port 443 after 134857 ms\", and `lint` fails only because it reports that job.\n  WHY: This was a runner network outage, not a defect in the diff, so the job only needs a re-run and no code change; check-run collection also timed out, so the other checks are not confirmed as passing. Both reviewers rated it SEVERITY: NIT, which maps to low here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- File: none. The failing check run is `tests-system-python (21)`; the aggregate `lint` check fails only because it reports that job. | severity=NIT | confidence=4\n  PROBLEM: The job failed during checkout, before any test ran; the log tail shows `git -c protocol.version=2 fetch ... +refs/pull/10068/merge` failing twice with \"Failed to connect to github.com port 443 after 134857 ms\".\n  WHY: This was a runner network outage, not a defect in the diff. Re-run the job; no code change is needed. Check-run collection timed out, so the other checks are not confirmed as passing either.\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- n/a (CI check run `tests-system-python (21)`, plus the aggregate `lint` check that only reports it):Actions run 45524172870 job 138903258829 log tail | severity=NIT | confidence=4\n  PROBLEM: The job failed during `actions/checkout` before any test ran: `git fetch ... +refs/pull/10068/merge` failed twice with \"Failed to connect to github.com port 443 after 134857 ms\". The `lint` job fails only because it requires all CI jobs to succeed.\n  WHY: Runner network outage, not a defect in the diff; check-run collection also timed out, so other checks are not confirmed as passing. No code change is needed \u2014 re-run the job.\n- HARDENING_SUGGESTION: scripts/unblock_judge.sh lines 2749-2750 (Phase 8b call-site check-triage skip)\n  PROBLEM: The skip is expressed as `! jq -e 'index(\"ai:check-triage\") != null'`, which fails open if labels.json is unreadable (jq exits 2, negated to true, and the verified close proceeds without the label evidence). Contrasting siblings in the same file fail closed (line 560: `... || return 1`; line 2738: `&& jq -e ...`).\n  WHY: suggested minimal fix: replace `! jq -e 'index(\"ai:check-triage\") != null' ...` with `jq -e 'index(\"ai:check-triage\") == null' ...` so an unreadable labels.json makes the condition false and the close is skipped; estimated lines changed: 1; HARDENING_RISK_SCORE: 1. (In practice labels.json is written unconditionally at scripts/unblock_judge.sh:2377 before judging, so this is advisory robustness, not a reachable defect.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "102d173265080de59f896a3bc5cfd84285e44eb4664802961338679870e4e641",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10068,
+    "run_id": "45532385699",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45532385699",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125041041_f9e7127422",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10068,
+    "run_id": "45532385699"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T04:10:41Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
