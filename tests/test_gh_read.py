@@ -645,6 +645,78 @@ def test_wait_review_reads_fall_back_to_the_pat(tmp_path: Path, job_stderr: str)
 	assert "log=pat-output" in result.stdout
 
 
+def _wait_review_call_statements() -> list[str]:
+	"""Each real gh_api_safe_quiet_print statement of the wait-review step,
+	joined over its backslash continuation lines (issue #10101)."""
+	lines = (SCRIPTS / "stable_e2e_step_wait_review.sh").read_text(encoding="utf-8").splitlines()
+	statements = []
+	for number in _read_helper_calls("\n".join(lines), "gh_api_safe_quiet_print"):
+		index = number - 1
+		parts = [lines[index].strip()]
+		while parts[-1].endswith("\\"):
+			index += 1
+			parts[-1] = parts[-1][:-1].rstrip()
+			parts.append(lines[index].strip())
+		statements.append(" ".join(parts))
+	return statements
+
+
+@pytest.mark.parametrize("job_stderr", JOB_FAILURES)
+def test_wait_review_real_call_lines_fall_back_to_the_pat(tmp_path: Path, job_stderr: str) -> None:
+	# Issue #10101: run every real wait-review call statement, verbatim from the
+	# script, against the stub gh. `if`/`elif ... then` fragments are closed so
+	# they run on their own; the read's result is then printed.
+	statements = _wait_review_call_statements()
+	assert len(statements) == RELEASE_GATE_READ_CALL_SITES["stable_e2e_step_wait_review.sh"]["gh_api_safe_quiet_print"]
+	for site, statement in enumerate(statements):
+		run_dir = tmp_path / f"site{site}"
+		run_dir.mkdir()
+		out_file = run_dir / "out.log"
+		env = _env(run_dir, FAKE_JOB_STDERR=job_stderr, FAKE_JOB_RC="1", FAKE_JOB_STDOUT="job-output")
+		setup = "\n".join(
+			f'{name}="{value}"'
+			for name, value in (
+				("TEST_REPO", REPO),
+				("coverage_run_id", "1"),
+				("coverage_job_id", "1"),
+				("coverage_log", out_file),
+				("BAIT_SHA", "abc"),
+				("coverage_checked", "def"),
+				("PR_BRANCH", "ai/issue-1"),
+				("PIN_SHA", "abc"),
+				("PR_NUMBER", "7"),
+				("RUN_ID", "1"),
+				("JOB_ID", "1"),
+				("LOG_FILE", out_file),
+				("JOB_ID_FOR_SIZE", "1"),
+			)
+		)
+		call = re.sub(r"^elif ", "if ", statement)
+		if call.startswith("if "):
+			assert call.endswith("; then"), (site, statement)
+			call += " echo site_then; else echo site_else; fi"
+		assigned = re.search(r"\b(\w+)=\$\(gh_api_safe_quiet_print\b", statement)
+		redirected = re.search(r'> "\$(\w+)"', statement)
+		if assigned:
+			show = f'printf "out=%s\\n" "${{{assigned.group(1)}}}"'
+		elif redirected:
+			show = f'printf "out=%s\\n" "$(cat "{out_file}")"'
+		else:
+			# The diagnostic inventory read prints to stderr.
+			assert ">&2" in statement, (site, statement)
+			show = ""
+		body = f'{WAIT_REVIEW_OPT_IN}\n{setup}\n{call}\n{show}\necho "rc=$?"'
+		result = _run(run_dir, body, env, RELEASE_GH_API, strict=True)
+		_assert_pat_fallback(result, env)
+		if "| wc -c" in statement:
+			assert re.search(rf"^out=\s*{len('pat-output')}$", result.stdout, re.MULTILINE), (site, result.stdout)
+		elif show:
+			assert "out=pat-output\n" in result.stdout, (site, statement, result.stdout)
+		else:
+			assert "pat-output" in result.stderr, (site, result.stderr)
+			assert "(inventory fetch failed)" not in result.stderr, (site, result.stderr)
+
+
 @pytest.mark.parametrize("job_stderr", JOB_FAILURES)
 def test_dispatch_watch_reads_fall_back_to_the_pat(tmp_path: Path, job_stderr: str) -> None:
 	watch = (SCRIPTS / "dispatch_and_watch_workflow_run.sh").read_text(encoding="utf-8")
