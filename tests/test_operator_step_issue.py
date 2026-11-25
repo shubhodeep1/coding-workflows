@@ -1479,6 +1479,7 @@ def test_operator_step_resolve_recheck_sees_a_new_unverifiable_entry(
 	monkeypatch.setattr(writer, "_gh", racing)
 	result = writer.resolve(REPO, BOT)
 	assert result["closed"] is False and fake.patches() == [] and _posts(fake, number) == []
+	assert result["unverified"] == 1
 	assert f"op=close issue={number} outcome=open reason=unverified_signed_entries" in capsys.readouterr().err
 
 
@@ -1498,6 +1499,7 @@ def test_operator_step_resolve_reopens_for_an_unverifiable_entry_after_the_close
 	monkeypatch.setattr(writer, "_gh", racing)
 	result = writer.resolve(REPO, BOT)
 	assert result["closed"] is False and fake.closed == [number] and fake.reopened == [number]
+	assert result["unverified"] == 1
 	assert f"op=close issue={number} outcome=open reason=reopened_after_close" in capsys.readouterr().err
 
 
