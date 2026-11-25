@@ -2857,8 +2857,8 @@ _merge_lease_split_soft()
 #   holder=<pr> head=<sha|> expires=<epoch> acquired=<epoch> updated=<epoch>
 #   holder_path=<pr> <path>   (one per path; `*` for a holder over the cap)
 # `paths:` holds the union, or `*`. One holder is written in the v1 shape, so
-# with the default of 1 the code path, record bytes, log lines and API calls
-# are those of Phases 1-4. _merge_lease_read sets MERGE_LEASE_HOLDER_ROWS
+# with MERGE_LEASE_MAX_HOLDERS=1 the code path, record bytes, log lines and API
+# calls are those of Phases 1-4. _merge_lease_read sets MERGE_LEASE_HOLDER_ROWS
 # (live rows `pr head expires acquired updated`, head `-` when unknown,
 # primary first), MERGE_LEASE_HOLDER_ALL_ROWS (expired rows too),
 # MERGE_LEASE_HOLDER_PATHS (`pr<TAB>path` lines) and MERGE_LEASE_HOLDER_COUNT;
@@ -2930,10 +2930,11 @@ _merge_lease_idle_seconds()
 }
 
 # Phase 5 (Refs #9781): holders allowed per base. MERGE_LEASE_MAX_HOLDERS
-# (default 2 since #10124, range 1-5; 1 restores the single-holder lease). A
-# value that is not a whole number of at most three digits (or is empty) uses 2
-# and prints one ::warning:: to stderr (the value shown is cut
-# to [0-9A-Za-z_-] and 32 characters); 0 gives 1, above 5 gives 5.
+# (default 2 since #10124, range 1-5; 1 restores the single-holder lease). An
+# empty or whitespace-only value uses 2 without a warning. A value that is not
+# a whole number of at most three digits uses 2 and prints one ::warning:: to
+# stderr (the value shown is cut to [0-9A-Za-z_-] and 32 characters); 0 gives
+# 1, above 5 gives 5.
 _merge_lease_max_holders()
 {
 	local lease_mh_raw="${MERGE_LEASE_MAX_HOLDERS:-2}" lease_mh_shown
