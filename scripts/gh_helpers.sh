@@ -1327,9 +1327,11 @@ _gh_read_run()
 	# error is permanent (see below). No latch: the next call tries the job
 	# token again.
 	if [ -z "${reason}" ]; then
-		# `gh pr checks` exits non-zero (1/8) with a valid answer for failed or
-		# pending checks, so its job-token result is returned unchanged.
-		if [ "${1:-} ${2:-}" = "pr checks" ]; then
+		# `gh pr checks` exits non-zero with a valid answer for pending (8) or
+		# failed (1, with the check table on stdout) checks, so that result is
+		# returned unchanged. A `pr checks` failure with rc 1 and no output
+		# (5xx, network) takes the reason=error PAT fallback below.
+		if [ "${1:-} ${2:-}" = "pr checks" ] && { [ "${rc}" -eq 8 ] || { [ "${rc}" -eq 1 ] && [ -s "${out_file}" ]; }; }; then
 			cat "${out_file}" 2>/dev/null || true
 			cat "${err_file}" >&2 2>/dev/null || true
 			rm -f "${out_file}" "${err_file}"

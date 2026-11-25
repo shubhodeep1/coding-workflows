@@ -34,7 +34,7 @@ REPO = "owner/repo"
 FAKE_GH = r"""#!/usr/bin/env bash
 printf 'token=%s args=%s\n' "${GH_TOKEN:-}" "$*" >> "${FAKE_GH_CALLS}"
 if [ "${GH_TOKEN:-}" = "${FAKE_JOB_TOKEN}" ]; then
-	printf '%s' "${FAKE_JOB_STDOUT:-job-output}"
+	printf '%s' "${FAKE_JOB_STDOUT-job-output}"
 	if [ -n "${FAKE_JOB_STDERR:-}" ]; then
 		printf '%s\n' "${FAKE_JOB_STDERR}" >&2
 	fi
@@ -218,6 +218,17 @@ def test_pr_checks_non_zero_returns_the_job_token_result(tmp_path: Path) -> None
 	assert result.stdout == "pending-checks rc=8\n"
 	assert _tokens(env) == [JOB_TOKEN]
 	assert "GH_READ_FALLBACK" not in result.stderr
+
+
+def test_pr_checks_error_without_answer_falls_back_to_the_pat(tmp_path: Path) -> None:
+	# A `pr checks` 5xx/network failure (rc 1, no check table) is not a valid
+	# answer, so it takes the reason=error PAT fallback like every other read.
+	env = _env(tmp_path, FAKE_JOB_STDOUT="", FAKE_JOB_STDERR="gh: Server Error (HTTP 502)", FAKE_JOB_RC="1")
+	result = _run(tmp_path, f'gh_read pr checks 1 -R {REPO}; echo " rc=$?"', env)
+	assert result.stdout == "pat-output rc=0\n"
+	assert _tokens(env) == [JOB_TOKEN, PAT]
+	assert "GH_READ_FALLBACK reason=error caller=poller.sh" in result.stderr
+	assert "HTTP 502" not in result.stderr
 
 
 @pytest.mark.parametrize(
