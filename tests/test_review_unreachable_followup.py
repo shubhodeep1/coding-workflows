@@ -668,3 +668,87 @@ def test_security_hold_withdraws_existing_auto_merge() -> None:
 	assert 'review_head_gate_withdraw_auto_merge "${GITHUB_REPOSITORY}" "${PR_NUMBER}" ""' in branch
 	assert "--disable-auto" in branch
 	assert branch.rstrip().endswith("exit 0")
+
+
+def _write_gh(root: Path, create_out: str, list_body: str) -> Path:
+	# Fake gh whose create output and list behaviour the test chooses.
+	bin_dir = _fake_gh(root)
+	gh = bin_dir / "gh"
+	gh.write_text(
+		gh.read_text(encoding="utf-8").replace(
+			'echo "https://github.com/octo/repo/issues/777"; fi',
+			f'echo "{create_out}"; fi\nif [ "$1 $2" = "issue list" ]; then {list_body}; fi',
+		),
+		encoding="utf-8",
+	)
+	return bin_dir
+
+
+def _run_sync_with(root: Path, bin_dir: Path, iteration: int) -> subprocess.CompletedProcess[str]:
+	driver = root / "sync_custom_driver.sh"
+	driver.write_text(
+		"set -euo pipefail\n"
+		"gh_retry() { \"$@\"; }\n"
+		"ensure_label_exists() { :; }\n"
+		+ _extract_shell_function(APPLY_FIXES, "review_unreachable_followup_sync")
+		+ "review_unreachable_followup_sync\n",
+		encoding="utf-8",
+	)
+	env = _env(root, AUTOFIX_ITERATION=str(iteration))
+	env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+	return subprocess.run(["bash", str(driver)], cwd=root, env=env, capture_output=True, text=True, check=True)
+
+
+def test_double_orphan_never_opens_a_second_issue(tmp_path: Path) -> None:
+	# Create succeeds without a URL and the recovery list fails: the ledger
+	# keeps an "orphan" sentinel, and later rounds look the issue up before
+	# any create instead of opening a second one.
+	_seed_repo(tmp_path)
+	block = _issue_block("001", "prompts/mode-x.txt", "CORRECTNESS & LOGIC")
+	_run_ledger(tmp_path, block, 1, IS_WORKFLOW_SOURCE_REPO="false")
+	sync = _run_sync_with(tmp_path, _write_gh(tmp_path, "created", "exit 1"), 1)
+	assert "followup=none outcome=orphan" in sync.stdout
+	assert "UNREACHABLE_FOLLOWUP_ISSUE: orphan" in _ledger_text(tmp_path)
+	assert "UNREACHABLE_FOLLOWUP: pending" in _ledger_text(tmp_path)
+
+	# Round 2: the ledger stage keeps the sentinel; the lookup fails again,
+	# so the round makes no create at all.
+	_run_ledger(tmp_path, block, 2, IS_WORKFLOW_SOURCE_REPO="false")
+	assert "UNREACHABLE_FOLLOWUP_ISSUE: orphan" in _ledger_text(tmp_path)
+	(tmp_path / "gh_calls.log").unlink()
+	sync = _run_sync_with(tmp_path, _write_gh(tmp_path, "created", "exit 1"), 2)
+	assert "outcome=orphan" in sync.stdout
+	assert [call.split()[:2] for call in _gh_calls(tmp_path)] == [["issue", "list"]]
+
+	# Round 3: the lookup finds the issue; the round comments on it.
+	_run_ledger(tmp_path, block, 3, IS_WORKFLOW_SOURCE_REPO="false")
+	(tmp_path / "gh_calls.log").unlink()
+	sync = _run_sync_with(tmp_path, _write_gh(tmp_path, "created", "echo 900"), 3)
+	assert "followup=900 outcome=recorded" in sync.stdout
+	calls = _gh_calls(tmp_path)
+	assert [call.split()[:3] for call in calls] == [["issue", "list", "--repo"], ["issue", "comment", "900"]]
+	ledger = _ledger_text(tmp_path)
+	assert "UNREACHABLE_FOLLOWUP_ISSUE: 900" in ledger
+	assert "orphan" not in ledger
+	assert "UNREACHABLE_FOLLOWUP: #900" in ledger
+
+
+def test_shared_location_fallback_omits_ambiguous_text(tmp_path: Path) -> None:
+	# Two blocks share FILE and LINES; a rebuilt row (block "-") cannot tell
+	# them apart, so no reviewer text is attached rather than the wrong one.
+	_seed_repo(tmp_path)
+	issues = _issue_block("001", "prompts/mode-x.txt", "CORRECTNESS & LOGIC", "First evidence.") + _issue_block(
+		"002", "prompts/mode-x.txt", "ERROR PATHS & EDGE CASES", "Second evidence."
+	)
+	_run_ledger(tmp_path, issues, 1, IS_WORKFLOW_SOURCE_REPO="false")
+	runtime = tmp_path / "runtime"
+	rows = (runtime / "review_unreachable_new.tsv").read_text(encoding="utf-8").splitlines()
+	assert len(rows) == 2
+	(runtime / "review_unreachable_new.tsv").write_text(
+		"".join("\t".join(row.split("\t")[:6] + ["-"]) + "\n" for row in rows), encoding="utf-8",
+	)
+	_run_sync(tmp_path)
+	body = (tmp_path / "gh_bodies.log").read_text(encoding="utf-8")
+	assert "First evidence." not in body
+	assert "Second evidence." not in body
+	assert body.count("### `prompts/mode-x.txt`") == 2

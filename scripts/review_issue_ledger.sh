@@ -1031,7 +1031,9 @@ if [ -s "${prior_header_file}" ]; then
 				fi
 				;;
 			UNREACHABLE_FOLLOWUP_ISSUE)
-				if [[ "${value}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+				# "orphan" is the sentinel review_apply_fixes.sh writes when
+				# the issue was created but its number could not be read.
+				if [[ "${value}" =~ ^[1-9][0-9]{0,9}$ ]] || [ "${value}" = "orphan" ]; then
 					header_unreachable_followup="${value}"
 				fi
 				;;
