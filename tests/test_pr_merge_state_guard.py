@@ -354,7 +354,11 @@ class Wiring(unittest.TestCase):
 		self.assertGreater(guard, case_text.rindex('_pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}"', 0, followup))
 		self.assertIn('echo "judge_skip_reason=pr_state_unavailable"', case_text[guard:followup])
 		# A closed PR gets no success status: each guard precedes its status post.
+		# The closed-during-retry branches run after the merge call (they only
+		# log the skip and release the lease), so they are not pre-merge guards.
 		for pos in [m.start() for m in re.finditer(r'_pr_merge_state_check "\$\{PR_NUMBER\}" "\$\{RB_JUDGED_HEAD_SHA\}" pre_merge', case_text)]:
+			if 'RB_MERGE_RETRY_GIVEUP:-}" = "not_open"' in case_text[max(0, pos - 800):pos]:
+				continue
 			nxt_status = case_text.index('review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success', pos)
 			nxt_merge = case_text.index('gh pr merge "${PR_NUMBER}"', pos)
 			self.assertLess(nxt_status, nxt_merge)
@@ -379,7 +383,7 @@ class Wiring(unittest.TestCase):
 		text = RB_JUDGE.read_text(encoding="utf-8")
 		self.assertIn('(.base.ref // "-"), (.closed_at // "-")] | @tsv', text)
 		self.assertIn('RB_MERGE_RETRY_CLOSED_AT="${_rb_retry_closed_at}"', text)
-		self.assertEqual(text.count('--arg closed_at "${RB_MERGE_RETRY_CLOSED_AT:-}"'), 2)
+		self.assertEqual(text.count('--arg closed_at "${RB_MERGE_RETRY_CLOSED_AT:-}"'), 3)
 		h = ml._Harness({})
 		payload = json.dumps({"state": "closed", "draft": False, "closed_at": CLOSED_AT, "head": {"sha": SHA}, "base": {"ref": "main"}})
 		res = h.lib(f"MERGE_LEASE_ENABLED=false\n_pr_merge_state_check {PR} {SHA} pre_merge '{payload}'; echo rc=$?")

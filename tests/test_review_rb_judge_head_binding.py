@@ -674,8 +674,8 @@ def test_no_merge_command_discards_stderr() -> None:
 	reports = re.findall(r"^\s+rb_judge_merge_err_report (\S+)$", text, re.MULTILINE)
 	# #9939: the merge and terminal deferral branches report the failed --auto
 	# request too (it was the only merge path left). #10049: so do the
-	# branches for a PR closed during the merge retry.
-	assert reports == ["merge", "merge", "merge", "terminal", "terminal", "terminal", "sync"]
+	# branches for a PR closed during the merge retry (all three sites).
+	assert reports == ["merge", "merge", "merge", "terminal", "terminal", "terminal", "sync", "sync"]
 
 
 # --- transient GitHub errors on the judge merge are retried ----------------
@@ -1020,6 +1020,48 @@ def test_moved_head_or_closed_pr_stops_the_retry(path: str, state: dict, outcome
 	assert len(calls) == len(_expected_calls(path)) + 1
 	assert _retry_lines(proc.stdout)[-1].endswith(f"outcome={outcome}")
 	assert len(_error_lines(proc.stdout)) == 1
+
+
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_closed_pr_with_moved_head_is_not_open(path: str) -> None:
+	"""#10049: a PR closed without merging is not_open even when its head
+	also moved, so the site takes the closed-PR skip branch."""
+	responses = _first_failure(path) + [_pr_state(state="closed", head=OTHER)]
+	proc, output, calls, _sleeps = _run_merge_site_scripted(path, responses)
+	assert proc.returncode == 0, proc.stderr
+	assert len(calls) == len(_expected_calls(path)) + 1
+	assert _retry_lines(proc.stdout)[-1].endswith("outcome=not_open")
+	assert len(_error_lines(proc.stdout)) == 1
+	if path == "sync":
+		assert "judge_skip_reason=pr_not_open" in output.splitlines()
+		assert "judge_skip_reason=sync_merge_failed" not in output.splitlines()
+	else:
+		assert "RB_MERGE_STATUS=not_open" in proc.stdout.splitlines()
+
+
+def test_sync_pr_closed_during_the_retry_is_not_a_failed_merge() -> None:
+	"""#10049: the merge_with_followup sync site reports pr_not_open, not
+	sync_merge_failed, when the retry read finds the PR closed."""
+	responses = _first_failure("sync") + [_pr_state(state="closed")]
+	proc, output, _calls, _sleeps = _run_merge_site_scripted("sync", responses)
+	assert proc.returncode == 0, proc.stderr
+	assert "judge_skip_reason=pr_not_open" in output.splitlines()
+	assert "judge_skip_reason=sync_merge_failed" not in output.splitlines()
+	assert "MERGE_CONFIRMED=true" not in proc.stdout.splitlines()
+
+
+@pytest.mark.parametrize("path", ("merge", "terminal"))
+def test_unreadable_read_keeps_a_blocked_guard_state(path: str) -> None:
+	"""#9939/#10049: blocked guard, then an unreadable retry read, then a
+	non-transient --auto refusal stays merge_failed (the unreadable read must
+	not erase the blocked state the auto-only path never re-checks)."""
+	responses = [_fail(), {"code": 1, "stderr": "HTTP 500"}, _pr_state(), _fail(DRAFT_MESSAGE)]
+	proc, _output, calls, sleeps = _run_merge_site_scripted(path, responses, extra_env={"GUARD_STUB_DEFER": "1"})
+	assert proc.returncode == 0, proc.stderr
+	assert sleeps == ["10", "20"]
+	assert [c for c in calls if c[:2] == ["pr", "merge"]] == _expected_calls(path)[:1] * 2, calls
+	assert "RB_MERGE_STATUS=merge_failed" in proc.stdout.splitlines()
+	assert "RB_MERGE_STATUS=mergeability_pending" not in proc.stdout.splitlines()
 
 
 def _after_unreadable_read(path: str) -> list[dict]:

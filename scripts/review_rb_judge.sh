@@ -2582,6 +2582,14 @@ rb_judge_merge_retry_transient() {
       open|closed) ;;
       *) _rb_retry_state=""; _rb_retry_merged=""; _rb_retry_auto=""; _rb_retry_head=""; _rb_retry_mergeable_state=""; _rb_retry_base_ref=""; _rb_retry_closed_at="" ;;
     esac
+    # A PR closed without merging is not_open even when its head also moved
+    # (#10049): the caller then logs the closed-PR skip and frees the lease.
+    if [ "${_rb_retry_state}" = "closed" ] && [ "${_rb_retry_merged}" != "true" ]; then
+      echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=not_open"
+      RB_MERGE_RETRY_GIVEUP="not_open"
+      RB_MERGE_RETRY_CLOSED_AT="${_rb_retry_closed_at}"
+      return 1
+    fi
     # Head first: a PR merged at a head other than the judged one is not the
     # judge's merge, so it stays a failure (head_moved).
     if [ -n "${_rb_retry_head}" ] && [ "${_rb_retry_head}" != "${RB_JUDGED_HEAD_SHA:-}" ]; then
@@ -2593,12 +2601,6 @@ rb_judge_merge_retry_transient() {
       echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=already_merged"
       return 0
     fi
-    if [ -n "${_rb_retry_state}" ] && [ "${_rb_retry_state}" != "open" ]; then
-      echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=not_open"
-      RB_MERGE_RETRY_GIVEUP="not_open"
-      RB_MERGE_RETRY_CLOSED_AT="${_rb_retry_closed_at}"
-      return 1
-    fi
     if [ "${_rb_retry_mode}" = "auto" ] && [ "${_rb_retry_auto}" = "true" ] && [ "${_rb_retry_head}" = "${RB_JUDGED_HEAD_SHA:-}" ]; then
       echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=auto_merge_enabled"
       return 0
@@ -2609,11 +2611,16 @@ rb_judge_merge_retry_transient() {
       # it deferred, so running out of attempts here is a wait
       # (mergeability_pending through rb_judge_deferred_merge_pending), not
       # merge_failed; a later guard call resets the flag. The guard state
-      # names the unreadable read, not an earlier guard's mergeable_state.
+      # names the unreadable read, not an earlier guard's mergeable_state,
+      # except a "blocked" one: rb_judge_deferred_merge_pending needs it to
+      # keep a later non-transient --auto refusal merge_failed (#9939), and
+      # the auto-only path never re-runs the guard to restore it.
       echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=state_unavailable"
       RB_SYNC_MERGE_DEFERRED="true"
-      SYNC_MERGE_BLOCKED_GUARD_STATE="unreadable"
-      SYNC_MERGE_BLOCKED_GUARD_BLOCKERS="unknown"
+      if [ "${SYNC_MERGE_BLOCKED_GUARD_STATE:-}" != "blocked" ]; then
+        SYNC_MERGE_BLOCKED_GUARD_STATE="unreadable"
+        SYNC_MERGE_BLOCKED_GUARD_BLOCKERS="unknown"
+      fi
       continue
     fi
     if [ "${_rb_retry_mode}" = "auto" ]; then
@@ -3581,6 +3588,19 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
               rb_judge_merge_err_close
               echo "::warning::PR #${PR_NUMBER} sync merge deferred: GitHub reports mergeable_state=${SYNC_MERGE_BLOCKED_GUARD_STATE:-unknown} (blockers: ${SYNC_MERGE_BLOCKED_GUARD_BLOCKERS:-unknown}). Leaving linked issues in ai:review-blocked — stall recovery will re-fire the judge."
               echo "judge_skip_reason=mergeability_pending" >> "$GITHUB_OUTPUT"
+            elif [ "${RB_MERGE_RETRY_GIVEUP:-}" = "not_open" ]; then
+              # #10049: the retry's PR read found the PR closed (not merged).
+              # Same outcome as the merge and terminal sites: one
+              # AUTOFIX_MERGE_SKIPPED line and the lease released, from that
+              # read (no extra call).
+              rb_judge_merge_err_report sync
+              rb_judge_merge_err_close
+              if declare -F _pr_merge_state_check >/dev/null 2>&1; then
+                PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_merge_state_check "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" pre_merge \
+                  "$(jq -cn --arg sha "${RB_JUDGED_HEAD_SHA:-}" --arg base "${PR_BASE_REF:-}" --arg closed_at "${RB_MERGE_RETRY_CLOSED_AT:-}" '{state: "closed", draft: false, closed_at: (if $closed_at == "" then null else $closed_at end), head: {sha: $sha}, base: {ref: $base}}' 2>/dev/null)" || true
+              fi
+              echo "::warning::PR #${PR_NUMBER} closed during the merge_with_followup merge retry; not merging. Leaving linked issues in ai:review-blocked."
+              echo "judge_skip_reason=pr_not_open" >> "$GITHUB_OUTPUT"
             else
               rb_judge_merge_err_report sync
               echo "::warning::PR #${PR_NUMBER} sync merge failed despite passing check-runs (typically: branch protection rules / merge queue / permissions / 422 / concurrent push changing HEAD). Leaving linked issues in ai:review-blocked — stall recovery will re-fire the judge.${RB_MERGE_ERROR_TEXT:+ gh error: ${RB_MERGE_ERROR_TEXT}}"
