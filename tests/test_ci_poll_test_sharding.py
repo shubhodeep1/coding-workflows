@@ -4298,6 +4298,63 @@ class MovedHooks9496StepsContractTest(unittest.TestCase):
 		self.assertEqual(set(group_one_guarded), {name for name, group in GROUP_PINNED_STEPS.items() if group == 1})
 
 
+# The #9496 picks were estimates because the run's step results had no
+# durations (#10071). Each moved step now prints its own elapsed seconds from
+# an EXIT trap, so the line also prints when the step fails, and the next
+# budget-watch pick can read the duration from the log.
+STEP_ELAPSED_TRAP_10071 = "trap 'echo \"step elapsed: ${SECONDS}s\"' EXIT"
+STEP_ELAPSED_10071_STEPS = (
+	MERGE_TRAIN_STEP_NAME,
+	"Review Semble contract test",
+	"Clarify sandbox base image pre-seed tests (#6985)",
+)
+STEP_ELAPSED_10071_LINE_RE = re.compile(r"^step elapsed: \d+s$", re.MULTILINE)
+
+
+class StepElapsedLine10071ContractTest(unittest.TestCase):
+	"""The three #9496 steps print their elapsed seconds on success and on failure (#10071)."""
+
+	def run_trap(self, exit_code: int) -> subprocess.CompletedProcess:
+		script = f"set -euo pipefail\n{STEP_ELAPSED_TRAP_10071}\nexit {exit_code}\n"
+		return subprocess.run(
+			["bash", "-c", script],
+			capture_output=True,
+			text=True,
+			timeout=30,
+			check=False,
+		)
+
+	def test_each_step_prints_its_elapsed_seconds(self) -> None:
+		for name in STEP_ELAPSED_10071_STEPS:
+			with self.subTest(step=name):
+				self.assertEqual(poll_job_step(name)["run"].count(STEP_ELAPSED_TRAP_10071), 1)
+
+	def test_trap_is_set_before_the_first_command(self) -> None:
+		for name in STEP_ELAPSED_10071_STEPS:
+			with self.subTest(step=name):
+				run = poll_job_step(name)["run"]
+				lines = run.splitlines()
+				self.assertEqual(lines[0].strip(), "set -euo pipefail")
+				self.assertEqual(lines[1].strip(), STEP_ELAPSED_TRAP_10071)
+				trap_index = run.index(STEP_ELAPSED_TRAP_10071)
+				self.assertLess(trap_index, run.index("python3"))
+				if "exit" in run[trap_index + len(STEP_ELAPSED_TRAP_10071):]:
+					self.assertLess(
+						trap_index,
+						run.index("exit", trap_index + len(STEP_ELAPSED_TRAP_10071)),
+					)
+
+	def test_trap_prints_on_failure_and_keeps_the_exit_status(self) -> None:
+		result = self.run_trap(3)
+		self.assertEqual(result.returncode, 3)
+		self.assertEqual(len(STEP_ELAPSED_10071_LINE_RE.findall(result.stdout)), 1, result.stdout)
+
+	def test_trap_prints_on_success(self) -> None:
+		result = self.run_trap(0)
+		self.assertEqual(result.returncode, 0)
+		self.assertEqual(len(STEP_ELAPSED_10071_LINE_RE.findall(result.stdout)), 1, result.stdout)
+
+
 # Step moved from orchestrate-poll group 3 to group 0: orchestrate-poll (3)
 # took 15m17s of its 20 minutes on main (run 43993691500, budget-watch issue
 # #9639). The run's step results gave statuses only, with no durations, so the
