@@ -708,6 +708,12 @@
 			"stage": "Publishing switch for both stable release paths."
 		},
 		{
+			"name": "STABLE_ROLLBACK_ENABLED",
+			"default": "true",
+			"stage": "Kill switch for .github/workflows/rollback-stable.yml (#9342), the one-dispatch rollback of @stable to an earlier signed release; off logs STABLE_ROLLBACK outcome=skipped reason=disabled and changes nothing.",
+			"on_values": ["1", "yes", "on"]
+		},
+		{
 			"name": "STAGED_SUPPORT_LATCH_AUTO_RELEASE_ENABLED",
 			"default": "true",
 			"stage": "In this source repository only, release the ai:needs-human latch that implement.yml marks as a genuine IMPLEMENT_STAGED_SUPPORT_REBASE_CONFLICT once the engine carries scripts/implement_staged_support_workspace.sh (th..."
