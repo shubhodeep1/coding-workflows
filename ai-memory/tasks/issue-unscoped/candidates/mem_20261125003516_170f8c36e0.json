@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A bare 403 (or 429, or a network error) on a memory-branch read or clone is retried a small, fixed number of times with backoff before the step fails.\"\n  expected_change_site: scripts/ai_memory_lib.py, _clone_for_memory_branch, handling of the `ls-remote` probe.\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: When the probe fails at lines 3253-3261, the function only optionally logs a diagnostic and proceeds to the full-clone fallback at line 3305. It does not raise for the retry wrapper, so a transient failure of this memory-branch read is not retried; instead, each attempt can start an expensive full repository clone.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"A bare 403 (or 429, or a network error) on a memory-branch read or clone is retried a small, fixed number of times with backoff before the step fails.\"\n  Expected change site: scripts/ai_memory_lib.py, _clone_for_memory_branch, handling of the `ls-remote` probe.\n  Evidence of absence: When the probe fails at lines 3253-3261, the function only optionally logs a diagnostic and proceeds to the full-clone fallback at line 3305. It does not raise for the retry wrapper, so a transient failure of this memory-branch read is not retried; instead, each attempt can start an expensive full repository clone.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8bd2aa29c6a0905871414327188760e9f30ea209fcd43fd336da3efd558c049b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10060,
+    "run_id": "45503937918",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45503937918",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125003516_170f8c36e0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10060,
+    "run_id": "45503937918"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-25T00:35:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
