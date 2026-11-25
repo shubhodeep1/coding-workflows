@@ -126,6 +126,19 @@ REVIEW_AUTOFIX_RUN_SUMMARY_LINE = re.compile(
     r"^(?:\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z )?REVIEW_AUTOFIX_RUN_SUMMARY_V1 (\{.*\})$"
 )
 ROOT_FAILURE_CLASS_RE = re.compile(r"[a-z0-9_]{1,64}")
+# Per-reviewer finding counts (scripts/review_findings_record.py, Refs #10058).
+# Anchored at both ends with bounded widths; the optional prefix is the GitHub
+# Actions log timestamp. The ::warning:: failure line never matches.
+REVIEWER_FINDINGS_PREFIX = "REVIEWER_FINDINGS "
+REVIEWER_FINDINGS_LINE = re.compile(
+    r"^(?:\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z )?REVIEWER_FINDINGS "
+    r"pr=([0-9]{1,10}|unknown) round=([A-Za-z0-9_.:-]{1,64}) reviewer=([A-Za-z0-9_./:-]{1,160}) "
+    r"(?:raised=([0-9]{1,7}) lone=([0-9]{1,7}) lone_rejected=([0-9]{1,7}) "
+    r"lone_accepted=([0-9]{1,7}) shared=([0-9]{1,7})"
+    r"|outcome=unavailable reason=([a-z_]{1,64}))$"
+)
+REVIEWER_FINDINGS_MAX_PER_RUN = 64
+REVIEWER_FINDINGS_COUNT_KEYS = ("raised", "lone", "lone_rejected", "lone_accepted", "shared")
 ROOT_FAILURE_CLASS_CONCLUSIONS = frozenset({"failure", "cancelled"})
 # Leading GitHub Actions log timestamp, stripped only from the parent/child
 # telemetry dedup key (never from emitted lines). In review run 36237495547
@@ -309,6 +322,15 @@ def _cached_cost_telemetry(row: dict[str, Any] | None) -> dict[str, Any] | None:
         return None
 
     return dict(telemetry)
+
+
+def _cached_reviewer_findings(row: dict[str, Any] | None) -> list[dict[str, Any]] | None:
+    if not isinstance(row, dict):
+        return None
+    entries = row.get("reviewer_findings")
+    if not isinstance(entries, list):
+        return None
+    return [dict(entry) for entry in entries[:REVIEWER_FINDINGS_MAX_PER_RUN] if isinstance(entry, dict)]
 
 
 def _run_snapshot_for_cache(run: dict[str, Any]) -> dict[str, Any]:
@@ -922,7 +944,7 @@ def _apply_untrusted_origin_exclusion(row: dict[str, Any]) -> bool:
     if row.get("origin_trust", "trusted") == "trusted":
         return False
     row["log_download_status"] = "excluded_untrusted_origin"
-    for key in ("log_excerpts", "cost_telemetry", "log_summary", "log_summary_meta", "full_logs"):
+    for key in ("log_excerpts", "cost_telemetry", "log_summary", "log_summary_meta", "full_logs", "reviewer_findings"):
         row.pop(key, None)
     row["failure_point"] = {"job_name": None, "step_name": None}
     row["workflow_name"] = None
@@ -1764,6 +1786,67 @@ def _apply_root_failure_class_from_full_logs(run: dict[str, Any], full_logs: lis
     )
 
 
+def _reviewer_findings_from_full_logs(full_logs: Any) -> list[dict[str, Any]]:
+    """Parse REVIEWER_FINDINGS lines (Refs #10058).
+
+    Keeps the first copy per (pr, round, reviewer), so the job-level and
+    step-level copies of one line count once, and caps the result at
+    REVIEWER_FINDINGS_MAX_PER_RUN entries. Fails open: any error yields [].
+    """
+    try:
+        if not isinstance(full_logs, list):
+            return []
+        entries: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for step in full_logs:
+            if not isinstance(step, dict):
+                continue
+            content = step.get("content")
+            if not isinstance(content, str) or REVIEWER_FINDINGS_PREFIX not in content:
+                continue
+            for line in content.splitlines():
+                match = REVIEWER_FINDINGS_LINE.fullmatch(line.rstrip())
+                if match is None:
+                    continue
+                pr_text, round_text, reviewer = match.group(1), match.group(2), match.group(3)
+                key = (pr_text, round_text, reviewer)
+                if key in seen:
+                    continue
+                seen.add(key)
+                entry: dict[str, Any] = {
+                    "pr": int(pr_text) if pr_text != "unknown" else None,
+                    "round": round_text,
+                    "reviewer": reviewer,
+                }
+                if match.group(9) is not None:
+                    entry["outcome"] = "unavailable"
+                    entry["reason"] = match.group(9)
+                else:
+                    entry["outcome"] = "counted"
+                    for offset, count_key in enumerate(REVIEWER_FINDINGS_COUNT_KEYS):
+                        entry[count_key] = int(match.group(4 + offset))
+                entries.append(entry)
+                if len(entries) >= REVIEWER_FINDINGS_MAX_PER_RUN:
+                    return entries
+        return entries
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _apply_reviewer_findings_from_full_logs(run: dict[str, Any], full_logs: list[dict[str, str]]) -> None:
+    """Set run["reviewer_findings"] for a trusted-origin run with lines; otherwise drop the key."""
+    entries: list[dict[str, Any]] = []
+    if (
+        run.get("origin_trust", "trusted") == "trusted"
+        and run.get("log_download_status") != "excluded_untrusted_origin"
+    ):
+        entries = _reviewer_findings_from_full_logs(full_logs)
+    if entries:
+        run["reviewer_findings"] = entries
+    else:
+        run.pop("reviewer_findings", None)
+
+
 def _sanitize_path_component(value: str, fallback: str) -> str:
     candidate = re.sub(r"[^a-zA-Z0-9._-]+", "_", value.strip())
     candidate = candidate.strip("._-")
@@ -1948,6 +2031,7 @@ def export_categorized_logs(
             if full_logs:
                 _apply_cost_telemetry_from_full_logs(run, full_logs)
                 _apply_root_failure_class_from_full_logs(run, full_logs)
+                _apply_reviewer_findings_from_full_logs(run, full_logs)
         except Exception as exc:  # noqa: BLE001
             _apply_log_download_exception(run, exc)
             _append_log_error(errors, repository, run_id, exc)
@@ -2362,6 +2446,11 @@ def main(argv: list[str] | None = None) -> int:
                     run["log_excerpts"] = cached_excerpts
                     run["cost_telemetry"] = cached_cost_telemetry
                     run["root_failure_class"] = cached_root_failure_class
+                    # Older cached rows without reviewer_findings are not
+                    # fetched again (Refs #10058); they simply carry no lines.
+                    cached_reviewer_findings = _cached_reviewer_findings(cached_row)
+                    if cached_reviewer_findings:
+                        run["reviewer_findings"] = cached_reviewer_findings
                     run["log_download_status"] = "cached"
                     _set_diagnostic_failure_reason(run, "logs", None)
                     identity = (repository, run_id)
@@ -2370,6 +2459,8 @@ def main(argv: list[str] | None = None) -> int:
                         canonical["log_excerpts"] = cached_excerpts
                         canonical["cost_telemetry"] = cached_cost_telemetry
                         canonical["root_failure_class"] = cached_root_failure_class
+                        if cached_reviewer_findings:
+                            canonical["reviewer_findings"] = [dict(entry) for entry in cached_reviewer_findings]
                         canonical["log_download_status"] = "cached"
                         _set_diagnostic_failure_reason(canonical, "logs", None)
                     continue
@@ -2381,10 +2472,12 @@ def main(argv: list[str] | None = None) -> int:
             if full_logs:
                 _apply_cost_telemetry_from_full_logs(run, full_logs)
                 _apply_root_failure_class_from_full_logs(run, full_logs)
+                _apply_reviewer_findings_from_full_logs(run, full_logs)
                 run["log_excerpts"] = log_excerpts
             else:
                 run.pop("log_excerpts", None)
                 run.pop("cost_telemetry", None)
+                run.pop("reviewer_findings", None)
             identity = (repository, run_id)
             canonical = run_rows_by_identity.get(identity)
             if canonical is not None:
@@ -2399,6 +2492,10 @@ def main(argv: list[str] | None = None) -> int:
                     canonical["cost_telemetry"] = dict(run["cost_telemetry"])
                 if "root_failure_class" in run:
                     canonical["root_failure_class"] = run["root_failure_class"]
+                if "reviewer_findings" in run:
+                    canonical["reviewer_findings"] = [dict(entry) for entry in run["reviewer_findings"]]
+                else:
+                    canonical.pop("reviewer_findings", None)
 
             if isinstance(repo_cache, dict) and run["log_download_status"] == "success":
                 logs_seen_set = _touch_seen_set(_normalize_seen_set(repo_cache.get("logs_seen_set")), run_id)
@@ -2414,6 +2511,10 @@ def main(argv: list[str] | None = None) -> int:
                         if "cost_telemetry" in run:
                             merged_row["cost_telemetry"] = dict(run["cost_telemetry"])
                         merged_row["root_failure_class"] = run.get("root_failure_class")
+                        if "reviewer_findings" in run:
+                            merged_row["reviewer_findings"] = [dict(entry) for entry in run["reviewer_findings"]]
+                        else:
+                            merged_row.pop("reviewer_findings", None)
                         updated_rows.append(merged_row)
                         replaced = True
                     else:
