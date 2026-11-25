@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_single_issue_security_pass.sh:366 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: In single_pass_dispatch_audit, the shell redirection `err=\"$(gh \"$@\" 2>&1 >/dev/null)\"` incorrectly suppresses both stderr (which contains the error output) and stdout.\n  WHY: The `err` variable stays empty even when the dispatch fails, so the error message cannot be captured for logging, classification or retries; transient dispatch failures are not retried, and the cause is logged as `other` instead of its real class. The source rated this SEVERITY: BLOCKER, mapped here to critical. No other reviewer flagged it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_single_issue_security_pass.sh:366 (in single_pass_dispatch_audit) | severity=BLOCKER | confidence=5\n  PROBLEM: The shell redirection `err=\"$(gh \"$@\" 2>&1 >/dev/null)\"` incorrectly suppresses both stderr (which contains the error output) and stdout.\n  WHY: The `err` variable remains empty even when the dispatch fails, making it impossible to capture the error message for logging, classification, or retries. Transient dispatch failures will not be retried, and the cause of the failure will be logged as `other` rather than being correctly classified or reported.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5a0d8aa1a988fd4796b0b180f3b00b7d7f5056ea020efd2831b73beec0e930d4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10110,
+    "run_id": "45670387375",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45670387375",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125192406_217532b599",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10110,
+    "run_id": "45670387375"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-25T19:24:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
