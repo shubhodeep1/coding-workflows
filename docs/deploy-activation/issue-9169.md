@@ -3,7 +3,7 @@
 - Reference: #9169   (+ PR #9178, merge commit b9d9db22ac9d58226d53555e7ffe8d7347363377; plan docs/plans/ci-reissue-branch-routing-and-sandbox-solc-plan.md)
 - Deploy target: shubhodeep1/coding-workflows (consumer variable on shubhodeep1/fun-token-multi-chain)
 - How it runs: implement workflow (`.github/workflows/implement.yml`) in consumers via the `@stable` sync; solc is installed only when `vars.SANDBOX_SOLC_VERSIONS` is non-empty
-- Status: IN_PROGRESS
+- Status: BLOCKED
 - Last updated: 2026-11-25
 - Last note: Step 1 done (variable set). Waiting at step 2: the change is not in @stable yet: v1.47.6 (2026-11-20) does not contain b9d9db2, and test-and-mark-stable runs have failed from 2026-11-22 to 2026-11-25.
 - Human-steps issue: https://github.com/shubhodeep1/coding-workflows/issues/9647 (closed tracker) — keys project-9169
