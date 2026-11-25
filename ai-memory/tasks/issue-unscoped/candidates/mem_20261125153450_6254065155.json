@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_final_ci_sweep.sh:212-237 | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The stale hand-back command prefix in review_final_ci_sweep_stale_hand_back passes `FINAL_CI_FAILED_SYNC_QUICK=false` to `review_final_ci_failed.sh`. The reviewer says nothing reads this variable and the hand-back flow does not document it as an input.\n  WHY: The reviewer says passing an unused, undocumented variable is misleading and redundant for maintainers. The reviewer gave no severity. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash disputed the claim: they say `scripts/review_final_ci_failed.sh` reads `FINAL_CI_FAILED_SYNC_QUICK` at line 250. minimax_minimax-m3 called it a harmless dead assignment and did not adopt the finding.\n- scripts/review_final_ci_sweep.sh:230-234 | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The stale hand-back decides success by grepping for `redispatched|already_reported`. If the script exits non-zero (for example on a `timeout` or `gh` failure) after a partial hand-back or after the marker was posted, the sweep can wrongly log `stale_workflow=hand_back_failed` or lose the hand-back state.\n  WHY: The reviewer says the grep-based outcome check is brittle. A wrong `hand_back_failed` forces a retry on the next tick, which could cause duplicate dispatches or marker problems when the state was already terminal. The reviewer gave no severity.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"At most one such sync per head.\" (Final-CI cut off under stale workflow sync)\n  expected_change_site: `scripts/review_final_ci_sweep.sh`\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: `_pr_base_sync_count` treats the stale-workflow marker and the failed marker (`ai:final-ci-failed:v1`) as exclusive states for a given SHA. The `stale_workflow=hand_back_failed` logic does not explicitly ensure that a failure to post the marker cannot lead to a re-dispatch when the hand-back is retried on a later sweep tick. The reviewer says the implementation appears correct but the state transitions need verification. Source severity: MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_final_ci_sweep.sh:212-237 (review_final_ci_sweep_stale_hand_back) | confidence=3\n  PROBLEM: The hand-back still passes `FINAL_CI_FAILED_SYNC_QUICK=false` to `review_final_ci_failed.sh`. The current diff does correctly set `FINAL_CI_FAILED_INFRA_RERUN_ENABLED=false`.\n  WHY: The reviewer says `FINAL_CI_FAILED_SYNC_QUICK` is not used in `scripts/review_final_ci_failed.sh` and is not documented as an expected input for this hand-back flow, so passing it is misleading and redundant.\n- scripts/review_final_ci_sweep.sh:230-234 (review_final_ci_sweep_stale_hand_back) | confidence=2\n  PROBLEM: The success check greps for `redispatched|already_reported`. A non-zero exit (timeout or `gh` failure) after a partial hand-back or a posted marker can be logged as `stale_workflow=hand_back_failed`, or the hand-back state can be lost.\n  WHY: A false `hand_back_failed` forces a retry on the next tick, which could cause duplicate dispatches or marker issues when the state was already terminal.\n- TASK_GAP\n  Requirement: \"At most one such sync per head.\" (Final-CI cut off under stale workflow sync)\n  Expected change site: `scripts/review_final_ci_sweep.sh`\n  Evidence of absence: `_pr_base_sync_count` treats the stale-workflow marker and the failed marker as exclusive states per SHA. The `stale_workflow=hand_back_failed` logic does not explicitly ensure that a failure to post the marker cannot lead to a re-dispatch on a retried sweep tick. The reviewer says the implementation appears correct but the state transitions need verification.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7686944b55746665409427df76a3742298855275bc5e36e1418ab96bacc7d17d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10103,
+    "run_id": "45633166452",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45633166452",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125153450_6254065155",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10103,
+    "run_id": "45633166452"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-25T15:34:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
