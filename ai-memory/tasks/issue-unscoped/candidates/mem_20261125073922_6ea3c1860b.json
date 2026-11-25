@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"list every step that sets GH_READ_TOKEN, and every gh_api_safe_job_token_read, gh_api_safe_quiet_print_read and gh_read call those steps reach\"; \"For each call site, add a test to tests/test_gh_read.py.\"\n  expected_change_site: tests/test_gh_read.py, release-gate inventory (RELEASE_GATE_READ_STEPS) and per-call-site fallback tests for scripts/stable_e2e_step_wait_review.sh and scripts/dispatch_and_watch_workflow_run.sh (and scripts/comprehensive_test_and_release_gh_api.sh)\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash, anthropic_claude-sonnet-5_5]\n  EVIDENCE: RELEASE_GATE_READ_STEPS (tests/test_gh_read.py:513-522) maps steps to scripts but does not inventory per-script helper call sites, the wait-review and dispatch-watch tests (tests/test_gh_read.py:571-595, 597-617) check script text and run hand-written call bodies instead of the real scripts (only the smoke-cancel test runs the real script), coverage-fidelity gap only (NIT; sonnet and glm judged the fallback itself covered)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- requirement: \"For each call site, add a test to tests/test_gh_read.py \u2026 Assert under set -euo pipefail that the PAT output is used, the caller exits 0, and no token value is printed.\"\n  expected_change_site: tests/test_gh_read.py\n  Evidence of absence: Each call site has a test. The wait-review and dispatch-watch tests do not run the real scripts; they check script text and run a copied call body. The smoke-cancel test runs the real script. Weaker coverage, not a missing deliverable.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- requirement: \"list every step that sets GH_READ_TOKEN, and every gh_api_safe_job_token_read, gh_api_safe_quiet_print_read and gh_read call those steps reach\"; \"For each call site, add a test.\"\n  expected_change_site: tests/test_gh_read.py, release-gate inventory and per-call-site fallback tests for scripts/comprehensive_test_and_release_gh_api.sh, scripts/dispatch_and_watch_workflow_run.sh, and scripts/stable_e2e_step_wait_review.sh\n  Evidence of absence: RELEASE_GATE_READ_STEPS (tests/test_gh_read.py:513-522) maps the 8 GH_READ_TOKEN steps to 3 script files but does not enumerate per-script call sites; dispatch_and_watch_workflow_run.sh has 2 gh_api_safe_quiet_print_read calls (lines 259, 321) and 2 gh_api_safe_quiet_print calls (lines 225, 286); wait-review and dispatch-watch fallback tests (tests/test_gh_read.py:571-595, 597-617) run hand-written bodies, only the cancel script test invokes the real script; the explicit call-site registry is not present.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- requirement: \"List every step that sets GH_READ_TOKEN, and every gh_api_safe_job_token_read, gh_api_safe_quiet_print_read and gh_read call those steps reach\"; \"For each call site, add a test to tests/test_gh_read.py.\"\n  expected_change_site: tests/test_gh_read.py, in the release-gate inventory and fallback tests for the token-routed call sites in scripts/stable_e2e_step_wait_review.sh and scripts/dispatch_and_watch_workflow_run.sh.\n  Evidence of absence: RELEASE_GATE_READ_STEPS maps workflow steps to scripts but does not inventory the helper call sites (tests/test_gh_read.py:513-522). The wait-review and dispatch tests execute hand-written helper-call snippets (tests/test_gh_read.py:578-591, 604-614).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\n- requirement: \"For each call site, add a test to tests/test_gh_read.py with a stub gh on PATH\" \u2014 for the call sites the release-gate steps reach, including stable_e2e_step_wait_review.sh.\n  expected_change_site: tests/test_gh_read.py, test_wait_review_reads_fall_back_to_the_pat (tests/test_gh_read.py:555-595).\n  Evidence of absence: The test asserts script-text properties and executes a hand-written helper-call body rather than invoking the actual stable_e2e_step_wait_review.sh call sites as the smoke-cancel test does (tests/test_gh_read.py:613-628). Fallback itself is covered via the shared helper; coverage-fidelity only.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "770ab80a5a92d23987ca210223f6bd57ee5d5a931e536045c37a982c215bcd54",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10106,
+    "run_id": "45556620382",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45556620382",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125073922_6ea3c1860b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10106,
+    "run_id": "45556620382"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T07:39:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
