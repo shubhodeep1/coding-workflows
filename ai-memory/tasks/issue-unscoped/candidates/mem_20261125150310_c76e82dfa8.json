@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Issue #9697: move the slowest steps of `tests-heal-plan-and-validation` into the CI job with the most headroom, without raising `timeout-minutes` or adding new required job names\n  expected_change_site: .github/workflows/ci.yml, `tests-heal-plan-and-validation` and the receiving job\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  EVIDENCE: PR diff and last-run diff contain no step-moving hunk, no verified step timings for the flagged run are provided. Severity disagreement: anthropic_claude-sonnet-5_5 rated NIT with confidence 2 (the move was already made earlier under #9420/#9684, `Merge probe unit tests` is at ci.yml:1625, and the comments at ci.yml:1578, 1610, 1652 and 2065 record it), google_gemini-3_1-flash-lite rated MAJOR with confidence 4. Highest severity is MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===\n\nTASK_GAP entries by reviewer (original shape):\n\n=== TASK GAPS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: Issue #9697 asks to move the slowest steps of `tests-heal-plan-and-validation` into the CI job with the most headroom, unchanged and with names kept. The issue also says not to raise `timeout-minutes` and not to add new required job names.\n  Expected change site: `.github/workflows/ci.yml`, in `tests-heal-plan-and-validation` and the receiving job.\n  Evidence of absence: No step-moving hunk in the PR diff or the last-run diff. The move was already made before this PR: `Merge probe unit tests` is at ci.yml:1625, inside `tests-hooks-and-orchestrator`; the comments at ci.yml:1578, 1610, 1652 and 2065 record the earlier move under #9420, re-issued as #9684. The repository holds no step timings for run 44214045174, so choosing further steps would be a guess. Rated a NIT, not a defect, no code change needed.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END TASK GAPS FROM anthropic_claude-sonnet-5_5 ===\n\n=== TASK GAPS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Move the slowest steps of the tests-heal-plan-and-validation CI job into the CI job with the most headroom, as requested in issue #9697 to resolve a 15m24s/20m runtime.\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The PR diff contains no step-moving hunks for tests-heal-plan-and-validation. The PR author asserts previous work moved the slow steps and the flagged run predates that move, but the job remains flagged by budget-watch. No steps were moved in this PR, and no verified step timings are provided.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END TASK GAPS FROM google_gemini-3_1-flash-lite ===\n\n=== TASK GAPS FROM minimax_minimax-m3 ===\n(No task gaps reported.)\n=== END TASK GAPS FROM minimax_minimax-m3 ===\n\n=== TASK GAPS FROM z-ai_glm-5_3-flash ===\n(No task gaps reported.)\n=== END TASK GAPS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bc69b8f76773bc21f17bce18b280cc6efca78f8fbe8f44bca42ad285b680bd64",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10074,
+    "run_id": "45628436729",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45628436729",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125150310_c76e82dfa8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10074,
+    "run_id": "45628436729"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T15:03:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
