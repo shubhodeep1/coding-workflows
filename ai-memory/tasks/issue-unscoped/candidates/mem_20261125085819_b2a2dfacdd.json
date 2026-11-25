@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_operator_step_issue.py:1464-1501 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: test_operator_step_resolve_recheck_sees_a_new_unverifiable_entry and test_operator_step_resolve_reopens_for_an_unverifiable_entry_after_the_close do not assert the result[\"unverified\"] count that the latest edits added.\n  WHY: Dropping the result[\"unverified\"] assignments in scripts/operator_step_issue.py (lines 997 and 1046) would fail no test. Reviewers rated this a NIT or hardening suggestion; the suggested fix is to assert result[\"unverified\"] == 1 in both tests.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_operator_step_issue.py:test_operator_step_resolve_recheck_sees_a_new_unverifiable_entry and test_operator_step_resolve_reopens_for_an_unverifiable_entry_after_the_close (hardening suggestion, HARDENING_RISK_SCORE: 1)\n  PROBLEM: Neither test asserts result[\"unverified\"], which the last run now sets on the re-read and after-close paths.\n  WHY: Dropping those assignments would not fail any test. The suggested fix is to add `assert result[\"unverified\"] == 1` to each test.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_operator_step_issue.py:test_operator_step_resolve_recheck_sees_a_new_unverifiable_entry and test_operator_step_resolve_reopens_for_an_unverifiable_entry_after_the_close | severity=NIT | confidence=5\n  PROBLEM: The tests lack assertions for the 'unverified' count in the 'resolve' result.\n  WHY: A future regression that fails to update the count in scripts/operator_step_issue.py would pass these tests.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_operator_step_issue.py:1480-1483 and 1499-1501 (test_operator_step_resolve_recheck_sees_a_new_unverifiable_entry and test_operator_step_resolve_reopens_for_an_unverifiable_entry_after_the_close) (hardening suggestion, HARDENING_RISK_SCORE: 1)\n  PROBLEM: The tests verify the hold/reopen behavior but do not assert the unverified count added by the latest changes.\n  WHY: The suggested fix is to assert result[\"unverified\"] == 1 in both tests.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_operator_step_issue.py:1464-1482 and 1485-1501 (test_operator_step_resolve_recheck_sees_a_new_unverifiable_entry and test_operator_step_resolve_reopens_for_an_unverifiable_entry_after_the_close) | severity=NIT | confidence=4\n  PROBLEM: The last-run edits added `result[\"unverified\"] = len(recheck_unverified)` (scripts/operator_step_issue.py:997) and `result[\"unverified\"] = len(after_close_unverified)` (scripts/operator_step_issue.py:1046), but neither test asserts the resulting value. The tests only check `closed`, patches/posts, and stderr.\n  WHY: This is not a runtime failure. A regression that drops either assignment would leave the JSON output reporting `unverified: 0` while the tracker is held open or reopened, and no test would catch it.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2504eed6ee1cba212be38c25c3191e1467f57a4ca4d8dbf9fe0574d7f7cce804",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10102,
+    "run_id": "45562104055",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45562104055",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125085819_b2a2dfacdd",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10102,
+    "run_id": "45562104055"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T08:58:19Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
