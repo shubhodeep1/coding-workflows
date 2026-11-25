@@ -118,6 +118,13 @@
 # (` stale_workflow=dry_run` under DRY_RUN, which runs nothing). Transient
 # skips (too_recent, review_in_flight, sync_count_unknown, gate_pending,
 # gate_unknown, other freshness outcomes, base_red) retry on a later tick.
+# With FINAL_CI_SWEEP_BASE_SYNC_MAX=0 (reason cap_zero) or
+# FINAL_CI_SWEEP_BASE_SYNC_ENABLED off (reason base_sync_disabled, after the
+# `outcome=disabled` line) nothing is synced, but each failed candidate still
+# gets the comments read (counted against the per-tick cap) so a marked head
+# is handed back: a branch's older ci.yml does not pass those switches to the
+# deferral. A hand-back whose script did not log `outcome=redispatched` or
+# `outcome=already_reported` appends ` stale_workflow=hand_back_failed`.
 # Env: FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED (default true; `false` or any
 # other value hands a marked head back), plus what the hand-back script
 # reads (FINAL_CI_FAILED_REDISPATCH_ENABLED, ALLOW_WORKFLOW_EDITS).
@@ -210,10 +217,19 @@ review_final_ci_sweep_stale_hand_back()
 		FINAL_CI_SWEEP_STALE_NOTE=" stale_workflow=dry_run"
 		return 0
 	fi
-	PR_NUMBER="$1" PR_HEAD_SHA="$2" FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED=false \
+	local hand_back_out
+	hand_back_out="$(PR_NUMBER="$1" PR_HEAD_SHA="$2" FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED=false \
 		FINAL_CI_FAILED_INFRA_RERUN_ENABLED=false FINAL_CI_FAILED_SYNC_QUICK=false \
-		timeout 120 bash "${hand_back_dir}/review_final_ci_failed.sh" || true
-	FINAL_CI_SWEEP_STALE_NOTE=" stale_workflow=handed_back"
+		timeout 120 bash "${hand_back_dir}/review_final_ci_failed.sh")" || true
+	[ -z "${hand_back_out}" ] || printf '%s\n' "${hand_back_out}"
+	# Only a hand-back that dispatched (or found one already reported) counts;
+	# read_failed, marker_failed, dispatch_failed, disabled, superseded or a
+	# timeout log `hand_back_failed`, and the marked head retries next tick.
+	if printf '%s\n' "${hand_back_out}" | grep -Eq "^REVIEW_FINAL_CI_FAILED pr=$1 head=$2 outcome=(redispatched|already_reported)( |\$)"; then
+		FINAL_CI_SWEEP_STALE_NOTE=" stale_workflow=handed_back"
+	else
+		FINAL_CI_SWEEP_STALE_NOTE=" stale_workflow=hand_back_failed"
+	fi
 	return 0
 }
 
@@ -226,14 +242,17 @@ review_final_ci_sweep_base_sync()
 	local number="$1" sha="$2" ref="$3" failed_at="$4"
 	local min_age="${FINAL_CI_SWEEP_BASE_SYNC_MIN_AGE_MINUTES:-30}" sync_cap="${FINAL_CI_SWEEP_BASE_SYNC_MAX:-3}"
 	local failed_epoch now_epoch base_ref sync_done sync_max gate stale_marked=""
+	# Set by the caller when FINAL_CI_SWEEP_BASE_SYNC_ENABLED is off (issue #10093).
+	local sync_off="${FINAL_CI_SWEEP_BASE_SYNC_OFF:-}"
 	FINAL_CI_SWEEP_STALE_NOTE=""
 	{ [[ "${min_age}" =~ ^[0-9]{1,4}$ ]] && [ "$((10#${min_age}))" -le 1440 ]; } || min_age=30
 	min_age=$((10#${min_age}))
 	{ [[ "${sync_cap}" =~ ^[0-9]{1,2}$ ]] && [ "$((10#${sync_cap}))" -le 20 ]; } || sync_cap=3
 	sync_cap=$((10#${sync_cap}))
-	if [ "${sync_cap}" -eq 0 ]; then
-		review_final_ci_sweep_base_sync_log "${number}" "${sha}" skipped cap_zero
-		return 2
+	# A zero cap no longer stops before the comments read: a head already
+	# carrying the stale-workflow marker must still be handed back (issue #10093).
+	if [ "${sync_cap}" -eq 0 ] && [ -z "${sync_off}" ]; then
+		sync_off="cap_zero"
 	fi
 	# GNU date reads "" and "-" as today's midnight, so only an ISO timestamp counts.
 	if ! [[ "${failed_at}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+Z$ ]] || ! failed_epoch="$(date -u -d "${failed_at}" +%s 2>/dev/null)"; then
@@ -255,6 +274,13 @@ review_final_ci_sweep_base_sync()
 	fi
 	# Issue #10093: a head whose final run was cut off under an old ci.yml.
 	stale_marked="${PR_BASE_SYNC_STALE_WORKFLOW_MARKED:-false}"
+	if [ -n "${sync_off}" ]; then
+		# Syncing is off (cap 0 or base sync disabled): never sync, but hand a
+		# stale-workflow-marked head back to review.
+		[ "${stale_marked}" = "true" ] && review_final_ci_sweep_stale_hand_back "${number}" "${sha}"
+		review_final_ci_sweep_base_sync_log "${number}" "${sha}" skipped "${sync_off}" "${FINAL_CI_SWEEP_STALE_NOTE# }"
+		return 0
+	fi
 	if [ "${stale_marked}" = "true" ] && ! review_final_ci_sweep_stale_sync_enabled; then
 		review_final_ci_sweep_stale_hand_back "${number}" "${sha}"
 		review_final_ci_sweep_base_sync_log "${number}" "${sha}" skipped stale_workflow_sync_disabled "${FINAL_CI_SWEEP_STALE_NOTE# }"
@@ -426,11 +452,15 @@ review_final_ci_sweep_main()
 
 	# Base-sync pass (header: "Base sync after a failed final CI run").
 	base_sync_switch="$(printf '%s' "${FINAL_CI_SWEEP_BASE_SYNC_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
+	FINAL_CI_SWEEP_BASE_SYNC_OFF=""
 	case "${base_sync_switch}" in
 		true|1|yes|on) ;;
 		*)
 			echo "REVIEW_FINAL_CI_SWEEP_BASE_SYNC outcome=disabled"
-			return 0
+			# Issue #10093: no sync, but the pass still visits failed heads so a
+			# stale-workflow-marked one is handed back to review (an older
+			# branch's ci.yml lacks this switch, so its marker can still appear).
+			FINAL_CI_SWEEP_BASE_SYNC_OFF="base_sync_disabled"
 			;;
 	esac
 	# Heads the listing already covers whose completed runs are all failures:

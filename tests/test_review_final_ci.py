@@ -1255,6 +1255,10 @@ SYNC_MARKERS = [{"user": {"login": "pipeline-bot"}, "body": f"**Branch updated f
 	("max_syncs", "outcome=skipped reason=max_syncs syncs=3 max=3 stale_workflow=handed_back"),
 	("refused", "outcome=failed reason=update_branch_refused base=ai/issue-9 stale_workflow=handed_back"),
 	("switch_off", "outcome=skipped reason=stale_workflow_sync_disabled stale_workflow=handed_back"),
+	# An older branch's ci.yml does not pass the base-sync switches to the
+	# deferral, so the marker can appear while the sweep cannot sync at all.
+	("cap_zero", "outcome=skipped reason=cap_zero stale_workflow=handed_back"),
+	("base_sync_disabled", "outcome=skipped reason=base_sync_disabled stale_workflow=handed_back"),
 ])
 def test_sweep_hands_a_stale_marked_head_back_when_it_cannot_sync(fake_gh, tmp_path: Path, case: str, reason: str) -> None:
 	env = {}
@@ -1265,6 +1269,12 @@ def test_sweep_hands_a_stale_marked_head_back_when_it_cannot_sync(fake_gh, tmp_p
 	elif case == "refused":
 		fixtures = _stale_sync_fixtures([_stale_marker_comment()])
 		fixtures[f"repos/{REPO}/pulls/1/update-branch"] = {"rc": 1}
+	elif case == "cap_zero":
+		fixtures = _stale_sync_fixtures([_stale_marker_comment()])
+		env["FINAL_CI_SWEEP_BASE_SYNC_MAX"] = "0"
+	elif case == "base_sync_disabled":
+		fixtures = _stale_sync_fixtures([_stale_marker_comment()])
+		env["FINAL_CI_SWEEP_BASE_SYNC_ENABLED"] = "false"
 	else:
 		fixtures = _stale_sync_fixtures([_stale_marker_comment()])
 		env["FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED"] = "false"
@@ -1310,3 +1320,21 @@ def test_sweep_stale_hand_back_runs_nothing_in_dry_run(fake_gh, tmp_path: Path) 
 	result, calls = _sweep_one(fake_gh, tmp_path, _stale_sync_fixtures([_stale_marker_comment()], ahead_by=0), {"DRY_RUN": "true"})
 	assert "reason=up_to_date stale_workflow=dry_run" in result.stdout, result.stdout + result.stderr
 	assert _dispatches(calls) == [] and _posted_bodies(calls) == []
+
+
+def test_sweep_logs_a_failed_stale_hand_back(fake_gh, tmp_path: Path) -> None:
+	# The hand-back script ran but dispatched nothing: the note says so.
+	fixtures = _stale_sync_fixtures([_stale_marker_comment()], ahead_by=0)
+	result, calls = _sweep_one(fake_gh, tmp_path, fixtures, {"FINAL_CI_FAILED_REDISPATCH_ENABLED": "false"})
+	out = result.stdout + result.stderr
+	assert f"REVIEW_FINAL_CI_BASE_SYNC pr=1 head={SHA} outcome=skipped reason=up_to_date stale_workflow=hand_back_failed" in result.stdout, out
+	assert "stale_workflow=handed_back" not in result.stdout
+	assert _dispatches(calls) == [] and _posted_bodies(calls) == []
+
+
+def test_sweep_unmarked_head_is_not_handed_back_when_syncing_is_off(fake_gh, tmp_path: Path) -> None:
+	for env, reason in (({"FINAL_CI_SWEEP_BASE_SYNC_MAX": "0"}, "cap_zero"), ({"FINAL_CI_SWEEP_BASE_SYNC_ENABLED": "false"}, "base_sync_disabled")):
+		result, calls = _sweep_one(fake_gh, tmp_path, _stale_sync_fixtures([]), env)
+		assert f"REVIEW_FINAL_CI_BASE_SYNC pr=1 head={SHA} outcome=skipped reason={reason}" in result.stdout, result.stdout + result.stderr
+		assert "stale_workflow=" not in result.stdout and "REVIEW_FINAL_CI_FAILED" not in result.stdout
+		assert _puts(calls) == [] and _dispatches(calls) == [] and _posted_bodies(calls) == []
