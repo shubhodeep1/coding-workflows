@@ -601,6 +601,82 @@ def test_review_timeout_inventory_body_parses_as_bash() -> None:
 	assert result.returncode == 0, result.stderr
 
 
+TIMEOUT_INV_REASON_WARNING = (
+	"::warning::Phase 4 review run never started before the review timeout "
+	"(runner queue or concurrency hold; cause unverified, may be environmental)"
+)
+
+
+def test_review_timeout_inventory_reads_timeout_reason() -> None:
+	"""Issue #10105: Phase 4d names wait-review's timeout_reason (#9619)."""
+	step = _step(_e2e_steps(_raw()), TIMEOUT_INV_STEP)
+	text = step["text"]
+	run = step["run"]
+	assert "\n          TIMEOUT_INV_REASON: ${{ steps.wait-review.outputs.timeout_reason }}\n" in text
+	assert "\n        id: review-timeout-inventory\n" in text
+	assert "\n        if: failure() && steps.wait-review.outputs.status == 'timeout'\n" in text
+	assert "\n        continue-on-error: true\n" in text
+	assert "\n        timeout-minutes: 3\n" in text
+	assert run.startswith("set -euo pipefail\n")
+	assert "${{" not in run
+	assert 'case "${TIMEOUT_INV_REASON:-}" in' in run
+	assert "review_run_never_started|inactivity)" in run
+	assert 'TIMEOUT_INV_REASON_VALUE="unknown"' in run
+	assert TIMEOUT_INV_REASON_WARNING in run
+	assert "cause unverified, may be environmental" in run
+	_ordered(
+		run,
+		"source scripts/gh_helpers.sh",
+		'echo "  Review timeout reason: ${TIMEOUT_INV_REASON_VALUE}"',
+		"Skipped review-timeout inventory",
+	)
+	# No GitHub API call was added: still exactly the runs and jobs fetches.
+	assert run.count('_safe_gh_jq "') == 2
+
+
+def test_review_timeout_inventory_reason_line_and_warning() -> None:
+	if shutil.which("bash") is None or shutil.which("jq") is None:
+		raise unittest.SkipTest("bash or jq is not installed")
+	import tempfile
+
+	runs = [_timeout_inv_run(800, "pull_request", "queued")]
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, baseline_calls = _run_timeout_inventory(Path(tmp), runs, {})
+		assert rc == 0, out
+		assert "  Review timeout reason: unknown" in out
+		assert not [line for line in out.splitlines() if line.startswith("::")], out
+	cases = [
+		("review_run_never_started", "review_run_never_started", True),
+		("inactivity", "inactivity", False),
+		("", "unknown", False),
+		("bad;$(id)", "unknown", False),
+		("inactivity\n::warning::injected", "unknown", False),
+		("review_run_never_started ", "unknown", False),
+	]
+	for value, expected, warns in cases:
+		with tempfile.TemporaryDirectory() as tmp:
+			rc, out, calls = _run_timeout_inventory(Path(tmp), runs, {}, env_extra={"TIMEOUT_INV_REASON": value})
+			assert rc == 0, (value, out)
+			reason_lines = [line for line in out.splitlines() if "Review timeout reason:" in line]
+			assert reason_lines == [f"  Review timeout reason: {expected}"], (value, out)
+			command_lines = [line for line in out.splitlines() if line.startswith("::")]
+			if warns:
+				assert command_lines == [TIMEOUT_INV_REASON_WARNING], (value, out)
+			else:
+				assert command_lines == [], (value, out)
+			assert "injected" not in out and "$(id)" not in out, (value, out)
+			assert len(calls) == len(baseline_calls), (value, calls)
+	with tempfile.TemporaryDirectory() as tmp:
+		rc, out, calls = _run_timeout_inventory(
+			Path(tmp), runs, {}, env_extra={"TIMEOUT_INV_REASON": "review_run_never_started", "ISSUE_NUMBER": "1; rm"}
+		)
+		assert rc == 0, out
+		assert "  Review timeout reason: review_run_never_started" in out
+		assert [line for line in out.splitlines() if line.startswith("::")] == [TIMEOUT_INV_REASON_WARNING], out
+		assert "Skipped review-timeout inventory" in out
+		assert calls == []
+
+
 # Issue #9223: Phase 1 fails fast on clarify's own failure comment when it
 # names the newest scoped Clarify run, and names that run (built from its
 # numeric ID) plus the issue URL on timeout. The fakes are

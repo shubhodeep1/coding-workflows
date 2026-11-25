@@ -373,6 +373,10 @@ MAX_OPEN="$(_positive_or_default "${WORKFLOW_HEAL_MAX_OPEN_ISSUES:-}" 10)"
 MAX_PER_DAY="$(_positive_or_default "${WORKFLOW_HEAL_MAX_ISSUES_PER_DAY:-}" 20)"
 MAX_RUNS="$(_positive_or_default "${WORKFLOW_HEAL_MAX_RUNS:-}" 3)"
 MAX_FAILED_JOBS="$(_positive_or_default "${WORKFLOW_HEAL_MAX_FAILED_JOBS:-}" 3)"
+# Release-gate runner wait (issue #10037): "<run_id>:<job_id>" of every read
+# job whose raw log carries a RELEASE_GATE_RUNNER_WAIT cancel_requested /
+# stop_failed line on one of the gate's watch steps.
+HEAL_RUNNER_WAIT_MATCHED=""
 MAX_LOG_BYTES="$(_positive_or_default "${WORKFLOW_HEAL_MAX_RUN_LOG_BYTES:-}" 60000)"
 LOG_TAIL_LINES="$(_positive_or_default "${WORKFLOW_HEAL_LOG_TAIL_LINES:-}" 400)"
 # Linked runs (#8248): runs the failed-job logs link to. 0 turns it off.
@@ -2053,6 +2057,25 @@ while IFS=$'\t' read -r run_id run_url; do
 				# A log whose filtering failed was emptied above and is not readable evidence.
 				READ_JOB_LOG_COUNT=$((READ_JOB_LOG_COUNT + 1))
 			fi
+			# Issue #10037: the marker must start a log line (after the runner
+			# timestamp) and the failing step must be a gate watch step (every
+			# step of test-and-mark-stable.yml that runs
+			# dispatch_and_watch_workflow_run.sh, plus Phase 4 and the alt-model
+			# wait (dispatch_and_watch_workflow_run.sh --alt-model-runner-wait); exact names), so
+			# text echoed from a model or an issue cannot suppress a report.
+			# The watch step must also be the job's only failed step (read from
+			# the run's jobs file already on disk): a real failure in a later
+			# always() step of the same job (soft-error analyser, cleanup) is
+			# filed as before. An unreadable jobs file never matches (fail closed).
+			if [ "${SOURCE_KIND}" = "workflow_run" ] \
+				&& grep -qE '^[^ ]+ RELEASE_GATE_RUNNER_WAIT outcome=(cancel_requested|stop_failed) ' "${RAW_LOG}" 2>/dev/null \
+				&& [ "$(jq -r --arg jid "${job_id}" --arg step "${failing_step}" '[.jobs[]? | select((.id | tostring) == $jid) | .steps[]? | select(.conclusion == "failure" or .conclusion == "timed_out") | (.name // "")] | if length == 1 and .[0] == $step then "only" else "other" end' "${JOBS_FILE}" 2>/dev/null || echo other)" = "only" ]; then
+				case "${failing_step}" in
+					"Phase 4: Wait for review & autofix to complete"|"Dispatch & watch — "*|"Dispatch internal-orchestrate.yml with multi-issue project"|"Dispatch internal-validate.yml standalone"|"Wait for clarify→plan→implement (alt-model)")
+						HEAL_RUNNER_WAIT_MATCHED="${HEAL_RUNNER_WAIT_MATCHED} ${run_id}:${job_id}"
+						;;
+				esac
+			fi
 			rm -f "${RAW_LOG}"
 			if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${RUN_COUNT}" -eq 1 ] && [ -s "${FILTERED_LOG}" ]; then
 				LOG_FILES+=("${FILTERED_LOG}")
@@ -2150,6 +2173,41 @@ if [ "${SOURCE_KIND}" = "workflow_run" ] && [ "${#LOG_FILES[@]}" -gt 0 ]; then
 			if grep -qE 'PROMOTE_CYCLE_FAILED reason=smoke_gate_(failed|timeout)' "${LOG_FILES[@]}" 2>/dev/null; then
 				log "skip reason=downstream_gate_failure workflow=${PAYLOAD_WORKFLOW_NAME}"
 				exit 0
+			fi
+			;;
+	esac
+fi
+
+# A release gate run whose only failed jobs are watch steps that ended as a
+# runner wait (issue #10037, G4): the gate tried to stop itself because a
+# child run waited for a runner, not because a test failed. Every failed job
+# of the current run (same filter as the provenance check) must have been
+# read and carry the marker on a watch step; any other mix files as before.
+if [ "${SOURCE_KIND}" = "workflow_run" ] && [ -n "${HEAL_RUNNER_WAIT_MATCHED}" ]; then
+	case "${PAYLOAD_WORKFLOW_NAME}" in
+		"Test & Mark Stable Release"|"Test & Mark Stable Release "*)
+			HEAL_RUNNER_WAIT_RUN_ID="$(jq -r '.run_refs[0].run_id // "" | tostring' "${PAYLOAD_FILE}" 2>/dev/null || echo "")"
+			HEAL_RUNNER_WAIT_JOBS_FILE="${LOG_DIR}/run-${HEAL_RUNNER_WAIT_RUN_ID}-jobs.json"
+			HEAL_RUNNER_WAIT_FAILED_IDS=""
+			if [[ "${HEAL_RUNNER_WAIT_RUN_ID}" =~ ^[0-9]+$ ]] && [ -s "${HEAL_RUNNER_WAIT_JOBS_FILE}" ]; then
+				HEAL_RUNNER_WAIT_FAILED_IDS="$(jq -r '[.jobs[]? | select((.conclusion == "failure" or .conclusion == "timed_out")
+					and (.name | type == "string") and .name != "heal-report"
+					and (.name | endswith("/ heal-report") | not)) | (.id | tostring)] | join(" ")' "${HEAL_RUNNER_WAIT_JOBS_FILE}" 2>/dev/null || echo "")"
+			fi
+			if [ -n "${HEAL_RUNNER_WAIT_FAILED_IDS}" ]; then
+				HEAL_RUNNER_WAIT_ALL=true
+				HEAL_RUNNER_WAIT_COUNT=0
+				for heal_runner_wait_job in ${HEAL_RUNNER_WAIT_FAILED_IDS}; do
+					HEAL_RUNNER_WAIT_COUNT=$((HEAL_RUNNER_WAIT_COUNT + 1))
+					case " ${HEAL_RUNNER_WAIT_MATCHED} " in
+						*" ${HEAL_RUNNER_WAIT_RUN_ID}:${heal_runner_wait_job} "*) ;;
+						*) HEAL_RUNNER_WAIT_ALL=false ;;
+					esac
+				done
+				if [ "${HEAL_RUNNER_WAIT_ALL}" = true ] && [ "${HEAL_RUNNER_WAIT_COUNT}" -le "${MAX_FAILED_JOBS}" ]; then
+					log "skip reason=release_gate_runner_wait run=${HEAL_RUNNER_WAIT_RUN_ID} jobs=${HEAL_RUNNER_WAIT_COUNT}"
+					exit 0
+				fi
 			fi
 			;;
 	esac
