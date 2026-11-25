@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:178 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: In the `FINAL_CI_FAILED_REDISPATCH_ENABLED` row, the sentence \"A job cancelled at its `timeout-minutes` limit is still handed back.\" does not mention the new stale-workflow exception documented in row 180.\n  WHY: For an eligible attempt-1 stale-workflow timeout, `scripts/review_final_ci_failed.sh` posts the `ai:final-ci-stale-workflow:v1` marker, logs `outcome=stale_workflow_sync_deferred` and defers to the sweep's base sync instead of handing the job back, so operators reading row 178 get the wrong idea; this is documentation drift only. All three reviewers rated it NIT, which maps to low here; sonnet filed it under NAMING / BACKWARD COMPATIBILITY and luna and glm under CORRECTNESS & LOGIC.\n- scripts/ci_cancelled_rerun.py:181 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `STALE_WORKFLOW_TIMEOUT_MESSAGE` regex may be brittle because of the non-capturing group `(?:running on runner .+ )?`.\n  WHY: If the runner name format changes, the match could fail and cause an unnecessary review hand-back; the source rated it NIT, which maps to low here, and anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash both said it is not a defect because `.+` matches any runner name and a miss falls back to the safe `genuine` hand-back.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- README.md:line 178, the `FINAL_CI_FAILED_REDISPATCH_ENABLED` row, sentence \"A job cancelled at its `timeout-minutes` limit is still handed back.\" | severity=NIT | confidence=3\n  PROBLEM: The PR adds an exception to this sentence, but the row was not updated. `review_final_ci_failed_main` in `scripts/review_final_ci_failed.sh` now posts the `ai:final-ci-stale-workflow:v1` marker and returns `outcome=stale_workflow_sync_deferred` when `review_final_ci_failed_infra_verdict` returns `stale_workflow_timeout`. That happens on attempt 1, in coding-workflows, for a same-repository head outside `orchestrator/project-*`, with base sync on and its cap above 0. Row 180 describes this exception, but row 178 does not.\n  WHY: Documentation only. An operator expects a review dispatch for every timeout cancellation, but a timeout under an older `ci.yml` is deferred to the sweep's base sync. The suggested fix is to add \"unless the stale-workflow rule applies (see `FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED`)\".\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/ci_cancelled_rerun.py:181 | severity=NIT | confidence=2\n  PROBLEM: The `STALE_WORKFLOW_TIMEOUT_MESSAGE` regex is brittle because of the non-capturing group `(?:running on runner .+ )?`.\n  WHY: If the runner name format changes, or contains characters that interact unexpectedly with `.+`, the regex might not match. That would cause an unnecessary review hand-back instead of identifying a stale-workflow timeout.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- README.md:178, `FINAL_CI_FAILED_REDISPATCH_ENABLED` row | severity=NIT | confidence=5\n  PROBLEM: The sentence \"A job cancelled at its `timeout-minutes` limit is still handed back\" leaves out the stale-workflow exception documented in the next row.\n  WHY: Operators may expect an immediate review dispatch for an eligible stale-workflow timeout. `scripts/review_final_ci_failed.sh` instead posts the stale-workflow marker and defers handling to the sweep (lines 288-294).\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- README.md:Line 178, `FINAL_CI_FAILED_REDISPATCH_ENABLED` row, sentence \"A job cancelled at its `timeout-minutes` limit is still handed back.\" | severity=NIT | confidence=5\n  PROBLEM: This sentence is now false in coding-workflows for the stale-workflow case. Row 180 (`FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED`) and the `stale_workflow_timeout` branch of `review_final_ci_failed_infra_verdict` in `scripts/review_final_ci_failed.sh` show that an eligible attempt-1 job cancelled at its time limit is not handed back. The branch posts the `ai:final-ci-stale-workflow:v1` marker, logs `outcome=stale_workflow_sync_deferred` and defers to the sweep's base sync. The deferral does not depend on `FINAL_CI_FAILED_REDISPATCH_ENABLED`.\n  WHY: Documentation drift, not a code failure. An operator or consumer reading row 178 configures or debugs against the wrong behaviour, and the deferral and its fallback path (`stale_workflow=handed_back`) cannot be seen from that row.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "66798f19e9de982e7035efbe074e3265127e8a4e149b75965299f906b5b98d32",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10103,
+    "run_id": "45647940697",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45647940697",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125161858_595f414bc9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10103,
+    "run_id": "45647940697"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T16:18:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
