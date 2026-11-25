@@ -691,8 +691,33 @@ exit 0
 
 FAKE_GH_LOGGER = r'''#!/usr/bin/env bash
 printf '%s\n' "$*" >> "__WORK__/gh.log"
+case "$*" in
+	*"/statuses"*)
+		# GET commits/<sha>/statuses: FAKE_GH_STATUSES_JSON through the --jq filter.
+		[ "${FAKE_GH_STATUSES_RC:-0}" = 0 ] || exit "${FAKE_GH_STATUSES_RC}"
+		jq_filter="." prev=""
+		for arg in "$@"; do
+			[ "${prev}" = "--jq" ] && jq_filter="${arg}"
+			prev="${arg}"
+		done
+		printf '%s' "${FAKE_GH_STATUSES_JSON:-[]}" | jq -r "${jq_filter}"
+		exit $?
+		;;
+esac
 exit "${FAKE_GH_RC:-0}"
 '''
+
+
+def _post_lines(tmp_path: Path) -> str:
+	return "".join(line for line in (_work(tmp_path) / "gh.log").read_text(encoding="utf-8").splitlines(keepends=True)
+		if line.startswith("api -X POST "))
+
+
+def _ci_final_statuses(*states: str, creator: str = "github-actions[bot]", newest_hour: int = 13) -> str:
+	# Newest first, one hour apart; the hand-back marker (_setup_final_ci) is at 12:00.
+	return json.dumps([{"context": "ci/final", "state": state, "created_at": f"2026-11-06T{newest_hour - i:02d}:00:00Z", "creator": {"login": creator}}
+		for i, state in enumerate(states)]
+		+ [{"context": "ai-review/head-gate", "state": "success", "creator": {"login": "pipeline"}}])
 
 
 def _setup_final_ci(tmp_path: Path, queue: list[dict]) -> tuple[Path, dict[str, str], Path, str]:
@@ -705,9 +730,17 @@ def _setup_final_ci(tmp_path: Path, queue: list[dict]) -> tuple[Path, dict[str, 
 	gh.write_text(FAKE_GH_LOGGER.replace("__WORK__", str(work)), encoding="utf-8")
 	gh.chmod(0o755)
 	head = _git(repo, "rev-parse", "HEAD").strip()
+	# The "Collect PR metadata" snapshot with the hand-back marker (issue #10023).
+	comments = tmp_path / "pr_issue_comments.json"
+	comments.write_text(json.dumps([
+		{"id": 1, "user": {"login": "github-actions[bot]", "type": "Bot"}, "created_at": "2026-11-06T11:30:00Z",
+			"body": f"<!-- ai:final-ci-failed:v1 pr=7 head={'f' * 40} -->"},
+		{"id": 2, "user": {"login": "github-actions[bot]", "type": "Bot"}, "created_at": "2026-11-06T12:00:00Z",
+			"body": f"**The final CI run failed.**\n\n<!-- ai:final-ci-failed:v1 pr=7 head={head} -->"},
+	]), encoding="utf-8")
 	env.update({"POST_SYNC_TEST_REPAIR": "false", "FINAL_CI_REPAIR": "true", "FINAL_CI_REPAIR_FROM_SHA": head,
 		"FINAL_CI_REPAIR_ATTEMPT": "2", "TARGET_BRANCH": "ai/issue-7", "PR_NUMBER": "7", "GITHUB_REPOSITORY": "o/r",
-		"FINAL_CI_REPAIR_MARKER_RETRY_SLEEP_SECS": "0"})
+		"FINAL_CI_REPAIR_MARKER_RETRY_SLEEP_SECS": "0", "PR_ISSUE_COMMENTS_FILE": str(comments)})
 	return repo, env, github_env, head
 
 
@@ -726,7 +759,7 @@ def test_final_ci_repair_commits_and_posts_the_marker(tmp_path):
 	repair = _git(repo, "rev-parse", "HEAD").strip()
 	assert repair != head
 	gh_log = (_work(tmp_path) / "gh.log").read_text(encoding="utf-8")
-	assert gh_log.startswith("api -X POST repos/o/r/issues/7/comments -f body=**Final CI repair.**")
+	assert _post_lines(tmp_path).startswith("api -X POST repos/o/r/issues/7/comments -f body=**Final CI repair.**")
 	assert gh_log.rstrip("\n").endswith(f"<!-- ai:final-ci-repair:v1 pr=7 from={head} repair={repair} attempt=2 -->")
 	assert f"FINAL_CI_REPAIR pr=7 head={head} outcome=committed repair={repair} attempt=2 marker=posted" in proc.stdout
 
@@ -749,7 +782,7 @@ def test_final_ci_repair_falls_back_to_the_full_review(tmp_path, queue, extra, r
 	# with repair=none so the head is not tried again.
 	assert _git(repo, "rev-parse", "HEAD").strip() == head
 	gh_log = (_work(tmp_path) / "gh.log").read_text(encoding="utf-8")
-	assert gh_log.count("api -X POST ") == 1 and gh_log.startswith("api -X POST repos/o/r/issues/7/comments -f body=**Final CI repair not applied**")
+	assert gh_log.count("api -X POST ") == 1 and _post_lines(tmp_path).startswith("api -X POST repos/o/r/issues/7/comments -f body=**Final CI repair not applied**")
 	assert (_work(tmp_path) / "gh.log").read_text(encoding="utf-8").rstrip("\n").endswith(
 		f"<!-- ai:final-ci-repair:v1 pr=7 from={head} repair=none attempt=2 -->")
 
@@ -779,6 +812,80 @@ def test_final_ci_repair_marker_post_is_retried(tmp_path):
 	assert "STEP_RETURNED" in proc.stdout, proc.stderr
 	assert "outcome=fallback reason=not_reproduced marker=failed" in proc.stdout
 	assert (_work(tmp_path) / "gh.log").read_text(encoding="utf-8").count("api -X POST ") == 3
+
+
+# --- issue #10023: ci/final turned green before the push --------------------------
+
+def test_final_ci_repair_skips_when_final_ci_turned_green(tmp_path):
+	repo, env, github_env, head = _setup_final_ci(tmp_path, [FAIL, PASS])
+	# Newest first: the re-run passed after the failed attempt.
+	env["FAKE_GH_STATUSES_JSON"] = _ci_final_statuses("success", "failure")
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	assert f"FINAL_CI_REPAIR pr=7 head={head} outcome=skipped reason=final_ci_now_green" in proc.stdout, proc.stdout
+	assert "outcome=committed" not in proc.stdout and "outcome=fallback" not in proc.stdout
+	# The resolver ran and committed, but the commit is dropped and nothing is pushed.
+	assert (_work(tmp_path) / "resolver.log").exists()
+	assert _git(repo, "rev-parse", "HEAD").strip() == head
+	assert _env_lines(github_env, "INTEGRATION_TEST_REPAIRED")[-1] == "false"
+	assert _env_lines(github_env, "INTEGRATION_TEST_REPAIR_ACTIVE")[-1] == "true"
+	gh_log = (_work(tmp_path) / "gh.log").read_text(encoding="utf-8")
+	assert "POST" not in gh_log
+	assert gh_log.count(f"api repos/o/r/commits/{head}/statuses?per_page=100 ") == 1
+
+
+@pytest.mark.parametrize("states", [("success",), ("success", "success")], ids=["no_older_failure", "success_after_stale_success"])
+def test_final_ci_repair_skips_without_an_older_failure(tmp_path, states):
+	# The gate's rule: a success newer than the marker is green even when the
+	# failed attempt's ci/final=failure POST never landed (newest at 13:00,
+	# a stale success at 12:00 at most, marker at 12:00).
+	repo, env, github_env, head = _setup_final_ci(tmp_path, [FAIL, PASS])
+	env["FAKE_GH_STATUSES_JSON"] = _ci_final_statuses(*states)
+	proc = _run_step(tmp_path, repo, env)
+	assert f"FINAL_CI_REPAIR pr=7 head={head} outcome=skipped reason=final_ci_now_green" in proc.stdout, proc.stdout
+	assert _git(repo, "rev-parse", "HEAD").strip() == head
+	assert "POST" not in (_work(tmp_path) / "gh.log").read_text(encoding="utf-8")
+
+
+def test_final_ci_repair_skips_a_fallback_when_final_ci_turned_green(tmp_path):
+	# Not reproduced on a green head: no marker, no full review either.
+	repo, env, github_env, head = _setup_final_ci(tmp_path, [PASS])
+	env["FAKE_GH_STATUSES_JSON"] = _ci_final_statuses("success", "failure")
+	proc = _run_step(tmp_path, repo, env)
+	assert f"FINAL_CI_REPAIR pr=7 head={head} outcome=skipped reason=final_ci_now_green" in proc.stdout, proc.stdout
+	assert _env_lines(github_env, "INTEGRATION_TEST_REPAIR_ACTIVE")[-1] == "true"
+	assert _env_lines(github_env, "INTEGRATION_TEST_REPAIRED") == ["false"]
+	assert "POST" not in (_work(tmp_path) / "gh.log").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("statuses, extra", [
+	(_ci_final_statuses("failure", "success"), {}),
+	(_ci_final_statuses("success", "failure", creator="mallory"), {}),
+	(_ci_final_statuses("success", "failure"), {"FAKE_GH_STATUSES_RC": "1"}),
+	("not json", {}),
+	# A stale success (older than the hand-back marker) that a failed
+	# ci/final=failure POST left in place is not green.
+	(_ci_final_statuses("success", "failure", newest_hour=11), {}),
+	# Without the comments snapshot there is no marker time: repair as before.
+	(_ci_final_statuses("success", "failure"), {"PR_ISSUE_COMMENTS_FILE": "/nonexistent/pr_issue_comments.json"}),
+	# A status time outside the gate's strict ISO form is not green, even when
+	# it sorts after the marker (the gate's rule).
+	(json.dumps([{"context": "ci/final", "state": "success", "created_at": "2026-11-06T13:00:00+00:00",
+		"creator": {"login": "github-actions[bot]"}}]), {}),
+], ids=["newest_failure", "untrusted_creator", "read_failed", "unparseable", "success_older_than_marker",
+	"no_comments_snapshot", "non_iso_status_time"])
+def test_final_ci_repair_commits_when_final_ci_is_not_green(tmp_path, statuses, extra):
+	repo, env, github_env, head = _setup_final_ci(tmp_path, [FAIL, PASS])
+	env["FAKE_GH_STATUSES_JSON"] = statuses
+	env.update(extra)
+	proc = _run_step(tmp_path, repo, env)
+	assert "STEP_RETURNED" in proc.stdout, proc.stderr
+	repair = _git(repo, "rev-parse", "HEAD").strip()
+	assert repair != head
+	assert "final_ci_now_green" not in proc.stdout
+	assert f"FINAL_CI_REPAIR pr=7 head={head} outcome=committed repair={repair} attempt=2 marker=posted" in proc.stdout
+	assert _env_lines(github_env, "INTEGRATION_TEST_REPAIRED")[-1] == "true"
+	assert _post_lines(tmp_path).count("api -X POST ") == 1
 
 
 def test_final_ci_repair_refuses_a_moved_head(tmp_path):
