@@ -8,7 +8,7 @@ A final CI run (`CI [pr:<n>]`) is dispatched on the PR head ref, so it uses the 
 | The numbers that matter | Value |
 | --- | --- |
 | Extra API calls per qualifying failed run | 2 contents reads, 1 comment POST |
-| Extra API calls in the sweep | 0 (reuses its comments read) while base sync is on; with it off or its cap at 0, one `user` and one comments read per failed head, within `FINAL_CI_SWEEP_MAX_PER_TICK`; the hand-back's own calls only when a marked head cannot sync |
+| Extra API calls in the sweep | 0 (reuses its comments read) while base sync is on; with it off or its cap at 0, one `user` and one comments read per failed head older than `FINAL_CI_SWEEP_BASE_SYNC_MIN_AGE_MINUTES` with no review in flight, within `FINAL_CI_SWEEP_MAX_PER_TICK`; the hand-back's own calls only when a marked head cannot sync |
 | Syncs per head | at most 1, within `FINAL_CI_SWEEP_BASE_SYNC_MAX` |
 | New repo variables | `FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED` (default `true`) |
 | New jobs or workflows | none |
