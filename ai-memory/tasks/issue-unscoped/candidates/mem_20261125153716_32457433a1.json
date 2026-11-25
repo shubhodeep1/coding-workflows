@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cAlso run the existing `tests/test_review_merge_train.py`.\u201d\n  expected_change_site: Validation evidence for `scripts/review_merge_train.sh` and `tests/test_review_merge_train.py`.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR description\u2019s acceptance table marks this test `unmet`; the reported pre-push gate is `unverified`.\n- requirement: The PR description\u2019s acceptance table requires the `tests-system-python` check.\n  expected_change_site: Validation evidence for the `tests-system-python` check in `.github/workflows/ci.yml`.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR description\u2019s acceptance table marks this check `not run`.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING (advisory; HARDENING_RISK_SCORE: 1): scripts/review_merge_train.sh | location: `_mt_merge_lease_conflict_unlabel_due`, the awk check on `MERGE_LEASE_SKIPS` (the line ending `$3 == \"released_conflict\" { f = 1 } END { exit !f }' && return 1`)\n  PROBLEM: The check accepts a `<holder_pr>:<head>:released_conflict` entry for any 40-hex head, not only the head this tick tried to release. An old entry from an earlier head can therefore keep the label after a lost race in which the winner released the holder for a different reason.\n  WHY: This needs several unlikely events in a row (the label removed while the old entry stayed in the record), so it is advisory only. Suggested fix: pass the holder head as a third argument from both callers (`MERGE_LEASE_HEAD` next to `tick_rel_pr`, `tm_h_head` in the multi-holder tick), and require `$2 == h` when it is a 40-hex SHA. About 5 lines change.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- HARDENING (advisory; HARDENING_RISK_SCORE: 2): scripts/review_merge_train.sh:_mt_merge_lease_conflict_unlabel_due \u2014 accept only `released_conflict` skip entries whose head matches the holder's last-known head\n  PROBLEM: The awk check matches any `pr:40hex:released_conflict` skip entry for `p`, whatever its head. A stale entry from a previous head can keep the label after a lost race in which the winner released the holder for a non-conflict reason, spending the D6 one-shot for nothing.\n  WHY: The previous fix accepted this as a residual window, and matching the captured `tick_rel_pr_head` would close it. Suggested fix: pass `tick_rel_pr_head` (or `tm_listed_head` in the multi-holder tick) as a third argument and add `$2 == h` when it is a 40-hex SHA. That is one line in each of `_mt_merge_lease_tick` and `_mt_merge_lease_tick_multi` plus about 3 lines in the helper, about 5 in total.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cAlso run the existing `tests/test_review_merge_train.py`.\u201d\n  Expected change site: Validation evidence for `scripts/review_merge_train.sh` and `tests/test_review_merge_train.py`.\n  Evidence of absence: The PR description\u2019s acceptance table marks this test `unmet`; the reported pre-push gate is `unverified`.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: The PR description\u2019s acceptance table requires the `tests-system-python` check.\n  Expected change site: Validation evidence for the `tests-system-python` check in `.github/workflows/ci.yml`.\n  Evidence of absence: The PR description\u2019s acceptance table marks this check `not run`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING (advisory; HARDENING_RISK_SCORE: 1): scripts/review_merge_train.sh | location: `_mt_merge_lease_conflict_unlabel_due`, the `MERGE_LEASE_SKIPS` awk check (about line 3011)\n  PROBLEM: The keep-label check matches any `<holder_pr>:<40hex>:released_conflict` entry regardless of head. Skip entries persist across heads (up to the 50 newest), so a stale entry can keep the just-added label after a lost race whose winner released the holder for a different reason (e.g. `expired`), spending the one-time conflict release.\n  WHY: This needs a prior conflict release on an older head plus a lost race, so it is advisory only. Suggested fix: pass the holder head as a third argument at both call sites and add `$2 == h` when it is a valid 40-hex SHA, keeping the current behavior when the argument is absent. About 5 lines change.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b77c098184439d390e20223a9370e5fa90dff385ebcf4330b0043acdcc0e866e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10108,
+    "run_id": "45633468913",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45633468913",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125153716_32457433a1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10108,
+    "run_id": "45633468913"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-25T15:37:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
