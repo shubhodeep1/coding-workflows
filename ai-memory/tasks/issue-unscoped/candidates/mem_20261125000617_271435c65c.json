@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_findings_record.py:620-646 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `_parser_found_no_issue_markers` checks `raw_text and CONSOLIDATOR_TRUNCATED_MARKER in raw_text`, but `_read_bounded` (line 640) may silently return a cut-off string for a raw file larger than `READ_LIMIT_BYTES`, which would drop a marker at the end of the file.\n  WHY: If the consolidator output is slightly over the limit (e.g. 4 MiB + 1 byte), the marker at the end is lost and the truncated round could still count as clean; the reviewer stated it could not see the `_read_bounded` implementation (reported as MAJOR, mapped to high; anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash state an oversized read returns None / `(None, \"oversized\")` and fails closed).\n- scripts/collect_workflow_logs.py:1795-1834 | severity=low | confidence=2\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The reviewer questioned whether the `REVIEWER_FINDINGS_LINE` regex `r\"^(?:\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d(?:\\.\\d+)?Z )?REVIEWER_FINDINGS \"` handles spacing correctly when the optional timestamp group also takes a trailing space.\n  WHY: The reviewer's own trace concluded that the regex matches `2026...Z REVIEWER_FINDINGS pr=...` both with and without the timestamp (\"It seems correct\") (reported as NIT, mapped to low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_findings_record.py:620-646 | severity=MAJOR | confidence=3\n  PROBLEM: `_parser_found_no_issue_markers` relies on `raw_text and CONSOLIDATOR_TRUNCATED_MARKER in raw_text`, but `_read_bounded` (line 640) may silently return a truncated string when the file exceeds `READ_LIMIT_BYTES`, which would lose a marker at the end.\n  WHY: For output just over the limit (e.g. 4 MiB + 1 byte), the end-of-file marker is lost and the truncation is not signalled; the reviewer could not see the `_read_bounded` implementation.\n- scripts/collect_workflow_logs.py:1795-1834 | severity=NIT | confidence=2\n  PROBLEM: Suspected spacing mismatch between the optional timestamp group `...Z ` and the literal `REVIEWER_FINDINGS ` in the `REVIEWER_FINDINGS_LINE` regex.\n  WHY: The reviewer's trace concluded that the regex matches both the timestamped and the plain log line format (\"It seems correct\").\n- HARDENING: scripts/review_findings_record.py `_parser_found_no_issue_markers`: \"`_read_bounded` silent truncation makes marker detection unreliable\"; suggested fix: make `_read_bounded` explicitly signal truncation, or check the file size before reading (5-10 lines). HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7c2842182f71aef98af222092c1ee51b3eeea685fccd61e9e9d7c2a56c78fc4d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10065,
+    "run_id": "45499050402",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45499050402",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125000617_271435c65c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10065,
+    "run_id": "45499050402"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-25T00:06:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
