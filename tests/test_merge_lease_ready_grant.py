@@ -87,7 +87,7 @@ def _lease_lines(out: str) -> list[str]:
 
 class ReadyGrantTick(unittest.TestCase):
 	def test_ready_waiter_is_granted(self) -> None:
-		st = _free([_pull(5)], [5])
+		st = _free([dict(_pull(5), mergeable=True, mergeable_state="clean")], [5])
 		_gates_ok(st, 5)
 		_ci_final(st, 5, "success")
 		h, out = _tick(st, FCI)
@@ -286,6 +286,24 @@ class ConflictRelease(unittest.TestCase):
 			self.assertIn("pr=4 base=main mode=tick outcome=write_failed reason=released_conflict", out, env)
 			self.assertNotIn(CONFLICT_LABEL, h.state["labels"]["4"], env)
 			self.assertEqual(h.state["refs"][REF], "c" * 40, env)
+
+	def test_lost_race_keeps_the_label_a_winner_relies_on(self) -> None:
+		# rc=3: the refused write re-read the winning record. The label comes
+		# off only while that record still holds the labelled holder; a winner
+		# that released it (or moved on to another PR) relies on the label (D6).
+		for env in ({}, {"MERGE_LEASE_MAX_HOLDERS": "2"}):
+			now = int(time.time())
+			for winner_record, label_kept in ((_record(4, state="released", paths=""), True),
+					(_record(5, acquired=now, updated=now), True),
+					(_record(4, acquired=now, updated=now), False)):
+				st = _held(dict(_pull(4), mergeable=False), [_pull(5)])
+				winner = "d" * 40
+				st["commits"][winner] = {"message": winner_record, "tree": "f" * 40, "parents": ["c" * 40]}
+				st["move_ref_on_patch"] = {REF: winner}
+				h, out = _tick(st, env)
+				self.assertIn("outcome=lost_race reason=released_conflict", out, (env, winner_record))
+				self.assertEqual(CONFLICT_LABEL in h.state["labels"]["4"], label_kept, (env, winner_record, out))
+				self.assertNotIn("repos/owner/repo/issues/5/labels/", " ".join(h.calls), (env, winner_record))
 
 	def test_waiter_scan_and_grant_read_each_waiter_once(self) -> None:
 		for env in ({}, {"MERGE_LEASE_MAX_HOLDERS": "2"}):

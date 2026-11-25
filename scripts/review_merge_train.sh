@@ -2033,6 +2033,7 @@ _mt_merge_lease_tick()
 	local tick_max_candidates=10
 	# Phase 1 queue fields (queue_len=, held_s=, MERGE_LEASE_QUEUE).
 	local tick_queue_ok=0 tick_queue_len_field="" tick_q_gone="" tick_rel_held=""
+	local tick_rel_pr=""
 	declare -F _merge_lease_queue_order >/dev/null 2>&1 && tick_queue_ok=1
 	# Phase 5: tick_p5_lib, the staged library has the multi-holder helpers.
 	local tick_p5_lib=0 tick_max_holders=1
@@ -2244,12 +2245,18 @@ _mt_merge_lease_tick()
 				fi
 			fi
 			tick_rc=0
+			# Issue #10098: the refused write re-reads the record, which resets
+			# MERGE_LEASE_PR, so the label rollback uses the PR captured here.
+			tick_rel_pr="${MERGE_LEASE_PR}"
 			_merge_lease_write "${tick_base}" released "${MERGE_LEASE_PR}" "${MERGE_LEASE_HEAD}" "" || tick_rc=$?
 			if [ "${tick_rc}" -ne 0 ]; then
 				# Issue #10098: the holder was not released, so it must not keep
-				# the one-time conflict-released marker.
-				if [ "${tick_reason}" = "released_conflict" ] && declare -F _merge_lease_unlabel_conflict_released >/dev/null 2>&1; then
-					_merge_lease_unlabel_conflict_released "${MERGE_LEASE_PR}"
+				# the one-time conflict-released marker. On a lost race the
+				# winner may have released it (and kept the shared label), so
+				# the label goes only while the re-read record still holds it.
+				if [ "${tick_reason}" = "released_conflict" ] && declare -F _merge_lease_unlabel_conflict_released >/dev/null 2>&1 \
+					&& _mt_merge_lease_conflict_unlabel_due "${tick_rc}" "${tick_rel_pr}"; then
+					_merge_lease_unlabel_conflict_released "${tick_rel_pr}"
 				fi
 				_mt_log "MERGE_LEASE pr=${MERGE_LEASE_PR} base=${tick_base} mode=tick outcome=$([ "${tick_rc}" -eq 3 ] && echo lost_race || echo write_failed) reason=${tick_reason}"
 				[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric "$([ "${tick_rc}" -eq 3 ] && echo lost_race || echo write_failed)" "${tick_base}" "${MERGE_LEASE_PR}" tick "${tick_reason}" "" "${tick_waiters}" || true
@@ -2665,7 +2672,8 @@ _mt_merge_lease_tick_multi()
 		if [ "${tm_rc}" -ne 0 ]; then
 			# Issue #10098: as the single-holder tick, an unreleased holder
 			# does not keep the one-time conflict-released marker.
-			if [ "${tm_reason}" = "released_conflict" ] && declare -F _merge_lease_unlabel_conflict_released >/dev/null 2>&1; then
+			if [ "${tm_reason}" = "released_conflict" ] && declare -F _merge_lease_unlabel_conflict_released >/dev/null 2>&1 \
+				&& _mt_merge_lease_conflict_unlabel_due "${tm_rc}" "${tm_h}"; then
 				_merge_lease_unlabel_conflict_released "${tm_h}"
 			fi
 			tm_outcome="write_failed"
@@ -2967,6 +2975,19 @@ _mt_merge_lease_ready_waiter_exists()
 		return 0
 	done
 	return 1
+}
+
+# _mt_merge_lease_conflict_unlabel_due <write_rc> <holder_pr> (issue #10098):
+# 0 when a refused conflict-release write should take the one-time label off
+# <holder_pr> again. rc 3 (lost race) left the winning record in the
+# MERGE_LEASE_* globals (_merge_lease_cas_commit re-read it): the label goes
+# only while that record still lists <holder_pr> as a holder, because a winner
+# that released it relies on the shared label (D6). Any other rc: 0.
+_mt_merge_lease_conflict_unlabel_due()
+{
+	[ "${1:-}" = 3 ] || return 0
+	[ "${MERGE_LEASE_STATE:-}" = "held" ] || return 1
+	printf '%s\n' "${MERGE_LEASE_HOLDER_ALL_ROWS:-}" | awk -v p="${2:-}" 'p != "" && $1 == p { f = 1 } END { exit !f }'
 }
 
 # _mt_merge_lease_pr_ready_cached <pr> <head_sha> <base> (issue #10098): as
