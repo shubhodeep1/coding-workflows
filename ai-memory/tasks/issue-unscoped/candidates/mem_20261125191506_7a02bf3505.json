@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/pr_checks_lib.sh:2849-2852 | severity=low | confidence=5\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The Phase 5 summary comment says out-of-range values are clamped but leaves out the parser's three-digit input limit (`^[0-9]{1,3}$`), so `MERGE_LEASE_MAX_HOLDERS=1000` actually warns and falls back to 2 rather than being clamped to 5.\n  WHY: Both reviewers rated this NIT (comment only, no runtime failure), mapped here to low; the comment contradicts the detailed comment at lines 2935-2936 and the `1000` example in the README row. anthropic_claude-sonnet-5_5 and minimax_minimax-m3 mentioned the same gap in their notes but did not report it as a finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/pr_checks_lib.sh:Lines 2851-2852; `_merge_lease_max_holders` lines 2945-2953 | severity=NIT | confidence=5\n  PROBLEM: The summary comment says out-of-range values are clamped, but the parser accepts only one to three digits before applying the 1-5 clamp.\n  WHY: Setting `MERGE_LEASE_MAX_HOLDERS=1000` fails the digit-length check and falls back to 2; the comment implies it will be clamped to 5.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/pr_checks_lib.sh:2849-2852 (summary comment), validated against the parser at 2945-2948 | severity=NIT | confidence=4\n  PROBLEM: The summary comment leaves out the parser's three-digit input limit. For `MERGE_LEASE_MAX_HOLDERS=1000` the regex `^[0-9]{1,3}$` at line 2945 rejects the value, and the code warns and falls back to 2 (lines 2946-2948) instead of clamping it to 5. This contradicts the detailed comment at lines 2935-2936.\n  WHY: No runtime failure (comment only), but the last autofix run rewrote this block and it still misstates parser behavior for a documented example value (`1000` in the README row).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "7a03511a72cfc70e8e71e361dcbd00579c0b934550920bc35efad6b76316fc5e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10126,
+    "run_id": "45669094643",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45669094643",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125191506_7a02bf3505",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10126,
+    "run_id": "45669094643"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T19:15:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
