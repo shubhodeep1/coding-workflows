@@ -82,7 +82,12 @@ observe and every condition holds:
 A step that also names any other UPPER_SNAKE identifier or rotate, revoke,
 scope, expire or permission wording (or a secret/token/variable/setting-like
 word outside its own condition) is unrecognised, and one unrecognised step
-keeps the whole entry open. Every check fails closed (`check_failed`). The
+keeps the whole entry open. A `credentials` step is unrecognised too when it
+hands the secret to someone or somewhere else (CREDENTIAL_HANDOFF_RE), names a
+`--repo`/`-R` value that is not a literal slug equal to `--repo`
+(CREDENTIAL_REPO_FLAG_RE, CREDENTIAL_REPO_SLUG_RE), or targets an organisation,
+environment, app or user secret (CREDENTIAL_SCOPE_FLAG_RE): the run proof covers
+only this repository's Actions secrets. Every check fails closed (`check_failed`). The
 ticked comment reuses the done marker, with the line `Done: <reasons>; ticked
 by the daily operator-step tick.` After the entries, the tracker is closed as
 `completed` by the same close logic as `resolve` when no unticked step is left.
@@ -741,10 +746,20 @@ CREDENTIAL_HANDOFF_RE = re.compile(
 # `--repo OWNER/REPO` / `-R OWNER/REPO` in a credential step: another repository's
 # secret cannot be proven by this repository's runs (#10118 review).
 # A quoted slug (`--repo "acme/app"`, `-R 'acme/app'`) is matched too (#10118 review).
-CREDENTIAL_REPO_SLUG_RE = re.compile(r"(?<![A-Za-z0-9_-])(?:--repo|-R)(?:\s+|=)[\"']?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)")
-# An organisation or environment secret (`gh secret set --org/--repos/--env`, `-o`, `-e`)
-# cannot be proven by this repository's runs either: such a step stays open (#10118 review).
-CREDENTIAL_SCOPE_FLAG_RE = re.compile(r"(?<![A-Za-z0-9_-])(?:--(?:org|repos|env)|-[oe])(?:\s|=)")
+# The slug must end the argument (an optional closing quote, then whitespace, a
+# backtick, light punctuation or the end), so `--repo "o/r"-other` captures nothing
+# instead of the prefix `o/r` (#10118 review).
+CREDENTIAL_REPO_SLUG_RE = re.compile(
+	r"(?<![A-Za-z0-9_-])(?:--repo|-R)(?:\s+|=)[\"']?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?=[\"']?(?:[\s,;:)\]\x60]|$))"
+)
+# Every `--repo`/`-R` flag must yield one captured slug: a value the slug pattern
+# cannot read (`<owner>/<app>`, `$TARGET`, a backtick-quoted value) keeps the step
+# open instead of skipping the repository check (#10118 review).
+CREDENTIAL_REPO_FLAG_RE = re.compile(r"(?<![A-Za-z0-9_-])(?:--repo|-R)(?:\s|=|$)")
+# An organisation, environment, app (Dependabot, Codespaces) or user secret
+# (`gh secret set --org/--repos/--env/--app/--user`, `-o`, `-e`, `-a`, `-u`) cannot be
+# proven by this repository's Actions runs either: such a step stays open (#10118 review).
+CREDENTIAL_SCOPE_FLAG_RE = re.compile(r"(?<![A-Za-z0-9_-])(?:--(?:org|repos|env|app|user)|-[oeau])(?:\s|=|$)")
 # Human-object words a recognised step may name without becoming a human step:
 # the auto-merge toggle lives in the repository settings, and a credential
 # step necessarily names its secret/token/key.
@@ -805,6 +820,10 @@ def _observable_condition(title: str, lines: list[str], repo: str = "") -> tuple
 	if condition == "credentials" and any(
 			slug.lower() != str(repo or "").lower() for slug in CREDENTIAL_REPO_SLUG_RE.findall(text)):
 		# Fails closed: without `repo`, any named repository keeps the step open.
+		return None
+	if condition == "credentials" and (
+			len(CREDENTIAL_REPO_FLAG_RE.findall(text)) != len(CREDENTIAL_REPO_SLUG_RE.findall(text))):
+		# Fails closed: a `--repo`/`-R` value that is not a literal slug is unverifiable.
 		return None
 	if condition == "credentials" and CREDENTIAL_SCOPE_FLAG_RE.search(text):
 		return None
