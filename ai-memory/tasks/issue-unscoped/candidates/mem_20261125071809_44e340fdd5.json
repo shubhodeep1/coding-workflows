@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_poll_test_sharding.py:4341-4343 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: `self.assertNotIn(\"exit\", run[:trap_index])` in `StepElapsedLine10071ContractTest.test_trap_is_set_before_the_first_command` is a tautology that can never fail.\n  WHY: The `lines[0]` and `lines[1]` pins at 4337-4338 already fix the pre-trap text to `set -euo pipefail`, so the assertion adds no guard. Both reviewers rated it NIT, mapped here to low. The sonnet reviewer saw the same redundancy and chose not to report it.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_ci_poll_test_sharding.py:4343 | severity=NIT | confidence=4\n  PROBLEM: `self.assertNotIn(\"exit\", run[:trap_index])` is tautological. The preceding assertions at lines 4337-4338 pin `lines[0]` and `lines[1]`, so the assertion can never fail.\n  WHY: It always passes and adds no defensive value, because the `lines[0]` pin would already catch any `exit` inserted before the trap.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_ci_poll_test_sharding.py:4341-4343 | severity=NIT | confidence=5\n  PROBLEM: The `assertNotIn(\"exit\", run[:trap_index])` assertion is a tautology that can never fail. Lines 4337-4338 already pin the whole pre-trap text, and the previous `if \"exit\" in run[...]` form was also dead.\n  WHY: The contract test enforces nothing beyond what lines 4337-4338 enforce, and the comment misleads readers into thinking a real guard exists. Hardening suggestion: delete the assertion and its two-line comment (about 3 lines changed, HARDENING_RISK_SCORE 1).\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8f3a80b2b656973919fbf059100614b5f4234ed5442c6d89a8d0da4c498e2d88",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10094,
+    "run_id": "45555135250",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45555135250",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125071809_44e340fdd5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10094,
+    "run_id": "45555135250"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T07:18:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
