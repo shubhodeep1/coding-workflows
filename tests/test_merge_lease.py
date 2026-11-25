@@ -104,6 +104,12 @@ class _Harness:
 			# on the default; a test's own env still overrides them.
 			"MERGE_LEASE_TTL_MINUTES": "240",
 			"MERGE_LEASE_IDLE_MINUTES": "60",
+			# Issue #10124 raised the shipped MERGE_LEASE_MAX_HOLDERS default to
+			# 2. The single-holder tests were written against 1 (still the
+			# documented rollback), so pin it here instead of relying on the
+			# default; a test's own env still overrides it, and the tests of the
+			# unset default delete the key.
+			"MERGE_LEASE_MAX_HOLDERS": "1",
 		}
 
 	def lib(self, body: str, extra_env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
@@ -1946,15 +1952,17 @@ def _holders(record: str) -> list[str]:
 class MultiHolderLease(unittest.TestCase):
 	def test_max_holders_validation(self) -> None:
 		h = _Harness({})
-		for raw, want, warns in (("abc", "1", True), ("0", "1", False), ("-1", "1", True), ("9", "5", False),
-				("2x", "1", True), ("", "1", False), (" 3 ", "3", False), ("1234", "1", True), ("2;echo x", "1", True)):
+		for raw, want, warns in (("abc", "2", True), ("0", "1", False), ("-1", "2", True), ("9", "5", False),
+				("2x", "2", True), ("", "2", False), (" ", "2", False), (" 3 ", "3", False), ("1", "1", False),
+				("1234", "2", True), ("2;echo x", "2", True)):
 			with self.subTest(raw=raw):
 				res = h.lib("_merge_lease_max_holders", {MAXH: raw})
 				self.assertEqual(res.stdout.strip(), want, res.stderr)
 				self.assertEqual("::warning::MERGE_LEASE_MAX_HOLDERS=" in res.stderr, warns, res.stderr)
 		res = h.lib("_merge_lease_max_holders", {MAXH: "2;echo x"})
-		self.assertIn("MERGE_LEASE_MAX_HOLDERS=2echox is not an integer; using 1", res.stderr)
-		self.assertEqual(h.lib("unset MERGE_LEASE_MAX_HOLDERS; _merge_lease_max_holders").stdout.strip(), "1")
+		self.assertIn("MERGE_LEASE_MAX_HOLDERS=2echox is not an integer; using 2", res.stderr)
+		# Issue #10124: the shipped default is 2.
+		self.assertEqual(h.lib("unset MERGE_LEASE_MAX_HOLDERS; _merge_lease_max_holders").stdout.strip(), "2")
 
 	def test_v1_record_reads_as_one_holder(self) -> None:
 		for skips in ([], [f"5:{_sha(5)}"]):
@@ -1996,6 +2004,44 @@ class MultiHolderLease(unittest.TestCase):
 		expires = [int(x) for x in re.findall(r"^holder=\d+ head=\S* expires=(\d+)", rec, re.M)]
 		self.assertEqual(int(old["expires"]), max(expires))
 		self.assertNotIn("ai:merge-lease-wait", h.state.get("labels", {}).get("7", []))
+
+	def test_unset_default_grants_a_second_disjoint_holder(self) -> None:
+		"""Issue #10124: with the variable unset, a newcomer whose paths are
+		disjoint from the live holder's becomes the second holder."""
+		st = {"pulls": [_pull(7), _pull(8)], "files": {"7": ["own.py"]}}
+		_seed_lease(st, _record(8, paths="shared.py", acquired=int(time.time()) - 60).replace(f"head={'b' * 40}", f"head={_sha(8)}"))
+		h = _Harness(st)
+		del h.env[MAXH]
+		rc, out = _gate(h, 7, "update")
+		self.assertEqual(rc, 0, out)
+		self.assertIn("outcome=acquired", out)
+		self.assertIn("holders=2", out)
+		self.assertEqual(_holders(h.record()), ["8", "7"])
+
+	def test_unset_default_overlapping_newcomer_waits(self) -> None:
+		"""Issue #10124: with the variable unset, a newcomer that shares a path
+		with the live holder waits on it and the record is not rewritten."""
+		st = {"pulls": [_pull(7), _pull(8)], "files": {"7": ["own.py", "shared.py"]}}
+		_seed_lease(st, _record(8, paths="shared.py", acquired=int(time.time()) - 60).replace(f"head={'b' * 40}", f"head={_sha(8)}"))
+		h = _Harness(st)
+		del h.env[MAXH]
+		rc, out = _gate(h, 7, "update")
+		self.assertEqual(rc, 1, out)
+		self.assertIn("outcome=wait reason=holder_shares_paths blocker=8", out)
+		self.assertEqual(h.state["refs"][REF], "c" * 40)
+
+	def test_explicit_one_keeps_single_holder_lease(self) -> None:
+		"""Issue #10124: MERGE_LEASE_MAX_HOLDERS=1 restores the single-holder
+		lease: a disjoint newcomer waits on the holder."""
+		st = {"pulls": [_pull(7), _pull(8)], "files": {"7": ["own.py"]}}
+		_seed_lease(st, _record(8, paths="shared.py", acquired=int(time.time()) - 60).replace(f"head={'b' * 40}", f"head={_sha(8)}"))
+		h = _Harness(st)
+		del h.env[MAXH]
+		rc, out = _gate(h, 7, "update", {MAXH: "1"})
+		self.assertEqual(rc, 1, out)
+		self.assertIn("outcome=wait reason=held blocker=8", out)
+		self.assertNotIn("holders=", out)
+		self.assertEqual(h.state["refs"][REF], "c" * 40)
 
 	def test_overlapping_newcomer_waits_on_the_holder_it_shares_with(self) -> None:
 		st = {"pulls": [_pull(7), _pull(8), _pull(9)], "files": {"7": ["b.py"]}}
@@ -2401,7 +2447,7 @@ class LeaseQueueSnapshot(unittest.TestCase):
 
 class MultiHolderWiring(unittest.TestCase):
 	def test_max_holders_switch_reaches_every_lease_path(self) -> None:
-		line = "MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}"
+		line = "MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '2' }}"
 		for wf, expected, before in ((REVIEW, 3, "MERGE_LEASE_SOFT_PATHS: ${{ vars."), (POLL, 4, "MERGE_LEASE_SOFT_PATHS: ${{ vars."),
 				(CLOSE, 1, "MERGE_LEASE_SOFT_PATHS: ${{ vars."), (SWEEP, 1, "MERGE_LEASE_WAIT_LABEL: ${{ vars.")):
 			lines = wf.read_text().splitlines()
@@ -2410,7 +2456,18 @@ class MultiHolderWiring(unittest.TestCase):
 			for i in hits:
 				self.assertTrue(lines[i - 1].strip().startswith(before), f"{wf.name}:{i + 1}")
 				self.assertEqual(len(lines[i]) - len(lines[i].lstrip()), len(lines[i - 1]) - len(lines[i - 1].lstrip()))
-		self.assertIn("${MERGE_LEASE_MAX_HOLDERS:-1}", LIB.read_text())
+		lib_text = LIB.read_text()
+		self.assertIn("${MERGE_LEASE_MAX_HOLDERS:-2}", lib_text)
+		# Issue #10124: the workflow default, the script default and the
+		# non-integer fallback are one value.
+		script_default = re.findall(r"\$\{MERGE_LEASE_MAX_HOLDERS:-(\d)\}", lib_text)
+		fallback = re.findall(r"MERGE_LEASE_MAX_HOLDERS=\$\{lease_mh_shown\} is not an integer; using (\d)", lib_text)
+		self.assertEqual(script_default, ["2"])
+		self.assertEqual(fallback, ["2"])
+		for wf in (REVIEW, POLL, CLOSE, SWEEP):
+			wf_defaults = re.findall(r"MERGE_LEASE_MAX_HOLDERS: \$\{\{ vars\.MERGE_LEASE_MAX_HOLDERS \|\| '(\d)' \}\}", wf.read_text())
+			self.assertTrue(wf_defaults, wf.name)
+			self.assertEqual(set(wf_defaults), set(script_default), wf.name)
 
 
 

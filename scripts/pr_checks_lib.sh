@@ -2846,8 +2846,9 @@ _merge_lease_split_soft()
 # auto/forward-merge-stable-; comma-separated literal prefixes; empty, none
 # or off turns it off). The head ref comes from the listing already read.
 # Several holders per base (merge-lease-parallel Phase 5, Refs #9781):
-# MERGE_LEASE_MAX_HOLDERS (default 1, 1-5; not a whole number gives 1 with a
-# warning, out of range is clamped) PRs whose paths are pairwise disjoint
+# MERGE_LEASE_MAX_HOLDERS (default 2 since #10124, 1-5; set 1 for the
+# single-holder lease; not a whole number gives 2 with a warning, out of
+# range is clamped) PRs whose paths are pairwise disjoint
 # (Phase 4 soft class included) may hold one base's lease at once. With 2+
 # live holders the record keeps pr=/head=/acquired=/updated= for the primary,
 # expires= is the latest holder expiry (an old v1 reader then sees the primary
@@ -2929,19 +2930,20 @@ _merge_lease_idle_seconds()
 }
 
 # Phase 5 (Refs #9781): holders allowed per base. MERGE_LEASE_MAX_HOLDERS
-# (default 1, range 1-5). A value that is not a whole number of at most three
-# digits uses 1 and prints one ::warning:: to stderr (the value shown is cut
+# (default 2 since #10124, range 1-5; 1 restores the single-holder lease). A
+# value that is not a whole number of at most three digits (or is empty) uses 2
+# and prints one ::warning:: to stderr (the value shown is cut
 # to [0-9A-Za-z_-] and 32 characters); 0 gives 1, above 5 gives 5.
 _merge_lease_max_holders()
 {
-	local lease_mh_raw="${MERGE_LEASE_MAX_HOLDERS:-1}" lease_mh_shown
+	local lease_mh_raw="${MERGE_LEASE_MAX_HOLDERS:-2}" lease_mh_shown
 	lease_mh_raw="${lease_mh_raw#"${lease_mh_raw%%[![:space:]]*}"}"
 	lease_mh_raw="${lease_mh_raw%"${lease_mh_raw##*[![:space:]]}"}"
-	[ -n "${lease_mh_raw}" ] || lease_mh_raw=1
+	[ -n "${lease_mh_raw}" ] || lease_mh_raw=2
 	if ! [[ "${lease_mh_raw}" =~ ^[0-9]{1,3}$ ]]; then
 		lease_mh_shown="$(printf '%s' "${lease_mh_raw}" | tr -cd '0-9A-Za-z_-' | cut -c1-32)"
-		echo "::warning::MERGE_LEASE_MAX_HOLDERS=${lease_mh_shown} is not an integer; using 1" >&2
-		echo 1
+		echo "::warning::MERGE_LEASE_MAX_HOLDERS=${lease_mh_shown} is not an integer; using 2" >&2
+		echo 2
 		return 0
 	fi
 	lease_mh_raw=$((10#${lease_mh_raw}))
