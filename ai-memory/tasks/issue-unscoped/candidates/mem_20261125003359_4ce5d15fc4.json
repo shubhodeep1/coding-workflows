@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1863 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Job tests-heal-plan-and-validation remains at high risk of exceeding its timeout.\n  WHY: The job took 15m24s of its 20-minute timeout in the flagged run (44214045174), and adding a comment does not mitigate that risk. Source severity was MAJOR. Another reviewer (anthropic_claude-sonnet-5_5) called this a restatement of the task gap, not a separate code defect.\n- .github/workflows/ci.yml:1856 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The new comment cites \"PR #9702\" as the PR that moved six steps, but no repository artifact corroborates that PR number.\n  WHY: The in-tree comment at .github/workflows/ci.yml:1608-1610 and changelog.d/9420-ci-heal-job-steps-to-hooks-job.md cite only #9420/#9684, so the citation is a maintenance hazard. Source severity was NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\" Do not raise timeout-minutes and do not split tests into new required job names.\n  expected_change_site: .github/workflows/ci.yml, job tests-heal-plan-and-validation (step list from line 1865) and the receiving job tests-hooks-and-orchestrator (line 885)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The PR adds only a comment block at ci.yml:1855-1860. No step is removed from tests-heal-plan-and-validation and none is added to another job. The six steps credited to the earlier #9420/#9684 move are already in tests-hooks-and-orchestrator at ci.yml:1625, 1630, 1639, 1654, 1659, 1845. No step timings for run 44214045174 are in the repo. The two constraints (no timeout raise, no new required job names) are met. Severity disagreement: the Sonnet reviewer rated it NIT at confidence 3, while the Gemini and MiniMax reviewers rated it MAJOR at confidence 5. The highest is MAJOR. The GLM reviewer explicitly did not flag it, because the move already exists in the base tree.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\" The issue also says not to raise timeout-minutes and not to add required job names.\n  Expected change site: .github/workflows/ci.yml, job tests-heal-plan-and-validation, and the receiving job tests-hooks-and-orchestrator.\n  Evidence of absence: The PR adds only the comment block at ci.yml:1855-1860. It removes no step and adds none to another job. The earlier move is in the base tree (comments at ci.yml:1578, 1609-1610, 1652, 2065; #9420, re-issued as #9684). Run 44214045174 timings are not in the repo. The \"PR #9702\" attribution at ci.yml:1856 is not corroborated in the repo (minor sourcing note). The reviewer calls it a deliberate, documented deferral that leaves the request unmet in the strict sense.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:1863 | severity=MAJOR | confidence=4\n  PROBLEM: Job tests-heal-plan-and-validation remains at high risk of exceeding its timeout.\n  WHY: The job took 15m24s of its 20-minute timeout in the flagged run (44214045174). A comment explaining why steps were not moved does not mitigate the performance risk.\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml, job tests-heal-plan-and-validation\n  Evidence of absence: The PR diff only adds a YAML comment. No steps were moved from tests-heal-plan-and-validation to another job as requested by issue #9697.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml:1856 | severity=NIT | confidence=4\n  PROBLEM: The new comment cites \"PR #9702\" as the PR that moved six steps, but no repository artifact corroborates that PR number.\n  WHY: The in-tree comment at ci.yml:1608-1610 and changelog.d/9420-ci-heal-job-steps-to-hooks-job.md line 4 cite only #9420/#9684. This is a documentation comment with no runtime failure, but a maintenance hazard.\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\" (issue #9697 body)\n  Expected change site: .github/workflows/ci.yml, the step list of tests-heal-plan-and-validation starting at line 1865, plus a corresponding insertion in the receiving job (tests-hooks-and-orchestrator at line 885).\n  Evidence of absence: The PR diff contains only six comment lines at ci.yml:1855-1860, with no step removed or inserted. The six steps the comment credits to a prior move are in tests-hooks-and-orchestrator at ci.yml:1625, 1630, 1639, 1654, 1659, 1845, moved by issue #9420, re-issued as #9684. Run 44214045174 measured 15m24s of the 20-minute timeout. The receiving job's post-move total is unmeasured per the comment at ci.yml:1578-1580. The two constraints are met, but the primary deliverable is not delivered and the repo holds no step timings for the run.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "97b43bf3460815ddf5223de885de2454803fb29b2d3219ca84e6ccf57cf9faad",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10074,
+    "run_id": "45504024132",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45504024132",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125003359_4ce5d15fc4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10074,
+    "run_id": "45504024132"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T00:33:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
