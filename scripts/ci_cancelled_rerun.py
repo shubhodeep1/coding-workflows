@@ -41,6 +41,12 @@ verdicts above; its decision line ends in `final_ci=true`.
 `classify-run --repo <o/r> --run-id <id> [--ignore-job <name>]` prints one
 run's verdict (one word) and exits 0; scripts/review_final_ci_failed.sh uses
 it from inside the run, ignoring its own in-progress `final-ci-failed` job.
+`classify-cancelled-run --repo <o/r> --run-id <id> [--ignore-job <name>]`
+prints `run_cancelled`, `not_cancelled` or `unverified` for attempt 1 of a
+run (issue #10131). scripts/ci_final_status.sh uses it from the `lint` job
+to skip a `ci/final=failure` post for a run cancelled as a whole. It makes
+one attempt-1 jobs GET plus at most MAX_FAILED_JOBS_CLASSIFIED check-run
+annotation GETs, and none of those when a cancelled job never started.
 """
 
 from __future__ import annotations
@@ -545,6 +551,48 @@ def classify_runner_shutdown(repo: str, run_id: int, action_resolution_enabled: 
 	except (ValueError, OSError, subprocess.TimeoutExpired):
 		return "unverified"
 
+def classify_cancelled_run(repo: str, run_id: int, ignore_job_names: tuple[str, ...] = ()) -> str:
+	"""Return "run_cancelled", "not_cancelled" or "unverified" (issue #10131).
+
+	Answers whether attempt 1 of a run was cancelled as a whole rather than
+	cut off by a job's own `timeout-minutes`. Fail closed: anything unclear
+	is "unverified", and the caller then posts `ci/final=failure` as before.
+	- Any job with conclusion `failure` (or one outside
+	  BENIGN_JOB_CONCLUSIONS): "not_cancelled".
+	- No `cancelled` job: "unverified".
+	- A `cancelled` job that never started (no step ran and no runner was
+	  assigned): "run_cancelled". A job timeout cannot produce that: every
+	  matrix in ci.yml sets `fail-fast: false`, so a job's own timeout never
+	  cancels a sibling, and a job that needs a timed-out job ends `skipped`,
+	  not `cancelled`. No annotation is read on this path.
+	- Otherwise, at most MAX_FAILED_JOBS_CLASSIFIED cancelled jobs (more is
+	  "unverified") have their failure annotations read once each; the first
+	  one with anything other than the runner-shutdown text or "The
+	  operation was canceled." (a `timeout-minutes` cancellation leaves its
+	  own annotation) gives "not_cancelled"; if none does, "run_cancelled".
+	Reuses list_run_jobs, failure_annotations and shutdown_only_annotations
+	unchanged. Annotation text is never logged.
+	"""
+	try:
+		jobs = list_run_jobs(repo, run_id, ignore_job_names)
+		if any(job["conclusion"] == "failure" or job["conclusion"] not in BENIGN_JOB_CONCLUSIONS for job in jobs):
+			return "not_cancelled"
+		cancelled = [job for job in jobs if job["conclusion"] == "cancelled"]
+		if not cancelled:
+			return "unverified"
+		if any(job_ran_no_steps(job) and not positive_number(job.get("runner_id")) for job in cancelled):
+			return "run_cancelled"
+		if len(cancelled) > MAX_FAILED_JOBS_CLASSIFIED:
+			return "unverified"
+		for job in cancelled:
+			check_run_id = int(CHECK_RUN_URL_PATTERN.search(job["check_run_url"])[1])
+			if not shutdown_only_annotations(failure_annotations(repo, check_run_id)):
+				return "not_cancelled"
+		return "run_cancelled"
+	except (ValueError, OSError, subprocess.TimeoutExpired):
+		return "unverified"
+
+
 def process(prs: list, repo: str, enabled: bool, dry_run: bool, head_filter: str,
 		action_resolution_enabled: bool = True, checkout_fetch_enabled: bool = True,
 		abandoned_job_enabled: bool = True) -> None:
@@ -685,14 +733,8 @@ def process(prs: list, repo: str, enabled: bool, dry_run: bool, head_filter: str
 			decision(number, sha, run_id, "skip", "rerun_refused", final_ci=final_ci)
 
 
-def classify_run_cli(argv: list[str]) -> int:
-	"""`classify-run --repo <o/r> --run-id <id> [--ignore-job <name>]...`.
-
-	Prints one word, the classify_runner_shutdown verdict for attempt 1 of
-	the run, and returns 0. Bad arguments print `unverified`. The per-cause
-	switches are read from the same env vars as the sweep. API reads: one
-	jobs GET plus the annotation GETs classify_runner_shutdown makes.
-	"""
+def _parse_classify_cli_args(argv: list[str]) -> tuple[str, int, list[str]] | None:
+	"""Parse `--repo <o/r> --run-id <id> [--ignore-job <name>]...`; None when invalid."""
 	repo, run_id, ignore = "", "", []
 	args = list(argv)
 	while args:
@@ -706,14 +748,28 @@ def classify_run_cli(argv: list[str]) -> int:
 			else:
 				ignore.append(value)
 		else:
-			print("unverified")
-			return 0
+			return None
 	if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) or ".." in repo \
 			or not re.fullmatch(r"[1-9][0-9]*", run_id) \
 			or any(not re.fullmatch(r"[A-Za-z0-9_. ()/-]+", name) for name in ignore):
+		return None
+	return repo, int(run_id), ignore
+
+
+def classify_run_cli(argv: list[str]) -> int:
+	"""`classify-run --repo <o/r> --run-id <id> [--ignore-job <name>]...`.
+
+	Prints one word, the classify_runner_shutdown verdict for attempt 1 of
+	the run, and returns 0. Bad arguments print `unverified`. The per-cause
+	switches are read from the same env vars as the sweep. API reads: one
+	jobs GET plus the annotation GETs classify_runner_shutdown makes.
+	"""
+	parsed = _parse_classify_cli_args(argv)
+	if parsed is None:
 		print("unverified")
 		return 0
-	print(classify_runner_shutdown(repo, int(run_id),
+	repo, run_id, ignore = parsed
+	print(classify_runner_shutdown(repo, run_id,
 		action_resolution_enabled=action_resolution_rerun_enabled(os.environ.get("CI_ACTION_RESOLUTION_RERUN_ENABLED")),
 		checkout_fetch_enabled=checkout_fetch_rerun_enabled(os.environ.get("CI_CHECKOUT_FETCH_RERUN_ENABLED")),
 		abandoned_job_enabled=abandoned_job_rerun_enabled(os.environ.get("CI_ABANDONED_JOB_RERUN_ENABLED")),
@@ -721,9 +777,27 @@ def classify_run_cli(argv: list[str]) -> int:
 	return 0
 
 
+def classify_cancelled_run_cli(argv: list[str]) -> int:
+	"""`classify-cancelled-run --repo <o/r> --run-id <id> [--ignore-job <name>]...`.
+
+	Prints one word, the classify_cancelled_run verdict for attempt 1 of
+	the run, and returns 0. Bad arguments print `unverified`. API reads: one
+	jobs GET plus at most MAX_FAILED_JOBS_CLASSIFIED annotation GETs.
+	"""
+	parsed = _parse_classify_cli_args(argv)
+	if parsed is None:
+		print("unverified")
+		return 0
+	repo, run_id, ignore = parsed
+	print(classify_cancelled_run(repo, run_id, ignore_job_names=tuple(ignore)))
+	return 0
+
+
 def main() -> None:
 	if sys.argv[1:2] == ["classify-run"]:
 		raise SystemExit(classify_run_cli(sys.argv[2:]))
+	if sys.argv[1:2] == ["classify-cancelled-run"]:
+		raise SystemExit(classify_cancelled_run_cli(sys.argv[2:]))
 	path = os.environ.get("CI_CANCELLED_PR_SNAPSHOT", "")
 	try:
 		prs = json.loads(Path(path).read_text(encoding="utf-8"))

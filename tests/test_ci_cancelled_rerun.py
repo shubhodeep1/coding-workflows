@@ -1224,3 +1224,142 @@ def test_classify_run_against_its_own_running_run():
 	with mock.patch.object(HELPER.subprocess, "run", side_effect=fake):
 		assert HELPER.classify_runner_shutdown(HELPER.SOURCE_REPO, 9, ignore_job_names=("final-ci-failed",)) == "shutdown"
 		assert HELPER.classify_runner_shutdown(HELPER.SOURCE_REPO, 9) == "unverified"
+
+
+# --- Run-cancelled verdict for ci/final (issue #10131) -----------------------
+
+def cancelled_job(name, job_id, started=False, runner_id=None, conclusion="cancelled"):
+	item = dict(job(name, job_id, conclusion), steps=[], runner_id=runner_id)
+	if started:
+		item["steps"] = [{"name": "Set up job", "conclusion": "success"}]
+		item["runner_id"] = job_id + 50 if runner_id is None else runner_id
+	return item
+
+
+def classify_cancelled(jobs, annotations=None):
+	annotations = annotations or {}
+	def fake_annotations(repo, check_run_id):
+		value = annotations[check_run_id - 1000]
+		if isinstance(value, Exception):
+			raise value
+		return [item for item in value if item["annotation_level"] == "failure"]
+	jobs_mock = mock.Mock(side_effect=jobs) if isinstance(jobs, Exception) else mock.Mock(return_value=jobs)
+	with mock.patch.object(HELPER, "list_run_jobs", jobs_mock) as listing, \
+		mock.patch.object(HELPER, "failure_annotations", side_effect=fake_annotations) as reads:
+		verdict = HELPER.classify_cancelled_run(HELPER.SOURCE_REPO, 123, ignore_job_names=("lint",))
+	assert listing.call_args.args == (HELPER.SOURCE_REPO, 123, ("lint",))
+	return verdict, reads
+
+
+def test_cancelled_run_never_started_job_is_run_cancelled_without_annotation_reads():
+	jobs = [cancelled_job("static-checks", 1), cancelled_job("orchestrate-poll (0)", 2, started=True),
+		job("tests-sync-quick", 3, "skipped")]
+	verdict, reads = classify_cancelled(jobs)
+	assert verdict == "run_cancelled"
+	reads.assert_not_called()
+
+
+def test_cancelled_run_any_failure_is_not_cancelled():
+	jobs = [cancelled_job("static-checks", 1), job("orchestrate-poll", 2, "failure")]
+	verdict, reads = classify_cancelled(jobs)
+	assert verdict == "not_cancelled"
+	reads.assert_not_called()
+
+
+def test_cancelled_run_other_conclusion_is_not_cancelled():
+	verdict, _ = classify_cancelled([cancelled_job("static-checks", 1), job("x", 2, "timed_out")])
+	assert verdict == "not_cancelled"
+
+
+def test_cancelled_run_without_cancelled_job_is_unverified():
+	verdict, _ = classify_cancelled([job("static-checks", 1, "success"), job("x", 2, "skipped")])
+	assert verdict == "unverified"
+
+
+def test_cancelled_run_runner_assigned_without_steps_counts_as_started():
+	jobs = [cancelled_job("static-checks", 1, runner_id=7)]
+	verdict, reads = classify_cancelled(jobs, {1: [annotation(TIMEOUT)]})
+	assert verdict == "not_cancelled"
+	assert [call.args[1] for call in reads.call_args_list] == [1001]
+
+
+@pytest.mark.parametrize("named", [[], [annotation(CANCELED)], [annotation(SHUTDOWN), annotation(CANCELED)]])
+def test_cancelled_run_started_jobs_with_cancel_annotations_only_are_run_cancelled(named):
+	jobs = [cancelled_job("static-checks", 1, started=True), cancelled_job("orchestrate-poll (0)", 2, started=True)]
+	verdict, reads = classify_cancelled(jobs, {1: list(named), 2: list(named)})
+	assert verdict == "run_cancelled"
+	assert reads.call_count == 2
+
+
+@pytest.mark.parametrize("bad", [
+	[annotation(TIMEOUT), annotation(CANCELED)],
+	[annotation("Error: something broke")],
+	[annotation("The run was canceled by @someone.")],
+])
+def test_cancelled_run_started_job_with_timeout_or_other_annotation_is_not_cancelled(bad):
+	jobs = [cancelled_job("static-checks", 1, started=True), cancelled_job("orchestrate-poll (0)", 2, started=True)]
+	verdict, _ = classify_cancelled(jobs, {1: [annotation(CANCELED)], 2: bad})
+	assert verdict == "not_cancelled"
+
+
+def test_cancelled_run_over_read_cap_is_unverified():
+	count = HELPER.MAX_FAILED_JOBS_CLASSIFIED + 1
+	jobs = [cancelled_job(f"job-{index}", index, started=True) for index in range(1, count + 1)]
+	verdict, reads = classify_cancelled(jobs)
+	assert verdict == "unverified"
+	reads.assert_not_called()
+
+
+def test_cancelled_run_at_read_cap_is_classified():
+	count = HELPER.MAX_FAILED_JOBS_CLASSIFIED
+	jobs = [cancelled_job(f"job-{index}", index, started=True) for index in range(1, count + 1)]
+	verdict, reads = classify_cancelled(jobs, {index: [] for index in range(1, count + 1)})
+	assert verdict == "run_cancelled"
+	assert reads.call_count == count
+
+
+@pytest.mark.parametrize("error", [ValueError("jobs_unreadable"), OSError("boom")])
+def test_cancelled_run_unreadable_jobs_is_unverified(error):
+	verdict, _ = classify_cancelled(error)
+	assert verdict == "unverified"
+
+
+def test_cancelled_run_unreadable_annotations_is_unverified():
+	jobs = [cancelled_job("static-checks", 1, started=True)]
+	verdict, _ = classify_cancelled(jobs, {1: ValueError("annotations_unreadable")})
+	assert verdict == "unverified"
+
+
+def test_classify_cancelled_run_cli_prints_the_verdict():
+	output = io.StringIO()
+	with mock.patch.object(HELPER, "classify_cancelled_run", return_value="run_cancelled") as classifier, \
+		contextlib.redirect_stdout(output):
+		assert HELPER.classify_cancelled_run_cli(["--repo", "o/r", "--run-id", "77",
+			"--ignore-job", "lint", "--ignore-job", "final-ci-failed"]) == 0
+	assert output.getvalue() == "run_cancelled\n"
+	assert classifier.call_args.args == ("o/r", 77)
+	assert classifier.call_args.kwargs["ignore_job_names"] == ("lint", "final-ci-failed")
+
+
+@pytest.mark.parametrize("argv", [
+	[], ["--repo", "o/r"], ["--repo", "o/r", "--run-id", "0"], ["--repo", "../r", "--run-id", "7"],
+	["--repo", "o/r", "--run-id", "7", "--bogus"], ["--repo", "o/r", "--run-id", "7", "--ignore-job", "a;b"],
+])
+def test_classify_cancelled_run_cli_bad_arguments_print_unverified(argv):
+	output = io.StringIO()
+	with mock.patch.object(HELPER, "classify_cancelled_run") as classifier, contextlib.redirect_stdout(output):
+		assert HELPER.classify_cancelled_run_cli(argv) == 0
+	assert output.getvalue() == "unverified\n"
+	classifier.assert_not_called()
+
+
+def test_main_dispatches_classify_cancelled_run(monkeypatch):
+	monkeypatch.setattr(HELPER.sys, "argv", ["ci_cancelled_rerun.py", "classify-cancelled-run", "--repo", "o/r", "--run-id", "5"])
+	output = io.StringIO()
+	with mock.patch.object(HELPER, "classify_cancelled_run", return_value="not_cancelled"), \
+		mock.patch.object(HELPER, "classify_runner_shutdown") as other, contextlib.redirect_stdout(output):
+		with pytest.raises(SystemExit) as exit_info:
+			HELPER.main()
+	assert exit_info.value.code == 0
+	assert output.getvalue() == "not_cancelled\n"
+	other.assert_not_called()

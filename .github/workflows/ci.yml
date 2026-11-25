@@ -5087,11 +5087,13 @@ jobs:
     # step uses: contents for the checkouts, pull-requests and actions for
     # scripts/ci_final_merge_ref_fresh.sh (pulls/<n>, actions/runs/<id>).
     # ci_pr_quick.yml grants the same scopes (a caller must, even for a
-    # skipped job).
+    # skipped job). checks: read (#10131) lets scripts/ci_final_status.sh
+    # read check-run annotations of cancelled jobs, as final-ci-failed does.
     permissions:
       contents: read
       pull-requests: read
       actions: read
+      checks: read
       statuses: write
     steps:
       # Docs-only final CI (run-volume plan item 4): the test jobs were skipped
@@ -5180,7 +5182,9 @@ jobs:
       # never turns a green `lint` red: a missing status keeps the PR
       # blocked, never falsely green. The script comes from the run's own
       # head (the same trust as this ci.yml); contract in
-      # scripts/ci_final_status.sh.
+      # scripts/ci_final_status.sh. A run cancelled as a whole posts nothing
+      # (#10131: `lint` still runs after an early cancel and its aggregate
+      # fails); a job cut off by its own timeout-minutes still posts failure.
       - name: Checkout the final CI status script
         if: always() && !cancelled()
         continue-on-error: true
@@ -5194,6 +5198,7 @@ jobs:
           sparse-checkout: |
             scripts/ci_final_status.sh
             scripts/gh_helpers.sh
+            scripts/ci_cancelled_rerun.py
 
       - name: Report the final CI result as a commit status
         if: always() && !cancelled()
@@ -5204,6 +5209,8 @@ jobs:
           CI_FINAL_STATUS_AGGREGATE_OUTCOME: ${{ steps.ci_require_all_jobs.outcome }}
           CI_FINAL_STATUS_DOCS_ONLY_REQUESTED: ${{ inputs.docs_only == 'true' }}
           CI_FINAL_STATUS_DOCS_ONLY_OUTCOME: ${{ steps.docs_only_verify.outcome }}
+          CI_FINAL_STATUS_NEEDS_JSON: ${{ toJSON(needs) }}
+          CI_FINAL_STATUS_RUN_CANCELLED_SKIP_ENABLED: ${{ vars.CI_FINAL_STATUS_RUN_CANCELLED_SKIP_ENABLED || 'true' }}
         run: bash .ci-final-status/scripts/ci_final_status.sh
 
   final-ci-failed:
