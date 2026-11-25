@@ -733,14 +733,18 @@ NEGATED_ACTION_RE = re.compile(r"(?<![A-Za-z])(?:disabl\w*|turn(?:ing)?\s+off|re
 # A credential step that hands the secret to someone or somewhere else is a human
 # step: the workflow-run proof only shows this repository's own runs (#10118 review).
 CREDENTIAL_HANDOFF_RE = re.compile(
-	r"(?<![A-Za-z])(?:to|for|with|from|in|into|at|via|by)\s+(?:the\s+|a\s+|an\s+|our\s+|your\s+|each\s+|every\s+|all\s+)?"
+	r"(?<![A-Za-z])(?:to|for|with|from|in|into|onto|on|at|via|by)\s+(?:the\s+|a\s+|an\s+|our\s+|your\s+|each\s+|every\s+|all\s+)?"
 	r"(?:vendors?|consumers?|customers?|clients?|partners?|teams?|support|maintainers?|owners?|admins?|third[ -]part(?:y|ies))(?![A-Za-z])"
 	r"|(?<![A-Za-z])(?:consumer|other|every|each|all)\s+repo|(?<![A-Za-z])(?:send|email|share|forward|hand\s+(?:over|off))(?![A-Za-z])",
 	re.I,
 )
 # `--repo OWNER/REPO` / `-R OWNER/REPO` in a credential step: another repository's
 # secret cannot be proven by this repository's runs (#10118 review).
-CREDENTIAL_REPO_SLUG_RE = re.compile(r"(?<![A-Za-z0-9_-])(?:--repo|-R)(?:\s+|=)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)")
+# A quoted slug (`--repo "acme/app"`, `-R 'acme/app'`) is matched too (#10118 review).
+CREDENTIAL_REPO_SLUG_RE = re.compile(r"(?<![A-Za-z0-9_-])(?:--repo|-R)(?:\s+|=)[\"']?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)")
+# An organisation or environment secret (`gh secret set --org/--repos/--env`, `-o`, `-e`)
+# cannot be proven by this repository's runs either: such a step stays open (#10118 review).
+CREDENTIAL_SCOPE_FLAG_RE = re.compile(r"(?<![A-Za-z0-9_-])(?:--(?:org|repos|env)|-[oe])(?:\s|=)")
 # Human-object words a recognised step may name without becoming a human step:
 # the auto-merge toggle lives in the repository settings, and a credential
 # step necessarily names its secret/token/key.
@@ -801,6 +805,8 @@ def _observable_condition(title: str, lines: list[str], repo: str = "") -> tuple
 	if condition == "credentials" and any(
 			slug.lower() != str(repo or "").lower() for slug in CREDENTIAL_REPO_SLUG_RE.findall(text)):
 		# Fails closed: without `repo`, any named repository keeps the step open.
+		return None
+	if condition == "credentials" and CREDENTIAL_SCOPE_FLAG_RE.search(text):
 		return None
 	stripped = UPPER_SNAKE_RE.sub(" ", text)
 	allowed_words = _OBSERVABLE_ALLOWED_OBJECT_WORDS.get(condition)
