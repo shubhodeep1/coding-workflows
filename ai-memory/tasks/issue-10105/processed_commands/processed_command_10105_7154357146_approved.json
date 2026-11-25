@@ -5,13 +5,24 @@
   "entry_id": "processed_command_10105_7154357146_approved",
   "issue_number": 10105,
   "metadata": {
+    "branch": "ai/issue-10105",
+    "changed_files": [
+      ".github/workflows/test-and-mark-stable.yml",
+      "changelog.d/10105-phase4d-timeout-reason.md",
+      "tests/test_test_and_mark_stable_step_scripts_contract.py"
+    ],
+    "issue_number": 10105,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/10105",
+    "pr_number": 10109,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/10109",
+    "run_attempt": "1",
+    "run_id": "45557530821",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/45557530821"
   },
   "run_attempt": 1,
   "run_id": "45557530821",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-25T06:19:54Z",
+  "status": "completed",
+  "timestamp": "2026-11-25T06:42:55Z",
   "workflow": "implement"
 }
