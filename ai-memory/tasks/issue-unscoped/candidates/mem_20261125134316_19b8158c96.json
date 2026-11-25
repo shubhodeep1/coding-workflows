@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  expected_change_site: .github/workflows/ci.yml (steps within tests-heal-plan-and-validation, line 1850)\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR moves no steps and adds only a comment at ci.yml:1855-1860. Gemini rated it MAJOR with confidence 4. Sonnet rated it NIT with confidence 2 and judged it satisfied in substance, because the move was already done under #9420 (re-issued as #9684), `Merge probe unit tests` is at ci.yml:1625 inside tests-hooks-and-orchestrator, and the repository holds no step timings for run 44214045174.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP: Requirement: Move the slowest steps of `tests-heal-plan-and-validation` into the CI job with the most headroom. Keep the steps unchanged, keep job and step names, and don't raise `timeout-minutes`.\n  Expected change site: `.github/workflows/ci.yml`, steps in `tests-heal-plan-and-validation` (line 1850).\n  Evidence of absence: The PR moves no steps. The move was done earlier under #9420, re-issued as #9684. `Merge probe unit tests` is at line 1625, inside `tests-hooks-and-orchestrator` (starts at line 885). Comments at lines 1578, 1609-1610, 1652, 2065, 2105 and 2113 record the earlier move. `timeout-minutes: 20` is unchanged and no job was added or renamed. The citations in the new comment at lines 1855-1860 match the repository. The repository holds no step timings for run 44214045174, so moving more steps would be a guess. The PR adds only the comment-only resolution the issue summary describes, so the reviewer treats this as satisfied in substance.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml (steps within tests-heal-plan-and-validation)\n  Evidence of absence: The PR diff contains no step moves to address the job timeout issue. The previous autofix round added a YAML comment explaining why the step move was deferred, but the implementation itself remains incomplete vs. the original issue intent.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fa5e71399ab8ed29d0814a2e93508c8936912f5a91e03a8b6967035ca87806a1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10074,
+    "run_id": "45607199087",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45607199087",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125134316_19b8158c96",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10074,
+    "run_id": "45607199087"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T13:43:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
