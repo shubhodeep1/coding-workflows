@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. Which part of the repository should this issue change?\nChoices:\nA. The issue \u2192 PR pipeline workflows (clarify, plan, implement, review/autofix) and their scripts (RECOMMENDED)\nB. The orchestrator (orchestrate / orchestrate_poll and their helpers)\nC. Documentation only (README.md, docs/, agents.d/ fragments)\nD. Something else: please name the file, workflow or feature\nQ2. What specific problem should be fixed, or what improvement is wanted?\nChoices:\nA. A concrete bug or failure: please give the symptom, a failing run or log, and the expected behavior (RECOMMENDED)\nB. Performance or cost: fewer runner jobs, fewer API calls, or lower token use (say which)\nC. Reliability: fewer stalls or retries, or better self-healing (say which path)\nD. Usability or clarity of comments, alerts or docs (say which)\nQ3. How will we know the change is done?\nChoices:\nA. A measurable result you give, such as a metric threshold, a test that passes or a run that succeeds (RECOMMENDED)\nB. A described before/after behavior that a contract test can check\nC. A reviewer judges it qualitatively (not recommended; this cannot be checked automatically)",
+  "fingerprint": "3c9c295f8740603dbc6ffdf74575ef0ebd2cc0eabb45e4a46639fc845ae5524f",
+  "lineage": {
+    "issue_number": 10111,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45583071794",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45583071794",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261125091916_f4d893095d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10111,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45583071794"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #10111 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-25T09:19:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
