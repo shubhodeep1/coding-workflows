@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/audit-plans.md:23 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: Step 4a's baseline `git fetch origin <default>` has no failure branch for a failed fetch or a missing `origin/<default>` (the same text is in workflow-templates/.claude/commands/audit-plans.md).\n  WHY: A failed fetch leaves an outdated or absent baseline, so a drifted plan can be classified CURRENT and recommended with no report caveat. Reviewers rated this MAJOR, which is mapped to high here.\n- .claude/commands/audit-plans.md:26,39 | severity=high | confidence=3\n  flagged_by: [minimax_minimax-m3, anthropic_claude-sonnet-5_5]\n  PROBLEM: The wording of step 4a (\"Fetch it before any refresh edit\") and step 6 (\"only when step 4a had no plan to check and made no fetch\") can be read so that the tracking-issue listing is never fetched when plans are PARTIAL or NOT IMPLEMENTED but none is STALE.\n  WHY: With no listing, step 6's conflict gate runs against nothing and the report may omit the UNSCREENED caveat. Severity disagreement: minimax rated it MAJOR and sonnet NIT with confidence 2, and the highest is used. z-ai_glm-5_3-flash checked the file and judged this reading not to hold.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR description says \"tests/test_audit_plans_command.py: 5 new contract tests for step 4a\". The changelog fragment says the file pins step 4a's rules and the maintenance-PR wiring. The last run added `--paginate` with `per_page=100`, the rule that a truncated listing counts as unreadable, and the \"Stale, not refreshed\" hand-off lines, and no test pins them.\n  expected_change_site: tests/test_audit_plans_command.py, next to test_tracking_issue_listing_is_fetched_once and test_refreshes_land_in_the_maintenance_pr\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  EVIDENCE: The PR diff adds exactly five tests, and the test file ends at line 166. None of them references `--paginate`, `per_page=100`, \"counts as unreadable\", \"make no refresh edits this run\" or \"Stale, not refreshed\". The pagination and fail-closed text could be deleted with no test failing.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .claude/commands/audit-plans.md:23 | severity=MAJOR | confidence=3\n  PROBLEM: Step 4a's \"Baseline\" `git fetch origin <default>` has no failure branch for a failed fetch or a missing `origin/<default>`.\n  WHY: A drifted plan can be marked CURRENT and passed to ranking, with no report field saying the drift check did not run.\n- .claude/commands/audit-plans.md:39 | severity=NIT | confidence=2\n  PROBLEM: Step 4a's \"before any refresh edit\" fetch could be read as refresh-path only, and step 6 fetches only when step 4a had no plan to check.\n  WHY: Under the narrow reading, step 6 screens against nothing and the pick is not marked UNSCREENED.\n- TASK_GAP: requirement: The changelog fragment and PR description say tests/test_audit_plans_command.py pins step 4a's rules, but the last run's pagination, fail-closed and \"Stale, not refreshed\" additions are untested. | expected_change_site: tests/test_audit_plans_command.py | evidence: The diff adds five tests, and none asserts the new rules. | severity=MAJOR | confidence=4\n- HARDENING_SUGGESTIONS: Add a failure path at line 23 and reword the step 6 fetch condition at line 39. HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/commands/audit-plans.md:26,39 | severity=MAJOR | confidence=3\n  PROBLEM: Step 4a's fetch and step 6's conditional fetch together leave the tracking-issue listing unread when plans are PARTIAL or NOT-IMPLEMENTED and none is STALE.\n  WHY: Step 6's conflict gate then runs with an empty in-flight footprint, or silently degrades without the UNSCREENED caveat.\n- TASK_GAP: requirement: The PR description says \"5 new contract tests for step 4a\". The last run added pagination, the \"truncated listing counts as unreadable\" rule and two \"Stale, not refreshed\" lines that have no coverage. | expected_change_site: tests/test_audit_plans_command.py | evidence: The file ends at line 166 with the five original tests, none of which cover the new rules. | severity=MAJOR | confidence=5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/commands/audit-plans.md:23 | severity=MAJOR | confidence=3\n  PROBLEM: Step 4a does not say to stop or report the drift check as unavailable if the fetch fails (the same text is in workflow-templates/.claude/commands/audit-plans.md).\n  WHY: A stale local `origin/<default>` ref can hide default-branch changes and make a stale plan look current.\n- HARDENING_SUGGESTIONS: State that a failed fetch or missing `origin/<default>` makes the drift check unavailable and blocks refreshes based on it. HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .claude/commands/audit-plans.md:23 | severity=MAJOR | confidence=4\n  PROBLEM: The baseline `git fetch origin <default>` has no failure branch, unlike the tracking-issue-listing fail-closed path at line 26, and the output format has no \"drift check not run\" field.\n  WHY: After a failed fetch, a plan with real drift is classified CURRENT, can become the recommendation, and is handed off with stale text and no caveat.\n- TASK_GAP: requirement: The PR description says \"5 new contract tests for step 4a\", and the changelog fragment claims the file pins step 4a's rules. The `--paginate`, `per_page=100`, \"unreadable\" and two \"Stale, not refreshed\" lines (audit-plans.md:127 and :141) are not pinned. | expected_change_site: tests/test_audit_plans_command.py | evidence: The file ends at line 166 with the five original tests, and none references the new rules. | severity=MAJOR | confidence=5\n- HARDENING_SUGGESTIONS: Add one sentence mirroring the tracking-listing fail-closed pattern, marking the affected plans unverified. HARDENING_RISK_SCORE: 3\n- Note: z-ai_glm-5_3-flash did not adopt the pass-1 line-39 finding. It checked that step 4a's fetch runs for every plan it checks, so the residual gap is the baseline-fetch failure.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e227282547decb531fe3fb04e8a1b7d198908a6976b24e63434f58a3c8b84530",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10090,
+    "run_id": "45595275082",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45595275082",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125130123_b158ca5929",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10090,
+    "run_id": "45595275082"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 3 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T13:01:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
