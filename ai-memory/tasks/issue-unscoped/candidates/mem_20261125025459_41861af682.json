@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- HARDENING_SUGGESTION (not a finding) | HARDENING_RISK_SCORE: 1\n  File: scripts/ai_memory_lib.py\n  Location: _run_memory_read_with_retry skip branch (raises \"Unable to read memory branch: skipped, ...\")\n  PROBLEM: The skip branch raises MemoryGitError with no AI_MEMORY_TELEMETRY line, so log analysis cannot see the read-skipped path, even though it is a deliberate, budget-coupled event.\n  WHY: Suggested minimal fix: emit one AI_MEMORY_TELEMETRY line on stderr with op=memory-read-retry, retry_reason=rate_limited, target=read-clone, attempt=_MEMORY_READ_RETRY_ATTEMPTS, max_attempts=_MEMORY_READ_RETRY_ATTEMPTS, plus a skip_reason key set to \"write_clone_exhausted\"; keep the fields fixed (no URL or credential); estimated 6 lines changed.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "f540b85d8d9ad9ced10481d1e2fa08c07ee4e8e01f597735decdca4b90cab2e8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10060,
+    "run_id": "45521992418",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45521992418",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125025459_41861af682",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10060,
+    "run_id": "45521992418"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-25T02:54:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
