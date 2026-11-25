@@ -396,11 +396,16 @@ class ReleaseTick(unittest.TestCase):
 		self.assertNotIn("dispatched", h.state)
 
 	def _resume(self, statuses: list[dict], checks_rc: int = 0, checks_outcome: str = "ok", fresh_rc: int = 0,
-			ci_state: str = "success", extra_labels: list[str] | None = None, env: dict[str, str] | None = None) -> _Harness:
-		pulls = [_pull(7, sha=HEAD)]
+			ci_state: str = "success", extra_labels: list[str] | None = None, env: dict[str, str] | None = None,
+			head_ref: str | None = None, head_repo: str | None = None, fail: list[str] | None = None) -> _Harness:
+		pulls = [_pull(7, head_ref=head_ref, sha=HEAD)]
+		if head_repo is not None:
+			pulls[0]["head"]["repo"]["full_name"] = head_repo
 		labels = {"7": ["ai:final-ci-merge-pending"] + (extra_labels or [])}
 		st = {"pulls": pulls, "labels": labels, "user": "pipeline-bot", "statuses": {HEAD: statuses},
 			"graphql": {"data": {"repository": {"pullRequest": {"closingIssuesReferences": {"nodes": [{"number": 70}]}}}}}}
+		if fail:
+			st["fail"] = fail
 		h = _Harness(st)
 		stubs = (f"_pr_wait_for_required_checks() {{ PR_CHECKS_WAIT_OUTCOME={checks_outcome}; PR_CHECKS_LAST_CI_STATE={ci_state}; echo \"WAIT_ARGS=$*\"; return {checks_rc}; }}\n"
 			f"_pr_base_fresh_for_merge() {{ PR_BASE_FRESHNESS_OUTCOME=lease_wait; return {fresh_rc}; }}\n")
@@ -419,9 +424,71 @@ class ReleaseTick(unittest.TestCase):
 		self.assertIn("--match-head-commit", merged)
 		self.assertIn(HEAD, merged)
 		self.assertIn("--squash", merged)
+		self.assertNotIn("--merge", merged)
+		self.assertIn("outcome=auto_merge_enabled reason=final_ci_green method=squash", h.out)  # type: ignore[attr-defined]
 		self.assertNotIn("ai:final-ci-merge-pending", h.state["labels"]["7"])
 		self.assertIn("ai:ready-to-merge", h.state["labels"]["70"])
 		self.assertEqual(h.state["statuses"][HEAD][0]["state"], "success")
+
+	FORWARD_MERGE_HEAD = "auto/forward-merge-stable-44903621347-1"
+
+	def test_forward_merge_head_resumes_with_a_merge_commit(self) -> None:
+		"""#9891: a forward-merge fallback PR whose checks wait timed out gets a merge commit, never a squash."""
+		h = self._resume([self.MARK, self.GATE], head_ref=self.FORWARD_MERGE_HEAD)
+		self.assertIn("outcome=auto_merge_enabled reason=final_ci_green method=merge", h.out)  # type: ignore[attr-defined]
+		merged = h.state["merged"][0]
+		for flag in ("--merge", "--auto", "--match-head-commit", HEAD):
+			self.assertIn(flag, merged)
+		self.assertNotIn("--squash", merged)
+		self.assertNotIn("--rebase", merged)
+		self.assertNotIn("ai:final-ci-merge-pending", h.state["labels"]["7"])
+		self.assertEqual(h.state["statuses"][HEAD][0]["state"], "success")
+
+	def test_forward_merge_refused_warning_names_the_method(self) -> None:
+		"""#9919: the auto_merge_refused warning ends with method=, as the log registry says."""
+		h = self._resume([self.MARK, self.GATE], head_ref=self.FORWARD_MERGE_HEAD, fail=["pr merge"])
+		self.assertIn("outcome=failed reason=auto_merge_refused method=merge", h.out)  # type: ignore[attr-defined]
+		self.assertIn("ai:final-ci-merge-pending", h.state["labels"]["7"])
+		self.assertEqual(h.state["statuses"][HEAD][0]["state"], "pending")
+
+	def test_forward_merge_head_dropped_when_fallback_auto_merge_off(self) -> None:
+		for value in ("false", "False", "0"):
+			h = self._resume([self.MARK, self.GATE], head_ref=self.FORWARD_MERGE_HEAD,
+				env={"FORWARD_MERGE_FALLBACK_AUTO_MERGE": value})
+			self.assertIn("outcome=dropped reason=forward_merge_auto_merge_disabled", h.out)  # type: ignore[attr-defined]
+			self.assertNotIn("merged", h.state)
+			self.assertNotIn("ai:final-ci-merge-pending", h.state["labels"]["7"])
+			self.assertFalse([c for c in h.calls if "/statuses" in c], value)
+		# The switch never touches an ordinary head.
+		h = self._resume([self.MARK, self.GATE], env={"FORWARD_MERGE_FALLBACK_AUTO_MERGE": "false"})
+		self.assertIn("method=squash", h.out)  # type: ignore[attr-defined]
+
+	def test_forward_merge_head_respects_hold_marker_and_checks(self) -> None:
+		h = self._resume([self.MARK, self.GATE], head_ref=self.FORWARD_MERGE_HEAD, extra_labels=["ai:needs-human"])
+		self.assertIn("reason=blocked_by_ai:needs-human", h.out)  # type: ignore[attr-defined]
+		self.assertNotIn("merged", h.state)
+		forged = dict(self.MARK, creator={"login": "someone-else"})
+		h = self._resume([forged, self.GATE], head_ref=self.FORWARD_MERGE_HEAD)
+		self.assertIn("reason=no_marker_on_head", h.out)  # type: ignore[attr-defined]
+		self.assertNotIn("merged", h.state)
+		h = self._resume([self.MARK, self.GATE], head_ref=self.FORWARD_MERGE_HEAD, checks_rc=1, checks_outcome="failed")
+		self.assertIn("reason=required_checks_failed", h.out)  # type: ignore[attr-defined]
+		self.assertNotIn("merged", h.state)
+		h = self._resume([self.MARK, self.GATE], head_ref=self.FORWARD_MERGE_HEAD, checks_rc=1, checks_outcome="timeout")
+		self.assertIn("outcome=waiting reason=required_checks_timeout", h.out)  # type: ignore[attr-defined]
+		self.assertIn("ai:final-ci-merge-pending", h.state["labels"]["7"])
+		self.assertNotIn("merged", h.state)
+		h = self._resume([self.MARK, self.GATE], head_ref=self.FORWARD_MERGE_HEAD, env={"ENABLE_AUTO_MERGE": "false"})
+		self.assertIn("reason=auto_merge_disabled", h.out)  # type: ignore[attr-defined]
+		self.assertNotIn("merged", h.state)
+
+	def test_integration_and_fork_heads_stay_not_eligible(self) -> None:
+		for kwargs in ({"head_ref": "orchestrator/project-1"},
+				{"head_ref": self.FORWARD_MERGE_HEAD, "head_repo": "attacker/repo"},
+				{"head_repo": "attacker/repo"}):
+			h = self._resume([self.MARK, self.GATE], **kwargs)  # type: ignore[arg-type]
+			self.assertIn("outcome=dropped reason=not_eligible", h.out, kwargs)  # type: ignore[attr-defined]
+			self.assertNotIn("merged", h.state)
 
 	def test_marker_from_another_login_authorizes_nothing(self) -> None:
 		forged = dict(self.MARK, creator={"login": "someone-else"})
@@ -1036,13 +1103,258 @@ class LeaseGrantEligibility(unittest.TestCase):
 		self.assertNotIn("skip=", h.record())
 
 
+JUDGE_CTX = "ai-review/judge-merge-pending"
+MAXH_ENV = "MERGE_LEASE_MAX_HOLDERS"
+
+
+def _judge_status(st: dict, sha: str, state: str = "success", login: str = "pipeline-bot") -> None:
+	"""Seed the review-blocked judge's merge-decision status (issue #9987)."""
+	st.setdefault("statuses", {}).setdefault(sha, []).insert(0,
+		{"context": JUDGE_CTX, "state": state, "creator": {"login": login}})
+
+
+def _dispatched_workflows(h: _Harness) -> list[str]:
+	return [d[2] for d in h.state.get("dispatched", [])]
+
+
+class JudgeDecisionLeaseGrant(unittest.TestCase):
+	"""Issue #9987: a waiter whose head carries the pipeline's judge
+	merge-decision status is eligible without head-gate success, and its grant
+	dispatches the judge instead of a review run."""
+
+	def _free(self, waiting: list[int], extra_pulls: list[dict] | None = None) -> dict:
+		pulls = [_pull(n) for n in waiting] + (extra_pulls or [])
+		st = {"pulls": pulls, "labels": {str(n): [WAIT] for n in waiting}, "files": {str(n): [f"f{n}.py"] for n in waiting}}
+		_seed_lease(st, _record(3, state="released", paths=""))
+		return st
+
+	def test_waiter_with_a_judge_decision_status_is_granted(self) -> None:
+		st = self._free([5, 6])
+		_head_gate(st, _sha(5), "pending")
+		_judge_status(st, _sha(5))
+		_gates_ok(st, 6)
+		h, out = _p2_tick(st)
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=granted reason=first_in_queue queue_len=2 gate=judge_decision\n", out)
+		self.assertNotIn("outcome=skipped", out)
+		self.assertIn("pr=5", h.record())
+		self.assertIn(WAIT, h.state["labels"]["6"])
+		self.assertIn(("granted", "first_in_queue"), [(r["event"], r["reason"]) for r in _metrics(out)])
+
+	def test_absent_head_gate_with_a_judge_decision_status_is_granted(self) -> None:
+		st = self._free([5])
+		_judge_status(st, _sha(5))
+		_, out = _p2_tick(st)
+		self.assertIn("pr=5 base=main mode=tick outcome=granted reason=first_in_queue queue_len=1 gate=judge_decision\n", out)
+
+	def test_judge_decision_status_from_another_login_is_skipped(self) -> None:
+		for login, sha in (("someone-else", _sha(5)), ("pipeline-bot", "e" * 40)):
+			with self.subTest(login=login, sha=sha):
+				st = self._free([5])
+				_head_gate(st, _sha(5), "pending")
+				_judge_status(st, sha, login=login)
+				h, out = _p2_tick(st)
+				self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=skipped reason=no_head_gate\n", out)
+				self.assertNotIn("outcome=granted", out)
+				self.assertNotIn(WAIT, h.state["labels"]["5"])
+				self.assertNotIn("dispatched", h.state)
+
+	def test_judge_decision_status_not_success_is_skipped(self) -> None:
+		st = self._free([5])
+		_judge_status(st, _sha(5), state="pending")
+		_, out = _p2_tick(st)
+		self.assertIn("pr=5 base=main mode=tick outcome=skipped reason=no_head_gate", out)
+
+	def test_head_gate_failure_wins_over_a_judge_decision(self) -> None:
+		for gate in ("failure", "error"):
+			with self.subTest(gate=gate):
+				st = self._free([5])
+				_head_gate(st, _sha(5), gate)
+				_judge_status(st, _sha(5))
+				h, out = _p2_tick(st)
+				self.assertIn("pr=5 base=main mode=tick outcome=skipped reason=no_head_gate", out)
+				self.assertNotIn("dispatched", h.state)
+
+	def test_pending_head_gate_without_a_judge_decision_is_skipped_as_before(self) -> None:
+		st = self._free([5])
+		_head_gate(st, _sha(5), "pending")
+		h, out = _p2_tick(st)
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=skipped reason=no_head_gate\n", out)
+		self.assertNotIn(WAIT, h.state["labels"]["5"])
+
+	def test_failed_final_ci_still_wins_over_a_judge_decision(self) -> None:
+		st = self._free([5])
+		_judge_status(st, _sha(5))
+		st["check_runs"] = {_sha(5): [{"id": 1, "name": "tests", "status": "completed", "conclusion": "failure"}]}
+		_, out = _p2_tick(st, env={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "tests"})
+		self.assertIn("pr=5 base=main mode=tick outcome=skipped reason=final_ci_failed", out)
+
+	def test_judge_decision_grant_dispatches_the_judge_workflow(self) -> None:
+		st = self._free([5])
+		_head_gate(st, _sha(5), "pending")
+		_judge_status(st, _sha(5))
+		h, out = _p2_tick(st)
+		# A `[pr:<n>]`-titled review wrapper with force_rb_judge=true first, so
+		# the #9983 holder check sees the judge run as live work.
+		self.assertEqual(h.state.get("dispatched"), [["workflow", "run", "ai-review.yml", "--repo", "owner/repo", "-f", "pr_number=5", "-f", "force_rb_judge=true", "-f", "allow_workflow_edits=false"]])
+		self.assertIn("MERGE_TRAIN_DISPATCHED pr=5 workflow=ai-review.yml ref=default head=ai/issue-5", out)
+
+	def test_head_gate_grant_still_dispatches_a_review(self) -> None:
+		st = self._free([5])
+		_gates_ok(st, 5)
+		_judge_status(st, _sha(5))
+		h, out = _p2_tick(st)
+		self.assertIn("pr=5 base=main mode=tick outcome=granted reason=first_in_queue queue_len=1\n", out)
+		self.assertEqual(_dispatched_workflows(h), ["ai-review.yml"])
+
+	def test_failed_judge_dispatch_falls_back_to_one_review_dispatch(self) -> None:
+		st = self._free([5])
+		_judge_status(st, _sha(5))
+		st["fail"] = ["force_rb_judge=true"]
+		h, out = _p2_tick(st)
+		# No force_rb_judge wrapper: the judge-only dispatch workflow.
+		self.assertEqual(h.state.get("dispatched"), [["workflow", "run", "review_rb_judge_dispatch.yml", "--repo", "owner/repo", "-f", "pr_number=5"]])
+		self.assertIn("MERGE_TRAIN_DISPATCHED pr=5 workflow=review_rb_judge_dispatch.yml ref=default head=ai/issue-5", out)
+		self.assertIn("pr=5 base=main mode=tick outcome=granted reason=first_in_queue queue_len=1 gate=judge_decision\n", out)
+		self.assertNotIn("falling back to the review dispatch", out)
+
+	def test_no_judge_wrapper_falls_back_to_one_plain_review_dispatch(self) -> None:
+		st = self._free([5])
+		_judge_status(st, _sha(5))
+		st["fail"] = ["review_rb_judge_dispatch.yml", "force_rb_judge=true"]
+		h, out = _p2_tick(st)
+		self.assertEqual(_dispatched_workflows(h), ["ai-review.yml"])
+		self.assertNotIn("force_rb_judge", " ".join(h.state["dispatched"][0]))
+		self.assertIn("pr=5 base=main mode=tick outcome=granted reason=first_in_queue queue_len=1 gate=judge_decision\n", out)
+		self.assertIn("falling back to the review dispatch", out)
+
+	def test_head_gate_success_from_another_login_ignores_the_judge_decision(self) -> None:
+		st = self._free([5])
+		_head_gate(st, _sha(5), "success", login="someone-else")
+		_judge_status(st, _sha(5))
+		h, out = _p2_tick(st)
+		self.assertIn("pr=5 base=main mode=tick outcome=skipped reason=no_head_gate", out)
+		self.assertNotIn("dispatched", h.state)
+
+	def test_pending_head_gate_from_another_login_ignores_the_judge_decision(self) -> None:
+		for login in ("someone-else", ""):
+			with self.subTest(login=login):
+				st = self._free([5])
+				_head_gate(st, _sha(5), "pending", login=login)
+				_judge_status(st, _sha(5))
+				h, out = _p2_tick(st)
+				self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=skipped reason=no_head_gate\n", out)
+				self.assertNotIn(WAIT, h.state["labels"]["5"])
+				self.assertNotIn("dispatched", h.state)
+
+	def test_revocation_off_grants_as_before_without_the_field(self) -> None:
+		st = self._free([5])
+		_head_gate(st, _sha(5), "pending")
+		_judge_status(st, _sha(5))
+		h, out = _p2_tick(st, env={"MERGE_LEASE_REVOKE_ENABLED": "false"})
+		self.assertIn("pr=5 base=main mode=tick outcome=granted reason=first_in_queue queue_len=1\n", out)
+		self.assertNotIn("gate=", out)
+		self.assertEqual(_dispatched_workflows(h), ["ai-review.yml"])
+
+	def test_tick_reads_are_unchanged(self) -> None:
+		with_judge = self._free([5])
+		_head_gate(with_judge, _sha(5), "pending")
+		_judge_status(with_judge, _sha(5))
+		with_gate = self._free([5])
+		_gates_ok(with_gate, 5)
+		h1, _ = _p2_tick(with_judge)
+		h2, _ = _p2_tick(with_gate)
+		def reads(h: _Harness) -> list[str]:
+			return [c for c in _stable_calls(h.calls) if not c.startswith("gh workflow run")]
+		self.assertEqual(reads(h1), reads(h2))
+		self.assertEqual(sum("/statuses" in c for c in h1.calls), 1, h1.calls)
+
+	def test_multi_holder_grant_carries_the_field_after_holders(self) -> None:
+		st = {"pulls": [_pull(4), _pull(6)], "labels": {"6": [WAIT]}, "files": {"6": ["b.py"]}}
+		_seed_lease(st, _record(4, paths="a.py").replace(f"head={'b' * 40}", f"head={_sha(4)}"))
+		_gates_ok(st, 4)
+		_head_gate(st, _sha(6), "pending")
+		_judge_status(st, _sha(6))
+		h, out = _p2_tick(st, env={MAXH_ENV: "2"})
+		self.assertIn("MERGE_LEASE pr=6 base=main mode=tick outcome=granted reason=first_in_queue queue_len=1 holders=2 gate=judge_decision\n", out)
+		self.assertIn(["workflow", "run", "ai-review.yml", "--repo", "owner/repo", "-f", "pr_number=6", "-f", "force_rb_judge=true", "-f", "allow_workflow_edits=false"], h.state["dispatched"])
+
+	def test_multi_holder_waiter_without_a_judge_decision_is_skipped(self) -> None:
+		st = {"pulls": [_pull(4), _pull(6)], "labels": {"6": [WAIT]}, "files": {"6": ["b.py"]}}
+		_seed_lease(st, _record(4, paths="a.py").replace(f"head={'b' * 40}", f"head={_sha(4)}"))
+		_gates_ok(st, 4)
+		_head_gate(st, _sha(6), "pending")
+		_judge_status(st, _sha(6), login="someone-else")
+		h, out = _p2_tick(st, env={MAXH_ENV: "2"})
+		self.assertIn("pr=6 base=main mode=tick outcome=skipped reason=no_head_gate", out)
+		self.assertNotIn("dispatched", h.state)
+
+	def test_marked_head_is_granted_end_to_end(self) -> None:
+		"""The judge's mark (posted with the pipeline token) is what the tick reads."""
+		st = self._free([5])
+		_head_gate(st, _sha(5), "pending")
+		h = _Harness(st)
+		res = h.lib(f"_pr_judge_merge_pending_mark 5 {_sha(5)} merge_with_followup")
+		self.assertIn(f"JUDGE_MERGE_PENDING pr=5 head={_sha(5)} decision=merge_with_followup outcome=marked reason=lease_wait", res.stdout, res.stderr)
+		res = h.train_fn('_mt_merge_lease_tick "${PRS_JSONL}" ""', {"PRS_JSONL": _p2_jsonl(h.state["pulls"], h.state["labels"])})
+		self.assertIn("pr=5 base=main mode=tick outcome=granted reason=first_in_queue queue_len=1 gate=judge_decision", res.stdout + res.stderr)
+
+
+class JudgeMergePendingMark(unittest.TestCase):
+	"""Issue #9987: _pr_judge_merge_pending_mark posts one head-bound status."""
+
+	def test_posts_one_success_status_with_the_decision(self) -> None:
+		h = _Harness({})
+		res = h.lib(f"_pr_judge_merge_pending_mark 7 {HEAD} merge; echo rc=$?")
+		self.assertIn("rc=0", res.stdout, res.stderr)
+		self.assertIn(f"JUDGE_MERGE_PENDING pr=7 head={HEAD} decision=merge outcome=marked reason=lease_wait", res.stdout)
+		self.assertEqual(h.state["statuses"][HEAD], [{"context": JUDGE_CTX, "state": "success", "creator": {"login": "pipeline-bot"}}])
+		self.assertEqual(len(h.calls), 1, h.calls)
+		self.assertIn("description=Review-blocked judge decided merge; waiting for the merge lease", h.calls[0])
+		self.assertNotIn("target_url", h.calls[0])
+
+	def test_target_url_only_for_a_run_url(self) -> None:
+		good = "https://github.com/owner/repo/actions/runs/123"
+		h = _Harness({})
+		h.lib(f"_pr_judge_merge_pending_mark 7 {HEAD} terminal", {"RUN_URL": good})
+		self.assertIn(f"target_url={good}", h.calls[0])
+		h2 = _Harness({})
+		h2.lib(f"_pr_judge_merge_pending_mark 7 {HEAD} terminal", {"RUN_URL": "https://evil.example/x"})
+		self.assertNotIn("target_url", h2.calls[0])
+
+	def test_invalid_input_posts_nothing(self) -> None:
+		for args in (f"0 {HEAD} merge", "7 abc merge", f"7 {HEAD} fix", f"7 {HEAD} 'merge; x'"):
+			with self.subTest(args=args):
+				h = _Harness({})
+				res = h.lib(f"_pr_judge_merge_pending_mark {args}; echo rc=$?")
+				self.assertIn("outcome=skipped reason=invalid_input", res.stdout)
+				self.assertIn("rc=0", res.stdout)
+				self.assertEqual(h.calls, [])
+
+	def test_revocation_off_posts_nothing(self) -> None:
+		h = _Harness({})
+		res = h.lib(f"_pr_judge_merge_pending_mark 7 {HEAD} merge", {"MERGE_LEASE_REVOKE_ENABLED": "false"})
+		self.assertIn("outcome=disabled reason=switch_off", res.stdout)
+		self.assertEqual(h.calls, [])
+
+	def test_failed_post_warns_and_returns_zero(self) -> None:
+		h = _Harness({"fail": ["/statuses/"]})
+		res = h.lib(f"set -e; _pr_judge_merge_pending_mark 7 {HEAD} merge; echo rc=$?")
+		self.assertIn("rc=0", res.stdout, res.stderr)
+		self.assertIn("::warning::JUDGE_MERGE_PENDING pr=7", res.stdout)
+		self.assertIn("outcome=failed reason=status_post_failed", res.stdout)
+
+	def test_context_name_is_the_contract(self) -> None:
+		self.assertIn('MERGE_LEASE_JUDGE_DECISION_CONTEXT="ai-review/judge-merge-pending"', LIB.read_text())
+
+
 class LeaseSkipList(unittest.TestCase):
 	"""Phase 2: a released PR is passed over until its head SHA changes."""
 
 	def test_skipped_waiter_keeps_its_label_and_the_next_one_is_granted(self) -> None:
-		# A hard entry (issue #9983: any reason but revoked_no_head_gate).
+		# A hard entry (issues #9983/#10044: any reason but revoked_no_head_gate,
+		# expired and revoked_idle).
 		st = {"pulls": [_pull(5), _pull(6)], "labels": {"5": [WAIT], "6": [WAIT]}, "files": {"6": ["a"]}}
-		_seed_lease(st, _record(3, state="released", paths="", skips=[f"5:{_sha(5)}:revoked_idle"]))
+		_seed_lease(st, _record(3, state="released", paths="", skips=[f"5:{_sha(5)}:revoked_draft"]))
 		_gates_ok(st, 5, 6)
 		h, out = _p2_tick(st)
 		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=skipped reason=skip_head_unchanged\n", out)
@@ -1050,7 +1362,7 @@ class LeaseSkipList(unittest.TestCase):
 		self.assertIn(WAIT, h.state["labels"]["5"])
 		rec = h.record()
 		self.assertIn("pr=6", rec)
-		self.assertEqual(_skips(rec), [f"5:{_sha(5)}:revoked_idle"])
+		self.assertEqual(_skips(rec), [f"5:{_sha(5)}:revoked_draft"])
 		self.assertLess(rec.index("updated="), rec.index("skip="))
 		self.assertLess(rec.index("skip="), rec.index("paths:"))
 
@@ -1059,7 +1371,7 @@ class LeaseSkipList(unittest.TestCase):
 		# labelled PRs, so a skip-held waiter left alone is unlabelled instead;
 		# the update-mode gate (lone-caller rule) then decides.
 		st = {"pulls": [_pull(5), _pull(6)], "labels": {"5": [WAIT], "6": [WAIT]}, "files": {"5": ["a"]}}
-		_seed_lease(st, _record(3, state="released", paths="", skips=[f"5:{_sha(5)}:revoked_idle"]))
+		_seed_lease(st, _record(3, state="released", paths="", skips=[f"5:{_sha(5)}:revoked_draft"]))
 		_gates_ok(st, 5)
 		_head_gate(st, _sha(6), "failure")
 		h, out = _p2_tick(st)
@@ -1068,7 +1380,7 @@ class LeaseSkipList(unittest.TestCase):
 		self.assertIn("MERGE_LEASE pr=- base=main mode=tick outcome=no_waiter reason=no_eligible_waiter\n", out)
 		self.assertNotIn(WAIT, h.state["labels"]["5"], "the skip-held waiter is handed back to the sweep")
 		self.assertEqual(h.state["refs"][REF], "c" * 40, "no lease write")
-		self.assertEqual(_skips(h.record()), [f"5:{_sha(5)}:revoked_idle"])
+		self.assertEqual(_skips(h.record()), [f"5:{_sha(5)}:revoked_draft"])
 		self.assertNotIn("dispatched", h.state)
 
 	def test_idle_holder_with_cancelled_ci_reads_the_runs_once(self) -> None:
@@ -1181,6 +1493,38 @@ class LeaseRecordCompat(unittest.TestCase):
 		rec = self._write({"MERGE_LEASE_REVOKE_ENABLED": "false"})
 		self.assertRegex(rec, r"^merge-lease v1\nstate=released\nbase=main\npr=4\nhead=a{40}\nexpires=0\nacquired=5\nupdated=\d+\npaths:\n$")
 
+	def test_previous_format_entries_round_trip_unchanged(self) -> None:
+		# Issue #10044: two- and three-field entries written before the change
+		# read and write back (released write) unchanged.
+		skips = [f"5:{_sha(5)}", f"6:{_sha(6)}:revoked_no_head_gate", f"7:{_sha(7)}:revoked_draft", f"8:{_sha(8)}:expired"]
+		out = self._read(_record(3, state="released", paths="", skips=skips))
+		self.assertIn("SKIPS<" + "\n".join(skips) + ">", out)
+		st: dict = {}
+		_seed_lease(st, _record(3, state="released", paths="", skips=skips))
+		h = _Harness(st)
+		res = h.lib(f'_merge_lease_read main && _merge_lease_write main released 3 {HEAD} ""; echo rc=$?')
+		self.assertIn("rc=0", res.stdout, res.stderr)
+		self.assertEqual(_skips(h.record()), skips)
+
+	def test_held_write_keeps_only_the_holder_marker_on_its_own_head(self) -> None:
+		cases = (
+			(f"4:{HEAD}:expired", [f"4:{HEAD}:expired_unparked"]),
+			(f"4:{HEAD}:revoked_idle", [f"4:{HEAD}:revoked_idle_unparked"]),
+			(f"4:{HEAD}:expired_unparked", [f"4:{HEAD}:expired_unparked"]),
+			(f"4:{HEAD}:revoked_no_head_gate_unparked", [f"4:{HEAD}:expired_unparked"]),
+			(f"4:{HEAD}:revoked_draft", []),
+			(f"4:{HEAD}:revoked_no_head_gate", []),
+			(f"4:{HEAD}", []),
+		)
+		for own, kept in cases:
+			with self.subTest(own=own):
+				h = _Harness({"pulls": []})
+				res = h.lib(f'MERGE_LEASE_SHA=""; MERGE_LEASE_TREE={"f" * 40}; '
+					f'MERGE_LEASE_SKIPS="4:{_sha(4)}:expired"$\'\\n\'"{own}"$\'\\n\'"6:{_sha(6)}:revoked_draft"$\'\\n\'"7:{_sha(7)}"; '
+					f'_merge_lease_write main held 4 {HEAD} "a.py" 5; echo rc=$?')
+				self.assertIn("rc=0", res.stdout, res.stderr)
+				self.assertEqual(_skips(h.record()), [f"6:{_sha(6)}:revoked_draft", f"7:{_sha(7)}"] + kept)
+
 	def test_write_puts_skips_before_paths_and_a_held_write_drops_its_own(self) -> None:
 		self.assertEqual(_skips(self._write()), [f"4:{_sha(4)}", f"6:{_sha(6)}"])
 		held = self._write(state="held", pr=4)
@@ -1285,6 +1629,15 @@ class LeaseForwardMergePriority(unittest.TestCase):
 
 
 class Wiring(unittest.TestCase):
+	def test_tick_steps_get_the_hold_labels(self) -> None:
+		line = f"MERGE_LEASE_HOLD_LABELS: ${{{{ vars.MERGE_LEASE_HOLD_LABELS || '{HOLD_DEFAULT}' }}}}"
+		self.assertEqual(POLL.read_text().count(line), 1)
+		self.assertEqual(CLOSE.read_text().count(line), 1)
+		self.assertEqual(REVIEW.read_text().count("MERGE_LEASE_HOLD_LABELS"), 0)
+		self.assertEqual(SWEEP.read_text().count("MERGE_LEASE_HOLD_LABELS"), 0)
+		self.assertIn(f"${{MERGE_LEASE_HOLD_LABELS-{HOLD_DEFAULT}}}", LIB.read_text())
+		self.assertIn("| `MERGE_LEASE_HOLD_LABELS` |", (REPO_ROOT / "README.md").read_text())
+
 	def test_sweep_skips_lease_waiters_only_while_the_train_releases_them(self) -> None:
 		text = SWEEP.read_text()
 		self.assertIn("reason=merge_lease_wait", text)
@@ -1304,7 +1657,8 @@ class Wiring(unittest.TestCase):
 		for wf in (POLL, CLOSE):
 			text = wf.read_text()
 			for name in ("ENABLE_AUTO_MERGE", "AUTO_MERGE_REQUIRED_CI_CHECK", "MERGE_BASE_FRESHNESS_ENABLED",
-					"MERGE_BASE_FRESHNESS_MAX_SYNCS", "ORCH_INTEGRATION_BRANCH_PATTERN", "AUTO_MERGE_WAIT_WORKFLOWS"):
+					"MERGE_BASE_FRESHNESS_MAX_SYNCS", "ORCH_INTEGRATION_BRANCH_PATTERN", "AUTO_MERGE_WAIT_WORKFLOWS",
+					"FORWARD_MERGE_FALLBACK_AUTO_MERGE"):
 				self.assertIn(f"          {name}: ${{{{ vars.{name}", text, f"{wf.name}: {name}")
 
 	def test_lease_revocation_and_priority_switches_reach_every_lease_path(self) -> None:
@@ -1815,6 +2169,132 @@ class MultiHolderTick(unittest.TestCase):
 		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=granted reason=first_in_queue queue_len=1\n", out)
 
 
+HOLD_DEFAULT = "ai:needs-human,ai:security-pass-failed,ai:review-blocked,ai:scope-blocked"
+
+
+class LeaseHoldLabels(unittest.TestCase):
+	"""Refs #9969: a hold label (MERGE_LEASE_HOLD_LABELS) makes a waiter or a
+	holder ineligible at once, from the listing the tick already read."""
+
+	def _free(self, hold: str = "ai:needs-human") -> dict:
+		st = {"pulls": [_pull(5), _pull(6)], "labels": {"5": [WAIT, hold], "6": [WAIT]}, "files": {"5": ["a"], "6": ["b"]}}
+		_seed_lease(st, _record(3, state="released", paths=""))
+		_gates_ok(st, 5, 6)
+		return st
+
+	def _holder(self, hold: str = "ai:security-pass-failed") -> dict:
+		st = {"pulls": [_pull(4)], "labels": {"4": [hold]}}
+		_seed_lease(st, _record(4))
+		_head_gate(st, _sha(4))
+		return st
+
+	def _assert_waiter_skipped(self, h: _Harness, out: str) -> None:
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=skipped reason=hold_label\n", out)
+		self.assertIn("MERGE_LEASE pr=6 base=main mode=tick outcome=granted reason=first_in_queue", out)
+		self.assertNotIn(WAIT, h.state["labels"]["5"], "a hold-labelled waiter is unlabelled")
+		self.assertIn("pr=6", h.record())
+		rows = [(r["event"], r["pr"], r["reason"], r["holder"]) for r in _metrics(out)]
+		self.assertIn(("skipped", "5", "hold_label", "-"), rows)
+		self.assertEqual(_skips(h.record()), [], "a grant-time skip is not stored")
+		joined = " ".join(h.calls)
+		self.assertIn(f"{_sha(6)}/statuses", joined)
+		self.assertNotIn(f"{_sha(5)}/statuses", joined, "a hold label costs no API read")
+
+	def test_hold_labelled_waiter_is_skipped_for_the_next_one(self) -> None:
+		h, out = _p2_tick(self._free())
+		self._assert_waiter_skipped(h, out)
+
+	def test_hold_label_match_is_case_insensitive(self) -> None:
+		h, out = _p2_tick(self._free("AI:Needs-Human"))
+		self._assert_waiter_skipped(h, out)
+
+	def test_every_default_hold_label_skips_a_waiter(self) -> None:
+		for hold in HOLD_DEFAULT.split(","):
+			h, out = _p2_tick(self._free(hold))
+			self.assertIn("pr=5 base=main mode=tick outcome=skipped reason=hold_label\n", out, hold)
+
+	def test_hold_labelled_holder_is_revoked(self) -> None:
+		h, out = _p2_tick(self._holder())
+		self.assertRegex(out, r"MERGE_LEASE pr=4 base=main mode=tick outcome=released reason=revoked_hold_label held_s=(\d+|-) merged=false\n")
+		rec = h.record()
+		self.assertIn("state=released", rec)
+		self.assertEqual(_skips(rec), [f"4:{_sha(4)}:revoked_hold_label"])
+		self.assertIn(("released", "revoked_hold_label"), [(r["event"], r["reason"]) for r in _metrics(out)])
+		self.assertNotIn("statuses", " ".join(h.calls), "a hold label costs no API read")
+
+	def test_off_switch_restores_the_old_behaviour(self) -> None:
+		for value in ("none", "", " OFF ", "none,", " NONE , OFF "):
+			env = {"MERGE_LEASE_HOLD_LABELS": value}
+			h, out = _p2_tick(self._free(), env=env)
+			self.assertIn("pr=5 base=main mode=tick outcome=granted", out, repr(value))
+			self.assertNotIn("hold_label", out)
+			h, out = _p2_tick(self._holder(), env=env)
+			self.assertIn("MERGE_LEASE pr=4 base=main mode=tick outcome=held reason=holder_open\n", out, repr(value))
+			self.assertEqual(h.state["refs"][REF], "c" * 40)
+
+	def test_custom_list_replaces_the_default(self) -> None:
+		env = {"MERGE_LEASE_HOLD_LABELS": " custom:hold , "}
+		h, out = _p2_tick(self._free(), env=env)
+		self.assertIn("pr=5 base=main mode=tick outcome=granted", out)
+		h, out = _p2_tick(self._free("custom:hold"), env=env)
+		self._assert_waiter_skipped(h, out)
+
+	def test_the_wait_label_is_never_a_hold_label(self) -> None:
+		h, out = _p2_tick(self._free(), env={"MERGE_LEASE_HOLD_LABELS": f"{WAIT},AI:MERGE-LEASE-WAIT"})
+		self.assertIn("pr=5 base=main mode=tick outcome=granted", out)
+		self.assertNotIn("hold_label", out)
+
+	def test_revocation_switch_off_keeps_a_hold_labelled_holder(self) -> None:
+		h, out = _p2_tick(self._holder(), env={"MERGE_LEASE_REVOKE_ENABLED": "false"})
+		self.assertIn("outcome=held reason=holder_open", out)
+		self.assertNotIn("hold_label", out)
+		self.assertEqual(h.state["refs"][REF], "c" * 40)
+		self.assertFalse(any("-X PATCH" in c or "-X POST" in c for c in h.calls), h.calls)
+
+	def test_revocation_switch_off_grants_a_hold_labelled_waiter(self) -> None:
+		h, out = _p2_tick(self._free(), env={"MERGE_LEASE_REVOKE_ENABLED": "false"})
+		self.assertIn("pr=5 base=main mode=tick outcome=granted", out)
+
+	def test_no_extra_api_calls_without_a_hold_label(self) -> None:
+		def free() -> dict:
+			st = {"pulls": [_pull(5)], "labels": {"5": [WAIT, "other"]}, "files": {"5": ["a"]}}
+			_seed_lease(st, _record(3, state="released", paths=""))
+			_gates_ok(st, 5)
+			return st
+
+		def holder() -> dict:
+			st = {"pulls": [_pull(4)], "labels": {"4": ["other"]}}
+			_seed_lease(st, _record(4))
+			_head_gate(st, _sha(4))
+			return st
+
+		for build in (free, holder):
+			on, out_on = _p2_tick(build())
+			off, out_off = _p2_tick(build(), env={"MERGE_LEASE_HOLD_LABELS": "none"})
+			self.assertNotIn("hold_label", out_on)
+			self.assertEqual(_stable_calls(on.calls), _stable_calls(off.calls), build.__name__)
+
+	def test_multi_holder_revokes_a_hold_labelled_secondary(self) -> None:
+		st = {"pulls": [_pull(4), _pull(6)], "labels": {"6": ["ai:review-blocked"]}}
+		_seed_lease(st, _multi_record([_row(4, ["a.py"]), _row(6, ["b.py"])]))
+		_gates_ok(st, 4, 6)
+		h, out = _p2_tick(st, env={MAXH: "2"})
+		self.assertRegex(out, r"MERGE_LEASE pr=6 base=main mode=tick outcome=released reason=revoked_hold_label held_s=\d+ merged=false\n")
+		self.assertIn("pr=4 base=main mode=tick outcome=held reason=holder_open holders=1", out)
+		self.assertEqual(_skips(h.record()), [f"6:{_sha(6)}:revoked_hold_label"])
+
+	def test_multi_holder_skips_a_hold_labelled_waiter(self) -> None:
+		st = {"pulls": [_pull(5), _pull(6)], "labels": {"5": [WAIT, "ai:scope-blocked"], "6": [WAIT]},
+			"files": {"5": ["a.py"], "6": ["b.py"]}}
+		_seed_lease(st, _record(3, state="released", paths=""))
+		_gates_ok(st, 5, 6)
+		h, out = _p2_tick(st, env={MAXH: "2"})
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=skipped reason=hold_label\n", out)
+		self.assertIn("pr=6 base=main mode=tick outcome=granted reason=first_in_queue", out)
+		self.assertNotIn(WAIT, h.state["labels"]["5"])
+		self.assertEqual(_holders(h.record()) or [_v1_fields(h.record())["pr"]], ["6"])
+
+
 class LeaseQueueSnapshot(unittest.TestCase):
 	"""Merge-lease parallel merges Phase 1 steps 1.2-1.3 (Refs #9781): the
 	queue order is exposed and logged once per lease ref, with no API call."""
@@ -2087,23 +2567,151 @@ class SoftSkipEntries(unittest.TestCase):
 		self.assertNotIn("skip_head_unchanged", out)
 		self.assertEqual(_skips(h.record()), [], "the new holder's own entry is dropped")
 
-	def test_revoked_idle_skip_entry_blocks_until_the_head_changes(self) -> None:
-		entry = f"5:{_sha(5)}:revoked_idle"
-		st = self._free([entry])
-		_head_gate(st, _sha(5))
+	def test_expired_and_idle_entries_unpark_once_the_head_gate_succeeds(self) -> None:
+		# Issue #10044 G1/G3: expired and revoked_idle are soft; the grant logs
+		# outcome=unparked and keeps the holder's entry as the hard marker (G2).
+		for why in ("expired", "revoked_idle"):
+			with self.subTest(why=why):
+				st = self._free([f"5:{_sha(5)}:{why}"])
+				_head_gate(st, _sha(5))
+				h, out = _p2_tick(st)
+				unparked = f"MERGE_LEASE pr=5 base=main mode=tick outcome=unparked reason=head_gate_passed_after_{why}\n"
+				self.assertIn(unparked, out)
+				self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=granted reason=first_in_queue", out)
+				self.assertLess(out.index(unparked), out.index("pr=5 base=main mode=tick outcome=granted"))
+				self.assertNotIn("skip_head_unchanged", out)
+				rec = h.record()
+				self.assertIn("pr=5", rec)
+				self.assertEqual(_skips(rec), [f"5:{_sha(5)}:{why}_unparked"])
+				self.assertNotIn(WAIT, h.state["labels"]["5"])
+
+	def test_expired_and_idle_entries_with_a_pending_head_gate_stay_skip_held(self) -> None:
+		for why in ("expired", "revoked_idle"):
+			with self.subTest(why=why):
+				entry = f"5:{_sha(5)}:{why}"
+				st = self._free([entry])
+				_head_gate(st, _sha(5), "pending")
+				h, out = _p2_tick(st)
+				self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=skipped reason=skip_head_unchanged\n", out)
+				self.assertIn("pr=6 base=main mode=tick outcome=granted", out)
+				self.assertNotIn("outcome=unparked", out)
+				self.assertIn(WAIT, h.state["labels"]["5"])
+				self.assertEqual(_skips(h.record()), [entry])
+
+	def test_a_head_released_again_after_its_unpark_stays_hard(self) -> None:
+		# G2 (and D3: any earlier un-park on the head counts): the release
+		# keeps the `_unparked` token, so the next tick passes the PR over.
+		for prev, why in (("expired", "expired"), ("revoked_idle", "revoked_idle"), ("expired", "revoked_idle"),
+				("revoked_idle", "expired")):
+			with self.subTest(prev=prev, why=why):
+				marker = f"4:{_sha(4)}:{prev}_unparked"
+				st = {"pulls": [_pull(4)]}
+				if why == "expired":
+					_seed_lease(st, _record(4, expires=int(time.time()) - 5, skips=[marker]))
+				else:
+					_seed_lease(st, _record(4, updated=OLD, acquired=OLD, skips=[marker]))
+				_head_gate(st, _sha(4))
+				h, out = _p2_tick(st)
+				self.assertIn(f"outcome=released reason={why}", out)
+				self.assertEqual(_skips(h.record()), [f"4:{_sha(4)}:{why}_unparked"])
+		for why in ("expired", "revoked_idle"):
+			with self.subTest(why=why, tick="next"):
+				entry = f"5:{_sha(5)}:{why}_unparked"
+				st = self._free([entry])
+				_head_gate(st, _sha(5))
+				h, out = _p2_tick(st)
+				self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=skipped reason=skip_head_unchanged\n", out)
+				self.assertIn("pr=6 base=main mode=tick outcome=granted", out)
+				self.assertNotIn("outcome=unparked", out)
+				self.assertIn(WAIT, h.state["labels"]["5"])
+				self.assertEqual(_skips(h.record()), [entry])
+
+	def test_a_first_release_without_a_marker_writes_the_plain_reason(self) -> None:
+		st = {"pulls": [_pull(4)]}
+		_seed_lease(st, _record(4, expires=int(time.time()) - 5, skips=[f"4:{'e' * 40}:expired_unparked"]))
 		h, out = _p2_tick(st)
-		self.assertIn("pr=5 base=main mode=tick outcome=skipped reason=skip_head_unchanged", out)
-		self.assertIn("pr=6 base=main mode=tick outcome=granted", out)
-		self.assertEqual(_skips(h.record()), [entry])
-		st = self._free([entry], head5="e" * 40)
-		_head_gate(st, "e" * 40)
-		h, out = _p2_tick(st)
-		self.assertIn("pr=5 base=main mode=tick outcome=granted", out)
-		self.assertEqual(_skips(h.record()), [])
+		self.assertIn("outcome=released reason=expired", out)
+		self.assertEqual(_skips(h.record()), [f"4:{_sha(4)}:expired"], "a marker on an old head is pruned")
+
+	def test_a_no_head_gate_release_keeps_the_marker_through_the_next_grant(self) -> None:
+		# G2: a head-gate revocation of a marker head must not reset the
+		# once-per-head budget. The release stays soft (#9983) but carries the
+		# marker, the next grant keeps it, and a later expired / revoked_idle
+		# release of that head is hard.
+		for prev in ("expired", "revoked_idle"):
+			with self.subTest(prev=prev, step="release"):
+				st = {"pulls": [_pull(4)]}
+				_seed_lease(st, _record(4, updated=OLD, acquired=OLD, skips=[f"4:{_sha(4)}:{prev}_unparked"]))
+				h, out = _p2_tick(st)
+				self.assertIn("outcome=released reason=revoked_no_head_gate", out)
+				self.assertEqual(_skips(h.record()), [f"4:{_sha(4)}:revoked_no_head_gate_unparked"])
+		entry = f"5:{_sha(5)}:revoked_no_head_gate_unparked"
+		with self.subTest(step="pending"):
+			st = self._free([entry])
+			_head_gate(st, _sha(5), "pending")
+			h, out = _p2_tick(st)
+			self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=skipped reason=skip_head_unchanged\n", out)
+			self.assertEqual(_skips(h.record()), [entry])
+		with self.subTest(step="grant"):
+			st = self._free([entry])
+			_head_gate(st, _sha(5))
+			h, out = _p2_tick(st)
+			self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=granted", out)
+			self.assertNotIn("outcome=unparked", out)
+			self.assertEqual(_skips(h.record()), [f"5:{_sha(5)}:expired_unparked"])
+		for why in ("expired", "revoked_idle"):
+			with self.subTest(why=why, step="re-release"):
+				st = {"pulls": [_pull(4)]}
+				marker = f"4:{_sha(4)}:expired_unparked"
+				if why == "expired":
+					_seed_lease(st, _record(4, expires=int(time.time()) - 5, skips=[marker]))
+				else:
+					_seed_lease(st, _record(4, updated=OLD, acquired=OLD, skips=[marker]))
+				_head_gate(st, _sha(4))
+				h, out = _p2_tick(st)
+				self.assertIn(f"outcome=released reason={why}", out)
+				self.assertEqual(_skips(h.record()), [f"4:{_sha(4)}:{why}_unparked"])
+
+	def test_an_unparked_marker_clears_once_the_head_changes(self) -> None:
+		for why in ("expired", "revoked_idle"):
+			with self.subTest(why=why):
+				st = self._free([f"5:{_sha(5)}:{why}_unparked"], head5="e" * 40)
+				_head_gate(st, "e" * 40)
+				h, out = _p2_tick(st)
+				self.assertIn("pr=5 base=main mode=tick outcome=granted", out)
+				self.assertNotIn("outcome=unparked", out)
+				self.assertEqual(_skips(h.record()), [])
+
+	def test_reasons_about_the_pr_itself_stay_hard(self) -> None:
+		# G4: revoked_draft (and every other reason) blocks until the head changes.
+		for why in ("revoked_draft", "revoked_skip_ai", "revoked_final_ci_failed"):
+			with self.subTest(why=why):
+				entry = f"5:{_sha(5)}:{why}"
+				st = self._free([entry])
+				_head_gate(st, _sha(5))
+				h, out = _p2_tick(st)
+				self.assertIn("pr=5 base=main mode=tick outcome=skipped reason=skip_head_unchanged", out)
+				self.assertIn("pr=6 base=main mode=tick outcome=granted", out)
+				self.assertNotIn("outcome=unparked", out)
+				self.assertEqual(_skips(h.record()), [entry])
+
+	def test_multi_tick_unparks_once_and_a_holder_marker_is_not_skipped(self) -> None:
+		st = {"pulls": [_pull(4), _pull(5)], "labels": {"4": [WAIT], "5": [WAIT]}, "files": {"5": ["b.py"]}}
+		_seed_lease(st, _multi_record([_row(4, ["a.py"])], skips=[f"4:{_sha(4)}:expired_unparked", f"5:{_sha(5)}:expired"]))
+		_gates_ok(st, 4, 5)
+		h, out = _p2_tick(st, env={MAXH: "2"})
+		self.assertIn("MERGE_LEASE pr=4 base=main mode=tick outcome=held reason=holder_open holders=1\n", out)
+		self.assertNotIn("pr=4 base=main mode=tick outcome=skipped", out)
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=unparked reason=head_gate_passed_after_expired\n", out)
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=granted reason=first_in_queue", out)
+		self.assertNotIn("outcome=released", out)
+		rec = h.record()
+		self.assertEqual(_holders(rec), ["4", "5"])
+		self.assertEqual(_skips(rec), [f"4:{_sha(4)}:expired_unparked", f"5:{_sha(5)}:expired_unparked"])
 
 	def test_two_field_skip_entry_is_read_as_revoked_no_head_gate(self) -> None:
 		h = _Harness({})
-		two, three, hard = f"5:{_sha(5)}", f"6:{_sha(6)}:revoked_no_head_gate", f"7:{_sha(7)}:revoked_idle"
+		two, three, hard = f"5:{_sha(5)}", f"6:{_sha(6)}:revoked_no_head_gate", f"7:{_sha(7)}:revoked_draft"
 		res = h.lib(f'L="{two}"$\'\\n\'"{three}"$\'\\n\'"{hard}"$\'\\n\'"8:{_sha(8)}:Bad"; '
 			'printf "SOFT<%s>\\nHARD<%s>\\n" "$(_merge_lease_skips_soft "$L")" "$(_merge_lease_skips_hard "$L")"; '
 			f'_merge_lease_skip_is_soft "{two}" && echo two_soft; _merge_lease_skip_is_soft "{hard}" || echo hard_not_soft')
@@ -2111,13 +2719,40 @@ class SoftSkipEntries(unittest.TestCase):
 		self.assertIn(f"HARD<{hard}>", res.stdout)
 		self.assertIn("two_soft\nhard_not_soft", res.stdout)
 		# Normalize keeps both forms; a newer reason for the same pr:head wins.
-		res = h.lib(f'_merge_lease_skips_normalize "{two}"$\'\\n\'"{hard}"$\'\\n\'"5:{_sha(5)}:revoked_idle"')
-		self.assertEqual(res.stdout, f"{hard}\n5:{_sha(5)}:revoked_idle\n", res.stderr)
+		res = h.lib(f'_merge_lease_skips_normalize "{two}"$\'\\n\'"{hard}"$\'\\n\'"5:{_sha(5)}:revoked_draft"')
+		self.assertEqual(res.stdout, f"{hard}\n5:{_sha(5)}:revoked_draft\n", res.stderr)
 		# In the tick a two-field entry clears once the head-gate succeeds.
 		st = self._free([two])
 		_head_gate(st, _sha(5))
 		_, out = _p2_tick(st)
 		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=granted", out)
+
+	def test_classifier_soft_and_hard_sets(self) -> None:
+		# Issue #10044: expired and revoked_idle join the soft set; the
+		# `_unparked` tokens and every reason about the PR itself are hard.
+		h = _Harness({})
+		soft = [f"1:{_sha(1)}", f"2:{_sha(2)}:revoked_no_head_gate", f"3:{_sha(3)}:expired", f"4:{_sha(4)}:revoked_idle",
+			f"11:{_sha(11)}:revoked_no_head_gate_unparked"]
+		hard = [f"5:{_sha(5)}:expired_unparked", f"6:{_sha(6)}:revoked_idle_unparked", f"7:{_sha(7)}:revoked_draft",
+			f"8:{_sha(8)}:revoked_skip_ai", f"9:{_sha(9)}:revoked_final_ci_failed", f"10:{_sha(10)}:some_future_reason"]
+		listing = "$'\\n'".join(f'"{e}"' for e in soft + hard)
+		checks = "; ".join(f'_merge_lease_skip_is_soft "{e}" && echo "S {e}" || echo "H {e}"' for e in soft + hard)
+		res = h.lib(f'L={listing}; printf "SOFT<%s>\\nHARD<%s>\\n" "$(_merge_lease_skips_soft "$L")" "$(_merge_lease_skips_hard "$L")"; {checks}')
+		self.assertIn("SOFT<" + "\n".join(soft) + ">", res.stdout, res.stderr)
+		self.assertIn("HARD<" + "\n".join(hard) + ">", res.stdout)
+		for e in soft:
+			self.assertIn(f"S {e}\n", res.stdout)
+		for e in hard:
+			self.assertIn(f"H {e}\n", res.stdout)
+		# The release token: `_unparked` only when that head already used its
+		# un-park, and only for expired / revoked_idle.
+		res = h.lib(f'MERGE_LEASE_SKIPS="4:{_sha(4)}:expired_unparked"$\'\\n\'"5:{_sha(5)}:expired"; '
+			f'for a in "4 {_sha(4)} expired" "4 {_sha(4)} revoked_idle" "4 {_sha(4)} revoked_draft" "4 {"e" * 40} expired" '
+			f'"5 {_sha(5)} expired" "6 {_sha(6)} revoked_idle" "4 {_sha(4)} revoked_no_head_gate" "5 {_sha(5)} revoked_no_head_gate"; '
+			'do set -- $a; echo "T $(_merge_lease_skip_release_token "$1" "$2" "$3")"; done')
+		self.assertEqual([ln for ln in res.stdout.splitlines() if ln.startswith("T ")],
+			["T expired_unparked", "T revoked_idle_unparked", "T revoked_draft", "T expired", "T expired", "T revoked_idle",
+				"T revoked_no_head_gate_unparked", "T revoked_no_head_gate"], res.stderr)
 
 	def test_soft_entry_with_an_unreadable_head_gate_stays_skip_held(self) -> None:
 		# A failed head-gate read keeps the soft entry (#9983 G5): the
@@ -2184,8 +2819,31 @@ class SoftSkipEntries(unittest.TestCase):
 				self.assertEqual(rc, 1, out)
 				self.assertIn("outcome=wait reason=queued_behind blocker=9", out)
 
+	def test_gate_caller_with_an_expired_entry_acquires_and_keeps_the_marker(self) -> None:
+		# Issue #10044: the update-mode gate treats expired/revoked_idle as soft,
+		# and the acquire write keeps the caller's marker on its head.
+		for why in ("expired", "revoked_idle"):
+			with self.subTest(why=why):
+				# The caller's head (_gate passes HEAD) is its listing head.
+				st = LeaseSkipList()._gate_state(HEAD, [9], [f"7:{HEAD}:{why}"])
+				_head_gate(st, HEAD)
+				h = _Harness(st)
+				rc, out = _gate(h, 7, "update")
+				self.assertEqual(rc, 0, out)
+				self.assertIn("outcome=acquired", out)
+				self.assertEqual(_skips(h.record()), [f"7:{HEAD}:{why}_unparked"])
+
+	def test_gate_caller_with_an_unparked_marker_waits_behind_another_waiter(self) -> None:
+		for why in ("expired", "revoked_idle"):
+			with self.subTest(why=why):
+				h = _Harness(self._gate_state(f"7:{_sha(7)}:{why}_unparked", "success"))
+				rc, out = _gate(h, 7, "update")
+				self.assertEqual(rc, 1, out)
+				self.assertIn("outcome=wait reason=queued_behind blocker=9", out)
+				self.assertEqual(_calls_with(h, "/statuses"), 0, h.calls)
+
 	def test_gate_hard_entry_makes_no_extra_call(self) -> None:
-		h = _Harness(self._gate_state(f"7:{_sha(7)}:revoked_idle", "success"))
+		h = _Harness(self._gate_state(f"7:{_sha(7)}:revoked_draft", "success"))
 		rc, out = _gate(h, 7, "update")
 		self.assertEqual(rc, 1, out)
 		self.assertIn("reason=queued_behind blocker=9", out)

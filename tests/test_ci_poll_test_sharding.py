@@ -982,8 +982,11 @@ class CiFailedShardLogSummaryTest(unittest.TestCase):
 
 
 MERGE_TRAIN_STEP_NAME = "Merge-train and gh_helpers rate-limit tests (CLAUDE.md §15)"
-# Moved back here from orchestrate-poll group 1 (budget-watch issue #7766).
-MERGE_TRAIN_JOB_ID = "tests-hooks-and-orchestrator"
+# Moved back to tests-hooks-and-orchestrator from orchestrate-poll group 1
+# (budget-watch issue #7766), and from there into orchestrate-poll group 0
+# (budget-watch issue #9496).
+MERGE_TRAIN_JOB_ID = POLL_JOB_ID
+MERGE_TRAIN_POLL_GROUP = 0
 MERGE_TRAIN_MODULE = "tests/test_review_merge_train.py"
 MERGE_TRAIN_SMALL_MODULES = (
 	"tests/test_gh_helpers_parse_reset_header.py",
@@ -1041,6 +1044,11 @@ class MergeTrainStepContractTest(unittest.TestCase):
 	Budget-watch issue #7766: group 1 then took 15m42s of its 20 minutes (run
 	39526504422), so the step moved, unchanged and still sharded, to
 	`tests-hooks-and-orchestrator`, which has no matrix and so no group guard.
+
+	Budget-watch issue #9496: `tests-hooks-and-orchestrator` then took 16m09s
+	of its 20 minutes (run 43544291165), so the step moved, unchanged and
+	still sharded, back into `orchestrate-poll`, guarded to group 0. The pick
+	is an estimate from test and subprocess counts, not a measurement.
 	"""
 
 	def setUp(self) -> None:
@@ -1052,8 +1060,9 @@ class MergeTrainStepContractTest(unittest.TestCase):
 		files["rest"] = {"log": "ok\n", "rc": "0\n"}
 		return files
 
-	def test_step_keeps_its_name_in_the_hooks_job_without_guard(self) -> None:
-		self.assertNotIn("if", self.step)
+	def test_step_runs_once_in_poll_group_zero(self) -> None:
+		self.assertLess(MERGE_TRAIN_POLL_GROUP, poll_group_count())
+		self.assertEqual(self.step.get("if"), f"strategy.job-index == {MERGE_TRAIN_POLL_GROUP}")
 		jobs = yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
 		owners = [
 			job_id
@@ -1061,11 +1070,12 @@ class MergeTrainStepContractTest(unittest.TestCase):
 			for step in job.get("steps", [])
 			if step.get("name") == MERGE_TRAIN_STEP_NAME
 		]
-		self.assertEqual(owners, [MERGE_TRAIN_JOB_ID])
+		self.assertEqual(owners, [POLL_JOB_ID])
 
-	def test_step_left_the_poll_job(self) -> None:
-		poll_step_names = [step.get("name") for step in load_poll_job()["steps"]]
-		self.assertNotIn(MERGE_TRAIN_STEP_NAME, poll_step_names)
+	def test_step_left_the_hooks_job(self) -> None:
+		jobs = yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+		hooks_step_names = [step.get("name") for step in jobs["tests-hooks-and-orchestrator"]["steps"]]
+		self.assertNotIn(MERGE_TRAIN_STEP_NAME, hooks_step_names)
 
 	def test_all_six_modules_are_named_literally(self) -> None:
 		for module in (MERGE_TRAIN_MODULE, *MERGE_TRAIN_SMALL_MODULES):
@@ -1175,6 +1185,12 @@ GROUP_PINNED_STEPS = {
 	"Judge Semble prefetch contract test": 1,
 	# Moved from tests-release-and-log-analysis in #9966.
 	"Regression tests wired by the CI wiring guard (part 1)": 1,
+	# Moved from tests-hooks-and-orchestrator in #9496.
+	"Merge-train and gh_helpers rate-limit tests (CLAUDE.md §15)": 0,
+	# Moved from tests-hooks-and-orchestrator in #9496.
+	"Review Semble contract test": 1,
+	# Moved from tests-hooks-and-orchestrator in #9496.
+	"Clarify sandbox base image pre-seed tests (#6985)": 1,
 }
 # The only steps pinned to the last matrix group (#8118; #8772's step moved
 # on to group 0 in #8980; #9037 moved the Claude engine judges and validation
@@ -4271,6 +4287,125 @@ class MovedHooks9391StepsContractTest(unittest.TestCase):
 				self.assertLess(names.index(HOOKS_9391_SETUP_STEP), names.index(name))
 
 
+# Steps moved out of tests-hooks-and-orchestrator, which took 16m09s of its 20
+# minutes (run 43544291165, budget-watch issue #9496): step name -> (target
+# poll group, module paths its body names). The run's step timings were not
+# readable, so the steps were picked by test and subprocess counts, an
+# estimate, not a measurement. The merge-train step (the job's largest step
+# that needs no git history or prepared .claude/ live copies) runs in group 0,
+# which had carried its slice, the fast-fail subset, since #9450 the
+# check-failure triage step after #9214 and since #9639 the pre-push
+# affected-test gate step (its headroom is unmeasured); the
+# Semble and pre-seed steps run in group 1, which pinned only the
+# review-pipeline plumbing step.
+HOOKS_9496_SOURCE_JOB_ID = "tests-hooks-and-orchestrator"
+HOOKS_9496_TARGET_JOB_ID = POLL_JOB_ID
+HOOKS_9496_SETUP_STEP = "Install Python CI dependencies"
+MOVED_HOOKS_9496_STEPS = {
+	MERGE_TRAIN_STEP_NAME: (
+		MERGE_TRAIN_POLL_GROUP,
+		(
+			MERGE_TRAIN_MODULE,
+			"tests/test_gh_helpers_parse_reset_header.py",
+			"tests/test_gh_retry_stdout_isolation.py",
+			"tests/test_gh_retry_permanent_auth_failures.py",
+			"tests/test_gh_retry_final_stderr_redaction.py",
+			"tests/test_gh_api_retry.py",
+			"tests/test_gh_api_retry_py.py",
+			"tests/test_gh_pr_comments_argv_limit.py",
+		),
+	),
+	"Review Semble contract test": (
+		1,
+		("tests/test_review_semble_contract.py",),
+	),
+	"Clarify sandbox base image pre-seed tests (#6985)": (
+		1,
+		("tests/test_clarify_sandbox_base_image_preseed.py",),
+	),
+}
+# The steps group 0 pins after the fast-fail subset, in order (#9496).
+POLL_GROUP_ZERO_9496_PINNED_STEPS = (MERGE_TRAIN_STEP_NAME,)
+
+
+class MovedHooks9496StepsContractTest(unittest.TestCase):
+	"""The steps moved out of tests-hooks-and-orchestrator run once, in orchestrate-poll groups 0 and 1 (#9496)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_each_step_is_owned_only_by_the_poll_job(self) -> None:
+		for name in MOVED_HOOKS_9496_STEPS:
+			with self.subTest(step=name):
+				self.assertEqual(
+					[owner for owner, _step in self.owning_steps(name)],
+					[HOOKS_9496_TARGET_JOB_ID],
+				)
+
+	def test_each_step_runs_in_its_group(self) -> None:
+		# Without the guard a step would run in every group; a wrong index
+		# would skip it silently.
+		for name, (group, _modules) in MOVED_HOOKS_9496_STEPS.items():
+			with self.subTest(step=name):
+				self.assertLess(group, poll_group_count())
+				self.assertEqual(GROUP_PINNED_STEPS.get(name), group)
+				self.assertEqual(poll_job_step(name).get("if"), f"strategy.job-index == {group}")
+
+	def test_each_step_still_names_its_modules(self) -> None:
+		for name, (_group, modules) in MOVED_HOOKS_9496_STEPS.items():
+			steps = self.owning_steps(name)
+			self.assertEqual(len(steps), 1, name)
+			run = steps[0][1]["run"]
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertTrue((REPO_ROOT / module).is_file(), module)
+					self.assertIn(module, run)
+
+	def test_preseed_step_keeps_its_runner_temp_tmpdir(self) -> None:
+		run = poll_job_step("Clarify sandbox base image pre-seed tests (#6985)")["run"]
+		self.assertIn('TMPDIR="${RUNNER_TEMP}"', run)
+
+	def test_moved_steps_left_the_hooks_job(self) -> None:
+		source_names = {step.get("name") for step in self.jobs()[HOOKS_9496_SOURCE_JOB_ID]["steps"]}
+		for name in MOVED_HOOKS_9496_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, source_names)
+
+	def test_moved_steps_run_after_the_poll_job_setup(self) -> None:
+		names = [step.get("name") for step in load_poll_job()["steps"]]
+		self.assertIn(HOOKS_9496_SETUP_STEP, names)
+		for name in MOVED_HOOKS_9496_STEPS:
+			with self.subTest(step=name):
+				self.assertIn(name, names)
+				self.assertLess(names.index(HOOKS_9496_SETUP_STEP), names.index(name))
+
+	def test_moved_steps_run_after_the_poll_slice(self) -> None:
+		"""Appended after the poll slice, so the fast-fail signal and slice are not delayed."""
+		names = [step.get("name") for step in load_poll_job()["steps"]]
+		slice_index = names.index("Orchestrate poll process unit tests")
+		for name in MOVED_HOOKS_9496_STEPS:
+			with self.subTest(step=name):
+				self.assertLess(slice_index, names.index(name))
+
+	def test_group_one_guarded_steps_match_its_pins(self) -> None:
+		"""Every group-1 guarded step is pinned once in GROUP_PINNED_STEPS, and vice versa (#9496)."""
+		group_one_guarded = [
+			step.get("name")
+			for step in load_poll_job()["steps"]
+			if str(step.get("if", "")) == "strategy.job-index == 1"
+		]
+		self.assertEqual(len(group_one_guarded), len(set(group_one_guarded)))
+		self.assertEqual(set(group_one_guarded), {name for name, group in GROUP_PINNED_STEPS.items() if group == 1})
+
+
 # Step moved from orchestrate-poll group 3 to group 0: orchestrate-poll (3)
 # took 15m17s of its 20 minutes on main (run 43993691500, budget-watch issue
 # #9639). The run's step results gave statuses only, with no durations, so the
@@ -4807,16 +4942,22 @@ class MovedPollGroupZero9214StepsContractTest(unittest.TestCase):
 			if str(step.get("if", "")) == "strategy.job-index == 0"
 		]
 		# Issue #9450 pinned the check-failure triage step to group 0, after the
-		# fast-fail step; #9639 pinned the pre-push gate step there, between
-		# the two in workflow order, and #9895 moved it out of the poll matrix
-		# back to tests-hooks-and-orchestrator.
+		# fast-fail step; #9639 pinned the pre-push gate step there, right after
+		# the fast-fail step in workflow order, and #9895 moved it out of the
+		# poll matrix back to tests-hooks-and-orchestrator. Since #9496 group 0
+		# also runs the merge-train step, before the triage step. Any further
+		# group-0 step must update POLL_GROUP_ZERO_9496_PINNED_STEPS on purpose.
 		self.assertEqual(
 			group_zero_guarded,
-			[POLL_GROUP_ZERO_9214_FAST_FAIL_STEP, RELEASE_9450_STEP_NAME],
+			[
+				POLL_GROUP_ZERO_9214_FAST_FAIL_STEP,
+				*POLL_GROUP_ZERO_9496_PINNED_STEPS,
+				RELEASE_9450_STEP_NAME,
+			],
 		)
 		self.assertEqual(
 			{name for name, group in GROUP_PINNED_STEPS.items() if group == 0},
-			{RELEASE_9450_STEP_NAME},
+			{*POLL_GROUP_ZERO_9496_PINNED_STEPS, RELEASE_9450_STEP_NAME},
 		)
 
 
@@ -4825,7 +4966,8 @@ class MovedPollGroupZero9214StepsContractTest(unittest.TestCase):
 # id, module paths its body names). The run's step timings were not readable;
 # the pick is the job's slowest unsplit step after the CI wiring guard part 2
 # step in the planning sandbox (about 162s), a relative weight, not a
-# measurement. Group 0 has pinned no step since #9214 moved part 2 out of it.
+# measurement. When #9450 was planned, group 0 had pinned no step since #9214
+# moved part 2 out of it; since #9496 it also pins the merge-train step.
 RELEASE_9450_SOURCE_JOB_ID = "tests-release-and-log-analysis"
 RELEASE_9450_SETUP_STEP = "Install Python CI dependencies"
 RELEASE_9450_DERIVE_STEP = "Derive orchestrate poll test subsets"

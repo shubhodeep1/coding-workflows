@@ -2242,6 +2242,33 @@ def test_reporter_does_not_reheal_pipeline_scope_refusal() -> None:
 		assert "dispatches" not in _state(state_file)
 
 
+def test_reporter_skips_remediation_no_code_park() -> None:
+	"""A deliberate ai:scope-blocked park by the remediation no-code guard is not healed."""
+	marker = "<!-- ai:guard-rejection:v1 item=42 guard=scope reason={reason} run=500 count=1 truncated=false paths=WyJSRUFETUUubWQiXQ== -->"
+	comments_key = f"repos/{CONSUMER_REPO}/issues/42/comments"
+	cases = [
+		# (comment author, reason, expected stdout text, dispatched)
+		("workflow-bot", "remediation-no-code", "skip reason=remediation_no_code_park issue=42 label=ai:scope-blocked", False),
+		("someone-else", "remediation-no-code", "WORKFLOW_HEAL_REPORT dispatched issue=42 kind=issue label=ai:scope-blocked", True),
+		("workflow-bot", "out-of-scope", "WORKFLOW_HEAL_REPORT dispatched issue=42 kind=issue label=ai:scope-blocked", True),
+	]
+	for author, reason, expected, dispatched in cases:
+		with tempfile.TemporaryDirectory(prefix="heal-reporter-remediation-") as tmp_name:
+			tmp = Path(tmp_name)
+			work, state_file, env = _stage(tmp, with_codex=False, wrapper_pin=SHA_A)
+			state = _report_state()
+			state["comments"][comments_key].append({
+				"body": "Guard rejected this run.\n\n" + marker.format(reason=reason),
+				"user": {"login": author}, "created_at": "2026-09-20T00:00:00Z",
+			})
+			state_file.write_text(json.dumps(state), encoding="utf-8")
+			env.update({"GITHUB_REPOSITORY": CONSUMER_REPO, "WORKFLOW_HEAL_ISSUE_NUMBER": "42", "WORKFLOW_HEAL_LABEL": "ai:scope-blocked"})
+			result = _run(REPORT_SCRIPT, work, env)
+			assert result.returncode == 0, (author, reason, result.stderr, result.stdout)
+			assert expected in result.stdout, (author, reason, result.stdout)
+			assert ("dispatches" in _state(state_file)) is dispatched, (author, reason)
+
+
 def test_report_script_dispatches_thin_payload() -> None:
 	with tempfile.TemporaryDirectory(prefix="heal-report-") as tmp_name:
 		tmp = Path(tmp_name)
