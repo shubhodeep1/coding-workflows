@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:1329-1338 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `pr checks` special case in `_gh_read_run` returns the job-token result for every unclassified non-zero exit, not only for a valid check answer, so it never tries the PAT.\n  WHY: A job-token HTTP 500 or network error on `gh pr checks` leaves `reason` empty and returns before the PAT fallback, so the caller fails even when the PAT could answer; this contradicts the reason=error hardening contract in changelog.d/9888-gh-read-token-polling.md and agents.d/9888-gh-read-token-polling.md, which describe a narrower exception. All three reviewers rated it NIT, mapped here to low. glm put it under ERROR PATHS and gave confidence 4; the others gave 5. glm notes that no in-repo caller routes `pr checks` through `gh_read` today. anthropic_claude-sonnet-5_5 dropped it as speculative because no runtime path reaches it. minimax_minimax-m3 confirmed the defect but did not report it, because the file is outside the last run's changed files.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Cross-repo reads stay on the PAT, because GITHUB_TOKEN can't read the private consumer repos from coding-workflows... gh_read takes a --same-repo-only check: when the target repo differs from GITHUB_REPOSITORY and the target is private, it uses the PAT without trying.\"\n  expected_change_site: scripts/gh_helpers.sh `_gh_read_run` (and potentially `_gh_api_safe_job_token_read` in scripts/comprehensive_test_and_release_gh_api.sh)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The code lacks any logic to compare the target repository against ${GITHUB_REPOSITORY} or verify repo privacy, and the --same-repo-only flag is not validated or enforced in the implementation. anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash all disputed this gap. They cite flag parsing at scripts/gh_helpers.sh:1259-1263/1260, the same-repo gate at 1279-1286, and `_gh_read_target_repo` at 1175-1210/1175-1215.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/gh_helpers.sh:1329-1338 | severity=NIT | confidence=5\n  PROBLEM: The pr checks special case in _gh_read_run returns any non-zero exit code as a valid result, rather than limiting the exception to valid check statuses.\n  WHY: If gh pr checks fails due to a network error or 5xx response (rc 1), the function returns that rc and empty output instead of falling back to the PAT as intended.\n- TASK_GAP\n  Requirement: \"Cross-repo reads stay on the PAT, because GITHUB_TOKEN can't read the private consumer repos from coding-workflows... gh_read takes a --same-repo-only check: when the target repo differs from GITHUB_REPOSITORY and the target is private, it uses the PAT without trying.\"\n  Expected change site: scripts/gh_helpers.sh in _gh_read_run (and potentially _gh_api_safe_job_token_read in scripts/comprehensive_test_and_release_gh_api.sh)\n  Evidence of absence: The code lacks any logic to compare the target repository against ${GITHUB_REPOSITORY} or verify repo privacy, and the --same-repo-only flag is not validated or enforced in the implementation.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/gh_helpers.sh:1329-1337 (`_gh_read_run`) | severity=NIT | confidence=5\n  PROBLEM: The `pr checks` exception returns every unclassified non-zero result as if it were a valid check result.\n  WHY: When `gh pr checks` fails with an unclassified job-token error, such as a network failure or HTTP 500, `reason` is empty and this branch returns before trying the PAT. The caller fails even when the PAT could provide the result.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/gh_helpers.sh:1329-1337 (_gh_read_run, `if [ -z \"${reason}\" ]; then ... if [ \"${1:-} ${2:-}\" = \"pr checks\" ]; then ... return \"${rc}\" ... fi; reason=\"error\"`) | severity=NIT | confidence=4\n  PROBLEM: The `pr checks` special case returns the job-token result unchanged for every unclassified non-zero exit, not only for a valid check answer. A job-token 500 or network error returns the job-token error without trying the PAT. The code's exception is also broader than the changelog wording (\"`gh pr checks`, which exits non-zero with a valid answer, keeps its job-token result\"), and the twin `gh_api_safe_job_token_read` has no such exception. Mitigating context: no in-repo caller routes `pr checks` through `gh_read` today.\n  WHY: any future caller of `gh_read pr checks` during a job-token 5xx/network outage gets the failed job-token error instead of the PAT's answer, contradicting the hardening contract stated in changelog.d/9888-gh-read-token-polling.md and agents.d/9888-gh-read-token-polling.md.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "096870e48dcb673e67a363046d8f5814842a4e2d23f48eb254dcd463b4c077cd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10107,
+    "run_id": "45627078309",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45627078309",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125141042_e172d74a78",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10107,
+    "run_id": "45627078309"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T14:10:42Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
