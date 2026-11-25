@@ -5,13 +5,30 @@
   "entry_id": "processed_command_10131_7173317229_approved",
   "issue_number": 10131,
   "metadata": {
+    "branch": "ai/issue-10131",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      "README.md",
+      "agents.d/10131-final-ci-status-cancelled-run.md",
+      "changelog.d/10131-final-ci-status-cancelled-run.md",
+      "scripts/ci_cancelled_rerun.py",
+      "scripts/ci_final_status.sh",
+      "scripts/stage_switches.json",
+      "tests/test_ci_cancelled_rerun.py",
+      "tests/test_ci_final_status.py"
+    ],
+    "issue_number": 10131,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/10131",
+    "pr_number": 10135,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/10135",
+    "run_attempt": "1",
+    "run_id": "45692584166",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/45692584166"
   },
   "run_attempt": 1,
   "run_id": "45692584166",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-25T20:14:04Z",
+  "status": "completed",
+  "timestamp": "2026-11-25T20:51:15Z",
   "workflow": "implement"
 }
