@@ -2847,7 +2847,8 @@ _merge_lease_split_soft()
 # or off turns it off). The head ref comes from the listing already read.
 # Several holders per base (merge-lease-parallel Phase 5, Refs #9781):
 # MERGE_LEASE_MAX_HOLDERS (default 2 since #10124, 1-5; set 1 for the
-# single-holder lease; not a whole number gives 2 with a warning, out of
+# single-holder lease; empty or whitespace-only gives 2 without a warning,
+# any other value that is not a whole number gives 2 with a warning, out of
 # range is clamped) PRs whose paths are pairwise disjoint
 # (Phase 4 soft class included) may hold one base's lease at once. With 2+
 # live holders the record keeps pr=/head=/acquired=/updated= for the primary,
