@@ -457,6 +457,29 @@ def test_infra_failure_posts_no_marker_and_dispatches_nothing(fake_gh) -> None:
 	assert not any(call[:3] == ["api", "-X", "POST"] for call in calls)
 	assert _dispatches(calls) == []
 	assert any(JOBS_KEY in arg for call in calls for arg in call)
+	# Only the abandoned (cancelled-jobs) verdict adds the deferred line.
+	assert "outcome=deferred" not in result.stdout
+
+
+def _abandoned_fixtures(cancelled_message: str | None = None) -> dict:
+	# Issue #10023: `static-checks` was cancelled (no failed test); the lint
+	# aggregate names it. No annotation (or a timeout annotation) on the job.
+	jobs = [_job("static-checks", 1, "cancelled"), _job("lint", 2), _job("final-ci-failed", 3, None, "in_progress")]
+	cancelled = [{"message": cancelled_message, "annotation_level": "failure"}] if cancelled_message else []
+	return {
+		_comments_key(): {"body": []},
+		f"repos/{REPO}/{JOBS_KEY}": {"body": {"total_count": 3, "jobs": jobs}},
+		f"repos/{REPO}/check-runs/1001/annotations": {"body": cancelled},
+		f"repos/{REPO}/check-runs/1002/annotations": {"body": [{"message": "CI jobs that did not succeed: static-checks", "annotation_level": "failure"}]},
+	}
+
+
+def test_abandoned_jobs_defer_with_cancelled_jobs_rerun(fake_gh) -> None:
+	result, calls = _infra_failed(fake_gh, _abandoned_fixtures(), INFRA_ENV)
+	assert f"REVIEW_FINAL_CI_FAILED pr=7 head={SHA} outcome=infra_rerun_deferred reason=abandoned" in result.stdout, result.stdout + result.stderr
+	assert f"REVIEW_FINAL_CI_FAILED pr=7 head={SHA} outcome=deferred reason=cancelled_jobs_rerun" in result.stdout
+	assert not any(call[:3] == ["api", "-X", "POST"] for call in calls)
+	assert _dispatches(calls) == []
 
 
 @pytest.mark.parametrize("fixtures, env", [
@@ -464,10 +487,17 @@ def test_infra_failure_posts_no_marker_and_dispatches_nothing(fake_gh) -> None:
 	(_infra_fixtures("Process completed with exit code 1."), INFRA_ENV),
 	# A classifier read error keeps the hand-back.
 	({**_infra_fixtures(), f"repos/{REPO}/{JOBS_KEY}": {"rc": 1}}, INFRA_ENV),
+	# A job cancelled at its timeout-minutes limit is genuine (issue #10023, AD-1).
+	(_abandoned_fixtures("The job running on runner r has exceeded the maximum execution time of 20 minutes."), INFRA_ENV),
+	# The re-run's attempt 2 is handed back.
+	(_abandoned_fixtures(), {**INFRA_ENV, "FINAL_CI_FAILED_RUN_ATTEMPT": "2"}),
+	# The abandoned-job class switched off in the classifier.
+	(_abandoned_fixtures(), {**INFRA_ENV, "CI_ABANDONED_JOB_RERUN_ENABLED": "false"}),
 ])
 def test_genuine_or_unreadable_failure_keeps_the_hand_back(fake_gh, fixtures: dict, env: dict) -> None:
 	result, calls = _infra_failed(fake_gh, fixtures, env)
 	assert "outcome=redispatched" in result.stdout, result.stdout + result.stderr
+	assert "outcome=deferred" not in result.stdout and "infra_rerun_deferred" not in result.stdout
 	assert len([call for call in calls if call[:3] == ["api", "-X", "POST"]]) == 1
 
 
@@ -485,6 +515,7 @@ def test_genuine_or_unreadable_failure_keeps_the_hand_back(fake_gh, fixtures: di
 def test_infra_deferral_needs_attempt_one_and_both_switches(fake_gh, env: dict) -> None:
 	result, calls = _infra_failed(fake_gh, _infra_fixtures(), env)
 	assert "outcome=redispatched" in result.stdout, result.stdout + result.stderr
+	assert "outcome=deferred" not in result.stdout
 	assert not any(JOBS_KEY in arg for call in calls for arg in call)
 
 

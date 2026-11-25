@@ -1027,6 +1027,9 @@ def _run_poller(
 	branch_rebuild_cooldown_hours: str = "48",
 	codex_touch_file: str | None = None,
 	mock_rb_judge_prompt_cap: int | None = None,
+	# Issue #9821: on a local jq < 1.7 (which reserves `$label`), rename the
+	# variable in the sandbox copy's has_label; a no-op on jq >= 1.7.
+	old_jq_has_label_compat: bool = False,
 	mock_orch_state_v2_pack_mode: str | None = None,
 	mock_git_push_success: bool = False,
 	mock_git_checkout_fail: bool = False,
@@ -1184,6 +1187,13 @@ def _run_poller(
 			poller_text = poller_copy.read_text(encoding="utf-8")
 			assert poller_text.count(guard) == 1
 			poller_copy.write_text(poller_text.replace(guard, f'if [ "${{RB_JUDGE_PROMPT_CHARS}}" -gt {mock_rb_judge_prompt_cap} ]; then'), encoding="utf-8")
+		if old_jq_has_label_compat and _jq_reserves_label_keyword():
+			# Same rename as tests/orchestrate_tracking_auto_close_cases.py.
+			poller_copy = sandbox / "scripts/orchestrate_poll_process.sh"
+			has_label_jq = "jq -e --arg label \"${label}\" 'index($label) != null'"
+			poller_text = poller_copy.read_text(encoding="utf-8")
+			assert poller_text.count(has_label_jq) == 1
+			poller_copy.write_text(poller_text.replace(has_label_jq, "jq -e --arg wanted \"${label}\" 'index($wanted) != null'"), encoding="utf-8")
 		# The poller's RB_JUDGE no longer invokes the host codex mock. Give
 		# review-blocked scenarios a credential-free sandbox stand-in that
 		# preserves the old verdict/combined-fix fixture semantics.
@@ -12708,9 +12718,11 @@ def test_review_blocked_fix_target_rejects_head_move_during_judge():
 		}
 		result = _review_blocked_fix_scope_case(
 			touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
-			# Reconciliation and branch prep consume six pulls/901 reads; the
-			# subsequent re-check must see the changed SHA.
-			pr_api_sequence={901: [dict(open_pr) for _ in range(6)] + [{**open_pr, **changed_pr}]},
+			# Reconciliation and branch prep consume five live pulls/901 reads
+			# (one more is served by the #9927 PR JSON cycle cache); the
+			# re-check is invalidated first, so it reads live and must see the
+			# changed SHA.
+			pr_api_sequence={901: [dict(open_pr) for _ in range(5)] + [{**open_pr, **changed_pr}]},
 		)
 		try:
 			_assert_in_poller_stdout(f"issue=10 pr=901 reason={reason}", result)
@@ -12754,6 +12766,11 @@ def test_review_blocked_merged_fix_target_rejects_unrelated_followup():
 			existing_branches=["main", "orchestrator/project-192"],
 			codex_json={"action": "fix", "justification": "apply fixes", "fix_description": "patched"},
 			codex_touch_file="sandbox_fix.txt", mock_git_push_success=True,
+			# The scenario is a PR that merges between the wave reconcile read
+			# and the review-blocked read in the same cycle. The #9927 PR JSON
+			# cache serves the second read from the first (the accepted
+			# in-cycle staleness), so the scenario only exists with it off.
+			env_overrides={"ORCH_POLL_PR_JSON_CACHE_TTL_SECS": "0"},
 		)
 		try:
 			_assert_in_poller_stdout(f"issue=10 pr=901 reason={reason}", result)
@@ -12762,6 +12779,26 @@ def test_review_blocked_merged_fix_target_rejects_unrelated_followup():
 			assert len(result["prs"]) == 1
 		except AssertionError as exc:
 			failures.append((reason, str(exc)))
+		if reason != "cross_repository":
+			continue
+		# Production default (cache on): the invalidated post-judge re-fetch
+		# still reads live and must block the push to the fork follow-up.
+		cached = _run_poller(
+			state=state, enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:review-blocked"]}, issue_linked_prs={10: 901},
+			pr_api_sequence={901: [dict(open_pr) for _ in range(4)] + [dict(merged_pr)]},
+			prs=[{**merged_pr, "files": ["sandbox_fix.txt"]}],
+			existing_branches=["main", "orchestrator/project-192"],
+			codex_json={"action": "fix", "justification": "apply fixes", "fix_description": "patched"},
+			codex_touch_file="sandbox_fix.txt", mock_git_push_success=True,
+		)
+		try:
+			_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=head_repo_mismatch", cached)
+			assert cached.get("git_push_calls", []) == [] and cached.get("review_blocked_fix_commit_calls", []) == []
+			# Pin that the cache really served a read (not a repeat of the TTL=0 run).
+			assert re.search(r"^ORCH_POLL_CYCLE_SUMMARY .* cache_hits_pr_json=[1-9]\d* ", str(cached.get("stdout", "")), re.MULTILINE), _poller_stdout_tail(cached)
+		except AssertionError as exc:
+			failures.append((reason + "/cache_on", str(exc)))
 	assert not failures, failures
 
 
@@ -21047,7 +21084,9 @@ def test_close_merged_issues_sweep_default_branch_unavailable_closes_nothing():
 	# FINAL_DEFAULT_BRANCH falls back to a literal "main" on lookup failure,
 	# so the sweep must not reuse it.
 	assert "${FINAL_DEFAULT_BRANCH" not in body
-	assert "--jq '.default_branch'" in body
+	# Issue #9927: the read goes through the shared default-branch wrapper
+	# with an empty fallback, so a failed lookup still yields "".
+	assert '_sweep_default_branch="$(_orch_poll_default_branch_or_live "" quiet)"' in body
 	assert "|| echo main" not in body
 	assert "CLOSE_MERGED_SWEEP outcome=skip reason=default_branch_unavailable" in body
 	skip_pos = body.index("reason=default_branch_unavailable")
@@ -23579,6 +23618,81 @@ def test_stall_judge_escalate_human_adds_needs_human_label_and_increments_counte
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 3
 	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+
+
+def _jq_reserves_label_keyword() -> bool:
+	# jq 1.6 rejects `$label` (reserved until jq 1.7, which Actions runners ship).
+	if not shutil.which("jq"):
+		return False
+	version = subprocess.run(["jq", "--version"], text=True, capture_output=True, check=False).stdout.strip()
+	return re.fullmatch(r"jq-1\.[0-6](\.\d+)?", version) is not None
+
+
+def _run_stall_escalate_human_comment_poller(**overrides):
+	# Issue #9821: shared setup for the escalate_human issue-comment tests.
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:implementing"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 2
+	return _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		enable_stall_human_terminalization="true",
+		mock_stall_judge_json={
+			"action": "escalate_human",
+			"justification": "needs operator",
+			"target_pr": None,
+			"head_ref": None,
+		},
+		old_jq_has_label_compat=True,
+		**overrides,
+	)
+
+
+def test_stall_escalate_human_comment_posted_after_judge_escalation():
+	result = _run_stall_escalate_human_comment_poller()
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+	marker_comments = [
+		c.get("body", "")
+		for c in result["issues"]["10"]["comments"]
+		if "ai:stall-escalate-human:v1" in c.get("body", "")
+	]
+	assert len(marker_comments) == 1, result["issues"]["10"]["comments"]
+	body = marker_comments[0]
+	assert "## Stall recovery: human input needed" in body
+	assert "needs operator" in body
+	assert "#192" in body
+	assert "remove `ai:needs-human`" in body
+	assert "<!-- ai:stall-escalate-human:v1 issue=10 phase=ai:implementing -->" in body
+	assert (
+		"STALL_ESCALATE_HUMAN_COMMENT issue=10 phase=ai:implementing source=stall_judge outcome=posted"
+		in result["stdout"]
+	), result["stdout"]
+
+
+def test_stall_escalate_human_comment_skipped_when_label_unconfirmed():
+	result = _run_stall_escalate_human_comment_poller(fail_issue_edit_for=[10])
+	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
+	assert not any(
+		"ai:stall-escalate-human:v1" in c.get("body", "")
+		for c in result["issues"]["10"]["comments"]
+	)
+	assert "STALL_ESCALATE_HUMAN_COMMENT" not in result["stdout"]
+
+
+def test_stall_escalate_human_comment_write_failure_is_logged_and_nonfatal():
+	result = _run_stall_escalate_human_comment_poller(fail_issue_comment_post_for=[10])
+	assert (
+		"STALL_ESCALATE_HUMAN_COMMENT issue=10 phase=ai:implementing source=stall_judge outcome=write_failed"
+		in result["stdout"]
+	), result["stdout"]
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 3
 
 
 def test_stall_judge_escalate_human_is_downgraded_when_human_terminalization_disabled():
@@ -34753,6 +34867,466 @@ def test_final_merge_auto_resume_ignores_other_failed_projects() -> None:
 	assert result["latest_state"]["status"] == "failed"
 
 
+# ---------------------------------------------------------------------------
+# Issue #9927 (GH_PAT budget, part D): per-cycle PR JSON cache, batched label
+# re-reads and one default-branch read per run.
+# ---------------------------------------------------------------------------
+
+_PD_CACHE_BEGIN = "# shellcheck source=gh_helpers.sh\n"
+_PD_CACHE_END = "# --- ORCH_POLL_PR_JSON_CACHE helpers (issue #9927; end) ---"
+_PD_CYCLE_BEGIN = "# --- ORCH_POLL_CYCLE_SUMMARY helpers (begin) ---"
+_PD_CYCLE_END = "# --- ORCH_POLL_CYCLE_SUMMARY helpers (end) ---"
+
+_PD_FAKE_GH = r'''#!/usr/bin/env python3
+import json, os, re, sys
+args = sys.argv[1:]
+with open(os.environ["FAKE_GH_LOG"], "a", encoding="utf-8") as fh:
+	fh.write(json.dumps(args) + "\n")
+counter_file = os.environ["FAKE_GH_LOG"] + ".n"
+try:
+	n = int(open(counter_file, encoding="utf-8").read().strip() or "0")
+except OSError:
+	n = 0
+n += 1
+open(counter_file, "w", encoding="utf-8").write(str(n))
+repo = os.environ.get("GITHUB_REPOSITORY", "")
+fail = set(filter(None, os.environ.get("FAKE_GH_FAIL", "").split(",")))
+if args[:1] == ["api"]:
+	rest = [a for a in args[1:]]
+	endpoint = next((a for a in rest if not a.startswith("-") and "=" not in a and a not in ("PUT", "PATCH", "GET", "POST", "DELETE")), "")
+	if endpoint == "graphql":
+		if "graphql" in fail:
+			sys.exit(1)
+		query = next((a[len("query="):] for a in rest if a.startswith("query=")), "")
+		omit = set(filter(None, os.environ.get("FAKE_GQL_OMIT", "").split(",")))
+		data = {}
+		for alias, num in re.findall(r"(i\d+): issue\(number: (\d+)\)", query):
+			if num in omit:
+				continue
+			data[alias] = {"number": int(num), "labels": {"nodes": [{"name": "gql-" + num}], "pageInfo": {"hasNextPage": False}}}
+		print(json.dumps({"data": {"repository": data}}))
+		sys.exit(0)
+	m = re.fullmatch(r"repos/" + re.escape(repo) + r"/pulls/(\d+)", endpoint)
+	if m:
+		if "pulls" in fail:
+			print("HTTP 404: Not Found", file=sys.stderr)
+			sys.exit(1)
+		print(json.dumps({"number": int(m.group(1)), "state": "open", "head": {"sha": "sha%d" % n}}))
+		sys.exit(0)
+	m = re.fullmatch(r"repos/" + re.escape(repo) + r"/issues/(\d+)/labels", endpoint)
+	if m:
+		print(json.dumps(["rest-" + m.group(1)]))
+		sys.exit(0)
+	if endpoint == "repos/" + repo:
+		if "repo" in fail:
+			print("HTTP 404: Not Found", file=sys.stderr)
+			sys.exit(1)
+		print("main" if "--jq" in rest else json.dumps({"default_branch": "main"}))
+		sys.exit(0)
+	print("{}")
+	sys.exit(0)
+if args[:2] == ["pr", "view"]:
+	print("{}")
+sys.exit(0)
+'''
+
+
+def _pd_bash_func(script: str, name: str) -> str:
+	match = re.search(r"^" + re.escape(name) + r"\(\)\s*\{?\s*$", script, re.MULTILINE)
+	assert match, name
+	end = script.index("\n}\n", match.start()) + 3
+	return script[match.start():end]
+
+
+def _pd_harness(body: str, tmp: Path, extra_env: dict | None = None) -> dict:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	cycle = script[script.index(_PD_CYCLE_BEGIN):script.index(_PD_CYCLE_END) + len(_PD_CYCLE_END)]
+	cache = script[script.index(_PD_CACHE_BEGIN):script.index(_PD_CACHE_END) + len(_PD_CACHE_END)]
+	funcs = "\n".join(
+		_pd_bash_func(script, name)
+		for name in (
+			"_fetch_pr_json",
+			"_fetch_issue_labels_batch_graphql",
+			"_orch_poll_labels_fill_missing",
+			"_review_run_default_branch",
+		)
+	)
+	bindir = tmp / "bin"
+	bindir.mkdir(exist_ok=True)
+	fake_gh = bindir / "gh"
+	fake_gh.write_text(_PD_FAKE_GH, encoding="utf-8")
+	fake_gh.chmod(0o755)
+	runtime = tmp / "runtime"
+	runtime.mkdir(exist_ok=True)
+	work = tmp / "tmp"
+	work.mkdir(exist_ok=True)
+	log = tmp / "gh.log"
+	harness = tmp / "harness.sh"
+	harness.write_text(
+		"set -euo pipefail\n"
+		f"cd {shlex.quote(str(REPO_ROOT))}\n"
+		+ cycle + "\n" + cache + "\n" + funcs + "\n" + body + "\n",
+		encoding="utf-8",
+	)
+	env = {
+		"PATH": f"{bindir}:/usr/bin:/bin",
+		"TMPDIR": str(work),
+		"RUNTIME_DIR": str(runtime),
+		"GITHUB_REPOSITORY": "acme/widgets",
+		"GITHUB_RUN_ID": "77",
+		"GH_RETRY_MAX_ATTEMPTS": "1",
+		"FAKE_GH_LOG": str(log),
+		"PYTHONDONTWRITEBYTECODE": "1",
+	}
+	env.update(extra_env or {})
+	result = subprocess.run(["bash", str(harness)], capture_output=True, text=True, check=False, env=env, timeout=120)
+	calls = []
+	if log.exists():
+		calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
+	summary = [line for line in result.stdout.splitlines() if line.startswith("ORCH_POLL_CYCLE_SUMMARY")]
+	return {"rc": result.returncode, "stdout": result.stdout, "stderr": result.stderr, "calls": calls, "summary": summary, "work": work}
+
+
+def _pd_pull_calls(calls: list, number: int = 7) -> list:
+	return [c for c in calls if c[:1] == ["api"] and f"repos/acme/widgets/pulls/{number}" in c]
+
+
+def _pd_hits(summary: list) -> dict:
+	assert len(summary) == 1, summary
+	return dict(re.findall(r"cache_hits_(pr_json|default_branch|labels)=(\w+)", summary[0]))
+
+
+def test_fetch_pr_json_cycle_cache_serves_repeat_reads():
+	with tempfile.TemporaryDirectory() as tmp:
+		body = (
+			'[ -d "${ORCH_POLL_PR_JSON_CACHE_DIR}" ]\n'
+			'[ "${GH_RETRY_AFTER_CALL_HOOK}" = "_orch_poll_pr_json_cache_after_gh_call" ]\n'
+			'for i in 1 2 3 4 5; do echo "OUT $(_fetch_pr_json 7 | jq -c .)"; done\n'
+			'echo "OTHER $(_fetch_pr_json 8 | jq -c .number)"\n'
+		)
+		result = _pd_harness(body, Path(tmp))
+		assert result["rc"] == 0, result["stderr"]
+		outs = [line for line in result["stdout"].splitlines() if line.startswith("OUT ")]
+		assert len(outs) == 5 and len(set(outs)) == 1, outs
+		assert json.loads(outs[0][4:])["number"] == 7
+		assert len(_pd_pull_calls(result["calls"], 7)) == 1
+		assert len(_pd_pull_calls(result["calls"], 8)) == 1
+		assert "OTHER 8" in result["stdout"]
+		assert _pd_hits(result["summary"])["pr_json"] == "4"
+		# The EXIT trap removes the cache directory and the hit ledger.
+		assert sorted(p.name for p in result["work"].iterdir()) == []
+
+
+def test_fetch_pr_json_cache_invalidated_by_gh_write():
+	with tempfile.TemporaryDirectory() as tmp:
+		body = (
+			"_fetch_pr_json 7 >/dev/null\n"
+			"_fetch_pr_json 7 >/dev/null\n"  # hit
+			'_invalidate_pr_json_cache "${GITHUB_REPOSITORY}" 7\n'
+			"_fetch_pr_json 7 >/dev/null\n"  # live (2)
+			# Reads through gh_retry keep the cache.
+			'gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/7/comments" --paginate >/dev/null\n'
+			'gh_retry gh api "repos/${GITHUB_REPOSITORY}/commits/abc" -X GET -f per_page=1 >/dev/null\n'
+			"gh_retry gh api graphql -f query='query { viewer { login } }' >/dev/null\n"
+			'gh_retry gh pr view 7 --repo "${GITHUB_REPOSITORY}" --json state >/dev/null\n'
+			"_fetch_pr_json 7 >/dev/null\n"  # hit
+			# Every write through gh_retry flushes, so the next read is live.
+			'gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/7/update-branch" -X PUT -f expected_head_sha=abc >/dev/null\n'
+			"_fetch_pr_json 7 >/dev/null\n"  # live (3)
+			'gh_retry gh pr merge 7 --repo "${GITHUB_REPOSITORY}" --squash --match-head-commit abc >/dev/null\n'
+			"_fetch_pr_json 7 >/dev/null\n"  # live (4)
+			'gh_retry gh issue edit 7 --repo "${GITHUB_REPOSITORY}" --add-label x >/dev/null\n'
+			"_fetch_pr_json 7 >/dev/null\n"  # live (5)
+			'_invalidate_pr_json_cache "${GITHUB_REPOSITORY}"\n'  # flush all
+			"_fetch_pr_json 7 >/dev/null\n"  # live (6)
+		)
+		result = _pd_harness(body, Path(tmp))
+		assert result["rc"] == 0, result["stderr"]
+		assert len(_pd_pull_calls(result["calls"], 7)) == 6
+		assert _pd_hits(result["summary"])["pr_json"] == "2"
+
+
+def test_fetch_pr_json_cache_numbered_write_keeps_other_prs():
+	with tempfile.TemporaryDirectory() as tmp:
+		body = (
+			"_fetch_pr_json 7 >/dev/null\n"  # live (1)
+			"_fetch_pr_json 8 >/dev/null\n"  # live 8 (1)
+			# Writes that name one other issue/PR keep PR 7's entry.
+			'gh_retry gh issue edit 9 --repo "${GITHUB_REPOSITORY}" --add-label x >/dev/null\n'
+			'gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/9/comments" -f body=hi >/dev/null\n'
+			'gh_retry gh pr comment 9 --body hi >/dev/null\n'
+			'_invalidate_pr_json_cache "${GITHUB_REPOSITORY}" 8\n'
+			"_fetch_pr_json 7 >/dev/null\n"  # hit
+			"_fetch_pr_json 8 >/dev/null\n"  # live 8 (2)
+			# A write naming PR 7 invalidates only 7.
+			'gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/7/labels" -f "labels[]=x" >/dev/null\n'
+			"_fetch_pr_json 7 >/dev/null\n"  # live (2)
+			"_fetch_pr_json 8 >/dev/null\n"  # hit
+			# Merges, update-branch and unnumbered writes flush every PR.
+			'gh_retry gh pr merge 9 --repo "${GITHUB_REPOSITORY}" --squash --match-head-commit abc >/dev/null\n'
+			"_fetch_pr_json 7 >/dev/null\n"  # live (3)
+			'gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/9/update-branch" -X PUT -f expected_head_sha=abc >/dev/null\n'
+			"_fetch_pr_json 7 >/dev/null\n"  # live (4)
+			"gh_retry gh label create y >/dev/null\n"
+			"_fetch_pr_json 7 >/dev/null\n"  # live (5)
+		)
+		result = _pd_harness(body, Path(tmp))
+		assert result["rc"] == 0, result["stderr"]
+		assert len(_pd_pull_calls(result["calls"], 7)) == 5
+		assert len(_pd_pull_calls(result["calls"], 8)) == 2
+		assert _pd_hits(result["summary"])["pr_json"] == "2"
+
+
+def test_fetch_pr_json_cache_hook_classifier():
+	reads = [
+		"_safe_gh_jq repos/acme/widgets/pulls/7",
+		"_safe_gh_jq --paginate repos/acme/widgets/issues/7/comments",
+		"gh api repos/acme/widgets/pulls/7",
+		"gh api -X GET repos/acme/widgets/commits -f per_page=1",
+		"gh api --method=get repos/acme/widgets/commits",
+		"gh api graphql -f 'query=query { viewer { login } }'",
+		"gh pr view 7",
+		"gh issue list --state open",
+		"gh run list --limit 1",
+		"gh pr checks 7",
+	]
+	writes = [
+		"gh api -X PUT repos/acme/widgets/pulls/7/update-branch -f expected_head_sha=a",
+		"gh api --method PATCH repos/acme/widgets/pulls/7 -f state=closed",
+		"gh api -XDELETE repos/acme/widgets/issues/7/labels/x",
+		"gh api repos/acme/widgets/issues/7/comments -f body=hi",
+		"gh api graphql -f 'query=mutation { x }'",
+		"gh api -X",
+		"gh pr merge 7 --squash",
+		"gh pr close 7",
+		"gh pr ready 7",
+		"gh issue edit 7 --add-label x",
+		"gh workflow run ci.yml",
+		"gh label create x",
+		"some_other_wrapper repos/acme/widgets",
+	]
+	with tempfile.TemporaryDirectory() as tmp:
+		table = list(enumerate(reads + writes))
+		lines = [
+			f"if _orch_poll_pr_json_cache_gh_call_is_read {cmd}; then echo R{i}; else echo W{i}; fi" for i, cmd in table
+		]
+		result = _pd_harness("\n".join(lines), Path(tmp))
+		assert result["rc"] == 0, result["stderr"]
+		out = result["stdout"].splitlines()
+		for i, cmd in table:
+			expected = f"R{i}" if i < len(reads) else f"W{i}"
+			assert expected in out, cmd
+		assert result["calls"] == []
+
+
+def test_fetch_pr_json_cache_write_failure_falls_back_live():
+	with tempfile.TemporaryDirectory() as tmp:
+		# Entry writes fail (mktemp in the cache dir fails): every read is live.
+		body = (
+			'mktemp() { case "$*" in *orch_poll_pr_json_cache.*) return 1 ;; esac; command mktemp "$@"; }\n'
+			'for i in 1 2 3; do _fetch_pr_json 7 | jq -e ".number == 7" >/dev/null; done\n'
+		)
+		result = _pd_harness(body, Path(tmp))
+		assert result["rc"] == 0, result["stderr"]
+		assert len(_pd_pull_calls(result["calls"], 7)) == 3
+	with tempfile.TemporaryDirectory() as tmp:
+		# TTL=0 is the kill switch: no cache directory, no hook, all live.
+		body = (
+			'[ -z "${ORCH_POLL_PR_JSON_CACHE_DIR}" ] && [ -z "${GH_RETRY_AFTER_CALL_HOOK}" ]\n'
+			"for i in 1 2 3; do _fetch_pr_json 7 >/dev/null; done\n"
+		)
+		result = _pd_harness(body, Path(tmp), {"ORCH_POLL_PR_JSON_CACHE_TTL_SECS": "0"})
+		assert result["rc"] == 0, result["stderr"]
+		assert len(_pd_pull_calls(result["calls"], 7)) == 3
+	with tempfile.TemporaryDirectory() as tmp:
+		# A failed read ({}) is never cached; a non-numeric number bypasses the
+		# cache; a corrupt or symlinked entry is never served.
+		body = (
+			'[ "$(_fetch_pr_json 7)" = "{}" ]\n'
+			'[ "$(_fetch_pr_json 7)" = "{}" ]\n'
+			"ls \"${ORCH_POLL_PR_JSON_CACHE_DIR}\" | grep -c json && exit 9 || true\n"
+		)
+		result = _pd_harness(body, Path(tmp), {"FAKE_GH_FAIL": "pulls"})
+		assert result["rc"] == 0, result["stderr"]
+		assert len(_pd_pull_calls(result["calls"], 7)) == 2
+	with tempfile.TemporaryDirectory() as tmp:
+		body = (
+			"_fetch_pr_json 7 >/dev/null\n"
+			'_entry="${ORCH_POLL_PR_JSON_CACHE_DIR}/acme__widgets__7.json"\n'
+			'[ -f "${_entry}" ]\n'
+			'{ head -n 1 "${_entry}"; echo "not json"; } > "${_entry}.x" && mv -f "${_entry}.x" "${_entry}"\n'
+			"_fetch_pr_json 7 | jq -e '.number == 7' >/dev/null\n"  # corrupt -> live (2), re-stored
+			'_target="$(mktemp)"; cp "${_entry}" "${_target}"; ln -sf "${_target}" "${_entry}"\n'
+			"_fetch_pr_json 7 >/dev/null\n"  # symlink -> live (3)
+			"_fetch_pr_json 07 >/dev/null\n"  # not a cache key -> live
+			"_fetch_pr_json 07 >/dev/null\n"
+		)
+		result = _pd_harness(body, Path(tmp))
+		assert result["rc"] == 0, result["stderr"]
+		assert len(_pd_pull_calls(result["calls"], 7)) == 3
+		assert len(_pd_pull_calls(result["calls"], "07")) == 2
+
+
+def test_gh_retry_call_hook_cannot_change_result():
+	with tempfile.TemporaryDirectory() as tmp:
+		body = (
+			"_noisy_hook() { echo HOOK-OUT; echo HOOK-ERR >&2; return 9; }\n"
+			'GH_RETRY_AFTER_CALL_HOOK=""\n'
+			'a="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/5")"\n'
+			"GH_RETRY_AFTER_CALL_HOOK=_noisy_hook\n"
+			'b="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/5")"\n'
+			"GH_RETRY_AFTER_CALL_HOOK=not_a_function\n"
+			'c="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/5")"\n'
+			'echo "A=$(echo "$a" | jq -c .number) B=$(echo "$b" | jq -c .number) C=$(echo "$c" | jq -c .number)"\n'
+		)
+		result = _pd_harness(body, Path(tmp))
+		assert result["rc"] == 0, result["stderr"]
+		assert "A=5 B=5 C=5" in result["stdout"]
+		assert "HOOK-OUT" not in result["stdout"] and "HOOK-ERR" not in result["stderr"]
+
+
+def test_rb_fresh_read_sites_invalidate_before_fetch():
+	lines = POLLER_SCRIPT.read_text(encoding="utf-8").splitlines()
+	fresh = ["_rb_pr_json_refetched", "_rb_merge_json", "_rb_fm_json", "_rb_recheck_json", "_rb_nofix_json", "_rb_mwf_json"]
+	for var in fresh:
+		idx = [i for i, line in enumerate(lines) if line.strip() == f'{var}="$(_fetch_pr_json "${{RB_PR}}")"']
+		assert len(idx) == 1, var
+		assert lines[idx[0] - 1].strip() == '_invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${RB_PR}" || true', var
+	# The RB update-branch and merge calls also invalidate the PR (defence in
+	# depth; the gh_retry hook already flushed).
+	text = "\n".join(lines)
+	for sha in ("_rb_merge_sha", "_rb_fm_sha"):
+		m = re.search(r'pulls/\$\{RB_PR\}/update-branch" \\\n\s*-X PUT -f expected_head_sha="\$\{' + sha + r'\}" \\\n\s*2>/dev/null; then\n\s*_invalidate_pr_json_cache "\$\{GITHUB_REPOSITORY\}" "\$\{RB_PR\}" \|\| true\n', text)
+		assert m, sha
+	for sha in ("_rb_merge_sha", "_rb_fm_sha", "_rb_nofix_sha"):
+		m = re.search(r'if _orch_squash_merge_bound "\$\{RB_PR\}" "\$\{' + sha + r'\}" auto; then\n\s*_invalidate_pr_json_cache "\$\{GITHUB_REPOSITORY\}" "\$\{RB_PR\}" \|\| true\n', text)
+		assert m, sha
+
+
+def test_unwrapped_pr_writes_followed_by_invalidation():
+	lines = POLLER_SCRIPT.read_text(encoding="utf-8").splitlines()
+	write_re = re.compile(
+		r"^\s*(?:if\s+!?\s*|&&\s*|elif\s+)?(?:git push|gh pr merge|gh api [^\n]*update-branch)\b"
+		r'|^\s*push "https://'  # `git -C <wt> ... push` continuation lines
+	)
+	sites = []
+	for i, line in enumerate(lines):
+		if line.lstrip().startswith("#") or not write_re.search(line):
+			continue
+		sites.append(i)
+		window = "\n".join(lines[i + 1:i + 6])
+		assert "_invalidate_pr_json_cache" in window, (i + 1, line)
+	assert len(sites) >= 13, sites
+	# The PR-body PATCH goes through gh_retry_to_file, which runs no hook.
+	eager = _pd_bash_func("\n".join(lines) + "\n", "update_eager_pr_validation_status_section")
+	assert '_invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${pr_number}" || true' in eager[eager.index("-X PATCH"):]
+	# The standalone-stall mergeability retry loop reads live on every attempt.
+	stall = [i for i, line in enumerate(lines) if line.strip() == '_std_conflict_pr_json_try="$(_fetch_pr_json "${_std_conflict_pr_num_try}")"']
+	assert len(stall) == 1
+	assert lines[stall[0] - 1].strip() == '_invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${_std_conflict_pr_num_try}" || true'
+	# Every gh_retry-wrapped write reaches the hook instead.
+	assert "GH_RETRY_AFTER_CALL_HOOK=\"_orch_poll_pr_json_cache_after_gh_call\"" in "\n".join(lines)
+
+
+def test_rb_label_reread_uses_one_batch_call():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	rb = script[script.index('echo "Re-checking wave status after review-blocked handling..."'):]
+	rb = rb[:rb.index("check-wave-status")]
+	assert "_orch_poll_labels_fill_missing '{}' ${ISSUE_NUMS} ${REISSUED_NUMS}" in rb
+	assert "/labels" not in rb
+	impl = script[script.index('if [ "${IMPL_FAILED_STATE_CHANGED}" = "true" ]; then'):]
+	impl = impl[:impl.index("INVOKE_JUDGE_FOR_STUCK=false")]
+	assert '_orch_poll_labels_fill_missing "${LABELS_JSON}" ${REISSUED_NUMS}' in impl
+	assert "/labels" not in impl
+
+	def gql(calls):
+		return [c for c in calls if c[:2] == ["api", "graphql"]]
+
+	def rest(calls):
+		return [c for c in calls if c[:1] == ["api"] and any(a.endswith("/labels") for a in c)]
+
+	with tempfile.TemporaryDirectory() as tmp:
+		body = "echo \"OUT $(_orch_poll_labels_fill_missing '{}' 11 12 null '' 13 12 abc | jq -cS .)\"\n"
+		result = _pd_harness(body, Path(tmp))
+		assert result["rc"] == 0, result["stderr"]
+		assert len(gql(result["calls"])) == 1 and rest(result["calls"]) == []
+		assert 'OUT {"11":["gql-11"],"12":["gql-12"],"13":["gql-13"]}' in result["stdout"]
+		assert _pd_hits(result["summary"])["labels"] == "3"
+	with tempfile.TemporaryDirectory() as tmp:
+		# Batch misses fall back to REST for those numbers only; keys already
+		# present are not re-read.
+		body = "echo \"OUT $(_orch_poll_labels_fill_missing '{\"10\":[\"keep\"]}' 10 11 12 13 | jq -cS .)\"\n"
+		result = _pd_harness(body, Path(tmp), {"FAKE_GQL_OMIT": "13"})
+		assert result["rc"] == 0, result["stderr"]
+		assert len(gql(result["calls"])) == 1
+		assert [c for c in rest(result["calls"])] == [c for c in result["calls"] if "repos/acme/widgets/issues/13/labels" in c]
+		assert len(rest(result["calls"])) == 1
+		assert 'OUT {"10":["keep"],"11":["gql-11"],"12":["gql-12"],"13":["rest-13"]}' in result["stdout"]
+	with tempfile.TemporaryDirectory() as tmp:
+		# A failed batch falls back to REST per issue (a single missing number
+		# also tries the batch first); an invalid input object is returned
+		# unchanged with no call.
+		body = (
+			"echo \"A $(_orch_poll_labels_fill_missing '{}' 11 12 | jq -cS .)\"\n"
+			"echo \"B $(_orch_poll_labels_fill_missing '{}' 14 | jq -cS .)\"\n"
+			"echo \"C $(_orch_poll_labels_fill_missing 'not-json' 15 16)\"\n"
+		)
+		result = _pd_harness(body, Path(tmp), {"FAKE_GH_FAIL": "graphql"})
+		assert result["rc"] == 0, result["stderr"]
+		assert 'A {"11":["rest-11"],"12":["rest-12"]}' in result["stdout"]
+		assert 'B {"14":["rest-14"]}' in result["stdout"]
+		assert "C not-json" in result["stdout"]
+		assert len(gql(result["calls"])) == 2
+		assert len(rest(result["calls"])) == 3
+	with tempfile.TemporaryDirectory() as tmp:
+		# A single missing number uses the batch and makes no REST read.
+		body = "echo \"OUT $(_orch_poll_labels_fill_missing '{\"10\":[\"keep\"]}' 10 14 | jq -cS .)\"\n"
+		result = _pd_harness(body, Path(tmp))
+		assert result["rc"] == 0, result["stderr"]
+		assert len(gql(result["calls"])) == 1 and rest(result["calls"]) == []
+		assert 'OUT {"10":["keep"],"14":["gql-14"]}' in result["stdout"]
+		assert _pd_hits(result["summary"])["labels"] == "1"
+
+
+def test_default_branch_fetched_once_per_run():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	# No site fetches the default branch inline any more: only the wrapper's
+	# live fallback and the memo itself read repos/<repo>.
+	inline = re.findall(r"""gh_retry _safe_gh_jq "repos/\$\{GITHUB_REPOSITORY\}" --jq '\.default_branch'[^\n]*""", script)
+	assert len(inline) == 3, inline
+	assert sum("|| _odbl_live_rc=$?" in line for line in inline) == 2
+	assert script.count("$(_orch_poll_default_branch_or_live ") >= 17
+
+	def repo_calls(calls):
+		return [c for c in calls if c[:1] == ["api"] and "repos/acme/widgets" in c]
+
+	with tempfile.TemporaryDirectory() as tmp:
+		body = (
+			'a="$(_orch_poll_default_branch_or_live "main")"\n'
+			'b="$(_orch_poll_default_branch_or_live "" quiet)"\n'
+			'c="${DEFAULT_BRANCH_TRACKING:-$(_orch_poll_default_branch_or_live "main")}"\n'
+			'for i in 1 2 3; do d="$(_orch_poll_default_branch_or_live "main")"; done\n'
+			'echo "BR ${a} ${b} ${c} ${d}"\n'
+		)
+		result = _pd_harness(body, Path(tmp))
+		assert result["rc"] == 0, result["stderr"]
+		assert "BR main main main main" in result["stdout"]
+		assert len(repo_calls(result["calls"])) == 1
+		assert _pd_hits(result["summary"])["default_branch"] == "5"
+	with tempfile.TemporaryDirectory() as tmp:
+		# When the read fails, every site keeps its own fallback.
+		body = (
+			'echo "A=[$(_orch_poll_default_branch_or_live "main")]"\n'
+			'echo "B=[$(_orch_poll_default_branch_or_live "" quiet)]"\n'
+		)
+		result = _pd_harness(body, Path(tmp), {"FAKE_GH_FAIL": "repo"})
+		assert result["rc"] == 0, result["stderr"]
+		assert "A=[main]" in result["stdout"] and "B=[]" in result["stdout"]
+		# One live GET per site (no second GET after a failure), and a failed
+		# generic read never records `failed` for the review-run matchers.
+		assert len(repo_calls(result["calls"])) == 2
+		assert list((Path(tmp) / "runtime").glob("review_run_default_branch.*")) == []
+
 
 # --- Issue #9732: standalone attempt_merge waits on the review auto-merge rule ---
 
@@ -35060,6 +35634,7 @@ def _check_stall_merge_final_ci_workflow_is_captured_and_cleared_for_other_paths
 	assert res.returncode == 0, res.stdout + res.stderr
 	assert res.stdout.strip().splitlines()[-1] == "after=unset"
 	assert log.read_text(encoding="utf-8").splitlines() == ["fresh wf=ci.yml", "wait wf=ci.yml", "merge wf="]
+
 
 if __name__ == "__main__":
 	raise SystemExit(main())
