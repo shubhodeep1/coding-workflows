@@ -1807,6 +1807,12 @@ jobs:
             fi
           fi
 
+          # Code-built per-reviewer finding counts (Refs #10058): appended after
+          # the structure check so REQUIRED_HEADINGS stay unchanged; fail open.
+          if ! python3 -I -B scripts/check_workflow_analysis_report.py --insert-reviewer-findings --context "${ANALYSIS_CONTEXT_FILE}" --report "${REPORT_FILE}"; then
+            echo "::warning::Could not add the reviewer findings table to the report; publishing it without the table."
+          fi
+
           echo "report_file=${REPORT_FILE}" >> "$GITHUB_OUTPUT"
           echo "analysis_status=completed" >> "$GITHUB_OUTPUT"
 
