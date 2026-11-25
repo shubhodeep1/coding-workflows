@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cAfter a rollback, neither `auto-release-stable.yml` nor the `promote-main-to-stable.yml` cycle releases until a release is cut deliberately.\u201d\n  expected_change_site: The poller-dispatched `promote` job in `.github/workflows/promote-main-to-stable.yml`, and its `target_sha` dispatch path in `scripts/orchestrate_poll_process.sh`.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The PR diff gates the scheduled cycle through `scripts/promote_main_cycle.sh`, but adds no hold check to the poller-dispatched promote path. The README explicitly says that path is not gated and can release after a rollback. The issue does not defer this behavior to a follow-up. (Severity stated by reviewer: MAJOR. Note: anthropic_claude-sonnet-5_5 explicitly chose not to report this, citing the issue's Approach that deliberate releases are not blocked by the hold, \u00a718.E naming only `promote_main_cycle.sh` as the promote-side reader, and earlier rounds/judge recording it as a documented follow-up.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cAfter a rollback, neither `auto-release-stable.yml` nor the `promote-main-to-stable.yml` cycle releases until a release is cut deliberately.\u201d\n  Expected change site: The poller-dispatched `promote` job in `.github/workflows/promote-main-to-stable.yml`, and its `target_sha` dispatch path in `scripts/orchestrate_poll_process.sh`.\n  Evidence of absence: The PR diff gates the scheduled cycle through `scripts/promote_main_cycle.sh`, but adds no hold check to the poller-dispatched promote path. The README explicitly says that path is not gated and can release after a rollback. The issue does not defer this behavior to a follow-up.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "de96cb837827a6a8d5ca5f378b9b7e233fb484eaa39f6b8d05e19cd2ad5dfa73",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9359,
+    "run_id": "45686009121",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45686009121",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125201632_4bbcd0e135",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9359,
+    "run_id": "45686009121"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-25T20:16:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
