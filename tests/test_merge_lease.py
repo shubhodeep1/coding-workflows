@@ -1680,6 +1680,15 @@ class Wiring(unittest.TestCase):
 		self.assertEqual(run("_merge_lease_idle_seconds", "MERGE_LEASE_IDLE_MINUTES", "0"), "0")
 		self.assertEqual(run("_merge_lease_idle_seconds", "MERGE_LEASE_IDLE_MINUTES", "99999"), "86400")
 
+	def test_tick_steps_get_the_hold_labels(self) -> None:
+		line = f"MERGE_LEASE_HOLD_LABELS: ${{{{ vars.MERGE_LEASE_HOLD_LABELS || '{HOLD_DEFAULT}' }}}}"
+		self.assertEqual(POLL.read_text().count(line), 1)
+		self.assertEqual(CLOSE.read_text().count(line), 1)
+		self.assertEqual(REVIEW.read_text().count("MERGE_LEASE_HOLD_LABELS"), 0)
+		self.assertEqual(SWEEP.read_text().count("MERGE_LEASE_HOLD_LABELS"), 0)
+		self.assertIn(f"${{MERGE_LEASE_HOLD_LABELS-{HOLD_DEFAULT}}}", LIB.read_text())
+		self.assertIn("| `MERGE_LEASE_HOLD_LABELS` |", (REPO_ROOT / "README.md").read_text())
+
 	def test_sweep_skips_lease_waiters_only_while_the_train_releases_them(self) -> None:
 		text = SWEEP.read_text()
 		self.assertIn("reason=merge_lease_wait", text)
@@ -2209,6 +2218,132 @@ class MultiHolderTick(unittest.TestCase):
 		_, out = _p2_tick(st)
 		self.assertNotIn("holders=", out)
 		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=granted reason=first_in_queue queue_len=1\n", out)
+
+
+HOLD_DEFAULT = "ai:needs-human,ai:security-pass-failed,ai:review-blocked,ai:scope-blocked"
+
+
+class LeaseHoldLabels(unittest.TestCase):
+	"""Refs #9969: a hold label (MERGE_LEASE_HOLD_LABELS) makes a waiter or a
+	holder ineligible at once, from the listing the tick already read."""
+
+	def _free(self, hold: str = "ai:needs-human") -> dict:
+		st = {"pulls": [_pull(5), _pull(6)], "labels": {"5": [WAIT, hold], "6": [WAIT]}, "files": {"5": ["a"], "6": ["b"]}}
+		_seed_lease(st, _record(3, state="released", paths=""))
+		_gates_ok(st, 5, 6)
+		return st
+
+	def _holder(self, hold: str = "ai:security-pass-failed") -> dict:
+		st = {"pulls": [_pull(4)], "labels": {"4": [hold]}}
+		_seed_lease(st, _record(4))
+		_head_gate(st, _sha(4))
+		return st
+
+	def _assert_waiter_skipped(self, h: _Harness, out: str) -> None:
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=skipped reason=hold_label\n", out)
+		self.assertIn("MERGE_LEASE pr=6 base=main mode=tick outcome=granted reason=first_in_queue", out)
+		self.assertNotIn(WAIT, h.state["labels"]["5"], "a hold-labelled waiter is unlabelled")
+		self.assertIn("pr=6", h.record())
+		rows = [(r["event"], r["pr"], r["reason"], r["holder"]) for r in _metrics(out)]
+		self.assertIn(("skipped", "5", "hold_label", "-"), rows)
+		self.assertEqual(_skips(h.record()), [], "a grant-time skip is not stored")
+		joined = " ".join(h.calls)
+		self.assertIn(f"{_sha(6)}/statuses", joined)
+		self.assertNotIn(f"{_sha(5)}/statuses", joined, "a hold label costs no API read")
+
+	def test_hold_labelled_waiter_is_skipped_for_the_next_one(self) -> None:
+		h, out = _p2_tick(self._free())
+		self._assert_waiter_skipped(h, out)
+
+	def test_hold_label_match_is_case_insensitive(self) -> None:
+		h, out = _p2_tick(self._free("AI:Needs-Human"))
+		self._assert_waiter_skipped(h, out)
+
+	def test_every_default_hold_label_skips_a_waiter(self) -> None:
+		for hold in HOLD_DEFAULT.split(","):
+			h, out = _p2_tick(self._free(hold))
+			self.assertIn("pr=5 base=main mode=tick outcome=skipped reason=hold_label\n", out, hold)
+
+	def test_hold_labelled_holder_is_revoked(self) -> None:
+		h, out = _p2_tick(self._holder())
+		self.assertRegex(out, r"MERGE_LEASE pr=4 base=main mode=tick outcome=released reason=revoked_hold_label held_s=(\d+|-) merged=false\n")
+		rec = h.record()
+		self.assertIn("state=released", rec)
+		self.assertEqual(_skips(rec), [f"4:{_sha(4)}:revoked_hold_label"])
+		self.assertIn(("released", "revoked_hold_label"), [(r["event"], r["reason"]) for r in _metrics(out)])
+		self.assertNotIn("statuses", " ".join(h.calls), "a hold label costs no API read")
+
+	def test_off_switch_restores_the_old_behaviour(self) -> None:
+		for value in ("none", "", " OFF ", "none,", " NONE , OFF "):
+			env = {"MERGE_LEASE_HOLD_LABELS": value}
+			h, out = _p2_tick(self._free(), env=env)
+			self.assertIn("pr=5 base=main mode=tick outcome=granted", out, repr(value))
+			self.assertNotIn("hold_label", out)
+			h, out = _p2_tick(self._holder(), env=env)
+			self.assertIn("MERGE_LEASE pr=4 base=main mode=tick outcome=held reason=holder_open\n", out, repr(value))
+			self.assertEqual(h.state["refs"][REF], "c" * 40)
+
+	def test_custom_list_replaces_the_default(self) -> None:
+		env = {"MERGE_LEASE_HOLD_LABELS": " custom:hold , "}
+		h, out = _p2_tick(self._free(), env=env)
+		self.assertIn("pr=5 base=main mode=tick outcome=granted", out)
+		h, out = _p2_tick(self._free("custom:hold"), env=env)
+		self._assert_waiter_skipped(h, out)
+
+	def test_the_wait_label_is_never_a_hold_label(self) -> None:
+		h, out = _p2_tick(self._free(), env={"MERGE_LEASE_HOLD_LABELS": f"{WAIT},AI:MERGE-LEASE-WAIT"})
+		self.assertIn("pr=5 base=main mode=tick outcome=granted", out)
+		self.assertNotIn("hold_label", out)
+
+	def test_revocation_switch_off_keeps_a_hold_labelled_holder(self) -> None:
+		h, out = _p2_tick(self._holder(), env={"MERGE_LEASE_REVOKE_ENABLED": "false"})
+		self.assertIn("outcome=held reason=holder_open", out)
+		self.assertNotIn("hold_label", out)
+		self.assertEqual(h.state["refs"][REF], "c" * 40)
+		self.assertFalse(any("-X PATCH" in c or "-X POST" in c for c in h.calls), h.calls)
+
+	def test_revocation_switch_off_grants_a_hold_labelled_waiter(self) -> None:
+		h, out = _p2_tick(self._free(), env={"MERGE_LEASE_REVOKE_ENABLED": "false"})
+		self.assertIn("pr=5 base=main mode=tick outcome=granted", out)
+
+	def test_no_extra_api_calls_without_a_hold_label(self) -> None:
+		def free() -> dict:
+			st = {"pulls": [_pull(5)], "labels": {"5": [WAIT, "other"]}, "files": {"5": ["a"]}}
+			_seed_lease(st, _record(3, state="released", paths=""))
+			_gates_ok(st, 5)
+			return st
+
+		def holder() -> dict:
+			st = {"pulls": [_pull(4)], "labels": {"4": ["other"]}}
+			_seed_lease(st, _record(4))
+			_head_gate(st, _sha(4))
+			return st
+
+		for build in (free, holder):
+			on, out_on = _p2_tick(build())
+			off, out_off = _p2_tick(build(), env={"MERGE_LEASE_HOLD_LABELS": "none"})
+			self.assertNotIn("hold_label", out_on)
+			self.assertEqual(_stable_calls(on.calls), _stable_calls(off.calls), build.__name__)
+
+	def test_multi_holder_revokes_a_hold_labelled_secondary(self) -> None:
+		st = {"pulls": [_pull(4), _pull(6)], "labels": {"6": ["ai:review-blocked"]}}
+		_seed_lease(st, _multi_record([_row(4, ["a.py"]), _row(6, ["b.py"])]))
+		_gates_ok(st, 4, 6)
+		h, out = _p2_tick(st, env={MAXH: "2"})
+		self.assertRegex(out, r"MERGE_LEASE pr=6 base=main mode=tick outcome=released reason=revoked_hold_label held_s=\d+ merged=false\n")
+		self.assertIn("pr=4 base=main mode=tick outcome=held reason=holder_open holders=1", out)
+		self.assertEqual(_skips(h.record()), [f"6:{_sha(6)}:revoked_hold_label"])
+
+	def test_multi_holder_skips_a_hold_labelled_waiter(self) -> None:
+		st = {"pulls": [_pull(5), _pull(6)], "labels": {"5": [WAIT, "ai:scope-blocked"], "6": [WAIT]},
+			"files": {"5": ["a.py"], "6": ["b.py"]}}
+		_seed_lease(st, _record(3, state="released", paths=""))
+		_gates_ok(st, 5, 6)
+		h, out = _p2_tick(st, env={MAXH: "2"})
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=skipped reason=hold_label\n", out)
+		self.assertIn("pr=6 base=main mode=tick outcome=granted reason=first_in_queue", out)
+		self.assertNotIn(WAIT, h.state["labels"]["5"])
+		self.assertEqual(_holders(h.record()) or [_v1_fields(h.record())["pr"]], ["6"])
 
 
 class LeaseQueueSnapshot(unittest.TestCase):
