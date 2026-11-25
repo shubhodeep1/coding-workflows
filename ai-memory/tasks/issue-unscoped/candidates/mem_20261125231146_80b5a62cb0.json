@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/stage_switch_watch.py:367 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The pending-marker quiet-skip in `_valid_markers` (`marker.get(\"pending\") is True and isinstance(name, str) and SWITCH_NAME_RE.fullmatch(name)`) accepts any uppercase identifier, because `SWITCH_NAME_RE` (line 66) does not require the `_ENABLED` suffix that `discover_switches` enforces at line 245; a marker such as `{\"name\": \"INVALID\", \"pending\": true, ...}` is therefore dropped silently on every run, even though discovery can never find a switch by that name.\n  WHY: The documented `STAGE_SWITCH_WATCH off_on_purpose marker for unknown switch ... ignored` warning never fires for such a marker, so the registry misconfiguration stays hidden permanently; neither test_pending_marker_with_malformed_name_still_warns nor test_registry_entries_are_well_formed catches it. Severity disagreement: minimax_minimax-m3 rated it MAJOR, while anthropic_claude-sonnet-5_5, openai_gpt-6-luna and z-ai_glm-5_3-flash rated it NIT. The highest rating is used here. Suggested fix: add `and name.endswith(\"_ENABLED\")` to the condition on line 367.\n- scripts/stage_switch_watch.py:367-370 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: In `_valid_markers`, the `name not in names` check (line 364) runs before the pending quiet-skip, and the `_warn` path for unknown names treats non-string names the same way it treats malformed and well-formed names.\n  WHY: A non-string marker name (e.g. {\"name\": 123, \"pending\": true}) triggers `_warn` correctly, but the reviewer says this is logically inconsistent with how string-named unknown switches that are not pending are handled.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/stage_switch_watch.py:_valid_markers, line 367: if marker.get(\"pending\") is True and isinstance(name, str) and SWITCH_NAME_RE.fullmatch(name): continue | severity=NIT | confidence=3\n  PROBLEM: `SWITCH_NAME_RE` (line 66, ^[A-Z][A-Z0-9_]*$) does not require the _ENABLED suffix, but discover_switches does. A pending marker with no suffix, such as {\"name\": \"FINAL_CI_FAILED_REDISPATCH\", \"pending\": true, ...}, is therefore dropped without the \"off_on_purpose marker for unknown switch ... ignored\" warning. This goes against the code's own comment on lines 365-366.\n  WHY: The marker is dropped on every daily evaluate run with no log line, so the off-on-purpose suppression never applies and the operator is never warned. tests/test_stage_switch_registry.py does not catch it because _undiscovered_without_pending accepts any pending: true marker. Fix: add `and name.endswith(\"_ENABLED\")` on line 367 and add a no-suffix case to test_pending_marker_with_malformed_name_still_warns.\n- HARDENING_SUGGESTION: scripts/stage_switch_watch.py, _valid_markers, line 367. This is the same issue as above. Fix: add the `_ENABLED` check plus a {\"name\": \"NO_SUFFIX\", \"pending\": true, ...} fixture, with the expected warning count raised to 4. Estimated lines changed: 3. HARDENING_RISK_SCORE: 1.\n- TASK COMPLETENESS: NONE. The reviewer checked G1\u2013G5 and the Tests list of issue #10127. Watching workflow-templates/ is a non-goal.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/stage_switch_watch.py:lines 367-370 | severity=NIT | confidence=3\n  PROBLEM: In _valid_markers, `name not in names` is checked (line 364) before the pending quiet-skip, and the `_warn` path for unknown names does not tell malformed names apart from well-formed unknown names when the name is not a string.\n  WHY: A marker such as {\"name\": 123, \"pending\": true} triggers `_warn`. That is correct, but it is logically inconsistent with how string-named unknown switches that are not pending are handled.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/stage_switch_watch.py:lines 66, 367 (`SWITCH_NAME_RE` and the `_valid_markers` quiet-skip check) | severity=MAJOR | confidence=4\n  PROBLEM: The quiet-skip check only matches `^[A-Z][A-Z0-9_]*$` and does not require `name.endswith(\"_ENABLED\")`, which `discover_switches` enforces at line 245. `load_registry` does not validate the marker name's shape, so `{\"name\": \"INVALID\", \"pending\": true, \"until\": \"2099-01-01\", \"reason\": \"r\"}` passes and is silently dropped, contradicting the README \"Off on purpose\" bullet. test_pending_marker_with_malformed_name_still_warns does not cover this case.\n  WHY: An operator typo or rename (e.g. dropping `_ENABLED`) is silently ignored on every daily run instead of producing the documented `STAGE_SWITCH_WATCH off_on_purpose marker for unknown switch 'INVALID' ignored` warning, so registry misconfigurations go unnoticed.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/stage_switch_watch.py:367, `_valid_markers` | severity=NIT | confidence=4\n  PROBLEM: The quiet-skip check accepts any uppercase identifier, not just a stage-switch name ending in `_ENABLED`.\n  WHY: A marker such as `{\"name\":\"INVALID\",\"pending\":true,...}` passes `SWITCH_NAME_RE.fullmatch` and is silently discarded, so the daily watch hides the invalid marker instead of warning about it.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/stage_switch_watch.py:line 367 (quiet-skip in `_valid_markers`), contrasted with line 245 (`discover_switches` name filter) | severity=NIT | confidence=4\n  PROBLEM: The quiet-skip for `pending: true` markers accepts any uppercase identifier, but discovery always requires the `_ENABLED` suffix (line 245). A marker such as `{\"name\": \"INVALID\", \"pending\": true, \"until\": \"2099-01-01\", \"reason\": \"r\"}` takes the quiet `continue` forever, with no warning and no `STAGE_SWITCH_*` signal. `tests/test_stage_switch_registry.py::test_registry_entries_are_well_formed` also passes for such a marker.\n  WHY: On every daily `evaluate` run the marker is skipped without a log line. The README instruction \"remove it once its pull request merges or closes\" can never trigger for a name that cannot be discovered, so the malformed entry stays hidden permanently.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "da5f60efe93062044b92a1b703d29ac8a935e55417d9a11231a33d9ba4178d55",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10130,
+    "run_id": "45711486659",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45711486659",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125231146_80b5a62cb0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10130,
+    "run_id": "45711486659"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T23:11:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
