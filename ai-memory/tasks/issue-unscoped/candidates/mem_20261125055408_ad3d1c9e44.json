@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Every step `env:` block that passes any `MERGE_LEASE_*` setting, or that runs a script able to write the lease, passes the full set,\" and the contract test must prevent a new step from missing settings.\n  expected_change_site: `tests/test_merge_lease_env_contract.py`, `collect_env_blocks()` and `violations()`.\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: `collect_env_blocks()` yields env mappings but does not retain or inspect step `run` commands (lines 70\u201396), `violations()` skips an env block unless it contains a lease key or `MERGE_BASE_FRESHNESS_ENABLED` (lines 150\u2013152), so steps that invoke lease-writing code via run: without these markers are not inspected and a new such step passes the contract test without the required settings\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Every step `env:` block that passes any `MERGE_LEASE_*` setting, or that runs a script able to write the lease, passes the full set.\"\n  Expected change site: tests/test_merge_lease_env_contract.py, violations()\n  Evidence of absence: The current violations() implementation skips any env: block that does not directly contain a MERGE_LEASE_* key or MERGE_BASE_FRESHNESS_ENABLED. Steps that invoke lease-writing code via run: without these markers are not inspected, meaning the contract test cannot prevent a future regression where such a step misses these settings.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Every step `env:` block that passes any `MERGE_LEASE_*` setting, or that runs a script able to write the lease, passes the full set,\" and the contract test must prevent a new step from missing settings.\n  Expected change site: `tests/test_merge_lease_env_contract.py`, `collect_env_blocks()` and `violations()`.\n  Evidence of absence: `collect_env_blocks()` yields env mappings but does not retain or inspect step `run` commands (lines 70\u201396). `violations()` skips an env block unless it contains a lease key or `MERGE_BASE_FRESHNESS_ENABLED` (lines 150\u2013152). A new step that runs lease-writing code without either marker therefore passes the contract test without the required settings.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "39fba7a03d4f220b4403e6589de83b591ff91ac553e3ffd78d1196a64239c110",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10081,
+    "run_id": "45543705201",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45543705201",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125055408_ad3d1c9e44",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10081,
+    "run_id": "45543705201"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T05:54:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
