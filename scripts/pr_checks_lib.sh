@@ -2806,6 +2806,12 @@ _merge_lease_split_soft()
 # eligibility, the skip list and `skip=` writes, so the record is byte-for-byte
 # the old format), MERGE_LEASE_IDLE_MINUTES (default 60, 0-1440; 0 turns the
 # idle test off). Every read failure is eligible (fail-open).
+# Hold labels (Refs #9969): a PR carrying a label listed in
+# MERGE_LEASE_HOLD_LABELS (default ai:needs-human,ai:security-pass-failed,
+# ai:review-blocked,ai:scope-blocked; comma-separated, case-insensitive exact
+# names; empty, none or off turns the test off; the wait label is never a
+# hold label) is ineligible at once (reason hold_label, revoked_hold_label
+# for a holder). Labels come from the open-PR listing already read; no call.
 # Forward-merge priority (merge-lease-parallel Phase 3, Refs #9781): the
 # order is a priority label or a same-repository head ref starting with an
 # entry of MERGE_LEASE_PRIORITY_HEAD_PREFIXES, then the lowest PR number.
@@ -3671,13 +3677,59 @@ _merge_lease_queue_order()
 	printf '%s' "${MERGE_LEASE_QUEUE_PRS}"
 }
 
-# _merge_lease_pr_eligible <pr> <head_sha> <title> <draft> [<base>] [<trusted_login>] [<hold_since_epoch>]
+# _merge_lease_hold_labels
+# Prints the configured hold labels (Refs #9969), one per line:
+# MERGE_LEASE_HOLD_LABELS (unset gives the default list; empty, none or off
+# prints nothing), split on commas and trimmed. An entry equal to the wait
+# label is dropped, so a misconfiguration never makes every waiter
+# ineligible. A `none`/`off` entry inside a list is dropped too (so `none,`
+# prints nothing; `off,<label>` keeps <label>). No API call.
+_merge_lease_hold_labels()
+{
+	local hold_raw hold_entry hold_wait_lc hold_entry_lc
+	local -a hold_entries=()
+	hold_raw="${MERGE_LEASE_HOLD_LABELS-ai:needs-human,ai:security-pass-failed,ai:review-blocked,ai:scope-blocked}"
+	hold_entry_lc="$(printf '%s' "${hold_raw}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+	case "${hold_entry_lc}" in
+		''|none|off) return 0 ;;
+	esac
+	hold_wait_lc="$(printf '%s' "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" | tr '[:upper:]' '[:lower:]')"
+	IFS=',' read -r -a hold_entries <<< "${hold_raw}"
+	for hold_entry in ${hold_entries[@]+"${hold_entries[@]}"}; do
+		hold_entry="${hold_entry#"${hold_entry%%[![:space:]]*}"}"
+		hold_entry="${hold_entry%"${hold_entry##*[![:space:]]}"}"
+		[ -n "${hold_entry}" ] || continue
+		hold_entry_lc="$(printf '%s' "${hold_entry}" | tr '[:upper:]' '[:lower:]')"
+		# A stray off token inside a list (`none,`) is never a label name.
+		case "${hold_entry_lc}" in none|off) continue ;; esac
+		[ "${hold_entry_lc}" != "${hold_wait_lc}" ] || continue
+		printf '%s\n' "${hold_entry}"
+	done
+}
+
+# _merge_lease_has_hold_label <labels_nl>
+# 0 when a line of <labels_nl> (newline-separated label names) matches a
+# configured hold label exactly (fixed-string, whole-line, case-insensitive:
+# GitHub label names are case-insensitive), 1 otherwise or when the test is
+# off. Label names are never printed, logged or evaluated. No API call.
+_merge_lease_has_hold_label()
+{
+	local hold_have="${1:-}" hold_list
+	[ -n "${hold_have}" ] || return 1
+	hold_list="$(_merge_lease_hold_labels)"
+	[ -n "${hold_list}" ] || return 1
+	printf '%s\n' "${hold_have}" | grep -Fxiq -f <(printf '%s\n' "${hold_list}") 2>/dev/null
+}
+
+# _merge_lease_pr_eligible <pr> <head_sha> <title> <draft> [<base>] [<trusted_login>] [<hold_since_epoch>] [<labels_nl>]
 # Phase 2 (Refs #9781): 0 when the PR can still merge or eligibility cannot
 # be read (fail-open), 1 when it cannot (MERGE_LEASE_INELIGIBLE_REASON =
-# draft|skip_ai|no_head_gate|final_ci_failed). Also sets MERGE_LEASE_CI_ACTIVE
+# draft|skip_ai|hold_label|no_head_gate|final_ci_failed). Also sets MERGE_LEASE_CI_ACTIVE
 # (true|false|unknown): whether a CI run or required check is still running.
 # Checks, cheapest first: draft, a `[skip ai]` title (fixed-string,
-# case-insensitive; the title is never logged or evaluated), the newest
+# case-insensitive; the title is never logged or evaluated), a hold label in
+# <labels_nl> (newline-separated names from the listing; see
+# _merge_lease_has_hold_label, Refs #9969; omitted or empty skips it), the newest
 # ai-review/head-gate status on the head (counted only when <trusted_login>
 # created it; failure/error is ineligible; absent or pending is ineligible
 # for a waiter, and for a holder (<hold_since_epoch> given) only once
@@ -3709,13 +3761,14 @@ _merge_lease_queue_order()
 # read as `success` by <login>; every fail-open return leaves it false, so a
 # soft skip entry (#9983 G5) is cleared only on a confirmed success.
 # API: 1 statuses read plus the reads of _pr_wait_for_required_checks; none
-# for draft or `[skip ai]`, or without a valid login or head; +1
+# for draft, `[skip ai]` or a hold label, or without a valid login or head; +1
 # actions/runs?head_sha read for a holder past the grace with a pending
 # head-gate (that path makes no required-checks read). The judge status is
 # read from the same statuses response (no extra call).
 _merge_lease_pr_eligible()
 {
 	local elig_pr="$1" elig_head="$2" elig_title="$3" elig_draft="$4" elig_base="${5:-}" elig_login="${6:-}" elig_since="${7:-}"
+	local elig_labels="${8:-}"
 	local elig_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" elig_statuses elig_gate elig_idle elig_now elig_rc=0
 	local elig_run_names
 	MERGE_LEASE_INELIGIBLE_REASON=""
@@ -3729,6 +3782,10 @@ _merge_lease_pr_eligible()
 	fi
 	if printf '%s' "${elig_title}" | grep -Fqi -- '[skip ai]'; then
 		MERGE_LEASE_INELIGIBLE_REASON="skip_ai"
+		return 1
+	fi
+	if [ -n "${elig_labels}" ] && _merge_lease_has_hold_label "${elig_labels}"; then
+		MERGE_LEASE_INELIGIBLE_REASON="hold_label"
 		return 1
 	fi
 	elig_login="$(printf '%s' "${elig_login}" | tr '[:upper:]' '[:lower:]')"
