@@ -22594,6 +22594,10 @@ _post_stall_escalate_human_comment() {
     return 0
   fi
   [ -n "${reason}" ] || reason="Stall recovery ran out of automatic actions for this phase."
+  # Bound the model-supplied reason so an oversized justification cannot
+  # push the body past GitHub's comment size limit (truncate before
+  # neutralising so a split delimiter is still caught below).
+  reason="${reason:0:2000}"
   # The judge justification is model output: neutralise HTML comment
   # delimiters so it cannot forge ai:* markers that other pollers read.
   # (No '&' in the replacements: bash 5.2 patsub_replacement expands it.)
