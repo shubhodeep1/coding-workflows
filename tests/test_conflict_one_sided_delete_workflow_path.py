@@ -503,3 +503,15 @@ def test_fingerprint_base_deletion_glob_path_is_literal() -> None:
 		result = _run_verifier(repo, tmp, fp_path)
 		assert result.returncode == 1, result.stdout + result.stderr
 		assert SUPERSEDED_MARKER not in result.stderr
+
+
+def test_fingerprint_base_deletion_invalid_flag_warns_without_missing_file() -> None:
+	"""An invalid off-switch value warns once even when every must_contain file is present."""
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp, repo = _setup(tmp_name)
+		fp_path = _write_fingerprints(tmp, BEFORE_ALL_COMMITS)
+		flag = "INTEGRATION_FINGERPRINT_BASE_DELETION_SUPERSEDE_ENABLED"
+		result = _run_verifier(repo, tmp, fp_path, extra_env={flag: "flase"})
+		assert result.returncode == 0, result.stdout + result.stderr
+		assert SUPERSEDED_MARKER not in result.stderr
+		assert (result.stdout + result.stderr).count(INVALID_FLAG_WARNING) == 1, result.stderr

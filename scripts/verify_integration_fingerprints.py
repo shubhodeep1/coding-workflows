@@ -1614,7 +1614,8 @@ def _evaluate_fp_state(
 				deletion_sha, base_label = base_deletion
 				print(
 					f"::warning::FINGERPRINT_BASE_DELETION_SUPERSEDED_V1 "
-					f"issue=#{issue_num} pr=#{pr_num} file={_sanitize_log_label(str(path))} "
+					f"issue=#{_sanitize_log_label(str(issue_num))} pr=#{_sanitize_log_label(str(pr_num))} "
+					f"file={_sanitize_log_label(str(path))} "
 					f"commit={deletion_sha[:12]} base_ref={base_label}",
 					flush=True,
 					file=sys.stderr,
@@ -2796,6 +2797,10 @@ def main(argv: list[str] | None = None) -> int:
 			args = args[1:]
 			continue
 		break
+
+	# Evaluate the #10120 off switch once up front so an invalid value logs its
+	# one-time warning even in runs where no must_contain file is missing.
+	_base_deletion_supersede_enabled()
 
 	if verification_tier not in VERIFICATION_TIERS:
 		print(
