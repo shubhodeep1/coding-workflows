@@ -6035,6 +6035,138 @@ def test_nothing_to_implement_close_failure_keeps_the_wait_and_posts_the_marker_
 	assert _closed_completed(state)
 
 
+# #10062 (Phase 8b): the plan run's verify (scripts/plan_nothing_to_implement_verify.sh)
+# posted its trusted success-no-op marker but could not close the issue; the judge
+# closes it from that marker without a fix-up.
+VERIFIED_NOOP_MARKER = "<!-- ai:implement-success-noop:v1 issue=7 -->"
+VERIFIED_CLOSE_MARKER = "<!-- ai:unblock-nothing-to-implement:v1 item=7 verified -->"
+# pnti_note_failed_pass in scripts/plan_nothing_to_implement_verify.sh, which plan.yml writes into the block.
+VERIFIED_PASS_NOTE = "Verify: 1 test(s) passed on the planning ref, but the issue could not be closed automatically; the block stays."
+
+
+def _verified_noop_comments(marker_body: str | None = None, marker_login: str = BOT, extra: list | None = None) -> list:
+	body = marker_body if marker_body is not None else "Already implemented - verified.\n\n- `tests/test_x.py`\n\n" + VERIFIED_NOOP_MARKER + "\n"
+	return [
+		_comment(body, marker_login, "2026-10-04T08:59:00Z"),
+		_comment(NOTHING_TO_IMPLEMENT_BLOCK + "\n\n" + VERIFIED_PASS_NOTE, BOT, "2026-10-04T09:00:00Z"),
+		*(extra or []),
+	]
+
+
+def _verified_judge(tmp_path: Path, item: dict = ISSUE, comments: list | None = None, **env):
+	import os
+
+	saved = os.environ.pop("PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED", None)
+	try:
+		return _judge(tmp_path, item, comments=_verified_noop_comments() if comments is None else comments, verdict=RETRY_VERDICT, **env)
+	finally:
+		if saved is not None:
+			os.environ["PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED"] = saved
+
+
+def test_verified_noop_marker_closes_a_nothing_to_implement_issue_without_a_fixup(tmp_path: Path) -> None:
+	# The switch is unset here, so this also covers its default (on).
+	result, state = _verified_judge(tmp_path)
+	assert "fixup=none op=nothing_to_implement outcome=closed reason=verified_noop" in result.stdout, result.stdout + result.stderr
+	assert not any(comment["body"].startswith(("/answer", "/approved")) for comment in state["comments"])
+	assert not any("verdict=retry_budget" in comment["body"] for comment in state["comments"])
+	assert state["comments"][-1]["body"].endswith(VERIFIED_CLOSE_MARKER)
+	assert "ai:implement-success-noop:v1" in state["comments"][-1]["body"]
+	assert state["labels_added"] == [["repos/o/r/issues/7/labels", "ai:closed"]]
+	assert _closed_completed(state)
+
+
+@pytest.mark.parametrize("case", ["verify_false_padded", "verify_off", "close_disabled", "untrusted_marker", "other_issue",
+	"marker_not_last", "stale_marker", "single_block_failed_verify", "single_block_no_note", "note_in_reason_only", "newer_plan", "project_item", "no_marker"])
+def test_verified_noop_close_keeps_today_otherwise(tmp_path: Path, case: str) -> None:
+	item, env, comments = ISSUE, {}, _verified_noop_comments()
+	if case == "verify_false_padded":
+		env["PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED"] = " False "
+	elif case == "verify_off":
+		env["PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED"] = "off"
+	elif case == "close_disabled":
+		env["UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED"] = "false"
+	elif case == "untrusted_marker":
+		comments = _verified_noop_comments(marker_login="someone-else")
+	elif case == "other_issue":
+		comments = _verified_noop_comments("Already implemented.\n\n<!-- ai:implement-success-noop:v1 issue=50 -->")
+	elif case == "marker_not_last":
+		comments = _verified_noop_comments("Already implemented.\n\n" + VERIFIED_NOOP_MARKER + "\n\nRun: https://github.com/o/r/actions/runs/2")
+	elif case == "stale_marker":
+		# A later plan run blocked again (its verify failed): the old marker is stale.
+		comments = _verified_noop_comments(extra=[_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T10:00:00Z")])
+	elif case in ("single_block_failed_verify", "single_block_no_note"):
+		# An older trusted marker (e.g. implement.yml Guard 0, before a reopen) does not vouch for the
+		# only block when that block's verify failed or left no pass note.
+		note = "\n\nVerify: 1 listed test(s) did not all pass on the planning ref (failed); the block stays." if case == "single_block_failed_verify" else ""
+		comments = [
+			_comment("Already implemented.\n\n" + VERIFIED_NOOP_MARKER, BOT, "2026-09-01T08:00:00Z"),
+			_comment(NOTHING_TO_IMPLEMENT_BLOCK + note, BOT, "2026-10-04T09:00:00Z"),
+		]
+	elif case == "note_in_reason_only":
+		# The pass phrase only inside other (model-derived) text, not on its own `Verify: ` line.
+		comments = _verified_noop_comments()
+		comments[1] = _comment(NOTHING_TO_IMPLEMENT_BLOCK + "\n\nNote: tests passed on the planning ref, but the issue could not be closed automatically.", BOT, "2026-10-04T09:00:00Z")
+	elif case == "newer_plan":
+		comments = _verified_noop_comments(extra=[_comment("Implementation Plan\n\n1. Do the thing.", BOT, "2026-10-04T10:00:00Z")])
+	elif case == "project_item":
+		item = dict(ISSUE, body="- Tracking issue: #40", labels=ISSUE["labels"] + [{"name": "ai:orchestrator-managed"}])
+		env["FAKE_GH_PROJECT_COMMENTS"] = _project_comments_for_item(7)
+	else:
+		comments = [_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z")]
+	result, state = _verified_judge(tmp_path, item, comments, **env)
+	assert "op=nothing_to_implement" not in result.stdout, result.stdout
+	assert not _closed_completed(state)
+	assert not any(comment["body"].endswith(VERIFIED_CLOSE_MARKER) for comment in state["comments"])
+	# Today's flow: the model verdict is recorded as usual.
+	assert any("verdict=retry_budget" in comment["body"] for comment in state["comments"]), result.stdout + result.stderr
+
+
+def test_verified_noop_close_failure_retries_without_reposting(tmp_path: Path) -> None:
+	result, state = _verified_judge(tmp_path, FAKE_GH_FAIL_CLOSE="1")
+	assert "fixup=none op=nothing_to_implement outcome=skip reason=close_failed" in result.stdout, result.stdout + result.stderr
+	assert not any(comment["body"].startswith(("/answer", "/approved")) for comment in state["comments"])
+	assert not any("verdict=retry_budget" in comment["body"] for comment in state["comments"])
+	assert sum(comment["body"].endswith(VERIFIED_CLOSE_MARKER) for comment in state["comments"]) == 1
+	# The next run finds its own marker and does not post it again.
+	prior = _verified_noop_comments(extra=[_comment("Closing as completed.\n\n" + VERIFIED_CLOSE_MARKER, BOT, "2026-10-04T11:30:00Z")])
+	result, state = _verified_judge(tmp_path, comments=prior)
+	assert "fixup=none op=nothing_to_implement outcome=closed reason=verified_noop" in result.stdout, result.stdout + result.stderr
+	assert not any(comment["body"].endswith(VERIFIED_CLOSE_MARKER) for comment in state["comments"])
+	assert _closed_completed(state)
+
+
+@pytest.mark.parametrize("gate", ["on", "q129_off"])
+def test_verified_noop_close_skips_check_triage_issues(tmp_path: Path, gate: str) -> None:
+	# #10062: planning-ref tests are not evidence that a check-triage issue's failing
+	# check passes, so the verified close leaves it to Q129 and the #9659 note, even
+	# when CHECK_TRIAGE_RESOLVED_GATE_ENABLED is off.
+	import os
+
+	env = {"FAKE_TRIAGE_STATUS": "unverified"}
+	if gate == "q129_off":
+		env["CHECK_TRIAGE_RESOLVED_GATE_ENABLED"] = "false"
+	saved = os.environ.pop("PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED", None)
+	try:
+		result, state = _judge_triage_superseded(tmp_path, comments=_verified_noop_comments(), **env)
+	finally:
+		if saved is not None:
+			os.environ["PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED"] = saved
+	assert "op=nothing_to_implement" not in result.stdout, result.stdout + result.stderr
+	assert not _closed_completed(state)
+	assert not any(comment["body"].endswith(VERIFIED_CLOSE_MARKER) for comment in state["comments"])
+
+
+def test_unblock_workflow_forwards_plan_nothing_to_implement_verify_switch() -> None:
+	# #10062: the Phase 8 rollback variable must reach scripts/unblock_judge.sh, which defaults it on.
+	# Parsed as text (no PyYAML) so the check also runs in the credential-free pre-push container.
+	text = (ROOT / ".github/workflows/unblock_judge.yml").read_text(encoding="utf-8")
+	step = text.split("      - name: Judge the blocked item\n", 1)[1].split("\n      - ", 1)[0]
+	env_block = step.split("\n        env:\n", 1)[1]
+	assert "          PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED: ${{ vars.PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED || 'true' }}\n" in env_block
+	assert '"${PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED:-true}"' in (ROOT / "scripts/unblock_judge.sh").read_text(encoding="utf-8")
+
+
 # #8530: a heal issue whose fix-up merged into the default branch and changed
 # every file the issue lists under Affected files is closed as completed when
 # the issue targets another branch; `/answer` would re-plan the same change on
