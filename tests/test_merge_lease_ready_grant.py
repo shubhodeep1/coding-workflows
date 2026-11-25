@@ -299,6 +299,8 @@ class ConflictRelease(unittest.TestCase):
 			for winner_record, label_kept in ((_record(4, state="released", paths="", skips=conflict_skip), True),
 					(_record(5, acquired=now, updated=now, skips=conflict_skip), True),
 					(_record(4, state="released", paths="", skips=[f"4:{_sha(4)}:expired"]), False),
+					# A released_conflict entry for an older head does not keep it.
+					(_record(4, state="released", paths="", skips=[f"4:{'e' * 40}:released_conflict", f"4:{_sha(4)}:expired"]), False),
 					(_record(4, state="released", paths=""), False),
 					(_record(5, acquired=now, updated=now), False),
 					(_record(4, acquired=now, updated=now), False)):
