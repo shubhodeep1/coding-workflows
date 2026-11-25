@@ -35616,6 +35616,22 @@ def _delivered_warnings(result: dict) -> list[dict]:
 	]
 
 
+def _assert_wave_judge_ran(result: dict, case: object = None) -> None:
+	"""The wave judge was called and its verdict parsed, not only prompted.
+
+	judge_prompt.txt is written before the over-cap skip and the isolation
+	skip, so its existence alone does not prove the judge ran. A parsed
+	verdict is what sets judge_last_fingerprint (from the mock justification).
+	"""
+	combined = result["stdout"] + result["stderr"]
+	assert "Judge attempt 1/" in combined, case
+	assert "Wave judge isolation unavailable" not in combined, case
+	assert "Judge failed for tracking issue" not in combined, case
+	assert "Could not parse judge output" not in combined, case
+	state = result["latest_state"] or result.get("state_on_disk") or {}
+	assert state.get("judge_last_fingerprint"), case
+
+
 def test_completion_status_closed_as_delivered_warns_once() -> None:
 	first = _run_closed_kind_poller(_closed_kind_state([10]), {10: "completed"}, {10: ["ai:closed"]})
 	comment = _completion_comment(first)
@@ -35646,6 +35662,8 @@ def test_completion_status_closed_as_delivered_warns_once() -> None:
 	# The judge path is unchanged: same invocation as the blocking case.
 	blocking = _run_closed_kind_poller(_closed_kind_state([10]), {10: "not_planned"}, {10: ["ai:closed"]})
 	assert first["judge_prompt"]
+	_assert_wave_judge_ran(first)
+	_assert_wave_judge_ran(blocking)
 	assert bool(first["judge_prompt"]) == bool(blocking["judge_prompt"])
 	assert first["latest_state"].get("judge_cycle") == blocking["latest_state"].get("judge_cycle")
 
@@ -35667,6 +35685,7 @@ def test_completion_status_closed_not_planned_keeps_critical() -> None:
 		assert result["latest_state"].get("completion_status_failure_alert_sent") is True
 		# The judge is invoked as today for every blocking variant.
 		assert result["judge_prompt"], (reasons, labels)
+		_assert_wave_judge_ran(result, (reasons, labels))
 
 
 def test_completion_status_mixed_closed_kinds_keeps_critical() -> None:
@@ -35685,6 +35704,7 @@ def test_completion_status_mixed_closed_kinds_keeps_critical() -> None:
 	assert _delivered_warnings(result) == []
 	# The judge is invoked as today for the mixed case too.
 	assert result["judge_prompt"]
+	_assert_wave_judge_ran(result)
 
 
 if __name__ == "__main__":
