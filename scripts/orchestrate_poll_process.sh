@@ -35106,8 +35106,14 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     _csc_delivered_new_json="$(jq -cn --argjson cur "${_csc_delivered_nums_json:-[]}" --argjson seen "${_csc_delivered_alerted_json}" '$cur - $seen' 2>/dev/null || echo '[]')"
     _csc_delivered_csv="$(printf '%s' "${_csc_delivered_nums_json:-[]}" | jq -r 'map(tostring) | join(",")' 2>/dev/null || echo "")"
     if [ "$(printf '%s' "${_csc_delivered_new_json}" | jq -r 'length' 2>/dev/null || echo 0)" -gt 0 ]; then
-      _csc_delivered_new_refs="$(printf '%s' "${_csc_delivered_new_json}" | jq -r 'map("#" + tostring) | join(", ")' 2>/dev/null || echo "")"
-      tg_notify "Project #${TRACKING_NUM}: wave item(s) ${_csc_delivered_new_refs} closed as already delivered (closed as completed, ai:closed, no failure label) without a merged PR. The project judge will decide whether the project can complete; see the pinned 'Completion status' comment." "WARNING"
+      # One WARNING per project and item (issue #10059 Goals); the dedupe
+      # array below still records every newly alerted item in one write.
+      _csc_delivered_new_refs="$(printf '%s' "${_csc_delivered_new_json}" | jq -r '.[] | tostring' 2>/dev/null | grep -xE '[0-9]+' || true)"
+      while IFS= read -r _csc_delivered_item; do
+        [ -n "${_csc_delivered_item}" ] || continue
+        tg_notify "Project #${TRACKING_NUM}: wave item #${_csc_delivered_item} closed as already delivered (closed as completed, ai:closed, no failure label) without a merged PR. The project judge will decide whether the project can complete; see the pinned 'Completion status' comment." "WARNING" </dev/null
+      done <<< "${_csc_delivered_new_refs}"
+      unset _csc_delivered_item
       if jq --argjson add "${_csc_delivered_new_json}" '.completion_status_delivered_closed_alerted = (((.completion_status_delivered_closed_alerted // []) | if type == "array" then [.[] | select(type == "number")] else [] end) + $add | unique)' "${STATE_FILE}" > "${STATE_FILE}.tmp" \
         && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
         COMPLETION_STATUS_STATE_CHANGED="true"

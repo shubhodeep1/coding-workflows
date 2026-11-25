@@ -35707,5 +35707,25 @@ def test_completion_status_mixed_closed_kinds_keeps_critical() -> None:
 	_assert_wave_judge_ran(result)
 
 
+def test_completion_status_two_delivered_items_warn_once_each() -> None:
+	"""One WARNING per project and item, not one combined message per tick."""
+	result = _run_closed_kind_poller(
+		_closed_kind_state([10, 11]),
+		{10: "completed", 11: "completed"},
+		{10: ["ai:closed"], 11: ["ai:closed"]},
+	)
+	comment = _completion_comment(result)
+	assert "**Wave issues closed as already delivered:**" in comment
+	assert "- #10: closed (" in comment and "- #11: closed (" in comment
+	assert _closed_without_merge_criticals(result) == []
+	warnings = _delivered_warnings(result)
+	assert len(warnings) == 2
+	assert ["#10" in w["message"] for w in warnings] == [True, False]
+	assert ["#11" in w["message"] for w in warnings] == [False, True]
+	assert result["latest_state"].get("completion_status_delivered_closed_alerted") == [10, 11]
+	combined = result["stdout"] + result["stderr"]
+	assert "COMPLETION_DELIVERED_CLOSED tracking_issue=192 items=10,11 alert=sent" in combined
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())
