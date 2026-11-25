@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\nThis plan replaces the whole content of `tests/e2e_smoke_canary.txt` with the three lines the issue gives. It is ready to implement.\n\nPlanning ref: `main` @ `32c7bffd605d9c70b2431d5fa9cdda7a6e54ee20`. The integration branch mismatch line reads `unknown`, not `true`, so it does not block planning.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: check e2e_smoke_canary_content\nACCEPTANCE: post-merge none: this only changes a smoke fixture file, so no workflow behaviour changes after merge\n\n## Functions or modules to implement\nNone. Only the data file changes. Its new content must be exactly:\n```\nstatus: ok\nrun_id: alt-45567683554\nupdated-by: ai-pipeline\n```\nEnd the file with one newline after `updated-by: ai-pipeline`. The file must have no other lines and no trailing spaces.\n\n## Data structures affected\nOnly the canary file. Today it holds `status: ok` and `decompose-run: 41445772297`. The second line is replaced by the two new lines.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Replace the whole file\n- Chosen: overwrite the file so it holds exactly the three lines.\n- Alternatives considered: edit only the second line and add a third.\n- Why: the issue asks for exactly these three lines, and writing the whole file is the simplest way to guarantee that.\n\n## Security considerations\n- This change crosses no trust boundary and adds no endpoint or new surface.\n- It contains no secrets or money-handling code, and there is no external input to validate.\n\n## Potential risks or edge cases\n- Several test files mention the canary, for example `tests/test_e2e_editor_smoke_canary.py`. A search of that file found no check on the file's current content, so the change should not break it.\n- Line endings must be LF.\n\n## Testing considerations\n- Byte-compare the file with the expected three lines plus a final newline.\n- `git diff --stat` must show changes to this one file only.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue names one file and its exact content and allows no other changes. Nothing needs to be reused or widened.\n\nPLAN_SELF_CHECK: WARNING: e2e_smoke_canary_content in the acceptance check line was not confirmed as an existing CI check name; if the host drops that line, CI green is the done-check\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "d10ec9123c968dd0a7ed0f503eebdd1d9bf8c3b646ccf108c68bd44fc6e0dd7d",
+  "lineage": {
+    "issue_number": 10113,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45587080112",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45587080112",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10113"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261125101209_bad1e06e56",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10113,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45587080112"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #10113",
+  "timestamps": {
+    "created_at": "2026-11-25T10:12:09Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
