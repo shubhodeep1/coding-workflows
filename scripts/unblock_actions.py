@@ -23,7 +23,11 @@ the network; the shell only executes.
        judge never sends them) carry that issue's security finding marker,
        `Integration branch` and `Depends on` lines onto a PR re-issue; optional
        `pr_base_branch` (same caller) is the Integration branch when the
-       linked issue declares none. Trusted PR-derived issue bodies
+       linked issue declares none. Optional `pr_head_ref` (the trusted
+       PR's same-repository head ref, sent by the unblock judge, #9938): a
+       standalone `descope` / `operator_step` fix-up for a PR whose head is
+       `ai/issue-<n>` carries `- Integration branch: <head>` so it is
+       planned on the PR head. Trusted PR-derived issue bodies
        carry an audit-only `ai:unblock-provenance:v1` marker.
        `accept_with_followup` on an `ai:security` issue is refused here too: it
        yields only a keep-open comment and a WARNING, never a follow-up issue
@@ -68,7 +72,12 @@ the network; the shell only executes.
       request that owns a CI-failure issue (label `ai:check-triage` /
       `ai:check-triage-escalated`, or the `check-failure-triage:pr=` marker),
       and the issue's single line-anchored integration branch. Conflicting PR
-      numbers or a URL into another repository give `pr: null`.
+      numbers or a URL into another repository give `pr: null`. A triage
+      issue keyed on a failing default branch (a valid
+      `<!-- check-failure-triage:base=<ref> -->` on line 5, after the
+      fp/gen/root/pr header lines, #9674) also gives `pr: null`, with
+      `reason: "base_keyed"`: its PR is only an example, so a re-issue keeps
+      the default branch (#10040).
   fixup-delivered-body --item-file PATH --repo R --pipeline-login L
       Reads the already-fetched item JSON and prints `{"status": "ok"|"skip",
       "reason": s, "target_branch": s|null, "paths": [s]}` for the unblock
@@ -178,6 +187,8 @@ SECURITY_FINDING_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,119}$")
 INTEGRATION_BRANCH_LINE_RE = re.compile(r"^\s*(?:-\s*)?(?:\*\*Integration branch:\*\*|Integration branch:)\s*`?\s*([^`\n]+?)\s*`?\s*$", re.MULTILINE)
 TARGET_BRANCH_LINE_RE = re.compile(r"^\s*(?:-\s*)?(?:\*\*Target branch:\*\*|Target branch:)\s*(?:`\s*([^`\n]+?)\s*`(?:\s.*)?|([^`\s]+))\s*$", re.MULTILINE)
 SECURITY_BRANCH_REF_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
+# A PR head a fix-up issue may be routed to as its Integration branch (#9938).
+PR_FIXUP_HEAD_REF_RE = re.compile(r"^ai/issue-[0-9]+$")
 MAX_COMMAND_TEXT = 300
 PROTECTED_HANDOFF_VERDICTS = ("descope", "operator_step")
 # Chain lineage in titles (see the module docstring); kept equal to
@@ -221,6 +232,16 @@ CHECK_TRIAGE_PR_LINE_RE = re.compile(
 	r"^\s*(?:-\s*)?\*\*Pull request:\*\*\s*https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/([0-9]{1,9})(?![0-9])",
 	re.MULTILINE,
 )
+# A triage issue keyed on a failing default branch (#9674): the first four
+# body lines are the fp/gen/root/pr header and line 5 names the base ref.
+# Mirrors CI_TRIAGE_PARSE_PY in scripts/resolve_integration_ref.sh (#10040).
+CHECK_TRIAGE_BASE_HEADER_RES = (
+	re.compile(r"<!-- check-failure-triage:fp=[0-9a-f]{64} -->"),
+	re.compile(r"<!-- check-failure-triage:gen=[0-9]+ -->"),
+	re.compile(r"<!-- check-failure-triage:root=[0-9a-f]{64} -->"),
+	re.compile(r"<!-- check-failure-triage:pr=[1-9][0-9]{0,9} -->"),
+)
+CHECK_TRIAGE_BASE_MARKER_RE = re.compile(r"<!-- check-failure-triage:base=([A-Za-z0-9._/-]{1,200}) -->")
 CI_OWNER_STATES = ("superseded", "open", "verified", "unverified")
 CI_OWNER_SHA_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 # A fix-up that already delivered a heal issue's fix (#8530): the issue's
@@ -266,12 +287,35 @@ def _safe_branch_ref(branch: str) -> bool:
 	)
 
 
+def _check_triage_base_keyed_ref(body: str) -> str | None:
+	"""The base ref of a base-keyed triage body (#9674), or None.
+
+	Same rule as CI_TRIAGE_PARSE_PY in scripts/resolve_integration_ref.sh
+	(#10040): CRLF is normalised, lines 1-4 must be the exact fp/gen/root/pr
+	header, line 5 the base marker, and the ref must not contain `..`. A base
+	marker anywhere else, or one that fails these checks, is not read.
+	"""
+	lines = (body if isinstance(body, str) else "").replace("\r\n", "\n").split("\n")
+	if len(lines) < 5:
+		return None
+	if not all(pattern.fullmatch(lines[index]) for index, pattern in enumerate(CHECK_TRIAGE_BASE_HEADER_RES)):
+		return None
+	match = CHECK_TRIAGE_BASE_MARKER_RE.fullmatch(lines[4])
+	if match is None or ".." in match.group(1):
+		return None
+	return match.group(1)
+
+
 def ci_owner_candidate(body: str, labels: list[str], repo: str) -> dict:
 	"""The PR that owns a CI-failure issue, from its body only (no network)."""
 	body = body if isinstance(body, str) else ""
 	markers = {int(match.group(1)) for match in CHECK_TRIAGE_PR_MARKER_RE.finditer(body)}
 	if not markers and not any(label in CHECK_TRIAGE_LABELS for label in labels):
 		return {"pr": None, "reason": "not_ci_failure"}
+	# #10040: a base-keyed issue's PR is only the example it was first seen
+	# on; no owner, so its fix work stays on the failing default branch.
+	if _check_triage_base_keyed_ref(body) is not None:
+		return {"pr": None, "reason": "base_keyed"}
 	numbers = set(markers)
 	foreign = False
 	for match in CHECK_TRIAGE_PR_LINE_RE.finditer(body):
@@ -480,6 +524,16 @@ def _context(raw: object) -> dict:
 		and ".." not in base_branch and "//" not in base_branch and not base_branch.endswith(("/", ".", ".lock"))
 		else None
 	)
+	# Optional trusted-PR head ref (#9938): a standalone fix-up for a PR whose
+	# head is `ai/issue-<n>` is planned and implemented on that head, where the
+	# PR's changes live. Validated like pr_base_branch; invalid is absent.
+	head_ref_raw = raw.get("pr_head_ref")
+	pr_head_ref = (
+		head_ref_raw
+		if pr_trusted and isinstance(head_ref_raw, str) and SECURITY_BRANCH_REF_RE.fullmatch(head_ref_raw)
+		and ".." not in head_ref_raw and "//" not in head_ref_raw and not head_ref_raw.endswith(("/", ".", ".lock"))
+		else None
+	)
 	return {
 		"repo": str(raw.get("repo") or ""),
 		"kind": kind,
@@ -509,6 +563,7 @@ def _context(raw: object) -> dict:
 		"pr_source_target_branch": pr_source_target_branch,
 		"pr_source_metadata_unsafe": pr_source_metadata_unsafe,
 		"pr_base_branch": pr_base_branch,
+		"pr_head_ref": pr_head_ref,
 	}
 
 
@@ -917,6 +972,15 @@ def _fixup_body(ctx: dict, verdict: dict, kind_word: str) -> str:
 			" dispatches, merges) keeps running unchanged.",
 		]
 	lines += ["", f"Why: {verdict['reason']}"]
+	# #9938: a standalone fix-up for a trusted PR targets the PR's head branch,
+	# but only an `ai/issue-<n>` head (the routing resolve_integration_ref.sh
+	# already serves); other heads and project fix-ups keep no line.
+	fixup_head_ref = ctx.get("pr_head_ref")
+	if (
+		ctx["kind"] == "pr" and ctx["pr_trusted"] and not ctx["tracking"]
+		and isinstance(fixup_head_ref, str) and PR_FIXUP_HEAD_REF_RE.fullmatch(fixup_head_ref)
+	):
+		lines += ["", f"- Integration branch: `{fixup_head_ref}`"]
 	if _provenance_line(ctx):
 		lines += ["", _provenance_line(ctx)]
 	return "\n".join(lines)

@@ -7,10 +7,15 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
 import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_test_and_mark_stable_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -88,14 +93,16 @@ sys.stdout.write(text)
 
 
 def _read_workflow() -> str:
-	return WORKFLOW.read_text(encoding="utf-8")
+	# Expanded text: the Phase 2 body lives in
+	# scripts/stable_e2e_step_wait_plan.sh (#9473).
+	return expanded_test_and_mark_stable_text()
 
 
 def _wait_plan_script() -> str:
 	doc = yaml.safe_load(_read_workflow())
 	for step in doc["jobs"]["e2e-smoke-test"]["steps"]:
 		if step.get("id") == "wait-plan":
-			return step["run"].replace("${{ steps.create-issue.outputs.created_after }}", CREATED_AFTER)
+			return step["run"].replace("${PLAN_CREATED_AFTER}", CREATED_AFTER)
 	raise AssertionError("wait-plan step not found")
 
 

@@ -95,6 +95,11 @@ STATIC_ALLOWED_PATHS = (
 	"AGENTS.md",
 	"agents.d/*.md",
 	"scripts/.gitignore",
+	# sync_dependabot_exclusions.py (issue #9485) adds the managed wrappers to
+	# exclude-paths of the consumer's own github-actions entries, editing the
+	# file in place; it stays consumer-owned.
+	".github/dependabot.yml",
+	".github/dependabot.yaml",
 )
 
 

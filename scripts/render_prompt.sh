@@ -192,8 +192,13 @@ import pathlib
 import re
 import sys
 
+# errors="replace" (#9261/#9949): placeholder names match [A-Za-z0-9_]+, which
+# is ASCII, so replacing invalid bytes with U+FFFD can neither invent nor hide
+# a placeholder name. A strict read used to abort the whole render (exit 1) on
+# one bad byte; render_prompt.py now replaces those bytes and prints one
+# WARNING line. The handler below keeps its ERROR prefix for read failures.
 try:
-	text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+	text = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
 except (OSError, UnicodeDecodeError) as exc:
 	print(f"ERROR: collect_prompt_placeholders {type(exc).__name__}: {sys.argv[1]}: {exc}", file=sys.stderr)
 	sys.exit(1)
@@ -359,6 +364,10 @@ esac
 # RENDER_PROMPT_SKIP_SYNTAX_VALIDATION=1 so those embedded tokens are not
 # mistaken for prompt-authoring errors and the whole render is not hard-failed.
 # Default (unset) keeps the strict syntax gate for every static template render.
+#
+# Either flag on its own selects untrusted-body mode on purpose, as defence in
+# depth (#9949, contract from #9341): a caller that sets only this flag still
+# gets no environment lookups for `{{NAME}}` tokens in the body.
 case "${RENDER_PROMPT_SKIP_SYNTAX_VALIDATION:-}" in
 	1|[Tt][Rr][Uu][Ee]|[Yy][Ee][Ss]|[Oo][Nn]|[Yy])
 		_render_untrusted_body_mode=true
