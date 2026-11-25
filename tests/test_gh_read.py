@@ -40,7 +40,7 @@ if [ "${GH_TOKEN:-}" = "${FAKE_JOB_TOKEN}" ]; then
 	fi
 	exit "${FAKE_JOB_RC:-0}"
 fi
-printf 'pat-output'
+printf '%s' "${FAKE_PAT_STDOUT:-pat-output}"
 if [ -n "${FAKE_PAT_STDERR:-}" ]; then
 	printf '%s\n' "${FAKE_PAT_STDERR}" >&2
 fi
@@ -99,9 +99,17 @@ def _env(tmp_path: Path, **extra: str) -> dict[str, str]:
 	return env
 
 
-def _run(tmp_path: Path, body: str, env: dict[str, str], helper: Path = GH_HELPERS) -> subprocess.CompletedProcess[str]:
+def _run(
+	tmp_path: Path,
+	body: str,
+	env: dict[str, str],
+	helper: Path = GH_HELPERS,
+	strict: bool = False,
+) -> subprocess.CompletedProcess[str]:
 	script = tmp_path / "poller.sh"
-	script.write_text(f"source '{helper}'\n{body}\n", encoding="utf-8")
+	# strict: the callers' order, set -euo pipefail before the helper is sourced.
+	prefix = "set -euo pipefail\n" if strict else ""
+	script.write_text(f"{prefix}source '{helper}'\n{body}\n", encoding="utf-8")
 	return subprocess.run(["bash", str(script)], env=env, capture_output=True, text=True, timeout=60, check=False)
 
 
@@ -411,7 +419,12 @@ def test_no_write_verb_goes_through_a_read_helper() -> None:
 
 def test_polling_call_sites_use_the_read_helpers() -> None:
 	promote = (SCRIPTS / "promote_main_cycle.sh").read_text(encoding="utf-8")
-	assert promote.count("gh_retry gh_read --same-repo-only api") == 2
+	# Issue #10101: both gate-run reads go through promote_cycle_gate_runs_read
+	# (the job token once through gh_read, then the bounded PAT loop).
+	assert promote.count('promote_cycle_gate_runs_read "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}/runs?') == 2
+	gate_runs_read = _promote_gate_runs_read_function()
+	assert 'gh_read --same-repo-only api "$1"' in gate_runs_read
+	assert 'gh_retry gh api "$1"' in gate_runs_read
 	# The GH_READ_FALLBACK line must reach the job log: no gh_read call in the
 	# promote cycle may send its stderr to /dev/null.
 	assert not [line for line in promote.splitlines() if "gh_read --same-repo-only" in line and "2>/dev/null" in line]
@@ -480,3 +493,192 @@ def test_release_gate_adds_only_read_scopes() -> None:
 		if line.strip() and not line.strip().startswith("#")
 	)
 	assert scopes == {"contents": "write", "actions": "read", "pull-requests": "read", "issues": "read"}
+
+
+# --- issue #10101: a job-token failure never stops a call site -----------------
+#
+# Each case fails the job-token call and lets the PAT answer. Every call site
+# runs under set -euo pipefail and must exit 0, use the PAT output, and never
+# print a token value.
+
+JOB_FAILURES = (
+	pytest.param("gh: Resource not accessible by integration (HTTP 403)", id="http_403"),
+	pytest.param("gh: API rate limit exceeded for installation ID 1. (HTTP 403)", id="rate_limit"),
+	pytest.param("gh: HTTP 502: Bad Gateway (https://api.github.com/repos/owner/repo)", id="http_502"),
+	pytest.param("error connecting to api.github.com", id="non_http"),
+)
+
+# Every test-and-mark-stable.yml step that exports GH_READ_TOKEN, and the
+# script whose read helpers it reaches.
+RELEASE_GATE_READ_STEPS = {
+	'      - name: "Phase 4: Wait for review & autofix to complete"\n': "stable_e2e_step_wait_review.sh",
+	"      - name: Dispatch & snapshot — workflow-log-analysis\n": "dispatch_and_watch_workflow_run.sh",
+	"      - name: Dispatch & watch — validation-refresh\n": "dispatch_and_watch_workflow_run.sh",
+	"      - name: Dispatch & watch — update_workflows (allow_workflow_edits=false)\n": "dispatch_and_watch_workflow_run.sh",
+	"      - name: Dispatch & watch — internal-memory-maintenance\n": "dispatch_and_watch_workflow_run.sh",
+	"      - name: Dispatch internal-orchestrate.yml with multi-issue project\n": "dispatch_and_watch_workflow_run.sh",
+	"      - name: Cleanup orchestrate test issues\n": "stable_orchestrate_cancel_dispatched_run.sh",
+	"      - name: Dispatch internal-validate.yml standalone\n": "dispatch_and_watch_workflow_run.sh",
+}
+
+WAIT_REVIEW_OPT_IN = 'GH_API_SAFE_USE_READ_TOKEN="${GH_API_SAFE_USE_READ_TOKEN:-1}"'
+DISPATCH_WATCH_REGISTRATION = 'NEW_ID="$(gh_api_safe_quiet_print_read "${REGISTRATION_QUERY}" --jq "${REGISTRATION_JQ}" || echo "")"'
+DISPATCH_WATCH_STATUS = (
+	'RUN_JSON="$(gh_api_safe_quiet_print_read "repos/${TARGET_REPO}/actions/runs/${NEW_ID}" --jq \'{status, conclusion}\' || echo "")"'
+)
+PROMOTE_IDLE_READ = (
+	'gate_runs_json="$(promote_cycle_gate_runs_read "repos/${GITHUB_REPOSITORY}/actions/workflows/'
+	'${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}/runs?per_page=30" 2> >(grep -a \'^GH_READ_FALLBACK \' >&2 || true) || echo "")"'
+)
+PROMOTE_WAIT_READ = (
+	'runs_json="$(promote_cycle_gate_runs_read "repos/${GITHUB_REPOSITORY}/actions/workflows/'
+	'${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=50")" || continue'
+)
+
+
+def _promote_gate_runs_read_function() -> str:
+	text = (SCRIPTS / "promote_main_cycle.sh").read_text(encoding="utf-8")
+	match = re.search(r"^promote_cycle_gate_runs_read\(\)\n\{\n.*?^\}\n", text, re.MULTILINE | re.DOTALL)
+	assert match, "promote_cycle_gate_runs_read() is missing from scripts/promote_main_cycle.sh"
+	return match.group(0)
+
+
+def _assert_pat_fallback(result: subprocess.CompletedProcess[str], env: dict[str, str]) -> None:
+	assert result.returncode == 0, result.stderr
+	assert "rc=0" in result.stdout, result.stdout + result.stderr
+	assert "job-output" not in result.stdout
+	for token in (JOB_TOKEN, PAT):
+		assert token not in result.stdout
+		assert token not in result.stderr
+	tokens = _tokens(env)
+	assert tokens and tokens[0] == JOB_TOKEN and tokens[-1] == PAT, tokens
+
+
+def test_release_gate_read_token_step_inventory() -> None:
+	text = (WORKFLOWS / "test-and-mark-stable.yml").read_text(encoding="utf-8")
+	# A new step that exports the job token must be added to the inventory
+	# (and get a fallback test) before CI passes.
+	assert text.count(TOKEN_LINE) == len(RELEASE_GATE_READ_STEPS) == 8
+	for step, script in RELEASE_GATE_READ_STEPS.items():
+		assert text.count(step) == 1, step
+		body = _step(text, step)
+		assert TOKEN_LINE in body, step
+		assert f"scripts/{script}" in body, (step, script)
+		assert (SCRIPTS / script).is_file(), script
+
+
+@pytest.mark.parametrize("job_stderr", JOB_FAILURES)
+def test_wait_review_reads_fall_back_to_the_pat(tmp_path: Path, job_stderr: str) -> None:
+	wait_review = (SCRIPTS / "stable_e2e_step_wait_review.sh").read_text(encoding="utf-8")
+	assert ". ./scripts/comprehensive_test_and_release_gh_api.sh" in wait_review
+	assert WAIT_REVIEW_OPT_IN in wait_review
+	assert wait_review.index(WAIT_REVIEW_OPT_IN) < wait_review.index("gh_api_safe_quiet_print ")
+	env = _env(tmp_path, FAKE_JOB_STDERR=job_stderr, FAKE_JOB_RC="1", FAKE_JOB_STDOUT="job-output")
+	log_file = tmp_path / "job.log"
+	body = (
+		f"{WAIT_REVIEW_OPT_IN}\n"
+		f'x=$(gh_api_safe_quiet_print "repos/{REPO}/actions/runs/1/jobs?per_page=10" || echo "")\n'
+		'printf "jobs=%s\\n" "$x"\n'
+		"if [ -z \"$x\" ]; then\n"
+		"\techo log_skipped\n"
+		f'elif gh_api_safe_quiet_print "repos/{REPO}/actions/jobs/1/logs" > "{log_file}"; then\n'
+		f'\tprintf "log=%s\\n" "$(cat "{log_file}")"\n'
+		"else\n"
+		"\techo log_failed\n"
+		"fi\n"
+		'echo "rc=$?"'
+	)
+	result = _run(tmp_path, body, env, RELEASE_GH_API, strict=True)
+	_assert_pat_fallback(result, env)
+	assert "jobs=pat-output" in result.stdout
+	assert "log=pat-output" in result.stdout
+
+
+@pytest.mark.parametrize("job_stderr", JOB_FAILURES)
+def test_dispatch_watch_reads_fall_back_to_the_pat(tmp_path: Path, job_stderr: str) -> None:
+	watch = (SCRIPTS / "dispatch_and_watch_workflow_run.sh").read_text(encoding="utf-8")
+	assert ". \"${SCRIPT_DIR}/comprehensive_test_and_release_gh_api.sh\"" in watch
+	assert f"\t{DISPATCH_WATCH_REGISTRATION}\n" in watch
+	assert DISPATCH_WATCH_STATUS in watch
+	env = _env(tmp_path, FAKE_JOB_STDERR=job_stderr, FAKE_JOB_RC="1", FAKE_PAT_STDOUT="4242")
+	body = (
+		f'TARGET_REPO="{REPO}"\n'
+		f'REGISTRATION_QUERY="repos/{REPO}/actions/workflows/x.yml/runs?event=workflow_dispatch&per_page=10"\n'
+		"REGISTRATION_JQ='[.workflow_runs[]] | sort_by(.created_at) | last | .id // empty'\n"
+		f"{DISPATCH_WATCH_REGISTRATION}\n"
+		'printf "new_id=%s\\n" "${NEW_ID}"\n'
+		f"{DISPATCH_WATCH_STATUS}\n"
+		'printf "run_json=%s\\n" "${RUN_JSON}"\n'
+		'echo "rc=$?"'
+	)
+	result = _run(tmp_path, body, env, RELEASE_GH_API, strict=True)
+	_assert_pat_fallback(result, env)
+	assert "new_id=4242\n" in result.stdout
+	assert "run_json=4242\n" in result.stdout
+
+
+@pytest.mark.parametrize("job_stderr", JOB_FAILURES)
+def test_smoke_cancel_status_falls_back_to_the_pat(tmp_path: Path, job_stderr: str) -> None:
+	script = SCRIPTS / "stable_orchestrate_cancel_dispatched_run.sh"
+	env = _env(
+		tmp_path,
+		FAKE_JOB_STDERR=job_stderr,
+		FAKE_JOB_RC="1",
+		FAKE_PAT_STDOUT="completed",
+		TEST_REPO=REPO,
+		DISPATCHED_RUN_ID="4242",
+		TRACKING_NUMBER="7",
+		SMOKE_CANCEL_POLL_SECS="0",
+	)
+	wrapper = tmp_path / "cleanup_step.sh"
+	wrapper.write_text(f"set -euo pipefail\nbash '{script}'\necho \"rc=$?\"\n", encoding="utf-8")
+	result = subprocess.run(["bash", str(wrapper)], env=env, capture_output=True, text=True, timeout=60, check=False)
+	_assert_pat_fallback(result, env)
+	assert "ORCHESTRATE_SMOKE_DISPATCH_CANCEL run=4242 outcome=already_completed" in result.stderr
+	assert not [call for call in _calls(env) if "-X POST" in call]
+
+
+@pytest.mark.parametrize("job_stderr", JOB_FAILURES)
+def test_promote_cycle_gate_runs_read_falls_back_to_the_pat(tmp_path: Path, job_stderr: str) -> None:
+	promote = (SCRIPTS / "promote_main_cycle.sh").read_text(encoding="utf-8")
+	assert f"\t{PROMOTE_IDLE_READ}\n" in promote
+	assert f"\t{PROMOTE_WAIT_READ}\n" in promote
+	function = _promote_gate_runs_read_function()
+	shapes = {
+		"idle": f'{PROMOTE_IDLE_READ}\nprintf "idle=%s\\n" "${{gate_runs_json}}"',
+		"wait": f'for _pass in 1; do\n\t{PROMOTE_WAIT_READ}\n\tprintf "wait=%s\\n" "${{runs_json}}"\ndone',
+	}
+	for shape, call in shapes.items():
+		run_dir = tmp_path / shape
+		run_dir.mkdir()
+		env = _env(
+			run_dir,
+			FAKE_JOB_STDERR=job_stderr,
+			FAKE_JOB_RC="1",
+			FAKE_JOB_STDOUT="job-output",
+			GH_RETRY_MAX_ATTEMPTS="1",
+			PROMOTE_CYCLE_GATE_WORKFLOW_FILE="test-and-mark-stable.yml",
+		)
+		body = f'{function}\n{call}\nwait\necho "rc=$?"'
+		result = _run(run_dir, body, env, GH_HELPERS, strict=True)
+		_assert_pat_fallback(result, env)
+		assert f"{shape}=pat-output\n" in result.stdout
+		assert _tokens(env) == [JOB_TOKEN, PAT]
+		if shape == "idle":
+			# The caller's stderr filter keeps only the contractual line.
+			assert "HTTP 502" not in result.stderr
+			assert "error connecting" not in result.stderr
+		if "HTTP 403" in job_stderr:
+			assert "GH_READ_FALLBACK reason=" in result.stderr
+
+
+@pytest.mark.parametrize("overrides", ({"GH_READ_TOKEN": ""}, {"GH_READ_TOKEN_ENABLED": "false"}))
+def test_promote_cycle_gate_runs_read_stays_on_the_pat_when_unset_or_disabled(
+	tmp_path: Path, overrides: dict[str, str]
+) -> None:
+	env = _env(tmp_path, GH_RETRY_MAX_ATTEMPTS="1", PROMOTE_CYCLE_GATE_WORKFLOW_FILE="test-and-mark-stable.yml", **overrides)
+	body = f'{_promote_gate_runs_read_function()}\n{PROMOTE_IDLE_READ}\nprintf "idle=%s\\n" "${{gate_runs_json}}"\nwait\necho "rc=$?"'
+	result = _run(tmp_path, body, env, GH_HELPERS, strict=True)
+	assert result.returncode == 0, result.stderr
+	assert "idle=pat-output\n" in result.stdout
+	assert _tokens(env) == [PAT]

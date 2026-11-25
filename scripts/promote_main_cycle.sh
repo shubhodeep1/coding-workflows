@@ -226,6 +226,38 @@ type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 # gh_read (issue #9888) moves polling reads to the job token; without
 # gh_helpers.sh it is plain gh on the PAT, as before.
 type gh_read >/dev/null 2>&1 || gh_read() { if [ "${1:-}" = "--same-repo-only" ]; then shift; fi; gh "$@"; }
+# promote_cycle_gate_runs_read <endpoint> (Refs #10101, option C): the gate-run
+# reads of the idle check and the wait loop. gh_read falls back to the PAT
+# only on 401/403/404 or a rate limit; on a 5xx or a non-HTTP error it
+# returns the job-token failure, and wrapping it in gh_retry asked the job
+# token again on every attempt, so the PAT was never tried and the idle check
+# skipped the cycle as guard_unavailable. Now the job token is tried once and
+# any failure runs the bounded PAT loop (the same shape as gh_api_safe in
+# comprehensive_test_and_release_gh_api.sh). A failed attempt's stdout is
+# discarded; stdout carries only the successful body, and GH_READ_FALLBACK
+# lines and gh_retry warnings go to stderr. No token is ever printed. With
+# GH_READ_TOKEN unset or GH_READ_TOKEN_ENABLED off this is `gh_retry gh api`,
+# exactly as before #9888.
+promote_cycle_gate_runs_read()
+{
+	local gate_runs_read_out=""
+	local gate_runs_read_enabled="${GH_READ_TOKEN_ENABLED:-true}"
+	case "${gate_runs_read_enabled,,}" in
+		false|0|no|off)
+			gh_retry gh api "$1"
+			return $?
+			;;
+	esac
+	if [ -z "${GH_READ_TOKEN:-}" ]; then
+		gh_retry gh api "$1"
+		return $?
+	fi
+	if gate_runs_read_out="$(gh_read --same-repo-only api "$1")"; then
+		printf '%s' "${gate_runs_read_out}"
+		return 0
+	fi
+	gh_retry gh api "$1"
+}
 # Issue #9473: wedged-queued run filter from gh_helpers.sh. When the helpers
 # could not be sourced, these no-op fallbacks keep the pre-#9473 behaviour
 # (every queued run counts as active).
@@ -1827,7 +1859,7 @@ idle_wait_deadline=$(( $(date +%s) + PROMOTE_CYCLE_GATE_IDLE_WAIT_SECS ))
 while :; do
 	# Only the contractual GH_READ_FALLBACK line (issue #9888) survives the
 	# stderr filter; other gh/gh_retry noise stays dropped, as before.
-	gate_runs_json="$(gh_retry gh_read --same-repo-only api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}/runs?per_page=30" 2> >(grep -a '^GH_READ_FALLBACK ' >&2 || true) || echo "")"
+	gate_runs_json="$(promote_cycle_gate_runs_read "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}/runs?per_page=30" 2> >(grep -a '^GH_READ_FALLBACK ' >&2 || true) || echo "")"
 	zombie_queued_log_ignored promote_cycle_gate_idle "${zq_cutoff}" <<< "${gate_runs_json}"
 	active_gate_runs="$(printf '%s' "${gate_runs_json}" \
 		| jq -r --argjson zq_cutoff "${zq_cutoff}" "${zq_def}"'[.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "requested" or .status == "pending") | select(is_wedged_queued($zq_cutoff) | not)] | length' 2>/dev/null || echo "")"
@@ -1878,7 +1910,7 @@ gate_conclusion=""
 gate_head_sha=""
 while [ "$(date +%s)" -lt "${deadline}" ]; do
 	sleep "${PROMOTE_CYCLE_GATE_POLL_SECS}"
-	runs_json="$(gh_retry gh_read --same-repo-only api "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=50")" || continue
+	runs_json="$(promote_cycle_gate_runs_read "repos/${GITHUB_REPOSITORY}/actions/workflows/${PROMOTE_CYCLE_GATE_WORKFLOW_FILE}/runs?event=workflow_dispatch&per_page=50")" || continue
 	if [ -z "${gate_run_id}" ]; then
 		gate_run_id="$(printf '%s' "${runs_json}" | jq -r --argjson before "${before_gate_ids}" --arg branch "${gate_ref}" --arg title "Test & Mark Stable Release [cycle:${GITHUB_RUN_ID}]" '[.workflow_runs[]? | select((.id as $id | ($before | index($id) | not)) and (.head_branch // "") == $branch and (.display_title // "") == $title)] | sort_by(.created_at) | first | .id // empty')"
 		[ -n "${gate_run_id}" ] || continue
