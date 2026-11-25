@@ -3251,6 +3251,15 @@ def _clone_for_memory_branch(repo_root: Path, memory_branch: str) -> Path:
     # the old tip stays an ancestor of the new remote tip. The read path and
     # memory_helpers.sh force-tick already clone this way.
     probe = _run_git(temp_dir.parent, ["ls-remote", "--heads", origin_url, memory_branch], check=False)
+    # A transient probe failure (bare 403, 429, network) raises for the read
+    # retry like the shallow clone below, instead of a slow full clone inside
+    # a throttled attempt (issue #10052). Permanent failures fall back as before.
+    if probe.returncode != 0 and _is_transient_memory_read_failure(probe.stderr or probe.stdout or ""):
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        raise MemoryGitError(
+            f"git ls-remote --heads {memory_branch} failed with exit {probe.returncode}\n"
+            f"stderr:\n{_redact_memory_push_stderr(probe.stderr or probe.stdout or '')}"
+        )
     # Fallback diagnostics stay off by default: fail-open in-process callers
     # (the integration fingerprint verifier) require an empty stderr.
     # AI_MEMORY_CLONE_DIAGNOSTICS=1 turns them on.

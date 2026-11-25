@@ -340,6 +340,9 @@ def test_full_clone_failure_removes_temp_dir() -> None:
 		return path
 
 	def fake_run_git(cwd, args, check: bool = True, **_kwargs):  # noqa: ANN001 - test stub
+		if args[:3] == ["ls-remote", "--heads", TOKEN_URL]:
+			# Branch absent on the origin probe: go straight to the full clone.
+			return _FakeProc(returncode=0)
 		if args and args[0] in {"clone", "ls-remote"}:
 			if check:
 				raise ai_memory_lib.MemoryGitError(_write_clone_error(BARE_403_STDERR))
@@ -398,11 +401,13 @@ def _run_clone_with_script(handler):
 
 
 def test_full_clone_failed_heads_probe_is_not_branch_absent() -> None:
-	# The first probe (against the origin URL) fails, so the full clone runs;
-	# its `ls-remote --heads origin` probe then fails with a bare 403. That
-	# must raise (so the read retry applies), not check out the default
-	# branch as a fresh memory branch.
+	# The first probe (against the origin URL) finds no branch, so the full
+	# clone runs; its `ls-remote --heads origin` probe then fails with a bare
+	# 403. That must raise (so the read retry applies), not check out the
+	# default branch as a fresh memory branch.
 	def handler(args):
+		if args[:3] == ["ls-remote", "--heads", TOKEN_URL]:
+			return 0, "", ""
 		if args[0] == "ls-remote":
 			return 128, "", BARE_403_STDERR
 		return 0, "", ""
@@ -415,6 +420,50 @@ def test_full_clone_failed_heads_probe_is_not_branch_absent() -> None:
 	assert not any(call[0] == "checkout" for call in calls)
 	assert created
 	assert not any(p.exists() for p in created)
+
+
+def test_transient_probe_failure_raises_without_full_clone(monkeypatch) -> None:
+	# A bare 403 on the fast-path probe raises for the read retry instead of
+	# running a full clone inside the throttled attempt (issue #10052).
+	monkeypatch.setenv("GH_TOKEN", FAKE_TOKEN)
+	monkeypatch.delenv("AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED", raising=False)
+
+	def handler(args):
+		if args[0] == "ls-remote":
+			return 128, "", BARE_403_STDERR
+		return 0, "", ""
+
+	path, exc, created, calls = _run_clone_with_script(handler)
+	assert path is None
+	assert exc is not None
+	message = str(exc)
+	assert message.startswith("git ls-remote --heads ai-memory")
+	assert "returned error: 403" in message
+	assert "https://" not in message
+	assert FAKE_TOKEN not in message
+	assert ai_memory_lib._is_transient_memory_read_failure(message)
+	assert [call[0] for call in calls] == ["ls-remote"]
+	assert created
+	assert not any(p.exists() for p in created)
+
+
+def test_permanent_probe_failure_still_falls_back_to_full_clone(monkeypatch) -> None:
+	monkeypatch.delenv("AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED", raising=False)
+
+	def handler(args):
+		if args[:3] == ["ls-remote", "--heads", TOKEN_URL]:
+			return 128, "", PERMISSION_DENIED_STDERR
+		return 0, "", ""
+
+	path, exc, _created, calls = _run_clone_with_script(handler)
+	try:
+		assert exc is None, exc
+		clones = [call for call in calls if call[0] == "clone"]
+		assert len(clones) == 1
+		assert "--depth" not in clones[0]
+	finally:
+		if path is not None:
+			shutil.rmtree(path, ignore_errors=True)
 
 
 def test_fast_clone_checkout_failure_removes_temp_dir() -> None:
