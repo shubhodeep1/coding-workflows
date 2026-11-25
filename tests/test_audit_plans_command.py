@@ -119,3 +119,48 @@ def test_implement_plan_template_parity():
 		live = ROOT / ".claude" / "commands" / f"{name}.md"
 		template = ROOT / "workflow-templates" / ".claude" / "commands" / f"{name}.md"
 		assert template.read_text(encoding="utf-8") == live.read_text(encoding="utf-8"), name
+
+
+@pytest.fixture(scope="module")
+def step4a(text) -> str:
+	start = text.index("4a. **Check every open plan for staleness, then refresh it.**")
+	end = text.index("5. **Rank the remaining work by value.**")
+	return text[start:end]
+
+
+def test_staleness_check_runs_before_ranking(text, step4a):
+	# Ranking and the conflict gate must see the refreshed plan text.
+	assert text.index("4. **Verify each plan against the current repo") < text.index("4a. **Check every open plan for staleness")
+	assert "Steps 5–6 rank and screen the refreshed text" in step4a
+
+
+def test_staleness_compares_against_default_branch_and_other_plans(step4a):
+	assert "`git fetch origin <default>`" in step4a
+	assert "do not hardcode `main`" in step4a
+	assert "`git log -1 --format=%cI -- <plan>`" in step4a
+	assert "**Drift against the default branch.**" in step4a
+	assert "**Overlap with other plans.**" in step4a
+	assert "contradicts another plan's approach" in step4a
+
+
+def test_refresh_keeps_intent_and_skips_in_flight_plans(step4a, text):
+	assert "**Refresh every STALE plan in place**" in step4a
+	assert "never *what* it delivers" in step4a
+	assert "**NEEDS DECISION**" in step4a
+	assert "is not a candidate in steps 5–6 until it is answered" in step4a
+	assert "**Plans in flight are checked, not edited.**" in step4a
+	assert "**A refresh adapts the plan, never its intent.**" in text
+
+
+def test_tracking_issue_listing_is_fetched_once(step4a, step6):
+	# §15: step 4a fetches the open tracking-issue listing; step 6 reuses it.
+	assert "Fetch the open tracking-issue listing here, once, and reuse it in step 6" in step4a
+	assert "Reuse the issue listing step 4a already fetched." in step6
+
+
+def test_refreshes_land_in_the_maintenance_pr(text):
+	step9 = text[text.index("9. **Land the maintenance changes"):text.index("10. **Report.**")]
+	assert "only when steps 4a, 7 or 8 changed anything" in step9
+	assert "One commit for the plan refreshes" in step9
+	assert "Enumerate every refreshed plan in the PR body" in step9
+	assert "Refreshed — stale against the default branch or other plans" in text

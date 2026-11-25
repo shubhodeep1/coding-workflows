@@ -1,4 +1,4 @@
-Audit every plan under `docs/` — read each one, classify it **implemented completely / partially / not implemented** against the *current* repo state, and recommend the single **next highest-value** plan to implement **that will not create merge conflicts with in-flight project work** — or, when related plans are better shipped together, a **bundle** of up to 3 related plans to run as **one** orchestrator project (step 6) — AI-orchestrator projects (open `ai:orchestrator-tracking` issues and their unmerged PRs; both `/implement-plan-ai` and `/implement-plan-claude` start these). If no candidate is conflict-safe, the correct output is *no recommendation*. The recommendation itself is report-only — this command never implements a plan — but every run also performs two bounded maintenance actions: it **archives verified-complete plans** (moves `docs/plans/` files classified COMPLETE into `docs/completed/`) and **sweeps `docs/scripts-pending-removal.md`** (removes scripts whose §18.F removal trigger is met and whose preflight checks all pass, deleting the registry entry alongside), committing and opening a maintenance PR only when either action changed something. `$ARGUMENTS` is optional — pass a filter (a subdirectory, a topic, or a glob) to narrow the audit; empty means audit all plans under `docs/plans/`.
+Audit every plan under `docs/` — read each one, classify it **implemented completely / partially / not implemented** against the *current* repo state, and recommend the single **next highest-value** plan to implement **that will not create merge conflicts with in-flight project work** — or, when related plans are better shipped together, a **bundle** of up to 3 related plans to run as **one** orchestrator project (step 6) — AI-orchestrator projects (open `ai:orchestrator-tracking` issues and their unmerged PRs; both `/implement-plan-ai` and `/implement-plan-claude` start these). If no candidate is conflict-safe, the correct output is *no recommendation*. The recommendation itself is report-only — this command never implements a plan — but every run also performs three bounded maintenance actions: it **refreshes stale plans** (step 4a: updates open plans that drifted from the default branch or overlap other plans, so the next plan handed off matches the repo as it is now), it **archives verified-complete plans** (moves `docs/plans/` files classified COMPLETE into `docs/completed/`) and **sweeps `docs/scripts-pending-removal.md`** (removes scripts whose §18.F removal trigger is met and whose preflight checks all pass, deleting the registry entry alongside), committing and opening a maintenance PR only when any of these changed something. `$ARGUMENTS` is optional — pass a filter (a subdirectory, a topic, or a glob) to narrow the audit; empty means audit all plans under `docs/plans/`.
 
 $ARGUMENTS
 
@@ -19,6 +19,15 @@ $ARGUMENTS
      - **NOT IMPLEMENTED** — none present, or scaffold-only.
    - For `docs/completed/*` plans, default-trust but flag any you find regressed or never actually finished.
 
+4a. **Check every open plan for staleness, then refresh it.** A plan written weeks ago can describe a repo that no longer exists. For each `docs/plans/*` plan step 4 classified PARTIAL or NOT IMPLEMENTED, compare it against the default branch as it is now and against the other plans, and mark it **CURRENT** or **STALE**:
+   - **Baseline.** Run `git fetch origin <default>` (resolve the default branch, do not hardcode `main`) and check against `origin/<default>`. The plan's baseline is its last commit, `git log -1 --format=%cI -- <plan>`; `git log --since=<baseline> origin/<default> -- <paths>` lists what changed under the plan's declared files since it was written.
+   - **Drift against the default branch.** A plan is STALE when any of these holds, each cited with the plan line and the repo evidence: a file, function, env var, repo variable, workflow, job, step, label, contract or test it names was renamed, moved or removed; a premise about current behaviour no longer holds (the code it describes now works differently); part of its scope was already shipped by other work; or it relies on a CLAUDE.md section, command or pipeline that was retired.
+   - **Overlap with other plans.** A plan is also STALE when it duplicates scope another open plan in `docs/plans/` owns, contradicts another plan's approach to the same code, or conflicts with a `docs/completed/` plan that shipped after its baseline. Name the other plan and the overlapping goal or file.
+   - **Refresh every STALE plan in place** with `Edit`: update renamed paths and identifiers to their current names; mark goals already shipped as done with the commit or PR that shipped them; rewrite steps whose premise changed so they start from the current code; and resolve an overlap by keeping the shared piece in one plan and replacing it in the other with a cross-reference. Keep each plan's goals, scope and structure: a refresh adapts *how* the plan gets there, never *what* it delivers.
+   - **Do not guess at intent.** When a fix would change a plan's goals or scope, or two plans contradict and either approach could win, leave that part unchanged and mark the plan **NEEDS DECISION**. Ask about it in the §2 Q/A format at the end of the report. A NEEDS DECISION plan is not a candidate in steps 5–6 until it is answered.
+   - **Plans in flight are checked, not edited.** An orchestrator project is already being planned from a plan that an open `ai:orchestrator-tracking` issue names. Report such a plan's drift and leave the file alone. Fetch the open tracking-issue listing here, once, and reuse it in step 6 (§15).
+   - Steps 5–6 rank and screen the refreshed text, so the declared files the conflict gate compares are current.
+
 5. **Rank the remaining work by value.** Across the PARTIAL + NOT-IMPLEMENTED plans, weigh each by impact × leverage against cost and risk, and produce a **ranked candidate list** (best first). Justify the ranking with the same criteria the final pick must satisfy:
    - **§1 priority order** — security and correctness rank above performance and speed; a security/correctness plan outranks a perf plan of similar size.
    - **Dependencies** — a plan that unblocks several others is worth more; a plan blocked by missing prerequisites ranks lower.
@@ -27,7 +36,7 @@ $ARGUMENTS
    Ranking alone does not decide the recommendation — the pick is made in step 6, after the conflict screen.
 
 6. **Screen candidates against in-flight project work (merge-conflict gate).** The recommendation must be startable *now* without colliding with work already in flight from the **AI orchestrator** (`/implement-plan-ai` or `/implement-plan-claude`; each project is an open `ai:orchestrator-tracking` issue):
-   - **Fetch GitHub state once.** Use REST per §23.D (`gh api "repos/<owner>/<repo>/issues?labels=ai:orchestrator-tracking&state=open"`, one `state=open` pulls listing) and batch per §15 — one issue listing and one PR listing serve every project; do not query per candidate plan or per project.
+   - **Fetch GitHub state once.** Use REST per §23.D (`gh api "repos/<owner>/<repo>/issues?labels=ai:orchestrator-tracking&state=open"`, one `state=open` pulls listing) and batch per §15 — one issue listing and one PR listing serve every project; do not query per candidate plan or per project. Reuse the issue listing step 4a already fetched.
    - **Enumerate in-flight orchestrator work.** List **open** orchestrator tracking issues (label `ai:orchestrator-tracking`) and the **unmerged** PRs belonging to them: open PRs whose head or base branch matches the integration-branch pattern (`^orchestrator/project-`, cf. `ORCH_INTEGRATION_BRANCH_PATTERN`) plus open PRs that reference a tracking issue (`Refs #N` / `Related to #N`).
    - **Build the in-flight footprint.** Take the union of:
      - (a) the files changed by each unmerged in-flight PR (`gh api "repos/<owner>/<repo>/pulls/<n>/files"`, paginated);
@@ -51,9 +60,10 @@ $ARGUMENTS
    - **Any check fails, cannot be run (missing token, API failure — degrade per §23.E), or is ambiguous** → keep the script and the entry, and report which check blocked removal. A partial pass is a fail.
    The full §18.F pass is what authorizes the §6 removal; there is no other path by which this command deletes a script.
 
-9. **Land the maintenance changes — only when steps 7–8 changed anything.** If nothing moved and nothing was removed, skip this step entirely: the run stays report-only, with no commit and no PR. Otherwise:
-   - Commit on the session's designated working branch when the harness assigns one; otherwise create `claude/audit-plans-maintenance-<YYYYMMDD>` (append `-2`, `-3`, … on collision). One commit for the plan archival, a separate commit for the registry sweep (§12.E).
-   - When a removal changes observable behaviour (§20.A — a workflow, scheduled job, or operator-visible script), add a `changelog.d/<issue-or-pr>-<slug>.md` fragment in the same PR; plan moves alone are docs-only and need no fragment.
+9. **Land the maintenance changes — only when steps 4a, 7 or 8 changed anything.** If nothing was refreshed, moved or removed, skip this step entirely: the run stays report-only, with no commit and no PR. Otherwise:
+   - Commit on the session's designated working branch when the harness assigns one; otherwise create `claude/audit-plans-maintenance-<YYYYMMDD>` (append `-2`, `-3`, … on collision). One commit for the plan refreshes, one for the plan archival, and a separate commit for the registry sweep (§12.E).
+   - When a removal changes observable behaviour (§20.A — a workflow, scheduled job, or operator-visible script), add a `changelog.d/<issue-or-pr>-<slug>.md` fragment in the same PR; plan refreshes and moves alone are docs-only and need no fragment.
+   - Enumerate every refreshed plan in the PR body with what was stale and what changed, so a reviewer can check each refresh against the evidence.
    - **PR-body contract:** the plan-archival lint (`.github/workflows/lint-plan-archival.yml`) fails any PR that adds `docs/completed/` files without referencing an issue. For each moved plan, include `Refs #N` for its tracking issue (or, when none exists, the issue / PR that shipped it) — never `Fixes` / `Closes` / `Resolves` (§19). When a referenced `ai:orchestrator-tracking` issue still has unchecked checkboxes, add a non-empty `## De-scoped phases` section naming every unshipped box with a rationale. Enumerate every removed script with its preflight evidence.
    - Push with `git push -u origin <branch>` (retry transient network errors with exponential backoff: 2s, 4s, 8s, 16s — up to 4 retries), then open a non-draft PR via `mcp__github__create_pull_request` against the default branch (resolve it dynamically — do **not** hardcode `main`). Pushing the branch and opening the PR are §23.B routine writes.
 
@@ -75,6 +85,15 @@ Not implemented:
 
 Regressions / mislabeled (only if any):
 - <plan> — <what's off>
+
+Refreshed — stale against the default branch or other plans (only if any):
+- <plan> — <what was stale, with evidence> → <what the refresh changed>
+
+Stale, needs decision (only if any; asked as Q-IDs at the end):
+- <plan> — <the goal / scope / contradiction a person must settle>
+
+Stale but in flight — reported, not edited (only if any):
+- <plan> — <orchestrator issue #N>; <what drifted>
 
 In-flight orchestrator work: <issue #N (open, waves pending), PR #M (open, files: …)>  (or: none / UNAVAILABLE — <why>)
 
@@ -128,15 +147,17 @@ Omit empty sections. Keep evidence terse but specific — a classification witho
 
 ## Tool Access
 
-Audit surface (read) plus the bounded step 7–9 write path:
+Audit surface (read) plus the bounded step 4a and 7–9 write path:
 
 - **`Read` / `Grep` / `Glob`** — primary tools for reading plans and verifying repo state.
-- **`Bash`** — cheap verification (running a targeted test, listing files), step-8 preflight-check commands, and the step 7–9 maintenance writes: `git mv` / `git rm`, commit, push. No mutating git operations outside steps 7–9.
+- **`Edit`** — the step-4a refresh of stale `docs/plans/*` files, and nothing else.
+- **`Bash`** — cheap verification (running a targeted test, listing files), the step-4a `git fetch` / `git log` drift checks, step-8 preflight-check commands, and the step 7–9 maintenance writes: `git mv` / `git rm`, commit, push. No mutating git operations outside steps 7–9.
 - **`mcp__github__*` / `gh` CLI** — read paths (§23.A): (a) when a plan references an issue / PR whose merge state settles whether it shipped, (b) the step-6 conflict gate — listing open `ai:orchestrator-tracking` issues, their unmerged PRs, and those PRs' changed files — and (c) registry preflight checks that query GitHub state; plus one routine write (§23.B): opening the step-9 maintenance PR. Shared rules live in **CLAUDE.md §23** (auth check, the mandatory `-R <owner>/<repo>` flag, REST-over-GraphQL preference, token hygiene); batch the gate's calls per §15/§23.F.
 
 ## Rules
 
-- **Report-first; writes are bounded to maintenance.** The verdict, ranking, and recommendation are chat output — this command never implements a plan and never edits code outside steps 7–9: plan moves into `docs/completed/`, §18.F-gated script + registry-entry removals, the changelog fragment those removals may require, and the commit / push / PR that lands them. A run with nothing to archive or remove makes no commit and opens no PR. To act on the recommendation, the user runs `/implement-plan-claude` (Claude-engine orchestrator hand-off) or `/implement-plan-ai` (default-engine orchestrator hand-off).
+- **Report-first; writes are bounded to maintenance.** The verdict, ranking, and recommendation are chat output — this command never implements a plan and never edits code outside steps 4a and 7–9: refreshes of stale `docs/plans/*` files, plan moves into `docs/completed/`, §18.F-gated script + registry-entry removals, the changelog fragment those removals may require, and the commit / push / PR that lands them. A run with nothing to refresh, archive or remove makes no commit and opens no PR.
+- **A refresh adapts the plan, never its intent.** Every refresh edit cites the drift or overlap that caused it. Goals, scope and structure stay as written; a change to any of them is NEEDS DECISION, asked in the §2 Q/A format, never applied. Plans named by an open `ai:orchestrator-tracking` issue and plans under `docs/completed/` are never refreshed. To act on the recommendation, the user runs `/implement-plan-claude` (Claude-engine orchestrator hand-off) or `/implement-plan-ai` (default-engine orchestrator hand-off).
 - **Archival must be earned.** Only plans step 4 classified COMPLETE — every goal cited — move to `docs/completed/`; a PARTIAL plan never moves, whatever its own Status line says. Use `git mv` so history follows, and satisfy the plan-archival lint via step 9's PR-body contract.
 - **The preflight gate is a hard gate.** No script is removed while any §18.F check fails, cannot be run, or is ambiguous, and no `permanent — review annually` entry is ever auto-removed. The removal's blast radius stays inside what the registry entry names.
 - **Verify, don't trust the plan's self-reported status.** Classification must cite repo evidence (`file:line`, a passing/failing test, an absent symbol). "The plan says it's done" is not evidence.
