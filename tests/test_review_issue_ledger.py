@@ -888,6 +888,13 @@ def test_convergence_failed_reviewer_does_not_count_toward_panel() -> None:
 	for notice in (
 		"Reviewer gamma failed after 3 attempts.\n",
 		"Reviewer slot gamma skipped after retryable failure (rate_limit); no same-family failback mapping is available.\n",
+		# Budget, circuit-breaker, pool and ChatGPT slot notices (#10056).
+		"Reviewer slot gamma skipped because only 60s remain before soft deadline (need 300s minimum for attempt 1).\n",
+		"Reviewer slot gamma skipped because cached reviewer health state is open.\n",
+		"Reviewer slot gamma skipped: the Claude account pool is unavailable (outage).\n",
+		"Reviewer slot gamma failed: its review prompt was empty.\n",
+		"Reviewer slot gamma failed on the Claude account pool after 2 attempt(s) (last reason: x).\n",
+		"Reviewer slot gamma stopped because PR #4242 was closed or merged.\n",
 	):
 		reviewers = {"alpha": _CONV_DEFAULT_REVIEWERS["alpha"], "beta": "No findings.\n", "gamma": notice}
 		with tempfile.TemporaryDirectory() as td:

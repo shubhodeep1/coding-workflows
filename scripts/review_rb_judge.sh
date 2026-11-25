@@ -817,7 +817,9 @@ PY
 # stage marked `CONVERGENCE: advisory-lone` (a finding one reviewer raised that
 # did not block a round) as compact informational notes for the judge. Runs
 # when REVIEW_CONVERGENCE_ENABLED is on (with the ledger off it reads this
-# run's review_convergence_advisory.txt instead); unlike the prior-round
+# run's review_convergence_advisory.txt instead, or the `=== ADVISORY ISSUE`
+# stubs in review_issues.txt when a same-head resume restored them without
+# the TSV); unlike the prior-round
 # decisions it does not need REVIEW_LEDGER_REREVIEW_ENABLED. Fail-open: any
 # error leaves the output file empty.
 render_review_rb_convergence_advisory_file() {
@@ -835,12 +837,24 @@ render_review_rb_convergence_advisory_file() {
     # reviewers, round, summary), so the notes come from it instead and a
     # lone finding still reaches the judge.
     local conv_tsv_path="${REVIEW_CONVERGENCE_ADVISORY_FILE:-${RUNTIME_DIR:-}/review_convergence_advisory.txt}"
-    if [ -z "${RUNTIME_DIR:-}${REVIEW_CONVERGENCE_ADVISORY_FILE:-}" ] || [ ! -f "${conv_tsv_path}" ] || [ -L "${conv_tsv_path}" ] \
-      || [ ! -s "${conv_tsv_path}" ] || ! command -v python3 >/dev/null 2>&1; then
+    local conv_src_path="" conv_src_mode="tsv"
+    local conv_stub_path="${REVIEW_ISSUES_FILE:-${RUNTIME_DIR:-}/review_issues.txt}"
+    if [ -n "${RUNTIME_DIR:-}${REVIEW_CONVERGENCE_ADVISORY_FILE:-}" ] && [ -f "${conv_tsv_path}" ] && [ ! -L "${conv_tsv_path}" ] \
+      && [ -s "${conv_tsv_path}" ]; then
+      conv_src_path="${conv_tsv_path}"
+    elif [ -n "${RUNTIME_DIR:-}${REVIEW_ISSUES_FILE:-}" ] && [ -f "${conv_stub_path}" ] && [ ! -L "${conv_stub_path}" ] \
+      && grep -qs '^=== ADVISORY ISSUE ' "${conv_stub_path}"; then
+      # A same-head resume restores the stubbed review_issues.txt without
+      # the advisory TSV (as in review_autofix_step_post_editor_summary.sh),
+      # so the notes are rebuilt from the `=== ADVISORY ISSUE` stubs.
+      conv_src_path="${conv_stub_path}"
+      conv_src_mode="stubs"
+    fi
+    if [ -z "${conv_src_path}" ] || ! command -v python3 >/dev/null 2>&1; then
       return 0
     fi
     tmp_path="$(mktemp)" || return 0
-    if PYTHONDONTWRITEBYTECODE=1 python3 - "${conv_tsv_path}" > "${tmp_path}" <<'PY'
+    if PYTHONDONTWRITEBYTECODE=1 python3 - "${conv_src_path}" "${conv_src_mode}" > "${tmp_path}" <<'PY'
 from pathlib import Path
 import re
 import sys
@@ -849,7 +863,36 @@ def clean(value: str) -> str:
     value = re.sub(r"[\x00-\x1f\x7f]", " ", value)
     return " ".join(value.replace(";", ",").split())[:300]
 
-for row in Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").splitlines()[:200]:
+raw_lines = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace").splitlines()
+rows = raw_lines
+if sys.argv[2] == "stubs":
+    # Rebuild TSV-shaped rows (block id, file:lines, lens, severity,
+    # reviewers, round, summary) from the `=== ADVISORY ISSUE` stubs.
+    rows = []
+    stub = None
+    for line in raw_lines:
+        if line.startswith("=== ADVISORY ISSUE ") and line.endswith(" ==="):
+            stub = {"ID": line[len("=== ADVISORY ISSUE "):-len(" ===")].strip()}
+            continue
+        if stub is None:
+            continue
+        if line.startswith("=== END ADVISORY ISSUE "):
+            rows.append("\t".join([
+                stub["ID"].replace("\t", " "),
+                f'{stub.get("FILE", "")}:{stub.get("LINES", "")}',
+                stub.get("LENS", ""),
+                stub.get("SEVERITY", ""),
+                stub.get("CONVERGENCE_REVIEWERS", ""),
+                stub.get("CONVERGENCE_ROUND", ""),
+                stub.get("SUMMARY", ""),
+            ]))
+            stub = None
+            continue
+        if ":" in line:
+            key, value = line.split(":", 1)
+            stub.setdefault(key.strip(), value.strip().replace("\t", " "))
+
+for row in rows[:200]:
     cols = row.split("\t")
     if len(cols) < 7 or not cols[0].strip():
         continue

@@ -854,10 +854,14 @@ review_convergence_classify()
 				sec_text[nsec] = ""
 				sec_nonempty[nsec] = 0
 				# A section whose every non-empty line is a reviewer failure
-				# notice (scripts/review_run_reviewers.sh writes
-				# `Reviewer <model> failed after ...` or
-				# `Reviewer slot <model> skipped after ...` into the output
-				# file) is not a reviewer that took part in the round.
+				# or skip notice is not a reviewer that took part in the
+				# round. scripts/review_run_reviewers.sh writes these into
+				# the output file as `Reviewer <model> failed after ...`,
+				# `Reviewer slot <model> skipped after ...`,
+				# `... skipped because ...` (budget, circuit breaker, PR
+				# closed), `... skipped: ...` / `... failed: ...` (pool and
+				# ChatGPT slots), `... failed on ...` and
+				# `... stopped because ...`.
 				sec_failed_only[nsec] = 1
 				nanc[nsec] = 0
 				pending_file[nsec] = ""
@@ -918,7 +922,7 @@ review_convergence_classify()
 		function scan_content_line(s, line,    rest, hit, f, l, ref, lw, fl) {
 			if (line ~ /[^[:space:]]/) {
 				sec_nonempty[s] = 1
-				if (line !~ /^[[:space:]]*Reviewer (slot )?[^[:space:]]+ (failed|skipped) after /) {
+				if (line !~ /^[[:space:]]*Reviewer (slot )?[^[:space:]()]+( \([^)]*\))? (failed|skipped|stopped)([[:space:]]+(after|because|on)[[:space:]]|:[[:space:]]|[[:space:]]+—)/) {
 					sec_failed_only[s] = 0
 				}
 			}
