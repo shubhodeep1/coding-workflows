@@ -3159,6 +3159,12 @@ only, both `false` by default) through `scripts/alert_inbox_capture.sh`:
 | `ALERT_TRIAGE_MODEL` | `WORKFLOW_EDITOR_MODEL`, then `openai/gpt-6-sol` | Codex model of the `ALERT_TRIAGE` role's fallback (the Claude model comes from `.github/ai/claude_engine.json`) |
 | `THINKING_LEVEL_ALERT_TRIAGE` | `high` | Codex reasoning effort of the `ALERT_TRIAGE` role |
 | `HEAL_ALERT_TRIAGE_KIND_ENABLED` | `true` | Heal intake accepts `alert_triage` reports (only from this repository's `alert-triage.yml` OIDC identity); `false` skips them |
+| `ALERT_TRIAGE_BREAK_GLASS_ENABLED` | `false` | Turns on the hourly break-glass scan of `alert-self-fix.yml`: it posts `ai-review/head-gate=success` on an `ai:alert-self-fix` PR head only when all six conditions hold (ownership, no gate status after 60 minutes or an `error` one, never over a `failure`; allowed paths; an independent `ALERT_BREAK_GLASS_REVIEWER` approve; the full test suite in the credential-free gate container; the daily cap) |
+| `ALERT_TRIAGE_BREAK_GLASS_MAX_PER_DAY` | `2` | Break-glass passes allowed in any 24 hours (integer 0-10; an invalid value means 0, no pass) |
+| `ALERT_TRIAGE_BREAK_GLASS_TEST_TIMEOUT_MINUTES` | `90` | Timeout of the break-glass full test-suite run (condition 5) in the gate container |
+| `ALERT_SELF_FIX_EDITOR_TIMEOUT_SECS` | `3600` | Wall clock of the alert self-fix editor (`IMPLEMENT` role, Claude then codex fallback) |
+| `ALERT_SELF_FIX_GATE_TIMEOUT_MINUTES` | `20` | Timeout of the pre-push affected-test gate that verifies an alert self-fix before its PR opens |
+| `AI_ENGINE_ALERT_BREAK_GLASS_REVIEWER` | — | Per-role engine override (`claude`/`codex`) of the read-only break-glass reviewer; empty uses `.github/ai/claude_engine.json` (Claude, codex fallback) |
 
 ## Semantic Cache (Clarification Only)
 

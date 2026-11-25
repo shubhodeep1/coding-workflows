@@ -1,0 +1,294 @@
+---
+name: Alert Self-Fix
+
+# Alert self-fix and break-glass (alert triage plan Phase 3, Refs #9394;
+# docs/plans/alert-triage-auto-heal-plan.md, "Self-fix and break-glass").
+#
+# self-fix (workflow_dispatch from scripts/alert_triage_route.sh, inputs
+#   `fingerprint` and `diagnosis`, the body alert_triage.py
+#   build_self_fix_body sends): on a clean worktree of the default branch at
+#   the pinned github.sha, the IMPLEMENT engine role (Claude, codex fallback,
+#   credential-free sandbox) writes the fix on ai/alert-self-fix-<fp8>-<run_id>;
+#   the pre-push affected-test gate and syntax checks verify it; the host
+#   pushes, lints the PR body (scripts/lint_pr_body_auto_close.py), opens a
+#   PR labelled ai:alert-self-fix, records it on ai/alert-inbox and enables
+#   auto-merge (squash, head commit pinned). Logic: scripts/alert_self_fix.sh.
+#
+# break-glass (cron, only with vars.ALERT_TRIAGE_BREAK_GLASS_ENABLED == 'true',
+#   default off): posts ai-review/head-gate=success on a self-fix PR head only
+#   when all six conditions of scripts/alert_self_fix_break_glass.sh hold
+#   (ownership, missing-or-error gate status -- a failure is never overridden,
+#   allowed paths, an independent ALERT_BREAK_GLASS_REVIEWER approve, the full
+#   test suite in the credential-free gate container, the daily cap).
+#
+# The main ruleset is not changed. Model processes get no credentials; only
+# host steps hold tokens. Every ${{ }} value reaches the scripts through env:.
+# Rollback: set ALERT_TRIAGE_BREAK_GLASS_ENABLED=false (and
+# ALERT_TRIAGE_SELF_FIX_ENABLED=false in alert triage), or revert. Open
+# self-fix PRs then go through normal review.
+#
+# Runner budget (CLAUDE.md §26): self-fix runs only when alert triage
+# dispatches it (one run per pipeline-blocking group, capped by the triage
+# ledger); break-glass is one job per hour and none while disabled (a false
+# job-level `if:` takes no runner). They are two jobs because they have
+# different triggers, permissions (statuses: write only for break-glass) and
+# concurrency groups; neither can join an existing job.
+
+"on":
+  workflow_dispatch:
+    inputs:
+      fingerprint:
+        description: Alert group fingerprint (64 hex)
+        required: true
+        type: string
+      diagnosis:
+        description: Alert triage diagnosis (compact JSON, at most 16 KiB)
+        required: true
+        type: string
+  schedule:
+    - cron: '47 * * * *'
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
+  PYTHONDONTWRITEBYTECODE: "1"
+  # The broker refuses this workflow until the Worker with alert-self-fix.yml
+  # in ALLOWED_WORKFLOW_FILES is deployed, so Claude falls back to codex for
+  # every non-capacity reason, and an exhausted pool runs codex instead of
+  # waiting.
+  AI_ENGINE_FALLBACK_POLICY: 'always'
+  CLAUDE_POOL_CAPACITY_WAIT_ENABLED: 'false'
+  AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+  AI_ENGINE_IMPLEMENT: ${{ vars.AI_ENGINE_IMPLEMENT || '' }}
+  AI_ENGINE_ALERT_BREAK_GLASS_REVIEWER: ${{ vars.AI_ENGINE_ALERT_BREAK_GLASS_REVIEWER || '' }}
+
+jobs:
+  self-fix:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: write
+      pull-requests: read
+      actions: read
+      id-token: write
+    concurrency:
+      group: alert-self-fix-dispatch-${{ inputs.fingerprint || 'none' }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout pinned default-branch SHA
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Prepare self-fix
+        id: prepare
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ALERT_SELF_FIX_INPUT_FINGERPRINT: ${{ inputs.fingerprint }}
+          ALERT_SELF_FIX_INPUT_DIAGNOSIS: ${{ inputs.diagnosis }}
+          ALERT_SELF_FIX_DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+        run: bash scripts/alert_self_fix.sh prepare
+
+      - name: Install Codex CLI
+        if: steps.prepare.outputs.proceed == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/install-codex
+        with:
+          codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+
+      - name: Create Codex config
+        if: steps.prepare.outputs.proceed == 'true'
+        continue-on-error: true
+        env:
+          ALERT_SELF_FIX_MODEL: ${{ vars.ALERT_SELF_FIX_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
+          ALERT_SELF_FIX_REASONING: ${{ vars.THINKING_LEVEL_IMPLEMENT || 'high' }}
+        run: |
+          set -euo pipefail
+          bash "${GITHUB_WORKSPACE}/scripts/write_codex_config.sh" \
+            --model "${ALERT_SELF_FIX_MODEL}" \
+            --reasoning "${ALERT_SELF_FIX_REASONING}" \
+            --catalog-path "${GITHUB_WORKSPACE}/scripts/codex_model_catalog.json"
+          echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
+
+      - name: Install Claude Code CLI
+        if: steps.prepare.outputs.proceed == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/install-claude
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        if: steps.prepare.outputs.proceed == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Stage Claude engine support
+        if: steps.prepare.outputs.proceed == 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          claude_engine_support_dest="${RUNNER_TEMP}/claude-engine-support"
+          # shellcheck disable=SC1091
+          if source "${GITHUB_WORKSPACE}/scripts/ai_engine.sh" &&
+             ai_engine_stage_support "${GITHUB_WORKSPACE}" "${claude_engine_support_dest}"; then
+            echo "CLAUDE_ENGINE_SUPPORT_DIR=${claude_engine_support_dest}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Trusted Claude engine support is unavailable; the codex editor runs instead."
+          fi
+
+      # No GitHub token here: the editor runs in the credential-free sandbox.
+      - name: Write the fix
+        id: edit
+        if: steps.prepare.outputs.proceed == 'true'
+        env:
+          ALERT_SELF_FIX_MODEL: ${{ vars.ALERT_SELF_FIX_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
+          ALERT_SELF_FIX_EDITOR_TIMEOUT_SECS: ${{ vars.ALERT_SELF_FIX_EDITOR_TIMEOUT_SECS || '3600' }}
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          # The codex fallback's host-side broker needs the inference key
+          # (scripts/codex_isolated_exec.sh); it never enters the sandbox.
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          SUPPORT_INSTRUCTIONS_FILE: ${{ github.workspace }}/unattended_system_instructions.md
+        run: bash scripts/alert_self_fix.sh edit
+
+      # No secrets: the tests run in the network-less gate container.
+      - name: Verify the fix
+        id: verify
+        if: steps.prepare.outputs.proceed == 'true'
+        env:
+          ALERT_SELF_FIX_GATE_TIMEOUT_MINUTES: ${{ vars.ALERT_SELF_FIX_GATE_TIMEOUT_MINUTES || '20' }}
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+        run: bash scripts/alert_self_fix.sh verify
+
+      - name: Publish the self-fix PR
+        id: publish
+        if: steps.prepare.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_TOKEN: ${{ github.token }}
+          ALERT_SELF_FIX_DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+        run: bash scripts/alert_self_fix.sh publish
+
+      - name: Escalate
+        if: failure() || steps.prepare.outputs.escalate == 'true'
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+        run: bash scripts/alert_self_fix.sh escalate
+
+  break-glass:
+    if: github.event_name == 'schedule' && vars.ALERT_TRIAGE_BREAK_GLASS_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    permissions:
+      contents: write
+      statuses: write
+      pull-requests: read
+      id-token: write
+    # One scan at a time and never cancelled: a scan writes ledger records
+    # before it posts a status.
+    concurrency:
+      group: alert-self-fix-break-glass
+      cancel-in-progress: false
+    env:
+      ALERT_TRIAGE_BREAK_GLASS_ENABLED: ${{ vars.ALERT_TRIAGE_BREAK_GLASS_ENABLED || 'false' }}
+      ALERT_TRIAGE_BREAK_GLASS_MAX_PER_DAY: ${{ vars.ALERT_TRIAGE_BREAK_GLASS_MAX_PER_DAY || '2' }}
+    steps:
+      - name: Checkout default branch
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Scan self-fix PRs
+        id: scan
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+        run: bash scripts/alert_self_fix_break_glass.sh scan
+
+      - name: Install Codex CLI
+        if: steps.scan.outputs.candidate != ''
+        continue-on-error: true
+        uses: ./.github/actions/install-codex
+        with:
+          codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+
+      - name: Create Codex config
+        if: steps.scan.outputs.candidate != ''
+        continue-on-error: true
+        env:
+          ALERT_BREAK_GLASS_MODEL: ${{ vars.ALERT_BREAK_GLASS_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
+          ALERT_BREAK_GLASS_REASONING: ${{ vars.THINKING_LEVEL_ALERT_TRIAGE || 'high' }}
+        run: |
+          set -euo pipefail
+          bash "${GITHUB_WORKSPACE}/scripts/write_codex_config.sh" \
+            --model "${ALERT_BREAK_GLASS_MODEL}" \
+            --reasoning "${ALERT_BREAK_GLASS_REASONING}" \
+            --catalog-path "${GITHUB_WORKSPACE}/scripts/codex_model_catalog.json"
+          echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
+
+      - name: Install Claude Code CLI
+        if: steps.scan.outputs.candidate != ''
+        continue-on-error: true
+        uses: ./.github/actions/install-claude
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        if: steps.scan.outputs.candidate != ''
+        continue-on-error: true
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Stage Claude engine support
+        if: steps.scan.outputs.candidate != ''
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          claude_engine_support_dest="${RUNNER_TEMP}/claude-engine-support"
+          # shellcheck disable=SC1091
+          if source "${GITHUB_WORKSPACE}/scripts/ai_engine.sh" &&
+             ai_engine_stage_support "${GITHUB_WORKSPACE}" "${claude_engine_support_dest}"; then
+            echo "CLAUDE_ENGINE_SUPPORT_DIR=${claude_engine_support_dest}" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Trusted Claude engine support is unavailable; condition 4 fails closed."
+          fi
+
+      # No GitHub token here: the reviewer runs read-only in the sandbox.
+      - name: Independent review (condition 4)
+        id: review
+        if: steps.scan.outputs.candidate != ''
+        env:
+          ALERT_BREAK_GLASS_MODEL: ${{ vars.ALERT_BREAK_GLASS_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          SUPPORT_INSTRUCTIONS_FILE: ${{ github.workspace }}/unattended_system_instructions.md
+        run: bash scripts/alert_self_fix_break_glass.sh review
+
+      # No token at all: the suite runs in the network-less gate container.
+      - name: Full test suite (condition 5)
+        id: test
+        if: steps.review.outputs.approved == 'true'
+        env:
+          ALERT_TRIAGE_BREAK_GLASS_TEST_TIMEOUT_MINUTES: ${{ vars.ALERT_TRIAGE_BREAK_GLASS_TEST_TIMEOUT_MINUTES || '90' }}
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+        run: bash scripts/alert_self_fix_break_glass.sh test
+
+      - name: Post break-glass status
+        if: steps.test.outputs.tests_passed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GITHUB_TOKEN: ${{ github.token }}
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+        run: bash scripts/alert_self_fix_break_glass.sh post

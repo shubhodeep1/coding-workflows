@@ -115,6 +115,7 @@ const JWKS_REFRESH_FLOOR_MS = 60 * 1000;
  * tests/test_claude_pool_token.py keeps this list equal to that set.
  */
 export const ALLOWED_WORKFLOW_FILES: readonly string[] = Object.freeze([
+	"alert-self-fix.yml",
 	"alert-triage.yml",
 	"check_failure_triage.yml",
 	"clarify.yml",
