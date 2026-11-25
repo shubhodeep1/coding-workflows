@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:180 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED` row says \"Costs two contents reads per such failed run and no extra sweep read.\" That claim is wrong when `FINAL_CI_SWEEP_BASE_SYNC_ENABLED` is off or `FINAL_CI_SWEEP_BASE_SYNC_MAX` is 0. In those cases the sweep still calls `_pr_base_sync_count`, which makes one `user` read and one paginated comments read for each eligible failed candidate. The relevant code is in `scripts/review_final_ci_sweep.sh`: lines 462-473 set `FINAL_CI_SWEEP_BASE_SYNC_OFF=base_sync_disabled` instead of returning, and lines 262-264 and 279 set `sync_off=\"cap_zero\"` and continue.\n  WHY: This affects documentation only and nothing fails at runtime. It gives operators a low API-cost figure, and it contradicts the `FINAL_CI_SWEEP_BASE_SYNC_ENABLED` row (README.md:184), the `FINAL_CI_SWEEP_BASE_SYNC_MAX` row (README.md:186) and the changelog \"Extra API calls in the sweep\" row. All five reviewers rated it NIT, mapped here to low, so there was no severity disagreement. Confidence ranged from 3 to 5.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- README.md:line 180, the `FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED` row, which ends with \"Costs two contents reads per such failed run and no extra sweep read.\" | severity=NIT | confidence=4\n  PROBLEM: The last autofix run edited this row but kept the \"no extra sweep read\" claim. In scripts/review_final_ci_sweep.sh, `review_final_ci_sweep_main` (lines 464-472) sets `FINAL_CI_SWEEP_BASE_SYNC_OFF=base_sync_disabled` and runs the candidate loop instead of returning. In `review_final_ci_sweep_base_sync`, a zero cap sets `sync_off=\"cap_zero\"` (lines 262-263) instead of returning early, so execution reaches `_pr_base_sync_count` (line 279), which makes one `user` read and one paginated comments read per eligible failed candidate. Lines 184 and 186 and the changelog.d fragment state the reads correctly, so line 180 is the only contradiction left.\n  WHY: This affects documentation only. Operators estimating API cost for `FINAL_CI_SWEEP_BASE_SYNC_ENABLED=false` or `FINAL_CI_SWEEP_BASE_SYNC_MAX=0` get the wrong figure. Suggested fix: change the text to \"and no extra sweep read while base sync is on (see `FINAL_CI_SWEEP_BASE_SYNC_ENABLED` for the reads made when it is off or its cap is 0)\".\n- TASK COMPLETENESS / INTENT GAPS: NONE (the reviewer found every deliverable present).\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- README.md:FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED row, column 5 | severity=NIT | confidence=5\n  PROBLEM: The row claims \"no extra sweep read\" when base sync is off or its cap is 0, but scripts/review_final_ci_sweep.sh still performs comments reads in those cases so it can hand back heads carrying the stale-workflow marker.\n  WHY: Nothing fails at runtime, but the API-cost documentation given to operators is inaccurate.\n- TASK COMPLETENESS / INTENT GAPS: NONE\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- README.md:line 180, the `FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED` row, the sentence \"Costs two contents reads per such failed run and no extra sweep read.\" | severity=NIT | confidence=3\n  PROBLEM: The cost claim has no qualification. The implementation, the rows at line 184 and line 186, the agents.d fragment and the changelog \"Extra API calls in the sweep\" row all describe one `user` read and one comments read per eligible failed candidate when base sync is off or its cap is 0. In `scripts/review_final_ci_sweep.sh`, `review_final_ci_sweep_main` lines 462-473 still set `FINAL_CI_SWEEP_BASE_SYNC_OFF=\"base_sync_disabled\"`, and `review_final_ci_sweep_base_sync` lines 262-264 still set `sync_off=\"cap_zero\"`, so `_pr_base_sync_count` runs.\n  WHY: Nothing fails at runtime; this is a documentation inconsistency. An operator reading line 180 alone will not see the extra reads, which contradicts the other three rows and the changelog.\n- TASK COMPLETENESS / INTENT GAPS: NONE\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- README.md:Line 180; `scripts/review_final_ci_sweep.sh` lines 262-280 and `scripts/pr_checks_lib.sh` lines 1965-1973. | severity=NIT | confidence=5\n  PROBLEM: The `FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED` row says \"no extra sweep read\", but when base sync is disabled or its cap is zero the sweep still calls `_pr_base_sync_count` for eligible candidates, and that function reads the token user and the PR comments.\n  WHY: Operators who rely on this row get an understated API-call budget for those configurations, and the row contradicts the base-sync and cap rows.\n- TASK COMPLETENESS / INTENT GAPS: NONE\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- README.md:line 180, the `FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED` row, sentence \"Costs two contents reads per such failed run and no extra sweep read.\" | severity=NIT | confidence=4\n  PROBLEM: The claim is false for two shipped configurations. `review_final_ci_sweep_main` (scripts/review_final_ci_sweep.sh:462-473) sets `FINAL_CI_SWEEP_BASE_SYNC_OFF=base_sync_disabled` and still visits failed heads. `review_final_ci_sweep_base_sync` (scripts/review_final_ci_sweep.sh:262-264 and 279) sets `sync_off=cap_zero` for a cap of 0 and continues into `_pr_base_sync_count \"${number}\" \"${sha}\"`, which makes one `user` read and one paginated comments read per eligible failed candidate, within `FINAL_CI_SWEEP_MAX_PER_TICK`. The row contradicts README.md:184, README.md:186 and `changelog.d/10093-final-ci-stale-workflow-sync.md` line 11. This is the pass-1 consensus finding, still unfixed: the last autofix run edited this row but left this sentence.\n  WHY: This affects documentation only. Operators sizing API spend for `FINAL_CI_SWEEP_BASE_SYNC_ENABLED=false` or `FINAL_CI_SWEEP_BASE_SYNC_MAX=0` read a wrong \"no extra sweep read\" figure, three rows above rows that state the opposite.\n- TASK COMPLETENESS / INTENT GAPS: NONE (every deliverable in issue #10093 is present in the PR diff).\n- HARDENING_SUGGESTIONS: none; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "633b273052e8c8e55760ec0a2c71e58a258c813b9b3ce949e6d827c232e8744e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10103,
+    "run_id": "45611586253",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45611586253",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125135602_81d26dc3a6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10103,
+    "run_id": "45611586253"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T13:56:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
