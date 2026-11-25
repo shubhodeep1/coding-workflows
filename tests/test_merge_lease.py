@@ -2448,6 +2448,44 @@ class LeaseSourceIssueGuard(unittest.TestCase):
 				)
 				self.assertGreaterEqual(text.count("MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED:"), count)
 
+	# The update-mode gate (a PR's own review/update run) applies G4 as well.
+
+	@staticmethod
+	def _update_state(graphql: dict | None) -> dict:
+		st = {"pulls": [_pull(5), _pull(6)], "labels": {"5": [WAIT]}, "files": {"5": ["a"], "6": ["b"]}}
+		if graphql is not None:
+			st["graphql"] = graphql
+		return st
+
+	def test_update_gate_never_gives_an_orphan_a_free_lease(self) -> None:
+		h = _Harness({"pulls": [_pull(9562, head_ref="ai/issue-9519")], "files": {"9562": ["a"]},
+			"graphql": _issue_states(n9519=("CLOSED", "NOT_PLANNED"))})
+		rc, out = _gate(h, 9562, "update")
+		self.assertEqual(rc, 1, out)
+		self.assertIn("MERGE_LEASE pr=9562 base=main mode=update outcome=skipped reason=source_issue_not_planned", out)
+		self.assertIn("outcome=wait reason=source_issue_not_planned", out)
+		self.assertNotIn(REF, h.state.get("refs", {}), "no lease record is written for an orphan")
+
+	def test_update_gate_passes_over_an_orphaned_waiter(self) -> None:
+		h = _Harness(self._update_state(_issue_states(n5=("CLOSED", "NOT_PLANNED"))))
+		rc, out = _gate(h, 6, "update")
+		self.assertEqual(rc, 0, out)
+		self.assertIn("outcome=acquired", out)
+		self.assertNotIn("queued_behind", out)
+		self.assertEqual(sum(1 for call in h.calls if "graphql" in call), 1)
+
+	def test_update_gate_switch_off_or_failed_read_keeps_todays_queue(self) -> None:
+		h = _Harness(self._update_state(_issue_states(n5=("CLOSED", "NOT_PLANNED"))))
+		rc, out = _gate(h, 6, "update", {"MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED": "false"})
+		self.assertEqual(rc, 1, out)
+		self.assertIn("reason=queued_behind", out)
+		self.assertEqual(sum(1 for call in h.calls if "graphql" in call), 0)
+		h = _Harness(self._update_state({"errors": [{"message": "rate limited"}]}))
+		rc, out = _gate(h, 6, "update")
+		self.assertEqual(rc, 1, out)
+		self.assertIn("MERGE_LEASE pr=- base=main mode=update outcome=unavailable reason=source_issue_read_failed", out)
+		self.assertIn("reason=queued_behind", out)
+
 class LeaseQueueSnapshot(unittest.TestCase):
 	"""Merge-lease parallel merges Phase 1 steps 1.2-1.3 (Refs #9781): the
 	queue order is exposed and logged once per lease ref, with no API call."""

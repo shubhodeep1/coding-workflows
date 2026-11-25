@@ -3005,6 +3005,54 @@ _merge_lease_source_issue_orphans()
 	return 0
 }
 
+# Issue #10121 (G4), the update-mode gate: a PR's own review/update run must
+# not take a free lease (or join as a Phase 5 holder) for an orphan of a
+# re-issue, and an orphaned waiter must not be first in queue order.
+# _merge_lease_gate_source_issue_skip <pulls_json> <pr> <base>
+#   input:  the REST open-pulls listing the gate already read (no other read);
+#           <pr> counts as a labelled waiter so its own source issue is read.
+#   calls:  _merge_lease_source_issue_orphans: none without an `ai/issue-<n>`
+#           candidate, else one GraphQL query per 50 issue numbers. Only the
+#           free-lease / join path calls this, never a renewal.
+#   output: MERGE_LEASE_GATE_SOURCE_ORPHANS = comma-separated orphan PRs other
+#           than <pr> (the caller excludes them from the queue). Returns 1, with
+#           MERGE_LEASE_OUTCOME=wait reason=source_issue_not_planned and its
+#           wait label left as it is, when <pr> itself is an orphan; else 0.
+#   fail-open: switch off, helper missing or a failed read returns 0 with no
+#           orphans (a failed read logs outcome=unavailable).
+_merge_lease_gate_source_issue_skip()
+{
+	local gate_src_pulls="${1:-[]}" gate_src_pr="${2:-}" gate_src_base="${3:-}" gate_src_rows gate_src_orphan
+	MERGE_LEASE_GATE_SOURCE_ORPHANS=""
+	declare -F _merge_lease_source_issue_orphans >/dev/null 2>&1 || return 0
+	_merge_lease_source_issue_guard_enabled || return 0
+	[[ "${gate_src_pr}" =~ ^[1-9][0-9]*$ ]] || return 0
+	gate_src_rows="$(jq -c --argjson self "${gate_src_pr}" --arg l "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" '
+		[ .[]? | if type == "array" then .[] else . end | select(type == "object")
+		| {number, draft: (.draft // false),
+			head: (if (.head | type) == "object" then (.head.ref // "") else (.head // "") end),
+			head_repo: (if (.head | type) == "object" then (.head.repo.full_name // "") else (.head_repo // "") end),
+			labels: ([ (.labels // [])[] | if type == "object" then .name else . end ] + (if .number == $self then [$l] else [] end))} ]' \
+		<<< "${gate_src_pulls}" 2>/dev/null)" || return 0
+	_merge_lease_source_issue_orphans "${gate_src_rows}" >/dev/null 2>&1 || return 0
+	if [ "${MERGE_LEASE_SOURCE_ISSUE_READ:-}" = "failed" ]; then
+		_merge_lease_log - "${gate_src_base}" update unavailable source_issue_read_failed
+		return 0
+	fi
+	for gate_src_orphan in ${MERGE_LEASE_SOURCE_ISSUE_ORPHANS//,/ }; do
+		[[ "${gate_src_orphan}" =~ ^[1-9][0-9]*$ ]] || continue
+		if [ "${gate_src_orphan}" = "${gate_src_pr}" ]; then
+			MERGE_LEASE_OUTCOME="wait"
+			MERGE_LEASE_REASON="source_issue_not_planned"
+			_merge_lease_log "${gate_src_pr}" "${gate_src_base}" update skipped source_issue_not_planned
+			_merge_lease_metric skipped "${gate_src_base}" "${gate_src_pr}" update source_issue_not_planned || true
+			return 1
+		fi
+		MERGE_LEASE_GATE_SOURCE_ORPHANS="${MERGE_LEASE_GATE_SOURCE_ORPHANS:+${MERGE_LEASE_GATE_SOURCE_ORPHANS},}${gate_src_orphan}"
+	done
+	return 0
+}
+
 # Idle window in seconds (MERGE_LEASE_IDLE_MINUTES, default 180, clamped to
 # 0-1440; anything that is not a number uses 180). 0 turns the idle test off.
 _merge_lease_idle_seconds()
@@ -4343,6 +4391,10 @@ _merge_lease_gate_multi()
 	# goes first. The listing is the single-holder path's call.
 	gm_pulls_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${gm_repo}/pulls?state=open&base=$(printf '%s' "${gm_base}" | jq -sRr @uri)&per_page=100" 2>/dev/null)" || gm_pulls_json=""
 	if jq -e 'type == "array"' >/dev/null 2>&1 <<< "${gm_pulls_json}"; then
+		# Issue #10121 (G4): an orphan never joins as a holder; orphaned
+		# waiters are passed over in queue order.
+		_merge_lease_gate_source_issue_skip "${gm_pulls_json}" "${gm_pr}" "${gm_base}" || return 1
+		gm_excluded="${MERGE_LEASE_GATE_SOURCE_ORPHANS:-}"
 		if _merge_lease_revoke_enabled; then
 			# Issue #9983 G5: a soft entry whose head-gate passed no longer blocks.
 			_merge_lease_skips_effective "${MERGE_LEASE_SKIPS:-}" "${gm_pulls_json}" "${gm_pr}"
@@ -4511,15 +4563,19 @@ _merge_lease_gate()
 		if ! { [ "${lease_rc}" -eq 0 ] && _merge_lease_is_held && [ "${MERGE_LEASE_PR}" = "${lease_pr}" ]; }; then
 			lease_pulls_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${lease_repo}/pulls?state=open&base=$(printf '%s' "${lease_base}" | jq -sRr @uri)&per_page=100" 2>/dev/null)" || lease_pulls_json=""
 			if jq -e 'type == "array"' >/dev/null 2>&1 <<< "${lease_pulls_json}"; then
+				# Issue #10121 (G4): an orphan of a re-issue never takes a free
+				# lease through its own run, and orphaned waiters are not first.
+				_merge_lease_gate_source_issue_skip "${lease_pulls_json}" "${lease_pr}" "${lease_base}" || return 1
 				if _merge_lease_revoke_enabled; then
 					# Phase 2: a PR on the record's skip list (unchanged head) does
 					# not jump ahead of another waiter; with no other waiter it
 					# still acquires, and its write drops its own entry. Issue #9983
 					# G5: a soft entry whose head-gate passed no longer blocks.
 					_merge_lease_skips_effective "${MERGE_LEASE_SKIPS:-}" "${lease_pulls_json}" "${lease_pr}"
-					lease_first="$(_merge_lease_queue_first "${lease_pulls_json}" "${lease_pr}" "${MERGE_LEASE_SKIPS_EFFECTIVE:-}")"
+					lease_first="$(_merge_lease_queue_first "${lease_pulls_json}" "${lease_pr}" "${MERGE_LEASE_SKIPS_EFFECTIVE:-}" "${MERGE_LEASE_GATE_SOURCE_ORPHANS:-}")"
 				else
-					lease_first="$(_merge_lease_queue_first "${lease_pulls_json}" "${lease_pr}")"
+					# MERGE_LEASE_GATE_SOURCE_ORPHANS is empty unless #10121 found orphans.
+					lease_first="$(_merge_lease_queue_first "${lease_pulls_json}" "${lease_pr}" "" "${MERGE_LEASE_GATE_SOURCE_ORPHANS:-}")"
 				fi
 				if printf '%s' "${lease_pulls_json}" | jq -e --argjson n "${lease_pr}" --arg l "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" \
 					'[ .[]? | if type == "array" then .[] else . end | select(type == "object" and .number == $n) | (.labels // [])[] | (if type == "object" then .name else . end) | select(. == $l) ] | length > 0' >/dev/null 2>&1; then

@@ -6643,6 +6643,19 @@ def test_shell_guard_off_values_make_no_own_pr_read(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required for the unblock judge fixture")
+@pytest.mark.parametrize("value", ["n o", "f alse", "o ff"])
+def test_shell_guard_inner_whitespace_keeps_the_guard_on(tmp_path: Path, value: str) -> None:
+	# As Python's .strip() (warns, keeps on): only leading/trailing space is trimmed.
+	assert actions._own_pr_guard_enabled({"UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED": value}) is True
+	result, state = _judge(tmp_path, ISSUE, verdict=REISSUE, FAKE_GH_OWN_PRS=_own_response(_own_node(9899)),
+		UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED=value)
+	out = result.stdout + result.stderr
+	assert _graphql_calls(state) == 2, out
+	assert "outcome=refused reason=own_pr_green pr=9899" in out, out
+	assert state["created"] == []
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required for the unblock judge fixture")
 def test_own_pr_page_overflow_is_unknown(tmp_path: Path) -> None:
 	response = json.loads(_own_response(_own_node(9562, gate="PENDING")))
 	response["data"]["repository"]["pullRequests"]["totalCount"] = 11

@@ -1914,7 +1914,12 @@ unblock_resolve_ci_owner()
 # registry's on_values; any other value keeps this safety guard on.
 unblock_own_pr_guard_enabled()
 {
-	case "$(printf '%s' "${UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED:-true}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')" in
+	# Trim only leading and trailing whitespace, as Python's str.strip(): an
+	# inner space (`n o`, `f alse`) is an invalid value and keeps the guard on.
+	local own_guard_value="${UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED:-true}"
+	own_guard_value="${own_guard_value#"${own_guard_value%%[![:space:]]*}"}"
+	own_guard_value="${own_guard_value%"${own_guard_value##*[![:space:]]}"}"
+	case "$(printf '%s' "${own_guard_value}" | tr '[:upper:]' '[:lower:]')" in
 		false|0|no|off) return 1 ;;
 	esac
 	return 0
