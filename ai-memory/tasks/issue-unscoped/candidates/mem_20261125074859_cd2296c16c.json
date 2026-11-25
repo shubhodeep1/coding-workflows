@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/orchestrate_poll.yml:1605-2036 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The updated steps in orchestrate_poll.yml (lines 1605-1610, 1865-1870, 2031-2036) are missing MERGE_LEASE_SOFT_PATHS and MERGE_LEASE_MAX_HOLDERS from the full set of required lease settings.\n  WHY: The lease renewal logic in these steps falls back to script defaults for these two settings instead of using the repository variables, which defeats the goal of passing the full set (source severity MAJOR, mapped to high); anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash each say they checked these blocks and found the full 8-key set present.\n- tests/test_merge_lease_env_contract.py:150 | severity=low | confidence=2\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The freshness-gate trigger (`runs_freshness_gate = \"MERGE_BASE_FRESHNESS_ENABLED\" in env`) ignores the flag's value, so a block that pins `MERGE_BASE_FRESHNESS_ENABLED: false` must still carry all 8 `MERGE_LEASE_*` keys.\n  WHY: If a step pins the flag off without the lease set, `test_repo_workflows_satisfy_contract` reports a false violation; no current workflow does this, so the test is only stricter than needed and nothing fails today (source severity NIT; anthropic_claude-sonnet-5_5 and minimax_minimax-m3 chose not to re-raise this because an earlier round deferred it).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Pass the full set of lease settings to every such step (Goal 1).\n  expected_change_site: .github/workflows/orchestrate_poll.yml env blocks for the three steps updated in the PR\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The diff for orchestrate_poll.yml adds 6 of the 8 required keys, missing MERGE_LEASE_SOFT_PATHS and MERGE_LEASE_MAX_HOLDERS.\n- requirement: \"A deliberate exception stays possible and visible: \u2026 the test accepts an explicit literal with a comment naming the reason\" (issue #10078 Goals); the literal exception must have a comment naming the reason.\n  expected_change_site: tests/test_merge_lease_env_contract.py, `_literal_has_comment()` (lines 118-124)\n  confidence=4\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: At lines 118-124 the check only verifies that the preceding line starts with `#`, so an unrelated or empty comment passes, line 124 returns `all(i > 0 and lines[i - 1].strip().startswith(\"#\") for i in hits)` and no assertion checks the comment text, the fixture tests cover a comment with a reason and no comment but not an unrelated comment (anthropic_claude-sonnet-5_5 explicitly declined to treat this as a gap because a line-based check cannot tell whether a comment states a reason)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/orchestrate_poll.yml:lines 1605-1610, 1865-1870, 2031-2036 | severity=MAJOR | confidence=4\n  PROBLEM: The updated steps in orchestrate_poll.yml are missing MERGE_LEASE_SOFT_PATHS and MERGE_LEASE_MAX_HOLDERS from the full set of required lease settings.\n  WHY: The lease renewal logic in these steps will fall back to script defaults for these two settings instead of using the repository variables, violating the goal of passing the full set of settings.\n- TASK_GAP | severity=MAJOR | confidence=4\n  Requirement: Pass the full set of lease settings to every such step (Goal 1).\n  Expected change site: .github/workflows/orchestrate_poll.yml env blocks for the three steps updated in the PR.\n  Evidence of absence: The diff for orchestrate_poll.yml adds 6 of the 8 required keys, missing MERGE_LEASE_SOFT_PATHS and MERGE_LEASE_MAX_HOLDERS.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP | severity=NIT | confidence=4\n  Requirement: The literal exception must have a comment naming the reason.\n  Expected change site: tests/test_merge_lease_env_contract.py, _literal_has_comment()\n  Evidence of absence: At lines 118-124, the check only verifies that the preceding line starts with `#`; an unrelated or empty comment passes. The fixture tests cover a comment containing a reason and no comment, but not an unrelated comment.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_merge_lease_env_contract.py:line 150 (`runs_freshness_gate = \"MERGE_BASE_FRESHNESS_ENABLED\" in env`) | severity=NIT | confidence=2\n  PROBLEM: the freshness-gate trigger is value-agnostic: a block that pins `MERGE_BASE_FRESHNESS_ENABLED: false` is treated as lease-writing and required to carry all 8 `MERGE_LEASE_*` keys, though a disabled gate cannot run the renewal path.\n  WHY: if an operator sets the repository variable to `false` and a step pins the flag off without the lease set, `test_repo_workflows_satisfy_contract` reports a false violation. No current workflow does this, so it is over-strictness only, not a live failure.\n- TASK_GAP: literal exception must have a comment naming the reason | severity=NIT | confidence=4\n  Requirement: \"A deliberate exception stays possible and visible: \u2026 the test accepts an explicit literal with a comment naming the reason\" (issue #10078 Goals) and the test docstring rule 3: \"the line directly above it in the workflow must be a `#` comment naming the reason\".\n  Expected change site: tests/test_merge_lease_env_contract.py, `_literal_has_comment()` (lines 118-124)\n  Evidence of absence: line 124 returns `all(i > 0 and lines[i - 1].strip().startswith(\"#\") for i in hits)` \u2014 any comment line qualifies, including a bare `#` or an unrelated comment that names no reason. No assertion in the file checks the comment text. The shipped exception's real comment is fine, but the contract the issue asked the test to enforce is weaker than specified.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "840bfb617600a8e24a46e5e938b5e1ffb020e177514e01f1c410793aeb31caa3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10081,
+    "run_id": "45557534904",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45557534904",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125074859_cd2296c16c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10081,
+    "run_id": "45557534904"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T07:48:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
