@@ -231,6 +231,18 @@ def test_pr_checks_error_without_answer_falls_back_to_the_pat(tmp_path: Path) ->
 	assert "HTTP 502" not in result.stderr
 
 
+@pytest.mark.parametrize("pat_rc", ("8", "1"))
+def test_pr_checks_error_keeps_a_valid_non_zero_pat_answer(tmp_path: Path, pat_rc: str) -> None:
+	# The PAT's `pr checks` answer (rc 8 pending, rc 1 with the check table) is
+	# valid, so it is returned with its own rc instead of the job token's error.
+	env = _env(tmp_path, FAKE_JOB_STDOUT="", FAKE_JOB_STDERR="gh: Server Error (HTTP 502)", FAKE_JOB_RC="1", FAKE_PAT_RC=pat_rc)
+	result = _run(tmp_path, f'gh_read pr checks 1 -R {REPO}; echo " rc=$?"', env)
+	assert result.stdout == f"pat-output rc={pat_rc}\n"
+	assert _tokens(env) == [JOB_TOKEN, PAT]
+	assert "GH_READ_FALLBACK reason=error caller=poller.sh" in result.stderr
+	assert "HTTP 502" not in result.stderr
+
+
 @pytest.mark.parametrize(
 	"overrides",
 	(

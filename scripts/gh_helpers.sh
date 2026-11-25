@@ -1357,8 +1357,10 @@ _gh_read_run()
 	# so gh_retry fails fast and reports the real cause.
 	local pat_rc=0
 	gh "$@" >"${out_file}" 2>"${err_file}" || pat_rc=$?
-	if [ "${pat_rc}" -eq 0 ]; then
-		local pat_replay_rc=0
+	# A PAT `pr checks` answer (rc 8 pending, or rc 1 with the check table)
+	# is valid too, so it is returned with its own rc like a success.
+	if [ "${pat_rc}" -eq 0 ] || { [ "${1:-} ${2:-}" = "pr checks" ] && { [ "${pat_rc}" -eq 8 ] || { [ "${pat_rc}" -eq 1 ] && [ -s "${out_file}" ]; }; }; }; then
+		local pat_replay_rc="${pat_rc}"
 		( cat "${out_file}" ) || pat_replay_rc=$?
 		cat "${err_file}" >&2 2>/dev/null || true
 		rm -f "${out_file}" "${err_file}"
