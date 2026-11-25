@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/operator_step_issue.py:456-533 | severity=high | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: SIGNED_COMMENT_LINE_RE requires the signature marker to be the final line (\\Z), so a bot entry comment with text appended after the marker is neither verified nor counted as unverified. It drops out of both the trusted entries and the unverified hold.\n  WHY: If the remaining trusted entries are done, resolve can close the tracker and bypass the fail-closed unverified_signed_entries hold. Severity disagreement: sonnet-5_5 rated it low confidence and listed it only as a hardening suggestion, while luna and glm rated it MAJOR. The highest severity is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/operator_step_issue.py:456-482 (`_is_signed_bot_comment`, `SIGNED_COMMENT_LINE_RE`) | severity=low | confidence=1\n  PROBLEM: A github-actions[bot] entry comment whose ai-comment-sig:v1 marker is not the final line is neither verified nor counted as unverified. It is dropped silently, and resolve could close the tracker over it. The reviewer listed this under HARDENING_SUGGESTIONS and rated HARDENING_RISK_SCORE 1.\n  WHY: This is a hardening gap, not a demonstrated defect. Every documented path ends the body with the signature line, so reaching it requires appending text by hand. Suggested fix: in `_unverified_entry_keys` only, also treat a bot comment as unverified when its body contains `<!-- ai-comment-sig:v1 ` anywhere.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/operator_step_issue.py:456 | confidence=4\n  PROBLEM: SIGNED_COMMENT_LINE_RE requires the signature line at the absolute end of the body (\\Z). A comment with text appended after it is not matched.\n  WHY: The comment is then neither a trusted entry nor tracked as unverified, because `_unverified_entry_keys` uses the same regex. If it held the only unticked steps, the tracker could close prematurely and bypass the fail-closed protection.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/operator_step_issue.py:456, 479-482, 528-530 | severity=high | confidence=5\n  PROBLEM: A bot entry comment with text appended after its signature marker is neither normalized nor counted as unverified.\n  WHY: The comment is excluded from trusted entries and from the unverified-entry hold. If the remaining trusted entries are done, resolve can close the tracker and bypass the new fail-closed behavior. The reviewer labelled this SEVERITY: MAJOR.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/operator_step_issue.py:456, 479-482, 516-533, 501 | severity=high | confidence=4\n  PROBLEM: Signed-bot detection requires the marker to be the final line. A signed entry comment edited with text appended after the signature fails the HMAC, but it also fails `_is_signed_bot_comment`. So `_verify_signed_entry_comments`, `_authoritative_entry_comments` (line 669) and `_unverified_entry_keys` (line 528) all skip it, and no `op=verify outcome=unverified` line is emitted.\n  WHY: resolve computes the unverified set as empty for this comment. The close decision at lines 977-981 can then close the tracker, which defeats the fail-closed `unverified_signed_entries` guarantee. This contradicts the code comment at lines 454-455 that says anything that looks signed is unverifiable, not unsigned. The reviewer labelled this SEVERITY: MAJOR. Suggested fix: detect any github-actions[bot] comment containing the marker anywhere in the body.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e9c4027819a246ca93537086086cd880ff401a1c75a1af7efa4b2e4b9e0ab0a3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10102,
+    "run_id": "45581283887",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45581283887",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125104413_ce21c1cf71",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10102,
+    "run_id": "45581283887"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T10:44:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
