@@ -630,3 +630,62 @@ def test_docstring_documents_batching_contract() -> None:
 	doc = pa.__doc__ or ""
 	for word in ("Batching contract", "gate:", "collect:", "apply:", "dispatch:", "fails closed"):
 		assert word in doc
+
+
+# ---------------------------------------------------------------- review fixes (round 2)
+
+def test_archive_never_overwrites_an_existing_completed_plan(tmp_path: Path) -> None:
+	work = _git_repo(tmp_path)
+	(work / "docs" / "completed" / "b.md").write_text("# Earlier archived plan\n\nkept history\n", encoding="utf-8")
+	subprocess.run(["git", "-C", str(work), "add", "-A"], check=True)
+	subprocess.run(["git", "-C", str(work), "-c", "user.name=t", "-c", "user.email=t@e", "commit", "-q", "-m", "c"], check=True)
+	content = (work / "docs" / "plans" / "b.md").read_text(encoding="utf-8")
+	(work / "docs" / "plans" / "b.md").unlink()
+	(work / "docs" / "completed" / "b.md").write_text(content, encoding="utf-8")
+	result = _result(archived=[{"from": "docs/plans/b.md", "to": "docs/completed/b.md", "refs_issue": 7}])
+	with pytest.raises(pa.ApplyError) as exc:
+		_check(work, result)
+	assert exc.value.reason == "diff_outside_allowlist"
+
+
+def test_pr_body_strips_url_form_auto_close_references() -> None:
+	result = _result(refreshed=[{"path": "docs/plans/a.md", "stale": "Fixes https://github.com/o/r/issues/12 renamed", "changed": "resolves: https://github.com/o/r/issues/3"}])
+	body = pa.build_pr_body(result, {}, "")
+	assert "issues/12" not in body and "issues/3" not in body
+
+
+def test_unrunnable_or_failed_preflight_is_rejected() -> None:
+	for verdict in ("unrunnable (needs GitHub)", "FAILED: 2 callers", "could not run without a token"):
+		bad = _result(removals=[{"entry_title": "x", "script_path": "scripts/old_helper.sh", "preflight": [{"check": "c", "result": verdict}]}])
+		assert pa.validate_result(bad), verdict
+	ok = _result(removals=[{"entry_title": "x", "script_path": "scripts/old_helper.sh", "preflight": [{"check": "c", "result": "passed: 0 callers"}]}])
+	assert pa.validate_result(ok) == []
+
+
+def test_skip_write_failure_holds_the_marker(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setattr(pa, "gh_api", FakeGh({"PATCH repos/o/r/issues/8": pa.ReadError("boom")}))
+	state = {"gate": {"proceed": False, "reason": "maintenance_pr_open", "save_marker": True, "stale_pr": "9", "status_issue": "8"}}
+	assert pa.run_report("o/r", state, NOW)["save_marker"] is False
+
+
+def test_failed_status_lookup_never_creates_a_duplicate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setattr(pa, "gh_api", FakeGh({"GET repos/o/r/issues?labels=ai:plan-autopilot": pa.ReadError("boom")}))
+	gate = pa.run_gate("o/r", _workdir(tmp_path, plans=()), 24, NOW)
+	assert gate["reason"] == "no_plans" and gate["status_lookup_failed"] is True and gate["save_marker"] is False
+	fake = FakeGh()
+	monkeypatch.setattr(pa, "gh_api", fake)
+	out = pa.run_report("o/r", {"gate": gate}, NOW)
+	assert not [c for c in fake.calls if c[0] == "POST"] and out["save_marker"] is False
+
+
+def test_decision_answer_window_starts_at_collect(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setattr(pa, "gh_api", FakeGh())
+	state = {
+		"audit": {"result": _result(needs_decision=[{"path": "docs/plans/a.md", "questions": "Q1"}])},
+		"collect": {"decision_issues": {"docs/plans/a.md": {"number": 3, "comments": 1}}, "collected_at": "2026-11-25T10:00:00Z"},
+	}
+	out = pa.run_decisions("o/r", state)
+	assert out["decision_issues"]["docs/plans/a.md"]["asked_at"] == "2026-11-25T10:00:00Z"
+	# An answer posted after collect read the comments survives the next run's cutoff.
+	late = [{"author_association": "OWNER", "body": "Q1: A", "created_at": "2026-11-25T10:30:00Z"}]
+	assert pa.trusted_answers(late, out["decision_issues"]["docs/plans/a.md"]["asked_at"]) == ["Q1: A"]

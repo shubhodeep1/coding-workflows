@@ -124,7 +124,12 @@ INPUT_FILE = f"{INPUT_DIR}/audit_input.json"
 PROTECTED_PREFIXES = (".github/", ".claude/", "prompts/", "workflow-templates/", ".git/")
 PROTECTED_PATHS = frozenset({"scripts/plan_autopilot.py", REGISTRY_PATH})
 PERMANENT_RE = re.compile(r"permanent\s*[\u2014\u2013-]+\s*review annually", re.I)
-AUTO_CLOSE_RE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b\s*:?\s*(?:[\w.-]+/[\w.-]+)?#\d+", re.I)
+# Same shapes as scripts/lint_pr_body_auto_close.py: `#N`, `owner/repo#N` and
+# the `https://github.com/owner/repo/issues/N` URL form.
+AUTO_CLOSE_RE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b\s*:?\s*(?:(?:[\w.-]+/[\w.-]+)?#\d+|https?://github\.com/[\w.-]+/[\w.-]+/issues/\d+)", re.I)
+# A preflight result the model itself reports as not passed. The prompt makes
+# `unrunnable` a fail; the apply side refuses it instead of trusting the prompt.
+PREFLIGHT_NOT_PASSED_RE = re.compile(r"\bunrunnable\b|\b(?:not|never|could ?not|cannot|can't) (?:be )?run\b|^\s*(?:fail(?:ed|s|ure)?|error|skipped)\b", re.IGNORECASE)
 
 RESULT_KEYS = (
 	"classification", "refreshed", "needs_decision", "applied_decisions", "archived",
@@ -426,6 +431,9 @@ def _attach_status_issue(repo: str, result: dict[str, Any]) -> None:
 		_set_status_issue(result, gh_list(f"repos/{repo}/issues?labels={STATUS_LABEL}&state=open"))
 	except ReadError as exc:
 		print(f"::warning::plan autopilot status issue lookup failed: {_one_line(exc, 300)}")
+		# Not "no status issue": report must not create a duplicate, and a
+		# later tick retries the lookup.
+		result.update(status_lookup_failed=True, save_marker=False)
 
 
 def cmd_gate(args: argparse.Namespace) -> int:
@@ -472,6 +480,9 @@ def trusted_answers(comments: list[dict[str, Any]], asked_at: str = "") -> list[
 def run_collect(repo: str, workdir: Path, state: dict[str, Any], today: str, head_sha: str, default_branch: str) -> dict[str, Any]:
 	gate = state.get("gate") or {}
 	prior = (gate.get("prior_state") or {}).get("decision_issues") or {}
+	# Taken before the comments are read: the next run's answer window starts
+	# here, so an answer posted while this run audits is not dropped.
+	collected_at = _iso(_now())
 	listing = gh_list(f"repos/{repo}/issues?labels={DECISION_LABEL}&state=open")
 	decisions = decision_issues_from_listing(listing)
 	answers: dict[str, str] = {}
@@ -498,7 +509,7 @@ def run_collect(repo: str, workdir: Path, state: dict[str, Any], today: str, hea
 	target = workdir / INPUT_FILE
 	target.parent.mkdir(parents=True, exist_ok=True)
 	target.write_text(json.dumps(bundle, indent=2, sort_keys=True), encoding="utf-8")
-	return {"decision_issues": seen, "answers": sorted(answers), "input": bundle}
+	return {"decision_issues": seen, "answers": sorted(answers), "input": bundle, "collected_at": collected_at}
 
 
 def _git_head(workdir: Path) -> str:
@@ -654,6 +665,8 @@ def _semantic_errors(obj: dict[str, Any]) -> list[str]:
 			errors.append(f"removals: invalid script_path {_one_line(path, 80)!r}")
 		if not item["preflight"] or not all(isinstance(c, dict) and set(c) == {"check", "result"} and all(isinstance(v, str) for v in c.values()) for c in item["preflight"]):
 			errors.append("removals: preflight must list {check, result} evidence")
+		elif any(PREFLIGHT_NOT_PASSED_RE.search(c["result"]) for c in item["preflight"]):
+			errors.append("removals: a preflight check did not pass (unrunnable is a fail)")
 	rec = obj["recommendation"]
 	plans = rec["plans"]
 	if not all(isinstance(p, str) and PLAN_PATH_RE.match(p) for p in plans):
@@ -875,7 +888,8 @@ def check_diff(changes: list[dict[str, str]], result: dict[str, Any], in_flight:
 			moved_plans.add(path)
 			archive_deleted[path] = change.get("old_sha", "")
 			groups["archive"].append(path)
-		elif status in ("M", "A") and path in archived.values() and path in completed_exists:
+		elif status == "A" and path in archived.values() and path in completed_exists:
+			# Only a new file: an `M` would replace an earlier completed plan.
 			archive_written[path] = change.get("new_sha", "")
 			groups["archive"].append(path)
 		elif status == "M" and path == REGISTRY_PATH:
@@ -1129,7 +1143,9 @@ def run_decisions(repo: str, state: dict[str, Any]) -> dict[str, Any]:
 	result = (state.get("audit") or {}).get("result") or {}
 	known = dict(((state.get("collect") or {}).get("decision_issues") or {}))
 	pr_number = str((state.get("apply") or {}).get("pr_number") or "")
-	now = _iso(_now())
+	# The answer window restarts at the moment collect read the comments (the
+	# comment count saved below is from then too), never at this later step.
+	now = str((state.get("collect") or {}).get("collected_at") or "") or _iso(_now())
 	opened: dict[str, int] = {}
 	closed: list[int] = []
 	if result.get("needs_decision"):
@@ -1442,7 +1458,7 @@ def run_report(repo: str, state: dict[str, Any], now: dt.datetime | None = None)
 	status_issue = str(gate.get("status_issue") or "")
 	audit_ran = bool((state.get("audit") or {}).get("completed"))
 	# Skips the operator must see get a status issue even before any audit.
-	visible_skip = not gate.get("proceed") and (gate.get("reason") in ("no_plans", "no_orchestrator") or bool(gate.get("stale_pr")))
+	visible_skip = not gate.get("proceed") and not gate.get("status_lookup_failed") and (gate.get("reason") in ("no_plans", "no_orchestrator") or bool(gate.get("stale_pr")))
 	wrote = ""
 	write_failed = False
 	try:
@@ -1461,7 +1477,7 @@ def run_report(repo: str, state: dict[str, Any], now: dt.datetime | None = None)
 		with open(summary, "a", encoding="utf-8") as fh:
 			fh.write(body.split(TRACKER_MARKER)[0])
 	# An unpublished report (and its state marker) is retried by a later tick.
-	save_marker = bool(gate.get("save_marker")) if not gate.get("proceed") else (audit_ran and not state.get("error") and not write_failed)
+	save_marker = (bool(gate.get("save_marker")) and not write_failed) if not gate.get("proceed") else (audit_ran and not state.get("error") and not write_failed)
 	pending = (state.get("decisions") or {}).get("decision_issues") or data.get("decision_issues") or {}
 	line = log_line(outcome, reason, pr=(state.get("apply") or {}).get("pr_number") or "none",
 		dispatched=(state.get("dispatch") or {}).get("dispatched_run") or "none", decisions_open=len(pending))
