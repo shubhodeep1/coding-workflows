@@ -160,11 +160,30 @@ def test_gate_refuses_while_dispatch_pending(tmp_path: Path, monkeypatch: pytest
 	assert out["reason"] == "dispatch_pending" and out["save_marker"] is True
 
 
-def test_gate_no_plans_makes_no_api_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-	fake = FakeGh()
+def test_gate_no_plans_reads_only_the_status_issue(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	status = [{"number": 2, "author_association": "OWNER", "body": pa.TRACKER_MARKER}]
+	fake = FakeGh({"GET repos/o/r/issues?labels=ai:plan-autopilot": status})
 	monkeypatch.setattr(pa, "gh_api", fake)
 	out = pa.run_gate("o/r", _workdir(tmp_path, plans=()), 24, NOW)
-	assert out["reason"] == "no_plans" and fake.calls == []
+	assert out["reason"] == "no_plans" and out["save_marker"] is True and out["status_issue"] == "2"
+	assert [p for _, p, _ in fake.calls] and all(p.startswith("repos/o/r/issues?labels=ai:plan-autopilot") for _, p, _ in fake.calls)
+
+
+def test_gate_flags_the_oldest_maintenance_pr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	prs = [
+		{"number": 11, "head": {"ref": "ai/plan-autopilot-b"}, "created_at": "2026-11-25T11:00:00Z"},
+		{"number": 9, "head": {"ref": "ai/plan-autopilot-a"}, "created_at": "2026-11-20T00:00:00Z"},
+	]
+	monkeypatch.setattr(pa, "gh_api", FakeGh(_gate_routes(prs=prs)))
+	assert pa.run_gate("o/r", _workdir(tmp_path), 24, NOW)["stale_pr"] == "9"
+
+
+def test_gate_recent_recorded_dispatch_counts_as_pending(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	marker = pa.render_state_marker({"dispatched_at": "2026-11-25T11:50:00Z"})
+	status = [{"number": 2, "author_association": "OWNER", "body": f"{pa.TRACKER_MARKER}\n{marker}"}]
+	monkeypatch.setattr(pa, "gh_api", FakeGh(_gate_routes(status=status)))
+	out = pa.run_gate("o/r", _workdir(tmp_path), 24, NOW)
+	assert (out["proceed"], out["reason"], out["save_marker"]) == (False, "dispatch_pending", False)
 
 
 def test_gate_read_failure_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -272,6 +291,43 @@ def test_valid_refresh_archive_and_removal_are_accepted(tmp_path: Path) -> None:
 	assert set(groups["sweep"]) == {pa.REGISTRY_PATH, "scripts/old_helper.sh", "changelog.d/plan-autopilot-20261125-abcdef0.md"}
 
 
+def _remove_entry(work: Path, heading: str, nxt: str | None) -> None:
+	registry = work / pa.REGISTRY_PATH
+	text = registry.read_text(encoding="utf-8")
+	start = text.index(heading)
+	end = text.index(nxt) if nxt else len(text)
+	registry.write_text(text[:start] + text[end:], encoding="utf-8")
+
+
+def test_allowlist_refuses_permanent_registry_entry(tmp_path: Path) -> None:
+	work = _git_repo(tmp_path)
+	_remove_entry(work, "### `scripts/keep_me.sh`", None)
+	(work / "scripts" / "keep_me.sh").unlink()
+	result = _result(removals=[{"entry_title": "k", "script_path": "scripts/keep_me.sh", "preflight": [{"check": "c", "result": "ok"}]}])
+	with pytest.raises(pa.ApplyError) as exc:
+		_check(work, result)
+	assert exc.value.reason == "diff_outside_allowlist"
+
+
+def test_allowlist_refuses_protected_registry_paths() -> None:
+	old = REGISTRY + "\n### `scripts/x.sh` + `.github/workflows/x.yml`\n\n- **Removal trigger:** after X\n"
+	with pytest.raises(pa.ApplyError):
+		pa.removed_registry_paths(old, REGISTRY)
+	old = REGISTRY + "\n### `tools/thing/`\n\n- **Removal trigger:** after X\n"
+	with pytest.raises(pa.ApplyError):
+		pa.removed_registry_paths(old, REGISTRY)
+
+
+def test_archive_must_carry_the_plan_content(tmp_path: Path) -> None:
+	work = _git_repo(tmp_path)
+	(work / "docs" / "plans" / "b.md").unlink()
+	(work / "docs" / "completed" / "b.md").write_text("# something else entirely\n\nunrelated text that is long enough\n", encoding="utf-8")
+	result = _result(archived=[{"from": "docs/plans/b.md", "to": "docs/completed/b.md", "refs_issue": 7}])
+	with pytest.raises(pa.ApplyError) as exc:
+		_check(work, result)
+	assert exc.value.reason == "diff_outside_allowlist"
+
+
 def test_diff_must_match_result(tmp_path: Path) -> None:
 	work = _git_repo(tmp_path)
 	(work / "docs" / "plans" / "a.md").write_text("# Plan a\n\nchanged\n", encoding="utf-8")
@@ -306,6 +362,8 @@ def test_result_schema_accepts_valid_and_rejects_bad_kind_and_paths() -> None:
 	assert pa.validate_result(bad)
 	bad = _result()
 	bad["extra"] = 1
+	assert pa.validate_result(bad)
+	bad = _result(needs_decision=[{"path": "docs/plans/a.md", "questions": "Q1"}], recommendation={"kind": "single", "plans": ["docs/plans/a.md"], "rationale": ""})
 	assert pa.validate_result(bad)
 
 
@@ -372,13 +430,24 @@ def test_applied_decision_is_closed_with_pr_link(monkeypatch: pytest.MonkeyPatch
 	monkeypatch.setattr(pa, "gh_api", fake)
 	state = {
 		"audit": {"result": _result(applied_decisions=[{"path": "docs/plans/a.md", "issue": 99}])},
-		"collect": {"decision_issues": {"docs/plans/a.md": {"number": 3, "comments": 1}}},
+		"collect": {"decision_issues": {"docs/plans/a.md": {"number": 3, "comments": 1}}, "answers": ["docs/plans/a.md"]},
 		"apply": {"pr_number": "12"},
 	}
 	out = pa.run_decisions("o/r", state)
 	assert out["closed"] == [3]
 	assert ("PATCH", "repos/o/r/issues/3", {"state": "closed", "state_reason": "completed"}) in fake.calls
 	assert any(m == "POST" and p == "repos/o/r/issues/3/comments" and "#12" in b["body"] for m, p, b in fake.calls)
+
+
+def test_decision_without_collected_answer_stays_open(monkeypatch: pytest.MonkeyPatch) -> None:
+	fake = FakeGh()
+	monkeypatch.setattr(pa, "gh_api", fake)
+	state = {
+		"audit": {"result": _result(applied_decisions=[{"path": "docs/plans/a.md", "issue": 3}])},
+		"collect": {"decision_issues": {"docs/plans/a.md": {"number": 3, "comments": 0}}, "answers": []},
+		"apply": {"pr_number": "12"},
+	}
+	assert pa.run_decisions("o/r", state)["closed"] == [] and fake.calls == []
 
 
 # ---------------------------------------------------------------- dispatch
@@ -425,13 +494,25 @@ def test_dispatch_engine_fallback_labels_tracking_issue(tmp_path: Path, monkeypa
 	fake = FakeGh({
 		"POST repos/o/r/actions/workflows/ai-orchestrate.yml/dispatches": dispatch,
 		"GET repos/o/r/actions/workflows/ai-orchestrate.yml/runs": {"workflow_runs": []},
-		"GET repos/o/r/issues?labels=ai:orchestrator-tracking": [{"number": 40, "title": title, "created_at": "2026-11-25T12:01:00Z"}],
+		# The pre-dispatch re-check sees no project; the issue appears later.
+		"GET repos/o/r/issues?labels=ai:orchestrator-tracking": lambda path, _b: [] if "&page=" in path else [{"number": 40, "title": title, "created_at": "2026-11-25T12:01:00Z"}],
 	})
 	monkeypatch.setattr(pa, "gh_api", fake)
 	out = pa.run_dispatch("o/r", work, state, NOW)
 	assert len(attempts) == 2 and "engine" not in attempts[1]["inputs"]
 	assert ("POST", "repos/o/r/issues/40/labels", {"labels": ["ai:engine-claude"]}) in fake.calls
 	assert out["engine_label_pending"] is False
+
+
+def test_dispatch_rechecks_idle_state_after_the_audit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	fake = FakeGh({"GET repos/o/r/issues?labels=ai:orchestrator-tracking": [{"number": 5, "title": "p"}]})
+	monkeypatch.setattr(pa, "gh_api", fake)
+	out = pa.run_dispatch("o/r", _workdir(tmp_path), _dispatch_state("single", ["docs/plans/a.md"]), NOW)
+	assert out["skip_reason"] == "project_open" and not [c for c in fake.calls if c[0] == "POST"]
+	fake = FakeGh({"GET repos/o/r/actions/workflows/ai-orchestrate.yml/runs": {"workflow_runs": [{"status": "in_progress"}]}})
+	monkeypatch.setattr(pa, "gh_api", fake)
+	out = pa.run_dispatch("o/r", _workdir(tmp_path / "n"), _dispatch_state("single", ["docs/plans/a.md"]), NOW)
+	assert out["skip_reason"] == "dispatch_pending" and not [c for c in fake.calls if c[0] == "POST"]
 
 
 def test_project_description_title_first_and_no_auto_close(tmp_path: Path) -> None:
@@ -459,6 +540,12 @@ def test_pr_body_passes_auto_close_lint_and_lists_descoped(tmp_path: Path) -> No
 	env = {k: v for k, v in os.environ.items() if k not in ("GH_TOKEN", "GITHUB_TOKEN")}
 	proc = subprocess.run([sys.executable, "-I", "-B", str(LINT), "--pr-body-file", str(body_file), "--repo", "o/r"], capture_output=True, text=True, env=env)
 	assert proc.returncode == 0, proc.stdout + proc.stderr
+
+
+def test_pr_body_strips_auto_close_references() -> None:
+	result = _result(refreshed=[{"path": "docs/plans/a.md", "stale": "Fixes #12 was renamed", "changed": "closes owner/repo#3"}])
+	body = pa.build_pr_body(result, {}, "")
+	assert not pa.AUTO_CLOSE_RE.search(body)
 
 
 def test_state_marker_round_trip() -> None:
@@ -504,6 +591,39 @@ def test_report_writes_state_marker_on_status_issue(monkeypatch: pytest.MonkeyPa
 	assert pa.TRACKER_MARKER in body
 	marker = pa.parse_state_marker(body)
 	assert marker["last_audit_sha"] == "b" * 40 and marker["dispatched_run"] == "77"
+
+
+def test_gate_skip_keeps_the_last_audit_report(monkeypatch: pytest.MonkeyPatch) -> None:
+	fake = FakeGh()
+	monkeypatch.setattr(pa, "gh_api", fake)
+	audited = {
+		"gate": {"proceed": True, "status_issue": "8", "prior_state": {}},
+		"audit": {"completed": True, "result": _result(summary="the audit")},
+		"collect": {"input": {"head_sha": "b" * 40}},
+	}
+	pa.run_report("o/r", audited, NOW)
+	prior = next(b["body"] for m, p, b in fake.calls if m == "PATCH")
+	state = {"gate": {"proceed": False, "reason": "maintenance_pr_open", "save_marker": True, "stale_pr": "9", "status_issue": "8", "status_issue_body": prior, "prior_state": pa.parse_state_marker(prior)}}
+	pa.run_report("o/r", state, NOW)
+	body = [b["body"] for m, p, b in fake.calls if m == "PATCH"][-1]
+	assert "## Classification" in body and "the audit" in body and "reason `maintenance_pr_open`" in body
+	assert "Maintenance PR #9 has been open" in body and pa.parse_state_marker(body)["last_audit_sha"] == "b" * 40
+	again = pa.run_report("o/r", {"gate": dict(state["gate"], status_issue_body=body, stale_pr="")}, NOW)
+	final = [b["body"] for m, p, b in fake.calls if m == "PATCH"][-1]
+	assert again["outcome"] == "skip" and "Maintenance PR #9 has been open" not in final and final.count("## Classification") == 1
+
+
+def test_report_write_failure_holds_the_marker(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setattr(pa, "gh_api", FakeGh({"PATCH repos/o/r/issues/8": pa.ReadError("boom")}))
+	state = {"gate": {"proceed": True, "status_issue": "8"}, "audit": {"completed": True, "result": _result()}}
+	assert pa.run_report("o/r", state, NOW)["save_marker"] is False
+
+
+def test_no_plans_skip_creates_the_status_issue(monkeypatch: pytest.MonkeyPatch) -> None:
+	fake = FakeGh()
+	monkeypatch.setattr(pa, "gh_api", fake)
+	pa.run_report("o/r", {"gate": {"proceed": False, "reason": "no_plans", "save_marker": True}}, NOW)
+	assert any(m == "POST" and p == "repos/o/r/issues" and "reason `no_plans`" in b["body"] for m, p, b in fake.calls)
 
 
 def test_docstring_documents_batching_contract() -> None:

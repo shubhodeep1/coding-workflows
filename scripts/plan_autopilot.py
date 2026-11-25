@@ -36,15 +36,21 @@ with GH_TOKEN (the GH_PAT); listings follow at most PAGE_CAP pages of 100.
   gate:      one ai:orchestrator-tracking issue listing, one state=open pulls
              listing, one actions/workflows/<wrapper>/runs?per_page=20
              listing (statuses filtered locally), one ai:plan-autopilot
-             issue listing (the status issue and its state marker).
+             issue listing (the status issue and its state marker). A
+             no_plans / no_orchestrator skip makes only the status-issue
+             listing (fail open).
   collect:   one ai:plan-decision issue listing, plus one comments listing
              only for decision issues whose comment count changed since the
              state marker recorded it.
-  apply:     one GET /issues/{n} per archived plan's Refs issue (at most
-             MAX_REFS_LOOKUPS), the lint's own lookups, one PR create.
+  apply:     one ai:orchestrator-tracking re-listing (projects started
+             during the audit own their plans), one GET /issues/{n} per
+             archived plan's Refs issue (at most MAX_REFS_LOOKUPS), the
+             lint's own lookups, one PR create.
   decisions: one label create per label, one create or edit per decision
              issue, one comment and one close per applied decision.
-  dispatch:  one dispatch POST (two on the engine fallback), at most
+  dispatch:  one ai:orchestrator-tracking re-listing and one wrapper runs
+             listing (the idle re-check right before dispatching), one
+             dispatch POST (two on the engine fallback), at most
              RUN_LOOKUPS run listings and, on the engine fallback only, at
              most ENGINE_LABEL_LOOKUPS tracking-issue listings.
   report:    one status-issue create or edit.
@@ -99,6 +105,10 @@ MAX_REFS_LOOKUPS = 20
 RUN_LOOKUPS = 3
 ENGINE_LABEL_LOOKUPS = 10
 ENGINE_LABEL_WAIT_SECONDS = 60
+# A dispatch recorded on the status issue this recently still counts as
+# pending even when its run is not listed yet (closes the double-dispatch
+# window between the dispatch POST and the run / tracking issue appearing).
+DISPATCH_GRACE_SECONDS = 30 * 60
 AUDIT_TIMEOUT_SECONDS = 75 * 60
 DEFAULT_STALE_HOURS = 24
 MAX_RESULT_BYTES = 2 * 1024 * 1024
@@ -108,6 +118,12 @@ SECRET_ENV = ("GH_TOKEN", "GITHUB_TOKEN", "GH_PAT", "ACTIONS_ID_TOKEN_REQUEST_TO
 REGISTRY_PATH = "docs/scripts-pending-removal.md"
 INPUT_DIR = ".plan-autopilot"
 INPUT_FILE = f"{INPUT_DIR}/audit_input.json"
+# The unattended sweep never deletes these, whatever a registry entry names:
+# workflow, prompt and agent configuration, and the autopilot itself. The
+# allowlist, not the prompt, is the security boundary (the push uses GH_PAT).
+PROTECTED_PREFIXES = (".github/", ".claude/", "prompts/", "workflow-templates/", ".git/")
+PROTECTED_PATHS = frozenset({"scripts/plan_autopilot.py", REGISTRY_PATH})
+PERMANENT_RE = re.compile(r"permanent\s*[\u2014\u2013-]+\s*review annually", re.I)
 AUTO_CLOSE_RE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b\s*:?\s*(?:[\w.-]+/[\w.-]+)?#\d+", re.I)
 
 RESULT_KEYS = (
@@ -346,10 +362,12 @@ def run_gate(repo: str, workdir: Path, stale_hours: int, now: dt.datetime | None
 	}
 	if not list_plans(workdir):
 		result.update(reason="no_plans", save_marker=True)
+		_attach_status_issue(repo, result)
 		return result
 	wrapper = select_wrapper(workdir)
 	if not wrapper:
 		result.update(reason="no_orchestrator", save_marker=True)
+		_attach_status_issue(repo, result)
 		return result
 	result["wrapper"] = wrapper
 	try:
@@ -365,11 +383,7 @@ def run_gate(repo: str, workdir: Path, stale_hours: int, now: dt.datetime | None
 	if not isinstance(runs, dict) or not isinstance(runs.get("workflow_runs"), list):
 		result.update(reason="read_failed", save_marker=False)
 		return result
-	status = find_status_issue(status_issues)
-	if status:
-		result["status_issue"] = str(status.get("number") or "")
-		result["status_issue_body"] = str(status.get("body") or "")
-		result["prior_state"] = parse_state_marker(result["status_issue_body"])
+	_set_status_issue(result, status_issues)
 	result["in_flight"] = in_flight_plans(tracking)
 	result["open_prs"] = [
 		{"number": p.get("number"), "head_ref": (p.get("head") or {}).get("ref", ""), "base_ref": (p.get("base") or {}).get("ref", ""), "title": _one_line(p.get("title"), 200)}
@@ -380,7 +394,8 @@ def run_gate(repo: str, workdir: Path, stale_hours: int, now: dt.datetime | None
 		return result
 	maintenance = [p for p in prs if str((p.get("head") or {}).get("ref", "")).startswith(BRANCH_PREFIX)]
 	if maintenance:
-		oldest = maintenance[0]
+		# The pulls listing is newest-first; flag the longest-waiting PR.
+		oldest = min(maintenance, key=lambda p: str(p.get("created_at") or ""))
 		created = _parse_ts(oldest.get("created_at"))
 		if created is not None and (now - created).total_seconds() >= stale_hours * 3600:
 			result["stale_pr"] = str(oldest.get("number") or "")
@@ -389,8 +404,28 @@ def run_gate(repo: str, workdir: Path, stale_hours: int, now: dt.datetime | None
 	if any(str(r.get("status") or "") in PENDING_RUN_STATUSES for r in runs["workflow_runs"] if isinstance(r, dict)):
 		result.update(reason="dispatch_pending", save_marker=True)
 		return result
+	dispatched_at = _parse_ts((result["prior_state"] or {}).get("dispatched_at"))
+	if dispatched_at is not None and 0 <= (now - dispatched_at).total_seconds() < DISPATCH_GRACE_SECONDS:
+		result.update(reason="dispatch_pending", save_marker=False)
+		return result
 	result.update(proceed=True, reason="idle")
 	return result
+
+
+def _set_status_issue(result: dict[str, Any], status_issues: list[dict[str, Any]]) -> None:
+	status = find_status_issue(status_issues)
+	if status:
+		result["status_issue"] = str(status.get("number") or "")
+		result["status_issue_body"] = str(status.get("body") or "")
+		result["prior_state"] = parse_state_marker(result["status_issue_body"])
+
+
+def _attach_status_issue(repo: str, result: dict[str, Any]) -> None:
+	"""Early skips still find the status issue so report can update it; fails open."""
+	try:
+		_set_status_issue(result, gh_list(f"repos/{repo}/issues?labels={STATUS_LABEL}&state=open"))
+	except ReadError as exc:
+		print(f"::warning::plan autopilot status issue lookup failed: {_one_line(exc, 300)}")
 
 
 def cmd_gate(args: argparse.Namespace) -> int:
@@ -398,8 +433,7 @@ def cmd_gate(args: argparse.Namespace) -> int:
 	result = run_gate(args.repo, Path(args.workdir), stale_hours)
 	state = {"gate": result, "repo": args.repo}
 	save_state(state)
-	if not result["proceed"]:
-		log_line("skip", result["reason"], stale_pr=result["stale_pr"])
+	# The report step logs the one PLAN_AUTOPILOT outcome line for a skip.
 	write_outputs({k: str(result[k]).lower() if isinstance(result[k], bool) else result[k] for k in ("proceed", "reason", "save_marker", "status_issue", "stale_pr", "wrapper")})
 	return 0
 
@@ -468,7 +502,8 @@ def run_collect(repo: str, workdir: Path, state: dict[str, Any], today: str, hea
 
 
 def _git_head(workdir: Path) -> str:
-	proc = subprocess.run(["git", "-C", str(workdir), "rev-parse", "HEAD"], capture_output=True, text=True)
+	proc = subprocess.run(["git", "-C", str(workdir), "rev-parse", "HEAD"], capture_output=True, text=True,
+		env={k: v for k, v in os.environ.items() if k not in SECRET_ENV})
 	sha = proc.stdout.strip()
 	return sha if re.fullmatch(r"[0-9a-f]{40}", sha) else ""
 
@@ -629,6 +664,9 @@ def _semantic_errors(obj: dict[str, Any]) -> list[str]:
 		expected = {"none": (0, 0), "single": (1, 1), "bundle": (2, 3)}[rec["kind"]]
 		if not expected[0] <= len(plans) <= expected[1]:
 			errors.append(f"recommendation.plans: {rec['kind']} needs {expected[0]}-{expected[1]} plans")
+		blocked = {item["path"] for item in obj["needs_decision"]}
+		if blocked & set(plans):
+			errors.append("recommendation.plans: a plan that needs a decision is never recommended")
 	return errors
 
 
@@ -644,11 +682,28 @@ def cmd_audit(args: argparse.Namespace) -> int:
 	if render.returncode != 0 or not render.stdout.strip():
 		return _audit_fail(state, "prompt_render")
 	prompt.write_text(render.stdout, encoding="utf-8")
-	env = {k: v for k, v in os.environ.items() if k not in SECRET_ENV}
+	env = {k: v for k, v in os.environ.items() if k not in SECRET_ENV and k != "AI_ENGINE_READ_ONLY"}
+	# claude_run_selected forces the read profile (a read-only, tracked-files
+	# snapshot), but PLAN_AUDIT must edit plans and read the untracked input
+	# bundle. So claude_run runs with the role's configured write profile
+	# (isolated --mode workspace, no secrets), and only its exit 75 runs the
+	# same isolated codex command; 76 and 80 are returned as they are, as in
+	# claude_run_selected.
+	env["SUPPORT_ROOT_DIR"] = str(support)
+	instructions = support / "unattended_system_instructions.md"
+	if instructions.is_file() and not instructions.is_symlink():
+		env["SUPPORT_INSTRUCTIONS_FILE"] = str(instructions)
+	runner = (
+		'source "$0" || exit 2; role="$1"; prompt="$2"; out="$3"; work="$4"; shift 4; '
+		'engine="$(ai_engine_for_role "${role}")" || engine=codex; '
+		'if [ "${engine}" = "claude" ]; then rc=0; claude_run "${role}" "${prompt}" "${out}" "${work}" || rc=$?; '
+		'[ "${rc}" -eq 75 ] || exit "${rc}"; fi; '
+		'"$@" < "${prompt}" > "${out}"'
+	)
 	cmd = [
 		"timeout", "-k", "30", str(AUDIT_TIMEOUT_SECONDS),
-		"bash", "-c", 'source "$0" || exit 2; claude_run_selected "$@"', str(support / "scripts" / "ai_engine.sh"),
-		ROLE, str(prompt), str(output), str(workdir), "--codex-stdio", "--",
+		"bash", "-c", runner, str(support / "scripts" / "ai_engine.sh"),
+		ROLE, str(prompt), str(output), str(workdir),
 		"bash", str(support / "scripts" / "codex_isolated_exec.sh"), "run", "--mode", "workspace", "--workdir", str(workdir), "--",
 		"--ask-for-approval", "never", "exec", "--skip-git-repo-check", "--model", args.codex_model, "--sandbox", "workspace-write",
 	]
@@ -712,7 +767,7 @@ def _git(workdir: Path, *args: str, env: dict[str, str] | None = None, check: bo
 
 
 def staged_changes(workdir: Path) -> list[dict[str, str]]:
-	"""Parse `git diff --cached --raw -M -z` into {status, old_mode, new_mode, path, from}."""
+	"""Parse `git diff --cached --raw -M -z` into {status, old_mode, new_mode, old_sha, new_sha, path, from}."""
 	raw = _git(workdir, "diff", "--cached", "--raw", "-M", "-z", "--no-abbrev", "HEAD").stdout
 	parts = raw.split("\0")
 	changes: list[dict[str, str]] = []
@@ -726,11 +781,12 @@ def staged_changes(workdir: Path) -> list[dict[str, str]]:
 		if len(fields) < 5:
 			raise ApplyError("diff_unparsable", head[:80])
 		old_mode, new_mode, status = fields[0], fields[1], fields[4]
+		shas = {"old_sha": fields[2], "new_sha": fields[3]}
 		if status.startswith(("R", "C")):
-			changes.append({"status": status[0], "old_mode": old_mode, "new_mode": new_mode, "from": parts[i + 1], "path": parts[i + 2]})
+			changes.append({"status": status[0], "old_mode": old_mode, "new_mode": new_mode, "from": parts[i + 1], "path": parts[i + 2], **shas})
 			i += 3
 		else:
-			changes.append({"status": status[0], "old_mode": old_mode, "new_mode": new_mode, "from": "", "path": parts[i + 1]})
+			changes.append({"status": status[0], "old_mode": old_mode, "new_mode": new_mode, "from": "", "path": parts[i + 1], **shas})
 			i += 2
 	return changes
 
@@ -762,10 +818,19 @@ def removed_registry_paths(old_text: str, new_text: str) -> tuple[list[str], lis
 	removed = [h for h in old_blocks if h not in new_blocks]
 	paths: list[str] = []
 	for heading in removed:
+		if PERMANENT_RE.search(old_blocks[heading]):
+			raise ApplyError("diff_outside_allowlist", "a permanent registry entry was removed")
 		for span in re.findall(r"`([^`]+)`", heading):
 			if re.fullmatch(r"[A-Za-z0-9._/-]{1,300}", span) and "/" in span and ".." not in span.split("/"):
+				if _protected(span):
+					raise ApplyError("diff_outside_allowlist", f"registry entry names a protected path: {span}")
 				paths.append(span)
 	return removed, paths
+
+
+def _protected(path: str) -> bool:
+	"""Directories and protected paths are never deleted by the unattended sweep."""
+	return path.endswith("/") or path.startswith(PROTECTED_PREFIXES) or path in PROTECTED_PATHS
 
 
 def _covered(path: str, named: list[str]) -> bool:
@@ -782,6 +847,10 @@ def check_diff(changes: list[dict[str, str]], result: dict[str, Any], in_flight:
 	modified_plans: set[str] = set()
 	moved_plans: set[str] = set()
 	deletions: list[str] = []
+	# Archive halves written as delete + add: source plan -> deleted blob, and
+	# completed target -> written blob. Both must pair up with equal content.
+	archive_deleted: dict[str, str] = {}
+	archive_written: dict[str, str] = {}
 	registry_touched = False
 	for change in changes:
 		status, path, old = change["status"], change["path"], change["from"]
@@ -798,12 +867,16 @@ def check_diff(changes: list[dict[str, str]], result: dict[str, Any], in_flight:
 			modified_plans.add(path)
 			groups["refresh"].append(path)
 		elif status == "R" and PLAN_PATH_RE.match(old) and archived.get(old) == path:
+			if change.get("old_sha") != change.get("new_sha"):
+				raise ApplyError("diff_outside_allowlist", f"archive changed the plan content: {old}")
 			moved_plans.add(old)
 			groups["archive"] += [old, path]
 		elif status == "D" and PLAN_PATH_RE.match(path) and path in archived and archived[path] in completed_exists:
 			moved_plans.add(path)
+			archive_deleted[path] = change.get("old_sha", "")
 			groups["archive"].append(path)
 		elif status in ("M", "A") and path in archived.values() and path in completed_exists:
+			archive_written[path] = change.get("new_sha", "")
 			groups["archive"].append(path)
 		elif status == "M" and path == REGISTRY_PATH:
 			registry_touched = True
@@ -815,6 +888,15 @@ def check_diff(changes: list[dict[str, str]], result: dict[str, Any], in_flight:
 			groups["sweep"].append(path)
 		else:
 			raise ApplyError("diff_outside_allowlist", f"{status} {path}")
+	for source, blob in archive_deleted.items():
+		if not blob or archive_written.get(archived[source]) != blob:
+			raise ApplyError("diff_outside_allowlist", f"archive target does not carry the plan content: {archived[source]}")
+	for target in archive_written:
+		if not any(archived[source] == target for source in archive_deleted):
+			raise ApplyError("diff_outside_allowlist", f"completed plan written without its archive move: {target}")
+	for path in deletions:
+		if _protected(path):
+			raise ApplyError("diff_outside_allowlist", f"deletion of a protected path: {path}")
 	named: list[str] = []
 	if registry_touched:
 		if registry_new is None:
@@ -854,12 +936,21 @@ def push_env(token: str) -> dict[str, str]:
 	}
 
 
+def _pr_text(text: Any, limit: int) -> str:
+	"""Model- or plan-derived PR body text with auto-close references removed.
+
+	The lint refuses keywords against tracking issues only; a "Closes #N" for
+	an ordinary issue would pass it and close #N when the maintenance PR merges.
+	"""
+	return AUTO_CLOSE_RE.sub("", _one_line(text, limit)).strip()
+
+
 def build_pr_body(result: dict[str, Any], refs_info: dict[int, dict[str, Any]], status_issue: str) -> str:
 	lines = ["Plan autopilot maintenance from an unattended `/audit-plans` run (`scripts/plan_autopilot.py`).", ""]
 	if result["refreshed"]:
 		lines += ["## Refreshed plans", ""]
 		for item in result["refreshed"]:
-			lines.append(f"- `{item['path']}` — stale: {_one_line(item['stale'], 400)} → changed: {_one_line(item['changed'], 400)}")
+			lines.append(f"- `{item['path']}` — stale: {_pr_text(item['stale'], 400)} → changed: {_pr_text(item['changed'], 400)}")
 		lines.append("")
 	if result["archived"]:
 		lines += ["## Archived plans", ""]
@@ -870,15 +961,15 @@ def build_pr_body(result: dict[str, Any], refs_info: dict[int, dict[str, Any]], 
 	for number, info in sorted(refs_info.items()):
 		if TRACKING_LABEL in info.get("labels", []) and info.get("unchecked"):
 			for box in info["unchecked"]:
-				descoped.append(f"- #{number}: {_one_line(box, 200)} — not shipped by the project; the plan autopilot audit found every plan goal present on the default branch (see the evidence above).")
+				descoped.append(f"- #{number}: {_pr_text(box, 200)} — not shipped by the project; the plan autopilot audit found every plan goal present on the default branch (see the evidence above).")
 	if descoped:
 		lines += ["## De-scoped phases", ""] + descoped + [""]
 	if result["removals"]:
 		lines += ["## Removed scripts", ""]
 		for item in result["removals"]:
-			lines.append(f"- `{item['script_path']}` ({_one_line(item['entry_title'], 200)}) — trigger met; preflight evidence:")
+			lines.append(f"- `{item['script_path']}` ({_pr_text(item['entry_title'], 200)}) — trigger met; preflight evidence:")
 			for check in item["preflight"][:20]:
-				lines.append(f"  - {_one_line(check['check'], 300)} → {_one_line(check['result'], 300)}")
+				lines.append(f"  - {_pr_text(check['check'], 300)} → {_pr_text(check['result'], 300)}")
 		lines.append("")
 	if status_issue:
 		lines.append(f"Refs #{status_issue}")
@@ -936,7 +1027,11 @@ def run_apply(repo: str, workdir: Path, support: Path, state: dict[str, Any], to
 	registry_new = registry_file.read_text(encoding="utf-8") if registry_file.is_file() and not registry_file.is_symlink() else None
 	completed_exists = {f"docs/completed/{p.name}" for p in (workdir / "docs" / "completed").glob("*.md")} if (workdir / "docs" / "completed").is_dir() else set()
 	changelog = f"changelog.d/plan-autopilot-{today}-{sha[:7]}.md"
-	groups = check_diff(changes, result, list(gate.get("in_flight") or []), registry_old, registry_new, changelog, completed_exists)
+	# The gate's listing is up to an audit old: a project that started since
+	# then owns its plans, so they are re-read here (one listing).
+	tracking = [t for t in gh_list(f"repos/{repo}/issues?labels={TRACKING_LABEL}&state=open") if not t.get("pull_request")]
+	in_flight = sorted(set(gate.get("in_flight") or []) | set(in_flight_plans(tracking)))
+	groups = check_diff(changes, result, in_flight, registry_old, registry_new, changelog, completed_exists)
 	refs_info = lookup_refs(repo, result)
 	_git(workdir, "reset", "-q")
 	ref_suffix = f"\n\nRefs #{status_issue}" if status_issue else ""
@@ -981,7 +1076,12 @@ def run_apply(repo: str, workdir: Path, support: Path, state: dict[str, Any], to
 def cmd_apply(args: argparse.Namespace) -> int:
 	state = load_state()
 	try:
-		applied = run_apply(args.repo, Path(args.workdir), Path(args.support), state, os.environ.get("GH_TOKEN", ""), _now().strftime("%Y%m%d"))
+		# The date the model was given (collect), so the changelog fragment
+		# name still matches when the audit crosses 00:00 UTC.
+		today = str(((state.get("collect") or {}).get("input") or {}).get("today") or "")
+		if not re.fullmatch(r"[0-9]{8}", today):
+			today = _now().strftime("%Y%m%d")
+		applied = run_apply(args.repo, Path(args.workdir), Path(args.support), state, os.environ.get("GH_TOKEN", ""), today)
 	except (ApplyError, ReadError) as exc:
 		reason = exc.reason if isinstance(exc, ApplyError) else "read_failed"
 		detail = exc.detail if isinstance(exc, ApplyError) else str(exc)
@@ -1046,10 +1146,13 @@ def run_decisions(repo: str, state: dict[str, Any]) -> dict[str, Any]:
 			number = int((created or {}).get("number") or 0)
 		known[path] = {"number": number, "comments": int((known.get(path) or {}).get("comments") or 0), "asked_at": now}
 		opened[path] = number
+	# Only plans with a trusted (OWNER / MEMBER / COLLABORATOR) answer collected
+	# this run can be closed; the model's applied_decisions alone is not proof.
+	answered = set((state.get("collect") or {}).get("answers") or [])
 	if pr_number:
 		for item in result.get("applied_decisions") or []:
 			entry = known.get(item["path"])
-			if not entry or item["path"] in opened:
+			if not entry or item["path"] in opened or item["path"] not in answered:
 				continue
 			number = int(entry.get("number") or 0)
 			if number <= 0:
@@ -1132,6 +1235,18 @@ def run_dispatch(repo: str, workdir: Path, state: dict[str, Any], start: dt.date
 		return out
 	if wrapper not in ORCHESTRATE_WRAPPERS:
 		out["skip_reason"] = "no_orchestrator"
+		return out
+	# The gate's idle check is up to an audit old: re-check right before the
+	# dispatch so a project started meanwhile is never doubled.
+	tracking = [t for t in gh_list(f"repos/{repo}/issues?labels={TRACKING_LABEL}&state=open") if not t.get("pull_request")]
+	if tracking:
+		out["skip_reason"] = "project_open"
+		return out
+	pending = gh_api(f"repos/{repo}/actions/workflows/{wrapper}/runs?per_page=20")
+	if not isinstance(pending, dict) or not isinstance(pending.get("workflow_runs"), list):
+		raise ReadError("GET workflow runs: unexpected response")
+	if any(str(r.get("status") or "") in PENDING_RUN_STATUSES for r in pending["workflow_runs"] if isinstance(r, dict)):
+		out["skip_reason"] = "dispatch_pending"
 		return out
 	default_branch = _default_branch()
 	head_sha = str(((state.get("collect") or {}).get("input") or {}).get("head_sha") or _git_head(workdir))
@@ -1243,6 +1358,41 @@ def next_state(state: dict[str, Any], now: dt.datetime) -> dict[str, Any]:
 	return data
 
 
+def _stale_pr_lines(gate: dict[str, Any]) -> list[str]:
+	if not gate.get("stale_pr"):
+		return []
+	return [f"**Maintenance PR #{gate['stale_pr']} has been open longer than `PLAN_AUTOPILOT_MAINTENANCE_PR_STALE_HOURS`; the autopilot waits until it merges or closes.**", ""]
+
+
+def render_skip_report(prior_body: str, gate: dict[str, Any], reason: str, data: dict[str, Any], now: dt.datetime) -> str | None:
+	"""A gate skip keeps the last audit's sections and refreshes only the header.
+
+	Returns None when the prior body is not a report this script rendered.
+	"""
+	if TRACKER_MARKER not in (prior_body or ""):
+		return None
+	lines = prior_body.split(TRACKER_MARKER)[0].rstrip().splitlines()
+	idx = next((i for i, line in enumerate(lines) if line.startswith("Last run: ")), None)
+	if idx is None:
+		return None
+	rest = lines[idx + 2:] if idx + 1 < len(lines) and lines[idx + 1].startswith("Updated by ") else lines[idx + 1:]
+	while rest and not rest[0].strip():
+		rest = rest[1:]
+	if rest and rest[0].startswith("**Maintenance PR #"):
+		rest = rest[1:]
+	while rest and not rest[0].strip():
+		rest = rest[1:]
+	audited = str(data.get("last_audit_at") or "unknown")
+	header = [
+		"# Plan autopilot status",
+		"",
+		f"Last run: {_iso(now)} — outcome `skip`, reason `{reason}`. The sections below are from the last audit ({_one_line(audited, 40)}).",
+		"Updated by the `plan_autopilot` job of `orchestrate_poll.yml` (repo variable `PLAN_AUTOPILOT_ENABLED`).",
+		"",
+	]
+	return "\n".join(header + _stale_pr_lines(gate) + rest + ["", TRACKER_MARKER, render_state_marker(data)]) + "\n"
+
+
 def render_report(state: dict[str, Any], outcome: str, reason: str, data: dict[str, Any], now: dt.datetime) -> str:
 	gate = state.get("gate") or {}
 	result = (state.get("audit") or {}).get("result") or {}
@@ -1253,8 +1403,7 @@ def render_report(state: dict[str, Any], outcome: str, reason: str, data: dict[s
 		"Updated by the `plan_autopilot` job of `orchestrate_poll.yml` (repo variable `PLAN_AUTOPILOT_ENABLED`).",
 		"",
 	]
-	if gate.get("stale_pr"):
-		lines += [f"**Maintenance PR #{gate['stale_pr']} has been open longer than `PLAN_AUTOPILOT_MAINTENANCE_PR_STALE_HOURS`; the autopilot waits until it merges or closes.**", ""]
+	lines += _stale_pr_lines(gate)
 	if result.get("classification"):
 		lines += ["## Classification", "", "| Plan | Status | Freshness |", "| --- | --- | --- |"]
 		for item in result["classification"][:200]:
@@ -1284,26 +1433,35 @@ def run_report(repo: str, state: dict[str, Any], now: dt.datetime | None = None)
 	now = now or _now()
 	outcome, reason = decide_outcome(state)
 	data = next_state(state, now)
-	body = render_report(state, outcome, reason, data, now)
 	gate = state.get("gate") or {}
+	body = None
+	if not gate.get("proceed"):
+		body = render_skip_report(str(gate.get("status_issue_body") or ""), gate, reason, data, now)
+	if body is None:
+		body = render_report(state, outcome, reason, data, now)
 	status_issue = str(gate.get("status_issue") or "")
 	audit_ran = bool((state.get("audit") or {}).get("completed"))
+	# Skips the operator must see get a status issue even before any audit.
+	visible_skip = not gate.get("proceed") and (gate.get("reason") in ("no_plans", "no_orchestrator") or bool(gate.get("stale_pr")))
 	wrote = ""
+	write_failed = False
 	try:
 		if status_issue:
 			gh_api(f"repos/{repo}/issues/{status_issue}", "PATCH", {"body": body})
 			wrote = status_issue
-		elif audit_ran or outcome == "error":
+		elif audit_ran or outcome == "error" or visible_skip:
 			ensure_label(repo, STATUS_LABEL)
 			created = gh_api(f"repos/{repo}/issues", "POST", {"title": "Plan autopilot status", "body": body, "labels": [STATUS_LABEL]})
 			wrote = str((created or {}).get("number") or "")
 	except ReadError as exc:
+		write_failed = True
 		print(f"::warning::plan autopilot status issue update failed: {_one_line(exc, 300)}")
 	summary = os.environ.get("GITHUB_STEP_SUMMARY", "")
 	if summary:
 		with open(summary, "a", encoding="utf-8") as fh:
 			fh.write(body.split(TRACKER_MARKER)[0])
-	save_marker = bool(gate.get("save_marker")) if not gate.get("proceed") else (audit_ran and not state.get("error"))
+	# An unpublished report (and its state marker) is retried by a later tick.
+	save_marker = bool(gate.get("save_marker")) if not gate.get("proceed") else (audit_ran and not state.get("error") and not write_failed)
 	pending = (state.get("decisions") or {}).get("decision_issues") or data.get("decision_issues") or {}
 	line = log_line(outcome, reason, pr=(state.get("apply") or {}).get("pr_number") or "none",
 		dispatched=(state.get("dispatch") or {}).get("dispatched_run") or "none", decisions_open=len(pending))

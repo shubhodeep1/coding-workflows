@@ -51,6 +51,7 @@ Step 8, registry sweep (the preflight gate is a hard gate):
 - `permanent — review annually` entries are never removed; report them in `kept_removals`.
 - For any other entry, judge the trigger, then run every preflight check exactly as written. A check that needs GitHub, the network or a token cannot run here: it is `unrunnable`, which is a fail, so the script and the entry are kept.
 - Remove a script and its entry only when the trigger is met and every check passed; remove only what the entry names.
+- Never remove an entry whose heading names a directory (a path ending in `/`), a path under `.github/`, `.claude/`, `prompts/` or `workflow-templates/`, or `scripts/plan_autopilot.py`: the script outside this run refuses the whole run. Report such an entry in `kept_removals`.
 
 Output contract:
 - Your final message is one JSON object and nothing else. One ```json fence around it is the only wrapper allowed.
