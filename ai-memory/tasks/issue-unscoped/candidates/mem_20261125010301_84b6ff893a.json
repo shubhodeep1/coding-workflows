@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_claude_fixer_mode.py:1269-1281 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: test_resolver_refused_fallback_rc76_contract reads the pending fragment agents.d/10018-resolver-refused-fallback-no-retry.md directly with read_text, so it raises FileNotFoundError once scripts/assemble_agents.py folds and deletes the fragment.\n  WHY: After the release or sync fold, the test fails on every later run. The repo helper tests/agents_doc.py:agents_text (lines 29-34) reads agents.md together with pending fragments and should be used instead. Severity is source-labelled MAJOR by all three reviewers, mapped to high. Confidence ranges from 4 to 5.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_autofix_claude_fixer_mode.py:1269-1281 | severity=MAJOR | confidence=4\n  PROBLEM: The test reads the pending agents.d fragment file (`agents.d/10018-resolver-refused-fallback-no-retry.md`) directly with `read_text()`.\n  WHY: `assemble_agents.py` deletes fragment files after merging them into `agents.md`, so the test fails with `FileNotFoundError` once the fold runs.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_review_autofix_claude_fixer_mode.py:1279-1281 | severity=MAJOR | confidence=4\n  PROBLEM: The test reads the pending agents.d fragment directly with `read_text`, in test_resolver_refused_fallback_rc76_contract.\n  WHY: `scripts/assemble_agents.py` folds the fragment into `agents.md` and unlinks it (line 424: `path.unlink()`), so the test raises `FileNotFoundError` after release. The repo convention `tests/agents_doc.py:agents_text(repo_root)` reads agents.md with pending fragments folded in, and this test bypasses it. Suggested fix: use that helper, assert \"- `CONFLICT_RESOLVER_FALLBACK_REFUSED`\" and \"LOG_PREFIX.name=CONFLICT_RESOLVER_FALLBACK_REFUSED\" in the result, and drop the `section=\"Stable log prefixes (contractual)\"` marker assertion.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_review_autofix_claude_fixer_mode.py:1279-1281 | severity=MAJOR | confidence=5\n  PROBLEM: The contract test reads the log-prefix fragment directly. Once `scripts/assemble_agents.py` folds the fragment into `agents.md`, it deletes the fragment (`scripts/assemble_agents.py:420-424`), so the test raises `FileNotFoundError`.\n  WHY: A later test run after fragment assembly fails before it can check the log-prefix contract. The repository already provides `tests/agents_doc.py:29-34` to read the assembled document together with any pending fragments.\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "7fca09bbd2bae468795c360009d0ff5b41441231335fd7e442dccc37f55d8157",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10020,
+    "run_id": "45508751821",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45508751821",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125010301_84b6ff893a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10020,
+    "run_id": "45508751821"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T01:03:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
