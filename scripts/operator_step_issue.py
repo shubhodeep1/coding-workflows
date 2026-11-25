@@ -733,11 +733,14 @@ NEGATED_ACTION_RE = re.compile(r"(?<![A-Za-z])(?:disabl\w*|turn(?:ing)?\s+off|re
 # A credential step that hands the secret to someone or somewhere else is a human
 # step: the workflow-run proof only shows this repository's own runs (#10118 review).
 CREDENTIAL_HANDOFF_RE = re.compile(
-	r"(?<![A-Za-z])(?:to|for|with|from)\s+(?:the\s+|a\s+|an\s+|our\s+|your\s+|each\s+|every\s+|all\s+)?"
+	r"(?<![A-Za-z])(?:to|for|with|from|in|into|at|via|by)\s+(?:the\s+|a\s+|an\s+|our\s+|your\s+|each\s+|every\s+|all\s+)?"
 	r"(?:vendors?|consumers?|customers?|clients?|partners?|teams?|support|maintainers?|owners?|admins?|third[ -]part(?:y|ies))(?![A-Za-z])"
 	r"|(?<![A-Za-z])(?:consumer|other|every|each|all)\s+repo|(?<![A-Za-z])(?:send|email|share|forward|hand\s+(?:over|off))(?![A-Za-z])",
 	re.I,
 )
+# `--repo OWNER/REPO` / `-R OWNER/REPO` in a credential step: another repository's
+# secret cannot be proven by this repository's runs (#10118 review).
+CREDENTIAL_REPO_SLUG_RE = re.compile(r"(?<![A-Za-z0-9_-])(?:--repo|-R)(?:\s+|=)([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)")
 # Human-object words a recognised step may name without becoming a human step:
 # the auto-merge toggle lives in the repository settings, and a credential
 # step necessarily names its secret/token/key.
@@ -767,7 +770,7 @@ def _tick_close_log(**fields: object) -> None:
 		file=sys.stderr)
 
 
-def _observable_condition(title: str, lines: list[str]) -> tuple[str, list[int]] | None:
+def _observable_condition(title: str, lines: list[str], repo: str = "") -> tuple[str, list[int]] | None:
 	"""(condition, PR numbers) for a step the pipeline can observe, else None.
 
 	Fails closed: any other UPPER_SNAKE name, rotate/revoke/scope/expire/
@@ -794,6 +797,10 @@ def _observable_condition(title: str, lines: list[str]) -> tuple[str, list[int]]
 	if condition in ("allow_auto_merge", "credentials") and NEGATED_ACTION_RE.search(text):
 		return None
 	if condition == "credentials" and CREDENTIAL_HANDOFF_RE.search(text):
+		return None
+	if condition == "credentials" and any(
+			slug.lower() != str(repo or "").lower() for slug in CREDENTIAL_REPO_SLUG_RE.findall(text)):
+		# Fails closed: without `repo`, any named repository keeps the step open.
 		return None
 	stripped = UPPER_SNAKE_RE.sub(" ", text)
 	allowed_words = _OBSERVABLE_ALLOWED_OBJECT_WORDS.get(condition)
@@ -885,7 +892,7 @@ def _observe_entry(repo: str, body: str, repo_dir: str, stable_sha: str, cache: 
 	Every unticked step is classified before any API call; one unrecognised
 	step keeps the entry open. Checks stop at the first step that is not met.
 	"""
-	classified = [_observable_condition(title, lines) for title, lines in _unticked_step_blocks(body)]
+	classified = [_observable_condition(title, lines, repo) for title, lines in _unticked_step_blocks(body)]
 	reasons = [found[0] if found else "unrecognised" for found in classified]
 	if not classified or any(found is None for found in classified):
 		return "unrecognised", reasons, ""
