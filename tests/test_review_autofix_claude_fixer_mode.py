@@ -1276,6 +1276,9 @@ def test_resolver_refused_fallback_rc76_contract():
 	assert block.index(log_line) < block.index(condition)
 	condition_line = next(line for line in block.splitlines() if "-eq 76 ] ||" in line)
 	assert "75" not in condition_line
-	fragment = (REPO_ROOT / "agents.d" / "10018-resolver-refused-fallback-no-retry.md").read_text(encoding="utf-8")
-	assert 'section="Stable log prefixes (contractual)"' in fragment
-	assert "LOG_PREFIX.name=CONFLICT_RESOLVER_FALLBACK_REFUSED" in fragment
+	# Read through agents_doc so the check holds before and after the release
+	# fold deletes the agents.d fragment (scripts/assemble_agents.py).
+	from agents_doc import agents_text as _agents_text_with_fragments
+	agents = _agents_text_with_fragments(REPO_ROOT)
+	assert "- `CONFLICT_RESOLVER_FALLBACK_REFUSED`" in agents
+	assert "LOG_PREFIX.name=CONFLICT_RESOLVER_FALLBACK_REFUSED" in agents
