@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_ci_poll_test_sharding.py:4335-4345 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: In StepElapsedLine10071ContractTest.test_trap_is_set_before_the_first_command, the `if \"exit\" in run[...]: assertLess(trap_index, run.index(\"exit\", trap_index + len(STEP_ELAPSED_TRAP_10071)))` block can never fail, because the search starts after trap_index.\n  WHY: It is a dead, misleading assertion that checks no ordering. The lines[0]/lines[1] checks already pin the trap's position. Reviewers rated it NIT.\n- .github/workflows/ci.yml:4276-4297 and tests/test_ci_poll_test_sharding.py:4314-4355 | severity=high | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The merge-train step's backgrounded `(...) &` subshells are claimed to inherit the EXIT trap, which would give 5 `step elapsed:` lines instead of 1. The contract test uses a subshell-free script, so it does not exercise this.\n  WHY: A parser could pick a shard's duration instead of the step's. Reviewers anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash checked this claim and rejected it, because bash resets caught traps in subshells. minimax_minimax-m3 rated it MAJOR; the other two reported no finding, so severity is mapped to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_ci_poll_test_sharding.py (StepElapsedLine10071ContractTest.test_trap_is_set_before_the_first_command, `if \"exit\" in run[...]` block) | severity=NIT | confidence=4\n  PROBLEM: The assertion can never fail, because `run.index(\"exit\", start)` searches only after trap_index.\n  WHY: It is dead and misleading. The lines[0]/lines[1] asserts and `assertLess(trap_index, run.index(\"python3\"))` already pin the ordering.\n- HARDENING_SUGGESTIONS: delete the block, or use an unanchored `run.index(\"exit\")`. Estimated 5 lines changed. HARDENING_RISK_SCORE: 1\n- Other sections: NONE. The reviewer checked the minimax-m3 subshell claim and rejected it, because bash does not run the parent's EXIT trap in `( ... ) &` subshells. Task completeness: no gaps found.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- (No findings reported.)\n- HARDENING_SUGGESTIONS: tests/test_ci_poll_test_sharding.py, StepElapsedLine10071ContractTest.test_trap_is_set_before_the_first_command (lines 4335-4340). The `if \"exit\" in ...` check followed by `assertLess` is tautological. Fix: remove it or replace it with a real check. Estimated 4 lines changed. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_ci_poll_test_sharding.py:4341-4345 | severity=NIT | confidence=4\n  PROBLEM: `run.index(\"exit\", start)` is always greater than trap_index, so the assertLess block is dead code.\n  WHY: A regression that put an `exit` before the trap would still pass. The lines[0]/lines[1] checks enforce the real ordering.\n- .github/workflows/ci.yml:4276-4282 and 4285-4297 vs tests/test_ci_poll_test_sharding.py:4314-4355 | severity=MAJOR | confidence=3\n  PROBLEM: Backgrounded subshells in the merge-train step are said to inherit the EXIT trap, giving 5 `step elapsed:` lines instead of 1. The contract test has no subshells, so it does not cover this.\n  WHY: A budget-watch parser could not tell which line is the step duration, and the test does not exercise the case.\n- HARDENING_SUGGESTIONS:\n  - Drop the dead block, or use `run.index(\"exit\")`. Estimated 1-4 lines changed. HARDENING_RISK_SCORE: 1\n  - Add a `test_trap_in_backgrounded_subshell_prints_to_parent_stdout` case, or clear the trap with `trap - EXIT` inside each `(...) &`. Estimated 6-10 lines changed. HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_ci_poll_test_sharding.py:4341-4345 (StepElapsedLine10071ContractTest.test_trap_is_set_before_the_first_command) | severity=NIT | confidence=5\n  PROBLEM: The guarded assert is tautological and can never fail, since `run.index(\"exit\", start)` has start > trap_index.\n  WHY: It is dead, misleading code that implies an ordering guarantee. The lines 4337-4338 asserts already pin the trap. The reviewer suggested deleting the block or asserting `\"exit\" not in run[:trap_index]`.\n- Other sections: NONE. The reviewer verified that bash resets traps in subshells, so the subshell claim does not hold. The EXIT trap prints one line and keeps the exit status. Task completeness: no gaps found.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3ec499daf4bec6c654e03effc321a9b54291c8eeb81bb618b7c7227f60dc02a2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10094,
+    "run_id": "45540057737",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45540057737",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125053610_440db96127",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10094,
+    "run_id": "45540057737"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T05:36:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
