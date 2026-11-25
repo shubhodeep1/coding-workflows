@@ -1557,6 +1557,7 @@ def test_delta_fallback_shares_the_dispatch_retry_budget(tmp_path: Path) -> None
 	result, calls, output = _run(tmp_path, "gate", comments=comments, env=_dispatch_errors("HTTP 422: Unexpected inputs", "HTTP 502: Bad Gateway", None))
 	assert output == "hold=true\nhold_reason=audit_dispatched\n"
 	assert "outcome=delta_fallback reason=dispatch_rejected" in result.stdout and "dispatch_attempts=3" in result.stdout
+	assert "outcome=delta_fallback reason=dispatch_rejected cycle=" in result.stdout and "workflow=ai-security-audit.yml dispatch_error=rejected" in result.stdout
 	assert _audit_dispatches(calls) == [LEGACY_DISPATCH + ["-f", f"audit_diff_since={OLD}", "-f", "prior_findings=5"], LEGACY_DISPATCH, LEGACY_DISPATCH]
 
 
@@ -1566,6 +1567,9 @@ def test_delta_fallback_stops_when_the_shared_budget_is_used(tmp_path: Path) -> 
 	result, calls, output = _run(tmp_path, "gate", comments=comments, env=_dispatch_errors("HTTP 502: Bad Gateway"))
 	assert output == "hold=true\nhold_reason=dispatch_failed\n"
 	assert len(_audit_dispatches(calls)) == 4 and result.stdout.count("outcome=dispatch_retry") == 2
+	# The fallback line names the transient class, not only the historical reason.
+	assert "outcome=delta_fallback reason=dispatch_rejected" in result.stdout
+	assert [line for line in result.stdout.splitlines() if "outcome=delta_fallback" in line][0].endswith("dispatch_error=server_error")
 	assert "dispatch_error=server_error" in result.stdout
 
 

@@ -1461,9 +1461,11 @@ No completed audit exists for \`${head_sha}\`. Auto-merge stays off. A new push 
 				delta_note+="."
 			fi
 		else
-			# A consumer wrapper that predates the delta inputs rejects them;
-			# retry once with today's arguments instead of burning a cycle.
-			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=delta_fallback reason=dispatch_rejected cycle=${next_cycle} workflow=${workflow}"
+			# A consumer wrapper that predates the delta inputs rejects them, or a
+			# transient failure used up the shared retry budget (dispatch_error
+			# names which); retry once with today's arguments instead of burning
+			# a cycle. reason=dispatch_rejected keeps its historical form (#10104).
+			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=delta_fallback reason=dispatch_rejected cycle=${next_cycle} workflow=${workflow} dispatch_error=${SINGLE_PASS_DISPATCH_ERROR:-other}"
 			if single_pass_dispatch_audit "${dispatch_args[@]}"; then
 				dispatch_ok="true"
 			fi
