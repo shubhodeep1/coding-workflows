@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: G5 of linked issue #9994 \u2014 \"The list of switches and defaults comes from one source that a test keeps in step with the workflows' `vars.<NAME> || '<default>'` expressions, so a new switch cannot be added without being covered.\"\n  expected_change_site: tests/test_stage_switch_registry.py, `_workflow_true_switches` (and the registry it validates)\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The test scans only `.github/workflows/*.yml` and *.yaml (lines 25, 63; tests/test_stage_switch_registry.py:62-64; `WORKFLOWS_DIR = ROOT / \".github\" / \"workflows\"`) and never reads `workflow-templates/`, a default-on switch added only to a workflow template is not checked against `scripts/stage_switches.json` unless it is also added to the README `#### Variables` or `## Required Variables` tables, the LAST RUN DIFF only adds `on_values` to three entries and does not widen the scan, templates carry default-on switch forms (workflow-templates/ai-review.yml:101-102 and :180 `vars.WORKFLOW_HEAL_ENABLED || 'true'`, `vars.WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_ENABLED || 'true'`, `vars.PROVIDER_OUTAGE_RESUME_ENABLED || 'true'`; workflow-templates/ai-update-workflows.yml:59 `vars.AI_WORKFLOW_AUTO_UPDATE_ENABLED != 'false'`, README.md:151 \"unset (runs)\"), `AI_WORKFLOW_AUTO_UPDATE_ENABLED` is absent from scripts/stage_switches.json and would escape the README-table check because its default is \"unset (runs)\", not \"true\"\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: G5 requires a test to keep the switch registry in step with workflow `vars.<NAME>_ENABLED` expressions so a new switch cannot be added without coverage.\n  Expected change site: tests/test_stage_switch_registry.py, _workflow_true_switches\n  Evidence of absence: The test scans only `.github/workflows/*.yml` and *.yaml (lines 25, 63); it does not scan workflow-templates/. A default-on switch added only to a workflow template is therefore not checked against the registry unless it is separately added to a README variable table.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: G5 requires a test to keep the switch registry in step with workflow `vars.<NAME>_ENABLED` expressions so a new switch cannot be added without coverage.\n  Expected change site: `tests/test_stage_switch_registry.py`, `_workflow_true_switches` (line 63 scans only `.github/workflows/*.yml` and `*.yaml`).\n  Evidence of absence: The test scans only `WORKFLOWS_DIR = ROOT / \".github\" / \"workflows\"`. A default-on switch added only to a reusable workflow under `workflow-templates/` (copied to consumer repos via `.github/workflows/update_workflows.yml`) is not checked against `scripts/stage_switches.json` unless it is also added to the README `#### Variables` or `## Required Variables` tables. The LAST RUN DIFF only adds `on_values` to three entries and does not widen the scan to `workflow-templates/*.yml`/`*.yaml`, so the G5 gap remains open. The README backstop is only partial.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: G5 requires a test to keep the switch registry in step with workflow `vars.<NAME>_ENABLED` expressions so a new switch cannot be added without coverage.\n  Expected change site: `tests/test_stage_switch_registry.py`, `_workflow_true_switches`.\n  Evidence of absence: `_workflow_true_switches` scans only the supplied workflows directory (`*.yml` and `*.yaml`), and its caller supplies `.github/workflows`. It does not scan `workflow-templates/`, which contains workflow variable expressions in files such as `ai-review.yml` and `ai-update-workflows.yml`. So this registry test does not cover a new default-on switch added only to a template.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: G5 of linked issue #9994 \u2014 \"The list of switches and defaults comes from one source that a test keeps in step with the workflows' `vars.<NAME> || '<default>'` expressions, so a new switch cannot be added without being covered.\"\n  Expected change site: tests/test_stage_switch_registry.py, `_workflow_true_switches` (and the registry it validates).\n  Evidence of absence: The scan covers only `.github/workflows/*.yml` and `*.yaml` (tests/test_stage_switch_registry.py:62-64) and never reads `workflow-templates/`. The templates use the same default-on switch forms:\n  - workflow-templates/ai-review.yml:101-102 and :180 have `vars.WORKFLOW_HEAL_ENABLED || 'true'`, `vars.WORKFLOW_HEAL_NON_RETRYABLE_BACKFILL_ENABLED || 'true'` and `vars.PROVIDER_OUTAGE_RESUME_ENABLED || 'true'`.\n  - workflow-templates/ai-update-workflows.yml:59 gates on `vars.AI_WORKFLOW_AUTO_UPDATE_ENABLED != 'false'`, which is default-on (README.md:151 \"unset (runs)\").\n\n  `AI_WORKFLOW_AUTO_UPDATE_ENABLED` is absent from scripts/stage_switches.json. It would also escape the README-table check, because its default is \"unset (runs)\", not \"true\". A new default-on switch added only to a template would therefore enter the consumer sync path with no registry-coverage check.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1aa06a4ef5e76f744c469af353f72dff2574623f661ddd064b5229c7a8bc062a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9999,
+    "run_id": "45546166108",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45546166108",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125062305_94b0944ea1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9999,
+    "run_id": "45546166108"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T06:23:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
