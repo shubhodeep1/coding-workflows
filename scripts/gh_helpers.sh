@@ -1086,7 +1086,9 @@ gh_review_pr_state()
 #   have answered (follow-up to #9888). When the PAT fails too, the
 #   job token's stderr and rc are returned instead of the PAT's, so the
 #   caller's own retry wrapper (gh_retry) treats the attempt as
-#   transient rather than as a PAT rate limit. `pr checks`, which exits
+#   transient rather than as a PAT rate limit; a permanent PAT failure
+#   (not a rate limit) returns the PAT's stderr and rc so gh_retry fails
+#   fast. `pr checks`, which exits
 #   non-zero with a valid answer, returns the job-token result unchanged.
 # The token value is never printed: xtrace is off while it is in use.
 # ---------------------------------------------------------------
@@ -1320,8 +1322,10 @@ _gh_read_run()
 	# Any other failure (5xx, network, non-HTTP error) also falls back once
 	# to the PAT: before #9888 these reads used the PAT alone, so a job-token
 	# problem must never fail a read the PAT can answer. The job-token output
-	# and stderr are dropped so a wrapping gh_retry classifies only the PAT's
-	# result. No latch: the next call tries the job token again.
+	# is dropped; when the PAT succeeds its result is returned, and when it
+	# fails too the job token's transient error is returned unless the PAT's
+	# error is permanent (see below). No latch: the next call tries the job
+	# token again.
 	if [ -z "${reason}" ]; then
 		# `gh pr checks` exits non-zero (1/8) with a valid answer for failed or
 		# pending checks, so its job-token result is returned unchanged.
@@ -1346,7 +1350,9 @@ _gh_read_run()
 	# error, not the PAT's, so a wrapping gh_retry backs off and retries the
 	# job token instead of treating an exhausted PAT as a rate limit (alert,
 	# breaker trip, wait for the PAT reset). Each attempt then costs one
-	# job-token call plus one PAT call.
+	# job-token call plus one PAT call. A permanent PAT failure (revoked PAT,
+	# 404, 422; never a rate limit) returns the PAT's stderr and rc instead,
+	# so gh_retry fails fast and reports the real cause.
 	local pat_rc=0
 	gh "$@" >"${out_file}" 2>"${err_file}" || pat_rc=$?
 	if [ "${pat_rc}" -eq 0 ]; then
@@ -1356,7 +1362,13 @@ _gh_read_run()
 		rm -f "${out_file}" "${err_file}"
 		return "${pat_replay_rc}"
 	fi
+	local pat_err_text=""
+	pat_err_text="$(cat "${err_file}" 2>/dev/null || true)"
 	rm -f "${out_file}" "${err_file}"
+	if ! _is_gh_rate_limit "${pat_err_text}" && _is_gh_permanent_failure "${pat_err_text}"; then
+		printf '%s\n' "${pat_err_text}" >&2
+		return "${pat_rc}"
+	fi
 	[ -z "${err_text}" ] || printf '%s\n' "${err_text}" >&2
 	return "${rc}"
 }

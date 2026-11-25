@@ -191,6 +191,26 @@ def test_other_failure_with_pat_rate_limited_returns_the_job_token_error(tmp_pat
 	assert not list((tmp_path / "runner_temp").glob("gh_read_refused_*"))
 
 
+@pytest.mark.parametrize("pat_stderr", ("gh: Bad credentials (HTTP 401)", "gh: Not Found (HTTP 404)"))
+def test_other_failure_with_permanent_pat_failure_returns_the_pat_error(tmp_path: Path, pat_stderr: str) -> None:
+	# Job token 502 while the PAT is revoked or the target is gone: gh_retry must
+	# see the PAT's permanent error so it fails fast and names the real cause.
+	env = _env(
+		tmp_path,
+		FAKE_JOB_STDERR="gh: Server Error (HTTP 502)",
+		FAKE_JOB_RC="1",
+		FAKE_PAT_STDERR=pat_stderr,
+		FAKE_PAT_RC="4",
+	)
+	result = _run(tmp_path, f'gh_read api "repos/{REPO}/pulls/1"; echo "rc=$?"', env)
+	assert result.stdout == "rc=4\n"
+	assert _tokens(env) == [JOB_TOKEN, PAT]
+	assert "GH_READ_FALLBACK reason=error caller=poller.sh" in result.stderr
+	assert pat_stderr in result.stderr
+	assert "HTTP 502" not in result.stderr
+	assert not list((tmp_path / "runner_temp").glob("gh_read_refused_*"))
+
+
 def test_pr_checks_non_zero_returns_the_job_token_result(tmp_path: Path) -> None:
 	# `gh pr checks` exits 8 with a valid answer while checks are pending.
 	env = _env(tmp_path, FAKE_JOB_STDOUT="pending-checks", FAKE_JOB_RC="8")
