@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Issue #9697: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  expected_change_site: `.github/workflows/ci.yml`, step blocks moving out of `tests-heal-plan-and-validation` (line 1850) into another test job\n  confidence=[2]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  EVIDENCE: The diff adds or rewords only comment lines at ci.yml:1855-1860 and moves no step block. All three reviewers rate this a NIT and treat it as already satisfied in substance: `Merge probe unit tests` is at ci.yml:1625 in `tests-hooks-and-orchestrator`, the #9420 (re-issued as #9684) move is recorded in comments, `timeout-minutes: 20` at ci.yml:1863 is unchanged, no job was added or renamed, the repository holds no step timings for run 44214045174, and the operator's expected outcome is a comment-only resolution.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP\n- Requirement: Issue #9697 says \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, step blocks moving out of `tests-heal-plan-and-validation` (line 1850).\n  Evidence of absence: The diff adds only comment lines (ci.yml:1855-1860) and moves no step block. Mitigating facts: `Merge probe unit tests` is at ci.yml:1625 inside `tests-hooks-and-orchestrator`. Comments at ci.yml:1578, 1610 and 1652 record the #9420 (re-issued as #9684) move. `timeout-minutes: 20` at ci.yml:1863 is unchanged, and no job was added or renamed. The repository holds no step timings for run 44214045174. The operator's issue-summary comment states a comment-only resolution is the expected outcome. Treated as already satisfied in substance; it stays a NIT only because the \"measured before the move\" claim is an inference.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, moving step blocks out of `tests-heal-plan-and-validation` (line 1850) into another test job\n  Evidence of absence: The LAST RUN DIFF adds and rewrites only comment lines at `.github/workflows/ci.yml:1855-1860`, and no step block is moved. Mitigating evidence: `Merge probe unit tests` sits at ci.yml:1625 inside `tests-hooks-and-orchestrator` (starts at line 885). The move-out notes at ci.yml:2065, 2104-2105 and 2113 cite #9420, matching the new comment's citation. The repository holds no step timings for run 44214045174, and the 15m24s total is within 11s of the 15m35s pre-move timing cited at ci.yml:1581 and 1608. The operator's expected outcome explicitly asks for a comment-only resolution.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\" (issue #9697)\n  Expected change site: `.github/workflows/ci.yml`, moving step blocks out of `tests-heal-plan-and-validation` (starts at ci.yml:1850) into another test job.\n  Evidence of absence: The PR diff and LAST RUN DIFF add or reword only `#` comment lines at ci.yml:1855-1860, and no step block is moved. Mitigating evidence: the six heaviest steps were already moved to `tests-hooks-and-orchestrator` by #9420 (re-issued as #9684, PR #9702), recorded at ci.yml:2065, 2105, 2113 and `changelog.d/9420-ci-heal-job-steps-to-hooks-job.md`. The flagged run 44214045174 most likely predates that move (inferred, not verified). The repository holds no step timings for that run. The operator's comment states a comment-only resolution is expected. `timeout-minutes: 20` (ci.yml:1863) is unchanged and no job was added or renamed.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "fc487b6fee96824e8218282033775e04a3c1e85f597b5806a3fe276b26440c70",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10074,
+    "run_id": "45550110413",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45550110413",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125062223_cf0c9c7805",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10074,
+    "run_id": "45550110413"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T06:22:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
