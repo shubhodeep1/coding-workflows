@@ -209,6 +209,14 @@
       "color": "5319e7",
       "description": "Stable tracker issue for weekly workflow retrospectives"
     },
+    "ai:plan-autopilot": {
+      "color": "5319e7",
+      "description": "Stable status issue for the plan autopilot"
+    },
+    "ai:plan-decision": {
+      "color": "fbca04",
+      "description": "Plan the autopilot cannot refresh without a decision"
+    },
     "ai:security": {
       "color": "0e8a16",
       "description": "Follow-up issue opened by the periodic security audit workflow"

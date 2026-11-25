@@ -116,6 +116,13 @@ jobs:
       # this tick is in the slot and the day's cache marker was not found.
       claude_pool_daily_due: ${{ steps.pool_daily_seen.outcome == 'success' && steps.pool_daily_seen.outputs.cache-hit != 'true' && 'true' || 'false' }}
       claude_pool_daily_date: ${{ steps.pool_daily_slot.outputs.date }}
+      # Plan autopilot (plan_autopilot job, issue #10091): due when
+      # PLAN_AUTOPILOT_ENABLED is 'true', find_tracking saw no open project
+      # and the (default-branch SHA, UTC day) cache marker was not found. No
+      # API call: the gate reuses find_tracking's listing.
+      plan_autopilot_due: ${{ steps.plan_autopilot_seen.outcome == 'success' && steps.plan_autopilot_seen.outputs.cache-hit != 'true' && 'true' || 'false' }}
+      plan_autopilot_key: ${{ steps.plan_autopilot_slot.outputs.key }}
+      plan_autopilot_support_ref: ${{ steps.plan_autopilot_slot.outputs.support_ref }}
 
     env:
       AI_ENGINE_FALLBACK_POLICY: ${{ vars.AI_ENGINE_FALLBACK_POLICY || 'capacity' }}
@@ -562,6 +569,29 @@ jobs:
             echo "🔬 All tracking issues are smoke fixtures — suppressing per-phase Telegram alerts"
             echo "ALERT_MSG_LEVEL=SILENT" >> "$GITHUB_ENV"
           fi
+
+      # Plan autopilot (issue #10091): runs on the idle path too, because
+      # find_tracking's early exit only ends that step. Off unless the repo
+      # variable PLAN_AUTOPILOT_ENABLED is exactly 'true'.
+      - name: Check plan autopilot slot
+        id: plan_autopilot_slot
+        if: vars.PLAN_AUTOPILOT_ENABLED == 'true' && steps.find_tracking.outcome == 'success' && steps.find_tracking.outputs.has_tracking == 'false'
+        continue-on-error: true
+        env:
+          PLAN_AUTOPILOT_SHA: ${{ github.sha }}
+        run: |
+          echo "key=plan-autopilot-v1-${PLAN_AUTOPILOT_SHA}-$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+          echo "support_ref=${SCRIPT_REF}" >> "$GITHUB_OUTPUT"
+
+      - name: Look up plan autopilot marker
+        id: plan_autopilot_seen
+        if: steps.plan_autopilot_slot.outcome == 'success' && steps.plan_autopilot_slot.outputs.key != ''
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: .plan-autopilot-marker/done
+          key: ${{ steps.plan_autopilot_slot.outputs.key }}
+          lookup-only: true
 
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -2581,3 +2611,168 @@ jobs:
         with:
           path: .claude-pool-daily-usage/sent
           key: claude-pool-daily-usage-v1-${{ needs.poll.outputs.claude_pool_daily_date }}
+
+  # Plan autopilot (issue #10091): while no orchestrator project is open, run
+  # the /audit-plans procedure unattended (role PLAN_AUDIT, isolated container,
+  # no GitHub token), land plan fixes in an ai/plan-autopilot-* maintenance PR
+  # and start the recommended plan as a Claude-engine orchestrator project.
+  # Off unless the repo variable PLAN_AUTOPILOT_ENABLED is 'true'.
+  # Its own job (§26), not poll steps: the audit is a long AI run (up to 90
+  # minutes against the poll's short ticks), it must not hold the
+  # ai-orchestrate-poll-* concurrency group every tick queues on, and its
+  # failure must not fail the poll. Jobs per poll tick: before, 1 (+1
+  # claude_pool_daily_usage when due); after, the same, +1 plan_autopilot at
+  # most once per (default-branch SHA, UTC day) while idle and enabled. A
+  # false job-level if: takes no runner.
+  plan_autopilot:
+    needs: poll
+    if: ${{ !cancelled() && needs.poll.outputs.plan_autopilot_due == 'true' }}
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
+    timeout-minutes: 90
+    concurrency:
+      # It writes state (status issue, maintenance PR, dispatch): one run at a
+      # time, never cancelled; each run re-checks the marker below.
+      group: plan-autopilot-${{ github.repository }}
+      cancel-in-progress: false
+    env:
+      AI_ENGINE_FALLBACK_POLICY: ${{ vars.AI_ENGINE_FALLBACK_POLICY || 'capacity' }}
+      PLAN_AUTOPILOT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
+      PLAN_AUTOPILOT_MAINTENANCE_PR_STALE_HOURS: ${{ vars.PLAN_AUTOPILOT_MAINTENANCE_PR_STALE_HOURS || '24' }}
+    steps:
+      - name: Checkout repository for the plan audit
+        uses: actions/checkout@v5
+        with:
+          path: repo
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout plan autopilot support
+        uses: actions/checkout@v5
+        with:
+          repository: shubhodeep1/coding-workflows
+          ref: ${{ needs.poll.outputs.plan_autopilot_support_ref }}
+          token: ${{ secrets.GH_PAT }}
+          path: .codex-workflow-src
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Verify plan autopilot support commit
+        env:
+          PLAN_AUTOPILOT_SUPPORT_REF: ${{ needs.poll.outputs.plan_autopilot_support_ref }}
+        run: |
+          set -euo pipefail
+          # A pinned support ref must be exactly the commit the poll resolved.
+          if [[ "${PLAN_AUTOPILOT_SUPPORT_REF}" =~ ^[0-9a-f]{40}$ ]] && [ "$(git -C .codex-workflow-src rev-parse HEAD)" != "${PLAN_AUTOPILOT_SUPPORT_REF}" ]; then
+            echo "::error::Plan autopilot support checkout does not match the pinned commit; refusing to run."
+            exit 1
+          fi
+          [ -f .codex-workflow-src/scripts/plan_autopilot.py ] || { echo "::notice::PLAN_AUTOPILOT outcome=skip reason=support_missing"; exit 1; }
+
+      - name: Re-check plan autopilot marker
+        id: plan_autopilot_recheck
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: .plan-autopilot-marker/done
+          key: ${{ needs.poll.outputs.plan_autopilot_key }}
+          lookup-only: true
+
+      - name: Plan autopilot gate
+        id: gate
+        if: steps.plan_autopilot_recheck.outcome == 'success' && steps.plan_autopilot_recheck.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: python3 -I -B .codex-workflow-src/scripts/plan_autopilot.py gate --repo "${GITHUB_REPOSITORY}" --workdir repo
+
+      - name: Collect plan audit input
+        id: collect
+        if: steps.gate.outputs.proceed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: python3 -I -B .codex-workflow-src/scripts/plan_autopilot.py collect --repo "${GITHUB_REPOSITORY}" --workdir repo
+
+      - name: Install Codex CLI
+        if: steps.collect.outcome == 'success'
+        uses: ./.codex-workflow-src/.github/actions/install-codex
+
+      # Claude engine: PLAN_AUDIT (.github/ai/claude_engine.json) runs on
+      # Claude unless AI_ENGINE_PLAN_AUDIT or AI_ENGINE says codex; any Claude
+      # failure falls back to codex under AI_ENGINE_FALLBACK_POLICY.
+      - name: Resolve plan audit engine
+        id: engine
+        if: steps.collect.outcome == 'success'
+        env:
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_PLAN_AUDIT: ${{ vars.AI_ENGINE_PLAN_AUDIT || '' }}
+        run: python3 -I -B .codex-workflow-src/scripts/plan_autopilot.py engine --repo "${GITHUB_REPOSITORY}" --support .codex-workflow-src
+
+      - name: Install Claude Code CLI
+        if: steps.engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/install-claude
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        id: claude_pool
+        if: steps.engine.outputs.engine == 'claude'
+        continue-on-error: true
+        uses: ./.codex-workflow-src/.github/actions/claude-pool-token
+        with:
+          config_path: .codex-workflow-src/.github/ai/claude_engine.json
+
+      # No GitHub token in this step: the agent reads untrusted plan and
+      # comment text and edits a disposable copy of the checkout.
+      - name: Run plan audit
+        id: audit
+        if: steps.engine.outcome == 'success'
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+          AI_ENGINE_PLAN_AUDIT: ${{ steps.engine.outputs.engine || 'codex' }}
+          CLAUDE_POOL_REASON: ${{ steps.claude_pool.outputs.reason || '' }}
+        run: python3 -I -B .codex-workflow-src/scripts/plan_autopilot.py audit --repo "${GITHUB_REPOSITORY}" --workdir repo --support .codex-workflow-src
+
+      - name: Apply plan audit changes
+        id: apply
+        if: steps.audit.outputs.completed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: python3 -I -B .codex-workflow-src/scripts/plan_autopilot.py apply --repo "${GITHUB_REPOSITORY}" --workdir repo --support .codex-workflow-src
+
+      - name: Upsert plan decision issues
+        id: decisions
+        if: steps.apply.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: python3 -I -B .codex-workflow-src/scripts/plan_autopilot.py decisions --repo "${GITHUB_REPOSITORY}" --workdir repo
+
+      - name: Start the recommended plan
+        id: dispatch
+        if: steps.decisions.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: python3 -I -B .codex-workflow-src/scripts/plan_autopilot.py dispatch --repo "${GITHUB_REPOSITORY}" --workdir repo
+
+      - name: Report plan autopilot status
+        id: report
+        if: always() && steps.gate.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: python3 -I -B .codex-workflow-src/scripts/plan_autopilot.py report --repo "${GITHUB_REPOSITORY}" --workdir repo
+
+      # Saved for a deterministic gate skip or a finished audit; never on a
+      # read failure, an error or a Claude capacity wait (exit 80), so a
+      # later tick retries.
+      - name: Write plan autopilot marker
+        if: always() && steps.report.outputs.save_marker == 'true'
+        run: mkdir -p .plan-autopilot-marker && date -u +%Y-%m-%dT%H:%M:%SZ > .plan-autopilot-marker/done
+
+      - name: Save plan autopilot marker
+        if: always() && steps.report.outputs.save_marker == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: .plan-autopilot-marker/done
+          key: ${{ needs.poll.outputs.plan_autopilot_key }}

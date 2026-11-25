@@ -429,3 +429,15 @@ Copy this block when adding a new entry:
   - The App Platform app and the Uptime check recorded in the agents file's `## DigitalOcean resources` table are deleted in the same change (ask-first, CLAUDE.md §22.B), and their rows are removed.
   - `tests/test_runner_scaler_*.py` and `tests/runner_scaler_fakes.py` are removed in the same PR.
 - **Owner:** @shubhodeep1
+
+### `scripts/plan_autopilot.py` (the `plan_autopilot` job of `.github/workflows/orchestrate_poll.yml`)
+
+- **Introduced in:** PR for #10091 (2026-11-25)
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually. It is the only unattended path from `/audit-plans` to a started orchestrator project; the poller runs it behind `PLAN_AUTOPILOT_ENABLED` (default `false`).
+- **Removal preflight checks:**
+  - `grep -rn plan_autopilot .github/workflows` returns no caller (remove the `plan_autopilot` job and the poll job's `plan_autopilot_*` outputs and steps first).
+  - For every repository in `.github/ai/consumer_repos.json` and this one, `gh api repos/<repo>/actions/variables/PLAN_AUTOPILOT_ENABLED` returns HTTP 404 or a value other than `true`.
+  - `gh api 'repos/shubhodeep1/coding-workflows/pulls?state=open&per_page=100' --jq '[.[] | select(.head.ref | startswith("ai/plan-autopilot-"))] | length'` prints `0` (no maintenance PR is still open).
+  - `tests/test_plan_autopilot.py`, `tests/test_plan_autopilot_workflow_contract.py`, `tests/test_plan_audit_prompt_contract.py` (and their `ci.yml` step), `prompts/mode-plan-audit.txt`, its template and render contract, and the `PLAN_AUDIT` role are removed in the same PR.
+- **Owner:** @shubhodeep1

@@ -176,6 +176,11 @@
       "engine": "claude",
       "claude_model": "claude-opus-5-5",
       "profile": "read"
+    },
+    "PLAN_AUDIT": {
+      "engine": "claude",
+      "claude_model": "claude-opus-5-5",
+      "profile": "write"
     }
   }
 }
