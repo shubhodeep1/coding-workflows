@@ -35725,6 +35725,8 @@ def test_completion_status_two_delivered_items_warn_once_each() -> None:
 	assert result["latest_state"].get("completion_status_delivered_closed_alerted") == [10, 11]
 	combined = result["stdout"] + result["stderr"]
 	assert "COMPLETION_DELIVERED_CLOSED tracking_issue=192 items=10,11 alert=sent" in combined
+	# The judge is invoked as today when several delivered items warn.
+	_assert_wave_judge_ran(result)
 
 
 if __name__ == "__main__":
