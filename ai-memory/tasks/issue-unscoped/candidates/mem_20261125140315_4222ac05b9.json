@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .claude/commands/audit-plans.md:23,102-103,129-130,143-144 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The new \"drift check not run\" plan state is not excluded from steps 5-6, and the single-plan and bundle recommendation blocks have no caveat line for it. The blocks cover only \"Refreshed in\" and \"Stale, not refreshed\". The same gap is in workflow-templates/.claude/commands/audit-plans.md.\n  WHY: When `git fetch origin <default>` fails, an unverified plan can be recommended with a `Hand off:` line and no warning. Severity disagreement: sonnet, minimax and glm rated this MAJOR, and luna rated it NIT. MAJOR is mapped to high, the highest rating.\n- .claude/commands/audit-plans.md:39 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: Step 6 says \"when step 4a's fetch failed, this step is in degraded mode\" without saying which of the two step 4a fetches is meant. The two are `git fetch origin <default>` and the tracking-issue listing. The same wording is in workflow-templates/.claude/commands/audit-plans.md.\n  WHY: A literal reading puts step 6 into degraded mode, with the UNSCREENED caveat and no bundles, after only the git fetch failed. The listing was still read in full, and line 23 says it is still fetched for step 6. This is a wording ambiguity only (NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .claude/commands/audit-plans.md:23,129-130,143-144 | severity=MAJOR | confidence=3\n  PROBLEM: The \"drift check not run\" state is neither CURRENT nor STALE and does not exclude a plan from steps 5-6. The recommendation blocks have no caveat line for it. The identical copy in workflow-templates/.claude/commands/audit-plans.md has the same gap.\n  WHY: If `git fetch origin <default>` fails, an unverified plan can be recommended with a `Hand off:` line and no caveat.\n- .claude/commands/audit-plans.md:39 | severity=NIT | confidence=2\n  PROBLEM: Line 39 says \"step 4a's fetch\" without saying which fetch. The identical copy in workflow-templates/.claude/commands/audit-plans.md has the same wording.\n  WHY: A literal reading could put step 6 into degraded mode after only the git fetch failed. This is a wording ambiguity only.\n- HARDENING_SUGGESTIONS: add one conditional caveat line after line 130 and after line 144 in both copies, and change \"step 4a's fetch failed\" to \"step 4a's tracking-issue listing failed\" in step 6 (about 3 lines per file). HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .claude/commands/audit-plans.md:102-103,129-130,143-144 | severity=MAJOR | confidence=4\n  PROBLEM: The \"Drift check not run\" report section was added, but the single-plan and bundle recommendation blocks have no matching caveat line. A plan that was never drift-checked can still be ranked and recommended. The same gap is in workflow-templates/.claude/commands/audit-plans.md.\n  WHY: When `git fetch origin <default>` fails, a `Hand off:` line can go to an unverified plan with no caveat. This is the same defect class as the earlier STALE-not-refreshed gap. The contract tests do not catch it.\n- .claude/commands/audit-plans.md:39 | severity=NIT | confidence=3\n  PROBLEM: Line 39 does not name which of the two step 4a fetches failed. The same wording is in workflow-templates/.claude/commands/audit-plans.md.\n  WHY: A literal reading puts step 6 into degraded mode after only the git fetch failed, which weakens the recommendation needlessly.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .claude/commands/audit-plans.md:23,31,129-130,143-144 | severity=NIT | confidence=4\n  PROBLEM: When `git fetch origin <default>` fails, step 5 still ranks all PARTIAL and NOT IMPLEMENTED plans. The recommendation templates carry caveats only for refreshed plans and for STALE plans that were not refreshed. The identical copy in workflow-templates/.claude/commands/audit-plans.md has the same gap.\n  WHY: A plan whose freshness was not verified can be presented as the next plan to hand off without a caveat in the recommendation block. The separate \"Drift check not run\" report section does warn the user.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .claude/commands/audit-plans.md:23,125-130,136-144 | severity=MAJOR | confidence=4\n  PROBLEM: The \"drift check not run\" state does not exclude a plan from candidacy, and the hand-off blocks have no caveat for it. The blocks cover only \"Refreshed in\" (line 129) and \"Stale, not refreshed\" (line 130), and the bundle block the same (lines 143-144). The same defect is in workflow-templates/.claude/commands/audit-plans.md.\n  WHY: When `git fetch origin <default>` fails, the report can still recommend an unchecked plan with a `Hand off:` line, so the fail-closed intent does not reach the hand-off surface.\n- .claude/commands/audit-plans.md:39 | severity=NIT | confidence=3\n  PROBLEM: Line 39 does not say which of the two step 4a fetches \"step 4a's fetch\" means: the drift-check fetch (line 23) or the tracking-issue listing fetch (line 26). The same wording is in workflow-templates/.claude/commands/audit-plans.md.\n  WHY: A literal reading unnecessarily weakens the step-6 conflict gate after only the git fetch failed, which contradicts line 23's \"still fetched for step 6\".\n- HARDENING_SUGGESTIONS: add one conditional \"Drift check not run\" caveat line per recommendation block, with a matching bundle form, in both copies (about 4 lines). HARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "46f2edd332ce3e53d9025da4d8918675e37b85fe475648ecb82c4bd10df5bbb7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10090,
+    "run_id": "45619805175",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45619805175",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125140315_4222ac05b9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10090,
+    "run_id": "45619805175"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T14:03:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
