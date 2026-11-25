@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/stage_switches.json:922-924 | severity=high | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `GITHUB_AI_PLAN_GRANT_WRITE_ENABLED` entry uses GitHub's reserved `GITHUB_` prefix, so it cannot be set as a repository Actions variable and the rollback switch can never be turned off.\n  WHY: An unset variable counts as on, so the watch never sees it off; severity disagreement: openai_gpt-6-luna=MAJOR, anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash=NIT (highest used); the fix belongs in #9654.\n- scripts/stage_switches.json:891-1050 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The \"stage\" text of the 32 new entries restates the switch name and includes temporary bookkeeping about an open PR (\"listed before the merge so the registry tests pass on the merged tree\").\n  WHY: The text goes stale after the PR merges and is used in the Telegram alert, so the alert is uninformative; detection is unchanged (all reviewers rated it NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/stage_switches.json:922 | severity=NIT | confidence=2\n  PROBLEM: `GITHUB_AI_PLAN_GRANT_WRITE_ENABLED` starts with the reserved `GITHUB_` prefix, so it cannot be an Actions variable name.\n  WHY: If #9654 reads it as `vars.*`, setting it to false cannot turn the stage off; the fix belongs in #9654.\n- scripts/stage_switches.json:891-1050 | severity=NIT | confidence=3\n  PROBLEM: The \"stage\" text of all 32 new entries is the switch name as prose plus bookkeeping about the open PR.\n  WHY: Only the alert wording is affected; no test or behaviour breaks.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/stage_switches.json:892-895; scripts/stage_switch_watch.sh:191-194 | severity=NIT | confidence=4\n  PROBLEM: The new stage description includes temporary bookkeeping saying the switch was added by an open PR and listed before merge, rather than naming the workflow or a concrete action.\n  WHY: The text goes stale on merge, and the Telegram warning uses it as its \"Stage\" field.\n- scripts/stage_switches.json:922-924; docs/plans/pipeline-human-wait-elimination-plan.md:191,277; scripts/stage_switch_watch.py:160-163,197-201 | severity=MAJOR | confidence=4\n  PROBLEM: `GITHUB_AI_PLAN_GRANT_WRITE_ENABLED` uses GitHub's reserved `GITHUB_` prefix, so it cannot be configured as a repository Actions variable.\n  WHY: It cannot be set to false, and the watcher skips absent variables, so this entry cannot monitor the intended rollback switch.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/stage_switches.json:~891-1050 | severity=NIT | confidence=3\n  PROBLEM: Every new `stage` value restates the switch name as prose plus PR bookkeeping, and `scripts/stage_switch_watch.py` copies it into the Telegram alert.\n  WHY: The alert text is uninformative and false after the PRs merge; detection behavior is unchanged.\n- scripts/stage_switches.json:922 | severity=NIT | confidence=3\n  PROBLEM: `GITHUB_AI_PLAN_GRANT_WRITE_ENABLED` cannot be set as a repository variable because of the reserved `GITHUB_` prefix, yet `docs/plans/pipeline-human-wait-elimination-plan.md:191` documents it as the rollback switch.\n  WHY: If #9654 reads it from `vars.`, the kill switch is inert; the defect is in #9654's naming and no change belongs here.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e955565828d8f81e0f9d6762ba124129caf1b15ac02fc968200ea8edded70ad6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10128,
+    "run_id": "45651618011",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45651618011",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125163316_91b174b4c5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10128,
+    "run_id": "45651618011"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T16:33:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
