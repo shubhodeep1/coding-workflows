@@ -210,7 +210,7 @@ jobs:
       - name: Install Codex CLI
         uses: ./.codex-workflow-src/.github/actions/install-codex
         with:
-          codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          codex_version: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
 
       - name: Create Codex config
         env:

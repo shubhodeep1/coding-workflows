@@ -298,7 +298,7 @@ jobs:
       - name: Install Codex CLI
         uses: ./.github/actions/install-codex
         with:
-          codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          codex_version: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
 
       - name: Create Codex config
         run: |
@@ -348,7 +348,7 @@ jobs:
       - name: Run workflow failure heal intake
         env:
           # Codex version baked into the isolated diagnosis agent's image (scripts/codex_isolated_exec.sh).
-          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
           AI_ENGINE_WORKFLOW_HEAL: ${{ vars.AI_ENGINE_WORKFLOW_HEAL || '' }}
           SUPPORT_INSTRUCTIONS_FILE: ${{ github.workspace }}/unattended_system_instructions.md
@@ -535,7 +535,7 @@ jobs:
       - name: Install Codex CLI
         uses: ./.github/actions/install-codex
         with:
-          codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          codex_version: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
 
       - name: Create Codex config
         run: |
@@ -582,7 +582,7 @@ jobs:
       - name: Run heal-scope recovery scan
         env:
           # Codex version baked into the isolated diagnosis agent's image (scripts/codex_isolated_exec.sh).
-          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
           AI_ENGINE_WORKFLOW_HEAL: ${{ vars.AI_ENGINE_WORKFLOW_HEAL || '' }}
           SUPPORT_INSTRUCTIONS_FILE: ${{ github.workspace }}/unattended_system_instructions.md

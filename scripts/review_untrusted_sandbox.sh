@@ -124,7 +124,7 @@ if [ "${action}" = prepare ] || [ "${action}" = prepare-ephemeral ]; then
 		printf 'claude\n' > "${root}/engine"
 	elif [ "${prepare_engine}" = chatgpt ] && [ "${action}" = prepare-ephemeral ]; then
 		[ -f "${support}/chatgpt_codex_relay.py" ] && [ ! -L "${support}/chatgpt_codex_relay.py" ] && [ -f "${support}/claude_engine.py" ] || { echo '::error::Review ChatGPT support missing' >&2; exit 1; }
-		chatgpt_cli_version="${CODEX_VERSION:-v0.114.0}"
+		chatgpt_cli_version="${CODEX_VERSION:-v0.171.0}"
 		[[ "${chatgpt_cli_version}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo '::error::Invalid review Codex CLI version' >&2; exit 1; }
 		image="$(_review_sandbox_build_image 900 --build-arg "OPENCODE_VERSION=${version}" --build-arg "CODEX_CLI_VERSION=${chatgpt_cli_version}" -f "${support}/review_sandbox/Dockerfile" "${support}/review_sandbox")"
 		printf 'chatgpt\n' > "${root}/engine"

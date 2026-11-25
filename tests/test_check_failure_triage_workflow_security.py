@@ -1036,7 +1036,7 @@ esac
 		self.assertEqual(diagnose["env"]["CHECK_TRIAGE_STAGE"], "diagnose")
 		self.assertEqual(diagnose["env"]["CHECK_TRIAGE_PREPARE_ONLY"], "true")
 		self.assertEqual(diagnose["env"]["CHECK_TRIAGE_CHECK_RUN_ID"], "${{ inputs.check_run_id }}")
-		self.assertEqual(diagnose["env"]["CLARIFY_CODEX_VERSION"], "${{ vars.CODEX_VERSION || 'v0.114.0' }}")
+		self.assertEqual(diagnose["env"]["CLARIFY_CODEX_VERSION"], "${{ vars.CODEX_VERSION || 'v0.171.0' }}")
 		self.assertEqual(diagnose["if"], "${{ steps.collect_triage.outputs.ready == 'true' }}")
 		post = _step(triage_job, name="Post check-failure triage issue")
 		self.assertLess(post["run"].index("triage_post_check_name="), post["run"].index("gh_retry gh issue create"))

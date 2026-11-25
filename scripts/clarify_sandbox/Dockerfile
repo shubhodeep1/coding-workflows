@@ -2,7 +2,7 @@
 # python3-yaml: the heal editor's syntax validator (validate_changed_files_syntax.sh)
 # checks edited YAML in this image; without it every workflow edit failed (#6982).
 FROM node:22.16.0-bookworm-slim
-ARG CODEX_VERSION=v0.114.0
+ARG CODEX_VERSION=v0.171.0
 # jq: the heal route's pre-push gate runs in this image, and shell-script tests
 # call jq.
 RUN apt-get update && apt-get install -y --no-install-recommends python3 python3-yaml ca-certificates git jq \

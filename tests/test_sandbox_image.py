@@ -90,7 +90,7 @@ def _hash_of(ref: str) -> str:
 
 
 def test_ref_uses_default_registry_family_and_input_hash(fake) -> None:
-	ref = fake["ref"]("--build-arg", "CODEX_VERSION=v0.114.0")
+	ref = fake["ref"]("--build-arg", "CODEX_VERSION=v0.171.0")
 	assert re.fullmatch(r"ghcr\.io/shubhodeep1/coding-workflows-sandbox:clarify-[0-9a-f]{32}", ref)
 
 
@@ -124,14 +124,14 @@ def test_pull_with_matching_label_skips_the_build(fake) -> None:
 
 def test_pull_failure_builds_locally_with_the_same_inputs(fake) -> None:
 	result = fake["run"](
-		"build", "--family", "clarify", "--build-arg", "CODEX_VERSION=v0.114.0",
+		"build", "--family", "clarify", "--build-arg", "CODEX_VERSION=v0.171.0",
 		"-f", str(fake["context"] / "Dockerfile"), str(fake["context"]),
 	)
 	assert result["rc"] == 0
 	assert result["stdout"] == BUILT_ID
 	assert "outcome=built reason=pull_failed" in result["stderr"]
 	build = next(c for c in result["calls"] if c.startswith("build "))
-	assert "--build-arg CODEX_VERSION=v0.114.0" in build
+	assert "--build-arg CODEX_VERSION=v0.171.0" in build
 	assert "--label coding-workflows.sandbox-input=" in build
 	assert build.endswith(str(fake["context"]))
 
@@ -227,7 +227,7 @@ def test_publish_script_publishes_every_build_site_variant(fake) -> None:
 	cli_version = json.loads((ROOT / ".github/ai/claude_engine.json").read_text())["cli_version"]
 	builds = [c for c in result["calls"] if c.startswith("build ")]
 	assert sum(f"CLAUDE_CLI_VERSION={cli_version}" in b for b in builds) == 3
-	assert sum("CODEX_VERSION=v0.114.0" in b for b in builds) == 4
+	assert sum("CODEX_VERSION=v0.171.0" in b for b in builds) == 4
 	assert sum("OPENCODE_VERSION=1.18.23" in b for b in builds) == 2
 
 
@@ -242,8 +242,8 @@ def test_publish_script_refs_match_the_build_sites_inputs(fake) -> None:
 		assert result["rc"] == 0, result["stderr"]
 		return str(result["stdout"])
 
-	expected.add(site_ref("clarify", scripts / "clarify_sandbox", "--build-arg", "CODEX_VERSION=v0.114.0"))
-	expected.add(site_ref("clarify", scripts / "clarify_sandbox", "--build-arg", "CODEX_VERSION=v0.114.0", "--build-arg", f"CLAUDE_CLI_VERSION={cli_version}"))
+	expected.add(site_ref("clarify", scripts / "clarify_sandbox", "--build-arg", "CODEX_VERSION=v0.171.0"))
+	expected.add(site_ref("clarify", scripts / "clarify_sandbox", "--build-arg", "CODEX_VERSION=v0.171.0", "--build-arg", f"CLAUDE_CLI_VERSION={cli_version}"))
 	expected.add(site_ref("clarify", scripts / "clarify_sandbox"))
 	expected.add(site_ref("review", scripts / "review_sandbox", "--build-arg", "OPENCODE_VERSION=1.18.23"))
 	expected.add(site_ref("review", scripts / "review_sandbox", "--build-arg", "OPENCODE_VERSION=1.18.23", "--build-arg", f"CLAUDE_CLI_VERSION={cli_version}"))
@@ -251,7 +251,7 @@ def test_publish_script_refs_match_the_build_sites_inputs(fake) -> None:
 		out = fake["tmp"] / f"site-{engine}"
 		out.mkdir()
 		subprocess.run(["bash", str(scripts / "codex_isolated_exec.sh"), "image-context", "--engine", engine, "--out", str(out)], check=True)
-		args = ["--build-arg", "CODEX_VERSION=v0.114.0"]
+		args = ["--build-arg", "CODEX_VERSION=v0.171.0"]
 		if engine == "claude":
 			args += ["--build-arg", f"CLAUDE_CLI_VERSION={cli_version}"]
 		expected.add(site_ref(f"codex-isolated-{engine}", out, *args))
@@ -262,14 +262,14 @@ def test_publish_script_refs_match_the_build_sites_inputs(fake) -> None:
 
 def test_build_site_defaults_match_the_publish_script() -> None:
 	scripts = ROOT / "scripts"
-	assert 'local version="${CODEX_VERSION:-v0.114.0}"' in (scripts / "codex_isolated_exec.sh").read_text()
-	assert 'version="${CLARIFY_CODEX_VERSION:-v0.114.0}"' in (scripts / "clarify_isolated_run.sh").read_text()
+	assert 'local version="${CODEX_VERSION:-v0.171.0}"' in (scripts / "codex_isolated_exec.sh").read_text()
+	assert 'version="${CLARIFY_CODEX_VERSION:-v0.171.0}"' in (scripts / "clarify_isolated_run.sh").read_text()
 	assert 'version="${OPENCODE_VERSION:-1.18.23}"' in (scripts / "review_untrusted_sandbox.sh").read_text()
 	publish = PUBLISH.read_text()
-	assert 'publish_codex_version="${CODEX_VERSION:-v0.114.0}"' in publish
+	assert 'publish_codex_version="${CODEX_VERSION:-v0.171.0}"' in publish
 	assert 'publish_opencode_version="${OPENCODE_VERSION:-1.18.23}"' in publish
 	workflow = (ROOT / ".github/workflows/publish-sandbox-images.yml").read_text()
-	assert "CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}" in workflow
+	assert "CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.171.0' }}" in workflow
 	assert "OPENCODE_VERSION: ${{ vars.OPENCODE_VERSION || '1.18.23' }}" in workflow
 
 

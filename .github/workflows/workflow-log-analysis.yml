@@ -478,7 +478,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
       AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
       AI_ENGINE_RETRO: ${{ vars.AI_ENGINE_RETRO || '' }}
     steps:
@@ -551,7 +551,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ${{ runner.tool_cache }}/codex
-          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}-v2
+          key: codex-${{ vars.CODEX_VERSION || 'v0.171.0' }}-v2
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
@@ -1115,7 +1115,7 @@ jobs:
       report_branch: ${{ steps.commit_report.outputs.delivery == '' && steps.commit_report.outputs.report_branch || '' }}
       purged_docs: ${{ steps.commit_report.outputs.purged_docs }}
     env:
-      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
       AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
       AI_ENGINE_LOG_SUMMARY: ${{ vars.AI_ENGINE_LOG_SUMMARY || '' }}
       AI_ENGINE_LOG_ANALYSIS: ${{ vars.AI_ENGINE_LOG_ANALYSIS || '' }}
@@ -1202,7 +1202,7 @@ jobs:
           # startup with "Missing optional dependency @openai/codex-linux-x64".
           # Bump invalidates the broken entries; persist+restore below now
           # handle both packages symmetrically.
-          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}-v2
+          key: codex-${{ vars.CODEX_VERSION || 'v0.171.0' }}-v2
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
@@ -2467,7 +2467,7 @@ jobs:
       section_branch: ${{ steps.deep_audit_section_push.outputs.section_branch }}
       section_base_sha: ${{ steps.deep_audit_section_push.outputs.section_base_sha }}
     env:
-      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
       AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
       AI_ENGINE_LOG_AUDIT: ${{ vars.AI_ENGINE_LOG_AUDIT || '' }}
     steps:
@@ -2550,7 +2550,7 @@ jobs:
           # startup with "Missing optional dependency @openai/codex-linux-x64".
           # Bump invalidates the broken entries; persist+restore below now
           # handle both packages symmetrically.
-          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}-v2
+          key: codex-${{ vars.CODEX_VERSION || 'v0.171.0' }}-v2
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
@@ -3136,7 +3136,7 @@ jobs:
       section_branch: ${{ steps.api_redundancy_section_push.outputs.section_branch }}
       section_base_sha: ${{ steps.api_redundancy_section_push.outputs.section_base_sha }}
     env:
-      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
       AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
       AI_ENGINE_LOG_ANALYSIS: ${{ vars.AI_ENGINE_LOG_ANALYSIS || '' }}
     steps:
@@ -3219,7 +3219,7 @@ jobs:
           # startup with "Missing optional dependency @openai/codex-linux-x64".
           # Bump invalidates the broken entries; persist+restore below now
           # handle both packages symmetrically.
-          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}-v2
+          key: codex-${{ vars.CODEX_VERSION || 'v0.171.0' }}-v2
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
