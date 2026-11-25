@@ -4338,11 +4338,9 @@ class StepElapsedLine10071ContractTest(unittest.TestCase):
 				self.assertEqual(lines[1].strip(), STEP_ELAPSED_TRAP_10071)
 				trap_index = run.index(STEP_ELAPSED_TRAP_10071)
 				self.assertLess(trap_index, run.index("python3"))
-				if "exit" in run[trap_index + len(STEP_ELAPSED_TRAP_10071):]:
-					self.assertLess(
-						trap_index,
-						run.index("exit", trap_index + len(STEP_ELAPSED_TRAP_10071)),
-					)
+				# No `exit` may run before the trap is set, or that path would
+				# skip the elapsed line.
+				self.assertNotIn("exit", run[:trap_index])
 
 	def test_trap_prints_on_failure_and_keeps_the_exit_status(self) -> None:
 		result = self.run_trap(3)
