@@ -22,6 +22,9 @@ except ImportError:  # credential-free gate containers ship without PyYAML
 
 ROOT = Path(__file__).resolve().parent.parent
 README = ROOT / "README.md"
+# workflow-templates/ is left out on purpose: those wrappers run in consumer
+# repositories and read the consumer's variables, while the watch lists only
+# this repository's actions/variables, so a template-only switch is unwatchable.
 WORKFLOWS_DIR = ROOT / ".github" / "workflows"
 REGISTRY = ROOT / "scripts" / "stage_switches.json"
 WATCH_WORKFLOW = WORKFLOWS_DIR / "workflow-log-analysis.yml"
