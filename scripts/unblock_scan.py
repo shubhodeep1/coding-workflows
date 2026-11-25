@@ -44,8 +44,9 @@ UNBLOCK_SKIP_E2E_TEST_ITEMS_ENABLED is the off switch: unset, empty or `true`
 turns it off and logs a warning on stderr.
 
 An item labelled `ai:security-audit` (the long-lived security-audit tracker,
-issue #3576) is skipped as `security_audit_tracker` unless it is a failed
-project; SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED=false turns that off.
+issue #3576) is skipped as `security_audit_tracker`, also when it is a failed
+project (issue #9730, see below); SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED=false
+turns that off.
 An item that carries `ai:needs-human` and whose newest trusted
 `ai:unblock:v1` marker is a `close` verdict is parked in the needs-human
 digest (scripts/operator_step_issue.py) and skipped as `parked`. With
@@ -71,6 +72,15 @@ Two terminal states are not judged again while nothing material changed:
     as `terminal_unchanged`. Pull requests are not covered (their fingerprint
     holds failing check names the scan cannot see), nor failed projects, nor
     the kill switch NEEDS_HUMAN_DIGEST_ENABLED=false (the judge then closes it).
+An issue labelled `ai:security-audit` (the long-lived security-audit tracker,
+issue #9730) is not a work item and is skipped as `security_audit_tracker`,
+also when it is in the failed-project set, so the judge can never close it;
+SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED (unset, empty or `true` in any
+case is on; `false` is off; any other value is off with one stderr warning)
+turns it off. A failed project the search did not return (its block label
+was released) carries no labels here; it gets `ai:security-audit` back when
+its fetched body carries `<!-- ai:security-audit-tracker:v1 -->` on its own
+line, so it is still skipped, and otherwise keeps the project path.
 An item is picked when all hold:
   - it has been blocked for at least --min-blocked-minutes (the newest
     `labeled` event of a block label it still carries; for a failed project
@@ -156,13 +166,14 @@ def _is_wedged_queued(run: object, now_epoch: int, guard: str) -> bool:
 
 TRACKING_LABEL = "ai:orchestrator-tracking"
 # Issue #3576: the long-lived security-audit tracker is not a work item; the
-# scan skips it unless its project failed. SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED=false
-# restores the previous selection.
+# scan skips it, also when its project failed (issue #9730).
+# SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED=false restores the previous selection.
 SECURITY_AUDIT_LABEL = "ai:security-audit"
 CLOSED_LABEL = "ai:unblock-closed"
 MARKER_PREFIXES = ("<!-- ai:unblock:v1 ", "<!-- ai:unblock-wait:v1 ")
 STATE_PREFIX = "<!-- ORCHESTRATOR_STATE_V"
 NEEDS_HUMAN_LABEL = "ai:needs-human"
+SECURITY_AUDIT_TRACKER_MARKER_RE = re.compile(r"^[ \t]*<!-- ai:security-audit-tracker:v1 -->[ \t]*\r?$", re.M)
 VERDICT_PREFIX = "<!-- ai:unblock:v1 "
 VERDICT_RE = re.compile(r" verdict=([a-z_]+) ")
 RUN_NAME_RE = re.compile(r"^Unblock judge #([1-9][0-9]*)$")
@@ -211,6 +222,26 @@ def _time(value: object) -> dt.datetime | None:
 	except ValueError:
 		return None
 	return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.timezone.utc)
+
+
+_SECURITY_AUDIT_EXCLUDE_WARNED = False
+
+
+def _security_audit_exclude_enabled() -> bool:
+	"""Issue #9730 switch; same rule as the poller's shell reader (no trimming).
+
+	An unrecognised value turns the exclusion off and warns once per process on
+	stderr (stdout carries the selection JSON).
+	"""
+	global _SECURITY_AUDIT_EXCLUDE_WARNED
+	raw = os.environ.get("SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED", "")
+	value = raw.lower()
+	if value in ("", "true"):
+		return True
+	if value != "false" and not _SECURITY_AUDIT_EXCLUDE_WARNED:
+		_SECURITY_AUDIT_EXCLUDE_WARNED = True
+		print(f"::warning::SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED={raw} is not true/false; tracker exclusion is off", file=sys.stderr)
+	return False
 
 
 def _label_names(item: dict) -> set[str]:
@@ -423,7 +454,16 @@ def select(
 	known = {int(item["number"]) for item in items if str(item.get("number", "")).isdigit()}
 	# A failed project the search did not return (no block label on it) is
 	# still judged; its labels are unknown here, so it is a project by origin.
-	items += [{"number": number, "labels": [TRACKING_LABEL], "updated_at": ""} for number in sorted(failed - known)]
+	# Issue #9730: a tracker whose block label was released drops out of the
+	# search but stays a failed project; its body marker (same rule as the
+	# poller) restores its label so the skip below still holds on later ticks.
+	def _rebuilt_labels(number: int) -> list[str]:
+		info = details.get(str(number))
+		body = info.get("body") if isinstance(info, dict) else None
+		if isinstance(body, str) and SECURITY_AUDIT_TRACKER_MARKER_RE.search(body):
+			return [TRACKING_LABEL, SECURITY_AUDIT_LABEL]
+		return [TRACKING_LABEL]
+	items += [{"number": number, "labels": _rebuilt_labels(number), "updated_at": ""} for number in sorted(failed - known)]
 	for item in items:
 		if not str(item.get("number", "")).isdigit():
 			continue
@@ -438,9 +478,9 @@ def select(
 				skip("e2e_test_item")
 				continue
 		labels = _label_names(item)
-		# Same vocabulary as the poller's is_truthy; unset or empty means on.
-		if ((os.environ.get("SECURITY_AUDIT_TRACKER_PIPELINE_EXCLUDE_ENABLED") or "true").strip().lower() in ("1", "true", "yes", "on")
-				and SECURITY_AUDIT_LABEL in labels and number not in failed):
+		# Issue #9730: no failed-project exemption. A tracker must never reach the
+		# judge, whose project path can give it a close verdict.
+		if SECURITY_AUDIT_LABEL in labels and _security_audit_exclude_enabled():
 			skip("security_audit_tracker")
 			continue
 		if CLOSED_LABEL in labels and number not in failed:

@@ -81,6 +81,11 @@ if args[:1] == ["api"]:
     if path.endswith("/comments"):
         state.setdefault("comments", []).append([path, fields.get("body", "")])
         respond({})
+    if "/actions/runs?status=queued" in path and "created=" in path:
+        state.setdefault("wedged_queries", []).append(path)
+        if state.get("wedged_error"):
+            save(); sys.stderr.write("HTTP 503\n"); sys.exit(1)
+        respond({"total_count": state.get("wedged_runs", 0), "workflow_runs": []})
     if "/actions/runs?status=queued" in path:
         if state.get("queued_error"):
             save(); sys.stderr.write("HTTP 503\n"); sys.exit(1)
@@ -700,7 +705,7 @@ def test_retry_waits_while_the_queue_is_deep_after_a_recent_failed_gate() -> Non
 		with tempfile.TemporaryDirectory() as tmp:
 			proc, final = _run(Path(tmp), state)
 		assert proc.returncode == 0, proc.stderr
-		assert f"AUTO_RELEASE_SKIPPED reason=runner_queue_deep sha={TIP} queued=375 max=100 last_run={GATE_RUN} last_age_hours=3 window_hours=24" in proc.stdout
+		assert f"AUTO_RELEASE_SKIPPED reason=runner_queue_deep sha={TIP} queued=375 wedged=0 max=100 last_run={GATE_RUN} last_age_hours=3 window_hours=24" in proc.stdout
 		assert not final.get("dispatches")
 		assert "dispatched=false" in final["github_output"]
 
@@ -710,7 +715,85 @@ def test_retry_goes_ahead_once_the_queue_has_drained() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final = _run(Path(tmp), state)
 	assert proc.returncode == 0, proc.stderr
-	assert f"AUTO_RELEASE_QUEUE_CHECK outcome=clear queued=99 max=100 last_run={GATE_RUN} last_age_hours=3" in proc.stdout
+	assert f"AUTO_RELEASE_QUEUE_CHECK outcome=clear queued=99 wedged=0 max=100 last_run={GATE_RUN} last_age_hours=3" in proc.stdout
+	assert len(final["dispatches"]) == 1
+
+
+# Issue #10032: wedged queued runs (older than ZOMBIE_RUN_MAX_QUEUED_HOURS) are
+# not load, so the back-off compares only live queued runs with the limit.
+
+
+def _queued_reads(state: dict) -> list[str]:
+	return [path for path in _api_paths(state) if "status=queued" in path]
+
+
+def test_queue_back_off_leaves_wedged_runs_out_of_the_count() -> None:
+	state = _state(tag_commit="3" * 40, runs=[_queue_failed_gate()], queued_runs=245, wedged_runs=240)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, env={"ZOMBIE_RUN_MAX_QUEUED_HOURS": "24"})
+	assert proc.returncode == 0, proc.stderr
+	assert f"AUTO_RELEASE_QUEUE_CHECK outcome=clear queued=5 wedged=240 max=100 last_run={GATE_RUN} last_age_hours=3" in proc.stdout
+	assert len(final["dispatches"]) == 1
+	reads = _queued_reads(final)
+	assert len(reads) == 2, reads
+	assert "created=" not in reads[0]
+	assert len(final["wedged_queries"]) == 1
+	query = final["wedged_queries"][0]
+	assert "per_page=1" in query and "created=%3C%3D" in query
+	cutoff = datetime.strptime(query.split("created=%3C%3D", 1)[1], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+	expected = datetime.now(timezone.utc) - timedelta(hours=24)
+	assert abs((cutoff - expected).total_seconds()) < 300
+
+
+def test_queue_back_off_still_holds_on_live_runs_over_the_limit() -> None:
+	state = _state(tag_commit="3" * 40, runs=[_queue_failed_gate()], queued_runs=150, wedged_runs=10)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, env={"ZOMBIE_RUN_MAX_QUEUED_HOURS": "24"})
+	assert proc.returncode == 0, proc.stderr
+	assert f"AUTO_RELEASE_SKIPPED reason=runner_queue_deep sha={TIP} queued=140 wedged=10 max=100 last_run={GATE_RUN} last_age_hours=3 window_hours=24" in proc.stdout
+	assert not final.get("dispatches")
+	assert "dispatched=false" in final["github_output"]
+
+
+def test_queue_under_the_limit_reads_the_total_only() -> None:
+	state = _state(tag_commit="3" * 40, runs=[_queue_failed_gate()], queued_runs=99, wedged_runs=90)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, env={"ZOMBIE_RUN_MAX_QUEUED_HOURS": "24"})
+	assert proc.returncode == 0, proc.stderr
+	assert f"AUTO_RELEASE_QUEUE_CHECK outcome=clear queued=99 wedged=0 max=100 last_run={GATE_RUN}" in proc.stdout
+	assert len(_queued_reads(final)) == 1
+	assert not final.get("wedged_queries")
+	assert len(final["dispatches"]) == 1
+
+
+def test_wedged_filter_off_compares_the_raw_count() -> None:
+	for hours in ("0", "soon"):
+		state = _state(tag_commit="3" * 40, runs=[_queue_failed_gate()], queued_runs=375, wedged_runs=370)
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, final = _run(Path(tmp), state, env={"ZOMBIE_RUN_MAX_QUEUED_HOURS": hours})
+		assert proc.returncode == 0, (hours, proc.stderr)
+		assert f"AUTO_RELEASE_SKIPPED reason=runner_queue_deep sha={TIP} queued=375 wedged=0 max=100" in proc.stdout, hours
+		assert len(_queued_reads(final)) == 1, hours
+		assert not final.get("wedged_queries"), hours
+		assert not final.get("dispatches"), hours
+
+
+def test_wedged_count_read_failure_fails_open() -> None:
+	state = _state(tag_commit="3" * 40, runs=[_queue_failed_gate()], queued_runs=375, wedged_error=True)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, env={"ZOMBIE_RUN_MAX_QUEUED_HOURS": "24"})
+	assert proc.returncode == 0, proc.stderr
+	assert f"AUTO_RELEASE_QUEUE_CHECK outcome=read_failed lookup=wedged_runs last_run={GATE_RUN}" in proc.stdout
+	assert "reason=runner_queue_deep" not in proc.stdout
+	assert len(final["dispatches"]) == 1
+
+
+def test_wedged_count_is_clamped_to_the_total() -> None:
+	state = _state(tag_commit="3" * 40, runs=[_queue_failed_gate()], queued_runs=245, wedged_runs=400)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, env={"ZOMBIE_RUN_MAX_QUEUED_HOURS": "24"})
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTO_RELEASE_QUEUE_CHECK outcome=clear queued=0 wedged=245 max=100" in proc.stdout
 	assert len(final["dispatches"]) == 1
 
 

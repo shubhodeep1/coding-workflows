@@ -32,7 +32,8 @@ CHAINED_GATE_TRAP = (
 SUMMARY_RE = re.compile(
 	r"^ORCH_POLL_CYCLE_SUMMARY elapsed_ms=(\d+|unknown) projects_seen=(\d+|unknown) "
 	r"projects_processed=(\d+|unknown) sleep_ms=(\d+|unknown) exit_code=(\d+|unknown) "
-	r"terminal_reason=(completed|no_projects|error)$"
+	r"terminal_reason=(completed|no_projects|error) cache_hits_pr_json=(\d+|unknown) "
+	r"cache_hits_default_branch=(\d+|unknown) cache_hits_labels=(\d+|unknown)$"
 )
 
 
@@ -64,13 +65,23 @@ def _run(body: str, *, tmpdir: str | None = None) -> tuple[int, list[str], list[
 		if tmpdir is None:
 			leftovers = sorted(path.name for path in Path(tmp).glob("orch_poll_cycle_sleep.*"))
 			assert leftovers == [], leftovers
+			hit_leftovers = sorted(path.name for path in Path(tmp).glob("orch_poll_cycle_cache_hits.*"))
+			assert hit_leftovers == [], hit_leftovers
 		return result.returncode, summaries, projects
 
 
 def _fields(summary: str) -> tuple[str, ...]:
+	"""The six original keys (elapsed .. terminal_reason)."""
 	match = SUMMARY_RE.match(summary)
 	assert match, summary
-	return match.groups()
+	return match.groups()[:6]
+
+
+def _hit_fields(summary: str) -> tuple[str, ...]:
+	"""The cache-hit keys appended by issue #9927 (pr_json, default_branch, labels)."""
+	match = SUMMARY_RE.match(summary)
+	assert match, summary
+	return match.groups()[6:]
 
 
 # ---------------------------------------------------------------------------
@@ -90,7 +101,9 @@ def test_cycle_summary_static_trap_and_format():
 	assert (
 		'echo "ORCH_POLL_CYCLE_SUMMARY elapsed_ms=${_orch_poll_cycle_exit_elapsed} projects_seen=${_orch_poll_cycle_exit_seen} '
 		"projects_processed=${_orch_poll_cycle_exit_processed} sleep_ms=${_orch_poll_cycle_exit_sleep} "
-		'exit_code=${_orch_poll_cycle_exit_code} terminal_reason=${_orch_poll_cycle_exit_reason}"'
+		"exit_code=${_orch_poll_cycle_exit_code} terminal_reason=${_orch_poll_cycle_exit_reason} "
+		"cache_hits_pr_json=${_orch_poll_cycle_exit_hits_pr} cache_hits_default_branch=${_orch_poll_cycle_exit_hits_branch} "
+		'cache_hits_labels=${_orch_poll_cycle_exit_hits_labels}"'
 	) in block
 	assert 'echo "ORCH_POLL_PROJECT_TIMING tracking_issue=${_orch_poll_cycle_flush_num} elapsed_ms=${_orch_poll_cycle_flush_elapsed}"' in block
 	assert "date +%s%3N" in block and "date +%s 2>/dev/null" in block
@@ -253,6 +266,48 @@ def test_cycle_summary_sums_sleep_ledger_including_subshells():
 	# A non-integer duration makes the total unknown rather than wrong.
 	rc, summaries, _ = _run('"${_ORCH_POLL_CYCLE_SLEEP_CMD:-sleep}" 0.01\n')
 	assert rc == 0 and _fields(summaries[0])[3] == "unknown"
+
+
+def test_cycle_summary_counts_cache_hits_from_ledger_including_subshells():
+	body = (
+		"_orch_poll_cycle_cache_hit pr_json || true\n"
+		'_x="$(_orch_poll_cycle_cache_hit pr_json; echo ok)"\n'
+		"( _orch_poll_cycle_cache_hit default_branch ) || true\n"
+		"_orch_poll_cycle_cache_hit labels || true\n"
+		'_y="$(_orch_poll_cycle_cache_hit labels; _orch_poll_cycle_cache_hit labels)"\n'
+		# Unknown kinds are ignored rather than miscounted.
+		"_orch_poll_cycle_cache_hit 'bogus; rm -rf /' || true\n"
+		"exit 3\n"
+	)
+	rc, summaries, _ = _run(body)
+	assert rc == 3
+	assert len(summaries) == 1
+	assert _fields(summaries[0])[4:] == ("3", "error")
+	assert _hit_fields(summaries[0]) == ("2", "1", "3")
+
+
+def test_cycle_summary_cache_hits_zero_and_unknown_without_ledger():
+	rc, summaries, _ = _run("exit 0")
+	assert rc == 0 and _hit_fields(summaries[0]) == ("0", "0", "0")
+	rc, summaries, _ = _run("_orch_poll_cycle_cache_hit pr_json || true\nexit 2\n", tmpdir="/nonexistent/orch_poll_cycle_missing")
+	assert rc == 2 and _hit_fields(summaries[0]) == ("unknown", "unknown", "unknown")
+
+
+def test_cycle_summary_removes_owned_pr_json_cache_dir_only():
+	with tempfile.TemporaryDirectory() as tmp:
+		owned = Path(tmp) / "orch_poll_pr_json_cache.owned"
+		owned.mkdir()
+		(owned / "gen").write_text("g1\n", encoding="utf-8")
+		body = f"ORCH_POLL_PR_JSON_CACHE_DIR={str(owned)!r}\n_ORCH_POLL_PR_JSON_CACHE_OWNED=true\nexit 4\n"
+		rc, summaries, _ = _run(body, tmpdir=tmp)
+		assert rc == 4 and len(summaries) == 1
+		assert not owned.exists()
+		# A directory this run did not create is left alone.
+		foreign = Path(tmp) / "foreign"
+		foreign.mkdir()
+		body = f"ORCH_POLL_PR_JSON_CACHE_DIR={str(foreign)!r}\nexit 0\n"
+		rc, summaries, _ = _run(body, tmpdir=tmp)
+		assert rc == 0 and foreign.is_dir()
 
 
 def test_cycle_summary_fails_open_without_ledger():

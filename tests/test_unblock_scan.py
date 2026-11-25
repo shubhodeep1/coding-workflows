@@ -23,7 +23,7 @@ POLLER = ROOT / "scripts" / "orchestrate_poll_process.sh"
 POLL_WORKFLOW = ROOT / ".github" / "workflows" / "orchestrate_poll.yml"
 if str(ROOT / "tests") not in sys.path:
 	sys.path.insert(0, str(ROOT / "tests"))
-from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
+from review_autofix_step_scripts import expanded_implement_text, expanded_review_autofix_text  # noqa: E402
 
 SPEC = importlib.util.spec_from_file_location("unblock_scan", SCRIPT)
 scan = importlib.util.module_from_spec(SPEC)
@@ -716,7 +716,8 @@ def test_poll_workflow_stages_the_scan_and_passes_its_knobs() -> None:
 
 @pytest.mark.parametrize("path", [".github/workflows/implement.yml", "scripts/implement_commit_changes.sh"])
 def test_bulk_override_never_covers_canonical_deletions(path: str) -> None:
-	text = (ROOT / path).read_text(encoding="utf-8")
+	# implement.yml sources the preflight guard from scripts/ (#9678); inline it.
+	text = expanded_implement_text() if path == ".github/workflows/implement.yml" else (ROOT / path).read_text(encoding="utf-8")
 	assert 'if [ "${UNBLOCK_BULK_DELETE_OVERRIDE:-false}" = "true" ] && [ -z "${canonical_deletions}" ] &&' in text
 	assert 'unblock_protected_deletions="$(printf \'%s\\n\' "${deleted_staged}" | grep -iE \'^(\\.github|\\.claude|workflow-templates)(/|$)\' || true)"' in text
 	assert '[ -z "${unblock_protected_deletions}" ] &&' in text
@@ -1057,10 +1058,11 @@ def test_security_audit_tracker_is_skipped_unless_failed() -> None:
 	result = _select(search, details)
 	assert result["dispatch"] == [{"item": 5, "kind": "issue"}]
 	assert result["skipped"]["security_audit_tracker"] == 1
-	# A failed project that also carries the label is still judged.
+	# Issue #9730: a failed project that also carries the label is skipped too,
+	# because the judge's project path can give it a close verdict.
 	failed = _select([_item(3576, ["ai:blocked", "ai:security-audit"])], {"3576": _details("ai:blocked", 10)}, failed=[3576])
-	assert failed["dispatch"] == [{"item": 3576, "kind": "project"}]
-	assert "security_audit_tracker" not in failed["skipped"]
+	assert failed["dispatch"] == []
+	assert failed["skipped"]["security_audit_tracker"] == 1
 
 
 def test_security_audit_tracker_skip_honours_kill_switch(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -159,6 +159,12 @@ if args[:1] == ["api"]:
         respond({"total_count": 0, "items": []})
     if "/issues/" in path and path.endswith("/comments?per_page=100"):
         respond(state.get("cycle_comments", [{"body": "apply-analysis-source-doc: x\napply-analysis-cycle-baseline-sha: " + state.get("last_cycle_baseline", ""), "user": {"login": "github-actions[bot]"}, "author_association": "NONE"}]))
+    if "/pulls?" in path:
+        # Forward-merge pending alert (#9919): open PRs into main.
+        state.setdefault("pulls_reads", []).append(path)
+        if state.get("pulls_error"):
+            save(); sys.stderr.write("HTTP 404: Not Found\n"); sys.exit(1)
+        respond(state.get("open_pulls", []))
     if "/issues?" in path:
         labels = state.get("in_flight_labels", {})
         respond([{"number": n, "labels": [{"name": l} for l in labels.get(str(n), [])]} for n in state.get("in_flight", [])])
@@ -1176,8 +1182,94 @@ def test_pinned_cycle_checks_the_stable_branch_after_the_freeze() -> None:
 	assert proc.returncode == 0, proc.stdout + proc.stderr
 	assert f"PROMOTE_CYCLE_PIN outcome=frozen candidate={TIP}" in proc.stdout
 	assert f"PROMOTE_CYCLE_SKIPPED reason=base_not_ancestor base={STABLE_BRANCH_OTHER} head={TIP} status=diverged ref=heads/stable" in proc.stdout
+	assert f"PROMOTE_CYCLE_FORWARD_MERGE_PENDING prs=none base={STABLE_BRANCH_OTHER} head={TIP} ref=heads/stable" in proc.stdout
 	assert not final.get("dispatches")
 	assert final["tag_deletes"] == 1
+
+
+# --- Forward-merge pending alert on a stable-branch divergence (#9919) -------
+
+def _fm_diverged_stable_state(**extra) -> dict:
+	state = {
+		"stable_branch_sha": STABLE_BRANCH_OTHER,
+		"compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), STABLE_BRANCH_OTHER: {"status": "diverged", "total_commits": 0, "files": []}},
+	}
+	state.update(extra)
+	return state
+
+
+def _fm_open_pull(num: int, ref: str, repo: str = "owner/repo") -> dict:
+	return {"number": num, "title": "evil https://phish.example", "html_url": "https://phish.example/x",
+		"head": {"ref": ref, "repo": {"full_name": repo}}, "base": {"ref": "main"}}
+
+
+def _fm_tg_texts(final: dict) -> list[str]:
+	return [next(a for a in post if a.startswith("text=")) for post in final["tg_posts"]]
+
+
+def test_stable_branch_divergence_alerts_open_forward_merge_pr() -> None:
+	state = _fm_diverged_stable_state(open_pulls=[
+		_fm_open_pull(9891, "auto/forward-merge-stable-1-1"),
+		_fm_open_pull(12, "auto/forward-merge-stable-2-1", repo="attacker/repo"),
+		_fm_open_pull(13, "ai/issue-13"),
+		{"number": 14, "head": {"ref": "auto/forward-merge-stable-3-1", "repo": None}},
+	])
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), state, env=TG_ENV)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	pending = f"PROMOTE_CYCLE_FORWARD_MERGE_PENDING prs=9891 base={STABLE_BRANCH_OTHER} head={TIP} ref=heads/stable"
+	skipped = f"PROMOTE_CYCLE_SKIPPED reason=base_not_ancestor base={STABLE_BRANCH_OTHER} head={TIP} status=diverged ref=heads/stable"
+	assert pending in proc.stdout and skipped in proc.stdout
+	assert proc.stdout.index(pending) < proc.stdout.index(skipped)
+	assert final["github_output"].strip().endswith("outcome=skipped:base_not_ancestor")
+	assert len(final["pulls_reads"]) == 1
+	assert "base=main" in final["pulls_reads"][0] and "state=open" in final["pulls_reads"][0]
+	texts = _fm_tg_texts(final)
+	assert len(texts) == 1
+	assert "https://github.com/owner/repo/pull/9891" in texts[0]
+	assert "Create a merge commit" in texts[0]
+	assert STABLE_BRANCH_OTHER in texts[0] and TIP in texts[0]
+	assert "/pull/12" not in texts[0] and "/pull/13" not in texts[0] and "/pull/14" not in texts[0]
+	assert "phish" not in texts[0]
+
+
+def test_stable_branch_divergence_without_forward_merge_pr() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), _fm_diverged_stable_state(), env=TG_ENV)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "PROMOTE_CYCLE_FORWARD_MERGE_PENDING prs=none " in proc.stdout
+	texts = _fm_tg_texts(final)
+	assert len(texts) == 1
+	assert "No open forward-merge PR: check forward-merge-stable-to-main.yml runs" in texts[0]
+
+
+def test_stable_branch_divergence_forward_merge_lookup_failure_still_skips() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), _fm_diverged_stable_state(pulls_error=True), env=TG_ENV)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "PROMOTE_CYCLE_FORWARD_MERGE_PENDING prs=lookup_failed " in proc.stdout
+	assert "PROMOTE_CYCLE_SKIPPED reason=base_not_ancestor" in proc.stdout
+	assert final["github_output"].strip().endswith("outcome=skipped:base_not_ancestor")
+	texts = _fm_tg_texts(final)
+	assert len(texts) == 1 and "lookup failed" in texts[0]
+	assert not final.get("dispatches")
+
+
+def test_other_skips_make_no_forward_merge_lookup() -> None:
+	failed_head = "4" * 40
+	runs = [{"id": 2, "status": "completed", "event": "schedule", "conclusion": "failure", "head_sha": failed_head, "created_at": "2026-09-18T00:00:00Z"}]
+	cases = [
+		({"self_runs": runs, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), failed_head: _compare([], status="diverged")}}, {}),
+		({"stable_branch_error": True, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}}, {}),
+		({"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}}, {"STUB_CANDIDATES": "1"}),
+	]
+	for state, env in cases:
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, final, _ = _run(Path(tmp), state, env={**TG_ENV, **env})
+		assert "PROMOTE_CYCLE_SKIPPED" in proc.stdout, proc.stdout + proc.stderr
+		assert "PROMOTE_CYCLE_FORWARD_MERGE_PENDING" not in proc.stdout
+		assert not final.get("pulls_reads")
+		assert not any("Create a merge commit" in t for t in _fm_tg_texts(final))
 
 
 def test_stable_branch_compare_keeps_the_tag_change_log() -> None:
