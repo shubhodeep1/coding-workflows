@@ -5,7 +5,7 @@
 - How it runs: pull_request review (`.github/workflows/review_autofix.yml`) once the slot switch is on; accounts kept fresh by claude-workers `chatgpt-pool-refresh.yml` (cron `41 */4 * * *` from its default branch)
 - Status: IN_PROGRESS
 - Last updated: 2026-11-25
-- Last note: Step 2 blocked: a fresh TEAM1 login (last_refresh 2026-11-25T05:29Z) still fails `auth_match=unauthorized` (run 45600532216), so it is not a used-up refresh token. claude-workers#7 logs Codex's redacted error message; merge it and read the detail line.
+- Last note: Step 2 root cause found: Codex refuses `gpt-6-sol` with a ChatGPT account (model_not_found), misreported as auth_failed. claude-workers#8 classifies it as run_failed and lets Codex choose its default model (owner's choice); the review slot needs REVIEWER_CHATGPT_MODEL set to the model the refresh log reports as `used=`.
 - Human-steps issue: https://github.com/shubhodeep1/coding-workflows/issues/9647 — keys project-8969
 
 ## Runbook
@@ -20,3 +20,4 @@
 - 2026-11-25: claude-workers#5 merged; run 45548371853 stored the TEAM1 seed (generation=1) and then failed `outcome=auth_failed`. The cause isn't visible because Codex output is not logged. claude-workers#6 logs the exit code and matched keyword only. A stale or already-used refresh token is the most likely cause.
 - 2026-11-25: claude-workers#6 merged; run 45548932894 logged `CHATGPT_POOL refresh diagnostic exit=1 auth_match=unauthorized quota_match=none` and `outcome=auth_failed generation=3`. The owner got the auth.json a couple of days earlier from the person who set up the team account, so that person's Codex most likely used the single-use refresh token since.
 - 2026-11-25: owner re-saved CHATGPT_POOL_AUTH_TEAM1 from a fresh auth.json (checked: auth_mode chatgpt, both tokens, last_refresh today). Run 45600532216 still failed with `diagnostic exit=1 auth_match=unauthorized` and `outcome=auth_failed generation=5`. Since there was no forced refresh, the access token is rejected on the call itself. claude-workers#7 adds the redacted Codex error message to find out why.
+- 2026-11-25: claude-workers#7 merged at the owner's in-session request (their Mac's sandbox blocked api.github.com). Run 45604765407 then logged `The 'gpt-6-sol' model is not supported when using Codex with a ChatGPT account` (`model_not_found`). The TEAM1 login is fine. The owner chose Codex's default model. claude-workers#8: model_not_found → run_failed, an empty REFRESH_MODEL omits -m (new workflow default), and the run logs `model requested=… used=…`. The coding-workflows slot default `gpt-6-sol` (scripts/claude_engine.py:215) hits the same refusal, so go-live sets `REVIEWER_CHATGPT_MODEL` to the reported model.
