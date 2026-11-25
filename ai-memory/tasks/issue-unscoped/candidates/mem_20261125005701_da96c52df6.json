@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"When stall recovery parks an issue with ai:needs-human, post a comment on the issue explaining why\" (heading, reason, phase, stall duration, resume step, marker); call the helper in the escalate_human arm after has_label confirms ai:needs-human\n  expected_change_site: scripts/orchestrate_poll_process.sh, standalone stall recovery escalate_human arm (lines 30517-30529)\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The helper call was added only in the escalate_human arm of execute_stall_recovery_action (line 23540, call at line 23547); the standalone arm at lines 30517-30536 posts its own generic comment (lines 30522-30528) without the heading, justification, phase/duration, tracking pointer, resume step or ai:stall-escalate-human:v1 marker. anthropic_claude-sonnet-5_5 rejected this gap because the issue scopes the change to execute_stall_recovery_action and says \"Change nothing else.\"\n- requirement: \"a pointer to tracking issue #TRACKING_NUM when local_id is set\"\n  expected_change_site: scripts/orchestrate_poll_process.sh, body assembly in `_post_stall_escalate_human_comment` (lines 22607-22611)\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The guard `[ -n \"${local_id}\" ] && [[ \"${TRACKING_NUM:-}\" =~ ^[0-9]+$ ]]` drops the pointer when local_id is set but TRACKING_NUM is unset or non-numeric, and the tests only cover the case where both are set. Severity NIT; anthropic_claude-sonnet-5_5 considered it a reasonable defensive reading.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nTASK_GAP:\n- Requirement: \"a pointer to tracking issue #TRACKING_NUM when local_id is set\"\n  Expected change site: body assembly in `_post_stall_escalate_human_comment`, scripts/orchestrate_poll_process.sh\n  Evidence of absence: The guard is `[ -n \"${local_id}\" ] && [[ \"${TRACKING_NUM:-}\" =~ ^[0-9]+$ ]]`. When `local_id` is set but `TRACKING_NUM` is empty, the pointer is skipped. This is a reasonable defensive reading, and the test asserting `#192` covers the spec's example case.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\nHARDENING_SUGGESTIONS:\n- scripts/orchestrate_poll_process.sh, `_post_stall_escalate_human_comment` where `reason` is assigned: the justification has no length bound and `phase` goes into the marker unchecked. Suggested fix: `reason=\"${reason:0:2000}\"` after the empty-reason default (about 1 line). HARDENING_RISK_SCORE: 1\nNote: the reviewer rejected the cross-pollinated gap about the standalone arm at line 30517 as out of scope.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\nTASK_GAP:\n- Requirement: \"When stall recovery parks an issue with ai:needs-human, post a comment\" with the specified heading, reason, phase and stall duration, resume step and marker.\n  Expected change site: scripts/orchestrate_poll_process.sh, standalone stall recovery escalate_human arm (lines 30517-30528)\n  Evidence of absence: A standalone arm outside execute_stall_recovery_action that handles escalate_human remains unchanged and posts only the generic comment.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n- Requirement: \"a pointer to tracking issue #TRACKING_NUM when local_id is set\"\n  Expected change site: scripts/orchestrate_poll_process.sh, body assembly in `_post_stall_escalate_human_comment` (around lines 22607-22611)\n  Evidence of absence: The `[[ \"${TRACKING_NUM:-}\" =~ ^[0-9]+$ ]]` guard is not in the requirement, so the pointer is omitted when local_id is set but TRACKING_NUM is unset or invalid.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\nTASK_GAP:\n- Requirement: \"Call it in the escalate_human arm only after has_label confirms ai:needs-human.\" (and the helper should produce the heading, reason, tracking pointer, resume step and marker)\n  Expected change site: scripts/orchestrate_poll_process.sh, standalone stall recovery `escalate_human)` arm (line 30517, heredoc at lines 30522-30528)\n  Evidence of absence: The call is only in the arm of `execute_stall_recovery_action` (line 23540, call at line 23547). The standalone arm at lines 30517-30536 posts a generic comment with none of the spec deliverables.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n- Requirement: \"a pointer to tracking issue #TRACKING_NUM when local_id is set\"\n  Expected change site: scripts/orchestrate_poll_process.sh, if-block at lines 22607-22611\n  Evidence of absence: The guard also requires TRACKING_NUM to be numeric, so the pointer is silently dropped otherwise; the tests cover only the both-set case and the skip is not logged.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\nHARDENING_SUGGESTIONS:\n- scripts/orchestrate_poll_process.sh, `_post_stall_escalate_human_comment`, line 22590 and 22602-22606: `reason` has no length bound and `phase` is unchecked. Fix: truncate `reason` to `${reason:0:2000}` and validate `phase` against `^[A-Za-z0-9:_.-]+$` (about 4 lines).\n- scripts/orchestrate_poll_process.sh, line 22607: the pointer is silently dropped when TRACKING_NUM is missing. Fix: emit a `STALL_ESCALATE_HUMAN_COMMENT ... reason=tracking_num_unset` warning (about 2 lines).\nHARDENING_RISK_SCORE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\nTASK_GAP:\n- Requirement: \"When stall recovery parks an issue with ai:needs-human, post a comment on the issue explaining why,\" including the specified reason, phase, stall duration, resume step, and marker.\n  Expected change site: The standalone stall recovery escalate_human arm in scripts/orchestrate_poll_process.sh.\n  Evidence of absence: At lines 30517-30529, this arm confirms ai:needs-human but posts only its existing generic comment, without calling _post_stall_escalate_human_comment or including the specified reason, phase, duration, or marker.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\nHARDENING_SUGGESTIONS: NONE\nHARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "2c6f95f598d86e2edcde22778d9819794aaf63c5fe559b5d57378fc210a89156",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10079,
+    "run_id": "45505693106",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45505693106",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125005701_da96c52df6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10079,
+    "run_id": "45505693106"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T00:57:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
