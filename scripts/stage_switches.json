@@ -403,6 +403,12 @@
 			"stage": "Merge-lease Phase 2: the merge-train tick revokes the lease from a holder that can no longer merge (draft, [skip ai] title, pipeline ai-review/head-gate failure, failed final CI, or idle; reasons revoked_*), grants a..."
 		},
 		{
+			"name": "MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED",
+			"default": "true",
+			"stage": "Issue #10121: the merge-lease tick never grants a labelled waiter on ai/issue-<n> whose issue <n> is closed as not planned (outcome=skipped reason=source_issue_not_planned; it keeps its wait label). One batched GraphQL read per base; a failed read grants as before. false turns it off.",
+			"on_values": ["1", "yes", "on"]
+		},
+		{
 			"name": "MERGE_TRAIN_CONFLICT_CHECK_ENABLED",
 			"default": "true",
 			"stage": "Merge-train real-conflict check (issue #6570)."
@@ -806,6 +812,12 @@
 			"name": "UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED",
 			"default": "true",
 			"stage": "When a fix-up the judge filed is done (merged, or closed as already implemented) and the newest pipeline \"Planning blocked\" comment on a standalone issue gives the reason work is already on the planning ref; nothing t..."
+		},
+		{
+			"name": "UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED",
+			"default": "true",
+			"stage": "Issue #10121: the unblock judge reads an issue's own open ai/issue-<n> pull requests; a reissue is refused (held on that pull request) while one has a passing ai-review/head-gate or ai:merge-lease-wait, or the read failed, and a reissue that goes ahead closes them. false restores the old reissue.",
+			"on_values": ["1", "yes", "on"]
 		},
 		{
 			"name": "UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED",

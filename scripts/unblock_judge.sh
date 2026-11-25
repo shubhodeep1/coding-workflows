@@ -111,14 +111,20 @@
 # A `heal_report` op (harness routing): one actions/runs listing and one
 # repository_dispatch to shubhodeep1/coding-workflows; a `hold_request` op:
 # one comment on the tracking issue.
-# CONSIST-001: the identity, item, item re-check, item comments, cited-run
-# and chain-title (a trusted PR's `ai/issue-<n>` issue) reads go through gh_retry, so after a transient error (5xx, connection
+# An issue judged with UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED on (default; #10121,
+# unblock_resolve_own_prs): one GraphQL read of its open `ai/issue-<n>` pull
+# requests with their head status contexts, labels and merge state.
+# CONSIST-001: the identity, item, item re-check, item comments, cited-run,
+# own-PR (#10121) and chain-title (a trusted PR's `ai/issue-<n>` issue) reads go through gh_retry, so after a transient error (5xx, connection
 # reset) one of them may be attempted up to GH_RETRY_MAX_ATTEMPTS times in
 # total, with capped rate-limit waits. Permanent errors and every write still
 # make one attempt.
 # Log: UNBLOCK_JUDGE item= kind= stop= fingerprint= verdict= round= outcome= reason=
 #      UNBLOCK_JUDGE item= op=hold hold= ref= outcome=held|holding|met|expired|skip reason=
 #      UNBLOCK_JUDGE item= op=reissue outcome=superseded pr= head=
+#      UNBLOCK_JUDGE item= op=own_pr outcome=ok|unknown count=
+#      UNBLOCK_JUDGE item= op=reissue outcome=refused reason=own_pr_green|own_pr_lease_wait|own_pr_unknown pr=
+#      UNBLOCK_JUDGE item= op=reissue outcome=retired_own_pr pr=
 #      UNBLOCK_JUDGE item= kind= stop= fingerprint= op=instruction_sandbox_check outcome=reasked|refused_after_reask reason=
 #      UNBLOCK_JUDGE item= op=ci_owner outcome= reason=|pr=
 #      UNBLOCK_JUDGE item= op=heal_already_fixed outcome=closed|judge|skip sibling= pr= status=|reason=
@@ -1265,6 +1271,7 @@ unblock_log_target_repo_guard()
 # must not close an item, and a failed close must not add the terminal label.
 unblock_run_ops()
 {
+	local unblock_last_created=""
 	local ops_file="$1" project_failed_guard="${2:-false}" count idx op issue number created body label close_failed="false" close_succeeded="false" ops_failed="false" unblock_removed_guard="" heal_sent="false" heal_skip_reason="" heal_rc=0 heal_planned="false" heal_warned="false" heal_unauth="false"
 	count="$(jq '.ops | length' "${ops_file}" 2>/dev/null || echo 0)"
 	for ((idx = 0; idx < count; idx++)); do
@@ -1290,6 +1297,15 @@ unblock_run_ops()
 		case "${op}" in
 			comment)
 				body="$(jq -r ".ops[${idx}].body" "${ops_file}")"
+				if [ "$(jq -r ".ops[${idx}].created_ref // false" "${ops_file}")" = "true" ]; then
+					# #10121 G3: names the issue this run's create_issue made.
+					if ! [[ "${unblock_last_created}" =~ ^[1-9][0-9]*$ ]]; then
+						ops_failed="true"
+						unblock_log "item=${ITEM} op=comment issue=${issue} outcome=failed reason=no_created_issue"
+						continue
+					fi
+					body="${body//"{created}"/${unblock_last_created}}"
+				fi
 				if ! gh api "repos/${REPOSITORY}/issues/${issue}/comments" -f body="${body}" >/dev/null 2>&1; then
 					ops_failed="true"
 					unblock_log "item=${ITEM} op=comment issue=${issue} outcome=failed"
@@ -1354,6 +1370,7 @@ unblock_run_ops()
 					fi
 				done < <(jq -r ".ops[${idx}].labels[]" "${ops_file}")
 				[ "${ops_failed}" != "true" ] || continue
+				unblock_last_created="${created}"
 				# Opt-in record of created issue numbers (default unset: no-op); the
 				# conflict resolver's host-only re-issue names the replacement with it.
 				if [ -n "${UNBLOCK_CREATED_ISSUES_FILE:-}" ]; then
@@ -1887,6 +1904,69 @@ unblock_resolve_ci_owner()
 		UNBLOCK_CI_OWNER_HEAD="${owner_head_sha}"
 	fi
 	return 0
+}
+
+# UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED (#10121), parsed as
+# unblock_actions._own_pr_guard_enabled: only `false` (any case) turns it off;
+# an invalid value keeps this safety guard on.
+unblock_own_pr_guard_enabled()
+{
+	[ "$(printf '%s' "${UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED:-true}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')" != "false" ]
+}
+
+# #10121 G1: the issue's own open implementation pull requests, merged into
+# context.json as `own_prs` for the judge and unblock_actions.py. Only
+# same-repository `ai/issue-<item>` heads opened by the pipeline login count;
+# head, author, labels and statuses come from the API alone. A failed or
+# malformed read is `unknown`, never "none", so it cannot cause a duplicate.
+# §14: no earlier call on this path lists the item's pull requests (the item
+# read is an issue read and ci_owner reads only a CI-failure owner); one
+# GraphQL query returns head, author, labels, merge state and head statuses.
+# Returns 1 only when context.json could not be updated (the caller skips).
+unblock_resolve_own_prs()
+{
+	local own_query own_resp="" own_result="" own_count="-" own_rc=0
+	[ "${ITEM_KIND}" = "issue" ] || return 0
+	unblock_own_pr_guard_enabled || return 0
+	own_query='query($owner: String!, $name: String!, $head: String!) { repository(owner: $owner, name: $name) { pullRequests(headRefName: $head, states: OPEN, first: 10) { nodes { number headRefName headRefOid isCrossRepository headRepository { nameWithOwner } author { login } mergeStateStatus labels(first: 50) { nodes { name } } commits(last: 1) { nodes { commit { oid status { contexts { context state creator { login } } } } } } } } } }'
+	own_resp="$(gh_retry gh api graphql -f query="${own_query}" -f owner="${REPOSITORY%%/*}" -f name="${REPOSITORY#*/}" -f head="ai/issue-${ITEM}" 2>/dev/null)" || own_rc=$?
+	if [ "${own_rc}" -eq 0 ] && own_result="$(jq -c --arg repo "${REPOSITORY}" --arg head "ai/issue-${ITEM}" --arg login "${UNBLOCK_LOGIN}" \
+		--arg wait "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" '
+		def norm: (. // "") | tostring | ascii_downcase | sub("\\[bot\\]$"; "");
+		def gate: ((. // "") | tostring | ascii_downcase) as $s
+			| if $s == "success" or $s == "failure" or $s == "error" or $s == "pending" then $s
+			elif $s == "expected" then "pending" else "absent" end;
+		def ctxstate($node; $name; $creators):
+			((($node.commits.nodes // []) | last // {}) | .commit // {}) as $c
+			| if ($c.oid // "") != ($node.headRefOid // "") then "absent"
+			else ([($c.status.contexts // [])[] | select(.context == $name and (((.creator.login) | norm) as $who | $creators | index($who) != null))][0].state | gate) end;
+		if type != "object" or (.errors // null) != null or ((.data.repository // null) | type) != "object"
+			or ((.data.repository.pullRequests.nodes // null) | type) != "array" then error("unreadable") else . end
+		| {status: "ok", prs: [.data.repository.pullRequests.nodes[] | select(type == "object")
+			| select(.isCrossRepository == false
+				and ((.headRepository.nameWithOwner // "") | ascii_downcase) == ($repo | ascii_downcase)
+				and .headRefName == $head
+				and ((.author.login) | norm) == ($login | norm) and ($login | norm) != "")
+			| . as $node
+			| {number, head_sha: (.headRefOid // ""), head_ref: .headRefName,
+				mergeable_state: ((.mergeStateStatus // "") | ascii_downcase | gsub("[^a-z_]"; "") | .[0:40]),
+				head_gate: ctxstate($node; "ai-review/head-gate"; [($login | norm)]),
+				ci_final: ctxstate($node; "ci/final"; ["github-actions", ($login | norm)]),
+				lease_wait: ([(.labels.nodes // [])[] | .name] | index($wait) != null)}]}
+	' <<< "${own_resp}" 2>/dev/null)" && [ -n "${own_result}" ]; then
+		own_count="$(jq -r '.prs | length' <<< "${own_result}" 2>/dev/null || echo -)"
+		unblock_log "item=${ITEM} op=own_pr outcome=ok count=${own_count}"
+	else
+		own_result='{"status":"unknown","prs":[]}'
+		unblock_log "item=${ITEM} op=own_pr outcome=unknown count=-"
+	fi
+	if jq --argjson own "${own_result}" '. + {own_prs: $own}' "${RUNTIME_DIR}/context.json" > "${RUNTIME_DIR}/context_own_prs.json" 2>/dev/null \
+		&& mv "${RUNTIME_DIR}/context_own_prs.json" "${RUNTIME_DIR}/context.json"; then
+		return 0
+	fi
+	rm -f "${RUNTIME_DIR}/context_own_prs.json"
+	unblock_log "item=${ITEM} op=own_pr outcome=failed reason=context_merge"
+	return 1
 }
 
 # Protected-path handoff (#7060), off by default: only a scope-blocked issue
@@ -2576,6 +2656,8 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 		jq -n --arg reason "$(jq -r '"Terminal: " + .terminal_reason + " (" + (.item_rounds | tostring) + " round(s) on this item)."' "${RUNTIME_DIR}/decision.json")" \
 			'{verdict: "close", reason: ($reason + " The unblock judge has no verdict left that could clear this block.")}' > "${RUNTIME_DIR}/verdict_raw.json"
 	else
+		# #10121 G1: an own-PR fact that cannot be merged skips this run (fail closed).
+		unblock_resolve_own_prs || return 0
 		unblock_ask_model || return 0
 	fi
 	local -a validate_args=()
@@ -2671,6 +2753,40 @@ ${invalid_marker}" >/dev/null 2>&1 || invalid_record_rc=$?
 	if [ "${untrusted_project_pr}" = "true" ] && [[ ! "${verdict_name}" =~ ^(reissue|descope|operator_step|accept_with_followup|close)$ ]]; then
 		unblock_log "item=${ITEM} outcome=skip reason=project_binding_unverified detail=untrusted_pr_verdict"
 		return 0
+	fi
+	if [ "${verdict_name}" = "reissue" ] && [ "${ITEM_KIND}" = "issue" ] && unblock_own_pr_guard_enabled; then
+		# #10121 G2: decided before the round is recorded, so a refused
+		# re-issue spends no round. With the own pull request known it becomes
+		# an item_closed hold on that pull request (one hold comment, the
+		# existing wait path); otherwise only the refusal comment is posted.
+		local own_refusal_json="" own_refusal_reason own_refusal_pr own_refusal_body
+		if ! own_refusal_json="$(unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" own-pr-refusal --context-file "${RUNTIME_DIR}/context.json" 2>/dev/null)" \
+			|| ! jq -e 'type == "object" and (.refuse | type) == "boolean"' <<< "${own_refusal_json}" >/dev/null 2>&1; then
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} outcome=skip reason=own_pr_check_failed"
+			return 0
+		fi
+		if [ "$(jq -r '.refuse' <<< "${own_refusal_json}")" = "true" ]; then
+			own_refusal_reason="$(jq -r '.reason // ""' <<< "${own_refusal_json}" | tr -cd 'a-z_' | cut -c1-40)"
+			own_refusal_pr="$(jq -r '.pr // ""' <<< "${own_refusal_json}" | tr -cd '0-9' | cut -c1-20)"
+			own_refusal_body="$(jq -r '.body // ""' <<< "${own_refusal_json}")"
+			unblock_log "item=${ITEM} op=reissue outcome=refused reason=${own_refusal_reason:-own_pr_unknown} pr=${own_refusal_pr:-none}"
+			if [[ "${own_refusal_pr}" =~ ^[1-9][0-9]*$ ]] && [ "${own_refusal_pr}" != "${ITEM}" ] && unblock_wait_enabled; then
+				jq -n --arg reason "${own_refusal_body}" --arg ref "${own_refusal_pr}" \
+					'{verdict: "wait", reason: $reason, hold_kind: "item_closed", hold_ref: $ref}' > "${RUNTIME_DIR}/verdict.json"
+				verdict_name="wait"
+			else
+				ops_file="${RUNTIME_DIR}/ops.json"
+				if unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" plan --verdict-file "${RUNTIME_DIR}/verdict.json" \
+					--context-file "${RUNTIME_DIR}/context.json" > "${ops_file}" \
+					&& jq -e '[.ops[].op] == ["comment"]' "${ops_file}" >/dev/null 2>&1; then
+					unblock_run_ops "${ops_file}" \
+						|| unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} outcome=skip reason=actuation_failed"
+				else
+					unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} outcome=skip reason=plan_failed"
+				fi
+				return 0
+			fi
+		fi
 	fi
 	if [ "${verdict_name}" = "wait" ]; then
 		# A hold, not a round: no ai:unblock:v1 marker and no project copy, so
@@ -2807,6 +2923,14 @@ ${marker_line}" >/dev/null 2>&1; then
 	if [ "${UNBLOCK_CI_OWNER_STATE}" = "superseded" ] && jq -e '[.ops[].op] == ["comment", "close"]' "${ops_file}" >/dev/null 2>&1; then
 		unblock_log "item=${ITEM} op=reissue outcome=superseded pr=${UNBLOCK_CI_OWNER_PR} head=${UNBLOCK_CI_OWNER_HEAD}"
 	fi
+	if [ "${verdict_name}" = "reissue" ] && [ "${ITEM_KIND}" = "issue" ]; then
+		# #10121 G3: each own pull request this re-issue closed.
+		local retired_own_pr
+		while IFS= read -r retired_own_pr; do
+			[[ "${retired_own_pr}" =~ ^[1-9][0-9]*$ ]] || continue
+			unblock_log "item=${ITEM} op=reissue outcome=retired_own_pr pr=${retired_own_pr}"
+		done < <(jq -r '.ops[] | select(.op == "close" and .pr == true) | .issue' "${ops_file}" 2>/dev/null)
+	fi
 	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} verdict=${verdict_name} round=${round} outcome=acted"
 }
 
@@ -2936,7 +3060,7 @@ unblock_ask_model()
 			item_body_untrusted: $item_body,
 			project_state: $state[0],
 			project_spec_untrusted: $spec
-		}' > "${RUNTIME_DIR}/judge_context.json" 2>/dev/null || {
+		} + (if ($context[0] | has("own_prs")) then {own_pull_requests: $context[0].own_prs} else {} end)' > "${RUNTIME_DIR}/judge_context.json" 2>/dev/null || {
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} outcome=skip reason=context_failed"
 		return 1
 	}

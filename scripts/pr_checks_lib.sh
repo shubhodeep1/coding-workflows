@@ -2914,6 +2914,97 @@ _merge_lease_revoke_enabled()
 	return 1
 }
 
+# Issue #10121 (G4): MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED, default on.
+# Only `false` (also 0/no/off, any case) turns the tick's orphan skip off.
+_merge_lease_source_issue_guard_enabled()
+{
+	case "$(printf '%s' "${MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+		false|0|no|off) return 1 ;;
+	esac
+	return 0
+}
+
+# Issue #10121 (G4): labelled lease waiters whose source issue was closed as
+# not planned (an unblock re-issue left the pull request behind).
+# Batching contract (§14):
+#   input:  $1 = a tick's base rows, the JSON array of the _mt_list_open_prs
+#           projection the tick already read ({number, head, head_repo,
+#           draft, labels[]}); no other per-PR data is read.
+#   candidates: non-draft rows labelled MERGE_LEASE_WAIT_LABEL whose
+#           head_repo is this repository and whose head is `ai/issue-<n>`;
+#           issue numbers are de-duplicated.
+#   calls:  none without a candidate; otherwise one GraphQL query per 50
+#           issue numbers (aliases `i<n>: issue(number:<n>){state stateReason}`;
+#           <n> is checked as digits first, owner and name go in as variables).
+#   output: MERGE_LEASE_SOURCE_ISSUE_ORPHANS = comma-separated PR numbers whose
+#           issue is CLOSED with stateReason NOT_PLANNED; the same on stdout.
+#           MERGE_LEASE_SOURCE_ISSUE_READ = none|ok|failed.
+#   fail-open: a failed read adds nothing for its batch and sets
+#           MERGE_LEASE_SOURCE_ISSUE_READ=failed, so the tick grants as before.
+_merge_lease_source_issue_orphans()
+{
+	local lease_src_rows="${1:-[]}" lease_src_repo lease_src_owner lease_src_name lease_src_pairs="" lease_src_line
+	local lease_src_pr lease_src_issue lease_src_query lease_src_resp lease_src_closed="" lease_src_batch_n=0 lease_src_fields=""
+	local -a lease_src_issues=()
+	MERGE_LEASE_SOURCE_ISSUE_ORPHANS=""
+	MERGE_LEASE_SOURCE_ISSUE_READ="none"
+	lease_src_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	if ! [[ "${lease_src_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+		MERGE_LEASE_SOURCE_ISSUE_READ="failed"
+		return 0
+	fi
+	lease_src_owner="${lease_src_repo%%/*}"
+	lease_src_name="${lease_src_repo#*/}"
+	while IFS=$'\t' read -r lease_src_pr lease_src_issue; do
+		[[ "${lease_src_pr}" =~ ^[1-9][0-9]{0,9}$ ]] || continue
+		# GraphQL Int is 32-bit: at most nine digits go into an alias.
+		[[ "${lease_src_issue}" =~ ^[1-9][0-9]{0,8}$ ]] || continue
+		lease_src_pairs+="${lease_src_pr} ${lease_src_issue}"$'\n'
+	done < <(jq -r --arg l "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" --arg repo "$(printf '%s' "${lease_src_repo}" | tr '[:upper:]' '[:lower:]')" '
+		.[]? | select(type == "object" and (.draft // false) == false)
+		| select([ (.labels // [])[] | if type == "object" then .name else . end ] | index($l) != null)
+		| select(((.head_repo // "") | tostring | ascii_downcase) == $repo)
+		| select((.head | type) == "string")
+		| (.head | capture("^ai/issue-(?<n>[1-9][0-9]*)$")?) as $m
+		| "\(.number)\t\($m.n)"' <<< "${lease_src_rows}" 2>/dev/null)
+	[ -n "${lease_src_pairs}" ] || return 0
+	mapfile -t lease_src_issues < <(printf '%s' "${lease_src_pairs}" | awk 'NF == 2 { print $2 }' | sort -un)
+	[ "${#lease_src_issues[@]}" -gt 0 ] || return 0
+	MERGE_LEASE_SOURCE_ISSUE_READ="ok"
+	for ((lease_src_batch_n = 0; lease_src_batch_n < ${#lease_src_issues[@]}; lease_src_batch_n += 50)); do
+		lease_src_fields=""
+		for lease_src_issue in "${lease_src_issues[@]:lease_src_batch_n:50}"; do
+			lease_src_fields+=" i${lease_src_issue}: issue(number: ${lease_src_issue}) { state stateReason }"
+		done
+		lease_src_query="query(\$owner: String!, \$name: String!) { repository(owner: \$owner, name: \$name) {${lease_src_fields} } }"
+		lease_src_resp=""
+		if declare -F gh_retry >/dev/null 2>&1; then
+			lease_src_resp="$(gh_retry gh api graphql -f query="${lease_src_query}" -f owner="${lease_src_owner}" -f name="${lease_src_name}" 2>/dev/null)" || lease_src_resp=""
+		else
+			lease_src_resp="$(gh api graphql -f query="${lease_src_query}" -f owner="${lease_src_owner}" -f name="${lease_src_name}" 2>/dev/null)" || lease_src_resp=""
+		fi
+		# An alias that did not resolve is null (never an orphan); a response
+		# without a repository object is a failed read.
+		if ! lease_src_line="$(jq -r '
+			if type == "object" and ((.data.repository // null) | type) == "object" then
+				[ .data.repository | to_entries[] | select((.value | type) == "object" and .value.state == "CLOSED" and .value.stateReason == "NOT_PLANNED")
+					| .key | ltrimstr("i") ] | join(" ")
+			else error("unreadable") end' <<< "${lease_src_resp}" 2>/dev/null)"; then
+			MERGE_LEASE_SOURCE_ISSUE_READ="failed"
+			continue
+		fi
+		lease_src_closed+=" ${lease_src_line}"
+	done
+	while read -r lease_src_pr lease_src_issue; do
+		[ -n "${lease_src_pr}" ] || continue
+		case " ${lease_src_closed} " in
+			*" ${lease_src_issue} "*) MERGE_LEASE_SOURCE_ISSUE_ORPHANS="${MERGE_LEASE_SOURCE_ISSUE_ORPHANS:+${MERGE_LEASE_SOURCE_ISSUE_ORPHANS},}${lease_src_pr}" ;;
+		esac
+	done <<< "${lease_src_pairs}"
+	printf '%s\n' "${MERGE_LEASE_SOURCE_ISSUE_ORPHANS}"
+	return 0
+}
+
 # Idle window in seconds (MERGE_LEASE_IDLE_MINUTES, default 180, clamped to
 # 0-1440; anything that is not a number uses 180). 0 turns the idle test off.
 _merge_lease_idle_seconds()

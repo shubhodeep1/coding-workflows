@@ -55,6 +55,21 @@ the network; the shell only executes.
       the verified PR head ref), `verified` (the marker only) or `unverified`.
       A missing or malformed object keeps today's re-issue unchanged. Only
       standalone, non-security issues use it.
+      An optional `own_prs` object `{"status": "ok"|"unknown"|"disabled",
+      "prs": [{"number", "head_sha", "head_ref", "mergeable_state",
+      "head_gate", "ci_final", "lease_wait"}]}` (issues only, #10121) lists
+      the open, same-repository, pipeline-authored pull requests on
+      `ai/issue-<item>` that scripts/unblock_judge.sh read from the API. With
+      UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED on (default), a `reissue` is
+      refused (one comment, no replacement, no close) when one of them has a
+      passing `ai-review/head-gate` or carries `ai:merge-lease-wait`, or when
+      the read failed (`unknown`; a malformed value counts as unknown). A
+      re-issue that goes ahead comments "Superseded by #<new>" on each listed
+      pull request and closes it. A missing key is `disabled`: today's ops.
+  own-pr-refusal --context-file PATH
+      Prints `{"refuse": bool, "reason": s|null, "pr": n|null, "body": s|null}`
+      for the context's `own_prs` (#10121); the judge turns a refusal into a
+      `wait` hold before it records a `reissue` round.
   followup --context-file PATH --fixup N [--done-text TEXT]
       The reset to run once the fix-up issue N of a `descope` or
       `operator_step` verdict has merged (Q11).
@@ -97,6 +112,9 @@ the network; the shell only executes.
 
 Output: one JSON line `{"ops": [...]}`. Operations:
   {"op": "comment", "issue": n, "body": s}
+      (optional `"created_ref": true`, #10121: the executor replaces the
+      literal `{created}` in body with the number of the issue this run's
+      `create_issue` made, and fails the op when none was made)
   {"op": "add_labels", "issue": n, "labels": [s]}
   {"op": "remove_label", "issue": n, "label": s}
   {"op": "create_issue", "title": s, "body": s, "labels": [s], "wait_on": n}
@@ -254,6 +272,14 @@ FIXUP_DELIVERED_AFFECTED_ENTRY_RE = re.compile(
 )
 FIXUP_DELIVERED_PATH_RE = re.compile(r"^[A-Za-z0-9._@+-][A-Za-z0-9._/@+-]{0,199}$")
 FIXUP_DELIVERED_MAX_PATHS = 50
+# The issue's own implementation pull requests (#10121): facts the judge read
+# from the API, never from model text or an issue body.
+OWN_PR_STATUSES = ("ok", "unknown", "disabled")
+OWN_PR_GATE_STATES = ("success", "pending", "failure", "error", "absent")
+OWN_PR_MAX = 5
+OWN_PR_SHA_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+OWN_PR_MERGEABLE_RE = re.compile(r"^[a-z_]{0,40}$")
+OWN_PR_REFUSAL_REASONS = ("own_pr_green", "own_pr_lease_wait", "own_pr_unknown")
 
 
 class UsageError(Exception):
@@ -360,6 +386,120 @@ def _ci_owner(raw: object) -> dict | None:
 	if state == "open" and head_ref is None:
 		return unverified
 	return {"number": number, "state": state, "head_sha": head_sha, "head_ref": head_ref}
+
+
+def _own_pr_guard_enabled(env: object = None) -> bool:
+	"""UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED: unset, empty or `true` is on, `false` off.
+
+	A safety guard, so any other value warns and keeps it on (fail closed).
+	"""
+	env = os.environ if env is None else env
+	value = str(env.get("UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED", "") or "").strip().lower()
+	if value in ("", "true"):
+		return True
+	if value == "false":
+		return False
+	print("warning: UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED is not true or false; the own-PR re-issue guard stays on", file=sys.stderr)
+	return True
+
+
+def _own_prs(raw: object, item: int) -> dict:
+	"""Validate the judge's own-PR facts (#10121). Missing is `disabled`; malformed is `unknown` (fail closed)."""
+	if raw is None:
+		return {"status": "disabled", "prs": []}
+	unknown = {"status": "unknown", "prs": []}
+	if not isinstance(raw, dict) or raw.get("status") not in OWN_PR_STATUSES:
+		return unknown
+	if raw["status"] != "ok":
+		return {"status": raw["status"], "prs": []}
+	entries = raw.get("prs")
+	if not isinstance(entries, list) or len(entries) > OWN_PR_MAX:
+		return unknown
+	head_ref = f"ai/issue-{item}"
+	prs: list[dict] = []
+	for entry in entries:
+		if not isinstance(entry, dict):
+			return unknown
+		number = entry.get("number")
+		mergeable = entry.get("mergeable_state", "")
+		if (
+			isinstance(number, bool) or not isinstance(number, int) or number < 1
+			or entry.get("head_ref") != head_ref
+			or not isinstance(entry.get("head_sha"), str) or not OWN_PR_SHA_RE.fullmatch(entry["head_sha"])
+			or entry.get("head_gate") not in OWN_PR_GATE_STATES or entry.get("ci_final") not in OWN_PR_GATE_STATES
+			or not isinstance(entry.get("lease_wait"), bool)
+			or not isinstance(mergeable, str) or not OWN_PR_MERGEABLE_RE.fullmatch(mergeable)
+		):
+			return unknown
+		if any(pr["number"] == number for pr in prs):
+			continue
+		prs.append({
+			"number": number, "head_sha": entry["head_sha"], "head_ref": head_ref, "mergeable_state": mergeable,
+			"head_gate": entry["head_gate"], "ci_final": entry["ci_final"], "lease_wait": entry["lease_wait"],
+		})
+	return {"status": "ok", "prs": prs}
+
+
+def own_pr_refusal(ctx: dict, env: object = None) -> dict | None:
+	"""Why a `reissue` of this issue must not go ahead (#10121), or None.
+
+	The issue's own pull request is the work when its head-gate passed or it
+	waits for the merge lease; an unreadable list cannot rule that out.
+	"""
+	if ctx.get("kind") != "issue" or not _own_pr_guard_enabled(env):
+		return None
+	facts = ctx.get("own_prs") or {"status": "disabled", "prs": []}
+	item = ctx["item"]
+	if facts["status"] == "disabled":
+		return None
+	if facts["status"] == "unknown":
+		return {
+			"reason": "own_pr_unknown", "pr": None,
+			"body": f"Not re-issued: the open pull requests on `ai/issue-{item}` could not be read, so the unblock judge cannot tell"
+			" whether this issue's own pull request is still the work. Nothing was re-issued or closed; the judge looks again on its next run.",
+		}
+	for pr in facts["prs"]:
+		if pr["head_gate"] == "success":
+			return {
+				"reason": "own_pr_green", "pr": pr["number"],
+				"body": f"Not re-issued: pull request #{pr['number']} (`ai/issue-{item}`, head `{pr['head_sha'][:12]}`) already has a passing"
+				" `ai-review/head-gate` on its current head. It is the work for this issue, and the review and merge-lease paths keep moving it.",
+			}
+	for pr in facts["prs"]:
+		if pr["lease_wait"]:
+			return {
+				"reason": "own_pr_lease_wait", "pr": pr["number"],
+				"body": f"Not re-issued: pull request #{pr['number']} (`ai/issue-{item}`, head `{pr['head_sha'][:12]}`) is waiting for the"
+				" merge lease (`ai:merge-lease-wait`). It is the work for this issue, and the merge-lease path keeps moving it.",
+			}
+	return None
+
+
+def _own_pr_retire_ops(ctx: dict, verdict: dict) -> list[dict]:
+	"""Comment on and close the issue's own pull requests once a re-issue goes ahead (#10121 G3)."""
+	facts = ctx.get("own_prs") or {}
+	if ctx.get("kind") != "issue" or facts.get("status") != "ok" or not _own_pr_guard_enabled():
+		return []
+	item = ctx["item"]
+	ops: list[dict] = []
+	for pr in facts.get("prs") or []:
+		# own_pr_refusal already stopped the re-issue for these; never close one.
+		if pr["head_gate"] == "success" or pr["lease_wait"]:
+			continue
+		if ctx["tracking"]:
+			comment = {
+				"op": "comment", "issue": pr["number"],
+				"body": f"Superseded by the re-issue of #{item} requested on tracking issue #{ctx['tracking']}"
+				f" (id `unblock-{item}-r{verdict['round']}`). The unblock judge closed this pull request; the branch is kept.",
+			}
+		else:
+			comment = {
+				"op": "comment", "issue": pr["number"],
+				"body": f"Superseded by #{{created}}: the unblock judge re-issued #{item}. The branch is kept.",
+				"created_ref": True,
+			}
+		ops += [comment, {"op": "close", "issue": pr["number"], "reason": "not_planned", "pr": True}]
+	return ops
 
 
 def _fixup_delivered_path_ok(path: str) -> bool:
@@ -564,6 +704,7 @@ def _context(raw: object) -> dict:
 		"pr_source_metadata_unsafe": pr_source_metadata_unsafe,
 		"pr_base_branch": pr_base_branch,
 		"pr_head_ref": pr_head_ref,
+		"own_prs": _own_prs(raw.get("own_prs"), item) if kind == "issue" else None,
 	}
 
 
@@ -1197,6 +1338,11 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 			ops.append({"op": "edit_files_touched", "issue": item, "paths": verdict["paths"]})
 		ops += _approve(item, ctx["labels"], _stop_label(ctx["stop"]) if _stop_label(ctx["stop"]) in ctx["labels"] else "")
 	elif name == "reissue":
+		# #10121 G2: the issue's own green or lease-waiting pull request is the
+		# work; a failed read cannot rule that out. No replacement, no close.
+		own_refusal = own_pr_refusal(ctx)
+		if own_refusal is not None:
+			return [{"op": "comment", "issue": item, "body": own_refusal["body"]}]
 		title = f"Re-issue of #{item}: {_lineage_title(ctx)}"[:240]
 		body = "\n".join([f"Re-issued by the unblock judge from #{item}.", "", f"Specification: {verdict['instructions']}", "", f"Why: {verdict['reason']}"])
 		security_issue = _is_security_issue(ctx)
@@ -1283,6 +1429,9 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 		if security_issue and (ctx["tracking"] or not ctx.get("security_finding_id")):
 			location = f"the re-issue request recorded on tracking issue #{ctx['tracking']}" if ctx["tracking"] else "the newest issue that links this one"
 			ops.append({"op": "comment", "issue": item, "body": f"This security finding stays open; it is tracked here until a linked fix is merged. Re-issue: see {location}."})
+		# #10121 G3: only when the source issue itself is closed by this re-issue.
+		if any(op.get("op") == "close" and op.get("issue") == item and op.get("pr") is False for op in ops):
+			ops += _own_pr_retire_ops(ctx, verdict)
 	elif name == "accept_with_followup":
 		if _is_security_issue(ctx):
 			# A security finding is never waived with an unbound follow-up; the
@@ -1426,6 +1575,9 @@ def build_parser() -> argparse.ArgumentParser:
 	regrant_cmd = sub.add_parser("regrant")
 	regrant_cmd.add_argument("--context-file", required=True)
 	regrant_cmd.add_argument("--rejection-file", required=True)
+	# #10121: whether a `reissue` of this issue is refused for its own pull request.
+	own_pr_cmd = sub.add_parser("own-pr-refusal")
+	own_pr_cmd.add_argument("--context-file", required=True)
 	escalate_cmd = sub.add_parser("fixup-escalate")
 	escalate_cmd.add_argument("--context-file", required=True)
 	escalate_cmd.add_argument("--origin", required=True, type=int)
@@ -1463,6 +1615,11 @@ def run(argv: list[str] | None = None) -> dict:
 		return {"ops": regrant_ops(ctx, rejection.get("run", ""), rejection.get("paths") or [])}
 	if args.command == "fixup-escalate":
 		return {"ops": fixup_escalate_ops(ctx, args.origin)}
+	if args.command == "own-pr-refusal":
+		refusal = own_pr_refusal(ctx)
+		if refusal is None:
+			return {"refuse": False, "reason": None, "pr": None, "body": None}
+		return {"refuse": True, **refusal}
 	verdict = _read_json(args.verdict_file, "--verdict-file")
 	if not isinstance(verdict, dict):
 		raise UsageError("--verdict-file must hold a JSON object")

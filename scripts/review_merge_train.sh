@@ -2245,6 +2245,25 @@ _mt_merge_lease_tick()
 				| select([ (.labels // [])[] | if type == "object" then .name else . end ] | index($l) != null)
 				| .number as $n | (.head_sha // "") as $hs | select(($sk | index("\($n):\($hs)")) != null) | $n' <<< "${tick_base_prs}" 2>/dev/null)
 		fi
+		# Issue #10121 (G4): a labelled waiter on `ai/issue-<n>` whose issue <n>
+		# is closed as not planned was left behind by a re-issue: never grant it.
+		# It keeps its wait label (its owner decides by hand). One batched
+		# source-issue read per base; a failed read grants as before.
+		if declare -F _merge_lease_source_issue_orphans >/dev/null 2>&1 \
+			&& declare -F _merge_lease_source_issue_guard_enabled >/dev/null 2>&1 \
+			&& _merge_lease_source_issue_guard_enabled; then
+			local tick_orphan_pr=""
+			_merge_lease_source_issue_orphans "${tick_base_prs}" >/dev/null 2>&1 || true
+			[ "${MERGE_LEASE_SOURCE_ISSUE_READ:-}" != "failed" ] \
+				|| _mt_log "MERGE_LEASE pr=- base=${tick_base} mode=tick outcome=unavailable reason=source_issue_read_failed"
+			for tick_orphan_pr in ${MERGE_LEASE_SOURCE_ISSUE_ORPHANS//,/ }; do
+				[[ "${tick_orphan_pr}" =~ ^[1-9][0-9]*$ ]] || continue
+				tick_skipped_any=1
+				_mt_log "MERGE_LEASE pr=${tick_orphan_pr} base=${tick_base} mode=tick outcome=skipped reason=source_issue_not_planned"
+				[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric skipped "${tick_base}" "${tick_orphan_pr}" tick source_issue_not_planned "" "${tick_waiters}" - || true
+				tick_excluded="${tick_excluded:+${tick_excluded},}${tick_orphan_pr}"
+			done
+		fi
 		while :; do
 			if [ "${tick_p2}" = 1 ]; then
 				tick_first="$(_merge_lease_queue_first "${tick_base_prs}" "" "${tick_queue_skips}" "${tick_excluded}")"
@@ -2252,7 +2271,8 @@ _mt_merge_lease_tick()
 				# the 10-candidate cap).
 				[ -n "${tick_first}" ] || tick_queue_empty=1
 			else
-				tick_first="$(_merge_lease_queue_first "${tick_base_prs}" "")"
+				# tick_excluded holds only #10121 orphans here; empty is today's call.
+				tick_first="$(_merge_lease_queue_first "${tick_base_prs}" "" "" "${tick_excluded}")"
 			fi
 			tick_first_gate=""
 			[ -n "${tick_first}" ] && [ "${tick_p2}" = 1 ] || break
@@ -2584,6 +2604,23 @@ _mt_merge_lease_tick_multi()
 			'($s | split("\n") | map(select(length > 0) | split(":")[0:2] | join(":"))) as $sk | .[] | select(type == "object" and (.draft // false) == false)
 			| select([ (.labels // [])[] | if type == "object" then .name else . end ] | index($l) != null)
 			| .number as $n | (.head_sha // "") as $hs | select(($sk | index("\($n):\($hs)")) != null) | $n' <<< "${tm_base_prs}" 2>/dev/null)
+	fi
+	# Issue #10121 (G4): as the single-holder tick, orphans of a re-issue are
+	# never granted and keep their wait label.
+	if declare -F _merge_lease_source_issue_orphans >/dev/null 2>&1 \
+		&& declare -F _merge_lease_source_issue_guard_enabled >/dev/null 2>&1 \
+		&& _merge_lease_source_issue_guard_enabled; then
+		local tm_orphan_pr=""
+		_merge_lease_source_issue_orphans "${tm_base_prs}" >/dev/null 2>&1 || true
+		[ "${MERGE_LEASE_SOURCE_ISSUE_READ:-}" != "failed" ] \
+			|| _mt_log "MERGE_LEASE pr=- base=${tm_base} mode=tick outcome=unavailable reason=source_issue_read_failed"
+		for tm_orphan_pr in ${MERGE_LEASE_SOURCE_ISSUE_ORPHANS//,/ }; do
+			[[ "${tm_orphan_pr}" =~ ^[1-9][0-9]*$ ]] || continue
+			tm_skipped_any=1
+			_mt_log "MERGE_LEASE pr=${tm_orphan_pr} base=${tm_base} mode=tick outcome=skipped reason=source_issue_not_planned"
+			[ "${tm_metric_ok}" = 1 ] && _merge_lease_metric skipped "${tm_base}" "${tm_orphan_pr}" tick source_issue_not_planned "" "${tm_waiters}" - || true
+			tm_excluded="${tm_excluded:+${tm_excluded},}${tm_orphan_pr}"
+		done
 	fi
 	while [ "${tm_count}" -lt "${tm_max}" ] && [ "${tm_cand_n}" -lt "${tm_max_candidates}" ]; do
 		tm_first="$(_merge_lease_queue_first "${tm_base_prs}" "" "${tm_queue_skips}" "${tm_excluded}")"

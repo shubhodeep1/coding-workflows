@@ -2346,6 +2346,108 @@ class LeaseHoldLabels(unittest.TestCase):
 		self.assertEqual(_holders(h.record()) or [_v1_fields(h.record())["pr"]], ["6"])
 
 
+
+def _issue_states(**states: tuple[str, str | None]) -> dict:
+	"""The batched source-issue GraphQL answer: alias i<n> -> {state, stateReason}."""
+	return {"data": {"repository": {f"i{n}": {"state": st, "stateReason": reason} for n, (st, reason) in
+		((int(k[1:]), v) for k, v in states.items())}}}
+
+
+class LeaseSourceIssueGuard(unittest.TestCase):
+	"""Issue #10121 (G4): the tick never grants a waiter on `ai/issue-<n>` whose
+	issue <n> was closed as not planned (the orphan of an unblock re-issue,
+	#9519/#9562 and #9887/#9899). One batched read per base, fail-open."""
+
+	def _free(self, graphql: dict | None, first: int = 5, first_ref: str | None = None) -> dict:
+		st = {"pulls": [_pull(first, head_ref=first_ref), _pull(first + 1)],
+			"labels": {str(first): [WAIT], str(first + 1): [WAIT]},
+			"files": {str(first): ["a"], str(first + 1): ["b"]}}
+		if graphql is not None:
+			st["graphql"] = graphql
+		_seed_lease(st, _record(3, state="released", paths=""))
+		_gates_ok(st, first, first + 1)
+		return st
+
+	@staticmethod
+	def _graphql_calls(h: _Harness) -> int:
+		return sum(1 for call in h.calls if "graphql" in call)
+
+	def test_not_planned_source_issue_is_skipped_and_keeps_its_label(self) -> None:
+		h, out = _p2_tick(self._free(_issue_states(n5=("CLOSED", "NOT_PLANNED"))))
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=skipped reason=source_issue_not_planned\n", out)
+		self.assertIn("MERGE_LEASE pr=6 base=main mode=tick outcome=granted reason=first_in_queue", out)
+		self.assertIn("pr=6", h.record())
+		self.assertIn(WAIT, h.state["labels"]["5"], "an orphan keeps its wait label")
+		self.assertIn(("skipped", "5", "source_issue_not_planned"), [(r["event"], r["pr"], r["reason"]) for r in _metrics(out)])
+		self.assertEqual(self._graphql_calls(h), 1, "one batched read per base")
+		self.assertNotIn(f"{_sha(5)}/statuses", " ".join(h.calls), "an orphan costs no eligibility read")
+
+	def test_completed_or_open_source_issue_is_granted(self) -> None:
+		for states in (_issue_states(n5=("CLOSED", "COMPLETED")), _issue_states(n5=("OPEN", None)), _issue_states()):
+			with self.subTest(states=states):
+				h, out = _p2_tick(self._free(states))
+				self.assertNotIn("source_issue_not_planned", out)
+				self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=granted reason=first_in_queue", out)
+
+	def test_failed_read_grants_as_before(self) -> None:
+		h, out = _p2_tick(self._free({"errors": [{"message": "rate limited"}]}))
+		self.assertIn("MERGE_LEASE pr=- base=main mode=tick outcome=unavailable reason=source_issue_read_failed\n", out)
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=granted reason=first_in_queue", out)
+
+	def test_switch_off_restores_todays_grant(self) -> None:
+		h, out = _p2_tick(self._free(_issue_states(n5=("CLOSED", "NOT_PLANNED"))),
+			env={"MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED": "false"})
+		self.assertNotIn("source_issue", out)
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=granted reason=first_in_queue", out)
+		self.assertEqual(self._graphql_calls(h), 0)
+
+	def test_no_ai_issue_waiter_costs_no_read(self) -> None:
+		st = self._free(_issue_states(n5=("CLOSED", "NOT_PLANNED")), first_ref="feature/five")
+		st["pulls"][1]["head"]["ref"] = "feature/six"
+		h, out = _p2_tick(st)
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=granted reason=first_in_queue", out)
+		self.assertEqual(self._graphql_calls(h), 0)
+
+	def test_case_9562_orphan_of_reissued_9519_is_not_granted(self) -> None:
+		# #9562 (`ai/issue-9519`) waited for the lease after #9519 was closed as
+		# not planned and its replacement had merged.
+		st = self._free(_issue_states(n9519=("CLOSED", "NOT_PLANNED")), first=9562, first_ref="ai/issue-9519")
+		h, out = _p2_tick(st)
+		self.assertIn("MERGE_LEASE pr=9562 base=main mode=tick outcome=skipped reason=source_issue_not_planned\n", out)
+		self.assertIn("MERGE_LEASE pr=9563 base=main mode=tick outcome=granted reason=first_in_queue", out)
+
+	def test_multi_holder_tick_skips_the_orphan(self) -> None:
+		h, out = _p2_tick(self._free(_issue_states(n5=("CLOSED", "NOT_PLANNED"))), env={MAXH: "2"})
+		self.assertIn("MERGE_LEASE pr=5 base=main mode=tick outcome=skipped reason=source_issue_not_planned\n", out)
+		self.assertIn("MERGE_LEASE pr=6 base=main mode=tick outcome=granted reason=first_in_queue", out)
+		self.assertNotIn("pr=5 base=main mode=tick outcome=granted", out)
+		self.assertEqual(_holders(h.record()) or [_v1_fields(h.record())["pr"]], ["6"])
+		self.assertIn(WAIT, h.state["labels"]["5"])
+
+	def test_helper_reports_orphans_and_batches(self) -> None:
+		h = _Harness({"graphql": _issue_states(n7=("CLOSED", "NOT_PLANNED"))})
+		rows = json.dumps([
+			{"number": 11, "head": "ai/issue-7", "head_repo": "owner/repo", "labels": [WAIT]},
+			{"number": 12, "head": "ai/issue-7", "head_repo": "OWNER/repo", "labels": [WAIT]},
+			{"number": 13, "head": "ai/issue-7", "head_repo": "fork/repo", "labels": [WAIT]},
+			{"number": 14, "head": "ai/issue-8", "head_repo": "owner/repo", "labels": []},
+			{"number": 15, "head": "ai/issue-7", "head_repo": "owner/repo", "labels": [WAIT], "draft": True},
+		])
+		res = h.lib('_merge_lease_source_issue_orphans "$ROWS" >/dev/null; echo "orphans=${MERGE_LEASE_SOURCE_ISSUE_ORPHANS} read=${MERGE_LEASE_SOURCE_ISSUE_READ}"',
+			{"ROWS": rows})
+		self.assertIn("orphans=11,12 read=ok", res.stdout)
+		self.assertEqual(sum(1 for call in h.calls if "graphql" in call), 1)
+
+	def test_wiring_passes_the_switch_with_a_default(self) -> None:
+		for path, count in ((POLL, 4), (REVIEW, 3), (CLOSE, 1)):
+			text = path.read_text()
+			with self.subTest(path=path.name):
+				self.assertEqual(
+					text.count("MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED: ${{ vars.MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED || 'true' }}"),
+					text.count("MERGE_LEASE_REVOKE_ENABLED: ${{"),
+				)
+				self.assertGreaterEqual(text.count("MERGE_LEASE_SOURCE_ISSUE_GUARD_ENABLED:"), count)
+
 class LeaseQueueSnapshot(unittest.TestCase):
 	"""Merge-lease parallel merges Phase 1 steps 1.2-1.3 (Refs #9781): the
 	queue order is exposed and logged once per lease ref, with no API call."""

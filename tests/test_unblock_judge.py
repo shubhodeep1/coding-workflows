@@ -1396,6 +1396,12 @@ if args[:1] == ["run"]:
 if args[:2] == ["label", "create"] and os.environ.get("FAKE_GH_ITEM_COMMENTS_AFTER_LABEL_CREATE"):
 	state["item_comments"] = json.loads(os.environ["FAKE_GH_ITEM_COMMENTS_AFTER_LABEL_CREATE"])
 	done()
+# #10121 G1: the own-PR GraphQL read; the default lists no pull request.
+if args[:2] == ["api", "graphql"]:
+	if os.environ.get("FAKE_GH_FAIL_OWN_PRS"):
+		json.dump(state, open(state_path, "w"))
+		sys.exit(1)
+	done(os.environ.get("FAKE_GH_OWN_PRS", '{"data": {"repository": {"pullRequests": {"nodes": []}}}}'))
 endpoint = next((a for a in args[1:] if a == "user" or a.startswith("repos/")), "")
 jq = args[args.index("--jq") + 1] if "--jq" in args else ""
 if endpoint == "user":
@@ -1754,7 +1760,7 @@ def test_comment_post_stays_single_attempt_on_a_transient_error(tmp_path: Path) 
 
 
 def test_only_the_listed_reads_are_wrapped_in_gh_retry() -> None:
-	"""CONSIST-001: the helper source, the pass-through fallback and the six wrapped reads."""
+	"""CONSIST-001: the helper source, the pass-through fallback and the seven wrapped reads (#10121 added the own-PR read)."""
 	text = JUDGE.read_text(encoding="utf-8")
 	assert 'if [ -f "${SUPPORT_DIR}/scripts/gh_helpers.sh" ]; then' in text
 	assert 'source "${SUPPORT_DIR}/scripts/gh_helpers.sh" >/dev/null 2>&1 || true' in text
@@ -1766,11 +1772,12 @@ def test_only_the_listed_reads_are_wrapped_in_gh_retry() -> None:
 		'gh_retry gh api "repos/${REPOSITORY}/issues/${ITEM}" > "${RUNTIME_DIR}/item_recheck.json"',
 		'gh_retry gh api "repos/${REPOSITORY}/actions/runs/${candidate_id}"',
 		'gh_retry gh api "repos/${REPOSITORY}/issues/${BASH_REMATCH[1]}" --jq \'(.title // "") | .[0:400]\'',
+		'gh_retry gh api graphql -f query="${own_query}"',
 	):
 		assert text.count(read) == 1, read
-	# The list above is exhaustive: a seventh wrapped read must be added to it
+	# The list above is exhaustive: an eighth wrapped read must be added to it
 	# and to the CONSIST-001 header comments.
-	assert sum(1 for line in text.splitlines() if "gh_retry gh api" in line) == 6
+	assert sum(1 for line in text.splitlines() if "gh_retry gh api" in line) == 7
 	for line in text.splitlines():
 		if "gh_retry" in line:
 			for write in ("-X POST", "-X PATCH", "-X DELETE", "/dispatches", "-f body="):
@@ -6379,3 +6386,235 @@ def test_unblock_workflow_forwards_triage_nothing_to_implement_gate_switch() -> 
 	assert "\n          UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED: ${{ vars.UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED || 'true' }}\n" in step
 	script = (ROOT / "scripts" / "unblock_judge.sh").read_text(encoding="utf-8")
 	assert '"${UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED:-true}"' in script
+
+
+# --- #10121: the issue's own pull request on a re-issue -----------------------
+
+
+def _own_pr_fact(number: int = 9562, *, head_gate: str = "pending", lease_wait: bool = False, item: int = 7, sha: str = "4" * 40) -> dict:
+	return {"number": number, "head_sha": sha, "head_ref": f"ai/issue-{item}", "mergeable_state": "clean",
+		"head_gate": head_gate, "ci_final": "success", "lease_wait": lease_wait}
+
+
+def _own_ctx(*prs: dict, status: str = "ok", **extra) -> dict:
+	return _ctx(own_prs={"status": status, "prs": list(prs)}, **extra)
+
+
+@pytest.fixture
+def _own_guard_default(monkeypatch: pytest.MonkeyPatch) -> pytest.MonkeyPatch:
+	monkeypatch.delenv("UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED", raising=False)
+	return monkeypatch
+
+
+def test_own_green_pr_refuses_the_reissue(_own_guard_default: pytest.MonkeyPatch) -> None:
+	ctx = _own_ctx(_own_pr_fact(9899, head_gate="success", sha="8f6b1d3e" + "0" * 32))
+	ops = actions.plan(_verdict("reissue", instructions="spec"), ctx)
+	assert [op["op"] for op in ops] == ["comment"]
+	assert ops[0]["issue"] == 7
+	assert "#9899" in ops[0]["body"] and "`8f6b1d3e0000`" in ops[0]["body"] and "ai-review/head-gate" in ops[0]["body"]
+	refusal = actions.own_pr_refusal(ctx)
+	assert (refusal["reason"], refusal["pr"]) == ("own_pr_green", 9899)
+
+
+def test_own_lease_waiting_pr_refuses_the_reissue(_own_guard_default: pytest.MonkeyPatch) -> None:
+	ctx = _own_ctx(_own_pr_fact(9562, head_gate="absent", lease_wait=True))
+	ops = actions.plan(_verdict("reissue", instructions="spec"), ctx)
+	assert [op["op"] for op in ops] == ["comment"]
+	assert "ai:merge-lease-wait" in ops[0]["body"]
+	assert actions.own_pr_refusal(ctx)["reason"] == "own_pr_lease_wait"
+
+
+@pytest.mark.parametrize("own", [
+	{"status": "unknown", "prs": []},
+	{"status": "ok", "prs": [dict(_own_pr_fact(), head_ref="ai/issue-8")]},
+	{"status": "ok", "prs": [dict(_own_pr_fact(), head_sha="not-a-sha")]},
+	{"status": "ok", "prs": [_own_pr_fact(n) for n in range(10, 16)]},
+	{"status": "ok", "prs": [dict(_own_pr_fact(), head_gate="green")]},
+	{"status": "weird"},
+	"ok",
+])
+def test_unreadable_or_malformed_own_prs_refuse_as_unknown(_own_guard_default: pytest.MonkeyPatch, own: object) -> None:
+	ctx = _ctx(own_prs=own)
+	ops = actions.plan(_verdict("reissue", instructions="spec"), ctx)
+	assert [op["op"] for op in ops] == ["comment"]
+	refusal = actions.own_pr_refusal(ctx)
+	assert (refusal["reason"], refusal["pr"]) == ("own_pr_unknown", None)
+	assert "could not be read" in ops[0]["body"]
+
+
+@pytest.mark.parametrize("gate", ["pending", "failure", "absent"])
+def test_reissue_retires_an_own_pr_that_is_not_green(_own_guard_default: pytest.MonkeyPatch, gate: str) -> None:
+	ops = actions.plan(_verdict("reissue", instructions="spec"), _own_ctx(_own_pr_fact(9562, head_gate=gate)))
+	assert [(op["op"], op.get("issue"), op.get("pr")) for op in ops] == [
+		("create_issue", None, None), ("close", 7, False), ("comment", 9562, None), ("close", 9562, True)]
+	assert ops[2]["created_ref"] is True
+	assert ops[2]["body"].startswith("Superseded by #{created}: the unblock judge re-issued #7.")
+
+
+def test_reissue_without_own_prs_is_unchanged(_own_guard_default: pytest.MonkeyPatch) -> None:
+	baseline = actions.plan(_verdict("reissue", instructions="spec"), _ctx())
+	assert [op["op"] for op in baseline] == ["create_issue", "close"]
+	assert actions.plan(_verdict("reissue", instructions="spec"), _own_ctx()) == baseline
+	assert actions.own_pr_refusal(_ctx()) is None
+
+
+def test_guard_off_keeps_todays_reissue(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setenv("UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED", "FALSE")
+	baseline = actions.plan(_verdict("reissue", instructions="spec"), _ctx())
+	for own in (_own_ctx(_own_pr_fact(head_gate="success")), _own_ctx(_own_pr_fact()), _own_ctx(status="unknown")):
+		assert actions.plan(_verdict("reissue", instructions="spec"), own) == baseline
+		assert actions.own_pr_refusal(own) is None
+
+
+def test_invalid_guard_value_keeps_the_guard_on(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture) -> None:
+	monkeypatch.setenv("UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED", "maybe")
+	assert actions.own_pr_refusal(_own_ctx(status="unknown"))["reason"] == "own_pr_unknown"
+	assert "stays on" in capsys.readouterr().err
+
+
+def test_tracked_reissue_retires_the_own_pr_with_static_text(_own_guard_default: pytest.MonkeyPatch) -> None:
+	ops = actions.plan(_verdict("reissue", instructions="spec", round=2), _own_ctx(_own_pr_fact(9562), tracking=40))
+	assert [(op["op"], op.get("issue")) for op in ops] == [("comment", 40), ("close", 7), ("comment", 9562), ("close", 9562)]
+	assert "created_ref" not in ops[2]
+	assert "tracking issue #40" in ops[2]["body"] and "`unblock-7-r2`" in ops[2]["body"]
+
+
+def test_own_prs_apply_to_issues_only(_own_guard_default: pytest.MonkeyPatch) -> None:
+	ctx = _ctx("pr", own_prs={"status": "ok", "prs": [_own_pr_fact(head_gate="success")]})
+	assert ctx["own_prs"] is None
+	assert actions.own_pr_refusal(ctx) is None
+
+
+def test_own_pr_refusal_cli(tmp_path: Path, _own_guard_default: pytest.MonkeyPatch) -> None:
+	context = tmp_path / "context.json"
+	context.write_text(json.dumps({"repo": "acme/app", "kind": "issue", "item": 7, "stop": "blocked", "labels": ["ai:blocked"],
+		"own_prs": {"status": "ok", "prs": [_own_pr_fact(9899, head_gate="success")]}}), encoding="utf-8")
+	out = subprocess.run([sys.executable, str(ACTIONS), "own-pr-refusal", "--context-file", str(context)], capture_output=True, text=True, check=True)
+	result = json.loads(out.stdout)
+	assert (result["refuse"], result["reason"], result["pr"]) == (True, "own_pr_green", 9899)
+	context.write_text(json.dumps({"repo": "acme/app", "kind": "issue", "item": 7, "stop": "blocked", "labels": ["ai:blocked"]}), encoding="utf-8")
+	out = subprocess.run([sys.executable, str(ACTIONS), "own-pr-refusal", "--context-file", str(context)], capture_output=True, text=True, check=True)
+	assert json.loads(out.stdout) == {"refuse": False, "reason": None, "pr": None, "body": None}
+
+
+def _own_node(number: int, *, gate: str | None = "SUCCESS", lease: bool = False, author: str = "pipeline-bot",
+		head_repo: str = "o/r", cross: bool = False, head: str = "ai/issue-7", sha: str = "8f6b1d3e" + "1" * 32,
+		gate_creator: str = "pipeline-bot", commit_oid: str | None = None) -> dict:
+	contexts = [{"context": "ci/final", "state": "SUCCESS", "creator": {"login": "github-actions"}}]
+	if gate is not None:
+		contexts.append({"context": "ai-review/head-gate", "state": gate, "creator": {"login": gate_creator}})
+	return {"number": number, "headRefName": head, "headRefOid": sha, "isCrossRepository": cross,
+		"headRepository": {"nameWithOwner": head_repo}, "author": {"login": author}, "mergeStateStatus": "CLEAN",
+		"labels": {"nodes": [{"name": "ai:merge-lease-wait"}] if lease else []},
+		"commits": {"nodes": [{"commit": {"oid": commit_oid or sha, "status": {"contexts": contexts}}}]}}
+
+
+def _own_response(*nodes: dict) -> str:
+	return json.dumps({"data": {"repository": {"pullRequests": {"nodes": list(nodes)}}}})
+
+
+def _graphql_calls(state: dict) -> int:
+	return sum(1 for call in state["calls"] if call[:2] == ["api", "graphql"])
+
+
+def _pr_closes(state: dict) -> list[str]:
+	return [endpoint for endpoint, fields in state["patched"] if endpoint.startswith("repos/o/r/pulls/") and fields.get("state") == "closed"]
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required for the unblock judge fixture")
+def test_case_9887_green_lease_waiting_pr_holds_instead_of_reissuing(tmp_path: Path) -> None:
+	# #9887 / PR #9899: ci/final and head-gate green, waiting for the lease.
+	result, state = _judge(tmp_path, ISSUE, verdict=REISSUE, FAKE_GH_OWN_PRS=_own_response(_own_node(9899, lease=True)))
+	out = result.stdout + result.stderr
+	assert "op=own_pr outcome=ok count=1" in out, out
+	assert "UNBLOCK_JUDGE item=7 op=reissue outcome=refused reason=own_pr_green pr=9899" in out, out
+	assert state["created"] == []
+	assert not any(endpoint.endswith(("/issues/7", "/pulls/9899")) for endpoint, _ in state["patched"])
+	bodies = [c["body"] for c in state["comments"]]
+	assert len(bodies) == 1, bodies
+	assert "<!-- ai:unblock-wait:v1 item=7 hold=item_closed ref=9899 -->" in bodies[0]
+	assert "ai:unblock:v1" not in bodies[0]
+	assert "Not re-issued: pull request #9899" in bodies[0]
+	assert _graphql_calls(state) == 1
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required for the unblock judge fixture")
+def test_case_9519_lease_waiting_pr_without_a_gate_holds(tmp_path: Path) -> None:
+	# #9519 / PR #9562: lease-waiting, its head-gate posted by someone else.
+	node = _own_node(9562, lease=True, gate_creator="mallory")
+	result, state = _judge(tmp_path, ISSUE, verdict=REISSUE, FAKE_GH_OWN_PRS=_own_response(node))
+	out = result.stdout + result.stderr
+	assert "outcome=refused reason=own_pr_lease_wait pr=9562" in out, out
+	assert state["created"] == []
+	assert "hold=item_closed ref=9562" in state["comments"][0]["body"]
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required for the unblock judge fixture")
+def test_failed_own_pr_read_refuses_and_creates_nothing(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, ISSUE, verdict=REISSUE, FAKE_GH_FAIL_OWN_PRS="1")
+	out = result.stdout + result.stderr
+	assert "op=own_pr outcome=unknown count=-" in out, out
+	assert "outcome=refused reason=own_pr_unknown pr=none" in out, out
+	assert state["created"] == [] and state["patched"] == []
+	assert len(state["comments"]) == 1 and "could not be read" in state["comments"][0]["body"]
+	assert "ai:unblock" not in state["comments"][0]["body"]
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required for the unblock judge fixture")
+def test_green_own_pr_with_waits_disabled_posts_only_the_refusal(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, ISSUE, verdict=REISSUE, FAKE_GH_OWN_PRS=_own_response(_own_node(9899)), UNBLOCK_JUDGE_WAIT_ENABLED="false")
+	assert "outcome=refused reason=own_pr_green pr=9899" in result.stdout, result.stdout + result.stderr
+	assert state["created"] == []
+	assert len(state["comments"]) == 1 and "ai:unblock" not in state["comments"][0]["body"]
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required for the unblock judge fixture")
+def test_reissue_retires_a_pending_own_pr(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, ISSUE, verdict=REISSUE, FAKE_GH_OWN_PRS=_own_response(_own_node(9562, gate="PENDING")))
+	out = result.stdout + result.stderr
+	assert len(state["created"]) == 1, out
+	assert any(endpoint == "repos/o/r/issues/7" and fields.get("state_reason") == "not_planned" for endpoint, fields in state["patched"])
+	assert _pr_closes(state) == ["repos/o/r/pulls/9562"]
+	superseded = [c for c in state["comments"] if c["endpoint"] == "repos/o/r/issues/9562/comments"]
+	assert [c["body"] for c in superseded] == ["Superseded by #901: the unblock judge re-issued #7. The branch is kept."]
+	assert "UNBLOCK_JUDGE item=7 op=reissue outcome=retired_own_pr pr=9562" in out
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required for the unblock judge fixture")
+@pytest.mark.parametrize("node", [
+	_own_node(9562, cross=True),
+	_own_node(9562, head_repo="evil/fork"),
+	_own_node(9562, author="mallory"),
+	_own_node(9562, head="ai/issue-70"),
+])
+def test_fork_or_foreign_own_prs_are_ignored(tmp_path: Path, node: dict) -> None:
+	result, state = _judge(tmp_path, ISSUE, verdict=REISSUE, FAKE_GH_OWN_PRS=_own_response(node))
+	out = result.stdout + result.stderr
+	assert "op=own_pr outcome=ok count=0" in out, out
+	assert len(state["created"]) == 1
+	assert _pr_closes(state) == []
+	assert "outcome=refused" not in out
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required for the unblock judge fixture")
+def test_stale_head_gate_does_not_count_as_green(tmp_path: Path) -> None:
+	node = _own_node(9562, commit_oid="9" * 40)
+	result, state = _judge(tmp_path, ISSUE, verdict=REISSUE, FAKE_GH_OWN_PRS=_own_response(node))
+	assert "outcome=refused" not in result.stdout, result.stdout + result.stderr
+	assert _pr_closes(state) == ["repos/o/r/pulls/9562"]
+
+
+@pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required for the unblock judge fixture")
+def test_guard_off_makes_no_own_pr_read(tmp_path: Path) -> None:
+	result, state = _judge(tmp_path, ISSUE, verdict=REISSUE, FAKE_GH_OWN_PRS=_own_response(_own_node(9899)),
+		UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED="false")
+	assert _graphql_calls(state) == 0
+	assert len(state["created"]) == 1, result.stdout + result.stderr
+	assert _pr_closes(state) == []
+
+
+def test_workflows_pass_the_own_pr_guard_with_a_default() -> None:
+	line = "UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED: ${{ vars.UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED || 'true' }}"
+	for name in ("orchestrate_poll.yml", "unblock_judge.yml"):
+		text = (ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+		assert text.count(line) == text.count("UNBLOCK_JUDGE_ENABLED: ${{"), name
