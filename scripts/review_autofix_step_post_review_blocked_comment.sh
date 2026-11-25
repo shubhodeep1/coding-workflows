@@ -39,6 +39,36 @@ case "${JUDGE_SKIP_REASON:-}" in
   blocking_check_runs)
     BODY_HEADING="AI review/autofix — merge gated by in-flight check-runs"
     BODY_DETAIL="The review-blocked judge approved this PR but other CI check-runs on the head commit had not yet completed when the merge was attempted. Stall recovery will re-fire the judge after the remaining check-runs settle; no action is required unless the blocking checks themselves are stuck. Linked issues remain labelled \`ai:review-blocked\` so the recovery ladder will retry."
+    # Issue #10137: when the judge found nothing still running, it hands the
+    # settled blocking check names over through GITHUB_ENV
+    # (RB_JUDGE_BLOCKING_CHECKS_SETTLED / RB_JUDGE_BLOCKING_CHECK_NAMES), and
+    # the comment names them instead of claiming the checks are in flight.
+    # Same off switch as the judge (unset, empty or true = on; anything else
+    # off); without the hand-over the text above is kept unchanged.
+    rb_settled_flag="${RB_JUDGE_SETTLED_CHECK_DIAGNOSTICS_ENABLED-}"
+    rb_settled_flag="${rb_settled_flag#"${rb_settled_flag%%[![:space:]]*}"}"
+    rb_settled_flag="${rb_settled_flag%"${rb_settled_flag##*[![:space:]]}"}"
+    rb_settled_flag="$(printf '%s' "${rb_settled_flag}" | tr '[:upper:]' '[:lower:]')"
+    if { [ -z "${rb_settled_flag}" ] || [ "${rb_settled_flag}" = "true" ]; } \
+      && [ "${RB_JUDGE_BLOCKING_CHECKS_SETTLED:-}" = "true" ] && [ -n "${RB_JUDGE_BLOCKING_CHECK_NAMES:-}" ]; then
+      rb_settled_list=""
+      rb_settled_count=0
+      while IFS= read -r rb_settled_name; do
+        rb_settled_name="${rb_settled_name# }"
+        [ -n "${rb_settled_name}" ] || continue
+        rb_settled_count=$((rb_settled_count + 1))
+        [ "${rb_settled_count}" -le 20 ] || break
+        rb_settled_name="$(printf '%s' "${rb_settled_name}" | LC_ALL=C tr -c 'A-Za-z0-9 _./():-' '_')"
+        rb_settled_list+=$'\n'"- ${rb_settled_name:0:120}"
+      done < <(printf '%s\n' "${RB_JUDGE_BLOCKING_CHECK_NAMES}" | tr ',' '\n')
+      if [ -n "${rb_settled_list}" ]; then
+        BODY_HEADING="AI review/autofix — merge gated by failed required check-runs"
+        BODY_DETAIL="The review-blocked judge approved this PR, but these required check-runs on the head commit finished without success (name:conclusion):
+${rb_settled_list}
+
+A run that was cancelled or timed out is re-run once per head and Actions run. A real failure needs a fix pushed to this PR. Linked issues remain labelled \`ai:review-blocked\`."
+      fi
+    fi
     ;;
   check_runs_query_failed)
     BODY_HEADING="AI review/autofix — judge could not query check-runs"
