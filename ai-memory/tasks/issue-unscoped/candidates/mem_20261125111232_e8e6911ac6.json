@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_merge_lease_env_contract.py:118-126 | severity=low | confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  PROBLEM: `_literal_has_comment()` accepts any non-empty `#` comment above the allowlisted `MERGE_LEASE_SOFT_PATHS: none` literal, including `# unrelated` or `# TODO`. It does not check that the comment names the reason for the literal.\n  WHY: The issue and module docstring rule 3 (lines 14-22) require \"a comment naming the reason\", but the contract only checks that some comment exists, so a missing or unrelated rationale still passes. Both reviewers rated it SEVERITY: NIT, which this ledger maps to low. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash looked at it and chose not to flag it: the in-code comment documents this as the limit of a line-based check, and `LITERAL_EXCEPTIONS` scopes the literal to one step.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_merge_lease_env_contract.py:lines 121-125 (`_literal_has_comment`); also documented intent at lines 14-22 (module docstring rule 3) | severity=NIT | confidence=4\n  PROBLEM: The check requires `lines[i - 1].strip().startswith(\"#\") and lines[i - 1].strip().lstrip(\"#\").strip()`, which only proves the line above the literal is a non-empty comment. It does not check that the text names the reason for the literal, so `# unrelated` or `# TODO` above `MERGE_LEASE_SOFT_PATHS: none` still passes.\n  WHY: The fixture tests for bare `#`, `# TODO` and real reason text all pass, and a unit-test-only check cannot judge the meaning of a comment. The contract therefore enforces \"a comment exists\" rather than \"a comment exists that names the reason\", which is what the issue asks for.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_merge_lease_env_contract.py:118-126, `_literal_has_comment()` | severity=NIT | confidence=5\n  PROBLEM: The check accepts any non-empty comment above the allowlisted literal, including `# unrelated`; it does not verify that the comment names the reason.\n  WHY: The contract test passes when the exception's rationale is absent or replaced with unrelated text, so it does not enforce the documented-reason requirement.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5f682ce4ec8b7015290619c9d2ebc9d4e1fdd499774f3c304f175bce691799bb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10081,
+    "run_id": "45557659772",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45557659772",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125111232_e8e6911ac6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10081,
+    "run_id": "45557659772"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T11:12:32Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
