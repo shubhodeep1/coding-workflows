@@ -2848,8 +2848,8 @@ _merge_lease_split_soft()
 # Several holders per base (merge-lease-parallel Phase 5, Refs #9781):
 # MERGE_LEASE_MAX_HOLDERS (default 2 since #10124, 1-5; set 1 for the
 # single-holder lease; empty or whitespace-only gives 2 without a warning,
-# any other value that is not a whole number gives 2 with a warning, out of
-# range is clamped) PRs whose paths are pairwise disjoint
+# any other value that is not a whole number of at most three digits gives 2
+# with a warning, 0 gives 1 and 6-999 give 5) PRs whose paths are pairwise disjoint
 # (Phase 4 soft class included) may hold one base's lease at once. With 2+
 # live holders the record keeps pr=/head=/acquired=/updated= for the primary,
 # expires= is the latest holder expiry (an old v1 reader then sees the primary
