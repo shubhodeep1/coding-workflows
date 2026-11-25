@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":10124,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/10124\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/10126\",\"pr_number\":10126,\"branch\":\"ai/issue-10124\",\"run_id\":\"45633147321\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/45633147321\",\"changed_files\":[\".github/workflows/cancel_on_pr_close.yml\",\".github/workflows/orchestrate_poll.yml\",\".github/workflows/review_autofix.yml\",\".github/workflows/review_autofix_sweep.yml\",\"README.md\",\"agents.d/merge-lease-parallel-p5-multi-holder.md\",\"changelog.d/10124-merge-lease-two-holders-default.md\",\"scripts/pr_checks_lib.sh\",\"tests/test_merge_lease.py\"]}",
+  "fingerprint": "4bd475ce24208a503ebfe0bbabb80013fc643ff2739ca1923849571ac20ce4cc",
+  "lineage": {
+    "issue_number": 10124,
+    "parent_ids": [],
+    "pr_number": 10126,
+    "run_id": "45633147321",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45633147321",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/10126"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261125150906_743809f4d9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10124,
+    "level": "run",
+    "pr_number": 10126,
+    "run_id": "45633147321"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #10124: https://github.com/shubhodeep1/coding-workflows/pull/10126",
+  "timestamps": {
+    "created_at": "2026-11-25T15:09:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
