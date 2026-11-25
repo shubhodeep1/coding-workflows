@@ -94,19 +94,39 @@ def test_discovery_finds_sample_switches():
 	assert not set(README_NOT_REPOSITORY_VARIABLES) & set(found)
 
 
-def test_registry_entries_name_discovered_or_pending():
-	discovered = set(ssw.discover_switches(ROOT))
-	data = _registry()
+def _undiscovered_without_pending(data: dict, discovered: set[str]) -> tuple[list, list]:
+	"""Registry entries and markers naming an undiscovered switch without `pending: true`."""
 	stray = [
 		entry["name"] for entry in data["switches"]
 		if entry["name"] not in discovered and entry.get("pending") is not True
 	]
-	assert stray == [], "registry entries for undiscovered switches need \"pending\": true"
 	stray_markers = [
-		marker.get("name") for marker in data["off_on_purpose"]
+		marker.get("name") for marker in data.get("off_on_purpose", [])
 		if marker.get("name") not in discovered and marker.get("pending") is not True
 	]
+	return stray, stray_markers
+
+
+def test_registry_entries_name_discovered_or_pending():
+	discovered = set(ssw.discover_switches(ROOT))
+	stray, stray_markers = _undiscovered_without_pending(_registry(), discovered)
+	assert stray == [], "registry entries for undiscovered switches need \"pending\": true"
 	assert stray_markers == [], "off_on_purpose markers for undiscovered switches need \"pending\": true"
+
+
+def test_undiscovered_entry_needs_pending(tmp_path):
+	workflows = tmp_path / ".github" / "workflows"
+	workflows.mkdir(parents=True)
+	(workflows / "a.yml").write_text("env:\n  X: ${{ vars.KNOWN_STAGE_ENABLED || 'true' }}\n", encoding="utf-8")
+	discovered = set(ssw.discover_switches(tmp_path))
+	data = {
+		"switches": [{"name": "KNOWN_STAGE_ENABLED"}, {"name": "UNKNOWN_STAGE_ENABLED"}],
+		"off_on_purpose": [{"name": "UNKNOWN_STAGE_ENABLED", "until": "2099-01-01", "reason": "r"}],
+	}
+	assert _undiscovered_without_pending(data, discovered) == (["UNKNOWN_STAGE_ENABLED"], ["UNKNOWN_STAGE_ENABLED"])
+	data["switches"][1]["pending"] = True
+	data["off_on_purpose"][0]["pending"] = True
+	assert _undiscovered_without_pending(data, discovered) == ([], [])
 
 
 def test_registry_check_fails_on_unlisted_workflow_switch(tmp_path):

@@ -305,6 +305,8 @@ def load_registry(path: str | Path, repo_root: str | Path | None = None) -> dict
 	for marker in markers:
 		if not isinstance(marker, dict):
 			raise RegistryError("registry off_on_purpose entry is not an object")
+		if "pending" in marker and not isinstance(marker["pending"], bool):
+			raise RegistryError("registry off_on_purpose pending must be true or false")
 	data.setdefault("off_on_purpose", [])
 
 	discovered = discover_switches(repo_root) if repo_root else {}

@@ -313,6 +313,13 @@ def test_invalid_pending_exits_2(tmp_path):
 	assert result.returncode == 2
 
 
+def test_invalid_marker_pending_exits_2(tmp_path):
+	registry = _registry(tmp_path, markers=[{"name": "ALPHA_ENABLED", "until": "2099-01-01", "reason": "r", "pending": "yes"}])
+	result = _run_py(["snapshot", "--registry", str(registry)], "")
+	assert result.returncode == 2
+	assert "off_on_purpose pending must be true or false" in result.stderr
+
+
 def test_empty_registry_without_discovery_exits_2(tmp_path):
 	path = tmp_path / "stage_switches.json"
 	path.write_text(json.dumps({"schema": "stage_switches.v1", "switches": []}), encoding="utf-8")
@@ -346,7 +353,11 @@ def test_real_registry_loads_unchanged():
 	merged = ssw.load_registry(REAL_REGISTRY, repo_root=ROOT)
 	by_name = {entry["name"]: entry for entry in merged["switches"]}
 	for entry in raw["switches"]:
-		assert by_name[entry["name"]]["stage"] == entry["stage"]
+		# stage is optional since #10127; an entry without one gets generated text.
+		if "stage" in entry:
+			assert by_name[entry["name"]]["stage"] == entry["stage"]
+		else:
+			assert by_name[entry["name"]]["stage"].startswith("Turns on "), entry
 		assert by_name[entry["name"]].get("on_values") == entry.get("on_values")
 	assert merged["off_on_purpose"] == raw["off_on_purpose"]
 	# Without --repo-root the registry loads as before #10127.
