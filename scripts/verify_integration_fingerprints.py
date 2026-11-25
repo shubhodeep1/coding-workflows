@@ -340,6 +340,7 @@ _AI_MERGE_RESOLVE_SUBJECT_PREFIX = "[ai-merge-resolve]"
 _BASE_DELETION_SUPERSEDE_ENV = "INTEGRATION_FINGERPRINT_BASE_DELETION_SUPERSEDE_ENABLED"
 _BASE_DELETION_SUPERSEDE_CACHE: dict[tuple[str, str, str], tuple[str, str] | None] = {}
 _BASE_DELETION_SUPERSEDE_FLAG_WARNED: list[bool] = [False]
+_BASE_DELETION_UNSAFE_BRANCH_WARNED: list[bool] = [False]
 _SAFE_BASE_BRANCH_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$")
 
 # Cache for the must_contain post-capture-evolution false-positive defense,
@@ -931,12 +932,14 @@ def _base_deletion_history_ref(ref: str | None) -> tuple[str, str] | None:
 	if not base_branch:
 		return None
 	if not _is_safe_base_branch_name(base_branch):
-		print(
-			f"::warning::verify_integration_fingerprints: unsafe BASE_BRANCH={_sanitize_log_label(repr(base_branch), 64)}; "
-			"skipping base-deletion supersede check.",
-			flush=True,
-			file=sys.stderr,
-		)
+		if not _BASE_DELETION_UNSAFE_BRANCH_WARNED[0]:
+			_BASE_DELETION_UNSAFE_BRANCH_WARNED[0] = True
+			print(
+				f"::warning::verify_integration_fingerprints: unsafe BASE_BRANCH={_sanitize_log_label(repr(base_branch), 64)}; "
+				"skipping base-deletion supersede check.",
+				flush=True,
+				file=sys.stderr,
+			)
 		return None
 	sha = _rev_parse_commit(f"refs/remotes/origin/{base_branch}")
 	if sha is None:
@@ -981,7 +984,9 @@ def _base_deletion_superseding_commit(
 			return (cached[0], label) if cached else None
 		result: tuple[str, str] | None = None
 		ls_tree = subprocess.run(
-			["git", "ls-tree", "--full-tree", "-z", "--name-only", history_sha, "--", normalized_path],
+			# --literal-pathspecs: glob characters in the path ([id], *, ?) must not
+			# match a deleted sibling and wrongly satisfy the fingerprint.
+			["git", "--literal-pathspecs", "ls-tree", "--full-tree", "-z", "--name-only", history_sha, "--", normalized_path],
 			capture_output=True,
 			check=False,
 			timeout=GIT_COMMAND_TIMEOUT_SECS,
@@ -989,7 +994,7 @@ def _base_deletion_superseding_commit(
 		if ls_tree.returncode == 0 and not ls_tree.stdout.strip(b"\x00 \n"):
 			log = subprocess.run(
 				[
-					"git", "log",
+					"git", "--literal-pathspecs", "log",
 					"--no-renames",
 					"--diff-filter=D",
 					"--max-count=1",
@@ -1609,7 +1614,7 @@ def _evaluate_fp_state(
 				deletion_sha, base_label = base_deletion
 				print(
 					f"::warning::FINGERPRINT_BASE_DELETION_SUPERSEDED_V1 "
-					f"issue=#{issue_num} pr=#{pr_num} file={path} "
+					f"issue=#{issue_num} pr=#{pr_num} file={_sanitize_log_label(str(path))} "
 					f"commit={deletion_sha[:12]} base_ref={base_label}",
 					flush=True,
 					file=sys.stderr,

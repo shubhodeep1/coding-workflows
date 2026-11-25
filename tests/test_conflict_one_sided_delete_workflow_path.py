@@ -319,7 +319,7 @@ SUPERSEDED_MARKER = "FINGERPRINT_BASE_DELETION_SUPERSEDED_V1"
 INVALID_FLAG_WARNING = "invalid INTEGRATION_FINGERPRINT_BASE_DELETION_SUPERSEDE_ENABLED"
 
 
-def _write_fingerprints(tmp: Path, captured_at: str) -> Path:
+def _write_fingerprints(tmp: Path, captured_at: str, file: str = WORKFLOW) -> Path:
 	fp_path = tmp / "fingerprints.json"
 	fp_path.write_text(
 		json.dumps(
@@ -328,7 +328,7 @@ def _write_fingerprints(tmp: Path, captured_at: str) -> Path:
 					"issue": 9001,
 					"pr": 9002,
 					"captured_at": captured_at,
-					"must_contain": [{"file": WORKFLOW, "regex": re.escape("runs-on: ubuntu-24.04")}],
+					"must_contain": [{"file": file, "regex": re.escape("runs-on: ubuntu-24.04")}],
 					"must_not_contain": [],
 					"must_not_exist": [],
 				}
@@ -492,3 +492,14 @@ def test_fingerprint_base_deletion_ref_mode() -> None:
 		late_result = _run_verifier(repo, tmp, late, "--ref", "main")
 		assert late_result.returncode == 1, late_result.stdout + late_result.stderr
 		assert SUPERSEDED_MARKER not in late_result.stderr
+
+
+def test_fingerprint_base_deletion_glob_path_is_literal() -> None:
+	"""A glob-like fingerprint path must not match the deleted sibling `x.yml`."""
+	with tempfile.TemporaryDirectory() as tmp_name:
+		tmp, repo = _setup(tmp_name)
+		fp_path = _write_fingerprints(tmp, BEFORE_ALL_COMMITS, file=".github/workflows/[x].yml")
+		_git(repo, "rm", "-q", "--", WORKFLOW)
+		result = _run_verifier(repo, tmp, fp_path)
+		assert result.returncode == 1, result.stdout + result.stderr
+		assert SUPERSEDED_MARKER not in result.stderr
