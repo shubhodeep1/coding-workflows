@@ -1,0 +1,21 @@
+{
+  "discovered_at": "2026-11-25T22:12:59Z",
+  "issue_number": 10127,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=scripts/stage_switches.json:1-1; cited_path=scripts/stage_switches.json; files_touched=README.md, agents.d/10127-stage-switch-discovery.md, agents.d/9994-stage-switch-watch.md, changelog.d/10127-stage-switch-discovery.md, scripts/stage_switch_watch.py, scripts/stage_switch_watch.sh, tests/test_stage_switch_registry.py, tests/test_stage_switch_watch.py.",
+  "phase": "review_autofix",
+  "pr_number": 10130,
+  "record_id": "lesson_20261125221259_b585d8c0a2",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/stage_switches.json",
+    "README.md",
+    "agents.d/10127-stage-switch-discovery.md",
+    "agents.d/9994-stage-switch-watch.md",
+    "changelog.d/10127-stage-switch-discovery.md",
+    "scripts/stage_switch_watch.py",
+    "scripts/stage_switch_watch.sh",
+    "tests/test_stage_switch_registry.py",
+    "tests/test_stage_switch_watch.py"
+  ]
+}
