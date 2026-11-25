@@ -3213,8 +3213,8 @@ historical `high` value across every layer was a workaround for the
 openai/codex#11151 announce-without-emit failure mode (implement /
 review_autofix smoke runs at 2026-05-07 12:41 / 12:42, where the model
 emitted a reasoning trace and exited without a tool call); the workaround
-now relies on `include_apply_patch_tool = true` as the primary
-belt-and-suspenders. If the announce-without-emit pattern recurs at `low`,
+then relied on `include_apply_patch_tool = true`, which Codex CLI v0.171.0
+ignores with a warning (#10129). If the announce-without-emit pattern recurs at `low`,
 raise verbosity at the layer that needs it (start with the editor /
 implement callsites, since those are the original 11151 reproducers).
 
@@ -3226,8 +3226,8 @@ phases on a separate older slug) was retired after the announce-without-emit
 regression (openai/codex#11151) drove repeat no-edit failures. The
 2026-05-07 ablation suite then identified the underlying root cause as
 `apply_patch_tool_type: "freeform"` on the OpenRouter Responses path (see
-the `openai/gpt-5.4` catalog entry — `apply_patch_tool_type` is now
-`function`).
+the `openai/gpt-5.4` catalog entry — `apply_patch_tool_type` went to
+`function`, then back to `freeform` with the Codex CLI v0.171.0 pin, #10129).
 
 The reviewer-only multi-model run (claude-branch-review) uses the same
 reviewer models (`minimax/minimax-m3`, `anthropic/claude-sonnet-5.5`,
@@ -5479,12 +5479,12 @@ An extracted candidate, empty or non-empty, also requires every earlier opener t
 ## Operational lessons learned (categorised)
 
 **General / Tooling**
-- Treat the `openai/codex#11151` no-edit regression as closed only with function-style patch tooling; keep `apply_patch_tool_type = "function"` as the settled baseline. Pointers: `scripts/codex_model_catalog.json`, `scripts/write_codex_config.sh`.
+- Codex CLI v0.171.0 removed function-style patch tooling (openai/codex#21651, #10129): catalog `apply_patch_tool_type` must be `freeform` or `null`, never `function` (the catalog no longer parses); `tests/test_write_codex_config.py::test_catalog_entries_parse_on_codex_v0171` guards it. If the `openai/codex#11151` no-edit regression recurs, raise editor verbosity first. Pointers: `scripts/codex_model_catalog.json`, `scripts/write_codex_config.sh`.
 - Keep `low` as the default gpt-6-sol verbosity across workflow entrypoints unless a specific phase re-proves the old announce-without-emit failure. Pointers: `.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, `.github/workflows/implement.yml`, `.github/workflows/orchestrate.yml`.
 
 **codex-cli quirks**
 - Announce-without-emit is a known codex-cli failure mode on patch-heavy turns; the mitigation is to keep patch tooling explicitly enabled rather than raising verbosity by default. Pointers: `scripts/codex_model_catalog.json`, `.github/workflows/implement.yml`.
-- The OpenRouter Responses-path regression was tied to `apply_patch_tool_type: "freeform"`; keep `include_apply_patch_tool = true` and function-style patch wiring in editor phases. Pointers: `scripts/codex_model_catalog.json`, `.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, `.github/workflows/implement.yml`.
+- The OpenRouter Responses-path regression was tied to `apply_patch_tool_type: "freeform"` before the v0.171.0 pin; on v0.171.0 `function` no longer exists and `include_apply_patch_tool` is ignored with a warning, so watch editor phases for no-edit turns instead of restoring either setting. Pointers: `scripts/codex_model_catalog.json`, `.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, `.github/workflows/implement.yml`.
 
 **OpenRouter / prompt-cache**
 - Prompt-cache hit rate depends on stable prompt ordering and unchanged prefix blocks; preserve cache-friendly layout before adding new dynamic material. Pointers: `probably_unnecessary_but_read_if_stuck.md` (OpenRouter Prompt Cache Instrumentation / Semantic Cache Scope), `scripts/openrouter_prompt_cache.py`.
