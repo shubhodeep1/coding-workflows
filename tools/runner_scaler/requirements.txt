@@ -1,0 +1,4 @@
+# Pinned (CLAUDE.md §3). Only the GitHub App JWT needs them; the scaler imports
+# them lazily, so the unit tests under tests/test_runner_scaler_*.py do not.
+PyJWT==2.15.0
+cryptography==50.0.1

@@ -369,6 +369,8 @@ def skip_ai_body(body: str) -> bool:
 	return False
 
 
+# Mirrored by triage_release_download_rerun_gate in scripts/check_failure_triage.sh
+# (issue #9812); keep the bounds and checks of both copies in sync.
 def rerun_failed_jobs(repo: str, run_id: int) -> bool:
 	try:
 		result = subprocess.run(
@@ -383,6 +385,8 @@ def rerun_failed_jobs(repo: str, run_id: int) -> bool:
 
 
 
+# Mirrored by triage_release_download_rerun_gate in scripts/check_failure_triage.sh
+# (issue #9812); keep the bounds and checks of both copies in sync.
 def list_run_jobs(repo: str, run_id: int, ignore_job_names: tuple[str, ...] = ()) -> list[dict]:
 	# Attempt-scoped: `already_retried` has ruled out any attempt >= 2.
 	result = subprocess.run(
@@ -414,6 +418,8 @@ def list_run_jobs(repo: str, run_id: int, ignore_job_names: tuple[str, ...] = ()
 	return jobs
 
 
+# Mirrored by triage_release_download_rerun_gate in scripts/check_failure_triage.sh
+# (issue #9812); keep the bounds and checks of both copies in sync.
 def failure_annotations(repo: str, check_run_id: int) -> list[dict]:
 	result = subprocess.run(
 		["gh", "api", "-X", "GET", f"repos/{repo}/check-runs/{check_run_id}/annotations",
