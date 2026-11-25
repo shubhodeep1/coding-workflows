@@ -2486,6 +2486,19 @@ class LeaseSourceIssueGuard(unittest.TestCase):
 		self.assertIn("MERGE_LEASE pr=- base=main mode=update outcome=unavailable reason=source_issue_read_failed", out)
 		self.assertIn("reason=queued_behind", out)
 
+	def test_multi_holder_join_still_passes_over_labelled_live_holders(self) -> None:
+		# The orphan list is added to the live-holder exclusions, never put in
+		# their place: a holder still labelled as a waiter is not a candidate.
+		st = {"pulls": [_pull(8), _pull(9), _pull(10)], "labels": {"8": [WAIT], "9": [WAIT]},
+			"files": {"8": ["a.py"], "9": ["b.py"], "10": ["c.py"]}, "graphql": _issue_states()}
+		_seed_lease(st, _multi_record([_row(8, ["a.py"]), _row(9, ["b.py"])]))
+		h = _Harness(st)
+		rc, out = _gate(h, 10, "update", {MAXH: "3"})
+		self.assertEqual(rc, 0, out)
+		self.assertIn("outcome=acquired", out)
+		self.assertEqual(_holders(h.record()), ["8", "9", "10"])
+		self.assertFalse(any("pulls/8/files" in c or "pulls/9/files" in c for c in h.calls), h.calls)
+
 class LeaseQueueSnapshot(unittest.TestCase):
 	"""Merge-lease parallel merges Phase 1 steps 1.2-1.3 (Refs #9781): the
 	queue order is exposed and logged once per lease ref, with no API call."""

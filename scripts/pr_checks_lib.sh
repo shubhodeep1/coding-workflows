@@ -2280,7 +2280,12 @@ _pr_base_fresh_for_merge()
 			if ! _merge_lease_gate "${pr_number}" "${base_ref:-${PR_BASE_FRESHNESS_BASE_REF:-}}" "${PR_BASE_FRESHNESS_HEAD_SHA:-}" update; then
 				PR_BASE_FRESHNESS_OUTCOME="lease_wait"
 				PR_BASE_FRESHNESS_LAST_REASON="merge_lease_${MERGE_LEASE_REASON:-held}"
-				echo "  [merge-lease] PR #${pr_number}: the merge lease for ${base_ref:-${PR_BASE_FRESHNESS_BASE_REF:-the base}} is held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; not updating the branch. This PR is labelled ${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait} and is re-dispatched when the lease is granted to it."
+				if [ "${MERGE_LEASE_REASON:-}" = "source_issue_not_planned" ]; then
+					# Issue #10121 (G4): no blocker and no grant to wait for.
+					echo "  [merge-lease] PR #${pr_number}: its source issue was closed as not planned (left behind by a re-issue), so this PR does not take the merge lease for ${base_ref:-${PR_BASE_FRESHNESS_BASE_REF:-the base}}; not updating the branch. Its owner decides on it by hand."
+				else
+					echo "  [merge-lease] PR #${pr_number}: the merge lease for ${base_ref:-${PR_BASE_FRESHNESS_BASE_REF:-the base}} is held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; not updating the branch. This PR is labelled ${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait} and is re-dispatched when the lease is granted to it."
+				fi
 				return 1
 			fi
 			local sync_max="${MERGE_BASE_FRESHNESS_MAX_SYNCS:-2}" sync_done=""
@@ -4394,7 +4399,8 @@ _merge_lease_gate_multi()
 		# Issue #10121 (G4): an orphan never joins as a holder; orphaned
 		# waiters are passed over in queue order.
 		_merge_lease_gate_source_issue_skip "${gm_pulls_json}" "${gm_pr}" "${gm_base}" || return 1
-		gm_excluded="${MERGE_LEASE_GATE_SOURCE_ORPHANS:-}"
+		# Append: gm_excluded already lists the live holders (loop above).
+		[ -z "${MERGE_LEASE_GATE_SOURCE_ORPHANS:-}" ] || gm_excluded="${gm_excluded:+${gm_excluded},}${MERGE_LEASE_GATE_SOURCE_ORPHANS}"
 		if _merge_lease_revoke_enabled; then
 			# Issue #9983 G5: a soft entry whose head-gate passed no longer blocks.
 			_merge_lease_skips_effective "${MERGE_LEASE_SKIPS:-}" "${gm_pulls_json}" "${gm_pr}"
