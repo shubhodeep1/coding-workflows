@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"For each call site, add a test to tests/test_gh_read.py with a stub gh on PATH. The stub fails the job-token call with HTTP 403, a rate limit, HTTP 502 and a non-HTTP error, and answers the PAT call. Assert under set -euo pipefail that the PAT output is used, the caller exits 0, and no token value is printed.\"\n  expected_change_site: tests/test_gh_read.py::test_wait_review_reads_fall_back_to_the_pat\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: test_wait_review_reads_fall_back_to_the_pat (tests/test_gh_read.py:622-645, also cited as 629-641) runs only two hand-written helper invocations (`actions/runs/{id}/jobs?per_page=10` and `actions/jobs/{id}/logs`), not the 14 actual gh_api_safe_quiet_print call sites in scripts/stable_e2e_step_wait_review.sh (:332, :352, :369, :594-595, :597-598, :654, :677, :754, :881, :908-909, :912-913 and more). The inventory test (tests/test_gh_read.py:531-536, 607-618) pins count 14 and opt-in ordering but does not run the actual call lines. The dispatch-watch and promote-cycle tests use real call lines verbatim. All three flagged it as NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP:\n  Requirement: \"For each call site, add a test to tests/test_gh_read.py\" that exercises job-token failures and verifies PAT output, successful caller exit, and no token leakage.\n  Expected change site: tests/test_gh_read.py\n  Evidence of absence: While test_wait_review_reads_fall_back_to_the_pat exercises the fallback logic for stable_e2e_step_wait_review.sh, it uses two hand-written gh_api_safe_quiet_print calls rather than simulating the 14 actual call sites in scripts/stable_e2e_step_wait_review.sh as requested by the issue requirement \"For each call site, add a test\". The inventory and call-site counts are present in the test file, confirming the number of call sites, but individual tests or a loop covering these 14 specific sites are missing.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP:\n  Requirement: \"For each call site, add a test to tests/test_gh_read.py with a stub gh on PATH. The stub fails the job-token call with HTTP 403, a rate limit, HTTP 502 and a non-HTTP error, and answers the PAT call. Assert under set -euo pipefail that the PAT output is used, the caller exits 0, and no token value is printed.\"\n  Expected change site: tests/test_gh_read.py::test_wait_review_reads_fall_back_to_the_pat (the body should exercise the actual 14 call lines in scripts/stable_e2e_step_wait_review.sh, not 2 hand-written shapes)\n  Evidence of absence: scripts/stable_e2e_step_wait_review.sh:332, :352, :369, :594-595, :597-598, :654, :677, :754, :881, :908-909, :912-913 (and three more) all call gh_api_safe_quiet_print with distinct URL/query shapes. The test body at tests/test_gh_read.py:629-641 exercises only two shapes (`actions/runs/{id}/jobs?per_page=10` and `actions/jobs/{id}/logs`). The new test_release_gate_read_call_site_inventory at tests/test_gh_read.py:607-618 pins the count to 14 and verifies all calls come after the opt-in line, but never runs the actual call lines against the stub gh, so per-call-site fallback behavior is verified only transitively through the shared-helper test. The other two call sites (`test_dispatch_watch_reads_fall_back_to_the_pat` lines 648-668 and `test_promote_cycle_gate_runs_read_falls_back_to_the_pat` lines 692-723) use the actual call lines verbatim; `test_wait_review_reads_fall_back_to_the_pat` does not.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP:\n  Requirement: \"For each call site, add a test to tests/test_gh_read.py\" that exercises job-token failures and verifies PAT output, successful caller exit, and no token leakage.\n  Expected change site: tests/test_gh_read.py::test_wait_review_reads_fall_back_to_the_pat\n  Evidence of absence: The inventory at tests/test_gh_read.py:531-536 counts 14 `gh_api_safe_quiet_print` calls in `scripts/stable_e2e_step_wait_review.sh`, but the test at tests/test_gh_read.py:622-645 constructs and runs only two synthetic helper invocations. It does not execute or test the 14 actual wait-review call sites.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "90d2ee0d01021a926c9651a6741b929860968cc343c617dbda0fa148ff28868e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10106,
+    "run_id": "45566907651",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45566907651",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125092229_a1125f8778",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10106,
+    "run_id": "45566907651"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T09:22:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
