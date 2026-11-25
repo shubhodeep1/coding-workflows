@@ -373,6 +373,20 @@ class Wiring(unittest.TestCase):
 		self.assertNotIn("_merge_lease", text[guard:merge])
 		self.assertIn("outcome=deferred reason=pr_${PR_MERGE_STATE_OUTCOME:-unavailable}", text[guard:merge])
 
+	def test_rb_judge_retry_not_open_passes_the_read_closed_at(self) -> None:
+		# The retry's PR read carries .closed_at as its last field and the
+		# closed-during-retry branches pass it on, so the skip line logs it.
+		text = RB_JUDGE.read_text(encoding="utf-8")
+		self.assertIn('(.base.ref // "-"), (.closed_at // "-")] | @tsv', text)
+		self.assertIn('RB_MERGE_RETRY_CLOSED_AT="${_rb_retry_closed_at}"', text)
+		self.assertEqual(text.count('--arg closed_at "${RB_MERGE_RETRY_CLOSED_AT:-}"'), 2)
+		h = ml._Harness({})
+		payload = json.dumps({"state": "closed", "draft": False, "closed_at": CLOSED_AT, "head": {"sha": SHA}, "base": {"ref": "main"}})
+		res = h.lib(f"MERGE_LEASE_ENABLED=false\n_pr_merge_state_check {PR} {SHA} pre_merge '{payload}'; echo rc=$?")
+		self.assertIn(f"AUTOFIX_MERGE_SKIPPED pr={PR} head_sha={SHA} reason=pr_closed closed_at={CLOSED_AT} stage=pre_merge", res.stdout)
+		self.assertIn("rc=1", res.stdout)
+		self.assertEqual(h.calls, [])
+
 	def test_rb_judge_start_checks_reuse_the_pr_read_before_the_freshness_gate(self) -> None:
 		text = RB_JUDGE.read_text(encoding="utf-8")
 		case_text = text[text.index("# END rb-judge merge error capture (#7659)"):]

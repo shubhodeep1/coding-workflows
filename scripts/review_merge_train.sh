@@ -2776,8 +2776,12 @@ _mt_final_ci_merge_resume()
 		# a closed, unmerged PR, so this read follows the freshness gate's
 		# compare and lease calls. The start check is the open-PR listing this
 		# tick read (closed PRs never reach this loop); a PR closed between
-		# that listing and here releases the lease the gate gave it. Fails
-		# closed when the guard or the read is unavailable.
+		# that listing and here releases the lease the gate gave it. On the
+		# gate's overlap path (branch update requested, `continue` above) this
+		# read does not run: a PR closed within the tick may keep the lease
+		# until `review_merge_train.sh release` frees it as holder_closed.
+		# A start read would be a second REST call per attempt (#10049 caps
+		# it at one). Fails closed when the guard or the read is unavailable.
 		if ! declare -F _pr_merge_state_check >/dev/null 2>&1 \
 			|| ! PR_CHECKS_REPOSITORY="${MT_REPO}" _pr_merge_state_check "${resume_num}" "${resume_sha}" pre_merge; then
 			_mt_log "FINAL_CI_MERGE_RESUME pr=${resume_num} head=${resume_sha} outcome=deferred reason=pr_${PR_MERGE_STATE_OUTCOME:-unavailable}"

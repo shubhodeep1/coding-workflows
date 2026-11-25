@@ -802,7 +802,7 @@ def test_transient_merge_error_is_retried_and_succeeds(path: str) -> None:
 	assert sleeps == ["10"]
 	expected = _expected_calls(path)
 	assert calls[: len(expected)] == expected
-	assert calls[len(expected)] == ["api", "repos/o/r/pulls/42", "--jq", '[.state, (.merged // false), (.auto_merge != null), .head.sha, (.mergeable_state // "none"), (.base.ref // "-")] | @tsv']
+	assert calls[len(expected)] == ["api", "repos/o/r/pulls/42", "--jq", '[.state, (.merged // false), (.auto_merge != null), .head.sha, (.mergeable_state // "none"), (.base.ref // "-"), (.closed_at // "-")] | @tsv']
 	assert calls[len(expected) + 1 :] == expected[:1]
 	retry = _retry_lines(proc.stdout)
 	assert retry == [f"RB_JUDGE_MERGE_RETRY pr=42 head={JUDGED} path={path} attempt=1/3 delay_s=10 reason=transient"]

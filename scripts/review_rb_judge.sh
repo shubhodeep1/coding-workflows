@@ -2540,14 +2540,17 @@ rb_judge_sync_merge_guard() {
 # and only while the --auto stderr is transient; direct mode returns 1.
 # Sets RB_MERGE_RETRY_GIVEUP to why it returned 1: non_transient, head_moved,
 # not_open, deferred (direct mode only) or exhausted; read by
-# rb_judge_deferred_merge_pending.
+# rb_judge_deferred_merge_pending. On not_open it also sets
+# RB_MERGE_RETRY_CLOSED_AT to the PR's closed_at from the same read (#10049,
+# empty when GitHub gave none), so the skip line carries the close time.
 rb_judge_merge_retry_transient() {
   local _rb_retry_mode="${1:-direct}" _rb_retry_path="${2:-unknown}"
   local _rb_retry_attempt=0 _rb_retry_delay="" _rb_retry_pr=""
   local _rb_retry_state="" _rb_retry_merged="" _rb_retry_auto="" _rb_retry_head=""
   local _rb_retry_mergeable_state="" _rb_retry_base_ref="" _rb_retry_guard_json=""
-  local _rb_retry_auto_only="false"
+  local _rb_retry_auto_only="false" _rb_retry_closed_at=""
   RB_MERGE_RETRY_GIVEUP=""
+  RB_MERGE_RETRY_CLOSED_AT=""
   if [ "${RB_SYNC_MERGE_DEFERRED:-false}" = "true" ]; then
     RB_MERGE_RETRY_GIVEUP="deferred"
     [ "${_rb_retry_mode}" = "auto" ] || return 1
@@ -2564,18 +2567,20 @@ rb_judge_merge_retry_transient() {
     _rb_retry_attempt=$((_rb_retry_attempt + 1))
     echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 delay_s=${_rb_retry_delay} reason=transient"
     sleep "${_rb_retry_delay}"
-    _rb_retry_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.state, (.merged // false), (.auto_merge != null), .head.sha, (.mergeable_state // "none"), (.base.ref // "-")] | @tsv' 2>/dev/null)" || _rb_retry_pr=""
-    _rb_retry_mergeable_state=""; _rb_retry_base_ref=""
+    _rb_retry_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.state, (.merged // false), (.auto_merge != null), .head.sha, (.mergeable_state // "none"), (.base.ref // "-"), (.closed_at // "-")] | @tsv' 2>/dev/null)" || _rb_retry_pr=""
+    _rb_retry_mergeable_state=""; _rb_retry_base_ref=""; _rb_retry_closed_at=""
     # Non-empty placeholders ("none", "-"): tab is IFS whitespace, so an
     # empty field would collapse and shift .base.ref into the mergeable
-    # state (#9939). "none" lands in the guard's defer arm.
-    IFS=$'\t' read -r _rb_retry_state _rb_retry_merged _rb_retry_auto _rb_retry_head _rb_retry_mergeable_state _rb_retry_base_ref <<< "${_rb_retry_pr}" || true
+    # state (#9939). "none" lands in the guard's defer arm. closed_at is the
+    # last field (#10049), so the earlier fields keep their positions.
+    IFS=$'\t' read -r _rb_retry_state _rb_retry_merged _rb_retry_auto _rb_retry_head _rb_retry_mergeable_state _rb_retry_base_ref _rb_retry_closed_at <<< "${_rb_retry_pr}" || true
     [ "${_rb_retry_base_ref}" != "-" ] || _rb_retry_base_ref=""
+    [ "${_rb_retry_closed_at}" != "-" ] || _rb_retry_closed_at=""
     # gh api prints an HTTP error's response body to stdout (--jq is skipped),
     # so a failed read or a state other than open/closed counts as unreadable.
     case "${_rb_retry_state}" in
       open|closed) ;;
-      *) _rb_retry_state=""; _rb_retry_merged=""; _rb_retry_auto=""; _rb_retry_head=""; _rb_retry_mergeable_state=""; _rb_retry_base_ref="" ;;
+      *) _rb_retry_state=""; _rb_retry_merged=""; _rb_retry_auto=""; _rb_retry_head=""; _rb_retry_mergeable_state=""; _rb_retry_base_ref=""; _rb_retry_closed_at="" ;;
     esac
     # Head first: a PR merged at a head other than the judged one is not the
     # judge's merge, so it stays a failure (head_moved).
@@ -2591,6 +2596,7 @@ rb_judge_merge_retry_transient() {
     if [ -n "${_rb_retry_state}" ] && [ "${_rb_retry_state}" != "open" ]; then
       echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=not_open"
       RB_MERGE_RETRY_GIVEUP="not_open"
+      RB_MERGE_RETRY_CLOSED_AT="${_rb_retry_closed_at}"
       return 1
     fi
     if [ "${_rb_retry_mode}" = "auto" ] && [ "${_rb_retry_auto}" = "true" ] && [ "${_rb_retry_head}" = "${RB_JUDGED_HEAD_SHA:-}" ]; then
@@ -2602,9 +2608,12 @@ rb_judge_merge_retry_transient() {
       # this attempt; the loop re-reads after the next delay (bounded). Mark
       # it deferred, so running out of attempts here is a wait
       # (mergeability_pending through rb_judge_deferred_merge_pending), not
-      # merge_failed; a later guard call resets the flag.
+      # merge_failed; a later guard call resets the flag. The guard state
+      # names the unreadable read, not an earlier guard's mergeable_state.
       echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=state_unavailable"
       RB_SYNC_MERGE_DEFERRED="true"
+      SYNC_MERGE_BLOCKED_GUARD_STATE="unreadable"
+      SYNC_MERGE_BLOCKED_GUARD_BLOCKERS="unknown"
       continue
     fi
     if [ "${_rb_retry_mode}" = "auto" ]; then
@@ -2827,7 +2836,7 @@ case "${RB_ACTION}" in
             rb_judge_merge_err_close
             if declare -F _pr_merge_state_check >/dev/null 2>&1; then
               PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_merge_state_check "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" pre_merge \
-                "$(jq -cn --arg sha "${RB_JUDGED_HEAD_SHA:-}" --arg base "${PR_BASE_REF:-}" '{state: "closed", draft: false, head: {sha: $sha}, base: {ref: $base}}' 2>/dev/null)" || true
+                "$(jq -cn --arg sha "${RB_JUDGED_HEAD_SHA:-}" --arg base "${PR_BASE_REF:-}" --arg closed_at "${RB_MERGE_RETRY_CLOSED_AT:-}" '{state: "closed", draft: false, closed_at: (if $closed_at == "" then null else $closed_at end), head: {sha: $sha}, base: {ref: $base}}' 2>/dev/null)" || true
             fi
             echo "::warning::Review-blocked judge: PR #${PR_NUMBER} closed during the merge retry; not merging and withholding ai:ready-to-merge."
             RB_MERGE_STATUS="not_open"
@@ -2962,7 +2971,7 @@ case "${RB_ACTION}" in
             rb_judge_merge_err_close
             if declare -F _pr_merge_state_check >/dev/null 2>&1; then
               PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_merge_state_check "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" pre_merge \
-                "$(jq -cn --arg sha "${RB_JUDGED_HEAD_SHA:-}" --arg base "${PR_BASE_REF:-}" '{state: "closed", draft: false, head: {sha: $sha}, base: {ref: $base}}' 2>/dev/null)" || true
+                "$(jq -cn --arg sha "${RB_JUDGED_HEAD_SHA:-}" --arg base "${PR_BASE_REF:-}" --arg closed_at "${RB_MERGE_RETRY_CLOSED_AT:-}" '{state: "closed", draft: false, closed_at: (if $closed_at == "" then null else $closed_at end), head: {sha: $sha}, base: {ref: $base}}' 2>/dev/null)" || true
             fi
             echo "::warning::Review-blocked judge: PR #${PR_NUMBER} closed during the merge retry; not merging and withholding ai:ready-to-merge."
             RB_MERGE_STATUS="not_open"
