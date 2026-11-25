@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: When the job-token read fails with HTTP 502 or a non-HTTP error, what should happen at the `test-and-mark-stable.yml` call sites? Here is what the code does today:\n- **`gh_api_safe` path (`dispatch_and_watch_workflow_run.sh` L259/L321 via `gh_api_safe_quiet_print_read`):** already falls back to the PAT on any job-token failure (L118-124), so all four failure cases pass.\n- **`gh_retry gh_read` path (`promote_main_cycle.sh` L1830/L1881):** a 502 goes back to `gh_retry`, which retries `gh_read`, and `gh_read` tries the job token first again each time. If the stub keeps returning 502, the PAT is never called. The step still exits 0, but only because the empty result is tolerated (`|| echo \"\"` / `|| continue`).\n- **`stable_orchestrate_cancel_dispatched_run.sh` L58:** calls `gh_api_safe_job_token_read` directly and turns any failure into `status=\"\"`.\nChoices:\n- A: Keep the shared rule in `gh_read` and `gh_api_safe_job_token_read`. For 502 and non-HTTP errors, the tests check that the caller exits 0 and no token value is printed. They check that the PAT output is used only where the caller already falls back (the `gh_api_safe` path). Smallest change, but the issue's \"PAT output is used\" check would not hold for every call site.\n- B: Change the shared helpers so any job-token failure, 502 and non-HTTP errors included, falls back to the PAT once. This changes behaviour for every workflow that uses `gh_read` (for example `workflow_failure_heal_queue.sh`), not just the release gate. During GitHub 5xx outages it also spends more of the PAT's rate limit.\n- C: Leave the shared helpers unchanged. At the `test-and-mark-stable.yml` call sites only, add a PAT fallback after a job-token failure that isn't one of the 401/403/404/rate-limit cases, so every one of the four failure cases uses the PAT output. Helper names, env defaults and every other workflow stay as they are. (RECOMMENDED)",
+  "fingerprint": "d07038af0af8796f0be8b566ff858ba2fdfca235c9ca2b3c9ba8c571352c7de5",
+  "lineage": {
+    "issue_number": 10101,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45548710630",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45548710630",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261125050301_ce7b125eec",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10101,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45548710630"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #10101 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-25T05:03:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
