@@ -13,6 +13,11 @@
 			"stage": "Turns on ai memory (issue_pr_status.yml, orchestrate_poll.yml, workflow-log-analysis.yml); false turns that stage off."
 		},
 		{
+			"name": "AI_PLAN_GRANT_WRITE_ENABLED",
+			"default": "true",
+			"stage": "Plan-granted .github/ai/<file> writes in implement and the review/heal editor sandboxes (issue #9920); implement.yml and review_autofix.yml forward it as GITHUB_AI_PLAN_GRANT_WRITE_ENABLED."
+		},
+		{
 			"name": "APPLY_ANALYSIS_ON_MAIN_ENABLED",
 			"default": "true",
 			"stage": "Kill switch for scripts/apply_analysis_on_main.sh, the dispatcher that hands one analysis/workflow-optimization-*.md doc to the orchestrator for the proving and verifying runs."
@@ -97,6 +102,12 @@
 			"name": "CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED",
 			"default": "true",
 			"stage": "Turns on check triage supersede stale (check_failure_triage.yml); false turns that stage off."
+		},
+		{
+			"name": "CHECK_TRIAGE_TARGET_FILES_GUARD_ENABLED",
+			"default": "true",
+			"stage": "Check-failure triage target-files guard (issue #9823): drops a PR-branch route when the failing files exist only on the default branch.",
+			"on_values": ["1", "yes", "on"]
 		},
 		{
 			"name": "CHECK_TRIAGE_TRANSIENT_RERUN_ENABLED",
@@ -204,6 +215,11 @@
 			"stage": "When true (default), scripts/review_conflict_prepare.sh resolves a two-sided content conflict on the generated .ai/.workspace_source_manifest.txt with set algebra, (ours ∩ theirs) ∪ (ours − base) ∪ (theirs − base), un..."
 		},
 		{
+			"name": "CONFLICT_MODIFY_DELETE_TAKE_BASE_ENABLED",
+			"default": "true",
+			"stage": "Conflict resolver modify/delete take-base, stage context and in-loop unmerged-path check (review_autofix.yml, issue #9886)."
+		},
+		{
 			"name": "CONSUMER_DRIFT_REPAIR_ENABLED",
 			"default": "true",
 			"stage": "false keeps the daily consumer drift audit and its Telegram alert but opens no restore pull requests (logs DRIFT_REPAIR outcome=disabled)."
@@ -290,6 +306,12 @@
 			"name": "HEAL_COUNTERFACTUAL_GATE_ENABLED",
 			"default": "true",
 			"stage": "Turns on heal counterfactual gate (orchestrate_poll.yml, plan.yml); false turns that stage off."
+		},
+		{
+			"name": "HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED",
+			"default": "true",
+			"stage": "Escalates and then closes as not planned an unanswered heal counterfactual hold (orchestrate_poll.yml, issue #9986).",
+			"on_values": ["1", "yes", "on"]
 		},
 		{
 			"name": "HEAL_INTAKE_QUEUE_ENABLED",
@@ -469,6 +491,12 @@
 			"stage": "Turns on plan isolated base (plan.yml); false turns that stage off."
 		},
 		{
+			"name": "PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED",
+			"default": "true",
+			"stage": "Verifies a nothing-to-implement planning block by running its listed tests and closes the issue when they pass (plan.yml #10015, unblock_judge.yml #10062).",
+			"on_values": ["1", "yes", "on"]
+		},
+		{
 			"name": "PLAN_SELF_CHECK_ENABLED",
 			"default": "true",
 			"stage": "Turns on plan self check (plan.yml); false turns that stage off."
@@ -568,6 +596,12 @@
 			"name": "RESOLVER_NON_RETRYABLE_ESCALATE_ENABLED",
 			"default": "true",
 			"stage": "When true (default), an integration-sync resolver failure the sandbox will repeat on every run (sandbox_path_host_only, sandbox_path_unsupported, sandbox_support_missing) marks the final PR's AUTOFIX_RESOLVER_RETRY_ST..."
+		},
+		{
+			"name": "RESOLVER_PROVENANCE_CHECK_ENABLED",
+			"default": "true",
+			"stage": "Conflict resolver provenance check: resolved regions must come from ours or theirs (review_autofix.yml, issue #9842).",
+			"on_values": ["1", "yes", "on"]
 		},
 		{
 			"name": "RETARGET_MERGED_BASE_ENABLED",
@@ -728,6 +762,12 @@
 			"stage": "Issue #9732: the stall-recovery attempt_merge arm merges only under the review auto-merge rule (fresh base, required checks) (orchestrate_poll.yml)."
 		},
 		{
+			"name": "STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED",
+			"default": "true",
+			"stage": "Stall judge picks the issue's implementation PR before a docs/plans-only cross-reference (orchestrate_poll.yml, issue #9986).",
+			"on_values": ["1", "yes", "on"]
+		},
+		{
 			"name": "STALL_RETIRED_CONFLICT_REISSUE_ENABLED",
 			"default": "true",
 			"stage": "Turns on stall retired conflict reissue (orchestrate_poll.yml); false turns that stage off."
@@ -768,6 +808,11 @@
 			"stage": "Turns on triage pr head branch metadata (check_failure_triage.yml); false turns that stage off."
 		},
 		{
+			"name": "UNBLOCK_EXISTING_PR_ROUTING_ENABLED",
+			"default": "true",
+			"stage": "Unblock judge reset and stall recovery dispatch review on an open implementation PR instead of posting /approved (unblock_judge.yml, orchestrate_poll.yml, issue #9809)."
+		},
+		{
 			"name": "UNBLOCK_FIXUP_DELIVERED_CLOSE_ENABLED",
 			"default": "true",
 			"stage": "When a fix-up the judge filed merged into the default branch through its ai/issue-<f> pull request, and that pull request changed every file a standalone, pipeline-authored ai:workflow-heal issue lists under ## Affect..."
@@ -776,6 +821,12 @@
 			"name": "UNBLOCK_HEAL_ALREADY_FIXED_ENABLED",
 			"default": "true",
 			"stage": "Before judging a blocked ai:workflow-heal issue, the judge looks for a sibling with the same source= marker and failure reason (or, for kinds without a reason line, the same fingerprint): another heal issue, or an unb..."
+		},
+		{
+			"name": "UNBLOCK_HOLD_PATCH_EQUIVALENCE_ENABLED",
+			"default": "true",
+			"stage": "Unblock judge counts a pr_on_branch hold as met when a patch-equivalent commit is on the branch (unblock_judge.yml, issue #9967).",
+			"on_values": ["1", "yes", "on"]
 		},
 		{
 			"name": "UNBLOCK_INSTRUCTION_SANDBOX_CHECK_ENABLED",
@@ -806,6 +857,12 @@
 			"name": "UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED",
 			"default": "true",
 			"stage": "When a fix-up the judge filed is done (merged, or closed as already implemented) and the newest pipeline \"Planning blocked\" comment on a standalone issue gives the reason work is already on the planning ref; nothing t..."
+		},
+		{
+			"name": "UNBLOCK_PLACEHOLDER_RECURRENCE_CHECK_ENABLED",
+			"default": "true",
+			"stage": "Unblock judge closes a placeholder_retired-held heal issue whose failure did not come back (unblock_judge.yml, issue #9967).",
+			"on_values": ["1", "yes", "on"]
 		},
 		{
 			"name": "UNBLOCK_TRIAGE_NOTHING_TO_IMPLEMENT_GATE_ENABLED",
@@ -856,6 +913,12 @@
 			"name": "WORKFLOW_HEAL_PR_RECONCILE_ENABLED",
 			"default": "true",
 			"stage": "Turns on workflow heal pr reconcile (internal-cancel-on-pr-close.yml); false turns that stage off.",
+			"on_values": ["1", "yes", "on"]
+		},
+		{
+			"name": "WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED",
+			"default": "true",
+			"stage": "Heal intake groups red default-branch push CI runs of one failing job into one open heal issue (workflow-failure-heal-intake.yml, issue #9823).",
 			"on_values": ["1", "yes", "on"]
 		},
 		{
