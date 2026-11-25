@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"agents.d/9750-stall-recovery-pr-ai-hold.md: two bullets corrected (scope is now every phase and every action)\"\n  expected_change_site: agents.d/9750-stall-recovery-pr-ai-hold.md\n  confidence=[3]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  EVIDENCE: agents.d/9750-stall-recovery-pr-ai-hold.md is not in the PR changed-files list or original_pr_diff.patch, the fragment was deleted in an earlier autofix round, the corrected wording is in agents.md lines 2070-2084 as a one-for-one replacement allowed by \u00a725, so this is a description path mismatch (severity NIT) and not missing behaviour\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"agents.d/9750-stall-recovery-pr-ai-hold.md: two bullets corrected (scope is now every phase and every action)\"\nExpected change site: agents.d/9750-stall-recovery-pr-ai-hold.md\nEvidence of absence: That fragment is not in the PR changed-files list. An earlier autofix round deleted it because the text had already been folded into `agents.md`. The corrected wording is in `agents.md` lines 2070-2084 as a one-for-one replacement, which \u00a725 allows. The substance is delivered under a different path than the PR description names, so this is a description mismatch and not missing behaviour.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"agents.d/9750-stall-recovery-pr-ai-hold.md: two bullets corrected (scope is now every phase and every action)\" (PR description \"Docs\" section).\nExpected change site: agents.d/9750-stall-recovery-pr-ai-hold.md (the file the PR description names).\nEvidence of absence: agents.d/9750-stall-recovery-pr-ai-hold.md is not in pr_changed_files.txt and does not appear in original_pr_diff.patch. The corrected bullets live in agents.md lines 2070-2084 as a one-for-one replacement (allowed by \u00a725 as a correction), and the duplicate fragment was deleted in an earlier autofix round. The substantive deliverable is met, just under a different file path than the PR description references.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "418a36b025d0b91eb3fcfbd8de62d8fc18e6fafcee2e08f5e1b65da1b1d8a474",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9832,
+    "run_id": "45566921780",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45566921780",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261125091755_63b3c462ee",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9832,
+    "run_id": "45566921780"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-25T09:17:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
