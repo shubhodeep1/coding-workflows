@@ -732,7 +732,37 @@ fi
 if [ -n "${SKIP_REASON}" ]; then
 	log "skip reason=${SKIP_REASON} source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none}"
 	if [ "${SKIP_REASON}" = "unregistered_source_repo" ]; then
-		tg_send_msg "Workflow failure heal intake ignored a report from unregistered repository ${SOURCE_REPO} (add it to .github/ai/consumer_repos.json to opt in)."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		# At most one WARNING per source repo per UTC day. The workflow looks up
+		# an actions/cache marker keyed by repo and day before this step and
+		# passes the hit as WORKFLOW_HEAL_UNREGISTERED_WARNED_TODAY; anything
+		# but "true" (miss, lookup failure, local run) sends the WARNING (fail
+		# open). After a WARNING the marker file and step output tell the
+		# workflow's save step to store the marker. No GitHub API call.
+		unregistered_alert_text="Workflow failure heal intake ignored a report from unregistered repository ${SOURCE_REPO} (add it to .github/ai/consumer_repos.json to opt in)."$'\n'"Run: ${RUN_URL}"
+		if [ "${WORKFLOW_HEAL_UNREGISTERED_WARNED_TODAY:-false}" = "true" ]; then
+			log "unregistered_source_repo_alert level=DEBUG reason=already_warned_today source=${SOURCE_REPO}"
+			tg_send_msg "${unregistered_alert_text}" "DEBUG" >/dev/null 2>&1 || true
+		else
+			log "unregistered_source_repo_alert level=WARNING source=${SOURCE_REPO}"
+			# tg_send_msg returns 0 even when nothing was delivered (curl failure,
+			# Telegram error, missing credentials, level filtered); the printed
+			# message_id is the only delivery signal. Mark today as warned only
+			# when Telegram accepted the WARNING, so a failed send is retried by
+			# the next report instead of downgrading the rest of the day to DEBUG.
+			unregistered_alert_msg_id="$(tg_send_msg "${unregistered_alert_text}" "WARNING" 2>/dev/null || true)"
+			if [ -n "${unregistered_alert_msg_id}" ]; then
+				# The cache path must be the same in every run (actions/cache versions
+				# entries by path), so it is not under the per-run RUNTIME_DIR.
+				unregistered_marker_path="${WORKFLOW_HEAL_UNREGISTERED_MARKER:-${RUNTIME_DIR}/heal_unregistered_warned}"
+				# Never follow a pre-existing file or symlink at the fixed path.
+				rm -f -- "${unregistered_marker_path}" 2>/dev/null || true
+				if printf '%s\n' "${SOURCE_REPO}" > "${unregistered_marker_path}" 2>/dev/null; then
+					echo "heal_unregistered_warned=true" >> "${GITHUB_OUTPUT:-/dev/null}" 2>/dev/null || true
+				fi
+			else
+				log "unregistered_source_repo_alert marker=skipped reason=not_delivered source=${SOURCE_REPO}"
+			fi
+		fi
 	fi
 	exit 0
 fi
@@ -1572,7 +1602,19 @@ if [[ "${SOURCE_KIND}" == "phase_failure" || "${SOURCE_KIND}" == "autofix_failur
 	if [ "$(jq -r '.status' "${PROVENANCE_RESULT}")" != "ok" ]; then
 		PROVENANCE_REASON="$(jq -r '.reason // "verifier_error"' "${PROVENANCE_RESULT}")"
 		log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=${PROVENANCE_REASON}"
-		tg_send_msg "Workflow failure heal rejected run provenance for ${SOURCE_REPO} (${SOURCE_KIND}, issue ${ISSUE_NUMBER:-none}, reason ${PROVENANCE_REASON})."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		# Expected, correct rejections go out at DEBUG: a CI run that is not a
+		# default-branch push (a PR branch), and a cited run that finished
+		# without failing (current_run_rejected:not_failed, or no_verified_runs
+		# where every rejection is not_failed). Everything else stays WARNING.
+		PROVENANCE_ALERT_LEVEL="WARNING"
+		if jq -e '(.reason == "current_run_rejected:ci_not_default_branch_push")
+			or (.reason == "current_run_rejected:not_failed")
+			or (.reason == "no_verified_runs" and (.rejections | length) > 0 and all(.rejections[]; .reason == "not_failed"))' \
+			"${PROVENANCE_RESULT}" >/dev/null 2>&1; then
+			PROVENANCE_ALERT_LEVEL="DEBUG"
+		fi
+		log "provenance_rejected_alert level=${PROVENANCE_ALERT_LEVEL} source=${SOURCE_REPO} kind=${SOURCE_KIND} detail=${PROVENANCE_REASON}"
+		tg_send_msg "Workflow failure heal rejected run provenance for ${SOURCE_REPO} (${SOURCE_KIND}, issue ${ISSUE_NUMBER:-none}, reason ${PROVENANCE_REASON})."$'\n'"Run: ${RUN_URL}" "${PROVENANCE_ALERT_LEVEL}" >/dev/null 2>&1 || true
 		exit 0
 	fi
 	PENDING_CURRENT_RUN="$(jq -r '.pending_current_run // ""' "${PROVENANCE_RESULT}")"
