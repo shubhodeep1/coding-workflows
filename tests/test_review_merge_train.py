@@ -3380,8 +3380,10 @@ def test_merge_lease_tick_metrics_are_additive_and_guarded():
 	calls = [line.strip() for line in body.splitlines() if "_merge_lease_metric " in line and "declare -F" not in line]
 	# 9 Phase 1 calls plus Phase 2's skipped (skip_head_unchanged, ineligible)
 	# and no_waiter reason=no_eligible_waiter, plus #9983's skipped
-	# skip_head_unchanged for a candidate still held by a soft skip entry.
-	assert len(calls) == 13, calls
+	# skip_head_unchanged for a candidate still held by a soft skip entry, plus
+	# #10121's skipped reason=source_issue_not_planned for an orphan of a re-issue.
+	assert len(calls) == 14, calls
+	assert sum(1 for call in calls if " tick source_issue_not_planned " in call) == 1, calls
 	for call in calls:
 		assert call.startswith('[ "${tick_metric_ok}" = 1 ] && _merge_lease_metric '), call
 		assert call.endswith("|| true"), call
