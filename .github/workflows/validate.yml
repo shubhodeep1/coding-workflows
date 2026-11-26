@@ -119,7 +119,7 @@ env:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
     timeout-minutes: 180
     outputs:
       status: ${{ steps.collect_status.outputs.status }}
@@ -1943,7 +1943,7 @@ jobs:
       inputs.tracking_issue != '' && inputs.tracking_issue != '0' &&
       !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED) &&
       !contains(fromJson('["false"]'), vars.VALIDATION_HARNESS_HEAL_ENABLED)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       id-token: write

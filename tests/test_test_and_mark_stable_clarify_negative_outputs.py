@@ -245,7 +245,9 @@ class ClarifyNegativeOutputsTest(unittest.TestCase):
 			STUB_ISSUE_OUT="9782\n",
 		)
 		self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-		self.assertEqual(self._outputs(), ["pre_clarify_run_id=123", "issue_number=9782"])
+		# created_after_epoch (issue #10037) scopes the gate-cancel step; the
+		# fake `date +%s` starts at 1000.
+		self.assertEqual(self._outputs(), ["pre_clarify_run_id=123", "created_after_epoch=1000", "issue_number=9782"])
 
 	def test_create_step_non_numeric_issue_number_fails_closed(self) -> None:
 		for issue_out in ("", "null\n", "12abc\n"):

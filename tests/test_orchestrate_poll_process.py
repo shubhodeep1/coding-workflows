@@ -1027,6 +1027,9 @@ def _run_poller(
 	branch_rebuild_cooldown_hours: str = "48",
 	codex_touch_file: str | None = None,
 	mock_rb_judge_prompt_cap: int | None = None,
+	# Issue #9821: on a local jq < 1.7 (which reserves `$label`), rename the
+	# variable in the sandbox copy's has_label; a no-op on jq >= 1.7.
+	old_jq_has_label_compat: bool = False,
 	mock_orch_state_v2_pack_mode: str | None = None,
 	mock_git_push_success: bool = False,
 	mock_git_checkout_fail: bool = False,
@@ -1184,6 +1187,13 @@ def _run_poller(
 			poller_text = poller_copy.read_text(encoding="utf-8")
 			assert poller_text.count(guard) == 1
 			poller_copy.write_text(poller_text.replace(guard, f'if [ "${{RB_JUDGE_PROMPT_CHARS}}" -gt {mock_rb_judge_prompt_cap} ]; then'), encoding="utf-8")
+		if old_jq_has_label_compat and _jq_reserves_label_keyword():
+			# Same rename as tests/orchestrate_tracking_auto_close_cases.py.
+			poller_copy = sandbox / "scripts/orchestrate_poll_process.sh"
+			has_label_jq = "jq -e --arg label \"${label}\" 'index($label) != null'"
+			poller_text = poller_copy.read_text(encoding="utf-8")
+			assert poller_text.count(has_label_jq) == 1
+			poller_copy.write_text(poller_text.replace(has_label_jq, "jq -e --arg wanted \"${label}\" 'index($wanted) != null'"), encoding="utf-8")
 		# The poller's RB_JUDGE no longer invokes the host codex mock. Give
 		# review-blocked scenarios a credential-free sandbox stand-in that
 		# preserves the old verdict/combined-fix fixture semantics.
@@ -4079,6 +4089,11 @@ sys.exit(proc.returncode)
 		# Exercise the script default of the automation-path plan gate (#7181)
 		# unless a test sets the flag through env_overrides.
 		env.pop("AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED", None)
+		# An Actions runner's real GITHUB_RUN_ID is never in the mocked
+		# actions-runs fixtures, so the stall self-run check
+		# (_ensure_actions_runs_blob_has_self_run) would force an extra live
+		# fetch only in CI. Tests that need a run id set it via env_overrides.
+		env.pop("GITHUB_RUN_ID", None)
 		# A CI runner's own Actions identity must not turn on the poller's
 		# release-blocker reporter (producer gate, OIDC) unless a test asks.
 		for actions_identity_var in ("GITHUB_WORKFLOW_REF", "ACTIONS_ID_TOKEN_REQUEST_URL", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", "RELEASE_BLOCKER_HEAL_ENABLED", "RELEASE_BLOCKER_HEAL_PY"):
@@ -6343,6 +6358,10 @@ def test_staged_support_latch_release_is_source_only_and_compensates_comment_fai
 		env_overrides={
 			"GITHUB_REPOSITORY": "owner/consumer",
 			"ORCHESTRATE_ENGINE_SHA": engine_sha,
+			# The PR-only head-bound latch release (PR #9839) lists
+			# ai:needs-human in every repository; off here so the listing
+			# check below still proves the staged-support sweep is source-only.
+			"NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED": "false",
 		},
 	)
 	assert "ai:needs-human" in consumer["issues"]["700"]["labels"]
@@ -12699,9 +12718,11 @@ def test_review_blocked_fix_target_rejects_head_move_during_judge():
 		}
 		result = _review_blocked_fix_scope_case(
 			touch="sandbox_fix.txt", files=["sandbox_fix.txt"],
-			# Reconciliation and branch prep consume six pulls/901 reads; the
-			# subsequent re-check must see the changed SHA.
-			pr_api_sequence={901: [dict(open_pr) for _ in range(6)] + [{**open_pr, **changed_pr}]},
+			# Reconciliation and branch prep consume five live pulls/901 reads
+			# (one more is served by the #9927 PR JSON cycle cache); the
+			# re-check is invalidated first, so it reads live and must see the
+			# changed SHA.
+			pr_api_sequence={901: [dict(open_pr) for _ in range(5)] + [{**open_pr, **changed_pr}]},
 		)
 		try:
 			_assert_in_poller_stdout(f"issue=10 pr=901 reason={reason}", result)
@@ -12745,6 +12766,11 @@ def test_review_blocked_merged_fix_target_rejects_unrelated_followup():
 			existing_branches=["main", "orchestrator/project-192"],
 			codex_json={"action": "fix", "justification": "apply fixes", "fix_description": "patched"},
 			codex_touch_file="sandbox_fix.txt", mock_git_push_success=True,
+			# The scenario is a PR that merges between the wave reconcile read
+			# and the review-blocked read in the same cycle. The #9927 PR JSON
+			# cache serves the second read from the first (the accepted
+			# in-cycle staleness), so the scenario only exists with it off.
+			env_overrides={"ORCH_POLL_PR_JSON_CACHE_TTL_SECS": "0"},
 		)
 		try:
 			_assert_in_poller_stdout(f"issue=10 pr=901 reason={reason}", result)
@@ -12753,6 +12779,26 @@ def test_review_blocked_merged_fix_target_rejects_unrelated_followup():
 			assert len(result["prs"]) == 1
 		except AssertionError as exc:
 			failures.append((reason, str(exc)))
+		if reason != "cross_repository":
+			continue
+		# Production default (cache on): the invalidated post-judge re-fetch
+		# still reads live and must block the push to the fork follow-up.
+		cached = _run_poller(
+			state=state, enable_validation="false", max_validate_cycles="3",
+			issue_labels={10: ["ai:review-blocked"]}, issue_linked_prs={10: 901},
+			pr_api_sequence={901: [dict(open_pr) for _ in range(4)] + [dict(merged_pr)]},
+			prs=[{**merged_pr, "files": ["sandbox_fix.txt"]}],
+			existing_branches=["main", "orchestrator/project-192"],
+			codex_json={"action": "fix", "justification": "apply fixes", "fix_description": "patched"},
+			codex_touch_file="sandbox_fix.txt", mock_git_push_success=True,
+		)
+		try:
+			_assert_in_poller_stdout("REVIEW_BLOCKED_FIX_TARGET_REJECTED issue=10 pr=901 reason=head_repo_mismatch", cached)
+			assert cached.get("git_push_calls", []) == [] and cached.get("review_blocked_fix_commit_calls", []) == []
+			# Pin that the cache really served a read (not a repeat of the TTL=0 run).
+			assert re.search(r"^ORCH_POLL_CYCLE_SUMMARY .* cache_hits_pr_json=[1-9]\d* ", str(cached.get("stdout", "")), re.MULTILINE), _poller_stdout_tail(cached)
+		except AssertionError as exc:
+			failures.append((reason + "/cache_on", str(exc)))
 	assert not failures, failures
 
 
@@ -16897,6 +16943,196 @@ def test_managed_skip_retries_timeline_discovery_failure_without_closing_issue()
 	)
 
 
+# Issue #9733 owner-hold cases. Their `test_zz_pr_ai_hold_` prefix sorts them
+# after every other test in this module. CI's orchestrate-poll job deals the
+# sorted names round-robin (`NR % total`) to groups and then to shards.
+# Names inserted mid-list moved 626 of 896 existing tests to another group or
+# shard, and orchestrate-poll (1) and (2) hit their 20-minute timeout.
+# Appended names leave every existing test's group and shard unchanged.
+def _managed_held_pr_run(phase: str, recovery_count: int, pr_extra: dict, **extra) -> dict:
+	"""Issue #9733: managed issue #10 in `phase` with implementation PR #91."""
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = phase
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = recovery_count
+	pr = {
+		"number": 91,
+		"body": "Closes #10",
+		"state": "open",
+		"mergeable": True,
+		"mergeable_state": "clean",
+		"headRefName": "ai/issue-10",
+		"headRefFromApi": "ai/issue-10",
+		"headSha": "sha91",
+		"baseRefName": "main",
+		"title": "AI implementation for issue #10",
+	}
+	pr.update(pr_extra)
+	# Switch-off parity: the `skip` close-out (close_linked_pr, then the issue
+	# close) only runs with the fingerprint breaker off; with the default
+	# (`true`) exhaustion escalates to ai:needs-human and never reaches it.
+	extra.setdefault("env_overrides", {"STALL_FINGERPRINT_BREAKER_ENABLED": "false"})
+	return _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: [phase]},
+		issue_linked_prs={10: 91},
+		prs=[pr],
+		mock_git_push_success=True,
+		**extra,
+	)
+
+
+def _assert_managed_held_pr_left_alone(result: dict, detail: str, phase: str, requested: str, recovery_count: int) -> None:
+	assert (
+		f"STALL_SKIP issue=10 reason=pr_ai_hold pr=91 detail={detail} phase={phase} action=none requested_action={requested}"
+		in result["stdout"]
+	), result["stdout"]
+	assert "close_linked_pr: closing linked PR #91" not in result["stdout"]
+	assert result["issues"]["10"].get("closed", False) is False
+	assert "ai:closed" not in result["issues"]["10"]["labels"]
+	assert result.get("review_dispatches", []) == []
+	assert result.get("git_push_calls", []) == []
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == recovery_count
+	assert issue_entry["status_since_ts"] == 1
+
+
+def test_zz_pr_ai_hold_managed_skip_leaves_held_pr_in_awaiting_approval_open():
+	# Issue #9733 / PR #9744: an exhausted ai:awaiting-approval issue took
+	# `skip` and close_linked_pr closed the owner-held PR.
+	result = _managed_held_pr_run(
+		"ai:awaiting-approval", 5,
+		{"draft": True, "title": "[skip ai] AI implementation for issue #10"},
+	)
+	assert "Action: skip" in result["stdout"], result["stdout"]
+	_assert_managed_held_pr_left_alone(result, "draft", "ai:awaiting-approval", "skip", 5)
+
+
+def test_zz_pr_ai_hold_managed_skip_leaves_held_pr_open_when_cache_lacks_hold_fields():
+	# Cache without isDraft/title: the guard in recover_stalled_issue fails
+	# open, and the skip arm's REST implementation-PR payload catches the hold.
+	result = _managed_held_pr_run(
+		"ai:awaiting-approval", 5,
+		{"title": "[skip ai] AI implementation for issue #10"},
+		mock_store_extra={"graphql_omit_pr_hold_fields": True},
+	)
+	assert "Action: skip" in result["stdout"], result["stdout"]
+	_assert_managed_held_pr_left_alone(result, "skip_ai_title", "ai:awaiting-approval", "skip", 5)
+
+
+def test_zz_pr_ai_hold_managed_implementing_held_pr_skips_dispatch_action():
+	result = _managed_held_pr_run("ai:implementing", 0, {"draft": True})
+	assert "STALL_SKIP issue=10 reason=pr_ai_hold" in result["stdout"], result["stdout"]
+	# Pin the stall detector's action for a fresh ai:implementing stall so a
+	# regression to `skip` (or any other action) fails here.
+	assert "Action: retrigger_implement" in result["stdout"], result["stdout"]
+	_assert_managed_held_pr_left_alone(result, "draft", "ai:implementing", "retrigger_implement", 0)
+	assert "reason=open_linked_pr" not in result["stdout"]
+
+
+def test_zz_pr_ai_hold_managed_implementing_held_conflicted_pr_gets_no_resolver_when_cache_lacks_hold_fields():
+	# Cache without isDraft/title: the pre-action hold guard fails open, and
+	# the early-phase open-PR guard's REST payload must catch the hold before
+	# routing the merge conflict to the resolver.
+	result = _managed_held_pr_run(
+		"ai:implementing", 0,
+		{"draft": True, "mergeable": False, "mergeable_state": "dirty"},
+		mock_store_extra={"graphql_omit_pr_hold_fields": True},
+	)
+	assert "Action: retrigger_implement" in result["stdout"], result["stdout"]
+	_assert_managed_held_pr_left_alone(result, "draft", "ai:implementing", "retrigger_implement", 0)
+	assert "reason=open_pr_merge_conflict" not in result["stdout"]
+
+
+def test_zz_pr_ai_hold_managed_skip_still_closes_unheld_pr_in_awaiting_approval():
+	result = _managed_held_pr_run("ai:awaiting-approval", 5, {"draft": False})
+	assert "Action: skip" in result["stdout"], result["stdout"]
+	assert "reason=pr_ai_hold" not in result["stdout"]
+	assert "close_linked_pr: closing linked PR #91 for issue #10" in result["stdout"], result["stdout"]
+	assert "ai:closed" in result["issues"]["10"]["labels"]
+
+
+def _standalone_exhausted_run(pr_extra: dict, **extra) -> dict:
+	"""Standalone ai:awaiting-approval issue #501 past its cap, PR #420."""
+	standalone_state_comment = (
+		"<!-- AI_STANDALONE_STALL_STATE_V1\n"
+		+ json.dumps({
+			"schema_version": 1,
+			"last_seen_phase": "ai:awaiting-approval",
+			"status_since_ts": 1,
+			"stall_recovery_count": 0,
+			"phase_attempts": {"ai:awaiting-approval": 5},
+		})
+		+ "\nAI_STANDALONE_STALL_STATE_V1 -->"
+	)
+	pr = {
+		"number": 420,
+		"body": "Automated implementation. Closes #501",
+		"state": "open",
+		"baseRefName": "main",
+		"headRefName": "ai/issue-501",
+		"headRefFromApi": "ai/issue-501",
+		"headSha": "0000000000000000000000000000000000000420",
+		"mergeable": True,
+		"mergeable_state": "clean",
+		"title": "AI implementation for issue #501",
+	}
+	pr.update(pr_extra)
+	# Switch-off parity: the exhausted close-out only runs with the
+	# fingerprint breaker off (the default escalates to ai:needs-human).
+	extra.setdefault("env_overrides", {"STALL_FINGERPRINT_BREAKER_ENABLED": "false"})
+	return _run_poller(
+		state=_base_state(status="complete"),
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:merged"], 501: ["ai:awaiting-approval"]},
+		issue_comments={501: [standalone_state_comment]},
+		issue_linked_prs={501: 420},
+		mock_gh_issue_list_label_filter=True,
+		prs=[pr],
+		**extra,
+	)
+
+
+def _assert_standalone_exhausted_held(result: dict, detail: str) -> None:
+	assert "STALL_SKIP issue=501 reason=pr_ai_hold pr=420" in result["stdout"], result["stdout"]
+	assert f"detail={detail} phase=ai:awaiting-approval action=none requested_action=skip" in result["stdout"]
+	assert "close_linked_pr: closing linked PR #420" not in result["stdout"]
+	assert "ai:closed" not in result["issues"]["501"]["labels"]
+	assert not any(
+		close_call["issue"] == 501 for close_call in result.get("issue_close_short_comments", [])
+	)
+	standalone_state = _extract_latest_standalone_state(result["issues"]["501"]["comments"])
+	assert standalone_state is None or standalone_state.get("status_since_ts") == 1
+
+
+def test_zz_pr_ai_hold_standalone_exhausted_close_leaves_held_pr_open():
+	_assert_standalone_exhausted_held(_standalone_exhausted_run({"draft": True}), "draft")
+
+
+def test_zz_pr_ai_hold_standalone_exhausted_close_leaves_held_pr_open_when_cache_lacks_hold_fields():
+	# Batched linked_pr without isDraft/title: close_linked_pr's REST payload
+	# catches the hold and the issue stays open.
+	result = _standalone_exhausted_run(
+		{"title": "[skip ai] held"},
+		mock_store_extra={"graphql_omit_pr_hold_fields": True},
+	)
+	assert "close_linked_pr: skipping PR #420 for issue #501 (owner hold: reason=pr_ai_hold detail=skip_ai_title)" in result["stdout"], result["stdout"]
+	assert "source=close_linked_pr" in result["stdout"]
+	_assert_standalone_exhausted_held(result, "skip_ai_title")
+
+
+def test_zz_pr_ai_hold_standalone_exhausted_close_still_closes_unheld_pr():
+	result = _standalone_exhausted_run({"draft": False})
+	assert "reason=pr_ai_hold" not in result["stdout"]
+	assert "close_linked_pr: closing linked PR #420 for issue #501" in result["stdout"], result["stdout"]
+	assert "ai:closed" in result["issues"]["501"]["labels"]
+
+
 def test_standalone_stall_recovery_skips_when_phase_attempts_exhausted():
 	state = _base_state(status="complete")
 	standalone_state_comment = (
@@ -21038,7 +21274,9 @@ def test_close_merged_issues_sweep_default_branch_unavailable_closes_nothing():
 	# FINAL_DEFAULT_BRANCH falls back to a literal "main" on lookup failure,
 	# so the sweep must not reuse it.
 	assert "${FINAL_DEFAULT_BRANCH" not in body
-	assert "--jq '.default_branch'" in body
+	# Issue #9927: the read goes through the shared default-branch wrapper
+	# with an empty fallback, so a failed lookup still yields "".
+	assert '_sweep_default_branch="$(_orch_poll_default_branch_or_live "" quiet)"' in body
 	assert "|| echo main" not in body
 	assert "CLOSE_MERGED_SWEEP outcome=skip reason=default_branch_unavailable" in body
 	skip_pos = body.index("reason=default_branch_unavailable")
@@ -21726,7 +21964,12 @@ def test_stall_judge_keeps_escalation_when_linked_pr_merged_into_non_target_base
 	body = script[start:script.index("\n}\n", start)]
 	normalize = body.index('effective_action="$(normalize_stall_recovery_action')
 	keep = body.index('_stall_judge_linked_pr_keeps_escalation "${issue_num}" "${linked_pr_json}"')
-	assert normalize < keep < body.index("**Decision (effective):** ${effective_action}")
+	# Issue #9520 renders the effective decision through _judge_effective_label
+	# (so a held escalation reads "escalate_human (held: ...)"); the label must
+	# still be computed from effective_action after the keep-escalation override.
+	label = body.index('local _judge_effective_label="${effective_action}"')
+	decision = body.index("**Decision (effective):** ${_judge_effective_label}")
+	assert normalize < keep < label < decision
 	assert '[ "${judge_action}" = "escalate_human" ] && [ "${effective_action}" = "attempt_merge" ]' in body
 	assert '"${_keep_escalation_managed}" "${_keep_escalation_declared}"; then' in body
 	assert "extract-integration-branch" in body[normalize:keep]
@@ -23565,6 +23808,81 @@ def test_stall_judge_escalate_human_adds_needs_human_label_and_increments_counte
 	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
 	assert issue_entry["stall_recovery_count"] == 3
 	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+
+
+def _jq_reserves_label_keyword() -> bool:
+	# jq 1.6 rejects `$label` (reserved until jq 1.7, which Actions runners ship).
+	if not shutil.which("jq"):
+		return False
+	version = subprocess.run(["jq", "--version"], text=True, capture_output=True, check=False).stdout.strip()
+	return re.fullmatch(r"jq-1\.[0-6](\.\d+)?", version) is not None
+
+
+def _run_stall_escalate_human_comment_poller(**overrides):
+	# Issue #9821: shared setup for the escalate_human issue-comment tests.
+	state = _base_state(status="in_progress")
+	issue = state["waves"][0]["issues"][0]
+	issue["status"] = "in_progress"
+	issue["last_seen_phase"] = "ai:implementing"
+	issue["status_since_ts"] = 1
+	issue["stall_recovery_count"] = 2
+	return _run_poller(
+		state=state,
+		enable_validation="false",
+		max_validate_cycles="3",
+		issue_labels={10: ["ai:implementing"]},
+		enable_stall_human_terminalization="true",
+		mock_stall_judge_json={
+			"action": "escalate_human",
+			"justification": "needs operator",
+			"target_pr": None,
+			"head_ref": None,
+		},
+		old_jq_has_label_compat=True,
+		**overrides,
+	)
+
+
+def test_stall_escalate_human_comment_posted_after_judge_escalation():
+	result = _run_stall_escalate_human_comment_poller()
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+	marker_comments = [
+		c.get("body", "")
+		for c in result["issues"]["10"]["comments"]
+		if "ai:stall-escalate-human:v1" in c.get("body", "")
+	]
+	assert len(marker_comments) == 1, result["issues"]["10"]["comments"]
+	body = marker_comments[0]
+	assert "## Stall recovery: human input needed" in body
+	assert "needs operator" in body
+	assert "#192" in body
+	assert "remove `ai:needs-human`" in body
+	assert "<!-- ai:stall-escalate-human:v1 issue=10 phase=ai:implementing -->" in body
+	assert (
+		"STALL_ESCALATE_HUMAN_COMMENT issue=10 phase=ai:implementing source=stall_judge outcome=posted"
+		in result["stdout"]
+	), result["stdout"]
+
+
+def test_stall_escalate_human_comment_skipped_when_label_unconfirmed():
+	result = _run_stall_escalate_human_comment_poller(fail_issue_edit_for=[10])
+	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
+	assert not any(
+		"ai:stall-escalate-human:v1" in c.get("body", "")
+		for c in result["issues"]["10"]["comments"]
+	)
+	assert "STALL_ESCALATE_HUMAN_COMMENT" not in result["stdout"]
+
+
+def test_stall_escalate_human_comment_write_failure_is_logged_and_nonfatal():
+	result = _run_stall_escalate_human_comment_poller(fail_issue_comment_post_for=[10])
+	assert (
+		"STALL_ESCALATE_HUMAN_COMMENT issue=10 phase=ai:implementing source=stall_judge outcome=write_failed"
+		in result["stdout"]
+	), result["stdout"]
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+	issue_entry = result["latest_state"]["waves"][0]["issues"][0]
+	assert issue_entry["stall_recovery_count"] == 3
 
 
 def test_stall_judge_escalate_human_is_downgraded_when_human_terminalization_disabled():
@@ -30468,6 +30786,7 @@ def test_close_linked_pr_only_closes_the_issues_own_implementation_pr():
 	script = POLLER_SCRIPT.read_text(encoding="utf-8")
 	helper = _extract_bash_function(script, "_linked_pr_is_issue_implementation()\n{")
 	closer = _extract_bash_function(script, "close_linked_pr() {")
+	hold_helper = _extract_bash_function(script, "_stall_pr_ai_hold_reason()\n{")
 	with tempfile.TemporaryDirectory() as tmp:
 		closed_log = Path(tmp) / "closed.txt"
 		api_log = Path(tmp) / "api.txt"
@@ -30486,12 +30805,15 @@ def test_close_linked_pr_only_closes_the_issues_own_implementation_pr():
 			"    103) printf '%s' '{\"state\":\"open\",\"head_ref\":\"feature/x\",\"base_ref\":\"orchestrator/project-9\",\"body\":\"Closes #77\"}' ;;\n"
 			"    104) printf '%s' '{\"state\":\"closed\",\"head_ref\":\"ai/issue-77\",\"base_ref\":\"main\",\"body\":\"\"}' ;;\n"
 			"    105) return 1 ;;\n"
+			"    106) printf '%s' '{\"state\":\"open\",\"head_ref\":\"ai/issue-77\",\"base_ref\":\"main\",\"body\":\"impl\",\"draft\":true,\"title\":\"impl\"}' ;;\n"
+			"    107) printf '%s' '{\"state\":\"open\",\"head_ref\":\"ai/issue-77\",\"base_ref\":\"main\",\"body\":\"impl\",\"draft\":false,\"title\":\"[skip ai] impl\"}' ;;\n"
 			"  esac\n"
 			"}\n"
 			'gh() { if [ "$1" = pr ] && [ "$2" = close ]; then echo "$3" >> "$CLOSED_LOG"; return 0; fi; return 1; }\n'
-			"_find_all_linked_prs() { printf '101\\n102\\n103\\n104\\n105\\n'; }\n"
-			+ helper + "\n" + closer + "\n"
-			'close_linked_pr 77 "why"\n',
+			"_find_all_linked_prs() { printf '101\\n102\\n103\\n104\\n105\\n106\\n107\\n'; }\n"
+			+ helper + "\n" + hold_helper + "\n" + closer + "\n"
+			'close_linked_pr 77 "why"\n'
+			'echo "HELD=${CLOSE_LINKED_PR_HELD_PRS} DETAIL=${CLOSE_LINKED_PR_HELD_DETAIL}"\n',
 			encoding="utf-8",
 		)
 		result = subprocess.run(
@@ -30513,10 +30835,14 @@ def test_close_linked_pr_only_closes_the_issues_own_implementation_pr():
 		assert "close_linked_pr: closing linked PR #103 for issue #77 (state=open)." in out
 		assert "close_linked_pr: skipping PR #104 for issue #77 (state=closed)." in out
 		assert "close_linked_pr: skipping PR #105 for issue #77 (state=unknown)." in out
-		assert "close_linked_pr: issue=#77 scanned=5 closed=2" in out
+		# Issue #9733: owner-held PRs are never closed and are reported back.
+		assert "close_linked_pr: skipping PR #106 for issue #77 (owner hold: reason=pr_ai_hold detail=draft)." in out
+		assert "close_linked_pr: skipping PR #107 for issue #77 (owner hold: reason=pr_ai_hold detail=skip_ai_title)." in out
+		assert "HELD=106 107 DETAIL=draft" in out
+		assert "close_linked_pr: issue=#77 scanned=7 closed=2" in out
 		# §15: exactly one pulls/<n> request per candidate, none extra.
 		api_calls = api_log.read_text(encoding="utf-8").split()
-		assert sorted(api_calls) == sorted(f"repos/o/r/pulls/{n}" for n in (101, 102, 103, 104, 105)), api_calls
+		assert sorted(api_calls) == sorted(f"repos/o/r/pulls/{n}" for n in (101, 102, 103, 104, 105, 106, 107)), api_calls
 
 
 def test_linked_pr_is_issue_implementation_predicate_contract():
@@ -34737,6 +35063,846 @@ def test_final_merge_auto_resume_ignores_other_failed_projects() -> None:
 	assert "FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=skip reason=not_final_merge_exhausted" in log
 	assert "Project already failed, skipping." in log
 	assert result["latest_state"]["status"] == "failed"
+
+
+# Issue #9534: judge-created issues get the scope companions (tests/**,
+# changelog.d/*, agents.d/*) in their files_touched block.
+def _judge_companions_run(body: str, *, enabled: str | None = None, scripts_dir: Path | None = None) -> tuple[str, str]:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	source = _extract_bash_function(script, "add_files_touched_companions() {") \
+		+ _extract_bash_function(script, "apply_judge_files_touched_companions() {")
+	program = source + '\napply_judge_files_touched_companions "$1" fixup "fix-1"\nprintf "%s" "${JUDGE_COMPANIONS_BODY_OUT}" > "$2"\n'
+	with tempfile.TemporaryDirectory() as tmp:
+		out_file = Path(tmp) / "body.txt"
+		env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "PYTHONDONTWRITEBYTECODE": "1"}
+		if enabled is not None:
+			env["JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED"] = enabled
+		# The helper finds files_touched_scope_guard.py next to the script ($0's directory).
+		cwd = scripts_dir if scripts_dir is not None else REPO_ROOT / "scripts"
+		result = subprocess.run(["bash", "-c", program, "./poller", body, str(out_file)], cwd=cwd, env=env,
+			capture_output=True, text=True, check=False, timeout=60)
+		assert result.returncode == 0, result.stderr
+		return result.stdout, out_file.read_text(encoding="utf-8")
+
+
+def test_judge_companions_added_at_the_block_indent() -> None:
+	body = "Fix it.\n\nfiles_touched:\n  - scripts/b.sh\n  - scripts/a.sh\n\nNotes after."
+	log, out = _judge_companions_run(body)
+	assert out == ("Fix it.\n\nfiles_touched:\n  - scripts/b.sh\n  - scripts/a.sh\n  - tests/**\n"
+		"  - changelog.d/*\n  - agents.d/*\n\nNotes after.")
+	assert "JUDGE_SCOPE_COMPANIONS outcome=added issue_kind=fixup local_id=fix-1 added=3" in log
+
+
+def test_judge_companions_only_missing_entries_are_added() -> None:
+	body = "files_touched:\n  - tests/**\n  - src/a.py"
+	log, out = _judge_companions_run(body)
+	assert out == "files_touched:\n  - tests/**\n  - src/a.py\n  - changelog.d/*\n  - agents.d/*"
+	assert "added=2" in log
+	full = "files_touched:\n  - agents.d/*\n  - tests/**\n  - changelog.d/*"
+	log, out = _judge_companions_run(full)
+	assert out == full and "JUDGE_SCOPE_COMPANIONS outcome=unchanged issue_kind=fixup local_id=fix-1 added=0" in log
+
+
+def test_judge_companions_flush_list_and_no_block() -> None:
+	log, out = _judge_companions_run("Body\nfiles_touched:\n- src/a.py\n- src/b.py\nTrailer")
+	assert out == "Body\nfiles_touched:\n- src/a.py\n- src/b.py\n- tests/**\n- changelog.d/*\n- agents.d/*\nTrailer"
+	log, out = _judge_companions_run("No scope list in this body.")
+	assert out == "No scope list in this body."
+	assert "JUDGE_SCOPE_COMPANIONS outcome=unchanged issue_kind=fixup local_id=fix-1 added=0 reason=no_block" in log
+
+
+def test_judge_companions_disabled_and_helper_failure_keep_the_body() -> None:
+	body = "files_touched:\n  - src/a.py"
+	for value in ("false", "FALSE", " false "):
+		log, out = _judge_companions_run(body, enabled=value)
+		assert out == body
+		assert "outcome=skipped issue_kind=fixup local_id=fix-1 added=0 reason=disabled" in log
+	with tempfile.TemporaryDirectory() as tmp:
+		log, out = _judge_companions_run(body, scripts_dir=Path(tmp))
+	assert out == body
+	assert "outcome=skipped issue_kind=fixup local_id=fix-1 added=0 reason=helper_failed" in log
+
+
+def test_judge_companions_wired_at_both_judge_issue_sites() -> None:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert 'JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED="${JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED:-true}"' in script
+	fixup = _extract_bash_function(script, "create_judge_fixup_issues_from_verdict() {")
+	call = 'apply_judge_files_touched_companions "${FIX_BODY}" fixup "${FIX_ID}"\n          FIX_BODY="${JUDGE_COMPANIONS_BODY_OUT}"'
+	assert call in fixup and fixup.index(call) < fixup.index('FULL_FIX_BODY="${FIX_BODY}')
+	addition = 'apply_judge_files_touched_companions "${NEW_BODY}" addition "${NEW_ID}"\n          NEW_BODY="${JUDGE_COMPANIONS_BODY_OUT}"'
+	assert script.count(addition) == 1
+	assert script.index(addition) < script.index('FULL_NEW_BODY="${NEW_BODY}')
+	helper = _extract_bash_function(script, "add_files_touched_companions() {")
+	assert "python3 -I -B -c" in helper and "PIPELINE_PLAN_GRANT_COMPANIONS" in helper and "gh " not in helper
+
+
+# ---------------------------------------------------------------------------
+# Issue #9927 (GH_PAT budget, part D): per-cycle PR JSON cache, batched label
+# re-reads and one default-branch read per run.
+# ---------------------------------------------------------------------------
+
+_PD_CACHE_BEGIN = "# shellcheck source=gh_helpers.sh\n"
+_PD_CACHE_END = "# --- ORCH_POLL_PR_JSON_CACHE helpers (issue #9927; end) ---"
+_PD_CYCLE_BEGIN = "# --- ORCH_POLL_CYCLE_SUMMARY helpers (begin) ---"
+_PD_CYCLE_END = "# --- ORCH_POLL_CYCLE_SUMMARY helpers (end) ---"
+
+_PD_FAKE_GH = r'''#!/usr/bin/env python3
+import json, os, re, sys
+args = sys.argv[1:]
+with open(os.environ["FAKE_GH_LOG"], "a", encoding="utf-8") as fh:
+	fh.write(json.dumps(args) + "\n")
+counter_file = os.environ["FAKE_GH_LOG"] + ".n"
+try:
+	n = int(open(counter_file, encoding="utf-8").read().strip() or "0")
+except OSError:
+	n = 0
+n += 1
+open(counter_file, "w", encoding="utf-8").write(str(n))
+repo = os.environ.get("GITHUB_REPOSITORY", "")
+fail = set(filter(None, os.environ.get("FAKE_GH_FAIL", "").split(",")))
+if args[:1] == ["api"]:
+	rest = [a for a in args[1:]]
+	endpoint = next((a for a in rest if not a.startswith("-") and "=" not in a and a not in ("PUT", "PATCH", "GET", "POST", "DELETE")), "")
+	if endpoint == "graphql":
+		if "graphql" in fail:
+			sys.exit(1)
+		query = next((a[len("query="):] for a in rest if a.startswith("query=")), "")
+		omit = set(filter(None, os.environ.get("FAKE_GQL_OMIT", "").split(",")))
+		data = {}
+		for alias, num in re.findall(r"(i\d+): issue\(number: (\d+)\)", query):
+			if num in omit:
+				continue
+			data[alias] = {"number": int(num), "labels": {"nodes": [{"name": "gql-" + num}], "pageInfo": {"hasNextPage": False}}}
+		print(json.dumps({"data": {"repository": data}}))
+		sys.exit(0)
+	m = re.fullmatch(r"repos/" + re.escape(repo) + r"/pulls/(\d+)", endpoint)
+	if m:
+		if "pulls" in fail:
+			print("HTTP 404: Not Found", file=sys.stderr)
+			sys.exit(1)
+		print(json.dumps({"number": int(m.group(1)), "state": "open", "head": {"sha": "sha%d" % n}}))
+		sys.exit(0)
+	m = re.fullmatch(r"repos/" + re.escape(repo) + r"/issues/(\d+)/labels", endpoint)
+	if m:
+		print(json.dumps(["rest-" + m.group(1)]))
+		sys.exit(0)
+	if endpoint == "repos/" + repo:
+		if "repo" in fail:
+			print("HTTP 404: Not Found", file=sys.stderr)
+			sys.exit(1)
+		print("main" if "--jq" in rest else json.dumps({"default_branch": "main"}))
+		sys.exit(0)
+	print("{}")
+	sys.exit(0)
+if args[:2] == ["pr", "view"]:
+	print("{}")
+sys.exit(0)
+'''
+
+
+def _pd_bash_func(script: str, name: str) -> str:
+	match = re.search(r"^" + re.escape(name) + r"\(\)\s*\{?\s*$", script, re.MULTILINE)
+	assert match, name
+	end = script.index("\n}\n", match.start()) + 3
+	return script[match.start():end]
+
+
+def _pd_harness(body: str, tmp: Path, extra_env: dict | None = None) -> dict:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	cycle = script[script.index(_PD_CYCLE_BEGIN):script.index(_PD_CYCLE_END) + len(_PD_CYCLE_END)]
+	cache = script[script.index(_PD_CACHE_BEGIN):script.index(_PD_CACHE_END) + len(_PD_CACHE_END)]
+	funcs = "\n".join(
+		_pd_bash_func(script, name)
+		for name in (
+			"_fetch_pr_json",
+			"_fetch_issue_labels_batch_graphql",
+			"_orch_poll_labels_fill_missing",
+			"_review_run_default_branch",
+		)
+	)
+	bindir = tmp / "bin"
+	bindir.mkdir(exist_ok=True)
+	fake_gh = bindir / "gh"
+	fake_gh.write_text(_PD_FAKE_GH, encoding="utf-8")
+	fake_gh.chmod(0o755)
+	runtime = tmp / "runtime"
+	runtime.mkdir(exist_ok=True)
+	work = tmp / "tmp"
+	work.mkdir(exist_ok=True)
+	log = tmp / "gh.log"
+	harness = tmp / "harness.sh"
+	harness.write_text(
+		"set -euo pipefail\n"
+		f"cd {shlex.quote(str(REPO_ROOT))}\n"
+		+ cycle + "\n" + cache + "\n" + funcs + "\n" + body + "\n",
+		encoding="utf-8",
+	)
+	env = {
+		"PATH": f"{bindir}:/usr/bin:/bin",
+		"TMPDIR": str(work),
+		"RUNTIME_DIR": str(runtime),
+		"GITHUB_REPOSITORY": "acme/widgets",
+		"GITHUB_RUN_ID": "77",
+		"GH_RETRY_MAX_ATTEMPTS": "1",
+		"FAKE_GH_LOG": str(log),
+		"PYTHONDONTWRITEBYTECODE": "1",
+	}
+	env.update(extra_env or {})
+	result = subprocess.run(["bash", str(harness)], capture_output=True, text=True, check=False, env=env, timeout=120)
+	calls = []
+	if log.exists():
+		calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
+	summary = [line for line in result.stdout.splitlines() if line.startswith("ORCH_POLL_CYCLE_SUMMARY")]
+	return {"rc": result.returncode, "stdout": result.stdout, "stderr": result.stderr, "calls": calls, "summary": summary, "work": work}
+
+
+def _pd_pull_calls(calls: list, number: int = 7) -> list:
+	return [c for c in calls if c[:1] == ["api"] and f"repos/acme/widgets/pulls/{number}" in c]
+
+
+def _pd_hits(summary: list) -> dict:
+	assert len(summary) == 1, summary
+	return dict(re.findall(r"cache_hits_(pr_json|default_branch|labels)=(\w+)", summary[0]))
+
+
+def test_fetch_pr_json_cycle_cache_serves_repeat_reads():
+	with tempfile.TemporaryDirectory() as tmp:
+		body = (
+			'[ -d "${ORCH_POLL_PR_JSON_CACHE_DIR}" ]\n'
+			'[ "${GH_RETRY_AFTER_CALL_HOOK}" = "_orch_poll_pr_json_cache_after_gh_call" ]\n'
+			'for i in 1 2 3 4 5; do echo "OUT $(_fetch_pr_json 7 | jq -c .)"; done\n'
+			'echo "OTHER $(_fetch_pr_json 8 | jq -c .number)"\n'
+		)
+		result = _pd_harness(body, Path(tmp))
+		assert result["rc"] == 0, result["stderr"]
+		outs = [line for line in result["stdout"].splitlines() if line.startswith("OUT ")]
+		assert len(outs) == 5 and len(set(outs)) == 1, outs
+		assert json.loads(outs[0][4:])["number"] == 7
+		assert len(_pd_pull_calls(result["calls"], 7)) == 1
+		assert len(_pd_pull_calls(result["calls"], 8)) == 1
+		assert "OTHER 8" in result["stdout"]
+		assert _pd_hits(result["summary"])["pr_json"] == "4"
+		# The EXIT trap removes the cache directory and the hit ledger.
+		assert sorted(p.name for p in result["work"].iterdir()) == []
+
+
+def test_fetch_pr_json_cache_invalidated_by_gh_write():
+	with tempfile.TemporaryDirectory() as tmp:
+		body = (
+			"_fetch_pr_json 7 >/dev/null\n"
+			"_fetch_pr_json 7 >/dev/null\n"  # hit
+			'_invalidate_pr_json_cache "${GITHUB_REPOSITORY}" 7\n'
+			"_fetch_pr_json 7 >/dev/null\n"  # live (2)
+			# Reads through gh_retry keep the cache.
+			'gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/7/comments" --paginate >/dev/null\n'
+			'gh_retry gh api "repos/${GITHUB_REPOSITORY}/commits/abc" -X GET -f per_page=1 >/dev/null\n'
+			"gh_retry gh api graphql -f query='query { viewer { login } }' >/dev/null\n"
+			'gh_retry gh pr view 7 --repo "${GITHUB_REPOSITORY}" --json state >/dev/null\n'
+			"_fetch_pr_json 7 >/dev/null\n"  # hit
+			# Every write through gh_retry flushes, so the next read is live.
+			'gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/7/update-branch" -X PUT -f expected_head_sha=abc >/dev/null\n'
+			"_fetch_pr_json 7 >/dev/null\n"  # live (3)
+			'gh_retry gh pr merge 7 --repo "${GITHUB_REPOSITORY}" --squash --match-head-commit abc >/dev/null\n'
+			"_fetch_pr_json 7 >/dev/null\n"  # live (4)
+			'gh_retry gh issue edit 7 --repo "${GITHUB_REPOSITORY}" --add-label x >/dev/null\n'
+			"_fetch_pr_json 7 >/dev/null\n"  # live (5)
+			'_invalidate_pr_json_cache "${GITHUB_REPOSITORY}"\n'  # flush all
+			"_fetch_pr_json 7 >/dev/null\n"  # live (6)
+		)
+		result = _pd_harness(body, Path(tmp))
+		assert result["rc"] == 0, result["stderr"]
+		assert len(_pd_pull_calls(result["calls"], 7)) == 6
+		assert _pd_hits(result["summary"])["pr_json"] == "2"
+
+
+def test_fetch_pr_json_cache_numbered_write_keeps_other_prs():
+	with tempfile.TemporaryDirectory() as tmp:
+		body = (
+			"_fetch_pr_json 7 >/dev/null\n"  # live (1)
+			"_fetch_pr_json 8 >/dev/null\n"  # live 8 (1)
+			# Writes that name one other issue/PR keep PR 7's entry.
+			'gh_retry gh issue edit 9 --repo "${GITHUB_REPOSITORY}" --add-label x >/dev/null\n'
+			'gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/9/comments" -f body=hi >/dev/null\n'
+			'gh_retry gh pr comment 9 --body hi >/dev/null\n'
+			'_invalidate_pr_json_cache "${GITHUB_REPOSITORY}" 8\n'
+			"_fetch_pr_json 7 >/dev/null\n"  # hit
+			"_fetch_pr_json 8 >/dev/null\n"  # live 8 (2)
+			# A write naming PR 7 invalidates only 7.
+			'gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/7/labels" -f "labels[]=x" >/dev/null\n'
+			"_fetch_pr_json 7 >/dev/null\n"  # live (2)
+			"_fetch_pr_json 8 >/dev/null\n"  # hit
+			# Merges, update-branch and unnumbered writes flush every PR.
+			'gh_retry gh pr merge 9 --repo "${GITHUB_REPOSITORY}" --squash --match-head-commit abc >/dev/null\n'
+			"_fetch_pr_json 7 >/dev/null\n"  # live (3)
+			'gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/9/update-branch" -X PUT -f expected_head_sha=abc >/dev/null\n'
+			"_fetch_pr_json 7 >/dev/null\n"  # live (4)
+			"gh_retry gh label create y >/dev/null\n"
+			"_fetch_pr_json 7 >/dev/null\n"  # live (5)
+		)
+		result = _pd_harness(body, Path(tmp))
+		assert result["rc"] == 0, result["stderr"]
+		assert len(_pd_pull_calls(result["calls"], 7)) == 5
+		assert len(_pd_pull_calls(result["calls"], 8)) == 2
+		assert _pd_hits(result["summary"])["pr_json"] == "2"
+
+
+def test_fetch_pr_json_cache_hook_classifier():
+	reads = [
+		"_safe_gh_jq repos/acme/widgets/pulls/7",
+		"_safe_gh_jq --paginate repos/acme/widgets/issues/7/comments",
+		"gh api repos/acme/widgets/pulls/7",
+		"gh api -X GET repos/acme/widgets/commits -f per_page=1",
+		"gh api --method=get repos/acme/widgets/commits",
+		"gh api graphql -f 'query=query { viewer { login } }'",
+		"gh pr view 7",
+		"gh issue list --state open",
+		"gh run list --limit 1",
+		"gh pr checks 7",
+	]
+	writes = [
+		"gh api -X PUT repos/acme/widgets/pulls/7/update-branch -f expected_head_sha=a",
+		"gh api --method PATCH repos/acme/widgets/pulls/7 -f state=closed",
+		"gh api -XDELETE repos/acme/widgets/issues/7/labels/x",
+		"gh api repos/acme/widgets/issues/7/comments -f body=hi",
+		"gh api graphql -f 'query=mutation { x }'",
+		"gh api -X",
+		"gh pr merge 7 --squash",
+		"gh pr close 7",
+		"gh pr ready 7",
+		"gh issue edit 7 --add-label x",
+		"gh workflow run ci.yml",
+		"gh label create x",
+		"some_other_wrapper repos/acme/widgets",
+	]
+	with tempfile.TemporaryDirectory() as tmp:
+		table = list(enumerate(reads + writes))
+		lines = [
+			f"if _orch_poll_pr_json_cache_gh_call_is_read {cmd}; then echo R{i}; else echo W{i}; fi" for i, cmd in table
+		]
+		result = _pd_harness("\n".join(lines), Path(tmp))
+		assert result["rc"] == 0, result["stderr"]
+		out = result["stdout"].splitlines()
+		for i, cmd in table:
+			expected = f"R{i}" if i < len(reads) else f"W{i}"
+			assert expected in out, cmd
+		assert result["calls"] == []
+
+
+def test_fetch_pr_json_cache_write_failure_falls_back_live():
+	with tempfile.TemporaryDirectory() as tmp:
+		# Entry writes fail (mktemp in the cache dir fails): every read is live.
+		body = (
+			'mktemp() { case "$*" in *orch_poll_pr_json_cache.*) return 1 ;; esac; command mktemp "$@"; }\n'
+			'for i in 1 2 3; do _fetch_pr_json 7 | jq -e ".number == 7" >/dev/null; done\n'
+		)
+		result = _pd_harness(body, Path(tmp))
+		assert result["rc"] == 0, result["stderr"]
+		assert len(_pd_pull_calls(result["calls"], 7)) == 3
+	with tempfile.TemporaryDirectory() as tmp:
+		# TTL=0 is the kill switch: no cache directory, no hook, all live.
+		body = (
+			'[ -z "${ORCH_POLL_PR_JSON_CACHE_DIR}" ] && [ -z "${GH_RETRY_AFTER_CALL_HOOK}" ]\n'
+			"for i in 1 2 3; do _fetch_pr_json 7 >/dev/null; done\n"
+		)
+		result = _pd_harness(body, Path(tmp), {"ORCH_POLL_PR_JSON_CACHE_TTL_SECS": "0"})
+		assert result["rc"] == 0, result["stderr"]
+		assert len(_pd_pull_calls(result["calls"], 7)) == 3
+	with tempfile.TemporaryDirectory() as tmp:
+		# A failed read ({}) is never cached; a non-numeric number bypasses the
+		# cache; a corrupt or symlinked entry is never served.
+		body = (
+			'[ "$(_fetch_pr_json 7)" = "{}" ]\n'
+			'[ "$(_fetch_pr_json 7)" = "{}" ]\n'
+			"ls \"${ORCH_POLL_PR_JSON_CACHE_DIR}\" | grep -c json && exit 9 || true\n"
+		)
+		result = _pd_harness(body, Path(tmp), {"FAKE_GH_FAIL": "pulls"})
+		assert result["rc"] == 0, result["stderr"]
+		assert len(_pd_pull_calls(result["calls"], 7)) == 2
+	with tempfile.TemporaryDirectory() as tmp:
+		body = (
+			"_fetch_pr_json 7 >/dev/null\n"
+			'_entry="${ORCH_POLL_PR_JSON_CACHE_DIR}/acme__widgets__7.json"\n'
+			'[ -f "${_entry}" ]\n'
+			'{ head -n 1 "${_entry}"; echo "not json"; } > "${_entry}.x" && mv -f "${_entry}.x" "${_entry}"\n'
+			"_fetch_pr_json 7 | jq -e '.number == 7' >/dev/null\n"  # corrupt -> live (2), re-stored
+			'_target="$(mktemp)"; cp "${_entry}" "${_target}"; ln -sf "${_target}" "${_entry}"\n'
+			"_fetch_pr_json 7 >/dev/null\n"  # symlink -> live (3)
+			"_fetch_pr_json 07 >/dev/null\n"  # not a cache key -> live
+			"_fetch_pr_json 07 >/dev/null\n"
+		)
+		result = _pd_harness(body, Path(tmp))
+		assert result["rc"] == 0, result["stderr"]
+		assert len(_pd_pull_calls(result["calls"], 7)) == 3
+		assert len(_pd_pull_calls(result["calls"], "07")) == 2
+
+
+def test_gh_retry_call_hook_cannot_change_result():
+	with tempfile.TemporaryDirectory() as tmp:
+		body = (
+			"_noisy_hook() { echo HOOK-OUT; echo HOOK-ERR >&2; return 9; }\n"
+			'GH_RETRY_AFTER_CALL_HOOK=""\n'
+			'a="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/5")"\n'
+			"GH_RETRY_AFTER_CALL_HOOK=_noisy_hook\n"
+			'b="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/5")"\n'
+			"GH_RETRY_AFTER_CALL_HOOK=not_a_function\n"
+			'c="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/5")"\n'
+			'echo "A=$(echo "$a" | jq -c .number) B=$(echo "$b" | jq -c .number) C=$(echo "$c" | jq -c .number)"\n'
+		)
+		result = _pd_harness(body, Path(tmp))
+		assert result["rc"] == 0, result["stderr"]
+		assert "A=5 B=5 C=5" in result["stdout"]
+		assert "HOOK-OUT" not in result["stdout"] and "HOOK-ERR" not in result["stderr"]
+
+
+def test_rb_fresh_read_sites_invalidate_before_fetch():
+	lines = POLLER_SCRIPT.read_text(encoding="utf-8").splitlines()
+	fresh = ["_rb_pr_json_refetched", "_rb_merge_json", "_rb_fm_json", "_rb_recheck_json", "_rb_nofix_json", "_rb_mwf_json"]
+	for var in fresh:
+		idx = [i for i, line in enumerate(lines) if line.strip() == f'{var}="$(_fetch_pr_json "${{RB_PR}}")"']
+		assert len(idx) == 1, var
+		assert lines[idx[0] - 1].strip() == '_invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${RB_PR}" || true', var
+	# The RB update-branch and merge calls also invalidate the PR (defence in
+	# depth; the gh_retry hook already flushed).
+	text = "\n".join(lines)
+	for sha in ("_rb_merge_sha", "_rb_fm_sha"):
+		m = re.search(r'pulls/\$\{RB_PR\}/update-branch" \\\n\s*-X PUT -f expected_head_sha="\$\{' + sha + r'\}" \\\n\s*2>/dev/null; then\n\s*_invalidate_pr_json_cache "\$\{GITHUB_REPOSITORY\}" "\$\{RB_PR\}" \|\| true\n', text)
+		assert m, sha
+	for sha in ("_rb_merge_sha", "_rb_fm_sha", "_rb_nofix_sha"):
+		m = re.search(r'if _orch_squash_merge_bound "\$\{RB_PR\}" "\$\{' + sha + r'\}" auto; then\n\s*_invalidate_pr_json_cache "\$\{GITHUB_REPOSITORY\}" "\$\{RB_PR\}" \|\| true\n', text)
+		assert m, sha
+
+
+def test_unwrapped_pr_writes_followed_by_invalidation():
+	lines = POLLER_SCRIPT.read_text(encoding="utf-8").splitlines()
+	write_re = re.compile(
+		r"^\s*(?:if\s+!?\s*|&&\s*|elif\s+)?(?:git push|gh pr merge|gh api [^\n]*update-branch)\b"
+		r'|^\s*push "https://'  # `git -C <wt> ... push` continuation lines
+	)
+	sites = []
+	for i, line in enumerate(lines):
+		if line.lstrip().startswith("#") or not write_re.search(line):
+			continue
+		sites.append(i)
+		window = "\n".join(lines[i + 1:i + 6])
+		assert "_invalidate_pr_json_cache" in window, (i + 1, line)
+	assert len(sites) >= 13, sites
+	# The PR-body PATCH goes through gh_retry_to_file, which runs no hook.
+	eager = _pd_bash_func("\n".join(lines) + "\n", "update_eager_pr_validation_status_section")
+	assert '_invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${pr_number}" || true' in eager[eager.index("-X PATCH"):]
+	# The standalone-stall mergeability retry loop reads live on every attempt.
+	stall = [i for i, line in enumerate(lines) if line.strip() == '_std_conflict_pr_json_try="$(_fetch_pr_json "${_std_conflict_pr_num_try}")"']
+	assert len(stall) == 1
+	assert lines[stall[0] - 1].strip() == '_invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${_std_conflict_pr_num_try}" || true'
+	# Every gh_retry-wrapped write reaches the hook instead.
+	assert "GH_RETRY_AFTER_CALL_HOOK=\"_orch_poll_pr_json_cache_after_gh_call\"" in "\n".join(lines)
+
+
+def test_rb_label_reread_uses_one_batch_call():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	rb = script[script.index('echo "Re-checking wave status after review-blocked handling..."'):]
+	rb = rb[:rb.index("check-wave-status")]
+	assert "_orch_poll_labels_fill_missing '{}' ${ISSUE_NUMS} ${REISSUED_NUMS}" in rb
+	assert "/labels" not in rb
+	impl = script[script.index('if [ "${IMPL_FAILED_STATE_CHANGED}" = "true" ]; then'):]
+	impl = impl[:impl.index("INVOKE_JUDGE_FOR_STUCK=false")]
+	assert '_orch_poll_labels_fill_missing "${LABELS_JSON}" ${REISSUED_NUMS}' in impl
+	assert "/labels" not in impl
+
+	def gql(calls):
+		return [c for c in calls if c[:2] == ["api", "graphql"]]
+
+	def rest(calls):
+		return [c for c in calls if c[:1] == ["api"] and any(a.endswith("/labels") for a in c)]
+
+	with tempfile.TemporaryDirectory() as tmp:
+		body = "echo \"OUT $(_orch_poll_labels_fill_missing '{}' 11 12 null '' 13 12 abc | jq -cS .)\"\n"
+		result = _pd_harness(body, Path(tmp))
+		assert result["rc"] == 0, result["stderr"]
+		assert len(gql(result["calls"])) == 1 and rest(result["calls"]) == []
+		assert 'OUT {"11":["gql-11"],"12":["gql-12"],"13":["gql-13"]}' in result["stdout"]
+		assert _pd_hits(result["summary"])["labels"] == "3"
+	with tempfile.TemporaryDirectory() as tmp:
+		# Batch misses fall back to REST for those numbers only; keys already
+		# present are not re-read.
+		body = "echo \"OUT $(_orch_poll_labels_fill_missing '{\"10\":[\"keep\"]}' 10 11 12 13 | jq -cS .)\"\n"
+		result = _pd_harness(body, Path(tmp), {"FAKE_GQL_OMIT": "13"})
+		assert result["rc"] == 0, result["stderr"]
+		assert len(gql(result["calls"])) == 1
+		assert [c for c in rest(result["calls"])] == [c for c in result["calls"] if "repos/acme/widgets/issues/13/labels" in c]
+		assert len(rest(result["calls"])) == 1
+		assert 'OUT {"10":["keep"],"11":["gql-11"],"12":["gql-12"],"13":["rest-13"]}' in result["stdout"]
+	with tempfile.TemporaryDirectory() as tmp:
+		# A failed batch falls back to REST per issue (a single missing number
+		# also tries the batch first); an invalid input object is returned
+		# unchanged with no call.
+		body = (
+			"echo \"A $(_orch_poll_labels_fill_missing '{}' 11 12 | jq -cS .)\"\n"
+			"echo \"B $(_orch_poll_labels_fill_missing '{}' 14 | jq -cS .)\"\n"
+			"echo \"C $(_orch_poll_labels_fill_missing 'not-json' 15 16)\"\n"
+		)
+		result = _pd_harness(body, Path(tmp), {"FAKE_GH_FAIL": "graphql"})
+		assert result["rc"] == 0, result["stderr"]
+		assert 'A {"11":["rest-11"],"12":["rest-12"]}' in result["stdout"]
+		assert 'B {"14":["rest-14"]}' in result["stdout"]
+		assert "C not-json" in result["stdout"]
+		assert len(gql(result["calls"])) == 2
+		assert len(rest(result["calls"])) == 3
+	with tempfile.TemporaryDirectory() as tmp:
+		# A single missing number uses the batch and makes no REST read.
+		body = "echo \"OUT $(_orch_poll_labels_fill_missing '{\"10\":[\"keep\"]}' 10 14 | jq -cS .)\"\n"
+		result = _pd_harness(body, Path(tmp))
+		assert result["rc"] == 0, result["stderr"]
+		assert len(gql(result["calls"])) == 1 and rest(result["calls"]) == []
+		assert 'OUT {"10":["keep"],"14":["gql-14"]}' in result["stdout"]
+		assert _pd_hits(result["summary"])["labels"] == "1"
+
+
+def test_default_branch_fetched_once_per_run():
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	# No site fetches the default branch inline any more: only the wrapper's
+	# live fallback and the memo itself read repos/<repo>.
+	inline = re.findall(r"""gh_retry _safe_gh_jq "repos/\$\{GITHUB_REPOSITORY\}" --jq '\.default_branch'[^\n]*""", script)
+	assert len(inline) == 3, inline
+	assert sum("|| _odbl_live_rc=$?" in line for line in inline) == 2
+	assert script.count("$(_orch_poll_default_branch_or_live ") >= 17
+
+	def repo_calls(calls):
+		return [c for c in calls if c[:1] == ["api"] and "repos/acme/widgets" in c]
+
+	with tempfile.TemporaryDirectory() as tmp:
+		body = (
+			'a="$(_orch_poll_default_branch_or_live "main")"\n'
+			'b="$(_orch_poll_default_branch_or_live "" quiet)"\n'
+			'c="${DEFAULT_BRANCH_TRACKING:-$(_orch_poll_default_branch_or_live "main")}"\n'
+			'for i in 1 2 3; do d="$(_orch_poll_default_branch_or_live "main")"; done\n'
+			'echo "BR ${a} ${b} ${c} ${d}"\n'
+		)
+		result = _pd_harness(body, Path(tmp))
+		assert result["rc"] == 0, result["stderr"]
+		assert "BR main main main main" in result["stdout"]
+		assert len(repo_calls(result["calls"])) == 1
+		assert _pd_hits(result["summary"])["default_branch"] == "5"
+	with tempfile.TemporaryDirectory() as tmp:
+		# When the read fails, every site keeps its own fallback.
+		body = (
+			'echo "A=[$(_orch_poll_default_branch_or_live "main")]"\n'
+			'echo "B=[$(_orch_poll_default_branch_or_live "" quiet)]"\n'
+		)
+		result = _pd_harness(body, Path(tmp), {"FAKE_GH_FAIL": "repo"})
+		assert result["rc"] == 0, result["stderr"]
+		assert "A=[main]" in result["stdout"] and "B=[]" in result["stdout"]
+		# One live GET per site (no second GET after a failure), and a failed
+		# generic read never records `failed` for the review-run matchers.
+		assert len(repo_calls(result["calls"])) == 2
+		assert list((Path(tmp) / "runtime").glob("review_run_default_branch.*")) == []
+
+
+# --- Issue #9732: standalone attempt_merge waits on the review auto-merge rule ---
+
+_STALL_MERGE_SHA = "a" * 40
+_STALL_MERGE_ORCH_POLL_WF = REPO_ROOT / ".github" / "workflows" / "orchestrate_poll.yml"
+
+
+def _run_stall_merge_required_checks(
+	tmp_path: Path,
+	*,
+	state: str = "open",
+	mergeable: str = "true",
+	head_sha: str = _STALL_MERGE_SHA,
+	fresh_rc: int = 0,
+	wait_rc: int = 0,
+	wait_outcome: str = "ok",
+	final_ci_outcome: str = "",
+	runs_pending: str = "0",
+	ci_state: str = "success",
+	merge_rc: int = 0,
+	head_ref: str = "ai/issue-501",
+) -> tuple[str, list[str]]:
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	helper = _extract_bash_function(source, "_standalone_attempt_merge_required_checks()\n{")
+	log = tmp_path / "calls.log"
+	log.write_text("", encoding="utf-8")
+	q = shlex.quote
+	script = (
+		"set -euo pipefail\n"
+		f"LOG={q(str(log))}\n"
+		"export REVIEW_FINAL_CI_WORKFLOW=ci.yml\n"
+		f"_pr_base_fresh_for_merge() {{ echo \"fresh $*\" >> \"$LOG\"; return {fresh_rc}; }}\n"
+		"_pr_wait_for_required_checks() {\n"
+		"  echo \"wait $* head_ref=${PR_CHECKS_HEAD_REF:-} wf=${REVIEW_FINAL_CI_WORKFLOW:-}\" >> \"$LOG\"\n"
+		f"  PR_CHECKS_WAIT_OUTCOME={q(wait_outcome)}\n"
+		f"  PR_FINAL_CI_OUTCOME={q(final_ci_outcome)}\n"
+		f"  PR_CHECKS_RUNS_PENDING={q(runs_pending)}\n"
+		f"  PR_CHECKS_LAST_CI_STATE={q(ci_state)}\n"
+		f"  return {wait_rc}\n"
+		"}\n"
+		f"_orch_squash_merge_bound() {{ echo \"merge $*\" >> \"$LOG\"; return {merge_rc}; }}\n"
+		+ helper
+		+ "rc=0\n"
+		+ "_standalone_attempt_merge_required_checks 501 416 "
+		+ " ".join(q(v) for v in (state, mergeable, head_sha, "main", head_ref))
+		+ " || rc=$?\n"
+		# Caller-shell state after the helper returns (prefix assignments must not leak).
+		+ f'echo "wf_after=${{REVIEW_FINAL_CI_WORKFLOW:-}} head_ref_after=${{PR_CHECKS_HEAD_REF:-}}" > {q(str(tmp_path / "after.log"))}\n'
+		+ 'echo "rc=${rc} reason=${STALL_MERGE_REFUSAL_REASON} in_flight=${STALL_MERGE_CHECKS_IN_FLIGHT}"\n'
+	)
+	res = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+	assert res.returncode == 0, res.stdout + res.stderr
+	calls = [line for line in log.read_text(encoding="utf-8").splitlines() if line]
+	return res.stdout.strip().splitlines()[-1], calls
+
+
+def test_stall_merge_required_checks_flag_parsing():
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	fn = _extract_bash_function(source, "_stall_merge_required_checks_enabled()\n{")
+	script = fn + 'rc=0\n_stall_merge_required_checks_enabled || rc=$?\necho "rc=${rc}"\n'
+
+	def run(value):
+		env = {k: v for k, v in os.environ.items() if k != "STALL_MERGE_REQUIRED_CHECKS_ENABLED"}
+		if value is not None:
+			env["STALL_MERGE_REQUIRED_CHECKS_ENABLED"] = value
+		res = subprocess.run(["bash", "-c", script], capture_output=True, text=True, env=env, check=False)
+		assert res.returncode == 0, res.stderr
+		return res.stdout
+
+	for value in (None, "", "TRUE", "true", " True "):
+		out = run(value)
+		assert out.strip().endswith("rc=0"), (value, out)
+		assert "::warning::" not in out
+	for value in ("false", "False", " FALSE "):
+		out = run(value)
+		assert out.strip().endswith("rc=1"), (value, out)
+		assert "::warning::" not in out
+	out = run("maybe")
+	assert out.strip().endswith("rc=1"), out
+	assert "::warning::STALL_MERGE_REQUIRED_CHECKS_ENABLED" in out
+
+
+def test_standalone_attempt_merge_required_checks_merges_only_on_rc0() -> None:
+	# No arguments: this module's custom runner calls every test as func()
+	# (test_custom_runner_tests_need_no_pytest_arguments).
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		_check_standalone_attempt_merge_required_checks_merges_only_on_rc0(Path(tmp_dir))
+
+
+def _check_standalone_attempt_merge_required_checks_merges_only_on_rc0(tmp_path: Path) -> None:
+	result, calls = _run_stall_merge_required_checks(tmp_path)
+	assert result == "rc=0 reason= in_flight=false"
+	assert calls == [
+		f"fresh 416 {_STALL_MERGE_SHA} main",
+		f"wait 416 {_STALL_MERGE_SHA} main 0 head_ref=ai/issue-501 wf=ci.yml",
+		f"merge 416 {_STALL_MERGE_SHA} auto",
+	]
+	# Wait rc != 0: never merge.
+	result, calls = _run_stall_merge_required_checks(tmp_path, wait_rc=1, wait_outcome="failed", ci_state="failure")
+	assert result == "rc=1 reason=checks_incomplete in_flight=false"
+	assert not any(call.startswith("merge ") for call in calls)
+
+
+def test_standalone_attempt_merge_required_checks_no_dispatch_without_same_repo_head_ref() -> None:
+	# No arguments: this module's custom runner calls every test as func()
+	# (test_custom_runner_tests_need_no_pytest_arguments).
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		_check_standalone_attempt_merge_required_checks_no_dispatch_without_same_repo_head_ref(Path(tmp_dir))
+
+
+def _check_standalone_attempt_merge_required_checks_no_dispatch_without_same_repo_head_ref(tmp_path: Path) -> None:
+	# Empty head_ref (fork or deleted-fork head): the wait runs with no final-CI
+	# workflow, so _pr_ensure_final_ci (whose fork check misses a null
+	# head.repo) is never reached; a missing check still refuses the merge.
+	result, calls = _run_stall_merge_required_checks(
+		tmp_path, head_ref="", wait_rc=1, wait_outcome="timeout", ci_state="absent",
+	)
+	assert result == "rc=1 reason=checks_incomplete in_flight=false"
+	assert calls == [
+		f"fresh 416 {_STALL_MERGE_SHA} main",
+		f"wait 416 {_STALL_MERGE_SHA} main 0 head_ref= wf=",
+	]
+	# The empty final-CI workflow is scoped to the wait call: the step-wide
+	# value survives for later PRs in the same tick.
+	after = (tmp_path / "after.log").read_text(encoding="utf-8").strip()
+	assert after == "wf_after=ci.yml head_ref_after=", after
+
+
+def test_standalone_attempt_merge_required_checks_dispatch_in_flight_refuses_without_merge() -> None:
+	# No arguments: this module's custom runner calls every test as func()
+	# (test_custom_runner_tests_need_no_pytest_arguments).
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		_check_standalone_attempt_merge_required_checks_dispatch_in_flight_refuses_without_merge(Path(tmp_dir))
+
+
+def _check_standalone_attempt_merge_required_checks_dispatch_in_flight_refuses_without_merge(tmp_path: Path) -> None:
+	result, calls = _run_stall_merge_required_checks(
+		tmp_path, wait_rc=1, wait_outcome="timeout", final_ci_outcome="dispatched", ci_state="absent",
+	)
+	assert result == "rc=1 reason=checks_incomplete in_flight=true"
+	assert [c.split(" ", 1)[0] for c in calls] == ["fresh", "wait"]
+	# A CI run already pending on the head is in flight too.
+	result, calls = _run_stall_merge_required_checks(
+		tmp_path, wait_rc=1, wait_outcome="timeout", final_ci_outcome="exists", runs_pending="2", ci_state="absent",
+	)
+	assert result == "rc=1 reason=checks_incomplete in_flight=true"
+	# A refused dispatch (nothing in flight) is counted.
+	result, calls = _run_stall_merge_required_checks(
+		tmp_path, wait_rc=1, wait_outcome="timeout", final_ci_outcome="dispatch_failed", ci_state="absent",
+	)
+	assert result == "rc=1 reason=checks_incomplete in_flight=false"
+	# A failed head is never in flight.
+	result, calls = _run_stall_merge_required_checks(
+		tmp_path, wait_rc=1, wait_outcome="failed", final_ci_outcome="dispatched", ci_state="failure",
+	)
+	assert result == "rc=1 reason=checks_incomplete in_flight=false"
+	assert not any(call.startswith("merge ") for call in calls)
+
+
+def test_standalone_attempt_merge_required_checks_first_refusal_reasons() -> None:
+	# No arguments: this module's custom runner calls every test as func()
+	# (test_custom_runner_tests_need_no_pytest_arguments).
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		_check_standalone_attempt_merge_required_checks_first_refusal_reasons(Path(tmp_dir))
+
+
+def _check_standalone_attempt_merge_required_checks_first_refusal_reasons(tmp_path: Path) -> None:
+	for kwargs, reason in (
+		({"state": "closed", "mergeable": "false", "head_sha": "abc"}, "state_not_open"),
+		({"mergeable": "false", "head_sha": "abc"}, "not_mergeable"),
+		({"mergeable": "", "head_sha": _STALL_MERGE_SHA}, "not_mergeable"),
+		({"head_sha": "abc1234"}, "bad_head_sha"),
+	):
+		result, calls = _run_stall_merge_required_checks(tmp_path, **kwargs)
+		assert result == f"rc=1 reason={reason} in_flight=false", (kwargs, result)
+		assert calls == [], (kwargs, calls)
+	result, calls = _run_stall_merge_required_checks(tmp_path, fresh_rc=1)
+	assert result == "rc=1 reason=base_not_fresh in_flight=false"
+	assert [c.split(" ", 1)[0] for c in calls] == ["fresh"]
+	result, calls = _run_stall_merge_required_checks(tmp_path, merge_rc=1)
+	assert result == "rc=1 reason=merge_call_failed in_flight=false"
+	assert [c.split(" ", 1)[0] for c in calls] == ["fresh", "wait", "merge"]
+
+
+def test_standalone_attempt_merge_arm_gates_new_chain_and_keeps_legacy():
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	body = _extract_bash_function(source, "run_standalone_stall_recovery() {")
+	start = body.index("      attempt_merge)\n")
+	arm = body[start:body.index("\n        ;;\n", start)]
+	assert "if _stall_merge_required_checks_enabled; then" in arm
+	assert '_standalone_attempt_merge_required_checks "${issue_num}" "${merge_pr}"' in arm
+	# Flag off: the legacy chain (#9715 first-refusal ladder, same gates,
+	# order and arguments) runs unchanged.
+	legacy_gates = (
+		'elif ! _pr_checks_completed "${merge_pr}" "${merge_head_sha}"; then',
+		'elif ! _pr_base_fresh_for_merge "${merge_pr}" "${merge_head_sha}" "${merge_base_ref}"; then',
+		'elif ! _orch_squash_merge_bound "${merge_pr}" "${merge_head_sha}" auto; then',
+	)
+	for gate in legacy_gates:
+		assert gate in arm, gate
+	assert [arm.index(gate) for gate in legacy_gates] == sorted(arm.index(gate) for gate in legacy_gates)
+	assert arm.index("_stall_merge_required_checks_enabled") < arm.index("_pr_checks_completed")
+	# Refusals are recorded; lease wait keeps its action and no increment.
+	assert "STALL_MERGE_REFUSAL issue=${issue_num} pr=${merge_pr}" in arm
+	assert 'STALL_RECOVERY_EFFECTIVE_ACTION="attempt_merge_refused_${STALL_MERGE_REFUSAL_REASON}"' in arm
+	assert 'STALL_RECOVERY_EFFECTIVE_ACTION="attempt_merge_skipped_merge_lease_wait"' in arm
+	lease = arm[arm.index('= "lease_wait" ]; then'):arm.index("attempt_merge_skipped_merge_lease_wait")]
+	assert "STALL_RECOVERY_SHOULD_INCREMENT" not in lease
+	refused = arm[arm.index('attempt_merge_refused_${STALL_MERGE_REFUSAL_REASON}'):]
+	# The #9732 refused branch ends where the #9715 legacy-refusal branch starts.
+	refused = refused[:refused.index("\n        elif ")]
+	in_flight = refused[refused.index('"${STALL_MERGE_CHECKS_IN_FLIGHT:-false}" = "true"'):refused.index("          else\n")]
+	assert "STALL_RECOVERY_SHOULD_INCREMENT" not in in_flight
+	assert 'STALL_RECOVERY_SHOULD_INCREMENT="true"' in refused
+	# The head ref comes from the PR JSON already read (no extra API call).
+	assert "merge_head_ref=\"$(printf '%s' \"${merge_pr_json}\" | jq -r" in arm
+
+
+def test_standalone_attempt_merge_head_ref_only_for_same_repo_head():
+	# A fork head must not pre-supply PR_CHECKS_HEAD_REF: _pr_ensure_final_ci
+	# runs its fork_head rejection only when it reads the PR itself.
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	body = _extract_bash_function(source, "run_standalone_stall_recovery() {")
+	start = body.index("      attempt_merge)\n")
+	arm = body[start:body.index("\n        ;;\n", start)]
+	ref_at = arm.index("merge_head_ref=\"$(printf '%s' \"${merge_pr_json}\" | jq -r")
+	guard_at = arm.index("merge_head_repo=\"$(printf '%s' \"${merge_pr_json}\" | jq -r")
+	call_at = arm.index("_standalone_attempt_merge_required_checks \"${issue_num}\"")
+	assert ref_at < guard_at < call_at
+	guard = arm[guard_at:call_at]
+	assert '"${merge_head_repo}" != "${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"' in guard
+	assert 'merge_head_ref=""' in guard
+	snippet = guard[guard.index("if [ -z"):guard.index("fi\n") + 3]
+	for head_repo, expected in (("o/r", "ai/issue-501"), ("fork/r", ""), ("", "")):
+		pr_json = json.dumps({"head": {"ref": "ai/issue-501", "repo": {"full_name": head_repo} if head_repo else None}})
+		script = (
+			"GITHUB_REPOSITORY=o/r\n"
+			"merge_head_ref=ai/issue-501\n"
+			f"merge_pr_json={shlex.quote(pr_json)}\n"
+			"merge_head_repo=\"$(printf '%s' \"${merge_pr_json}\" | jq -r 'if type == \"object\" then (.head.repo.full_name? // \"\") else \"\" end' 2>/dev/null | tail -n1)\"\n"
+			+ snippet
+			+ 'printf "ref=%s\\n" "${merge_head_ref}"\n'
+		)
+		res = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+		assert res.returncode == 0, res.stderr
+		assert res.stdout.strip() == f"ref={expected}", (head_repo, res.stdout)
+
+
+def test_orchestrate_poll_steps_carry_stall_merge_final_ci_env():
+	wf = _STALL_MERGE_ORCH_POLL_WF.read_text(encoding="utf-8")
+	lines = (
+		"          STALL_MERGE_REQUIRED_CHECKS_ENABLED: ${{ vars.STALL_MERGE_REQUIRED_CHECKS_ENABLED || 'true' }}\n",
+		"          REVIEW_FINAL_CI_WORKFLOW: ${{ github.repository == 'shubhodeep1/coding-workflows' && 'ci.yml' || '' }}\n",
+		"          AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}\n",
+		"          AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}\n",
+	)
+	for step in ("Process each tracking issue", "Run standalone stall recovery without active projects"):
+		start = wf.index(f"      - name: {step}\n")
+		end = wf.find("\n      - name:", start + 1)
+		block = wf[start:end if end != -1 else len(wf)]
+		for line in lines:
+			assert block.count(line) == 1, (step, line)
+
+
+def test_stall_merge_final_ci_workflow_is_captured_and_cleared_for_other_paths() -> None:
+	# No arguments: this module's custom runner calls every test as func()
+	# (test_custom_runner_tests_need_no_pytest_arguments).
+	with tempfile.TemporaryDirectory() as tmp_dir:
+		_check_stall_merge_final_ci_workflow_is_captured_and_cleared_for_other_paths(Path(tmp_dir))
+
+
+def _check_stall_merge_final_ci_workflow_is_captured_and_cleared_for_other_paths(tmp_path: Path) -> None:
+	# The step-wide REVIEW_FINAL_CI_WORKFLOW is for the new attempt_merge chain
+	# only: the poller captures it right after sourcing pr_checks_lib.sh and
+	# clears it, so gate D, the base-freshness branch update and the legacy
+	# flag-off chain never see it (their dispatch behaviour is unchanged).
+	source = POLLER_SCRIPT.read_text(encoding="utf-8")
+	capture = (
+		"unset _OPP_LIB_DIR\n"
+		"# Issue #9732: the two stall-recovery poller steps set REVIEW_FINAL_CI_WORKFLOW\n"
+	)
+	assert capture in source
+	block = source[source.index(capture):]
+	block = block[:block.index("unset REVIEW_FINAL_CI_WORKFLOW\n") + len("unset REVIEW_FINAL_CI_WORKFLOW\n")]
+	assert '_OPP_STALL_MERGE_FINAL_CI_WORKFLOW="${REVIEW_FINAL_CI_WORKFLOW:-}"\n' in block
+	helper = _extract_bash_function(source, "_standalone_attempt_merge_required_checks()\n{")
+	# Outside the helper and its header comment, nothing in the poller reads it.
+	rest = source.replace(helper, "")
+	assert "${REVIEW_FINAL_CI_WORKFLOW" not in rest.replace('"${REVIEW_FINAL_CI_WORKFLOW:-}"\nunset REVIEW_FINAL_CI_WORKFLOW', "")
+	log = tmp_path / "calls.log"
+	q = shlex.quote
+	script = (
+		"set -euo pipefail\n"
+		f"LOG={q(str(log))}\n"
+		"unset REVIEW_FINAL_CI_WORKFLOW\n"
+		"_OPP_STALL_MERGE_FINAL_CI_WORKFLOW=ci.yml\n"
+		"_pr_base_fresh_for_merge() { echo \"fresh wf=${REVIEW_FINAL_CI_WORKFLOW:-}\" >> \"$LOG\"; return 0; }\n"
+		"_pr_wait_for_required_checks() { echo \"wait wf=${REVIEW_FINAL_CI_WORKFLOW:-}\" >> \"$LOG\"; PR_CHECKS_WAIT_OUTCOME=ok; return 0; }\n"
+		"_orch_squash_merge_bound() { echo \"merge wf=${REVIEW_FINAL_CI_WORKFLOW:-}\" >> \"$LOG\"; return 0; }\n"
+		+ helper
+		+ f"_standalone_attempt_merge_required_checks 501 416 open true {_STALL_MERGE_SHA} main ai/issue-501\n"
+		+ 'echo "after=${REVIEW_FINAL_CI_WORKFLOW:-unset}"\n'
+	)
+	res = subprocess.run(["bash", "-c", script], capture_output=True, text=True, check=False)
+	assert res.returncode == 0, res.stdout + res.stderr
+	assert res.stdout.strip().splitlines()[-1] == "after=unset"
+	assert log.read_text(encoding="utf-8").splitlines() == ["fresh wf=ci.yml", "wait wf=ci.yml", "merge wf="]
 
 
 if __name__ == "__main__":
