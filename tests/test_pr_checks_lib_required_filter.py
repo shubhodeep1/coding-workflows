@@ -1233,6 +1233,30 @@ def test_blocking_run_id_from_other_repo_reads_as_non_actions() -> None:
 	assert run_ids == ["none:cancelled"], run_ids
 
 
+def test_blocking_run_id_requires_anchored_host_and_repo_prefix() -> None:
+	"""A details_url that merely embeds the repo path (another host, or a
+	longer path on github.com) reads as non-Actions; the anchored URL, in any
+	case, and a GITHUB_SERVER_URL host (GHES) yield the run id."""
+	for url in (
+		"https://attacker.example/x/owner/repo/actions/runs/4711/job/1",
+		"https://github.com/evil/owner/repo/actions/runs/4711/job/1",
+		"https://github.com.evil.example/owner/repo/actions/runs/4711/job/1",
+		"https://github.com/owner/repo/actions/runs/4711x/actions/runs/4712/job/1",
+	):
+		run = {"id": 1, "name": "CI", "status": "completed", "conclusion": "cancelled", "details_url": url}
+		_, _, run_ids = _blocking(_page([run]), env={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI"})
+		assert run_ids == ["none:cancelled"], (url, run_ids)
+	run = {"id": 1, "name": "CI", "status": "completed", "conclusion": "cancelled",
+		"details_url": "https://GitHub.com/Owner/Repo/actions/runs/4711"}
+	_, _, run_ids = _blocking(_page([run]), env={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI"})
+	assert run_ids == ["4711:cancelled"], run_ids
+	run = {"id": 1, "name": "CI", "status": "completed", "conclusion": "cancelled",
+		"details_url": "https://ghe.example/owner/repo/actions/runs/4711/job/1"}
+	_, _, run_ids = _blocking(_page([run]), env={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI",
+		"GITHUB_SERVER_URL": "https://ghe.example/"})
+	assert run_ids == ["4711:cancelled"], run_ids
+
+
 def test_blocking_names_empty_on_api_error_and_allow_all() -> None:
 	gate, names, run_ids = _blocking("{}")
 	assert gate == "1:query_failed" and names == [] and run_ids == [], (gate, names, run_ids)
