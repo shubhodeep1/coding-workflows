@@ -25366,6 +25366,14 @@ ${diagnostics}
   if [ "${_sj_review_runner_hold}" = "true" ]; then
     echo "STALL_RECOVERY issue=${issue_num} reason=review_waiting_for_runner held=${effective_action} pr=${target_pr:-none} run=${_sj_review_waiting_run:-none} phase=${phase}"
     STALL_RECOVERY_EFFECTIVE_ACTION="${effective_action}_held_review_waiting_for_runner"
+    # A held cache replay dispatched nothing: restore the replay_count it
+    # bumped, so held ticks cannot reach MAX_JUDGE_REPLAY and force
+    # escalate_human the tick the review starts (the cache key ignores status).
+    if [ "${_judge_from_cache}" = "true" ] && [ "${_judge_force_escalate}" != "true" ] && [ -n "${_judge_cache_key}" ]; then
+      jq --arg k "${_judge_cache_key}" --argjson n "${_judge_cache_replay_count}" \
+        '.judge_decision_cache = ((.judge_decision_cache // {}) | .[$k].replay_count = $n)' \
+        "${_judge_state_file}" > "${_judge_state_file}.tmp" 2>/dev/null && mv "${_judge_state_file}.tmp" "${_judge_state_file}" || rm -f "${_judge_state_file}.tmp" 2>/dev/null || true
+    fi
     return 1
   fi
 

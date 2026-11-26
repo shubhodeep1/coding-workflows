@@ -35996,5 +35996,23 @@ def test_stall_judge_live_review_runs_old_waiting_run_does_not_hold():
 	assert "ai:needs-human" in result["issues"]["10"]["labels"]
 
 
+def test_stall_judge_live_review_runs_held_cache_replay_keeps_replay_count():
+	# A held tick that replays the cached verdict must not use up the replay
+	# budget, or MAX_JUDGE_REPLAY forces escalate_human once the review starts.
+	first = _run_stall_judge_live_review_poller(active_autofix_runs=[_sj_live_review_run()])
+	cache = first["latest_state"].get("judge_decision_cache") or {}
+	assert cache and all(entry.get("replay_count", 0) == 0 for entry in cache.values()), cache
+	second = _run_stall_judge_live_review_poller(
+		state=json.loads(json.dumps(first["latest_state"])),
+		active_autofix_runs=[_sj_live_review_run()],
+	)
+	out = second["stdout"]
+	assert "replaying cached decision 'escalate_human'" in out, out[-4000:]
+	assert "reason=review_waiting_for_runner held=escalate_human" in out, out[-4000:]
+	replayed = second["latest_state"].get("judge_decision_cache") or {}
+	assert replayed and all(entry.get("replay_count", 0) == 0 for entry in replayed.values()), replayed
+	assert "ai:needs-human" not in second["issues"]["10"]["labels"]
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())
