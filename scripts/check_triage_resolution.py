@@ -580,13 +580,15 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 			# listing as it is (the check below fails closed on it).
 			if all(isinstance(item, dict) for item in base_runs):
 				base_runs = sorted(base_runs, key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
-				# A red run stays the branch's result until a green run created
-				# after it finished: a delta push that chose its base before the
-				# red run finished cannot vouch for the tree it found broken.
+				# A red run stays the branch's result until a green run started
+				# after it finished (`run_started_at`, else `created_at`): a delta
+				# push that chose its base before the red run finished cannot
+				# vouch for the tree it found broken, while a push queued behind
+				# the red run in `ci-push-<ref>` starts only after it.
 				red_run = next((item for item in base_runs if item.get("conclusion") not in CI_NON_RED_CONCLUSIONS), None)
 				if red_run is not None:
 					red_finished = str(red_run.get("updated_at") or red_run.get("created_at") or "")
-					if not any(item.get("conclusion") == "success" and str(item.get("created_at") or "") >= red_finished for item in base_runs):
+					if not any(item.get("conclusion") == "success" and str(item.get("run_started_at") or item.get("created_at") or "") >= red_finished for item in base_runs):
 						base_runs = [red_run] + [item for item in base_runs if item is not red_run]
 		if not isinstance(base_runs, list) or not base_runs or not isinstance(base_runs[0], dict):
 			_fail("no_completed_default_run")

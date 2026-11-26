@@ -33,10 +33,13 @@
 #       The base is the run that finished last (`updated_at`, then
 #       `created_at`): push and scheduled runs overlap, so a later-created
 #       delta push that finished first cannot hide a red scheduled run. A red
-#       run also stays the result until a green run created after it finished
-#       (`created_at` >= its `updated_at`): a delta push that chose its base
-#       before the red run finished cannot vouch for the tree it found broken,
-#       while any run created later saw base_red and ran the full suite. The
+#       run also stays the result until a green run started after it finished
+#       (`run_started_at`, else `created_at`, >= its `updated_at`): a delta push
+#       that chose its base before the red run finished cannot vouch for the
+#       tree it found broken, while any run started later (including a push
+#       queued behind it in `ci-push-<ref>`) saw base_red and ran the full
+#       suite. A neutral or empty conclusion never keeps an earlier red
+#       base red, and is never a green base itself. The
 #       runs read is tried up to 3 times before read_failed; the last failure
 #       logs a category (auth, not_found or other), never gh's stderr.
 #       A failed GITHUB_OUTPUT write fails the step (exit 1), so `lint` never
@@ -220,10 +223,10 @@ ci_main_delta_select()
 				| select((.head_sha // "") | tostring | test("^[0-9a-f]{40}$"))
 				| select((.conclusion // "") | IN("cancelled", "skipped") | not)]
 			| sort_by([(.updated_at // .created_at // ""), (.created_at // "")]) as $done
-			| ([$done[] | select((.conclusion // "") != "success")] | last) as $red
+			| ([$done[] | select((.conclusion // "") | IN("success", "neutral", "") | not)] | last) as $red
 			| if ($done | length) == 0 then "none"
 			  elif $red != null and ([$done[] | select((.conclusion // "") == "success"
-			      and ((.created_at // "") >= ($red.updated_at // $red.created_at // "")))] | length) == 0
+			      and ((.run_started_at // .created_at // "") >= ($red.updated_at // $red.created_at // "")))] | length) == 0
 			  then "red \($red.head_sha)"
 			  elif ($done | last | .conclusion // "") == "success" then "green \($done | last | .head_sha)"
 			  else "red \($done | last | .head_sha)" end

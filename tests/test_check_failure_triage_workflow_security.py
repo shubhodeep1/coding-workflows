@@ -2031,6 +2031,21 @@ class CheckFailureTriageBaseGateTests(unittest.TestCase):
 		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 		self.assertIn("CHECK_TRIAGE skip reason=pr_specific_failure base=main base_conclusion=success pr=17 check=CI", proc.stdout)
 
+	def test_ci_base_gate_green_push_queued_behind_the_red_run_clears_it(self) -> None:
+		"""A push created before the red run finished but queued behind it in
+		ci-push-<ref> (run_started_at after the red run's updated_at) clears it."""
+		red = {"id": 70, "event": "push", "status": "completed", "conclusion": "failure",
+			"created_at": "2026-11-26T10:00:00Z", "run_started_at": "2026-11-26T10:00:05Z", "updated_at": "2026-11-26T10:30:00Z"}
+		queued = {"id": 71, "event": "push", "status": "completed", "conclusion": "success",
+			"created_at": "2026-11-26T10:15:00Z", "run_started_at": "2026-11-26T10:30:05Z", "updated_at": "2026-11-26T11:00:00Z"}
+		proc, _outputs, _metadata = _run_collect_stage(
+			parent_body=PLAIN_SOURCE,
+			base={"ref": "main", "workflow_id": "9", "workflow_path": ".github/workflows/ci.yml"},
+			extra_env={"MOCK_BASE_RUNS_PAGE": json.dumps({"workflow_runs": [queued, red]})},
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE skip reason=pr_specific_failure base=main base_conclusion=success pr=17 check=CI", proc.stdout)
+
 	def test_non_ci_base_gate_keeps_the_push_read(self) -> None:
 		calls: list[str] = []
 		proc, _outputs, _metadata = _run_collect_stage(

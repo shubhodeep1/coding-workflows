@@ -359,6 +359,37 @@ def test_green_run_created_after_the_red_run_finished_clears_it(repo: Repo) -> N
 	assert f"outcome=ok reason=selected base={later[:12]} " in _terminal(proc)
 
 
+def test_green_push_queued_behind_the_red_run_clears_it(repo: Repo) -> None:
+	# P2 was pushed while P1 was running, waited in `ci-push-main` and only
+	# started (and read its base) after P1 finished red, so it saw base_red
+	# and ran the full suite: its green clears the red although it was
+	# created before P1 finished.
+	mid = repo.commit("push 1", files={"src/a.sh": "echo 1\n"})
+	queued = repo.commit("push 2", files={"src/b.sh": "echo 2\n"})
+	repo.commit("push 3", files={"src/a.sh": "echo 3\n"})
+	repo.runs(
+		_run(mid, conclusion="failure", created="2026-11-26T10:00:00Z", run_started_at="2026-11-26T10:00:05Z", updated_at="2026-11-26T10:30:00Z"),
+		_run(queued, created="2026-11-26T10:15:00Z", run_started_at="2026-11-26T10:30:05Z", updated_at="2026-11-26T11:00:00Z"),
+	)
+	proc, outputs = repo.run("select")
+	assert outputs == {"full_required": "false"}, proc.stdout
+	assert f"outcome=ok reason=selected base={queued[:12]} " in _terminal(proc)
+
+
+def test_neutral_run_does_not_keep_an_earlier_red_base(repo: Repo) -> None:
+	# A neutral conclusion is neither red nor green: it never makes a base red
+	# for later runs, and it is never a green base itself.
+	mid = repo.commit("push 1", files={"src/a.sh": "echo 1\n"})
+	repo.commit("push 2", files={"src/b.sh": "echo 2\n"})
+	repo.runs(
+		_run(repo.base, conclusion="neutral", created="2026-11-26T10:00:00Z", updated_at="2026-11-26T10:30:00Z"),
+		_run(mid, created="2026-11-26T10:10:00Z", updated_at="2026-11-26T10:40:00Z"),
+	)
+	proc, outputs = repo.run("select")
+	assert outputs == {"full_required": "false"}, proc.stdout
+	assert f"base={mid[:12]} " in _terminal(proc)
+
+
 def test_missing_wiring_list_runs_the_full_suite(repo: Repo) -> None:
 	(repo.root / "scripts" / "ci_sync_quick.sh").unlink()
 	repo.commit("drop the wiring list", files={"src/a.sh": "echo 1\n"})

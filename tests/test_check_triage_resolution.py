@@ -1343,6 +1343,20 @@ def test_ci_green_run_created_after_the_red_run_finished_clears_it(tmp_path, mon
 	assert rc == 0 and result["status"] == "resolved", result
 
 
+def test_ci_green_push_queued_behind_the_red_run_clears_it(tmp_path, monkeypatch):
+	# Created before the red push finished, but queued in ci-push-main and
+	# started only after it: run_started_at, not created_at, decides.
+	runs = [
+		_base_run(id=37000001013, created_at="2026-11-26T10:15:00Z", run_started_at="2026-11-26T10:30:05Z", updated_at="2026-11-26T11:00:00Z"),
+		_base_run(conclusion="failure", id=37000001014, created_at="2026-11-26T10:00:00Z", run_started_at="2026-11-26T10:00:05Z", updated_at="2026-11-26T10:30:00Z"),
+	]
+	routes = _ci_routes(runs, **{
+		rf"repos/{REPO}/actions/runs/37000001013/jobs\?filter=latest&per_page=100": _jobs(BASE_JOBS, id_base=1),
+	})
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert rc == 0 and result["status"] == "resolved", result
+
+
 def test_ci_delta_push_falls_back_to_the_newest_green_scheduled_run(tmp_path, monkeypatch):
 	delta = _base_run(id=37000001003)
 	scheduled = _base_run(event="schedule", id=37000001004, head_sha=SCHEDULE_SHA)

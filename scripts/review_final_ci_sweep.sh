@@ -143,8 +143,8 @@ review_final_ci_sweep_base_sync_log()
 }
 
 # `review_final_ci_sweep_base_ci_red <base ref>`: returns 0 when the base has
-# push CI and its newest completed (success or failure) push or scheduled run
-# of the workflow failed, 1 otherwise (issue #10156: main's push runs are a
+# push CI and its newest completed push or scheduled run of the workflow that
+# reports a result failed (failure, timed_out, startup_failure, ...), 1 otherwise (issue #10156: main's push runs are a
 # delta suite and its full suite runs on a schedule, so a red scheduled run is
 # a red base) (green, no push CI, or unknown: an unreadable
 # base result does not block the sync). Reads the tick's listing first
@@ -153,16 +153,20 @@ review_final_ci_sweep_base_sync_log()
 # (`updated_at`, then `created_at`): push and scheduled runs sit in separate
 # concurrency groups and overlap, so a later-created delta push that finished
 # first must not hide a scheduled full run that finished red after it.
-# A red run stays the result until a green run created after it finished
-# (`created_at` >= the red run's `updated_at`): a delta push that chose its
-# base before that red run finished cannot vouch for the tree it found broken.
+# A red run (any conclusion other than success; cancelled, skipped, neutral
+# and empty ones report no result and are dropped) stays the result until a
+# green run started after it finished (`run_started_at`, else `created_at`,
+# >= the red run's `updated_at`): a delta push that chose its base before that
+# red run finished cannot vouch for the tree it found broken, while a push
+# that queued in `ci-push-<ref>` behind the red run starts, and reads its
+# base, only after it.
 declare -A FINAL_CI_SWEEP_BASE_STATE=()
 review_final_ci_sweep_base_ci_red()
 {
 	local base="$1" state="" base_runs=""
 	local base_red_wins_jq='sort_by([(.updated_at // .created_at // ""), (.created_at // "")]) as $done
-		| ([$done[] | select(.conclusion == "failure")] | last) as $red
-		| if $red != null and ([$done[] | select(.conclusion == "success" and ((.created_at // "") >= ($red.updated_at // $red.created_at // "")))] | length) == 0
+		| ([$done[] | select((.conclusion // "") != "success")] | last) as $red
+		| if $red != null and ([$done[] | select(.conclusion == "success" and ((.run_started_at // .created_at // "") >= ($red.updated_at // $red.created_at // "")))] | length) == 0
 		  then "failure" else ($done | last | (.conclusion // "")) end'
 	case "${base}" in
 		main|stable|orchestrator/project-*) ;;
@@ -174,13 +178,13 @@ review_final_ci_sweep_base_ci_red()
 		state="$(jq -r --arg base "${base}" '
 			[.workflow_runs[]? | select(type == "object")
 				| select(((.event // "") | IN("push", "schedule")) and (.head_branch // "") == $base and (.status // "") == "completed")
-				| select((.conclusion // "") | IN("success", "failure"))]
+				| select((.conclusion // "") | IN("cancelled", "skipped", "neutral", "") | not)]
 			| '"${base_red_wins_jq}" "${FINAL_CI_SWEEP_LISTING_FILE}" 2>/dev/null | tail -n1)"
 		if [ -z "${state}" ]; then
 			base_runs="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/actions/workflows/${REVIEW_FINAL_CI_WORKFLOW}/runs?branch=${base}&status=completed&per_page=10" 2>/dev/null || echo "")"
 			state="$(printf '%s' "${base_runs}" | jq -r '
 				[.workflow_runs[]? | select(type == "object") | select((.event // "") | IN("push", "schedule"))
-					| select((.conclusion // "") | IN("success", "failure"))]
+					| select((.conclusion // "") | IN("cancelled", "skipped", "neutral", "") | not)]
 				| '"${base_red_wins_jq}" 2>/dev/null | tail -n1)"
 		fi
 		FINAL_CI_SWEEP_BASE_STATE["${base}"]="${state:-unknown}"
