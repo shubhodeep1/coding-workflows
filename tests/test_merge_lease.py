@@ -1264,7 +1264,11 @@ class JudgeDecisionLeaseGrant(unittest.TestCase):
 		h1, _ = _p2_tick(with_judge)
 		h2, _ = _p2_tick(with_gate)
 		def reads(h: _Harness) -> list[str]:
-			return [c for c in _stable_calls(h.calls) if not c.startswith("gh workflow run")]
+			# Issue #10098: a confirmed head-gate waiter also gets the ready-
+			# first mergeability read (pulls/<n>); a judge-decision waiter is
+			# granted without it. Every other read must stay the same.
+			return [c for c in _stable_calls(h.calls) if not c.startswith("gh workflow run")
+				and c != "gh api repos/owner/repo/pulls/5"]
 		self.assertEqual(reads(h1), reads(h2))
 		self.assertEqual(sum("/statuses" in c for c in h1.calls), 1, h1.calls)
 
