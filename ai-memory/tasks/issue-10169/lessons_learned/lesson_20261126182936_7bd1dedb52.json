@@ -1,0 +1,24 @@
+{
+  "discovered_at": "2026-11-26T18:29:36Z",
+  "issue_number": 10169,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=scripts/review_merge_train.sh:3019-3025; cited_path=scripts/review_merge_train.sh; files_touched=.github/workflows/review_autofix.yml, README.md, agents.d/merge-lease-short-cs-p3-resolve-delta-review.md, changelog.d/merge-lease-short-cs-p3-resolve-delta-review.md, scripts/pr_checks_lib.sh, scripts/review_autofix_step_evaluate_gate.sh, scripts/review_autofix_step_generate_diff_context.sh, scripts/review_head_gate.sh, scripts/review_single_issue_security_pass.sh, scripts/stage_switches.json, tests/test_merge_resolve_delta_review.py.",
+  "phase": "review_autofix",
+  "pr_number": 10173,
+  "record_id": "lesson_20261126182936_7bd1dedb52",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/review_merge_train.sh",
+    ".github/workflows/review_autofix.yml",
+    "README.md",
+    "agents.d/merge-lease-short-cs-p3-resolve-delta-review.md",
+    "changelog.d/merge-lease-short-cs-p3-resolve-delta-review.md",
+    "scripts/pr_checks_lib.sh",
+    "scripts/review_autofix_step_evaluate_gate.sh",
+    "scripts/review_autofix_step_generate_diff_context.sh",
+    "scripts/review_head_gate.sh",
+    "scripts/review_single_issue_security_pass.sh",
+    "scripts/stage_switches.json",
+    "tests/test_merge_resolve_delta_review.py"
+  ]
+}
