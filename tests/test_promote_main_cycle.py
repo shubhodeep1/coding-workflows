@@ -148,10 +148,25 @@ if args[:1] == ["api"]:
         respond({"total_count": 0, "items": []})
     if "/issues/" in path and path.endswith("/comments?per_page=100"):
         respond(state.get("cycle_comments", [{"body": "apply-analysis-source-doc: x\napply-analysis-cycle-baseline-sha: " + state.get("last_cycle_baseline", ""), "user": {"login": "github-actions[bot]"}, "author_association": "NONE"}]))
+    if "/pulls?" in path:
+        # Forward-merge pending alert (#9919): open PRs into main.
+        state.setdefault("pulls_reads", []).append(path)
+        if state.get("pulls_error"):
+            save(); sys.stderr.write("HTTP 404: Not Found\n"); sys.exit(1)
+        respond(state.get("open_pulls", []))
     if "/issues?" in path:
         labels = state.get("in_flight_labels", {})
         respond([{"number": n, "labels": [{"name": l} for l in labels.get(str(n), [])]} for n in state.get("in_flight", [])])
+    if path.endswith("/actions/runs") and "status=queued" in args:
+        # Issue #10037: the created-range read of queued runs.
+        state.setdefault("window_reads", []).append([a for a in args if "=" in a])
+        if state.get("window_error"):
+            save(); sys.stderr.write("HTTP 503\n"); sys.exit(1)
+        runs = state.get("window_runs", [])
+        respond({"total_count": len(runs), "workflow_runs": runs})
     if "/actions/workflows/promote-main-to-stable.yml/runs" in path:
+        if state.get("self_runs_error"):
+            save(); sys.stderr.write("HTTP 503\n"); sys.exit(1)
         respond({"workflow_runs": state.get("self_runs", [])})
     if "/actions/workflows/test-and-mark-stable.yml/runs" in path and "event=workflow_dispatch" not in path:
         # The idle check before dispatch (any branch, any event).
@@ -183,6 +198,8 @@ if args[:1] == ["api"]:
         respond(state.get("gate_jobs", {"jobs": []}))
     save(); sys.stderr.write("unexpected api path " + path + "\n"); sys.exit(1)
 if args[:2] == ["workflow", "run"]:
+    if state.get("workflow_run_error"):
+        save(); sys.stderr.write("HTTP 500\n"); sys.exit(1)
     state.setdefault("dispatches", []).append(args[2:])
     save(); sys.exit(0)
 save(); sys.stderr.write("unexpected gh call " + " ".join(args) + "\n"); sys.exit(1)
@@ -1163,8 +1180,94 @@ def test_pinned_cycle_checks_the_stable_branch_after_the_freeze() -> None:
 	assert proc.returncode == 0, proc.stdout + proc.stderr
 	assert f"PROMOTE_CYCLE_PIN outcome=frozen candidate={TIP}" in proc.stdout
 	assert f"PROMOTE_CYCLE_SKIPPED reason=base_not_ancestor base={STABLE_BRANCH_OTHER} head={TIP} status=diverged ref=heads/stable" in proc.stdout
+	assert f"PROMOTE_CYCLE_FORWARD_MERGE_PENDING prs=none base={STABLE_BRANCH_OTHER} head={TIP} ref=heads/stable" in proc.stdout
 	assert not final.get("dispatches")
 	assert final["tag_deletes"] == 1
+
+
+# --- Forward-merge pending alert on a stable-branch divergence (#9919) -------
+
+def _fm_diverged_stable_state(**extra) -> dict:
+	state = {
+		"stable_branch_sha": STABLE_BRANCH_OTHER,
+		"compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), STABLE_BRANCH_OTHER: {"status": "diverged", "total_commits": 0, "files": []}},
+	}
+	state.update(extra)
+	return state
+
+
+def _fm_open_pull(num: int, ref: str, repo: str = "owner/repo") -> dict:
+	return {"number": num, "title": "evil https://phish.example", "html_url": "https://phish.example/x",
+		"head": {"ref": ref, "repo": {"full_name": repo}}, "base": {"ref": "main"}}
+
+
+def _fm_tg_texts(final: dict) -> list[str]:
+	return [next(a for a in post if a.startswith("text=")) for post in final["tg_posts"]]
+
+
+def test_stable_branch_divergence_alerts_open_forward_merge_pr() -> None:
+	state = _fm_diverged_stable_state(open_pulls=[
+		_fm_open_pull(9891, "auto/forward-merge-stable-1-1"),
+		_fm_open_pull(12, "auto/forward-merge-stable-2-1", repo="attacker/repo"),
+		_fm_open_pull(13, "ai/issue-13"),
+		{"number": 14, "head": {"ref": "auto/forward-merge-stable-3-1", "repo": None}},
+	])
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), state, env=TG_ENV)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	pending = f"PROMOTE_CYCLE_FORWARD_MERGE_PENDING prs=9891 base={STABLE_BRANCH_OTHER} head={TIP} ref=heads/stable"
+	skipped = f"PROMOTE_CYCLE_SKIPPED reason=base_not_ancestor base={STABLE_BRANCH_OTHER} head={TIP} status=diverged ref=heads/stable"
+	assert pending in proc.stdout and skipped in proc.stdout
+	assert proc.stdout.index(pending) < proc.stdout.index(skipped)
+	assert final["github_output"].strip().endswith("outcome=skipped:base_not_ancestor")
+	assert len(final["pulls_reads"]) == 1
+	assert "base=main" in final["pulls_reads"][0] and "state=open" in final["pulls_reads"][0]
+	texts = _fm_tg_texts(final)
+	assert len(texts) == 1
+	assert "https://github.com/owner/repo/pull/9891" in texts[0]
+	assert "Create a merge commit" in texts[0]
+	assert STABLE_BRANCH_OTHER in texts[0] and TIP in texts[0]
+	assert "/pull/12" not in texts[0] and "/pull/13" not in texts[0] and "/pull/14" not in texts[0]
+	assert "phish" not in texts[0]
+
+
+def test_stable_branch_divergence_without_forward_merge_pr() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), _fm_diverged_stable_state(), env=TG_ENV)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "PROMOTE_CYCLE_FORWARD_MERGE_PENDING prs=none " in proc.stdout
+	texts = _fm_tg_texts(final)
+	assert len(texts) == 1
+	assert "No open forward-merge PR: check forward-merge-stable-to-main.yml runs" in texts[0]
+
+
+def test_stable_branch_divergence_forward_merge_lookup_failure_still_skips() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), _fm_diverged_stable_state(pulls_error=True), env=TG_ENV)
+	assert proc.returncode == 0, proc.stdout + proc.stderr
+	assert "PROMOTE_CYCLE_FORWARD_MERGE_PENDING prs=lookup_failed " in proc.stdout
+	assert "PROMOTE_CYCLE_SKIPPED reason=base_not_ancestor" in proc.stdout
+	assert final["github_output"].strip().endswith("outcome=skipped:base_not_ancestor")
+	texts = _fm_tg_texts(final)
+	assert len(texts) == 1 and "lookup failed" in texts[0]
+	assert not final.get("dispatches")
+
+
+def test_other_skips_make_no_forward_merge_lookup() -> None:
+	failed_head = "4" * 40
+	runs = [{"id": 2, "status": "completed", "event": "schedule", "conclusion": "failure", "head_sha": failed_head, "created_at": "2026-09-18T00:00:00Z"}]
+	cases = [
+		({"self_runs": runs, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"]), failed_head: _compare([], status="diverged")}}, {}),
+		({"stable_branch_error": True, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}}, {}),
+		({"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}}, {"STUB_CANDIDATES": "1"}),
+	]
+	for state, env in cases:
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, final, _ = _run(Path(tmp), state, env={**TG_ENV, **env})
+		assert "PROMOTE_CYCLE_SKIPPED" in proc.stdout, proc.stdout + proc.stderr
+		assert "PROMOTE_CYCLE_FORWARD_MERGE_PENDING" not in proc.stdout
+		assert not final.get("pulls_reads")
+		assert not any("Create a merge commit" in t for t in _fm_tg_texts(final))
 
 
 def test_stable_branch_compare_keeps_the_tag_change_log() -> None:
@@ -1784,3 +1887,193 @@ def test_diverged_stable_branch_with_recent_marker_does_not_report() -> None:
 	assert "PROMOTE_CYCLE_SKIPPED reason=base_not_ancestor" in proc.stdout
 	assert not final.get("heal_dispatches")
 	assert "RELEASE_BLOCKER_REPORTED" not in proc.stdout
+
+
+# --- Runner-wait check and poller retry (issue #10037) ---
+
+PROMOTE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "promote-main-to-stable.yml"
+RETRY_TITLE = "Promote main to stable [cycle-retry]"
+MARKER_STEP = "Record runner-wait skip for the poller retry"
+
+
+def _rw_minutes_ago(minutes: float) -> str:
+	return (datetime.now(timezone.utc) - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _rw_recent_gate_only(hours_ago: float = 2) -> list:
+	# The newest gate-only run is younger than the 24 h window: bound open.
+	return [{"id": 450, "status": "completed", "conclusion": "success", "head_branch": "main", "head_sha": "6" * 40,
+		"display_title": "Test & Mark Stable Release [cycle:600]", "created_at": _rw_minutes_ago(hours_ago * 60)}]
+
+
+def _rw_queued(run_id: int, minutes_ago: float) -> dict:
+	return {"id": run_id, "status": "queued", "created_at": _rw_minutes_ago(minutes_ago)}
+
+
+def _rw_state(**overrides) -> dict:
+	state = {"compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}, "gate_runs_sequence": GATE_SUCCESS,
+		"gate_idle_sequence": [_rw_recent_gate_only()]}
+	state.update(overrides)
+	return state
+
+
+def test_runner_wait_long_skips_before_the_smoke_gate_and_the_freeze() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, env_out = _run(Path(tmp), _rw_state(window_runs=[_rw_queued(1, 70)]))
+		assert not env_out.exists()
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert "PROMOTE_CYCLE_SKIPPED reason=runner_wait_long oldest_queued_min=70 max=30 last_run=450 last_age_hours=2 window_hours=24" in proc.stdout
+	assert "outcome=skipped:runner_wait_long" in final["github_output"]
+	assert not final.get("dispatches")
+	assert not final.get("tag_objects_created") and not final.get("ref_creates")
+	assert "PROMOTE_CYCLE_PIN outcome=frozen" not in proc.stdout
+	assert len(final["window_reads"]) == 1
+
+
+def test_runner_wait_short_runs_the_cycle() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), _rw_state(window_runs=[_rw_queued(1, 5)]))
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert "PROMOTE_CYCLE_RUNNER_WAIT_CHECK outcome=clear max=30 calls=1" in proc.stdout
+	assert [d[0] for d in final["dispatches"]] == ["test-and-mark-stable.yml"]
+
+
+def test_runner_wait_only_wedged_runs_queued_runs_the_cycle() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), _rw_state(window_runs=[_rw_queued(1, 30 * 60)]))
+	assert "PROMOTE_CYCLE_RUNNER_WAIT_CHECK outcome=clear" in proc.stdout
+	assert [d[0] for d in final["dispatches"]] == ["test-and-mark-stable.yml"]
+
+
+def test_runner_wait_read_failure_runs_the_cycle_with_a_warning() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), _rw_state(window_error=True), env={"GH_RETRY_MAX_ATTEMPTS": "1"})
+	assert "::warning::PROMOTE_CYCLE_RUNNER_WAIT_CHECK outcome=read_failed" in proc.stdout
+	assert [d[0] for d in final["dispatches"]] == ["test-and-mark-stable.yml"]
+
+
+def test_runner_wait_limit_zero_makes_no_read() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), _rw_state(window_runs=[_rw_queued(1, 70)]), env={"RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES": "0"})
+	assert "PROMOTE_CYCLE_RUNNER_WAIT_CHECK outcome=disabled" in proc.stdout
+	assert not final.get("window_reads")
+	assert [d[0] for d in final["dispatches"]] == ["test-and-mark-stable.yml"]
+
+
+def test_runner_wait_bound_reached_runs_the_cycle_without_a_read() -> None:
+	for idle, last in (([[]], "none"), ([_rw_recent_gate_only(hours_ago=30)], "450")):
+		with tempfile.TemporaryDirectory() as tmp:
+			proc, final, _ = _run(Path(tmp), _rw_state(window_runs=[_rw_queued(1, 500)], gate_idle_sequence=idle))
+		assert f"PROMOTE_CYCLE_RUNNER_WAIT_CHECK outcome=bound_reached last_run={last}" in proc.stdout, idle
+		assert not final.get("window_reads")
+		assert [d[0] for d in final["dispatches"]] == ["test-and-mark-stable.yml"]
+
+
+def test_failed_retry_runs_spend_the_attempt_budget() -> None:
+	runs = [
+		{"id": 2, "status": "completed", "event": "schedule", "conclusion": "failure", "head_sha": TIP, "created_at": "2026-09-16T00:00:00Z"},
+		{"id": 5, "status": "completed", "event": "workflow_dispatch", "display_title": RETRY_TITLE, "conclusion": "failure", "head_sha": TIP, "created_at": "2026-09-17T00:00:00Z"},
+		{"id": 6, "status": "completed", "event": "workflow_dispatch", "display_title": RETRY_TITLE, "conclusion": "timed_out", "head_sha": TIP, "created_at": "2026-09-18T00:00:00Z"},
+		# A failed promotion (target_sha) run is not a cycle run.
+		{"id": 7, "status": "completed", "event": "workflow_dispatch", "display_title": "Promote main to stable", "conclusion": "failure", "head_sha": TIP, "created_at": "2026-09-18T06:00:00Z"},
+	]
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), {"self_runs": runs, "compares": {TAG_COMMIT: _compare(["scripts/x.sh"])}})
+	assert f"PROMOTE_CYCLE_SKIPPED reason=no_code_changes_since_failed_run base={TIP} head={TIP} attempts=3 max=3" in proc.stdout
+	assert not final.get("dispatches")
+
+
+def _retry_run(**overrides) -> dict:
+	run = {"id": 880, "status": "completed", "conclusion": "success", "event": "schedule", "head_sha": TIP,
+		"display_title": "Promote main to stable", "created_at": _rw_minutes_ago(130), "updated_at": _rw_minutes_ago(120)}
+	run.update(overrides)
+	return run
+
+
+def _marker_jobs(conclusion: str = "success") -> dict:
+	return {"jobs": [{"id": 1, "name": "cycle", "steps": [{"name": "Run the promote cycle", "conclusion": "success"},
+		{"name": MARKER_STEP, "conclusion": conclusion}]}]}
+
+
+def _retry_check(state: dict, env: dict | None = None):
+	run_env = {"PROMOTE_CYCLE_RETRY_CHECK_ONLY": "true", "GH_RETRY_MAX_ATTEMPTS": "1"}
+	run_env.update(env or {})
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), state, env=run_env)
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	return proc, final
+
+
+def test_retry_check_dispatches_once_after_a_runner_wait_skip() -> None:
+	proc, final = _retry_check({"self_runs": [_retry_run()], "self_run_jobs": {"880": _marker_jobs()}})
+	assert "PROMOTE_CYCLE_RETRY outcome=dispatched after_run=880 age_min=120" in proc.stdout
+	assert final["dispatches"] == [["promote-main-to-stable.yml", "--repo", "owner/repo", "--ref", "main", "-f", "cycle_retry=true"]]
+	# Check-only: none of the cycle's guards ran.
+	assert "PROMOTE_CYCLE_SKIPPED" not in proc.stdout
+	api_paths = [c for c in final["calls"] if c[:1] == ["api"]]
+	# Runs listing, marker jobs read, current runner-wait read.
+	assert len(api_paths) == 3, api_paths
+	assert len(final["window_reads"]) == 1
+
+
+def test_retry_check_holds_while_the_runner_wait_is_still_long() -> None:
+	proc, final = _retry_check({"self_runs": [_retry_run()], "self_run_jobs": {"880": _marker_jobs()}, "window_runs": [_rw_queued(1, 70)]})
+	assert "PROMOTE_CYCLE_RETRY outcome=wait_long after_run=880 oldest_queued_min=70 max=30" in proc.stdout
+	assert not final.get("dispatches")
+
+
+def test_retry_check_dispatches_when_the_runner_wait_read_fails() -> None:
+	proc, final = _retry_check({"self_runs": [_retry_run()], "self_run_jobs": {"880": _marker_jobs()}, "window_error": True})
+	assert "::warning::PROMOTE_CYCLE_RETRY wait_check=read_failed after_run=880" in proc.stdout
+	assert "PROMOTE_CYCLE_RETRY outcome=dispatched after_run=880" in proc.stdout
+	assert len(final["dispatches"]) == 1
+
+
+def test_retry_check_newest_retry_run_is_the_candidate() -> None:
+	runs = [_retry_run(id=870, created_at=_rw_minutes_ago(400), updated_at=_rw_minutes_ago(390)),
+		_retry_run(id=881, event="workflow_dispatch", display_title=RETRY_TITLE)]
+	proc, final = _retry_check({"self_runs": runs, "self_run_jobs": {"881": _marker_jobs()}})
+	assert "PROMOTE_CYCLE_RETRY outcome=dispatched after_run=881" in proc.stdout
+
+
+def test_retry_check_skips_without_dispatching() -> None:
+	cases = [
+		({"self_runs": [_retry_run()]}, {"PROMOTE_CYCLE_ENABLED": "false"}, "PROMOTE_CYCLE_RETRY outcome=disabled reason=cycle_disabled"),
+		({"self_runs": [_retry_run()]}, {"RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES": "0"}, "PROMOTE_CYCLE_RETRY outcome=disabled reason=runner_wait_check_off"),
+		({"self_runs_error": True}, {}, "PROMOTE_CYCLE_RETRY outcome=read_failed lookup=runs"),
+		({"self_runs": [_retry_run(), _retry_run(id=881, status="in_progress", conclusion=None)]}, {}, "PROMOTE_CYCLE_RETRY outcome=cycle_active active_runs=1"),
+		({"self_runs": []}, {}, "PROMOTE_CYCLE_RETRY outcome=no_cycle_run"),
+		({"self_runs": [_retry_run(conclusion="failure")]}, {}, "PROMOTE_CYCLE_RETRY outcome=not_runner_wait run=880 conclusion=failure"),
+		({"self_runs": [_retry_run(updated_at=_rw_minutes_ago(20))], "self_run_jobs": {"880": _marker_jobs()}}, {}, "PROMOTE_CYCLE_RETRY outcome=not_due run=880 age_min=20"),
+		({"self_runs": [_retry_run(updated_at=_rw_minutes_ago(25 * 60))], "self_run_jobs": {"880": _marker_jobs()}}, {}, "PROMOTE_CYCLE_RETRY outcome=stale run=880"),
+		({"self_runs": [_retry_run()], "self_run_jobs": {"880": _marker_jobs(conclusion="skipped")}}, {}, "PROMOTE_CYCLE_RETRY outcome=not_runner_wait run=880"),
+		# A target_sha promotion is not a cycle run.
+		({"self_runs": [_retry_run(event="workflow_dispatch")], "self_run_jobs": {"880": _marker_jobs()}}, {}, "PROMOTE_CYCLE_RETRY outcome=no_cycle_run"),
+	]
+	for state, env, expected in cases:
+		proc, final = _retry_check(state, env)
+		assert expected in proc.stdout, (expected, proc.stdout)
+		assert not final.get("dispatches"), expected
+
+
+def test_retry_check_dispatch_failure_still_exits_zero() -> None:
+	proc, final = _retry_check({"self_runs": [_retry_run()], "self_run_jobs": {"880": _marker_jobs()}, "workflow_run_error": True})
+	assert "::warning::PROMOTE_CYCLE_RETRY outcome=dispatch_failed after_run=880" in proc.stdout
+	# One attempt only: a retried dispatch is not idempotent.
+	assert len([c for c in final["calls"] if c[:2] == ["workflow", "run"]]) == 1
+
+
+def test_promote_workflow_routes_the_cycle_retry() -> None:
+	text = PROMOTE_WORKFLOW.read_text(encoding="utf-8")
+	assert "run-name: ${{ inputs.cycle_retry && 'Promote main to stable [cycle-retry]' || 'Promote main to stable' }}" in text
+	assert "      cycle_retry:\n" in text and "        type: boolean\n        default: false\n      target_sha:" in text
+	assert "    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.cycle_retry == true)\n" in text
+	assert "    if: github.event_name == 'workflow_dispatch' && inputs.cycle_retry != true\n" in text
+	marker = text.index(f"      - name: {MARKER_STEP}\n")
+	assert text.index("      - name: Run the promote cycle\n") < marker < text.index("  promote:\n")
+	assert "        if: steps.cycle.outputs.outcome == 'skipped:runner_wait_long'\n" in text[marker:marker + 300]
+	assert "RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES: ${{ vars.RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES || '30' }}" in text
+	assert "AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS: ${{ vars.AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS || '24' }}" in text
+	script = SCRIPT.read_text(encoding="utf-8")
+	assert f'PROMOTE_CYCLE_RETRY_MARKER_STEP="{MARKER_STEP}"' in script
+	assert f'PROMOTE_CYCLE_RETRY_TITLE="{RETRY_TITLE}"' in script

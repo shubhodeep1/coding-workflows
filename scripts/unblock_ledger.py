@@ -304,6 +304,9 @@ GUARD_REJECTION_HEADERS = (
 	"🚨 **Issue scope-lock rejected this implementation run.**",
 	"🚨 **Automation-path grant guard rejected this implementation run.**",
 	"🚨 **Destructive-commit guard rejected this implementation run.**",
+	# A routed planning scope block (scripts/plan_scope_block_route.sh, #9534).
+	"🚨 **files_touched scope guard rejected this planning run.**",
+	"🚨 **Auto-heal remediation guard rejected this implementation run: no code change.**",
 )
 LOGIN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$")
 # Commands the implement sandbox (scripts/codex_isolated_exec.sh: no network,
