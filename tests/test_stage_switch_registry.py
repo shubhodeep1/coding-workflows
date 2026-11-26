@@ -105,8 +105,11 @@ def _undiscovered_without_pending(data: dict, discovered: set[str]) -> tuple[lis
 		if entry["name"] not in discovered
 		and (entry.get("pending") is not True or not entry["name"].endswith("_ENABLED"))
 	]
+	# A missing or non-string name is reported as a short repr of the marker,
+	# so the failure message still identifies which object to fix.
 	stray_markers = [
-		marker.get("name") for marker in data.get("off_on_purpose", [])
+		marker.get("name") if isinstance(marker.get("name"), str) else repr(marker)[:120]
+		for marker in data.get("off_on_purpose", [])
 		if marker.get("name") not in discovered
 		and (marker.get("pending") is not True or not str(marker.get("name", "")).endswith("_ENABLED"))
 	]
