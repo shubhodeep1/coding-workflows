@@ -1148,8 +1148,15 @@ class MergeTrainStepContractTest(unittest.TestCase):
 GROUP_PINNED_STEPS = {
 	# "Regression tests wired by the CI wiring guard (part 2)" (group 2, then
 	# group 4 in #8772, group 0 in #8980, split across 4 local processes in
-	# #9021) left the matrix for tests-release-and-log-analysis in #9214; see
-	# MOVED_POLL_GROUP_ZERO_9214_STEPS.
+	# #9021) left the matrix for tests-release-and-log-analysis in #9214 and
+	# returned to the matrix, in group 3, in #10162; see
+	# MOVED_POLL_GROUP_ZERO_9214_STEPS and MOVED_RELEASE_10162_STEPS.
+	# Moved from tests-release-and-log-analysis in #10162.
+	"Regression tests wired by the CI wiring guard (part 2)": 3,
+	# Moved from tests-release-and-log-analysis in #10162.
+	"Set up Node 22 for the claude-pool-broker Worker tests": 2,
+	# Moved from tests-release-and-log-analysis in #10162.
+	"claude-pool-broker Worker tests (vitest)": 2,
 	# Moved from group 3 to group 1 in #8072, to group 0 in #8091, and to
 	# group 4 in #8118.
 	"Unblock judge, scan and orphan fix-up close tests (replace-claude-sessions Phase 7)": 4,
@@ -1882,12 +1889,15 @@ class MovedPollGroupTwoStepsContractTest(unittest.TestCase):
 # same move are in GROUP_PINNED_STEPS. Issue #8179 added three more steps.
 # Issue #8268 moved the Node pair on to tests-heal-plan-and-validation.
 # Issue #9018 moved the Node pair on to tests-release-and-log-analysis.
+# Issue #10162 moved the Node pair on to orchestrate-poll group 2.
 HOOKS_SOURCE_JOB_ID = "tests-hooks-and-orchestrator"
 HOOKS_NODE_SETUP_STEP = "Set up Node 22 for the claude-pool-broker Worker tests"
 HOOKS_VITEST_STEP = "claude-pool-broker Worker tests (vitest)"
 MOVED_HOOKS_JOB_STEPS = {
-	HOOKS_NODE_SETUP_STEP: ("tests-release-and-log-analysis", ()),
-	HOOKS_VITEST_STEP: ("tests-release-and-log-analysis", ("tools/claude-pool-broker",)),
+	# Issue #10162 moved it on to orchestrate-poll group 2.
+	HOOKS_NODE_SETUP_STEP: ("orchestrate-poll", ()),
+	# Issue #10162 moved it on to orchestrate-poll group 2.
+	HOOKS_VITEST_STEP: ("orchestrate-poll", ("tools/claude-pool-broker",)),
 	# tests-hooks-and-orchestrator took 15m01s of its 20 minutes again (run
 	# 40264887710, budget-watch issue #8179); these three steps moved,
 	# unchanged, to tests-promote-stall-and-review. Issue #8771 moved
@@ -2243,7 +2253,8 @@ class MovedReleaseLogStepsToHealContractTest(unittest.TestCase):
 
 	def test_node_pair_runs_in_order_after_the_heal_job_setup(self) -> None:
 		# The name is historical (#8268): issue #9018 moved the Node pair to
-		# tests-release-and-log-analysis, so the job id comes from
+		# tests-release-and-log-analysis and issue #10162 moved it on to
+		# orchestrate-poll group 2, so the job id comes from
 		# MOVED_HOOKS_JOB_STEPS and the order check still holds there.
 		job_id = MOVED_HOOKS_JOB_STEPS[HOOKS_VITEST_STEP][0]
 		names = [step.get("name") for step in self.jobs()[job_id]["steps"]]
@@ -2698,6 +2709,91 @@ class MovedRelease9966StepsContractTest(unittest.TestCase):
 				self.assertLess(names.index(RELEASE_9966_SETUP_STEP), names.index(name))
 
 
+# Steps moved out of tests-release-and-log-analysis, which took 18m23s of its
+# 20 minutes (run 45766722607, budget-watch issue #10162): step name -> poll
+# group. The run's step timings were not readable (step statuses only), so the
+# pick is an estimate from test and subprocess counts, not a measurement: the
+# CI wiring guard part 2 step named about 692 of the job's about 2,905 test
+# functions, and the Node pair carries an npm ci of wrangler plus vitest. Both
+# go to orchestrate-poll, the job with the only 30-minute budget: part 2 to
+# group 3 (lightest pinned load), the Node pair to group 2 (next lightest), so
+# no single group took both moves. Names and bodies unchanged; only the group
+# guards were added. The part 2 module set stays pinned by the #8772 constants.
+RELEASE_10162_SOURCE_JOB_ID = "tests-release-and-log-analysis"
+RELEASE_10162_SETUP_STEP = "Install Python CI dependencies"
+# String literal: POLL_GROUP_TWO_8772_STEP_NAME is defined further down.
+MOVED_RELEASE_10162_STEPS = {
+	"Regression tests wired by the CI wiring guard (part 2)": 3,
+	HOOKS_NODE_SETUP_STEP: 2,
+	HOOKS_VITEST_STEP: 2,
+}
+
+
+class MovedRelease10162StepsContractTest(unittest.TestCase):
+	"""The steps moved out of tests-release-and-log-analysis run once, in one poll group (#10162)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_each_step_is_owned_only_by_the_poll_job(self) -> None:
+		for name in MOVED_RELEASE_10162_STEPS:
+			with self.subTest(step=name):
+				self.assertEqual([owner for owner, _step in self.owning_steps(name)], [POLL_JOB_ID])
+
+	def test_each_step_is_guarded_to_its_group(self) -> None:
+		for name, group in MOVED_RELEASE_10162_STEPS.items():
+			with self.subTest(step=name):
+				self.assertEqual(GROUP_PINNED_STEPS.get(name), group)
+				# A guard naming a group the matrix does not run would skip the step silently.
+				self.assertLess(group, poll_group_count())
+				for _owner, step in self.owning_steps(name):
+					self.assertEqual(step.get("if"), f"strategy.job-index == {group}")
+
+	def test_moved_steps_left_the_source_job(self) -> None:
+		source_names = {step.get("name") for step in self.jobs()[RELEASE_10162_SOURCE_JOB_ID]["steps"]}
+		for name in MOVED_RELEASE_10162_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, source_names)
+
+	def test_moved_steps_run_after_the_poll_job_setup(self) -> None:
+		names = [step.get("name") for step in self.jobs()[POLL_JOB_ID]["steps"]]
+		self.assertIn(RELEASE_10162_SETUP_STEP, names)
+		for name in MOVED_RELEASE_10162_STEPS:
+			with self.subTest(step=name):
+				self.assertIn(name, names)
+				self.assertLess(names.index(RELEASE_10162_SETUP_STEP), names.index(name))
+
+	def test_node_pair_stays_together_in_group_two(self) -> None:
+		names = [step.get("name") for step in self.jobs()[POLL_JOB_ID]["steps"]]
+		node_index = names.index(HOOKS_NODE_SETUP_STEP)
+		self.assertLess(node_index + 1, len(names))
+		self.assertEqual(names[node_index + 1], HOOKS_VITEST_STEP)
+		self.assertEqual(MOVED_RELEASE_10162_STEPS[HOOKS_NODE_SETUP_STEP], 2)
+		self.assertEqual(MOVED_RELEASE_10162_STEPS[HOOKS_VITEST_STEP], 2)
+		vitest = self.owning_steps(HOOKS_VITEST_STEP)[0][1]
+		self.assertEqual(vitest["working-directory"], "tools/claude-pool-broker")
+		self.assertIn("npm ci --no-audit --no-fund", vitest["run"])
+		self.assertIn("npx vitest run", vitest["run"])
+		setup = self.owning_steps(HOOKS_NODE_SETUP_STEP)[0][1]
+		self.assertEqual(str(setup["with"]["node-version"]), "22")
+
+	def test_part2_body_still_names_its_boundary_modules(self) -> None:
+		steps = self.owning_steps("Regression tests wired by the CI wiring guard (part 2)")
+		self.assertEqual(len(steps), 1)
+		for module in POLL_GROUP_TWO_8772_BOUNDARY_MODULES:
+			with self.subTest(module=module):
+				self.assertTrue((REPO_ROOT / module).is_file(), module)
+				self.assertIn(module, steps[0][1]["run"])
+
+
 # Steps moved out of tests-heal-plan-and-validation, which took 16m08s of its
 # 20 minutes (run 42373283876, budget-watch issue #8993): step name -> (target
 # job id, module paths its body names). The run's step timings were not
@@ -2805,8 +2901,10 @@ MOVED_HEAL_9018_STEPS = {
 	# Issue #9363 moved it on from tests-promote-stall-and-review.
 	# Issue #9966 moved it on to orchestrate-poll group 1.
 	WIRING_PART1_STEP_NAME: ("orchestrate-poll", ()),
-	HOOKS_NODE_SETUP_STEP: ("tests-release-and-log-analysis", ()),
-	HOOKS_VITEST_STEP: ("tests-release-and-log-analysis", ("tools/claude-pool-broker",)),
+	# Issue #10162 moved it on to orchestrate-poll group 2.
+	HOOKS_NODE_SETUP_STEP: ("orchestrate-poll", ()),
+	# Issue #10162 moved it on to orchestrate-poll group 2.
+	HOOKS_VITEST_STEP: ("orchestrate-poll", ("tools/claude-pool-broker",)),
 }
 
 
@@ -3208,9 +3306,11 @@ MOVED_POLL_GROUP_THREE_8472_STEPS = {
 # group 4, so only the single-file module step stays. #9391 then pinned the
 # pre-push affected-test gate step (moved from tests-hooks-and-orchestrator)
 # to group 3, and #9639 moved that step on to group 0, so only the single-file
-# module step stays.
+# module step stays. #10162 then pinned the CI wiring guard part 2 step (moved
+# from tests-release-and-log-analysis) to group 3.
 POLL_GROUP_THREE_8472_REMAINING_STEPS = {
 	SINGLE_FILE_MODULES_STEP,
+	"Regression tests wired by the CI wiring guard (part 2)",
 }
 
 
@@ -4669,11 +4769,16 @@ class MovedPollGroupZero9895StepsContractTest(unittest.TestCase):
 # #8772 constants.
 # Issue #9214: orchestrate-poll (0) took 15m51s of its 20 minutes (run
 # 42933243586), so the step moved, name and body unchanged, out of the poll
-# matrix into tests-release-and-log-analysis, where it runs unguarded.
+# matrix into tests-release-and-log-analysis, where it ran unguarded.
+# Issue #10162: tests-release-and-log-analysis took 18m23s of its 20 minutes
+# (run 45766722607), so the step moved, name and body unchanged, back into the
+# poll matrix, guarded to group 3.
 WIRING_PART2_STEP_NAME = POLL_GROUP_TWO_8772_STEP_NAME
 # The poll group the step ran in before #9214 (kept for reference only).
 WIRING_PART2_GROUP = 0
-WIRING_PART2_JOB_ID = "tests-release-and-log-analysis"
+# The poll group the step runs in since #10162.
+WIRING_PART2_POLL_GROUP_10162 = 3
+WIRING_PART2_JOB_ID = POLL_JOB_ID
 WIRING_PART2_SHARDS = 4
 WIRING_PART2_AWK_RE = re.compile(
 	r"""awk -v n="\$\{wg2_shard\}" -v total="\$\{wg2_shards\}" '(?P<expr>[^']+)'"""
@@ -4744,8 +4849,9 @@ class WiringGuardPartTwoShardingContractTest(unittest.TestCase):
 	collect at least one test, every test must run exactly once, and a shard
 	that fails or records no exit code must fail the step.
 
-	Since #9214 the step runs, name and body unchanged, in
-	tests-release-and-log-analysis without a matrix guard.
+	From #9214 the step ran, name and body unchanged, in
+	tests-release-and-log-analysis without a matrix guard. Since #10162 it
+	runs, name and body unchanged, in orchestrate-poll group 3.
 	"""
 
 	def setUp(self) -> None:
@@ -4760,7 +4866,7 @@ class WiringGuardPartTwoShardingContractTest(unittest.TestCase):
 		self.assertIsNotNone(array)
 		return tuple(array.group("mods").split())
 
-	def test_step_runs_unguarded_in_the_release_job(self) -> None:
+	def test_step_runs_once_in_poll_group_three(self) -> None:
 		jobs = yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
 		owners = [
 			job_id
@@ -4768,9 +4874,9 @@ class WiringGuardPartTwoShardingContractTest(unittest.TestCase):
 			for step in job.get("steps", [])
 			if step.get("name") == WIRING_PART2_STEP_NAME
 		]
-		self.assertEqual(owners, [WIRING_PART2_JOB_ID])
-		self.assertNotIn("if", self.step)
-		self.assertNotIn(WIRING_PART2_STEP_NAME, GROUP_PINNED_STEPS)
+		self.assertEqual(owners, [POLL_JOB_ID])
+		self.assertEqual(self.step["if"], f"strategy.job-index == {WIRING_PART2_POLL_GROUP_10162}")
+		self.assertEqual(GROUP_PINNED_STEPS[WIRING_PART2_STEP_NAME], WIRING_PART2_POLL_GROUP_10162)
 		self.assertIn(f"wg2_shards={WIRING_PART2_SHARDS}", self.run)
 
 	def test_module_array_is_the_pinned_set_and_the_only_paths_named(self) -> None:
@@ -4914,19 +5020,24 @@ class WiringGuardPartTwoShardingContractTest(unittest.TestCase):
 # readable; this is group 0's only step that can move whole (the fast-fail step
 # reads the derive step's /tmp list, and the slice is the matrix). The target
 # was chosen by test and subprocess counts, an estimate, not a measurement. The
-# step needs no Node or prepared .claude/ live copies, so it runs unguarded in
+# step needs no Node or prepared .claude/ live copies, so it ran unguarded in
 # tests-release-and-log-analysis, before that job's Node 22 / vitest pair.
+# Issue #10162 moved the step and the Node pair on to orchestrate-poll (the
+# step to group 3, the pair to group 2), so source and target are now the same
+# job: the checks below assert the step left group 0 and still runs before the
+# Node pair in workflow order.
 POLL_GROUP_ZERO_9214_SOURCE_JOB_ID = POLL_JOB_ID
 POLL_GROUP_ZERO_9214_SETUP_STEP = "Install Python CI dependencies"
 POLL_GROUP_ZERO_9214_NODE_STEP = HOOKS_NODE_SETUP_STEP
 POLL_GROUP_ZERO_9214_FAST_FAIL_STEP = "Orchestrate poll implementation-failed regression fast-fail"
 MOVED_POLL_GROUP_ZERO_9214_STEPS = {
-	WIRING_PART2_STEP_NAME: ("tests-release-and-log-analysis", POLL_GROUP_TWO_8772_BOUNDARY_MODULES),
+	# Issue #10162 moved it on to orchestrate-poll group 3.
+	WIRING_PART2_STEP_NAME: (POLL_JOB_ID, POLL_GROUP_TWO_8772_BOUNDARY_MODULES),
 }
 
 
 class MovedPollGroupZero9214StepsContractTest(unittest.TestCase):
-	"""The CI wiring guard part 2 step runs once, in tests-release-and-log-analysis (#9214)."""
+	"""The CI wiring guard part 2 step left poll group 0 (#9214) and runs once, in group 3 (#10162)."""
 
 	def jobs(self) -> dict:
 		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
@@ -4945,11 +5056,15 @@ class MovedPollGroupZero9214StepsContractTest(unittest.TestCase):
 				self.assertEqual([owner for owner, _step in self.owning_steps(name)], [job_id])
 
 	def test_each_step_has_no_matrix_guard(self) -> None:
+		# Name kept for history (#9214 ran the step unguarded); #10162 moved it
+		# back into the poll matrix, so it carries its single group pin, which
+		# is not group 0.
 		for name in MOVED_POLL_GROUP_ZERO_9214_STEPS:
 			with self.subTest(step=name):
-				self.assertNotIn(name, GROUP_PINNED_STEPS)
+				self.assertIn(name, GROUP_PINNED_STEPS)
+				self.assertNotEqual(GROUP_PINNED_STEPS[name], 0)
 				for _owner, step in self.owning_steps(name):
-					self.assertNotIn("if", step)
+					self.assertEqual(step.get("if"), f"strategy.job-index == {GROUP_PINNED_STEPS[name]}")
 
 	def test_each_step_still_names_its_modules(self) -> None:
 		for name, (_job_id, modules) in MOVED_POLL_GROUP_ZERO_9214_STEPS.items():
@@ -4960,8 +5075,12 @@ class MovedPollGroupZero9214StepsContractTest(unittest.TestCase):
 					self.assertTrue((REPO_ROOT / module).is_file(), module)
 					self.assertIn(module, steps[0][1]["run"])
 
-	def test_moved_steps_left_the_poll_job(self) -> None:
-		source_names = {step.get("name") for step in self.jobs()[POLL_GROUP_ZERO_9214_SOURCE_JOB_ID]["steps"]}
+	def test_moved_steps_left_group_zero(self) -> None:
+		source_names = {
+			step.get("name")
+			for step in self.jobs()[POLL_GROUP_ZERO_9214_SOURCE_JOB_ID]["steps"]
+			if str(step.get("if", "")) == "strategy.job-index == 0"
+		}
 		for name in MOVED_POLL_GROUP_ZERO_9214_STEPS:
 			with self.subTest(step=name):
 				self.assertNotIn(name, source_names)
@@ -4986,9 +5105,12 @@ class MovedPollGroupZero9214StepsContractTest(unittest.TestCase):
 				self.assertEqual(names[node_index + 1], HOOKS_VITEST_STEP)
 
 	def test_no_target_is_the_source_job(self) -> None:
+		# Since #10162 the target job is the poll job again, so the target
+		# group, not the job, must differ from the source group 0.
 		for name, (job_id, _modules) in MOVED_POLL_GROUP_ZERO_9214_STEPS.items():
 			with self.subTest(step=name):
-				self.assertNotEqual(job_id, POLL_GROUP_ZERO_9214_SOURCE_JOB_ID)
+				self.assertEqual(job_id, POLL_GROUP_ZERO_9214_SOURCE_JOB_ID)
+				self.assertNotEqual(GROUP_PINNED_STEPS.get(name), 0)
 
 	def test_group_zero_keeps_only_its_slice_and_fast_fail(self) -> None:
 		group_zero_guarded = [
