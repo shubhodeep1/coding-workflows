@@ -221,6 +221,7 @@ def test_garbage_input_defers(tmp_path: Path, arg: str) -> None:
 
 
 GUARD_WINDOW_LINES = 30
+PY_ARGV_MERGE_RE = re.compile(r"""['"]pr['"]\s*,\s*['"]merge['"]""")
 
 
 def _direct_merge_lines(path: Path) -> list[int]:
@@ -228,7 +229,9 @@ def _direct_merge_lines(path: Path) -> list[int]:
 	hits = []
 	for index, line in enumerate(lines):
 		stripped = line.lstrip()
-		if stripped.startswith("#") or "gh pr merge" not in line:
+		# Python helpers may call gh with an argument list: ["gh", "pr", "merge", ...].
+		argv_merge = path.suffix == ".py" and PY_ARGV_MERGE_RE.search(line) is not None
+		if stripped.startswith("#") or ("gh pr merge" not in line and not argv_merge):
 			continue
 		if "--auto" in line or "--disable-auto" in line:
 			continue
