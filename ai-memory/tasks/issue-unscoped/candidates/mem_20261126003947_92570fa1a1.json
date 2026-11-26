@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/10127-stage-switch-registry-duplicate-entries.md:13 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  PROBLEM: The changelog says \"#10127 ends this class of duplicate-entry failures by dropping the hand-kept list\", but this PR only prunes redundant entries and keeps 20 interim entries.\n  WHY: The wording may mislead maintainers about the fix. A later PR can still add a duplicate of a retained switch and fail `test_registry_entries_are_well_formed`. Both reviewers rated it NIT, mapped here to low. Sonnet-5_5 and glm-5_3-flash checked the same line and judged it not valid, so they disagree.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- changelog.d/10127-stage-switch-registry-duplicate-entries.md:13 | severity=low (source: NIT) | confidence=4\n  PROBLEM: The changelog claims \"#10127 ends this class of duplicate-entry failures by dropping the hand-kept list\", but this PR only prunes redundant entries from scripts/stage_switches.json and does not drop the mechanism or the list.\n  WHY: Not a runtime failure. The documentation misdescribes the extent of the fix and may mislead future maintenance expectations.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- changelog.d/10127-stage-switch-registry-duplicate-entries.md:13 (also scripts/stage_switches.json lines 892-990) | severity=low (source: NIT) | confidence=4\n  PROBLEM: The changelog says \"#10127 ends this\" class of duplicate-entry failures by dropping the hand-kept list, but this change retains 20 interim entries.\n  WHY: A later PR that adds its own entry for a retained switch can still create a duplicate and fail `test_registry_entries_are_well_formed` at tests/test_stage_switch_registry.py lines 149-150. The changelog wrongly says that risk is eliminated.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4e2a533a47610ca1ddf2281e7239e47e77b79047aa775173ea8e51f326482434",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10138,
+    "run_id": "45721589041",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45721589041",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126003947_92570fa1a1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10138,
+    "run_id": "45721589041"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T00:39:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
