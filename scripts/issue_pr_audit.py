@@ -30,14 +30,19 @@ GitHub API budget (CLAUDE.md §14 / §15), per run
   ascending; ``pulls?state=all`` descending for ``has_issues=false``), at
   most ``ISSUE_PR_AUDIT_MAX_WINDOW_PAGES``-capped pages, usually 1 call; the
   open snapshot (``issues?state=open``), at most ``ISSUE_PR_AUDIT_MAX_OPEN_PAGES``
-  pages, skipped when the listing's ``open_issues_count`` is 0.
+  pages, skipped when the listing's ``open_issues_count`` is 0 (``pulls?state=open``
+  for ``has_issues=false``, whose issues endpoint answers 410). A capped
+  snapshot is named under Coverage and its known blocked entries are kept.
 * Details: one aliased GraphQL query per 25 items (input: ``repo#number``
   keys; output: ``{key: node}``), at most ``ISSUE_PR_AUDIT_MAX_DETAIL_ITEMS``
   items, so ``ceil(K / 25)`` calls. Same pattern as
   ``_fetch_candidate_issue_details_graphql`` in scripts/orchestrate_poll_process.sh.
+  A failed batch spanning several repositories is retried once per repository.
 * Blocked log tails: at most ``ISSUE_PR_AUDIT_MAX_BLOCKED_LOGS`` new blocked
   items, 2 calls each (``runs/{id}/jobs``, ``jobs/{id}/logs``).
-* Dedupe: 1 listing of open ``ai:workflow-heal`` issues in the host repository.
+* Dedupe: 1 listing (at most ``HEAL_LIST_MAX_PAGES`` = 5 pages) of open
+  ``ai:workflow-heal`` issues in the host repository.
+* Retries: every API attempt, retries included, is counted.
 
 Fail open per repository: a listing or detail error marks the repository
 ``read_failed``. It keeps its old cursor (the next run re-reads the window)
@@ -76,6 +81,7 @@ REPORT_GLOB = "issue-pr-audit-*.md"
 REPORT_NAME_RE = re.compile(r"^issue-pr-audit-([0-9]{4}-[0-9]{2}-[0-9]{2})(-[0-9]+)?\.md$")
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 GRAPHQL_BATCH = 25
+HEAL_LIST_MAX_PAGES = 5
 TRUSTED_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
 HARD_BLOCK_LABELS = ("ai:needs-human", "ai:scope-blocked", "ai:destructive-blocked")
 NEVER_BLOCKED_LABEL = "ai:waiting-on-dependency"
@@ -229,9 +235,10 @@ class GhTransport:
 		self.counts = {"rest": 0, "graphql": 0, "failed": 0}
 
 	def _run(self, args: list[str], kind: str) -> str:
-		self.counts[kind] += 1
 		last = ""
 		for attempt in range(1, self.retries + 1):
+			# Counted per attempt, so retries show up in the Metrics Appendix.
+			self.counts[kind] += 1
 			try:
 				proc = subprocess.run(["gh", "api", *args], capture_output=True, text=True, timeout=120)
 			except (OSError, subprocess.TimeoutExpired) as exc:
@@ -410,14 +417,24 @@ def list_window(transport: Any, repo: dict[str, Any], cursor: dt.datetime, setti
 	if truncated and repo.get("has_issues", True) and items:
 		# Ascending order: the last item read is where the next run resumes.
 		partial_cursor = max((item["updated_at"] for item in items if parse_time(item["updated_at"])), default=None)
+	elif truncated:
+		# Descending PR listing: the unread items are the oldest ones, so the
+		# cursor stays where it was (overlap, never a gap; the clamp bounds it).
+		partial_cursor = since
 	return items, partial_cursor
 
 
-def list_open(transport: Any, repo: dict[str, Any], settings: dict[str, Any]) -> list[dict[str, Any]]:
+def list_open(transport: Any, repo: dict[str, Any], settings: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]:
+	"""Open items for blocked detection: ``(items, truncated)``.
+
+	A repository with issues disabled answers 410 on the issues endpoint, so
+	its open pull requests are listed through ``pulls?state=open`` instead.
+	"""
 	if repo.get("open_issues_count") == 0 or settings["max_open_pages"] == 0:
-		return []
-	rows, _ = paginate(transport, f"repos/{repo['name']}/issues?state=open&per_page=100", settings["max_open_pages"])
-	return [item for item in (normalize_item(repo["name"], row) for row in rows) if item]
+		return [], False
+	kind = "issues" if repo.get("has_issues", True) else "pulls"
+	rows, truncated = paginate(transport, f"repos/{repo['name']}/{kind}?state=open&per_page=100", settings["max_open_pages"])
+	return [item for item in (normalize_item(repo["name"], row) for row in rows) if item], truncated
 
 
 # --- GraphQL details -----------------------------------------------------------
@@ -430,20 +447,37 @@ _DETAIL_FIELDS = """
         reviews { totalCount }
         statusRollup: commits(last: 1) { nodes { commit { statusCheckRollup { state } } } }
         closingIssuesReferences(first: 5) { nodes { number } }
-      }
-      timelineItems(last: 40, itemTypes: [REOPENED_EVENT, CLOSED_EVENT, MERGED_EVENT, LABELED_EVENT, UNLABELED_EVENT, CROSS_REFERENCED_EVENT]) {
-        nodes {
-          __typename
-          ... on ReopenedEvent { createdAt }
-          ... on ClosedEvent { createdAt closer { __typename } }
-          ... on MergedEvent { createdAt }
-          ... on LabeledEvent { createdAt label { name } }
-          ... on UnlabeledEvent { createdAt label { name } }
-          ... on CrossReferencedEvent { createdAt source { __typename ... on Issue { number title createdAt url } ... on PullRequest { number title createdAt url } } }
+        timelineItems(last: 40, itemTypes: [REOPENED_EVENT, CLOSED_EVENT, MERGED_EVENT, LABELED_EVENT, UNLABELED_EVENT, CROSS_REFERENCED_EVENT]) {
+          nodes {
+            __typename
+            ... on ReopenedEvent { createdAt }
+            ... on ClosedEvent { createdAt closer { __typename } }
+            ... on MergedEvent { createdAt }
+            ... on LabeledEvent { createdAt label { name } }
+            ... on UnlabeledEvent { createdAt label { name } }
+            ... on CrossReferencedEvent { createdAt source { __typename ... on Issue { number title createdAt url } ... on PullRequest { number title createdAt url } } }
+          }
         }
+        comments(last: 5) { nodes { authorAssociation createdAt body author { login } } }
       }
-      comments(last: 5) { nodes { authorAssociation createdAt body author { login } } }
+      ... on Issue {
+        issueTimelineItems: timelineItems(last: 40, itemTypes: [REOPENED_EVENT, CLOSED_EVENT, LABELED_EVENT, UNLABELED_EVENT, CROSS_REFERENCED_EVENT]) {
+          nodes {
+            __typename
+            ... on ReopenedEvent { createdAt }
+            ... on ClosedEvent { createdAt closer { __typename } }
+            ... on LabeledEvent { createdAt label { name } }
+            ... on UnlabeledEvent { createdAt label { name } }
+            ... on CrossReferencedEvent { createdAt source { __typename ... on Issue { number title createdAt url } ... on PullRequest { number title createdAt url } } }
+          }
+        }
+        comments(last: 5) { nodes { authorAssociation createdAt body author { login } } }
+      }
 """
+# IssueOrPullRequest is a union: every field except __typename sits inside a
+# type fragment, and MERGED_EVENT exists only on pull request timelines. The
+# Issue timeline is aliased (issueTimelineItems) so the two selections never
+# need to merge; parse_detail_node reads either.
 
 
 def build_detail_query(keys: list[str]) -> str:
@@ -481,7 +515,7 @@ def parse_detail_node(node: Any) -> dict[str, Any] | None:
 			"closing_issues": [n.get("number") for n in ((node.get("closingIssuesReferences") or {}).get("nodes") or []) if isinstance(n, dict)],
 		})
 	events = []
-	for event in ((node.get("timelineItems") or {}).get("nodes") or []):
+	for event in ((node.get("timelineItems") or node.get("issueTimelineItems") or {}).get("nodes") or []):
 		if not isinstance(event, dict):
 			continue
 		entry = {"type": event.get("__typename") or "", "at": event.get("createdAt") or ""}
@@ -514,15 +548,23 @@ def parse_detail_node(node: Any) -> dict[str, Any] | None:
 
 
 def fetch_details(transport: Any, keys: list[str]) -> tuple[dict[str, dict[str, Any]], set[str]]:
-	"""``ceil(len(keys) / 25)`` GraphQL calls. Returns ``(details, failed_repos)``."""
+	"""``ceil(len(keys) / 25)`` GraphQL calls (plus one per repository of a failed
+	multi-repository batch). Returns ``(details, failed_repos)``."""
 	details: dict[str, dict[str, Any]] = {}
 	failed: set[str] = set()
-	for start in range(0, len(keys), GRAPHQL_BATCH):
-		batch = keys[start:start + GRAPHQL_BATCH]
+	queue = [keys[start:start + GRAPHQL_BATCH] for start in range(0, len(keys), GRAPHQL_BATCH)]
+	while queue:
+		batch = queue.pop(0)
 		try:
 			payload = transport.graphql(build_detail_query(batch))
 		except ApiError:
-			failed.update(key.rsplit("#", 1)[0] for key in batch)
+			repos = list(dict.fromkeys(key.rsplit("#", 1)[0] for key in batch))
+			if len(repos) > 1:
+				# One repository's error (NOT_FOUND, SAML) must not fail the
+				# others: retry the batch once per repository.
+				queue.extend([key for key in batch if key.rsplit("#", 1)[0] == repo] for repo in repos)
+				continue
+			failed.update(repos)
 			continue
 		data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
 		for index, key in enumerate(batch):
@@ -566,6 +608,14 @@ def normalize_title(title: str) -> str:
 	return re.sub(r"\s+", " ", text).strip()
 
 
+def reopened_since(detail: dict[str, Any] | None, cursor: dt.datetime) -> bool:
+	"""A ReopenedEvent at or after ``cursor`` (an older item reopened in the window)."""
+	return any(
+		event.get("type") == "ReopenedEvent" and (parse_time(event.get("at")) or cursor - dt.timedelta(seconds=1)) >= cursor
+		for event in (detail or {}).get("events") or []
+	)
+
+
 def in_window(item: dict[str, Any], cursor: dt.datetime) -> bool:
 	"""Closed, merged or created since ``cursor`` (only these get tier-1 / deep review)."""
 	for field in ("created_at", "closed_at", "merged_at"):
@@ -573,6 +623,20 @@ def in_window(item: dict[str, Any], cursor: dt.datetime) -> bool:
 		if stamp is not None and stamp >= cursor:
 			return True
 	return False
+
+
+def labels_at_close(labels: set[str], events: list[dict[str, Any]], closed_at: dt.datetime | None) -> set[str]:
+	"""The label set when the item closed: label events after ``closed_at`` are undone, newest first."""
+	result = set(labels)
+	if closed_at is None:
+		return result
+	later = [event for event in events if event.get("type") in ("LabeledEvent", "UnlabeledEvent") and (parse_time(event.get("at")) or closed_at) > closed_at]
+	for event in sorted(later, key=lambda event: event.get("at") or "", reverse=True):
+		if event.get("type") == "LabeledEvent":
+			result.discard(event.get("label") or "")
+		elif event.get("label"):
+			result.add(event["label"])
+	return result
 
 
 def waste_signals(item: dict[str, Any], detail: dict[str, Any] | None, peers: list[dict[str, Any]], settings: dict[str, Any]) -> list[str]:
@@ -627,7 +691,7 @@ def waste_signals(item: dict[str, Any], detail: dict[str, Any] | None, peers: li
 		signals.append("fast_close")
 	if closed and created and closed_at and any(label.startswith("ai:") for label in labels) and (closed_at - created) > dt.timedelta(hours=72):
 		signals.append("long_cycle")
-	if closed and any(FAILED_LABEL_RE.match(label) for label in labels):
+	if closed and any(FAILED_LABEL_RE.match(label) for label in labels_at_close(labels, events, closed_at)):
 		signals.append("failure_label_at_close")
 	if sum(1 for event in events if event.get("type") in ("LabeledEvent", "UnlabeledEvent")) > 20:
 		signals.append("label_churn")
@@ -740,7 +804,11 @@ def collect(transport: Any, *, host: str, run_id: int, state: dict[str, Any], se
 			if partial:
 				record["next_cursor"] = partial
 				record["window_truncated"] = True
-			record["open"] = list_open(transport, repo, settings)
+			record["open"], open_truncated = list_open(transport, repo, settings)
+			if open_truncated:
+				# Known blocked entries past the cap are kept (classify) and the
+				# gap is named under Coverage.
+				record["open_truncated"] = True
 		except ApiError as exc:
 			record["status"] = "read_failed"
 			record["error"] = str(exc)
@@ -795,7 +863,7 @@ def collect(transport: Any, *, host: str, run_id: int, state: dict[str, Any], se
 				continue
 	heal: list[dict[str, Any]] = []
 	try:
-		rows, _ = paginate(transport, f"repos/{host}/issues?state=open&labels=ai:workflow-heal&per_page=100", 1)
+		rows, _ = paginate(transport, f"repos/{host}/issues?state=open&labels=ai:workflow-heal&per_page=100", HEAL_LIST_MAX_PAGES)
 		heal = [{"number": row.get("number"), "title": (row.get("title") or "")[:TITLE_MAX], "url": row.get("html_url") or ""} for row in rows if isinstance(row.get("number"), int)]
 	except ApiError:
 		pass
@@ -855,24 +923,30 @@ def classify(raw: dict[str, Any], state: dict[str, Any], settings: dict[str, Any
 	clean_keys: list[str] = []
 	clean_counts: dict[str, int] = {}
 	failed_displays: set[str] = set()
+	# Repositories whose open snapshot was read in full this run; blocked
+	# entries of any other repository (read failure, capped snapshot, or not
+	# audited at all, e.g. a discovery fallback) are carried over unchanged.
+	full_snapshot_displays: set[str] = set()
 	for record in raw.get("repos") or []:
 		display = record.get("display") or record["name"]
 		redacted = bool(record.get("redacted"))
 		cursor = parse_time(record.get("cursor")) or now
 		window = record.get("window") or []
-		cov = {"repo": display, "items": 0, "flagged": 0, "blocked": 0, "status": record.get("status", "ok"), "clamped": bool(record.get("clamped")), "cursor": record.get("cursor"), "truncated": bool(record.get("window_truncated"))}
+		cov = {"repo": display, "items": 0, "flagged": 0, "blocked": 0, "status": record.get("status", "ok"), "clamped": bool(record.get("clamped")), "cursor": record.get("cursor"), "truncated": bool(record.get("window_truncated")), "open_truncated": bool(record.get("open_truncated"))}
 		if record.get("status") != "ok":
 			failed_displays.add(display)
 			log(f"ISSUE_PR_AUDIT_REPO repo={display} items=0 flagged=0 blocked=0 outcome=read_failed")
 			coverage.append(cov)
 			continue
 		next_state["repos"][display] = {"cursor": record.get("next_cursor") or fmt_time(now), "last_run": run_id}
+		if not record.get("open_truncated"):
+			full_snapshot_displays.add(display)
 		peers = window + [item for item in record.get("open") or [] if item not in window]
 		for item in window:
-			if not in_window(item, cursor):
-				continue
 			key = item_key(item["repo"], item["number"])
 			detail = details.get(key)
+			if not in_window(item, cursor) and not reopened_since(detail, cursor):
+				continue
 			signals = waste_signals(item, detail, peers, settings)
 			entry = _digest_item(item, detail, redacted, raw, settings)
 			entry["signals"] = signals
@@ -907,9 +981,10 @@ def classify(raw: dict[str, Any], state: dict[str, Any], settings: dict[str, Any
 			next_state["blocked"][state_key] = {"since": fmt_time(since), "fingerprint": fingerprint, "diagnosed_run": run_id if is_new else int(old.get("diagnosed_run") or 0) if old else run_id}
 		log(f"ISSUE_PR_AUDIT_REPO repo={display} items={cov['items']} flagged={cov['flagged']} blocked={cov['blocked']} outcome=ok")
 		coverage.append(cov)
-	# A repository that could not be read keeps its blocked entries.
+	# A repository that could not be read, or was not read in full, keeps its
+	# blocked entries (and their since) instead of losing them.
 	for key, value in old_blocked.items():
-		if isinstance(value, dict) and key.rsplit("#", 1)[0] in failed_displays:
+		if isinstance(value, dict) and key not in next_state["blocked"] and key.rsplit("#", 1)[0] not in full_snapshot_displays:
 			next_state["blocked"][key] = value
 	sample = set(clean_sample(clean_keys, run_id, settings["clean_sample"]))
 	flagged = sorted((entry for entry in items if entry["flagged"]), key=lambda entry: (-len(entry["signals"]), entry["key"]))
@@ -991,13 +1066,15 @@ def _render_entry(entry: dict[str, Any], lines: list[str]) -> None:
 		lines.append(f"- kind: {'pull request' if entry['is_pr'] else 'issue'}; state: {entry['state']} {entry.get('state_reason') or ''}".rstrip())
 		lines.append(f"- author: {entry['author']} ({entry['author_association']}); creating automation: {entry['automation'] or 'none (person)'}")
 		lines.append(f"- created {entry.get('created_at') or '?'}; closed {entry.get('closed_at') or '-'}; merged {entry.get('merged_at') or '-'}")
-		lines.append(f"- labels: {', '.join(entry['labels']) or 'none'}; head ref: {entry.get('head_ref') or '-'}")
+		# Labels and branch names are repository-controlled text too.
+		lines.append(wrap_untrusted(f"labels: {', '.join(entry['labels']) or 'none'}; head ref: {entry.get('head_ref') or '-'}", "labels-and-head-ref"))
 	if entry.get("stats"):
 		lines.append("- stats: " + ", ".join(f"{key}={value}" for key, value in entry["stats"].items()))
 	if entry.get("signals"):
 		lines.append("- tier-1 signals: " + ", ".join(entry["signals"]))
 	if entry.get("latch"):
-		lines.append(f"- blocked since {entry['since']}; latch: {entry['latch']}")
+		lines.append(f"- blocked since {entry['since']}; latch:")
+		lines.append(wrap_untrusted(entry["latch"], "latch"))
 	if entry["redacted"]:
 		return
 	lines.append(wrap_untrusted(entry.get("title", "")[:TITLE_MAX], "title"))
@@ -1021,6 +1098,7 @@ def render_model_input(digest: dict[str, Any]) -> str:
 		lines.append(
 			f"- {cov['repo']}: items={cov['items']} flagged={cov['flagged']} blocked={cov['blocked']} status={cov['status']}"
 			f" cursor={cov['cursor']} clamped={'true' if cov['clamped'] else 'false'}" + (" listing_truncated=true" if cov.get("truncated") else "")
+			+ (" open_snapshot_truncated=true" if cov.get("open_truncated") else "")
 		)
 	lines += ["", "### Clean item counts"]
 	lines += [f"- {category}: {count}" for category, count in digest["clean_counts"].items()] or ["- none"]
@@ -1034,25 +1112,38 @@ def render_model_input(digest: dict[str, Any]) -> str:
 		("## New blocked items (diagnose each to a root cause)", [entry for entry in digest["blocked"] if entry.get("new")]),
 		("## Known blocked items (list with their age; no new diagnosis needed)", [entry for entry in digest["blocked"] if not entry.get("new")]),
 	)
+	# Whole entries are kept or left out, so no wrapped block is ever cut. An
+	# entry left out is marked ``omitted``; required_report_refs and
+	# scripts/check_issue_pr_audit_report.py do not require it, so a heavy day
+	# cannot fail the report check on items the model never saw.
+	size = len(("\n".join(lines) + "\n").encode("utf-8"))
+	budget = MODEL_INPUT_MAX_BYTES - 1024
+	omitted = 0
 	for heading, entries in sections:
 		lines += ["", heading]
+		size += len(heading.encode("utf-8")) + 2
 		if not entries:
 			lines.append("- none")
 		for entry in entries:
-			_render_entry(entry, lines)
-	text = "\n".join(lines) + "\n"
-	encoded = text.encode("utf-8")
-	if len(encoded) > MODEL_INPUT_MAX_BYTES:
-		text = encoded[:MODEL_INPUT_MAX_BYTES].decode("utf-8", errors="ignore")
-		# A truncated block is closed so the wrapper rule still holds.
-		text += "\n</untrusted_external_data>\n\n(audit data truncated at the input size cap)\n"
-	return text
+			chunk: list[str] = []
+			_render_entry(entry, chunk)
+			chunk_size = len(("\n".join(chunk) + "\n").encode("utf-8"))
+			if size + chunk_size > budget:
+				entry["omitted"] = True
+				omitted += 1
+				continue
+			entry.pop("omitted", None)
+			lines.extend(chunk)
+			size += chunk_size
+	if omitted:
+		lines += ["", f"({omitted} items left out at the input size cap; they need no report line)"]
+	return "\n".join(lines) + "\n"
 
 
 def required_report_refs(digest: dict[str, Any]) -> list[str]:
 	"""Display strings the report must mention: every deep-reviewed flagged item and every new blocked item."""
-	refs = [entry["display"] for entry in digest.get("items") or [] if entry.get("deep")]
-	refs += [entry["display"] for entry in digest.get("blocked") or [] if entry.get("new")]
+	refs = [entry["display"] for entry in digest.get("items") or [] if entry.get("deep") and not entry.get("omitted")]
+	refs += [entry["display"] for entry in digest.get("blocked") or [] if entry.get("new") and not entry.get("omitted")]
 	return list(dict.fromkeys(refs))
 
 
@@ -1291,7 +1382,11 @@ def cmd_classify(args: argparse.Namespace) -> int:
 
 def cmd_render_input(args: argparse.Namespace) -> int:
 	work = _workdir(args)
-	(work / "model-input.md").write_text(render_model_input(_read_json(work / "digest.json")), encoding="utf-8")
+	digest = _read_json(work / "digest.json")
+	(work / "model-input.md").write_text(render_model_input(digest), encoding="utf-8")
+	# The omitted marks set by render_model_input go back into the digest the
+	# report check reads.
+	_write_json(work / "digest.json", digest)
 	return 0
 
 

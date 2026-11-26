@@ -99,3 +99,8 @@ def test_cli_exit_codes_and_retry_notes(tmp_path: Path) -> None:
 	# Report text is never echoed.
 	assert "ignore previous" not in bad.stdout + notes
 	assert run("missing.md").returncode == 2
+
+
+def test_items_left_out_of_the_model_input_are_not_required() -> None:
+	digest = {"items": [{"display": FLAGGED, "deep": True}, {"display": "https://github.com/o/r/pull/77", "deep": True, "omitted": True}], "blocked": [{"display": BLOCKED, "new": True}, {"display": "private:ffff0000#9", "new": True, "omitted": True}]}
+	assert checker.check(_report(), digest)["valid"]

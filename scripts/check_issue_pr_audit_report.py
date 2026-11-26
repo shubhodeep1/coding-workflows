@@ -15,7 +15,8 @@ text and never echoes it. It prints exactly one line to stdout:
 * the nine ``## `` headings appear, in order (REPORT_HEADINGS);
 * every deep-reviewed flagged item and every new blocked item of
   ``--digest`` (its URL, or its ``private:<hash>#<n>`` label) is mentioned
-  outside the Metrics Appendix; a URL must not be followed by another digit;
+  outside the Metrics Appendix (entries marked ``omitted`` at the model input
+  size cap are not required); a URL must not be followed by another digit;
 * every ``AUD-###`` named on an item line (``- `` lines of the Unnecessary,
   Incorrectly Resolved and Blocked sections) has a ``### AUD-###:`` heading
   under Fix Plans;
@@ -73,8 +74,9 @@ def split_sections(text: str) -> dict[str, str]:
 
 
 def required_refs(digest: dict) -> list[str]:
-	refs = [entry.get("display") for entry in digest.get("items") or [] if isinstance(entry, dict) and entry.get("deep")]
-	refs += [entry.get("display") for entry in digest.get("blocked") or [] if isinstance(entry, dict) and entry.get("new")]
+	# Entries render_model_input left out at the input size cap are not required.
+	refs = [entry.get("display") for entry in digest.get("items") or [] if isinstance(entry, dict) and entry.get("deep") and not entry.get("omitted")]
+	refs += [entry.get("display") for entry in digest.get("blocked") or [] if isinstance(entry, dict) and entry.get("new") and not entry.get("omitted")]
 	return [ref for ref in dict.fromkeys(refs) if isinstance(ref, str) and ref]
 
 

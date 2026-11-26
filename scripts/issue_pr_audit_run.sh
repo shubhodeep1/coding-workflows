@@ -100,8 +100,13 @@ ipa_collect()
 		echo "ISSUE_PR_AUDIT_SKIPPED reason=collect_failed"
 		return 0
 	fi
-	"${IPA_PY[@]}" classify --state "${IPA_STATE_PATH}"
-	"${IPA_PY[@]}" render-input
+	# A tier-1 or render error is a handled outcome too: the daily job keeps its result.
+	if ! "${IPA_PY[@]}" classify --state "${IPA_STATE_PATH}" || ! "${IPA_PY[@]}" render-input; then
+		echo "::warning::Issue/PR audit classification failed."
+		echo "ISSUE_PR_AUDIT_SKIPPED reason=collect_failed"
+		rm -f "${IPA_WORKDIR}"/digest.json "${IPA_WORKDIR}"/model-input.md
+		return 0
+	fi
 	ipa_output digest_ready true
 }
 
