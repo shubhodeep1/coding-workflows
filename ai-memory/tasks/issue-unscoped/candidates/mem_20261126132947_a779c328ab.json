@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:6142-6162 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: review_autofix.yml is 431,709 bytes, over the 430,000-byte limit asserted at tests/test_review_autofix_review_pipeline_contract.py:11106-11107 (test_post_sync_test_repair_keeps_review_autofix_well_under_the_size_guard).\n  WHY: tests-system-python (9) and orchestrate-poll (1) fail, so the lint aggregate fails and the PR cannot merge. All reviewers rate it BLOCKER. Reviewers differ on line scope: whole file, the added alert case at 6142-6162, and env entries at about 5969-5974.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description \"review_autofix.yml is 404,301 bytes, under the 480,000-byte guard (\u00a727). No new jobs.\" The repo contract also requires the file to be under 430,000 bytes (tests/test_review_autofix_review_pipeline_contract.py:11107).\n  expected_change_site: .github/workflows/review_autofix.yml (move inline run: bodies into scripts/ to get under 430,000 bytes, and reconcile the PR description byte claim)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  EVIDENCE: CI run 45804146864 on head ba26fd8d4ff5 reports 431709 < 430000 assertion failure, no hunk in the PR diff moves any run: body into scripts/, the PR description's 404,301 figure is stale\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/review_autofix.yml:whole file (PR additions: base_freshness_unknown) case about lines 6142-6162, AUTOFIX_STEP_* env about 5969-5974; size assertion tests/test_review_autofix_review_pipeline_contract.py:11106-11107) | severity=BLOCKER | confidence=4\n  PROBLEM: review_autofix.yml is 431,709 bytes per CI run 45804146864, 1,709 over the 430,000-byte ceiling. tests-system-python (9) and orchestrate-poll (1) fail, and the lint aggregate fails.\n  WHY: CI is red on the merged head, so the PR cannot merge. Fix: move the freshness message construction into scripts/tg_helpers.sh or a step script, trim the comments, and do not raise the limit.\n- TASK_GAP: Requirement: PR description \"review_autofix.yml is 404,301 bytes, under the 480,000-byte guard (\u00a727)\"; repo enforces a 430,000-byte contract. Expected change site: .github/workflows/review_autofix.yml. Evidence of absence: no hunk reduces workflow size; CI shows 431,709 bytes. SEVERITY: BLOCKER, ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml:Throughout (file size) | severity=BLOCKER | confidence=5\n  PROBLEM: review_autofix.yml is 431,709 bytes, over the 430,000-byte limit asserted by test_post_sync_test_repair_keeps_review_autofix_well_under_the_size_guard.\n  WHY: CI jobs lint and tests-system-python fail, preventing the PR from merging.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: Requirement: PR description \"review_autofix.yml is 404,301 bytes, under the 480,000-byte guard (\u00a727). No new jobs.\" plus \u00a727, plus the stricter test at tests/test_review_autofix_review_pipeline_contract.py:11107 (< 430_000). Expected change site: .github/workflows/review_autofix.yml. Evidence of absence: CI run 45804146864 on head ba26fd8d4ff5 reports AssertionError: 431709 < 430000; no hunk moves a run: body into scripts/; the file grew from the PR's ~1.7 KB plus 143 lines from main (8e503df). SEVERITY: BLOCKER, ISSUE_CONFIDENCE: 5\n- HARDENING (risk score 1): scripts/review_autofix_step_post_review_blocked_comment.sh:186-190 \u2014 an unknown future RB_BLOCKED_DEDUPE_TAG would leave RB_BLOCKED_DEDUPE_REPEAT at its \"false\" default. Suggested: add a ::warning:: for unknown tags (4-5 lines).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/review_autofix.yml:6142-6162 (size check tests/test_review_autofix_review_pipeline_contract.py:11106-11107) | severity=BLOCKER | confidence=5\n  PROBLEM: The current PR head has review_autofix.yml at 431,709 bytes, exceeding the test's 430,000-byte limit.\n  WHY: The size assertion fails, causing tests-system-python and its dependent CI checks to fail.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/review_autofix.yml:whole file (PR hunks 5281-5287, 5966-5991, 6139-6165; gate tests/test_review_autofix_review_pipeline_contract.py:11106-11107) | severity=BLOCKER | confidence=5\n  PROBLEM: On head ba26fd8d4ff5e5407914232bad0a8fba07f133f2 the file is 431,709 bytes, over the 430,000-byte ceiling. CI run 45804146864 fails tests-system-python (9) and orchestrate-poll (1), and lint fails as a result.\n  WHY: CI is red, so the PR cannot merge. Fix direction: extract the largest inline run: body into a review_autofix_step_*.sh script, recovering at least 1,710 bytes, without raising the limit.\n- TASK_GAP: Requirement: PR description claims \"review_autofix.yml is 404,301 bytes, under the 480,000-byte guard (\u00a727). No new jobs.\"; the repo contract requires under 430,000 bytes. Expected change site: .github/workflows/review_autofix.yml. Evidence of absence: CI run 45804146864 fails with assert 431709 < 430000; no hunk moves a run: body into scripts/. SEVERITY: BLOCKER, ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "864d129b579d80daa5c6a18ff9bb435046ca06395fdee9078bb86cb10a98b94c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9944,
+    "run_id": "45818881384",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "github-actions[bot]",
+    "run_attempt": 1,
+    "run_id": "45818881384",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126132947_a779c328ab",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9944,
+    "run_id": "45818881384"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T13:29:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
