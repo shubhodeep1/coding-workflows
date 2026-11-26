@@ -1450,3 +1450,649 @@ def test_materiality_advisory_posts_with_the_job_token_and_refreshes_with_gh_tok
 	assert "(job token, not resent)." in step
 	# The in-place refresh of an existing PAT-authored advisory keeps GH_TOKEN.
 	assert 'if gh_retry gh api -X PATCH "repos/${{ github.repository }}/issues/comments/${existing_comment_id}"' in step
+
+
+# --- #9671: every judge merge site runs the security follow-up guard -------
+# A PR whose base is a standalone PR's head branch must not merge once that
+# head passed a clean single-issue security audit (#9479). Each judge merge
+# site (merge, terminal fix, merge_with_followup sync) runs
+# rb_judge_followup_merge_guard right before its merge; anything but `allow`
+# skips the merge and posts no success status.
+
+FG_BEGIN = "# BEGIN rb-judge security follow-up guard (#9671)"
+FG_END = "# END rb-judge security follow-up guard (#9671)"
+FG_SITE_STARTS = {
+	"merge": '        elif ! rb_judge_followup_merge_guard merge "${_pr_json:-}"; then\n',
+	"terminal": '        elif ! rb_judge_followup_merge_guard terminal "${_rb_terminal_pr_json:-}"; then\n',
+	"sync": '          elif [ "${ENABLE_AUTO_MERGE}" = "true" ] && ! rb_judge_followup_merge_guard sync "${_pr_json:-}"; then\n',
+}
+FG_STUB = """#!/usr/bin/env bash
+printf '%s\\n' "$*" > "${FG_STUB_ARGS}"
+printf '%s\\n' "${SINGLE_ISSUE_SECURITY_PASS_ENABLED-<unset>}" > "${FG_STUB_SWITCH}"
+cp "${PR_PAYLOAD_FILE}" "${FG_STUB_PAYLOAD}"
+echo "SINGLE_ISSUE_SECURITY_PASS mode=followup_guard stub=1"
+echo "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=${FG_STUB_RESULT}"
+"""
+FG_PAYLOAD = json.dumps({"number": 42, "state": "open", "base": {"ref": "ai/issue-7", "repo": {"default_branch": "main"}}, "head": {"sha": JUDGED}})
+
+
+def _fg_helper_block() -> str:
+	text = _script_text()
+	start = text.index(FG_BEGIN)
+	return text[start: text.index(FG_END, start) + len(FG_END)]
+
+
+def _fg_site_snippet(path: str) -> str:
+	text = _script_text()
+	start = text.index(FG_SITE_STARTS[path])
+	end_marker = MERGE_SITE_ENDS[path]
+	end = text.index(end_marker, start) + len(end_marker)
+	return text[start:end]
+
+
+def _run_fg_site(
+	path: str,
+	result: str = "allow",
+	*,
+	payload: str = FG_PAYLOAD,
+	stub: bool = True,
+	support: Path | None = None,
+	extra_env: dict[str, str] | None = None,
+) -> dict:
+	with tempfile.TemporaryDirectory(prefix="test_rb_judge_followup_guard_") as td:
+		tmp = Path(td)
+		bin_dir = tmp / "bin"
+		bin_dir.mkdir()
+		gh_log = tmp / "gh_calls.jsonl"
+		gh_shim = bin_dir / "gh"
+		gh_shim.write_text(
+			"#!/usr/bin/env python3\n"
+			"import json, os, sys\n"
+			"with open(os.environ['GH_CALL_LOG'], 'a', encoding='utf-8') as fh:\n"
+			"\tfh.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+			"sys.exit(0)\n",
+			encoding="utf-8",
+		)
+		gh_shim.chmod(0o755)
+		if support is None:
+			support = tmp / "support"
+			support.mkdir()
+			if stub:
+				script = support / "review_single_issue_security_pass.sh"
+				script.write_text(FG_STUB, encoding="utf-8")
+				script.chmod(0o755)
+		scratch = tmp / "scratch"
+		scratch.mkdir()
+		status_log = tmp / "status.log"
+		github_output = tmp / "github_output.txt"
+		github_output.write_text("", encoding="utf-8")
+		harness = tmp / "harness.sh"
+		harness.write_text(
+			"set -euo pipefail\n"
+			f"review_head_gate_post_status() {{ printf '%s\\n' \"$*\" >> {str(status_log)!r}; }}\n"
+			+ GUARD_STUB
+			+ _merge_err_helpers()
+			+ "\n"
+			+ _fg_helper_block()
+			+ "\n"
+			# Seed only what each arm sets itself: `_pr_meta` and `_guard_pr_meta`
+			# are unset long before any merge site runs.
+			+ '_pr_json="${FG_PAYLOAD_JSON}"\n_rb_terminal_pr_json="${FG_PAYLOAD_JSON}"\nunset _guard_pr_meta _pr_meta\n'
+			+ "if false; then :\n"
+			+ _fg_site_snippet(path)
+			+ "fi\n"
+			+ 'echo "RB_MERGE_STATUS=${RB_MERGE_STATUS:-}"\n'
+			+ 'echo "MERGE_CONFIRMED=${MERGE_CONFIRMED:-}"\n',
+			encoding="utf-8",
+		)
+		env = {
+			"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+			"GH_CALL_LOG": str(gh_log),
+			"GITHUB_OUTPUT": str(github_output),
+			"TMPDIR": str(scratch),
+			"PR_NUMBER": "42",
+			"REPOSITORY": "o/r",
+			"RB_JUDGED_HEAD_SHA": JUDGED,
+			"ENABLE_AUTO_MERGE": "true",
+			"SUPPORT_SCRIPTS_DIR": str(support),
+			"DEFAULT_BRANCH": "main",
+			"FG_PAYLOAD_JSON": payload,
+			"FG_STUB_RESULT": result,
+			"FG_STUB_ARGS": str(tmp / "stub_args"),
+			"FG_STUB_SWITCH": str(tmp / "stub_switch"),
+			"FG_STUB_PAYLOAD": str(tmp / "stub_payload.json"),
+		}
+		env.update(extra_env or {})
+		proc = subprocess.run(["bash", str(harness)], env=env, text=True, capture_output=True, timeout=60)
+		calls = [json.loads(line) for line in gh_log.read_text(encoding="utf-8").splitlines() if line.strip()] if gh_log.exists() else []
+		leftovers = sorted(p.name for p in scratch.iterdir())
+		return {
+			"proc": proc,
+			"stdout": proc.stdout,
+			"calls": calls,
+			"status": status_log.read_text(encoding="utf-8").splitlines() if status_log.exists() else [],
+			"outputs": github_output.read_text(encoding="utf-8").splitlines(),
+			"leftovers": leftovers,
+			"stub_args": (tmp / "stub_args").read_text(encoding="utf-8").strip() if (tmp / "stub_args").exists() else None,
+			"stub_switch": (tmp / "stub_switch").read_text(encoding="utf-8").strip() if (tmp / "stub_switch").exists() else None,
+			"stub_payload": (tmp / "stub_payload.json").read_text(encoding="utf-8") if (tmp / "stub_payload.json").exists() else None,
+		}
+
+
+def _fg_merge_calls(calls: list[list[str]]) -> list[list[str]]:
+	return [call for call in calls if call[:2] == ["pr", "merge"]]
+
+
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_followup_guard_allow_merges(path: str) -> None:
+	run = _run_fg_site(path, "allow")
+	assert run["proc"].returncode == 0, run["proc"].stderr
+	assert run["stub_args"] == "followup-guard"
+	assert json.loads(run["stub_payload"]) == json.loads(FG_PAYLOAD)
+	# Unset SINGLE_PASS_FOLLOWUP_GUARD_SWITCH reaches the guard as empty: on.
+	assert run["stub_switch"] == ""
+	assert _fg_merge_calls(run["calls"]) == _expected_calls(path)[:1]
+	assert "RB_JUDGE_SECURITY_FOLLOWUP_GUARD" not in run["stdout"]
+	assert run["status"] == [f"o/r {JUDGED} success review-blocked judge approved"]
+	if path == "sync":
+		assert "MERGE_CONFIRMED=true" in run["stdout"].splitlines()
+	else:
+		assert "RB_MERGE_STATUS=merge_requested" in run["stdout"].splitlines()
+	assert run["leftovers"] == []
+
+
+FG_REFUSALS = [
+	pytest.param({"result": "refuse"}, "refuse", id="refuse"),
+	pytest.param({"result": "unverifiable"}, "unverifiable", id="unverifiable"),
+	pytest.param({"result": "garbage"}, "unavailable", id="unknown_result"),
+	pytest.param({"stub": False}, "unavailable", id="missing_script"),
+	pytest.param({"payload": "{}"}, "unavailable", id="empty_payload"),
+	pytest.param({"payload": ""}, "unavailable", id="no_payload"),
+	pytest.param({"payload": '{"base": {"ref": ""}}'}, "unavailable", id="empty_base"),
+]
+
+
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+@pytest.mark.parametrize("kwargs,expected", FG_REFUSALS)
+def test_followup_guard_non_allow_skips_merge(path: str, kwargs: dict, expected: str) -> None:
+	run = _run_fg_site(path, **kwargs)
+	assert run["proc"].returncode == 0, run["proc"].stderr
+	assert run["calls"] == []
+	assert run["status"] == []
+	line = f"RB_JUDGE_SECURITY_FOLLOWUP_GUARD pr=42 head={JUDGED} path={path} result={expected} action=skip_merge"
+	assert line in run["stdout"].splitlines(), run["stdout"]
+	assert sum(item.startswith("::warning::") for item in run["stdout"].splitlines()) == 1
+	assert "ai:review-blocked" in run["stdout"]
+	if path == "sync":
+		assert run["outputs"] == ["judge_skip_reason=security_followup_guard"]
+		assert "MERGE_CONFIRMED=" in run["stdout"].splitlines()
+	else:
+		assert "RB_MERGE_STATUS=security_followup_guard" in run["stdout"].splitlines()
+	if expected == "unavailable" and "payload" in kwargs:
+		# Fails closed before running the guard.
+		assert run["stub_args"] is None
+	assert run["leftovers"] == []
+
+
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_followup_guard_forwards_explicit_kill_switch(path: str) -> None:
+	run = _run_fg_site(path, "allow", extra_env={"SINGLE_PASS_FOLLOWUP_GUARD_SWITCH": "false", "SINGLE_ISSUE_SECURITY_PASS_ENABLED": "true"})
+	assert run["stub_switch"] == "false"
+	# The judge's own `|| 'false'` setting is never forwarded to the guard.
+	run = _run_fg_site(path, "allow", extra_env={"SINGLE_ISSUE_SECURITY_PASS_ENABLED": "false"})
+	assert run["stub_switch"] == ""
+
+
+TERMINAL_ARM_START = '      _rb_terminal_pr_json="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo \'{}\')"\n'
+TERMINAL_ARM_END = '        RB_MERGE_STATUS="not_open"\n      fi\n'
+
+
+@needs_jq
+@pytest.mark.parametrize("base, merged", [("main", True), ("orchestrator/project-9", True), ("ai/issue-7", False)])
+def test_followup_guard_terminal_arm_uses_its_own_pr_read(base: str, merged: bool) -> None:
+	"""The real terminal arm, from its one /pulls/<n> read to the merge, with
+	`_pr_meta` and `_guard_pr_meta` unset as in production (#9671)."""
+	text = _script_text()
+	start = text.index(TERMINAL_ARM_START)
+	assert text.count(TERMINAL_ARM_START) == 1
+	end = text.index(TERMINAL_ARM_END, start) + len(TERMINAL_ARM_END)
+	payload = json.dumps({"number": 42, "state": "open", "base": {"ref": base}, "head": {"sha": JUDGED}})
+	with tempfile.TemporaryDirectory(prefix="test_rb_judge_terminal_arm_") as td:
+		tmp = Path(td)
+		bin_dir = tmp / "bin"
+		bin_dir.mkdir()
+		gh_log = tmp / "gh_calls.jsonl"
+		gh_shim = bin_dir / "gh"
+		gh_shim.write_text(
+			"#!/usr/bin/env python3\n"
+			"import json, os, sys\n"
+			"with open(os.environ['GH_CALL_LOG'], 'a', encoding='utf-8') as fh:\n"
+			"\tfh.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+			"sys.exit(0)\n",
+			encoding="utf-8",
+		)
+		gh_shim.chmod(0o755)
+		reads = tmp / "reads.log"
+		harness = tmp / "harness.sh"
+		harness.write_text(
+			"set -euo pipefail\n"
+			"unset _pr_meta _guard_pr_meta\n"
+			'gh_retry() { "$@"; }\n'
+			f"_safe_gh_jq() {{ printf '%s\\n' \"$*\" >> {str(reads)!r}; printf '%s' \"${{FG_PAYLOAD_JSON}}\"; }}\n"
+			"_pr_base_fresh_for_merge() { return 0; }\n"
+			"_pr_wait_for_required_checks() { return 0; }\n"
+			"review_head_gate_post_status() { :; }\n"
+			+ _merge_err_helpers()
+			+ "\n"
+			+ _fg_helper_block()
+			+ "\n"
+			+ text[start:end]
+			+ 'echo "RB_MERGE_STATUS=${RB_MERGE_STATUS:-}"\n',
+			encoding="utf-8",
+		)
+		scratch = tmp / "scratch"
+		scratch.mkdir()
+		env = {
+			"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+			"GH_CALL_LOG": str(gh_log),
+			"TMPDIR": str(scratch),
+			"PR_NUMBER": "42",
+			"REPOSITORY": "o/r",
+			"RB_JUDGED_HEAD_SHA": JUDGED,
+			"ENABLE_AUTO_MERGE": "true",
+			"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+			"DEFAULT_BRANCH": "main",
+			"FG_PAYLOAD_JSON": payload,
+			"GH_RETRY_MAX_ATTEMPTS": "1",
+		}
+		proc = subprocess.run(["bash", str(harness)], env=env, text=True, capture_output=True, timeout=60)
+		assert proc.returncode == 0, proc.stderr
+		calls = [json.loads(line) for line in gh_log.read_text(encoding="utf-8").splitlines() if line.strip()] if gh_log.exists() else []
+		# One PR read, the arm's own.
+		assert reads.read_text(encoding="utf-8").splitlines() == ["repos/o/r/pulls/42"]
+		if merged:
+			assert "RB_MERGE_STATUS=merge_requested" in proc.stdout.splitlines(), proc.stdout + proc.stderr
+			assert _fg_merge_calls(calls) == _expected_calls("terminal")[:1]
+			assert "RB_JUDGE_SECURITY_FOLLOWUP_GUARD" not in proc.stdout
+		else:
+			# A standalone-PR base reaches the guard's parent lookup; the shim
+			# answers nothing, so the guard does not allow and no merge runs.
+			assert "RB_MERGE_STATUS=security_followup_guard" in proc.stdout.splitlines(), proc.stdout + proc.stderr
+			assert _fg_merge_calls(calls) == []
+			assert "path=terminal result=" in proc.stdout
+		assert sorted(p.name for p in scratch.iterdir()) == []
+
+
+@needs_jq
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+@pytest.mark.parametrize("base", ["main", "orchestrator/project-9"])
+def test_followup_guard_real_guard_default_or_integration_base_makes_no_api_call(path: str, base: str) -> None:
+	payload = json.dumps({"number": 42, "state": "open", "base": {"ref": base}, "head": {"sha": JUDGED}})
+	run = _run_fg_site(path, payload=payload, support=REPO_ROOT / "scripts")
+	assert run["proc"].returncode == 0, run["proc"].stderr
+	assert ("reason=default_base" if base == "main" else "reason=integration_base") in run["stdout"]
+	# Only the merge itself reaches gh.
+	assert run["calls"] == _expected_calls(path)[:1]
+
+
+def test_followup_guard_sits_after_the_gates_and_before_the_status() -> None:
+	text = _script_text()
+	assert text.count("rb_judge_followup_merge_guard merge ") == 1
+	assert text.count("rb_judge_followup_merge_guard terminal ") == 1
+	assert text.count("rb_judge_followup_merge_guard sync ") == 1
+	for path, start in FG_SITE_STARTS.items():
+		at = text.index(start)
+		before = text[:at]
+		if path == "sync":
+			assert before.rindex("_pr_checks_completed") < before.rindex("_pr_base_fresh_for_merge")
+		else:
+			assert before.rindex("_pr_wait_for_required_checks") < before.rindex("_pr_base_fresh_for_merge")
+		after = text[at:]
+		status = after.index('review_head_gate_post_status "${REPOSITORY}" "${RB_JUDGED_HEAD_SHA}" success')
+		merge = after.index('if gh pr merge "${PR_NUMBER}"')
+		assert status < merge
+		assert after.index("rb_judge_merge_err_open") < status
+	# The helper is defined once, after the merge-error helpers.
+	assert text.index("# END rb-judge merge error capture (#7659)") < text.index(FG_BEGIN) < text.index('case "${RB_ACTION}" in\n  merge)')
+
+
+# The transient merge retry re-runs the guard before each retried merge (#9671):
+# a clean audit can land during the retry delay.
+
+FG_SEQ_STUB = """#!/usr/bin/env bash
+n=$(cat "${FG_STUB_COUNT}" 2>/dev/null || echo 0)
+echo $((n + 1)) > "${FG_STUB_COUNT}"
+IFS=, read -r -a results <<< "${FG_STUB_RESULTS}"
+r="${results[$n]:-${results[${#results[@]}-1]}}"
+if [ -n "${FG_STUB_PAYLOADS:-}" ]; then cp "${PR_PAYLOAD_FILE}" "${FG_STUB_PAYLOADS}/payload_$((n + 1)).json"; fi
+echo "SINGLE_ISSUE_SECURITY_PASS mode=followup_guard stub=1 call=$((n + 1))"
+echo "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=${r}"
+"""
+
+
+def _fg_pr_state(base: str = "ai/issue-7") -> dict:
+	"""The retry's PR read with a readable base ref (the payload's, by default).
+
+	The read's fifth field is mergeable_state (#9939); the base ref is last."""
+	return {"code": 0, "stdout": f"open\tfalse\tfalse\t{JUDGED}\tclean\t{base}\n"}
+
+
+def _run_fg_site_with_retry(path: str, guard_results: list[str], responses: list[dict], payload: str = FG_PAYLOAD, extra_env: dict[str, str] | None = None) -> dict:
+	with tempfile.TemporaryDirectory(prefix="test_rb_judge_followup_guard_retry_") as td:
+		tmp = Path(td)
+		bin_dir = tmp / "bin"
+		bin_dir.mkdir()
+		gh_log = tmp / "gh_calls.jsonl"
+		responses_file = tmp / "responses.json"
+		responses_file.write_text(json.dumps(responses), encoding="utf-8")
+		gh_shim = bin_dir / "gh"
+		gh_shim.write_text(
+			"#!/usr/bin/env python3\n"
+			"import json, os, sys\n"
+			"log = os.environ['GH_CALL_LOG']\n"
+			"n = sum(1 for _ in open(log, encoding='utf-8')) if os.path.exists(log) else 0\n"
+			"with open(log, 'a', encoding='utf-8') as fh:\n"
+			"\tfh.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+			"rs = json.load(open(os.environ['GH_STUB_RESPONSES'], encoding='utf-8'))\n"
+			"r = rs[n] if n < len(rs) else rs[-1]\n"
+			"sys.stdout.write(r.get('stdout', ''))\n"
+			"sys.stderr.write(r.get('stderr', ''))\n"
+			"sys.exit(r.get('code', 0))\n",
+			encoding="utf-8",
+		)
+		gh_shim.chmod(0o755)
+		sleep_shim = bin_dir / "sleep"
+		sleep_shim.write_text("#!/usr/bin/env bash\n:\n", encoding="utf-8")
+		sleep_shim.chmod(0o755)
+		support = tmp / "support"
+		support.mkdir()
+		stub = support / "review_single_issue_security_pass.sh"
+		stub.write_text(FG_SEQ_STUB, encoding="utf-8")
+		stub.chmod(0o755)
+		scratch = tmp / "scratch"
+		scratch.mkdir()
+		github_output = tmp / "github_output.txt"
+		github_output.write_text("", encoding="utf-8")
+		harness = tmp / "harness.sh"
+		harness.write_text(
+			"set -euo pipefail\n"
+			"review_head_gate_post_status() { :; }\n"
+			+ GUARD_STUB
+			+ _merge_err_helpers()
+			+ "\n"
+			+ _fg_helper_block()
+			+ "\n"
+			+ '_pr_json="${FG_PAYLOAD_JSON}"\n_rb_terminal_pr_json="${FG_PAYLOAD_JSON}"\n'
+			+ "if false; then :\n"
+			+ _fg_site_snippet(path)
+			+ "fi\n"
+			+ 'echo "RB_MERGE_STATUS=${RB_MERGE_STATUS:-}"\n'
+			+ 'echo "MERGE_CONFIRMED=${MERGE_CONFIRMED:-}"\n',
+			encoding="utf-8",
+		)
+		env = {
+			"PATH": f"{bin_dir}:{os.environ.get('PATH', '')}",
+			"GH_CALL_LOG": str(gh_log),
+			"GH_STUB_RESPONSES": str(responses_file),
+			"GITHUB_OUTPUT": str(github_output),
+			"TMPDIR": str(scratch),
+			"PR_NUMBER": "42",
+			"REPOSITORY": "o/r",
+			"RB_JUDGED_HEAD_SHA": JUDGED,
+			"ENABLE_AUTO_MERGE": "true",
+			"SUPPORT_SCRIPTS_DIR": str(support),
+			"DEFAULT_BRANCH": "main",
+			"FG_PAYLOAD_JSON": payload,
+			"FG_STUB_RESULTS": ",".join(guard_results),
+			"FG_STUB_COUNT": str(tmp / "stub_count"),
+			"FG_STUB_PAYLOADS": str(tmp),
+		}
+		env.update(extra_env or {})
+		proc = subprocess.run(["bash", str(harness)], env=env, text=True, capture_output=True, timeout=60)
+		calls = [json.loads(line) for line in gh_log.read_text(encoding="utf-8").splitlines() if line.strip()] if gh_log.exists() else []
+		count_file = tmp / "stub_count"
+		return {
+			"proc": proc,
+			"calls": calls,
+			"outputs": github_output.read_text(encoding="utf-8").splitlines(),
+			"guard_calls": int(count_file.read_text(encoding="utf-8").strip()) if count_file.exists() else 0,
+			"payloads": [json.loads(p.read_text(encoding="utf-8")) for p in sorted(tmp.glob("payload_*.json"))],
+			"leftovers": sorted(p.name for p in scratch.iterdir()),
+		}
+
+
+@needs_jq
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+@pytest.mark.parametrize("retry_result", ["refuse", "unverifiable"])
+def test_followup_guard_rerun_before_transient_retry_stops_merge(path: str, retry_result: str) -> None:
+	run = _run_fg_site_with_retry(path, ["allow", retry_result], _first_failure(path) + [_fg_pr_state(), _ok()])
+	proc = run["proc"]
+	assert proc.returncode == 0, proc.stderr
+	assert run["guard_calls"] == 2
+	expected = _expected_calls(path)
+	# The initial attempts and the retry's PR-state read; no retried merge.
+	assert run["calls"][: len(expected)] == expected
+	assert len(run["calls"]) == len(expected) + 1 and run["calls"][-1][0] == "api"
+	assert _retry_lines(proc.stdout)[-1] == f"RB_JUDGE_MERGE_RETRY pr=42 head={JUDGED} path={path} attempt=1/3 outcome=security_followup_guard"
+	assert f"RB_JUDGE_SECURITY_FOLLOWUP_GUARD pr=42 head={JUDGED} path={path} result={retry_result} action=skip_merge" in proc.stdout.splitlines()
+	if path == "sync":
+		assert "judge_skip_reason=sync_merge_failed" in run["outputs"]
+	else:
+		assert "RB_MERGE_STATUS=merge_failed" in proc.stdout.splitlines()
+	assert run["leftovers"] == []
+
+
+@needs_jq
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_followup_guard_rerun_allow_lets_transient_retry_merge(path: str) -> None:
+	run = _run_fg_site_with_retry(path, ["allow"], _first_failure(path) + [_fg_pr_state(), _ok()])
+	proc = run["proc"]
+	assert proc.returncode == 0, proc.stderr
+	assert run["guard_calls"] == 2
+	assert run["calls"][-1] == _expected_calls(path)[0]
+	assert "RB_JUDGE_SECURITY_FOLLOWUP_GUARD" not in proc.stdout
+	_assert_merge_succeeded(path, "\n".join(run["outputs"]), proc.stdout)
+	assert run["leftovers"] == []
+
+
+@needs_jq
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_followup_guard_rerun_uses_the_retry_reads_live_base(path: str) -> None:
+	"""A retarget during the retry delay reaches the guard re-run (#9671)."""
+	payload = json.dumps({"number": 42, "state": "open", "base": {"ref": "main", "repo": {"default_branch": "main"}}, "head": {"sha": JUDGED}})
+	retargeted = {"code": 0, "stdout": f"open\tfalse\tfalse\t{JUDGED}\tclean\tai/issue-7\n"}
+	run = _run_fg_site_with_retry(path, ["allow", "refuse"], _first_failure(path) + [retargeted, _ok()], payload=payload)
+	assert run["proc"].returncode == 0, run["proc"].stderr
+	assert [p["base"]["ref"] for p in run["payloads"]] == ["main", "ai/issue-7"]
+	assert run["payloads"][1]["head"] == {"sha": JUDGED}
+	assert _retry_lines(run["proc"].stdout)[-1].endswith("outcome=security_followup_guard")
+	assert _fg_merge_calls(run["calls"][len(_expected_calls(path)):]) == []
+
+
+@needs_jq
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_followup_guard_rerun_keeps_payload_when_base_unchanged(path: str) -> None:
+	run = _run_fg_site_with_retry(path, ["allow"], _first_failure(path) + [_fg_pr_state(), _ok()])
+	assert run["proc"].returncode == 0, run["proc"].stderr
+	assert run["payloads"] == [json.loads(FG_PAYLOAD)] * 2
+	_assert_merge_succeeded(path, "\n".join(run["outputs"]), run["proc"].stdout)
+
+
+FG_UNREADABLE_READS = [
+	{"code": 1, "stderr": "gh: Server Error (HTTP 500)"},
+	_pr_state(),
+	{"code": 1, "stdout": '{"message":"Server Error"}\n', "stderr": "gh: Server Error (HTTP 500)"},
+]
+
+
+@needs_jq
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_followup_guard_unreadable_retry_base_skips_every_retried_merge(path: str) -> None:
+	"""No base from the retry's read: the merge, bound only to the head, is not
+	retried on the saved base (#9671); the site's failure branch runs."""
+	run = _run_fg_site_with_retry(path, ["allow"], _first_failure(path) + FG_UNREADABLE_READS)
+	proc = run["proc"]
+	assert proc.returncode == 0, proc.stderr
+	expected = _expected_calls(path)
+	assert run["calls"][: len(expected)] == expected
+	assert [call[0] for call in run["calls"][len(expected):]] == ["api"] * 3
+	assert _fg_merge_calls(run["calls"][len(expected):]) == []
+	assert run["guard_calls"] == 1
+	skips = [line for line in _retry_lines(proc.stdout) if "note=base_unverified" in line]
+	assert skips == [f"RB_JUDGE_MERGE_RETRY pr=42 head={JUDGED} path={path} attempt={n}/3 note=base_unverified action=skip_attempt" for n in (1, 2, 3)]
+	if path == "sync":
+		assert "judge_skip_reason=sync_merge_failed" in run["outputs"]
+	else:
+		assert "RB_MERGE_STATUS=merge_failed" in proc.stdout.splitlines()
+	assert run["leftovers"] == []
+
+
+@needs_jq
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_followup_guard_unreadable_retry_base_reads_again_then_merges(path: str) -> None:
+	run = _run_fg_site_with_retry(path, ["allow"], _first_failure(path) + [FG_UNREADABLE_READS[0], _fg_pr_state(), _ok()])
+	proc = run["proc"]
+	assert proc.returncode == 0, proc.stderr
+	assert run["guard_calls"] == 2
+	assert run["payloads"] == [json.loads(FG_PAYLOAD)] * 2
+	assert run["calls"][-1] == _expected_calls(path)[0]
+	assert sum("note=base_unverified" in line for line in _retry_lines(proc.stdout)) == 1
+	_assert_merge_succeeded(path, "\n".join(run["outputs"]), proc.stdout)
+	assert run["leftovers"] == []
+
+
+@needs_jq
+@pytest.mark.parametrize("path", MERGE_SITE_ORDER)
+def test_followup_guard_kill_switch_keeps_old_retry_on_unreadable_base(path: str) -> None:
+	"""An explicit `false` kill switch: an unreadable retry read still retries
+	the head-bound merge, as before #9671."""
+	run = _run_fg_site_with_retry(
+		path,
+		["allow"],
+		_first_failure(path) + [FG_UNREADABLE_READS[0], _ok()],
+		extra_env={"SINGLE_PASS_FOLLOWUP_GUARD_SWITCH": "false"},
+	)
+	proc = run["proc"]
+	assert proc.returncode == 0, proc.stderr
+	assert not any("note=base_unverified" in line for line in _retry_lines(proc.stdout))
+	assert run["calls"][-1] == _expected_calls(path)[0]
+	_assert_merge_succeeded(path, "\n".join(run["outputs"]), proc.stdout)
+	assert run["leftovers"] == []
+
+
+# --- #9987: a lease_wait deferral marks the judge's merge decision ---------
+
+
+JMP_BEGIN = "# BEGIN rb-judge judge-decision lease mark (#9987)"
+JMP_END = "# END rb-judge judge-decision lease mark (#9987)"
+LEASE_WAIT_ELIF = re.compile(r'^([ \t]*)elif \[ "\$\{PR_BASE_FRESHNESS_OUTCOME:-\}" = "lease_wait" \]; then\n', re.MULTILINE)
+JMP_STUB = (
+	"_pr_judge_merge_pending_mark() {\n"
+	'  printf \'%s|%s|%s|%s\\n\' "${PR_CHECKS_REPOSITORY:-}" "$1" "$2" "$3" >> "${JMP_LOG}"\n'
+	'  return "${JMP_RC:-0}"\n'
+	"}\n"
+)
+
+
+def _jmp_helper() -> str:
+	text = _script_text()
+	start = text.index(JMP_BEGIN)
+	return text[start:text.index(JMP_END, start) + len(JMP_END)] + "\n"
+
+
+def _lease_blocker_helper() -> str:
+	"""rb_judge_emit_lease_blocker (#9502), called after a lease_wait deferral."""
+	text = _script_text()
+	start = text.index("rb_judge_emit_lease_blocker()\n{\n")
+	return text[start:text.index("\n}\n", start) + 3]
+
+
+def _lease_wait_bodies() -> list[str]:
+	"""Each `lease_wait` elif body of the judge's merge sites, in script order."""
+	text = _script_text()
+	bodies = []
+	for m in LEASE_WAIT_ELIF.finditer(text):
+		indent = m.group(1)
+		end = re.compile(rf"^{re.escape(indent)}else\n", re.MULTILINE).search(text, m.end())
+		assert end is not None
+		bodies.append(text[m.end():end.start()])
+	return bodies
+
+
+def _run_jmp(body: str, *, outcome: str = "lease_wait", stub: bool = True, stub_rc: int = 0) -> tuple[subprocess.CompletedProcess[str], list[str], str]:
+	with tempfile.TemporaryDirectory(prefix="test_rb_judge_jmp_") as td:
+		tmp = Path(td)
+		log = tmp / "jmp.log"
+		out = tmp / "github_output.txt"
+		out.write_text("", encoding="utf-8")
+		harness = tmp / "harness.sh"
+		harness.write_text("set -euo pipefail\n" + (JMP_STUB if stub else "") + _jmp_helper() + _lease_blocker_helper() + body + "echo DONE\n", encoding="utf-8")
+		env = {"PATH": os.environ.get("PATH", ""), "JMP_LOG": str(log), "JMP_RC": str(stub_rc), "GITHUB_OUTPUT": str(out),
+			"PR_NUMBER": "42", "REPOSITORY": "o/r", "RB_JUDGED_HEAD_SHA": JUDGED, "PR_BASE_FRESHNESS_OUTCOME": outcome,
+			"MERGE_LEASE_BLOCKER": "7"}
+		proc = subprocess.run(["bash", str(harness)], env=env, text=True, capture_output=True, timeout=60)
+		calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+		return proc, calls, out.read_text(encoding="utf-8")
+
+
+def test_lease_wait_deferral_marks_the_judge_decision_once() -> None:
+	bodies = _lease_wait_bodies()
+	assert len(bodies) == 5, len(bodies)
+	expected = ["merge", "merge", "terminal", "terminal", "merge_with_followup"]
+	for body, decision in zip(bodies, expected):
+		proc, calls, _ = _run_jmp(body + body)
+		assert proc.returncode == 0, proc.stderr
+		assert calls == [f"o/r|42|{JUDGED}|{decision}"], (decision, calls)
+
+
+def test_mark_helper_acts_only_on_lease_wait() -> None:
+	for outcome in ("overlap", "unknown", ""):
+		proc, calls, _ = _run_jmp("rb_judge_mark_merge_pending merge\n", outcome=outcome)
+		assert proc.returncode == 0, proc.stderr
+		assert calls == [], outcome
+
+
+def test_mark_helper_is_called_only_in_lease_wait_branches() -> None:
+	text = _script_text()
+	calls = [m.start() for m in re.finditer(r"^[ \t]+rb_judge_mark_merge_pending ", text, re.MULTILINE)]
+	assert len(calls) == 5
+	in_branches = sum(body.count("rb_judge_mark_merge_pending ") for body in _lease_wait_bodies())
+	assert in_branches == 5
+	# The head-gate status is still posted only right before a merge request.
+	for body in _lease_wait_bodies():
+		assert "review_head_gate_post_status" not in body
+	assert len(re.findall(r"^[ \t]+rb_judge_merge_err_open$", text, re.MULTILINE)) == 3
+
+
+def test_failed_or_missing_mark_never_fails_the_judge() -> None:
+	body = _lease_wait_bodies()[0]
+	proc, calls, _ = _run_jmp(body, stub_rc=1)
+	assert proc.returncode == 0, proc.stderr
+	assert "DONE" in proc.stdout
+	assert len(calls) == 1
+	proc, calls, _ = _run_jmp(body, stub=False)
+	assert proc.returncode == 0, proc.stderr
+	assert "DONE" in proc.stdout
+	assert calls == []
+
+
+def test_merge_with_followup_lease_wait_keeps_its_skip_reason() -> None:
+	body = _lease_wait_bodies()[4]
+	proc, calls, output = _run_jmp(body)
+	assert proc.returncode == 0, proc.stderr
+	assert output.splitlines() == ["judge_skip_reason=base_freshness_unknown"]
+	assert "waits for the merge lease held by or queued for PR #7" in proc.stdout
+	assert len(calls) == 1
+
+
+def test_lease_wait_branches_keep_their_merge_status() -> None:
+	for body in _lease_wait_bodies()[:4]:
+		proc, _, _ = _run_jmp(body + 'echo "RB_MERGE_STATUS=${RB_MERGE_STATUS:-}"\n')
+		assert proc.returncode == 0, proc.stderr
+		assert "RB_MERGE_STATUS=mergeability_pending" in proc.stdout.splitlines()
+
+
+def test_a_deferral_never_counts_as_a_judge_retry() -> None:
+	"""G4 (#9987): the retry count comes only from [judge-fix] commits."""
+	assigned = re.findall(r"^\s*RETRY_COUNT=.*$", _script_text(), re.MULTILINE)
+	assert [a.strip() for a in assigned] == ['RETRY_COUNT="${JUDGE_FIX_COUNT:-0}"']
