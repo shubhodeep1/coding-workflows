@@ -3331,7 +3331,7 @@ def _full_repo_clone_for_memory_branch(temp_dir: Path, origin_url: str, memory_b
         # instead of checking out the default branch for a claim.
         raise MemoryGitError(
             f"git ls-remote --heads origin {memory_branch} failed with exit {heads_probe.returncode}\n"
-            f"stderr:\n{heads_probe.stderr}"
+            f"stderr:\n{_redact_memory_push_stderr(heads_probe.stderr or heads_probe.stdout or '')}"
         )
     branch_exists = heads_probe.stdout.strip() != ""
     if branch_exists:

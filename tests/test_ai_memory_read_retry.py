@@ -31,16 +31,25 @@ if str(REPO_ROOT) not in sys.path:
 spec = importlib.util.spec_from_file_location("ai_memory_lib", MODULE_PATH)
 assert spec is not None and spec.loader is not None
 ai_memory_lib = importlib.util.module_from_spec(spec)
+# Restore the previous sys.modules entry after loading, so this file's
+# instance does not leak into the rest of a shared pytest session.
+_previous_ai_memory_lib = sys.modules.get(spec.name)
 sys.modules[spec.name] = ai_memory_lib
-spec.loader.exec_module(ai_memory_lib)
+try:
+	spec.loader.exec_module(ai_memory_lib)
 
-# The claim CLI binds its ai_memory_lib names at import time, so load it now,
-# while sys.modules["ai_memory_lib"] is this file's module instance.
-CLI_MODULE_PATH = REPO_ROOT / "scripts" / "ai_memory.py"
-cli_spec = importlib.util.spec_from_file_location("ai_memory_read_retry_cli", CLI_MODULE_PATH)
-assert cli_spec is not None and cli_spec.loader is not None
-ai_memory_cli = importlib.util.module_from_spec(cli_spec)
-cli_spec.loader.exec_module(ai_memory_cli)
+	# The claim CLI binds its ai_memory_lib names at import time, so load it now,
+	# while sys.modules["ai_memory_lib"] is this file's module instance.
+	CLI_MODULE_PATH = REPO_ROOT / "scripts" / "ai_memory.py"
+	cli_spec = importlib.util.spec_from_file_location("ai_memory_read_retry_cli", CLI_MODULE_PATH)
+	assert cli_spec is not None and cli_spec.loader is not None
+	ai_memory_cli = importlib.util.module_from_spec(cli_spec)
+	cli_spec.loader.exec_module(ai_memory_cli)
+finally:
+	if _previous_ai_memory_lib is None:
+		sys.modules.pop(spec.name, None)
+	else:
+		sys.modules[spec.name] = _previous_ai_memory_lib
 
 
 @pytest.fixture(autouse=True)
