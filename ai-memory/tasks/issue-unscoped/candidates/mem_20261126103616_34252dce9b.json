@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/stage_switches.json:453-458 | severity=low | confidence=4\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: Both readers of the switch treat every value except `false` as on: scripts/operator_step_daily_tick.sh:25-28 (`[ \"${enabled}\" = \"false\" ]`) and scripts/operator_step_issue.py:794-795 (`operator_step_daily_tick_enabled()` with `!= \"false\"`). The registry lists only `1`, `yes` and `on` as extra on values, so `scripts/stage_switch_watch.py`'s `_value_class` (80-82) classifies `0` as off while the tick keeps running.\n  WHY: With `OPERATOR_STEP_DAILY_TICK_ENABLED=0` the daily tick keeps running, but after `STAGE_SWITCH_OFF_ALERT_HOURS` the watcher sends a Telegram WARNING that the stage is off. The registry format cannot list `0` as an on value (`stage_switch_watch.py:58,139`), and the last run's `on_values` addition fixed only the `1`/`yes`/`on` half. All three reviewers rated it NIT, shown here as low.\n- scripts/operator_step_issue.py:683 | severity=low | confidence=2\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The earlier finding from google_gemini-3_1-flash-lite (cited at `scripts/operator_step_issue.py:795`), that the kill switch gates `tick` globally, is wrong. The `if not operator_step_daily_tick_enabled():` check is nested inside `if observable:` (lines 681-682).\n  WHY: The reviewer says this does not fail at runtime: promote-cycle `tick` callers run without `--observable` and never read `OPERATOR_STEP_DAILY_TICK_ENABLED`, so the reported defect does not exist. The source rated it NIT, shown here as low.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Give the switch a default inside every script that reads it.\" (Plan Phase 9, #10118.)\n  expected_change_site: scripts/operator_step_daily_tick.sh, scripts/operator_step_issue.py, .github/workflows/workflow-log-analysis.yml\n  confidence=2\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The reviewer reports that no code is missing:\n    - All three readers default the switch to `true`: the shell script uses `-true`, Python uses `\"true\"` and the workflow uses `|| 'true'`.\n    - The LAST RUN DIFF entry's `\"default\": \"true\"` matches them.\n    - The gemini TASK_GAP on the same requirement is wrong, because the gate is inside the `if observable:` block and promote-cycle callers pass `observable=False` by default.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/operator_step_issue.py:683 | severity=NIT | confidence=2\n  PROBLEM: The consensus finding (google_gemini-3_1-flash-lite, `scripts/operator_step_issue.py:795`) that the kill switch gates `tick` globally is incorrect. `if not operator_step_daily_tick_enabled():` is nested inside `if observable:` (lines 681-682), so the check fires only when `observable=True`.\n  WHY: It does not fail at runtime. The kill switch is correctly scoped to the daily observable path, and existing callers continue unchanged.\n- scripts/stage_switches.json:456; scripts/operator_step_daily_tick.sh:25-27; scripts/operator_step_issue.py:794-795 | severity=NIT | confidence=3\n  PROBLEM: The registry lists `on_values: [\"1\", \"yes\", \"on\"]`, but the shell check (line 27 `[ \"${enabled}\" = \"false\" ]`) and the Python check (line 795 `!= \"false\"`) accept every non-`false` value. With `0` the script runs while `scripts/stage_switch_watch.py`'s `_value_class` classifies it as off. The LAST RUN DIFF did not extend the fix to `0` (or `no`/`off`).\n  WHY: A consumer who sets the switch to `0` gets a false-positive alert and an inconsistent system state. This is uncommon but is a real divergence between the registry contract and the script's lenient check.\n- TASK_GAP\n  Requirement: \"Give the switch a default inside every script that reads it.\" (Plan Phase 9, #10118.)\n  Expected change site: scripts/operator_step_daily_tick.sh, scripts/operator_step_issue.py, .github/workflows/workflow-log-analysis.yml.\n  Evidence of absence: All three readers default the switch to `true` (shell `-true`, Python `\"true\"`, workflow `|| 'true'`), and the LAST RUN DIFF entry's `\"default\": \"true\"` matches. The gemini TASK_GAP is incorrect because the gate is inside `if observable:`. No code is missing.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/stage_switches.json:454-457; scripts/operator_step_daily_tick.sh:25-28; scripts/operator_step_issue.py:794-795; scripts/stage_switch_watch.py:80-82 | severity=NIT | confidence=4\n  PROBLEM: The tick scripts treat any switch value other than `false` as enabled, but the registry lists only `1`, `yes` and `on` as extra enabled values. For example, `0` enables the tick but the watcher classifies it as off.\n  WHY: With `OPERATOR_STEP_DAILY_TICK_ENABLED=0` the daily tick keeps running while the watcher can report the stage as disabled and alert after its off threshold.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/stage_switches.json:453-458 (`\"on_values\": [\"1\", \"yes\", \"on\"]` on the `OPERATOR_STEP_DAILY_TICK_ENABLED` entry), with scripts/stage_switch_watch.py:80-82 and scripts/operator_step_issue.py:794-795 | severity=NIT | confidence=3\n  PROBLEM: The watcher counts a value as on only when it is `true` or in `on_values`, but both readers treat every normalized value except `false` as on. The registry format cannot express `0` as an on value (`stage_switch_watch.py:58,139` restrict `on_values` to 1/yes/on).\n  WHY: With `OPERATOR_STEP_DAILY_TICK_ENABLED=0` the tick keeps running (both `.strip().lower() != \"false\"` and the shell `= \"false\"` test), while `_value_class(\"0\", ...)` returns `off`. After `STAGE_SWITCH_OFF_ALERT_HOURS` the stage-switch watch then sends a Telegram WARNING. The `0` half of the mismatch remains.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "79273b70c27c77e75e05f11bbc5bdd4355d7ef2e307cfa65d5110e9b8acbc8d9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10122,
+    "run_id": "45795930775",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45795930775",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126103616_34252dce9b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10122,
+    "run_id": "45795930775"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T10:36:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
