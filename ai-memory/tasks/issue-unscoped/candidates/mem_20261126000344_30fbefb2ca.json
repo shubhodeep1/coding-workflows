@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION (advisory, not a finding): tests/test_stage_switch_registry.py | location: `_undiscovered_without_pending`, the `stray_markers` and `stray` comprehensions\n  PROBLEM: The registry test accepts any `pending: true` name, including one without the `_ENABLED` suffix. Since the last run, the watch warns about such a marker every day (scripts/stage_switch_watch.py lines 369-371), and discovery can never find that name (line 245).\n  WHY: A typo like this passes CI and only shows up later as a daily warning in the watch.\n  FIX: In both conditions, only accept `pending` when the name ends in `_ENABLED`. For example, change `marker.get(\"pending\") is not True` to `(marker.get(\"pending\") is not True or not str(marker.get(\"name\", \"\")).endswith(\"_ENABLED\"))`, and make the same change for entries. Estimated lines changed: 2. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- HARDENING_SUGGESTION (advisory, not a finding): tests/test_stage_switch_registry.py | location: _undiscovered_without_pending helper (around lines 75-86), stray_markers comprehension\n  PROBLEM: The runtime now warns daily about a `pending: true` marker whose name lacks the `_ENABLED` suffix (`scripts/stage_switch_watch.py` `_valid_markers` lines 363-372), but the helper only checks `name not in discovered AND pending is not True`.\n  WHY: A typo like `NO_SUFFIX` passes the registry test in CI yet triggers a daily warning.\n  FIX: Add `or not str(marker.get(\"name\", \"\")).endswith(\"_ENABLED\")` to the stray_markers condition (and the analogous check on stray for entries), so the test mirrors what discover_switches actually keeps. Estimated lines changed: 2-4. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n- HARDENING_SUGGESTION (advisory, not a finding): tests/test_stage_switch_registry.py | location: lines 103-106, `_undiscovered_without_pending`\n  PROBLEM: The registry test accepts an undiscovered pending marker whose name lacks the `_ENABLED` suffix.\n  WHY: The runtime warns about such a marker on each watch run.\n  FIX: Require pending names to end in `_ENABLED` in the helper's entry and marker checks. Estimated lines changed: 2. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING_SUGGESTION (advisory, not a finding): tests/test_stage_switch_registry.py | location: `_undiscovered_without_pending` helper (stray/stray_markers comprehensions)\n  PROBLEM: a `pending: true` entry or marker whose name lacks the `_ENABLED` suffix is accepted by the contract test, while the runtime now warns about such a marker every daily run (scripts/stage_switch_watch.py:371).\n  WHY: the test could mirror the suffix rule so a typo fails CI instead of surfacing as a daily warning; the previous editor explicitly deferred this as won't-fix to keep the change small, and it is raised only as an advisory residual, not a defect.\n  FIX: add `or not str(marker.get(\"name\", \"\")).endswith(\"_ENABLED\")` to the stray_markers condition and the analogous check for `stray`. Estimated lines changed: 2. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1fe0fa6e06cbf819264751892cde073933d276f9cf4b0813ca930b1fed502692",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10130,
+    "run_id": "45719804434",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45719804434",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126000344_30fbefb2ca",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10130,
+    "run_id": "45719804434"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-26T00:03:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
