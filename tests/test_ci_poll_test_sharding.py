@@ -4778,6 +4778,7 @@ WIRING_PART2_STEP_NAME = POLL_GROUP_TWO_8772_STEP_NAME
 WIRING_PART2_GROUP = 0
 # The poll group the step runs in since #10162.
 WIRING_PART2_POLL_GROUP_10162 = 3
+# Since #10162 this names the orchestrate-poll job, not tests-release-and-log-analysis.
 WIRING_PART2_JOB_ID = POLL_JOB_ID
 WIRING_PART2_SHARDS = 4
 WIRING_PART2_AWK_RE = re.compile(
