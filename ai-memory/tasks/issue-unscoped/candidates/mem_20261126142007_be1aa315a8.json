@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/stage_switches.json:975-979 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The registry has a stale placeholder entry for `GITHUB_AI_PLAN_GRANT_WRITE_ENABLED`, \"added by open pull request #9654; listed before the merge\". The same name is in `README_NOT_REPOSITORY_VARIABLES` (tests/test_stage_switch_registry.py:45), and the test asserts at line 133 that the two sets do not overlap (`assert not names & set(README_NOT_REPOSITORY_VARIABLES)`).\n  WHY: All five reviewers rated this BLOCKER, mapped here to critical. On head 413b8ee, `tests/test_stage_switch_registry.py::test_every_readme_true_switch_is_in_registry` fails in `tests-system-python (27)` and the aggregate `lint` job fails with it, so the PR cannot merge. The entry came in through the orchestrator/project-9650 merge, not from this PR's own `OPERATOR_STEP_DAILY_TICK_ENABLED` hunk. Proposed fix: delete the 5-line object. The real variable `AI_PLAN_GRANT_WRITE_ENABLED` stays registered at scripts/stage_switches.json:15-19, and no workflow reads `vars.GITHUB_AI_PLAN_GRANT_WRITE_ENABLED`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/stage_switches.json:Lines 975-979 | severity=BLOCKER | confidence=5\n  PROBLEM: The entry {\"name\": \"GITHUB_AI_PLAN_GRANT_WRITE_ENABLED\", ...} conflicts with tests/test_stage_switch_registry.py line 45, where README_NOT_REPOSITORY_VARIABLES lists \"GITHUB_AI_PLAN_GRANT_WRITE_ENABLED\", and with line 133: `assert not names & set(README_NOT_REPOSITORY_VARIABLES)`. The entry is a stale #9654 placeholder from the orchestrator/project-9650 merge (#10127 pending-switches block). The real variable, AI_PLAN_GRANT_WRITE_ENABLED, is registered at scripts/stage_switches.json line 16.\n  WHY: The final CI run on head 413b8ee fails `tests/test_stage_switch_registry.py::test_every_readme_true_switch_is_in_registry` at line 133 (`tests-system-python (27)`), and the aggregate `lint` job fails, so the PR cannot merge. Proposed fix: delete lines 975-979. `test_every_workflow_true_switch_is_in_registry` and the line-146 check still hold after the deletion. Caveat: `files_touched` does not list scripts/stage_switches.json. Note: the PR's own OPERATOR_STEP_DAILY_TICK_ENABLED hunk (lines 454-459) is well formed, and its last-run stage text is accurate.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/stage_switches.json:lines 975-979 | severity=BLOCKER | confidence=5\n  PROBLEM: The registry contains a stale entry for `GITHUB_AI_PLAN_GRANT_WRITE_ENABLED`. It conflicts with `tests/test_stage_switch_registry.py` because the name is listed in `README_NOT_REPOSITORY_VARIABLES`.\n  WHY: Final CI fails with `AssertionError: assert not names & set(README_NOT_REPOSITORY_VARIABLES)`, which blocks the merge.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/stage_switches.json:lines 975-979 | severity=BLOCKER | confidence=5\n  PROBLEM: The registry holds `GITHUB_AI_PLAN_GRANT_WRITE_ENABLED`, but `tests/test_stage_switch_registry.py:45` lists it in `README_NOT_REPOSITORY_VARIABLES`, and `tests/test_stage_switch_registry.py:133` asserts that the intersection is empty. The real variable `AI_PLAN_GRANT_WRITE_ENABLED` is registered at `scripts/stage_switches.json:15-19`. The entry is a stale merge-prep artifact for #9654.\n  WHY: On head `413b8ee68fa412fc767758a1a58600761c07d1a0`, `tests-system-python (27)` fails `tests/test_stage_switch_registry.py::test_every_readme_true_switch_is_in_registry` (`1 failed, 660 passed`), and `lint` fails with `::error::CI jobs that did not succeed: tests-system-python`, so the merge gate stays red. The entry was not introduced by the last run's diff (lines 454-457).\n- TASK COMPLETENESS / INTENT GAPS: NONE. The reviewer says the Phase 9 scope from `docs/plans/pipeline-human-wait-elimination-plan.md:486-489` is fully delivered.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/stage_switches.json:976-978 | severity=BLOCKER | confidence=5\n  PROBLEM: The registry includes `GITHUB_AI_PLAN_GRANT_WRITE_ENABLED`, but `tests/test_stage_switch_registry.py` lists that name in `README_NOT_REPOSITORY_VARIABLES` and asserts at line 133 that registry names do not overlap that set.\n  WHY: `test_every_readme_true_switch_is_in_registry` fails on the PR head in `tests-system-python (27)`, and the aggregate `lint` check fails as a result.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/stage_switches.json:lines 975-979 | severity=BLOCKER | confidence=5\n  PROBLEM: The registry lists `GITHUB_AI_PLAN_GRANT_WRITE_ENABLED`, which conflicts with tests/test_stage_switch_registry.py:41-48 (`README_NOT_REPOSITORY_VARIABLES`, which lists the name at line 45) and with the assertion at tests/test_stage_switch_registry.py:133. The real switch `AI_PLAN_GRANT_WRITE_ENABLED` is registered at scripts/stage_switches.json:15-19. The entry is a stale #9654 placeholder that arrived with the orchestrator/project-9650 merge (commit 413b8ee).\n  WHY: `tests-system-python (27)` fails `tests/test_stage_switch_registry.py::test_every_readme_true_switch_is_in_registry` at line 133, and `lint` fails with it, so the PR cannot merge. Proposed fix: delete scripts/stage_switches.json:975-979. The reviewer verified this is safe: no workflow reads `vars.GITHUB_AI_PLAN_GRANT_WRITE_ENABLED`, so the test at line 114 stays green. Note: the PR's own `OPERATOR_STEP_DAILY_TICK_ENABLED` entry (lines 455-460) is registered correctly.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0a31410124ea75a794a6750aa17eeab061a018e1cdfa6cdfa2c42ad6247d2ddc",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10122,
+    "run_id": "45826112199",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45826112199",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126142007_be1aa315a8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10122,
+    "run_id": "45826112199"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T14:20:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
