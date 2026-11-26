@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Run tests/test_check_failure_triage_workflow_security.py, tests/test_unblock_judge.py and tests/test_orchestrate_poll_promote_cycle.py on the current branch. Their pre-push gate results were timeouts or unverified. For any failure, check the same test against isolated-base files using git show isolated-base:<path>, and fix only failures this change caused.\"\n  expected_change_site: verification of the three named test files on the PR head (no code change expected unless a caused failure existed)\n  confidence=[3]\n  flagged_by: [z-ai_glm-5_3-flash]\n  EVIDENCE: The PR's own pre-push gate and acceptance table report these files still unverified \u2014 tests/test_check_failure_triage_workflow_security.py unmet (4 tests listed as failed), tests/test_unblock_judge.py unmet (3 tests), tests/test_orchestrate_poll_promote_cycle.py \"not run\" (timeout); gate says \"Mode: repair, Repair turn: skipped (editor exit 124)\"; the PR diff (README.md, changelog fragment, one added test) contains no re-run/fix addressing item 1\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP\nRequirement: \"Run tests/test_check_failure_triage_workflow_security.py, tests/test_unblock_judge.py and tests/test_orchestrate_poll_promote_cycle.py on the current branch. Their pre-push gate results were timeouts or unverified. For any failure, check the same test against isolated-base files using git show isolated-base:<path>, and fix only failures this change caused.\"\nExpected change site: verification of the three named test files on the PR head (no code change expected unless a caused failure existed).\nEvidence of absence: The PR's own pre-push gate and acceptance table report these three files still unverified \u2014 `tests/test_check_failure_triage_workflow_security.py` unmet (4 tests listed as failed on this change: `test_triage_checkouts_do_not_persist_credentials`, `test_trigger_log_sanitizes_metacharacters_to_one_line`, `test_valid_same_repo_and_empty_optional_values_continue`, `test_workflow_contract_gates_secrets_behind_minimal_prerequisite`), `tests/test_unblock_judge.py` unmet (3 tests), `tests/test_orchestrate_poll_promote_cycle.py` \"not run\" (timeout); the gate says \"Mode: repair, Repair turn: skipped (editor exit 124)\". The PR diff (README.md, changelog fragment, one added test) contains no re-run/fix addressing item 1, so the issue's first deliverable was never completed to a verified result.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n(All other checklist categories: NONE.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d0fd3b2d27fe9644993071cc519b9ffeeda8fe96d8e94f35566a4f24d91f42c3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10140,
+    "run_id": "45728173185",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45728173185",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126020633_ffe4d53961",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10140,
+    "run_id": "45728173185"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-26T02:06:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
