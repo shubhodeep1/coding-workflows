@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION (not a finding): scripts/review_single_issue_security_pass.sh | location: single_pass_dispatch_audit, line 369 (`err=\"$(gh \"$@\" 2>&1 >/dev/null)\"`)\n  ISSUE: The capture only works because bash applies redirections left to right; reordering to `>/dev/null 2>&1` would quietly empty err, so every failure would be classed `other` and none retried.\n  FIX: add one trailing comment, e.g. \"# 2>&1 first: stderr is captured into err; >/dev/null then drops stdout. Do not reorder.\" (estimated lines changed: 1)\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n- HARDENING_SUGGESTION (not a finding): scripts/review_single_issue_security_pass.sh | location: line 369, redirections in single_pass_dispatch_audit\n  ISSUE: The current order correctly captures stderr and discards stdout, but this depends on Bash applying redirections left to right.\n  FIX: Add a short comment that `2>&1` must come before `>/dev/null` so a later reorder does not silently discard the dispatch error. (estimated lines changed: 1)\n  HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING_SUGGESTION (not a finding): scripts/review_single_issue_security_pass.sh | location: line 369, the redirect pair inside single_pass_dispatch_audit\n  ISSUE: The capture depends on bash applying redirections left to right; reordering to `>/dev/null 2>&1` would discard stderr, and classification would silently degrade to the empty-output `other` class.\n  FIX: append one comment on the existing line, e.g. `# 2>&1 first captures stderr into err; >/dev/null then drops stdout. Do not reorder.` (estimated lines changed: 1)\n  HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4fdaa57fa238fba35b29511f67669dcd8c9212e412dea438a7f8769ee0dc063c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10110,
+    "run_id": "45898266403",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45898266403",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126222210_8ebffca198",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10110,
+    "run_id": "45898266403"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-26T22:22:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
