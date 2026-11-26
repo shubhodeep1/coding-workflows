@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:158 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The \"Used By\" column of the `MERGE_BASE_SYNC_DELTA_CI_ENABLED` row lists `ci, review_autofix, orchestrate_poll`, but only `.github/workflows/ci.yml` exports the variable (lines 5018 and 5025), so in `review_autofix.yml` and `orchestrate_poll.yml` the dispatcher (`scripts/pr_checks_lib.sh:2280`) always uses the script default `true`.\n  WHY: An operator who sets the variable to `false` expects the review and poller dispatch to stop, but each affected PR still gets one failed `[sync-quick]` run (`reason=delta_disabled`), which also contradicts the row's own description; this is a docs-only defect that every reviewer rated NIT (mapped to low); google_gemini-3_1-flash-lite raised the same point as a hardening suggestion, not as a finding.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- README.md:line 158, the `MERGE_BASE_SYNC_DELTA_CI_ENABLED` row. Its \"Used By\" column reads `ci, review_autofix, orchestrate_poll`; the last run added `orchestrate_poll`. | severity=NIT | confidence=3\n  PROBLEM: The \"Used By\" column names the workflows where setting the variable takes effect, but `MERGE_BASE_SYNC_DELTA_CI_ENABLED` is exported only in `.github/workflows/ci.yml` lines 5018 and 5025. The row compares with `MERGE_BASE_FRESHNESS_ENABLED`, which is exported at `review_autofix.yml:1214/4782/4914` and `orchestrate_poll.yml:315/1609/1869/2035`. In `review_autofix.yml` and `orchestrate_poll.yml`, the delta arm of `_pr_base_sync_dispatch_final_ci` (`scripts/pr_checks_lib.sh:2280`) always sees the script default `true`.\n  WHY: This is documentation only, but an operator who sets the variable to `false` still gets one failed `[sync-quick]` run (`reason=delta_disabled`) per affected PR before the full run, so the row contradicts its own description. Minimal fix: list only `ci`, or mark the other two entries \"script default only\". Exporting the variable from the other workflows was deferred as outside files_touched.\n- Task completeness: NONE. Every item in the scope of issue #10154 appears in the diff. Issue step 5 asks for the export in `ci.yml` only. The `CI_SYNC_QUICK` log prefix is already in `agents.d/9642-merge-base-sync-churn.md`.\n- Verified correct: the whitespace stripping in `scripts/ci_sync_quick.sh` and `scripts/pr_checks_lib.sh:2280` matches `scripts/pr_checks_lib.sh:3991`/`:3999`. The `on_values` in `scripts/stage_switches.json` stay within the allowed set checked at `tests/test_stage_switch_registry.py:153`. The changelog wording matches the diff.\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- No standard findings (all categories NONE). Task completeness: NONE.\n- HARDENING_SUGGESTION \u2014 README.md:row `MERGE_BASE_SYNC_DELTA_CI_ENABLED`, column \"Used By\"\n  PROBLEM: The \"Used By\" column lists `ci, review_autofix, orchestrate_poll`, but only `.github/workflows/ci.yml` reads the variable (lines 5018 and 5025).\n  WHY: This may mislead operators about the variable's scope. Suggested fix: change \"Used By\" to `ci` (or `ci (script default only)` for the others); estimated 1 line changed. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- README.md:line 158, the `MERGE_BASE_SYNC_DELTA_CI_ENABLED` row, \"Used By\" column | severity=NIT | confidence=4\n  PROBLEM: The \"Used By\" column lists `ci, review_autofix, orchestrate_poll`, but only `.github/workflows/ci.yml` exports the variable (lines 5018 and 5025). In the other two workflows the dispatcher falls back to the script default `true` from `MERGE_BASE_SYNC_DELTA_CI_ENABLED:-true` at `scripts/pr_checks_lib.sh:2280` and `scripts/ci_sync_quick.sh:211`. The row's own description contradicts the column. `agents.d/merge-lease-short-cs-p2-delta-ci.md` and `changelog.d/merge-lease-short-cs-p2-delta-ci.md` both correctly say only ci.yml exports it. The last run made the column worse by adding `orchestrate_poll`.\n  WHY: Not a hard failure; it is docs/contract drift. An operator expects `=false` to disable the delta path in all three listed workflows, but it only does so in `ci.yml`, and the other two still pay for one failed `[sync-quick]` run. The linked issue's step 5 only requires the export in `ci.yml`, and D7 defers the other two.\n- Task completeness: NONE.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- README.md:158; `scripts/pr_checks_lib.sh:2280-82`; `.github/workflows/review_autofix.yml:1211-15`; `.github/workflows/orchestrate_poll.yml:1608-18` | severity=NIT | confidence=4\n  PROBLEM: The `Used By` column lists `review_autofix` and `orchestrate_poll`, but neither workflow exports `MERGE_BASE_SYNC_DELTA_CI_ENABLED` to the dispatcher, so the dispatcher uses its default `true` even when the repository variable is `false`.\n  WHY: Those workflows can still dispatch a `[sync-quick]` run with the variable off; the `ci.yml` verifier rejects it and the full run follows, so the docs misstate which workflows consume the switch.\n- Task completeness: NONE.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- README.md:line 158, the `MERGE_BASE_SYNC_DELTA_CI_ENABLED` row, \"Used By\" column `ci, review_autofix, orchestrate_poll` (the last run added `orchestrate_poll`) | severity=NIT | confidence=4\n  PROBLEM: Only `.github/workflows/ci.yml` reads the variable (lines 5018 and 5025). A grep of `.github/workflows/review_autofix.yml` and `.github/workflows/orchestrate_poll.yml` found it in neither file, so the dispatcher there always gets the script default `true`. The repo convention is shown by `MERGE_BASE_FRESHNESS_ENABLED`, exported at review_autofix.yml:1214 and orchestrate_poll.yml:315, and by `MERGE_BASE_SYNC_FAST_PATH_ENABLED`, which lists only review_autofix. The row contradicts its own description.\n  WHY: An operator who sets the variable to `false` to roll back still gets one failed `[sync-quick]` run per affected PR in the review and poller workflows. This is a docs-only defect; no code path is wrong.\n- Task completeness: NONE.\n- Verified correct: the whitespace stripping matches `scripts/pr_checks_lib.sh:3991`. The `MERGE_LEASE_CONFLICT_RELEASE_ENABLED` text matches `scripts/review_merge_train.sh:2212,2639`. The `MERGE_LEASE_READY_GRANT_ENABLED` text matches `scripts/review_merge_train.sh:2400-2408`. The changelog correction matches the registry diff.\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "71ac67101a7e5e8908174db0fd074bfd45ca44d6fb982496e9480f92c4eed4bd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10160,
+    "run_id": "45803221214",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45803221214",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126120211_8c4df2d58a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10160,
+    "run_id": "45803221214"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T12:02:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
