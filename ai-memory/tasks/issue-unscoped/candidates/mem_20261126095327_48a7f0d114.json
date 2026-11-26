@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description \"Limit\" paragraph \u2014 \"the per-head dedupe only applies on runs where the comment step runs (`max_iterations_reached=true`), which is every judge re-fire.\"\n  expected_change_site: PR description metadata (outside the repo tree)\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: `.github/workflows/review_autofix.yml:5129` (comment step gated on `max_iterations_reached == 'true'`; openai_gpt-6-luna cites line 5157), `.github/workflows/review_autofix.yml:5836` (alert step also runs when `single_issue_security_pass.outputs.exhausted == 'true'`), `changelog.d/9502-rb-judge-lease-wait-alert.md:9,13,17`, `agents.d/9502-rb-judge-lease-wait-alert.md` (Known residual) \u2014 the repo docs already state the limit correctly, but the PR description sentence overstates the dedupe. Severity NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: PR DESCRIPTION \"Limit\" paragraph \u2014 \"the per-head dedupe only applies on runs where the comment step runs (`max_iterations_reached=true`), which is every judge re-fire.\"\n  Expected change site: PR description (metadata on GitHub, outside the repo tree)\n  Evidence of absence: The qualifier \"which is every judge re-fire\" is contradicted by `agents.d/9502-rb-judge-lease-wait-alert.md` (Known residual) and by the corrected `changelog.d/9502-rb-judge-lease-wait-alert.md:9,13,17`. The comment step is gated on `max_iterations_reached == 'true'`; the alert step has a separate `single_issue_security_pass.outputs.exhausted == 'true'` path.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP:\n- Requirement: The PR description says the per-head dedupe applies when the comment step runs (`max_iterations_reached=true`), \"which is every judge re-fire.\"\n  Expected change site: PR description metadata.\n  Evidence of absence: Inaccurate qualifier. `.github/workflows/review_autofix.yml` gates the comment step on `max_iterations_reached == 'true'` (line 5157), but the alert step also runs when the single-issue security pass is exhausted (line 5836). The changelog documents that security-pass-only runs repeat the WARNING (lines 9 and 17).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\n- Requirement: \"Limit: the per-head dedupe only applies on runs where the comment step runs (max_iterations_reached=true), which is every judge re-fire.\" (PR DESCRIPTION, Limit paragraph)\n  Expected change site: PR DESCRIPTION (PR metadata outside the repository; not editable by the diff)\n  Evidence of absence: `.github/workflows/review_autofix.yml:5836` uses `max_iterations_reached == 'true' || steps.single_issue_security_pass.outputs.exhausted == 'true'`, but the comment step carrying the dedupe requires only `max_iterations_reached == 'true'` (`.github/workflows/review_autofix.yml:5129`), so the WARNING repeats per head on security-pass-only runs. Repo documentation was already corrected; only the PR-description sentence remains wrong.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3539ffb0761fc1439f560440221f1e58dbe40f0bc44f861344597f230306081f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9944,
+    "run_id": "45776821332",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45776821332",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126095327_48a7f0d114",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9944,
+    "run_id": "45776821332"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T09:53:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
