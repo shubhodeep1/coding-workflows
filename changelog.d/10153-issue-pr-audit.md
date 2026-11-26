@@ -13,4 +13,4 @@ Rules flag likely waste (closed unmerged PRs, not-planned or duplicate issues, r
 
 Refs #10153
 
-What this means for operators: `ISSUE_PR_AUDIT_ENABLED=false` turns the audit off; `APPLY_ANALYSIS_DOC_GLOB_EXTRA=none` keeps the reports but stops handing them to the orchestrator. Private repositories appear in the committed report only as `private:<hash>` while this repository is public.
+What this means for operators: `ISSUE_PR_AUDIT_ENABLED=false` turns the audit off; `APPLY_ANALYSIS_DOC_GLOB_EXTRA=none` in the hand-off step's environment keeps the reports but stops handing them to the orchestrator (the promote-cycle workflows do not forward it as a repository variable yet; `APPLY_ANALYSIS_ON_MAIN_ENABLED=false` stops every hand-off). Private repositories appear in the committed report only as `private:<hash>` while this repository is public.

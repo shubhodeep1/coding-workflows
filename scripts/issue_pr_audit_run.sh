@@ -191,8 +191,11 @@ ipa_analyze()
 			echo "::warning::Issue/PR audit model pass attempt ${attempt} failed (rc=${rc})."
 			continue
 		fi
+		# Neither engine path hands token usage back to this script, so the
+		# appendix states the gap instead of leaving the lines out.
 		"${IPA_PY[@]}" finalize --model-output "${model_out}" --out "${report}" \
-			--metric "model_attempt=${attempt}" --metric "model_seconds=$(( $(date +%s) - started ))" --metric "engine_rc=${rc}"
+			--metric "model_attempt=${attempt}" --metric "model_seconds=$(( $(date +%s) - started ))" --metric "engine_rc=${rc}" \
+			--metric "model_tokens=unavailable" --metric "model_cost=unavailable"
 		check_rc=0
 		python3 -I -B "${SCRIPT_DIR}/check_issue_pr_audit_report.py" --report "${report}" --digest "${IPA_WORKDIR}/digest.json" --errors-out "${notes}" || check_rc=$?
 		if [ "${check_rc}" -eq 0 ]; then

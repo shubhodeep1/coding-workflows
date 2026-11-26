@@ -63,6 +63,7 @@ public (D7), because the host's Actions logs are public too.
 from __future__ import annotations
 
 import argparse
+import base64
 import datetime as dt
 import hashlib
 import json
@@ -107,6 +108,11 @@ TITLE_MAX = 200
 LOG_TAIL_LINES = 200
 LOG_TAIL_MAX_CHARS = 8000
 MODEL_INPUT_MAX_BYTES = 600_000
+EARLIER_REPORT_REF_RE = re.compile(r"^auto/issue-pr-audit-report-[0-9]+-[0-9]+$")
+EARLIER_REPORT_ITEM_RE = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/(?:issues|pull)/[0-9]+|private:[0-9a-f]{8}#[0-9]+")
+EARLIER_REPORT_LIST_PAGES = 3
+EARLIER_REPORT_MAX_PRS = 3
+EARLIER_REPORT_MAX_ITEMS = 300
 REPORT_HEADINGS = (
 	"Executive Summary",
 	"Coverage",
@@ -430,8 +436,12 @@ def list_open(transport: Any, repo: dict[str, Any], settings: dict[str, Any]) ->
 	A repository with issues disabled answers 410 on the issues endpoint, so
 	its open pull requests are listed through ``pulls?state=open`` instead.
 	"""
-	if repo.get("open_issues_count") == 0 or settings["max_open_pages"] == 0:
+	if repo.get("open_issues_count") == 0:
 		return [], False
+	if settings["max_open_pages"] == 0:
+		# Nothing was read, so the snapshot is not complete: classify keeps
+		# the repository's known blocked entries instead of dropping them.
+		return [], True
 	kind = "issues" if repo.get("has_issues", True) else "pulls"
 	rows, truncated = paginate(transport, f"repos/{repo['name']}/{kind}?state=open&per_page=100", settings["max_open_pages"])
 	return [item for item in (normalize_item(repo["name"], row) for row in rows) if item], truncated
@@ -758,6 +768,11 @@ def _detail_priority(item: dict[str, Any], cursor: dt.datetime) -> int:
 		return 1
 	if item["is_pr"] and item.get("state") == "open":
 		return 2
+	updated = parse_time(item.get("updated_at"))
+	if item.get("state") == "open" and updated is not None and updated >= cursor:
+		# An older open item updated in the window may have been reopened;
+		# classify needs its timeline (reopened_since) to tell.
+		return 2
 	return 3
 
 
@@ -867,6 +882,7 @@ def collect(transport: Any, *, host: str, run_id: int, state: dict[str, Any], se
 		heal = [{"number": row.get("number"), "title": (row.get("title") or "")[:TITLE_MAX], "url": row.get("html_url") or ""} for row in rows if isinstance(row.get("number"), int)]
 	except ApiError:
 		pass
+	earlier = open_earlier_reports(transport, host, pipeline_login)
 	counts = dict(getattr(transport, "counts", {}))
 	log(f"ISSUE_PR_AUDIT_API rest={counts.get('rest', 0)} graphql={counts.get('graphql', 0)} failed={counts.get('failed', 0)}")
 	return {
@@ -882,8 +898,66 @@ def collect(transport: Any, *, host: str, run_id: int, state: dict[str, Any], se
 		"logs": logs,
 		"heal_issues": heal,
 		"prior_aud_titles": prior_aud_titles(checkout),
+		"earlier_open_reports": earlier,
 		"api": counts,
 	}
+
+
+def open_earlier_reports(transport: Any, host: str, pipeline_login: str) -> list[dict[str, Any]]:
+	"""Open, unmerged audit report PRs of this host and what they covered.
+
+	The state file moves only when a report PR merges, so while an earlier
+	report PR is open this run re-reads its window. The model is told which
+	items and ``AUD-###`` plans that report already holds, so it cites them
+	instead of planning a cause twice.
+
+	API calls: 1 open-PR listing of the host (at most EARLIER_REPORT_LIST_PAGES
+	pages; the delivery script reads the same listing later, after the model
+	pass), then per matching PR (at most EARLIER_REPORT_MAX_PRS) 1 files
+	listing and 1 contents read. Only same-repository PRs on
+	``auto/issue-pr-audit-report-<run>-<attempt>`` opened by the pipeline login
+	count. Fails open: any API error returns what was read so far.
+	Output: ``[{"pr", "branch", "report", "items", "aud_titles"}]``; the text
+	is earlier model output, so it is rendered only as untrusted data.
+	"""
+	found: list[dict[str, Any]] = []
+	if not pipeline_login:
+		return found
+	try:
+		rows, _ = paginate(transport, f"repos/{host}/pulls?state=open&per_page=100", EARLIER_REPORT_LIST_PAGES)
+	except ApiError:
+		return found
+	for row in rows:
+		if len(found) >= EARLIER_REPORT_MAX_PRS:
+			break
+		head = row.get("head") if isinstance(row.get("head"), dict) else {}
+		head_repo = head.get("repo") if isinstance(head.get("repo"), dict) else {}
+		user = row.get("user") if isinstance(row.get("user"), dict) else {}
+		ref = head.get("ref") if isinstance(head.get("ref"), str) else ""
+		sha = head.get("sha") if isinstance(head.get("sha"), str) else ""
+		number = row.get("number")
+		if not EARLIER_REPORT_REF_RE.match(ref) or not re.fullmatch(r"[0-9a-f]{40}", sha) or not isinstance(number, int):
+			continue
+		if str(head_repo.get("full_name") or "").lower() != host.lower() or user.get("login") != pipeline_login:
+			continue
+		try:
+			files = transport.rest(f"repos/{host}/pulls/{number}/files?per_page=100")
+			report = next((entry.get("filename") for entry in files or [] if isinstance(entry, dict) and entry.get("status") in ("added", "modified")
+				and isinstance(entry.get("filename"), str) and entry["filename"].startswith("analysis/") and REPORT_NAME_RE.match(entry["filename"][len("analysis/"):])), None)
+			if not report:
+				continue
+			content = transport.rest(f"repos/{host}/contents/{report}?ref={sha}")
+			text = base64.b64decode((content or {}).get("content") or "").decode("utf-8", errors="replace") if isinstance(content, dict) else ""
+		except (ApiError, ValueError):
+			break
+		found.append({
+			"pr": row.get("html_url") if isinstance(row.get("html_url"), str) else f"https://github.com/{host}/pull/{number}",
+			"branch": ref,
+			"report": report,
+			"items": list(dict.fromkeys(match.group(0) for match in EARLIER_REPORT_ITEM_RE.finditer(text)))[:EARLIER_REPORT_MAX_ITEMS],
+			"aud_titles": [match.group(1)[:TITLE_MAX] for match in re.finditer(r"^### (AUD-[0-9]{3}: .+)$", text, re.M)][:200],
+		})
+	return found
 
 
 def prior_aud_titles(checkout: Path) -> list[str]:
@@ -982,10 +1056,43 @@ def classify(raw: dict[str, Any], state: dict[str, Any], settings: dict[str, Any
 		log(f"ISSUE_PR_AUDIT_REPO repo={display} items={cov['items']} flagged={cov['flagged']} blocked={cov['blocked']} outcome=ok")
 		coverage.append(cov)
 	# A repository that could not be read, or was not read in full, keeps its
-	# blocked entries (and their since) instead of losing them.
+	# blocked entries (and their since) instead of losing them. Only
+	# repositories this run tried to read count, plus, after a discovery
+	# fallback (host only), every repository the run could not list. Entries
+	# of a repository dropped on purpose (archived, excluded, past the cap,
+	# or shown under another display name, e.g. a plain name after
+	# redaction was turned back on) are dropped, so the committed state
+	# stays bounded and a plain private name left by an unredacted run is
+	# removed on the next run that audits that repository.
+	audited_displays = {record.get("display") or record["name"] for record in raw.get("repos") or []}
+	partial_displays = failed_displays | {record.get("display") or record["name"] for record in raw.get("repos") or [] if record.get("open_truncated")}
+	discovery_fallback = bool((raw.get("discovery") or {}).get("fallback"))
 	for key, value in old_blocked.items():
-		if isinstance(value, dict) and key not in next_state["blocked"] and key.rsplit("#", 1)[0] not in full_snapshot_displays:
-			next_state["blocked"][key] = value
+		repo_part, _, number_text = key.rpartition("#")
+		if not isinstance(value, dict) or key in next_state["blocked"] or repo_part in full_snapshot_displays:
+			continue
+		if repo_part not in partial_displays and not (discovery_fallback and repo_part not in audited_displays):
+			continue
+		next_state["blocked"][key] = value
+		if not number_text.isdigit():
+			continue
+		# Listed in the report and on Telegram with its age (no current data).
+		redacted_part = repo_part.startswith("private:")
+		blocked.append({
+			"key": key,
+			"repo": repo_part,
+			"number": int(number_text),
+			"display": key if redacted_part else f"https://github.com/{repo_part}/issues/{number_text}",
+			"redacted": redacted_part,
+			"url": "" if redacted_part else f"https://github.com/{repo_part}/issues/{number_text}",
+			"title": "",
+			"labels": [],
+			"latch": "carried_over",
+			"since": value.get("since") if isinstance(value.get("since"), str) else "",
+			"new": False,
+			"carried_over": True,
+			"fingerprint": value.get("fingerprint") if isinstance(value.get("fingerprint"), str) else "",
+		})
 	sample = set(clean_sample(clean_keys, run_id, settings["clean_sample"]))
 	flagged = sorted((entry for entry in items if entry["flagged"]), key=lambda entry: (-len(entry["signals"]), entry["key"]))
 	deep = flagged[: settings["max_deep_items"]]
@@ -1007,6 +1114,7 @@ def classify(raw: dict[str, Any], state: dict[str, Any], settings: dict[str, Any
 		"clean_counts": dict(sorted(clean_counts.items())),
 		"heal_issues": raw.get("heal_issues") or [],
 		"prior_aud_titles": raw.get("prior_aud_titles") or [],
+		"earlier_open_reports": raw.get("earlier_open_reports") or [],
 		"api": raw.get("api") or {},
 	}
 	return digest, next_state
@@ -1059,6 +1167,11 @@ def wrap_untrusted(text: str, source: str) -> str:
 
 def _render_entry(entry: dict[str, Any], lines: list[str]) -> None:
 	lines.append(f"### {entry['display']}")
+	if entry.get("carried_over"):
+		# Kept from the previous state: this run did not read the repository
+		# in full, so there is no current data for the item.
+		lines.append(f"- blocked since {entry.get('since') or '?'}; carried over from the previous audit (repository not read in full this run, no current data)")
+		return
 	if entry["redacted"]:
 		lines.append(f"- kind: {'pull request' if entry['is_pr'] else 'issue'}; state: {entry['state']} {entry.get('state_reason') or ''}".rstrip())
 		lines.append("- private repository item: metadata only, never expand this label")
@@ -1106,10 +1219,20 @@ def render_model_input(digest: dict[str, Any]) -> str:
 	lines += [f"- {heal['url']} {wrap_untrusted(heal['title'], 'heal-title')}" for heal in digest["heal_issues"]] or ["- none"]
 	lines += ["", "### Fix plans in the previous audit report (cite instead of planning again)"]
 	lines += [f"- {wrap_untrusted(title, 'previous-plan-title')}" for title in digest["prior_aud_titles"]] or ["- none"]
+	earlier = [report for report in digest.get("earlier_open_reports") or [] if isinstance(report, dict)]
+	lines += ["", "### Open earlier audit report PRs (not merged: this run re-read their window; say so under Coverage, and cite their plans instead of planning again)"]
+	if not earlier:
+		lines.append("- none")
+	for report in earlier:
+		lines.append(f"- {report.get('pr', '')} ({report.get('report', '')})")
+		lines.append(wrap_untrusted("items covered: " + (", ".join(report.get("items") or []) or "none"), "earlier-report-items"))
+		lines.append(wrap_untrusted("fix plans: " + ("; ".join(report.get("aud_titles") or []) or "none"), "earlier-report-plans"))
+	# New blocked items come first: G4 needs a diagnosis for each, so they get
+	# the input budget before the flagged items.
 	sections = (
+		("## New blocked items (diagnose each to a root cause)", [entry for entry in digest["blocked"] if entry.get("new")]),
 		("## Flagged items (every one must appear in a report section)", [entry for entry in digest["items"] if entry.get("deep")]),
 		("## Clean sample (verify the tier-1 rules missed nothing)", [entry for entry in digest["items"] if entry.get("sample") and not entry.get("flagged")]),
-		("## New blocked items (diagnose each to a root cause)", [entry for entry in digest["blocked"] if entry.get("new")]),
 		("## Known blocked items (list with their age; no new diagnosis needed)", [entry for entry in digest["blocked"] if not entry.get("new")]),
 	)
 	# Whole entries are kept or left out, so no wrapped block is ever cut. An
@@ -1119,7 +1242,9 @@ def render_model_input(digest: dict[str, Any]) -> str:
 	size = len(("\n".join(lines) + "\n").encode("utf-8"))
 	budget = MODEL_INPUT_MAX_BYTES - 1024
 	omitted = 0
+	omitted_by_section: list[str] = []
 	for heading, entries in sections:
+		section_omitted = 0
 		lines += ["", heading]
 		size += len(heading.encode("utf-8")) + 2
 		if not entries:
@@ -1131,12 +1256,15 @@ def render_model_input(digest: dict[str, Any]) -> str:
 			if size + chunk_size > budget:
 				entry["omitted"] = True
 				omitted += 1
+				section_omitted += 1
 				continue
 			entry.pop("omitted", None)
 			lines.extend(chunk)
 			size += chunk_size
+		if section_omitted:
+			omitted_by_section.append(f"{section_omitted} under {heading[3:].split(' (', 1)[0]}")
 	if omitted:
-		lines += ["", f"({omitted} items left out at the input size cap; they need no report line)"]
+		lines += ["", f"({omitted} items left out at the input size cap; they need no report line: {', '.join(omitted_by_section)})"]
 	return "\n".join(lines) + "\n"
 
 
@@ -1176,6 +1304,13 @@ def finalize_report(model_text: str, digest: dict[str, Any], metrics: dict[str, 
 		f"- API calls: rest={api.get('rest', 0)} graphql={api.get('graphql', 0)} failed={api.get('failed', 0)}",
 		f"- Items in window: {len(digest.get('items') or [])}; flagged: {sum(1 for entry in digest.get('items') or [] if entry.get('flagged'))}; "
 		f"deep-reviewed: {sum(1 for entry in digest.get('items') or [] if entry.get('deep'))}; blocked: {len(digest.get('blocked') or [])}",
+		(
+			f"- Left out at the model input size cap: new blocked {sum(1 for entry in digest.get('blocked') or [] if entry.get('new') and entry.get('omitted'))}; "
+			f"flagged {sum(1 for entry in digest.get('items') or [] if entry.get('deep') and entry.get('omitted'))}; "
+			f"clean sample {sum(1 for entry in digest.get('items') or [] if entry.get('sample') and not entry.get('flagged') and entry.get('omitted'))}; "
+			f"known blocked {sum(1 for entry in digest.get('blocked') or [] if not entry.get('new') and entry.get('omitted'))}"
+		),
+		f"- Open earlier audit report PRs (window re-read): {len(digest.get('earlier_open_reports') or [])}",
 	]
 	for key in sorted(metrics):
 		if re.fullmatch(r"[a-z_]{1,40}", key) and re.fullmatch(r"[A-Za-z0-9_.:=/ -]{0,120}", metrics[key] or ""):
@@ -1202,6 +1337,15 @@ def state_update(next_state: dict[str, Any], digest: dict[str, Any], today: str)
 	final = json.loads(json.dumps(next_state))
 	if digest.get("blocked"):
 		final["last_tg_date"] = today
+	# A new blocked item the model never saw (left out at the input size cap)
+	# keeps its since but loses its fingerprint, so the next run treats it as
+	# new again and diagnoses it (G4).
+	for entry in digest.get("blocked") or []:
+		if not (isinstance(entry, dict) and entry.get("new") and entry.get("omitted") and isinstance(entry.get("number"), int)):
+			continue
+		state_key = item_key(repo_display(str(entry.get("repo") or ""), bool(entry.get("redacted"))), entry["number"])
+		if isinstance((final.get("blocked") or {}).get(state_key), dict):
+			final["blocked"][state_key]["fingerprint"] = ""
 	final["repos"] = dict(sorted((final.get("repos") or {}).items()))
 	final["blocked"] = dict(sorted((final.get("blocked") or {}).items()))
 	return final

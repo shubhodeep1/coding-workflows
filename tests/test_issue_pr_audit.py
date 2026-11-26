@@ -619,17 +619,26 @@ def test_capped_pull_listing_keeps_the_cursor() -> None:
 	assert partial == ipa.fmt_time(cursor)
 
 
-def test_known_blocked_entries_survive_a_capped_snapshot_or_an_unaudited_repo() -> None:
+def test_known_blocked_entries_survive_a_capped_snapshot_or_a_discovery_fallback() -> None:
 	state = {"version": 1, "repos": {}, "blocked": {f"{HOST}#500": {"since": _iso(90), "fingerprint": "x", "diagnosed_run": 3}, "owner/gone#4": {"since": _iso(90), "fingerprint": "y", "diagnosed_run": 3}}}
 	raw = _blocked_raw(["ai:needs-human"])
 	raw["repos"][0]["open_truncated"] = True
 	digest, next_state = ipa.classify(raw, state, _settings(), now=NOW, log=lambda _line: None)
 	assert next_state["blocked"][f"{HOST}#500"]["since"] == _iso(90)
-	assert next_state["blocked"]["owner/gone#4"]["since"] == _iso(90)
+	# A repository this run did not try to read (no fallback) is dropped.
+	assert "owner/gone#4" not in next_state["blocked"]
 	assert digest["coverage"][0]["open_truncated"] is True
+	# The carried entry is still listed (report and Telegram) with its age.
+	carried = [entry for entry in digest["blocked"] if entry.get("carried_over")]
+	assert [entry["key"] for entry in carried] == [f"{HOST}#500"] and carried[0]["since"] == _iso(90) and carried[0]["new"] is False
+	assert f"blocked since {_iso(90)}; carried over" in ipa.render_model_input(digest)
 	raw["repos"][0]["open_truncated"] = False
 	_, next_state = ipa.classify(raw, state, _settings(), now=NOW, log=lambda _line: None)
-	assert f"{HOST}#500" not in next_state["blocked"] and "owner/gone#4" in next_state["blocked"]
+	assert f"{HOST}#500" not in next_state["blocked"] and "owner/gone#4" not in next_state["blocked"]
+	# After a discovery fallback (host only), an unlisted repository keeps its entries.
+	raw["discovery"] = {**raw["discovery"], "fallback": "self"}
+	_, next_state = ipa.classify(raw, state, _settings(), now=NOW, log=lambda _line: None)
+	assert next_state["blocked"]["owner/gone#4"]["since"] == _iso(90)
 
 
 def test_failed_multi_repo_batch_is_retried_per_repository() -> None:
@@ -676,3 +685,95 @@ def test_model_input_cap_leaves_whole_entries_out_and_drops_them_from_required_r
 	refs = ipa.required_report_refs(digest)
 	assert all(entry["display"] not in refs for entry in omitted) and all(entry["display"] in text for entry in entries if not entry.get("omitted"))
 	assert "ignore" not in text.split("labels-and-head-ref")[0]
+
+
+# --- review fixes, round 2 -----------------------------------------------------
+
+
+def test_zero_open_pages_is_a_capped_snapshot_and_keeps_known_blocked() -> None:
+	items, truncated = ipa.list_open(FakeTransport(), {"name": HOST, "open_issues_count": 3}, _settings(max_open_pages=0))
+	assert items == [] and truncated is True
+	assert ipa.list_open(FakeTransport(), {"name": HOST, "open_issues_count": 0}, _settings(max_open_pages=0)) == ([], False)
+	state = {"version": 1, "repos": {}, "blocked": {f"{HOST}#9": {"since": _iso(90), "fingerprint": "x", "diagnosed_run": 3}}}
+	transport = FakeTransport({"user/repos": [{"full_name": HOST, "open_issues_count": 4}]})
+	raw = ipa.collect(transport, host=HOST, run_id=77, state=state, settings=_settings(max_open_pages=0), checkout=REPO_ROOT, now=NOW, log=lambda _line: None)
+	_, next_state = ipa.classify(raw, state, _settings(max_open_pages=0), now=NOW, log=lambda _line: None)
+	assert next_state["blocked"][f"{HOST}#9"]["since"] == _iso(90)
+
+
+def test_unlabelled_old_issue_reopened_in_the_window_gets_details() -> None:
+	node = {"__typename": "Issue", "issueTimelineItems": {"nodes": [{"__typename": "ReopenedEvent", "createdAt": _iso(2)}]}, "comments": {"nodes": []}}
+	transport = FakeTransport({"user/repos": [], f"repos/{HOST}/issues?state=all": [_issue(8, created_at=_iso(24 * 5), updated_at=_iso(2))]}, graphql_nodes={8: node})
+	raw, _ = _collect(transport)
+	assert f"{HOST}#8" in raw["details"]
+	digest, _ = ipa.classify(raw, {}, _settings(), now=NOW, log=lambda _line: None)
+	assert [entry["signals"] for entry in digest["items"]] == [["reopened"]]
+
+
+def test_stale_entries_of_unaudited_or_renamed_repositories_are_dropped() -> None:
+	plain = "owner/secret#4"
+	state = {"version": 1, "repos": {}, "blocked": {plain: {"since": _iso(90), "fingerprint": "y", "diagnosed_run": 3}}}
+	transport = FakeTransport({"user/repos": [{"full_name": HOST, "private": False}, {"full_name": "owner/secret", "private": True}]}, fail={"repos/owner/secret/issues"})
+	raw, _ = _collect(transport, state)
+	assert raw["repos"][1]["status"] == "read_failed" and raw["repos"][1]["display"].startswith("private:")
+	_, next_state = ipa.classify(raw, state, _settings(), now=NOW, log=lambda _line: None)
+	# The plain name left by an unredacted run never reaches the committed state again.
+	assert plain not in next_state["blocked"] and "owner/secret" not in json.dumps(next_state)
+
+
+def test_new_blocked_items_get_the_budget_first_and_unseen_ones_stay_new(monkeypatch) -> None:
+	raw = _blocked_raw(["ai:needs-human"])
+	digest, next_state = ipa.classify(raw, {}, _settings(), now=NOW, log=lambda _line: None)
+	key = f"{HOST}#9"
+	text = ipa.render_model_input(digest)
+	assert text.index("## New blocked items") < text.index("## Flagged items")
+	monkeypatch.setattr(ipa, "MODEL_INPUT_MAX_BYTES", 1200)
+	text = ipa.render_model_input(digest)
+	assert digest["blocked"][0].get("omitted") is True and "1 under New blocked items" in text
+	final = ipa.state_update(next_state, digest, "2026-11-27")
+	assert final["blocked"][key]["fingerprint"] == "" and final["blocked"][key]["since"] == next_state["blocked"][key]["since"]
+	raw["run_id"] = 78
+	digest2, _ = ipa.classify(raw, final, _settings(), now=NOW, log=lambda _line: None)
+	assert digest2["blocked"][0]["new"] is True
+	report = ipa.finalize_report("## Executive Summary\n- a\n", digest, {"model_tokens": "unavailable"})
+	assert "- Left out at the model input size cap: new blocked 1;" in report and "- model tokens: unavailable" in report
+
+
+def test_open_earlier_report_prs_reach_the_model_input() -> None:
+	import base64 as _b64
+
+	sha = "a" * 40
+	report_text = "## Fix Plans\n### AUD-001: Dedupe heal intake\n- https://github.com/o/r/pull/12 and private:abcd1234#3\n"
+	pulls = [
+		{"number": 50, "html_url": f"https://github.com/{HOST}/pull/50", "user": {"login": "pipeline"}, "head": {"ref": "auto/issue-pr-audit-report-9-1", "sha": sha, "repo": {"full_name": HOST}}},
+		{"number": 51, "html_url": f"https://github.com/{HOST}/pull/51", "user": {"login": "mallory"}, "head": {"ref": "auto/issue-pr-audit-report-9-2", "sha": sha, "repo": {"full_name": HOST}}},
+		{"number": 52, "html_url": f"https://github.com/{HOST}/pull/52", "user": {"login": "pipeline"}, "head": {"ref": "feature/x", "sha": sha, "repo": {"full_name": HOST}}},
+	]
+	files = [{"filename": "analysis/issue-pr-audit-2026-11-26.md", "status": "added"}, {"filename": "analysis/issue_pr_audit_state.json", "status": "modified"}]
+
+	class FilesTransport(FakeTransport):
+		def rest(self, endpoint: str):
+			# Not paginated, so the base fake's page handling does not apply.
+			if endpoint.startswith(f"repos/{HOST}/pulls/50/files"):
+				self.calls.append(endpoint)
+				self.counts["rest"] += 1
+				return files
+			return super().rest(endpoint)
+
+	transport = FilesTransport({
+		"user/repos": [],
+		f"repos/{HOST}/pulls?state=open": pulls,
+		f"repos/{HOST}/contents/analysis/issue-pr-audit-2026-11-26.md": {"content": _b64.b64encode(report_text.encode()).decode()},
+		"user": {"login": "pipeline"},
+	})
+	raw, _ = _collect(transport)
+	assert [report["pr"] for report in raw["earlier_open_reports"]] == [f"https://github.com/{HOST}/pull/50"]
+	assert raw["earlier_open_reports"][0]["items"] == ["https://github.com/o/r/pull/12", "private:abcd1234#3"]
+	assert raw["earlier_open_reports"][0]["aud_titles"] == ["AUD-001: Dedupe heal intake"]
+	assert not any("pulls/51/" in call or "pulls/52/" in call for call in transport.calls)
+	digest, _ = ipa.classify(raw, {}, _settings(), now=NOW, log=lambda _line: None)
+	text = ipa.render_model_input(digest)
+	assert "### Open earlier audit report PRs" in text and f"https://github.com/{HOST}/pull/50" in text
+	assert '<untrusted_external_data source="earlier-report-plans">' in text
+	# No pipeline login: nothing is trusted, nothing is read.
+	assert ipa.open_earlier_reports(FakeTransport({f"repos/{HOST}/pulls?state=open": pulls}), HOST, "") == []
