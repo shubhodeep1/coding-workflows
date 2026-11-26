@@ -10,4 +10,4 @@ PR #10128 listed 32 switches in `scripts/stage_switches.json` on behalf of 17 op
 | Pull requests with a duplicate or a missing switch after this change | 0 of 52 |
 | First failure | `CI [pr:9359]` run 45695791182, `assert 208 == 207` |
 
-What this means for operators: a final CI failure on `test_registry_entries_are_well_formed` in #9359 or #9654 should stop on their next final CI run. If another open pull request adds its own entry for a switch that `main` already lists for it, the same failure appears until one of the two copies is removed; #10127 ends this by dropping the hand-kept list.
+What this means for operators: a final CI failure on `test_registry_entries_are_well_formed` in #9359 or #9654 should stop on their next final CI run. If another open pull request adds its own entry for a switch that `main` already lists for it, the same failure appears until one of the two copies is removed. This change keeps the hand-kept list and its other 20 interim entries, so that risk stays until the follow-up work tracked in #10127 drops the list.
