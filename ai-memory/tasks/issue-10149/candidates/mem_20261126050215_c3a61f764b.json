@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":10149,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/10149\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/10152\",\"pr_number\":10152,\"branch\":\"ai/issue-10149\",\"run_id\":\"45746733750\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/45746733750\",\"changed_files\":[\".github/workflows/orchestrate_poll.yml\",\".github/workflows/unblock_judge.yml\",\"README.md\",\"agents.d/10149-judge-blind-spots.md\",\"changelog.d/10149-judge-blind-spots.md\",\"prompts/_templates/mode-judge-stall-recovery.txt\",\"prompts/_templates/mode-judge-unblock.txt\",\"prompts/mode-judge-stall-recovery.txt\",\"prompts/mode-judge-unblock.txt\",\"scripts/orchestrate_poll_process.sh\",\"scripts/unblock_judge.sh\",\"scripts/unblock_ledger.py\",\"tests/test_orchestrate_poll_process.py\",\"tests/test_unblock_judge.py\"]}",
+  "fingerprint": "7fa99c2c7e2f57558ab12c7f3c098676d4c1faf3a38231a63bcb9866d6e169ea",
+  "lineage": {
+    "issue_number": 10149,
+    "parent_ids": [],
+    "pr_number": 10152,
+    "run_id": "45746733750",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45746733750",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/10152"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261126050215_c3a61f764b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10149,
+    "level": "run",
+    "pr_number": 10152,
+    "run_id": "45746733750"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #10149: https://github.com/shubhodeep1/coding-workflows/pull/10152",
+  "timestamps": {
+    "created_at": "2026-11-26T05:02:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
