@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: The PR bumps `actions/cache` from 4 to 6 (Dependabot); the implied deliverable is updating every actions/cache pin to v6.\n  expected_change_site: .github/actions/install-claude/action.yml:32\n  confidence=[3]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: Line 32 of .github/actions/install-claude/action.yml still reads `uses: actions/cache@v5`, the composite action is outside the PR's modified files, the v5 pin still works at runtime, and the reviewers rated it NIT (consistency note, not a defect).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: The PR bumps `actions/cache` from 4 to 6 (Dependabot, workflow files only).\n  Expected change site: `.github/actions/install-claude/action.yml:32`\n  Evidence of absence: Line 32 still reads `uses: actions/cache@v5`. Dependabot did not touch this composite action, and the PR is the Dependabot bump of the `actions/cache` pins in `.github/workflows/`. Three earlier editor runs deferred this for that reason. The v5 pin still works, so nothing breaks. Dependabot can raise a separate PR for the composite action's directory. This is a consistency note, not a defect in the PR.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: Update actions/cache pins from version 4 or 5 to 6 across all workflows touched by this PR, as indicated in the PR title and description.\n  Expected change site: .github/actions/install-claude/action.yml:32\n  Evidence of absence: Line 32 of .github/actions/install-claude/action.yml still reads uses: actions/cache@v5. This composite action file is outside the modified scope of this PR, and infrastructure-protection rules discourage touching un-modified CI files unless absolutely necessary for runtime correctness. The pin remains functional at v5.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: PR title and description state \"Bump actions/cache from 4 to 6\"; the implied deliverable is updating every actions/cache pin in the repo to v6.\n  Expected change site: `.github/actions/install-claude/action.yml:32`\n  Evidence of absence: Line 32 of `.github/actions/install-claude/action.yml` still reads `uses: actions/cache@v5`. A grep for `uses:\\s*actions/cache@v[345]` finds this as the only remaining pre-v6 cache pin; the 23 cache pins in `.github/workflows/*.yml` are all on `@v6`. Multiple autofix rounds deferred this because the PR does not change that file, the v5 pin works at runtime, and Dependabot tracks `.github/actions/*` separately. The gap against the PR's stated intent is nonetheless real.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===",
+  "fingerprint": "d78d9b8a24091014b2e3793d4c40bf2f55227081d6c673a6adc9e7ea2280cbce",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10002,
+    "run_id": "45839349247",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45839349247",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126152457_0f2d3feca4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10002,
+    "run_id": "45839349247"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T15:24:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
