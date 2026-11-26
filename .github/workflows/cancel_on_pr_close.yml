@@ -420,10 +420,10 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           MERGE_TRAIN_ENABLED: ${{ vars.MERGE_TRAIN_ENABLED || 'true' }}
           MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
-          MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '240' }}
+          MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '480' }}
           MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
           MERGE_LEASE_REVOKE_ENABLED: ${{ vars.MERGE_LEASE_REVOKE_ENABLED || 'true' }}
-          MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '60' }}
+          MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '180' }}
           MERGE_LEASE_READY_GRANT_ENABLED: ${{ vars.MERGE_LEASE_READY_GRANT_ENABLED || 'true' }}
           MERGE_LEASE_CONFLICT_RELEASE_ENABLED: ${{ vars.MERGE_LEASE_CONFLICT_RELEASE_ENABLED || 'true' }}
           MERGE_LEASE_CONFLICT_RELEASED_LABEL: ${{ vars.MERGE_LEASE_CONFLICT_RELEASED_LABEL || 'ai:merge-lease-conflict-released' }}
