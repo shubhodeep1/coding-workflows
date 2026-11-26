@@ -73,6 +73,7 @@ REVIEW_AUTOFIX_STEP_SCRIPTS: dict[str, tuple[str, str]] = {
 	"Assemble failure evidence": ("review_autofix_step_assemble_failure_evidence.sh", "warning"),
 	"Record model-provider outage": ("review_autofix_step_provider_outage_record.sh", "warning"),
 	"Mark linked issues review-blocked (workflow failure)": ("review_autofix_step_mark_review_blocked_workflow_failure.sh", "error"),
+	"Mark linked issues review-blocked (autofix exhaustion)": ("review_autofix_step_mark_review_blocked_exhaustion.sh", "error"),
 	"Post review-blocked comment on PR (workflow failure)": ("review_autofix_step_failure_comment.sh", "error"),
 	"Record Claude pool capacity": ("review_autofix_step_claude_pool_capacity.sh", "warning"),
 	"Defer review on Claude capacity": ("review_autofix_step_claude_capacity_wait.sh", "error"),
