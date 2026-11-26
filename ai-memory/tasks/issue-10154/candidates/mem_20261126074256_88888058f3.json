@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":10154,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/10154\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/10160\",\"pr_number\":10160,\"branch\":\"ai/issue-10154\",\"run_id\":\"45768884590\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/45768884590\",\"changed_files\":[\".github/workflows/ci.yml\",\"README.md\",\"agents.d/merge-lease-short-cs-p2-delta-ci.md\",\"changelog.d/merge-lease-short-cs-p2-delta-ci.md\",\"scripts/ci_sync_quick.sh\",\"scripts/pr_checks_lib.sh\",\"scripts/stage_switches.json\",\"tests/test_ci_job_split_contract.py\",\"tests/test_ci_sync_quick.py\",\"tests/test_ci_sync_quick_delta.py\"]}",
+  "fingerprint": "92fbb7d5aa3a9bdbfd98753b72ffcbbe5ec64da25c0aa6bceb71e13d337f15a1",
+  "lineage": {
+    "issue_number": 10154,
+    "parent_ids": [],
+    "pr_number": 10160,
+    "run_id": "45768884590",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45768884590",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/10160"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261126074256_88888058f3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10154,
+    "level": "run",
+    "pr_number": 10160,
+    "run_id": "45768884590"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #10154: https://github.com/shubhodeep1/coding-workflows/pull/10160",
+  "timestamps": {
+    "created_at": "2026-11-26T07:42:56Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
