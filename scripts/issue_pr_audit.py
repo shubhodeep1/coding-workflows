@@ -48,6 +48,13 @@ GitHub API budget (CLAUDE.md §14 / §15), per run
   ``EARLIER_REPORT_MAX_PRS`` = 3 PRs tried, so up to 9 calls.
 * Retries: every API attempt, retries included, is counted.
 
+State: per-repository ``cursor`` and ``last_run``, plus ``recent_titles``
+(``<created>|<number>|<12-hex title hash>`` for items created in the last 7
+days, at most 300, none for redacted repositories) so ``duplicate_title``
+also compares against items outside the window. A deep-reviewed flagged item
+left out at the model input size cap holds its repository's cursor at the
+item's earliest in-window event (``state_update``), so the next run reviews it.
+
 Fail open per repository: a listing or detail error marks the repository
 ``read_failed``. It keeps its old cursor (the next run re-reads the window)
 and is listed under the report's Coverage gaps. A failed ``/user/repos``
@@ -117,6 +124,9 @@ EARLIER_REPORT_ITEM_RE = re.compile(r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-
 EARLIER_REPORT_LIST_PAGES = 3
 EARLIER_REPORT_MAX_PRS = 3
 EARLIER_REPORT_MAX_ITEMS = 300
+RECENT_TITLE_DAYS = 7
+RECENT_TITLE_MAX = 300
+RECENT_TITLE_RE = re.compile(r"^([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z)\|([0-9]{1,9})\|([0-9a-f]{12})$")
 REPORT_HEADINGS = (
 	"Executive Summary",
 	"Coverage",
@@ -622,6 +632,36 @@ def normalize_title(title: str) -> str:
 	return re.sub(r"\s+", " ", text).strip()
 
 
+def title_hash(title_key: str) -> str:
+	return hashlib.sha256(title_key.encode("utf-8")).hexdigest()[:12]
+
+
+def recent_title_peers(entry: Any) -> list[dict[str, Any]]:
+	"""``duplicate_title`` peers kept in the state (``recent_titles``) for items
+	created in the last RECENT_TITLE_DAYS that may be outside this window.
+	Each entry is ``<created ISO>|<number>|<title hash>``: no title text."""
+	peers: list[dict[str, Any]] = []
+	for raw in (entry.get("recent_titles") if isinstance(entry, dict) and isinstance(entry.get("recent_titles"), list) else []):
+		match = RECENT_TITLE_RE.match(raw) if isinstance(raw, str) else None
+		if match:
+			peers.append({"created_at": match.group(1), "number": int(match.group(2)), "title_hash": match.group(3)})
+	return peers
+
+
+def next_recent_titles(old_peers: list[dict[str, Any]], items: list[dict[str, Any]], now: dt.datetime) -> list[str]:
+	"""Merge this run's items into the kept peers; drop entries older than the
+	7-day comparison window and keep the newest RECENT_TITLE_MAX."""
+	floor = now - dt.timedelta(days=RECENT_TITLE_DAYS)
+	by_number = {peer["number"]: (peer["created_at"], peer["title_hash"]) for peer in old_peers}
+	for item in items:
+		key = normalize_title(item.get("title", ""))
+		created = parse_time(item.get("created_at"))
+		if key and created is not None and isinstance(item.get("number"), int):
+			by_number[item["number"]] = (fmt_time(created), title_hash(key))
+	rows = sorted(((created, number, digest) for number, (created, digest) in by_number.items() if (parse_time(created) or floor - dt.timedelta(seconds=1)) >= floor), reverse=True)
+	return [f"{created}|{number}|{digest}" for created, number, digest in rows[:RECENT_TITLE_MAX]]
+
+
 def reopened_since(detail: dict[str, Any] | None, cursor: dt.datetime) -> bool:
 	"""A ReopenedEvent at or after ``cursor`` (an older item reopened in the window)."""
 	return any(
@@ -672,11 +712,16 @@ def waste_signals(item: dict[str, Any], detail: dict[str, Any] | None, peers: li
 		signals.append("issue_duplicate")
 	title_key = normalize_title(item.get("title", ""))
 	if title_key and created is not None:
+		key_hash = title_hash(title_key)
 		for peer in peers:
 			if peer is item or peer.get("number") == item.get("number"):
 				continue
 			peer_created = parse_time(peer.get("created_at"))
-			if peer_created is not None and abs((peer_created - created).total_seconds()) <= 7 * 86400 and normalize_title(peer.get("title", "")) == title_key:
+			if peer_created is None or abs((peer_created - created).total_seconds()) > RECENT_TITLE_DAYS * 86400:
+				continue
+			# State peers (recent_title_peers) carry only a title hash.
+			same = peer.get("title_hash") == key_hash if "title_hash" in peer else normalize_title(peer.get("title", "")) == title_key
+			if same:
 				signals.append("duplicate_title")
 				break
 	if any(event.get("type") == "ReopenedEvent" for event in events):
@@ -886,7 +931,12 @@ def collect(transport: Any, *, host: str, run_id: int, state: dict[str, Any], se
 		heal = [{"number": row.get("number"), "title": (row.get("title") or "")[:TITLE_MAX], "url": row.get("html_url") or ""} for row in rows if isinstance(row.get("number"), int)]
 	except ApiError:
 		pass
-	earlier = redact_earlier_items(open_earlier_reports(transport, host, pipeline_login), records, host_private, settings)
+	earlier_raw = open_earlier_reports(transport, host, pipeline_login)
+	# Owners named by earlier report links, read before their redaction.
+	earlier_owners = _url_owners([ref for report in earlier_raw for ref in report.get("items") or []])
+	earlier = redact_earlier_items(earlier_raw, records, host_private, settings)
+	# The newest report on the checkout may predate redaction too.
+	prior_titles = redact_titles(prior_aud_titles(checkout), records, host_private, settings, earlier_owners)
 	counts = dict(getattr(transport, "counts", {}))
 	log(f"ISSUE_PR_AUDIT_API rest={counts.get('rest', 0)} graphql={counts.get('graphql', 0)} failed={counts.get('failed', 0)}")
 	return {
@@ -901,7 +951,7 @@ def collect(transport: Any, *, host: str, run_id: int, state: dict[str, Any], se
 		"details": details,
 		"logs": logs,
 		"heal_issues": heal,
-		"prior_aud_titles": prior_aud_titles(checkout),
+		"prior_aud_titles": prior_titles,
 		"earlier_open_reports": earlier,
 		"api": counts,
 	}
@@ -970,6 +1020,54 @@ def open_earlier_reports(transport: Any, host: str, pipeline_login: str) -> list
 
 EARLIER_REPORT_URL_RE = re.compile(r"^https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(?:issues|pull)/([0-9]+)$")
 EARLIER_REPORT_TITLE_REPO_RE = re.compile(r"github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)")
+# A bare ``owner/repo`` token in a title (not part of a URL or a longer path).
+TITLE_BARE_REPO_RE = re.compile(r"(?<![A-Za-z0-9_.:/-])([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)")
+
+
+def _url_owners(refs: list[Any]) -> set[str]:
+	"""Owners named by ``https://github.com/<owner>/<repo>/...`` item URLs."""
+	owners: set[str] = set()
+	for ref in refs:
+		match = EARLIER_REPORT_URL_RE.match(ref) if isinstance(ref, str) else None
+		if match:
+			owners.add(match.group(1).split("/", 1)[0].lower())
+	return owners
+
+
+def redact_titles(titles: list[Any], records: list[dict[str, Any]], host_private: bool, settings: dict[str, Any], known_owners: set[str] | None = None) -> list[str]:
+	"""Apply this run's redaction (D7) to earlier fix-plan titles (``AUD-###: ...``).
+
+	Used for the titles of open earlier report PRs and for the titles of the
+	newest report on the checkout (``prior_aud_titles``), so both sources
+	follow one policy. While redaction is active:
+
+	* a redacted repository's ``owner/repo`` becomes ``private:<hash>`` (also
+		before sentence punctuation, e.g. ``owner/secret.``);
+	* a title that still links (``github.com/owner/repo``) into a repository
+		this run did not audit, or did not rewrite, is dropped (fail closed);
+	* a title naming a bare ``owner/repo`` whose owner is known (an audited
+		repository's owner, or ``known_owners``) and which is not an audited
+		public repository is dropped too (excluded, capped or, after a
+		discovery fallback, unlisted repositories have unknown visibility).
+		Path-like text such as ``scripts/x.py`` has no known owner and is kept.
+	"""
+	clean = [title for title in titles if isinstance(title, str)]
+	if host_private or not settings["redact_private_in_public"]:
+		return list(dict.fromkeys(clean))
+	audited = {str(record.get("name") or "").lower(): bool(record.get("redacted")) for record in records if record.get("name")}
+	redacted_names = sorted({str(record.get("name") or "") for record in records if record.get("redacted") and record.get("name")}, key=len, reverse=True)
+	owners = {name.split("/", 1)[0] for name in audited if "/" in name} | {owner.lower() for owner in known_owners or set()}
+	kept: list[str] = []
+	for title in clean:
+		for name in redacted_names:
+			# A "." ends the name unless a name character follows it.
+			title = re.sub(r"(?<![A-Za-z0-9_.-])" + re.escape(name) + r"(?![A-Za-z0-9_-]|\.[A-Za-z0-9_-])", repo_display(name, True), title, flags=re.IGNORECASE)
+		linked = [match.group(1).lower() for match in EARLIER_REPORT_TITLE_REPO_RE.finditer(title)]
+		bare = [f"{match.group(1)}/{match.group(2)}".lower().rstrip(".") for match in TITLE_BARE_REPO_RE.finditer(title) if match.group(1).lower() in owners]
+		if any(repo not in audited or audited[repo] for repo in linked + bare):
+			continue
+		kept.append(title)
+	return list(dict.fromkeys(kept))
 
 
 def redact_earlier_items(earlier: list[dict[str, Any]], records: list[dict[str, Any]], host_private: bool, settings: dict[str, Any]) -> list[dict[str, Any]]:
@@ -978,15 +1076,14 @@ def redact_earlier_items(earlier: list[dict[str, Any]], records: list[dict[str, 
 	An earlier report may have been written while redaction was off. A URL of
 	a repository this run redacts becomes ``private:<hash>#<n>``. While
 	redaction is active, a URL of a repository this run did not audit
-	(unknown visibility) is dropped, fail closed. While redaction is active the
-	fix-plan titles (``aud_titles``) get the same treatment: a redacted
-	repository's ``owner/repo`` becomes ``private:<hash>``, and a title that
-	still links into a repository this run did not audit is dropped.
+	(unknown visibility) is dropped, fail closed. The fix-plan titles
+	(``aud_titles``) go through ``redact_titles``; owners named by the
+	report's own item URLs count as known owners there.
 	"""
 	active = not host_private and bool(settings["redact_private_in_public"])
 	audited = {str(record.get("name") or "").lower(): bool(record.get("redacted")) for record in records}
-	redacted_names = sorted({str(record.get("name") or "") for record in records if record.get("redacted") and record.get("name")}, key=len, reverse=True)
 	for report in earlier:
+		owners = _url_owners(report.get("items") or [])
 		kept: list[str] = []
 		for ref in report.get("items") or []:
 			match = EARLIER_REPORT_URL_RE.match(ref)
@@ -1000,15 +1097,7 @@ def redact_earlier_items(earlier: list[dict[str, Any]], records: list[dict[str, 
 				kept.append(ref)
 		report["items"] = list(dict.fromkeys(kept))
 		if active:
-			titles: list[str] = []
-			for title in report.get("aud_titles") or []:
-				for name in redacted_names:
-					title = re.sub(r"(?<![A-Za-z0-9_.-])" + re.escape(name) + r"(?![A-Za-z0-9_.-])", repo_display(name, True), title, flags=re.IGNORECASE)
-				linked = [match.group(1).lower() for match in EARLIER_REPORT_TITLE_REPO_RE.finditer(title)]
-				if any(repo not in audited or audited[repo] for repo in linked):
-					continue
-				titles.append(title)
-			report["aud_titles"] = list(dict.fromkeys(titles))
+			report["aud_titles"] = redact_titles(report.get("aud_titles") or [], records, host_private, settings, owners)
 	return earlier
 
 
@@ -1068,6 +1157,16 @@ def classify(raw: dict[str, Any], state: dict[str, Any], settings: dict[str, Any
 		if not record.get("open_truncated"):
 			full_snapshot_displays.add(display)
 		peers = window + [item for item in record.get("open") or [] if item not in window]
+		# duplicate_title compares within 7 days, also against items outside
+		# this window: their title hashes are kept in the state. Redacted
+		# repositories keep none, so nothing about their titles is committed.
+		state_peers = [] if redacted else recent_title_peers(old_repos.get(display))
+		listed_numbers = {item.get("number") for item in peers}
+		peers += [peer for peer in state_peers if peer["number"] not in listed_numbers]
+		if not redacted:
+			recent = next_recent_titles(state_peers, window + (record.get("open") or []), now)
+			if recent:
+				next_state["repos"][display]["recent_titles"] = recent
 		for item in window:
 			key = item_key(item["repo"], item["number"])
 			detail = details.get(key)
@@ -1420,6 +1519,23 @@ def state_update(next_state: dict[str, Any], digest: dict[str, Any], today: str)
 		state_key = item_key(repo_display(str(entry.get("repo") or ""), bool(entry.get("redacted"))), entry["number"])
 		if isinstance((final.get("blocked") or {}).get(state_key), dict):
 			final["blocked"][state_key]["fingerprint"] = ""
+	# A deep-reviewed flagged item the model never saw (left out at the input
+	# size cap) holds its repository's cursor at the item's earliest in-window
+	# event, so the next run's window still holds it and reviews it (G3).
+	cursor_floor = {cov.get("repo"): parse_time(cov.get("cursor")) for cov in digest.get("coverage") or [] if isinstance(cov, dict)}
+	for entry in digest.get("items") or []:
+		if not (isinstance(entry, dict) and entry.get("deep") and entry.get("omitted")):
+			continue
+		display = repo_display(str(entry.get("repo") or ""), bool(entry.get("redacted")))
+		repo_state = (final.get("repos") or {}).get(display)
+		if not isinstance(repo_state, dict):
+			continue
+		floor = cursor_floor.get(display)
+		stamps = [stamp for stamp in (parse_time(entry.get(field)) for field in ("created_at", "closed_at", "merged_at")) if stamp is not None and (floor is None or stamp >= floor)]
+		hold = min(stamps) if stamps else floor
+		current = parse_time(repo_state.get("cursor"))
+		if hold is not None and (current is None or hold < current):
+			repo_state["cursor"] = fmt_time(hold)
 	final["repos"] = dict(sorted((final.get("repos") or {}).items()))
 	final["blocked"] = dict(sorted((final.get("blocked") or {}).items()))
 	return final

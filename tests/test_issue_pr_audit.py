@@ -870,3 +870,85 @@ def test_carried_entry_of_a_redacted_repo_groups_under_its_real_name() -> None:
 	assert carried[0]["repo"] == secret and carried[0]["display"] == f"{label}#7"
 	assert f"{label}#7" in next_state["blocked"] and secret not in json.dumps(next_state)
 	assert secret not in ipa.render_model_input(digest)
+
+
+# --- review fixes, round 4 -----------------------------------------------------
+
+
+def test_title_redaction_covers_punctuation_bare_unaudited_names_and_prior_titles() -> None:
+	records = [{"name": HOST, "redacted": False}, {"name": "owner/secret", "redacted": True}]
+	label = f"private:{ipa.repo_hash('owner/secret')}"
+	titles = [
+		"AUD-001: Fix scope guard in owner/secret.",
+		"AUD-002: Fix gate in owner/unlisted",
+		"AUD-003: Fix gate in owner/host.",
+		"AUD-004: Edit scripts/issue_pr_audit.py",
+		"AUD-005: Keep owner/secret.io untouched",
+	]
+	out = ipa.redact_titles(titles, records, False, _settings())
+	assert out == [f"AUD-001: Fix scope guard in {label}.", "AUD-003: Fix gate in owner/host.", "AUD-004: Edit scripts/issue_pr_audit.py"]
+	# After a discovery fallback only the host is audited: an owner known from
+	# earlier report links still drops its unaudited repositories.
+	host_only = [{"name": HOST, "redacted": False}]
+	assert ipa.redact_titles(["AUD-006: Fix gate in acme/private-x"], host_only, False, _settings(), {"acme"}) == []
+	assert ipa.redact_titles(["AUD-006: Fix gate in acme/private-x"], host_only, False, _settings(redact_private_in_public=False), {"acme"}) == ["AUD-006: Fix gate in acme/private-x"]
+	earlier = [{"items": ["https://github.com/acme/private-x/pull/3"], "aud_titles": ["AUD-007: Retry in acme/private-x"]}]
+	assert ipa.redact_earlier_items(earlier, host_only, False, _settings())[0]["aud_titles"] == []
+
+
+def test_prior_report_titles_are_redacted_in_collect(tmp_path: Path) -> None:
+	analysis = tmp_path / "analysis"
+	analysis.mkdir()
+	(analysis / "issue-pr-audit-2026-11-25.md").write_text("### AUD-001: Fix scope guard in owner/secret\n### AUD-002: Dedupe heal intake\n", encoding="utf-8")
+	transport = FakeTransport({"user/repos": [{"full_name": HOST, "private": False}, {"full_name": "owner/secret", "private": True}]})
+	raw = ipa.collect(transport, host=HOST, run_id=77, state={}, settings=_settings(), checkout=tmp_path, now=NOW, log=lambda _line: None)
+	assert raw["prior_aud_titles"] == [f"AUD-001: Fix scope guard in private:{ipa.repo_hash('owner/secret')}", "AUD-002: Dedupe heal intake"]
+
+
+def test_duplicate_title_compares_against_kept_titles_outside_the_window() -> None:
+	first = ipa.collect(
+		FakeTransport({"user/repos": [], f"repos/{HOST}/issues?state=all": [_issue(1, title="Fix the gate", created_at=_iso(30))]}),
+		host=HOST, run_id=1, state={}, settings=_settings(), checkout=REPO_ROOT, now=NOW - dt.timedelta(hours=20), log=lambda _line: None,
+	)
+	_, state = ipa.classify(first, {}, _settings(), now=NOW - dt.timedelta(hours=20), log=lambda _line: None)
+	recent = state["repos"][HOST]["recent_titles"]
+	assert len(recent) == 1 and recent[0].endswith("|1|" + ipa.title_hash("fix the gate")) and "gate" not in recent[0]
+	second = ipa.collect(
+		FakeTransport({"user/repos": [], f"repos/{HOST}/issues?state=all": [_issue(2, title="fix: the gate!", created_at=_iso(2))]}),
+		host=HOST, run_id=2, state=state, settings=_settings(), checkout=REPO_ROOT, now=NOW, log=lambda _line: None,
+	)
+	digest, state2 = ipa.classify(second, state, _settings(), now=NOW, log=lambda _line: None)
+	assert [entry["signals"] for entry in digest["items"]] == [["duplicate_title"]]
+	assert [row.split("|")[1] for row in state2["repos"][HOST]["recent_titles"]] == ["2", "1"]
+	# Entries older than seven days are pruned.
+	_, state3 = ipa.classify(second, state2, _settings(), now=NOW + dt.timedelta(days=8), log=lambda _line: None)
+	assert "recent_titles" not in state3["repos"][HOST]
+
+
+def test_redacted_repository_keeps_no_title_hashes() -> None:
+	transport = FakeTransport({
+		"user/repos": [{"full_name": HOST, "private": False}, {"full_name": "owner/secret", "private": True}],
+		"repos/owner/secret/issues?state=all": [_issue(4, repo="owner/secret", created_at=_iso(2))],
+	})
+	raw, _ = _collect(transport)
+	_, state = ipa.classify(raw, {}, _settings(), now=NOW, log=lambda _line: None)
+	label = f"private:{ipa.repo_hash('owner/secret')}"
+	assert "recent_titles" not in state["repos"][label]
+
+
+def test_omitted_flagged_item_holds_the_cursor_for_the_next_run(monkeypatch) -> None:
+	rows = [_issue(n, pr=True, state="closed", created_at=_iso(20), closed_at=_iso(10 - n * 0.1), body="b" * 3000) for n in range(1, 30)]
+	transport = FakeTransport({"user/repos": [], f"repos/{HOST}/issues?state=all": rows})
+	raw, _ = _collect(transport)
+	digest, next_state = ipa.classify(raw, {}, _settings(), now=NOW, log=lambda _line: None)
+	monkeypatch.setattr(ipa, "MODEL_INPUT_MAX_BYTES", 20_000)
+	ipa.render_model_input(digest)
+	omitted = [entry for entry in digest["items"] if entry.get("deep") and entry.get("omitted")]
+	assert omitted
+	final = ipa.state_update(next_state, digest, "2026-11-27")
+	hold = min(ipa.parse_time(entry["created_at"]) for entry in omitted)
+	assert final["repos"][HOST]["cursor"] == ipa.fmt_time(hold)
+	# Nothing omitted: the cursor moves to the listing start as before.
+	for entry in digest["items"]:
+		entry.pop("omitted", None)
+	assert ipa.state_update(next_state, digest, "2026-11-27")["repos"][HOST]["cursor"] == ipa.fmt_time(NOW)
