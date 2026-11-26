@@ -92,7 +92,7 @@ def test_review_autofix_stages_and_activates_workspace_reuse_before_reviewers() 
 	assert 'workspace_reuse_enabled="false"' in metadata_block
 	assert 'WORKSPACE_REQUIRE_STABLE_IDENTIFIER_FOR_REUSE="true"' in metadata_block
 	assert 'bash "${SUPPORT_SCRIPTS_DIR}/workspace_init.sh" metadata' in metadata_block
-	assert cache_step.get('uses') == 'actions/cache@v5'
+	assert cache_step.get('uses') == 'actions/cache@v6'
 	assert cache_step.get('with', {}).get('path') == '${{ steps.workspace_meta.outputs.workspace_path }}'
 	assert cache_step.get('with', {}).get('restore-keys') == (
 		'${{ steps.workspace_meta.outputs.workspace_cache_restore_prefix_exact }}\n'

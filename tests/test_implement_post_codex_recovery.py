@@ -23,6 +23,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_implement_text  # noqa: E402
 from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 IMPLEMENT_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
@@ -32,7 +33,8 @@ FILES_TOUCHED_SCOPE_GUARD = REPO_ROOT / "scripts" / "files_touched_scope_guard.p
 
 
 def _workflow_text() -> str:
-	return IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
+	# Two step bodies live in scripts/implement_step_*.sh (#9678); inline them.
+	return expanded_implement_text()
 
 
 def _implement_commit_script_text() -> str:
@@ -1063,7 +1065,7 @@ def test_resolve_checkout_ref_ignores_prior_pr_baseline_branch_when_present() ->
 				- Type: review-blocked-reissue
 				- prior_pr_baseline_branch: {baseline_branch}
 				- files_touched:
-				  - src/app.py
+				\x20\x20- src/app.py
 				"""
 			),
 			default_checkout_ref="orchestrator/project-829",
@@ -2930,7 +2932,7 @@ def test_destructive_snapshot_upload_wiring() -> None:
 	upload = _step_block_text("Upload destructive-rejection snapshot")
 	assert "id: handle_guard_block" in handler
 	assert "always() && steps.handle_guard_block.outputs.rejection_snapshot == 'true'" in upload
-	assert "uses: actions/upload-artifact@v6" in upload
+	assert "uses: actions/upload-artifact@v7" in upload
 	assert "name: destructive-rejection-issue-${{ env.ISSUE_NUMBER }}" in upload
 	assert "path: ${{ env.RUNTIME_DIR }}/destructive_rejection/destructive_rejection.json" in upload
 	assert "retention-days: 30" in upload and "continue-on-error: true" in upload
@@ -5696,10 +5698,10 @@ def test_validator_offending_bytes_redacts_secrets() -> None:
 
 	Two layered guards (per Copilot review):
 	(a) Path denylist: skip the dump for files whose names match
-	    common secret-bearing patterns (.env, *secret*, *.pem, ...).
+		common secret-bearing patterns (.env, *secret*, *.pem, ...).
 	(b) Per-line redaction: replace lines whose key contains
-	    secret-like keywords (token/password/api_key/...) or whose
-	    value contains a long opaque token with a redaction marker.
+		secret-like keywords (token/password/api_key/...) or whose
+		value contains a long opaque token with a redaction marker.
 	"""
 	with tempfile.TemporaryDirectory(prefix="test_validator_redact_") as td:
 		repo_dir = Path(td)

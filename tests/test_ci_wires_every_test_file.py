@@ -83,24 +83,33 @@ def _test_files() -> list[str]:
 	)
 
 
-def _catch_all_job_text_without_yaml(text: str) -> list[str]:
-	"""The catch-all job's own lines (2-space job key under `jobs:`), for hosts without PyYAML.
+def _job_block_text(workflow_text: str, job_id: str) -> str:
+	"""Text of the `jobs.<job_id>` block of a workflow, read without PyYAML.
 
-	The rest of this guard reads workflows as text, and the pre-push gate runs
-	it on a host Python that may lack PyYAML, so the catch-all check must not
-	depend on it. Only the job's own block counts: the next job key ends it.
+	Fallback for containers without PyYAML: the block runs from the job's
+	`  <job_id>:` line under top-level `jobs:` to the next line at the same or
+	a lower indentation. Empty when the job is missing.
 	"""
-	lines = text.splitlines()
-	try:
-		start = lines.index(f"  {CATCH_ALL_JOB}:")
-	except ValueError:
-		return []
-	block: list[str] = []
-	for line in lines[start + 1:]:
-		if re.match(r"^ {0,2}\S", line) and not line.lstrip().startswith("#"):
-			break
-		block.append(line)
-	return ["\n".join(block)]
+	lines = workflow_text.splitlines()
+	in_jobs = False
+	start = None
+	job_indent = 0
+	for index, line in enumerate(lines):
+		stripped = line.strip()
+		if not stripped or stripped.startswith("#"):
+			continue
+		indent = len(line) - len(line.lstrip(" "))
+		if start is not None:
+			if indent <= job_indent:
+				return "\n".join(lines[start:index])
+			continue
+		if indent == 0:
+			in_jobs = stripped.split("#", 1)[0].rstrip() == "jobs:"
+			continue
+		if in_jobs and stripped.split("#", 1)[0].rstrip() in (f"{job_id}:", f'"{job_id}":', f"'{job_id}':"):
+			start = index + 1
+			job_indent = indent
+	return "\n".join(lines[start:]) if start is not None else ""
 
 
 def _catch_all_collects_python_tests() -> bool:
@@ -108,17 +117,14 @@ def _catch_all_collects_python_tests() -> bool:
 	workflow_text = CI_WORKFLOW.read_text(encoding="utf-8")
 	try:
 		import yaml
-	except ImportError:
-		# PyYAML is installed in CI; without it (an offline container or a
-		# host Python), read the job's own block from the text.
+	except ImportError:  # CI installs PyYAML; credential-free gate containers may not.
 		yaml = None
-
-	if yaml is None:
-		runs = _catch_all_job_text_without_yaml(workflow_text)
-	else:
+	if yaml is not None:
 		workflow = yaml.safe_load(workflow_text)
 		job = (workflow.get("jobs") or {}).get(CATCH_ALL_JOB) or {}
 		runs = [str(step.get("run") or "") for step in job.get("steps") or [] if isinstance(step, dict)]
+	else:
+		runs = [_job_block_text(workflow_text, CATCH_ALL_JOB)]
 	collects_all = any(
 		CATCH_ALL_COLLECT_COMMAND in "\n".join(_strip_comment(line) for line in run.splitlines())
 		for run in runs

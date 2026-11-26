@@ -336,7 +336,7 @@ env:
 
 jobs:
   gate:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
     # Serialize notices across pull_request and workflow_dispatch runs for
     # the same PR; a second gate must see the first gate's marker before POST.
     concurrency:
@@ -454,6 +454,19 @@ jobs:
             remaining=unknown; reset=unknown
           fi
           echo "GH_PAT_BUDGET phase=start workflow=review_autofix job=gate remaining=${remaining} reset=${reset} used_in_job=unknown"
+
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: ${{ env.GH_API_RETRY_HELPERS }}
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
 
       - name: Resolve trusted review support commit
         id: resolve_support
@@ -801,6 +814,9 @@ jobs:
           PR_EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GATE_HEAD_SHA: ${{ steps.evaluate.outputs.head_sha }}
           GATE_AUTO_MERGE_ENABLED: ${{ steps.evaluate.outputs.auto_merge_enabled }}
+          # #9483: updater PRs get head-gate success once verify + integrity pass.
+          GATE_HEAD_REF: ${{ steps.evaluate.outputs.head_ref }}
+          REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED: ${{ vars.REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED || 'true' }}
           # #8333: a skip whose security pass is still required gets its
           # success status from the skip job, only after hold=false.
           DETERMINISTIC_SKIP: ${{ steps.evaluate.outputs.det_skip_security_pass != 'true' && steps.evaluate.outputs.deterministic_skip || 'false' }}
@@ -826,6 +842,7 @@ jobs:
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_gate
         run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
           reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
           remaining=unknown; reset=unknown; used=unknown
           if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
@@ -837,11 +854,11 @@ jobs:
               fi
             fi
           fi
-          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=gate remaining=${remaining} reset=${reset} used_in_job=${used}"
+          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=gate remaining=${remaining} reset=${reset} used_in_job=${used} ${counter_keys}"
 
   post-merge-validate-dispatch:
     needs: gate
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
     # claude_branch_review-mode skip: claude/* branches are operator-driven
     # and never carry orchestrator-managed sub-issues, so the validate
     # dispatch is unnecessary. Belt-and-braces — the label-scoped iteration
@@ -897,6 +914,19 @@ jobs:
             exit 1
           fi
           echo "WORKFLOW_SUPPORT_REF=${WORKFLOW_SHA}" >> "$GITHUB_ENV"
+
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        # Every path ends in exit 0; this job must still fail closed elsewhere.
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: .codex-workflow-src/scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
 
       - name: Dispatch standalone validate for orchestrator short-circuit issues
         run: |
@@ -1062,6 +1092,7 @@ jobs:
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_post-merge-validate-dispatch
         run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
           reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
           remaining=unknown; reset=unknown; used=unknown
           if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
@@ -1073,11 +1104,11 @@ jobs:
               fi
             fi
           fi
-          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=post-merge-validate-dispatch remaining=${remaining} reset=${reset} used_in_job=${used}"
+          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=post-merge-validate-dispatch remaining=${remaining} reset=${reset} used_in_job=${used} ${counter_keys}"
 
   post-merge-force-poll:
     needs: gate
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
     if: ${{ needs.gate.outputs.post_merge_dispatch == 'true' && needs.gate.outputs.claude_branch_review != 'true' }}
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
@@ -1127,6 +1158,19 @@ jobs:
           fi
           echo "WORKFLOW_SUPPORT_REF=${WORKFLOW_SHA}" >> "$GITHUB_ENV"
 
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: .codex-workflow-src/scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
+
       - name: Force orchestrate poll after merged PR handling
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
@@ -1162,6 +1206,7 @@ jobs:
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_post-merge-force-poll
         run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
           reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
           remaining=unknown; reset=unknown; used=unknown
           if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
@@ -1173,14 +1218,15 @@ jobs:
               fi
             fi
           fi
-          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=post-merge-force-poll remaining=${remaining} reset=${reset} used_in_job=${used}"
+          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=post-merge-force-poll remaining=${remaining} reset=${reset} used_in_job=${used} ${counter_keys}"
 
   deterministic-skip-merge:
     needs: gate
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
     if: ${{ needs.gate.outputs.deterministic_skip == 'true' }}
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
+      GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
       AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
       AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       REPOSITORY: ${{ github.repository }}
@@ -1213,13 +1259,14 @@ jobs:
       # without branch protection, auto-merge lands the PR immediately.
       AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
       AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
+      AUTO_MERGE_CHECKS_POLL_MAX_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_MAX_SECONDS || '180' }}
       AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
       AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
       MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
-      MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '240' }}
+      MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '480' }}
       MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
       MERGE_LEASE_REVOKE_ENABLED: ${{ vars.MERGE_LEASE_REVOKE_ENABLED || 'true' }}
-      MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '60' }}
+      MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '180' }}
       MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars.MERGE_LEASE_PRIORITY_HEAD_PREFIXES || 'auto/forward-merge-stable-' }}
       MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || 'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}
       MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}
@@ -1244,6 +1291,7 @@ jobs:
             scripts/review_single_issue_security_pass.sh
             scripts/security_pass_skip.py
             scripts/review_autofix_step_deterministic_skip_security_pass.sh
+            scripts/review_autofix_step_det_skip_followup_guard.sh
             scripts/review_head_gate.sh
           sparse-checkout-cone-mode: false
 
@@ -1262,6 +1310,19 @@ jobs:
             remaining=unknown; reset=unknown
           fi
           echo "GH_PAT_BUDGET phase=start workflow=review_autofix job=deterministic-skip-merge remaining=${remaining} reset=${reset} used_in_job=unknown"
+
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: .codex-freshness-src/scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
 
       - name: Checkout PR head for security pass
         # #8333: the pass verifies extension ancestry against the audited head
@@ -1335,6 +1396,11 @@ jobs:
           FRESHNESS_CI_FAILED_RETRY_SLEEP_SECS: ${{ vars.FRESHNESS_CI_FAILED_RETRY_SLEEP_SECS || '5' }}
           REVIEW_AUTOFIX_CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
           ALLOW_WORKFLOW_EDITS: ${{ inputs.allow_workflow_edits }}
+          # Security follow-up merge guard (#9671,
+          # scripts/review_autofix_step_det_skip_followup_guard.sh). The raw
+          # variable: only an explicit `false` turns the guard off.
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED }}
         run: |
           set -euo pipefail
 
@@ -1398,6 +1464,13 @@ jobs:
             echo "::warning::pr_checks_lib.sh unavailable; refusing auto-merge for PR #${1:-unknown} (required checks cannot be verified)."
             return 1
           }
+          # Security follow-up guard (#9671): fail closed unless the verified
+          # support checkout provides the library below.
+          det_skip_followup_merge_guard() {
+            DET_SKIP_FOLLOWUP_GUARD_RESULT="unavailable"
+            echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA:-unknown} action=refuse reason=security_followup_guard_unavailable"
+            return 1
+          }
           freshness_helper_verified=false
           if [ "${FRESHNESS_HELPER_CHECKOUT_OUTCOME:-}" = "success" ] \
             && [ -f .codex-freshness-src/scripts/pr_checks_lib.sh ] \
@@ -1407,6 +1480,11 @@ jobs:
             # shellcheck disable=SC1091
             source .codex-freshness-src/scripts/pr_checks_lib.sh
             freshness_helper_verified=true
+            if [ -f .codex-freshness-src/scripts/review_autofix_step_det_skip_followup_guard.sh ] \
+              && [ ! -L .codex-freshness-src/scripts/review_autofix_step_det_skip_followup_guard.sh ]; then
+              # shellcheck disable=SC1091
+              source .codex-freshness-src/scripts/review_autofix_step_det_skip_followup_guard.sh
+            fi
           else
             echo "::warning::Merge-base freshness helper checkout unavailable or unverified (outcome=${FRESHNESS_HELPER_CHECKOUT_OUTCOME:-unset}); freshness gate defers and auto-merge refused (required checks cannot be verified)."
           fi
@@ -1529,6 +1607,8 @@ jobs:
                   auto_merge_summary="DEFERRED (base freshness could not be verified; no branch update requested, the review sweep retries)"
                   echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_freshness_unknown"
                 fi
+              elif ! det_skip_followup_merge_guard; then
+                auto_merge_summary="REFUSED (security follow-up guard: ${DET_SKIP_FOLLOWUP_GUARD_RESULT:-unavailable})"
               elif gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --merge --auto --match-head-commit "${PR_HEAD_SHA}"; then
                 auto_merge_ready_labels_allowed="true"
                 auto_merge_summary="ENABLED (merge commit)"
@@ -1572,6 +1652,8 @@ jobs:
                 auto_merge_summary="DEFERRED (base freshness could not be verified; no branch update requested, the review sweep retries)"
                 echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_freshness_unknown"
               fi
+            elif ! det_skip_followup_merge_guard; then
+              auto_merge_summary="REFUSED (security follow-up guard: ${DET_SKIP_FOLLOWUP_GUARD_RESULT:-unavailable})"
             elif gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${PR_HEAD_SHA}"; then
               auto_merge_ready_labels_allowed="true"
               auto_merge_summary="ENABLED (squash)"
@@ -1666,6 +1748,7 @@ jobs:
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_deterministic-skip-merge
         run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
           reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
           remaining=unknown; reset=unknown; used=unknown
           if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
@@ -1677,7 +1760,7 @@ jobs:
               fi
             fi
           fi
-          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=deterministic-skip-merge remaining=${remaining} reset=${reset} used_in_job=${used}"
+          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=deterministic-skip-merge remaining=${remaining} reset=${reset} used_in_job=${used} ${counter_keys}"
 
   # Retain the legacy job identifier for workflow consumers (a required
   # check that names it keeps reporting "skipped"). The Claude-fixer
@@ -1685,7 +1768,7 @@ jobs:
   # emits this skip_reason (actionlint rejects a constant `if: false`).
   claude-fixer-auto-merge:
     needs: gate
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
     if: ${{ needs.gate.outputs.skip_reason == 'claude_fixer_auto_merge_retired' }}
     steps:
       - name: Legacy direct convergence merge disabled
@@ -1704,7 +1787,7 @@ jobs:
     # concurrency lock, one GET /pulls/{n} (linked issues and the reporter's
     # PR payload), then the label and comment writes.
     needs: gate
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
     concurrency:
       group: fingerprint-cap-${{ github.repository }}-${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number || github.run_id }}
       cancel-in-progress: false
@@ -1777,6 +1860,19 @@ jobs:
             exit 1
           fi
           echo "WORKFLOW_SUPPORT_REF=${WORKFLOW_SHA}" >> "$GITHUB_ENV"
+
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: .codex-workflow-src/scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
 
       - name: Apply identical-failure cap outcome
         run: |
@@ -2000,6 +2096,7 @@ jobs:
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_fingerprint-cap-block
         run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
           reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
           remaining=unknown; reset=unknown; used=unknown
           if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
@@ -2011,7 +2108,7 @@ jobs:
               fi
             fi
           fi
-          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=fingerprint-cap-block remaining=${remaining} reset=${reset} used_in_job=${used}"
+          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=fingerprint-cap-block remaining=${remaining} reset=${reset} used_in_job=${used} ${counter_keys}"
 
   codex-agent:
     needs: gate
@@ -2022,7 +2119,7 @@ jobs:
     # "codex-agent" so cross-references in internal-review.yml / status
     # checks / required-checks rules don't break.
     name: ${{ needs.gate.outputs.claude_branch_review == 'true' && 'codex-agent (claude-branch-review)' || 'codex-agent' }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
     # Sized to accommodate the resolver step's 170-min cap plus the
     # pre-resolver work (~24 min observed on run 25629086684: disk
     # cleanup, checkout, OpenCode install, runtime workspace setup,
@@ -2070,6 +2167,9 @@ jobs:
       # (or its workspace copy) when running -c, -, or -m.
       PYTHONSAFEPATH: "1"
       PR_NUMBER: ${{ inputs.pr_number || github.event.inputs.pr_number || github.event.pull_request.number }}
+      # Issue #9928: run-local PR read cache kill switch and job key.
+      REVIEW_RUN_READ_CACHE_ENABLED: ${{ vars.REVIEW_RUN_READ_CACHE_ENABLED || 'true' }}
+      GH_PR_READ_CACHE_JOB: codex-agent
       # Head the gate evaluated; the review-autofix-failure:v1 marker on every
       # failure comment records it so the gate's identical-failure cap can
       # match markers to the current head.
@@ -2208,7 +2308,7 @@ jobs:
       # has no checkout, no LLM, and no working tree, so the ~30 s spent
       # here would be pure waste there.
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be  # v1.3.1
+        uses: jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6  # v2.0.0
         with:
           tool-cache: true
           android: true
@@ -2431,6 +2531,19 @@ jobs:
             fi
           fi
 
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: ${{ env.SUPPORT_SCRIPTS_DIR }}/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
+
       - name: Show disk usage (post support-source staging)
         run: df -h /
 
@@ -2458,8 +2571,9 @@ jobs:
           set -euo pipefail
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
           type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
+          type gh_pr_cached_read >/dev/null 2>&1 || gh_pr_cached_read() { gh_retry _safe_gh_jq "repos/$2/pulls/$3"; }
 
-          pr_meta="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" || echo 'null')"
+          pr_meta="$(gh_pr_cached_read pull "${REPOSITORY}" "${PR_NUMBER}" || echo 'null')"
           # An unavailable label snapshot must not override an explicit ai:codex
           # label by selecting Claude from the role default.
           AI_ENGINE_LABELS="$(printf '%s\n' "${pr_meta}" | jq -ce 'if (.labels | type) == "array" then [.labels[] | .name | select(type == "string")] else error("labels unavailable") end' 2>/dev/null || printf '%s' '["ai:codex"]')"
@@ -2720,7 +2834,7 @@ jobs:
       - name: Restore reusable workspace cache
         if: env.PR_CLOSED != 'true' && steps.workspace_meta.outputs.workspace_reuse_enabled == 'true'
         id: workspace_cache
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ steps.workspace_meta.outputs.workspace_path }}
           key: ${{ steps.workspace_meta.outputs.workspace_cache_key }}
@@ -3163,7 +3277,7 @@ jobs:
         # set this early in the job.
         if: env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         continue-on-error: true
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           # The path list is hashed into the actions/cache *version*, so it
           # must be byte-identical across runs. The per-run workspace path
@@ -3533,6 +3647,7 @@ jobs:
         # with the editor step's explicit env entries, so it sees what the
         # editor will see ("Apply fixes with editor model").
         env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
@@ -3647,6 +3762,7 @@ jobs:
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'
         id: reviewers
         env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
@@ -3695,7 +3811,7 @@ jobs:
       - name: Upload per-reviewer logs (always)
         if: always() && env.PREVIOUS_REVIEWS_DIR != '' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'
         continue-on-error: true
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: reviewer-logs-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
@@ -3987,6 +4103,7 @@ jobs:
       - name: Apply fixes with editor model
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'
         env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
           REPOSITORY: ${{ github.repository }}
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
@@ -4167,7 +4284,7 @@ jobs:
       - name: Save review-issue ledger
         if: always() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true'
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           # The path list is hashed into the actions/cache *version*, so it
           # must be byte-identical across runs. The per-run workspace path
@@ -4234,7 +4351,7 @@ jobs:
       - name: Upload review findings record
         if: always() && env.PREVIOUS_REVIEWS_DIR != '' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'
         continue-on-error: true
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: reviewer-findings-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.PREVIOUS_REVIEWS_DIR }}/review_findings_record.json
@@ -4729,9 +4846,13 @@ jobs:
         if: "success() && (steps.retrigger_guard.outputs.max_iterations_reached != 'true' || steps.retrigger_guard.outputs.skip_judge == 'true') && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.MERGE_CONFLICT != 'true' && env.PR_CLOSED != 'true' && env.EDITOR_CHANGES_LOST != 'true' && env.EDITOR_NOOP_SUSPICIOUS != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true' && steps.single_issue_security_pass.outputs.hold != 'true'"
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
+          # Security follow-up merge guard (#9479/#9671) kill switch, raw: only
+          # an explicit `false` turns it off; unset keeps it on.
+          SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED }}
           # When 'true' (default), forward-merge fallback PRs auto-merge via a
           # real merge commit instead of being suppressed for manual merge.
           # See the forward-merge-fallback branch below for the full rationale.
@@ -4742,13 +4863,15 @@ jobs:
           MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
           AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
           AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
+          AUTO_MERGE_CHECKS_POLL_MAX_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_MAX_SECONDS || '180' }}
           AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
           AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
+          REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED: ${{ vars.REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED || 'true' }}
           MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
-          MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '240' }}
+          MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '480' }}
           MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
           MERGE_LEASE_REVOKE_ENABLED: ${{ vars.MERGE_LEASE_REVOKE_ENABLED || 'true' }}
-          MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '60' }}
+          MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '180' }}
           MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars.MERGE_LEASE_PRIORITY_HEAD_PREFIXES || 'auto/forward-merge-stable-' }}
           MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || 'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}
           MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}
@@ -4852,6 +4975,7 @@ jobs:
         env:
           DEPENDENCY_PROXY_ALLOWED_HOSTS: ${{ vars.DEPENDENCY_PROXY_ALLOWED_HOSTS || '' }}
           GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           # Judge comments are informational, so they post with the job token
@@ -4868,13 +4992,14 @@ jobs:
           MERGE_BASE_FRESHNESS_MAX_SYNCS: ${{ vars.MERGE_BASE_FRESHNESS_MAX_SYNCS || '2' }}
           AUTO_MERGE_CHECKS_WAIT_MINUTES: ${{ vars.AUTO_MERGE_CHECKS_WAIT_MINUTES || '45' }}
           AUTO_MERGE_CHECKS_POLL_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_SECONDS || '60' }}
+          AUTO_MERGE_CHECKS_POLL_MAX_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_MAX_SECONDS || '180' }}
           AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
           AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
           MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
-          MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '240' }}
+          MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '480' }}
           MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
           MERGE_LEASE_REVOKE_ENABLED: ${{ vars.MERGE_LEASE_REVOKE_ENABLED || 'true' }}
-          MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '60' }}
+          MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '180' }}
           MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars.MERGE_LEASE_PRIORITY_HEAD_PREFIXES || 'auto/forward-merge-stable-' }}
           MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || 'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}
           MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}
@@ -4882,12 +5007,18 @@ jobs:
           PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED: ${{ vars.PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED || 'true' }}
           REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
+          # #9483: the judge's updater_verify_hold branch re-checks the
+          # head-gate exemption; without this the helper default (true) wins.
+          REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED: ${{ vars.REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED || 'true' }}
           # Single-issue security pass settings, the same as the
           # "Single-issue security pass" step: security-exhaustion mode and
           # the security gate on judge merges.
           SECURITY_PASS_EXHAUSTED: ${{ steps.single_issue_security_pass.outputs.exhausted }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
+          # Security follow-up merge guard (#9671): the raw variable, so unset
+          # keeps the guard on; only an explicit `false` turns it off.
+          SINGLE_PASS_FOLLOWUP_GUARD_SWITCH: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED }}
           SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED || 'true' }}
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS || '2' }}
@@ -5150,6 +5281,7 @@ jobs:
           JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}
           RB_JUDGE_STATUS: ${{ steps.rb_judge.outputs.rb_judge_status }}
           RB_JUDGE_PROVIDER_UNAVAILABLE: ${{ steps.rb_judge.outputs.rb_judge_provider_unavailable }}
+          JUDGE_MERGE_LEASE_BLOCKER: ${{ steps.rb_judge.outputs.judge_merge_lease_blocker }}
           AUTOFIX_ITERATION: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
           AUTOFIX_STEP_SERVER_URL: ${{ github.server_url }}
           AUTOFIX_STEP_REPOSITORY: ${{ github.repository }}
@@ -5365,6 +5497,7 @@ jobs:
             fi
             : > "${push_stderr_file}"
           done
+          ( source "${SUPPORT_SCRIPTS_DIR:-}/gh_helpers.sh" && gh_pr_cache_evict "${GITHUB_REPOSITORY}" "${PR_NUMBER:-}" ) >/dev/null 2>&1 || true
 
       - name: Resolve addressed PR review threads
         # The editor stage audits every PR review comment it saw (the
@@ -5487,7 +5620,7 @@ jobs:
       - name: Save review-issue ledger after partial finalize
         if: always() && env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED == 'true' && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           # The path list is hashed into the actions/cache *version*, so it
           # must be byte-identical across runs. The per-run workspace path
@@ -5677,145 +5810,17 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          AUTOFIX_STEP_SERVER_URL: ${{ github.server_url }}
+          AUTOFIX_STEP_REPOSITORY: ${{ github.repository }}
+          AUTOFIX_STEP_RUN_ID: ${{ github.run_id }}
         run: |
-          source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
-          source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
-          type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
-          PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-
-          # review-autofix-failure:v1 marker for the gate's identical-failure
-          # fingerprint cap. Same evidence files and reason precedence as
-          # "Assemble failure evidence", so every failure comment of one run
-          # carries one fingerprint. Empty when the helper is unavailable.
-          AUTOFIX_FAILURE_MARKER_SUFFIX=""
-          if [ -n "${AUTOFIX_FAILURE_HEAL_PY:-}" ] && [ -f "${AUTOFIX_FAILURE_HEAL_PY}" ]; then
-            autofix_failure_marker_line="$(PYTHONDONTWRITEBYTECODE=1 python3 "${AUTOFIX_FAILURE_HEAL_PY}" autofix-failure-fingerprint \
-              --summary-line-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
-              --evidence-file "${RUNTIME_DIR:-}/reviewers_failure_evidence.txt" \
-              --evidence-file "${RUNTIME_DIR:-}/sandbox_prepare_failure_evidence.txt" \
-              --evidence-file "${RUNTIME_DIR:-}/editor_stage_stderr.txt" \
-              --evidence-file "${RUNTIME_DIR:-}/collect_metadata_stderr.txt" \
-              --evidence-file "${RUNTIME_DIR:-}/review_autofix_run_summary_line.txt" \
-              --head-sha "${AUTOFIX_FAILURE_HEAD_SHA:-}" \
-              --support-sha "${REVIEW_SUPPORT_SHA:-}" \
-              --run-id "${GITHUB_RUN_ID:-}" 2>/dev/null | sed -n 's/^marker=//p' | head -n 1 || true)"
-            if [ -n "${autofix_failure_marker_line}" ]; then
-              AUTOFIX_FAILURE_MARKER_SUFFIX=$'\n\n'"${autofix_failure_marker_line}"
-            fi
+          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_editor_noop_suspicious_warning.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_editor_noop_suspicious_warning.sh"
+          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
+            echo "::error::review_autofix_step_editor_noop_suspicious_warning.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Telegram editor-noop-suspicious warning'."
+            exit 1
           fi
-
-          # Branch the operator-facing alert on EDITOR_NOOP_REFUSAL (set by
-          # the "Validate editor no-op disposition" step's Check 1b when the
-          # editor model returns a safety-policy refusal). A refusal is
-          # transient — re-running after the provider-side prompt cache
-          # expires usually clears it — so the alert points the operator at a
-          # re-run instead of the generic "editor failed silently / audit
-          # inconsistent" causes, which do not apply to a refusal. The flag
-          # was added for exactly this branch (see
-          # probably_unnecessary_but_read_if_stuck.md §20.10.1). Auto-merge
-          # stays blocked in both branches (the EDITOR_NOOP_SUSPICIOUS gate is
-          # unchanged — a refusal always also sets SUSPICIOUS=true via Check
-          # 1). The PR comment BODY keeps the "⚠️ **Editor no-op suspicious**"
-          # literal in BOTH branches because the orchestrator-poll
-          # noop-suspicious recovery sweep (scripts/orchestrate_poll_process.sh)
-          # greps PR comments for it to auto-re-dispatch the run — which is
-          # precisely the remediation a refusal needs. Dropping it from the
-          # refusal branch would strand refusal PRs (no auto-re-dispatch, no
-          # force-merge). Do NOT rename the flags or that literal (CLAUDE.md §6).
-          if [ "${EDITOR_NOOP_REFUSAL:-false}" = "true" ]; then
-            MSG="⚠️ Editor safety-policy refusal: #${PR_NUMBER}"
-            MSG+=$'\n'
-            MSG+="Editor model returned a safety-policy refusal — no changes applied."
-            MSG+=$'\n'
-            MSG+="Auto-merge blocked. Re-run is likely to succeed once the provider-side cache expires."
-            MSG+=$'\n'
-            MSG+="PR: ${PR_URL}"
-            MSG+=$'\n'
-            MSG+="Run: ${RUN_URL}"
-            tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
-
-            BODY="⚠️ **Editor no-op suspicious** — the editor model returned a safety-policy refusal (safety filter), so no fix was applied this pass."
-            BODY+=$'\n\n'
-            BODY+="This is typically transient. Re-running the AI Review workflow after the provider-side prompt cache expires usually clears it; manual review is only needed if the refusal recurs."
-            BODY+=$'\n'
-            BODY+="Auto-merge has been **blocked**."
-            BODY+="${AUTOFIX_FAILURE_MARKER_SUFFIX}"
-            gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
-          elif [ "${EDITOR_NOOP_RECOVERABLE_FAILURE:-false}" = "true" ]; then
-            # Every editor attempt failed and review_apply_fixes.sh wrote
-            # the recoverable_failure partial-finalize summary (validator
-            # Check 1c). The editor produced no output, so "claimed no
-            # changes needed" would misdirect the operator; name the
-            # attempt count and the final attempt's provider error
-            # instead. Observed on PR #4077 (runs 34692519987,
-            # 34700918528, 34702442346): the broker answered HTTP 429 on
-            # every attempt for 21 consecutive runs while the alert kept
-            # asking for a "manual review or re-run". The attempt stderr
-            # files are the editor_attempt_<n>.err copies the retry loop
-            # leaves in PREVIOUS_REVIEWS_DIR; only the final `Error:` line
-            # (or the last opencode level=ERROR value) is quoted, clipped
-            # to 240 characters, never the whole stderr.
-            editor_attempts=0
-            editor_last_error=""
-            if [ -n "${PREVIOUS_REVIEWS_DIR:-}" ] && [ -d "${PREVIOUS_REVIEWS_DIR}" ]; then
-              editor_attempts="$(ls -1 "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.err 2>/dev/null | wc -l | tr -d '[:space:]' || true)"
-              last_err_file="$(ls -1 "${PREVIOUS_REVIEWS_DIR}"/editor_attempt_*.err 2>/dev/null | sort -V | tail -n 1 || true)"
-              if [ -n "${last_err_file}" ] && [ -s "${last_err_file}" ]; then
-                editor_last_error="$(grep -aE '^Error: ' "${last_err_file}" | tail -n 1 | tr -d '\r\140' | cut -c1-240 || true)"
-                if [ -z "${editor_last_error}" ]; then
-                  editor_last_error="$(grep -aoE 'level=ERROR .*error="[^"]*"' "${last_err_file}" | tail -n 1 | sed -E 's/.*error="([^"]*)".*/\1/' | tr -d '\140' | cut -c1-240 || true)"
-                fi
-              fi
-            fi
-            [ -n "${editor_last_error}" ] || editor_last_error="not captured — see the editor step log of the linked run"
-            attempts_label="every attempt"
-            if [ "${editor_attempts:-0}" -eq 1 ] 2>/dev/null; then
-              attempts_label="1 attempt"
-            elif [ "${editor_attempts:-0}" -gt 1 ] 2>/dev/null; then
-              attempts_label="all ${editor_attempts} attempts"
-            fi
-            MSG="⚠️ Editor failed on ${attempts_label}: #${PR_NUMBER}"
-            MSG+=$'\n'
-            MSG+="No editor output was produced (recoverable failure). Last provider error: ${editor_last_error}"
-            MSG+=$'\n'
-            MSG+="Auto-merge blocked. Re-dispatch happens automatically; if the same error recurs the cause needs a fix, not a re-run."
-            MSG+=$'\n'
-            MSG+="PR: ${PR_URL}"
-            MSG+=$'\n'
-            MSG+="Run: ${RUN_URL}"
-            tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
-
-            BODY="⚠️ **Editor no-op suspicious** — the editor failed on ${attempts_label} and produced no output (recoverable failure), so no fix was applied this pass."
-            BODY+=$'\n\n'
-            BODY+="Last provider error from the final attempt: \`${editor_last_error}\`"
-            BODY+=$'\n\n'
-            BODY+="Auto-merge has been **blocked**. The review run is re-dispatched automatically; if the same error recurs, inspect the editor step log of the linked run — a re-run will not clear a deterministic failure."
-            BODY+="${AUTOFIX_FAILURE_MARKER_SUFFIX}"
-            gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
-          else
-            MSG="⚠️ Editor no-op suspicious: #${PR_NUMBER}"
-            MSG+=$'\n'
-            MSG+="Editor claimed no changes needed but disposition could not be verified."
-            MSG+=$'\n'
-            MSG+="Auto-merge blocked. The no-op recovery sweep re-dispatches the review automatically."
-            MSG+=$'\n'
-            MSG+="PR: ${PR_URL}"
-            MSG+=$'\n'
-            MSG+="Run: ${RUN_URL}"
-            # DEBUG for all three no-op branches: the orchestrator's no-op
-            # recovery sweep (or, for orchestrator sub-issue PRs, the stall
-            # ladder) re-dispatches; its force-merge gate failures page once.
-            tg_send_tracked "${PR_NUMBER}" "${MSG}" "DEBUG"
-
-            BODY="⚠️ **Editor no-op suspicious** — the editor claimed no changes were needed but the disposition could not be verified."
-            BODY+=$'\n\n'
-            BODY+="Possible causes: editor failed silently, did not read reviewer files, or audit counts are inconsistent."
-            BODY+=$'\n'
-            BODY+="Auto-merge has been **blocked**. Please review the editor summary and re-run the workflow if appropriate."
-            BODY+="${AUTOFIX_FAILURE_MARKER_SUFFIX}"
-            gh_retry gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" -f body="${BODY}" >/dev/null 2>&1 || true
-          fi
+          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
 
       - name: Telegram review-blocked judge decision
         if: success() && (steps.retrigger_guard.outputs.max_iterations_reached == 'true' || steps.single_issue_security_pass.outputs.exhausted == 'true') && steps.retrigger_guard.outputs.skip_judge != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && steps.rb_judge.outputs.rb_judge_provider_unavailable != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'
@@ -5833,19 +5838,26 @@ jobs:
           RB_JUDGE_STATUS: ${{ steps.rb_judge.outputs.rb_judge_status }}
           RB_JUDGE_EXIT_CODE: ${{ steps.rb_judge.outputs.rb_judge_exit_code }}
           AUTOFIX_ITERATION: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
+          # Kept out of run: so the body has no ${{ }} expression (GitHub's
+          # 21,000-character expression limit; tests/test_workflow_file_size_limit.py).
+          AUTOFIX_STEP_SERVER_URL: ${{ github.server_url }}
+          AUTOFIX_STEP_REPOSITORY: ${{ github.repository }}
+          AUTOFIX_STEP_RUN_ID: ${{ github.run_id }}
           RB_BLOCKED_REPEAT: ${{ steps.rb_blocked_comment.outputs.rb_judge_crash_repeat }}
+          RB_BLOCKED_FRESHNESS_REPEAT: ${{ steps.rb_blocked_comment.outputs.rb_judge_freshness_repeat }}
+          JUDGE_MERGE_LEASE_BLOCKER: ${{ steps.rb_judge.outputs.judge_merge_lease_blocker }}
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '5' }}
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 
-          PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          PR_URL="${AUTOFIX_STEP_SERVER_URL}/${AUTOFIX_STEP_REPOSITORY}/pull/${PR_NUMBER}"
+          RUN_URL="${AUTOFIX_STEP_SERVER_URL}/${AUTOFIX_STEP_REPOSITORY}/actions/runs/${AUTOFIX_STEP_RUN_ID}"
           ISSUE_NUM="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[0].number // empty' 2>/dev/null || true)"
           ISSUE_LINE=""
           if [ -n "${ISSUE_NUM}" ]; then
-            ISSUE_LINE=$'\n'"Issue: ${{ github.server_url }}/${{ github.repository }}/issues/${ISSUE_NUM}"
+            ISSUE_LINE=$'\n'"Issue: ${AUTOFIX_STEP_SERVER_URL}/${AUTOFIX_STEP_REPOSITORY}/issues/${ISSUE_NUM}"
           fi
           # CRITICAL pages a human. Outcomes the pipeline finishes or retries
           # on its own (judge merged/fixed/re-issued, stall recovery retries,
@@ -5999,6 +6011,27 @@ jobs:
                 # synchronize run re-validates the PR without a person.
                 MSG="$(printf 'PR review blocked — merge_with_followup approved but the base moved under its files; branch update requested\nThe synchronize run re-validates automatically')"
                 JUDGE_ALERT_LEVEL="DEBUG" ;;
+              base_freshness_unknown)
+                # #9502: the freshness gate could not verify the base (merge
+                # lease held, or the check failed). Not autofix exhaustion;
+                # a stuck lease is real, so WARNING, once per head (the
+                # comment step's rb-judge-base-freshness marker).
+                if [ "${RB_BLOCKED_FRESHNESS_REPEAT:-}" = "true" ]; then
+                  echo "RB_JUDGE_FRESHNESS_ALERT pr=${PR_NUMBER} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} repeat=true level=SUPPRESSED"
+                  exit 0
+                fi
+                # Lease guidance only when the judge exported a lease blocker
+                # (merge_lease_* reasons); a queued_behind blocker is the PR
+                # first in the queue, not the holder, hence "held by or
+                # queued for". Other reasons (compare_failed, ...) have no lease.
+                LEASE_HOLDER_LINE=""
+                FRESHNESS_NEXT_LINE="The judge re-fires and retries the merge; if this persists, check the run log for the freshness reason"
+                if [[ "${JUDGE_MERGE_LEASE_BLOCKER:-}" =~ ^[0-9]+$ ]]; then
+                  LEASE_HOLDER_LINE=" (lease held by or queued for PR #${JUDGE_MERGE_LEASE_BLOCKER})"
+                  FRESHNESS_NEXT_LINE="The merge retries when the lease frees; if this persists, check that PR"
+                fi
+                MSG="$(printf 'PR review blocked — merge_with_followup approved, but base freshness could not be verified (merge lease held or freshness check failed); merge deferred%s\n%s' "${LEASE_HOLDER_LINE}" "${FRESHNESS_NEXT_LINE}")"
+                JUDGE_ALERT_LEVEL="WARNING" ;;
               stale_head)
                 # A push landed during the judge call; the push re-runs review.
                 MSG="$(printf 'PR review blocked — PR head moved during the judge call; judge took no action\nThe new push re-runs review automatically')"
@@ -6350,7 +6383,7 @@ jobs:
       - name: Upload codex logs (failure or empty-editor)
         if: always() && env.CODEX_REVIEW_AUTOFIX_FAILURE_LOG_DIR != ''
         continue-on-error: true
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: codex-review-autofix-failure-logs-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.CODEX_REVIEW_AUTOFIX_FAILURE_LOG_DIR }}
@@ -6490,6 +6523,7 @@ jobs:
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_codex-agent
         run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
           reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
           remaining=unknown; reset=unknown; used=unknown
           if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
@@ -6501,4 +6535,5 @@ jobs:
               fi
             fi
           fi
-          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=codex-agent remaining=${remaining} reset=${reset} used_in_job=${used}"
+          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=codex-agent remaining=${remaining} reset=${reset} used_in_job=${used} ${counter_keys}"
+          gpc_stats="${RUNNER_TEMP:-/nonexistent}/gh_pr_read_cache/${GITHUB_RUN_ID:-local}_${GITHUB_RUN_ATTEMPT:-1}.stats"; [ -r "${gpc_stats}" ] || gpc_stats=/dev/null; echo "GH_PR_READ_CACHE hits=$(awk '$1=="hit"{n++} END{print n+0}' "${gpc_stats}" 2>/dev/null || echo 0) misses=$(awk '$1=="miss"{n++} END{print n+0}' "${gpc_stats}" 2>/dev/null || echo 0) job=codex-agent"
