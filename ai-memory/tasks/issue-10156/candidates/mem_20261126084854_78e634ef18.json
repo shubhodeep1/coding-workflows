@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":10156,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/10156\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/10163\",\"pr_number\":10163,\"branch\":\"ai/issue-10156\",\"run_id\":\"45773439441\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/45773439441\",\"changed_files\":[\".github/workflows/ci.yml\",\".github/workflows/workflow-failure-heal-intake.yml\",\"README.md\",\"agents.d/10156-main-push-delta-ci.md\",\"changelog.d/10156-main-push-delta-ci.md\",\"docs/INVENTORY.md\",\"scripts/check_failure_triage.sh\",\"scripts/check_triage_resolution.py\",\"scripts/ci_final_status.sh\",\"scripts/ci_main_delta.sh\",\"scripts/orchestrate_poll_process.sh\",\"scripts/review_final_ci_sweep.sh\",\"scripts/stage_switches.json\",\"scripts/workflow_failure_heal.py\",\"tests/test_check_failure_triage_workflow_security.py\",\"tests/test_check_triage_resolution.py\",\"tests/test_ci_budget_watch.py\",\"tests/test_ci_concurrency.py\",\"tests/test_ci_docs_only_final_ci.py\",\"tests/test_ci_final_status.py\",\"tests/test_ci_job_split_contract.py\",\"tests/test_ci_main_delta.py\",\"tests/test_orchestrate_poll_process.py\",\"tests/test_review_final_ci.py\",\"tests/test_workflow_failure_heal.py\"]}",
+  "fingerprint": "8b668ea55ea5c826737ea705e536c83803cd735eedf5c206379a39ee8dbbc6a1",
+  "lineage": {
+    "issue_number": 10156,
+    "parent_ids": [],
+    "pr_number": 10163,
+    "run_id": "45773439441",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45773439441",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/10163"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261126084854_78e634ef18",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10156,
+    "level": "run",
+    "pr_number": 10163,
+    "run_id": "45773439441"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #10156: https://github.com/shubhodeep1/coding-workflows/pull/10163",
+  "timestamps": {
+    "created_at": "2026-11-26T08:48:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
