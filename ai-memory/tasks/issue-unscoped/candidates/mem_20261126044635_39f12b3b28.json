@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"CI is green.\"\n  expected_change_site: CI checks for PR head 5e83f40f5fde5d95b4d6fadc5da56cd3cb7d289d\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The check-run snapshot reports collection_status: timeout with 45 incomplete checks, all queued, and failed_count=0; the PR acceptance table lists required tests and checks as not run or unmet; three reviewers rated it BLOCKER (google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna) but z-ai_glm-5_3-flash rated it NIT at confidence 2, calling it a transient snapshot-collection status and not a code defect, with prior rounds on the same head recording failed_count: 0; anthropic_claude-sonnet-5_5 chose not to raise it because a diff cannot deliver a CI result and said the merge gate should confirm it\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"CI is green.\"\n  Expected change site: CI checks for PR head `5e83f40f5fde5d95b4d6fadc5da56cd3cb7d289d`\n  Evidence of absence: The supplied check-run snapshot reports `collection_status: timeout` and 45 incomplete checks, all queued. The PR acceptance table also lists required tests and checks as `not run` or `unmet`. This acceptance criterion is not yet satisfied.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"CI is green.\"\n  Expected change site: CI checks for PR head 5e83f40f5fde5d95b4d6fadc5da56cd3cb7d289d\n  Evidence of absence: The check-run snapshot reports collection_status=timeout with failed_count=0 and 45 incomplete checks (all queued). The PR acceptance table lists required tests and checks as not run or unmet. No checks have failed, but the acceptance criterion is not yet verified.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"CI is green.\"\n  Expected change site: CI checks for PR head 5e83f40f5fde5d95b4d6fadc5da56cd3cb7d289d.\n  Evidence of absence: The supplied check-run snapshot has 45 incomplete checks, all queued, and the PR acceptance table marks required tests as unmet and checks as not run. The criterion is not yet satisfied.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: \"CI is green.\"\n  Expected change site: CI checks for PR head 5e83f40f5fde5d95b4d6fadc5da56cd3cb7d289d.\n  Evidence of absence: The check-run snapshot reports collection_status: timeout with 45 queued/incomplete checks; no failure signal exists, but no green signal exists either (prior editor rounds recorded failed_count: 0 on this head).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n  Note: this is a transient snapshot-collection status, not a code defect in the diff; no failing check maps to any PR file. Prior rounds on the same head confirm failed_count: 0, so this does not rise to a BLOCKER gap.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e133b2811f911fc489dcf5882d7384de6ec4a334d45c3e4bd2573c5280179e6b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10132,
+    "run_id": "45737960799",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45737960799",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126044635_39f12b3b28",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10132,
+    "run_id": "45737960799"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T04:46:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
