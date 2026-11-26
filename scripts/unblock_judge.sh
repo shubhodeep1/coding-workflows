@@ -80,6 +80,9 @@
 # UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED (default true; #8470): once a
 # fix-up is done, a standalone issue whose planning stop was "nothing to
 # implement" is closed as completed instead of resumed; `false` resumes it.
+# It also covers a standalone issue with no pending fix-up wait (#9946: no
+# wait at all, or the wait ended before the block); `false` turns both paths
+# off.
 # It also turns off the verified close below.
 # PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED (default true; #10062, Phase 8b):
 # a standalone issue whose newest trusted "Planning blocked" comment gives the
@@ -158,6 +161,7 @@
 #      UNBLOCK_JUDGE item= op=ci_owner outcome= reason=|pr=
 #      UNBLOCK_JUDGE item= op=heal_already_fixed outcome=closed|judge|skip sibling= pr= status=|reason=
 #      UNBLOCK_JUDGE item= kind= stop= fixup= op=nothing_to_implement outcome=closed|skip reason=comment_failed|label_failed|close_failed
+#        (fixup=none on the #9946 no-wait path)
 #      UNBLOCK_JUDGE item= kind= stop= fixup=none op=nothing_to_implement outcome=closed reason=verified_noop|outcome=skip reason=comment_failed|label_failed|close_failed
 #      UNBLOCK_JUDGE item= kind= stop= fixup= op=fixup_delivered outcome=closed|resume|skip reason=|pr=
 #      UNBLOCK_JUDGE item= kind= stop= fixup= op=fixup_delivered outcome=warn reason=wait_update_failed
@@ -929,23 +933,33 @@ unblock_nothing_to_implement_verified()
 # as usual; it sets UNBLOCK_NOTHING_TO_IMPLEMENT_RESULT to `closed` after a
 # close. UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED=false (default true)
 # restores the resume.
-# Verified mode (#10062, Phase 8b): an empty <fixup> closes the issue without
-# a fix-up when unblock_nothing_to_implement_verified finds the plan run's
-# trusted success-no-op marker; marker
+# Verified mode (#10062, Phase 8b): an empty <fixup> with a 4th argument of
+# `verified` closes the issue without a fix-up when
+# unblock_nothing_to_implement_verified finds the plan run's trusted
+# success-no-op marker; marker
 # `<!-- ai:unblock-nothing-to-implement:v1 item=<n> verified -->`, logged as
 # `fixup=none ... reason=verified_noop`. Gated by both
 # UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED and
 # PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED (default true); either off returns 1.
+# An empty <fixup> without `verified` (#9946) is the no-wait call site in
+# unblock_main: the block came after the fix-up wait ended, or there was never
+# a wait (#9215). The comment then names no fix-up, the marker and log carry
+# `fixup=none`, and no wait update follows.
 # API budget: at most three writes (comment, label, close), no reads; the
-# caller then marks the fix-up wait `done` (one more write, not retried).
+# fix-up caller then marks the fix-up wait `done` (one more write, not
+# retried).
 unblock_nothing_to_implement_close()
 {
-	local fixup="$1" done_text="$2" tracking_issue="$3" marker close_text log_fixup log_reason=""
+	local fixup="$1" done_text="$2" tracking_issue="$3" nti_mode="${4:-}" marker close_text log_fixup log_reason="" nti_fixup_clause=""
+	# Verified mode (#10062) applies only to the no-fix-up call.
+	if [ -n "${fixup}" ]; then
+		nti_mode=""
+	fi
 	UNBLOCK_NOTHING_TO_IMPLEMENT_RESULT=""
 	if [ "$(printf '%s' "${UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" = "false" ]; then
 		return 1
 	fi
-	if [ -z "${fixup}" ]; then
+	if [ "${nti_mode}" = "verified" ]; then
 		# Parsed exactly as scripts/plan_nothing_to_implement_verify.sh parses it.
 		case "$(printf '%s' "${PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
 			""|1|true|yes|on) ;;
@@ -957,17 +971,21 @@ unblock_nothing_to_implement_close()
 	# after that block means planning moved on, so the stale block never closes
 	# the issue: it resumes as usual (`/approved`).
 	unblock_nothing_to_implement_blocked || return 1
-	if [ -n "${fixup}" ]; then
-		log_fixup="${fixup}"
-		marker="<!-- ai:unblock-nothing-to-implement:v1 item=${ITEM} fixup=${fixup} -->"
-		close_text="Closing as completed: planning found nothing to implement for this issue (\`${UNBLOCK_NOTHING_TO_IMPLEMENT_REASON}\`), and fix-up #${fixup} ${done_text}. A resume command would only stop planning again, so the unblock judge closed the issue instead. Reopen it and reply with \`/reclarify\` if work is still missing."
-	else
+	if [ "${nti_mode}" = "verified" ]; then
 		# Phase 8b: only a trusted success-no-op marker bound to the newest block closes.
 		unblock_nothing_to_implement_verified || return 1
 		log_fixup="none"
 		log_reason=" reason=verified_noop"
 		marker="<!-- ai:unblock-nothing-to-implement:v1 item=${ITEM} verified -->"
 		close_text="Closing as completed: planning found nothing to implement for this issue (\`${UNBLOCK_NOTHING_TO_IMPLEMENT_REASON}\`), and the plan run's verify passed the listed tests on the planning ref (the comment ending in the \`ai:implement-success-noop:v1\` marker) but could not close the issue. A resume command would only stop planning again, so the unblock judge closed the issue instead. Reopen it and reply with \`/reclarify\` if work is still missing."
+	else
+		# #9946: an empty <fixup> names no fix-up and carries `fixup=none`.
+		log_fixup="${fixup:-none}"
+		if [ -n "${fixup}" ]; then
+			nti_fixup_clause=", and fix-up #${fixup} ${done_text}"
+		fi
+		marker="<!-- ai:unblock-nothing-to-implement:v1 item=${ITEM} fixup=${log_fixup} -->"
+		close_text="Closing as completed: planning found nothing to implement for this issue (\`${UNBLOCK_NOTHING_TO_IMPLEMENT_REASON}\`)${nti_fixup_clause}. A resume command would only stop planning again, so the unblock judge closed the issue instead. Reopen it and reply with \`/reclarify\` if work is still missing."
 	fi
 	if jq -e --arg login "${UNBLOCK_LOGIN}" --arg marker "${marker}" \
 		'any(.[]; (.user.login // "") == $login and ((.body // "") | sub("\\s+$"; "") | endswith($marker)))' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1; then
@@ -2748,7 +2766,7 @@ ${step_escalation_marker}" >/dev/null 2>&1; then
 	# note below (plan.yml promises those issues close with check evidence).
 	if [ "${ITEM_KIND}" = "issue" ] && [ -z "${tracking}" ] \
 		&& ! jq -e 'index("ai:check-triage") != null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1 \
-		&& unblock_nothing_to_implement_close "" "" "${tracking}"; then
+		&& unblock_nothing_to_implement_close "" "" "${tracking}" "verified"; then
 		return 0
 	fi
 
@@ -2891,6 +2909,26 @@ Still waiting for an operator; last checked ${now}.
 			unblock_escalate_fixup "${fixup_origin}"
 			return 0
 		fi
+	fi
+
+	# #9946: a standalone issue blocked with "nothing to implement" after its
+	# fix-up wait ended, or with no wait at all (#9215), is closed as completed
+	# instead of judged into a resume or escalation. Check-triage issues keep the
+	# #9659 gate, and orchestrator-managed issues (even without a parseable
+	# tracking line) behave as before; the label check fails closed. The close
+	# helper returns 0 after a close or a failed write (the next scan retries;
+	# its marker is posted once only) and 1 to judge as usual.
+	# A done wait counts only when the newest trusted "Planning blocked" comment
+	# came after it ended: a wait marked done because its fix-up "did not merge
+	# in time" must not let an older block close the issue.
+	if [ "${ITEM_KIND}" = "issue" ] && [ -z "${tracking}" ] \
+		&& { [ -z "${wait}" ] || { [ "${wait_state:-}" = "done" ] \
+			&& jq -e --arg login "${UNBLOCK_LOGIN}" --arg after "${wait_updated:-${wait_at:-}}" '[.[] | select((.user.login // "") == $login)
+				| select(((.body // "") | split("\n") | map(rtrimstr("\r")) | map(select(test("\\S"))) | first // "") == "Planning blocked: human input required.")
+				| (.created_at // "")] | (max // "") > $after' "${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1; }; } \
+		&& jq -e 'index("ai:check-triage") == null and index("ai:orchestrator-managed") == null' "${RUNTIME_DIR}/labels.json" >/dev/null 2>&1 \
+		&& unblock_nothing_to_implement_close "" "" "${tracking}"; then
+		return 0
 	fi
 
 	# Evidence and fingerprint.

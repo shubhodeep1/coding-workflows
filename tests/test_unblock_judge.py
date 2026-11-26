@@ -6076,6 +6076,24 @@ def test_verified_noop_marker_closes_a_nothing_to_implement_issue_without_a_fixu
 	assert _closed_completed(state)
 
 
+# #9946: a standalone issue blocked with "nothing to implement" after its fix-up
+# wait ended, or with no wait at all (#9215), is closed as completed too.
+NO_WAIT_NOTHING_TO_IMPLEMENT_MARKER = "<!-- ai:unblock-nothing-to-implement:v1 item=7 fixup=none -->"
+
+
+def _assert_no_wait_nothing_to_implement_closed(result, state) -> None:
+	assert "fixup=none op=nothing_to_implement outcome=closed" in result.stdout, result.stdout + result.stderr
+	assert "verdict=" not in result.stdout, result.stdout
+	assert len(state["comments"]) == 1, state["comments"]
+	body = state["comments"][0]["body"]
+	assert body.endswith(NO_WAIT_NOTHING_TO_IMPLEMENT_MARKER)
+	assert "fix-up #" not in body
+	assert "planning found nothing to implement for this issue" in body and "/reclarify" in body
+	assert not any(comment["body"].startswith(("/answer", "/approved")) for comment in state["comments"])
+	assert state["labels_added"] == [["repos/o/r/issues/7/labels", "ai:closed"]]
+	assert _closed_completed(state)
+
+
 @pytest.mark.parametrize("case", ["verify_false_padded", "verify_off", "close_disabled", "untrusted_marker", "other_issue",
 	"marker_not_last", "stale_marker", "single_block_failed_verify", "single_block_no_note", "note_in_reason_only", "newer_plan", "project_item", "no_marker"])
 def test_verified_noop_close_keeps_today_otherwise(tmp_path: Path, case: str) -> None:
@@ -6115,11 +6133,17 @@ def test_verified_noop_close_keeps_today_otherwise(tmp_path: Path, case: str) ->
 	else:
 		comments = [_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z")]
 	result, state = _verified_judge(tmp_path, item, comments, **env)
-	assert "op=nothing_to_implement" not in result.stdout, result.stdout
-	assert not _closed_completed(state)
+	assert "reason=verified_noop" not in result.stdout, result.stdout
 	assert not any(comment["body"].endswith(VERIFIED_CLOSE_MARKER) for comment in state["comments"])
-	# Today's flow: the model verdict is recorded as usual.
-	assert any("verdict=retry_budget" in comment["body"] for comment in state["comments"]), result.stdout + result.stderr
+	if case in ("close_disabled", "newer_plan", "project_item"):
+		assert "op=nothing_to_implement" not in result.stdout, result.stdout
+		assert not _closed_completed(state)
+		# Today's flow: the model verdict is recorded as usual.
+		assert any("verdict=retry_budget" in comment["body"] for comment in state["comments"]), result.stdout + result.stderr
+	else:
+		# No fix-up wait exists, so the #9946 no-wait close (which does not read
+		# the verify switch or marker) still closes the issue.
+		_assert_no_wait_nothing_to_implement_closed(result, state)
 
 
 def test_verified_noop_close_failure_retries_without_reposting(tmp_path: Path) -> None:
@@ -6165,6 +6189,92 @@ def test_unblock_workflow_forwards_plan_nothing_to_implement_verify_switch() -> 
 	env_block = step.split("\n        env:\n", 1)[1]
 	assert "          PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED: ${{ vars.PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED || 'true' }}\n" in env_block
 	assert '"${PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED:-true}"' in (ROOT / "scripts/unblock_judge.sh").read_text(encoding="utf-8")
+
+
+def test_no_wait_nothing_to_implement_issue_is_closed_as_completed(tmp_path: Path) -> None:
+	comments = [_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z")]
+	result, state = _judge(tmp_path, ISSUE, comments=comments, verdict=RETRY_VERDICT)
+	_assert_no_wait_nothing_to_implement_closed(result, state)
+	# No fix-up wait comment exists, so none is updated.
+	assert not any("ai:unblock-wait:v1" in fields.get("body", "") for _, fields in state["patched"])
+
+
+def test_done_wait_before_nothing_to_implement_block_still_closes(tmp_path: Path) -> None:
+	# #9215: the wait for fix-up #9246 ended at 03:49Z; planning blocked at 07:46Z.
+	wait = _comment("Fix-up #50 merged; the unblock judge posted a resume command.\n\n<!-- ai:unblock-wait:v1 item=7 fixup=50 done -->", BOT, "2026-10-04T03:49:00Z")
+	wait["id"] = 123
+	comments = [wait, _comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T07:46:00Z")]
+	result, state = _judge(tmp_path, ISSUE, comments=comments, verdict=RETRY_VERDICT)
+	_assert_no_wait_nothing_to_implement_closed(result, state)
+	assert "fixup=50 op=nothing_to_implement" not in result.stdout
+
+
+@pytest.mark.parametrize("case", ["other_reason", "untrusted_block", "newer_other_block", "newer_plan", "disabled", "project_item", "managed_no_tracking_line", "open_wait", "done_wait_after_block"])
+def test_no_wait_nothing_to_implement_close_keeps_todays_judging_otherwise(tmp_path: Path, case: str) -> None:
+	item, env, issues = ISSUE, {}, None
+	comments = [_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z")]
+	if case == "other_reason":
+		comments = [_comment(NOTHING_TO_IMPLEMENT_BLOCK.replace("work is already on the planning ref; nothing to implement", "missing API key"), BOT, "2026-10-04T09:00:00Z")]
+	elif case == "untrusted_block":
+		comments = [_comment(NOTHING_TO_IMPLEMENT_BLOCK, "someone-else", "2026-10-04T09:00:00Z")]
+	elif case == "newer_other_block":
+		comments.append(_comment("Planning blocked: human input required.\n\nReason: missing API key\n", BOT, "2026-10-04T10:00:00Z"))
+	elif case == "newer_plan":
+		comments.append(_comment("Implementation Plan\n\n1. Do the thing.", BOT, "2026-10-04T10:00:00Z"))
+	elif case == "disabled":
+		env["UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED"] = " False "
+	elif case == "project_item":
+		item = dict(ISSUE, body="- Tracking issue: #40", labels=ISSUE["labels"] + [{"name": "ai:orchestrator-managed"}])
+		env["FAKE_GH_PROJECT_COMMENTS"] = _project_comments_for_item(7)
+	elif case == "managed_no_tracking_line":
+		item = dict(ISSUE, labels=ISSUE["labels"] + [{"name": "ai:orchestrator-managed"}])
+	elif case == "done_wait_after_block":
+		# The fix-up ordered over this block did not merge in time; the older
+		# block must not close the issue.
+		wait = _comment("Fix-up #50 did not merge in time; the unblock judge decides again.\n\n<!-- ai:unblock-wait:v1 item=7 fixup=50 done -->", BOT, "2026-10-04T11:00:00Z")
+		wait["id"] = 123
+		comments.append(wait)
+	else:
+		wait = _comment("Waiting.\n\n<!-- ai:unblock-wait:v1 item=7 fixup=50 -->", BOT, "2026-10-04T11:00:00Z")
+		wait["id"] = 123
+		comments.append(wait)
+		issues = {"50": {"state": "open"}}
+	result, state = _judge(tmp_path, item, comments=comments, verdict=RETRY_VERDICT, issues=issues, **env)
+	assert "op=nothing_to_implement" not in result.stdout, result.stdout
+	if case == "open_wait":
+		assert "fixup=50 outcome=waiting" in result.stdout, result.stdout + result.stderr
+	else:
+		assert "verdict=retry_budget" in result.stdout, result.stdout + result.stderr
+	assert not any(comment["body"].endswith(NO_WAIT_NOTHING_TO_IMPLEMENT_MARKER) for comment in state["comments"])
+	assert not _closed_completed(state)
+
+
+def test_wait_created_before_block_but_marked_done_after_it_is_judged(tmp_path: Path) -> None:
+	# The guard compares the block with the wait's updated_at (the time it was
+	# patched `done`), not its created_at: a "did not merge in time" wait opened
+	# before the block and closed after it must not let that block close the issue.
+	wait = _comment("Fix-up #50 did not merge in time; the unblock judge decides again.\n\n<!-- ai:unblock-wait:v1 item=7 fixup=50 done -->", BOT, "2026-10-04T08:00:00Z")
+	wait["id"], wait["updated_at"] = 123, "2026-10-04T11:00:00Z"
+	comments = [wait, _comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z")]
+	result, state = _judge(tmp_path, ISSUE, comments=comments, verdict=RETRY_VERDICT)
+	assert "op=nothing_to_implement" not in result.stdout, result.stdout
+	assert "verdict=retry_budget" in result.stdout, result.stdout + result.stderr
+	assert not _closed_completed(state)
+
+
+def test_no_wait_nothing_to_implement_close_posts_the_marker_once(tmp_path: Path) -> None:
+	comments = [_comment(NOTHING_TO_IMPLEMENT_BLOCK, BOT, "2026-10-04T09:00:00Z")]
+	result, state = _judge(tmp_path, ISSUE, comments=comments, verdict=RETRY_VERDICT, FAKE_GH_FAIL_CLOSE="1")
+	assert "fixup=none op=nothing_to_implement outcome=skip reason=close_failed" in result.stdout, result.stdout + result.stderr
+	assert "verdict=" not in result.stdout
+	assert sum(comment["body"].endswith(NO_WAIT_NOTHING_TO_IMPLEMENT_MARKER) for comment in state["comments"]) == 1
+	# The next run finds its own marker and does not post it again.
+	prior = [*comments, _comment("Closing as completed.\n\n" + NO_WAIT_NOTHING_TO_IMPLEMENT_MARKER, BOT, "2026-10-04T11:30:00Z")]
+	result, state = _judge(tmp_path, ISSUE, comments=prior, verdict=RETRY_VERDICT)
+	assert "fixup=none op=nothing_to_implement outcome=closed" in result.stdout, result.stdout + result.stderr
+	assert not any(comment["body"].endswith(NO_WAIT_NOTHING_TO_IMPLEMENT_MARKER) for comment in state["comments"])
+	assert state["labels_added"] == [["repos/o/r/issues/7/labels", "ai:closed"]]
+	assert _closed_completed(state)
 
 
 # #8530: a heal issue whose fix-up merged into the default branch and changed
@@ -6743,6 +6853,10 @@ def test_triage_superseded_note_keeps_todays_judging_otherwise(tmp_path: Path, c
 		comments.append(_comment("Implementation Plan\n\n1. Do the thing.", BOT, "2026-10-04T10:00:00Z"))
 	else:
 		item = ISSUE
+		# #9946: a standalone non-triage issue would now be closed by the
+		# no-wait nothing-to-implement path; switch it off to keep showing that
+		# the #9659 note skips non-triage issues.
+		env["UNBLOCK_NOTHING_TO_IMPLEMENT_CLOSE_ENABLED"] = "false"
 	result, state = _judge_triage_superseded(tmp_path, item=item, comments=comments, **env)
 	assert "op=triage_superseded" not in result.stdout, result.stdout
 	assert "verdict=retry_budget round=1 outcome=acted" in result.stdout, result.stdout + result.stderr
