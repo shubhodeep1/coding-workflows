@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/stage_switches.json:453-457 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The `OPERATOR_STEP_DAILY_TICK_ENABLED` registry entry omits `on_values`, so the stage-switch watch counts only the literal `true` as on, while the daily tick (`scripts/operator_step_daily_tick.sh`, `operator_step_daily_tick_enabled()` in `scripts/operator_step_issue.py`) counts every value except `false` as on.\n  WHY: If the variable is set to `1`, `yes` or `on`, the tick still runs but `scripts/stage_switch_watch.py` reports the switch as off and raises a false alert; the tick itself is unaffected. Both reviewers rated it NIT, mapped here to low. anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite and minimax_minimax-m3 raised the same item as a hardening suggestion only.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/stage_switches.json:453-457 | HARDENING_SUGGESTION | HARDENING_RISK_SCORE=1\n  PROBLEM: The entry has no on_values key, so the stage switch watch counts only `true` as on. The code that reads the switch treats every value other than `false` as on: operator_step_daily_tick_enabled() in scripts/operator_step_issue.py uses `.strip().lower() != \"false\"`, and scripts/operator_step_daily_tick.sh compares the lower-cased value with \"false\".\n  WHY: If the variable is set to `1`, `yes` or `on`, the daily watch raises a false \"switch left off\" alert while the tick keeps running. It is a false alert only, and the neighbouring OPERATOR_STEP_AUTO_RESOLVE_ENABLED entry behaves the same way. Suggested fix: add `\"on_values\": [\"1\", \"yes\", \"on\"]`, as the NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED entry does (1 line).\n- Verification notes (no defect): the entry at scripts/stage_switches.json lines 453-457 keeps alphabetical order, and it passes test_registry_entries_are_well_formed in tests/test_stage_switch_registry.py (lines 149-159). It also passes the registry contract for the workflow expression at .github/workflows/workflow-log-analysis.yml line 378 and for the README row. The fallback parser in _collect_logs_steps_text (test lines 178-229) is unaffected. The test_workflow_file_size_limit.py failure is inherited from the merge-base. All lens headings: NONE. (5 related items)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/stage_switches.json:OPERATOR_STEP_DAILY_TICK_ENABLED entry | HARDENING_SUGGESTION | HARDENING_RISK_SCORE=1\n  PROBLEM: The entry lacks an \"on_values\" key, so the stage switch watch identifies only \"true\" as the \"on\" state.\n  WHY: Any other valid truthy value (e.g. \"1\", \"yes\", \"on\") makes the switch watch report the switch as \"off\" while the daily tick actually runs. Suggested fix: add `\"on_values\": [\"1\", \"yes\", \"on\"]` (1 line).\n- All lens headings: NONE.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/stage_switches.json:453-457 | HARDENING_SUGGESTION | HARDENING_RISK_SCORE=1\n  PROBLEM: The entry has no on_values key. operator_step_daily_tick_enabled() in scripts/operator_step_issue.py and the `\"${enabled}\" = \"false\"` check in scripts/operator_step_daily_tick.sh both treat any value other than `false` as on, while scripts/stage_switch_watch.py treats only `true` as on unless on_values lists alternatives.\n  WHY: If an operator sets `1`, `yes` or `on`, the watch reports the switch as off (a false alert) while the daily tick still runs. Suggested fix: add `\"on_values\": [\"1\", \"yes\", \"on\"]`, matching NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED at scripts/stage_switches.json:444 (1 line).\n- Verdict (no defect): the LAST RUN DIFF is exactly the deterministic fix the unblock judge requested, and the full PR delivers Phase 9 of docs/plans/pipeline-human-wait-elimination-plan.md. Every observable condition fails closed, the OPERATOR_STEP_RESOLVE op=close log format is unchanged, and the daily script follows the CLAUDE.md \u00a78 defaults and always exits 0. All lens headings: NONE.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/stage_switches.json:454-457 | severity=NIT | confidence=4\n  PROBLEM: The registry's enabled-value definition does not match the tick's behaviour. The `OPERATOR_STEP_DAILY_TICK_ENABLED` entry omits `on_values`, the tick treats only `false` as disabled (`scripts/operator_step_daily_tick.sh:25-30`, `scripts/operator_step_issue.py:794-795`), and the watcher treats only `true` and the listed `on_values` as enabled (`scripts/stage_switch_watch.py:80-82`).\n  WHY: If the repository variable is set to `1`, `yes` or `on`, the tick runs but the daily stage-switch watch reports it as off, producing a false alert. Fix: add those values to `on_values`, or make the tick accept only `true`.\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 1; all other lens headings: NONE.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/stage_switches.json:453-457 | severity=NIT | confidence=3\n  PROBLEM: The registry entry has no `on_values`, so the stage-switch watch treats only the literal `true` as on. The tick code treats every value except `false` (e.g. `1`, `yes`, `on`) as on: scripts/operator_step_daily_tick.sh line 20 (`\"${enabled}\" = \"false\"`) and scripts/operator_step_issue.py `operator_step_daily_tick_enabled()`. Compare scripts/stage_switch_watch.py lines 135, 152.\n  WHY: `stage_switch_watch.py` classifies `\"on\"` (or `1`) as off and alerts after the wait window while `operator_step_daily_tick.sh` still runs the daily tick. It is a false alert only, and it follows the existing convention of `OPERATOR_STEP_AUTO_RESOLVE_ENABLED`, so the fix is optional.\n- Verification notes (no defect): the entry at scripts/stage_switches.json lines 453-457 sits between `OPERATOR_STEP_AUTO_RESOLVE_ENABLED` (lines 448-452) and `ORCH_IMPLEMENTS_MARKER_ENABLED` (lines 458-462). Its alphabetical order, key shape, tab indentation and JSON validity are correct, and its default `\"true\"` matches every consumer. HARDENING_RISK_SCORE: 1; all other lens headings: NONE. (4 related items)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6f5e772c58493ae1c54fb2286d9298dce1f5301981aae50362cabc75dbc00a7b",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10122,
+    "run_id": "45782285871",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45782285871",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126094821_5c344ef937",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10122,
+    "run_id": "45782285871"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T09:48:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
