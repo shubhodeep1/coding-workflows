@@ -509,6 +509,9 @@ def list_run_jobs(repo: str, run_id: int, ignore_job_names: tuple[str, ...] = ()
 	# Attempt-scoped: `already_retried` has ruled out any attempt >= 2 for the
 	# sweep and classify-run, which keep the default; only
 	# classify_cancelled_run passes its own run's attempt (issue #10131).
+	# Issue #10131 names `runs/<id>/jobs?filter=latest`; this attempt-scoped
+	# read gives the same current-attempt jobs while the default (attempt 1)
+	# keeps the sweep and classify-run unchanged.
 	result = subprocess.run(
 		["gh", "api", "-X", "GET", f"repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs",
 			"-f", "per_page=100"],
