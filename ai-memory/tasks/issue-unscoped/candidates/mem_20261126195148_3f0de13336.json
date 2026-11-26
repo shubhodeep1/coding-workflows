@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"otherwise read the run's jobs once (GET repos/<repo>/actions/runs/<run_id>/jobs?per_page=100&filter=latest, through gh_retry)\" (issue #10131, Design step 1, second bullet).\n  expected_change_site: scripts/ci_cancelled_rerun.py, classify_cancelled_run (the jobs read at lines 747-756), and list_run_jobs.\n  confidence=2\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: The read never goes through gh_retry and calls /attempts/<n>/jobs instead of /jobs?filter=latest, list_run_jobs calls subprocess.run([\"gh\", \"api\", ...]) directly, classify_cancelled_run retries once after time.sleep(2) (line 755) and then returns \"unverified\", the comment at lines 750-754 explains that scripts/gh_helpers.sh:2647 sets a 600 s GH_RETRY_RATE_LIMIT_MAX_WAIT_SECS default that cannot fit inside `timeout 90` in scripts/ci_final_status.sh, the fail-closed rule still holds, earlier rounds accepted this deviation (severity NIT), and the only open item is that the PR description does not explain why the issue's wording was not followed. z-ai_glm-5_3-flash treats this as an accepted residual from earlier rounds and does not raise it again.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"otherwise read the run's jobs once (GET repos/<repo>/actions/runs/<run_id>/jobs?per_page=100&filter=latest, through gh_retry)\" (issue #10131, Design step 1, second bullet).\n  Expected change site: scripts/ci_cancelled_rerun.py, classify_cancelled_run (the jobs read at lines 747-756), and list_run_jobs.\n  Evidence of absence: The read does not go through gh_retry and calls /attempts/<n>/jobs instead of /jobs?filter=latest. list_run_jobs calls subprocess.run([\"gh\", \"api\", ...]) directly. classify_cancelled_run retries once after time.sleep(2) (line 755) and then returns \"unverified\". The last run added only a comment, at lines 750-754. It accurately cites the 600 s default at scripts/gh_helpers.sh:2647, which cannot fit inside `timeout 90` in scripts/ci_final_status.sh. The fail-closed rule still holds. Earlier rounds accepted this deviation. The only open item is that the PR description does not explain the deviation.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e32a96f4a57f98621e336cb7f189d36672e71304bafa4d3150b880b386a6b569",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10135,
+    "run_id": "45883095178",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45883095178",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126195148_3f0de13336",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10135,
+    "run_id": "45883095178"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-26T19:51:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
