@@ -1,0 +1,20 @@
+{
+  "discovered_at": "2026-11-26T02:11:09Z",
+  "issue_number": 10137,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=scripts/review_rb_judge.sh:886-906; cited_path=.github/workflows/review_autofix.yml; files_touched=agents.d/10137-rb-judge-settled-check-diagnostics.md, changelog.d/10137-rb-judge-settled-check-diagnostics.md, scripts/pr_checks_lib.sh, scripts/review_autofix_step_post_review_blocked_comment.sh, scripts/review_rb_judge.sh, tests/test_pr_checks_lib_required_filter.py, tests/test_review_rb_judge_settled_check_diagnostics.py.",
+  "phase": "review_autofix",
+  "pr_number": 10139,
+  "record_id": "lesson_20261126021109_773271df8c",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/review_autofix.yml",
+    "scripts/review_rb_judge.sh",
+    "agents.d/10137-rb-judge-settled-check-diagnostics.md",
+    "changelog.d/10137-rb-judge-settled-check-diagnostics.md",
+    "scripts/pr_checks_lib.sh",
+    "scripts/review_autofix_step_post_review_blocked_comment.sh",
+    "tests/test_pr_checks_lib_required_filter.py",
+    "tests/test_review_rb_judge_settled_check_diagnostics.py"
+  ]
+}
