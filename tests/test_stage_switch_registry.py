@@ -206,7 +206,10 @@ def test_registry_entries_are_well_formed():
 		# does, so a missing or unhashable name fails with the marker shown.
 		marker_name = marker.get("name")
 		assert (isinstance(marker_name, str) and marker_name in discovered) or (
-			marker.get("pending") is True and str(marker_name).endswith("_ENABLED")
+			# Same excuse rule as _undiscovered_without_pending and the runtime
+			# _valid_markers: a string matching SWITCH_NAME_RE ending in `_ENABLED`.
+			marker.get("pending") is True and isinstance(marker_name, str)
+			and ssw.SWITCH_NAME_RE.fullmatch(marker_name) and marker_name.endswith("_ENABLED")
 		), marker
 		if "pending" in marker:
 			assert isinstance(marker["pending"], bool), marker
