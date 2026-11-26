@@ -135,6 +135,10 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   # Wedged-queued run filter (issue #9473); 0 disables it.
   ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}
+  # Issue #10037: a child watch (dispatch_and_watch_workflow_run.sh, Phase 4)
+  # that times out on a runner wait stops this gate run (it ends cancelled,
+  # so no release attempt is spent) unless a job already failed.
+  DISPATCH_WATCH_STOP_RELEASE_GATE: "true"
   # Signed job-token comments (run-volume plan item 15, D16; see
   # scripts/comment_signature.py). The opt-in secret and the job token sit
   # next to each step's GH_PAT, never here, so a step without the PAT never
@@ -3021,6 +3025,21 @@ jobs:
           fi
 
       # ── Cleanup ─────────────────────────────────────────────────
+      # Issue #10037 (G3): when the gate run is cancelled (the runner-wait
+      # stop in scripts/dispatch_and_watch_workflow_run.sh, or an operator),
+      # cancel this job's test-issue runs that have not completed (title and
+      # created-after scoped, logic in the script's --cancel-issue-runs mode),
+      # so they do not keep holding or queueing runners after the gate ends.
+      - name: Cancel the test issue's runs when the gate is cancelled
+        if: cancelled()
+        env:
+          CANCEL_ISSUE_TITLE: ${{ steps.create-issue.outputs.title }}
+          CANCEL_ISSUE_CREATED_AFTER: ${{ steps.create-issue.outputs.created_after }}
+        run: |
+          if grep -q -- '--cancel-issue-runs)' ./scripts/dispatch_and_watch_workflow_run.sh 2>/dev/null; then
+            bash ./scripts/dispatch_and_watch_workflow_run.sh --cancel-issue-runs || true
+          fi
+
       - name: Cleanup test artifacts
         if: always()
         env:
@@ -4082,6 +4101,26 @@ jobs:
           rm -f "${DW_TIMEOUT_LOG}"
           # End dispatch-watch timeout handling.
 
+      # Issue #10037 (G3): when the gate run is cancelled (the runner-wait
+      # stop in scripts/dispatch_and_watch_workflow_run.sh, or an operator),
+      # cancel this job's dispatched child runs that have not completed, so
+      # they do not keep holding runners after the gate ends.
+      - name: Cancel dispatched child runs when the gate is cancelled
+        if: cancelled()
+        env:
+          GATE_CHILD_RUN_IDS: ${{ steps.dispatch_validation_refresh.outputs.dispatched_run_id }} ${{ steps.dispatch_update_workflows.outputs.dispatched_run_id }} ${{ steps.dispatch_memory_maintenance.outputs.dispatched_run_id }}
+        run: |
+          for child_id in ${GATE_CHILD_RUN_IDS}; do
+            [[ "${child_id}" =~ ^[0-9]+$ ]] || continue
+            child_status="$(timeout 20 gh api "repos/${TEST_REPO}/actions/runs/${child_id}" --jq '.status // ""' 2>/dev/null || true)"
+            [ "${child_status}" != "completed" ] || continue
+            if timeout 20 gh api -X POST "repos/${TEST_REPO}/actions/runs/${child_id}/cancel" >/dev/null 2>&1; then
+              echo "Cancel requested for child run #${child_id} (gate cancelled)"
+            else
+              echo "::warning::Could not cancel child run #${child_id} after the gate was cancelled"
+            fi
+          done
+
       - name: "Soft-error analyser (memory_maintenance)"
         if: always() && steps.dispatch_memory_maintenance.outputs.run_id != ''
         uses: ./.github/actions/run-soft-error-analyzer
@@ -4627,6 +4666,26 @@ jobs:
           rm -f "${DW_TIMEOUT_LOG}"
           # End dispatch-watch timeout handling.
 
+      # Issue #10037 (G3): when the gate run is cancelled (the runner-wait
+      # stop in scripts/dispatch_and_watch_workflow_run.sh, or an operator),
+      # cancel this job's dispatched child runs that have not completed, so
+      # they do not keep holding runners after the gate ends.
+      - name: Cancel dispatched child runs when the gate is cancelled
+        if: cancelled()
+        env:
+          GATE_CHILD_RUN_IDS: ${{ steps.dispatch.outputs.dispatched_run_id }}
+        run: |
+          for child_id in ${GATE_CHILD_RUN_IDS}; do
+            [[ "${child_id}" =~ ^[0-9]+$ ]] || continue
+            child_status="$(timeout 20 gh api "repos/${TEST_REPO}/actions/runs/${child_id}" --jq '.status // ""' 2>/dev/null || true)"
+            [ "${child_status}" != "completed" ] || continue
+            if timeout 20 gh api -X POST "repos/${TEST_REPO}/actions/runs/${child_id}/cancel" >/dev/null 2>&1; then
+              echo "Cancel requested for child run #${child_id} (gate cancelled)"
+            else
+              echo "::warning::Could not cancel child run #${child_id} after the gate was cancelled"
+            fi
+          done
+
       - name: "Soft-error analyser (validate-standalone)"
         if: always() && steps.dispatch.outputs.run_id != ''
         uses: ./.github/actions/run-soft-error-analyzer
@@ -4707,6 +4766,9 @@ jobs:
           echo "pre_clarify_run_id=${PRE_CLARIFY_RUN_ID}" >> "$GITHUB_OUTPUT"
           TITLE="[E2E Clarify Negative Test] under-specified task (run ${GITHUB_RUN_ID})"
           BODY="Make it better."
+          # Issue #10037 (G3): the creation time (epoch digits only, #9797)
+          # scopes the gate-cancel step below to this issue's runs.
+          echo "created_after_epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
           NUMBER=$(gh api "repos/${TEST_REPO}/issues" \
             -f title="${TITLE}" -f body="${BODY}" --jq '.number')
           if ! [[ "${NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
@@ -4854,6 +4916,29 @@ jobs:
           fi
           echo "::error::Clarify did not act on the under-specified issue within timeout"
           exit 1
+
+      # Issue #10037 (G3): when the gate run is cancelled (the runner-wait
+      # stop in scripts/dispatch_and_watch_workflow_run.sh, or an operator),
+      # cancel this job's test-issue runs that have not completed (title and
+      # created-after scoped, logic in the script's --cancel-issue-runs mode),
+      # so they do not keep holding or queueing runners after the gate ends.
+      # It sits right after the wait step, the job's last step that is not
+      # always(), so it runs before the soft-error analyser.
+      - name: Cancel the test issue's runs when the gate is cancelled
+        if: cancelled()
+        env:
+          CANCEL_ISSUE_CREATED_EPOCH: ${{ steps.create.outputs.created_after_epoch }}
+        run: |
+          # Same title as the "Create unsolvable issue" step.
+          CANCEL_ISSUE_TITLE="[E2E Clarify Negative Test] under-specified task (run ${GITHUB_RUN_ID})"
+          CANCEL_ISSUE_CREATED_AFTER=""
+          if [[ "${CANCEL_ISSUE_CREATED_EPOCH:-}" =~ ^[0-9]+$ ]]; then
+            CANCEL_ISSUE_CREATED_AFTER="$(date -u -d "@${CANCEL_ISSUE_CREATED_EPOCH}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+          fi
+          export CANCEL_ISSUE_TITLE CANCEL_ISSUE_CREATED_AFTER
+          if grep -q -- '--cancel-issue-runs)' ./scripts/dispatch_and_watch_workflow_run.sh 2>/dev/null; then
+            bash ./scripts/dispatch_and_watch_workflow_run.sh --cancel-issue-runs || true
+          fi
 
       - name: "Soft-error analyser (clarify negative test)"
         if: always() && steps.capture_clarify_run.outputs.run_id != ''
@@ -5122,9 +5207,34 @@ jobs:
               ALT_CLARIFY_RUN_NOTE=" (no non-skipped Clarify run titled '${ALT_ISSUE_TITLE}' found)"
             fi
           fi
+          # Issue #10037 (G3): a timeout caused only by this issue's runs waiting
+          # for runners ends as runner_wait and, with
+          # DISPATCH_WATCH_STOP_RELEASE_GATE=true, stops the gate (no attempt).
+          # The grep skips a checkout whose watcher predates the mode.
+          if grep -q -- '--alt-model-runner-wait)' ./scripts/dispatch_and_watch_workflow_run.sh 2>/dev/null; then
+            ALT_WAIT_STARTED_AT=$(( DEADLINE - 4500 )) ALT_WAIT_BUDGET_SECS=4500 \
+              bash ./scripts/dispatch_and_watch_workflow_run.sh --alt-model-runner-wait || true
+          fi
           echo "::error::Alt-model run timed out before reaching review stage${ALT_CLARIFY_RUN_NOTE}"
           echo "  Issue: ${GITHUB_SERVER_URL:-https://github.com}/${TEST_REPO}/issues/${ISSUE_NUMBER}"
           exit 1
+
+      # Issue #10037 (G3): when the gate run is cancelled (the runner-wait
+      # stop in scripts/dispatch_and_watch_workflow_run.sh, or an operator),
+      # cancel this job's test-issue runs that have not completed (title and
+      # created-after scoped, logic in the script's --cancel-issue-runs mode),
+      # so they do not keep holding or queueing runners after the gate ends.
+      # It sits right after the wait step, the job's last step that is not
+      # always(), so it runs before the capture and soft-error analyser steps.
+      - name: Cancel the test issue's runs when the gate is cancelled
+        if: cancelled()
+        env:
+          CANCEL_ISSUE_TITLE: ${{ steps.create.outputs.title }}
+          CANCEL_ISSUE_CREATED_AFTER: ${{ steps.create.outputs.created_after }}
+        run: |
+          if grep -q -- '--cancel-issue-runs)' ./scripts/dispatch_and_watch_workflow_run.sh 2>/dev/null; then
+            bash ./scripts/dispatch_and_watch_workflow_run.sh --cancel-issue-runs || true
+          fi
 
       - name: Capture alt-model phase run ids
         id: capture_alt_runs
