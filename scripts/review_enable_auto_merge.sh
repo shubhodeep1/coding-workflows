@@ -277,6 +277,13 @@ fi
 # the PR tree against the attested release manifest. Review never does.
 if [[ "${_orch_pr_head_ref}" =~ ^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$ ]]; then
 	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA:-unknown} action=skip reason=updater_pr_verify_job_owns_merge"
+	# This exit precedes the head-gate success post below, so the gate used
+	# to stay pending on updater PRs (#9483). Post success only when the
+	# verify and integrity statuses are green on this exact head; reuses the
+	# PR read above (no extra PR call). Review still never enables auto-merge.
+	if type review_head_gate_updater_exempt >/dev/null 2>&1; then
+		review_head_gate_updater_exempt "${GITHUB_REPOSITORY}" "${PR_NUMBER}" "${INITIAL_HEAD_SHA:-}" "${_orch_pr_head_ref}" "${_ORCH_PR_META_JSON}" || true
+	fi
 	exit 0
 fi
 
@@ -309,10 +316,11 @@ fi
 # covered. No API call for PRs into the default or an integration branch.
 # Anything but `allow` (helper missing, lookup failure) fails closed; the next
 # review run or the review sweep retries. Sets _followup_guard_result.
+# $1: the call's phase (pre_status|post_wait), logged as `phase=` on a refusal.
 _followup_guard_result=""
 run_security_followup_guard()
 {
-	local _followup_guard_output="" _followup_guard_payload
+	local _followup_guard_output="" _followup_guard_payload _followup_guard_phase="${1:-unknown}"
 	_followup_guard_result=""
 	_followup_guard_payload="$(mktemp 2>/dev/null || true)"
 	if [ -n "${_followup_guard_payload}" ] && [ -f "${SCRIPT_DIR}/review_single_issue_security_pass.sh" ] \
@@ -324,13 +332,13 @@ run_security_followup_guard()
 	fi
 	[ -n "${_followup_guard_payload}" ] && rm -f "${_followup_guard_payload}"
 	if [ "${_followup_guard_result}" != "allow" ]; then
-		echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=refuse reason=security_followup_guard_${_followup_guard_result:-unavailable}"
+		echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=refuse reason=security_followup_guard_${_followup_guard_result:-unavailable} phase=${_followup_guard_phase}"
 		echo "::warning::Auto-merge not enabled for PR #${PR_NUMBER}: the security follow-up guard returned '${_followup_guard_result:-unavailable}' (its base branch's head passed a clean security audit, or that could not be verified). The PR stays open."
 		return 1
 	fi
 	return 0
 }
-if ! run_security_followup_guard; then
+if ! run_security_followup_guard pre_status; then
 	exit 0
 fi
 
@@ -398,7 +406,7 @@ fi
 # default or an integration branch get `allow` with no API call. The success
 # status posted above stays bound to this PR's head; refusing here withholds
 # auto-merge and merge labels.
-if ! run_security_followup_guard; then
+if ! run_security_followup_guard post_wait; then
 	exit 0
 fi
 

@@ -34,6 +34,8 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 import files_touched_scope_guard as guard  # noqa: E402
 
 IMPLEMENT = REPO_ROOT / ".github" / "workflows" / "implement.yml"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_implement_text  # noqa: E402
 IMPLEMENT_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
 IMPLEMENT_GUARD_HANDLER = REPO_ROOT / "scripts" / "implement_handle_guard_block.sh"
 GUARD_SCRIPT = REPO_ROOT / "scripts" / "files_touched_scope_guard.py"
@@ -425,7 +427,7 @@ def test_automation_grant_cli_denies_invalid_file_and_preserves_old_exit_codes()
 
 def _scope_fragment(label: str) -> str:
 	source = IMPLEMENT_COMMIT_SCRIPT if label == "commit" else IMPLEMENT
-	text = source.read_text(encoding="utf-8")
+	text = expanded_implement_text() if source == IMPLEMENT else source.read_text(encoding="utf-8")
 	start = f"# >>> files_touched scope-enforcement guard ({label}) >>>"
 	end = f"# <<< files_touched scope-enforcement guard ({label}) <<<"
 	lines = text.splitlines()
@@ -539,7 +541,7 @@ def test_preflight_and_commit_fragments_share_logic() -> None:
 
 def _automation_fragment(label: str) -> str:
 	source = IMPLEMENT_COMMIT_SCRIPT if label == "commit" else IMPLEMENT
-	lines = source.read_text(encoding="utf-8").splitlines()
+	lines = (expanded_implement_text() if source == IMPLEMENT else source.read_text(encoding="utf-8")).splitlines()
 	start = next(i for i, line in enumerate(lines) if line.strip() == f"# >>> automation-path grant guard ({label}) >>>")
 	end = next(i for i, line in enumerate(lines) if line.strip() == f"# <<< automation-path grant guard ({label}) <<<")
 	base = len(lines[start]) - len(lines[start].lstrip(" "))
@@ -610,7 +612,7 @@ def test_automation_fragments_share_logic_and_fail_closed() -> None:
 
 
 def _implement_text() -> str:
-	return IMPLEMENT.read_text(encoding="utf-8")
+	return expanded_implement_text()
 
 
 def _implement_commit_text() -> str:
@@ -1191,7 +1193,7 @@ def test_plan_gate_does_not_hold_for_own_issue_fragments() -> None:
 
 def test_issue_body_scope_callers_pass_issue_number() -> None:
 	for path in (IMPLEMENT, IMPLEMENT_COMMIT_SCRIPT):
-		text = path.read_text(encoding="utf-8")
+		text = expanded_implement_text() if path == IMPLEMENT else path.read_text(encoding="utf-8")
 		start = text.index('"${scope_guard_extra_args[@]}" \\')
 		window = text[start:start + 200]
 		assert '--issue-number "${ISSUE_NUMBER:-}"' in window, (path, window)
@@ -2328,14 +2330,14 @@ def test_cli_issue_body_mode_auto_heal_companions() -> None:
 def test_implement_scope_callers_pass_auto_heal_identity() -> None:
 	args = '--issue-meta-file "${ISSUE_META_FILE:-}" --pipeline-login "${IMPLEMENT_SCOPE_PIPELINE_LOGIN:-}"'
 	for path in (IMPLEMENT, IMPLEMENT_COMMIT_SCRIPT):
-		text = path.read_text(encoding="utf-8")
+		text = expanded_implement_text() if path == IMPLEMENT else path.read_text(encoding="utf-8")
 		start = text.index('"${scope_guard_extra_args[@]}" \\')
 		assert args in text[start:start + 300], path
 	prepush = (REPO_ROOT / "scripts" / "implement_step_prepush_test_gate.sh").read_text(encoding="utf-8")
 	start = prepush.index("implement_prepush_test_gate_narrow_allow_list()")
 	window = prepush[start:prepush.index("--check-automation-paths", start)]
 	assert '--issue-body-file "${ISSUE_BODY_FILE:-/dev/null}"' in window and args in window
-	text = IMPLEMENT.read_text(encoding="utf-8")
+	text = expanded_implement_text()
 	export = 'echo "IMPLEMENT_SCOPE_PIPELINE_LOGIN=${pipeline_login}" >> "$GITHUB_ENV"'
 	assert text.count(export) == 1
 	check = 'if [[ "${pipeline_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\\[bot\\])?$ ]]; then'

@@ -240,7 +240,8 @@ class Wiring(unittest.TestCase):
 		# between merge_with_followup's gate and its merge call (3404 chars).
 		# 4600: the #10049 pre-merge PR state branch sits there too. 5400:
 		# the #9987 `lease_wait` branch (judge-decision mark) sits there as well.
-		# 6600: the #10049 guard-found-closed skip branch sits there too.
+		# 6600: the #10049 guard-found-closed skip branch and the security
+		# follow-up guard branch (#9671) sit there too (6311 chars with all).
 		for call in retry_calls:
 			self.assertIn("_pr_base_fresh_for_merge", case_text[max(0, call.start() - 6600):call.start()])
 		# merge_with_followup's synchronous merge is gated too.
