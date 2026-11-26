@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Read the run's jobs once (`GET repos/<repo>/actions/runs/<run_id>/jobs?per_page=100&filter=latest`, through `gh_retry`).\"\n  expected_change_site: scripts/ci_cancelled_rerun.py, list_run_jobs()\n  confidence=4\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: `list_run_jobs()` invokes `gh api` directly with `subprocess.run` at lines 512-515; `classify_cancelled_run()` performs its own retry at lines 747-756. Neither uses `gh_retry`. The new comment at lines 750-754 explains this deviation but does not implement the specified call path, The classifier in `scripts/ci_cancelled_rerun.py:747-756` calls `subprocess.run([\"gh\", \"api\", ...])` directly and retries once after 2 seconds, rather than invoking the `gh_retry` bash helper that the issue's text requires. The newly added comment at lines 750-754 explicitly documents this as a deliberate design choice. `gh_retry` is a bash function defined at `scripts/gh_helpers.sh:2804`, so a Python module cannot import it; its rate-limit wait of up to `GH_RETRY_RATE_LIMIT_MAX_WAIT_SECS` (default 600, confirmed in `scripts/gh_api_retry.py:406` and `scripts/gh_helpers.sh:2647`) would break the `timeout 90` shell wrapper in `scripts/ci_final_status.sh:113`. Both reviewers rated it SEVERITY: NIT. minimax_minimax-m3 called it informational only and said no further code change is appropriate. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash explicitly declined to re-raise it as an accepted, documented deviation (scripts/ci_cancelled_rerun.py:750-754).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"read the run's jobs once (`GET repos/<repo>/actions/runs/<run_id>/jobs?per_page=100&filter=latest`, through `gh_retry`)\"\n  Expected change site: scripts/ci_cancelled_rerun.py, list_run_jobs()\n  Evidence of absence: The classifier in `scripts/ci_cancelled_rerun.py:747-756` calls `subprocess.run([\"gh\", \"api\", ...])` directly and retries once after 2 seconds, rather than invoking the `gh_retry` bash helper that the issue's text requires. The newly added comment at lines 750-754 explicitly documents this as a deliberate design choice. `gh_retry` is a bash function defined at `scripts/gh_helpers.sh:2804`, so a Python module cannot import it; its rate-limit wait of up to `GH_RETRY_RATE_LIMIT_MAX_WAIT_SECS` (default 600, confirmed in `scripts/gh_api_retry.py:406` and `scripts/gh_helpers.sh:2647`) would break the `timeout 90` shell wrapper in `scripts/ci_final_status.sh:113`. The bounded retry already implements the issue's \"fail closed\" rule. The comment is accurate and the rationale is sound. This gap is informational only; no further code change is appropriate.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Read the run's jobs once (`GET repos/<repo>/actions/runs/<run_id>/jobs?per_page=100&filter=latest`, through `gh_retry`).\"\n  Expected change site: `scripts/ci_cancelled_rerun.py`, `list_run_jobs()`.\n  Evidence of absence: `list_run_jobs()` invokes `gh api` directly with `subprocess.run` at lines 512-515; `classify_cancelled_run()` performs its own retry at lines 747-756. Neither uses `gh_retry`. The new comment at lines 750-754 explains this deviation but does not implement the specified call path.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a8b602219201c0026e1a7c84291e1e832518bf44ab7caaca4ec27a6837d8d9f6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10135,
+    "run_id": "45821650673",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45821650673",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126133524_cc09dfa28e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10135,
+    "run_id": "45821650673"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T13:35:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
