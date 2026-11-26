@@ -391,6 +391,16 @@ review_prepush_test_gate_changed()
 	} | sed '/^$/d' | sort -u
 }
 
+# Same list as review_prepush_test_gate_changed, but returns 1 when either git
+# read fails, so a git error is never mistaken for "no change" (issue #9519).
+review_prepush_test_gate_changed_checked()
+{
+	local rpg_cc_tracked rpg_cc_untracked
+	rpg_cc_tracked="$(git diff --name-only HEAD 2>/dev/null)" || return 1
+	rpg_cc_untracked="$(git ls-files --others --exclude-standard "${rpg_untracked_excludes[@]}" 2>/dev/null)" || return 1
+	printf '%s\n%s\n' "${rpg_cc_tracked}" "${rpg_cc_untracked}" | sed '/^$/d' | sort -u
+}
+
 # Docker image ids and registry references only; anything else is refused.
 review_prepush_test_gate_image_ok()
 {
@@ -639,14 +649,68 @@ review_prepush_test_gate_restore_symlinks()
 	done < <(git ls-files -s -z 2>/dev/null)
 }
 
+# Sets rpg_diag_paths_out to a bounded, sanitised comma list of $1 (one path
+# per line; at most 20 paths of at most 200 characters, each reduced to
+# [A-Za-z0-9._/+-]) and rpg_diag_paths_count to the number of paths; sets
+# rpg_diag_truncated=1 when a list or a path was cut. Untrusted file names
+# therefore cannot add fields, split the line or start a workflow command.
+review_prepush_test_gate_diag_paths()
+{
+	local list="$1" path clean n=0 out=""
+	while IFS= read -r path; do
+		[ -n "${path}" ] || continue
+		n=$((n + 1))
+		if [ "${n}" -gt 20 ]; then
+			rpg_diag_truncated=1
+			continue
+		fi
+		clean="$(printf '%s' "${path}" | LC_ALL=C tr -c 'A-Za-z0-9._/+-' '_')"
+		if [ "${#clean}" -gt 200 ]; then
+			clean="${clean:0:200}"
+			rpg_diag_truncated=1
+		fi
+		out="${out:+${out},}${clean}"
+	done <<< "${list}"
+	rpg_diag_paths_count="${n}"
+	rpg_diag_paths_out="${out:-none}"
+}
+
+# One PREPUSH_REPAIR_CHANGES line per repair turn in which the editor ran
+# (issue #9519): the editor-changed files before the repair and the changed
+# files after it (after stray rollback and symlink restore), with the
+# pre-repair gate status. A list that could not be read is `unknown`.
+# Args: EDITOR_RC BEFORE_OK BEFORE_LIST AFTER_OK AFTER_LIST. No API call.
+review_prepush_test_gate_repair_diag()
+{
+	local editor_rc="$1" before_ok="$2" before_list="$3" after_ok="$4" after_list="$5"
+	local before=unknown after=unknown before_paths=unknown after_paths=unknown
+	local rpg_diag_truncated=0 rpg_diag_paths_out="" rpg_diag_paths_count=0
+	local acceptance="${rpg_persist_state:-none}" extra="${rpg_persist_extra:-0}"
+	[[ "${editor_rc}" =~ ^[0-9]+$ ]] || editor_rc=unknown
+	case "${acceptance}" in met|unmet|not_run|none) ;; *) acceptance=none ;; esac
+	[[ "${extra}" =~ ^[0-9]+$ ]] || extra=0
+	if [ "${before_ok}" = true ]; then
+		review_prepush_test_gate_diag_paths "${before_list}"
+		before="${rpg_diag_paths_count}" before_paths="${rpg_diag_paths_out}"
+	fi
+	if [ "${after_ok}" = true ]; then
+		review_prepush_test_gate_diag_paths "${after_list}"
+		after="${rpg_diag_paths_count}" after_paths="${rpg_diag_paths_out}"
+	fi
+	echo "PREPUSH_REPAIR_CHANGES phase=${rpg_phase:-review} editor_rc=${editor_rc} pre_status=${rpg_pre_repair_status:-unknown} pre_failures=${rpg_pre_repair_failures:-unknown} acceptance=${acceptance} extra_unmet=${extra} before=${before} after=${after} before_paths=${before_paths} after_paths=${after_paths} truncated=${rpg_diag_truncated}" >&2
+	return 0
+}
+
 # One review editor turn. Sets rpg_repair to ran | skipped (...) | reverted (syntax)
 # | reverted (it removed the whole change for lint findings only)
-# | reverted (it removed the whole change while no failure was caused by it);
-# the gate re-runs only for ran. Logs one outcome=repair_diff line per editor turn.
+# | reverted (it removed the whole change while no failure was caused by it); the gate re-runs only for ran.
+# Logs one outcome=repair_diff line per editor turn.
 review_prepush_test_gate_repair()
 {
 	local result="$1" prompt rc editor editor_timeout validator sd
-	local repair_changed_before="" repair_changed_after="" repair_status_line="" repair_pr_caused="" repair_diff_paths
+	local rpg_pre_repair_changed="" rpg_pre_repair_ok=false rpg_pre_repair_status=unknown rpg_pre_repair_failures=unknown
+	local rpg_post_repair_changed="" rpg_post_repair_ok=false rpg_pre_repair_line=""
+	local repair_changed_before="" repair_changed_after="" repair_diff_paths
 	sd="$(review_prepush_test_gate_abs "${SUPPORT_SCRIPTS_DIR:-}")"
 	editor="$(review_prepush_test_gate_pick "${sd:+${sd}/review_apply_fixes.sh}")" || editor=""
 	if [ -z "${editor}" ] || ! grep -qxF '# supports: --repair-turn' "${editor}"; then
@@ -694,6 +758,21 @@ review_prepush_test_gate_repair()
 		rpg_repair="skipped (step time budget)"
 		return 0
 	fi
+	# Pre-repair state for the diagnostic line and the passing-change guard
+	# (issue #9519). An unreadable list or status stays unknown, and the guard
+	# then never fires (today's behaviour).
+	if rpg_pre_repair_changed="$(review_prepush_test_gate_changed_checked)"; then
+		rpg_pre_repair_ok=true
+	else
+		rpg_pre_repair_changed=""
+	fi
+	if rpg_pre_repair_line="$(review_prepush_test_gate_py status "${result}" 2>/dev/null)"; then
+		read -r rpg_pre_repair_status rpg_pre_repair_failures _ <<< "${rpg_pre_repair_line}"
+	fi
+	case "${rpg_pre_repair_status}" in pass|fail|unverified|skipped) ;; *) rpg_pre_repair_status=unknown ;; esac
+	if [ "${rpg_pre_repair_status}" = unknown ] || ! [[ "${rpg_pre_repair_failures}" =~ ^[0-9]+$ ]]; then
+		rpg_pre_repair_status=unknown rpg_pre_repair_failures=unknown
+	fi
 	repair_changed_before="$(review_prepush_test_gate_changed || true)"
 	rc=0
 	timeout --kill-after=30s "${editor_timeout}" bash "${editor}" --repair-turn "${prompt}" "${RUNTIME_DIR}/prepush_gate_repair_output.txt" || rc=$?
@@ -701,6 +780,13 @@ review_prepush_test_gate_repair()
 		review_prepush_test_gate_log "outcome=warning reason=stray_edits_rolled_back"
 	fi
 	review_prepush_test_gate_restore_symlinks
+	if rpg_post_repair_changed="$(review_prepush_test_gate_changed_checked)"; then
+		rpg_post_repair_ok=true
+	else
+		rpg_post_repair_changed=""
+	fi
+	review_prepush_test_gate_repair_diag "${rc}" "${rpg_pre_repair_ok}" "${rpg_pre_repair_changed}" \
+		"${rpg_post_repair_ok}" "${rpg_post_repair_changed}"
 	# One line per editor turn: what the editor left behind (#9519). Paths are
 	# untrusted worktree names, so keep [A-Za-z0-9._/-] only and at most 10.
 	repair_changed_after="$(review_prepush_test_gate_changed || true)"
@@ -724,6 +810,17 @@ review_prepush_test_gate_repair()
 		rpg_repair="reverted (syntax)"
 		return 0
 	fi
+	# The validator rewrites files in place (strip_full_file_fence on changed
+	# YAML/JSON), so re-read the tree for the passing-change guard below; the
+	# PREPUSH_REPAIR_CHANGES line above keeps the pre-validator read. A failed
+	# read leaves the guard off (issue #9519 fail-safe).
+	if [ -n "${validator}" ]; then
+		if rpg_post_repair_changed="$(review_prepush_test_gate_changed_checked)"; then
+			rpg_post_repair_ok=true
+		else
+			rpg_post_repair_ok=false rpg_post_repair_changed=""
+		fi
+	fi
 	# A repair that leaves no change at all undid the editor's work instead of
 	# fixing it. For lint-only failures that edit usually restores code the PR
 	# base already had (PR #8747: three E101 lines a reviewer asked to restore),
@@ -735,26 +832,30 @@ review_prepush_test_gate_repair()
 		rpg_repair="reverted (it removed the whole change for lint findings only)"
 		return 0
 	fi
-	# #9519 / PR #9562: a done-check-only repair turn (pr_caused=0) erased the
-	# PR's whole change. Restore it; an unreadable status skips this guard.
-	# `status` prints "unverified 0 0" when load() falls back to {} for a
-	# missing or corrupt result, so require a parseable JSON object with a
-	# known `status` first ({} or no status counts as unreadable); a genuine
-	# status=unverified result still reaches the guard.
-	if PYTHONDONTWRITEBYTECODE=1 python3 -I -B -c 'import json,sys; d=json.load(open(sys.argv[1], encoding="utf-8")); sys.exit(0 if isinstance(d, dict) and d.get("status") in ("pass", "fail", "unverified", "skipped") else 1)' "${result}" 2>/dev/null \
-		&& repair_status_line="$(review_prepush_test_gate_py status "${result}" 2>/dev/null)" && [ -n "${repair_status_line}" ]; then
-		read -r _ repair_pr_caused _ <<< "${repair_status_line}" || repair_pr_caused=""
-		case "${repair_pr_caused}" in
-			''|*[!0-9]*) ;;
-			*)
-				if [ -z "${repair_changed_after}" ] && [ -n "${repair_changed_before}" ] && [ "$((10#${repair_pr_caused}))" -eq 0 ]; then
-					review_prepush_test_gate_revert all || true
-					review_prepush_test_gate_log "outcome=repair_reverted reason=passing_change_erased"
-					rpg_repair="reverted (it removed the whole change while no failure was caused by it)"
-					return 0
-				fi
-				;;
-		esac
+	# Issue #9519 (run 43517436284): with the repair loop on, a repair can run
+	# on a result with no PR-caused failure (only an unmet done-check), and a
+	# repair that then erases the whole change leaves nothing to commit
+	# ("Editor changes lost"). When the pre-repair result passed with zero
+	# PR-caused failures, the editor had changes and the tree is now provably
+	# clean, keep the editor's change. The pre-repair result stays final, so
+	# an unmet done-check is still reported. Any unreadable input falls
+	# through to "ran" (today's behaviour). In the repair loop the pre-repair
+	# result is the run just before this turn (possibly a re-run after an
+	# earlier repair), and "revert all" restores this turn's baseline, the
+	# tree that run verified; a result with PR-caused failures never fires.
+	if [ "${rpg_pre_repair_ok}" = true ] && [ -n "${rpg_pre_repair_changed}" ] \
+		&& [ "${rpg_pre_repair_status}" = pass ] && [ "${rpg_pre_repair_failures}" = 0 ] \
+		&& [ "${rpg_post_repair_ok}" = true ] && [ -z "${rpg_post_repair_changed}" ]; then
+		review_prepush_test_gate_revert all || true
+		review_prepush_test_gate_log "outcome=repair_reverted reason=passing_change_erased"
+		# The untracked-file backup is best-effort; when the revert brought
+		# nothing back (or the tree cannot be read), say so instead of
+		# letting the line above imply the editor's change was restored.
+		if ! rpg_post_repair_changed="$(review_prepush_test_gate_changed_checked)" || [ -z "${rpg_post_repair_changed}" ]; then
+			review_prepush_test_gate_log "outcome=warning reason=passing_change_restore_empty"
+		fi
+		rpg_repair="reverted (it removed the whole change while no failure was caused by it)"
+		return 0
 	fi
 	rpg_repair="ran"
 	return 0

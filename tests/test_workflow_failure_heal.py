@@ -2860,6 +2860,120 @@ def test_intake_workflow_run_targets_failed_branch_and_skips_downstream_gate() -
 	assert "issues_created" not in state_after
 
 
+def _runner_wait_gate_payload(name: str = "Test & Mark Stable Release") -> dict:
+	return heal.build_workflow_run_payload(
+		repo=SELF_REPO,
+		workflow_run={"id": 500, "name": name, "conclusion": "failure", "head_sha": SHA_B, "head_branch": "stable", "html_url": f"https://github.com/{SELF_REPO}/actions/runs/500", "display_title": name},
+	)
+
+
+_RUNNER_WAIT_LOG = (
+	"2026-11-24T02:18:00.0000000Z ::warning::internal-memory-maintenance run #45306352148 watch diagnosis: status=queued the whole time (no runner was assigned); status_reads=160\n"
+	"2026-11-24T02:18:01.0000000Z DISPATCH_WATCH_RESULT outcome=runner_wait run=45306352148 reason=never_assigned jobs=1 queued_without_runner=1\n"
+	"2026-11-24T02:18:02.0000000Z RELEASE_GATE_RUNNER_WAIT outcome=stop_failed detail=still_running gate_run=500 watched_run=45306352148 reason=never_assigned waited_secs=240 display_name=internal-memory-maintenance\n"
+	"2026-11-24T02:18:03.0000000Z ::error::internal-memory-maintenance run #45306352148 timed out\n"
+)
+_PHASE4_RUNNER_WAIT_LOG = (
+	"2026-11-24T15:19:00.0000000Z E2E_REVIEW_RUNNER_WAIT run=30 outcome=runner_wait reason=never_assigned\n"
+	"2026-11-24T15:19:01.0000000Z RELEASE_GATE_RUNNER_WAIT outcome=cancel_requested gate_run=500 watched_run=30 reason=never_assigned display_name=review\n"
+)
+
+
+def _runner_wait_job(job_id: int, name: str, step: str) -> dict:
+	return {"id": job_id, "name": name, "workflow_name": "Test & Mark Stable Release", "conclusion": "failure", "steps": [{"name": step, "conclusion": "failure"}]}
+
+
+def test_intake_skips_a_release_gate_run_whose_only_failures_are_runner_waits() -> None:
+	"""Issue #10037 (G4): a gate whose watch steps only waited for a runner is not a heal issue."""
+	jobs = [
+		_runner_wait_job(9001, "orphan-workflows-test", "Dispatch & watch — internal-memory-maintenance"),
+		_runner_wait_job(9002, "e2e-smoke-test", "Phase 4: Wait for review & autofix to complete"),
+	]
+	for name in ("Test & Mark Stable Release", "Test & Mark Stable Release [cycle:45296434662]"):
+		state = _intake_state(jobs={"500": jobs}, job_logs={"9001": _RUNNER_WAIT_LOG, "9002": _PHASE4_RUNNER_WAIT_LOG})
+		result, state_after, _ = _run_intake(_runner_wait_gate_payload(name), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "skip reason=release_gate_runner_wait run=500 jobs=2" in result.stdout, result.stdout
+		assert "issues_created" not in state_after
+		assert not _composed_issues(state_after)
+
+
+def test_intake_skips_runner_waits_on_the_orchestrate_and_standalone_validate_watch_steps() -> None:
+	"""Both steps run dispatch_and_watch_workflow_run.sh without the "Dispatch & watch — " title."""
+	jobs = [
+		_runner_wait_job(9001, "orchestrate-decompose-test", "Dispatch internal-orchestrate.yml with multi-issue project"),
+		_runner_wait_job(9002, "validate-standalone-test", "Dispatch internal-validate.yml standalone"),
+	]
+	state = _intake_state(jobs={"500": jobs}, job_logs={"9001": _RUNNER_WAIT_LOG, "9002": _RUNNER_WAIT_LOG})
+	result, state_after, _ = _run_intake(_runner_wait_gate_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "skip reason=release_gate_runner_wait run=500 jobs=2" in result.stdout, result.stdout
+	assert not _composed_issues(state_after)
+
+
+def test_intake_skips_a_runner_wait_on_the_alt_model_wait_step() -> None:
+	"""The alt-model wait (dispatch_and_watch_workflow_run.sh --alt-model-runner-wait) prints the same marker."""
+	jobs = [_runner_wait_job(9001, "e2e-alt-model-test", "Wait for clarify→plan→implement (alt-model)")]
+	log = "2026-11-24T02:07:01.0000000Z RELEASE_GATE_RUNNER_WAIT outcome=stop_failed detail=still_running gate_run=500 watched_run=61 reason=never_assigned waited_secs=240 display_name=alt-model\n"
+	state = _intake_state(jobs={"500": jobs}, job_logs={"9001": log})
+	result, state_after, _ = _run_intake(_runner_wait_gate_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "skip reason=release_gate_runner_wait run=500 jobs=1" in result.stdout, result.stdout
+	assert not _composed_issues(state_after)
+
+
+def test_intake_files_a_release_gate_run_with_a_real_failure_next_to_a_runner_wait() -> None:
+	jobs = [
+		_runner_wait_job(9001, "orphan-workflows-test", "Dispatch & watch — internal-memory-maintenance"),
+		_runner_wait_job(9003, "validate-scripts", "Run pytest"),
+	]
+	logs = {"9001": _RUNNER_WAIT_LOG, "9003": "2026-11-24T02:00:00.0000000Z ##[error]Process completed with exit code 1.\n"}
+	state = _intake_state(jobs={"500": jobs}, job_logs=logs)
+	result, state_after, _ = _run_intake(_runner_wait_gate_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "release_gate_runner_wait" not in result.stdout
+	assert _composed_issues(state_after), result.stdout
+
+
+def test_intake_runner_wait_marker_counts_only_on_a_watch_step_at_line_start() -> None:
+	cases = (
+		# The marker on a step that is not a gate watch step.
+		(_runner_wait_job(9001, "e2e-smoke-test", "Phase 4b: Verify editor restored canary (pytest + retry)"), _RUNNER_WAIT_LOG),
+		# Echoed text: the marker does not start the line.
+		(_runner_wait_job(9001, "orphan-workflows-test", "Dispatch & watch — internal-memory-maintenance"),
+			"2026-11-24T02:18:00.0000000Z issue body said RELEASE_GATE_RUNNER_WAIT outcome=cancel_requested gate_run=500\n"),
+		# Any other outcome does not count.
+		(_runner_wait_job(9001, "orphan-workflows-test", "Dispatch & watch — internal-memory-maintenance"),
+			"2026-11-24T02:18:00.0000000Z RELEASE_GATE_RUNNER_WAIT outcome=real_failure_present gate_run=500 watched_run=1\n"),
+	)
+	for job, log in cases:
+		state = _intake_state(jobs={"500": [job]}, job_logs={"9001": log})
+		result, state_after, _ = _run_intake(_runner_wait_gate_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "release_gate_runner_wait" not in result.stdout, (job, log)
+		assert _composed_issues(state_after), (job, result.stdout)
+
+
+def test_intake_files_a_runner_wait_job_with_a_second_failed_step() -> None:
+	"""A later always() step that failed in the same job is a real failure (G4 is per step)."""
+	job = _runner_wait_job(9001, "orphan-workflows-test", "Dispatch & watch — internal-memory-maintenance")
+	job["steps"].append({"name": "Soft-error analyser (memory_maintenance)", "conclusion": "failure"})
+	state = _intake_state(jobs={"500": [job]}, job_logs={"9001": _RUNNER_WAIT_LOG})
+	result, state_after, _ = _run_intake(_runner_wait_gate_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "release_gate_runner_wait" not in result.stdout
+	assert _composed_issues(state_after), result.stdout
+
+
+def test_intake_runner_wait_skip_is_limited_to_the_release_gate() -> None:
+	jobs = [_runner_wait_job(9001, "orphan-workflows-test", "Dispatch & watch — internal-memory-maintenance")]
+	state = _intake_state(jobs={"500": jobs}, job_logs={"9001": _RUNNER_WAIT_LOG})
+	result, state_after, _ = _run_intake(_runner_wait_gate_payload("Mark Stable Release"), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "release_gate_runner_wait" not in result.stdout
+	assert _composed_issues(state_after)
+
+
 def test_intake_workflow_run_preserves_slash_bearing_target_branch() -> None:
 	branch_name = "release/2026-09"
 	run_payload = heal.build_workflow_run_payload(
@@ -7133,6 +7247,127 @@ def test_intake_rejects_ci_run_that_is_not_a_default_branch_push(tmp_path) -> No
 		assert "run_id=500 reason=ci_not_default_branch_push" in result.stdout
 		assert "skip reason=provenance_rejected" in result.stdout
 		assert "issues_created" not in state_after
+
+
+def _run_intake_capturing_tg(payload: dict, state: dict, extra_env: dict[str, str | None] | None = None, *, delivered: bool = True) -> tuple[subprocess.CompletedProcess[str], list[str], str]:
+	"""Run the intake with a stubbed ``tg_send_msg``; return the result, every
+	``level|text`` line it recorded, and what the intake wrote to GITHUB_OUTPUT.
+	Like the real helper, the stub prints a message id only when ``delivered``."""
+	tg_dir = Path(tempfile.mkdtemp(prefix="heal-tg-"))
+	try:
+		output_file = tg_dir / "github_output.txt"
+		output_file.write_text("", encoding="utf-8")
+		msg_id_echo = " printf '4242';" if delivered else ""
+		def setup(tmp: Path, work: Path) -> None:
+			(work / "scripts" / "tg_helpers.sh").write_text(
+				f'tg_send_msg() {{ printf \'%s|%s\\n\' "${{2:-}}" "$1" >> {str(tg_dir / "calls.txt")!r};{msg_id_echo} }}\n', encoding="utf-8")
+		result, _state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=setup,
+			extra_env={"GITHUB_OUTPUT": str(output_file), **(extra_env or {})})
+		calls_file = tg_dir / "calls.txt"
+		calls = calls_file.read_text(encoding="utf-8").splitlines() if calls_file.exists() else []
+		return result, calls, output_file.read_text(encoding="utf-8")
+	finally:
+		shutil.rmtree(tg_dir, ignore_errors=True)
+
+
+def test_intake_unregistered_source_repo_warns_once_per_day() -> None:
+	# atlas-bridge.gd sent six identical WARNINGs overnight: the workflow's
+	# actions/cache lookup now tells the intake today's WARNING already went out.
+	payload = _consumer_payload(source_repo="shubhodeep1/not-registered")
+	result, calls, output = _run_intake_capturing_tg(payload, _intake_state())
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "skip reason=unregistered_source_repo" in result.stdout
+	assert [line.split("|", 1)[0] for line in calls if "ignored a report" in line] == ["WARNING"], calls
+	assert "unregistered_source_repo_alert level=WARNING source=shubhodeep1/not-registered" in result.stdout
+	assert "heal_unregistered_warned=true" in output.splitlines()
+	result, calls, output = _run_intake_capturing_tg(payload, _intake_state(), {"WORKFLOW_HEAL_UNREGISTERED_WARNED_TODAY": "true"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert [line.split("|", 1)[0] for line in calls if "ignored a report" in line] == ["DEBUG"], calls
+	assert "unregistered_source_repo_alert level=DEBUG reason=already_warned_today" in result.stdout
+	assert "heal_unregistered_warned" not in output
+	# Fail open: anything but "true" (cache miss, failed lookup) sends the WARNING.
+	for warned_today in ("false", "", None):
+		result, calls, output = _run_intake_capturing_tg(payload, _intake_state(), {"WORKFLOW_HEAL_UNREGISTERED_WARNED_TODAY": warned_today})
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert [line.split("|", 1)[0] for line in calls if "ignored a report" in line] == ["WARNING"], (warned_today, calls)
+	# An undelivered WARNING (no message id) leaves no marker, so the next
+	# report that day retries the WARNING instead of being sent at DEBUG.
+	result, calls, output = _run_intake_capturing_tg(payload, _intake_state(), delivered=False)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert [line.split("|", 1)[0] for line in calls if "ignored a report" in line] == ["WARNING"], calls
+	assert "unregistered_source_repo_alert marker=skipped reason=not_delivered" in result.stdout
+	assert "heal_unregistered_warned" not in output
+
+
+def test_intake_unregistered_warning_workflow_cache_wiring() -> None:
+	workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "workflow-failure-heal-intake.yml").read_text(encoding="utf-8"))
+	steps = workflow["jobs"]["intake"]["steps"]
+	names = [step.get("name") for step in steps]
+	lookup = steps[names.index("Look up today's unregistered-repo warning marker")]
+	run = steps[names.index("Run workflow failure heal intake")]
+	save = steps[names.index("Save today's unregistered-repo warning marker")]
+	day = steps[names.index("Compute today's unregistered-repo warning day")]
+	assert names.index("Wait for the heal intake queue") < names.index(day["name"]) < names.index(lookup["name"]) < names.index(run["name"]) < names.index(save["name"]) < names.index("Leave the heal intake queue")
+	assert lookup["uses"] == "actions/cache/restore@v4" and save["uses"] == "actions/cache/save@v4"
+	assert lookup["continue-on-error"] is True and save["continue-on-error"] is True
+	# A failed day step must leave `day` empty and let the intake send the WARNING (fail open).
+	assert day["continue-on-error"] is True
+	assert lookup["with"]["lookup-only"] is True
+	assert lookup["with"]["path"] == save["with"]["path"] == "/tmp/workflow-heal-unregistered-warned"
+	assert run["env"]["WORKFLOW_HEAL_UNREGISTERED_MARKER"] == "/tmp/workflow-heal-unregistered-warned"
+	# The UTC day is taken after the queue wait, so a report that waits across
+	# midnight saves under the day it warned on.
+	assert day["id"] == "heal_unregistered_day" and "date -u +%Y%m%d" in day["run"]
+	assert lookup["with"]["key"] == save["with"]["key"] == "${{ steps.payload.outputs.heal_unregistered_cache_key }}-${{ steps.heal_unregistered_day.outputs.day }}"
+	assert run["id"] == "intake_run"
+	assert "steps.heal_unregistered_seen.outputs.cache-hit == 'true'" in run["env"]["WORKFLOW_HEAL_UNREGISTERED_WARNED_TODAY"]
+	assert "steps.intake_run.outputs.heal_unregistered_warned == 'true'" in save["if"]
+	payload_run = steps[names.index("Materialize the report payload")]["run"]
+	assert "heal_unregistered_cache_key=heal-unregistered-${heal_unregistered_repo}\" >>" in payload_run
+	assert "date -u" not in payload_run
+
+
+def _provenance_alert_filter() -> str:
+	text = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	match = re.search(r"PROVENANCE_ALERT_LEVEL=\"WARNING\"\n\t\tif jq -e '(.*?)' \\\n", text, re.S)
+	assert match, "provenance alert-level filter not found"
+	return match.group(1)
+
+
+def test_intake_provenance_alert_level_filter() -> None:
+	jq_filter = _provenance_alert_filter()
+	def is_debug(result: dict) -> bool:
+		return subprocess.run(["jq", "-e", jq_filter], input=json.dumps(result), capture_output=True, text=True).returncode == 0
+	assert is_debug({"reason": "current_run_rejected:ci_not_default_branch_push", "rejections": [{"run_id": "500", "reason": "ci_not_default_branch_push"}]})
+	assert is_debug({"reason": "current_run_rejected:not_failed", "rejections": [{"run_id": "500", "reason": "not_failed"}]})
+	assert is_debug({"reason": "no_verified_runs", "rejections": [{"run_id": "500", "reason": "not_failed"}, {"run_id": "499", "reason": "not_failed"}]})
+	for warning in (
+		{"reason": "no_verified_runs", "rejections": [{"run_id": "500", "reason": "not_failed"}, {"run_id": "499", "reason": "not_linked_to_pr"}]},
+		{"reason": "no_verified_runs", "rejections": []},
+		{"reason": "verifier_error", "rejections": []},
+		{"reason": "current_run_rejected:run_lookup_failed", "rejections": [{"run_id": "500", "reason": "run_lookup_failed"}]},
+		{"reason": "current_run_rejected:unexpected_workflow_path", "rejections": [{"run_id": "500", "reason": "unexpected_workflow_path"}]},
+		{"reason": "identity_unavailable", "rejections": []},
+	):
+		assert not is_debug(warning), warning
+
+
+def test_intake_provenance_rejection_alert_levels() -> None:
+	# A CI run on a PR branch and a cited run that did not fail are expected
+	# rejections: DEBUG. Any other rejection keeps the WARNING.
+	ci_run = _ci_intake_state()["run_details"]["500"]
+	for state, level, detail in (
+		(_ci_intake_state(event="pull_request"), "DEBUG", "current_run_rejected:ci_not_default_branch_push"),
+		(_ci_intake_state(head_branch="feature/x"), "DEBUG", "current_run_rejected:ci_not_default_branch_push"),
+		({**_ci_intake_state(), "run_details": {"500": {**ci_run, "conclusion": "success"}}}, "DEBUG", "current_run_rejected:not_failed"),
+		({**_ci_intake_state(), "run_details": {}}, "WARNING", "current_run_rejected:run_lookup_failed"),
+	):
+		result, calls, _ = _run_intake_capturing_tg(_ci_run_payload(), state, {"WORKFLOW_HEAL_DEFAULT_BRANCH": "main"})
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"skip reason=provenance_rejected source={SELF_REPO} kind=workflow_run issue=none detail={detail}" in result.stdout, result.stdout
+		assert f"provenance_rejected_alert level={level} " in result.stdout
+		provenance_calls = [line for line in calls if "rejected run provenance" in line]
+		assert [line.split("|", 1)[0] for line in provenance_calls] == [level], calls
 
 
 def test_build_phase_failure_payload_validates_and_carries_lineage() -> None:
