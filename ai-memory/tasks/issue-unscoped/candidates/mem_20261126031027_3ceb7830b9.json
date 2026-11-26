@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.88,
+  "details": "Add or update a focused `changelog.d/` entry when making a user-visible or operational behavior change, and follow the repository\u2019s existing fragment naming and content conventions. This pattern appears across changes to scripts, workflows, and tooling.",
+  "fingerprint": "3d556e6ebfc3ff66e74f4096b734995247db5c6bead21c411751cd91ce1d03b5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45745843796",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45745843796",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10098",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9671",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9888",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9946",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9990",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10107",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10108",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9692",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9951",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9995"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261126031027_3ceb7830b9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Merged changes consistently include a `changelog.d/` fragment.",
+  "timestamps": {
+    "created_at": "2026-11-26T03:10:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
