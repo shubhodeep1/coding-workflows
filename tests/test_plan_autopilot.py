@@ -172,6 +172,9 @@ def test_gate_ignores_fork_and_misnamed_maintenance_branches(tmp_path: Path, mon
 	out = pa.run_gate("o/r", _workdir(tmp_path), 24, NOW)
 	assert out["proceed"] is True and out["stale_pr"] == ""
 	assert pa.MAINTENANCE_BRANCH_RE.fullmatch(pa.branch_name("20261125", "abcdef0" + "1" * 33))
+	# Same repository in a different case, with a collision suffix: still the maintenance PR.
+	assert pa.is_maintenance_pr({"head": {"ref": "ai/plan-autopilot-20261120-abcdef0-2", "repo": {"full_name": "O/R"}}}, "o/r") is True
+	assert pa.is_maintenance_pr({"head": {"ref": "feature/ai/plan-autopilot-20261120-abcdef0", "repo": {"full_name": "o/r"}}}, "o/r") is False
 
 
 def test_gate_refuses_while_dispatch_pending(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
