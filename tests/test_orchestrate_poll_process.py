@@ -10417,12 +10417,56 @@ def test_security_pass_external_finalize_uses_verified_pr_head_when_integration_
 		pull_ref_shas={395: "__integration_head__"},
 	)
 
-	assert result["latest_state"]["status"] == "complete"
-	assert result["latest_state"]["security_pass_status"] == "passed"
-	assert result["latest_state"]["security_pass_head_sha"] == result["security_audit_capture"]["diff_head"]
-	assert result["pr_get_calls"]["395"] == 1
-	assert result["git_fetch_calls"]["refs/pull/395/head:refs/orchestrator/security-pass/pr-395-head"] == 2
-	assert "EXTERNAL_FINALIZE_DELIVERY tracking_issue=192 pr=395 outcome=branch_deleted reason=branch_absent" in result["stdout"] + result["stderr"]
+	# Diagnostics only (issue #9869): a CI failure of this test printed an
+	# empty message, so each assert below names the values it saw. Every
+	# lookup here is safe, so building it never changes which assert fails.
+	_fc_result = result if isinstance(result, dict) else {}
+	_fc_state = _fc_result.get("latest_state") or {}
+	if not isinstance(_fc_state, dict):
+		_fc_state = {}
+	_fc_capture = _fc_result.get("security_audit_capture") or {}
+	if not isinstance(_fc_capture, dict):
+		_fc_capture = {}
+	_fc_output = f"{_fc_result.get('stdout') or ''}\n{_fc_result.get('stderr') or ''}"
+	_fc_lines = [
+		line[:400]
+		for line in _fc_output.splitlines()
+		if "EXTERNAL_FINALIZE_DELIVERY" in line or "SECURITY_PASS" in line or "security-pass" in line
+	][-40:]
+	failure_context = (
+		"state="
+		+ json.dumps(
+			{
+				key: _fc_state.get(key)
+				for key in (
+					"status",
+					"security_pass_status",
+					"security_pass_head_sha",
+					"final_merge_status",
+					"final_merge_pr",
+				)
+			},
+			sort_keys=True,
+			default=str,
+		)
+		+ f" diff_head={_fc_capture.get('diff_head')!r}"
+		+ f" pr_get_calls={_fc_result.get('pr_get_calls')!r}"
+		+ f" git_fetch_calls={_fc_result.get('git_fetch_calls')!r}"
+		+ " log_lines="
+		+ "\n".join(_fc_lines)
+	)
+
+	# The asserts read the safe copies so a missing key or None container
+	# fails as an AssertionError carrying failure_context, not a bare
+	# KeyError/TypeError. The explicit key/dict checks keep each assert as
+	# strict as the raw subscripts were (None == None must not pass).
+	assert _fc_state.get("status") == "complete", failure_context
+	assert _fc_state.get("security_pass_status") == "passed", failure_context
+	assert isinstance(_fc_result.get("security_audit_capture"), dict) and "diff_head" in _fc_capture, failure_context
+	assert "security_pass_head_sha" in _fc_state and _fc_state.get("security_pass_head_sha") == _fc_capture.get("diff_head"), failure_context
+	assert (_fc_result.get("pr_get_calls") or {}).get("395") == 1, failure_context
+	assert (_fc_result.get("git_fetch_calls") or {}).get("refs/pull/395/head:refs/orchestrator/security-pass/pr-395-head") == 2, failure_context
+	assert "EXTERNAL_FINALIZE_DELIVERY tracking_issue=192 pr=395 outcome=branch_deleted reason=branch_absent" in (_fc_result.get("stdout") or "") + (_fc_result.get("stderr") or ""), failure_context
 
 
 def _external_finalize_delivery_run(
@@ -35063,6 +35107,77 @@ def test_final_merge_auto_resume_ignores_other_failed_projects() -> None:
 	assert "FINAL_MERGE_AUTO_RESUME tracking_issue=192 outcome=skip reason=not_final_merge_exhausted" in log
 	assert "Project already failed, skipping." in log
 	assert result["latest_state"]["status"] == "failed"
+
+
+# Issue #9534: judge-created issues get the scope companions (tests/**,
+# changelog.d/*, agents.d/*) in their files_touched block.
+def _judge_companions_run(body: str, *, enabled: str | None = None, scripts_dir: Path | None = None) -> tuple[str, str]:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	source = _extract_bash_function(script, "add_files_touched_companions() {") \
+		+ _extract_bash_function(script, "apply_judge_files_touched_companions() {")
+	program = source + '\napply_judge_files_touched_companions "$1" fixup "fix-1"\nprintf "%s" "${JUDGE_COMPANIONS_BODY_OUT}" > "$2"\n'
+	with tempfile.TemporaryDirectory() as tmp:
+		out_file = Path(tmp) / "body.txt"
+		env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "PYTHONDONTWRITEBYTECODE": "1"}
+		if enabled is not None:
+			env["JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED"] = enabled
+		# The helper finds files_touched_scope_guard.py next to the script ($0's directory).
+		cwd = scripts_dir if scripts_dir is not None else REPO_ROOT / "scripts"
+		result = subprocess.run(["bash", "-c", program, "./poller", body, str(out_file)], cwd=cwd, env=env,
+			capture_output=True, text=True, check=False, timeout=60)
+		assert result.returncode == 0, result.stderr
+		return result.stdout, out_file.read_text(encoding="utf-8")
+
+
+def test_judge_companions_added_at_the_block_indent() -> None:
+	body = "Fix it.\n\nfiles_touched:\n  - scripts/b.sh\n  - scripts/a.sh\n\nNotes after."
+	log, out = _judge_companions_run(body)
+	assert out == ("Fix it.\n\nfiles_touched:\n  - scripts/b.sh\n  - scripts/a.sh\n  - tests/**\n"
+		"  - changelog.d/*\n  - agents.d/*\n\nNotes after.")
+	assert "JUDGE_SCOPE_COMPANIONS outcome=added issue_kind=fixup local_id=fix-1 added=3" in log
+
+
+def test_judge_companions_only_missing_entries_are_added() -> None:
+	body = "files_touched:\n  - tests/**\n  - src/a.py"
+	log, out = _judge_companions_run(body)
+	assert out == "files_touched:\n  - tests/**\n  - src/a.py\n  - changelog.d/*\n  - agents.d/*"
+	assert "added=2" in log
+	full = "files_touched:\n  - agents.d/*\n  - tests/**\n  - changelog.d/*"
+	log, out = _judge_companions_run(full)
+	assert out == full and "JUDGE_SCOPE_COMPANIONS outcome=unchanged issue_kind=fixup local_id=fix-1 added=0" in log
+
+
+def test_judge_companions_flush_list_and_no_block() -> None:
+	log, out = _judge_companions_run("Body\nfiles_touched:\n- src/a.py\n- src/b.py\nTrailer")
+	assert out == "Body\nfiles_touched:\n- src/a.py\n- src/b.py\n- tests/**\n- changelog.d/*\n- agents.d/*\nTrailer"
+	log, out = _judge_companions_run("No scope list in this body.")
+	assert out == "No scope list in this body."
+	assert "JUDGE_SCOPE_COMPANIONS outcome=unchanged issue_kind=fixup local_id=fix-1 added=0 reason=no_block" in log
+
+
+def test_judge_companions_disabled_and_helper_failure_keep_the_body() -> None:
+	body = "files_touched:\n  - src/a.py"
+	for value in ("false", "FALSE", " false "):
+		log, out = _judge_companions_run(body, enabled=value)
+		assert out == body
+		assert "outcome=skipped issue_kind=fixup local_id=fix-1 added=0 reason=disabled" in log
+	with tempfile.TemporaryDirectory() as tmp:
+		log, out = _judge_companions_run(body, scripts_dir=Path(tmp))
+	assert out == body
+	assert "outcome=skipped issue_kind=fixup local_id=fix-1 added=0 reason=helper_failed" in log
+
+
+def test_judge_companions_wired_at_both_judge_issue_sites() -> None:
+	script = POLLER_SCRIPT.read_text(encoding="utf-8")
+	assert 'JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED="${JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED:-true}"' in script
+	fixup = _extract_bash_function(script, "create_judge_fixup_issues_from_verdict() {")
+	call = 'apply_judge_files_touched_companions "${FIX_BODY}" fixup "${FIX_ID}"\n          FIX_BODY="${JUDGE_COMPANIONS_BODY_OUT}"'
+	assert call in fixup and fixup.index(call) < fixup.index('FULL_FIX_BODY="${FIX_BODY}')
+	addition = 'apply_judge_files_touched_companions "${NEW_BODY}" addition "${NEW_ID}"\n          NEW_BODY="${JUDGE_COMPANIONS_BODY_OUT}"'
+	assert script.count(addition) == 1
+	assert script.index(addition) < script.index('FULL_NEW_BODY="${NEW_BODY}')
+	helper = _extract_bash_function(script, "add_files_touched_companions() {")
+	assert "python3 -I -B -c" in helper and "PIPELINE_PLAN_GRANT_COMPANIONS" in helper and "gh " not in helper
 
 
 # ---------------------------------------------------------------------------
