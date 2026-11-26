@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_single_issue_security_pass.sh:1471-1478 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The delta fallback runs after every failed delta dispatch, including an `auth` failure, and calls `single_pass_dispatch_audit` again with plain arguments even though that function does not retry `auth`.\n  WHY: A delta dispatch rejected with HTTP 401 or an authorization-related 403 triggers another workflow dispatch, although the issue says auth failures are not retried, and the fallback log labels the failure `reason=dispatch_rejected`, which adds a needless request and misreports the cause (the reviewer rated this SEVERITY: NIT, recorded here as low).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_single_issue_security_pass.sh:1471-1478 | severity=NIT | confidence=4\n  PROBLEM: The delta fallback runs after every failed delta dispatch, including an `auth` failure. `single_pass_dispatch_audit` does not retry `auth`, but this branch then calls it again with plain arguments.\n  WHY: A delta dispatch rejected with HTTP 401 or an authorization-related 403 triggers another workflow dispatch even though the issue says auth failures are not retried; the fallback log also labels the failure `reason=dispatch_rejected`. This makes an unnecessary request and misreports the cause.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0cb945566d1287dfe34501a98223e537241d75be7e6328630d7c4959b828b5c0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10110,
+    "run_id": "45778232755",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45778232755",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126090336_2b33cb0deb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10110,
+    "run_id": "45778232755"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-26T09:03:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
