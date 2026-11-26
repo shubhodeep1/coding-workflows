@@ -7,7 +7,9 @@ import base64
 import datetime as dt
 import json
 import os
+import re
 import subprocess
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -2080,16 +2082,253 @@ def test_auto_merge_helper_runs_followup_guard_before_merge() -> None:
 	# The guard runs again after the required-checks wait, before any --auto
 	# merge, even when the wait returned without polling.
 	wait = text.index("_pr_wait_for_required_checks", status)
-	recheck = text.index("\nif ! run_security_followup_guard; then\n\texit 0\nfi\n", wait)
+	recheck = text.index("\nif ! run_security_followup_guard post_wait; then\n\texit 0\nfi\n", wait)
 	assert "-gt 0 ] 2>/dev/null && ! run_security_followup_guard" not in text
 	assert recheck < text.index("gh_retry gh pr merge")
+	# #9671: each call names its phase on the refusal line; the keys before
+	# it are unchanged.
+	first = text.index("\nif ! run_security_followup_guard pre_status; then\n\texit 0\nfi\n")
+	assert guard < first < status
+	assert "action=refuse reason=security_followup_guard_${_followup_guard_result:-unavailable} phase=${_followup_guard_phase}" in text
+	assert '_followup_guard_phase="${1:-unknown}"' in text
+
+
+# --- #9671: the deterministic-skip merge path runs the same guard ----------
+
+DET_SKIP_GUARD_LIB = ROOT / "scripts" / "review_autofix_step_det_skip_followup_guard.sh"
+
+STUB_GUARD = """#!/usr/bin/env bash
+printf '%s\\n' "$*" > "${STUB_GUARD_ARGS}"
+cp "${PR_PAYLOAD_FILE}" "${STUB_GUARD_PAYLOAD}"
+printf '%s\\n' "${SINGLE_ISSUE_SECURITY_PASS_ENABLED-<unset>}" > "${STUB_GUARD_SWITCH}"
+echo "SINGLE_ISSUE_SECURITY_PASS mode=followup_guard stub=1"
+echo "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=${STUB_GUARD_RESULT}"
+"""
+
+
+def _det_skip_guard(tmp_path: Path, result: str = "allow", *, stub: bool = True, support: Path | None = None, env: dict | None = None):
+	"""Source the library and call det_skip_followup_merge_guard once."""
+	bin_dir = tmp_path / "bin"
+	bin_dir.mkdir(exist_ok=True)
+	gh = bin_dir / "gh"
+	gh.write_text(FAKE_GH, encoding="utf-8")
+	gh.chmod(0o755)
+	scratch = tmp_path / "scratch"
+	scratch.mkdir(exist_ok=True)
+	if support is None:
+		support = tmp_path / "support"
+		support.mkdir(exist_ok=True)
+		if stub:
+			script = support / "review_single_issue_security_pass.sh"
+			script.write_text(STUB_GUARD, encoding="utf-8")
+			script.chmod(0o755)
+	log = tmp_path / "calls.log"
+	log.write_text("", encoding="utf-8")
+	run_env = {
+		"PATH": f"{bin_dir}:{os.environ['PATH']}",
+		"TMPDIR": str(scratch),
+		"FAKE_GH_LOG": str(log),
+		"STUB_GUARD_RESULT": result,
+		"STUB_GUARD_ARGS": str(tmp_path / "stub_args"),
+		"STUB_GUARD_PAYLOAD": str(tmp_path / "stub_payload.json"),
+		"STUB_GUARD_SWITCH": str(tmp_path / "stub_switch"),
+		"DET_SKIP_FOLLOWUP_GUARD_SUPPORT_DIR": str(support),
+		"REPOSITORY": "o/r",
+		"PR_NUMBER": "77",
+		"PR_BASE_REF": "ai/issue-7",
+		"PR_HEAD_REF": "ai/issue-9399",
+		"PR_HEAD_SHA": HEAD,
+		"DEFAULT_BRANCH": "main",
+		"GH_RETRY_MAX_ATTEMPTS": "1",
+	}
+	for name, value in (env or {}).items():
+		if value is None:
+			run_env.pop(name, None)
+		else:
+			run_env[name] = value
+	harness = (
+		"set -euo pipefail\n"
+		f"source {str(DET_SKIP_GUARD_LIB)!r}\n"
+		"rc=0; det_skip_followup_merge_guard || rc=$?\n"
+		'echo "RC=${rc} RESULT=${DET_SKIP_FOLLOWUP_GUARD_RESULT}"\n'
+	)
+	proc = subprocess.run(["bash", "-c", harness], env=run_env, text=True, capture_output=True, timeout=60)
+	calls = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
+	assert sorted(p.name for p in scratch.iterdir()) == [], "temp payload left behind"
+	return proc, calls
+
+
+def test_det_skip_followup_guard_allow_returns_zero(tmp_path: Path) -> None:
+	proc, calls = _det_skip_guard(tmp_path, "allow")
+	assert proc.returncode == 0, proc.stderr
+	assert "RC=0 RESULT=allow" in proc.stdout.splitlines()
+	assert "SINGLE_ISSUE_SECURITY_PASS mode=followup_guard stub=1" in proc.stdout.splitlines()
+	assert "AUTOFIX_DET_SKIP_MERGE_BOUND" not in proc.stdout
+	assert (tmp_path / "stub_args").read_text(encoding="utf-8").strip() == "followup-guard"
+	payload = json.loads((tmp_path / "stub_payload.json").read_text(encoding="utf-8"))
+	assert payload["base"] == {"ref": "ai/issue-7", "repo": {"default_branch": "main"}}
+	assert payload["head"] == {"ref": "ai/issue-9399", "sha": HEAD}
+	assert payload["state"] == "open" and payload["number"] == 77
+	# Unset kill switch reaches the guard as empty, which keeps it on.
+	assert (tmp_path / "stub_switch").read_text(encoding="utf-8").strip() == ""
+	assert calls == []
+
+
+@pytest.mark.parametrize("result, expected", [("refuse", "refuse"), ("unverifiable", "unverifiable"), ("bogus", "unavailable"), ("", "unavailable")])
+def test_det_skip_followup_guard_non_allow_refuses(tmp_path: Path, result: str, expected: str) -> None:
+	proc, _calls = _det_skip_guard(tmp_path, result)
+	assert proc.returncode == 0, proc.stderr
+	assert f"RC=1 RESULT={expected}" in proc.stdout.splitlines()
+	assert f"AUTOFIX_DET_SKIP_MERGE_BOUND pr=77 head_sha={HEAD} action=refuse reason=security_followup_guard_{expected}" in proc.stdout.splitlines()
+	assert sum(line.startswith("::warning::") for line in proc.stdout.splitlines()) == 1
+
+
+@pytest.mark.parametrize("env", [{"PR_BASE_REF": ""}, {"DEFAULT_BRANCH": ""}, {"PR_BASE_REF": None}, {"DEFAULT_BRANCH": None}])
+def test_det_skip_followup_guard_missing_input_fails_closed(tmp_path: Path, env: dict) -> None:
+	proc, _calls = _det_skip_guard(tmp_path, "allow", env=env)
+	assert "RC=1 RESULT=unavailable" in proc.stdout.splitlines()
+	assert "reason=security_followup_guard_unavailable" in proc.stdout
+	assert not (tmp_path / "stub_args").exists()
+
+
+def test_det_skip_followup_guard_missing_script_fails_closed(tmp_path: Path) -> None:
+	proc, _calls = _det_skip_guard(tmp_path, "allow", stub=False)
+	assert "RC=1 RESULT=unavailable" in proc.stdout.splitlines()
+	assert "reason=security_followup_guard_unavailable" in proc.stdout
+
+
+def test_det_skip_followup_guard_passes_explicit_kill_switch(tmp_path: Path) -> None:
+	_proc, _calls = _det_skip_guard(tmp_path, "allow", env={"SINGLE_ISSUE_SECURITY_PASS_ENABLED": "false"})
+	assert (tmp_path / "stub_switch").read_text(encoding="utf-8").strip() == "false"
+
+
+@pytest.mark.parametrize("base", ["main", "orchestrator/project-9"])
+def test_det_skip_followup_guard_real_guard_default_or_integration_base_makes_no_call(tmp_path: Path, base: str) -> None:
+	proc, calls = _det_skip_guard(tmp_path, support=ROOT / "scripts", env={"PR_BASE_REF": base})
+	assert "RC=0 RESULT=allow" in proc.stdout.splitlines(), proc.stdout + proc.stderr
+	assert ("reason=default_base" if base == "main" else "reason=integration_base") in proc.stdout
+	assert calls == []
+
+
+def test_det_skip_followup_guard_real_guard_refuses_into_clean_head(tmp_path: Path) -> None:
+	(tmp_path / "comments.json").write_text(json.dumps([_comment(_marker("clean", HEAD, 2))]), encoding="utf-8")
+	(tmp_path / "head_prs.json").write_text(json.dumps([PARENT_PR]), encoding="utf-8")
+	proc, calls = _det_skip_guard(tmp_path, support=ROOT / "scripts", env={"FAKE_GH_COMMENTS": str(tmp_path / "comments.json"), "FAKE_GH_HEAD_PRS": str(tmp_path / "head_prs.json")})
+	assert "RC=1 RESULT=refuse" in proc.stdout.splitlines(), proc.stdout + proc.stderr
+	assert "reason=parent_head_clean" in proc.stdout
+	assert f"AUTOFIX_DET_SKIP_MERGE_BOUND pr=77 head_sha={HEAD} action=refuse reason=security_followup_guard_refuse" in proc.stdout
+	assert ["api", "--paginate", "repos/o/r/pulls?state=open&head=o:ai%2Fissue-7&per_page=100"] in calls
+	assert not any(call[:2] == ["pr", "merge"] for call in calls)
+
+
+def test_det_skip_followup_guard_library_has_no_expressions() -> None:
+	text = DET_SKIP_GUARD_LIB.read_text(encoding="utf-8")
+	assert "${{" not in text
+	assert os.access(DET_SKIP_GUARD_LIB, os.X_OK)
+
+
+def _det_skip_merge_job_text() -> str:
+	"""The deterministic-skip-merge job, up to the next top-level job key."""
+	text = expanded_review_autofix_text()
+	start = text.index("\n  deterministic-skip-merge:\n") + 1
+	match = re.search(r"\n  [A-Za-z0-9_-]+:\n", text[start:])
+	return text[start: start + match.start()] if match else text[start:]
+
+
+def test_det_skip_merge_step_runs_followup_guard_before_both_auto_merges() -> None:
+	job = _det_skip_merge_job_text()
+	for method, indent in (("--merge", " " * 14), ("--squash", " " * 12)):
+		merge = f'{indent}elif gh_retry gh pr merge "${{PR_NUMBER}}" --repo "${{REPOSITORY}}" {method} --auto --match-head-commit "${{PR_HEAD_SHA}}"; then\n'
+		assert job.count(merge) == 1, method
+		guard = (
+			f"{indent}elif ! det_skip_followup_merge_guard; then\n"
+			f'{indent}  auto_merge_summary="REFUSED (security follow-up guard: ${{DET_SKIP_FOLLOWUP_GUARD_RESULT:-unavailable}})"\n'
+		)
+		assert guard + merge in job, method
+		# After the required-checks wait and the post-wait freshness check.
+		before = job[: job.index(guard + merge)]
+		assert before.rindex("_pr_wait_for_required_checks") < before.rindex("_pr_base_fresh_for_merge")
+	assert job.count("elif ! det_skip_followup_merge_guard; then") == 2
+	# Fail-closed stub first; the verified library replaces it.
+	stub = job.index("          det_skip_followup_merge_guard() {\n")
+	verified = job.index("            freshness_helper_verified=true\n")
+	source = job.index("              source .codex-freshness-src/scripts/review_autofix_step_det_skip_followup_guard.sh\n")
+	assert stub < verified < source
+	assert "reason=security_followup_guard_unavailable" in job[stub:verified]
+	assert "            scripts/review_autofix_step_det_skip_followup_guard.sh\n" in job
+	step = job[job.index("      - name: Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge\n"):]
+	step_env = step[: step.index("        run: |\n")]
+	assert "          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}\n" in step_env
+	assert "          SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED }}\n" in step_env
+
+
+def test_review_job_forwards_raw_followup_guard_kill_switch() -> None:
+	text = REVIEW.read_text(encoding="utf-8")
+	auto = text.index("      - name: Enable auto-merge on PR\n")
+	auto_env = text[auto: text.index("        run: |\n", auto)]
+	assert auto_env.count("SINGLE_ISSUE_SECURITY_PASS_ENABLED:") == 1
+	assert "          SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED }}\n" in auto_env
+	judge = text.index("      - name: Review-blocked judge decision\n        id: rb_judge\n")
+	judge_env = text[judge: text.index("        run: |\n", judge)]
+	assert "          SINGLE_PASS_FOLLOWUP_GUARD_SWITCH: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED }}\n" in judge_env
+	# The judge's own security-pass setting keeps its `false` default.
+	assert "          SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}\n" in judge_env
+
+
+@pytest.mark.parametrize("result, merged", [("allow", True), ("refuse", False), ("unverifiable", False)])
+def test_det_skip_squash_segment_merges_only_on_allow(tmp_path: Path, result: str, merged: bool) -> None:
+	job = _det_skip_merge_job_text()
+	# The squash site sits at 12 spaces; anchor on its line start so the
+	# deeper `--merge` site's identical text does not match.
+	start = job.index("\n            elif ! det_skip_followup_merge_guard; then\n            ") + 1
+	tail = '              echo "::warning::Could not enable auto-merge on PR #${PR_NUMBER}. Check that \'Allow auto-merge\' is enabled in repo settings and branch protection is configured."\n            fi\n'
+	end = job.index(tail, start) + len(tail)
+	segment = textwrap.dedent("            if false; then :\n" + job[start:end])
+	support = tmp_path / "support"
+	support.mkdir()
+	script = support / "review_single_issue_security_pass.sh"
+	script.write_text(STUB_GUARD, encoding="utf-8")
+	script.chmod(0o755)
+	log = tmp_path / "merge.log"
+	harness = (
+		"set -euo pipefail\n"
+		f'gh_retry() {{ printf \'%s\\n\' "$*" >> {str(log)!r}; return 0; }}\n'
+		f"source {str(DET_SKIP_GUARD_LIB)!r}\n"
+		"auto_merge_ready_labels_allowed=false\n"
+		+ segment
+		+ 'echo "LABELS=${auto_merge_ready_labels_allowed} SUMMARY=${auto_merge_summary}"\n'
+	)
+	env = {
+		"PATH": os.environ["PATH"],
+		"TMPDIR": str(tmp_path),
+		"STUB_GUARD_RESULT": result,
+		"STUB_GUARD_ARGS": str(tmp_path / "a"),
+		"STUB_GUARD_PAYLOAD": str(tmp_path / "p"),
+		"STUB_GUARD_SWITCH": str(tmp_path / "s"),
+		"DET_SKIP_FOLLOWUP_GUARD_SUPPORT_DIR": str(support),
+		"REPOSITORY": "o/r",
+		"PR_NUMBER": "77",
+		"PR_BASE_REF": "ai/issue-7",
+		"PR_HEAD_REF": "ai/issue-9399",
+		"PR_HEAD_SHA": HEAD,
+		"DEFAULT_BRANCH": "main",
+	}
+	proc = subprocess.run(["bash", "-c", harness], env=env, text=True, capture_output=True, timeout=60)
+	assert proc.returncode == 0, proc.stderr
+	merges = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+	if merged:
+		assert merges == [f"gh pr merge 77 --repo o/r --squash --auto --match-head-commit {HEAD}"]
+		assert "LABELS=true SUMMARY=ENABLED (squash)" in proc.stdout.splitlines()
+	else:
+		assert merges == []
+		assert f"LABELS=false SUMMARY=REFUSED (security follow-up guard: {result})" in proc.stdout.splitlines()
 
 
 def test_followup_merge_guard_honours_explicit_kill_switch(tmp_path: Path) -> None:
 	result, calls, _ = _guard(tmp_path, [_comment(_marker("clean", HEAD, 2))], env={"SINGLE_ISSUE_SECURITY_PASS_ENABLED": "false"})
 	assert "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=allow" in result.stdout.splitlines()
 	assert "reason=disabled" in result.stdout and calls == []
-	# Unset keeps the guard on: the auto-merge step does not pass the variable.
+	# Unset keeps the guard on: the step envs pass the raw repository variable.
 	result, _, _ = _guard(tmp_path, [_comment(_marker("clean", HEAD, 2))], env={"SINGLE_ISSUE_SECURITY_PASS_ENABLED": None})
 	assert "SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=refuse" in result.stdout.splitlines()
 
