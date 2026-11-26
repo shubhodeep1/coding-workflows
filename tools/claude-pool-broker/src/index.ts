@@ -75,8 +75,10 @@ export interface Env {
 	/**
 	 * Off switch for asking every ANCESTOR_BRANCHES branch after an unavailable
 	 * compare (issue #10172). Unset, empty or `true` (any case) keeps it on;
-	 * `false` (any case) restores the old stop-at-first-unavailable loop; any
-	 * other value also turns it off and logs a warning.
+	 * `false` (any case) restores the old stop-at-first-unavailable loop. A
+	 * boolean `true`/`false` (wrangler.toml [vars]) is honoured silently. Any
+	 * other value (an unrecognised string or another non-string type) also
+	 * turns it off and logs a warning.
 	 */
 	BROKER_SHA_CHECK_ALL_BRANCHES_ENABLED?: string;
 	/** ChatGPT usage gate in (0, 1]; DEFAULT_CHATGPT_GATE when unset or invalid. */
