@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":10166,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/10166\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/10167\",\"pr_number\":10167,\"branch\":\"ai/issue-10166\",\"run_id\":\"45821187165\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/45821187165\",\"changed_files\":[\".github/workflows/review_autofix.yml\",\"README.md\",\"agents.d/10166-review-autofix-size-headroom.md\",\"agents.md\",\"changelog.d/10166-review-autofix-size-headroom.md\",\"docs/INVENTORY.md\",\"scripts/ci_budget_watch.py\",\"scripts/review_autofix_step_mark_review_blocked_exhaustion.sh\",\"scripts/review_autofix_step_push_pending_commits.sh\",\"scripts/review_autofix_step_static_context.sh\",\"scripts/review_autofix_step_telegram_editor_noop_suspicious.sh\",\"scripts/review_autofix_step_telegram_rb_judge_decision.sh\",\"scripts/stage_workflow_support.sh\",\"tests/review_autofix_step_scripts.py\",\"tests/test_alert_levels_human_only.py\",\"tests/test_ci_budget_watch.py\",\"tests/test_gh_pr_cached_read.py\",\"tests/test_implement_step_scripts_contract.py\",\"tests/test_orchestrate_poll_noop_suspicious_recovery.py\",\"tests/test_review_autofix_provider_outage_contract.py\",\"tests/test_review_autofix_rb_judge_crash_alert.py\",\"tests/test_review_autofix_review_pipeline_contract.py\",\"tests/test_review_rb_judge_draft_skip.py\",\"tests/test_review_rb_judge_head_binding.py\",\"tests/test_review_rb_judge_security_pass.py\",\"tests/test_test_and_mark_stable_step_scripts_contract.py\",\"tests/test_update_workflows_template_gate.py\",\"tests/test_workflow_untrusted_input_contract.py\"]}",
+  "fingerprint": "09e7f00306d508701d4f9ac881609e08c1903e568f05c8113963e54541358ede",
+  "lineage": {
+    "issue_number": 10166,
+    "parent_ids": [],
+    "pr_number": 10167,
+    "run_id": "45821187165",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45821187165",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/10167"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261126142248_18f9dabd77",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10166,
+    "level": "run",
+    "pr_number": 10167,
+    "run_id": "45821187165"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #10166: https://github.com/shubhodeep1/coding-workflows/pull/10167",
+  "timestamps": {
+    "created_at": "2026-11-26T14:22:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
