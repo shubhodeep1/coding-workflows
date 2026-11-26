@@ -1,0 +1,12 @@
+<!-- changelog: fixed -->
+- **Standalone stall recovery now merges a ready-to-merge PR only after its required checks pass, and says why it did not.** The `attempt_merge` arm of `run_standalone_stall_recovery` (`scripts/orchestrate_poll_process.sh`) now follows the review auto-merge rule: PR open, mergeable and a 40-hex head, then the base-freshness gate, then `_pr_wait_for_required_checks <pr> <head> <base_ref> 0`, then the head-bound merge.
+
+Since #9528 Phase 4, `ci.yml` has no `pull_request` trigger, so the required `lint` check exists on a head only after a final-CI dispatch. The review path makes that dispatch; the standalone arm did not. It called the legacy two-argument `_pr_checks_completed` and dropped merge failures with `|| true`, so branch protection refused the merge and the arm reported only "attempted merge retry" (PR #9564, #9520). Both stall-recovery steps in `orchestrate_poll.yml` now set `REVIEW_FINAL_CI_WORKFLOW` to `ci.yml` in this repository (empty for consumers), so the wait dispatches the missing final CI once, and pass `AUTO_MERGE_REQUIRED_CI_CHECK` and `AUTO_MERGE_WAIT_WORKFLOWS` as the review path does. A fork or deleted-fork head never gets that dispatch. The first refusal is recorded as `attempt_merge_refused_<reason>` and logged as `STALL_MERGE_REFUSAL issue= pr= head= reason=`. A timeout while final CI is in flight does not spend recovery budget; a merge-lease wait keeps `attempt_merge_skipped_merge_lease_wait`.
+
+| The numbers that matter | Value |
+| --- | --- |
+| Refusal reasons | 6 (`state_not_open`, `not_mergeable`, `bad_head_sha`, `base_not_fresh`, `checks_incomplete`, `merge_call_failed`) |
+| Extra API reads per merge attempt | 0 for the PR (head ref read from the JSON already fetched); the wait's check-runs, protection and runs reads |
+| Final-CI dispatches per head | at most 1 (deduplicated by `_pr_ensure_final_ci`) |
+
+The poller captures `REVIEW_FINAL_CI_WORKFLOW` at startup and clears it for every other path, so the noop-suspicious gate D wait and the base-freshness branch update dispatch exactly as before. On by default. Set the repository variable `STALL_MERGE_REQUIRED_CHECKS_ENABLED=false` to restore the previous `attempt_merge` chain exactly; any other value than unset, empty or `true` also turns it off and logs a warning. What this means for consumer repos: after the next `@stable` sync, a standalone merge retry refuses a head whose required checks have not passed and logs the reason; no final CI is dispatched for consumers.

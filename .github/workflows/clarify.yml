@@ -43,7 +43,7 @@ jobs:
       (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && !contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, fromJson('"/reclarify\n<!-- ai:pr-dependency-released:"'))) ||
       (github.event_name == 'issue_comment' && github.event.action == 'created' && github.event.issue.pull_request == null && github.event.comment.user.type == 'User' && !contains(fromJson('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association) && startsWith(github.event.comment.body, fromJson('"/reclarify\n<!-- ai:partial-delivery-restart:"')))
       )
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
     timeout-minutes: 120
     concurrency:
       # NOTE: cancel-in-progress: true means if a /reclarify comment arrives
@@ -715,6 +715,20 @@ jobs:
 
           rm -rf .codex-workflow-src-main
 
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        if: steps.refctx.outputs.label_missing_hold != 'true'
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: ${{ env.SUPPORT_SCRIPTS_DIR || 'scripts' }}/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
+
       - name: Create runtime workspace
         if: steps.refctx.outputs.label_missing_hold != 'true'
         run: |
@@ -1298,7 +1312,7 @@ jobs:
       - name: Restore semantic cache SQLite
         if: steps.refctx.outputs.label_missing_hold != 'true' && (steps.clarify_route.outputs.skip_codex != 'true' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec')
         continue-on-error: true
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ${{ vars.SEMANTIC_CACHE_SQLITE_PATH || '/tmp/semantic_cache.sqlite3' }}
           key: semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -2078,7 +2092,7 @@ jobs:
       - name: Save semantic cache SQLite
         if: steps.refctx.outputs.label_missing_hold != 'true' && (env.CLAUDE_CAPACITY_WAIT != 'true' && (always() && steps.clarify_route.outputs.skip_codex != 'true' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec' && steps.run_codex.outcome == 'success'))
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ${{ vars.SEMANTIC_CACHE_SQLITE_PATH || '/tmp/semantic_cache.sqlite3' }}
           key: semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -2774,6 +2788,8 @@ jobs:
         if: env.CLAUDE_CAPACITY_WAIT != 'true' && (failure() && github.event_name == 'issue_comment' && github.event.comment.user.type == 'User' && steps.parse_codex.outputs.blocked != 'true' && steps.clarify_route.outputs.is_closed != 'true' && steps.clarify_route.outputs.skip_codex != 'true' && steps.post_questions.outcome != 'success' && steps.post_clear.outcome != 'success')
         env:
           GH_TOKEN: ${{ github.token }}
+          # Issue #9887: GH_TOKEN carries the job token here, not GH_PAT.
+          GH_CALL_COUNTER_TOKEN_KIND: github_token
           SOURCE_COMMENT_ID: ${{ github.event.comment.id }}
           SOURCE_COMMENT_BODY: ${{ github.event.comment.body }}
           SOURCE_ASSOCIATION: ${{ github.event.comment.author_association }}
@@ -2850,20 +2866,6 @@ jobs:
           # pick this up and page when a person is needed.
           tg_send_phase_failure clarify "${MSG}" "DEBUG" "${ISSUE_NUMBER}"
 
-      - name: Record GH_PAT budget at clarify end
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
-          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
-          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_clarify
-        run: |
-          if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" ] && grep -q '^gh_pat_budget()' "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh"; then
-            source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh"
-            gh_pat_budget end clarify clarify "${GH_PAT_BUDGET_FILE}"
-          else
-            echo 'GH_PAT_BUDGET phase=end workflow=clarify job=clarify remaining=unknown reset=unknown used_in_job=unknown'
-          fi
       # Plan item 3e (D1): report every refused (non-capacity) Claude fallback
       # recorded by scripts/ai_engine.sh in this job's RUNNER_TEMP as a
       # workflow-failure-heal dispatch plus one Telegram WARNING. Runs only
@@ -2888,6 +2890,22 @@ jobs:
           else
             echo "::warning::AI_ENGINE_FALLBACK_REPORT skip reason=support_missing"
           fi
+
+      - name: Record GH_PAT budget at clarify end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_clarify
+        run: |
+          if [ -f "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" ] && grep -q '^gh_pat_budget()' "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh"; then
+            source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh"
+            gh_pat_budget end clarify clarify "${GH_PAT_BUDGET_FILE}"
+          else
+            counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+            echo "GH_PAT_BUDGET phase=end workflow=clarify job=clarify remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
+          fi
   heal-report:
     # Workflow failure heal (README "Workflow Failure Heal"): report a failed
     # clarify run to coding-workflows' heal intake, which diagnoses it and opens
@@ -2901,7 +2919,7 @@ jobs:
     if: >-
       always() && needs.clarify.result == 'failure' &&
       !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       id-token: write
@@ -2985,6 +3003,19 @@ jobs:
           persist-credentials: false
           sparse-checkout: scripts
 
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: .codex-workflow-src/scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
+
       - name: Report the failed run to workflow failure heal
         run: |
           set -euo pipefail
@@ -3008,6 +3039,7 @@ jobs:
         env:
           GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_heal_report
         run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
           reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
           remaining=unknown; reset=unknown; used=unknown
           if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
@@ -3019,4 +3051,4 @@ jobs:
               fi
             fi
           fi
-          echo "GH_PAT_BUDGET phase=end workflow=clarify job=heal-report remaining=${remaining} reset=${reset} used_in_job=${used}"
+          echo "GH_PAT_BUDGET phase=end workflow=clarify job=heal-report remaining=${remaining} reset=${reset} used_in_job=${used} ${counter_keys}"

@@ -12,7 +12,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
+from review_autofix_step_scripts import expanded_implement_text, expanded_review_autofix_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -29,7 +29,13 @@ REVIEW_CONFLICT_RESOLVE = REPO_ROOT / "scripts" / "review_conflict_resolve.sh"
 
 def _workflow_doc(path: Path) -> dict[str, object]:
 	# review_autofix.yml sources some step bodies from scripts/; inline them.
-	text = expanded_review_autofix_text() if path == REVIEW_WORKFLOW else path.read_text(encoding="utf-8")
+	if path == REVIEW_WORKFLOW:
+		text = expanded_review_autofix_text()
+	elif path == IMPLEMENT_WORKFLOW:
+		# implement.yml sources two step bodies from scripts/ (#9678); inline them.
+		text = expanded_implement_text()
+	else:
+		text = path.read_text(encoding="utf-8")
 	doc = yaml.safe_load(text)
 	if not isinstance(doc, dict):
 		raise AssertionError(f"Workflow did not parse into a mapping: {path}")
