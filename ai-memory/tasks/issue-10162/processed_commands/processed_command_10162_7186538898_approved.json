@@ -5,13 +5,24 @@
   "entry_id": "processed_command_10162_7186538898_approved",
   "issue_number": 10162,
   "metadata": {
+    "branch": "ai/issue-10162",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      "changelog.d/10162-ci-release-job-budget-move.md",
+      "tests/test_ci_poll_test_sharding.py"
+    ],
+    "issue_number": 10162,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/10162",
+    "pr_number": 10164,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/10164",
+    "run_attempt": "1",
+    "run_id": "45782777103",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/45782777103"
   },
   "run_attempt": 1,
   "run_id": "45782777103",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-26T08:37:48Z",
+  "status": "completed",
+  "timestamp": "2026-11-26T09:28:27Z",
   "workflow": "implement"
 }
