@@ -94,7 +94,11 @@ def _alt_wait_run_body(wf: str) -> str:
 		if line.strip() == "":
 			body.append("")
 			continue
-		assert line.startswith("          "), line
+		# The run block ends at the first line indented less than its body,
+		# e.g. a step-level comment before the next step (issue #10037 put
+		# the gate-cancel step's comment there).
+		if not line.startswith("          "):
+			break
 		body.append(line[10:])
 	return "\n".join(body) + "\n"
 
