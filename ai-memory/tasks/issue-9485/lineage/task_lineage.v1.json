@@ -9,6 +9,11 @@
       "pr_number": 9510,
       "state": "merged",
       "url": "https://github.com/shubhodeep1/coding-workflows/pull/9510"
+    },
+    {
+      "pr_number": 10006,
+      "state": "merged",
+      "url": "https://github.com/shubhodeep1/coding-workflows/pull/10006"
     }
   ],
   "runs": [
@@ -25,9 +30,16 @@
       "status": "merged",
       "timestamp": "2026-11-23T14:13:23Z",
       "workflow": "Internal: Issue-PR Status Sync"
+    },
+    {
+      "run_attempt": 1,
+      "run_id": "45913482474",
+      "status": "merged",
+      "timestamp": "2026-11-26T23:56:05Z",
+      "workflow": "Internal: Issue-PR Status Sync"
     }
   ],
   "schema_version": "task_lineage.v1",
   "state": "merged",
-  "updated_at": "2026-11-23T14:13:23Z"
+  "updated_at": "2026-11-26T23:56:05Z"
 }
