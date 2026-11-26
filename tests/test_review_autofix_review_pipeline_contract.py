@@ -11322,3 +11322,73 @@ def test_repeated_reviewer_failure_labels_fallback_issue_before_the_pr(tmp_path:
 
 if __name__ == "__main__":
 	raise SystemExit(main())
+
+
+# --- deterministic-skip final CI on the no-wait paths (issue #10151) ---------
+
+_DET_SKIP_MERGE_STEP = "Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge"
+
+
+def _det_skip_ensure_final_ci_function(block: str) -> str:
+	start = block.index("          deterministic_skip_ensure_final_ci()\n")
+	end = block.index("\n          }\n", start) + len("\n          }\n")
+	return textwrap.dedent(block[start:end])
+
+
+def test_det_skip_merge_requests_final_ci_when_no_wait_runs() -> None:
+	block = _step_block(_DET_SKIP_MERGE_STEP)
+	assert "deterministic_skip_ensure_final_ci()\n" in block
+	# The fail-closed inline stub stays: an unverified checkout never arms
+	# auto-merge without the wait.
+	assert "          _pr_wait_for_required_checks() {\n            PR_CHECKS_WAIT_OUTCOME=\"unavailable\"" in block
+	# Called right after the head refresh on both paths that skip the wait.
+	no_auto = re.search(
+		r'elif \[ "\$\{ENABLE_AUTO_MERGE\}" != "true" \]; then\n\s+if deterministic_skip_head_is_current; then\n'
+		r'\s+auto_merge_ready_labels_allowed="true"\n\s+deterministic_skip_ensure_final_ci\n',
+		block,
+	)
+	assert no_auto, "ENABLE_AUTO_MERGE != true path must request final CI after the head refresh"
+	suppressed_at = block.index('auto_merge_summary="SUPPRESSED (forward-merge fallback head ref')
+	suppressed = block[block.rindex("            else\n", 0, suppressed_at):suppressed_at]
+	assert re.search(
+		r'if deterministic_skip_head_is_current; then\n\s+auto_merge_ready_labels_allowed="true"\n\s+deterministic_skip_ensure_final_ci\n',
+		suppressed,
+	), "forward-merge suppressed path must request final CI after the head refresh"
+	# Exactly two call sites plus the definition; none on the wait paths
+	# (the wait starts final CI itself, and a second request could dispatch twice).
+	assert len(re.findall(r"^\s+deterministic_skip_ensure_final_ci$", block, re.MULTILINE)) == 2
+	squash_from = block.index('echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=squash"')
+	squash_to = block.index('--squash --auto --match-head-commit "${PR_HEAD_SHA}"')
+	assert "deterministic_skip_ensure_final_ci" not in block[squash_from:squash_to]
+	merge_from = block.index('echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=merge_commit"')
+	merge_to = block.index('--merge --auto --match-head-commit "${PR_HEAD_SHA}"')
+	assert "deterministic_skip_ensure_final_ci" not in block[merge_from:merge_to]
+	# The docs-only classifier reaches the verified support checkout.
+	assert "            scripts/ci_docs_only_paths.sh\n" in _job_block("deterministic-skip-merge")
+
+
+@pytest.mark.parametrize("workflow,verified,library,expected", [
+	("ci.yml", "true", True, "CALL o/r 42 " + "a" * 40 + " docs/x"),
+	("ci.yml", "false", True, "outcome=dispatch_failed reason=library_unavailable"),
+	("ci.yml", "true", False, "outcome=dispatch_failed reason=library_unavailable"),
+	("", "true", True, ""),
+])
+def test_det_skip_ensure_final_ci_behaviour(workflow: str, verified: str, library: bool, expected: str) -> None:
+	function = _det_skip_ensure_final_ci_function(_step_block(_DET_SKIP_MERGE_STEP))
+	stub = '_pr_ensure_final_ci() { echo "CALL $*"; return 1; }\n' if library else ""
+	script = f"set -e\nfreshness_helper_verified={verified}\n{stub}{function}\ndeterministic_skip_ensure_final_ci\necho RC=$?\n"
+	env = {
+		"PATH": os.environ.get("PATH", ""),
+		"REVIEW_FINAL_CI_WORKFLOW": workflow,
+		"REPOSITORY": "o/r",
+		"PR_NUMBER": "42",
+		"PR_HEAD_SHA": "a" * 40,
+		"PR_HEAD_REF": "docs/x",
+	}
+	proc = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=False)
+	assert proc.returncode == 0, proc.stderr
+	assert proc.stdout.rstrip().endswith("RC=0"), proc.stdout
+	if expected:
+		assert expected in proc.stdout, proc.stdout
+	else:
+		assert proc.stdout.strip() == "RC=0", proc.stdout

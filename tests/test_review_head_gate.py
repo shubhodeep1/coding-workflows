@@ -106,6 +106,44 @@ def test_dispatch_skip_status_is_bound_to_gate_head(tmp_path: Path) -> None:
 	assert not any("--disable-auto" in call for call in calls)
 
 
+def test_dispatch_skip_status_names_the_skip_reason(tmp_path: Path) -> None:
+	# Issue #10151: the one success POST names the gate's skip reason.
+	result, calls = _run(tmp_path, EVENT_NAME="workflow_dispatch", EVENT_ACTION="", DETERMINISTIC_SKIP="true",
+		GATE_HEAD_SHA=NEW_HEAD, GATE_DET_SKIP_REASON="generated_chore")
+	assert result.returncode == 0, result.stderr
+	posts = _statuses(calls)
+	assert len(posts) == 1
+	assert f"repos/o/r/statuses/{NEW_HEAD}" in posts[0]
+	assert "state=success" in posts[0]
+	assert "description=deterministic skip: generated_chore" in posts[0]
+
+
+def test_dispatch_skip_without_a_reason_keeps_the_legacy_text(tmp_path: Path) -> None:
+	result, calls = _run(tmp_path, EVENT_NAME="workflow_dispatch", EVENT_ACTION="", DETERMINISTIC_SKIP="true",
+		GATE_HEAD_SHA=NEW_HEAD, GATE_DET_SKIP_REASON="")
+	assert result.returncode == 0, result.stderr
+	posts = _statuses(calls)
+	assert len(posts) == 1
+	assert "description=deterministic skip evaluated this head" in posts[0]
+
+
+def test_skip_awaiting_the_security_pass_posts_no_success(tmp_path: Path) -> None:
+	# The workflow passes DETERMINISTIC_SKIP=false while the security pass is
+	# still required; the reason alone must not post success.
+	result, calls = _run(tmp_path, EVENT_NAME="workflow_dispatch", EVENT_ACTION="", DETERMINISTIC_SKIP="false",
+		GATE_DET_SKIP_REASON="doc_only")
+	assert result.returncode == 0, result.stderr
+	assert not any("state=success" in call for call in _statuses(calls))
+
+
+def test_review_autofix_passes_the_skip_reason_to_the_gate() -> None:
+	text = (ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	step = text[text.index("        id: head_gate\n"):]
+	step = step[:step.index("        run: |")]
+	assert "GATE_DET_SKIP_REASON: ${{ steps.evaluate.outputs.det_skip_reason }}" in step
+	assert "DETERMINISTIC_SKIP: ${{ steps.evaluate.outputs.det_skip_security_pass != 'true' && steps.evaluate.outputs.deterministic_skip || 'false' }}" in step
+
+
 def test_changed_event_head_marks_both_heads_pending(tmp_path: Path) -> None:
 	result, calls = _run(tmp_path, PR_EVENT_HEAD_SHA=NEW_HEAD, GATE_AUTO_MERGE_ENABLED="false")
 	assert result.returncode == 0

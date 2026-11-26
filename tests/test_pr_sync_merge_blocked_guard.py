@@ -257,6 +257,54 @@ def test_direct_merge_site_counts_are_pinned() -> None:
 	assert len(_direct_merge_lines(POLLER)) == 3
 
 
+# Issue #10151: every other `gh pr merge` line without --auto in workflows,
+# templates and scripts is either text (not a merge) or exempt with a reason.
+# Path (relative to the repo root) -> (expected hit count, reason).
+DIRECT_MERGE_EXEMPT: dict[str, tuple[int, str]] = {
+	".github/workflows/claude-engine-smoke.yml": (
+		3,
+		"text: the smoke's deny-list assert, its prompt and its tool-call filter; no merge runs",
+	),
+	".github/workflows/review_autofix.yml": (1, "text: a Telegram alert message; no merge runs"),
+	"scripts/review_autofix_step_post_review_blocked_comment.sh": (2, "text: the review-blocked PR comment body"),
+	".github/workflows/update_workflows.yml": (
+		1,
+		"consumer repos only, legacy UPDATER_PR_DELIVERY_ENABLED=false path, after GitHub refuses --auto "
+		"with 'clean status' or 'auto-merge not allowed'; never merges into this repo's ruleset-protected main",
+	),
+}
+GUARDED_DIRECT_MERGE_FILES = (JUDGE, POLLER)
+
+
+def _direct_merge_scan_paths() -> list[Path]:
+	paths: list[Path] = []
+	for pattern in (".github/workflows/*.yml", ".github/workflows/*.yaml", "workflow-templates/*.yml", "workflow-templates/*.yaml"):
+		paths.extend(REPO_ROOT.glob(pattern))
+	paths.extend((REPO_ROOT / "scripts").rglob("*.sh"))
+	return sorted(set(paths))
+
+
+def test_no_unguarded_direct_merge_into_the_default_branch() -> None:
+	# A direct merge with the admin GH_PAT bypasses ruleset 25851281
+	# (ai-review/head-gate + ci/final). The guarded files are covered by the
+	# guard-window test above; anything else must be exempt with a reason.
+	found: dict[str, int] = {}
+	for path in _direct_merge_scan_paths():
+		if path in GUARDED_DIRECT_MERGE_FILES:
+			continue
+		hits = _direct_merge_lines(path)
+		if hits:
+			found[path.relative_to(REPO_ROOT).as_posix()] = len(hits)
+	unexpected = {path: count for path, count in found.items() if path not in DIRECT_MERGE_EXEMPT}
+	assert not unexpected, (
+		f"direct (non --auto) gh pr merge outside the guarded files: {unexpected}; "
+		"arm --auto --match-head-commit, put it behind _pr_sync_merge_blocked_guard, or exempt it with a reason"
+	)
+	for path, (count, reason) in DIRECT_MERGE_EXEMPT.items():
+		assert reason.strip(), path
+		assert found.get(path, 0) == count, f"{path}: expected {count} exempt direct-merge line(s), found {found.get(path, 0)}"
+
+
 def test_judge_wrapper_fails_closed_without_the_library() -> None:
 	text = JUDGE.read_text(encoding="utf-8")
 	start = text.index("rb_judge_sync_merge_guard() {")

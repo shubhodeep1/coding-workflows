@@ -807,6 +807,8 @@ jobs:
           # #8333: a skip whose security pass is still required gets its
           # success status from the skip job, only after hold=false.
           DETERMINISTIC_SKIP: ${{ steps.evaluate.outputs.det_skip_security_pass != 'true' && steps.evaluate.outputs.deterministic_skip || 'false' }}
+          # #10151: the skip success names the reason ("deterministic skip: <reason>").
+          GATE_DET_SKIP_REASON: ${{ steps.evaluate.outputs.det_skip_reason }}
           REVIEW_HEAD_GATE_STATUS_ENABLED: ${{ vars.REVIEW_HEAD_GATE_STATUS_ENABLED || 'true' }}
           REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED: ${{ vars.REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED || 'true' }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -1434,6 +1436,21 @@ jobs:
             echo "::warning::Merge-base freshness helper checkout unavailable or unverified (outcome=${FRESHNESS_HELPER_CHECKOUT_OUTCOME:-unset}); freshness gate defers and auto-merge refused (required checks cannot be verified)."
           fi
 
+          # #10151: paths that authorize the head without the required-checks
+          # wait (which starts final CI itself) request final CI here, so the
+          # head still gets ci/final (docs-only when every file qualifies).
+          # Mirrors review_enable_auto_merge_ensure_final_ci.
+          deterministic_skip_ensure_final_ci()
+          {
+            [ -n "${REVIEW_FINAL_CI_WORKFLOW:-}" ] || return 0
+            if [ "${freshness_helper_verified}" != "true" ] || ! type _pr_ensure_final_ci >/dev/null 2>&1; then
+              echo "::warning::REVIEW_FINAL_CI pr=${PR_NUMBER:-?} head=${PR_HEAD_SHA:-?} outcome=dispatch_failed reason=library_unavailable"
+              return 0
+            fi
+            _pr_ensure_final_ci "${REPOSITORY}" "${PR_NUMBER}" "${PR_HEAD_SHA}" "${PR_HEAD_REF}" || true
+            return 0
+          }
+
           write_deterministic_skip_summary()
           {
             {
@@ -1506,6 +1523,7 @@ jobs:
           elif [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
             if deterministic_skip_head_is_current; then
               auto_merge_ready_labels_allowed="true"
+              deterministic_skip_ensure_final_ci
             fi
             echo "Auto-merge disabled (ENABLE_AUTO_MERGE != true) — leaving PR for manual merge."
           elif ! [[ "${PR_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
@@ -1565,6 +1583,7 @@ jobs:
             else
               if deterministic_skip_head_is_current; then
                 auto_merge_ready_labels_allowed="true"
+                deterministic_skip_ensure_final_ci
               fi
               auto_merge_summary="SUPPRESSED (forward-merge fallback head ref '${PR_HEAD_REF}', FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true')"
               echo "PR #${PR_NUMBER} head ref '${PR_HEAD_REF}' matches forward-merge fallback pattern '^auto/forward-merge-stable-' and FORWARD_MERGE_FALLBACK_AUTO_MERGE != 'true' — auto-merge suppressed on the deterministic-skip path. Merge manually via 'Create a merge commit' (NOT squash/rebase) so stable's commits remain in main's ancestry; promote-main-to-stable.yml's pre-flight 'git merge-base --is-ancestor HEAD origin/main' check refuses otherwise."

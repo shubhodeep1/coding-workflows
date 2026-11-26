@@ -202,7 +202,14 @@ review_head_gate_main()
 		fi
 	fi
 	if [ "${DETERMINISTIC_SKIP:-false}" = "true" ]; then
-		review_head_gate_post_status "${REPOSITORY:-}" "${GATE_HEAD_SHA:-}" success "deterministic skip evaluated this head"
+		# #10151: name the gate's skip reason (a fixed token set by the gate)
+		# in the one success POST; empty keeps the legacy text. The status
+		# helper strips the text to printable ASCII and 140 characters.
+		local det_skip_description="deterministic skip evaluated this head"
+		if [ -n "${GATE_DET_SKIP_REASON:-}" ]; then
+			det_skip_description="deterministic skip: ${GATE_DET_SKIP_REASON}"
+		fi
+		review_head_gate_post_status "${REPOSITORY:-}" "${GATE_HEAD_SHA:-}" success "${det_skip_description}"
 	elif [ -n "${GATE_HEAD_SHA:-}" ] && [ -n "${GATE_HEAD_REF:-}" ]; then
 		# Posted after any pending status above for the same SHA, so it wins.
 		# The early gate call passes no GATE_HEAD_REF, so it skips this (no

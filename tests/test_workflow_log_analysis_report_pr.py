@@ -5,8 +5,9 @@ The `Commit and push report` step (id `commit_report`) of job
 `analyze-commit-notify` used to push the new report straight to the dispatch
 branch. With `WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR` (default `true`) it now
 pushes a run-unique `auto/workflow-log-analysis-report-<run>-<attempt>`
-branch, opens a PR, and tries a direct squash merge, then auto-merge, then
-leaves the PR open. `false` keeps the legacy direct push.
+branch, opens a PR, and arms auto-merge (`--auto --squash
+--match-head-commit`; never a direct merge, #10151), else leaves the PR open.
+`false` keeps the legacy direct push.
 
 These tests run the step's real `run:` body with bash against a temporary
 bare origin and a fake `gh` on PATH, plus static checks on the YAML.
@@ -304,10 +305,10 @@ def test_report_pr_default_mode_opens_and_merges_pr() -> None:
 	with tempfile.TemporaryDirectory() as raw:
 		box = _Sandbox(Path(raw))
 		box.write_report()
-		proc = box.run()
+		proc = box.run(FAKE_GH_AUTO_LANDS="1")
 		assert proc.returncode == 0, proc.stderr + proc.stdout
 		head = _git(box.work, "rev-parse", "HEAD", env=box.git_env)
-		# The (faked) PR merge delivers the report; the step checks it landed.
+		# The (faked) auto-merge delivers the report; the step checks it landed.
 		assert box.origin_has("refs/heads/main", REPORT)
 		# The run branch is deleted after the merge.
 		assert box.origin_ref(f"refs/heads/{PR_BRANCH}") == ""
@@ -316,7 +317,7 @@ def test_report_pr_default_mode_opens_and_merges_pr() -> None:
 		assert calls[0].startswith(f"pr create --base main --head {PR_BRANCH} ")
 		assert f"--title chore: add workflow log analysis report ({REPORT})" in calls[0]
 		assert re.fullmatch(r"[0-9a-f]{40}", head)
-		assert calls[1] == f"pr merge 42 --squash --match-head-commit {head}"
+		assert calls[1] == f"pr merge 42 --auto --squash --match-head-commit {head}"
 		out = box.outputs()
 		assert out["committed"] == "true"
 		assert out["report_file"] == REPORT
@@ -332,14 +333,14 @@ def test_report_pr_default_mode_opens_and_merges_pr() -> None:
 		assert "#" not in body.replace("## Workflow", "")
 
 
-def test_report_pr_queued_direct_merge_is_not_reported_merged() -> None:
+def test_report_pr_armed_auto_merge_is_not_reported_merged() -> None:
 	with tempfile.TemporaryDirectory() as raw:
 		box = _Sandbox(Path(raw))
 		box.write_report()
-		proc = box.run(FAKE_GH_MERGE_QUEUED="1")
+		proc = box.run()
 		assert proc.returncode == 0, proc.stderr + proc.stdout
-		# Accepted into a merge queue but not merged: no pr_merged, and the
-		# head branch is kept so the queued PR is not closed.
+		# Auto-merge armed but not merged yet: no pr_merged, and the head
+		# branch is kept so the pending PR is not closed.
 		assert box.origin_ref("refs/heads/main") == box.base_main
 		assert box.origin_has(f"refs/heads/{PR_BRANCH}", REPORT)
 		calls = box.gh_calls()
@@ -362,7 +363,7 @@ def test_report_pr_auto_merge_drops_purge_deletions() -> None:
 		_git(box.work, "commit", "-q", "-m", "old report", env=box.git_env)
 		_git(box.work, "push", "-q", "origin", "HEAD:main", env=box.git_env)
 		box.write_report()
-		proc = box.run(FAKE_GH_MERGE_RC="1")
+		proc = box.run()
 		assert proc.returncode == 0, proc.stderr + proc.stdout
 		# Auto-merge can land after the purge guard's answer is stale, so the
 		# PR keeps the old report and carries only the new one.
@@ -371,17 +372,17 @@ def test_report_pr_auto_merge_drops_purge_deletions() -> None:
 		assert "WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED reason=auto_merge_pending count=1" in proc.stdout
 		branch_head = box.origin_ref(f"refs/heads/{PR_BRANCH}")
 		calls = box.gh_calls()
-		assert len(calls) == 3, calls
-		assert calls[2] == f"pr merge 42 --auto --squash --match-head-commit {branch_head}", calls
+		assert len(calls) == 2, calls
+		assert calls[1] == f"pr merge 42 --auto --squash --match-head-commit {branch_head}", calls
 		out = box.outputs()
 		assert out["delivery"] == "pr_auto_merge"
 		# The kept doc is not reported as purged.
 		assert out["purged_docs"] == ""
 
 
-def test_report_pr_queued_direct_merge_drops_purge_deletions_first() -> None:
-	# A merge queue accepts the direct merge (exit 0) and lands it later, so
-	# the purge deletions must leave the PR before that merge call too.
+def test_report_pr_landed_auto_merge_keeps_purged_docs() -> None:
+	# Auto-merge lands the PR later, so the purge deletions leave the PR
+	# before the merge request: the landed tree keeps the old doc.
 	old_report = "analysis/workflow-optimization-2020-01-01.md"
 	with tempfile.TemporaryDirectory() as raw:
 		box = _Sandbox(Path(raw))
@@ -392,17 +393,17 @@ def test_report_pr_queued_direct_merge_drops_purge_deletions_first() -> None:
 		_git(box.work, "commit", "-q", "-m", "old report", env=box.git_env)
 		_git(box.work, "push", "-q", "origin", "HEAD:main", env=box.git_env)
 		box.write_report()
-		proc = box.run(FAKE_GH_MERGE_QUEUED="1")
+		proc = box.run(FAKE_GH_AUTO_LANDS="1")
 		assert proc.returncode == 0, proc.stderr + proc.stdout
-		assert box.origin_has(f"refs/heads/{PR_BRANCH}", REPORT)
-		assert box.origin_has(f"refs/heads/{PR_BRANCH}", old_report)
+		assert box.origin_has("refs/heads/main", REPORT)
+		assert box.origin_has("refs/heads/main", old_report)
 		assert "WORKFLOW_LOG_ANALYSIS_PURGE_SKIPPED reason=auto_merge_pending count=1" in proc.stdout
-		branch_head = box.origin_ref(f"refs/heads/{PR_BRANCH}")
+		main_head = box.origin_ref("refs/heads/main")
 		calls = box.gh_calls()
 		assert len(calls) == 2, calls
-		assert calls[1] == f"pr merge 42 --squash --match-head-commit {branch_head}", calls
+		assert calls[1] == f"pr merge 42 --auto --squash --match-head-commit {main_head}", calls
 		out = box.outputs()
-		assert out["delivery"] == "pr_auto_merge"
+		assert out["delivery"] == "pr_merged"
 		assert out["purged_docs"] == ""
 
 
@@ -420,7 +421,7 @@ def test_report_pr_purge_drop_restores_a_doc_git_would_pair_as_a_rename() -> Non
 		_git(box.work, "commit", "-q", "-m", "old report", env=box.git_env)
 		_git(box.work, "push", "-q", "origin", "HEAD:main", env=box.git_env)
 		box.write_report()
-		proc = box.run(FAKE_GH_MERGE_QUEUED="1")
+		proc = box.run()
 		assert proc.returncode == 0, proc.stderr + proc.stdout
 		assert box.origin_has(f"refs/heads/{PR_BRANCH}", REPORT)
 		assert box.origin_has(f"refs/heads/{PR_BRANCH}", old_report)
@@ -430,17 +431,17 @@ def test_report_pr_purge_drop_restores_a_doc_git_would_pair_as_a_rename() -> Non
 		assert box.outputs()["purged_docs"] == ""
 
 
-def test_report_pr_auto_merge_when_direct_merge_refused() -> None:
+def test_report_pr_arms_auto_merge_without_a_direct_merge() -> None:
 	with tempfile.TemporaryDirectory() as raw:
 		box = _Sandbox(Path(raw))
 		box.write_report()
-		proc = box.run(FAKE_GH_MERGE_RC="1")
+		proc = box.run()
 		assert proc.returncode == 0, proc.stderr + proc.stdout
 		assert box.origin_ref("refs/heads/main") == box.base_main
 		assert box.origin_has(f"refs/heads/{PR_BRANCH}", REPORT)
 		calls = box.gh_calls()
-		assert len(calls) == 3, calls
-		assert calls[2].startswith("pr merge 42 --auto --squash --match-head-commit ")
+		assert len(calls) == 2, calls
+		assert calls[1].startswith("pr merge 42 --auto --squash --match-head-commit ")
 		out = box.outputs()
 		assert out["delivery"] == "pr_auto_merge"
 		assert out["report_branch"] == PR_BRANCH
@@ -452,7 +453,7 @@ def test_report_pr_auto_merge_wait_sees_the_report_land() -> None:
 	with tempfile.TemporaryDirectory() as raw:
 		box = _Sandbox(Path(raw))
 		box.write_report()
-		proc = box.run(FAKE_GH_MERGE_RC="1", FAKE_GH_AUTO_LANDS="1", WORKFLOW_LOG_ANALYSIS_REPORT_MERGE_WAIT_MINUTES="1")
+		proc = box.run(FAKE_GH_AUTO_LANDS="1", WORKFLOW_LOG_ANALYSIS_REPORT_MERGE_WAIT_MINUTES="1")
 		assert proc.returncode == 0, proc.stderr + proc.stdout
 		assert box.origin_has("refs/heads/main", REPORT)
 		# The run branch is deleted once the report is on the target branch.
@@ -470,7 +471,7 @@ def test_report_pr_auto_merge_not_landed_warns_about_skipped_audits() -> None:
 	with tempfile.TemporaryDirectory() as raw:
 		box = _Sandbox(Path(raw))
 		box.write_report()
-		proc = box.run(FAKE_GH_MERGE_RC="1")
+		proc = box.run()
 		assert proc.returncode == 0, proc.stderr + proc.stdout
 		assert "deep-audit and api-redundancy are skipped" in proc.stdout
 		assert box.outputs()["delivery"] == "pr_auto_merge"
@@ -498,7 +499,7 @@ def test_report_pr_unrecognized_switch_value_warns_and_uses_pr() -> None:
 	with tempfile.TemporaryDirectory() as raw:
 		box = _Sandbox(Path(raw))
 		box.write_report()
-		proc = box.run(WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR="flase")
+		proc = box.run(WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR="flase", FAKE_GH_AUTO_LANDS="1")
 		assert proc.returncode == 0, proc.stderr + proc.stdout
 		assert "::warning::WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR has an unrecognized value" in proc.stdout
 		assert "flase" not in proc.stdout
@@ -525,7 +526,6 @@ def test_report_pr_merge_wait_clamped_to_job_budget() -> None:
 		started = time.monotonic()
 		# The job started an hour ago, so a 20-minute wait ends at once.
 		proc = box.run(
-			FAKE_GH_MERGE_RC="1",
 			WORKFLOW_LOG_ANALYSIS_REPORT_MERGE_WAIT_MINUTES="20",
 			WLA_JOB_START_EPOCH=str(int(time.time()) - 3600),
 		)
@@ -534,13 +534,19 @@ def test_report_pr_merge_wait_clamped_to_job_budget() -> None:
 		assert box.outputs()["delivery"] == "pr_auto_merge"
 
 
-def test_report_pr_stays_open_when_both_merges_refused() -> None:
+def test_report_pr_stays_open_when_auto_merge_refused() -> None:
 	with tempfile.TemporaryDirectory() as raw:
 		box = _Sandbox(Path(raw))
 		box.write_report()
-		proc = box.run(FAKE_GH_MERGE_RC="1", FAKE_GH_AUTO_RC="1")
+		proc = box.run(FAKE_GH_AUTO_RC="1")
 		assert proc.returncode == 0, proc.stderr + proc.stdout
 		assert "::warning::" in proc.stdout and "https://github.com/o/r/pull/42" in proc.stdout
+		assert "could not be set to auto-merge" in proc.stdout
+		# Refused auto-merge never falls back to a direct merge.
+		assert [call for call in box.gh_calls() if call.startswith("pr merge")] == [
+			call for call in box.gh_calls() if call.startswith("pr merge 42 --auto ")
+		]
+		assert box.origin_ref("refs/heads/main") == box.base_main
 		out = box.outputs()
 		assert out["delivery"] == "pr_open"
 		assert out["report_branch"] == PR_BRANCH
@@ -570,11 +576,12 @@ def test_report_pr_already_exists_looks_up_the_open_pr() -> None:
 			FAKE_GH_CREATE_RC="1",
 			FAKE_GH_CREATE_OUT=f'a pull request for branch "{PR_BRANCH}" into branch "main" already exists:\nhttps://github.com/o/r/pull/7',
 			FAKE_GH_LIST_OUT="7 https://github.com/o/r/pull/7",
+			FAKE_GH_AUTO_LANDS="1",
 		)
 		assert proc.returncode == 0, proc.stderr + proc.stdout
 		calls = box.gh_calls()
 		assert calls[1].startswith(f"pr list --head {PR_BRANCH} --base main --state open --json number,url")
-		assert calls[2].startswith("pr merge 7 --squash --match-head-commit ")
+		assert calls[2].startswith("pr merge 7 --auto --squash --match-head-commit ")
 		out = box.outputs()
 		assert out["report_pr_number"] == "7"
 		assert out["delivery"] == "pr_merged"
@@ -611,7 +618,7 @@ def test_report_pr_renames_on_upstream_collision() -> None:
 		_git(other, "commit", "-q", "-m", "other report", env=box.git_env)
 		_git(other, "push", "-q", "origin", "HEAD:main", env=box.git_env)
 		box.write_report()
-		proc = box.run()
+		proc = box.run(FAKE_GH_AUTO_LANDS="1")
 		assert proc.returncode == 0, proc.stderr + proc.stdout
 		renamed = "analysis/workflow-optimization-2026-11-09-2.md"
 		out = box.outputs()
@@ -698,6 +705,29 @@ def test_report_pr_ruleset_rejection_fails_the_step() -> None:
 		assert box.origin_ref(f"refs/heads/{PR_BRANCH}") == ""
 		assert box.origin_ref("refs/heads/main") == box.base_main
 		assert "committed=true" not in box.output.read_text(encoding="utf-8")
+
+
+def test_report_pr_never_merges_directly() -> None:
+	# Issue #10151 (owner Q8 A): a direct GH_PAT merge bypassed the ruleset's
+	# required ai-review/head-gate and ci/final statuses. The step may only
+	# arm auto-merge, bound to the pushed head.
+	merge_lines = [
+		line.strip()
+		for line in _step_body().splitlines()
+		if "gh pr merge" in line and not line.lstrip().startswith("#")
+	]
+	assert merge_lines, "the commit_report step lost its auto-merge request"
+	for line in merge_lines:
+		assert "--auto" in line and "--match-head-commit" in line, line
+		assert "--admin" not in line, line
+	with tempfile.TemporaryDirectory() as raw:
+		box = _Sandbox(Path(raw))
+		box.write_report()
+		proc = box.run()
+		assert proc.returncode == 0, proc.stderr + proc.stdout
+		merges = [call for call in box.gh_calls() if call.startswith("pr merge")]
+		assert len(merges) == 1 and merges[0].startswith("pr merge 42 --auto --squash --match-head-commit "), merges
+		assert box.outputs()["delivery"] == "pr_auto_merge"
 
 
 def test_report_pr_static_contract() -> None:
@@ -882,18 +912,18 @@ def test_section_steps_static_contract() -> None:
 
 def main() -> int:
 	test_report_pr_default_mode_opens_and_merges_pr()
-	test_report_pr_queued_direct_merge_is_not_reported_merged()
+	test_report_pr_armed_auto_merge_is_not_reported_merged()
 	test_report_pr_auto_merge_drops_purge_deletions()
-	test_report_pr_queued_direct_merge_drops_purge_deletions_first()
+	test_report_pr_landed_auto_merge_keeps_purged_docs()
 	test_report_pr_purge_drop_restores_a_doc_git_would_pair_as_a_rename()
-	test_report_pr_auto_merge_when_direct_merge_refused()
+	test_report_pr_arms_auto_merge_without_a_direct_merge()
 	test_report_pr_auto_merge_wait_sees_the_report_land()
 	test_report_pr_auto_merge_not_landed_warns_about_skipped_audits()
 	test_report_pr_renames_when_a_pending_report_pr_holds_the_path()
 	test_report_pr_unrecognized_switch_value_warns_and_uses_pr()
 	test_report_pr_number_parsed_from_enterprise_url()
 	test_report_pr_merge_wait_clamped_to_job_budget()
-	test_report_pr_stays_open_when_both_merges_refused()
+	test_report_pr_stays_open_when_auto_merge_refused()
 	test_report_pr_create_failure_fails_the_step()
 	test_report_pr_already_exists_looks_up_the_open_pr()
 	test_report_pr_disabled_keeps_legacy_direct_push()
@@ -902,6 +932,7 @@ def main() -> int:
 	test_report_pr_rejects_malformed_report_path()
 	test_report_pr_missing_pat_fails_before_any_push()
 	test_report_pr_ruleset_rejection_fails_the_step()
+	test_report_pr_never_merges_directly()
 	test_report_pr_static_contract()
 	test_section_push_mode_report_pushed_creates_run_branch_for_delivery()
 	test_section_pr_merged_recreates_deleted_run_branch()
