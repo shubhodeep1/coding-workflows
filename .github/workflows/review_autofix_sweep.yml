@@ -154,6 +154,19 @@ jobs:
             echo 'GH_PAT_BUDGET phase=start workflow=review_autofix_sweep job=sweep remaining=unknown reset=unknown used_in_job=unknown'
           fi
 
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
+
       # Use the 30-minute sweep rather than the hourly Claude catch-all: it
       # already snapshots every open non-draft PR, including non-Claude PRs.
       # The sweep itself needs no checkout. Fetch only the default-branch
@@ -909,24 +922,11 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run }}
         run: bash .ci-rerun-support/scripts/workflow_failure_heal_non_retryable_backfill.sh
 
-      - name: Record GH_PAT budget at sweep end
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
-          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
-          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_sweep
-        run: |
-          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
-            source scripts/gh_helpers.sh
-            gh_pat_budget end review_autofix_sweep sweep "${GH_PAT_BUDGET_FILE}"
-          else
-            echo 'GH_PAT_BUDGET phase=end workflow=review_autofix_sweep job=sweep remaining=unknown reset=unknown used_in_job=unknown'
-          fi
-
       - name: Re-run cancelled CI failed jobs once
         env:
           GH_TOKEN: ${{ github.token }}
+          # Issue #9887: GH_TOKEN carries the job token here, not GH_PAT.
+          GH_CALL_COUNTER_TOKEN_KIND: github_token
           REPOSITORY: ${{ github.repository }}
           CI_CANCELLED_AUTO_RERUN_ENABLED: ${{ vars.CI_CANCELLED_AUTO_RERUN_ENABLED || 'true' }}
           CI_ACTION_RESOLUTION_RERUN_ENABLED: ${{ vars.CI_ACTION_RESOLUTION_RERUN_ENABLED || 'true' }}
@@ -962,6 +962,11 @@ jobs:
           FINAL_CI_SWEEP_BASE_SYNC_MIN_AGE_MINUTES: ${{ vars.FINAL_CI_SWEEP_BASE_SYNC_MIN_AGE_MINUTES || '30' }}
           FINAL_CI_SWEEP_BASE_SYNC_MAX: ${{ vars.FINAL_CI_SWEEP_BASE_SYNC_MAX || '3' }}
           FINAL_CI_SWEEP_ACTIVE_REVIEW_RUNS: ${{ runner.temp }}/final-ci-active-review-runs.txt
+          # A head whose final run was cut off under an older ci.yml is synced,
+          # or handed back to review through review_final_ci_failed.sh (issue #10093).
+          FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED: ${{ vars.FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED || 'true' }}
+          FINAL_CI_FAILED_REDISPATCH_ENABLED: ${{ vars.FINAL_CI_FAILED_REDISPATCH_ENABLED || 'true' }}
+          ALLOW_WORKFLOW_EDITS: ${{ contains(' 1 true yes on ', format(' {0} ', vars.ALLOW_WORKFLOW_EDITS || 'true')) }}
           FINAL_CI_SWEEP_HELPERS_DIR: .ci-rerun-support/scripts
           HEAD_REF_FILTER: ${{ inputs.head_ref_filter }}
           DRY_RUN: ${{ inputs.dry_run }}
@@ -984,3 +989,19 @@ jobs:
           # The PR-named wrapper keeps the judge run visible to the active-run guards.
           SECURITY_HOLD_REVIEW_WORKFLOW: internal-review.yml
         run: PYTHONDONTWRITEBYTECODE=1 python3 .ci-rerun-support/scripts/review_security_hold_sweep.py
+
+      - name: Record GH_PAT budget at sweep end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_sweep
+        run: |
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
+            source scripts/gh_helpers.sh
+            gh_pat_budget end review_autofix_sweep sweep "${GH_PAT_BUDGET_FILE}"
+          else
+            counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+            echo "GH_PAT_BUDGET phase=end workflow=review_autofix_sweep job=sweep remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
+          fi
