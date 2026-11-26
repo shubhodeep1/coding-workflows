@@ -8,7 +8,8 @@ when the delta job asks for the full suite. The full suite also runs on a
 
   * `select`: the base is the head of the push or scheduled ci.yml run on
     main that finished last, when it succeeded and no red run lacks a green
-    run created after it finished; every untrusted selection writes
+    run started after it finished (`run_started_at` of a first attempt; a
+    re-run counts from `created_at`); every untrusted selection writes
     `full_required=true` and exits 0 (never a pass on an unknown selection);
   * `run-tests`: pass, failure and timeout;
   * the ci.yml wiring (job, gates, trigger, concurrency, `lint`) and the
@@ -374,6 +375,21 @@ def test_green_push_queued_behind_the_red_run_clears_it(repo: Repo) -> None:
 	proc, outputs = repo.run("select")
 	assert outputs == {"full_required": "false"}, proc.stdout
 	assert f"outcome=ok reason=selected base={queued[:12]} " in _terminal(proc)
+
+
+def test_partial_rerun_of_a_delta_push_does_not_clear_a_red_run(repo: Repo) -> None:
+	# A "re-run failed jobs" of the delta push (run_attempt 2) gets a new
+	# run_started_at after the red full run finished but reuses the first
+	# attempt's full_required=false: it counts from created_at and stays red.
+	mid = repo.commit("push 1", files={"src/a.sh": "echo 1\n"})
+	repo.commit("push 2", files={"src/b.sh": "echo 2\n"})
+	repo.runs(
+		_run(repo.base, event="schedule", conclusion="failure", created="2026-11-26T22:30:00Z", updated_at="2026-11-26T22:40:00Z"),
+		_run(mid, created="2026-11-26T22:35:00Z", run_started_at="2026-11-26T23:00:00Z", run_attempt=2, updated_at="2026-11-26T23:10:00Z"),
+	)
+	proc, outputs = repo.run("select")
+	assert outputs == {"full_required": "true"}, proc.stdout
+	assert "reason=base_red " in _terminal(proc)
 
 
 def test_neutral_run_does_not_keep_an_earlier_red_base(repo: Repo) -> None:

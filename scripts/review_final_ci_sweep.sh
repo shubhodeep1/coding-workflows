@@ -156,7 +156,9 @@ review_final_ci_sweep_base_sync_log()
 # A red run (any conclusion other than success; cancelled, skipped, neutral
 # and empty ones report no result and are dropped) stays the result until a
 # green run started after it finished (`run_started_at`, else `created_at`,
-# >= the red run's `updated_at`): a delta push that chose its base before that
+# >= the red run's `updated_at`; a re-run, `run_attempt` > 1, counts from
+# `created_at`, since a partial re-run reuses its first attempt's delta
+# selection): a delta push that chose its base before that
 # red run finished cannot vouch for the tree it found broken, while a push
 # that queued in `ci-push-<ref>` behind the red run starts, and reads its
 # base, only after it.
@@ -166,7 +168,7 @@ review_final_ci_sweep_base_ci_red()
 	local base="$1" state="" base_runs=""
 	local base_red_wins_jq='sort_by([(.updated_at // .created_at // ""), (.created_at // "")]) as $done
 		| ([$done[] | select((.conclusion // "") != "success")] | last) as $red
-		| if $red != null and ([$done[] | select(.conclusion == "success" and ((.run_started_at // .created_at // "") >= ($red.updated_at // $red.created_at // "")))] | length) == 0
+		| if $red != null and ([$done[] | select(.conclusion == "success" and ((if ((.run_attempt // 1) | type == "number" and . <= 1) then (.run_started_at // .created_at // "") else (.created_at // "") end) >= ($red.updated_at // $red.created_at // "")))] | length) == 0
 		  then "failure" else ($done | last | (.conclusion // "")) end'
 	case "${base}" in
 		main|stable|orchestrator/project-*) ;;

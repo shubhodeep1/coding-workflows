@@ -581,14 +581,25 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 			if all(isinstance(item, dict) for item in base_runs):
 				base_runs = sorted(base_runs, key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
 				# A red run stays the branch's result until a green run started
-				# after it finished (`run_started_at`, else `created_at`): a delta
+				# after it finished (`run_started_at`, else `created_at`; a re-run
+				# counts from `created_at`, see _run_start): a delta
 				# push that chose its base before the red run finished cannot
 				# vouch for the tree it found broken, while a push queued behind
 				# the red run in `ci-push-<ref>` starts only after it.
 				red_run = next((item for item in base_runs if item.get("conclusion") not in CI_NON_RED_CONCLUSIONS), None)
+
+				def _run_start(item: dict[str, Any]) -> str:
+					# A re-run (run_attempt > 1) gets a new run_started_at but can
+					# reuse the first attempt's delta selection, so only the first
+					# attempt counts from its start; a re-run counts from creation.
+					attempt = item.get("run_attempt")
+					first_attempt = attempt is None or (type(attempt) is int and attempt <= 1)
+					started = item.get("run_started_at") if first_attempt else None
+					return str(started or item.get("created_at") or "")
+
 				if red_run is not None:
 					red_finished = str(red_run.get("updated_at") or red_run.get("created_at") or "")
-					if not any(item.get("conclusion") == "success" and str(item.get("run_started_at") or item.get("created_at") or "") >= red_finished for item in base_runs):
+					if not any(item.get("conclusion") == "success" and _run_start(item) >= red_finished for item in base_runs):
 						base_runs = [red_run] + [item for item in base_runs if item is not red_run]
 		if not isinstance(base_runs, list) or not base_runs or not isinstance(base_runs[0], dict):
 			_fail("no_completed_default_run")

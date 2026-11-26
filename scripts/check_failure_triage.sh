@@ -1806,12 +1806,14 @@ else
 			# ties to the API's newest-created order): a later-created delta push
 			# that finished green first must not hide a red scheduled full run.
 			# A red run (failure, timed_out, ...) stays the result until a green
-			# run started after it finished (`run_started_at`, else `created_at`):
+			# run started after it finished (`run_started_at`, else `created_at`;
+			# a re-run, `run_attempt` > 1, counts from `created_at`, since a
+			# partial re-run reuses its first attempt's delta selection):
 			# a delta push that chose its base before the red run finished cannot
 			# vouch for the tree it broke on, while a push queued behind the red
 			# run in `ci-push-<ref>` starts, and reads its base, only after it.
 			base_gate_conclusion="$(gh_retry gh api "repos/${REPO}/actions/workflows/${base_gate_workflow_id}/runs?branch=${BASE_REF}&per_page=10" \
-				--jq '[.workflow_runs[]? | select(type == "object") | select((.event // "") == "push" or (.event // "") == "schedule")] as $base_runs | if ($base_runs | length) == 0 then "" elif $base_runs[0].status != "completed" then "pending" else ([$base_runs | to_entries[] | select(.value.status == "completed")] | sort_by([(.value.updated_at // .value.created_at // ""), (0 - .key)]) | map(.value)) as $done | ([$done[] | select((.conclusion // "") | IN("success", "cancelled", "skipped", "neutral", "") | not)] | last) as $red | (if $red != null and ([$done[] | select((.conclusion // "") == "success" and ((.run_started_at // .created_at // "") >= ($red.updated_at // $red.created_at // "")))] | length) == 0 then $red else ($done | last) end) | ((.conclusion // "") + " " + (.id // "" | tostring)) end' 2>/dev/null || true)"
+				--jq '[.workflow_runs[]? | select(type == "object") | select((.event // "") == "push" or (.event // "") == "schedule")] as $base_runs | if ($base_runs | length) == 0 then "" elif $base_runs[0].status != "completed" then "pending" else ([$base_runs | to_entries[] | select(.value.status == "completed")] | sort_by([(.value.updated_at // .value.created_at // ""), (0 - .key)]) | map(.value)) as $done | ([$done[] | select((.conclusion // "") | IN("success", "cancelled", "skipped", "neutral", "") | not)] | last) as $red | (if $red != null and ([$done[] | select((.conclusion // "") == "success" and ((if ((.run_attempt // 1) | type == "number" and . <= 1) then (.run_started_at // .created_at // "") else (.created_at // "") end) >= ($red.updated_at // $red.created_at // "")))] | length) == 0 then $red else ($done | last) end) | ((.conclusion // "") + " " + (.id // "" | tostring)) end' 2>/dev/null || true)"
 		elif [[ "${base_gate_workflow_id}" =~ ^[0-9]+$ ]]; then
 			base_gate_conclusion="$(gh_retry gh api "repos/${REPO}/actions/workflows/${base_gate_workflow_id}/runs?branch=${BASE_REF}&event=push&per_page=1" \
 				--jq '.workflow_runs[0] | if . == null then "" elif .status == "completed" then ((.conclusion // "") + " " + (.id // "" | tostring)) else "pending" end' 2>/dev/null || true)"

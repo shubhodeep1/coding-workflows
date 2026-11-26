@@ -1357,6 +1357,17 @@ def test_ci_green_push_queued_behind_the_red_run_clears_it(tmp_path, monkeypatch
 	assert rc == 0 and result["status"] == "resolved", result
 
 
+def test_ci_partial_rerun_of_a_delta_push_does_not_clear_a_red_run(tmp_path, monkeypatch):
+	# A re-run (run_attempt 2) starts after the red run finished but reuses
+	# the first attempt's delta selection: it counts from created_at.
+	runs = [
+		_base_run(id=37000001015, created_at="2026-11-26T22:35:00Z", run_started_at="2026-11-26T23:00:00Z", run_attempt=2, updated_at="2026-11-26T23:10:00Z"),
+		_base_run(event="schedule", conclusion="failure", id=37000001016, created_at="2026-11-26T22:30:00Z", updated_at="2026-11-26T22:40:00Z"),
+	]
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=_ci_routes(runs))
+	assert rc == 0 and result["status"] == "unverified" and result["reason"] == "default_run_not_success"
+
+
 def test_ci_delta_push_falls_back_to_the_newest_green_scheduled_run(tmp_path, monkeypatch):
 	delta = _base_run(id=37000001003)
 	scheduled = _base_run(event="schedule", id=37000001004, head_sha=SCHEDULE_SHA)

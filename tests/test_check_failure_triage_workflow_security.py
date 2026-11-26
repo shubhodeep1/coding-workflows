@@ -2046,6 +2046,23 @@ class CheckFailureTriageBaseGateTests(unittest.TestCase):
 		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 		self.assertIn("CHECK_TRIAGE skip reason=pr_specific_failure base=main base_conclusion=success pr=17 check=CI", proc.stdout)
 
+	def test_ci_base_gate_partial_rerun_of_a_delta_push_stays_red(self) -> None:
+		"""A re-run (run_attempt 2) starting after the red run finished counts
+		from created_at: it reuses the first attempt's delta selection."""
+		red = {"id": 72, "event": "schedule", "status": "completed", "conclusion": "failure",
+			"created_at": "2026-11-26T22:30:00Z", "updated_at": "2026-11-26T22:40:00Z"}
+		rerun = {"id": 73, "event": "push", "status": "completed", "conclusion": "success", "run_attempt": 2,
+			"created_at": "2026-11-26T22:35:00Z", "run_started_at": "2026-11-26T23:00:00Z", "updated_at": "2026-11-26T23:10:00Z"}
+		proc, outputs, _metadata = _run_collect_stage(
+			parent_body=PLAIN_SOURCE,
+			base={"ref": "main", "workflow_id": "9", "workflow_path": ".github/workflows/ci.yml"},
+			extra_env={"MOCK_BASE_RUNS_PAGE": json.dumps({"workflow_runs": [rerun, red]})},
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE base_gate outcome=file base=main base_conclusion=failure pr=17", proc.stdout)
+		self.assertEqual(outputs.get("ready"), "true")
+
+
 	def test_non_ci_base_gate_keeps_the_push_read(self) -> None:
 		calls: list[str] = []
 		proc, _outputs, _metadata = _run_collect_stage(

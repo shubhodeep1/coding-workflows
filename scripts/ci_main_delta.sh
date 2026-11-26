@@ -12,7 +12,8 @@
 #       `actions/workflows/ci.yml/runs?branch=<branch>&status=completed&per_page=30`,
 #       keeps the push and schedule runs of .github/workflows/ci.yml on the
 #       branch (cancelled and skipped runs report nothing and are dropped) and
-#       takes the head of the newest one as the base when it succeeded. So the
+#       takes the head of the one that finished last as the base when it
+#       succeeded and no red run outranks it (rule below). So the
 #       range covers every push since main's last green run, including a push
 #       whose waiting run `ci-push-main` replaced. Then
 #       `git diff --name-status -M <base> <head>` feeds
@@ -24,8 +25,8 @@
 #       `full_required=true` instead and exits 0, so the seven gated jobs run
 #       in this run (their `if:` reads the job output); reasons:
 #       invalid_input, head_mismatch, read_failed, invalid_response,
-#       no_green_base, base_red (the newest run failed: a red base stays red
-#       until a full run passes), base_not_ancestor, diff_failed,
+#       no_green_base, base_red (the run that finished last failed, or a red
+#       run has no green run started after it finished), base_not_ancestor, diff_failed,
 #       selector_failed, selection_invalid (also a missing or null
 #       `affected_tests`), over_cap, sharded_test_selected,
 #       wiring_list_missing (the CI-structure list could not be loaded),
@@ -34,7 +35,10 @@
 #       `created_at`): push and scheduled runs overlap, so a later-created
 #       delta push that finished first cannot hide a red scheduled run. A red
 #       run also stays the result until a green run started after it finished
-#       (`run_started_at`, else `created_at`, >= its `updated_at`): a delta push
+#       (`run_started_at`, else `created_at`, >= its `updated_at`; a re-run,
+#       `run_attempt` > 1, counts from `created_at`, because a partial re-run
+#       gets a new start time but reuses the first attempt's delta selection
+#       and never runs the full suite): a delta push
 #       that chose its base before the red run finished cannot vouch for the
 #       tree it found broken, while any run started later (including a push
 #       queued behind it in `ci-push-<ref>`) saw base_red and ran the full
@@ -226,7 +230,7 @@ ci_main_delta_select()
 			| ([$done[] | select((.conclusion // "") | IN("success", "neutral", "") | not)] | last) as $red
 			| if ($done | length) == 0 then "none"
 			  elif $red != null and ([$done[] | select((.conclusion // "") == "success"
-			      and ((.run_started_at // .created_at // "") >= ($red.updated_at // $red.created_at // "")))] | length) == 0
+			      and ((if ((.run_attempt // 1) | type == "number" and . <= 1) then (.run_started_at // .created_at // "") else (.created_at // "") end) >= ($red.updated_at // $red.created_at // "")))] | length) == 0
 			  then "red \($red.head_sha)"
 			  elif ($done | last | .conclusion // "") == "success" then "green \($done | last | .head_sha)"
 			  else "red \($done | last | .head_sha)" end
