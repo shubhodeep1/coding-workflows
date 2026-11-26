@@ -57,7 +57,8 @@ case "${JUDGE_SKIP_REASON:-}" in
         rb_settled_name="${rb_settled_name# }"
         [ -n "${rb_settled_name}" ] || continue
         rb_settled_count=$((rb_settled_count + 1))
-        [ "${rb_settled_count}" -le 20 ] || break
+        # 21 = the judge's 20 names plus its "(N more)" entry.
+        [ "${rb_settled_count}" -le 21 ] || break
         rb_settled_name="$(printf '%s' "${rb_settled_name}" | LC_ALL=C tr -c 'A-Za-z0-9 _./():-' '_')"
         rb_settled_list+=$'\n'"- ${rb_settled_name:0:120}"
       done < <(printf '%s\n' "${RB_JUDGE_BLOCKING_CHECK_NAMES}" | tr ',' '\n')

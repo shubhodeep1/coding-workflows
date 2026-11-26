@@ -69,7 +69,8 @@
 #   PR_CHECKS_LAST_BLOCKING_RUN_IDS — companion of the above: one line per
 #                            COMPLETED blocking check-run, `<run_id>:<conclusion>`
 #                            with the Actions run id parsed from details_url
-#                            (`none:<conclusion>` for a non-Actions check),
+#                            (`none:<conclusion>` for a non-Actions check or a
+#                            details_url outside PR_CHECKS_REPOSITORY's Actions),
 #                            sorted and unique. Read by review_rb_judge.sh to
 #                            pick the one-time rerun target.
 #   PR_CHECKS_LAST_TOTAL   — set by _pr_checks_completed when it reads the
@@ -239,8 +240,9 @@ _pr_checks_blocking_detail()
 	local blocking_detail="" blocking_line=""
 	PR_CHECKS_LAST_BLOCKING_NAMES=""
 	PR_CHECKS_LAST_BLOCKING_RUN_IDS=""
-	blocking_detail="$(printf '%s' "${blocking_runs_json}" | jq -r --arg names "${blocking_required_csv}" --arg self_run "${blocking_self_run}" --arg gate_drop_id "${blocking_drop_id}" --arg ci "${PR_CHECKS_LAST_CI_NAME:-none}" --arg bound "${PR_CHECKS_CI_RUN_IDS-__unbound__}" "${PR_CHECKS_JQ_SUPERSEDE_DEFS}"'
+	blocking_detail="$(printf '%s' "${blocking_runs_json}" | jq -r --arg names "${blocking_required_csv}" --arg self_run "${blocking_self_run}" --arg gate_drop_id "${blocking_drop_id}" --arg ci "${PR_CHECKS_LAST_CI_NAME:-none}" --arg bound "${PR_CHECKS_CI_RUN_IDS-__unbound__}" --arg blocking_repo "${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" "${PR_CHECKS_JQ_SUPERSEDE_DEFS}"'
 		def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
+		def _own_run_id: if (_run_id != null) and (($blocking_repo == "") or ((.details_url // "") | ascii_downcase | contains("/" + ($blocking_repo | ascii_downcase) + "/actions/runs/"))) then _run_id else null end;
 		def _is_bad: (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and (.conclusion != "cancelled" or (._superseded | not)));
 		def _state: (if .status != "completed" then (.status // "unknown") else (.conclusion // "unknown") end) | tostring;
 		(if $names == "*" then null else ($names | split(",") | map(gsub("^\\s+|\\s+$"; ""))) end) as $required |
@@ -264,7 +266,7 @@ _pr_checks_blocking_detail()
 				and (($gate_drop_id == "") or (((.id // "") | tostring) != $gate_drop_id))
 			)] as $blocking
 			| ([$blocking[] | "N\t" + (((.name // "") | tostring | gsub("[\t\r\n]"; " ")) + ":" + _state)] | unique | .[]),
-			  ([$blocking[] | select(.status == "completed") | "R\t" + ((_run_id // "none") + ":" + _state)] | unique | .[])
+			  ([$blocking[] | select(.status == "completed") | "R\t" + ((_own_run_id // "none") + ":" + _state)] | unique | .[])
 		end
 	' 2>/dev/null)" || blocking_detail=""
 	while IFS= read -r blocking_line; do

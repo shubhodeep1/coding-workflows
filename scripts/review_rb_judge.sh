@@ -929,7 +929,7 @@ rb_judge_settled_check_diagnostics()
   [ "${PR_CHECKS_LAST_PENDING:-0}" = "0" ] || return 0
   local rb_sc_head="${RB_JUDGED_HEAD_SHA:-}" rb_sc_head7 rb_sc_entry rb_sc_clean rb_sc_joined="" rb_sc_count=0
   local rb_sc_retryable="true" rb_sc_run rb_sc_ids="" rb_sc_id rb_sc_handled=0 rb_sc_login="" rb_sc_marker rb_sc_seen
-  local rb_sc_action rb_sc_reason rb_sc_body rb_sc_result rb_sc_prefix
+  local rb_sc_action rb_sc_reason rb_sc_body rb_sc_result rb_sc_prefix rb_sc_non_actions=0
   rb_sc_head7="${rb_sc_head:0:7}"
   [ -n "${rb_sc_head7}" ] || rb_sc_head7="unknown"
   rb_sc_prefix="RB_JUDGE_SETTLED_CHECKS pr=${PR_NUMBER:-unknown} head=${rb_sc_head7} settled=true"
@@ -947,6 +947,11 @@ rb_judge_settled_check_diagnostics()
     rb_sc_clean="${rb_sc_clean:0:120}"
     rb_sc_joined+="${rb_sc_joined:+, }${rb_sc_clean}"
   done <<< "${PR_CHECKS_LAST_BLOCKING_NAMES:-}"
+  # Entries past the cap of 20 are counted but not listed; say so, so the
+  # comment never reads as the complete list.
+  if [ "${rb_sc_count}" -gt 20 ]; then
+    rb_sc_joined+=", ($((rb_sc_count - 20)) more)"
+  fi
   if [ "${rb_sc_count}" -eq 0 ]; then
     echo "${rb_sc_prefix} names=0 run=- action=rerun_skipped reason=names_unavailable"
     return 0
@@ -973,8 +978,12 @@ rb_judge_settled_check_diagnostics()
     [ -n "${rb_sc_entry}" ] || continue
     rb_sc_run="${rb_sc_entry%%:*}"
     if ! [[ "${rb_sc_run}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+      # A non-Actions check cannot be re-run from here; skip that entry only,
+      # so the cancelled/timed-out Actions runs in the same set still get
+      # their one rerun.
       echo "${rb_sc_prefix} names=${rb_sc_count} run=- action=rerun_skipped reason=non_actions_check"
-      return 0
+      rb_sc_non_actions=$((rb_sc_non_actions + 1))
+      continue
     fi
     case $'\n'"${rb_sc_ids}"$'\n' in
       *$'\n'"${rb_sc_run}"$'\n'*) ;;
@@ -982,7 +991,8 @@ rb_judge_settled_check_diagnostics()
     esac
   done <<< "${PR_CHECKS_LAST_BLOCKING_RUN_IDS:-}"
   if [ -z "${rb_sc_ids}" ]; then
-    echo "${rb_sc_prefix} names=${rb_sc_count} run=- action=rerun_skipped reason=non_actions_check"
+    [ "${rb_sc_non_actions}" -gt 0 ] \
+      || echo "${rb_sc_prefix} names=${rb_sc_count} run=- action=rerun_skipped reason=non_actions_check"
     return 0
   fi
   # API audit (§14): the dedupe reads the comment snapshot this judge already

@@ -1178,7 +1178,7 @@ def _blocking(runs_json: str, args: str = '5 "abc1234" "main"', env: dict[str, s
 def _run_with_url(name: str, status: str, conclusion: str | None, check_id: int, run_id: str | None = "555") -> dict:
 	run = {"id": check_id, "name": name, "status": status, "conclusion": conclusion}
 	if run_id is not None:
-		run["details_url"] = f"https://github.com/o/r/actions/runs/{run_id}/job/{check_id}"
+		run["details_url"] = f"https://github.com/owner/repo/actions/runs/{run_id}/job/{check_id}"
 	return run
 
 
@@ -1220,6 +1220,17 @@ def test_blocking_names_cancelled_and_non_actions_check() -> None:
 	assert gate == "1:blocking", gate
 	assert names == ["CI:cancelled", "external:timed_out"], names
 	assert run_ids == ["555:cancelled", "none:timed_out"], run_ids
+
+
+def test_blocking_run_id_from_other_repo_reads_as_non_actions() -> None:
+	"""A details_url pointing at another repository's Actions run never yields
+	a run id the judge would re-run inside PR_CHECKS_REPOSITORY."""
+	foreign = {"id": 1, "name": "CI", "status": "completed", "conclusion": "cancelled",
+		"details_url": "https://github.com/evil/other/actions/runs/4711/job/1"}
+	gate, names, run_ids = _blocking(_page([foreign]), env={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI"})
+	assert gate == "1:blocking", gate
+	assert names == ["CI:cancelled"], names
+	assert run_ids == ["none:cancelled"], run_ids
 
 
 def test_blocking_names_empty_on_api_error_and_allow_all() -> None:

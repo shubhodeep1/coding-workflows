@@ -201,10 +201,16 @@ def test_self_run_and_non_actions_check_are_skipped() -> None:
 	res = _run_judge(names="lint:cancelled", run_ids="999:cancelled")
 	assert _rerun_calls(res) == [] and res["posts"] == [], res
 	assert "run=999 action=rerun_skipped reason=self_run" in res["stdout"], res["stdout"]
-	res = _run_judge(names="lint:cancelled\nexternal:timed_out", run_ids="4711:cancelled\nnone:timed_out")
-	assert _rerun_calls(res) == [] and res["posts"] == [], res
-	assert "reason=non_actions_check" in res["stdout"], res["stdout"]
+	# A mixed set skips only the non-Actions entry; the Actions run still gets
+	# its one rerun.
+	res = _run_judge(names="external:timed_out\nlint:cancelled", run_ids="none:timed_out\n4711:cancelled")
+	assert _rerun_calls(res) == ["true|" + "gh api -X POST repos/o/r/actions/runs/4711/rerun-failed-jobs"], res["calls"]
+	assert len(res["posts"]) == 1 and res["posts"][0].rstrip().endswith(_marker("4711")), res["posts"]
+	assert res["stdout"].count("run=- action=rerun_skipped reason=non_actions_check") == 1, res["stdout"]
 	assert "judge_blocking_checks_settled=true" in res["output"]
+	res = _run_judge(names="external:timed_out", run_ids="none:timed_out")
+	assert _rerun_calls(res) == [] and res["posts"] == [], res
+	assert res["stdout"].count("reason=non_actions_check") == 1, res["stdout"]
 
 
 def test_incomplete_or_unreadable_comments_skip_rerun() -> None:
@@ -227,6 +233,15 @@ def test_rerun_capped_at_three_runs() -> None:
 	res = _run_judge(names="a:cancelled\nb:cancelled\nc:cancelled\nd:cancelled", run_ids=ids)
 	assert len(_rerun_calls(res)) == 3, res["calls"]
 	assert "run=14 action=rerun_skipped reason=rerun_capped" in res["stdout"], res["stdout"]
+
+
+def test_names_past_cap_are_marked_as_more() -> None:
+	names = "\n".join(f"c{n}:failure" for n in range(1, 24))
+	res = _run_judge(names=names, run_ids="1:failure")
+	line = [ln for ln in res["output"].splitlines() if ln.startswith("judge_blocking_check_names=")][0]
+	assert line.endswith(", c20:failure, (3 more)"), line
+	assert "c21:failure" not in line, line
+	assert "names=23 " in res["stdout"], res["stdout"]
 
 
 def test_no_names_writes_nothing() -> None:
@@ -359,6 +374,12 @@ def test_comment_names_settled_checks() -> None:
 	assert body.startswith(f"**{SETTLED_HEADING}**"), body
 	assert "\n- lint:failure\n- review / gate:cancelled\n" in body, body
 	assert LEGACY_HEADING not in body and LEGACY_DETAIL not in body
+
+
+def test_comment_keeps_judge_more_entry() -> None:
+	names = ", ".join(f"c{n}:failure" for n in range(1, 21)) + ", (3 more)"
+	body = _run_comment_script({"RB_JUDGE_BLOCKING_CHECKS_SETTLED": "true", "RB_JUDGE_BLOCKING_CHECK_NAMES": names})
+	assert "\n- c20:failure\n- (3 more)\n" in body, body
 
 
 def test_comment_cleans_names_again() -> None:
