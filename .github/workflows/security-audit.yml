@@ -110,7 +110,7 @@ env:
 
 jobs:
   security-audit:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-24.04' }}
     timeout-minutes: 60
     env:
       AI_ENGINE_FALLBACK_POLICY: ${{ vars.AI_ENGINE_FALLBACK_POLICY || 'capacity' }}

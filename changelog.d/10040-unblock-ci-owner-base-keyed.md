@@ -1,0 +1,4 @@
+<!-- changelog: fixed -->
+- **The unblock judge keeps a base-keyed CI-failure issue on the default branch.** A triage issue keyed on a failing default branch (#9674) names the PR it was first seen on only as an example. `ci_owner_candidate` in `scripts/unblock_actions.py` now recognises its `<!-- check-failure-triage:base=<ref> -->` marker, using the same rule as `scripts/resolve_integration_ref.sh`: the marker must be on line 5 after a valid fp/gen/root/pr header, and the ref must match `[A-Za-z0-9._/-]{1,200}` with no `..`. For such an issue the judge logs `UNBLOCK_JUDGE item=<n> op=ci_owner outcome=none reason=base_keyed`, reads no owner PR, and a `reissue` verdict neither closes the issue as superseded nor routes the re-issue to the example PR's branch (Refs #10040).
+
+A base marker anywhere else, or one that fails validation, changes nothing, and per-PR triage issues behave as before. No new API calls and no new settings.
