@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":10136,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/10136\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/10140\",\"pr_number\":10140,\"branch\":\"ai/issue-10136\",\"run_id\":\"45716994710\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/45716994710\",\"changed_files\":[\"README.md\",\"changelog.d/10136-final-ci-stale-workflow-followup.md\",\"tests/test_ci_cancelled_rerun.py\"]}",
+  "fingerprint": "24d46f03462cd62950c6f24e464a431288edb3b4d6c7a540dcfc3b304953bf3c",
+  "lineage": {
+    "issue_number": 10136,
+    "parent_ids": [],
+    "pr_number": 10140,
+    "run_id": "45716994710",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45716994710",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/10140"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261126002201_fcb8f436d3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10136,
+    "level": "run",
+    "pr_number": 10140,
+    "run_id": "45716994710"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #10136: https://github.com/shubhodeep1/coding-workflows/pull/10140",
+  "timestamps": {
+    "created_at": "2026-11-26T00:22:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
