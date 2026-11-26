@@ -248,6 +248,11 @@ if mine:
 	else:
 		print("false status_unknown")
 	sys.exit(0)
+# A full page (the lookups ask for per_page=100, newest first) without a
+# head-gate entry may hide an older `failure` on a later page: fail closed.
+if len(statuses) >= 100:
+	print("false statuses_truncated")
+	sys.exit(0)
 try:
 	pushed = datetime.datetime.strptime(sys.argv[2], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
 except Exception:
@@ -607,10 +612,11 @@ abg_test()
 		_abg_eval "${pr}" "${head}" 5 false gate_missing
 		return 0
 	fi
-	# The non-Python suites ci.yml runs (the broker's Vitest under tools/**)
-	# cannot differ from the base: condition 3 refuses any tools/** path
-	# (denied, and absent from break_glass_allowed_paths).
-	(cd "${ABG_HEAD_DIR}" && find tests -maxdepth 1 -type f -name 'test_*.py' 2>/dev/null | LC_ALL=C sort) > "${tests_file}"
+	# Every tests/test_*.py and the tests/test_*.sh modules ci.yml runs with
+	# bash (the gate runs a .sh test file as `bash <path>`). The broker's
+	# Vitest under tools/** cannot differ from the base: condition 3 refuses
+	# any tools/** path (denied, and absent from break_glass_allowed_paths).
+	(cd "${ABG_HEAD_DIR}" && find tests -maxdepth 1 -type f \( -name 'test_*.py' -o -name 'test_*.sh' \) 2>/dev/null | LC_ALL=C sort) > "${tests_file}"
 	if [ ! -s "${tests_file}" ]; then
 		_abg_eval "${pr}" "${head}" 5 false no_tests
 		return 0

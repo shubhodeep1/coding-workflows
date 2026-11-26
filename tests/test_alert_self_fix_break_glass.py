@@ -181,6 +181,7 @@ class Harness:
 		(self.source / "scripts").mkdir()
 		(self.source / "scripts" / "fix.sh").write_text("echo fixed\n", encoding="utf-8")
 		(self.source / "tests" / "test_b.py").write_text("def test_b():\n\tpass\n", encoding="utf-8")
+		(self.source / "tests" / "test_c.sh").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
 		_git(self.source, "add", "-A")
 		_git(self.source, "commit", "-q", "-m", "fix")
 		self.head = _git(self.source, "rev-parse", "HEAD")
@@ -328,7 +329,7 @@ def test_full_pass_writes_ledger_before_single_status_post(h: Harness) -> None:
 	assert h.curl_count() == 1
 	assert "outcome=posted" in results[-1].stdout and "notice pr=77 outcome=sent" in results[-1].stdout
 	# The full suite of the head ran: every tests/test_*.py, in shards.
-	assert (h.tmp / "checkout" / "gate_tests.txt").read_text(encoding="utf-8").split() == ["tests/test_a.py", "tests/test_b.py"]
+	assert (h.tmp / "checkout" / "gate_tests.txt").read_text(encoding="utf-8").split() == ["tests/test_a.py", "tests/test_b.py", "tests/test_c.sh"]
 	gate_args = (h.tmp / "checkout" / "gate_args.txt").read_text(encoding="utf-8")
 	assert f"--base {h.base}" in gate_args and "--shards 4" in gate_args
 	assert "pat-secret" not in out and "job-token-secret" not in out
@@ -418,6 +419,24 @@ def test_condition_2_missing_after_60_minutes_is_eligible_and_younger_waits(h: H
 	h.record(pushed=datetime.timedelta(minutes=59))
 	result = h.run("scan")
 	assert "condition=2 outcome=false reason=waiting" in result.stdout and h.outputs()["candidate"] == ""
+
+
+def test_condition_2_full_status_page_without_head_gate_fails_closed(h: Harness) -> None:
+	# 100 newer statuses of other contexts may hide a head-gate `failure` on page 2.
+	h.world["statuses"][h.head] = [{"context": f"other-{i}", "state": "success", "created_at": _stamp(datetime.timedelta(minutes=1))}
+		for i in range(100)]
+	result = h.run("scan")
+	assert "condition=2 outcome=false reason=statuses_truncated" in result.stdout
+	assert h.outputs()["candidate"] == ""
+
+
+def test_post_recheck_fails_closed_on_full_status_page(h: Harness) -> None:
+	assert [r.returncode for r in _through_test(h)] == [0, 0, 0]
+	h.world["statuses_post"] = {h.head: [{"context": f"other-{i}", "state": "success", "created_at": _stamp(datetime.timedelta(minutes=1))}
+		for i in range(100)]}
+	result = h.run("post")
+	assert "outcome=recheck_failed reason=statuses_truncated" in result.stdout
+	assert h.posts() == [] and h.puts() == []
 
 
 @pytest.mark.parametrize("state", ["pending", "success"])
