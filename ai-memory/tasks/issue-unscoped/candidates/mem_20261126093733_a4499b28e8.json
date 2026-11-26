@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ci_cancelled_rerun.py:762-763 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: In `classify_cancelled_run`, `time.monotonic()` is checked against a fixed 55s limit while the shell timeout is 90s, so a slow jobs read can make the classifier skip annotation reads too early and return `unverified`, which posts `failure` for a run that could have been classified as `run_cancelled`.\n  WHY: The source rated this NIT, mapped here to low; the reviewer agrees it fails closed but says the time budget is not used fully, since the reads could safely run for a few more seconds within the 90s shell timeout.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"otherwise read the run's jobs once (GET repos/<repo>/actions/runs/<run_id>/jobs?per_page=100&filter=latest, through gh_retry)\" (Issue #10131, Goal 1)\n  expected_change_site: scripts/ci_cancelled_rerun.py, list_run_jobs (lines 512-516) and classify_cancelled_run (lines 747-756)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: `list_run_jobs` (lines 512-516) calls `gh api` directly through `subprocess.run` and does not use the `gh_retry` shell helper, `classify_cancelled_run` handles a failed read with a fixed 2-second sleep and one more direct call (lines 748-756), the read uses /attempts/<n>/jobs instead of /jobs?filter=latest, and the comment at lines 750-754 explains the deferral (the rate-limit wait in gh_retry cannot fit inside `timeout 90`) but does not add the `gh_retry` path; the sources rated this NIT, and anthropic_claude-sonnet-5_5 judged the reason sound and the code fail-closed, so it listed the item only so the PR description records why the issue's wording was not followed.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"otherwise read the run's jobs once (GET repos/<repo>/actions/runs/<run_id>/jobs?per_page=100&filter=latest, through gh_retry)\"\n  Expected change site: scripts/ci_cancelled_rerun.py, list_run_jobs (lines 512-516) and classify_cancelled_run (lines 747-756)\n  Evidence of absence: The jobs read calls `gh api` directly through subprocess.run, with one fixed 2 s retry, and does not use gh_retry. It also reads /attempts/<n>/jobs instead of /jobs?filter=latest. The editor deferred this, and the last run only added the comment at lines 750-754 giving the reason (the rate-limit wait in gh_retry cannot fit inside `timeout 90`). The reviewer finds the reason sound and the code fail-closed, and lists the item only so the PR description records why the issue's wording was not followed.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/ci_cancelled_rerun.py:lines 762-763 (in `classify_cancelled_run`) | severity=NIT | confidence=4\n  PROBLEM: `time.monotonic()` is checked against a hardcoded 55s limit while classification is wrapped in a 90s shell timeout in `scripts/ci_final_status.sh`, so a slow jobs read can make the classifier skip annotation reads too early and return `unverified`, which posts `failure` for a run that could have been `run_cancelled`.\n  WHY: If the jobs read takes >35s, there is still enough time left in the 90s timeout, but the classifier returns `unverified`. This fails closed, but the time budget is not used fully.\n- TASK_GAP\n  Requirement: \"Read the run's jobs once ... through `gh_retry`.\" (Issue #10131, Goal 1)\n  Expected change site: `scripts/ci_cancelled_rerun.py:list_run_jobs`\n  Evidence of absence: The `list_run_jobs` function (lines 512-516) uses `subprocess.run([\"gh\", \"api\", ...])` directly and does not use the `gh_retry` shell helper. Code comments document the deferral, but the gap is still unresolved against the design goals.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Read the run's jobs once \u2026 through `gh_retry`.\"\n  Expected change site: `scripts/ci_cancelled_rerun.py:list_run_jobs` and `classify_cancelled_run`.\n  Evidence of absence: `list_run_jobs` invokes `gh api` directly via `subprocess.run`; `classify_cancelled_run` handles a failed read with a fixed 2-second sleep and a second direct call (lines 748-756). The comment at lines 750-754 explains the deviation but does not implement the required `gh_retry` path.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d63c7dafbb7820a0a516b76e75d3b68e13aa73c8e4db31c9b21d3afa17479d6e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10135,
+    "run_id": "45772623631",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45772623631",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126093733_a4499b28e8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10135,
+    "run_id": "45772623631"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T09:37:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
