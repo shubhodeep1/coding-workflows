@@ -14,7 +14,10 @@ review_head_gate_valid_repo()
 review_head_gate_post_status()
 {
 	local status_repo="${1:-}" status_sha="${2:-}" status_state="${3:-}" status_description="${4:-}"
-	if [ "${REVIEW_HEAD_GATE_STATUS_ENABLED}" = "false" ]; then
+	# Case-insensitive, like review_head_gate_updater_exempt and the updater
+	# verify job: "False"/"FALSE" must not post a pending that no success replaces.
+	local status_flag="${REVIEW_HEAD_GATE_STATUS_ENABLED:-true}"
+	if [ "${status_flag,,}" = "false" ]; then
 		echo "REVIEW_HEAD_GATE mode=status pr=${PR_NUMBER:-?} head=${status_sha:-?} state=${status_state:-?} outcome=disabled"
 		return 0
 	fi
@@ -120,6 +123,110 @@ review_head_gate_withdraw_auto_merge()
 	echo "REVIEW_HEAD_GATE mode=withdraw pr=${withdraw_pr} outcome=disabled"
 }
 
+# Updater-PR exemption (#9483, AD-1: A). Consumer-updater PRs
+# (auto/update-workflows-<sha12>[-r2..-r5]) are never merged by review: the updater's
+# verify job owns the merge, and review_enable_auto_merge.sh leaves before
+# the review tail's success post, so the gate used to stay `pending` forever
+# (btc_sweeper#264, atlas-bridge.gd#134). Post `success` for the gated head
+# only when every signal holds; anything missing, failed, stale or unreadable
+# keeps the gate pending (fail closed):
+#   - the head ref matches ^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$ (hint
+#     and live; -r2..-r5 are updater resend branches, as in the other review
+#     guards in review_enable_auto_merge.sh and review_rb_judge.sh);
+#   - the PR is open and its head repository is the base repository (no fork);
+#   - the live head SHA equals the gated SHA;
+#   - the combined status of that SHA has ai-update-workflows/verify=success
+#     and coding-workflows/workflow-integrity=success (the integrity check is
+#     published as a commit status by workflow_integrity.yml, not a check run).
+# Usage: review_head_gate_updater_exempt <repo> <pr> <gated sha> <head ref hint> [live pr json]
+# API budget (§14): none when the hint is empty or not an updater branch; one
+# PR read when no live PR JSON is passed (review_enable_auto_merge.sh passes
+# its own fresh read); one combined-status read. Logs exactly one
+# REVIEW_HEAD_GATE mode=updater_exempt line. Returns 0 only when posted.
+: "${REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED:=true}"
+REVIEW_HEAD_GATE_UPDATER_BRANCH_RE='^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$'
+REVIEW_HEAD_GATE_UPDATER_VERIFY_CONTEXT="ai-update-workflows/verify"
+REVIEW_HEAD_GATE_UPDATER_INTEGRITY_CONTEXT="coding-workflows/workflow-integrity"
+
+review_head_gate_updater_exempt()
+{
+	local ue_repo="${1:-}" ue_pr="${2:-}" ue_sha="${3:-}" ue_hint="${4:-}" ue_pr_json="${5:-}" ue_status_json="" ue_reason=""
+	ue_log()
+	{
+		echo "REVIEW_HEAD_GATE mode=updater_exempt pr=${ue_pr:-?} head=${ue_sha:-?} outcome=$1 reason=$2"
+	}
+	# Case-insensitive, like the workflow's other switches: False/FALSE also disable.
+	local ue_exempt_flag="${REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED:-true}" ue_status_flag="${REVIEW_HEAD_GATE_STATUS_ENABLED:-true}"
+	if [ "${ue_exempt_flag,,}" = "false" ]; then
+		ue_log skipped disabled
+		return 1
+	fi
+	if [ "${ue_status_flag,,}" = "false" ]; then
+		ue_log skipped status_disabled
+		return 1
+	fi
+	if ! review_head_gate_valid_repo "${ue_repo}" || ! [[ "${ue_pr}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${ue_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+		ue_log skipped invalid_input
+		return 1
+	fi
+	if [ -z "${ue_hint}" ]; then
+		ue_log skipped head_ref_unavailable
+		return 1
+	fi
+	if ! [[ "${ue_hint}" =~ ${REVIEW_HEAD_GATE_UPDATER_BRANCH_RE} ]]; then
+		ue_log skipped not_updater_branch
+		return 1
+	fi
+	if [ -z "${ue_pr_json}" ]; then
+		if ! ue_pr_json="$(gh_retry gh api "repos/${ue_repo}/pulls/${ue_pr}" 2>/dev/null)"; then
+			ue_log skipped pr_read_failed
+			return 1
+		fi
+	fi
+	ue_reason="$(jq -r --arg repo "${ue_repo}" --arg sha "${ue_sha}" --arg re "${REVIEW_HEAD_GATE_UPDATER_BRANCH_RE}" '
+		if type != "object" then "invalid_response"
+		elif .state != "open" then "pr_not_open"
+		elif ((.head.ref // "") | type) != "string" or ((.head.ref // "") | test($re) | not) then "not_updater_branch"
+		elif (.head.repo.full_name // "") != $repo or (.base.repo.full_name // "") != $repo then "fork_head"
+		elif (.head.sha // "") != $sha then "head_moved"
+		else "ok" end' <<< "${ue_pr_json}" 2>/dev/null)" || ue_reason=""
+	if [ "${ue_reason}" != "ok" ]; then
+		ue_log skipped "${ue_reason:-invalid_response}"
+		return 1
+	fi
+	if ! ue_status_json="$(gh_retry gh api "repos/${ue_repo}/commits/${ue_sha}/status?per_page=100" 2>/dev/null)"; then
+		ue_log skipped status_read_failed
+		return 1
+	fi
+	ue_reason="$(jq -r --arg v "${REVIEW_HEAD_GATE_UPDATER_VERIFY_CONTEXT}" --arg i "${REVIEW_HEAD_GATE_UPDATER_INTEGRITY_CONTEXT}" '
+		def state_of($c): [ .statuses[] | select(type == "object" and .context == $c) | .state ] | first;
+		if type != "object" or ((.statuses // null) | type) != "array" then "invalid_response"
+		else
+			state_of($v) as $vs | state_of($i) as $is
+			| ((.total_count // 0) > (.statuses | length)) as $incomplete
+			| if $vs == null then (if $incomplete then "status_page_incomplete" else "verify_missing" end)
+			elif $vs != "success" then "verify_not_success"
+			elif $is == null then (if $incomplete then "status_page_incomplete" else "integrity_missing" end)
+			elif $is != "success" then "integrity_not_success"
+			else "ok" end
+		end' <<< "${ue_status_json}" 2>/dev/null)" || ue_reason=""
+	if [ "${ue_reason}" != "ok" ]; then
+		ue_log skipped "${ue_reason:-invalid_response}"
+		return 1
+	fi
+	# review_head_gate_post_status always returns 0 (its other callers rely
+	# on that), so read its own outcome line to tell a failed POST apart.
+	local ue_post_out=""
+	ue_post_out="$(review_head_gate_post_status "${ue_repo}" "${ue_sha}" success "updater PR verified against the attested release manifest")"
+	[ -n "${ue_post_out}" ] && printf '%s\n' "${ue_post_out}"
+	if [[ "${ue_post_out}" != *"state=success outcome=posted"* ]]; then
+		ue_log skipped post_failed
+		return 1
+	fi
+	ue_log posted verified
+	return 0
+}
+
 review_head_gate_main()
 {
 	if [ "${EVENT_NAME:-}" = "pull_request" ]; then
@@ -139,6 +246,11 @@ review_head_gate_main()
 	fi
 	if [ "${DETERMINISTIC_SKIP:-false}" = "true" ]; then
 		review_head_gate_post_status "${REPOSITORY:-}" "${GATE_HEAD_SHA:-}" success "deterministic skip evaluated this head"
+	elif [ -n "${GATE_HEAD_SHA:-}" ] && [ -n "${GATE_HEAD_REF:-}" ]; then
+		# Posted after any pending status above for the same SHA, so it wins.
+		# The early gate call passes no GATE_HEAD_REF, so it skips this (no
+		# API call and no misleading mode=updater_exempt log line).
+		review_head_gate_updater_exempt "${REPOSITORY:-}" "${PR_NUMBER:-}" "${GATE_HEAD_SHA}" "${GATE_HEAD_REF:-}" || true
 	fi
 }
 

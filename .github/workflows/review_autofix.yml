@@ -801,6 +801,9 @@ jobs:
           PR_EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           GATE_HEAD_SHA: ${{ steps.evaluate.outputs.head_sha }}
           GATE_AUTO_MERGE_ENABLED: ${{ steps.evaluate.outputs.auto_merge_enabled }}
+          # #9483: updater PRs get head-gate success once verify + integrity pass.
+          GATE_HEAD_REF: ${{ steps.evaluate.outputs.head_ref }}
+          REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED: ${{ vars.REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED || 'true' }}
           # #8333: a skip whose security pass is still required gets its
           # success status from the skip job, only after hold=false.
           DETERMINISTIC_SKIP: ${{ steps.evaluate.outputs.det_skip_security_pass != 'true' && steps.evaluate.outputs.deterministic_skip || 'false' }}
@@ -1218,10 +1221,10 @@ jobs:
       AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
       AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
       MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
-      MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '240' }}
+      MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '480' }}
       MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
       MERGE_LEASE_REVOKE_ENABLED: ${{ vars.MERGE_LEASE_REVOKE_ENABLED || 'true' }}
-      MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '60' }}
+      MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '180' }}
       MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars.MERGE_LEASE_PRIORITY_HEAD_PREFIXES || 'auto/forward-merge-stable-' }}
       MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || 'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}
       MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}
@@ -1246,6 +1249,7 @@ jobs:
             scripts/review_single_issue_security_pass.sh
             scripts/security_pass_skip.py
             scripts/review_autofix_step_deterministic_skip_security_pass.sh
+            scripts/review_autofix_step_det_skip_followup_guard.sh
             scripts/review_head_gate.sh
           sparse-checkout-cone-mode: false
 
@@ -1337,6 +1341,11 @@ jobs:
           FRESHNESS_CI_FAILED_RETRY_SLEEP_SECS: ${{ vars.FRESHNESS_CI_FAILED_RETRY_SLEEP_SECS || '5' }}
           REVIEW_AUTOFIX_CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
           ALLOW_WORKFLOW_EDITS: ${{ inputs.allow_workflow_edits }}
+          # Security follow-up merge guard (#9671,
+          # scripts/review_autofix_step_det_skip_followup_guard.sh). The raw
+          # variable: only an explicit `false` turns the guard off.
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED }}
         run: |
           set -euo pipefail
 
@@ -1400,6 +1409,13 @@ jobs:
             echo "::warning::pr_checks_lib.sh unavailable; refusing auto-merge for PR #${1:-unknown} (required checks cannot be verified)."
             return 1
           }
+          # Security follow-up guard (#9671): fail closed unless the verified
+          # support checkout provides the library below.
+          det_skip_followup_merge_guard() {
+            DET_SKIP_FOLLOWUP_GUARD_RESULT="unavailable"
+            echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA:-unknown} action=refuse reason=security_followup_guard_unavailable"
+            return 1
+          }
           freshness_helper_verified=false
           if [ "${FRESHNESS_HELPER_CHECKOUT_OUTCOME:-}" = "success" ] \
             && [ -f .codex-freshness-src/scripts/pr_checks_lib.sh ] \
@@ -1409,6 +1425,11 @@ jobs:
             # shellcheck disable=SC1091
             source .codex-freshness-src/scripts/pr_checks_lib.sh
             freshness_helper_verified=true
+            if [ -f .codex-freshness-src/scripts/review_autofix_step_det_skip_followup_guard.sh ] \
+              && [ ! -L .codex-freshness-src/scripts/review_autofix_step_det_skip_followup_guard.sh ]; then
+              # shellcheck disable=SC1091
+              source .codex-freshness-src/scripts/review_autofix_step_det_skip_followup_guard.sh
+            fi
           else
             echo "::warning::Merge-base freshness helper checkout unavailable or unverified (outcome=${FRESHNESS_HELPER_CHECKOUT_OUTCOME:-unset}); freshness gate defers and auto-merge refused (required checks cannot be verified)."
           fi
@@ -1531,6 +1552,8 @@ jobs:
                   auto_merge_summary="DEFERRED (base freshness could not be verified; no branch update requested, the review sweep retries)"
                   echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_freshness_unknown"
                 fi
+              elif ! det_skip_followup_merge_guard; then
+                auto_merge_summary="REFUSED (security follow-up guard: ${DET_SKIP_FOLLOWUP_GUARD_RESULT:-unavailable})"
               elif gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --merge --auto --match-head-commit "${PR_HEAD_SHA}"; then
                 auto_merge_ready_labels_allowed="true"
                 auto_merge_summary="ENABLED (merge commit)"
@@ -1574,6 +1597,8 @@ jobs:
                 auto_merge_summary="DEFERRED (base freshness could not be verified; no branch update requested, the review sweep retries)"
                 echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_freshness_unknown"
               fi
+            elif ! det_skip_followup_merge_guard; then
+              auto_merge_summary="REFUSED (security follow-up guard: ${DET_SKIP_FOLLOWUP_GUARD_RESULT:-unavailable})"
             elif gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${PR_HEAD_SHA}"; then
               auto_merge_ready_labels_allowed="true"
               auto_merge_summary="ENABLED (squash)"
@@ -4742,6 +4767,9 @@ jobs:
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
+          # Security follow-up merge guard (#9479/#9671) kill switch, raw: only
+          # an explicit `false` turns it off; unset keeps it on.
+          SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED }}
           # When 'true' (default), forward-merge fallback PRs auto-merge via a
           # real merge commit instead of being suppressed for manual merge.
           # See the forward-merge-fallback branch below for the full rationale.
@@ -4755,11 +4783,12 @@ jobs:
           AUTO_MERGE_CHECKS_POLL_MAX_SECONDS: ${{ vars.AUTO_MERGE_CHECKS_POLL_MAX_SECONDS || '180' }}
           AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
           AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
+          REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED: ${{ vars.REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED || 'true' }}
           MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
-          MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '240' }}
+          MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '480' }}
           MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
           MERGE_LEASE_REVOKE_ENABLED: ${{ vars.MERGE_LEASE_REVOKE_ENABLED || 'true' }}
-          MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '60' }}
+          MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '180' }}
           MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars.MERGE_LEASE_PRIORITY_HEAD_PREFIXES || 'auto/forward-merge-stable-' }}
           MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || 'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}
           MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}
@@ -4884,10 +4913,10 @@ jobs:
           AUTO_MERGE_REQUIRED_CI_CHECK: ${{ vars.AUTO_MERGE_REQUIRED_CI_CHECK || '' }}
           AUTO_MERGE_WAIT_WORKFLOWS: ${{ vars.AUTO_MERGE_WAIT_WORKFLOWS || 'CI' }}
           MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}
-          MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '240' }}
+          MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '480' }}
           MERGE_LEASE_WAIT_LABEL: ${{ vars.MERGE_LEASE_WAIT_LABEL || 'ai:merge-lease-wait' }}
           MERGE_LEASE_REVOKE_ENABLED: ${{ vars.MERGE_LEASE_REVOKE_ENABLED || 'true' }}
-          MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '60' }}
+          MERGE_LEASE_IDLE_MINUTES: ${{ vars.MERGE_LEASE_IDLE_MINUTES || '180' }}
           MERGE_LEASE_PRIORITY_HEAD_PREFIXES: ${{ vars.MERGE_LEASE_PRIORITY_HEAD_PREFIXES || 'auto/forward-merge-stable-' }}
           MERGE_LEASE_SOFT_PATHS: ${{ vars.MERGE_LEASE_SOFT_PATHS || 'README.md,agents.md,AGENTS.md,docs/INVENTORY.md,CHANGELOG.md,agents.d/,changelog.d/' }}
           MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}
@@ -4895,12 +4924,18 @@ jobs:
           PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED: ${{ vars.PR_SYNC_MERGE_BLOCKED_GUARD_ENABLED || 'true' }}
           REISSUE_PRESERVE_BASELINE_ENABLED: ${{ vars.REISSUE_PRESERVE_BASELINE_ENABLED || 'true' }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
+          # #9483: the judge's updater_verify_hold branch re-checks the
+          # head-gate exemption; without this the helper default (true) wins.
+          REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED: ${{ vars.REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED || 'true' }}
           # Single-issue security pass settings, the same as the
           # "Single-issue security pass" step: security-exhaustion mode and
           # the security gate on judge merges.
           SECURITY_PASS_EXHAUSTED: ${{ steps.single_issue_security_pass.outputs.exhausted }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
+          # Security follow-up merge guard (#9671): the raw variable, so unset
+          # keeps the guard on; only an explicit `false` turns it off.
+          SINGLE_PASS_FOLLOWUP_GUARD_SWITCH: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED }}
           SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED || 'true' }}
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS || '2' }}
