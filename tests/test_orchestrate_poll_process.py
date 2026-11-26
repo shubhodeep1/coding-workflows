@@ -665,6 +665,83 @@ def _extract_latest_standalone_state(comments: list[dict]) -> dict | None:
 	return None
 
 
+# #10019: the fake `gh`, `git` and `python3` that `_run_poller` writes, and
+# its `tg_cleanup_msgs` / `tg_send_tracked` helpers, all read-modify-write the
+# shared GH_MOCK_STORE JSON. Each `_run_poller` call keeps that store in its own
+# temp directory, so separate tests and shards never share it; the race is
+# inside one poller run. Unlocked, two overlapping fakes there (process
+# substitution, background calls, a fake that starts another fake) could lose
+# a counter update (`pr_get_calls`, `git_fetch_calls`) or read a half-written
+# store. Every one of them prepends this snippet: it takes an exclusive flock on
+# `<store>.lock` before the load, holds it until the fake exits (or calls
+# `_mock_store_lock_release()`), and replaces the store atomically.
+# GH_MOCK_STORE_LOCK_HELD=1 is inherited by children, so a fake started by a
+# fake that holds the lock does not wait on its own parent. The wait is bounded
+# so that a fake-to-fake pipeline cannot hang a shard; past the bound the fake
+# continues unlocked (the behaviour before #10019) and says so on stderr.
+_POLLER_MOCK_STORE_LOCK_SNIPPET = r'''import fcntl as _mock_store_fcntl
+import os as _mock_store_os
+import sys as _mock_store_sys
+import tempfile as _mock_store_tempfile
+import time as _mock_store_time
+
+_MOCK_STORE_LOCK_HANDLE = None
+# Test-only override so the fail-open path can be exercised quickly; 30s default.
+try:
+	_mock_store_wait_override = float(_mock_store_os.environ.get("GH_MOCK_STORE_LOCK_WAIT_SECONDS", "30") or "30")
+except ValueError:
+	_mock_store_wait_override = 30.0
+# A non-numeric, non-positive, nan or inf value would crash every fake or
+# defeat the bounded wait; fall back to the 30s default instead.
+_MOCK_STORE_LOCK_WAIT_SECONDS = _mock_store_wait_override if 0 < _mock_store_wait_override < float("inf") else 30.0
+
+
+def _mock_store_lock_acquire(store_path):
+	global _MOCK_STORE_LOCK_HANDLE
+	if _MOCK_STORE_LOCK_HANDLE is not None:
+		return
+	if _mock_store_os.environ.get("GH_MOCK_STORE_LOCK_HELD") == "1":
+		return
+	lock_handle = open(f"{store_path}.lock", "a+", encoding="utf-8")
+	lock_deadline = _mock_store_time.monotonic() + _MOCK_STORE_LOCK_WAIT_SECONDS
+	while True:
+		try:
+			_mock_store_fcntl.flock(lock_handle.fileno(), _mock_store_fcntl.LOCK_EX | _mock_store_fcntl.LOCK_NB)
+			break
+		except BlockingIOError:
+			if _mock_store_time.monotonic() >= lock_deadline:
+				lock_handle.close()
+				_mock_store_sys.stderr.write(
+					f"poller mock store: lock wait exceeded {_MOCK_STORE_LOCK_WAIT_SECONDS:g}s for {store_path}; continuing unlocked\n"
+				)
+				return
+			_mock_store_time.sleep(0.005)
+	_MOCK_STORE_LOCK_HANDLE = lock_handle
+	_mock_store_os.environ["GH_MOCK_STORE_LOCK_HELD"] = "1"
+
+
+def _mock_store_lock_release():
+	global _MOCK_STORE_LOCK_HANDLE
+	if _MOCK_STORE_LOCK_HANDLE is None:
+		return
+	_mock_store_os.environ.pop("GH_MOCK_STORE_LOCK_HELD", None)
+	# Closing the only descriptor drops the flock.
+	_MOCK_STORE_LOCK_HANDLE.close()
+	_MOCK_STORE_LOCK_HANDLE = None
+
+
+def _mock_store_write_atomic(store_path, text):
+	store_dir = _mock_store_os.path.dirname(_mock_store_os.path.abspath(str(store_path)))
+	with _mock_store_tempfile.NamedTemporaryFile(
+		"w", encoding="utf-8", dir=store_dir, prefix=".mock-store-", suffix=".tmp", delete=False
+	) as tmp_store_handle:
+		tmp_store_handle.write(text)
+		tmp_store_name = tmp_store_handle.name
+	_mock_store_os.replace(tmp_store_name, str(store_path))
+
+'''
+
+
 def _write_exec(path: Path, body: str) -> None:
 	path.write_text(body, encoding="utf-8")
 	path.chmod(0o755)
@@ -1370,10 +1447,12 @@ esac
 					'\ntg_cleanup_msgs() {\n'
 					'\tprintf \'%s\\n\' "$1" >> "${TG_CLEANUP_CAPTURE}"\n'
 					'\t"${REAL_PYTHON_BIN}" - "${GH_MOCK_STORE}" "$1" <<\'PY\'\n'
+					+ _POLLER_MOCK_STORE_LOCK_SNIPPET +
 					'import json\n'
 					'import sys\n'
 					'from pathlib import Path\n'
 					'telegram_store_path = Path(sys.argv[1])\n'
+					'_mock_store_lock_acquire(telegram_store_path)\n'
 					'telegram_store = json.loads(telegram_store_path.read_text(encoding="utf-8"))\n'
 					'telegram_issue = telegram_store["issues"][sys.argv[2]]\n'
 					'telegram_issue["comments"] = [\n'
@@ -1381,7 +1460,7 @@ esac
 					'\tif "<!-- tg_cleanup:" not in telegram_comment.get("body", "")\n'
 					'\tand "<!-- tg_phase:" not in telegram_comment.get("body", "")\n'
 					']\n'
-					'telegram_store_path.write_text(json.dumps(telegram_store), encoding="utf-8")\n'
+					'_mock_store_write_atomic(telegram_store_path, json.dumps(telegram_store))\n'
 					'PY\n'
 					'}\n'
 					'tg_send_tracked() {\n'
@@ -1391,10 +1470,12 @@ esac
 					'\tjq -cn --arg issue "${tracked_issue_num}" --arg message "${tracked_message_text}" --arg level "${tracked_level}" '
 					"'{issue: $issue, message: $message, level: $level}' >> \"${TG_NOTIFICATION_CAPTURE}\"\n"
 					'\t"${REAL_PYTHON_BIN}" - "${GH_MOCK_STORE}" "${tracked_issue_num}" <<\'PY\'\n'
+					+ _POLLER_MOCK_STORE_LOCK_SNIPPET +
 					'import json\n'
 					'import sys\n'
 					'from pathlib import Path\n'
 					'tracked_store_path = Path(sys.argv[1])\n'
+					'_mock_store_lock_acquire(tracked_store_path)\n'
 					'tracked_store = json.loads(tracked_store_path.read_text(encoding="utf-8"))\n'
 					'tracked_issue = tracked_store["issues"][sys.argv[2]]\n'
 					'tracked_comment_id = int(tracked_store.get("next_comment_id", 1))\n'
@@ -1415,7 +1496,7 @@ esac
 					'\t\t"user": {"login": "github-actions[bot]"},\n'
 					'\t})\n'
 					'tracked_store["next_comment_id"] = tracked_comment_id + 1\n'
-					'tracked_store_path.write_text(json.dumps(tracked_store), encoding="utf-8")\n'
+					'_mock_store_write_atomic(tracked_store_path, json.dumps(tracked_store))\n'
 					'PY\n'
 					'}\n'
 				)
@@ -1686,8 +1767,7 @@ esac
 			encoding="utf-8",
 		)
 
-		gh_mock = r'''#!/usr/bin/env python3
-import json
+		gh_mock = "#!/usr/bin/env python3\n" + _POLLER_MOCK_STORE_LOCK_SNIPPET + r'''import json
 import os
 import re
 import subprocess
@@ -1695,12 +1775,13 @@ import sys
 from pathlib import Path
 
 store_path = Path(__import__('os').environ['GH_MOCK_STORE'])
+_mock_store_lock_acquire(store_path)
 store = json.loads(store_path.read_text(encoding='utf-8'))
 args = sys.argv[1:]
 
 
 def save():
-	store_path.write_text(json.dumps(store), encoding='utf-8')
+	_mock_store_write_atomic(store_path, json.dumps(store))
 
 
 def get_issue(num):
@@ -3435,14 +3516,14 @@ sys.exit(1)
 		assert real_python is not None
 		_write_exec(
 			bin_dir / "git",
-			r'''#!/usr/bin/env python3
-import json
+			"#!/usr/bin/env python3\n" + _POLLER_MOCK_STORE_LOCK_SNIPPET + r'''import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 
 store_path = Path(os.environ['GH_MOCK_STORE'])
+_mock_store_lock_acquire(store_path)
 store = json.loads(store_path.read_text(encoding='utf-8'))
 raw_args = sys.argv[1:]
 real_git = os.environ.get('REAL_GIT_BIN', 'git')
@@ -3474,12 +3555,12 @@ if len(args) >= 2 and args[0] == 'merge-tree' and args[1] == '--write-tree' and 
 
 if len(args) >= 2 and args[0] == 'push' and os.environ.get('MOCK_GIT_PUSH_SUCCESS', '') == 'true':
 	store.setdefault('git_push_calls', []).append(args[1:])
-	store_path.write_text(json.dumps(store), encoding='utf-8')
+	_mock_store_write_atomic(store_path, json.dumps(store))
 	sys.exit(0)
 
 if args and args[0] == 'commit' and any('[orchestrator-fix]' in arg for arg in args[1:]):
 	store.setdefault('review_blocked_fix_commit_calls', []).append(args[1:])
-	store_path.write_text(json.dumps(store), encoding='utf-8')
+	_mock_store_write_atomic(store_path, json.dumps(store))
 
 if args and args[0] == 'checkout' and os.environ.get('MOCK_GIT_CHECKOUT_FAIL', '') == 'true':
 	sys.exit(1)
@@ -3492,7 +3573,7 @@ if args[:2] == ['worktree', 'add'] and os.environ.get('MOCK_GIT_WORKTREE_ADD_FAI
 	sys.exit(1)
 if args[:2] == ['worktree', 'add']:
 	store.setdefault('git_worktree_add_calls', []).append(args[2:])
-	store_path.write_text(json.dumps(store), encoding='utf-8')
+	_mock_store_write_atomic(store_path, json.dumps(store))
 
 if args and args[0] == 'fetch' and len([a for a in args[1:] if a not in ('--no-tags', 'origin')]) > 1:
 	# Several refspecs in one call (the integration judge fetches both
@@ -3519,7 +3600,7 @@ if args and args[0] == 'fetch':
 		calls = store.setdefault('git_fetch_calls', {})
 		calls[refspec] = int(calls.get(refspec, 0)) + 1
 		fail_after = store.get('mock_git_fetch_fail_after', {}).get(refspec)
-		store_path.write_text(json.dumps(store), encoding='utf-8')
+		_mock_store_write_atomic(store_path, json.dumps(store))
 		if fail_after is not None and calls[refspec] > int(fail_after):
 			sys.exit(1)
 	if refspec and ':' in refspec:
@@ -3567,6 +3648,9 @@ if args and args[0] == 'fetch':
 					sys.exit(update_ref.returncode)
 				sys.exit(1)
 
+# The store is not touched past this point; let a concurrent fake (for
+# example a `done < <(git diff ...)` loop body) run while real git works.
+_mock_store_lock_release()
 proc = subprocess.run([real_git, *raw_args])
 sys.exit(proc.returncode)
 ''',
@@ -3634,6 +3718,7 @@ print(json.dumps(parsed))
 			# Use the interpreter running the tests (not a hardcoded /usr/bin/python3);
 			# an env shebang would resolve to this shim itself on PATH and recurse.
 			f"#!{sys.executable}\n"
+			+ _POLLER_MOCK_STORE_LOCK_SNIPPET
 			+ r'''import json
 import os
 import subprocess
@@ -3656,12 +3741,14 @@ def _load_store() -> dict:
 		return {}
 	if not store_path.exists():
 		return {}
+	if os.environ.get("GH_MOCK_STORE", ""):
+		_mock_store_lock_acquire(store_path)
 	return json.loads(store_path.read_text(encoding="utf-8"))
 
 def _save_store(store: dict) -> None:
 	if not store_path:
 		return
-	store_path.write_text(json.dumps(store), encoding="utf-8")
+	_mock_store_write_atomic(store_path, json.dumps(store))
 
 if len(args) >= 3 and _script_matches(args[0], "scripts/ai_memory.py") and args[1] == "actions-runs-cache":
 	store = _load_store()
@@ -4080,6 +4167,7 @@ if len(args) >= 2 and _script_matches(args[0], "scripts/orchestrate_state_v2.py"
 		}))
 		sys.exit(0)
 
+_mock_store_lock_release()
 proc = subprocess.run([real_python, *args])
 sys.exit(proc.returncode)
 ''',
@@ -10383,6 +10471,92 @@ def test_security_pass_external_finalize_route_blocks_then_clean_pass_completes(
 			assert len(complete_bodies) == 1
 			assert f"Delivery check: `delivered` — merged final-PR head `{head_sha}`, integration tip `{head_sha}`." in complete_bodies[0]
 			assert f"Security pass audited `{head_sha}`." in complete_bodies[0]
+
+
+def test_poller_mock_store_concurrent_writers_keep_every_update() -> None:
+	"""#10019: the poller sandbox's fakes share one GH_MOCK_STORE. Concurrent
+	read-modify-write must not lose an update or expose a half-written store,
+	a nested fake (GH_MOCK_STORE_LOCK_HELD=1) must not wait on its parent, and
+	every store writer `_run_poller` installs must use the shared lock."""
+	import fcntl
+	import inspect
+
+	writer_count = 24
+	with tempfile.TemporaryDirectory() as tmp:
+		tmp_dir = Path(tmp)
+		store_file = tmp_dir / "gh_store.json"
+		store_file.write_text(json.dumps({"pr_get_calls": {}}), encoding="utf-8")
+		writer_script = tmp_dir / "mock_store_writer.py"
+		writer_script.write_text(
+			_POLLER_MOCK_STORE_LOCK_SNIPPET
+			+ "import json\n"
+			"import os\n"
+			"import time\n"
+			"from pathlib import Path\n"
+			"store_path = Path(os.environ['GH_MOCK_STORE'])\n"
+			"_mock_store_lock_acquire(store_path)\n"
+			"store = json.loads(store_path.read_text(encoding='utf-8'))\n"
+			"calls = store.setdefault('pr_get_calls', {})\n"
+			"calls['395'] = int(calls.get('395', 0)) + 1\n"
+			"time.sleep(0.01)\n"
+			"_mock_store_write_atomic(store_path, json.dumps(store))\n",
+			encoding="utf-8",
+		)
+		writer_env = {key: value for key, value in os.environ.items() if key != "GH_MOCK_STORE_LOCK_HELD"}
+		writer_env["GH_MOCK_STORE"] = str(store_file)
+		writer_procs = [
+			subprocess.Popen(
+				[sys.executable, str(writer_script)],
+				env=writer_env,
+				stdout=subprocess.PIPE,
+				stderr=subprocess.PIPE,
+				text=True,
+			)
+			for _ in range(writer_count)
+		]
+		writer_results = []
+		for writer_proc in writer_procs:
+			writer_stdout, writer_stderr = writer_proc.communicate(timeout=120)
+			writer_results.append((writer_proc.returncode, writer_stdout, writer_stderr))
+		assert all(result[0] == 0 for result in writer_results), writer_results
+		assert not any("continuing unlocked" in result[2] for result in writer_results), writer_results
+		final_store = json.loads(store_file.read_text(encoding="utf-8"))
+		assert final_store["pr_get_calls"]["395"] == writer_count, final_store
+
+		# A nested fake inherits GH_MOCK_STORE_LOCK_HELD=1 from its parent and
+		# must proceed while the parent still holds the lock.
+		with open(f"{store_file}.lock", "a+", encoding="utf-8") as parent_lock_handle:
+			fcntl.flock(parent_lock_handle.fileno(), fcntl.LOCK_EX)
+			nested_result = subprocess.run(
+				[sys.executable, str(writer_script)],
+				env={**writer_env, "GH_MOCK_STORE_LOCK_HELD": "1"},
+				capture_output=True,
+				text=True,
+				check=False,
+				timeout=20,
+			)
+			# Past the bounded wait a fake must say on stderr that it continues
+			# unlocked, so a degraded run is visible rather than a silent race.
+			timed_out_result = subprocess.run(
+				[sys.executable, str(writer_script)],
+				env={**writer_env, "GH_MOCK_STORE_LOCK_WAIT_SECONDS": "0.2"},
+				capture_output=True,
+				text=True,
+				check=False,
+				timeout=20,
+			)
+		assert nested_result.returncode == 0, nested_result.stderr
+		assert timed_out_result.returncode == 0, timed_out_result.stderr
+		assert "lock wait exceeded" in timed_out_result.stderr and "continuing unlocked" in timed_out_result.stderr
+		assert json.loads(store_file.read_text(encoding="utf-8"))["pr_get_calls"]["395"] == writer_count + 2
+		assert not list(tmp_dir.glob(".mock-store-*.tmp"))
+
+	run_poller_source = inspect.getsource(_run_poller)
+	# gh, git and python3 fakes plus the tg_cleanup_msgs / tg_send_tracked heredocs.
+	assert run_poller_source.count("_POLLER_MOCK_STORE_LOCK_SNIPPET") == 5
+	assert run_poller_source.count("_mock_store_lock_acquire(") == 5
+	assert "store_path.write_text(" not in run_poller_source
+	assert '"#!/usr/bin/env python3\\n" + _POLLER_MOCK_STORE_LOCK_SNIPPET' in run_poller_source
 
 
 def test_security_pass_external_finalize_uses_verified_pr_head_when_integration_branch_is_deleted() -> None:
