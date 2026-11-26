@@ -75,7 +75,7 @@ env:
 
 jobs:
   investigate:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
     timeout-minutes: 60
     outputs:
       verdict: ${{ steps.investigate.outputs.verdict }}

@@ -67,7 +67,11 @@
 #                            non-self check-run with that exact name:
 #                            failure (any completed run whose conclusion is
 #                            not success, so skipped/neutral/cancelled count
-#                            as failure) > pending > success > absent;
+#                            as failure) > pending > success > absent.
+#                            When bound (PR_CHECKS_CI_RUN_IDS), two kinds of
+#                            run are left out: a cancelled run superseded by
+#                            a newer run, and a completed non-success run
+#                            older than the newest successful run (PR #9839);
 #                            unknown when the check-runs could not be read;
 #                            disabled when the name is `none`. Computed from
 #                            the check-runs listing the gate already fetched
@@ -123,6 +127,14 @@
 # name a newer run supersedes only when it comes from the same Actions run
 # (a re-run attempt) or when both runs are bound CI runs. Otherwise an
 # unrelated workflow's `lint` would hide a cancelled CI `lint`.
+# _bound_rerun_succeeded (CI name only, PR #9839): a completed run that is
+# bound to the CI workflow (PR_CHECKS_CI_RUN_IDS) and has a newer bound run
+# of the same name that completed with `success`. The gate filters drop such
+# a run, so a failed CI `lint` that a later CI run on the same head passed no
+# longer blocks the head forever (#9839: `lint` failed at 17:15 because
+# `orchestrate-poll (3)` was cancelled, passed at 18:01, and every merge
+# attempt still read `failure`). A newer failure, a still-running newer run,
+# or unbound name-only matching keeps the older failure blocking.
 PR_CHECKS_JQ_SUPERSEDE_DEFS='
 def _run_id: [(.details_url // "") | capture("/actions/runs/(?<id>[0-9]+)(/|$)") | .id] | first;
 def _bound_ci_run: ($bound != "__unbound__") and (_run_id as $rid | ($rid != null) and (($bound | split(",") | index($rid)) != null));
@@ -136,7 +148,8 @@ def _mark_superseded:
 				. as $r
 				| ($r | _run_id) as $rrid
 				| ($r | _bound_ci_run) as $rb
-				| . + {_superseded: ([$grp[] | select(_newer_than($r) and (((_run_id) as $nid | ($nid != null and $nid == $rrid)) or ($rb and _bound_ci_run)))] | length > 0)}
+				| . + {_superseded: ([$grp[] | select(_newer_than($r) and (((_run_id) as $nid | ($nid != null and $nid == $rrid)) or ($rb and _bound_ci_run)))] | length > 0),
+					_bound_rerun_succeeded: ($rb and ([$grp[] | select(_newer_than($r) and _bound_ci_run and .status == "completed" and .conclusion == "success")] | length > 0))}
 			)
 		else
 			max_by([(.id // 0), (.started_at // "")]) as $newest | map(. + {_superseded: (. != $newest)})
@@ -372,7 +385,10 @@ _pr_checks_completed()
 	# `unknown`, never `success`. One exception, only when the runs are bound
 	# to the CI workflow (PR_CHECKS_CI_RUN_IDS): a cancelled run superseded by
 	# a newer bound run of the same name is dropped, as in the gate below, so
-	# a re-run of a cancelled CI check unblocks the wait. Unbound (name-only)
+	# a re-run of a cancelled CI check unblocks the wait. Likewise a completed
+	# failure older than the newest successful bound run is dropped
+	# (_bound_rerun_succeeded in the gate, PR #9839); a still-running run, or
+	# a failure newer than that success, still counts. Unbound (name-only)
 	# matching keeps every run, since another workflow's same-name run could
 	# otherwise hide the cancellation. The name reaches jq only through --arg.
 	# `__invalid__` (a malformed explicit value with no repository default)
@@ -394,7 +410,14 @@ _pr_checks_completed()
 				[$runs[] | select(type == "object" and .name == $ci and ((.head_sha // $sha) | tostring | startswith($sha)) and (_is_self_check_run | not) and _is_bound_run)] as $all |
 				(if ($bound == "__unbound__") or (($all | length) == 0) then $all
 				else ($all | max_by([(.id // 0), (.started_at // "")])) as $newest
-					| [$all[] | select(.conclusion != "cancelled" or . == $newest)]
+					| ([$all[] | select(.status == "completed" and .conclusion == "success")] | max_by([(.id // 0), (.started_at // "")])) as $newest_ok
+					| [$all[] | select(.conclusion != "cancelled" or . == $newest)
+						| select(
+							($newest_ok == null)
+							or (.status != "completed")
+							or (.conclusion == "success")
+							or (([($newest_ok.id // 0), ($newest_ok.started_at // "")] > [(.id // 0), (.started_at // "")]) | not)
+						)]
 				end) as $m |
 				if ([$m[] | select(.status == "completed" and .conclusion != "success")] | length) > 0 then "failure"
 				elif ([$m[] | select(.status != "completed")] | length) > 0 then "pending"
@@ -596,7 +619,7 @@ _pr_checks_completed()
 		# Legacy fail-closed-on-any-failure behaviour (with self-run exclusion).
 		incomplete="$(printf '%s' "${check_runs_json}" | jq -r --arg self_run "${self_run}" --arg gate_drop_id "${gate_sup_drop_id}" --arg ci "${PR_CHECKS_LAST_CI_NAME:-none}" --arg bound "${PR_CHECKS_CI_RUN_IDS-__unbound__}" "${PR_CHECKS_JQ_SUPERSEDE_DEFS}"'
 			def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
-			def _is_pending: .status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and (.conclusion != "cancelled" or (._superseded | not)));
+			def _is_pending: .status != "completed" or (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and (.conclusion != "cancelled" or (._superseded | not)) and (._bound_rerun_succeeded | not));
 			(
 				if (type == "array") then
 					[.[]? | (.check_runs // [])[]]
@@ -638,7 +661,7 @@ _pr_checks_completed()
 					(
 						(.status != "completed")
 						or (
-							(.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and (.conclusion != "cancelled" or (._superseded | not)))
+							(.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and (.conclusion != "cancelled" or (._superseded | not)) and (._bound_rerun_succeeded | not))
 							and (.name as $n | $required | index($n))
 						)
 					)
@@ -833,6 +856,11 @@ _pr_ruleset_required_check_blockers()
 # API calls (§15): 0 for JSON input, 1 GET for a PR number, plus the 1-3
 # GETs of _pr_ruleset_required_check_blockers only when the state is
 # blocked and no hint is given.
+# Issue #9993 (G3): when the blockers are exactly
+# `<FINAL_CI_WIRING_STATUS_CONTEXT> (missing)` (default `ci/final`), the
+# deferral also calls _pr_final_ci_wiring_behind_update ... blocked_status
+# (its own budget; it acts only on a head whose final CI run succeeded). The
+# guard's return value and its SYNC_MERGE_BLOCKED_GUARD line are unchanged.
 # ---------------------------------------------------------------------------
 _pr_sync_merge_blocked_guard()
 {
@@ -907,6 +935,17 @@ _pr_sync_merge_blocked_guard()
 	SYNC_MERGE_BLOCKED_GUARD_STATE="${guard_state}"
 	SYNC_MERGE_BLOCKED_GUARD_BLOCKERS="${guard_blockers}"
 	echo "SYNC_MERGE_BLOCKED_GUARD outcome=deferred pr=${guard_pr:-unknown} head=${guard_head:-unknown} state=${guard_state} blockers=${guard_blockers}"
+	# Issue #9993 (G3): a green head blocked only by a missing final-CI status
+	# may sit on a branch whose workflow copy cannot post it; route it to the
+	# CI-wiring update. The guard still defers. A caller that set
+	# REVIEW_FINAL_CI_WORKFLOW to empty (final CI off) gets no wiring call.
+	local guard_wiring_wf=""
+	if [ "${guard_state}" = "blocked" ] && [ -n "${guard_head}" ] && [ -n "${guard_pr}" ] \
+		&& [ "${guard_blockers}" = "${FINAL_CI_WIRING_STATUS_CONTEXT:-ci/final} (missing)" ] \
+		&& declare -F _pr_final_ci_wiring_behind_update >/dev/null 2>&1 \
+		&& guard_wiring_wf="$(_pr_final_ci_wiring_workflow)"; then
+		_pr_final_ci_wiring_behind_update "${guard_pr}" "${guard_head}" "${guard_base_ref}" "${guard_wiring_wf}" blocked_status || true
+	fi
 	return 1
 }
 
@@ -954,8 +993,12 @@ _pr_sync_merge_blocked_guard()
 # exactly that name exists on the reviewed head and every such run
 # succeeded: absent/pending/unknown keep polling until the budget is spent
 # (outcome timeout), and a failed, skipped, neutral or cancelled run ends
-# the wait with outcome failed. The zero-check-runs grace applies only when
-# the requirement is off. Every AUTOFIX_AUTO_MERGE_CHECKS line ends with
+# the wait with outcome failed. With bound runs (PR_CHECKS_CI_RUN_IDS) a
+# cancelled run superseded by a newer run, or a completed non-success run
+# older than a newer successful run of that name (PR #9839), does not count;
+# a newer failure or a still-running run still does. The zero-check-runs
+# grace applies only when the requirement is off. Every
+# AUTOFIX_AUTO_MERGE_CHECKS line ends with
 # `ci_check=<name> ci_state=<state>`. Actions pull_request CI records its
 # check-runs on the PR head SHA (the job checks out the test-merge ref), so
 # the reviewed-head binding and the callers' --match-head-commit stay as
@@ -1031,8 +1074,15 @@ _pr_auto_merge_required_ci_check_name()
 # the final run's `lint` binds and a queued final run counts as pending.
 # Without this, a head whose only CI run is its final run never binds
 # `lint` and the wait always timed out (`ci_state=absent`).
-# Input: head SHA. Output: PR_CHECKS_RUNS_PENDING, PR_CHECKS_RUNS_UNRUN
-# (integers), PR_CHECKS_RUNS_IDS (comma-separated run ids of the listed
+# Issue #9983: PR_CHECKS_RUNS_PENDING_LIVE is PR_CHECKS_RUNS_PENDING minus
+# the wedged runs: a run whose status is queued, requested, pending or
+# waiting and whose created_at is at least ZOMBIE_RUN_MAX_QUEUED_HOURS old
+# (_merge_lease_wedged_queued_seconds, the #9473 rule; default 24). A run
+# with a missing or malformed created_at, or an unreadable clock, stays live
+# (fail-open). Only the merge-lease activity decisions read it; every other
+# caller keeps PR_CHECKS_RUNS_PENDING. Same jq pass, no extra call.
+# Input: head SHA. Output: PR_CHECKS_RUNS_PENDING, PR_CHECKS_RUNS_UNRUN,
+# PR_CHECKS_RUNS_PENDING_LIVE (integers), PR_CHECKS_RUNS_IDS (comma-separated run ids of the listed
 # workflows on the head, self excluded) and PR_CHECKS_RUNS_READ
 # (true | false when the read failed or was skipped | disabled), return 0.
 # API calls: one REST `actions/runs?head_sha=` read (per_page=100); none
@@ -1056,6 +1106,7 @@ _pr_head_ci_runs_pending()
 	local head_sha="$1" repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" names_csv runs_json self_run
 	PR_CHECKS_RUNS_PENDING=0
 	PR_CHECKS_RUNS_UNRUN=0
+	PR_CHECKS_RUNS_PENDING_LIVE=0
 	PR_CHECKS_RUNS_READ="false"
 	PR_CHECKS_RUNS_IDS=""
 	PR_CHECKS_RUNS_RAW_JSON=""
@@ -1070,21 +1121,37 @@ _pr_head_ci_runs_pending()
 	# final-CI check in _pr_wait_for_required_checks reuses this listing
 	# instead of reading the runs again (§15).
 	PR_CHECKS_RUNS_RAW_JSON="${runs_json}"
-	local counts
-	counts="$(printf '%s' "${runs_json}" | jq -r --arg names "${names_csv}" --arg self_run "${self_run}" "${PR_CHECKS_JQ_WAIT_WORKFLOW_KEY_DEF}"'
+	local counts runs_now runs_wedged_s
+	runs_now="$(date -u +%s 2>/dev/null)" || runs_now=0
+	[[ "${runs_now}" =~ ^[0-9]+$ ]] || runs_now=0
+	runs_wedged_s="$(_merge_lease_wedged_queued_seconds 2>/dev/null)" || runs_wedged_s=0
+	[[ "${runs_wedged_s}" =~ ^[0-9]+$ ]] || runs_wedged_s=0
+	counts="$(printf '%s' "${runs_json}" | jq -r --arg names "${names_csv}" --arg self_run "${self_run}" \
+		--argjson now "${runs_now}" --argjson wedged_s "${runs_wedged_s}" "${PR_CHECKS_JQ_WAIT_WORKFLOW_KEY_DEF}"'
+		def _runs_wedged:
+			$wedged_s > 0 and $now > 0
+			and ((.status // "") as $s | $s == "queued" or $s == "requested" or $s == "pending" or $s == "waiting")
+			and (.created_at
+				| if type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?Z$")
+					then ((sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) <= ($now - $wedged_s))
+					else false
+					end);
 		($names | split(",") | map(gsub("^\\s+|\\s+$"; "") | ascii_downcase) | map(select(length > 0))) as $wanted
 		| [(.workflow_runs // [])[]
 			| select((.id | tostring) != $self_run)
 			| select(_wait_wf_key($wanted) != "")] as $runs
 		| ($runs | map(select(.status != "completed")) | length) as $pending
+		| ($runs | map(select(.status != "completed" and (_runs_wedged | not))) | length) as $live
 		| ($runs | group_by(_wait_wf_key($wanted))
 			| map(select(all(.[]; .status == "completed" and (.conclusion == "cancelled" or .conclusion == "startup_failure"))))
 			| length) as $unrun
-		| "\($pending) \($unrun)"' 2>/dev/null | tail -n1)"
-	PR_CHECKS_RUNS_PENDING="${counts%% *}"
-	PR_CHECKS_RUNS_UNRUN="${counts##* }"
+		| "\($pending) \($unrun) \($live)"' 2>/dev/null | tail -n1)"
+	# Three fields since #9983: read them by position, so the live count never
+	# lands in PR_CHECKS_RUNS_UNRUN.
+	read -r PR_CHECKS_RUNS_PENDING PR_CHECKS_RUNS_UNRUN PR_CHECKS_RUNS_PENDING_LIVE _ <<< "${counts}" || true
 	[[ "${PR_CHECKS_RUNS_PENDING}" =~ ^[0-9]+$ ]] || PR_CHECKS_RUNS_PENDING=0
 	[[ "${PR_CHECKS_RUNS_UNRUN}" =~ ^[0-9]+$ ]] || PR_CHECKS_RUNS_UNRUN=0
+	[[ "${PR_CHECKS_RUNS_PENDING_LIVE}" =~ ^[0-9]+$ ]] || PR_CHECKS_RUNS_PENDING_LIVE="${PR_CHECKS_RUNS_PENDING}"
 	# Run ids of the listed workflows on this head (self excluded), for the
 	# named CI check binding (issue #6963). Same listing, no extra call.
 	local run_ids
@@ -1128,9 +1195,32 @@ _pr_head_ci_runs_pending()
 # -f sync_quick=true, and when the workflow refuses that input the full suite
 # is dispatched once more (one `REVIEW_FINAL_CI_SYNC_QUICK pr= head=
 # outcome=dispatched|dispatch_refused` line).
-# Outputs: PR_FINAL_CI_OUTCOME = dispatched | exists | disabled |
+# CI wiring behind the base (issue #9993): before it dispatches, the helper
+# calls _pr_final_ci_wiring_behind_update <pr> <sha> <base ref> <workflow>
+# dispatch, unless PR_FINAL_CI_WIRING_SKIP=true (set only by
+# _pr_base_sync_dispatch_final_ci for a verified update head).
+# scripts/review_enable_auto_merge.sh sets PR_FINAL_CI_WIRING_NO_UPDATE=true
+# on its two exits that never merge (auto-merge off, e2e-smoke-test): the
+# check still runs and a behind head is held (no dispatch on the stale
+# workflow), but it takes no merge lease and gets no new head mid-gate. The
+# helper sets the same mode itself when its PR read carries the
+# `e2e-smoke-test` label, but that read is made only when no head ref or no
+# base ref (below) was known (the sweep); a caller that passes both, such as
+# _pr_wait_for_required_checks, must set PR_FINAL_CI_WIRING_NO_UPDATE itself
+# for such a PR. The base ref is
+# the optional PR_FINAL_CI_BASE_REF, else PR_BASE_FRESHNESS_BASE_REF when the
+# freshness side channel is for <sha>, else `.base.ref` of the PR read (made
+# only on this dispatch path, and shared with the head-ref read). When that
+# helper updated the branch, asked for an update, or holds it (lease, refused
+# update, recorded refusal), nothing is dispatched on this head:
+# PR_FINAL_CI_OUTCOME=deferred, PR_FINAL_CI_REASON=ci_wiring_behind and one
+# `REVIEW_FINAL_CI pr= head= outcome=deferred reason=ci_wiring_behind` line.
+# Any other result (not behind, switch off, comparison failed) dispatches as
+# before (fail-open).
+# Outputs: PR_FINAL_CI_OUTCOME = dispatched | exists | disabled | deferred |
 # dispatch_failed | invalid_input; PR_FINAL_CI_REASON = the decision's reason
-# token (in_flight, success, failure, no_run, ...; empty when there was none);
+# token (in_flight, success, failure, no_run, ci_wiring_behind, ...; empty
+# when there was none);
 # PR_FINAL_CI_FAILED_AT = the newest failed full run's `updated_at` when the
 # reason is `failure` (empty otherwise); one `REVIEW_FINAL_CI pr= head= outcome=
 # reason=` line per decision (plus `outcome=read_failed action=dispatch` when
@@ -1142,7 +1232,11 @@ _pr_head_ci_runs_pending()
 # dispatches (docs-only final CI, run-volume plan item 4; one
 # `REVIEW_FINAL_CI_DOCS_ONLY pr= head= docs_only= reason=` line); at most one
 # `workflow_dispatch`, or two when a docs_only=true dispatch is refused and
-# the full-suite dispatch is tried once more. Fail-open: a failed
+# the full-suite dispatch is tried once more. On the dispatch path only, the
+# wiring check above (§14/§15 API hygiene): 0 calls when the freshness side
+# channel covers <sha>, else one `GET pulls/<pr>` when no base ref is known
+# plus the helper's own budget (see _pr_final_ci_wiring_behind_update).
+# Fail-open: a failed
 # read dispatches anyway, because a duplicate run is harmless and a missing
 # run blocks the merge (the required `lint` check never appears).
 # The final-CI decision over an `actions/.../runs` listing ($path, $sha):
@@ -1227,6 +1321,43 @@ _pr_ensure_final_ci()
 		PR_FINAL_CI_OUTCOME="dispatch_failed"
 		echo "::warning::REVIEW_FINAL_CI pr=${pr} head=${sha} outcome=dispatch_failed reason=head_ref_unavailable"
 		return 0
+	fi
+	# CI wiring behind the base (issue #9993): GitHub runs the head branch's
+	# own copy of <workflow> while its jobs run the base's scripts, so a branch
+	# that lacks the base's commits to that file gets a false failure or no
+	# `ci/final`. Update such a branch instead of dispatching on it.
+	if [ "${PR_FINAL_CI_WIRING_SKIP:-}" != "true" ] && declare -F _pr_final_ci_wiring_behind_update >/dev/null 2>&1; then
+		local final_ci_wiring_base=""
+		# The base ref is resolved only with the switch on, so off makes no call.
+		if _pr_final_ci_wiring_enabled; then
+			final_ci_wiring_base="${PR_FINAL_CI_BASE_REF:-}"
+			if [ -z "${final_ci_wiring_base}" ] && [ "${PR_BASE_FRESHNESS_HEAD_SHA:-}" = "${sha}" ]; then
+				final_ci_wiring_base="${PR_BASE_FRESHNESS_BASE_REF:-}"
+			fi
+			if [ -z "${final_ci_wiring_base}" ]; then
+				[ -n "${pr_json}" ] || pr_json="$(gh_retry _safe_gh_jq "repos/${repo}/pulls/${pr}" 2>/dev/null || echo "")"
+				final_ci_wiring_base="$(printf '%s' "${pr_json}" | jq -r 'if type == "object" then (.base.ref // "") else "" end' 2>/dev/null | tail -n1)"
+			fi
+		fi
+		# An e2e-smoke-test PR's branch is never updated mid-gate: the review
+		# step's e2e exit is check-only, and the final-CI sweep reaches the same
+		# head without that flag. The labels come from the PR read above (the
+		# sweep path always makes it), so this costs no call.
+		local final_ci_wiring_no_update="${PR_FINAL_CI_WIRING_NO_UPDATE:-}"
+		if [ -n "${pr_json}" ] && printf '%s' "${pr_json}" | jq -e 'type == "object"
+			and ([(.labels // [])[]? | select(type == "object") | (.name // "")] | any(. == "e2e-smoke-test"))' >/dev/null 2>&1; then
+			final_ci_wiring_no_update="true"
+		fi
+		PR_FINAL_CI_WIRING_NO_UPDATE="${final_ci_wiring_no_update}" \
+			_pr_final_ci_wiring_behind_update "${pr}" "${sha}" "${final_ci_wiring_base}" "${wf}" dispatch || true
+		case "${PR_FINAL_CI_WIRING_OUTCOME:-}" in
+			updated|requested|held)
+				PR_FINAL_CI_OUTCOME="deferred"
+				PR_FINAL_CI_REASON="ci_wiring_behind"
+				echo "REVIEW_FINAL_CI pr=${pr} head=${sha} outcome=deferred reason=ci_wiring_behind"
+				return 0
+				;;
+		esac
 	fi
 	# Docs-only final CI (run-volume plan item 4): a PR whose changed files
 	# are all on the scripts/ci_docs_only_paths.sh list gets docs_only=true,
@@ -1439,7 +1570,8 @@ _pr_wait_for_required_checks()
 		if [ "${final_ci_checked}" = "0" ] && [ -n "${REVIEW_FINAL_CI_WORKFLOW:-}" ] && [ "${ci_required_name}" != "none" ] \
 			&& { [ "${PR_CHECKS_LAST_CI_STATE:-}" = "absent" ] || [ "${PR_CHECKS_RUNS_UNRUN:-0}" -gt 0 ]; }; then
 			final_ci_checked=1
-			PR_FINAL_CI_RUNS_JSON="${PR_CHECKS_RUNS_RAW_JSON:-}" _pr_ensure_final_ci "${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" \
+			PR_FINAL_CI_RUNS_JSON="${PR_CHECKS_RUNS_RAW_JSON:-}" PR_FINAL_CI_BASE_REF="${base_ref}" \
+				_pr_ensure_final_ci "${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" \
 				"${pr_number}" "${head_sha}" "${PR_CHECKS_HEAD_REF:-}" || true
 			if [ "${PR_FINAL_CI_OUTCOME:-}" = "dispatched" ] && [ "${waited}" -lt $((max_minutes * 60)) ]; then
 				# Base interval; the back-off restarts after a dispatch (#9926).
@@ -1452,6 +1584,15 @@ _pr_wait_for_required_checks()
 				wait_ticks=$((wait_ticks + 1))
 				PR_CHECKS_WAIT_WAITED_S="${waited}"
 				continue
+			fi
+			# The branch's CI wiring is behind its base (issue #9993): the
+			# head was updated (or waits for an update) instead of getting a
+			# final CI run, so the required check cannot appear on it. Stop
+			# now rather than hold the runner for the whole budget.
+			if [ "${PR_FINAL_CI_OUTCOME:-}" = "deferred" ]; then
+				PR_CHECKS_WAIT_OUTCOME="timeout"
+				echo "AUTOFIX_AUTO_MERGE_CHECKS pr=${pr_number} head_sha=${head_sha:-unknown} outcome=timeout waited_s=${waited} pending=${PR_CHECKS_RUNS_PENDING:-0} reason=final_ci_wiring_behind ci_check=${PR_CHECKS_LAST_CI_NAME:-none} ci_state=${PR_CHECKS_LAST_CI_STATE:-unknown}"
+				return 1
 			fi
 			# The head has no CI run and none could be started (a branch
 			# whose ci.yml predates the workflow_dispatch trigger, a fork
@@ -1617,7 +1758,10 @@ _pr_wait_for_required_checks()
 #       same word, plus PR_BASE_FRESHNESS_LAST_REASON,
 #       PR_BASE_FRESHNESS_HEAD_SHA, PR_BASE_FRESHNESS_BEHIND_BY,
 #       PR_BASE_FRESHNESS_OVERLAP and PR_BASE_FRESHNESS_BASE_SHA (the base
-#       tip the compare saw, empty when its commit list was truncated).
+#       tip the compare saw, empty when its commit list was truncated), and
+#       PR_BASE_FRESHNESS_BASE_PATHS (issue #9993: the compare's base-side
+#       file names, one per line, `__truncated__` at 300+ files, empty when
+#       the base gained no commits or the compare failed).
 #   _pr_base_sync_for_fresh_ci <pr> <head_sha>
 #       PUT /pulls/{n}/update-branch bound to <head_sha>; returns 0 when
 #       GitHub accepted the update.
@@ -1677,6 +1821,10 @@ _pr_base_freshness()
 	# for the merge lease (_merge_lease_gate) so it never re-reads the files.
 	PR_BASE_FRESHNESS_PR_PATHS=""
 	PR_BASE_FRESHNESS_PR_PATHS_FOR=""
+	# The base-side paths of the compare (newline-separated; `__truncated__`
+	# when it lists 300+ files), kept for _pr_final_ci_wiring_behind_update
+	# (issue #9993) so it never re-reads the compare for this head.
+	PR_BASE_FRESHNESS_BASE_PATHS=""
 	case "$(printf '%s' "${MERGE_BASE_FRESHNESS_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
 		true|1|yes|on) ;;
 		*)
@@ -1741,17 +1889,28 @@ _pr_base_freshness()
 		return 0
 	fi
 	if [ "${base_files_count}" -ge 300 ]; then
+		PR_BASE_FRESHNESS_BASE_PATHS="__truncated__"
 		PR_BASE_FRESHNESS_LAST_REASON="base_diff_truncated"
 		PR_BASE_FRESHNESS_OVERLAP="(base diff lists ${base_files_count} files; extent unknown)"
 		PR_BASE_FRESHNESS_OUTCOME="overlap"
 		echo "overlap"
 		return 0
 	fi
+	# Issue #9993: the base-side names (renames under both), no extra call.
+	PR_BASE_FRESHNESS_BASE_PATHS="$(printf '%s' "${compare_json}" | jq -r '
+		[ (.files // [])[]? | select(type == "object") | (.filename // empty), (.previous_filename // empty)
+		  | select(type == "string") ] | unique | .[]' 2>/dev/null || true)"
 
 	# The PR's own paths: `--paginate --slurp` yields an array of pages,
 	# each an array of file objects; renames count under both names.
 	local pr_files_json tmp_compare tmp_pr_files overlap freshness_soft_input=""
-	pr_files_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${repo}/pulls/${pr_number}/files?per_page=100" 2>/dev/null || echo "{}")"
+	# Issue #9928: in the review job (GH_PR_READ_CACHE_JOB set) the files list
+	# comes from the run-local PR read cache, one flat array keyed by head.
+	if [ -n "${GH_PR_READ_CACHE_JOB:-}" ] && type gh_pr_cached_read >/dev/null 2>&1; then
+		pr_files_json="$(gh_pr_cached_read files "${repo}" "${pr_number}" "${head_sha}" 2>/dev/null || echo "{}")"
+	else
+		pr_files_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${repo}/pulls/${pr_number}/files?per_page=100" 2>/dev/null || echo "{}")"
+	fi
 	if ! tmp_compare="$(mktemp "${TMPDIR:-/tmp}/pr_base_compare.XXXXXX" 2>/dev/null)"; then
 		PR_BASE_FRESHNESS_LAST_REASON="tmp_failed"
 		PR_BASE_FRESHNESS_OUTCOME="unknown"
@@ -1909,24 +2068,41 @@ _pr_base_sync_for_fresh_ci()
 # after a failed final CI run (they carry `<!-- ai:final-ci-base-sync:v1 pr=<n> -->`
 # in their text; empty when unknown), and PR_BASE_SYNC_LOGIN to the token's
 # own login once the `user` read succeeded.
+# `_pr_base_sync_count <pr> <head sha>` (optional 2nd arg, issue #10093) also
+# sets PR_BASE_SYNC_STALE_WORKFLOW_MARKED from the same comments read (no
+# extra call): `true` when a Bot or an OWNER/MEMBER/COLLABORATOR comment
+# carries `<!-- ai:final-ci-stale-workflow:v1 pr=<n> head=<sha> -->`
+# (scripts/review_final_ci_failed.sh; same trust rule as its failed-marker
+# check) and no such comment carries that head's
+# `<!-- ai:final-ci-failed:v1 pr=<n> head=<sha> -->` (already handed back),
+# `false` otherwise, `""` when no valid head was given or the read failed.
 # API budget (§15): one `user` read and one paginated issue-comments read,
-# only on the overlap path. No earlier call in this file reads comments or
-# the token's login; the review gate's own comments read happens in another
-# job and cannot be shared.
+# only on the overlap path. On the CI-wiring update path (issue #9993),
+# _pr_final_ci_wiring_note_seen read both once already for its hold marker;
+# that path runs once per head, so the second read is accepted. The review
+# gate's own comments read happens in another job and cannot be shared. In
+# the review job (GH_PR_READ_CACHE_JOB set) the comments read goes through
+# the run-local PR read cache (issue #9928; keyed with no head SHA, so it
+# expires after 120 s and PR writes evict it).
 _pr_base_sync_count()
 {
-	local pr_number="$1"
+	local pr_number="$1" sync_stale_head="${2:-}"
 	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
 	local sync_login sync_comments_json
 	PR_BASE_SYNC_COUNT=""
 	PR_BASE_SYNC_FINAL_CI_COUNT=""
 	PR_BASE_SYNC_LOGIN=""
+	PR_BASE_SYNC_STALE_WORKFLOW_MARKED=""
 	sync_login="$(gh_retry _safe_gh_jq user 2>/dev/null | jq -r 'if type == "object" then (.login // "") else "" end' 2>/dev/null | tail -n1)"
 	[[ "${sync_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]] || return 1
 	# Kept for the review sweep's base sync, which trusts only this login's
 	# ai-review/head-gate status (scripts/review_final_ci_sweep.sh).
 	PR_BASE_SYNC_LOGIN="${sync_login}"
-	sync_comments_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${repo}/issues/${pr_number}/comments?per_page=100" 2>/dev/null)" || return 1
+	if [ -n "${GH_PR_READ_CACHE_JOB:-}" ] && type gh_pr_cached_read >/dev/null 2>&1; then
+		sync_comments_json="$(gh_pr_cached_read issue_comments "${repo}" "${pr_number}" 2>/dev/null)" || return 1
+	else
+		sync_comments_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${repo}/issues/${pr_number}/comments?per_page=100" 2>/dev/null)" || return 1
+	fi
 	PR_BASE_SYNC_COUNT="$(printf '%s' "${sync_comments_json}" | jq -r --arg login "${sync_login}" --arg pr "${pr_number}" '
 		[ .[]? | if type == "array" then .[] else . end
 		  | select(type == "object" and ((.user.login // "") == $login))
@@ -1944,6 +2120,18 @@ _pr_base_sync_count()
 		  | (.body // "") | select(type == "string" and startswith("**Branch updated from `") and contains("<!-- ai:final-ci-base-sync:v1 pr=" + $pr + " -->") and test("<!-- ai:merge-base-sync:v1 pr=" + $pr + " from=[0-9a-f]{40} sync=[0-9]+( base=[0-9a-f]{40} merge=[0-9a-f]{40})? -->\\s*$")) ]
 		| length' 2>/dev/null | tail -n1)"
 	[[ "${PR_BASE_SYNC_FINAL_CI_COUNT}" =~ ^[0-9]+$ ]] || PR_BASE_SYNC_FINAL_CI_COUNT=""
+	# Stale-workflow marker for this head (issue #10093); same read.
+	if [[ "${sync_stale_head}" =~ ^[0-9a-f]{40}$ ]]; then
+		PR_BASE_SYNC_STALE_WORKFLOW_MARKED="$(printf '%s' "${sync_comments_json}" | jq -r \
+			--arg marker "<!-- ai:final-ci-stale-workflow:v1 pr=${pr_number} head=${sync_stale_head} -->" \
+			--arg failed "<!-- ai:final-ci-failed:v1 pr=${pr_number} head=${sync_stale_head} -->" '
+			[ .[]? | if type == "array" then .[] else . end
+			  | select(type == "object")
+			  | select(((.user.type // "") == "Bot") or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")))
+			  | (.body // "") | select(type == "string") ] as $bodies
+			| any($bodies[]; contains($marker)) and (any($bodies[]; contains($failed)) | not)' 2>/dev/null | tail -n1)"
+		[[ "${PR_BASE_SYNC_STALE_WORKFLOW_MARKED}" =~ ^(true|false)$ ]] || PR_BASE_SYNC_STALE_WORKFLOW_MARKED="false"
+	fi
 }
 
 # `_pr_base_sync_observe_update_commit <pr> <from head> [<base ref>]`
@@ -2083,6 +2271,11 @@ _pr_base_sync_marker_post()
 	else
 		echo "::warning::MERGE_BASE_SYNC_MARKER pr=${pr_number} head_sha=${head_sha} sync=${sync_number} outcome=failed (the synchronize run reviews normally)"
 	fi
+	# Issue #9928: this bare POST bypasses the gh_retry eviction hook, so drop
+	# the run-local cached comments (a failed attempt may still have posted).
+	if type gh_pr_cache_evict >/dev/null 2>&1; then
+		gh_pr_cache_evict "${repo}" "${pr_number}" issue_comments >/dev/null 2>&1 || true
+	fi
 	return 0
 }
 
@@ -2189,7 +2382,10 @@ _pr_base_sync_dispatch_final_ci()
 			fi
 			;;
 	esac
-	PR_FINAL_CI_SYNC_QUICK="${sync_ci_quick}" _pr_ensure_final_ci "${repo}" "${pr_number}" "${sync_update_head}" "${PR_BASE_SYNC_HEAD_REF}" || true
+	# PR_FINAL_CI_WIRING_SKIP: the update head was just verified as GitHub's
+	# merge with the base tip, so its wiring is current (issue #9993).
+	PR_FINAL_CI_WIRING_SKIP=true PR_FINAL_CI_SYNC_QUICK="${sync_ci_quick}" \
+		_pr_ensure_final_ci "${repo}" "${pr_number}" "${sync_update_head}" "${PR_BASE_SYNC_HEAD_REF}" || true
 	sync_ci_log "${PR_FINAL_CI_OUTCOME:-unknown}" "${sync_ci_reason}"
 	return 0
 }
@@ -2360,6 +2556,388 @@ _pr_final_ci_refused_base_update()
 	else
 		echo "MERGE_BASE_SYNC_MARKER pr=${refused_pr} head_sha=${refused_head} outcome=skipped reason=${PR_BASE_SYNC_OBSERVE_REASON:-head_not_observed}"
 		refused_log requested "${PR_BASE_SYNC_OBSERVE_REASON:-head_not_observed}"
+	fi
+	return 0
+}
+
+# ---------------------------------------------------------------------------
+# Final CI on a branch whose CI wiring is behind its base (issue #9993).
+#
+# The final CI is dispatched on the PR's head ref, so GitHub runs the head
+# branch's own copy of REVIEW_FINAL_CI_WORKFLOW, while its jobs check out the
+# merge ref and run the base's scripts. A branch that lacks the base's commits
+# to that workflow file runs old steps against new scripts: false failures
+# (CI [pr:9725], run 45159799693: `not our ref` after #9727's
+# CI_FINAL_MERGE_REF_LOCAL_MERGE handling) or no `ci/final` status at all
+# (branches cut before #9956). _pr_base_fresh_for_merge does not help: it
+# updates a branch only when the base moved under files the PR touches.
+#
+#   _pr_final_ci_wiring_enabled
+#       0 when FINAL_CI_WIRING_BEHIND_UPDATE_ENABLED (default true;
+#       true/1/yes/on, any case) is on.
+#   _pr_final_ci_wiring_behind_update <pr> <head sha> <base ref> <workflow file> <entry>
+#       <entry> is `dispatch` (from _pr_ensure_final_ci, before a dispatch)
+#       or `blocked_status` (from _pr_sync_merge_blocked_guard, when the only
+#       blocker is `<FINAL_CI_WIRING_STATUS_CONTEXT> (missing)`; it then also
+#       requires a `success` final CI run on the head).
+#       "Behind" means the base has commits to `.github/workflows/<file>`
+#       that the head lacks: the file is in the base-side file list of
+#       `compare/<head>...<base>`. A PR that edits the file itself is not
+#       behind by this rule alone (G5). Only that one path is checked: ci.yml
+#       calls no local reusable workflow (tests/test_review_final_ci.py pins
+#       that), and local actions resolve from the checked-out merge ref, so
+#       they already come from the base.
+#       When behind: a recorded refusal for this head (below) holds without a
+#       new attempt; otherwise the merge lease (`_merge_lease_gate ... update`)
+#       must allow the update, then the freshness path's chain runs: head-bound
+#       update-branch, verified update commit, the ai:merge-base-sync:v1
+#       marker (so the update head only waits for CI) and the update head's
+#       final CI. A refused update posts one comment ending in
+#         <!-- ai:final-ci-wiring-behind:v1 pr=<n> head=<sha> reason=update_branch_refused -->
+#       (only when the comment read succeeded, so a failing read cannot post
+#       one comment per tick), and later calls for that head hold with
+#       reason=recorded. Only comments by the token's own login count, so a
+#       commenter cannot forge the marker to stall a PR. Before posting, one
+#       PR read: a head that already moved (a concurrent caller updated the
+#       branch) holds with reason=head_moved and posts nothing. The hold
+#       marker needs `mergeable: false`; any other read (true, null, failed)
+#       on the first refusal posts a one-time retry note ending in
+#         <!-- ai:final-ci-wiring-behind:v1 pr=<n> head=<sha> reason=update_branch_failed -->
+#       and holds with reason=update_branch_failed; the next call tries once
+#       more, and a second refusal posts the hold marker. So the update lease
+#       is taken at most twice per head without progress.
+#       With PR_FINAL_CI_WIRING_NO_UPDATE=true (check-only callers; also set
+#       by _pr_ensure_final_ci for a PR labelled e2e-smoke-test in its PR
+#       read), a behind head holds with reason=no_update_path: no lease and no
+#       update; one note per head ending in
+#         <!-- ai:final-ci-wiring-behind:v1 pr=<n> head=<sha> reason=no_update_path -->
+#       (only when the comment read succeeded), which is not a hold.
+#       The update chain runs with an unset REVIEW_FINAL_CI_WORKFLOW
+#       defaulted to <workflow file>, so the poller's calls also dispatch the
+#       update head's final CI; a set-but-empty value (final CI off) stays
+#       empty, and the blocked_status hooks then make no call at all
+#       (_pr_final_ci_wiring_workflow).
+#       Sets PR_FINAL_CI_WIRING_OUTCOME = current | updated | requested |
+#       held | unknown and PR_FINAL_CI_WIRING_REASON; always returns 0.
+#       Callers dispatch (or defer) as before on current and unknown.
+# Env: FINAL_CI_WIRING_BEHIND_UPDATE_ENABLED (default true; off restores the
+# behaviour before issue #9993 with no API call; read from the job
+# environment, no workflow maps a repository variable to it),
+# FINAL_CI_WIRING_STATUS_CONTEXT (default ci/final, the context
+# scripts/ci_final_status.sh posts; read by the guard),
+# PR_FINAL_CI_WIRING_NO_UPDATE (default unset).
+# API budget (§14/§15 API hygiene): 0 calls to decide "behind" when the
+# freshness side channel (PR_BASE_FRESHNESS_HEAD_SHA / _BASE_REF /
+# _BASE_PATHS / _OUTCOME) covers this head and base; otherwise one
+# `GET compare/<head>...<base>`, plus, only when that compare lists 300+
+# files, one `GET commits?sha=<base>&path=<file>&per_page=1` and one
+# `GET compare/<that commit>...<head>`. `blocked_status` adds one
+# `GET actions/workflows/<file>/runs?head_sha=<head>&per_page=20` first. Only
+# when behind: one `GET user` and one paginated issue-comments read, the
+# lease gate's own calls, then the freshness update path's PUT, observe
+# reads, sync count (_pr_base_sync_count reads `user` and the comments a
+# second time: two of each on an updated head, once per head), marker POST
+# and final-CI dispatch, or, when the update is refused, one `GET pulls/<pr>`
+# and at most one comment POST (two refusals per head at most). A
+# check-only hold reads `user` and the comments once and posts at most one
+# note per head. No earlier call in these paths reads the
+# compare for a head the side channel does not cover. A held head that
+# stays a final-CI sweep candidate pays the compare, `GET user` and comments
+# read again on each sweep tick (at most FINAL_CI_SWEEP_MAX_PER_TICK heads).
+# Log (one line per decision): `REVIEW_FINAL_CI_WIRING pr=<n> head=<sha>
+# entry=dispatch|blocked_status outcome=<word> reason=<token>`; on invalid
+# input `pr=`, `head=` and `entry=` may read `invalid`
+# (outcome=unknown reason=invalid_input).
+_pr_final_ci_wiring_enabled()
+{
+	case "$(printf '%s' "${FINAL_CI_WIRING_BEHIND_UPDATE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+		true|1|yes|on) return 0 ;;
+	esac
+	return 1
+}
+
+# _pr_final_ci_wiring_workflow: prints the workflow file the blocked_status
+# hooks (_pr_sync_merge_blocked_guard, the poller's final merge) check. An
+# unset REVIEW_FINAL_CI_WORKFLOW (the poller never sets it) means ci.yml; a
+# set-but-empty one is the documented "final CI off" (README), so it prints
+# nothing and returns 1 and the hook makes no call. No API call.
+_pr_final_ci_wiring_workflow()
+{
+	if [ "${REVIEW_FINAL_CI_WORKFLOW+set}" = "set" ]; then
+		[ -n "${REVIEW_FINAL_CI_WORKFLOW}" ] || return 1
+		printf '%s\n' "${REVIEW_FINAL_CI_WORKFLOW}"
+		return 0
+	fi
+	printf '%s\n' "ci.yml"
+}
+
+# _pr_final_ci_wiring_note_seen <pr> <head sha>: 0 when the token's own login
+# already posted the ai:final-ci-wiring-behind:v1 hold marker for this head
+# (any reason except update_branch_failed), 3 when it posted only the
+# one-time retry note (reason=update_branch_failed: a refusal without a
+# reported conflict, so one more attempt is allowed), 1 when it posted
+# neither, 2 when the login or the comments could not be read. The check-only
+# note (reason=no_update_path) is not a hold either: it is counted apart in
+# PR_FINAL_CI_WIRING_NOTE_NO_UPDATE_SEEN (0 or more; empty unless the read
+# succeeded), so a merge path or the sweep still updates the branch.
+_pr_final_ci_wiring_note_seen()
+{
+	local seen_pr="$1" seen_head="$2"
+	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" seen_login="" seen_comments="" seen_count="" seen_hold="" seen_retry="" seen_no_update=""
+	PR_FINAL_CI_WIRING_NOTE_NO_UPDATE_SEEN=""
+	seen_login="$(gh_retry _safe_gh_jq user 2>/dev/null | jq -r 'if type == "object" then (.login // "") else "" end' 2>/dev/null | tail -n1)"
+	[[ "${seen_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]] || return 2
+	seen_comments="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${repo}/issues/${seen_pr}/comments?per_page=100" 2>/dev/null)" || return 2
+	seen_count="$(printf '%s' "${seen_comments}" | jq -r --arg login "${seen_login}" --arg pr "${seen_pr}" --arg head "${seen_head}" '
+		[ .[]? | if type == "array" then .[] else . end
+		  | select(type == "object" and ((.user.login // "") == $login))
+		  | (.body // "") | select(type == "string")
+		  | (capture("<!-- ai:final-ci-wiring-behind:v1 pr=" + $pr + " head=" + $head + " reason=(?<r>[a-z_]+) -->\\s*$")? | .r) ]
+		| "\(map(select(. != "update_branch_failed" and . != "no_update_path")) | length) \(map(select(. == "update_branch_failed")) | length) \(map(select(. == "no_update_path")) | length)"' 2>/dev/null | tail -n1)"
+	read -r seen_hold seen_retry seen_no_update <<< "${seen_count}"
+	[[ "${seen_hold}" =~ ^[0-9]+$ ]] && [[ "${seen_retry}" =~ ^[0-9]+$ ]] && [[ "${seen_no_update}" =~ ^[0-9]+$ ]] || return 2
+	PR_FINAL_CI_WIRING_NOTE_NO_UPDATE_SEEN="${seen_no_update}"
+	[ "${seen_hold}" -gt 0 ] && return 0
+	[ "${seen_retry}" -gt 0 ] && return 3
+	return 1
+}
+
+_pr_final_ci_wiring_behind_update()
+{
+	local wiring_pr="${1:-}" wiring_head="${2:-}" wiring_base="${3:-}" wiring_wf="${4:-}" wiring_entry="${5:-}"
+	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	local wiring_path="" wiring_paths="" wiring_behind="" wiring_tip="" wiring_behind_by="" wiring_compare="" wiring_count=""
+	local wiring_runs="" wiring_decision="" wiring_file_sha="" wiring_status="" wiring_seen_rc=0 wiring_sync_number=1 wiring_body=""
+	PR_FINAL_CI_WIRING_OUTCOME=""
+	PR_FINAL_CI_WIRING_REASON=""
+	_pr_final_ci_wiring_log()
+	{
+		PR_FINAL_CI_WIRING_OUTCOME="$1"
+		# shellcheck disable=SC2034  # output for callers (documented above)
+		PR_FINAL_CI_WIRING_REASON="$2"
+		echo "REVIEW_FINAL_CI_WIRING pr=${wiring_pr:-?} head=${wiring_head:-?} entry=${wiring_entry:-?} outcome=$1 reason=$2"
+	}
+	if ! _pr_final_ci_wiring_enabled; then
+		_pr_final_ci_wiring_log current disabled
+		return 0
+	fi
+	if ! [[ "${wiring_pr}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${wiring_head}" =~ ^[0-9a-f]{40}$ ]] \
+		|| ! [[ "${wiring_wf}" =~ ^[A-Za-z0-9._-]+\.ya?ml$ ]] \
+		|| ! [[ "${repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || [[ "${repo}" == *..* ]] \
+		|| ! [[ "${wiring_base}" =~ ^[A-Za-z0-9._/-]+$ ]] || [[ "${wiring_base}" == *..* ]] || [[ "${wiring_base}" == -* ]] \
+		|| { [ "${wiring_entry}" != "dispatch" ] && [ "${wiring_entry}" != "blocked_status" ]; }; then
+		[[ "${wiring_head}" =~ ^[0-9a-f]{40}$ ]] || wiring_head="invalid"
+		[[ "${wiring_pr}" =~ ^[1-9][0-9]*$ ]] || wiring_pr="invalid"
+		[ "${wiring_entry}" = "dispatch" ] || [ "${wiring_entry}" = "blocked_status" ] || wiring_entry="invalid"
+		_pr_final_ci_wiring_log unknown invalid_input
+		return 0
+	fi
+	# Built from the validated name only, never from API data.
+	wiring_path=".github/workflows/${wiring_wf}"
+
+	# G3: act only on a head whose final CI run succeeded (a run in flight or
+	# a red run is not a wiring problem).
+	if [ "${wiring_entry}" = "blocked_status" ]; then
+		wiring_runs="$(gh_retry _safe_gh_jq "repos/${repo}/actions/workflows/${wiring_wf}/runs?head_sha=${wiring_head}&per_page=20" 2>/dev/null || echo "")"
+		wiring_decision="$(printf '%s' "${wiring_runs}" | jq -r --arg path "${wiring_path}" --arg sha "${wiring_head}" "${PR_FINAL_CI_JQ_DECISION_DEF}"' _pr_final_ci_decision' 2>/dev/null | tail -n1)"
+		case "${wiring_decision}" in
+			"exists success") ;;
+			"exists "*|"dispatch "*)
+				_pr_final_ci_wiring_log current "final_ci_${wiring_decision#* }"
+				return 0
+				;;
+			*)
+				_pr_final_ci_wiring_log unknown final_ci_read_failed
+				return 0
+				;;
+		esac
+	fi
+
+	# "Behind": the freshness side channel first (no call), then one compare.
+	if [ "${PR_BASE_FRESHNESS_HEAD_SHA:-}" = "${wiring_head}" ] && [ "${PR_BASE_FRESHNESS_BASE_REF:-}" = "${wiring_base}" ]; then
+		if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "fresh" ]; then
+			wiring_behind="no"
+		elif [ -n "${PR_BASE_FRESHNESS_BASE_PATHS:-}" ]; then
+			# Set only after a successful compare for this head; an empty list
+			# is ambiguous (never set, or no base-side file) and re-reads below.
+			wiring_paths="${PR_BASE_FRESHNESS_BASE_PATHS}"
+			wiring_tip="${PR_BASE_FRESHNESS_BASE_SHA:-}"
+			wiring_behind_by="${PR_BASE_FRESHNESS_BEHIND_BY:-}"
+		fi
+	fi
+	if [ -z "${wiring_behind}" ] && [ -z "${wiring_paths}" ]; then
+		wiring_compare="$(gh_retry _safe_gh_jq "repos/${repo}/compare/${wiring_head}...${wiring_base}" 2>/dev/null || echo "")"
+		wiring_behind_by="$(printf '%s' "${wiring_compare}" | jq -r 'if (type == "object" and (.ahead_by | type) == "number") then .ahead_by else empty end' 2>/dev/null | tail -n1)"
+		if ! [[ "${wiring_behind_by}" =~ ^[0-9]+$ ]]; then
+			_pr_final_ci_wiring_log unknown compare_failed
+			return 0
+		fi
+		if [ "${wiring_behind_by}" -eq 0 ]; then
+			wiring_behind="no"
+		else
+			wiring_count="$(printf '%s' "${wiring_compare}" | jq -r 'if (type == "object") then ((.files // []) | length) else empty end' 2>/dev/null | tail -n1)"
+			if ! [[ "${wiring_count}" =~ ^[0-9]+$ ]]; then
+				_pr_final_ci_wiring_log unknown compare_failed
+				return 0
+			fi
+			# Same base tip rule as _pr_base_freshness: the last listed commit,
+			# only when the commit list is complete.
+			wiring_tip="$(printf '%s' "${wiring_compare}" | jq -r '
+				if (type == "object" and (.commits | type) == "array" and (.commits | length) > 0 and (.commits | length) == .ahead_by)
+				then (.commits[-1].sha // "") else "" end' 2>/dev/null | tail -n1)"
+			if [ "${wiring_count}" -ge 300 ]; then
+				wiring_paths="__truncated__"
+			else
+				wiring_paths="$(printf '%s' "${wiring_compare}" | jq -r '
+					[ (.files // [])[]? | select(type == "object") | (.filename // empty), (.previous_filename // empty)
+					  | select(type == "string") ] | unique | .[]' 2>/dev/null || true)"
+				[ -n "${wiring_paths}" ] || wiring_behind="no"
+			fi
+		fi
+	fi
+	[[ "${wiring_tip}" =~ ^[0-9a-f]{40}$ ]] || wiring_tip=""
+	if [ -z "${wiring_behind}" ]; then
+		if [ "${wiring_paths}" = "__truncated__" ]; then
+			# GitHub lists at most 300 files: ask whether the newest base commit
+			# to the file is in the head. An older base commit to the file that
+			# is not its ancestor (unusual merge histories) is not seen; that
+			# fails toward dispatching as before.
+			wiring_file_sha="$(gh_retry _safe_gh_jq "repos/${repo}/commits?sha=${wiring_base}&path=${wiring_path}&per_page=1" 2>/dev/null \
+				| jq -r 'if type == "array" and length > 0 and (.[0] | type) == "object" then (.[0].sha // "") else "" end' 2>/dev/null | tail -n1)"
+			if ! [[ "${wiring_file_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+				_pr_final_ci_wiring_log unknown compare_failed
+				return 0
+			fi
+			wiring_status="$(gh_retry _safe_gh_jq "repos/${repo}/compare/${wiring_file_sha}...${wiring_head}" 2>/dev/null \
+				| jq -r 'if type == "object" then (.status // "") else "" end' 2>/dev/null | tail -n1)"
+			case "${wiring_status}" in
+				ahead|identical) wiring_behind="no" ;;
+				behind|diverged) wiring_behind="yes" ;;
+				*)
+					_pr_final_ci_wiring_log unknown compare_failed
+					return 0
+					;;
+			esac
+		elif printf '%s\n' "${wiring_paths}" | grep -Fxq -- "${wiring_path}"; then
+			wiring_behind="yes"
+		else
+			wiring_behind="no"
+		fi
+	fi
+	if [ "${wiring_behind}" != "yes" ]; then
+		_pr_final_ci_wiring_log current not_behind
+		return 0
+	fi
+	# Check-only callers (scripts/review_enable_auto_merge.sh on its exits
+	# that never merge, and an e2e-smoke-test PR reached by the sweep): no
+	# lease, no branch update, and no dispatch on the stale workflow copy
+	# (G2). One note per head records the reason on the PR (G2), only when
+	# the comment read succeeded and nothing is recorded for the head yet;
+	# it is not a hold, so a merge path or the final-CI sweep still updates
+	# the branch.
+	if [ "${PR_FINAL_CI_WIRING_NO_UPDATE:-}" = "true" ]; then
+		wiring_seen_rc=0
+		_pr_final_ci_wiring_note_seen "${wiring_pr}" "${wiring_head}" || wiring_seen_rc=$?
+		if [ "${wiring_seen_rc}" -eq 1 ] && [ "${PR_FINAL_CI_WIRING_NOTE_NO_UPDATE_SEEN:-}" = "0" ]; then
+			# shellcheck disable=SC2016  # Markdown backticks, not expansions
+			wiring_body="$(printf '**Final CI held: this branch'"'"'s `%s` is behind `%s`**\n\n`%s` has commits to `%s` that this branch lacks. The final CI run starts from the branch'"'"'s own copy of that workflow but runs the scripts from `%s`, so on this head it would fail or never report its result. This review step does not update branches (auto-merge is off, or the PR is an e2e smoke test), so the final CI was not started on head `%s`. Update the branch from `%s`; the final CI then runs on the new head.\n\n<!-- ai:final-ci-wiring-behind:v1 pr=%s head=%s reason=no_update_path -->' \
+				"${wiring_wf}" "${wiring_base}" "${wiring_base}" "${wiring_path}" "${wiring_base}" "${wiring_head}" "${wiring_base}" "${wiring_pr}" "${wiring_head}")"
+			# One attempt only: a retried POST whose first response was lost
+			# would post a duplicate.
+			_safe_gh_jq -X POST "repos/${repo}/issues/${wiring_pr}/comments" -f "body=${wiring_body}" >/dev/null 2>&1 \
+				|| echo "::warning::REVIEW_FINAL_CI_WIRING pr=${wiring_pr} head=${wiring_head} comment=post_failed (the next call posts the note again)"
+		fi
+		_pr_final_ci_wiring_log held no_update_path
+		return 0
+	fi
+
+	# Once per head (an update costs a new review and a new final CI): a
+	# recorded refusal holds without another attempt. Read before the lease,
+	# so a held PR never takes the lease without updating.
+	wiring_seen_rc=0
+	_pr_final_ci_wiring_note_seen "${wiring_pr}" "${wiring_head}" || wiring_seen_rc=$?
+	if [ "${wiring_seen_rc}" -eq 0 ]; then
+		_pr_final_ci_wiring_log held recorded
+		return 0
+	fi
+	if ! _merge_lease_gate "${wiring_pr}" "${wiring_base}" "${wiring_head}" update; then
+		echo "  [merge-lease] PR #${wiring_pr}: the merge lease for ${wiring_base} is held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; not updating the branch's CI wiring. This PR is labelled ${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait} and is re-dispatched when the lease is granted to it."
+		_pr_final_ci_wiring_log held "merge_lease_${MERGE_LEASE_REASON:-held}"
+		return 0
+	fi
+
+	# The freshness update chain reads these side channels; shadow them for
+	# this call only (bash dynamic scope), so a stale result for another head
+	# never binds the marker and nothing leaks to the caller. No overlap: the
+	# update head gets the full suite.
+	local PR_BASE_FRESHNESS_BASE_SHA="${wiring_tip}" PR_BASE_FRESHNESS_BASE_REF="${wiring_base}"
+	local PR_BASE_FRESHNESS_BEHIND_BY="${wiring_behind_by}" PR_BASE_FRESHNESS_OVERLAP=""
+	# The update chain dispatches the update head's final CI only when this
+	# is set; the poller never sets it, so default an unset value to the
+	# workflow checked. A set-but-empty value (final CI off) stays empty.
+	local REVIEW_FINAL_CI_WORKFLOW="${REVIEW_FINAL_CI_WORKFLOW-${wiring_wf}}"
+	if ! _pr_base_sync_for_fresh_ci "${wiring_pr}" "${wiring_head}"; then
+		if [ "${wiring_seen_rc}" -eq 1 ] || [ "${wiring_seen_rc}" -eq 3 ]; then
+			# One PR read, only before a note would be posted: a head that
+			# moved (another caller updated the branch) records nothing. The
+			# hold marker needs a confirmed conflict (`mergeable: false`); any
+			# other result (true, null while GitHub computes it, an unreadable
+			# read) posts the one-time retry note first, so the next call tries
+			# once more and the update lease is renewed at most twice per head.
+			local wiring_after_json="" wiring_after_head="" wiring_after_mergeable=""
+			wiring_after_json="$(gh_retry _safe_gh_jq "repos/${repo}/pulls/${wiring_pr}" 2>/dev/null || echo "")"
+			wiring_after_head="$(printf '%s' "${wiring_after_json}" | jq -r 'if type == "object" then (.head.sha // "") else "" end' 2>/dev/null | tail -n1)"
+			wiring_after_mergeable="$(printf '%s' "${wiring_after_json}" | jq -r 'if type == "object" then (.mergeable | tostring) else "" end' 2>/dev/null | tail -n1)"
+			if [[ "${wiring_after_head}" =~ ^[0-9a-f]{40}$ ]] && [ "${wiring_after_head}" != "${wiring_head}" ]; then
+				_pr_final_ci_wiring_log held head_moved
+				return 0
+			fi
+			if [ "${wiring_after_mergeable}" != "false" ] && [ "${wiring_seen_rc}" -eq 1 ]; then
+				# shellcheck disable=SC2016  # Markdown backticks, not expansions
+				wiring_body="$(printf '**Final CI held: this branch'"'"'s `%s` is behind `%s`**\n\n`%s` has commits to `%s` that this branch lacks, and GitHub did not update the branch from `%s` this time (no merge conflict was reported), so the final CI was not started on head `%s`. The next check tries the update once more; if that also fails, the final CI waits until the branch is updated from `%s`.\n\n<!-- ai:final-ci-wiring-behind:v1 pr=%s head=%s reason=update_branch_failed -->' \
+					"${wiring_wf}" "${wiring_base}" "${wiring_base}" "${wiring_path}" "${wiring_base}" "${wiring_head}" "${wiring_base}" "${wiring_pr}" "${wiring_head}")"
+				# One attempt only: a retried POST whose first response was lost
+				# would post a duplicate.
+				_safe_gh_jq -X POST "repos/${repo}/issues/${wiring_pr}/comments" -f "body=${wiring_body}" >/dev/null 2>&1 \
+					|| echo "::warning::REVIEW_FINAL_CI_WIRING pr=${wiring_pr} head=${wiring_head} comment=post_failed (the next call tries the update again)"
+				_pr_final_ci_wiring_log held update_branch_failed
+				return 0
+			fi
+			# The cause sentence follows the PR read: a conflict only when GitHub
+			# reported one (a second refusal may come without one).
+			local wiring_cause="because of a merge conflict"
+			[ "${wiring_after_mergeable}" = "false" ] || wiring_cause="twice, without reporting a merge conflict"
+			# shellcheck disable=SC2016  # Markdown backticks, not expansions
+			wiring_body="$(printf '**Final CI held: this branch'"'"'s `%s` is behind `%s`**\n\n`%s` has commits to `%s` that this branch lacks. The final CI run starts from the branch'"'"'s own copy of that workflow but runs the scripts from `%s`, so on this head it would fail or never report its result. GitHub refused to update the branch from `%s` %s, so the final CI was not started on head `%s`. Update the branch from `%s` (resolving any conflict); the final CI then runs on the new head.\n\n<!-- ai:final-ci-wiring-behind:v1 pr=%s head=%s reason=update_branch_refused -->' \
+				"${wiring_wf}" "${wiring_base}" "${wiring_base}" "${wiring_path}" "${wiring_base}" "${wiring_base}" "${wiring_cause}" "${wiring_head}" "${wiring_base}" "${wiring_pr}" "${wiring_head}")"
+			# One attempt only: a retried POST whose first response was lost
+			# would post a duplicate.
+			_safe_gh_jq -X POST "repos/${repo}/issues/${wiring_pr}/comments" -f "body=${wiring_body}" >/dev/null 2>&1 \
+				|| echo "::warning::REVIEW_FINAL_CI_WIRING pr=${wiring_pr} head=${wiring_head} comment=post_failed (the next call tries the update again)"
+		else
+			# The comment read failed: nothing is posted (no comment per tick),
+			# so surface the refusal as a run-level warning instead.
+			echo "::warning::REVIEW_FINAL_CI_WIRING pr=${wiring_pr} head=${wiring_head} comment=skipped reason=notes_unreadable (the branch update was refused; the next call tries again)"
+		fi
+		_pr_final_ci_wiring_log held update_branch_refused
+		return 0
+	fi
+	if _pr_base_sync_observe_update_commit "${wiring_pr}" "${wiring_head}" "${wiring_base}"; then
+		# The update number counts earlier sync markers; an unreadable count
+		# falls back to 1 (as _pr_final_ci_refused_base_update).
+		wiring_sync_number=1
+		if _pr_base_sync_count "${wiring_pr}"; then
+			wiring_sync_number=$(( PR_BASE_SYNC_COUNT + 1 ))
+		fi
+		# shellcheck disable=SC2016  # Markdown backticks, not expansions
+		PR_BASE_SYNC_MARKER_LEAD="$(printf 'This branch'"'"'s `%s` lacks commits that `%s` (%s commit(s) ahead) made to it. The final CI run that the merge requires runs the branch'"'"'s copy of that workflow with the scripts from `%s`, so on the old head it would fail or never report its result.' "${wiring_path}" "${wiring_base}" "${wiring_behind_by:-?}" "${wiring_base}")" \
+			_pr_base_sync_marker_post "${wiring_pr}" "${wiring_head}" "${wiring_sync_number}" "${MERGE_BASE_FRESHNESS_MAX_SYNCS:-2}" \
+			"${PR_BASE_SYNC_BASE_SHA}" "${PR_BASE_SYNC_MERGE_SHA}"
+		_pr_base_sync_dispatch_final_ci "${wiring_pr}" "${wiring_head}" "${PR_BASE_SYNC_MERGE_SHA}"
+		_pr_final_ci_wiring_log updated ci_wiring_behind
+	else
+		echo "MERGE_BASE_SYNC_MARKER pr=${wiring_pr} head_sha=${wiring_head} outcome=skipped reason=${PR_BASE_SYNC_OBSERVE_REASON:-head_not_observed}"
+		_pr_final_ci_wiring_log requested "${PR_BASE_SYNC_OBSERVE_REASON:-head_not_observed}"
 	fi
 	return 0
 }
@@ -2728,7 +3306,7 @@ _merge_lease_split_soft()
 # behaves as before the lease existed.
 #
 # Env: MERGE_LEASE_ENABLED (default true; true/1/yes/on), MERGE_LEASE_TTL_MINUTES
-# (default 240, 30-1440; renewed each time the holder updates),
+# (default 480, 30-1440; renewed each time the holder updates),
 # MERGE_LEASE_MAX_HOLD_MINUTES (default 720, at least the TTL; no renewal
 # after that long since first acquisition),
 # MERGE_LEASE_REF_PREFIX (default refs/merge-lease/), MERGE_LEASE_WAIT_LABEL
@@ -2763,8 +3341,14 @@ _merge_lease_split_soft()
 # order until its head SHA changes. Env (defaults here):
 # MERGE_LEASE_REVOKE_ENABLED (default true; false turns off revocation,
 # eligibility, the skip list and `skip=` writes, so the record is byte-for-byte
-# the old format), MERGE_LEASE_IDLE_MINUTES (default 60, 0-1440; 0 turns the
+# the old format), MERGE_LEASE_IDLE_MINUTES (default 180, 0-1440; 0 turns the
 # idle test off). Every read failure is eligible (fail-open).
+# Hold labels (Refs #9969): a PR carrying a label listed in
+# MERGE_LEASE_HOLD_LABELS (default ai:needs-human,ai:security-pass-failed,
+# ai:review-blocked,ai:scope-blocked; comma-separated, case-insensitive exact
+# names; empty, none or off turns the test off; the wait label is never a
+# hold label) is ineligible at once (reason hold_label, revoked_hold_label
+# for a holder). Labels come from the open-PR listing already read; no call.
 # Forward-merge priority (merge-lease-parallel Phase 3, Refs #9781): the
 # order is a priority label or a same-repository head ref starting with an
 # entry of MERGE_LEASE_PRIORITY_HEAD_PREFIXES, then the lowest PR number.
@@ -2805,8 +3389,8 @@ _merge_lease_enabled()
 
 _merge_lease_ttl_seconds()
 {
-	local lease_ttl_minutes="${MERGE_LEASE_TTL_MINUTES:-240}"
-	[[ "${lease_ttl_minutes}" =~ ^[0-9]+$ ]] || lease_ttl_minutes=240
+	local lease_ttl_minutes="${MERGE_LEASE_TTL_MINUTES:-480}"
+	[[ "${lease_ttl_minutes}" =~ ^[0-9]+$ ]] || lease_ttl_minutes=480
 	[ "${lease_ttl_minutes}" -ge 30 ] || lease_ttl_minutes=30
 	[ "${lease_ttl_minutes}" -le 1440 ] || lease_ttl_minutes=1440
 	echo $((lease_ttl_minutes * 60))
@@ -2823,6 +3407,14 @@ _merge_lease_max_hold_seconds()
 	echo $((lease_hold_minutes * 60))
 }
 
+# Judge-decision grant signal (issue #9987): the review-blocked judge posts a
+# `success` commit status under this context on the judged head when it decided
+# to merge but deferred for the lease (_pr_judge_merge_pending_mark). The tick
+# counts it, for a waiter only, in place of a pending or absent head-gate
+# (_merge_lease_pr_eligible). Not an env input: a fixed contract name, like
+# REVIEW_HEAD_GATE_CONTEXT in scripts/review_head_gate.sh.
+MERGE_LEASE_JUDGE_DECISION_CONTEXT="ai-review/judge-merge-pending"
+
 # Phase 2 kill switch: MERGE_LEASE_REVOKE_ENABLED (default true; true/1/yes/on).
 _merge_lease_revoke_enabled()
 {
@@ -2832,12 +3424,12 @@ _merge_lease_revoke_enabled()
 	return 1
 }
 
-# Idle window in seconds (MERGE_LEASE_IDLE_MINUTES, default 60, clamped to
-# 0-1440; anything that is not a number uses 60). 0 turns the idle test off.
+# Idle window in seconds (MERGE_LEASE_IDLE_MINUTES, default 180, clamped to
+# 0-1440; anything that is not a number uses 180). 0 turns the idle test off.
 _merge_lease_idle_seconds()
 {
-	local lease_idle_minutes="${MERGE_LEASE_IDLE_MINUTES:-60}"
-	[[ "${lease_idle_minutes}" =~ ^[0-9]+$ ]] || lease_idle_minutes=60
+	local lease_idle_minutes="${MERGE_LEASE_IDLE_MINUTES:-180}"
+	[[ "${lease_idle_minutes}" =~ ^[0-9]+$ ]] || lease_idle_minutes=180
 	if [ "${#lease_idle_minutes}" -gt 4 ]; then
 		lease_idle_minutes=1440
 	fi
@@ -2869,17 +3461,129 @@ _merge_lease_max_holders()
 }
 
 # _merge_lease_skips_normalize <skips> [<drop pr>]: the skip list (newline-
-# separated `pr:head`) with malformed entries and <drop pr>'s entries removed,
-# duplicates collapsed to their last position, and only the newest 50 kept.
+# separated `pr:head` or, since #9983, `pr:head:reason`) with malformed
+# entries and <drop pr>'s entries removed, duplicates (same `pr:head`)
+# collapsed to their last position (so a newer reason replaces an older one),
+# and only the newest 50 kept. The reason is `[a-z][a-z_]{0,39}`, never
+# evaluated.
 _merge_lease_skips_normalize()
 {
 	local lease_skip_drop="${2:-}"
-	{ printf '%s\n' "${1:-}" | grep -E '^[1-9][0-9]*:[0-9a-f]{40}$' || true; } \
-		| awk -F: -v drop="${lease_skip_drop}" '$1 != drop { line[NR] = $0; last[$0] = NR }
-			END { for (i = 1; i <= NR; i++) if ((i in line) && last[line[i]] == i) print line[i] }' \
+	{ printf '%s\n' "${1:-}" | grep -E '^[1-9][0-9]*:[0-9a-f]{40}(:[a-z][a-z_]{0,39})?$' || true; } \
+		| awk -F: -v drop="${lease_skip_drop}" '$1 != drop { key = $1 ":" $2; line[NR] = $0; lkey[NR] = key; last[key] = NR }
+			END { for (i = 1; i <= NR; i++) if ((i in line) && last[lkey[i]] == i) print line[i] }' \
 		| tail -n 50
 	return 0
 }
+
+# Skip-entry classes (issue #9983, G5/G6). A "soft" entry was written for
+# revoked_no_head_gate, or has no reason field (every entry written before
+# #9983 is read that way, so PRs parked by the old rule are released once):
+# it stops blocking once the PR's pipeline head-gate is `success` on the
+# entry head. Any other reason is "hard": it blocks until the head changes.
+# Issue #10044: `expired` and `revoked_idle` are soft too (a hold spent
+# waiting for runners leaves a healthy PR on an unchanged head). Each is
+# soft once per head: the grant write turns the new holder's own entry into
+# `expired_unparked` / `revoked_idle_unparked` (_merge_lease_skip_block), and
+# a later expired/revoked_idle release on that head keeps the `_unparked`
+# token (_merge_lease_skip_release_token), which is hard. Every other reason
+# (revoked_draft, revoked_skip_ai, revoked_final_ci_failed, the `_unparked`
+# tokens, any unknown one) stays hard; older libraries read every reason but
+# revoked_no_head_gate as hard (the safe direction).
+# `revoked_no_head_gate_unparked` (a head-gate revocation of a head that
+# already used its un-park) stays soft like revoked_no_head_gate, but carries
+# the marker through that release so the once-per-head budget is not reset
+# (_merge_lease_skip_release_token, _merge_lease_skip_block). Older libraries
+# read it as hard (the safe direction).
+# No API call in any of these.
+# _merge_lease_skip_reason_is_soft <reason>: 0 when <reason> (the third
+# field; empty for a two-field entry) is a soft reason.
+_merge_lease_skip_reason_is_soft()
+{
+	case "${1:-}" in
+		""|revoked_no_head_gate|revoked_no_head_gate_unparked|expired|revoked_idle) return 0 ;;
+	esac
+	return 1
+}
+
+# _merge_lease_skip_is_soft <entry>: 0 when <entry> is a valid soft entry.
+_merge_lease_skip_is_soft()
+{
+	local lease_soft_entry="${1:-}"
+	[[ "${lease_soft_entry}" =~ ^[1-9][0-9]*:[0-9a-f]{40}(:([a-z][a-z_]{0,39}))?$ ]] || return 1
+	_merge_lease_skip_reason_is_soft "${BASH_REMATCH[2]:-}"
+}
+
+# _merge_lease_skips_hard <skips> / _merge_lease_skips_soft <skips>: the valid
+# entries of one class, in list order (newline-separated, may be empty). The
+# soft set is _merge_lease_skip_reason_is_soft's.
+_merge_lease_skips_hard()
+{
+	{ printf '%s\n' "${1:-}" | grep -E '^[1-9][0-9]*:[0-9a-f]{40}(:[a-z][a-z_]{0,39})?$' || true; } \
+		| awk -F: 'NF == 3 && $3 != "revoked_no_head_gate" && $3 != "revoked_no_head_gate_unparked" && $3 != "expired" && $3 != "revoked_idle"'
+	return 0
+}
+
+_merge_lease_skips_soft()
+{
+	{ printf '%s\n' "${1:-}" | grep -E '^[1-9][0-9]*:[0-9a-f]{40}(:[a-z][a-z_]{0,39})?$' || true; } \
+		| awk -F: 'NF == 2 || $3 == "revoked_no_head_gate" || $3 == "revoked_no_head_gate_unparked" || $3 == "expired" || $3 == "revoked_idle"'
+	return 0
+}
+
+# _merge_lease_skip_release_token <pr> <head> <reason> (issue #10044, G2):
+# the reason token of a release entry for <pr>:<head>. `<reason>_unparked`
+# when <reason> is expired, revoked_idle or revoked_no_head_gate and the
+# newest MERGE_LEASE_SKIPS entry for <pr>:<head> is an `_unparked` marker
+# (that head already used its one un-park, whatever the earlier reason was);
+# <reason> otherwise. `revoked_no_head_gate_unparked` stays soft, so a failed
+# head-gate still clears once it passes (#9983), but the next grant keeps the
+# marker, so a head-gate failure cannot reset the once-per-head budget. No API
+# call. The tick also uses its presence as the version guard for writing
+# `_unparked` tokens.
+_merge_lease_skip_release_token()
+{
+	local rt_pr="${1:-}" rt_head="${2:-}" rt_reason="${3:-}" rt_prev=""
+	case "${rt_reason}" in
+		expired|revoked_idle|revoked_no_head_gate)
+			if [[ "${rt_pr}" =~ ^[1-9][0-9]*$ && "${rt_head}" =~ ^[0-9a-f]{40}$ ]]; then
+				rt_prev="$(_merge_lease_skips_normalize "${MERGE_LEASE_SKIPS:-}" | { grep -E "^${rt_pr}:${rt_head}:[a-z][a-z_]{0,39}\$" || true; } | tail -n1 | cut -d: -f3)"
+				case "${rt_prev}" in
+					*_unparked)
+						printf '%s_unparked\n' "${rt_reason}"
+						return 0
+						;;
+				esac
+			fi
+			;;
+	esac
+	printf '%s\n' "${rt_reason}"
+	return 0
+}
+
+# _merge_lease_wedged_queued_seconds (issue #9983, G3): the age in seconds at
+# which a queued run counts as wedged, not as activity. Reuses the #9473
+# reaper's ZOMBIE_RUN_MAX_QUEUED_HOURS (default 24 here, as in
+# scripts/review_autofix_sweep_reaper.sh); a value that is not a positive
+# whole number of at most six digits uses 24 and prints one ::warning:: to
+# stderr (the value itself is not echoed). No API call.
+_merge_lease_wedged_queued_seconds()
+{
+	local lease_wedged_hours="${ZOMBIE_RUN_MAX_QUEUED_HOURS:-24}"
+	if ! [[ "${lease_wedged_hours}" =~ ^[1-9][0-9]{0,5}$ ]]; then
+		echo "::warning::ZOMBIE_RUN_MAX_QUEUED_HOURS is not a positive whole number of hours; using 24" >&2
+		lease_wedged_hours=24
+	fi
+	echo $((lease_wedged_hours * 3600))
+}
+
+# Review workflow names whose runs on a holder's head count as activity for
+# the head-gate grace (issue #9983, G1): `name:` of
+# .github/workflows/internal-review.yml ("Internal: AI Review & Autofix") and
+# of workflow-templates/ai-review.yml ("AI Review"). A library constant, not
+# an env var. Their `[pr:<n>]` dispatch runs also match through
+# PR_CHECKS_JQ_WAIT_WORKFLOW_KEY_DEF when they run on the head.
+_MERGE_LEASE_REVIEW_RUN_NAMES="Internal: AI Review & Autofix,AI Review"
 
 # Ref name without the leading "refs/" (the git/ref API path form).
 _merge_lease_ref_name()
@@ -3122,7 +3826,11 @@ _merge_lease_write()
 	fi
 	[ "${lease_state}" = "released" ] && lease_paths=""
 	local lease_skip_lines="" lease_skip_block="" lease_skip_drop=""
-	[ "${lease_state}" = "held" ] && lease_skip_drop="${lease_pr}"
+	if [ "${lease_state}" = "held" ]; then
+		# Issue #10044: `<pr>:<head>` keeps the holder's own un-park marker.
+		lease_skip_drop="${lease_pr}"
+		[[ "${lease_head}" =~ ^[0-9a-f]{40}$ ]] && lease_skip_drop="${lease_pr}:${lease_head}"
+	fi
 	lease_skip_lines="$(_merge_lease_skip_block "${lease_skip_drop}")"
 	[ -z "${lease_skip_lines}" ] || lease_skip_block="${lease_skip_lines}"$'\n'
 	lease_msg="merge-lease v1
@@ -3138,15 +3846,42 @@ ${lease_paths}"
 	_merge_lease_cas_commit "${lease_base}" "${lease_msg}"
 }
 
-# _merge_lease_skip_block <drop_pr>...: the `skip=` lines of the next write
+# _merge_lease_skip_block <drop>...: the `skip=` lines of the next write
 # (no trailing newline; empty with MERGE_LEASE_REVOKE_ENABLED off), with each
-# <drop_pr>'s own entries removed (a holder is never on the skip list).
+# <drop>'s own entries removed (a holder is never on the skip list, except
+# its one `_unparked` marker on its own head). <drop> is `<pr>` (drop all of
+# that PR's entries) or, since issue #10044, `<pr>:<40-hex head>`: all of the
+# PR's entries are dropped too, but its entry for exactly that head is kept
+# as the un-park marker when its reason is expired or revoked_idle (rewritten
+# to `<reason>_unparked`, hard) or already `expired_unparked` /
+# `revoked_idle_unparked` (kept unchanged), or `revoked_no_head_gate_unparked`
+# (soft; kept as the hard `expired_unparked` marker so a head-gate failure
+# never resets the once-per-head budget). The kept entry is appended as the
+# newest, so the 50-entry cap evicts it last. No API call.
+# Known residual: the marker is still an ordinary capped entry, so 50 newer
+# entries from other PRs before the same head is released again evict it
+# (_merge_lease_skips_normalize's `tail -n 50`), and that head can then be
+# un-parked once more (one extra queue cycle, never a permanent park).
 _merge_lease_skip_block()
 {
-	local skip_lines="${MERGE_LEASE_SKIPS:-}" skip_drop
+	local skip_lines="${MERGE_LEASE_SKIPS:-}" skip_drop skip_drop_pr skip_drop_head skip_keep skip_keep_why
 	_merge_lease_revoke_enabled || return 0
+	skip_lines="$(_merge_lease_skips_normalize "${skip_lines}")"
 	for skip_drop in "$@"; do
+		skip_keep=""
+		if [[ "${skip_drop}" =~ ^([1-9][0-9]*):([0-9a-f]{40})$ ]]; then
+			skip_drop_pr="${BASH_REMATCH[1]}"
+			skip_drop_head="${BASH_REMATCH[2]}"
+			skip_keep_why="$(printf '%s\n' "${skip_lines}" | { grep -E "^${skip_drop_pr}:${skip_drop_head}:[a-z][a-z_]{0,39}\$" || true; } | tail -n1 | cut -d: -f3)"
+			case "${skip_keep_why}" in
+				expired|revoked_idle) skip_keep="${skip_drop_pr}:${skip_drop_head}:${skip_keep_why}_unparked" ;;
+				expired_unparked|revoked_idle_unparked) skip_keep="${skip_drop_pr}:${skip_drop_head}:${skip_keep_why}" ;;
+				revoked_no_head_gate_unparked) skip_keep="${skip_drop_pr}:${skip_drop_head}:expired_unparked" ;;
+			esac
+			skip_drop="${skip_drop_pr}"
+		fi
 		skip_lines="$(_merge_lease_skips_normalize "${skip_lines}" "${skip_drop}")"
+		[ -z "${skip_keep}" ] || skip_lines="$(_merge_lease_skips_normalize "$(printf '%s\n%s\n' "${skip_lines}" "${skip_keep}")")"
 	done
 	[ -z "${skip_lines}" ] || printf '%s\n' "${skip_lines}" | sed 's/^/skip=/'
 }
@@ -3215,7 +3950,8 @@ _merge_lease_paths_record_form()
 # shape with that row's own times, byte-identical to a single-holder record,
 # so releasing the other holder never extends this one's lease. Two or more
 # rows write pr=/head=/acquired=/updated= of the primary, expires= the latest
-# expiry, the skip lines (every holder's own entries dropped), one `holder=`
+# expiry, the skip lines (every holder's own entries dropped, but for its
+# `_unparked` marker on its own head, issue #10044), one `holder=`
 # line per row, the `holder_path=` lines, then `paths:` with the union (`*`
 # when a holder is `*` or the union exceeds MERGE_LEASE_MAX_PATHS). Same
 # compare-and-swap and return codes as _merge_lease_write (1 also for
@@ -3236,7 +3972,12 @@ _merge_lease_write_holders()
 		[[ "${wh_pr}" =~ ^[1-9][0-9]*$ && "${wh_exp}" =~ ^[0-9]+$ && "${wh_acq}" =~ ^[0-9]+$ && "${wh_upd}" =~ ^[0-9]+$ ]] || return 1
 		[[ "${wh_head}" =~ ^[0-9a-f]{40}$ ]] || wh_head=""
 		wh_n=$((wh_n + 1))
-		wh_drop+=("${wh_pr}")
+		# Issue #10044: `<pr>:<head>` keeps the holder's own un-park marker.
+		if [ -n "${wh_head}" ]; then
+			wh_drop+=("${wh_pr}:${wh_head}")
+		else
+			wh_drop+=("${wh_pr}")
+		fi
 		[ "${wh_exp}" -le "${wh_max_exp}" ] || wh_max_exp="${wh_exp}"
 		wh_paths="$(_merge_lease_paths_record_form "$(_merge_lease_holder_paths "${wh_pr}")" "${wh_max_paths}")"
 		if [ "${wh_n}" -eq 1 ]; then
@@ -3435,7 +4176,11 @@ _merge_lease_queue_first()
 		if [ -n "${lease_exclude}" ] && printf ',%s,' "${lease_exclude}" | grep -Fq ",${lease_num},"; then
 			continue
 		fi
-		if [ -n "${lease_skips}" ] && [ -n "${lease_row_head}" ] && printf '%s\n' "${lease_skips}" | grep -Fxq -- "${lease_num}:${lease_row_head}"; then
+		# An entry matches on its first two fields, so `pr:head` and
+		# `pr:head:reason` (issue #9983) both apply. Both values are validated
+		# (digits, 40 hex) before they go into the pattern.
+		if [ -n "${lease_skips}" ] && [[ "${lease_row_head}" =~ ^[0-9a-f]{40}$ ]] \
+			&& printf '%s\n' "${lease_skips}" | grep -Eq -- "^${lease_num}:${lease_row_head}(:|\$)"; then
 			continue
 		fi
 		lease_key="$(_merge_lease_order_key "${lease_num}" "${lease_labels}" "${lease_row_ref}")"
@@ -3469,33 +4214,115 @@ _merge_lease_queue_order()
 	printf '%s' "${MERGE_LEASE_QUEUE_PRS}"
 }
 
-# _merge_lease_pr_eligible <pr> <head_sha> <title> <draft> [<base>] [<trusted_login>] [<hold_since_epoch>]
+# _merge_lease_hold_labels
+# Prints the configured hold labels (Refs #9969), one per line:
+# MERGE_LEASE_HOLD_LABELS (unset gives the default list; empty, none or off
+# prints nothing), split on commas and trimmed. An entry equal to the wait
+# label is dropped, so a misconfiguration never makes every waiter
+# ineligible. A `none`/`off` entry inside a list is dropped too (so `none,`
+# prints nothing; `off,<label>` keeps <label>). No API call.
+_merge_lease_hold_labels()
+{
+	local hold_raw hold_entry hold_wait_lc hold_entry_lc
+	local -a hold_entries=()
+	hold_raw="${MERGE_LEASE_HOLD_LABELS-ai:needs-human,ai:security-pass-failed,ai:review-blocked,ai:scope-blocked}"
+	hold_entry_lc="$(printf '%s' "${hold_raw}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+	case "${hold_entry_lc}" in
+		''|none|off) return 0 ;;
+	esac
+	hold_wait_lc="$(printf '%s' "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" | tr '[:upper:]' '[:lower:]')"
+	IFS=',' read -r -a hold_entries <<< "${hold_raw}"
+	for hold_entry in ${hold_entries[@]+"${hold_entries[@]}"}; do
+		hold_entry="${hold_entry#"${hold_entry%%[![:space:]]*}"}"
+		hold_entry="${hold_entry%"${hold_entry##*[![:space:]]}"}"
+		[ -n "${hold_entry}" ] || continue
+		hold_entry_lc="$(printf '%s' "${hold_entry}" | tr '[:upper:]' '[:lower:]')"
+		# A stray off token inside a list (`none,`) is never a label name.
+		case "${hold_entry_lc}" in none|off) continue ;; esac
+		[ "${hold_entry_lc}" != "${hold_wait_lc}" ] || continue
+		printf '%s\n' "${hold_entry}"
+	done
+}
+
+# _merge_lease_has_hold_label <labels_nl>
+# 0 when a line of <labels_nl> (newline-separated label names) matches a
+# configured hold label exactly (fixed-string, whole-line, case-insensitive:
+# GitHub label names are case-insensitive), 1 otherwise or when the test is
+# off. Label names are never printed, logged or evaluated. No API call.
+_merge_lease_has_hold_label()
+{
+	local hold_have="${1:-}" hold_list
+	[ -n "${hold_have}" ] || return 1
+	hold_list="$(_merge_lease_hold_labels)"
+	[ -n "${hold_list}" ] || return 1
+	printf '%s\n' "${hold_have}" | grep -Fxiq -f <(printf '%s\n' "${hold_list}") 2>/dev/null
+}
+
+# _merge_lease_pr_eligible <pr> <head_sha> <title> <draft> [<base>] [<trusted_login>] [<hold_since_epoch>] [<labels_nl>]
 # Phase 2 (Refs #9781): 0 when the PR can still merge or eligibility cannot
 # be read (fail-open), 1 when it cannot (MERGE_LEASE_INELIGIBLE_REASON =
-# draft|skip_ai|no_head_gate|final_ci_failed). Also sets MERGE_LEASE_CI_ACTIVE
+# draft|skip_ai|hold_label|no_head_gate|final_ci_failed). Also sets MERGE_LEASE_CI_ACTIVE
 # (true|false|unknown): whether a CI run or required check is still running.
 # Checks, cheapest first: draft, a `[skip ai]` title (fixed-string,
-# case-insensitive; the title is never logged or evaluated), the newest
+# case-insensitive; the title is never logged or evaluated), a hold label in
+# <labels_nl> (newline-separated names from the listing; see
+# _merge_lease_has_hold_label, Refs #9969; omitted or empty skips it), the newest
 # ai-review/head-gate status on the head (counted only when <trusted_login>
 # created it; failure/error is ineligible; absent or pending is ineligible
 # for a waiter, and for a holder (<hold_since_epoch> given) only once
 # MERGE_LEASE_IDLE_MINUTES have passed since it, so a holder whose updated
 # head is still being reviewed keeps the lease), then the required checks
 # with a 0-minute budget (no final-CI dispatch, no pending marker).
+# Judge decision (issue #9987): a waiter whose head-gate is absent or pending
+# is still eligible when the newest MERGE_LEASE_JUDGE_DECISION_CONTEXT status
+# on the head is `success` and <trusted_login> created it (the review-blocked
+# judge decided to merge and deferred for the lease). A head-gate failure or
+# error still wins; holders are unchanged. Sets MERGE_LEASE_ELIGIBLE_GATE to
+# head_gate|judge_decision (empty when eligibility did not rest on a status,
+# e.g. fail-open or no valid login/head).
+# Issue #9983 (G1, G3): once a holder's grace has passed with the head-gate
+# still absent or pending, the runs on its head are read once (the
+# AUTO_MERGE_WAIT_WORKFLOWS list, default CI, plus the review workflows in
+# _MERGE_LEASE_REVIEW_RUN_NAMES). A queued or in-progress run that is not
+# wedged (PR_CHECKS_RUNS_PENDING_LIVE > 0) keeps the holder eligible with
+# MERGE_LEASE_CI_ACTIVE=true; a failed read keeps it eligible with
+# MERGE_LEASE_CI_ACTIVE=unknown (fail-open; the TTL and maximum hold still
+# end the hold); no live run gives no_head_gate as before. Sets
+# MERGE_LEASE_HEAD_RUNS_READ=true when that read was made, so the tick's idle
+# test does not read the head runs a second time. The CI-activity reads below
+# also use the live count, so a wedged run never counts as activity.
+# That read sees only runs on the head; the tick also checks its cached
+# active-run listing for a `[pr:<n>]` review dispatch on the default branch
+# before it revokes for no_head_gate (scripts/review_merge_train.sh).
+# MERGE_LEASE_GATE_CONFIRMED=true only when the newest head-gate status was
+# read as `success` by <login>; every fail-open return leaves it false, so a
+# soft skip entry (#9983 G5) is cleared only on a confirmed success.
 # API: 1 statuses read plus the reads of _pr_wait_for_required_checks; none
-# for draft or `[skip ai]`, or without a valid login or head.
+# for draft, `[skip ai]` or a hold label, or without a valid login or head; +1
+# actions/runs?head_sha read for a holder past the grace with a pending
+# head-gate (that path makes no required-checks read). The judge status is
+# read from the same statuses response (no extra call).
 _merge_lease_pr_eligible()
 {
 	local elig_pr="$1" elig_head="$2" elig_title="$3" elig_draft="$4" elig_base="${5:-}" elig_login="${6:-}" elig_since="${7:-}"
+	local elig_labels="${8:-}"
 	local elig_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" elig_statuses elig_gate elig_idle elig_now elig_rc=0
+	local elig_run_names
 	MERGE_LEASE_INELIGIBLE_REASON=""
+	MERGE_LEASE_ELIGIBLE_GATE=""
 	MERGE_LEASE_CI_ACTIVE="unknown"
+	MERGE_LEASE_HEAD_RUNS_READ="false"
+	MERGE_LEASE_GATE_CONFIRMED="false"
 	if [ "${elig_draft}" = "true" ]; then
 		MERGE_LEASE_INELIGIBLE_REASON="draft"
 		return 1
 	fi
 	if printf '%s' "${elig_title}" | grep -Fqi -- '[skip ai]'; then
 		MERGE_LEASE_INELIGIBLE_REASON="skip_ai"
+		return 1
+	fi
+	if [ -n "${elig_labels}" ] && _merge_lease_has_hold_label "${elig_labels}"; then
+		MERGE_LEASE_INELIGIBLE_REASON="hold_label"
 		return 1
 	fi
 	elig_login="$(printf '%s' "${elig_login}" | tr '[:upper:]' '[:lower:]')"
@@ -3507,7 +4334,10 @@ _merge_lease_pr_eligible()
 	# Newest first: the latest head-gate status decides.
 	elig_gate="$(jq -r '[ .[] | select(type == "object" and .context == "ai-review/head-gate") ][0] | if . == null then "" else "\(.state) \((.creator.login // "") | ascii_downcase)" end' <<< "${elig_statuses}" 2>/dev/null)" || return 0
 	case "${elig_gate}" in
-		"success ${elig_login}") ;;
+		"success ${elig_login}")
+			MERGE_LEASE_ELIGIBLE_GATE="head_gate"
+			MERGE_LEASE_GATE_CONFIRMED="true"
+			;;
 		"failure ${elig_login}"|"error ${elig_login}")
 			MERGE_LEASE_INELIGIBLE_REASON="no_head_gate"
 			return 1
@@ -3517,21 +4347,57 @@ _merge_lease_pr_eligible()
 				[[ "${elig_since}" =~ ^[0-9]+$ ]] || return 0
 				elig_idle="$(_merge_lease_idle_seconds)"
 				# MERGE_LEASE_IDLE_MINUTES=0 turns off only the idle test (plan
-				# 2.3): the head-gate grace then uses the 60-minute default.
-				[ "${elig_idle}" -gt 0 ] || elig_idle=3600
+				# 2.3): the head-gate grace then uses the 180-minute default.
+				[ "${elig_idle}" -gt 0 ] || elig_idle=10800
 				elig_now="$(date -u +%s)"
 				if [ "$((10#${elig_since}))" -gt 0 ] && [ "${elig_idle}" -gt 0 ] && [ $((elig_now - 10#${elig_since})) -ge "${elig_idle}" ]; then
+					# Issue #9983 G1: a review or CI run still queued or running
+					# on the head (not wedged) keeps the holder; one read.
+					elig_run_names="${AUTO_MERGE_WAIT_WORKFLOWS-CI}"
+					case "$(printf '%s' "${elig_run_names}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" in
+						""|none|off) elig_run_names="" ;;
+					esac
+					elig_run_names="${elig_run_names:+${elig_run_names},}${_MERGE_LEASE_REVIEW_RUN_NAMES}"
+					AUTO_MERGE_WAIT_WORKFLOWS="${elig_run_names}" PR_CHECKS_REPOSITORY="${elig_repo}" \
+						_pr_head_ci_runs_pending "${elig_head}" || true
+					MERGE_LEASE_HEAD_RUNS_READ="true"
+					if [ "${PR_CHECKS_RUNS_READ:-}" != "true" ]; then
+						MERGE_LEASE_CI_ACTIVE="unknown"
+						return 0
+					fi
+					if [ "${PR_CHECKS_RUNS_PENDING_LIVE:-0}" -gt 0 ]; then
+						MERGE_LEASE_CI_ACTIVE="true"
+						return 0
+					fi
+					MERGE_LEASE_CI_ACTIVE="false"
 					MERGE_LEASE_INELIGIBLE_REASON="no_head_gate"
 					return 1
 				fi
 				return 0
 			fi
-			MERGE_LEASE_INELIGIBLE_REASON="no_head_gate"
-			return 1
+			# Waiter (issue #9987): a pipeline judge-decision status on this
+			# head stands in for an absent head-gate or a pending one from
+			# <trusted_login> only (a head-gate in any state from another
+			# login keeps no_head_gate; the pipeline posts its pending
+			# head-gate with the same token); a jq failure counts as no judge
+			# status (today's no_head_gate).
+			case "${elig_gate}" in
+				""|"pending ${elig_login}") ;;
+				*)
+					MERGE_LEASE_INELIGIBLE_REASON="no_head_gate"
+					return 1
+					;;
+			esac
+			if [ "$(jq -r --arg c "${MERGE_LEASE_JUDGE_DECISION_CONTEXT:-ai-review/judge-merge-pending}" '[ .[] | select(type == "object" and .context == $c) ][0] | if . == null then "" else "\(.state) \((.creator.login // "") | ascii_downcase)" end' <<< "${elig_statuses}" 2>/dev/null)" != "success ${elig_login}" ]; then
+				MERGE_LEASE_INELIGIBLE_REASON="no_head_gate"
+				return 1
+			fi
+			MERGE_LEASE_ELIGIBLE_GATE="judge_decision"
 			;;
 	esac
 	PR_CHECKS_RUNS_READ=""
 	PR_CHECKS_RUNS_PENDING=0
+	PR_CHECKS_RUNS_PENDING_LIVE=0
 	PR_CHECKS_LAST_PENDING=0
 	PR_CHECKS_RUNS_UNRUN=0
 	PR_CHECKS_WAIT_OUTCOME=""
@@ -3547,7 +4413,7 @@ _merge_lease_pr_eligible()
 		# test does not read actions/runs again (section 14 budget).
 		if [ "${PR_CHECKS_RUNS_READ:-}" = "true" ]; then
 			MERGE_LEASE_CI_ACTIVE="false"
-			[ "${PR_CHECKS_RUNS_PENDING:-0}" -eq 0 ] || MERGE_LEASE_CI_ACTIVE="true"
+			[ "${PR_CHECKS_RUNS_PENDING_LIVE:-0}" -eq 0 ] || MERGE_LEASE_CI_ACTIVE="true"
 		fi
 		return 0
 	fi
@@ -3557,7 +4423,7 @@ _merge_lease_pr_eligible()
 	fi
 	case "${PR_CHECKS_WAIT_OUTCOME:-}" in
 		ok|allow_all|timeout)
-			if [ "${PR_CHECKS_RUNS_READ:-}" = "true" ] && [ "${PR_CHECKS_RUNS_PENDING:-0}" -gt 0 ]; then
+			if [ "${PR_CHECKS_RUNS_READ:-}" = "true" ] && [ "${PR_CHECKS_RUNS_PENDING_LIVE:-0}" -gt 0 ]; then
 				MERGE_LEASE_CI_ACTIVE="true"
 			elif [ "${PR_CHECKS_WAIT_OUTCOME}" = "timeout" ] && [ "${PR_CHECKS_LAST_PENDING:-0}" -gt 0 ]; then
 				MERGE_LEASE_CI_ACTIVE="true"
@@ -3566,6 +4432,68 @@ _merge_lease_pr_eligible()
 			fi
 			;;
 	esac
+	return 0
+}
+
+# _merge_lease_skips_effective <skips> <pulls_json> <candidate> (issue #9983,
+# G5 in the update-mode gates): sets MERGE_LEASE_SKIPS_EFFECTIVE to <skips>
+# without each soft entry (_merge_lease_skip_is_soft) whose PR is open in
+# <pulls_json> on the entry head, is <candidate> or carries
+# MERGE_LEASE_WAIT_LABEL, and whose newest ai-review/head-gate status on that
+# head is `success` created by the pipeline login. Hard entries always stay.
+# Runs in the caller's shell (not $(...)) so the login cache persists.
+# API: none when no soft entry qualifies; otherwise one `GET user` per
+# process and token (cached in _MERGE_LEASE_GATE_LOGIN and the token-keyed
+# PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE) and at most 10 commit-statuses
+# reads per call (entries past the cap stay). Fail-closed for the skip: a
+# failed login or statuses read keeps the entry (today's rule). Returns 0.
+_MERGE_LEASE_GATE_LOGIN=""
+_merge_lease_skips_effective()
+{
+	local eff_skips="${1:-}" eff_pulls="${2:-}" eff_cand="${3:-}" eff_label="${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}"
+	local eff_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" eff_rows eff_entry eff_pair eff_head eff_reads=0
+	local eff_statuses eff_gate eff_login="" eff_drop="" eff_token_fp=""
+	MERGE_LEASE_SKIPS_EFFECTIVE="${eff_skips}"
+	[ -n "${eff_skips}" ] || return 0
+	[[ "${eff_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 0
+	eff_rows="$(jq -r --arg l "${eff_label}" --arg c "${eff_cand}" '[ .[]? | if type == "array" then .[] else . end | select(type == "object")
+		| ((if (.head | type) == "object" then .head.sha else .head_sha end) // "" | tostring) as $hs
+		| select(((.number // "") | tostring) == $c or ([ (.labels // [])[] | if type == "object" then .name else . end ] | index($l) != null))
+		| "\(.number):\($hs)" ] | .[]' <<< "${eff_pulls}" 2>/dev/null)" || eff_rows=""
+	[ -n "${eff_rows}" ] || return 0
+	while IFS= read -r eff_entry; do
+		_merge_lease_skip_is_soft "${eff_entry}" || continue
+		eff_pair="${eff_entry%%:*}:$(printf '%s' "${eff_entry#*:}" | cut -d: -f1)"
+		printf '%s\n' "${eff_rows}" | grep -Fxq -- "${eff_pair}" || continue
+		[ "${eff_reads}" -lt 10 ] || break
+		if [ -z "${eff_login}" ]; then
+			# Once per call, from the token-keyed login cache of the head-gate
+			# supersede check (PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE), so a token
+			# switch reads the login again and one token reads `user` once.
+			eff_token_fp="$(printf '%s|%s' "${GH_TOKEN:-}" "${GITHUB_TOKEN:-}" | sha256sum 2>/dev/null | cut -c1-64)"
+			if [ -n "${eff_token_fp}" ] && [ "${PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE_KEY:-}" = "${eff_token_fp}" ]; then
+				eff_login="${PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE:-}"
+			fi
+			if [ -z "${eff_login}" ]; then
+				eff_login="$(gh_retry _safe_gh_jq user 2>/dev/null | jq -r 'if type == "object" then (.login // "") else "" end' 2>/dev/null | tail -n1)" || eff_login=""
+				if [ -n "${eff_token_fp}" ] && [[ "${eff_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]]; then
+					PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE="${eff_login}"
+					PR_CHECKS_GATE_SUP_SELF_LOGIN_CACHE_KEY="${eff_token_fp}"
+				fi
+			fi
+			eff_login="$(printf '%s' "${eff_login}" | tr '[:upper:]' '[:lower:]')"
+			[[ "${eff_login}" =~ ^[a-z0-9][a-z0-9-]*(\[bot\])?$ ]] || return 0
+			_MERGE_LEASE_GATE_LOGIN="${eff_login}"
+		fi
+		eff_head="${eff_pair#*:}"
+		eff_reads=$((eff_reads + 1))
+		eff_statuses="$(gh_retry _safe_gh_jq "repos/${eff_repo}/commits/${eff_head}/statuses?per_page=100" 2>/dev/null)" || continue
+		eff_gate="$(jq -r '[ .[]? | select(type == "object" and .context == "ai-review/head-gate") ][0] | if . == null then "" else "\(.state) \((.creator.login // "") | ascii_downcase)" end' <<< "${eff_statuses}" 2>/dev/null)" || continue
+		[ "${eff_gate}" = "success ${_MERGE_LEASE_GATE_LOGIN}" ] || continue
+		eff_drop+="${eff_entry}"$'\n'
+	done < <(printf '%s\n' "${eff_skips}" | sed '/^$/d')
+	[ -n "${eff_drop}" ] || return 0
+	MERGE_LEASE_SKIPS_EFFECTIVE="$(printf '%s\n' "${eff_skips}" | sed '/^$/d' | grep -Fxv -f <(printf '%s' "${eff_drop}") || true)"
 	return 0
 }
 
@@ -3834,7 +4762,11 @@ _merge_lease_gate_multi()
 	# goes first. The listing is the single-holder path's call.
 	gm_pulls_json="$(gh_retry _safe_gh_jq --paginate --slurp "repos/${gm_repo}/pulls?state=open&base=$(printf '%s' "${gm_base}" | jq -sRr @uri)&per_page=100" 2>/dev/null)" || gm_pulls_json=""
 	if jq -e 'type == "array"' >/dev/null 2>&1 <<< "${gm_pulls_json}"; then
-		_merge_lease_revoke_enabled && gm_skips="${MERGE_LEASE_SKIPS:-}"
+		if _merge_lease_revoke_enabled; then
+			# Issue #9983 G5: a soft entry whose head-gate passed no longer blocks.
+			_merge_lease_skips_effective "${MERGE_LEASE_SKIPS:-}" "${gm_pulls_json}" "${gm_pr}"
+			gm_skips="${MERGE_LEASE_SKIPS_EFFECTIVE:-}"
+		fi
 		if printf '%s' "${gm_pulls_json}" | jq -e --argjson n "${gm_pr}" --arg l "${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait}" \
 			'[ .[]? | if type == "array" then .[] else . end | select(type == "object" and .number == $n) | (.labels // [])[] | (if type == "object" then .name else . end) | select(. == $l) ] | length > 0' >/dev/null 2>&1; then
 			gm_was_waiting=1
@@ -4001,8 +4933,10 @@ _merge_lease_gate()
 				if _merge_lease_revoke_enabled; then
 					# Phase 2: a PR on the record's skip list (unchanged head) does
 					# not jump ahead of another waiter; with no other waiter it
-					# still acquires, and its write drops its own entry.
-					lease_first="$(_merge_lease_queue_first "${lease_pulls_json}" "${lease_pr}" "${MERGE_LEASE_SKIPS:-}")"
+					# still acquires, and its write drops its own entry. Issue #9983
+					# G5: a soft entry whose head-gate passed no longer blocks.
+					_merge_lease_skips_effective "${MERGE_LEASE_SKIPS:-}" "${lease_pulls_json}" "${lease_pr}"
+					lease_first="$(_merge_lease_queue_first "${lease_pulls_json}" "${lease_pr}" "${MERGE_LEASE_SKIPS_EFFECTIVE:-}")"
 				else
 					lease_first="$(_merge_lease_queue_first "${lease_pulls_json}" "${lease_pr}")"
 				fi
@@ -4135,5 +5069,59 @@ _pr_final_ci_merge_pending_mark()
 		return 0
 	fi
 	echo "FINAL_CI_MERGE_PENDING pr=${pending_pr} head=${pending_head} outcome=marked reason=checks_wait_timeout"
+	return 0
+}
+
+# ---------------------------------------------------------------------------
+# _pr_judge_merge_pending_mark <pr> <head_sha> <decision> (issue #9987)
+#
+# Why: the review-blocked judge waits for the merge lease before it posts
+# ai-review/head-gate ("gates first"), and the lease tick refused a waiter
+# without head-gate success (reason=no_head_gate), so a judge-approved PR on
+# a busy lease never merged without a person (#9956 on 2026-11-23).
+#
+# When the judge defers a merge decision (merge, merge_with_followup or the
+# terminal fix merge) with PR_BASE_FRESHNESS_OUTCOME=lease_wait, this posts a
+# `success` commit status MERGE_LEASE_JUDGE_DECISION_CONTEXT on the judged
+# head with the pipeline token. It only makes the waiter eligible for a lease
+# grant (_merge_lease_pr_eligible); the merge itself still runs the judge's
+# gates. ai-review/head-gate is not posted here.
+#
+# Off with MERGE_LEASE_REVOKE_ENABLED=false (Phase 2 off: no grant-time
+# eligibility check reads it). API: one status POST per call, none when off
+# or on invalid input. Fail-open: every outcome returns 0. Log:
+# `JUDGE_MERGE_PENDING pr=<n> head=<sha> decision=<token>
+# outcome=marked|failed|disabled|skipped reason=<token>`.
+# ---------------------------------------------------------------------------
+_pr_judge_merge_pending_mark()
+{
+	local jmp_pr="${1:-}" jmp_head="${2:-}" jmp_decision="${3:-}" jmp_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	local -a jmp_url_args=()
+	if ! _merge_lease_revoke_enabled; then
+		echo "JUDGE_MERGE_PENDING pr=${jmp_pr:-?} head=${jmp_head:-?} decision=${jmp_decision:-?} outcome=disabled reason=switch_off"
+		return 0
+	fi
+	if ! [[ "${jmp_pr}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${jmp_head}" =~ ^[0-9a-f]{40}$ ]]; then
+		echo "JUDGE_MERGE_PENDING pr=? head=? decision=? outcome=skipped reason=invalid_input"
+		return 0
+	fi
+	case "${jmp_decision}" in
+		merge|merge_with_followup|terminal) ;;
+		*)
+			echo "JUDGE_MERGE_PENDING pr=${jmp_pr} head=${jmp_head} decision=? outcome=skipped reason=invalid_input"
+			return 0
+			;;
+	esac
+	if [[ "${RUN_URL:-}" =~ ^https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/actions/runs/[0-9]+$ ]]; then
+		jmp_url_args=(-f "target_url=${RUN_URL}")
+	fi
+	if ! gh_retry _safe_gh_jq -X POST "repos/${jmp_repo}/statuses/${jmp_head}" \
+		-f state=success -f "context=${MERGE_LEASE_JUDGE_DECISION_CONTEXT:-ai-review/judge-merge-pending}" \
+		-f "description=Review-blocked judge decided ${jmp_decision}; waiting for the merge lease" \
+		${jmp_url_args[@]+"${jmp_url_args[@]}"} >/dev/null 2>&1; then
+		echo "::warning::JUDGE_MERGE_PENDING pr=${jmp_pr} head=${jmp_head} decision=${jmp_decision} outcome=failed reason=status_post_failed (stall recovery still re-runs the judge)"
+		return 0
+	fi
+	echo "JUDGE_MERGE_PENDING pr=${jmp_pr} head=${jmp_head} decision=${jmp_decision} outcome=marked reason=lease_wait"
 	return 0
 }

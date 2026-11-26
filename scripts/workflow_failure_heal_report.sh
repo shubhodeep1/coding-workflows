@@ -172,6 +172,29 @@ if [ "${LABEL}" = "ai:needs-human" ] || [ "${LABEL}" = "ai:scope-blocked" ]; the
 	HEAL_REPORTER_LOGIN="$(gh_retry gh api user --jq .login 2>/dev/null || true)"
 fi
 
+# The auto-heal remediation no-code guard (scripts/implement_commit_changes.sh)
+# parks an issue with ai:scope-blocked on purpose: the pipeline worked, the
+# remediation just changed no code, so there is nothing to heal. Skip when the
+# newest guard-rejection marker for this issue, written by the authenticated
+# account, carries reason=remediation-no-code. A newer guard-rejection comment
+# without a marker (its marker failed to encode) counts as the newest one, so
+# a stale park marker cannot hide a later rejection. Uses the comments and the
+# identity already read above (no extra API call). Without a verifiable
+# identity or marker the report is dispatched as before, so a forged marker
+# cannot suppress a heal.
+if [ "${LABEL}" = "ai:scope-blocked" ] && [ -n "${HEAL_REPORTER_LOGIN}" ] \
+	&& jq -e --arg login "${HEAL_REPORTER_LOGIN}" --arg item "${ISSUE_NUMBER}" '
+		[.[] | select(.author == $login)
+			| ((.body // "") | split("\n") | map(sub("\r$"; "")) | map(select(length > 0)))
+			| {head: (first // ""), tail: (last // "")}
+			| select((.tail | startswith("<!-- ai:guard-rejection:v1 item=" + $item + " "))
+				or (.head | (startswith("🚨 **") and contains("rejected this implementation run"))))]
+		| (last // {tail: ""}) | .tail | test("^<!-- ai:guard-rejection:v1 item=[0-9]+ guard=scope reason=remediation-no-code run=[0-9]+ ")
+	' "${COMMENTS_JSON_FILE}" >/dev/null 2>&1; then
+	log "skip reason=remediation_no_code_park issue=${ISSUE_NUMBER} label=${LABEL}"
+	exit 0
+fi
+
 PAYLOAD_FILE="${RUNTIME_DIR}/payload.json"
 if ! python3 "${HEAL_PY}" build-issue-payload \
 	--repo "${REPO}" \
