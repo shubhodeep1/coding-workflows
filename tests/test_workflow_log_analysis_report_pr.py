@@ -542,6 +542,13 @@ def test_report_pr_stays_open_when_auto_merge_refused() -> None:
 		assert proc.returncode == 0, proc.stderr + proc.stdout
 		assert "::warning::" in proc.stdout and "https://github.com/o/r/pull/42" in proc.stdout
 		assert "could not be set to auto-merge" in proc.stdout
+		assert "GitHub refuses --auto" in proc.stdout
+		assert "still carries the purge deletions" not in proc.stdout
+		# The refusal cause is named only when --auto ran: the purge-failure
+		# path skips the call and must not blame repository settings.
+		body = _step_body()
+		cause_at = body.index("GitHub refuses --auto")
+		assert body.rindex('if [ "${report_purge_drop_ok}" -eq 1 ]; then', 0, cause_at) > body.rindex('report_delivery="pr_open"', 0, cause_at)
 		# Refused auto-merge never falls back to a direct merge.
 		assert [call for call in box.gh_calls() if call.startswith("pr merge")] == [
 			call for call in box.gh_calls() if call.startswith("pr merge 42 --auto ")
