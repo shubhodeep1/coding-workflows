@@ -36103,5 +36103,20 @@ def test_stall_judge_live_review_runs_held_cache_replay_keeps_replay_count():
 	assert "ai:needs-human" not in second["issues"]["10"]["labels"]
 
 
+def test_stall_judge_live_review_runs_holds_unparseable_judge_fallback_escalate():
+	# With terminalization on, the ai:implementing ladder's fallback at
+	# recovery count 2 is escalate_human; an unparseable judge reply must not
+	# escalate while a review of the PR's head waits for a runner.
+	result = _run_stall_judge_live_review_poller(
+		active_autofix_runs=[_sj_live_review_run()],
+		env_overrides={"MOCK_STALL_JUDGE_JSON": "no verdict here"},
+	)
+	out = result["stdout"]
+	assert "Could not parse stall judge output for #10; falling back to escalate_human" in out, out[-4000:]
+	assert "STALL_RECOVERY issue=10 reason=review_waiting_for_runner held=escalate_human pr=77 run=555 phase=ai:implementing" in out, out[-4000:]
+	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 2
+
+
 if __name__ == "__main__":
 	raise SystemExit(main())

@@ -25306,8 +25306,21 @@ invoke_stall_judge() {
 
   rm -f "${stall_judge_semble_query_file}"
 
+  # Issue #10149: the review-runner hold also covers the fallback ladder action
+  # (escalate_human with ENABLE_STALL_HUMAN_TERMINALIZATION=true), so a failed
+  # or unparseable judge cannot escalate or close a PR whose review is queued.
+  local _sj_fallback_held="false"
+  if [ "${_sj_review_waiting_for_runner}" = "true" ]; then
+    case "${fallback_action}" in escalate_human|close_and_reissue) _sj_fallback_held="true" ;; esac
+  fi
+
   if [ "${judge_success}" != "true" ]; then
     echo "::warning::Stall judge failed for issue #${issue_num}; falling back to ${fallback_action}."
+    if [ "${_sj_fallback_held}" = "true" ]; then
+      echo "STALL_RECOVERY issue=${issue_num} reason=review_waiting_for_runner held=${fallback_action} pr=${target_pr:-none} run=${_sj_review_waiting_run:-none} phase=${phase}"
+      STALL_RECOVERY_EFFECTIVE_ACTION="${fallback_action}_held_review_waiting_for_runner"
+      return 1
+    fi
     execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
     return $?
   fi
@@ -25316,6 +25329,11 @@ invoke_stall_judge() {
   judge_json="$(_robust_parse_json_file "${stall_judge_output_file}")"
   if [ -z "${judge_json}" ]; then
     echo "::warning::Could not parse stall judge output for #${issue_num}; falling back to ${fallback_action}."
+    if [ "${_sj_fallback_held}" = "true" ]; then
+      echo "STALL_RECOVERY issue=${issue_num} reason=review_waiting_for_runner held=${fallback_action} pr=${target_pr:-none} run=${_sj_review_waiting_run:-none} phase=${phase}"
+      STALL_RECOVERY_EFFECTIVE_ACTION="${fallback_action}_held_review_waiting_for_runner"
+      return 1
+    fi
     execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
     return $?
   fi
