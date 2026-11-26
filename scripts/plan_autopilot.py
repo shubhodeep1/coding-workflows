@@ -83,6 +83,8 @@ from typing import Any
 
 LOG_PREFIX = "PLAN_AUTOPILOT"
 BRANCH_PREFIX = "ai/plan-autopilot-"
+# The exact names branch_name() and run_apply push (base, then -2 / -3).
+MAINTENANCE_BRANCH_RE = re.compile(r"ai/plan-autopilot-[0-9]{8}-[0-9a-f]{7}(?:-[23])?")
 STATUS_LABEL = "ai:plan-autopilot"
 DECISION_LABEL = "ai:plan-decision"
 TRACKING_LABEL = "ai:orchestrator-tracking"
@@ -417,7 +419,7 @@ def run_gate(repo: str, workdir: Path, stale_hours: int, now: dt.datetime | None
 	if tracking:
 		result.update(reason="project_open", save_marker=True)
 		return result
-	maintenance = [p for p in prs if str((p.get("head") or {}).get("ref", "")).startswith(BRANCH_PREFIX)]
+	maintenance = [p for p in prs if is_maintenance_pr(p, repo)]
 	if maintenance:
 		# The pulls listing is newest-first; flag the longest-waiting PR.
 		oldest = min(maintenance, key=lambda p: str(p.get("created_at") or ""))
@@ -435,6 +437,22 @@ def run_gate(repo: str, workdir: Path, stale_hours: int, now: dt.datetime | None
 		return result
 	result.update(proceed=True, reason="idle")
 	return result
+
+
+def is_maintenance_pr(pr: dict[str, Any], repo: str) -> bool:
+	"""Only a PR this script could have opened counts as the maintenance PR.
+
+	The head must be a branch of this repository (a fork author picks any
+	branch name, and a fork PR named ai/plan-autopilot-* would otherwise pause
+	the autopilot and be flagged on the status issue), and its name must have
+	the exact shape branch_name() pushes. A deleted fork (null head.repo)
+	never counts.
+	"""
+	head = pr.get("head") or {}
+	head_repo = head.get("repo") if isinstance(head.get("repo"), dict) else {}
+	if str(head_repo.get("full_name") or "").lower() != (repo or "").lower():
+		return False
+	return bool(MAINTENANCE_BRANCH_RE.fullmatch(str(head.get("ref") or "")))
 
 
 def _set_status_issue(result: dict[str, Any], status_issues: list[dict[str, Any]]) -> None:
