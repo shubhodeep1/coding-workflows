@@ -634,7 +634,7 @@ abg_test()
 	# The gate refuses a --tests-only list longer than its
 	# MAX_TESTS_FILE_ENTRIES (500; the full suite is longer) as `unverified`,
 	# so the list runs in chunks of at most that many entries, one gate run
-	# each, sharing the timeout budget. The cap comes from the trusted module
+	# each, within one shared timeout budget. The cap comes from the trusted module
 	# itself (500 when it cannot be read). Every chunk must pass.
 	local entry_cap="" chunk="" chunk_count=0 chunk_minutes=0 chunk_index=0
 	entry_cap="$(sed -n 's/^MAX_TESTS_FILE_ENTRIES = \([0-9]\{1,4\}\)$/\1/p' "${module}" 2>/dev/null | head -n 1)" || entry_cap=""
@@ -648,11 +648,29 @@ abg_test()
 		_abg_eval "${pr}" "${head}" 5 false no_tests
 		return 0
 	fi
-	chunk_minutes=$((minutes / chunk_count))
-	[ "${chunk_minutes}" -ge 1 ] || chunk_minutes=1
+	# One wall-clock deadline for the whole suite: each chunk gets the time
+	# left times its share of the entries still to run (the last chunk all of
+	# it), so the 500-entry chunk is not held to an even split and time a
+	# chunk leaves unused passes on. Under a minute left fails closed.
+	local deadline=0 entries_left=0 chunk_entries=0 remaining_secs=0
+	entries_left=$(( $(wc -l < "${tests_file}") ))
+	deadline=$(( $(date +%s) + minutes * 60 ))
 	local -a gate_args=()
 	for chunk in "${ABG_STATE_DIR}/tests-chunks"/chunk-*; do
 		chunk_index=$((chunk_index + 1))
+		remaining_secs=$(( deadline - $(date +%s) ))
+		if [ "${remaining_secs}" -lt 60 ]; then
+			status="timeout"
+			break
+		fi
+		chunk_entries=$(( $(wc -l < "${chunk}") ))
+		if [ "${chunk_index}" -ge "${chunk_count}" ] || [ "${entries_left}" -le "${chunk_entries}" ]; then
+			chunk_minutes=$(( remaining_secs / 60 ))
+		else
+			chunk_minutes=$(( remaining_secs * chunk_entries / entries_left / 60 ))
+		fi
+		[ "${chunk_minutes}" -ge 1 ] || chunk_minutes=1
+		entries_left=$(( entries_left - chunk_entries ))
 		gate_args=(--worktree "${ABG_HEAD_DIR}" --module "${module}" --image "${image}" --base "${base}"
 			--out-dir "${gate_dir}/chunk-${chunk_index}" --timeout-minutes "${chunk_minutes}" --shards 4 --tests-only "${chunk}")
 		if [ -n "${prep}" ] && [ -d "${prep}/venv/bin" ]; then

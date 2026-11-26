@@ -128,6 +128,7 @@ for arg in "$@"; do
 	prev="${arg}"
 done
 printf '%s\n' "$*" > "$(dirname "$0")/../gate_args.txt"
+printf '%s\n' "$*" >> "$(dirname "$0")/../gate_args_all.txt"
 cp "${tests}" "$(dirname "$0")/../gate_tests.txt"
 # Every gate run appends its list, so a chunked suite shows each chunk.
 { cat "${tests}"; echo "--"; } >> "$(dirname "$0")/../gate_chunks.txt"
@@ -580,8 +581,11 @@ def test_condition_5_runs_suite_in_chunks_within_gate_cap(h: Harness) -> None:
 	assert "condition=5 outcome=true reason=tests_pass" in results[2].stdout
 	chunks = (h.tmp / "checkout" / "gate_chunks.txt").read_text(encoding="utf-8").split("--\n")
 	assert [c.split() for c in chunks if c.strip()] == [["tests/test_a.py", "tests/test_b.py"], ["tests/test_c.sh"]]
-	# The two runs share the 90-minute budget.
-	assert "--timeout-minutes 45 " in (h.tmp / "checkout" / "gate_args.txt").read_text(encoding="utf-8")
+	# The 90-minute budget is split by share of entries, not evenly: the
+	# 2-of-3 chunk gets about 60 minutes and the last chunk what is left.
+	runs = (h.tmp / "checkout" / "gate_args_all.txt").read_text(encoding="utf-8").splitlines()
+	minutes = [int(run.split("--timeout-minutes ", 1)[1].split()[0]) for run in runs]
+	assert len(minutes) == 2 and 59 <= minutes[0] <= 60 and 88 <= minutes[1] <= 90, minutes
 	assert len(h.posts()) == 1
 
 
