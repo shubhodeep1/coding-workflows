@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"ChatGPT slot model default gpt-6-sol \u2192 gpt-6.2-sol in CHATGPT_SLOT_DEFAULTS (scripts/claude_engine.py) and .github/ai/chatgpt_pool.json\" and \"Docs: README mentions ...\". The PR updates the README row for REVIEWER_CHATGPT_MODEL, but one other doc still quotes the old shipped file content.\n  expected_change_site: agents.d/chatgpt-reviewer-slot.md line 2\n  confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: The PR diff has no hunk in agents.d/chatgpt-reviewer-slot.md, which still quotes the trusted `.codex-workflow-src/.github/ai/chatgpt_pool.json` as `{\"reviewer_slot_enabled\": false, \"model\": \"gpt-6-sol\", \"replaces\": \"openai/gpt-6-luna\", \"reasoning\": \"xhigh\"}`, while the shipped .github/ai/chatgpt_pool.json now reads `\"model\": \"gpt-6.2-sol\"`. When automation folds this fragment into agents.md, it will contradict agents.d/10129-codex-v0171-pin.md. Documentation only, no runtime change (reviewer severity: NIT).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"ChatGPT slot model default gpt-6-sol \u2192 gpt-6.2-sol in CHATGPT_SLOT_DEFAULTS (scripts/claude_engine.py) and .github/ai/chatgpt_pool.json\" and \"Docs: README mentions ...\". The PR updates the README row for REVIEWER_CHATGPT_MODEL, but one other doc still quotes the old shipped file content.\n  Expected change site: agents.d/chatgpt-reviewer-slot.md line 2. This existing fragment quotes the trusted `.codex-workflow-src/.github/ai/chatgpt_pool.json` as `{\"reviewer_slot_enabled\": false, \"model\": \"gpt-6-sol\", \"replaces\": \"openai/gpt-6-luna\", \"reasoning\": \"xhigh\"}`.\n  Evidence of absence: The PR diff has no hunk in agents.d/chatgpt-reviewer-slot.md. A repo-wide grep for `\"model\": \"gpt-6-sol\"` in *.md files outside the historical docs/plans/ finds only this fragment. The shipped .github/ai/chatgpt_pool.json now reads `\"model\": \"gpt-6.2-sol\"`. Once folded into agents.md, it documents the slot model wrongly and contradicts agents.d/10129-codex-v0171-pin.md. Fix: change `gpt-6-sol` to `gpt-6.2-sol` inside the quoted JSON. This path is covered by the `agents.d/*` grant. Documentation only.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- All other categories: NONE. HARDENING_SUGGESTIONS: NONE. HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "969c89b6c15ddb4ed205e934f8ce5354372d18ecfc0c333875b4faca642ad080",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10132,
+    "run_id": "45894161375",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45894161375",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126211834_10bf6561e5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10132,
+    "run_id": "45894161375"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-26T21:18:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
