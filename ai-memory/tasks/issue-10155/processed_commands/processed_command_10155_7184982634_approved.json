@@ -5,13 +5,25 @@
   "entry_id": "processed_command_10155_7184982634_approved",
   "issue_number": 10155,
   "metadata": {
+    "branch": "ai/issue-10155",
+    "changed_files": [
+      "agents.d/10155-plan-autopilot-maintenance-pr-provenance.md",
+      "changelog.d/10155-plan-autopilot-maintenance-pr-provenance.md",
+      "scripts/plan_autopilot.py",
+      "tests/test_plan_autopilot.py"
+    ],
+    "issue_number": 10155,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/10155",
+    "pr_number": 10158,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/10158",
+    "run_attempt": "1",
+    "run_id": "45772020798",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/45772020798"
   },
   "run_attempt": 1,
   "run_id": "45772020798",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-26T07:17:32Z",
+  "status": "completed",
+  "timestamp": "2026-11-26T07:28:34Z",
   "workflow": "implement"
 }
