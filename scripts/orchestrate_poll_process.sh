@@ -25429,11 +25429,16 @@ invoke_stall_judge() {
   # the linked PR. The wedged-queued cutoff (#9473, ZOMBIE_RUN_MAX_QUEUED_HOURS)
   # bounds the hold: the waiting-run selection applies it to queued, waiting,
   # pending and requested runs alike, so no unstarted run holds forever.
+  # The judge's own escalate_human is held too: with the default
+  # ENABLE_STALL_HUMAN_TERMINALIZATION=false it is normalized to the ladder
+  # action above (e.g. retrigger_implement), which would otherwise dispatch
+  # while the review is still waiting for a runner.
   local _sj_review_runner_hold="false"
   if [ "${_sj_review_waiting_for_runner}" = "true" ]; then
     case "${effective_action}" in
       escalate_human|close_and_reissue) _sj_review_runner_hold="true" ;;
     esac
+    [ "${judge_action}" = "escalate_human" ] && _sj_review_runner_hold="true"
   fi
   STALL_JUDGE_TARGET_PR="$(echo "${judge_json}" | jq -r '.target_pr // empty')"
   if [ -z "${STALL_JUDGE_TARGET_PR}" ] && [[ "${target_pr}" =~ ^[0-9]+$ ]]; then

@@ -35995,6 +35995,24 @@ def test_stall_judge_live_review_runs_holds_escalate_when_review_queued():
 	assert '"head_sha":"deadbeef"' in bodies[-1]
 
 
+def test_stall_judge_live_review_runs_holds_normalized_escalate_with_terminalization_off():
+	# Default config: the judge's escalate_human is normalized to the ladder
+	# action, which must be held too while the review waits for a runner.
+	result = _run_stall_judge_live_review_poller(
+		active_autofix_runs=[_sj_live_review_run()],
+		enable_stall_human_terminalization="false",
+	)
+	out = result["stdout"]
+	assert "outcome=ok runs=1 waiting=true" in out, out[-4000:]
+	assert "STALL_RECOVERY issue=10 reason=review_waiting_for_runner held=" in out, out[-4000:]
+	assert "held=escalate_human" not in out, out[-4000:]
+	assert "ai:needs-human" not in result["issues"]["10"]["labels"]
+	assert result["latest_state"]["waves"][0]["issues"][0]["stall_recovery_count"] == 2
+	bodies = _sj_judge_comment_bodies(result)
+	assert bodies and "**Decision (judge):** escalate_human" in bodies[-1]
+	assert "(held: review_waiting_for_runner)" in bodies[-1]
+
+
 def test_stall_judge_live_review_runs_holds_close_and_reissue_when_review_queued():
 	result = _run_stall_judge_live_review_poller(action="close_and_reissue", active_autofix_runs=[_sj_live_review_run()])
 	out = result["stdout"]
