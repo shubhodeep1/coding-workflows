@@ -7055,9 +7055,17 @@ def test_deterministic_skip_merge_integration_pr_runs_no_merge_or_label_calls() 
 		# The verified merge-gate helper checkout the step sources
 		# (.codex-freshness-src pinned to REVIEW_SUPPORT_SHA); without it the
 		# required-checks wait fails closed and no auto-merge is enabled.
+		# The security follow-up guard (#9671) is sourced from the same
+		# checkout and runs review_single_issue_security_pass.sh from it;
+		# without both files the step refuses the merge.
 		helper = tmp / ".codex-freshness-src"
 		(helper / "scripts").mkdir(parents=True)
-		for name in ("pr_checks_lib.sh", "gh_helpers.sh"):
+		for name in (
+			"pr_checks_lib.sh",
+			"gh_helpers.sh",
+			"review_autofix_step_det_skip_followup_guard.sh",
+			"review_single_issue_security_pass.sh",
+		):
 			(helper / "scripts" / name).write_text((REPO_ROOT / "scripts" / name).read_text(encoding="utf-8"), encoding="utf-8")
 		git_env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com", GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
 		subprocess.run(["git", "init", "-q", str(helper)], check=True, env=git_env)
@@ -7096,6 +7104,14 @@ def test_deterministic_skip_merge_integration_pr_runs_no_merge_or_label_calls() 
 				# gh cannot bind to a CI run, so the wait would time out.
 				"GITHUB_REPOSITORY": "test-owner/test-repo",
 				"AUTO_MERGE_REQUIRED_CI_CHECK": "none",
+				# Security follow-up guard (#9671): the job passes the base ref
+				# and the step the default branch; a PR into the default branch
+				# is allowed with no API call. The guard resolves its support
+				# directory from GITHUB_WORKSPACE, so pin it to this sandbox
+				# instead of the runner's checkout.
+				"PR_BASE_REF": "main",
+				"DEFAULT_BRANCH": "main",
+				"GITHUB_WORKSPACE": str(tmp),
 			})
 			result = subprocess.run(["bash", "-c", step["run"]], env=env, cwd=tmp, capture_output=True, text=True, check=False)
 			assert result.returncode == 0, result.stderr
@@ -7105,6 +7121,7 @@ def test_deterministic_skip_merge_integration_pr_runs_no_merge_or_label_calls() 
 				assert not calls, calls
 				assert f"action=refuse reason={expected_reason}" in result.stdout
 			else:
+				assert "reason=security_followup_guard_" not in result.stdout, result.stdout
 				assert [call for call in calls if call.startswith("pr merge ")] == [
 					f"pr merge 42 --repo test-owner/test-repo --squash --auto --match-head-commit {head_sha}"
 				]

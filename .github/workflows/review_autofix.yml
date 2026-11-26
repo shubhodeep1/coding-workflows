@@ -455,6 +455,19 @@ jobs:
           fi
           echo "GH_PAT_BUDGET phase=start workflow=review_autofix job=gate remaining=${remaining} reset=${reset} used_in_job=unknown"
 
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: ${{ env.GH_API_RETRY_HELPERS }}
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
+
       - name: Resolve trusted review support commit
         id: resolve_support
         env:
@@ -829,6 +842,7 @@ jobs:
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_gate
         run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
           reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
           remaining=unknown; reset=unknown; used=unknown
           if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
@@ -840,7 +854,7 @@ jobs:
               fi
             fi
           fi
-          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=gate remaining=${remaining} reset=${reset} used_in_job=${used}"
+          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=gate remaining=${remaining} reset=${reset} used_in_job=${used} ${counter_keys}"
 
   post-merge-validate-dispatch:
     needs: gate
@@ -900,6 +914,19 @@ jobs:
             exit 1
           fi
           echo "WORKFLOW_SUPPORT_REF=${WORKFLOW_SHA}" >> "$GITHUB_ENV"
+
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        # Every path ends in exit 0; this job must still fail closed elsewhere.
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: .codex-workflow-src/scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
 
       - name: Dispatch standalone validate for orchestrator short-circuit issues
         run: |
@@ -1065,6 +1092,7 @@ jobs:
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_post-merge-validate-dispatch
         run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
           reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
           remaining=unknown; reset=unknown; used=unknown
           if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
@@ -1076,7 +1104,7 @@ jobs:
               fi
             fi
           fi
-          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=post-merge-validate-dispatch remaining=${remaining} reset=${reset} used_in_job=${used}"
+          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=post-merge-validate-dispatch remaining=${remaining} reset=${reset} used_in_job=${used} ${counter_keys}"
 
   post-merge-force-poll:
     needs: gate
@@ -1130,6 +1158,19 @@ jobs:
           fi
           echo "WORKFLOW_SUPPORT_REF=${WORKFLOW_SHA}" >> "$GITHUB_ENV"
 
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: .codex-workflow-src/scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
+
       - name: Force orchestrate poll after merged PR handling
         env:
           GH_PAT: ${{ secrets.GH_PAT }}
@@ -1165,6 +1206,7 @@ jobs:
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_post-merge-force-poll
         run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
           reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
           remaining=unknown; reset=unknown; used=unknown
           if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
@@ -1176,7 +1218,7 @@ jobs:
               fi
             fi
           fi
-          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=post-merge-force-poll remaining=${remaining} reset=${reset} used_in_job=${used}"
+          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=post-merge-force-poll remaining=${remaining} reset=${reset} used_in_job=${used} ${counter_keys}"
 
   deterministic-skip-merge:
     needs: gate
@@ -1249,6 +1291,7 @@ jobs:
             scripts/review_single_issue_security_pass.sh
             scripts/security_pass_skip.py
             scripts/review_autofix_step_deterministic_skip_security_pass.sh
+            scripts/review_autofix_step_det_skip_followup_guard.sh
             scripts/review_head_gate.sh
           sparse-checkout-cone-mode: false
 
@@ -1267,6 +1310,19 @@ jobs:
             remaining=unknown; reset=unknown
           fi
           echo "GH_PAT_BUDGET phase=start workflow=review_autofix job=deterministic-skip-merge remaining=${remaining} reset=${reset} used_in_job=unknown"
+
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: .codex-freshness-src/scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
 
       - name: Checkout PR head for security pass
         # #8333: the pass verifies extension ancestry against the audited head
@@ -1340,6 +1396,11 @@ jobs:
           FRESHNESS_CI_FAILED_RETRY_SLEEP_SECS: ${{ vars.FRESHNESS_CI_FAILED_RETRY_SLEEP_SECS || '5' }}
           REVIEW_AUTOFIX_CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
           ALLOW_WORKFLOW_EDITS: ${{ inputs.allow_workflow_edits }}
+          # Security follow-up merge guard (#9671,
+          # scripts/review_autofix_step_det_skip_followup_guard.sh). The raw
+          # variable: only an explicit `false` turns the guard off.
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED }}
         run: |
           set -euo pipefail
 
@@ -1403,6 +1464,13 @@ jobs:
             echo "::warning::pr_checks_lib.sh unavailable; refusing auto-merge for PR #${1:-unknown} (required checks cannot be verified)."
             return 1
           }
+          # Security follow-up guard (#9671): fail closed unless the verified
+          # support checkout provides the library below.
+          det_skip_followup_merge_guard() {
+            DET_SKIP_FOLLOWUP_GUARD_RESULT="unavailable"
+            echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA:-unknown} action=refuse reason=security_followup_guard_unavailable"
+            return 1
+          }
           freshness_helper_verified=false
           if [ "${FRESHNESS_HELPER_CHECKOUT_OUTCOME:-}" = "success" ] \
             && [ -f .codex-freshness-src/scripts/pr_checks_lib.sh ] \
@@ -1412,6 +1480,11 @@ jobs:
             # shellcheck disable=SC1091
             source .codex-freshness-src/scripts/pr_checks_lib.sh
             freshness_helper_verified=true
+            if [ -f .codex-freshness-src/scripts/review_autofix_step_det_skip_followup_guard.sh ] \
+              && [ ! -L .codex-freshness-src/scripts/review_autofix_step_det_skip_followup_guard.sh ]; then
+              # shellcheck disable=SC1091
+              source .codex-freshness-src/scripts/review_autofix_step_det_skip_followup_guard.sh
+            fi
           else
             echo "::warning::Merge-base freshness helper checkout unavailable or unverified (outcome=${FRESHNESS_HELPER_CHECKOUT_OUTCOME:-unset}); freshness gate defers and auto-merge refused (required checks cannot be verified)."
           fi
@@ -1534,6 +1607,8 @@ jobs:
                   auto_merge_summary="DEFERRED (base freshness could not be verified; no branch update requested, the review sweep retries)"
                   echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_freshness_unknown"
                 fi
+              elif ! det_skip_followup_merge_guard; then
+                auto_merge_summary="REFUSED (security follow-up guard: ${DET_SKIP_FOLLOWUP_GUARD_RESULT:-unavailable})"
               elif gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --merge --auto --match-head-commit "${PR_HEAD_SHA}"; then
                 auto_merge_ready_labels_allowed="true"
                 auto_merge_summary="ENABLED (merge commit)"
@@ -1577,6 +1652,8 @@ jobs:
                 auto_merge_summary="DEFERRED (base freshness could not be verified; no branch update requested, the review sweep retries)"
                 echo "AUTOFIX_DET_SKIP_MERGE_BOUND pr=${PR_NUMBER} head_sha=${PR_HEAD_SHA} action=defer reason=base_freshness_unknown"
               fi
+            elif ! det_skip_followup_merge_guard; then
+              auto_merge_summary="REFUSED (security follow-up guard: ${DET_SKIP_FOLLOWUP_GUARD_RESULT:-unavailable})"
             elif gh_retry gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" --squash --auto --match-head-commit "${PR_HEAD_SHA}"; then
               auto_merge_ready_labels_allowed="true"
               auto_merge_summary="ENABLED (squash)"
@@ -1671,6 +1748,7 @@ jobs:
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_deterministic-skip-merge
         run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
           reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
           remaining=unknown; reset=unknown; used=unknown
           if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
@@ -1682,7 +1760,7 @@ jobs:
               fi
             fi
           fi
-          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=deterministic-skip-merge remaining=${remaining} reset=${reset} used_in_job=${used}"
+          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=deterministic-skip-merge remaining=${remaining} reset=${reset} used_in_job=${used} ${counter_keys}"
 
   # Retain the legacy job identifier for workflow consumers (a required
   # check that names it keeps reporting "skipped"). The Claude-fixer
@@ -1782,6 +1860,19 @@ jobs:
             exit 1
           fi
           echo "WORKFLOW_SUPPORT_REF=${WORKFLOW_SHA}" >> "$GITHUB_ENV"
+
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: .codex-workflow-src/scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
 
       - name: Apply identical-failure cap outcome
         run: |
@@ -2005,6 +2096,7 @@ jobs:
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_fingerprint-cap-block
         run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
           reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
           remaining=unknown; reset=unknown; used=unknown
           if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
@@ -2016,7 +2108,7 @@ jobs:
               fi
             fi
           fi
-          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=fingerprint-cap-block remaining=${remaining} reset=${reset} used_in_job=${used}"
+          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=fingerprint-cap-block remaining=${remaining} reset=${reset} used_in_job=${used} ${counter_keys}"
 
   codex-agent:
     needs: gate
@@ -2438,6 +2530,19 @@ jobs:
               rm -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
             fi
           fi
+
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: ${{ env.SUPPORT_SCRIPTS_DIR }}/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
 
       - name: Show disk usage (post support-source staging)
         run: df -h /
@@ -4745,6 +4850,9 @@ jobs:
           AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           ENABLE_AUTO_MERGE: ${{ vars.ENABLE_AUTO_MERGE || 'true' }}
+          # Security follow-up merge guard (#9479/#9671) kill switch, raw: only
+          # an explicit `false` turns it off; unset keeps it on.
+          SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED }}
           # When 'true' (default), forward-merge fallback PRs auto-merge via a
           # real merge commit instead of being suppressed for manual merge.
           # See the forward-merge-fallback branch below for the full rationale.
@@ -4908,6 +5016,9 @@ jobs:
           SECURITY_PASS_EXHAUSTED: ${{ steps.single_issue_security_pass.outputs.exhausted }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
+          # Security follow-up merge guard (#9671): the raw variable, so unset
+          # keeps the guard on; only an explicit `false` turns it off.
+          SINGLE_PASS_FOLLOWUP_GUARD_SWITCH: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED }}
           SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED || 'true' }}
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS || '2' }}
@@ -6511,6 +6622,7 @@ jobs:
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
           GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_codex-agent
         run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
           reading="$(gh api rate_limit --jq '[.resources.core.remaining, .resources.core.reset] | @tsv' 2>/dev/null || true)"
           remaining=unknown; reset=unknown; used=unknown
           if [[ "${reading}" =~ ^[0-9]+[[:space:]][0-9]+$ ]]; then
@@ -6522,5 +6634,5 @@ jobs:
               fi
             fi
           fi
-          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=codex-agent remaining=${remaining} reset=${reset} used_in_job=${used}"
+          echo "GH_PAT_BUDGET phase=end workflow=review_autofix job=codex-agent remaining=${remaining} reset=${reset} used_in_job=${used} ${counter_keys}"
           gpc_stats="${RUNNER_TEMP:-/nonexistent}/gh_pr_read_cache/${GITHUB_RUN_ID:-local}_${GITHUB_RUN_ATTEMPT:-1}.stats"; [ -r "${gpc_stats}" ] || gpc_stats=/dev/null; echo "GH_PR_READ_CACHE hits=$(awk '$1=="hit"{n++} END{print n+0}' "${gpc_stats}" 2>/dev/null || echo 0) misses=$(awk '$1=="miss"{n++} END{print n+0}' "${gpc_stats}" 2>/dev/null || echo 0) job=codex-agent"
