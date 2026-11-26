@@ -33,7 +33,7 @@ Dedupe rule:
 
 Output contract: these `## ` headings, in this order, and no other `## ` headings:
 1. `## Executive Summary` — three to six bullets: counts and the most important causes.
-2. `## Coverage` — one line per repository from the audit data: items in window, flagged, deep-reviewed, blocked, read failures; name every cursor clamp, truncated listing and read failure as a coverage gap. When open earlier audit report PRs are listed, say that this window re-reads theirs and name each PR.
+2. `## Coverage` — one line per repository from the audit data: items in window, flagged, deep-reviewed, blocked, read failures; name every cursor clamp, truncated listing and read failure as a coverage gap, and add one line from the `discovery` entry naming repositories cut by the repository cap (`truncated_by_repo_cap`) and a failed repository listing (`fallback`) as gaps. When open earlier audit report PRs are listed, say that this window re-reads theirs and name each PR.
 3. `## Unnecessary Items` — one line per item: `- <url> — creator <login> via <automation> — <why created> — <why unnecessary> — <AUD-### | tracking link | observation>`.
 4. `## Incorrectly Resolved Items` — same line shape: `- <url> — creator <login> via <automation> — <what was expected> — <what went wrong and the evidence> — <AUD-### | tracking link | observation>`.
 5. `## Blocked Items` — `- <url> — blocked since <date> — <labels/latch> — <one-line root cause> — <AUD-### | tracking link | observation>` (exactly these five parts separated by ` — `), then indented evidence bullets for new blocked items.

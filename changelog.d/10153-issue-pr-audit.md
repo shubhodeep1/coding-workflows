@@ -8,7 +8,7 @@ Rules flag likely waste (closed unmerged PRs, not-planned or duplicate issues, r
 | The numbers that matter | Value |
 | --- | --- |
 | New jobs | 0 (steps in the existing `collect-logs` job; timeout 60 -> 100 minutes) |
-| API calls per run | about 2 REST per active repository, 1 GraphQL per 25 items, up to 20 for blocked-item logs, 3 more |
+| API calls per run | about 2 REST per active repository, 1 GraphQL per 25 items, up to 20 for blocked-item logs, up to 9 for open earlier audit report PRs, about 3 more |
 | Model calls per run | 1, plus 1 retry when the report fails its structure check |
 
 Refs #10153

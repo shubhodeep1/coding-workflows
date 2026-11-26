@@ -183,6 +183,7 @@ deployment fallback.
 | `ISSUE_PR_AUDIT_EXCLUDE_REPOS` | No | empty | `workflow-log-analysis.yml` (`collect-logs`) | Comma- or space-separated `owner/repo` names the audit skips. |
 | `ISSUE_PR_AUDIT_MAX_REPOS` | No | `200` | `workflow-log-analysis.yml` (`collect-logs`) | Cap on audited repositories (the host repository included); the rest are counted as `truncated=`. |
 | `ISSUE_PR_AUDIT_MAX_OPEN_PAGES` | No | `5` | `workflow-log-analysis.yml` (`collect-logs`) | Pages (100 items each) of the open-item snapshot read per repository for blocked detection. |
+| `ISSUE_PR_AUDIT_MAX_WINDOW_PAGES` | No | `10` | `workflow-log-analysis.yml` (`collect-logs`) | Pages (100 items each, 1-100) of the per-repository window listing; a capped listing resumes from the last item read next run and is named under Coverage. |
 | `ISSUE_PR_AUDIT_MAX_DETAIL_ITEMS` | No | `500` | `workflow-log-analysis.yml` (`collect-logs`) | Items whose GraphQL details are read (one aliased query per 25 items). |
 | `ISSUE_PR_AUDIT_MAX_DEEP_ITEMS` | No | `80` | `workflow-log-analysis.yml` (`collect-logs`) | Flagged items the model reviews, highest signal count first. |
 | `ISSUE_PR_AUDIT_CLEAN_SAMPLE` | No | `10` | `workflow-log-analysis.yml` (`collect-logs`) | Clean items sampled (seeded by the run id) for the model, so gaps in the rules surface. |

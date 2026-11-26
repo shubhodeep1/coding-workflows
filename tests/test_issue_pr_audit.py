@@ -768,7 +768,8 @@ def test_open_earlier_report_prs_reach_the_model_input() -> None:
 	})
 	raw, _ = _collect(transport)
 	assert [report["pr"] for report in raw["earlier_open_reports"]] == [f"https://github.com/{HOST}/pull/50"]
-	assert raw["earlier_open_reports"][0]["items"] == ["https://github.com/o/r/pull/12", "private:abcd1234#3"]
+	# o/r was not audited this run and the public host redacts, so its URL is dropped (fail closed).
+	assert raw["earlier_open_reports"][0]["items"] == ["private:abcd1234#3"]
 	assert raw["earlier_open_reports"][0]["aud_titles"] == ["AUD-001: Dedupe heal intake"]
 	assert not any("pulls/51/" in call or "pulls/52/" in call for call in transport.calls)
 	digest, _ = ipa.classify(raw, {}, _settings(), now=NOW, log=lambda _line: None)
@@ -777,3 +778,72 @@ def test_open_earlier_report_prs_reach_the_model_input() -> None:
 	assert '<untrusted_external_data source="earlier-report-plans">' in text
 	# No pipeline login: nothing is trusted, nothing is read.
 	assert ipa.open_earlier_reports(FakeTransport({f"repos/{HOST}/pulls?state=open": pulls}), HOST, "") == []
+
+
+# --- review fixes, round 3 -----------------------------------------------------
+
+
+def test_earlier_report_items_get_this_runs_redaction() -> None:
+	records = [{"name": HOST, "redacted": False}, {"name": "owner/secret", "redacted": True}]
+	earlier = [{"items": [
+		f"https://github.com/{HOST}/pull/1",
+		"https://github.com/owner/secret/issues/4",
+		"https://github.com/other/unknown/pull/9",
+		"private:abcd1234#3",
+	]}]
+	out = ipa.redact_earlier_items(json.loads(json.dumps(earlier)), records, False, _settings())
+	assert out[0]["items"] == [f"https://github.com/{HOST}/pull/1", f"private:{ipa.repo_hash('owner/secret')}#4", "private:abcd1234#3"]
+	assert "owner/secret" not in json.dumps(out) and "other/unknown" not in json.dumps(out)
+	# Redaction off (or a private host): unknown repositories are kept.
+	out = ipa.redact_earlier_items(json.loads(json.dumps(earlier)), [{"name": HOST, "redacted": False}], True, _settings())
+	assert "https://github.com/other/unknown/pull/9" in out[0]["items"]
+
+
+def test_one_failed_earlier_report_pr_does_not_hide_the_next() -> None:
+	sha = "b" * 40
+	pulls = [
+		{"number": n, "html_url": f"https://github.com/{HOST}/pull/{n}", "user": {"login": "pipeline"}, "head": {"ref": f"auto/issue-pr-audit-report-{n}-1", "sha": sha, "repo": {"full_name": HOST}}}
+		for n in (60, 61)
+	]
+
+	class OneFails(FakeTransport):
+		def rest(self, endpoint: str):
+			if endpoint.startswith(f"repos/{HOST}/pulls/60/files"):
+				self.calls.append(endpoint)
+				raise ipa.ApiError("gh_api_failed status=502")
+			if endpoint.startswith(f"repos/{HOST}/pulls/61/files"):
+				self.calls.append(endpoint)
+				return [{"filename": "analysis/issue-pr-audit-2026-11-25.md", "status": "added"}]
+			return super().rest(endpoint)
+
+	import base64 as _b64
+	transport = OneFails({f"repos/{HOST}/pulls?state=open": pulls, f"repos/{HOST}/contents/analysis/issue-pr-audit-2026-11-25.md": {"content": _b64.b64encode(b"### AUD-001: x\n").decode()}})
+	found = ipa.open_earlier_reports(transport, HOST, "pipeline")
+	assert [report["pr"] for report in found] == [f"https://github.com/{HOST}/pull/61"]
+
+
+def test_coverage_names_discovery_gaps_deep_counts_and_carried_entries() -> None:
+	state = {"version": 1, "repos": {}, "blocked": {f"{HOST}#500": {"since": _iso(90), "fingerprint": "x", "diagnosed_run": 3}}}
+	transport = FakeTransport({"user/repos": [], f"repos/{HOST}/issues?state=all": [_issue(1, pr=True, state="closed", closed_at=_iso(1))]})
+	raw, _ = _collect(transport, state)
+	raw["repos"][0]["open_truncated"] = True
+	raw["discovery"] = {**raw["discovery"], "truncated": 4, "fallback": "self"}
+	digest, _ = ipa.classify(raw, state, _settings(), now=NOW, log=lambda _line: None)
+	text = ipa.render_model_input(digest)
+	assert "deep_reviewed=1" in text and "carried_blocked=1" in text
+	assert "truncated_by_repo_cap=4" in text and "fallback=self" in text
+	carried = [entry for entry in digest["blocked"] if entry.get("carried_over")]
+	assert carried[0]["repo"] == HOST
+
+
+def test_carried_entry_of_a_redacted_repo_groups_under_its_real_name() -> None:
+	secret = "owner/secret"
+	label = f"private:{ipa.repo_hash(secret)}"
+	state = {"version": 1, "repos": {}, "blocked": {f"{label}#7": {"since": _iso(90), "fingerprint": "x", "diagnosed_run": 3}}}
+	transport = FakeTransport({"user/repos": [{"full_name": HOST, "private": False}, {"full_name": secret, "private": True}]}, fail={f"repos/{secret}/issues"})
+	raw, _ = _collect(transport, state)
+	digest, next_state = ipa.classify(raw, state, _settings(), now=NOW, log=lambda _line: None)
+	carried = [entry for entry in digest["blocked"] if entry.get("carried_over")]
+	assert carried[0]["repo"] == secret and carried[0]["display"] == f"{label}#7"
+	assert f"{label}#7" in next_state["blocked"] and secret not in json.dumps(next_state)
+	assert secret not in ipa.render_model_input(digest)

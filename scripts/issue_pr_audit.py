@@ -42,6 +42,10 @@ GitHub API budget (CLAUDE.md §14 / §15), per run
   items, 2 calls each (``runs/{id}/jobs``, ``jobs/{id}/logs``).
 * Dedupe: 1 listing (at most ``HEAL_LIST_MAX_PAGES`` = 5 pages) of open
   ``ai:workflow-heal`` issues in the host repository.
+* Open earlier audit report PRs (``open_earlier_reports``): 1 open-PR listing
+  of the host (at most ``EARLIER_REPORT_LIST_PAGES`` = 3 pages), then 1 files
+  listing and 1 contents read per matching PR, at most
+  ``EARLIER_REPORT_MAX_PRS`` = 3 PRs tried, so up to 9 calls.
 * Retries: every API attempt, retries included, is counted.
 
 Fail open per repository: a listing or detail error marks the repository
@@ -882,7 +886,7 @@ def collect(transport: Any, *, host: str, run_id: int, state: dict[str, Any], se
 		heal = [{"number": row.get("number"), "title": (row.get("title") or "")[:TITLE_MAX], "url": row.get("html_url") or ""} for row in rows if isinstance(row.get("number"), int)]
 	except ApiError:
 		pass
-	earlier = open_earlier_reports(transport, host, pipeline_login)
+	earlier = redact_earlier_items(open_earlier_reports(transport, host, pipeline_login), records, host_private, settings)
 	counts = dict(getattr(transport, "counts", {}))
 	log(f"ISSUE_PR_AUDIT_API rest={counts.get('rest', 0)} graphql={counts.get('graphql', 0)} failed={counts.get('failed', 0)}")
 	return {
@@ -918,9 +922,12 @@ def open_earlier_reports(transport: Any, host: str, pipeline_login: str) -> list
 	``auto/issue-pr-audit-report-<run>-<attempt>`` opened by the pipeline login
 	count. Fails open: any API error returns what was read so far.
 	Output: ``[{"pr", "branch", "report", "items", "aud_titles"}]``; the text
-	is earlier model output, so it is rendered only as untrusted data.
+	is earlier model output, so it is rendered only as untrusted data. A read
+	error on one PR skips that PR; at most EARLIER_REPORT_MAX_PRS matching PRs
+	are tried, so failures cannot raise the call count.
 	"""
 	found: list[dict[str, Any]] = []
+	attempted = 0
 	if not pipeline_login:
 		return found
 	try:
@@ -928,7 +935,7 @@ def open_earlier_reports(transport: Any, host: str, pipeline_login: str) -> list
 	except ApiError:
 		return found
 	for row in rows:
-		if len(found) >= EARLIER_REPORT_MAX_PRS:
+		if len(found) >= EARLIER_REPORT_MAX_PRS or attempted >= EARLIER_REPORT_MAX_PRS:
 			break
 		head = row.get("head") if isinstance(row.get("head"), dict) else {}
 		head_repo = head.get("repo") if isinstance(head.get("repo"), dict) else {}
@@ -940,6 +947,7 @@ def open_earlier_reports(transport: Any, host: str, pipeline_login: str) -> list
 			continue
 		if str(head_repo.get("full_name") or "").lower() != host.lower() or user.get("login") != pipeline_login:
 			continue
+		attempted += 1
 		try:
 			files = transport.rest(f"repos/{host}/pulls/{number}/files?per_page=100")
 			report = next((entry.get("filename") for entry in files or [] if isinstance(entry, dict) and entry.get("status") in ("added", "modified")
@@ -949,7 +957,7 @@ def open_earlier_reports(transport: Any, host: str, pipeline_login: str) -> list
 			content = transport.rest(f"repos/{host}/contents/{report}?ref={sha}")
 			text = base64.b64decode((content or {}).get("content") or "").decode("utf-8", errors="replace") if isinstance(content, dict) else ""
 		except (ApiError, ValueError):
-			break
+			continue
 		found.append({
 			"pr": row.get("html_url") if isinstance(row.get("html_url"), str) else f"https://github.com/{host}/pull/{number}",
 			"branch": ref,
@@ -958,6 +966,35 @@ def open_earlier_reports(transport: Any, host: str, pipeline_login: str) -> list
 			"aud_titles": [match.group(1)[:TITLE_MAX] for match in re.finditer(r"^### (AUD-[0-9]{3}: .+)$", text, re.M)][:200],
 		})
 	return found
+
+
+EARLIER_REPORT_URL_RE = re.compile(r"^https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(?:issues|pull)/([0-9]+)$")
+
+
+def redact_earlier_items(earlier: list[dict[str, Any]], records: list[dict[str, Any]], host_private: bool, settings: dict[str, Any]) -> list[dict[str, Any]]:
+	"""Apply this run's redaction (D7) to item URLs scraped from earlier reports.
+
+	An earlier report may have been written while redaction was off. A URL of
+	a repository this run redacts becomes ``private:<hash>#<n>``. While
+	redaction is active, a URL of a repository this run did not audit
+	(unknown visibility) is dropped, fail closed.
+	"""
+	active = not host_private and bool(settings["redact_private_in_public"])
+	audited = {str(record.get("name") or "").lower(): bool(record.get("redacted")) for record in records}
+	for report in earlier:
+		kept: list[str] = []
+		for ref in report.get("items") or []:
+			match = EARLIER_REPORT_URL_RE.match(ref)
+			if not match:
+				kept.append(ref)
+				continue
+			repo = match.group(1).lower()
+			if repo in audited:
+				kept.append(f"{repo_display(match.group(1), True)}#{match.group(2)}" if audited[repo] else ref)
+			elif not active:
+				kept.append(ref)
+		report["items"] = list(dict.fromkeys(kept))
+	return earlier
 
 
 def prior_aud_titles(checkout: Path) -> list[str]:
@@ -1067,6 +1104,10 @@ def classify(raw: dict[str, Any], state: dict[str, Any], settings: dict[str, Any
 	audited_displays = {record.get("display") or record["name"] for record in raw.get("repos") or []}
 	partial_displays = failed_displays | {record.get("display") or record["name"] for record in raw.get("repos") or [] if record.get("open_truncated")}
 	discovery_fallback = bool((raw.get("discovery") or {}).get("fallback"))
+	# Carried entries group under the real repository name (Telegram, sort),
+	# like fresh entries; their display stays the redacted state key.
+	display_to_name = {record.get("display") or record["name"]: record["name"] for record in raw.get("repos") or []}
+	coverage_by_display = {cov["repo"]: cov for cov in coverage}
 	for key, value in old_blocked.items():
 		repo_part, _, number_text = key.rpartition("#")
 		if not isinstance(value, dict) or key in next_state["blocked"] or repo_part in full_snapshot_displays:
@@ -1074,13 +1115,15 @@ def classify(raw: dict[str, Any], state: dict[str, Any], settings: dict[str, Any
 		if repo_part not in partial_displays and not (discovery_fallback and repo_part not in audited_displays):
 			continue
 		next_state["blocked"][key] = value
+		if repo_part in coverage_by_display:
+			coverage_by_display[repo_part]["carried_blocked"] = coverage_by_display[repo_part].get("carried_blocked", 0) + 1
 		if not number_text.isdigit():
 			continue
 		# Listed in the report and on Telegram with its age (no current data).
 		redacted_part = repo_part.startswith("private:")
 		blocked.append({
 			"key": key,
-			"repo": repo_part,
+			"repo": display_to_name.get(repo_part, repo_part),
 			"number": int(number_text),
 			"display": key if redacted_part else f"https://github.com/{repo_part}/issues/{number_text}",
 			"redacted": redacted_part,
@@ -1096,9 +1139,14 @@ def classify(raw: dict[str, Any], state: dict[str, Any], settings: dict[str, Any
 	sample = set(clean_sample(clean_keys, run_id, settings["clean_sample"]))
 	flagged = sorted((entry for entry in items if entry["flagged"]), key=lambda entry: (-len(entry["signals"]), entry["key"]))
 	deep = flagged[: settings["max_deep_items"]]
+	name_to_display = {record["name"]: record.get("display") or record["name"] for record in raw.get("repos") or []}
+	coverage_by_repo = {cov["repo"]: cov for cov in coverage}
 	for entry in items:
 		entry["deep"] = entry in deep
 		entry["sample"] = entry["key"] in sample
+		cov_entry = coverage_by_repo.get(name_to_display.get(entry["repo"], entry["repo"]))
+		if entry["deep"] and cov_entry is not None:
+			cov_entry["deep"] = cov_entry.get("deep", 0) + 1
 	cursors = [entry.get("cursor") for entry in coverage if entry.get("cursor")]
 	digest = {
 		"version": 1,
@@ -1209,9 +1257,20 @@ def render_model_input(digest: dict[str, Any]) -> str:
 	]
 	for cov in digest["coverage"]:
 		lines.append(
-			f"- {cov['repo']}: items={cov['items']} flagged={cov['flagged']} blocked={cov['blocked']} status={cov['status']}"
+			f"- {cov['repo']}: items={cov['items']} flagged={cov['flagged']} deep_reviewed={cov.get('deep', 0)} blocked={cov['blocked']}"
+			+ (f" carried_blocked={cov['carried_blocked']}" if cov.get("carried_blocked") else "")
+			+ f" status={cov['status']}"
 			f" cursor={cov['cursor']} clamped={'true' if cov['clamped'] else 'false'}" + (" listing_truncated=true" if cov.get("truncated") else "")
 			+ (" open_snapshot_truncated=true" if cov.get("open_truncated") else "")
+		)
+	discovery = digest.get("discovery") or {}
+	if discovery:
+		# Counts only: names cut by the cap are not kept and may be private.
+		lines.append(
+			f"- discovery: discovered={discovery.get('discovered', 0)} audited={discovery.get('audited', 0)}"
+			f" skipped_archived={discovery.get('skipped_archived', 0)} excluded={discovery.get('excluded', 0)}"
+			f" truncated_by_repo_cap={discovery.get('truncated', 0)}"
+			+ (f" fallback={discovery['fallback']} (repository listing failed: only the host was audited)" if discovery.get("fallback") else "")
 		)
 	lines += ["", "### Clean item counts"]
 	lines += [f"- {category}: {count}" for category, count in digest["clean_counts"].items()] or ["- none"]
