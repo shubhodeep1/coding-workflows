@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_single_issue_security_pass.sh:911-917 | severity=low | confidence=1\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The new `cd \"${carry_dir}\" || exit 3` exits the subshell with code 3 if the `cd` fails, which empties `carry_result` and leads to `single_pass_carry_skip \"${head_sha}\" helper_missing`.\n  WHY: The reviewer says this does not fail at runtime: the `cd` only applies inside the subshell, and an empty result takes the existing helper-missing fallback, so the audit still runs (fail safe). The source rated it NIT, which is mapped to low here.\n- scripts/review_single_issue_security_pass.sh:911-917 | severity=low | confidence=1\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: Before this change, the `single_pass_base_sync_carry` subshell could source `scripts/emit_event.sh` from the PR-head checkout's working directory while `GH_TOKEN` was set, through the fallback at `gh_helpers.sh:1063-1065`.\n  WHY: The reviewer says the change closes that hole by changing into `${carry_dir}` before helpers are sourced, the same pattern the PR applies at line 579. The source rated it NIT, which is mapped to low here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_single_issue_security_pass.sh:lines 911-917 (inside `carry_result=\"$( ... )\"`) | severity=NIT | confidence=1\n  PROBLEM: The new `cd \"${carry_dir}\" || exit 3` exits the subshell with code 3 on failure. The outer `carry_result=\"$(...)\" || carry_result=\"\"` (line 926) then sets `carry_result` to empty, and line 931 calls `single_pass_carry_skip \"${head_sha}\" helper_missing`.\n  WHY: It does not fail. The `cd` only applies inside the subshell, so the outer shell keeps its working directory for the `git cat-file` checks at line 941. The empty-result path matches the existing helper-missing fallback, so the change is correct.\n- scripts/review_single_issue_security_pass.sh:lines 911-917 | severity=NIT | confidence=1\n  PROBLEM: The previous run left the `single_pass_base_sync_carry` subshell at risk of sourcing `${carry_dir}/gh_helpers.sh` (and through it `scripts/emit_event.sh`) from the PR-head checkout's working directory via `gh_helpers.sh:1063-1065` while `GH_TOKEN` is set.\n  WHY: The change closes that hole by changing into `${carry_dir}` before helpers are sourced. This matches the pattern at line 579, and `test_lease_check_never_sources_the_pr_checkouts_emit_event` covers the same case for the lease subshell.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "045fba05e74c58e7e853e68b574fee08457dee0e61b1465cb321892f2bd40c9c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10021,
+    "run_id": "45741728874",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45741728874",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126033513_1165bca463",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10021,
+    "run_id": "45741728874"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-26T03:35:13Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
