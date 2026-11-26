@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: PR description's \"Limit\" paragraph and stale byte figure should match the repository state.\n  expected_change_site: PR description (GitHub-side metadata, not editable from this rollout)\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: PR description still says \"which is every judge re-fire\" and \"404,301 bytes\"; changelog.d/9502-rb-judge-lease-wait-alert.md:17, agents.d/9502-rb-judge-lease-wait-alert.md:2-3 describe the limit correctly. Reviewer rated it SEVERITY: NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP:\n  Requirement: PR description's \"Limit\" paragraph and stale byte figure should match the repository state.\n  Expected change site: PR description (GitHub-side metadata, not editable from this rollout).\n  Evidence of absence: PR description still says \"which is every judge re-fire\" and \"404,301 bytes\"; the editor explicitly noted in entry[2] that this is PR metadata and the repository docs (`changelog.d/9502-rb-judge-lease-wait-alert.md:17`, `agents.d/9502-rb-judge-lease-wait-alert.md:2-3`) describe the limit correctly.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2659ed4160edbc8e4ee362027186c878a6e07d85bf66d38300d6bcc47ee4d776",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9944,
+    "run_id": "45837451841",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45837451841",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126150112_cef8236836",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9944,
+    "run_id": "45837451841"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-26T15:01:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
