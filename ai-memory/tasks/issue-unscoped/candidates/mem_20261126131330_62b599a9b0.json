@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:25503-25507 | severity=blocker (reported as BLOCKER by minimax_minimax-m3; MAJOR confidence=2 by z-ai_glm-5_3-flash) | confidence=5\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The pre-push test gate reports a shellcheck failure caused by this change, although the editor's local shellcheck run found nothing and the new restore block matches existing gate-passing blocks.\n  WHY: The CI gate would block merge; severity disagreement (BLOCKER vs MAJOR) so the highest is used. The signal is ambiguous because the gate container was killed (container_rc_137).\n- tests/test_orchestrate_poll_process.py:36081 | severity=major | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The regression test `test_stall_judge_live_review_runs_held_cache_replay_keeps_replay_count` asserts on the first tick's `cache.values()` instead of the second tick's `replayed` values, which makes it a tautology.\n  WHY: It would not catch a regression in the replay_count restore. Disputed by anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash, who found line 36084 asserts on `replayed.values()`.\n- scripts/orchestrate_poll_process.sh:25036-25039 | severity=major | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The status filter `[\"queued\", \"waiting\", \"pending\", \"requested\"]` does not check `conclusion`, so an already-failed run might be classed as waiting for a runner.\n  WHY: A failed review run could hold escalation and cause unnecessary delay.\n- scripts/orchestrate_poll_process.sh:24996-25006 | severity=major | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Error handling for `gh run list` is too permissive; partial or non-array output silently falls back to the cached outcomes without logging.\n  WHY: It can mask a real live-listing failure.\n- scripts/orchestrate_poll_process.sh:24992-24993 | severity=nit | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: `gh run list` runs with `2>/dev/null`, which suppresses the reason a listing fails.\n  WHY: Operators see only `outcome=listing_unavailable` and cannot debug the cause.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Before finishing, run shellcheck on both scripts, tests/test_unblock_judge.py, and the stall_judge cases in tests/test_orchestrate_poll_process.py. Fix every failure whose test passes on isolated-base.\"\n  expected_change_site: scripts/orchestrate_poll_process.sh lines 25503-25507 (new restore block) or scripts/unblock_judge.sh lines 1663-1724\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The pre-push gate lists shellcheck under \"Failures caused by this change: 1\", and no follow-up hunk fixes it. The editor's local run reported no findings.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:25036-25039 | severity=MAJOR | confidence=4\n  PROBLEM: The status filter does not check `conclusion`, so an already-failed queued/waiting run might be classed as waiting for a runner.\n  WHY: An already-failed review run could hold escalation and cause unnecessary delay.\n- tests/test_orchestrate_poll_process.py:36081 | severity=MAJOR | confidence=5\n  PROBLEM: The regression test asserts on the first tick's `cache.values()` instead of the second tick's `replayed` values.\n  WHY: The assertion is a tautology and would not catch a regression in the replay_count fix.\n- scripts/orchestrate_poll_process.sh:24996-25006 | severity=MAJOR | confidence=3\n  PROBLEM: Error handling for `gh run list` is too permissive; partial or non-array output silently falls back to the cached outcomes without logging.\n  WHY: It can mask a real live-listing failure.\n- scripts/orchestrate_poll_process.sh:24992-24993 | severity=NIT | confidence=4\n  PROBLEM: `gh run list` runs with `2>/dev/null`, which suppresses diagnostics.\n  WHY: Operators see only `outcome=listing_unavailable` and cannot debug the cause.\n- TASK_GAP: Requirement: \"Fix every failure whose test passes on isolated-base.\" (Issue #10149)\n  Expected change site: scripts/orchestrate_poll_process.sh (shellcheck failures)\n  Evidence of absence: The last run report says shellcheck fails, caused by this PR (\"Failures caused by this change: 1\").\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:25503-25507 | severity=BLOCKER | confidence=5\n  PROBLEM: The pre-push gate reports shellcheck as a failure caused by this change, and the issue requires shellcheck to be run before finishing.\n  WHY: The CI gate is a hard merge blocker.\n- tests/test_orchestrate_poll_process.py:36084 | severity=NIT | confidence=4\n  PROBLEM: The reviewer disputes the earlier \"tautology\" finding as a misquote. Line 36084 uses `replayed.values()`, so the test is discriminative.\n  WHY: Acting on the finding would \"fix\" a test that already exercises the regression correctly.\n- TASK_GAP: Requirement: \"Before finishing, run shellcheck on both scripts, tests/test_unblock_judge.py, and the stall_judge cases in tests/test_orchestrate_poll_process.py. Fix every failure whose test passes on isolated-base.\"\n  Expected change site: scripts/orchestrate_poll_process.sh lines 25503-25507 or scripts/unblock_judge.sh lines 1663-1724\n  Evidence of absence: The pre-push gate lists shellcheck under \"Failures caused by this change: 1\". The editor's local run found nothing, and no follow-up hunk fixes it.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:25503-25506 | severity=MAJOR | confidence=2\n  PROBLEM: The pre-push gate reports a shellcheck failure caused by this change, while the editor's own run reported 0 findings. The gate container was killed (`container_rc_137`), and the new block matches three pre-existing gate-passing blocks.\n  WHY: If the failure is real, the required CI gate blocks merge. The signal is ambiguous and must be settled by running shellcheck on the current head.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "62cb51d68615796b6f79c4fe430a3b6e63ff3c071197aa80078bf160f80dd5fe",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10152,
+    "run_id": "45816084330",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45816084330",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126131330_62b599a9b0",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10152,
+    "run_id": "45816084330"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 6 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T13:13:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
