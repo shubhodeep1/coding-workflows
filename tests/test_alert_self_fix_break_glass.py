@@ -129,7 +129,15 @@ for arg in "$@"; do
 done
 printf '%s\n' "$*" > "$(dirname "$0")/../gate_args.txt"
 cp "${tests}" "$(dirname "$0")/../gate_tests.txt"
+# Every gate run appends its list, so a chunked suite shows each chunk.
+{ cat "${tests}"; echo "--"; } >> "$(dirname "$0")/../gate_chunks.txt"
 mkdir -p "${out}"
+# Like the real module's MAX_TESTS_FILE_ENTRIES: an over-long list is unverified.
+cap_file="$(dirname "$0")/gate_cap"
+if [ -f "${cap_file}" ] && [ "$(grep -c . "${tests}")" -gt "$(cat "${cap_file}")" ]; then
+	echo '{"status": "unverified", "failures": [], "inherited": []}' > "${out}/result.json"
+	exit 0
+fi
 cat "$(dirname "$0")/gate_result.json" > "${out}/result.json"
 """
 
@@ -559,6 +567,40 @@ def test_condition_5_false_blocks(h: Harness, gate: dict, reason: str) -> None:
 	results = _full(h)
 	assert f"condition=5 outcome=false reason={reason}" in results[2].stdout
 	assert h.outputs()["tests_passed"] == "false"
+	assert h.posts() == [] and h.puts() == []
+
+
+def test_condition_5_runs_suite_in_chunks_within_gate_cap(h: Harness) -> None:
+	# The real gate refuses a --tests-only list over MAX_TESTS_FILE_ENTRIES
+	# (500, shorter than the full suite); the cap is read from the module.
+	(h.root / "scripts" / "gate_cap").write_text("2", encoding="utf-8")
+	(h.root / ".claude" / "hooks" / "prepush_affected_tests.py").write_text("MAX_TESTS_FILE_ENTRIES = 2\n", encoding="utf-8")
+	results = _full(h, ALERT_TRIAGE_BREAK_GLASS_TEST_TIMEOUT_MINUTES="90")
+	assert [r.returncode for r in results] == [0, 0, 0, 0], [r.stdout + r.stderr for r in results]
+	assert "condition=5 outcome=true reason=tests_pass" in results[2].stdout
+	chunks = (h.tmp / "checkout" / "gate_chunks.txt").read_text(encoding="utf-8").split("--\n")
+	assert [c.split() for c in chunks if c.strip()] == [["tests/test_a.py", "tests/test_b.py"], ["tests/test_c.sh"]]
+	# The two runs share the 90-minute budget.
+	assert "--timeout-minutes 45 " in (h.tmp / "checkout" / "gate_args.txt").read_text(encoding="utf-8")
+	assert len(h.posts()) == 1
+
+
+def test_condition_5_list_over_gate_cap_without_chunking_is_unverified(h: Harness) -> None:
+	# Module cap unreadable (fallback 500) but the gate enforces 2: fails closed.
+	(h.root / "scripts" / "gate_cap").write_text("2", encoding="utf-8")
+	results = _full(h)
+	assert "condition=5 outcome=false reason=tests_unverified" in results[2].stdout
+	assert h.posts() == [] and h.puts() == []
+
+
+def test_condition_5_any_failing_chunk_blocks(h: Harness) -> None:
+	(h.root / ".claude" / "hooks" / "prepush_affected_tests.py").write_text("MAX_TESTS_FILE_ENTRIES = 1\n", encoding="utf-8")
+	(h.root / "scripts" / "gate_cap").write_text("0", encoding="utf-8")
+	results = _full(h)
+	assert "condition=5 outcome=false reason=tests_unverified" in results[2].stdout
+	# The first non-pass chunk stops the run.
+	chunks = (h.tmp / "checkout" / "gate_chunks.txt").read_text(encoding="utf-8").split("--\n")
+	assert len([c for c in chunks if c.strip()]) == 1
 	assert h.posts() == [] and h.puts() == []
 
 

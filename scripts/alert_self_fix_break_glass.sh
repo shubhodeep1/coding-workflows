@@ -22,9 +22,11 @@
 #   4. review: a separate read-only ALERT_BREAK_GLASS_REVIEWER engine call,
 #      which sees only the diff and the diagnosis, replies exactly one JSON
 #      object with "verdict": "approve";
-#   5. tests: every tests/test_*.py passes on the head in the credential-free
-#      gate container (scripts/prepush_test_gate_run.sh --tests-only), with
-#      no failures and no inherited failures;
+#   5. tests: every tests/test_*.py and tests/test_*.sh passes on the head in
+#      the credential-free gate container (scripts/prepush_test_gate_run.sh
+#      --tests-only, in chunks of at most the gate's MAX_TESTS_FILE_ENTRIES
+#      sharing the timeout), with no failures and no inherited failures in
+#      any chunk;
 #   6. cap: fewer than ALERT_TRIAGE_BREAK_GLASS_MAX_PER_DAY passes in the last
 #      24 hours (break_glass/pass-*.json records).
 #
@@ -629,17 +631,38 @@ abg_test()
 	fi
 	prep="$("${clean_env[@]}" bash "${exec_helper}" prepare --workdir "${ABG_HEAD_DIR}" --deps </dev/null 2>/dev/null | tail -n 1)" || prep=""
 	[[ "${prep}" == /* ]] && [ -d "${prep}" ] || prep=""
-	local -a gate_args=(--worktree "${ABG_HEAD_DIR}" --module "${module}" --image "${image}" --base "${base}"
-		--out-dir "${gate_dir}" --timeout-minutes "${minutes}" --shards 4 --tests-only "${tests_file}")
-	if [ -n "${prep}" ] && [ -d "${prep}/venv/bin" ]; then
-		gate_args+=(--venv "${prep}/venv")
+	# The gate refuses a --tests-only list longer than its
+	# MAX_TESTS_FILE_ENTRIES (500; the full suite is longer) as `unverified`,
+	# so the list runs in chunks of at most that many entries, one gate run
+	# each, sharing the timeout budget. The cap comes from the trusted module
+	# itself (500 when it cannot be read). Every chunk must pass.
+	local entry_cap="" chunk="" chunk_count=0 chunk_minutes=0 chunk_index=0
+	entry_cap="$(sed -n 's/^MAX_TESTS_FILE_ENTRIES = \([0-9]\{1,4\}\)$/\1/p' "${module}" 2>/dev/null | head -n 1)" || entry_cap=""
+	[[ "${entry_cap}" =~ ^[0-9]{1,4}$ ]] && [ "$((10#${entry_cap}))" -ge 1 ] || entry_cap=500
+	entry_cap=$((10#${entry_cap}))
+	rm -rf -- "${gate_dir}" "${ABG_STATE_DIR}/tests-chunks"
+	mkdir -p "${ABG_STATE_DIR}/tests-chunks"
+	split -l "${entry_cap}" -d -a 3 "${tests_file}" "${ABG_STATE_DIR}/tests-chunks/chunk-"
+	chunk_count="$(find "${ABG_STATE_DIR}/tests-chunks" -maxdepth 1 -type f -name 'chunk-*' | wc -l)"
+	if [ "${chunk_count}" -lt 1 ]; then
+		_abg_eval "${pr}" "${head}" 5 false no_tests
+		return 0
 	fi
-	if [ -n "${prep}" ] && [ -d "${prep}/work/node_modules" ] && [ ! -L "${prep}/work/node_modules" ]; then
-		gate_args+=(--node-modules "${prep}/work/node_modules")
-	fi
-	rm -rf -- "${gate_dir}"
-	"${clean_env[@]}" bash "${wrapper}" "${gate_args[@]}" </dev/null >/dev/null 2>&1 || true
-	status="$(python3 -I -B -c '
+	chunk_minutes=$((minutes / chunk_count))
+	[ "${chunk_minutes}" -ge 1 ] || chunk_minutes=1
+	local -a gate_args=()
+	for chunk in "${ABG_STATE_DIR}/tests-chunks"/chunk-*; do
+		chunk_index=$((chunk_index + 1))
+		gate_args=(--worktree "${ABG_HEAD_DIR}" --module "${module}" --image "${image}" --base "${base}"
+			--out-dir "${gate_dir}/chunk-${chunk_index}" --timeout-minutes "${chunk_minutes}" --shards 4 --tests-only "${chunk}")
+		if [ -n "${prep}" ] && [ -d "${prep}/venv/bin" ]; then
+			gate_args+=(--venv "${prep}/venv")
+		fi
+		if [ -n "${prep}" ] && [ -d "${prep}/work/node_modules" ] && [ ! -L "${prep}/work/node_modules" ]; then
+			gate_args+=(--node-modules "${prep}/work/node_modules")
+		fi
+		"${clean_env[@]}" bash "${wrapper}" "${gate_args[@]}" </dev/null >/dev/null 2>&1 || true
+		status="$(python3 -I -B -c '
 import json, sys
 try:
 	data = json.load(open(sys.argv[1], encoding="utf-8"))
@@ -655,8 +678,10 @@ elif data.get("failures") or data.get("inherited"):
 	print("failures")
 else:
 	print("pass")
-' "${gate_dir}/result.json" 2>/dev/null)" || status="invalid"
-	if [ "${status}" = "pass" ]; then
+' "${gate_dir}/chunk-${chunk_index}/result.json" 2>/dev/null)" || status="invalid"
+		[ "${status}" = "pass" ] || break
+	done
+	if [ "${status}" = "pass" ] && [ "${chunk_index}" -eq "${chunk_count}" ]; then
 		_abg_eval "${pr}" "${head}" 5 true tests_pass
 		printf 'pass\n' > "${ABG_STATE_DIR}/test_status"
 		_abg_output "tests_passed=true"
