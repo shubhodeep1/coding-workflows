@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The full test suite passes on the merged tree.\" (acceptance criterion #5 of issue #10166)\n  expected_change_site: The merged-tree final CI gate in `.github/workflows/ci.yml`.\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The reported pre-push gate is unverified, covers only 240 of the suite's tests, and lists 67 inherited failures plus 3 unverified checks (timeouts on `tests/test_security_audit_workflow_contract.py` and `tests/test_test_and_mark_stable_review_blocked_budget.py`, plus `tests/test_check_failure_triage_workflow_security.py` baseline_timeout), The PR check-run snapshot shows `failed_count: 0` but `review / codex-agent` is still in_progress, so no successful full-suite run on the merged tree has been observed (severity disagreement: BLOCKER from google_gemini-3_1-flash-lite, MAJOR from minimax_minimax-m3 and openai_gpt-6-luna; the highest is BLOCKER; anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash said this is a verification-gate state rather than a missing code deliverable and did not raise it)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: The full test suite passes on the merged tree.\n  Expected change site: The merged-tree final CI gate in .github/workflows/ci.yml.\n  Evidence of absence: The PR check snapshot shows review / codex-agent is still in progress; no final success signal is available for the full test suite on the merged tree.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"The full test suite passes on the merged tree.\" (acceptance criterion #5 of issue #10166)\n  Expected change site: The merged-tree final CI gate in `.github/workflows/ci.yml`.\n  Evidence of absence: The reported pre-push gate is unverified, covers only 240 of the suite's tests, and lists 67 inherited failures plus 3 unverified checks (timeouts on `tests/test_security_audit_workflow_contract.py` and `tests/test_test_and_mark_stable_review_blocked_budget.py`, plus `tests/test_check_failure_triage_workflow_security.py` baseline_timeout). The PR check-run snapshot shows `failed_count: 0` but `review / codex-agent` is still in_progress, so a successful full-suite run on the merged tree has not been observed.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"The full test suite passes on the merged tree.\"\n  Expected change site: The merged-tree final CI gate in `.github/workflows/ci.yml`.\n  Evidence of absence: The reported pre-push gate is unverified and lists 67 inherited failures and 3 unverified checks. The PR check snapshot reports zero failures but has `review / codex-agent` still in progress; it does not establish a successful full-suite run on the merged tree.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d51bd34f173f181fc8cb59f8d4ce7b1777c8d1067973ffdbf87dc43a4648b955",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10167,
+    "run_id": "45896416031",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45896416031",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126212750_6e3bab6158",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10167,
+    "run_id": "45896416031"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T21:27:50Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
