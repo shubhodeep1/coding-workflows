@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-26T16:12:05Z",
+  "tick_at": "2026-11-26T16:38:51Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -77,14 +77,14 @@
       "wave_complete": false
     },
     {
-      "current_wave": 2,
-      "integration_ahead_by": "5",
+      "current_wave": 3,
+      "integration_ahead_by": "6",
       "issue_counts": {
         "closed": 0,
         "done": 0,
         "implementation_failed": 0,
-        "in_progress": 0,
-        "merged": 1,
+        "in_progress": 1,
+        "merged": 0,
         "not_created": 0,
         "ready_to_merge": 0,
         "review_blocked": 0,
@@ -92,10 +92,10 @@
       },
       "number": 10097,
       "project_complete": false,
-      "status": "waiting",
+      "status": "in-progress",
       "title": "[Orchestrator] Merge lease as a short critical section: ready-first grant, delta CI after update, resolution-only review, one job per hold",
       "total_waves": 4,
-      "wave_complete": true
+      "wave_complete": false
     }
   ]
 }
