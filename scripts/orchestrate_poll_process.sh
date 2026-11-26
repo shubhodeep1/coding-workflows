@@ -3791,6 +3791,9 @@ fi
 # DEBUG; after this many automatic resolution attempts on the same PR head
 # the sweep sends one WARNING. 0 disables that alert.
 STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS="${STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS:-3}"
+# Issue #9534: judge-created issues get the scope companions (tests/**,
+# changelog.d/*, agents.d/*) in their files_touched block. `false` disables it.
+JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED="${JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED:-true}"
 if ! [[ "${STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS}" =~ ^[0-9]+$ ]]; then
   echo "::warning::STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS must be a non-negative integer; defaulting to 3"
   STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS="3"
@@ -11476,6 +11479,129 @@ judge_tracking_issue_closed_skip() {
   return 1
 }
 
+# add_files_touched_companions <body> (issue #9534)
+# Input: $1 is an issue body (a judge addition or judge fix-up).
+# Output: one JSON line on stdout,
+#   {"outcome":"added|unchanged|no_block","added":<n>,"body":"<body>"}
+# where body is the input with each missing PIPELINE_PLAN_GRANT_COMPANIONS
+# entry (scripts/files_touched_scope_guard.py) appended to the first
+# `files_touched:` block, at that block's indent and bullet prefix. Entries
+# the judge wrote keep their text and order; a body without a block (or with
+# an empty one) comes back unchanged as `no_block`. The block is located with
+# the same rules as extract_files_touched, imported from the guard module, so
+# there is one source of truth. 0 API calls. Exits non-zero when the guard
+# module is missing or the scan disagrees with extract_files_touched; callers
+# fail open and keep the body as it was.
+add_files_touched_companions() {
+  local aftc_body="${1-}"
+  local aftc_dir=""
+  aftc_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || return 1
+  [ -f "${aftc_dir}/files_touched_scope_guard.py" ] || return 1
+  printf '%s' "${aftc_body}" | python3 -I -B -c '
+import json
+import re
+import sys
+
+sys.path.insert(0, sys.argv[1])
+from files_touched_scope_guard import PIPELINE_PLAN_GRANT_COMPANIONS, extract_files_touched, normalize_path
+
+body = sys.stdin.read()
+
+
+def emit(outcome, added, text):
+	print(json.dumps({"outcome": outcome, "added": added, "body": text}))
+
+
+entries = extract_files_touched(body)
+if not entries:
+	emit("no_block", 0, body)
+	raise SystemExit(0)
+lines = body.split("\n")
+found = None
+for idx, raw in enumerate(lines):
+	stripped = raw.strip()
+	if stripped not in {"files_touched:", "- files_touched:"}:
+		continue
+	base_indent = len(raw) - len(raw.lstrip(" "))
+	flush_allowed = stripped == "files_touched:"
+	flush = None
+	scanned = []
+	last_index = -1
+	for offset, candidate in enumerate(lines[idx + 1:], start=idx + 1):
+		if not candidate.strip():
+			if scanned:
+				break
+			continue
+		indent = len(candidate) - len(candidate.lstrip(" "))
+		if flush is None:
+			flush = flush_allowed and indent == base_indent
+		if flush:
+			if indent != base_indent:
+				break
+		elif indent <= base_indent:
+			break
+		match = re.match(r"^\s*-\s+(.+?)\s*$", candidate)
+		if not match:
+			break
+		entry = match.group(1).strip()
+		if entry:
+			scanned.append(entry)
+			last_index = offset
+	found = (scanned, last_index)
+	break
+if found is None or found[0] != entries or found[1] < 0:
+	raise SystemExit(3)
+existing = {normalize_path(entry) for entry in entries}
+missing = [companion for companion in PIPELINE_PLAN_GRANT_COMPANIONS if companion not in existing]
+if not missing:
+	emit("unchanged", 0, body)
+	raise SystemExit(0)
+last_line = lines[found[1]]
+prefix = re.match(r"^(\s*-\s+)", last_line).group(1)
+new_lines = lines[: found[1] + 1] + [prefix + companion for companion in missing] + lines[found[1] + 1:]
+emit("added", len(missing), "\n".join(new_lines))
+' "${aftc_dir}"
+}
+
+# apply_judge_files_touched_companions <body> <addition|fixup> <local_id>
+# Sets JUDGE_COMPANIONS_BODY_OUT to the body with the scope companions added
+# (add_files_touched_companions), or to the body unchanged when
+# JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED is `false` or the helper fails (fail
+# open). Logs one JUDGE_SCOPE_COMPANIONS line. Runs in the caller's shell so
+# the result needs no command substitution. 0 API calls.
+apply_judge_files_touched_companions() {
+  local ajc_body="${1-}" ajc_kind="${2:-addition}" ajc_id="${3:-}"
+  local ajc_flag="" ajc_json="" ajc_outcome="" ajc_added="" ajc_new="" ajc_reason=""
+  JUDGE_COMPANIONS_BODY_OUT="${ajc_body}"
+  ajc_id="$(printf '%s' "${ajc_id}" | tr -c 'A-Za-z0-9._-' '_' | cut -c1-80)" || ajc_id="unknown"
+  ajc_flag="$(printf '%s' "${JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')" || ajc_flag="true"
+  if [ "${ajc_flag}" = "false" ]; then
+    echo "JUDGE_SCOPE_COMPANIONS outcome=skipped issue_kind=${ajc_kind} local_id=${ajc_id} added=0 reason=disabled"
+    return 0
+  fi
+  if ! ajc_json="$(add_files_touched_companions "${ajc_body}" 2>/dev/null)" \
+    || ! ajc_outcome="$(printf '%s' "${ajc_json}" | jq -er '.outcome | select(. == "added" or . == "unchanged" or . == "no_block")' 2>/dev/null)" \
+    || ! ajc_added="$(printf '%s' "${ajc_json}" | jq -er '.added | select(type == "number") | floor' 2>/dev/null)" \
+    || ! ajc_new="$(printf '%s' "${ajc_json}" | jq -er '.body | select(type == "string")' 2>/dev/null)"; then
+    echo "JUDGE_SCOPE_COMPANIONS outcome=skipped issue_kind=${ajc_kind} local_id=${ajc_id} added=0 reason=helper_failed"
+    return 0
+  fi
+  case "${ajc_outcome}" in
+    added)
+      JUDGE_COMPANIONS_BODY_OUT="${ajc_new}"
+      echo "JUDGE_SCOPE_COMPANIONS outcome=added issue_kind=${ajc_kind} local_id=${ajc_id} added=${ajc_added}"
+      ;;
+    no_block)
+      ajc_reason=" reason=no_block"
+      echo "JUDGE_SCOPE_COMPANIONS outcome=unchanged issue_kind=${ajc_kind} local_id=${ajc_id} added=0${ajc_reason}"
+      ;;
+    *)
+      echo "JUDGE_SCOPE_COMPANIONS outcome=unchanged issue_kind=${ajc_kind} local_id=${ajc_id} added=0"
+      ;;
+  esac
+  return 0
+}
+
 create_judge_fixup_issues_from_verdict() {
       if [ "${NEW_ISSUES_COUNT}" -gt 0 ] && ! judge_tracking_issue_closed_skip judge-fix-up; then
         echo "Processing ${NEW_ISSUES_COUNT} judge fix-up candidate(s)..."
@@ -11510,6 +11636,11 @@ create_judge_fixup_issues_from_verdict() {
               echo "  ${FIX_ID}: prior issue #${EXISTING_NUM} is already merged/closed, allowing new fix-up."
             fi
           fi
+
+          # Issue #9534: add the standard scope companions to a judge-written
+          # files_touched block (fail open; JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED).
+          apply_judge_files_touched_companions "${FIX_BODY}" fixup "${FIX_ID}"
+          FIX_BODY="${JUDGE_COMPANIONS_BODY_OUT}"
 
           FULL_FIX_BODY="${FIX_BODY}
 
@@ -20872,6 +21003,12 @@ cancel_zombie_runs_for_issue() {
 close_linked_pr() {
   local issue_num="$1"
   local close_reason="${2:-Closed by orchestrator stall recovery.}"
+  # Owner-held PRs (draft / `[skip ai]` title, issue #9733) are never
+  # closed: their numbers land here (space-separated) and the first hold
+  # detail in CLOSE_LINKED_PR_HELD_DETAIL, so a caller about to close the
+  # issue too can leave it open. Reset on every call.
+  CLOSE_LINKED_PR_HELD_PRS=""
+  CLOSE_LINKED_PR_HELD_DETAIL=""
   local pr_nums
   pr_nums="$(_find_all_linked_prs "${issue_num}" 2>/dev/null || true)"
 
@@ -20895,9 +21032,10 @@ close_linked_pr() {
     # than issuing a second request.  A failed call yields an empty blob,
     # which parses to state="" and is skipped as unknown, exactly as the
     # previous `.state`-only lookup behaved.
-    local pr_meta_json pr_state pr_head_ref pr_base_ref pr_body
+    # The same request also carries draft/title for the owner-hold check.
+    local pr_meta_json pr_state pr_head_ref pr_base_ref pr_body pr_hold_reason
     pr_meta_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" \
-      --jq '{state: (.state // ""), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), body: (.body // "")}' || echo "")"
+      --jq '{state: (.state // ""), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), body: (.body // ""), draft: (.draft // false), title: (.title // "")}' || echo "")"
     pr_state="$(printf '%s' "${pr_meta_json}" | jq -r '.state // ""' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
     pr_head_ref="$(printf '%s' "${pr_meta_json}" | jq -r '.head_ref // ""' 2>/dev/null || echo "")"
     pr_base_ref="$(printf '%s' "${pr_meta_json}" | jq -r '.base_ref // ""' 2>/dev/null || echo "")"
@@ -20912,6 +21050,13 @@ close_linked_pr() {
     # skip leaves the same trail the other outcomes do.
     if ! _linked_pr_is_issue_implementation "${issue_num}" "${pr_head_ref}" "${pr_body}"; then
       echo "  close_linked_pr: skipping PR #${pr_num} for issue #${issue_num} (cross-reference only; head=${pr_head_ref:-?} does not match the issue's implementation branch pattern and the body carries no close keyword; base=${pr_base_ref:-?} is shown for context and is not evaluated)."
+      continue
+    fi
+    pr_hold_reason="$(_stall_pr_ai_hold_reason "${pr_meta_json}")"
+    if [ -n "${pr_hold_reason}" ]; then
+      echo "  close_linked_pr: skipping PR #${pr_num} for issue #${issue_num} (owner hold: reason=pr_ai_hold detail=${pr_hold_reason})."
+      CLOSE_LINKED_PR_HELD_PRS="${CLOSE_LINKED_PR_HELD_PRS:+${CLOSE_LINKED_PR_HELD_PRS} }${pr_num}"
+      [ -n "${CLOSE_LINKED_PR_HELD_DETAIL}" ] || CLOSE_LINKED_PR_HELD_DETAIL="${pr_hold_reason}"
       continue
     fi
     echo "  close_linked_pr: closing linked PR #${pr_num} for issue #${issue_num} (state=open)."
@@ -23293,6 +23438,13 @@ STALL_EOF
         ensure_label_exists "ai:closed"
         close_linked_pr "${issue_num}" \
           "Closed by orchestrator stall recovery — ancestor-chain no-op cap reached (${stall_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES})."
+        if [ -n "${CLOSE_LINKED_PR_HELD_PRS:-}" ]; then
+          # close_linked_pr left an owner-held PR open (#9733): leave the issue open too.
+          echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${CLOSE_LINKED_PR_HELD_PRS%% *} detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown} phase=${phase} action=none requested_action=close_and_reissue source=close_linked_pr"
+          STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue_skipped_pr_ai_hold"
+          STALL_RECOVERY_SHOULD_INCREMENT="false"
+          return 1
+        fi
         gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
           --remove-label 'ai:done' --remove-label 'ai:implementing' \
           --remove-label 'ai:planning' --remove-label 'ai:clarification' \
@@ -23315,6 +23467,26 @@ STALL_EOF
       STALL_RETIRED_CONFLICT_CLOSE_MESSAGE=""
       STALL_REISSUE_EXTRA_GUIDANCE_ISSUE=""
       [ -n "${_stall_reissue_close_msg}" ] || _stall_reissue_close_msg="Closed by orchestrator stall recovery — issue #${issue_num} was stuck in '${phase}' for ${stall_minutes}m. A replacement issue will be created."
+
+      # Owner hold re-check before the replacement exists (issue #9733).
+      # The pre-action guards fail open when the cached linked-PR payloads
+      # lack draft/title, and once the replacement is created the source
+      # issue is closed even when close_linked_pr leaves a held PR open.
+      # §14 audit: those cached payloads (_fresh_lpr_entry, the wave's
+      # batched linked_pr) are exactly what lacked the fields, so this
+      # reuses the skip arm's REST implementation-PR lookup (1 `gh pr list
+      # --head` + 1 pulls/<n> on the common path) on this rare arm only.
+      # A failed or empty lookup fails open to the legacy flow.
+      if _resolve_issue_implementation_pr "${issue_num}"; then
+        local _reissue_hold_reason=""
+        _reissue_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON}")"
+        if [ -n "${_reissue_hold_reason}" ]; then
+          echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${STALL_IMPL_PR_NUM} detail=${_reissue_hold_reason} phase=${phase} action=none requested_action=close_and_reissue source=reissue_precheck"
+          STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue_skipped_pr_ai_hold"
+          STALL_RECOVERY_SHOULD_INCREMENT="false"
+          return 1
+        fi
+      fi
 
       local orig_title orig_body orig_issue_json orig_issue_is_heal orig_issue_is_managed orig_issue_is_check_triage
       orig_issue_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '{title: (.title // ""), body: (.body // ""), heal: ([.labels[]?.name] | index("ai:workflow-heal") != null), managed: ([.labels[]?.name] | index("ai:orchestrator-managed") != null), check_triage: ([.labels[]?.name] | index("ai:check-triage") != null)}' || echo "")"
@@ -23438,6 +23610,17 @@ REISSUE_EOF
       if [ "${SKIP_HEALTHY_PR_GUARD_ENABLED:-true}" = "true" ]; then
         if _resolve_issue_implementation_pr "${issue_num}"; then
           _skip_pr_num="${STALL_IMPL_PR_NUM}"
+          # Owner hold re-check on the REST payload this lookup already
+          # fetched (0 extra API calls): recover_stalled_issue's hold guard
+          # fails open when the linked-PR caches lack draft/title.
+          local _skip_hold_reason=""
+          _skip_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON}")"
+          if [ -n "${_skip_hold_reason}" ]; then
+            echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${_skip_pr_num} detail=${_skip_hold_reason} phase=${phase} action=none requested_action=skip"
+            STALL_RECOVERY_EFFECTIVE_ACTION="skip_skipped_pr_ai_hold"
+            STALL_RECOVERY_SHOULD_INCREMENT="false"
+            return 1
+          fi
         elif [ "${STALL_IMPL_PR_FAILURE_REASON}" = "pr_fetch_failed" ]; then
           echo "::warning::skip healthy-PR guard: implementation PR lookup was inconclusive for issue #${issue_num}; retrying next poll instead of closing or dispatching against an unverified PR."
           STALL_RECOVERY_EFFECTIVE_ACTION="skip_skipped_pr_lookup_failed"
@@ -23525,6 +23708,13 @@ The issue and its linked PR stay open with \`ai:needs-human\`; the unblock judge
       echo "  Skipping issue #${issue_num} after ${recovery_count} recovery attempts."
       close_linked_pr "${issue_num}" \
         "Closed by orchestrator: stall recovery exhausted (${recovery_count} attempts). The judge will evaluate this gap."
+      if [ -n "${CLOSE_LINKED_PR_HELD_PRS:-}" ]; then
+        # close_linked_pr left an owner-held PR open: leave the issue open too.
+        echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${CLOSE_LINKED_PR_HELD_PRS%% *} detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown} phase=${phase} action=none requested_action=skip source=close_linked_pr"
+        STALL_RECOVERY_EFFECTIVE_ACTION="skip_skipped_pr_ai_hold"
+        STALL_RECOVERY_SHOULD_INCREMENT="false"
+        return 1
+      fi
       ensure_label_exists "ai:closed"
       gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
         --add-label 'ai:closed' 2>/dev/null || true
@@ -23586,7 +23776,10 @@ The judge will evaluate this gap when the wave completes and decide whether to r
         STALL_HEALING_CHANGED=true
         local _rmc_reissue_rc=0
         "${STALL_RETIRED_CONFLICT_REISSUE_FN}" "${issue_num}" "${phase}" "close_and_reissue" "${recovery_count}" "${local_id}" "${stall_minutes}" || _rmc_reissue_rc=$?
-        STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
+        # Keep the nested reissue's owner-hold marker (#9733) so
+        # invoke_stall_judge skips its fallback dispatch too.
+        [ "${STALL_RECOVERY_EFFECTIVE_ACTION:-}" = "close_and_reissue_skipped_pr_ai_hold" ] \
+          || STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
         return "${_rmc_reissue_rc}"
       fi
       head_sha="$(_jq_field "${pr_json}" '.head.sha')"
@@ -23632,6 +23825,16 @@ The judge will evaluate this gap when the wave completes and decide whether to r
         STALL_RECOVERY_SHOULD_INCREMENT="true"
         return 0
       fi
+      # Owner hold (#9733) on the payload resolved above (0 extra calls):
+      # also covers the stall judge's dispatch_rb_judge fallback.
+      local _rbj_hold_reason=""
+      _rbj_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON:-}")"
+      if [ -n "${_rbj_hold_reason}" ]; then
+        echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${rb_pr_num} detail=${_rbj_hold_reason} phase=${phase} action=none requested_action=dispatch_rb_judge"
+        STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_rb_judge_skipped_pr_ai_hold"
+        STALL_RECOVERY_SHOULD_INCREMENT="false"
+        return 1
+      fi
       # Issue #6680: a PR that conflicts with its base only on retired
       # host-only file(s) the base no longer has can never be merged by the
       # sandboxed resolver, and the judge cannot merge it either. Close and
@@ -23643,7 +23846,8 @@ The judge will evaluate this gap when the wave completes and decide whether to r
         STALL_HEALING_CHANGED=true
         local _rbj_reissue_rc=0
         "${STALL_RETIRED_CONFLICT_REISSUE_FN}" "${issue_num}" "${phase}" "close_and_reissue" "${recovery_count}" "${local_id}" "${stall_minutes}" || _rbj_reissue_rc=$?
-        STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
+        [ "${STALL_RECOVERY_EFFECTIVE_ACTION:-}" = "close_and_reissue_skipped_pr_ai_hold" ] \
+          || STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
         return "${_rbj_reissue_rc}"
       fi
       local rb_dispatch_rc=0
@@ -25203,10 +25407,14 @@ ${diagnostics}
       fi
       if ! execute_stall_recovery_action "${issue_num}" "${phase}" "resolve_merge_conflict" "${recovery_count}" "${local_id}" "${stall_minutes}"; then
         # Owner hold (PR #9750): the target PR is held, so no fallback
-        # dispatch either; no attempt is counted.
-        if [ "${STALL_RECOVERY_EFFECTIVE_ACTION:-}" = "resolve_merge_conflict_skipped_pr_ai_hold" ]; then
-          return 1
-        fi
+        # dispatch either; no attempt is counted. A retired-host-only
+        # reissue stopped by its own hold re-check (#9733) reports
+        # close_and_reissue_skipped_pr_ai_hold and gets the same treatment.
+        case "${STALL_RECOVERY_EFFECTIVE_ACTION:-}" in
+          resolve_merge_conflict_skipped_pr_ai_hold|close_and_reissue_skipped_pr_ai_hold)
+            return 1
+            ;;
+        esac
         echo "::warning::resolve_merge_conflict dispatch failed for issue #${issue_num}; falling back to ${fallback_action}."
         execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
         return $?
@@ -29652,23 +29860,23 @@ PY
       continue
     fi
 
-    # Owner hold (draft PR or `[skip ai]` title): leave an ai:done issue alone
+    # Owner hold (draft PR or `[skip ai]` title): leave the issue alone
     # before the stall judge, conflict dispatch or review retrigger runs. The
     # linked_pr entry comes from the batched details GraphQL (isDraft/title
     # ride on the existing query) or the implementation-PR REST payload
     # resolved above, so this adds no API calls. No attempt is counted and
     # the stall clock is not reset. A payload without the fields fails open;
     # the retrigger_review arms re-check the implementation PR payload.
-    if [ "${phase}" = "ai:done" ] && [ "${action}" != "skip" ]; then
-      local _std_ai_hold_reason=""
-      _std_ai_hold_reason="$(_stall_pr_ai_hold_reason "${_std_linked_json}")"
-      if [ -n "${_std_ai_hold_reason}" ]; then
-        echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=$(printf '%s' "${_std_linked_json}" | jq -r '.number // "unknown"' 2>/dev/null || echo unknown) detail=${_std_ai_hold_reason} phase=${phase} action=none"
-        if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
-          write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
-        fi
-        continue
+    # Every phase and every action, `skip` included (issue #9733: the
+    # exhausted close-out closed a held PR in ai:awaiting-approval).
+    local _std_ai_hold_reason=""
+    _std_ai_hold_reason="$(_stall_pr_ai_hold_reason "${_std_linked_json}")"
+    if [ -n "${_std_ai_hold_reason}" ]; then
+      echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=$(printf '%s' "${_std_linked_json}" | jq -r '.number // "unknown"' 2>/dev/null || echo unknown) detail=${_std_ai_hold_reason} phase=${phase} action=none requested_action=${action}"
+      if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+        write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
       fi
+      continue
     fi
 
     # Fresh-push guard complements issue_has_active_workflow above; see
@@ -29949,6 +30157,19 @@ PY
         _std_rb_pre_pr_num="${STALL_IMPL_PR_NUM}"
       fi
       _std_rb_pre_failure_reason="${STALL_IMPL_PR_FAILURE_REASON}"
+      # Owner hold (#9733) on the REST payload resolved above (0 extra
+      # calls), mirroring the managed dispatch_rb_judge arm: the generic
+      # guard above fails open when the batched linked_pr lacks draft/title.
+      local _std_rb_hold_reason=""
+      [[ "${_std_rb_pre_pr_num}" =~ ^[0-9]+$ ]] && _std_rb_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON:-}")"
+      if [ -n "${_std_rb_hold_reason}" ]; then
+        echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${_std_rb_pre_pr_num} detail=${_std_rb_hold_reason} phase=${phase} action=none requested_action=dispatch_rb_judge"
+        STALL_RECOVERY_SHOULD_INCREMENT="false"
+        if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+          write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+        fi
+        continue
+      fi
       if [[ "${_std_rb_pre_pr_num}" =~ ^[0-9]+$ ]] \
         && _stall_pr_json_may_conflict "${STALL_IMPL_PR_JSON:-}" \
         && _stall_retired_host_only_conflict_check "${issue_num}" "${_std_rb_pre_pr_num}" "${STALL_IMPL_PR_JSON:-}"; then
@@ -30554,6 +30775,15 @@ STALL_EOF
           echo "  [standalone-stall-recovery] Ancestor-chain no-op cap reached for #${issue_num} (${standalone_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES:-2}). Closing without re-issue — judge will verify."
           ensure_label_exists "ai:closed"
           close_linked_pr "${issue_num}" "Closed by standalone stall recovery — ancestor-chain no-op cap reached (${standalone_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES:-2})."
+          if [ -n "${CLOSE_LINKED_PR_HELD_PRS:-}" ]; then
+            # close_linked_pr left an owner-held PR open (#9733): leave the issue open too.
+            echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${CLOSE_LINKED_PR_HELD_PRS%% *} detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown} phase=${phase} action=none requested_action=close_and_reissue source=close_linked_pr"
+            STALL_RECOVERY_SHOULD_INCREMENT="false"
+            if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+              write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+            fi
+            continue
+          fi
           gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
             --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:awaiting-approval' --remove-label 'ai:ready-to-merge' \
             --add-label 'ai:closed' 2>/dev/null || true
@@ -30611,6 +30841,21 @@ REISSUE_EOF
           new_body="${new_body}"$'\n'"- ${_std_reissue_extra}"
         fi
         [ -n "${_std_reissue_close_msg}" ] || _std_reissue_close_msg="Closed by standalone stall recovery — issue #${issue_num} was stuck in '${phase}' for ${elapsed_minutes}m."
+        # Owner hold re-check before the replacement exists (issue #9733);
+        # same REST lookup and fail-open rule as the managed close_and_reissue
+        # arm in execute_stall_recovery_action. Counts nothing, keeps the clock.
+        if _resolve_issue_implementation_pr "${issue_num}"; then
+          local _std_reissue_hold_reason=""
+          _std_reissue_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON}")"
+          if [ -n "${_std_reissue_hold_reason}" ]; then
+            echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${STALL_IMPL_PR_NUM} detail=${_std_reissue_hold_reason} phase=${phase} action=none requested_action=close_and_reissue source=reissue_precheck"
+            STALL_RECOVERY_SHOULD_INCREMENT="false"
+            if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+              write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+            fi
+            continue
+          fi
+        fi
         ensure_label_exists "ai:clarification"
         local -a _heal_reissue_label_args=()
         if [ "${orig_issue_is_heal}" = true ] || printf '%s' "${orig_body}" | grep -q 'workflow-failure-heal:fp=' || printf '%s' "${labels_json:-[]}" | jq -e 'index("ai:workflow-heal") != null' >/dev/null 2>&1; then
@@ -30731,6 +30976,17 @@ This issue and its linked PR stay open with \`ai:needs-human\`; the unblock judg
           STALL_RECOVERY_SHOULD_INCREMENT="false"
         else
           close_linked_pr "${issue_num}" "Closed by standalone stall recovery: max recovery attempts exhausted (${_std_exhausted_attempts} attempts in '${phase}' phase, limit ${effective_max_recoveries})."
+          if [ -n "${CLOSE_LINKED_PR_HELD_PRS:-}" ]; then
+            # close_linked_pr left an owner-held PR open (the batched linked_pr
+            # lacked draft/title, so the hold guard above failed open): leave
+            # the issue open too, count nothing and keep the stall clock.
+            echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${CLOSE_LINKED_PR_HELD_PRS%% *} detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown} phase=${phase} action=none requested_action=skip source=close_linked_pr"
+            STALL_RECOVERY_SHOULD_INCREMENT="false"
+            if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+              write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+            fi
+            continue
+          fi
           ensure_label_exists "ai:closed"
           gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label 'ai:closed' 2>/dev/null || true
           gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" -c "Closing: standalone stall recovery exhausted (${_std_exhausted_attempts} attempts in '${phase}' phase, limit ${effective_max_recoveries}; stuck ${elapsed_minutes} minutes this time)." 2>/dev/null || true
@@ -31181,6 +31437,36 @@ recover_stalled_issue() {
     return 1  # Signal: no action taken (caller should not increment counter)
   fi
 
+  # ---- Guard: owner hold on the linked PR (draft / `[skip ai]` title) ----
+  # PR #9750 added this for managed ai:done issues only. Issue #9733 showed
+  # the gap: an ai:awaiting-approval issue whose held PR #9744 exhausted its
+  # budget took the `skip` action, and close_linked_pr closed the held PR.
+  # An owner hold now means "leave this item alone" in every phase and for
+  # every action, `skip` included, and it runs before the early-phase
+  # open-PR guard below so a held PR with conflicts gets no resolver either.
+  # Reads _fresh_lpr_entry first (the same STALL_MANAGED_LINKED_PR_CACHE
+  # entry, or REST implementation-PR fallback, the guards above use), then
+  # the wave's batched GraphQL linked_pr (0 extra API calls). A missing
+  # payload fails open; execute_stall_recovery_action retrigger_review /
+  # resolve_merge_conflict / skip and close_linked_pr re-check the REST
+  # payload they already fetch. No attempt is counted and the stall clock
+  # is not reset.
+  local _recover_hold_pr_json="${_fresh_lpr_entry:-}"
+  local _recover_hold_reason=""
+  _recover_hold_reason="$(_stall_pr_ai_hold_reason "${_recover_hold_pr_json}")"
+  if [ -z "${_recover_hold_reason}" ]; then
+    _recover_hold_pr_json="$(printf '%s' "${_current_wave_details_json:-}" | jq -c --arg n "${issue_num}" '.[$n].linked_pr // empty' 2>/dev/null || true)"
+    _recover_hold_reason="$(_stall_pr_ai_hold_reason "${_recover_hold_pr_json}")"
+  fi
+  if [ -n "${_recover_hold_reason}" ]; then
+    local _recover_hold_pr_num=""
+    _recover_hold_pr_num="$(printf '%s' "${_recover_hold_pr_json}" | jq -r '.number // empty' 2>/dev/null || true)"
+    echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${_recover_hold_pr_num} detail=${_recover_hold_reason} phase=${phase} action=none requested_action=${action}"
+    STALL_RECOVERY_EFFECTIVE_ACTION="${action}_skipped_pr_ai_hold"
+    STALL_RECOVERY_SHOULD_INCREMENT="false"
+    return 1
+  fi
+
   # ---- Guard: skip pre-implementation recovery when a linked PR already exists ----
   # Early-phase actions (retrigger_pipeline, auto_respond_clarify, retrigger_plan,
   # auto_approve, retrigger_implement) assume the issue has not yet produced a PR.
@@ -31303,6 +31589,16 @@ recover_stalled_issue() {
         _opr_mergeable="$(_jq_field "${_opr_json}" '.mergeable' 'true|false')"
         _opr_mergeable_state="$(_jq_field "${_opr_json}" '.mergeable_state')"
         _opr_head_ref="$(_jq_field "${_opr_json}" '.head.ref')"
+        # Owner hold re-check (issue #9733) on this payload (0 extra calls):
+        # the guard above fails open when the cached payloads lack draft/title.
+        local _opr_hold_reason=""
+        _opr_hold_reason="$(_stall_pr_ai_hold_reason "${_opr_json}")"
+        if [ -n "${_opr_hold_reason}" ]; then
+          echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${_lpr_num} detail=${_opr_hold_reason} phase=${phase} action=none requested_action=${action}"
+          STALL_RECOVERY_EFFECTIVE_ACTION="${action}_skipped_pr_ai_hold"
+          STALL_RECOVERY_SHOULD_INCREMENT="false"
+          return 1
+        fi
 
         # Sub-case 1: PR has merge conflicts → dispatch conflict resolver
         if { [ "${_opr_mergeable}" = "false" ] || [ "${_opr_mergeable_state}" = "dirty" ]; } && [ -n "${_opr_head_ref}" ]; then
@@ -31313,7 +31609,8 @@ recover_stalled_issue() {
             STALL_HEALING_CHANGED=true
             local _opr_reissue_rc=0
             "${STALL_RETIRED_CONFLICT_REISSUE_FN}" "${issue_num}" "${phase}" "close_and_reissue" "${recovery_count}" "${local_id}" "${stall_minutes}" || _opr_reissue_rc=$?
-            STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
+            [ "${STALL_RECOVERY_EFFECTIVE_ACTION:-}" = "close_and_reissue_skipped_pr_ai_hold" ] \
+              || STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
             return "${_opr_reissue_rc}"
           fi
           local _opr_dispatch_rc=0
@@ -31371,31 +31668,6 @@ recover_stalled_issue() {
   esac
 
   # Cancel any zombie runs for this issue before retrying.
-  # Owner hold on the linked PR (draft / `[skip ai]` title, PR #9750):
-  # managed ai:done issues skip the stall judge and every dispatch. Reads
-  # _fresh_lpr_entry first (the same STALL_MANAGED_LINKED_PR_CACHE entry,
-  # or REST implementation-PR fallback, the guards above use), then the
-  # wave's batched GraphQL linked_pr (0 extra API calls); a missing
-  # payload fails open, and execute_stall_recovery_action retrigger_review
-  # / resolve_merge_conflict re-check the REST payload.
-  if [ "${phase}" = "ai:done" ] && [ "${action}" != "skip" ]; then
-    local _recover_hold_pr_json="${_fresh_lpr_entry:-}"
-    local _recover_hold_reason=""
-    _recover_hold_reason="$(_stall_pr_ai_hold_reason "${_recover_hold_pr_json}")"
-    if [ -z "${_recover_hold_reason}" ]; then
-      _recover_hold_pr_json="$(printf '%s' "${_current_wave_details_json:-}" | jq -c --arg n "${issue_num}" '.[$n].linked_pr // empty' 2>/dev/null || true)"
-      _recover_hold_reason="$(_stall_pr_ai_hold_reason "${_recover_hold_pr_json}")"
-    fi
-    if [ -n "${_recover_hold_reason}" ]; then
-      local _recover_hold_pr_num=""
-      _recover_hold_pr_num="$(printf '%s' "${_recover_hold_pr_json}" | jq -r '.number // empty' 2>/dev/null || true)"
-      echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${_recover_hold_pr_num} detail=${_recover_hold_reason} phase=${phase} action=none"
-      STALL_RECOVERY_EFFECTIVE_ACTION="${action}_skipped_pr_ai_hold"
-      STALL_RECOVERY_SHOULD_INCREMENT="false"
-      return 1
-    fi
-  fi
-
   if [ "${action}" != "skip" ] && [ "${action}" != "attempt_merge" ] && [ "${action}" != "escalate_human" ]; then
     cancel_zombie_runs_for_issue "${issue_num}"
   fi
@@ -39007,6 +39279,11 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
               echo "  ${NEW_ID}: prior issue #${EXISTING_NUM} is already merged/closed, allowing new addition."
             fi
           fi
+
+          # Issue #9534: add the standard scope companions to a judge-written
+          # files_touched block (fail open; JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED).
+          apply_judge_files_touched_companions "${NEW_BODY}" addition "${NEW_ID}"
+          NEW_BODY="${JUDGE_COMPANIONS_BODY_OUT}"
 
           FULL_NEW_BODY="${NEW_BODY}
 

@@ -218,6 +218,19 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           persist-credentials: false
 
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
+
       - name: Create runtime workspace
         run: |
           set -euo pipefail
@@ -287,6 +300,16 @@ jobs:
             exit 1
           fi
           echo "source_repo=$(jq -r '.source_repo // ""' "${WORKFLOW_HEAL_PAYLOAD_FILE}" | tr -cd 'A-Za-z0-9_./-' | head -c 120)" >> "$GITHUB_OUTPUT"
+          # Cache key prefix for the once-per-UTC-day unregistered-repo WARNING
+          # (scripts/workflow_failure_heal_intake.sh, unregistered_source_repo).
+          # The UTC day is appended after the queue wait (heal_unregistered_day),
+          # so a report that waits across midnight uses the day it warns on.
+          # The 200-char cap is above the longest GitHub owner/repo (39 + 1 + 100),
+          # so distinct repos never share a key, and well under the 512-char key limit.
+          heal_unregistered_repo="$(jq -r '.source_repo // ""' "${WORKFLOW_HEAL_PAYLOAD_FILE}" 2>/dev/null | tr '[:upper:]' '[:lower:]' | tr '/' '_' | tr -cd 'a-z0-9_.-' | head -c 200 || true)"
+          if [ -n "${heal_unregistered_repo}" ]; then
+            echo "heal_unregistered_cache_key=heal-unregistered-${heal_unregistered_repo}" >> "$GITHUB_OUTPUT"
+          fi
 
       # Waits for this report's turn instead of letting a newer run cancel it.
       # Never fails the job: when the queue cannot be used the report proceeds.
@@ -345,8 +368,35 @@ jobs:
         with:
           config_path: .github/ai/claude_engine.json
 
+      # An unregistered source repo gets one Telegram WARNING per UTC day: a
+      # cache hit here means today's WARNING was already sent, so the intake
+      # sends DEBUG instead. A failed lookup leaves cache-hit empty and the
+      # WARNING goes out (fail open). Runs inside the heal intake queue so the
+      # previous report's save step has finished.
+      - name: Compute today's unregistered-repo warning day
+        id: heal_unregistered_day
+        if: steps.payload.outputs.heal_unregistered_cache_key != ''
+        # A failure here leaves day empty: lookup and save are skipped and the
+        # intake still runs and sends the WARNING (fail open).
+        continue-on-error: true
+        run: echo "day=$(date -u +%Y%m%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Look up today's unregistered-repo warning marker
+        id: heal_unregistered_seen
+        if: steps.payload.outputs.heal_unregistered_cache_key != '' && steps.heal_unregistered_day.outputs.day != ''
+        continue-on-error: true
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/workflow-heal-unregistered-warned
+          key: ${{ steps.payload.outputs.heal_unregistered_cache_key }}-${{ steps.heal_unregistered_day.outputs.day }}
+          lookup-only: true
+
       - name: Run workflow failure heal intake
+        id: intake_run
         env:
+          WORKFLOW_HEAL_UNREGISTERED_WARNED_TODAY: ${{ steps.heal_unregistered_seen.outputs.cache-hit == 'true' && 'true' || 'false' }}
+          # Fixed path shared by both cache steps (a per-run path never matches).
+          WORKFLOW_HEAL_UNREGISTERED_MARKER: /tmp/workflow-heal-unregistered-warned
           # Codex version baked into the isolated diagnosis agent's image (scripts/codex_isolated_exec.sh).
           CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
           AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
@@ -355,6 +405,14 @@ jobs:
         run: |
           set -euo pipefail
           bash scripts/workflow_failure_heal_intake.sh
+
+      - name: Save today's unregistered-repo warning marker
+        if: always() && steps.intake_run.outputs.heal_unregistered_warned == 'true' && steps.payload.outputs.heal_unregistered_cache_key != '' && steps.heal_unregistered_day.outputs.day != ''
+        continue-on-error: true
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/workflow-heal-unregistered-warned
+          key: ${{ steps.payload.outputs.heal_unregistered_cache_key }}-${{ steps.heal_unregistered_day.outputs.day }}
 
       - name: Leave the heal intake queue
         if: always()
@@ -383,7 +441,8 @@ jobs:
             source scripts/gh_helpers.sh
             gh_pat_budget end workflow-failure-heal-intake intake "${GH_PAT_BUDGET_FILE}"
           else
-            echo 'GH_PAT_BUDGET phase=end workflow=workflow-failure-heal-intake job=intake remaining=unknown reset=unknown used_in_job=unknown'
+            counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+            echo "GH_PAT_BUDGET phase=end workflow=workflow-failure-heal-intake job=intake remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
           fi
 
   recovery-candidates:
@@ -520,6 +579,19 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           persist-credentials: false
 
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
+
       - name: Create runtime workspace
         run: |
           set -euo pipefail
@@ -614,7 +686,8 @@ jobs:
             source scripts/gh_helpers.sh
             gh_pat_budget end workflow-failure-heal-intake recovery-scan "${GH_PAT_BUDGET_FILE}"
           else
-            echo 'GH_PAT_BUDGET phase=end workflow=workflow-failure-heal-intake job=recovery-scan remaining=unknown reset=unknown used_in_job=unknown'
+            counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+            echo "GH_PAT_BUDGET phase=end workflow=workflow-failure-heal-intake job=recovery-scan remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
           fi
 
   heal-verify:
@@ -665,6 +738,19 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           persist-credentials: false
 
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
+
       - name: Run heal post-merge verification
         run: |
           set -euo pipefail
@@ -679,5 +765,6 @@ jobs:
             source scripts/gh_helpers.sh
             gh_pat_budget end workflow-failure-heal-intake heal-verify "${GH_PAT_BUDGET_FILE}"
           else
-            echo 'GH_PAT_BUDGET phase=end workflow=workflow-failure-heal-intake job=heal-verify remaining=unknown reset=unknown used_in_job=unknown'
+            counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+            echo "GH_PAT_BUDGET phase=end workflow=workflow-failure-heal-intake job=heal-verify remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
           fi

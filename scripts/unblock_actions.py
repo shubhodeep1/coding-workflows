@@ -1055,10 +1055,19 @@ def reset_ops(ctx: dict, note: str) -> list[dict]:
 		return ops
 	present = label if label in ctx["labels"] else ""
 	if stop in GUARD_STOPS or stop == "implement-diagnose-failed":
-		if ctx["has_plan"]:
+		# Issue #9534: a routed planning scope block (plan.yml) carries
+		# ai:blocked beside ai:scope-blocked. Every resume path (retry_budget,
+		# accept_with_followup, regrant, hold follow-ups) must re-plan rather
+		# than approve the older plan, and must drop ai:blocked too, or the
+		# next scan resumes the issue a second time as stop `blocked`.
+		reset_routed_planning_scope = stop == "scope-blocked" and "ai:blocked" in ctx["labels"]
+		if ctx["has_plan"] and not reset_routed_planning_scope:
 			return _approve(item, ctx["labels"], present)
 		ops = [{"op": "comment", "issue": item, "body": "/reclarify"}]
-		return ops + ([{"op": "remove_label", "issue": item, "label": present}] if present else [])
+		ops += [{"op": "remove_label", "issue": item, "label": present}] if present else []
+		if reset_routed_planning_scope:
+			ops.append({"op": "remove_label", "issue": item, "label": "ai:blocked"})
+		return ops
 	if stop == "blocked":
 		if ctx["has_plan"]:
 			return _approve(item, ctx["labels"], present)
@@ -1340,7 +1349,15 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 	elif name == "override_guard":
 		if ctx["stop"] == "scope-blocked":
 			ops.append({"op": "edit_files_touched", "issue": item, "paths": verdict["paths"]})
-		ops += _approve(item, ctx["labels"], _stop_label(ctx["stop"]) if _stop_label(ctx["stop"]) in ctx["labels"] else "")
+		# Issue #9534: resume through reset_ops, the one source of the guard-stop
+		# rule (an older plan is approved, except on a routed planning scope block,
+		# ai:blocked beside ai:scope-blocked, which re-plans with /reclarify and
+		# drops both labels). The ledger offers override_guard only on an issue's
+		# GUARD_STOPS; anything else keeps the old approve path.
+		if ctx["kind"] == "issue" and ctx["stop"] in GUARD_STOPS:
+			ops += reset_ops(ctx, verdict.get("reason", ""))
+		else:
+			ops += _approve(item, ctx["labels"], _stop_label(ctx["stop"]) if _stop_label(ctx["stop"]) in ctx["labels"] else "")
 	elif name == "reissue":
 		# #10121 G2: the issue's own green or lease-waiting pull request is the
 		# work; a failed read cannot rule that out. No replacement, no close.
