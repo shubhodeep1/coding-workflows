@@ -156,7 +156,7 @@ jobs:
           contains(github.event.comment.body, '[auto-approved-by-plan]')
         )
       )
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
     timeout-minutes: 180
     outputs:
       # Read by the heal-report job: "true" when this failed run should reach
@@ -1581,7 +1581,7 @@ jobs:
             fi
           else
           # support-scripts-legacy:begin
-          for f in gh_helpers.sh pr_dependency.py git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_stale_branch_check.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh assemble_agents.py unblock_ledger.py targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py claude_anthropic_relay.py security_dependency.py auto_decisions.py partial_delivery.py workflow_failure_heal.py workflow_failure_heal_evidence.sh implement_heal_preflight.sh heal_isolated_implement.sh review_untrusted_workspace.py files_touched_scope_guard.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do
+          for f in gh_helpers.sh pr_dependency.py git_ref_health_check.sh render_prompt.sh assemble_prompt.sh render_prompt.py load_workflow_overlay.py validate_changed_files_syntax.sh tg_helpers.sh label_helpers.sh memory_helpers.sh ai_memory.py ai_memory_lib.py memory_injection_patterns.py openrouter_prompt_cache.py implement_diagnose_post_codex_failure.sh implement_step_preflight_destructive_guard.sh implement_step_post_codex_syntax_repair.sh implement_stale_branch_check.sh implement_commit_changes.sh implement_handle_guard_block.sh build_static_context.sh assemble_agents.py unblock_ledger.py targeted_file_context.py write_codex_config.sh codex_helpers.sh codex_stall_guard.sh watchdog_helpers.sh write_guard.sh ledger_emit_substate.sh orchestrate_force_tick.sh workspace_init.sh workspace_safety_check.sh run_workspace_hook.sh codex_thread_reuse.sh codex_isolated_exec.sh sandbox_image.sh codex_isolated_workspace.py clarify_openrouter_broker.py dependency_registry_proxy.py claude_anthropic_relay.py security_dependency.py auto_decisions.py partial_delivery.py workflow_failure_heal.py workflow_failure_heal_evidence.sh implement_heal_preflight.sh heal_isolated_implement.sh review_untrusted_workspace.py files_touched_scope_guard.py lint_pr_body_auto_close.py implement_staged_support_workspace.sh ai_engine.sh claude_engine.py; do
             src=".codex-workflow-src/scripts/${f}"
             if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/${f}" ]; then
               src=".codex-workflow-src-main/scripts/${f}"
@@ -2778,6 +2778,41 @@ jobs:
 
           if [ ! -s "${PLAN_FILE}" ] || ! grep -qiE '^[[:space:]]*implementation[[:space:]]+plan\b' "${PLAN_FILE}"; then
             echo "Unable to locate approved Implementation Plan in issue comments."
+            # Diagnostics only (#9724): say why no plan was accepted. Reads the
+            # comments file already fetched; never prints comment bodies; every
+            # comment-derived value is reduced to a safe charset. The selection
+            # above and the exit status are unchanged.
+            jq -r --arg approval_comment_id "${APPROVAL_COMMENT_ID}" '
+              def heading: ((.body // "") | test("(?im)^\\s*implementation\\s+plan\\b"));
+              def marker: ((.body // "") | contains("<!-- ai:plan-proposal:v1 -->"));
+              def trusted: (
+                (
+                  (.user.type == "Bot") and
+                  ((.user.login // "") as $bot_login | ["github-actions[bot]", "codex-bot[bot]"] | index($bot_login))
+                ) or
+                ((.author_association // "") as $assoc | ["OWNER", "MEMBER", "COLLABORATOR"] | index($assoc))
+              );
+              def clean: tostring | gsub("[^A-Za-z0-9_.:\\[\\]-]"; "_");
+              sort_by(.created_at) as $all |
+              ([$all[] | select(
+                ((.id | tostring) == $approval_comment_id) and
+                ((.body // "") | test("(?i)/approved"))
+              )] | if length > 0 then .[0] else null end) as $approval |
+              (if $approval == null then null else $approval.created_at end) as $approval_at |
+              [$all[] | select(heading or marker)] as $cands |
+              [$all[] | select(heading)] as $heads |
+              (if $approval == null then "approval_not_found"
+               elif ($heads | length) == 0 then "no_plan_comment"
+               elif ([$heads[] | select(.created_at <= $approval_at)] | length) == 0 then "plan_after_approval"
+               elif ([$heads[] | select(.created_at <= $approval_at) | select(trusted)] | length) == 0 then "plan_author_untrusted"
+               else "plan_body_mismatch" end) as $reason |
+              # Candidate lines first, error line last: the heal log filter
+              # keeps the tail when it cuts, so the reason token survives.
+              ($cands[] |
+                "::warning::IMPLEMENT_PLAN_CANDIDATE id=\(.id | clean) created_at=\(.created_at | clean) login=\(.user.login // "none" | clean) type=\(.user.type // "none" | clean) association=\(.author_association // "none" | clean) heading=\(heading) marker=\(marker) after_approval=\(if $approval_at == null then "unknown" else (.created_at > $approval_at) end) trusted=\(trusted)"),
+              "::error::IMPLEMENT_PLAN_NOT_FOUND reason=\($reason) approval_id=\($approval_comment_id | clean) approval_created_at=\(if $approval_at == null then "none" else ($approval_at | clean) end) comments_total=\($all | length) plan_candidates=\($cands | length)"
+            ' "${ISSUE_COMMENTS_FILE}" \
+              || echo "::warning::IMPLEMENT_PLAN_DIAGNOSTICS_UNAVAILABLE reason=jq_failed"
             exit 1
           fi
 
@@ -4515,399 +4550,13 @@ jobs:
           WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
           SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}
         run: |
-          set -euo pipefail
-
-          TEMP_INDEX_FILE="$(mktemp "${TMPDIR:-/tmp}/implement-preflight-index.XXXXXX")"
-          VIRTUAL_CLEANUP_FILE="$(mktemp "${TMPDIR:-/tmp}/implement-preflight-cleanup.XXXXXX")"
-          cleanup() {
-            rm -f "${TEMP_INDEX_FILE}" "${VIRTUAL_CLEANUP_FILE}"
-          }
-          trap cleanup EXIT
-          rm -f "${TEMP_INDEX_FILE}"
-
-          export GIT_INDEX_FILE="${TEMP_INDEX_FILE}"
-          git read-tree HEAD
-
-          : > "${VIRTUAL_CLEANUP_FILE}"
-          drop_bootstrap_serena="false"
-
-          add_virtual_cleanup_path() {
-            local cleanup_path="${1#./}"
-            [ -n "${cleanup_path}" ] || return 0
-            printf '%s\n' "${cleanup_path}" >> "${VIRTUAL_CLEANUP_FILE}"
-            git rm -r -q --cached --ignore-unmatch -- "${cleanup_path}" 2>/dev/null || true
-          }
-
-          is_virtual_cleanup_path() {
-            local candidate="${1#./}"
-            if grep -Fqx -- "${candidate}" "${VIRTUAL_CLEANUP_FILE}" 2>/dev/null; then
-              return 0
-            fi
-            if [ "${drop_bootstrap_serena}" = "true" ]; then
-              case "${candidate}" in
-                .serena|.serena/*)
-                  return 0
-                  ;;
-              esac
-            fi
-            return 1
-          }
-
-          add_virtual_cleanup_path "pre_assembled_static.txt"
-          if [ -n "${FETCHED_MANIFEST:-}" ] && [ -f "${FETCHED_MANIFEST}" ]; then
-            while IFS= read -r fetched_file; do
-              [ -n "${fetched_file}" ] || continue
-              add_virtual_cleanup_path "${fetched_file}"
-            done < "${FETCHED_MANIFEST}"
+          IMPLEMENT_STEP_SCRIPT="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}/implement_step_preflight_destructive_guard.sh"
+          if [ -z "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}" ] || [ ! -f "${IMPLEMENT_STEP_SCRIPT}" ] || [ -L "${IMPLEMENT_STEP_SCRIPT}" ]; then
+            echo "::error::Trusted pre-editor copy of implement_step_preflight_destructive_guard.sh is missing (IMPLEMENT_STAGED_SUPPORT_RUN_DIR=${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-<unset>}); the step never runs a workspace copy."
+            exit 1
           fi
-
-          if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -n "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] && [ -f .serena/project.yml ]; then
-            current_serena_project_hash="$(sha256sum .serena/project.yml 2>/dev/null | awk '{print $1}' || true)"
-            if [ -n "${current_serena_project_hash}" ] && [ "${current_serena_project_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then
-              if ! git ls-files --error-unmatch -- .serena >/dev/null 2>&1; then
-                drop_bootstrap_serena="true"
-              fi
-            fi
-          fi
-
-          git rm -r --cached node_modules 2>/dev/null || true
-          # Template-owned paths (prompts/, .github/prompts/,
-          # .github/scripts/) are fetched from coding-workflows at runtime in
-          # consumer repos, and must NOT be committed there — any edit to them
-          # in a consumer wrapper would either be a no-op (overwritten next run)
-          # or leak a stale copy back into the caller's tree.  In the canonical
-          # `shubhodeep1/coding-workflows` repository these paths ARE the source of truth
-          # and must be editable, so the excludes are dropped.
-          #
-          # NOTE: scripts/ is NOT blanket-excluded here. Runtime-fetched
-          # infrastructure helpers are filtered separately so consumer repos can
-          # still commit their own scripts/ changes when required.
-          wf_source="shubhodeep1/coding-workflows"
-          is_self_repo="false"
-          if [ "${GITHUB_REPOSITORY:-}" = "${wf_source}" ]; then
-            is_self_repo="true"
-          fi
-          add_u_excludes=(':!node_modules' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.ai/.workspace_source_manifest.txt')
-          add_o_excludes=(':!node_modules' ':!.github/ai' ':!.codex-workflow-src' ':!.codex-workflow-src-main' ':!.ai/.workspace_source_manifest.txt')
-          if [ "${is_self_repo}" = "false" ]; then
-            # Build per-file exclusions from the runtime-generated scripts/.gitignore
-            # instead of a blanket ':!scripts'.  The blanket exclusion previously
-            # blocked ALL consumer-repo-owned files under scripts/ (e.g.
-            # scripts/security/check-npm-audit.js), causing silent no-op commits.
-            # The .gitignore lists exactly the fetched coding-workflows helper
-            # scripts that must NOT be committed to consumer repos.
-            if [ -f scripts/.gitignore ]; then
-              while IFS= read -r _ign_entry; do
-                [[ -z "${_ign_entry}" || "${_ign_entry}" == \#* ]] && continue
-                add_u_excludes+=(":!scripts/${_ign_entry}")
-                add_o_excludes+=(":!scripts/${_ign_entry}")
-              done < scripts/.gitignore
-            else
-              # Fallback: if .gitignore was not created (bootstrap failure), use
-              # blanket exclusion for safety — same as the legacy behaviour.
-              add_u_excludes+=(':!scripts')
-              add_o_excludes+=(':!scripts')
-            fi
-            # Keep runtime artifact paths out of consumer-repo commits for
-            # both tracked updates (-u) and untracked additions.
-            add_u_excludes+=(':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
-            add_o_excludes+=(':!prompts' ':!ai-memory' ':!.github/prompts' ':!.github/scripts')
-          fi
-          git add -u -- "${add_u_excludes[@]}"
-          if git ls-files --error-unmatch -- .ai/.workspace_source_manifest.txt >/dev/null 2>&1 && [ ! -e .ai/.workspace_source_manifest.txt ] && [ ! -L .ai/.workspace_source_manifest.txt ]; then
-            git rm --cached --quiet -- .ai/.workspace_source_manifest.txt
-            echo "IMPLEMENT_GENERATED_MANIFEST_UNTRACKED path=.ai/.workspace_source_manifest.txt"
-          fi
-          while IFS= read -r -d '' untracked_candidate; do
-            [ -n "${untracked_candidate}" ] || continue
-            if is_virtual_cleanup_path "${untracked_candidate}"; then
-              continue
-            fi
-            git add -- "${untracked_candidate}"
-          done < <(git ls-files --others --exclude-standard -z -- "${add_o_excludes[@]}")
-          if [ "${is_self_repo}" = "false" ] && [ -f scripts/.gitignore ]; then
-            while IFS= read -r fetched_script; do
-              case "${fetched_script}" in ''|'#'*|'.gitignore') continue ;; esac
-              git reset -q HEAD -- "scripts/${fetched_script}" 2>/dev/null || true
-            done < scripts/.gitignore
-          fi
-          # Align with the later workflow-protection step so preflight does
-          # not count workflow-file deletions that will be restored before the
-          # real commit path when workflow edits are disallowed.
-          if [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ] && git cat-file -e HEAD:.github/workflows >/dev/null 2>&1; then
-            git reset -q HEAD -- .github/workflows 2>/dev/null || true
-          fi
-
-          deleted_staged="$(git diff --cached --diff-filter=D --name-only || true)"
-          if [ -n "${deleted_staged}" ]; then
-            canonical_deletions="$(printf '%s\n' "${deleted_staged}" \
-              | grep -E '^(agents\.md|ai_pipeline\.md|unattended_system_instructions\.md|CLAUDE\.md|prompts/|scripts/|\.github/ai/|\.github/scripts/)' \
-              || true)"
-            unblock_protected_deletions="$(printf '%s\n' "${deleted_staged}" | grep -iE '^(\.github|\.claude|workflow-templates)(/|$)' || true)"
-            total_deletions="$(printf '%s\n' "${deleted_staged}" | sed '/^$/d' | wc -l | tr -d ' ')"
-            # Count non-.md deletions to decide whether the lenient
-            # markdown-only threshold applies. Case-insensitive match so
-            # .MD / .Md are treated the same as .md.
-            non_md_deletions="$(printf '%s\n' "${deleted_staged}" | sed '/^$/d' | grep -ivE '\.md$' || true)"
-            non_md_count="$(printf '%s\n' "${non_md_deletions}" | sed '/^$/d' | wc -l | tr -d ' ')"
-            threshold="${BULK_DELETE_THRESHOLD:-3}"
-            if ! [[ "${threshold}" =~ ^[0-9]+$ ]]; then
-              echo "::warning::Invalid BULK_DELETE_THRESHOLD='${threshold}'; defaulting to 3."
-              threshold=3
-            fi
-            md_threshold="${BULK_DELETE_THRESHOLD_MD:-100}"
-            if ! [[ "${md_threshold}" =~ ^[0-9]+$ ]]; then
-              echo "::warning::Invalid BULK_DELETE_THRESHOLD_MD='${md_threshold}'; defaulting to 100."
-              md_threshold=100
-            fi
-            # When every staged deletion is a .md file, apply the
-            # lenient markdown-only threshold; otherwise fall back to
-            # the strict mixed-content threshold so any source-file
-            # deletion still trips at the original limit.
-            if [ "${non_md_count}" -eq 0 ]; then
-              effective_threshold="${md_threshold}"
-              threshold_label="BULK_DELETE_THRESHOLD_MD"
-            else
-              effective_threshold="${threshold}"
-              threshold_label="BULK_DELETE_THRESHOLD"
-            fi
-
-            if [ -n "${canonical_deletions}" ] && [ "${ALLOW_WORKFLOW_EDITS:-false}" != "true" ]; then
-              echo "::error::Refusing to commit: ${total_deletions} staged deletion(s) include canonical workflow-source files and ALLOW_WORKFLOW_EDITS is not 'true'."
-              echo "Canonical-source deletions blocked:"
-              printf '%s\n' "${canonical_deletions}" | sed 's/^/  - /'
-              {
-                echo "destructive_commit_blocked=canonical-source"
-                echo "destructive_commit_count=${total_deletions}"
-                echo 'destructive_commit_deletions<<__DCD_EOF__'
-                printf '%s\n' "${deleted_staged}"
-                echo '__DCD_EOF__'
-              } >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
-
-            # The unblock judge's one-shot override (plan Phase 7, Q12) lifts the
-            # bulk-delete threshold for this run only, and never when a canonical
-            # workflow source or protected automation path is among the deletions.
-            unblock_bulk_override_applies="false"
-            if [ "${UNBLOCK_BULK_DELETE_OVERRIDE:-false}" = "true" ] && [ -z "${canonical_deletions}" ] &&
-              [ -z "${unblock_protected_deletions}" ] &&
-              printf '%s\n' "${deleted_staged}" | jq -R -s -e --argjson paths "${UNBLOCK_BULK_DELETE_PATHS:-null}" 'all(split("\n")[] | select(length > 0); . as $path | $paths | index($path) != null)' >/dev/null 2>&1; then
-              unblock_bulk_override_applies="true"
-              echo "UNBLOCK_BULK_DELETE_OVERRIDE applied deletions=${total_deletions}"
-            fi
-            if [ "${UNBLOCK_BULK_DELETE_OVERRIDE:-false}" = "true" ] && [ -n "${unblock_protected_deletions}" ]; then
-              echo "UNBLOCK_BULK_DELETE_OVERRIDE outcome=skip reason=protected_automation_paths"
-            fi
-            if [ "${total_deletions}" -gt "${effective_threshold}" ] && [ "${ALLOW_BULK_DELETE:-false}" != "true" ] && [ "${unblock_bulk_override_applies}" != "true" ]; then
-              echo "::error::Refusing to commit: ${total_deletions} staged deletions exceeds ${threshold_label}=${effective_threshold} (non-md deletions=${non_md_count}) and ALLOW_BULK_DELETE is not 'true'."
-              echo "Deletions blocked by bulk-delete threshold:"
-              printf '%s\n' "${deleted_staged}" | sed 's/^/  - /'
-              {
-                echo "destructive_commit_blocked=bulk-delete"
-                echo "destructive_commit_count=${total_deletions}"
-                echo "destructive_commit_threshold_label=${threshold_label}"
-                echo "destructive_commit_effective_threshold=${effective_threshold}"
-                echo 'destructive_commit_deletions<<__DCD_EOF__'
-                printf '%s\n' "${deleted_staged}"
-                echo '__DCD_EOF__'
-              } >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
-          fi
-
-          # Project the staged-support restore into the temporary index before
-          # scope enforcement. Only untouched installed copies are reset;
-          # editor-modified or deleted support files remain scope-checked.
-          if [ "${is_self_repo}" = "true" ]; then
-            if [ -z "${STAGED_SUPPORT_LEDGER:-}" ] || [ ! -f "${STAGED_SUPPORT_LEDGER:-}" ]; then
-              echo "::error::IMPLEMENT_STAGED_SUPPORT_LEDGER_MISSING path=${STAGED_SUPPORT_LEDGER:-<unset>}; refusing preflight without the staged-support inventory."
-              {
-                echo "staged_support_rebase_conflict=true"
-                echo "staged_support_rebase_conflict_files=${STAGED_SUPPORT_LEDGER:-STAGED_SUPPORT_LEDGER}"
-              } >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
-            if [ -z "${STAGED_SUPPORT_BASE_DIR:-}" ] || [ ! -d "${STAGED_SUPPORT_BASE_DIR:-}" ]; then
-              echo "::error::IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=${STAGED_SUPPORT_BASE_DIR:-<unset>}; refusing preflight without the installed-content baseline."
-              {
-                echo "staged_support_rebase_conflict=true"
-                echo "staged_support_rebase_conflict_files=${STAGED_SUPPORT_BASE_DIR:-STAGED_SUPPORT_BASE_DIR}"
-              } >> "$GITHUB_OUTPUT"
-              exit 1
-            fi
-            while IFS= read -r preflight_staged_support_path; do
-              [ -n "${preflight_staged_support_path}" ] || continue
-              case "${preflight_staged_support_path}" in
-                /*|../*|*/../*|..|*/..)
-                  echo "::error::IMPLEMENT_STAGED_SUPPORT_LEDGER_INVALID path=${preflight_staged_support_path} reason=unsafe_path"
-                  {
-                    echo "staged_support_rebase_conflict=true"
-                    echo "staged_support_rebase_conflict_files=${preflight_staged_support_path}"
-                  } >> "$GITHUB_OUTPUT"
-                  exit 1
-                  ;;
-              esac
-              preflight_staged_support_base="${STAGED_SUPPORT_BASE_DIR}/${preflight_staged_support_path}"
-              if [ ! -f "${preflight_staged_support_base}" ]; then
-                echo "::error::IMPLEMENT_STAGED_SUPPORT_BASE_MISSING path=${preflight_staged_support_path}; refusing preflight without the installed-content baseline."
-                {
-                  echo "staged_support_rebase_conflict=true"
-                  echo "staged_support_rebase_conflict_files=${preflight_staged_support_path}"
-                } >> "$GITHUB_OUTPUT"
-                exit 1
-              fi
-              preflight_staged_support_mode="$(stat -c '%a' -- "${preflight_staged_support_path}" 2>/dev/null || true)"
-              preflight_staged_support_base_mode="$(stat -c '%a' -- "${preflight_staged_support_base}" 2>/dev/null || true)"
-              if [ -f "${preflight_staged_support_path}" ] \
-                && cmp -s -- "${preflight_staged_support_path}" "${preflight_staged_support_base}" \
-                && [ -n "${preflight_staged_support_mode}" ] \
-                && [ "${preflight_staged_support_mode}" = "${preflight_staged_support_base_mode}" ]; then
-                git reset -q HEAD -- "${preflight_staged_support_path}" 2>/dev/null \
-                  || git rm -q --cached --ignore-unmatch -- "${preflight_staged_support_path}" 2>/dev/null \
-                  || true
-              fi
-            done < "${STAGED_SUPPORT_LEDGER}"
-          fi
-
-          # >>> automation-path grant guard (preflight) >>>
-          # core.quotePath=false keeps non-ASCII names literal; names Git still
-          # C-quotes (control characters, quotes, backslashes) start with '"' and
-          # are denied below rather than slipping past the prefix match.
-          automation_staged="$(git -c core.quotePath=false diff --cached --name-only --no-renames --diff-filter=ACMDT || true)"
-          automation_paths="$(printf '%s\n' "${automation_staged}" | grep -iE '^"?(\.github|\.claude|scripts|prompts|workflow-templates)(/|$)' || true)"
-          if [ -n "${automation_paths}" ]; then
-            automation_staged_file="$(mktemp "${TMPDIR:-/tmp}/implement-automation-staged.XXXXXX")"
-            printf '%s\n' "${automation_paths}" > "${automation_staged_file}"
-            automation_reason="grant_unavailable"
-            automation_denied="${automation_paths}"
-            automation_rc=127
-            if grep -q '^"' <<< "${automation_paths}"; then
-              automation_rc=30
-              automation_reason="quoted_path"
-            elif [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" ]; then
-              automation_error_file="$(mktemp "${TMPDIR:-/tmp}/implement-automation-error.XXXXXX")"
-              automation_rc=0
-              automation_denied="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
-                --check-automation-paths --staged-file "${automation_staged_file}" \
-                --automation-grant-file "${AUTOMATION_PATH_GRANT_FILE:-${RUNTIME_DIR:-/nonexistent}/automation_path_grant.json}" \
-                --allow-workflow-edits "${ALLOW_WORKFLOW_EDITS:-false}" --issue-number "${ISSUE_NUMBER}" \
-                2> "${automation_error_file}")" || automation_rc=$?
-              if [ "${automation_rc}" -eq 30 ]; then
-                automation_reason="$(grep -m1 '^reason=' "${automation_error_file}" | cut -d= -f2 || true)"
-              fi
-              rm -f "${automation_error_file}"
-            fi
-            rm -f "${automation_staged_file}"
-            if [ "${automation_rc}" -ne 0 ]; then
-              if [ "${automation_rc}" -ne 30 ] || [ -z "${automation_denied}" ]; then
-                automation_denied="${automation_paths}"
-                automation_reason="guard_error"
-              fi
-              automation_count="$(printf '%s\n' "${automation_denied}" | wc -l | tr -d ' ')"
-              automation_granted="$(jq -r '.paths[]? | strings' "${AUTOMATION_PATH_GRANT_FILE:-${RUNTIME_DIR:-/nonexistent}/automation_path_grant.json}" 2>/dev/null || true)"
-              {
-                echo 'scope_violation_blocked=automation-path'
-                echo "scope_violation_count=${automation_count}"
-                echo 'scope_violation_files<<__SVF_EOF__'
-                printf '%s\n' "${automation_denied}"
-                echo '__SVF_EOF__'
-                echo 'scope_violation_allowlist<<__SVA_EOF__'
-                printf 'reason=%s\n%s\n' "${automation_reason}" "${automation_granted}"
-                echo '__SVA_EOF__'
-              } >> "$GITHUB_OUTPUT"
-              echo "::error::Automation-path grant denied ${automation_count} staged path(s)."
-              echo "IMPLEMENT_AUTOMATION_PATH_GUARD mode=check outcome=rejected reason=${automation_reason} issue=${ISSUE_NUMBER} count=${automation_count}"
-              exit 1
-            fi
-            echo "IMPLEMENT_AUTOMATION_PATH_GUARD mode=check outcome=granted issue=${ISSUE_NUMBER} count=0"
-          fi
-          # <<< automation-path grant guard (preflight) <<<
-
-          # >>> files_touched scope-enforcement guard (preflight) >>>
-          # Mirror of the destructive-commit guard above, for scope drift:
-          # reject when the staged change set includes paths the issue's
-          # files_touched allowlist does not cover. Shares the same projected
-          # staged index the destructive guard just inspected (GIT_INDEX_FILE
-          # is still the temp index here). Fails OPEN — no allowlist, master
-          # toggle off, or a missing helper all log-and-allow, matching the
-          # missing-allowlist posture used elsewhere in this workflow.
-          if [ "${ENFORCE_FILES_TOUCHED:-true}" != "true" ] && [ "${HEAL_ROUTE:-false}" != true ]; then
-            echo "::notice::files_touched scope guard disabled (ENFORCE_FILES_TOUCHED='${ENFORCE_FILES_TOUCHED:-true}')."
-          else
-            scope_staged="$(git diff --cached --name-only --diff-filter=ACMRD || true)"
-            if [ -n "${scope_staged}" ]; then
-              scope_staged_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-staged.XXXXXX")"
-              scope_allowlist_file="$(mktemp "${TMPDIR:-/tmp}/implement-scope-allowlist.XXXXXX")"
-              printf '%s\n' "${scope_staged}" > "${scope_staged_file}"
-              scope_violations=""
-              scope_rc=0
-              scope_guard_extra_args=()
-              if [ "${HEAL_ROUTE:-false}" = true ]; then
-                scope_guard_extra_args+=(--strict-allowlist)
-              fi
-              if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" ]; then
-                set +e
-                scope_violations="$(python3 "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/files_touched_scope_guard.py" \
-                  "$(if [ "${HEAL_ROUTE:-false}" = true ]; then printf '%s' '--allowlist-file'; else printf '%s' '--issue-body-file'; fi)" \
-                  "$(if [ "${HEAL_ROUTE:-false}" = true ]; then printf '%s' "${HEAL_SCOPE_FILE:?}"; else printf '%s' "${ISSUE_BODY_FILE:-}"; fi)" \
-                  "${scope_guard_extra_args[@]}" \
-                  --issue-number "${ISSUE_NUMBER:-}" \
-                  --issue-meta-file "${ISSUE_META_FILE:-}" --pipeline-login "${IMPLEMENT_SCOPE_PIPELINE_LOGIN:-}" \
-                  --staged-file "${scope_staged_file}" \
-                  --allowlist-out "${scope_allowlist_file}")"
-                scope_rc=$?
-                set -e
-              else
-                scope_rc=127
-              fi
-              rm -f "${scope_staged_file}"
-              case "${scope_rc}" in
-                0)
-                  echo "files_touched scope guard: all staged paths fall within the issue allowlist."
-                  ;;
-                10)
-                  if [ "${HEAL_ROUTE:-false}" = true ]; then
-                    echo '::error::Verified heal scope is empty; refusing scope check.' >&2
-                    exit 1
-                  fi
-                  echo "::notice::files_touched scope guard skipped: issue declares no files_touched allowlist."
-                  ;;
-                20)
-                  scope_count="$(printf '%s\n' "${scope_violations}" | sed '/^$/d' | wc -l | tr -d ' ')"
-                  scope_allowlist="$(sed '/^$/d' "${scope_allowlist_file}" 2>/dev/null || true)"
-                  if [ "${ALLOW_OUT_OF_SCOPE_FILES:-false}" = "true" ] && [ "${HEAL_ROUTE:-false}" != true ]; then
-                    echo "::warning::files_touched scope guard: ${scope_count} staged path(s) outside the allowlist, but ALLOW_OUT_OF_SCOPE_FILES=true — allowing."
-                    printf '%s\n' "${scope_violations}" | sed '/^$/d;s/^/  - /'
-                  else
-                    echo "::error::Refusing to commit: ${scope_count} staged path(s) fall outside the issue's files_touched allowlist and ALLOW_OUT_OF_SCOPE_FILES is not 'true'."
-                    printf '%s\n' "${scope_violations}" | sed '/^$/d;s/^/  - /'
-                    {
-                      echo "scope_violation_blocked=out-of-scope"
-                      echo "scope_violation_count=${scope_count}"
-                      echo 'scope_violation_files<<__SVF_EOF__'
-                      printf '%s\n' "${scope_violations}" | sed '/^$/d'
-                      echo '__SVF_EOF__'
-                      echo 'scope_violation_allowlist<<__SVA_EOF__'
-                      printf '%s\n' "${scope_allowlist}" | sed '/^$/d'
-                      echo '__SVA_EOF__'
-                    } >> "$GITHUB_OUTPUT"
-                    rm -f "${scope_allowlist_file}"
-                    exit 1
-                  fi
-                  ;;
-                *)
-                  if [ "${HEAL_ROUTE:-false}" = true ]; then
-                    echo "::error::Heal scope guard failed with exit ${scope_rc}; refusing scope check." >&2
-                    exit 1
-                  fi
-                  echo "::warning::files_touched scope guard failed open (helper exit ${scope_rc}); staged change set not scope-checked this run."
-                  ;;
-              esac
-              rm -f "${scope_allowlist_file}"
-            fi
-          fi
-          # <<< files_touched scope-enforcement guard (preflight) <<<
+          # shellcheck source=/dev/null
+          source "${IMPLEMENT_STEP_SCRIPT}"
 
       - name: Validate syntax of changed files
         if: env.SKIP_IMPLEMENT != 'true' && env.HEAL_ROUTE != 'true'
@@ -4929,528 +4578,13 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           DEPENDENCY_PROXY_ALLOWED_HOSTS: ${{ vars.DEPENDENCY_PROXY_ALLOWED_HOSTS || '' }}
         run: |
-          set -euo pipefail
-          echo "repaired=false" >> "$GITHUB_OUTPUT"
-
-          # Source sanitize_codex_prompt_file (best-effort) so the
-          # repair-prompt pipe to codex strips invalid UTF-8 first.
+          IMPLEMENT_STEP_SCRIPT="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}/implement_step_post_codex_syntax_repair.sh"
+          if [ -z "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}" ] || [ ! -f "${IMPLEMENT_STEP_SCRIPT}" ] || [ -L "${IMPLEMENT_STEP_SCRIPT}" ]; then
+            echo "::error::Trusted pre-editor copy of implement_step_post_codex_syntax_repair.sh is missing (IMPLEMENT_STAGED_SUPPORT_RUN_DIR=${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-<unset>}); the step never runs a workspace copy."
+            exit 1
+          fi
           # shellcheck source=/dev/null
-          source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true
-
-          REPAIR_PROMPT_TEMPLATE="prompts/mode-implement-repair.txt"
-          REPAIR_VALIDATOR_SCRIPT="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/validate_changed_files_syntax.sh"
-          LEDGER_SUBSTATE_HELPER="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/ledger_emit_substate.sh"
-
-          # The repair agent runs in the same credential-free, network-isolated
-          # container as the implementation attempts (scripts/codex_isolated_exec.sh
-          # from the trusted IMPLEMENT_STAGED_SUPPORT_RUN_DIR copy), reusing the
-          # sandbox the implementation step prepared when it is still there.
-          CODEX_ISOLATED_EXEC="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}/codex_isolated_exec.sh"
-          if [ -z "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}" ] || [ ! -f "${CODEX_ISOLATED_EXEC}" ]; then
-            echo "::error::CODEX_ISOLATION trusted support copy missing (IMPLEMENT_STAGED_SUPPORT_RUN_DIR=${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-<unset>}); Codex is never run on the host."
-            exit 1
-          fi
-          CODEX_ISOLATED_ROOT="${CODEX_ISOLATED_IMPLEMENT_ROOT:-}"
-          if [ -z "${CODEX_ISOLATED_ROOT}" ] || [ ! -d "${CODEX_ISOLATED_ROOT}" ]; then
-            # Only the sandbox image build is retried (bounded, #7196); every
-            # other isolation failure still fails the step on its first try.
-            if ! CODEX_ISOLATED_ROOT="$(CODEX_ISOLATED_IMAGE_BUILD_ATTEMPTS=3 bash "${CODEX_ISOLATED_EXEC}" prepare --workdir "$(pwd)" --deps)"; then
-              echo "::error::CODEX_ISOLATION sandbox preparation failed; Codex is never run on the host."
-              exit 1
-            fi
-          fi
-          CODEX_ISOLATED_MODE="workspace"
-          export CODEX_ISOLATED_EXEC CODEX_ISOLATED_ROOT CODEX_ISOLATED_MODE
-          emit_implement_substate() {
-            local phase_name="$1"
-            local mode_name="$2"
-            local event_or_substate="$3"
-            local attempt_number="$4"
-            local tokens_log_file="${5:-}"
-            local args=()
-
-            [ -f "${LEDGER_SUBSTATE_HELPER}" ] || return 0
-
-            args=(
-              --run-id "${GITHUB_RUN_ID}"
-              --workflow "implement"
-              --phase "${phase_name}"
-              --mode "${mode_name}"
-              --attempt "${attempt_number}"
-              --model "${MODEL_EDITOR:-}"
-              --issue-number "${ISSUE_NUMBER:-}"
-              --actor "${GITHUB_ACTOR:-codex-bot}"
-              --repo-root "${GITHUB_WORKSPACE:-$(pwd)}"
-            )
-            case "${event_or_substate}" in
-              codex_stall_observed|codex_stall_killed)
-                args+=(--event-type "${event_or_substate}")
-                ;;
-              *)
-                args+=(--substate "${event_or_substate}")
-                ;;
-            esac
-            if [ -n "${tokens_log_file}" ]; then
-              args+=(--tokens-log-file "${tokens_log_file}")
-            fi
-
-            bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" || true
-          }
-          CAPTURE_FILE="${RUNTIME_DIR}/post_codex_validation_errors.txt"
-          INITIAL_CHANGED_FILE="${RUNTIME_DIR}/post_codex_initial_changed_files.txt"
-          CAPTURED_FILES_FILE="${RUNTIME_DIR}/post_codex_captured_files.txt"
-          ALLOW_LIST_FILE="${RUNTIME_DIR}/post_codex_repair_allow_list.txt"
-
-          if [ ! -s "${REPAIR_PROMPT_TEMPLATE}" ] || [ ! -s "${REPAIR_VALIDATOR_SCRIPT}" ]; then
-            echo "::error::Required repair artifacts are missing from repair-prompt-and-validator-split dependency."
-            echo "Expected prompt: ${REPAIR_PROMPT_TEMPLATE} (non-empty)"
-            echo "Expected validator: ${REPAIR_VALIDATOR_SCRIPT} (non-empty)"
-            exit 1
-          fi
-
-          max_attempts_raw="${MAX_POST_CODEX_REPAIR_ATTEMPTS:-3}"
-          if ! [[ "${max_attempts_raw}" =~ ^[0-9]+$ ]] || [ "${max_attempts_raw}" -lt 0 ]; then
-            echo "::warning::Invalid MAX_POST_CODEX_REPAIR_ATTEMPTS='${max_attempts_raw}'. Falling back to 3."
-            max_attempts=3
-          else
-            max_attempts="${max_attempts_raw}"
-          fi
-
-          if [ "${max_attempts}" -eq 0 ]; then
-            echo "::notice::MAX_POST_CODEX_REPAIR_ATTEMPTS=0; skipping in-job post-Codex syntax repair attempts."
-            exit 1
-          fi
-
-          # Repair phases honour MODEL_REPAIR_REASONING_EFFORT (default
-          # "high"), separate from the editor's MODEL_REASONING_EFFORT so
-          # operators can drop repair effort independently of the main
-          # editor. Patch ~/.codex/config.toml in-place so `codex exec`
-          # honors it (the CLI has no --reasoning-effort flag). Validate
-          # against the known set first; fall back with a warning on a
-          # typo.
-          REPAIR_REASONING="${MODEL_REPAIR_REASONING_EFFORT:-high}"
-          case "${REPAIR_REASONING}" in
-            xhigh|high|medium|low|none) ;;
-            *)
-              echo "::warning::Invalid MODEL_REPAIR_REASONING_EFFORT='${REPAIR_REASONING}'. Falling back to 'high'."
-              REPAIR_REASONING="high"
-              ;;
-          esac
-          REPAIR_CODEX_CONFIG="${HOME:-/root}/.codex/config.toml"
-          upsert_repair_reasoning_into_config() {
-            local cfg="$1"
-            PYTHONDONTWRITEBYTECODE=1 python3 - "${cfg}" "${REPAIR_REASONING}" <<'PY' || return 1
-          from pathlib import Path
-          import re
-          import sys
-
-          config_path = Path(sys.argv[1])
-          reasoning = sys.argv[2]
-          replacement = f'model_reasoning_effort = "{reasoning}"\n'
-
-          if not config_path.exists():
-              config_path.parent.mkdir(parents=True, exist_ok=True)
-              config_path.write_text(replacement, encoding="utf-8")
-              raise SystemExit(0)
-
-          text = config_path.read_text(encoding="utf-8")
-          lines = text.splitlines(keepends=True)
-
-          first_table_idx = len(lines)
-          for idx, line in enumerate(lines):
-              stripped = line.lstrip()
-              if re.match(r"^(\[[^\]]+\]|\[\[[^\]]+\]\])(?:[ \t]+#.*)?$", stripped):
-                  first_table_idx = idx
-                  break
-
-          top_level_lines = lines[:first_table_idx]
-          rest_lines = lines[first_table_idx:]
-          pattern = re.compile(r"^[ \t]*model_reasoning_effort[ \t]*=")
-
-          updated_top = []
-          replaced = False
-          for line in top_level_lines:
-              if pattern.match(line):
-                  if not replaced:
-                      updated_top.append(replacement)
-                      replaced = True
-                  continue
-              updated_top.append(line)
-
-          if not replaced:
-              if updated_top and not updated_top[-1].endswith("\n"):
-                  updated_top[-1] += "\n"
-              updated_top.append(replacement)
-
-          config_path.write_text("".join(updated_top + rest_lines), encoding="utf-8")
-          PY
-          }
-          if ! upsert_repair_reasoning_into_config "${REPAIR_CODEX_CONFIG}"; then
-            echo "::warning::Failed to patch ~/.codex/config.toml for repair reasoning; leaving existing config unchanged."
-          else
-            echo "Patched ~/.codex/config.toml: model_reasoning_effort=${REPAIR_REASONING} for repair phase."
-          fi
-
-          # No Serena hints: the agent runs in the isolated container
-          # (scripts/codex_isolated_exec.sh), where no MCP server is
-          # configured, so a hint would only send it to tools that are not
-          # there. Semble results are unaffected: they are rendered into the
-          # prompt on the host.
-          REPAIR_SERENA_TOOL_HINTS=""
-          REPAIR_RENDERED_PROMPT_TEMPLATE="${RUNTIME_DIR}/mode-implement-repair.rendered.txt"
-          if SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/render_prompt.sh" "${REPAIR_PROMPT_TEMPLATE}" > "${REPAIR_RENDERED_PROMPT_TEMPLATE}"; then
-            REPAIR_PROMPT_TEMPLATE="${REPAIR_RENDERED_PROMPT_TEMPLATE}"
-          else
-            echo "::warning::Failed to render repair prompt template ${REPAIR_PROMPT_TEMPLATE}; using raw prompt."
-          fi
-          REPAIR_CONTINUATION_PROMPT=""
-          if [ -s "prompts/mode-implement-repair-continuation.txt" ]; then
-            REPAIR_CONTINUATION_PROMPT="${RUNTIME_DIR}/mode-implement-repair-continuation.rendered.txt"
-            if ! SERENA_TOOL_HINTS="${REPAIR_SERENA_TOOL_HINTS}" bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/render_prompt.sh" "prompts/mode-implement-repair-continuation.txt" > "${REPAIR_CONTINUATION_PROMPT}"; then
-              echo "::warning::Failed to render repair continuation prompt; later repair attempts will fall back to the full prompt path."
-              REPAIR_CONTINUATION_PROMPT=""
-            fi
-          fi
-
-          : > "${INITIAL_CHANGED_FILE}"
-          while IFS= read -r -d '' path; do
-            printf '%s\n' "${path}" >> "${INITIAL_CHANGED_FILE}"
-          done < <(git diff --name-only --diff-filter=ACMR -z HEAD)
-          while IFS= read -r -d '' path; do
-            printf '%s\n' "${path}" >> "${INITIAL_CHANGED_FILE}"
-          done < <(git ls-files --others --exclude-standard -z -- '*.py' '*.js' '*.sh' '*.yml' '*.yaml' '*.json')
-          sort -u "${INITIAL_CHANGED_FILE}" -o "${INITIAL_CHANGED_FILE}" || true
-
-          : > "${CAPTURED_FILES_FILE}"
-          if [ -s "${CAPTURE_FILE}" ]; then
-            awk '/^===== / && / \([^)]*\) =====$/ { line=$0; sub(/^===== /, "", line); sub(/ \([^)]*\) =====$/, "", line); print line }' "${CAPTURE_FILE}" > "${CAPTURED_FILES_FILE}" || true
-            sort -u "${CAPTURED_FILES_FILE}" -o "${CAPTURED_FILES_FILE}" || true
-          fi
-
-          : > "${ALLOW_LIST_FILE}"
-          if [ -s "${CAPTURED_FILES_FILE}" ]; then
-            comm -12 "${INITIAL_CHANGED_FILE}" "${CAPTURED_FILES_FILE}" > "${ALLOW_LIST_FILE}" || true
-          else
-            cp "${INITIAL_CHANGED_FILE}" "${ALLOW_LIST_FILE}"
-          fi
-
-          if [ ! -s "${ALLOW_LIST_FILE}" ]; then
-            echo "::error::Effective post-Codex repair allow-list is empty. Failing repair path deterministically."
-            exit 1
-          fi
-
-          is_allowed_path() {
-            local p="$1"
-            grep -Fqx -- "${p}" "${ALLOW_LIST_FILE}" 2>/dev/null
-          }
-
-          if [ -f "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/semble_helpers.sh" ]; then
-            # shellcheck source=/dev/null
-            source "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/semble_helpers.sh" 2>/dev/null || true
-          fi
-
-            build_repair_semble_query() {
-              local output_file="$1"
-              : > "${output_file}"
-              python3 - "${CAPTURE_FILE}" "${ALLOW_LIST_FILE}" "${CAPTURED_FILES_FILE}" "${output_file}" <<'PY' || { echo "::warning::Failed to build repair Semble query" >&2; :; }
-          import os
-          import re
-          import sys
-
-          capture_path, allow_list_path, captured_files_path, output_path = sys.argv[1:5]
-
-
-          def read_lines(path: str) -> list[str]:
-          	try:
-          		with open(path, "r", encoding="utf-8", errors="replace") as handle:
-          			return [line.rstrip("\n") for line in handle]
-          	except OSError:
-          		return []
-
-
-          capture_lines = read_lines(capture_path)
-          allow_list_lines = [line.strip() for line in read_lines(allow_list_path) if line.strip()]
-          captured_file_lines = [line.strip() for line in read_lines(captured_files_path) if line.strip()]
-          tail_text = "\n".join(capture_lines[-120:])
-
-          seen: set[str] = set()
-          identifiers: list[str] = []
-          stop_words = {
-          	"and",
-          	"bash",
-          	"captured",
-          	"command",
-          	"diff",
-          	"error",
-          	"errors",
-          	"failed",
-          	"failure",
-          	"file",
-          	"files",
-          	"from",
-          	"line",
-          	"lines",
-          	"list",
-          	"path",
-          	"repair",
-          	"syntax",
-          	"the",
-          	"traceback",
-          	"validate",
-          	"validation",
-          	"warning",
-          	"with",
-          	"yaml",
-          }
-
-
-          def add_identifier(value: str) -> None:
-          	value = value.strip()
-          	if not value or value in seen:
-          		return
-          	seen.add(value)
-          	identifiers.append(value)
-
-
-          for path in allow_list_lines[:20]:
-          	add_identifier(path)
-          	add_identifier(os.path.basename(path))
-
-          for path in captured_file_lines[:20]:
-          	add_identifier(path)
-          	add_identifier(os.path.basename(path))
-
-          for match in re.findall(r"(?:[A-Za-z0-9_.-]+/)*([A-Za-z0-9_.-]+\.[A-Za-z0-9_.-]+)", tail_text):
-          	add_identifier(match)
-
-          for match in re.findall(r"\b[A-Za-z_][A-Za-z0-9_]{2,}\b", tail_text):
-          	if match.lower() in stop_words:
-          		continue
-          	add_identifier(match)
-          	if len(identifiers) >= 40:
-          		break
-
-          parts: list[str] = ["Implement post-Codex syntax repair"]
-          if allow_list_lines:
-          	parts.append("Allow-list files:\n" + "\n".join(allow_list_lines[:20]))
-          if captured_file_lines:
-          	parts.append("Captured syntax-failure files:\n" + "\n".join(captured_file_lines[:20]))
-          if identifiers:
-          	parts.append("Captured diagnostics identifiers:\n" + "\n".join(identifiers[:40]))
-
-          query_text = "\n\n".join(part for part in parts if part).strip()
-          if query_text:
-          	with open(output_path, "w", encoding="utf-8") as handle:
-          		handle.write(query_text)
-          		handle.write("\n")
-          PY
-            }
-
-          REPAIR_SEMBLE_QUERY_FILE="${RUNTIME_DIR}/post_codex_repair_semble_query.txt"
-          build_repair_semble_query "${REPAIR_SEMBLE_QUERY_FILE}"
-
-          # Same editor view as the implementation step: the repair agent
-          # edits the branch's own helper copies, never SCRIPT_REF's.
-          STAGED_SUPPORT_WORKSPACE_HELPER="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_staged_support_workspace.sh"
-          if [ -f "${STAGED_SUPPORT_WORKSPACE_HELPER}" ]; then
-            bash "${STAGED_SUPPORT_WORKSPACE_HELPER}" restore
-          fi
-
-          repair_succeeded=false
-          for attempt in $(seq 1 "${max_attempts}"); do
-            echo "Post-Codex syntax repair attempt ${attempt}/${max_attempts}"
-            emit_implement_substate "implement_repair" "implement_repair" "PreparingWorkspace" "${attempt}"
-
-            BASELINE_COMMIT="$(git stash create "post-codex-repair-attempt-${attempt}" || true)"
-            if [ -z "${BASELINE_COMMIT}" ]; then
-              BASELINE_COMMIT="HEAD"
-            fi
-
-            PRE_UNTRACKED_FILE="${RUNTIME_DIR}/post_codex_pre_untracked_attempt_${attempt}.txt"
-            : > "${PRE_UNTRACKED_FILE}"
-            while IFS= read -r -d '' pre_untracked; do
-              [ -n "${pre_untracked}" ] || continue
-              if ! is_allowed_path "${pre_untracked}"; then
-                printf '%s\n' "${pre_untracked}" >> "${PRE_UNTRACKED_FILE}"
-              fi
-            done < <(git ls-files --others --exclude-standard -z)
-            sort -u "${PRE_UNTRACKED_FILE}" -o "${PRE_UNTRACKED_FILE}" || true
-
-            get_blob_for_source() {
-              local source_ref="$1"
-              local file_path="$2"
-              if git cat-file -e "${source_ref}:${file_path}" >/dev/null 2>&1; then
-                git rev-parse "${source_ref}:${file_path}" 2>/dev/null || true
-              else
-                echo "__MISSING__"
-              fi
-            }
-
-            REPAIR_PROMPT_FILE="${RUNTIME_DIR}/mode-implement-repair-attempt-${attempt}.txt"
-            {
-              cat "${REPAIR_PROMPT_TEMPLATE}"
-              echo
-              echo "=== CAPTURED SYNTAX DIAGNOSTICS (FULL) ==="
-              if [ -s "${CAPTURE_FILE}" ]; then
-                cat "${CAPTURE_FILE}"
-              else
-                echo "(capture file missing or empty)"
-              fi
-              echo
-              echo "=== INITIAL POST-CODEX CHANGED FILES ==="
-              cat "${INITIAL_CHANGED_FILE}"
-              echo
-              echo "=== EFFECTIVE REPAIR ALLOW-LIST ==="
-              cat "${ALLOW_LIST_FILE}"
-              echo
-              echo "=== CURRENT DIFF FOR ALLOW-LIST FILES ==="
-              while IFS= read -r allowed_file; do
-                [ -n "${allowed_file}" ] || continue
-                echo "----- ${allowed_file} -----"
-                if git ls-files --error-unmatch -- "${allowed_file}" >/dev/null 2>&1; then
-                  git diff -- "${allowed_file}" || true
-                elif [ -f "${allowed_file}" ]; then
-                  git diff --no-index -- /dev/null "${allowed_file}" || true
-                else
-                  echo "(file not found in working tree)"
-                fi
-              done < "${ALLOW_LIST_FILE}"
-              echo
-              if [ -s "${REPAIR_SEMBLE_QUERY_FILE}" ] && declare -F semble_query_block >/dev/null 2>&1; then
-                SEMBLE_STATIC_CONTEXT_FILE=./pre_assembled_static.txt semble_query_block "$(cat "${REPAIR_SEMBLE_QUERY_FILE}")" 6 "Implement Repair Context" || true
-              fi
-            } > "${REPAIR_PROMPT_FILE}"
-            emit_implement_substate "implement_repair" "implement_repair" "BuildingPrompt" "${attempt}"
-
-            REPAIR_OUTPUT_FILE="${RUNTIME_DIR}/post_codex_repair_output_attempt_${attempt}.txt"
-            REPAIR_LOG_FILE="${RUNTIME_DIR}/post_codex_repair_log_attempt_${attempt}.txt"
-            repair_thread_reuse_continuation_file=""
-            if [ "${attempt}" -gt 1 ] && [ -n "${REPAIR_CONTINUATION_PROMPT}" ]; then
-              repair_thread_reuse_continuation_file="${REPAIR_CONTINUATION_PROMPT}"
-            fi
-            if command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
-              sanitize_codex_prompt_file "${REPAIR_PROMPT_FILE}"
-            fi
-            bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/workspace_safety_check.sh"
-            emit_implement_substate "implement_repair" "implement_repair" "LaunchingAgentProcess" "${attempt}" "${REPAIR_LOG_FILE}"
-            emit_implement_substate "implement_repair" "implement_repair" "InitializingSession" "${attempt}" "${REPAIR_LOG_FILE}"
-            emit_implement_substate "implement_repair" "implement_repair" "StreamingTurn" "${attempt}" "${REPAIR_LOG_FILE}"
-            # Same ledger scrub as the implementation launch above.
-            repair_direct_rc=0
-            CODEX_THREAD_REUSE_STATE_KEY="implement-repair" \
-              CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR:-codex}" \
-              CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT_REPAIR" \
-              AI_ENGINE_EFFORT_HINT="${REPAIR_REASONING}" \
-              CODEX_THREAD_REUSE_PROMPT_FILE="${REPAIR_PROMPT_FILE}" \
-              CODEX_THREAD_REUSE_OUTPUT_FILE="${REPAIR_OUTPUT_FILE}" \
-              CODEX_THREAD_REUSE_PHASE="implement_repair" \
-              CODEX_THREAD_REUSE_MODEL="${MODEL_EDITOR}" \
-              CODEX_THREAD_REUSE_SKIP_GIT_REPO_CHECK="true" \
-              CODEX_THREAD_REUSE_LOG_FILE="${REPAIR_LOG_FILE}" \
-              CODEX_THREAD_REUSE_CONTINUATION_FILE="${repair_thread_reuse_continuation_file}" \
-              CODEX_THREAD_REUSE_TRANSFORM_MODE="replace-prefix" \
-              CODEX_THREAD_REUSE_MARKER_START="=== CAPTURED SYNTAX DIAGNOSTICS (FULL) ===" \
-              env -u STAGED_SUPPORT_LEDGER -u STAGED_SUPPORT_BASE_DIR -u STAGED_SUPPORT_EDITOR_HEAD_LEDGER -u IMPLEMENT_STAGED_SUPPORT_RUN_DIR \
-              bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/codex_thread_reuse.sh" direct-run || repair_direct_rc=$?
-            if [ "${repair_direct_rc}" -eq 80 ]; then
-              # Claude capacity wait (issue #7370): stop without codex.
-              echo "AI_ENGINE_CAPACITY_WAIT role=IMPLEMENT_REPAIR outcome=deferred stage=implement"
-              { echo "SKIP_IMPLEMENT=true"; echo "RESTORE_AWAITING_APPROVAL_ON_SKIP=true"; echo "CLAUDE_CAPACITY_WAIT=true"; } >> "${GITHUB_ENV}"
-              exit 0
-            fi
-            if [ "${repair_direct_rc}" -ne 0 ]; then
-              emit_implement_substate "implement_repair" "implement_repair" "Finishing" "${attempt}" "${REPAIR_LOG_FILE}"
-              echo "::warning::Post-Codex repair attempt ${attempt} failed while invoking Codex."
-              emit_implement_substate "implement_repair" "implement_repair" "Failed" "${attempt}" "${REPAIR_LOG_FILE}"
-              continue
-            fi
-            emit_implement_substate "implement_repair" "implement_repair" "Finishing" "${attempt}" "${REPAIR_LOG_FILE}"
-
-            tracked_strays=()
-            while IFS= read -r -d '' changed_path; do
-              [ -n "${changed_path}" ] || continue
-              if ! is_allowed_path "${changed_path}"; then
-                baseline_blob="$(get_blob_for_source "${BASELINE_COMMIT}" "${changed_path}")"
-                if [ -f "${changed_path}" ]; then
-                  current_blob="$(git hash-object -- "${changed_path}" 2>/dev/null || echo "__MISSING__")"
-                else
-                  current_blob="__MISSING__"
-                fi
-                if [ "${baseline_blob}" != "${current_blob}" ]; then
-                  tracked_strays+=("${changed_path}")
-                fi
-              fi
-            done < <(git diff --name-only -z HEAD)
-
-            untracked_strays=()
-            while IFS= read -r -d '' untracked_path; do
-              [ -n "${untracked_path}" ] || continue
-              if ! is_allowed_path "${untracked_path}"; then
-                if ! grep -Fqx -- "${untracked_path}" "${PRE_UNTRACKED_FILE}" 2>/dev/null; then
-                  untracked_strays+=("${untracked_path}")
-                fi
-              fi
-            done < <(git ls-files --others --exclude-standard -z)
-
-            if [ "${#tracked_strays[@]}" -gt 0 ] || [ "${#untracked_strays[@]}" -gt 0 ]; then
-              echo "::warning::Repair attempt ${attempt} produced out-of-scope edits. Rolling back stray files."
-              if [ "${#tracked_strays[@]}" -gt 0 ]; then
-                restore_from_baseline=()
-                remove_from_baseline=()
-                for stray_tracked in "${tracked_strays[@]}"; do
-                  if git cat-file -e "${BASELINE_COMMIT}:${stray_tracked}" >/dev/null 2>&1; then
-                    restore_from_baseline+=("${stray_tracked}")
-                  else
-                    remove_from_baseline+=("${stray_tracked}")
-                  fi
-                done
-                if [ "${#restore_from_baseline[@]}" -gt 0 ]; then
-                  git restore --source="${BASELINE_COMMIT}" --staged --worktree -- "${restore_from_baseline[@]}"
-                fi
-                if [ "${#remove_from_baseline[@]}" -gt 0 ]; then
-                  git rm -r -f --ignore-unmatch -- "${remove_from_baseline[@]}"
-                fi
-              fi
-              if [ "${#untracked_strays[@]}" -gt 0 ]; then
-                safe_untracked=()
-                for stray in "${untracked_strays[@]}"; do
-                  case "${stray}" in
-                    /*|../*|*/../*|*/..)
-                      echo "::error::Refusing to delete unsafe untracked stray path: ${stray}"
-                      ;;
-                    *)
-                      safe_untracked+=("${stray}")
-                      ;;
-                  esac
-                done
-                if [ "${#safe_untracked[@]}" -gt 0 ]; then
-                  rm -rf -- "${safe_untracked[@]}"
-                fi
-              fi
-              emit_implement_substate "implement_repair" "implement_repair" "Failed" "${attempt}" "${REPAIR_LOG_FILE}"
-              continue
-            fi
-
-            rm -f "${CAPTURE_FILE}"
-            if CAPTURE_FILE="${CAPTURE_FILE}" RUNTIME_DIR="${RUNTIME_DIR}" bash "${REPAIR_VALIDATOR_SCRIPT}"; then
-              repair_succeeded=true
-              emit_implement_substate "implement_repair" "implement_repair" "Succeeded" "${attempt}" "${REPAIR_LOG_FILE}"
-              break
-            fi
-            emit_implement_substate "implement_repair" "implement_repair" "Failed" "${attempt}" "${REPAIR_LOG_FILE}"
-          done
-
-          if [ -f "${STAGED_SUPPORT_WORKSPACE_HELPER}" ]; then
-            bash "${STAGED_SUPPORT_WORKSPACE_HELPER}" reinstall
-          fi
-
-          if [ "${repair_succeeded}" != 'true' ]; then
-            echo "::error::Post-Codex syntax repair did not succeed after ${max_attempts} attempt(s)."
-            exit 1
-          fi
-
-          rm -f "${CAPTURE_FILE}"
-          echo "repaired=true" >> "$GITHUB_OUTPUT"
+          source "${IMPLEMENT_STEP_SCRIPT}"
 
       - name: Restore tracked symlinks the syntax-repair editor replaced
         if: env.SKIP_IMPLEMENT != 'true'
@@ -5640,6 +4774,10 @@ jobs:
           ALLOW_WORKFLOW_EDITS: ${{ vars.ALLOW_WORKFLOW_EDITS || 'true' }}
           WRITE_GUARDS_ENABLED: ${{ vars.WRITE_GUARDS_ENABLED || 'true' }}
           SCOPE_LOCK_LABEL_ENABLED: ${{ vars.SCOPE_LOCK_LABEL_ENABLED || 'false' }}
+          REMEDIATION_NO_CODE_GUARD_ENABLED: ${{ vars.REMEDIATION_NO_CODE_GUARD_ENABLED || 'true' }}
+          # Only when the baseline checkout succeeded: on failure the run fell back
+          # to the default ref, so the staged set is the whole change set.
+          PRIOR_PR_BASELINE_BRANCH: ${{ steps.checkout_baseline.outcome == 'success' && steps.baseline_refctx.outputs.branch || '' }}
         run: |
           set -euo pipefail
           bash "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-scripts}/implement_commit_changes.sh"
@@ -7489,7 +6627,7 @@ jobs:
       always() && needs.implement.result == 'failure' &&
       needs.implement.outputs.heal_report == 'true' &&
       !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED)
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
     timeout-minutes: 10
     permissions:
       id-token: write

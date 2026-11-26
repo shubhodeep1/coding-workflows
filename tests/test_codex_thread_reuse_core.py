@@ -17,6 +17,8 @@ HELPER = REPO_ROOT / "scripts" / "codex_thread_reuse.sh"
 RENDER_PROMPT_PY = REPO_ROOT / "scripts" / "render_prompt.py"
 RENDER_PROMPT_SH = REPO_ROOT / "scripts" / "render_prompt.sh"
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_implement_text  # noqa: E402
 VALIDATE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "validate.yml"
 VALIDATE_PROCESS = REPO_ROOT / "scripts" / "validate_process.sh"
 
@@ -530,7 +532,7 @@ def test_render_prompt_shell_shim_enforces_prompt_contracts() -> None:
 
 
 def test_implement_workflow_contains_thread_reuse_wiring() -> None:
-	text = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
+	text = expanded_implement_text()
 	fetch_script_list = text.split("for f in ", 1)[1].split("; do", 1)[0]
 	assert "CODEX_THREAD_REUSE_ENABLED: ${{ vars.CODEX_THREAD_REUSE_ENABLED || 'false' }}" in text
 	assert 'echo "CODEX_THREAD_REUSE_RUNTIME_DIR=${RUNTIME_DIR}"' in text
@@ -769,7 +771,7 @@ def test_codex_engine_never_touches_claude() -> None:
 
 
 def test_implement_workflow_passes_each_role_its_engine() -> None:
-	text = IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
+	text = expanded_implement_text()
 	assert 'CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT:-codex}" \\\n              CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT" \\' in text
 	assert 'CODEX_THREAD_REUSE_ENGINE="${AI_ENGINE_RESOLVED_IMPLEMENT_REPAIR:-codex}" \\\n              CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT_REPAIR" \\' in text
 	assert 'CODEX_THREAD_REUSE_ENGINE_ROLE="IMPLEMENT_REPAIR" \\\n              AI_ENGINE_EFFORT_HINT="${REPAIR_REASONING}" \\' in text
