@@ -203,11 +203,12 @@ ci_sync_quick_read_merge()
 	return 0
 }
 
-# Delta switch: MERGE_BASE_SYNC_DELTA_CI_ENABLED, default true; on for
+# Delta switch: MERGE_BASE_SYNC_DELTA_CI_ENABLED, default true; whitespace is
+# stripped (like the merge-lease switches); on for
 # true/1/yes/on (any letter case), off for anything else.
 ci_sync_quick_delta_enabled()
 {
-	case "$(printf '%s' "${MERGE_BASE_SYNC_DELTA_CI_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+	case "$(printf '%s' "${MERGE_BASE_SYNC_DELTA_CI_ENABLED:-true}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')" in
 		true|1|yes|on) return 0 ;;
 	esac
 	return 1

@@ -7,4 +7,4 @@ What this means for operators: expect more `[sync-quick]` final CI runs and fewe
 
 ### For contributors
 
-New: `scripts/ci_sync_quick.sh delta-supported`, the delta branches of its `verify` and `run-tests`, and the delta arm of `_pr_base_sync_dispatch_final_ci` in `scripts/pr_checks_lib.sh`. `scripts/stage_switches.json` also registers `MERGE_LEASE_READY_GRANT_ENABLED` and `MERGE_LEASE_CONFLICT_RELEASE_ENABLED`, which Phase 1 added to the workflows.
+New: `scripts/ci_sync_quick.sh delta-supported`, the delta branches of its `verify` and `run-tests`, and the delta arm of `_pr_base_sync_dispatch_final_ci` in `scripts/pr_checks_lib.sh`. `scripts/stage_switches.json` also updates the stage text of `MERGE_LEASE_READY_GRANT_ENABLED` and `MERGE_LEASE_CONFLICT_RELEASE_ENABLED`, which Phase 1 added to the workflows, and adds `on_values` to both.

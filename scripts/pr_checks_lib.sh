@@ -2277,7 +2277,7 @@ _pr_base_sync_dispatch_final_ci()
 				# reason= stays one token: the classifier's `other <path>` is logged as overlap_other.
 				if [ "${sync_ci_verdict}" != "ci_wiring_only" ]; then
 					sync_ci_reason="overlap_other"
-					sync_ci_delta_switch="$(printf '%s' "${MERGE_BASE_SYNC_DELTA_CI_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
+					sync_ci_delta_switch="$(printf '%s' "${MERGE_BASE_SYNC_DELTA_CI_ENABLED:-true}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
 					case "${sync_ci_delta_switch}" in
 						true|1|yes|on)
 							# Probe first: an older ci_sync_quick.sh has no delta mode.

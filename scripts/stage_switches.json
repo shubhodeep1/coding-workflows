@@ -396,7 +396,7 @@
 		{
 			"name": "MERGE_LEASE_CONFLICT_RELEASE_ENABLED",
 			"default": "true",
-			"stage": "Merge-lease ready-first grant (issue #10098, Phase 1 of docs/plans/merge-lease-short-critical-section-plan.md): the merge-train tick releases a holder that conflicts with its base once per PR while another waiter is ready (released_conflict); only false turns it off.",
+			"stage": "Merge-lease conflict release (issue #10098, Phase 1 of docs/plans/merge-lease-short-critical-section-plan.md): the merge-train tick releases a holder that conflicts with its base once per PR while another waiter is ready (released_conflict); only false turns it off.",
 			"on_values": ["1", "yes", "on"]
 		},
 		{
