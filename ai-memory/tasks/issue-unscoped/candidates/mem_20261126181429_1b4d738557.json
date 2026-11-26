@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:25309-25321 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The judge-failure and unparseable-output fallback paths execute `fallback_action` (possibly `escalate_human` or `close_and_reissue`) without checking `_sj_review_waiting_for_runner`, so the review-runner hold does not apply there.\n  WHY: A judge failure while a review of the linked PR's current head is queued dispatches the escalation instead of holding; both reviewers rated it NIT, and anthropic_claude-sonnet-5_5 explicitly declined to report it as pre-existing behavior outside this PR.\n- tests/test_orchestrate_poll_process.py:35998-36013 | severity=low | confidence=3\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: No test covers the combined hold branch (`STALL_ACTIVE_SET_UNVERIFIABLE` and `_sj_review_waiting_for_runner` both true) at scripts/orchestrate_poll_process.sh:25470-25472.\n  WHY: A regression in the `${_judge_effective_label%)}, review_waiting_for_runner)` expansion could ship a malformed label in the judge comment and Telegram text without any test failing (rated NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:25309-25320 | severity=low | confidence=4\n  PROBLEM: These fallback paths execute `fallback_action` without checking `_sj_review_waiting_for_runner`. With `ENABLE_STALL_HUMAN_TERMINALIZATION=true`, a phase at its escalation rung can produce `fallback_action=escalate_human`.\n  WHY: If the linked PR's current-head review is queued and the judge fails or returns unparseable output, the fallback escalates to a human instead of holding. The hold is applied only after successful parsing, and `execute_stall_recovery_action` only guards against `STALL_ACTIVE_SET_UNVERIFIABLE`. (Source label: SEVERITY: NIT)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:25309-25321 | severity=low | confidence=4\n  PROBLEM: The two fallback paths call `execute_stall_recovery_action ... \"${fallback_action}\"` directly without consulting `_sj_review_waiting_for_runner`, which is already computed at line 24993 and in scope. The hold at 25436-25442 never applies on the fallback branch.\n  WHY: A tick whose judge invocation fails while a review run waits for a runner dispatches the fallback action (which can be `escalate_human` or `close_and_reissue`) instead of holding. (Source label: SEVERITY: NIT)\n- tests/test_orchestrate_poll_process.py:35998-36013 | severity=low | confidence=3\n  PROBLEM: The normalized-escalate test does not cover the combined-hold branch at scripts/orchestrate_poll_process.sh:25470-25472 (`STALL_ACTIVE_SET_UNVERIFIABLE` and `_sj_review_waiting_for_runner` both true).\n  WHY: A regression in the `${_judge_effective_label%)}, review_waiting_for_runner)` expansion would pass CI silently, and a malformed label would reach operators. (Source label: SEVERITY: NIT)\n- HARDENING_SUGGESTIONS: scripts/orchestrate_poll_process.sh 25309-25313 and 25317-25321 \u2014 before each `execute_stall_recovery_action ... \"${fallback_action}\"`, hold when `_sj_review_waiting_for_runner` is true and `fallback_action` is `escalate_human` or `close_and_reissue`. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c62cb08cdbf2fae7dc9f05a2d81920366431a9848e7805d369618497beaa12f5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10152,
+    "run_id": "45860052523",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45860052523",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126181429_1b4d738557",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10152,
+    "run_id": "45860052523"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T18:14:29Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
