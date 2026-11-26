@@ -841,16 +841,25 @@ single_pass_base_sync_carry()
 		# Phase 3): a head that is no freshness update may be the resolver's
 		# verified [ai-merge-resolve] merge of an audited head.
 		carry_mr_rc="-"
-		if [ "${carry_fs_rc}" != "0" ] && [ "${MERGE_RESOLVE_DELTA_REVIEW_ENABLED:-true}" != "false" ] \
+		# Same switch parse as the gate and _pr_merge_resolve_marker_post:
+		# only empty or true (any case) is on; any other value is off.
+		carry_mr_switch="$(printf '%s' "${MERGE_RESOLVE_DELTA_REVIEW_ENABLED:-true}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+		if [ "${carry_fs_rc}" != "0" ] && { [ -z "${carry_mr_switch}" ] || [ "${carry_mr_switch}" = "true" ]; } \
 			&& type review_head_gate_merge_resolve >/dev/null 2>&1 \
 			&& grep -Fq "resolve=${head_sha} " "${carry_tmp}/comments.json" 2>/dev/null; then
 			review_head_gate_merge_resolve "${REPOSITORY}" "${PR_NUMBER}" "${head_sha}" "${base_ref}" "${SECURITY_PASS_AUTHOR_LOGIN}" "${carry_tmp}/comments.json" >> "${carry_tmp}/helper.log" 2>/dev/null
 			carry_mr_rc="$?"
 		fi
-		printf '%s %s %s %s %s\n' "${carry_fs_rc}" "${REVIEW_HEAD_GATE_FRESHNESS_FROM:-}" "${REVIEW_HEAD_GATE_FRESHNESS_BASE_PARENT:-}" "${carry_mr_rc}" "${REVIEW_HEAD_GATE_MERGE_RESOLVE_FROM:-}"
+		# Every field is printed non-empty ("-" for none): the default-IFS
+		# read below would otherwise collapse empty fields and shift the rest.
+		printf '%s %s %s %s %s\n' "${carry_fs_rc:--}" "${REVIEW_HEAD_GATE_FRESHNESS_FROM:--}" "${REVIEW_HEAD_GATE_FRESHNESS_BASE_PARENT:--}" "${carry_mr_rc:--}" "${REVIEW_HEAD_GATE_MERGE_RESOLVE_FROM:--}"
 	)" || carry_result=""
 	[ -s "${carry_tmp}/helper.log" ] && cat "${carry_tmp}/helper.log"
 	read -r carry_rc carry_from carry_base_parent carry_mr_rc carry_mr_from <<< "${carry_result}"
+	[ "${carry_from:-}" = "-" ] && carry_from=""
+	[ "${carry_base_parent:-}" = "-" ] && carry_base_parent=""
+	[ "${carry_mr_rc:-}" = "-" ] && carry_mr_rc=""
+	[ "${carry_mr_from:-}" = "-" ] && carry_mr_from=""
 	if [ "${carry_rc:-}" != "0" ] && [ "${carry_mr_rc:-}" = "0" ] && [[ "${carry_mr_from:-}" =~ ^[0-9a-f]{40}$ ]]; then
 		# A verified resolution head is never released without an audit: it
 		# gets a delta audit since its audited first parent (D4), and the
@@ -1344,6 +1353,10 @@ No completed audit exists for \`${head_sha}\`. Auto-merge stays off. A new push 
 		delta_source="$(single_pass_delta_source "${markers}" "${head_sha}")"
 		# Resolution-only review (merge-lease plan Phase 3, D4): a verified
 		# resolution head is audited as a delta since its clean first parent.
+		# security_audit.sh keeps only PR-range files (merge-base..head) that
+		# also changed in <from>..<head>, so base-only files drop out and the
+		# scope covers every file the remerge diff touches (a fail-safe
+		# superset: a PR file the base changed cleanly is audited too).
 		# The audit job re-derives the source from the trusted markers and
 		# runs a full audit when it is not that head (input_mismatch).
 		if [[ "${single_pass_remerge_since:-}" =~ ^[0-9a-f]{40}$ ]]; then

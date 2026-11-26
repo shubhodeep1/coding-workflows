@@ -538,7 +538,7 @@ def test_marker_post_binds_the_pushed_resolution(tmp_path: Path) -> None:
 	assert [call[1] for call in calls if call[1] != "-X"][:2] == ["user", f"repos/o/r/commits/{shas['from']}/statuses?per_page=100"]
 	posts = _posts(calls)
 	assert len(posts) == 1
-	assert f"repos/o/r/issues/42/comments" in posts[0]
+	assert "repos/o/r/issues/42/comments" in posts[0]
 	body = next(arg for arg in posts[0] if arg.startswith("body="))[len("body="):]
 	assert body.splitlines()[-1] == _marker(shas["from"], shas["head"], shas["base"])
 	# The gate's verifier accepts the posted body (round trip).
@@ -642,3 +642,74 @@ def test_registry_and_readme_list_the_switch() -> None:
 	assert len(entry) == 1 and entry[0]["default"] == "true"
 	readme = (ROOT / "README.md").read_text(encoding="utf-8")
 	assert "| `MERGE_RESOLVE_DELTA_REVIEW_ENABLED` | No | `true` |" in readme
+
+
+STUB_HEAD_GATE = '''
+review_head_gate_freshness_sync()
+{
+	REVIEW_HEAD_GATE_FRESHNESS_FROM=""
+	REVIEW_HEAD_GATE_FRESHNESS_BASE_PARENT=""
+	echo "freshness_sync called" >> "${STUB_CALLS}"
+	return 1
+}
+review_head_gate_merge_resolve()
+{
+	REVIEW_HEAD_GATE_MERGE_RESOLVE_FROM=""
+	echo "merge_resolve called" >> "${STUB_CALLS}"
+	[ "${STUB_MR_OK:-yes}" = "yes" ] || return 1
+	REVIEW_HEAD_GATE_MERGE_RESOLVE_FROM="${STUB_MR_FROM}"
+	return 0
+}
+'''
+
+
+def _run_carry(tmp_path: Path, switch: str | None = None, mr_ok: str = "yes", from_status: str = "clean") -> tuple[subprocess.CompletedProcess[str], list[str]]:
+	support = tmp_path / "carry_support"
+	support.mkdir()
+	(support / "gh_helpers.sh").write_text("gh_retry() { \"$@\"; }\n", encoding="utf-8")
+	(support / "review_head_gate.sh").write_text(STUB_HEAD_GATE, encoding="utf-8")
+	comments = tmp_path / "carry_comments.json"
+	comments.write_text(json.dumps([{"user": {"login": LOGIN}, "body": _marker()}]), encoding="utf-8")
+	calls = tmp_path / "carry_calls.txt"
+	env = {k: v for k, v in os.environ.items() if k not in ("BASH_ENV", "ENV")}
+	env.pop("MERGE_RESOLVE_DELTA_REVIEW_ENABLED", None)
+	env.update({
+		"SUPPORT_SCRIPTS_DIR": str(support), "STUB_CALLS": str(calls), "STUB_MR_OK": mr_ok, "STUB_MR_FROM": FROM,
+		"REPOSITORY": "o/r", "PR_NUMBER": "42", "SECURITY_PASS_AUTHOR_LOGIN": LOGIN,
+	})
+	if switch is not None:
+		env["MERGE_RESOLVE_DELTA_REVIEW_ENABLED"] = switch
+	markers = f"x\\tx\\t{from_status}\\t{FROM}"
+	script = (
+		f'source "{SECURITY_PASS}"\n'
+		f'single_pass_base_sync_carry "{comments}" "{HEAD}" main topic "$(printf "{markers}")" || true\n'
+		'echo "since=${single_pass_remerge_since:-} reason=${single_pass_carry_skip_reason:-}"\n'
+	)
+	proc = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
+	return proc, (calls.read_text(encoding="utf-8").splitlines() if calls.exists() else [])
+
+
+def test_security_pass_carry_reaches_the_merge_resolve_branch(tmp_path: Path) -> None:
+	# Regression: the empty freshness fields once collapsed under read's
+	# default IFS, so a verified resolution head never reached this branch.
+	proc, calls = _run_carry(tmp_path)
+	assert proc.returncode == 0, proc.stderr
+	assert calls == ["freshness_sync called", "merge_resolve called"]
+	assert f"outcome=merge_resolve_carry from={FROM}" in proc.stdout
+	assert proc.stdout.splitlines()[-1] == f"since={FROM} reason=merge_resolve_audit"
+
+
+@pytest.mark.parametrize("switch", ["false", "FALSE", "off", "0", "maybe"])
+def test_security_pass_carry_switch_off_skips_the_verifier(tmp_path: Path, switch: str) -> None:
+	proc, calls = _run_carry(tmp_path, switch=switch)
+	assert proc.returncode == 0, proc.stderr
+	assert calls == ["freshness_sync called"]
+	assert proc.stdout.splitlines()[-1] == "since= reason=freshness_unverified"
+
+
+@pytest.mark.parametrize("mr_ok,from_status", [("no", "clean"), ("yes", "findings")])
+def test_security_pass_carry_unverified_or_unclean_from_gets_no_delta(tmp_path: Path, mr_ok: str, from_status: str) -> None:
+	proc, _ = _run_carry(tmp_path, mr_ok=mr_ok, from_status=from_status)
+	assert proc.returncode == 0, proc.stderr
+	assert "merge_resolve_carry" not in proc.stdout
+	assert proc.stdout.splitlines()[-1] == "since= reason=freshness_unverified"
