@@ -889,21 +889,6 @@
 			"stage": "Enable the write-guard policy from .github/ai/write_guards.v1.json at the plan post-Codex workspace boundary, implement commit boundary, review-editor commit boundary, and validate fix/harness boundary."
 		},
 		{
-			"name": "AI_PLAN_GRANT_WRITE_ENABLED",
-			"default": "true",
-			"stage": "Turns on ai plan grant write (added by open pull request #9654; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
-		},
-		{
-			"name": "CHECK_TRIAGE_TARGET_FILES_GUARD_ENABLED",
-			"default": "true",
-			"stage": "Turns on check triage target files guard (added by open pull request #9654; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
-		},
-		{
-			"name": "CONFLICT_MODIFY_DELETE_TAKE_BASE_ENABLED",
-			"default": "true",
-			"stage": "Turns on conflict modify delete take base (added by open pull request #9654; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
-		},
-		{
 			"name": "FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED",
 			"default": "true",
 			"stage": "Turns on final ci stale workflow sync (added by open pull request #10103; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
@@ -949,11 +934,6 @@
 			"stage": "Turns on persist queue pause (added by open pull request #9442; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
 		},
 		{
-			"name": "PLAN_NOTHING_TO_IMPLEMENT_VERIFY_ENABLED",
-			"default": "true",
-			"stage": "Turns on plan nothing to implement verify (added by open pull request #9654; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
-		},
-		{
 			"name": "PLAN_SCOPE_BLOCK_ROUTING_ENABLED",
 			"default": "true",
 			"stage": "Turns on plan scope block routing (added by open pull request #9981; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
@@ -972,11 +952,6 @@
 			"name": "RED_BASE_APPROVAL_HOLD_ENABLED",
 			"default": "true",
 			"stage": "Turns on red base approval hold (added by open pull request #9442; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
-		},
-		{
-			"name": "RESOLVER_PROVENANCE_CHECK_ENABLED",
-			"default": "true",
-			"stage": "Turns on resolver provenance check (added by open pull request #9654; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
 		},
 		{
 			"name": "REVIEW_CONVERGENCE_ENABLED",
@@ -1004,19 +979,9 @@
 			"stage": "Turns on runner image canary (added by open pull request #9442; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
 		},
 		{
-			"name": "STABLE_ROLLBACK_ENABLED",
-			"default": "true",
-			"stage": "Turns on stable rollback (added by open pull request #9359; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
-		},
-		{
 			"name": "STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED",
 			"default": "true",
 			"stage": "Turns on stall judge live review runs (added by open pull request #9573; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
-		},
-		{
-			"name": "STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED",
-			"default": "true",
-			"stage": "Turns on stall pr resolve implementation first (added by open pull request #9654; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
 		},
 		{
 			"name": "STALL_REISSUE_GREEN_PR_GUARD_ENABLED",
@@ -1024,34 +989,14 @@
 			"stage": "Turns on stall reissue green pr guard (added by open pull request #9902; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
 		},
 		{
-			"name": "UNBLOCK_EXISTING_PR_ROUTING_ENABLED",
-			"default": "true",
-			"stage": "Turns on unblock existing pr routing (added by open pull request #9654; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
-		},
-		{
-			"name": "UNBLOCK_HOLD_PATCH_EQUIVALENCE_ENABLED",
-			"default": "true",
-			"stage": "Turns on unblock hold patch equivalence (added by open pull request #9654; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
-		},
-		{
 			"name": "UNBLOCK_JUDGE_LINKED_PR_ENABLED",
 			"default": "true",
 			"stage": "Turns on unblock judge linked pr (added by open pull request #9573; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
 		},
 		{
-			"name": "UNBLOCK_PLACEHOLDER_RECURRENCE_CHECK_ENABLED",
-			"default": "true",
-			"stage": "Turns on unblock placeholder recurrence check (added by open pull request #9654; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
-		},
-		{
 			"name": "VERDICT_WAIT_DISPATCH_SKIP_ENABLED",
 			"default": "true",
 			"stage": "Turns on verdict wait dispatch skip (added by open pull request #10000; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
-		},
-		{
-			"name": "WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED",
-			"default": "true",
-			"stage": "Turns on workflow heal red main grouping (added by open pull request #9654; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
 		}
 	],
 	"off_on_purpose": []
