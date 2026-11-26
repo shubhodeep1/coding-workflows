@@ -22,7 +22,10 @@
  *     feature branch or refs/heads/stable given as a branch, is refused.
  *     A verification call that fails, times out or is rate limited is
  *     refused too (403 workflow_sha_unverifiable); nothing is granted on
- *     uncertainty (issue #6636).
+ *     uncertainty (issue #6636). An unavailable compare against one branch
+ *     no longer stops the check against the other; trust still needs a
+ *     positive answer, and BROKER_SHA_CHECK_ALL_BRANCHES_ENABLED=false
+ *     restores the old stop-at-first-unavailable behaviour (issue #10172).
  *   - or, for shubhodeep1/coding-workflows only, name refs/heads/promote-candidate
  *     (the branch its internal-*.yml wrappers call), with a signed 40-hex
  *     job_workflow_sha that passes the same main/stable ancestry check. The
@@ -69,6 +72,13 @@ export interface Env {
 	GATE?: string;
 	/** Optional read-only token for the GitHub compare calls; unauthenticated reads when unset. Never logged. */
 	BROKER_GITHUB_READ_TOKEN?: string;
+	/**
+	 * Off switch for asking every ANCESTOR_BRANCHES branch after an unavailable
+	 * compare (issue #10172). Unset, empty or `true` (any case) keeps it on;
+	 * `false` (any case) restores the old stop-at-first-unavailable loop; any
+	 * other value also turns it off and logs a warning.
+	 */
+	BROKER_SHA_CHECK_ALL_BRANCHES_ENABLED?: string;
 	/** ChatGPT usage gate in (0, 1]; DEFAULT_CHATGPT_GATE when unset or invalid. */
 	CHATGPT_GATE?: string;
 	/** The only repository whose workflow may write the ChatGPT store; an invalid value fails closed (503). */
@@ -712,6 +722,28 @@ export class ChatgptAccount
 	}
 }
 
+/**
+ * Whether verifyTrustedSha asks every ANCESTOR_BRANCHES branch after an
+ * unavailable compare. Unset, non-string, empty or `true` (any case): on.
+ * `false` (any case): off, silently. Anything else: off, with one fixed-shape
+ * warning that never echoes the raw value.
+ */
+export function shaCheckAllBranchesEnabled(raw: unknown, log: (line: string) => void): boolean
+{
+	if (typeof raw !== "string") {
+		return true;
+	}
+	const value = raw.trim().toLowerCase();
+	if (value === "" || value === "true") {
+		return true;
+	}
+	if (value === "false") {
+		return false;
+	}
+	log("CLAUDE_POOL broker workflow_sha_check_all_branches flag=invalid fallback=off");
+	return false;
+}
+
 /** The bearer JWT of a request; 403 missing_token otherwise. */
 function bearerToken(request: Request): string
 {
@@ -893,15 +925,34 @@ export function createHandler(deps: Deps)
 			return "trusted";
 		}
 		let verdict: ShaVerdict = "untrusted";
-		for (const branch of ANCESTOR_BRANCHES) {
-			const result = await compareStatus(branch, sha, env);
-			if (result === "unavailable") {
-				verdict = "unavailable";
-				break;
+		if (shaCheckAllBranchesEnabled(env.BROKER_SHA_CHECK_ALL_BRANCHES_ENABLED, deps.log)) {
+			// Issue #10172: an unavailable compare moves on to the next branch;
+			// only a "yes" (HTTP 200 behind/identical) grants trust.
+			let sawUnavailable = false;
+			for (const branch of ANCESTOR_BRANCHES) {
+				const result = await compareStatus(branch, sha, env);
+				if (result === "yes") {
+					verdict = "trusted";
+					break;
+				}
+				if (result === "unavailable") {
+					sawUnavailable = true;
+				}
 			}
-			if (result === "yes") {
-				verdict = "trusted";
-				break;
+			if (verdict !== "trusted" && sawUnavailable) {
+				verdict = "unavailable";
+			}
+		} else {
+			for (const branch of ANCESTOR_BRANCHES) {
+				const result = await compareStatus(branch, sha, env);
+				if (result === "unavailable") {
+					verdict = "unavailable";
+					break;
+				}
+				if (result === "yes") {
+					verdict = "trusted";
+					break;
+				}
 			}
 		}
 		if (verdict === "trusted") {
