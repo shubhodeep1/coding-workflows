@@ -249,6 +249,17 @@ def test_already_requested_runs_do_not_use_the_cap() -> None:
 	assert len(res["posts"]) == 1 and res["posts"][0].rstrip().endswith(_marker("14")), res["posts"]
 
 
+def test_marked_run_past_cap_logs_already_requested() -> None:
+	"""After three POSTs in one pass, a later run that already carries a
+	trusted marker is logged as already_requested, not rerun_capped."""
+	ids = "\n".join(f"{n}:cancelled" for n in (11, 12, 13, 14, 15))
+	comments = [{"author": "github-actions[bot]", "body": _marker("14")}]
+	res = _run_judge(names="a:cancelled\nb:cancelled\nc:cancelled\nd:cancelled\ne:cancelled", run_ids=ids, comments=comments)
+	assert len(_rerun_calls(res)) == 3, res["calls"]
+	assert "run=14 action=rerun_skipped reason=already_requested" in res["stdout"], res["stdout"]
+	assert "run=15 action=rerun_skipped reason=rerun_capped" in res["stdout"], res["stdout"]
+
+
 def test_names_past_cap_are_marked_as_more() -> None:
 	names = "\n".join(f"c{n}:failure" for n in range(1, 24))
 	res = _run_judge(names=names, run_ids="1:failure")

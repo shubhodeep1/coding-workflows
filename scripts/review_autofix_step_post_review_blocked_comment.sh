@@ -67,7 +67,7 @@ case "${JUDGE_SKIP_REASON:-}" in
         BODY_DETAIL="The review-blocked judge approved this PR, but these required check-runs on the head commit finished without success (name:conclusion):
 ${rb_settled_list}
 
-A run that was cancelled or timed out is re-run once per head and Actions run. A real failure needs a fix pushed to this PR. Linked issues remain labelled \`ai:review-blocked\`."
+The judge re-runs a cancelled or timed-out Actions run at most once per head and run, so a later comment may not mean a new re-run. A real failure needs a fix pushed to this PR. Linked issues remain labelled \`ai:review-blocked\`."
       fi
     fi
     ;;

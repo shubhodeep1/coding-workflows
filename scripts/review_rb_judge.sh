@@ -1011,10 +1011,6 @@ rb_judge_settled_check_diagnostics()
       echo "${rb_sc_prefix} names=${rb_sc_count} run=${rb_sc_id} action=rerun_skipped reason=self_run"
       continue
     fi
-    if [ "${rb_sc_handled}" -ge 3 ]; then
-      echo "${rb_sc_prefix} names=${rb_sc_count} run=${rb_sc_id} action=rerun_skipped reason=rerun_capped"
-      continue
-    fi
     rb_sc_marker="<!-- rb-judge-settled-rerun:v1 head=${rb_sc_head} run=${rb_sc_id} -->"
     rb_sc_seen="$(printf '%s' "${PR_CONTEXT_JSON}" | jq -r --arg marker "${rb_sc_marker}" --arg login "${rb_sc_login}" '
       [.comments[]?
@@ -1029,6 +1025,12 @@ rb_judge_settled_check_diagnostics()
     fi
     if [ "${rb_sc_seen}" -gt 0 ]; then
       echo "${rb_sc_prefix} names=${rb_sc_count} run=${rb_sc_id} action=rerun_skipped reason=already_requested"
+      continue
+    fi
+    # Cap checked after the dedupe so a marked run past the cap still logs
+    # already_requested rather than rerun_capped.
+    if [ "${rb_sc_handled}" -ge 3 ]; then
+      echo "${rb_sc_prefix} names=${rb_sc_count} run=${rb_sc_id} action=rerun_skipped reason=rerun_capped"
       continue
     fi
     # The cap of 3 counts only runs that reach the POST below: a run skipped
