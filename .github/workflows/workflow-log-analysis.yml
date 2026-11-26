@@ -2323,7 +2323,7 @@ jobs:
               # Name GitHub's refusal only when --auto actually ran; the purge
               # path above skipped the call and already warned why.
               if [ "${report_purge_drop_ok}" -eq 1 ]; then
-                echo "::warning::Workflow log analysis report PR ${report_pr_url:-#${report_pr_number}} could not be set to auto-merge; it stays open for review. GitHub refuses --auto when ${TARGET_BRANCH} has no required checks, reports the PR already mergeable (clean status), or the repository has auto-merge disabled (#10151 removed the direct-merge fallback): enable auto-merge, or set WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR=false for direct delivery."
+                echo "::warning::Workflow log analysis report PR ${report_pr_url:-#${report_pr_number}} could not be set to auto-merge; it stays open for review. GitHub refuses --auto when ${TARGET_BRANCH} has no required checks, reports the PR already mergeable (clean status), or the repository has auto-merge disabled, or --match-head-commit refuses because the PR head moved after this run's push (#10151 removed the direct-merge fallback): enable auto-merge, or set WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR=false for direct delivery."
               else
                 echo "::warning::Workflow log analysis report PR ${report_pr_url:-#${report_pr_number}} could not be set to auto-merge; it stays open for review because it still carries the purge deletions (see the warning above)."
               fi

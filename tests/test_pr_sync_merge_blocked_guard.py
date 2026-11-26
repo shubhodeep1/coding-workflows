@@ -280,7 +280,9 @@ def _direct_merge_scan_paths() -> list[Path]:
 	paths: list[Path] = []
 	for pattern in (".github/workflows/*.yml", ".github/workflows/*.yaml", "workflow-templates/*.yml", "workflow-templates/*.yaml"):
 		paths.extend(REPO_ROOT.glob(pattern))
-	paths.extend((REPO_ROOT / "scripts").rglob("*.sh"))
+	# Python helpers too (shell-string form), so a later direct merge there fails this test.
+	for suffix in ("*.sh", "*.py"):
+		paths.extend((REPO_ROOT / "scripts").rglob(suffix))
 	return sorted(set(paths))
 
 
