@@ -388,6 +388,11 @@
 			"stage": "When the head is exactly the merge commit a workflow-authored ai:merge-base-sync marker records, with parents [from, base], signed by web-flow and with its base parent contained in the base, the review gate skips the..."
 		},
 		{
+			"name": "MERGE_LEASE_CONFLICT_RELEASE_ENABLED",
+			"default": "true",
+			"stage": "Merge-lease conflict release (#10098): the tick labels and releases once a holder that reads mergeable false while another waiter is ready (reason released_conflict)."
+		},
+		{
 			"name": "MERGE_LEASE_ENABLED",
 			"default": "true",
 			"stage": "Merge lease (scripts/pr_checks_lib.sh \"Merge lease\")."
@@ -396,6 +401,11 @@
 			"name": "MERGE_LEASE_METRICS_ENABLED",
 			"default": "true",
 			"stage": "Merge-lease Phase 1: one MERGE_LEASE_METRIC event=... base=... pr=... mode=... reason=... holder=... hold_s=... waiters=... ts=... line after each lease gate and tick decision; the tick's released lines end with merge..."
+		},
+		{
+			"name": "MERGE_LEASE_READY_GRANT_ENABLED",
+			"default": "true",
+			"stage": "Merge-lease ready-first grant (#10098): the tick grants a free slot only to a waiter whose ci/final is success and that is not unmergeable (skips final_ci_pending / not_mergeable; ready_fallback after the idle wait)."
 		},
 		{
 			"name": "MERGE_LEASE_REVOKE_ENABLED",
