@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_gh_read.py:608-621 (also assertion at line 693) | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: RELEASE_GATE_PAT_ONLY_CALLS pins 2 plain `gh_api_safe_quiet_print` calls for `dispatch_and_watch_workflow_run.sh`, but the merged script has 4 (lines 137, 608, 669, 773), so the exact-equality assert in test_release_gate_read_call_site_inventory fails.\n  WHY: The test raises AssertionError at line 693 on the merged head and turns CI red. Severity disagreement: reviewers rated it MAJOR, except minimax_minimax-m3, which rated it BLOCKER. The highest is used.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_gh_read.py:619-621 (comment at 608-609, assert at 693) | severity=MAJOR | confidence=5\n  PROBLEM: The inventory pins 2 plain `gh_api_safe_quiet_print` calls in `scripts/dispatch_and_watch_workflow_run.sh`, but the merged script has 4 (lines 137, 608, 669, 773).\n  WHY: The equality assert in `test_release_gate_read_call_site_inventory` raises AssertionError at the merged head. The fix is to set the count to 4 and update the comment.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_gh_read.py:619-621 | severity=MAJOR | confidence=4\n  PROBLEM: The pinned count of plain `gh_api_safe_quiet_print` calls for `dispatch_and_watch_workflow_run.sh` is stale: the script has four (lines 137, 608, 669, 773) and the test pins 2.\n  WHY: `test_release_gate_read_call_site_inventory` raises AssertionError at line 693 during CI.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_gh_read.py:619-621 (comment 608-609, assert 693) | severity=BLOCKER | confidence=5\n  PROBLEM: RELEASE_GATE_PAT_ONLY_CALLS pins 2 plain `gh_api_safe_quiet_print` calls, but the merged script has 4 (lines 137, 608, 669, 773) and 2 `gh_api_safe_quiet_print_read` calls (lines 642, 705), so the exact dict equality at line 693 fails.\n  WHY: Merge commit 8381b1f added two plain PAT-only reads without a test update, so every CI run on the merged head raises AssertionError.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_gh_read.py:619-621 (assert at 693) | severity=MAJOR | confidence=5\n  PROBLEM: The inventory expects two PAT-only `gh_api_safe_quiet_print` calls in dispatch_and_watch_workflow_run.sh, but the script has four (lines 137, 608, 669, 773).\n  WHY: The exact dictionary comparison in test_release_gate_read_call_site_inventory fails because it counts four calls and expects two.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_gh_read.py:619-621 (comment 608-609, assert 693) | severity=MAJOR | confidence=5\n  PROBLEM: The inventory pins 2 plain `gh_api_safe_quiet_print` calls for `scripts/dispatch_and_watch_workflow_run.sh`, but the merged head has 4 real call sites (lines 137, 608, 669, 773).\n  WHY: The exact-dict equality at line 693 fails deterministically and turns CI red. The fix is to set the count to 4 and update the comment at lines 608-609.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "092535039b755b5eb4ea0775af97775f0f4e51e92198d351eda31eecf0826be3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10106,
+    "run_id": "45724290421",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45724290421",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126010346_ed6e2dcb92",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10106,
+    "run_id": "45724290421"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T01:03:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
