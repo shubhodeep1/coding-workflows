@@ -1,0 +1,22 @@
+{
+  "discovered_at": "2026-11-26T17:12:49Z",
+  "issue_number": 10118,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=.github/workflows/review_autofix.yml:1-1; cited_path=.github/workflows/review_autofix.yml; files_touched=.github/workflows/workflow-log-analysis.yml, README.md, agents.d/10118-operator-step-daily-tick.md, changelog.d/10118-operator-step-daily-tick.md, docs/INVENTORY.md, scripts/operator_step_daily_tick.sh, scripts/operator_step_issue.py, scripts/stage_switches.json, tests/test_operator_step_issue.py.",
+  "phase": "review_autofix",
+  "pr_number": 10122,
+  "record_id": "lesson_20261126171249_1455347122",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/review_autofix.yml",
+    ".github/workflows/workflow-log-analysis.yml",
+    "README.md",
+    "agents.d/10118-operator-step-daily-tick.md",
+    "changelog.d/10118-operator-step-daily-tick.md",
+    "docs/INVENTORY.md",
+    "scripts/operator_step_daily_tick.sh",
+    "scripts/operator_step_issue.py",
+    "scripts/stage_switches.json",
+    "tests/test_operator_step_issue.py"
+  ]
+}
