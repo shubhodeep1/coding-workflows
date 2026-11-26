@@ -383,6 +383,12 @@
 			"stage": "Merge-base freshness gate (scripts/pr_checks_lib.sh)."
 		},
 		{
+			"name": "MERGE_BASE_SYNC_DELTA_CI_ENABLED",
+			"default": "true",
+			"stage": "Delta final CI after a clean merge-base update (scripts/ci_sync_quick.sh verify/run-tests; scripts/pr_checks_lib.sh _pr_base_sync_dispatch_final_ci).",
+			"on_values": ["1", "yes", "on"]
+		},
+		{
 			"name": "MERGE_BASE_SYNC_FAST_PATH_ENABLED",
 			"default": "true",
 			"stage": "When the head is exactly the merge commit a workflow-authored ai:merge-base-sync marker records, with parents [from, base], signed by web-flow and with its base parent contained in the base, the review gate skips the..."
@@ -390,7 +396,8 @@
 		{
 			"name": "MERGE_LEASE_CONFLICT_RELEASE_ENABLED",
 			"default": "true",
-			"stage": "Merge-lease conflict release (#10098): the tick labels and releases once a holder that reads mergeable false while another waiter is ready (reason released_conflict)."
+			"stage": "Merge-lease conflict release (issue #10098, Phase 1 of docs/plans/merge-lease-short-critical-section-plan.md): the merge-train tick releases a holder that conflicts with its base once per PR while another waiter is ready (released_conflict); only false turns it off.",
+			"on_values": ["1", "yes", "on"]
 		},
 		{
 			"name": "MERGE_LEASE_ENABLED",
@@ -405,7 +412,8 @@
 		{
 			"name": "MERGE_LEASE_READY_GRANT_ENABLED",
 			"default": "true",
-			"stage": "Merge-lease ready-first grant (#10098): the tick grants a free slot only to a waiter whose ci/final is success and that is not unmergeable (skips final_ci_pending / not_mergeable; ready_fallback after the idle wait)."
+			"stage": "Merge-lease ready-first grant (issue #10098, Phase 1 of docs/plans/merge-lease-short-critical-section-plan.md): the merge-train tick grants a lease slot only to a waiter that can merge now (ready_fallback); only false turns it off.",
+			"on_values": ["1", "yes", "on"]
 		},
 		{
 			"name": "MERGE_LEASE_REVOKE_ENABLED",

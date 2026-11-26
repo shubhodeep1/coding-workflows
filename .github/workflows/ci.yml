@@ -4962,9 +4962,14 @@ jobs:
     # head passed a full final CI run), then runs the PR's own test files and
     # the CI-structure tests. Skipped in every other run; `lint` accepts that
     # skip only when sync_quick is not "true".
+    # Delta overlap (merge-lease short critical section, Phase 2, D1): an
+    # overlap with other files also passes verify when
+    # MERGE_BASE_SYNC_DELTA_CI_ENABLED is on and the pre-push selector picks at
+    # most MERGE_BASE_SYNC_DELTA_MAX_TEST_FILES tests for it; run-tests then
+    # adds those tests. The full suite still runs on main after the merge.
     if: inputs.mode != 'quick' && github.event_name == 'workflow_dispatch' && inputs.sync_quick == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     permissions:
       contents: read
       # full-ci-green reads the approved head's ci.yml runs.
@@ -5010,11 +5015,15 @@ jobs:
           CI_SYNC_QUICK_REPOSITORY: ${{ github.repository }}
           CI_SYNC_QUICK_PR_NUMBER: ${{ inputs.pr_number }}
           CI_SYNC_QUICK_DOCS_ONLY: ${{ inputs.docs_only }}
+          MERGE_BASE_SYNC_DELTA_CI_ENABLED: ${{ vars.MERGE_BASE_SYNC_DELTA_CI_ENABLED || 'true' }}
+          MERGE_BASE_SYNC_DELTA_MAX_TEST_FILES: ${{ vars.MERGE_BASE_SYNC_DELTA_MAX_TEST_FILES || '60' }}
         run: bash scripts/ci_sync_quick.sh verify
 
       - name: Run the PR's own tests and the CI-structure tests
         env:
           CI_SYNC_QUICK_HEAD_SHA: ${{ github.sha }}
+          MERGE_BASE_SYNC_DELTA_CI_ENABLED: ${{ vars.MERGE_BASE_SYNC_DELTA_CI_ENABLED || 'true' }}
+          MERGE_BASE_SYNC_DELTA_MAX_TEST_FILES: ${{ vars.MERGE_BASE_SYNC_DELTA_MAX_TEST_FILES || '60' }}
         run: bash scripts/ci_sync_quick.sh run-tests
 
   budget-watch:
