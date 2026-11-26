@@ -1010,6 +1010,23 @@ def test_operator_step_release_condition_matches_activation_verify() -> None:
 	assert writer.RELEASE_CONDITION_RE.flags & re.I
 
 
+def test_operator_step_title_rules_match_activation_verify() -> None:
+	# activation_verify.sh reroutes condition-less release-titled operator gaps
+	# with the same rules _is_release_entry uses (issue #9393).
+	script = (ROOT / "scripts" / "activation_verify.sh").read_text(encoding="utf-8")
+	for name in ("RELEASE_STEP_TITLE_RE", "HUMAN_OBJECT_TITLE_RE"):
+		match = re.search(rf'^{name} = re\.compile\(r"(.+?)", re\.I\)$', script, re.M)
+		assert match, name
+		assert match.group(1) == getattr(writer, name).pattern, name
+		assert getattr(writer, name).flags & re.I, name
+	# The camelCase split that feeds HUMAN_OBJECT_TITLE_RE must match too.
+	camel_re = r'HUMAN_OBJECT_TITLE_RE\.search\((re\.sub\(r"[^"]+", "_", title\))\)'
+	writer_source = (ROOT / "scripts" / "operator_step_issue.py").read_text(encoding="utf-8")
+	script_split, writer_split = re.findall(camel_re, script), re.findall(camel_re, writer_source)
+	assert len(script_split) == 1 and len(writer_split) == 1
+	assert script_split == writer_split
+
+
 def test_poller_wires_operator_step_resolve_step() -> None:
 	# Plain-text parse of the poll job's steps: PyYAML is not installed in
 	# every test container, and this test must not skip without it.
@@ -1022,6 +1039,8 @@ def test_poller_wires_operator_step_resolve_step() -> None:
 	assert names.index("Resume dependency waits") + 1 == names.index("Resolve released operator steps") < names.index("Find active tracking issues")
 	keys = re.findall(r"^        ([A-Za-z-]+):", block, re.M)
 	assert "if" not in keys and re.search(r"^        continue-on-error: true$", block, re.M)
+	# A hung gh call must not hold the poll job until the 360-minute job limit (issue #9393).
+	assert re.search(r"^        timeout-minutes: 5$", block, re.M)
 	env_block = re.search(r"^        env:\n((?:          .*\n)+)", block, re.M)
 	assert env_block
 	env = dict(line.strip().split(": ", 1) for line in env_block.group(1).splitlines())
@@ -1276,3 +1295,51 @@ def test_operator_step_resolve_logs_a_failed_fail_safe_reopen(
 		writer.resolve(REPO, BOT)
 	assert fake.closed == [number] and fake.reopened == []
 	assert f"op=close issue={number} outcome=closed reason=after_close_reopen_failed" in capsys.readouterr().err
+
+
+# --- resolve CLI: kill switch and fail-open (issue #9393, Refs #8291) ---------
+
+
+def test_operator_step_resolve_cli_kill_switch_makes_no_api_call(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+	number = _tracker(fake)
+	_release_entry(fake, number, 10, "pr-1")
+	fake.compare_status[RELEASE_SHA] = "ahead"
+	monkeypatch.setenv("OPERATOR_STEP_AUTO_RESOLVE_ENABLED", "false")
+	assert writer.main(["resolve", "--repo", REPO, "--trusted-login", BOT]) == 0
+	captured = capsys.readouterr()
+	assert json.loads(captured.out)["reason"] == "disabled"
+	assert "OPERATOR_STEP_RESOLVE op=resolve outcome=skip reason=disabled" in captured.err
+	assert fake.calls == [] and fake.closed == []
+
+
+@pytest.mark.parametrize("failure", ["listing", "tick_post"])
+def test_operator_step_resolve_cli_fails_open_on_api_errors(
+		fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], failure: str) -> None:
+	number = _tracker(fake)
+	_release_entry(fake, number, 10, "pr-1")
+	_release_entry(fake, number, 11, "pr-2")
+	fake.compare_status[RELEASE_SHA] = "ahead"
+	tick_posts: list[list[str]] = []
+
+	def failing(args: list[str], *, allow_existing_label: bool = False) -> str:
+		if failure == "listing" and args[0] == "api" and len(args) > 1 and args[1].startswith(f"repos/{REPO}/issues?labels=ai:operator-step"):
+			raise writer.ApiError("GitHub unavailable")
+		if args[:2] == ["api", f"repos/{REPO}/issues/{number}/comments"] and "-f" in args and "ai:operator-step:resolved" in args[-1]:
+			tick_posts.append(args)
+			if failure == "tick_post":
+				raise writer.ApiError("GitHub unavailable")
+		return fake(args, allow_existing_label=allow_existing_label)
+
+	monkeypatch.setattr(writer, "_gh", failing)
+	assert writer.main(["resolve", "--repo", REPO, "--trusted-login", BOT]) == 2
+	assert "error" in json.loads(capsys.readouterr().out)
+	assert fake.closed == [] and fake.reopened == []
+	assert not any("state=closed" in args for args in fake.patches())
+	assert not any(comment["body"].startswith(writer.AUTO_CLOSED_MARKER) for comment in fake.comments[number])
+	if failure == "listing":
+		assert tick_posts == [] and _compares(fake) == []
+	else:
+		# The run stops at the first failed tick: the second entry is not ticked.
+		assert len(tick_posts) == 1 and "key=pr-1" in tick_posts[0][-1].split("\n", 1)[0]
+		assert not any("ai:operator-step:resolved" in comment["body"] for comment in fake.comments[number])

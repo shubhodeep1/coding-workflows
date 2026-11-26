@@ -135,6 +135,10 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   # Wedged-queued run filter (issue #9473); 0 disables it.
   ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}
+  # Issue #10037: a child watch (dispatch_and_watch_workflow_run.sh, Phase 4)
+  # that times out on a runner wait stops this gate run (it ends cancelled,
+  # so no release attempt is spent) unless a job already failed.
+  DISPATCH_WATCH_STOP_RELEASE_GATE: "true"
   # Signed job-token comments (run-volume plan item 15, D16; see
   # scripts/comment_signature.py). The opt-in secret and the job token sit
   # next to each step's GH_PAT, never here, so a step without the PAT never
@@ -144,6 +148,11 @@ env:
 
 permissions:
   contents: write
+  # Read-only scopes for the polling reads that use the job token
+  # (GH_READ_TOKEN, issue #9888). Writes stay on GH_PAT.
+  actions: read
+  pull-requests: read
+  issues: read
 
 jobs:
   # ──────────────────────────────────────────────────────────────────
@@ -665,6 +674,12 @@ jobs:
       REVIEW_WORKFLOW_FILE: ${{ inputs.review_workflow_file || 'internal-review.yml' }}
 
     steps:
+      - name: Record GH_PAT budget at e2e-smoke-test start
+        # Issue #9887: no rate_limit read, so the release gate adds no GitHub
+        # request; the quota keys read unknown (same pattern as validate).
+        run: |
+          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=e2e-smoke-test remaining=unknown reset=unknown used_in_job=unknown"
+
       # Checkout repo at the start so `if: always()` steps (per-phase
       # soft-error analyser invocations, Cleanup test artifacts) can find
       # scripts/ even when an earlier phase exits non-zero. The original
@@ -691,6 +706,19 @@ jobs:
         run: |
           [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
           source scripts/gh_helpers.sh
+
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
 
       # Phase 2 (#9473), Phase 4 and Phase 4b (#7991) run step bodies moved
       # to scripts/ (workflow file size guard). They are read from this run's own commit,
@@ -1979,6 +2007,7 @@ jobs:
       - name: "Phase 4: Wait for review & autofix to complete"
         id: wait-review
         env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
           PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
           # When inject-bait pushed a bait commit, pin the wait loop to
           # review runs whose head_sha matches the bait commit. Without
@@ -2030,6 +2059,7 @@ jobs:
       # workflow-level concurrency hold. Inline because scripts/ is outside
       # the #9418 heal scope. One runs call plus at most 5 jobs calls (§14);
       # read-only, fail-soft, prints ids, enums and timestamps only.
+      # #10105: also prints wait-review's timeout_reason (#9619), allowlisted.
       - name: "Phase 4d: Review-timeout run inventory"
         id: review-timeout-inventory
         if: failure() && steps.wait-review.outputs.status == 'timeout'
@@ -2039,9 +2069,19 @@ jobs:
           PR_NUMBER: ${{ steps.wait-implement.outputs.pr_number }}
           ISSUE_NUMBER: ${{ steps.create-issue.outputs.issue_number }}
           BAIT_SHA: ${{ steps.inject-bait.outputs.bait_sha }}
+          # #10105 / #9619: empty on the wall-clock deadline path -> unknown.
+          TIMEOUT_INV_REASON: ${{ steps.wait-review.outputs.timeout_reason }}
         run: |
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
+          case "${TIMEOUT_INV_REASON:-}" in
+            review_run_never_started|inactivity) TIMEOUT_INV_REASON_VALUE="${TIMEOUT_INV_REASON}" ;;
+            *) TIMEOUT_INV_REASON_VALUE="unknown" ;;
+          esac
+          echo "  Review timeout reason: ${TIMEOUT_INV_REASON_VALUE}"
+          if [ "${TIMEOUT_INV_REASON_VALUE}" = "review_run_never_started" ]; then
+            echo "::warning::Phase 4 review run never started before the review timeout (runner queue or concurrency hold; cause unverified, may be environmental)"
+          fi
           if ! [[ "${ISSUE_NUMBER:-}" =~ ^[0-9]+$ ]] \
             || ! [[ "${REVIEW_WORKFLOW_FILE:-}" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]*\.yml$ ]] \
             || ! [[ "${TEST_REPO:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
@@ -3004,6 +3044,21 @@ jobs:
           fi
 
       # ── Cleanup ─────────────────────────────────────────────────
+      # Issue #10037 (G3): when the gate run is cancelled (the runner-wait
+      # stop in scripts/dispatch_and_watch_workflow_run.sh, or an operator),
+      # cancel this job's test-issue runs that have not completed (title and
+      # created-after scoped, logic in the script's --cancel-issue-runs mode),
+      # so they do not keep holding or queueing runners after the gate ends.
+      - name: Cancel the test issue's runs when the gate is cancelled
+        if: cancelled()
+        env:
+          CANCEL_ISSUE_TITLE: ${{ steps.create-issue.outputs.title }}
+          CANCEL_ISSUE_CREATED_AFTER: ${{ steps.create-issue.outputs.created_after }}
+        run: |
+          if grep -q -- '--cancel-issue-runs)' ./scripts/dispatch_and_watch_workflow_run.sh 2>/dev/null; then
+            bash ./scripts/dispatch_and_watch_workflow_run.sh --cancel-issue-runs || true
+          fi
+
       - name: Cleanup test artifacts
         if: always()
         env:
@@ -3168,6 +3223,14 @@ jobs:
       # Remove after root-cause is identified and a targeted fix lands.
       - *git-checkout-diag
 
+      - name: Record GH_PAT budget at e2e-smoke-test end
+        if: always()
+        # Issue #9887: no rate_limit read (no added GitHub request); only the
+        # job's own gh call count.
+        run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=e2e-smoke-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
+
   # ──────────────────────────────────────────────────────────────────
   # Job 1b: Script correctness validation — runs parallel with E2E
   # ──────────────────────────────────────────────────────────────────
@@ -3188,7 +3251,11 @@ jobs:
     # in test-and-mark-stable run 39526632477 (2026-10-21, v1.37.0 attempt):
     # orchestrate-poll took 39.5 minutes and unit tests had run 19 more. The
     # prior release (run 39213880700, 2026-10-19) already used 56 of 60.
-    timeout-minutes: 90
+    # 135, not 90: run 44689548109 (2026-11-20, v1.47.6) timed out at 90 in
+    # Unit tests: orchestrate-poll 52.7 min, unit tests ~45 min, ~100 min
+    # total; the 2026-11-17 run 44093205767 already used 88 of 90. 135 keeps
+    # at least 25% headroom (CLAUDE.md §33).
+    timeout-minutes: 135
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -3607,6 +3674,12 @@ jobs:
       AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
     steps:
+      - name: Record GH_PAT budget at workflow-log-analysis-test start
+        # Issue #9887: no rate_limit read, so the release gate adds no GitHub
+        # request; the quota keys read unknown (same pattern as validate).
+        run: |
+          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=workflow-log-analysis-test remaining=unknown reset=unknown used_in_job=unknown"
+
       - name: Validate prerequisites
         run: |
           set -euo pipefail
@@ -3637,6 +3710,19 @@ jobs:
           [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
           source scripts/gh_helpers.sh
 
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
+
       - name: Dispatch & snapshot — workflow-log-analysis
         id: dispatch_log_analysis
         # Rate-limit shaping: the script below opens with a brief 4s
@@ -3654,6 +3740,7 @@ jobs:
         # during healthy runs.
         timeout-minutes: 265
         env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
           WF_FILE: workflow-log-analysis.yml
           # Plan P4: with the switch on (default) and TEST_REPO being this
           # repository, the gate analyses the full repo roster since the last
@@ -3728,6 +3815,14 @@ jobs:
             RESULT=cancelled
           fi
           echo "result=${RESULT}" >> "$GITHUB_OUTPUT"
+
+      - name: Record GH_PAT budget at workflow-log-analysis-test end
+        if: always()
+        # Issue #9887: no rate_limit read (no added GitHub request); only the
+        # job's own gh call count.
+        run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=workflow-log-analysis-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
   # ──────────────────────────────────────────────────────────────────
   # Job 1c-2: Orphan workflows live-dispatch test
   # Dispatches each user-facing workflow that the e2e smoke test does
@@ -3770,6 +3865,12 @@ jobs:
       # set the repo variable to false to skip the cancel (the shell default stays true).
       DISPATCH_WATCH_CANCEL_ON_TIMEOUT: ${{ vars.DISPATCH_WATCH_CANCEL_ON_TIMEOUT || 'true' }}
     steps:
+      - name: Record GH_PAT budget at orphan-workflows-test start
+        # Issue #9887: no rate_limit read, so the release gate adds no GitHub
+        # request; the quota keys read unknown (same pattern as validate).
+        run: |
+          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=orphan-workflows-test remaining=unknown reset=unknown used_in_job=unknown"
+
       - name: Validate prerequisites
         run: |
           set -euo pipefail
@@ -3800,6 +3901,19 @@ jobs:
           [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
           source scripts/gh_helpers.sh
 
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
+
       # Generic helper: dispatch a workflow_dispatch workflow by file name
       # and capture the resulting run id, then wait for completion. Each
       # invocation runs in its own step so failures attribute to the
@@ -3822,6 +3936,8 @@ jobs:
       - name: Dispatch & watch — validation-refresh
         id: dispatch_validation_refresh
         timeout-minutes: 95
+        env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
         run: |
           set -euo pipefail
           sleep 4
@@ -3913,6 +4029,8 @@ jobs:
       - name: Dispatch & watch — update_workflows (allow_workflow_edits=false)
         id: dispatch_update_workflows
         timeout-minutes: 18
+        env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
         run: |
           set -euo pipefail
           sleep 4
@@ -3993,6 +4111,8 @@ jobs:
       - name: Dispatch & watch — internal-memory-maintenance
         id: dispatch_memory_maintenance
         timeout-minutes: 45
+        env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
         run: |
           set -euo pipefail
           sleep 4
@@ -4054,6 +4174,26 @@ jobs:
           rm -f "${DW_TIMEOUT_LOG}"
           # End dispatch-watch timeout handling.
 
+      # Issue #10037 (G3): when the gate run is cancelled (the runner-wait
+      # stop in scripts/dispatch_and_watch_workflow_run.sh, or an operator),
+      # cancel this job's dispatched child runs that have not completed, so
+      # they do not keep holding runners after the gate ends.
+      - name: Cancel dispatched child runs when the gate is cancelled
+        if: cancelled()
+        env:
+          GATE_CHILD_RUN_IDS: ${{ steps.dispatch_validation_refresh.outputs.dispatched_run_id }} ${{ steps.dispatch_update_workflows.outputs.dispatched_run_id }} ${{ steps.dispatch_memory_maintenance.outputs.dispatched_run_id }}
+        run: |
+          for child_id in ${GATE_CHILD_RUN_IDS}; do
+            [[ "${child_id}" =~ ^[0-9]+$ ]] || continue
+            child_status="$(timeout 20 gh api "repos/${TEST_REPO}/actions/runs/${child_id}" --jq '.status // ""' 2>/dev/null || true)"
+            [ "${child_status}" != "completed" ] || continue
+            if timeout 20 gh api -X POST "repos/${TEST_REPO}/actions/runs/${child_id}/cancel" >/dev/null 2>&1; then
+              echo "Cancel requested for child run #${child_id} (gate cancelled)"
+            else
+              echo "::warning::Could not cancel child run #${child_id} after the gate was cancelled"
+            fi
+          done
+
       - name: "Soft-error analyser (memory_maintenance)"
         if: always() && steps.dispatch_memory_maintenance.outputs.run_id != ''
         uses: ./.github/actions/run-soft-error-analyzer
@@ -4066,6 +4206,14 @@ jobs:
           gh_token: ${{ secrets.GH_PAT }}
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+
+      - name: Record GH_PAT budget at orphan-workflows-test end
+        if: always()
+        # Issue #9887: no rate_limit read (no added GitHub request); only the
+        # job's own gh call count.
+        run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=orphan-workflows-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
 
   # ──────────────────────────────────────────────────────────────────
   # Job 1d: Orchestrate decompose end-to-end test
@@ -4089,6 +4237,12 @@ jobs:
       tracking_issue: ${{ steps.dispatch.outputs.tracking_issue }}
       child_issues: ${{ steps.dispatch.outputs.child_issues }}
     steps:
+      - name: Record GH_PAT budget at orchestrate-decompose-test start
+        # Issue #9887: no rate_limit read, so the release gate adds no GitHub
+        # request; the quota keys read unknown (same pattern as validate).
+        run: |
+          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=orchestrate-decompose-test remaining=unknown reset=unknown used_in_job=unknown"
+
       - name: Validate prerequisites
         run: |
           set -euo pipefail
@@ -4118,8 +4272,23 @@ jobs:
           [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
           source scripts/gh_helpers.sh
 
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
+
       - name: Dispatch internal-orchestrate.yml with multi-issue project
         id: dispatch
+        env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
         run: |
           set -euo pipefail
           WF_FILE="internal-orchestrate.yml"
@@ -4363,6 +4532,7 @@ jobs:
       - name: Cleanup orchestrate test issues
         if: always()
         env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
           TRACKING_NUMBER: ${{ steps.dispatch.outputs.tracking_issue }}
           CHILDREN: ${{ steps.dispatch.outputs.child_issues }}
           RUN_ID: ${{ github.run_id }}
@@ -4475,6 +4645,14 @@ jobs:
           fi
           true  # ensure step exits 0 even if some closes failed
 
+      - name: Record GH_PAT budget at orchestrate-decompose-test end
+        if: always()
+        # Issue #9887: no rate_limit read (no added GitHub request); only the
+        # job's own gh call count.
+        run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=orchestrate-decompose-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
+
   # ──────────────────────────────────────────────────────────────────
   # Job 1e: Validate (reusable) standalone fixture dispatch
   # Dispatches internal-validate.yml in standalone mode (tracking_issue=0)
@@ -4501,6 +4679,12 @@ jobs:
       # set the repo variable to false to skip the cancel (the shell default stays true).
       DISPATCH_WATCH_CANCEL_ON_TIMEOUT: ${{ vars.DISPATCH_WATCH_CANCEL_ON_TIMEOUT || 'true' }}
     steps:
+      - name: Record GH_PAT budget at validate-standalone-test start
+        # Issue #9887: no rate_limit read, so the release gate adds no GitHub
+        # request; the quota keys read unknown (same pattern as validate).
+        run: |
+          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=validate-standalone-test remaining=unknown reset=unknown used_in_job=unknown"
+
       - name: Validate prerequisites
         run: |
           set -euo pipefail
@@ -4528,10 +4712,25 @@ jobs:
           [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
           source scripts/gh_helpers.sh
 
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
+
       - name: Dispatch internal-validate.yml standalone
         id: dispatch
         # 1800s watcher wait + one 20s poll + gh retry backoff headroom.
         timeout-minutes: 35
+        env:
+          GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
         run: |
           set -euo pipefail
           WF_FILE="internal-validate.yml"
@@ -4594,6 +4793,26 @@ jobs:
           rm -f "${DW_TIMEOUT_LOG}"
           # End dispatch-watch timeout handling.
 
+      # Issue #10037 (G3): when the gate run is cancelled (the runner-wait
+      # stop in scripts/dispatch_and_watch_workflow_run.sh, or an operator),
+      # cancel this job's dispatched child runs that have not completed, so
+      # they do not keep holding runners after the gate ends.
+      - name: Cancel dispatched child runs when the gate is cancelled
+        if: cancelled()
+        env:
+          GATE_CHILD_RUN_IDS: ${{ steps.dispatch.outputs.dispatched_run_id }}
+        run: |
+          for child_id in ${GATE_CHILD_RUN_IDS}; do
+            [[ "${child_id}" =~ ^[0-9]+$ ]] || continue
+            child_status="$(timeout 20 gh api "repos/${TEST_REPO}/actions/runs/${child_id}" --jq '.status // ""' 2>/dev/null || true)"
+            [ "${child_status}" != "completed" ] || continue
+            if timeout 20 gh api -X POST "repos/${TEST_REPO}/actions/runs/${child_id}/cancel" >/dev/null 2>&1; then
+              echo "Cancel requested for child run #${child_id} (gate cancelled)"
+            else
+              echo "::warning::Could not cancel child run #${child_id} after the gate was cancelled"
+            fi
+          done
+
       - name: "Soft-error analyser (validate-standalone)"
         if: always() && steps.dispatch.outputs.run_id != ''
         uses: ./.github/actions/run-soft-error-analyzer
@@ -4606,6 +4825,14 @@ jobs:
           gh_token: ${{ secrets.GH_PAT }}
           model: ${{ vars.LOG_ANALYZER_MODEL || 'openai/gpt-6-luna' }}
           reasoning: ${{ vars.LOG_ANALYZER_REASONING || 'medium' }}
+
+      - name: Record GH_PAT budget at validate-standalone-test end
+        if: always()
+        # Issue #9887: no rate_limit read (no added GitHub request); only the
+        # job's own gh call count.
+        run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=validate-standalone-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
 
   # ──────────────────────────────────────────────────────────────────
   # Job 1f: Clarify-rejects-unsolvable negative test
@@ -4624,6 +4851,12 @@ jobs:
       AI_COMMENT_JOB_TOKEN: ${{ github.token }}
       TEST_REPO: ${{ inputs.test_repo || github.repository }}
     steps:
+      - name: Record GH_PAT budget at clarify-rejects-unsolvable-test start
+        # Issue #9887: no rate_limit read, so the release gate adds no GitHub
+        # request; the quota keys read unknown (same pattern as validate).
+        run: |
+          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=clarify-rejects-unsolvable-test remaining=unknown reset=unknown used_in_job=unknown"
+
       - name: Validate prerequisites
         run: |
           set -euo pipefail
@@ -4651,6 +4884,19 @@ jobs:
           [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
           source scripts/gh_helpers.sh
 
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
+
       - name: Create unsolvable issue
         id: create
         run: |
@@ -4674,6 +4920,9 @@ jobs:
           echo "pre_clarify_run_id=${PRE_CLARIFY_RUN_ID}" >> "$GITHUB_OUTPUT"
           TITLE="[E2E Clarify Negative Test] under-specified task (run ${GITHUB_RUN_ID})"
           BODY="Make it better."
+          # Issue #10037 (G3): the creation time (epoch digits only, #9797)
+          # scopes the gate-cancel step below to this issue's runs.
+          echo "created_after_epoch=$(date +%s)" >> "$GITHUB_OUTPUT"
           NUMBER=$(gh api "repos/${TEST_REPO}/issues" \
             -f title="${TITLE}" -f body="${BODY}" --jq '.number')
           if ! [[ "${NUMBER}" =~ ^[1-9][0-9]*$ ]]; then
@@ -4822,6 +5071,29 @@ jobs:
           echo "::error::Clarify did not act on the under-specified issue within timeout"
           exit 1
 
+      # Issue #10037 (G3): when the gate run is cancelled (the runner-wait
+      # stop in scripts/dispatch_and_watch_workflow_run.sh, or an operator),
+      # cancel this job's test-issue runs that have not completed (title and
+      # created-after scoped, logic in the script's --cancel-issue-runs mode),
+      # so they do not keep holding or queueing runners after the gate ends.
+      # It sits right after the wait step, the job's last step that is not
+      # always(), so it runs before the soft-error analyser.
+      - name: Cancel the test issue's runs when the gate is cancelled
+        if: cancelled()
+        env:
+          CANCEL_ISSUE_CREATED_EPOCH: ${{ steps.create.outputs.created_after_epoch }}
+        run: |
+          # Same title as the "Create unsolvable issue" step.
+          CANCEL_ISSUE_TITLE="[E2E Clarify Negative Test] under-specified task (run ${GITHUB_RUN_ID})"
+          CANCEL_ISSUE_CREATED_AFTER=""
+          if [[ "${CANCEL_ISSUE_CREATED_EPOCH:-}" =~ ^[0-9]+$ ]]; then
+            CANCEL_ISSUE_CREATED_AFTER="$(date -u -d "@${CANCEL_ISSUE_CREATED_EPOCH}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+          fi
+          export CANCEL_ISSUE_TITLE CANCEL_ISSUE_CREATED_AFTER
+          if grep -q -- '--cancel-issue-runs)' ./scripts/dispatch_and_watch_workflow_run.sh 2>/dev/null; then
+            bash ./scripts/dispatch_and_watch_workflow_run.sh --cancel-issue-runs || true
+          fi
+
       - name: "Soft-error analyser (clarify negative test)"
         if: always() && steps.capture_clarify_run.outputs.run_id != ''
         uses: ./.github/actions/run-soft-error-analyzer
@@ -4856,6 +5128,14 @@ jobs:
           done
           echo "::warning::Could not close issue #${ISSUE_NUMBER} after 3 attempts (manual cleanup may be required)"
           exit 0
+
+      - name: Record GH_PAT budget at clarify-rejects-unsolvable-test end
+        if: always()
+        # Issue #9887: no rate_limit read (no added GitHub request); only the
+        # job's own gh call count.
+        run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=clarify-rejects-unsolvable-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
 
   # ──────────────────────────────────────────────────────────────────
   # Job 1g: Alternate-model happy-path run
@@ -4917,6 +5197,12 @@ jobs:
       # production default in implement.yml's MODEL_EDITOR.
       ALT_EDITOR_MODEL: ${{ vars.ALT_EDITOR_MODEL || 'openai/gpt-6-sol' }}
     steps:
+      - name: Record GH_PAT budget at e2e-alt-model-test start
+        # Issue #9887: no rate_limit read, so the release gate adds no GitHub
+        # request; the quota keys read unknown (same pattern as validate).
+        run: |
+          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=e2e-alt-model-test remaining=unknown reset=unknown used_in_job=unknown"
+
       # Required for the run-soft-error-analyzer composite action below.
       - name: Checkout repository (for soft-error analyser)
         uses: actions/checkout@v5
@@ -4934,6 +5220,19 @@ jobs:
         run: |
           [ -n "${AI_COMMENT_SIGNING_SECRET:-}" ] || exit 0
           source scripts/gh_helpers.sh
+
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
 
       - name: Validate prerequisites
         run: |
@@ -5089,9 +5388,34 @@ jobs:
               ALT_CLARIFY_RUN_NOTE=" (no non-skipped Clarify run titled '${ALT_ISSUE_TITLE}' found)"
             fi
           fi
+          # Issue #10037 (G3): a timeout caused only by this issue's runs waiting
+          # for runners ends as runner_wait and, with
+          # DISPATCH_WATCH_STOP_RELEASE_GATE=true, stops the gate (no attempt).
+          # The grep skips a checkout whose watcher predates the mode.
+          if grep -q -- '--alt-model-runner-wait)' ./scripts/dispatch_and_watch_workflow_run.sh 2>/dev/null; then
+            ALT_WAIT_STARTED_AT=$(( DEADLINE - 4500 )) ALT_WAIT_BUDGET_SECS=4500 \
+              bash ./scripts/dispatch_and_watch_workflow_run.sh --alt-model-runner-wait || true
+          fi
           echo "::error::Alt-model run timed out before reaching review stage${ALT_CLARIFY_RUN_NOTE}"
           echo "  Issue: ${GITHUB_SERVER_URL:-https://github.com}/${TEST_REPO}/issues/${ISSUE_NUMBER}"
           exit 1
+
+      # Issue #10037 (G3): when the gate run is cancelled (the runner-wait
+      # stop in scripts/dispatch_and_watch_workflow_run.sh, or an operator),
+      # cancel this job's test-issue runs that have not completed (title and
+      # created-after scoped, logic in the script's --cancel-issue-runs mode),
+      # so they do not keep holding or queueing runners after the gate ends.
+      # It sits right after the wait step, the job's last step that is not
+      # always(), so it runs before the capture and soft-error analyser steps.
+      - name: Cancel the test issue's runs when the gate is cancelled
+        if: cancelled()
+        env:
+          CANCEL_ISSUE_TITLE: ${{ steps.create.outputs.title }}
+          CANCEL_ISSUE_CREATED_AFTER: ${{ steps.create.outputs.created_after }}
+        run: |
+          if grep -q -- '--cancel-issue-runs)' ./scripts/dispatch_and_watch_workflow_run.sh 2>/dev/null; then
+            bash ./scripts/dispatch_and_watch_workflow_run.sh --cancel-issue-runs || true
+          fi
 
       - name: Capture alt-model phase run ids
         id: capture_alt_runs
@@ -5275,6 +5599,14 @@ jobs:
           done
           true  # ensure step exits 0 even on failed branch delete
 
+      - name: Record GH_PAT budget at e2e-alt-model-test end
+        if: always()
+        # Issue #9887: no rate_limit read (no added GitHub request); only the
+        # job's own gh call count.
+        run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=e2e-alt-model-test remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
+
   # ──────────────────────────────────────────────────────────────────
   # Job 2: Validate release prerequisites (same as mark-stable.yml)
   # ──────────────────────────────────────────────────────────────────
@@ -5303,6 +5635,11 @@ jobs:
       checks: read
       actions: read
     steps:
+      - name: Record GH_PAT budget at validate start
+        # This job holds no GH_PAT (issue #9887, D6): no API call, quota unknown.
+        run: |
+          echo "GH_PAT_BUDGET phase=start workflow=test-and-mark-stable job=validate remaining=unknown reset=unknown used_in_job=unknown"
+
       - name: Validate version format
         run: |
           set -euo pipefail
@@ -5320,6 +5657,19 @@ jobs:
           # (the one the promote cycle records as the smoke-tested revision).
           ref: ${{ github.sha }}
           fetch-depth: 0
+
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
 
       - name: Validate existing version tag
         run: |
@@ -5372,6 +5722,8 @@ jobs:
       - name: Verify CI passed on source branch
         env:
           GH_TOKEN: ${{ github.token }}
+          # Issue #9887: GH_TOKEN carries the job token here, not GH_PAT.
+          GH_CALL_COUNTER_TOKEN_KIND: github_token
           SOURCE_BRANCH: ${{ needs.source.outputs.branch }}
           GATE_REPO: ${{ github.repository }}
           GATE_ONLY: ${{ inputs.gate_only }}
@@ -5408,6 +5760,13 @@ jobs:
       # produces `The process '/usr/bin/git' failed with exit code 128`.
       # Remove after root-cause is identified and a targeted fix lands.
       - *git-checkout-diag
+
+      - name: Record GH_PAT budget at validate end
+        if: always()
+        # No GH_PAT and no API call; only the job's own gh call count.
+        run: |
+          counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+          echo "GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=validate remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
 
   # ──────────────────────────────────────────────────────────────────
   # Job 3: Create release (same as mark-stable.yml)
@@ -5691,7 +6050,10 @@ jobs:
           # release notes are extracted and the version tag is cut, and fails
           # open (reset to the remote tip) if the commit cannot be pushed.
 
-          PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_changelog.py assemble --repo-root .
+          # --notes-out (#9846): the folded fragments' text, read by "Extract
+          # changelog for this version" as the release body. RUNNER_TEMP sits
+          # outside the worktree, so the fail-open reset below leaves it alone.
+          PYTHONDONTWRITEBYTECODE=1 python3 scripts/assemble_changelog.py assemble --repo-root . --notes-out "${RUNNER_TEMP:-/tmp}/release_fragment_notes.md"
           # agents.d/ fragments (CLAUDE.md §30) fold into agents.md in the same
           # commit. Fail open: a fragment that cannot fold stays in agents.d/
           # for the next release, and a missing script (an older ref) is a no-op.
@@ -5760,8 +6122,15 @@ jobs:
           NOTES=$(awk \
             "/^## \\[${VERSION}\\]/{found=1; next} /^## \\[/{if(found) exit} found{print}" \
             CHANGELOG.md)
+          # Fallback order (#9846): a hand-written ## [VERSION] section, then
+          # the notes the assemble step wrote from the folded fragments, then
+          # a placeholder. A missing notes file only means the placeholder.
+          FRAGMENT_NOTES_FILE="${RUNNER_TEMP:-/tmp}/release_fragment_notes.md"
+          if [ -z "$NOTES" ] && [ -s "${FRAGMENT_NOTES_FILE}" ]; then
+            NOTES=$(cat "${FRAGMENT_NOTES_FILE}")
+          fi
           if [ -z "$NOTES" ]; then
-            NOTES="No changelog entry found for ${VERSION}."
+            NOTES="No changelog fragments were folded for ${VERSION}."
           fi
           echo "$NOTES" > /tmp/release_notes.md
           echo "notes_file=/tmp/release_notes.md" >> "$GITHUB_OUTPUT"
@@ -5787,7 +6156,7 @@ jobs:
       # A failed attestation fails the job here, before any tag is pushed.
       - name: Attest sync manifest
         if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: ${{ steps.sync_manifest.outputs.path }}
 
@@ -5984,7 +6353,7 @@ jobs:
 
       - name: Attest release manifest
         if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: ${{ steps.release_manifest.outputs.manifest_path }}
 

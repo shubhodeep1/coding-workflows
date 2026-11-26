@@ -86,7 +86,7 @@ env:
 
 jobs:
   orchestrate:
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
     # Raised from 60 → 240 min after run 25742821278 was SIGKILLed at
     # the 60-min cap while still inside attempt 1/3 of the decomposer
     # codex call, making the 3-attempt retry loop structurally

@@ -72,7 +72,12 @@ the network; the shell only executes.
       request that owns a CI-failure issue (label `ai:check-triage` /
       `ai:check-triage-escalated`, or the `check-failure-triage:pr=` marker),
       and the issue's single line-anchored integration branch. Conflicting PR
-      numbers or a URL into another repository give `pr: null`.
+      numbers or a URL into another repository give `pr: null`. A triage
+      issue keyed on a failing default branch (a valid
+      `<!-- check-failure-triage:base=<ref> -->` on line 5, after the
+      fp/gen/root/pr header lines, #9674) also gives `pr: null`, with
+      `reason: "base_keyed"`: its PR is only an example, so a re-issue keeps
+      the default branch (#10040).
   fixup-delivered-body --item-file PATH --repo R --pipeline-login L
       Reads the already-fetched item JSON and prints `{"status": "ok"|"skip",
       "reason": s, "target_branch": s|null, "paths": [s]}` for the unblock
@@ -227,6 +232,16 @@ CHECK_TRIAGE_PR_LINE_RE = re.compile(
 	r"^\s*(?:-\s*)?\*\*Pull request:\*\*\s*https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/pull/([0-9]{1,9})(?![0-9])",
 	re.MULTILINE,
 )
+# A triage issue keyed on a failing default branch (#9674): the first four
+# body lines are the fp/gen/root/pr header and line 5 names the base ref.
+# Mirrors CI_TRIAGE_PARSE_PY in scripts/resolve_integration_ref.sh (#10040).
+CHECK_TRIAGE_BASE_HEADER_RES = (
+	re.compile(r"<!-- check-failure-triage:fp=[0-9a-f]{64} -->"),
+	re.compile(r"<!-- check-failure-triage:gen=[0-9]+ -->"),
+	re.compile(r"<!-- check-failure-triage:root=[0-9a-f]{64} -->"),
+	re.compile(r"<!-- check-failure-triage:pr=[1-9][0-9]{0,9} -->"),
+)
+CHECK_TRIAGE_BASE_MARKER_RE = re.compile(r"<!-- check-failure-triage:base=([A-Za-z0-9._/-]{1,200}) -->")
 CI_OWNER_STATES = ("superseded", "open", "verified", "unverified")
 CI_OWNER_SHA_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 # A fix-up that already delivered a heal issue's fix (#8530): the issue's
@@ -272,12 +287,35 @@ def _safe_branch_ref(branch: str) -> bool:
 	)
 
 
+def _check_triage_base_keyed_ref(body: str) -> str | None:
+	"""The base ref of a base-keyed triage body (#9674), or None.
+
+	Same rule as CI_TRIAGE_PARSE_PY in scripts/resolve_integration_ref.sh
+	(#10040): CRLF is normalised, lines 1-4 must be the exact fp/gen/root/pr
+	header, line 5 the base marker, and the ref must not contain `..`. A base
+	marker anywhere else, or one that fails these checks, is not read.
+	"""
+	lines = (body if isinstance(body, str) else "").replace("\r\n", "\n").split("\n")
+	if len(lines) < 5:
+		return None
+	if not all(pattern.fullmatch(lines[index]) for index, pattern in enumerate(CHECK_TRIAGE_BASE_HEADER_RES)):
+		return None
+	match = CHECK_TRIAGE_BASE_MARKER_RE.fullmatch(lines[4])
+	if match is None or ".." in match.group(1):
+		return None
+	return match.group(1)
+
+
 def ci_owner_candidate(body: str, labels: list[str], repo: str) -> dict:
 	"""The PR that owns a CI-failure issue, from its body only (no network)."""
 	body = body if isinstance(body, str) else ""
 	markers = {int(match.group(1)) for match in CHECK_TRIAGE_PR_MARKER_RE.finditer(body)}
 	if not markers and not any(label in CHECK_TRIAGE_LABELS for label in labels):
 		return {"pr": None, "reason": "not_ci_failure"}
+	# #10040: a base-keyed issue's PR is only the example it was first seen
+	# on; no owner, so its fix work stays on the failing default branch.
+	if _check_triage_base_keyed_ref(body) is not None:
+		return {"pr": None, "reason": "base_keyed"}
 	numbers = set(markers)
 	foreign = False
 	for match in CHECK_TRIAGE_PR_LINE_RE.finditer(body):
@@ -872,10 +910,19 @@ def reset_ops(ctx: dict, note: str) -> list[dict]:
 		return ops
 	present = label if label in ctx["labels"] else ""
 	if stop in GUARD_STOPS or stop == "implement-diagnose-failed":
-		if ctx["has_plan"]:
+		# Issue #9534: a routed planning scope block (plan.yml) carries
+		# ai:blocked beside ai:scope-blocked. Every resume path (retry_budget,
+		# accept_with_followup, regrant, hold follow-ups) must re-plan rather
+		# than approve the older plan, and must drop ai:blocked too, or the
+		# next scan resumes the issue a second time as stop `blocked`.
+		reset_routed_planning_scope = stop == "scope-blocked" and "ai:blocked" in ctx["labels"]
+		if ctx["has_plan"] and not reset_routed_planning_scope:
 			return _approve(item, ctx["labels"], present)
 		ops = [{"op": "comment", "issue": item, "body": "/reclarify"}]
-		return ops + ([{"op": "remove_label", "issue": item, "label": present}] if present else [])
+		ops += [{"op": "remove_label", "issue": item, "label": present}] if present else []
+		if reset_routed_planning_scope:
+			ops.append({"op": "remove_label", "issue": item, "label": "ai:blocked"})
+		return ops
 	if stop == "blocked":
 		if ctx["has_plan"]:
 			return _approve(item, ctx["labels"], present)
@@ -1157,7 +1204,15 @@ def plan(verdict: dict, ctx: dict) -> list[dict]:
 	elif name == "override_guard":
 		if ctx["stop"] == "scope-blocked":
 			ops.append({"op": "edit_files_touched", "issue": item, "paths": verdict["paths"]})
-		ops += _approve(item, ctx["labels"], _stop_label(ctx["stop"]) if _stop_label(ctx["stop"]) in ctx["labels"] else "")
+		# Issue #9534: resume through reset_ops, the one source of the guard-stop
+		# rule (an older plan is approved, except on a routed planning scope block,
+		# ai:blocked beside ai:scope-blocked, which re-plans with /reclarify and
+		# drops both labels). The ledger offers override_guard only on an issue's
+		# GUARD_STOPS; anything else keeps the old approve path.
+		if ctx["kind"] == "issue" and ctx["stop"] in GUARD_STOPS:
+			ops += reset_ops(ctx, verdict.get("reason", ""))
+		else:
+			ops += _approve(item, ctx["labels"], _stop_label(ctx["stop"]) if _stop_label(ctx["stop"]) in ctx["labels"] else "")
 	elif name == "reissue":
 		title = f"Re-issue of #{item}: {_lineage_title(ctx)}"[:240]
 		body = "\n".join([f"Re-issued by the unblock judge from #{item}.", "", f"Specification: {verdict['instructions']}", "", f"Why: {verdict['reason']}"])
