@@ -3019,6 +3019,8 @@ unblock_ask_model()
 			linked_diff_pr="$(jq -r '.number // "" | tostring' "${RUNTIME_DIR}/linked_pr.json" 2>/dev/null || true)"
 			if [[ "${linked_diff_pr}" =~ ^[1-9][0-9]*$ ]]; then
 				gh api "repos/${REPOSITORY}/pulls/${linked_diff_pr}" -H "Accept: application/vnd.github.diff" 2>/dev/null | head -c 120000 > "${RUNTIME_DIR}/pr_diff.txt" || true
+				# Fail open, but say so: an empty diff is a failed read or a PR with no changes.
+				[ -s "${RUNTIME_DIR}/pr_diff.txt" ] || unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=linked_pr_diff outcome=unavailable pr=${linked_diff_pr}"
 			fi
 		fi
 	fi

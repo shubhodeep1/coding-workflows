@@ -6602,3 +6602,12 @@ def test_ledger_linked_pr_evidence_and_validate_rule() -> None:
 		assert ledger.validate({"verdict": name, "reason": "r", "instructions": "i"}, decision, "o/r")["verdict"] == name
 		assert ledger.validate({"verdict": name, "reason": "r", "instructions": "i"}, decision, "o/r", linked_pr={"number": True})["verdict"] == name
 	assert ledger.validate({"verdict": "descope", "reason": "r", "instructions": "i"}, decision, "o/r", linked_pr={"number": 12})["verdict"] == "descope"
+
+
+def test_unblock_workflow_forwards_linked_pr_switch() -> None:
+	# #10149: the linked-PR switch reaches scripts/unblock_judge.sh from a repository variable.
+	workflow = (ROOT / ".github/workflows/unblock_judge.yml").read_text(encoding="utf-8")
+	step = workflow[workflow.index("      - name: Judge the blocked item\n"):]
+	assert "\n          UNBLOCK_JUDGE_LINKED_PR_ENABLED: ${{ vars.UNBLOCK_JUDGE_LINKED_PR_ENABLED || 'true' }}\n" in step
+	script = (ROOT / "scripts" / "unblock_judge.sh").read_text(encoding="utf-8")
+	assert '"${UNBLOCK_JUDGE_LINKED_PR_ENABLED:-true}"' in script

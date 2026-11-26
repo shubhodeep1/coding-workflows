@@ -35845,10 +35845,6 @@ def _check_stall_merge_final_ci_workflow_is_captured_and_cleared_for_other_paths
 	assert log.read_text(encoding="utf-8").splitlines() == ["fresh wf=ci.yml", "wait wf=ci.yml", "merge wf="]
 
 
-if __name__ == "__main__":
-	raise SystemExit(main())
-
-
 # Issue #10149 (re-implementation of #9546): the stall judge lists the linked
 # PR's review runs once, flags a review of the current head that waits for a
 # runner, and holds escalate_human / close_and_reissue while it does.
@@ -35889,16 +35885,16 @@ def _run_stall_judge_live_review_poller(action: str = "escalate_human", **overri
 	issue["last_seen_phase"] = "ai:implementing"
 	issue["status_since_ts"] = 1
 	issue["stall_recovery_count"] = 2
-	kwargs = dict(
-		state=state,
-		enable_validation="false",
-		max_validate_cycles="3",
-		issue_labels={10: ["ai:implementing"]},
-		issue_linked_prs={10: 77},
-		prs=[dict(_SJ_LIVE_PR)],
-		enable_stall_human_terminalization="true",
-		mock_stall_judge_json={"action": action, "justification": "stuck", "target_pr": None, "head_ref": None},
-	)
+	kwargs = {
+		"state": state,
+		"enable_validation": "false",
+		"max_validate_cycles": "3",
+		"issue_labels": {10: ["ai:implementing"]},
+		"issue_linked_prs": {10: 77},
+		"prs": [dict(_SJ_LIVE_PR)],
+		"enable_stall_human_terminalization": "true",
+		"mock_stall_judge_json": {"action": action, "justification": "stuck", "target_pr": None, "head_ref": None},
+	}
 	kwargs.update(overrides)
 	return _run_poller(**kwargs)
 
@@ -35987,3 +35983,18 @@ def test_stall_judge_live_review_runs_wedged_queued_run_does_not_hold():
 	assert "outcome=ok runs=1 waiting=false" in out, out[-4000:]
 	assert "reason=review_waiting_for_runner" not in out
 	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+
+
+def test_stall_judge_live_review_runs_old_waiting_run_does_not_hold():
+	# The wedged-queued cutoff bounds every unstarted status, not only `queued`.
+	result = _run_stall_judge_live_review_poller(
+		active_autofix_runs=[_sj_live_review_run(status="waiting", createdAt="2000-01-01T00:00:00Z")]
+	)
+	out = result["stdout"]
+	assert "outcome=ok runs=1 waiting=false" in out, out[-4000:]
+	assert "reason=review_waiting_for_runner" not in out
+	assert "ai:needs-human" in result["issues"]["10"]["labels"]
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

@@ -24895,7 +24895,7 @@ invoke_stall_judge() {
           [.[]?
             | select(($head_sha != "" and (.headSha // "") == $head_sha) or ($head_sha == "" and (.headBranch // "") == $head_ref))
             | select((.status // "") as $s | ["queued", "waiting", "pending", "requested"] | index($s) != null)
-            | select(is_wedged_queued($zq_cutoff) | not)
+            | select((. + {status: "queued"}) | is_wedged_queued($zq_cutoff) | not)
           ] | (.[0].databaseId // empty) | tostring' 2>/dev/null || echo "")"
         if [[ "${_sj_review_waiting_run}" =~ ^[0-9]+$ ]]; then
           _sj_review_waiting_for_runner="true"
@@ -24903,8 +24903,8 @@ invoke_stall_judge() {
           _sj_review_waiting_run=""
         fi
         _sj_merged_outcomes="$(jq -cn --argjson cached "${workflow_outcomes}" --argjson live "${_sj_live_review_runs}" '
-          ([$cached[]? | . + {head_sha: (.head_sha // "")}]
-           + [$live[]? | {id: .databaseId, workflow: (if (.name // "") != "" then .name else (.workflowName // "") end), conclusion: (.conclusion // ""), status: (.status // ""), head_branch: (.headBranch // ""), head_sha: (.headSha // ""), created_at: (.createdAt // "")}])
+          ([$live[]? | {id: .databaseId, workflow: (if (.name // "") != "" then .name else (.workflowName // "") end), conclusion: (.conclusion // ""), status: (.status // ""), head_branch: (.headBranch // ""), head_sha: (.headSha // ""), created_at: (.createdAt // "")}]
+           + [$cached[]? | . + {head_sha: (.head_sha // "")}])
           | unique_by(.id)
           | sort_by(.created_at)
           | reverse
@@ -25289,7 +25289,9 @@ invoke_stall_judge() {
   # simply has not started. Hold both (D1): the judge comment still posts,
   # nothing is dispatched and no attempt is counted, as for the owner hold
   # below; the next tick re-checks. Never mapped to `skip`, which can close
-  # the linked PR. The wedged-queued filter (#9473) bounds the hold.
+  # the linked PR. The wedged-queued cutoff (#9473, ZOMBIE_RUN_MAX_QUEUED_HOURS)
+  # bounds the hold: the waiting-run selection applies it to queued, waiting,
+  # pending and requested runs alike, so no unstarted run holds forever.
   local _sj_review_runner_hold="false"
   if [ "${_sj_review_waiting_for_runner}" = "true" ]; then
     case "${effective_action}" in

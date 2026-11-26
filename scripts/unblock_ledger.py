@@ -1215,12 +1215,13 @@ def validate(
 		raise UsageError(f"unknown verdict {name!r}")
 	if name not in allowed:
 		raise UsageError(f"verdict {name!r} is not allowed here; allowed: {allowed}")
-	# Independent of `allowed`: a hand-built or tampered decision that lists
-	# `close` without a deterministic terminal condition is refused (#6557).
+	# Issue #10149: the issue's open pull request already carries the work.
 	if name in LINKED_PR_REFUSED_VERDICTS and isinstance(linked_pr, dict):
 		linked_number = linked_pr.get("number")
 		if type(linked_number) is int and linked_number > 0:
 			raise UsageError(f"linked_open_pr:{linked_number}")
+	# Independent of `allowed`: a hand-built or tampered decision that lists
+	# `close` without a deterministic terminal condition is refused (#6557).
 	if name == TERMINAL_VERDICT and (
 		decision.get("terminal") is not True or decision.get("terminal_reason") not in TERMINAL_REASONS
 	):
