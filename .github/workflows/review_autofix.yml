@@ -5848,6 +5848,11 @@ jobs:
           RB_JUDGE_STATUS: ${{ steps.rb_judge.outputs.rb_judge_status }}
           RB_JUDGE_EXIT_CODE: ${{ steps.rb_judge.outputs.rb_judge_exit_code }}
           AUTOFIX_ITERATION: ${{ steps.retrigger_guard.outputs.autofix_iteration }}
+          # Kept out of run: so the body has no ${{ }} expression (GitHub's
+          # 21,000-character expression limit; tests/test_workflow_file_size_limit.py).
+          AUTOFIX_STEP_SERVER_URL: ${{ github.server_url }}
+          AUTOFIX_STEP_REPOSITORY: ${{ github.repository }}
+          AUTOFIX_STEP_RUN_ID: ${{ github.run_id }}
           RB_BLOCKED_REPEAT: ${{ steps.rb_blocked_comment.outputs.rb_judge_crash_repeat }}
           RB_BLOCKED_FRESHNESS_REPEAT: ${{ steps.rb_blocked_comment.outputs.rb_judge_freshness_repeat }}
           JUDGE_MERGE_LEASE_BLOCKER: ${{ steps.rb_judge.outputs.judge_merge_lease_blocker }}
@@ -5857,12 +5862,12 @@ jobs:
           source "${SUPPORT_SCRIPTS_DIR}/tg_helpers.sh"
           source "${SUPPORT_SCRIPTS_DIR}/gh_helpers.sh" 2>/dev/null || true
 
-          PR_URL="${{ github.server_url }}/${{ github.repository }}/pull/${PR_NUMBER}"
-          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          PR_URL="${AUTOFIX_STEP_SERVER_URL}/${AUTOFIX_STEP_REPOSITORY}/pull/${PR_NUMBER}"
+          RUN_URL="${AUTOFIX_STEP_SERVER_URL}/${AUTOFIX_STEP_REPOSITORY}/actions/runs/${AUTOFIX_STEP_RUN_ID}"
           ISSUE_NUM="$(echo "${LINKED_ISSUES_JSON:-[]}" | jq -r '.[0].number // empty' 2>/dev/null || true)"
           ISSUE_LINE=""
           if [ -n "${ISSUE_NUM}" ]; then
-            ISSUE_LINE=$'\n'"Issue: ${{ github.server_url }}/${{ github.repository }}/issues/${ISSUE_NUM}"
+            ISSUE_LINE=$'\n'"Issue: ${AUTOFIX_STEP_SERVER_URL}/${AUTOFIX_STEP_REPOSITORY}/issues/${ISSUE_NUM}"
           fi
           # CRITICAL pages a human. Outcomes the pipeline finishes or retries
           # on its own (judge merged/fixed/re-issued, stall recovery retries,

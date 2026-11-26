@@ -3445,6 +3445,7 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
               echo "PR #${PR_NUMBER} waits for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?} — merge_with_followup deferred, re-dispatched when the lease is granted. Leaving linked issues in ai:review-blocked."
               rb_judge_mark_merge_pending merge_with_followup
               echo "judge_skip_reason=base_freshness_unknown" >> "$GITHUB_OUTPUT"
+              rb_judge_emit_lease_blocker
             else
               echo "::warning::PR #${PR_NUMBER} base freshness could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}) — merge_with_followup deferred, no branch update requested. Leaving linked issues in ai:review-blocked."
               echo "judge_skip_reason=base_freshness_unknown" >> "$GITHUB_OUTPUT"

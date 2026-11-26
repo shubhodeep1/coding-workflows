@@ -458,8 +458,12 @@ def test_workflow_wires_freshness_outputs():
 	assert "JUDGE_MERGE_LEASE_BLOCKER: ${{ steps.rb_judge.outputs.judge_merge_lease_blocker }}" in alert
 	script = (REPO_ROOT / "scripts" / "review_rb_judge.sh").read_text(encoding="utf-8")
 	anchor = 'echo "judge_skip_reason=base_freshness_unknown" >> "$GITHUB_OUTPUT"\n'
-	start = script.index(anchor)
-	assert script[start + len(anchor):].lstrip(" ").startswith("rb_judge_emit_lease_blocker\n")
+	# Every deferral site (the #9987 lease_wait branch and the unverified-base
+	# branch) exports the lease holder right after the skip reason.
+	sites = script.split(anchor)[1:]
+	assert len(sites) >= 2
+	for after in sites:
+		assert after.lstrip(" ").startswith("rb_judge_emit_lease_blocker\n")
 	fn_start = script.index("rb_judge_emit_lease_blocker()\n{\n")
 	fn = script[fn_start:script.index("\n}\n", fn_start) + 3]
 	for reason, blocker, expected in (
