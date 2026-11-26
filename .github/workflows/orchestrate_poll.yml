@@ -1475,7 +1475,7 @@ jobs:
         id: pool_daily_seen
         if: steps.pool_daily_slot.outputs.in_slot == 'true'
         continue-on-error: true
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: .claude-pool-daily-usage/sent
           key: claude-pool-daily-usage-v1-${{ steps.pool_daily_slot.outputs.date }}
@@ -1642,6 +1642,7 @@ jobs:
           # Standalone conflict sweep: page once per PR head after this many
           # automatic resolution attempts (0 disables the alert).
           STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ${{ vars.STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS || '3' }}
+          JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED: ${{ vars.JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED || 'true' }}
           # Issue-less review retry pass (issue #9487): re-dispatches per cycle at
           # most this many failed reviews of PRs with no linked issue (0 logs only).
           ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE: ${{ vars.ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE || '5' }}
@@ -1891,6 +1892,7 @@ jobs:
           STALL_FINGERPRINT_BREAKER_ENABLED: ${{ vars.STALL_FINGERPRINT_BREAKER_ENABLED || 'true' }}
           STALL_FINGERPRINT_REPEAT_MAX: ${{ vars.STALL_FINGERPRINT_REPEAT_MAX || '2' }}
           STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ${{ vars.STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS || '3' }}
+          JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED: ${{ vars.JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED || 'true' }}
           ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE: ${{ vars.ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE || '5' }}
           ISSUELESS_REVIEW_RETRY_MAX_AGE_DAYS: ${{ vars.ISSUELESS_REVIEW_RETRY_MAX_AGE_DAYS || '7' }}
           STANDALONE_SWEEP_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
@@ -2031,6 +2033,7 @@ jobs:
           STANDALONE_SWEEP_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
           STANDALONE_PR_SWEEP_ONLY: "true"
           STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ${{ vars.STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS || '3' }}
+          JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED: ${{ vars.JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED || 'true' }}
           ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE: ${{ vars.ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE || '5' }}
           ISSUELESS_REVIEW_RETRY_MAX_AGE_DAYS: ${{ vars.ISSUELESS_REVIEW_RETRY_MAX_AGE_DAYS || '7' }}
           STALL_THRESHOLD_MINUTES: ${{ vars.STALL_THRESHOLD_MINUTES || '120' }}
@@ -2106,7 +2109,7 @@ jobs:
         id: consumer_health_day
         if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_date.outputs.day != ''
         continue-on-error: true
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ${{ runner.temp }}/consumer-health-day
           key: consumer-health-check-${{ steps.consumer_health_date.outputs.day }}
@@ -2119,7 +2122,7 @@ jobs:
         id: consumer_health_alerted
         if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_date.outputs.day != '' && steps.consumer_health_day.outputs.cache-hit != 'true'
         continue-on-error: true
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ${{ runner.temp }}/consumer-health-day
           key: consumer-health-alert-${{ steps.consumer_health_date.outputs.day }}
@@ -2162,7 +2165,7 @@ jobs:
       - name: Record today's consumer health check
         if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_date.outputs.day != '' && steps.consumer_health.outcome == 'success'
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ${{ runner.temp }}/consumer-health-day
           key: consumer-health-check-${{ steps.consumer_health_date.outputs.day }}
@@ -2170,7 +2173,7 @@ jobs:
       - name: Record today's consumer health failure alert
         if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_date.outputs.day != '' && steps.consumer_health.outputs.failure_alerted == 'true'
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ${{ runner.temp }}/consumer-health-day
           key: consumer-health-alert-${{ steps.consumer_health_date.outputs.day }}
@@ -2534,7 +2537,7 @@ jobs:
       - name: Re-check today's Claude pool daily usage marker
         id: pool_daily_recheck
         continue-on-error: true
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: .claude-pool-daily-usage/sent
           key: claude-pool-daily-usage-v1-${{ needs.poll.outputs.claude_pool_daily_date }}
@@ -2594,7 +2597,7 @@ jobs:
       - name: Save today's Claude pool daily usage marker
         if: steps.pool_daily_send.outputs.sent == 'true'
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: .claude-pool-daily-usage/sent
           key: claude-pool-daily-usage-v1-${{ needs.poll.outputs.claude_pool_daily_date }}
