@@ -402,6 +402,99 @@ review_head_gate_final_ci_repair()
 	return 0
 }
 
+# merge-resolve <repo> <pr> <head sha> <base ref> <author login> <comments json file>
+# (docs/plans/merge-lease-short-critical-section-plan.md Phase 3, D4).
+# Recognises a resolver head ([ai-merge-resolve] merge of an approved head
+# with the base) so its review narrows the reviewers' primary diff to the
+# resolution (git show --remerge-diff). Every check must hold, otherwise the
+# head gets a full review (fail closed):
+#   * the newest marker comment by <author login> (the GH_PAT login,
+#     case-insensitive) whose final line is
+#     `<!-- ai:merge-resolve from=<sha> resolve=<head> base=<sha> -->`;
+#   * the head commit has exactly two parents, [from, base];
+#   * its committer or author is the pipeline identity (`codex-bot` or
+#     `claude-bot` at users.noreply.invalid, the final-ci-repair guard);
+#   * `from`'s newest ai-review/head-gate status is `success`, posted by
+#     <author login>;
+#   * the base parent is contained in <base ref> (`compare/<base>...<base ref>`
+#     is `ahead` or `identical`, the freshness_sync check).
+# The comments file is the gate's shared marker read (no comments call here).
+# API budget (§14): `commits/<head>`, `commits/<from>/statuses` and one
+# compare read, only when a trusted marker names the head and the earlier
+# checks pass. On success prints `merge_resolve_from=<from>`, sets
+# REVIEW_HEAD_GATE_MERGE_RESOLVE_FROM for sourcing callers and returns 0;
+# anything else returns 1. Every outcome logs one
+# `REVIEW_HEAD_GATE mode=merge_resolve outcome=delta|review reason=<token>` line.
+review_head_gate_merge_resolve()
+{
+	local mr_repo="${1:-}" mr_pr="${2:-}" mr_head="${3:-}" mr_base="${4:-}" mr_login="${5:-}" mr_comments="${6:-}"
+	local mr_marker mr_from mr_base_parent mr_commit mr_parents mr_identity mr_gate mr_gate_state mr_gate_creator mr_status
+	REVIEW_HEAD_GATE_MERGE_RESOLVE_FROM=""
+	mr_log()
+	{
+		echo "REVIEW_HEAD_GATE mode=merge_resolve pr=${mr_pr:-?} head=${mr_head:-?} outcome=$1 reason=$2${3:+ $3}"
+	}
+	if ! review_head_gate_valid_repo "${mr_repo}" || ! [[ "${mr_pr}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${mr_head}" =~ ^[0-9a-f]{40}$ ]] \
+		|| ! [[ "${mr_base}" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || [[ "${mr_base}" == *..* ]] \
+		|| [ -z "${mr_login}" ] || [ ! -f "${mr_comments}" ]; then
+		mr_log review invalid_input
+		return 1
+	fi
+	mr_marker="$(jq -r --arg login "${mr_login}" --arg head "${mr_head}" '
+		[ .[]? | select(type == "object" and ((.author_login // "") | ascii_downcase) == ($login | ascii_downcase))
+		| (.body // "") | select(type == "string")
+		| capture("<!-- ai:merge-resolve from=(?<from>[0-9a-f]{40}) resolve=(?<resolve>[0-9a-f]{40}) base=(?<base>[0-9a-f]{40}) -->\\s*$")?
+		| select(.resolve == $head) | "\(.from) \(.base)" ] | last // ""' "${mr_comments}" 2>/dev/null || true)"
+	read -r mr_from mr_base_parent _ <<< "${mr_marker}"
+	if ! [[ "${mr_from:-}" =~ ^[0-9a-f]{40}$ ]] || ! [[ "${mr_base_parent:-}" =~ ^[0-9a-f]{40}$ ]]; then
+		mr_log review no_resolve_marker
+		return 1
+	fi
+	if ! mr_commit="$(gh_retry gh api "repos/${mr_repo}/commits/${mr_head}" \
+		--jq '{parents: [.parents[]?.sha], cname: (.commit.committer.name // ""), cemail: (.commit.committer.email // ""), aname: (.commit.author.name // ""), aemail: (.commit.author.email // "")}' 2>/dev/null)"; then
+		mr_log review commit_read_failed "from=${mr_from}"
+		return 1
+	fi
+	mr_parents="$(printf '%s' "${mr_commit}" | jq -r '.parents | join(",")' 2>/dev/null || true)"
+	if [ "${mr_parents}" != "${mr_from},${mr_base_parent}" ]; then
+		mr_log review head_is_not_the_resolution "from=${mr_from} parents=${mr_parents:-none}"
+		return 1
+	fi
+	mr_identity="$(printf '%s' "${mr_commit}" | jq -r '
+		def pipeline($n; $e): ($n == "codex-bot" or $n == "claude-bot") and $e == ($n + "@users.noreply.invalid");
+		if pipeline(.cname; .cemail) or pipeline(.aname; .aemail) then "pipeline" else "other" end' 2>/dev/null || true)"
+	if [ "${mr_identity}" != "pipeline" ]; then
+		mr_log review identity_not_pipeline "from=${mr_from}"
+		return 1
+	fi
+	if ! mr_gate="$(gh_retry gh api "repos/${mr_repo}/commits/${mr_from}/statuses?per_page=100" \
+		--jq '[.[] | select(.context == "ai-review/head-gate")][0] // {} | "\(.state // "none") \(.creator.login // "-")"' 2>/dev/null)"; then
+		mr_log review from_gate_read_failed "from=${mr_from}"
+		return 1
+	fi
+	read -r mr_gate_state mr_gate_creator <<< "${mr_gate:-none -}"
+	if [ "${mr_gate_state}" != "success" ] \
+		|| [ "$(printf '%s' "${mr_gate_creator}" | tr '[:upper:]' '[:lower:]')" != "$(printf '%s' "${mr_login}" | tr '[:upper:]' '[:lower:]')" ]; then
+		mr_log review from_not_approved "from=${mr_from} state=${mr_gate_state:-none}"
+		return 1
+	fi
+	if ! mr_status="$(gh_retry gh api "repos/${mr_repo}/compare/${mr_base_parent}...${mr_base}" --jq '.status // ""' 2>/dev/null)"; then
+		mr_log review base_compare_failed "from=${mr_from} base_parent=${mr_base_parent}"
+		return 1
+	fi
+	case "${mr_status}" in
+		ahead|identical) ;;
+		*)
+			mr_log review base_parent_not_on_base "from=${mr_from} base_parent=${mr_base_parent} status=${mr_status:-none}"
+			return 1
+			;;
+	esac
+	REVIEW_HEAD_GATE_MERGE_RESOLVE_FROM="${mr_from}"
+	mr_log delta merge_resolve "from=${mr_from} base_parent=${mr_base_parent}"
+	echo "merge_resolve_from=${mr_from}"
+	return 0
+}
+
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 	set -euo pipefail
 	# shellcheck source=/dev/null
@@ -410,6 +503,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 		gate) review_head_gate_main ;;
 		freshness-sync) shift; review_head_gate_freshness_sync "$@" ;;
 		final-ci-repair) shift; review_head_gate_final_ci_repair "$@" ;;
-		*) echo "Usage: review_head_gate.sh gate | freshness-sync <repo> <pr> <head sha> <base ref> <author login> <comments json file> | final-ci-repair <repo> <pr> <head sha> <author login> <comments json file>" >&2; exit 2 ;;
+		merge-resolve) shift; review_head_gate_merge_resolve "$@" ;;
+		*) echo "Usage: review_head_gate.sh gate | freshness-sync <repo> <pr> <head sha> <base ref> <author login> <comments json file> | final-ci-repair <repo> <pr> <head sha> <author login> <comments json file> | merge-resolve <repo> <pr> <head sha> <base ref> <author login> <comments json file>" >&2; exit 2 ;;
 	esac
 fi

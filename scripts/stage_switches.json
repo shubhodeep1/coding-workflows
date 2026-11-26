@@ -421,6 +421,11 @@
 			"stage": "Merge-lease Phase 2: the merge-train tick revokes the lease from a holder that can no longer merge (draft, [skip ai] title, pipeline ai-review/head-gate failure, failed final CI, or idle; reasons revoked_*), grants a..."
 		},
 		{
+			"name": "MERGE_RESOLVE_DELTA_REVIEW_ENABLED",
+			"default": "true",
+			"stage": "A verified [ai-merge-resolve] commit on an approved head is reviewed on its resolution (git show --remerge-diff) instead of the whole PR, gets a delta security audit since that head and, when the head passed a full final CI run, a [sync-quick] final CI run (merge-lease short critical section plan, Phase 3; review_autofix.yml); false reviews resolution heads in full."
+		},
+		{
 			"name": "MERGE_TRAIN_CONFLICT_CHECK_ENABLED",
 			"default": "true",
 			"stage": "Merge-train real-conflict check (issue #6570)."

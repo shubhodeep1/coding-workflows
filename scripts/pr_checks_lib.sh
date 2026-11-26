@@ -1524,7 +1524,7 @@ _pr_wait_for_required_checks()
 	local max_minutes="${4:-${AUTO_MERGE_CHECKS_WAIT_MINUTES:-45}}"
 	local poll_seconds="${AUTO_MERGE_CHECKS_POLL_SECONDS:-60}"
 	local poll_max_seconds="${AUTO_MERGE_CHECKS_POLL_MAX_SECONDS:-180}"
-	local waited=0 rc=0 ci_runs_fresh=0 ci_bind ci_required_name final_ci_checked=0
+	local waited=0 rc=0 ci_runs_fresh=0 ci_bind ci_required_name final_ci_checked=0 final_ci_resolve_quick=""
 	# Wait-scoped memo and back-off state (issue #9926; see the block above).
 	local _pr_wait_memo_active=1 _pr_wait_required_set=0 _pr_wait_required_base="" _pr_wait_required_csv=""
 	local _pr_wait_statuses_sha="" _pr_wait_statuses_json="" _pr_wait_statuses_last="" _pr_wait_route_reads=0
@@ -1570,6 +1570,15 @@ _pr_wait_for_required_checks()
 		if [ "${final_ci_checked}" = "0" ] && [ -n "${REVIEW_FINAL_CI_WORKFLOW:-}" ] && [ "${ci_required_name}" != "none" ] \
 			&& { [ "${PR_CHECKS_LAST_CI_STATE:-}" = "absent" ] || [ "${PR_CHECKS_RUNS_UNRUN:-0}" -gt 0 ]; }; then
 			final_ci_checked=1
+			# Resolution-only review (merge-lease short critical section plan,
+			# Phase 3): a head that is still exactly the gate-verified
+			# resolution commit gets the delta [sync-quick] run; anything
+			# else (including any commit on top of it) gets the full run.
+			final_ci_resolve_quick="${PR_FINAL_CI_SYNC_QUICK:-false}"
+			if type _pr_merge_resolve_final_ci_quick >/dev/null 2>&1 && [ -n "${REVIEW_REMERGE_HEAD:-}" ]; then
+				final_ci_resolve_quick="$(_pr_merge_resolve_final_ci_quick "${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" "${pr_number}" "${head_sha}")" || final_ci_resolve_quick="false"
+			fi
+			PR_FINAL_CI_SYNC_QUICK="${final_ci_resolve_quick}" \
 			PR_FINAL_CI_RUNS_JSON="${PR_CHECKS_RUNS_RAW_JSON:-}" PR_FINAL_CI_BASE_REF="${base_ref}" \
 				_pr_ensure_final_ci "${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" \
 				"${pr_number}" "${head_sha}" "${PR_CHECKS_HEAD_REF:-}" || true
@@ -2276,6 +2285,151 @@ _pr_base_sync_marker_post()
 	if type gh_pr_cache_evict >/dev/null 2>&1; then
 		gh_pr_cache_evict "${repo}" "${pr_number}" issue_comments >/dev/null 2>&1 || true
 	fi
+	return 0
+}
+
+# Resolution-only review marker (docs/plans/merge-lease-short-critical-section-plan.md
+# Phase 3, D4). Called once from review_autofix.yml "Push all pending
+# commits" after the push loop. Args: <pr> <pre-resolution head>
+# (LOCAL_HEAD_SHA, the head this review run started on). When the pushed
+# HEAD is exactly the resolver's [ai-merge-resolve] merge of that head with
+# the base tip, and that head has a pipeline ai-review/head-gate success,
+# posts one comment ending in
+#   <!-- ai:merge-resolve from=<pre-resolution head> resolve=<HEAD> base=<HEAD^2> -->
+# which review_head_gate.sh merge-resolve verifies on the synchronize run.
+# Local checks first (no API read): CONFLICT_RESOLVED=true, the switch
+# MERGE_RESOLVE_DELTA_REVIEW_ENABLED on (empty or true; false off; any other
+# value warns and counts as off), exactly two parents, HEAD^1 == the
+# pre-resolution head, an [ai-merge-resolve] subject. Autofix commits on
+# either side of the resolution, or a push-retry merge, fail them and no
+# marker is posted (the head is reviewed in full). Reads, only after the
+# local checks: one `gh api user` (the GH_PAT login; no existing call in the
+# step exposes it) and one `commits/<from>/statuses`. One single-attempt POST,
+# the same comment path as _pr_base_sync_marker_post. Logs one
+# MERGE_RESOLVE_MARKER pr= head= outcome=posted|skipped|failed reason=<token>
+# line (silent when CONFLICT_RESOLVED is not true). Always returns 0.
+_pr_merge_resolve_marker_post()
+{
+	local mr_pr="${1:-}" mr_expected="${2:-}" mr_repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
+	local mr_switch mr_head mr_first mr_second mr_subject mr_login mr_gate mr_gate_state mr_gate_creator mr_body
+	[ "${CONFLICT_RESOLVED:-false}" = "true" ] || return 0
+	mr_head="$(git rev-parse --verify -q HEAD 2>/dev/null || true)"
+	mr_switch="$(printf '%s' "${MERGE_RESOLVE_DELTA_REVIEW_ENABLED:-true}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+	case "${mr_switch}" in
+		''|true) ;;
+		false)
+			echo "MERGE_RESOLVE_MARKER pr=${mr_pr:-?} head=${mr_head:-?} outcome=skipped reason=disabled"
+			return 0
+			;;
+		*)
+			echo "::warning::MERGE_RESOLVE_DELTA_REVIEW_ENABLED has an unrecognised value; no resolution marker is posted. Use true or false."
+			echo "MERGE_RESOLVE_MARKER pr=${mr_pr:-?} head=${mr_head:-?} outcome=skipped reason=disabled"
+			return 0
+			;;
+	esac
+	if ! [[ "${mr_pr}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${mr_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || ! [[ "${mr_head}" =~ ^[0-9a-f]{40}$ ]]; then
+		echo "MERGE_RESOLVE_MARKER pr=${mr_pr:-?} head=${mr_head:-?} outcome=skipped reason=not_resolution"
+		return 0
+	fi
+	mr_first="$(git rev-parse --verify -q "HEAD^1" 2>/dev/null || true)"
+	mr_second="$(git rev-parse --verify -q "HEAD^2" 2>/dev/null || true)"
+	mr_subject="$(git log -1 --format=%s HEAD 2>/dev/null || true)"
+	if ! [[ "${mr_second}" =~ ^[0-9a-f]{40}$ ]] || git rev-parse --verify -q "HEAD^3" >/dev/null 2>&1 \
+		|| [[ "${mr_subject}" != "[ai-merge-resolve]"* ]]; then
+		echo "MERGE_RESOLVE_MARKER pr=${mr_pr} head=${mr_head} outcome=skipped reason=not_resolution"
+		return 0
+	fi
+	if ! [[ "${mr_expected}" =~ ^[0-9a-f]{40}$ ]] || [ "${mr_first}" != "${mr_expected}" ]; then
+		echo "MERGE_RESOLVE_MARKER pr=${mr_pr} head=${mr_head} outcome=skipped reason=parent_mismatch"
+		return 0
+	fi
+	if ! mr_login="$(_safe_gh_jq user --jq '.login // ""' 2>/dev/null)" || [ -z "${mr_login}" ] \
+		|| ! mr_gate="$(_safe_gh_jq "repos/${mr_repo}/commits/${mr_first}/statuses?per_page=100" \
+			--jq '[.[] | select(.context == "ai-review/head-gate")][0] // {} | "\(.state // "none") \(.creator.login // "-")"' 2>/dev/null)"; then
+		echo "MERGE_RESOLVE_MARKER pr=${mr_pr} head=${mr_head} outcome=skipped reason=read_failed"
+		return 0
+	fi
+	read -r mr_gate_state mr_gate_creator <<< "${mr_gate:-none -}"
+	if [ "${mr_gate_state}" != "success" ] \
+		|| [ "$(printf '%s' "${mr_gate_creator}" | tr '[:upper:]' '[:lower:]')" != "$(printf '%s' "${mr_login}" | tr '[:upper:]' '[:lower:]')" ]; then
+		echo "MERGE_RESOLVE_MARKER pr=${mr_pr} head=${mr_head} outcome=skipped reason=from_not_approved"
+		return 0
+	fi
+	mr_body="$(printf '**Merge conflict resolved on an approved head.** Commit `%s` merges the base tip `%s` into approved head `%s`. The next review run checks only what the resolution changed (`git show --remerge-diff`); any later commit is reviewed in full.\n\n<!-- ai:merge-resolve from=%s resolve=%s base=%s -->' \
+		"${mr_head}" "${mr_second}" "${mr_first}" "${mr_first}" "${mr_head}" "${mr_second}")"
+	# One attempt only: a retried POST whose first response was lost would
+	# post a duplicate marker.
+	if _safe_gh_jq -X POST "repos/${mr_repo}/issues/${mr_pr}/comments" -f "body=${mr_body}" >/dev/null 2>&1; then
+		echo "MERGE_RESOLVE_MARKER pr=${mr_pr} head=${mr_head} outcome=posted reason=verified from=${mr_first} base=${mr_second}"
+	else
+		echo "::warning::MERGE_RESOLVE_MARKER pr=${mr_pr} head=${mr_head} outcome=failed reason=post_failed (the synchronize run reviews in full)"
+	fi
+	if type gh_pr_cache_evict >/dev/null 2>&1; then
+		gh_pr_cache_evict "${mr_repo}" "${mr_pr}" issue_comments >/dev/null 2>&1 || true
+	fi
+	return 0
+}
+
+# Final CI for a verified resolution head (merge-lease short critical section
+# plan, Phase 3). Args: <repo> <pr> <head sha>. Prints `true` only when the
+# approved head is still exactly the gate-verified resolution commit
+# (REVIEW_REMERGE_HEAD), it has exactly two local parents, the
+# ci_sync_quick.sh delta-supported probe passes (absent before Phase 2),
+# MERGE_BASE_SYNC_DELTA_CI_ENABLED is on (true/1/yes/on, the
+# _pr_base_sync_dispatch_final_ci parse) and `from` (head^1) passed a full
+# final CI run (ci_sync_quick.sh full-ci-green). Prints `false` otherwise;
+# silent `false` with no log when REVIEW_REMERGE_HEAD is empty (every other
+# caller). Logs MERGE_RESOLVE_FINAL_CI pr= head= outcome=quick|full
+# reason=<token> to stderr so the caller can capture the verdict.
+_pr_merge_resolve_final_ci_quick()
+{
+	local mrq_repo="${1:-}" mrq_pr="${2:-}" mrq_head="${3:-}" mrq_from mrq_classifier mrq_probe mrq_switch
+	if [ -z "${REVIEW_REMERGE_HEAD:-}" ]; then
+		echo "false"
+		return 0
+	fi
+	mrq_log()
+	{
+		echo "MERGE_RESOLVE_FINAL_CI pr=${mrq_pr:-?} head=${mrq_head:-?} outcome=$1 reason=$2" >&2
+	}
+	if ! [[ "${REVIEW_REMERGE_HEAD}" =~ ^[0-9a-f]{40}$ ]] || [ "${REVIEW_REMERGE_HEAD}" != "${mrq_head}" ]; then
+		mrq_log full head_not_resolution
+		echo "false"
+		return 0
+	fi
+	mrq_from="$(git rev-parse --verify -q "${mrq_head}^1" 2>/dev/null || true)"
+	if ! [[ "${mrq_from}" =~ ^[0-9a-f]{40}$ ]] || ! git rev-parse --verify -q "${mrq_head}^2" >/dev/null 2>&1 \
+		|| git rev-parse --verify -q "${mrq_head}^3" >/dev/null 2>&1; then
+		mrq_log full parents_unavailable
+		echo "false"
+		return 0
+	fi
+	mrq_switch="$(printf '%s' "${MERGE_BASE_SYNC_DELTA_CI_ENABLED:-true}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+	case "${mrq_switch}" in
+		true|1|yes|on) ;;
+		*)
+			mrq_log full delta_ci_disabled
+			echo "false"
+			return 0
+			;;
+	esac
+	mrq_classifier="${BASH_SOURCE[0]%/*}/ci_sync_quick.sh"
+	mrq_probe=""
+	if [ -f "${mrq_classifier}" ]; then
+		mrq_probe="$(bash "${mrq_classifier}" delta-supported 2>/dev/null)" || mrq_probe=""
+	fi
+	if [ "${mrq_probe}" != "delta_supported" ]; then
+		mrq_log full delta_unsupported
+		echo "false"
+		return 0
+	fi
+	if ! bash "${mrq_classifier}" full-ci-green "${mrq_repo}" "${mrq_pr}" "${mrq_from}" "${REVIEW_FINAL_CI_WORKFLOW:-}" >/dev/null 2>&1; then
+		mrq_log full approved_head_not_full_green
+		echo "false"
+		return 0
+	fi
+	mrq_log quick merge_resolve
+	echo "true"
 	return 0
 }
 
