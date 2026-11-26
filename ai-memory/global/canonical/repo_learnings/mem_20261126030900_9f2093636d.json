@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.84,
+  "details": "When changing CI, release, review, or orchestration behavior, inspect the relevant `.github/workflows/` files and the scripts they invoke rather than treating either layer in isolation. The merged changes frequently pair these edits with targeted tests that check script behavior or workflow contracts.",
+  "fingerprint": "e18f5856fa56354e36cef74baf82498ab38ff909c461f624ef42a6aeac8db977",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45745843796",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45745843796",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10098",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9671",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9888",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9946",
+      "https://github.com/shubhodeep1/coding-workflows/issues/9990",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10107",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10108",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9692",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9951",
+      "https://github.com/shubhodeep1/coding-workflows/pull/9995"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261126030900_9f2093636d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Automation behavior is commonly implemented across workflow YAML and scripts, with focused tests covering both.",
+  "timestamps": {
+    "created_at": "2026-11-26T03:09:00Z",
+    "promoted_at": "2026-11-26T03:09:44Z",
+    "superseded_at": null
+  }
+}
