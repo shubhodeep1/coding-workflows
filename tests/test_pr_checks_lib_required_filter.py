@@ -1153,6 +1153,177 @@ def test_review_gate_supersede_context_matches_head_gate_helper() -> None:
 	assert 'local gate_sup_status_ctx="ai-review/head-gate"' in LIB.read_text(encoding="utf-8")
 
 
+# ---------------------------------------------------------------------------
+# Issue #10137: PR_CHECKS_LAST_BLOCKING_NAMES / PR_CHECKS_LAST_BLOCKING_RUN_IDS
+# name the blocking check-runs with the same selection as the blocking count.
+# ---------------------------------------------------------------------------
+
+
+def _blocking(runs_json: str, args: str = '5 "abc1234" "main"', env: dict[str, str] | None = None) -> tuple[str, list[str], list[str]]:
+	body = (
+		f'_pr_checks_completed {args} >/dev/null 2>&1; rc=$?; '
+		'printf "GATE=%s\\n" "${rc}:${PR_CHECKS_LAST_REASON}"; '
+		'printf "%s\\n" "${PR_CHECKS_LAST_BLOCKING_NAMES}" | sed "s/^/N=/"; '
+		'printf "%s\\n" "${PR_CHECKS_LAST_BLOCKING_RUN_IDS}" | sed "s/^/R=/"'
+	)
+	res = _run(body, runs_json=runs_json, env={**REPO_ENV, **(env or {})})
+	assert res.returncode == 0, res.stderr
+	lines = res.stdout.splitlines()
+	gate = [ln[5:] for ln in lines if ln.startswith("GATE=")][0]
+	names = [ln[2:] for ln in lines if ln.startswith("N=") and ln != "N="]
+	run_ids = [ln[2:] for ln in lines if ln.startswith("R=") and ln != "R="]
+	return gate, names, run_ids
+
+
+def _run_with_url(name: str, status: str, conclusion: str | None, check_id: int, run_id: str | None = "555") -> dict:
+	run = {"id": check_id, "name": name, "status": status, "conclusion": conclusion}
+	if run_id is not None:
+		run["details_url"] = f"https://github.com/owner/repo/actions/runs/{run_id}/job/{check_id}"
+	return run
+
+
+def test_blocking_names_list_required_failure_with_run_id() -> None:
+	runs = _page([
+		_run_with_url("CI / lint", "completed", "failure", 1, "4711"),
+		_run_with_url("Security CodeQL", "completed", "failure", 2, "4712"),
+	])
+	gate, names, run_ids = _blocking(runs, env={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI / lint"})
+	assert gate == "1:blocking", gate
+	assert names == ["CI / lint:failure"], names
+	assert run_ids == ["4711:failure"], run_ids
+
+
+def test_blocking_names_report_running_status() -> None:
+	runs = _page([_run_with_url("CI", "in_progress", None, 1)])
+	gate, names, run_ids = _blocking(runs, env={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI"})
+	assert gate == "1:blocking", gate
+	assert names == ["CI:in_progress"], names
+	assert run_ids == [], run_ids
+
+
+def test_blocking_names_skip_non_required_and_superseded() -> None:
+	runs = _page([
+		_run_with_url("CI", "completed", "cancelled", 1, "555"),
+		_run_with_url("CI", "completed", "success", 2, "556"),
+		_run_with_url("advisory", "completed", "failure", 3, "557"),
+	])
+	gate, names, run_ids = _blocking(runs, env={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI"})
+	assert gate == "0:ok" and names == [] and run_ids == [], (gate, names, run_ids)
+
+
+def test_blocking_names_cancelled_and_non_actions_check() -> None:
+	runs = _page([
+		_run_with_url("CI", "completed", "cancelled", 1, "555"),
+		_run_with_url("external", "completed", "timed_out", 2, None),
+	])
+	gate, names, run_ids = _blocking(runs, env={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI,external"})
+	assert gate == "1:blocking", gate
+	assert names == ["CI:cancelled", "external:timed_out"], names
+	assert run_ids == ["555:cancelled", "none:timed_out"], run_ids
+
+
+def test_blocking_run_id_from_other_repo_reads_as_non_actions() -> None:
+	"""A details_url pointing at another repository's Actions run never yields
+	a run id the judge would re-run inside PR_CHECKS_REPOSITORY."""
+	foreign = {"id": 1, "name": "CI", "status": "completed", "conclusion": "cancelled",
+		"details_url": "https://github.com/evil/other/actions/runs/4711/job/1"}
+	gate, names, run_ids = _blocking(_page([foreign]), env={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI"})
+	assert gate == "1:blocking", gate
+	assert names == ["CI:cancelled"], names
+	assert run_ids == ["none:cancelled"], run_ids
+
+
+def test_blocking_run_id_requires_anchored_host_and_repo_prefix() -> None:
+	"""A details_url that merely embeds the repo path (another host, or a
+	longer path on github.com) reads as non-Actions; the anchored URL, in any
+	case, and a GITHUB_SERVER_URL host (GHES) yield the run id."""
+	for url in (
+		"https://attacker.example/x/owner/repo/actions/runs/4711/job/1",
+		"https://github.com/evil/owner/repo/actions/runs/4711/job/1",
+		"https://github.com.evil.example/owner/repo/actions/runs/4711/job/1",
+		"https://github.com/owner/repo/actions/runs/4711x/actions/runs/4712/job/1",
+	):
+		run = {"id": 1, "name": "CI", "status": "completed", "conclusion": "cancelled", "details_url": url}
+		_, _, run_ids = _blocking(_page([run]), env={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI"})
+		assert run_ids == ["none:cancelled"], (url, run_ids)
+	run = {"id": 1, "name": "CI", "status": "completed", "conclusion": "cancelled",
+		"details_url": "https://GitHub.com/Owner/Repo/actions/runs/4711"}
+	_, _, run_ids = _blocking(_page([run]), env={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI"})
+	assert run_ids == ["4711:cancelled"], run_ids
+	run = {"id": 1, "name": "CI", "status": "completed", "conclusion": "cancelled",
+		"details_url": "https://ghe.example/owner/repo/actions/runs/4711/job/1"}
+	_, _, run_ids = _blocking(_page([run]), env={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI",
+		"GITHUB_SERVER_URL": "https://ghe.example/"})
+	assert run_ids == ["4711:cancelled"], run_ids
+
+
+def test_blocking_names_empty_on_api_error_and_allow_all() -> None:
+	gate, names, run_ids = _blocking("{}")
+	assert gate == "1:query_failed" and names == [] and run_ids == [], (gate, names, run_ids)
+	runs = _page([_run_with_url("CI", "completed", "failure", 1)])
+	gate, names, run_ids = _blocking(runs, env={"ORCH_FINAL_MERGE_REQUIRED_CHECKS": ""})
+	assert gate == "0:allow_all" and names == [] and run_ids == [], (gate, names, run_ids)
+
+
+def test_blocking_names_reset_between_calls() -> None:
+	"""A later call that passes must not inherit the previous call's names."""
+	body = (
+		'RUNS_JSON="${FAIL_RUNS}" _pr_checks_completed 5 "abc1234" "main" >/dev/null 2>&1; '
+		'printf "A=%s\\n" "${PR_CHECKS_LAST_BLOCKING_NAMES}"; '
+		'RUNS_JSON="${OK_RUNS}" _pr_checks_completed 5 "abc1234" "main" >/dev/null 2>&1; '
+		'printf "B=%s\\n" "${PR_CHECKS_LAST_BLOCKING_NAMES}"'
+	)
+	res = _run(body, env={
+		**REPO_ENV,
+		"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI",
+		"FAIL_RUNS": _page([_run_with_url("CI", "completed", "failure", 1)]),
+		"OK_RUNS": _page([_run_with_url("CI", "completed", "success", 1)]),
+	})
+	assert res.returncode == 0, res.stderr
+	assert "A=CI:failure" in res.stdout and "B=\n" in res.stdout + "\n", res.stdout
+
+
+def test_blocking_names_count_matches_blocking_count() -> None:
+	"""Parity: with distinct names, one names line per blocking check-run, in
+	both filter modes, including the self-run exclusion."""
+	runs = [
+		_run_with_url("CI", "completed", "failure", 1, "1"),
+		_run_with_url("lint", "completed", "cancelled", 2, "2"),
+		_run_with_url("Copilot", "completed", "failure", 3, "3"),
+		_run_with_url("pending-job", "queued", None, 4, "4"),
+		_run_with_url("review / codex-agent", "in_progress", None, 5, "999"),
+		_run_with_url("ok", "completed", "success", 6, "6"),
+	]
+	for env, expected in (
+		({"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "CI,lint", "PR_CHECKS_SELF_RUN_ID": "999"}, 3),
+		({"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "*", "PR_CHECKS_SELF_RUN_ID": "999"}, 4),
+	):
+		res = _run(
+			'gate_out="$(mktemp)"; _pr_checks_completed 5 "abc1234" "main" > "${gate_out}" 2>/dev/null; '
+			'grep -o "has [0-9]* blocking" "${gate_out}"; rm -f "${gate_out}"; '
+			'printf "%s\\n" "${PR_CHECKS_LAST_BLOCKING_NAMES}" | grep -c .',
+			runs_json=_page(runs),
+			env={**REPO_ENV, **env},
+		)
+		assert res.returncode == 0, res.stderr
+		out = res.stdout.split()
+		assert out == ["has", str(expected), "blocking", str(expected)], (env, res.stdout)
+
+
+def test_blocking_detail_helper_accepts_cancelled_only_when_superseded() -> None:
+	"""Static guard (mirrors test_restore_7126_cancelled_not_in_accept_set):
+	the names pass shares the supersede defs and the accept expression."""
+	lib_text = LIB.read_text(encoding="utf-8")
+	start = lib_text.index("\n_pr_checks_blocking_detail()\n")
+	end = lib_text.index("\n}\n", start)
+	body = lib_text[start:end]
+	assert body.count('"${PR_CHECKS_JQ_SUPERSEDE_DEFS}"') == 1
+	assert "_mark_superseded" in body
+	assert _ACCEPT_EXPR in body
+	gate = lib_text[lib_text.index("\n_pr_checks_completed()\n"):]
+	assert '_pr_checks_blocking_detail "${check_runs_json}" "${required_names_csv}" "${self_run}" "${gate_sup_drop_id}"' in gate
+
+
 def main() -> int:
 	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
 	passed = skipped = failed = 0

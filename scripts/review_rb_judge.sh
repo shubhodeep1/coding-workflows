@@ -878,6 +878,194 @@ rb_judge_post_issue_comment()
   gh_retry gh api "repos/${REPOSITORY:-}/issues/${PR_NUMBER:-}/comments" "$@"
 }
 
+# Issue #10137: switch for the settled-check diagnostics below. Unset, empty or
+# `true` (any case, surrounding whitespace ignored) keeps them on; `false`
+# turns them off; any other value also turns them off and logs one warning.
+# flag_enabled is not reused on purpose: it accepts 1/yes/on, which must turn
+# this switch off.
+rb_judge_settled_check_diagnostics_enabled()
+{
+  local rb_sc_flag="${RB_JUDGE_SETTLED_CHECK_DIAGNOSTICS_ENABLED-}"
+  rb_sc_flag="${rb_sc_flag#"${rb_sc_flag%%[![:space:]]*}"}"
+  rb_sc_flag="${rb_sc_flag%"${rb_sc_flag##*[![:space:]]}"}"
+  rb_sc_flag="$(printf '%s' "${rb_sc_flag}" | tr '[:upper:]' '[:lower:]')"
+  case "${rb_sc_flag}" in
+    ""|true)
+      return 0
+      ;;
+    false)
+      return 1
+      ;;
+    *)
+      echo "::warning::RB_JUDGE_SETTLED_CHECK_DIAGNOSTICS_ENABLED is neither true nor false; settled check diagnostics are off."
+      return 1
+      ;;
+  esac
+}
+
+# rb_judge_settled_check_diagnostics — issue #10137 (unblock #9502). Called
+# from the merge_with_followup blocking branch right after
+# judge_skip_reason=blocking_check_runs is written. When no check-run on the
+# head is still running (PR_CHECKS_LAST_PENDING=0) the block is a settled
+# failure, not an in-flight wait, so:
+#   - write judge_blocking_checks_settled=true and judge_blocking_check_names
+#     (cleaned `name:conclusion` entries joined with ", ") to GITHUB_OUTPUT,
+#     and mirror them to GITHUB_ENV as RB_JUDGE_BLOCKING_CHECKS_SETTLED /
+#     RB_JUDGE_BLOCKING_CHECK_NAMES for the review-blocked comment step (that
+#     step gets no rb_judge step outputs in the workflow YAML);
+#   - when EVERY settled blocking run concluded cancelled or timed_out,
+#     request one rerun-failed-jobs per Actions run (at most 3 runs), at most
+#     once per head and run id: a trusted comment ending with
+#     `<!-- rb-judge-settled-rerun:v1 head=<sha> run=<id> -->` marks the
+#     attempt and is posted whatever the POST returned (an ambiguous 5xx may
+#     already have started the rerun).
+# Logs one `RB_JUDGE_SETTLED_CHECKS ...` line per decision. It never changes
+# judge_skip_reason, never merges and never edits labels; every failure is
+# logged and the function returns 0. Off switch:
+# RB_JUDGE_SETTLED_CHECK_DIAGNOSTICS_ENABLED.
+rb_judge_settled_check_diagnostics()
+{
+  rb_judge_settled_check_diagnostics_enabled || return 0
+  [ "${PR_CHECKS_LAST_PENDING:-0}" = "0" ] || return 0
+  local rb_sc_head="${RB_JUDGED_HEAD_SHA:-}" rb_sc_head7 rb_sc_entry rb_sc_clean rb_sc_joined="" rb_sc_count=0
+  local rb_sc_retryable="true" rb_sc_run rb_sc_ids="" rb_sc_id rb_sc_handled=0 rb_sc_login="" rb_sc_marker rb_sc_seen
+  local rb_sc_action rb_sc_reason rb_sc_body rb_sc_result rb_sc_prefix rb_sc_non_actions=0 rb_sc_state
+  rb_sc_head7="${rb_sc_head:0:7}"
+  [ -n "${rb_sc_head7}" ] || rb_sc_head7="unknown"
+  rb_sc_prefix="RB_JUDGE_SETTLED_CHECKS pr=${PR_NUMBER:-unknown} head=${rb_sc_head7} settled=true"
+  while IFS= read -r rb_sc_entry; do
+    [ -n "${rb_sc_entry}" ] || continue
+    rb_sc_count=$((rb_sc_count + 1))
+    case "${rb_sc_entry##*:}" in
+      cancelled|timed_out) ;;
+      *) rb_sc_retryable="false" ;;
+    esac
+    [ "${rb_sc_count}" -le 20 ] || continue
+    # Names reach GITHUB_OUTPUT, GITHUB_ENV and a PR comment: keep a fixed
+    # character set (no newline, `=`, comma, backtick or `@`).
+    rb_sc_clean="$(printf '%s' "${rb_sc_entry}" | LC_ALL=C tr -c 'A-Za-z0-9 _./():-' '_')"
+    # Cut the name, not the `:conclusion` suffix, when the entry is too long.
+    if [ "${#rb_sc_clean}" -gt 120 ] && [[ "${rb_sc_clean}" == *:* ]]; then
+      rb_sc_state="${rb_sc_clean##*:}"
+      rb_sc_state="${rb_sc_state:0:20}"
+      rb_sc_clean="${rb_sc_clean%:*}"
+      rb_sc_clean="${rb_sc_clean:0:$((119 - ${#rb_sc_state}))}:${rb_sc_state}"
+    fi
+    rb_sc_clean="${rb_sc_clean:0:120}"
+    rb_sc_joined+="${rb_sc_joined:+, }${rb_sc_clean}"
+  done <<< "${PR_CHECKS_LAST_BLOCKING_NAMES:-}"
+  # Entries past the cap of 20 are counted but not listed; say so, so the
+  # comment never reads as the complete list.
+  if [ "${rb_sc_count}" -gt 20 ]; then
+    rb_sc_joined+=", ($((rb_sc_count - 20)) more)"
+  fi
+  if [ "${rb_sc_count}" -eq 0 ]; then
+    echo "${rb_sc_prefix} names=0 run=- action=rerun_skipped reason=names_unavailable"
+    return 0
+  fi
+  echo "judge_blocking_checks_settled=true" >> "${GITHUB_OUTPUT:-/dev/null}" || true
+  echo "judge_blocking_check_names=${rb_sc_joined}" >> "${GITHUB_OUTPUT:-/dev/null}" || true
+  if [ -n "${GITHUB_ENV:-}" ]; then
+    { echo "RB_JUDGE_BLOCKING_CHECKS_SETTLED=true"; echo "RB_JUDGE_BLOCKING_CHECK_NAMES=${rb_sc_joined}"; } >> "${GITHUB_ENV}" || true
+  fi
+  if [ "${rb_sc_retryable}" != "true" ]; then
+    echo "${rb_sc_prefix} names=${rb_sc_count} run=- action=diagnosed reason=settled_failure"
+    return 0
+  fi
+  if ! [[ "${rb_sc_head}" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "${rb_sc_prefix} names=${rb_sc_count} run=- action=rerun_skipped reason=unresolved_head"
+    return 0
+  fi
+  if [ "${RB_JUDGE_COMMENTS_INCOMPLETE:-false}" = "true" ] \
+    || ! printf '%s' "${PR_CONTEXT_JSON:-}" | jq -e 'type == "object" and (.comments | type == "array")' >/dev/null 2>&1; then
+    echo "${rb_sc_prefix} names=${rb_sc_count} run=- action=rerun_skipped reason=comments_unreadable"
+    return 0
+  fi
+  while IFS= read -r rb_sc_entry; do
+    [ -n "${rb_sc_entry}" ] || continue
+    rb_sc_run="${rb_sc_entry%%:*}"
+    if ! [[ "${rb_sc_run}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+      # A non-Actions check cannot be re-run from here; skip that entry only,
+      # so the cancelled/timed-out Actions runs in the same set still get
+      # their one rerun.
+      echo "${rb_sc_prefix} names=${rb_sc_count} run=- action=rerun_skipped reason=non_actions_check"
+      rb_sc_non_actions=$((rb_sc_non_actions + 1))
+      continue
+    fi
+    case $'\n'"${rb_sc_ids}"$'\n' in
+      *$'\n'"${rb_sc_run}"$'\n'*) ;;
+      *) rb_sc_ids+="${rb_sc_ids:+$'\n'}${rb_sc_run}" ;;
+    esac
+  done <<< "${PR_CHECKS_LAST_BLOCKING_RUN_IDS:-}"
+  if [ -z "${rb_sc_ids}" ]; then
+    [ "${rb_sc_non_actions}" -gt 0 ] \
+      || echo "${rb_sc_prefix} names=${rb_sc_count} run=- action=rerun_skipped reason=non_actions_check"
+    return 0
+  fi
+  # API audit (§14): the dedupe reads the comment snapshot this judge already
+  # loaded (PR_CONTEXT_JSON). The one new read is the token's own login
+  # (_tg_tracking_author_login, GET user, cached per process), made only on
+  # this rerun path so a marker posted with GH_TOKEN (the
+  # rb_judge_post_issue_comment fallback) is recognised. Without the helper,
+  # only github-actions markers are trusted.
+  if type _tg_tracking_author_login >/dev/null 2>&1; then
+    _tg_tracking_author_login || true
+    rb_sc_login="$(printf '%s' "${_TG_TRACKING_AUTHOR_CURRENT:-}" | tr '[:upper:]' '[:lower:]')"
+  fi
+  while IFS= read -r rb_sc_id; do
+    [ -n "${rb_sc_id}" ] || continue
+    if [ "${rb_sc_id}" = "${GITHUB_RUN_ID:-}" ]; then
+      echo "${rb_sc_prefix} names=${rb_sc_count} run=${rb_sc_id} action=rerun_skipped reason=self_run"
+      continue
+    fi
+    rb_sc_marker="<!-- rb-judge-settled-rerun:v1 head=${rb_sc_head} run=${rb_sc_id} -->"
+    rb_sc_seen="$(printf '%s' "${PR_CONTEXT_JSON}" | jq -r --arg marker "${rb_sc_marker}" --arg login "${rb_sc_login}" '
+      [.comments[]?
+        | select(type == "object")
+        | select(((.author // "") | tostring | ascii_downcase) as $a
+            | ($a == "github-actions[bot]" or $a == "github-actions" or ($login != "" and $a == $login)))
+        | select((.body // "") | tostring | sub("\\s+\\z"; "") | (. == $marker or endswith("\n" + $marker)))
+      ] | length' 2>/dev/null)" || rb_sc_seen=""
+    if ! [[ "${rb_sc_seen}" =~ ^[0-9]+$ ]]; then
+      echo "${rb_sc_prefix} names=${rb_sc_count} run=${rb_sc_id} action=rerun_skipped reason=comments_unreadable"
+      continue
+    fi
+    if [ "${rb_sc_seen}" -gt 0 ]; then
+      echo "${rb_sc_prefix} names=${rb_sc_count} run=${rb_sc_id} action=rerun_skipped reason=already_requested"
+      continue
+    fi
+    # Cap checked after the dedupe so a marked run past the cap still logs
+    # already_requested rather than rerun_capped.
+    if [ "${rb_sc_handled}" -ge 3 ]; then
+      echo "${rb_sc_prefix} names=${rb_sc_count} run=${rb_sc_id} action=rerun_skipped reason=rerun_capped"
+      continue
+    fi
+    # The cap of 3 counts only runs that reach the POST below: a run skipped
+    # as already_requested or comments_unreadable must not use a slot, or
+    # three marked runs would starve a fourth on every later pass.
+    rb_sc_handled=$((rb_sc_handled + 1))
+    if GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${REPOSITORY}/actions/runs/${rb_sc_id}/rerun-failed-jobs" >/dev/null 2>&1; then
+      rb_sc_action="rerun_requested"
+      rb_sc_reason="cancelled_or_timed_out"
+      rb_sc_result="The judge requested one re-run of that run's failed jobs."
+    else
+      rb_sc_action="rerun_failed"
+      rb_sc_reason="post_failed"
+      rb_sc_result="The judge's request to re-run that run's failed jobs failed; it is not retried for this head and run."
+    fi
+    rb_sc_body="**AI review/autofix — re-run of cancelled required check-runs**
+
+The review-blocked judge approved this PR, but required check-runs in Actions run ${rb_sc_id} on head \`${rb_sc_head7}\` finished as cancelled or timed out. ${rb_sc_result} This happens at most once per head and run.
+
+${rb_sc_marker}"
+    if ! rb_judge_post_issue_comment -f body="${rb_sc_body}" >/dev/null; then
+      echo "::warning::PR #${PR_NUMBER:-unknown} could not post the settled-check rerun marker for run ${rb_sc_id}."
+    fi
+    echo "${rb_sc_prefix} names=${rb_sc_count} run=${rb_sc_id} action=${rb_sc_action} reason=${rb_sc_reason}"
+  done <<< "${rb_sc_ids}"
+  return 0
+}
+
 post_review_blocked_assessment() {
   local body_file="$1"
   local review_state="$2"
@@ -3394,8 +3582,16 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
               echo "::warning::PR #${PR_NUMBER} could not query check-runs for SHA ${RB_JUDGED_HEAD_SHA:0:7} — refusing merge_with_followup to avoid creating a follow-up against unvalidated code. Leaving linked issues in ai:review-blocked."
               echo "judge_skip_reason=check_runs_query_failed" >> "$GITHUB_OUTPUT"
             else
-              echo "::warning::PR #${PR_NUMBER} has blocking required check-run(s) for SHA ${RB_JUDGED_HEAD_SHA:0:7} — refusing merge_with_followup until required checks complete with success/neutral/skipped (a cancelled required check blocks; re-run it; non-required/advisory failures are ignored). Leaving linked issues in ai:review-blocked; stall recovery will re-fire the judge after checks settle."
+              if [ "${PR_CHECKS_LAST_PENDING:-0}" = "0" ] && [ -n "${PR_CHECKS_LAST_BLOCKING_NAMES:-}" ] \
+                && rb_judge_settled_check_diagnostics_enabled >/dev/null 2>&1; then
+                # Issue #10137: nothing is still running, so name the settled
+                # failures instead of reporting an in-flight wait.
+                echo "::warning::PR #${PR_NUMBER} required check-run(s) for SHA ${RB_JUDGED_HEAD_SHA:0:7} have finished without success — refusing merge_with_followup. Blocking: $(printf '%s' "${PR_CHECKS_LAST_BLOCKING_NAMES}" | head -n 20 | LC_ALL=C tr -c 'A-Za-z0-9 _./():\n-' '_' | paste -sd ',' - | sed 's/,/, /g'). Leaving linked issues in ai:review-blocked."
+              else
+                echo "::warning::PR #${PR_NUMBER} has blocking required check-run(s) for SHA ${RB_JUDGED_HEAD_SHA:0:7} — refusing merge_with_followup until required checks complete with success/neutral/skipped (a cancelled required check blocks; re-run it; non-required/advisory failures are ignored). Leaving linked issues in ai:review-blocked; stall recovery will re-fire the judge after checks settle."
+              fi
               echo "judge_skip_reason=blocking_check_runs" >> "$GITHUB_OUTPUT"
+              rb_judge_settled_check_diagnostics || true
             fi
           elif [ "${ENABLE_AUTO_MERGE}" = "true" ] \
             && ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}"; then

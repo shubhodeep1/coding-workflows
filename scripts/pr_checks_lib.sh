@@ -56,6 +56,24 @@
 #                            "CI"; none/off disables) whose not-yet-completed
 #                            runs on the head keep _pr_wait_for_required_checks
 #                            waiting (_pr_head_ci_runs_pending).
+#   PR_CHECKS_LAST_BLOCKING_NAMES — set by _pr_checks_completed (reset to ""
+#                            on entry, so every early return leaves it empty):
+#                            on a blocking result, one line per blocking
+#                            check-run, `<name>:<conclusion>` (a still-running
+#                            run reports its status, queued/in_progress), sorted
+#                            and unique; tabs/CR/LF in a name become spaces.
+#                            Same selection as the blocking count (issue
+#                            #10137); computed from the listing already
+#                            fetched, no extra API call. The return value and
+#                            PR_CHECKS_LAST_REASON never depend on it.
+#   PR_CHECKS_LAST_BLOCKING_RUN_IDS — companion of the above: one line per
+#                            COMPLETED blocking check-run, `<run_id>:<conclusion>`
+#                            with the Actions run id parsed from details_url
+#                            (`none:<conclusion>` for a non-Actions check or a
+#                            details_url that does not start with
+#                            ${GITHUB_SERVER_URL:-https://github.com}/<PR_CHECKS_REPOSITORY>/actions/runs/),
+#                            sorted and unique. Read by review_rb_judge.sh to
+#                            pick the one-time rerun target.
 #   PR_CHECKS_LAST_TOTAL   — set by _pr_checks_completed when it reads the
 #                            check-runs: total non-self check-runs on the
 #                            head (0 = none registered yet).
@@ -206,6 +224,64 @@ _pr_required_check_names_for_base()
 	echo "${ORCH_FINAL_MERGE_REQUIRED_CHECKS-${ORCH_FINAL_MERGE_REQUIRED_CHECKS_DEFAULT}}"
 }
 
+# Helper (issue #10137): fill PR_CHECKS_LAST_BLOCKING_NAMES and
+# PR_CHECKS_LAST_BLOCKING_RUN_IDS from a check-runs listing that
+# _pr_checks_completed already fetched (no API call). The selection mirrors
+# the gate's two blocking-count filters exactly: "*" mode counts every run
+# that is running or completed unacceptably; required mode counts every
+# running run plus unacceptable completed runs named in the required set;
+# both apply the PR_CHECKS_JQ_SUPERSEDE_DEFS supersede marks (a cancelled
+# run is accepted only when superseded), the self-run exclusion and the
+# review-gate supersede drop id. A jq failure leaves both globals empty.
+#
+# Usage: _pr_checks_blocking_detail <check_runs_json> <required_names_csv> <self_run> <gate_drop_id>
+_pr_checks_blocking_detail()
+{
+	local blocking_runs_json="$1" blocking_required_csv="$2" blocking_self_run="$3" blocking_drop_id="$4"
+	local blocking_detail="" blocking_line=""
+	PR_CHECKS_LAST_BLOCKING_NAMES=""
+	PR_CHECKS_LAST_BLOCKING_RUN_IDS=""
+	blocking_detail="$(printf '%s' "${blocking_runs_json}" | jq -r --arg names "${blocking_required_csv}" --arg self_run "${blocking_self_run}" --arg gate_drop_id "${blocking_drop_id}" --arg ci "${PR_CHECKS_LAST_CI_NAME:-none}" --arg bound "${PR_CHECKS_CI_RUN_IDS-__unbound__}" --arg blocking_repo "${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}" --arg blocking_server "${GITHUB_SERVER_URL:-https://github.com}" "${PR_CHECKS_JQ_SUPERSEDE_DEFS}"'
+		def _is_self_check_run: ($self_run != "") and ((.details_url // "") | test("/actions/runs/" + $self_run + "(/|$)"));
+		def _own_run_id: if ($blocking_repo == "") then _run_id
+			else ((($blocking_server | ascii_downcase | rtrimstr("/")) + "/" + ($blocking_repo | ascii_downcase) + "/actions/runs/") as $own_prefix
+				| ((.details_url // "") | tostring | ascii_downcase) as $own_url
+				| if ($own_url | startswith($own_prefix)) then ([$own_url | ltrimstr($own_prefix) | capture("^(?<id>[0-9]+)(/|$)") | .id] | first) else null end) end;
+		def _is_bad: (.conclusion != "success" and .conclusion != "neutral" and .conclusion != "skipped" and (.conclusion != "cancelled" or (._superseded | not)));
+		def _state: (if .status != "completed" then (.status // "unknown") else (.conclusion // "unknown") end) | tostring;
+		(if $names == "*" then null else ($names | split(",") | map(gsub("^\\s+|\\s+$"; ""))) end) as $required |
+		(
+			if (type == "array") then
+				[.[]? | (.check_runs // [])[]]
+			elif (type == "object" and (.check_runs | type == "array")) then
+				.check_runs
+			else
+				null
+			end
+		) as $runs |
+		if ($runs == null) then empty
+		else
+			[$runs | _mark_superseded | .[] | select(
+				(
+					(.status != "completed")
+					or (_is_bad and (($required == null) or (.name as $n | $required | index($n))))
+				)
+				and (_is_self_check_run | not)
+				and (($gate_drop_id == "") or (((.id // "") | tostring) != $gate_drop_id))
+			)] as $blocking
+			| ([$blocking[] | "N\t" + (((.name // "") | tostring | gsub("[\t\r\n]"; " ")) + ":" + _state)] | unique | .[]),
+			  ([$blocking[] | select(.status == "completed") | "R\t" + ((_own_run_id // "none") + ":" + _state)] | unique | .[])
+		end
+	' 2>/dev/null)" || blocking_detail=""
+	while IFS= read -r blocking_line; do
+		case "${blocking_line}" in
+			N$'\t'*) PR_CHECKS_LAST_BLOCKING_NAMES+="${PR_CHECKS_LAST_BLOCKING_NAMES:+$'\n'}${blocking_line#N$'\t'}" ;;
+			R$'\t'*) PR_CHECKS_LAST_BLOCKING_RUN_IDS+="${PR_CHECKS_LAST_BLOCKING_RUN_IDS:+$'\n'}${blocking_line#R$'\t'}" ;;
+		esac
+	done <<< "${blocking_detail}"
+	return 0
+}
+
 # Helper: Check whether all check-runs on a PR's head commit have
 # completed AND none of the check-runs that count as "required"
 # are in an unacceptable conclusion (success/neutral/skipped are
@@ -282,6 +358,8 @@ _pr_checks_completed()
 	PR_CHECKS_LAST_REASON="query_failed"
 	PR_CHECKS_LAST_PENDING=0
 	PR_CHECKS_LAST_TOTAL=""
+	PR_CHECKS_LAST_BLOCKING_NAMES=""
+	PR_CHECKS_LAST_BLOCKING_RUN_IDS=""
 	# stderr dropped: _pr_wait_for_required_checks warns once per wait instead
 	# of this call repeating an invalid-name warning on every poll.
 	PR_CHECKS_LAST_CI_NAME="$(_pr_auto_merge_required_ci_check_name "${3:-}" 2>/dev/null)"
@@ -680,6 +758,13 @@ _pr_checks_completed()
 	# Unparseable count: treat as "none registered" so the wait polls the
 	# grace intervals rather than reading a jq failure as green.
 	[[ "${PR_CHECKS_LAST_TOTAL}" =~ ^[0-9]+$ ]] || PR_CHECKS_LAST_TOTAL=0
+
+	# Issue #10137: name the blocking check-runs (and their Actions run ids)
+	# for callers that report or re-run them. Diagnostic only: it never
+	# changes the return value or PR_CHECKS_LAST_REASON.
+	if [ "${incomplete}" -gt 0 ]; then
+		_pr_checks_blocking_detail "${check_runs_json}" "${required_names_csv}" "${self_run}" "${gate_sup_drop_id}"
+	fi
 
 	if [ "${incomplete}" -gt 0 ]; then
 		if [ "${required_names_csv}" = "*" ]; then
