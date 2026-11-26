@@ -137,6 +137,27 @@ def test_failure_description(tmp_path: Path) -> None:
 	assert "description=Final CI failed" in calls[0]
 
 
+@pytest.mark.parametrize(
+	("kind", "aggregate", "description"),
+	[
+		("delta", "success", "Final CI passed (delta suite)"),
+		("delta", "failure", "Final CI failed (delta suite)"),
+		("full", "success", "Final CI passed (full suite)"),
+		("full", "failure", "Final CI failed (full suite)"),
+		("", "success", "Final CI passed"),
+		("bogus", "failure", "Final CI failed"),
+	],
+)
+def test_run_kind_adds_the_suite_to_the_description(tmp_path: Path, kind: str, aggregate: str, description: str) -> None:
+	# Issue #10156: main's push runs are a delta suite, scheduled runs the full
+	# suite; the state mapping is unchanged.
+	proc, calls = _run(tmp_path, aggregate=aggregate, extra_env={"CI_FINAL_STATUS_RUN_KIND": kind})
+	assert proc.returncode == 0, proc.stderr
+	assert f"description={description}" in calls[0]
+	assert _posted_state(calls) == aggregate
+	assert f"CI_FINAL_STATUS sha={SHA} state={aggregate} outcome=posted run=4242" in proc.stdout.splitlines()
+
+
 def test_cancelled_posts_nothing(tmp_path: Path) -> None:
 	proc, calls = _run(tmp_path, aggregate="cancelled")
 	assert proc.returncode == 0
@@ -237,6 +258,7 @@ def test_status_steps_are_the_last_steps_of_lint() -> None:
 		"CI_FINAL_STATUS_AGGREGATE_OUTCOME": "${{ steps.ci_require_all_jobs.outcome }}",
 		"CI_FINAL_STATUS_DOCS_ONLY_REQUESTED": "${{ inputs.docs_only == 'true' }}",
 		"CI_FINAL_STATUS_DOCS_ONLY_OUTCOME": "${{ steps.docs_only_verify.outcome }}",
+		"CI_FINAL_STATUS_RUN_KIND": "${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'schedule') && (needs.tests-main-delta.result != 'skipped' && needs.tests-main-delta.outputs.full_required != 'true' && 'delta' || 'full') || '' }}",
 	}
 
 

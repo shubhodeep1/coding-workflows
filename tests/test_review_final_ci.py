@@ -741,13 +741,42 @@ def test_base_sync_waits_for_a_red_base(fake_gh, tmp_path: Path) -> None:
 
 def test_base_sync_reads_the_base_result_when_the_listing_has_none(fake_gh, tmp_path: Path) -> None:
 	fixtures = _base_sync_fixtures(base="orchestrator/project-5")
-	fixtures[f"repos/{REPO}/actions/workflows/ci.yml/runs?branch=orchestrator/project-5&event=push"] = {"body": {"workflow_runs": [
-		{"conclusion": "failure", "created_at": "2026-11-17T07:00:00Z"},
-		{"conclusion": "success", "created_at": "2026-11-17T08:00:00Z"},
+	fixtures[f"repos/{REPO}/actions/workflows/ci.yml/runs?branch=orchestrator/project-5&status=completed"] = {"body": {"workflow_runs": [
+		{"event": "push", "conclusion": "failure", "created_at": "2026-11-17T07:00:00Z"},
+		{"event": "push", "conclusion": "success", "created_at": "2026-11-17T08:00:00Z"},
+		# Dispatch final runs are not the base's own result (issue #10156).
+		{"event": "workflow_dispatch", "conclusion": "failure", "created_at": "2026-11-17T09:00:00Z"},
 	]}}
 	result, calls = _sweep_one(fake_gh, tmp_path, fixtures)
 	assert "outcome=synced reason=behind base=orchestrator/project-5" in result.stdout, result.stdout + result.stderr
 	assert len(_puts(calls)) == 1
+	assert not any("&event=push" in arg for call in calls for arg in call)
+
+
+def test_base_sync_reads_a_red_scheduled_run_as_a_red_base(fake_gh, tmp_path: Path) -> None:
+	# Issue #10156: main's push runs are a delta suite; a failed scheduled full
+	# run newer than a green push run is a red base.
+	fixtures = _base_sync_fixtures(base="main")
+	fixtures[LISTING_KEY]["body"]["workflow_runs"].extend([
+		{"head_sha": "8" * 40, "head_branch": "main", "event": "push", "status": "completed", "conclusion": "success",
+			"path": ".github/workflows/ci.yml", "created_at": "2026-11-17T07:00:00Z"},
+		{"head_sha": "9" * 40, "head_branch": "main", "event": "schedule", "status": "completed", "conclusion": "failure",
+			"path": ".github/workflows/ci.yml", "created_at": "2026-11-17T08:00:00Z"},
+	])
+	result, calls = _sweep_one(fake_gh, tmp_path, fixtures)
+	assert "outcome=skipped reason=base_red base=main" in result.stdout, result.stdout + result.stderr
+	assert _puts(calls) == [] and _dispatches(calls) == []
+
+
+def test_base_sync_fallback_read_counts_a_red_scheduled_run(fake_gh, tmp_path: Path) -> None:
+	fixtures = _base_sync_fixtures(base="orchestrator/project-5")
+	fixtures[f"repos/{REPO}/actions/workflows/ci.yml/runs?branch=orchestrator/project-5&status=completed"] = {"body": {"workflow_runs": [
+		{"event": "push", "conclusion": "success", "created_at": "2026-11-17T07:00:00Z"},
+		{"event": "schedule", "conclusion": "failure", "created_at": "2026-11-17T08:00:00Z"},
+	]}}
+	result, calls = _sweep_one(fake_gh, tmp_path, fixtures)
+	assert "outcome=skipped reason=base_red base=orchestrator/project-5" in result.stdout, result.stdout + result.stderr
+	assert _puts(calls) == []
 
 
 @pytest.mark.parametrize(

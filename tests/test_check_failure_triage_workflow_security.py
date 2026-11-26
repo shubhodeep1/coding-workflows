@@ -1346,6 +1346,17 @@ case "$*" in
   "api repos/owner/repo/actions/workflows/"*"/runs?branch="*"&event=push&per_page=1 --jq "*)
     [ -n "${MOCK_BASE_CONCLUSION+set}" ] || exit 1
     printf '%s\\n' "${MOCK_BASE_CONCLUSION}${MOCK_BASE_RUN_ID:+ ${MOCK_BASE_RUN_ID}}" ;;
+  "api repos/owner/repo/actions/workflows/"*"/runs?branch="*"&per_page=10 --jq "*)
+    # ci.yml base gate (issue #10156): push and scheduled runs, filtered by
+    # the script's own --jq when a runs page is given.
+    if [ -n "${MOCK_BASE_RUNS_PAGE:-}" ]; then
+      base_jq=""; base_prev=""
+      for base_arg in "$@"; do [ "${base_prev}" = "--jq" ] && base_jq="${base_arg}"; base_prev="${base_arg}"; done
+      printf '%s' "${MOCK_BASE_RUNS_PAGE}" | jq -r "${base_jq}" || exit 1
+      exit 0
+    fi
+    [ -n "${MOCK_BASE_CONCLUSION+set}" ] || exit 1
+    printf '%s\\n' "${MOCK_BASE_CONCLUSION}${MOCK_BASE_RUN_ID:+ ${MOCK_BASE_RUN_ID}}" ;;
   "api -X GET repos/owner/repo/commits/"*"/check-runs -f check_name="*)
     [ -n "${MOCK_BASE_CHECK_CONCLUSION+set}" ] || exit 1
     printf '%s\\n' "${MOCK_BASE_CHECK_CONCLUSION}" ;;
@@ -1941,6 +1952,48 @@ class CheckFailureTriageBaseGateTests(unittest.TestCase):
 			"api repos/owner/repo/actions/workflows/9/runs?branch=main&event=push&per_page=1 --jq .workflow_runs[0] | if . == null then \"\" elif .status == \"completed\" then ((.conclusion // \"\") + \" \" + (.id // \"\" | tostring)) else \"pending\" end",
 			calls,
 		)
+
+	def test_ci_base_gate_reads_push_and_scheduled_runs(self) -> None:
+		"""Issue #10156: for ci.yml, a red scheduled full run newer than a green
+		push (delta) run reads as a red base; other workflows keep the push read."""
+		page = json.dumps({"workflow_runs": [
+			{"id": 31, "event": "schedule", "status": "completed", "conclusion": "failure"},
+			{"id": 30, "event": "workflow_dispatch", "status": "completed", "conclusion": "success"},
+			{"id": 29, "event": "push", "status": "completed", "conclusion": "success"},
+		]})
+		calls: list[str] = []
+		proc, outputs, _metadata = _run_collect_stage(
+			parent_body=PLAIN_SOURCE,
+			base={"ref": "main", "workflow_id": "9", "workflow_path": ".github/workflows/ci.yml"},
+			extra_env={"MOCK_BASE_RUNS_PAGE": page}, calls_path=calls,
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE base_gate outcome=file base=main base_conclusion=failure pr=17", proc.stdout)
+		self.assertEqual(outputs.get("ready"), "true")
+		self.assertTrue(any("/runs?branch=main&per_page=10 --jq " in call for call in calls), calls)
+		self.assertFalse(any("&event=push&per_page=1" in call for call in calls), calls)
+
+		green = json.dumps({"workflow_runs": [
+			{"id": 41, "event": "workflow_dispatch", "status": "completed", "conclusion": "failure"},
+			{"id": 40, "event": "push", "status": "completed", "conclusion": "success"},
+		]})
+		proc, outputs, _metadata = _run_collect_stage(
+			parent_body=PLAIN_SOURCE,
+			base={"ref": "main", "workflow_id": "9", "workflow_path": ".github/workflows/ci.yml"},
+			extra_env={"MOCK_BASE_RUNS_PAGE": green},
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE skip reason=pr_specific_failure base=main base_conclusion=success pr=17 check=CI", proc.stdout)
+
+	def test_non_ci_base_gate_keeps_the_push_read(self) -> None:
+		calls: list[str] = []
+		proc, _outputs, _metadata = _run_collect_stage(
+			parent_body=PLAIN_SOURCE,
+			base={"ref": "main", "workflow_id": "9", "workflow_path": ".github/workflows/other.yml", "conclusion": "success"},
+			calls_path=calls,
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertTrue(any("/runs?branch=main&event=push&per_page=1 --jq " in call for call in calls), calls)
 
 	def test_failing_or_unknown_base_still_files(self) -> None:
 		for base, expected in (

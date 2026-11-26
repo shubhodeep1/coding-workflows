@@ -37,7 +37,8 @@ GATED_JOBS = (
 	"tests-system-python",
 	"tests-sandbox-python",
 )
-GATED_IF = "inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'"
+# Issue #10156 added the push-to-main delta gate (tests-main-delta).
+GATED_IF = "!cancelled() && inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true' && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.MAIN_PUSH_DELTA_CI_ENABLED == 'false' || (needs.tests-main-delta.result == 'success' && needs.tests-main-delta.outputs.full_required == 'true'))"
 AGGREGATE_STEP_NAME = "Require every CI job to succeed"
 
 

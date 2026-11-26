@@ -286,7 +286,9 @@ def test_api_failures_never_fail_the_job(tmp_path: Path) -> None:
 def test_ci_wiring() -> None:
 	ci = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"))
 	job = ci["jobs"]["budget-watch"]
-	assert job["if"] == "always() && github.event_name == 'push' && github.ref == 'refs/heads/main'"
+	# Pushes to main and the scheduled full runs on main (issue #10156).
+	assert job["if"] == "always() && (github.event_name == 'push' || github.event_name == 'schedule') && github.ref == 'refs/heads/main'"
+	assert "tests-main-delta" in job["needs"]
 	assert job["permissions"] == {"contents": "read", "actions": "read", "issues": "write"}
 	assert "budget-watch" not in ci["jobs"]["lint"]["needs"]
 	assert set(ci["jobs"]["lint"]["needs"]) <= set(job["needs"])

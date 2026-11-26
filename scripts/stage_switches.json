@@ -368,6 +368,11 @@
 			"stage": "Poller-side gate for run-substate enrichment in state-snapshot exports."
 		},
 		{
+			"name": "MAIN_PUSH_DELTA_CI_ENABLED",
+			"default": "true",
+			"stage": "Push to main runs static checks plus the tests selected for the changes since main's last green CI run; false runs the full suite on every push (issue 10156)."
+		},
+		{
 			"name": "MEMORY_INJECTION_SCAN_ENABLED",
 			"default": "true",
 			"stage": "Turns on memory injection scan (clarify.yml, implement.yml, orchestrate.yml, orchestrate_clarify_respond.yml, plan.yml, review_autofix.yml, validate.yml); false turns that stage off."

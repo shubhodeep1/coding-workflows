@@ -364,6 +364,9 @@ RELEASE_WORKFLOW_FILES = ("test-and-mark-stable.yml", "mark-stable.yml", "promot
 # runs on the repository's default branch (checked against the run GitHub
 # returns, not the payload), matching the intake job's `if:` predicate.
 CI_WORKFLOW_FILES = ("ci.yml",)
+# Issue #10156: CI on the default branch runs on push (a delta suite) and on
+# a schedule (the full suite, every 6 hours); both are the branch's own runs.
+CI_DEFAULT_BRANCH_RUN_EVENTS = ("push", "schedule")
 # Scheduled self-check workflow files (SCHEDULED_CHECK_WORKFLOW_NAMES) a
 # `workflow_run` report may cite. Accepted only for runs GitHub reports on the
 # default branch, matching the intake job's `if:` predicate.
@@ -5541,7 +5544,7 @@ def verify_run_provenance(
 		if not reason and _run_workflow_file(run) not in allowed:
 			reason = "unexpected_workflow_path"
 		if not reason and kind == "workflow_run" and _run_workflow_file(run) in CI_WORKFLOW_FILES and not (
-			run.get("event") == "push"
+			run.get("event") in CI_DEFAULT_BRANCH_RUN_EVENTS
 			and is_valid_branch(default_branch)
 			and str(run.get("head_branch") or "") == default_branch
 		):
@@ -11237,6 +11240,13 @@ def heal_stale_decision(issue: Any, comments: Any, runs: Any, *, pipeline_login:
 		return done("keep", "runs_unavailable")
 	window: list[tuple[datetime, dict[str, Any]]] = []
 	reaches_anchor = False
+	# Issue #10156: for CI the scheduled full runs count too (push runs on the
+	# default branch are a delta suite). When the page holds any scheduled
+	# run, the window must hold a green one: green delta runs alone do not
+	# show the full suite passing. Pages without one (consumers with no
+	# scheduled CI) keep the push-only rule.
+	counted_events = CI_DEFAULT_BRANCH_RUN_EVENTS if workflow in CI_WORKFLOW_FILES else ("push",)
+	page_has_schedule = False
 	for run in runs["workflow_runs"]:
 		# A malformed entry could hide a failed run: keep the issue (fail open).
 		if not isinstance(run, dict):
@@ -11246,8 +11256,10 @@ def heal_stale_decision(issue: Any, comments: Any, runs: Any, *, pipeline_login:
 			return done("keep", "runs_unavailable")
 		if created <= anchor:
 			reaches_anchor = True
-		if run.get("event") != "push" or run.get("status") != "completed" or run.get("head_branch") != branch:
+		if run.get("event") not in counted_events or run.get("status") != "completed" or run.get("head_branch") != branch:
 			continue
+		if run.get("event") == "schedule":
+			page_has_schedule = True
 		if created <= anchor:
 			continue
 		# A cancelled run reports no result, green or red: since push CI
@@ -11279,6 +11291,8 @@ def heal_stale_decision(issue: Any, comments: Any, runs: Any, *, pipeline_login:
 	result["green_runs"] = len(window)
 	if len(window) < green_runs:
 		return done("keep", "too_few_green_runs")
+	if page_has_schedule and not any(run.get("event") == "schedule" for _, run in window):
+		return done("keep", "no_full_run_in_window")
 	result["first_green"] = _heal_stale_run_summary(window[0][1])
 	result["newest_green"] = _heal_stale_run_summary(window[-1][1])
 	close_prefix = f"<!-- {HEAL_STALE_CLOSE_MARKER_TAG} issue={number} "

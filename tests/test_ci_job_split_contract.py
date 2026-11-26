@@ -59,7 +59,23 @@ OLD_SINGLE_JOB_BUDGET_MINUTES = 45
 ADVISORY_JOB_IDS = frozenset({"budget-watch"})
 # Alias kept for the advisory-job wiring test below.
 POST_AGGREGATE_ADVISORY_JOBS = ADVISORY_JOB_IDS
-ADVISORY_JOB_IF = "always() && github.event_name == 'push' && github.ref == 'refs/heads/main'"
+# Pushes to main and the scheduled full runs on main (issue #10156).
+ADVISORY_JOB_IF = "always() && (github.event_name == 'push' || github.event_name == 'schedule') && github.ref == 'refs/heads/main'"
+# Issue #10156: on a push to main the seven gated test jobs wait for the delta
+# job, which is skipped at once in every other run, and run only when it asks
+# for the full suite. This is the one `needs` a worker job may carry.
+MAIN_DELTA_JOB_ID = "tests-main-delta"
+MAIN_DELTA_JOB_IF = "inputs.mode != 'quick' && github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.MAIN_PUSH_DELTA_CI_ENABLED != 'false'"
+MAIN_DELTA_GATED_IF = "!cancelled() && inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true' && (github.event_name != 'push' || github.ref != 'refs/heads/main' || vars.MAIN_PUSH_DELTA_CI_ENABLED == 'false' || (needs.tests-main-delta.result == 'success' && needs.tests-main-delta.outputs.full_required == 'true'))"
+MAIN_DELTA_GATED_JOBS = frozenset({
+	"tests-hooks-and-orchestrator",
+	"tests-heal-plan-and-validation",
+	"tests-promote-stall-and-review",
+	"tests-release-and-log-analysis",
+	"orchestrate-poll",
+	"tests-system-python",
+	"tests-sandbox-python",
+})
 # The final-CI hand-back job (cut-ci-runner-time Phase 4) runs only after a
 # failed `lint` in a workflow_dispatch run and gates nothing, so it is neither
 # a worker job nor in `lint.needs`. Pinned in FinalCiFailedJobTest below.
@@ -132,11 +148,20 @@ class AggregateJobWiringTest(unittest.TestCase):
 		self.assertEqual(_aggregate_step()["env"]["CI_NEEDS_JSON"], "${{ toJSON(needs) }}")
 
 	def test_no_other_job_waits_on_another(self) -> None:
-		"""The split only helps if the worker jobs start together."""
+		"""The split only helps if the worker jobs start together.
+
+		Exception (issue #10156): the seven gated test jobs need
+		tests-main-delta, which is skipped at once outside a push to main.
+		"""
 		jobs = _ci_jobs()
 		for job_id in _worker_job_ids(jobs):
 			with self.subTest(job=job_id):
-				self.assertNotIn("needs", jobs[job_id])
+				if job_id in MAIN_DELTA_GATED_JOBS:
+					self.assertEqual(jobs[job_id]["needs"], MAIN_DELTA_JOB_ID)
+					self.assertEqual(jobs[job_id]["if"], MAIN_DELTA_GATED_IF)
+				else:
+					self.assertNotIn("needs", jobs[job_id])
+		self.assertEqual(jobs[MAIN_DELTA_JOB_ID]["if"], MAIN_DELTA_JOB_IF)
 
 	def test_advisory_jobs_stay_outside_the_aggregate_and_main_only(self) -> None:
 		jobs = _ci_jobs()
@@ -177,6 +202,9 @@ class FinalCiFailedJobTest(unittest.TestCase):
 			with self.subTest(job=job_id):
 				if job_id == "static-checks":
 					self.assertNotIn("if", jobs[job_id])
+				elif job_id == MAIN_DELTA_JOB_ID:
+					# Runs only on a push to main; tests/test_ci_main_delta.py pins it.
+					self.assertEqual(jobs[job_id]["if"], MAIN_DELTA_JOB_IF)
 				elif job_id == "tests-sync-quick":
 					# Runs only in a sync-quick final-CI dispatch, never in quick
 					# mode; tests/test_ci_sync_quick.py pins that gate.
@@ -185,7 +213,7 @@ class FinalCiFailedJobTest(unittest.TestCase):
 					# Docs-only and sync-quick final CI also skip them;
 					# tests/test_ci_docs_only_final_ci.py and
 					# tests/test_ci_sync_quick.py pin those gates.
-					self.assertEqual(jobs[job_id]["if"], "inputs.mode != 'quick' && inputs.docs_only != 'true' && inputs.sync_quick != 'true'")
+					self.assertEqual(jobs[job_id]["if"], MAIN_DELTA_GATED_IF)
 
 
 class SystemPythonJobTest(unittest.TestCase):

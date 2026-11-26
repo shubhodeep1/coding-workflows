@@ -44,6 +44,8 @@ GROUP_EXPR = (
 	" || github.event_name == 'workflow_dispatch' && format('ci-final-pr-{0}', inputs.pr_number)"
 	" || github.event_name == 'pull_request' && format('ci-pr-{0}', github.event.pull_request.number)"
 	" || github.event_name == 'push' && format('ci-push-{0}', github.ref)"
+	# Issue #10156: scheduled full runs on main share one non-cancelling group.
+	" || github.event_name == 'schedule' && format('ci-schedule-{0}', github.ref)"
 	" || format('ci-{0}', github.run_id) }}"
 )
 CANCEL_EXPR = (
@@ -207,7 +209,19 @@ def test_push_runs_share_one_non_cancelling_group_per_branch() -> None:
 	}
 
 
-@pytest.mark.parametrize("event", ["workflow_call", "schedule"])
+def test_scheduled_runs_share_one_non_cancelling_group_per_ref() -> None:
+	# Issue #10156: a late timer run waits for the running full run.
+	block = _concurrency()
+	older = _context("schedule", run_id=301, **{"github.ref": "refs/heads/main"})
+	newer = _context("schedule", run_id=302, **{"github.ref": "refs/heads/main"})
+	assert _evaluate(block["group"], older) == "ci-schedule-refs/heads/main"
+	assert _evaluate(block["group"], newer) == _evaluate(block["group"], older)
+	assert _evaluate(block["cancel-in-progress"], older) is False
+	push = _context("push", run_id=303, **{"github.ref": "refs/heads/main"})
+	assert _evaluate(block["group"], push) != _evaluate(block["group"], older)
+
+
+@pytest.mark.parametrize("event", ["workflow_call"])
 def test_other_runs_never_cancel_and_never_share_a_group(event: str) -> None:
 	block = _concurrency()
 	run_a = _context(event, run_id=101)
