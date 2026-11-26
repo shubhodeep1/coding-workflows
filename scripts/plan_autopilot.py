@@ -719,6 +719,11 @@ def _semantic_errors(obj: dict[str, Any]) -> list[str]:
 	# name the plan by its docs/plans/ path or its docs/completed/ path. The
 	# plan's own docs/plans/ entry decides when it exists: a PARTIAL source
 	# never passes on a COMPLETE entry for its same-name docs/completed/ file.
+	# A path listed twice would let the last entry decide the guard below
+	# (PARTIAL then COMPLETE passes), so duplicates are refused outright.
+	classified = [c["path"] for c in obj["classification"]]
+	if len(classified) != len(set(classified)):
+		errors.append("classification: duplicate plan path")
 	statuses = {c["path"]: c["status"] for c in obj["classification"]}
 	for item in obj["archived"]:
 		own = statuses.get(item["from"], statuses.get(item["to"]))

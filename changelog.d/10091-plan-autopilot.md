@@ -7,7 +7,7 @@ With the repo variable `PLAN_AUTOPILOT_ENABLED=true`, a new `plan_autopilot` job
 | --- | --- |
 | Extra API calls in the poll job | 0 (reuses `find_tracking`'s listing and a cache lookup) |
 | Extra jobs per poll tick | 0 while off; at most 1 per (default-branch SHA, UTC day) while on and idle |
-| New repo variables | `PLAN_AUTOPILOT_ENABLED` (default `false`), `PLAN_AUTOPILOT_MAINTENANCE_PR_STALE_HOURS` (default `24`) |
+| New repo variables | `PLAN_AUTOPILOT_ENABLED` (default `false`), `PLAN_AUTOPILOT_MAINTENANCE_PR_STALE_HOURS` (default `24`), `PLAN_AUTOPILOT_CODEX_MODEL` (default empty, meaning `openai/gpt-6-sol`) |
 | New labels | `ai:plan-autopilot`, `ai:plan-decision` (clarify skips both) |
 
 What this means for operators: nothing changes until you set the variable. To stop it, set `PLAN_AUTOPILOT_ENABLED=false`. Answer a decision issue with `Q1: A` lines, never `/answer`.

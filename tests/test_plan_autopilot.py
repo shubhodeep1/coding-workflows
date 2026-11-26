@@ -922,6 +922,12 @@ def test_archived_plan_must_be_classified_complete() -> None:
 		{"path": "docs/completed/a.md", "status": "COMPLETE", "freshness": "n/a", "evidence": "y"},
 	], archived=move)
 	assert any("not classified COMPLETE" in e for e in pa.validate_result(contradictory))
+	# The same path listed twice (PARTIAL, then COMPLETE) never passes on its last entry.
+	duplicate = _result(classification=[
+		{"path": "docs/plans/a.md", "status": "PARTIAL", "freshness": "CURRENT", "evidence": "x"},
+		{"path": "docs/plans/a.md", "status": "COMPLETE", "freshness": "n/a", "evidence": "y"},
+	], archived=move)
+	assert "classification: duplicate plan path" in pa.validate_result(duplicate)
 
 
 def test_completed_blobs_lookup_failure_is_logged(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
