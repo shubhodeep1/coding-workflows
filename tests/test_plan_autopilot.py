@@ -859,3 +859,46 @@ def test_registry_entry_removed_without_a_reported_removal_is_a_mismatch(tmp_pat
 	with pytest.raises(pa.ApplyError) as exc:
 		_check(work, _result())
 	assert exc.value.reason == "result_mismatch"
+
+
+# ---------------------------------------------------------------- review fixes (round 5)
+
+def _archive_collision_repo(tmp_path: Path, completed_text: str | None) -> Path:
+	work = _git_repo(tmp_path)
+	content = (work / "docs" / "plans" / "b.md").read_text(encoding="utf-8")
+	(work / "docs" / "completed" / "b.md").write_text(content if completed_text is None else completed_text, encoding="utf-8")
+	subprocess.run(["git", "-C", str(work), "add", "-A"], check=True)
+	subprocess.run(["git", "-C", str(work), "-c", "user.name=t", "-c", "user.email=t@e", "commit", "-q", "-m", "c"], check=True)
+	return work
+
+
+def _check_with_head_blobs(work: Path, result: dict[str, Any]) -> dict[str, list[str]]:
+	changes = _stage(work)
+	completed = {f"docs/completed/{p.name}" for p in (work / "docs" / "completed").glob("*.md")}
+	return pa.check_diff(changes, result, [], REGISTRY, (work / pa.REGISTRY_PATH).read_text(encoding="utf-8"), "changelog.d/x.md", completed, pa.completed_blobs_at_head(work))
+
+
+def test_identical_archive_copy_allows_removing_the_live_plan(tmp_path: Path) -> None:
+	work = _archive_collision_repo(tmp_path, None)
+	assert set(pa.completed_blobs_at_head(work)) == {"docs/completed/b.md"}
+	(work / "docs" / "plans" / "b.md").unlink()
+	result = _result(archived=[{"from": "docs/plans/b.md", "to": "docs/completed/b.md", "refs_issue": 7}])
+	assert _check_with_head_blobs(work, result)["archive"] == ["docs/plans/b.md"]
+	# Without the HEAD blobs (the old call shape) the lone deletion is still refused.
+	with pytest.raises(pa.ApplyError):
+		_check(work, result)
+
+
+def test_different_archive_copy_is_never_replaced(tmp_path: Path) -> None:
+	work = _archive_collision_repo(tmp_path, "# Older archived text\n")
+	(work / "docs" / "plans" / "b.md").unlink()
+	result = _result(archived=[{"from": "docs/plans/b.md", "to": "docs/completed/b.md", "refs_issue": 7}])
+	with pytest.raises(pa.ApplyError) as exc:
+		_check_with_head_blobs(work, result)
+	assert exc.value.reason == "diff_outside_allowlist"
+	# Overwriting the different copy with the live plan is refused too.
+	content = subprocess.run(["git", "-C", str(work), "show", "HEAD:docs/plans/b.md"], check=True, capture_output=True, text=True).stdout
+	(work / "docs" / "completed" / "b.md").write_text(content, encoding="utf-8")
+	with pytest.raises(pa.ApplyError) as exc:
+		_check_with_head_blobs(work, result)
+	assert exc.value.reason == "diff_outside_allowlist"
