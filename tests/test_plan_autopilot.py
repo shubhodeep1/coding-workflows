@@ -133,6 +133,11 @@ def _gate_routes(tracking=None, prs=None, runs=None, status=None) -> dict[str, A
 	}
 
 
+def _maintenance_pr(number: int, ref: str, created_at: str, head_repo: str | None = "o/r", association: str = "MEMBER") -> dict[str, Any]:
+	head: dict[str, Any] = {"ref": ref, "repo": {"full_name": head_repo} if head_repo is not None else None}
+	return {"number": number, "head": head, "base": {"ref": "main"}, "created_at": created_at, "author_association": association}
+
+
 def test_gate_refuses_when_tracking_issue_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 	monkeypatch.setattr(pa, "gh_api", FakeGh(_gate_routes(tracking=[{"number": 5, "title": "p", "body": "docs/plans/a.md"}])))
 	out = pa.run_gate("o/r", _workdir(tmp_path), 24, NOW)
@@ -141,14 +146,14 @@ def test_gate_refuses_when_tracking_issue_open(tmp_path: Path, monkeypatch: pyte
 
 
 def test_gate_refuses_while_maintenance_pr_open_and_flags_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-	prs = [{"number": 9, "head": {"ref": "ai/plan-autopilot-20261120-abcdef0"}, "base": {"ref": "main"}, "created_at": "2026-11-23T00:00:00Z"}]
+	prs = [_maintenance_pr(9, "ai/plan-autopilot-20261120-abcdef0", "2026-11-23T00:00:00Z")]
 	monkeypatch.setattr(pa, "gh_api", FakeGh(_gate_routes(prs=prs)))
 	out = pa.run_gate("o/r", _workdir(tmp_path), 24, NOW)
 	assert (out["reason"], out["stale_pr"], out["save_marker"]) == ("maintenance_pr_open", "9", True)
 
 
 def test_gate_fresh_maintenance_pr_is_not_flagged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-	prs = [{"number": 9, "head": {"ref": "ai/plan-autopilot-x"}, "created_at": "2026-11-25T11:00:00Z"}]
+	prs = [_maintenance_pr(9, "ai/plan-autopilot-20261125-abcdef0", "2026-11-25T11:00:00Z")]
 	monkeypatch.setattr(pa, "gh_api", FakeGh(_gate_routes(prs=prs)))
 	out = pa.run_gate("o/r", _workdir(tmp_path), 24, NOW)
 	assert out["reason"] == "maintenance_pr_open" and out["stale_pr"] == ""
@@ -171,11 +176,50 @@ def test_gate_no_plans_reads_only_the_status_issue(tmp_path: Path, monkeypatch: 
 
 def test_gate_flags_the_oldest_maintenance_pr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 	prs = [
-		{"number": 11, "head": {"ref": "ai/plan-autopilot-b"}, "created_at": "2026-11-25T11:00:00Z"},
-		{"number": 9, "head": {"ref": "ai/plan-autopilot-a"}, "created_at": "2026-11-20T00:00:00Z"},
+		_maintenance_pr(11, "ai/plan-autopilot-20261125-bbbbbbb", "2026-11-25T11:00:00Z"),
+		_maintenance_pr(9, "ai/plan-autopilot-20261120-aaaaaaa", "2026-11-20T00:00:00Z"),
 	]
 	monkeypatch.setattr(pa, "gh_api", FakeGh(_gate_routes(prs=prs)))
 	assert pa.run_gate("o/r", _workdir(tmp_path), 24, NOW)["stale_pr"] == "9"
+
+
+def test_gate_ignores_fork_pr_with_maintenance_branch_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	# #10155: a fork author picks the head branch name freely.
+	prs = [
+		_maintenance_pr(9, "ai/plan-autopilot-20261120-abcdef0", "2026-11-20T00:00:00Z", head_repo="attacker/r", association="NONE"),
+		_maintenance_pr(10, "ai/plan-autopilot-20261120-abcdef0-2", "2026-11-20T00:00:00Z", head_repo="attacker/r", association="MEMBER"),
+		_maintenance_pr(12, "ai/plan-autopilot-20261120-abcdef0", "2026-11-20T00:00:00Z", head_repo=None, association="NONE"),
+	]
+	monkeypatch.setattr(pa, "gh_api", FakeGh(_gate_routes(prs=prs)))
+	out = pa.run_gate("o/r", _workdir(tmp_path), 24, NOW)
+	assert (out["proceed"], out["reason"], out["stale_pr"]) == (True, "idle", "")
+
+
+def test_gate_ignores_same_repo_pr_with_non_matching_branch_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	for ref in ("ai/plan-autopilot-x", "ai/plan-autopilot-20261120-abcdef0-4", "ai/plan-autopilot-20261120-ABCDEF0", "ai/plan-autopilot-20261120-abcdef0-2x"):
+		monkeypatch.setattr(pa, "gh_api", FakeGh(_gate_routes(prs=[_maintenance_pr(9, ref, "2026-11-20T00:00:00Z")])))
+		out = pa.run_gate("o/r", _workdir(tmp_path / ref.replace("/", "_")), 24, NOW)
+		assert (out["reason"], out["stale_pr"]) == ("idle", ""), ref
+	for ref in ("ai/plan-autopilot-20261120-abcdef0-2", "ai/plan-autopilot-20261120-abcdef0-3"):
+		# The repository comparison ignores case.
+		monkeypatch.setattr(pa, "gh_api", FakeGh(_gate_routes(prs=[_maintenance_pr(9, ref, "2026-11-20T00:00:00Z", head_repo="O/R")])))
+		out = pa.run_gate("o/r", _workdir(tmp_path / ref.replace("/", "_")), 24, NOW)
+		assert (out["reason"], out["stale_pr"]) == ("maintenance_pr_open", "9"), ref
+
+
+def test_gate_ignores_untrusted_author_unless_recorded_maintenance_pr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	prs = [_maintenance_pr(9, "ai/plan-autopilot-20261120-abcdef0", "2026-11-20T00:00:00Z", association="CONTRIBUTOR")]
+	monkeypatch.setattr(pa, "gh_api", FakeGh(_gate_routes(prs=prs)))
+	assert pa.run_gate("o/r", _workdir(tmp_path / "a"), 24, NOW)["reason"] == "idle"
+	marker = pa.render_state_marker({"maintenance_pr": "9"})
+	trusted_status = [{"number": 2, "author_association": "OWNER", "body": f"{pa.TRACKER_MARKER}\n{marker}"}]
+	monkeypatch.setattr(pa, "gh_api", FakeGh(_gate_routes(prs=prs, status=trusted_status)))
+	out = pa.run_gate("o/r", _workdir(tmp_path / "b"), 24, NOW)
+	assert (out["reason"], out["stale_pr"], out["save_marker"]) == ("maintenance_pr_open", "9", True)
+	forged_status = [{"number": 3, "author_association": "NONE", "body": f"{pa.TRACKER_MARKER}\n{marker}"}]
+	monkeypatch.setattr(pa, "gh_api", FakeGh(_gate_routes(prs=prs, status=forged_status)))
+	out = pa.run_gate("o/r", _workdir(tmp_path / "c"), 24, NOW)
+	assert (out["reason"], out["stale_pr"]) == ("idle", "")
 
 
 def test_gate_recent_recorded_dispatch_counts_as_pending(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

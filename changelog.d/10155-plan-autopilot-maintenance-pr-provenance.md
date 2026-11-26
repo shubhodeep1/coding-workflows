@@ -1,0 +1,4 @@
+<!-- changelog: fixed -->
+- **Plan autopilot: fork or foreign-author pull requests named `ai/plan-autopilot-*` no longer block it.**
+
+The autopilot's gate used to count any open pull request whose branch started with `ai/plan-autopilot-` as its own maintenance PR. Anyone could open a fork PR from a branch with that name and stop every daily audit and dispatch, and that PR's number then showed on the status issue as the stale maintenance PR. The gate now counts a pull request only when its branch is in this repository, the name is exactly `ai/plan-autopilot-<YYYYMMDD>-<sha7>` (or that name with `-2` or `-3`), and the author is an owner, member or collaborator or the PR is the maintenance PR the status issue recorded. Other pull requests are ignored, both in the gate and in the stale-PR line. No new API calls.

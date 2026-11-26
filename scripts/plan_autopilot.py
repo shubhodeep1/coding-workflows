@@ -83,6 +83,9 @@ from typing import Any
 
 LOG_PREFIX = "PLAN_AUTOPILOT"
 BRANCH_PREFIX = "ai/plan-autopilot-"
+# Every name run_apply can push: branch_name() plus its `-2` / `-3` collision
+# retries. Keep the suffix set in step with the retry list in run_apply.
+MAINTENANCE_BRANCH_RE = re.compile(r"^" + re.escape(BRANCH_PREFIX) + r"[0-9]{8}-[0-9a-f]{7}(?:-[23])?$")
 STATUS_LABEL = "ai:plan-autopilot"
 DECISION_LABEL = "ai:plan-decision"
 TRACKING_LABEL = "ai:orchestrator-tracking"
@@ -378,6 +381,29 @@ def in_flight_plans(tracking: list[dict[str, Any]]) -> list[str]:
 # gate
 # --------------------------------------------------------------------------
 
+def is_maintenance_pr(pr: dict[str, Any], repo: str, prior_state: dict[str, Any] | None) -> bool:
+	"""True only for a pull request the autopilot itself can have opened (#10155).
+
+	The open-pulls listing includes fork PRs, and a fork author picks the
+	head branch name, so a name prefix alone let anyone block the autopilot
+	(maintenance_pr_open with save_marker=true). Required: the head is in
+	this repository, the branch is exactly a branch_name() shape, and the
+	author is trusted or the number is the maintenance_pr recorded in the
+	trusted status-issue state marker.
+	"""
+	head = pr.get("head") if isinstance(pr.get("head"), dict) else {}
+	head_repo = head.get("repo") if isinstance(head.get("repo"), dict) else {}
+	full_name = str(head_repo.get("full_name") or "")
+	if not full_name or full_name.casefold() != str(repo or "").casefold():
+		return False
+	if not MAINTENANCE_BRANCH_RE.fullmatch(str(head.get("ref") or "")):
+		return False
+	if trusted(pr):
+		return True
+	recorded = str((prior_state or {}).get("maintenance_pr") or "")
+	return bool(recorded) and str(pr.get("number") or "") == recorded
+
+
 def run_gate(repo: str, workdir: Path, stale_hours: int, now: dt.datetime | None = None) -> dict[str, Any]:
 	now = now or _now()
 	result: dict[str, Any] = {
@@ -417,7 +443,8 @@ def run_gate(repo: str, workdir: Path, stale_hours: int, now: dt.datetime | None
 	if tracking:
 		result.update(reason="project_open", save_marker=True)
 		return result
-	maintenance = [p for p in prs if str((p.get("head") or {}).get("ref", "")).startswith(BRANCH_PREFIX)]
+	# Fork and foreign-author lookalikes are ignored here and in stale_pr.
+	maintenance = [p for p in prs if is_maintenance_pr(p, repo, result["prior_state"])]
 	if maintenance:
 		# The pulls listing is newest-first; flag the longest-waiting PR.
 		oldest = min(maintenance, key=lambda p: str(p.get("created_at") or ""))
