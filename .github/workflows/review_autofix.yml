@@ -1376,6 +1376,8 @@ jobs:
           SECURITY_PASS_FOLLOWUP_STALE_HOURS: ${{ vars.SECURITY_PASS_FOLLOWUP_STALE_HOURS || '24' }}
           SECURITY_PASS_AUTHOR_LOGIN_FALLBACK: ${{ secrets.GH_PAT == '' && 'github-actions[bot]' || '' }}
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
+          # Rollback switch of the resolution-only audit carry (merge-lease plan Phase 3).
+          MERGE_RESOLVE_DELTA_REVIEW_ENABLED: ${{ vars.MERGE_RESOLVE_DELTA_REVIEW_ENABLED || 'true' }}
           DET_SKIP_SECURITY_PASS_PR_JSON: ${{ needs.gate.outputs.det_skip_security_pass_pr_json }}
           FRESHNESS_HELPER_CHECKOUT_OUTCOME: ${{ steps.checkout_freshness_helper.outcome }}
           REVIEW_SUPPORT_SHA: ${{ needs.gate.outputs.review_support_sha }}

@@ -630,6 +630,8 @@ def test_workflow_wiring() -> None:
 	assert switch in _step(text, "Evaluate review gate")
 	assert "REVIEW_REMERGE_HEAD: ${{ needs.gate.outputs.review_remerge_head }}" in _step(text, "Generate diff context")
 	assert switch in _step(text, "Single-issue security pass")
+	# The deterministic-skip copy of the same gate honours the rollback too.
+	assert switch in _step(text, "Single-issue security pass (deterministic skip)")
 	assert "REVIEW_REMERGE_HEAD: ${{ needs.gate.outputs.review_remerge_head }}" in _step(text, "Enable auto-merge on PR")
 	push = _step(text, "Push all pending commits")
 	assert switch in push
@@ -720,6 +722,22 @@ def test_security_pass_carry_take_ours_resolution_gets_the_full_audit(tmp_path: 
 	assert f"outcome=merge_resolve_scope_uncovered from={shas['from']}" in proc.stdout
 	assert "merge_resolve_carry" not in proc.stdout
 	assert proc.stdout.splitlines()[-1] == "since= reason=freshness_unverified"
+
+
+def test_security_pass_carry_unshallows_a_depth_one_checkout(tmp_path: Path) -> None:
+	# The deterministic-skip job checks the head out with fetch-depth 1: the
+	# head is present but its parents and their merge base are not. The carry
+	# must unshallow instead of falling back to the full audit.
+	work, shas = _resolution_repo(tmp_path)
+	_git(work, "push", "-q", "origin", "HEAD:topic")
+	shallow = tmp_path / "shallow"
+	_git(tmp_path, "clone", "-q", "--depth", "1", "--branch", "topic", f"file://{tmp_path / 'origin.git'}", str(shallow))
+	assert _git(shallow, "rev-parse", "--is-shallow-repository") == "true"
+	assert _git(shallow, "rev-parse", "HEAD") == shas["head"]
+	proc, _ = _run_carry(tmp_path, work=shallow, shas=shas)
+	assert proc.returncode == 0, proc.stderr
+	assert f"outcome=merge_resolve_carry from={shas['from']}" in proc.stdout
+	assert proc.stdout.splitlines()[-1] == f"since={shas['from']} reason=merge_resolve_audit"
 
 
 def test_security_pass_carry_without_git_objects_gets_the_full_audit(tmp_path: Path) -> None:

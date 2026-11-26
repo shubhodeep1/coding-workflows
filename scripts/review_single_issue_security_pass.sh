@@ -871,7 +871,11 @@ single_pass_base_sync_carry()
 		# when <from>..<head> covers every remerge-diff file. Any git failure
 		# (missing objects, no merge base, git < 2.36) falls through to the
 		# full audit (freshness_unverified).
-		if [ "${carry_from_status}" = "clean" ] && ! git cat-file -e "${head_sha}^{commit}" 2>/dev/null \
+		# A shallow checkout (the deterministic-skip job uses fetch-depth 1)
+		# usually has the head but not its parents or their merge base, so
+		# unshallow when any of them is missing, not only the head.
+		if [ "${carry_from_status}" = "clean" ] && { ! git cat-file -e "${head_sha}^{commit}" 2>/dev/null \
+			|| ! git merge-base "${head_sha}^1" "${head_sha}^2" >/dev/null 2>&1; } \
 			&& [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ] && git check-ref-format --branch "${head_ref}" >/dev/null 2>&1; then
 			git fetch --no-tags --unshallow origin "+refs/heads/${head_ref}:refs/remotes/origin/${head_ref}" >/dev/null 2>&1 || true
 		fi
