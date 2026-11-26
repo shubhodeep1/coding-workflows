@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:926 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, anthropic_claude-sonnet-5_5]\n  PROBLEM: The 120-character cut on the whole `name:conclusion` entry drops the `:conclusion` suffix when a check name is very long (hardening suggestion; the same cut is in scripts/review_autofix_step_post_review_blocked_comment.sh per anthropic_claude-sonnet-5_5).\n  WHY: Only the diagnostic text is affected. Suggested fix: cut only the name part and keep the conclusion.\n- scripts/review_rb_judge.sh:946 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: A RB_JUDGE_SETTLED_CHECK_DIAGNOSTICS_ENABLED value that is neither 'true' nor 'false' logs a warning, and the script then treats the flag as off.\n  WHY: The reviewer rated it NIT and called it a minor behaviour discrepancy that could confuse readers.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Gate the new paths behind RB_JUDGE_SETTLED_CHECK_DIAGNOSTICS_ENABLED as an off switch,\" with `false` turning the paths off.\n  expected_change_site: .github/workflows/review_autofix.yml (the `Review-blocked judge decision` and `Post review-blocked comment on PR (autofix exhaustion)` step env blocks)\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: scripts/review_rb_judge.sh and scripts/review_autofix_step_post_review_blocked_comment.sh read the variable, but neither workflow step maps it from `vars` or another workflow environment. Setting a repository variable does not reach the scripts. Four other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash) treated this as a documented deferral outside the issue's `files_touched` grant, not a gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/review_rb_judge.sh and scripts/review_autofix_step_post_review_blocked_comment.sh (where each cuts the cleaned `name:conclusion` entry to 120 characters) | severity=low\n  PROBLEM: A check name longer than about 110 characters loses its `:conclusion` suffix in the diagnostic text (hardening suggestion; HARDENING_RISK_SCORE: 1).\n  WHY: Only the diagnostic text is affected. Suggested fix: cut only the name part and keep the conclusion (about 3 lines).\n- No other findings. The reviewer checked the cap-check reorder, the marker dedupe, the failure path, naming, trust boundaries and task completeness, and found nothing. It did not re-flag the workflow `env:` mapping of RB_JUDGE_SETTLED_CHECK_DIAGNOSTICS_ENABLED, because the issue's `files_touched` grant excludes the workflow file and the earlier editor rounds deferred it.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_rb_judge.sh:946 | severity=NIT | confidence=4\n  PROBLEM: A RB_JUDGE_SETTLED_CHECK_DIAGNOSTICS_ENABLED value that is neither 'true' nor 'false' logs a warning, and the script then treats the flag as off.\n  WHY: The warning is logged and execution continues. `rb_judge_settled_check_diagnostics` returns early, which may mislead a caller and confuse readers.\n- scripts/review_rb_judge.sh:926 | hardening suggestion (HARDENING_RISK_SCORE: 1)\n  PROBLEM: The loop that builds `rb_sc_joined` cuts the whole `name:conclusion` entry to 120 characters, so a very long check name loses its `:conclusion` suffix.\n  WHY: Suggested fix: cut only the name part and keep the suffix (about 2 lines).\n- TASK_GAP:\n  Requirement: \"Gate the new paths behind RB_JUDGE_SETTLED_CHECK_DIAGNOSTICS_ENABLED as an off switch,\" with `false` turning the paths off.\n  Expected change site: `.github/workflows/review_autofix.yml`, the `Review-blocked judge decision` and `Post review-blocked comment on PR (autofix exhaustion)` step environment blocks.\n  Evidence of absence: Neither workflow step maps the variable from `vars` or another workflow environment, so turning the feature off requires editing the workflow, which was not done in this PR and is outside the granted file list.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- No findings in any category. Notes for the editor: the cap-check relocation in scripts/review_rb_judge.sh is correct, the counter increment is unchanged, and the new test `test_marked_run_past_cap_logs_already_requested` covers the ordering. The wording change in scripts/review_autofix_step_post_review_blocked_comment.sh is more accurate. The workflow env wiring of RB_JUDGE_SETTLED_CHECK_DIAGNOSTICS_ENABLED raised by openai/gpt-6-luna is not a gap from the issue text. The issue asks for an off switch that defaults to on, both scripts provide it, and the workflow file is outside the `files_touched` grant.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b70b24bc08c3f14a9d4a446cc9d336ae34fb63a4441e763fd5613cbaae497242",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10139,
+    "run_id": "45780105646",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45780105646",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126091811_5672302d8a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10139,
+    "run_id": "45780105646"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 3 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T09:18:11Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
