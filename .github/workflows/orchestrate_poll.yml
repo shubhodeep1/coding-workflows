@@ -280,6 +280,19 @@ jobs:
             fi
           done
 
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
+
       - name: Release merge-queued PRs (merge train backstop)
         # Runs on EVERY tick, before the tracking-issue gate below exits early
         # for repos with no active orchestrator project, because the merge
@@ -1636,6 +1649,7 @@ jobs:
           # Standalone conflict sweep: page once per PR head after this many
           # automatic resolution attempts (0 disables the alert).
           STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ${{ vars.STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS || '3' }}
+          JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED: ${{ vars.JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED || 'true' }}
           # Issue-less review retry pass (issue #9487): re-dispatches per cycle at
           # most this many failed reviews of PRs with no linked issue (0 logs only).
           ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE: ${{ vars.ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE || '5' }}
@@ -1888,6 +1902,7 @@ jobs:
           STALL_FINGERPRINT_BREAKER_ENABLED: ${{ vars.STALL_FINGERPRINT_BREAKER_ENABLED || 'true' }}
           STALL_FINGERPRINT_REPEAT_MAX: ${{ vars.STALL_FINGERPRINT_REPEAT_MAX || '2' }}
           STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ${{ vars.STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS || '3' }}
+          JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED: ${{ vars.JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED || 'true' }}
           ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE: ${{ vars.ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE || '5' }}
           ISSUELESS_REVIEW_RETRY_MAX_AGE_DAYS: ${{ vars.ISSUELESS_REVIEW_RETRY_MAX_AGE_DAYS || '7' }}
           STANDALONE_SWEEP_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
@@ -2028,6 +2043,7 @@ jobs:
           STANDALONE_SWEEP_ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
           STANDALONE_PR_SWEEP_ONLY: "true"
           STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS: ${{ vars.STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS || '3' }}
+          JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED: ${{ vars.JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED || 'true' }}
           ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE: ${{ vars.ISSUELESS_REVIEW_RETRY_MAX_PER_CYCLE || '5' }}
           ISSUELESS_REVIEW_RETRY_MAX_AGE_DAYS: ${{ vars.ISSUELESS_REVIEW_RETRY_MAX_AGE_DAYS || '7' }}
           STALL_THRESHOLD_MINUTES: ${{ vars.STALL_THRESHOLD_MINUTES || '120' }}
@@ -2468,20 +2484,6 @@ jobs:
 
           tg_send_msg "${msg}" "ERROR" >/dev/null || true
 
-      - name: Record GH_PAT budget at poll end
-        if: always()
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
-          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
-          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_poll
-        run: |
-          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
-            source scripts/gh_helpers.sh
-            gh_pat_budget end orchestrate_poll poll "${GH_PAT_BUDGET_FILE}"
-          else
-            echo 'GH_PAT_BUDGET phase=end workflow=orchestrate_poll job=poll remaining=unknown reset=unknown used_in_job=unknown'
-          fi
       # Plan item 3e (D1): report every refused (non-capacity) Claude fallback
       # recorded by scripts/ai_engine.sh in this job's RUNNER_TEMP as a
       # workflow-failure-heal dispatch plus one Telegram WARNING. Runs only
@@ -2505,6 +2507,22 @@ jobs:
               bash "${fallback_report}" || true
           else
             echo "::warning::AI_ENGINE_FALLBACK_REPORT skip reason=support_missing"
+          fi
+
+      - name: Record GH_PAT budget at poll end
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          GH_PAT_BUDGET_FILE: ${{ runner.temp }}/gh_pat_budget_${{ github.run_id }}_${{ github.run_attempt }}_poll
+        run: |
+          if [ -f scripts/gh_helpers.sh ] && grep -q '^gh_pat_budget()' scripts/gh_helpers.sh; then
+            source scripts/gh_helpers.sh
+            gh_pat_budget end orchestrate_poll poll "${GH_PAT_BUDGET_FILE}"
+          else
+            counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+            echo "GH_PAT_BUDGET phase=end workflow=orchestrate_poll job=poll remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
           fi
 
   # Daily Claude pool usage report: one Telegram message with every pool
