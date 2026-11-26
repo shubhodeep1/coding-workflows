@@ -5,13 +5,32 @@
   "entry_id": "processed_command_10169_7197961755_approved",
   "issue_number": 10169,
   "metadata": {
+    "branch": "ai/issue-10169",
+    "changed_files": [
+      ".github/workflows/review_autofix.yml",
+      "README.md",
+      "agents.d/merge-lease-short-cs-p3-resolve-delta-review.md",
+      "changelog.d/merge-lease-short-cs-p3-resolve-delta-review.md",
+      "scripts/pr_checks_lib.sh",
+      "scripts/review_autofix_step_evaluate_gate.sh",
+      "scripts/review_autofix_step_generate_diff_context.sh",
+      "scripts/review_head_gate.sh",
+      "scripts/review_single_issue_security_pass.sh",
+      "scripts/stage_switches.json",
+      "tests/test_merge_resolve_delta_review.py"
+    ],
+    "issue_number": 10169,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/10169",
+    "pr_number": 10173,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/10173",
+    "run_attempt": "1",
+    "run_id": "45861013948",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/45861013948"
   },
   "run_attempt": 1,
   "run_id": "45861013948",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-26T16:48:14Z",
+  "status": "completed",
+  "timestamp": "2026-11-26T18:00:59Z",
   "workflow": "implement"
 }
