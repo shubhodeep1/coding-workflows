@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:4860-4913, 5155-5166 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: Neither the \"Review-blocked judge decision\" step nor the \"Post review-blocked comment on PR (autofix exhaustion)\" step maps `RB_JUDGE_SETTLED_CHECK_DIAGNOSTICS_ENABLED` from a repository variable or other configurable input, so the scripts always see it unset and default to enabled.\n  WHY: Operators cannot disable the new rerun and settled-check comment behavior through repository configuration (reviewer severity MAJOR; other reviewers treated this as a documented deferral).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Gate only the new code path behind RB_JUDGE_SETTLED_CHECK_DIAGNOSTICS_ENABLED as an off switch.\" (`false` turns it off)\n  expected_change_site: .github/workflows/review_autofix.yml (env: blocks for \"Review-blocked judge decision\" and \"Post review-blocked comment on PR (autofix exhaustion)\")\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The PR diff does not wire the variable into either workflow step, so the scripts receive it unset and use default-on behavior. Severity disagreement: openai_gpt-6-luna rates it MAJOR; anthropic_claude-sonnet-5_5 and google_gemini-3_1-flash-lite rate it NIT, calling it a documented deferral that the scripts satisfy.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/review_autofix.yml:4860-4913, 5155-5166 | severity=high | confidence=5\n  PROBLEM: Neither step maps `RB_JUDGE_SETTLED_CHECK_DIAGNOSTICS_ENABLED` from a repository variable or other configurable workflow input, and the scripts default it to enabled.\n  WHY: The workflow always enables the new rerun and settled-check comment behavior, and operators cannot disable it through repository configuration.\n- TASK_GAP: Requirement: \"Gate only the new code path behind RB_JUDGE_SETTLED_CHECK_DIAGNOSTICS_ENABLED as an off switch.\" The issue specifies that `false` turns it off.\n  Expected change site: `.github/workflows/review_autofix.yml`, the `env:` blocks for \"Review-blocked judge decision\" and \"Post review-blocked comment on PR (autofix exhaustion)\".\n  Evidence of absence: The PR diff does not wire this variable into either workflow step. Without that mapping, the scripts receive it unset and use their default-on behavior, so the requested off switch is not configurable in the production workflow.\n  severity=MAJOR | confidence=5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "39e92f5ec3ad93d54debb07ecd62052f50a059e2ee1674f6d9eee762fc1e7db2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10139,
+    "run_id": "45766693554",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45766693554",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126075544_98cd3a2924",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10139,
+    "run_id": "45766693554"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T07:55:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
