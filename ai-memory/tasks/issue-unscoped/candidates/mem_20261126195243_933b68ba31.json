@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tools/claude-pool-broker/src/index.ts:69-81 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The Env interface doc comment for BROKER_SHA_CHECK_ALL_BRANCHES_ENABLED says any other value turns the flag off and logs a warning, but boolean true/false values are now honoured silently, so the comment contradicts the shaCheckAllBranchesEnabled JSDoc and code.\n  WHY: There is no runtime failure, but an operator reading only the Env doc expects a warning for a boolean wrangler.toml [vars] value and gets none. All four reviewers rated it NIT with no disagreement. Line ranges as cited: 75-81, 69-76 and 75-80.\n- changelog.d/10172-broker-sha-check-all-branches.md:10 | severity=low | confidence=4\n  flagged_by: [z-ai_glm-5_3-flash]\n  PROBLEM: The changelog table row says any other value is off with a warning, but a boolean false/true from wrangler.toml [vars] is now handled silently and the table has no boolean entry.\n  WHY: The release notes misstate the flag's behaviour for the boolean case the last run added (NIT).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"In the PR body, use Refs #9865.\"\n  expected_change_site: pull request description (PR body; pipeline-generated, not a repository file)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The PR body reads \"Closes https://github.com/shubhodeep1/coding-workflows/issues/10172\" and has no \"Refs #9865\", although changelog.d/10172-broker-sha-check-all-branches.md already ends with \"Refs #9865\". The previous editor deferred it because a worktree edit cannot change the PR body. All three reviewers rated it NIT.\n- requirement: \u00a719 of CLAUDE.md / \u00a721 forbid auto-close keywords against `ai:orchestrator-tracking` issues, and scripts/lint_pr_body_auto_close.py should be a pre-flight gate.\n  expected_change_site: PR body text\n  confidence=3\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The PR body uses \"Closes https://github.com/shubhodeep1/coding-workflows/issues/10172\". If #10172 carries `ai:orchestrator-tracking`, merging would auto-close it. No pr-body-lint failure was reported, so the lint may not have run or the label may be absent. NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tools/claude-pool-broker/src/index.ts:75-81 (Env interface doc comment vs shaCheckAllBranchesEnabled JSDoc) | severity=NIT | confidence=4\n  PROBLEM: The Env comment says any other value turns the flag off and logs a warning, but a boolean true/false is now honoured silently.\n  WHY: No runtime failure, but an operator reading only the Env doc would expect a warning for a boolean and see none.\n- TASK_GAP: Requirement: \"In the PR body, use Refs #9865.\"\n  Expected change site: the pull request description (pipeline-generated, not a repository file)\n  Evidence of absence: The PR body reads \"Closes https://github.com/shubhodeep1/coding-workflows/issues/10172\" with no \"Refs #9865\". The changelog fragment already ends with \"Refs #9865\", and no closing keyword targets #9865. The previous editor deferred this. All code deliverables are present.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tools/claude-pool-broker/src/index.ts:69-76 vs 725-732 (Env interface vs shaCheckAllBranchesEnabled JSDoc) | severity=NIT | confidence=4\n  PROBLEM: The Env doc suggests any value other than true/false turns the flag off with a warning, but the implementation silently turns it off for a boolean false.\n  WHY: A documentation discrepancy, not a functional failure; an operator expects a warning and gets silence.\n- TASK_GAP: Requirement: \"In the PR body, use Refs #9865.\"\n  Expected change site: pull request description (PR body)\n  Evidence of absence: The PR body reads \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/10172\" with no \"Refs #9865\".\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tools/claude-pool-broker/src/index.ts:75-81 (Env interface doc comment) | severity=NIT | confidence=4\n  PROBLEM: The Env doc says any other value turns the flag off and logs a warning, but boolean true/false are silently accepted (lines 738-740).\n  WHY: No runtime failure; a doc inconsistency with the updated shaCheckAllBranchesEnabled JSDoc.\n- TASK_GAP: Requirement: \"In the PR body, use Refs #9865.\"\n  Expected change site: pull request description text (not a repo file)\n  Evidence of absence: The PR body reads \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/10172\" with no \"Refs #9865\". changelog.d/10172-broker-sha-check-all-branches.md:14 already ends with \"Refs #9865\". The previous autofix editor deferred this as NIT.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP: Requirement: \u00a719 of CLAUDE.md forbids auto-close keywords against `ai:orchestrator-tracking` issues, and scripts/lint_pr_body_auto_close.py should be a pre-flight gate.\n  Expected change site: PR body text\n  Evidence of absence: The PR body uses \"Closes https://github.com/shubhodeep1/coding-workflows/issues/10172\". If #10172 carries `ai:orchestrator-tracking`, merging would auto-close it. No pr-body-lint failure is reported, so the lint may not have run or the label is absent.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tools/claude-pool-broker/src/index.ts:75-80 vs 733-754 (Env interface comment vs shaCheckAllBranchesEnabled) | severity=NIT | confidence=4\n  PROBLEM: The last run updated the function JSDoc for boolean/null handling but not the Env interface comment, so the two doc blocks and the code contradict each other.\n  WHY: No runtime failure; an operator expects a `flag=invalid fallback=off` warning for a boolean value and gets silence.\n- changelog.d/10172-broker-sha-check-all-branches.md:10 | severity=NIT | confidence=4\n  PROBLEM: The changelog row says any other value is off with a warning, but boolean false/true from wrangler.toml [vars] is handled silently and the table has no boolean entry.\n  WHY: The release notes misstate the behaviour for the boolean case the last run added.\n- TASK_GAP: (none reported; skipped the \"In the PR body, use Refs #9865\" gap as an already-deferred item, noting that all code deliverables are present.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "24dc533e39effc0d0938e436faf5011e98b07ce81ad309c5abdad8fe29b91a89",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10174,
+    "run_id": "45884509747",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45884509747",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126195243_933b68ba31",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10174,
+    "run_id": "45884509747"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 4 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T19:52:43Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
