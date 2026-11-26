@@ -605,8 +605,9 @@ RELEASE_GATE_READ_STEPS = {
 # helper. Comment lines, `type <helper>` probes and function definitions are
 # not counted. In stable_e2e_step_wait_review.sh every gh_api_safe_quiet_print
 # runs after the GH_API_SAFE_USE_READ_TOKEN opt-in, so each one tries the job
-# token first. The two plain gh_api_safe_quiet_print calls in
-# dispatch_and_watch_workflow_run.sh stay on the PAT (no opt-in there) and are
+# token first. The four plain gh_api_safe_quiet_print calls in
+# dispatch_and_watch_workflow_run.sh (stop-jobs check, pre-dispatch run id,
+# status poll, watched-run jobs) stay on the PAT (no opt-in there) and are
 # not listed. A new call site changes a count and must get a fallback test.
 RELEASE_GATE_READ_CALL_SITES = {
 	"stable_e2e_step_wait_review.sh": {"gh_api_safe_quiet_print": 14},
@@ -617,7 +618,7 @@ RELEASE_GATE_READ_CALL_SITES = {
 # Calls of the same helpers that stay on the PAT; listed so the counts above
 # can be exact.
 RELEASE_GATE_PAT_ONLY_CALLS = {
-	"dispatch_and_watch_workflow_run.sh": {"gh_api_safe_quiet_print": 2},
+	"dispatch_and_watch_workflow_run.sh": {"gh_api_safe_quiet_print": 4},
 }
 READ_HELPERS = (
 	"gh_api_safe_job_token_read",
