@@ -716,10 +716,13 @@ def _semantic_errors(obj: dict[str, Any]) -> list[str]:
 			errors.append("archived: refs_issue must be a positive integer")
 	# /audit-plans step 7: only a plan classified COMPLETE is archived. The
 	# script enforces it (apply pushes with GH_PAT); the classification may
-	# name the plan by its docs/plans/ path or its docs/completed/ path.
-	complete = {c["path"] for c in obj["classification"] if c["status"] == "COMPLETE"}
+	# name the plan by its docs/plans/ path or its docs/completed/ path. The
+	# plan's own docs/plans/ entry decides when it exists: a PARTIAL source
+	# never passes on a COMPLETE entry for its same-name docs/completed/ file.
+	statuses = {c["path"]: c["status"] for c in obj["classification"]}
 	for item in obj["archived"]:
-		if item["from"] not in complete and item["to"] not in complete:
+		own = statuses.get(item["from"], statuses.get(item["to"]))
+		if own != "COMPLETE":
 			errors.append(f"archived: plan is not classified COMPLETE {_one_line(item['from'], 80)!r}")
 	for item in obj["removals"]:
 		path = item["script_path"]

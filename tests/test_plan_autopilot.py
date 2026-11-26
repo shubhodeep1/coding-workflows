@@ -916,6 +916,12 @@ def test_archived_plan_must_be_classified_complete() -> None:
 	assert pa.validate_result(by_plan_path) == []
 	by_completed_path = _result(classification=[{"path": "docs/completed/a.md", "status": "COMPLETE", "freshness": "n/a", "evidence": "x"}], archived=move)
 	assert pa.validate_result(by_completed_path) == []
+	# A PARTIAL source never passes on a COMPLETE entry for its same-name completed file.
+	contradictory = _result(classification=[
+		{"path": "docs/plans/a.md", "status": "PARTIAL", "freshness": "CURRENT", "evidence": "x"},
+		{"path": "docs/completed/a.md", "status": "COMPLETE", "freshness": "n/a", "evidence": "y"},
+	], archived=move)
+	assert any("not classified COMPLETE" in e for e in pa.validate_result(contradictory))
 
 
 def test_completed_blobs_lookup_failure_is_logged(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
