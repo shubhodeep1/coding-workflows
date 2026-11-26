@@ -2320,7 +2320,7 @@ jobs:
               fi
             else
               report_delivery="pr_open"
-              echo "::warning::Workflow log analysis report PR ${report_pr_url:-#${report_pr_number}} could not be set to auto-merge; it stays open for review."
+              echo "::warning::Workflow log analysis report PR ${report_pr_url:-#${report_pr_number}} could not be set to auto-merge; it stays open for review. GitHub refuses --auto when ${TARGET_BRANCH} has no required checks or the repository has auto-merge disabled (#10151 removed the direct-merge fallback): enable auto-merge, or set WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR=false for direct delivery."
             fi
             if [ "${report_delivery}" != "pr_merged" ]; then
               echo "::warning::The workflow log analysis report is not on ${TARGET_BRANCH} yet (PR ${report_pr_url:-#${report_pr_number}}, delivery ${report_delivery}): deep-audit and api-redundancy are skipped for this run, and a caller that reads the newest report from ${TARGET_BRANCH} after this run sees the previous one. Set WORKFLOW_LOG_ANALYSIS_REPORT_VIA_PR=false to keep the direct push."

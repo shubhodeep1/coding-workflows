@@ -11320,10 +11320,6 @@ def test_repeated_reviewer_failure_labels_fallback_issue_before_the_pr(tmp_path:
 		assert "No linked issues found for PR #9356" in result.stdout
 
 
-if __name__ == "__main__":
-	raise SystemExit(main())
-
-
 # --- deterministic-skip final CI on the no-wait paths (issue #10151) ---------
 
 _DET_SKIP_MERGE_STEP = "Mark PR review-skipped, mark linked issues ready-to-merge, enable auto-merge"
@@ -11392,3 +11388,7 @@ def test_det_skip_ensure_final_ci_behaviour(workflow: str, verified: str, librar
 		assert expected in proc.stdout, proc.stdout
 	else:
 		assert proc.stdout.strip() == "RC=0", proc.stdout
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
