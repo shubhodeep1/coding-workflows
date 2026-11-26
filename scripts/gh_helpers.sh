@@ -1079,8 +1079,17 @@ gh_review_pr_state()
 #   caller=<script>` is logged to stderr, and gh runs once with the PAT.
 #   A 401 or a non-rate-limit 403 (missing scope) writes a per-job
 #   latch file so later calls go straight to the PAT.
-# - Any other failure returns the job-token result to the caller's own
-#   retry wrapper (gh_retry).
+# - Any other job-token failure (a 5xx, a network or other non-HTTP
+#   error) also drops the output, logs `GH_READ_FALLBACK reason=error
+#   caller=<script>` and runs gh once with the PAT, without latching, so
+#   a failing job token can never stop a polling read that the PAT would
+#   have answered (follow-up to #9888). When the PAT fails too, the
+#   job token's stderr and rc are returned instead of the PAT's, so the
+#   caller's own retry wrapper (gh_retry) treats the attempt as
+#   transient rather than as a PAT rate limit; a permanent PAT failure
+#   (not a rate limit) returns the PAT's stderr and rc so gh_retry fails
+#   fast. `pr checks`, which exits
+#   non-zero with a valid answer, returns the job-token result unchanged.
 # The token value is never printed: xtrace is off while it is in use.
 # ---------------------------------------------------------------
 _gh_read_args_are_read()
@@ -1310,18 +1319,62 @@ _gh_read_run()
 	elif printf '%s' "${err_text}" | grep -q 'HTTP 404'; then
 		reason="404"
 	fi
+	# Any other failure (5xx, network, non-HTTP error) also falls back once
+	# to the PAT: before #9888 these reads used the PAT alone, so a job-token
+	# problem must never fail a read the PAT can answer. The job-token output
+	# is dropped; when the PAT succeeds its result is returned, and when it
+	# fails too the job token's transient error is returned unless the PAT's
+	# error is permanent (see below). No latch: the next call tries the job
+	# token again.
 	if [ -z "${reason}" ]; then
-		cat "${out_file}" 2>/dev/null || true
-		cat "${err_file}" >&2 2>/dev/null || true
-		rm -f "${out_file}" "${err_file}"
-		return "${rc}"
+		# `gh pr checks` exits non-zero with a valid answer for pending (8) or
+		# failed (1, with the check table on stdout) checks, so that result is
+		# returned unchanged. A `pr checks` failure with rc 1 and no output
+		# (5xx, network) takes the reason=error PAT fallback below.
+		if [ "${1:-} ${2:-}" = "pr checks" ] && { [ "${rc}" -eq 8 ] || { [ "${rc}" -eq 1 ] && [ -s "${out_file}" ]; }; }; then
+			cat "${out_file}" 2>/dev/null || true
+			cat "${err_file}" >&2 2>/dev/null || true
+			rm -f "${out_file}" "${err_file}"
+			return "${rc}"
+		fi
+		reason="error"
 	fi
-	rm -f "${out_file}" "${err_file}"
 	if [ "${reason}" = "401" ] || [ "${reason}" = "403" ]; then
 		: > "$(_gh_read_latch_file)" 2>/dev/null || true
 	fi
 	echo "GH_READ_FALLBACK reason=${reason} caller=$(_gh_read_caller)" >&2
-	gh "$@"
+	if [ "${reason}" != "error" ]; then
+		rm -f "${out_file}" "${err_file}"
+		gh "$@"
+		return $?
+	fi
+	# reason=error: when the PAT fails too, return the job token's transient
+	# error, not the PAT's, so a wrapping gh_retry backs off and retries the
+	# job token instead of treating an exhausted PAT as a rate limit (alert,
+	# breaker trip, wait for the PAT reset). Each attempt then costs one
+	# job-token call plus one PAT call. A permanent PAT failure (revoked PAT,
+	# 404, 422; never a rate limit) returns the PAT's stderr and rc instead,
+	# so gh_retry fails fast and reports the real cause.
+	local pat_rc=0
+	gh "$@" >"${out_file}" 2>"${err_file}" || pat_rc=$?
+	# A PAT `pr checks` answer (rc 8 pending, or rc 1 with the check table)
+	# is valid too, so it is returned with its own rc like a success.
+	if [ "${pat_rc}" -eq 0 ] || { [ "${1:-} ${2:-}" = "pr checks" ] && { [ "${pat_rc}" -eq 8 ] || { [ "${pat_rc}" -eq 1 ] && [ -s "${out_file}" ]; }; }; }; then
+		local pat_replay_rc="${pat_rc}"
+		( cat "${out_file}" ) || pat_replay_rc=$?
+		cat "${err_file}" >&2 2>/dev/null || true
+		rm -f "${out_file}" "${err_file}"
+		return "${pat_replay_rc}"
+	fi
+	local pat_err_text=""
+	pat_err_text="$(cat "${err_file}" 2>/dev/null || true)"
+	rm -f "${out_file}" "${err_file}"
+	if ! _is_gh_rate_limit "${pat_err_text}" && _is_gh_permanent_failure "${pat_err_text}"; then
+		printf '%s\n' "${pat_err_text}" >&2
+		return "${pat_rc}"
+	fi
+	[ -z "${err_text}" ] || printf '%s\n' "${err_text}" >&2
+	return "${rc}"
 }
 
 # ---------------------------------------------------------------
@@ -4742,6 +4795,107 @@ zombie_queued_log_ignored()
 	return 0
 }
 
+# ---------------------------------------------------------------
+# Release-gate runner wait (issue #10037)
+#
+# release_gate_oldest_queued_wait <repo> <limit_minutes> <zq_cutoff_epoch>
+#
+# Measures how long the oldest live queued run of <repo> has waited for a
+# runner, for the release scripts' runner_wait_long skip
+# (scripts/auto_release_stable.sh, scripts/promote_main_cycle.sh).
+# Only runs created between the wedged-queued cutoff (zombie_queued_cutoff_epoch,
+# 0 = no lower bound) and now - <limit_minutes> are read, so the answer is
+# "is any live run queued for at least the limit, and the oldest one's age".
+#
+# Output: exactly one line on stdout, always exit 0 (fail open):
+#   outcome=<long|short|read_failed> oldest_queued_min=<n|-> queued_in_window=<n|-> calls=<0|1|2>
+#
+# API calls (§14): no existing call in the callers returns queued runs'
+# created_at (they list workflow-scoped runs or a queued count), so:
+#   call 1  GET repos/<repo>/actions/runs?status=queued&created=<lower>..<upper>&per_page=100
+#   call 2  only when total_count > 100: the last page (newest first, so the
+#           oldest runs are there), capped at page 10 (the API's 1,000-result
+#           limit).
+# Any failed or unparseable read prints outcome=read_failed.
+# ---------------------------------------------------------------
+release_gate_oldest_queued_wait()
+{
+	local _rgw_repo="${1:-}" _rgw_limit="${2:-}" _rgw_cutoff="${3:-0}"
+	local _rgw_now="" _rgw_upper_epoch="" _rgw_upper="" _rgw_lower="" _rgw_json="" _rgw_total="" _rgw_page="" _rgw_calls=0 _rgw_oldest=""
+	local _rgw_jq_def=""
+	if ! [[ "${_rgw_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || ! [[ "${_rgw_limit}" =~ ^[0-9]{1,6}$ ]]; then
+		echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=0"
+		return 0
+	fi
+	[[ "${_rgw_cutoff}" =~ ^[0-9]+$ ]] || _rgw_cutoff=0
+	_rgw_now="$(date -u +%s 2>/dev/null || true)"
+	if ! [[ "${_rgw_now}" =~ ^[0-9]+$ ]]; then
+		echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=0"
+		return 0
+	fi
+	_rgw_upper_epoch=$(( _rgw_now - 10#${_rgw_limit} * 60 ))
+	# A limit at or beyond the wedged-queued cutoff leaves an empty (inverted)
+	# created range: every run queued that long is wedged, so no live run can
+	# reach the limit. Answer short without a read instead of a 422.
+	if [ "${_rgw_cutoff}" -gt 0 ] && [ "${_rgw_upper_epoch}" -le "${_rgw_cutoff}" ]; then
+		echo "outcome=short oldest_queued_min=- queued_in_window=0 calls=0"
+		return 0
+	fi
+	_rgw_upper="$(date -u -d "@${_rgw_upper_epoch}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+	if [ "${_rgw_cutoff}" -gt 0 ]; then
+		_rgw_lower="$(date -u -d "@$(( _rgw_cutoff + 1 ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+	else
+		_rgw_lower="1970-01-01T00:00:00Z"
+	fi
+	if [ -z "${_rgw_upper}" ] || [ -z "${_rgw_lower}" ]; then
+		echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=0"
+		return 0
+	fi
+	if declare -F zombie_queued_jq_def >/dev/null 2>&1; then
+		_rgw_jq_def="$(zombie_queued_jq_def 2>/dev/null || true)"
+	fi
+	[ -n "${_rgw_jq_def}" ] || _rgw_jq_def='def is_wedged_queued($cutoff): false;'
+	_rgw_calls=1
+	if ! _rgw_json="$(gh_retry gh api -X GET "repos/${_rgw_repo}/actions/runs" -f status=queued -f "created=${_rgw_lower}..${_rgw_upper}" -f per_page=100 2>/dev/null)"; then
+		echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=${_rgw_calls}"
+		return 0
+	fi
+	_rgw_total="$(printf '%s' "${_rgw_json}" | jq -r 'if (.total_count | type) == "number" and (.workflow_runs | type) == "array" then .total_count else empty end' 2>/dev/null || true)"
+	if ! [[ "${_rgw_total}" =~ ^[0-9]+$ ]]; then
+		echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=${_rgw_calls}"
+		return 0
+	fi
+	if [ "${_rgw_total}" -gt 100 ]; then
+		_rgw_page=$(( (_rgw_total + 99) / 100 ))
+		[ "${_rgw_page}" -le 10 ] || _rgw_page=10
+		_rgw_calls=2
+		if ! _rgw_json="$(gh_retry gh api -X GET "repos/${_rgw_repo}/actions/runs" -f status=queued -f "created=${_rgw_lower}..${_rgw_upper}" -f per_page=100 -f "page=${_rgw_page}" 2>/dev/null)" \
+			|| ! printf '%s' "${_rgw_json}" | jq -e '(.workflow_runs | type) == "array"' >/dev/null 2>&1; then
+			echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=${_rgw_calls}"
+			return 0
+		fi
+	fi
+	# Oldest created_at among live queued runs at or before the upper bound
+	# (the server-side range is re-checked here).
+	_rgw_oldest="$(printf '%s' "${_rgw_json}" | jq -r --argjson zq_cutoff "${_rgw_cutoff}" --argjson upper "${_rgw_upper_epoch}" "${_rgw_jq_def}"'
+		[.workflow_runs[]? | select(type == "object")
+			| select(((.status // "") | tostring | ascii_downcase) == "queued")
+			| select(is_wedged_queued($zq_cutoff) | not)
+			| ((.created_at // "") | tostring | sub("\\.[0-9]+Z$"; "Z") | (try fromdateiso8601 catch null)) as $c
+			| select($c != null and $c <= $upper) | $c] | min // empty' 2>/dev/null || true)"
+	if [ -z "${_rgw_oldest}" ]; then
+		echo "outcome=short oldest_queued_min=- queued_in_window=${_rgw_total} calls=${_rgw_calls}"
+		return 0
+	fi
+	if ! [[ "${_rgw_oldest}" =~ ^[0-9]+$ ]]; then
+		echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=${_rgw_calls}"
+		return 0
+	fi
+	echo "outcome=long oldest_queued_min=$(( (_rgw_now - _rgw_oldest) / 60 )) queued_in_window=${_rgw_total} calls=${_rgw_calls}"
+	return 0
+}
+
+# ---------------------------------------------------------------
 # zombie_queued_live_count <repo> <limit> [cutoff_epoch]  (issue #10032)
 #
 # Queue depth with wedged queued runs left out: the number of this

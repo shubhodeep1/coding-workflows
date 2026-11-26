@@ -373,6 +373,10 @@ MAX_OPEN="$(_positive_or_default "${WORKFLOW_HEAL_MAX_OPEN_ISSUES:-}" 10)"
 MAX_PER_DAY="$(_positive_or_default "${WORKFLOW_HEAL_MAX_ISSUES_PER_DAY:-}" 20)"
 MAX_RUNS="$(_positive_or_default "${WORKFLOW_HEAL_MAX_RUNS:-}" 3)"
 MAX_FAILED_JOBS="$(_positive_or_default "${WORKFLOW_HEAL_MAX_FAILED_JOBS:-}" 3)"
+# Release-gate runner wait (issue #10037): "<run_id>:<job_id>" of every read
+# job whose raw log carries a RELEASE_GATE_RUNNER_WAIT cancel_requested /
+# stop_failed line on one of the gate's watch steps.
+HEAL_RUNNER_WAIT_MATCHED=""
 MAX_LOG_BYTES="$(_positive_or_default "${WORKFLOW_HEAL_MAX_RUN_LOG_BYTES:-}" 60000)"
 LOG_TAIL_LINES="$(_positive_or_default "${WORKFLOW_HEAL_LOG_TAIL_LINES:-}" 400)"
 # Linked runs (#8248): runs the failed-job logs link to. 0 turns it off.
@@ -728,7 +732,37 @@ fi
 if [ -n "${SKIP_REASON}" ]; then
 	log "skip reason=${SKIP_REASON} source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none}"
 	if [ "${SKIP_REASON}" = "unregistered_source_repo" ]; then
-		tg_send_msg "Workflow failure heal intake ignored a report from unregistered repository ${SOURCE_REPO} (add it to .github/ai/consumer_repos.json to opt in)."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		# At most one WARNING per source repo per UTC day. The workflow looks up
+		# an actions/cache marker keyed by repo and day before this step and
+		# passes the hit as WORKFLOW_HEAL_UNREGISTERED_WARNED_TODAY; anything
+		# but "true" (miss, lookup failure, local run) sends the WARNING (fail
+		# open). After a WARNING the marker file and step output tell the
+		# workflow's save step to store the marker. No GitHub API call.
+		unregistered_alert_text="Workflow failure heal intake ignored a report from unregistered repository ${SOURCE_REPO} (add it to .github/ai/consumer_repos.json to opt in)."$'\n'"Run: ${RUN_URL}"
+		if [ "${WORKFLOW_HEAL_UNREGISTERED_WARNED_TODAY:-false}" = "true" ]; then
+			log "unregistered_source_repo_alert level=DEBUG reason=already_warned_today source=${SOURCE_REPO}"
+			tg_send_msg "${unregistered_alert_text}" "DEBUG" >/dev/null 2>&1 || true
+		else
+			log "unregistered_source_repo_alert level=WARNING source=${SOURCE_REPO}"
+			# tg_send_msg returns 0 even when nothing was delivered (curl failure,
+			# Telegram error, missing credentials, level filtered); the printed
+			# message_id is the only delivery signal. Mark today as warned only
+			# when Telegram accepted the WARNING, so a failed send is retried by
+			# the next report instead of downgrading the rest of the day to DEBUG.
+			unregistered_alert_msg_id="$(tg_send_msg "${unregistered_alert_text}" "WARNING" 2>/dev/null || true)"
+			if [ -n "${unregistered_alert_msg_id}" ]; then
+				# The cache path must be the same in every run (actions/cache versions
+				# entries by path), so it is not under the per-run RUNTIME_DIR.
+				unregistered_marker_path="${WORKFLOW_HEAL_UNREGISTERED_MARKER:-${RUNTIME_DIR}/heal_unregistered_warned}"
+				# Never follow a pre-existing file or symlink at the fixed path.
+				rm -f -- "${unregistered_marker_path}" 2>/dev/null || true
+				if printf '%s\n' "${SOURCE_REPO}" > "${unregistered_marker_path}" 2>/dev/null; then
+					echo "heal_unregistered_warned=true" >> "${GITHUB_OUTPUT:-/dev/null}" 2>/dev/null || true
+				fi
+			else
+				log "unregistered_source_repo_alert marker=skipped reason=not_delivered source=${SOURCE_REPO}"
+			fi
+		fi
 	fi
 	exit 0
 fi
@@ -1568,7 +1602,19 @@ if [[ "${SOURCE_KIND}" == "phase_failure" || "${SOURCE_KIND}" == "autofix_failur
 	if [ "$(jq -r '.status' "${PROVENANCE_RESULT}")" != "ok" ]; then
 		PROVENANCE_REASON="$(jq -r '.reason // "verifier_error"' "${PROVENANCE_RESULT}")"
 		log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=${PROVENANCE_REASON}"
-		tg_send_msg "Workflow failure heal rejected run provenance for ${SOURCE_REPO} (${SOURCE_KIND}, issue ${ISSUE_NUMBER:-none}, reason ${PROVENANCE_REASON})."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		# Expected, correct rejections go out at DEBUG: a CI run that is not a
+		# default-branch push (a PR branch), and a cited run that finished
+		# without failing (current_run_rejected:not_failed, or no_verified_runs
+		# where every rejection is not_failed). Everything else stays WARNING.
+		PROVENANCE_ALERT_LEVEL="WARNING"
+		if jq -e '(.reason == "current_run_rejected:ci_not_default_branch_push")
+			or (.reason == "current_run_rejected:not_failed")
+			or (.reason == "no_verified_runs" and (.rejections | length) > 0 and all(.rejections[]; .reason == "not_failed"))' \
+			"${PROVENANCE_RESULT}" >/dev/null 2>&1; then
+			PROVENANCE_ALERT_LEVEL="DEBUG"
+		fi
+		log "provenance_rejected_alert level=${PROVENANCE_ALERT_LEVEL} source=${SOURCE_REPO} kind=${SOURCE_KIND} detail=${PROVENANCE_REASON}"
+		tg_send_msg "Workflow failure heal rejected run provenance for ${SOURCE_REPO} (${SOURCE_KIND}, issue ${ISSUE_NUMBER:-none}, reason ${PROVENANCE_REASON})."$'\n'"Run: ${RUN_URL}" "${PROVENANCE_ALERT_LEVEL}" >/dev/null 2>&1 || true
 		exit 0
 	fi
 	PENDING_CURRENT_RUN="$(jq -r '.pending_current_run // ""' "${PROVENANCE_RESULT}")"
@@ -2053,6 +2099,25 @@ while IFS=$'\t' read -r run_id run_url; do
 				# A log whose filtering failed was emptied above and is not readable evidence.
 				READ_JOB_LOG_COUNT=$((READ_JOB_LOG_COUNT + 1))
 			fi
+			# Issue #10037: the marker must start a log line (after the runner
+			# timestamp) and the failing step must be a gate watch step (every
+			# step of test-and-mark-stable.yml that runs
+			# dispatch_and_watch_workflow_run.sh, plus Phase 4 and the alt-model
+			# wait (dispatch_and_watch_workflow_run.sh --alt-model-runner-wait); exact names), so
+			# text echoed from a model or an issue cannot suppress a report.
+			# The watch step must also be the job's only failed step (read from
+			# the run's jobs file already on disk): a real failure in a later
+			# always() step of the same job (soft-error analyser, cleanup) is
+			# filed as before. An unreadable jobs file never matches (fail closed).
+			if [ "${SOURCE_KIND}" = "workflow_run" ] \
+				&& grep -qE '^[^ ]+ RELEASE_GATE_RUNNER_WAIT outcome=(cancel_requested|stop_failed) ' "${RAW_LOG}" 2>/dev/null \
+				&& [ "$(jq -r --arg jid "${job_id}" --arg step "${failing_step}" '[.jobs[]? | select((.id | tostring) == $jid) | .steps[]? | select(.conclusion == "failure" or .conclusion == "timed_out") | (.name // "")] | if length == 1 and .[0] == $step then "only" else "other" end' "${JOBS_FILE}" 2>/dev/null || echo other)" = "only" ]; then
+				case "${failing_step}" in
+					"Phase 4: Wait for review & autofix to complete"|"Dispatch & watch — "*|"Dispatch internal-orchestrate.yml with multi-issue project"|"Dispatch internal-validate.yml standalone"|"Wait for clarify→plan→implement (alt-model)")
+						HEAL_RUNNER_WAIT_MATCHED="${HEAL_RUNNER_WAIT_MATCHED} ${run_id}:${job_id}"
+						;;
+				esac
+			fi
 			rm -f "${RAW_LOG}"
 			if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${RUN_COUNT}" -eq 1 ] && [ -s "${FILTERED_LOG}" ]; then
 				LOG_FILES+=("${FILTERED_LOG}")
@@ -2150,6 +2215,41 @@ if [ "${SOURCE_KIND}" = "workflow_run" ] && [ "${#LOG_FILES[@]}" -gt 0 ]; then
 			if grep -qE 'PROMOTE_CYCLE_FAILED reason=smoke_gate_(failed|timeout)' "${LOG_FILES[@]}" 2>/dev/null; then
 				log "skip reason=downstream_gate_failure workflow=${PAYLOAD_WORKFLOW_NAME}"
 				exit 0
+			fi
+			;;
+	esac
+fi
+
+# A release gate run whose only failed jobs are watch steps that ended as a
+# runner wait (issue #10037, G4): the gate tried to stop itself because a
+# child run waited for a runner, not because a test failed. Every failed job
+# of the current run (same filter as the provenance check) must have been
+# read and carry the marker on a watch step; any other mix files as before.
+if [ "${SOURCE_KIND}" = "workflow_run" ] && [ -n "${HEAL_RUNNER_WAIT_MATCHED}" ]; then
+	case "${PAYLOAD_WORKFLOW_NAME}" in
+		"Test & Mark Stable Release"|"Test & Mark Stable Release "*)
+			HEAL_RUNNER_WAIT_RUN_ID="$(jq -r '.run_refs[0].run_id // "" | tostring' "${PAYLOAD_FILE}" 2>/dev/null || echo "")"
+			HEAL_RUNNER_WAIT_JOBS_FILE="${LOG_DIR}/run-${HEAL_RUNNER_WAIT_RUN_ID}-jobs.json"
+			HEAL_RUNNER_WAIT_FAILED_IDS=""
+			if [[ "${HEAL_RUNNER_WAIT_RUN_ID}" =~ ^[0-9]+$ ]] && [ -s "${HEAL_RUNNER_WAIT_JOBS_FILE}" ]; then
+				HEAL_RUNNER_WAIT_FAILED_IDS="$(jq -r '[.jobs[]? | select((.conclusion == "failure" or .conclusion == "timed_out")
+					and (.name | type == "string") and .name != "heal-report"
+					and (.name | endswith("/ heal-report") | not)) | (.id | tostring)] | join(" ")' "${HEAL_RUNNER_WAIT_JOBS_FILE}" 2>/dev/null || echo "")"
+			fi
+			if [ -n "${HEAL_RUNNER_WAIT_FAILED_IDS}" ]; then
+				HEAL_RUNNER_WAIT_ALL=true
+				HEAL_RUNNER_WAIT_COUNT=0
+				for heal_runner_wait_job in ${HEAL_RUNNER_WAIT_FAILED_IDS}; do
+					HEAL_RUNNER_WAIT_COUNT=$((HEAL_RUNNER_WAIT_COUNT + 1))
+					case " ${HEAL_RUNNER_WAIT_MATCHED} " in
+						*" ${HEAL_RUNNER_WAIT_RUN_ID}:${heal_runner_wait_job} "*) ;;
+						*) HEAL_RUNNER_WAIT_ALL=false ;;
+					esac
+				done
+				if [ "${HEAL_RUNNER_WAIT_ALL}" = true ] && [ "${HEAL_RUNNER_WAIT_COUNT}" -le "${MAX_FAILED_JOBS}" ]; then
+					log "skip reason=release_gate_runner_wait run=${HEAL_RUNNER_WAIT_RUN_ID} jobs=${HEAL_RUNNER_WAIT_COUNT}"
+					exit 0
+				fi
 			fi
 			;;
 	esac
