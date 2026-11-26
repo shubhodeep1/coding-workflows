@@ -138,11 +138,12 @@ AUTO_CLOSE_RE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b\s*:?\
 # ("passed: FAILED, 2 callers remain", "passed: could not verify ..."), not
 # in the evidence prose, so "passed: 0 callers, the script cannot be reached"
 # is accepted. `unrunnable`, and wording that says the check itself could not
-# be verified or confirmed, are refused anywhere in the result.
+# be run, executed, completed, verified or confirmed, are refused anywhere in
+# the result ("passed: 0 callers, but the grep could not run").
 PREFLIGHT_NOT_PASSED_RE = re.compile(
 	r"^\s*pass(?:ed)?\s*:\s*\W*(?:fail(?:ed|s|ure)?|error(?:ed|s)?|skip(?:ped|s)?|unrunnable|n/?a|not (?:run|pass(?:ed)?|verified|checked|executed|met)|did ?n[o']t|could ?n[o']t|cannot|can't|unable)\b"
 	r"|\bunrunnable\b"
-	r"|\b(?:could ?n[o']t|cannot|can't|unable to) (?:be )?(?:verif(?:y|ied)|check(?:ed)?|confirm(?:ed)?)\b",
+	r"|\b(?:could ?n[o']t|cannot|can't|unable to) (?:be )?(?:run|execute[ds]?|complete[ds]?|verif(?:y|ied)|check(?:ed)?|confirm(?:ed)?)\b",
 	re.IGNORECASE,
 )
 # Every preflight result must open with an explicit pass verdict
