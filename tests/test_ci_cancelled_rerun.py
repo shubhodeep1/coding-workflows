@@ -1361,6 +1361,35 @@ def test_workflow_file_at_ref_parser():
 	assert HELPER.job_timeout_minutes(STALE_HEAD_CI, "missing") is None
 
 
+def test_job_timeout_minutes_with_matrix_step_level_limit_and_matrix_suffix():
+	# Issue #10136: a strategy/matrix block, a step-only limit, and the
+	# matrix-suffixed job name that stale_workflow_verdict strips.
+	matrix_ci = ("jobs:\n  orchestrate-poll:\n    strategy:\n      fail-fast: false\n      matrix:\n"
+		"        shard: [0, 1]\n    runs-on: ubuntu-latest\n    timeout-minutes: 25\n    steps:\n"
+		"      - run: x\n  lint:\n    timeout-minutes: 5\n")
+	assert HELPER.job_timeout_minutes(matrix_ci, "orchestrate-poll") == 25
+	assert HELPER.job_timeout_minutes(matrix_ci, "lint") == 5
+	step_only_ci = ("jobs:\n  orchestrate-poll:\n    runs-on: ubuntu-latest\n    steps:\n      - run: x\n"
+		"        timeout-minutes: 99\n  lint:\n    timeout-minutes: 5\n")
+	assert HELPER.job_timeout_minutes(step_only_ci, "orchestrate-poll") is None
+	timeout_jobs = [job("orchestrate-poll (0)", 1, "cancelled")]
+
+	def verdict_for(head_text, base_text):
+		files = {SHA: (STALE_HEAD_BLOB, head_text), "main": (STALE_BASE_BLOB, base_text)}
+		with mock.patch.object(HELPER, "workflow_file_at_ref", side_effect=lambda repo, ref: files[ref]) as reads:
+			verdict = HELPER.stale_workflow_verdict(HELPER.SOURCE_REPO, SHA, "main", timeout_jobs)
+		assert [call.args[1] for call in reads.call_args_list] == [SHA, "main"]
+		return verdict
+
+	assert verdict_for(matrix_ci, matrix_ci.replace("timeout-minutes: 25", "timeout-minutes: 30")) == "stale_workflow_timeout"
+	# Equal or lower base limits are only seen when the " (0)" suffix is removed.
+	for base_limit in (25, 20):
+		base_ci = matrix_ci.replace("timeout-minutes: 25", f"timeout-minutes: {base_limit}") + "# base\n"
+		assert verdict_for(matrix_ci, base_ci) == "genuine"
+	# Neither limit parses: the differing files decide.
+	assert verdict_for(step_only_ci, step_only_ci) == "stale_workflow_timeout"
+
+
 def test_classify_run_cli_forwards_the_stale_workflow_arguments():
 	with mock.patch.object(HELPER, "classify_runner_shutdown", return_value="stale_workflow_timeout") as classifier, \
 		contextlib.redirect_stdout(io.StringIO()) as output:
