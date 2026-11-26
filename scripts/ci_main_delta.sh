@@ -32,8 +32,13 @@
 #       list_write_failed. It never counts an unknown selection as passed.
 #       The base is the run that finished last (`updated_at`, then
 #       `created_at`): push and scheduled runs overlap, so a later-created
-#       delta push that finished first cannot hide a red scheduled run. The
-#       runs read is tried up to 3 times before read_failed.
+#       delta push that finished first cannot hide a red scheduled run. A red
+#       run also stays the result until a green run created after it finished
+#       (`created_at` >= its `updated_at`): a delta push that chose its base
+#       before the red run finished cannot vouch for the tree it found broken,
+#       while any run created later saw base_red and ran the full suite. The
+#       runs read is tried up to 3 times before read_failed; the last failure
+#       logs a category (auth, not_found or other), never gh's stderr.
 #       A failed GITHUB_OUTPUT write fails the step (exit 1), so `lint` never
 #       reads a missing output as "delta sufficient".
 #   ci_main_delta.sh run-tests
@@ -67,6 +72,11 @@
 #
 # Log (stable prefix CI_MAIN_DELTA; one terminal line per subcommand):
 #   CI_MAIN_DELTA mode=select|run_tests outcome=ok|full_required|fail reason=<token> base=<sha12|none> head=<sha12|none> changed=<n> tests=<n>
+#   CI_MAIN_DELTA mode=output outcome=fail reason=output_write_failed base=... head=... changed=<n> tests=<n>
+#     (a failed GITHUB_OUTPUT write; the step exits 1)
+# Notes (not terminal): `mode=select outcome=note reason=cap_invalid_default cap=60`,
+#   `mode=select outcome=note reason=read_failed_category category=auth|not_found|other`,
+#   `mode=run_tests outcome=start reason=selected script=<n> pytest=<n> shell=<n>`.
 # Logs hold SHAs, counts and reason tokens only.
 
 set -uo pipefail
@@ -180,15 +190,26 @@ ci_main_delta_select()
 	fi
 
 	# Up to 3 tries, 2s apart, for a transient error; then the full suite.
-	local read_attempt=1
-	until runs="$(gh api "repos/${repo}/actions/workflows/ci.yml/runs?branch=${branch}&status=completed&per_page=30" 2>/dev/null)"; do
+	# gh's stderr goes to a private file only to name a category on the last
+	# failure (a missing `actions: read` must not look like a flaky API).
+	local read_attempt=1 read_err_file="" read_category="other"
+	read_err_file="$(mktemp "${TMPDIR:-/tmp}/ci_main_delta_read.XXXXXX" 2>/dev/null || true)"
+	until runs="$(gh api "repos/${repo}/actions/workflows/ci.yml/runs?branch=${branch}&status=completed&per_page=30" 2>"${read_err_file:-/dev/null}")"; do
 		if [ "${read_attempt}" -ge 3 ]; then
+			if [ -n "${read_err_file}" ] && grep -Eqi 'HTTP 40[13]|bad credentials|resource not accessible' "${read_err_file}" 2>/dev/null; then
+				read_category=auth
+			elif [ -n "${read_err_file}" ] && grep -Eqi 'HTTP 404|not found' "${read_err_file}" 2>/dev/null; then
+				read_category=not_found
+			fi
+			[ -z "${read_err_file}" ] || rm -f "${read_err_file}"
+			echo "CI_MAIN_DELTA mode=select outcome=note reason=read_failed_category category=${read_category}"
 			ci_main_delta_full select read_failed
 			return 0
 		fi
 		read_attempt=$((read_attempt + 1))
 		sleep 2
 	done
+	[ -z "${read_err_file}" ] || rm -f "${read_err_file}"
 	verdict="$(printf '%s' "${runs}" | jq -r --arg branch "${branch}" --arg path "${CI_MAIN_DELTA_WORKFLOW_PATH}" '
 		if (type == "object" and (.workflow_runs | type) == "array") then
 			[.workflow_runs[] | select(type == "object")
@@ -198,10 +219,14 @@ ci_main_delta_select()
 				| select((.status // "") == "completed")
 				| select((.head_sha // "") | tostring | test("^[0-9a-f]{40}$"))
 				| select((.conclusion // "") | IN("cancelled", "skipped") | not)]
-			| sort_by([(.updated_at // .created_at // ""), (.created_at // "")])
-			| if length == 0 then "none"
-			  elif (last | .conclusion // "") == "success" then "green \(last | .head_sha)"
-			  else "red \(last | .head_sha)" end
+			| sort_by([(.updated_at // .created_at // ""), (.created_at // "")]) as $done
+			| ([$done[] | select((.conclusion // "") != "success")] | last) as $red
+			| if ($done | length) == 0 then "none"
+			  elif $red != null and ([$done[] | select((.conclusion // "") == "success"
+			      and ((.created_at // "") >= ($red.updated_at // $red.created_at // "")))] | length) == 0
+			  then "red \($red.head_sha)"
+			  elif ($done | last | .conclusion // "") == "success" then "green \($done | last | .head_sha)"
+			  else "red \($done | last | .head_sha)" end
 		else "invalid" end' 2>/dev/null | tail -n1)"
 	verdict_kind="${verdict%% *}"
 	case "${verdict_kind}" in

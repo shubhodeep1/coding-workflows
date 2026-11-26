@@ -6,8 +6,9 @@ A push to `main` runs static-checks, `tests-main-delta`
 when the delta job asks for the full suite. The full suite also runs on a
 `schedule`. These tests pin:
 
-  * `select`: the base is the head of the newest successful push or
-    scheduled ci.yml run on main; every untrusted selection writes
+  * `select`: the base is the head of the push or scheduled ci.yml run on
+    main that finished last, when it succeeded and no red run lacks a green
+    run created after it finished; every untrusted selection writes
     `full_required=true` and exits 0 (never a pass on an unknown selection);
   * `run-tests`: pass, failure and timeout;
   * the ci.yml wiring (job, gates, trigger, concurrency, `lint`) and the
@@ -89,6 +90,7 @@ import os, sys
 with open(os.environ["FAKE_GH_LOG"], "a", encoding="utf-8") as fh:
 	fh.write(" ".join(sys.argv[1:]) + "\n")
 if os.environ.get("FAKE_GH_EXIT", "0") != "0":
+	sys.stderr.write(os.environ.get("FAKE_GH_STDERR", ""))
 	sys.exit(int(os.environ["FAKE_GH_EXIT"]))
 sys.stdout.write(open(os.environ["FAKE_GH_RESPONSE"], encoding="utf-8").read())
 '''
@@ -312,6 +314,49 @@ def test_read_is_retried_before_read_failed(repo: Repo) -> None:
 	assert outputs == {"full_required": "true"}
 	assert "reason=read_failed " in _terminal(proc)
 	assert len(repo.gh_log.read_text(encoding="utf-8").splitlines()) == 3
+	assert "CI_MAIN_DELTA mode=select outcome=note reason=read_failed_category category=other" in proc.stdout
+
+
+@pytest.mark.parametrize(
+	("stderr", "category"),
+	[("HTTP 403: Resource not accessible by integration", "auth"), ("HTTP 404: Not Found", "not_found"), ("timeout", "other")],
+)
+def test_read_failure_names_a_category_without_stderr(repo: Repo, stderr: str, category: str) -> None:
+	repo.commit("push", files={"src/a.sh": "echo 1\n"})
+	proc, outputs = repo.run("select", FAKE_GH_EXIT="1", FAKE_GH_STDERR=stderr)
+	assert outputs == {"full_required": "true"}
+	assert f"reason=read_failed_category category={category}" in proc.stdout
+	assert stderr not in proc.stdout
+
+
+def test_green_push_that_chose_its_base_before_a_red_run_finished_does_not_clear_it(repo: Repo) -> None:
+	# The scheduled full run S is created first and is still running when the
+	# delta push P selects its base; S then fails, and P finishes green after
+	# it. P never retested what S found broken, so the base stays red.
+	mid = repo.commit("push 1", files={"src/a.sh": "echo 1\n"})
+	repo.commit("push 2", files={"src/b.sh": "echo 2\n"})
+	scheduled = _run(repo.base, event="schedule", conclusion="failure", created="2026-11-26T22:30:00Z", updated_at="2026-11-26T22:40:00Z")
+	delta = _run(mid, created="2026-11-26T22:35:00Z", updated_at="2026-11-26T22:45:00Z")
+	repo.runs(scheduled, delta)
+	proc, outputs = repo.run("select")
+	assert outputs == {"full_required": "true"}, proc.stdout
+	assert "reason=base_red " in _terminal(proc)
+
+
+def test_green_run_created_after_the_red_run_finished_clears_it(repo: Repo) -> None:
+	# A run created after the red run finished saw base_red and ran the full
+	# suite, so its green result is a full-suite green.
+	mid = repo.commit("push 1", files={"src/a.sh": "echo 1\n"})
+	later = repo.commit("push 2", files={"src/b.sh": "echo 2\n"})
+	repo.commit("push 3", files={"src/a.sh": "echo 3\n"})
+	repo.runs(
+		_run(repo.base, event="schedule", conclusion="failure", created="2026-11-26T22:30:00Z", updated_at="2026-11-26T22:40:00Z"),
+		_run(mid, created="2026-11-26T22:35:00Z", updated_at="2026-11-26T22:45:00Z"),
+		_run(later, created="2026-11-26T22:41:00Z", updated_at="2026-11-26T22:50:00Z"),
+	)
+	proc, outputs = repo.run("select")
+	assert outputs == {"full_required": "false"}, proc.stdout
+	assert f"outcome=ok reason=selected base={later[:12]} " in _terminal(proc)
 
 
 def test_missing_wiring_list_runs_the_full_suite(repo: Repo) -> None:

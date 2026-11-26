@@ -161,6 +161,9 @@ FAILED_JOB_CONCLUSIONS = ("failure", "timed_out")
 # and schedule (full suite) runs.
 CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
 CI_BASE_RUN_EVENTS = ("push", "schedule")
+# Conclusions that do not make the default branch red (a run that reports no
+# result, or a missing conclusion, never clears or sets a red base).
+CI_NON_RED_CONCLUSIONS = ("success", "cancelled", "skipped", "neutral", None, "")
 MAX_TRACEBACK_JOBS = 3
 MAX_EXCERPT_LINES = 120
 MAX_EXCERPT_BYTES = 12_000
@@ -577,6 +580,14 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 			# listing as it is (the check below fails closed on it).
 			if all(isinstance(item, dict) for item in base_runs):
 				base_runs = sorted(base_runs, key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
+				# A red run stays the branch's result until a green run created
+				# after it finished: a delta push that chose its base before the
+				# red run finished cannot vouch for the tree it found broken.
+				red_run = next((item for item in base_runs if item.get("conclusion") not in CI_NON_RED_CONCLUSIONS), None)
+				if red_run is not None:
+					red_finished = str(red_run.get("updated_at") or red_run.get("created_at") or "")
+					if not any(item.get("conclusion") == "success" and str(item.get("created_at") or "") >= red_finished for item in base_runs):
+						base_runs = [red_run] + [item for item in base_runs if item is not red_run]
 		if not isinstance(base_runs, list) or not base_runs or not isinstance(base_runs[0], dict):
 			_fail("no_completed_default_run")
 			return None

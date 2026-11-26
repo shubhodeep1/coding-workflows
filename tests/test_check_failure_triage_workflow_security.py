@@ -2004,6 +2004,33 @@ class CheckFailureTriageBaseGateTests(unittest.TestCase):
 		self.assertIn("CHECK_TRIAGE base_gate outcome=file base=main base_conclusion=failure pr=17", proc.stdout)
 		self.assertEqual(outputs.get("ready"), "true")
 
+	def test_ci_base_gate_green_push_created_before_the_red_run_finished_stays_red(self) -> None:
+		"""A delta push created while the scheduled full run was running, and
+		finishing green after it failed, does not clear the red base; a green
+		run created after the red run finished does."""
+		red = {"id": 60, "event": "schedule", "status": "completed", "conclusion": "failure",
+			"created_at": "2026-11-26T22:30:00Z", "updated_at": "2026-11-26T22:40:00Z"}
+		early = {"id": 61, "event": "push", "status": "completed", "conclusion": "success",
+			"created_at": "2026-11-26T22:35:00Z", "updated_at": "2026-11-26T22:45:00Z"}
+		proc, outputs, _metadata = _run_collect_stage(
+			parent_body=PLAIN_SOURCE,
+			base={"ref": "main", "workflow_id": "9", "workflow_path": ".github/workflows/ci.yml"},
+			extra_env={"MOCK_BASE_RUNS_PAGE": json.dumps({"workflow_runs": [early, red]})},
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE base_gate outcome=file base=main base_conclusion=failure pr=17", proc.stdout)
+		self.assertEqual(outputs.get("ready"), "true")
+
+		late = {"id": 62, "event": "push", "status": "completed", "conclusion": "success",
+			"created_at": "2026-11-26T22:41:00Z", "updated_at": "2026-11-26T22:50:00Z"}
+		proc, outputs, _metadata = _run_collect_stage(
+			parent_body=PLAIN_SOURCE,
+			base={"ref": "main", "workflow_id": "9", "workflow_path": ".github/workflows/ci.yml"},
+			extra_env={"MOCK_BASE_RUNS_PAGE": json.dumps({"workflow_runs": [late, early, red]})},
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE skip reason=pr_specific_failure base=main base_conclusion=success pr=17 check=CI", proc.stdout)
+
 	def test_non_ci_base_gate_keeps_the_push_read(self) -> None:
 		calls: list[str] = []
 		proc, _outputs, _metadata = _run_collect_stage(

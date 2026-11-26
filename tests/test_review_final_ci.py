@@ -783,6 +783,34 @@ def test_base_sync_orders_base_runs_by_completion(fake_gh, tmp_path: Path) -> No
 	assert _puts(calls) == [] and _dispatches(calls) == []
 
 
+def test_base_sync_green_push_created_before_the_red_run_finished_does_not_clear_it(fake_gh, tmp_path: Path) -> None:
+	# The delta push chose its base while the scheduled full run was running;
+	# the scheduled run failed, then the push finished green. The base is red.
+	fixtures = _base_sync_fixtures(base="main")
+	fixtures[LISTING_KEY]["body"]["workflow_runs"].extend([
+		{"head_sha": "9" * 40, "head_branch": "main", "event": "schedule", "status": "completed", "conclusion": "failure",
+			"path": ".github/workflows/ci.yml", "created_at": "2026-11-17T07:00:00Z", "updated_at": "2026-11-17T07:10:00Z"},
+		{"head_sha": "8" * 40, "head_branch": "main", "event": "push", "status": "completed", "conclusion": "success",
+			"path": ".github/workflows/ci.yml", "created_at": "2026-11-17T07:05:00Z", "updated_at": "2026-11-17T07:15:00Z"},
+	])
+	result, calls = _sweep_one(fake_gh, tmp_path, fixtures)
+	assert "outcome=skipped reason=base_red base=main" in result.stdout, result.stdout + result.stderr
+	assert _puts(calls) == [] and _dispatches(calls) == []
+
+
+def test_base_sync_green_run_created_after_the_red_run_finished_clears_it(fake_gh, tmp_path: Path) -> None:
+	fixtures = _base_sync_fixtures(base="main")
+	fixtures[LISTING_KEY]["body"]["workflow_runs"].extend([
+		{"head_sha": "9" * 40, "head_branch": "main", "event": "schedule", "status": "completed", "conclusion": "failure",
+			"path": ".github/workflows/ci.yml", "created_at": "2026-11-17T07:00:00Z", "updated_at": "2026-11-17T07:10:00Z"},
+		{"head_sha": "8" * 40, "head_branch": "main", "event": "push", "status": "completed", "conclusion": "success",
+			"path": ".github/workflows/ci.yml", "created_at": "2026-11-17T07:11:00Z", "updated_at": "2026-11-17T07:30:00Z"},
+	])
+	result, calls = _sweep_one(fake_gh, tmp_path, fixtures)
+	assert "outcome=synced reason=behind base=main" in result.stdout, result.stdout + result.stderr
+	assert len(_puts(calls)) == 1
+
+
 def test_base_sync_fallback_read_counts_a_red_scheduled_run(fake_gh, tmp_path: Path) -> None:
 	fixtures = _base_sync_fixtures(base="orchestrator/project-5")
 	fixtures[f"repos/{REPO}/actions/workflows/ci.yml/runs?branch=orchestrator/project-5&status=completed"] = {"body": {"workflow_runs": [

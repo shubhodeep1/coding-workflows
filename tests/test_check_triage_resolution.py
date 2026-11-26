@@ -1320,6 +1320,29 @@ def test_ci_red_scheduled_run_that_finished_last_is_not_success(tmp_path, monkey
 	assert rc == 0 and result["status"] == "unverified" and result["reason"] == "default_run_not_success"
 
 
+def test_ci_green_push_that_chose_its_base_before_a_red_run_finished_is_not_success(tmp_path, monkeypatch):
+	# The delta push was created while the scheduled full run was still
+	# running and finished green after that run failed: it cannot clear it.
+	runs = [
+		_base_run(id=37000001009, created_at="2026-11-26T22:35:00Z", updated_at="2026-11-26T22:45:00Z"),
+		_base_run(event="schedule", conclusion="failure", id=37000001010, created_at="2026-11-26T22:30:00Z", updated_at="2026-11-26T22:40:00Z"),
+	]
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=_ci_routes(runs))
+	assert rc == 0 and result["status"] == "unverified" and result["reason"] == "default_run_not_success"
+
+
+def test_ci_green_run_created_after_the_red_run_finished_clears_it(tmp_path, monkeypatch):
+	runs = [
+		_base_run(event="schedule", id=37000001011, created_at="2026-11-26T22:41:00Z", updated_at="2026-11-26T23:10:00Z"),
+		_base_run(event="schedule", conclusion="failure", id=37000001012, created_at="2026-11-26T22:00:00Z", updated_at="2026-11-26T22:40:00Z"),
+	]
+	routes = _ci_routes(runs, **{
+		rf"repos/{REPO}/actions/runs/37000001011/jobs\?filter=latest&per_page=100": _jobs(BASE_JOBS, id_base=1),
+	})
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=routes)
+	assert rc == 0 and result["status"] == "resolved", result
+
+
 def test_ci_delta_push_falls_back_to_the_newest_green_scheduled_run(tmp_path, monkeypatch):
 	delta = _base_run(id=37000001003)
 	scheduled = _base_run(event="schedule", id=37000001004, head_sha=SCHEDULE_SHA)
