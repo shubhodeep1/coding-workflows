@@ -41,6 +41,10 @@ import sys
 import tempfile
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
+
 
 # Moved review_autofix.yml step bodies live in scripts/review_autofix_step_*.sh
 # (#10166); read the workflow with them inlined again.
@@ -282,6 +286,9 @@ def _poller_text() -> str:
 
 
 def _workflow_text() -> str:
+	# Step bodies moved into scripts/review_autofix_step_*.sh are inlined
+	# again, so literals the workflow emits through a sourced step script
+	# (e.g. the noop-suspicious warning, PR #9944) still count.
 	return expanded_review_autofix_text()
 
 

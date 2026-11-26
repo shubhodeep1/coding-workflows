@@ -684,7 +684,9 @@ def _run_telegram_step(tmp_path: Path, judge_action: str, judge_skip_reason: str
 		env={"PATH": os.environ["PATH"], "SUPPORT_SCRIPTS_DIR": str(support), "FAKE_TG_SENT": str(sent),
 			"AUTOFIX_STEP_SERVER_URL": "https://github.com", "AUTOFIX_STEP_REPOSITORY": "o/r", "AUTOFIX_STEP_RUN_ID": "1",
 			"PR_NUMBER": "42", "LINKED_ISSUES_JSON": "[]", "JUDGE_HANDLED": "true",
-			"JUDGE_ACTION": judge_action, "JUDGE_SKIP_REASON": judge_skip_reason, "MAX_AUTOFIX_ITERATIONS": "5"},
+			"JUDGE_ACTION": judge_action, "JUDGE_SKIP_REASON": judge_skip_reason, "MAX_AUTOFIX_ITERATIONS": "5",
+			# The step reads the github context from env: (no ${{ }} in run:).
+			"AUTOFIX_STEP_SERVER_URL": "https://github.com", "AUTOFIX_STEP_REPOSITORY": "o/r", "AUTOFIX_STEP_RUN_ID": "1"},
 		capture_output=True, text=True, check=False,
 	)
 	return result, sent.read_text(encoding="utf-8") if sent.exists() else ""

@@ -2005,6 +2005,13 @@ def _jmp_helper() -> str:
 	return text[start:text.index(JMP_END, start) + len(JMP_END)] + "\n"
 
 
+def _lease_blocker_helper() -> str:
+	"""rb_judge_emit_lease_blocker (#9502), called after a lease_wait deferral."""
+	text = _script_text()
+	start = text.index("rb_judge_emit_lease_blocker()\n{\n")
+	return text[start:text.index("\n}\n", start) + 3]
+
+
 def _lease_wait_bodies() -> list[str]:
 	"""Each `lease_wait` elif body of the judge's merge sites, in script order."""
 	text = _script_text()
@@ -2024,7 +2031,7 @@ def _run_jmp(body: str, *, outcome: str = "lease_wait", stub: bool = True, stub_
 		out = tmp / "github_output.txt"
 		out.write_text("", encoding="utf-8")
 		harness = tmp / "harness.sh"
-		harness.write_text("set -euo pipefail\n" + (JMP_STUB if stub else "") + _jmp_helper() + body + "echo DONE\n", encoding="utf-8")
+		harness.write_text("set -euo pipefail\n" + (JMP_STUB if stub else "") + _jmp_helper() + _lease_blocker_helper() + body + "echo DONE\n", encoding="utf-8")
 		env = {"PATH": os.environ.get("PATH", ""), "JMP_LOG": str(log), "JMP_RC": str(stub_rc), "GITHUB_OUTPUT": str(out),
 			"PR_NUMBER": "42", "REPOSITORY": "o/r", "RB_JUDGED_HEAD_SHA": JUDGED, "PR_BASE_FRESHNESS_OUTCOME": outcome,
 			"MERGE_LEASE_BLOCKER": "7"}
