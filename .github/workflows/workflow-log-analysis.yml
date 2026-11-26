@@ -419,6 +419,59 @@ jobs:
           MSG+="Run: ${RUN_URL}"
           tg_send_msg "${MSG}" "WARNING" >/dev/null || echo "::warning::Collection gap alert could not be sent to Telegram."
 
+      # Stage switch watch (#9994): reports repository variables that turn a
+      # pipeline stage off although its default is on (registry:
+      # scripts/stage_switches.json). Steps in this existing daily job, not a
+      # new job (§26). The read step holds only the PAT, the report step only
+      # the Telegram secrets. A per-UTC-day cache marker keeps the Monday
+      # retro run, dispatches and re-runs from alerting twice a day. The read
+      # step runs even when the watch is off, so the wrapper logs
+      # `STAGE_SWITCH_WATCH outcome=disabled` and returns before any API call.
+      - name: Read stage switch variables
+        id: stage_switch_read
+        if: ${{ always() }}
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          STAGE_SWITCH_WATCH_ENABLED: ${{ vars.STAGE_SWITCH_WATCH_ENABLED || 'true' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: bash scripts/stage_switch_watch.sh read
+
+      - name: Look up today's stage switch alert
+        id: stage_switch_alerted
+        if: ${{ always() && (vars.STAGE_SWITCH_WATCH_ENABLED || 'true') == 'true' && steps.stage_switch_read.outputs.day != '' && steps.stage_switch_read.outputs.snapshot_ready == 'true' }}
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/stage-switch-alert-day
+          key: stage-switch-off-alert-${{ steps.stage_switch_read.outputs.day }}
+          lookup-only: true
+
+      - name: Report stage switches left off
+        id: stage_switch_report
+        if: ${{ always() && (vars.STAGE_SWITCH_WATCH_ENABLED || 'true') == 'true' && steps.stage_switch_read.outputs.snapshot_ready == 'true' }}
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          STAGE_SWITCH_WATCH_ENABLED: ${{ vars.STAGE_SWITCH_WATCH_ENABLED || 'true' }}
+          STAGE_SWITCH_OFF_ALERT_HOURS: ${{ vars.STAGE_SWITCH_OFF_ALERT_HOURS || '24' }}
+          STAGE_SWITCH_ALERTED_TODAY: ${{ steps.stage_switch_alerted.outputs.cache-hit == 'true' && 'true' || 'false' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: bash scripts/stage_switch_watch.sh report
+
+      - name: Record today's stage switch alert
+        if: ${{ always() && (vars.STAGE_SWITCH_WATCH_ENABLED || 'true') == 'true' && steps.stage_switch_report.outputs.alerted == 'true' && steps.stage_switch_read.outputs.day != '' }}
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/stage-switch-alert-day
+          key: stage-switch-off-alert-${{ steps.stage_switch_read.outputs.day }}
+
   weekly-retro:
     needs: collect-logs
     if: ${{ github.event_name == 'schedule' && (vars.WORKFLOW_RETRO_ENABLED || 'true') == 'true' && github.event.schedule == (vars.WORKFLOW_RETRO_CRON || '0 9 * * 1') }}
@@ -495,7 +548,7 @@ jobs:
 
       - name: Cache Codex CLI
         id: cache-codex
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ runner.tool_cache }}/codex
           key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}-v2
@@ -1141,7 +1194,7 @@ jobs:
 
       - name: Cache Codex CLI
         id: cache-codex
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ runner.tool_cache }}/codex
           # -v2: previous cache only stored @openai/codex (no platform binary),
@@ -1752,6 +1805,12 @@ jobs:
             if ! python3 -I -B scripts/check_workflow_analysis_report.py --insert-data-gap --report "${REPORT_FILE}"; then
               echo "::warning::Could not add the data-gap line to the report; publishing it without the line."
             fi
+          fi
+
+          # Code-built per-reviewer finding counts (Refs #10058): appended after
+          # the structure check so REQUIRED_HEADINGS stay unchanged; fail open.
+          if ! python3 -I -B scripts/check_workflow_analysis_report.py --insert-reviewer-findings --context "${ANALYSIS_CONTEXT_FILE}" --report "${REPORT_FILE}"; then
+            echo "::warning::Could not add the reviewer findings table to the report; publishing it without the table."
           fi
 
           echo "report_file=${REPORT_FILE}" >> "$GITHUB_OUTPUT"
@@ -2483,7 +2542,7 @@ jobs:
 
       - name: Cache Codex CLI
         id: cache-codex
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ runner.tool_cache }}/codex
           # -v2: previous cache only stored @openai/codex (no platform binary),
@@ -3152,7 +3211,7 @@ jobs:
 
       - name: Cache Codex CLI
         id: cache-codex
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ runner.tool_cache }}/codex
           # -v2: previous cache only stored @openai/codex (no platform binary),
