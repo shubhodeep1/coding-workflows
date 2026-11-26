@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  expected_change_site: `.github/workflows/ci.yml`, job `tests-heal-plan-and-validation` (starts at ci.yml:1850), moving steps into `tests-hooks-and-orchestrator` or another job with headroom\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The PR is comment-only at ci.yml:1855-1860 and moves no step out of `tests-heal-plan-and-validation`. Reviewers disagree on severity (gemini MAJOR, sonnet and minimax NIT). Sonnet and minimax say the six heaviest steps already moved to `tests-hooks-and-orchestrator` (`Merge probe unit tests` at ci.yml:1625, move recorded at ci.yml:2065 as #9420). They also say the issue-summary comment asks for a comment-only outcome, and `timeout-minutes: 20` is unchanged. Highest severity is MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\nExpected change site: `.github/workflows/ci.yml`, job `tests-heal-plan-and-validation`\nEvidence of absence: The PR diff adds only a comment block and moves no step. This is deferred in practice, not an open defect. The six heaviest steps had already moved to `tests-hooks-and-orchestrator` (`Merge probe unit tests` at ci.yml:1625; move recorded at ci.yml:2065 as #9420). The repository has no step timings for run 44214045174. The issue-summary comment asks for a comment-only outcome. `timeout-minutes: 20` is unchanged and no job names were added.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\nExpected change site: .github/workflows/ci.yml within the tests-heal-plan-and-validation job.\nEvidence of absence: The PR diff introduces only YAML comments in .github/workflows/ci.yml. No steps are moved from the tests-heal-plan-and-validation job to any other job to alleviate the timeout.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\" (issue #9697 body)\nExpected change site: `.github/workflows/ci.yml`, job `tests-heal-plan-and-validation` (starts at ci.yml:1850), moving steps into `tests-hooks-and-orchestrator` or another job with measured headroom.\nEvidence of absence: The PR is comment-only at ci.yml:1855-1860, with no `uses:` or `run:` block added, removed or moved. The six heaviest steps already moved to `tests-hooks-and-orchestrator` under PR #9702 (issue #9420/#9684), per `changelog.d/9420-ci-heal-job-steps-to-hooks-job.md` and the marker at ci.yml:2065. The issue-summary comment redefines the expected outcome as comment-only. `timeout-minutes: 20` at ci.yml:1863 is unchanged, no job or step was added or renamed, and ci.yml is 289,132 bytes.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b49b8f8d02de8f5db15f7545496435d713424204c6064b5ff1e65ba71a7a54ae",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10074,
+    "run_id": "45801396717",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45801396717",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126111024_1501c94b0a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10074,
+    "run_id": "45801396717"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T11:10:24Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
