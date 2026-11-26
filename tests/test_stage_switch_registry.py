@@ -113,7 +113,13 @@ def _undiscovered_without_pending(data: dict, discovered: set[str]) -> tuple[lis
 		# Check the type first: an unhashable name (list, dict) would raise
 		# TypeError in the set lookup before the repr above is built.
 		if (not isinstance(marker.get("name"), str) or marker.get("name") not in discovered)
-		and (marker.get("pending") is not True or not str(marker.get("name", "")).endswith("_ENABLED"))
+		# A pending marker is excused only for a name the runtime `_valid_markers`
+		# would skip quietly (SWITCH_NAME_RE and `_ENABLED`); any other name
+		# would warn on every daily run.
+		and not (
+			marker.get("pending") is True and isinstance(marker.get("name"), str)
+			and ssw.SWITCH_NAME_RE.fullmatch(marker["name"]) and marker["name"].endswith("_ENABLED")
+		)
 	]
 	return stray, stray_markers
 
@@ -151,6 +157,9 @@ def test_undiscovered_entry_needs_pending(tmp_path):
 	data["switches"].append({"name": "NO_SUFFIX", "pending": True})
 	data["off_on_purpose"].append({"name": "NO_SUFFIX", "until": "2099-01-01", "reason": "r", "pending": True})
 	assert _undiscovered_without_pending(data, discovered) == (["NO_SUFFIX"], ["NO_SUFFIX"])
+	# A pending marker name the runtime rejects (SWITCH_NAME_RE) is reported too.
+	data["off_on_purpose"].append({"name": "123_ENABLED", "until": "2099-01-01", "reason": "r", "pending": True})
+	assert _undiscovered_without_pending(data, discovered) == (["NO_SUFFIX"], ["NO_SUFFIX", "123_ENABLED"])
 
 
 def test_registry_check_fails_on_unlisted_workflow_switch(tmp_path):
