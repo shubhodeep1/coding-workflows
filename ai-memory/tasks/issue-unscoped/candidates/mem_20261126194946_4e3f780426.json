@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Issue #9697: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  expected_change_site: `.github/workflows/ci.yml` \u2014 `tests-heal-plan-and-validation` job (starts at line 1850) and receiving job `tests-hooks-and-orchestrator`\n  confidence=[2]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  EVIDENCE: The PR diff only adds a comment block at ci.yml:1855-1860 and no step moves; the six heaviest steps were already moved to `tests-hooks-and-orchestrator` by #9420 (re-issued as #9684, PR #9702), and the repository has no step timings for run 44214045174. Both reviewers rated it NIT and called it a deliberate comment-only resolution, not a defect.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP (severity=NIT, confidence=1)\n  Requirement: Issue #9697 asks to move the slowest steps of `tests-heal-plan-and-validation` into the CI job with the most headroom, unchanged and with job and step names kept. It also says not to raise `timeout-minutes` and not to add new required job names.\n  Expected change site: `.github/workflows/ci.yml`, the `tests-heal-plan-and-validation` job (starts at line 1850) and the receiving job.\n  Evidence of absence: The PR diff only adds a comment block at ci.yml:1855-1860, and no step moves. Budget-watch issue #9420 (re-issued as #9684) already moved six steps to `tests-hooks-and-orchestrator`, which the comments at ci.yml:1578-1582, 1609-1610, 1652 and 2065 record. `Merge probe unit tests` is at ci.yml:1625. `timeout-minutes: 20` is unchanged and no jobs were added or renamed. The repository has no step timings for run 44214045174. This is a deliberate comment-only resolution and not an unmet deliverable.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP (severity=NIT, confidence=2)\n  Requirement: Issue #9697 says \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml` \u2014 steps of the `tests-heal-plan-and-validation` job (starts at line 1850) and the receiving job `tests-hooks-and-orchestrator`.\n  Evidence of absence: No hunk in the PR diff or the last-run diff moves a step. The PR only adds/refines the comment block at `.github/workflows/ci.yml:1855-1860`. The six heaviest steps were already moved to `tests-hooks-and-orchestrator` by #9420 (re-issued as #9684, PR #9702), recorded at `.github/workflows/ci.yml:1618-1624` and `.github/workflows/ci.yml:2065`; `changelog.d/9420-ci-heal-job-steps-to-hooks-job.md` exists. The receiving job's new total has not been measured against its 20-minute timeout, and the repository has no step timings for run 44214045174. `timeout-minutes: 20` at `.github/workflows/ci.yml:1863` and the no-new-job constraint are satisfied. The operator's issue-summary comment explicitly asks for a comment-only resolution. Not a defect to fix in this PR.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8c67b9946a21e65ef7038cf3641fb66ed474184caec2e4f6ed937f2b3df9a4b4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10074,
+    "run_id": "45882725838",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45882725838",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126194946_4e3f780426",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10074,
+    "run_id": "45882725838"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T19:49:46Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
