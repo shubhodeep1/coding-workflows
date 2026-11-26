@@ -1,0 +1,23 @@
+{
+  "discovered_at": "2026-11-26T10:51:23Z",
+  "issue_number": 10124,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=docs/plans/merge-lease-parallel-merges-plan.md:312; cited_path=docs/plans/merge-lease-parallel-merges-plan.md; files_touched=.github/workflows/cancel_on_pr_close.yml, .github/workflows/orchestrate_poll.yml, .github/workflows/review_autofix.yml, .github/workflows/review_autofix_sweep.yml, README.md, agents.d/merge-lease-parallel-p5-multi-holder.md, changelog.d/10124-merge-lease-two-holders-default.md, changelog.d/merge-lease-parallel-p5-multi-holder.md, scripts/pr_checks_lib.sh, tests/test_merge_lease.py.",
+  "phase": "review_autofix",
+  "pr_number": 10126,
+  "record_id": "lesson_20261126105123_32b3ff3293",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "docs/plans/merge-lease-parallel-merges-plan.md",
+    ".github/workflows/cancel_on_pr_close.yml",
+    ".github/workflows/orchestrate_poll.yml",
+    ".github/workflows/review_autofix.yml",
+    ".github/workflows/review_autofix_sweep.yml",
+    "README.md",
+    "agents.d/merge-lease-parallel-p5-multi-holder.md",
+    "changelog.d/10124-merge-lease-two-holders-default.md",
+    "changelog.d/merge-lease-parallel-p5-multi-holder.md",
+    "scripts/pr_checks_lib.sh",
+    "tests/test_merge_lease.py"
+  ]
+}
