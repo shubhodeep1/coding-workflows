@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/operator_step_issue.py:697-751 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: In `_observable_condition`, the `len(...) != len(...)` comparison between `CREDENTIAL_REPO_FLAG_RE.findall(text)` matches (`--repo`/`-R`) and `CREDENTIAL_REPO_SLUG_RE` matches can be bypassed when a flag has no correctly separated slug, for example an attached slug without a space on the first flag while the other flags are well formed.\n  WHY: A credential step that targets an unauthorized repository could be marked \"observable\", which could close the tracker incorrectly. The source severity was MAJOR, mapped here to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Keep workflow files under the 480,000-byte guard\"; the Phase 9 plan requires running `tests/test_workflow_file_size_limit.py` for every phase that touches a workflow.\n  expected_change_site: `.github/workflows/workflow-log-analysis.yml` (size) and the Phase 9 acceptance result for `tests/test_workflow_file_size_limit.py`\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The PR description's acceptance table marks `tests/test_workflow_file_size_limit.py` as `unmet`, the current diff shows no update to `tests/test_workflow_file_size_limit.py` that covers the new workflow changes, the same test is listed under \"Inherited failures (also failing on the merge-base)\", the LAST RUN DIFF (deletion of `GITHUB_AI_PLAN_GRANT_WRITE_ENABLED` from `scripts/stage_switches.json`, line 972-977) does not address it, and the supplied check-run context gives no passing result for this acceptance target.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/operator_step_issue.py:_observable_condition (line 697-751) | severity=MAJOR | confidence=3\n  PROBLEM: The check that compares `CREDENTIAL_REPO_FLAG_RE` and `CREDENTIAL_REPO_SLUG_RE` match counts with `len(...) != len(...)` can be bypassed when a flag is present but not followed correctly by a slug, for example an attached slug without a space on the first flag while the other flags are correct.\n  WHY: A credential step might be marked as \"observable\" even when it targets an unauthorized repository, potentially leading to incorrect tracker closure.\n- TASK_GAP\n  Requirement: \u201cKeep workflow files under the 480,000-byte guard\u201d; the Phase 9 plan also requires `tests/test_workflow_file_size_limit.py` for each phase that touches a workflow.\n  Expected change site: `tests/test_workflow_file_size_limit.py` or the Phase 9 acceptance result for `tests/test_workflow_file_size_limit.py`.\n  Evidence of absence: The PR description\u2019s acceptance table marks `tests/test_workflow_file_size_limit.py` as `unmet`. The current diff does not show any update to `tests/test_workflow_file_size_limit.py` to include the new workflow changes as part of its verification.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: Phase 9 acceptance from the plan (\"Keep workflow files under the 480,000-byte guard\"); the PR's own acceptance table also lists `tests/test_workflow_file_size_limit.py` as a target.\n  Expected change site: `.github/workflows/workflow-log-analysis.yml` (size) and the Phase 9 acceptance row for `tests/test_workflow_file_size_limit.py`.\n  Evidence of absence: The PR description's acceptance table marks `tests/test_workflow_file_size_limit.py` as `unmet`, and the same test is listed under \"Inherited failures (also failing on the merge-base)\". The LAST RUN DIFF (deletion of `GITHUB_AI_PLAN_GRANT_WRITE_ENABLED` from `scripts/stage_switches.json`, line 972-977) does not address it. The deletion itself is correct, but the size-guard acceptance criterion is still unmet on this PR's head.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: The Phase 9 plan requires running `tests/test_workflow_file_size_limit.py` for every phase that touches a workflow.\n  Expected change site: `.github/workflows/workflow-log-analysis.yml` and the Phase 9 acceptance result for `tests/test_workflow_file_size_limit.py`.\n  Evidence of absence: The PR acceptance table marks `tests/test_workflow_file_size_limit.py` as `unmet`. The supplied check-run context provides no passing result for this acceptance target, so the required size-guard check is not established.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5b4bb6ced8d5ea91b047e6d23e800c804d0e1d05465797b5922113704e4ac8d8",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10122,
+    "run_id": "45838401948",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45838401948",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126150138_4626aab96a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10122,
+    "run_id": "45838401948"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T15:01:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
