@@ -1,0 +1,19 @@
+<!-- agents: section="Workflow file size limit" -->
+- Test ceiling and early warning (#10166): `WORKFLOW_TEST_CEILING_BYTES`
+  (430,000) in `scripts/ci_budget_watch.py` is the one size ceiling the
+  contract tests use (`tests/test_review_autofix_review_pipeline_contract.py`,
+  and `MAX_WORKFLOW_BYTES` in `tests/test_implement_step_scripts_contract.py`
+  and `tests/test_test_and_mark_stable_step_scripts_contract.py` import it).
+  The `CI_BUDGET_WORKFLOW_WARN_BYTES` default is 400,000 and must stay at
+  least 20,000 bytes under that ceiling
+  (`tests/test_ci_budget_watch.py::test_default_warn_threshold_is_under_the_test_ceiling`),
+  so the watcher opens its `ai:ci-budget` issue before a test fails.
+  Workflow-size findings skip the re-file cooldown. `review_autofix.yml`
+  moved five more `codex-agent` step bodies out:
+  `scripts/review_autofix_step_telegram_rb_judge_decision.sh`,
+  `scripts/review_autofix_step_push_pending_commits.sh`,
+  `scripts/review_autofix_step_static_context.sh`,
+  `scripts/review_autofix_step_telegram_editor_noop_suspicious.sh` and
+  `scripts/review_autofix_step_mark_review_blocked_exhaustion.sh`. The two
+  Telegram scripts open with `set -euo pipefail` then `set +u +o pipefail`
+  to keep the runner's default `bash -e` options of the inline body.

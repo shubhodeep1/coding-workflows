@@ -32,6 +32,11 @@ from pathlib import Path
 
 import pytest
 
+# Moved review_autofix.yml step bodies live in scripts/review_autofix_step_*.sh
+# (#10166); read the workflow with them inlined again.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = REPO_ROOT / "scripts" / "review_rb_judge.sh"
 
@@ -1323,7 +1328,7 @@ def test_integration_hold_iteration_summary_records_any_judge_action() -> None:
 
 
 def _ihold_telegram_step() -> str:
-	workflow = IHOLD_WORKFLOW.read_text(encoding="utf-8")
+	workflow = expanded_review_autofix_text()
 	start = workflow.index("      - name: Telegram review-blocked judge decision")
 	end = workflow.index("      - name: Check PR state before failure alerts", start)
 	return workflow[start:end]

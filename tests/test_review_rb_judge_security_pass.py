@@ -19,10 +19,16 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 import yaml
+
+# Moved review_autofix.yml step bodies live in scripts/review_autofix_step_*.sh
+# (#10166); read the workflow with them inlined again.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 HELPER = ROOT / "scripts" / "review_rb_judge_security_pass.sh"
@@ -620,7 +626,7 @@ def test_noop_fix_merge_paths_hold_before_labelling_issues(tmp_path: Path) -> No
 
 
 def test_review_workflow_runs_the_judge_on_security_exhaustion() -> None:
-	workflow = yaml.safe_load(REVIEW.read_text(encoding="utf-8"))
+	workflow = yaml.safe_load(expanded_review_autofix_text())
 	steps = {step.get("name", ""): step for step in workflow["jobs"]["codex-agent"]["steps"]}
 	names = list(steps)
 	assert names.index("Single-issue security pass") < names.index("Review-blocked judge decision")
@@ -661,7 +667,7 @@ def test_merge_path_hold_emits_the_gate_hold_reason(tmp_path: Path) -> None:
 def _run_telegram_step(tmp_path: Path, judge_action: str, judge_skip_reason: str) -> tuple[subprocess.CompletedProcess, str]:
 	"""Runs the real `Telegram review-blocked judge decision` body with the
 	helpers stubbed: tg_send_tracked appends `<level>|<message>` to a file."""
-	workflow = yaml.safe_load(REVIEW.read_text(encoding="utf-8"))
+	workflow = yaml.safe_load(expanded_review_autofix_text())
 	steps = {step.get("name", ""): step for step in workflow["jobs"]["codex-agent"]["steps"]}
 	body = steps["Telegram review-blocked judge decision"]["run"]
 	body = body.replace("${{ github.server_url }}", "https://github.com").replace("${{ github.repository }}", "o/r")
@@ -676,6 +682,7 @@ def _run_telegram_step(tmp_path: Path, judge_action: str, judge_skip_reason: str
 	result = subprocess.run(
 		["bash", "-e", "-c", body],
 		env={"PATH": os.environ["PATH"], "SUPPORT_SCRIPTS_DIR": str(support), "FAKE_TG_SENT": str(sent),
+			"AUTOFIX_STEP_SERVER_URL": "https://github.com", "AUTOFIX_STEP_REPOSITORY": "o/r", "AUTOFIX_STEP_RUN_ID": "1",
 			"PR_NUMBER": "42", "LINKED_ISSUES_JSON": "[]", "JUDGE_HANDLED": "true",
 			"JUDGE_ACTION": judge_action, "JUDGE_SKIP_REASON": judge_skip_reason, "MAX_AUTOFIX_ITERATIONS": "5"},
 		capture_output=True, text=True, check=False,

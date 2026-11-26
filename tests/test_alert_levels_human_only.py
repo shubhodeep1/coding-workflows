@@ -20,7 +20,13 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+import sys
 from pathlib import Path
+
+# Moved review_autofix.yml step bodies live in scripts/review_autofix_step_*.sh
+# (#10166); read the workflow with them inlined again.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 POLLER_SCRIPT = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
@@ -597,7 +603,7 @@ def test_activation_dormant_pages_only_when_a_person_must_act():
 
 def test_review_blocked_judge_successes_are_debug():
 	"""Every finished judge outcome, merge_with_followup included, is DEBUG."""
-	workflow = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	workflow = expanded_review_autofix_text()
 	for action in ("merge", "fix", "close_and_reissue", "merge_with_followup"):
 		start = workflow.index(f"              {action})\n", workflow.index('JUDGE_ALERT_LEVEL="CRITICAL"'))
 		arm = workflow[start:workflow.index(";;", start)]
@@ -607,7 +613,7 @@ def test_review_blocked_judge_successes_are_debug():
 def _judge_alert(env: dict[str, str]) -> list[tuple[str, str]]:
 	"""Run the "Telegram review-blocked judge decision" step body with the
 	given step outputs; return the (level, message) sent."""
-	workflow = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	workflow = expanded_review_autofix_text()
 	start = workflow.index("      - name: Telegram review-blocked judge decision")
 	end = workflow.index("      - name: Check PR state before failure alerts", start)
 	step = workflow[start:end]

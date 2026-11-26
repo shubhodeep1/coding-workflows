@@ -2995,7 +2995,7 @@ The standalone PR conflict sweep (`scripts/orchestrate_poll_process.sh`) also le
 
 - Early warning: the `budget-watch` job of `ci.yml` (pushes to main only,
   `scripts/ci_budget_watch.py`) opens one `ai:ci-budget` issue when a
-  workflow file reaches `CI_BUDGET_WORKFLOW_WARN_BYTES` (default 440,000)
+  workflow file reaches `CI_BUDGET_WORKFLOW_WARN_BYTES` (default 400,000)
   or a CI job's duration reaches `CI_BUDGET_JOB_WARN_RATIO` (default 0.75)
   of its `timeout-minutes`, deduplicated by
   `<!-- ai:ci-budget:v1 kind=<workflow_size|job_duration> subject=<s> -->`.

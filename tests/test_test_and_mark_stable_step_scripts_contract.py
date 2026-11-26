@@ -29,7 +29,11 @@ from review_autofix_step_scripts import (  # noqa: E402
 )
 
 SCRIPTS_DIR = REPO_ROOT / "scripts"
-MAX_WORKFLOW_BYTES = 430_000
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+from ci_budget_watch import WORKFLOW_TEST_CEILING_BYTES  # noqa: E402
+
+# One shared ceiling with the size watcher, so the two cannot drift (#10166).
+MAX_WORKFLOW_BYTES = WORKFLOW_TEST_CEILING_BYTES
 WRAPPER_RE = re.compile(
 	r'STABLE_E2E_STEP_SCRIPT="\$\{RUNNER_TEMP\}/stable-e2e-step-scripts/(stable_e2e_step_[a-z0-9_]+\.sh)"'
 )

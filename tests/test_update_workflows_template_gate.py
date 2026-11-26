@@ -34,6 +34,11 @@ import pytest
 import yaml
 
 
+# Moved review_autofix.yml step bodies live in scripts/review_autofix_step_*.sh
+# (#10166); read the workflow with them inlined again.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "update_workflows.yml"
 TEMPLATE = REPO_ROOT / "workflow-templates" / "ai-update-workflows.yml"
@@ -377,7 +382,7 @@ def test_review_editor_never_commits_to_updater_branches() -> None:
 
 
 def test_review_never_pushes_or_resolves_on_updater_branches() -> None:
-	text = (REPO_ROOT / ".github" / "workflows" / "review_autofix.yml").read_text(encoding="utf-8")
+	text = expanded_review_autofix_text()
 	push = text.index("- name: Push all pending commits")
 	guard = text.index('[[ "${TARGET_BRANCH:-}" =~ ^auto/update-workflows-[0-9a-f]{12}(-r[2-5])?$ ]]', push)
 	assert "AUTOFIX_PUSH_SKIPPED" in text[guard:guard + 300]

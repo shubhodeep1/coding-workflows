@@ -5,9 +5,11 @@ Runs as the `budget-watch` job of `.github/workflows/ci.yml` on pushes to the
 default branch, after the test jobs. It checks:
 
 * workflow file size: any `.github/workflows/*.yml` at or above
-  CI_BUDGET_WORKFLOW_WARN_BYTES (default 440,000; the hard guard in
+  CI_BUDGET_WORKFLOW_WARN_BYTES (default 400,000). The first limit such a file
+  hits is the 430,000-byte contract-test ceiling (WORKFLOW_TEST_CEILING_BYTES,
+  imported by the three size tests); the hard guard in
   tests/test_workflow_file_size_limit.py fails at 480,000 and GitHub stops
-  starting runs above 512,000, CLAUDE.md §27);
+  starting runs above 512,000, CLAUDE.md §27 (#10166);
 * CI job duration: any job of this CI run whose duration reached
   CI_BUDGET_JOB_WARN_RATIO (default 0.75) of its `timeout-minutes`. The
   duration runs from the job's first started step to its completion, so time
@@ -28,7 +30,9 @@ the warning ratio (15m16s of 20 minutes). When an issue for the same finding
 was closed within CI_BUDGET_REFILE_COOLDOWN_DAYS (default 7; 0 turns the
 cooldown off), a new one is opened only once the value reaches
 CI_BUDGET_REFILE_URGENT_RATIO (default 0.9) of the limit. The `::warning::`
-line is printed either way.
+line is printed either way. Workflow-size findings are never held back by the
+cooldown: 0.9 of the 480,000-byte guard is above the 430,000-byte test
+ceiling, so a held-back size finding would let CI fail first (#10166).
 
 API calls (CLAUDE.md §15): one `actions/runs/{run_id}/jobs` read (skipped when
 no run id), one open-issue listing for the label, one label create when a
@@ -51,8 +55,15 @@ from pathlib import Path
 from typing import Any
 
 LABEL = "ai:ci-budget"
-DEFAULT_WORKFLOW_WARN_BYTES = 440_000
+DEFAULT_WORKFLOW_WARN_BYTES = 400_000
 HARD_WORKFLOW_GUARD_BYTES = 480_000
+# The first size limit a workflow file hits: the contract tests
+# tests/test_review_autofix_review_pipeline_contract.py,
+# tests/test_implement_step_scripts_contract.py and
+# tests/test_test_and_mark_stable_step_scripts_contract.py import this value,
+# so the watcher and the tests cannot drift apart. DEFAULT_WORKFLOW_WARN_BYTES
+# stays at least 20,000 bytes under it (#10166).
+WORKFLOW_TEST_CEILING_BYTES = 430_000
 DEFAULT_JOB_WARN_RATIO = 0.75
 DEFAULT_REFILE_COOLDOWN_DAYS = 7
 DEFAULT_REFILE_URGENT_RATIO = 0.9
@@ -184,9 +195,11 @@ def issue_title(finding: dict[str, Any]) -> str:
 def issue_body(finding: dict[str, Any], run_url: str) -> str:
 	if finding["kind"] == "workflow_size":
 		task = (
-			f"`{finding['subject']}` is {finding['value']:,} bytes. `tests/test_workflow_file_size_limit.py` fails at "
+			f"`{finding['subject']}` is {finding['value']:,} bytes. Contract tests fail at {WORKFLOW_TEST_CEILING_BYTES:,} bytes "
+			"(`tests/test_review_autofix_review_pipeline_contract.py`, `tests/test_implement_step_scripts_contract.py`, "
+			"`tests/test_test_and_mark_stable_step_scripts_contract.py`), `tests/test_workflow_file_size_limit.py` fails at "
 			f"{HARD_WORKFLOW_GUARD_BYTES:,} bytes and GitHub stops starting runs above 512,000 bytes.\n\n"
-			"Move the largest inline `run:` bodies into `scripts/` until the file is at least 50,000 bytes under the guard, "
+			f"Move the largest inline `run:` bodies into `scripts/` until the file is at least 50,000 bytes under the {WORKFLOW_TEST_CEILING_BYTES:,}-byte test ceiling, "
 			"following CLAUDE.md §27 and agents.md \"Workflow file size limit\" (for `review_autofix.yml`: "
 			"`scripts/review_autofix_step_<slug>.sh`, the resolving wrapper, `REQUIRED_BOOTSTRAP_SCRIPTS`, "
 			"`tests/review_autofix_step_scripts.py` and `docs/INVENTORY.md`). Keep every step's `name:`, `id:`, `if:`, `env:` "
@@ -323,7 +336,10 @@ def main(argv: list[str] | None = None) -> int:
 		if marker(f["kind"], f["subject"]) in existing:
 			print(f"CI_BUDGET_ISSUE kind={f['kind']} subject={f['subject']} action=exists")
 			continue
-		if cooldown_days > 0 and f["value"] < urgent_ratio * f["limit"]:
+		# Workflow-size findings skip the cooldown: urgent_ratio * 480,000 is
+		# above the 430,000-byte test ceiling, so holding one back would let
+		# the contract tests fail before a new issue is opened (#10166).
+		if f["kind"] != "workflow_size" and cooldown_days > 0 and f["value"] < urgent_ratio * f["limit"]:
 			if closed_issues is None:
 				try:
 					closed_issues = _gh([f"repos/{args.repo}/issues?state=closed&labels={LABEL}&sort=updated&direction=desc&per_page=50"]) or []

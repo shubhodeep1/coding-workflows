@@ -37,9 +37,15 @@ import re
 import json
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
+
+# Moved review_autofix.yml step bodies live in scripts/review_autofix_step_*.sh
+# (#10166); read the workflow with them inlined again.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 POLLER = REPO_ROOT / "scripts" / "orchestrate_poll_process.sh"
@@ -276,7 +282,7 @@ def _poller_text() -> str:
 
 
 def _workflow_text() -> str:
-	return WORKFLOW.read_text(encoding="utf-8")
+	return expanded_review_autofix_text()
 
 
 def _sweep_block() -> str:

@@ -139,6 +139,9 @@ def test_issue_text_names_the_fix_and_carries_the_marker() -> None:
 	body = cbw.issue_body(size, "https://github.com/o/r/actions/runs/1")
 	assert body.startswith("<!-- ai:ci-budget:v1 kind=workflow_size subject=.github/workflows/review_autofix.yml -->")
 	assert "Never raise the guard." in body and "expanded_review_autofix_text()" in body
+	# The 430,000-byte contract-test ceiling is the first limit the file hits (#10166).
+	assert "430,000" in body and "480,000" in body and "512,000" in body
+	assert body.index("430,000") < body.index("480,000")
 	dur = {"kind": "job_duration", "subject": "tests-a", "value": 1176, "limit": 1200, "job": "tests-a"}
 	assert cbw.issue_title(dur) == "CI budget: CI job tests-a took 19m36s of its 20-minute timeout"
 	assert "Do not raise `timeout-minutes`" in cbw.issue_body(dur, "u")
@@ -255,6 +258,28 @@ def test_refile_cooldown_does_not_hide_an_urgent_or_old_finding(tmp_path: Path, 
 	# No closed-issue read when the finding is urgent or the cooldown is off.
 	assert bool([c for c in calls if "issues?state=closed" in c["args"][1]]) == (case not in ("urgent", "cooldown_off"))
 	assert ("re-file cooldown not applied" in result.stdout) == (case == "closed_list_fails")
+
+
+def test_default_warn_threshold_is_under_the_test_ceiling() -> None:
+	# #10166: the old 440,000 default warned only after the 430,000-byte
+	# contract tests had already failed on an unrelated PR's final CI.
+	assert cbw.WORKFLOW_TEST_CEILING_BYTES == 430_000
+	assert cbw.WORKFLOW_TEST_CEILING_BYTES - cbw.DEFAULT_WORKFLOW_WARN_BYTES >= 20_000
+	assert cbw.WORKFLOW_TEST_CEILING_BYTES < cbw.HARD_WORKFLOW_GUARD_BYTES
+
+
+def test_refile_cooldown_never_holds_back_a_workflow_size_finding(tmp_path: Path) -> None:
+	# 0.9 of the 480,000-byte guard is above the 430,000-byte test ceiling, so
+	# a size finding held back by the cooldown would let CI fail first (#10166).
+	root = _tree(tmp_path, {"big.yml": 410_000}, CI)
+	closed_at = (cbw.datetime.now(cbw.timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+	closed = [{"number": 9447, "state": "closed", "closed_at": closed_at, "body": cbw.marker("workflow_size", ".github/workflows/big.yml") + "\nbody"}]
+	env = _fake_gh(tmp_path, [], [], closed=closed)
+	result = _run(root, env)
+	assert result.returncode == 0, result.stderr
+	assert len(_created(env)) == 1, result.stdout
+	assert "CI_BUDGET_ISSUE kind=workflow_size subject=.github/workflows/big.yml action=opened number=77" in result.stdout
+	assert "action=cooldown" not in result.stdout
 
 
 def test_recently_closed_issue_ignores_malformed_entries() -> None:

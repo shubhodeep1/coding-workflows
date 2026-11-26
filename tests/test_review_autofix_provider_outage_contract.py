@@ -172,7 +172,8 @@ def test_consumer_security_hold_sweep_waits_for_outage_pause() -> None:
 
 
 def test_exhaustion_label_step_exports_labelled_set() -> None:
-	label = _step(REVIEW, "Mark linked issues review-blocked (autofix exhaustion)")
+	# The label step's body lives in a step script (#10166); read it inlined.
+	label = _step(expanded_review_autofix_text(), "Mark linked issues review-blocked (autofix exhaustion)")
 	assert "        id: mark_review_blocked_exhaustion\n" in label
 	no_issues = label[label.index("No linked issues found"):]
 	assert no_issues.index("labelled_issue_numbers_resolved=true") < no_issues.index("exit 0")
