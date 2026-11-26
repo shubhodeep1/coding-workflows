@@ -45,12 +45,13 @@ Step 6, merge-conflict gate (rules kept from `/audit-plans`):
 - The conflict gate is a hard gate: a candidate whose declared files overlap the footprint is never the recommendation. When no candidate passes, recommend nothing (`kind: none`); never fall back to a "least risky" pick.
 - Bundles: from the highest-ranked conflict-free candidate (the anchor), add a related conflict-free candidate only when it shares files or a tightly-coupled unit with the anchor or a member, or one depends on the other; every prerequisite it declares is shipped or is already in the bundle; and the bundle stays within the caps of at most 3 plans and at most 8 phases. List the bundle in dependency order, prerequisites first. An anchor whose own prerequisite is unshipped and cannot join is not recommended.
 
-Step 7, archival: only plans classified COMPLETE, with every goal cited, move to `docs/completed/`. Give each moved plan a `refs_issue`: the tracking issue or the issue / PR that shipped it. A plan with no such issue stays in `docs/plans/`.
+Step 7, archival: only plans classified COMPLETE, with every goal cited, move to `docs/completed/`. Give each moved plan a `refs_issue`: the tracking issue or the issue / PR that shipped it. A plan with no such issue stays in `docs/plans/`. Never archive a plan when `docs/completed/<name>.md` already exists: the script outside this run refuses an overwrite and fails the whole run, so leave that plan in `docs/plans/` and name the collision in `summary`.
 
 Step 8, registry sweep (the preflight gate is a hard gate):
 - `permanent — review annually` entries are never removed; report them in `kept_removals`.
 - For any other entry, judge the trigger, then run every preflight check exactly as written. A check that needs GitHub, the network or a token cannot run here: it is `unrunnable`, which is a fail, so the script and the entry are kept.
 - Remove a script and its entry only when the trigger is met and every check passed; remove only what the entry names.
+- Write each preflight `result` as `passed: <evidence>`. A result that does not start with `passed` counts as a fail, and the script outside this run refuses the whole run.
 - Never remove an entry whose heading names a directory (a path ending in `/`), a path under `.github/`, `.claude/`, `prompts/` or `workflow-templates/`, or `scripts/plan_autopilot.py`: the script outside this run refuses the whole run. Report such an entry in `kept_removals`.
 
 Output contract:
@@ -61,7 +62,7 @@ Output contract:
   - `needs_decision`: array of `{"path", "questions"}`; `questions` is the Q/A text.
   - `applied_decisions`: array of `{"path", "issue"}`; `issue` is the decision issue number from the input, or 0 when unknown.
   - `archived`: array of `{"from", "to", "refs_issue"}`; `refs_issue` is a positive integer.
-  - `removals`: array of `{"entry_title", "script_path", "preflight"}`; `preflight` is an array of `{"check", "result"}` strings, every one passed.
+  - `removals`: array of `{"entry_title", "script_path", "preflight"}`; `preflight` is an array of `{"check", "result"}` strings, every one passed and every `result` starting with `passed`.
   - `kept_removals`: array of `{"entry_title", "reason"}`.
   - `recommendation`: `{"kind", "plans", "rationale"}`; `kind` is `none`, `single` or `bundle`; `plans` lists `docs/plans/<name>.md` paths in dependency order (empty for `none`, one for `single`, two or three for `bundle`).
   - `summary`: a short plain-text report in the `/audit-plans` Output Format.

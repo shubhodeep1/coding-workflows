@@ -45,7 +45,9 @@ with GH_TOKEN (the GH_PAT); listings follow at most PAGE_CAP pages of 100.
   apply:     one ai:orchestrator-tracking re-listing (projects started
              during the audit own their plans), one GET /issues/{n} per
              archived plan's Refs issue (at most MAX_REFS_LOOKUPS), the
-             lint's own lookups, one PR create.
+             lint's own lookups, one PR create; on the first run only (no
+             status issue yet) one label create and one status-issue create,
+             so the PR body and commits can carry `Refs #N`.
   decisions: one label create per label, one create or edit per decision
              issue, one comment and one close per applied decision.
   dispatch:  one ai:orchestrator-tracking re-listing and one wrapper runs
@@ -129,7 +131,13 @@ PERMANENT_RE = re.compile(r"permanent\s*[\u2014\u2013-]+\s*review annually", re.
 AUTO_CLOSE_RE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b\s*:?\s*(?:(?:[\w.-]+/[\w.-]+)?#\d+|https?://github\.com/[\w.-]+/[\w.-]+/issues/\d+)", re.I)
 # A preflight result the model itself reports as not passed. The prompt makes
 # `unrunnable` a fail; the apply side refuses it instead of trusting the prompt.
-PREFLIGHT_NOT_PASSED_RE = re.compile(r"\bunrunnable\b|\b(?:not|never|could ?not|cannot|can't) (?:be )?run\b|^\s*(?:fail(?:ed|s|ure)?|error|skipped)\b", re.IGNORECASE)
+PREFLIGHT_NOT_PASSED_RE = re.compile(r"\bunrunnable\b", re.IGNORECASE)
+# Every preflight result must open with an explicit pass verdict
+# (`passed: <evidence>`, as the prompt asks); any other wording is a fail. An
+# allow-list, not a list of failure phrasings: "did not pass", "not passed" or
+# a trailing "FAILED" can never slip through, and a passing result that says
+# "has not run since" is not refused.
+PREFLIGHT_PASSED_RE = re.compile(r"\s*pass(?:ed)?\b", re.IGNORECASE)
 
 RESULT_KEYS = (
 	"classification", "refreshed", "needs_decision", "applied_decisions", "archived",
@@ -665,7 +673,7 @@ def _semantic_errors(obj: dict[str, Any]) -> list[str]:
 			errors.append(f"removals: invalid script_path {_one_line(path, 80)!r}")
 		if not item["preflight"] or not all(isinstance(c, dict) and set(c) == {"check", "result"} and all(isinstance(v, str) for v in c.values()) for c in item["preflight"]):
 			errors.append("removals: preflight must list {check, result} evidence")
-		elif any(PREFLIGHT_NOT_PASSED_RE.search(c["result"]) for c in item["preflight"]):
+		elif any(not PREFLIGHT_PASSED_RE.match(c["result"]) or PREFLIGHT_NOT_PASSED_RE.search(c["result"]) for c in item["preflight"]):
 			errors.append("removals: a preflight check did not pass (unrunnable is a fail)")
 	rec = obj["recommendation"]
 	plans = rec["plans"]
@@ -950,13 +958,25 @@ def push_env(token: str) -> dict[str, str]:
 	}
 
 
+def _strip_auto_close(text: str) -> str:
+	"""Remove auto-close references until none is left.
+
+	One pass is not enough: removing `fix #1` from `Fixes fix #1#2` leaves
+	`Fixes #2`. Every substitution shortens the text, so the loop ends.
+	"""
+	previous = None
+	while previous != text:
+		previous, text = text, AUTO_CLOSE_RE.sub("", text)
+	return text
+
+
 def _pr_text(text: Any, limit: int) -> str:
 	"""Model- or plan-derived PR body text with auto-close references removed.
 
 	The lint refuses keywords against tracking issues only; a "Closes #N" for
 	an ordinary issue would pass it and close #N when the maintenance PR merges.
 	"""
-	return AUTO_CLOSE_RE.sub("", _one_line(text, limit)).strip()
+	return _strip_auto_close(_one_line(text, limit)).strip()
 
 
 def build_pr_body(result: dict[str, Any], refs_info: dict[int, dict[str, Any]], status_issue: str) -> str:
@@ -1048,6 +1068,17 @@ def run_apply(repo: str, workdir: Path, support: Path, state: dict[str, Any], to
 	groups = check_diff(changes, result, in_flight, registry_old, registry_new, changelog, completed_exists)
 	refs_info = lookup_refs(repo, result)
 	_git(workdir, "reset", "-q")
+	if not status_issue:
+		# First run: report creates the status issue only after this step, so
+		# create it now (report then fills in its body) and the maintenance
+		# PR body and commits can carry `Refs #N`. The gate proceeded, so its
+		# status-issue listing succeeded and found none: no duplicate.
+		ensure_label(repo, STATUS_LABEL)
+		created = gh_api(f"repos/{repo}/issues", "POST", {"title": "Plan autopilot status", "body": f"# Plan autopilot status\n\nAudit in progress.\n\n{TRACKER_MARKER}\n", "labels": [STATUS_LABEL]})
+		status_issue = str((created or {}).get("number") or "")
+		if status_issue:
+			gate["status_issue"] = status_issue
+			state["gate"] = gate
 	ref_suffix = f"\n\nRefs #{status_issue}" if status_issue else ""
 	messages = {
 		"refresh": "docs(plans): refresh stale plans (plan autopilot)",
@@ -1177,6 +1208,16 @@ def run_decisions(repo: str, state: dict[str, Any]) -> dict[str, Any]:
 			gh_api(f"repos/{repo}/issues/{number}", "PATCH", {"state": "closed", "state_reason": "completed"})
 			closed.append(number)
 			known.pop(item["path"], None)
+	# A trusted answer collected this run but not closed (not applied, or the
+	# plan was asked again) must reach a later audit: keep the earlier answer
+	# window and force the next collect to re-read the comments (-1 never
+	# equals a comment count), instead of storing the count that already
+	# includes the answer.
+	collected = (state.get("collect") or {}).get("decision_issues") or {}
+	for path in answered:
+		if path in known:
+			before = collected.get(path) if isinstance(collected.get(path), dict) else {}
+			known[path] = dict(known[path], comments=-1, asked_at=str(before.get("asked_at") or ""))
 	return {"decision_issues": known, "opened": opened, "closed": closed}
 
 
@@ -1214,7 +1255,7 @@ def compose_description(workdir: Path, plans: list[str], default_branch: str, he
 		title = f"Implement plan: {titles[0]}"
 	else:
 		title = f"Implement plan bundle: {' + '.join(titles)}"
-	title = AUTO_CLOSE_RE.sub("", _one_line(title, 200)).strip()[:200]
+	title = _strip_auto_close(_one_line(title, 200)).strip()[:200]
 	lines = [
 		title,
 		"",
@@ -1230,7 +1271,7 @@ def compose_description(workdir: Path, plans: list[str], default_branch: str, he
 	]
 	lines += [f"- Plan: `{p}`" for p in plans]
 	lines += [f"- Default branch: `{default_branch}` at `{head_sha}`", "- Started by the plan autopilot (`scripts/plan_autopilot.py`)."]
-	return AUTO_CLOSE_RE.sub("", "\n".join(lines))
+	return _strip_auto_close("\n".join(lines))
 
 
 def run_dispatch(repo: str, workdir: Path, state: dict[str, Any], start: dt.datetime | None = None) -> dict[str, Any]:

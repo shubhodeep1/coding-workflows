@@ -689,3 +689,49 @@ def test_decision_answer_window_starts_at_collect(monkeypatch: pytest.MonkeyPatc
 	# An answer posted after collect read the comments survives the next run's cutoff.
 	late = [{"author_association": "OWNER", "body": "Q1: A", "created_at": "2026-11-25T10:30:00Z"}]
 	assert pa.trusted_answers(late, out["decision_issues"]["docs/plans/a.md"]["asked_at"]) == ["Q1: A"]
+
+
+# ---------------------------------------------------------------- review fixes (round 3)
+
+def test_chained_auto_close_references_are_stripped_until_none_is_left(tmp_path: Path) -> None:
+	for text in ("Fixes fix #1#2", "Fixes: fix #1#2", "Fixes Fixes #1 #2", "Closes closes https://github.com/o/r/issues/1https://github.com/o/r/issues/2"):
+		body = pa.build_pr_body(_result(refreshed=[{"path": "docs/plans/a.md", "stale": text, "changed": "y"}]), {}, "")
+		assert not pa.AUTO_CLOSE_RE.search(body), text
+	work = _workdir(tmp_path)
+	(work / "docs" / "plans" / "a.md").write_text("# Fixes fix #1#2 poller\n", encoding="utf-8")
+	assert not pa.AUTO_CLOSE_RE.search(pa.compose_description(work, ["docs/plans/a.md"], "main", "a" * 40))
+
+
+def test_preflight_requires_an_explicit_pass_verdict() -> None:
+	for verdict in ("not passed: 2 callers remain", "did not pass", "2 callers found - FAILED", "ok", "passed: unrunnable without a token"):
+		bad = _result(removals=[{"entry_title": "x", "script_path": "scripts/old_helper.sh", "preflight": [{"check": "c", "result": verdict}]}])
+		assert pa.validate_result(bad), verdict
+	for verdict in ("passed: the job has not run since 2026-09", "Passed: no workflow can run it (0 callers)", "pass"):
+		ok = _result(removals=[{"entry_title": "x", "script_path": "scripts/old_helper.sh", "preflight": [{"check": "c", "result": verdict}]}])
+		assert pa.validate_result(ok) == [], verdict
+
+
+def test_unused_collected_answer_survives_to_the_next_collect(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setattr(pa, "gh_api", FakeGh())
+	state = {
+		# The model asked again instead of applying the answer.
+		"audit": {"result": _result(needs_decision=[{"path": "docs/plans/a.md", "questions": "Q1"}])},
+		"collect": {"decision_issues": {"docs/plans/a.md": {"number": 3, "comments": 1, "asked_at": "2026-11-20T00:00:00Z"}}, "answers": ["docs/plans/a.md"], "collected_at": "2026-11-25T10:00:00Z"},
+		"apply": {"pr_number": ""},
+	}
+	entry = pa.run_decisions("o/r", state)["decision_issues"]["docs/plans/a.md"]
+	assert entry["comments"] == -1 and entry["asked_at"] == "2026-11-20T00:00:00Z"
+	answer = [{"author_association": "OWNER", "body": "Q1: A", "created_at": "2026-11-24T00:00:00Z"}]
+	assert pa.trusted_answers(answer, entry["asked_at"]) == ["Q1: A"]
+	# Next collect: the comment count is unchanged, but the comments are re-read.
+	calls: list[str] = []
+
+	def route(path: str, _b: Any) -> Any:
+		calls.append(path)
+		if "/comments" in path:
+			return answer
+		return [{"number": 3, "author_association": "OWNER", "comments": 1, "body": "<!-- ai:plan-decision:v1 plan=docs/plans/a.md -->"}]
+
+	monkeypatch.setattr(pa, "gh_api", FakeGh({"GET repos/o/r/issues": route}))
+	out = pa.run_collect("o/r", _workdir(Path(pa.state_dir()) / "w"), {"gate": {"prior_state": {"decision_issues": {"docs/plans/a.md": entry}}}}, "20261126", "a" * 40, "main")
+	assert out["answers"] == ["docs/plans/a.md"] and any("/comments" in c for c in calls)
