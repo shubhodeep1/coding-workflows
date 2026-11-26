@@ -180,6 +180,27 @@ else
       # synchronize run re-validates the PR without a person.
       MSG="$(printf 'PR review blocked — merge_with_followup approved but the base moved under its files; branch update requested\nThe synchronize run re-validates automatically')"
       JUDGE_ALERT_LEVEL="DEBUG" ;;
+    base_freshness_unknown)
+      # #9502: the freshness gate could not verify the base (merge
+      # lease held, or the check failed). Not autofix exhaustion;
+      # a stuck lease is real, so WARNING, once per head (the
+      # comment step's rb-judge-base-freshness marker).
+      if [ "${RB_BLOCKED_FRESHNESS_REPEAT:-}" = "true" ]; then
+        echo "RB_JUDGE_FRESHNESS_ALERT pr=${PR_NUMBER} head=${AUTOFIX_FAILURE_HEAD_SHA:-unknown} repeat=true level=SUPPRESSED"
+        exit 0
+      fi
+      # Lease guidance only when the judge exported a lease blocker
+      # (merge_lease_* reasons); a queued_behind blocker is the PR
+      # first in the queue, not the holder, hence "held by or
+      # queued for". Other reasons (compare_failed, ...) have no lease.
+      LEASE_HOLDER_LINE=""
+      FRESHNESS_NEXT_LINE="The judge re-fires and retries the merge; if this persists, check the run log for the freshness reason"
+      if [[ "${JUDGE_MERGE_LEASE_BLOCKER:-}" =~ ^[0-9]+$ ]]; then
+        LEASE_HOLDER_LINE=" (lease held by or queued for PR #${JUDGE_MERGE_LEASE_BLOCKER})"
+        FRESHNESS_NEXT_LINE="The merge retries when the lease frees; if this persists, check that PR"
+      fi
+      MSG="$(printf 'PR review blocked — merge_with_followup approved, but base freshness could not be verified (merge lease held or freshness check failed); merge deferred%s\n%s' "${LEASE_HOLDER_LINE}" "${FRESHNESS_NEXT_LINE}")"
+      JUDGE_ALERT_LEVEL="WARNING" ;;
     stale_head)
       # A push landed during the judge call; the push re-runs review.
       MSG="$(printf 'PR review blocked — PR head moved during the judge call; judge took no action\nThe new push re-runs review automatically')"

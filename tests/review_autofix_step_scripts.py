@@ -98,7 +98,6 @@ REVIEW_AUTOFIX_STEP_SCRIPTS: dict[str, tuple[str, str]] = {
 	"Telegram review-blocked judge decision": ("review_autofix_step_telegram_rb_judge_decision.sh", "error"),
 	"Push all pending commits": ("review_autofix_step_push_pending_commits.sh", "error"),
 	"Pre-assemble static context (cacheable across runs)": ("review_autofix_step_static_context.sh", "error"),
-	"Telegram editor-noop-suspicious warning": ("review_autofix_step_telegram_editor_noop_suspicious.sh", "error"),
 	"Mark linked issues review-blocked (autofix exhaustion)": ("review_autofix_step_mark_review_blocked_exhaustion.sh", "error"),
 }
 

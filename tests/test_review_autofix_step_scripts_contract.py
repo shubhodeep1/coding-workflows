@@ -152,6 +152,17 @@ def test_every_wrapper_is_registered_and_expands() -> None:
 		assert expanded_steps[step_name]["run"].rstrip("\n") == review_autofix_step_script_body(script_name).rstrip("\n")
 
 
+def test_step_script_registry_has_no_duplicate_step_names() -> None:
+	# A dict literal silently keeps the last of two equal keys (#10166: one
+	# step registered twice, one script orphaned). Scripts may repeat.
+	import ast
+
+	tree = ast.parse((REPO_ROOT / "tests" / "review_autofix_step_scripts.py").read_text(encoding="utf-8"))
+	node = next(n for n in ast.walk(tree) if isinstance(n, ast.AnnAssign) and getattr(n.target, "id", "") == "REVIEW_AUTOFIX_STEP_SCRIPTS")
+	keys = [ast.literal_eval(k) for k in node.value.keys]
+	assert len(keys) == len(set(keys)), sorted(k for k in keys if keys.count(k) > 1)
+
+
 def test_gate_job_step_scripts_come_only_from_verified_head_gate_checkout() -> None:
 	assert REVIEW_AUTOFIX_GATE_JOB_STEP_SCRIPTS, "gate-job step registry must not be empty"
 	raw = REVIEW_AUTOFIX_WORKFLOW_PATH.read_text(encoding="utf-8")
