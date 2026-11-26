@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -42,6 +43,11 @@ ERRORS_CAP = 250
 # through unchanged; anything longer is truncated before it reaches the
 # Codex prompt context.
 RUN_DIAGNOSTIC_FIELD_MAX_CHARS = 512
+# Per-reviewer finding counts parsed by the collector from REVIEWER_FINDINGS
+# lines (Refs #10058). Names keep the collector's character set.
+REVIEWER_FINDINGS_NAME_RE = re.compile(r"^[A-Za-z0-9_./:-]{1,160}$")
+REVIEWER_FINDINGS_MAX_PER_RUN = 64
+REVIEWER_FINDINGS_COUNT_KEYS = ("raised", "lone", "lone_rejected", "lone_accepted", "shared")
 RUN_DIAGNOSTIC_STATUS_FIELDS = (
 	"log_download_status",
 	"jobs_fetch_status",
@@ -241,6 +247,11 @@ def _normalized_run_view(run: dict[str, Any]) -> dict[str, Any]:
 	cost_telemetry = run.get("cost_telemetry")
 	if isinstance(cost_telemetry, dict) and cost_telemetry:
 		view["cost_telemetry"] = dict(cost_telemetry)
+	reviewer_findings = run.get("reviewer_findings")
+	if isinstance(reviewer_findings, list) and reviewer_findings:
+		view["reviewer_findings"] = [
+			dict(entry) for entry in reviewer_findings[:REVIEWER_FINDINGS_MAX_PER_RUN] if isinstance(entry, dict)
+		]
 	# Additive diagnostic fields so the analysis can tell a missing/404 log
 	# archive or an unknown duration apart from a genuine 0s run.
 	for field_name in RUN_DIAGNOSTIC_STATUS_FIELDS:
@@ -322,6 +333,67 @@ def _aggregate_runs_by_key(runs: list[dict[str, Any]], key_name: str) -> dict[st
 		entry["cost_telemetry"] = aggregate_run_cost_telemetry(rows)
 		result[key_value] = entry
 	return result
+
+
+def aggregate_reviewer_findings(runs: list[dict[str, Any]]) -> dict[str, Any]:
+	"""Sum the collector's per-run REVIEWER_FINDINGS entries per reviewer.
+
+	Output: review_runs (workflow_family review_autofix), runs_with_lines,
+	unavailable_runs, unavailable_lines and reviewers (sorted by name, each
+	{reviewer, runs, raised, lone, lone_rejected, lone_accepted, shared}).
+	Counts are clamped to >= 0; unavailable lines add no reviewer counts.
+	Only review_autofix runs contribute, so a matching line echoed by any
+	other trusted workflow cannot add to the totals.
+	"""
+	review_runs = 0
+	runs_with_lines = 0
+	unavailable_runs = 0
+	unavailable_lines = 0
+	per_reviewer: dict[str, dict[str, Any]] = {}
+	for run in runs:
+		if str(run.get("workflow_family") or "") != "review_autofix":
+			continue
+		review_runs += 1
+		entries = run.get("reviewer_findings")
+		if not isinstance(entries, list):
+			continue
+		valid = [
+			entry
+			for entry in entries[:REVIEWER_FINDINGS_MAX_PER_RUN]
+			if isinstance(entry, dict)
+			and isinstance(entry.get("reviewer"), str)
+			and REVIEWER_FINDINGS_NAME_RE.match(entry["reviewer"])
+			and entry.get("outcome") in ("counted", "unavailable")
+		]
+		if not valid:
+			continue
+		runs_with_lines += 1
+		run_unavailable = False
+		counted_in_run: set[str] = set()
+		for entry in valid:
+			if entry["outcome"] == "unavailable":
+				unavailable_lines += 1
+				run_unavailable = True
+				continue
+			name = entry["reviewer"]
+			totals = per_reviewer.setdefault(
+				name,
+				{"reviewer": name, "runs": 0, **dict.fromkeys(REVIEWER_FINDINGS_COUNT_KEYS, 0)},
+			)
+			if name not in counted_in_run:
+				counted_in_run.add(name)
+				totals["runs"] += 1
+			for key in REVIEWER_FINDINGS_COUNT_KEYS:
+				totals[key] += max(0, _to_int(entry.get(key), 0))
+		if run_unavailable:
+			unavailable_runs += 1
+	return {
+		"review_runs": review_runs,
+		"runs_with_lines": runs_with_lines,
+		"unavailable_runs": unavailable_runs,
+		"unavailable_lines": unavailable_lines,
+		"reviewers": [per_reviewer[name] for name in sorted(per_reviewer)],
+	}
 
 
 def _normalize_collector_coverage(raw: dict[str, Any]) -> dict[str, Any]:
@@ -492,6 +564,7 @@ def prepare_analysis_context(input_data: dict[str, Any]) -> dict[str, Any]:
 		"slow_runs": slow_runs[:RUN_LIST_CAP],
 		"recent_runs": recent_runs[:RUN_LIST_CAP],
 		"errors": errors[:ERRORS_CAP],
+		"reviewer_findings": aggregate_reviewer_findings(runs),
 		"insufficient_data": insufficient_data,
 		"analysis_guidance": (
 			"No workflow runs were available in the selected window. "
