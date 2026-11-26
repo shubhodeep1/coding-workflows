@@ -929,7 +929,7 @@ rb_judge_settled_check_diagnostics()
   [ "${PR_CHECKS_LAST_PENDING:-0}" = "0" ] || return 0
   local rb_sc_head="${RB_JUDGED_HEAD_SHA:-}" rb_sc_head7 rb_sc_entry rb_sc_clean rb_sc_joined="" rb_sc_count=0
   local rb_sc_retryable="true" rb_sc_run rb_sc_ids="" rb_sc_id rb_sc_handled=0 rb_sc_login="" rb_sc_marker rb_sc_seen
-  local rb_sc_action rb_sc_reason rb_sc_body rb_sc_result rb_sc_prefix rb_sc_non_actions=0
+  local rb_sc_action rb_sc_reason rb_sc_body rb_sc_result rb_sc_prefix rb_sc_non_actions=0 rb_sc_state
   rb_sc_head7="${rb_sc_head:0:7}"
   [ -n "${rb_sc_head7}" ] || rb_sc_head7="unknown"
   rb_sc_prefix="RB_JUDGE_SETTLED_CHECKS pr=${PR_NUMBER:-unknown} head=${rb_sc_head7} settled=true"
@@ -944,6 +944,13 @@ rb_judge_settled_check_diagnostics()
     # Names reach GITHUB_OUTPUT, GITHUB_ENV and a PR comment: keep a fixed
     # character set (no newline, `=`, comma, backtick or `@`).
     rb_sc_clean="$(printf '%s' "${rb_sc_entry}" | LC_ALL=C tr -c 'A-Za-z0-9 _./():-' '_')"
+    # Cut the name, not the `:conclusion` suffix, when the entry is too long.
+    if [ "${#rb_sc_clean}" -gt 120 ] && [[ "${rb_sc_clean}" == *:* ]]; then
+      rb_sc_state="${rb_sc_clean##*:}"
+      rb_sc_state="${rb_sc_state:0:20}"
+      rb_sc_clean="${rb_sc_clean%:*}"
+      rb_sc_clean="${rb_sc_clean:0:$((119 - ${#rb_sc_state}))}:${rb_sc_state}"
+    fi
     rb_sc_clean="${rb_sc_clean:0:120}"
     rb_sc_joined+="${rb_sc_joined:+, }${rb_sc_clean}"
   done <<< "${PR_CHECKS_LAST_BLOCKING_NAMES:-}"

@@ -269,6 +269,14 @@ def test_names_past_cap_are_marked_as_more() -> None:
 	assert "names=23 " in res["stdout"], res["stdout"]
 
 
+def test_long_name_keeps_conclusion() -> None:
+	"""A check name past the 120-character cap is cut, not its conclusion."""
+	res = _run_judge(names=("x" * 200) + ":cancelled", run_ids="1:failure")
+	line = [ln for ln in res["output"].splitlines() if ln.startswith("judge_blocking_check_names=")][0]
+	value = line.split("=", 1)[1]
+	assert len(value) == 120 and value.endswith("x:cancelled"), value
+
+
 def test_no_names_writes_nothing() -> None:
 	res = _run_judge(names="", run_ids="")
 	assert res["output"] == "" and res["env"] == "" and res["calls"] == [], res
