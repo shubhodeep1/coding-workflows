@@ -33,6 +33,11 @@ on:
         required: false
         default: "0"
         type: string
+      issue_pr_audit:
+        description: Run the daily issue/PR audit (#10153) in this dispatch's collect-logs job; it always runs on the 06:00 UTC schedule.
+        required: false
+        default: "false"
+        type: string
       alert_msg_level:
         description: Override the Telegram alert threshold for this run. Set to SILENT when dispatched from the test-and-mark-stable smoke gate to avoid drowning the gate's combined notification in per-job alerts.
         required: false
@@ -88,20 +93,66 @@ jobs:
   collect-logs:
     if: ${{ github.event_name != 'schedule' || github.event.schedule == '0 6 * * *' || ((vars.WORKFLOW_RETRO_ENABLED || 'true') == 'true' && github.event.schedule == (vars.WORKFLOW_RETRO_CRON || '0 9 * * 1')) }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # 60 -> 100 for the daily issue/PR audit (#10153): today's 14-20 minutes,
+    # plus at most ISSUE_PR_AUDIT_TIMEOUT_MINUTES (35) of model time, about 5
+    # for engine setup and about 10 for delivery and Telegram, plus headroom.
+    # The audit runs as steps of this job, the only job the 06:00 event runs,
+    # so the event still takes one runner (§26).
+    timeout-minutes: 100
     permissions:
       contents: read
       actions: read
+      # Claude engine (#10153): the job's OIDC token for claude-pool-broker,
+      # used only by the "Resolve Claude credential" step of the audit.
+      id-token: write
     # Collection window (plan P4): the analyze step writes these into the
     # report's first-line marker, which a later since_last_report run reads.
     outputs:
       window_start: ${{ steps.collect.outputs.window_start }}
       window_end: ${{ steps.collect.outputs.window_end }}
+    env:
+      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+      AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
+      AI_ENGINE_ISSUE_PR_AUDIT: ${{ vars.AI_ENGINE_ISSUE_PR_AUDIT || '' }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
         with:
           fetch-depth: 1
+
+      # Daily issue/PR audit (#10153): the engine root is staged only on the
+      # audit runs (06:00 schedule, or a dispatch with issue_pr_audit=true),
+      # and only from a trusted ref, as in analyze-commit-notify.
+      - name: Resolve AI engine
+        id: ai_engine
+        if: ${{ (github.event.schedule == '0 6 * * *' || github.event.inputs.issue_pr_audit == 'true') && (vars.ISSUE_PR_AUDIT_ENABLED || 'true') == 'true' }}
+        env:
+          WLA_ENGINE_ROLES: ISSUE_PR_AUDIT
+          CLAUDE_ENGINE_SUPPORT_DEST: ${{ runner.temp }}/claude-engine-support
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || '' }}
+        run: |
+          set -euo pipefail
+          any_claude="false"
+          trusted_ref="false"
+          if [ "${GITHUB_EVENT_NAME}" = "schedule" ] ||
+             { [ -n "${DEFAULT_BRANCH}" ] && [ "${GITHUB_REF}" = "refs/heads/${DEFAULT_BRANCH}" ]; }; then
+            trusted_ref="true"
+          fi
+          checkout_head="$(git -C "${GITHUB_WORKSPACE}" rev-parse HEAD 2>/dev/null || true)"
+          # shellcheck disable=SC1091
+          if [ "${trusted_ref}" = "true" ] && [ -n "${checkout_head}" ] && [ "${checkout_head}" = "${GITHUB_SHA}" ] &&
+             source scripts/ai_engine.sh && ai_engine_stage_support "${GITHUB_WORKSPACE}" "${CLAUDE_ENGINE_SUPPORT_DEST}"; then
+            echo "CLAUDE_ENGINE_SUPPORT_DIR=${CLAUDE_ENGINE_SUPPORT_DEST}" >> "$GITHUB_ENV"
+            for wla_role in ${WLA_ENGINE_ROLES}; do
+              wla_engine="$(SUPPORT_ROOT_DIR="${CLAUDE_ENGINE_SUPPORT_DEST}" ai_engine_for_role "${wla_role}" || echo codex)"
+              if [ "${wla_engine}" = "claude" ]; then
+                any_claude="true"
+              fi
+            done
+          else
+            echo "::warning::Trusted Claude engine support is unavailable; ${WLA_ENGINE_ROLES} run codex."
+          fi
+          echo "any_claude=${any_claude}" >> "$GITHUB_OUTPUT"
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -471,6 +522,144 @@ jobs:
         with:
           path: ${{ runner.temp }}/stage-switch-alert-day
           key: stage-switch-off-alert-${{ steps.stage_switch_read.outputs.day }}
+
+      # --- Daily issue/PR audit (#10153) -------------------------------------
+      # Folded into this job (§26): no new job. Runs after the PAT budget and
+      # stage switch reports. Every run: body is in scripts/issue_pr_audit_run.sh
+      # (§24); dispatch inputs appear only in if: expressions. Secrets are
+      # step-scoped: GH_PAT in collect and deliver only, Telegram secrets in
+      # the Telegram step only, none in the model step.
+      - name: Install Claude Code CLI
+        if: steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/install-claude
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Resolve Claude credential
+        id: claude_pool
+        if: steps.ai_engine.outputs.any_claude == 'true'
+        continue-on-error: true
+        uses: ./.github/actions/claude-pool-token
+        with:
+          config_path: .github/ai/claude_engine.json
+
+      - name: Install Codex CLI for the issue/PR audit
+        if: ${{ !cancelled() && (github.event.schedule == '0 6 * * *' || github.event.inputs.issue_pr_audit == 'true') && (vars.ISSUE_PR_AUDIT_ENABLED || 'true') == 'true' }}
+        continue-on-error: true
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
+        with:
+          codex_version: ${{ env.CODEX_VERSION }}
+
+      - name: Create Codex config for the issue/PR audit
+        if: ${{ !cancelled() && (github.event.schedule == '0 6 * * *' || github.event.inputs.issue_pr_audit == 'true') && (vars.ISSUE_PR_AUDIT_ENABLED || 'true') == 'true' }}
+        continue-on-error: true
+        env:
+          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-6-sol' }}
+          WORKFLOW_ISSUE_PR_AUDIT_REASONING: ${{ vars.THINKING_LEVEL_ANALYSIS || 'high' }}
+        run: bash scripts/write_codex_config.sh --model "${WORKFLOW_EDITOR_MODEL}" --reasoning "${WORKFLOW_ISSUE_PR_AUDIT_REASONING}" && echo "CODEX_HOME=$HOME/.codex" >> "$GITHUB_ENV"
+
+      - name: Collect issue and PR audit data
+        id: issue_pr_audit_collect
+        if: ${{ !cancelled() && (github.event.schedule == '0 6 * * *' || github.event.inputs.issue_pr_audit == 'true') && (vars.ISSUE_PR_AUDIT_ENABLED || 'true') == 'true' }}
+        timeout-minutes: 30
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          PYTHONDONTWRITEBYTECODE: "1"
+          ISSUE_PR_AUDIT_ENABLED: ${{ vars.ISSUE_PR_AUDIT_ENABLED || 'true' }}
+          ISSUE_PR_AUDIT_INITIAL_LOOKBACK_HOURS: ${{ vars.ISSUE_PR_AUDIT_INITIAL_LOOKBACK_HOURS || '24' }}
+          ISSUE_PR_AUDIT_MAX_WINDOW_DAYS: ${{ vars.ISSUE_PR_AUDIT_MAX_WINDOW_DAYS || '7' }}
+          ISSUE_PR_AUDIT_EXCLUDE_REPOS: ${{ vars.ISSUE_PR_AUDIT_EXCLUDE_REPOS || '' }}
+          ISSUE_PR_AUDIT_MAX_REPOS: ${{ vars.ISSUE_PR_AUDIT_MAX_REPOS || '200' }}
+          ISSUE_PR_AUDIT_MAX_OPEN_PAGES: ${{ vars.ISSUE_PR_AUDIT_MAX_OPEN_PAGES || '5' }}
+          ISSUE_PR_AUDIT_MAX_DETAIL_ITEMS: ${{ vars.ISSUE_PR_AUDIT_MAX_DETAIL_ITEMS || '500' }}
+          ISSUE_PR_AUDIT_MAX_DEEP_ITEMS: ${{ vars.ISSUE_PR_AUDIT_MAX_DEEP_ITEMS || '80' }}
+          ISSUE_PR_AUDIT_CLEAN_SAMPLE: ${{ vars.ISSUE_PR_AUDIT_CLEAN_SAMPLE || '10' }}
+          ISSUE_PR_AUDIT_COMMITS_FLAG: ${{ vars.ISSUE_PR_AUDIT_COMMITS_FLAG || '8' }}
+          ISSUE_PR_AUDIT_STALL_HOURS: ${{ vars.ISSUE_PR_AUDIT_STALL_HOURS || '24' }}
+          ISSUE_PR_AUDIT_BLOCKED_LABELS: ${{ vars.ISSUE_PR_AUDIT_BLOCKED_LABELS || '' }}
+          ISSUE_PR_AUDIT_MAX_BLOCKED_LOGS: ${{ vars.ISSUE_PR_AUDIT_MAX_BLOCKED_LOGS || '10' }}
+          ISSUE_PR_AUDIT_REDACT_PRIVATE_IN_PUBLIC: ${{ vars.ISSUE_PR_AUDIT_REDACT_PRIVATE_IN_PUBLIC || 'true' }}
+        run: bash scripts/issue_pr_audit_run.sh collect
+
+      - name: Remove persisted checkout credential
+        if: ${{ !cancelled() && (github.event.schedule == '0 6 * * *' || github.event.inputs.issue_pr_audit == 'true') && (vars.ISSUE_PR_AUDIT_ENABLED || 'true') == 'true' }}
+        env:
+          ISSUE_PR_AUDIT_ENABLED: ${{ vars.ISSUE_PR_AUDIT_ENABLED || 'true' }}
+        run: bash scripts/issue_pr_audit_run.sh scrub-credentials
+
+      - name: Run issue and PR audit model pass
+        id: issue_pr_audit_analyze
+        if: ${{ !cancelled() && (github.event.schedule == '0 6 * * *' || github.event.inputs.issue_pr_audit == 'true') && (vars.ISSUE_PR_AUDIT_ENABLED || 'true') == 'true' && steps.issue_pr_audit_collect.outputs.digest_ready == 'true' }}
+        timeout-minutes: 45
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          WORKFLOW_EDITOR_MODEL: ${{ vars.WORKFLOW_LOG_ANALYSIS_MODEL || 'openai/gpt-6-sol' }}
+          ISSUE_PR_AUDIT_ENABLED: ${{ vars.ISSUE_PR_AUDIT_ENABLED || 'true' }}
+          ISSUE_PR_AUDIT_TIMEOUT_MINUTES: ${{ vars.ISSUE_PR_AUDIT_TIMEOUT_MINUTES || '35' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: bash scripts/issue_pr_audit_run.sh analyze
+
+      - name: Deliver issue and PR audit report
+        id: issue_pr_audit_deliver
+        if: ${{ !cancelled() && (github.event.schedule == '0 6 * * *' || github.event.inputs.issue_pr_audit == 'true') && (vars.ISSUE_PR_AUDIT_ENABLED || 'true') == 'true' && steps.issue_pr_audit_analyze.outputs.report_valid == 'true' }}
+        timeout-minutes: 15
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          REPORT_PUSH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch || '' }}
+          COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS: ${{ vars.COMPREHENSIVE_CYCLE_MARKER_TRUSTED_ASSOCIATIONS || 'OWNER,MEMBER,COLLABORATOR' }}
+          WORKFLOW_LOG_ANALYSIS_REPORT_RETENTION_DAYS: ${{ vars.WORKFLOW_LOG_ANALYSIS_REPORT_RETENTION_DAYS || '30' }}
+          ISSUE_PR_AUDIT_ENABLED: ${{ vars.ISSUE_PR_AUDIT_ENABLED || 'true' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: bash scripts/issue_pr_audit_run.sh deliver
+
+      - name: Upload issue and PR audit report
+        if: ${{ !cancelled() && (github.event.schedule == '0 6 * * *' || github.event.inputs.issue_pr_audit == 'true') && (vars.ISSUE_PR_AUDIT_ENABLED || 'true') == 'true' && steps.issue_pr_audit_analyze.outputs.report_path != '' }}
+        continue-on-error: true
+        uses: actions/upload-artifact@v6
+        with:
+          name: issue-pr-audit-report
+          path: ${{ steps.issue_pr_audit_analyze.outputs.report_path }}
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Look up today's issue/PR audit Telegram report
+        id: issue_pr_audit_tg_sent
+        if: ${{ !cancelled() && (github.event.schedule == '0 6 * * *' || github.event.inputs.issue_pr_audit == 'true') && (vars.ISSUE_PR_AUDIT_ENABLED || 'true') == 'true' && steps.issue_pr_audit_collect.outputs.day != '' }}
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/issue-pr-audit-tg-day
+          key: issue-pr-audit-tg-${{ steps.issue_pr_audit_collect.outputs.day }}
+          lookup-only: true
+
+      - name: Send issue and PR audit Telegram report
+        id: issue_pr_audit_tg
+        if: ${{ !cancelled() && (github.event.schedule == '0 6 * * *' || github.event.inputs.issue_pr_audit == 'true') && (vars.ISSUE_PR_AUDIT_ENABLED || 'true') == 'true' }}
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+          TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID }}
+          ISSUE_PR_AUDIT_ENABLED: ${{ vars.ISSUE_PR_AUDIT_ENABLED || 'true' }}
+          ISSUE_PR_AUDIT_TG_WHEN_EMPTY: ${{ vars.ISSUE_PR_AUDIT_TG_WHEN_EMPTY || 'false' }}
+          ISSUE_PR_AUDIT_TG_ALREADY_SENT: ${{ steps.issue_pr_audit_tg_sent.outputs.cache-hit == 'true' && 'true' || 'false' }}
+          ISSUE_PR_AUDIT_REPORT_URL: ${{ steps.issue_pr_audit_deliver.outputs.pr_url || '' }}
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: bash scripts/issue_pr_audit_run.sh telegram
+
+      - name: Record today's issue/PR audit Telegram report
+        if: ${{ !cancelled() && (github.event.schedule == '0 6 * * *' || github.event.inputs.issue_pr_audit == 'true') && (vars.ISSUE_PR_AUDIT_ENABLED || 'true') == 'true' && steps.issue_pr_audit_tg.outputs.sent == 'true' && steps.issue_pr_audit_collect.outputs.day != '' }}
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/issue-pr-audit-tg-day
+          key: issue-pr-audit-tg-${{ steps.issue_pr_audit_collect.outputs.day }}
 
   weekly-retro:
     needs: collect-logs

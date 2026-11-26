@@ -109,6 +109,9 @@
 #   APPLY_ANALYSIS_LIST_ONLY                   true: print the unprocessed docs, no dispatch
 #   APPLY_ANALYSIS_IN_FLIGHT_DOCS              true: print the docs open projects use, no dispatch
 #   APPLY_ANALYSIS_DOC_GLOB                    default analysis/workflow-optimization-*.md
+#   APPLY_ANALYSIS_DOC_GLOB_EXTRA              default analysis/issue-pr-audit-*.md (#10153);
+#                                              a second doc stream scanned with the first
+#                                              one; `none` (or empty) turns it off
 #   APPLY_ANALYSIS_REPORT_PATH                 default analysis/recommendation-processing-report.md
 #   APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE   default internal-orchestrate.yml
 #   APPLY_ANALYSIS_TRACKING_LABEL              default ai:comprehensive-test-pending
@@ -155,6 +158,10 @@ APPLY_ANALYSIS_PINNED="${APPLY_ANALYSIS_PINNED:-false}"
 APPLY_ANALYSIS_LIST_ONLY="${APPLY_ANALYSIS_LIST_ONLY:-false}"
 APPLY_ANALYSIS_IN_FLIGHT_DOCS="${APPLY_ANALYSIS_IN_FLIGHT_DOCS:-false}"
 APPLY_ANALYSIS_DOC_GLOB="${APPLY_ANALYSIS_DOC_GLOB:-analysis/workflow-optimization-*.md}"
+APPLY_ANALYSIS_DOC_GLOB_EXTRA="${APPLY_ANALYSIS_DOC_GLOB_EXTRA-analysis/issue-pr-audit-*.md}"
+case "${APPLY_ANALYSIS_DOC_GLOB_EXTRA}" in
+	none|NONE|None|"${APPLY_ANALYSIS_DOC_GLOB}") APPLY_ANALYSIS_DOC_GLOB_EXTRA="" ;;
+esac
 APPLY_ANALYSIS_REPORT_PATH="${APPLY_ANALYSIS_REPORT_PATH:-analysis/recommendation-processing-report.md}"
 APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE="${APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE:-internal-orchestrate.yml}"
 APPLY_ANALYSIS_TRACKING_LABEL="${APPLY_ANALYSIS_TRACKING_LABEL:-ai:comprehensive-test-pending}"
@@ -383,6 +390,67 @@ orchestrate_run_in_flight()
 	return 1
 }
 
+# apply_analysis_last_stream
+# Prints `extra` when the doc listed last in the processing report belongs to
+# the APPLY_ANALYSIS_DOC_GLOB_EXTRA stream, `primary` when it belongs to
+# APPLY_ANALYSIS_DOC_GLOB, and `none` with no report or no listed doc. Local
+# file read only, no API call.
+apply_analysis_last_stream()
+{
+	local primary_base extra_base token last="none"
+	primary_base="$(basename -- "${APPLY_ANALYSIS_DOC_GLOB}")"
+	extra_base="$(basename -- "${APPLY_ANALYSIS_DOC_GLOB_EXTRA}")"
+	if [ -f "${APPLY_ANALYSIS_REPORT_PATH}" ]; then
+		while IFS= read -r token; do
+			# shellcheck disable=SC2053
+			if [ -n "${APPLY_ANALYSIS_DOC_GLOB_EXTRA}" ] && [[ "${token}" == ${extra_base} ]]; then
+				last="extra"
+			elif [[ "${token}" == ${primary_base} ]]; then
+				last="primary"
+			fi
+		done < <(grep -oE '[A-Za-z0-9._-]+\.md' "${APPLY_ANALYSIS_REPORT_PATH}" 2>/dev/null || true)
+	fi
+	printf '%s\n' "${last}"
+}
+
+# apply_analysis_candidate_docs
+# Prints every doc under APPLY_ANALYSIS_DOC_GLOB, plus APPLY_ANALYSIS_DOC_GLOB_EXTRA
+# when set (#10153), newest first. Without the extra stream the order is the
+# original reverse version sort. With it: by the YYYY-MM-DD date in the file
+# name, then the same-day -N suffix (highest first), then on a tie the stream
+# that was not processed last goes first (apply_analysis_last_stream), so
+# neither stream starves the other.
+apply_analysis_candidate_docs()
+{
+	if [ -z "${APPLY_ANALYSIS_DOC_GLOB_EXTRA}" ]; then
+		compgen -G "${APPLY_ANALYSIS_DOC_GLOB}" | sort -rV || true
+		return 0
+	fi
+	local primary_rank=0 extra_rank=1 doc rank stamp suffix name
+	if [ "$(apply_analysis_last_stream)" = "primary" ]; then
+		primary_rank=1
+		extra_rank=0
+	fi
+	{
+		while IFS= read -r doc; do
+			[ -n "${doc}" ] && printf '%s\t%s\n' "${primary_rank}" "${doc}"
+		done < <(compgen -G "${APPLY_ANALYSIS_DOC_GLOB}" || true)
+		while IFS= read -r doc; do
+			[ -n "${doc}" ] && printf '%s\t%s\n' "${extra_rank}" "${doc}"
+		done < <(compgen -G "${APPLY_ANALYSIS_DOC_GLOB_EXTRA}" || true)
+	} | while IFS=$'\t' read -r rank doc; do
+		name="$(basename -- "${doc}")"
+		stamp="0000-00-00"
+		suffix=1
+		if [[ "${name}" =~ ([0-9]{4}-[0-9]{2}-[0-9]{2})(-([0-9]+))?\.md$ ]]; then
+			stamp="${BASH_REMATCH[1]}"
+			suffix="${BASH_REMATCH[3]:-1}"
+		fi
+		printf '%s\t%06d\t%s\t%s\n' "${stamp}" "$((10#${suffix}))" "${rank}" "${doc}"
+	done | sort -t $'\t' -k1,1r -k2,2r -k3,3n -k4,4 | awk -F '\t' '!seen[$4]++ { print $4 }'
+	return 0
+}
+
 # unprocessed_docs
 # Prints one unprocessed doc path per line, newest first (reverse version sort
 # of the dated filenames, so a same-day -2/-3 doc comes before the day's first
@@ -405,7 +473,7 @@ unprocessed_docs()
 	local candidate_cap="${APPLY_ANALYSIS_EFFECTIVE_MAX_CANDIDATES:-${APPLY_ANALYSIS_MAX_CANDIDATES}}"
 	while IFS= read -r candidate; do
 		[ -n "${candidate}" ] && candidates+=("${candidate}")
-	done < <(compgen -G "${APPLY_ANALYSIS_DOC_GLOB}" | sort -rV || true)
+	done < <(apply_analysis_candidate_docs)
 	candidate_total="${#candidates[@]}"
 	for (( candidate_index = 0; candidate_index < candidate_total; candidate_index++ )); do
 		candidate="${candidates[${candidate_index}]}"
@@ -542,7 +610,8 @@ case "${orchestrate_run_in_flight_rc}" in
 	*) skip_dispatch guard_unavailable "lookup=workflow-runs:${APPLY_ANALYSIS_ORCHESTRATE_WORKFLOW_FILE}" ;;
 esac
 
-if ! compgen -G "${APPLY_ANALYSIS_DOC_GLOB}" >/dev/null; then
+if ! compgen -G "${APPLY_ANALYSIS_DOC_GLOB}" >/dev/null \
+	&& { [ -z "${APPLY_ANALYSIS_DOC_GLOB_EXTRA}" ] || ! compgen -G "${APPLY_ANALYSIS_DOC_GLOB_EXTRA}" >/dev/null; }; then
 	skip_dispatch no_docs "glob=${APPLY_ANALYSIS_DOC_GLOB}"
 fi
 
@@ -607,7 +676,7 @@ Apply analysis recommendations from ${selected_basename}
 
 These are analysis recommendation docs, NOT a pre-approved spec. Step 1, before planning any implementation issue: read the source doc in full and record a verdict for every finding against the current default branch: \`applied-candidate\` (still valid and safe), \`already-implemented\`, or \`rejected\` (with the reason). A finding is \`applied-candidate\` only when it is still correct, still applicable, and safe under the repository rules (security and correctness first; never rename or remove existing identifiers without an alias; MongoDB changes ship their /db/contracts update; no standalone manual scripts, wire work into existing automation; never use auto-close keywords against ai:orchestrator-tracking issues). Plan implementation issues only for \`applied-candidate\` findings. If no finding is \`applied-candidate\`, the project is a single PR that deletes the source doc and appends its verdict table to the processing report.
 
-Scope: process ONLY the single source doc referenced below. Do not read, modify, or delete any other file under analysis/. In the final PR of this project: delete the source doc and append an entry for it to ${APPLY_ANALYSIS_REPORT_PATH} (path, date, and a per-recommendation verdict: applied, already-implemented, or rejected with the reason). Never delete or modify analysis/last_collection_timestamp.txt or analysis/validation-selftest-status.json.
+Scope: process ONLY the single source doc referenced below. Do not read, modify, or delete any other file under analysis/. In the final PR of this project: delete the source doc and append an entry for it to ${APPLY_ANALYSIS_REPORT_PATH} (path, date, and a per-recommendation verdict: applied, already-implemented, or rejected with the reason). Never delete or modify analysis/last_collection_timestamp.txt, analysis/validation-selftest-status.json or analysis/issue_pr_audit_state.json.
 
 Source doc: ${selected_doc} (branch ${GITHUB_REF_NAME} at ${ref_sha})
 Source doc URL: ${doc_url}

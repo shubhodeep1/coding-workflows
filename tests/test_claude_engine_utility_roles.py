@@ -518,6 +518,8 @@ LOG_ANALYSIS_JOBS = {
 	"analyze-commit-notify": ("LOG_SUMMARY", "LOG_ANALYSIS"),
 	"deep-audit": ("LOG_AUDIT",),
 	"api-redundancy": ("LOG_ANALYSIS",),
+	# Daily issue/PR audit (#10153), gated to the 06:00 run and its dispatch.
+	"collect-logs": ("ISSUE_PR_AUDIT",),
 }
 
 
