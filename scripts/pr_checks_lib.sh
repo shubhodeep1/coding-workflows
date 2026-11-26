@@ -2201,9 +2201,16 @@ _pr_base_sync_marker_post()
 # approved head passed a full final CI run (ci_sync_quick.sh full-ci-green, one
 # runs read), the dispatch passes sync_quick=true; ci.yml's tests-sync-quick
 # re-checks both conditions.
+# Delta (merge-lease short critical section, Phase 2, D1): when the classifier
+# says `other`, MERGE_BASE_SYNC_DELTA_CI_ENABLED (default true; true/1/yes/on)
+# is on, `ci_sync_quick.sh delta-supported` prints delta_supported and the
+# approved head passed a full final CI run (the same full-ci-green read), the
+# dispatch also passes sync_quick=true (reason delta_overlap); tests-sync-quick
+# then runs the delta suite. A failed check logs overlap_other or
+# approved_head_not_full_green and dispatches the full suite.
 # API budget (§15): the merge-ref reads above, at most one runs read for the
-# sync-quick check, then _pr_ensure_final_ci's own runs read, PR-files read and
-# dispatch. Always returns 0.
+# sync-quick check (wiring or delta arm, never both), then _pr_ensure_final_ci's
+# own runs read, PR-files read and dispatch. Always returns 0.
 # Log: `MERGE_BASE_SYNC_FINAL_CI pr=<n> head=<sha> outcome=<word> reason=<token> sync_quick=true|false`.
 _pr_base_sync_dispatch_final_ci()
 {
@@ -2211,6 +2218,7 @@ _pr_base_sync_dispatch_final_ci()
 	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
 	local sync_ci_attempts="${MERGE_BASE_SYNC_MERGE_REF_POLL_ATTEMPTS:-3}" sync_ci_sleep="${MERGE_BASE_SYNC_HEAD_POLL_SECONDS:-3}"
 	local sync_ci_i sync_ci_pull sync_ci_pull_head sync_ci_quick="false" sync_ci_verdict="" sync_ci_classifier sync_ci_reason="full_suite"
+	local sync_ci_delta_switch sync_ci_delta_probe=""
 	sync_ci_log()
 	{
 		echo "MERGE_BASE_SYNC_FINAL_CI pr=${pr_number:-?} head=${sync_update_head:-?} outcome=$1 reason=$2 sync_quick=${sync_ci_quick}"
@@ -2269,6 +2277,21 @@ _pr_base_sync_dispatch_final_ci()
 				# reason= stays one token: the classifier's `other <path>` is logged as overlap_other.
 				if [ "${sync_ci_verdict}" != "ci_wiring_only" ]; then
 					sync_ci_reason="overlap_other"
+					sync_ci_delta_switch="$(printf '%s' "${MERGE_BASE_SYNC_DELTA_CI_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
+					case "${sync_ci_delta_switch}" in
+						true|1|yes|on)
+							# Probe first: an older ci_sync_quick.sh has no delta mode.
+							sync_ci_delta_probe="$(bash "${sync_ci_classifier}" delta-supported 2>/dev/null)" || sync_ci_delta_probe=""
+							if [ "${sync_ci_delta_probe}" = "delta_supported" ]; then
+								if bash "${sync_ci_classifier}" full-ci-green "${repo}" "${pr_number}" "${sync_from_head}" "${REVIEW_FINAL_CI_WORKFLOW:-}"; then
+									sync_ci_quick="true"
+									sync_ci_reason="delta_overlap"
+								else
+									sync_ci_reason="approved_head_not_full_green"
+								fi
+							fi
+							;;
+					esac
 				elif bash "${sync_ci_classifier}" full-ci-green "${repo}" "${pr_number}" "${sync_from_head}" "${REVIEW_FINAL_CI_WORKFLOW:-}"; then
 					sync_ci_quick="true"
 					sync_ci_reason="ci_wiring_only"
