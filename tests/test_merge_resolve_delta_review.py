@@ -301,9 +301,10 @@ def _git(cwd: Path, *args: str) -> str:
 	return subprocess.run(["git", "-C", str(cwd), *args], check=True, capture_output=True, text=True, env=env).stdout.strip()
 
 
-def _resolution_repo(tmp_path: Path, conflict: bool = True) -> tuple[Path, dict[str, str]]:
+def _resolution_repo(tmp_path: Path, conflict: bool = True, ours: bool = False) -> tuple[Path, dict[str, str]]:
 	"""A clone whose topic branch is an [ai-merge-resolve] merge of the
-	approved head (`from`) with main (`base`)."""
+	approved head (`from`) with main (`base`). `ours` resolves the conflict
+	by keeping `from`'s content and dropping the base change."""
 	origin = tmp_path / "origin.git"
 	work = tmp_path / "work"
 	_git(tmp_path, "init", "-q", "--bare", "-b", "main", str(origin))
@@ -338,8 +339,11 @@ def _resolution_repo(tmp_path: Path, conflict: bool = True) -> tuple[Path, dict[
 	assert (work / ".git" / "MERGE_HEAD").exists(), merged.stdout + merged.stderr
 	if conflict:
 		assert merged.returncode != 0 and "CONFLICT" in merged.stdout, "the fixture must conflict"
-		(work / "conf.txt").write_text("resolved\n", encoding="utf-8")
-		(work / "other.txt").write_text("other\nextra resolver edit\n", encoding="utf-8")
+		if ours:
+			(work / "conf.txt").write_text("topic\n", encoding="utf-8")
+		else:
+			(work / "conf.txt").write_text("resolved\n", encoding="utf-8")
+			(work / "other.txt").write_text("other\nextra resolver edit\n", encoding="utf-8")
 		_git(work, "add", "-A")
 	_git(work, "commit", "-q", "-m", "[ai-merge-resolve] resolve merge conflicts with main")
 	head = _git(work, "rev-parse", "HEAD")
@@ -663,40 +667,66 @@ review_head_gate_merge_resolve()
 '''
 
 
-def _run_carry(tmp_path: Path, switch: str | None = None, mr_ok: str = "yes", from_status: str = "clean") -> tuple[subprocess.CompletedProcess[str], list[str]]:
+def _run_carry(tmp_path: Path, switch: str | None = None, mr_ok: str = "yes", from_status: str = "clean",
+		work: Path | None = None, shas: dict[str, str] | None = None) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+	from_sha = shas["from"] if shas else FROM
+	head_sha = shas["head"] if shas else HEAD
 	support = tmp_path / "carry_support"
 	support.mkdir()
 	(support / "gh_helpers.sh").write_text("gh_retry() { \"$@\"; }\n", encoding="utf-8")
 	(support / "review_head_gate.sh").write_text(STUB_HEAD_GATE, encoding="utf-8")
 	comments = tmp_path / "carry_comments.json"
-	comments.write_text(json.dumps([{"user": {"login": LOGIN}, "body": _marker()}]), encoding="utf-8")
+	comments.write_text(json.dumps([{"user": {"login": LOGIN}, "body": _marker(from_sha, head_sha)}]), encoding="utf-8")
 	calls = tmp_path / "carry_calls.txt"
 	env = {k: v for k, v in os.environ.items() if k not in ("BASH_ENV", "ENV")}
 	env.pop("MERGE_RESOLVE_DELTA_REVIEW_ENABLED", None)
 	env.update({
-		"SUPPORT_SCRIPTS_DIR": str(support), "STUB_CALLS": str(calls), "STUB_MR_OK": mr_ok, "STUB_MR_FROM": FROM,
+		"SUPPORT_SCRIPTS_DIR": str(support), "STUB_CALLS": str(calls), "STUB_MR_OK": mr_ok, "STUB_MR_FROM": from_sha,
 		"REPOSITORY": "o/r", "PR_NUMBER": "42", "SECURITY_PASS_AUTHOR_LOGIN": LOGIN,
 	})
 	if switch is not None:
 		env["MERGE_RESOLVE_DELTA_REVIEW_ENABLED"] = switch
-	markers = f"x\\tx\\t{from_status}\\t{FROM}"
+	markers = f"x\\tx\\t{from_status}\\t{from_sha}"
 	script = (
 		f'source "{SECURITY_PASS}"\n'
-		f'single_pass_base_sync_carry "{comments}" "{HEAD}" main topic "$(printf "{markers}")" || true\n'
+		f'single_pass_base_sync_carry "{comments}" "{head_sha}" main topic "$(printf "{markers}")" || true\n'
 		'echo "since=${single_pass_remerge_since:-} reason=${single_pass_carry_skip_reason:-}"\n'
 	)
-	proc = subprocess.run(["bash", "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
+	for key in [k for k in env if k.startswith("GIT_")]:
+		env.pop(key)
+	env.update({"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"})
+	proc = subprocess.run(["bash", "-c", script], cwd=work or tmp_path, env=env, capture_output=True, text=True, check=False)
 	return proc, (calls.read_text(encoding="utf-8").splitlines() if calls.exists() else [])
 
 
 def test_security_pass_carry_reaches_the_merge_resolve_branch(tmp_path: Path) -> None:
 	# Regression: the empty freshness fields once collapsed under read's
 	# default IFS, so a verified resolution head never reached this branch.
-	proc, calls = _run_carry(tmp_path)
+	work, shas = _resolution_repo(tmp_path)
+	proc, calls = _run_carry(tmp_path, work=work, shas=shas)
 	assert proc.returncode == 0, proc.stderr
 	assert calls == ["freshness_sync called", "merge_resolve called"]
-	assert f"outcome=merge_resolve_carry from={FROM}" in proc.stdout
-	assert proc.stdout.splitlines()[-1] == f"since={FROM} reason=merge_resolve_audit"
+	assert f"outcome=merge_resolve_carry from={shas['from']}" in proc.stdout
+	assert proc.stdout.splitlines()[-1] == f"since={shas['from']} reason=merge_resolve_audit"
+
+
+def test_security_pass_carry_take_ours_resolution_gets_the_full_audit(tmp_path: Path) -> None:
+	# The resolution keeps `from`'s conf.txt and drops the base change: the file
+	# is in the remerge diff but not in from..head, so the delta audit would
+	# never see it. The carry must fail closed to the full audit.
+	work, shas = _resolution_repo(tmp_path, ours=True)
+	proc, _ = _run_carry(tmp_path, work=work, shas=shas)
+	assert proc.returncode == 0, proc.stderr
+	assert f"outcome=merge_resolve_scope_uncovered from={shas['from']}" in proc.stdout
+	assert "merge_resolve_carry" not in proc.stdout
+	assert proc.stdout.splitlines()[-1] == "since= reason=freshness_unverified"
+
+
+def test_security_pass_carry_without_git_objects_gets_the_full_audit(tmp_path: Path) -> None:
+	proc, _ = _run_carry(tmp_path)
+	assert proc.returncode == 0, proc.stderr
+	assert "outcome=merge_resolve_scope_uncovered" in proc.stdout
+	assert proc.stdout.splitlines()[-1] == "since= reason=freshness_unverified"
 
 
 @pytest.mark.parametrize("switch", ["false", "FALSE", "off", "0", "maybe"])

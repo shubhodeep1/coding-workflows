@@ -799,7 +799,7 @@ single_pass_carry_skip()
 single_pass_base_sync_carry()
 {
 	local comments_file="$1" head_sha="$2" base_ref="$3" head_ref="$4" markers_tsv="$5"
-	local carry_dir carry_tmp carry_result carry_rc carry_from carry_base_parent carry_sha carry_mb carry_from_status carry_mr_rc carry_mr_from
+	local carry_dir carry_tmp carry_result carry_rc carry_from carry_base_parent carry_sha carry_mb carry_from_status carry_mr_rc carry_mr_from carry_mr_remerge carry_mr_delta
 	local carry_pr_files carry_audited_files carry_patch_audited carry_patch_head
 	local -a carry_paths=()
 	single_pass_carry_from=""
@@ -865,6 +865,24 @@ single_pass_base_sync_carry()
 		# gets a delta audit since its audited first parent (D4), and the
 		# gate skips the freshness inheritance walk for it.
 		carry_from_status="$(printf '%s\n' "${markers_tsv}" | awk -F'\t' -v h="${carry_mr_from}" '$4 == h' | tail -n 1 | cut -f3)"
+		# The delta audit keeps only files changed in <from>..<head>. A file the
+		# resolution kept at <from>'s content (e.g. dropping a base change) is in
+		# the remerge diff but not in that range, so the carry is granted only
+		# when <from>..<head> covers every remerge-diff file. Any git failure
+		# (missing objects, no merge base, git < 2.36) falls through to the
+		# full audit (freshness_unverified).
+		if [ "${carry_from_status}" = "clean" ] && ! git cat-file -e "${head_sha}^{commit}" 2>/dev/null \
+			&& [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ] && git check-ref-format --branch "${head_ref}" >/dev/null 2>&1; then
+			git fetch --no-tags --unshallow origin "+refs/heads/${head_ref}:refs/remotes/origin/${head_ref}" >/dev/null 2>&1 || true
+		fi
+		if [ "${carry_from_status}" = "clean" ] && { [ "$(git rev-parse --verify -q "${head_sha}^1" 2>/dev/null)" != "${carry_mr_from}" ] \
+			|| ! git merge-base "${head_sha}^1" "${head_sha}^2" >/dev/null 2>&1 \
+			|| ! carry_mr_remerge="$(git show --remerge-diff --no-ext-diff --format= --name-only "${head_sha}" 2>/dev/null)" \
+			|| ! carry_mr_delta="$(git diff --no-ext-diff --name-only "${carry_mr_from}..${head_sha}" -- 2>/dev/null)" \
+			|| [ -n "$(LC_ALL=C comm -23 <(printf '%s\n' "${carry_mr_remerge}" | sed '/^$/d' | LC_ALL=C sort -u) <(printf '%s\n' "${carry_mr_delta}" | sed '/^$/d' | LC_ALL=C sort -u))" ]; }; then
+			single_pass_log "mode=gate pr=${PR_NUMBER:-} head=${head_sha} outcome=merge_resolve_scope_uncovered from=${carry_mr_from}"
+			carry_from_status="scope_uncovered"
+		fi
 		if [ "${carry_from_status}" = "clean" ]; then
 			rm -rf "${carry_tmp}"
 			single_pass_remerge_since="${carry_mr_from}"
@@ -1354,9 +1372,10 @@ No completed audit exists for \`${head_sha}\`. Auto-merge stays off. A new push 
 		# Resolution-only review (merge-lease plan Phase 3, D4): a verified
 		# resolution head is audited as a delta since its clean first parent.
 		# security_audit.sh keeps only PR-range files (merge-base..head) that
-		# also changed in <from>..<head>, so base-only files drop out and the
-		# scope covers every file the remerge diff touches (a fail-safe
-		# superset: a PR file the base changed cleanly is audited too).
+		# also changed in <from>..<head>. single_pass_base_sync_carry grants
+		# this only when <from>..<head> contains every file of the head's
+		# remerge diff, so the audited scope covers the resolution (plus any
+		# PR file the base changed cleanly); otherwise the head is audited in full.
 		# The audit job re-derives the source from the trusted markers and
 		# runs a full audit when it is not that head (input_mismatch).
 		if [[ "${single_pass_remerge_since:-}" =~ ^[0-9a-f]{40}$ ]]; then
