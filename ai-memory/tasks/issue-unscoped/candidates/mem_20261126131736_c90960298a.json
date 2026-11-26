@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  expected_change_site: .github/workflows/ci.yml, where `tests-heal-plan-and-validation` (line 1850) would give steps to another job\n  confidence=[2]\n  flagged_by: [anthropic_claude-sonnet-5_5, z-ai_glm-5_3-flash]\n  EVIDENCE: The PR diff adds no step move and changes only comment lines at ci.yml:1855-1860, `Merge probe unit tests` is already at ci.yml:1625 inside `tests-hooks-and-orchestrator`, the note at ci.yml:2065 and `changelog.d/9420-ci-heal-job-steps-to-hooks-job.md` record the earlier move (#9420), no step timings for run 44214045174 exist in the repository, and `timeout-minutes: 20` is unchanged. Both reviewers rated it NIT and treated it as an accepted, evidence-limited deferral.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  Expected change site: .github/workflows/ci.yml, where `tests-heal-plan-and-validation` (line 1850) would give steps to another job.\n  Evidence of absence: The PR diff adds no step move. It adds only a whole-line comment block at ci.yml:1855-1860. `Merge probe unit tests` is at ci.yml:1625, inside `tests-hooks-and-orchestrator` (lines 885-1849). The note at ci.yml:2065 records the move as #9420. `timeout-minutes: 20` is unchanged and no job was added or renamed. The repository has no step timings for run 44214045174, so choosing further steps to move would be a guess. The reviewer called this an accepted, evidence-limited deferral, not an unmet deliverable.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, where `tests-heal-plan-and-validation` (job begins ci.yml:1850) would give steps to another job.\n  Evidence of absence: The PR diff adds no step move and changes only comment lines at ci.yml:1855-1860. The move is already in the base tree: `Merge probe unit tests` is at ci.yml:1625 inside `tests-hooks-and-orchestrator`, and `changelog.d/9420-ci-heal-job-steps-to-hooks-job.md` records the six-step move (#9420, re-issued as #9684, PR #9702). No step timings for run 44214045174 exist in the repository to drive a further move. The linked issue's accepted outcome asks for a comment-only resolution with a check-step-timings guard, which ci.yml:1859-1860 now delivers. The reviewer deferred it as an accepted residual.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4f4e6aeda26964ca66ed7d05479c41023c8772047d2e97ce4b40188381d1719d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10074,
+    "run_id": "45821151897",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45821151897",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126131736_c90960298a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10074,
+    "run_id": "45821151897"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T13:17:36Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
