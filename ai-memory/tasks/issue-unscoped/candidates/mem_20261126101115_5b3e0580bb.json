@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:4208 | severity=high | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The moved step `Regression tests wired by the CI wiring guard (part 2)` is guarded by `if: strategy.job-index == 3` inside `orchestrate-poll`, but the matrix configuration is not visible or verifiable in the diff.\n  WHY: If the matrix has no index 3, the step is silently skipped and the regression tests never run. Severity was reported as MAJOR. Other reviewers verified the matrix is `poll-group: [0, 1, 2, 3, 4]`, so the guard is valid.\n- tests/test_ci_poll_test_sharding.py:1148-1162 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The `GROUP_PINNED_STEPS` constants are updated by hand, and the reviewer saw no runtime assertion that the `if: strategy.job-index == ...` guard matches the group in the constant.\n  WHY: If the constant drifts from the CI YAML, tests could pass while CI skips or misplaces steps. Severity was reported as MAJOR. Other reviewers found that `PollGroupPinnedStepsTest` and `test_each_step_is_guarded_to_its_group` already assert this.\n- tests/test_ci_poll_test_sharding.py:5056-5066, 5105-5116 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: `test_each_step_has_no_matrix_guard` and `test_no_target_is_the_source_job` have names that contradict what their assertions now check.\n  WHY: Readers who trust the names may write the opposite test later. Reviewers rated it NIT, and the assertions pass today.\n- tests/test_ci_poll_test_sharding.py:4769-4784 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: `WIRING_PART2_JOB_ID` is reassigned to `POLL_JOB_ID`, but its name and comments do not make clear that it now points to the poll job rather than the release job.\n  WHY: This is a maintenance hazard, because a later change may assume it still names the release job. Reviewers rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Move the slowest steps of CI job `tests-release-and-log-analysis` to the job with the most headroom, unchanged, keeping job and step names.\n  expected_change_site: .github/workflows/ci.yml\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The steps were moved and names kept, but the comments in `.github/workflows/ci.yml` explaining the history are redundant, interleaved with outdated comments, and potentially misleading. Rated NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:4208 | severity=high | confidence=3\n  PROBLEM: The moved step `Regression tests wired by the CI wiring guard (part 2)` is guarded by `if: strategy.job-index == 3` inside `orchestrate-poll`, but the matrix configuration is not visible or verifiable in the diff.\n  WHY: If the matrix has no index 3, the step is silently skipped and the regression tests never run.\n- tests/test_ci_poll_test_sharding.py:1148-1162 | severity=high | confidence=4\n  PROBLEM: The `GROUP_PINNED_STEPS` constants are updated by hand, and no runtime assertion in the CI job verifies that the `if: strategy.job-index == ...` guard matches the group in the constant.\n  WHY: If the constant drifts from the CI YAML, tests may pass while CI executes incorrect steps or skips them.\n- tests/test_ci_poll_test_sharding.py:5056-5066, 5105-5116 | severity=low | confidence=4\n  PROBLEM: The names of `test_each_step_has_no_matrix_guard` and `test_no_target_is_the_source_job` are misleading after the move.\n  WHY: The tests pass, but the names imply assertions that the implemented logic now contradicts.\n- tests/test_ci_poll_test_sharding.py:4769-4784 | severity=low | confidence=3\n  PROBLEM: `WIRING_PART2_JOB_ID` is reassigned to `POLL_JOB_ID`, but its name and surrounding comments do not reflect that it now points to the poll job.\n  WHY: This is a maintenance and documentation hazard for future readers.\n- TASK_GAP:\n  Requirement: Move the slowest steps of CI job `tests-release-and-log-analysis` to the CI job with the most headroom, unchanged, keeping job and step names.\n  Expected change site: .github/workflows/ci.yml\n  Evidence of absence: The steps were moved and names kept, but the comments explaining the history are redundant, interleaved with outdated comments, and potentially misleading about the new job locations.\n  severity=low | confidence=3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_ci_poll_test_sharding.py:5058, 5107 | severity=low | confidence=3\n  PROBLEM: After the move, both `test_each_step_has_no_matrix_guard` and `test_no_target_is_the_source_job` assert the inverse of what their names advertise.\n  WHY: It does not fail at runtime, but a future reader who trusts the method name may write the opposite test and silently drop the coverage that #10162 added.\n- tests/test_ci_poll_test_sharding.py:4774-4784 | severity=low | confidence=3\n  PROBLEM: `WIRING_PART2_JOB_ID` was reassigned from the literal `\"tests-release-and-log-analysis\"` to `POLL_JOB_ID`, and no comment records that the constant now names the poll job.\n  WHY: A downstream change that re-uses it expecting the release job will silently target the poll matrix.\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: .github/workflows/ci.yml and tests/test_ci_poll_test_sharding.py\n  Evidence of absence: The reviewer found all deliverables present, so this is not a real gap.\n  severity=low | confidence=2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_ci_poll_test_sharding.py:5056-5066, 5107-5113 | severity=low | confidence=4\n  PROBLEM: After the #10162 move, `test_each_step_has_no_matrix_guard` and `test_no_target_is_the_source_job` have names that contradict their assertions. The first now asserts a guard exists, and the second asserts the target job is the source job.\n  WHY: No runtime failure, but a reader scanning method names will conclude the opposite of the pinned state, which is a maintainability defect.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "337120f6448f41df978b7681b0f4a3bfb3e386d229469a6c1d368e1beb53d4bf",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10164,
+    "run_id": "45792103934",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45792103934",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126101115_5b3e0580bb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10164,
+    "run_id": "45792103934"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 5 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T10:11:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
