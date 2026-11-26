@@ -559,7 +559,7 @@ jobs:
         # set by "Resolve audit target" from the event payload's repository
         # object, with one repository read only as a fail-closed fallback.
         if: failure() && env.SECURITY_AUDIT_REPO_PRIVATE == 'true'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: security-audit-claude-rejected-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/security-audit-claude-rejected.txt
