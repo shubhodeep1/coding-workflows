@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Read the run's jobs once \u2026 through gh_retry.\" / \"otherwise read the run's jobs once (GET repos/<repo>/actions/runs/<run_id>/jobs?per_page=100&filter=latest, through gh_retry)\"\n  expected_change_site: scripts/ci_cancelled_rerun.py, list_run_jobs and the jobs read in classify_cancelled_run\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  EVIDENCE: list_run_jobs invokes gh api directly through subprocess.run at lines 512-515, classify_cancelled_run uses a local single retry after 2 s at lines 747-756 instead of gh_retry, sonnet notes the deviation was documented and accepted in earlier rounds (gh_retry is a bash helper the Python classifier cannot call; its 600 s rate-limit wait does not fit `timeout 90` in scripts/ci_final_status.sh) and only the PR description lacks the rationale; both rate it SEVERITY: NIT\n- requirement: \"GET repos/<repo>/actions/runs/<run_id>/jobs?per_page=100&filter=latest.\"\n  expected_change_site: scripts/ci_cancelled_rerun.py, list_run_jobs endpoint\n  confidence=5\n  flagged_by: [openai_gpt-6-luna, anthropic_claude-sonnet-5_5]\n  EVIDENCE: lines 512-515 request /actions/runs/{run_id}/attempts/{attempt}/jobs with per_page=100; the specified /jobs endpoint and filter=latest are absent, sonnet notes the attempt-scoped endpoint is deliberate so the classifier reads the jobs of the run's own GITHUB_RUN_ATTEMPT, and the issue's fail-closed requirement is met; both rate it SEVERITY: NIT\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"otherwise read the run's jobs once (GET repos/<repo>/actions/runs/<run_id>/jobs?per_page=100&filter=latest, through gh_retry)\"\n  Expected change site: scripts/ci_cancelled_rerun.py, list_run_jobs (jobs endpoint) and the jobs read in classify_cancelled_run\n  Evidence of absence: list_run_jobs calls `gh api` directly through subprocess.run on repos/{repo}/actions/runs/{run_id}/attempts/{attempt}/jobs, without filter=latest and without gh_retry; classify_cancelled_run uses its own single retry after 2 s. Deviation documented and accepted in earlier rounds; the new comment above the retry explains it (gh_retry is a bash helper; its 600 s rate-limit wait does not fit `timeout 90` in scripts/ci_final_status.sh). Attempt-scoped endpoint is deliberate. Fail-closed requirement met. Only open item: the PR description does not say why the issue's wording was not followed. No code change needed.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Read the run's jobs once \u2026 through gh_retry.\"\n  Expected change site: scripts/ci_cancelled_rerun.py, list_run_jobs and the cancelled-run classifier's jobs-read path.\n  Evidence of absence: list_run_jobs invokes gh api directly through subprocess.run at lines 512-515. The classifier uses a local retry at lines 747-756; it does not route the request through gh_retry.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"GET repos/<repo>/actions/runs/<run_id>/jobs?per_page=100&filter=latest.\"\n  Expected change site: scripts/ci_cancelled_rerun.py, list_run_jobs endpoint.\n  Evidence of absence: lines 512-515 request /actions/runs/{run_id}/attempts/{attempt}/jobs with per_page=100; the specified /jobs endpoint and filter=latest are absent.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bf4890463146df49a91ba8c7439bd19cf59b28a6d026ea918de055f557cc17bb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10135,
+    "run_id": "45898344761",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45898344761",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126222404_af81651987",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10135,
+    "run_id": "45898344761"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T22:24:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
