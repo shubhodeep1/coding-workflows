@@ -5,13 +5,30 @@
   "entry_id": "processed_command_10170_7198051073_approved",
   "issue_number": 10170,
   "metadata": {
+    "branch": "ai/issue-10170",
+    "changed_files": [
+      "README.md",
+      "agents.d/10170-stage-switch-discovery.md",
+      "agents.d/9994-stage-switch-watch.md",
+      "changelog.d/10170-stage-switch-discovery.md",
+      "scripts/stage_switch_watch.py",
+      "scripts/stage_switch_watch.sh",
+      "scripts/stage_switches.json",
+      "tests/test_stage_switch_registry.py",
+      "tests/test_stage_switch_watch.py"
+    ],
+    "issue_number": 10170,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/10170",
+    "pr_number": 10171,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/10171",
+    "run_attempt": "1",
+    "run_id": "45861651074",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/45861651074"
   },
   "run_attempt": 1,
   "run_id": "45861651074",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-26T16:48:48Z",
+  "status": "completed",
+  "timestamp": "2026-11-26T17:18:08Z",
   "workflow": "implement"
 }
