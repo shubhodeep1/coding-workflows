@@ -193,8 +193,11 @@ def test_registry_entries_are_well_formed():
 	assert isinstance(data["off_on_purpose"], list)
 	discovered = set(ssw.discover_switches(ROOT))
 	for marker in data["off_on_purpose"]:
-		assert marker["name"] in discovered or (
-			marker.get("pending") is True and str(marker["name"]).endswith("_ENABLED")
+		# Check the type before the set lookup, as _undiscovered_without_pending
+		# does, so a missing or unhashable name fails with the marker shown.
+		marker_name = marker.get("name")
+		assert (isinstance(marker_name, str) and marker_name in discovered) or (
+			marker.get("pending") is True and str(marker_name).endswith("_ENABLED")
 		), marker
 		if "pending" in marker:
 			assert isinstance(marker["pending"], bool), marker
