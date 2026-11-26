@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Check, and fix whatever v0.171.0 changed: the `config.toml` that `scripts/write_codex_config.sh` writes, and the `codex exec` flags and `-c` keys pipelines pass (..., `include_apply_patch_tool`, ...).\"\n  expected_change_site: `scripts/write_codex_config.sh:247-262` (and the Codex invocation call sites, with corresponding coverage in `tests/test_write_codex_config.py`)\n  confidence=4\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The PR did not touch `scripts/write_codex_config.sh` and has no diff hunks for these sites, the writer still emits `include_apply_patch_tool = true` unconditionally at line 262, the inline comments at lines 247-254 and 256-261 still describe the key as the active mitigation / forcing the tool, invocation sites still pass `-c include_apply_patch_tool=true` or `false`, and the PR's own agents.d fragment and agents.md lessons (lines 3216 and 5486/5487) say v0.171.0 ignores the key with a warning; both reviewers rated it SEVERITY: NIT, and minimax_minimax-m3 notes the runtime is safe and that keeping the emission preserves backward compatibility for older pins\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Check, and fix whatever v0.171.0 changed: the `config.toml` that `scripts/write_codex_config.sh` writes, and the `codex exec` flags and `-c` keys pipelines pass (..., `include_apply_patch_tool`, ...).\"\n  Expected change site: `scripts/write_codex_config.sh:247-262`\n  Evidence of absence: The PR did not touch `scripts/write_codex_config.sh`. The writer still emits `include_apply_patch_tool = true` unconditionally at line 262, and the inline comments at lines 247-254 (`# The workaround now relies on include_apply_patch_tool = true below as the primary belt-and-suspenders against codex#11151`) and 256-261 (`# Forces the apply_patch tool surface to be wired even when the catalog apply_patch_tool_type resolution path falls back. Belt-and-suspenders against the upstream codex#11151 announce-without-emit failure mode`) still describe the key as the active mitigation, but on v0.171.0 that key is ignored with a warning (per the PR's own agents.d fragment and agents.md lessons, lines 3216 and 5486/5487). Runtime is safe (warns and continues on v0.171.0; key still works on older pins, so keeping it preserves backward compatibility), but the inline comments contradict the rewritten lessons.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Check, and fix whatever v0.171.0 changed\" in the generated `config.toml` and the `codex exec` flags and `-c` keys, including `include_apply_patch_tool`.\n  Expected change site: `scripts/write_codex_config.sh` and the Codex invocation call sites, with corresponding coverage in `tests/test_write_codex_config.py`.\n  Evidence of absence: The PR has no diff hunks for these sites. `scripts/write_codex_config.sh` still emits `include_apply_patch_tool = true` at line 262 and describes it as forcing the tool at lines 256\u2013261; invocation sites still pass `-c include_apply_patch_tool=true` or `false`. The PR's documentation says v0.171.0 ignores this setting with a warning, so the configuration compatibility change remains unaddressed.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "dc69ddb6bc01d8e383c20c465435437f2faa4c8592317c98623ae0651a4a26b9",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10132,
+    "run_id": "45723893563",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45723893563",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126005734_ed8086fbe3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10132,
+    "run_id": "45723893563"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T00:57:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
