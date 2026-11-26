@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/plan_autopilot.py:985-1044 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: completed_blobs_at_head() runs `git ls-tree HEAD -- docs/completed/` without recursive listing and then keeps only `100644 blob` entries that match `docs/completed/*.md`, so the returned map is empty.\n  WHY: When the auditor removes a live plan whose identical copy already exists under `docs/completed/`, check_diff() cannot find that copy's blob at HEAD and raises `diff_outside_allowlist` at line 994; the repo's live `docs/plans/integration-sync-resolver-self-heal-plan.md` and its same-suffix completed copy make this reachable (source severity MAJOR, mapped to high; the other reviewers who traced this path reported no finding).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Save the cache marker for `plan_autopilot_key`, only when the audit finished, whatever its outcome.\"\n  expected_change_site: `scripts/plan_autopilot.py:run_gate()` and `run_report()`; `.github/workflows/orchestrate_poll.yml` marker-save steps.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: `run_gate()` sets `save_marker=True` for gate skips including `project_open`, `maintenance_pr_open`, and `dispatch_pending` (lines 419\u2013432), `run_report()` propagates that value even when no audit ran (line 1643), and the workflow saves the cache marker when that output is true (lines 2768\u20132778); if a skip condition clears later that same UTC day without changing the default-branch SHA, the cache hit suppresses another audit until the next date or commit (source severity NIT).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/plan_autopilot.py:completed_blobs_at_head(), lines 1034\u20131044; check_diff(), lines 985\u2013994 | severity=MAJOR | confidence=5\n  PROBLEM: completed_blobs_at_head() runs `git ls-tree HEAD -- docs/completed/` without recursive listing and then records only `100644 blob` entries matching `docs/completed/*.md`; the command lists the directory tree, not the Markdown blobs inside it, so the returned map is empty.\n  WHY: When the auditor follows the new prompt rule and removes a live plan whose identical copy already exists under `docs/completed/`, check_diff() cannot find that copy's blob at HEAD and raises `diff_outside_allowlist` at line 994; this repository has a live `docs/plans/integration-sync-resolver-self-heal-plan.md` and a completed plan with the same path suffix, so this case is reachable.\n- TASK_GAP\n  Requirement: \"Save the cache marker for `plan_autopilot_key`, only when the audit finished, whatever its outcome.\"\n  Expected change site: `scripts/plan_autopilot.py:run_gate()` and `run_report()`; `.github/workflows/orchestrate_poll.yml` marker-save steps.\n  Evidence of absence: `run_gate()` sets `save_marker=True` for gate skips including `project_open`, `maintenance_pr_open`, and `dispatch_pending` (lines 419\u2013432). `run_report()` propagates that value even when no audit ran (line 1643), and the workflow saves the cache marker when that output is true (lines 2768\u20132778). If a skip condition clears later that same UTC day without changing the default-branch SHA, the cache hit suppresses another audit until the next date or commit.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c73be103abe10ca8c06197568f9e29db22e2146e7c32498e9cafad5de89d4fb1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10133,
+    "run_id": "45800622070",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45800622070",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126111127_4c25166639",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10133,
+    "run_id": "45800622070"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-26T11:11:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
