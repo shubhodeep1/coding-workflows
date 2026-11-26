@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:25385-25390, 25432-25435, 25511-25518 | severity=high | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The review-run hold checks only `effective_action`. With the default `ENABLE_STALL_HUMAN_TERMINALIZATION=false`, `escalate_human` is normalized to the prior non-human action (`retrigger_implement` for `ai:implementing` at recovery count 2) before the check.\n  WHY: While a review run is waiting, `_sj_review_runner_hold` stays false and `retrigger_implement` starts another implementation instead of holding. The new tests set human terminalization to true (tests/test_orchestrate_poll_process.py:35966), so they miss the default path. The source labelled severity MAJOR, mapped here to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:25385-25390, 25432-25435, 25511-25518 | severity=high (source: MAJOR) | confidence=5\n  PROBLEM: The review-run hold checks only `effective_action`. With the default `ENABLE_STALL_HUMAN_TERMINALIZATION=false` (line 3890), `escalate_human` is normalized to the prior non-human action before this check. For `ai:implementing` at recovery count 2, that action is `retrigger_implement`.\n  WHY: When a review run is waiting, `_sj_review_runner_hold` remains false and the dispatch case runs `retrigger_implement`, starting another implementation instead of holding. The new tests set human terminalization to true (tests/test_orchestrate_poll_process.py:35966), so they do not cover the default path.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c2badc95f52fa0b3792f8f8eb4b783c42971511b8ebb8cd80c25dbb3d5a24309",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10152,
+    "run_id": "45815998666",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45815998666",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126135928_07530dcd5e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10152,
+    "run_id": "45815998666"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-26T13:59:28Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
