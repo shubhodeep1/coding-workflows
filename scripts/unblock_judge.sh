@@ -820,6 +820,9 @@ unblock_triage_superseded_note()
 					"${RUNTIME_DIR}/item_comments.json" >/dev/null 2>&1; then
 				local triage_close_fp triage_close_round triage_close_marker
 				echo '[]' > "${RUNTIME_DIR}/failing_checks.json"
+				# Issue #10149: this park runs before unblock_linked_open_pr, so a
+				# linked_pr.json left in RUNTIME_DIR must not reach this evidence.
+				echo '{}' > "${RUNTIME_DIR}/linked_pr.json"
 				unblock_evidence > "${RUNTIME_DIR}/triage_superseded_evidence.json" 2>/dev/null \
 					|| echo '{"reason": "unreadable"}' > "${RUNTIME_DIR}/triage_superseded_evidence.json"
 				triage_close_fp="$(unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" fingerprint --stop "${ITEM_STOP}" --evidence-file "${RUNTIME_DIR}/triage_superseded_evidence.json" 2>/dev/null | jq -r '.fingerprint // empty' 2>/dev/null || true)"

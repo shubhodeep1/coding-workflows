@@ -24857,6 +24857,8 @@ invoke_stall_judge() {
   # _direct_inflight_review_run_on_branch returns a single run id, drops
   # completed runs and runs on another code path, so neither covers this.
   # One `gh run list` per judge invocation; fails open to the cached outcomes.
+  # --limit 100 (one API page) is applied before the review-name filter, so
+  # newer CI runs on a busy branch cannot push a queued review out of view.
   local _sj_review_waiting_for_runner="false" _sj_review_waiting_run="" _sj_live_outcome="disabled" _sj_live_runs_total=0
   local _sj_live_enabled="${STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED:-true}"
   _sj_live_enabled="$(printf '%s' "${_sj_live_enabled}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
@@ -24871,7 +24873,7 @@ invoke_stall_judge() {
       local _sj_live_runs_json="" _sj_live_rc=0
       _sj_live_runs_json="$(gh_retry gh run list --repo "${GITHUB_REPOSITORY}" \
         --branch "${head_ref}" \
-        --limit 20 \
+        --limit 100 \
         --json databaseId,status,conclusion,name,workflowName,headSha,headBranch,createdAt,startedAt \
         2>/dev/null)" || _sj_live_rc=$?
       if [ "${_sj_live_rc}" -ne 0 ] || [ -z "${_sj_live_runs_json}" ] \
@@ -25217,7 +25219,11 @@ invoke_stall_judge() {
   # Threshold reuses MAX_JUDGE_REPLAY for parity with the input-hash cap.
   local _judge_escalate_streak=0
   if [ "${_judge_state_file_ready}" = "true" ]; then
-    if [ "${judge_action}" = "escalate_human" ] && [ "${STALL_ACTIVE_SET_UNVERIFIABLE:-false}" = "true" ]; then
+    if [ "${judge_action}" = "escalate_human" ] \
+      && { [ "${STALL_ACTIVE_SET_UNVERIFIABLE:-false}" = "true" ] || [ "${_sj_review_waiting_for_runner}" = "true" ]; }; then
+      # Issue #10149: a tick on which a review of the linked PR's head waits
+      # for a runner is treated the same way (computed, not stored), so held
+      # ticks do not push the streak toward MAX_JUDGE_REPLAY.
       # Active set unverifiable this tick: compute the streak this verdict
       # would reach so the MAX_JUDGE_REPLAY backstop still yields
       # effective_action=escalate_human (then held by
@@ -25325,7 +25331,12 @@ invoke_stall_judge() {
     _judge_effective_label="${effective_action} (held: active_set_unverifiable)"
   fi
   if [ "${_sj_review_runner_hold}" = "true" ]; then
-    _judge_effective_label="${effective_action} (held: review_waiting_for_runner)"
+    if [ "${_judge_effective_label}" != "${effective_action}" ]; then
+      # Both holds apply: name both reasons.
+      _judge_effective_label="${_judge_effective_label%)}, review_waiting_for_runner)"
+    else
+      _judge_effective_label="${effective_action} (held: review_waiting_for_runner)"
+    fi
   fi
 
   local judge_comment
