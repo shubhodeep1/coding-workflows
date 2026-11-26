@@ -159,6 +159,21 @@ def test_gate_fresh_maintenance_pr_is_not_flagged(tmp_path: Path, monkeypatch: p
 	assert out["reason"] == "maintenance_pr_open" and out["stale_pr"] == ""
 
 
+def test_gate_ignores_fork_and_misnamed_maintenance_branches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	prs = [
+		# A fork PR picks the branch name freely: never the maintenance PR.
+		{"number": 20, "head": {"ref": "ai/plan-autopilot-20261120-abcdef0", "repo": {"full_name": "evil/r"}}, "created_at": "2026-11-20T00:00:00Z"},
+		# A deleted fork has a null head.repo.
+		{"number": 21, "head": {"ref": "ai/plan-autopilot-20261120-abcdef0", "repo": None}, "created_at": "2026-11-20T00:00:00Z"},
+		# Same repository, but not a name branch_name() produces.
+		{"number": 22, "head": {"ref": "ai/plan-autopilot-x", "repo": {"full_name": "o/r"}}, "created_at": "2026-11-20T00:00:00Z"},
+	]
+	monkeypatch.setattr(pa, "gh_api", FakeGh(_gate_routes(prs=prs)))
+	out = pa.run_gate("o/r", _workdir(tmp_path), 24, NOW)
+	assert out["proceed"] is True and out["stale_pr"] == ""
+	assert pa.MAINTENANCE_BRANCH_RE.fullmatch(pa.branch_name("20261125", "abcdef0" + "1" * 33))
+
+
 def test_gate_refuses_while_dispatch_pending(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 	monkeypatch.setattr(pa, "gh_api", FakeGh(_gate_routes(runs=[{"status": "completed"}, {"status": "queued"}])))
 	out = pa.run_gate("o/r", _workdir(tmp_path), 24, NOW)
@@ -177,7 +192,7 @@ def test_gate_no_plans_reads_only_the_status_issue(tmp_path: Path, monkeypatch: 
 def test_gate_flags_the_oldest_maintenance_pr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 	prs = [
 		_maintenance_pr(11, "ai/plan-autopilot-20261125-bbbbbbb", "2026-11-25T11:00:00Z"),
-		_maintenance_pr(9, "ai/plan-autopilot-20261120-aaaaaaa", "2026-11-20T00:00:00Z"),
+		_maintenance_pr(9, "ai/plan-autopilot-20261120-aaaaaaa-2", "2026-11-20T00:00:00Z"),
 	]
 	monkeypatch.setattr(pa, "gh_api", FakeGh(_gate_routes(prs=prs)))
 	assert pa.run_gate("o/r", _workdir(tmp_path), 24, NOW)["stale_pr"] == "9"
