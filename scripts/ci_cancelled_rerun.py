@@ -747,6 +747,11 @@ def classify_cancelled_run(repo: str, run_id: int, ignore_job_names: tuple[str, 
 		try:
 			jobs = list_run_jobs(repo, run_id, ignore_job_names, attempt=attempt)
 		except (ValueError, OSError, subprocess.TimeoutExpired):
+			# Issue #10131 asks for the jobs read "through gh_retry". gh_retry
+			# is a bash helper this Python classifier cannot call, and its
+			# rate-limit wait (GH_RETRY_RATE_LIMIT_MAX_WAIT_SECS, default 600 s)
+			# cannot fit the `timeout 90` in scripts/ci_final_status.sh, so the
+			# read gets one bounded retry here and then fails closed.
 			time.sleep(2)
 			jobs = list_run_jobs(repo, run_id, ignore_job_names, attempt=attempt)
 		if any(job["conclusion"] == "failure" or job["conclusion"] not in BENIGN_JOB_CONCLUSIONS for job in jobs):

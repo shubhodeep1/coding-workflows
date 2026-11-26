@@ -1368,6 +1368,18 @@ def test_cancelled_run_stops_annotation_reads_past_the_time_limit():
 	assert [call.args[1] for call in reads.call_args_list] == [1001]
 
 
+def test_cancelled_run_slow_jobs_read_leaves_no_annotation_reads():
+	# Worst case: the jobs reads used up the budget before the first
+	# annotation read, so none starts and the caller posts failure.
+	jobs = [cancelled_job("static-checks", 1, started=True)]
+	limit = HELPER.CLASSIFY_CANCELLED_READ_START_LIMIT_SECONDS
+	clock = mock.Mock(side_effect=[0.0, limit + 7.0])
+	with mock.patch.object(HELPER.time, "monotonic", clock):
+		verdict, reads = classify_cancelled(jobs, {1: [annotation(TIMEOUT)]})
+	assert verdict == "unverified"
+	reads.assert_not_called()
+
+
 def test_cancelled_run_unreadable_annotations_is_unverified():
 	jobs = [cancelled_job("static-checks", 1, started=True)]
 	verdict, _ = classify_cancelled(jobs, {1: ValueError("annotations_unreadable")})
