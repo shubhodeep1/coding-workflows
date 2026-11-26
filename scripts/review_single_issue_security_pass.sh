@@ -365,6 +365,7 @@ single_pass_dispatch_audit()
 	local err dispatch_class
 	while :; do
 		SINGLE_PASS_DISPATCH_ATTEMPTS=$((${SINGLE_PASS_DISPATCH_ATTEMPTS:-0} + 1))
+		# 2>&1 first captures stderr into err; >/dev/null then drops stdout. Do not reorder.
 		# gh-loop-ok: one dispatch, repeated only for a transient class within the bounded retry budget (0-5).
 		if err="$(gh "$@" 2>&1 >/dev/null)"; then
 			SINGLE_PASS_DISPATCH_ERROR=""
