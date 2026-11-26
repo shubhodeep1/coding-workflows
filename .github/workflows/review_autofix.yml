@@ -1355,6 +1355,10 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
           SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED || 'true' }}
+          # Issue #10176: fresh comments re-read before a security-pass dispatch, and
+          # no reuse of a marker cycle number (the script defaults both to true).
+          SECURITY_PASS_MARKER_REREAD_ENABLED: ${{ vars.SECURITY_PASS_MARKER_REREAD_ENABLED || 'true' }}
+          SECURITY_PASS_CYCLE_REUSE_GUARD_ENABLED: ${{ vars.SECURITY_PASS_CYCLE_REUSE_GUARD_ENABLED || 'true' }}
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS || '2' }}
           SECURITY_PASS_LOST_AUDIT_RETRIES: ${{ vars.SECURITY_PASS_LOST_AUDIT_RETRIES || '2' }}
@@ -4809,6 +4813,10 @@ jobs:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED || 'false' }}
           SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED || 'true' }}
+          # Issue #10176: fresh comments re-read before a security-pass dispatch, and
+          # no reuse of a marker cycle number (the script defaults both to true).
+          SECURITY_PASS_MARKER_REREAD_ENABLED: ${{ vars.SECURITY_PASS_MARKER_REREAD_ENABLED || 'true' }}
+          SECURITY_PASS_CYCLE_REUSE_GUARD_ENABLED: ${{ vars.SECURITY_PASS_CYCLE_REUSE_GUARD_ENABLED || 'true' }}
           MAX_SECURITY_PASS_CYCLES: ${{ vars.MAX_SECURITY_PASS_CYCLES || '5' }}
           SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS: ${{ vars.SECURITY_PASS_EXHAUSTED_HEAD_AUDIT_ATTEMPTS || '2' }}
           SECURITY_PASS_LOST_AUDIT_RETRIES: ${{ vars.SECURITY_PASS_LOST_AUDIT_RETRIES || '2' }}

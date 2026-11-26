@@ -327,6 +327,28 @@ def test_rate_limited_job_token_falls_back_without_caching(env):
 	assert "reason=job_token_rate_limited" in result.stderr
 
 
+def test_signed_post_fallback_logs_reason(env):
+	"""Issue #10176: every fallback to the caller's token says why, never a token."""
+	set_responses(env, [{"match": "--method POST", "token": JOB, "rc": 1, "stderr": "HTTP 403: You have exceeded a secondary rate limit"}])
+	result = run(env, f'gh api repos/{REPO}/issues/5/comments -f body=one')
+	assert result.returncode == 0, result.stderr
+	assert "AI_COMMENT_SIG outcome=fallback reason=job_token_rate_limited issue=5 status=403" in result.stderr
+
+	set_responses(env, [{"match": "--method POST", "token": JOB, "rc": 1, "stderr": "HTTP 403: Resource not accessible by integration"}])
+	result = run(env, f'gh api repos/{REPO}/issues/5/comments -f body=two; gh api repos/{REPO}/issues/5/comments -f body=three')
+	assert result.returncode == 0, result.stderr
+	assert "outcome=fallback reason=job_token_refused issue=5 status=403" in result.stderr
+	assert "outcome=fallback reason=job_token_refused_cached issue=5" in result.stderr
+
+	result = run(env, f'gh api repos/{REPO}/issues/5/comments -f body=four', extra={"AI_COMMENT_SIGNING_POST": "false"})
+	assert "outcome=fallback reason=post_switch_off issue=5" in result.stderr
+
+	result = run(env, 'gh api repos/acme/elsewhere/issues/5/comments -f body=five')
+	assert "outcome=fallback reason=repo_mismatch issue=5" in result.stderr
+	for token in (PAT, JOB, SECRET):
+		assert token not in result.stderr
+
+
 def test_posted_comment_carries_the_pat_user_id(env):
 	run(env, f'gh api repos/{REPO}/issues/5/comments -f body="escalation marker"')
 	body = comment_calls(env)[0]["payload"]["body"]

@@ -668,6 +668,11 @@
 			"stage": "Turns on security pass base sync carry (review_autofix.yml); false turns that stage off."
 		},
 		{
+			"name": "SECURITY_PASS_CYCLE_REUSE_GUARD_ENABLED",
+			"default": "true",
+			"stage": "Issue #10176. The single-issue security pass numbers a new pending or failed marker above every trusted cycle already on the PR (log outcome=cycle_renumbered), so no cycle number is reused (review_autofix.yml); false keeps the old numbering."
+		},
+		{
 			"name": "SECURITY_PASS_DELTA_AUDIT_ENABLED",
 			"default": "true",
 			"stage": "Delta audits for the single-issue security pass."
@@ -676,6 +681,11 @@
 			"name": "SECURITY_PASS_EXHAUSTION_JUDGE_ENABLED",
 			"default": "true",
 			"stage": "When MAX_SECURITY_PASS_CYCLES is spent with findings still open, consult the security-pass exhaustion judge (prompts/mode-judge-security-pass-exhaustion.txt) instead of terminalizing."
+		},
+		{
+			"name": "SECURITY_PASS_MARKER_REREAD_ENABLED",
+			"default": "true",
+			"stage": "Issue #10176. Before the single-issue security pass dispatches an audit, and when its comments snapshot is unusable, it reads the PR comments once more, fresh: other markers re-enter the gate on that view, and a failed or empty read holds with markers_unverifiable (detail=fresh_read_failed|fresh_read_empty) without dispatching or posting a marker (review_autofix.yml); false keeps the job-start snapshot only."
 		},
 		{
 			"name": "SECURITY_PASS_REBIND_ENABLED",
