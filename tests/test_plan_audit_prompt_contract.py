@@ -41,6 +41,14 @@ def test_prompt_keeps_conflict_gate_and_bundle_caps() -> None:
 	assert "dependency order" in text
 
 
+def test_prompt_keeps_step_5_ranking_criteria() -> None:
+	text = _prompt()
+	assert "Step 5, rank the remaining work by value" in text
+	assert "impact × leverage against cost and risk" in text
+	assert "security and correctness rank above performance and speed" in text
+	assert "the pick is made in step 6, after the conflict screen" in text
+
+
 def test_prompt_keeps_preflight_hard_gate_and_permanent_entries() -> None:
 	text = _prompt()
 	assert "the preflight gate is a hard gate" in text

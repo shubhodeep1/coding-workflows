@@ -703,10 +703,10 @@ def test_chained_auto_close_references_are_stripped_until_none_is_left(tmp_path:
 
 
 def test_preflight_requires_an_explicit_pass_verdict() -> None:
-	for verdict in ("not passed: 2 callers remain", "did not pass", "2 callers found - FAILED", "ok", "passed: unrunnable without a token"):
+	for verdict in ("not passed: 2 callers remain", "did not pass", "2 callers found - FAILED", "ok", "passed: unrunnable without a token", "pass", "Pass-through", "passed:", "passed: could not verify without a token", "passed: cannot run gh here", "Passed: unable to confirm (network unavailable)"):
 		bad = _result(removals=[{"entry_title": "x", "script_path": "scripts/old_helper.sh", "preflight": [{"check": "c", "result": verdict}]}])
 		assert pa.validate_result(bad), verdict
-	for verdict in ("passed: the job has not run since 2026-09", "Passed: no workflow can run it (0 callers)", "pass"):
+	for verdict in ("passed: the job has not run since 2026-09", "Passed: no workflow can run it (0 callers)", "pass: 0 callers"):
 		ok = _result(removals=[{"entry_title": "x", "script_path": "scripts/old_helper.sh", "preflight": [{"check": "c", "result": verdict}]}])
 		assert pa.validate_result(ok) == [], verdict
 
@@ -714,8 +714,8 @@ def test_preflight_requires_an_explicit_pass_verdict() -> None:
 def test_unused_collected_answer_survives_to_the_next_collect(monkeypatch: pytest.MonkeyPatch) -> None:
 	monkeypatch.setattr(pa, "gh_api", FakeGh())
 	state = {
-		# The model asked again instead of applying the answer.
-		"audit": {"result": _result(needs_decision=[{"path": "docs/plans/a.md", "questions": "Q1"}])},
+		# The model neither applied the answer nor asked again.
+		"audit": {"result": _result()},
 		"collect": {"decision_issues": {"docs/plans/a.md": {"number": 3, "comments": 1, "asked_at": "2026-11-20T00:00:00Z"}}, "answers": ["docs/plans/a.md"], "collected_at": "2026-11-25T10:00:00Z"},
 		"apply": {"pr_number": ""},
 	}
@@ -735,3 +735,79 @@ def test_unused_collected_answer_survives_to_the_next_collect(monkeypatch: pytes
 	monkeypatch.setattr(pa, "gh_api", FakeGh({"GET repos/o/r/issues": route}))
 	out = pa.run_collect("o/r", _workdir(Path(pa.state_dir()) / "w"), {"gate": {"prior_state": {"decision_issues": {"docs/plans/a.md": entry}}}}, "20261126", "a" * 40, "main")
 	assert out["answers"] == ["docs/plans/a.md"] and any("/comments" in c for c in calls)
+
+
+# ---------------------------------------------------------------- review fixes (round 4)
+
+def test_reasked_plan_keeps_the_new_answer_window(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setattr(pa, "gh_api", FakeGh())
+	state = {
+		"audit": {"result": _result(needs_decision=[{"path": "docs/plans/a.md", "questions": "Q1: new"}])},
+		"collect": {"decision_issues": {"docs/plans/a.md": {"number": 3, "comments": 1, "asked_at": "2026-11-20T00:00:00Z"}}, "answers": ["docs/plans/a.md"], "collected_at": "2026-11-25T10:00:00Z"},
+		"apply": {"pr_number": ""},
+	}
+	entry = pa.run_decisions("o/r", state)["decision_issues"]["docs/plans/a.md"]
+	assert entry["asked_at"] == "2026-11-25T10:00:00Z" and entry["comments"] == 1
+	old = [{"author_association": "OWNER", "body": "Q1: A", "created_at": "2026-11-24T00:00:00Z"}]
+	assert pa.trusted_answers(old, entry["asked_at"]) == []
+
+
+def test_preserved_answer_without_prior_window_uses_collect_time(monkeypatch: pytest.MonkeyPatch) -> None:
+	monkeypatch.setattr(pa, "gh_api", FakeGh())
+	state = {
+		"audit": {"result": _result()},
+		"collect": {"decision_issues": {"docs/plans/a.md": {"number": 3, "comments": 1, "asked_at": ""}}, "answers": ["docs/plans/a.md"], "collected_at": "2026-11-25T10:00:00Z"},
+		"apply": {"pr_number": ""},
+	}
+	entry = pa.run_decisions("o/r", state)["decision_issues"]["docs/plans/a.md"]
+	assert entry["comments"] == -1 and entry["asked_at"] == "2026-11-25T10:00:00Z"
+
+
+def test_decision_applied_without_a_file_change_is_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+	fake = FakeGh()
+	monkeypatch.setattr(pa, "gh_api", fake)
+	state = {
+		"audit": {"result": _result(applied_decisions=[{"path": "docs/plans/a.md", "issue": 3}])},
+		"collect": {"decision_issues": {"docs/plans/a.md": {"number": 3, "comments": 1}}, "answers": ["docs/plans/a.md"]},
+		"apply": {"pr_number": ""},
+	}
+	out = pa.run_decisions("o/r", state)
+	assert out["closed"] == [3] and "docs/plans/a.md" not in out["decision_issues"]
+	assert any(m == "POST" and p == "repos/o/r/issues/3/comments" and "no file change" in b["body"] for m, p, b in fake.calls)
+
+
+def test_collect_passes_the_decision_questions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+	body = pa.decision_body("docs/plans/a.md", "Q1: which?\nA) x\nB) y")
+	listing = [{"number": 3, "author_association": "OWNER", "comments": 1, "body": body}]
+	answer = [{"author_association": "OWNER", "body": "Q1: A", "created_at": "2026-11-25T00:00:00Z"}]
+	monkeypatch.setattr(pa, "gh_api", FakeGh({"GET repos/o/r/issues/3/comments": answer, "GET repos/o/r/issues": listing}))
+	out = pa.run_collect("o/r", _workdir(tmp_path), {"gate": {}}, "20261126", "a" * 40, "main")
+	questions = out["input"]["decision_questions"]["docs/plans/a.md"]
+	assert "Q1: which?" in questions and "B) y" in questions and "ai:plan-decision" not in questions
+
+
+def test_audit_result_must_classify_every_plan(tmp_path: Path) -> None:
+	out = tmp_path / "out.txt"
+	out.write_text("```json\n" + json.dumps(_result()) + "\n```\n", encoding="utf-8")
+	state: dict[str, Any] = {}
+	assert pa.finish_audit(state, 0, out, ["docs/plans/a.md", "docs/plans/b.md"]) == 1
+	assert state["error"]["reason"] == "result_invalid"
+	full = _result(classification=[
+		{"path": "docs/plans/a.md", "status": "PARTIAL", "freshness": "CURRENT", "evidence": "x"},
+		{"path": "docs/completed/b.md", "status": "COMPLETE", "freshness": "n/a", "evidence": "y"},
+	])
+	out.write_text("```json\n" + json.dumps(full) + "\n```\n", encoding="utf-8")
+	state = {}
+	assert pa.finish_audit(state, 0, out, ["docs/plans/a.md", "docs/plans/b.md"]) == 0
+
+
+def test_registry_entry_removed_without_a_reported_removal_is_a_mismatch(tmp_path: Path) -> None:
+	work = _git_repo(tmp_path)
+	_remove_entry(work, "### `scripts/old_helper.sh`", "### `scripts/keep_me.sh`")
+	with pytest.raises(pa.ApplyError) as exc:
+		_check(work, _result())
+	assert exc.value.reason == "result_mismatch"
+	(work / "scripts" / "old_helper.sh").unlink()
+	with pytest.raises(pa.ApplyError) as exc:
+		_check(work, _result())
+	assert exc.value.reason == "result_mismatch"

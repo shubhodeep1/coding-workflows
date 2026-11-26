@@ -131,13 +131,18 @@ PERMANENT_RE = re.compile(r"permanent\s*[\u2014\u2013-]+\s*review annually", re.
 AUTO_CLOSE_RE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b\s*:?\s*(?:(?:[\w.-]+/[\w.-]+)?#\d+|https?://github\.com/[\w.-]+/[\w.-]+/issues/\d+)", re.I)
 # A preflight result the model itself reports as not passed. The prompt makes
 # `unrunnable` a fail; the apply side refuses it instead of trusting the prompt.
-PREFLIGHT_NOT_PASSED_RE = re.compile(r"\bunrunnable\b", re.IGNORECASE)
+# Also any wording that says the check could not be run or verified
+# ("passed: could not verify without a token"); "has not run since" is not
+# matched, so a passing result that mentions it is still accepted.
+PREFLIGHT_NOT_PASSED_RE = re.compile(r"\b(?:unrunnable|could ?not|couldn't|cannot|can't|unable to)\b", re.IGNORECASE)
 # Every preflight result must open with an explicit pass verdict
 # (`passed: <evidence>`, as the prompt asks); any other wording is a fail. An
 # allow-list, not a list of failure phrasings: "did not pass", "not passed" or
 # a trailing "FAILED" can never slip through, and a passing result that says
 # "has not run since" is not refused.
-PREFLIGHT_PASSED_RE = re.compile(r"\s*pass(?:ed)?\b", re.IGNORECASE)
+# The verdict must be followed by a colon and non-empty evidence, as the
+# prompt asks: a bare "pass" (or "Pass-through") carries no evidence.
+PREFLIGHT_PASSED_RE = re.compile(r"\s*pass(?:ed)?\s*:\s*\S", re.IGNORECASE)
 
 RESULT_KEYS = (
 	"classification", "refreshed", "needs_decision", "applied_decisions", "archived",
@@ -485,6 +490,13 @@ def trusted_answers(comments: list[dict[str, Any]], asked_at: str = "") -> list[
 	return answers
 
 
+def decision_questions(body: str) -> str:
+	"""The "## Questions" section of a decision issue body (text before the marker)."""
+	text = body.split("## Questions", 1)[1] if "## Questions" in body else ""
+	text = text.split("<!-- ai:plan-decision:v1 ", 1)[0]
+	return _clean(text.strip(), MAX_TEXT)
+
+
 def run_collect(repo: str, workdir: Path, state: dict[str, Any], today: str, head_sha: str, default_branch: str) -> dict[str, Any]:
 	gate = state.get("gate") or {}
 	prior = (gate.get("prior_state") or {}).get("decision_issues") or {}
@@ -494,6 +506,7 @@ def run_collect(repo: str, workdir: Path, state: dict[str, Any], today: str, hea
 	listing = gh_list(f"repos/{repo}/issues?labels={DECISION_LABEL}&state=open")
 	decisions = decision_issues_from_listing(listing)
 	answers: dict[str, str] = {}
+	questions: dict[str, str] = {}
 	seen: dict[str, dict[str, Any]] = {}
 	for path, issue in sorted(decisions.items()):
 		number = int(issue.get("number") or 0)
@@ -506,10 +519,14 @@ def run_collect(repo: str, workdir: Path, state: dict[str, Any], today: str, hea
 		found = trusted_answers(comments, str(before.get("asked_at") or ""))
 		if found:
 			answers[path] = "\n\n".join(found)[:MAX_TEXT * 2]
+			# The questions the answer refers to, from the issue body this
+			# listing already returned (no extra call).
+			questions[path] = decision_questions(str(issue.get("body") or ""))
 	bundle = {
 		"open_tracking": [],
 		"open_prs": gate.get("open_prs") or [],
 		"decision_answers": answers,
+		"decision_questions": questions,
 		"default_branch": default_branch,
 		"head_sha": head_sha,
 		"today": today,
@@ -703,6 +720,8 @@ def cmd_audit(args: argparse.Namespace) -> int:
 	if render.returncode != 0 or not render.stdout.strip():
 		return _audit_fail(state, "prompt_render")
 	prompt.write_text(render.stdout, encoding="utf-8")
+	# Taken before the model runs: an archive moves a plan out of docs/plans/.
+	plans_before = list_plans(workdir)
 	env = {k: v for k, v in os.environ.items() if k not in SECRET_ENV and k != "AI_ENGINE_READ_ONLY"}
 	# claude_run_selected forces the read profile (a read-only, tracked-files
 	# snapshot), but PLAN_AUDIT must edit plans and read the untracked input
@@ -729,10 +748,16 @@ def cmd_audit(args: argparse.Namespace) -> int:
 		"--ask-for-approval", "never", "exec", "--skip-git-repo-check", "--model", args.codex_model, "--sandbox", "workspace-write",
 	]
 	rc = subprocess.run(cmd, env=env).returncode
-	return finish_audit(state, rc, output)
+	return finish_audit(state, rc, output, plans_before)
 
 
-def finish_audit(state: dict[str, Any], rc: int, output: Path) -> int:
+def missing_plans(result: dict[str, Any], plans: list[str]) -> list[str]:
+	"""Plans under docs/plans/ before the audit that classification[] does not list."""
+	listed = {str(c.get("path") or "") for c in result.get("classification") or [] if isinstance(c, dict)}
+	return [p for p in plans if p not in listed and "docs/completed/" + p.rsplit("/", 1)[1] not in listed]
+
+
+def finish_audit(state: dict[str, Any], rc: int, output: Path, plans: list[str] | None = None) -> int:
 	if rc == CAPACITY_WAIT_RC:
 		print(f"AI_ENGINE_CAPACITY_WAIT role={ROLE} outcome=deferred stage=plan_autopilot")
 		state["audit"] = {"completed": False, "capacity_wait": True}
@@ -749,6 +774,12 @@ def finish_audit(state: dict[str, Any], rc: int, output: Path) -> int:
 		return _audit_fail(state, "no_output")
 	result = extract_result(text)
 	errors = validate_result(result) if result is not None else ["no JSON object found"]
+	if not errors and plans is not None:
+		# Every plan must be audited: a result that leaves plans out would be
+		# reported as idle_all_done and save the marker.
+		omitted = missing_plans(result, plans)
+		if omitted:
+			errors = [f"classification omits {len(omitted)} plan(s), e.g. {omitted[0]}"]
 	if errors:
 		for error in errors[:10]:
 			print(f"::warning::plan audit result invalid: {_one_line(error, 200)}")
@@ -941,6 +972,14 @@ def check_diff(changes: list[dict[str, str]], result: dict[str, Any], in_flight:
 			raise ApplyError("result_mismatch", f"removal without a deletion or registry entry: {removal}")
 	if result["removals"] and not registry_touched:
 		raise ApplyError("result_mismatch", "removals[] without a registry edit")
+	# The reverse: every removed registry entry must be a reported removal,
+	# so no entry is dropped without preflight evidence.
+	if registry_touched:
+		if len(removed) > len(result["removals"]):
+			raise ApplyError("result_mismatch", "registry entry removed without a removals[] entry")
+		for path in named:
+			if path not in removal_paths:
+				raise ApplyError("result_mismatch", f"registry entry removed without a removals[] entry: {path}")
 	return groups
 
 
@@ -1196,18 +1235,24 @@ def run_decisions(repo: str, state: dict[str, Any]) -> dict[str, Any]:
 	# Only plans with a trusted (OWNER / MEMBER / COLLABORATOR) answer collected
 	# this run can be closed; the model's applied_decisions alone is not proof.
 	answered = set((state.get("collect") or {}).get("answers") or [])
-	if pr_number:
-		for item in result.get("applied_decisions") or []:
-			entry = known.get(item["path"])
-			if not entry or item["path"] in opened or item["path"] not in answered:
-				continue
-			number = int(entry.get("number") or 0)
-			if number <= 0:
-				continue
-			gh_api(f"repos/{repo}/issues/{number}/comments", "POST", {"body": f"The plan autopilot applied this decision in #{pr_number}."})
-			gh_api(f"repos/{repo}/issues/{number}", "PATCH", {"state": "closed", "state_reason": "completed"})
-			closed.append(number)
-			known.pop(item["path"], None)
+	# An answer applied without a file change opens no PR; it is still
+	# applied, so its issue closes too (apply succeeded, or this step would
+	# not run).
+	for item in result.get("applied_decisions") or []:
+		entry = known.get(item["path"])
+		if not entry or item["path"] in opened or item["path"] not in answered:
+			continue
+		number = int(entry.get("number") or 0)
+		if number <= 0:
+			continue
+		if pr_number:
+			comment = f"The plan autopilot applied this decision in #{pr_number}."
+		else:
+			comment = "The plan autopilot applied this decision; it needed no file change, so there is no maintenance PR."
+		gh_api(f"repos/{repo}/issues/{number}/comments", "POST", {"body": comment})
+		gh_api(f"repos/{repo}/issues/{number}", "PATCH", {"state": "closed", "state_reason": "completed"})
+		closed.append(number)
+		known.pop(item["path"], None)
 	# A trusted answer collected this run but not closed (not applied, or the
 	# plan was asked again) must reach a later audit: keep the earlier answer
 	# window and force the next collect to re-read the comments (-1 never
@@ -1215,9 +1260,11 @@ def run_decisions(repo: str, state: dict[str, Any]) -> dict[str, Any]:
 	# includes the answer.
 	collected = (state.get("collect") or {}).get("decision_issues") or {}
 	for path in answered:
-		if path in known:
+		# A plan asked again keeps the new window (asked_at = collect time):
+		# an answer to the old questions must not be applied to the new ones.
+		if path in known and path not in opened:
 			before = collected.get(path) if isinstance(collected.get(path), dict) else {}
-			known[path] = dict(known[path], comments=-1, asked_at=str(before.get("asked_at") or ""))
+			known[path] = dict(known[path], comments=-1, asked_at=str(before.get("asked_at") or known[path].get("asked_at") or now))
 	return {"decision_issues": known, "opened": opened, "closed": closed}
 
 
