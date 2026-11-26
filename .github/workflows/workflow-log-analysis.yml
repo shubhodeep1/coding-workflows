@@ -363,6 +363,24 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      # Pipeline-human-wait-elimination Phase 9 (#10118): tick ai:operator-step
+      # entries whose condition the pipeline can observe, and close an empty
+      # tracker. Daily schedule only, folded into this job (no new runner).
+      # GH_TOKEN is GH_PAT because entries are written under the PAT login,
+      # which `tick` reads from /user as its trusted login. Fail-open: the step
+      # script always exits 0. `OPERATOR_STEP_DAILY_TICK_ENABLED=false` makes no
+      # git or API call.
+      - name: Tick observable operator steps
+        if: ${{ !cancelled() && github.event_name == 'schedule' && github.event.schedule == '0 6 * * *' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          OPERATOR_STEP_DAILY_TICK_ENABLED: ${{ vars.OPERATOR_STEP_DAILY_TICK_ENABLED || 'true' }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+        run: bash scripts/operator_step_daily_tick.sh
+
       - name: Upload workflow log report artifact
         uses: actions/upload-artifact@v6
         with:
