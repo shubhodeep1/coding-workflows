@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":10172,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/10172\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/10174\",\"pr_number\":10174,\"branch\":\"ai/issue-10172\",\"run_id\":\"45874058858\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/45874058858\",\"changed_files\":[\"changelog.d/10172-broker-sha-check-all-branches.md\",\"tools/claude-pool-broker/src/index.ts\",\"tools/claude-pool-broker/test/broker.test.ts\"]}",
+  "fingerprint": "c52971ff507d13fbfebcc65ebd7aec3ed65c54f87291d5973b49fdd58d36f9fc",
+  "lineage": {
+    "issue_number": 10172,
+    "parent_ids": [],
+    "pr_number": 10174,
+    "run_id": "45874058858",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45874058858",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/10174"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261126182430_aca7e4ab4e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10172,
+    "level": "run",
+    "pr_number": 10174,
+    "run_id": "45874058858"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #10172: https://github.com/shubhodeep1/coding-workflows/pull/10174",
+  "timestamps": {
+    "created_at": "2026-11-26T18:24:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
