@@ -1,0 +1,26 @@
+{
+  "discovered_at": "2026-11-26T15:02:25Z",
+  "issue_number": null,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=changelog.d/9502-rb-judge-lease-wait-alert.md:17; cited_path=PR description (GitHub-side metadata, not a repository file); files_touched=.github/workflows/review_autofix.yml, agents.d/9502-rb-judge-lease-wait-alert.md, changelog.d/9502-rb-judge-lease-wait-alert.md, docs/INVENTORY.md, scripts/review_autofix_step_editor_noop_suspicious_warning.sh, scripts/review_autofix_step_post_review_blocked_comment.sh, scripts/review_rb_judge.sh, scripts/stage_workflow_support.sh, tests/review_autofix_step_scripts.py, tests/test_orchestrate_poll_noop_suspicious_recovery.py, tests/test_review_autofix_rb_judge_crash_alert.py, tests/test_review_rb_judge_head_binding.py, tests/test_review_rb_judge_security_pass.py.",
+  "phase": "review_autofix",
+  "pr_number": 9944,
+  "record_id": "lesson_20261126150225_b9b649e675",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "PR description (GitHub-side metadata, not a repository file)",
+    "changelog.d/9502-rb-judge-lease-wait-alert.md",
+    ".github/workflows/review_autofix.yml",
+    "agents.d/9502-rb-judge-lease-wait-alert.md",
+    "docs/INVENTORY.md",
+    "scripts/review_autofix_step_editor_noop_suspicious_warning.sh",
+    "scripts/review_autofix_step_post_review_blocked_comment.sh",
+    "scripts/review_rb_judge.sh",
+    "scripts/stage_workflow_support.sh",
+    "tests/review_autofix_step_scripts.py",
+    "tests/test_orchestrate_poll_noop_suspicious_recovery.py",
+    "tests/test_review_autofix_rb_judge_crash_alert.py",
+    "tests/test_review_rb_judge_head_binding.py",
+    "tests/test_review_rb_judge_security_pass.py"
+  ]
+}
