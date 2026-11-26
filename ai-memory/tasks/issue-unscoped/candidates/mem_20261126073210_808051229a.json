@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add `dispatch_error=<class>` to the existing `SINGLE_ISSUE_SECURITY_PASS ... reason=dispatch_failed*` log lines, and print the first 200 characters of the error as a `::warning::`, with anything token-like removed.\"\n  expected_change_site: `scripts/review_single_issue_security_pass.sh`\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The change is fully implemented in the code (G1). (Reviewer marked SEVERITY: NIT.)\n- requirement: \"For `rate_limited`, `server_error` and `network`, wait and dispatch again, up to `SECURITY_PASS_DISPATCH_RETRIES` times (default `2`) with `SECURITY_PASS_DISPATCH_RETRY_DELAY_SECS` between attempts.\"\n  expected_change_site: `scripts/review_single_issue_security_pass.sh`\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The change is fully implemented in the code (G2). (Reviewer marked SEVERITY: NIT.)\n- requirement: \"The 'could not be dispatched' comments name the class, so a reader sees whether it was a limit, an outage or a bad input.\"\n  expected_change_site: `scripts/review_single_issue_security_pass.sh`\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The change is fully implemented in the code (G3). (Reviewer marked SEVERITY: NIT.)\n- requirement: \"A dispatch that succeeds on a retry logs `dispatch_attempts=<n>` on the existing `outcome=dispatched` line.\"\n  expected_change_site: `scripts/review_single_issue_security_pass.sh`\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The change is fully implemented in the code (G4). (Reviewer marked SEVERITY: NIT.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Add `dispatch_error=<class>` to the existing `SINGLE_ISSUE_SECURITY_PASS ... reason=dispatch_failed*` log lines, and print the first 200 characters of the error as a `::warning::`, with anything token-like removed.\"\n  Expected change site: `scripts/review_single_issue_security_pass.sh`\n  Evidence of absence: The change is fully implemented in the code (G1).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"For `rate_limited`, `server_error` and `network`, wait and dispatch again, up to `SECURITY_PASS_DISPATCH_RETRIES` times (default `2`) with `SECURITY_PASS_DISPATCH_RETRY_DELAY_SECS` between attempts.\"\n  Expected change site: `scripts/review_single_issue_security_pass.sh`\n  Evidence of absence: The change is fully implemented in the code (G2).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"The 'could not be dispatched' comments name the class, so a reader sees whether it was a limit, an outage or a bad input.\"\n  Expected change site: `scripts/review_single_issue_security_pass.sh`\n  Evidence of absence: The change is fully implemented in the code (G3).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"A dispatch that succeeds on a retry logs `dispatch_attempts=<n>` on the existing `outcome=dispatched` line.\"\n  Expected change site: `scripts/review_single_issue_security_pass.sh`\n  Evidence of absence: The change is fully implemented in the code (G4).\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "82e8d82da3587ed5a5aee1d5e6c9ac19307001f012fe7baf9e5abadf12a929a0",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10110,
+    "run_id": "45763219547",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45763219547",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126073210_808051229a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10110,
+    "run_id": "45763219547"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-26T07:32:10Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
