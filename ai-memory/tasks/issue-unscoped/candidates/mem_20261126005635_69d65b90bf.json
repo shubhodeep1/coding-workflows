@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/ci_cancelled_rerun.py:759 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The code accesses job[\"check_run_url\"] without verifying that the key exists in the dictionary or that the value is a valid string.\n  WHY: If the GitHub API response lacks the check_run_url field, a KeyError is raised; the function fails closed and returns \"unverified\", but this is still an unvalidated trust boundary on external input (source severity MAJOR, mapped to high).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Read the run's jobs once \u2026 through gh_retry.\"\n  expected_change_site: scripts/ci_cancelled_rerun.py, list_run_jobs() used by classify_cancelled_run()\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: list_run_jobs() invokes gh api directly via subprocess.run without routing through the gh_retry bash helper and has its own local retry instead of the standard gh_retry contract, classify_cancelled_run() retries that call once after a fixed two-second sleep and does not route the request through gh_retry (source severities differ: MAJOR from google_gemini-3_1-flash-lite, NIT from openai_gpt-6-luna)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/ci_cancelled_rerun.py:line 759 | severity=MAJOR | confidence=4\n  PROBLEM: The code accesses job[\"check_run_url\"] without verifying that the key exists in the dictionary or that the value is a valid string.\n  WHY: If the GitHub API response does not contain the check_run_url field, a KeyError is raised; the function fails closed and returns \"unverified\", but this is an unvalidated trust boundary on external input.\n- TASK_GAP\n  Requirement: \"Read the run's jobs once \u2026 through gh_retry.\"\n  Expected change site: scripts/ci_cancelled_rerun.py, list_run_jobs()\n  Evidence of absence: list_run_jobs() invokes gh api directly via subprocess.run without routing through the gh_retry bash helper; it has a local retry mechanism but does not use the standard gh_retry contract the task requires.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Read the run's jobs once \u2026 through `gh_retry`.\"\n  Expected change site: `scripts/ci_cancelled_rerun.py`, `list_run_jobs()` used by `classify_cancelled_run()`.\n  Evidence of absence: `list_run_jobs()` calls `subprocess.run([\"gh\", \"api\", ...])` directly. `classify_cancelled_run()` retries that call once after a fixed two-second sleep; it does not route the request through `gh_retry`.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5aad95d5b8afdaa31719a53bc6626a59317e74fde761d305fd7e2261919a9e3f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10135,
+    "run_id": "45723351494",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45723351494",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126005635_69d65b90bf",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10135,
+    "run_id": "45723351494"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T00:56:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
