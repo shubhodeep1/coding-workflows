@@ -934,8 +934,13 @@ def _covered(path: str, named: list[str]) -> bool:
 	return any(path == n or (n.endswith("/") and path.startswith(n)) for n in named)
 
 
-def check_diff(changes: list[dict[str, str]], result: dict[str, Any], in_flight: list[str], registry_old: str, registry_new: str | None, changelog_name: str, completed_exists: set[str]) -> dict[str, list[str]]:
-	"""Validate staged changes against the allowlist and the result. Returns commit groups."""
+def check_diff(changes: list[dict[str, str]], result: dict[str, Any], in_flight: list[str], registry_old: str, registry_new: str | None, changelog_name: str, completed_exists: set[str], completed_head_blobs: dict[str, str] | None = None) -> dict[str, list[str]]:
+	"""Validate staged changes against the allowlist and the result. Returns commit groups.
+
+	completed_head_blobs maps a docs/completed/ path to its blob at HEAD; an
+	archive of a plan whose identical copy is already there is just the
+	deletion of the live copy (/audit-plans step 7, byte-identical case).
+	"""
 	refreshed = {r["path"] for r in result["refreshed"]}
 	archived = {a["from"]: a["to"] for a in result["archived"]}
 	removal_paths = [r["script_path"] for r in result["removals"]]
@@ -986,9 +991,17 @@ def check_diff(changes: list[dict[str, str]], result: dict[str, Any], in_flight:
 			groups["sweep"].append(path)
 		else:
 			raise ApplyError("diff_outside_allowlist", f"{status} {path}")
+	head_blobs = completed_head_blobs or {}
 	for source, blob in archive_deleted.items():
-		if not blob or archive_written.get(archived[source]) != blob:
-			raise ApplyError("diff_outside_allowlist", f"archive target does not carry the plan content: {archived[source]}")
+		target = archived[source]
+		if blob and archive_written.get(target) == blob:
+			continue
+		# The identical plan is already archived and left untouched (an `M` or
+		# `D` of it is refused above or below): removing the live copy is the
+		# whole archive. A different archive copy is never replaced.
+		if blob and target not in archive_written and head_blobs.get(target) == blob:
+			continue
+		raise ApplyError("diff_outside_allowlist", f"archive target does not carry the plan content: {archived[source]}")
 	for target in archive_written:
 		if not any(archived[source] == target for source in archive_deleted):
 			raise ApplyError("diff_outside_allowlist", f"completed plan written without its archive move: {target}")
@@ -1026,6 +1039,20 @@ def check_diff(changes: list[dict[str, str]], result: dict[str, Any], in_flight:
 			if path not in removal_paths:
 				raise ApplyError("result_mismatch", f"registry entry removed without a removals[] entry: {path}")
 	return groups
+
+
+def completed_blobs_at_head(workdir: Path) -> dict[str, str]:
+	"""docs/completed/*.md path -> blob SHA at HEAD (regular files only); {} on any error."""
+	proc = _git(workdir, "ls-tree", "-z", "HEAD", "--", "docs/completed/", check=False)
+	blobs: dict[str, str] = {}
+	if proc.returncode != 0:
+		return blobs
+	for entry in proc.stdout.split("\0"):
+		meta, _, path = entry.partition("\t")
+		fields = meta.split()
+		if len(fields) == 3 and fields[0] == "100644" and fields[1] == "blob" and re.fullmatch(r"docs/completed/[A-Za-z0-9._-]{1,200}\.md", path):
+			blobs[path] = fields[2]
+	return blobs
 
 
 def branch_name(today: str, sha: str) -> str:
@@ -1149,7 +1176,7 @@ def run_apply(repo: str, workdir: Path, support: Path, state: dict[str, Any], to
 	# then owns its plans, so they are re-read here (one listing).
 	tracking = [t for t in gh_list(f"repos/{repo}/issues?labels={TRACKING_LABEL}&state=open") if not t.get("pull_request")]
 	in_flight = sorted(set(gate.get("in_flight") or []) | set(in_flight_plans(tracking)))
-	groups = check_diff(changes, result, in_flight, registry_old, registry_new, changelog, completed_exists)
+	groups = check_diff(changes, result, in_flight, registry_old, registry_new, changelog, completed_exists, completed_blobs_at_head(workdir))
 	refs_info = lookup_refs(repo, result)
 	_git(workdir, "reset", "-q")
 	if not status_issue:
