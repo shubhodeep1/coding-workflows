@@ -37,8 +37,9 @@ ceiling, so a held-back size finding would let CI fail first (#10166).
 API calls (CLAUDE.md §15): one `actions/runs/{run_id}/jobs` read (skipped when
 no run id), one open-issue listing for the label, one label create when a
 new finding needs an issue (HTTP 422 when it exists), one listing of the 50
-most recently updated closed issues for the label (only when a finding has no
-open issue and the cooldown is on), and one create per new finding.
+most recently updated closed issues for the label (only when a job-duration
+finding has no open issue and the cooldown is on; workflow-size findings never
+read it), and one create per new finding.
 Fail-open: any API error is a warning; the job never fails, and a failed
 closed-issue listing opens the issue as before.
 """
@@ -272,6 +273,9 @@ def main(argv: list[str] | None = None) -> int:
 	if not 0 < warn_bytes < HARD_WORKFLOW_GUARD_BYTES:
 		print(f"::warning::ci_budget_watch: CI_BUDGET_WORKFLOW_WARN_BYTES={warn_bytes} is outside (0, {HARD_WORKFLOW_GUARD_BYTES}); using {DEFAULT_WORKFLOW_WARN_BYTES}.")
 		warn_bytes = DEFAULT_WORKFLOW_WARN_BYTES
+	if warn_bytes >= WORKFLOW_TEST_CEILING_BYTES:
+		# Kept as configured, but named: contract tests fail before this warns (#10166).
+		print(f"::warning::ci_budget_watch: CI_BUDGET_WORKFLOW_WARN_BYTES={warn_bytes} is at or above the {WORKFLOW_TEST_CEILING_BYTES:,}-byte test ceiling; the watcher warns only after contract tests fail.")
 	try:
 		ratio = float(os.environ.get("CI_BUDGET_JOB_WARN_RATIO", DEFAULT_JOB_WARN_RATIO))
 	except ValueError:

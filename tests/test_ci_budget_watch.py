@@ -319,3 +319,5 @@ def test_ci_wiring() -> None:
 	env = next(step["env"] for step in job["steps"] if "CI_BUDGET_JOB_WARN_RATIO" in (step.get("env") or {}))
 	assert env["CI_BUDGET_REFILE_COOLDOWN_DAYS"] == "${{ vars.CI_BUDGET_REFILE_COOLDOWN_DAYS || '7' }}"
 	assert env["CI_BUDGET_REFILE_URGENT_RATIO"] == "${{ vars.CI_BUDGET_REFILE_URGENT_RATIO || '0.9' }}"
+	# The workflow fallback is what CI uses; it must match the Python default (#10166).
+	assert env["CI_BUDGET_WORKFLOW_WARN_BYTES"] == f"${{{{ vars.CI_BUDGET_WORKFLOW_WARN_BYTES || '{cbw.DEFAULT_WORKFLOW_WARN_BYTES}' }}}}"
