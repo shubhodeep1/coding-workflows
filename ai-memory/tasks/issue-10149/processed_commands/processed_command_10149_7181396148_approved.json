@@ -5,13 +5,35 @@
   "entry_id": "processed_command_10149_7181396148_approved",
   "issue_number": 10149,
   "metadata": {
+    "branch": "ai/issue-10149",
+    "changed_files": [
+      ".github/workflows/orchestrate_poll.yml",
+      ".github/workflows/unblock_judge.yml",
+      "README.md",
+      "agents.d/10149-judge-blind-spots.md",
+      "changelog.d/10149-judge-blind-spots.md",
+      "prompts/_templates/mode-judge-stall-recovery.txt",
+      "prompts/_templates/mode-judge-unblock.txt",
+      "prompts/mode-judge-stall-recovery.txt",
+      "prompts/mode-judge-unblock.txt",
+      "scripts/orchestrate_poll_process.sh",
+      "scripts/unblock_judge.sh",
+      "scripts/unblock_ledger.py",
+      "tests/test_orchestrate_poll_process.py",
+      "tests/test_unblock_judge.py"
+    ],
+    "issue_number": 10149,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/10149",
+    "pr_number": 10152,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/10152",
+    "run_attempt": "1",
+    "run_id": "45746733750",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/45746733750"
   },
   "run_attempt": 1,
   "run_id": "45746733750",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-26T03:32:26Z",
+  "status": "completed",
+  "timestamp": "2026-11-26T05:02:51Z",
   "workflow": "implement"
 }
