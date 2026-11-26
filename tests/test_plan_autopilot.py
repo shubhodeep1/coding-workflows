@@ -682,7 +682,8 @@ def test_decision_answer_window_starts_at_collect(monkeypatch: pytest.MonkeyPatc
 	monkeypatch.setattr(pa, "gh_api", FakeGh())
 	state = {
 		"audit": {"result": _result(needs_decision=[{"path": "docs/plans/a.md", "questions": "Q1"}])},
-		"collect": {"decision_issues": {"docs/plans/a.md": {"number": 3, "comments": 1}}, "collected_at": "2026-11-25T10:00:00Z"},
+		# The issue already asks the same questions.
+		"collect": {"decision_issues": {"docs/plans/a.md": {"number": 3, "comments": 1}}, "collected_at": "2026-11-25T10:00:00Z", "asked_questions": {"docs/plans/a.md": "Q1"}},
 	}
 	out = pa.run_decisions("o/r", state)
 	assert out["decision_issues"]["docs/plans/a.md"]["asked_at"] == "2026-11-25T10:00:00Z"
@@ -703,10 +704,10 @@ def test_chained_auto_close_references_are_stripped_until_none_is_left(tmp_path:
 
 
 def test_preflight_requires_an_explicit_pass_verdict() -> None:
-	for verdict in ("not passed: 2 callers remain", "did not pass", "2 callers found - FAILED", "ok", "passed: unrunnable without a token", "pass", "Pass-through", "passed:", "passed: could not verify without a token", "passed: cannot run gh here", "Passed: unable to confirm (network unavailable)"):
+	for verdict in ("not passed: 2 callers remain", "did not pass", "2 callers found - FAILED", "ok", "passed: unrunnable without a token", "pass", "Pass-through", "passed:", "passed: could not verify without a token", "passed: cannot run gh here", "Passed: unable to confirm (network unavailable)", "passed: FAILED, 2 callers remain", "passed: skipped (network unavailable)", "passed: error, grep exited 2", "passed: n/a", "passed: 0 callers, but the cron could not be verified"):
 		bad = _result(removals=[{"entry_title": "x", "script_path": "scripts/old_helper.sh", "preflight": [{"check": "c", "result": verdict}]}])
 		assert pa.validate_result(bad), verdict
-	for verdict in ("passed: the job has not run since 2026-09", "Passed: no workflow can run it (0 callers)", "pass: 0 callers"):
+	for verdict in ("passed: the job has not run since 2026-09", "Passed: no workflow can run it (0 callers)", "pass: 0 callers", "passed: grep found 0 callers, so the script cannot be reached from any workflow", "passed: the job can't be triggered (no on: block)", "passed: not referenced by any workflow (0 callers)"):
 		ok = _result(removals=[{"entry_title": "x", "script_path": "scripts/old_helper.sh", "preflight": [{"check": "c", "result": verdict}]}])
 		assert pa.validate_result(ok) == [], verdict
 
@@ -741,18 +742,23 @@ def test_unused_collected_answer_survives_to_the_next_collect(monkeypatch: pytes
 
 def test_reasked_plan_keeps_the_new_answer_window(monkeypatch: pytest.MonkeyPatch) -> None:
 	monkeypatch.setattr(pa, "gh_api", FakeGh())
+	monkeypatch.setattr(pa, "_now", lambda: NOW)
 	state = {
 		"audit": {"result": _result(needs_decision=[{"path": "docs/plans/a.md", "questions": "Q1: new"}])},
-		"collect": {"decision_issues": {"docs/plans/a.md": {"number": 3, "comments": 1, "asked_at": "2026-11-20T00:00:00Z"}}, "answers": ["docs/plans/a.md"], "collected_at": "2026-11-25T10:00:00Z"},
+		"collect": {"decision_issues": {"docs/plans/a.md": {"number": 3, "comments": 1, "asked_at": "2026-11-20T00:00:00Z"}}, "answers": ["docs/plans/a.md"], "collected_at": "2026-11-25T10:00:00Z", "asked_questions": {"docs/plans/a.md": "Q1: old"}},
 		"apply": {"pr_number": ""},
 	}
 	entry = pa.run_decisions("o/r", state)["decision_issues"]["docs/plans/a.md"]
-	assert entry["asked_at"] == "2026-11-25T10:00:00Z" and entry["comments"] == 1
+	# Changed questions: the window starts when they are written, not at collect.
+	assert entry["asked_at"] == "2026-11-25T12:00:00Z" and entry["comments"] == 1
 	old = [{"author_association": "OWNER", "body": "Q1: A", "created_at": "2026-11-24T00:00:00Z"}]
 	assert pa.trusted_answers(old, entry["asked_at"]) == []
+	# An answer to the old questions posted during the audit is not paired with the new ones.
+	during_audit = [{"author_association": "OWNER", "body": "Q1: B", "created_at": "2026-11-25T11:00:00Z"}]
+	assert pa.trusted_answers(during_audit, entry["asked_at"]) == []
 
 
-def test_preserved_answer_without_prior_window_uses_collect_time(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_preserved_answer_without_prior_window_keeps_the_answer(monkeypatch: pytest.MonkeyPatch) -> None:
 	monkeypatch.setattr(pa, "gh_api", FakeGh())
 	state = {
 		"audit": {"result": _result()},
@@ -760,7 +766,23 @@ def test_preserved_answer_without_prior_window_uses_collect_time(monkeypatch: py
 		"apply": {"pr_number": ""},
 	}
 	entry = pa.run_decisions("o/r", state)["decision_issues"]["docs/plans/a.md"]
-	assert entry["comments"] == -1 and entry["asked_at"] == "2026-11-25T10:00:00Z"
+	assert entry["comments"] == -1 and entry["asked_at"] == ""
+	# The answer was posted before collect ran; the next collect still accepts it.
+	answer = [{"author_association": "OWNER", "body": "Q1: A", "created_at": "2026-11-25T09:00:00Z"}]
+	assert pa.trusted_answers(answer, entry["asked_at"]) == ["Q1: A"]
+
+
+def test_pushed_branch_without_pr_number_keeps_the_decision_open(monkeypatch: pytest.MonkeyPatch) -> None:
+	fake = FakeGh()
+	monkeypatch.setattr(pa, "gh_api", fake)
+	state = {
+		"audit": {"result": _result(applied_decisions=[{"path": "docs/plans/a.md", "issue": 3}])},
+		"collect": {"decision_issues": {"docs/plans/a.md": {"number": 3, "comments": 1, "asked_at": "2026-11-20T00:00:00Z"}}, "answers": ["docs/plans/a.md"]},
+		"apply": {"pr_number": "", "branch": "ai/plan-autopilot-20261125-abcdef0"},
+	}
+	out = pa.run_decisions("o/r", state)
+	assert out["closed"] == [] and fake.calls == []
+	assert out["decision_issues"]["docs/plans/a.md"]["comments"] == -1
 
 
 def test_decision_applied_without_a_file_change_is_closed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -792,10 +814,18 @@ def test_audit_result_must_classify_every_plan(tmp_path: Path) -> None:
 	state: dict[str, Any] = {}
 	assert pa.finish_audit(state, 0, out, ["docs/plans/a.md", "docs/plans/b.md"]) == 1
 	assert state["error"]["reason"] == "result_invalid"
-	full = _result(classification=[
+	classified = [
 		{"path": "docs/plans/a.md", "status": "PARTIAL", "freshness": "CURRENT", "evidence": "x"},
 		{"path": "docs/completed/b.md", "status": "COMPLETE", "freshness": "n/a", "evidence": "y"},
-	])
+	]
+	# An older completed plan with the same name does not cover the live plan.
+	collision = _result(classification=classified)
+	out.write_text("```json\n" + json.dumps(collision) + "\n```\n", encoding="utf-8")
+	state = {}
+	assert pa.finish_audit(state, 0, out, ["docs/plans/a.md", "docs/plans/b.md"]) == 1
+	assert state["error"]["reason"] == "result_invalid"
+	# The completed path counts only for a plan this result archives.
+	full = _result(classification=classified, archived=[{"from": "docs/plans/b.md", "to": "docs/completed/b.md", "refs_issue": 7}])
 	out.write_text("```json\n" + json.dumps(full) + "\n```\n", encoding="utf-8")
 	state = {}
 	assert pa.finish_audit(state, 0, out, ["docs/plans/a.md", "docs/plans/b.md"]) == 0

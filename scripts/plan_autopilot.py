@@ -131,10 +131,17 @@ PERMANENT_RE = re.compile(r"permanent\s*[\u2014\u2013-]+\s*review annually", re.
 AUTO_CLOSE_RE = re.compile(r"\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\b\s*:?\s*(?:(?:[\w.-]+/[\w.-]+)?#\d+|https?://github\.com/[\w.-]+/[\w.-]+/issues/\d+)", re.I)
 # A preflight result the model itself reports as not passed. The prompt makes
 # `unrunnable` a fail; the apply side refuses it instead of trusting the prompt.
-# Also any wording that says the check could not be run or verified
-# ("passed: could not verify without a token"); "has not run since" is not
-# matched, so a passing result that mentions it is still accepted.
-PREFLIGHT_NOT_PASSED_RE = re.compile(r"\b(?:unrunnable|could ?not|couldn't|cannot|can't|unable to)\b", re.IGNORECASE)
+# The failure words are checked only in the verdict, right after `passed:`
+# ("passed: FAILED, 2 callers remain", "passed: could not verify ..."), not
+# in the evidence prose, so "passed: 0 callers, the script cannot be reached"
+# is accepted. `unrunnable`, and wording that says the check itself could not
+# be verified or confirmed, are refused anywhere in the result.
+PREFLIGHT_NOT_PASSED_RE = re.compile(
+	r"^\s*pass(?:ed)?\s*:\s*\W*(?:fail(?:ed|s|ure)?|error(?:ed|s)?|skip(?:ped|s)?|unrunnable|n/?a|not (?:run|pass(?:ed)?|verified|checked|executed|met)|did ?n[o']t|could ?n[o']t|cannot|can't|unable)\b"
+	r"|\bunrunnable\b"
+	r"|\b(?:could ?n[o']t|cannot|can't|unable to) (?:be )?(?:verif(?:y|ied)|check(?:ed)?|confirm(?:ed)?)\b",
+	re.IGNORECASE,
+)
 # Every preflight result must open with an explicit pass verdict
 # (`passed: <evidence>`, as the prompt asks); any other wording is a fail. An
 # allow-list, not a list of failure phrasings: "did not pass", "not passed" or
@@ -507,12 +514,17 @@ def run_collect(repo: str, workdir: Path, state: dict[str, Any], today: str, hea
 	decisions = decision_issues_from_listing(listing)
 	answers: dict[str, str] = {}
 	questions: dict[str, str] = {}
+	# The questions every open decision issue asks now (run state only, not
+	# the status marker): decisions keeps the answer window when it re-asks
+	# the same questions and restarts it when the questions change.
+	asked_questions: dict[str, str] = {}
 	seen: dict[str, dict[str, Any]] = {}
 	for path, issue in sorted(decisions.items()):
 		number = int(issue.get("number") or 0)
 		count = int(issue.get("comments") or 0)
 		before = prior.get(path) if isinstance(prior.get(path), dict) else {}
 		seen[path] = {"number": number, "comments": count, "asked_at": str(before.get("asked_at") or "")}
+		asked_questions[path] = decision_questions(str(issue.get("body") or ""))
 		if count == 0 or count == int(before.get("comments") or -1):
 			continue
 		comments = gh_list(f"repos/{repo}/issues/{number}/comments")
@@ -534,7 +546,7 @@ def run_collect(repo: str, workdir: Path, state: dict[str, Any], today: str, hea
 	target = workdir / INPUT_FILE
 	target.parent.mkdir(parents=True, exist_ok=True)
 	target.write_text(json.dumps(bundle, indent=2, sort_keys=True), encoding="utf-8")
-	return {"decision_issues": seen, "answers": sorted(answers), "input": bundle, "collected_at": collected_at}
+	return {"decision_issues": seen, "answers": sorted(answers), "input": bundle, "collected_at": collected_at, "asked_questions": asked_questions}
 
 
 def _git_head(workdir: Path) -> str:
@@ -752,9 +764,14 @@ def cmd_audit(args: argparse.Namespace) -> int:
 
 
 def missing_plans(result: dict[str, Any], plans: list[str]) -> list[str]:
-	"""Plans under docs/plans/ before the audit that classification[] does not list."""
+	"""Plans under docs/plans/ before the audit that classification[] does not list.
+
+	The docs/completed/ alias counts only for a plan this result archives: an
+	older completed plan with the same file name never hides a live plan.
+	"""
 	listed = {str(c.get("path") or "") for c in result.get("classification") or [] if isinstance(c, dict)}
-	return [p for p in plans if p not in listed and "docs/completed/" + p.rsplit("/", 1)[1] not in listed]
+	moved = {str(a.get("from") or "") for a in result.get("archived") or [] if isinstance(a, dict)}
+	return [p for p in plans if p not in listed and not (p in moved and "docs/completed/" + p.rsplit("/", 1)[1] in listed)]
 
 
 def finish_audit(state: dict[str, Any], rc: int, output: Path, plans: list[str] | None = None) -> int:
@@ -1216,6 +1233,7 @@ def run_decisions(repo: str, state: dict[str, Any]) -> dict[str, Any]:
 	# The answer window restarts at the moment collect read the comments (the
 	# comment count saved below is from then too), never at this later step.
 	now = str((state.get("collect") or {}).get("collected_at") or "") or _iso(_now())
+	asked_questions = (state.get("collect") or {}).get("asked_questions") or {}
 	opened: dict[str, int] = {}
 	closed: list[int] = []
 	if result.get("needs_decision"):
@@ -1224,13 +1242,18 @@ def run_decisions(repo: str, state: dict[str, Any]) -> dict[str, Any]:
 		path = item["path"]
 		body = decision_body(path, item["questions"])
 		existing = known.get(path)
+		# Same questions as the issue already asks: an answer posted during
+		# the audit still fits them, so the window keeps starting at collect.
+		# New or changed questions: the window starts when they are written,
+		# so a late answer to the old questions is never paired with them.
+		same_questions = bool(existing) and asked_questions.get(path) == decision_questions(body)
 		if existing and int(existing.get("number") or 0) > 0:
 			number = int(existing["number"])
 			gh_api(f"repos/{repo}/issues/{number}", "PATCH", {"body": body})
 		else:
 			created = gh_api(f"repos/{repo}/issues", "POST", {"title": f"Plan decision needed: {path.rsplit('/', 1)[1]}", "body": body, "labels": [DECISION_LABEL]})
 			number = int((created or {}).get("number") or 0)
-		known[path] = {"number": number, "comments": int((known.get(path) or {}).get("comments") or 0), "asked_at": now}
+		known[path] = {"number": number, "comments": int((known.get(path) or {}).get("comments") or 0), "asked_at": now if same_questions else _iso(_now())}
 		opened[path] = number
 	# Only plans with a trusted (OWNER / MEMBER / COLLABORATOR) answer collected
 	# this run can be closed; the model's applied_decisions alone is not proof.
@@ -1244,6 +1267,11 @@ def run_decisions(repo: str, state: dict[str, Any]) -> dict[str, Any]:
 			continue
 		number = int(entry.get("number") or 0)
 		if number <= 0:
+			continue
+		if not pr_number and (state.get("apply") or {}).get("branch"):
+			# A branch was pushed but no PR number came back: the change is
+			# not reviewable yet, so the issue stays open (the answer is kept
+			# for a later audit below).
 			continue
 		if pr_number:
 			comment = f"The plan autopilot applied this decision in #{pr_number}."
@@ -1264,7 +1292,9 @@ def run_decisions(repo: str, state: dict[str, Any]) -> dict[str, Any]:
 		# an answer to the old questions must not be applied to the new ones.
 		if path in known and path not in opened:
 			before = collected.get(path) if isinstance(collected.get(path), dict) else {}
-			known[path] = dict(known[path], comments=-1, asked_at=str(before.get("asked_at") or known[path].get("asked_at") or now))
+			# No earlier window stays empty (every trusted answer counts): the
+			# collect time would postdate the answer and drop it.
+			known[path] = dict(known[path], comments=-1, asked_at=str(before.get("asked_at") or known[path].get("asked_at") or ""))
 	return {"decision_issues": known, "opened": opened, "closed": closed}
 
 
