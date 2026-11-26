@@ -2638,6 +2638,8 @@ jobs:
       AI_ENGINE_FALLBACK_POLICY: ${{ vars.AI_ENGINE_FALLBACK_POLICY || 'capacity' }}
       PLAN_AUTOPILOT_DEFAULT_BRANCH: ${{ github.event.repository.default_branch || 'main' }}
       PLAN_AUTOPILOT_MAINTENANCE_PR_STALE_HOURS: ${{ vars.PLAN_AUTOPILOT_MAINTENANCE_PR_STALE_HOURS || '24' }}
+      # Codex fallback model; empty means the script default (openai/gpt-6-sol).
+      PLAN_AUTOPILOT_CODEX_MODEL: ${{ vars.PLAN_AUTOPILOT_CODEX_MODEL || '' }}
     steps:
       - name: Checkout repository for the plan audit
         uses: actions/checkout@v5

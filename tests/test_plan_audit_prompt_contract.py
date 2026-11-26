@@ -33,6 +33,8 @@ def test_prompt_keeps_step_4a_refresh_rules() -> None:
 	assert "Check only plans step 4 classified PARTIAL or NOT_IMPLEMENTED for staleness" in text
 	assert "A COMPLETE plan is never refreshed" in text
 	assert "An in-flight plan always owns the shared piece" in text
+	assert "Treat `docs/completed/*.md` as presumed done but auditable" in text
+	assert "every archived plan must be classified `COMPLETE`" in text
 
 
 def test_prompt_keeps_conflict_gate_and_bundle_caps() -> None:

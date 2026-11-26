@@ -20,6 +20,9 @@ Inputs:
 - `.plan-autopilot/audit_input.json` holds `open_tracking` (open `ai:orchestrator-tracking` issues; empty when this run starts), `open_prs` (open pull requests: number, head ref, title), `decision_answers` (plan path to answer text from repository members), `decision_questions` (plan path to the questions those answers refer to, from the decision issue), `default_branch`, `head_sha` and `today`.
 - The workspace is the default branch at `head_sha`. Use it as the default branch for step 4a: there is no `git fetch` and no `git log`, so a plan's baseline is the repository content you can read, and drift is judged against that content.
 
+Step 4, completed plans (rule kept from `/audit-plans`):
+- Treat `docs/completed/*.md` as presumed done but auditable: default-trust those plans, but flag any the repository shows regressed or never actually finished. Report each flagged plan as a `classification` entry under its `docs/completed/<name>.md` path with `status` `PARTIAL` or `NOT_IMPLEMENTED`, `freshness` `n/a` and the evidence, and name it in `summary`. Never edit, move or delete a `docs/completed/` plan.
+
 Step 4a, stale-plan refresh (rules kept from `/audit-plans`):
 - Check only plans step 4 classified PARTIAL or NOT_IMPLEMENTED for staleness, and refresh only those. A COMPLETE plan is never refreshed: report its `freshness` as `n/a` and archive it unchanged only as step 7 allows (an archive must carry the plan's exact content).
 - A plan is STALE when a file, function, env var, repo variable, workflow, job, step, label, contract or test it names was renamed, moved or removed; when a premise about current behaviour no longer holds; when part of its scope was already shipped by other work; or when it relies on a CLAUDE.md section, command or pipeline that was retired. Cite the plan line and the repository evidence.
@@ -58,7 +61,7 @@ Step 8, registry sweep (the preflight gate is a hard gate):
 Output contract:
 - Your final message is one JSON object and nothing else. One ```json fence around it is the only wrapper allowed.
 - The object has exactly these keys:
-  - `classification`: array of `{"path", "status", "freshness", "evidence"}`, one entry for every plan under `docs/plans/` when the run started (an archived plan by its `docs/plans/` path); a result that leaves a plan out is refused; `status` is `COMPLETE`, `PARTIAL` or `NOT_IMPLEMENTED`; `freshness` is `CURRENT`, `STALE` or `n/a`.
+  - `classification`: array of `{"path", "status", "freshness", "evidence"}`, one entry for every plan under `docs/plans/` when the run started (an archived plan by its `docs/plans/` path), plus one `docs/completed/<name>.md` entry for each completed plan step 4 flags; a result that leaves a plan out is refused; every archived plan must be classified `COMPLETE`, or the result is refused; `status` is `COMPLETE`, `PARTIAL` or `NOT_IMPLEMENTED`; `freshness` is `CURRENT`, `STALE` or `n/a`.
   - `refreshed`: array of `{"path", "stale", "changed"}`, one per plan file you edited in `docs/plans/`.
   - `needs_decision`: array of `{"path", "questions"}`; `questions` is the Q/A text.
   - `applied_decisions`: array of `{"path", "issue"}`; `issue` is the decision issue number from the input, or 0 when unknown.

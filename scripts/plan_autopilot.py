@@ -714,6 +714,13 @@ def _semantic_errors(obj: dict[str, Any]) -> list[str]:
 			errors.append(f"archived: invalid move {_one_line(item['from'], 80)!r}")
 		if item["refs_issue"] < 1:
 			errors.append("archived: refs_issue must be a positive integer")
+	# /audit-plans step 7: only a plan classified COMPLETE is archived. The
+	# script enforces it (apply pushes with GH_PAT); the classification may
+	# name the plan by its docs/plans/ path or its docs/completed/ path.
+	complete = {c["path"] for c in obj["classification"] if c["status"] == "COMPLETE"}
+	for item in obj["archived"]:
+		if item["from"] not in complete and item["to"] not in complete:
+			errors.append(f"archived: plan is not classified COMPLETE {_one_line(item['from'], 80)!r}")
 	for item in obj["removals"]:
 		path = item["script_path"]
 		if not re.fullmatch(r"[A-Za-z0-9._/-]{1,300}", path) or path.startswith("/") or ".." in path.split("/") or path.startswith(".git/"):
@@ -1036,6 +1043,7 @@ def completed_blobs_at_head(workdir: Path) -> dict[str, str]:
 	proc = _git(workdir, "ls-tree", "-z", "HEAD", "--", "docs/completed/", check=False)
 	blobs: dict[str, str] = {}
 	if proc.returncode != 0:
+		print(f"::warning::plan autopilot: git ls-tree of docs/completed/ failed rc={proc.returncode}; identical-archive dedup disabled")
 		return blobs
 	for entry in proc.stdout.split("\0"):
 		meta, _, path = entry.partition("\t")

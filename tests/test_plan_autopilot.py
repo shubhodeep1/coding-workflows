@@ -902,3 +902,22 @@ def test_different_archive_copy_is_never_replaced(tmp_path: Path) -> None:
 	with pytest.raises(pa.ApplyError) as exc:
 		_check_with_head_blobs(work, result)
 	assert exc.value.reason == "diff_outside_allowlist"
+
+
+# ---------------------------------------------------------------- review fixes (round 6)
+
+def test_archived_plan_must_be_classified_complete() -> None:
+	move = [{"from": "docs/plans/a.md", "to": "docs/completed/a.md", "refs_issue": 7}]
+	partial = _result(archived=move)
+	assert any("not classified COMPLETE" in e for e in pa.validate_result(partial))
+	unlisted = _result(classification=[], archived=move)
+	assert pa.validate_result(unlisted)
+	by_plan_path = _result(classification=[{"path": "docs/plans/a.md", "status": "COMPLETE", "freshness": "n/a", "evidence": "x"}], archived=move)
+	assert pa.validate_result(by_plan_path) == []
+	by_completed_path = _result(classification=[{"path": "docs/completed/a.md", "status": "COMPLETE", "freshness": "n/a", "evidence": "x"}], archived=move)
+	assert pa.validate_result(by_completed_path) == []
+
+
+def test_completed_blobs_lookup_failure_is_logged(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+	assert pa.completed_blobs_at_head(tmp_path / "not-a-repo") == {}
+	assert "identical-archive dedup disabled" in capsys.readouterr().out

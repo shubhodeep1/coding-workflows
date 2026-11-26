@@ -69,6 +69,7 @@ def test_enable_variable_defaults_off() -> None:
 	assert "vars.PLAN_AUTOPILOT_ENABLED == 'true'" in text
 	assert "vars.PLAN_AUTOPILOT_ENABLED ||" not in text
 	assert "PLAN_AUTOPILOT_MAINTENANCE_PR_STALE_HOURS: ${{ vars.PLAN_AUTOPILOT_MAINTENANCE_PR_STALE_HOURS || '24' }}" in text
+	assert "PLAN_AUTOPILOT_CODEX_MODEL: ${{ vars.PLAN_AUTOPILOT_CODEX_MODEL || '' }}" in _job("plan_autopilot")
 	switches = (REPO_ROOT / "scripts" / "stage_switches.json").read_text(encoding="utf-8")
 	assert "PLAN_AUTOPILOT_ENABLED" not in switches
 
