@@ -453,7 +453,8 @@
 		{
 			"name": "OPERATOR_STEP_DAILY_TICK_ENABLED",
 			"default": "true",
-			"stage": "Pipeline-human-wait-elimination Phase 9 (#10118). The daily 0 6 * * * collect-logs run of workflow-log-analysis.yml runs scripts/operator_step_daily_tick.sh (step \"Tick observable operator steps\", fail-open); false turns the daily observable tick off."
+			"stage": "Pipeline-human-wait-elimination Phase 9 (#10118). The daily 0 6 * * * collect-logs run of workflow-log-analysis.yml runs scripts/operator_step_daily_tick.sh (step \"Tick observable operator steps\", fail-open); false turns the daily observable tick off.",
+			"on_values": ["1", "yes", "on"]
 		},
 		{
 			"name": "ORCH_IMPLEMENTS_MARKER_ENABLED",
