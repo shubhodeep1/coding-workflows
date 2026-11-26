@@ -110,7 +110,9 @@ def _undiscovered_without_pending(data: dict, discovered: set[str]) -> tuple[lis
 	stray_markers = [
 		marker.get("name") if isinstance(marker.get("name"), str) else repr(marker)[:120]
 		for marker in data.get("off_on_purpose", [])
-		if marker.get("name") not in discovered
+		# Check the type first: an unhashable name (list, dict) would raise
+		# TypeError in the set lookup before the repr above is built.
+		if (not isinstance(marker.get("name"), str) or marker.get("name") not in discovered)
 		and (marker.get("pending") is not True or not str(marker.get("name", "")).endswith("_ENABLED"))
 	]
 	return stray, stray_markers
