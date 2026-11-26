@@ -222,6 +222,10 @@ def test_garbage_input_defers(tmp_path: Path, arg: str) -> None:
 
 GUARD_WINDOW_LINES = 30
 PY_ARGV_MERGE_RE = re.compile(r"""['"]pr['"]\s*,\s*['"]merge['"]""")
+# One item per line (formatter style): `"pr",` then `"merge",` on the next non-blank line.
+PY_ARGV_PR_LINE_RE = re.compile(r"""^['"]pr['"]\s*,\s*$""")
+PY_ARGV_MERGE_LINE_RE = re.compile(r"""^['"]merge['"]\s*(,|$)""")
+PY_ARGV_LIST_SCAN_LINES = 15
 
 
 def _direct_merge_lines(path: Path) -> list[int]:
@@ -231,9 +235,14 @@ def _direct_merge_lines(path: Path) -> list[int]:
 		stripped = line.lstrip()
 		# Python helpers may call gh with an argument list: ["gh", "pr", "merge", ...].
 		argv_merge = path.suffix == ".py" and PY_ARGV_MERGE_RE.search(line) is not None
-		if stripped.startswith("#") or ("gh pr merge" not in line and not argv_merge):
+		prev = next((prior.strip() for prior in reversed(lines[:index]) if prior.strip()), "")
+		split_merge = path.suffix == ".py" and bool(PY_ARGV_MERGE_LINE_RE.match(stripped)) and bool(PY_ARGV_PR_LINE_RE.match(prev))
+		if stripped.startswith("#") or ("gh pr merge" not in line and not argv_merge and not split_merge):
 			continue
-		if "--auto" in line or "--disable-auto" in line:
+		# A split list carries its flags on the following lines, up to the closing bracket.
+		tail = lines[index:index + PY_ARGV_LIST_SCAN_LINES] if split_merge else [line]
+		tail = tail[:next((i + 1 for i, item in enumerate(tail) if "]" in item), len(tail))]
+		if any("--auto" in item or "--disable-auto" in item for item in tail):
 			continue
 		if stripped.startswith("echo ") or stripped.startswith('_noop_gate_failure_alert'):
 			continue
@@ -283,7 +292,7 @@ def _direct_merge_scan_paths() -> list[Path]:
 	paths: list[Path] = []
 	for pattern in (".github/workflows/*.yml", ".github/workflows/*.yaml", "workflow-templates/*.yml", "workflow-templates/*.yaml"):
 		paths.extend(REPO_ROOT.glob(pattern))
-	# Python helpers too (shell-string form), so a later direct merge there fails this test.
+	# Python helpers too (shell-string and argument-list forms), so a later direct merge there fails this test.
 	for suffix in ("*.sh", "*.py"):
 		paths.extend((REPO_ROOT / "scripts").rglob(suffix))
 	return sorted(set(paths))
@@ -308,6 +317,21 @@ def test_no_unguarded_direct_merge_into_the_default_branch() -> None:
 	for path, (count, reason) in DIRECT_MERGE_EXEMPT.items():
 		assert reason.strip(), path
 		assert found.get(path, 0) == count, f"{path}: expected {count} exempt direct-merge line(s), found {found.get(path, 0)}"
+
+
+def test_python_argv_merge_forms_are_detected(tmp_path: Path) -> None:
+	helper = tmp_path / "helper.py"
+	helper.write_text(
+		'run(["gh", "pr", "merge", "1", "--squash"])\n'
+		'run(["gh", "pr", "merge", "2", "--auto", "--squash"])\n'
+		'run([\n\t"gh",\n\t"pr",\n\t"merge",\n\t"3",\n\t"--squash",\n])\n'
+		'run([\n\t"gh",\n\t"pr",\n\t"merge",\n\t"4",\n\t"--auto",\n])\n'
+		'run([\n\t"gh",\n\t"pr",\n\t"list",\n])\n',
+		encoding="utf-8",
+	)
+	lines = helper.read_text(encoding="utf-8").splitlines()
+	assert [lines[index].strip() for index in _direct_merge_lines(helper)] == ['run(["gh", "pr", "merge", "1", "--squash"])', '"merge",']
+	assert len(_direct_merge_lines(helper)) == 2
 
 
 def test_judge_wrapper_fails_closed_without_the_library() -> None:
