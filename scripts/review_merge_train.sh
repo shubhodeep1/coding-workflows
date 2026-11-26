@@ -3010,10 +3010,19 @@ _mt_merge_lease_conflict_unlabel_due()
 # this tick (_MT_LEASE_READY_CACHE, reset at the start of _mt_merge_lease_tick)
 # is reused with its MERGE_LEASE_NOT_READY_REASON / MERGE_LEASE_FINAL_CI_STATE,
 # so the waiter scan and the grant loop make one pulls/<pr> read per head.
-# The caller has just run _merge_lease_pr_eligible for the same head.
+# The caller has just run _merge_lease_pr_eligible for the same head. The key
+# also carries the newest ci/final state of that fresh statuses response, so a
+# ci/final that changed since the cached result misses the cache and is
+# checked again (no extra call; only the pulls/<pr> read is reused).
 _mt_merge_lease_pr_ready_cached()
 {
-	local rdc_key="${1:-}:${2:-}" rdc_line="" rdc_rc=0 rdc_reason="" rdc_state=""
+	local rdc_key="${1:-}:${2:-}" rdc_line="" rdc_rc=0 rdc_reason="" rdc_state="" rdc_fci="-"
+	if [ -n "${REVIEW_FINAL_CI_WORKFLOW:-}" ] && [ -n "${MERGE_LEASE_ELIGIBLE_STATUSES_JSON:-}" ] \
+		&& [ "${MERGE_LEASE_ELIGIBLE_STATUSES_HEAD:-}" = "${2:-}" ]; then
+		rdc_fci="$(jq -r '[ .[] | select(type == "object" and .context == "ci/final") ][0] | if . == null then "absent" else ((.state // "") | tostring | gsub("[^a-z_]"; "")) end' <<< "${MERGE_LEASE_ELIGIBLE_STATUSES_JSON}" 2>/dev/null)" || rdc_fci="-"
+		[ -n "${rdc_fci}" ] || rdc_fci="-"
+	fi
+	rdc_key="${rdc_key}:${rdc_fci}"
 	rdc_line="$(printf '%s\n' "${_MT_LEASE_READY_CACHE:-}" | awk -v k="${rdc_key}" '$1 == k { print; exit }' 2>/dev/null)" || rdc_line=""
 	if [ -n "${rdc_line}" ]; then
 		read -r _ rdc_rc rdc_reason rdc_state <<< "${rdc_line}"
