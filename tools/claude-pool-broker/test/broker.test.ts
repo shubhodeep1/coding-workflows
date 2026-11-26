@@ -565,6 +565,17 @@ describe("workflow identity", () => {
 		expect(s.logs.join("\n")).not.toContain("maybe");
 	});
 
+	it("a boolean BROKER_SHA_CHECK_ALL_BRANCHES_ENABLED=false (wrangler [vars]) keeps the old 1-call refusal", async () => {
+		const s = stub();
+		s.compare[`main...${SHA}`] = { status: 503, body: {} };
+		s.compare[`stable...${SHA}`] = { status: 200, body: { status: "behind" } };
+		const env = { ...ENV, BROKER_SHA_CHECK_ALL_BRANCHES_ENABLED: false as unknown as string };
+		const { status, body } = await call(s, request(await sign(pinned())), env);
+		expect([status, body.error]).toEqual([403, "workflow_sha_unverifiable"]);
+		expect(compareCalls(s).length).toBe(1);
+		expect(s.logs.some((line) => line.includes("workflow_sha_check_all_branches"))).toBe(false);
+	});
+
 	for (const value of ["TRUE", "", " true "]) {
 		it(`BROKER_SHA_CHECK_ALL_BRANCHES_ENABLED=${JSON.stringify(value)} keeps the new path on`, async () => {
 			const s = stub();

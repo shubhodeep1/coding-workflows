@@ -724,14 +724,23 @@ export class ChatgptAccount
 
 /**
  * Whether verifyTrustedSha asks every ANCESTOR_BRANCHES branch after an
- * unavailable compare. Unset, non-string, empty or `true` (any case): on.
- * `false` (any case): off, silently. Anything else: off, with one fixed-shape
- * warning that never echoes the raw value.
+ * unavailable compare. Unset (undefined/null), empty or `true` (any case,
+ * string or boolean): on. `false` (any case, string or boolean): off,
+ * silently. Anything else, including other non-string values such as a
+ * number from wrangler.toml [vars]: off, with one fixed-shape warning that
+ * never echoes the raw value.
  */
 export function shaCheckAllBranchesEnabled(raw: unknown, log: (line: string) => void): boolean
 {
-	if (typeof raw !== "string") {
+	if (raw === undefined || raw === null) {
 		return true;
+	}
+	if (typeof raw === "boolean") {
+		return raw;
+	}
+	if (typeof raw !== "string") {
+		log("CLAUDE_POOL broker workflow_sha_check_all_branches flag=invalid fallback=off");
+		return false;
 	}
 	const value = raw.trim().toLowerCase();
 	if (value === "" || value === "true") {
