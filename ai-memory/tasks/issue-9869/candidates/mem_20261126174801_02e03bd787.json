@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The remaining scope says to fix the cause, but no failure with the new messages exists yet. How should this issue continue?\nChoices:\nA) Implementation first tries to reproduce the failure on current `main`: run the single test at least 10 times, plus once through the orchestrate-poll shard runner. If it reproduces, the run reads `failure_context` and fixes the cause, either in `scripts/orchestrate_poll_process.sh` (the `branch_deleted` / PR-head fallback) or in a fixture that gives different results between runs. Either fix comes with a `changelog.d` fragment, and no assert is loosened or skipped. If it does not reproduce, no code changes: the plan records the failure as a flake it could not reproduce, the issue closes, and the heal intake files a new issue if the gate fails on this test again, this time with the assertion values in the log. (RECOMMENDED)\nB) Park this issue until a release gate run fails on this test and logs the new `failure_context`. Plan the fix from that message only.\nC) Close the remaining scope now as transient, with no reproduction attempt. Rely on the heal intake to file a new issue with the assertion values if the test fails again.",
+  "fingerprint": "d6ac2cfd9114a16f6d1a1338bbf272866ea30093d4690079ea0d1217a9b9b81d",
+  "lineage": {
+    "issue_number": 9869,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45870027472",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45870027472",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261126174801_02e03bd787",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 9869,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45870027472"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #9869 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-26T17:48:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
