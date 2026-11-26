@@ -799,6 +799,29 @@ def test_earlier_report_items_get_this_runs_redaction() -> None:
 	assert "https://github.com/other/unknown/pull/9" in out[0]["items"]
 
 
+def test_earlier_report_plan_titles_get_this_runs_redaction() -> None:
+	records = [{"name": HOST, "redacted": False}, {"name": "owner/secret", "redacted": True}]
+	label = f"private:{ipa.repo_hash('owner/secret')}"
+	earlier = [{"items": [], "aud_titles": [
+		"AUD-001: Fix scope guard in Owner/Secret",
+		"AUD-002: Retry see https://github.com/owner/secret/issues/4",
+		"AUD-003: Gate drift, see https://github.com/other/unknown/pull/9",
+		f"AUD-004: Dedupe heal intake in {HOST}",
+		"AUD-005: Keep otherowner/secret2 untouched",
+	]}]
+	out = ipa.redact_earlier_items(json.loads(json.dumps(earlier)), records, False, _settings())
+	assert out[0]["aud_titles"] == [
+		f"AUD-001: Fix scope guard in {label}",
+		f"AUD-002: Retry see https://github.com/{label}/issues/4",
+		f"AUD-004: Dedupe heal intake in {HOST}",
+		"AUD-005: Keep otherowner/secret2 untouched",
+	]
+	assert "owner/secret " not in json.dumps(out).lower() and "other/unknown" not in json.dumps(out)
+	# Redaction off: titles are left as they were.
+	out = ipa.redact_earlier_items(json.loads(json.dumps(earlier)), records, False, _settings(redact_private_in_public=False))
+	assert out[0]["aud_titles"] == earlier[0]["aud_titles"]
+
+
 def test_one_failed_earlier_report_pr_does_not_hide_the_next() -> None:
 	sha = "b" * 40
 	pulls = [

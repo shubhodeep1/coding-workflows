@@ -969,6 +969,7 @@ def open_earlier_reports(transport: Any, host: str, pipeline_login: str) -> list
 
 
 EARLIER_REPORT_URL_RE = re.compile(r"^https://github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)/(?:issues|pull)/([0-9]+)$")
+EARLIER_REPORT_TITLE_REPO_RE = re.compile(r"github\.com/([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)")
 
 
 def redact_earlier_items(earlier: list[dict[str, Any]], records: list[dict[str, Any]], host_private: bool, settings: dict[str, Any]) -> list[dict[str, Any]]:
@@ -977,10 +978,14 @@ def redact_earlier_items(earlier: list[dict[str, Any]], records: list[dict[str, 
 	An earlier report may have been written while redaction was off. A URL of
 	a repository this run redacts becomes ``private:<hash>#<n>``. While
 	redaction is active, a URL of a repository this run did not audit
-	(unknown visibility) is dropped, fail closed.
+	(unknown visibility) is dropped, fail closed. While redaction is active the
+	fix-plan titles (``aud_titles``) get the same treatment: a redacted
+	repository's ``owner/repo`` becomes ``private:<hash>``, and a title that
+	still links into a repository this run did not audit is dropped.
 	"""
 	active = not host_private and bool(settings["redact_private_in_public"])
 	audited = {str(record.get("name") or "").lower(): bool(record.get("redacted")) for record in records}
+	redacted_names = sorted({str(record.get("name") or "") for record in records if record.get("redacted") and record.get("name")}, key=len, reverse=True)
 	for report in earlier:
 		kept: list[str] = []
 		for ref in report.get("items") or []:
@@ -994,6 +999,16 @@ def redact_earlier_items(earlier: list[dict[str, Any]], records: list[dict[str, 
 			elif not active:
 				kept.append(ref)
 		report["items"] = list(dict.fromkeys(kept))
+		if active:
+			titles: list[str] = []
+			for title in report.get("aud_titles") or []:
+				for name in redacted_names:
+					title = re.sub(r"(?<![A-Za-z0-9_.-])" + re.escape(name) + r"(?![A-Za-z0-9_.-])", repo_display(name, True), title, flags=re.IGNORECASE)
+				linked = [match.group(1).lower() for match in EARLIER_REPORT_TITLE_REPO_RE.finditer(title)]
+				if any(repo not in audited or audited[repo] for repo in linked):
+					continue
+				titles.append(title)
+			report["aud_titles"] = list(dict.fromkeys(titles))
 	return earlier
 
 
