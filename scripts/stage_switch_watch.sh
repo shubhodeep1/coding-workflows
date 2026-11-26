@@ -49,6 +49,11 @@ stage_switch_registry="${STAGE_SWITCH_REGISTRY:-${script_dir}/stage_switches.jso
 # Both python calls get the same root, so a switch found only by discovery is
 # kept by the snapshot and evaluated by the report.
 stage_switch_repo_root="${STAGE_SWITCH_REPO_ROOT:-$(cd "${script_dir}/.." && pwd)}"
+# An empty root means "no discovery" to the python CLI; say so instead of
+# silently narrowing the watch to the registry names.
+if [ -z "${stage_switch_repo_root}" ]; then
+	echo "::warning::STAGE_SWITCH_WATCH repo root unresolved; switch discovery is off for this run."
+fi
 stage_switch_dir="${STAGE_SWITCH_SNAPSHOT_DIR:-${RUNNER_TEMP:-/tmp}/stage-switch-watch}"
 stage_switch_snapshot="${stage_switch_dir}/snapshot.json"
 stage_switch_output="${GITHUB_OUTPUT:-/dev/null}"
