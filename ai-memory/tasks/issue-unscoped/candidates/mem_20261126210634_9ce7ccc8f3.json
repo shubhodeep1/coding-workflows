@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The full test suite passes on the merged tree.\" (issue #10166, acceptance criterion 5)\n  expected_change_site: CI validation for PR #10166 (the final CI run for this PR on the tree merged with main; a verification step, not a code change)\n  confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5, openai_gpt-6-luna]\n  EVIDENCE: the pre-push test gate in the PR body is marked \"unverified\" and lists 67 inherited failures and 3 unverified files (tests/test_security_audit_workflow_contract.py, tests/test_test_and_mark_stable_review_blocked_budget.py, tests/test_check_failure_triage_workflow_security.py), the last editor could not collect the PyYAML-importing tests (tests/test_review_autofix_step_scripts_contract.py, tests/test_review_rb_judge_security_pass.py, tests/test_ci_budget_watch.py), the acceptance table leaves its test targets unmet, the check-run snapshot has no completed full-suite result because review / codex-agent is still in progress; the reviewers disagree on severity (anthropic_claude-sonnet-5_5=NIT, openai_gpt-6-luna=MAJOR), and z-ai_glm-5_3-flash treated this as deferred rather than a gap\n- requirement: \"A workflow that comes within 30,000 bytes of the 430,000-byte test ceiling opens a ai:ci-budget issue before any test fails.\"\n  expected_change_site: .github/workflows/ci.yml, budget-watch trigger and execution conditions\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The budget-watch job is restricted to pushes to main at .github/workflows/ci.yml:5067 and waits for the test jobs listed at lines 5068-5077. Final CI for PRs uses workflow_dispatch, declared at lines 22-28. This PR changes only the warning-threshold fallback in the budget-watch step and does not run the watcher for final CI, so a PR merge tree that exceeds the test ceiling can fail before this watcher opens an issue.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP\n  Requirement: \"The full test suite passes on the merged tree.\" (issue #10166, acceptance criterion 5)\n  Expected change site: the final CI run for this PR on the tree merged with main. This is a verification step, not a code change.\n  Evidence of absence: the pre-push test gate is \"unverified\" (67 inherited failures; 3 unverified files: tests/test_security_audit_workflow_contract.py, tests/test_test_and_mark_stable_review_blocked_budget.py, tests/test_check_failure_triage_workflow_security.py); PyYAML-importing tests were not collectable (tests/test_review_autofix_step_scripts_contract.py, tests/test_review_rb_judge_security_pass.py, tests/test_ci_budget_watch.py); no completed full-suite check result (review / codex-agent in progress); no code defect shown, so this is a gap in verification, not in what was built.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n- HARDENING_SUGGESTION: tests/test_orchestrate_poll_noop_suspicious_recovery.py lines 49-52 | HARDENING_RISK_SCORE=1\n  PROBLEM: a second `sys.path.insert` and a repeat of the same import, added after the existing `from review_autofix_step_scripts import expanded_review_autofix_text` on line 46.\n  WHY: nothing breaks, but the lines are dead code and add a duplicate sys.path entry; the fix is to delete the four added lines (4 lines changed).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- HARDENING_SUGGESTION: tests/test_orchestrate_poll_noop_suspicious_recovery.py lines 46-52 (added at lines 49-52 in the original PR diff) | HARDENING_RISK_SCORE=1\n  PROBLEM: a second `sys.path.insert` and a duplicate `from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402`, placed right after the identical import on line 46.\n  WHY: it is harmless at runtime because Python caches the module, but it is dead code that repeats the path change; the fix is to delete the 4 added lines.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"A workflow that comes within 30,000 bytes of the 430,000-byte test ceiling opens a ai:ci-budget issue before any test fails.\"\n  Expected change site: .github/workflows/ci.yml, budget-watch trigger and execution conditions.\n  Evidence of absence: The budget-watch job is restricted to pushes to main at .github/workflows/ci.yml:5067 and waits for the test jobs listed at lines 5068-5077. Final CI for PRs uses workflow_dispatch, declared at lines 22-28. The PR changes only the warning-threshold fallback, so a PR merge tree over the test ceiling can fail before the watcher opens an issue.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"The full test suite passes on the merged tree.\"\n  Expected change site: CI validation for PR #10166.\n  Evidence of absence: the pre-push test gate is marked unverified and reports inherited failures and unverified tests; the acceptance table leaves its test targets unmet; one check-run job is still in progress, so there is no completed passing full-suite result.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4b6e2ef7927e9c0cbde5bfbf0453cb48d641068a69843bc6a814afb5eb99563d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10167,
+    "run_id": "45891679085",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45891679085",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126210634_9ce7ccc8f3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10167,
+    "run_id": "45891679085"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T21:06:34Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
