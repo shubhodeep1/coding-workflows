@@ -908,6 +908,13 @@ single_pass_base_sync_carry()
 	# The shared verifier runs in a subshell so sourcing its helpers cannot
 	# change this gate's own functions (gh_retry) or shell options.
 	carry_result="$(
+		# The det-skip gate runs from the PR-head checkout; cd keeps
+		# gh_helpers.sh's cwd-relative scripts/emit_event.sh fallback inside
+		# the trusted support directory, like single_pass_inherited_clean.
+		# The cd is subshell-local, so the git checks below still run in
+		# the checkout; review_head_gate_freshness_sync reads only absolute
+		# paths and the API.
+		cd "${carry_dir}" || exit 3
 		# shellcheck source=/dev/null
 		source "${carry_dir}/gh_helpers.sh" >/dev/null 2>&1 || true
 		type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
