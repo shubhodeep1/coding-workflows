@@ -569,6 +569,14 @@ def verify_resolution(repo: str, triage: dict[str, Any], default_branch: str) ->
 			# Newest first, as the API lists them; other events (dispatch final
 			# runs on main) are not the branch's own result.
 			base_runs = [item for item in base_runs if not isinstance(item, dict) or item.get("event") in allowed_events]
+			# Push and scheduled runs overlap (separate concurrency groups): the
+			# branch's result is the run that finished last (`updated_at`, else
+			# `created_at`), so a later-created delta push that finished first
+			# cannot hide a red scheduled full run. The sort is stable, so ties
+			# keep the API's newest-created order. A malformed entry keeps the
+			# listing as it is (the check below fails closed on it).
+			if all(isinstance(item, dict) for item in base_runs):
+				base_runs = sorted(base_runs, key=lambda item: str(item.get("updated_at") or item.get("created_at") or ""), reverse=True)
 		if not isinstance(base_runs, list) or not base_runs or not isinstance(base_runs[0], dict):
 			_fail("no_completed_default_run")
 			return None

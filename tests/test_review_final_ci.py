@@ -768,6 +768,21 @@ def test_base_sync_reads_a_red_scheduled_run_as_a_red_base(fake_gh, tmp_path: Pa
 	assert _puts(calls) == [] and _dispatches(calls) == []
 
 
+def test_base_sync_orders_base_runs_by_completion(fake_gh, tmp_path: Path) -> None:
+	# Push and scheduled runs overlap: a delta push created after a scheduled
+	# full run but finishing green first must not hide the red scheduled run.
+	fixtures = _base_sync_fixtures(base="main")
+	fixtures[LISTING_KEY]["body"]["workflow_runs"].extend([
+		{"head_sha": "9" * 40, "head_branch": "main", "event": "schedule", "status": "completed", "conclusion": "failure",
+			"path": ".github/workflows/ci.yml", "created_at": "2026-11-17T07:00:00Z", "updated_at": "2026-11-17T07:40:00Z"},
+		{"head_sha": "8" * 40, "head_branch": "main", "event": "push", "status": "completed", "conclusion": "success",
+			"path": ".github/workflows/ci.yml", "created_at": "2026-11-17T07:05:00Z", "updated_at": "2026-11-17T07:15:00Z"},
+	])
+	result, calls = _sweep_one(fake_gh, tmp_path, fixtures)
+	assert "outcome=skipped reason=base_red base=main" in result.stdout, result.stdout + result.stderr
+	assert _puts(calls) == [] and _dispatches(calls) == []
+
+
 def test_base_sync_fallback_read_counts_a_red_scheduled_run(fake_gh, tmp_path: Path) -> None:
 	fixtures = _base_sync_fixtures(base="orchestrator/project-5")
 	fixtures[f"repos/{REPO}/actions/workflows/ci.yml/runs?branch=orchestrator/project-5&status=completed"] = {"body": {"workflow_runs": [

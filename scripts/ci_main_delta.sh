@@ -26,12 +26,22 @@
 #       invalid_input, head_mismatch, read_failed, invalid_response,
 #       no_green_base, base_red (the newest run failed: a red base stays red
 #       until a full run passes), base_not_ancestor, diff_failed,
-#       selector_failed, selection_invalid, over_cap, sharded_test_selected,
+#       selector_failed, selection_invalid (also a missing or null
+#       `affected_tests`), over_cap, sharded_test_selected,
+#       wiring_list_missing (the CI-structure list could not be loaded),
 #       list_write_failed. It never counts an unknown selection as passed.
+#       The base is the run that finished last (`updated_at`, then
+#       `created_at`): push and scheduled runs overlap, so a later-created
+#       delta push that finished first cannot hide a red scheduled run. The
+#       runs read is tried up to 3 times before read_failed.
+#       A failed GITHUB_OUTPUT write fails the step (exit 1), so `lint` never
+#       reads a missing output as "delta sufficient".
 #   ci_main_delta.sh run-tests
 #       Step id main_delta_run, only after `select` wrote full_required=false.
 #       Re-reads and re-checks the list, then runs, under one shared deadline
-#       (CI_MAIN_DELTA_TEST_TIMEOUT_SECS, default 840 = 14 minutes):
+#       (CI_MAIN_DELTA_TEST_TIMEOUT_SECS, default 600 = 10 minutes, so the
+#       timeout fallback stays under budget-watch's 15-minute warning for the
+#       20-minute job):
 #         - files ci.yml itself runs as `python3 <file>` the same way;
 #         - the other tests/test_*.py files in one pytest call (pytest exit 5,
 #           nothing collected, counts as a pass);
@@ -52,7 +62,7 @@
 #                                   suite runs (default 60, 1-10000).
 #   CI_MAIN_DELTA_TESTS_FILE        list file (default
 #                                   ${RUNNER_TEMP:-/tmp}/ci-main-delta-tests.txt).
-#   CI_MAIN_DELTA_TEST_TIMEOUT_SECS run-tests deadline (default 840, 60-1080).
+#   CI_MAIN_DELTA_TEST_TIMEOUT_SECS run-tests deadline (default 600, 60-1080).
 #   GITHUB_OUTPUT                   step outputs (default /dev/null).
 #
 # Log (stable prefix CI_MAIN_DELTA; one terminal line per subcommand):
@@ -64,11 +74,16 @@ set -uo pipefail
 CI_MAIN_DELTA_SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CI_MAIN_DELTA_WORKFLOW_PATH=".github/workflows/ci.yml"
 CI_MAIN_DELTA_SELECTOR="workflow-templates/.claude/hooks/prepush_affected_tests.py"
-# Test files ci.yml splits across matrix legs: one job cannot run them whole
-# inside its budget, so selecting one runs the full suite
-# (tests/test_ci_poll_test_sharding.py pins the orchestrate-poll split).
+# Test files ci.yml splits across matrix legs, or across local shards as a
+# single module (heal_module, mt_module): one serial run cannot fit them in
+# the delta deadline, so selecting one runs the full suite at once instead of
+# timing out first (tests/test_ci_poll_test_sharding.py pins the
+# orchestrate-poll split). Group-sharded module sets (pc, wg1, wg2, ub) are
+# split for their combined time, not per module, and stay runnable here.
 CI_MAIN_DELTA_SHARDED_TESTS=(
 	"tests/test_orchestrate_poll_process.py"
+	"tests/test_workflow_failure_heal.py"
+	"tests/test_review_merge_train.py"
 )
 
 # Same list as tests-sync-quick: the tests that pin ci.yml's structure. The
@@ -82,9 +97,16 @@ CI_MAIN_DELTA_HEAD="none"
 CI_MAIN_DELTA_CHANGED=0
 CI_MAIN_DELTA_TESTS=0
 
+# A failed write exits the script with 1: the step fails, tests-main-delta
+# fails and `lint` rejects the run. Returning success instead would leave the
+# job output at its "false" rendering, which `lint` accepts as delta passed.
 ci_main_delta_output()
 {
-	printf '%s=%s\n' "$1" "$2" >> "${GITHUB_OUTPUT:-/dev/null}" 2>/dev/null || true
+	if ! printf '%s=%s\n' "$1" "$2" >> "${GITHUB_OUTPUT:-/dev/null}" 2>/dev/null; then
+		echo "CI_MAIN_DELTA mode=output outcome=fail reason=output_write_failed base=${CI_MAIN_DELTA_BASE:0:12} head=${CI_MAIN_DELTA_HEAD:0:12} changed=${CI_MAIN_DELTA_CHANGED} tests=${CI_MAIN_DELTA_TESTS}"
+		echo "::error::Could not write the ${1} step output; failing the delta job."
+		exit 1
+	fi
 }
 
 ci_main_delta_log()
@@ -157,10 +179,16 @@ ci_main_delta_select()
 		return 0
 	fi
 
-	if ! runs="$(gh api "repos/${repo}/actions/workflows/ci.yml/runs?branch=${branch}&status=completed&per_page=30" 2>/dev/null)"; then
-		ci_main_delta_full select read_failed
-		return 0
-	fi
+	# Up to 3 tries, 2s apart, for a transient error; then the full suite.
+	local read_attempt=1
+	until runs="$(gh api "repos/${repo}/actions/workflows/ci.yml/runs?branch=${branch}&status=completed&per_page=30" 2>/dev/null)"; do
+		if [ "${read_attempt}" -ge 3 ]; then
+			ci_main_delta_full select read_failed
+			return 0
+		fi
+		read_attempt=$((read_attempt + 1))
+		sleep 2
+	done
 	verdict="$(printf '%s' "${runs}" | jq -r --arg branch "${branch}" --arg path "${CI_MAIN_DELTA_WORKFLOW_PATH}" '
 		if (type == "object" and (.workflow_runs | type) == "array") then
 			[.workflow_runs[] | select(type == "object")
@@ -170,7 +198,7 @@ ci_main_delta_select()
 				| select((.status // "") == "completed")
 				| select((.head_sha // "") | tostring | test("^[0-9a-f]{40}$"))
 				| select((.conclusion // "") | IN("cancelled", "skipped") | not)]
-			| sort_by(.created_at // "")
+			| sort_by([(.updated_at // .created_at // ""), (.created_at // "")])
 			| if length == 0 then "none"
 			  elif (last | .conclusion // "") == "success" then "green \(last | .head_sha)"
 			  else "red \(last | .head_sha)" end
@@ -230,7 +258,7 @@ ci_main_delta_select()
 		# One path per line, or the single word `invalid` for any malformed
 		# entry (not a list, not an object, a path that is not a string).
 		if ! jq -r '
-			(.affected_tests // []) as $a
+			.affected_tests as $a
 			| if ($a | type) != "array" then "invalid"
 			  elif any($a[]; (type != "object") or ((.path | type) != "string") or ((.path | test("[\\n\\r]")))) then "invalid"
 			  else $a[] | .path end' "${selection_file}" > "${selected_file}" 2>/dev/null; then
@@ -269,6 +297,10 @@ ci_main_delta_select()
 			return 0
 		fi
 	done
+	if [ "${#CI_SYNC_QUICK_WIRING_PATHS[@]}" -eq 0 ]; then
+		ci_main_delta_full select wiring_list_missing
+		return 0
+	fi
 	for selected_path in "${CI_SYNC_QUICK_WIRING_PATHS[@]}"; do
 		case "${selected_path}" in
 			tests/test_*.py) ;;
@@ -346,8 +378,8 @@ ci_main_delta_run_tests()
 		esac
 	done < "${list_file}"
 	CI_MAIN_DELTA_TESTS=$(( ${#script_tests[@]} + ${#pytest_tests[@]} + ${#shell_tests[@]} ))
-	limit="${CI_MAIN_DELTA_TEST_TIMEOUT_SECS:-840}"
-	{ [[ "${limit}" =~ ^[0-9]{2,4}$ ]] && [ "$((10#${limit}))" -ge 60 ] && [ "$((10#${limit}))" -le 1080 ]; } || limit=840
+	limit="${CI_MAIN_DELTA_TEST_TIMEOUT_SECS:-600}"
+	{ [[ "${limit}" =~ ^[0-9]{2,4}$ ]] && [ "$((10#${limit}))" -ge 60 ] && [ "$((10#${limit}))" -le 1080 ]; } || limit=600
 	deadline=$(( $(date -u +%s) + 10#${limit} ))
 	echo "CI_MAIN_DELTA mode=run_tests outcome=start reason=selected script=${#script_tests[@]} pytest=${#pytest_tests[@]} shell=${#shell_tests[@]}"
 

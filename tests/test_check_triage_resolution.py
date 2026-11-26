@@ -1309,6 +1309,17 @@ def test_ci_red_scheduled_run_newer_than_green_push_is_not_success(tmp_path, mon
 	assert rc == 0 and result["status"] == "unverified" and result["reason"] == "default_run_not_success"
 
 
+def test_ci_red_scheduled_run_that_finished_last_is_not_success(tmp_path, monkeypatch):
+	# The delta push was created later but finished first; the scheduled full
+	# run that finished red after it is the branch's result.
+	runs = [
+		_base_run(id=37000001007, created_at="2026-11-26T22:35:00Z", updated_at="2026-11-26T22:45:00Z"),
+		_base_run(event="schedule", conclusion="failure", id=37000001008, created_at="2026-11-26T22:30:00Z", updated_at="2026-11-26T22:55:00Z"),
+	]
+	result, rc, _ = _gate(tmp_path, monkeypatch, routes=_ci_routes(runs))
+	assert rc == 0 and result["status"] == "unverified" and result["reason"] == "default_run_not_success"
+
+
 def test_ci_delta_push_falls_back_to_the_newest_green_scheduled_run(tmp_path, monkeypatch):
 	delta = _base_run(id=37000001003)
 	scheduled = _base_run(event="schedule", id=37000001004, head_sha=SCHEDULE_SHA)

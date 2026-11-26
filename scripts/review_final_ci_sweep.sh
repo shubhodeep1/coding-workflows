@@ -149,7 +149,10 @@ review_final_ci_sweep_base_sync_log()
 # a red base) (green, no push CI, or unknown: an unreadable
 # base result does not block the sync). Reads the tick's listing first
 # (FINAL_CI_SWEEP_LISTING_FILE), then at most one runs read per base, cached
-# in FINAL_CI_SWEEP_BASE_STATE for the tick.
+# in FINAL_CI_SWEEP_BASE_STATE for the tick. Runs are ordered by completion
+# (`updated_at`, then `created_at`): push and scheduled runs sit in separate
+# concurrency groups and overlap, so a later-created delta push that finished
+# first must not hide a scheduled full run that finished red after it.
 declare -A FINAL_CI_SWEEP_BASE_STATE=()
 review_final_ci_sweep_base_ci_red()
 {
@@ -165,13 +168,13 @@ review_final_ci_sweep_base_ci_red()
 			[.workflow_runs[]? | select(type == "object")
 				| select(((.event // "") | IN("push", "schedule")) and (.head_branch // "") == $base and (.status // "") == "completed")
 				| select((.conclusion // "") | IN("success", "failure"))]
-			| sort_by(.created_at // "") | last | (.conclusion // "")' "${FINAL_CI_SWEEP_LISTING_FILE}" 2>/dev/null | tail -n1)"
+			| sort_by([(.updated_at // .created_at // ""), (.created_at // "")]) | last | (.conclusion // "")' "${FINAL_CI_SWEEP_LISTING_FILE}" 2>/dev/null | tail -n1)"
 		if [ -z "${state}" ]; then
 			base_runs="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/actions/workflows/${REVIEW_FINAL_CI_WORKFLOW}/runs?branch=${base}&status=completed&per_page=10" 2>/dev/null || echo "")"
 			state="$(printf '%s' "${base_runs}" | jq -r '
 				[.workflow_runs[]? | select(type == "object") | select((.event // "") | IN("push", "schedule"))
 					| select((.conclusion // "") | IN("success", "failure"))]
-				| sort_by(.created_at // "") | last | (.conclusion // "")' 2>/dev/null | tail -n1)"
+				| sort_by([(.updated_at // .created_at // ""), (.created_at // "")]) | last | (.conclusion // "")' 2>/dev/null | tail -n1)"
 		fi
 		FINAL_CI_SWEEP_BASE_STATE["${base}"]="${state:-unknown}"
 		state="${state:-unknown}"

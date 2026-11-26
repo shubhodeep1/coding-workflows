@@ -1800,9 +1800,13 @@ else
 			# Issue #10156: main's push runs are a delta suite and its full suite
 			# runs from ci.yml's `schedule` trigger, so the base result is the
 			# newest push or scheduled run. Same single read, a wider page,
-			# filtered on the client.
+			# filtered on the client. Push and scheduled runs overlap (separate
+			# concurrency groups), so when the newest-created run is completed
+			# the result is the completed run that finished last (`updated_at`,
+			# ties to the API's newest-created order): a later-created delta push
+			# that finished green first must not hide a red scheduled full run.
 			base_gate_conclusion="$(gh_retry gh api "repos/${REPO}/actions/workflows/${base_gate_workflow_id}/runs?branch=${BASE_REF}&per_page=10" \
-				--jq '[.workflow_runs[]? | select(type == "object") | select((.event // "") == "push" or (.event // "") == "schedule")][0] | if . == null then "" elif .status == "completed" then ((.conclusion // "") + " " + (.id // "" | tostring)) else "pending" end' 2>/dev/null || true)"
+				--jq '[.workflow_runs[]? | select(type == "object") | select((.event // "") == "push" or (.event // "") == "schedule")] as $base_runs | if ($base_runs | length) == 0 then "" elif $base_runs[0].status != "completed" then "pending" else ([$base_runs | to_entries[] | select(.value.status == "completed")] | sort_by([(.value.updated_at // .value.created_at // ""), (0 - .key)]) | last | .value | ((.conclusion // "") + " " + (.id // "" | tostring))) end' 2>/dev/null || true)"
 		elif [[ "${base_gate_workflow_id}" =~ ^[0-9]+$ ]]; then
 			base_gate_conclusion="$(gh_retry gh api "repos/${REPO}/actions/workflows/${base_gate_workflow_id}/runs?branch=${BASE_REF}&event=push&per_page=1" \
 				--jq '.workflow_runs[0] | if . == null then "" elif .status == "completed" then ((.conclusion // "") + " " + (.id // "" | tostring)) else "pending" end' 2>/dev/null || true)"

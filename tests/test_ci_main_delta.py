@@ -76,6 +76,11 @@ if mode == "nonlist":
 	affected = {"path": "tests/test_a.py"}
 if mode == "nonobject":
 	affected = ["tests/test_a.py"]
+if mode == "nokey":
+	open(out, "w").write(json.dumps({"changed_files": []}))
+	sys.exit(0)
+if mode == "null":
+	affected = None
 open(out, "w").write(json.dumps({"changed_files": [], "affected_tests": affected}))
 '''
 
@@ -150,7 +155,8 @@ class Repo:
 			(self.root / "tests" / f"test_{name}.py").write_text(PASSING_TEST, encoding="utf-8")
 		# A CI-structure test (CI_SYNC_QUICK_WIRING_PATHS) that ci.yml runs as a script.
 		(self.root / "tests" / "test_ci_job_split_contract.py").write_text("print('structure ok')\n", encoding="utf-8")
-		(self.root / "tests" / "test_orchestrate_poll_process.py").write_text(PASSING_TEST, encoding="utf-8")
+		for sharded in ("test_orchestrate_poll_process.py", "test_workflow_failure_heal.py", "test_review_merge_train.py"):
+			(self.root / "tests" / sharded).write_text(PASSING_TEST, encoding="utf-8")
 		self.git("init", "-q", "-b", "main")
 		self.base = self.commit("base")
 
@@ -286,6 +292,47 @@ def test_untrusted_range_runs_the_full_suite(repo: Repo, setup: str, reason: str
 	assert f"outcome=full_required reason={reason} " in _terminal(proc)
 
 
+def test_base_is_the_run_that_finished_last(repo: Repo) -> None:
+	# A scheduled full run created before a delta push run but finishing red
+	# after it is the branch's result: the overlap must not hide it.
+	mid = repo.commit("push 1", files={"src/a.sh": "echo 1\n"})
+	repo.commit("push 2", files={"src/b.sh": "echo 2\n"})
+	repo.runs(
+		_run(repo.base, event="schedule", conclusion="failure", created="2026-11-26T22:30:00Z", updated_at="2026-11-26T22:55:00Z"),
+		_run(mid, created="2026-11-26T22:35:00Z", updated_at="2026-11-26T22:45:00Z"),
+	)
+	proc, outputs = repo.run("select")
+	assert outputs == {"full_required": "true"}, proc.stdout
+	assert "reason=base_red " in _terminal(proc)
+
+
+def test_read_is_retried_before_read_failed(repo: Repo) -> None:
+	repo.commit("push", files={"src/a.sh": "echo 1\n"})
+	proc, outputs = repo.run("select", FAKE_GH_EXIT="1")
+	assert outputs == {"full_required": "true"}
+	assert "reason=read_failed " in _terminal(proc)
+	assert len(repo.gh_log.read_text(encoding="utf-8").splitlines()) == 3
+
+
+def test_missing_wiring_list_runs_the_full_suite(repo: Repo) -> None:
+	(repo.root / "scripts" / "ci_sync_quick.sh").unlink()
+	repo.commit("drop the wiring list", files={"src/a.sh": "echo 1\n"})
+	repo.runs(_run(repo.base))
+	proc, outputs = repo.run("select")
+	assert outputs == {"full_required": "true"}, proc.stdout
+	assert "reason=wiring_list_missing " in _terminal(proc)
+
+
+@pytest.mark.parametrize("mode", ["select", "run-tests"])
+def test_unwritable_output_fails_the_job(repo: Repo, mode: str) -> None:
+	# A lost full_required output would render as "false", which lint accepts.
+	repo.runs(_run(repo.base))
+	repo.tests_file.write_text("tests/test_a.py\n", encoding="utf-8")
+	proc, _outputs = repo.run(mode, GITHUB_OUTPUT=str(repo.tmp))
+	assert proc.returncode == 1, proc.stdout + proc.stderr
+	assert "reason=output_write_failed" in proc.stdout
+
+
 def test_base_not_ancestor_runs_the_full_suite(repo: Repo) -> None:
 	repo.git("checkout", "-q", "-b", "side")
 	side = repo.commit("side", files={"src/a.sh": "side\n"})
@@ -313,9 +360,14 @@ def test_head_mismatch_and_invalid_input_run_the_full_suite(repo: Repo) -> None:
 		({"FAKE_SELECTOR_MODE": "badjson"}, "selector_failed"),
 		({"FAKE_SELECTOR_MODE": "nonlist"}, "selection_invalid"),
 		({"FAKE_SELECTOR_MODE": "nonobject"}, "selection_invalid"),
+		# A missing or null affected_tests is an unknown selection, not an empty one.
+		({"FAKE_SELECTOR_MODE": "nokey"}, "selection_invalid"),
+		({"FAKE_SELECTOR_MODE": "null"}, "selection_invalid"),
 		({"FAKE_SELECTOR_EXTRA": "tests/../scripts/x.py"}, "selection_invalid"),
 		({"FAKE_SELECTOR_EXTRA": "scripts/ci_main_delta.sh"}, "selection_invalid"),
 		({"FAKE_SELECTOR_EXTRA": "tests/test_orchestrate_poll_process.py"}, "sharded_test_selected"),
+		({"FAKE_SELECTOR_EXTRA": "tests/test_workflow_failure_heal.py"}, "sharded_test_selected"),
+		({"FAKE_SELECTOR_EXTRA": "tests/test_review_merge_train.py"}, "sharded_test_selected"),
 		({"MAIN_PUSH_DELTA_MAX_TEST_FILES": "1"}, "over_cap"),
 	],
 )

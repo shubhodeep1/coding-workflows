@@ -1985,6 +1985,25 @@ class CheckFailureTriageBaseGateTests(unittest.TestCase):
 		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 		self.assertIn("CHECK_TRIAGE skip reason=pr_specific_failure base=main base_conclusion=success pr=17 check=CI", proc.stdout)
 
+	def test_ci_base_gate_orders_completed_runs_by_completion(self) -> None:
+		"""A delta push created after a scheduled full run but finishing green
+		first does not hide the red scheduled run; an in-progress newest run
+		still reads as pending."""
+		page = json.dumps({"workflow_runs": [
+			{"id": 51, "event": "push", "status": "completed", "conclusion": "success",
+				"created_at": "2026-11-26T22:35:00Z", "updated_at": "2026-11-26T22:45:00Z"},
+			{"id": 50, "event": "schedule", "status": "completed", "conclusion": "failure",
+				"created_at": "2026-11-26T22:30:00Z", "updated_at": "2026-11-26T22:55:00Z"},
+		]})
+		proc, outputs, _metadata = _run_collect_stage(
+			parent_body=PLAIN_SOURCE,
+			base={"ref": "main", "workflow_id": "9", "workflow_path": ".github/workflows/ci.yml"},
+			extra_env={"MOCK_BASE_RUNS_PAGE": page},
+		)
+		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+		self.assertIn("CHECK_TRIAGE base_gate outcome=file base=main base_conclusion=failure pr=17", proc.stdout)
+		self.assertEqual(outputs.get("ready"), "true")
+
 	def test_non_ci_base_gate_keeps_the_push_read(self) -> None:
 		calls: list[str] = []
 		proc, _outputs, _metadata = _run_collect_stage(
