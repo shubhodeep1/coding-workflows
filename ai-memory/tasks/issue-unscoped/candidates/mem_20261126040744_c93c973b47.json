@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"2) For each call site, add a test to tests/test_gh_read.py with a stub gh on PATH.\"\n  expected_change_site: tests/test_gh_read.py\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: scripts/dispatch_and_watch_workflow_run.sh contains four plain `gh_api_safe_quiet_print` calls (stop-jobs check, pre-dispatch run id, status poll, watched-run jobs) that stay on the PAT and are inventoried but not tested with the requested 403/rate-limit/502/non-HTTP failure stubs in test_gh_read.py. Severity stated: MAJOR. Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) examined this gap and concluded it does not hold.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"2) For each call site, add a test to tests/test_gh_read.py with a stub gh on PATH.\"\n  Expected change site: tests/test_gh_read.py\n  Evidence of absence: The PR adds tests for wait-review, dispatch-watch, smoke-cancel, and promote-cycle call sites. However, `scripts/dispatch_and_watch_workflow_run.sh` contains four plain `gh_api_safe_quiet_print` calls (stop-jobs check, pre-dispatch run id, status poll, watched-run jobs) that stay on the PAT and are inventoried in the PR but are not explicitly tested with the requested 403/rate-limit/502/non-HTTP failure stubs in `test_gh_read.py`. The requirement requested a test for \"each call site\" that the steps reach.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "ff178cbca54ffbf590a07aa99057fd1559cd00de47f98adc2397138df5c82108",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10106,
+    "run_id": "45745383300",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45745383300",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126040744_c93c973b47",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10106,
+    "run_id": "45745383300"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-26T04:07:44Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
