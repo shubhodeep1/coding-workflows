@@ -95,14 +95,20 @@ def test_discovery_finds_sample_switches():
 
 
 def _undiscovered_without_pending(data: dict, discovered: set[str]) -> tuple[list, list]:
-	"""Registry entries and markers naming an undiscovered switch without `pending: true`."""
+	"""Registry entries and markers naming an undiscovered switch without `pending: true`.
+
+	`pending` is accepted only for a name ending in `_ENABLED`: discovery never
+	finds any other name, and the watch warns daily about such a marker.
+	"""
 	stray = [
 		entry["name"] for entry in data["switches"]
-		if entry["name"] not in discovered and entry.get("pending") is not True
+		if entry["name"] not in discovered
+		and (entry.get("pending") is not True or not entry["name"].endswith("_ENABLED"))
 	]
 	stray_markers = [
 		marker.get("name") for marker in data.get("off_on_purpose", [])
-		if marker.get("name") not in discovered and marker.get("pending") is not True
+		if marker.get("name") not in discovered
+		and (marker.get("pending") is not True or not str(marker.get("name", "")).endswith("_ENABLED"))
 	]
 	return stray, stray_markers
 
@@ -127,6 +133,10 @@ def test_undiscovered_entry_needs_pending(tmp_path):
 	data["switches"][1]["pending"] = True
 	data["off_on_purpose"][0]["pending"] = True
 	assert _undiscovered_without_pending(data, discovered) == ([], [])
+	# A pending name without the `_ENABLED` suffix can never be discovered.
+	data["switches"].append({"name": "NO_SUFFIX", "pending": True})
+	data["off_on_purpose"].append({"name": "NO_SUFFIX", "until": "2099-01-01", "reason": "r", "pending": True})
+	assert _undiscovered_without_pending(data, discovered) == (["NO_SUFFIX"], ["NO_SUFFIX"])
 
 
 def test_registry_check_fails_on_unlisted_workflow_switch(tmp_path):
@@ -169,7 +179,9 @@ def test_registry_entries_are_well_formed():
 	assert isinstance(data["off_on_purpose"], list)
 	discovered = set(ssw.discover_switches(ROOT))
 	for marker in data["off_on_purpose"]:
-		assert marker["name"] in discovered or marker.get("pending") is True, marker
+		assert marker["name"] in discovered or (
+			marker.get("pending") is True and str(marker["name"]).endswith("_ENABLED")
+		), marker
 		if "pending" in marker:
 			assert isinstance(marker["pending"], bool), marker
 		assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", marker["until"])
