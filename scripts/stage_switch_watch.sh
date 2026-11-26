@@ -53,6 +53,9 @@ stage_switch_repo_root="${STAGE_SWITCH_REPO_ROOT:-$(cd "${script_dir}/.." && pwd
 # silently narrowing the watch to the registry names.
 if [ -z "${stage_switch_repo_root}" ]; then
 	echo "::warning::STAGE_SWITCH_WATCH repo root unresolved; switch discovery is off for this run."
+elif [ ! -d "${stage_switch_repo_root}/.github/workflows" ]; then
+	# A mistyped STAGE_SWITCH_REPO_ROOT makes discovery fail open to nothing.
+	echo "::warning::STAGE_SWITCH_WATCH repo root ${stage_switch_repo_root} has no .github/workflows; workflow switch discovery finds nothing this run."
 fi
 stage_switch_dir="${STAGE_SWITCH_SNAPSHOT_DIR:-${RUNNER_TEMP:-/tmp}/stage-switch-watch}"
 stage_switch_snapshot="${stage_switch_dir}/snapshot.json"
