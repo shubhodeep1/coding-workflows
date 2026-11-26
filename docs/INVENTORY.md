@@ -197,6 +197,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/evidence_pack.py` — Build the fenced, scrubbed evidence pack (trusted open pull requests touching the paths in play, default-branch history, recent default-branch runs) for clarify, plan and implement prompts (issue #8427, default off).
 - `scripts/files_touched_scope_guard.py` — files_touched scope-enforcement guard for the AI implement pipeline.
 - `scripts/plan_superseded_merged_pr.py` — Plan-phase check that closes a CI-repair issue (or a re-issue of one) whose pull request already merged with the failing check passing on its final head (issue #7216; log prefix `PLAN_SUPERSEDED_MERGED_PR`).
+- `scripts/plan_scope_block_route.sh` — Plan-phase router run by the "Route planning scope block" step of `plan.yml`: validates the planner's `SCOPE_MISSING:` paths for a block caused only by missing `files_touched` scope and writes the trusted guard-rejection marker the unblock judge turns into an `override_guard` offer (issue #9534; log prefix `PLAN_SCOPE_BLOCK`).
 - `scripts/plan_split_dispatch.sh` — Plan-phase hand-off that starts an orchestrator project (Claude engine) for a pipeline-authored plan listing more than 50 files, instead of holding it for `/approved` (Q151; log prefix `PLAN_SPLIT`).
 - `scripts/partial_delivery.py` — Parse an approved plan's `## Deferred scope` section, embed it in the implement PR body and render the remaining-items comment that keeps a partially delivered issue open (issue #7657; log prefix `PARTIAL_DELIVERY`); its `heal-counterfactual` subcommand decides a workflow-heal plan's auto-approval from its `HEAL_COUNTERFACTUAL` line (issue #8249).
 - `scripts/persist_postmerge_verify.py` — Check after merge: arm an `AI_POSTMERGE_VERIFY_V1` pending marker and `ai:verify-pending` on a merged standalone issue whose plan names a post-merge workflow, then grade the first completed run that contains the merge on poller ticks (issue #8427 P5, default off; log prefix `PERSIST`).
@@ -219,6 +220,8 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/generate_resource_id.py` — Generate stable-format resource IDs via the ai-memory record-ID helper.
 - `scripts/generate_symbol_diff_summary.py` — Generate a symbol-level diff summary from a unified diff and changed files list.
 - `scripts/gh_api_retry.py` — Rate-limit-aware `gh api` retry helper; Python twin of `gh_api_retry` in gh_helpers.sh.
+- `scripts/gh_call_counter/gh` — `gh` PATH shim that logs one allowlisted-subcommand/paginate/token-kind line per GitHub CLI call (never arguments or values) and then execs the next `gh` on PATH unchanged; installed by `gh_call_counter_install` in gh_helpers.sh (issue #9887).
+- `scripts/gh_call_counter/gh-call-counter-summary` — Summarises the `gh_call_counter` shim log into the `calls_in_job=` / `paginated_in_job=` / `calls_by_token=` keys of the `GH_PAT_BUDGET phase=end` line.
 - `scripts/gh_helpers.sh` — gh_helpers.sh — Rate-limit-aware GitHub API retry helpers.
 - `scripts/git_ref_health_check.sh` — Shell helper for git ref health check.
 - `scripts/heal_isolated_implement.sh` — Run a heal editor and validator in disposable credential-free containers and scope-check transfer.
