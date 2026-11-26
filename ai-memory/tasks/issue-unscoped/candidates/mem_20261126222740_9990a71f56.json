@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tools/claude-pool-broker/src/index.ts:83,735 | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The Env interface declares `BROKER_SHA_CHECK_ALL_BRANCHES_ENABLED?: string;`, but `shaCheckAllBranchesEnabled(raw: unknown, ...)` accepts and handles booleans, so the type does not match the runtime shape (the test at `tools/claude-pool-broker/test/broker.test.ts:572` casts through `false as unknown as string`).\n  WHY: Nothing fails today because every call site goes through `shaCheckAllBranchesEnabled`, but a future caller that calls string methods on a boolean value from wrangler.toml `[vars]` would throw. The reviewer rated it NIT.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"In the PR body, use Refs #9865.\"\n  expected_change_site: PR description body (pipeline-composed, not a repository file)\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  EVIDENCE: The PR description reads \"Closes https://github.com/shubhodeep1/coding-workflows/issues/10172\" and has no `Refs #9865`. `changelog.d/10172-broker-sha-check-all-branches.md:15` already carries `Refs #9865`. No auto-close keyword targets #9865, so \u00a721 is not violated. The gap cannot be fixed from the worktree. All reviewers rated it NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\nTASK_GAP:\nRequirement: \"In the PR body, use Refs #9865.\"\nExpected change site: the PR description, which the pipeline writes and which is not a repository file.\nEvidence of absence: the PR description reads \"Closes https://github.com/shubhodeep1/coding-workflows/issues/10172\" and has no `Refs #9865`. `changelog.d/10172-broker-sha-check-all-branches.md` already ends with `Refs #9865`. No auto-close keyword points at #9865, so the \u00a721 rule is not broken. A worktree edit cannot change the PR body.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\nTASK_GAP:\nRequirement: \"In the PR body, use Refs #9865.\"\nExpected change site: PR description (pipeline-composed; not a repository file)\nEvidence of absence: The PR description does not contain `Refs #9865`. The changelog fragment at `changelog.d/10172-broker-sha-check-all-branches.md:15` contains `Refs #9865`. The PR body cannot be edited from the worktree.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tools/claude-pool-broker/src/index.ts:83,735 | severity=NIT | confidence=3\n  PROBLEM: The Env interface declares the flag as `string | undefined`, but `shaCheckAllBranchesEnabled` accepts `unknown` and handles booleans. The test at `tools/claude-pool-broker/test/broker.test.ts:572` casts a boolean through `false as unknown as string`.\n  WHY: It does not fail today, but the type misdescribes the runtime shape, so a future caller using string methods would throw on a boolean.\nTASK_GAP:\nRequirement: \"In the PR body, use Refs #9865.\"\nExpected change site: The PR description body that the pipeline composes (not a repository file).\nEvidence of absence: The PR body is \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/10172\" with no `Refs #9865`. `changelog.d/10172-broker-sha-check-all-branches.md:15` carries `Refs #9865`. No auto-close keyword targets #9865. The gap cannot be fixed from the worktree.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\nTASK_GAP:\nRequirement: \"In the PR body, use Refs #9865.\"\nExpected change site: the PR description body (pipeline-composed; not a repository file).\nEvidence of absence: the PR description reads \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/10172\" and has no reference to #9865. `changelog.d/10172-broker-sha-check-all-branches.md:15` carries `Refs #9865`, and no auto-close keyword targets #9865, so \u00a721 is not violated. Prior autofix rounds deferred this as not fixable from the worktree.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "68e0a71d4d4be198c9beaf8bf7756a32c298e566dc400ad1b2500d2b06d4b747",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10174,
+    "run_id": "45901254171",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45901254171",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261126222740_9990a71f56",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10174,
+    "run_id": "45901254171"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-26T22:27:40Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
