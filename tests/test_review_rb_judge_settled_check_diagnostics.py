@@ -235,6 +235,20 @@ def test_rerun_capped_at_three_runs() -> None:
 	assert "run=14 action=rerun_skipped reason=rerun_capped" in res["stdout"], res["stdout"]
 
 
+def test_already_requested_runs_do_not_use_the_cap() -> None:
+	"""A later pass: runs 11-13 already carry trusted markers, so they are
+	skipped without a POST and must not fill the cap; run 14 gets its one
+	rerun instead of being capped on every pass."""
+	ids = "\n".join(f"{n}:cancelled" for n in (11, 12, 13, 14))
+	comments = [{"author": "github-actions[bot]", "body": _marker(str(n))} for n in (11, 12, 13)]
+	res = _run_judge(names="a:cancelled\nb:cancelled\nc:cancelled\nd:cancelled", run_ids=ids, comments=comments)
+	reruns = _rerun_calls(res)
+	assert len(reruns) == 1 and reruns[0].endswith("/actions/runs/14/rerun-failed-jobs"), res["calls"]
+	assert res["stdout"].count("reason=already_requested") == 3, res["stdout"]
+	assert "reason=rerun_capped" not in res["stdout"], res["stdout"]
+	assert len(res["posts"]) == 1 and res["posts"][0].rstrip().endswith(_marker("14")), res["posts"]
+
+
 def test_names_past_cap_are_marked_as_more() -> None:
 	names = "\n".join(f"c{n}:failure" for n in range(1, 24))
 	res = _run_judge(names=names, run_ids="1:failure")
