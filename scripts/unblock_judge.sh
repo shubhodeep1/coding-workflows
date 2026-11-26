@@ -1628,7 +1628,7 @@ PY
 # so the same failure keeps the same fingerprint across runs.
 unblock_evidence()
 {
-	unblock_py - "${RUNTIME_DIR}/item_comments.json" "${UNBLOCK_LOGIN}" "${RUNTIME_DIR}/failing_checks.json" "${ITEM_KIND}" "${ITEM}" <<'PY'
+	unblock_py - "${RUNTIME_DIR}/item_comments.json" "${UNBLOCK_LOGIN}" "${RUNTIME_DIR}/failing_checks.json" "${ITEM_KIND}" "${ITEM}" "${RUNTIME_DIR}/linked_pr.json" <<'PY'
 import json, re, sys
 comments = json.load(open(sys.argv[1], encoding="utf-8"))
 login, kind, item = sys.argv[2], sys.argv[4], sys.argv[5]
@@ -1636,6 +1636,11 @@ try:
 	checks = json.load(open(sys.argv[3], encoding="utf-8"))
 except (OSError, ValueError):
 	checks = []
+# Issue #10149: an issue's open ai/issue-<n> pull request (unblock_linked_open_pr).
+try:
+	linked_pr = json.load(open(sys.argv[6], encoding="utf-8"))
+except (OSError, ValueError, IndexError):
+	linked_pr = {}
 def norm(text):
 	text = re.sub(r"https?://\S+", "", text)
 	text = re.sub(r"\b[0-9a-f]{7,40}\b", "", text)
@@ -1655,8 +1660,60 @@ if kind == "pr":
 	evidence["pr"] = item
 	if isinstance(checks, list) and checks:
 		evidence["checks"] = sorted({str(name) for name in checks if name})[:30]
+# Without an open pull request the key is left out, so existing fingerprints
+# do not change.
+if kind == "issue" and isinstance(linked_pr, dict) and type(linked_pr.get("number")) is int and linked_pr["number"] > 0:
+	evidence["linked_pr"] = linked_pr["number"]
 print(json.dumps(evidence))
 PY
+}
+
+# unblock_linked_open_pr (issue #10149, re-implementation of #9546): for an
+# issue item, find its open pull request on this repository's own
+# ai/issue-<n> branch and write {number, head_ref, head_sha, base_ref} to
+# linked_pr.json ({} when there is none, the read fails, or the switch
+# UNBLOCK_JUDGE_LINKED_PR_ENABLED is false). The judge then sees the work in
+# progress instead of re-implementing it from the default branch.
+# GitHub API audit (CLAUDE.md §14): the only other `pulls?head=` reads here
+# (unblock_fixup_delivered_close, unblock_heal_already_fixed) ask for
+# state=closed pull requests of fix-up branches, so they cannot answer this.
+# One read per issue item; fails open to {}.
+unblock_linked_open_pr()
+{
+	local out="${RUNTIME_DIR}/linked_pr.json" pulls_json="" found="" number="" outcome="none"
+	echo '{}' > "${out}"
+	if [ "${ITEM_KIND}" != "issue" ]; then
+		return 0
+	fi
+	if [ "$(printf '%s' "${UNBLOCK_JUDGE_LINKED_PR_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" = "false" ]; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=linked_pr_lookup outcome=disabled pr="
+		return 0
+	fi
+	if ! pulls_json="$(gh api -X GET "repos/${REPOSITORY}/pulls" -f state=open -f head="${REPOSITORY%%/*}:ai/issue-${ITEM}" -f per_page=5 2>/dev/null)" \
+		|| ! jq -e 'type == "array"' <<< "${pulls_json}" >/dev/null 2>&1; then
+		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=linked_pr_lookup outcome=unavailable pr="
+		return 0
+	fi
+	# Only this repository's own branch counts: a fork's pull request never matches.
+	found="$(jq -c --arg ref "ai/issue-${ITEM}" --arg repo "${REPOSITORY}" '
+		[.[] | select(type == "object" and (.state // "open") == "open" and (.head.ref // "") == $ref
+			and ((.head.repo.full_name // "") | ascii_downcase) == ($repo | ascii_downcase))]
+		| first // empty
+		| {number: .number,
+			head_ref: ((.head.ref // "") | tostring | gsub("[^A-Za-z0-9._/-]"; "") | .[0:100]),
+			head_sha: ((.head.sha // "") | tostring | gsub("[^0-9a-f]"; "") | .[0:40]),
+			base_ref: ((.base.ref // "") | tostring | gsub("[^A-Za-z0-9._/-]"; "") | .[0:100])}' <<< "${pulls_json}" 2>/dev/null || true)"
+	if [ -n "${found}" ]; then
+		number="$(jq -r '.number // "" | tostring' <<< "${found}" 2>/dev/null || true)"
+	fi
+	if [[ "${number}" =~ ^[1-9][0-9]*$ ]] && jq -e '(.number | type) == "number"' <<< "${found}" >/dev/null 2>&1; then
+		printf '%s\n' "${found}" > "${out}"
+		outcome="found"
+	else
+		number=""
+	fi
+	unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} op=linked_pr_lookup outcome=${outcome} pr=${number}"
+	return 0
 }
 
 # Item/comments/check-runs and the optional run-log read do not include Actions
@@ -2490,6 +2547,7 @@ Still waiting for an operator; last checked ${now}.
 				> "${RUNTIME_DIR}/failing_checks.json" 2>/dev/null || echo '[]' > "${RUNTIME_DIR}/failing_checks.json"
 		fi
 	fi
+	unblock_linked_open_pr
 	unblock_evidence > "${RUNTIME_DIR}/evidence.json" 2>/dev/null || echo '{"reason": "unreadable"}' > "${RUNTIME_DIR}/evidence.json"
 	fp="$(unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" fingerprint --stop "${ITEM_STOP}" --evidence-file "${RUNTIME_DIR}/evidence.json" | jq -r '.fingerprint // empty')"
 	if ! [[ "${fp}" =~ ^[0-9a-f]{12}$ ]]; then
@@ -2612,7 +2670,7 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 		unblock_ask_model || return 0
 	fi
 	local -a validate_args=()
-	local validate_ok="false" sandbox_reasked="false" validate_err sandbox_reason
+	local validate_ok="false" sandbox_reasked="false" validate_err sandbox_reason linked_reason=""
 	# At most two passes: a verdict whose instructions need network or remote
 	# access (sandbox_incompatible:<id>) gets one re-ask; anything else, or a
 	# second refusal, falls through to the invalid_verdict handling below.
@@ -2627,11 +2685,32 @@ ${unblock_marker_entry}" >/dev/null 2>&1; then
 		if [ "${UNBLOCK_INSTRUCTION_SANDBOX_CHECK_ENABLED}" != "false" ]; then
 			validate_args+=(--sandbox-check)
 		fi
+		# Issue #10149: an open pull request already carries the issue's work.
+		if jq -e '(.number | type) == "number"' "${RUNTIME_DIR}/linked_pr.json" >/dev/null 2>&1; then
+			validate_args+=(--linked-pr-file "${RUNTIME_DIR}/linked_pr.json")
+		fi
 		if unblock_py "${SUPPORT_DIR}/scripts/unblock_ledger.py" "${validate_args[@]}" > "${RUNTIME_DIR}/verdict.json"; then
 			validate_ok="true"
 			break
 		fi
 		validate_err="$(jq -r '.error // ""' "${RUNTIME_DIR}/verdict.json" 2>/dev/null || true)"
+		# Issue #10149: a verdict that would re-implement the work of the
+		# issue's open pull request gets the same single re-ask.
+		if [[ "${validate_err}" == linked_open_pr:* ]]; then
+			linked_reason="$(printf '%s' "${validate_err#linked_open_pr:}" | tr -cd '0-9' | cut -c1-20)"
+			if [ "${sandbox_reasked}" = "true" ] || [ "${terminal}" = "true" ]; then
+				unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=linked_pr_check outcome=refused_after_reask reason=linked_open_pr pr=${linked_reason}"
+				break
+			fi
+			sandbox_reasked="true"
+			unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=linked_pr_check outcome=reasked reason=linked_open_pr pr=${linked_reason}"
+			UNBLOCK_JUDGE_REASK_NOTE="Your previous verdict was refused: issue has open pull request #${linked_reason} carrying the work; retry_budget and reissue would re-implement it. Judge from the diff, or use wait on that pull request."
+			if ! unblock_ask_model; then
+				unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=linked_pr_check outcome=refused_after_reask reason=ask_failed"
+				return 0
+			fi
+			continue
+		fi
 		if [[ "${validate_err}" != sandbox_incompatible:* ]]; then
 			# A re-asked answer that fails for another reason still closes the re-ask in the log.
 			[ "${sandbox_reasked}" = "true" ] && unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} fingerprint=${fp} op=instruction_sandbox_check outcome=refused_after_reask reason=other"
@@ -2933,6 +3012,14 @@ unblock_ask_model()
 		: > "${RUNTIME_DIR}/pr_diff.txt"
 		if [ "${ITEM_KIND}" = "pr" ]; then
 			gh api "repos/${REPOSITORY}/pulls/${ITEM}" -H "Accept: application/vnd.github.diff" 2>/dev/null | head -c 120000 > "${RUNTIME_DIR}/pr_diff.txt" || true
+		elif [ "${ITEM_KIND}" = "issue" ]; then
+			# Issue #10149: the issue's open pull request carries the work, so
+			# the judge reads its diff (the same read as for a PR item).
+			local linked_diff_pr=""
+			linked_diff_pr="$(jq -r '.number // "" | tostring' "${RUNTIME_DIR}/linked_pr.json" 2>/dev/null || true)"
+			if [[ "${linked_diff_pr}" =~ ^[1-9][0-9]*$ ]]; then
+				gh api "repos/${REPOSITORY}/pulls/${linked_diff_pr}" -H "Accept: application/vnd.github.diff" 2>/dev/null | head -c 120000 > "${RUNTIME_DIR}/pr_diff.txt" || true
+			fi
 		fi
 	fi
 	echo '{}' > "${RUNTIME_DIR}/state_slice.json"
@@ -2973,6 +3060,19 @@ unblock_ask_model()
 		unblock_log "item=${ITEM} kind=${ITEM_KIND} stop=${ITEM_STOP} outcome=skip reason=context_failed"
 		return 1
 	}
+	# Issue #10149: an issue item's open pull request, only with
+	# UNBLOCK_JUDGE_LINKED_PR_ENABLED on (default true; off keeps the context
+	# byte-identical). null when the issue has none.
+	if [ "${ITEM_KIND}" = "issue" ] \
+		&& [ "$(printf '%s' "${UNBLOCK_JUDGE_LINKED_PR_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')" != "false" ]; then
+		if jq --slurpfile linked "${RUNTIME_DIR}/linked_pr.json" \
+			'. + {linked_open_pr: (($linked[0] // {}) | if (.number | type) == "number" then {number, head_ref, base_ref, head_sha} else null end)}' \
+			"${RUNTIME_DIR}/judge_context.json" > "${RUNTIME_DIR}/judge_context.json.tmp" 2>/dev/null; then
+			mv -f "${RUNTIME_DIR}/judge_context.json.tmp" "${RUNTIME_DIR}/judge_context.json"
+		else
+			rm -f "${RUNTIME_DIR}/judge_context.json.tmp"
+		fi
+	fi
 	# Attempt journal (issue #8428, P1): only with PERSIST_JOURNAL_ENABLED=true
 	# (default false) is `attempt_journal` added, so the context is
 	# byte-identical with the switch off. Rendered from the comments already
