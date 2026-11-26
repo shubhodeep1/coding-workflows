@@ -30,6 +30,8 @@ def test_prompt_keeps_step_4a_refresh_rules() -> None:
 	assert "never what it delivers" in text
 	assert "Do not guess at intent" in text
 	assert "Plans in flight are checked, not edited" in text
+	assert "Check only plans step 4 classified PARTIAL or NOT_IMPLEMENTED for staleness" in text
+	assert "A COMPLETE plan is never refreshed" in text
 	assert "An in-flight plan always owns the shared piece" in text
 
 
