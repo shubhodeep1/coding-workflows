@@ -116,8 +116,17 @@ def _undiscovered_without_pending(data: dict, discovered: set[str]) -> tuple[lis
 def test_registry_entries_name_discovered_or_pending():
 	discovered = set(ssw.discover_switches(ROOT))
 	stray, stray_markers = _undiscovered_without_pending(_registry(), discovered)
-	assert stray == [], "registry entries for undiscovered switches need \"pending\": true"
-	assert stray_markers == [], "off_on_purpose markers for undiscovered switches need \"pending\": true"
+	# Name the offending switches and the remedy, so a failure on a merged tree
+	# (an entry registered ahead of its switch's pull request, #10127 G4) can
+	# be fixed from the CI log alone.
+	assert stray == [], (
+		f"registry entries for undiscovered switches {stray} need \"pending\": true "
+		"in scripts/stage_switches.json (or remove them once their pull request closes)"
+	)
+	assert stray_markers == [], (
+		f"off_on_purpose markers for undiscovered switches {stray_markers} need \"pending\": true "
+		"in scripts/stage_switches.json"
+	)
 
 
 def test_undiscovered_entry_needs_pending(tmp_path):
