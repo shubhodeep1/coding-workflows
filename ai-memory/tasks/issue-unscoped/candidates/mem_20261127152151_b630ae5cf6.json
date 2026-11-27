@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cAdd a contract test that reads `.github/workflows/test-and-mark-stable.yml` and fails when a dispatch step sets `DISPATCH_RATE_LIMIT_MAX_WAIT_SECS` below a floor constant.\u201d\n  expected_change_site: `tests/test_dispatch_and_watch_rate_limit.py::_gate_dispatch_steps`\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The parser checks cap values in each step\u2019s `header` and rejects a job-level value in `job_header` (lines 422\u2013428), but does not inspect workflow-level `env:`. A workflow-level cap below the floor would be inherited by the workflow-log-analysis snapshot, which relies on the default, while the test continues to count it as 1500. (Reviewer-stated SEVERITY: NIT.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING (advisory, not a finding): tests/test_dispatch_and_watch_rate_limit.py:`_gate_dispatch_steps`, near line 427 (the job-level cap check)\n  PROBLEM: The fail-closed check covers step-level and job-level `env:` but not a workflow-level `env:` (the text before `jobs:`), so a cap set there would reach every step and still be scored as the 1500 default.\n  WHY: The workflow sets no such entry today (the key appears only on the five step-level lines). Suggested fix: before the job loop, assert `not re.search(r\"^\\s*DISPATCH_RATE_LIMIT_MAX_WAIT_SECS\\s*:\", text.split(\"\\njobs:\\n\", 1)[0], re.M)`. Estimated lines changed: 2. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n- HARDENING (advisory, not a finding): tests/test_dispatch_and_watch_rate_limit.py:`_gate_dispatch_steps`, line 427\n  PROBLEM: The fail-closed check covers step env and job header env, but not a workflow-level `env:` block (text before `jobs:`).\n  WHY: A cap set there would reach every step and still be scored as the 1500 default. Suggested fix: once before the job loop, add `assert not re.search(r\"^\\s*DISPATCH_RATE_LIMIT_MAX_WAIT_SECS\\s*:\", text.split(\"\\njobs:\\n\", 1)[0], re.M)`. Estimated lines changed: 2. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- HARDENING (advisory, not a finding): tests/test_dispatch_and_watch_rate_limit.py:_gate_dispatch_steps (around line 427), before the job loop\n  PROBLEM: The fail-closed checks cover the step env (header) and the job env (job_header) but not a workflow-level `env:` block (the text before `jobs:` in `.github/workflows/test-and-mark-stable.yml`).\n  WHY: GitHub Actions merges workflow-level env into every step, so a `DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: \"100\"` set at workflow scope would override per-step values at runtime while the test still scores every step as the 1500 default and passes. Suggested fix: assert no match of `r\"^\\s*DISPATCH_RATE_LIMIT_MAX_WAIT_SECS\\s*:\"` against `text.split(\"\\njobs:\\n\", 1)[0]` (re.M). Estimated lines changed: 4. HARDENING_RISK_SCORE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cAdd a contract test that reads `.github/workflows/test-and-mark-stable.yml` and fails when a dispatch step sets `DISPATCH_RATE_LIMIT_MAX_WAIT_SECS` below a floor constant.\u201d\n  Expected change site: `tests/test_dispatch_and_watch_rate_limit.py::_gate_dispatch_steps`\n  Evidence of absence: The parser checks cap values in each step\u2019s `header` and rejects a job-level value in `job_header` (lines 422\u2013428), but does not inspect workflow-level `env:`. A workflow-level cap below the floor would be inherited by the workflow-log-analysis snapshot, which relies on the default, while the test continues to count it as 1500.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING (advisory, not a finding): tests/test_dispatch_and_watch_rate_limit.py:`_gate_dispatch_steps`, lines 423-427 (fail-closed checks added by the last run)\n  PROBLEM: The fail-closed check covers step-level env and job-header env, but not a workflow-level `env:` block (text before `jobs:` in the same file).\n  WHY: A `DISPATCH_RATE_LIMIT_MAX_WAIT_SECS` entry set at workflow level would apply to every dispatch step at runtime yet still be scored by `_gate_dispatch_steps` as the 1500 default, silently bypassing both the floor test and the budget test; no such entry exists today, so advisory only. Suggested fix: at the top of `_gate_dispatch_steps`, before the job loop, add `assert not re.search(r\"^\\s*DISPATCH_RATE_LIMIT_MAX_WAIT_SECS\\s*:\", text.split(\"\\njobs:\\n\", 1)[0], re.M), \"set the cap on the step, not the workflow\"`. Estimated lines changed: 2. HARDENING_RISK_SCORE: 1\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1fdec2865a8528104d20e2ca91c49ec95d557a025f0fa8f97650dbb8afcb8bba",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10207,
+    "run_id": "46013319455",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46013319455",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127152151_b630ae5cf6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10207,
+    "run_id": "46013319455"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-27T15:21:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
