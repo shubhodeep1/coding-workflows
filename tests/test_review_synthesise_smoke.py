@@ -8,9 +8,14 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
+# Moved review_autofix.yml step bodies live in scripts/review_autofix_step_*.sh
+# (#10166); read the workflow with them inlined again.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SYNTH_SCRIPT = REPO_ROOT / "scripts" / "review_synthesise_smoke.sh"
@@ -954,7 +959,7 @@ def test_review_synthesise_smoke_is_registered_in_ci_workflows() -> None:
 def test_validate_workflows_restore_cached_behavioural_smoke_artifacts() -> None:
 	validate_workflow = VALIDATE_WORKFLOW.read_text(encoding="utf-8")
 	internal_validate_workflow = INTERNAL_VALIDATE_WORKFLOW.read_text(encoding="utf-8")
-	review_workflow = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8")
+	review_workflow = expanded_review_autofix_text()
 
 	assert "description: \"Review PR number for restoring cached behavioural smoke artifacts (0 to auto-detect from tracking issue)\"" in validate_workflow
 	assert "- name: Normalize behavioural smoke include flag" in validate_workflow

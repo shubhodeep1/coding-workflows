@@ -32,6 +32,7 @@ from review_autofix_step_scripts import (  # noqa: E402
 	REVIEW_AUTOFIX_GATE_JOB_STEP_SCRIPTS,
 	REVIEW_AUTOFIX_SKIP_MERGE_JOB_STEP_SCRIPTS,
 	REVIEW_AUTOFIX_STEP_SCRIPTS,
+	REVIEW_AUTOFIX_SUPPORT_CHECKOUT_JOB_STEP_SCRIPTS,
 	REVIEW_AUTOFIX_WORKFLOW_PATH,
 )
 
@@ -47,7 +48,9 @@ _CODEX_AGENT_TEXT = _WORKFLOW_TEXT.split("\n  codex-agent:\n", 1)[1]
 DEFAULT_WRAPPER_STEPS = sorted(
 	(step_name, script_name, severity)
 	for step_name, (script_name, severity) in REVIEW_AUTOFIX_STEP_SCRIPTS.items()
-	if script_name not in REVIEW_AUTOFIX_GATE_JOB_STEP_SCRIPTS and script_name not in REVIEW_AUTOFIX_SKIP_MERGE_JOB_STEP_SCRIPTS
+	if script_name not in REVIEW_AUTOFIX_GATE_JOB_STEP_SCRIPTS
+	and script_name not in REVIEW_AUTOFIX_SKIP_MERGE_JOB_STEP_SCRIPTS
+	and script_name not in REVIEW_AUTOFIX_SUPPORT_CHECKOUT_JOB_STEP_SCRIPTS
 )
 
 

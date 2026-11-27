@@ -21,10 +21,16 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
 import pytest
+
+# The dispatch step's body lives in scripts/review_autofix_step_*.sh (#10166);
+# read the workflow with moved step bodies inlined again.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -331,7 +337,7 @@ def test_success_replay_with_nul_byte_falls_back_to_cat(tmp_path: Path) -> None:
 
 def _inline_gh_retry(step_name: str) -> str:
 	"""Return the inline ``gh_retry() { ... }`` defined in a review_autofix.yml step."""
-	lines = REVIEW_AUTOFIX_WORKFLOW.read_text(encoding="utf-8").splitlines()
+	lines = expanded_review_autofix_text().splitlines()
 	step_idx = next(
 		(i for i, line in enumerate(lines) if line.strip() == f"- name: {step_name}"), None,
 	)
