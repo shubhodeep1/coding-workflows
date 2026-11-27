@@ -28564,12 +28564,32 @@ _Orchestrator: released the \`ai:needs-human\` latch that the staged-support res
 #     head starts at zero; a PR still over the cap is labelled again by the
 #     next sweep tick. A cap comment without the head marker (posted before
 #     it existed) is never released here.
+#   autofix_cap_head_moved   scripts/review_autofix_step_post_review_blocked_comment.sh
+#     The default "AI review/autofix blocked — needs human intervention"
+#     comment (autofix iteration cap, or a judge that gave up) carries
+#     `<!-- ai:autofix-cap-head:v1 head=<sha> -->` (issue #9917). A legacy
+#     comment without that marker is matched by its `Run: <server>/<repo>/
+#     actions/runs/<id>` line instead, only when <repo> is this repository:
+#     the run's head counts only when the run is a `pull_request` run with a
+#     40-hex `head_sha` whose head branch and head repository equal the PR's
+#     (a `workflow_dispatch` run's head_sha is a default-branch commit, so it
+#     never proves the PR head moved; such a latch stays for a person, logged
+#     `latch_head_unverifiable`; a failed run read logs `run_unavailable`).
+#     The two other labelling blocked-comment headings (judge omitted follow-up
+#     details, auto-merge disabled) are never latches here: a later trusted
+#     comment with either heading re-asserts the hold like a later
+#     `ai:needs-human` mention.
 # A latch is released only when all of these hold: the newest trusted latch
-# comment (a `[bot]` login or OWNER/MEMBER/COLLABORATOR) is one of the two
-# above and names a 40-hex head; the newest ai:needs-human label event is a
+# comment (a `[bot]` login or OWNER/MEMBER/COLLABORATOR) is one of the three
+# above and names (or, for a legacy autofix-cap comment, resolves) a 40-hex head; the newest ai:needs-human label event is a
 # `labeled` event by the same login, at or after that comment and at most
 # 30 minutes later (the fixed local `hl_bind_minutes`, not an env var), which
-# binds the label to that latch (both writers comment first, then label); no
+# binds the label to that latch (both writers comment first, then label;
+# an autofix-cap latch, whose writer does not always label, also binds when
+# the newest older trusted latch comment the label is bound to that way has
+# a head that is not the PR's current head and no trusted comment between it
+# and the autofix-cap comment re-asserts the hold or latches again on the
+# current head or an unresolved head, issue #9917); no
 # later trusted comment other than a release comment mentions
 # `ai:needs-human` (another path re-asserting the hold; a label re-added by
 # hand after a release fails the label binding above instead); no trusted
@@ -28603,7 +28623,10 @@ _Orchestrator: released the \`ai:needs-human\` latch that the staged-support res
 # `pulls/<n>` re-read (revalidation), one label removal, one comments read
 # after the removal (a latch that raced the removal gets its label back: one
 # label add, no release comment) and one comment write. PRs without a
-# head-bound latch cost only the comments read. Every read failure skips that PR for the tick
+# head-bound latch cost only the comments read. A legacy autofix-cap comment
+# (no head marker) costs one `actions/runs/<id>` read per run id per tick,
+# cached in the function-local `hl_run_head_cache` (no existing read carries a
+# run's event, head and head branch). Every read failure skips that PR for the tick
 # (fail open: the label stays). NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED=false
 # skips the sweep.
 release_head_bound_needs_human_latches() {
@@ -28615,7 +28638,10 @@ release_head_bound_needs_human_latches() {
   local hl_prs hl_count hl_idx hl_pr hl_labels hl_comments hl_latch hl_latch_idx
   local hl_latch_at hl_latch_login hl_latch_head hl_reason hl_events hl_event
   local hl_pull hl_head hl_release_marker hl_body hl_refreshed_comments hl_refreshed_events hl_refreshed_event hl_refreshed_pull
-  local hl_post_delete_comments
+  local hl_post_delete_comments hl_latch_run hl_latch_legacy hl_run_info hl_run_branch hl_run_repo hl_latch_candidates hl_bound_idx hl_bound_head hl_bound_reason
+  # Per-tick cache of legacy autofix-cap run reads (issue #9917): run id ->
+  # projected run JSON, or "unavailable" when the read failed.
+  local -A hl_run_head_cache=()
   if ! hl_prs="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues?state=open&labels=ai%3Aneeds-human&per_page=100" \
     | jq -s 'add // [] | map(select(.pull_request != null))' 2>/dev/null)" \
     || ! hl_count="$(printf '%s' "${hl_prs}" | jq 'length' 2>/dev/null)" \
@@ -28636,8 +28662,9 @@ release_head_bound_needs_human_latches() {
       echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=comments_unavailable"
       continue
     fi
-    # Newest trusted latch comment of either kind, with its head.
-    hl_latch="$(printf '%s' "${hl_comments}" | jq -c '
+    # Every trusted latch comment of any kind, oldest first, with its head;
+    # the newest one is the latch.
+    hl_latch_candidates="$(printf '%s' "${hl_comments}" | jq -c --arg repo "${GITHUB_REPOSITORY}" '
       def trusted: ((.user.login // "") | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"));
       [to_entries[]
         | .value as $c
@@ -28649,8 +28676,15 @@ release_head_bound_needs_human_latches() {
           elif ($b | contains("<!-- ai:review-round-cap:v1 -->")) then
             {idx: .key, created_at: ($c.created_at // ""), login: ($c.user.login // ""), reason: "review_round_cap_head_moved",
              head: (($b | capture("<!-- ai:review-round-cap-head:v1 head=(?<h>[0-9a-f]{40}) -->") // {h: ""}).h)}
-          else empty end]
-      | last // null' 2>/dev/null || echo null)"
+          elif ($b | contains("<!-- ai:autofix-cap-head:v1 ")) then
+            {idx: .key, created_at: ($c.created_at // ""), login: ($c.user.login // ""), reason: "autofix_cap_head_moved",
+             head: (($b | capture("<!-- ai:autofix-cap-head:v1 head=(?<h>[0-9a-f]{40}) -->") // {h: ""}).h), run: ""}
+          elif ($b | contains("**AI review/autofix blocked — needs human intervention**")) then
+            {idx: .key, created_at: ($c.created_at // ""), login: ($c.user.login // ""), reason: "autofix_cap_head_moved", head: "",
+             run: (($b | capture("Run: https?://[^/\\s]+/(?<r>[^/\\s]+/[^/\\s]+)/actions/runs/(?<id>[0-9]+)") // {r: "", id: ""})
+               | if .r != "" and (.r | ascii_downcase) == ($repo | ascii_downcase) then .id else "" end)}
+          else empty end]' 2>/dev/null || echo '[]')"
+    hl_latch="$(printf '%s' "${hl_latch_candidates}" | jq -c 'last // null' 2>/dev/null || echo null)"
     hl_latch_idx="$(printf '%s' "${hl_latch}" | jq -r '.idx // -1' 2>/dev/null || echo -1)"
     if ! [[ "${hl_latch_idx}" =~ ^[0-9]+$ ]]; then
       echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=no_head_bound_latch"
@@ -28660,6 +28694,40 @@ release_head_bound_needs_human_latches() {
     hl_latch_login="$(printf '%s' "${hl_latch}" | jq -r '.login')"
     hl_latch_head="$(printf '%s' "${hl_latch}" | jq -r '.head')"
     hl_reason="$(printf '%s' "${hl_latch}" | jq -r '.reason')"
+    hl_latch_run="$(printf '%s' "${hl_latch}" | jq -r '.run // ""')"
+    hl_latch_legacy=false
+    hl_run_branch=""
+    hl_run_repo=""
+    # Set only by the autofix-cap fallback binding below; reset per PR.
+    hl_bound_idx=""
+    # Legacy autofix-cap comment (issue #9917): no head marker, so take the
+    # head from the run it names, read once per run id per tick.
+    if [ "${hl_reason}" = "autofix_cap_head_moved" ] && [ -z "${hl_latch_head}" ] && [[ "${hl_latch_run}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+      if [ -z "${hl_run_head_cache[${hl_latch_run}]+set}" ]; then
+        # gh-loop-ok: one read per legacy autofix-cap run id per tick, cached in hl_run_head_cache (§14)
+        if hl_run_info="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${hl_latch_run}" --jq '{event, head_sha, head_branch, head_repo: (.head_repository.full_name // "")}' 2>/dev/null)" \
+          && printf '%s' "${hl_run_info}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+          hl_run_head_cache[${hl_latch_run}]="${hl_run_info}"
+        else
+          hl_run_head_cache[${hl_latch_run}]="unavailable"
+        fi
+      fi
+      hl_run_info="${hl_run_head_cache[${hl_latch_run}]}"
+      if [ "${hl_run_info}" = "unavailable" ]; then
+        echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=run_unavailable latch=${hl_reason} run=${hl_latch_run}"
+        continue
+      fi
+      # Only a pull_request run's head_sha is the PR head; a
+      # workflow_dispatch run's head_sha is a default-branch commit.
+      hl_latch_head="$(printf '%s' "${hl_run_info}" | jq -r 'if (.event // "") == "pull_request" and ((.head_sha // "") | type == "string" and test("^[0-9a-f]{40}$")) and ((.head_branch // "") | type == "string" and . != "") and ((.head_repo // "") | type == "string" and . != "") then .head_sha else "" end' 2>/dev/null || true)"
+      if ! [[ "${hl_latch_head}" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=latch_head_unverifiable latch=${hl_reason} run=${hl_latch_run}"
+        continue
+      fi
+      hl_run_branch="$(printf '%s' "${hl_run_info}" | jq -r '.head_branch')"
+      hl_run_repo="$(printf '%s' "${hl_run_info}" | jq -r '.head_repo')"
+      hl_latch_legacy=true
+    fi
     if ! [[ "${hl_latch_head}" =~ ^[0-9a-f]{40}$ ]]; then
       echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=latch_head_missing latch=${hl_reason}"
       continue
@@ -28671,11 +28739,11 @@ release_head_bound_needs_human_latches() {
         any(to_entries[];
           .key > $i
           and ((((.value.user.login // "") | test("\\[bot\\]$")) or ((.value.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))))
-          and ((.value.body // "") | contains("ai:needs-human") and (test("<!-- ai:needs-human-auto-release reason=(non_retryable_head_moved|review_round_cap_head_moved) pr=" + $pr + " head=[0-9a-f]{40} -->\\s*$") | not)))' >/dev/null 2>&1; then
+          and ((.value.body // "") | (contains("ai:needs-human") or contains("**AI review/autofix — judge omitted follow-up issue details**") or contains("**AI review/autofix — judge approved merge but auto-merge is disabled**")) and (test("<!-- ai:needs-human-auto-release reason=(non_retryable_head_moved|review_round_cap_head_moved|autofix_cap_head_moved) pr=" + $pr + " head=[0-9a-f]{40} -->\\s*$") | not)))' >/dev/null 2>&1; then
       echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=later_needs_human_comment latch=${hl_reason}"
       continue
     fi
-    if ! hl_pull="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${hl_pr}" --jq '{state, head: (.head.sha // ""), labels: [.labels[]?.name]}' 2>/dev/null)" \
+    if ! hl_pull="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${hl_pr}" --jq '{state, head: (.head.sha // ""), ref: (.head.ref // ""), head_repo: (.head.repo.full_name // ""), labels: [.labels[]?.name]}' 2>/dev/null)" \
       || ! hl_head="$(printf '%s' "${hl_pull}" | jq -r '.head' 2>/dev/null)"; then
       echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=pull_unavailable"
       continue
@@ -28683,6 +28751,12 @@ release_head_bound_needs_human_latches() {
     if ! printf '%s' "${hl_pull}" | jq -e '.state == "open" and (.labels | index("ai:needs-human") != null) and (.labels | index("ai:destructive-blocked") == null) and (.labels | index("ai:scope-blocked") == null)' >/dev/null 2>&1 \
       || ! [[ "${hl_head}" =~ ^[0-9a-f]{40}$ ]]; then
       echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=pull_changed latch=${hl_reason}"
+      continue
+    fi
+    # A legacy-derived head counts only when its run was on this PR's branch.
+    if [ "${hl_latch_legacy}" = "true" ] && ! printf '%s' "${hl_pull}" | jq -e --arg ref "${hl_run_branch}" --arg repo "${hl_run_repo}" \
+      '(.ref // "") != "" and .ref == $ref and (.head_repo // "") != "" and .head_repo == $repo' >/dev/null 2>&1; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=latch_head_unverifiable latch=${hl_reason} run=${hl_latch_run}"
       continue
     fi
     if [ "${hl_head}" = "${hl_latch_head}" ]; then
@@ -28712,8 +28786,47 @@ release_head_bound_needs_human_latches() {
         and .created_at != "" and $at != ""
         and (.created_at >= $at)
         and (((.created_at | fromdateiso8601) - ($at | fromdateiso8601)) <= ($bind * 60))' >/dev/null 2>&1; then
-      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=label_not_bound_to_latch latch=${hl_reason}"
-      continue
+      # Issue #9917: the default autofix-cap comment does not always add the
+      # label itself (review_autofix_step_post_review_blocked_comment.sh labels
+      # only some JUDGE_SKIP_REASON values), so an unlabelled one can be newer
+      # than the latch that set the label. It does not shadow that latch: the
+      # label still binds to the newest older trusted latch comment it is bound
+      # to (same login, at or after it, within hl_bind_minutes), when that
+      # latch's own 40-hex head is not the PR's current head either.
+      hl_bound_idx=""
+      if [ "${hl_reason}" = "autofix_cap_head_moved" ]; then
+        hl_bound_idx="$(printf '%s' "${hl_latch_candidates}" | jq -r --argjson e "${hl_event}" --argjson i "${hl_latch_idx}" --arg cur "${hl_head}" --argjson bind "${hl_bind_minutes}" '
+          if ($e | type) == "object" and $e.event == "labeled" and ($e.login // "") != "" and ($e.created_at // "") != "" then
+            ([.[] | select(.idx < $i
+                and (.login // "") == $e.login
+                and (.created_at // "") != "" and $e.created_at >= .created_at
+                and ((($e.created_at | fromdateiso8601) - (.created_at | fromdateiso8601)) <= ($bind * 60)))] | last // null)
+            | if . != null and ((.head // "") | test("^[0-9a-f]{40}$")) and .head != $cur then .idx else "" end
+          else "" end' 2>/dev/null || true)"
+      fi
+      if ! [[ "${hl_bound_idx}" =~ ^[0-9]+$ ]]; then
+        echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=label_not_bound_to_latch latch=${hl_reason}"
+        continue
+      fi
+      # The re-assertion check above starts after the newest latch. With the
+      # label bound to an older latch, a trusted comment between the two keeps
+      # the hold when it is itself a latch on the PR's current head (its label
+      # add was a no-op) or on a head that cannot be resolved (fail closed), or
+      # when it is not a latch and re-asserts ai:needs-human. A latch between
+      # them on a head the PR has left (e.g. the same writer re-firing on the
+      # stale head) holds nothing on the current head.
+      if printf '%s' "${hl_comments}" | jq -e --argjson b "${hl_bound_idx}" --argjson i "${hl_latch_idx}" --arg pr "${hl_pr}" --argjson c "${hl_latch_candidates}" --arg cur "${hl_head}" '
+          any(to_entries[];
+            .key as $k
+            | .key > $b and .key < $i
+            and ((((.value.user.login // "") | test("\\[bot\\]$")) or ((.value.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))))
+            and (([$c[] | select(.idx == $k)] | first // null) as $between_latch
+              | if $between_latch != null then (($between_latch.head // "") | (test("^[0-9a-f]{40}$") | not) or . == $cur) else true end)
+            and ((.value.body // "") | (contains("ai:needs-human") or contains("<!-- ai:workflow-heal-non-retryable:v1 ") or contains("<!-- ai:review-round-cap:v1 -->") or contains("<!-- ai:autofix-cap-head:v1 ") or contains("**AI review/autofix blocked — needs human intervention**") or contains("**AI review/autofix — judge omitted follow-up issue details**") or contains("**AI review/autofix — judge approved merge but auto-merge is disabled**"))
+              and (test("<!-- ai:needs-human-auto-release reason=(non_retryable_head_moved|review_round_cap_head_moved|autofix_cap_head_moved) pr=" + $pr + " head=[0-9a-f]{40} -->\\s*$") | not)))' >/dev/null 2>&1; then
+        echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=later_needs_human_comment latch=${hl_reason}"
+        continue
+      fi
     fi
     # Revalidate right before the write, like the staged-support release's
     # latch_changed_during_release guard: a writer that commented a new latch
@@ -28735,15 +28848,15 @@ release_head_bound_needs_human_latches() {
         any(.[];
           (.created_at // "") > $at
           and ((((.user.login // "") | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))))
-          and ((.body // "") | (contains("ai:needs-human") or contains("<!-- ai:workflow-heal-non-retryable:v1 ") or contains("<!-- ai:review-round-cap:v1 -->"))
-            and (test("<!-- ai:needs-human-auto-release reason=(non_retryable_head_moved|review_round_cap_head_moved) pr=" + $pr + " head=[0-9a-f]{40} -->\\s*$") | not)))' >/dev/null 2>&1; then
+          and ((.body // "") | (contains("ai:needs-human") or contains("<!-- ai:workflow-heal-non-retryable:v1 ") or contains("<!-- ai:review-round-cap:v1 -->") or contains("<!-- ai:autofix-cap-head:v1 ") or contains("**AI review/autofix blocked — needs human intervention**") or contains("**AI review/autofix — judge omitted follow-up issue details**") or contains("**AI review/autofix — judge approved merge but auto-merge is disabled**"))
+            and (test("<!-- ai:needs-human-auto-release reason=(non_retryable_head_moved|review_round_cap_head_moved|autofix_cap_head_moved) pr=" + $pr + " head=[0-9a-f]{40} -->\\s*$") | not)))' >/dev/null 2>&1; then
       echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=latch_changed_during_release latch=${hl_reason}"
       continue
     fi
     # The head and labels were checked on the first pulls/<n> read; read them
     # again so a push back to the latched head (or any other head change) or a
     # newly added ai:scope-blocked / ai:destructive-blocked keeps the hold.
-    if ! hl_refreshed_pull="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${hl_pr}" --jq '{state, head: (.head.sha // ""), labels: [.labels[]?.name]}' 2>/dev/null)"; then
+    if ! hl_refreshed_pull="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${hl_pr}" --jq '{state, head: (.head.sha // ""), ref: (.head.ref // ""), head_repo: (.head.repo.full_name // ""), labels: [.labels[]?.name]}' 2>/dev/null)"; then
       echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=latch_revalidation_unavailable latch=${hl_reason}"
       continue
     fi
@@ -28772,8 +28885,8 @@ release_head_bound_needs_human_latches() {
         any(.[];
           (.created_at // "") > $at
           and ((((.user.login // "") | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))))
-          and ((.body // "") | (contains("ai:needs-human") or contains("<!-- ai:workflow-heal-non-retryable:v1 ") or contains("<!-- ai:review-round-cap:v1 -->"))
-            and (test("<!-- ai:needs-human-auto-release reason=(non_retryable_head_moved|review_round_cap_head_moved) pr=" + $pr + " head=[0-9a-f]{40} -->\\s*$") | not)))' >/dev/null 2>&1; then
+          and ((.body // "") | (contains("ai:needs-human") or contains("<!-- ai:workflow-heal-non-retryable:v1 ") or contains("<!-- ai:review-round-cap:v1 -->") or contains("<!-- ai:autofix-cap-head:v1 ") or contains("**AI review/autofix blocked — needs human intervention**") or contains("**AI review/autofix — judge omitted follow-up issue details**") or contains("**AI review/autofix — judge approved merge but auto-merge is disabled**"))
+            and (test("<!-- ai:needs-human-auto-release reason=(non_retryable_head_moved|review_round_cap_head_moved|autofix_cap_head_moved) pr=" + $pr + " head=[0-9a-f]{40} -->\\s*$") | not)))' >/dev/null 2>&1; then
       if GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${hl_pr}/labels" -f "labels[]=ai:needs-human" >/dev/null 2>&1; then
         echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=relatched_after_release latch=${hl_reason} head=${hl_head:0:12}"
       else
@@ -28784,6 +28897,27 @@ release_head_bound_needs_human_latches() {
     fi
     if [ "${hl_reason}" = "non_retryable_head_moved" ]; then
       hl_body="_Orchestrator: removed \`ai:needs-human\`. It was set because a review/autofix run on head \`${hl_latch_head:0:12}\` failed in a way another run on that head could not fix. The PR is now on head \`${hl_head:0:12}\`, so that diagnosis no longer applies and the review runs on the new head as usual. If the same failure happens on this head, the label comes back._"
+    elif [ "${hl_reason}" = "autofix_cap_head_moved" ]; then
+      # When the label was bound to an older latch (fallback above), name
+      # that latch's head and cause, not the newest autofix-cap comment's.
+      hl_bound_head="${hl_latch_head}"
+      hl_bound_reason="autofix_cap_head_moved"
+      if [[ "${hl_bound_idx}" =~ ^[0-9]+$ ]]; then
+        hl_bound_head="$(printf '%s' "${hl_latch_candidates}" | jq -r --argjson b "${hl_bound_idx}" '[.[] | select(.idx == $b) | .head] | first // ""' 2>/dev/null || true)"
+        if [[ "${hl_bound_head}" =~ ^[0-9a-f]{40}$ ]]; then
+          hl_bound_reason="$(printf '%s' "${hl_latch_candidates}" | jq -r --argjson b "${hl_bound_idx}" '[.[] | select(.idx == $b) | .reason] | first // ""' 2>/dev/null || true)"
+        else
+          hl_bound_head="${hl_latch_head}"
+        fi
+      fi
+      case "${hl_bound_reason}" in
+        non_retryable_head_moved)
+          hl_body="_Orchestrator: removed \`ai:needs-human\`. It was set because a review/autofix run on head \`${hl_bound_head:0:12}\` failed in a way another run on that head could not fix. The PR is now on head \`${hl_head:0:12}\`, so that diagnosis no longer applies and the review runs on the new head as usual. If the same failure happens on this head, the label comes back._" ;;
+        review_round_cap_head_moved)
+          hl_body="_Orchestrator: removed \`ai:needs-human\`. The review sweep set it when head \`${hl_bound_head:0:12}\` reached the review-round cap. The PR is now on head \`${hl_head:0:12}\` and the round count starts again for it, so the sweep reviews it as usual. If this head reaches the cap too, the sweep labels it again._" ;;
+        *)
+          hl_body="_Orchestrator: removed \`ai:needs-human\`. It was set when review/autofix stopped on head \`${hl_bound_head:0:12}\` (autofix iteration cap, or a review-blocked judge that gave up). The PR is now on head \`${hl_head:0:12}\`, so the review runs on the new head as usual. If review/autofix stops on this head too, the label comes back._" ;;
+      esac
     else
       hl_body="_Orchestrator: removed \`ai:needs-human\`. The review sweep set it when head \`${hl_latch_head:0:12}\` reached the review-round cap. The PR is now on head \`${hl_head:0:12}\` and the round count starts again for it, so the sweep reviews it as usual. If this head reaches the cap too, the sweep labels it again._"
     fi
