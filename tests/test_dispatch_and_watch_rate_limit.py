@@ -38,6 +38,10 @@ WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
 # limit, raise its timeout-minutes; never lower the cap below this floor.
 GATE_RATE_LIMIT_CAP_FLOOR_SECS = 1500
 UPDATE_WORKFLOWS_STEP = "Dispatch & watch — update_workflows (allow_workflow_edits=false)"
+# A dispatch step without its own timeout-minutes shares its job limit with the
+# job's other steps; the workflow budgets 360 s for them (orchestrate-decompose-test:
+# 3000s watch + 1500s cap + 360s = 4860s = 81m). The floor test counts that reserve.
+GATE_JOB_OTHER_STEPS_RESERVE_SECS = 360
 
 pytestmark = pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required by the watcher")
 
@@ -478,7 +482,8 @@ def test_gate_dispatch_steps_rate_limit_cap_meets_floor() -> None:
 
 	Each cap is at least GATE_RATE_LIMIT_CAP_FLOOR_SECS, each step's limit (or,
 	without one, its job's limit) holds the cap plus its watch deadline, and the
-	dispatch steps of one job fit that job's limit together.
+	dispatch steps of one job fit that job's limit together (a step without its
+	own limit also keeps GATE_JOB_OTHER_STEPS_RESERVE_SECS for the other steps).
 	"""
 	text = WORKFLOW.read_text(encoding="utf-8")
 	steps = _gate_dispatch_steps(text)
@@ -495,7 +500,9 @@ def test_gate_dispatch_steps_rate_limit_cap_meets_floor() -> None:
 			spent = step["step_minutes"] * 60
 		else:
 			assert step["need"] <= step["job_minutes"] * 60, (name, step["need"], step["job_minutes"])
-			spent = step["need"]
+			# cap + watch deadline + the reserve for the job's other steps, which
+			# also covers the step's own 64 s margin.
+			spent = step["need"] - 64 + GATE_JOB_OTHER_STEPS_RESERVE_SECS
 		per_job[step["job"]] = per_job.get(step["job"], 0) + spent
 	for job, total in per_job.items():
 		assert total <= job_limits[job] * 60, (job, total, job_limits[job])
