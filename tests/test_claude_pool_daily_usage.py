@@ -147,6 +147,11 @@ def test_pool_usage_cli_reads_the_gate_from_the_config(tmp_path: Path) -> None:
 		("2026-10-17T09:30", {"CLAUDE_POOL_DAILY_USAGE_HOUR_UTC": "10"}, "false", "before_hour"),
 		("2026-10-17T00:30", {"CLAUDE_POOL_DAILY_USAGE_HOUR_UTC": "nonsense"}, "true", "due"),
 		("2026-10-17T00:30", {"CLAUDE_POOL_DAILY_USAGE_HOUR_UTC": "24"}, "true", "due"),
+		# An oversized value would wrap to hour 4 in 64-bit arithmetic; it falls back to 0.
+		("2026-10-17T00:30", {"CLAUDE_POOL_DAILY_USAGE_HOUR_UTC": "18446744073709551620"}, "true", "due"),
+		# Leading zeros keep their meaning: 023 is hour 23, not the fallback 0.
+		("2026-10-17T22:30", {"CLAUDE_POOL_DAILY_USAGE_HOUR_UTC": "023"}, "false", "before_hour"),
+		("2026-10-17T23:00", {"CLAUDE_POOL_DAILY_USAGE_HOUR_UTC": "023"}, "true", "due"),
 	],
 )
 def test_slot(env: dict, now: str, extra: dict, in_slot: str, reason: str) -> None:
@@ -165,7 +170,7 @@ def test_send_reaches_telegram_at_the_default_warning_threshold(env: dict) -> No
 	result = _run(env, "send", probes)
 	assert result.returncode == 0, result.stderr
 	assert "CLAUDE_POOL_DAILY_USAGE op=send accounts=2 usable=1 gated=1 auth_failed=0 probe_failed=0 outcome=sent" in result.stdout
-	assert _outputs(env) == {"sent": "true"}
+	assert _outputs(env) == {"sent": "true", "deferred": "false"}
 	text = _sent_text(env)
 	assert text.startswith("📊 Claude pool daily usage: 2 account(s), 1 usable, 1 at or above the 90% gate.\n")
 	# The 1970 reset times are in the past, so each note reads "resets now".
@@ -178,7 +183,7 @@ def test_send_reaches_telegram_at_the_default_warning_threshold(env: dict) -> No
 def test_send_honours_silent(env: dict) -> None:
 	result = _run(env, "send", [_probe("ALPHA", 0.1, 0.1)], ALERT_MSG_LEVEL="SILENT")
 	assert "outcome=not_delivered" in result.stdout
-	assert _outputs(env) == {"sent": "false"}
+	assert _outputs(env) == {"sent": "false", "deferred": "false"}
 	assert not env["log"].exists()
 
 
@@ -276,6 +281,74 @@ def test_send_with_an_oversized_chatgpt_status_reports_it_unavailable(env: dict)
 	assert "\n\nChatGPT accounts: unavailable (status_too_large).\n" in text
 
 
+# --- send: deferral on a temporary broker refusal (Refs #9990) -----------------
+
+
+@pytest.mark.parametrize("reason", ["broker_refused_workflow_sha_unverifiable", "broker_unavailable_503"])
+def test_send_defers_a_temporary_broker_refusal_inside_the_window(env: dict, reason: str) -> None:
+	result = _run(
+		env, "send", [], CLAUDE_POOL_REASON=reason,
+		CLAUDE_POOL_DAILY_USAGE_HOUR_UTC="0", CLAUDE_POOL_DAILY_USAGE_NOW=_epoch("2026-11-23T00:15"),
+	)
+	assert result.returncode == 0, result.stderr
+	assert _outputs(env) == {"sent": "false", "deferred": "true"}
+	assert f"CLAUDE_POOL_DAILY_USAGE op=send accounts=0 usable=0 gated=0 auth_failed=0 probe_failed=0 outcome=deferred reason={reason} truncated=false" in result.stdout
+	assert not env["log"].exists()
+
+
+@pytest.mark.parametrize(
+	("hour_utc", "now", "probes", "reason", "extra"),
+	[
+		# The window (default 2 hours) has passed.
+		("0", "2026-11-23T02:10", [], "broker_refused_workflow_sha_unverifiable", {}),
+		# The window is capped at hour 23, so the day's report still goes out.
+		("22", "2026-11-23T23:05", [], "broker_refused_workflow_sha_unverifiable", {}),
+		# Before the slot hour (a late job for yesterday's slot) never defers.
+		("6", "2026-11-23T00:03", [], "broker_unavailable_503", {}),
+		# Deferral disabled.
+		("0", "2026-11-23T00:15", [], "broker_refused_workflow_sha_unverifiable", {"CLAUDE_POOL_DAILY_USAGE_RETRY_HOURS": "0"}),
+		# A reason that is not a temporary broker answer.
+		("0", "2026-11-23T00:15", [], "no_accounts", {}),
+		# Probes present.
+		("0", "2026-11-23T00:15", [_probe("ALPHA", 0.2, 0.1)], "broker_refused_workflow_sha_unverifiable", {}),
+	],
+)
+def test_send_does_not_defer(env: dict, hour_utc: str, now: str, probes: list, reason: str, extra: dict) -> None:
+	result = _run(
+		env, "send", probes, CLAUDE_POOL_REASON=reason,
+		CLAUDE_POOL_DAILY_USAGE_HOUR_UTC=hour_utc, CLAUDE_POOL_DAILY_USAGE_NOW=_epoch(now), **extra,
+	)
+	assert result.returncode == 0, result.stderr
+	assert "outcome=sent" in result.stdout and "outcome=deferred" not in result.stdout
+	assert _outputs(env) == {"sent": "true", "deferred": "false"}
+	assert env["log"].exists()
+
+
+@pytest.mark.parametrize("retry_hours", ["abc", "24", "9223372036854775808"])
+def test_send_invalid_retry_hours_falls_back_to_two(env: dict, retry_hours: str) -> None:
+	common = {"CLAUDE_POOL_REASON": "broker_refused_workflow_sha_unverifiable", "CLAUDE_POOL_DAILY_USAGE_HOUR_UTC": "0", "CLAUDE_POOL_DAILY_USAGE_RETRY_HOURS": retry_hours}
+	inside = _run(env, "send", [], CLAUDE_POOL_DAILY_USAGE_NOW=_epoch("2026-11-23T01:30"), **common)
+	assert "::warning::CLAUDE_POOL_DAILY_USAGE op=send reason=retry_hours_invalid; using 2" in inside.stdout
+	assert "outcome=deferred" in inside.stdout
+	assert not env["log"].exists()
+	env["output"].unlink()
+	after = _run(env, "send", [], CLAUDE_POOL_DAILY_USAGE_NOW=_epoch("2026-11-23T02:00"), **common)
+	assert "outcome=sent" in after.stdout
+	assert _outputs(env) == {"sent": "true", "deferred": "false"}
+
+
+def test_send_zero_padded_retry_hours_keeps_its_value(env: dict) -> None:
+	# 003 means 3 hours, like a zero-padded CLAUDE_POOL_DAILY_USAGE_HOUR_UTC, not the fallback 2.
+	result = _run(
+		env, "send", [], CLAUDE_POOL_REASON="broker_refused_workflow_sha_unverifiable",
+		CLAUDE_POOL_DAILY_USAGE_HOUR_UTC="0", CLAUDE_POOL_DAILY_USAGE_RETRY_HOURS="003",
+		CLAUDE_POOL_DAILY_USAGE_NOW=_epoch("2026-11-23T02:30"),
+	)
+	assert "retry_hours_invalid" not in result.stdout
+	assert "outcome=deferred" in result.stdout
+	assert _outputs(env) == {"sent": "false", "deferred": "true"}
+
+
 def test_unknown_mode_never_fails(env: dict) -> None:
 	result = _run(env, "bogus")
 	assert result.returncode == 0
@@ -314,6 +387,9 @@ def test_orchestrate_poll_wiring() -> None:
 	assert send["run"] == "bash scripts/claude_pool_daily_usage.sh send"
 	assert send["env"]["CLAUDE_POOL_PROBES"] == "${{ steps.claude_pool.outputs.probes || '[]' }}"
 	assert save["if"] == "steps.pool_daily_send.outputs.sent == 'true'"
+	# Deferral window (issue #9990): the send step reads the slot hour and retry hours.
+	assert send["env"]["CLAUDE_POOL_DAILY_USAGE_HOUR_UTC"] == "${{ vars.CLAUDE_POOL_DAILY_USAGE_HOUR_UTC || '0' }}"
+	assert send["env"]["CLAUDE_POOL_DAILY_USAGE_RETRY_HOURS"] == "${{ vars.CLAUDE_POOL_DAILY_USAGE_RETRY_HOURS || '2' }}"
 
 
 def test_ci_runs_this_file() -> None:

@@ -76,6 +76,10 @@ jobs:
           AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS: ${{ vars.AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS || '24' }}
           AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_ENABLED: ${{ vars.AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_ENABLED || 'true' }}
           AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX: ${{ vars.AUTO_RELEASE_STABLE_FIXTURE_CLEANUP_MAX || '30' }}
+          # Runner-wait check (issue #10037): skip with runner_wait_long while
+          # the oldest live queued run has waited this many minutes; 0 turns
+          # it off. Bounded by AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS.
+          RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES: ${{ vars.RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES || '30' }}
         run: |
           set -euo pipefail
           bash scripts/auto_release_stable.sh

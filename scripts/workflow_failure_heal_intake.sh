@@ -166,6 +166,10 @@
 #                                         records a report with no fingerprint match but a cause match
 #                                         on a recent open heal issue as an occurrence there (P5 / D3)
 #   WORKFLOW_HEAL_CAUSE_GROUPING_DAYS     cause match window in days (default 3; the helper clamps 1-30)
+#   WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED default "true": only "false" turns it off. A failed push CI
+#                                         run on the default branch records on the open heal issue whose
+#                                         `red-main-group=` header matches (workflow, failing job, branch)
+#                                         before any fingerprint match; new red-main heals carry it (#9823)
 #   WORKFLOW_HEAL_CONSUMER_REGISTRY       consumer registry (default .github/ai/consumer_repos.json)
 #   WORKFLOW_HEAL_PY                      path of workflow_failure_heal.py
 #   WORKFLOW_HEAL_PROMPT_FILE             diagnosis prompt (default prompts/mode-workflow-failure-heal.txt)
@@ -373,6 +377,10 @@ MAX_OPEN="$(_positive_or_default "${WORKFLOW_HEAL_MAX_OPEN_ISSUES:-}" 10)"
 MAX_PER_DAY="$(_positive_or_default "${WORKFLOW_HEAL_MAX_ISSUES_PER_DAY:-}" 20)"
 MAX_RUNS="$(_positive_or_default "${WORKFLOW_HEAL_MAX_RUNS:-}" 3)"
 MAX_FAILED_JOBS="$(_positive_or_default "${WORKFLOW_HEAL_MAX_FAILED_JOBS:-}" 3)"
+# Release-gate runner wait (issue #10037): "<run_id>:<job_id>" of every read
+# job whose raw log carries a RELEASE_GATE_RUNNER_WAIT cancel_requested /
+# stop_failed line on one of the gate's watch steps.
+HEAL_RUNNER_WAIT_MATCHED=""
 MAX_LOG_BYTES="$(_positive_or_default "${WORKFLOW_HEAL_MAX_RUN_LOG_BYTES:-}" 60000)"
 LOG_TAIL_LINES="$(_positive_or_default "${WORKFLOW_HEAL_LOG_TAIL_LINES:-}" 400)"
 # Linked runs (#8248): runs the failed-job logs link to. 0 turns it off.
@@ -398,6 +406,14 @@ CAUSE_GROUPING_ENABLED="${WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED:-false}"
 CAUSE_GROUPING_DAYS="$(_positive_or_default "${WORKFLOW_HEAL_CAUSE_GROUPING_DAYS:-}" 3)"
 CAUSE_KEY=""
 CAUSE_SHAPE=""
+# Red-main grouping (#9823): on by default; only "false" (any case) turns it off.
+RED_MAIN_GROUPING_ENABLED="${WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED:-true}"
+if [ "${RED_MAIN_GROUPING_ENABLED,,}" = "false" ]; then
+	RED_MAIN_GROUPING_ENABLED="false"
+else
+	RED_MAIN_GROUPING_ENABLED="true"
+fi
+RED_MAIN_GROUP_KEY=""
 # Suspect commits (P3 steps 4 and 5): same switch. The compare files JSON is
 # the handoff for the later suspect-scope phase; the last-green cache lets the
 # suspect step reuse the reproduction step's lookup instead of a second call.
@@ -728,7 +744,37 @@ fi
 if [ -n "${SKIP_REASON}" ]; then
 	log "skip reason=${SKIP_REASON} source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none}"
 	if [ "${SKIP_REASON}" = "unregistered_source_repo" ]; then
-		tg_send_msg "Workflow failure heal intake ignored a report from unregistered repository ${SOURCE_REPO} (add it to .github/ai/consumer_repos.json to opt in)."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		# At most one WARNING per source repo per UTC day. The workflow looks up
+		# an actions/cache marker keyed by repo and day before this step and
+		# passes the hit as WORKFLOW_HEAL_UNREGISTERED_WARNED_TODAY; anything
+		# but "true" (miss, lookup failure, local run) sends the WARNING (fail
+		# open). After a WARNING the marker file and step output tell the
+		# workflow's save step to store the marker. No GitHub API call.
+		unregistered_alert_text="Workflow failure heal intake ignored a report from unregistered repository ${SOURCE_REPO} (add it to .github/ai/consumer_repos.json to opt in)."$'\n'"Run: ${RUN_URL}"
+		if [ "${WORKFLOW_HEAL_UNREGISTERED_WARNED_TODAY:-false}" = "true" ]; then
+			log "unregistered_source_repo_alert level=DEBUG reason=already_warned_today source=${SOURCE_REPO}"
+			tg_send_msg "${unregistered_alert_text}" "DEBUG" >/dev/null 2>&1 || true
+		else
+			log "unregistered_source_repo_alert level=WARNING source=${SOURCE_REPO}"
+			# tg_send_msg returns 0 even when nothing was delivered (curl failure,
+			# Telegram error, missing credentials, level filtered); the printed
+			# message_id is the only delivery signal. Mark today as warned only
+			# when Telegram accepted the WARNING, so a failed send is retried by
+			# the next report instead of downgrading the rest of the day to DEBUG.
+			unregistered_alert_msg_id="$(tg_send_msg "${unregistered_alert_text}" "WARNING" 2>/dev/null || true)"
+			if [ -n "${unregistered_alert_msg_id}" ]; then
+				# The cache path must be the same in every run (actions/cache versions
+				# entries by path), so it is not under the per-run RUNTIME_DIR.
+				unregistered_marker_path="${WORKFLOW_HEAL_UNREGISTERED_MARKER:-${RUNTIME_DIR}/heal_unregistered_warned}"
+				# Never follow a pre-existing file or symlink at the fixed path.
+				rm -f -- "${unregistered_marker_path}" 2>/dev/null || true
+				if printf '%s\n' "${SOURCE_REPO}" > "${unregistered_marker_path}" 2>/dev/null; then
+					echo "heal_unregistered_warned=true" >> "${GITHUB_OUTPUT:-/dev/null}" 2>/dev/null || true
+				fi
+			else
+				log "unregistered_source_repo_alert marker=skipped reason=not_delivered source=${SOURCE_REPO}"
+			fi
+		fi
 	fi
 	exit 0
 fi
@@ -1568,7 +1614,19 @@ if [[ "${SOURCE_KIND}" == "phase_failure" || "${SOURCE_KIND}" == "autofix_failur
 	if [ "$(jq -r '.status' "${PROVENANCE_RESULT}")" != "ok" ]; then
 		PROVENANCE_REASON="$(jq -r '.reason // "verifier_error"' "${PROVENANCE_RESULT}")"
 		log "skip reason=provenance_rejected source=${SOURCE_REPO} kind=${SOURCE_KIND} issue=${ISSUE_NUMBER:-none} detail=${PROVENANCE_REASON}"
-		tg_send_msg "Workflow failure heal rejected run provenance for ${SOURCE_REPO} (${SOURCE_KIND}, issue ${ISSUE_NUMBER:-none}, reason ${PROVENANCE_REASON})."$'\n'"Run: ${RUN_URL}" "WARNING" >/dev/null 2>&1 || true
+		# Expected, correct rejections go out at DEBUG: a CI run that is not a
+		# default-branch push (a PR branch), and a cited run that finished
+		# without failing (current_run_rejected:not_failed, or no_verified_runs
+		# where every rejection is not_failed). Everything else stays WARNING.
+		PROVENANCE_ALERT_LEVEL="WARNING"
+		if jq -e '(.reason == "current_run_rejected:ci_not_default_branch_push")
+			or (.reason == "current_run_rejected:not_failed")
+			or (.reason == "no_verified_runs" and (.rejections | length) > 0 and all(.rejections[]; .reason == "not_failed"))' \
+			"${PROVENANCE_RESULT}" >/dev/null 2>&1; then
+			PROVENANCE_ALERT_LEVEL="DEBUG"
+		fi
+		log "provenance_rejected_alert level=${PROVENANCE_ALERT_LEVEL} source=${SOURCE_REPO} kind=${SOURCE_KIND} detail=${PROVENANCE_REASON}"
+		tg_send_msg "Workflow failure heal rejected run provenance for ${SOURCE_REPO} (${SOURCE_KIND}, issue ${ISSUE_NUMBER:-none}, reason ${PROVENANCE_REASON})."$'\n'"Run: ${RUN_URL}" "${PROVENANCE_ALERT_LEVEL}" >/dev/null 2>&1 || true
 		exit 0
 	fi
 	PENDING_CURRENT_RUN="$(jq -r '.pending_current_run // ""' "${PROVENANCE_RESULT}")"
@@ -2053,6 +2111,25 @@ while IFS=$'\t' read -r run_id run_url; do
 				# A log whose filtering failed was emptied above and is not readable evidence.
 				READ_JOB_LOG_COUNT=$((READ_JOB_LOG_COUNT + 1))
 			fi
+			# Issue #10037: the marker must start a log line (after the runner
+			# timestamp) and the failing step must be a gate watch step (every
+			# step of test-and-mark-stable.yml that runs
+			# dispatch_and_watch_workflow_run.sh, plus Phase 4 and the alt-model
+			# wait (dispatch_and_watch_workflow_run.sh --alt-model-runner-wait); exact names), so
+			# text echoed from a model or an issue cannot suppress a report.
+			# The watch step must also be the job's only failed step (read from
+			# the run's jobs file already on disk): a real failure in a later
+			# always() step of the same job (soft-error analyser, cleanup) is
+			# filed as before. An unreadable jobs file never matches (fail closed).
+			if [ "${SOURCE_KIND}" = "workflow_run" ] \
+				&& grep -qE '^[^ ]+ RELEASE_GATE_RUNNER_WAIT outcome=(cancel_requested|stop_failed) ' "${RAW_LOG}" 2>/dev/null \
+				&& [ "$(jq -r --arg jid "${job_id}" --arg step "${failing_step}" '[.jobs[]? | select((.id | tostring) == $jid) | .steps[]? | select(.conclusion == "failure" or .conclusion == "timed_out") | (.name // "")] | if length == 1 and .[0] == $step then "only" else "other" end' "${JOBS_FILE}" 2>/dev/null || echo other)" = "only" ]; then
+				case "${failing_step}" in
+					"Phase 4: Wait for review & autofix to complete"|"Dispatch & watch — "*|"Dispatch internal-orchestrate.yml with multi-issue project"|"Dispatch internal-validate.yml standalone"|"Wait for clarify→plan→implement (alt-model)")
+						HEAL_RUNNER_WAIT_MATCHED="${HEAL_RUNNER_WAIT_MATCHED} ${run_id}:${job_id}"
+						;;
+				esac
+			fi
 			rm -f "${RAW_LOG}"
 			if [ "${SOURCE_KIND}" = "phase_failure" ] && [ "${RUN_COUNT}" -eq 1 ] && [ -s "${FILTERED_LOG}" ]; then
 				LOG_FILES+=("${FILTERED_LOG}")
@@ -2150,6 +2227,41 @@ if [ "${SOURCE_KIND}" = "workflow_run" ] && [ "${#LOG_FILES[@]}" -gt 0 ]; then
 			if grep -qE 'PROMOTE_CYCLE_FAILED reason=smoke_gate_(failed|timeout)' "${LOG_FILES[@]}" 2>/dev/null; then
 				log "skip reason=downstream_gate_failure workflow=${PAYLOAD_WORKFLOW_NAME}"
 				exit 0
+			fi
+			;;
+	esac
+fi
+
+# A release gate run whose only failed jobs are watch steps that ended as a
+# runner wait (issue #10037, G4): the gate tried to stop itself because a
+# child run waited for a runner, not because a test failed. Every failed job
+# of the current run (same filter as the provenance check) must have been
+# read and carry the marker on a watch step; any other mix files as before.
+if [ "${SOURCE_KIND}" = "workflow_run" ] && [ -n "${HEAL_RUNNER_WAIT_MATCHED}" ]; then
+	case "${PAYLOAD_WORKFLOW_NAME}" in
+		"Test & Mark Stable Release"|"Test & Mark Stable Release "*)
+			HEAL_RUNNER_WAIT_RUN_ID="$(jq -r '.run_refs[0].run_id // "" | tostring' "${PAYLOAD_FILE}" 2>/dev/null || echo "")"
+			HEAL_RUNNER_WAIT_JOBS_FILE="${LOG_DIR}/run-${HEAL_RUNNER_WAIT_RUN_ID}-jobs.json"
+			HEAL_RUNNER_WAIT_FAILED_IDS=""
+			if [[ "${HEAL_RUNNER_WAIT_RUN_ID}" =~ ^[0-9]+$ ]] && [ -s "${HEAL_RUNNER_WAIT_JOBS_FILE}" ]; then
+				HEAL_RUNNER_WAIT_FAILED_IDS="$(jq -r '[.jobs[]? | select((.conclusion == "failure" or .conclusion == "timed_out")
+					and (.name | type == "string") and .name != "heal-report"
+					and (.name | endswith("/ heal-report") | not)) | (.id | tostring)] | join(" ")' "${HEAL_RUNNER_WAIT_JOBS_FILE}" 2>/dev/null || echo "")"
+			fi
+			if [ -n "${HEAL_RUNNER_WAIT_FAILED_IDS}" ]; then
+				HEAL_RUNNER_WAIT_ALL=true
+				HEAL_RUNNER_WAIT_COUNT=0
+				for heal_runner_wait_job in ${HEAL_RUNNER_WAIT_FAILED_IDS}; do
+					HEAL_RUNNER_WAIT_COUNT=$((HEAL_RUNNER_WAIT_COUNT + 1))
+					case " ${HEAL_RUNNER_WAIT_MATCHED} " in
+						*" ${HEAL_RUNNER_WAIT_RUN_ID}:${heal_runner_wait_job} "*) ;;
+						*) HEAL_RUNNER_WAIT_ALL=false ;;
+					esac
+				done
+				if [ "${HEAL_RUNNER_WAIT_ALL}" = true ] && [ "${HEAL_RUNNER_WAIT_COUNT}" -le "${MAX_FAILED_JOBS}" ]; then
+					log "skip reason=release_gate_runner_wait run=${HEAL_RUNNER_WAIT_RUN_ID} jobs=${HEAL_RUNNER_WAIT_COUNT}"
+					exit 0
+				fi
 			fi
 			;;
 	esac
@@ -2338,6 +2450,62 @@ _heal_cause_key()
 }
 _heal_cause_key || { CAUSE_KEY=""; CAUSE_SHAPE=""; log "cause outcome=skipped reason=helper_failed"; }
 
+# --- Red-main grouping (#9823, plan Phase 2) ----------------------------------
+# Behind WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED (default true): a failed push
+# CI run on the default branch gets a key over (workflow name, failing job,
+# branch), so every red-main run failing in the same job records on one open
+# heal issue whatever its error text. The run facts (event, head branch,
+# workflow path) come from the provenance-verified run object saved above and
+# the failing job from the jobs listing (SUMMARIES_FILE): local files only, no
+# API call. Any failure leaves grouping off for this report (fail open).
+_heal_red_main_group_key()
+{
+	local red_main_run_id="" red_main_run_json="" red_main_event="" red_main_branch="" red_main_path=""
+	local red_main_job="" red_main_workflow="" red_main_json="" red_main_reason=""
+	if [ "${RED_MAIN_GROUPING_ENABLED}" != "true" ]; then
+		log "red_main_group key= outcome=skipped reason=disabled"
+		return 0
+	fi
+	if [ "${SOURCE_KIND}" != "workflow_run" ]; then
+		log "red_main_group key= outcome=skipped reason=ineligible_kind"
+		return 0
+	fi
+	if [ "${REPORT_AUTH}" = "reconstructed" ]; then
+		log "red_main_group key= outcome=skipped reason=reconstructed"
+		return 0
+	fi
+	red_main_run_id="$(jq -r '.run_refs[0].run_id // "" | tostring' "${PAYLOAD_FILE}" 2>/dev/null || true)"
+	if ! [[ "${red_main_run_id}" =~ ^[0-9]+$ ]] || [ -z "${PROVENANCE_RUNS:-}" ] || [ ! -s "${PROVENANCE_RUNS}" ]; then
+		log "red_main_group key= outcome=skipped reason=no_verified_run"
+		return 0
+	fi
+	red_main_run_json="$(jq -c --arg id "${red_main_run_id}" '.[$id] // empty | objects' "${PROVENANCE_RUNS}" 2>/dev/null || true)"
+	if [ -z "${red_main_run_json}" ]; then
+		log "red_main_group key= outcome=skipped reason=no_verified_run"
+		return 0
+	fi
+	red_main_event="$(jq -r '.event // "" | tostring' <<< "${red_main_run_json}" 2>/dev/null || true)"
+	red_main_branch="$(jq -r '.head_branch // "" | tostring' <<< "${red_main_run_json}" 2>/dev/null || true)"
+	red_main_path="$(jq -r '.path // "" | tostring' <<< "${red_main_run_json}" 2>/dev/null || true)"
+	red_main_job="$(jq -r --arg id "${red_main_run_id}" 'map(select((.run_id | tostring) == $id and (.job_name // "") != "")) | first | .job_name // ""' "${SUMMARIES_FILE}" 2>/dev/null || true)"
+	red_main_workflow="$(jq -r --arg id "${red_main_run_id}" 'map(select((.run_id | tostring) == $id and (.workflow_name // "") != "")) | first | .workflow_name // ""' "${SUMMARIES_FILE}" 2>/dev/null || true)"
+	[ -n "${red_main_workflow}" ] || red_main_workflow="${FIRST_WORKFLOW_NAME:-}"
+	if ! red_main_json="$(python3 "${HEAL_PY}" red-main-group-key --workflow-name "${red_main_workflow}" --failing-job "${red_main_job}" \
+		--branch "${red_main_branch}" --default-branch "${PROVENANCE_DEFAULT_BRANCH:-}" --event "${red_main_event}" \
+		--workflow-path "${red_main_path}" 2>/dev/null)" \
+		|| ! jq -e '(.key | type == "string" and test("^([0-9a-f]{64})?$")) and (.reason | type == "string" and test("^[a-z_]{1,40}$"))' <<< "${red_main_json}" >/dev/null 2>&1; then
+		log "red_main_group key= outcome=skipped reason=helper_failed"
+		return 0
+	fi
+	red_main_reason="$(jq -r '.reason' <<< "${red_main_json}")"
+	RED_MAIN_GROUP_KEY="$(jq -r '.key' <<< "${red_main_json}")"
+	if [ -z "${RED_MAIN_GROUP_KEY}" ]; then
+		log "red_main_group key= outcome=skipped reason=${red_main_reason}"
+	fi
+	return 0
+}
+_heal_red_main_group_key || { RED_MAIN_GROUP_KEY=""; log "red_main_group key= outcome=skipped reason=helper_failed"; }
+
 # --- Dedup / lineage / budget ----------------------------------------------
 
 # A deferred non-retryable report (#7333) whose heal-issue list cannot be read
@@ -2421,6 +2589,10 @@ fi
 # Cause grouping (P5 / D3): set only with the switch on and an eligible report.
 if [ -n "${CAUSE_KEY}" ]; then
 	BUDGET_ARGS+=(--cause "${CAUSE_KEY}" --cause-window-days "${CAUSE_GROUPING_DAYS}")
+fi
+# Red-main grouping (#9823): set only with the switch on and a red-main run.
+if [ -n "${RED_MAIN_GROUP_KEY}" ]; then
+	BUDGET_ARGS+=(--red-main-group "${RED_MAIN_GROUP_KEY}")
 fi
 DECISION_FILE="${RUNTIME_DIR}/decision.json"
 python3 "${HEAL_PY}" budget "${BUDGET_ARGS[@]}" > "${DECISION_FILE}"
@@ -2533,6 +2705,9 @@ _heal_scope_recovery_evaluate()
 	[ "$(jq -r '.match // ""' "${DECISION_FILE}")" != "cause" ] || return 0
 	# A heal issue's own failed run (heal-of-heal dedupe) is recorded, not replaced.
 	[ "$(jq -r '.match // ""' "${DECISION_FILE}")" != "heal_source" ] || return 0
+	# A red-main group match (#9823) may be another fingerprint's heal issue;
+	# this report never replaces or recovers it.
+	[ "$(jq -r '.match // ""' "${DECISION_FILE}")" != "red_main_group" ] || return 0
 	local recovery_issue recovery_repo recovery_url recovery_login
 	local recovery_record="${RUNTIME_DIR}/heal_scope_recovery_issue.json"
 	local recovery_comments="${RUNTIME_DIR}/heal_scope_recovery_comments.json"
@@ -2645,6 +2820,12 @@ _heal_scope_recovery_evaluate()
 				recovery_arg_index=$((recovery_arg_index + 2))
 				continue
 				;;
+			# Red-main grouping (#9823) is not a cap either: another open
+			# red-main heal issue must not block the replacement.
+			--red-main-group)
+				recovery_arg_index=$((recovery_arg_index + 2))
+				continue
+				;;
 			# Heal-of-heal dedupe is not a cap either: another open heal issue
 			# whose own run failed must not turn the replacement into a
 			# `match: heal_source` duplicate.
@@ -2691,6 +2872,31 @@ if [ "${REPORT_AUTH}" = "reconstructed" ] && { [ "${HEAL_SCOPE_RECOVERY_ACTIVE}"
 	# The scan records no occurrence: only a recovery may follow a replay.
 	log "heal_scope_recovery outcome=skip reason=not_recovered issue=${RECOVERY_SCAN_EXPECTED_ISSUE} fp=${FP}"
 	exit 0
+fi
+
+# Red-main grouping (#9823): log the final decision, after the re-issue lookup
+# and scope recovery could rewrite DECISION_FILE, so `outcome=` names what this
+# run does (a re-issue match is `action=duplicate`, logged as other_match).
+if [ -n "${RED_MAIN_GROUP_KEY}" ]; then
+	red_main_decision_match="$(jq -r '.match // ""' "${DECISION_FILE}" 2>/dev/null || true)"
+	red_main_decision_action="$(jq -r '.action // ""' "${DECISION_FILE}" 2>/dev/null || true)"
+	if [ "${red_main_decision_match}" = "red_main_group" ]; then
+		log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=open_group_heal"
+	elif [ "${red_main_decision_match}" = "fingerprint" ]; then
+		# Same fingerprint: recorded by the fingerprint match (scope recovery applies).
+		log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=fingerprint_match"
+	elif [ "${red_main_decision_action}" = "duplicate" ]; then
+		# Recorded on another heal issue (source, heal_source, reissue or cause match).
+		log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=other_match"
+	elif [ "${red_main_decision_action}" = "open" ] && [ "${HEAL_SCOPE_RECOVERY_ACTIVE}" = "true" ]; then
+		# Scope recovery turned a duplicate into an open: a replacement issue.
+		log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=new reason=scope_recovery"
+	elif [ "${red_main_decision_action}" = "open" ]; then
+		log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=new reason=no_open_group_heal"
+	else
+		# escalate / budget_exhausted / unreadable decision: no new issue here.
+		log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=skipped reason=budget_decision"
+	fi
 fi
 
 # Cause-match occurrence inputs (P5 / D3): the signature, the error class and,
@@ -4801,6 +5007,11 @@ _open_issue()
 	local -a cause_args=()
 	if [ "${CAUSE_GROUPING_ENABLED}" = true ] && [ -n "${CAUSE_KEY}" ]; then
 		cause_args=(--cause "${CAUSE_KEY}")
+	fi
+	# Red-main grouping (#9823): the red-main-group header line, only with the
+	# switch on and a computed key, so a switch-off body is byte-identical.
+	if [ "${RED_MAIN_GROUPING_ENABLED}" = true ] && [ -n "${RED_MAIN_GROUP_KEY}" ]; then
+		cause_args+=(--red-main-group "${RED_MAIN_GROUP_KEY}")
 	fi
 	# Code-ref routing (P6 step 1): the `Code ran from` line, only with the
 	# switch on and a line, so a switch-off body is byte-identical.

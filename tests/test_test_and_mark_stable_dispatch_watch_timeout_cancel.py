@@ -375,6 +375,20 @@ def test_real_watcher_with_switch_off_issues_no_cancel() -> None:
 	assert not [c for c in calls if "/cancel" in c], calls
 
 
+def test_gate_enables_the_runner_wait_stop_and_keeps_the_timeout_blocks() -> None:
+	"""Issue #10037 (G3): the gate opts into the watcher's runner_wait stop at
+	workflow level (no inline run: growth); every call site keeps its timeout
+	block, and the watcher keeps the stop off by default for other callers."""
+	text = WORKFLOW.read_text(encoding="utf-8")
+	env_block = text[text.index("\nenv:\n"):text.index("\npermissions:\n")]
+	assert '  DISPATCH_WATCH_STOP_RELEASE_GATE: "true"\n' in env_block
+	for name, run in _step_runs().items():
+		assert BLOCK_START in run and BLOCK_END in run, name
+	watcher = WATCHER.read_text(encoding="utf-8")
+	assert '"${DISPATCH_WATCH_STOP_RELEASE_GATE:-false}"' in watcher
+	assert 'echo "::error::${DISPLAY_NAME} run #${NEW_ID} timed out"\nexit 1\n' in watcher
+
+
 def main() -> int:
 	tests = [value for name, value in sorted(globals().items()) if name.startswith("test_") and callable(value)]
 	for test in tests:

@@ -20,6 +20,7 @@ OPERATIONAL_PROMPT_LIMITS = {
 	"integration-sync-conflict-resolver.txt": 200,
 	"integration-sync-conflict-resolver-retry-prelude.txt": 100,
 	"integration-sync-conflict-resolver-retry-timeout-prelude.txt": 100,
+	"conflict-resolver-retry-provenance-prelude.txt": 100,
 	"header.txt": 20,
 }
 EXPECTED_TIERS = {

@@ -64,6 +64,19 @@ REVIEW_PHASE_DEADLINE_EXTENSION_LOGGED=0
 # runner, cleared when it starts, completes or is replaced.
 REVIEW_RUNNER_WAIT_SINCE=""
 REVIEW_RUNNER_WAIT_RUN_ID=""
+# When and for which run the last stretch closed (issue #10037): a runner
+# assigned only in the last third of the budget is a late assignment.
+REVIEW_RUNNER_WAIT_CLOSED_AT=""
+REVIEW_RUNNER_WAIT_CLOSED_RUN_ID=""
+# What the open stretch saw (issue #10037, G3): a job status=queued with no
+# runner (a runner wait), or a job held in waiting/pending (an environment or
+# concurrency hold, not a runner wait). Only a stretch that saw the first and
+# never the second is reported as runner_wait. The *_CLOSED_* copies keep the
+# last closed stretch's start and verdict for the late_assigned check.
+REVIEW_RUNNER_WAIT_QUEUED_SEEN=0
+REVIEW_RUNNER_WAIT_HELD_SEEN=0
+REVIEW_RUNNER_WAIT_CLOSED_SINCE=""
+REVIEW_RUNNER_WAIT_CLOSED_QUALIFIED=0
 # Consecutive polls whose runs lookup came back empty (#9480).
 REVIEW_RUNNER_WAIT_EMPTY_POLLS=0
 if [[ "${E2E_JOB_STARTED_EPOCH:-}" =~ ^[0-9]+$ ]] \
@@ -459,7 +472,42 @@ while true; do
         fi
       fi
       echo "::error::Review phase exceeded its ${REVIEW_PHASE_WALL_BUDGET_MINUTES}-minute total wall-clock budget$(e2e_watched_run_urls)"
+      # Runner wait (issue #10037, G3): the watched review run never got a
+      # runner (the stretch is still open and the runs lookup still answers),
+      # or got one only in the last third of the time spent here. status
+      # stays timeout (Phase 4d reads it); runner_wait=true is added, and with
+      # DISPATCH_WATCH_STOP_RELEASE_GATE=true the gate stops itself so the run
+      # ends cancelled instead of failed. Anything else fails as before.
+      rw_result_reason=""
+      rw_result_run=""
+      # never_assigned also needs the open stretch to have started in the
+      # first third of the time spent here: a replacement run queued late,
+      # after an earlier review run overran, stays a real timeout.
+      if [[ "${REVIEW_RUNNER_WAIT_SINCE}" =~ ^[0-9]+$ ]] && [[ "${REVIEW_RUNNER_WAIT_RUN_ID}" =~ ^[0-9]+$ ]] \
+          && [ "${REVIEW_RUNNER_WAIT_EMPTY_POLLS:-0}" -le 2 ] \
+          && [ "${REVIEW_RUNNER_WAIT_QUEUED_SEEN}" = "1" ] && [ "${REVIEW_RUNNER_WAIT_HELD_SEEN}" = "0" ] \
+          && [ "${REVIEW_RUNNER_WAIT_SINCE}" -le $(( REVIEW_PHASE_STARTED_AT + (NOW - REVIEW_PHASE_STARTED_AT) / 3 )) ]; then
+        rw_result_reason="never_assigned"
+        rw_result_run="${REVIEW_RUNNER_WAIT_RUN_ID}"
+      elif [[ "${REVIEW_RUNNER_WAIT_CLOSED_RUN_ID}" =~ ^[0-9]+$ ]] && [ "${REVIEW_RUNNER_WAIT_CLOSED_RUN_ID}" = "${RUN_ID:-}" ] \
+          && [[ "${REVIEW_RUNNER_WAIT_CLOSED_AT}" =~ ^[0-9]+$ ]] \
+          && [ "${REVIEW_RUNNER_WAIT_CLOSED_QUALIFIED}" = "1" ] \
+          && [[ "${REVIEW_RUNNER_WAIT_CLOSED_SINCE}" =~ ^[0-9]+$ ]] \
+          && [ "${REVIEW_RUNNER_WAIT_CLOSED_SINCE}" -le $(( REVIEW_PHASE_STARTED_AT + (NOW - REVIEW_PHASE_STARTED_AT) / 3 )) ] \
+          && [ "${REVIEW_RUNNER_WAIT_CLOSED_AT}" -ge $(( REVIEW_PHASE_STARTED_AT + 2 * (NOW - REVIEW_PHASE_STARTED_AT) / 3 )) ]; then
+        rw_result_reason="late_assigned"
+        rw_result_run="${REVIEW_RUNNER_WAIT_CLOSED_RUN_ID}"
+      fi
       echo "status=timeout" >> "$GITHUB_OUTPUT"
+      if [ -n "${rw_result_reason}" ]; then
+        echo "E2E_REVIEW_RUNNER_WAIT run=${rw_result_run} outcome=runner_wait reason=${rw_result_reason}"
+        echo "runner_wait=true" >> "$GITHUB_OUTPUT"
+        if [ "$(printf '%s' "${DISPATCH_WATCH_STOP_RELEASE_GATE:-false}" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
+          bash "${E2E_RUNNER_WAIT_STOP_HELPER:-./scripts/dispatch_and_watch_workflow_run.sh}" --stop-release-gate \
+            --repo "${TEST_REPO}" --watched-run-id "${rw_result_run}" --display-name review \
+            --runner-wait-reason "${rw_result_reason}" || true
+        fi
+      fi
       exit 1
     fi
   fi
@@ -621,6 +669,11 @@ while true; do
     # the wait here, before the completed-run exits below.
     if [ "$RUN_STATUS" = "completed" ] && [ -n "${REVIEW_RUNNER_WAIT_RUN_ID}" ] && [ "${REVIEW_RUNNER_WAIT_RUN_ID}" = "${RUN_ID}" ]; then
       echo "E2E_REVIEW_RUNNER_WAIT run=${RUN_ID} outcome=started waited_seconds=$((NOW - REVIEW_RUNNER_WAIT_SINCE))"
+      REVIEW_RUNNER_WAIT_CLOSED_AT="$NOW"
+      REVIEW_RUNNER_WAIT_CLOSED_RUN_ID="${REVIEW_RUNNER_WAIT_RUN_ID}"
+      REVIEW_RUNNER_WAIT_CLOSED_SINCE="${REVIEW_RUNNER_WAIT_SINCE}"
+      REVIEW_RUNNER_WAIT_CLOSED_QUALIFIED=0
+      [ "${REVIEW_RUNNER_WAIT_QUEUED_SEEN}" = "1" ] && [ "${REVIEW_RUNNER_WAIT_HELD_SEEN}" = "0" ] && REVIEW_RUNNER_WAIT_CLOSED_QUALIFIED=1
       REVIEW_RUNNER_WAIT_SINCE=""
       REVIEW_RUNNER_WAIT_RUN_ID=""
     fi
@@ -967,7 +1020,20 @@ while true; do
       REVIEW_RUNNER_WAIT_SINCE="$NOW"
       REVIEW_RUNNER_WAIT_RUN_ID="$RUN_ID"
       echo "E2E_REVIEW_RUNNER_WAIT run=${RUN_ID} status=${RUN_STATUS} outcome=waiting since=${REVIEW_RUNNER_WAIT_SINCE} ceiling=${REVIEW_PHASE_DEADLINE_CEILING}"
+      REVIEW_RUNNER_WAIT_QUEUED_SEEN=0
+      REVIEW_RUNNER_WAIT_HELD_SEEN=0
     fi
+    # Issue #10037: jobs read this poll first; without one (or with an empty
+    # jobs list, as the watcher treats it), the run status.
+    rw_poll_kind="$(printf '%s' "${E2E_REVIEW_LAST_JOBS_JSON:-}" | jq -r 'if (.jobs | type) == "array" and (.jobs | length) > 0 then ((if any(.jobs[]; ((.status // "") == "waiting" or (.status // "") == "pending") and ((.runner_name // "") == "")) then "held" else "" end) + " " + (if any(.jobs[]; (.status // "") == "queued" and ((.runner_name // "") == "")) then "queued" else "" end)) else "none" end' 2>/dev/null || echo none)"
+    if [ "${rw_poll_kind:-none}" = "none" ]; then
+      case "${RUN_STATUS}" in
+        queued) rw_poll_kind=" queued" ;;
+        waiting|pending) rw_poll_kind="held " ;;
+      esac
+    fi
+    case "${rw_poll_kind}" in held*) REVIEW_RUNNER_WAIT_HELD_SEEN=1 ;; esac
+    case "${rw_poll_kind}" in *queued) REVIEW_RUNNER_WAIT_QUEUED_SEEN=1 ;; esac
     LAST_ACTIVITY=$NOW
     IDLE=0
   elif [ -n "${REVIEW_RUNNER_WAIT_RUN_ID}" ] \
@@ -982,6 +1048,11 @@ while true; do
     if [ "${REVIEW_RUNNER_WAIT_RUN_ID}" = "${RUN_ID}" ]; then
       echo "E2E_REVIEW_RUNNER_WAIT run=${RUN_ID} outcome=started waited_seconds=$((NOW - REVIEW_RUNNER_WAIT_SINCE))"
     fi
+    REVIEW_RUNNER_WAIT_CLOSED_AT="$NOW"
+    REVIEW_RUNNER_WAIT_CLOSED_RUN_ID="${REVIEW_RUNNER_WAIT_RUN_ID}"
+    REVIEW_RUNNER_WAIT_CLOSED_SINCE="${REVIEW_RUNNER_WAIT_SINCE}"
+    REVIEW_RUNNER_WAIT_CLOSED_QUALIFIED=0
+    [ "${REVIEW_RUNNER_WAIT_QUEUED_SEEN}" = "1" ] && [ "${REVIEW_RUNNER_WAIT_HELD_SEEN}" = "0" ] && REVIEW_RUNNER_WAIT_CLOSED_QUALIFIED=1
     REVIEW_RUNNER_WAIT_SINCE=""
     REVIEW_RUNNER_WAIT_RUN_ID=""
   fi

@@ -55,11 +55,17 @@ from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 # Issues #9519 / #9520 added the `files_touched` sentence to item 1's last
 # line: both plans were held with plan_files_outside_files_touched (270 lines,
 # 18_031 -> 18_402 bytes). With P8a-2 the prompt is 271 lines, 19_140 bytes.
+# That pin was PRE_EXTRACTION_PROMPT_SHA256
+# "d504e171e37ca7b8da0f2eb11fb3230fa2b2c168ae91d502b51b2d0de73f6b46" with
+# PRE_EXTRACTION_PROMPT_BYTES = 19_140.
+# Issue #9534 added the one-line "Missing scope" `SCOPE_MISSING:` rule after
+# the sequencing-wait rule, matching prompts/mode-plan.txt (271 -> 272 lines,
+# 19_140 -> 19_726 bytes).
 PRE_EXTRACTION_PROMPT_SHA256 = (
-	"d504e171e37ca7b8da0f2eb11fb3230fa2b2c168ae91d502b51b2d0de73f6b46"
+	"cbd4decb7d8d9b71c20b5893b14624b8ae99d14b19e90dde4b646aae34718ace"
 )
-PRE_EXTRACTION_PROMPT_BYTES = 19_140
-PRE_EXTRACTION_PROMPT_LINES = 271
+PRE_EXTRACTION_PROMPT_BYTES = 19_726
+PRE_EXTRACTION_PROMPT_LINES = 272
 
 
 # Issue #9266: the step runs the runner through a wrapper that prints one

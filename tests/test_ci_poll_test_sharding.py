@@ -1181,6 +1181,10 @@ GROUP_PINNED_STEPS = {
 	# tests-hooks-and-orchestrator to group 3 in #9391, and from group 3 to
 	# group 0 in #9639) left the matrix for tests-hooks-and-orchestrator in
 	# #9895; see MOVED_POLL_GROUP_ZERO_9895_STEPS.
+	# Moved from tests-release-and-log-analysis in #9966.
+	"Judge Semble prefetch contract test": 1,
+	# Moved from tests-release-and-log-analysis in #9966.
+	"Regression tests wired by the CI wiring guard (part 1)": 1,
 	# Moved from tests-hooks-and-orchestrator in #9496.
 	"Merge-train and gh_helpers rate-limit tests (CLAUDE.md §15)": 0,
 	# Moved from tests-hooks-and-orchestrator in #9496.
@@ -1483,7 +1487,8 @@ class UnblockStepShardingContractTest(unittest.TestCase):
 
 WIRING_PART1_STEP_NAME = "Regression tests wired by the CI wiring guard (part 1)"
 # Issue #9363 moved the step on to tests-release-and-log-analysis.
-WIRING_PART1_JOB_ID = "tests-release-and-log-analysis"
+# Issue #9966 moved the step on to orchestrate-poll group 1.
+WIRING_PART1_JOB_ID = "orchestrate-poll"
 WIRING_PART1_MODULES = (
 	"tests/test_ai_memory_cli.py",
 	"tests/test_branch_rebuild.py",
@@ -1599,7 +1604,9 @@ class WiringGuardPartOneShardingContractTest(unittest.TestCase):
 	test must run exactly once, and a shard that fails or records no exit
 	code must fail the step. Issue #9018 moved the step, unchanged, to
 	tests-promote-stall-and-review. Issue #9363 moved it, unchanged, to
-	tests-release-and-log-analysis.
+	tests-release-and-log-analysis. Issue #9966 moved it to orchestrate-poll,
+	where its only change is the `strategy.job-index == 1` guard that keeps
+	it in one matrix group.
 	"""
 
 	def setUp(self) -> None:
@@ -1618,7 +1625,8 @@ class WiringGuardPartOneShardingContractTest(unittest.TestCase):
 			if step.get("name") == WIRING_PART1_STEP_NAME
 		]
 		self.assertEqual(owners, [WIRING_PART1_JOB_ID])
-		self.assertNotIn("if", self.step)
+		# Since #9966 the step runs in one orchestrate-poll matrix group.
+		self.assertEqual(self.step.get("if"), "strategy.job-index == 1")
 		self.assertIn("wg1_shards=4", self.run)
 
 	def test_module_array_matches_the_constant_and_files_exist(self) -> None:
@@ -1899,8 +1907,9 @@ MOVED_HOOKS_JOB_STEPS = {
 		),
 	),
 	# Issue #9363 moved it on from tests-promote-stall-and-review.
+	# Issue #9966 moved it on to orchestrate-poll group 1.
 	"Judge Semble prefetch contract test": (
-		"tests-release-and-log-analysis",
+		"orchestrate-poll",
 		(
 			"tests/test_judge_semble_prefetch_contract.py",
 			"tests/test_implement_semble_contract.py",
@@ -1958,7 +1967,12 @@ class MovedHooksJobStepsContractTest(unittest.TestCase):
 		for name in MOVED_HOOKS_JOB_STEPS:
 			with self.subTest(step=name):
 				for _owner, step in self.owning_steps(name):
-					self.assertNotIn("if", step)
+					# A step moved on into the orchestrate-poll matrix (#9966) keeps
+					# its single group guard; every other step stays unguarded.
+					if name in GROUP_PINNED_STEPS:
+						self.assertEqual(step.get("if"), f"strategy.job-index == {GROUP_PINNED_STEPS[name]}")
+					else:
+						self.assertNotIn("if", step)
 
 	def test_moved_step_modules_exist_and_are_named(self) -> None:
 		for name, (_job_id, paths) in MOVED_HOOKS_JOB_STEPS.items():
@@ -2519,8 +2533,9 @@ class MovedPromote8771StepsContractTest(unittest.TestCase):
 PROMOTE_9363_SOURCE_JOB_ID = "tests-promote-stall-and-review"
 PROMOTE_9363_SETUP_STEP = "Install Python CI dependencies"
 MOVED_PROMOTE_9363_STEPS = {
-	WIRING_PART1_STEP_NAME: ("tests-release-and-log-analysis", ()),
-	"Judge Semble prefetch contract test": ("tests-release-and-log-analysis", ()),
+	# Issue #9966 moved these two on to orchestrate-poll group 1.
+	WIRING_PART1_STEP_NAME: ("orchestrate-poll", ()),
+	"Judge Semble prefetch contract test": ("orchestrate-poll", ()),
 	"Review conflict-resolve sandbox-only tests": (
 		"tests-heal-plan-and-validation",
 		("tests/test_review_conflict_resolve_sandbox_only.py",),
@@ -2565,7 +2580,12 @@ class MovedPromote9363StepsContractTest(unittest.TestCase):
 		for name in MOVED_PROMOTE_9363_STEPS:
 			with self.subTest(step=name):
 				for _owner, step in self.owning_steps(name):
-					self.assertNotIn("if", step)
+					# A step moved on into the orchestrate-poll matrix (#9966) keeps
+					# its single group guard; every other step stays unguarded.
+					if name in GROUP_PINNED_STEPS:
+						self.assertEqual(step.get("if"), f"strategy.job-index == {GROUP_PINNED_STEPS[name]}")
+					else:
+						self.assertNotIn("if", step)
 
 	def test_each_step_still_names_its_modules(self) -> None:
 		for name, (_job_id, modules) in MOVED_PROMOTE_9363_STEPS.items():
@@ -2594,6 +2614,88 @@ class MovedPromote9363StepsContractTest(unittest.TestCase):
 		for name, (job_id, _modules) in MOVED_PROMOTE_9363_STEPS.items():
 			with self.subTest(step=name):
 				self.assertNotEqual(job_id, PROMOTE_9363_SOURCE_JOB_ID)
+
+
+# Steps moved out of tests-release-and-log-analysis, which took 19m01s of its
+# 20 minutes (run 45035315687, budget-watch issue #9966): step name -> module
+# paths its body names. The run's step timings were not readable; the pick is
+# an estimate from test and subprocess counts; both steps were already in the
+# job when it measured 15m19s (run 43352637124), so the cause of the rise to
+# 19m01s is not identified. Both go to orchestrate-poll group 1, the job with
+# the only 30-minute budget. The wiring guard part 1 modules are pinned by
+# WIRING_PART1_MODULES.
+RELEASE_9966_SOURCE_JOB_ID = "tests-release-and-log-analysis"
+RELEASE_9966_TARGET_GROUP = 1
+RELEASE_9966_SETUP_STEP = "Install Python CI dependencies"
+MOVED_RELEASE_9966_STEPS = {
+	WIRING_PART1_STEP_NAME: (),
+	"Judge Semble prefetch contract test": (
+		"tests/test_judge_semble_prefetch_contract.py",
+		"tests/test_implement_semble_contract.py",
+		"tests/test_record_id_format_contract.py",
+		"tests/test_clarify_informal_detect.py",
+		"tests/test_repo_root_helper.py",
+		"tests/test_generate_resource_id.py",
+		"tests/test_update_repo_tree.py",
+		"tests/test_validate_semble_contract.py",
+		"tests/test_mcp_handshake_probe.py",
+		"tests/test_setup_serena_toml.py",
+		"tests/test_serena_stats_emit.py",
+		"tests/test_validate_process_template_mode.py",
+		"tests/test_semble_workflow_parity_contract.py",
+		"tests/test_smoke_alert_silencing_contract.py",
+	),
+}
+
+
+class MovedRelease9966StepsContractTest(unittest.TestCase):
+	"""The steps moved out of tests-release-and-log-analysis run once, in orchestrate-poll (1) (#9966)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_each_step_is_owned_only_by_the_poll_job(self) -> None:
+		for name in MOVED_RELEASE_9966_STEPS:
+			with self.subTest(step=name):
+				self.assertEqual([owner for owner, _step in self.owning_steps(name)], [POLL_JOB_ID])
+
+	def test_each_step_is_guarded_to_its_group(self) -> None:
+		for name in MOVED_RELEASE_9966_STEPS:
+			with self.subTest(step=name):
+				self.assertEqual(GROUP_PINNED_STEPS.get(name), RELEASE_9966_TARGET_GROUP)
+				for _owner, step in self.owning_steps(name):
+					self.assertEqual(step.get("if"), f"strategy.job-index == {RELEASE_9966_TARGET_GROUP}")
+
+	def test_each_step_still_names_its_modules(self) -> None:
+		for name, modules in MOVED_RELEASE_9966_STEPS.items():
+			steps = self.owning_steps(name)
+			self.assertEqual(len(steps), 1, name)
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertTrue((REPO_ROOT / module).is_file(), module)
+					self.assertIn(module, steps[0][1]["run"])
+
+	def test_moved_steps_left_the_source_job(self) -> None:
+		source_names = {step.get("name") for step in self.jobs()[RELEASE_9966_SOURCE_JOB_ID]["steps"]}
+		for name in MOVED_RELEASE_9966_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, source_names)
+
+	def test_moved_steps_run_after_the_poll_job_setup(self) -> None:
+		names = [step.get("name") for step in self.jobs()[POLL_JOB_ID]["steps"]]
+		for name in MOVED_RELEASE_9966_STEPS:
+			with self.subTest(step=name):
+				self.assertIn(RELEASE_9966_SETUP_STEP, names)
+				self.assertIn(name, names)
+				self.assertLess(names.index(RELEASE_9966_SETUP_STEP), names.index(name))
 
 
 # Steps moved out of tests-heal-plan-and-validation, which took 16m08s of its
@@ -2701,7 +2803,8 @@ HEAL_9018_SOURCE_JOB_ID = "tests-heal-plan-and-validation"
 HEAL_9018_SETUP_STEP = "Install Python CI dependencies"
 MOVED_HEAL_9018_STEPS = {
 	# Issue #9363 moved it on from tests-promote-stall-and-review.
-	WIRING_PART1_STEP_NAME: ("tests-release-and-log-analysis", ()),
+	# Issue #9966 moved it on to orchestrate-poll group 1.
+	WIRING_PART1_STEP_NAME: ("orchestrate-poll", ()),
 	HOOKS_NODE_SETUP_STEP: ("tests-release-and-log-analysis", ()),
 	HOOKS_VITEST_STEP: ("tests-release-and-log-analysis", ("tools/claude-pool-broker",)),
 }
@@ -2730,7 +2833,12 @@ class MovedHeal9018StepsContractTest(unittest.TestCase):
 		for name in MOVED_HEAL_9018_STEPS:
 			with self.subTest(step=name):
 				for _owner, step in self.owning_steps(name):
-					self.assertNotIn("if", step)
+					# A step moved on into the orchestrate-poll matrix (#9966) keeps
+					# its single group guard; every other step stays unguarded.
+					if name in GROUP_PINNED_STEPS:
+						self.assertEqual(step.get("if"), f"strategy.job-index == {GROUP_PINNED_STEPS[name]}")
+					else:
+						self.assertNotIn("if", step)
 
 	def test_named_directories_exist(self) -> None:
 		for name, (_job_id, paths) in MOVED_HEAL_9018_STEPS.items():
@@ -2934,9 +3042,11 @@ VALIDATION_SELFTEST_MODULES = (
 )
 # VALIDATION_SELFTEST_MODULES is kept as it is for
 # MovedPollGroupThree8472StepsContractTest. It lists 21 paths while the step
-# runs 23 commands: VALIDATION_SELFTEST_COMMANDS below (budget-watch issue
-# #9362) also covers tests/test_review_conflict_resolve_terminal_record.py
-# and tests/test_epochrealtime_ms_clock.py (#9252), which this tuple leaves out.
+# runs 25 commands: VALIDATION_SELFTEST_COMMANDS below (budget-watch issue
+# #9362) also covers tests/test_review_conflict_resolve_terminal_record.py,
+# tests/test_review_conflict_resolve_provenance.py (#9842),
+# tests/test_review_conflict_modify_delete.py (#9886) and
+# tests/test_epochrealtime_ms_clock.py (#9252), which this tuple leaves out.
 # The step's command table, (kind, path) in the original order: "py" runs
 # `python3 <path>` and "pytest" runs `python3 -m pytest -q -p no:cacheprovider
 # <path>`, as the sequential body did before #9362.
@@ -2958,6 +3068,8 @@ VALIDATION_SELFTEST_COMMANDS = (
 	("py", "tests/test_fingerprint_quarantine.py"),
 	("py", "tests/test_review_conflict_resolve_retry_state.py"),
 	("pytest", "tests/test_review_conflict_resolve_terminal_record.py"),
+	("pytest", "tests/test_review_conflict_resolve_provenance.py"),
+	("pytest", "tests/test_review_conflict_modify_delete.py"),
 	("pytest", "tests/test_epochrealtime_ms_clock.py"),
 	("pytest", "tests/test_touched_set_symlink_aware.py"),
 	("py", "tests/test_consumer_artifact_cleanup_preserves_tracked.py"),
@@ -5904,7 +6016,7 @@ class ValidationSelftestConcurrencyContractTest(unittest.TestCase):
 
 	static-checks took 14m21s of its 15 minutes on main (run 43139141266,
 	budget-watch issue #9362). The step stays in static-checks under its own
-	name and runs its 23 commands, unchanged, in four lanes: lane 0 runs the
+	name and runs its 25 commands, unchanged, in four lanes: lane 0 runs the
 	security-audit contract module alone and the others go round-robin to
 	lanes 1-3. Every lane is reaped before any command is judged, a failing
 	command or a missing or non-numeric rc fails the step, and
@@ -5932,7 +6044,7 @@ class ValidationSelftestConcurrencyContractTest(unittest.TestCase):
 		self.assertIsNotNone(array)
 		entries = [tuple(entry.split(":", 1)) for entry in array.group("entries").split()]
 		self.assertEqual(entries, list(VALIDATION_SELFTEST_COMMANDS))
-		self.assertEqual(len(entries), 23)
+		self.assertEqual(len(entries), 25)
 		for kind, path in entries:
 			with self.subTest(path=path):
 				self.assertIn(kind, ("py", "pytest"))

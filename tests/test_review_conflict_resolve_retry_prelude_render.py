@@ -63,6 +63,7 @@ RESOLVE_SCRIPT = REPO_ROOT / "scripts" / "review_conflict_resolve.sh"
 PROMPTS_DIR = REPO_ROOT / "prompts"
 VALIDATION_PRELUDE = PROMPTS_DIR / "integration-sync-conflict-resolver-retry-prelude.txt"
 TIMEOUT_PRELUDE = PROMPTS_DIR / "integration-sync-conflict-resolver-retry-timeout-prelude.txt"
+PROVENANCE_PRELUDE = PROMPTS_DIR / "conflict-resolver-retry-provenance-prelude.txt"
 
 
 def _resolve_script_text() -> str:
@@ -193,6 +194,32 @@ def test_both_prelude_files_exist() -> None:
 		"falls open to a verbatim retry with `::warning::` when "
 		"this file is absent."
 	)
+
+
+def test_provenance_prelude_exists_with_placeholders() -> None:
+	"""Issue #9842: the provenance retry prelude must be checked in with
+	every placeholder `_build_retry_prompt` binds for the `provenance`
+	failure kind. When it is absent the builder falls back to an inline
+	header, so a missing file in upstream is a regression."""
+	assert PROVENANCE_PRELUDE.is_file(), f"Provenance prelude missing at {PROVENANCE_PRELUDE}"
+	text = PROVENANCE_PRELUDE.read_text(encoding="utf-8")
+	for placeholder in (
+		"{{PREVIOUS_ATTEMPT_NUMBER}}",
+		"{{MAX_ATTEMPTS}}",
+		"{{PROVENANCE_HUNK_COUNT}}",
+		"{{PROVENANCE_REPORT}}",
+	):
+		assert placeholder in text, placeholder
+	rendered = _render_retry_template(
+		text,
+		{
+			"PREVIOUS_ATTEMPT_NUMBER": "1",
+			"MAX_ATTEMPTS": "3",
+			"PROVENANCE_HUNK_COUNT": "1",
+			"PROVENANCE_REPORT": "--- cfg.yml lines 3..3 ---",
+		},
+	)
+	assert "{{" not in rendered and "}}" not in rendered
 
 
 def test_validation_prelude_carries_violations_framing() -> None:
@@ -437,6 +464,7 @@ def test_build_retry_prompt_sets_retry_prompt_outcome() -> None:
 		'_retry_prompt_outcome="verbatim:fallback"',
 		'_retry_prompt_outcome="timeout-prelude"',
 		'_retry_prompt_outcome="validation-prelude"',
+		'_retry_prompt_outcome="provenance-prelude"',
 	):
 		assert outcome in src, (
 			f"_build_retry_prompt must set {outcome}; the "
@@ -1107,6 +1135,7 @@ def main() -> int:
 	test_dependency_fallback_gates_workspace_scripts_and_fails_closed()
 	test_dependency_fallback_wiring_warns_and_updates_helper_paths()
 	test_both_prelude_files_exist()
+	test_provenance_prelude_exists_with_placeholders()
 	test_validation_prelude_carries_violations_framing()
 	test_validation_prelude_optional_resolver_serena_hint_renders_cleanly()
 	test_validation_prelude_has_no_leaked_unprocessed_markers()

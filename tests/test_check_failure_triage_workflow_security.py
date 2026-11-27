@@ -344,8 +344,9 @@ esac
 	def test_triage_checkouts_do_not_persist_credentials(self) -> None:
 		triage_job = _workflow()["jobs"]["triage"]
 		checkouts = [step for step in triage_job["steps"] if step.get("uses", "").startswith("actions/checkout@")]
-		# Three normal checkouts plus the historical-mode default-branch fallback.
-		self.assertEqual(len(checkouts), 4)
+		# Three normal checkouts, the historical-mode default-branch fallback and
+		# the target-files guard's default-branch checkout (#9823).
+		self.assertEqual(len(checkouts), 5)
 		for checkout in checkouts:
 			self.assertIn(checkout["with"]["persist-credentials"], (False, "false"))
 
