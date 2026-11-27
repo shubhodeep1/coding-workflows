@@ -176,6 +176,7 @@ jobs:
           FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
           GH_TOKEN: ${{ github.token }}
           CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+          CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED || 'true' }}
         run: bash scripts/ci_final_merge_ref_fresh.sh --depth 1
 
       - name: Shared shell-block anti-regression checks
@@ -922,6 +923,7 @@ jobs:
           FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
           GH_TOKEN: ${{ github.token }}
           CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+          CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED || 'true' }}
         run: bash scripts/ci_final_merge_ref_fresh.sh --depth 1
 
       - name: Fetch base commits for the shallow checkout (hooks and orchestrator)
@@ -1752,6 +1754,7 @@ jobs:
           FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
           GH_TOKEN: ${{ github.token }}
           CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+          CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED || 'true' }}
         run: bash scripts/ci_final_merge_ref_fresh.sh --depth 1
 
       - name: Setup Python
@@ -2063,6 +2066,7 @@ jobs:
           FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
           GH_TOKEN: ${{ github.token }}
           CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+          CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED || 'true' }}
         run: bash scripts/ci_final_merge_ref_fresh.sh --depth 1
 
       - name: Setup Python
@@ -2502,6 +2506,7 @@ jobs:
           FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
           GH_TOKEN: ${{ github.token }}
           CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+          CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED || 'true' }}
         run: bash scripts/ci_final_merge_ref_fresh.sh --depth 1
 
       - name: Fetch base commits for the shallow checkout (release and log analysis)
@@ -3329,6 +3334,7 @@ jobs:
           FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
           GH_TOKEN: ${{ github.token }}
           CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+          CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED || 'true' }}
         run: bash scripts/ci_final_merge_ref_fresh.sh --depth 1
 
       - name: Setup Python
@@ -4518,6 +4524,7 @@ jobs:
           FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
           GH_TOKEN: ${{ github.token }}
           CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+          CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED || 'true' }}
         run: bash scripts/ci_final_merge_ref_fresh.sh --depth 1
 
       - name: Fetch base commits for the shallow checkout (system Python)
@@ -4834,6 +4841,7 @@ jobs:
           # No token: this job passes none (tests/test_sandbox_python_coverage.py),
           # so the script reads the PR from the public REST API instead.
           CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+          CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED || 'true' }}
         run: bash scripts/ci_final_merge_ref_fresh.sh --depth 1
 
       - name: Setup Python
@@ -5046,6 +5054,7 @@ jobs:
           FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
           GH_TOKEN: ${{ github.token }}
           CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+          CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED || 'true' }}
         run: bash scripts/ci_final_merge_ref_fresh.sh --depth 3
 
       - name: Setup Python
@@ -5173,6 +5182,7 @@ jobs:
           FINAL_CI_PR_NUMBER: ${{ inputs.pr_number }}
           GH_TOKEN: ${{ github.token }}
           CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+          CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED || 'true' }}
         run: bash scripts/ci_final_merge_ref_fresh.sh --depth 2
 
       - name: Verify every changed file is docs-only
