@@ -10,6 +10,7 @@ fail-open split, and the staging entries.
 
 from __future__ import annotations
 
+import ast
 import re
 import subprocess
 import sys
@@ -212,6 +213,35 @@ def test_step_script_registry_has_no_duplicate_step_names() -> None:
 	node = next(n for n in ast.walk(tree) if isinstance(n, ast.AnnAssign) and getattr(n.target, "id", "") == "REVIEW_AUTOFIX_STEP_SCRIPTS")
 	keys = [ast.literal_eval(k) for k in node.value.keys]
 	assert len(keys) == len(set(keys)), sorted(k for k in keys if keys.count(k) > 1)
+
+
+def test_step_script_registries_have_no_duplicate_keys_and_no_orphan_scripts() -> None:
+	# A repeated key in a dict literal is silent in Python: the later entry
+	# replaces the earlier one, and the earlier script stays on disk with no
+	# step that runs it. A merge of two branches that each moved the same step
+	# body to a script (PR #10167 with #9944, "Telegram editor-noop-suspicious
+	# warning") produced exactly that, and no other check here noticed.
+	registry_module_source = (Path(__file__).resolve().parent / "review_autofix_step_scripts.py").read_text(encoding="utf-8")
+	for registry_node in ast.walk(ast.parse(registry_module_source)):
+		if not isinstance(registry_node, ast.Dict):
+			continue
+		literal_keys = [key.value for key in registry_node.keys if isinstance(key, ast.Constant)]
+		repeated_keys = sorted({key for key in literal_keys if literal_keys.count(key) > 1})
+		assert not repeated_keys, (
+			f"tests/review_autofix_step_scripts.py line {registry_node.lineno}: "
+			f"dict literal repeats key(s) {repeated_keys}; keep one entry per step"
+		)
+	# Every scripts/review_autofix_step_*.sh is named in the workflow: by a
+	# step wrapper, or by the inline step that sources it as a helper
+	# (review_autofix_step_det_skip_followup_guard.sh).
+	workflow_raw_text = REVIEW_AUTOFIX_WORKFLOW_PATH.read_text(encoding="utf-8")
+	scripts_on_disk = sorted(path.name for path in (REPO_ROOT / "scripts").glob("review_autofix_step_*.sh"))
+	assert scripts_on_disk, "no scripts/review_autofix_step_*.sh found"
+	orphan_scripts = [name for name in scripts_on_disk if name not in workflow_raw_text]
+	assert not orphan_scripts, (
+		f"scripts not named anywhere in review_autofix.yml: {orphan_scripts}; "
+		"remove them or restore the step that runs them"
+	)
 
 
 def test_gate_job_step_scripts_come_only_from_verified_head_gate_checkout() -> None:
