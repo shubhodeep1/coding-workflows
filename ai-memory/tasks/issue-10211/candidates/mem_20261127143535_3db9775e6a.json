@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan for issue #10211\n\nPlanning ref: `main` at 6233a870d9be4be917cecce882eceae3cab5f508. The integration-branch mismatch line reads `unknown`, not `true`, so there is no mismatch to block on.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: check e2e_smoke_canary content\nACCEPTANCE: post-merge none: the change only rewrites a text fixture and no post-merge workflow covers it\n\n## Functions or modules to implement\nNone. The only change is to the content of `tests/e2e_smoke_canary.txt`. That file currently holds two lines: `status: ok` and `decompose-run: 41445772297`. Replace them with exactly these three lines, with LF line endings and one trailing newline, so it matches how the file ends today:\n```\nstatus: ok\nrun_id: alt-46009933351\nupdated-by: ai-pipeline\n```\n\n## Data structures affected\nNone.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Trailing newline\n- Chosen: end the file with a single newline after the last line.\n- Alternatives considered: leaving out the final newline.\n- Why: the current file ends with a newline (checked with `cat -A`), and \"exactly three lines\" means three newline-terminated lines.\n\n## Security considerations\nThis touches no trust boundary, endpoint, secret or external input. It is a plain text fixture.\n\n## Potential risks or edge cases\n- Several tests mention the path, for example `tests/test_review_autofix_review_pipeline_contract.py` around lines 10327\u201310379. They write their own content into temporary directories and never read the committed file, so changing its content cannot break them.\n- No CI check named \"e2e_smoke_canary content\" exists, so the host will drop that acceptance line. The reviewer should instead compare the file byte-for-byte with the three lines above.\n\n## Testing considerations\nNo new tests. Check by hand with `cat -A tests/e2e_smoke_canary.txt`: it should show three lines, each ending in `$`. `git diff --stat` should list only this one file.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies the change: one file with exact contents. There is nothing to expand or reduce.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "531e7c02ffd8178076e3ddd90eefa032722534d1a3011990e4858d39d0fde443",
+  "lineage": {
+    "issue_number": 10211,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "46013832236",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46013832236",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10211"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261127143535_3db9775e6a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10211,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "46013832236"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #10211",
+  "timestamps": {
+    "created_at": "2026-11-27T14:35:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
