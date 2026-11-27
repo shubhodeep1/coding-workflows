@@ -19,6 +19,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -38,7 +39,8 @@ SERVER_ERR = "HTTP 500: Internal Server Error (https://api.github.com/repos/owne
 FAILED_LINE = "::error::gh workflow run update_workflows.yml failed after 5 attempts"
 WAIT_RE = re.compile(
 	r"^DISPATCH_RATE_LIMIT_WAIT workflow=update_workflows\.yml kind=(primary|secondary) "
-	r"wait_s=([0-9]+) waited_total_s=([0-9]+) max_s=([0-9]+)( outcome=cap_reached)?$"
+	r"wait_s=([0-9]+) waited_total_s=([0-9]+) max_s=([0-9]+)(?: elapsed_s=([0-9]+)(?= outcome=cap_reached))?"
+	r"( outcome=cap_reached)?$"
 )
 
 GH_STUB = r"""#!/usr/bin/env bash
@@ -68,7 +70,12 @@ case "${path}" in
 		[ "${STUB_RATE_LIMIT_FAIL:-0}" = "1" ] && exit 1
 		reset=$(( $(date +%s) + ${STUB_RESET_OFFSET:-505} ))
 		body="{\"resources\":{\"core\":{\"limit\":5000,\"remaining\":${STUB_REMAINING:-0},\"reset\":${reset}}}}" ;;
-	*"/runs?event=workflow_dispatch&per_page=1") body='{"workflow_runs":[]}' ;;
+	*"/runs?event=workflow_dispatch&per_page=1")
+		if [ "${STUB_PRE_LOOKUP_RATE_LIMIT:-0}" = "1" ]; then
+			echo "HTTP 403: API rate limit exceeded for user ID 11442166." >&2
+			exit 1
+		fi
+		body='{"workflow_runs":[]}' ;;
 	*"/runs?event=workflow_dispatch&"*) body='{"workflow_runs":[{"id":4242,"created_at":"2026-11-27T03:23:10Z"}]}' ;;
 	*"/actions/runs/4242") body='{"status":"completed","conclusion":"success"}' ;;
 	*) exit 1 ;;
@@ -82,6 +89,21 @@ fi
 
 SLEEP_STUB = """#!/usr/bin/env bash
 echo "$1" >> "${STUB_SLEEP_LOG}"
+if [ -n "${STUB_CLOCK_OFFSET:-}" ]; then
+	off="$(cat "${STUB_CLOCK_OFFSET}" 2>/dev/null || echo 0)"
+	echo "$(( off + $1 ))" > "${STUB_CLOCK_OFFSET}"
+fi
+"""
+
+# Fake clock: `date +%s` returns the real start time plus every stubbed sleep,
+# so time spent in stubbed backoffs shows up as elapsed time.
+DATE_STUB = """#!/usr/bin/env bash
+if [ "$#" -eq 1 ] && [ "$1" = "+%s" ]; then
+	off="$(cat "${STUB_CLOCK_OFFSET}" 2>/dev/null || echo 0)"
+	echo "$(( STUB_CLOCK_BASE + off ))"
+	exit 0
+fi
+exec "${STUB_REAL_DATE}" "$@"
 """
 
 
@@ -93,6 +115,8 @@ def _run(
 	remaining: int = 0,
 	rate_limit_fail: bool = False,
 	cap: str | None = None,
+	pre_lookup_rate_limit: bool = False,
+	fake_clock: bool = False,
 ) -> tuple[int, str, list[str], list[int], int]:
 	bash = shutil.which("bash")
 	assert bash is not None
@@ -103,7 +127,10 @@ def _run(
 			shutil.copyfile(REPO_ROOT / "scripts" / helper, tmp / "scripts" / helper)
 		bindir = tmp / "bin"
 		bindir.mkdir()
-		for name, body in (("gh", GH_STUB), ("sleep", SLEEP_STUB)):
+		stubs = [("gh", GH_STUB), ("sleep", SLEEP_STUB)]
+		if fake_clock:
+			stubs.append(("date", DATE_STUB))
+		for name, body in stubs:
 			stub = bindir / name
 			stub.write_text(body, encoding="utf-8")
 			stub.chmod(0o755)
@@ -129,6 +156,16 @@ def _run(
 		}
 		if cap is not None:
 			env["DISPATCH_RATE_LIMIT_MAX_WAIT_SECS"] = cap
+		if pre_lookup_rate_limit:
+			env["STUB_PRE_LOOKUP_RATE_LIMIT"] = "1"
+		if fake_clock:
+			real_date = shutil.which("date")
+			assert real_date is not None
+			clock = tmp / "clock_offset"
+			clock.write_text("0", encoding="utf-8")
+			env["STUB_CLOCK_OFFSET"] = str(clock)
+			env["STUB_CLOCK_BASE"] = str(int(time.time()))
+			env["STUB_REAL_DATE"] = real_date
 		proc = subprocess.run(
 			[
 				bash,
@@ -170,7 +207,7 @@ def test_primary_rate_limit_replay_waits_for_reset_then_dispatches() -> None:
 	assert rc == 0, out
 	waits = _waits(out)
 	assert len(waits) == 1, out
-	kind, wait_s, total, max_s, cap_reached = waits[0].groups()
+	kind, wait_s, total, max_s, _elapsed, cap_reached = waits[0].groups()
 	assert kind == "primary" and cap_reached is None, out
 	assert 509 <= int(wait_s) <= 511, out
 	assert int(total) == int(wait_s) and max_s == "1500", out
@@ -210,7 +247,7 @@ def test_reset_beyond_cap_fails_at_once_with_the_existing_error_line() -> None:
 	assert rc == 1, out
 	waits = _waits(out)
 	assert len(waits) == 1, out
-	kind, wait_s, total, max_s, cap_reached = waits[0].groups()
+	kind, wait_s, total, max_s, _elapsed, cap_reached = waits[0].groups()
 	assert kind == "primary" and cap_reached == " outcome=cap_reached", out
 	assert int(wait_s) >= 904 and total == "0" and max_s == "300", out
 	assert FAILED_LINE in out.splitlines(), out
@@ -222,10 +259,52 @@ def test_wait_that_outlasts_the_remaining_cap_reports_cap_reached() -> None:
 	rc, out, _, sleeps, dispatches = _run(dispatch_err=SECONDARY_ERR, dispatch_fails=99, cap="150")
 	assert rc == 1, out
 	waits = _waits(out)
-	assert [(w.group(3), w.group(5)) for w in waits] == [("60", None), ("120", None), ("120", " outcome=cap_reached")], out
+	assert [(w.group(3), w.group(6)) for w in waits] == [("60", None), ("120", None), ("120", " outcome=cap_reached")], out
 	assert sleeps == [60, 60], sleeps
 	assert dispatches == 3, out
 	assert FAILED_LINE in out.splitlines(), out
+
+
+def test_pre_lookup_backoff_counts_against_the_cap() -> None:
+	# The PAT's core bucket is empty, so the pre-dispatch run-id lookup backs
+	# off 30+60+120 s before the dispatch is rate-limited too. That time counts
+	# against the cap, so a 300 s wait under a 410 s cap is refused at once and
+	# the step stays inside its timeout-minutes.
+	rc, out, _, sleeps, dispatches = _run(
+		dispatch_fails=99, reset_offset=295, cap="410", pre_lookup_rate_limit=True, fake_clock=True
+	)
+	assert rc == 1, out
+	assert sleeps == [30, 60, 120], sleeps
+	waits = _waits(out)
+	assert len(waits) == 1, out
+	kind, wait_s, total, max_s, elapsed, cap_reached = waits[0].groups()
+	assert (kind, total, max_s, cap_reached) == ("primary", "0", "410", " outcome=cap_reached"), out
+	assert 299 <= int(wait_s) <= 301 and int(elapsed) == 210, out
+	assert FAILED_LINE in out.splitlines(), out
+	assert dispatches == 1, out
+
+
+def test_pre_lookup_failure_then_wait_restarts_the_fallback_window() -> None:
+	rc, out, calls, sleeps, dispatches = _run(
+		dispatch_fails=1, reset_offset=295, pre_lookup_rate_limit=True, fake_clock=True
+	)
+	assert rc == 0, out
+	assert sleeps[:3] == [30, 60, 120], sleeps
+	waits = _waits(out)
+	assert len(waits) == 1 and waits[0].group(6) is None, out
+	assert dispatches == 2, out
+	fallback = [c for c in calls if "&created=>" in c]
+	assert fallback, calls
+	created = re.search(r"created=>([0-9TZ:-]+)", fallback[0])
+	assert created is not None, fallback
+	window_start = int(
+		subprocess.run(
+			["date", "-u", "-d", created.group(1), "+%s"], capture_output=True, text=True, check=True
+		).stdout.strip()
+	)
+	# The window starts after the 210 s lookup backoff and the rate-limit wait,
+	# not before the lookup.
+	assert window_start >= int(time.time()) + 210 + int(waits[0].group(2)) - 30, (window_start, out)
 
 
 def test_non_rate_limit_failure_keeps_todays_backoff() -> None:
@@ -259,6 +338,7 @@ def test_invalid_cap_warns_and_uses_the_default() -> None:
 	assert "::warning::DISPATCH_RATE_LIMIT_MAX_WAIT_SECS must be an integer (0-99999); using 1500" in out, out
 	waits = _waits(out)
 	assert len(waits) == 1 and waits[0].group(4) == "1500", out
+	assert waits[0].group(5) is None, out
 
 
 def test_failed_rate_limit_read_waits_one_minute() -> None:
@@ -300,7 +380,12 @@ def _workflow_steps(text: str) -> list[tuple[str, str]]:
 
 
 def test_gate_dispatch_steps_fit_rate_limit_cap_in_step_budget() -> None:
-	"""cap + watch deadline + 4 s pre-sleep + 60 s margin fits each step budget."""
+	"""cap + watch deadline + 4 s pre-sleep + 60 s margin fits each step budget.
+
+	The cap clock starts before the pre-dispatch run-id lookup, so its
+	rate-limit backoff and the `GET /rate_limit` reads are inside the cap; the
+	60 s margin covers the backoff after the last wait (<= 30 s) and gh calls.
+	"""
 	text = WORKFLOW.read_text(encoding="utf-8")
 	checked = []
 	orchestrate_cap = None
