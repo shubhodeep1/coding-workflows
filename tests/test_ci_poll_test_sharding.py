@@ -2234,8 +2234,8 @@ class MovedReleaseLogStepsToHealContractTest(unittest.TestCase):
 	def test_moved_steps_left_the_source_job(self) -> None:
 		source_names = {step.get("name") for step in self.jobs()[RELEASE_LOG_TO_HEAL_SOURCE_JOB_ID]["steps"]}
 		# Issue #9018 moved the Node pair back to this class's source job, so
-		# only the two steps that stay in the heal job are checked here.
-		# Issue #10200 moved the workflow log analysis step on to
+		# only the steps that stayed in the heal job are checked here (two
+		# then). Issue #10200 moved the workflow log analysis step on to
 		# orchestrate-poll, so only the semantic cache step is left here.
 		for name in MOVED_RELEASE_LOG_TO_HEAL_STEPS:
 			with self.subTest(step=name):
