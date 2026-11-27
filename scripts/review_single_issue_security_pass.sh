@@ -799,11 +799,12 @@ single_pass_carry_skip()
 single_pass_base_sync_carry()
 {
 	local comments_file="$1" head_sha="$2" base_ref="$3" head_ref="$4" markers_tsv="$5"
-	local carry_dir carry_tmp carry_result carry_rc carry_from carry_base_parent carry_sha carry_mb carry_from_status
+	local carry_dir carry_tmp carry_result carry_rc carry_from carry_base_parent carry_sha carry_mb carry_from_status carry_mr_rc carry_mr_from carry_mr_remerge carry_mr_delta
 	local carry_pr_files carry_audited_files carry_patch_audited carry_patch_head
 	local -a carry_paths=()
 	single_pass_carry_from=""
 	single_pass_carry_skip_reason=""
+	single_pass_remerge_since=""
 	if [ "${SECURITY_PASS_BASE_SYNC_CARRY_ENABLED:-true}" = "false" ]; then
 		single_pass_carry_skip "${head_sha}" disabled
 		return 1
@@ -835,10 +836,65 @@ single_pass_base_sync_carry()
 		source "${carry_dir}/review_head_gate.sh" >/dev/null 2>&1 || exit 3
 		set +e
 		review_head_gate_freshness_sync "${REPOSITORY}" "${PR_NUMBER}" "${head_sha}" "${base_ref}" "${SECURITY_PASS_AUTHOR_LOGIN}" "${carry_tmp}/comments.json" > "${carry_tmp}/helper.log" 2>/dev/null
-		printf '%s %s %s\n' "$?" "${REVIEW_HEAD_GATE_FRESHNESS_FROM:-}" "${REVIEW_HEAD_GATE_FRESHNESS_BASE_PARENT:-}"
+		carry_fs_rc="$?"
+		# Resolution-only review (merge-lease short critical section plan,
+		# Phase 3): a head that is no freshness update may be the resolver's
+		# verified [ai-merge-resolve] merge of an audited head.
+		carry_mr_rc="-"
+		# Same switch parse as the gate and _pr_merge_resolve_marker_post:
+		# only empty or true (any case) is on; any other value is off.
+		carry_mr_switch="$(printf '%s' "${MERGE_RESOLVE_DELTA_REVIEW_ENABLED:-true}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+		if [ "${carry_fs_rc}" != "0" ] && { [ -z "${carry_mr_switch}" ] || [ "${carry_mr_switch}" = "true" ]; } \
+			&& type review_head_gate_merge_resolve >/dev/null 2>&1 \
+			&& grep -Fq "resolve=${head_sha} " "${carry_tmp}/comments.json" 2>/dev/null; then
+			review_head_gate_merge_resolve "${REPOSITORY}" "${PR_NUMBER}" "${head_sha}" "${base_ref}" "${SECURITY_PASS_AUTHOR_LOGIN}" "${carry_tmp}/comments.json" >> "${carry_tmp}/helper.log" 2>/dev/null
+			carry_mr_rc="$?"
+		fi
+		# Every field is printed non-empty ("-" for none): the default-IFS
+		# read below would otherwise collapse empty fields and shift the rest.
+		printf '%s %s %s %s %s\n' "${carry_fs_rc:--}" "${REVIEW_HEAD_GATE_FRESHNESS_FROM:--}" "${REVIEW_HEAD_GATE_FRESHNESS_BASE_PARENT:--}" "${carry_mr_rc:--}" "${REVIEW_HEAD_GATE_MERGE_RESOLVE_FROM:--}"
 	)" || carry_result=""
 	[ -s "${carry_tmp}/helper.log" ] && cat "${carry_tmp}/helper.log"
-	read -r carry_rc carry_from carry_base_parent <<< "${carry_result}"
+	read -r carry_rc carry_from carry_base_parent carry_mr_rc carry_mr_from <<< "${carry_result}"
+	[ "${carry_from:-}" = "-" ] && carry_from=""
+	[ "${carry_base_parent:-}" = "-" ] && carry_base_parent=""
+	[ "${carry_mr_rc:-}" = "-" ] && carry_mr_rc=""
+	[ "${carry_mr_from:-}" = "-" ] && carry_mr_from=""
+	if [ "${carry_rc:-}" != "0" ] && [ "${carry_mr_rc:-}" = "0" ] && [[ "${carry_mr_from:-}" =~ ^[0-9a-f]{40}$ ]]; then
+		# A verified resolution head is never released without an audit: it
+		# gets a delta audit since its audited first parent (D4), and the
+		# gate skips the freshness inheritance walk for it.
+		carry_from_status="$(printf '%s\n' "${markers_tsv}" | awk -F'\t' -v h="${carry_mr_from}" '$4 == h' | tail -n 1 | cut -f3)"
+		# The delta audit keeps only files changed in <from>..<head>. A file the
+		# resolution kept at <from>'s content (e.g. dropping a base change) is in
+		# the remerge diff but not in that range, so the carry is granted only
+		# when <from>..<head> covers every remerge-diff file. Any git failure
+		# (missing objects, no merge base, git < 2.36) falls through to the
+		# full audit (freshness_unverified).
+		# A shallow checkout (the deterministic-skip job uses fetch-depth 1)
+		# usually has the head but not its parents or their merge base, so
+		# unshallow when any of them is missing, not only the head.
+		if [ "${carry_from_status}" = "clean" ] && { ! git cat-file -e "${head_sha}^{commit}" 2>/dev/null \
+			|| ! git merge-base "${head_sha}^1" "${head_sha}^2" >/dev/null 2>&1; } \
+			&& [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ] && git check-ref-format --branch "${head_ref}" >/dev/null 2>&1; then
+			git fetch --no-tags --unshallow origin "+refs/heads/${head_ref}:refs/remotes/origin/${head_ref}" >/dev/null 2>&1 || true
+		fi
+		if [ "${carry_from_status}" = "clean" ] && { [ "$(git rev-parse --verify -q "${head_sha}^1" 2>/dev/null)" != "${carry_mr_from}" ] \
+			|| ! git merge-base "${head_sha}^1" "${head_sha}^2" >/dev/null 2>&1 \
+			|| ! carry_mr_remerge="$(git show --remerge-diff --no-ext-diff --format= --name-only "${head_sha}" 2>/dev/null)" \
+			|| ! carry_mr_delta="$(git diff --no-ext-diff --name-only "${carry_mr_from}..${head_sha}" -- 2>/dev/null)" \
+			|| [ -n "$(LC_ALL=C comm -23 <(printf '%s\n' "${carry_mr_remerge}" | sed '/^$/d' | LC_ALL=C sort -u) <(printf '%s\n' "${carry_mr_delta}" | sed '/^$/d' | LC_ALL=C sort -u))" ]; }; then
+			single_pass_log "mode=gate pr=${PR_NUMBER:-} head=${head_sha} outcome=merge_resolve_scope_uncovered from=${carry_mr_from}"
+			carry_from_status="scope_uncovered"
+		fi
+		if [ "${carry_from_status}" = "clean" ]; then
+			rm -rf "${carry_tmp}"
+			single_pass_remerge_since="${carry_mr_from}"
+			single_pass_log "mode=gate pr=${PR_NUMBER:-} head=${head_sha} outcome=merge_resolve_carry from=${carry_mr_from}"
+			single_pass_carry_skip "${head_sha}" merge_resolve_audit
+			return 1
+		fi
+	fi
 	if [ "${carry_rc:-}" != "0" ] || ! [[ "${carry_from:-}" =~ ^[0-9a-f]{40}$ ]] || ! [[ "${carry_base_parent:-}" =~ ^[0-9a-f]{40}$ ]]; then
 		rm -rf "${carry_tmp}"
 		single_pass_carry_skip "${head_sha}" "$([ -n "${carry_result}" ] && echo freshness_unverified || echo helper_missing)"
@@ -967,6 +1023,8 @@ single_pass_gate()
 	local gate_checkout_head
 	local delta_source="" delta_since="" delta_comment_id="" delta_status="" delta_note="" dispatch_ok="false"
 	local -a dispatch_args=() delta_dispatch_args=()
+	# Set by single_pass_base_sync_carry for a verified resolution head.
+	single_pass_remerge_since=""
 	local attempts_used cap_cycle effective_attempts pending_state="" active_audits
 	local max_attempts="${SECURITY_PASS_MAX_AUDIT_ATTEMPTS:-}" max_concurrent="${SECURITY_PASS_MAX_CONCURRENT_AUDITS:-3}"
 	local cancel_check_minutes="${SECURITY_PASS_PENDING_CANCEL_CHECK_MINUTES:-20}"
@@ -1110,7 +1168,7 @@ single_pass_gate()
 			return 0
 		fi
 		case "${single_pass_carry_skip_reason:-}" in
-			freshness_unverified|parents_mismatch|changed_files_differ|patch_mismatch) ;;
+			freshness_unverified|parents_mismatch|changed_files_differ|patch_mismatch|merge_resolve_audit) ;;
 			*)
 				if inherited="$(single_pass_inherited_clean "${comments}" "${markers}" "${head_sha}" "${default_branch}")"; then
 					single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=clean reason=freshness_sync_inherited from=${inherited%% *} hops=${inherited##* }"
@@ -1315,6 +1373,18 @@ No completed audit exists for \`${head_sha}\`. Auto-merge stays off. A new push 
 	# the final audit of an exhausted head stays a full merge-base..head audit.
 	if [ "${SINGLE_ISSUE_SECURITY_PASS_DELTA_ENABLED:-true}" != "false" ] && [ "${exhausted_retry}" != "true" ]; then
 		delta_source="$(single_pass_delta_source "${markers}" "${head_sha}")"
+		# Resolution-only review (merge-lease plan Phase 3, D4): a verified
+		# resolution head is audited as a delta since its clean first parent.
+		# security_audit.sh keeps only PR-range files (merge-base..head) that
+		# also changed in <from>..<head>. single_pass_base_sync_carry grants
+		# this only when <from>..<head> contains every file of the head's
+		# remerge diff, so the audited scope covers the resolution (plus any
+		# PR file the base changed cleanly); otherwise the head is audited in full.
+		# The audit job re-derives the source from the trusted markers and
+		# runs a full audit when it is not that head (input_mismatch).
+		if [[ "${single_pass_remerge_since:-}" =~ ^[0-9a-f]{40}$ ]]; then
+			delta_source="$(printf '%s\t\tclean\t' "${single_pass_remerge_since}")"
+		fi
 		if [ -n "${delta_source}" ]; then
 			delta_since="$(printf '%s' "${delta_source}" | cut -f1)"
 			delta_comment_id="$(printf '%s' "${delta_source}" | cut -f2)"
