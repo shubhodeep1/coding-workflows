@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Implementation plan: issue #10213 (overwrite the e2e smoke canary file)\n\nPlanning ref: `main` at `6233a870d9be4be917cecce882eceae3cab5f508`. The integration branch mismatch line reads `unknown`, not `true`, so this plan is not blocked by it.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: check ci\nACCEPTANCE: post-merge none: this only replaces the text in a smoke canary file, so no workflow behaviour changes\n\n## Functions or modules to implement\nNone. The only change is to the file's contents.\n\nToday the file holds two lines:\n```\nstatus: ok\ndecompose-run: 41445772297\n```\nReplace the whole file with exactly these three lines, ending with one newline (`\\n`) after the last line:\n```\nstatus: ok\nrun_id: 46009933351\nupdated-by: ai-pipeline\n```\nThe issue's own command does this: `printf 'status: ok\\nrun_id: 46009933351\\nupdated-by: ai-pipeline\\n' > tests/e2e_smoke_canary.txt`.\n\n## Data structures affected\nNone.\n\n## API or interface changes\nNone.\n\n## Decisions\n### D1 \u2014 Overwrite the file in one write\n- Chosen: replace the file completely with exactly the three requested lines.\n- Alternatives considered: editing the existing lines one by one, or appending to the file.\n- Why: the issue asks for exactly these lines and nothing else. The old `decompose-run` line has to go, and a full overwrite removes it with no leftovers.\n\n## Security considerations\nNo trust boundary, endpoint, input handling or secret is touched. The new content is a fixed, non-sensitive run ID and two status lines.\n\n## Potential risks or edge cases\n- Several tests mention `e2e_smoke_canary` by name, for example `tests/test_workflow_failure_heal.py` and `tests/test_review_merge_train.py`. A search for tests that read this file's text found none that check its current lines. The only content check found, in `tests/test_review_synthesise_smoke.py`, reads a different canary file whose content is a bash script, not this one.\n- The file must end with exactly one newline: no trailing blank line, and no missing newline.\n\n## Testing considerations\n- Confirm that `git diff --stat` shows only `tests/e2e_smoke_canary.txt` changed.\n- Confirm that `cat -A tests/e2e_smoke_canary.txt` prints exactly three lines, each ending in `$`.\n- Let the normal CI run cover the rest.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies one change to one existing file and forbids touching anything else. Because the full overwrite is both the complete option and the smallest one, there is no shortcut-versus-complete trade-off to weigh, and nothing is added or left out.\n\nPre-execution self-check: the plan changes one file, matches the requested content exactly, and adds no new files or directories.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "848d0c56594045fb15157c0f26573da163473abd01318b3a7e8a72d2a36b0de4",
+  "lineage": {
+    "issue_number": 10213,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "46014302509",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46014302509",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10213"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261127143655_1f9ae27e70",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10213,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "46014302509"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #10213",
+  "timestamps": {
+    "created_at": "2026-11-27T14:36:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
