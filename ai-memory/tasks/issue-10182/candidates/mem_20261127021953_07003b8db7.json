@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":10182,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/10182\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/10184\",\"pr_number\":10184,\"branch\":\"ai/issue-10182\",\"run_id\":\"45923127255\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/45923127255\",\"changed_files\":[\".github/workflows/ci.yml\",\"changelog.d/10182-ci-release-job-budget-move.md\",\"tests/test_ci_poll_test_sharding.py\"]}",
+  "fingerprint": "2a5d821141eaaa38ed0bedacc222540b7d3bc10df3fca6bc7280a4288443a0ba",
+  "lineage": {
+    "issue_number": 10182,
+    "parent_ids": [],
+    "pr_number": 10184,
+    "run_id": "45923127255",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45923127255",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/10184"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261127021953_07003b8db7",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10182,
+    "level": "run",
+    "pr_number": 10184,
+    "run_id": "45923127255"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #10182: https://github.com/shubhodeep1/coding-workflows/pull/10184",
+  "timestamps": {
+    "created_at": "2026-11-27T02:19:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
