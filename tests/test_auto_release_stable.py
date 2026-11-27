@@ -84,6 +84,8 @@ if args[:1] == ["api"]:
         state.setdefault("window_reads", []).append(fields)
         if state.get("window_error"):
             save(); sys.stderr.write("HTTP 503\n"); sys.exit(1)
+        if fields.get("page") in state.get("window_pages", {}):
+            respond({"total_count": state.get("window_total", 0), "workflow_runs": state["window_pages"][fields["page"]]})
         if fields.get("page"):
             respond({"total_count": state.get("window_total", 0), "workflow_runs": state.get("window_last_page", [])})
         runs = state.get("window_runs", [])
@@ -97,7 +99,8 @@ if args[:1] == ["api"]:
         run_id = path.split("/actions/runs/")[1].split("/")[0]
         jobs = state.get("window_jobs", {}).get(run_id)
         if jobs is None:
-            run = next((r for r in state.get("window_runs", []) + state.get("window_last_page", []) if str(r.get("id")) == run_id), None)
+            pages = [r for page in state.get("window_pages", {}).values() for r in page]
+            run = next((r for r in state.get("window_runs", []) + state.get("window_last_page", []) + pages if str(r.get("id")) == run_id), None)
             jobs = [{"id": 1, "status": "queued", "created_at": run["created_at"]}] if run else []
         respond({"total_count": len(jobs), "jobs": jobs})
     if "/git/ref/heads/" in path:
@@ -1060,12 +1063,14 @@ def test_runner_wait_bound_reached_dispatches_without_a_read() -> None:
 def test_runner_wait_reads_the_last_page_when_more_than_100_match() -> None:
 	first_page = [_queued(100 + i, 35) for i in range(100)]
 	state = _state(tag_commit="3" * 40, runs=[_recent_stable_gate()], window_runs=first_page, window_total=250,
-		window_last_page=[_queued(9, 120), _queued(10, 90)])
+		window_last_page=[_queued(9, 120), _queued(10, 90)], window_pages={"2": [_queued(300 + i, 40) for i in range(100)]})
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final = _run(Path(tmp), state)
 	assert "reason=runner_wait_long oldest_queued_min=120 max=30" in proc.stdout
-	assert len(final["window_reads"]) == 2
-	assert final["window_reads"][1]["page"] == "3"
+	# The last page holds 2 runs (< 3 job reads), so the page before it is
+	# merged in too (issue #10181).
+	assert len(final["window_reads"]) == 3
+	assert [r["page"] for r in final["window_reads"][1:]] == ["3", "2"]
 	assert not final.get("dispatches")
 
 
@@ -1224,6 +1229,27 @@ def test_runner_wait_runs_unread_counts_pages_not_fetched() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		out = _helper_output(Path(tmp), {"window_total": 250, "window_runs": [], "window_last_page": last_page, "window_jobs": jobs})
 	assert out == "outcome=short oldest_queued_min=2 queued_in_window=250 calls=5 runs_unread=247", out
+
+
+def test_runner_wait_short_page_2_merges_the_first_page_without_a_call() -> None:
+	# 101 runs: page 2 holds only the oldest run, a concurrency hold. The first
+	# page already held is merged in, so its aged queued job is still read.
+	jobs = {"9": [], "30": [_job("queued", 45)]}
+	state = {"window_total": 101, "window_runs": [_queued(30, 60)], "window_last_page": [_queued(9, 120)], "window_jobs": jobs}
+	with tempfile.TemporaryDirectory() as tmp:
+		out = _helper_output(Path(tmp), state)
+	assert out == "outcome=long oldest_queued_min=45 queued_in_window=101 calls=4", out
+
+
+def test_runner_wait_short_last_page_reads_the_page_before_it() -> None:
+	# 201 runs: page 3 holds only a concurrency hold; page 2 is fetched (call 3)
+	# and its aged queued job is read.
+	jobs = {"9": [], "40": [_job("queued", 50)], "41": []}
+	state = {"window_total": 201, "window_runs": [_queued(50, 35)], "window_last_page": [_queued(9, 120)],
+		"window_pages": {"3": [_queued(9, 120)], "2": [_queued(40, 90), _queued(41, 80)]}, "window_jobs": jobs}
+	with tempfile.TemporaryDirectory() as tmp:
+		out = _helper_output(Path(tmp), state)
+	assert out == "outcome=long oldest_queued_min=50 queued_in_window=201 calls=6", out
 
 
 def test_runner_wait_empty_listing_makes_no_jobs_read() -> None:

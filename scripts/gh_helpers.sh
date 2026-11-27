@@ -5041,14 +5041,14 @@ zombie_queued_log_ignored()
 # longer, else short.
 #
 # Output: exactly one line on stdout, always exit 0 (fail open):
-#   outcome=<long|short|read_failed> oldest_queued_min=<n|-> queued_in_window=<n|-> calls=<0..5>[ runs_unread=<n>]
+#   outcome=<long|short|read_failed> oldest_queued_min=<n|-> queued_in_window=<n|-> calls=<0..6>[ runs_unread=<n>]
 #   oldest_queued_min  the oldest queued job's wait in minutes (also on
 #                      short), `-` when no queued job was found
 #   queued_in_window   total_count of the run listing (queued runs in range)
 #   runs_unread        only on short, when more than 3 candidates exist: the
 #                      candidates whose jobs were not read (bounded check);
 #                      past 100 runs it adds total_count minus the runs on
-#                      the fetched last page (pages never read)
+#                      the fetched page(s) (pages never read)
 #
 # API calls (§14): no existing call in the callers returns queued runs'
 # created_at or job created_at values (they list workflow-scoped runs or a
@@ -5057,6 +5057,9 @@ zombie_queued_log_ignored()
 #   call 2  only when total_count > 100: the last page (newest first, so the
 #           oldest runs are there), capped at page 10 (the API's 1,000-result
 #           limit).
+#   call 3  only when that last page holds fewer than 3 runs and is page 3 or
+#           later: the page before it, merged in so up to 3 candidates are
+#           read (for page 2 the first page already held is merged, no call).
 #   +0..3   GET repos/<repo>/actions/runs/<id>/jobs?per_page=100&filter=latest
 #           for at most 3 candidate runs; none when there is no candidate.
 #           Only the first 100 jobs of the latest attempt are read.
@@ -5069,6 +5072,7 @@ release_gate_oldest_queued_wait()
 	local _rgw_jq_def=""
 	local _rgw_max_job_reads=3 _rgw_candidates="" _rgw_candidate_count="" _rgw_run_id="" _rgw_jobs_json="" _rgw_job_oldest=""
 	local _rgw_wait_min="" _rgw_outcome="" _rgw_unread_suffix="" _rgw_unread_extra=0 _rgw_unread_count=0
+	local _rgw_first_json="" _rgw_prev_json="" _rgw_page_len=""
 	local -a _rgw_run_ids=()
 	if ! [[ "${_rgw_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || ! [[ "${_rgw_limit}" =~ ^[0-9]{1,6}$ ]]; then
 		echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=0"
@@ -5113,6 +5117,7 @@ release_gate_oldest_queued_wait()
 		return 0
 	fi
 	if [ "${_rgw_total}" -gt 100 ]; then
+		_rgw_first_json="${_rgw_json}"
 		_rgw_page=$(( (_rgw_total + 99) / 100 ))
 		[ "${_rgw_page}" -le 10 ] || _rgw_page=10
 		_rgw_calls=2
@@ -5120,6 +5125,24 @@ release_gate_oldest_queued_wait()
 			|| ! printf '%s' "${_rgw_json}" | jq -e '(.workflow_runs | type) == "array"' >/dev/null 2>&1; then
 			echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=${_rgw_calls}"
 			return 0
+		fi
+		# A last page shorter than the read bound (101, 201 ... runs) would
+		# leave job reads unused while older candidates sit on the page before
+		# it: merge that page in (page 1 is already held, so no extra call).
+		_rgw_page_len="$(printf '%s' "${_rgw_json}" | jq -r '.workflow_runs | length' 2>/dev/null || true)"
+		if [[ "${_rgw_page_len}" =~ ^[0-9]+$ ]] && [ "${_rgw_page_len}" -lt "${_rgw_max_job_reads}" ] && [ "${_rgw_page}" -gt 1 ]; then
+			_rgw_prev_json="${_rgw_first_json}"
+			if [ "${_rgw_page}" -gt 2 ]; then
+				_rgw_calls=3
+				if ! _rgw_prev_json="$(gh_retry gh api -X GET "repos/${_rgw_repo}/actions/runs" -f status=queued -f "created=${_rgw_lower}..${_rgw_upper}" -f per_page=100 -f "page=$(( _rgw_page - 1 ))" 2>/dev/null)"; then
+					echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=${_rgw_calls}"
+					return 0
+				fi
+			fi
+			if ! _rgw_json="$(printf '%s\n%s\n' "${_rgw_json}" "${_rgw_prev_json}" | jq -c -s 'if (.[1].workflow_runs | type) == "array" then {workflow_runs: (.[0].workflow_runs + .[1].workflow_runs)} else error("no workflow_runs") end' 2>/dev/null)" || [ -z "${_rgw_json}" ]; then
+				echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=${_rgw_calls}"
+				return 0
+			fi
 		fi
 		# Runs on the pages not fetched (newer pages, and pages past 10) are
 		# candidates whose jobs are never read: count them in runs_unread.
