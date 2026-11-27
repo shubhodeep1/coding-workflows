@@ -363,6 +363,7 @@ def test_workspace_fallback_never_sources_unverified_pr_tree_copy() -> None:
 	cases = (
 		("Mark linked issues review-blocked (workflow failure)", 1),
 		("Assemble failure evidence", 0),
+		("Post review-blocked comment on PR (workflow failure)", 1),
 	)
 	for step_name, unverified_exit in cases:
 		script_name = REVIEW_AUTOFIX_STEP_SCRIPTS[step_name][0]
