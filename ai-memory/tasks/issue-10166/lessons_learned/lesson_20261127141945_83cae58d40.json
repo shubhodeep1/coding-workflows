@@ -1,0 +1,29 @@
+{
+  "discovered_at": "2026-11-27T14:19:45Z",
+  "issue_number": 10166,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=.github/workflows/review_autofix.yml:5374-5395; cited_path=scripts/review_autofix_step_assemble_failure_evidence.sh; files_touched=.github/workflows/ci.yml, .github/workflows/review_autofix.yml, README.md, agents.d/10166-review-autofix-size-headroom.md, agents.md, changelog.d/10166-review-autofix-size-headroom.md, docs/INVENTORY.md, scripts/ci_budget_watch.py, scripts/review_autofix_step_capture_runtime_context.sh, scripts/review_autofix_step_mark_review_blocked_exhaustion.sh, scripts/review_autofix_step_push_pending_commits.sh, scripts/review_autofix_step_resolve_ai_engine.sh, scripts/review_autofix_step_static_context.sh, scripts/review_autofix_step_telegram_rb_judge_decision.sh, scripts/stage_workflow_support.sh, tests/*.",
+  "phase": "review_autofix",
+  "pr_number": 10167,
+  "record_id": "lesson_20261127141945_83cae58d40",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/review_autofix_step_assemble_failure_evidence.sh",
+    ".github/workflows/review_autofix.yml",
+    ".github/workflows/ci.yml",
+    "README.md",
+    "agents.d/10166-review-autofix-size-headroom.md",
+    "agents.md",
+    "changelog.d/10166-review-autofix-size-headroom.md",
+    "docs/INVENTORY.md",
+    "scripts/ci_budget_watch.py",
+    "scripts/review_autofix_step_capture_runtime_context.sh",
+    "scripts/review_autofix_step_mark_review_blocked_exhaustion.sh",
+    "scripts/review_autofix_step_push_pending_commits.sh",
+    "scripts/review_autofix_step_resolve_ai_engine.sh",
+    "scripts/review_autofix_step_static_context.sh",
+    "scripts/review_autofix_step_telegram_rb_judge_decision.sh",
+    "scripts/stage_workflow_support.sh",
+    "tests/*"
+  ]
+}
