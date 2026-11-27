@@ -88,7 +88,8 @@
 #     into <base>` two-parent merge whose second parent is a default-branch
 #     commit, or a `[ai-merge-resolve]` commit; (3) none of the range's files
 #     (with `previous_filename` for renames) is in the PR's paginated files
-#     listing (at most 3000, counted against `changed_files`). tested_base is
+#     listing (at most 3000, counted against `changed_files`); a base tip
+#     that moved during these reads is `truncated`. tested_base is
 #     the first parent of the commit the job checked out, captured before the
 #     refresh loop. Any failed condition or unreadable response keeps the
 #     `::error::` and exit 1 and adds `detail=default_base|not_ahead|
@@ -385,7 +386,7 @@ ci_final_merge_ref_sync_only_check()
 	local so_dir="$1" so_tested_base="$2" so_tip="$3" so_base_ref="$4" so_changed_files="$5" so_checked_out="$6"
 	local so_p1="" so_p2="" so_p3="" so_default="" so_kind="" so_status="" so_total="" so_listed="" so_nfiles=""
 	local so_sha="" so_pcount="" so_second="" so_subject="" so_sync_subject="" so_pages=0 so_page=0 so_entries=0
-	local so_page_count="" so_lines=0 so_range_total=0
+	local so_page_count="" so_lines=0 so_range_total=0 so_now_tip=""
 	# Pre-checks (all api_error): a readable tip, the original checkout with
 	# parents <tested_base> <head>, and a readable default branch.
 	if ! [[ "${so_tip}" =~ ^[0-9a-f]{40}$ ]]; then
@@ -498,6 +499,16 @@ ci_final_merge_ref_sync_only_check()
 	cut -f 2- "${so_dir}/pr_raw" | LC_ALL=C sort -u > "${so_dir}/pr_files"
 	if [ -n "$(LC_ALL=C comm -12 "${so_dir}/range_files" "${so_dir}/pr_files")" ]; then
 		ci_final_merge_ref_sync_only_fail file_overlap; return 1
+	fi
+	# The base can move while the reads above run; commits past the judged tip
+	# were never classified, so a moved tip is an incomplete listing
+	# (`truncated`) and an unreadable one `api_error`. One `git ls-remote`.
+	so_now_tip="$(ci_final_merge_ref_tip "${so_base_ref}")"
+	if ! [[ "${so_now_tip}" =~ ^[0-9a-f]{40}$ ]]; then
+		ci_final_merge_ref_sync_only_fail api_error; return 1
+	fi
+	if [ "${so_now_tip}" != "${so_tip}" ]; then
+		ci_final_merge_ref_sync_only_fail truncated; return 1
 	fi
 	CI_FINAL_MERGE_REF_SYNC_ONLY_COMMITS="${so_range_total}"
 	CI_FINAL_MERGE_REF_SYNC_ONLY_FILES="$(wc -l < "${so_dir}/range_files" | tr -d ' ')"

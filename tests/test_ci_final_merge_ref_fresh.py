@@ -46,6 +46,10 @@ FAKE_GH = textwrap.dedent(
 		fixture = os.path.join(os.environ.get("FAKE_GH_FIXTURES", "/nonexistent"), name)
 		if not os.path.exists(fixture):
 			sys.exit(1)
+		move_ref, move_to = os.environ.get("FAKE_GH_FILES_MOVE_REF", ""), os.environ.get("FAKE_GH_FILES_MOVE_TO", "")
+		if "/pulls/7/files" in path and move_ref and move_to:
+			# The base moves while the sync-only check reads the PR's files.
+			subprocess.run(["git", "-C", os.environ["FAKE_ORIGIN"], "update-ref", move_ref, move_to], check=True)
 		out = subprocess.run(["jq", "-r", jq, fixture], capture_output=True, text=True)
 		sys.stdout.write(out.stdout)
 		sys.exit(out.returncode)
@@ -767,6 +771,16 @@ def test_tested_base_is_the_original_checkouts_first_parent(integration) -> None
 	assert result.returncode == 0, result.stdout + result.stderr
 	assert f"outcome=stale_accepted reason=sync_only_no_overlap base={INTEGRATION} tested_base={it['i0']} tip={it['sync']}" in result.stdout
 	assert tested == it["merge_ref"]
+
+
+def test_base_tip_moving_during_the_check_fails_as_truncated(integration) -> None:
+	it = integration()
+	it["standard"]()
+	result, _, _ = it["run"](env={
+		"FAKE_GH_FILES_MOVE_REF": f"refs/heads/{INTEGRATION}", "FAKE_GH_FILES_MOVE_TO": it["m1_merge"],
+	})
+	_stale_detail(result, "truncated")
+	assert it["summary"].read_text(encoding="utf-8") == ""
 
 
 def test_fresh_path_makes_no_sync_only_calls(world) -> None:
