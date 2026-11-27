@@ -1015,6 +1015,19 @@ def test_gate_final_ci_now_green_routes_a_generated_chore_without_the_security_p
 	assert f"FINAL_CI_NOW_GREEN_MERGE pr=42 head={HEAD} outcome=routed det_skip_reason=final_ci_now_green" in result.stdout
 
 
+def test_gate_final_ci_now_green_generated_chore_skips_the_pass_with_the_skip_job_pass_on(tmp_path: Path) -> None:
+	# With AUTOFIX_SKIP_RUNS_SECURITY_PASS=true the gate always writes
+	# det_skip_security_pass, so this run shows the chore is not handed a pass.
+	fixture = _now_green_fixture()
+	fixture["pr"]["head"]["ref"] = "auto/workflow-log-analysis-report-123-1"
+	fixture["pr"]["user"] = {"login": PIPELINE, "type": "User"}
+	fixture["files"] = [{"filename": "analysis/workflow-optimization-2026-11-26.md", "status": "added"}]
+	result, outputs, _ = _run_gate(tmp_path, fixture, **_SECURITY_PASS_ENV, AUTOFIX_SKIP_RUNS_SECURITY_PASS="true")
+	assert outputs["deterministic_skip"] == "true" and outputs["det_skip_reason"] == "final_ci_now_green", result.stdout + result.stderr
+	assert outputs["det_skip_security_pass"] == "false"
+	assert "AUTOFIX_GATE_DET_SKIP_SECURITY_PASS" not in result.stdout
+
+
 def _job_block(text: str, job: str) -> str:
 	match = re.search(rf"^  {re.escape(job)}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)", text, re.M | re.S)
 	assert match, job
