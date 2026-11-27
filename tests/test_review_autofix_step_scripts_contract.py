@@ -210,6 +210,18 @@ def test_skip_merge_job_step_scripts_come_only_from_verified_freshness_checkout(
 		assert names.index("Checkout merge-base freshness helper") < names.index(step_name)
 
 
+def test_capture_runtime_context_stays_inline() -> None:
+	# #10166 security pass: this always() step can run before the trusted
+	# support checkout, when the wrapper's .codex-workflow-src fallback would
+	# source a PR-committed script. Its body stays inline, sourcing nothing.
+	steps = _steps_by_name(REVIEW_AUTOFIX_WORKFLOW_PATH.read_text(encoding="utf-8"))
+	step = steps["Capture runtime context"]
+	assert str(step.get("if", "")) == "always()", step.get("if")
+	assert "REVIEW_AUTOFIX_STEP_SCRIPT" not in step["run"] and "source " not in step["run"], step["run"]
+	assert 'mkdir -p "${RUNTIME_CONTEXT_DIR}"' in step["run"]
+	assert "Capture runtime context" not in REVIEW_AUTOFIX_STEP_SCRIPTS
+
+
 def main() -> int:
 	test_functions = [value for key, value in sorted(globals().items()) if key.startswith("test_")]
 	for func in test_functions:
@@ -221,11 +233,3 @@ def main() -> int:
 if __name__ == "__main__":
 	raise SystemExit(main())
 
-
-def test_capture_runtime_context_runs_only_after_the_trusted_support_checkout() -> None:
-	# #10166 security pass: the always() step's .codex-workflow-src fallback
-	# must never resolve a PR-committed script after an early failure.
-	steps = _steps_by_name(REVIEW_AUTOFIX_WORKFLOW_PATH.read_text(encoding="utf-8"))
-	condition = str(steps["Capture runtime context"].get("if", ""))
-	assert condition.startswith("always()"), condition
-	assert "steps.checkout_support_source.outcome == 'success'" in condition, condition
