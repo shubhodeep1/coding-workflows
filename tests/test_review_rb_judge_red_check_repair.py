@@ -467,7 +467,10 @@ def test_merge_with_followup_routes_a_red_head() -> None:
 	block = text[text.index('blocking) _checks_reason="blocking_check_runs" ;;'):]
 	block = block[:block.index('echo "judge_skip_reason=blocking_check_runs"')]
 	assert 'rb_judge_route_red_checks merge_with_followup || true' in block
-	assert '[ "${PR_CHECKS_LAST_PENDING:-0}" = "0" ] && [ -s "${RB_JUDGE_CI_FAILURE_NAMES_FILE}" ]' in block
+	# Blocking with nothing pending routes even when the snapshot cannot show
+	# the head (missing, disabled sentinel, another head): no names-file gate.
+	assert '[ "${PR_CHECKS_LAST_PENDING:-0}" = "0" ] && [ "$(rb_judge_red_check_switch 2>/dev/null)" = "true" ]' in block
+	assert 'RB_JUDGE_CI_FAILURE_NAMES_FILE' not in block
 	raw = WORKFLOW.read_text(encoding="utf-8")
 	assert "              final_ci_handover)\n" in raw and "              final_ci_repair_requested)\n" in raw
 

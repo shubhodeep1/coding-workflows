@@ -4108,11 +4108,14 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
               echo "::warning::PR #${PR_NUMBER} could not query check-runs for SHA ${RB_JUDGED_HEAD_SHA:0:7} — refusing merge_with_followup to avoid creating a follow-up against unvalidated code. Leaving linked issues in ai:review-blocked."
               echo "judge_skip_reason=check_runs_query_failed" >> "$GITHUB_OUTPUT"
             else
-              # #10063: nothing pending and failed check-runs listed for the
-              # judged head: a red head goes to the final-CI repair or a
-              # hand-over, like the `merge` path, instead of a stall.
+              # #10063: blocking with nothing pending is a settled failed
+              # required check (scripts/pr_checks_lib.sh), whatever the
+              # snapshot shows (it can be missing, disabled, for another head
+              # or unrenderable): a red head goes to the final-CI repair or a
+              # hand-over, like the `merge` path, instead of a stall. The
+              # switch off keeps the pre-#10063 blocking_check_runs outcome.
               _rb_mwf_red_status=""
-              if [ "${PR_CHECKS_LAST_PENDING:-0}" = "0" ] && [ -s "${RB_JUDGE_CI_FAILURE_NAMES_FILE}" ]; then
+              if [ "${PR_CHECKS_LAST_PENDING:-0}" = "0" ] && [ "$(rb_judge_red_check_switch 2>/dev/null)" = "true" ]; then
                 RB_MERGE_STATUS="checks_failed"
                 rb_judge_route_red_checks merge_with_followup || true
                 case "${RB_MERGE_STATUS}" in
