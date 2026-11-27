@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cThe full test suite passes.\u201d\n  expected_change_site: Verification results for the release runner-wait changes in `tests/test_auto_release_stable.py` and `tests/test_promote_main_cycle.py`.\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The provided pre-push gate reports 30 inherited failures, and its 103 checks cover 99 selected test files rather than a passing full-suite run.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cThe full test suite passes.\u201d\n  Expected change site: Verification results for the release runner-wait changes in `tests/test_auto_release_stable.py` and `tests/test_promote_main_cycle.py`.\n  Evidence of absence: The provided pre-push gate reports 30 inherited failures, and its 103 checks cover 99 selected test files rather than a passing full-suite run.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b6fb1ae290aed0e0811ec8b8a6475008b7a72f312fcc900ee5e04b4b318850d7",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10185,
+    "run_id": "45963707606",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45963707606",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127083522_86277857a9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10185,
+    "run_id": "45963707606"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-27T08:35:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
