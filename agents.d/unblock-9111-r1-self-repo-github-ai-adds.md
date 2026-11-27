@@ -1,0 +1,3 @@
+<!-- agents: section="Stable log prefixes (contractual)" -->
+- `IMPLEMENT_SELF_REPO_GITHUB_AI_ADD` (`scripts/implement_commit_changes.sh`, stdout, self repo only, one line per new untracked `.github/ai/` file staged because the issue's `files_touched` list names its exact path: `IMPLEMENT_SELF_REPO_GITHUB_AI_ADD path=<repo-relative path>`; not emitted when `IMPLEMENT_SELF_REPO_GITHUB_AI_ADDS_ENABLED` (read only from the script environment; `implement.yml` does not forward it from a repository variable) turns the step off, when there is no allowlist, or for glob/directory entries)
+LOG_PREFIX.name=IMPLEMENT_SELF_REPO_GITHUB_AI_ADD

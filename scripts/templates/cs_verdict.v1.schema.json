@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/shubhodeep1/coding-workflows/scripts/templates/cs_verdict.v1.schema.json",
+  "title": "cs_verdict v1",
+  "$comment": "Output of .github/workflows/cs_investigate.yml (issue #9440). The per-item caps (questions item 500, evidence summary 1000, other evidence strings 300, root_* 300, preconditions 10 x 500, rationale 1000) are assumptions the issue left open. scripts/cs_verdict.py validates against this file with a stdlib validator that only knows the keywords used here; adding any other keyword makes it fail closed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "ticket_id",
+    "mode",
+    "outcome",
+    "reply_to_cs",
+    "questions",
+    "evidence",
+    "root_path",
+    "root_function",
+    "user_ids",
+    "repair_proposals",
+    "confidence"
+  ],
+  "properties": {
+    "ticket_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9_-]{1,40}$"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["investigate", "verify"]
+    },
+    "outcome": {
+      "type": "string",
+      "enum": [
+        "needs_info",
+        "not_a_bug",
+        "user_data_repair",
+        "code_bug",
+        "outage",
+        "money_or_security",
+        "verified_fixed",
+        "verify_failed"
+      ]
+    },
+    "reply_to_cs": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "questions": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "string",
+        "maxLength": 500
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["target", "op", "collection_or_index", "summary"],
+        "properties": {
+          "target": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "op": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "collection_or_index": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "summary": {
+            "type": "string",
+            "maxLength": 1000
+          }
+        }
+      }
+    },
+    "root_path": {
+      "type": ["string", "null"],
+      "maxLength": 300
+    },
+    "root_function": {
+      "type": ["string", "null"],
+      "maxLength": 300
+    },
+    "user_ids": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "integer"
+      }
+    },
+    "repair_proposals": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["action", "params", "preconditions", "rationale"],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "balance_adjust",
+              "wof_replay_outcome",
+              "game_api_replay_level",
+              "withdrawal_approve",
+              "withdrawal_reject"
+            ]
+          },
+          "params": {
+            "type": "object"
+          },
+          "preconditions": {
+            "type": "array",
+            "maxItems": 10,
+            "items": {
+              "type": "string",
+              "maxLength": 500
+            }
+          },
+          "rationale": {
+            "type": "string",
+            "maxLength": 1000
+          }
+        }
+      }
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    }
+  }
+}

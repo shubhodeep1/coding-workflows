@@ -1,0 +1,40 @@
+# IMPORTANT: This file is managed by coding-workflows and will be overwritten
+# by the update process. Do not add custom logic here.
+#
+# This workflow is ENABLED BY DEFAULT. When the AI pipeline escalates an issue
+# or pull request for human attention (ai:needs-human or one of the terminal
+# latch labels), the escalation is reported to coding-workflows, whose intake
+# diagnoses the failed runs and opens a heal issue for the AI pipeline: in
+# coding-workflows when the shared workflow source is at fault, in this
+# repository when the fault is in this repository's own code. To disable it
+# for this repository, set the repository variable WORKFLOW_HEAL_ENABLED to
+# 'false'.
+name: AI Workflow Failure Heal
+on:
+  issues:
+    types: [labeled]
+  pull_request:
+    types: [labeled]
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+  # The reusable reporter requests an OIDC token so the intake can verify
+  # which repository sent the heal report.
+  id-token: write
+jobs:
+  report:
+    if: >-
+      !contains(fromJson('["false"]'), vars.WORKFLOW_HEAL_ENABLED) &&
+      contains(fromJson('["ai:needs-human","ai:check-triage-escalated","ai:destructive-blocked","ai:scope-blocked","ai:harness-broken","ai:resolver-escalated","ai:security-pass-failed"]'), github.event.label.name)
+    uses: shubhodeep1/coding-workflows/.github/workflows/workflow_failure_heal.yml@stable
+    with:
+      issue_number: ${{ github.event.issue.number || github.event.pull_request.number }}
+      label: ${{ github.event.label.name }}
+      is_pull_request: ${{ github.event_name == 'pull_request' }}
+    # Least privilege: forward only the secrets the reusable workflow
+    # declares, never inherit them all (consumer repos hold other secrets).
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      TG_BOT_SECRET: ${{ secrets.TG_BOT_SECRET }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}

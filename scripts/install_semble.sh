@@ -1,0 +1,243 @@
+#!/usr/bin/env bash
+# install_semble.sh — fail-soft Semble installer for GitHub Actions jobs.
+
+set -euo pipefail
+
+SEMBLE_VERSION="0.1.3"
+SEMBLE_SPEC="semble==${SEMBLE_VERSION}"
+SEMBLE_PYTHON_BIN="${SEMBLE_PYTHON_BIN:-python3}"
+
+semble_install_now_ms()
+{
+	local semble_install_now_value="" semble_install_now_realtime="${EPOCHREALTIME:-}"
+	# Bash's own clock first: on ubuntu-26.04 runners (Rust uutils coreutils)
+	# `date +%s%3N` gave readings that went backwards within a run, or
+	# sometimes a reading one digit short (#9240).
+	# `date` stays as the fallback for bash < 5. Always returns 0.
+	if [[ "${semble_install_now_realtime}" =~ ^([0-9]+)[.,]([0-9]{6})$ ]]; then
+		printf '%s\n' "$(( 10#${BASH_REMATCH[1]} * 1000 + 10#${BASH_REMATCH[2]} / 1000 ))"
+		return 0
+	fi
+	semble_install_now_value="$(date +%s%3N 2>/dev/null || true)"
+	if [[ "${semble_install_now_value}" =~ ^[0-9]{13,}$ ]]; then
+		printf '%s\n' "${semble_install_now_value}"
+		return 0
+	fi
+	# Whole seconds when `date` has no %3N; 0 when no clock is usable.
+	semble_install_now_value="$(date +%s 2>/dev/null || true)"
+	if [[ "${semble_install_now_value}" =~ ^[0-9]+$ ]]; then
+		printf '%s\n' "$(( 10#${semble_install_now_value} * 1000 ))"
+		return 0
+	fi
+	printf '0\n'
+	return 0
+}
+
+SEMBLE_INSTALL_START_MS="$(semble_install_now_ms)"
+semble_neutral_dir=""
+
+semble_python()
+(
+	cd -- "${semble_neutral_dir}" || return 1
+	PYTHONSAFEPATH=1 PYTHONDONTWRITEBYTECODE=1 "${SEMBLE_PYTHON_BIN}" "$@"
+)
+
+log()
+{
+	printf 'install_semble: %s\n' "$*" >&2
+}
+
+write_github_env()
+{
+	local key="${1:?write_github_env: key required}"
+	local value="${2:?write_github_env: value required}"
+
+	if [ -z "${GITHUB_ENV:-}" ]; then
+		return 0
+	fi
+	if ! printf '%s=%s\n' "${key}" "${value}" >> "${GITHUB_ENV}" 2>/dev/null; then
+		log "unable to append ${key} to GITHUB_ENV=${GITHUB_ENV}; continuing."
+	fi
+}
+
+append_github_path()
+{
+	local dir="${1:-}"
+
+	if [ -z "${dir}" ]; then
+		return 0
+	fi
+	case ":${PATH}:" in
+		*":${dir}:"*) ;;
+		*) PATH="${dir}:${PATH}" ;;
+	esac
+	if [ -n "${GITHUB_PATH:-}" ]; then
+		if ! printf '%s\n' "${dir}" >> "${GITHUB_PATH}" 2>/dev/null; then
+			log "unable to append ${dir} to GITHUB_PATH=${GITHUB_PATH}; continuing."
+		fi
+	fi
+}
+
+python_user_bin()
+{
+	if command -v "${SEMBLE_PYTHON_BIN}" >/dev/null 2>&1; then
+		semble_python - <<'PY'
+import site
+print(site.USER_BASE + "/bin")
+PY
+		return 0
+	fi
+	if [ -n "${HOME:-}" ]; then
+		printf '%s/.local/bin\n' "${HOME}"
+		return 0
+	fi
+	return 1
+}
+
+current_semble_version()
+{
+	local semble_bin=""
+	local module_version=""
+
+	# Prefer the python module's version constant: semble 0.1.3 ships no
+	# `--version` CLI flag at all, so the legacy CLI probe always fails
+	# even when a correctly-pinned install is on disk. Falling back to
+	# the CLI keeps detection working for hypothetical newer releases
+	# that re-introduce the flag.
+	if command -v "${SEMBLE_PYTHON_BIN}" >/dev/null 2>&1; then
+		module_version="$(semble_python -c 'import semble.version as v; print(v.__version__)' 2>/dev/null || true)"
+		module_version="${module_version%%$'\n'*}"
+		if [ -n "${module_version}" ]; then
+			printf '%s\n' "${module_version}"
+			return 0
+		fi
+	fi
+
+	semble_bin="$(command -v semble 2>/dev/null || true)"
+	if [ -z "${semble_bin}" ]; then
+		return 1
+	fi
+	(cd -- "${semble_neutral_dir}" && "${semble_bin}" --version) 2>/dev/null || return 1
+}
+
+binary_matches_pin()
+{
+	local version_text=""
+	local version_pattern=""
+
+	version_text="$(current_semble_version)" || return 1
+	version_text="${version_text%%$'\n'*}"
+	version_pattern="${SEMBLE_VERSION//./\\.}"
+	if printf '%s\n' "${version_text}" | grep -Eq "(^|[^0-9.])${version_pattern}([^0-9.]|$)"; then
+		return 0
+	fi
+	return 1
+}
+
+mark_available()
+{
+	local semble_install_elapsed_ms=0
+	if [ -n "${SEMBLE_INSTALL_RESULT_FILE:-}" ]; then printf 'available\n' > "${SEMBLE_INSTALL_RESULT_FILE}" || true; fi
+	semble_install_elapsed_ms="$(( $(semble_install_now_ms) - SEMBLE_INSTALL_START_MS ))"
+	# A clock that fails mid-run reads 0; never report a negative duration.
+	[ "${semble_install_elapsed_ms}" -ge 0 ] || semble_install_elapsed_ms=0
+	write_github_env "SEMBLE_INSTALL_MS" "${semble_install_elapsed_ms}"
+	write_github_env "SEMBLE_AVAILABLE" "true"
+	log "Semble ${SEMBLE_VERSION} is available."
+}
+
+mark_unavailable()
+{
+	local semble_install_elapsed_ms=0
+	if [ -n "${SEMBLE_INSTALL_RESULT_FILE:-}" ]; then printf 'unavailable\n' > "${SEMBLE_INSTALL_RESULT_FILE}" || true; fi
+	semble_install_elapsed_ms="$(( $(semble_install_now_ms) - SEMBLE_INSTALL_START_MS ))"
+	# A clock that fails mid-run reads 0; never report a negative duration.
+	[ "${semble_install_elapsed_ms}" -ge 0 ] || semble_install_elapsed_ms=0
+	write_github_env "SEMBLE_INSTALL_MS" "${semble_install_elapsed_ms}"
+	write_github_env "SEMBLE_AVAILABLE" "false"
+	log "Semble ${SEMBLE_VERSION} is unavailable; callers should use fallback paths."
+}
+
+attempt_pip_install()
+{
+	local pip_log=""
+	local user_bin=""
+
+	if ! command -v "${SEMBLE_PYTHON_BIN}" >/dev/null 2>&1; then
+		log "${SEMBLE_PYTHON_BIN} is unavailable; cannot install ${SEMBLE_SPEC}."
+		return 1
+	fi
+
+	user_bin="$(python_user_bin || true)"
+	append_github_path "${user_bin}"
+
+	pip_log="$(mktemp 2>/dev/null || true)"
+	if [ -z "${pip_log}" ]; then
+		log "mktemp unavailable; skipping install attempt for ${SEMBLE_SPEC}."
+		return 1
+	fi
+
+	if semble_python -m pip install \
+		--disable-pip-version-check \
+		--quiet \
+		--upgrade \
+		--user \
+		"${SEMBLE_SPEC}" >"${pip_log}" 2>&1; then
+		rm -f "${pip_log}"
+		return 0
+	fi
+
+	if semble_python -m pip install \
+		--disable-pip-version-check \
+		--quiet \
+		--upgrade \
+		--user \
+		--break-system-packages \
+		"${SEMBLE_SPEC}" >"${pip_log}" 2>&1; then
+		rm -f "${pip_log}"
+		return 0
+	fi
+
+	log "pip install failed for ${SEMBLE_SPEC}: $(tail -n 1 "${pip_log}" 2>/dev/null || printf 'unknown-error')"
+	rm -f "${pip_log}"
+	return 1
+}
+
+main()
+{
+	local user_bin=""
+	local existing_version=""
+
+	semble_neutral_dir="$(mktemp -d 2>/dev/null || true)"
+	if [ -z "${semble_neutral_dir}" ]; then
+		log "neutral cwd unavailable"
+		mark_unavailable
+		return 0
+	fi
+	trap 'rm -rf -- "${semble_neutral_dir}"' EXIT
+
+	user_bin="$(python_user_bin || true)"
+	append_github_path "${user_bin}"
+
+	if binary_matches_pin; then
+		mark_available
+		return 0
+	fi
+
+	existing_version="$(current_semble_version || true)"
+	if [ -n "${existing_version}" ]; then
+		log "found non-pinned Semble (${existing_version}); attempting install of ${SEMBLE_SPEC}."
+	else
+		log "Semble not found; attempting install of ${SEMBLE_SPEC}."
+	fi
+
+	if attempt_pip_install && binary_matches_pin; then
+		mark_available
+		return 0
+	fi
+
+	mark_unavailable
+	return 0
+}
+
+main "$@"

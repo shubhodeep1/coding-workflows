@@ -1,0 +1,543 @@
+#!/usr/bin/env python3
+"""Regression tests for the sweep's stale-queued active-run guard.
+
+The sweep skips dispatching a review for any PR that already has a
+`queued` or `in_progress` run on its head ref. That guard originally had
+no time cutoff, which deadlocked the recovery path it exists to protect:
+GitHub can wedge a run in `queued` with zero jobs and then refuse both
+`cancel` (409 "Cannot cancel a workflow run that has not been queued
+yet") and `rerun` (403 "This workflow is already running"), so nothing
+can clear it. PR #3841 sat unreviewed for 11+ hours behind run
+32984498460 while every 30-minute tick logged:
+
+    AUTOFIX_SWEEP_SKIP pr=#3841 reason=active_run
+      workflow=internal-review.yml count=1
+
+These tests execute the jq program **as extracted from the shipped
+workflow file**, so a future edit to the reduce cannot silently drop the
+cutoff while the tests keep passing against a stale copy.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import shutil
+import subprocess
+import unittest
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SWEEP_WF = REPO_ROOT / ".github" / "workflows" / "review_autofix_sweep.yml"
+
+# The jq program is embedded in the workflow as a single-quoted argument to
+# `jq -c -s --argjson cutoff "${stale_cutoff_epoch}" --arg default_branch
+# "${sweep_default_branch}"` (the default branch since issue #6629). Grab it
+# verbatim.
+JQ_BLOCK = re.compile(
+	r"jq -c -s --argjson cutoff \"\$\{stale_cutoff_epoch\}\" --arg default_branch \"\$\{sweep_default_branch\}\" '(?P<prog>.*?)'\s*2>/dev/null",
+	re.DOTALL,
+)
+
+
+def extract_jq_program() -> str:
+	text = SWEEP_WF.read_text(encoding="utf-8")
+	match = JQ_BLOCK.search(text)
+	assert match is not None, "could not locate the sweep's jq reduce in the workflow"
+	# Strip the YAML block-scalar indentation the workflow carries.
+	lines = [line[10:] if line.startswith(" " * 10) else line for line in match.group("prog").splitlines()]
+	return "\n".join(lines)
+
+
+def iso(delta_minutes: int) -> str:
+	stamp = datetime.now(timezone.utc) + timedelta(minutes=delta_minutes)
+	return stamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def cutoff_epoch(minutes_ago: int) -> int:
+	return int((datetime.now(timezone.utc) - timedelta(minutes=minutes_ago)).timestamp())
+
+
+def run_sweep_reduce(runs: list[dict], cutoff: int, default_branch: str = "main") -> dict:
+	payload = json.dumps({"workflow_runs": runs})
+	result = subprocess.run(
+		["jq", "-c", "-s", "--argjson", "cutoff", str(cutoff), "--arg", "default_branch", default_branch,
+		extract_jq_program()],
+		input=payload,
+		capture_output=True,
+		text=True,
+		check=True,
+	)
+	return json.loads(result.stdout)
+
+
+@unittest.skipUnless(shutil.which("jq"), "jq is required")
+class SweepStaleQueuedGuardTest(unittest.TestCase):
+	def run_reduce(self, runs: list[dict], cutoff: int) -> dict:
+		return run_sweep_reduce(runs, cutoff)
+
+	def test_wedged_queued_run_stops_suppressing_dispatch(self) -> None:
+		"""The PR #3841 case: queued 11 hours, zero jobs, uncancellable."""
+		created_at = iso(-660)
+		out = self.run_reduce(
+			[{"id": 32984498460, "head_branch": "claude/x", "status": "queued", "created_at": created_at}],
+			cutoff_epoch(120),
+		)
+		self.assertEqual(out["active"], {})
+		stale_head_ref, stale_run_id, stale_created_epoch = out["stale"][0].split("\t")
+		self.assertEqual(stale_head_ref, "claude/x")
+		self.assertEqual(stale_run_id, "32984498460")
+		self.assertEqual(int(stale_created_epoch), int(datetime.strptime(created_at, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()))
+
+	def test_recently_queued_run_still_suppresses(self) -> None:
+		"""A genuine concurrency wait must not be cut short."""
+		out = self.run_reduce(
+			[{"id": 1, "head_branch": "claude/x", "status": "queued", "created_at": iso(-15)}],
+			cutoff_epoch(120),
+		)
+		self.assertEqual(out["active"], {"claude/x": 1})
+		self.assertEqual(out["stale"], [])
+
+	def test_long_running_in_progress_is_never_discounted(self) -> None:
+		"""codex-agent legitimately runs well over an hour."""
+		out = self.run_reduce(
+			[{"id": 2, "head_branch": "claude/x", "status": "in_progress", "created_at": iso(-1200)}],
+			cutoff_epoch(120),
+		)
+		self.assertEqual(out["active"], {"claude/x": 1})
+		self.assertEqual(out["stale"], [])
+
+	def test_unparseable_or_missing_created_at_fails_safe(self) -> None:
+		"""Without a usable timestamp, keep suppressing rather than risk a duplicate."""
+		out = self.run_reduce(
+			[
+				{"id": 3, "head_branch": "a", "status": "queued"},
+				{"id": 4, "head_branch": "b", "status": "queued", "created_at": "not-a-date"},
+				{"id": 5, "head_branch": "c", "status": "queued", "created_at": ""},
+			],
+			cutoff_epoch(120),
+		)
+		self.assertEqual(out["active"], {"a": 1, "b": 1, "c": 1})
+		self.assertEqual(out["stale"], [])
+
+	def test_zero_cutoff_restores_previous_always_suppress_behaviour(self) -> None:
+		out = self.run_reduce(
+			[{"id": 6, "head_branch": "claude/x", "status": "queued", "created_at": iso(-660)}],
+			0,
+		)
+		self.assertEqual(out["active"], {"claude/x": 1})
+		self.assertEqual(out["stale"], [])
+
+	def test_duplicate_run_ids_are_counted_once(self) -> None:
+		run = {"id": 7, "head_branch": "claude/x", "status": "in_progress", "created_at": iso(-5)}
+		out = self.run_reduce([run, dict(run)], cutoff_epoch(120))
+		self.assertEqual(out["active"], {"claude/x": 1})
+
+	def test_transitioned_run_prefers_in_progress_snapshot(self) -> None:
+		out = self.run_reduce(
+			[
+				{"id": 8, "head_branch": "claude/x", "status": "queued", "created_at": iso(-180)},
+				{"id": 8, "head_branch": "claude/x", "status": "in_progress", "created_at": iso(-180)},
+			],
+			cutoff_epoch(120),
+		)
+		self.assertEqual(out["active"], {"claude/x": 1})
+		self.assertEqual(out["stale"], [])
+
+	def test_runs_without_a_head_branch_are_ignored(self) -> None:
+		out = self.run_reduce(
+			[{"id": 9, "status": "queued", "created_at": iso(-5)}, {"id": 10, "head_branch": "", "status": "queued"}],
+			cutoff_epoch(120),
+		)
+		self.assertEqual(out["active"], {})
+
+
+@unittest.skipUnless(shutil.which("jq"), "jq is required")
+class SweepPrKeyedDispatchTest(unittest.TestCase):
+	"""Issue #4618: the sweep dispatches from the default branch, so a
+	dispatched run is keyed by the PR its run name carries, not its head."""
+
+	def run_reduce(self, runs: list[dict], cutoff: int) -> dict:
+		return run_sweep_reduce(runs, cutoff)
+
+	def dispatch_run(self, run_id: int, pr: str, **extra: object) -> dict:
+		run = {
+			"id": run_id,
+			"head_branch": "main",
+			"event": "workflow_dispatch",
+			"display_title": f"Internal: AI Review & Autofix [pr:{pr}]",
+			"path": ".github/workflows/internal-review.yml",
+			"status": "in_progress",
+			"created_at": iso(-5),
+		}
+		run.update(extra)
+		return run
+
+	def test_spoofed_dispatch_runs_keep_their_own_branch_key(self) -> None:
+		"""Issue #6629: a dispatch run is keyed by its PR only when it comes
+		from the default branch (or a null head_branch) and internal-review.yml."""
+		out = self.run_reduce(
+			[
+				# (a) the title on a branch copy of the wrapper.
+				self.dispatch_run(30, "77", head_branch="attacker/branch"),
+				# (b) the title on another workflow path.
+				self.dispatch_run(31, "77", head_branch="attacker/b", path=".github/workflows/ai-review.yml"),
+				self.dispatch_run(32, "77", head_branch="attacker/c", path=".github/workflows/review_autofix.yml"),
+				# (c) the title on another event.
+				self.dispatch_run(33, "77", head_branch="attacker/d", event="pull_request"),
+			],
+			cutoff_epoch(120),
+		)
+		self.assertEqual(
+			out["active"],
+			{"attacker/branch": 1, "attacker/b": 1, "attacker/c": 1, "attacker/d": 1},
+		)
+
+	def test_spoofed_dispatch_run_without_a_branch_is_dropped(self) -> None:
+		out = self.run_reduce(
+			[self.dispatch_run(34, "77", head_branch=None, path=".github/workflows/ai-review.yml")],
+			cutoff_epoch(120),
+		)
+		self.assertEqual(out["active"], {})
+
+	def test_trusted_dispatch_runs_including_a_null_branch_are_keyed_by_pr(self) -> None:
+		out = self.run_reduce(
+			[
+				self.dispatch_run(35, "77"),
+				self.dispatch_run(36, "78", head_branch=None),
+				self.dispatch_run(37, "79", path=".github/workflows/internal-review.yml@refs/heads/main"),
+			],
+			cutoff_epoch(120),
+		)
+		self.assertEqual(out["active"], {"pr:77": 1, "pr:78": 1, "pr:79": 1})
+
+	def test_default_branch_other_than_main_is_honoured(self) -> None:
+		out = run_sweep_reduce(
+			[self.dispatch_run(38, "77", head_branch="trunk"), self.dispatch_run(39, "78")],
+			cutoff_epoch(120),
+			default_branch="trunk",
+		)
+		self.assertEqual(out["active"], {"pr:77": 1, "main": 1})
+
+	def test_empty_default_branch_trusts_no_dispatch_run(self) -> None:
+		out = run_sweep_reduce([self.dispatch_run(40, "77")], cutoff_epoch(120), default_branch="")
+		self.assertEqual(out["active"], {"main": 1})
+
+	def test_named_dispatch_run_is_keyed_by_pr(self) -> None:
+		out = self.run_reduce([self.dispatch_run(1, "4618")], cutoff_epoch(120))
+		self.assertEqual(out["active"], {"pr:4618": 1})
+
+	def test_named_dispatch_runs_do_not_mark_the_default_branch_active(self) -> None:
+		"""A main-headed PR (promote/forward-merge) is not suppressed by sweep runs."""
+		out = self.run_reduce(
+			[self.dispatch_run(1, "10"), self.dispatch_run(2, "11")],
+			cutoff_epoch(120),
+		)
+		self.assertEqual(out["active"], {"pr:10": 1, "pr:11": 1})
+		self.assertNotIn("main", out["active"])
+
+	def test_marker_on_a_pull_request_run_stays_branch_keyed(self) -> None:
+		"""A PR titled like the marker cannot claim another PR's key."""
+		out = self.run_reduce(
+			[self.dispatch_run(3, "7", event="pull_request", head_branch="feature/x")],
+			cutoff_epoch(120),
+		)
+		self.assertEqual(out["active"], {"feature/x": 1})
+
+	def test_unnamed_or_malformed_dispatch_run_stays_branch_keyed(self) -> None:
+		out = self.run_reduce(
+			[
+				{"id": 4, "head_branch": "claude/y", "event": "workflow_dispatch", "display_title": "Internal: AI Review & Autofix", "status": "queued", "created_at": iso(-5)},
+				self.dispatch_run(5, "0", head_branch="claude/z"),
+				self.dispatch_run(6, "12x", head_branch="claude/w"),
+				{"id": 7, "head_branch": "claude/v", "event": "workflow_dispatch", "status": "pending"},
+			],
+			cutoff_epoch(120),
+		)
+		self.assertEqual(out["active"], {"claude/y": 1, "claude/z": 1, "claude/w": 1, "claude/v": 1})
+
+	def test_wedged_named_dispatch_run_is_logged_under_its_pr(self) -> None:
+		out = self.run_reduce(
+			[self.dispatch_run(8, "4618", status="queued", created_at=iso(-660))],
+			cutoff_epoch(120),
+		)
+		self.assertEqual(out["active"], {})
+		stale_key, stale_run_id, _ = out["stale"][0].split("\t")
+		self.assertEqual(stale_key, "pr:4618")
+		self.assertEqual(stale_run_id, "8")
+
+	def test_branch_and_pr_keys_count_side_by_side(self) -> None:
+		out = self.run_reduce(
+			[
+				self.dispatch_run(9, "5"),
+				self.dispatch_run(10, "5", status="pending"),
+				{"id": 11, "head_branch": "claude/x", "event": "pull_request", "display_title": "Some PR", "status": "in_progress", "created_at": iso(-5)},
+			],
+			cutoff_epoch(120),
+		)
+		self.assertEqual(out["active"], {"pr:5": 2, "claude/x": 1})
+
+	def test_named_dispatch_run_without_a_head_branch_is_keyed_by_pr(self) -> None:
+		"""Issue #4928: GitHub can report head_branch=null on a
+		workflow_dispatch run. The PR key still identifies it, so it must
+		keep suppressing a duplicate dispatch for that PR."""
+		null_head = self.dispatch_run(12, "4928", head_branch=None)
+		missing_head = self.dispatch_run(13, "4929", status="queued")
+		del missing_head["head_branch"]
+		empty_head = self.dispatch_run(14, "4930", status="pending", head_branch="")
+		out = self.run_reduce([null_head, missing_head, empty_head], cutoff_epoch(120))
+		self.assertEqual(out["active"], {"pr:4928": 1, "pr:4929": 1, "pr:4930": 1})
+		self.assertEqual(out["stale"], [])
+
+	def test_wedged_named_dispatch_run_without_a_head_branch_is_logged_under_its_pr(self) -> None:
+		out = self.run_reduce(
+			[self.dispatch_run(15, "4928", head_branch=None, status="queued", created_at=iso(-660))],
+			cutoff_epoch(120),
+		)
+		self.assertEqual(out["active"], {})
+		stale_key, stale_run_id, _ = out["stale"][0].split("\t")
+		self.assertEqual(stale_key, "pr:4928")
+		self.assertEqual(stale_run_id, "15")
+
+	def test_run_without_a_head_branch_or_pr_key_is_still_dropped(self) -> None:
+		"""Only a verified PR key rescues a run with no head branch."""
+		out = self.run_reduce(
+			[
+				{"id": 16, "head_branch": None, "event": "workflow_dispatch", "display_title": "Internal: AI Review & Autofix", "status": "queued", "created_at": iso(-5)},
+				self.dispatch_run(17, "0", head_branch=None),
+				self.dispatch_run(18, "12x", head_branch=None),
+				self.dispatch_run(19, "7", head_branch=None, event="pull_request"),
+				{"id": 20, "head_branch": None, "event": "workflow_dispatch", "status": "pending"},
+			],
+			cutoff_epoch(120),
+		)
+		self.assertEqual(out["active"], {})
+		self.assertEqual(out["stale"], [])
+
+
+class SweepWorkflowContractTest(unittest.TestCase):
+	def setUp(self) -> None:
+		self.text = SWEEP_WF.read_text(encoding="utf-8")
+
+	def test_cutoff_is_configurable_with_a_default(self) -> None:
+		self.assertIn("SWEEP_STALE_QUEUED_MINUTES: ${{ vars.SWEEP_STALE_QUEUED_MINUTES || '120' }}", self.text)
+
+	def test_stale_runs_are_logged_not_silently_discounted(self) -> None:
+		self.assertIn("AUTOFIX_SWEEP_STALE_QUEUED", self.text)
+		self.assertIn("run_id=${stale_run_id}", self.text)
+		self.assertIn("queued_age_minutes=${queued_age_minutes}", self.text)
+		self.assertIn("queued_age_threshold_minutes=${SWEEP_STALE_QUEUED_MINUTES:-0}", self.text)
+		self.assertNotIn("queued_minutes_gt=", self.text)
+
+	def test_header_records_why_the_cutoff_exists(self) -> None:
+		self.assertIn("wedge a run in `queued` with zero jobs", self.text)
+
+
+GH_HELPERS = REPO_ROOT / "scripts" / "gh_helpers.sh"
+
+
+def sweep_cutoff_block() -> str:
+	"""The bash lines that compute stale_cutoff_epoch, including the #9473 floor."""
+	text = SWEEP_WF.read_text(encoding="utf-8")
+	start = text.index("            local stale_cutoff_epoch=0\n")
+	end_marker = 'stale_snapshot_epoch="$(date -u +%s 2>/dev/null || echo 0)"\n            fi\n'
+	end = text.index(end_marker, start) + len(end_marker)
+	return "\n".join(line[12:] if line.startswith(" " * 12) else line for line in text[start:end].splitlines())
+
+
+def compute_sweep_cutoff(minutes: str, zombie_hours: str | None) -> int:
+	env = {"PATH": "/usr/bin:/bin", "SWEEP_STALE_QUEUED_MINUTES": minutes}
+	if zombie_hours is not None:
+		env["ZOMBIE_RUN_MAX_QUEUED_HOURS"] = zombie_hours
+	script = (f'source "{GH_HELPERS}" >/dev/null 2>&1 || true\n'
+		f'compute() {{\n{sweep_cutoff_block()}\nprintf "%s" "${{stale_cutoff_epoch}}"\n}}\ncompute\n')
+	result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, check=True)
+	return int(result.stdout.strip())
+
+
+@unittest.skipUnless(shutil.which("jq"), "jq is required")
+class SweepZombieQueuedFloorTest(unittest.TestCase):
+	"""Issue #9473: ZOMBIE_RUN_MAX_QUEUED_HOURS is a floor beneath the minutes rule."""
+
+	def test_minutes_rule_off_still_ages_out_a_25h_queued_run(self) -> None:
+		cutoff = compute_sweep_cutoff("0", None)
+		self.assertGreater(cutoff, 0)
+		out = run_sweep_reduce(
+			[{"id": 43095142301, "head_branch": "ai/issue-1", "status": "queued", "created_at": iso(-25 * 60)}],
+			cutoff,
+		)
+		self.assertEqual(out["active"], {})
+		self.assertEqual(out["stale"][0].split("\t")[1], "43095142301")
+
+	def test_minutes_rule_off_keeps_a_23h_queued_run_active(self) -> None:
+		cutoff = compute_sweep_cutoff("0", None)
+		out = run_sweep_reduce(
+			[{"id": 7, "head_branch": "ai/issue-2", "status": "queued", "created_at": iso(-23 * 60)}],
+			cutoff,
+		)
+		self.assertEqual(out["active"], {"ai/issue-2": 1})
+
+	def test_zombie_rule_off_restores_the_previous_behaviour(self) -> None:
+		self.assertEqual(compute_sweep_cutoff("0", "0"), 0)
+
+	def test_shorter_minutes_rule_still_wins(self) -> None:
+		cutoff = compute_sweep_cutoff("120", None)
+		self.assertAlmostEqual(cutoff, cutoff_epoch(120), delta=30)
+
+	def test_floor_logs_zombie_run_ignored_after_the_stale_line(self) -> None:
+		text = SWEEP_WF.read_text(encoding="utf-8")
+		stale = text.index("::warning::AUTOFIX_SWEEP_STALE_QUEUED workflow=")
+		zombie = text.index("ZOMBIE_RUN_IGNORED run=${stale_run_id}", stale)
+		self.assertIn("guard=review_autofix_sweep", text[zombie:zombie + 200])
+		self.assertIn("ZOMBIE_RUN_MAX_QUEUED_HOURS: ${{ vars.ZOMBIE_RUN_MAX_QUEUED_HOURS || '24' }}", text)
+
+
+def _write_stale_queued_fake_gh(tmp: Path, *, jobs_reply: str, jobs_rc: int = 0) -> Path:
+	"""Fake `gh` for one open PR whose review run has been queued for 200 min.
+
+	`jobs_reply` is what `GET actions/runs/<id>/jobs` prints (exit `jobs_rc`).
+	"""
+	import stat
+	import textwrap
+	created = (datetime.now(timezone.utc) - timedelta(minutes=200)).strftime("%Y-%m-%dT%H:%M:%SZ")
+	runs = {"total_count": 1, "workflow_runs": [{
+		"id": 555, "status": "queued", "event": "pull_request", "head_branch": "ai/issue-1",
+		"created_at": created, "path": ".github/workflows/internal-review.yml",
+		"display_title": "PR 10",
+	}]}
+	prs = [{"number": 10, "draft": False, "title": "PR 10", "body": "", "head": {"ref": "ai/issue-1", "sha": "0" * 40}, "labels": []}]
+	(tmp / "pulls.json").write_text(json.dumps(prs), encoding="utf-8")
+	(tmp / "runs.json").write_text(json.dumps(runs), encoding="utf-8")
+	(tmp / "jobs.json").write_text(jobs_reply, encoding="utf-8")
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	gh = bin_dir / "gh"
+	gh.write_text(textwrap.dedent(f"""\
+		#!/usr/bin/env bash
+		printf '%s\\n' "$*" >> "{tmp}/gh_calls.log"
+		if [ "$1" = "workflow" ] && [ "$2" = "run" ]; then
+			printf '%s\\n' "$*" >> "{tmp}/dispatches.log"
+			exit 0
+		fi
+		if [ "$1" = "api" ]; then
+			case "$*" in
+				"api repos/"*" --jq .default_branch") printf 'main\\n'; exit 0 ;;
+				*"/actions/runs/555/jobs"*) cat "{tmp}/jobs.json"; exit {jobs_rc} ;;
+				*"/pulls "*|*"/pulls") cat "{tmp}/pulls.json"; exit 0 ;;
+				*"internal-review.yml/runs"*"status=queued"*) cat "{tmp}/runs.json"; exit 0 ;;
+				*"/actions/workflows/"*) printf '%s' '{{"total_count":0,"workflow_runs":[]}}'; exit 0 ;;
+			esac
+		fi
+		echo "unexpected gh call: $*" >&2
+		exit 1
+		"""), encoding="utf-8")
+	gh.chmod(gh.stat().st_mode | stat.S_IEXEC)
+	return bin_dir
+
+
+@unittest.skipUnless(shutil.which("jq"), "jq is required")
+class SweepStaleQueuedRequiresNoJobsTest(unittest.TestCase):
+	"""A queued run past SWEEP_STALE_QUEUED_MINUTES is wedged only with zero jobs.
+
+	In the 2026-11 backlog every review run waited more than two hours for a
+	runner, so the age-only rule replaced each one with a pending duplicate on
+	every sweep. A run whose jobs exist is waiting, not wedged, and keeps
+	suppressing dispatch; it reviews the PR's current head when it starts.
+	"""
+
+	def setUp(self) -> None:
+		import os
+		import sys
+		sys.path.insert(0, str(Path(__file__).resolve().parent))
+		from test_review_autofix_sweep_merge_queued_skip import extract_step_script
+		self.script = extract_step_script()
+		self.tmp = Path(os.environ.get("TMPDIR", "/tmp")) / f"sweep_stale_jobs_{os.getpid()}_{self._testMethodName}"
+		if self.tmp.exists():
+			shutil.rmtree(self.tmp)
+		self.tmp.mkdir(parents=True)
+		self.addCleanup(shutil.rmtree, self.tmp, True)
+
+	def run_sweep(self, jobs_reply: str, jobs_rc: int = 0, **env: str) -> subprocess.CompletedProcess:
+		import os
+		bin_dir = _write_stale_queued_fake_gh(self.tmp, jobs_reply=jobs_reply, jobs_rc=jobs_rc)
+		full_env = {
+			"PATH": f"{bin_dir}:{os.environ['PATH']}",
+			"RUNNER_TEMP": str(self.tmp),
+			"REPOSITORY": "o/r",
+			"GH_TOKEN": "x",
+			"READ_TOKEN": "x",
+			"HEAD_REF_FILTER": "",
+			"DRY_RUN": "false",
+			"ALLOW_WORKFLOW_EDITS": "true",
+			"SWEEP_STALE_QUEUED_MINUTES": "120",
+		}
+		full_env.update(env)
+		return subprocess.run(["bash", "-c", self.script], env=full_env, capture_output=True, text=True, cwd=self.tmp)
+
+	def dispatched(self) -> bool:
+		return (self.tmp / "dispatches.log").exists()
+
+	def test_queued_run_with_jobs_still_suppresses_dispatch(self) -> None:
+		result = self.run_sweep('{"total_count": 3, "jobs": [{"id": 1}]}')
+		self.assertEqual(result.returncode, 0, result.stderr)
+		self.assertFalse(self.dispatched(), result.stdout)
+		self.assertIn("run_id=555", result.stdout)
+		self.assertIn("jobs=3 outcome=waiting_for_runner", result.stdout)
+		self.assertIn("AUTOFIX_SWEEP_SKIP pr=#10 reason=active_run", result.stdout)
+		self.assertNotIn("treating as wedged", result.stdout)
+
+	def test_queued_run_without_jobs_is_wedged_and_dispatched(self) -> None:
+		result = self.run_sweep('{"total_count": 0, "jobs": []}')
+		self.assertEqual(result.returncode, 0, result.stderr)
+		self.assertTrue(self.dispatched(), result.stdout)
+		self.assertIn("treating as wedged", result.stdout)
+
+	def test_unreadable_jobs_reply_keeps_the_wedged_path(self) -> None:
+		for reply, rc in (("", 1), ("not json", 0), ('{"message": "x"}', 0)):
+			with self.subTest(reply=reply, rc=rc):
+				shutil.rmtree(self.tmp)
+				self.tmp.mkdir()
+				result = self.run_sweep(reply, jobs_rc=rc)
+				self.assertEqual(result.returncode, 0, result.stderr)
+				self.assertTrue(self.dispatched(), result.stdout)
+				self.assertIn("treating as wedged", result.stdout)
+
+	def test_switch_off_restores_the_age_only_rule(self) -> None:
+		result = self.run_sweep('{"total_count": 3, "jobs": [{"id": 1}]}', SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS="false")
+		self.assertEqual(result.returncode, 0, result.stderr)
+		self.assertTrue(self.dispatched(), result.stdout)
+		calls = (self.tmp / "gh_calls.log").read_text()
+		self.assertNotIn("/actions/runs/555/jobs", calls)
+
+	def test_workflow_defaults_the_switch_on(self) -> None:
+		text = SWEEP_WF.read_text(encoding="utf-8")
+		self.assertIn("SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS: ${{ vars.SWEEP_STALE_QUEUED_REQUIRE_NO_JOBS || 'true' }}", text)
+
+
+class SweepDefaultBranchProvenanceContractTest(unittest.TestCase):
+	"""Issue #6629: one default-branch read per tick with candidates, no
+	fallback, and a fail-closed skip of every dispatch when it fails."""
+
+	def setUp(self) -> None:
+		self.text = SWEEP_WF.read_text(encoding="utf-8")
+
+	def test_default_branch_read_follows_the_zero_candidate_exit(self) -> None:
+		guard = self.text.index('if [ "${total}" -eq 0 ]; then')
+		read = self.text.index('sweep_default_branch="$(GH_TOKEN="${READ_TOKEN}" gh api "repos/${REPOSITORY}" --jq .default_branch')
+		snapshot = self.text.index("snapshot_active_review_runs() {")
+		self.assertLess(guard, read)
+		self.assertLess(read, snapshot)
+		self.assertEqual(self.text.count("--jq .default_branch"), 1)
+
+	def test_unresolvable_default_branch_skips_every_dispatch(self) -> None:
+		read = self.text.index('sweep_default_branch="$(')
+		block = self.text[read:self.text.index("snapshot_active_review_runs() {")]
+		self.assertIn("AUTOFIX_SWEEP_SKIPPED reason=default_branch_unavailable", block)
+		self.assertIn("AUTOFIX_SWEEP_END dispatched=", block)
+		self.assertIn("exit 0", block)
+		self.assertNotIn("main", block.split("AUTOFIX_SWEEP_SKIPPED")[0].replace("default_branch", ""))
+
+
+if __name__ == "__main__":
+	unittest.main()

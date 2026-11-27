@@ -1,0 +1,4 @@
+<!-- changelog: changed -->
+- **The three CI steps moved by #9496 now print their elapsed time.** `Merge-train and gh_helpers rate-limit tests (CLAUDE.md §15)`, `Review Semble contract test` and `Clarify sandbox base image pre-seed tests (#6985)` in `orchestrate-poll` each set an EXIT trap right after `set -euo pipefail`, so the step log ends with `step elapsed: <n>s` on success and on failure, and the step's exit status is unchanged. This follows up the estimate-only step picks of budget-watch issue #9496 / PR #9515: the run's step results had no durations, so the next budget-watch pick can read these steps' durations from the log instead of estimating them. No step name, `if:` guard, `timeout-minutes` or matrix changed; operators have nothing to do. `tests/test_ci_poll_test_sharding.py` now checks that each step sets the trap once, before its first command, and that the trap line prints on success and on failure.
+
+Refs #9496.

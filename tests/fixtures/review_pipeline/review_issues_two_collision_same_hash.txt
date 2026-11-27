@@ -1,0 +1,27 @@
+=== ISSUE 001 ===
+FILE: src/module.py
+LINES: 2
+LENS: SECURITY
+SEVERITY: high
+CLASSIFICATION: actionable
+EVIDENCE:
+  reviewer_bundle> Finding A at same anchor.
+CURRENT_CODE:
+  total = a + b
+SUGGESTED_APPROACH:
+  Apply fix A.
+=== END ISSUE 001 ===
+
+=== ISSUE 002 ===
+FILE: src/module.py
+LINES: 2
+LENS: SECURITY
+SEVERITY: medium
+CLASSIFICATION: actionable
+EVIDENCE:
+  reviewer_bundle> Finding B at same anchor with different severity text.
+CURRENT_CODE:
+  total = a + b
+SUGGESTED_APPROACH:
+  Apply fix B.
+=== END ISSUE 002 ===

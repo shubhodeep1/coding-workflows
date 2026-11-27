@@ -1,0 +1,2 @@
+<!-- changelog: fixed -->
+- **Consumer secret propagation no longer glob-expands its target list.** `scripts/propagate_consumer_secrets.sh` now splits `PROPAGATE_TARGETS` on whitespace without pathname expansion, so a token such as `*` or `*/*` reaches the owner/repo slug and registry validation as written instead of being silently replaced by file names from the repository root. The whitespace-separated semantics, the empty-input fallback to every registry entry and the slug and registry validation are unchanged (SHELL-001, workflow-optimization-2026-10-08). Refs #9099.

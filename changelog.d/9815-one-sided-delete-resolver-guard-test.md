@@ -1,0 +1,2 @@
+<!-- changelog: changed -->
+- New tests pin the conflict resolver's guard for a workflow file that one side of a merge deleted and the other modified. A resolver that leaves such a file in place and unchanged still fails with "keep or delete it explicitly", and one that deletes it passes and gets its `[ai-merge-resolve]` merge commit. The prompt and keep-line fix that lets the resolver keep the file comes separately.

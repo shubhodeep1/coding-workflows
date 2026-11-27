@@ -1,0 +1,701 @@
+#!/usr/bin/env python3
+"""Contract tests for workflow-local gh_retry fallback shims."""
+
+from __future__ import annotations
+
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import textwrap
+import time
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+COMPREHENSIVE_RELEASE_GH_API_HELPER = REPO_ROOT / "scripts" / "comprehensive_test_and_release_gh_api.sh"
+DISPATCH_WATCH_HELPER = REPO_ROOT / "scripts" / "dispatch_and_watch_workflow_run.sh"
+SOURCE_LINE = 'source scripts/gh_helpers.sh 2>/dev/null || true'
+# clarify.yml sources the verified support bundle copy (stuck-states plan P2a);
+# the `:-scripts` default keeps the kill-switch path identical to SOURCE_LINE.
+SUPPORT_SOURCE_LINE = 'source "${SUPPORT_SCRIPTS_DIR:-scripts}/gh_helpers.sh" 2>/dev/null || true'
+SOURCE_LINES = (SOURCE_LINE, SUPPORT_SOURCE_LINE)
+FALLBACK_LINE = 'type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }'
+SAFE_GH_JQ_LINE = 'type _safe_gh_jq >/dev/null 2>&1 || _safe_gh_jq() {'
+TARGET_STEPS = (
+	(".github/workflows/clarify.yml", "Fetch issue metadata"),
+	(".github/workflows/clarify.yml", "Fetch issue comments"),
+	(".github/workflows/clarify.yml", "Post clarification questions"),
+	(".github/workflows/clarify.yml", "Comment on issue failure"),
+	(".github/workflows/cancel_on_pr_close.yml", "Cancel queued/in-progress runs for closed PR branch"),
+	(".github/workflows/mark-stable.yml", "Notify consumer repos via repository_dispatch"),
+	(".github/workflows/orchestrate_poll.yml", "Find active tracking issues"),
+	(".github/workflows/plan.yml", "Fetch issue metadata"),
+	(".github/workflows/plan.yml", "Fetch issue comments"),
+	(".github/workflows/plan.yml", "Skip when issue already has a PR"),
+	(".github/workflows/plan.yml", "Comment on issue failure"),
+	(".github/workflows/orchestrate.yml", "Create tracking issue"),
+	(".github/workflows/orchestrate_clarify_respond.yml", "Fetch issue and tracking context"),
+	(".github/workflows/orchestrate_clarify_respond.yml", "Comment on issue failure"),
+)
+SAFE_FETCH_STEPS = (
+	(".github/workflows/orchestrate.yml", "Create integration branch"),
+)
+BOOTSTRAPPED_GH_HELPER_WORKFLOWS = (
+	".github/workflows/cancel_on_pr_close.yml",
+	".github/workflows/orchestrate_poll.yml",
+)
+
+
+def _write_executable(path: Path, content: str) -> None:
+	path.write_text(content, encoding="utf-8")
+	path.chmod(0o755)
+
+
+def _run_comprehensive_release_helper(
+	*,
+	gh_script: str,
+	shell_body: str,
+	sleep_script: str | None = None,
+) -> tuple[subprocess.CompletedProcess[str], str, str]:
+	with tempfile.TemporaryDirectory() as tempdir_name:
+		tempdir = Path(tempdir_name)
+		bin_dir = tempdir / "bin"
+		count_file = tempdir / "gh-count.txt"
+		sleep_log_file = tempdir / "sleep.log"
+		bin_dir.mkdir()
+		_write_executable(bin_dir / "gh", gh_script)
+		_write_executable(
+			bin_dir / "sleep",
+			sleep_script
+			or "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"${TEST_SLEEP_LOG_FILE}\"\n",
+		)
+		env = os.environ.copy()
+		env.update(
+			{
+				"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
+				"TEST_RELEASE_HELPER_PATH": str(COMPREHENSIVE_RELEASE_GH_API_HELPER),
+				"TEST_GH_COUNT_FILE": str(count_file),
+				"TEST_SLEEP_LOG_FILE": str(sleep_log_file),
+			}
+		)
+		command = textwrap.dedent(
+			f"""\
+			source \"${{TEST_RELEASE_HELPER_PATH}}\"
+			{shell_body}
+			"""
+		)
+		result = subprocess.run(
+			["bash", "-lc", command],
+			capture_output=True,
+			check=False,
+			cwd=REPO_ROOT,
+			env=env,
+			text=True,
+		)
+		gh_count = count_file.read_text(encoding="utf-8") if count_file.exists() else ""
+		sleep_log = sleep_log_file.read_text(encoding="utf-8") if sleep_log_file.exists() else ""
+		return result, gh_count, sleep_log
+
+
+def _workflow_text(relative_path: str) -> str:
+	return (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+
+
+def _dispatch_watch_helper_text() -> str:
+	return DISPATCH_WATCH_HELPER.read_text(encoding="utf-8")
+
+
+def _step_block(text: str, step_name: str) -> str:
+	marker = f"- name: {step_name}"
+	start = text.find(marker)
+	assert start != -1, f"Missing workflow step: {step_name}"
+	next_step = text.find("\n      - name:", start + len(marker))
+	if next_step == -1:
+		return text[start:]
+	return text[start:next_step]
+
+
+def _step_lines(relative_path: str, step_name: str) -> list[str]:
+	return _step_block(_workflow_text(relative_path), step_name).splitlines()
+
+
+def test_targeted_optional_source_blocks_define_local_gh_retry_fallback() -> None:
+	for relative_path, step_name in TARGET_STEPS:
+		lines = _step_lines(relative_path, step_name)
+		source_idx = next((i for i, line in enumerate(lines) if any(source_line in line for source_line in SOURCE_LINES)), -1)
+		fallback_idx = next((i for i, line in enumerate(lines) if FALLBACK_LINE in line), -1)
+		call_idx = next(
+			(
+				i
+				for i, line in enumerate(lines)
+				if "gh_retry" in line and FALLBACK_LINE not in line
+			),
+			-1,
+		)
+
+		assert source_idx != -1, f"{relative_path} :: {step_name} must keep optional gh_helpers sourcing"
+		assert fallback_idx != -1, f"{relative_path} :: {step_name} must define the gh_retry fallback shim"
+		assert fallback_idx == source_idx + 1, (
+			f"{relative_path} :: {step_name} must place the gh_retry fallback immediately after the optional source"
+		)
+		assert call_idx != -1, f"{relative_path} :: {step_name} must still call gh_retry"
+		assert fallback_idx < call_idx, (
+			f"{relative_path} :: {step_name} must define the fallback before its first gh_retry call"
+		)
+
+
+def test_targeted_gh_retry_only_blocks_do_not_define_safe_gh_jq() -> None:
+	for relative_path, step_name in TARGET_STEPS:
+		block = _step_block(_workflow_text(relative_path), step_name)
+		assert SAFE_GH_JQ_LINE not in block, (
+			f"{relative_path} :: {step_name} should stay gh_retry-only and not add an unused _safe_gh_jq shim"
+		)
+
+
+def test_safe_fetch_steps_define_canonical_safe_gh_jq_fallback() -> None:
+	for relative_path, step_name in SAFE_FETCH_STEPS:
+		block = _step_block(_workflow_text(relative_path), step_name)
+
+		assert any(source_line in block for source_line in SOURCE_LINES)
+		assert FALLBACK_LINE in block
+		assert SAFE_GH_JQ_LINE in block
+		assert 'if ! _tmpf=$(mktemp "${TMPDIR:-/tmp}/_safe_gh_jq.XXXXXX" 2>/dev/null); then' in block
+		assert 'echo "::error::_safe_gh_jq: failed to create temp file (mktemp failed); aborting without running: $*" >&2' in block
+		assert 'if gh api "$@" > "${_tmpf}"; then' in block
+		assert 'type _safe_gh_jq >/dev/null 2>&1 || _safe_gh_jq() { gh api "$@"; }' not in block
+		assert 'if gh api "$@" > "${_tmpf}" 2>/dev/null; then' not in block
+		assert (
+			'DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}" --jq \'.default_branch\')"'
+		) in block
+		assert (
+			'BASE_SHA="$(gh_retry _safe_gh_jq "repos/${{ github.repository }}/git/ref/heads/${DEFAULT_BRANCH_REF}" --jq \'.object.sha\')"'
+		) in block
+
+
+def test_bootstrapped_gh_retry_workflows_require_staged_helper_with_main_fallback() -> None:
+	for relative_path in BOOTSTRAPPED_GH_HELPER_WORKFLOWS:
+		text = _workflow_text(relative_path)
+		fallback_step = (
+			"Checkout workflow support source fallback for gh retry"
+			if relative_path.endswith("orchestrate_poll.yml")
+			else "Checkout workflow support source fallback"
+		)
+		fallback_block = _step_block(text, fallback_step)
+		assert "path: .codex-workflow-src" in text, (
+			f"{relative_path} must stage the workflow support checkout before sourcing gh_helpers.sh"
+		)
+		assert "continue-on-error: true" in fallback_block, (
+			f"{relative_path} must keep the fallback checkout non-fatal until the explicit ensure step runs"
+		)
+		assert "if [ ! -d .codex-workflow-src ]; then" in text, (
+			f"{relative_path} must fail if the workflow support checkout is unavailable"
+		)
+		assert "path: .codex-workflow-src-main" in text, (
+			f"{relative_path} must keep the main-snapshot fallback for gh_helpers.sh staging"
+		)
+		assert 'src=".codex-workflow-src/scripts/gh_helpers.sh"' in text, (
+			f"{relative_path} must stage gh_helpers.sh from the workflow support checkout"
+		)
+		assert 'if [ ! -f "${src}" ] && [ -f ".codex-workflow-src-main/scripts/gh_helpers.sh" ]; then' in text, (
+			f"{relative_path} must fall back to the main snapshot when the primary gh_helpers.sh is absent"
+		)
+		assert '::error::Missing required support script gh_helpers.sh' in text, (
+			f"{relative_path} must hard-fail when gh_helpers.sh cannot be staged"
+		)
+
+
+def test_dispatch_watcher_registration_poll_prefers_id_delta_and_uses_created_window_only_as_fallback() -> None:
+	text = _dispatch_watch_helper_text()
+	baseline_flag = 'PRE_RUN_ID_LOOKUP_OK="false"'
+	baseline_query = 'runs?event=workflow_dispatch&per_page=1'
+	normal_query = 'runs?event=workflow_dispatch&per_page=10'
+	normal_filter = '[.workflow_runs[] | select(.id > ${PRE_RUN_ID})] | sort_by(.created_at) | last | .id // empty'
+	fallback_epoch = 'REGISTRATION_WINDOW_FALLBACK_EPOCH="$(( REGISTRATION_WINDOW_START_EPOCH - 1 ))"'
+	fallback_query = 'runs?event=workflow_dispatch&created=>${REGISTRATION_WINDOW_FALLBACK_UTC}&per_page=10'
+	legacy_query = 'runs?event=workflow_dispatch&created=>${REGISTRATION_WINDOW_START_UTC}&per_page=10'
+	lookup_branch = 'if [ "${PRE_RUN_ID_LOOKUP_OK}" = "true" ]; then'
+	dispatch_call = 'if ! dispatch_workflow; then'
+
+	assert baseline_flag in text and baseline_query in text, (
+		"scripts/dispatch_and_watch_workflow_run.sh must track whether the baseline PRE_RUN_ID snapshot succeeded "
+		"before it chooses the registration lookup path."
+	)
+	assert normal_query in text and normal_filter in text and lookup_branch in text, (
+		"scripts/dispatch_and_watch_workflow_run.sh must use the id > PRE_RUN_ID registration query on the normal path."
+	)
+	assert fallback_epoch in text and fallback_query in text, (
+		"scripts/dispatch_and_watch_workflow_run.sh must keep a one-second-earlier created-window fallback for degraded PRE_RUN_ID lookups."
+	)
+	assert legacy_query not in text, (
+		"scripts/dispatch_and_watch_workflow_run.sh must not apply the strict created-window filter on the normal registration path."
+	)
+	assert text.index(fallback_epoch) < text.index(dispatch_call) < text.index(fallback_query), (
+		"scripts/dispatch_and_watch_workflow_run.sh must capture the fallback registration window before dispatching and only use it in the degraded path."
+	)
+
+
+def test_comprehensive_release_helper_retries_rate_limit_once_and_returns_retry_output() -> None:
+	gh_script = textwrap.dedent(
+		"""\
+		#!/usr/bin/env bash
+		count="$(cat \"${TEST_GH_COUNT_FILE}\" 2>/dev/null || echo 0)"
+		count=$((count + 1))
+		printf '%s' "${count}" > "${TEST_GH_COUNT_FILE}"
+		if [ "${count}" -eq 1 ]; then
+			echo "secondary rate limit" >&2
+			exit 1
+		fi
+		printf 'success payload'
+		"""
+	)
+	result, gh_count, sleep_log = _run_comprehensive_release_helper(
+		gh_script=gh_script,
+		shell_body=textwrap.dedent(
+			"""\
+			gh_api_safe "repos/example/repo"
+			status=$?
+			printf 'status=%s\n' "${status}"
+			printf 'output=%s\n' "${GH_API_SAFE_OUTPUT}"
+			printf 'backoff=%s\n' "${RATE_LIMIT_BACKOFF}"
+			exit "${status}"
+			"""
+		),
+	)
+
+	assert result.returncode == 0
+	assert result.stdout == "status=0\noutput=success payload\nbackoff=0\n"
+	assert result.stderr == ""
+	assert gh_count == "2"
+	assert sleep_log == "30\n"
+
+
+def test_comprehensive_release_helper_stops_after_max_attempts_on_rate_limit() -> None:
+	gh_script = textwrap.dedent(
+		"""\
+		#!/usr/bin/env bash
+		count="$(cat \"${TEST_GH_COUNT_FILE}\" 2>/dev/null || echo 0)"
+		count=$((count + 1))
+		printf '%s' "${count}" > "${TEST_GH_COUNT_FILE}"
+		echo "secondary rate limit" >&2
+		exit 1
+		"""
+	)
+	result, gh_count, sleep_log = _run_comprehensive_release_helper(
+		gh_script=gh_script,
+		shell_body=textwrap.dedent(
+			"""\
+			gh_api_safe "repos/example/repo"
+			status=$?
+			printf 'status=%s\n' "${status}"
+			printf 'output=%s\n' "${GH_API_SAFE_OUTPUT}"
+			printf 'backoff=%s\n' "${RATE_LIMIT_BACKOFF}"
+			exit "${status}"
+			"""
+		),
+	)
+
+	assert result.returncode == 1
+	assert result.stdout == "status=1\noutput=\nbackoff=120\n"
+	assert result.stderr == ""
+	assert gh_count == "4"
+	assert sleep_log == "30\n60\n120\n"
+
+
+def test_comprehensive_release_helper_quiet_mode_retries_rate_limit_once_without_reporting() -> None:
+	gh_script = textwrap.dedent(
+		"""\
+		#!/usr/bin/env bash
+		count="$(cat \"${TEST_GH_COUNT_FILE}\" 2>/dev/null || echo 0)"
+		count=$((count + 1))
+		printf '%s' "${count}" > "${TEST_GH_COUNT_FILE}"
+		if [ "${count}" -eq 1 ]; then
+			echo "secondary rate limit" >&2
+			exit 1
+		fi
+		printf 'success payload'
+		"""
+	)
+	result, gh_count, sleep_log = _run_comprehensive_release_helper(
+		gh_script=gh_script,
+		shell_body=textwrap.dedent(
+			"""\
+			gh_api_safe_quiet "repos/example/repo"
+			status=$?
+			printf 'status=%s\n' "${status}"
+			printf 'output=%s\n' "${GH_API_SAFE_OUTPUT}"
+			printf 'backoff=%s\n' "${RATE_LIMIT_BACKOFF}"
+			exit "${status}"
+			"""
+		),
+	)
+
+	assert result.returncode == 0
+	assert result.stdout == "status=0\noutput=success payload\nbackoff=0\n"
+	assert result.stderr == ""
+	assert gh_count == "2"
+	assert sleep_log == "30\n"
+
+
+def test_comprehensive_release_helper_non_rate_limit_failure_keeps_existing_reporting() -> None:
+	gh_script = textwrap.dedent(
+		"""\
+		#!/usr/bin/env bash
+		count="$(cat \"${TEST_GH_COUNT_FILE}\" 2>/dev/null || echo 0)"
+		count=$((count + 1))
+		printf '%s' "${count}" > "${TEST_GH_COUNT_FILE}"
+		echo "boom failure" >&2
+		exit 1
+		"""
+	)
+	result, gh_count, sleep_log = _run_comprehensive_release_helper(
+		gh_script=gh_script,
+		shell_body='gh_api_safe "repos/example/repo"',
+	)
+
+	assert result.returncode == 1
+	assert result.stdout == "::error::gh api call failed: repos/example/repo\n"
+	assert result.stderr == "boom failure\n"
+	assert gh_count == "1"
+	assert sleep_log == ""
+
+
+def test_comprehensive_release_helper_quiet_mode_suppresses_non_rate_limit_reporting() -> None:
+	gh_script = textwrap.dedent(
+		"""\
+		#!/usr/bin/env bash
+		count="$(cat \"${TEST_GH_COUNT_FILE}\" 2>/dev/null || echo 0)"
+		count=$((count + 1))
+		printf '%s' "${count}" > "${TEST_GH_COUNT_FILE}"
+		echo "boom failure" >&2
+		exit 1
+		"""
+	)
+	result, gh_count, sleep_log = _run_comprehensive_release_helper(
+		gh_script=gh_script,
+		shell_body='gh_api_safe_quiet "repos/example/repo"',
+	)
+
+	assert result.returncode == 1
+	assert result.stdout == ""
+	assert result.stderr == ""
+	assert gh_count == "1"
+	assert sleep_log == ""
+
+
+def main() -> int:
+	tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	for test in tests:
+		test()
+	print(f"{len(tests)} passed")
+	return 0
+
+
+
+# ---------------------------------------------------------------------------
+# gh_api_retry migration contract (issue #5873, re-issued as #6634).
+# ---------------------------------------------------------------------------
+
+GH_API_RETRY_BOOTSTRAP_WORKFLOWS = (
+	"review_autofix.yml",
+	"validate.yml",
+	"implement.yml",
+	"orchestrate_clarify_respond.yml",
+	"security-audit.yml",
+)
+GH_API_RETRY_SHIM = (
+	'source "${GH_API_RETRY_HELPERS:-/dev/null}" 2>/dev/null || true\n',
+	'type gh_api_retry >/dev/null 2>&1 || gh_api_retry() { while [ "${1:-}" = --idempotent ] '
+	'|| [ "${1:-}" = --optional ]; do shift; done; gh api "$@"; }\n',
+)
+GH_API_RETRY_MIGRATED_STEPS = {
+	"review_autofix.yml": ("Resolve trusted review support commit", "Evaluate review gate"),
+	"validate.yml": ("Authorize explicit validation target",),
+	"implement.yml": ("Precheck approval phase label", "Safety check for existing PR", "Fetch issue comments"),
+	"orchestrate_clarify_respond.yml": ("Check orchestrator metadata",),
+	"security-audit.yml": ("Resolve trusted audit support commit", "Resolve audit target"),
+	"review_autofix_sweep.yml": ("Enumerate open PRs and dispatch internal-review.yml",),
+}
+
+
+def _gh_api_retry_step(text: str, name: str) -> str:
+	marker = f"      - name: {name}\n"
+	assert text.count(marker) == 1, name
+	start = text.index(marker)
+	end = text.find("\n      - name: ", start + len(marker))
+	return text[start:] if end < 0 else text[start:end]
+
+
+def _gh_api_retry_workflow(name: str) -> str:
+	# review_autofix.yml step bodies moved to scripts/ are read inlined again (#6972).
+	if name == "review_autofix.yml":
+		return expanded_review_autofix_text()
+	return (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
+
+
+def test_gh_api_retry_bootstrap_step_is_identical_and_precedes_migrated_steps() -> None:
+	bodies = set()
+	for name in GH_API_RETRY_BOOTSTRAP_WORKFLOWS:
+		text = _gh_api_retry_workflow(name)
+		step = _gh_api_retry_step(text, "Bootstrap GitHub API retry helper")
+		bodies.add(step)
+		boot_at = text.index("      - name: Bootstrap GitHub API retry helper\n")
+		for migrated in GH_API_RETRY_MIGRATED_STEPS[name]:
+			assert boot_at < text.index(f"      - name: {migrated}\n"), (name, migrated)
+		assert "continue-on-error: true" in step
+		# Trusted refs only: main here, stable in consumers; never a PR head.
+		assert 'ghr_ref=stable' in step and 'ghr_ref=main' in step
+		assert "https://github.com/shubhodeep1/coding-workflows" in step
+		assert "show HEAD:scripts/emit_event.sh" in step
+		assert "grep -q '^gh_api_retry()'" in step
+		assert "x-access-token:%s" in step and "@github.com" not in step
+	assert len(bodies) == 1
+
+
+def test_gh_api_retry_bootstrap_script_parses() -> None:
+	step = _gh_api_retry_step(_gh_api_retry_workflow("validate.yml"), "Bootstrap GitHub API retry helper")
+	body = step.split("        run: |\n", 1)[1]
+	script = textwrap.dedent(body)
+	subprocess.run(["bash", "-n"], input=script, text=True, check=True)
+
+
+def test_gh_api_retry_migrated_steps_carry_the_shim() -> None:
+	for name, steps in GH_API_RETRY_MIGRATED_STEPS.items():
+		text = _gh_api_retry_workflow(name)
+		for step_name in steps:
+			step = _gh_api_retry_step(text, step_name)
+			flat = "\n".join(line.strip() for line in step.splitlines()) + "\n"
+			if name == "review_autofix_sweep.yml":
+				assert "source scripts/gh_helpers.sh" in step
+				assert GH_API_RETRY_SHIM[1].strip() in flat
+			else:
+				for line in GH_API_RETRY_SHIM:
+					assert line.strip() in flat, (name, step_name)
+			assert "gh_api_retry " in step, (name, step_name)
+
+
+def test_gate_pr_read_fails_loudly_instead_of_skipping() -> None:
+	step = _gh_api_retry_step(_gh_api_retry_workflow("review_autofix.yml"), "Evaluate review gate")
+	assert 'if _pr_gate="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}"' not in step
+	assert '_pr_gate="$(gh_api_retry "repos/${REPOSITORY}/pulls/${PR_NUMBER}"' in step
+	assert "::error::AUTOFIX_GATE_PR_READ_FAILED pr=${PR_NUMBER} rc=${_pr_gate_rc}" in step
+
+
+def test_validate_authorize_and_resolvers_distinguish_api_failures() -> None:
+	validate = _gh_api_retry_workflow("validate.yml")
+	authorize = _gh_api_retry_step(validate, "Authorize explicit validation target")
+	assert '"repos/${GITHUB_REPOSITORY}/pulls")" || exit 1' not in authorize
+	assert "VALIDATE_AUTHORIZE_TARGET outcome=api_unavailable" in authorize
+	for name in ("validate.yml", "implement.yml"):
+		resolve = _gh_api_retry_step(_gh_api_retry_workflow(name), "Resolve integration ref")
+		assert "INTEGRATION_REF_RESOLVE outcome=rate_limited" in resolve
+		assert 'if [ "${resolver_rc}" -eq 75 ]; then' in resolve
+	safety = _gh_api_retry_step(_gh_api_retry_workflow("implement.yml"), "Safety check for existing PR")
+	assert "            ' || true)\"" not in safety
+	assert "@base64)\"' || true)\"" not in safety
+	assert safety.count("IMPLEMENT_PR_SAFETY_CHECK outcome=api_unavailable") == 2
+
+
+def test_sweep_snapshot_failure_is_not_no_active_runs() -> None:
+	step = _gh_api_retry_step(_gh_api_retry_workflow("review_autofix_sweep.yml"), "Enumerate open PRs and dispatch internal-review.yml")
+	assert 'gh api --paginate -X GET "repos/${REPOSITORY}/actions/workflows/' not in step
+	assert 'gh_api_retry --paginate -X GET "repos/${REPOSITORY}/actions/workflows/${workflow}/runs"' in step
+	assert "active_snapshot_incomplete=true" in step
+	assert "reason=active_snapshot_incomplete" in step
+	assert "snapshot_incomplete=${active_snapshot_incomplete}" in step
+
+
+SWEEP_DISPATCH_STEP = "Enumerate open PRs and dispatch internal-review.yml"
+
+
+def _sweep_dispatch_step() -> str:
+	return _gh_api_retry_step(_gh_api_retry_workflow("review_autofix_sweep.yml"), SWEEP_DISPATCH_STEP)
+
+
+def test_sweep_snapshot_parse_failure_is_not_no_active_runs() -> None:
+	step = _sweep_dispatch_step()
+	if_at = step.index('if snapshot_json="$(')
+	else_at = step.index("\n            else\n", if_at)
+	fi_at = step.index("\n            fi", else_at)
+	else_body = step[else_at + len("\n            else\n"):fi_at]
+	statements = [line.strip() for line in else_body.splitlines() if line.strip() and not line.strip().startswith("#")]
+	# $? must be read before any other statement overwrites it.
+	assert statements[0] == "snap_parse_rc=$?", statements
+	assert "snapshot_json='{}'" in statements
+	assert "active_snapshot_incomplete=true" in statements
+	warning = [s for s in statements if "AUTOFIX_SWEEP_SNAPSHOT_INCOMPLETE" in s]
+	assert warning == [
+		'echo "::warning::AUTOFIX_SWEEP_SNAPSHOT_INCOMPLETE workflow=${workflow} status=parse rc=${snap_parse_rc}"'
+	], warning
+	# Never log raw API content.
+	assert "snap_raw" not in warning[0] and "snapshot_json" not in warning[0]
+	assert step.index("local snap_parse_rc") < if_at
+
+
+def _run_sweep_snapshot_with_listing(listing: str) -> subprocess.CompletedProcess[str]:
+	step = _sweep_dispatch_step()
+	start = step.index("active_snapshot_incomplete=false")
+	end = step.index("for wf in internal-review.yml review_autofix.yml; do", start)
+	body = step[start:end]
+	with tempfile.TemporaryDirectory() as tempdir:
+		script = "\n".join(
+			(
+				"declare -A active_review_runs=()",
+				"sweep_default_branch=main",
+				"REPOSITORY=o/r",
+				"READ_TOKEN=x",
+				"SWEEP_STALE_QUEUED_MINUTES=0",
+				f"RUNNER_TEMP={tempdir}",
+				f"gh_api_retry() {{ printf '%s' '{listing}'; }}",
+				body,
+				"snapshot_active_review_runs internal-review.yml",
+				'echo "FLAG=${active_snapshot_incomplete}"',
+			)
+		)
+		return subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True, text=True, check=False)
+
+
+def test_sweep_snapshot_parse_failure_marks_incomplete_behaviour() -> None:
+	# Fail loudly instead of passing silently when the tools are missing.
+	assert shutil.which("jq") is not None, "jq is required for the sweep snapshot behavioural test"
+	assert shutil.which("bash") is not None, "bash is required for the sweep snapshot behavioural test"
+	truncated = _run_sweep_snapshot_with_listing('{"workflow_runs":[')
+	assert truncated.returncode == 0, truncated.stderr
+	assert "FLAG=true" in truncated.stdout, truncated.stdout
+	assert "AUTOFIX_SWEEP_SNAPSHOT_INCOMPLETE workflow=internal-review.yml status=parse rc=" in truncated.stdout
+	assert "status=parse rc=0" not in truncated.stdout
+	assert "workflow_runs" not in truncated.stdout
+	# Control: a valid empty listing is still "no active runs".
+	empty = _run_sweep_snapshot_with_listing('{"workflow_runs":[]}')
+	assert empty.returncode == 0, empty.stderr
+	assert "FLAG=false" in empty.stdout, empty.stdout
+	assert "status=parse" not in empty.stdout
+
+
+# ---------------------------------------------------------------------------
+# implement.yml "Fetch issue comments" waits out a rate limit (issue #9858).
+# ---------------------------------------------------------------------------
+
+IMPLEMENT_FETCH_COMMENTS_STEP = "Fetch issue comments"
+IMPLEMENT_FETCH_COMMENTS_READ = (
+	'gh_api_retry --paginate "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments?per_page=100"'
+)
+IMPLEMENT_FETCH_COMMENTS_READ_ERROR = "::error::Unable to read issue comments (GitHub API unavailable or rate-limited)."
+IMPLEMENT_FETCH_COMMENTS_APPROVAL_ERROR = "Unable to fetch triggering approval comment from issue comments."
+
+# Fake gh: rate limited until the simulated clock (real time plus the offset
+# in FAKE_CLOCK) reaches FAKE_RESET; `gh api rate_limit` reports FAKE_RESET.
+_FAKE_RATE_LIMITED_GH = """#!/usr/bin/env bash
+if [ "${1:-}" = api ] && [ "${2:-}" = rate_limit ]; then
+	printf '%s\\n' "${FAKE_RESET}"
+	exit 0
+fi
+now=$(( $(date +%s) + $(cat "${FAKE_CLOCK}") ))
+if [ "${now}" -lt "${FAKE_RESET}" ]; then
+	echo "gh: API rate limit exceeded for user ID 1. (HTTP 403)" >&2
+	exit 1
+fi
+cat "${FAKE_COMMENTS_FILE}"
+"""
+
+
+def _implement_fetch_comments_step() -> str:
+	return _gh_api_retry_step(_gh_api_retry_workflow("implement.yml"), IMPLEMENT_FETCH_COMMENTS_STEP)
+
+
+def _run_implement_fetch_issue_comments(*, reset_offset: int, comments_json: str, approval_id: str) -> tuple[subprocess.CompletedProcess[str], str, str]:
+	assert shutil.which("jq") is not None, "jq is required for the implement fetch-comments behavioural test"
+	assert shutil.which("bash") is not None, "bash is required for the implement fetch-comments behavioural test"
+	body = textwrap.dedent(_implement_fetch_comments_step().split("        run: |\n", 1)[1])
+	body = body.replace("${{ github.repository }}", "o/r")
+	with tempfile.TemporaryDirectory() as tempdir_name:
+		return _run_implement_fetch_issue_comments_in(Path(tempdir_name), body, reset_offset=reset_offset, comments_json=comments_json, approval_id=approval_id)
+
+
+def _run_implement_fetch_issue_comments_in(tempdir: Path, body: str, *, reset_offset: int, comments_json: str, approval_id: str) -> tuple[subprocess.CompletedProcess[str], str, str]:
+	bin_dir = tempdir / "bin"
+	bin_dir.mkdir()
+	_write_executable(bin_dir / "gh", _FAKE_RATE_LIMITED_GH)
+	clock = tempdir / "clock"
+	clock.write_text("0", encoding="utf-8")
+	comments_src = tempdir / "comments_src.json"
+	comments_src.write_text(comments_json, encoding="utf-8")
+	comments_file = tempdir / "c.json"
+	env = {
+		k: v
+		for k, v in os.environ.items()
+		if not k.startswith(("TG_", "GH_RETRY", "GH_API_RETRY", "PERSIST_JOURNAL"))
+	}
+	env.update(
+		{
+			"PATH": f"{bin_dir}{os.pathsep}{env.get('PATH', '')}",
+			"GH_API_RETRY_HELPERS": str(REPO_ROOT / "scripts" / "gh_helpers.sh"),
+			"ISSUE_NUMBER": "1",
+			"ISSUE_COMMENTS_FILE": str(comments_file),
+			"APPROVAL_COMMENT_ID": approval_id,
+			"TMPDIR": str(tempdir),
+			"GH_RATE_LIMIT_BREAKER_FILE": str(tempdir / "breaker"),
+			"PYTHONDONTWRITEBYTECODE": "1",
+			"FAKE_CLOCK": str(clock),
+			"FAKE_RESET": str(int(time.time()) + reset_offset),
+			"FAKE_COMMENTS_FILE": str(comments_src),
+		}
+	)
+	# Simulated clock: sleeping only moves FAKE_CLOCK forward.
+	prefix = 'sleep() { echo $(( $(cat "${FAKE_CLOCK}") + $1 )) > "${FAKE_CLOCK}"; }\n'
+	result = subprocess.run(["bash", "-c", prefix + body], env=env, capture_output=True, text=True, check=False, cwd=tempdir)
+	output = result.stdout + result.stderr
+	comments_text = comments_file.read_text(encoding="utf-8") if comments_file.exists() else ""
+	return result, comments_text, output
+
+
+def test_implement_fetch_issue_comments_uses_gh_api_retry_and_keeps_stderr() -> None:
+	step = _implement_fetch_comments_step()
+	assert IMPLEMENT_FETCH_COMMENTS_READ in step
+	assert 'gh api --paginate "repos/${{ github.repository }}/issues/${ISSUE_NUMBER}/comments' not in step
+	assert "} 2>/dev/null; then" not in step
+	assert IMPLEMENT_FETCH_COMMENTS_READ_ERROR in step
+	assert IMPLEMENT_FETCH_COMMENTS_APPROVAL_ERROR in step
+
+
+def test_implement_fetch_issue_comments_waits_out_primary_rate_limit() -> None:
+	comments = '[{"id": 7, "body": "hi"}, {"id": 42, "body": "/approved"}]'
+	result, comments_text, output = _run_implement_fetch_issue_comments(reset_offset=300, comments_json=comments, approval_id="42")
+	assert result.returncode == 0, output
+	ids = [c["id"] for c in json.loads(comments_text)]
+	assert 42 in ids
+	assert "GH_API_RETRY outcome=retry kind=primary bucket=core" in result.stderr, output
+
+
+def test_implement_fetch_issue_comments_reports_read_failure_separately() -> None:
+	# Reset beyond the helper's 600 s maximum wait: every read fails.
+	result, _, output = _run_implement_fetch_issue_comments(reset_offset=5000, comments_json="[]", approval_id="42")
+	assert result.returncode == 1, output
+	assert IMPLEMENT_FETCH_COMMENTS_READ_ERROR in output
+	assert IMPLEMENT_FETCH_COMMENTS_APPROVAL_ERROR in output
+	assert "outcome=gave_up" in result.stderr, output
+	# Control: the read works but the approval comment is absent.
+	result, _, output = _run_implement_fetch_issue_comments(reset_offset=-100, comments_json='[{"id": 7, "body": "hi"}]', approval_id="42")
+	assert result.returncode == 1, output
+	assert IMPLEMENT_FETCH_COMMENTS_APPROVAL_ERROR in output
+	assert IMPLEMENT_FETCH_COMMENTS_READ_ERROR not in output
+
+
+def test_idempotent_marker_never_rides_on_creates() -> None:
+	offenders = []
+	for path in list((REPO_ROOT / "scripts").glob("*.sh")) + list((REPO_ROOT / ".github" / "workflows").glob("*.yml")):
+		for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+			if "GH_RETRY_IDEMPOTENT=true" not in line:
+				continue
+			if any(token in line for token in ("gh issue create", "gh pr create", "gh issue comment", "gh pr comment", "/comments", "gh release create")):
+				offenders.append(f"{path.name}:{number}")
+	assert offenders == []
+
+if __name__ == "__main__":
+	raise SystemExit(main())

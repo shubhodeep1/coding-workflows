@@ -1,0 +1,5719 @@
+#!/usr/bin/env bash
+# validate_process.sh — Generate and execute runtime validation harness.
+#
+# Required env vars:
+#   RUNTIME_DIR, GH_TOKEN, OPENROUTER_API_KEY, GITHUB_REPOSITORY
+#
+# Optional env vars:
+#   TRACKING_ISSUE, VALIDATION_TIMEOUT, TOOL_CALL_BUDGET_VALIDATE,
+#   MODEL_EDITOR, MODEL_REASONING_EFFORT,
+#   TG_BOT_SECRET, TG_ADMIN_CHAT_ID,
+#   VALIDATION_COMPOSE_FILE, VALIDATION_USE_TEMPLATES,
+#   VALIDATION_TEST_USERNAME, VALIDATION_TEST_PASSWORD, VALIDATION_TEST_API_KEY,
+#   WRITE_GUARDS_ENABLED,
+#   VALIDATE_PREFLIGHT_PYFLAKES_ENABLED, VALIDATE_PREFLIGHT_PYFLAKES_RULES
+
+set -euo pipefail
+# Signed job-token comments (run-volume plan item 15): route this script's
+# gh comment calls through the shim even when no earlier step loaded it.
+[ -z "${BASH_SOURCE[0]:-}" ] || AI_COMMENT_SIG_ACTIVATE_ONLY=1 source "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" >/dev/null 2>&1 || true
+
+compact_validation_summary_value_bootstrap()
+{
+  local value="${1-}"
+
+  printf '%s' "${value}" | tr '\r\n' '  ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'
+}
+
+quote_validation_summary_json_value_bootstrap()
+{
+  local value="${1-}"
+
+  value="$(compact_validation_summary_value_bootstrap "${value}")"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf '"%s"' "${value}"
+}
+
+emit_validation_failure_summary_bootstrap()
+{
+  local status="${1:-error}"
+  local summary="${2:-Validation bootstrap failure}"
+  local failure_summary="${3:-${summary}}"
+  local raw_status="${4:-${status}}"
+  local compact_summary=""
+  local compact_failure_summary=""
+  local repository_json='""'
+  local summary_json='""'
+  local failure_summary_json='""'
+
+  compact_summary="$(compact_validation_summary_value_bootstrap "${summary}")"
+  compact_failure_summary="$(compact_validation_summary_value_bootstrap "${failure_summary}")"
+  if [ -z "${compact_failure_summary}" ]; then
+    compact_failure_summary="${compact_summary}"
+  fi
+
+  repository_json="$(quote_validation_summary_json_value_bootstrap "${GITHUB_REPOSITORY:-}")"
+  summary_json="$(quote_validation_summary_json_value_bootstrap "${compact_summary}")"
+  failure_summary_json="$(quote_validation_summary_json_value_bootstrap "${compact_failure_summary}")"
+
+  printf '%s\n' \
+    "VALIDATION_FAILURE_SUMMARY repository=${repository_json} tracking_issue=${TRACKING_ISSUE_RAW:-${TRACKING_ISSUE:-0}} status=${status} raw_status=${raw_status} cycle=${VALIDATION_CYCLE:-1} run_id=${GITHUB_RUN_ID:-} run_attempt=${GITHUB_RUN_ATTEMPT:-} self_heal_attempt=${SELF_HEAL_ATTEMPT:-0}/${MAX_SELF_HEAL_ATTEMPTS:-2} fix_issues=0 summary=${summary_json} failure_summary=${failure_summary_json}"
+}
+
+require_validation_env_or_emit()
+{
+  local env_name="$1"
+  local env_value="${!env_name-}"
+  local local_failure_summary=""
+
+  if [ -n "${env_value}" ]; then
+    return 0
+  fi
+
+  local_failure_summary="${env_name} is required"
+  printf '%s\n' "${local_failure_summary}" >&2
+  emit_validation_failure_summary_bootstrap "error" "Validation bootstrap failure" "${local_failure_summary}" "harness_error"
+  exit 1
+}
+
+require_validation_env_or_emit "RUNTIME_DIR"
+require_validation_env_or_emit "GH_TOKEN"
+require_validation_env_or_emit "OPENROUTER_API_KEY"
+require_validation_env_or_emit "GITHUB_REPOSITORY"
+if [[ ! "${GITHUB_REPOSITORY}" =~ ^[^/]+/[^/]+$ ]]; then
+  local_failure_summary="GITHUB_REPOSITORY must be in owner/repo format"
+  printf '%s\n' "${local_failure_summary}" >&2
+  emit_validation_failure_summary_bootstrap "error" "Validation bootstrap failure" "${local_failure_summary}" "harness_error"
+  exit 1
+fi
+if ! command -v jq >/dev/null 2>&1; then
+  local_failure_summary="jq is required but not installed"
+  printf '%s\n' "${local_failure_summary}" >&2
+  emit_validation_failure_summary_bootstrap "error" "Validation bootstrap failure" "${local_failure_summary}" "harness_error"
+  exit 1
+fi
+if ! command -v python3 >/dev/null 2>&1; then
+  local_failure_summary="python3 is required but not installed"
+  printf '%s\n' "${local_failure_summary}" >&2
+  emit_validation_failure_summary_bootstrap "error" "Validation bootstrap failure" "${local_failure_summary}" "harness_error"
+  exit 1
+fi
+if ! command -v sha256sum >/dev/null 2>&1; then
+  local_failure_summary="sha256sum is required but not installed"
+  printf '%s\n' "${local_failure_summary}" >&2
+  emit_validation_failure_summary_bootstrap "error" "Validation bootstrap failure" "${local_failure_summary}" "harness_error"
+  exit 1
+fi
+
+_validate_script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=/dev/null
+source "${_validate_script_dir}/write_guard.sh"
+if [ -f "${_validate_script_dir}/emit_event.sh" ]; then
+  # shellcheck disable=SC1091
+  source "${_validate_script_dir}/emit_event.sh" 2>/dev/null || true
+fi
+if ! type emit_event >/dev/null 2>&1; then
+  emit_event()
+  {
+    return 0
+  }
+fi
+if [ -f "${_validate_script_dir}/transcript_archive.sh" ]; then
+  # shellcheck disable=SC1091
+  source "${_validate_script_dir}/transcript_archive.sh" 2>/dev/null || true
+fi
+if ! type archive_transcript >/dev/null 2>&1; then
+  archive_transcript()
+  {
+    return 0
+  }
+fi
+
+TRACKING_ISSUE_RAW="${TRACKING_ISSUE:-0}"
+TRACKING_ISSUE_NUM=0
+if [[ "${TRACKING_ISSUE_RAW}" =~ ^[0-9]+$ ]]; then
+  TRACKING_ISSUE_NUM="${TRACKING_ISSUE_RAW}"
+fi
+
+MODEL_EDITOR="${MODEL_EDITOR:-openai/gpt-6-sol}"
+# Defaults to high to match the repo-wide gpt-6-sol reasoning-level
+# policy and `validate.yml`'s workflow-level `THINKING_LEVEL_VALIDATE ||
+# 'high'`. Earlier revisions defaulted to `medium`/`none`; `none` is
+# not in `scripts/codex_model_catalog.json`'s `supported_reasoning_levels`
+# for the default gpt-6-sol model, so the standalone / local invocation default
+# is kept aligned with the workflow env to avoid silent drift.
+MODEL_REASONING_EFFORT="${MODEL_REASONING_EFFORT:-high}"
+# Discover is a low-volume execution-heavy task (read repo metadata,
+# emit `.ai/validate.yml` hints). It now defaults to `high` to match
+# the repo-wide gpt-6-sol reasoning-level policy; the per-phase override
+# knob is retained so operators can drop discover's level independently
+# of the parent MODEL_REASONING_EFFORT (mirrors the per-phase pattern
+# used in implement.yml — MODEL_REPAIR_REASONING_EFFORT,
+# MODEL_DIAGNOSE_REASONING_EFFORT). The discover step temporarily
+# patches ~/.codex/config.toml before its codex exec call and restores
+# `MODEL_REASONING_EFFORT` after — see the "Validation hint discovery
+# attempt" loop further down.
+MODEL_REASONING_EFFORT_DISCOVER="${MODEL_REASONING_EFFORT_DISCOVER:-high}"
+# `none` is intentionally rejected here: the parent MODEL_REASONING_EFFORT
+# rationale above cites the catalog (`scripts/codex_model_catalog.json`)
+# not advertising `none` for the default gpt-6-sol model, so accepting it for the
+# per-phase override would be inconsistent. To use `none` everywhere,
+# update the catalog first.
+case "${MODEL_REASONING_EFFORT_DISCOVER}" in
+  xhigh|high|medium|low) ;;
+  *)
+    echo "::warning::Invalid MODEL_REASONING_EFFORT_DISCOVER='${MODEL_REASONING_EFFORT_DISCOVER}'. Falling back to 'high'."
+    MODEL_REASONING_EFFORT_DISCOVER="high"
+    ;;
+esac
+CODEX_THREAD_REUSE_ENABLED="${CODEX_THREAD_REUSE_ENABLED:-false}"
+# Export MODEL_EDITOR so child processes (notably scripts/self_heal_validation.sh)
+# see it even when the caller relied on our default fallback. In CI the workflow
+# env: block already exports MODEL_EDITOR, but standalone/local invocations
+# would otherwise lose the default at the env boundary.
+export MODEL_EDITOR
+export CODEX_THREAD_REUSE_ENABLED
+VALIDATION_TIMEOUT="${VALIDATION_TIMEOUT:-15}"
+if ! [[ "${VALIDATION_TIMEOUT}" =~ ^[0-9]+$ ]] || [ "${VALIDATION_TIMEOUT}" -le 0 ]; then
+  local_failure_summary="VALIDATION_TIMEOUT must be a positive integer (got: ${VALIDATION_TIMEOUT})"
+  printf '%s\n' "${local_failure_summary}" >&2
+  emit_validation_failure_summary_bootstrap "error" "Validation configuration error" "${local_failure_summary}" "harness_error"
+  exit 1
+fi
+TOOL_CALL_BUDGET_VALIDATE="${TOOL_CALL_BUDGET_VALIDATE:-60}"
+MAX_CODEX_ATTEMPTS="${MAX_CODEX_ATTEMPTS:-3}"
+if ! [[ "${MAX_CODEX_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_CODEX_ATTEMPTS}" -lt 1 ]; then
+  echo "::warning::MAX_CODEX_ATTEMPTS must be a positive integer (got: ${MAX_CODEX_ATTEMPTS}); defaulting to 3."
+  MAX_CODEX_ATTEMPTS="3"
+fi
+CODEX_RETRY_BACKOFF_BASE_SECS="${CODEX_RETRY_BACKOFF_BASE_SECS:-10}"
+if ! [[ "${CODEX_RETRY_BACKOFF_BASE_SECS}" =~ ^[0-9]+$ ]] || [ "${CODEX_RETRY_BACKOFF_BASE_SECS}" -lt 1 ]; then
+  echo "::warning::CODEX_RETRY_BACKOFF_BASE_SECS must be a positive integer (got: ${CODEX_RETRY_BACKOFF_BASE_SECS}); defaulting to 10."
+  CODEX_RETRY_BACKOFF_BASE_SECS="10"
+fi
+VALIDATION_COMPOSE_FILE="${VALIDATION_COMPOSE_FILE:-docker-compose.yml}"
+SERENA_ENABLED="${SERENA_ENABLED:-false}"
+SERENA_AVAILABLE="${SERENA_AVAILABLE:-false}"
+SERENA_BOOTSTRAP_ATTEMPTED="${SERENA_BOOTSTRAP_ATTEMPTED:-false}"
+SERENA_PROJECT_PREEXISTED="${SERENA_PROJECT_PREEXISTED:-}"
+SERENA_PROJECT_BOOTSTRAP_HASH="${SERENA_PROJECT_BOOTSTRAP_HASH:-}"
+VALIDATION_TEST_USERNAME="${VALIDATION_TEST_USERNAME:-test-user}"
+VALIDATION_TEST_PASSWORD="${VALIDATION_TEST_PASSWORD:-test-password}"
+VALIDATION_TEST_API_KEY="${VALIDATION_TEST_API_KEY:-test-api-key}"
+VALIDATION_INCLUDE_SYNTHESISED="${VALIDATION_INCLUDE_SYNTHESISED:-true}"
+VALIDATION_USE_TEMPLATES="${VALIDATION_USE_TEMPLATES:-true}"
+VALIDATION_USE_TEMPLATES_ENABLED="false"
+case "$(printf '%s' "${VALIDATION_USE_TEMPLATES}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on)
+    VALIDATION_USE_TEMPLATES_ENABLED="true"
+    ;;
+esac
+# Project #7913 p4: remember whether the caller set VALIDATION_CYCLE, so
+# validation_cycle_resolve (below) derives it from the newest trusted
+# "Runtime validation dispatched" tracking comment only when it is unset.
+VALIDATION_CYCLE_EXPLICIT="false"
+VALIDATION_CYCLE_INVALID_ENV="false"
+if [ -n "${VALIDATION_CYCLE:-}" ]; then
+  VALIDATION_CYCLE_EXPLICIT="true"
+fi
+VALIDATION_CYCLE="${VALIDATION_CYCLE:-1}"
+if ! [[ "${VALIDATION_CYCLE}" =~ ^[0-9]+$ ]] || [ "${VALIDATION_CYCLE}" -lt 1 ]; then
+  echo "::warning::VALIDATION_CYCLE must be a positive integer (got: ${VALIDATION_CYCLE}); defaulting to 1."
+  VALIDATION_CYCLE="1"
+  VALIDATION_CYCLE_INVALID_ENV="true"
+fi
+
+# Preflight pyflakes/ruff lint gate for embedded Python heredocs in
+# validation/**/*.sh. Catches undefined-name (F821) / other F-code bugs
+# that ast.parse cannot see and that runtime tests miss when the bug
+# lives in an unexercised conditional branch (observed as
+# `unknown_error:NameError` in consumer-repo autobet flows). See
+# run_preflight_checks() for the implementation.
+VALIDATE_PREFLIGHT_PYFLAKES_ENABLED="${VALIDATE_PREFLIGHT_PYFLAKES_ENABLED:-true}"
+case "${VALIDATE_PREFLIGHT_PYFLAKES_ENABLED}" in
+  true|false) ;;
+  *)
+    echo "::warning::VALIDATE_PREFLIGHT_PYFLAKES_ENABLED must be 'true' or 'false' (got: ${VALIDATE_PREFLIGHT_PYFLAKES_ENABLED}); defaulting to 'true'."
+    VALIDATE_PREFLIGHT_PYFLAKES_ENABLED="true"
+    ;;
+esac
+VALIDATE_PREFLIGHT_PYFLAKES_RULES="${VALIDATE_PREFLIGHT_PYFLAKES_RULES:-F}"
+if ! [[ "${VALIDATE_PREFLIGHT_PYFLAKES_RULES}" =~ ^[A-Z0-9,]+$ ]]; then
+  echo "::warning::VALIDATE_PREFLIGHT_PYFLAKES_RULES must match ^[A-Z0-9,]+\$ (got: ${VALIDATE_PREFLIGHT_PYFLAKES_RULES}); defaulting to 'F'."
+  VALIDATE_PREFLIGHT_PYFLAKES_RULES="F"
+fi
+export VALIDATE_PREFLIGHT_PYFLAKES_ENABLED VALIDATE_PREFLIGHT_PYFLAKES_RULES
+
+PROJECT_SPEC_FILE="${RUNTIME_DIR}/project_spec.txt"
+STATIC_CONTEXT_FILE="${RUNTIME_DIR}/validate_static.txt"
+VALIDATE_HINTS_FILE="${RUNTIME_DIR}/validate_hints.txt"
+DISCOVER_PROMPT_FILE="${RUNTIME_DIR}/validate_discover_prompt.txt"
+DISCOVER_OUTPUT_FILE="${RUNTIME_DIR}/validate_discover_output.txt"
+DISCOVER_LOG_FILE="${RUNTIME_DIR}/validate_discover.log"
+GENERATE_OUTPUT_FILE="${RUNTIME_DIR}/validate_generate_output.txt"
+GENERATE_LOG_FILE="${RUNTIME_DIR}/validate_generate.log"
+VALIDATION_LOG_FILE="${RUNTIME_DIR}/validation.log"
+VALIDATION_RESULT_FILE="${RUNTIME_DIR}/validation_result.json"
+DIAGNOSE_PROMPT_FILE="${RUNTIME_DIR}/validate_diagnose_prompt.txt"
+DIAGNOSE_OUTPUT_FILE="${RUNTIME_DIR}/validate_diagnose_output.txt"
+DIAGNOSE_LOG_FILE="${RUNTIME_DIR}/validate_diagnose.log"
+DIAGNOSE_RESULT_FILE="${RUNTIME_DIR}/validation_diagnosis.json"
+METADATA_FILE="${RUNTIME_DIR}/validation_metadata.json"
+STATUS_FILE="${RUNTIME_DIR}/validation_status.json"
+VALIDATION_LOG_TAIL_FILE="${RUNTIME_DIR}/validation_log_tail.txt"
+CONTAINER_LOG_TAIL_FILE="${RUNTIME_DIR}/container_logs_tail.txt"
+NULL_JSON_FILE="${RUNTIME_DIR}/null.json"
+PRE_GENERATE_STATUS_FILE="${RUNTIME_DIR}/pre_generate_git_status.txt"
+POST_GENERATE_STATUS_FILE="${RUNTIME_DIR}/post_generate_git_status.txt"
+PRE_GENERATE_GUARD_PATHS_FILE="${RUNTIME_DIR}/pre_generate_write_guard_paths.txt"
+POST_GENERATE_GUARD_PATHS_FILE="${RUNTIME_DIR}/post_generate_write_guard_paths.txt"
+PRE_FLIGHT_LOG_FILE="${RUNTIME_DIR}/validation_preflight.log"
+PRIOR_RESULT_JSON_FILE="${RUNTIME_DIR}/prior_validation_result.json"
+PRIOR_CONTAINER_LOGS_FILE="${RUNTIME_DIR}/prior_container_logs_tail.txt"
+VALIDATION_RUNNER_FILE="${RUNTIME_DIR}/validation_runtime_driver.sh"
+
+HINTS_SOURCE="none"
+HARNESS_MODE="template_generate"
+HARNESS_GENERATOR_MODE="templates"
+PRE_FLIGHT_STATUS="not_run"
+PRE_FLIGHT_FAILURE_CLASS="none"
+PRE_FLIGHT_FAILURE_KIND="none"
+PRE_FLIGHT_FAILURE_REASON="not_run"
+PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="false"
+PRE_FLIGHT_APPEND_LOG="false"
+GENERATED_VALIDATE_SCRIPT_PATH=""
+CANONICAL_VALIDATE_DRIVER_REL="scripts/validate_process.sh"
+CANONICAL_VALIDATE_HARNESS_REL="validation/validate.sh"
+
+mkdir -p "${RUNTIME_DIR}"
+printf 'null\n' > "${NULL_JSON_FILE}"
+
+# Bind the driver Phase 3 launches to the copy present before any model
+# phase runs (findings smoke-synth-unsandboxed-driver /
+# validation-harness-credential-inheritance).  At this point the in-tree
+# scripts/validate_driver.sh is the copy staged with this script, so it is
+# exactly as trusted as validate_process.sh itself; generate, self-heal and
+# hook phases that write back into the workspace must not be able to swap it.
+# The snapshot lives in the private RUNTIME_DIR and survives self-heal
+# re-execs, which reuse the first invocation's record.
+VALIDATE_DRIVER_SNAPSHOT_FILE="${RUNTIME_DIR}/validate_driver_trusted_snapshot.sh"
+VALIDATE_DRIVER_SNAPSHOT_STATE_FILE="${RUNTIME_DIR}/validate_driver_trusted_snapshot.state"
+if [ ! -f "${VALIDATE_DRIVER_SNAPSHOT_STATE_FILE}" ]; then
+  rm -f -- "${VALIDATE_DRIVER_SNAPSHOT_FILE}" >/dev/null 2>&1 || true
+  if [ -f scripts/validate_driver.sh ] && [ ! -L scripts/validate_driver.sh ] \
+    && cp -- scripts/validate_driver.sh "${VALIDATE_DRIVER_SNAPSHOT_FILE}"; then
+    printf 'present\n' > "${VALIDATE_DRIVER_SNAPSHOT_STATE_FILE}"
+  else
+    rm -f -- "${VALIDATE_DRIVER_SNAPSHOT_FILE}" >/dev/null 2>&1 || true
+    printf 'absent\n' > "${VALIDATE_DRIVER_SNAPSHOT_STATE_FILE}"
+  fi
+fi
+
+export VALIDATION_TEST_USERNAME
+export VALIDATION_TEST_PASSWORD
+export VALIDATION_TEST_API_KEY
+export TEST_USERNAME="${TEST_USERNAME:-${VALIDATION_TEST_USERNAME}}"
+export TEST_PASSWORD="${TEST_PASSWORD:-${VALIDATION_TEST_PASSWORD}}"
+export TEST_API_KEY="${TEST_API_KEY:-${VALIDATION_TEST_API_KEY}}"
+
+CREATED_FIX_ISSUES_JSON='[]'
+
+# ---------------------------------------------------------------
+# Self-heal state (see prompts/mode-validate-self-heal.txt).
+# Self-heal attempts do NOT burn validation cycles: they are re-execs of
+# this process within the same cycle. The counter is passed across execs
+# via SELF_HEAL_ATTEMPT, and the accumulated patches are appended to
+# SELF_HEAL_PATCHES_FILE (JSONL) for later repository_dispatch back to
+# shubhodeep1/coding-workflows.
+# ---------------------------------------------------------------
+SELF_HEAL_ATTEMPT="${SELF_HEAL_ATTEMPT:-0}"
+if ! [[ "${SELF_HEAL_ATTEMPT}" =~ ^[0-9]+$ ]]; then
+  SELF_HEAL_ATTEMPT=0
+fi
+MAX_SELF_HEAL_ATTEMPTS="${MAX_SELF_HEAL_ATTEMPTS:-2}"
+if ! [[ "${MAX_SELF_HEAL_ATTEMPTS}" =~ ^[0-9]+$ ]]; then
+  MAX_SELF_HEAL_ATTEMPTS=2
+fi
+SELF_HEAL_PATCHES_FILE="${SELF_HEAL_PATCHES_FILE:-${RUNTIME_DIR}/self_heal_patches.jsonl}"
+export SELF_HEAL_ATTEMPT MAX_SELF_HEAL_ATTEMPTS SELF_HEAL_PATCHES_FILE
+# BEGIN deterministic-only gate (#7553): switch
+# VALIDATE_DETERMINISTIC_ONLY (default false here; validate.yml sets it for the
+# opt-in weekly scheduled run) skips every model phase: discover, diagnose and
+# self-heal. Only the committed .ai/validate.yml and the rendered harness run.
+# Unset, empty or "false" is off, "true" (any letter case) is on, any other
+# value is off with a warning.
+VALIDATE_DETERMINISTIC_ONLY_ACTIVE=false
+case "${VALIDATE_DETERMINISTIC_ONLY:-}" in
+	''|[Ff][Aa][Ll][Ss][Ee]) ;;
+	[Tt][Rr][Uu][Ee]) VALIDATE_DETERMINISTIC_ONLY_ACTIVE=true ;;
+	*) echo "::warning::VALIDATE_DETERMINISTIC_ONLY has an unrecognised value; deterministic-only mode stays off." ;;
+esac
+if [ "${VALIDATE_DETERMINISTIC_ONLY_ACTIVE}" = "true" ]; then
+	MAX_SELF_HEAL_ATTEMPTS=0
+	echo "VALIDATE_DETERMINISTIC_ONLY phase=self_heal outcome=skip reason=deterministic_only"
+fi
+export VALIDATE_DETERMINISTIC_ONLY_ACTIVE
+# END deterministic-only gate (#7553): switch
+
+
+# ---------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------
+# shellcheck source=gh_helpers.sh
+if [ -f "scripts/gh_helpers.sh" ]; then
+  # shellcheck disable=SC1091
+  source scripts/gh_helpers.sh
+fi
+# shellcheck source=tg_helpers.sh
+if [ -f "scripts/tg_helpers.sh" ]; then
+  # shellcheck disable=SC1091
+  source scripts/tg_helpers.sh
+fi
+# shellcheck source=/dev/null
+if [ ! -f "${_validate_script_dir}/codex_helpers.sh" ]; then
+  local_failure_summary="Missing required support script ${_validate_script_dir}/codex_helpers.sh"
+  printf '%s\n' "::error::${local_failure_summary}" >&2
+  emit_validation_failure_summary_bootstrap "error" "Validation bootstrap failure" "${local_failure_summary}" "harness_error"
+  exit 1
+fi
+source "${_validate_script_dir}/codex_helpers.sh"
+# shellcheck source=/dev/null
+if [ ! -f "${_validate_script_dir}/watchdog_helpers.sh" ]; then
+  local_failure_summary="Missing required support script ${_validate_script_dir}/watchdog_helpers.sh"
+  printf '%s\n' "::error::${local_failure_summary}" >&2
+  emit_validation_failure_summary_bootstrap "error" "Validation bootstrap failure" "${local_failure_summary}" "harness_error"
+  exit 1
+fi
+source "${_validate_script_dir}/watchdog_helpers.sh"
+
+
+# _gh_url constructs a full GitHub URL for the current repository.
+_gh_url() {
+  printf "%s/%s/%s" "${GITHUB_SERVER_URL:-https://github.com}" "${GITHUB_REPOSITORY}" "$1"
+}
+_tg_link_suffix()
+{
+  local suffix=""
+  if [ "${TRACKING_ISSUE_NUM}" -gt 0 ]; then
+    suffix+=$'\n'"Issue: $(_gh_url "issues/${TRACKING_ISSUE_NUM}")"
+  fi
+  if [ -n "${GITHUB_RUN_ID:-}" ]; then
+    suffix+=$'\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
+  fi
+  printf '%s' "${suffix}"
+}
+
+tg_notify()
+{
+  local msg
+  local link_suffix=""
+  local level="${2:-CRITICAL}"
+  if link_suffix="$(_tg_link_suffix)"; then
+    :
+  else
+    printf '%s\n' "::warning::Validation Telegram link suffix generation failed; sending alert without links." >&2
+    link_suffix=""
+  fi
+  msg="$1${link_suffix}"
+  if [ "${TRACKING_ISSUE_NUM}" -gt 0 ]; then
+    tg_send_tracked "${TRACKING_ISSUE_NUM}" "${msg}" "${level}"
+  else
+    # Standalone validation run (no tracking issue): untracked send
+    tg_send_msg "${msg}" "${level}" >/dev/null
+  fi
+}
+
+# _poll_recovers_level <level>: DEBUG on a tracked (orchestrator) run, else
+# <level>. For failures the orchestrator poller picks up through
+# ai:validation-failed (mark_validation_failed sends the project back to the
+# judge while recovery budget remains and pages CRITICAL when it runs out),
+# this run's own alert is informational. A standalone run has no poller
+# behind it, so it keeps the given level.
+_poll_recovers_level()
+{
+  if [ "${TRACKING_ISSUE_NUM:-0}" -gt 0 ] 2>/dev/null; then
+    printf 'DEBUG'
+  else
+    printf '%s' "$1"
+  fi
+}
+
+# gh_retry is provided by scripts/gh_helpers.sh (rate-limit-aware).
+# Fallback definition in case gh_helpers.sh was not sourced.
+if ! type gh_retry >/dev/null 2>&1; then
+  gh_retry() { "$@"; }
+fi
+if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
+  sanitize_codex_prompt_file() { :; }
+fi
+
+write_github_env_value()
+{
+  local key="${1:?write_github_env_value: key required}"
+  local value="${2-}"
+
+  if [ -z "${GITHUB_ENV:-}" ]; then
+    return 0
+  fi
+  printf '%s=%s\n' "${key}" "${value}" >> "${GITHUB_ENV}" 2>/dev/null || true
+}
+
+env_is_truthy()
+{
+  local value="${1:-}"
+
+  case "$(printf '%s' "${value}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+detect_serena_project_preexisting()
+{
+  if command -v git >/dev/null 2>&1 && git ls-files --error-unmatch -- .serena/project.yml >/dev/null 2>&1; then
+    printf '%s\n' "true"
+    return 0
+  fi
+  if [ -e .serena/project.yml ]; then
+    printf '%s\n' "true"
+  else
+    printf '%s\n' "false"
+  fi
+}
+
+clear_stale_serena_codex_config()
+{
+  local codex_config_path=""
+
+  if [ -z "${HOME:-}" ]; then
+    return 0
+  fi
+  codex_config_path="${HOME}/.codex/config.toml"
+  if [ ! -f "${codex_config_path}" ]; then
+    return 0
+  fi
+
+  if ! PYTHONDONTWRITEBYTECODE=1 python3 - "${codex_config_path}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+config_path = Path(sys.argv[1])
+existing = config_path.read_text(encoding="utf-8")
+lines = existing.splitlines(keepends=True)
+out = []
+i = 0
+
+def is_serena_header(line: str) -> bool:
+    stripped = line.strip()
+    return bool(re.match(r"^\[mcp_servers\.serena(?:\.[^\]]+)?\](?:[ \t]+#.*)?$", stripped))
+
+def is_table_header(line: str) -> bool:
+    stripped = line.strip()
+    return bool(re.match(r"^(\[[^\]]+\]|\[\[[^\]]+\]\])(?:[ \t]+#.*)?$", stripped))
+
+while i < len(lines):
+    if is_serena_header(lines[i]):
+        i += 1
+        while i < len(lines) and (not is_table_header(lines[i]) or is_serena_header(lines[i])):
+            i += 1
+        continue
+    out.append(lines[i])
+    i += 1
+
+rendered = "".join(out).rstrip("\n")
+if rendered == existing.rstrip("\n"):
+    raise SystemExit(0)
+if rendered:
+    config_path.write_text(rendered + "\n", encoding="utf-8")
+else:
+    config_path.unlink()
+PY
+  then
+    echo "::warning::Failed to clear stale Serena MCP configuration from ${codex_config_path}; continuing." >&2
+  fi
+}
+
+if [ -z "${SERENA_PROJECT_PREEXISTED}" ]; then
+  SERENA_PROJECT_PREEXISTED="$(detect_serena_project_preexisting)"
+fi
+export SERENA_ENABLED SERENA_AVAILABLE SERENA_BOOTSTRAP_ATTEMPTED SERENA_PROJECT_PREEXISTED SERENA_PROJECT_BOOTSTRAP_HASH
+
+SEMBLE_HELPERS_AVAILABLE="false"
+# shellcheck source=semble_helpers.sh
+if [ -f "scripts/semble_helpers.sh" ]; then
+  # shellcheck disable=SC1091
+  if source scripts/semble_helpers.sh; then
+    if type semble_query_block >/dev/null 2>&1; then
+      SEMBLE_HELPERS_AVAILABLE="true"
+    else
+      echo "::warning::scripts/semble_helpers.sh did not provide semble_query_block; continuing without Semble prompt context." >&2
+    fi
+  else
+    echo "::warning::Failed to source scripts/semble_helpers.sh; continuing without Semble prompt context." >&2
+  fi
+fi
+
+VALIDATE_DISCOVER_SEMBLE_MAX_CHUNKS="${VALIDATE_DISCOVER_SEMBLE_MAX_CHUNKS:-3}"
+if ! [[ "${VALIDATE_DISCOVER_SEMBLE_MAX_CHUNKS}" =~ ^[0-9]+$ ]] || [ "${VALIDATE_DISCOVER_SEMBLE_MAX_CHUNKS}" -lt 1 ]; then
+  echo "::warning::VALIDATE_DISCOVER_SEMBLE_MAX_CHUNKS must be a positive integer (got: ${VALIDATE_DISCOVER_SEMBLE_MAX_CHUNKS}); defaulting to 3." >&2
+  VALIDATE_DISCOVER_SEMBLE_MAX_CHUNKS="3"
+fi
+
+VALIDATE_DIAGNOSE_SEMBLE_MAX_CHUNKS="${VALIDATE_DIAGNOSE_SEMBLE_MAX_CHUNKS:-3}"
+if ! [[ "${VALIDATE_DIAGNOSE_SEMBLE_MAX_CHUNKS}" =~ ^[0-9]+$ ]] || [ "${VALIDATE_DIAGNOSE_SEMBLE_MAX_CHUNKS}" -lt 1 ]; then
+  echo "::warning::VALIDATE_DIAGNOSE_SEMBLE_MAX_CHUNKS must be a positive integer (got: ${VALIDATE_DIAGNOSE_SEMBLE_MAX_CHUNKS}); defaulting to 3." >&2
+  VALIDATE_DIAGNOSE_SEMBLE_MAX_CHUNKS="3"
+fi
+
+build_validate_semble_query()
+{
+  local label="${1:-validation}"
+  shift || true
+
+  python3 - "${label}" "$@" <<'PY'
+import pathlib
+import re
+import sys
+
+label = sys.argv[1].strip() or "validation"
+raw_inputs = sys.argv[2:]
+path_tokens = []
+interesting_lines = []
+
+path_re = re.compile(
+    r"(?<![A-Za-z0-9_./-])(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\."
+    r"(?:py|sh|ya?ml|json|toml|js|jsx|ts|tsx|go|rs|java|kt|rb|php|sql|md|txt)"
+    r"(?![A-Za-z0-9_./-])"
+)
+special_file_re = re.compile(r"\b(?:Dockerfile(?:\.[A-Za-z0-9_.-]+)?|Makefile|Procfile)\b")
+
+def append_unique(bucket, value, *, limit):
+    value = value.strip()
+    if not value or value in bucket or len(bucket) >= limit:
+        return
+    bucket.append(value)
+
+def iter_source_texts(values):
+    for raw in values:
+        if not raw:
+            continue
+        candidate_path = pathlib.Path(raw)
+        if "\n" not in raw and len(raw) < 512 and candidate_path.is_file():
+            try:
+                yield candidate_path.read_text(encoding="utf-8", errors="replace")[:12000]
+            except OSError:
+                yield raw[:12000]
+        else:
+            yield raw[:12000]
+
+for text in iter_source_texts(raw_inputs):
+    if not text.strip():
+        continue
+
+    for token in re.findall(r"`([^`\n]+)`", text):
+        token = token.strip()
+        if "/" in token or "." in pathlib.Path(token).name or token in {"Dockerfile", "Makefile", "Procfile"}:
+            append_unique(path_tokens, token, limit=10)
+
+    for token in path_re.findall(text):
+        append_unique(path_tokens, token, limit=10)
+    for token in special_file_re.findall(text):
+        append_unique(path_tokens, token, limit=10)
+
+    for raw_line in text.splitlines():
+        line = re.sub(r"\s+", " ", raw_line).strip()
+        if not line or line.startswith(("===", "---", "```", "#")):
+            continue
+        if len(line) < 8:
+            continue
+        append_unique(interesting_lines, line[:180], limit=8)
+
+query_parts = [label]
+if path_tokens:
+    query_parts.append("files " + " ".join(path_tokens[:8]))
+if interesting_lines:
+    query_parts.extend(interesting_lines[:6])
+
+query = " ; ".join(part for part in query_parts if part)
+query = query[:700].strip(" ;")
+if query:
+    print(query)
+PY
+}
+
+build_validate_discover_semble_query()
+{
+  build_validate_semble_query \
+    "validation discover context" \
+    "validation harness docker compose canary runtime validation" \
+    "${VALIDATION_COMPOSE_FILE}" \
+    "${PROJECT_SPEC_FILE}"
+}
+
+build_validate_diagnose_semble_query()
+{
+  build_validate_semble_query \
+    "validation diagnose failure context" \
+    "runtime validation failure diagnose failing tests" \
+    "${FIRST_FAILURE:-}" \
+    "${VALIDATION_RESULT_FILE}" \
+    "${VALIDATION_LOG_TAIL_FILE}" \
+    "${CONTAINER_LOG_TAIL_FILE}" \
+    "${VALIDATE_HINTS_FILE}"
+}
+
+append_validate_semble_context()
+{
+  local query_text="${1:-}"
+  local max_chunks="${2:-3}"
+  local header_label="${3:-Validation Context}"
+
+  if [ "${SEMBLE_HELPERS_AVAILABLE}" != "true" ] || [ -z "${query_text}" ]; then
+    return 0
+  fi
+
+  echo
+  # Validate prompts are prefixed with STATIC_CONTEXT_FILE; count overlap with it.
+  if SEMBLE_STATIC_CONTEXT_FILE="${STATIC_CONTEXT_FILE:-}" semble_query_block "${query_text}" "${max_chunks}" "${header_label}"; then
+    echo
+  fi
+}
+
+# Filter workflow-generated Serena runtime artifacts from path-constraint
+# bookkeeping only when the repo did not already own the Serena project
+# config before bootstrap and that config stayed unchanged. That keeps
+# bootstrap-owned .serena/ state from looking like a validation-side edit
+# while still preserving repo-owned .serena files.
+filter_runtime_status_noise()
+{
+  local line current_hash
+
+  while IFS= read -r line; do
+    case "${line}" in
+      *' .serena/'*|*' .serena')
+        if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && \
+           [ -n "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] && \
+           [ -f .serena/project.yml ]; then
+          current_hash="$(sha256sum .serena/project.yml 2>/dev/null | awk '{print $1}' || true)"
+          if [ -n "${current_hash}" ] && [ "${current_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then
+            continue
+          fi
+        fi
+        ;;
+    esac
+    printf '%s\n' "${line}"
+  done
+}
+
+filter_runtime_path_noise()
+{
+	local candidate_line path current_hash
+
+	while IFS= read -r candidate_line; do
+		path="${candidate_line%%$'\t'*}"
+		case "${path}" in
+		  .serena|.serena/*)
+			if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && \
+			   [ -n "${SERENA_PROJECT_BOOTSTRAP_HASH:-}" ] && \
+           [ -f .serena/project.yml ]; then
+          current_hash="$(sha256sum .serena/project.yml 2>/dev/null | awk '{print $1}' || true)"
+          if [ -n "${current_hash}" ] && [ "${current_hash}" = "${SERENA_PROJECT_BOOTSTRAP_HASH}" ]; then
+            continue
+          fi
+			fi
+			;;
+		esac
+		printf '%s\n' "${candidate_line}"
+	done
+}
+
+capture_write_guard_candidate_paths()
+{
+	if ! command -v git >/dev/null 2>&1 || [ ! -d .git ]; then
+		return 0
+	fi
+
+	local path path_state
+	while IFS= read -r path; do
+		[ -n "${path}" ] || continue
+		if [ -e "${path}" ]; then
+			path_state="$(sha256sum -- "${path}" 2>/dev/null | awk '{print $1}' || true)"
+			[ -n "${path_state}" ] || path_state="__present__"
+		else
+			path_state="__deleted__"
+		fi
+		printf '%s\t%s\n' "${path}" "${path_state}"
+	done < <(
+		{
+			git diff --name-only --diff-filter=ACMRD HEAD || true
+			git ls-files --others --exclude-standard || true
+		} | sed '/^$/d' | LC_ALL=C sort -u
+	) | filter_runtime_path_noise | LC_ALL=C sort -u
+}
+
+run_validate_write_guard()
+{
+  if ! command -v git >/dev/null 2>&1 || [ ! -d .git ]; then
+    return 0
+  fi
+
+	local validate_write_guard_file
+	validate_write_guard_file="$(mktemp "${TMPDIR:-/tmp}/validate-write-guard.XXXXXX")"
+
+	if [ -f "${PRE_GENERATE_GUARD_PATHS_FILE}" ] && [ -f "${POST_GENERATE_GUARD_PATHS_FILE}" ]; then
+		{
+			LC_ALL=C comm -23 "${PRE_GENERATE_GUARD_PATHS_FILE}" "${POST_GENERATE_GUARD_PATHS_FILE}" || true
+			LC_ALL=C comm -13 "${PRE_GENERATE_GUARD_PATHS_FILE}" "${POST_GENERATE_GUARD_PATHS_FILE}" || true
+		} | cut -f1 | sed '/^$/d' | LC_ALL=C sort -u > "${validate_write_guard_file}"
+	elif [ -f "${POST_GENERATE_GUARD_PATHS_FILE}" ]; then
+		cut -f1 "${POST_GENERATE_GUARD_PATHS_FILE}" | sed '/^$/d' | LC_ALL=C sort -u > "${validate_write_guard_file}"
+	fi
+
+  if ! write_guard_check validate_fix_harness "${validate_write_guard_file}"; then
+    rm -f "${validate_write_guard_file}"
+    return 1
+  fi
+
+  rm -f "${validate_write_guard_file}"
+  return 0
+}
+
+build_validate_serena_tool_hints()
+{
+  local phase="${1:-general}"
+
+  # The validate agents run in the isolated container
+  # (scripts/codex_isolated_exec.sh), where no MCP server is configured, so
+  # a Serena hint would only send them to tools that are not there.
+  if [ -n "${CODEX_ISOLATED_EXEC:-}" ] || [ "${SERENA_AVAILABLE:-false}" != "true" ]; then
+    return 0
+  fi
+
+  case "${phase}" in
+    discover)
+      printf '%s\n' \
+        'Serena hints:' \
+        '- Serena MCP is available in this run. Prefer Serena symbol/navigation tools for discovery when they materially reduce shell reads (for example: activate_project, find_symbol, get_symbols_overview, find_referencing_symbols, search_for_pattern).' \
+        '- Use Serena to confirm runtime entrypoints, env readers, health routes, Docker/build files, and existing test commands; keep the YAML output grounded in repo evidence and preserve the required schema.'
+      ;;
+    diagnose)
+      printf '%s\n' \
+        'Serena hints:' \
+        '- Serena MCP is available in this run. Prefer Serena symbol/navigation tools when they materially reduce shell reads while confirming which repository-owned file, function, or script path a failure comes from.' \
+        '- Use Serena to strengthen evidence for `needs_fixes` vs `harness_error`, but keep the JSON schema unchanged and do not invent ownership facts.'
+      ;;
+    *)
+      printf '%s\n' \
+        'Serena hints:' \
+        '- Serena MCP is available in this run. Prefer Serena symbol/navigation tools when they materially reduce shell reads.' \
+        '- Keep repository changes and output contracts unchanged.'
+      ;;
+  esac
+}
+
+sanitize_serena_log_value()
+{
+  local value="${1:-unknown}"
+
+  value="$(printf '%s' "${value}" | tr '[:space:]=' '__')"
+  if [ -z "${value}" ]; then
+    value="unknown"
+  fi
+  printf '%s\n' "${value}"
+}
+
+emit_serena_fallback()
+{
+  local phase="${1:-general}"
+  local reason="${2:-setup-failure}"
+  local safe_phase=""
+  local safe_reason=""
+
+  safe_phase="$(sanitize_serena_log_value "${phase}")"
+  safe_reason="$(sanitize_serena_log_value "${reason}")"
+
+  printf 'SERENA_FALLBACK target=validate phase=%s reason=%s\n' \
+    "${safe_phase}" \
+    "${safe_reason}" >&2
+  emit_event "SERENA_FALLBACK" "target=validate" "phase=${safe_phase}" "reason=${safe_reason}"
+}
+
+ensure_serena_bootstrap()
+{
+  local serena_phase="${1:-general}"
+  local bootstrap_env_file=""
+  local env_key=""
+  local env_value=""
+  local serena_project_hash=""
+
+  if ! env_is_truthy "${SERENA_ENABLED:-false}"; then
+    emit_serena_fallback "${serena_phase}" "disabled"
+    clear_stale_serena_codex_config
+    SERENA_AVAILABLE="false"
+    export SERENA_AVAILABLE
+    write_github_env_value "SERENA_AVAILABLE" "${SERENA_AVAILABLE}"
+    return 0
+  fi
+  if env_is_truthy "${SERENA_AVAILABLE:-false}"; then
+    return 0
+  fi
+  if env_is_truthy "${SERENA_BOOTSTRAP_ATTEMPTED:-false}"; then
+    return 0
+  fi
+
+  SERENA_BOOTSTRAP_ATTEMPTED="true"
+  export SERENA_BOOTSTRAP_ATTEMPTED
+
+  if [ -z "${SERENA_PROJECT_PREEXISTED:-}" ]; then
+    SERENA_PROJECT_PREEXISTED="$(detect_serena_project_preexisting)"
+  fi
+  export SERENA_PROJECT_PREEXISTED
+  write_github_env_value "SERENA_PROJECT_PREEXISTED" "${SERENA_PROJECT_PREEXISTED}"
+
+  if [ ! -f "scripts/setup_serena.sh" ]; then
+    echo "::notice::scripts/setup_serena.sh is unavailable; validation will continue without Serena."
+    emit_serena_fallback "${serena_phase}" "setup-failure"
+    clear_stale_serena_codex_config
+    SERENA_AVAILABLE="false"
+    export SERENA_AVAILABLE
+    write_github_env_value "SERENA_AVAILABLE" "${SERENA_AVAILABLE}"
+    return 0
+  fi
+
+  bootstrap_env_file="$(mktemp "${RUNTIME_DIR}/serena-bootstrap-env.XXXXXX")"
+  if ! SERENA_FALLBACK_TARGET="validate" SERENA_FALLBACK_PHASE="${serena_phase}" GITHUB_ENV="${bootstrap_env_file}" bash scripts/setup_serena.sh; then
+    echo "::warning::scripts/setup_serena.sh exited non-zero; validation will continue without Serena."
+    emit_serena_fallback "${serena_phase}" "setup-failure"
+    clear_stale_serena_codex_config
+    SERENA_AVAILABLE="false"
+  else
+    SERENA_AVAILABLE="false"
+    while IFS='=' read -r env_key env_value; do
+      case "${env_key}" in
+        SERENA_AVAILABLE)
+          SERENA_AVAILABLE="${env_value}"
+          ;;
+      esac
+    done < "${bootstrap_env_file}"
+  fi
+  rm -f "${bootstrap_env_file}"
+
+  if [ "${SERENA_PROJECT_PREEXISTED:-false}" != "true" ] && [ -f .serena/project.yml ]; then
+    serena_project_hash="$(sha256sum .serena/project.yml 2>/dev/null | awk '{print $1}' || true)"
+    SERENA_PROJECT_BOOTSTRAP_HASH="${serena_project_hash}"
+  else
+    SERENA_PROJECT_BOOTSTRAP_HASH=""
+  fi
+
+  export SERENA_AVAILABLE SERENA_PROJECT_BOOTSTRAP_HASH
+  write_github_env_value "SERENA_AVAILABLE" "${SERENA_AVAILABLE}"
+  write_github_env_value "SERENA_PROJECT_BOOTSTRAP_HASH" "${SERENA_PROJECT_BOOTSTRAP_HASH}"
+}
+
+# attempt_self_heal_and_reexec — last-chance interception before a hard
+# validation failure. If the self-heal LLM proposes a patch to one of the
+# four validation prompt files and the patch applies cleanly, we re-exec
+# this script (incrementing SELF_HEAL_ATTEMPT, not VALIDATION_CYCLE). If
+# self-heal is not applicable or budget is exhausted, this function
+# returns and the caller proceeds with its normal hard-fail path.
+#
+# Usage: attempt_self_heal_and_reexec "<failure-phase-tag>"
+#   phase tag: generate|preflight|render|canary|runtime|diagnose|discover
+attempt_self_heal_and_reexec()
+{
+  local phase="${1:-unknown}"
+
+  case "${phase}" in
+    discover|generate|preflight|render|canary|diagnose|runtime|unknown)
+      ;;
+    *)
+      echo "::warning::self-heal invoked with unsupported phase '${phase}'; normalizing to 'unknown'." >&2
+      phase="unknown"
+      ;;
+  esac
+
+  if [ "${MAX_SELF_HEAL_ATTEMPTS:-0}" -le 0 ]; then
+    return 0
+  fi
+  if [ "${SELF_HEAL_ATTEMPT:-0}" -ge "${MAX_SELF_HEAL_ATTEMPTS}" ]; then
+    tg_notify "Validation self-heal budget exhausted for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} (${SELF_HEAL_ATTEMPT}/${MAX_SELF_HEAL_ATTEMPTS}); falling back to hard-fail." "DEBUG"
+    return 0
+  fi
+
+  if [ ! -f "scripts/self_heal_validation.sh" ]; then
+    echo "::warning::self-heal helper scripts/self_heal_validation.sh not found; skipping self-heal." >&2
+    return 0
+  fi
+  # Self-heal is designed to be opt-in: workflow-templates/ai-validate.yml
+  # and .github/workflows/validate.yml fetch the prompt and helper script
+  # with require_remote=false, so older @stable tags can be missing one or
+  # both. Fail-closed here rather than letting self_heal_validation.sh exit
+  # with a misleading "no patch proposed" code, which would look like the
+  # LLM chose not to self-heal when in fact a dependency was missing.
+  if [ ! -f "prompts/mode-validate-self-heal.txt" ]; then
+    echo "::warning::self-heal prompt prompts/mode-validate-self-heal.txt not found; skipping self-heal." >&2
+    return 0
+  fi
+  if [ ! -f "scripts/render_prompt.sh" ]; then
+    echo "::warning::self-heal dependency scripts/render_prompt.sh not found; skipping self-heal." >&2
+    return 0
+  fi
+
+  ensure_serena_bootstrap "${phase}"
+
+  local heal_path="${PATH}"
+  local self_heal_continuation_source=""
+  local self_heal_continuation_rendered=""
+  local self_heal_wrapper_dir=""
+  if validate_thread_reuse_enabled; then
+    self_heal_continuation_source="$(resolve_validate_thread_reuse_asset 'prompts/mode-validate-self-heal-continuation.txt' 2>/dev/null || true)"
+    if [ -n "${self_heal_continuation_source}" ]; then
+      self_heal_continuation_rendered="${RUNTIME_DIR}/mode-validate-self-heal-continuation.rendered.txt"
+      if SERENA_TOOL_HINTS='' bash scripts/render_prompt.sh "${self_heal_continuation_source}" > "${self_heal_continuation_rendered}"; then
+        if self_heal_wrapper_dir="$(codex_thread_reuse_install_wrapper \
+          'validate-self-heal' \
+          "${self_heal_continuation_rendered}" \
+          'replace-between' \
+          '=== SELF-HEAL TASK ===' \
+          '=== SELF-HEAL ATTEMPT ===')"; then
+          heal_path="${self_heal_wrapper_dir}:${PATH}"
+        else
+          echo "::warning::Failed to install validate self-heal thread-reuse wrapper; using the full prompt path." >&2
+        fi
+      else
+        echo "::warning::Failed to render validate self-heal continuation prompt; using the full prompt path." >&2
+      fi
+    fi
+  fi
+
+  local heal_exit=0
+  PATH="${heal_path}" \
+    SELF_HEAL_FAILURE_PHASE="${phase}" \
+    STATIC_CONTEXT_FILE="${STATIC_CONTEXT_FILE}" \
+    VALIDATION_RESULT_FILE="${VALIDATION_RESULT_FILE}" \
+    DIAGNOSE_RESULT_FILE="${DIAGNOSE_RESULT_FILE}" \
+    VALIDATION_LOG_TAIL_FILE="${VALIDATION_LOG_TAIL_FILE}" \
+    CONTAINER_LOG_TAIL_FILE="${CONTAINER_LOG_TAIL_FILE}" \
+    VALIDATE_HINTS_FILE="${VALIDATE_HINTS_FILE}" \
+    DISCOVER_OUTPUT_FILE="${DISCOVER_OUTPUT_FILE}" \
+    GENERATE_OUTPUT_FILE="${GENERATE_OUTPUT_FILE}" \
+    DIAGNOSE_OUTPUT_FILE="${DIAGNOSE_OUTPUT_FILE}" \
+    bash scripts/self_heal_validation.sh || heal_exit=$?
+
+  case "${heal_exit}" in
+    0)
+      # Patch applied; re-exec with incremented attempt counter.
+      SELF_HEAL_ATTEMPT=$((SELF_HEAL_ATTEMPT + 1))
+      tg_notify "Validation self-heal attempt ${SELF_HEAL_ATTEMPT}/${MAX_SELF_HEAL_ATTEMPTS} applied for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} (phase=${phase})." "DEBUG"
+      # validate_process.sh takes no positional args; re-exec plain.
+      exec env \
+        SELF_HEAL_ATTEMPT="${SELF_HEAL_ATTEMPT}" \
+        MAX_SELF_HEAL_ATTEMPTS="${MAX_SELF_HEAL_ATTEMPTS}" \
+        SELF_HEAL_PATCHES_FILE="${SELF_HEAL_PATCHES_FILE}" \
+        bash "${BASH_SOURCE[0]:-$0}"
+      ;;
+    1)
+      # No patch proposed — fall through to normal hard-fail path.
+      return 0
+      ;;
+    80)
+      # Claude capacity wait (issue #7370): no verdict; validate.yml maps
+      # exit 80 to a wait for the capacity-resume pass.
+      echo "AI_ENGINE_CAPACITY_WAIT role=VALIDATE_SELF_HEAL outcome=deferred stage=validate"
+      exit 80
+      ;;
+    *)
+      # Hard error inside self-heal helper — fall through to hard-fail.
+      echo "::warning::self-heal helper exited with code ${heal_exit}; falling through to hard-fail." >&2
+      return 0
+      ;;
+  esac
+}
+
+# dispatch_self_heal_improvements — send accumulated self-heal patches
+# back to the upstream coding-workflows repo as a repository_dispatch
+# event. The intake workflow there will open a draft PR, append to
+# docs/validation-improvements.md, and Telegram-alert the admin.
+#
+# No-op if no patches were accumulated or GH_PAT has no dispatch scope.
+dispatch_self_heal_improvements()
+{
+  # This function runs on the success path AFTER the validation has
+  # already been marked passing. It MUST NOT abort the script on any
+  # internal failure, or a model-produced pathological patches ledger
+  # could flip an otherwise-passing validation into a non-zero script
+  # exit. The entire body runs in a subshell so `set -e` failures stay
+  # local; the outer caller always sees return 0.
+  (
+    set +e
+    if [ ! -s "${SELF_HEAL_PATCHES_FILE}" ]; then
+      exit 0
+    fi
+
+    local upstream="shubhodeep1/coding-workflows"
+
+    # Slurp patches into an array file. jq's --slurpfile reads the
+    # referenced file from disk instead of taking it as a command-line
+    # argument, so we sidestep ARG_MAX limits on large payloads.
+    local patches_array_file="${RUNTIME_DIR}/self_heal_dispatch_patches.json"
+    if ! jq -cs '.' "${SELF_HEAL_PATCHES_FILE}" > "${patches_array_file}" 2>/dev/null; then
+      echo "::warning::Self-heal patches ledger could not be slurped by jq; skipping dispatch." >&2
+      tg_notify "Validation self-heal SUCCEEDED for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} but patches ledger was malformed; dispatch skipped." "WARNING"
+      exit 0
+    fi
+    local patches_count
+    patches_count="$(jq 'length // 0' "${patches_array_file}" 2>/dev/null || echo 0)"
+    if [ "${patches_count:-0}" -le 0 ]; then
+      exit 0
+    fi
+
+    # Hard-cap total payload size so a pathological patches ledger
+    # cannot produce a giant repository_dispatch body. 1 MiB total is
+    # already far larger than any legitimate self-heal sequence given
+    # the per-patch size limit (SELF_HEAL_MAX_PATCH_BYTES, default
+    # 64 KiB) and the configured self-heal attempt budget
+    # (MAX_SELF_HEAL_ATTEMPTS, default 2). Above the cap we skip
+    # dispatch and preserve the full ledger in the run artifact.
+    local max_dispatch_bytes="${SELF_HEAL_MAX_DISPATCH_BYTES:-1048576}"
+    local patches_size
+    patches_size="$(wc -c < "${patches_array_file}" | tr -d ' ')"
+    if [ "${patches_size:-0}" -gt "${max_dispatch_bytes}" ]; then
+      echo "::warning::Self-heal patches ledger is ${patches_size} bytes, exceeds SELF_HEAL_MAX_DISPATCH_BYTES=${max_dispatch_bytes}; skipping dispatch to avoid bloating the repository_dispatch payload." >&2
+      tg_notify "Validation self-heal SUCCEEDED for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} but patches ledger is oversized (${patches_size} bytes); dispatch skipped. See run artifacts." "WARNING"
+      exit 0
+    fi
+
+    local run_url=""
+    if [ -n "${GITHUB_RUN_ID:-}" ]; then
+      run_url="$(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
+    fi
+
+    local payload_file="${RUNTIME_DIR}/self_heal_dispatch_payload.json"
+    # --slurpfile binds $patches_wrapper to [<contents-of-file>]; the
+    # patches array is already a single JSON array so we unwrap the
+    # outer slurp layer with $patches_wrapper[0].
+    if ! jq -cn \
+      --arg consumer_repo "${GITHUB_REPOSITORY}" \
+      --arg tracking_issue "${TRACKING_ISSUE_RAW}" \
+      --arg validation_cycle "${VALIDATION_CYCLE}" \
+      --arg run_id "${GITHUB_RUN_ID:-0}" \
+      --arg run_url "${run_url}" \
+      --arg final_status "pass" \
+      --argjson attempts "${SELF_HEAL_ATTEMPT}" \
+      --slurpfile patches_wrapper "${patches_array_file}" \
+      '{
+        event_type: "validation-prompt-self-heal",
+        client_payload: {
+          consumer_repo: $consumer_repo,
+          tracking_issue: $tracking_issue,
+          validation_cycle: $validation_cycle,
+          run_id: $run_id,
+          run_url: $run_url,
+          final_status: $final_status,
+          self_heal_attempts: $attempts,
+          patches: $patches_wrapper[0]
+        }
+      }' > "${payload_file}" 2>"${RUNTIME_DIR}/self_heal_dispatch_jq.log"; then
+      echo "::warning::Self-heal dispatch payload could not be built by jq; skipping dispatch. See ${RUNTIME_DIR}/self_heal_dispatch_jq.log." >&2
+      tg_notify "Validation self-heal SUCCEEDED for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} but dispatch payload construction failed; dispatch skipped." "WARNING"
+      exit 0
+    fi
+
+    local dispatch_log="${RUNTIME_DIR}/self_heal_dispatch.log"
+    local dispatch_exit=0
+    # Stream the payload from the file via stdin — gh api --input -
+    # reads the POST body from stdin, so we never put the payload on
+    # the command line.
+    gh_retry gh api \
+      -X POST \
+      -H 'Accept: application/vnd.github+json' \
+      "repos/${upstream}/dispatches" \
+      --input "${payload_file}" \
+      > "${dispatch_log}" 2>&1 || dispatch_exit=$?
+
+    if [ "${dispatch_exit}" -ne 0 ]; then
+      echo "::warning::Self-heal dispatch to ${upstream} failed (exit ${dispatch_exit}); see ${dispatch_log}. Patches are preserved in ${SELF_HEAL_PATCHES_FILE}." >&2
+      tg_notify "Validation self-heal SUCCEEDED for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} but dispatch back to ${upstream} failed. Patches remain in run artifacts." "WARNING"
+      exit 0
+    fi
+
+    tg_notify "Validation self-heal SUCCEEDED for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} (${SELF_HEAL_ATTEMPT} patch(es)); improvements dispatched to ${upstream}." "DEBUG"
+  ) || true
+}
+
+is_tracking_run()
+{
+  [ "${TRACKING_ISSUE_NUM}" -gt 0 ]
+}
+
+enforce_canonical_driver_path()
+{
+  local script_source="${BASH_SOURCE[0]:-$0}"
+  case "${script_source}" in
+    "${CANONICAL_VALIDATE_DRIVER_REL}"|"./${CANONICAL_VALIDATE_DRIVER_REL}"|*/"${CANONICAL_VALIDATE_DRIVER_REL}")
+      return 0
+      ;;
+    *)
+      echo "Refusing to run validate driver from non-canonical path '${script_source}'. Expected ${CANONICAL_VALIDATE_DRIVER_REL}." >&2
+      return 1
+      ;;
+  esac
+}
+
+ensure_validation_harness_not_tracked()
+{
+  if ! command -v git >/dev/null 2>&1 || [ ! -d .git ]; then
+    return 0
+  fi
+
+  if git ls-files --error-unmatch -- "${CANONICAL_VALIDATE_HARNESS_REL}" >/dev/null 2>&1; then
+    echo "${CANONICAL_VALIDATE_HARNESS_REL} is tracked by git; it must remain transient." >&2
+    return 1
+  fi
+
+  if git diff --cached --name-only -- "${CANONICAL_VALIDATE_HARNESS_REL}" | grep -q .; then
+    echo "${CANONICAL_VALIDATE_HARNESS_REL} is staged in git; it must remain unstaged/untracked." >&2
+    return 1
+  fi
+
+  return 0
+}
+
+enforce_no_renamed_driver_artifacts()
+{
+  if ! command -v git >/dev/null 2>&1 || [ ! -d .git ]; then
+    return 0
+  fi
+
+  local candidate_driver_files
+  local candidate
+  local renamed_driver_files=""
+  candidate_driver_files="$({
+    git ls-files -- 'scripts/validate*.sh'
+    git ls-files --others --exclude-standard -- 'scripts/validate*.sh'
+  } 2>/dev/null | awk '$0 != "scripts/validate_process.sh" && $0 != "scripts/validate_driver.sh"' | sort -u)"
+
+  while IFS= read -r candidate; do
+    [ -n "${candidate}" ] || continue
+    [ -f "${candidate}" ] || continue
+
+    if cmp -s "${candidate}" "scripts/validate_process.sh" \
+      || { [ -f "scripts/validate_driver.sh" ] && cmp -s "${candidate}" "scripts/validate_driver.sh"; }; then
+      renamed_driver_files="${renamed_driver_files}${candidate}"$'\n'
+    fi
+  done <<< "${candidate_driver_files}"
+
+  if [ -n "${renamed_driver_files}" ]; then
+    echo "Found renamed managed validate driver artifacts in scripts/:" >&2
+    printf '%s' "${renamed_driver_files}" >&2
+    return 1
+  fi
+
+  return 0
+}
+
+post_tracking_comment()
+{
+  local comment_body="$1"
+  if ! is_tracking_run; then
+    return 0
+  fi
+
+  comment_body="${comment_body//\\n/$'\n'}"
+
+  gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}/comments" \
+    -f body="${comment_body}" >/dev/null || true
+}
+
+ensure_label_exists()
+{
+  local label_name="$1"
+  local contract_file=".github/ai/label_contract.v1.json"
+  local color="1d76db"
+  local description="AI workflow label"
+
+  if [ -f "${contract_file}" ]; then
+    color="$(jq -r --arg lbl "${label_name}" '.labels[$lbl].color // "1d76db"' "${contract_file}" 2>/dev/null || echo "1d76db")"
+    description="$(jq -r --arg lbl "${label_name}" '.labels[$lbl].description // "AI workflow label"' "${contract_file}" 2>/dev/null || echo "AI workflow label")"
+  fi
+
+  local _label_err_file
+  _label_err_file="$(mktemp 2>/dev/null || echo '/dev/null')"
+
+  if gh_retry gh label create "${label_name}" \
+    --repo "${GITHUB_REPOSITORY}" \
+    --color "${color}" \
+    --description "${description}" >/dev/null 2>"${_label_err_file}"; then
+    [ "${_label_err_file}" = "/dev/null" ] || rm -f "${_label_err_file}"
+    return 0
+  fi
+
+  local _label_err=""
+  _label_err="$(cat "${_label_err_file}" 2>/dev/null || true)"
+  [ "${_label_err_file}" = "/dev/null" ] || rm -f "${_label_err_file}"
+
+  if printf '%s' "${_label_err}" | grep -Eiq 'already[ _-]*exists|already_exists'; then
+    echo "::debug::ensure_label_exists: label already exists, skipping '${label_name}'." >&2
+    return 0
+  fi
+
+  tg_notify "ensure_label_exists: failed to create label '${label_name}' in repo '${GITHUB_REPOSITORY}': ${_label_err}" "WARNING"
+  return 0
+}
+
+set_tracking_phase_label()
+{
+  local phase_label="$1"
+  local contract_file=".github/ai/label_contract.v1.json"
+
+  if ! is_tracking_run; then
+    return 0
+  fi
+
+  ensure_label_exists "${phase_label}"
+
+  if [ ! -f "${contract_file}" ]; then
+    echo "::warning::set_tracking_phase_label: missing label contract ${contract_file}; cannot apply label '${phase_label}' safely." >&2
+    return 1
+  fi
+
+  local phase_changes
+  if ! phase_changes="$(python3 scripts/ai_labels.py resolve-phase \
+    --contract-file "${contract_file}" \
+    --phase "${phase_label}" 2>/dev/null)"; then
+    echo "::warning::set_tracking_phase_label: resolve-phase failed for '${phase_label}' using ${contract_file}." >&2
+    return 1
+  fi
+
+  # Fetch current labels on the issue so we only attempt to remove labels
+  # that are actually present.  Trying to remove a label that does not
+  # exist on the issue can cause `gh issue edit` to return an error,
+  # which the outer `|| true` would silently swallow — leaving stale
+  # labels (e.g. ai:validating + ai:validation-fixing) in place even
+  # after the phase has advanced to ai:validated.
+  local current_issue_labels
+  current_issue_labels="$(gh_retry gh api \
+    "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}/labels" \
+    --jq '[.[].name]' 2>/dev/null || echo '[]')"
+
+  # Build a single gh issue edit command with all --remove-label and
+  # --add-label flags instead of one API call per label.
+  local edit_args=()
+  while IFS= read -r remove_label; do
+    [ -n "${remove_label}" ] || continue
+    # Only remove labels that are currently on the issue to avoid
+    # errors from trying to remove absent labels.
+    if echo "${current_issue_labels}" | jq -e --arg l "${remove_label}" 'index($l) != null' >/dev/null 2>&1; then
+      edit_args+=(--remove-label "${remove_label}")
+    fi
+  done < <(echo "${phase_changes}" | jq -r '.remove[]?')
+
+  while IFS= read -r add_label; do
+    [ -n "${add_label}" ] || continue
+    ensure_label_exists "${add_label}"
+    edit_args+=(--add-label "${add_label}")
+  done < <(echo "${phase_changes}" | jq -r '.add[]?')
+
+  if [ "${#edit_args[@]}" -gt 0 ]; then
+    local _label_err_file
+    _label_err_file="$(mktemp 2>/dev/null || echo '/dev/null')"
+    if ! gh_retry gh issue edit "${TRACKING_ISSUE_NUM}" \
+      --repo "${GITHUB_REPOSITORY}" \
+      "${edit_args[@]}" >/dev/null 2>"${_label_err_file}"; then
+      local _label_err
+      _label_err="$(cat "${_label_err_file}" 2>/dev/null || true)"
+      if echo "${_label_err}" | grep -Eqi "could not remove label:|['\"][[:alnum:]:._/-]+['\"] not found"; then
+        echo "::warning::set_tracking_phase_label: non-fatal missing label while applying '${phase_label}' to #${TRACKING_ISSUE_NUM}: ${_label_err}" >&2
+        [ "${_label_err_file}" = "/dev/null" ] || rm -f "${_label_err_file}"
+        return 0
+      fi
+      echo "::warning::set_tracking_phase_label: failed to apply '${phase_label}' to #${TRACKING_ISSUE_NUM}: ${_label_err}" >&2
+      [ "${_label_err_file}" = "/dev/null" ] || rm -f "${_label_err_file}"
+      return 1
+    fi
+    [ "${_label_err_file}" = "/dev/null" ] || rm -f "${_label_err_file}"
+  fi
+  return 0
+}
+
+emit_validation_failure_summary_precheck()
+{
+  local summary="$1"
+  local failure_summary="$2"
+  local raw_status="${3:-error}"
+  local compact_summary=""
+  local compact_failure_summary=""
+  local repository_json='""'
+  local summary_json='""'
+  local failure_summary_json='""'
+  local created_fix_issues_count="0"
+
+  compact_summary="$(printf '%s' "${summary}" | tr '\r\n' '  ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+  compact_failure_summary="$(printf '%s' "${failure_summary}" | tr '\r\n' '  ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//')"
+  if [ -z "${compact_failure_summary}" ]; then
+    compact_failure_summary="${compact_summary}"
+  fi
+
+  repository_json="$(jq -cn --arg value "${GITHUB_REPOSITORY:-}" '$value')"
+  summary_json="$(jq -cn --arg value "${compact_summary}" '$value')"
+  failure_summary_json="$(jq -cn --arg value "${compact_failure_summary}" '$value')"
+  created_fix_issues_count="$(printf '%s' "${CREATED_FIX_ISSUES_JSON:-[]}" | jq -r 'if type == "array" then length else 0 end' 2>/dev/null || printf '%s' '0')"
+
+  printf '%s\n' \
+    "VALIDATION_FAILURE_SUMMARY repository=${repository_json} tracking_issue=${TRACKING_ISSUE_RAW} status=error raw_status=${raw_status} cycle=${VALIDATION_CYCLE} run_id=${GITHUB_RUN_ID:-} run_attempt=${GITHUB_RUN_ATTEMPT:-} self_heal_attempt=${SELF_HEAL_ATTEMPT}/${MAX_SELF_HEAL_ATTEMPTS} fix_issues=${created_fix_issues_count} summary=${summary_json} failure_summary=${failure_summary_json}"
+}
+
+if ! VALIDATION_PRECHECK_FAILURE_OUTPUT="$(enforce_canonical_driver_path 2>&1)"; then
+  printf '%s\n' "${VALIDATION_PRECHECK_FAILURE_OUTPUT}" >&2
+  emit_validation_failure_summary_precheck "Validation driver path violation" "${VALIDATION_PRECHECK_FAILURE_OUTPUT}" "harness_error"
+  exit 1
+fi
+
+if ! VALIDATION_PRECHECK_FAILURE_OUTPUT="$(enforce_no_renamed_driver_artifacts 2>&1)"; then
+  printf '%s\n' "${VALIDATION_PRECHECK_FAILURE_OUTPUT}" >&2
+  emit_validation_failure_summary_precheck "Validation driver artifact violation" "${VALIDATION_PRECHECK_FAILURE_OUTPUT}" "harness_error"
+  exit 1
+fi
+
+extract_last_json_with_key()
+{
+  local source_file="$1"
+  local required_key="$2"
+  local output_file="$3"
+
+  python3 - "${source_file}" "${required_key}" "${output_file}" <<'PY'
+import json
+import re
+import sys
+
+source_file = sys.argv[1]
+required_key = sys.argv[2]
+output_file = sys.argv[3]
+
+with open(source_file, "r", encoding="utf-8", errors="replace") as handle:
+    raw = handle.read()
+
+candidates = []
+
+trimmed = raw.strip()
+if trimmed:
+    try:
+        parsed = json.loads(trimmed)
+        if isinstance(parsed, dict) and required_key in parsed:
+            candidates.append(parsed)
+    except json.JSONDecodeError:
+        pass
+
+cleaned = re.sub(r"```(?:json)?\s*", "", raw)
+cleaned = re.sub(r"```\s*$", "", cleaned, flags=re.MULTILINE)
+
+decoder = json.JSONDecoder()
+pos = 0
+while pos < len(cleaned):
+    start = cleaned.find("{", pos)
+    if start == -1:
+        break
+    try:
+        parsed, end = decoder.raw_decode(cleaned[start:])
+        if isinstance(parsed, dict) and required_key in parsed:
+            candidates.append(parsed)
+        pos = start + end
+    except json.JSONDecodeError:
+        pos = start + 1
+
+if not candidates:
+    print(f"No JSON object with key '{required_key}' found", file=sys.stderr)
+    sys.exit(1)
+
+with open(output_file, "w", encoding="utf-8") as handle:
+    json.dump(candidates[-1], handle, ensure_ascii=True, indent=2)
+    handle.write("\n")
+PY
+}
+
+is_validation_harness_runnable()
+{
+	if [ -f validation/docker-compose.test.yml ] \
+		&& [ -f validation/tests/00_canary.sh ] \
+		&& find validation/tests -maxdepth 1 -type f -name '*.sh' -print -quit | grep -q .; then
+		GENERATED_VALIDATE_SCRIPT_PATH=""
+		return 0
+	fi
+
+	GENERATED_VALIDATE_SCRIPT_PATH=""
+	return 1
+}
+
+ensure_runtime_validation_driver()
+{
+  cat > "${VALIDATION_RUNNER_FILE}" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+# This fallback runner has no sandbox, so synthesised behavioural smoke tests
+# are skipped below and this flag must never be inherited (finding
+# smoke-synth-fallback-driver-host-exec).
+unset BEHAVIOURAL_SMOKE_SANDBOXED
+
+# Same rule as validate_driver.sh: a synthesised test is recognised by a
+# synth_round_*.sh name in any letter case or by the generated-wrapper
+# marker; a file whose content cannot be checked counts as synthesised and
+# is skipped (fail closed).
+is_synthesised_test()
+{
+  local synth_candidate_path="$1"
+  local synth_candidate_name="${synth_candidate_path##*/}"
+  local synth_marker_status=0
+
+  synth_candidate_name="${synth_candidate_name,,}"
+  if [[ "${synth_candidate_name}" == synth_round_*.sh ]]; then
+    return 0
+  fi
+  if [ -L "${synth_candidate_path}" ] || [ ! -f "${synth_candidate_path}" ] || [ ! -r "${synth_candidate_path}" ]; then
+    return 0
+  fi
+  grep -qF -e 'BEHAVIOURAL_SMOKE_SANDBOXED' -e '__BEHAVIOURAL_SMOKE_' -- "${synth_candidate_path}" 2>/dev/null \
+    || synth_marker_status=$?
+  [ "${synth_marker_status}" -ne 1 ]
+}
+
+COMPOSE_FILE="validation/docker-compose.test.yml"
+TEST_DIR="validation/tests"
+LOG_DIR="validation/logs"
+COMPOSE_LOG="${LOG_DIR}/compose.log"
+ENV_FILE="${VALIDATE_ENV_FILE:-validation/validate.env}"
+START_TS="$(date +%s)"
+
+	if [ -f "${ENV_FILE}" ]; then
+	  while IFS= read -r env_line || [ -n "${env_line}" ]; do
+	    env_line="${env_line%$'\r'}"
+	    env_line="${env_line#"${env_line%%[![:space:]]*}"}"
+	    [ -z "${env_line}" ] && continue
+	    [ "${env_line#\#}" != "${env_line}" ] && continue
+	    if [[ ! "${env_line}" =~ ^[A-Za-z_][A-Za-z0-9_]*=.*$ ]]; then
+	      printf 'validation_runtime_driver: %s: unparseable env_file line: %s\n' "${ENV_FILE}" "${env_line}" >&2
+	      exit 1
+	    fi
+	    key="${env_line%%=*}"
+	    value="${env_line#*=}"
+	    if [ "${#value}" -ge 2 ]; then
+	      first="${value:0:1}"; last="${value: -1}"
+	      if { [ "${first}" = '"' ] && [ "${last}" = '"' ]; } || { [ "${first}" = "'" ] && [ "${last}" = "'" ]; }; then
+	        value="${value:1:${#value}-2}"
+	      fi
+	    fi
+	    export "${key}=${value}"
+	  done < "${ENV_FILE}"
+	fi
+
+mkdir -p "${LOG_DIR}"
+: > "${COMPOSE_LOG}"
+
+TOTAL_TESTS=0
+PASSED_TESTS=0
+FAILED_TESTS=0
+FAILURES_FILE="$(mktemp)"
+RESULT_EMITTED=0
+printf '[]' > "${FAILURES_FILE}"
+
+append_failure()
+{
+  local test_name="$1"
+  local error_msg="$2"
+  local log_file="${3:-}"
+  local log_tail=""
+
+  if [ -n "${log_file}" ] && [ -f "${log_file}" ]; then
+    log_tail="$(tail -c 10000 "${log_file}" | tr -d '\000' | tail -n 30 2>/dev/null || true)"
+  fi
+
+  python3 - "${FAILURES_FILE}" "${test_name}" "${error_msg}" "${log_tail}" <<'PY'
+import json
+import sys
+
+path, test_name, error_msg, log_tail = sys.argv[1:5]
+with open(path, "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+payload.append({"test": test_name, "error": error_msg, "log_tail": log_tail})
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle)
+PY
+}
+
+emit_result()
+{
+  local result_value="${1:-fail}"
+  local duration_seconds
+
+  if [ "${RESULT_EMITTED}" = "1" ]; then
+    return 0
+  fi
+
+  duration_seconds=$(( $(date +%s) - START_TS ))
+
+  RESULT="${result_value}" \
+  TOTAL_TESTS="${TOTAL_TESTS}" \
+  PASSED_TESTS="${PASSED_TESTS}" \
+  FAILED_TESTS="${FAILED_TESTS}" \
+  DURATION_SECONDS="${duration_seconds}" \
+  FAILURES_FILE_PATH="${FAILURES_FILE}" \
+  python3 -c 'import json, os; print(json.dumps({
+"result": os.environ["RESULT"],
+"phase": "runtime_validation",
+"total_tests": int(os.environ["TOTAL_TESTS"]),
+"passed_tests": int(os.environ["PASSED_TESTS"]),
+"failed_tests": int(os.environ["FAILED_TESTS"]),
+"failures": json.load(open(os.environ["FAILURES_FILE_PATH"], encoding="utf-8")),
+"duration_seconds": int(os.environ["DURATION_SECONDS"]),
+}))'
+
+  RESULT_EMITTED=1
+}
+
+cleanup()
+{
+  {
+    printf '\n===== docker compose logs --no-color =====\n'
+    docker compose -f "${COMPOSE_FILE}" logs --no-color 2>/dev/null || true
+  } >> "${COMPOSE_LOG}"
+  docker compose -f "${COMPOSE_FILE}" down -v --remove-orphans >/dev/null 2>&1 || true
+  rm -f "${FAILURES_FILE}" >/dev/null 2>&1 || true
+}
+
+trap cleanup EXIT
+
+if ! docker compose -f "${COMPOSE_FILE}" up -d --build >> "${COMPOSE_LOG}" 2>&1; then
+  TOTAL_TESTS=$((TOTAL_TESTS + 1))
+  FAILED_TESTS=$((FAILED_TESTS + 1))
+  append_failure "compose_up" "failed to build/start compose services" "${COMPOSE_LOG}"
+  emit_result fail
+  exit 1
+fi
+
+mapfile -t test_scripts < <(find "${TEST_DIR}" -maxdepth 1 -type f -name '*.sh' | sort)
+if [ "${#test_scripts[@]}" -eq 0 ]; then
+  TOTAL_TESTS=$((TOTAL_TESTS + 1))
+  FAILED_TESTS=$((FAILED_TESTS + 1))
+  append_failure "tests_missing" "no validation test scripts found under ${TEST_DIR}"
+  emit_result fail
+  exit 1
+fi
+
+# A synthesised test is skipped below, so it can never serve as the canary
+# (same rule as validate_driver.sh's discover_tests).
+if [ "$(basename "${test_scripts[0]}")" != "00_canary.sh" ] || is_synthesised_test "${test_scripts[0]}"; then
+  TOTAL_TESTS=$((TOTAL_TESTS + 1))
+  FAILED_TESTS=$((FAILED_TESTS + 1))
+  append_failure "canary_missing" "first validation test script must be validation/tests/00_canary.sh"
+  emit_result fail
+  exit 1
+fi
+
+# Generated tests are untrusted: run each without the job's credentials
+# (mirrors run_test_without_credentials in scripts/validate_driver.sh).
+run_test_without_credentials()
+{
+  local -a scrub_args=()
+  local var_name
+  while IFS= read -r var_name; do
+    case "${var_name}" in
+      VALIDATION_TEST_USERNAME|VALIDATION_TEST_PASSWORD|VALIDATION_TEST_API_KEY|TEST_USERNAME|TEST_PASSWORD|TEST_API_KEY)
+        ;;
+      GH_TOKEN|GH_PAT|GITHUB_TOKEN|GH_ENTERPRISE_TOKEN|GITHUB_ENTERPRISE_TOKEN|OPENROUTER_API_KEY|TG_BOT_SECRET|TG_ADMIN_CHAT_ID|CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|OPENAI_API_KEY \
+      |GIT_CONFIG_*|GIT_ASKPASS|SSH_ASKPASS|SSH_AUTH_SOCK|ACTIONS_*|GITHUB_ENV|GITHUB_PATH|GITHUB_OUTPUT|GITHUB_STATE|GITHUB_STEP_SUMMARY \
+      |*_TOKEN|*_SECRET|*_PAT|*_API_KEY)
+        scrub_args+=("-u" "${var_name}")
+        ;;
+    esac
+  done < <(compgen -e)
+  env "${scrub_args[@]}" \
+    GIT_CONFIG_NOSYSTEM=1 \
+    GIT_CONFIG_GLOBAL=/dev/null \
+    GIT_TERMINAL_PROMPT=0 \
+    bash "$@"
+}
+
+for test_script in "${test_scripts[@]}"; do
+  test_name="$(basename "${test_script}")"
+  test_log="${LOG_DIR}/${test_name}.log"
+
+  echo "=== RUN ${test_name} ==="
+  test_script_is_synthesised=0
+  if is_synthesised_test "${test_script}"; then
+    test_script_is_synthesised=1
+    # Model-written synthesised tests run only in validate_driver.sh's
+    # credential-free, network-less sandbox; this fallback runner has none,
+    # so they are reported as skipped, never run on the host (finding
+    # smoke-synth-fallback-driver-host-exec).
+    {
+      echo "1..1"
+      echo "# BEHAVIOURAL_SMOKE_PRESENT_INCONCLUSIVE reason=sandbox_unavailable detail=fallback_driver"
+      echo "ok 1 - ${test_name} # SKIP behavioural smoke sandbox unavailable"
+    } > "${test_log}"
+    echo "BEHAVIOURAL_SMOKE_SANDBOX test=${test_name} outcome=skipped reason=fallback_driver" >&2
+    test_rc=0
+  else
+    # Template-rendered tests exist only when
+    # run_template_validation_harness_renderer's manifest shell-safety gate
+    # passed: it refuses to render when a shell-reachable .ai/validate.yml
+    # value is shell-unsafe (finding
+    # validation-manifest-shell-injection-fallback). This runner itself is
+    # launched through VALIDATION_HARNESS_CREDENTIAL_SCRUB. The validation-refresh
+    # path, which renders without validate_process.sh, applies the same check
+    # in validation_refresh_runner.py before it renders.
+    # Stream the output as it runs (tee keeps the copy the TAP counting
+    # reads): the idle watchdog kills a run that prints nothing for
+    # VALIDATION_TIMEOUT minutes (mirrors scripts/validate_driver.sh).
+    set +e
+    run_test_without_credentials "${test_script}" 2>&1 | tee "${test_log}"
+    # One PIPESTATUS snapshot. A failed tee leaves a partial log, so a
+    # passing test with a failed log write counts as failed.
+    test_rc=${PIPESTATUS[0]} test_tee_rc=${PIPESTATUS[1]}
+    if [ "${test_tee_rc}" -ne 0 ]; then
+      echo "::warning::validate_process: tee exited ${test_tee_rc} while writing ${test_log}; the test log may be incomplete" >&2
+      if [ "${test_rc}" -eq 0 ]; then
+        test_rc="${test_tee_rc}"
+      fi
+    fi
+    set -e
+  fi
+
+  # Decided once above: a test that deletes or rewrites itself must not
+  # flip which branch prints its log.
+  if [ "${test_script_is_synthesised}" -eq 1 ]; then
+    cat "${test_log}" || true
+  fi
+
+  ok_count="$(grep -E -c '^ok[[:space:]]+[0-9]+' "${test_log}" || true)"
+  TOTAL_TESTS=$((TOTAL_TESTS + ok_count))
+  PASSED_TESTS=$((PASSED_TESTS + ok_count))
+
+  not_ok_count=0
+  while IFS= read -r not_ok_line; do
+    [ -z "${not_ok_line}" ] && continue
+    not_ok_count=$((not_ok_count + 1))
+    append_failure "${test_name}" "${not_ok_line}" "${test_log}"
+  done < <(grep -E '^not ok[[:space:]]+[0-9]+([[:space:]]+-[[:space:]].*)?$' "${test_log}" || true)
+
+  TOTAL_TESTS=$((TOTAL_TESTS + not_ok_count))
+  FAILED_TESTS=$((FAILED_TESTS + not_ok_count))
+
+  if [ "${test_rc}" -ne 0 ] && [ "${not_ok_count}" -eq 0 ]; then
+    TOTAL_TESTS=$((TOTAL_TESTS + 1))
+    FAILED_TESTS=$((FAILED_TESTS + 1))
+    append_failure "${test_name}:unexpected_error" "script exited with code ${test_rc} without TAP 'not ok' output" "${test_log}"
+  fi
+done
+
+if [ "${FAILED_TESTS}" -eq 0 ]; then
+  emit_result pass
+  exit 0
+fi
+
+emit_result fail
+exit 1
+EOF
+
+  chmod +x "${VALIDATION_RUNNER_FILE}"
+}
+
+materialize_synthesised_behavioural_smoke_tests()
+{
+  local include_synthesised="true"
+  local materialize_output=""
+
+  case "$(printf '%s' "${VALIDATION_INCLUDE_SYNTHESISED:-true}" | tr '[:upper:]' '[:lower:]')" in
+    0|false|no|off)
+      include_synthesised="false"
+      ;;
+  esac
+
+  if [ "${include_synthesised}" != "true" ]; then
+    echo "validate_process: skipping synthesised behavioural smoke materialization (VALIDATION_INCLUDE_SYNTHESISED=${VALIDATION_INCLUDE_SYNTHESISED:-true})." >&2
+    return 0
+  fi
+
+  if [ ! -d .ai/review_runtime ]; then
+    return 0
+  fi
+
+  if ! materialize_output="$(PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+import json
+import os
+import re
+import stat
+import subprocess
+import sys
+from pathlib import Path
+
+
+repo_root = Path('.').resolve()
+runtime_root = (repo_root / '.ai' / 'review_runtime').resolve()
+# Cached synthesised wrappers are small generated shell scripts; anything
+# larger is not one of ours (finding smoke-manifest-canary-overwrite).
+SYNTH_SOURCE_MAX_BYTES = 1048576
+target_root = (repo_root / 'validation' / 'tests').resolve()
+# The manifest is restored from a PR-scoped cache, so its names are
+# untrusted: only synth_round_* names may be written, which validate_driver.sh
+# routes into its credential-free sandbox (finding
+# smoke-synth-credentialed-test-exec).  A non-matching name could plant a
+# host-run test or overwrite the canary.
+SYNTH_TARGET_NAME_RE = re.compile(r'^synth_round_([0-9]+)_[a-z0-9_]{1,72}\.sh$')
+SYNTH_MANIFEST_NAME_RE = re.compile(r'^synth_round_([0-9]+)_manifest\.json$')
+
+
+class _SynthSourceRejected(Exception):
+    pass
+
+
+def _read_regular_nofollow(name, dir_fd=None) -> bytes:
+    # Opens without following a final-component symlink, requires a regular
+    # file and bounds the size (finding smoke-manifest-canary-overwrite).
+    fd = os.open(name, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0), dir_fd=dir_fd)
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode):
+            raise _SynthSourceRejected('not_regular')
+        if info.st_size > SYNTH_SOURCE_MAX_BYTES:
+            raise _SynthSourceRejected('source_too_large')
+        chunks = []
+        total = 0
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > SYNTH_SOURCE_MAX_BYTES:
+                raise _SynthSourceRejected('source_too_large')
+            chunks.append(chunk)
+        return b''.join(chunks)
+    finally:
+        os.close(fd)
+
+
+def _write_new_file(data: bytes, name: str, mode: int, dir_fd: int) -> str:
+    # Never follow a symlink or overwrite a different file at the target
+    # (finding smoke-manifest-canary-overwrite).  Every check, the create and
+    # the chmod are relative to the already-opened validation/tests directory
+    # descriptor, so swapping a path component after the checks cannot
+    # redirect the write.  A byte-identical regular file counts as already
+    # materialized, so a self-heal re-run stays idempotent.  Returns
+    # 'written', 'identical' or a skip reason.
+    if not name or '/' in name or name in ('.', '..'):
+        return 'target_invalid'
+    try:
+        existing_info = os.lstat(name, dir_fd=dir_fd)
+    except FileNotFoundError:
+        existing_info = None
+    except OSError:
+        return 'target_unreadable'
+    if existing_info is not None:
+        if not stat.S_ISREG(existing_info.st_mode):
+            return 'target_not_regular'
+        try:
+            existing = _read_regular_nofollow(name, dir_fd=dir_fd)
+        except (OSError, _SynthSourceRejected):
+            return 'target_unreadable'
+        return 'identical' if existing == data else 'target_exists'
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, 'O_NOFOLLOW', 0)
+    try:
+        fd = os.open(name, flags, mode, dir_fd=dir_fd)
+    except OSError:
+        return 'target_create_failed'
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, 'wb') as handle:
+            fd = -1
+            handle.write(data)
+    finally:
+        if fd != -1:
+            os.close(fd)
+    return 'written'
+
+
+def _open_target_dir() -> int:
+    # Opens validation/tests one component at a time without following
+    # symlinks, so the descriptor is the real in-repository directory.
+    dir_flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0)
+    root_fd = os.open(str(repo_root), os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0))
+    try:
+        validation_fd = os.open('validation', dir_flags, dir_fd=root_fd)
+    finally:
+        os.close(root_fd)
+    try:
+        return os.open('tests', dir_flags, dir_fd=validation_fd)
+    finally:
+        os.close(validation_fd)
+
+
+def _manifest_key(path: Path):
+    round_match = re.search(r'/round-(\d+)/', path.as_posix())
+    pr_match = re.search(r'/pr-(\d+)/', path.as_posix())
+    round_value = int(round_match.group(1)) if round_match else -1
+    pr_value = int(pr_match.group(1)) if pr_match else -1
+    return (round_value, pr_value, path.as_posix())
+
+
+def _safe_target(relpath: object, expected_root: Path):
+    if not isinstance(relpath, str) or not relpath.strip():
+        return None
+    unresolved = repo_root / relpath
+    # Checks run on the unresolved path: resolving first would follow a
+    # symlink planted under validation/tests onto another file (finding
+    # smoke-manifest-canary-overwrite).
+    if unresolved.parent.resolve() != expected_root:
+        return None
+    if unresolved.name in ('', '.', '..'):
+        return None
+    return expected_root / unresolved.name
+
+
+# Provenance (finding smoke-manifest-canary-overwrite): the cache root must
+# be the real .ai/review_runtime inside this checkout, and the PR must not
+# have committed anything there (a force-added file would be taken for cache
+# output).  A failed tracked-file check fails closed when this is a git
+# checkout.
+if (
+    (repo_root / '.ai').is_symlink()
+    or (repo_root / '.ai' / 'review_runtime').is_symlink()
+    or not str(runtime_root).startswith(str(repo_root) + os.sep)
+):
+    print('validate_process: skipping synthesised smoke materialization because .ai or .ai/review_runtime is a symlink or escapes the repository.', file=sys.stderr)
+    sys.exit(0)
+try:
+    tracked_runtime = subprocess.run(
+        ['git', '-c', 'core.fsmonitor=', 'ls-files', '-z', '--', '.ai/review_runtime'],
+        cwd=str(repo_root),
+        capture_output=True,
+        timeout=60,
+    )
+except (OSError, subprocess.SubprocessError):
+    tracked_runtime = None
+in_git_checkout = (repo_root / '.git').exists() or bool(os.environ.get('GIT_DIR'))
+if tracked_runtime is not None and tracked_runtime.returncode == 0:
+    if tracked_runtime.stdout:
+        print('validate_process: skipping synthesised smoke materialization because of tracked review-runtime files.', file=sys.stderr)
+        sys.exit(0)
+elif in_git_checkout:
+    print('validate_process: skipping synthesised smoke materialization because the tracked review-runtime files check failed.', file=sys.stderr)
+    sys.exit(0)
+
+manifest_paths = sorted(runtime_root.glob('pr-*/round-*/synth/synth_round_*_manifest.json'))
+if not manifest_paths:
+    sys.exit(0)
+
+manifest_path = max(manifest_paths, key=_manifest_key)
+if manifest_path.is_symlink():
+    print('validate_process: skipping synthesised smoke materialization because the manifest is a symlink.', file=sys.stderr)
+    sys.exit(0)
+try:
+    manifest_path.resolve().relative_to(runtime_root)
+except ValueError:
+    print('validate_process: skipping synthesised smoke materialization because the manifest is outside the review-runtime root.', file=sys.stderr)
+    sys.exit(0)
+try:
+    manifest_bytes = _read_regular_nofollow(str(manifest_path))
+except (OSError, _SynthSourceRejected) as exc:
+    reason = str(exc) if isinstance(exc, _SynthSourceRejected) else 'unreadable'
+    print(f'validate_process: skipping synthesised smoke materialization because the manifest was rejected ({reason}).', file=sys.stderr)
+    sys.exit(0)
+payload = json.loads(manifest_bytes.decode('utf-8'))
+
+if not isinstance(payload, dict):
+    raise ValueError(f'invalid manifest payload at {manifest_path}')
+
+rows = payload.get('files')
+if not isinstance(rows, list):
+    raise ValueError(f'invalid manifest files list at {manifest_path}')
+
+source_manifest_match = SYNTH_MANIFEST_NAME_RE.match(manifest_path.name)
+if source_manifest_match is None:
+    print('validate_process: skipping synthesised smoke materialization because the manifest name is invalid.', file=sys.stderr)
+    sys.exit(0)
+manifest_round = source_manifest_match.group(1)
+
+target_manifest_relpath = payload.get('target_manifest_relpath')
+target_manifest_path = _safe_target(target_manifest_relpath, target_root)
+if (
+    target_manifest_path is None
+    or not SYNTH_MANIFEST_NAME_RE.match(target_manifest_path.name)
+    or target_manifest_path.name != manifest_path.name
+):
+    print('validate_process: skipping synthesised smoke materialization because target_manifest_relpath is invalid.', file=sys.stderr)
+    sys.exit(0)
+
+# A symlinked validation/ or validation/tests would resolve target_root
+# outside the repository; refuse to write anywhere in that case.
+if (
+    (repo_root / 'validation').is_symlink()
+    or (repo_root / 'validation' / 'tests').is_symlink()
+    or not str(target_root).startswith(str(repo_root) + os.sep)
+):
+    print('validate_process: skipping synthesised smoke materialization because validation/tests is a symlink or escapes the repository.', file=sys.stderr)
+    sys.exit(0)
+
+target_root.mkdir(parents=True, exist_ok=True)
+try:
+    target_dir_fd = _open_target_dir()
+except OSError:
+    print('validate_process: skipping synthesised smoke materialization because validation/tests could not be opened without following symlinks.', file=sys.stderr)
+    sys.exit(0)
+
+copied = 0
+seen_targets = set()
+for row in rows:
+    if not isinstance(row, dict):
+        continue
+    source_relpath = row.get('cache_relpath')
+    target_relpath = row.get('target_relpath')
+    if not isinstance(source_relpath, str) or not isinstance(target_relpath, str):
+        continue
+
+    unresolved_source = repo_root / source_relpath
+    if unresolved_source.is_symlink():
+        print(f'validate_process: skipping synthesised smoke source that is a symlink: {source_relpath}', file=sys.stderr)
+        continue
+    source_path = unresolved_source.resolve()
+    try:
+        source_path.relative_to(runtime_root)
+    except ValueError:
+        print(f'validate_process: skipping synthesised smoke source outside review-runtime root: {source_relpath}', file=sys.stderr)
+        continue
+    if not source_path.is_file():
+        print(f'validate_process: missing synthesised smoke source: {source_relpath}', file=sys.stderr)
+        continue
+
+    target_path = _safe_target(target_relpath, target_root)
+    if target_path is None:
+        print(f'validate_process: skipping synthesised smoke target outside validation/tests: {target_relpath}', file=sys.stderr)
+        continue
+    target_name_match = SYNTH_TARGET_NAME_RE.match(target_path.name)
+    if target_name_match is None:
+        print(f'validate_process: skipping synthesised smoke target not named synth_round_<n>_<slug>.sh: {target_relpath}', file=sys.stderr)
+        continue
+    if target_name_match.group(1) != manifest_round:
+        print(f'validate_process: skipping synthesised smoke target whose round does not match the manifest: {target_relpath}', file=sys.stderr)
+        continue
+    if target_path.name in seen_targets:
+        print(f'validate_process: skipping duplicate synthesised smoke target: {target_relpath}', file=sys.stderr)
+        continue
+    seen_targets.add(target_path.name)
+
+    try:
+        source_data = _read_regular_nofollow(str(unresolved_source))
+    except _SynthSourceRejected as exc:
+        print(f'validate_process: skipping synthesised smoke source ({exc}): {source_relpath}', file=sys.stderr)
+        continue
+    except OSError:
+        print(f'validate_process: skipping synthesised smoke source (source_unreadable): {source_relpath}', file=sys.stderr)
+        continue
+    outcome = _write_new_file(source_data, target_path.name, 0o755, target_dir_fd)
+    if outcome not in ('written', 'identical'):
+        print(f'validate_process: skipping synthesised smoke target ({outcome}): {target_relpath}', file=sys.stderr)
+        continue
+    copied += 1
+
+manifest_outcome = _write_new_file(manifest_bytes, target_manifest_path.name, 0o644, target_dir_fd)
+os.close(target_dir_fd)
+if manifest_outcome not in ('written', 'identical'):
+    print(f'validate_process: warning: synthesised smoke manifest not copied ({manifest_outcome}).', file=sys.stderr)
+
+if copied == 0 and rows:
+    print(
+        'validate_process: warning: manifest at {} listed {} file(s) but none were materialized into validation/tests.'.format(
+            manifest_path.relative_to(repo_root).as_posix(),
+            len(rows),
+        ),
+        file=sys.stderr,
+    )
+else:
+    print(f'Materialized synthesised behavioural smoke tests from {manifest_path.relative_to(repo_root).as_posix()} into validation/tests (files={copied}).')
+PY
+)"; then
+    echo "::warning::Failed to materialize synthesised behavioural smoke tests from .ai/review_runtime; continuing without them." >&2
+    return 0
+  fi
+
+  if [ -n "${materialize_output}" ]; then
+    echo "${materialize_output}"
+  fi
+}
+
+write_status_file()
+{
+  local status="$1"
+  local summary="$2"
+  local failure_summary="$3"
+  # Optional 4th arg: raw_status preserves the original diagnose classifier
+  # (for example `harness_error`, `needs_fixes`, `infeasible`) so downstream
+  # consumers can distinguish harness defects from app-side failures even
+  # though `status` is normalized to `pass`/`fail`/`error`. Defaults to the
+  # normalized status for backward compatibility.
+  local raw_status="${4:-${status}}"
+
+  jq -n \
+    --arg status "${status}" \
+    --arg raw_status "${raw_status}" \
+    --arg summary "${summary}" \
+    --arg failure_summary "${failure_summary}" \
+    --arg tracking_issue "${TRACKING_ISSUE_RAW}" \
+    '{
+      status: $status,
+      raw_status: $raw_status,
+      summary: $summary,
+      failure_summary: (if ($failure_summary | length) > 0 then $failure_summary else null end),
+      tracking_issue: $tracking_issue
+    }' > "${STATUS_FILE}"
+}
+
+write_metadata_file()
+{
+  local status="$1"
+  local summary="$2"
+  local failure_summary="$3"
+  local raw_status="${4:-${status}}"
+
+  local validation_file="${VALIDATION_RESULT_FILE}"
+  local diagnosis_file="${DIAGNOSE_RESULT_FILE}"
+
+  if [ ! -f "${validation_file}" ]; then
+    validation_file="${NULL_JSON_FILE}"
+  fi
+
+  if [ ! -f "${diagnosis_file}" ]; then
+    diagnosis_file="${NULL_JSON_FILE}"
+  fi
+
+  jq -n \
+    --arg status "${status}" \
+    --arg raw_status "${raw_status}" \
+    --arg summary "${summary}" \
+    --arg failure_summary "${failure_summary}" \
+    --arg hints_source "${HINTS_SOURCE}" \
+    --arg harness_mode "${HARNESS_MODE}" \
+    --arg harness_generator_mode "${HARNESS_GENERATOR_MODE}" \
+    --arg pre_flight_status "${PRE_FLIGHT_STATUS}" \
+    --arg repository "${GITHUB_REPOSITORY}" \
+    --arg tracking_issue "${TRACKING_ISSUE_RAW}" \
+    --arg runtime_dir "${RUNTIME_DIR}" \
+    --arg compose_file "${VALIDATION_COMPOSE_FILE}" \
+    --arg validation_log_file "${VALIDATION_LOG_FILE}" \
+    --arg generate_log_file "${GENERATE_LOG_FILE}" \
+    --arg diagnose_log_file "${DIAGNOSE_LOG_FILE}" \
+    --arg generated_validate_file "${GENERATED_VALIDATE_SCRIPT_PATH}" \
+    --arg generated_compose_file "validation/docker-compose.test.yml" \
+    --argjson created_fix_issues "${CREATED_FIX_ISSUES_JSON}" \
+    --slurpfile validation_result "${validation_file}" \
+    --slurpfile diagnosis "${diagnosis_file}" \
+    '{
+      status: $status,
+      raw_status: $raw_status,
+      summary: $summary,
+      failure_summary: (if ($failure_summary | length) > 0 then $failure_summary else null end),
+      hints_source: $hints_source,
+      harness_mode: $harness_mode,
+      harness_generator_mode: $harness_generator_mode,
+      pre_flight_status: $pre_flight_status,
+      repository: $repository,
+      tracking_issue: $tracking_issue,
+      compose_file: $compose_file,
+      generated_at_utc: (now | todateiso8601),
+      created_fix_issues: $created_fix_issues,
+      validation_result: ($validation_result[0] // null),
+      diagnosis: ($diagnosis[0] // null),
+      artifact_paths: {
+        runtime_dir: $runtime_dir,
+        validation_log: $validation_log_file,
+        generate_log: $generate_log_file,
+        diagnose_log: $diagnose_log_file,
+        generated_validate_script: (if ($generated_validate_file | length) > 0 then $generated_validate_file else null end),
+        generated_compose_file: $generated_compose_file,
+        validation_logs_dir: "validation/logs"
+      }
+    }' > "${METADATA_FILE}"
+}
+
+compact_validation_summary_value()
+{
+  local value="$1"
+
+  printf '%s' "${value}" | tr '\r\n' '  ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//'
+}
+
+emit_validation_failure_summary()
+{
+  local status="$1"
+  local summary="$2"
+  local failure_summary="$3"
+  local raw_status="${4:-${status}}"
+
+  if [ "${status}" = "pass" ]; then
+    return 0
+  fi
+
+  local compact_summary=""
+  local compact_failure_summary=""
+  local repository_json='""'
+  local summary_json='""'
+  local failure_summary_json='""'
+  local created_fix_issues_count="0"
+
+  compact_summary="$(compact_validation_summary_value "${summary}")"
+  compact_failure_summary="$(compact_validation_summary_value "${failure_summary}")"
+  if [ -z "${compact_failure_summary}" ]; then
+    compact_failure_summary="${compact_summary}"
+  fi
+
+  repository_json="$(jq -cn --arg value "${GITHUB_REPOSITORY:-}" '$value')"
+  summary_json="$(jq -cn --arg value "${compact_summary}" '$value')"
+  failure_summary_json="$(jq -cn --arg value "${compact_failure_summary}" '$value')"
+  created_fix_issues_count="$(printf '%s' "${CREATED_FIX_ISSUES_JSON:-[]}" | jq -r 'if type == "array" then length else 0 end' 2>/dev/null || printf '%s' '0')"
+
+  printf '%s\n' \
+    "VALIDATION_FAILURE_SUMMARY repository=${repository_json} tracking_issue=${TRACKING_ISSUE_RAW} status=${status} raw_status=${raw_status} cycle=${VALIDATION_CYCLE} run_id=${GITHUB_RUN_ID:-} run_attempt=${GITHUB_RUN_ATTEMPT:-} self_heal_attempt=${SELF_HEAL_ATTEMPT}/${MAX_SELF_HEAL_ATTEMPTS} fix_issues=${created_fix_issues_count} summary=${summary_json} failure_summary=${failure_summary_json}"
+}
+
+write_result_files()
+{
+  local status="$1"
+  local summary="$2"
+  local failure_summary="$3"
+  local raw_status="${4:-${status}}"
+
+  write_status_file "${status}" "${summary}" "${failure_summary}" "${raw_status}"
+  write_metadata_file "${status}" "${summary}" "${failure_summary}" "${raw_status}"
+  validation_owner_merge_fields
+  emit_validation_failure_summary "${status}" "${summary}" "${failure_summary}" "${raw_status}"
+}
+
+# BEGIN validation owner routing (project #7913 p1c)
+# Who owns a failed runtime validation run: the harness this repository
+# ships, the consumer project, both (mixed) or neither (plan
+# docs/plans/validation-failure-harness-routing-plan.md, Phase 1, steps 1
+# and 5). `workflow_failure_heal.py classify-validation-owner` makes every
+# decision; this block gathers its inputs, applies the result and records it.
+# The classifier runs only from the trusted support checkout
+# (VALIDATE_HELPER_STAGE_DIR), never from the consumer checkout. A missing
+# helper or a failed call fails open to the behaviour before this block.
+# VALIDATION_HARNESS_HEAL_ENABLED (default true): unset, empty or true (any
+# letter case) is on, false (any letter case) is off, and any other value
+# warns once and stays on, like the poller's validation harness hold. Off,
+# nothing below runs and the run behaves exactly as before.
+# raw_status values are unchanged; ownership is the separate failure_owner
+# field of the status and metadata files.
+VALIDATION_HARNESS_REASON=""
+VALIDATION_HARNESS_STAGE=""
+VALIDATION_OWNER_OWNER=""
+VALIDATION_OWNER_REASON=""
+VALIDATION_OWNER_STAGE=""
+VALIDATION_OWNER_FP=""
+VALIDATION_OWNER_HARNESS_PATHS=""
+VALIDATION_OWNER_PROJECT_PATHS=""
+VALIDATION_OWNER_REPORT="false"
+VALIDATION_OWNER_SWITCH_WARNED="0"
+VALIDATION_OWNER_MANAGED_PATHS_FILE="${VALIDATION_OWNER_MANAGED_PATHS_FILE:-}"
+VALIDATION_OWNER_STAGES="generate preflight sandbox canary run diagnose engine"
+VALIDATION_OWNER_REASONS="sandbox_unavailable preflight_failed canary_failed generate_failed engine_unavailable diagnosis_harness owner_paths mixed_harness_part escalated_repeat bounced_repeat"
+
+validation_owner_enabled()
+{
+  local value="${VALIDATION_HARNESS_HEAL_ENABLED-true}"
+  case "${value,,}" in
+    ""|true) return 0 ;;
+    false) return 1 ;;
+  esac
+  # Same contract as the poller's validation harness hold
+  # (scripts/orchestrate_poll_process.sh): an invalid value warns and stays on,
+  # so validate writes the owner markers the poller's hold waits for.
+  # The warned state is also kept in a RUNTIME_DIR sentinel, because a first
+  # call inside $(...) cannot set VALIDATION_OWNER_SWITCH_WARNED for the parent.
+  local warned_file
+  warned_file="$(validation_owner_runtime_file validation_owner_switch_warned)"
+  if [ "${VALIDATION_OWNER_SWITCH_WARNED}" != "1" ] && [ ! -e "${warned_file}" ]; then
+    echo "::warning::VALIDATION_OWNER outcome=default reason=invalid_switch (VALIDATION_HARNESS_HEAL_ENABLED must be true or false; owner routing stays on)." >&2
+    : > "${warned_file}" 2>/dev/null || true
+  fi
+  VALIDATION_OWNER_SWITCH_WARNED="1"
+  return 0
+}
+
+validation_owner_in_list()
+{
+  local value="$1" list="$2" item
+  [ -n "${value}" ] || return 1
+  for item in ${list}; do
+    [ "${item}" = "${value}" ] && return 0
+  done
+  return 1
+}
+
+validation_owner_helper()
+{
+  local stage_dir="${VALIDATE_HELPER_STAGE_DIR:-}"
+  local helper="${stage_dir}/scripts/workflow_failure_heal.py"
+  [ -n "${stage_dir}" ] || return 1
+  if [ -L "${stage_dir}/scripts" ] || [ -L "${helper}" ] || [ ! -f "${helper}" ]; then
+    return 1
+  fi
+  printf '%s\n' "${helper}"
+}
+
+validation_owner_runtime_file()
+{
+  printf '%s/%s\n' "${RUNTIME_DIR:-${TMPDIR:-/tmp}}" "$1"
+}
+
+validation_owner_pipeline_login()
+{
+  local memo login=""
+  memo="$(validation_owner_runtime_file validation_owner_login.txt)"
+  if [ -f "${memo}" ] && [ ! -L "${memo}" ]; then
+    login="$(head -n 1 "${memo}" 2>/dev/null || true)"
+  else
+    login="$(gh_retry gh api user --jq .login 2>/dev/null | head -n 1 | tr -d '\r' || true)"
+    if [[ "${login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}(\[bot\])?$ ]]; then
+      printf '%s\n' "${login}" > "${memo}" 2>/dev/null || true
+    fi
+  fi
+  [[ "${login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}(\[bot\])?$ ]] || return 1
+  printf '%s\n' "${login}"
+}
+
+validation_owner_load_bounced()
+{
+  local out loaded login="" comments=""
+  validation_owner_enabled || return 0
+  out="$(validation_owner_runtime_file validation_harness_bounced_fps.txt)"
+  # Memoized by a separate sentinel, written only once the markers were read
+  # (or need no read), so a failed read is retried by the next call.
+  loaded="$(validation_owner_runtime_file validation_harness_bounced_loaded)"
+  if [ -f "${loaded}" ] && [ ! -L "${loaded}" ] && [ -f "${out}" ] && [ ! -L "${out}" ]; then
+    return 0
+  fi
+  : > "${out}" 2>/dev/null || return 0
+  if ! is_tracking_run; then
+    : > "${loaded}" 2>/dev/null || true
+    return 0
+  fi
+  if ! login="$(validation_owner_pipeline_login)"; then
+    echo "::warning::VALIDATION_OWNER outcome=fail_open reason=login_unavailable (bounce markers not read)." >&2
+    return 0
+  fi
+  # GitHub API audit (unattended rules §14): the existing tracking-comment
+  # read (PRIOR_COMMENTS, Phase 2 bootstrap) keeps bodies only, with no
+  # author, only the last 3 "Runtime validation" comments, and runs only when
+  # the cycle is above 1. A bounce marker counts only from the pipeline login,
+  # so this one memoized paginated read keeps {login, body} of the comments
+  # that carry it. At most one call (plus pages) per run.
+  if ! comments="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}/comments?per_page=100" --paginate \
+    --jq '.[] | select((.body // "") | contains("validation-harness-bounce:v1")) | {login: (.user.login // ""), body: (.body // "")} | @json' 2>/dev/null)"; then
+    echo "::warning::VALIDATION_OWNER outcome=fail_open reason=comments_unavailable (bounce markers not read)." >&2
+    return 0
+  fi
+  if ! printf '%s\n' "${comments}" | jq -r --arg login "${login}" '
+    select(type == "object" and .login == $login)
+    | (.body // "") | split("\n")
+    | map(sub("\\s+$"; "")) | map(select(length > 0))
+    | (last // "")
+    | (capture("^<!-- validation-harness-bounce:v1 fp=(?<fp>[0-9a-f]{64})( [^>]*)? -->$")? // empty)
+    | .fp' 2>/dev/null | sort -u > "${out}" 2>/dev/null; then
+    # A failed parse is not memoized, so the next call reads the markers again.
+    : > "${out}" 2>/dev/null || true
+    echo "::warning::VALIDATION_OWNER outcome=fail_open reason=comments_unparsed (bounce markers not read)." >&2
+    return 0
+  fi
+  : > "${loaded}" 2>/dev/null || true
+}
+
+validation_owner_signature()
+{
+  local stage="$1" fallback="${2:-}"
+  local out tail_file log="" helper="" signature=""
+  validation_owner_enabled || return 0
+  out="$(validation_owner_runtime_file validation_harness_signature.txt)"
+  tail_file="$(validation_owner_runtime_file validation_harness_log_tail.txt)"
+  case "${stage}" in
+    canary|run|diagnose) log="${VALIDATION_LOG_FILE:-}" ;;
+    generate) log="${GENERATE_LOG_FILE:-}" ;;
+    preflight)
+      log="${PRE_FLIGHT_LOG_FILE:-}"
+      [ -s "${log}" ] || log="${GENERATE_LOG_FILE:-}"
+      ;;
+    engine)
+      log="${DIAGNOSE_LOG_FILE:-}"
+      [ -s "${log}" ] || log="${GENERATE_LOG_FILE:-}"
+      ;;
+    sandbox) log="${VALIDATION_HARNESS_SANDBOX_STATUS_FILE:-}" ;;
+  esac
+  : > "${tail_file}" 2>/dev/null || true
+  if helper="$(validation_owner_helper)"; then
+    if [ -n "${log}" ] && [ -f "${log}" ] && [ ! -L "${log}" ] && [ -s "${log}" ]; then
+      tail -n 200 -- "${log}" 2>/dev/null | python3 -I -B "${helper}" redact-stream > "${tail_file}" 2>/dev/null || : > "${tail_file}"
+      if [ -s "${tail_file}" ]; then
+        signature="$(python3 -I -B "${helper}" error-signature --log-file "${tail_file}" 2>/dev/null | head -n 1 | cut -c1-200 || true)"
+      fi
+    fi
+    # A log with no error-shaped line (the sandbox status file is one) gives
+    # the "no-error-lines" sentinel; prefer the fallback text then, so
+    # distinct failures of one stage keep distinct fingerprints.
+    if [ "${signature}" = "no-error-lines" ] && [ -n "${fallback}" ]; then
+      signature=""
+    fi
+    if [ -z "${signature}" ] && [ -n "${fallback}" ]; then
+      # Normalise the fallback text through error-signature like a log tail,
+      # so one failure keeps one fingerprint whether or not its log exists.
+      compact_validation_summary_value "${fallback}" | python3 -I -B "${helper}" redact-stream > "${tail_file}" 2>/dev/null || : > "${tail_file}"
+      if [ -s "${tail_file}" ]; then
+        signature="$(python3 -I -B "${helper}" error-signature --log-file "${tail_file}" 2>/dev/null | head -n 1 | cut -c1-200 || true)"
+        # error-signature prints "no-error-lines" when nothing matches; use the
+        # redacted first line then, so distinct summaries keep distinct prints.
+        if [ -z "${signature}" ] || [ "${signature}" = "no-error-lines" ]; then
+          signature="$(head -n 1 "${tail_file}" 2>/dev/null | cut -c1-200 || true)"
+        fi
+      fi
+    fi
+  fi
+  printf '%s\n' "${signature}" > "${out}" 2>/dev/null || true
+}
+
+validation_owner_reset()
+{
+  VALIDATION_OWNER_OWNER="none"
+  VALIDATION_OWNER_REASON=""
+  VALIDATION_OWNER_STAGE=""
+  VALIDATION_OWNER_FP=""
+  VALIDATION_OWNER_HARNESS_PATHS=""
+  VALIDATION_OWNER_PROJECT_PATHS=""
+  VALIDATION_OWNER_REPORT="false"
+}
+
+validation_owner_sanitize_paths()
+{
+  printf '%s' "$1" | tr -c 'A-Za-z0-9._/,:-' '_' | cut -c1-2000
+}
+
+validation_owner_classify()
+{
+  local mode="$1" raw_status="${2:-}"
+  local helper out bounced_file sig_file parsed owner reason stage fp harness_paths project_paths
+  local -a args=()
+  validation_owner_reset
+  validation_owner_enabled || return 0
+  out="$(validation_owner_runtime_file validation_owner.json)"
+  bounced_file="$(validation_owner_runtime_file validation_harness_bounced_fps.txt)"
+  sig_file="$(validation_owner_runtime_file validation_harness_signature.txt)"
+  rm -f -- "${out}" 2>/dev/null || true
+  if ! helper="$(validation_owner_helper)"; then
+    echo "::warning::VALIDATION_OWNER outcome=fail_open reason=classifier_unavailable (no trusted workflow_failure_heal.py in VALIDATE_HELPER_STAGE_DIR)." >&2
+    return 0
+  fi
+  args=(classify-validation-owner
+    --consumer-root "${PWD}"
+    --support-root "${VALIDATE_HELPER_STAGE_DIR}"
+    --support-commit HEAD
+    --raw-status "${raw_status}"
+    --bounced-fingerprints-file "${bounced_file}"
+    --signature-file "${sig_file}"
+    --source-repo "${GITHUB_REPOSITORY:-}")
+  if [ "${mode}" = "fixed" ]; then
+    args+=(--fixed-reason "${VALIDATION_HARNESS_REASON}" --fixed-stage "${VALIDATION_HARNESS_STAGE}")
+  else
+    args+=(--diagnosis-json "${DIAGNOSE_RESULT_FILE}")
+  fi
+  if [ -n "${VALIDATION_OWNER_MANAGED_PATHS_FILE}" ]; then
+    args+=(--managed-paths-file "${VALIDATION_OWNER_MANAGED_PATHS_FILE}")
+  fi
+  if ! python3 -I -B "${helper}" "${args[@]}" > "${out}" 2>/dev/null; then
+    echo "::warning::VALIDATION_OWNER outcome=fail_open reason=classifier_unavailable (classify-validation-owner failed)." >&2
+    rm -f -- "${out}" 2>/dev/null || true
+    return 0
+  fi
+  if ! parsed="$(jq -r 'if type == "object" then [
+      (.owner // "" | tostring), (.reason // "" | tostring), (.stage // "" | tostring), (.fingerprint // "" | tostring),
+      ((.harness_paths // []) | if type == "array" then map(strings) | .[:10] | join(",") else "" end),
+      ((.project_paths // []) | if type == "array" then map(strings) | .[:10] | join(",") else "" end)
+    ] | join("\u001f") else error("not an object") end' "${out}" 2>/dev/null)" || [ -z "${parsed}" ]; then
+    echo "::warning::VALIDATION_OWNER outcome=fail_open reason=classifier_unavailable (unreadable classifier output)." >&2
+    return 0
+  fi
+  IFS=$'\x1f' read -r owner reason stage fp harness_paths project_paths <<< "${parsed}"
+  case "${owner}" in
+    harness|project|mixed|none) ;;
+    *)
+      echo "::warning::VALIDATION_OWNER outcome=fail_open reason=classifier_unavailable (unknown owner)." >&2
+      return 0
+      ;;
+  esac
+  if [ -n "${reason}" ] && ! validation_owner_in_list "${reason}" "${VALIDATION_OWNER_REASONS}"; then reason=""; fi
+  if [ -n "${stage}" ] && ! validation_owner_in_list "${stage}" "${VALIDATION_OWNER_STAGES}"; then stage=""; fi
+  [[ "${fp}" =~ ^[0-9a-f]{64}$ ]] || fp=""
+  if [ "${owner}" = "harness" ] || [ "${owner}" = "mixed" ]; then
+    if [ -z "${reason}" ] || [ -z "${stage}" ] || [ "${reason}" = "bounced_repeat" ]; then
+      echo "::warning::VALIDATION_OWNER outcome=fail_open reason=classifier_unavailable (harness owner without a valid stage or reason)." >&2
+      return 0
+    fi
+    if [ -z "${fp}" ]; then
+      fp="$(python3 -I -B "${helper}" validation-failure-fingerprint --stage "${stage}" --reason "${reason}" \
+        --signature-file "${sig_file}" --source-repo "${GITHUB_REPOSITORY:-}" 2>/dev/null | head -n 1 || true)"
+      [[ "${fp}" =~ ^[0-9a-f]{64}$ ]] || fp=""
+    fi
+  fi
+  VALIDATION_OWNER_OWNER="${owner}"
+  VALIDATION_OWNER_REASON="${reason}"
+  VALIDATION_OWNER_STAGE="${stage}"
+  VALIDATION_OWNER_FP="${fp}"
+  VALIDATION_OWNER_HARNESS_PATHS="$(validation_owner_sanitize_paths "${harness_paths}")"
+  VALIDATION_OWNER_PROJECT_PATHS="$(validation_owner_sanitize_paths "${project_paths}")"
+  if is_tracking_run; then
+    if [ "${owner}" = "harness" ] || { [ "${owner}" = "mixed" ] && [ -n "${fp}" ] && [ "${reason}" = "mixed_harness_part" ]; }; then
+      VALIDATION_OWNER_REPORT="true"
+    fi
+  fi
+  echo "VALIDATION_OWNER owner=${VALIDATION_OWNER_OWNER} reason=${VALIDATION_OWNER_REASON:-none} stage=${VALIDATION_OWNER_STAGE:-none} fp=${VALIDATION_OWNER_FP:-none} harness_paths=${VALIDATION_OWNER_HARNESS_PATHS:-none} project_paths=${VALIDATION_OWNER_PROJECT_PATHS:-none}"
+}
+
+# Layer 0: a reason the validate run decides itself, without the diagnosis.
+validation_owner_fixed()
+{
+  local reason="$1" fallback="${2:-}" stage="" raw_status="harness_error"
+  validation_owner_reset
+  validation_owner_enabled || return 0
+  case "${reason}" in
+    sandbox_unavailable) stage="sandbox" ;;
+    preflight_failed) stage="preflight" ;;
+    canary_failed) stage="canary" ;;
+    generate_failed) stage="generate" ;;
+    engine_unavailable) stage="engine"; raw_status="codex_failure" ;;
+    escalated_repeat) stage="run" ;;
+    *)
+      echo "::warning::VALIDATION_OWNER outcome=fail_open reason=unknown_fixed_reason." >&2
+      return 0
+      ;;
+  esac
+  VALIDATION_HARNESS_REASON="${reason}"
+  VALIDATION_HARNESS_STAGE="${stage}"
+  validation_owner_signature "${stage}" "${fallback}"
+  validation_owner_load_bounced
+  validation_owner_classify fixed "${raw_status}"
+}
+
+# Whether this job's engine-fallback ledger holds a refused (non-capacity)
+# fallback record: `v1<TAB>ts<TAB>role<TAB>reason<TAB>class<TAB>action<TAB>policy`
+# (scripts/ai_engine.sh), action `refused`.
+validation_owner_engine_refused()
+{
+  local records="${AI_ENGINE_FALLBACK_RECORDS_FILE:-${RUNNER_TEMP:-/tmp}/ai-engine-fallback-records.tsv}"
+  [ -f "${records}" ] && [ ! -L "${records}" ] || return 1
+  awk -F'\t' '$1 == "v1" && $6 == "refused" { found = 1 } END { exit(found ? 0 : 1) }' "${records}" 2>/dev/null
+}
+
+# Last line of a harness-owned tracking comment; printed only when every
+# field is valid, else nothing (the poller then keeps its local fallback).
+validation_owner_comment_marker()
+{
+  local support="" run="${GITHUB_RUN_ID:-}"
+  validation_owner_enabled || return 0
+  [ "${VALIDATION_OWNER_OWNER}" = "harness" ] || return 0
+  [[ "${VALIDATION_OWNER_FP}" =~ ^[0-9a-f]{64}$ ]] || return 0
+  validation_owner_in_list "${VALIDATION_OWNER_STAGE}" "${VALIDATION_OWNER_STAGES}" || return 0
+  validation_owner_in_list "${VALIDATION_OWNER_REASON}" "${VALIDATION_OWNER_REASONS}" || return 0
+  [ "${VALIDATION_OWNER_REASON}" != "bounced_repeat" ] || return 0
+  [[ "${run}" =~ ^[0-9]+$ ]] || return 0
+  if [[ "${VALIDATE_SUPPORT_SHA:-}" =~ ^[0-9a-f]{40}$ ]]; then
+    support="${VALIDATE_SUPPORT_SHA}"
+  elif [ -n "${VALIDATE_HELPER_STAGE_DIR:-}" ]; then
+    # validate.yml exports GIT_DIR / GIT_WORK_TREE for the consumer checkout,
+    # which would override -C; drop them so HEAD is the support checkout's.
+    support="$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${VALIDATE_HELPER_STAGE_DIR}" rev-parse HEAD 2>/dev/null || true)"
+  fi
+  [[ "${support}" =~ ^[0-9a-f]{40}$ ]] || return 0
+  printf '\n\n<!-- validation-harness-owner:v1 fp=%s stage=%s reason=%s support=%s run=%s -->' \
+    "${VALIDATION_OWNER_FP}" "${VALIDATION_OWNER_STAGE}" "${VALIDATION_OWNER_REASON}" "${support}" "${run}"
+}
+
+# Adds the ownership fields to the status and metadata files that
+# write_status_file / write_metadata_file just wrote.
+validation_owner_merge_fields()
+{
+  local owner reason stage fp report tmp
+  validation_owner_enabled || return 0
+  owner="${VALIDATION_OWNER_OWNER:-none}"
+  case "${owner}" in harness|project|mixed|none) ;; *) owner="none" ;; esac
+  reason="${VALIDATION_OWNER_REASON}"
+  validation_owner_in_list "${reason}" "${VALIDATION_OWNER_REASONS}" || reason=""
+  stage="${VALIDATION_OWNER_STAGE}"
+  validation_owner_in_list "${stage}" "${VALIDATION_OWNER_STAGES}" || stage=""
+  fp="${VALIDATION_OWNER_FP}"
+  [[ "${fp}" =~ ^[0-9a-f]{64}$ ]] || fp=""
+  report="false"
+  [ "${VALIDATION_OWNER_REPORT}" = "true" ] && report="true"
+  if [ -f "${STATUS_FILE:-}" ]; then
+    tmp="${STATUS_FILE}.owner.tmp"
+    if jq --arg owner "${owner}" --argjson report "${report}" --arg stage "${stage}" --arg reason "${reason}" --arg fp "${fp}" \
+      '. + {failure_owner: $owner, harness_report: $report, harness_stage: $stage, harness_reason: $reason, harness_fp: $fp}' \
+      "${STATUS_FILE}" > "${tmp}" 2>/dev/null; then
+      mv -f -- "${tmp}" "${STATUS_FILE}"
+    else
+      rm -f -- "${tmp}" 2>/dev/null || true
+    fi
+  fi
+  if [ -f "${METADATA_FILE:-}" ]; then
+    tmp="${METADATA_FILE}.owner.tmp"
+    if jq --arg owner "${owner}" --argjson report "${report}" --arg stage "${stage}" --arg reason "${reason}" --arg fp "${fp}" \
+      --arg harness_paths "${VALIDATION_OWNER_HARNESS_PATHS}" --arg project_paths "${VALIDATION_OWNER_PROJECT_PATHS}" \
+      '. + {failure_owner: $owner, harness_report: $report, harness_stage: $stage, harness_reason: $reason, harness_fp: $fp,
+        harness_paths: ($harness_paths | if length > 0 then split(",") else [] end),
+        project_paths: ($project_paths | if length > 0 then split(",") else [] end)}' \
+      "${METADATA_FILE}" > "${tmp}" 2>/dev/null; then
+      mv -f -- "${tmp}" "${METADATA_FILE}"
+    else
+      rm -f -- "${tmp}" 2>/dev/null || true
+    fi
+  fi
+}
+
+# Diagnose prompt context: the harness owner already bounced this failure
+# back to the project, and run facts the diagnosis must weigh (Q17: an idle
+# watchdog kill is a fact, not a harness verdict).
+validation_owner_ruled_out_block()
+{
+  local bounced_file sig_file helper pair fp matched=""
+  validation_owner_enabled || return 0
+  if [ "${VALIDATION_IDLE_KILLED:-0}" = "1" ]; then
+    echo
+    echo "=== VALIDATION RUN FACTS ==="
+    echo "idle_watchdog_killed=true"
+    echo "The harness run produced no output for the idle timeout and the watchdog killed it. This is a fact about the run, not a classification: decide the owner from the evidence."
+  fi
+  bounced_file="$(validation_owner_runtime_file validation_harness_bounced_fps.txt)"
+  sig_file="$(validation_owner_runtime_file validation_harness_signature.txt)"
+  [ -s "${bounced_file}" ] || return 0
+  helper="$(validation_owner_helper)" || return 0
+  for pair in diagnose:diagnosis_harness diagnose:owner_paths diagnose:mixed_harness_part run:escalated_repeat; do
+    fp="$(python3 -I -B "${helper}" validation-failure-fingerprint --stage "${pair%%:*}" --reason "${pair#*:}" \
+      --signature-file "${sig_file}" --source-repo "${GITHUB_REPOSITORY:-}" 2>/dev/null | head -n 1 || true)"
+    [[ "${fp}" =~ ^[0-9a-f]{64}$ ]] || continue
+    if grep -qxF -- "${fp}" "${bounced_file}" 2>/dev/null; then
+      matched="${fp}"
+      break
+    fi
+  done
+  [ -n "${matched}" ] || return 0
+  echo
+  echo "=== HARNESS RULED OUT ==="
+  echo "The coding-workflows harness owner already reviewed this failure (fingerprint ${matched}) and returned it to this repository. Classify as needs_fixes unless you have new evidence; do not repeat the harness hypothesis."
+}
+
+# Mixed result: keep only the project-owned fix issues for the consumer
+# fix-up; the harness part is reported separately (harness_report=true).
+validation_owner_split_mixed()
+{
+  local owner_json unsplit tmp ids_json expected kept past_cap
+  local cap=50
+  owner_json="$(validation_owner_runtime_file validation_owner.json)"
+  unsplit="$(validation_owner_runtime_file validation_diagnosis_unsplit.json)"
+  # The classifier decides only the first ${cap} fix issues (a fix issue whose
+  # files list is past its cap already counts as project-owned). Issues after
+  # index ${cap} are unclassified, so they are always kept; only the known
+  # harness-owned issues within the cap are dropped.
+  past_cap="$(jq -r --argjson cap "${cap}" 'if (.fix_issues | type) == "array" then ([.fix_issues[$cap:][] | select(type == "object")] | length) else 0 end' "${DIAGNOSE_RESULT_FILE}" 2>/dev/null || true)"
+  if ! [[ "${past_cap}" =~ ^[0-9]+$ ]]; then
+    echo "::warning::VALIDATION_OWNER outcome=split_skipped reason=split_failed (all fix issues kept)." >&2
+    return 0
+  fi
+  ids_json="$(jq -c '(.project_fix_ids // []) | if type == "array" then map(strings) else [] end' "${owner_json}" 2>/dev/null || true)"
+  expected="$(printf '%s' "${ids_json}" | jq -r 'length' 2>/dev/null || echo 0)"
+  if [ -z "${ids_json}" ] || [ "${expected:-0}" -le 0 ]; then
+    echo "::warning::VALIDATION_OWNER outcome=split_skipped reason=no_project_issues (all fix issues kept)." >&2
+    return 0
+  fi
+  cp -f -- "${DIAGNOSE_RESULT_FILE}" "${unsplit}" 2>/dev/null || return 0
+  tmp="${DIAGNOSE_RESULT_FILE}.split.tmp"
+  expected=$((expected + past_cap))
+  if ! jq --argjson ids "${ids_json}" --argjson cap "${cap}" '
+      .fix_issues as $all
+      | .fix_issues = [range(0; ($all | length)) as $i | $all[$i]
+          | select(type == "object")
+          | select($i >= $cap
+              or ((.id // null) as $id | ($id != null and ($ids | index($id | tostring)) != null))
+              or (($ids | index("index-\($i)")) != null))]' \
+      "${DIAGNOSE_RESULT_FILE}" > "${tmp}" 2>/dev/null; then
+    rm -f -- "${tmp}" 2>/dev/null || true
+    echo "::warning::VALIDATION_OWNER outcome=split_skipped reason=split_failed (all fix issues kept)." >&2
+    return 0
+  fi
+  kept="$(jq -r '.fix_issues | length' "${tmp}" 2>/dev/null || echo 0)"
+  if [ "${kept:-0}" -le 0 ] || [ "${kept}" != "${expected}" ]; then
+    rm -f -- "${tmp}" 2>/dev/null || true
+    echo "::warning::VALIDATION_OWNER outcome=split_skipped reason=id_mismatch (all fix issues kept)." >&2
+    return 0
+  fi
+  mv -f -- "${tmp}" "${DIAGNOSE_RESULT_FILE}"
+  echo "VALIDATION_OWNER outcome=split kept_fix_issues=${kept}"
+}
+
+# Layer 1: after the diagnosis and the cross-cycle escalation, before the
+# DIAG_STATUS dispatch.
+validation_owner_route_diagnosis()
+{
+  validation_owner_enabled || return 0
+  if [ "${ESCALATED_FROM_NEEDS_FIXES:-false}" = "true" ]; then
+    # Pass the first failure as fallback text, like the other Layer 0 sites,
+    # so a log tail with no error-shaped line does not give every escalated
+    # failure the shared "no-error-lines" fingerprint.
+    validation_owner_fixed escalated_repeat "${FIRST_FAILURE:-}"
+    return 0
+  fi
+  validation_owner_classify layer1 "${DIAG_STATUS:-}"
+  case "${VALIDATION_OWNER_OWNER}" in
+    harness)
+      if [ "${DIAG_STATUS:-}" != "harness_error" ]; then
+        echo "VALIDATION_OWNER outcome=reclassified from=${DIAG_STATUS:-none} to=harness_error"
+        DIAG_STATUS="harness_error"
+      fi
+      ;;
+    mixed)
+      if [ "${DIAG_STATUS:-}" = "needs_fixes" ]; then
+        validation_owner_split_mixed
+      fi
+      ;;
+  esac
+}
+# END validation owner routing
+
+emit_phase_failure_marker()
+{
+  local phase="$1"
+  local failed_step_name="$2"
+  local failure_mode="$3"
+  local attempt_count="$4"
+  local failure_summary="$5"
+  local timestamp
+  local run_id="${GITHUB_RUN_ID:-}"
+  local run_attempt="${GITHUB_RUN_ATTEMPT:-}"
+  local run_url=""
+  local workflow_name="${GITHUB_WORKFLOW:-AI Validate (Reusable)}"
+  local workflow_file="validate.yml"
+  local recommended_resume_action="retrigger_validate"
+
+  timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  if [ -n "${run_id}" ]; then
+    run_url="$(_gh_url "actions/runs/${run_id}")"
+  fi
+
+  if ! is_tracking_run; then
+    echo "::warning::AI_PHASE_FAILURE_V1 skipped: no tracking issue context (phase=${phase}, step=${failed_step_name})." >&2
+    emit_event "AI_PHASE_FAILURE_V1" \
+      "schema_version=1" \
+      "phase=${phase}" \
+      "failure_mode=${failure_mode}" \
+      "failed_step_name=${failed_step_name}" \
+      "workflow_run_id=${run_id}" \
+      "workflow_run_attempt=${run_attempt}" \
+      "workflow_name=${workflow_name}" \
+      "workflow_file=${workflow_file}" \
+      "workflow_run_url=${run_url}" \
+      "repository=${GITHUB_REPOSITORY}" \
+      "tracking_issue=0" \
+      "attempt_count=${attempt_count}" \
+      "recommended_resume_action=${recommended_resume_action}" \
+      "timestamp=${timestamp}" \
+      "status=skipped" \
+      "reason=no_tracking_issue"
+    return 0
+  fi
+
+  local payload
+  payload="$(jq -cn \
+    --arg phase "${phase}" \
+    --arg failure_mode "${failure_mode}" \
+    --arg failed_step_name "${failed_step_name}" \
+    --arg workflow_run_id "${run_id}" \
+    --arg workflow_run_attempt "${run_attempt}" \
+    --arg workflow_name "${workflow_name}" \
+    --arg workflow_file "${workflow_file}" \
+    --arg workflow_run_url "${run_url}" \
+    --arg repository "${GITHUB_REPOSITORY}" \
+    --arg tracking_issue "${TRACKING_ISSUE_NUM}" \
+    --arg attempt_count "${attempt_count}" \
+    --arg recommended_resume_action "${recommended_resume_action}" \
+    --arg timestamp "${timestamp}" \
+    '{
+      schema_version: 1,
+      phase: $phase,
+      failure_mode: $failure_mode,
+      failed_step_name: $failed_step_name,
+      workflow_run_id: $workflow_run_id,
+      workflow_run_attempt: $workflow_run_attempt,
+      workflow_name: $workflow_name,
+      workflow_file: $workflow_file,
+      workflow_run_url: (if ($workflow_run_url | length) > 0 then $workflow_run_url else null end),
+      repository: $repository,
+      tracking_issue: $tracking_issue,
+      attempt_count: $attempt_count,
+      recommended_resume_action: $recommended_resume_action,
+      timestamp: $timestamp
+    }')"
+
+  local comment_body
+  comment_body="<!-- AI_PHASE_FAILURE_V1
+${payload}
+AI_PHASE_FAILURE_V1 -->
+## ❌ Validate workflow failure
+
+${failure_summary}"
+
+  if [ -n "${run_url}" ]; then
+    comment_body+=$'\n\n'"Run: ${run_url}"
+  fi
+  comment_body+="$(validation_owner_comment_marker)"
+
+  post_tracking_comment "${comment_body}"
+  emit_event "AI_PHASE_FAILURE_V1" \
+    "schema_version=1" \
+    "phase=${phase}" \
+    "failure_mode=${failure_mode}" \
+    "failed_step_name=${failed_step_name}" \
+    "workflow_run_id=${run_id}" \
+    "workflow_run_attempt=${run_attempt}" \
+    "workflow_name=${workflow_name}" \
+    "workflow_file=${workflow_file}" \
+    "workflow_run_url=${run_url}" \
+    "repository=${GITHUB_REPOSITORY}" \
+    "tracking_issue=${TRACKING_ISSUE_NUM}" \
+    "attempt_count=${attempt_count}" \
+    "recommended_resume_action=${recommended_resume_action}" \
+    "timestamp=${timestamp}"
+}
+
+# BEGIN validation cycle derivation (project #7913 p4)
+# Neither validate.yml nor the consumer ai-validate.yml wrapper passes
+# VALIDATION_CYCLE, so it used to stay 1 and the cross-cycle escalation
+# (cycle >= 3) never fired. When it is unset, take the cycle from the newest
+# "## 🧪 Runtime validation dispatched" tracking comment written by the
+# pipeline login (the poller posts "- Cycle: <N>" there). Comments by other
+# authors are ignored. Every failure falls back to cycle 1 (today's value).
+validation_cycle_resolve()
+{
+  local login="" items="" cycle="" status=""
+  if [ "${VALIDATION_CYCLE_EXPLICIT:-false}" = "true" ]; then
+    if [ "${VALIDATION_CYCLE_INVALID_ENV:-false}" = "true" ]; then
+      echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=invalid_env"
+    else
+      echo "VALIDATION_CYCLE_SOURCE source=env cycle=${VALIDATION_CYCLE}"
+    fi
+    return 0
+  fi
+  if ! is_tracking_run; then
+    echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=not_tracking_run"
+    return 0
+  fi
+  if ! login="$(validation_owner_pipeline_login)"; then
+    echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=login_unavailable"
+    return 0
+  fi
+  # GitHub API audit (unattended_system_instructions.md §14): the existing
+  # PRIOR_COMMENTS read further down runs only when the cycle is already above
+  # 1 and keeps bodies without authors, so it cannot supply the cycle or the
+  # author check. This is one paginated read per tracking run that has no
+  # explicit VALIDATION_CYCLE; the identity read above is memoized and shared
+  # with the owner routing block.
+  if ! items="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}/comments?per_page=100" --paginate \
+    --jq '.[] | select(((.body // "") | split("\n")[0] | sub("\r$"; "")) == "## 🧪 Runtime validation dispatched") | {login: (.user.login // ""), updated_at: (.updated_at // ""), body: (.body // "")} | @json' 2>/dev/null)"; then
+    echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=comments_unavailable"
+    return 0
+  fi
+  # post_tracking_comment edits a repeated dispatch comment in place (after a
+  # /revalidate reset the id stays, updated_at moves), so the newest edit wins;
+  # sort_by is stable, so equal timestamps keep the creation order.
+  if ! status="$(printf '%s\n' "${items}" | jq -Rrn --arg login "${login}" '
+      [inputs | select(length > 0) | (try fromjson catch null)
+        | select(type == "object" and (.login // "") == $login)]
+      | sort_by(.updated_at // "" | tostring) as $trusted
+      | if ($trusted | length) == 0 then "none"
+        else ($trusted[-1].body // "" | tostring | split("\n")
+          | map(sub("[[:space:]]+$"; "")) | map(select(test("^- Cycle: [0-9]+$")))
+          | if length == 0 then "malformed" else ("cycle:" + (.[0] | sub("^- Cycle: "; ""))) end)
+        end' 2>/dev/null)"; then
+    echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=comments_unavailable"
+    return 0
+  fi
+  case "${status}" in
+    none)
+      echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=no_dispatch_comment"
+      return 0
+      ;;
+    cycle:*)
+      cycle="${status#cycle:}"
+      ;;
+  esac
+  if ! [[ "${cycle}" =~ ^[1-9][0-9]{0,5}$ ]]; then
+    echo "VALIDATION_CYCLE_SOURCE source=default cycle=${VALIDATION_CYCLE} reason=malformed_cycle"
+    return 0
+  fi
+  VALIDATION_CYCLE="${cycle}"
+  # A self-heal re-exec inherits the derived cycle instead of reading again.
+  export VALIDATION_CYCLE
+  echo "VALIDATION_CYCLE_SOURCE source=dispatch_comment cycle=${VALIDATION_CYCLE}"
+  return 0
+}
+validation_cycle_resolve || true
+# END validation cycle derivation
+
+fail_validate_codex_phase()
+{
+  local failed_step_name="$1"
+  local failure_mode="$2"
+  local attempt_count="$3"
+  local failure_summary="$4"
+  local exit_code="${5:-1}"
+
+  if validation_owner_enabled && validation_owner_engine_refused; then
+    validation_owner_fixed engine_unavailable "${failure_summary}"
+  fi
+  emit_phase_failure_marker "validate" "${failed_step_name}" "${failure_mode}" "${attempt_count}" "${failure_summary}"
+
+  if is_tracking_run; then
+    set_tracking_phase_label "ai:validate-failed" || true
+  else
+    echo "::warning::Validate workflow Codex failure occurred without tracking issue context; skipped applying ai:validate-failed." >&2
+  fi
+
+  write_result_files "error" "Validate workflow failed before runtime validation could complete" "${failure_summary}" "codex_failure"
+  tg_notify "Validate workflow Codex failure during ${failed_step_name} for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "$(_poll_recovers_level ERROR)"
+  exit "${exit_code}"
+}
+
+cleanup_runtime_containers()
+{
+  if [ -f "validation/docker-compose.test.yml" ]; then
+    docker compose -f validation/docker-compose.test.yml down -v --remove-orphans >/dev/null 2>&1 || true
+  fi
+
+  if [ -n "${VALIDATION_COMPOSE_FILE}" ] \
+    && [ -f "${VALIDATION_COMPOSE_FILE}" ] \
+    && [ "${VALIDATION_COMPOSE_FILE}" != "validation/docker-compose.test.yml" ]; then
+    docker compose -f "${VALIDATION_COMPOSE_FILE}" down -v --remove-orphans >/dev/null 2>&1 || true
+  fi
+
+  # Restore the discover-phase reasoning override on abnormal exit
+  # (SIGINT/SIGTERM/timeout/unexpected error between the patch and the
+  # normal-path restore). Without this, the user's ~/.codex/config.toml
+  # can be left at the discover override level, leaking into subsequent
+  # codex invocations in the same environment. Idempotent: the
+  # normal-path restore at the bottom of the discover block flips
+  # _discover_reasoning_patched back to "false" so this branch is a
+  # no-op when reached after a clean restore.
+  if [ "${_discover_reasoning_patched:-false}" = "true" ] \
+    && [ -n "${_validate_codex_config:-}" ] \
+    && [ -f "${_validate_codex_config}" ]; then
+    sed -i \
+      -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\"/" \
+      -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*'[^']*'/model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\"/" \
+      "${_validate_codex_config}" 2>/dev/null || true
+    _discover_reasoning_patched="false"
+  fi
+}
+
+# The only validation/validate.sh content Phase 3 will launch (findings
+# smoke-synth-unsandboxed-driver / validation-harness-credential-inheritance).
+canonical_validate_wrapper_text()
+{
+	cat <<'EOF'
+#!/usr/bin/env bash
+# Auto-generated by coding-workflows — DO NOT EDIT
+
+set -euo pipefail
+
+exec bash scripts/validate_driver.sh "$@"
+EOF
+}
+
+ensure_validate_wrapper()
+{
+	local validate_wrapper_tmp=""
+
+	# Only generate the wrapper if the canonical driver exists.
+	# When absent, the runtime fallback driver will be used instead.
+	if [ ! -f scripts/validate_driver.sh ]; then
+		return 0
+	fi
+	if [ -L validation ]; then
+		echo "::warning::validate_process: validation/ is a symlink; refusing to write validation/validate.sh." >&2
+		return 1
+	fi
+	mkdir -p validation || return 1
+	# Write a new file and rename it over validate.sh, so a symlinked
+	# validate.sh is replaced instead of written through.
+	if ! validate_wrapper_tmp="$(mktemp validation/.validate.sh.XXXXXX 2>/dev/null)"; then
+		return 1
+	fi
+	if ! canonical_validate_wrapper_text > "${validate_wrapper_tmp}" \
+		|| ! chmod 0755 "${validate_wrapper_tmp}" \
+		|| ! mv -f -- "${validate_wrapper_tmp}" validation/validate.sh; then
+		rm -f -- "${validate_wrapper_tmp}" >/dev/null 2>&1 || true
+		return 1
+	fi
+	return 0
+}
+
+run_template_validation_harness_renderer()
+{
+	local manifest_path=".ai/validate.yml"
+	local renderer_script="scripts/render_validation_templates.py"
+	local schema_path="scripts/templates/slot_manifest.schema.json"
+	local templates_root="workflow-templates/validation-harness"
+	local renderer_summary=""
+	local python3_bin="python3"
+	local renderer_python="${RUNTIME_DIR:-}/renderer-venv/bin/python"
+	local renderer_empty_dir="${RUNTIME_DIR:-}/renderer-empty"
+	local renderer_workspace=""
+
+	HARNESS_GENERATOR_MODE="templates"
+
+	if [ ! -f "${manifest_path}" ]; then
+		return 10
+	fi
+	if [ ! -f "${renderer_script}" ]; then
+		return 11
+	fi
+	if [ ! -f "${schema_path}" ]; then
+		return 12
+	fi
+	if [ ! -d "${templates_root}" ]; then
+		return 13
+	fi
+	if [ ! -f "${templates_root}/_shared/_lib/tap_helpers.sh.j2" ] \
+		|| [ ! -f "${templates_root}/_shared/tests/00_canary.sh.j2" ] \
+		|| [ ! -f "${templates_root}/_shared/tests/90_tap_report.sh.j2" ]; then
+		return 15
+	fi
+
+	# Report a skipped or failed renderer-preparation step before checking the
+	# runtime directory it creates; otherwise a skipped preparation surfaces as
+	# the misleading "runtime unavailable" message (#6521). Pure env check: no
+	# Python runs here. VALIDATION_RENDERER_DEPENDENCIES_OUTCOME defaults inside
+	# this helper because older workflow YAML does not export it.
+	if [ "${VALIDATION_RENDERER_DEPENDENCIES_READY:-true}" != "true" ]; then
+		local renderer_dependencies_message
+		renderer_dependencies_message="Template renderer dependency setup did not succeed (step outcome: ${VALIDATION_RENDERER_DEPENDENCIES_OUTCOME:-unknown}); renderer not invoked."
+		printf '%s\n' "${renderer_dependencies_message}" >> "${GENERATE_LOG_FILE}"
+		printf '::error::%s\n' "${renderer_dependencies_message}" >&2
+		return 14
+	fi
+	# Do not run even diagnostic Python probes from the credentialed workspace.
+	if [ -z "${RUNTIME_DIR:-}" ] || [ ! -d "${renderer_empty_dir}" ]; then
+		printf '%s\n' 'Trusted renderer runtime is unavailable; renderer not invoked.' >> "${GENERATE_LOG_FILE}"
+		return 14
+	fi
+	python3_bin="$(command -v python3 2>/dev/null || printf '%s' 'python3')"
+	if [ ! -f "${renderer_python}" ]; then
+		printf '%s\n' 'Isolated renderer Python is unavailable; renderer not invoked.' >> "${GENERATE_LOG_FILE}"
+		return 14
+	fi
+	{
+		printf '\n--- python3 environment probe ---\n'
+		printf 'command -v python3: %s\n' "${python3_bin}"
+		printf 'renderer python3 -V: %s\n' "$(cd "${renderer_empty_dir}" && "${renderer_python}" -I -V 2>&1 || echo 'failed')"
+		(cd "${renderer_empty_dir}" && "${renderer_python}" -I -c 'import sys; print("sys.executable:", sys.executable); print("sys.version:", sys.version.replace(chr(10), " "))') 2>&1 \
+			|| printf '(python3 -c probe failed)\n'
+		printf -- '--- end python3 environment probe ---\n'
+	} >> "${GENERATE_LOG_FILE}" 2>&1
+	if ! (cd "${renderer_empty_dir}" && "${renderer_python}" -I -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)') >/dev/null 2>&1; then
+		printf '%s\n' "Template renderer requires python3 >= 3.9 (detected: $(cd "${renderer_empty_dir}" && "${renderer_python}" -I -V 2>&1 || echo unknown))." >> "${GENERATE_LOG_FILE}"
+		return 17
+	fi
+	renderer_workspace="$(pwd -P)"
+	# Resolve all paths before leaving the workspace. -I removes both the script
+	# directory and PYTHON* / user-site paths from the renderer import search.
+	if ! renderer_summary="$(cd "${renderer_empty_dir}" && "${renderer_python}" -I -c '
+import importlib.util
+import pathlib
+import sys
+import sysconfig
+environment = pathlib.Path(sys.argv[1]).resolve()
+if pathlib.Path(sys.prefix).resolve() != environment:
+    raise SystemExit("Renderer interpreter is not the isolated environment")
+roots = [pathlib.Path(sysconfig.get_path(key)).resolve() for key in ("purelib", "platlib")]
+if not all(root.is_relative_to(environment) for root in roots):
+    raise SystemExit("Renderer package paths are not in the isolated environment")
+for name in ("yaml", "jsonschema", "jinja2"):
+    spec = importlib.util.find_spec(name)
+    if spec is None or spec.origin is None or not any(pathlib.Path(spec.origin).resolve().is_relative_to(root) for root in roots):
+        raise SystemExit("Renderer dependency origin is not in the isolated environment: " + name)
+    if spec.submodule_search_locations and not all(any(pathlib.Path(location).resolve().is_relative_to(root) for root in roots) for location in spec.submodule_search_locations):
+        raise SystemExit("Renderer dependency search path is not in the isolated environment: " + name)
+import yaml, jsonschema, jinja2
+' "${RUNTIME_DIR}/renderer-venv" 2>&1)"; then
+		printf '%s\n' "${renderer_summary}" >> "${GENERATE_LOG_FILE}"
+		printf '%s\n' 'Template renderer dependencies (yaml, jsonschema, jinja2) are unavailable in the isolated environment; renderer not invoked.' >> "${GENERATE_LOG_FILE}"
+		return 14
+	fi
+
+	# Manifest shell-safety gate (finding validation-manifest-shell-injection-fallback).
+	# .ai/validate.yml is untrusted checkout data, and the renderer interpolates
+	# its values unescaped into shell scripts that validate_driver.sh and the
+	# runtime fallback runner execute on the host. Every render (first render and
+	# render recovery) passes through this function, so values in
+	# shell-reachable fields are rejected here, fail closed, before any template
+	# is written: quotes, $, backticks, backslashes, control characters and
+	# non-scalar YAML types. Exempt keys are commands by design (custom_tests,
+	# skip_tests), escaped where emitted (env_overrides), schema-constrained
+	# (port) or never interpolated (health_check, services). Parse errors and
+	# non-mapping roots are left to the renderer, which rejects them with the
+	# same yaml.safe_load. Violations name only a sanitized JSON pointer and the
+	# character class, never the raw value. The check is done here rather than
+	# in the renderer because this issue's automation-path grant covers this
+	# file only.
+	if ! renderer_summary="$(cd "${renderer_empty_dir}" && "${renderer_python}" -I -c '
+import sys
+import yaml
+MAX_BYTES = 2 * 1024 * 1024
+MAX_DEPTH = 32
+EXEMPT_TOP_LEVEL_KEYS = frozenset({"custom_tests", "skip_tests", "env_overrides", "health_check", "services", "port"})
+QUOTES = (chr(34), chr(39))
+BACKSLASH = chr(92)
+def pointer(parts):
+    if not parts:
+        return "$"
+    text = "/" + "/".join(str(part).replace("~", "~0").replace("/", "~1") for part in parts)
+    text = "".join(ch if ch.isprintable() and ch not in QUOTES and ch not in ("$", "`", BACKSLASH) else "?" for ch in text)
+    return text if len(text) <= 120 else text[:117] + "..."
+def unsafe_classes(text):
+    found = []
+    if "$" in text:
+        found.append("dollar")
+    if "`" in text:
+        found.append("backtick")
+    if any(quote in text for quote in QUOTES):
+        found.append("quote")
+    if BACKSLASH in text:
+        found.append("backslash")
+    if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in text):
+        found.append("control")
+    return found
+with open(sys.argv[1], "rb") as handle:
+    raw = handle.read(MAX_BYTES + 1)
+if len(raw) > MAX_BYTES:
+    print("Manifest shell-safety check: manifest exceeds " + str(MAX_BYTES) + " bytes")
+    raise SystemExit(1)
+try:
+    manifest = yaml.safe_load(raw.decode("utf-8"))
+except (UnicodeDecodeError, yaml.YAMLError):
+    raise SystemExit(0)
+except RecursionError:
+    # Same message as validation_refresh_runner.manifest_shell_safety_violations.
+    print("Manifest validation failed (shell-unsafe values in shell-reachable fields):")
+    print("- $: manifest nesting too deep")
+    raise SystemExit(1)
+if not isinstance(manifest, dict):
+    raise SystemExit(0)
+stack = []
+for key in sorted(manifest, key=str, reverse=True):
+    if key == "slots" or key not in EXEMPT_TOP_LEVEL_KEYS:
+        stack.append(([key], manifest[key]))
+violations = []
+seen_containers = set()
+while stack:
+    parts, value = stack.pop()
+    if isinstance(value, (dict, list)):
+        # Aliases can make a container recursive or shared; each is checked once.
+        if id(value) in seen_containers:
+            continue
+        seen_containers.add(id(value))
+        if len(parts) > MAX_DEPTH:
+            violations.append(pointer(parts) + ": nesting exceeds " + str(MAX_DEPTH) + " levels")
+            continue
+    if isinstance(value, str):
+        classes = unsafe_classes(value)
+        if classes:
+            violations.append(pointer(parts) + ": contains shell-unsafe character class " + ",".join(classes))
+    elif isinstance(value, dict):
+        for key in sorted(value, key=str, reverse=True):
+            stack.append((parts + [key], value[key]))
+    elif isinstance(value, list):
+        for index in range(len(value) - 1, -1, -1):
+            stack.append((parts + [index], value[index]))
+    elif value is None or isinstance(value, (bool, int, float)):
+        continue
+    else:
+        violations.append(pointer(parts) + ": contains unsupported value type " + type(value).__name__)
+if violations:
+    print("Manifest validation failed (shell-unsafe values in shell-reachable fields):")
+    for line in violations[:10]:
+        print("- " + line)
+    if len(violations) > 10:
+        print("- ... " + str(len(violations) - 10) + " additional shell-safety violations")
+    raise SystemExit(1)
+' "${renderer_workspace}/${manifest_path}" 2>&1)"; then
+		printf '%s\n' "${renderer_summary}" >> "${GENERATE_LOG_FILE}"
+		printf '%s\n' 'Template manifest shell-safety check failed; renderer not invoked.' >> "${GENERATE_LOG_FILE}"
+		printf '%s\n' '::error::.ai/validate.yml has shell-unsafe values in shell-reachable fields; renderer not invoked (see validate_generate.log).' >&2
+		return 14
+	fi
+
+	if ! renderer_summary="$(cd "${renderer_empty_dir}" && "${renderer_python}" -I "${renderer_workspace}/${renderer_script}" \
+		--manifest "${renderer_workspace}/${manifest_path}" \
+		--schema "${renderer_workspace}/${schema_path}" \
+		--templates-root "${renderer_workspace}/${templates_root}" \
+		--output-root "${renderer_workspace}/validation" 2>&1)"; then
+		printf '%s\n' "${renderer_summary}" >> "${GENERATE_LOG_FILE}"
+		return 14
+	fi
+
+	if [ -n "${renderer_summary}" ]; then
+		printf '%s\n' "${renderer_summary}" >> "${GENERATE_LOG_FILE}"
+	fi
+
+	if [ -d validation/tests ]; then
+		find validation/tests -type f -name '*.sh' -exec chmod +x {} +
+	fi
+
+	return 0
+}
+
+attempt_render_recovery_after_preflight_failure()
+{
+	local renderer_exit=0
+
+	if [ "${HARNESS_MODE}" != "template_generate" ] || [ "${HARNESS_GENERATOR_MODE}" != "templates" ]; then
+		return 1
+	fi
+	if [ "${PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED:-false}" = "true" ]; then
+		return 1
+	fi
+	if [ "${PRE_FLIGHT_FAILURE_CLASS:-non_lint}" != "lint" ]; then
+		echo "Render recovery: skipping deterministic rerender because pre-flight failure class=${PRE_FLIGHT_FAILURE_CLASS:-unknown}." >> "${PRE_FLIGHT_LOG_FILE}"
+		return 1
+	fi
+
+	classify_preflight_failure
+	if [ "${PRE_FLIGHT_FAILURE_KIND}" != "lint" ]; then
+		echo "Render recovery: skipped because pre-flight failure was classified as kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON}." >> "${PRE_FLIGHT_LOG_FILE}"
+		return 1
+	fi
+
+	PRE_FLIGHT_RENDER_RECOVERY_ATTEMPTED="true"
+	{
+		echo "Render recovery: deterministic template rerender triggered after pre-flight failure."
+		echo "Render recovery: preserving initial pre-flight diagnostics and attempting rerender."
+		echo "Render recovery: classification kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON}."
+	} >> "${PRE_FLIGHT_LOG_FILE}"
+	if run_template_validation_harness_renderer; then
+		renderer_exit=0
+	else
+		renderer_exit=$?
+	fi
+
+	if [ "${renderer_exit}" -ne 0 ]; then
+		PRE_FLIGHT_FAILURE_KIND="render"
+		PRE_FLIGHT_FAILURE_REASON="render_retry_renderer_exit_${renderer_exit}"
+		echo "Render recovery: template rerender failed with exit=${renderer_exit}; fail-open to render-phase self-heal." >> "${PRE_FLIGHT_LOG_FILE}"
+		return 2
+	fi
+
+	echo "Render recovery: rerender completed; re-running pre-flight checks." >> "${PRE_FLIGHT_LOG_FILE}"
+	local PRE_FLIGHT_APPEND_LOG="true"
+	if run_preflight_checks; then
+		PRE_FLIGHT_FAILURE_KIND="none"
+		PRE_FLIGHT_FAILURE_REASON="none"
+		echo "Render recovery: pre-flight checks passed after deterministic rerender." >> "${PRE_FLIGHT_LOG_FILE}"
+		return 0
+	fi
+
+	local tmp_log="${RUNTIME_DIR}/preflight_latest.log"
+	sed -n '/Render recovery: rerender completed; re-running pre-flight checks[.]/,$p' "${PRE_FLIGHT_LOG_FILE}" > "${tmp_log}" || true
+	if [ -s "${tmp_log}" ]; then
+		PRE_FLIGHT_LOG_FILE="${tmp_log}" classify_preflight_failure
+	else
+		classify_preflight_failure
+	fi
+	echo "Render recovery: pre-flight checks still failing after deterministic rerender (kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON})." >> "${PRE_FLIGHT_LOG_FILE}"
+	PRE_FLIGHT_FAILURE_KIND="render"
+	PRE_FLIGHT_FAILURE_REASON="render_retry_post_rerender_${PRE_FLIGHT_FAILURE_REASON}"
+	return 2
+}
+
+run_preflight_checks()
+{
+	PRE_FLIGHT_STATUS="running"
+	PRE_FLIGHT_FAILURE_CLASS="none"
+	PRE_FLIGHT_FAILURE_KIND="unknown"
+	PRE_FLIGHT_FAILURE_REASON="running"
+	if [ "${PRE_FLIGHT_APPEND_LOG:-false}" != "true" ]; then
+		: > "${PRE_FLIGHT_LOG_FILE}"
+	fi
+
+	# Emit the tail of the pre-flight log to stderr so that the failing command's
+	# output is visible directly in the GitHub Actions job log, without requiring
+	# the validation_preflight.log artifact to be downloaded. Structured with
+	# clear delimiter markers so the excerpt is easy to scan and grep in CI logs.
+	_emit_preflight_tail()
+	{
+		local reason="$1"
+		{
+			echo "::error::Pre-flight failed: ${reason}"
+			echo "----- validation_preflight.log (tail -n 40) -----"
+			tail -n 40 "${PRE_FLIGHT_LOG_FILE}" 2>/dev/null || true
+			echo "-------------------------------------------------"
+		} >&2
+	}
+
+	if [ ! -f validation/docker-compose.test.yml ]; then
+		echo "Missing validation/docker-compose.test.yml" >> "${PRE_FLIGHT_LOG_FILE}"
+		PRE_FLIGHT_STATUS="fail"
+		PRE_FLIGHT_FAILURE_CLASS="non_lint"
+		_emit_preflight_tail "validation/docker-compose.test.yml missing"
+		return 1
+	fi
+
+	# Validate legacy wrapper only if it exists. In template mode the harness
+	# may intentionally omit validate.env (for example python-mongo-flask).
+	if [ -f validation/validate.sh ]; then
+		if ! bash -n validation/validate.sh >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
+			echo "Shell syntax check failed: validation/validate.sh" >> "${PRE_FLIGHT_LOG_FILE}"
+			PRE_FLIGHT_STATUS="fail"
+			PRE_FLIGHT_FAILURE_CLASS="lint"
+			_emit_preflight_tail "bash -n failed for validation/validate.sh"
+			return 1
+		fi
+
+		if ! grep -q 'scripts/validate_driver.sh' validation/validate.sh; then
+			echo "validation/validate.sh must delegate to scripts/validate_driver.sh" >> "${PRE_FLIGHT_LOG_FILE}"
+			PRE_FLIGHT_STATUS="fail"
+			PRE_FLIGHT_FAILURE_CLASS="non_lint"
+			_emit_preflight_tail "validation/validate.sh is not a thin wrapper"
+			return 1
+		fi
+
+		if [ -f scripts/validate_driver.sh ]; then
+			if ! bash -n scripts/validate_driver.sh >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
+				echo "Shell syntax check failed: scripts/validate_driver.sh" >> "${PRE_FLIGHT_LOG_FILE}"
+				PRE_FLIGHT_STATUS="fail"
+				PRE_FLIGHT_FAILURE_CLASS="lint"
+				_emit_preflight_tail "bash -n failed for scripts/validate_driver.sh"
+				return 1
+			fi
+		else
+			echo "scripts/validate_driver.sh not present; allowing runtime fallback driver selection" >> "${PRE_FLIGHT_LOG_FILE}"
+		fi
+	fi
+
+	if [ ! -f validation/tests/00_canary.sh ]; then
+		echo "Missing validation/tests/00_canary.sh" >> "${PRE_FLIGHT_LOG_FILE}"
+		PRE_FLIGHT_STATUS="fail"
+		PRE_FLIGHT_FAILURE_CLASS="non_lint"
+		_emit_preflight_tail "validation/tests/00_canary.sh missing"
+		return 1
+	fi
+
+	if ! docker compose -f validation/docker-compose.test.yml config --quiet >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
+		echo "Compose syntax/validation check failed." >> "${PRE_FLIGHT_LOG_FILE}"
+		PRE_FLIGHT_STATUS="fail"
+		PRE_FLIGHT_FAILURE_CLASS="lint"
+		_emit_preflight_tail "docker compose config failed (YAML/schema invalid). Common cause: YAML must use space indentation, not tabs."
+		return 1
+	fi
+
+	local shell_count
+	shell_count="$(find validation -type f -name '*.sh' -not -path 'validation/logs/*' | wc -l | tr -d ' ')"
+	if [ "${shell_count}" -eq 0 ]; then
+		echo "No shell scripts found under validation/." >> "${PRE_FLIGHT_LOG_FILE}"
+		PRE_FLIGHT_STATUS="fail"
+		PRE_FLIGHT_FAILURE_CLASS="non_lint"
+		_emit_preflight_tail "no shell scripts found under validation/"
+		return 1
+	fi
+
+	while IFS= read -r shell_file; do
+		if ! bash -n "${shell_file}" >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
+			echo "Shell syntax check failed: ${shell_file}" >> "${PRE_FLIGHT_LOG_FILE}"
+			PRE_FLIGHT_STATUS="fail"
+			PRE_FLIGHT_FAILURE_CLASS="lint"
+			_emit_preflight_tail "bash -n failed for ${shell_file}"
+			return 1
+		fi
+	done < <(find validation -type f -name '*.sh' -not -path 'validation/logs/*' | sort)
+
+	local compose_json_file
+	compose_json_file="${RUNTIME_DIR}/validation_compose_config.json"
+	if ! docker compose -f validation/docker-compose.test.yml config --format json > "${compose_json_file}" 2>> "${PRE_FLIGHT_LOG_FILE}"; then
+		echo "Compose JSON export unavailable or failed; skipping build context and dockerfile path verification." >> "${PRE_FLIGHT_LOG_FILE}"
+		printf '%s\n' '{"services":{}}' > "${compose_json_file}"
+	fi
+
+	if ! python3 - "${compose_json_file}" >> "${PRE_FLIGHT_LOG_FILE}" 2>&1 <<'PY'
+import json
+import os
+import sys
+
+compose_json_path = sys.argv[1]
+
+with open(compose_json_path, "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+services = payload.get("services") or {}
+compose_dir = os.path.abspath("validation")
+missing = []
+
+for service_name, service_cfg in services.items():
+    build_cfg = service_cfg.get("build")
+    if not build_cfg:
+        continue
+
+    context = "."
+    dockerfile = "Dockerfile"
+    if isinstance(build_cfg, str):
+        context = build_cfg
+    elif isinstance(build_cfg, dict):
+        context = build_cfg.get("context") or "."
+        dockerfile = build_cfg.get("dockerfile") or "Dockerfile"
+    else:
+        continue
+
+    if os.path.isabs(context):
+        resolved_context = os.path.normpath(context)
+    else:
+        resolved_context = os.path.normpath(os.path.join(compose_dir, context))
+
+    if os.path.isabs(dockerfile):
+        resolved_dockerfile = os.path.normpath(dockerfile)
+    else:
+        resolved_dockerfile = os.path.normpath(os.path.join(resolved_context, dockerfile))
+
+    if not os.path.isdir(resolved_context):
+        missing.append(f"service={service_name} missing build context: {resolved_context}")
+        continue
+    if not os.path.isfile(resolved_dockerfile):
+        missing.append(f"service={service_name} missing dockerfile: {resolved_dockerfile}")
+
+if missing:
+    for line in missing:
+        print(line)
+    sys.exit(1)
+
+print("Build context and dockerfile path checks passed.")
+PY
+	then
+		PRE_FLIGHT_STATUS="fail"
+		PRE_FLIGHT_FAILURE_CLASS="non_lint"
+		_emit_preflight_tail "build context / dockerfile path resolution failed"
+		return 1
+	fi
+
+	# Embedded-Python syntax check for generated harness scripts.
+	#
+	# `bash -n` above validates shell syntax only; it cannot see inside a
+	# heredoc body. Codex occasionally emits `python3 - <<'PY' ... PY`
+	# blocks whose Python source has a SyntaxError (typically malformed
+	# f-strings or stray quoting) that only surfaces at runtime, producing
+	# a `harness_error` diagnose outcome. Statically ast-parse every
+	# QUOTED python3 heredoc body under validation/ so the preflight self-
+	# heal path (phase tag "preflight") can intercept the failure with an
+	# actionable fix pointer instead of burning a validation cycle. Only
+	# quoted delimiters (`<<'PY'`, `<<"PY"`) are checked: unquoted
+	# delimiters allow shell variable expansion, so the static body is not
+	# the source Python actually sees.
+	if ! python3 - >> "${PRE_FLIGHT_LOG_FILE}" 2>&1 <<'PY2'
+import ast
+import pathlib
+import re
+import sys
+
+HEREDOC_PATTERN = re.compile(
+    # Skip lines whose first non-whitespace character is `#` (commented-out
+    # examples) so we never ast-parse a documented example block. Keep
+    # `python3` matchable anywhere on the line (mid-pipeline, after
+    # `docker compose exec -T svc`, inside `$(...)`, etc.) — anchoring on
+    # `^[ \t]*python3` would miss every legitimate generated invocation.
+    r'^(?![ \t]*#).*\bpython3\b[^\n<]*<<\s*(-)?\s*[\'"](\w+)[\'"][^\n]*$',
+    re.MULTILINE,
+)
+
+errors = []
+root = pathlib.Path("validation")
+if not root.is_dir():
+    print("validation/ directory missing; embedded Python check skipped.")
+    sys.exit(0)
+
+for path in sorted(root.rglob("*.sh")):
+    if "logs" in path.parts:
+        continue
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        errors.append(f"{path}: cannot read: {exc}")
+        continue
+    for match in HEREDOC_PATTERN.finditer(text):
+        strip_tabs = bool(match.group(1))
+        delim = match.group(2)
+        rest = text[match.end():]
+        close_re = re.compile(
+            r'^' + (r'\t*' if strip_tabs else r'') + re.escape(delim) + r'\s*$',
+            re.MULTILINE,
+        )
+        close_match = close_re.search(rest)
+        if close_match is None:
+            continue
+        body = rest[: close_match.start()]
+        # match.end() lands ON the trailing newline of the opener line, so
+        # body always starts with a single '\n' that is NOT a real empty
+        # source line — it's the opener's own line terminator. Strip it so
+        # ast.parse line numbers count from the first real Python source
+        # line; absolute_line below then resolves to the correct file line
+        # via `opener_line + exc.lineno`.
+        if body.startswith('\n'):
+            body = body[1:]
+        if strip_tabs:
+            body = '\n'.join(line.lstrip('\t') for line in body.splitlines())
+        try:
+            ast.parse(body)
+        except SyntaxError as exc:
+            opener_line = text[: match.start()].count('\n') + 1
+            absolute_line = opener_line + (exc.lineno or 1)
+            offset_suffix = "" if exc.offset is None else f" (offset {exc.offset})"
+            errors.append(
+                f"{path}:{absolute_line}: embedded Python heredoc <<{delim}>>: "
+                f"SyntaxError: {exc.msg}{offset_suffix}"
+            )
+
+if errors:
+    print("Embedded Python syntax errors in generated harness scripts:")
+    for err in errors:
+        print(f"  {err}")
+    print(
+        "Prompt guidance: mode-validate-generate.txt forbids nested heredoc "
+        "inline Python. Rewrite as a sidecar .py file under validation/tests/_lib/ "
+        "and invoke via `python3 validation/tests/_lib/<name>.py`, or run a "
+        "single-layer quoted heredoc directly as `python3 - <<'PY' ... PY` "
+        "with no `/bin/sh -c` / `bash -lc` wrapper."
+    )
+    sys.exit(1)
+
+print("Embedded Python heredoc syntax checks passed.")
+PY2
+	then
+		PRE_FLIGHT_STATUS="fail"
+		PRE_FLIGHT_FAILURE_CLASS="lint"
+		_emit_preflight_tail "embedded Python syntax check failed in validation/**/*.sh"
+		return 1
+	fi
+
+	# Embedded-Python F-code lint for generated harness scripts.
+	#
+	# ast.parse above detects SyntaxError only — it does not resolve
+	# names. A `NameError` (F821 undefined-name) in a conditional branch
+	# that the runtime test suite does not exercise will therefore reach
+	# production. Observed in a consumer-repo autobet flow:
+	# `autobet_finalize ... reason=unknown_error:NameError attempt=0`
+	# fired on every finalize call because the failing branch was never
+	# tripped by a `tests/NN_*.sh` case. Running pyflakes + ruff (both,
+	# per ask-first decision Q1=C) against each quoted python3 heredoc
+	# body flags these statically so the preflight self-heal loop can
+	# intercept before a validation cycle burns.
+	#
+	# Env vars (defaults in header): VALIDATE_PREFLIGHT_PYFLAKES_ENABLED,
+	# VALIDATE_PREFLIGHT_PYFLAKES_RULES. On missing tools the preflight
+	# attempts `python3 -m pip install --user --quiet` (Q4=C); if that
+	# fails (PEP 668, offline runner, etc.) the check fails open with a
+	# ::warning:: — matches the fail-open convention used by
+	# verify_integration_fingerprints.py (see probably_unnecessary_but_read_if_stuck.md §18).
+	if [ "${VALIDATE_PREFLIGHT_PYFLAKES_ENABLED}" = "true" ]; then
+		local _pf_tool _pf_missing=""
+		for _pf_tool in pyflakes ruff; do
+			if ! command -v "${_pf_tool}" >/dev/null 2>&1; then
+				if ! python3 -m pip install --user --quiet "${_pf_tool}" >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
+					if ! python3 -m pip install --user --quiet --break-system-packages "${_pf_tool}" >> "${PRE_FLIGHT_LOG_FILE}" 2>&1; then
+						_pf_missing="${_pf_missing:+${_pf_missing} }${_pf_tool}"
+					fi
+				fi
+				# Refresh PATH for --user site-packages bin dir.
+				local _pf_user_bin
+				_pf_user_bin="$(python3 -c 'import site,os; print(os.path.join(site.getuserbase(), "bin"))' 2>/dev/null || true)"
+				if [ -n "${_pf_user_bin}" ] && [ -d "${_pf_user_bin}" ]; then
+					case ":${PATH}:" in
+						*":${_pf_user_bin}:"*) ;;
+						*) PATH="${_pf_user_bin}:${PATH}" ;;
+					esac
+				fi
+				if ! command -v "${_pf_tool}" >/dev/null 2>&1; then
+					case " ${_pf_missing} " in
+						*" ${_pf_tool} "*) ;;
+						*) _pf_missing="${_pf_missing:+${_pf_missing} }${_pf_tool}" ;;
+					esac
+				fi
+			fi
+		done
+		if [ -n "${_pf_missing}" ]; then
+			echo "::warning::Preflight F-code lint fail-open: could not install ${_pf_missing}; skipping embedded-Python pyflakes/ruff lint." >&2
+		elif ! python3 - >> "${PRE_FLIGHT_LOG_FILE}" 2>&1 <<'PY3'
+import ast
+import os
+import pathlib
+import re
+import subprocess
+import sys
+import tempfile
+
+RULES = os.environ.get("VALIDATE_PREFLIGHT_PYFLAKES_RULES", "F").strip() or "F"
+
+HEREDOC_PATTERN = re.compile(
+    r'^(?![ \t]*#).*\bpython3\b[^\n<]*<<\s*(-)?\s*[\'"](\w+)[\'"][^\n]*$',
+    re.MULTILINE,
+)
+
+def iter_bodies(path):
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        yield None, None, None, f"{path}: cannot read: {exc}"
+        return
+    for match in HEREDOC_PATTERN.finditer(text):
+        strip_tabs = bool(match.group(1))
+        delim = match.group(2)
+        rest = text[match.end():]
+        close_re = re.compile(
+            r'^' + (r'\t*' if strip_tabs else r'') + re.escape(delim) + r'\s*$',
+            re.MULTILINE,
+        )
+        close_match = close_re.search(rest)
+        if close_match is None:
+            continue
+        body = rest[: close_match.start()]
+        if body.startswith('\n'):
+            body = body[1:]
+        if strip_tabs:
+            body = '\n'.join(line.lstrip('\t') for line in body.splitlines())
+        opener_line = text[: match.start()].count('\n') + 1
+        yield opener_line, delim, body, None
+
+def run_tool(cmd, tmp_path):
+    try:
+        proc = subprocess.run(
+            cmd + [tmp_path],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return 2, "", f"tool invocation failed: {exc}"
+    return proc.returncode, proc.stdout, proc.stderr
+
+LINE_RE = re.compile(r'^[^:]+:(\d+):(?:(\d+):)?\s*(.+)$')
+
+def absolutise(raw, opener_line, path, delim, tool_label):
+    m = LINE_RE.match(raw)
+    if m:
+        rel_line = int(m.group(1))
+        absolute_line = opener_line + rel_line
+        return (
+            f"{path}:{absolute_line}: embedded Python heredoc <<{delim}>>: "
+            f"{tool_label}: {m.group(3)}"
+        )
+    return f"{path}: {tool_label}: {raw}"
+
+errors = []
+root = pathlib.Path("validation")
+if not root.is_dir():
+    print("validation/ directory missing; embedded Python lint skipped.")
+    sys.exit(0)
+
+for path in sorted(root.rglob("*.sh")):
+    if "logs" in path.parts:
+        continue
+    for opener_line, delim, body, read_err in iter_bodies(path):
+        if read_err:
+            errors.append(read_err)
+            continue
+        try:
+            ast.parse(body)
+        except SyntaxError:
+            # ast.parse block above already reports SyntaxError; avoid
+            # double-flagging the same body here.
+            continue
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False) as f:
+            f.write(body)
+            tmp_path = f.name
+        try:
+            pf_rc, pf_out, pf_err = run_tool(["pyflakes"], tmp_path)
+            if pf_rc != 0:
+                for raw in (pf_out + pf_err).splitlines():
+                    if raw.strip():
+                        errors.append(absolutise(raw, opener_line, path, delim, "pyflakes"))
+            rf_rc, rf_out, rf_err = run_tool(
+                ["ruff", "check", "--select", RULES, "--no-cache", "--output-format=concise", "--quiet"],
+                tmp_path,
+            )
+            if rf_rc != 0:
+                for raw in (rf_out + rf_err).splitlines():
+                    stripped = raw.strip()
+                    if not stripped:
+                        continue
+                    if stripped.startswith("Found ") or stripped.startswith("All checks"):
+                        continue
+                    errors.append(absolutise(raw, opener_line, path, delim, f"ruff[{RULES}]"))
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+
+if errors:
+    print("Embedded Python F-code lint violations in generated harness scripts:")
+    for err in errors:
+        print(f"  {err}")
+    print(
+        "These are undefined-name / unused-binding class bugs that would "
+        "produce a runtime NameError in any branch reached at runtime. "
+        "Ensure every identifier used in the heredoc body is imported or "
+        "defined. Disable gate via VALIDATE_PREFLIGHT_PYFLAKES_ENABLED=false "
+        "only as a temporary break-glass — the bug class is the same one "
+        "that produced `unknown_error:NameError` in consumer autobet logs."
+    )
+    sys.exit(1)
+
+print("Embedded Python F-code lint (pyflakes + ruff) passed.")
+PY3
+		then
+			PRE_FLIGHT_STATUS="fail"
+			PRE_FLIGHT_FAILURE_CLASS="lint"
+			_emit_preflight_tail "embedded Python F-code lint failed in validation/**/*.sh (pyflakes/ruff)"
+			return 1
+		fi
+	fi
+
+	# Preflight: scan generated validation Dockerfiles for apt package names that
+	# are known to be absent from default Debian/Ubuntu repositories. The canonical
+	# case is `mongodb-mongosh`, which is only available via MongoDB's official apt
+	# repo (key + source list). Catching this before `docker compose up --build`
+	# turns a 20-second opaque `E: Unable to locate package` build failure into a
+	# clear, actionable preflight diagnostic. Only trips when the bad package name
+	# appears on a non-comment line AND no accompanying MongoDB apt-source hint
+	# (`repo.mongodb.org`) is present in the same file.
+	for dockerfile in validation/Dockerfile validation/Dockerfile.* validation/*.Dockerfile; do
+		[ -f "${dockerfile}" ] || continue
+		if grep -Evi '^[[:space:]]*#' "${dockerfile}" \
+		   | sed -E 's/[[:space:]]+#.*$//' \
+		   | sed -E ':a;N;$!ba;s/\\[[:space:]]*\n[[:space:]]*/ /g' \
+		   | grep -Eq 'apt(-get)?[[:space:]].*install.*(^|[^[:alnum:]_-])(mongodb-)?mongosh(=[^[:space:]\\]+)?($|[^[:alnum:]_-])' \
+		   && ! grep -Evi '^[[:space:]]*#' "${dockerfile}" \
+		   | sed -E 's/[[:space:]]+#.*$//' \
+		   | grep -qi 'repo\.mongodb\.org'; then
+			echo "${dockerfile} references 'mongosh'/'mongodb-mongosh' but does not add MongoDB's official apt repo (no 'repo.mongodb.org' reference). mongosh is NOT in Debian/Ubuntu default repos and will fail the compose build with 'E: Unable to locate package mongosh' or 'E: Unable to locate package mongodb-mongosh'. Prefer pymongo, or add the MongoDB apt source + GPG key to the Dockerfile. See mode-validate-generate.txt: 'installing mongosh in validation/Dockerfile.app'." >> "${PRE_FLIGHT_LOG_FILE}"
+			PRE_FLIGHT_STATUS="fail"
+			PRE_FLIGHT_FAILURE_CLASS="non_lint"
+			_emit_preflight_tail "mongosh installation in ${dockerfile} requires official MongoDB apt repo"
+			return 1
+		fi
+	done
+
+	# Preflight: app-container CANARY_TOOLS scope check.
+	#
+	# mode-validate-generate.txt hard rule: service-side CLIs (mongosh, mongo,
+	# psql, redis-cli, mysql, mysqladmin, kafkacat, kcat) must NOT appear in
+	# the app container's CANARY_TOOLS loop unless the app image explicitly
+	# installs that exact binary. Canonical false-positive symptom:
+	# `not ok N - mongosh is NOT available in app` on a python:*-slim-based
+	# image whose app never invokes mongosh (Mongo reachability is already
+	# covered by a service-side assertion that runs inside the mongo
+	# container). The generator prompt already forbids this at lines 491-492,
+	# but the LLM has been observed to violate it; mechanical enforcement
+	# here routes the violation through the preflight self-heal path so the
+	# regenerate/self-heal loop can intercept before a validation cycle
+	# burns. See docs/validation-improvements.md for the motivating run.
+	if [ -f validation/tests/00_canary.sh ]; then
+		local _canary_tools_line
+		_canary_tools_line="$(grep -E '^[[:space:]]*CANARY_TOOLS=' validation/tests/00_canary.sh | head -n 1 || true)"
+		if [ -n "${_canary_tools_line}" ]; then
+			local _canary_tools_raw
+			# Strip the default-value wrapper from any of these shapes:
+			#   CANARY_TOOLS="${CANARY_TOOLS:-curl jq python3 mongosh}"
+			#   CANARY_TOOLS='${CANARY_TOOLS:-curl jq python3}'
+			#   CANARY_TOOLS="curl jq python3 mongosh"
+			#   CANARY_TOOLS=curl jq python3         (unquoted — sol3 bug; still scannable)
+			_canary_tools_raw="$(printf '%s\n' "${_canary_tools_line}" \
+				| sed -E 's/^[[:space:]]*CANARY_TOOLS=//' \
+				| sed -E 's/[[:space:]]*#.*$//' \
+				| sed -E 's/^"\$\{CANARY_TOOLS:-//; s/\}"[[:space:]]*$//' \
+				| sed -E "s/^'\\\$\\{CANARY_TOOLS:-//; s/\\}'[[:space:]]*$//" \
+				| sed -E 's/^\$\{CANARY_TOOLS:-//; s/\}[[:space:]]*$//' \
+				| sed -E 's/^"//; s/"$//; s/^'"'"'//; s/'"'"'$//')"
+			local _denylist="mongosh mongo psql redis-cli mysql mysqladmin kafkacat kcat"
+			local _tool _tool_pattern _offenders=""
+			set -f
+			for _tool in ${_canary_tools_raw}; do
+				case " ${_denylist} " in
+					*" ${_tool} "*)
+					case "${_tool}" in
+						psql) _tool_pattern='psql|postgresql-client' ;;
+						redis-cli) _tool_pattern='redis-cli|redis-tools' ;;
+						mysql|mysqladmin) _tool_pattern="${_tool}|mysql-client|default-mysql-client|mariadb-client" ;;
+						kcat|kafkacat) _tool_pattern='kcat|kafkacat' ;;
+						*) _tool_pattern="${_tool}" ;;
+					esac
+						# Tool is service-side. Accept it only if the app
+						# image explicitly installs it (apt/pip/custom RUN).
+						# The token-boundary regex avoids matching the tool
+						# name inside an unrelated identifier.
+						if [ -f validation/Dockerfile.app ] && \
+							grep -Ev '^[[:space:]]*#' validation/Dockerfile.app \
+							| sed -E 's/[[:space:]]+#.*$//' \
+							| sed -E ':a;N;$!ba;s/\\[[:space:]]*\n[[:space:]]*/ /g' \
+							| grep -qE "(^|[^[:alnum:]_])(${_tool_pattern})([^[:alnum:]_]|$)"; then
+							: # installed; scope satisfied
+						else
+							_offenders="${_offenders:+${_offenders} }${_tool}"
+						fi
+						;;
+				esac
+			done
+			set +f
+			if [ -n "${_offenders}" ]; then
+				{
+					echo "validation/tests/00_canary.sh CANARY_TOOLS references service-side CLI(s) not installed in validation/Dockerfile.app: ${_offenders}"
+					echo "mode-validate-generate.txt hard rule: do NOT include service-side CLIs (mongosh, mongo, psql, redis-cli, mysql, mysqladmin, kafkacat, kcat) in the app-container CANARY_TOOLS unless the app image explicitly installs that exact binary."
+					echo "Fix options (choose one per offending tool):"
+					echo "  1) Remove the tool from CANARY_TOOLS in 00_canary.sh. For DB reachability, probe from the service container (docker compose exec -T <service> <cli> ...) or use a native client inside the app (python3 + pymongo, psycopg2, redis-py, etc.)."
+					echo "  2) Install the tool in validation/Dockerfile.app via apt (plus any required repo/GPG plumbing, e.g. MongoDB official apt repo for mongosh) and leave CANARY_TOOLS unchanged."
+				} >> "${PRE_FLIGHT_LOG_FILE}"
+				PRE_FLIGHT_STATUS="fail"
+				PRE_FLIGHT_FAILURE_CLASS="non_lint"
+				_emit_preflight_tail "CANARY_TOOLS scope violation: service-side CLI(s) referenced in app canary but not installed in app image: ${_offenders}"
+				return 1
+			fi
+		fi
+	fi
+
+	PRE_FLIGHT_STATUS="pass"
+	PRE_FLIGHT_FAILURE_KIND="none"
+	PRE_FLIGHT_FAILURE_REASON="none"
+	return 0
+}
+
+classify_preflight_failure()
+{
+	PRE_FLIGHT_FAILURE_KIND="non_lint"
+	PRE_FLIGHT_FAILURE_REASON="preflight_failure_other"
+
+	if [ ! -s "${PRE_FLIGHT_LOG_FILE}" ]; then
+		PRE_FLIGHT_FAILURE_REASON="preflight_log_empty"
+		echo "PRE_FLIGHT_CLASSIFICATION kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON}" >&2
+		return 0
+	fi
+
+	if grep -Fq "Embedded Python F-code lint violations in generated harness scripts:" "${PRE_FLIGHT_LOG_FILE}"; then
+		PRE_FLIGHT_FAILURE_KIND="lint"
+		PRE_FLIGHT_FAILURE_REASON="embedded_python_fcode_lint"
+	elif grep -Fq "Embedded Python syntax errors in generated harness scripts:" "${PRE_FLIGHT_LOG_FILE}"; then
+		PRE_FLIGHT_FAILURE_KIND="lint"
+		PRE_FLIGHT_FAILURE_REASON="embedded_python_syntax"
+	elif grep -Fq "Compose syntax/validation check failed." "${PRE_FLIGHT_LOG_FILE}"; then
+		PRE_FLIGHT_FAILURE_KIND="lint"
+		PRE_FLIGHT_FAILURE_REASON="compose_schema_lint"
+	elif grep -Fq "Shell syntax check failed:" "${PRE_FLIGHT_LOG_FILE}"; then
+		PRE_FLIGHT_FAILURE_KIND="lint"
+		PRE_FLIGHT_FAILURE_REASON="shell_syntax_lint"
+	elif grep -Fq "validation/tests/00_canary.sh CANARY_TOOLS references service-side CLI(s)" "${PRE_FLIGHT_LOG_FILE}"; then
+		PRE_FLIGHT_FAILURE_KIND="lint"
+		PRE_FLIGHT_FAILURE_REASON="canary_tools_scope_lint"
+	elif grep -Fq "references 'mongosh'/'mongodb-mongosh' but does not add MongoDB's official apt repo" "${PRE_FLIGHT_LOG_FILE}"; then
+		PRE_FLIGHT_FAILURE_KIND="lint"
+		PRE_FLIGHT_FAILURE_REASON="dockerfile_package_lint"
+	elif grep -Fq "missing build context:" "${PRE_FLIGHT_LOG_FILE}" \
+		|| grep -Fq "missing dockerfile:" "${PRE_FLIGHT_LOG_FILE}"; then
+		PRE_FLIGHT_FAILURE_KIND="lint"
+		PRE_FLIGHT_FAILURE_REASON="compose_build_path_lint"
+	elif grep -Fq "Missing validation/docker-compose.test.yml" "${PRE_FLIGHT_LOG_FILE}" \
+		|| grep -Fq "Missing validation/validate.env" "${PRE_FLIGHT_LOG_FILE}" \
+		|| grep -Fq "Missing validation/tests/00_canary.sh" "${PRE_FLIGHT_LOG_FILE}"; then
+		PRE_FLIGHT_FAILURE_KIND="non_lint"
+		PRE_FLIGHT_FAILURE_REASON="missing_validation_artifact"
+	fi
+
+	echo "PRE_FLIGHT_CLASSIFICATION kind=${PRE_FLIGHT_FAILURE_KIND} reason=${PRE_FLIGHT_FAILURE_REASON}" >&2
+	return 0
+}
+
+enforce_managed_validation_artifact_contract()
+{
+	if ! command -v git >/dev/null 2>&1 || [ ! -d .git ]; then
+		return 0
+	fi
+
+	local canonical_path
+	local canonical_hash
+	local tracked_script
+	local tracked_hash
+	local has_violation=false
+	local -a canonical_paths
+	local -a tracked_scripts
+	local -a violations
+
+	canonical_paths=(
+		"scripts/validate_process.sh"
+		"scripts/validate_driver.sh"
+	)
+
+	if git ls-files --error-unmatch -- validation/validate.sh >/dev/null 2>&1; then
+		violations+=("validation/validate.sh is tracked. validation/ artifacts must remain transient and untracked.")
+		has_violation=true
+	fi
+
+	mapfile -t tracked_scripts < <(git ls-files -- 'scripts/*.sh' 2>/dev/null || true)
+
+	for canonical_path in "${canonical_paths[@]}"; do
+		if [ ! -f "${canonical_path}" ] || [ -L "${canonical_path}" ]; then
+			continue
+		fi
+
+		if ! canonical_hash="$(git hash-object -- "${canonical_path}" 2>/dev/null)"; then
+			continue
+		fi
+
+		for tracked_script in "${tracked_scripts[@]}"; do
+			if [ -z "${tracked_script}" ] || [ "${tracked_script}" = "${canonical_path}" ] || [ ! -f "${tracked_script}" ] || [ -L "${tracked_script}" ]; then
+				continue
+			fi
+
+			if ! tracked_hash="$(git hash-object -- "${tracked_script}" 2>/dev/null)"; then
+				continue
+			fi
+
+			if [ "${tracked_hash}" = "${canonical_hash}" ]; then
+				violations+=("${tracked_script} is a tracked copy of managed artifact ${canonical_path}.")
+				has_violation=true
+			fi
+		done
+	done
+
+	if [ "${has_violation}" = true ]; then
+		echo "Managed validation artifact contract violation detected:" >&2
+		printf ' - %s\n' "${violations[@]}" >&2
+		return 1
+	fi
+
+	return 0
+}
+
+trap cleanup_runtime_containers EXIT
+
+
+# ---------------------------------------------------------------
+# Setup Codex
+# ---------------------------------------------------------------
+# Centralised in scripts/write_codex_config.sh — its `--allow-elevation
+# auto` default already implements the standalone-safety gate this
+# script needs (elevate iff GITHUB_ACTIONS=true OR
+# VALIDATE_FORCE_FULL_ACCESS=1, otherwise keep codex's safer
+# workspace-write/on-request defaults). Catalog path is script-relative
+# so a "Standalone validation run" without a fetched scripts/ tree
+# still picks up the catalog shipped next to validate_process.sh.
+CODEX_HEARTBEAT_HELPER="${_validate_script_dir}/codex_heartbeat.sh"
+CODEX_STALL_GUARD_HELPER="${_validate_script_dir}/codex_stall_guard.sh"
+# Every validate agent (discover, diagnose, self-heal) reads the tracking
+# issue, harness and container logs, so it runs in the credential-free,
+# network-isolated container with a read-only snapshot of the checkout.
+# Exported so codex_thread_reuse.sh (direct-run and the PATH wrapper) and
+# self_heal_validation.sh launch through the same helper.
+CODEX_ISOLATED_EXEC="${_validate_script_dir}/codex_isolated_exec.sh"
+CODEX_ISOLATED_MODE="read-only"
+export CODEX_ISOLATED_EXEC CODEX_ISOLATED_MODE
+unset CODEX_ISOLATED_ROOT
+WORKSPACE_SAFETY_CHECK_HELPER=""
+for _workspace_safety_candidate in \
+  "${_validate_script_dir}/workspace_safety_check.sh" \
+  "scripts/workspace_safety_check.sh" \
+  ".codex-workflow-src/scripts/workspace_safety_check.sh" \
+  ".codex-workflow-src-main/scripts/workspace_safety_check.sh"; do
+  if [ -f "${_workspace_safety_candidate}" ]; then
+    WORKSPACE_SAFETY_CHECK_HELPER="${_workspace_safety_candidate}"
+    break
+  fi
+done
+CODEX_THREAD_REUSE_HELPER=""
+for _thread_reuse_candidate in \
+  "${_validate_script_dir}/codex_thread_reuse.sh" \
+  "scripts/codex_thread_reuse.sh" \
+  ".codex-workflow-src/scripts/codex_thread_reuse.sh" \
+  ".codex-workflow-src-main/scripts/codex_thread_reuse.sh"; do
+  if [ -f "${_thread_reuse_candidate}" ]; then
+    CODEX_THREAD_REUSE_HELPER="${_thread_reuse_candidate}"
+    break
+  fi
+done
+export CODEX_THREAD_REUSE_RUNTIME_DIR="${CODEX_THREAD_REUSE_RUNTIME_DIR:-${RUNTIME_DIR}}"
+if [ -n "${CODEX_THREAD_REUSE_HELPER}" ]; then
+  # shellcheck disable=SC1090
+  source "${CODEX_THREAD_REUSE_HELPER}"
+fi
+LEDGER_SUBSTATE_HELPER=""
+for _ledger_candidate in \
+  "${_validate_script_dir}/ledger_emit_substate.sh" \
+  "scripts/ledger_emit_substate.sh" \
+  ".codex-workflow-src/scripts/ledger_emit_substate.sh" \
+  ".codex-workflow-src-main/scripts/ledger_emit_substate.sh"; do
+  if [ -f "${_ledger_candidate}" ]; then
+    LEDGER_SUBSTATE_HELPER="${_ledger_candidate}"
+    break
+  fi
+done
+codex_config_assemble \
+  "${MODEL_EDITOR}" \
+  "${MODEL_REASONING_EFFORT}" \
+  "low" \
+  --scripts-dir "${_validate_script_dir}" \
+  --catalog-path "${_validate_script_dir}/codex_model_catalog.json"
+
+emit_validate_substate() {
+  local phase_name="$1"
+  local mode_name="$2"
+  local event_or_substate="$3"
+  local attempt_number="$4"
+  local tokens_log_file="${5:-}"
+  local args=()
+
+  [ -f "${LEDGER_SUBSTATE_HELPER:-}" ] || return 0
+
+  args=(
+    --run-id "${GITHUB_RUN_ID:-}"
+    --workflow "validate"
+    --phase "${phase_name}"
+    --mode "${mode_name}"
+    --attempt "${attempt_number}"
+    --model "${MODEL_EDITOR:-}"
+    --issue-number "${TRACKING_ISSUE_NUM:-}"
+    --actor "${GITHUB_ACTOR:-codex-bot}"
+    --repo-root "$(pwd)"
+  )
+  case "${event_or_substate}" in
+    codex_stall_observed|codex_stall_killed)
+      args+=(--event-type "${event_or_substate}")
+      ;;
+    *)
+      args+=(--substate "${event_or_substate}")
+      ;;
+  esac
+  if [ -n "${tokens_log_file}" ]; then
+    args+=(--tokens-log-file "${tokens_log_file}")
+  fi
+
+  bash "${LEDGER_SUBSTATE_HELPER}" "${args[@]}" || true
+}
+
+resolve_validate_thread_reuse_asset() {
+	local repo_path="$1"
+	local candidate=""
+
+	for candidate in \
+	  "${repo_path}" \
+	  ".codex-workflow-src/${repo_path}" \
+	  ".codex-workflow-src-main/${repo_path}"; do
+		if [ -f "${candidate}" ]; then
+			printf '%s\n' "${candidate}"
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+validate_thread_reuse_enabled() {
+	[ -n "${CODEX_THREAD_REUSE_HELPER:-}" ] || return 1
+	declare -F codex_thread_reuse_truthy >/dev/null 2>&1 || return 1
+	codex_thread_reuse_truthy "${CODEX_THREAD_REUSE_ENABLED:-false}"
+}
+
+run_validate_codex_attempt() {
+  local phase_name="$1"
+  local prompt_file="$2"
+  local output_file="$3"
+  local log_file="$4"
+  local status_file="$5"
+
+  if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
+    bash "${WORKSPACE_SAFETY_CHECK_HELPER}" || return $?
+  fi
+
+	if validate_thread_reuse_enabled; then
+		CODEX_THREAD_REUSE_STATE_KEY="${phase_name}" \
+		  CODEX_THREAD_REUSE_PROMPT_FILE="${prompt_file}" \
+		  CODEX_THREAD_REUSE_OUTPUT_FILE="${output_file}" \
+		  CODEX_THREAD_REUSE_PHASE="${phase_name}" \
+		  CODEX_THREAD_REUSE_MODEL="${MODEL_EDITOR}" \
+		  CODEX_THREAD_REUSE_LOG_FILE="${log_file}" \
+		  CODEX_THREAD_REUSE_STATUS_FILE="${status_file}" \
+		  CODEX_THREAD_REUSE_STALL_GUARD_HELPER="${CODEX_STALL_GUARD_HELPER}" \
+		  CODEX_THREAD_REUSE_HEARTBEAT_HELPER="${CODEX_HEARTBEAT_HELPER}" \
+		  CODEX_THREAD_REUSE_SKIP_GIT_REPO_CHECK="true" \
+		  bash "${CODEX_THREAD_REUSE_HELPER}" direct-run
+		return $?
+	fi
+
+  if [ -x "${CODEX_STALL_GUARD_HELPER}" ]; then
+    "${CODEX_STALL_GUARD_HELPER}" \
+      --phase "${phase_name}" \
+      --stdout-file "${output_file}" \
+      --status-file "${status_file}" \
+      -- bash "${CODEX_ISOLATED_EXEC}" run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" 2> >(tee -a "${log_file}" >&2)
+    return $?
+  fi
+
+  if [ -x "${CODEX_HEARTBEAT_HELPER}" ]; then
+    "${CODEX_HEARTBEAT_HELPER}" \
+      --phase "${phase_name}" \
+      --stdout-file "${output_file}" \
+      -- bash "${CODEX_ISOLATED_EXEC}" run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" 2> >(tee -a "${log_file}" >&2)
+    return $?
+  fi
+
+  bash "${CODEX_ISOLATED_EXEC}" run --mode read-only -- --ask-for-approval never -c model_verbosity=low -c include_apply_patch_tool=true exec --skip-git-repo-check --model "${MODEL_EDITOR}" --sandbox danger-full-access < "${prompt_file}" > "${output_file}" 2> >(tee -a "${log_file}" >&2)
+}
+
+# Engine selection for the validate agents (role VALIDATE): Claude by default
+# through the trusted engine root validate.yml stages from the verified
+# support clone (CLAUDE_ENGINE_SUPPORT_DIR, default
+# ${RUNNER_TEMP}/claude-engine-support), the unchanged
+# run_validate_codex_attempt otherwise (AI_ENGINE_VALIDATE=codex, the ai:codex
+# label, Claude unavailable, or no trusted root). ai_engine.sh is never sourced
+# from the checkout. The Claude run is read-only, like every codex attempt.
+run_validate_engine_attempt() {
+  local role="$1"
+  local phase_name="$2"
+  local prompt_file="$3"
+  local output_file="$4"
+  local log_file="$5"
+  local status_file="$6"
+  local effort_hint="${7:-${MODEL_REASONING_EFFORT:-}}"
+  local engine_root="${CLAUDE_ENGINE_SUPPORT_DIR:-${RUNNER_TEMP:-/tmp}/claude-engine-support}"
+  local engine_script="${engine_root}/scripts/ai_engine.sh"
+
+  if [ ! -f "${engine_script}" ] || [ -L "${engine_script}" ]; then
+    echo "AI_ENGINE_FALLBACK role=${role} reason=engine_support_missing" >&2
+    run_validate_codex_attempt "${phase_name}" "${prompt_file}" "${output_file}" "${log_file}" "${status_file}"
+    return $?
+  fi
+
+  if [ -x "${WORKSPACE_SAFETY_CHECK_HELPER}" ]; then
+    bash "${WORKSPACE_SAFETY_CHECK_HELPER}" || return $?
+  fi
+
+  (
+    # shellcheck source=/dev/null
+    if ! source "${engine_script}"; then
+      echo "AI_ENGINE_FALLBACK role=${role} reason=engine_support_missing" >&2
+      run_validate_codex_attempt "${phase_name}" "${prompt_file}" "${output_file}" "${log_file}" "${status_file}"
+      exit $?
+    fi
+    AI_ENGINE_MODEL_HINT="${MODEL_EDITOR:-}" AI_ENGINE_EFFORT_HINT="${effort_hint}" \
+      claude_run_selected "${role}" "${prompt_file}" "${output_file}" "${PWD}" -- \
+      run_validate_codex_attempt "${phase_name}" "${prompt_file}" "${output_file}" "${log_file}" "${status_file}"
+  )
+}
+
+export PATH="${HOME}/.local/bin:${PATH}"
+
+
+# ---------------------------------------------------------------
+# Assemble context
+# ---------------------------------------------------------------
+if is_tracking_run; then
+  gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}" --jq '.body // ""' > "${PROJECT_SPEC_FILE}"
+else
+  printf 'Standalone validation run. Tracking issue is not provided.\n' > "${PROJECT_SPEC_FILE}"
+fi
+
+INTEGRATION_BRANCH=""
+if is_tracking_run; then
+  INTEGRATION_BRANCH="$(sed -n 's/^\*\*Integration branch:\*\* `\([^`]*\)`$/\1/p' "${PROJECT_SPEC_FILE}" | head -n1 | tr -d '\r')"
+fi
+
+VALIDATE_README_CONTEXT="$(mktemp "${RUNTIME_DIR:-/tmp}/validate-readme.XXXXXX")"
+if ! bash scripts/build_static_context.sh readme "${VALIDATE_README_CONTEXT}"; then
+  rm -f "${VALIDATE_README_CONTEXT}"
+  exit 1
+fi
+
+{
+  if [ -f unattended_system_instructions.md ]; then
+    echo "=== SYSTEM INSTRUCTIONS ==="
+    cat unattended_system_instructions.md
+    echo
+  fi
+  if [ -f ai_pipeline.md ]; then
+    echo "=== AI PIPELINE ==="
+    cat ai_pipeline.md
+    echo
+  fi
+  VALIDATE_AGENTS_FILE=""
+  # A symlinked agents file reads as absent (issue #8269).
+  if [ -f AGENTS.md ] && [ ! -L AGENTS.md ]; then
+    VALIDATE_AGENTS_FILE="AGENTS.md"
+  elif [ -f agents.md ] && [ ! -L agents.md ]; then
+    VALIDATE_AGENTS_FILE="agents.md"
+  fi
+  # BEGIN static context agents index (#8269)
+  # Index the agents file instead of inlining it unless STATIC_CONTEXT_AGENTS_MODE
+  # says inline (same rules as build_static_context.sh); any failure inlines.
+  VALIDATE_AGENTS_MODE="$(printf '%s' "${STATIC_CONTEXT_AGENTS_MODE:-}" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+  case "${VALIDATE_AGENTS_MODE}" in
+    ""|index) VALIDATE_AGENTS_MODE=index ;;
+    inline) VALIDATE_AGENTS_MODE=inline ;;
+    *)
+      echo "::warning::STATIC_CONTEXT_AGENTS_MODE has an unrecognised value; using inline." >&2
+      VALIDATE_AGENTS_MODE=inline
+      ;;
+  esac
+  VALIDATE_AGENTS_EFFECTIVE_MODE="${VALIDATE_AGENTS_MODE}"
+  VALIDATE_AGENTS_FALLBACK_REASON=""
+  VALIDATE_AGENTS_INDEXED=false
+  if [ -n "${VALIDATE_AGENTS_FILE}" ] && [ "${VALIDATE_AGENTS_MODE}" = index ]; then
+    if VALIDATE_AGENTS_INDEX_TMP="$(mktemp "${RUNTIME_DIR:-/tmp}/validate-agents-index.XXXXXX" 2>/dev/null)"; then
+      if bash scripts/build_static_context.sh agents-index "${VALIDATE_AGENTS_INDEX_TMP}" "${VALIDATE_AGENTS_FILE}" && [ -s "${VALIDATE_AGENTS_INDEX_TMP}" ]; then
+        cat "${VALIDATE_AGENTS_INDEX_TMP}"
+        echo
+        VALIDATE_AGENTS_INDEXED=true
+      else
+        VALIDATE_AGENTS_FALLBACK_REASON=index_unavailable
+      fi
+      rm -f "${VALIDATE_AGENTS_INDEX_TMP}"
+    else
+      VALIDATE_AGENTS_FALLBACK_REASON=tmp_unavailable
+    fi
+    if [ "${VALIDATE_AGENTS_INDEXED}" != true ]; then
+      VALIDATE_AGENTS_EFFECTIVE_MODE=inline
+      echo "::warning::Static context agents index unavailable; inlining agents.md." >&2
+    fi
+  fi
+  # END static context agents index (#8269)
+  if [ -n "${VALIDATE_AGENTS_FILE}" ] && [ "${VALIDATE_AGENTS_INDEXED}" != true ]; then
+    echo "=== AGENTS.MD ==="
+    # CLAUDE.md §30: fold pending agents.d/ fragments in; plain file on any failure.
+    if [ -d agents.d ] && [ ! -L agents.d ] && VALIDATE_AGENTS_RENDER="$(PYTHONDONTWRITEBYTECODE=1 python3 -I -B scripts/assemble_agents.py render --repo-root . --agents-file "${VALIDATE_AGENTS_FILE}" 2>/dev/null)"; then
+      printf '%s\n' "${VALIDATE_AGENTS_RENDER}"
+    else
+      cat "${VALIDATE_AGENTS_FILE}"
+    fi
+    echo
+  fi
+  cat "${VALIDATE_README_CONTEXT}"
+  if [ -f probably_unnecessary_but_read_if_stuck.md ]; then
+    echo "=== OVERFLOW REFERENCE ==="
+    echo "If you cannot make progress without operator-runbook details (env var reference, autofix retrigger/dedup internals, orchestrator integration-sync auto-heal, validation self-healing, workflow log analysis pipeline, semantic cache scope, wrapper pin policy), read ./probably_unnecessary_but_read_if_stuck.md from the working tree before bailing."
+    echo
+  fi
+} > "${STATIC_CONTEXT_FILE}"
+rm -f "${VALIDATE_README_CONTEXT}"
+VALIDATE_STATIC_SIZE_BYTES="$(wc -c < "${STATIC_CONTEXT_FILE}" 2>/dev/null | tr -d '[:space:]')" || VALIDATE_STATIC_SIZE_BYTES=0
+case "${VALIDATE_STATIC_SIZE_BYTES}" in
+  ''|*[!0-9]*) VALIDATE_STATIC_SIZE_BYTES=0 ;;
+esac
+VALIDATE_STATIC_SIZE_LINE="STATIC_CONTEXT_SIZE phase=validate mode=${VALIDATE_AGENTS_EFFECTIVE_MODE} bytes=${VALIDATE_STATIC_SIZE_BYTES}"
+if [ -n "${VALIDATE_AGENTS_FALLBACK_REASON}" ]; then
+  VALIDATE_STATIC_SIZE_LINE="${VALIDATE_STATIC_SIZE_LINE} fallback=inline reason=${VALIDATE_AGENTS_FALLBACK_REASON}"
+fi
+if [ -z "${VALIDATE_AGENTS_FILE}" ]; then
+  VALIDATE_STATIC_SIZE_LINE="${VALIDATE_STATIC_SIZE_LINE} agents=absent"
+fi
+echo "${VALIDATE_STATIC_SIZE_LINE}" >&2
+
+
+# ---------------------------------------------------------------
+# Phase 0: Discover validation hints when repository hints are absent
+#
+# Hint source precedence:
+#   1. .ai/validate.yml         — committed in consumer repo (authoritative)
+#   2. .ai/validate-hints-cache/hints.yml
+#                                — restored from GitHub Actions cache
+#                                  (written by a prior successful run in
+#                                  the same repo with a matching cache key)
+#   3. codex discover call      — LLM-driven discovery, last resort
+#
+# The cache path is restored by a `Restore validate hints cache` step in
+# the validate workflow via actions/cache. On successful discovery we
+# copy the hints back into the cache directory so the next run in this
+# repo can reuse them without a codex call. Different repos are
+# automatically isolated because GitHub Actions cache is per-repo. The
+# cache key hashes files that drive discovery output (Dockerfile,
+# compose, package manifests) so a repo structure change invalidates it.
+# ---------------------------------------------------------------
+VALIDATE_HINTS_CACHE_DIR="${VALIDATE_HINTS_CACHE_DIR:-.ai/validate-hints-cache}"
+VALIDATE_HINTS_CACHE_FILE="${VALIDATE_HINTS_CACHE_DIR}/hints.yml"
+
+# Lightweight sanity check for a hints file before reuse. Stricter than
+# the discover-path validator (which accepts indented keys) because a
+# cache entry may live across many runs and the poisoning threat model
+# is different: we require at least one TRULY top-level key (no leading
+# whitespace in the original line) so a nested mapping cannot satisfy
+# the regex by accident. Returns 0 on pass, 1 on fail.
+validate_hints_sanity_check() {
+  local hints_file="$1"
+  [ -s "${hints_file}" ] || return 1
+  python3 - "${hints_file}" <<'PY' 2>/dev/null
+import pathlib
+import re
+import sys
+
+path = pathlib.Path(sys.argv[1])
+try:
+    raw = path.read_text(encoding="utf-8", errors="replace")
+except Exception:
+    sys.exit(1)
+
+candidate = raw.strip()
+if not candidate:
+    sys.exit(1)
+
+if path.stat().st_size > 64 * 1024:
+    sys.exit(1)
+
+expected_key = re.compile(
+    r"^(type|entry|port|health_check|services|env_overrides|custom_tests|skip_tests):\s*",
+    re.IGNORECASE,
+)
+# Keep original indentation so we can distinguish truly top-level keys
+# (no leading whitespace) from nested ones.
+lines = [
+    line
+    for line in candidate.splitlines()
+    if line.strip() and not line.lstrip().startswith("#")
+]
+if not lines:
+    sys.exit(1)
+if not any(line == line.lstrip() and expected_key.match(line) for line in lines):
+    sys.exit(1)
+sys.exit(0)
+PY
+}
+
+# BEGIN deterministic-only gate (#7553): discover
+# A deterministic run never calls a model to discover or generate a manifest.
+if [ "${VALIDATE_DETERMINISTIC_ONLY_ACTIVE:-false}" = "true" ] && { [ -L .ai/validate.yml ] || [ ! -f .ai/validate.yml ]; }; then
+	echo "VALIDATE_DETERMINISTIC_ONLY phase=discover outcome=skip reason=no_committed_manifest"
+	write_result_files "error" "Validation harness missing" ".ai/validate.yml is missing; scheduled runs do not call a model to discover or generate one. Commit .ai/validate.yml, or post /revalidate or dispatch AI Validate by hand for a run that can generate it." "harness_missing"
+	exit 0
+fi
+# END deterministic-only gate (#7553): discover
+
+if [ -f .ai/validate.yml ]; then
+  cp .ai/validate.yml "${VALIDATE_HINTS_FILE}"
+  HINTS_SOURCE="committed"
+elif [ -f "${VALIDATE_HINTS_CACHE_FILE}" ] \
+  && validate_hints_sanity_check "${VALIDATE_HINTS_CACHE_FILE}"; then
+  cp "${VALIDATE_HINTS_CACHE_FILE}" "${VALIDATE_HINTS_FILE}"
+  HINTS_SOURCE="cache"
+  echo "Reused validation hints from ${VALIDATE_HINTS_CACHE_FILE} (skipped codex discovery)."
+else
+  if [ -f "${VALIDATE_HINTS_CACHE_FILE}" ] && [ -s "${VALIDATE_HINTS_CACHE_FILE}" ]; then
+    echo "::warning::Cached validation hints at ${VALIDATE_HINTS_CACHE_FILE} failed sanity checks; falling back to codex discovery." >&2
+  fi
+  ensure_serena_bootstrap "discover"
+  DISCOVER_SERENA_TOOL_HINTS="$(build_validate_serena_tool_hints "discover" || true)"
+  discover_semble_query="$(build_validate_discover_semble_query || true)"
+{
+  cat "${STATIC_CONTEXT_FILE}"
+  echo
+  echo "=== DISCOVERY TASK ==="
+  echo
+  SERENA_TOOL_HINTS="${DISCOVER_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh prompts/mode-validate-discover.txt
+  echo
+  echo "TOOL_CALL_BUDGET: 15"
+  echo
+  echo "=== PROJECT SPEC ==="
+    cat "${PROJECT_SPEC_FILE}"
+    echo
+    append_validate_semble_context "${discover_semble_query}" "${VALIDATE_DISCOVER_SEMBLE_MAX_CHUNKS}" "Validate Discover Context"
+    echo "Output only YAML for .ai/validate.yml with no markdown fences or prose."
+  } > "${DISCOVER_PROMPT_FILE}"
+
+  # Discover-only reasoning override. Patch ~/.codex/config.toml to the
+  # discover-specific level (default `low`) before the codex loop, then
+  # restore `MODEL_REASONING_EFFORT` after. Matches the per-phase pattern
+  # in implement.yml (MODEL_REPAIR_REASONING_EFFORT) and aligns the
+  # runtime behaviour with the documented `agents.md` model table.
+  _validate_codex_config="${HOME:-/root}/.codex/config.toml"
+  _discover_reasoning_patched="false"
+  if [ -f "${_validate_codex_config}" ] && grep -Eq '^[[:space:]]*model_reasoning_effort[[:space:]]*=' "${_validate_codex_config}"; then
+    sed -i \
+      -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${MODEL_REASONING_EFFORT_DISCOVER}\"/" \
+      -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*'[^']*'/model_reasoning_effort = \"${MODEL_REASONING_EFFORT_DISCOVER}\"/" \
+      "${_validate_codex_config}" || true
+    # Verify the patch landed before claiming success / setting the
+    # restore flag. A silent sed failure (permissions, unexpected config
+    # shape, BSD sed argument differences in standalone runs) would
+    # otherwise leave discover running at the previous reasoning level
+    # while the log claims the override took effect. Mirrors the
+    # post-edit verification pattern in scripts/review_conflict_resolve.sh.
+    if grep -Eq "^model_reasoning_effort = \"${MODEL_REASONING_EFFORT_DISCOVER}\"$" "${_validate_codex_config}"; then
+      _discover_reasoning_patched="true"
+      echo "Patched ~/.codex/config.toml: model_reasoning_effort=${MODEL_REASONING_EFFORT_DISCOVER} for discover phase."
+    else
+      echo "::warning::Codex config rewrite did not produce the expected model_reasoning_effort = \"${MODEL_REASONING_EFFORT_DISCOVER}\" line; discover phase will run at the prior reasoning level (no restore needed)."
+    fi
+  fi
+
+  DISCOVER_SUCCESS=false
+  DISCOVER_FAILURE_MODE=""
+  DISCOVER_ATTEMPTS_USED=0
+  for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
+  DISCOVER_ATTEMPTS_USED="${attempt}"
+  echo "Validation hint discovery attempt ${attempt}/${MAX_CODEX_ATTEMPTS}"
+  emit_validate_substate "validate_discover" "discover" "PreparingWorkspace" "${attempt}"
+  emit_validate_substate "validate_discover" "discover" "BuildingPrompt" "${attempt}"
+  sanitize_codex_prompt_file "${DISCOVER_PROMPT_FILE}"
+  discover_stall_status_file="$(mktemp /tmp/validate_discover_stall_status.XXXXXX)"
+  discover_stall_state=""
+  emit_validate_substate "validate_discover" "discover" "LaunchingAgentProcess" "${attempt}"
+  emit_validate_substate "validate_discover" "discover" "InitializingSession" "${attempt}"
+  emit_validate_substate "validate_discover" "discover" "StreamingTurn" "${attempt}"
+  set +e
+  run_validate_engine_attempt "VALIDATE" "validate_discover" "${DISCOVER_PROMPT_FILE}" "${DISCOVER_OUTPUT_FILE}" "${DISCOVER_LOG_FILE}" "${discover_stall_status_file}" "${MODEL_REASONING_EFFORT_DISCOVER:-${MODEL_REASONING_EFFORT:-}}"
+  DISCOVER_EXIT=$?
+  set -e
+  if [ "${DISCOVER_EXIT}" -eq 80 ]; then
+    # Claude capacity wait (issue #7370): no codex and no verdict; validate.yml
+    # maps exit 80 to a wait instead of a harness error.
+    echo "AI_ENGINE_CAPACITY_WAIT role=VALIDATE outcome=deferred stage=validate"
+    exit 80
+  fi
+  emit_validate_substate "validate_discover" "discover" "Finishing" "${attempt}" "${DISCOVER_LOG_FILE}"
+  if discover_stall_state="$(read_codex_stall_guard_state "${discover_stall_status_file}" 2>/dev/null)"; then
+    :
+  elif [ -s "${discover_stall_status_file}" ]; then
+    echo "::warning::Validation hint discovery attempt ${attempt}/${MAX_CODEX_ATTEMPTS}: could not parse codex stall guard status from ${discover_stall_status_file}."
+  fi
+  rm -f "${discover_stall_status_file}"
+  case "${discover_stall_state}" in
+    observed)
+      echo "Validation hint discovery attempt ${attempt}/${MAX_CODEX_ATTEMPTS}: codex_stall_observed recorded (observe-only mode)."
+      emit_validate_substate "validate_discover" "discover" "codex_stall_observed" "${attempt}" "${DISCOVER_LOG_FILE}"
+      ;;
+    killed)
+      echo "::warning::Validation hint discovery attempt ${attempt}/${MAX_CODEX_ATTEMPTS}: codex_stall_killed recorded."
+      emit_validate_substate "validate_discover" "discover" "codex_stall_killed" "${attempt}" "${DISCOVER_LOG_FILE}"
+      ;;
+  esac
+
+  if [ "${DISCOVER_EXIT}" -eq 78 ]; then
+    emit_validate_substate "validate_discover" "discover" "Failed" "${attempt}" "${DISCOVER_LOG_FILE}"
+    fail_validate_codex_phase \
+      "validation_discovery" \
+      "workspace_safety_violation" \
+      "${DISCOVER_ATTEMPTS_USED:-${attempt}}" \
+      "Workspace safety preflight failed before validation hint discovery could launch Codex." \
+      78
+  fi
+
+    if [ "${DISCOVER_EXIT}" -ne 0 ]; then
+      if [ "${discover_stall_state}" = "killed" ]; then
+        DISCOVER_FAILURE_MODE="codex_stall_killed"
+      else
+        DISCOVER_FAILURE_MODE="codex_rc_nonzero"
+      fi
+    elif ! grep -q '[^[:space:]]' "${DISCOVER_OUTPUT_FILE}"; then
+      DISCOVER_FAILURE_MODE="codex_empty_output"
+    elif python3 - "${DISCOVER_OUTPUT_FILE}" "${VALIDATE_HINTS_FILE}" <<'PY'
+import re
+import sys
+
+source_file = sys.argv[1]
+output_file = sys.argv[2]
+
+with open(source_file, "r", encoding="utf-8", errors="replace") as handle:
+    raw = handle.read().replace("\r", "")
+
+candidate = raw.strip()
+if "```" in raw:
+    match = re.search(r"```(?:yaml|yml)?\n(.*?)```", raw, flags=re.DOTALL | re.IGNORECASE)
+    if match:
+        candidate = match.group(1).strip()
+
+if not candidate:
+    sys.exit(1)
+
+if candidate.lstrip().startswith("{") or candidate.lstrip().startswith("["):
+    sys.exit(1)
+
+if len(candidate) > 12000:
+    sys.exit(1)
+
+lines = [
+    line.lstrip()
+    for line in candidate.splitlines()
+    if line.strip() and not line.lstrip().startswith("#")
+]
+if not lines:
+    sys.exit(1)
+
+if lines[0].lower().startswith(("error:", "fatal:", "traceback", "exception")):
+    sys.exit(1)
+
+expected_key = re.compile(r"^(type|entry|port|health_check|services|env_overrides|custom_tests|skip_tests):\s*", re.IGNORECASE)
+if not any(expected_key.match(line) for line in lines):
+    sys.exit(1)
+
+with open(output_file, "w", encoding="utf-8") as handle:
+    handle.write(candidate)
+    handle.write("\n")
+PY
+    then
+      DISCOVER_SUCCESS=true
+      HINTS_SOURCE="discovered"
+      emit_validate_substate "validate_discover" "discover" "Succeeded" "${attempt}" "${DISCOVER_LOG_FILE}"
+      archive_transcript "${GITHUB_RUN_ID:-local-run}" "validate-discover" "${DISCOVER_OUTPUT_FILE}"
+      break
+    else
+      DISCOVER_FAILURE_MODE="validator_rejected"
+    fi
+
+    if [ "${discover_stall_state}" = "killed" ]; then
+      emit_validate_substate "validate_discover" "discover" "Stalled" "${attempt}" "${DISCOVER_LOG_FILE}"
+    else
+      emit_validate_substate "validate_discover" "discover" "Failed" "${attempt}" "${DISCOVER_LOG_FILE}"
+    fi
+
+    if [ "${attempt}" -lt "${MAX_CODEX_ATTEMPTS}" ]; then
+      sleep $((CODEX_RETRY_BACKOFF_BASE_SECS * (2 ** (attempt - 1))))
+    fi
+  done
+
+  # Restore the workflow-level reasoning effort so the subsequent
+  # generate / diagnose / fix-harness phases run at MODEL_REASONING_EFFORT
+  # (default `medium`) rather than inheriting the discover-only override.
+  if [ "${_discover_reasoning_patched}" = "true" ] && [ -f "${_validate_codex_config}" ]; then
+    sed -i \
+      -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*\".*\"/model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\"/" \
+      -e "s/^[[:space:]]*model_reasoning_effort[[:space:]]*=[[:space:]]*'[^']*'/model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\"/" \
+      "${_validate_codex_config}" || true
+    # Verify the restore landed before logging success. Without this
+    # check, a silent sed failure would leave subsequent generate /
+    # diagnose / fix-harness phases running at the discover override
+    # level while the log claimed restoration succeeded. Mirrors the
+    # post-edit verification on the patch side above and the pattern in
+    # scripts/review_conflict_resolve.sh.
+    if grep -Eq "^model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\"$" "${_validate_codex_config}"; then
+      echo "Restored ~/.codex/config.toml: model_reasoning_effort=${MODEL_REASONING_EFFORT} after discover phase."
+      # Clear the patched flag so the EXIT trap (cleanup_runtime_containers)
+      # treats this as already-restored and skips the redundant sed.
+      _discover_reasoning_patched="false"
+    else
+      echo "::warning::Codex config rewrite did not produce the expected model_reasoning_effort = \"${MODEL_REASONING_EFFORT}\" line after discover; subsequent validate phases may run at the discover override level (${MODEL_REASONING_EFFORT_DISCOVER})."
+    fi
+  fi
+
+  if [ "${DISCOVER_SUCCESS}" != "true" ]; then
+    echo "::warning::Validation hint discovery exhausted ${DISCOVER_ATTEMPTS_USED} attempt(s) (mode=${DISCOVER_FAILURE_MODE:-unknown}); continuing without discovered hints." >&2
+    printf '# No .ai/validate.yml hints file found\n' > "${VALIDATE_HINTS_FILE}"
+    HINTS_SOURCE="none"
+  else
+    # Persist the discovered hints to the cache directory so subsequent
+    # runs in the same workspace can skip the codex discover call. The
+    # cache is saved by the `Save validate hints cache` / actions/cache
+    # post-step in validate.yml.
+    if mkdir -p "${VALIDATE_HINTS_CACHE_DIR}" 2>/dev/null; then
+      cp "${VALIDATE_HINTS_FILE}" "${VALIDATE_HINTS_CACHE_FILE}" 2>/dev/null || true
+    fi
+  fi
+fi
+
+# Template mode requires a manifest at .ai/validate.yml. When hints came
+# from cache or codex discovery (not a committed manifest), materialize
+# them into .ai/validate.yml so run_template_validation_harness_renderer
+# can consume them. Never clobber an existing committed manifest.
+if [ "${HINTS_SOURCE:-}" = "discovered" ] || [ "${HINTS_SOURCE:-}" = "cache" ]; then
+  if [ ! -f .ai/validate.yml ] && [ -s "${VALIDATE_HINTS_FILE}" ]; then
+    if [ -L .ai ]; then
+      echo "::warning::Refusing to materialize ${HINTS_SOURCE} hints into .ai/validate.yml because .ai is a symlink." >&2
+    elif [ -e .ai ] && [ ! -d .ai ]; then
+      echo "::warning::Refusing to materialize ${HINTS_SOURCE} hints into .ai/validate.yml because .ai exists but is not a directory." >&2
+    elif mkdir -p .ai 2>/dev/null && cp "${VALIDATE_HINTS_FILE}" .ai/validate.yml; then
+      echo "Materialized ${HINTS_SOURCE} hints into .ai/validate.yml for template renderer."
+    else
+      echo "::warning::Failed to materialize ${HINTS_SOURCE} hints into .ai/validate.yml; template renderer will report manifest as missing." >&2
+    fi
+  fi
+fi
+
+
+# ---------------------------------------------------------------
+# Phase 1: Generate validation harness
+# ---------------------------------------------------------------
+set_tracking_phase_label "ai:validating"
+
+if command -v git >/dev/null 2>&1 && [ -d .git ]; then
+  if ! grep -qxF 'validation/' .git/info/exclude 2>/dev/null; then
+    echo 'validation/' >> .git/info/exclude
+  fi
+fi
+
+if ! ensure_validation_harness_not_tracked; then
+  local_failure_summary="${CANONICAL_VALIDATE_HARNESS_REL} is tracked in git. Runtime validation harness must remain untracked."
+  post_tracking_comment "## ⚠️ Runtime validation harness tracking violation\n\n${local_failure_summary}\n\nRemove it from git tracking in the consumer repository and rerun validation."
+  set_tracking_phase_label "ai:validation-failed"
+  write_result_files "error" "Validation harness tracking violation" "${local_failure_summary}" "harness_error"
+  tg_notify "Validation harness tracking violation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+  exit 1
+fi
+
+VALIDATION_ARTIFACT_CONTRACT_FAILURE_OUTPUT=""
+if ! VALIDATION_ARTIFACT_CONTRACT_FAILURE_OUTPUT="$(enforce_managed_validation_artifact_contract 2>&1)"; then
+	printf '%s\n' "${VALIDATION_ARTIFACT_CONTRACT_FAILURE_OUTPUT}" >&2
+	emit_validation_failure_summary "error" "Validation harness artifact contract violation" "${VALIDATION_ARTIFACT_CONTRACT_FAILURE_OUTPUT}" "harness_error"
+	exit 1
+fi
+
+if [ -L validation ] || { [ -e validation ] && [ ! -d validation ]; }; then
+	local_failure_summary="Refusing to use non-directory 'validation' path."
+	printf '%s\n' "${local_failure_summary}" >&2
+	emit_validation_failure_summary "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+	exit 1
+fi
+
+if [ "${VALIDATION_USE_TEMPLATES_ENABLED}" != "true" ]; then
+	local_failure_summary="Freehand harness generation has been removed. Set VALIDATION_USE_TEMPLATES=true (or leave it unset) to use template rendering."
+	post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate rendering is now the only supported harness generation path."
+	set_tracking_phase_label "ai:validation-failed"
+	write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+	tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+	exit 1
+fi
+
+HARNESS_MODE="template_generate"
+HARNESS_GENERATOR_MODE="templates"
+if [ -d validation ] && [ ! -f validation/.ai-validation-owned ]; then
+	local_failure_summary="Refusing to delete existing 'validation' directory without ownership marker (validation/.ai-validation-owned)."
+	printf '%s\n' "${local_failure_summary}" >&2
+	emit_validation_failure_summary "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+	exit 1
+fi
+rm -rf validation
+mkdir -p validation/logs
+touch validation/.ai-validation-owned
+
+ensure_validate_wrapper
+
+if command -v git >/dev/null 2>&1; then
+  git status --porcelain --untracked-files=all -- . ':!validation/**' | filter_runtime_status_noise | sort > "${PRE_GENERATE_STATUS_FILE}" 2>/dev/null || true
+  capture_write_guard_candidate_paths > "${PRE_GENERATE_GUARD_PATHS_FILE}" 2>/dev/null || true
+fi
+
+# ---------------------------------------------------------------
+# Cycle 2+: gather previous validation failure context so the LLM
+# avoids repeating the same harness mistakes.
+# ---------------------------------------------------------------
+PRIOR_FAILURE_CONTEXT_FILE="${RUNTIME_DIR}/prior_validation_failures.txt"
+: > "${PRIOR_FAILURE_CONTEXT_FILE}"
+: > "${PRIOR_RESULT_JSON_FILE}"
+: > "${PRIOR_CONTAINER_LOGS_FILE}"
+
+if [ "${VALIDATION_CYCLE}" -gt 1 ] && is_tracking_run; then
+	echo "Cycle ${VALIDATION_CYCLE}: fetching prior validation failure context from tracking issue #${TRACKING_ISSUE_NUM}."
+  # Project #7913 p4: one read feeds both the LLM context (last three
+  # "Runtime validation" comments) and the cross-cycle escalation, which needs
+  # the fingerprint markers of cycles N-1 and N-2. Each cycle posts at least
+  # two matching comments (dispatch + result), so the cycle N-2 marker is
+  # older than the last three. PRIOR_FINGERPRINT_MARKERS keeps every marker
+  # the pipeline login posted since the current sequence started, i.e. since
+  # the newest trusted "Cycle: 1" dispatch comment (a /revalidate reset edits
+  # or re-posts it, moving updated_at). Markers by other authors, and markers
+  # from before a reset, never count. No pipeline login means no markers.
+  PRIOR_RUNTIME_COMMENTS_JSONL="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}/comments?per_page=100" \
+    --paginate --jq '.[] | select((.body // "") | test("Runtime validation")) | {login: (.user.login // ""), created_at: (.created_at // ""), updated_at: (.updated_at // ""), body: (.body // "")} | @json' 2>/dev/null || true)"
+  PRIOR_COMMENTS="$(printf '%s\n' "${PRIOR_RUNTIME_COMMENTS_JSONL}" \
+    | jq -Rrn '[inputs | select(length > 0) | (try fromjson catch null) | objects | (.body // "") | strings] | .[-3:] | .[]' 2>/dev/null || true)"
+  PRIOR_FINGERPRINT_MARKERS=""
+  if PRIOR_MARKER_LOGIN="$(validation_owner_pipeline_login)"; then
+    PRIOR_FINGERPRINT_MARKERS="$(printf '%s\n' "${PRIOR_RUNTIME_COMMENTS_JSONL}" \
+      | jq -Rrn --arg login "${PRIOR_MARKER_LOGIN}" '
+          [inputs | select(length > 0) | (try fromjson catch null) | objects
+            | select((.login // "") == $login)] as $trusted
+          | ([$trusted[] | select((.body // "" | tostring | split("\n")) as $l
+                | (($l[0] | sub("\r$"; "")) == "## 🧪 Runtime validation dispatched")
+                  and any($l[]; sub("[[:space:]]+$"; "") == "- Cycle: 1"))
+              | (.updated_at // "" | tostring)] | max // "") as $start
+          | $trusted[] | select((.created_at // "" | tostring) >= $start) | (.body // "" | tostring)' 2>/dev/null \
+      | grep -oE '<!-- validation-failure-fingerprint: [0-9a-f]+ cycle: [0-9]+ -->' || true)"
+  else
+    echo "::warning::Cross-cycle escalation: pipeline login unavailable; prior fingerprint markers are not trusted this run."
+  fi
+  if [ -n "${PRIOR_COMMENTS}" ]; then
+    {
+      echo "IMPORTANT — PREVIOUS VALIDATION CYCLE FAILURES (cycle $((VALIDATION_CYCLE - 1))):"
+      echo "The following failures occurred in prior validation cycles. Your generated"
+      echo "harness MUST avoid these same patterns. If a prior failure was caused by"
+      echo "fragile shell output parsing (e.g. raw mongosh text matching), use the"
+      echo "deterministic assertion patterns described above instead."
+      echo
+      echo "${PRIOR_COMMENTS}"
+    } > "${PRIOR_FAILURE_CONTEXT_FILE}"
+
+    jq -n --arg summary "${PRIOR_COMMENTS}" '{result: "fail", phase: "prior_cycle", summary: $summary}' > "${PRIOR_RESULT_JSON_FILE}"
+    printf '%s\n' "${PRIOR_COMMENTS}" > "${PRIOR_CONTAINER_LOGS_FILE}"
+  fi
+fi
+
+echo "Validation harness template render mode is enabled (VALIDATION_USE_TEMPLATES=${VALIDATION_USE_TEMPLATES}, enabled=${VALIDATION_USE_TEMPLATES_ENABLED})."
+if run_template_validation_harness_renderer; then
+	renderer_exit=0
+else
+	renderer_exit=$?
+fi
+case "${renderer_exit}" in
+	0)
+		if ! is_validation_harness_runnable; then
+			local_failure_summary="Template renderer completed but produced non-runnable validation assets (validation/docker-compose.test.yml and validation/tests/00_canary.sh at minimum)."
+			validation_owner_fixed generate_failed "${local_failure_summary}"
+			post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nSee workflow artifacts for renderer logs.$(validation_owner_comment_marker)"
+			set_tracking_phase_label "ai:validation-failed"
+			write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+			tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+			exit 1
+		fi
+		;;
+	10)
+		local_failure_summary="Template mode requires ${PWD}/.ai/validate.yml but it is missing. Create the required manifest to proceed with template-based validation."
+		validation_owner_fixed generate_failed "${local_failure_summary}"
+		post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate mode is enabled and does not fall back to freehand generation.$(validation_owner_comment_marker)"
+		set_tracking_phase_label "ai:validation-failed"
+		write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+		tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+		exit 1
+		;;
+	11)
+		local_failure_summary="Template mode requires scripts/render_validation_templates.py but it is missing. Ensure workflow bootstrap fetched renderer assets."
+		validation_owner_fixed generate_failed "${local_failure_summary}"
+		post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate mode is enabled and does not fall back to freehand generation.$(validation_owner_comment_marker)"
+		set_tracking_phase_label "ai:validation-failed"
+		write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+		tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+		exit 1
+		;;
+	12)
+		local_failure_summary="Template mode requires scripts/templates/slot_manifest.schema.json but it is missing. Ensure workflow bootstrap fetched schema assets."
+		validation_owner_fixed generate_failed "${local_failure_summary}"
+		post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate mode is enabled and does not fall back to freehand generation.$(validation_owner_comment_marker)"
+		set_tracking_phase_label "ai:validation-failed"
+		write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+		tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+		exit 1
+		;;
+	13)
+		local_failure_summary="Template mode requires workflow-templates/validation-harness directory but it is missing. Ensure workflow bootstrap fetched template assets."
+		validation_owner_fixed generate_failed "${local_failure_summary}"
+		post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate mode is enabled and does not fall back to freehand generation.$(validation_owner_comment_marker)"
+		set_tracking_phase_label "ai:validation-failed"
+		write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+		tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+		exit 1
+		;;
+	14)
+		local_failure_summary="Template renderer preflight or subprocess (\`scripts/render_validation_templates.py\`) failed (exit 14). Common causes: failed dependency setup, dependencies (\`pyyaml\`, \`jsonschema\`, \`jinja2\`) not importable, invalid \`.ai/validate.yml\`, schema-validation failure, or template-collection error."
+		_render_log_excerpt="(no renderer log captured at ${GENERATE_LOG_FILE})"
+		if [ -s "${GENERATE_LOG_FILE}" ]; then
+			_render_log_excerpt="$(tail -n 40 "${GENERATE_LOG_FILE}" 2>/dev/null || echo '(failed to read renderer log)')"
+		fi
+		validation_owner_fixed generate_failed "${local_failure_summary}"
+		post_tracking_comment "$(printf '## ⚠️ Runtime validation harness generation failed\n\n%s\n\nLast 40 lines of renderer log (`%s`):\n\n~~~\n%s\n~~~\n\nTemplate mode is enabled and does not fall back to freehand generation.' "${local_failure_summary}" "${GENERATE_LOG_FILE}" "${_render_log_excerpt}")$(validation_owner_comment_marker)"
+		unset _render_log_excerpt
+		set_tracking_phase_label "ai:validation-failed"
+		write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+		tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+		exit 1
+		;;
+	17)
+		local_failure_summary="Template renderer requires python3 >= 3.9 but the runner does not provide it (exit 17). This is a deterministic environment failure; retrying with the same runner image will not help."
+		_render_log_excerpt="(no renderer log captured at ${GENERATE_LOG_FILE})"
+		if [ -s "${GENERATE_LOG_FILE}" ]; then
+			_render_log_excerpt="$(tail -n 40 "${GENERATE_LOG_FILE}" 2>/dev/null || echo '(failed to read renderer log)')"
+		fi
+		validation_owner_fixed generate_failed "${local_failure_summary}"
+		post_tracking_comment "$(printf '## ⚠️ Runtime validation harness generation failed\n\n%s\n\nPython environment probe (last 40 lines of `%s`):\n\n~~~\n%s\n~~~\n\nFix: install python3 >= 3.9 on the runner image, or pin a setup-python step in the validate workflow.\n\n<!-- AI_VALIDATION_FAILURE_CLASS:deterministic_python_missing -->' "${local_failure_summary}" "${GENERATE_LOG_FILE}" "${_render_log_excerpt}")$(validation_owner_comment_marker)"
+		unset _render_log_excerpt
+		set_tracking_phase_label "ai:validation-failed"
+		write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+		tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}: python3 >= 3.9 missing on runner." "ERROR"
+		exit 1
+		;;
+	15)
+		local_failure_summary="Template mode requires essential shared templates (_shared/_lib/tap_helpers.sh.j2, _shared/tests/00_canary.sh.j2, _shared/tests/90_tap_report.sh.j2) plus family-specific templates; ensure workflow bootstrap fetched all required template assets under workflow-templates/validation-harness/."
+		validation_owner_fixed generate_failed "${local_failure_summary}"
+		post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate mode is enabled and does not fall back to freehand generation.$(validation_owner_comment_marker)"
+		set_tracking_phase_label "ai:validation-failed"
+		write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+		tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+		exit 1
+		;;
+	*)
+		local_failure_summary="Template renderer failed while generating validation assets. Check validate_generate.log for dependency or manifest errors from scripts/render_validation_templates.py."
+		validation_owner_fixed generate_failed "${local_failure_summary}"
+		post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nTemplate mode is enabled and does not fall back to freehand generation.$(validation_owner_comment_marker)"
+		set_tracking_phase_label "ai:validation-failed"
+		write_result_files "error" "Validation harness generation failed" "${local_failure_summary}" "harness_error"
+		tg_notify "Validation harness generation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+		exit 1
+		;;
+esac
+
+materialize_synthesised_behavioural_smoke_tests
+
+if command -v git >/dev/null 2>&1; then
+  git status --porcelain --untracked-files=all -- . ':!validation/**' | filter_runtime_status_noise | sort > "${POST_GENERATE_STATUS_FILE}" 2>/dev/null || true
+  capture_write_guard_candidate_paths > "${POST_GENERATE_GUARD_PATHS_FILE}" 2>/dev/null || true
+  if ! run_validate_write_guard; then
+    local_failure_summary="Codex modified files outside the validate write-guard policy during harness generation."
+    validation_owner_fixed generate_failed "${local_failure_summary}"
+    post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}$(validation_owner_comment_marker)"
+    set_tracking_phase_label "ai:validation-failed"
+    write_result_files "error" "Validation harness generation violated write guard" "${local_failure_summary}" "harness_error"
+    tg_notify "Validation harness generation violated the write guard for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+    exit 1
+  fi
+  NON_VALIDATION_CHANGES=""
+  if [ -f "${PRE_GENERATE_STATUS_FILE}" ] && [ -f "${POST_GENERATE_STATUS_FILE}" ] && ! cmp -s "${PRE_GENERATE_STATUS_FILE}" "${POST_GENERATE_STATUS_FILE}"; then
+    NON_VALIDATION_CHANGES="$(diff -u "${PRE_GENERATE_STATUS_FILE}" "${POST_GENERATE_STATUS_FILE}" || true)"
+  fi
+
+  if [ -n "${NON_VALIDATION_CHANGES}" ]; then
+    local_failure_summary="Codex modified files outside validation/ during harness generation."
+    validation_owner_fixed generate_failed "${local_failure_summary}"
+    post_tracking_comment "## ⚠️ Runtime validation harness generation failed\n\n${local_failure_summary}\n\nUnexpected changes:\n\n\`\`\`\n${NON_VALIDATION_CHANGES}\n\`\`\`$(validation_owner_comment_marker)"
+    set_tracking_phase_label "ai:validation-failed"
+    write_result_files "error" "Validation harness generation violated path constraints" "${local_failure_summary}" "harness_error"
+    tg_notify "Validation harness generation touched non-validation files for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+    exit 1
+  fi
+fi
+
+find validation -type f -name '*.sh' -exec chmod +x {} +
+
+if ! ensure_validation_harness_not_tracked; then
+  local_failure_summary="${CANONICAL_VALIDATE_HARNESS_REL} became tracked/staged after harness generation."
+  post_tracking_comment "## ⚠️ Runtime validation harness tracking violation\n\n${local_failure_summary}\n\nValidation harness files must remain transient and untracked."
+  set_tracking_phase_label "ai:validation-failed"
+  write_result_files "error" "Validation harness tracking violation" "${local_failure_summary}" "harness_error"
+  tg_notify "Validation harness tracking violation after generation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+  exit 1
+fi
+
+
+# ---------------------------------------------------------------
+# Phase 2: Pre-flight checks for generated harness
+# ---------------------------------------------------------------
+if ! run_preflight_checks; then
+  render_recovery_exit=1
+  if attempt_render_recovery_after_preflight_failure; then
+    render_recovery_exit=0
+  else
+    render_recovery_exit=$?
+  fi
+
+  if [ "${render_recovery_exit}" -ne 0 ]; then
+    failure_summary="Validation pre-flight checks failed. See validation_preflight.log artifact."
+    jq -n \
+      --arg diagnosis "Pre-flight validation failed before test execution." \
+      --arg harness_fixes "$(tail -n 120 "${PRE_FLIGHT_LOG_FILE}" 2>/dev/null || true)" \
+      '{
+        status: "harness_error",
+        diagnosis: $diagnosis,
+        fix_issues: [],
+        harness_fixes: (if ($harness_fixes | length) > 0 then $harness_fixes else "Fix validation/docker-compose.test.yml, shell syntax, or build context/dockerfile paths." end)
+      }' > "${DIAGNOSE_RESULT_FILE}"
+
+    # Self-heal interception: bad harness is often a prompt-wording defect.
+    if [ "${render_recovery_exit}" -eq 2 ]; then
+      attempt_self_heal_and_reexec "render"
+    else
+      attempt_self_heal_and_reexec "preflight"
+    fi
+    validation_owner_fixed preflight_failed "${failure_summary}"
+    post_tracking_comment "## ❌ Runtime validation harness pre-flight failed\n\n${failure_summary}\n\n\`docker compose config\`, shell syntax, or build context/dockerfile path checks failed.$(validation_owner_comment_marker)"
+    set_tracking_phase_label "ai:validation-failed"
+    write_result_files "fail" "Validation failed due to harness pre-flight error" "${failure_summary}" "harness_error"
+    tg_notify "Validation pre-flight failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+    exit 0
+  fi
+fi
+
+
+# ---------------------------------------------------------------
+# Phase 3: Execute validation harness (idle-timeout based)
+# ---------------------------------------------------------------
+# The timeout is activity-based: the process is killed only if it
+# produces no output for VALIDATION_TIMEOUT minutes. This allows
+# large projects to run longer as long as they keep producing output.
+IDLE_TIMEOUT_SECS=$((VALIDATION_TIMEOUT * 60))
+VALIDATION_EXIT=0
+VALIDATION_IDLE_KILLED=0
+
+# Only trusted code decides how tests run (findings
+# smoke-synth-unsandboxed-driver / validation-harness-credential-inheritance).
+# Assumption: the in-tree scripts/validate_driver.sh is the trusted copy that
+# `stage_workflow_support.sh validate` installs from the verified support SHA
+# (stage_required_entry -> copy_from_ref_or_local).  With the driver present,
+# validation/validate.sh is regenerated here, after rendering, self-heal and
+# synthesised-test materialization, and must then equal the canonical wrapper
+# byte for byte; any other validate.sh (freehand, self-healed or committed)
+# is refused, never executed.  Without the driver the trusted fallback runner
+# is always used, whatever validate.sh contains.  The driver the wrapper
+# execs must also be byte-identical to the startup snapshot taken before any
+# model phase; a driver that appeared later is ignored (fallback runner) and
+# one that changed is refused.
+VALIDATION_USE_CANONICAL_WRAPPER="false"
+validate_driver_snapshot_state="$(cat -- "${VALIDATE_DRIVER_SNAPSHOT_STATE_FILE}" 2>/dev/null || true)"
+if [ "${validate_driver_snapshot_state}" != "present" ] && { [ -e scripts/validate_driver.sh ] || [ -L scripts/validate_driver.sh ]; }; then
+  echo "::warning::validate_process: scripts/validate_driver.sh was not present as a regular file before the model phases; using the trusted fallback runner." >&2
+fi
+if [ "${validate_driver_snapshot_state}" = "present" ]; then
+  validate_wrapper_canonical_ok="false"
+  validate_wrapper_canonical_file=""
+  if [ -f scripts/validate_driver.sh ] && [ ! -L scripts/validate_driver.sh ] && [ ! -L scripts ] \
+    && [ -f "${VALIDATE_DRIVER_SNAPSHOT_FILE}" ] \
+    && cmp -s -- "${VALIDATE_DRIVER_SNAPSHOT_FILE}" scripts/validate_driver.sh \
+    && ensure_validate_wrapper \
+    && validate_wrapper_canonical_file="$(mktemp "${TMPDIR:-/tmp}/validate_wrapper_canonical.XXXXXX" 2>/dev/null)" \
+    && canonical_validate_wrapper_text > "${validate_wrapper_canonical_file}" \
+    && [ ! -L validation ] && [ ! -L validation/validate.sh ] && [ -f validation/validate.sh ] \
+    && cmp -s -- "${validate_wrapper_canonical_file}" validation/validate.sh; then
+    validate_wrapper_canonical_ok="true"
+  fi
+  if [ -n "${validate_wrapper_canonical_file}" ]; then
+    rm -f -- "${validate_wrapper_canonical_file}" >/dev/null 2>&1 || true
+  fi
+  if [ "${validate_wrapper_canonical_ok}" != "true" ]; then
+    local_failure_summary="scripts/validate_driver.sh no longer matches the copy staged before the model phases, or validation/validate.sh could not be regenerated as the canonical wrapper around it; the harness was not run."
+    validation_owner_fixed generate_failed "${local_failure_summary}"
+    post_tracking_comment "## ⚠️ Runtime validation harness launch refused\n\n${local_failure_summary}$(validation_owner_comment_marker)"
+    set_tracking_phase_label "ai:validation-failed"
+    write_result_files "error" "Validation harness launch refused" "${local_failure_summary}" "harness_error"
+    tg_notify "Validation harness launch refused for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+    exit 1
+  fi
+  VALIDATION_USE_CANONICAL_WRAPPER="true"
+fi
+
+# Generated tests are untrusted. They never run in this credentialed
+# process: scripts/validation_harness_sandbox.sh runs the whole harness as a
+# separate unprivileged user with its own rootless Docker daemon, a screened
+# workspace copy and an allowlisted environment, after a self-check proves
+# GH_PAT/GH_TOKEN, checkout auth and the host Docker socket are out of reach.
+# Any sandbox failure is fail-closed (harness_error); there is no host fallback.
+VALIDATION_HARNESS_SANDBOX_SCRIPT="${VALIDATION_HARNESS_SANDBOX_SCRIPT:-${_validate_script_dir}/validation_harness_sandbox.sh}"
+VALIDATION_HARNESS_SANDBOX_STATUS_FILE="${VALIDATION_HARNESS_SANDBOX_STATUS_FILE:-${RUNTIME_DIR:-${TMPDIR:-/tmp}}/validation_harness_sandbox.status}"
+export VALIDATION_HARNESS_SANDBOX_STATUS_FILE
+
+fail_closed_validation_sandbox()
+{
+  local sandbox_reason="$1"
+  local sandbox_summary="Isolated validation harness unavailable; tests were not executed (fail-closed)."
+  [[ "${sandbox_reason}" =~ ^[a-z_0-9\ ]+$ ]] || sandbox_reason="sandbox_failed"
+  jq -n \
+    --arg diagnosis "${sandbox_summary}" \
+    --arg harness_fixes "Validation harness sandbox failure: ${sandbox_reason}. Fix runner provisioning (sudo, uidmap, docker-ce-rootless-extras, unprivileged user namespaces) or set ENABLE_VALIDATION=false; host execution is never used as a fallback." \
+    '{status: "harness_error", diagnosis: $diagnosis, fix_issues: [], harness_fixes: $harness_fixes}' > "${DIAGNOSE_RESULT_FILE}"
+  validation_owner_fixed sandbox_unavailable "${sandbox_reason}"
+  post_tracking_comment "## ❌ Runtime validation harness sandbox unavailable\n\n${sandbox_summary}\n\nReason: \`${sandbox_reason}\`$(validation_owner_comment_marker)"
+  set_tracking_phase_label "ai:validation-failed"
+  write_result_files "fail" "Validation failed: isolated harness unavailable" "${sandbox_summary} Reason: ${sandbox_reason}" "harness_error"
+  tg_notify "Validation harness sandbox unavailable for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} (${sandbox_reason}); tests were not executed." "ERROR"
+  exit 0
+}
+
+if [ ! -f "${VALIDATION_HARNESS_SANDBOX_SCRIPT}" ]; then
+  fail_closed_validation_sandbox "sandbox_helper_missing"
+fi
+if [ "${SANDBOX_PROVISIONED:-}" != "1" ]; then
+  if ! bash "${VALIDATION_HARNESS_SANDBOX_SCRIPT}" provision; then
+    fail_closed_validation_sandbox "$(sed -n 's/^fail //p' "${VALIDATION_HARNESS_SANDBOX_STATUS_FILE}" 2>/dev/null | head -n 1)"
+  fi
+  # Self-heal re-exec inherits this, so provisioning runs once per job.
+  SANDBOX_PROVISIONED=1
+  export SANDBOX_PROVISIONED
+fi
+if ! bash "${VALIDATION_HARNESS_SANDBOX_SCRIPT}" selfcheck "$$"; then
+  fail_closed_validation_sandbox "$(sed -n 's/^fail //p' "${VALIDATION_HARNESS_SANDBOX_STATUS_FILE}" 2>/dev/null | head -n 1)"
+fi
+
+set +e
+# The harness runs model-written tests, so it gets no pipeline credentials
+# (finding smoke-synth-credentialed-test-exec, sibling fix): every launch
+# below drops them from its environment.  The driver itself makes no GitHub or
+# OpenRouter calls.
+VALIDATION_HARNESS_CREDENTIAL_SCRUB=(
+  env
+  -u GH_TOKEN
+  -u GITHUB_TOKEN
+  -u GH_PAT
+  -u OPENROUTER_API_KEY
+  -u TG_BOT_SECRET
+  -u CHECK_TRIAGE_ISSUES_TOKEN
+  -u ACTIONS_ID_TOKEN_REQUEST_TOKEN
+  -u ACTIONS_ID_TOKEN_REQUEST_URL
+  -u ACTIONS_RUNTIME_TOKEN
+  -u ACTIONS_RESULTS_URL
+  -u ACTIONS_CACHE_URL
+  -u CLAUDE_CODE_OAUTH_TOKEN
+  -u ANTHROPIC_API_KEY
+  -u BEHAVIOURAL_SMOKE_SANDBOXED
+)
+# Also drop every other credential-shaped variable in the environment
+# (finding validation-harness-credential-inheritance): pipeline prefixes,
+# Git/SSH credential helpers and config injection (GIT_CONFIG_*), and any
+# *_KEY, *_PASSWORD, *_CREDENTIAL(S) or *_COOKIE name.  VALIDATION_TEST_* and
+# TEST_* are test fixtures that validate_driver.sh re-defaults, so they stay;
+# tests that need other values read them from validation/validate.env.
+validation_harness_scrub_append()
+{
+  local scrub_name
+  local scrub_existing
+  while IFS= read -r scrub_name; do
+    [ -n "${scrub_name}" ] || continue
+    case "${scrub_name}" in
+      VALIDATION_TEST_*|TEST_*)
+        continue
+        ;;
+    esac
+    # CREDENTIAL_NAME_POLICY (keep identical to review_synthesise_smoke.sh)
+    if [[ "${scrub_name}" =~ ^(GH_|GITHUB_TOKEN$|OPENROUTER_|TG_BOT_|CHECK_TRIAGE_|ACTIONS_ID_TOKEN_|ACTIONS_RUNTIME_|ACTIONS_CACHE_|ACTIONS_RESULTS_|CLAUDE_|ANTHROPIC_|GIT_CONFIG_|GIT_ASKPASS$|SSH_ASKPASS$|SSH_AUTH_SOCK$) ]] \
+      || [[ "${scrub_name}" =~ (_TOKEN|_SECRET|_KEY|_API_KEY|_PAT|_PRIVATE_KEY|_PASSWORD|_PASSWD|_CREDENTIAL|_CREDENTIALS|_COOKIE)$ ]]; then
+      for scrub_existing in "${VALIDATION_HARNESS_CREDENTIAL_SCRUB[@]}"; do
+        if [ "${scrub_existing}" = "${scrub_name}" ]; then
+          continue 2
+        fi
+      done
+      VALIDATION_HARNESS_CREDENTIAL_SCRUB+=(-u "${scrub_name}")
+    fi
+  done < <(compgen -e)
+}
+validation_harness_scrub_append
+# Run validation in background, tee output to log file.  Only the verified
+# canonical wrapper (driver present) or the trusted fallback runner (driver
+# absent) is selected; an arbitrary validation/validate.sh never is.  The
+# selected entry runs only inside the isolated harness sandbox, launched
+# without the pipeline credentials.
+if [ "${VALIDATION_USE_CANONICAL_WRAPPER}" = "true" ]; then
+  GENERATED_VALIDATE_SCRIPT_PATH="validation/validate.sh"
+else
+  ensure_runtime_validation_driver
+  GENERATED_VALIDATE_SCRIPT_PATH="${VALIDATION_RUNNER_FILE}"
+fi
+: > "${VALIDATION_HARNESS_SANDBOX_STATUS_FILE}" 2>/dev/null || true
+"${VALIDATION_HARNESS_CREDENTIAL_SCRUB[@]}" bash "${VALIDATION_HARNESS_SANDBOX_SCRIPT}" run "${GENERATED_VALIDATE_SCRIPT_PATH}" > "${VALIDATION_LOG_FILE}" 2>&1 &
+VALIDATION_PID=$!
+
+# Monitor the log file for activity; kill if idle too long
+LAST_SIZE=0
+IDLE_ELAPSED=0
+POLL_INTERVAL=5
+while kill -0 "${VALIDATION_PID}" 2>/dev/null; do
+  CURRENT_SIZE=0
+  if [ -f "${VALIDATION_LOG_FILE}" ]; then
+    CURRENT_SIZE=$(stat -c%s "${VALIDATION_LOG_FILE}" 2>/dev/null || echo 0)
+  fi
+
+  if [ "${CURRENT_SIZE}" -ne "${LAST_SIZE}" ]; then
+    LAST_SIZE="${CURRENT_SIZE}"
+    IDLE_ELAPSED=0
+  else
+    IDLE_ELAPSED=$((IDLE_ELAPSED + POLL_INTERVAL))
+  fi
+
+  if [ "${IDLE_ELAPSED}" -ge "${IDLE_TIMEOUT_SECS}" ]; then
+    echo "Validation idle for ${VALIDATION_TIMEOUT} minute(s) with no output — terminating." >> "${VALIDATION_LOG_FILE}"
+    kill "${VALIDATION_PID}" 2>/dev/null || true
+    # Grace period: SIGKILL after 30s if still running
+    sleep 30
+    if kill -0 "${VALIDATION_PID}" 2>/dev/null; then
+      kill -9 "${VALIDATION_PID}" 2>/dev/null || true
+    fi
+    VALIDATION_IDLE_KILLED=1
+    # SIGKILL to the helper's sudo does not reach the sandbox user's processes.
+    bash "${VALIDATION_HARNESS_SANDBOX_SCRIPT}" cleanup >> "${VALIDATION_LOG_FILE}" 2>&1 || true
+    break
+  fi
+
+  sleep "${POLL_INTERVAL}"
+done
+
+wait "${VALIDATION_PID}" 2>/dev/null
+VALIDATION_EXIT=$?
+set -e
+
+if [ "${VALIDATION_IDLE_KILLED}" -eq 0 ] && [ "${VALIDATION_EXIT}" -eq 3 ] \
+  && grep -q '^fail ' "${VALIDATION_HARNESS_SANDBOX_STATUS_FILE}" 2>/dev/null; then
+  fail_closed_validation_sandbox "$(sed -n 's/^fail //p' "${VALIDATION_HARNESS_SANDBOX_STATUS_FILE}" 2>/dev/null | head -n 1)"
+fi
+
+tail -n 200 "${VALIDATION_LOG_FILE}" > "${VALIDATION_LOG_TAIL_FILE}" 2>/dev/null || true
+
+if [ "${VALIDATION_IDLE_KILLED}" -eq 1 ] || [ "${VALIDATION_EXIT}" -eq 124 ] || [ "${VALIDATION_EXIT}" -eq 137 ]; then
+  timeout_test="validation-idle-timeout"
+  timeout_error="Validation idle-timed out after ${VALIDATION_TIMEOUT} minute(s) with no output"
+  if [ "${VALIDATION_IDLE_KILLED}" -eq 0 ]; then
+    # Legacy exit codes (shouldn't normally happen now, but handle defensively)
+    timeout_test="validation-timeout-signal"
+    timeout_error="Validation terminated (exit code ${VALIDATION_EXIT}) after ${VALIDATION_TIMEOUT} minute(s)"
+  fi
+
+  jq -n \
+    --arg timeout_test "${timeout_test}" \
+    --arg timeout_error "${timeout_error}" \
+    --arg duration_seconds "${IDLE_TIMEOUT_SECS}" \
+    '{
+      result: "fail",
+      phase: "timeout",
+      total_tests: 0,
+      passed_tests: 0,
+      failed_tests: 1,
+      failures: [
+        {
+          test: $timeout_test,
+          error: $timeout_error,
+          log_tail: "See validation.log tail in artifacts"
+        }
+      ],
+      duration_seconds: ($duration_seconds | tonumber)
+    }' > "${VALIDATION_RESULT_FILE}"
+else
+  if ! extract_last_json_with_key "${VALIDATION_LOG_FILE}" "result" "${VALIDATION_RESULT_FILE}"; then
+    jq -n \
+      --arg exit_code "${VALIDATION_EXIT}" \
+      '{
+        result: "fail",
+        phase: "execution_error",
+        total_tests: 0,
+        passed_tests: 0,
+        failed_tests: 1,
+        failures: [
+          {
+            test: "validation-json-parse",
+            error: ("Unable to parse validation result JSON (exit code " + $exit_code + ")"),
+            log_tail: "See validation.log in artifacts"
+          }
+        ],
+        duration_seconds: 0
+      }' > "${VALIDATION_RESULT_FILE}"
+  fi
+fi
+
+RESULT_KIND="$(jq -r '.result // "fail"' "${VALIDATION_RESULT_FILE}")"
+TOTAL_TESTS="$(jq -r '.total_tests // 0' "${VALIDATION_RESULT_FILE}")"
+PASSED_TESTS="$(jq -r '.passed_tests // 0' "${VALIDATION_RESULT_FILE}")"
+FAILED_TESTS="$(jq -r '.failed_tests // 0' "${VALIDATION_RESULT_FILE}")"
+DURATION_SECONDS="$(jq -r '.duration_seconds // 0' "${VALIDATION_RESULT_FILE}")"
+FIRST_FAILURE="$(jq -r '.failures[0].error // ""' "${VALIDATION_RESULT_FILE}")"
+
+# ---------------------------------------------------------------
+# Safety net: override contradictory fail-with-all-pass results.
+# When the harness script crashes (non-zero exit / result=fail)
+# but the structured JSON shows all tests passed (failed_tests==0,
+# passed_tests>0, counts consistent), the crash was a scripting
+# bug (e.g. grep returning 1 on zero matches under pipefail),
+# not a real test failure. Override to pass.
+# ---------------------------------------------------------------
+if [ "${RESULT_KIND}" != "pass" ] || [ "${VALIDATION_EXIT}" -ne 0 ]; then
+	if jq -e '
+		(.total_tests | type == "number") and
+		(.passed_tests | type == "number") and
+		(.failed_tests | type == "number") and
+		(.total_tests > 0) and
+		(.passed_tests > 0) and
+		(.failed_tests == 0) and
+		(.passed_tests == .total_tests) and
+		((.failures | length == 0) or ((.failures | length == 1) and ((.failures[0].test // "") | endswith(":unexpected_error"))))
+	' "${VALIDATION_RESULT_FILE}" >/dev/null 2>&1; then
+		echo "::warning::Harness exited ${VALIDATION_EXIT} with result '${RESULT_KIND}' but all ${PASSED_TESTS}/${TOTAL_TESTS} tests passed (failed_tests=0). Overriding to pass (likely scripting bug in generated harness script)."
+		# Strip the synthetic unexpected_error failure entry and fix result
+		jq '.result = "pass" | .failures = [] | .phase = "runtime_validation"' "${VALIDATION_RESULT_FILE}" > "${VALIDATION_RESULT_FILE}.tmp"
+		mv "${VALIDATION_RESULT_FILE}.tmp" "${VALIDATION_RESULT_FILE}"
+		RESULT_KIND="pass"
+		VALIDATION_EXIT=0
+		FIRST_FAILURE=""
+	fi
+fi
+
+PASS_SCHEMA_OK="false"
+if [ "${RESULT_KIND}" = "pass" ] && [ "${VALIDATION_EXIT}" -eq 0 ]; then
+  if jq -e '
+    (.total_tests | type == "number") and
+    (.passed_tests | type == "number") and
+    (.failed_tests | type == "number") and
+    (.duration_seconds | type == "number") and
+    (.failures | type == "array") and
+    (.failed_tests == 0) and
+    (.total_tests >= 0) and
+    (.passed_tests >= 0) and
+    (.passed_tests <= .total_tests) and
+    (.failed_tests <= .total_tests) and
+    ((.passed_tests + .failed_tests) == .total_tests)
+  ' "${VALIDATION_RESULT_FILE}" >/dev/null 2>&1; then
+    PASS_SCHEMA_OK="true"
+  else
+    jq -n \
+      --arg reason "Pass payload schema consistency check failed" \
+      '{
+        result: "fail",
+        phase: "result_schema_error",
+        total_tests: 0,
+        passed_tests: 0,
+        failed_tests: 1,
+        failures: [
+          {
+            test: "validation-result-schema",
+            error: $reason,
+            log_tail: "See validation.log in artifacts"
+          }
+        ],
+        duration_seconds: 0
+      }' > "${VALIDATION_RESULT_FILE}"
+    RESULT_KIND="fail"
+    TOTAL_TESTS="0"
+    PASSED_TESTS="0"
+    FAILED_TESTS="1"
+    DURATION_SECONDS="0"
+    FIRST_FAILURE="Pass payload schema consistency check failed"
+  fi
+fi
+
+if [ "${RESULT_KIND}" = "pass" ] && [ "${VALIDATION_EXIT}" -eq 0 ] && [ "${PASS_SCHEMA_OK}" = "true" ]; then
+	summary_text="Runtime validation passed (${PASSED_TESTS}/${TOTAL_TESTS} tests, ${DURATION_SECONDS}s)."
+	post_tracking_comment "## ✅ Runtime validation passed\n\n- Passed tests: ${PASSED_TESTS}/${TOTAL_TESTS}\n- Duration: ${DURATION_SECONDS}s"
+	set_tracking_phase_label "ai:validated"
+
+	# Verify the ai:validated label was applied; retry with direct add if missing.
+	# This prevents the orchestrator from looping forever when the label
+	# application silently fails (Bug: validation-fixing loop stuck).
+	if is_tracking_run; then
+		_verify_labels="$(gh_retry gh api \
+			"repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_NUM}/labels" \
+			--jq '[.[].name]' 2>/dev/null || echo '[]')"
+		if ! echo "${_verify_labels}" | jq -e 'index("ai:validated") != null' >/dev/null 2>&1; then
+			echo "::warning::ai:validated label not found on #${TRACKING_ISSUE_NUM} after set_tracking_phase_label; retrying direct add." >&2
+			ensure_label_exists "ai:validated"
+			gh_retry gh issue edit "${TRACKING_ISSUE_NUM}" \
+				--repo "${GITHUB_REPOSITORY}" \
+				--add-label "ai:validated" >/dev/null 2>&1 || \
+				echo "::warning::Retry of ai:validated label application also failed for #${TRACKING_ISSUE_NUM}." >&2
+		fi
+	fi
+
+	write_result_files "pass" "${summary_text}" ""
+	tg_notify "Runtime validation passed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} (${PASSED_TESTS}/${TOTAL_TESTS})." "DEBUG"
+	# If this pass was reached after one or more self-heal attempts, send
+	# the accumulated prompt patches back to upstream coding-workflows.
+	dispatch_self_heal_improvements
+	exit 0
+fi
+
+
+# ---------------------------------------------------------------
+# Collect container logs (used for canary classification + diagnosis)
+# ---------------------------------------------------------------
+: > "${CONTAINER_LOG_TAIL_FILE}"
+if [ -d validation/logs ]; then
+	while IFS= read -r log_file; do
+		echo "===== ${log_file} (tail 80) =====" >> "${CONTAINER_LOG_TAIL_FILE}"
+		tail -n 80 "${log_file}" >> "${CONTAINER_LOG_TAIL_FILE}" 2>/dev/null || true
+		echo >> "${CONTAINER_LOG_TAIL_FILE}"
+	done < <(find validation/logs -type f | sort)
+fi
+
+
+# ---------------------------------------------------------------
+# Canary shortcut: classify infra-only canary failure as harness_error
+# ---------------------------------------------------------------
+CANARY_TEST_NAME="$(jq -r '.failures[0].test // ""' "${VALIDATION_RESULT_FILE}")"
+CANARY_ERROR_TEXT="$(jq -r '.failures[0].error // ""' "${VALIDATION_RESULT_FILE}" | tr '[:upper:]' '[:lower:]')"
+CANARY_ONLY_FAILURE=false
+CANARY_APP_SIGNAL_IN_LOGS=false
+if [ -s "${CONTAINER_LOG_TAIL_FILE}" ]; then
+	if grep -E -i -q 'application crashed|app crashed|process exited|server startup failed|panic|traceback|exception in app|fatal error|segmentation fault' "${CONTAINER_LOG_TAIL_FILE}"; then
+		CANARY_APP_SIGNAL_IN_LOGS=true
+	fi
+fi
+
+if [ "${FAILED_TESTS}" = "1" ] && [ -n "${CANARY_TEST_NAME}" ] && [ -n "${CANARY_ERROR_TEXT}" ]; then
+	if [[ "${CANARY_TEST_NAME}" == *00_canary* ]]; then
+		CANARY_ONLY_FAILURE=true
+	fi
+fi
+
+if [ "${CANARY_ONLY_FAILURE}" = true ]; then
+	if echo "${CANARY_ERROR_TEXT}" | grep -E -q 'connection refused|could not resolve host|command not found|exit code 127|no such file or directory|invalid compose|healthcheck|network|timeout waiting for'; then
+		if [ "${CANARY_APP_SIGNAL_IN_LOGS}" != "true" ] \
+			&& ! echo "${CANARY_ERROR_TEXT}" | grep -E -q 'application crashed|app crashed|process exited|server startup failed|panic|traceback|exception in app'; then
+			jq -n \
+				--arg diagnosis "Canary infrastructure check failed before app validation. Classified as harness_error." \
+				--arg harness_fixes "${FIRST_FAILURE}" \
+				'{
+					status: "harness_error",
+					diagnosis: $diagnosis,
+					fix_issues: [],
+					harness_fixes: (if ($harness_fixes | length) > 0 then $harness_fixes else "Fix canary test infrastructure assumptions (ports/services/tools)." end)
+				}' > "${DIAGNOSE_RESULT_FILE}"
+
+			# Self-heal interception: canary failures are prime candidates
+			# for a bad generate/fix-harness prompt.
+			attempt_self_heal_and_reexec "canary"
+			failure_summary="Validation harness error: ${FIRST_FAILURE}"
+			validation_owner_fixed canary_failed "${failure_summary}"
+			post_tracking_comment "## ❌ Runtime validation harness error\n\n${failure_summary}\n\nCanary infrastructure check failed and remaining tests were skipped.$(validation_owner_comment_marker)"
+			set_tracking_phase_label "ai:validation-failed"
+			write_result_files "fail" "Validation failed due to harness error" "${failure_summary}" "harness_error"
+			tg_notify "Validation harness canary failure for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+			exit 0
+		fi
+	fi
+fi
+
+
+# BEGIN deterministic-only gate (#7553): diagnose
+# A deterministic run reports the failing tests and stops: no diagnose model
+# call, and so no fix-up issue (diagnose creates those even with tracking 0).
+if [ "${VALIDATE_DETERMINISTIC_ONLY_ACTIVE:-false}" = "true" ]; then
+	echo "VALIDATE_DETERMINISTIC_ONLY phase=diagnose outcome=skip reason=deterministic_only"
+	deterministic_failure_summary="${FAILED_TESTS:-0} failing test(s)"
+	if [ -n "${FIRST_FAILURE:-}" ]; then
+		deterministic_failure_summary="${deterministic_failure_summary}: ${FIRST_FAILURE}"
+	fi
+	write_result_files "fail" "Runtime validation failed" "${deterministic_failure_summary}" "tests_failed"
+	exit 0
+fi
+# END deterministic-only gate (#7553): diagnose
+
+# ---------------------------------------------------------------
+# Phase 4: Diagnose failures
+# ---------------------------------------------------------------
+ensure_serena_bootstrap "diagnose"
+DIAGNOSE_SERENA_TOOL_HINTS="$(build_validate_serena_tool_hints "diagnose" || true)"
+diagnose_semble_query="$(build_validate_diagnose_semble_query || true)"
+validation_owner_signature diagnose "${FIRST_FAILURE:-}"
+validation_owner_load_bounced
+{
+  cat "${STATIC_CONTEXT_FILE}"
+  echo
+  echo "=== DIAGNOSIS TASK ==="
+  echo
+  SERENA_TOOL_HINTS="${DIAGNOSE_SERENA_TOOL_HINTS}" bash scripts/render_prompt.sh prompts/mode-validate-diagnose.txt
+  echo
+  echo "TOOL_CALL_BUDGET: ${TOOL_CALL_BUDGET_VALIDATE}"
+  echo
+  echo "=== PROJECT SPEC ==="
+  cat "${PROJECT_SPEC_FILE}"
+  echo
+  echo "=== STRUCTURED VALIDATION FAILURE JSON ==="
+  cat "${VALIDATION_RESULT_FILE}"
+  echo
+  echo "=== VALIDATION LOG TAIL (last 200 lines) ==="
+  cat "${VALIDATION_LOG_TAIL_FILE}"
+  echo
+  echo "=== CONTAINER LOG TAILS ==="
+  cat "${CONTAINER_LOG_TAIL_FILE}"
+  echo
+  echo "=== VALIDATION HINTS ==="
+  cat "${VALIDATE_HINTS_FILE}"
+  append_validate_semble_context "${diagnose_semble_query}" "${VALIDATE_DIAGNOSE_SEMBLE_MAX_CHUNKS}" "Validate Diagnose Context"
+  validation_owner_ruled_out_block
+} > "${DIAGNOSE_PROMPT_FILE}"
+
+DIAGNOSE_SUCCESS=false
+DIAGNOSE_FAILURE_MODE=""
+DIAGNOSE_ATTEMPTS_USED=0
+for attempt in $(seq 1 "${MAX_CODEX_ATTEMPTS}"); do
+  DIAGNOSE_ATTEMPTS_USED="${attempt}"
+  echo "Validation diagnosis attempt ${attempt}/${MAX_CODEX_ATTEMPTS}"
+  emit_validate_substate "validate_diagnose" "diagnose" "PreparingWorkspace" "${attempt}"
+  emit_validate_substate "validate_diagnose" "diagnose" "BuildingPrompt" "${attempt}"
+  sanitize_codex_prompt_file "${DIAGNOSE_PROMPT_FILE}"
+  diagnose_stall_status_file="$(mktemp /tmp/validate_diagnose_stall_status.XXXXXX)"
+  diagnose_stall_state=""
+  emit_validate_substate "validate_diagnose" "diagnose" "LaunchingAgentProcess" "${attempt}"
+  emit_validate_substate "validate_diagnose" "diagnose" "InitializingSession" "${attempt}"
+  emit_validate_substate "validate_diagnose" "diagnose" "StreamingTurn" "${attempt}"
+  set +e
+  run_validate_engine_attempt "VALIDATE" "validate_diagnose" "${DIAGNOSE_PROMPT_FILE}" "${DIAGNOSE_OUTPUT_FILE}" "${DIAGNOSE_LOG_FILE}" "${diagnose_stall_status_file}" "${MODEL_REASONING_EFFORT:-}"
+  DIAGNOSE_EXIT=$?
+  set -e
+  if [ "${DIAGNOSE_EXIT}" -eq 80 ]; then
+    # Claude capacity wait (issue #7370): no codex and no verdict; validate.yml
+    # maps exit 80 to a wait instead of a harness error.
+    echo "AI_ENGINE_CAPACITY_WAIT role=VALIDATE outcome=deferred stage=validate"
+    exit 80
+  fi
+  emit_validate_substate "validate_diagnose" "diagnose" "Finishing" "${attempt}" "${DIAGNOSE_LOG_FILE}"
+  if diagnose_stall_state="$(read_codex_stall_guard_state "${diagnose_stall_status_file}" 2>/dev/null)"; then
+    :
+  elif [ -s "${diagnose_stall_status_file}" ]; then
+    echo "::warning::Validation diagnosis attempt ${attempt}/${MAX_CODEX_ATTEMPTS}: could not parse codex stall guard status from ${diagnose_stall_status_file}."
+  fi
+  rm -f "${diagnose_stall_status_file}"
+  case "${diagnose_stall_state}" in
+    observed)
+      echo "Validation diagnosis attempt ${attempt}/${MAX_CODEX_ATTEMPTS}: codex_stall_observed recorded (observe-only mode)."
+      emit_validate_substate "validate_diagnose" "diagnose" "codex_stall_observed" "${attempt}" "${DIAGNOSE_LOG_FILE}"
+      ;;
+    killed)
+      echo "::warning::Validation diagnosis attempt ${attempt}/${MAX_CODEX_ATTEMPTS}: codex_stall_killed recorded."
+      emit_validate_substate "validate_diagnose" "diagnose" "codex_stall_killed" "${attempt}" "${DIAGNOSE_LOG_FILE}"
+      ;;
+  esac
+
+  if [ "${DIAGNOSE_EXIT}" -eq 78 ]; then
+    emit_validate_substate "validate_diagnose" "diagnose" "Failed" "${attempt}" "${DIAGNOSE_LOG_FILE}"
+    fail_validate_codex_phase \
+      "validation_diagnosis" \
+      "workspace_safety_violation" \
+      "${DIAGNOSE_ATTEMPTS_USED:-${attempt}}" \
+      "Workspace safety preflight failed before validation diagnosis could launch Codex." \
+      78
+  fi
+
+  if [ "${DIAGNOSE_EXIT}" -ne 0 ]; then
+    if [ "${diagnose_stall_state}" = "killed" ]; then
+      DIAGNOSE_FAILURE_MODE="codex_stall_killed"
+    else
+      DIAGNOSE_FAILURE_MODE="codex_rc_nonzero"
+    fi
+  elif ! grep -q '[^[:space:]]' "${DIAGNOSE_OUTPUT_FILE}"; then
+    DIAGNOSE_FAILURE_MODE="codex_empty_output"
+  elif extract_last_json_with_key "${DIAGNOSE_OUTPUT_FILE}" "status" "${DIAGNOSE_RESULT_FILE}"; then
+    DIAGNOSE_SUCCESS=true
+    emit_validate_substate "validate_diagnose" "diagnose" "Succeeded" "${attempt}" "${DIAGNOSE_LOG_FILE}"
+    archive_transcript "${GITHUB_RUN_ID:-local-run}" "validate-diagnose" "${DIAGNOSE_OUTPUT_FILE}"
+    break
+  else
+    DIAGNOSE_FAILURE_MODE="validator_rejected"
+  fi
+
+  if [ "${diagnose_stall_state}" = "killed" ]; then
+    emit_validate_substate "validate_diagnose" "diagnose" "Stalled" "${attempt}" "${DIAGNOSE_LOG_FILE}"
+  else
+    emit_validate_substate "validate_diagnose" "diagnose" "Failed" "${attempt}" "${DIAGNOSE_LOG_FILE}"
+  fi
+
+  if [ "${attempt}" -lt "${MAX_CODEX_ATTEMPTS}" ]; then
+    sleep $((CODEX_RETRY_BACKOFF_BASE_SECS * (2 ** (attempt - 1))))
+  fi
+done
+
+if [ "${DIAGNOSE_SUCCESS}" != "true" ]; then
+  attempt_self_heal_and_reexec "diagnose"
+  failure_summary="Codex diagnosis failed to produce contract-compliant JSON (mode=${DIAGNOSE_FAILURE_MODE:-unknown}, attempts=${DIAGNOSE_ATTEMPTS_USED}/${MAX_CODEX_ATTEMPTS})."
+  fail_validate_codex_phase "validation_diagnosis" "${DIAGNOSE_FAILURE_MODE:-validator_rejected}" "${DIAGNOSE_ATTEMPTS_USED:-${MAX_CODEX_ATTEMPTS}}" "${failure_summary}"
+fi
+
+DIAG_STATUS="$(jq -r '.status // "harness_error"' "${DIAGNOSE_RESULT_FILE}")"
+DIAG_TEXT="$(jq -r '.diagnosis // "Validation failed."' "${DIAGNOSE_RESULT_FILE}")"
+
+# Self-heal interception: the diagnose LLM has classified the failure. If
+# the self-heal LLM determines the classification or the originating phase
+# was driven by a prompt defect and proposes a patch, we re-exec this
+# script (without burning a validation cycle). This hook fires for ALL
+# diagnose outcomes (needs_fixes, harness_error, infeasible, unknown)
+# per Q5=B: any failure where a prompt edit is proposed is self-heal-
+# eligible. The helper short-circuits on an empty-patch proposal.
+attempt_self_heal_and_reexec "diagnose"
+
+# -----------------------------------------------------------------
+# Cross-cycle escalation (Q5=A, Q6=A, Q7=B):
+#
+# The diagnose prompt has been inverted to prefer `needs_fixes` over
+# `harness_error` when in doubt, so that the clarify -> plan -> implement
+# pipeline gets a chance to fix the failure inside the consumer repo
+# without human involvement. This is only safe if we auto-escalate when
+# the same fix-up proposal keeps failing across cycles, otherwise a
+# genuinely harness-side defect could loop indefinitely burning cycles.
+#
+# Mechanism:
+#   1. Compute a stable fingerprint of the current needs_fixes proposal
+#      (Q5=A: sha256 of sorted fix_issues[].title, 16-char hex prefix).
+#   2. Embed the fingerprint as an HTML-comment marker in the tracking
+#      issue comment posted by the `needs_fixes` branch below (Q6=A).
+#   3. On each cycle with VALIDATION_CYCLE >= 3, scan PRIOR_COMMENTS
+#      (already fetched at the top of this script for the LLM's
+#      cycle-N context) for prior markers. If the same fingerprint
+#      appears in at least 2 prior cycles' comments, the editor has
+#      failed to land the fix twice — promote this cycle to
+#      `harness_error` so the human/alert path takes over (Q7=B).
+#   4. The promoted `harness_error` uses the LLM-provided
+#      `harness_fixes` text (Q9=B schema allows it alongside
+#      `fix_issues`) if present; otherwise a templated fallback.
+# -----------------------------------------------------------------
+FAILURE_FINGERPRINT=""
+PRIOR_FINGERPRINT_HITS=0
+ESCALATED_FROM_NEEDS_FIXES=false
+
+if [ "${DIAG_STATUS}" = "needs_fixes" ]; then
+	FP_FIX_COUNT="$(jq -r 'if (.fix_issues | type) == "array" then (.fix_issues | length) else 0 end' "${DIAGNOSE_RESULT_FILE}" 2>/dev/null || echo 0)"
+	if [ "${FP_FIX_COUNT:-0}" -gt 0 ]; then
+		if FINGERPRINT_TITLES="$(jq -r '.fix_issues | sort_by(.title // "") | map(.title // "") | join("\n")' "${DIAGNOSE_RESULT_FILE}" 2>/dev/null)"; then
+			FAILURE_FINGERPRINT="$(printf '%s' "${FINGERPRINT_TITLES}" | sha256sum | cut -c1-16)"
+		fi
+	fi
+fi
+
+if [ "${DIAG_STATUS}" = "needs_fixes" ] \
+	&& [ -n "${FAILURE_FINGERPRINT}" ] \
+	&& [ "${VALIDATION_CYCLE}" -ge 3 ] \
+	&& [ -n "${PRIOR_FINGERPRINT_MARKERS:-}" ]; then
+	PREV_CYCLE_1="$((VALIDATION_CYCLE - 1))"
+	PREV_CYCLE_2="$((VALIDATION_CYCLE - 2))"
+	HIT_PREV_CYCLE_1=0
+	HIT_PREV_CYCLE_2=0
+	if grep -qF "<!-- validation-failure-fingerprint: ${FAILURE_FINGERPRINT} cycle: ${PREV_CYCLE_1} -->" <<< "${PRIOR_FINGERPRINT_MARKERS:-}" 2>/dev/null; then
+		HIT_PREV_CYCLE_1=1
+	fi
+	if grep -qF "<!-- validation-failure-fingerprint: ${FAILURE_FINGERPRINT} cycle: ${PREV_CYCLE_2} -->" <<< "${PRIOR_FINGERPRINT_MARKERS:-}" 2>/dev/null; then
+		HIT_PREV_CYCLE_2=1
+	fi
+	PRIOR_FINGERPRINT_HITS="$((HIT_PREV_CYCLE_1 + HIT_PREV_CYCLE_2))"
+	if [ "${PRIOR_FINGERPRINT_HITS}" -ge 2 ]; then
+		ESCALATED_FROM_NEEDS_FIXES=true
+		DIAG_STATUS="harness_error"
+		echo "Cross-cycle escalation: needs_fixes fingerprint ${FAILURE_FINGERPRINT} seen in consecutive prior cycles (${PREV_CYCLE_2}, ${PREV_CYCLE_1}); promoting to harness_error (cycle ${VALIDATION_CYCLE})."
+	fi
+fi
+
+validation_owner_route_diagnosis
+
+case "${DIAG_STATUS}" in
+  needs_fixes)
+    FIX_COUNT="$(jq -r 'if (.fix_issues | type) == "array" then (.fix_issues | length) else 0 end' "${DIAGNOSE_RESULT_FILE}" 2>/dev/null || echo 0)"
+    if [ "${FIX_COUNT}" -le 0 ]; then
+      failure_summary="Diagnosis returned needs_fixes with empty fix_issues."
+      post_tracking_comment "## ❌ Runtime validation failed\n\n${failure_summary}\n\nDiagnosis:\n\n${DIAG_TEXT}"
+      set_tracking_phase_label "ai:validation-failed"
+      write_result_files "fail" "Runtime validation failed" "${failure_summary}" "harness_error"
+      tg_notify "Validation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}: invalid diagnosis payload." "$(_poll_recovers_level ERROR)"
+      exit 0
+    fi
+
+    # Consolidate every diagnosed root cause into a SINGLE GitHub
+    # issue. Previously each fix_issues[] entry became its own issue
+    # and ran the full clarify -> plan -> implement -> review -> merge
+    # pipeline, multiplying token cost by N. The diagnose prompt
+    # contract (fix_issues[]) is intentionally unchanged; the
+    # collapse happens here at issue-creation time.
+    SORTED_FIXES_FILE="${RUNTIME_DIR}/diagnose_fixes_sorted.json"
+    jq '.fix_issues | sort_by(.priority // 5)' "${DIAGNOSE_RESULT_FILE}" > "${SORTED_FIXES_FILE}"
+
+    TOP_PRIORITY="$(jq -r '[.[] | (.priority // 5)] | min // 5' "${SORTED_FIXES_FILE}")"
+    if ! [[ "${TOP_PRIORITY}" =~ ^[0-9]+$ ]]; then
+      TOP_PRIORITY=5
+    fi
+
+    CONSOLIDATED_LOCAL_ID="validation-fix-cycle-${VALIDATION_CYCLE}"
+    CONSOLIDATED_TITLE="Validation fix-ups (cycle ${VALIDATION_CYCLE}): ${FIX_COUNT} root cause(s)"
+
+    CONSOLIDATED_BODY_FILE="${RUNTIME_DIR}/consolidated_fix_body.md"
+    {
+      printf '## Diagnosis\n\n%s\n\n' "${DIAG_TEXT}"
+      if [ "${FIX_COUNT}" -gt 1 ]; then
+        printf '_The %s root causes below are listed in priority order (lowest priority number = highest urgency). Apply them in the order shown._\n\n' "${FIX_COUNT}"
+      fi
+      printf -- '---\n\n'
+      for idx in $(seq 0 $((FIX_COUNT - 1))); do
+        FIX_TITLE_N="$(jq -r ".[${idx}].title // \"Validation fix-up $((idx + 1))\"" "${SORTED_FIXES_FILE}")"
+        FIX_BODY_N="$(jq -r ".[${idx}].body // \"No body provided\"" "${SORTED_FIXES_FILE}" | sed 's/\\n/\n/g')"
+        FIX_PRIORITY_N="$(jq -r ".[${idx}].priority // 5" "${SORTED_FIXES_FILE}")"
+        FIX_DEPENDS_ON_N="$(jq -r ".[${idx}].depends_on // empty | if type == \"array\" then map(tostring) | join(\", \") else tostring end" "${SORTED_FIXES_FILE}")"
+        printf '## Fix %s: %s\n\n_Priority: %s_\n\n' "$((idx + 1))" "${FIX_TITLE_N}" "${FIX_PRIORITY_N}"
+        if [ -n "${FIX_DEPENDS_ON_N}" ]; then
+          printf '_Depends on: %s_\n\n' "${FIX_DEPENDS_ON_N}"
+        fi
+        printf '%s\n\n' "${FIX_BODY_N}"
+      done
+      printf -- '---\n'
+      printf '**Orchestrator metadata** (do not edit)\n'
+      printf -- '- Tracking issue: #%s\n' "${TRACKING_ISSUE_RAW}"
+      printf -- '- Integration branch: %s\n' "${INTEGRATION_BRANCH}"
+      printf -- '- Local ID: `%s`\n' "${CONSOLIDATED_LOCAL_ID}"
+      printf -- '- Type: validation-fix-up (cycle %s, consolidated %s root cause(s))\n' "${VALIDATION_CYCLE}" "${FIX_COUNT}"
+      printf -- '- Priority: %s\n' "${TOP_PRIORITY}"
+      printf -- '- Managed by: AI Orchestrator\n'
+    } > "${CONSOLIDATED_BODY_FILE}"
+
+    if ! is_tracking_run; then
+      failure_summary="Runtime validation failed with ${FAILED_TESTS} failing test(s). Tracking issue is not set, so the consolidated fix-up issue was not created."
+      write_result_files "fail" "Validation needs fixes" "${failure_summary}" "needs_fixes"
+      tg_notify "Validation for ${GITHUB_REPOSITORY} reported fixable failures, but TRACKING_ISSUE is not set." "WARNING"
+      exit 0
+    fi
+
+    # Tracker-open guard: never open a fix-up against a closed tracker.
+    # Fail-open on API failure (empty state) so a transient blip does
+    # not block legitimate fix-up creation.
+    TRACKER_STATE="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${TRACKING_ISSUE_RAW}" --jq '.state' 2>/dev/null | tr -d '[:space:]' || true)"
+    if [ -n "${TRACKER_STATE}" ] && [ "${TRACKER_STATE}" != "open" ]; then
+      echo "Tracker-open guard: tracking issue #${TRACKING_ISSUE_RAW} is '${TRACKER_STATE}'; skipping fix-up issue creation."
+      failure_summary="Runtime validation failed with ${FAILED_TESTS} failing test(s), but tracking issue #${TRACKING_ISSUE_RAW} is ${TRACKER_STATE}; no fix-up issue created."
+      write_result_files "fail" "Validation needs fixes" "${failure_summary}" "needs_fixes"
+      tg_notify "Validation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} needs fixes, but tracker is ${TRACKER_STATE}; no fix-up created." "WARNING"
+      exit 0
+    fi
+
+    # Per-tracker dedupe: if an open fix-up for this tracker + cycle
+    # already exists (matched by the Local ID and Tracking issue lines
+    # the body writer emits above), reuse it instead of creating a
+    # duplicate. Fail-open on list/jq failure so a transient API blip
+    # does not block legitimate fix-up creation.
+    EXISTING_FIXUP_NUM=""
+    # Dedupe lookup bound (BUG-003): `gh issue list` paginates internally
+    # up to this many open managed issues; --limit below reads it.
+    FIXUP_DEDUPE_LIST_LIMIT=1000
+    # Record lookup / parse outcome so a failed or unparsable lookup is
+    # distinguishable from a confirmed miss in the log. Still fail-open.
+    # Warnings carry only tracker/cycle/count/limit, never issue bodies.
+    FIXUP_DEDUPE_LOOKUP_OK=true
+    if ! DEDUPE_LIST_JSON="$(gh_retry gh issue list \
+      --repo "${GITHUB_REPOSITORY}" \
+      --state open \
+      --label "ai:orchestrator-managed" \
+      --limit "${FIXUP_DEDUPE_LIST_LIMIT}" \
+      --json number,body 2>/dev/null)"; then
+      FIXUP_DEDUPE_LOOKUP_OK=false
+      DEDUPE_LIST_JSON=""
+      echo "::warning::Fix-up dedupe lookup failed for tracker #${TRACKING_ISSUE_RAW} (cycle ${VALIDATION_CYCLE}); proceeding with fix-up creation (fail-open)."
+    fi
+    if [ -n "${DEDUPE_LIST_JSON}" ]; then
+      if ! EXISTING_FIXUP_NUM="$(printf '%s' "${DEDUPE_LIST_JSON}" | jq -r \
+        --arg lid "Local ID: \`${CONSOLIDATED_LOCAL_ID}\`" \
+        --arg trk "Tracking issue: #${TRACKING_ISSUE_RAW}" \
+        '[.[] | select(((.body // "") as $b | ($b | contains($lid)) and ($b | contains($trk))))] | .[0].number // empty' 2>/dev/null)"; then
+        FIXUP_DEDUPE_LOOKUP_OK=false
+        EXISTING_FIXUP_NUM=""
+        echo "::warning::Fix-up dedupe response could not be parsed for tracker #${TRACKING_ISSUE_RAW} (cycle ${VALIDATION_CYCLE}); proceeding with fix-up creation (fail-open)."
+      fi
+      if [ "${FIXUP_DEDUPE_LOOKUP_OK}" = "true" ] && [ -z "${EXISTING_FIXUP_NUM}" ]; then
+        FIXUP_DEDUPE_LIST_COUNT="$(printf '%s' "${DEDUPE_LIST_JSON}" | jq -r 'length' 2>/dev/null || true)"
+        if [[ "${FIXUP_DEDUPE_LIST_COUNT}" =~ ^[0-9]+$ ]] && [ "${FIXUP_DEDUPE_LIST_COUNT}" -ge "${FIXUP_DEDUPE_LIST_LIMIT}" ]; then
+          echo "::warning::Fix-up dedupe lookup returned ${FIXUP_DEDUPE_LIST_COUNT} issues (limit ${FIXUP_DEDUPE_LIST_LIMIT}); an older matching fix-up may be outside the window; proceeding."
+        fi
+      fi
+    fi
+    if [ -n "${EXISTING_FIXUP_NUM}" ] && [[ "${EXISTING_FIXUP_NUM}" =~ ^[0-9]+$ ]]; then
+      echo "Dedupe: open fix-up issue #${EXISTING_FIXUP_NUM} already exists for tracker #${TRACKING_ISSUE_RAW} at cycle ${VALIDATION_CYCLE}; skipping create."
+      CREATED_FIX_ISSUES_JSON="$(echo "${CREATED_FIX_ISSUES_JSON}" | jq --argjson num "${EXISTING_FIXUP_NUM}" '. + [$num]')"
+      DEDUPE_FINGERPRINT_MARKER=""
+      if [ -n "${FAILURE_FINGERPRINT:-}" ]; then
+        DEDUPE_FINGERPRINT_MARKER="$(printf '\n<!-- validation-failure-fingerprint: %s cycle: %s -->' \
+          "${FAILURE_FINGERPRINT}" "${VALIDATION_CYCLE:-1}")"
+      fi
+      post_tracking_comment "## 🧪 Runtime validation found fixable issues\n\n${DIAG_TEXT}\n\nReusing existing open fix-up issue #${EXISTING_FIXUP_NUM} for ${FIX_COUNT} root cause(s); not creating a duplicate.${DEDUPE_FINGERPRINT_MARKER}"
+      set_tracking_phase_label "ai:validation-fixing"
+      failure_summary="Runtime validation failed with ${FAILED_TESTS} failing test(s). Reused existing fix-up issue #${EXISTING_FIXUP_NUM} (cycle ${VALIDATION_CYCLE}); no duplicate created."
+      write_result_files "fail" "Validation needs fixes" "${failure_summary}" "needs_fixes"
+      tg_notify "Validation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} needs fixes; reused existing fix-up #${EXISTING_FIXUP_NUM}." "DEBUG"
+      exit 0
+    fi
+
+    ensure_label_exists "ai:clarification"
+    ensure_label_exists "ai:orchestrator-managed"
+
+	FIX_URL_OUTPUT="$(gh_retry gh issue create \
+	  --repo "${GITHUB_REPOSITORY}" \
+	  --title "${CONSOLIDATED_TITLE}" \
+	  --body-file "${CONSOLIDATED_BODY_FILE}" \
+	  --label "ai:clarification" \
+	  --label "ai:orchestrator-managed")"
+	FIX_URL="$(printf '%s\n' "${FIX_URL_OUTPUT}" | grep -oE 'https://[^ ]+/issues/[0-9]+/?([?#][^ ]*)?' | tail -n 1 || true)"
+	FIX_NUM="$(basename "${FIX_URL%%[?#]*}")"
+	if ! [[ "${FIX_NUM}" =~ ^[0-9]+$ ]]; then
+	  failure_summary="Runtime validation failed with ${FAILED_TESTS} failing test(s), but creating the consolidated fix-up issue failed."
+	  post_tracking_comment "## ❌ Runtime validation failed\n\n${failure_summary}\n\nDiagnosis:\n\n${DIAG_TEXT}"
+	  set_tracking_phase_label "ai:validation-failed"
+	  write_result_files "fail" "Runtime validation failed" "${failure_summary}" "harness_error"
+	  tg_notify "Validation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}: unable to create consolidated fix-up issue." "$(_poll_recovers_level ERROR)"
+	  exit 0
+	fi
+	CREATED_FIX_ISSUES_JSON="$(echo "${CREATED_FIX_ISSUES_JSON}" | jq --argjson num "${FIX_NUM}" '. + [$num]')"
+
+    issue_list_md="$(echo "${CREATED_FIX_ISSUES_JSON}" | jq -r '.[] | "- #\(.)"')"
+    if [ -z "${issue_list_md}" ]; then
+      issue_list_md='- (no issue numbers captured)'
+    fi
+
+    # Embed the cross-cycle fingerprint marker so future cycles can
+    # detect the same-proposal-repeated case and escalate (Q6=A). The
+    # HTML comment is invisible in GitHub's rendered view but readable
+    # by the PRIOR_COMMENTS fetch at the top of this script. The
+    # `:-` defaults let this branch be exercised in isolation by
+    # tests/test_validate_process_fixup_labels.py, which does not
+    # populate FAILURE_FINGERPRINT / VALIDATION_CYCLE.
+    FINGERPRINT_MARKER=""
+    if [ -n "${FAILURE_FINGERPRINT:-}" ]; then
+      FINGERPRINT_MARKER="$(printf '\n<!-- validation-failure-fingerprint: %s cycle: %s -->' \
+        "${FAILURE_FINGERPRINT}" "${VALIDATION_CYCLE:-1}")"
+    fi
+
+    post_tracking_comment "## 🧪 Runtime validation found fixable issues\n\n${DIAG_TEXT}\n\nConsolidated ${FIX_COUNT} root cause(s) into a single fix-up issue:\n${issue_list_md}${FINGERPRINT_MARKER}"
+    set_tracking_phase_label "ai:validation-fixing"
+
+    failure_summary="Runtime validation failed with ${FAILED_TESTS} failing test(s). A single consolidated fix-up issue was created for ${FIX_COUNT} root cause(s)."
+    write_result_files "fail" "Validation needs fixes" "${failure_summary}" "needs_fixes"
+    tg_notify "Validation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW} needs fixes (${FIX_COUNT} root cause(s) consolidated into 1 issue)." "DEBUG"
+    ;;
+
+  harness_error)
+    HARNESS_RUN_REFERENCE=""
+    if [ -n "${GITHUB_RUN_ID:-}" ]; then
+      HARNESS_RUN_REFERENCE=$'\n\n'"Run: $(_gh_url "actions/runs/${GITHUB_RUN_ID}")"
+    fi
+    if [ "${ESCALATED_FROM_NEEDS_FIXES}" = "true" ]; then
+      # Cross-cycle escalation path: the diagnose LLM classified this
+      # as needs_fixes, but the same fix-up proposal has failed in
+      # PRIOR_FINGERPRINT_HITS prior cycles. Prefer the LLM-provided
+      # harness_fixes hint (Q9=B schema permits it alongside
+      # fix_issues); fall back to a templated explanation.
+      HARNESS_FIXES_FROM_LLM="$(jq -r '.harness_fixes // ""' "${DIAGNOSE_RESULT_FILE}" \
+        | tr '\n' ' ' | sed -e 's/[[:space:]]\+/ /g' -e 's/^ //; s/ $//')"
+      if [ -n "${HARNESS_FIXES_FROM_LLM}" ]; then
+        HARNESS_FIXES="Cross-cycle escalation: the same fix-up proposal (fingerprint ${FAILURE_FINGERPRINT}) failed in ${PRIOR_FINGERPRINT_HITS} prior cycle(s). LLM fallback guidance: ${HARNESS_FIXES_FROM_LLM}"
+      else
+        HARNESS_FIXES="Cross-cycle escalation: the same fix-up proposal (fingerprint ${FAILURE_FINGERPRINT}) failed in ${PRIOR_FINGERPRINT_HITS} prior cycle(s). The repeated failure suggests the root cause is in harness-owned files (under \`validation/\`, in workflow wrappers referencing \`shubhodeep1/coding-workflows\`, or in scripts fetched from \`coding-workflows\` at runtime) rather than in consumer-repo application code. A human needs to inspect the diagnosis and determine whether to patch the harness or update the consumer repo manually."
+      fi
+      failure_summary="Validation harness error (cross-cycle escalation): ${HARNESS_FIXES}"
+
+      post_tracking_comment "## ❌ Runtime validation harness error (cross-cycle escalation)\n\n${DIAG_TEXT}\n\nHarness fix guidance:\n\n${HARNESS_FIXES}${HARNESS_RUN_REFERENCE}$(validation_owner_comment_marker)"
+      set_tracking_phase_label "ai:validation-failed"
+      write_result_files "fail" "Validation failed due to harness error" "${failure_summary}" "harness_error"
+      tg_notify "Validation cross-cycle escalation for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}: same fix-up proposal failed $((PRIOR_FINGERPRINT_HITS + 1)) times." "ERROR"
+    else
+      if validation_owner_enabled; then
+        HARNESS_FIXES="$(jq -r '(.harness_fixes // "") | if . == "" then "Validation harness needs correction." else . end' "${DIAGNOSE_RESULT_FILE}")"
+      else
+        HARNESS_FIXES="$(jq -r '.harness_fixes // "Validation harness needs correction."' "${DIAGNOSE_RESULT_FILE}")"
+      fi
+      failure_summary="Validation harness error: ${HARNESS_FIXES}"
+
+      post_tracking_comment "## ❌ Runtime validation harness error\n\n${DIAG_TEXT}\n\nHarness fix guidance:\n\n${HARNESS_FIXES}${HARNESS_RUN_REFERENCE}$(validation_owner_comment_marker)"
+      set_tracking_phase_label "ai:validation-failed"
+      write_result_files "fail" "Validation failed due to harness error" "${failure_summary}" "harness_error"
+      tg_notify "Validation harness error for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "ERROR"
+    fi
+    ;;
+
+  infeasible)
+    failure_summary="Runtime validation infeasible: ${DIAG_TEXT}"
+
+    post_tracking_comment "## ❌ Runtime validation infeasible\n\n${DIAG_TEXT}"
+    set_tracking_phase_label "ai:validation-failed"
+    write_result_files "fail" "Validation marked infeasible" "${failure_summary}" "infeasible"
+    tg_notify "Validation infeasible for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}." "$(_poll_recovers_level ERROR)"
+    ;;
+
+  *)
+    failure_summary="Unknown diagnosis status '${DIAG_STATUS}'. ${FIRST_FAILURE}"
+
+    post_tracking_comment "## ❌ Runtime validation failed\n\n${failure_summary}\n\nDiagnosis:\n\n${DIAG_TEXT}"
+    set_tracking_phase_label "ai:validation-failed"
+    write_result_files "fail" "Validation failed" "${failure_summary}" "harness_error"
+    tg_notify "Validation failed for ${GITHUB_REPOSITORY}#${TRACKING_ISSUE_RAW}: unknown diagnosis status." "$(_poll_recovers_level ERROR)"
+    ;;
+esac
+
+exit 0

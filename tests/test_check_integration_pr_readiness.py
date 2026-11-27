@@ -1,0 +1,561 @@
+#!/usr/bin/env python3
+"""Tests for scripts/check_integration_pr_readiness.py (P3 from
+docs/postmortems/2026-05-18-project-2734-stall.md).
+
+Tests focus on the pure logic (branch derivation, checkbox counting,
+state decision tree). The commit-status POST is exercised separately
+via the workflow itself; we test the function shape rather than the
+HTTP call.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import importlib.util
+import io
+import sys
+import tempfile
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+SCRIPT_PATH = REPO_ROOT / "scripts" / "check_integration_pr_readiness.py"
+
+
+def _import():
+	spec = importlib.util.spec_from_file_location("check_integration_pr_readiness", SCRIPT_PATH)
+	assert spec is not None and spec.loader is not None
+	mod = importlib.util.module_from_spec(spec)
+	sys.modules["check_integration_pr_readiness"] = mod
+	spec.loader.exec_module(mod)
+	return mod
+
+
+def test_derive_tracking_issue_from_canonical_branch():
+	mod = _import()
+	assert mod._derive_tracking_issue("orchestrator/project-2734") == 2734
+	assert mod._derive_tracking_issue("orchestrator/project-1") == 1
+	assert mod._derive_tracking_issue("orchestrator/project-999999") == 999999
+
+
+def test_derive_tracking_issue_rejects_non_orchestrator_branches():
+	mod = _import()
+	# Branches that aren't orchestrator integration branches must return
+	# None so the readiness check no-ops on them (a feature PR from
+	# claude/foo or main is not subject to this check).
+	for branch in (
+		"main",
+		"stable",
+		"claude/fix-something",
+		"feature/whatever",
+		"orchestrator/project-",        # missing number
+		"orchestrator/project-abc",     # non-numeric
+		"orchestrator/foo-100",         # wrong prefix
+		"orchestrator/project-2734-x",  # suffix
+	):
+		assert mod._derive_tracking_issue(branch) is None, f"expected None for {branch!r}"
+
+
+def test_count_checkboxes_canonical_body():
+	mod = _import()
+	body = """## Project: Some project
+
+### Wave 1
+- [ ] **issue-a**: First sub-issue
+- [x] **issue-b**: Second sub-issue (done)
+
+### Wave 2
+- [ ] **issue-c**: Third (priority 1)
+- [X] **issue-d**: Fourth (capital X also counts as checked)
+
+Some prose with `- [ ]` mid-line (not a real task list item).
+"""
+	unchecked, total = mod._count_checkboxes(body)
+	# 4 task list items at line start (`^\s*-\s*\[...]` matches);
+	# the in-backtick mid-line literal is correctly ignored because
+	# its dash is not at the line start.
+	assert total == 4, f"expected 4 total checkboxes, got {total}"
+	# 'issue-a' and 'issue-c' are unchecked; 'issue-b' (lowercase x)
+	# and 'issue-d' (capital X) are both checked.
+	assert len(unchecked) == 2, f"expected 2 unchecked, got {unchecked!r}"
+	assert any("issue-a" in t for t in unchecked)
+	assert any("issue-c" in t for t in unchecked)
+
+
+def test_count_checkboxes_no_checkboxes_in_body():
+	mod = _import()
+	body = "Just some prose.\n\nNo checkboxes at all."
+	unchecked, total = mod._count_checkboxes(body)
+	assert total == 0
+	assert unchecked == []
+
+
+def test_count_checkboxes_blank_checkbox_item_counts_as_unchecked():
+	mod = _import()
+	body = "- [ ]\n- [x] done\n"
+	unchecked, total = mod._count_checkboxes(body)
+	assert total == 2
+	assert unchecked == ["<blank checkbox item>"]
+
+
+def test_count_checkboxes_handles_project_2734_body_shape():
+	# Pin against the actual project-#2734 body shape (the orchestrator-
+	# emitted template). If this regresses, the script silently
+	# mis-counts on real tracking issues.
+	mod = _import()
+	body = """## Project: Implement the resolver self-heal plan
+
+**Total issues:** 9 | **Waves:** 7
+
+### Wave 1
+- [ ] **phase1-verifier-baseline-delta**: Phase 1A (priority 1)
+- [ ] **phase6-subissue-test-runs-spike**: Phase 6 spike (priority 4)
+
+### Wave 2
+- [ ] **phase1-resolver-bootstrap-wiring**: Phase 1B (priority 1)
+
+### Wave 3
+- [ ] **phase2-retry-state-escalation**: Phase 2 (priority 2)
+
+### Wave 4
+- [ ] **phase3-tiered-verification**: Phase 3 (priority 2)
+
+### Wave 5
+- [ ] **phase4-quarantine-core**: Phase 4A (priority 3)
+
+### Wave 6
+- [ ] **phase4-drift-audit-job**: Phase 4B (priority 4)
+- [ ] **phase5-branch-rebuild**: Phase 5 (priority 4)
+
+### Wave 7
+- [ ] **docs-closeout-and-plan-move**: Close out (priority 5)
+"""
+	unchecked, total = mod._count_checkboxes(body)
+	assert total == 9, f"expected 9 (project #2734 had 9 sub-issues), got {total}"
+	assert len(unchecked) == 9, f"expected 9 unchecked, got {len(unchecked)}"
+
+
+def test_main_posts_noop_success_for_non_orchestrator_branch():
+	mod = _import()
+	posted: list[tuple[str, str]] = []
+	original_post = mod._post_commit_status
+	original_fetch = mod._fetch_issue
+	old_argv = sys.argv
+	try:
+		mod._post_commit_status = lambda repo, sha, state, description, target_url="": posted.append((state, description)) or True
+		mod._fetch_issue = lambda repo, n: (_ for _ in ()).throw(AssertionError("_fetch_issue should not run for non-orchestrator branches"))
+		sys.argv = [
+			"check_integration_pr_readiness.py",
+			"--head-ref", "claude/fix-something",
+			"--head-sha", "deadbeef",
+			"--repo", "owner/repo",
+		]
+		rc = mod.main()
+		assert rc == 0
+		assert posted == [(
+			"success",
+			"head ref 'claude/fix-something' is not an orchestrator/project-* branch — readiness check does not apply",
+		)]
+	finally:
+		sys.argv = old_argv
+		mod._post_commit_status = original_post
+		mod._fetch_issue = original_fetch
+
+
+def test_main_errors_when_non_orchestrator_status_post_fails():
+	mod = _import()
+	posted: list[tuple[str, str, str]] = []
+	original_post = mod._post_commit_status
+	original_fetch = mod._fetch_issue
+	old_argv = sys.argv
+	try:
+		mod._post_commit_status = lambda repo, sha, state, description, target_url="": posted.append((state, description, target_url)) or False
+		mod._fetch_issue = lambda repo, n: (_ for _ in ()).throw(AssertionError("_fetch_issue should not run for non-orchestrator branches"))
+		sys.argv = [
+			"check_integration_pr_readiness.py",
+			"--head-ref", "claude/fix-something",
+			"--head-sha", "deadbeef",
+			"--repo", "owner/repo",
+		]
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			rc = mod.main()
+		assert rc == 1
+		assert posted == [(
+			"success",
+			"head ref 'claude/fix-something' is not an orchestrator/project-* branch — readiness check does not apply",
+			"",
+		)]
+		assert "::error::[integration-pr-readiness] failed to post readiness commit status" in stderr.getvalue()
+	finally:
+		sys.argv = old_argv
+		mod._post_commit_status = original_post
+		mod._fetch_issue = original_fetch
+
+
+def test_main_fails_closed_when_tracking_issue_has_no_checkboxes():
+	mod = _import()
+	posted: list[tuple[str, str]] = []
+	original_post = mod._post_commit_status
+	original_fetch = mod._fetch_issue
+	old_argv = sys.argv
+	try:
+		mod._post_commit_status = lambda repo, sha, state, description, target_url="": posted.append((state, description)) or True
+		mod._fetch_issue = lambda repo, n: {"labels": [mod.TRACKING_LABEL], "body": "Just prose."}
+		sys.argv = [
+			"check_integration_pr_readiness.py",
+			"--head-ref", "orchestrator/project-2734",
+			"--head-sha", "deadbeef",
+			"--repo", "owner/repo",
+		]
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			rc = mod.main()
+		assert rc == 0
+		assert posted == [(
+			"failure",
+			"tracking issue #2734 has no checkbox items in its body; readiness check cannot verify completeness",
+		)]
+		assert "::error::[integration-pr-readiness] tracking issue #2734 has no checkbox items in its body; readiness check cannot verify completeness" in stderr.getvalue()
+	finally:
+		sys.argv = old_argv
+		mod._post_commit_status = original_post
+		mod._fetch_issue = original_fetch
+
+
+def test_main_posts_success_when_all_tracking_boxes_are_ticked():
+	mod = _import()
+	posted: list[tuple[str, str]] = []
+	original_post = mod._post_commit_status
+	original_fetch = mod._fetch_issue
+	old_argv = sys.argv
+	try:
+		mod._post_commit_status = lambda repo, sha, state, description, target_url="": posted.append((state, description)) or True
+		mod._fetch_issue = lambda repo, n: {
+			"labels": [mod.TRACKING_LABEL],
+			"body": "- [x] shipped A\n- [X] shipped B\n",
+		}
+		sys.argv = [
+			"check_integration_pr_readiness.py",
+			"--head-ref", "orchestrator/project-2734",
+			"--head-sha", "deadbeef",
+			"--repo", "owner/repo",
+		]
+		rc = mod.main()
+		assert rc == 0
+		assert posted == [(
+			"success",
+			"all 2 sub-issue(s) on #2734 are ticked — integration PR is ready",
+		)]
+	finally:
+		sys.argv = old_argv
+		mod._post_commit_status = original_post
+		mod._fetch_issue = original_fetch
+
+
+def test_main_fails_when_any_tracking_checkbox_remains_unchecked():
+	mod = _import()
+	posted: list[tuple[str, str]] = []
+	original_post = mod._post_commit_status
+	original_fetch = mod._fetch_issue
+	old_argv = sys.argv
+	try:
+		mod._post_commit_status = lambda repo, sha, state, description, target_url="": posted.append((state, description)) or True
+		mod._fetch_issue = lambda repo, n: {
+			"labels": [mod.TRACKING_LABEL],
+			"body": "- [x] shipped A\n- [ ] outstanding B\n- [X] shipped C\n",
+		}
+		sys.argv = [
+			"check_integration_pr_readiness.py",
+			"--head-ref", "orchestrator/project-2734",
+			"--head-sha", "deadbeef",
+			"--repo", "owner/repo",
+		]
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			rc = mod.main()
+		assert rc == 0
+		assert posted == [(
+			"failure",
+			"1/3 sub-issues on #2734 still unchecked: outstanding B",
+		)]
+		assert "::warning::[integration-pr-readiness] 1/3 sub-issues on #2734 still unchecked: outstanding B" in stderr.getvalue()
+		assert f"::notice::To merge anyway (rare; e.g. de-scoping the remaining work), apply the {mod.OVERRIDE_LABEL!r} label to this PR." in stderr.getvalue()
+		assert "::error::[integration-pr-readiness] 1/3 sub-issues on #2734 still unchecked: outstanding B" not in stderr.getvalue()
+	finally:
+		sys.argv = old_argv
+		mod._post_commit_status = original_post
+		mod._fetch_issue = original_fetch
+
+
+def test_main_errors_when_failure_status_cannot_be_posted():
+	mod = _import()
+	posted: list[tuple[str, str, str]] = []
+	original_post = mod._post_commit_status
+	original_fetch = mod._fetch_issue
+	old_argv = sys.argv
+	try:
+		mod._post_commit_status = lambda repo, sha, state, description, target_url="": posted.append((state, description, target_url)) or False
+		mod._fetch_issue = lambda repo, n: {
+			"labels": [mod.TRACKING_LABEL],
+			"body": "- [ ] outstanding work\n",
+		}
+		sys.argv = [
+			"check_integration_pr_readiness.py",
+			"--head-ref", "orchestrator/project-2734",
+			"--head-sha", "deadbeef",
+			"--repo", "owner/repo",
+		]
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			rc = mod.main()
+		assert rc == 1
+		assert posted == [(
+			"failure",
+			"1/1 sub-issues on #2734 still unchecked: outstanding work",
+			"https://github.com/owner/repo/issues/2734",
+		)]
+		assert "::error::[integration-pr-readiness] failed to post readiness commit status" in stderr.getvalue()
+	finally:
+		sys.argv = old_argv
+		mod._post_commit_status = original_post
+		mod._fetch_issue = original_fetch
+
+
+def test_main_fails_closed_when_tracking_label_missing():
+	# BUG-002 (analysis/workflow-optimization-2026-10-06.md): a missing
+	# tracking label on an orchestrator/project-N head must not turn the
+	# required readiness status green.
+	mod = _import()
+	posted: list[tuple[str, str, str]] = []
+	original_post = mod._post_commit_status
+	original_fetch = mod._fetch_issue
+	old_argv = sys.argv
+	try:
+		mod._post_commit_status = lambda repo, sha, state, description, target_url="": posted.append((state, description, target_url)) or True
+		mod._fetch_issue = lambda repo, n: {"labels": ["enhancement"], "body": "- [ ] outstanding work\n"}
+		sys.argv = [
+			"check_integration_pr_readiness.py",
+			"--head-ref", "orchestrator/project-2734",
+			"--head-sha", "deadbeef",
+			"--repo", "owner/repo",
+		]
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			rc = mod.main()
+		assert rc == 0
+		assert len(posted) == 1, posted
+		state, description, target_url = posted[0]
+		assert state == "failure"
+		assert target_url == "https://github.com/owner/repo/issues/2734"
+		assert "not labeled ai:orchestrator-tracking" in description
+		assert mod.OVERRIDE_LABEL in description
+		assert "does not apply" not in description
+		assert len(description) <= 140, len(description)
+		assert "::error::[integration-pr-readiness] issue #2734 is not labeled ai:orchestrator-tracking" in stderr.getvalue()
+	finally:
+		sys.argv = old_argv
+		mod._post_commit_status = original_post
+		mod._fetch_issue = original_fetch
+
+
+def test_main_fails_closed_when_tracking_labels_file_lacks_tracking_label():
+	# Poller input shape: --tracking-body-file + --tracking-labels-file
+	# with a non-tracking label re-reads the labels once, then fails
+	# closed when the live labels still lack the tracking label.
+	mod = _import()
+	posted: list[tuple[str, str, str]] = []
+	original_post = mod._post_commit_status
+	original_fetch = mod._fetch_issue
+	old_argv = sys.argv
+	try:
+		with tempfile.TemporaryDirectory() as tmp:
+			body_file = Path(tmp) / "body.md"
+			body_file.write_text("- [x] shipped A\n", encoding="utf-8")
+			labels_file = Path(tmp) / "labels.txt"
+			labels_file.write_text("enhancement\n", encoding="utf-8")
+			mod._post_commit_status = lambda repo, sha, state, description, target_url="": posted.append((state, description, target_url)) or True
+			fetch_calls: list[int] = []
+			mod._fetch_issue = lambda repo, n: fetch_calls.append(n) or {"labels": ["enhancement"], "body": "- [x] shipped A\n"}
+			sys.argv = [
+				"check_integration_pr_readiness.py",
+				"--head-ref", "orchestrator/project-2734",
+				"--head-sha", "deadbeef",
+				"--repo", "owner/repo",
+				"--tracking-body-file", str(body_file),
+				"--tracking-labels-file", str(labels_file),
+			]
+			stderr = io.StringIO()
+			with contextlib.redirect_stderr(stderr):
+				rc = mod.main()
+		assert rc == 0
+		# The file labels lack the tracking label, so they are re-read once.
+		assert fetch_calls == [2734], fetch_calls
+		assert len(posted) == 1, posted
+		assert posted[0][0] == "failure"
+		assert "not labeled ai:orchestrator-tracking" in posted[0][1]
+	finally:
+		sys.argv = old_argv
+		mod._post_commit_status = original_post
+		mod._fetch_issue = original_fetch
+
+
+def test_main_rereads_labels_when_labels_file_snapshot_is_stale():
+	# A non-empty but stale --tracking-labels-file must not post a false
+	# failure when the live issue still carries the tracking label.
+	mod = _import()
+	posted: list[tuple[str, str, str]] = []
+	original_post = mod._post_commit_status
+	original_fetch = mod._fetch_issue
+	old_argv = sys.argv
+	try:
+		with tempfile.TemporaryDirectory() as tmp:
+			body_file = Path(tmp) / "body.md"
+			body_file.write_text("- [x] shipped A\n", encoding="utf-8")
+			labels_file = Path(tmp) / "labels.txt"
+			labels_file.write_text("ai:integration-backpressure\n", encoding="utf-8")
+			mod._post_commit_status = lambda repo, sha, state, description, target_url="": posted.append((state, description, target_url)) or True
+			mod._fetch_issue = lambda repo, n: {"labels": [mod.TRACKING_LABEL, "ai:integration-backpressure"], "body": "- [x] shipped A\n"}
+			sys.argv = [
+				"check_integration_pr_readiness.py",
+				"--head-ref", "orchestrator/project-2734",
+				"--head-sha", "deadbeef",
+				"--repo", "owner/repo",
+				"--tracking-body-file", str(body_file),
+				"--tracking-labels-file", str(labels_file),
+			]
+			rc = mod.main()
+		assert rc == 0
+		assert len(posted) == 1, posted
+		assert posted[0][0] == "success"
+		assert "not labeled" not in posted[0][1]
+	finally:
+		sys.argv = old_argv
+		mod._post_commit_status = original_post
+		mod._fetch_issue = original_fetch
+
+
+def test_main_posts_success_with_override_when_tracking_label_missing():
+	mod = _import()
+	posted: list[tuple[str, str, str]] = []
+	original_post = mod._post_commit_status
+	original_fetch = mod._fetch_issue
+	old_argv = sys.argv
+	try:
+		with tempfile.TemporaryDirectory() as tmp:
+			pr_labels_file = Path(tmp) / "pr_labels.txt"
+			pr_labels_file.write_text(f"{mod.OVERRIDE_LABEL}\n", encoding="utf-8")
+			mod._post_commit_status = lambda repo, sha, state, description, target_url="": posted.append((state, description, target_url)) or True
+			mod._fetch_issue = lambda repo, n: {"labels": ["enhancement"], "body": "- [ ] outstanding work\n"}
+			sys.argv = [
+				"check_integration_pr_readiness.py",
+				"--head-ref", "orchestrator/project-2734",
+				"--head-sha", "deadbeef",
+				"--repo", "owner/repo",
+				"--pr-labels-file", str(pr_labels_file),
+			]
+			rc = mod.main()
+		assert rc == 0
+		assert len(posted) == 1, posted
+		state, description, target_url = posted[0]
+		assert state == "success"
+		assert mod.OVERRIDE_LABEL in description
+		assert "#2734" in description
+		assert target_url == "https://github.com/owner/repo/issues/2734"
+	finally:
+		sys.argv = old_argv
+		mod._post_commit_status = original_post
+		mod._fetch_issue = original_fetch
+
+
+def test_main_errors_when_missing_tracking_label_failure_post_fails():
+	mod = _import()
+	posted: list[tuple[str, str, str]] = []
+	original_post = mod._post_commit_status
+	original_fetch = mod._fetch_issue
+	old_argv = sys.argv
+	try:
+		mod._post_commit_status = lambda repo, sha, state, description, target_url="": posted.append((state, description, target_url)) or False
+		mod._fetch_issue = lambda repo, n: {"labels": ["enhancement"], "body": "- [ ] outstanding work\n"}
+		sys.argv = [
+			"check_integration_pr_readiness.py",
+			"--head-ref", "orchestrator/project-2734",
+			"--head-sha", "deadbeef",
+			"--repo", "owner/repo",
+		]
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			rc = mod.main()
+		assert rc == 1
+		assert len(posted) == 1, posted
+		assert posted[0][0] == "failure"
+		assert "::error::[integration-pr-readiness] failed to post readiness commit status" in stderr.getvalue()
+	finally:
+		sys.argv = old_argv
+		mod._post_commit_status = original_post
+		mod._fetch_issue = original_fetch
+
+
+def test_post_commit_status_logs_subprocess_failures():
+	mod = _import()
+	original_run = mod.subprocess.run
+	try:
+		mod.subprocess.run = lambda *args, **kwargs: (_ for _ in ()).throw(OSError("gh missing"))
+		stderr = io.StringIO()
+		with contextlib.redirect_stderr(stderr):
+			ok = mod._post_commit_status("owner/repo", "deadbeef", "success", "desc")
+		assert ok is False
+		assert "::warning::[integration-pr-readiness] commit status POST failed: gh missing" in stderr.getvalue()
+	finally:
+		mod.subprocess.run = original_run
+
+
+def test_workflow_skips_label_events_for_every_label_but_the_override():
+	"""Run-volume plan item 10: a label change that the script never reads
+	skips the job (no runner); the override label still re-runs it."""
+	import re
+
+	import yaml
+
+	mod = _import()
+	workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "integration-pr-readiness.yml").read_text(encoding="utf-8"))
+	# Since 2026-11-18 this workflow receives label events only; the other
+	# pull request events run the same script in pr-checks.yml
+	# (tests/test_pr_checks_workflow.py).
+	types = workflow["on"]["pull_request"]["types"]
+	assert types == ["labeled", "unlabeled"]
+	condition = workflow["jobs"]["readiness"]["if"]
+	assert condition == "${{ github.event.label.name == 'ai:override-incomplete-merge' }}"
+	# The label in the expression is the one the script honours.
+	assert re.search(r"label\.name == '([^']+)'", condition).group(1) == mod.OVERRIDE_LABEL
+
+	def runs(label: str | None) -> bool:
+		return label == mod.OVERRIDE_LABEL
+
+	assert runs(mod.OVERRIDE_LABEL)
+	assert not runs("ai:review-blocked") and not runs("ai:in-progress")
+
+
+def main() -> int:
+	try:
+		import sys as _sys
+		_sys.stdout.reconfigure(line_buffering=True)
+	except Exception:
+		pass
+	test_funcs = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
+	passed = 0
+	failed = 0
+	for func in test_funcs:
+		name = func.__name__
+		try:
+			func()
+			print(f"  PASS  {name}", flush=True)
+			passed += 1
+		except Exception as e:
+			print(f"  FAIL  {name}: {e}", flush=True)
+			failed += 1
+	print(f"\n{passed} passed, {failed} failed, {passed + failed} total", flush=True)
+	return 1 if failed > 0 else 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())

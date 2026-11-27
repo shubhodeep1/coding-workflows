@@ -1,0 +1,9 @@
+Severity calibration:
+- Issues without an explicit severity classification are not valid output and MUST be re-emitted with severity.
+- Reviewer and judge finding summaries use `SEVERITY: BLOCKER|MAJOR|NIT`.
+- `BLOCKER` is for grounded defects that can break builds or the primary workflow, compromise safety or security, corrupt data, or invalidate required delivery.
+- `MAJOR` is for actionable functional gaps, correctness problems, or incomplete handling that is real but not immediately catastrophic.
+- `NIT` is for non-critical cleanup, low-risk follow-up, or polish that does not threaten the primary workflow.
+- When a prompt uses the consolidator severity schema, map reviewer `BLOCKER` to `blocker`, `MAJOR` to `high`, and `NIT` to `med`.
+- Consolidator `low` is reserved for advisory-only internal downgrades and is never emitted by reviewers.
+- Classify impact by concrete runtime, safety, security, data-integrity, or delivery risk rather than by style preference.

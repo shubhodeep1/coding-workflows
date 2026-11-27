@@ -1,0 +1,14 @@
+diff --git a/.github/workflows/review_autofix.yml b/.github/workflows/review_autofix.yml
+index 1111111..2222222 100644
+--- a/.github/workflows/review_autofix.yml
++++ b/.github/workflows/review_autofix.yml
+@@ -118,6 +118,10 @@ env:
+   REVIEWER_TIER_TRIVIAL_MODELS: ${{ vars.REVIEWER_TIER_TRIVIAL_MODELS || '' }}
+   REVIEWER_TIER_LITE_MODELS: ${{ vars.REVIEWER_TIER_LITE_MODELS || '' }}
++  REVIEWER_CIRCUIT_BREAKER_ENABLED: ${{ vars.REVIEWER_CIRCUIT_BREAKER_ENABLED || '0' }}
++  REVIEWER_FAILBACK_MAX_RETRIES: ${{ vars.REVIEWER_FAILBACK_MAX_RETRIES || '1' }}
++  REVIEWER_HEALTH_OPEN_THRESHOLD: ${{ vars.REVIEWER_HEALTH_OPEN_THRESHOLD || '3' }}
++  REVIEWER_HEALTH_OPEN_TTL_SECS: ${{ vars.REVIEWER_HEALTH_OPEN_TTL_SECS || '1800' }}
+   JUDGE_INTERIM_ENABLED: ${{ vars.JUDGE_INTERIM_ENABLED || 'false' }}
+   JUDGE_INTERIM_REASONING: ${{ vars.JUDGE_INTERIM_REASONING || 'low' }}
+   JUDGE_INTERIM_TIMEOUT_S: ${{ vars.JUDGE_INTERIM_TIMEOUT_S || '120' }}

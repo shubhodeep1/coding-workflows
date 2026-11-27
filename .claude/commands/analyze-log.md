@@ -1,0 +1,66 @@
+Download the full logs from every URL in `$ARGUMENTS`, identify the root cause, and ship a fix. `$ARGUMENTS` may contain **one or more log URLs** (newline- or whitespace-separated; mix and match accepted) and an **optional free-form description** of what the user expects you to focus on (suspected cause, what changed recently, which step failed, etc.). The description may appear before, between, or after the URLs.
+
+$ARGUMENTS
+
+## Procedure
+
+1. **Parse `$ARGUMENTS` and fetch every log.** Extract every `https?://...` token as a log URL; treat all remaining (non-URL) text as the user's free-form description. Save the description verbatim — it shapes prioritisation in steps 2–3 (what to focus on, which leads to chase first) but never overrides evidence. If `$ARGUMENTS` contains zero URLs, stop and ask the user for at least one log URL — for ref/ID/prose-only inputs, use `/investigate-issue` instead.
+
+   For each URL: `(cd .claude && python scripts/safe_fetch_url.py --url <url> --output /tmp/<name>.log)` and check the status it prints. Run it from the repo root; `--output` must be an absolute path because the subshell runs inside `.claude/`. The helper ships to `.claude/scripts/` with the workflow sync. It prints the final HTTP status, exits non-zero on any failure or non-2xx status without leaving an error page at the output path, allows only `https://` URLs, and refuses hosts (redirect targets included) that resolve to private or internal addresses. Treat a refusal as a hard failure; do not fall back to `curl`. If `python` is not on the PATH, run the same command with `python3`. Use a **distinct `<name>` per URL** (e.g. derived from run/job ID, or numbered `log-1.log`, `log-2.log`) so concurrent downloads don't overwrite each other. Retry transient errors (5xx, 429, timeouts, DNS, connection reset) with exponential backoff (up to 4 retries: 2s, 4s, 8s, 16s). Hard failures (401/403/404/410, auth-walled) → record the URL under `Artifacts needed`; stop only if all URLs are inaccessible. For GitHub Actions run/job URLs, use a GitHub MCP workflow-log tool (`mcp__github__get_workflow_run_logs`, `mcp__github__get_job_logs`, or whichever workflow-log tool is exposed in the current session — search `mcp__github__*` for `log`) (or `gh run view --log <run-id> -R <owner>/<repo>` / `gh run view --log --job <job-id> -R <owner>/<repo>` if `GH_TOKEN` is set — see [Tool Access](#tool-access) for why `-R` is mandatory in this environment) — `curl` against rendered Actions pages returns HTML, not log content. Reference log lines via `nl -ba /tmp/<name>.log` so `L<n>` citations are stable; when multiple logs are in play, cite as `log-<n> L<line>` to disambiguate.
+2. **Read every log end to end.** No skimming. Read each downloaded log in the order the user provided them (the first URL is usually the primary failure; subsequent ones are corroborating runs, retries, or related jobs). Note errors, stack traces, exit codes, timeouts, dep mismatches, and any references (PRs, issues, SHAs, run IDs, artifact URLs). Use the user's description to prioritise which signals to chase first, but don't let it cause you to skip parts of any log.
+3. **Investigate — keep pulling artifacts until the root cause is nailed down.** Follow every relevant reference: PRs/issues via `mcp__github__pull_request_read` / `mcp__github__issue_read`; workflow YAML; `git blame` / `git log -p` on files in the stack trace; recent commits intersected with implicated files. When a log points at another run / job / artifact / PR / issue, fetch that too — recursively — using the GitHub MCP tools or `gh` CLI (see [Tool Access](#tool-access)). Don't stop investigating because the *first* log was thin: if the root cause isn't yet evidence-based, the next step is to read more, not to guess. Read the actual source — never guess at code.
+4. **Decide and act.** Apply the [Decision Rule](#decision-rule) below.
+
+## Decision Rule
+
+After investigation, classify each finding as **EVIDENCE-BASED** (fully supported by log + code, plus reproduction when feasible) or **HYPOTHESIS** (plausible but unverified). Then:
+
+- **All findings are EVIDENCE-BASED and no missing/inaccessible resource blocks root cause or fix verification** → design the fix, apply it, verify it (re-run the repro / failing test when feasible), commit, push, open a PR. Do not ask. Report using the [Output Format](#output-format) afterward. Non-blocking gaps (e.g. an inaccessible linked PR that doesn't affect the diagnosis) still get listed under `Artifacts needed` for transparency.
+- **Otherwise** (any HYPOTHESIS finding, or any missing/inaccessible resource that blocks root cause or fix verification) → stop before editing. Report using the [Output Format](#output-format) and ask the user how to proceed.
+- **Environmental failure** (service down, rate limit, runner outage) → no fix; say so explicitly.
+
+## Output Format
+
+Keep it tight. No prose padding.
+
+```
+Summary: <1–2 lines: what failed, root cause; mention how many logs were analysed and the user's description in one phrase>
+
+Evidence-based:
+- <claim> — log-<n> L<line>: "<text>" (or just L<line>: "<text>" if only one log); <file>:<line>; <SHA/PR if applicable>
+
+Hypothesis (if any):
+- <claim> — gap: <what's missing to confirm>
+
+Artifacts needed (if any):
+- <exact URL or path> — <what's needed, what's blocked without it>
+
+Fix: <applied / proposed>
+- <file>:<line> — <one-line rationale>
+```
+
+Omit empty sections. If the fix was applied and pushed, include the branch/PR link in the Fix line.
+
+## Tool Access
+
+GitHub reads can go through either of two equivalent paths — pick whichever is exposed in the current session:
+
+- **`mcp__github__*` MCP tools** — always available. Preferred when the schema fits cleanly (e.g. whichever workflow-log tool is exposed — `get_job_logs`, `get_workflow_run_logs` — plus `pull_request_read`, `issue_read`, `list_commits`, `get_file_contents`).
+- **`gh` CLI** — the `GH_TOKEN` transport for GitHub reads. Shared rules live in **CLAUDE.md §23** and are not restated here: availability and the nounset-safe auth check, the mandatory `-R <owner>/<repo>` flag, REST-over-GraphQL preference, token hygiene, and the self-serve-read / ask-first-mutation split (§23.A–E). This command needs only §23.A reads. Use `gh` for one-off reads where the MCP surface is awkward, or for tools that don't have a clean MCP equivalent in this session — e.g. `gh run view --log <run-id> -R <owner>/<repo>`, `gh run view --log --job <job-id> -R <owner>/<repo>`, `gh run view --log-failed <run-id> -R <owner>/<repo>` (failed-step lines only), `gh api repos/<owner>/<repo>/actions/runs/<id>/logs`. The token reaches run logs, job logs, PRs, issues, commits, and file contents the same way the MCP tools do.
+
+**Always pass `-R <owner>/<repo>` on `gh` calls that need repo context.** In Claude Code Web sessions the only git remote points at a local proxy (e.g. `http://...@127.0.0.1:PORT/git/<owner>/<repo>`), so `gh` cannot auto-detect the GitHub repo from `git remote -v`; bare `gh run view ...` fails with `failed to determine base repo`. The SessionStart hook prints the resolved slug — use that value (defaults to `shubhodeep1/coding-workflows` for this repo).
+
+Repo scope: `shubhodeep1/coding-workflows`. If a *specific* `gh` call returns 401/403/404 for one resource (GitHub returns 404 for many auth-walled / private resources, so treat it as a permission-or-visibility error rather than "resource missing"), or `gh` is missing entirely, fall back to the MCP tool for that call — don't conclude `gh` is broken globally and don't stop the investigation.
+
+**Keep going until the diagnosis is evidence-based.** A single log rarely contains the whole story. If the root cause isn't yet supported by log + source citations, pull the next layer: re-fetch the run with `--log-failed`, fetch sibling/previous runs of the same workflow, fetch the linked PR/issue, fetch the workflow YAML, fetch artifacts. Only stop reading when (a) you have an evidence-based fix, (b) you've hit a [Decision Rule](#decision-rule) blocker that genuinely requires the user, or (c) every reasonable lead is exhausted and recorded under `Artifacts needed`.
+
+## Rules
+
+- **Always emit the full Output Format — even when the fix has been applied, committed, and pushed.** The PR/commit alone is not the user-facing report. The chat reply MUST include `Summary` (with the root cause), `Evidence-based` cites, and `Fix:` describing what changed and why. A bare "Done — see PR #X" is not acceptable; the user wants the diagnosis and a description of the generated fix without leaving the chat.
+- Download the complete log; never truncate. When `$ARGUMENTS` lists multiple URLs, this rule applies to each — download every accessible log in full before drawing conclusions.
+- Prefer `mcp__github__*` for GitHub reads; fall back to the `gh` CLI + `GH_TOKEN` when the MCP surface is awkward or scope-gated (CLAUDE.md §23.D) (see [Tool Access](#tool-access)). Repo scope: `shubhodeep1/coding-workflows`.
+- **`gh` calls that need repo context MUST pass `-R <owner>/<repo>` explicitly.** Claude Code Web's git remote is a local proxy that `gh` cannot auto-resolve — bare `gh run view --log <id>` fails with `failed to determine base repo`. The SessionStart hook prints the resolved slug; use that value (`shubhodeep1/coding-workflows` for this repo).
+- No citation → no claim. No claim → no fix.
+- Forbidden silent moves: editing tests to pass without evidence the test is wrong, broadening `except`/`catch`, suppressing warnings, version-bumping without verified compatibility, adding retries to mask deterministic failures.
+- Address the root cause (first meaningful error), not cascading failures. Multiple independent failures → handle each separately.
+- Cleanup: delete every temp log written to `/tmp/` during step 1 when done.

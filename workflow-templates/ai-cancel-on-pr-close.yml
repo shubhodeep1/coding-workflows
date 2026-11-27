@@ -1,0 +1,20 @@
+# IMPORTANT: This file is managed by coding-workflows and will be overwritten
+# by the update process. Do not add custom logic here.
+name: AI Cancel on PR Close
+on:
+  pull_request:
+    types: [closed]
+  schedule:
+    - cron: "23 * * * *"
+permissions:
+  actions: write
+  contents: read
+  pull-requests: read
+jobs:
+  cancel:
+    uses: shubhodeep1/coding-workflows/.github/workflows/cancel_on_pr_close.yml@stable
+    # Least privilege: forward only the secrets the reusable workflow
+    # declares, never inherit them all (consumer repos hold other secrets).
+    secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
+      AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}

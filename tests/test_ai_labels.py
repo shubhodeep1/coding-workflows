@@ -1,0 +1,922 @@
+#!/usr/bin/env python3
+"""Tests for scripts/ai_labels.py contract and repair behavior."""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import io
+import json
+import os
+import re
+import sys
+import tempfile
+import urllib.error
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT / "scripts"))
+
+import ai_labels  # noqa: E402
+
+
+CONTRACT_PATH = REPO_ROOT / ".github" / "ai" / "label_contract.v1.json"
+HELPER_PATH = REPO_ROOT / "scripts" / "label_helpers.sh"
+
+
+FAILURE_LABELS = [
+	"ai:clarify-failed",
+	"ai:clarify-respond-failed",
+	"ai:plan-failed",
+	"ai:implement-diagnose-failed",
+	"ai:review-autofix-failed",
+	"ai:validate-failed",
+	"ai:integration-judge-failed",
+	"ai:log-analysis-failed",
+	"ai:memory-maintenance-failed",
+]
+
+RESOLVER_ESCALATED_LABEL = "ai:resolver-escalated"
+ADDITIVE_LABELS = [
+	RESOLVER_ESCALATED_LABEL,
+	"ai:harness-broken",
+	"ai:force-merge",
+	"ai:integration-backpressure",
+	"ai:retro",
+	"ai:security-audit",
+	"ai:security",
+]
+
+
+SYNC_LABELS = {
+	"ai:alpha": {"color": "123abc", "description": "Alpha label"},
+	"ai:beta": {"color": "abcdef", "description": "Beta label"},
+}
+
+
+def _repair(issue_labels: str) -> dict[str, object]:
+	args = argparse.Namespace(contract_file=str(CONTRACT_PATH), issue_labels=issue_labels)
+	output_lines: list[str] = []
+	original = ai_labels._print_json
+	try:
+		ai_labels._print_json = lambda payload: output_lines.append(json.dumps(payload, ensure_ascii=True, sort_keys=True))
+		rc = ai_labels.cmd_repair_labels(args)
+	finally:
+		ai_labels._print_json = original
+	assert rc == 0
+	assert len(output_lines) == 1
+	return json.loads(output_lines[0])
+
+
+def _extract_helper_catalog() -> tuple[dict[str, str], dict[str, str]]:
+	helper_body = HELPER_PATH.read_text(encoding="utf-8")
+	colors_block_match = re.search(r"declare -A _AI_LABEL_COLORS=\((.*?)\n\)", helper_body, flags=re.S)
+	descs_block_match = re.search(r"declare -A _AI_LABEL_DESCS=\((.*?)\n\)", helper_body, flags=re.S)
+	assert colors_block_match, "Could not parse _AI_LABEL_COLORS from label_helpers.sh"
+	assert descs_block_match, "Could not parse _AI_LABEL_DESCS from label_helpers.sh"
+	colors = dict(re.findall(r'\["([^"]+)"\]="([^"]+)"', colors_block_match.group(1)))
+	descs = dict(re.findall(r'\["([^"]+)"\]="([^"]+)"', descs_block_match.group(1)))
+	return colors, descs
+
+
+class _FakeHTTPResponse:
+	def __init__(self, payload: object) -> None:
+		self._body = json.dumps(payload, ensure_ascii=True, sort_keys=True).encode("utf-8")
+
+	def read(self) -> bytes:
+		return self._body
+
+	def __enter__(self) -> "_FakeHTTPResponse":
+		return self
+
+	def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+		return False
+
+
+class _FakeRawHTTPResponse:
+	def __init__(self, body: bytes) -> None:
+		self._body = body
+
+	def read(self) -> bytes:
+		return self._body
+
+	def __enter__(self) -> "_FakeRawHTTPResponse":
+		return self
+
+	def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
+		return False
+
+
+def _set_env(overrides: dict[str, str | None]) -> dict[str, str | None]:
+	previous: dict[str, str | None] = {}
+	for key, value in overrides.items():
+		previous[key] = os.environ.get(key)
+		if value is None:
+			os.environ.pop(key, None)
+		else:
+			os.environ[key] = value
+	return previous
+
+
+def _restore_env(previous: dict[str, str | None]) -> None:
+	for key, value in previous.items():
+		if value is None:
+			os.environ.pop(key, None)
+		else:
+			os.environ[key] = value
+
+
+def _make_sync_contract(tmpdir: Path, labels: dict[str, dict[str, str]]) -> Path:
+	assert len(labels) >= 2
+	contract_path = tmpdir / "label_contract.sync.json"
+	contract_path.write_text(
+		json.dumps(
+			{
+				"schema_version": "label_contract.v1",
+				"labels": labels,
+				"phase_groups": [
+					{
+						"name": "sync_test_phase",
+						"members": list(labels.keys())[:2],
+						"fallback": list(labels.keys())[0],
+					}
+				],
+			},
+			ensure_ascii=True,
+			sort_keys=True,
+		),
+		encoding="utf-8",
+	)
+	return contract_path
+
+
+def _http_error(
+	url: str,
+	code: int,
+	message: str,
+	body: object | None = None,
+	headers: dict[str, str] | None = None,
+) -> urllib.error.HTTPError:
+	payload = body if body is not None else {"message": message}
+	return urllib.error.HTTPError(
+		url,
+		code,
+		message,
+		hdrs=headers,
+		fp=io.BytesIO(json.dumps(payload, ensure_ascii=True, sort_keys=True).encode("utf-8")),
+	)
+
+
+def _run_sync_labels(
+	contract_path: Path,
+	*,
+	responses: list[object],
+	dry_run: bool = False,
+	token: str | None = "test-token",
+	use_main: bool = False,
+	env: dict[str, str | None] | None = None,
+	prefetch_pages: list[object] | None = None,
+	prefetch_log: list[dict[str, str]] | None = None,
+) -> tuple[int, dict[str, object], str, list[dict[str, str]]]:
+	request_log: list[dict[str, str]] = []
+	stdout_lines: list[str] = []
+	stderr_buffer = io.StringIO()
+	response_iter = iter(responses)
+	prefetch_iter = iter(prefetch_pages or [])
+
+	def _fake_urlopen(request: object, timeout: int = 120) -> _FakeHTTPResponse:
+		assert timeout == 120
+		assert isinstance(request, ai_labels.urllib.request.Request)
+		# The label-list prefetch is routed to its own queue so existing tests
+		# keep their per-label response order. With no prefetch pages, it fails
+		# with a non-retried 404 and the sync falls back to per-label GETs.
+		if "/labels?per_page=" in request.full_url:
+			if prefetch_log is not None:
+				prefetch_log.append({"method": request.get_method(), "url": request.full_url})
+			if prefetch_pages is None:
+				raise _http_error(request.full_url, 404, "Not Found")
+			prefetch_response = next(prefetch_iter)
+			if isinstance(prefetch_response, Exception):
+				raise prefetch_response
+			return prefetch_response
+		request_log.append(
+			{
+				"method": request.get_method(),
+				"url": request.full_url,
+				"data": request.data.decode("utf-8") if request.data else "",
+			}
+		)
+		response = next(response_iter)
+		if isinstance(response, Exception):
+			raise response
+		assert hasattr(response, "read")
+		return response
+
+	# RETIRED_LABEL_DRAIN_ENABLED is cleared by default so the ambient
+	# environment cannot change which retired-label path runs.
+	previous_env = _set_env({"GH_TOKEN": token, "GITHUB_TOKEN": None, "RETIRED_LABEL_DRAIN_ENABLED": None, **(env or {})})
+	original_print = ai_labels._print_json
+	original_urlopen = ai_labels.urllib.request.urlopen
+	try:
+		ai_labels._print_json = lambda payload: stdout_lines.append(json.dumps(payload, ensure_ascii=True, sort_keys=True))
+		ai_labels.urllib.request.urlopen = _fake_urlopen
+		with contextlib.redirect_stderr(stderr_buffer):
+			if use_main:
+				argv = [
+					"sync-labels",
+					"--contract-file",
+					str(contract_path),
+					"--repo",
+					"octo-org/octo-repo",
+				]
+				if dry_run:
+					argv.append("--dry-run")
+				rc = ai_labels.main(argv)
+			else:
+				args = argparse.Namespace(
+					contract_file=str(contract_path),
+					repo="octo-org/octo-repo",
+					dry_run=dry_run,
+				)
+				rc = ai_labels.cmd_sync_labels(args)
+	finally:
+		ai_labels._print_json = original_print
+		ai_labels.urllib.request.urlopen = original_urlopen
+		_restore_env(previous_env)
+
+	assert len(stdout_lines) == 1
+	return rc, json.loads(stdout_lines[0]), stderr_buffer.getvalue(), request_log
+
+
+def _request_payload(entry: dict[str, str]) -> dict[str, object]:
+	assert entry["data"]
+	return json.loads(entry["data"])
+
+
+def test_contract_includes_failure_phase_group_and_members():
+	contract = ai_labels.load_label_contract(CONTRACT_PATH)
+	labels = set(contract["labels"].keys())
+	assert set(FAILURE_LABELS).issubset(labels)
+
+	groups = {group["name"]: group for group in contract["phase_groups"]}
+	assert "failure_phase" in groups
+	failure_group = groups["failure_phase"]
+	assert "fallback" not in failure_group
+	assert failure_group["members"] == FAILURE_LABELS
+
+
+def test_repair_labels_enforces_failure_phase_exclusivity():
+	payload = _repair("ai:planning,ai:clarify-failed,ai:plan-failed,ai:log-analysis-failed")
+	assert payload["add"] == []
+	assert payload["remove"] == ["ai:clarify-failed", "ai:plan-failed"]
+
+
+def test_repair_labels_does_not_add_failure_phase_when_absent():
+	payload = _repair("ai:planning")
+	assert payload["add"] == []
+	assert payload["remove"] == []
+
+
+def test_contract_labels_match_helper_color_and_description_catalogs():
+	contract = ai_labels.load_label_contract(CONTRACT_PATH)
+	contract_labels = contract["labels"]
+	helper_colors, helper_descs = _extract_helper_catalog()
+	assert set(helper_colors) == set(contract_labels)
+	assert set(helper_descs) == set(contract_labels)
+	assert helper_colors == {name: metadata["color"] for name, metadata in contract_labels.items()}
+	assert helper_descs == {name: metadata["description"] for name, metadata in contract_labels.items()}
+
+
+GITHUB_LABEL_DESCRIPTION_MAX_CHARS = 100
+
+
+def test_label_descriptions_fit_github_description_limit():
+	# GitHub rejects label descriptions over 100 characters, so the label sync
+	# (scripts/ai_labels.py) and ensure_label_exists (scripts/label_helpers.sh)
+	# could never create a label whose description is longer.
+	contract = ai_labels.load_label_contract(CONTRACT_PATH)
+	_helper_colors, helper_descs = _extract_helper_catalog()
+	overlong_descriptions = {
+		f"{source}:{name}": len(description_text)
+		for source, catalog in (
+			("contract", {name: metadata["description"] for name, metadata in contract["labels"].items()}),
+			("label_helpers.sh", helper_descs),
+		)
+		for name, description_text in catalog.items()
+		if len(description_text) > GITHUB_LABEL_DESCRIPTION_MAX_CHARS
+	}
+	assert overlong_descriptions == {}
+
+
+def test_additive_labels_are_present_and_non_phase():
+	contract = ai_labels.load_label_contract(CONTRACT_PATH)
+	for label in ADDITIVE_LABELS:
+		assert label in contract["labels"]
+		for group in contract["phase_groups"]:
+			assert label not in group.get("members", [])
+			assert label != group.get("fallback")
+
+
+def test_security_pass_labels_are_mutually_exclusive_issue_phases() -> None:
+	contract = ai_labels.load_label_contract(CONTRACT_PATH)
+	issue_phase = next(group for group in contract["phase_groups"] if group["name"] == "issue_phase")
+	security_labels = {
+		"ai:security-pass",
+		"ai:security-pass-fixing",
+		"ai:security-pass-failed",
+	}
+	assert security_labels <= set(issue_phase["members"])
+	for security_label in security_labels:
+		output_lines: list[dict] = []
+		original_print_json = ai_labels._print_json
+		try:
+			ai_labels._print_json = lambda payload: output_lines.append(payload)
+			rc = ai_labels.cmd_resolve_phase(
+				argparse.Namespace(contract_file=str(CONTRACT_PATH), phase=security_label)
+			)
+		finally:
+			ai_labels._print_json = original_print_json
+		assert rc == 0
+		assert output_lines[0]["add"] == [security_label]
+		assert security_labels - {security_label} <= set(output_lines[0]["remove"])
+
+
+def test_additive_labels_survive_repair_alongside_phase_label():
+	for label in ADDITIVE_LABELS:
+		payload = _repair(f"ai:planning,{label}")
+		assert payload["add"] == []
+		assert payload["remove"] == []
+
+
+def test_contract_validate_command_succeeds_with_failure_phase():
+	args = argparse.Namespace(contract_file=str(CONTRACT_PATH))
+	output_lines: list[str] = []
+	original = ai_labels._print_json
+	try:
+		ai_labels._print_json = lambda payload: output_lines.append(json.dumps(payload, ensure_ascii=True, sort_keys=True))
+		rc = ai_labels.cmd_contract_validate(args)
+	finally:
+		ai_labels._print_json = original
+	assert rc == 0
+	payload = json.loads(output_lines[0])
+	assert payload["ok"] is True
+	assert payload["schema_version"] == "label_contract.v1"
+	assert set(FAILURE_LABELS).issubset(set(payload["labels"]))
+
+
+def test_sync_labels_creates_missing_labels() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-create-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
+		responses = [
+			_http_error("https://api.github.com/repos/octo-org/octo-repo/labels/ai%3Aalpha", 404, "Not Found"),
+			_FakeHTTPResponse({"name": "ai:alpha", **SYNC_LABELS["ai:alpha"]}),
+			_http_error("https://api.github.com/repos/octo-org/octo-repo/labels/ai%3Abeta", 404, "Not Found"),
+			_FakeHTTPResponse({"name": "ai:beta", **SYNC_LABELS["ai:beta"]}),
+		]
+		rc, payload, stderr_text, request_log = _run_sync_labels(contract_path, responses=responses)
+
+	assert rc == 0
+	assert payload == {"created": 2, "updated": 0, "unchanged": 0, "deleted": 0, "errors": []}
+	assert [entry["method"] for entry in request_log] == ["GET", "POST", "GET", "POST"]
+	assert _request_payload(request_log[1]) == {"color": "123abc", "description": "Alpha label", "name": "ai:alpha"}
+	assert _request_payload(request_log[3]) == {"color": "abcdef", "description": "Beta label", "name": "ai:beta"}
+	assert stderr_text.count("LABEL_SYNC_CREATED:") == 2
+
+
+def test_sync_labels_leaves_matching_labels_unchanged() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-unchanged-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
+		responses = [
+			_FakeHTTPResponse({"name": "ai:alpha", **SYNC_LABELS["ai:alpha"]}),
+			_FakeHTTPResponse({"name": "ai:beta", **SYNC_LABELS["ai:beta"]}),
+		]
+		rc, payload, stderr_text, request_log = _run_sync_labels(contract_path, responses=responses)
+
+	assert rc == 0
+	assert payload == {"created": 0, "updated": 0, "unchanged": 2, "deleted": 0, "errors": []}
+	assert [entry["method"] for entry in request_log] == ["GET", "GET"]
+	assert stderr_text.count("LABEL_SYNC_UNCHANGED:") == 2
+
+
+def test_sync_labels_updates_mismatched_labels() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-update-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
+		responses = [
+			_FakeHTTPResponse({"name": "ai:alpha", "color": "000000", "description": "Old alpha"}),
+			_FakeHTTPResponse({"name": "ai:alpha", **SYNC_LABELS["ai:alpha"]}),
+			_FakeHTTPResponse({"name": "ai:beta", "color": "ffffff", "description": "Old beta"}),
+			_FakeHTTPResponse({"name": "ai:beta", **SYNC_LABELS["ai:beta"]}),
+		]
+		rc, payload, stderr_text, request_log = _run_sync_labels(contract_path, responses=responses)
+
+	assert rc == 0
+	assert payload == {"created": 0, "updated": 2, "unchanged": 0, "deleted": 0, "errors": []}
+	assert [entry["method"] for entry in request_log] == ["GET", "PATCH", "GET", "PATCH"]
+	assert _request_payload(request_log[1]) == {"color": "123abc", "description": "Alpha label"}
+	assert _request_payload(request_log[3]) == {"color": "abcdef", "description": "Beta label"}
+	assert stderr_text.count("LABEL_SYNC_UPDATED:") == 2
+
+
+def test_sync_labels_records_partial_errors_and_continues() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-partial-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
+		responses = [
+			_FakeHTTPResponse({"name": "ai:alpha", **SYNC_LABELS["ai:alpha"]}),
+			_http_error("https://api.github.com/repos/octo-org/octo-repo/labels/ai%3Abeta", 404, "Not Found"),
+			_http_error(
+				"https://api.github.com/repos/octo-org/octo-repo/labels",
+				422,
+				"Unprocessable Entity",
+				{"message": "Validation Failed", "errors": [{"field": "color", "code": "invalid"}]},
+			),
+		]
+		rc, payload, stderr_text, request_log = _run_sync_labels(contract_path, responses=responses)
+
+	assert rc == 0
+	assert payload["created"] == 0
+	assert payload["updated"] == 0
+	assert payload["unchanged"] == 1
+	assert payload["errors"] == [
+		{
+			"action": "create",
+			"label": "ai:beta",
+			"message": 'Validation Failed: [{"code": "invalid", "field": "color"}]',
+			"status": 422,
+		}
+	]
+	assert [entry["method"] for entry in request_log] == ["GET", "GET", "POST"]
+	assert "LABEL_SYNC_UNCHANGED:" in stderr_text
+	assert "LABEL_SYNC_ERROR:" in stderr_text
+
+
+def test_sync_labels_treats_matching_already_exists_create_conflict_as_created() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-create-conflict-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), {"ai:alpha": SYNC_LABELS["ai:alpha"], "ai:beta": SYNC_LABELS["ai:beta"]})
+		responses = [
+			_http_error("https://api.github.com/repos/octo-org/octo-repo/labels/ai%3Aalpha", 404, "Not Found"),
+			_http_error(
+				"https://api.github.com/repos/octo-org/octo-repo/labels",
+				422,
+				"Unprocessable Entity",
+				{"message": "Validation Failed", "errors": [{"field": "name", "code": "already_exists"}]},
+			),
+			_FakeHTTPResponse({"name": "ai:alpha", **SYNC_LABELS["ai:alpha"]}),
+			_FakeHTTPResponse({"name": "ai:beta", **SYNC_LABELS["ai:beta"]}),
+		]
+		rc, payload, stderr_text, request_log = _run_sync_labels(contract_path, responses=responses)
+
+	assert rc == 0
+	assert payload == {"created": 1, "updated": 0, "unchanged": 1, "deleted": 0, "errors": []}
+	assert [entry["method"] for entry in request_log] == ["GET", "POST", "GET", "GET"]
+	assert "resolved already_exists conflict by re-reading label" in stderr_text
+
+
+def test_sync_labels_returns_nonzero_when_every_label_fails() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-fail-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
+		responses = [
+			_http_error("https://api.github.com/repos/octo-org/octo-repo/labels/ai%3Aalpha", 401, "Unauthorized"),
+			_http_error("https://api.github.com/repos/octo-org/octo-repo/labels/ai%3Abeta", 403, "Forbidden"),
+		]
+		rc, payload, stderr_text, request_log = _run_sync_labels(contract_path, responses=responses, use_main=True)
+
+	assert rc == 1
+	assert payload["created"] == 0
+	assert payload["updated"] == 0
+	assert payload["unchanged"] == 0
+	assert len(payload["errors"]) == 2
+	assert [entry["method"] for entry in request_log] == ["GET", "GET"]
+	assert stderr_text.count("LABEL_SYNC_ERROR:") == 2
+
+
+def test_sync_labels_retries_rate_limited_requests() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-retry-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
+		responses = [
+			_http_error(
+				"https://api.github.com/repos/octo-org/octo-repo/labels/ai%3Aalpha",
+				429,
+				"Too Many Requests",
+				headers={"Retry-After": "60"},
+			),
+			_FakeHTTPResponse({"name": "ai:alpha", **SYNC_LABELS["ai:alpha"]}),
+			_FakeHTTPResponse({"name": "ai:beta", **SYNC_LABELS["ai:beta"]}),
+		]
+		sleep_calls: list[float] = []
+		original_sleep = ai_labels.time.sleep
+		original_uniform = ai_labels.random.uniform
+		try:
+			ai_labels.time.sleep = lambda seconds: sleep_calls.append(seconds)
+			ai_labels.random.uniform = lambda _start, _end: 0.0
+			rc, payload, stderr_text, request_log = _run_sync_labels(contract_path, responses=responses)
+		finally:
+			ai_labels.time.sleep = original_sleep
+			ai_labels.random.uniform = original_uniform
+
+	assert rc == 0
+	assert payload == {"created": 0, "updated": 0, "unchanged": 2, "deleted": 0, "errors": []}
+	assert [entry["method"] for entry in request_log] == ["GET", "GET", "GET"]
+	assert sleep_calls == [60.0]
+	assert stderr_text.count("LABEL_SYNC_UNCHANGED:") == 2
+
+
+def test_sync_labels_records_non_json_success_bodies() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-non-json-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
+		responses = [
+			_FakeRawHTTPResponse(b"<html>ok</html>"),
+			_FakeHTTPResponse({"name": "ai:beta", **SYNC_LABELS["ai:beta"]}),
+		]
+		rc, payload, stderr_text, request_log = _run_sync_labels(contract_path, responses=responses)
+
+	assert rc == 0
+	assert payload["created"] == 0
+	assert payload["updated"] == 0
+	assert payload["unchanged"] == 1
+	assert payload["errors"] == [
+		{
+			"action": "get",
+			"label": "ai:alpha",
+			"message": "GitHub API returned non-JSON response for GET repos/octo-org/octo-repo/labels/ai%3Aalpha: <html>ok</html>",
+		}
+	]
+	assert [entry["method"] for entry in request_log] == ["GET", "GET"]
+	assert "LABEL_SYNC_ERROR:" in stderr_text
+
+
+def test_sync_labels_dry_run_skips_mutations() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-dry-run-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
+		responses = [
+			_http_error("https://api.github.com/repos/octo-org/octo-repo/labels/ai%3Aalpha", 404, "Not Found"),
+			_FakeHTTPResponse({"name": "ai:beta", "color": "000000", "description": "Old beta"}),
+		]
+		rc, payload, stderr_text, request_log = _run_sync_labels(
+			contract_path,
+			responses=responses,
+			dry_run=True,
+			token=None,
+		)
+
+	assert rc == 0
+	assert payload == {"created": 1, "updated": 1, "unchanged": 0, "deleted": 0, "errors": []}
+	assert [entry["method"] for entry in request_log] == ["GET", "GET"]
+	assert "LABEL_SYNC_CREATED:" in stderr_text
+	assert "LABEL_SYNC_UPDATED:" in stderr_text
+
+
+def test_sync_labels_rejects_overlong_label_name_before_api_calls() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-label-name-") as tmpdir:
+		label_name = "ai:" + ("x" * 48)
+		contract_path = _make_sync_contract(Path(tmpdir), {
+			label_name: {"color": "123abc", "description": "Alpha label"},
+			"ai:beta": SYNC_LABELS["ai:beta"],
+		})
+		responses = [
+			_FakeHTTPResponse({"name": "ai:beta", **SYNC_LABELS["ai:beta"]}),
+		]
+		rc, payload, stderr_text, request_log = _run_sync_labels(contract_path, responses=responses)
+
+	assert rc == 0
+	assert payload["created"] == 0
+	assert payload["updated"] == 0
+	assert payload["unchanged"] == 1
+	assert payload["errors"] == [
+		{
+			"action": "validate",
+			"label": label_name,
+			"message": "label name exceeds GitHub's 50-character limit (51)",
+		}
+	]
+	assert [entry["method"] for entry in request_log] == ["GET"]
+	assert "LABEL_SYNC_ERROR:" in stderr_text
+
+
+def test_sync_labels_rejects_invalid_repo_before_api_calls() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-invalid-repo-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
+		stderr_buffer = io.StringIO()
+		urlopen_called = False
+		previous_env = _set_env({"GH_TOKEN": "test-token", "GITHUB_TOKEN": None})
+		original_urlopen = ai_labels.urllib.request.urlopen
+		try:
+			def _unexpected_urlopen(request: object, timeout: int = 120) -> _FakeHTTPResponse:
+				nonlocal urlopen_called
+				urlopen_called = True
+				raise AssertionError(f"urlopen should not be called for invalid repo: {request!r} {timeout!r}")
+
+			ai_labels.urllib.request.urlopen = _unexpected_urlopen
+			with contextlib.redirect_stderr(stderr_buffer):
+				rc = ai_labels.main(
+					[
+						"sync-labels",
+						"--contract-file",
+						str(contract_path),
+						"--repo",
+						"octo-org",
+					]
+				)
+		finally:
+			ai_labels.urllib.request.urlopen = original_urlopen
+			_restore_env(previous_env)
+
+	assert rc == 2
+	assert urlopen_called is False
+	assert "repo must be in 'owner/name' format" in stderr_buffer.getvalue()
+
+
+def test_repair_labels_keeps_needs_human_parked_on_blocked():
+	payload = _repair("ai:needs-human,ai:orchestrator-managed,ai:blocked")
+	assert payload["add"] == []
+	assert payload["remove"] == []
+
+
+def test_repair_labels_keeps_needs_human_parked_on_review_blocked_and_implementation_failed():
+	assert _repair("ai:needs-human,ai:review-blocked")["remove"] == []
+	assert _repair("ai:needs-human,ai:implementation-failed")["remove"] == []
+
+
+def test_repair_labels_keeps_needs_human_and_latest_stop_label_only():
+	payload = _repair("ai:needs-human,ai:awaiting-approval,ai:blocked")
+	assert payload["add"] == []
+	assert payload["remove"] == ["ai:awaiting-approval"]
+
+
+def test_repair_labels_needs_human_still_wins_over_earlier_phases():
+	payload = _repair("ai:needs-human,ai:awaiting-approval,ai:implementing")
+	assert payload["add"] == []
+	assert payload["remove"] == ["ai:awaiting-approval", "ai:implementing"]
+
+
+def test_repair_labels_terminal_phase_drops_needs_human():
+	payload = _repair("ai:needs-human,ai:blocked,ai:merged")
+	assert payload["add"] == []
+	assert payload["remove"] == ["ai:blocked", "ai:needs-human"]
+
+
+WAITING_ON_DEPENDENCY_LABEL = "ai:waiting-on-dependency"
+
+
+def test_contract_declares_waiting_on_dependency_issue_phase():
+	contract = ai_labels.load_label_contract(CONTRACT_PATH)
+	assert contract["labels"][WAITING_ON_DEPENDENCY_LABEL]["color"] == "fbca04"
+	issue_phase = next(group for group in contract["phase_groups"] if group["name"] == "issue_phase")
+	members = issue_phase["members"]
+	assert WAITING_ON_DEPENDENCY_LABEL in members
+	assert members.index(WAITING_ON_DEPENDENCY_LABEL) + 1 == members.index("ai:blocked")
+
+
+def test_repair_labels_waiting_on_dependency_beats_stage_but_not_latches():
+	assert _repair(f"ai:planning,{WAITING_ON_DEPENDENCY_LABEL}")["remove"] == ["ai:planning"]
+	blocked_payload = _repair(f"ai:blocked,{WAITING_ON_DEPENDENCY_LABEL}")
+	assert blocked_payload["add"] == []
+	assert blocked_payload["remove"] == [WAITING_ON_DEPENDENCY_LABEL]
+	needs_human_payload = _repair(f"ai:needs-human,{WAITING_ON_DEPENDENCY_LABEL}")
+	assert needs_human_payload["add"] == []
+	assert needs_human_payload["remove"] == []
+
+
+def _label_page(labels: list[dict[str, str]]) -> _FakeHTTPResponse:
+	return _FakeHTTPResponse(labels)
+
+
+def test_sync_labels_rejects_overlong_description_before_get() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-overlong-desc-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), {
+			"ai:alpha": {"color": "123abc", "description": "d" * 101},
+			"ai:beta": SYNC_LABELS["ai:beta"],
+		})
+		responses = [
+			_FakeHTTPResponse({"name": "ai:beta", **SYNC_LABELS["ai:beta"]}),
+		]
+		rc, payload, stderr_text, request_log = _run_sync_labels(contract_path, responses=responses)
+
+	assert rc == 0
+	assert payload["unchanged"] == 1
+	assert payload["errors"] == [
+		{
+			"action": "validate",
+			"label": "ai:alpha",
+			"message": "description exceeds GitHub's 100-character limit (101)",
+		}
+	]
+	assert [entry["method"] for entry in request_log] == ["GET"]
+	assert all("ai%3Aalpha" not in entry["url"] for entry in request_log)
+	assert "LABEL_SYNC_ERROR:" in stderr_text
+
+
+def test_sync_labels_all_invalid_contract_makes_no_github_request() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-all-invalid-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), {
+			"ai:alpha": {"color": "123abc", "description": "a" * 101},
+			"ai:beta": {"color": "abcdef", "description": "b" * 120},
+		})
+		prefetch_log: list[dict[str, str]] = []
+		rc, payload, _stderr_text, request_log = _run_sync_labels(
+			contract_path,
+			responses=[],
+			prefetch_pages=[],
+			prefetch_log=prefetch_log,
+		)
+
+	assert rc == 1
+	assert [error["action"] for error in payload["errors"]] == ["validate", "validate"]
+	assert prefetch_log == []
+	assert request_log == []
+
+
+def test_sync_labels_prefetch_avoids_per_label_gets() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-prefetch-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
+		api_calls: list[tuple[str, str]] = []
+		original_request = ai_labels._github_api_request
+
+		def _counting_request(path: str, *, method: str = "GET", payload: object = None, require_token: bool = False) -> object:
+			api_calls.append((method, path))
+			if path.startswith("repos/octo-org/octo-repo/labels?per_page="):
+				return [
+					{"name": "ai:alpha", **SYNC_LABELS["ai:alpha"]},
+					{"name": "ai:beta", "color": "000000", "description": "Old beta"},
+				]
+			raise AssertionError(f"unexpected API call: {method} {path}")
+
+		stdout_lines: list[str] = []
+		original_print = ai_labels._print_json
+		stderr_buffer = io.StringIO()
+		try:
+			ai_labels._github_api_request = _counting_request
+			ai_labels._print_json = lambda payload: stdout_lines.append(json.dumps(payload, ensure_ascii=True, sort_keys=True))
+			with contextlib.redirect_stderr(stderr_buffer):
+				rc = ai_labels.cmd_sync_labels(
+					argparse.Namespace(contract_file=str(contract_path), repo="octo-org/octo-repo", dry_run=True)
+				)
+		finally:
+			ai_labels._github_api_request = original_request
+			ai_labels._print_json = original_print
+
+	assert rc == 0
+	payload = json.loads(stdout_lines[0])
+	assert payload == {"created": 0, "updated": 1, "unchanged": 1, "deleted": 0, "errors": []}
+	assert api_calls == [("GET", "repos/octo-org/octo-repo/labels?per_page=100&page=1")]
+	assert all("/labels/ai%3A" not in path for _method, path in api_calls)
+	assert "prefetch unavailable" not in stderr_buffer.getvalue()
+
+
+def test_sync_labels_prefetch_matches_label_names_case_insensitively() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-prefetch-case-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
+		prefetch_pages = [
+			_label_page([
+				{"name": "AI:Alpha", **SYNC_LABELS["ai:alpha"]},
+				{"name": "ai:beta", **SYNC_LABELS["ai:beta"]},
+			]),
+		]
+		rc, payload, _stderr_text, request_log = _run_sync_labels(
+			contract_path,
+			responses=[],
+			prefetch_pages=prefetch_pages,
+		)
+
+	assert rc == 0
+	assert payload == {"created": 0, "updated": 0, "unchanged": 2, "deleted": 0, "errors": []}
+	assert request_log == []
+
+
+def test_sync_labels_prefetch_failure_falls_back_to_per_label_gets() -> None:
+	failing_prefetches: list[object] = [
+		_http_error("https://api.github.com/repos/octo-org/octo-repo/labels?per_page=100&page=1", 403, "Forbidden"),
+		_FakeHTTPResponse({"name": "not-a-list"}),
+		ai_labels.http.client.IncompleteRead(b""),
+	]
+	for failing_prefetch in failing_prefetches:
+		with tempfile.TemporaryDirectory(prefix="ai-label-sync-prefetch-fallback-") as tmpdir:
+			contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
+			responses = [
+				_FakeHTTPResponse({"name": "ai:alpha", "color": "000000", "description": "Old alpha"}),
+				_FakeHTTPResponse({"name": "ai:alpha", **SYNC_LABELS["ai:alpha"]}),
+				_FakeHTTPResponse({"name": "ai:beta", "color": "ffffff", "description": "Old beta"}),
+				_FakeHTTPResponse({"name": "ai:beta", **SYNC_LABELS["ai:beta"]}),
+			]
+			prefetch_log: list[dict[str, str]] = []
+			rc, payload, stderr_text, request_log = _run_sync_labels(
+				contract_path,
+				responses=responses,
+				prefetch_pages=[failing_prefetch],
+				prefetch_log=prefetch_log,
+			)
+
+		assert rc == 0
+		assert payload == {"created": 0, "updated": 2, "unchanged": 0, "deleted": 0, "errors": []}
+		assert [entry["method"] for entry in request_log] == ["GET", "PATCH", "GET", "PATCH"]
+		assert len(prefetch_log) == 1
+		assert "label list prefetch unavailable" in stderr_text
+		assert "falling back to per-label GET for 2 labels" in stderr_text
+
+
+def test_sync_labels_fallback_records_truncated_per_label_get() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-fallback-truncated-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
+		responses = [
+			ai_labels.http.client.IncompleteRead(b""),
+			_FakeHTTPResponse({"name": "ai:beta", **SYNC_LABELS["ai:beta"]}),
+		]
+		rc, payload, stderr_text, request_log = _run_sync_labels(contract_path, responses=responses)
+
+	assert rc == 0
+	assert payload["unchanged"] == 1
+	assert len(payload["errors"]) == 1
+	assert payload["errors"][0]["action"] == "get"
+	assert payload["errors"][0]["label"] == "ai:alpha"
+	assert [entry["method"] for entry in request_log] == ["GET", "GET"]
+	assert "LABEL_SYNC_ERROR:" in stderr_text
+
+
+def test_sync_labels_prefetch_paginates_across_two_pages() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-prefetch-pages-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
+		filler_labels = [
+			{"name": f"filler-{index:03d}", "color": "eeeeee", "description": "Filler"}
+			for index in range(ai_labels.LABEL_SYNC_PREFETCH_PAGE_SIZE)
+		]
+		prefetch_pages = [
+			_label_page(filler_labels),
+			_label_page([
+				{"name": "ai:alpha", **SYNC_LABELS["ai:alpha"]},
+				{"name": "ai:beta", **SYNC_LABELS["ai:beta"]},
+			]),
+		]
+		prefetch_log: list[dict[str, str]] = []
+		rc, payload, stderr_text, request_log = _run_sync_labels(
+			contract_path,
+			responses=[],
+			prefetch_pages=prefetch_pages,
+			prefetch_log=prefetch_log,
+		)
+
+	assert rc == 0
+	assert payload == {"created": 0, "updated": 0, "unchanged": 2, "deleted": 0, "errors": []}
+	assert [entry["url"].rsplit("&", 1)[-1] for entry in prefetch_log] == ["page=1", "page=2"]
+	assert request_log == []
+	assert "prefetch unavailable" not in stderr_text
+
+
+def test_sync_labels_prefetch_missing_label_counts_as_not_found() -> None:
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-prefetch-missing-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
+		prefetch_pages = [
+			_label_page([{"name": "ai:alpha", **SYNC_LABELS["ai:alpha"]}]),
+		]
+		rc, payload, stderr_text, request_log = _run_sync_labels(
+			contract_path,
+			responses=[],
+			dry_run=True,
+			token=None,
+			prefetch_pages=prefetch_pages,
+		)
+
+	assert rc == 0
+	assert payload == {"created": 1, "updated": 0, "unchanged": 1, "deleted": 0, "errors": []}
+	assert request_log == []
+	assert "LABEL_SYNC_CREATED: repo=octo-org/octo-repo label=ai:beta" in stderr_text
+
+
+def test_sync_labels_prefetch_page_cap_falls_back() -> None:
+	full_page = [
+		{"name": f"filler-{index:03d}", "color": "eeeeee", "description": "Filler"}
+		for index in range(ai_labels.LABEL_SYNC_PREFETCH_PAGE_SIZE)
+	]
+	with tempfile.TemporaryDirectory(prefix="ai-label-sync-prefetch-cap-") as tmpdir:
+		contract_path = _make_sync_contract(Path(tmpdir), SYNC_LABELS)
+		prefetch_pages = [
+			_label_page([
+				{"name": f"p{page_index}-{entry['name']}", "color": "eeeeee", "description": "Filler"}
+				for entry in full_page
+			])
+			for page_index in range(ai_labels.LABEL_SYNC_PREFETCH_MAX_PAGES)
+		]
+		responses = [
+			_FakeHTTPResponse({"name": "ai:alpha", **SYNC_LABELS["ai:alpha"]}),
+			_FakeHTTPResponse({"name": "ai:beta", **SYNC_LABELS["ai:beta"]}),
+		]
+		rc, payload, stderr_text, request_log = _run_sync_labels(
+			contract_path,
+			responses=responses,
+			prefetch_pages=prefetch_pages,
+		)
+
+	assert rc == 0
+	assert payload == {"created": 0, "updated": 0, "unchanged": 2, "deleted": 0, "errors": []}
+	assert [entry["method"] for entry in request_log] == ["GET", "GET"]
+	assert "reason=page cap reached" in stderr_text
+
+
+def main() -> int:
+	for name in sorted(globals()):
+		if name.startswith("test_") and callable(globals()[name]):
+			globals()[name]()
+	return 0
+
+
+if __name__ == "__main__":
+	raise SystemExit(main())
