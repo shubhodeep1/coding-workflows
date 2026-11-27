@@ -2952,6 +2952,68 @@ def test_pat_budget_daily_ranking_is_hourly_deduped_and_discloses_gaps():
 	assert "No measured job-end deltas" in missing_report
 
 
+def test_pat_budget_line_parses_call_counter_keys():
+	"""Issue #9887: old and new GH_PAT_BUDGET end lines parse; jobs rank by calls_in_job."""
+	old = "GH_PAT_BUDGET phase=end workflow=clarify job=clarify remaining=10 reset=500 used_in_job=4"
+	new = (old + " calls_in_job=12 paginated_in_job=2 calls_by_token=pat:10,github_token:1,other:1")
+	unknown = (old + " calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown")
+	old_match = collector.PAT_BUDGET_LINE.fullmatch(old)
+	assert old_match is not None and old_match.group(4) == "4" and old_match.group(5) is None
+	new_match = collector.PAT_BUDGET_LINE.fullmatch(new)
+	assert new_match is not None
+	assert new_match.group(2, 3, 4) == ("clarify", "clarify", "4")
+	assert new_match.group(5, 6, 7) == ("12", "2", "pat:10,github_token:1,other:1")
+	assert collector.PAT_BUDGET_LINE.fullmatch(unknown).group(5) == "unknown"
+	release = ("2026-10-05T10:00:00Z GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=e2e-smoke-test "
+		"remaining=unknown reset=unknown used_in_job=unknown calls_in_job=3 paginated_in_job=0 "
+		"calls_by_token=pat:3,github_token:0,other:0")
+	assert collector.PAT_BUDGET_LINE.fullmatch(release).group(3) == "e2e-smoke-test"
+	assert collector.PAT_BUDGET_WORKFLOWS["test-and-mark-stable.yml"] == "test-and-mark-stable"
+	# Injected text after the keys never matches.
+	assert collector.PAT_BUDGET_LINE.fullmatch(new + " extra=1") is None
+	assert collector.PAT_BUDGET_LINE.fullmatch(old + " calls_in_job=1 paginated_in_job=0 calls_by_token=Pat:1") is None
+
+	day = datetime(2026, 10, 5, tzinfo=timezone.utc)
+	texts = {
+		1: "2026-10-05T10:20:00Z " + new + "\n",
+		2: ("2026-10-05T11:20:00Z GH_PAT_BUDGET phase=end workflow=clarify job=clarify remaining=9 reset=500 "
+			"used_in_job=unknown calls_in_job=5 paginated_in_job=1 calls_by_token=pat:4,github_token:0,other:1\n"),
+		3: ("2026-10-05T10:30:00Z GH_PAT_BUDGET phase=end workflow=review_autofix job=gate remaining=4 reset=500 "
+			"used_in_job=12 calls_in_job=30 paginated_in_job=0 calls_by_token=pat:20,github_token:10,other:0\n"),
+		4: "2026-10-05T10:40:00Z GH_PAT_BUDGET phase=end workflow=review_autofix job=gate remaining=2 reset=500 used_in_job=2\n",
+		5: release + "\n",
+	}
+	paths = {1: "internal-clarify.yml", 2: "internal-clarify.yml", 3: "internal-review.yml",
+		4: "internal-review.yml", 5: "test-and-mark-stable.yml"}
+	runs = [
+		{"repository": "owner/repo", "run_id": run_id, "run_attempt": 1,
+			"workflow_path": f".github/workflows/{paths[run_id]}",
+			"created_at": "2026-10-05T09:00:00Z", "updated_at": "2026-10-05T11:49:00Z"}
+		for run_id in texts
+	]
+
+	def archive_for(run_id: int) -> bytes:
+		buffer = io.BytesIO()
+		with zipfile.ZipFile(buffer, mode="w") as zipped:
+			zipped.writestr("job/step.log", texts[run_id])
+		return buffer.getvalue()
+
+	with patch.object(collector, "_fetch_run_log_archive", side_effect=lambda repo, run_id, **kwargs: archive_for(run_id)):
+		report = collector.build_pat_budget_report(runs, day, "test-token", None)
+	# The hourly used_in_job table keeps its shape (runs 3 and 4 share the hour).
+	assert "| 2026-10-05 10:00 | 1 | review_autofix / gate | 14 | 2 |" in report
+	assert "### Top consumers by calls_in_job (UTC 2026-10-05)" in report
+	assert "Coverage: 1 job-end lines without calls_in_job." in report
+	assert "| 1 | review_autofix / gate | 30 | 0 | 20 | 10 | 0 | 1 |" in report
+	assert "| 2 | clarify / clarify | 17 | 3 | 14 | 1 | 2 | 2 |" in report
+	assert "| 3 | test-and-mark-stable / e2e-smoke-test | 3 | 0 | 3 | 0 | 0 | 1 |" in report
+	assert report.index("| 1 | review_autofix / gate | 30 |") < report.index("| 2 | clarify / clarify | 17 |")
+
+	with patch.object(collector, "_fetch_run_log_archive", side_effect=lambda repo, run_id, **kwargs: archive_for(4)):
+		legacy_only = collector.build_pat_budget_report(runs[3:4], day, "test-token", None)
+	assert "| No jobs reported calls_in_job | | | | | | | |" in legacy_only
+
+
 def test_pat_budget_workflow_listing_marks_api_ceiling_incomplete():
 	day = datetime(2026, 10, 5, tzinfo=timezone.utc)
 	with patch.object(collector, "gh_api_json", return_value=(
