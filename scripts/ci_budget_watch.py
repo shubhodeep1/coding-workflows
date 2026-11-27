@@ -19,9 +19,11 @@ default branch, after the test jobs. It checks:
   Its finding subject is `test-and-mark-stable.yml/<job>` so it cannot share
   a dedup marker with a `ci.yml` job of the same name. Matrix legs
   (`validate-scripts (orchestrate-poll)`) use the base job's timeout. A job
-  reported under the bare id of a job that now defines `strategy.matrix` comes
-  from a run before the split and is skipped as stale (`stale_jobs=N` on the
-  `CI_BUDGET_GATE outcome=read` line). A gate issue links the measured run.
+  reported under the bare id of a job that now defines `strategy.matrix` is
+  never measured. Unless its conclusion is `skipped` (a post-split matrix job
+  skipped at job level by a failed `needs:`, listed under its bare name), it
+  comes from a run before the split and is counted as stale (`stale_jobs=N` on
+  the `CI_BUDGET_GATE outcome=read` line). A gate issue links the measured run.
 
 For every finding it prints a `::warning::` and makes sure exactly one open
 issue labelled `ai:ci-budget` exists for it (deduplicated by a hidden marker
