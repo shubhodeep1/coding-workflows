@@ -725,6 +725,8 @@ jobs:
           FINAL_CI_REPAIR_ENABLED: ${{ vars.FINAL_CI_REPAIR_ENABLED || 'true' }}
           # Review a verified repair commit on its own diff (Phase 3).
           FINAL_CI_REPAIR_DELTA_REVIEW_ENABLED: ${{ vars.FINAL_CI_REPAIR_DELTA_REVIEW_ENABLED || 'true' }}
+          # #10183: a now-green approved head goes to deterministic-skip-merge.
+          FINAL_CI_NOW_GREEN_MERGE_ENABLED: ${{ vars.FINAL_CI_NOW_GREEN_MERGE_ENABLED || 'true' }}
           POST_SYNC_TEST_REPAIR: ${{ inputs.post_sync_test_repair && 'true' || 'false' }}
           # Same expression as the retrigger_guard step: a stall-poller
           # force_rb_judge dispatch must never be swallowed by the terminal

@@ -1848,6 +1848,72 @@ if [ "${SHOULD_RUN}" != "true" ] && [ "${pr_state}" = "open" ] \
   fi
 fi
 
+# ----- Final-CI now-green merge route (issue #10183) -----
+# Called only from the final_ci_now_green branch below (SHOULD_RUN already
+# false, no repair). Routes the approved head to the deterministic-skip-merge
+# job, which runs the base-freshness check (branch update and final CI when
+# the base moved), the merge lease, the required-checks wait and the squash
+# auto-merge. The det-skip suppressors above only ran for a doc-only /
+# small-diff candidate, so each block is recomputed here; the first match
+# keeps the #10023 ending. Switch FINAL_CI_NOW_GREEN_MERGE_ENABLED (default
+# true): only empty or true routes; any other value warns and counts as off.
+# Reads only variables the gate already holds (no API call, CLAUDE.md §14).
+# Log: FINAL_CI_NOW_GREEN_MERGE pr=<n> head=<sha> outcome=routed|not_routed ...
+gate_final_ci_now_green_merge_route()
+{
+  local final_ci_now_green_merge_switch final_ci_now_green_merge_block="" final_ci_now_green_merge_detail=""
+  final_ci_now_green_merge_switch="$(printf '%s' "${FINAL_CI_NOW_GREEN_MERGE_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
+  case "${final_ci_now_green_merge_switch}" in
+    ''|true) ;;
+    false) final_ci_now_green_merge_block="disabled" ;;
+    *)
+      echo "::warning::FINAL_CI_NOW_GREEN_MERGE_ENABLED has an unrecognised value; the run ends as before. Use true or false."
+      final_ci_now_green_merge_block="disabled"
+      ;;
+  esac
+  if [ -z "${final_ci_now_green_merge_block}" ] && [ "${FORCE_REVIEW:-false}" = "true" ]; then
+    final_ci_now_green_merge_block="force_review"
+  fi
+  if [ -z "${final_ci_now_green_merge_block}" ] && [ "${CLAUDE_BRANCH_REVIEW:-false}" = "true" ]; then
+    final_ci_now_green_merge_block="claude_branch_review"
+  fi
+  if [ -z "${final_ci_now_green_merge_block}" ] && [ "${workflow_sync_head_unmanaged:-false}" = "true" ]; then
+    final_ci_now_green_merge_block="workflow_sync_unmanaged"
+  fi
+  # Same conflict test as gate_freshness_sync_fast_path: the skip job runs no
+  # conflict resolver. A null/empty mergeable (not computed yet) fails open.
+  if [ -z "${final_ci_now_green_merge_block}" ] \
+    && { [ "${pr_mergeable:-}" = "false" ] || [ "${pr_mergeable_state:-}" = "dirty" ]; }; then
+    final_ci_now_green_merge_block="conflict"
+  fi
+  # Same single-issue security pass eligibility as gate_freshness_sync_fast_path
+  # (#8333): the skip job runs the pass only with AUTOFIX_SKIP_RUNS_SECURITY_PASS.
+  if [ -z "${final_ci_now_green_merge_block}" ] \
+    && [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-false}" != "false" ] \
+    && [ -n "${DEFAULT_BRANCH:-}" ] && [ "${pr_base_ref:-}" = "${DEFAULT_BRANCH}" ] \
+    && [ "${pr_head_repo:-}" = "${REPOSITORY:-}" ] \
+    && ! [[ "${pr_head_ref:-}" =~ ${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-} ]] \
+    && [[ ",${pr_labels:-}," != *,e2e-smoke-test,* ]]; then
+    if [ "${AUTOFIX_SKIP_RUNS_SECURITY_PASS:-false}" != "true" ]; then
+      final_ci_now_green_merge_block="security_pass"
+      final_ci_now_green_merge_detail=" detail=skip_job_pass_off"
+    elif [[ ",${pr_labels:-}," == *,ai:security-pass-failed,* ]]; then
+      final_ci_now_green_merge_block="security_pass"
+      final_ci_now_green_merge_detail=" detail=security_pass_failed"
+    else
+      DET_SKIP_SECURITY_PASS_REQUIRED="true"
+    fi
+  fi
+  if [ -n "${final_ci_now_green_merge_block}" ]; then
+    echo "FINAL_CI_NOW_GREEN_MERGE pr=${PR_NUMBER} head=${pr_head_sha_gate} outcome=not_routed reason=${final_ci_now_green_merge_block}${final_ci_now_green_merge_detail}"
+    return 1
+  fi
+  DETERMINISTIC_SKIP="true"
+  DET_SKIP_REASON="final_ci_now_green"
+  echo "FINAL_CI_NOW_GREEN_MERGE pr=${PR_NUMBER} head=${pr_head_sha_gate} outcome=routed det_skip_reason=final_ci_now_green"
+  return 0
+}
+
 # ----- Final-CI repair (docs/plans/final-ci-failure-ci-fix-plan.md Phase 2) -----
 # A run that will review an approved head whose final CI failed runs the
 # CI-fix path (review_autofix.yml "Integration post-sync test repair" with
@@ -1872,6 +1938,12 @@ fi
 #     skip_reason=final_ci_now_green; FINAL_CI_REPAIR ... outcome=skipped
 #     reason=final_ci_now_green): the failed attempt turned green, so the
 #     marker counts as answered and the approved head is left as it is.
+#     With FINAL_CI_NOW_GREEN_MERGE_ENABLED on (default true, issue #10183)
+#     the run is also routed to the deterministic-skip-merge job
+#     (deterministic_skip=true, det_skip_reason=final_ci_now_green), so the
+#     base-freshness check, final CI, merge lease and merge still run; see
+#     gate_final_ci_now_green_merge_route for the blocks that keep the
+#     old ending.
 # final_ci_repair_attempt carries the repair's ordinal (1 or 2) for its
 # marker. API cost (CLAUDE.md §15): the comments come from the shared
 # gate_fetch_marker_comments read; one GET commits/<head>/statuses runs only
@@ -1991,6 +2063,9 @@ PY
           # This echo is the only searchable line for it (issue #4985); no
           # GATE_SKIP_RECORDED is set because nothing reads it after that point.
           echo "AUTOFIX_GATE_SKIP reason=final_ci_now_green pr=${PR_NUMBER} head_sha=${pr_head_sha_gate}"
+          # Issue #10183: send the approved head to the merge path. The
+          # result never changes SHOULD_RUN (no repair, no panel either way).
+          gate_final_ci_now_green_merge_route || true
         elif [ "${final_ci_head_gate_state}" = "success" ] \
           && [ "$(printf '%s' "${final_ci_head_gate_creator}" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "${gate_marker_author_login}" | tr '[:upper:]' '[:lower:]')" ]; then
           FINAL_CI_REPAIR="true"
