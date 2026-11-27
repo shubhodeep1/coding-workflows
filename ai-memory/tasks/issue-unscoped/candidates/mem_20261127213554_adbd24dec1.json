@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_dispatch_and_watch_rate_limit.py:501-508 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The job-budget check for a step with no step limit computes `spent = step[\"need\"] - 64 + GATE_JOB_OTHER_STEPS_RESERVE_SECS`, so the step's 64 s margin is absorbed into the 360 s other-steps reserve, while the line-501 assertion counts `need` (including the 64 s) as real step time.\n  WHY: For orchestrate, `spent` = (1500 + 3000 + 64) - 64 + 360 = 4860 s, which passes exactly against the 81-minute (4860 s) job limit, so the 64 s margin is not kept on top of the documented 360 s reserve (.github/workflows/test-and-mark-stable.yml:4245-4247). The worst case is 4924 s against 4860 s. Reviewers disagree on severity: minimax and luna say MAJOR, glm says NIT and calls it a strictness/documentation gap with no proven runtime failure; the highest is used here. anthropic_claude-sonnet-5_5 explicitly declined this finding: the arithmetic matches the workflow comment and the pattern from before this PR (3000 + 240 + 360 = 3600 s), and 4 s of the 64 s is a pre-sleep this step does not have.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_dispatch_and_watch_rate_limit.py:lines 503-505 in `test_gate_dispatch_steps_rate_limit_cap_meets_floor` (the `else` branch for steps without their own `timeout-minutes`) | severity=MAJOR | confidence=4\n  PROBLEM: `spent = step[\"need\"] - 64 + GATE_JOB_OTHER_STEPS_RESERVE_SECS` treats the 64 s margin as already covered by the 360 s reserve, but the line-501 assertion `assert step[\"need\"] <= step[\"job_minutes\"] * 60` counts it as real step time, so two adjacent lines use different conventions.\n  WHY: For orchestrate, need = 4564 s and `spent` = 4860 s, exactly the 81-minute limit, which hides a 64 s shortfall: the worst case is 4924 s against 4860 s. An 82-minute budget would expose the inconsistency (4924 > 4920).\n- HARDENING: tests/test_dispatch_and_watch_rate_limit.py:lines 500-505 in `test_gate_dispatch_steps_rate_limit_cap_meets_floor`\n  PROBLEM: The two assertions mix conventions for the 64 s margin.\n  WHY: Use one convention: either `spent = need + GATE_JOB_OTHER_STEPS_RESERVE_SECS` with orchestrate at 82 min, or change line 501 to compare `cap + max(deadlines)` against the budget. Estimated lines changed: 2-3. HARDENING_RISK_SCORE: 2.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_dispatch_and_watch_rate_limit.py:503-505; .github/workflows/test-and-mark-stable.yml:4245-4247 | severity=MAJOR | confidence=4\n  PROBLEM: The budget check for a step with no step timeout subtracts the 64 s margin from `need` before adding the 360 s other-steps reserve, so the reserve is also made to cover the dispatch margin.\n  WHY: The test accepts the 81-minute limit at exactly 4,860 s (3,000 watch + 1,500 rate-limit wait + 360 other steps) with no 64 s margin, so if every budget is fully used the job can hit its timeout; the test should require the margin plus the reserve.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_dispatch_and_watch_rate_limit.py:lines 501-508 (`spent = step[\"need\"] - 64 + GATE_JOB_OTHER_STEPS_RESERVE_SECS`) with `.github/workflows/test-and-mark-stable.yml:4245-4247` | severity=NIT | confidence=3\n  PROBLEM: The orchestrate `spent` value equals the 4860 s job limit exactly. The workflow comment reserves 360 s \"for the other steps\", but the test comment says the 360 s \"also covers the step's own 64 s margin\", so the worst-case reserve actually left for other steps is about 296 s.\n  WHY: This is not a proven runtime failure; the pattern predates this PR. It is a strictness/documentation gap: the floor the test enforces is 64 s looser than the stated budget. The fix is to raise the job limit to 82 minutes or charge `step[\"need\"] + GATE_JOB_OTHER_STEPS_RESERVE_SECS`. glm raises it again only because the last run changed this exact expression.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b0d46682b91c9897cf83b51199fee64cdb7852fe550309a1838a278e7151ad28",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10207,
+    "run_id": "46066829878",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46066829878",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127213554_adbd24dec1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10207,
+    "run_id": "46066829878"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-27T21:35:54Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
