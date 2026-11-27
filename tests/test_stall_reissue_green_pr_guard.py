@@ -527,12 +527,21 @@ def test_close_linked_pr_keeps_lease_waiting_pr_open(tmp: Path):
 			[ -n "${API_JSON[${path}]+set}" ] || return 1
 			if [ "${1:-}" = "--jq" ]; then printf '%s' "${API_JSON[${path}]}" | jq -c "$2"; else printf '%s' "${API_JSON[${path}]}"; fi
 		}
-		_stall_merge_lease_label_age_minutes() { [ "$1" = "9402" ] || return 1; printf '%s\\n' "${LABEL_AGE:-5}"; }
+		_stall_merge_lease_label_age_minutes() { [ -z "${LABEL_RC:-}" ] || return "${LABEL_RC}"; [ "$1" = "9402" ] || return 1; printf '%s\\n' "${LABEL_AGE:-5}"; }
 		_find_all_linked_prs() { printf '9402\\n'; }
 		close_linked_pr 9398 "why"
 		echo "HELD=[${CLOSE_LINKED_PR_HELD_PRS}] DETAIL=[${CLOSE_LINKED_PR_HELD_DETAIL}]"
 		LABEL_AGE=5000 close_linked_pr 9398 "why"
 		echo "HELD2=[${CLOSE_LINKED_PR_HELD_PRS}]"
+		# Unreadable label age (rc 1): the default `0` clock never lapses...
+		LABEL_RC=1 close_linked_pr 9398 "why"
+		echo "HELD3=[${CLOSE_LINKED_PR_HELD_PRS}]"
+		# ...but the caller's stall clock past 2x the maximum lapses it, as
+		# the close guard and recover_stalled_issue did with the same clock.
+		LABEL_RC=1 close_linked_pr 9398 "why" 2881
+		echo "HELD4=[${CLOSE_LINKED_PR_HELD_PRS}]"
+		LABEL_RC=1 close_linked_pr 9398 "why" 2880
+		echo "HELD5=[${CLOSE_LINKED_PR_HELD_PRS}]"
 		""",
 		prs={9402: _pr(9402, "ai/issue-9398", labels=["ai:merge-lease-wait"])},
 	)
@@ -541,8 +550,11 @@ def test_close_linked_pr_keeps_lease_waiting_pr_open(tmp: Path):
 	assert "detail=merge_lease_wait" in r.stdout, r.stdout
 	# A label older than STALL_MERGE_LEASE_WAIT_MAX_MINUTES lapses: closed.
 	assert "HELD2=[]" in r.stdout, (r.stdout, r.stderr)
+	assert "HELD3=[9402]" in r.stdout, (r.stdout, r.stderr)
+	assert "HELD4=[]" in r.stdout, (r.stdout, r.stderr)
+	assert "HELD5=[9402]" in r.stdout, (r.stdout, r.stderr)
 	gh_log = (tmp / "gh.log").read_text(encoding="utf-8") if (tmp / "gh.log").exists() else ""
-	assert gh_log.count("pr close 9402") == 1, gh_log
+	assert gh_log.count("pr close 9402") == 2, gh_log
 
 
 def test_stall_hold_rechecks_pass_the_stall_clock():
@@ -554,9 +566,20 @@ def test_stall_hold_rechecks_pass_the_stall_clock():
 		'_rbj_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON:-}" "${stall_minutes}")"',
 		'_std_rb_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON:-}" "${elapsed_minutes}")"',
 		'_stall_pr_ai_hold_reason "${_opr_json}" "${stall_minutes}"',
-		'_stall_pr_ai_hold_reason "${pr_meta_json}" "0"',
+		'_stall_pr_ai_hold_reason "${pr_meta_json}" "${_clp_stall_minutes}"',
 	):
 		assert text.count(call) == 1, call
+	# Every close_linked_pr caller hands over its stall clock, so the hold
+	# inside close_linked_pr lapses when the caller's own hold check did.
+	assert text.count('_clp_stall_minutes="${3:-0}"') == 1
+	calls = [ln for ln in text.splitlines() if ln.strip().startswith("close_linked_pr ")]
+	assert len(calls) == 6, calls
+	clock_calls = [
+		ln for ln in text.splitlines()
+		if ('close_linked_pr "${issue_num}"' in ln or ln.strip().startswith('"Closed by orchestrator'))
+		and (ln.rstrip().endswith('"${stall_minutes}"') or ln.rstrip().endswith('"${elapsed_minutes}"'))
+	]
+	assert len(clock_calls) == 6, clock_calls
 
 
 def test_close_and_reissue_arms_call_the_guard():

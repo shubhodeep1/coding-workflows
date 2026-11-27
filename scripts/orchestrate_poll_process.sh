@@ -21499,9 +21499,15 @@ cancel_zombie_runs_for_issue() {
 }
 
 # Find and close the PR linked to an issue (if any).
+# close_linked_pr <issue_num> [close_reason] [stall_minutes] — the optional
+# third argument (issue #9892, default `0`) is the caller's stall clock for
+# the merge-lease hold check below, so its lapse backstops match the ones
+# the caller's own hold checks and _stall_reissue_green_pr_guard applied.
 close_linked_pr() {
   local issue_num="$1"
   local close_reason="${2:-Closed by orchestrator stall recovery.}"
+  local _clp_stall_minutes="${3:-0}"
+  [[ "${_clp_stall_minutes}" =~ ^[0-9]+$ ]] || _clp_stall_minutes="0"
   # Owner-held PRs (draft / `[skip ai]` title, issue #9733) are never
   # closed: their numbers land here (space-separated) and the first hold
   # detail in CLOSE_LINKED_PR_HELD_DETAIL, so a caller about to close the
@@ -21534,7 +21540,7 @@ close_linked_pr() {
     # The same request also carries draft/title for the owner-hold check.
     local pr_meta_json pr_state pr_head_ref pr_base_ref pr_body pr_hold_reason
     pr_meta_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" \
-      --jq '{state: (.state // ""), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), body: (.body // ""), draft: (.draft // false), title: (.title // ""), number: (.number // null), labels: [(.labels // [])[]? | (.name // empty)]}' || echo "")"
+      --jq '{state: (.state // ""), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), body: (.body // ""), draft: (.draft // false), title: (.title // ""), number: (.number // null), labels: [(.labels // [])[]? | (.name // empty)], updated_at: (.updated_at // "")}' || echo "")"
     pr_state="$(printf '%s' "${pr_meta_json}" | jq -r '.state // ""' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
     pr_head_ref="$(printf '%s' "${pr_meta_json}" | jq -r '.head_ref // ""' 2>/dev/null || echo "")"
     pr_base_ref="$(printf '%s' "${pr_meta_json}" | jq -r '.base_ref // ""' 2>/dev/null || echo "")"
@@ -21553,11 +21559,15 @@ close_linked_pr() {
     fi
     # Issue #9892: every caller is a stall-recovery close path (the skip and
     # exhausted close-outs never run _stall_reissue_green_pr_guard), so a
-    # PR waiting for the merge lease is held here too. `0` enables the
-    # lease hold without the stall-clock backstops (as in the review-blocked
-    # arm): it lapses only on the label's own readable age. The projection
-    # above carries `number` and `labels` for that check.
-    pr_hold_reason="$(_stall_pr_ai_hold_reason "${pr_meta_json}" "0")"
+    # PR waiting for the merge lease is held here too. The caller's stall
+    # clock (third argument) keeps the lapse backstops in step with the
+    # caller's own hold checks and the close guard: with the real clock an
+    # unreadable label age lapses here exactly when it lapsed there, so the
+    # close-outs cannot park the issue forever and close_and_reissue does not
+    # leave the PR open next to its replacement. The default `0` enables the
+    # hold without those backstops (lapse only on the label's readable age).
+    # The projection above carries `number`, `labels` and `updated_at`.
+    pr_hold_reason="$(_stall_pr_ai_hold_reason "${pr_meta_json}" "${_clp_stall_minutes}")"
     if [ -n "${pr_hold_reason}" ]; then
       echo "  close_linked_pr: skipping PR #${pr_num} for issue #${issue_num} (owner hold: reason=pr_ai_hold detail=${pr_hold_reason})."
       CLOSE_LINKED_PR_HELD_PRS="${CLOSE_LINKED_PR_HELD_PRS:+${CLOSE_LINKED_PR_HELD_PRS} }${pr_num}"
@@ -24252,7 +24262,7 @@ STALL_EOF
         echo "  [stall-recovery] Ancestor-chain no-op cap reached for #${issue_num} (${stall_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES}). Closing without re-issue — judge will verify."
         ensure_label_exists "ai:closed"
         close_linked_pr "${issue_num}" \
-          "Closed by orchestrator stall recovery — ancestor-chain no-op cap reached (${stall_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES})."
+          "Closed by orchestrator stall recovery — ancestor-chain no-op cap reached (${stall_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES})." "${stall_minutes}"
         if [ -n "${CLOSE_LINKED_PR_HELD_PRS:-}" ]; then
           # close_linked_pr left an owner-held PR open (#9733): leave the issue open too.
           echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${CLOSE_LINKED_PR_HELD_PRS%% *} detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown} phase=${phase} action=none requested_action=close_and_reissue source=close_linked_pr"
@@ -24381,7 +24391,11 @@ REISSUE_EOF
       new_num="$(basename "${new_url_clean%%[?#]*}")"
       if [[ "${new_num}" =~ ^[0-9]+$ ]]; then
         surface_reissue_closed_without_pr "${issue_num}" "${phase}" "${stall_minutes}" "${recovery_count}" "main"
-        close_linked_pr "${issue_num}" "${_stall_reissue_close_msg}"
+        close_linked_pr "${issue_num}" "${_stall_reissue_close_msg}" "${stall_minutes}"
+        if [ -n "${CLOSE_LINKED_PR_HELD_PRS:-}" ]; then
+          # The replacement already exists; make a PR left open visible (#9892).
+          echo "::warning::close_and_reissue for #${issue_num}: close_linked_pr left held PR(s) ${CLOSE_LINKED_PR_HELD_PRS} open (detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown}) next to replacement #${new_num}."
+        fi
         ensure_label_exists "ai:closed"
         gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
           --remove-label 'ai:done' --remove-label 'ai:implementing' \
@@ -24522,7 +24536,7 @@ The issue and its linked PR stay open with \`ai:needs-human\`; the unblock judge
 
       echo "  Skipping issue #${issue_num} after ${recovery_count} recovery attempts."
       close_linked_pr "${issue_num}" \
-        "Closed by orchestrator: stall recovery exhausted (${recovery_count} attempts). The judge will evaluate this gap."
+        "Closed by orchestrator: stall recovery exhausted (${recovery_count} attempts). The judge will evaluate this gap." "${stall_minutes}"
       if [ -n "${CLOSE_LINKED_PR_HELD_PRS:-}" ]; then
         # close_linked_pr left an owner-held PR open: leave the issue open too.
         echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${CLOSE_LINKED_PR_HELD_PRS%% *} detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown} phase=${phase} action=none requested_action=skip source=close_linked_pr"
@@ -32160,7 +32174,7 @@ STALL_EOF
         if [ "${standalone_anc_noop_count}" -ge "${MAX_IMPL_NOOP_REISSUES:-2}" ] && [ "${STALL_REISSUE_EXTRA_GUIDANCE_ISSUE:-}" != "${issue_num}" ]; then
           echo "  [standalone-stall-recovery] Ancestor-chain no-op cap reached for #${issue_num} (${standalone_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES:-2}). Closing without re-issue — judge will verify."
           ensure_label_exists "ai:closed"
-          close_linked_pr "${issue_num}" "Closed by standalone stall recovery — ancestor-chain no-op cap reached (${standalone_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES:-2})."
+          close_linked_pr "${issue_num}" "Closed by standalone stall recovery — ancestor-chain no-op cap reached (${standalone_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES:-2})." "${elapsed_minutes}"
           if [ -n "${CLOSE_LINKED_PR_HELD_PRS:-}" ]; then
             # close_linked_pr left an owner-held PR open (#9733): leave the issue open too.
             echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${CLOSE_LINKED_PR_HELD_PRS%% *} detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown} phase=${phase} action=none requested_action=close_and_reissue source=close_linked_pr"
@@ -32268,7 +32282,11 @@ REISSUE_EOF
         new_num="$(basename "${new_url_clean%%[?#]*}")"
         if [[ "${new_num}" =~ ^[0-9]+$ ]]; then
           surface_reissue_closed_without_pr "${issue_num}" "${phase}" "${elapsed_minutes}" "${recovery_count}" "standalone"
-          close_linked_pr "${issue_num}" "${_std_reissue_close_msg}"
+          close_linked_pr "${issue_num}" "${_std_reissue_close_msg}" "${elapsed_minutes}"
+          if [ -n "${CLOSE_LINKED_PR_HELD_PRS:-}" ]; then
+            # The replacement already exists; make a PR left open visible (#9892).
+            echo "::warning::close_and_reissue for #${issue_num}: close_linked_pr left held PR(s) ${CLOSE_LINKED_PR_HELD_PRS} open (detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown}) next to replacement #${new_num}."
+          fi
           ensure_label_exists "ai:closed"
           gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
             --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:awaiting-approval' --remove-label 'ai:ready-to-merge' \
@@ -32361,7 +32379,7 @@ This issue and its linked PR stay open with \`ai:needs-human\`; the unblock judg
           fi
           STALL_RECOVERY_SHOULD_INCREMENT="false"
         else
-          close_linked_pr "${issue_num}" "Closed by standalone stall recovery: max recovery attempts exhausted (${_std_exhausted_attempts} attempts in '${phase}' phase, limit ${effective_max_recoveries})."
+          close_linked_pr "${issue_num}" "Closed by standalone stall recovery: max recovery attempts exhausted (${_std_exhausted_attempts} attempts in '${phase}' phase, limit ${effective_max_recoveries})." "${elapsed_minutes}"
           if [ -n "${CLOSE_LINKED_PR_HELD_PRS:-}" ]; then
             # close_linked_pr left an owner-held PR open (the batched linked_pr
             # lacked draft/title, so the hold guard above failed open): leave
