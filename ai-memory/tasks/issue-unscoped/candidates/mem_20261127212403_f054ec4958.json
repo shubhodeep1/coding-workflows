@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  expected_change_site: .github/workflows/ci.yml \u2014 selection of the steps moved out of tests-release-and-log-analysis (the comment blocks above \"Orchestrate lib unit tests\" at lines 4390-4396 and \"Implement post-Codex recovery unit tests\" at lines 4445-4460, and MOVED_RELEASE_10182_STEPS in tests/test_ci_poll_test_sharding.py:2718-2738)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The comments in .github/workflows/ci.yml (lines 4387-4400 and 4445-4455) state that the step timings for run 45766722607 could not be read, so steps were selected from estimates (test and subprocess counts) and not from measured step timings, the move comment at .github/workflows/ci.yml:4390-4393 reads \"The run's step timings could not be read, so the pick is an estimate from test and subprocess counts (10 modules run one after another, about 298 test functions and 25 subprocess call sites), not a measurement.\", the comment at 4449-4451 for \"Implement post-Codex recovery unit tests\" uses the same estimate, the comments at `.github/workflows/ci.yml:4392-4396` and `:4447-4450` say the same, changelog.d/10182-ci-release-job-budget-move.md:1 / line 2 repeats the caveat, and no measured per-step duration for that run is recorded anywhere in the diff (all four reviewers rated this SEVERITY: MAJOR; sonnet considered it an already-accepted deferral and did not report it)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: .github/workflows/ci.yml, selection of steps moved from tests-release-and-log-analysis.\n  Evidence of absence: The comments in .github/workflows/ci.yml (lines 4387-4400 and 4445-4455) state that the step timings for run 45766722607 could not be read. Consequently, the steps were selected based on estimates (test and subprocess counts) rather than the measured step timings as required.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: .github/workflows/ci.yml, selection of steps moved from tests-release-and-log-analysis (the comments at lines 4390-4396 and 4449-4453 where the move is justified).\n  Evidence of absence: The move comment at .github/workflows/ci.yml:4390-4393 says timings could not be read and the pick is an estimate from test and subprocess counts, not a measurement. The comment at 4449-4451 uses the same estimate. changelog.d/10182-ci-release-job-budget-move.md:1 repeats the caveat. The functional goal is met, but the selection criterion is not.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of steps moved from `tests-release-and-log-analysis`.\n  Evidence of absence: The comments at `.github/workflows/ci.yml:4392-4396` and `:4447-4450` state that run 45766722607's step timings could not be read and that the steps were selected from test and subprocess counts instead. The PR does not establish that the moved steps were picked using that run's timings.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP:\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged\" (issue #10182 body).\n  Expected change site: .github/workflows/ci.yml \u2014 selection of the steps moved out of tests-release-and-log-analysis (the comment blocks above \"Orchestrate lib unit tests\" at lines 4390-4396 and \"Implement post-Codex recovery unit tests\" at lines 4445-4460, and MOVED_RELEASE_10182_STEPS in tests/test_ci_poll_test_sharding.py:2718-2738).\n  Evidence of absence: The comments (ci.yml lines 4391-4394) and the changelog (changelog.d/10182-ci-release-job-budget-move.md line 2) say the timings \"could not be read\" and the pick is \"an estimate from test and subprocess counts ... not a measurement\". No measured per-step duration is recorded in the diff. Mitigations noted: the estimate basis is disclosed, and the moved steps are the heaviest movable candidates (orchestrate lib about 72s, post-Codex recovery about 31s; CI wiring guard part 2 about 162s is pinned by the #9214 contract). Guards, GROUP_PINNED_STEPS, timeouts (ci.yml 3228, 4501) and the comment edits were verified. Editors deferred this gap in six consecutive rounds; it is reported again so the operator can decide whether a measured re-check is needed.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "9b631519b1c2b42504525bb9d75007cf8f908deee61538ba10ab2cd719091198",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10184,
+    "run_id": "46064470232",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46064470232",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127212403_f054ec4958",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10184,
+    "run_id": "46064470232"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-27T21:24:03Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
