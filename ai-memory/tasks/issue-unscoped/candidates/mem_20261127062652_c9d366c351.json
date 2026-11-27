@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  expected_change_site: .github/workflows/ci.yml, step selection for the moves out of tests-release-and-log-analysis (the comment blocks above \"Orchestrate lib unit tests\" at ci.yml:4390-4398 and \"Implement post-Codex recovery unit tests\" at ci.yml:4445-4455)\n  confidence=5\n  flagged_by: [minimax_minimax-m3, z-ai_glm-5_3-flash]\n  EVIDENCE: The relocation comments at `.github/workflows/ci.yml:4392-4399` (Orchestrate lib) and `:4447-4455` (post-Codex recovery) both say \"the run's step timings could not be read, so the pick is an estimate from test and subprocess counts... not a measurement\". The changelog fragment changelog.d/10182-ci-release-job-budget-move.md says the same. No measured step timings for run 45766722607 are cited anywhere in the diff. The structural requirements are met: job ids, names, bodies, `timeout-minutes` and `MovedRelease10182StepsContractTest` are all in place. Severity disagreement: minimax_minimax-m3 rated it MAJOR, and z-ai_glm-5_3-flash rated it NIT as a carried-over residual that three earlier autofix rounds deferred. The highest is MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml` step selection and move comments around the relocated `Orchestrate lib unit tests` (group 3) and `Implement post-Codex recovery unit tests` (group 0) steps.\n  Evidence of absence: The relocation comments at `.github/workflows/ci.yml:4392-4399` (Orchestrate lib) and `:4447-4455` (post-Codex recovery) both say \"the run's step timings could not be read, so the pick is an estimate from test and subprocess counts... not a measurement.\" The diff, including the comment-only last-run diff, does not show that the steps were picked from measured timings. The structural requirements are met. The \"well under its budget\" outcome cannot be verified from the diff.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: .github/workflows/ci.yml, step selection for the moves out of tests-release-and-log-analysis (the comment blocks above \"Orchestrate lib unit tests\" at ci.yml:4390-4398 and \"Implement post-Codex recovery unit tests\" at ci.yml:4445-4455).\n  Evidence of absence: Both comment blocks say \"the run's step timings could not be read\" and that the pick is \"an estimate from test and subprocess counts ... not a measurement\". The changelog fragment changelog.d/10182-ci-release-job-budget-move.md repeats this, and no measured step timings for run 45766722607 are cited. Every other constraint is met and was checked against HEAD:\n  - ci.yml:4428-4429 guard == 3 and ci.yml:4482-4483 guard == 0.\n  - GROUP_PINNED_STEPS is at tests/test_ci_poll_test_sharding.py:1194-1197.\n  - The group-zero ordering at tests/test_ci_poll_test_sharding.py:5142-5149 matches the workflow order: ci.yml:3293 / ci.yml:4214 / ci.yml:4380 / ci.yml:4482.\n  This is a carried-over residual that three earlier autofix rounds deferred. The reviewer reports it at residual severity and does not re-assert it as a blocker.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "84838bd72b9d29ffcacfcc626af423ac960bfa0c7a0fb4b20c364ba796e12684",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10184,
+    "run_id": "45940785510",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45940785510",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127062652_c9d366c351",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10184,
+    "run_id": "45940785510"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-27T06:26:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
