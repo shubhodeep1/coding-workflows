@@ -704,6 +704,7 @@ _HOLD_GATE_FAILURE_STEPS = {
 	"Record clarification run failed",
 	"Comment on issue failure",
 	"Queue failed reclarify for poller",
+	"Queue rate-limited clarify for poller",
 	"Telegram failure notification",
 }
 _HOLD_GATE_SELF_GUARDED_STEPS = {
