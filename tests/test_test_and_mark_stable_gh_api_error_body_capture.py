@@ -111,7 +111,8 @@ def _run_step(body: str, runs_mode: str) -> dict[str, str]:
 		# dir noexec, and bash reading a file is not blocked by noexec.
 		gh = Path(tmp) / "stub_gh.sh"
 		gh.write_text(STUB_GH, encoding="utf-8")
-		body = 'gh() { bash "$STUB_GH_SH" "$@"; }\n' + body
+		# Issue #10225: step reads go through gh_api_retry; pass them to the stub.
+		body = 'gh() { bash "$STUB_GH_SH" "$@"; }\ngh_api_retry() { gh api "$@"; }\n' + body
 		out = Path(tmp) / "github_output"
 		out.write_text("", encoding="utf-8")
 		env = {

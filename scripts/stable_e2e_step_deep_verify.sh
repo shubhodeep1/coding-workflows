@@ -9,6 +9,13 @@
 # of this file from RUNNER_TEMP, so exit/GITHUB_OUTPUT act on the step.
 set -euo pipefail
 
+# Issue #10225: the jobs reads below go through gh_api_retry
+# (scripts/gh_helpers.sh), which waits for a rate-limit reset instead of
+# failing. A missing helper fails the step (fail closed).
+if ! declare -F gh_api_retry >/dev/null 2>&1; then
+  source scripts/gh_helpers.sh
+fi
+
 DEEP_PASS=true
 FAILED_STEPS=""
 SKIPPED_STEPS=""
@@ -64,7 +71,7 @@ check_all_steps() {
 
   JOBS_JSON='{"jobs":[]}'
   for _attempt in 1 2 3; do
-    if _JOBS_OUT=$(gh api "repos/${TEST_REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null); then
+    if _JOBS_OUT=$(gh_api_retry "repos/${TEST_REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null); then
       JOBS_JSON="$_JOBS_OUT"
       break
     fi
@@ -95,7 +102,7 @@ check_all_steps() {
       # Same hazard as the outer retry — assign fallback outside the
       # command substitution so gh's error-body stdout cannot
       # concatenate with the literal fallback JSON.
-      if _JOBS_OUT=$(gh api "repos/${TEST_REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null); then
+      if _JOBS_OUT=$(gh_api_retry "repos/${TEST_REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null); then
         JOBS_JSON="$_JOBS_OUT"
       else
         JOBS_JSON='{"jobs":[]}'

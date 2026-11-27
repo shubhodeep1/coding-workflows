@@ -89,6 +89,8 @@ exec /bin/date "$@"
 # Shell-function fakes prepended to each step body (see setUp).
 STUB_FAKES = (
 	'gh() { "$STUB_PYTHON" "$STUB_GH_PY" "$@"; }\n'
+	# Issue #10225: step reads go through gh_api_retry; pass them to the stub.
+	'gh_api_retry() { gh api "$@"; }\n'
 	'date() { bash "$STUB_DATE_SH" "$@"; }\n'
 	'sleep() { :; }\n'
 )
