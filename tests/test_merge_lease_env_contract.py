@@ -13,7 +13,11 @@ Rules enforced here, for every workflow-level, job-level and step-level
    them. A step is checked on its effective env (workflow env, then job env,
    then step env), so a job-level full set covers its steps. A block that
    sets MERGE_BASE_FRESHNESS_ENABLED itself also needs the full set, because
-   _pr_base_fresh_for_merge can renew a lease.
+   _pr_base_fresh_for_merge can renew a lease. A lease-writing step is found
+   only by these env markers (a REQUIRED_KEYS key, the freshness flag, or a
+   READ_ONLY_LEASE_STEPS entry), not by its `run:` text: several steps run
+   scripts/orchestrate_poll_process.sh in modes that exit before any lease
+   path, so matching the script name would report steps that never write one.
 2. Same form and default. Each value is `${{ vars.<KEY> || '<default>' }}`
    and the default equals the script default in scripts/pr_checks_lib.sh
    (which also keeps every workflow consistent with every other one).
