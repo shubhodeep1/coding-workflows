@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"The full test suite passes on the merged tree.\" (Acceptance Criterion 5 from Issue #10166 / PR DESCRIPTION pre-push gate)\n  expected_change_site: A successful full-suite CI run for the current PR head's merged tree (the final CI run for this PR's merged head)\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The most recent pre-push gate reports \"Status: unverified\"; this is a verification step that final CI owns and runs on the merge ref after review completion, so it is deferred to final CI, The PR description reports the pre-push gate as unverified, with 67 inherited failures and 3 unverified tests, The current check-run context reports `review / codex-agent` still in progress, so it does not establish a completed green full-suite run for this head\n- requirement: \"A workflow that comes within 30,000 bytes of the 430,000-byte test ceiling opens a `ai:ci-budget` issue before any test fails.\"\n  expected_change_site: `.github/workflows/ci.yml`, the existing `budget-watch` trigger and ordering (lines 5095-5111)\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: `budget-watch` runs only for `push` events to `main` and depends on the test jobs. Final CI for a PR uses `workflow_dispatch` (`.github/workflows/ci.yml`, lines 22-29), which the job excludes. A PR that increases a workflow from below 400,000 bytes to at least 430,000 bytes therefore reaches its size-test failure without this watcher opening an issue.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION (not a finding; HARDENING_RISK_SCORE: 1): .github/workflows/review_autofix.yml line 938 (post-merge-validate-dispatch wrapper) and line 1740 (fingerprint-cap-block wrapper)\n  PROBLEM: These wrappers call `git -C \"${GITHUB_WORKSPACE}/.codex-workflow-src\" rev-parse HEAD` without clearing GIT_DIR/GIT_WORK_TREE, while the codex-agent wrappers clear them (`env -u GIT_DIR -u GIT_WORK_TREE git ...`).\n  WHY: Neither job exports those variables today, so nothing fails now. If a future step exported them, the check would read the wrong HEAD and fail closed. Suggested fix: prefix both rev-parse calls with `env -u GIT_DIR -u GIT_WORK_TREE`, and update the matching check string in tests/test_review_autofix_step_scripts_contract.py line 110 (est. 3 lines).\n- TASK COMPLETENESS: NONE. Acceptance criteria 1-4 are reflected in the diff. Criterion 5 has not run yet on head 47d32b87 and is left to final CI on the merge ref, with no code missing. The pass-1 budget-watch push-to-main point matches issue #10166's \"Automation and wiring\" section (\u00a733), so it is not a gap.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"The full test suite passes on the merged tree.\" (Acceptance Criterion 5 from Issue #10166 / PR DESCRIPTION pre-push gate)\n  Expected change site: The final CI run for this PR's merged head.\n  Evidence of absence: The most recent pre-push gate reports \"Status: unverified\". This requirement is a verification step that final CI owns and executes on the merge ref after review completion. It is deferred to final CI.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"A workflow that comes within 30,000 bytes of the 430,000-byte test ceiling opens a `ai:ci-budget` issue before any test fails.\"\n  Expected change site: `.github/workflows/ci.yml`, the existing `budget-watch` trigger and ordering (lines 5095-5111).\n  Evidence of absence: `budget-watch` runs only for `push` events to `main` and depends on the test jobs. Final CI for a PR uses `workflow_dispatch` (`.github/workflows/ci.yml`, lines 22-29), which the job excludes. A PR that increases a workflow from below 400,000 bytes to at least 430,000 bytes therefore reaches its size-test failure without this watcher opening an issue.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \"The full test suite passes on the merged tree.\"\n  Expected change site: A successful full-suite CI run for the current PR head's merged tree.\n  Evidence of absence: The PR description reports the pre-push gate as unverified, with 67 inherited failures and 3 unverified tests. The current check-run context reports `review / codex-agent` still in progress, so it does not establish a completed green full-suite run for this head.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n- HARDENING_SUGGESTIONS: NONE (HARDENING_RISK_SCORE: 0)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING_SUGGESTION (not a finding; HARDENING_RISK_SCORE: 1): .github/workflows/review_autofix.yml lines 938 and 1740 (the two support-checkout-job step wrappers)\n  PROBLEM: Both wrappers verify the `.codex-workflow-src` HEAD with a bare `git -C \"${GITHUB_WORKSPACE}/.codex-workflow-src\" rev-parse HEAD`, unlike every codex-agent wrapper, which clears `GIT_DIR`/`GIT_WORK_TREE` (`env -u GIT_DIR -u GIT_WORK_TREE git ...`, review_autofix.yml:2279 and 37 later sites), because \"Activate workspace shell context\" exports them (review_autofix.yml:2496-2497).\n  WHY: Nothing fails today. If a future step in `post-merge-validate-dispatch` or `fingerprint-cap-block` exports those variables, both wrappers would read the PR checkout's HEAD, mismatch `WORKFLOW_SUPPORT_REF`, and fail the cap/validate dispatch steps spuriously. The agents.d/10208 fragment documents `env -u` as the required pattern. Suggested fix: prefix both rev-parse calls with `env -u GIT_DIR -u GIT_WORK_TREE` and update the matching check string in tests/test_review_autofix_step_scripts_contract.py:110 (est. 3 lines).\n- TASK COMPLETENESS: NONE. It skipped the pass-1 budget-watch single-PR-jump gap with a citation to the issue's \"Automation and wiring\" section (\u00a733), where the residual was accepted in earlier rounds (entries 13-15, 21, 30). It also skipped acceptance criterion 5 as a merge-ref final CI gate: head 47d32b87 shows `failed_count: 0` with only `review / codex-agent` in progress.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e1c899b6abb9ab903eb60577c9ec0905ecde988eb11b6404de5a0b8f84c15980",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10167,
+    "run_id": "46067171873",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46067171873",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127220900_763a764c90",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10167,
+    "run_id": "46067171873"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-27T22:09:00Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
