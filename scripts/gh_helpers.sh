@@ -5046,7 +5046,9 @@ zombie_queued_log_ignored()
 #                      short), `-` when no queued job was found
 #   queued_in_window   total_count of the run listing (queued runs in range)
 #   runs_unread        only on short, when more than 3 candidates exist: the
-#                      candidates whose jobs were not read (bounded check)
+#                      candidates whose jobs were not read (bounded check);
+#                      past 100 runs it adds total_count minus the runs on
+#                      the fetched last page (pages never read)
 #
 # API calls (§14): no existing call in the callers returns queued runs'
 # created_at or job created_at values (they list workflow-scoped runs or a
@@ -5066,7 +5068,7 @@ release_gate_oldest_queued_wait()
 	local _rgw_now="" _rgw_upper_epoch="" _rgw_upper="" _rgw_lower="" _rgw_json="" _rgw_total="" _rgw_page="" _rgw_calls=0 _rgw_oldest=""
 	local _rgw_jq_def=""
 	local _rgw_max_job_reads=3 _rgw_candidates="" _rgw_candidate_count="" _rgw_run_id="" _rgw_jobs_json="" _rgw_job_oldest=""
-	local _rgw_wait_min="" _rgw_outcome="" _rgw_unread_suffix=""
+	local _rgw_wait_min="" _rgw_outcome="" _rgw_unread_suffix="" _rgw_unread_extra=0 _rgw_unread_count=0
 	local -a _rgw_run_ids=()
 	if ! [[ "${_rgw_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || ! [[ "${_rgw_limit}" =~ ^[0-9]{1,6}$ ]]; then
 		echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=0"
@@ -5119,6 +5121,14 @@ release_gate_oldest_queued_wait()
 			echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=${_rgw_calls}"
 			return 0
 		fi
+		# Runs on the pages not fetched (newer pages, and pages past 10) are
+		# candidates whose jobs are never read: count them in runs_unread.
+		_rgw_unread_extra="$(printf '%s' "${_rgw_json}" | jq -r '.workflow_runs | length' 2>/dev/null || true)"
+		if [[ "${_rgw_unread_extra}" =~ ^[0-9]+$ ]] && [ "${_rgw_total}" -gt "${_rgw_unread_extra}" ]; then
+			_rgw_unread_extra=$(( _rgw_total - _rgw_unread_extra ))
+		else
+			_rgw_unread_extra=0
+		fi
 	fi
 	# Live queued runs at or before the upper bound (the server-side range is
 	# re-checked here): the count on the first line, then the ids of the
@@ -5164,8 +5174,9 @@ release_gate_oldest_queued_wait()
 			if (.jobs | type) != "array" then error("no jobs array") else . end
 			| [.jobs[] | select(type == "object")
 				| select(((.status // "") | tostring | ascii_downcase) == "queued")
-				| ((.created_at // "") | tostring | sub("\\.[0-9]+Z$"; "Z") | (try fromdateiso8601 catch null))
-				| select(. != null)] | min // "none"' 2>/dev/null || true)"
+				# A queued job whose created_at cannot be parsed fails jq, so
+				# the read answers read_failed instead of counting as `none`.
+				| ((.created_at // "") | tostring | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601)] | min // "none"' 2>/dev/null || true)"
 		if [ "${_rgw_job_oldest}" = "none" ]; then
 			continue
 		fi
@@ -5186,8 +5197,9 @@ release_gate_oldest_queued_wait()
 			_rgw_outcome="long"
 		fi
 	fi
-	if [ "${_rgw_outcome}" = "short" ] && [ "${_rgw_candidate_count}" -gt "${_rgw_max_job_reads}" ]; then
-		_rgw_unread_suffix=" runs_unread=$(( _rgw_candidate_count - _rgw_max_job_reads ))"
+	_rgw_unread_count=$(( _rgw_candidate_count + _rgw_unread_extra - ${#_rgw_run_ids[@]} ))
+	if [ "${_rgw_outcome}" = "short" ] && [ "${_rgw_unread_count}" -gt 0 ]; then
+		_rgw_unread_suffix=" runs_unread=${_rgw_unread_count}"
 	fi
 	echo "outcome=${_rgw_outcome} oldest_queued_min=${_rgw_wait_min} queued_in_window=${_rgw_total} calls=${_rgw_calls}${_rgw_unread_suffix}"
 	return 0

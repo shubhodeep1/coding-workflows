@@ -1207,6 +1207,25 @@ def test_runner_wait_reads_at_most_three_runs_and_reports_runs_unread() -> None:
 	assert out.startswith("outcome=short oldest_queued_min=2 queued_in_window=5 calls=4 runs_unread=2"), out
 
 
+def test_runner_wait_unparseable_queued_job_created_at_is_read_failed() -> None:
+	# A queued job whose created_at does not parse is an unparseable read, not
+	# a run without queued jobs.
+	jobs = {"11": [{"id": 1, "status": "queued", "created_at": "not-a-date"}]}
+	with tempfile.TemporaryDirectory() as tmp:
+		out = _helper_output(Path(tmp), {"window_runs": [_queued(11, 70)], "window_jobs": jobs})
+	assert out == "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=2", out
+
+
+def test_runner_wait_runs_unread_counts_pages_not_fetched() -> None:
+	# 250 queued runs: only the last page (5 runs here) is listed, so the 245
+	# runs on the pages not fetched are unread too: 5 + 245 - 3 read = 247.
+	last_page = [_queued(20 + i, 70 - i * 5) for i in range(5)]
+	jobs = {str(20 + i): [_job("queued", 2)] for i in range(5)}
+	with tempfile.TemporaryDirectory() as tmp:
+		out = _helper_output(Path(tmp), {"window_total": 250, "window_runs": [], "window_last_page": last_page, "window_jobs": jobs})
+	assert out == "outcome=short oldest_queued_min=2 queued_in_window=250 calls=5 runs_unread=247", out
+
+
 def test_runner_wait_empty_listing_makes_no_jobs_read() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		out = _helper_output(Path(tmp), {"window_runs": []})
