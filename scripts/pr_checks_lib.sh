@@ -2778,6 +2778,10 @@ _pr_base_sync_inline_merge()
 	_pr_base_sync_inline_enabled || return 1
 	[ "${PR_BASE_SYNC_INLINE_MARKED:-false}" = "true" ] || return 1
 	[ -n "${inline_lib}" ] && [ -d "${inline_lib}" ] || inline_lib="."
+	# Absolute from here on: the deterministic-skip-merge job sources this
+	# library by the relative path .codex-freshness-src/scripts, and
+	# _pr_base_sync_inline_post_status cd's into the directory before sourcing.
+	inline_lib="$(cd "${inline_lib}" 2>/dev/null && pwd -P)" || inline_lib="$(pwd -P)"
 	_pr_base_sync_inline_finish()
 	{
 		inline_reason="$1"

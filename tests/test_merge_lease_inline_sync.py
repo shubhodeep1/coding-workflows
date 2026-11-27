@@ -266,8 +266,12 @@ def _pull_json(update: str, *, labels: list[str] | None = None) -> str:
 
 def _inline(tmp_path: Path, *, update: str = UPDATE, marked: str = "true", quick: str = "true", ci_outcome: str = "dispatched",
 		wait_rc: int = 0, gh_helpers: bool = True, pull_json: str | None = None, args: str | None = None,
-		**env: str) -> tuple[int, str, list[str]]:
+		relative: bool = False, **env: str) -> tuple[int, str, list[str]]:
 	lib = _lib_dir(tmp_path, gh_helpers=gh_helpers)
+	# relative=True sources the library the way the deterministic-skip-merge
+	# job does (`source .codex-freshness-src/scripts/pr_checks_lib.sh`).
+	source_line = (f"cd {str(lib.parent)!r}\nsource scripts/pr_checks_lib.sh" if relative
+		else f"source {str(lib / 'pr_checks_lib.sh')!r}")
 	script = f"""
 set -euo pipefail
 gh_retry() {{ "$@"; }}
@@ -286,7 +290,7 @@ gh() {{
   esac
   return 1
 }}
-source {str(lib / "pr_checks_lib.sh")!r}
+{source_line}
 _pr_wait_for_required_checks() {{ echo "WAIT $*" >> "${{CALL_LOG}}"; PR_CHECKS_WAIT_OUTCOME=x; return {wait_rc}; }}
 PR_BASE_SYNC_INLINE_MARKED={marked}
 PR_BASE_FRESHNESS_OUTCOME=overlap
@@ -320,6 +324,14 @@ def test_success_path_returns_the_update_head(tmp_path: Path) -> None:
 	assert sum(1 for c in calls if c.startswith(f"POST_STATUS repo=o/r sha={UPDATE} state=success")) == 2
 	assert any(c.startswith(f"FRESHNESS_SYNC freshness-sync o/r 7 {UPDATE} main pipeline-bot ") for c in calls)
 	assert f"WAIT 7 {UPDATE} main" in calls
+
+
+def test_success_path_with_a_relatively_sourced_library(tmp_path: Path) -> None:
+	rc, out, calls = _inline(tmp_path, relative=True)
+	assert rc == 0, out
+	assert f"MERGE_BASE_FRESHNESS pr=7 outcome=inline_merge reason=ok head={UPDATE} dispatch=none" in out
+	assert sum(1 for c in calls if c.startswith(f"POST_STATUS repo=o/r sha={UPDATE} state=success")) == 2
+	assert _dispatches(calls) == []
 
 
 def test_unmarked_call_returns_1_without_dispatch_or_log(tmp_path: Path) -> None:
