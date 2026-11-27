@@ -1280,9 +1280,12 @@ if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
       echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} skip=false reason=lease_inline_owner_read_failed run=${inline_owner_run}"
       return 1
     fi
+    # Only a completed run (or an empty answer, read as a failed read) gives
+    # up the head; every other run status (queued, in_progress, requested,
+    # waiting, pending) is a live owner, so a status GitHub adds later fails
+    # toward the single owner.
     case "${inline_owner_status}" in
-      queued|in_progress) ;;
-      *) return 1 ;;
+      completed|"") return 1 ;;
     esac
     # The owner run's status decides, never the PR's auto-merge flag: that
     # flag was read before the early head-gate call withdrew it and cannot
@@ -1291,8 +1294,12 @@ if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
     # owner made. A live owner keeps the head (single owner). When an
     # enrollment was withdrawn on synchronize, say so: if the owner had
     # already enabled it, the merge is left to the next review run on this
-    # head, as for a late `pending` after the owner's second success.
-    if [ "${pr_auto_merge_enabled:-}" = "true" ] && [ "${EVENT_ACTION:-}" = "synchronize" ]; then
+    # head, as for a late `pending` after the owner's second success. The
+    # early call withdraws only with REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED
+    # not `false` (scripts/review_head_gate.sh), so the line names a
+    # withdrawal only when one was made.
+    if [ "${pr_auto_merge_enabled:-}" = "true" ] && [ "${EVENT_ACTION:-}" = "synchronize" ] \
+      && [ "${REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED:-true}" != "false" ]; then
       echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} skip=true reason=lease_inline_owner_auto_merge_withdrawn run=${inline_owner_run}"
     fi
     return 0

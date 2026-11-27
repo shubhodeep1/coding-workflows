@@ -514,7 +514,7 @@ echo "rc=${{rc}}"
 	return rc, res.stdout, _calls(tmp_path)
 
 
-@pytest.mark.parametrize("status", ["queued", "in_progress"])
+@pytest.mark.parametrize("status", ["queued", "in_progress", "requested", "waiting", "pending"])
 def test_gate_skips_for_a_live_owner_run(tmp_path: Path, status: str) -> None:
 	rc, _out, calls = _owner(tmp_path, [_gate_marker(f" inline_run={RUN_ID}")], FAKE_RUN_STATUS=status)
 	assert rc == 0
@@ -531,6 +531,22 @@ def test_gate_keeps_the_owner_skip_when_auto_merge_was_enabled(tmp_path: Path, a
 	assert len(calls) == 1 and calls[0].startswith(f"gh api repos/o/r/actions/runs/{RUN_ID} --jq ")
 	withdrawn = f"skip=true reason=lease_inline_owner_auto_merge_withdrawn run={RUN_ID}"
 	assert (withdrawn in out) == (action == "synchronize")
+
+
+def test_gate_names_no_withdrawal_when_the_withdraw_switch_is_off(tmp_path: Path) -> None:
+	# With REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED=false the early call withdrew
+	# nothing, so the line claiming a withdrawal is not printed; the skip stays.
+	rc, out, calls = _owner(tmp_path, [_gate_marker(f" inline_run={RUN_ID}")], FAKE_RUN_STATUS="in_progress",
+		pr_auto_merge_enabled="true", EVENT_ACTION="synchronize", REVIEW_STALE_AUTO_MERGE_WITHDRAW_ENABLED="false")
+	assert rc == 0
+	assert len(calls) == 1
+	assert "lease_inline_owner_auto_merge_withdrawn" not in out
+
+
+def test_gate_proceeds_when_the_run_status_is_empty(tmp_path: Path) -> None:
+	rc, _out, calls = _owner(tmp_path, [_gate_marker(f" inline_run={RUN_ID}")], FAKE_RUN_STATUS="")
+	assert rc == 1
+	assert len(calls) == 1
 
 
 def test_gate_proceeds_with_auto_merge_enabled_once_the_owner_completed(tmp_path: Path) -> None:
