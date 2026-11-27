@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.72,
+  "details": "Related changes touch review gate evaluation, merge-lease handling, human-required latches, and round caps, with focused tests for these controls. When modifying review automation, preserve the distinction between an eligible automated change and one that must stop for human intervention.",
+  "fingerprint": "1e1c13ec64c9cb01461dfcc7ccb4750d3b36ed959a834e5f3b62d55b8ef4ec58",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "46018249451",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46018249451",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10072",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10129",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10177",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10181",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10197",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10075",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10132",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10179",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10185",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10201"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261127150710_a73e475cf9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Review autofix automation uses explicit gates and merge-lease safeguards.",
+  "timestamps": {
+    "created_at": "2026-11-27T15:07:10Z",
+    "promoted_at": "2026-11-27T15:07:57Z",
+    "superseded_at": null
+  }
+}
