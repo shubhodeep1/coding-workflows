@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_dispatch_and_watch_rate_limit.py:415-416 | severity=low | confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: The workflow-level cap guard in `_gate_dispatch_steps` scans only text before `jobs:`. A valid top-level `env:` placed after `jobs:` is not detected, so the parser can treat an inherited cap as the 1500-second default.\n  WHY: If a lower cap is set in that root-level `env:`, the workflow-log-analysis snapshot step inherits it because it has no step-level override, and the floor test still scores that step at 1500 and passes, leaving the release-gate dispatch below the required cap. The source gave severity NIT, mapped here to low; no other reviewer flagged this.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_dispatch_and_watch_rate_limit.py:`_gate_dispatch_steps`, lines 415-416 | severity=NIT | confidence=4\n  PROBLEM: The workflow-level cap guard scans only text before `jobs:`. A valid top-level `env:` placed after `jobs:` is therefore not detected, and the parser can treat an inherited cap as the 1500-second default.\n  WHY: If a lower cap is set in that root-level `env:`, the workflow-log-analysis snapshot inherits it because it has no step-level override. The floor test still scores that step at 1500 and passes, leaving the release-gate dispatch below the required cap.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "58de6e803d91d19676a16e1e68d61b0646d61a80282409bb160b1f7e5f36dd6e",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10207,
+    "run_id": "46024571364",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46024571364",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127164057_287fb002d8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10207,
+    "run_id": "46024571364"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-27T16:40:57Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
