@@ -887,6 +887,106 @@
 			"name": "WRITE_GUARDS_ENABLED",
 			"default": "true",
 			"stage": "Enable the write-guard policy from .github/ai/write_guards.v1.json at the plan post-Codex workspace boundary, implement commit boundary, review-editor commit boundary, and validate fix/harness boundary."
+		},
+		{
+			"name": "FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED",
+			"default": "true",
+			"stage": "Turns on final ci stale workflow sync (added by open pull request #10103; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+		},
+		{
+			"name": "FINAL_CI_WIRING_BEHIND_UPDATE_ENABLED",
+			"default": "true",
+			"stage": "Turns on final ci wiring behind update (added by open pull request #9997; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+		},
+		{
+			"name": "GH_CALL_COUNTER_ENABLED",
+			"default": "true",
+			"stage": "Turns on gh call counter (added by open pull request #9899; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+		},
+		{
+			"name": "GITHUB_AI_PLAN_GRANT_WRITE_ENABLED",
+			"default": "true",
+			"stage": "Turns on github ai plan grant write (added by open pull request #9654; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+		},
+		{
+			"name": "HEAL_ALERT_TRIAGE_KIND_ENABLED",
+			"default": "true",
+			"stage": "Turns on heal alert triage kind (added by open pull request #9396; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+		},
+		{
+			"name": "JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED",
+			"default": "true",
+			"stage": "Turns on judge files touched companions (added by open pull request #9981; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+		},
+		{
+			"name": "PERSIST_QUEUE_PAUSE_ENABLED",
+			"default": "true",
+			"stage": "Turns on persist queue pause (added by open pull request #9442; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+		},
+		{
+			"name": "PLAN_SCOPE_BLOCK_ROUTING_ENABLED",
+			"default": "true",
+			"stage": "Turns on plan scope block routing (added by open pull request #9981; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+		},
+		{
+			"name": "PRIORITY_LANE_ENABLED",
+			"default": "true",
+			"stage": "Turns on priority lane (added by open pull request #10061; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+		},
+		{
+			"name": "RB_JUDGE_RED_CHECK_REPAIR_ENABLED",
+			"default": "true",
+			"stage": "Turns on rb judge red check repair (added by open pull request #10067; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+		},
+		{
+			"name": "RED_BASE_APPROVAL_HOLD_ENABLED",
+			"default": "true",
+			"stage": "Turns on red base approval hold (added by open pull request #9442; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+		},
+		{
+			"name": "REVIEW_CONVERGENCE_ENABLED",
+			"default": "true",
+			"stage": "Turns on review convergence (added by open pull request #10066; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+		},
+		{
+			"name": "REVIEW_HEAD_GATE_UPDATER_EXEMPT_ENABLED",
+			"default": "true",
+			"stage": "Turns on review head gate updater exempt (added by open pull request #9505; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+		},
+		{
+			"name": "REVIEW_INFRA_FAILURE_EXCLUDED_ENABLED",
+			"default": "true",
+			"stage": "Turns on review infra failure excluded (added by open pull request #10007; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+		},
+		{
+			"name": "REVIEW_UNREACHABLE_FOLLOWUP_ENABLED",
+			"default": "true",
+			"stage": "Turns on review unreachable followup (added by open pull request #10070; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+		},
+		{
+			"name": "RUNNER_IMAGE_CANARY_ENABLED",
+			"default": "true",
+			"stage": "Turns on runner image canary (added by open pull request #9442; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+		},
+		{
+			"name": "STALL_JUDGE_LIVE_REVIEW_RUNS_ENABLED",
+			"default": "true",
+			"stage": "Turns on stall judge live review runs (added by open pull request #9573; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+		},
+		{
+			"name": "STALL_REISSUE_GREEN_PR_GUARD_ENABLED",
+			"default": "true",
+			"stage": "Turns on stall reissue green pr guard (added by open pull request #9902; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+		},
+		{
+			"name": "UNBLOCK_JUDGE_LINKED_PR_ENABLED",
+			"default": "true",
+			"stage": "Turns on unblock judge linked pr (added by open pull request #9573; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
+		},
+		{
+			"name": "VERDICT_WAIT_DISPATCH_SKIP_ENABLED",
+			"default": "true",
+			"stage": "Turns on verdict wait dispatch skip (added by open pull request #10000; listed before the merge so the registry tests pass on the merged tree); false turns that stage off."
 		}
 	],
 	"off_on_purpose": []

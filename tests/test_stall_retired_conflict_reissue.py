@@ -516,6 +516,51 @@ def test_reissue_dispatch_fn_targets_the_stall_action_and_is_not_env_controlled(
 	assert "${STALL_RETIRED_CONFLICT_REISSUE_FN:-" not in POLLER_TEXT
 
 
+def test_reroutes_keep_the_nested_reissue_owner_hold_marker() -> None:
+	# Issue #9733: the nested close_and_reissue hold re-check sets
+	# close_and_reissue_skipped_pr_ai_hold; no reroute may overwrite it, and
+	# invoke_stall_judge must skip its fallback dispatch on it.
+	call = '"${STALL_RETIRED_CONFLICT_REISSUE_FN}" "${issue_num}" "${phase}" "close_and_reissue"'
+	pos = 0
+	for _ in range(3):
+		pos = POLLER_TEXT.index(call, pos) + len(call)
+		after = POLLER_TEXT[pos:POLLER_TEXT.index("return ", pos)]
+		assert '[ "${STALL_RECOVERY_EFFECTIVE_ACTION:-}" = "close_and_reissue_skipped_pr_ai_hold" ]' in after, after
+		assert '|| STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"' in after, after
+	judge = POLLER_TEXT[POLLER_TEXT.index("invoke_stall_judge() {"):]
+	fallback = judge.index('echo "::warning::resolve_merge_conflict dispatch failed')
+	assert "resolve_merge_conflict_skipped_pr_ai_hold|close_and_reissue_skipped_pr_ai_hold)" in judge[:fallback]
+
+
+def test_managed_dispatch_rb_judge_honours_owner_hold_before_dispatch() -> None:
+	start = POLLER_TEXT.index("    dispatch_rb_judge)\n      # Autonomous escape from ai:review-blocked")
+	dispatch = POLLER_TEXT.index('_dispatch_rb_judge_for_pr "${rb_pr_num}" "${issue_num}"', start)
+	block = POLLER_TEXT[start:dispatch]
+	hold = block.index('_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON:-}"')
+	assert hold < block.index('_stall_retired_host_only_conflict_check "${issue_num}" "${rb_pr_num}"')
+	assert 'STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_rb_judge_skipped_pr_ai_hold"' in block[hold:]
+	assert "requested_action=dispatch_rb_judge" in block[hold:]
+
+
+def test_standalone_dispatch_rb_judge_honours_owner_hold_before_reroute_and_dispatch() -> None:
+	# Issue #9733: the standalone review-blocked rung re-checks the hold on the
+	# REST payload it pre-resolves, before the retired-host-only reroute and
+	# the case arm's _dispatch_rb_judge_for_pr.
+	pre = POLLER_TEXT.index('    if [ "${action}" = "dispatch_rb_judge" ]; then\n      _std_rb_pre_resolved="true"')
+	retired = POLLER_TEXT.index('_stall_retired_host_only_conflict_check "${issue_num}" "${_std_rb_pre_pr_num}"', pre)
+	block = POLLER_TEXT[pre:retired]
+	hold = block.index('_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON:-}"')
+	assert block.index('_std_rb_pre_pr_num="${STALL_IMPL_PR_NUM}"') < hold
+	after = block[hold:]
+	assert "reason=pr_ai_hold pr=${_std_rb_pre_pr_num}" in after
+	assert "requested_action=dispatch_rb_judge" in after
+	assert 'STALL_RECOVERY_SHOULD_INCREMENT="false"' in after
+	assert 'write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"' in after
+	assert "continue" in after
+	case_start = POLLER_TEXT.index('    case "${action}" in\n      run_stall_judge)', retired)
+	assert pre < retired < case_start
+
+
 @needs_tools
 def test_helper_fetch_failure_fails_closed(tmp_path: Path) -> None:
 	# A failed refresh must not let cached (possibly stale) base refs decide.
