@@ -139,7 +139,10 @@
 # ref, changed_files, mergeable) and the `actions/runs/<id>` read carry no
 # compare or files data, so the compare and files reads are new. Each of the
 # ten final-CI jobs that reaches the stale exit pays it; on a token-less job a
-# rate-limit refusal fails closed as `detail=api_error`.
+# rate-limit refusal fails closed as `detail=api_error`. With GH_TOKEN set, a
+# refused authenticated read is retried once without credentials over curl
+# (`ci_final_merge_ref_api`), so a refused read costs two requests: the 32
+# reads are at most 64 HTTP requests when every authenticated read is refused.
 # Log: `CI_FINAL_MERGE_REF pr=<n> head=<sha> outcome=fresh|refreshed|merged_locally|stale|stale_accepted|conflict|skipped reason=<token> [base=<ref>] [tested_base=<sha>] [tip=<sha>] [attempt=<n>] [merge=<sha>] [tree=<sha>] [commits=<k>] [files=<m>] [pin=<sha>|pin=none pin_reason=<token>] [detail=<token>]` (`stale_accepted` has reason `sync_only_no_overlap`).
 
 set -uo pipefail

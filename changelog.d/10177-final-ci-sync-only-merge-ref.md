@@ -6,7 +6,7 @@
 | The numbers that matter | Value |
 | --- | --- |
 | Extra API reads on the fresh, refreshed and merged-locally paths | 0 |
-| Extra API reads on the stale path, per job | at most 32 (two compares, up to 30 PR-files pages) |
+| Extra API reads on the stale path, per job | at most 32 (two compares, up to 30 PR-files pages); at most 64 requests if every authenticated read is refused and retried without credentials |
 | Largest range accepted | 250 commits, under 300 files |
 | Largest PR accepted | 3000 changed files |
 
