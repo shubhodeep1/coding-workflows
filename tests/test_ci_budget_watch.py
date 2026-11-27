@@ -444,3 +444,19 @@ def test_gate_serial_run_against_a_matrix_checkout_is_stale(tmp_path: Path) -> N
 	result2 = _run(root2, env2)
 	assert "findings=1 stale_jobs=0" in result2.stdout
 	assert len(_created(env2)) == 1
+
+
+def test_gate_skipped_post_split_job_is_not_counted_as_stale(tmp_path: Path) -> None:
+	# A post-split validate-scripts skipped at job level (failed `needs:`) is
+	# listed under its bare name with conclusion `skipped`: not measured and
+	# not a pre-split job.
+	gate = {"jobs": {"validate-scripts": {"timeout-minutes": 135, "strategy": {"matrix": {"leg": ["orchestrate-poll", "unit-tests"]}}},
+		"e2e-smoke-test": {"timeout-minutes": 360}}}
+	root = _tree(tmp_path, {}, CI, gate=gate)
+	# No null fields: the fake gh pastes this JSON into Python source.
+	skipped = {"name": "validate-scripts", "conclusion": "skipped", "steps": []}
+	env = _fake_gh(tmp_path, [], [], gate_runs=[{"id": GATE_RUN_ID}], gate_jobs=[skipped])
+	result = _run(root, env)
+	assert result.returncode == 0, result.stderr
+	assert f"CI_BUDGET_GATE outcome=read run_id={GATE_RUN_ID} jobs=1 findings=0 stale_jobs=0" in result.stdout
+	assert _created(env) == []

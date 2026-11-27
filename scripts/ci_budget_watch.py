@@ -252,7 +252,10 @@ def gate_job_findings(repo: str, root: Path, ratio: float) -> list[dict[str, Any
 		# an issue asking for a split already made, so it is skipped as stale.
 		matrix_keys = _matrix_job_keys(gate_path)
 		measured_jobs = [job for job in gate_jobs if job.get("name") not in matrix_keys]
-		stale_jobs = len(gate_jobs) - len(measured_jobs)
+		# A post-split matrix job skipped at job level (a failed `needs:`) is
+		# also listed under its bare name; it is left out of the measurement
+		# but is not a pre-split job, so it is not counted as stale.
+		stale_jobs = sum(1 for job in gate_jobs if job.get("name") in matrix_keys and job.get("conclusion") != "skipped")
 		found = job_duration_findings(measured_jobs, job_timeouts(gate_path), ratio, workflow=GATE_WORKFLOW)
 		gate_run_url = f"{os.environ.get('GITHUB_SERVER_URL', 'https://github.com')}/{repo}/actions/runs/{gate_run_id}"
 		for gate_finding in found:
