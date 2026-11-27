@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\" (severity disagreement: NIT from anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash, MAJOR from the others; highest is MAJOR)\n  expected_change_site: .github/workflows/ci.yml, selection of the five steps moved from tests-heal-plan-and-validation into orchestrate-poll (lines 4434-4522)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: ci.yml:1729-1739, ci.yml:1730-1731, ci.yml:4434-4443, ci.yml:4435-4437, ci.yml:4470-4473 and changelog.d/10200-ci-heal-job-steps-to-poll-groups.md state the run's step timings could not be read and the steps were picked by test and subprocess counts, so the pick is an estimate and not timing-based. The sharded heal step stays in the source job (tests/test_workflow_failure_heal.py, ~602 test functions per ci.yml:1733-1735) and may keep it near its limit.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\n  Expected change site: `.github/workflows/ci.yml`, the selection of steps moved from `tests-heal-plan-and-validation`.\n  Evidence of absence: the diff comments (`ci.yml` 1729-1739 and 4434-4443) and the changelog say the run's step timings could not be read, so the five steps were picked by test and subprocess counts. Names and bodies follow the issue and no timeout was raised. The pick is not timing-based.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n(No other findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom\"\n  Expected change site: .github/workflows/ci.yml, selection of the five steps moved into orchestrate-poll (lines 4434-4522)\n  Evidence of absence: .github/workflows/ci.yml lines 1730-1731 and 4435-4437 state the step timings could not be read and the selection was based on test and subprocess counts.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\n  Expected change site: .github/workflows/ci.yml, steps moved out of tests-heal-plan-and-validation (lines 4434-4522 in orchestrate-poll).\n  Evidence of absence: ci.yml:1730-1731, ci.yml:4435-4437, changelog.d/10200-ci-heal-job-steps-to-poll-groups.md:1 say timings could not be read and the pick was an estimate. The sharded heal step (tests/test_workflow_failure_heal.py, ~602 test functions per ci.yml:1733-1735) stays in the source job, which may still exceed the 0.75 budget-watch threshold.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n(No other findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nTASK_GAP\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of steps moved from `tests-heal-plan-and-validation` to `orchestrate-poll`.\n  Evidence of absence: `.github/workflows/ci.yml:1729-1734` and `4434-4443` state run 45931627782's step timings could not be read and the steps were selected by test and subprocess counts.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP\n- Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom\" (issue #10200)\n  Expected change site: .github/workflows/ci.yml - the five steps moved into orchestrate-poll groups 2 and 3 (lines 4458-4522).\n  Evidence of absence: ci.yml:1729-1739, ci.yml:4434-4443 and 4470-4473, and changelog.d/10200-ci-heal-job-steps-to-poll-groups.md:2 state the timings were not readable and the pick is an estimate. The residual was deferred in prior autofix passes. Severity lowered from pass-1 MAJOR.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6491f505d078d096dddb87893a96c7f10a4dfe68b620fddec6b26d80dfc80ac2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10202,
+    "run_id": "46002942456",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46002942456",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127140558_dc8710fd4d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10202,
+    "run_id": "46002942456"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-27T14:05:58Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
