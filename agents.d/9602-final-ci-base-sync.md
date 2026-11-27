@@ -23,7 +23,7 @@
 <!-- agents: section="Stable log prefixes (contractual)" -->
 - `REVIEW_FINAL_CI_BASE_SYNC` (`scripts/review_final_ci_sweep.sh`: `pr=<n> head=<sha> outcome=synced|skipped|failed|dry_run reason=behind|unverified_update|up_to_date|too_recent|failed_at_unknown|review_in_flight|gate_<state>|gate_untrusted|freshness_<outcome>|base_red|sync_count_unknown|max_syncs|cap_zero|update_branch_refused`, plus `base=`, `behind_by=`, `merge=`, `observe=`, `syncs= max=`, `failed_at= min_age_minutes=`, `detail=` where they apply.)
 - `REVIEW_FINAL_CI_SWEEP_BASE_SYNC` (`scripts/review_final_ci_sweep.sh`: `outcome=disabled|done|skip reason=tmp_failed`; `done` carries `candidates= checked= cap=`.)
-- `CI_FINAL_MERGE_REF` (`scripts/ci_final_merge_ref_fresh.sh`: `pr=<n> head=<sha> outcome=fresh|refreshed|stale|conflict|skipped reason=base_tip|not_refreshed|not_mergeable|not_final_ci|disabled|invalid_input|not_a_merge_of_the_head|base_ref_unreadable|tip_unreadable|fetch_unavailable|head_moved`, plus `base=`, `tested_base=`, `tip=`, `attempt=`, `merged_head=`.)
+- `CI_FINAL_MERGE_REF` (`scripts/ci_final_merge_ref_fresh.sh`: `pr=<n> head=<sha> outcome=fresh|refreshed|stale|stale_accepted|conflict|skipped reason=base_tip|not_refreshed|not_mergeable|not_final_ci|disabled|invalid_input|not_a_merge_of_the_head|base_ref_unreadable|tip_unreadable|fetch_unavailable|head_moved|sync_only_no_overlap`, plus `base=`, `tested_base=`, `tip=`, `attempt=`, `merged_head=`, `commits=`, `files=` and, on a stale line after the sync-only check ran, `detail=default_base|not_ahead|truncated|foreign_commit|file_overlap|too_many_files|api_error`.)
 LOG_PREFIX.name=REVIEW_FINAL_CI_BASE_SYNC
 LOG_PREFIX.name=REVIEW_FINAL_CI_SWEEP_BASE_SYNC
 LOG_PREFIX.name=CI_FINAL_MERGE_REF

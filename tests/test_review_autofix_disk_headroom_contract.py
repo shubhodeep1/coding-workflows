@@ -30,7 +30,7 @@ PRE_STEP = "Show disk usage (pre free-disk-space)"
 POST_STEP = "Show disk usage (post free-disk-space)"
 FREE_STEP = "Free disk space"
 BYTES_CMD = "df -B1 --output=avail,size / || true"
-PINNED_USES = "jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be"
+PINNED_USES = "jlumbroso/free-disk-space@ceedf095f4ec1a097402bc6bd80831f2e1a6fde6"
 EXPECTED_WITH = {
 	"tool-cache": True,
 	"android": True,

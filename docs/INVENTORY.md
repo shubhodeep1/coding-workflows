@@ -226,6 +226,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/git_ref_health_check.sh` — Shell helper for git ref health check.
 - `scripts/heal_isolated_implement.sh` — Run a heal editor and validator in disposable credential-free containers and scope-check transfer.
 - `scripts/heal_reproduce.sh` — Run a heal's listed failing tests at a SHA and its baseline in the credential-free pre-push gate container and write heal_repro.v1.
+- `scripts/plan_nothing_to_implement_verify.sh` — Body of plan.yml "Verify nothing-to-implement block": runs a nothing-to-implement plan's listed tests on the planning ref through `heal_reproduce.sh` and closes the issue as completed when all pass (issue #10015; log prefix `PLAN_NOTHING_TO_IMPLEMENT`).
 - `scripts/implement_commit_changes.sh` — implement_commit_changes.sh — stage + commit implement-phase editor output.
 - `scripts/implement_heal_preflight.sh` — Verify the pipeline-authored heal scope before granting an isolated editor access to an issue.
 - `scripts/implement_diagnose_post_codex_failure.sh` — validation failures in implement.yml and file fix-up issues.
@@ -249,6 +250,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/nag_reminder.sh` — Fail-open reminder injection helper for long-running unattended wrapper loops.
 - `scripts/opencode_helpers.sh` — Shared OpenCode command, output, bootstrap, and alert helpers.
 - `scripts/openrouter_prompt_cache.py` — OpenRouter prompt-cache helpers shared by workflow scripts.
+- `scripts/operator_step_daily_tick.sh` — Daily `workflow-log-analysis.yml` step body: tick observable `ai:operator-step` entries and close an empty tracker (#10118).
 - `scripts/operator_step_issue.py` — Keep the repository's single `ai:operator-step` issue, one keyed section per source (Q33).
 - `scripts/orchestrate_force_tick.sh` — Shell helper for orchestrate force tick.
 - `scripts/orchestrate_lib.py` — Orchestrator library: DAG management, wave computation, issue tracking, and judge helpers.
@@ -291,6 +293,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_autofix_step_assemble_failure_evidence.sh` — body of the review_autofix.yml "Assemble failure evidence" step, including the model-provider outage classification (issue #6633; moved out to keep the workflow under GitHub's 512,000-byte limit).
 - `scripts/review_autofix_step_provider_outage_record.sh` — body of the review_autofix.yml "Record model-provider outage" step: opens or reuses the `ai:provider-outage` tracker and sends its one alert (issue #6633).
 - `scripts/review_autofix_step_mark_review_blocked_workflow_failure.sh` — body of the review_autofix.yml "Mark linked issues review-blocked (workflow failure)" step (moved out to keep the workflow under GitHub's 512,000-byte limit).
+- `scripts/review_autofix_step_mark_review_blocked_exhaustion.sh` — body of the review_autofix.yml "Mark linked issues review-blocked (autofix exhaustion)" step (moved out to keep the workflow under its 430,000-byte size guard).
 - `scripts/review_autofix_step_failure_comment.sh` — body of the review_autofix.yml "Post review-blocked comment on PR (workflow failure)" step, including the provider-outage comment (issue #6633).
 - `scripts/review_autofix_step_claude_capacity_wait.sh` — body of the review_autofix.yml "Defer review on Claude capacity" (`defer`) and "Record Claude capacity wait" (`record`) steps: with the Claude capacity wait on, an all-gated pool fails the run as `claude_capacity` instead of falling back, and the record mode labels the PR `ai:claude-capacity-wait` and records it on the capacity tracker for the hourly resume pass (issue #7370).
 - `scripts/review_autofix_step_claude_pool_capacity.sh` — body of the review_autofix.yml "Record Claude pool capacity" step: one deduplicated capacity tracker and alert when every Claude pool account is gated (issue #6633).
@@ -308,6 +311,7 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_autofix_step_generate_diff_context.sh` — body of the review_autofix.yml "Generate diff context" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
 - `scripts/review_autofix_step_preflight_required_files.sh` — body of the review_autofix.yml "Preflight: Verify required files before reviewer invocation" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
 - `scripts/review_autofix_step_editor_noop_disposition.sh` — body of the review_autofix.yml "Validate editor no-op disposition" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
+- `scripts/review_autofix_step_editor_noop_suspicious_warning.sh` — body of the review_autofix.yml "Telegram editor-noop-suspicious warning" step (sourced by the step; same `AUTOFIX_STEP_*` pass-through as the review-blocked comment step; moved out to keep the workflow under the 430,000-byte ceiling, PR #9944).
 - `scripts/review_autofix_step_stage_codex_logs.sh` — body of the review_autofix.yml "Stage codex logs for upload (failure or empty-editor)" step (sourced by the step; skips with a warning when the script is missing, since the step also runs after support staging failed; moved out to keep the workflow under the §27 size guard).
 - `scripts/review_autofix_step_init_runtime_workspace.sh` — body of the review_autofix.yml "Initialize runtime workspace" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
 - `scripts/review_autofix_step_mark_ready_to_merge.sh` — body of the review_autofix.yml "Mark linked issues ready to merge" step (sourced by the step; moved out to keep the workflow under the §27 size guard).
