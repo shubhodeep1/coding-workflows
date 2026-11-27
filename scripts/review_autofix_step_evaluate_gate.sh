@@ -59,6 +59,43 @@ pr_base_retargeted="false"
 pr_updated_at_gate=""
 pr_title_cached="${PR_TITLE:-}"
 pr_body_cached="${PR_BODY:-}"
+# Issue #10031: when the PR read gives up on a GH_PAT primary rate limit
+# (rc=75), leave a job-token marker comment so the orchestrator poller's
+# run_review_gate_rate_limit_requeue_pass re-dispatches the review after the
+# reset. The job token has its own rate budget, and signing is turned off for
+# this post so the marker stays a plain github-actions comment (the poller
+# trusts only that author). GET /rate_limit does not count against the limit.
+# Fails open: the caller still logs AUTOFIX_GATE_PR_READ_FAILED and exits 1.
+_gate_write_rate_limit_marker()
+{
+  local _rl_pr="${PR_NUMBER:-}" _rl_run="${GITHUB_RUN_ID:-}" _rl_head="${PR_HEAD_SHA:-}" _rl_now _rl_reset="" _rl_body
+  [[ "${_rl_run}" =~ ^[1-9][0-9]*$ ]] || _rl_run="unknown"
+  _rl_head="$(printf '%s' "${_rl_head}" | tr 'A-F' 'a-f')"
+  [[ "${_rl_head}" =~ ^[0-9a-f]{40}$ ]] || _rl_head="unknown"
+  if ! [[ "${_rl_pr}" =~ ^[1-9][0-9]*$ ]] || [ "${_rl_run}" = "unknown" ]; then
+    echo "REVIEW_GATE_RATE_LIMIT_MARKER pr=${_rl_pr:-unknown} run=${_rl_run} outcome=skipped reason=invalid_input"
+    return 0
+  fi
+  if [ -z "${AI_COMMENT_JOB_TOKEN:-}" ]; then
+    echo "REVIEW_GATE_RATE_LIMIT_MARKER pr=${_rl_pr} run=${_rl_run} outcome=skipped reason=no_job_token"
+    return 0
+  fi
+  _rl_now="$(date -u +%s)"
+  _rl_reset="$(gh api rate_limit --jq '.resources.core.reset' 2>/dev/null || true)"
+  if ! [[ "${_rl_reset}" =~ ^[1-9][0-9]{9}$ ]] || [ "${_rl_reset}" -gt $((_rl_now + 3900)) ]; then
+    _rl_reset=$((_rl_now + 3600))
+  fi
+  _rl_body="The AI review gate could not read this pull request because the GitHub API rate limit was reached; the orchestrator poller re-dispatches the review after the limit resets.
+
+<!-- ai:review-gate-rate-limited:v1 head=${_rl_head} reset=${_rl_reset} run=${_rl_run} -->"
+  if AI_COMMENT_SIGNING_POST=false GH_TOKEN="${AI_COMMENT_JOB_TOKEN}" gh api -X POST "repos/${REPOSITORY}/issues/${_rl_pr}/comments" \
+    -f body="${_rl_body}" >/dev/null 2>&1; then
+    echo "REVIEW_GATE_RATE_LIMIT_MARKER pr=${_rl_pr} run=${_rl_run} head=${_rl_head} reset=${_rl_reset} outcome=written"
+  else
+    echo "REVIEW_GATE_RATE_LIMIT_MARKER pr=${_rl_pr} run=${_rl_run} head=${_rl_head} reset=${_rl_reset} outcome=write_failed"
+  fi
+  return 0
+}
 if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
   : # fall through to existing PR-API fetch below
 elif [ "${FORCE_CLAUDE_BRANCH_REVIEW:-false}" = "true" ] && [ -n "${HEAD_REF_OVERRIDE:-}" ]; then
@@ -101,6 +138,9 @@ if [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
   if [ "${_pr_gate_rc}" -eq 75 ] \
     || { [ "${_pr_gate_rc}" -eq 1 ] && declare -F _gh_api_classify >/dev/null; } \
     || { [ "${_pr_gate_rc}" -eq 2 ] && declare -F _gh_api_classify >/dev/null && [ "${_pr_gate_not_found}" != "true" ]; }; then
+    if [ "${_pr_gate_rc}" -eq 75 ]; then
+      _gate_write_rate_limit_marker || true
+    fi
     echo "::error::AUTOFIX_GATE_PR_READ_FAILED pr=${PR_NUMBER} rc=${_pr_gate_rc}"
     exit 1
   fi

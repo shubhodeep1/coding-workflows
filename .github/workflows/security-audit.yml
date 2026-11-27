@@ -512,7 +512,7 @@ jobs:
           TG_ADMIN_CHAT_ID: ${{ vars.TG_ADMIN_CHAT_ID || '' }}
           ALERT_MSG_LEVEL: ${{ vars.ALERT_MSG_LEVEL || 'WARNING' }}
           # Codex version baked into the isolated audit agent's image (scripts/codex_isolated_exec.sh).
-          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
           PYTHONDONTWRITEBYTECODE: "1"
           SECURITY_AUDIT_ENABLED: ${{ vars.SECURITY_AUDIT_ENABLED || 'true' }}
           SECURITY_AUDIT_CONFIDENCE_GATE: ${{ vars.SECURITY_AUDIT_CONFIDENCE_GATE || '8' }}
@@ -559,7 +559,7 @@ jobs:
         # set by "Resolve audit target" from the event payload's repository
         # object, with one repository read only as a fail-closed fallback.
         if: failure() && env.SECURITY_AUDIT_REPO_PRIVATE == 'true'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: security-audit-claude-rejected-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/security-audit-claude-rejected.txt

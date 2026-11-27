@@ -1,0 +1,30 @@
+#!/usr/bin/env bash
+# gh call counter summary (issue #9887). Canonical copy of the command that
+# scripts/gh_helpers.sh (gh_call_counter_install) writes next to the gh
+# shim; kept byte-identical by tests/test_gh_call_counter.py.
+# Prints one line of GH_PAT_BUDGET end-line keys from the job's counter log:
+#   calls_in_job=<n> paginated_in_job=<n> calls_by_token=pat:<n>,github_token:<n>,other:<n>
+# Lines that do not match the shim's exact format are skipped. A missing or
+# unreadable log prints the three keys as `unknown`. Always exits 0.
+_gcc_unknown='calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown'
+_gcc_log="${GH_CALL_COUNTER_LOG:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/gh_call_counter.log}"
+if [ ! -f "${_gcc_log}" ] || [ ! -r "${_gcc_log}" ]; then
+	printf '%s\n' "${_gcc_unknown}"
+	exit 0
+fi
+_gcc_out="$(awk '
+	/^v1 cmd=[a-z-]+ paginate=[01] token=(pat|github_token|other)$/ {
+		calls++
+		if ($3 == "paginate=1") paginated++
+		sub(/^token=/, "", $4)
+		tokens[$4]++
+	}
+	END {
+		printf "calls_in_job=%d paginated_in_job=%d calls_by_token=pat:%d,github_token:%d,other:%d\n", \
+			calls, paginated, tokens["pat"], tokens["github_token"], tokens["other"]
+	}' "${_gcc_log}" 2>/dev/null)" || _gcc_out=""
+case "${_gcc_out}" in
+	calls_in_job=[0-9]*) printf '%s\n' "${_gcc_out}" ;;
+	*) printf '%s\n' "${_gcc_unknown}" ;;
+esac
+exit 0

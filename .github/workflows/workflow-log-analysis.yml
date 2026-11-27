@@ -407,15 +407,33 @@ jobs:
 
       - name: Upload daily PAT consumer ranking
         if: ${{ github.event_name == 'schedule' && github.event.schedule == '0 6 * * *' }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: gh-pat-budget-day
           path: ${{ runner.temp }}/gh-pat-budget.md
           if-no-files-found: error
           retention-days: 30
 
+      # Pipeline-human-wait-elimination Phase 9 (#10118): tick ai:operator-step
+      # entries whose condition the pipeline can observe, and close an empty
+      # tracker. Daily schedule only, folded into this job (no new runner).
+      # GH_TOKEN is GH_PAT because entries are written under the PAT login,
+      # which `tick` reads from /user as its trusted login. Fail-open: the step
+      # script always exits 0. `OPERATOR_STEP_DAILY_TICK_ENABLED=false` makes no
+      # git or API call.
+      - name: Tick observable operator steps
+        if: ${{ !cancelled() && github.event_name == 'schedule' && github.event.schedule == '0 6 * * *' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          OPERATOR_STEP_DAILY_TICK_ENABLED: ${{ vars.OPERATOR_STEP_DAILY_TICK_ENABLED || 'true' }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+        run: bash scripts/operator_step_daily_tick.sh
+
       - name: Upload workflow log report artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: workflow-log-report
           path: workflow_log_report.json
@@ -423,7 +441,7 @@ jobs:
           retention-days: 7
 
       - name: Upload full workflow log directory artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: workflow-log-output
           path: ${{ steps.collect.outputs.log_output_dir }}
@@ -668,7 +686,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
       AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
       AI_ENGINE_RETRO: ${{ vars.AI_ENGINE_RETRO || '' }}
     steps:
@@ -738,14 +756,14 @@ jobs:
 
       - name: Cache Codex CLI
         id: cache-codex
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ runner.tool_cache }}/codex
-          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}-v2
+          key: codex-${{ vars.CODEX_VERSION || 'v0.171.0' }}-v2
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@cbe65b01a1ff0890a0149a244ee46121065a0c45
         with:
           codex_version: ${{ env.CODEX_VERSION }}
 
@@ -1305,7 +1323,7 @@ jobs:
       report_branch: ${{ steps.commit_report.outputs.delivery == '' && steps.commit_report.outputs.report_branch || '' }}
       purged_docs: ${{ steps.commit_report.outputs.purged_docs }}
     env:
-      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
       AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
       AI_ENGINE_LOG_SUMMARY: ${{ vars.AI_ENGINE_LOG_SUMMARY || '' }}
       AI_ENGINE_LOG_ANALYSIS: ${{ vars.AI_ENGINE_LOG_ANALYSIS || '' }}
@@ -1384,7 +1402,7 @@ jobs:
 
       - name: Cache Codex CLI
         id: cache-codex
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ runner.tool_cache }}/codex
           # -v2: previous cache only stored @openai/codex (no platform binary),
@@ -1392,11 +1410,11 @@ jobs:
           # startup with "Missing optional dependency @openai/codex-linux-x64".
           # Bump invalidates the broken entries; persist+restore below now
           # handle both packages symmetrically.
-          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}-v2
+          key: codex-${{ vars.CODEX_VERSION || 'v0.171.0' }}-v2
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@cbe65b01a1ff0890a0149a244ee46121065a0c45
         with:
           codex_version: ${{ env.CODEX_VERSION }}
 
@@ -2011,7 +2029,7 @@ jobs:
       - name: Upload workflow log analysis report
         if: always() && (steps.analyze.outputs.report_file != '' || steps.analyze.outputs.held_report_file != '')
         continue-on-error: true
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: workflow-log-analysis-report
           path: ${{ steps.analyze.outputs.report_file || steps.analyze.outputs.held_report_file }}
@@ -2657,7 +2675,7 @@ jobs:
       section_branch: ${{ steps.deep_audit_section_push.outputs.section_branch }}
       section_base_sha: ${{ steps.deep_audit_section_push.outputs.section_base_sha }}
     env:
-      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
       AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
       AI_ENGINE_LOG_AUDIT: ${{ vars.AI_ENGINE_LOG_AUDIT || '' }}
     steps:
@@ -2732,7 +2750,7 @@ jobs:
 
       - name: Cache Codex CLI
         id: cache-codex
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ runner.tool_cache }}/codex
           # -v2: previous cache only stored @openai/codex (no platform binary),
@@ -2740,11 +2758,11 @@ jobs:
           # startup with "Missing optional dependency @openai/codex-linux-x64".
           # Bump invalidates the broken entries; persist+restore below now
           # handle both packages symmetrically.
-          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}-v2
+          key: codex-${{ vars.CODEX_VERSION || 'v0.171.0' }}-v2
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@cbe65b01a1ff0890a0149a244ee46121065a0c45
         with:
           codex_version: ${{ env.CODEX_VERSION }}
 
@@ -3326,7 +3344,7 @@ jobs:
       section_branch: ${{ steps.api_redundancy_section_push.outputs.section_branch }}
       section_base_sha: ${{ steps.api_redundancy_section_push.outputs.section_base_sha }}
     env:
-      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+      CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
       AI_ENGINE: ${{ vars.AI_ENGINE || '' }}
       AI_ENGINE_LOG_ANALYSIS: ${{ vars.AI_ENGINE_LOG_ANALYSIS || '' }}
     steps:
@@ -3401,7 +3419,7 @@ jobs:
 
       - name: Cache Codex CLI
         id: cache-codex
-        uses: actions/cache@v5
+        uses: actions/cache@v6
         with:
           path: ${{ runner.tool_cache }}/codex
           # -v2: previous cache only stored @openai/codex (no platform binary),
@@ -3409,11 +3427,11 @@ jobs:
           # startup with "Missing optional dependency @openai/codex-linux-x64".
           # Bump invalidates the broken entries; persist+restore below now
           # handle both packages symmetrically.
-          key: codex-${{ vars.CODEX_VERSION || 'v0.114.0' }}-v2
+          key: codex-${{ vars.CODEX_VERSION || 'v0.171.0' }}-v2
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@cbe65b01a1ff0890a0149a244ee46121065a0c45
         with:
           codex_version: ${{ env.CODEX_VERSION }}
 

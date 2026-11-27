@@ -346,3 +346,138 @@ def test_wrapper_disabled(tmp_path):
 	read = _wrapper(tmp_path, "read", env)
 	assert read.returncode == 0
 	assert "STAGE_SWITCH_WATCH outcome=disabled" in read.stdout
+
+
+# --- discovery (issue #10170) ------------------------------------------------
+
+GAMMA_STAGE = "Turns on gamma (w.yml); false turns that stage off."
+
+
+def _gamma_root(root: Path) -> Path:
+	workflows = root / ".github" / "workflows"
+	workflows.mkdir(parents=True, exist_ok=True)
+	(workflows / "w.yml").write_text("env:\n  G: ${{ vars.GAMMA_ENABLED || 'true' }}\n", encoding="utf-8")
+	return root
+
+
+def test_discovered_switch_without_entry_is_snapshotted_and_alerts(tmp_path):
+	registry = _registry(tmp_path)
+	root = _gamma_root(tmp_path / "repo")
+	listing = _listing({"name": "GAMMA_ENABLED", "value": "false", "updated_at": "2026-11-01T00:00:00Z"})
+	plain = _run_py(["snapshot", "--registry", str(registry)], listing)
+	assert plain.returncode == 0, plain.stderr
+	assert "GAMMA_ENABLED" not in json.loads(plain.stdout)
+	result = _run_py(["snapshot", "--registry", str(registry), "--repo-root", str(root)], listing)
+	assert result.returncode == 0, result.stderr
+	assert json.loads(result.stdout)["GAMMA_ENABLED"]["value_class"] == "off"
+	snapshot = tmp_path / "snapshot.json"
+	snapshot.write_text(result.stdout, encoding="utf-8")
+	ev = _run_py(["evaluate", "--registry", str(registry), "--snapshot", str(snapshot), "--repo-root", str(root), "--now", NOW, "--wait-hours", "24"])
+	assert ev.returncode == 0, ev.stderr
+	alerts = json.loads(ev.stdout)["alerts"]
+	assert [entry["name"] for entry in alerts] == ["GAMMA_ENABLED"]
+	assert alerts[0]["stage"] == GAMMA_STAGE
+	assert "STAGE_SWITCH_OFF name=GAMMA_ENABLED value=false default=true" in ev.stderr
+	ev_plain = _run_py(["evaluate", "--registry", str(registry), "--snapshot", str(snapshot), "--now", NOW])
+	assert ev_plain.returncode == 0, ev_plain.stderr
+	assert json.loads(ev_plain.stdout)["off"] == []
+
+
+def test_entry_stage_and_on_values_win_over_discovery(tmp_path):
+	root = _gamma_root(tmp_path / "repo")
+	data = json.loads(_registry(tmp_path).read_text(encoding="utf-8"))
+	data["switches"].append({"name": "GAMMA_ENABLED", "stage": "Hand-written.", "on_values": ["yes"]})
+	path = tmp_path / "custom.json"
+	path.write_text(json.dumps(data), encoding="utf-8")
+	merged = ssw.load_registry(path, root)
+	gamma = {entry["name"]: entry for entry in merged["switches"]}["GAMMA_ENABLED"]
+	assert gamma == {"name": "GAMMA_ENABLED", "stage": "Hand-written.", "on_values": ["yes"], "default": "true"}
+	names = [entry["name"] for entry in merged["switches"]]
+	assert names == sorted(names)
+
+
+def test_wrapper_alerts_for_discovered_switch(tmp_path):
+	gh_gamma = "printf '%s\\n' '{\"name\":\"GAMMA_ENABLED\",\"value\":\"false\",\"updated_at\":\"2026-11-20T00:00:00Z\"}'"
+	# Default root: the folder above the copied scripts/ (tmp_path).
+	_gamma_root(tmp_path)
+	env = _wrapper_env(tmp_path, gh_gamma)
+	assert _wrapper(tmp_path, "read", env).returncode == 0
+	report = _wrapper(tmp_path, "report", env)
+	assert "alerts=1 alert=sent" in report.stdout, report.stdout + report.stderr
+	assert GAMMA_STAGE in (tmp_path / "sent.txt").read_text()
+
+
+def test_wrapper_honours_stage_switch_repo_root(tmp_path):
+	gh_gamma = "printf '%s\\n' '{\"name\":\"GAMMA_ENABLED\",\"value\":\"false\",\"updated_at\":\"2026-11-20T00:00:00Z\"}'"
+	root = _gamma_root(tmp_path / "elsewhere")
+	env = _wrapper_env(tmp_path, gh_gamma, STAGE_SWITCH_REPO_ROOT=str(root))
+	assert _wrapper(tmp_path, "read", env).returncode == 0
+	report = _wrapper(tmp_path, "report", env)
+	assert "alerts=1 alert=sent" in report.stdout, report.stdout + report.stderr
+	assert GAMMA_STAGE in (tmp_path / "sent.txt").read_text()
+
+
+def test_non_boolean_pending_exits_2(tmp_path):
+	for where in ("entry", "marker"):
+		data = json.loads(_registry(tmp_path).read_text(encoding="utf-8"))
+		if where == "entry":
+			data["switches"][1]["pending"] = "yes"
+		else:
+			data["off_on_purpose"] = [{"name": "ALPHA_ENABLED", "until": "2099-01-01", "reason": "x", "pending": 1}]
+		path = tmp_path / f"{where}.json"
+		path.write_text(json.dumps(data), encoding="utf-8")
+		result = _run_py(["snapshot", "--registry", str(path)], "")
+		assert result.returncode == 2, where
+		assert "pending must be true or false" in result.stderr
+
+
+def test_name_only_entry_loads_with_defaults(tmp_path):
+	path = tmp_path / "names.json"
+	path.write_text(json.dumps({"schema": "stage_switches.v1", "switches": [{"name": "DELTA_STAGE_ENABLED"}]}), encoding="utf-8")
+	entry = ssw.load_registry(path)["switches"][0]
+	assert entry["default"] == "true"
+	assert entry["stage"] == "Turns on delta stage; false turns that stage off."
+
+
+def test_empty_switches_with_nothing_discovered_exits_2(tmp_path):
+	path = tmp_path / "empty.json"
+	path.write_text(json.dumps({"schema": "stage_switches.v1", "switches": []}), encoding="utf-8")
+	empty_root = tmp_path / "root"
+	empty_root.mkdir()
+	result = _run_py(["snapshot", "--registry", str(path), "--repo-root", str(empty_root)], "")
+	assert result.returncode == 2
+	assert "after discovery" in result.stderr
+	_gamma_root(empty_root)
+	result = _run_py(["snapshot", "--registry", str(path), "--repo-root", str(empty_root)], "")
+	assert result.returncode == 0, result.stderr
+
+
+def test_pending_marker_for_unknown_switch_is_silent(tmp_path):
+	registry = _registry(tmp_path, [
+		{"name": "FOO_ENABLED", "until": "2099-01-01", "reason": "x", "pending": True},
+		{"name": "foo", "until": "2099-01-01", "reason": "x", "pending": True},
+	])
+	snapshot = _snapshot(tmp_path, registry, {"name": "ALPHA_ENABLED", "value": "true"})
+	_, stderr = _evaluate(registry, snapshot)
+	assert "FOO_ENABLED" not in stderr
+	assert stderr.count("STAGE_SWITCH_WATCH off_on_purpose marker") == 1
+	assert "'foo'" in stderr
+
+
+def test_discovery_and_evaluate_without_pyyaml(tmp_path):
+	registry = _registry(tmp_path)
+	snapshot = _snapshot(tmp_path, registry, {"name": "ALPHA_ENABLED", "value": "false"})
+	code = (
+		"import sys\n"
+		"sys.modules['yaml'] = None\n"
+		f"sys.path.insert(0, {str(ROOT / 'scripts')!r})\n"
+		"import stage_switch_watch as s\n"
+		f"assert s.discover_switches({str(ROOT)!r})\n"
+		f"sys.exit(s.main(['evaluate', '--registry', {str(registry)!r}, '--snapshot', {str(snapshot)!r}, '--repo-root', {str(ROOT)!r}, '--now', {NOW!r}]))\n"
+	)
+	result = subprocess.run(
+		[sys.executable, "-c", code], capture_output=True, text=True,
+		env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"), check=False,
+	)
+	assert result.returncode == 0, result.stderr
+	assert "ALPHA_ENABLED" in result.stdout
