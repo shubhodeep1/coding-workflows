@@ -204,6 +204,9 @@ LINKED_ISSUE = 5797
 PR_READ_CALL = f"gh api repos/owner/repo/pulls/{PR}"
 FRESH_STUB = "_pr_base_fresh_for_merge() { PR_BASE_FRESHNESS_OUTCOME=fresh; return 0; }\n"
 CHECKS_OK_STUB = "_pr_wait_for_required_checks() { PR_CHECKS_WAIT_OUTCOME=ok; PR_CHECKS_WAIT_WAITED_S=0; return 0; }\n"
+# The security follow-up guard (#9671) is not in the test's support checkout,
+# so the step's fail-closed fallback would refuse; this stub lets it allow.
+FOLLOWUP_ALLOW_STUB = "det_skip_followup_merge_guard() { DET_SKIP_FOLLOWUP_GUARD_RESULT=allow; return 0; }\n"
 # The checks wait closes the PR (state file rewrite) before the pre-merge read.
 CHECKS_OK_THEN_CLOSE_STUB = (
 	"_pr_wait_for_required_checks() { PR_CHECKS_WAIT_OUTCOME=ok; PR_CHECKS_WAIT_WAITED_S=0; "
@@ -301,7 +304,7 @@ class DeterministicSkipStepReplay(unittest.TestCase):
 
 	def test_open_pr_on_the_gate_head_merges_as_before(self) -> None:
 		h = ml._Harness(self._state(_pr("open")))
-		res = self._run_step(h, FRESH_STUB + CHECKS_OK_STUB)
+		res = self._run_step(h, FRESH_STUB + CHECKS_OK_STUB + FOLLOWUP_ALLOW_STUB)
 		out = res.stdout + res.stderr
 		self.assertEqual(res.returncode, 0, out)
 		self.assertEqual(_skip_lines(out), [])
@@ -326,7 +329,8 @@ class Wiring(unittest.TestCase):
 		self.assertLess(start, block.index('_pr_base_fresh_for_merge "${PR_NUMBER}"'))
 		self.assertLess(start, block.index("gh_retry gh pr merge"))
 		self.assertLess(start, block.index('ensure_label_exists "ai:review-skipped"'))
-		_assert_guard_before_each_merge(self, block, "elif gh_retry gh pr merge", 200, 2)
+		# The security follow-up guard arm (#9671) sits between the state check and each merge.
+		_assert_guard_before_each_merge(self, block, "elif gh_retry gh pr merge", 400, 2)
 		# Fallback when the support library is unverified: pre_merge fails closed.
 		self.assertIn("reason=pr_state_unavailable closed_at=- stage=pre_merge", block)
 		# The label-only paths read state and draft with the head (one call).
@@ -338,7 +342,7 @@ class Wiring(unittest.TestCase):
 		start = text.index('_pr_merge_state_check "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" start "${_ORCH_PR_META_JSON}"')
 		self.assertLess(text.index('if [ -z "${_orch_pr_head_sha}" ] || [ "${_orch_pr_head_sha}" != "${INITIAL_HEAD_SHA}" ]; then'), start)
 		self.assertLess(start, text.index('_pr_base_fresh_for_merge "${PR_NUMBER}"'))
-		self.assertLess(start, text.index("run_security_followup_guard; then"))
+		self.assertLess(start, text.index("run_security_followup_guard pre_status; then"))
 		self.assertLess(start, text.index('review_head_gate_post_status "${GITHUB_REPOSITORY}" "${INITIAL_HEAD_SHA}" success', start - 1))
 		_assert_guard_before_each_merge(self, text, "if gh_retry gh pr merge", 300, 2)
 		self.assertIn('if ! type _pr_merge_state_check >/dev/null 2>&1; then', text)

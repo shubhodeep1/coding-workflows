@@ -1801,6 +1801,8 @@ def test_followup_guard_terminal_arm_uses_its_own_pr_read(base: str, merged: boo
 			f"_safe_gh_jq() {{ printf '%s\\n' \"$*\" >> {str(reads)!r}; printf '%s' \"${{FG_PAYLOAD_JSON}}\"; }}\n"
 			"_pr_base_fresh_for_merge() { return 0; }\n"
 			"_pr_wait_for_required_checks() { return 0; }\n"
+			# #10049: the arm's pre-merge PR state check is a gate like the two above.
+			"_pr_merge_state_check() { return 0; }\n"
 			"review_head_gate_post_status() { :; }\n"
 			+ _merge_err_helpers()
 			+ "\n"
@@ -2059,11 +2061,17 @@ def test_followup_guard_unreadable_retry_base_skips_every_retried_merge(path: st
 	assert _fg_merge_calls(run["calls"][len(expected):]) == []
 	assert run["guard_calls"] == 1
 	skips = [line for line in _retry_lines(proc.stdout) if "note=base_unverified" in line]
-	assert skips == [f"RB_JUDGE_MERGE_RETRY pr=42 head={JUDGED} path={path} attempt={n}/3 note=base_unverified action=skip_attempt" for n in (1, 2, 3)]
 	if path == "sync":
+		assert skips == [f"RB_JUDGE_MERGE_RETRY pr=42 head={JUDGED} path={path} attempt={n}/3 note=base_unverified action=skip_attempt" for n in (1, 2, 3)]
 		assert "judge_skip_reason=sync_merge_failed" in run["outputs"]
 	else:
-		assert "RB_MERGE_STATUS=merge_failed" in proc.stdout.splitlines()
+		# #10049: an auto-mode retry reports an unreadable PR state as
+		# state_unavailable (no merge call); only the readable read without a
+		# base is base_unverified. Running out of reads is a wait.
+		assert skips == [f"RB_JUDGE_MERGE_RETRY pr=42 head={JUDGED} path={path} attempt=2/3 note=base_unverified action=skip_attempt"]
+		assert [line for line in _retry_lines(proc.stdout) if "outcome=state_unavailable" in line] == [
+			f"RB_JUDGE_MERGE_RETRY pr=42 head={JUDGED} path={path} attempt={n}/3 outcome=state_unavailable" for n in (1, 3)]
+		assert "RB_MERGE_STATUS=mergeability_pending" in proc.stdout.splitlines()
 	assert run["leftovers"] == []
 
 
@@ -2076,7 +2084,9 @@ def test_followup_guard_unreadable_retry_base_reads_again_then_merges(path: str)
 	assert run["guard_calls"] == 2
 	assert run["payloads"] == [json.loads(FG_PAYLOAD)] * 2
 	assert run["calls"][-1] == _expected_calls(path)[0]
-	assert sum("note=base_unverified" in line for line in _retry_lines(proc.stdout)) == 1
+	# #10049: an auto-mode retry reports the unreadable read as state_unavailable.
+	skip_note = "note=base_unverified" if path == "sync" else "outcome=state_unavailable"
+	assert sum(skip_note in line for line in _retry_lines(proc.stdout)) == 1
 	_assert_merge_succeeded(path, "\n".join(run["outputs"]), proc.stdout)
 	assert run["leftovers"] == []
 
@@ -2089,7 +2099,9 @@ def test_followup_guard_kill_switch_keeps_old_retry_on_unreadable_base(path: str
 	run = _run_fg_site_with_retry(
 		path,
 		["allow"],
-		_first_failure(path) + [FG_UNREADABLE_READS[0], _ok()],
+		# #10049: an auto-mode retry merges only after a read shows the PR
+		# open; that read carries no base, which the kill switch accepts.
+		_first_failure(path) + [FG_UNREADABLE_READS[0]] + _after_unreadable_read(path),
 		extra_env={"SINGLE_PASS_FOLLOWUP_GUARD_SWITCH": "false"},
 	)
 	proc = run["proc"]
