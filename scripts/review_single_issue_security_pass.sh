@@ -200,8 +200,9 @@
 # Log: SINGLE_ISSUE_SECURITY_PASS mode= pr= head= outcome= reason= cycle=
 #      (followup_guard adds parent=; retirement adds item=, issues=, prs=)
 #      Issue #10176 (gate): outcome=markers_read comments=<n|unreadable>
-#      markers=<n> author=<login> source=<cache|direct|synthesized|fresh|unknown>
-#      age_s=<n|unknown> sig_shim=<on|off>, once per view; a markers_unverifiable
+#      markers=<n> author=<login> source=<cache_hit|cache_miss|fallback|cache|direct|synthesized|fresh|unknown>
+#      age_s=<n|unknown> sig_shim=<on|off>, once per view (also for the view a
+#      markers_unverifiable hold rejects, with markers=0); a markers_unverifiable
 #      hold after a fresh read adds detail=fresh_read_failed|fresh_read_empty;
 #      outcome=reread reason=markers_changed before a re-entry;
 #      outcome=cycle_renumbered from= to=; outcome=cycle_guard result=unverified.
@@ -376,13 +377,14 @@ single_pass_payload_comment_count()
 # Issue #10176: one diagnostic line describing the comments view the gate
 # decides on. Arguments: comments file, marker TSV, head, `fresh` for a fresh
 # read (anything else reads the file's `.source` sidecar written by
-# review_collect_pr_metadata.sh: `<cache|direct|synthesized> <epoch>`). age_s
-# is measured from that write (a cache hit may be older still) or, without a
-# valid sidecar, from the file's mtime. No token or secret is printed.
+# review_collect_pr_metadata.sh: `<cache_hit|cache_miss|fallback|cache|direct|synthesized> <epoch>`).
+# age_s is measured from that epoch (for cache_hit, when the cached entry was
+# fetched; for the legacy `cache` token a hit may be older still) or, without
+# a valid sidecar, from the file's mtime. No token or secret is printed.
 single_pass_view_log()
 {
 	local view_file="$1" view_markers="$2" view_head="$3" view_source="$4"
-	local view_comments view_marker_count view_age="unknown" view_token="" view_epoch="" view_now view_shim="off" view_gh
+	local view_comments view_marker_count view_age="unknown" view_token="" view_epoch="" view_now view_shim="off" view_path_dir view_old_ifs="${IFS}"
 	view_comments="$(jq -r 'if type == "array" then length else "unreadable" end' "${view_file}" 2>/dev/null)" || view_comments="unreadable"
 	[[ "${view_comments}" =~ ^[0-9]+$ ]] || view_comments="unreadable"
 	view_marker_count="$(printf '%s\n' "${view_markers}" | awk -F'\t' 'NF >= 5 { n++ } END { print n + 0 }')"
@@ -394,7 +396,7 @@ single_pass_view_log()
 		if [ -n "${view_file}" ] && [ -f "${view_file}.source" ] && [ -r "${view_file}.source" ]; then
 			{ read -r view_token view_epoch _ || true; } < "${view_file}.source"
 			case "${view_token}" in
-				cache|direct|synthesized)
+				cache|cache_hit|cache_miss|fallback|direct|synthesized)
 					if [[ "${view_epoch}" =~ ^[0-9]{1,12}$ ]]; then
 						view_source="${view_token}"
 						view_epoch="$((10#${view_epoch}))"
@@ -414,10 +416,21 @@ single_pass_view_log()
 			[ "${view_age}" -ge 0 ] || view_age=0
 		fi
 	fi
-	view_gh="$(command -v gh 2>/dev/null || true)"
-	case "${view_gh}" in
-		*/ai_comment_sig_shim.*) view_shim="on" ;;
-	esac
+	# The gh call counter is kept first on PATH (it execs the next gh, the
+	# shim; gh_helpers.sh _gh_call_counter_refront), so scan every PATH entry
+	# for the shim dir rather than only the first gh.
+	IFS=":"
+	for view_path_dir in ${PATH}; do
+		case "${view_path_dir}" in
+			*/ai_comment_sig_shim.*)
+				if [ -x "${view_path_dir}/gh" ]; then
+					view_shim="on"
+					break
+				fi
+				;;
+		esac
+	done
+	IFS="${view_old_ifs}"
 	single_pass_log "mode=gate pr=${PR_NUMBER} head=${view_head} outcome=markers_read comments=${view_comments} markers=${view_marker_count} author=${SECURITY_PASS_AUTHOR_LOGIN:-} source=${view_source} age_s=${view_age} sig_shim=${view_shim}"
 }
 
@@ -1208,6 +1221,14 @@ single_pass_gate()
 	fi
 	if [ -z "${SECURITY_PASS_AUTHOR_LOGIN}" ] || [ ! -s "${comments}" ] \
 		|| ! jq -e 'type == "array"' "${comments}" >/dev/null 2>&1; then
+		# Issue #10176: the view this hold rejects (the empty fresh read, or
+		# else the unusable snapshot), so the hold carries the comments,
+		# markers, author and source fields too.
+		if [ "${snapshot_detail}" = " detail=fresh_read_empty" ]; then
+			single_pass_view_log "${SINGLE_PASS_FRESH_COMMENTS_PATH}" "" "${head_sha}" fresh
+		else
+			single_pass_view_log "${comments}" "" "${head_sha}" "${gate_view_source}"
+		fi
 		single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=markers_unverifiable${snapshot_detail}"
 		single_pass_state unverifiable
 		single_pass_output true markers_unverifiable
@@ -1514,6 +1535,9 @@ No completed audit exists for \`${head_sha}\`. Auto-merge stays off. A new push 
 			fi
 		fi
 		if [ -n "${fresh_detail}" ]; then
+			# Issue #10176: an empty fresh view is logged before it is rejected
+			# (the snapshot view was logged above).
+			[ "${fresh_detail}" != "fresh_read_empty" ] || single_pass_view_log "${fresh_view}" "" "${head_sha}" fresh
 			if [ "${gate_reread_on}" = "true" ]; then
 				single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=hold reason=markers_unverifiable detail=${fresh_detail} cycle=${cycles_used}"
 				single_pass_state unverifiable
@@ -1522,15 +1546,17 @@ No completed audit exists for \`${head_sha}\`. Auto-merge stays off. A new push 
 			fi
 			single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=cycle_guard result=unverified detail=${fresh_detail}"
 		else
+			# A re-entry logs the fresh view itself, so it is logged here only
+			# when no re-entry follows (one markers_read line per view).
+			if [ "${fresh_markers}" != "${markers}" ] && [ "${gate_reread_on}" = "true" ]; then
+				single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=reread reason=markers_changed"
+				reentry_rc=0
+				SINGLE_PASS_GATE_REENTRY=true PR_ISSUE_COMMENTS_FILE="${fresh_view}" single_pass_gate || reentry_rc=$?
+				rm -f "${fresh_view}"
+				return "${reentry_rc}"
+			fi
 			single_pass_view_log "${fresh_view}" "${fresh_markers}" "${head_sha}" fresh
 			if [ "${fresh_markers}" != "${markers}" ]; then
-				if [ "${gate_reread_on}" = "true" ]; then
-					single_pass_log "mode=gate pr=${PR_NUMBER} head=${head_sha} outcome=reread reason=markers_changed"
-					reentry_rc=0
-					SINGLE_PASS_GATE_REENTRY=true PR_ISSUE_COMMENTS_FILE="${fresh_view}" single_pass_gate || reentry_rc=$?
-					rm -f "${fresh_view}"
-					return "${reentry_rc}"
-				fi
 				guard_markers="${fresh_markers}"
 			fi
 		fi

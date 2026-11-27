@@ -670,7 +670,7 @@
 		{
 			"name": "SECURITY_PASS_CYCLE_REUSE_GUARD_ENABLED",
 			"default": "true",
-			"stage": "Issue #10176. The single-issue security pass numbers a new pending or failed marker above every trusted cycle already on the PR (log outcome=cycle_renumbered), so no cycle number is reused (review_autofix.yml); false keeps the old numbering."
+			"stage": "Issue #10176. The single-issue security pass numbers a new pending or failed marker above every trusted cycle already on the PR (log outcome=cycle_renumbered), so a run does not reuse a cycle number it can see (review_autofix.yml); false keeps the old numbering."
 		},
 		{
 			"name": "SECURITY_PASS_DELTA_AUDIT_ENABLED",

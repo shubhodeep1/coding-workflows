@@ -397,6 +397,10 @@ def test_failed_or_empty_fresh_comments_read_holds_markers_unverifiable(tmp_path
 	assert result.returncode == 0, result.stderr
 	assert output == "hold=true\nhold_reason=markers_unverifiable\n"
 	assert f"reason=markers_unverifiable detail={detail}" in result.stdout
+	# The hold still logs the view it rejects with the four fields.
+	assert re.search(r"outcome=markers_read comments=(unreadable|[0-9]+) markers=[0-9]+ author=owner source=[a-z_]+ ", result.stdout), result.stdout
+	if detail == "fresh_read_empty":
+		assert "outcome=markers_read comments=0 markers=0 author=owner source=fresh age_s=0 " in result.stdout
 	# No dispatch, no marker, so no cycle is counted.
 	assert not _audit_dispatches(calls) and not _comment_posts(calls)
 
@@ -467,6 +471,40 @@ def test_gate_logs_the_markers_view(tmp_path: Path) -> None:
 	result, calls, output = _run(bad, "gate", comments=stale)
 	assert re.search(r"outcome=markers_read comments=2 markers=1 author=owner source=unknown age_s=[0-9]+ ", result.stdout)
 	assert "evil" not in result.stdout
+
+
+def test_reentry_logs_the_fresh_view_once(tmp_path: Path) -> None:
+	# Snapshot: no marker for the head; fresh view: the head is clean.
+	env = {"FAKE_GH_FRESH_COMMENTS": _fresh_comments(tmp_path, [_comment("ok\n" + _marker("clean", HEAD, 1))])}
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("clean", OLD, 1))], env=env)
+	assert output == "hold=false\n" and "outcome=reread reason=markers_changed" in result.stdout, result.stdout
+	assert not _audit_dispatches(calls) and not _comment_posts(calls)
+	assert len(re.findall(r"outcome=markers_read .*source=fresh age_s=0 ", result.stdout)) == 1, result.stdout
+
+
+@pytest.mark.parametrize("token", ["cache_hit", "cache_miss", "fallback", "direct"])
+def test_markers_read_reports_the_sidecar_provenance(tmp_path: Path, token: str) -> None:
+	epoch = int(dt.datetime.now(dt.timezone.utc).timestamp()) - 600
+	(tmp_path / "comments.json.source").write_text(f"{token} {epoch}\n", encoding="utf-8")
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("clean", OLD, 1))])
+	match = re.search(rf"outcome=markers_read comments=1 markers=1 author=owner source={token} age_s=([0-9]+) ", result.stdout)
+	assert match and int(match.group(1)) >= 600, result.stdout
+
+
+def test_sig_shim_is_on_behind_the_gh_call_counter(tmp_path: Path) -> None:
+	# Production keeps the gh call counter first on PATH, ahead of the shim.
+	counter = tmp_path / "gh_call_counter.abc123"
+	shim = tmp_path / "ai_comment_sig_shim.def456"
+	for directory in (counter, shim):
+		directory.mkdir()
+		(directory / "gh").write_text("#!/usr/bin/env bash\nexec \"${FAKE_REAL_GH}\" \"$@\"\n", encoding="utf-8")
+		(directory / "gh").chmod(0o755)
+	bin_dir = tmp_path / "bin"
+	env = {"FAKE_REAL_GH": str(bin_dir / "gh"), "PATH": f"{counter}:{shim}:{bin_dir}:{os.environ['PATH']}"}
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("clean", OLD, 1))], env=env)
+	assert re.search(r"outcome=markers_read .* sig_shim=on$", result.stdout, re.MULTILINE), result.stdout
+	result, calls, output = _run(tmp_path, "gate", comments=[_comment(_marker("clean", OLD, 1))])
+	assert re.search(r"outcome=markers_read .* sig_shim=off$", result.stdout, re.MULTILINE), result.stdout
 
 
 @pytest.mark.parametrize("fail", ["", "dispatch"])
