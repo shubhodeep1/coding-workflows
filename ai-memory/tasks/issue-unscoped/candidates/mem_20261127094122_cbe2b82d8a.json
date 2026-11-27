@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/gh_helpers.sh:5133-5146 | severity=critical | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: When total runs > 200 (i.e., page >= 3), the candidate pool merges only the last page and the page before it, and the first page (saved at :5120 as `_rgw_first_json`) is never merged back if `_rgw_page > 2`.\n  WHY: The source graded this BLOCKER (mapped here to critical) and claimed page 1 holds the oldest runs, so missing them makes the helper answer `outcome=short` and lets the release gate proceed on a saturated queue; anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash each rejected this finding, saying the listing is newest-first and limited on the server to `created=<cutoff+1s>..<upper>` (lines 5096-5100), so page 1 holds only the newest runs.\n- scripts/gh_helpers.sh:5178-5180 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: When no candidates are found after filtering, the helper returns early with `outcome=short` without calculating or reporting `runs_unread`.\n  WHY: The source graded this NIT (mapped here to low): operators cannot see whether the check was complete or covered only part of the queue; z-ai_glm-5_3-flash raised the same point only as a hardening suggestion (HARDENING_RISK_SCORE: 1), and anthropic_claude-sonnet-5_5 declined it because the server-side status and created-range filters prevent that path.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- NOTE: rejected the pass-1 page-1-drop finding (scripts/gh_helpers.sh:5120, 5134-5145, 5163-5169, 5178-5180) as unreachable: `is_wedged_queued` (scripts/gh_helpers.sh:4982-4986) is true only when `created_at <= cutoff`, and the listing filters on `created=${_rgw_lower}..${_rgw_upper}` with `_rgw_lower` set to cutoff+1s (lines 5096-5097).\n- NOTE: did not adopt the suggestion to add `runs_unread` to the zero-candidate early return at lines 5178-5180; checked every deliverable of issue #10181 with no gaps found; HARDENING_RISK_SCORE: 0.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/gh_helpers.sh:lines 5133-5146 | severity=BLOCKER | confidence=5\n  PROBLEM: When total runs > 200 (i.e., page >= 3), the candidate pool incorrectly drops the first page of results; page 1 (saved at :5120 as `_rgw_first_json`) is never merged back into the candidate pool if `_rgw_page > 2`.\n  WHY: For repositories with > 200 queued runs, the oldest runs are on page 1 and are missed entirely, so the check can incorrectly answer `outcome=short` and let the release gate proceed despite a saturated queue.\n- scripts/gh_helpers.sh:5178-5180 | severity=NIT | confidence=4\n  PROBLEM: When no candidates are found after filtering, the helper returns early with `outcome=short` without calculating or reporting `runs_unread`.\n  WHY: Operators cannot see whether the check was complete or only covered part of the queue.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- NOTE: rejected the z-ai_glm-5_3-flash page-1 cross-pollination finding: page 1 holds the newest runs, so merging it cannot change the min comparison or `_rgw_unread_extra`; confirmed `runs_unread=198` in tests/test_auto_release_stable.py:1267-1277.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- HARDENING_SUGGESTION: scripts/gh_helpers.sh, release_gate_oldest_queued_wait, zero-candidate early return at lines 5178-5180: when `_rgw_candidate_count` is 0, the `short` answer never carries `runs_unread=`, even though `_rgw_unread_extra` may be large; fix: compute `_rgw_unread_count=$(( _rgw_candidate_count + _rgw_unread_extra ))` before the early return and append `_rgw_unread_suffix` when > 0 (about 4 lines); HARDENING_RISK_SCORE: 1.\n- NOTE: rejected the pass-1 consensus finding (scripts/gh_helpers.sh:5120, 5134-5145, 5163-5180) as unreachable, because the created range is limited on the server (gh_helpers.sh:5096-5100, 5110) and `is_wedged_queued` (gh_helpers.sh:4982-4986) uses the same cutoff; found all issue #10181 deliverables present.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5702dac72144db885f615f6aae4de0d5d3432372956be410d487302d7c3922c1",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10185,
+    "run_id": "45968992818",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45968992818",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127094122_cbe2b82d8a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10185,
+    "run_id": "45968992818"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-27T09:41:22Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
