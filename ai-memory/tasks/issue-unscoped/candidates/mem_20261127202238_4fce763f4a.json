@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Set persist-credentials: false on the PR-head checkout\"\n  expected_change_site: .github/workflows/review_autofix.yml \"Checkout repo\" step\n  confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: No diff hunk adds persist-credentials: false to the PR-head \"Checkout repo\" step (note: anthropic_claude-sonnet-5_5, openai_gpt-6-luna and z-ai_glm-5_3-flash state it is already present at line 2367, so this gap is disputed)\n- requirement: The issue states \"Contract and behavior tests cover this\" for the three cited failure-path steps\n  expected_change_site: tests/test_review_autofix_step_scripts_contract.py test_workspace_fallback_never_sources_unverified_pr_tree_copy `cases` tuple\n  confidence=[4]\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: FAILURE_PATH_STEPS_10221 lists all three steps, but the behavioral `cases` tuple omits \"Post review-blocked comment on PR (workflow failure)\"; only the structural test covers it\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\n- Requirement: \"Set persist-credentials: false on the PR-head checkout\"\n  Expected change site: .github/workflows/review_autofix.yml \"Checkout repo\" step at line 2332\n  Evidence of absence: No diff hunk in .github/workflows/review_autofix.yml adds persist-credentials: false to the PR-head \"Checkout repo\" step; the LAST RUN DIFF and original PR DIFF both leave the step body unchanged.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\n- Requirement: Issue #1's \"Recommendation\" section calls out \"Set persist-credentials: false on the PR-head checkout\" alongside the fallback fix.\n  Expected change site: .github/workflows/review_autofix.yml \"Checkout repo\" step (PR-head actions/checkout at top of codex-agent)\n  Evidence of absence: The PR diff and LAST RUN DIFF only modify wrapper fallback lines and the verify step; no hunk adds persist-credentials: false to the PR-head checkout.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n- Requirement: The issue states \"Contract and behavior tests cover this\" for the three cited failure-path steps\n  Expected change site: `cases` tuple at tests/test_review_autofix_step_scripts_contract.py test_workspace_fallback_never_sources_unverified_pr_tree_copy\n  Evidence of absence: FAILURE_PATH_STEPS_10221 lists all three steps, but the behavioral `cases` tuple omits \"Post review-blocked comment on PR (workflow failure)\"; only the structural test covers it.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "c5e7e89f313fa5b6a25befaf924b183a8f4a57bba03309eb93ed975d23f53497",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10226,
+    "run_id": "46058455524",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46058455524",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127202238_4fce763f4a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10226,
+    "run_id": "46058455524"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-27T20:22:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
