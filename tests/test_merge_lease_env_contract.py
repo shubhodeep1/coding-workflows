@@ -30,6 +30,11 @@ Rules enforced here, for every workflow-level, job-level and step-level
    script carries exactly one; otherwise every workflow site agrees.
 6. Unknown settings. Any other MERGE_LEASE_* env key must first be
    classified in one of the three lists above.
+7. Read-only lease steps. A step listed in READ_ONLY_LEASE_STEPS only reads
+   the lease and never grants or renews one, so it may pass just the listed
+   subset of REQUIRED_KEYS (rule 2 still applies to each value). Passing any
+   other required key, or setting MERGE_BASE_FRESHNESS_ENABLED, puts the step
+   back under rule 1.
 """
 
 from __future__ import annotations
@@ -74,6 +79,17 @@ OPTIONAL_KEYS = (
 # (workflow file name, step name, key) -> the only literal value accepted.
 LITERAL_EXCEPTIONS = {
 	("review_autofix_sweep.yml", "Ensure the final CI run on reviewed PR heads", "MERGE_LEASE_SOFT_PATHS"): "none",
+}
+
+# (workflow file name, step name) -> the REQUIRED_KEYS subset a read-only
+# lease step may pass instead of the full set (rule 7). The codex-agent
+# "Single-issue security pass" step runs scripts/review_single_issue_security_pass.sh,
+# whose lease check only calls _merge_lease_read / _merge_lease_holder_row /
+# _merge_lease_max_holders to let a lease holder past the audit limit; it
+# never writes the lease, so TTL, idle and revocation settings have no reader
+# there. It reached this branch from main through the base sync.
+READ_ONLY_LEASE_STEPS = {
+	("review_autofix.yml", "Single-issue security pass"): frozenset({"MERGE_LEASE_ENABLED", "MERGE_LEASE_MAX_HOLDERS"}),
 }
 
 VALUE_RE = re.compile(r"^\$\{\{ vars\.([A-Z0-9_]+) \|\| '([^']*)' \}\}$")
@@ -198,6 +214,13 @@ def violations(files: dict[str, str], defaults: dict[str, str], optional_default
 			if not any(k in REQUIRED_KEYS for k in lease_keys) and not runs_freshness_gate:
 				continue
 			missing = [k for k in REQUIRED_KEYS if k not in effective]
+			read_only_keys = READ_ONLY_LEASE_STEPS.get((wf, step_name))
+			if (
+				read_only_keys is not None
+				and not runs_freshness_gate
+				and {k for k in lease_keys if k in REQUIRED_KEYS} <= read_only_keys
+			):
+				missing = []
 			if missing:
 				reason = "passes some merge-lease settings" if lease_keys else "runs the merge-base freshness gate"
 				out.append(f"{where}: {reason} but is missing {', '.join(missing)}")
@@ -391,6 +414,36 @@ class MergeLeaseEnvContractTest(unittest.TestCase):
 	def test_fixture_freshness_gate_with_full_set_passes(self) -> None:
 		text = _fixture(self._full() + "\n          MERGE_BASE_FRESHNESS_ENABLED: ${{ vars.MERGE_BASE_FRESHNESS_ENABLED || 'true' }}")
 		self.assertEqual(violations({"f.yml": text}, self.defaults), [])
+
+	def _read_only_subset(self, extra: tuple[str, ...] = ()) -> str:
+		keys = ("MERGE_LEASE_ENABLED", "MERGE_LEASE_MAX_HOLDERS") + extra
+		return "\n".join(f"          {k}: ${{{{ vars.{k} || '{self.defaults[k]}' }}}}" for k in keys)
+
+	def test_fixture_read_only_step_subset_passes(self) -> None:
+		text = _fixture(self._read_only_subset(), step_name="Single-issue security pass")
+		self.assertEqual(violations({"review_autofix.yml": text}, self.defaults), [])
+
+	def test_fixture_read_only_subset_outside_allowlist_fails(self) -> None:
+		text = _fixture(self._read_only_subset(), step_name="Some other step")
+		found = violations({"review_autofix.yml": text}, self.defaults)
+		self.assertEqual(len(found), 1, found)
+		self.assertIn("missing MERGE_LEASE_TTL_MINUTES", found[0])
+
+	def test_fixture_read_only_step_with_extra_key_fails(self) -> None:
+		text = _fixture(self._read_only_subset(extra=("MERGE_LEASE_IDLE_MINUTES",)), step_name="Single-issue security pass")
+		found = violations({"review_autofix.yml": text}, self.defaults)
+		self.assertEqual(len(found), 1, found)
+		self.assertIn("missing MERGE_LEASE_TTL_MINUTES", found[0])
+
+	def test_fixture_read_only_step_wrong_default_fails(self) -> None:
+		text = _fixture(
+			"          MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}\n"
+			"          MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '2' }}",
+			step_name="Single-issue security pass",
+		)
+		found = violations({"review_autofix.yml": text}, self.defaults)
+		self.assertEqual(len(found), 1, found)
+		self.assertIn("MERGE_LEASE_MAX_HOLDERS default '2' differs", found[0])
 
 	def test_fixture_partial_job_env_fails(self) -> None:
 		job_env = "    env:\n" + self._full(drop=("MERGE_LEASE_ENABLED",)).replace("          ", "      ") + "\n"
