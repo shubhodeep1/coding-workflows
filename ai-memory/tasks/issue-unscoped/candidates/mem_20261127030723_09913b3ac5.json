@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_single_issue_security_pass.sh:single_pass_next_free_cycle (and related call site in single_pass_gate) | severity=medium | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The cycle guard reads the comments and then posts without reserving a cycle number, so two overlapping review runs on the same PR can read the same highest cycle and both pick the same next number.\n  WHY: The reviewer calls this a documented residual of the pre-existing logic; the fresh re-read narrows the race but does not remove it for overlapping concurrent runs. The source gave no severity, so medium is a placeholder. openai_gpt-6-luna reported the same root cause as a task gap with SEVERITY: MAJOR (see CONSENSUS TASK GAPS).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A status=failed or status=pending marker is not posted with a cycle number that a trusted marker on the PR already carries.\"\n  expected_change_site: `scripts/review_single_issue_security_pass.sh`, `single_pass_next_free_cycle` and `single_pass_gate`; workflow serialization for the deterministic-skip security-pass path if needed.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The gate works out the next cycle from the comments it read, then dispatches and posts without reserving that cycle, so two concurrent runs can read the same view and post the same cycle. The PR's own `agents.d` and `changelog.d` fragments acknowledge this remaining race, and the `deterministic-skip-merge` job has no per-PR concurrency group. (SEVERITY: MAJOR)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_single_issue_security_pass.sh:single_pass_next_free_cycle (and related call site in single_pass_gate) | confidence=4\n  PROBLEM: The cycle guard uses a \"read-then-post\" pattern without reservation. Two overlapping review runs on the same PR can still read the same highest cycle and both decide on the same next number.\n  WHY: This race is a documented residual of the pre-existing logic. Re-reading the comments fresh narrows it but does not fully remove it for overlapping concurrent runs. Given the minimal-change constraint and the risk of starvation with more complex concurrency control, it is documented as a residual issue.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cA status=failed or status=pending marker is not posted with a cycle number that a trusted marker on the PR already carries.\u201d\n  Expected change site: `scripts/review_single_issue_security_pass.sh`, `single_pass_next_free_cycle` and `single_pass_gate`; workflow serialization for the deterministic-skip security-pass path if needed.\n  Evidence of absence: The gate calculates the next cycle from the comments view it read, then proceeds to dispatch and post without reserving that cycle. Two concurrent runs can read the same view and post the same cycle; the PR\u2019s own `agents.d` and `changelog.d` fragments acknowledge this remaining race. The `deterministic-skip-merge` job has no per-PR concurrency group.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "3ee1aff4063791952eb560e6cbc3f78c8b3753d6f339b8530200029b754e5fd5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10178,
+    "run_id": "45928898753",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45928898753",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127030723_09913b3ac5",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10178,
+    "run_id": "45928898753"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-27T03:07:23Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
