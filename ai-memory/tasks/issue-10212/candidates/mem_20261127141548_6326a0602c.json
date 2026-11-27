@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1. Which part of the repository should this issue change?\nChoices:\nA. One specific workflow or pipeline phase (clarify, plan, implement, review/autofix, orchestrate, validate, update-workflows, security audit). Name it in your answer. (RECOMMENDED)\nB. One specific helper script under `scripts/`. Name the file in your answer.\nC. Documentation only (README.md, `docs/`, agents.md through an `agents.d/` fragment).\nD. Something else. Name the file or feature in your answer.\nQ2. What does \"better\" mean here?\nChoices:\nA. Fix a specific bug or failure. Link the failing run, PR or issue, or paste the log excerpt. (RECOMMENDED)\nB. Reduce cost or run volume (fewer runner jobs, fewer GitHub API calls, fewer model tokens).\nC. Make it faster or more reliable (fewer stalls, retries or manual holds).\nD. Improve documentation or clarity for operators.\nE. Add a new capability. Describe it in your answer.\nQ3. How will we know the change is done?\nChoices:\nA. A concrete, testable outcome that you state in your answer, e.g. \"run X no longer fails with Y\", or \"metric Z drops below N\". (RECOMMENDED)\nB. A contract or regression test that pins the new behaviour is enough evidence.\nC. Reviewer judgement only (not recommended for unattended implementation).",
+  "fingerprint": "3c031361c1152fbf95823b4ec0f567dfa4d6188c518c18204db1522867fa8f11",
+  "lineage": {
+    "issue_number": 10212,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "46011552072",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46011552072",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261127141548_6326a0602c",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10212,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "46011552072"
+  },
+  "sensitive": true,
+  "status": "candidate",
+  "summary": "Issue #10212 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-27T14:15:48Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
