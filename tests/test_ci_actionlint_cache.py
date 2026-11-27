@@ -4,9 +4,9 @@
 The actionlint release download from github.com returned HTTP 504 in CI runs
 35615284953, 42465389350 and 42470227946; the last outage outlasted the whole
 retry window (#9056). The `static-checks` job now caches the release tarball
-with `actions/cache@v5`, so most runs skip the download. These tests pin that:
+with `actions/cache@v6`, so most runs skip the download. These tests pin that:
 
-  1. the cache step uses `actions/cache@v5`, comes before `Install actionlint`,
+  1. the cache step uses `actions/cache@v6`, comes before `Install actionlint`,
      keys on both `ACTIONLINT_VERSION` and `ACTIONLINT_SHA256`, and has no
      `restore-keys` (exact match only);
   2. the job-level env copies match the Install step's pinned values;
@@ -219,7 +219,7 @@ class ActionlintTarballCacheContract(unittest.TestCase):
 		cache_index = _step_index(self.steps, lambda step: step.get("id") == CACHE_STEP_ID)
 		self.assertGreaterEqual(cache_index, 0, f"step id {CACHE_STEP_ID!r} missing")
 		cache = self.steps[cache_index]
-		self.assertEqual(cache.get("uses"), "actions/cache@v5")
+		self.assertEqual(cache.get("uses"), "actions/cache@v6")
 		self.assertLess(cache_index, self.install_index, "cache step must run before the install")
 		with_block = cache.get("with") or {}
 		key = str(with_block.get("key") or "")

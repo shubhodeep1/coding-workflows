@@ -131,7 +131,12 @@ if [ "${ENABLE_AUTO_MERGE}" != "true" ]; then
 	if reviewed_head_is_current_for_labels; then
 		review_head_gate_post_status "${GITHUB_REPOSITORY}" "${INITIAL_HEAD_SHA}" success "review and security gate passed"
 		record_auto_merge_ready_labels_allowed "true"
-		review_enable_auto_merge_ensure_final_ci
+		# Issue #9993: this exit never merges, so it takes no merge lease and
+		# pushes no new head; a head whose CI wiring is behind the base is held
+		# (no final CI on the stale workflow) and a merge path or the sweep
+		# updates it. Otherwise the final CI is dispatched as before.
+		# shellcheck disable=SC2119  # no head ref known here; the helper reads it
+		PR_FINAL_CI_WIRING_NO_UPDATE=true review_enable_auto_merge_ensure_final_ci
 	fi
 	echo "Auto-merge disabled (set ENABLE_AUTO_MERGE=true to enable)."
 	exit 0
@@ -178,7 +183,11 @@ if PR_LABELS_RAW="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issue
 		if reviewed_head_is_current_for_labels; then
 			review_head_gate_post_status "${GITHUB_REPOSITORY}" "${INITIAL_HEAD_SHA}" success "review and security gate passed"
 			record_auto_merge_ready_labels_allowed "true"
-			review_enable_auto_merge_ensure_final_ci
+			# Issue #9993: never update an e2e PR's branch mid-gate (the race
+			# this opt-out exists to prevent); a head whose CI wiring is behind
+			# is held instead of getting a final CI on the stale workflow.
+			# shellcheck disable=SC2119  # no head ref known here; the helper reads it
+			PR_FINAL_CI_WIRING_NO_UPDATE=true review_enable_auto_merge_ensure_final_ci
 		fi
 		echo "PR #${PR_NUMBER} carries 'e2e-smoke-test' label — auto-merge suppressed for the e2e gate's lifecycle."
 		exit 0
@@ -289,10 +298,11 @@ fi
 # covered. No API call for PRs into the default or an integration branch.
 # Anything but `allow` (helper missing, lookup failure) fails closed; the next
 # review run or the review sweep retries. Sets _followup_guard_result.
+# $1: the call's phase (pre_status|post_wait), logged as `phase=` on a refusal.
 _followup_guard_result=""
 run_security_followup_guard()
 {
-	local _followup_guard_output="" _followup_guard_payload
+	local _followup_guard_output="" _followup_guard_payload _followup_guard_phase="${1:-unknown}"
 	_followup_guard_result=""
 	_followup_guard_payload="$(mktemp 2>/dev/null || true)"
 	if [ -n "${_followup_guard_payload}" ] && [ -f "${SCRIPT_DIR}/review_single_issue_security_pass.sh" ] \
@@ -304,13 +314,13 @@ run_security_followup_guard()
 	fi
 	[ -n "${_followup_guard_payload}" ] && rm -f "${_followup_guard_payload}"
 	if [ "${_followup_guard_result}" != "allow" ]; then
-		echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=refuse reason=security_followup_guard_${_followup_guard_result:-unavailable}"
+		echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=refuse reason=security_followup_guard_${_followup_guard_result:-unavailable} phase=${_followup_guard_phase}"
 		echo "::warning::Auto-merge not enabled for PR #${PR_NUMBER}: the security follow-up guard returned '${_followup_guard_result:-unavailable}' (its base branch's head passed a clean security audit, or that could not be verified). The PR stays open."
 		return 1
 	fi
 	return 0
 }
-if ! run_security_followup_guard; then
+if ! run_security_followup_guard pre_status; then
 	exit 0
 fi
 
@@ -378,7 +388,7 @@ fi
 # default or an integration branch get `allow` with no API call. The success
 # status posted above stays bound to this PR's head; refusing here withholds
 # auto-merge and merge labels.
-if ! run_security_followup_guard; then
+if ! run_security_followup_guard post_wait; then
 	exit 0
 fi
 
