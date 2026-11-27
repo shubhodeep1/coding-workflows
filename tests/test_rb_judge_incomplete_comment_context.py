@@ -432,7 +432,9 @@ def test_merge_arm_dispatches_gh_pr_merge_only_for_a_complete_context(tmp_path: 
 	script = (
 		"set -uo pipefail\n"
 		'gh_retry() { "$@"; }\n'
-		"_safe_gh_jq() { printf '%s' '{\"state\":\"open\",\"mergeable\":true}'; }\n"
+		# base.ref = DEFAULT_BRANCH: the real security follow-up guard (#9671)
+		# allows a PR into the default branch without any API call.
+		"_safe_gh_jq() { printf '%s' '{\"state\":\"open\",\"mergeable\":true,\"base\":{\"ref\":\"main\"}}'; }\n"
 		"_pr_base_fresh_for_merge() { return 0; }\n"
 		"_pr_wait_for_required_checks() { return 0; }\n"
 		'review_head_gate_post_status() { printf \'status %s\\n\' "$*" >> "${CALL_LOG}"; return 0; }\n'
@@ -459,6 +461,8 @@ def test_merge_arm_dispatches_gh_pr_merge_only_for_a_complete_context(tmp_path: 
 		"RB_MERGE_METHOD_FLAG": "--squash",
 		"RB_JUDGE_COMMENTS_INCOMPLETE": incomplete,
 		"RB_JUDGE_COMMENTS_INCOMPLETE_REASONS": "issue_comments_read_failed",
+		"SUPPORT_SCRIPTS_DIR": str(REPO_ROOT / "scripts"),
+		"DEFAULT_BRANCH": "main",
 	}
 	result = _bash(script, env, tmp_path)
 	assert result.returncode == 0, result.stderr

@@ -111,12 +111,19 @@ PAT_BUDGET_WORKFLOWS = {
     "review_autofix_sweep.yml": "review_autofix_sweep",
     "workflow-failure-heal-intake.yml": "workflow-failure-heal-intake",
     "validation-improvements-intake.yml": "validation-improvements-intake",
+    # Issue #9887: release-gate jobs print GH_PAT_BUDGET too.
+    "test-and-mark-stable.yml": "test-and-mark-stable",
 }
 PAT_BUDGET_LINE = re.compile(
     r"^(?:(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z) )?"
-    r"GH_PAT_BUDGET phase=end workflow=([a-z_-]+) job=([a-z_-]+) "
-    r"remaining=(?:[0-9]+|unknown) reset=(?:[0-9]+|unknown) used_in_job=([0-9]+|unknown)$"
+    r"GH_PAT_BUDGET phase=end workflow=([a-z0-9_-]+) job=([a-z0-9_-]+) "
+    r"remaining=(?:[0-9]+|unknown) reset=(?:[0-9]+|unknown) used_in_job=([0-9]+|unknown)"
+    # Issue #9887: optional per-job gh call counter keys appended after
+    # used_in_job=. Groups 1-4 keep their indices, so older lines parse as before.
+    r"(?: calls_in_job=([0-9]+|unknown) paginated_in_job=([0-9]+|unknown) "
+    r"calls_by_token=((?:[a-z_]+:[0-9]+)(?:,[a-z_]+:[0-9]+)*|unknown))?$"
 )
+PAT_BUDGET_TOP_CONSUMERS_LIMIT = 20
 PAT_BUDGET_MAX_RUN_ARCHIVES = 1500
 # Review/autofix run summary (scripts/review_autofix_step_iteration_summary.sh).
 # Anchored so echoed script text (structured_summary_line='...') never matches;
@@ -126,6 +133,19 @@ REVIEW_AUTOFIX_RUN_SUMMARY_LINE = re.compile(
     r"^(?:\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z )?REVIEW_AUTOFIX_RUN_SUMMARY_V1 (\{.*\})$"
 )
 ROOT_FAILURE_CLASS_RE = re.compile(r"[a-z0-9_]{1,64}")
+# Per-reviewer finding counts (scripts/review_findings_record.py, Refs #10058).
+# Anchored at both ends with bounded widths; the optional prefix is the GitHub
+# Actions log timestamp. The ::warning:: failure line never matches.
+REVIEWER_FINDINGS_PREFIX = "REVIEWER_FINDINGS "
+REVIEWER_FINDINGS_LINE = re.compile(
+    r"^(?:\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z )?REVIEWER_FINDINGS "
+    r"pr=([0-9]{1,10}|unknown) round=([A-Za-z0-9_.:-]{1,64}) reviewer=([A-Za-z0-9_./:-]{1,160}) "
+    r"(?:raised=([0-9]{1,7}) lone=([0-9]{1,7}) lone_rejected=([0-9]{1,7}) "
+    r"lone_accepted=([0-9]{1,7}) shared=([0-9]{1,7})"
+    r"|outcome=unavailable reason=([a-z_]{1,64}))$"
+)
+REVIEWER_FINDINGS_MAX_PER_RUN = 64
+REVIEWER_FINDINGS_COUNT_KEYS = ("raised", "lone", "lone_rejected", "lone_accepted", "shared")
 ROOT_FAILURE_CLASS_CONCLUSIONS = frozenset({"failure", "cancelled"})
 # Leading GitHub Actions log timestamp, stripped only from the parent/child
 # telemetry dedup key (never from emitted lines). In review run 36237495547
@@ -309,6 +329,15 @@ def _cached_cost_telemetry(row: dict[str, Any] | None) -> dict[str, Any] | None:
         return None
 
     return dict(telemetry)
+
+
+def _cached_reviewer_findings(row: dict[str, Any] | None) -> list[dict[str, Any]] | None:
+    if not isinstance(row, dict):
+        return None
+    entries = row.get("reviewer_findings")
+    if not isinstance(entries, list):
+        return None
+    return [dict(entry) for entry in entries[:REVIEWER_FINDINGS_MAX_PER_RUN] if isinstance(entry, dict)]
 
 
 def _run_snapshot_for_cache(run: dict[str, Any]) -> dict[str, Any]:
@@ -922,7 +951,7 @@ def _apply_untrusted_origin_exclusion(row: dict[str, Any]) -> bool:
     if row.get("origin_trust", "trusted") == "trusted":
         return False
     row["log_download_status"] = "excluded_untrusted_origin"
-    for key in ("log_excerpts", "cost_telemetry", "log_summary", "log_summary_meta", "full_logs"):
+    for key in ("log_excerpts", "cost_telemetry", "log_summary", "log_summary_meta", "full_logs", "reviewer_findings"):
         row.pop(key, None)
     row["failure_point"] = {"job_name": None, "step_name": None}
     row["workflow_name"] = None
@@ -1764,6 +1793,67 @@ def _apply_root_failure_class_from_full_logs(run: dict[str, Any], full_logs: lis
     )
 
 
+def _reviewer_findings_from_full_logs(full_logs: Any) -> list[dict[str, Any]]:
+    """Parse REVIEWER_FINDINGS lines (Refs #10058).
+
+    Keeps the first copy per (pr, round, reviewer), so the job-level and
+    step-level copies of one line count once, and caps the result at
+    REVIEWER_FINDINGS_MAX_PER_RUN entries. Fails open: any error yields [].
+    """
+    try:
+        if not isinstance(full_logs, list):
+            return []
+        entries: list[dict[str, Any]] = []
+        seen: set[tuple[str, str, str]] = set()
+        for step in full_logs:
+            if not isinstance(step, dict):
+                continue
+            content = step.get("content")
+            if not isinstance(content, str) or REVIEWER_FINDINGS_PREFIX not in content:
+                continue
+            for line in content.splitlines():
+                match = REVIEWER_FINDINGS_LINE.fullmatch(line.rstrip())
+                if match is None:
+                    continue
+                pr_text, round_text, reviewer = match.group(1), match.group(2), match.group(3)
+                key = (pr_text, round_text, reviewer)
+                if key in seen:
+                    continue
+                seen.add(key)
+                entry: dict[str, Any] = {
+                    "pr": int(pr_text) if pr_text != "unknown" else None,
+                    "round": round_text,
+                    "reviewer": reviewer,
+                }
+                if match.group(9) is not None:
+                    entry["outcome"] = "unavailable"
+                    entry["reason"] = match.group(9)
+                else:
+                    entry["outcome"] = "counted"
+                    for offset, count_key in enumerate(REVIEWER_FINDINGS_COUNT_KEYS):
+                        entry[count_key] = int(match.group(4 + offset))
+                entries.append(entry)
+                if len(entries) >= REVIEWER_FINDINGS_MAX_PER_RUN:
+                    return entries
+        return entries
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _apply_reviewer_findings_from_full_logs(run: dict[str, Any], full_logs: list[dict[str, str]]) -> None:
+    """Set run["reviewer_findings"] for a trusted-origin run with lines; otherwise drop the key."""
+    entries: list[dict[str, Any]] = []
+    if (
+        run.get("origin_trust", "trusted") == "trusted"
+        and run.get("log_download_status") != "excluded_untrusted_origin"
+    ):
+        entries = _reviewer_findings_from_full_logs(full_logs)
+    if entries:
+        run["reviewer_findings"] = entries
+    else:
+        run.pop("reviewer_findings", None)
+
+
 def _sanitize_path_component(value: str, fallback: str) -> str:
     candidate = re.sub(r"[^a-zA-Z0-9._-]+", "_", value.strip())
     candidate = candidate.strip("._-")
@@ -1811,6 +1901,9 @@ def build_pat_budget_report(
     ]
     eligible.sort(key=lambda run: (_to_int(run.get("run_id"), 0), _to_int(run.get("run_attempt"), 1)))
     totals: dict[tuple[str, str, str], list[int]] = defaultdict(lambda: [0, 0])
+    # (workflow, job) -> [calls, paginated, pat, github_token, other, jobs]
+    call_totals: dict[tuple[str, str], list[int]] = defaultdict(lambda: [0, 0, 0, 0, 0, 0])
+    without_calls = 0
     missing = 0
     unmeasured = 0
     unknown = 0
@@ -1827,7 +1920,7 @@ def build_pat_budget_report(
             )
             # Read only budget lines, not arbitrary raw workflow output into the report.
             with zipfile.ZipFile(io.BytesIO(archive)) as log_zip:
-                measured: dict[str, tuple[datetime, int | None, bool]] = {}
+                measured: dict[str, tuple[datetime, int | None, bool, int | None, int, dict[str, int]]] = {}
                 for member in log_zip.infolist():
                     if member.is_dir() or member.file_size > 64 * 1024 * 1024:
                         continue
@@ -1843,10 +1936,29 @@ def build_pat_budget_report(
                             if end_time is None or not day <= end_time < day_end:
                                 continue
                             amount = int(match.group(4)) if match.group(4) != "unknown" else None
-                            measured[match.group(3)] = (end_time, amount, timestamp is None)
+                            calls = int(match.group(5)) if match.group(5) not in (None, "unknown") else None
+                            paginated = int(match.group(6)) if match.group(6) not in (None, "unknown") else 0
+                            by_token: dict[str, int] = {}
+                            if match.group(7) not in (None, "unknown"):
+                                for token_part in match.group(7).split(","):
+                                    token_name, token_count = token_part.split(":", 1)
+                                    by_token[token_name] = by_token.get(token_name, 0) + int(token_count)
+                            measured[match.group(3)] = (end_time, amount, timestamp is None, calls, paginated, by_token)
                 if not measured:
                     unmeasured += 1
-                for job, (end_time, amount, used_fallback) in measured.items():
+                for job, (end_time, amount, used_fallback, calls, paginated, by_token) in measured.items():
+                    if calls is None:
+                        without_calls += 1
+                    else:
+                        call_entry = call_totals[(PAT_BUDGET_WORKFLOWS[filename], job)]
+                        call_entry[0] += calls
+                        call_entry[1] += paginated
+                        call_entry[2] += by_token.get("pat", 0)
+                        call_entry[3] += by_token.get("github_token", 0)
+                        call_entry[4] += sum(
+                            count for name, count in by_token.items() if name not in ("pat", "github_token")
+                        )
+                        call_entry[5] += 1
                     if amount is None:
                         unknown += 1
                         continue
@@ -1880,6 +1992,26 @@ def build_pat_budget_report(
             lines.append(f"| {hour} | {rank} | {workflow} / {job} | {amount} | {count} |")
     if not totals:
         lines.append("| No measured job-end deltas | | | | |")
+    # Issue #9887: rank jobs by their own gh invocations (calls_in_job), which,
+    # unlike used_in_job, do not include concurrent jobs' usage.
+    lines.extend([
+        "",
+        f"### Top consumers by calls_in_job (UTC {day:%Y-%m-%d})",
+        "",
+        "Each job's own gh invocations; a --paginate call counts once (see Paginated).",
+        f"Coverage: {without_calls} job-end lines without calls_in_job.",
+        "",
+        "| Rank | Workflow / job | gh calls | Paginated | PAT | GITHUB_TOKEN | Other | Measured jobs |",
+        "| ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ])
+    ranked_consumers = sorted(call_totals.items(), key=lambda item: (-item[1][0], item[0][0], item[0][1]))
+    for rank, ((workflow, job), values) in enumerate(ranked_consumers[:PAT_BUDGET_TOP_CONSUMERS_LIMIT], start=1):
+        calls, paginated, pat_calls, token_calls, other_calls, job_count = values
+        lines.append(
+            f"| {rank} | {workflow} / {job} | {calls} | {paginated} | {pat_calls} | {token_calls} | {other_calls} | {job_count} |"
+        )
+    if not call_totals:
+        lines.append("| No jobs reported calls_in_job | | | | | | | |")
     return "\n".join(lines) + "\n"
 
 
@@ -1948,6 +2080,7 @@ def export_categorized_logs(
             if full_logs:
                 _apply_cost_telemetry_from_full_logs(run, full_logs)
                 _apply_root_failure_class_from_full_logs(run, full_logs)
+                _apply_reviewer_findings_from_full_logs(run, full_logs)
         except Exception as exc:  # noqa: BLE001
             _apply_log_download_exception(run, exc)
             _append_log_error(errors, repository, run_id, exc)
@@ -2106,7 +2239,7 @@ def main(argv: list[str] | None = None) -> int:
             if pat_budget_day_utc is not None:
                 # The unfiltered created search can hit GitHub's 1,000-run
                 # ceiling in a day. Split the two-day window by day and query
-                # only the nine instrumented workflow paths; dedupe boundaries.
+                # only the PAT_BUDGET_WORKFLOWS paths (ten); dedupe boundaries.
                 budget_window_edges = (effective_since, pat_budget_day_utc, pat_budget_day_utc + timedelta(days=1))
                 budget_runs_by_id: dict[int, dict[str, Any]] = {}
                 budget_listing_successes = 0
@@ -2362,6 +2495,11 @@ def main(argv: list[str] | None = None) -> int:
                     run["log_excerpts"] = cached_excerpts
                     run["cost_telemetry"] = cached_cost_telemetry
                     run["root_failure_class"] = cached_root_failure_class
+                    # Older cached rows without reviewer_findings are not
+                    # fetched again (Refs #10058); they simply carry no lines.
+                    cached_reviewer_findings = _cached_reviewer_findings(cached_row)
+                    if cached_reviewer_findings:
+                        run["reviewer_findings"] = cached_reviewer_findings
                     run["log_download_status"] = "cached"
                     _set_diagnostic_failure_reason(run, "logs", None)
                     identity = (repository, run_id)
@@ -2370,6 +2508,8 @@ def main(argv: list[str] | None = None) -> int:
                         canonical["log_excerpts"] = cached_excerpts
                         canonical["cost_telemetry"] = cached_cost_telemetry
                         canonical["root_failure_class"] = cached_root_failure_class
+                        if cached_reviewer_findings:
+                            canonical["reviewer_findings"] = [dict(entry) for entry in cached_reviewer_findings]
                         canonical["log_download_status"] = "cached"
                         _set_diagnostic_failure_reason(canonical, "logs", None)
                     continue
@@ -2381,10 +2521,12 @@ def main(argv: list[str] | None = None) -> int:
             if full_logs:
                 _apply_cost_telemetry_from_full_logs(run, full_logs)
                 _apply_root_failure_class_from_full_logs(run, full_logs)
+                _apply_reviewer_findings_from_full_logs(run, full_logs)
                 run["log_excerpts"] = log_excerpts
             else:
                 run.pop("log_excerpts", None)
                 run.pop("cost_telemetry", None)
+                run.pop("reviewer_findings", None)
             identity = (repository, run_id)
             canonical = run_rows_by_identity.get(identity)
             if canonical is not None:
@@ -2399,6 +2541,10 @@ def main(argv: list[str] | None = None) -> int:
                     canonical["cost_telemetry"] = dict(run["cost_telemetry"])
                 if "root_failure_class" in run:
                     canonical["root_failure_class"] = run["root_failure_class"]
+                if "reviewer_findings" in run:
+                    canonical["reviewer_findings"] = [dict(entry) for entry in run["reviewer_findings"]]
+                else:
+                    canonical.pop("reviewer_findings", None)
 
             if isinstance(repo_cache, dict) and run["log_download_status"] == "success":
                 logs_seen_set = _touch_seen_set(_normalize_seen_set(repo_cache.get("logs_seen_set")), run_id)
@@ -2414,6 +2560,10 @@ def main(argv: list[str] | None = None) -> int:
                         if "cost_telemetry" in run:
                             merged_row["cost_telemetry"] = dict(run["cost_telemetry"])
                         merged_row["root_failure_class"] = run.get("root_failure_class")
+                        if "reviewer_findings" in run:
+                            merged_row["reviewer_findings"] = [dict(entry) for entry in run["reviewer_findings"]]
+                        else:
+                            merged_row.pop("reviewer_findings", None)
                         updated_rows.append(merged_row)
                         replaced = True
                     else:
