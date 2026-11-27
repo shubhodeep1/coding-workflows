@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Every dispatch step of the release gate can wait at least 1,500 seconds for a primary rate-limit reset without hitting its step or job limit,\" including raising job limits to cover the dispatch and other job steps.\n  expected_change_site: `tests/test_dispatch_and_watch_rate_limit.py`, `test_gate_dispatch_steps_rate_limit_cap_meets_floor`\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: For a dispatch step without its own step limit, the test adds only `step[\"need\"]` to the job budget (lines 497-499) and does not count the time reserved for non-dispatch steps, the orchestrate job's workflow comment at `.github/workflows/test-and-mark-stable.yml:4245-4247` reserves another 360 seconds for other steps that the test does not include, and a 77-minute job limit would pass the check even though it leaves only 56 seconds beyond the dispatch's 4,564-second need (SEVERITY: NIT from both reviewers)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Every dispatch step of the release gate can wait at least 1,500 seconds for a primary rate-limit reset without hitting its step or job limit,\" and raise the job limit where the total step budget requires it.\n  Expected change site: `tests/test_dispatch_and_watch_rate_limit.py`, `test_gate_dispatch_steps_rate_limit_cap_meets_floor`.\n  Evidence of absence: For dispatch steps without a step limit, the test does not count the time reserved for non-dispatch steps in its budget calculation. It only adds up the `step[\"need\"]` of the dispatch steps, so it does not fully check that the total job budget (dispatch steps plus reserve) fits the job limit.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Every dispatch step of the release gate can wait at least 1,500 seconds for a primary rate-limit reset without hitting its step or job limit,\" including raising job limits to cover the dispatch and other job steps.\n  Expected change site: `tests/test_dispatch_and_watch_rate_limit.py`, `test_gate_dispatch_steps_rate_limit_cap_meets_floor`.\n  Evidence of absence: For a dispatch without its own step limit, the test adds only `step[\"need\"]` to the job budget at lines 497-499. The orchestrate job's workflow comment at `.github/workflows/test-and-mark-stable.yml:4245-4247` reserves another 360 seconds for other steps, but the test does not include that reserve. A 77-minute job limit would therefore pass the test's dispatch budget check even though it leaves only 56 seconds beyond the dispatch's 4,564-second need, rather than the stated 360 seconds for the other steps.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "599fbc30a5157bf6bda11bfea39669e91413248e4f7d3459a226bd7223e157a6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10207,
+    "run_id": "46061195099",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46061195099",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127205053_98eeab4c6a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10207,
+    "run_id": "46061195099"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-27T20:50:53Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
