@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.77,
+  "details": "The repository has dedicated changes and tests for dispatch rate-limit waiting, rate-limit requeueing, and runner wait age. When planning workflow polling or release automation, account for these conditions explicitly rather than treating every delay as a generic failure.",
+  "fingerprint": "39a458445e7288b84e8972708c4885214ebdae3a2016cacb75e50a53d93f16cd",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "46018249451",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46018249451",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10072",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10129",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10177",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10181",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10197",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10075",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10132",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10179",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10185",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10201"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261127150415_4c1e4ed963",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Treat GitHub Actions rate limits and runner queue delays as distinct operational conditions.",
+  "timestamps": {
+    "created_at": "2026-11-27T15:04:15Z",
+    "promoted_at": "2026-11-27T15:04:58Z",
+    "superseded_at": null
+  }
+}
