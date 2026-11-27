@@ -92,6 +92,9 @@ README_SWITCH_TABLES = ("#### Variables", "## Required Variables")
 # variable (the watch reads repository variables only). Each needs a reason.
 README_NOT_REPOSITORY_VARIABLES = {
 	"CI_TRIAGE_PROSE_MARKER_SKIP_ENABLED": "scripts/resolve_integration_ref.sh environment only; no workflow forwards a repository variable",
+	# Issue #9920: GitHub rejects configuration variable names starting with
+	# GITHUB_, so the registry lists the repository variable AI_PLAN_GRANT_WRITE_ENABLED.
+	"GITHUB_AI_PLAN_GRANT_WRITE_ENABLED": "job environment only; implement.yml and review_autofix.yml forward it from vars.AI_PLAN_GRANT_WRITE_ENABLED (registered)",
 	"LESSONS_LEARNED_ENABLED": "job environment only (README Memory System); no workflow reads vars.LESSONS_LEARNED_ENABLED",
 	"WORKFLOW_HEAL_SCOPE_MARKER_GUARD_ENABLED": "scripts/workflow_failure_heal_intake.sh environment only; not forwarded from a repository variable",
 }

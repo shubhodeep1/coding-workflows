@@ -90,6 +90,9 @@ def test_discovery_finds_sample_switches():
 	assert "not_false" in found["E2E_ALT_MODEL_ENABLED"]["forms"]  # `!= 'false'` form
 	assert "readme" in found["HEAL_PLAN_GRANT_BODY_EDIT_FIX_ENABLED"]["forms"]  # Required Variables table
 	assert not set(found) & set(README_NOT_REPOSITORY_VARIABLES)
+	# Issue #9920 alias: README env name, not a repository variable.
+	assert "GITHUB_AI_PLAN_GRANT_WRITE_ENABLED" not in found
+	assert "AI_PLAN_GRANT_WRITE_ENABLED" in _registry_names()
 	for name, info in found.items():
 		assert ssw._is_switch_name(name), name
 		assert info["files"] == sorted(info["files"]) and info["files"], name
