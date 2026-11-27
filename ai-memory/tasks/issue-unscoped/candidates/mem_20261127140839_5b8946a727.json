@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged\" (linked issue #10182 body)\n  expected_change_site: `.github/workflows/ci.yml`, selection and placement of the steps moved out of `tests-release-and-log-analysis`\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The linked issue says to pick the steps from run 45766722607's step timings, but the PR picked \"Orchestrate lib unit tests\" (about 72s sandbox weight) and \"Implement post-Codex recovery unit tests\" (about 31s) from test and subprocess count estimates because the timings could not be read, the comments at ci.yml:4387-4400, 4445-4455 / ci.yml:4392-4400, ci.yml:4447-4449 and `changelog.d/10182-ci-release-job-budget-move.md` say the timings were unreadable and call the pick an estimate, the diff does not show that the destination job had the most runtime headroom, ci.yml:4399-4400 tells the next mover to read the step timings first, the heavier candidates (\"CI wiring guard part 2\", \"Merge-base freshness gate\", \"Conflict-dispatch active-run visibility\") stay pinned by their #9214/#9078 contracts (tests/test_ci_poll_test_sharding.py:5064-5098, 4222-4245), and four earlier autofix rounds (runs 45935384369, 45940583730, 45940785510, 45968020950) recorded this deferral because the sandbox has no network access and the timings are in no repository artefact; severity disagreement: MAJOR (google_gemini-3_1-flash-lite, openai_gpt-6-luna) vs NIT (z-ai_glm-5_3-flash)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged\"\n  Expected change site: .github/workflows/ci.yml, selection of steps moved out of the tests-release-and-log-analysis job\n  Evidence of absence: The linked issue required the steps to be moved based on the run's step timings (run 45766722607). The PR diff and last run diff demonstrate that the steps \"Orchestrate lib unit tests\" and \"Implement post-Codex recovery unit tests\" were moved based on test and subprocess count estimates because the run's step timings could not be read. The PR explicitly acknowledges in comments (e.g., ci.yml:4387-4400, 4445-4455) and in the changelog fragment that these timings were unavailable, leaving this specific requirement of the issue unfulfilled.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  Expected change site: `.github/workflows/ci.yml`, selection and placement of steps moved from `tests-release-and-log-analysis`.\n  Evidence of absence: The workflow comments and `changelog.d/10182-ci-release-job-budget-move.md` state that run 45766722607's step timings were unreadable and that the moved steps were selected using estimates. The diff therefore does not select steps using the run's measured timings or establish that the destination job had the most runtime headroom.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP (carried forward from prior rounds; deferral stands, last run changed only comments and brought no new evidence)\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged\" (linked issue #10182 body).\n  Expected change site: `.github/workflows/ci.yml`, selection and placement of the steps moved out of `tests-release-and-log-analysis`.\n  Evidence of absence: The PR selects \"Orchestrate lib unit tests\" (about 72s sandbox weight) and \"Implement post-Codex recovery unit tests\" (about 31s) from test-and-subprocess-count estimates, not run 45766722607's measured step timings; the comments above both moved steps (ci.yml:4392-4400, ci.yml:4447-4449) and `changelog.d/10182-ci-release-job-budget-move.md` state the timings could not be read and call the pick an estimate, and ci.yml:4399-4400 instructs the next mover to read the step timings first. The heavier candidates (\"CI wiring guard part 2\", \"Merge-base freshness gate\", \"Conflict-dispatch active-run visibility\") stay pinned by their #9214/#9078 contracts (tests/test_ci_poll_test_sharding.py:5064-5098, 4222-4245). Four prior autofix rounds (runs 45935384369, 45940583730, 45940785510, 45968020950) recorded this deferral: the sandbox has no network access and the timings are not in any repository artefact, so the gap cannot be closed without grounding violations.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1677927af50347dd83ff6d6dd5506b612404983fe9ebd324bf871bdeb6991abb",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10184,
+    "run_id": "46007286623",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46007286623",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127140839_5b8946a727",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10184,
+    "run_id": "46007286623"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-27T14:08:39Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
