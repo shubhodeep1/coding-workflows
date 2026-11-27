@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: Which existing merge path should a head in the `final_ci_now_green` state take, now that the \"clean-same-head path that ends in the merge steps\" turns out not to exist?\nContext: Today both `clean_same_head` and `final_ci_now_green` end the run with `SHOULD_RUN=false`, and no merge job runs. The gate also blocks the deterministic skip for any head that has an `ai:final-ci-failed:v1` marker (lines 1729-1743, `AUTOFIX_GATE_DET_SKIP_SUPPRESSED reason=final_ci_failed`). Option A would need an exception to that block for this one case, behind the new switch.\nChoices:\n- A: Send it to the existing `deterministic-skip-merge` job. When the switch is on, the gate sets `deterministic_skip=true` with a new `det_skip_reason` (e.g. `final_ci_now_green`). There is no repair, no reviewer panel and no new job, and the logic stays in the step script. This job already does the merge-lease and auto-merge work that the freshness-sync fast path (`det_skip_reason=freshness_sync`) uses. (RECOMMENDED)\n- B: Keep `should_run=true` and run the `codex-agent` job, adding a new gate output that skips the repair and reviewer-panel steps inside it but keeps its rb-judge, freshness and merge steps. This means editing several step conditions in `review_autofix.yml`, which is close to its size ceiling (#10166).\n- C: Leave the gate run as it is and fix only the lease-holder case somewhere else (for example the merge-train release or the sweep), so a holder in this state gets a branch update or merge attempt outside `review_autofix.yml`. This is point 3 of the issue, which the implementer would otherwise have to choose without guidance.",
+  "fingerprint": "0f396b95a0cb2999ed036c5f7b69adf21a0c094a7b53e1f4d6f7214072e56785",
+  "lineage": {
+    "issue_number": 10183,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45923163951",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45923163951",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261127014049_05e7232015",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10183,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45923163951"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #10183 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-27T01:40:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
