@@ -1625,6 +1625,25 @@ on fewer runners. Delivery speed must not suffer.
 - §15: one job that does the work of several also shares their API results;
   reuse them instead of fetching again.
 
+### D) Wedged Queued Runs
+
+GitHub leaves some runs in `queued` with no jobs for good and refuses to
+cancel or delete them (run `43095142301`: 409 / 409 / 403). A run still
+`queued` after `ZOMBIE_RUN_MAX_QUEUED_HOURS` (default 24 hours) is not work
+and not load. The active-run guards and the release back-off already leave it
+out.
+
+- A session does not report such runs, count them in a queue depth, or name
+  them as the reason a release or dispatch is held.
+- Queue depth is quoted as live runs only. This is `queued=` in
+  `AUTO_RELEASE_QUEUE_CHECK` and `AUTO_RELEASE_SKIPPED
+  reason=runner_queue_deep`; `wedged=` is the part left out.
+- A session does not try to cancel or delete them, does not ask the owner to,
+  and does not ask for a cleanup script against them.
+  `ZOMBIE_RUN_REAPER_ENABLED` stays off.
+- Only GitHub Support can remove such a run. A session mentions this at most
+  once, and only when asked.
+
 ---
 
 ## §34. Prevent Recurrence (MANDATORY)

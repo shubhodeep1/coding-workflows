@@ -19,7 +19,10 @@
 # Executed as `implement_step_prepush_test_gate.sh expected-files PLAN ISSUE_BODY`
 # (Build implementation context): prints an advisory "EXPECTED FILES" section
 # for a standalone issue, from the trusted module's `select --paths-file` over
-# the repository paths the approved plan names.
+# the repository paths the approved plan names. Paths outside the issue's
+# files_touched scope (staged files_touched_scope_guard.py, as the repair
+# allow-list checks them) move to "OUT-OF-SCOPE EXPECTED FILES (DO NOT EDIT)";
+# a missing, failing or disabled guard leaves the output unchanged (fail open).
 #
 # Trust: the gate module, the wrapper and the repair prompt come only from the
 # pre-editor run-dir copies (IMPLEMENT_STAGED_SUPPORT_RUN_DIR, staged by "Stage
@@ -953,6 +956,71 @@ implement_prepush_test_gate_main()
 	return 0
 }
 
+# Prints the expected-files lines ($1), split by the issue's files_touched
+# scope. The guard call mirrors implement_prepush_test_gate_narrow_allow_list
+# (same flags, ENFORCE_FILES_TOUCHED / ALLOW_OUT_OF_SCOPE_FILES conditions and
+# exit codes 0 and 10/20), but fails open: a missing guard, an unexpected exit
+# code or a disabled check denies nothing, so the output is today's. Registry
+# check lines are not paths and always stay advisory. Only exact matches with
+# paths fed to the guard move a line, so guard output never enters the prompt.
+implement_prepush_test_gate_expected_scope_split()
+{
+	local lines="$1" body="$2" tmp="$3" scope_guard scope_rc=0 scope_body expected_line expected_path out_count
+	scope_guard="${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}/files_touched_scope_guard.py"
+	printf '%s\n' "${lines}" > "${tmp}/expected_lines.txt"
+	: > "${tmp}/expected_paths.txt"
+	: > "${tmp}/expected_denied.txt"
+	: > "${tmp}/expected_in.txt"
+	: > "${tmp}/expected_out.txt"
+	while IFS= read -r expected_line; do
+		case "${expected_line}" in
+			"- registry check: "*) ;;
+			"- "?*) printf '%s\n' "${expected_line#- }" >> "${tmp}/expected_paths.txt" ;;
+		esac
+	done < "${tmp}/expected_lines.txt"
+	if [ -n "${body}" ] && [ -f "${body}" ]; then
+		scope_body="${body}"
+	else
+		scope_body="${ISSUE_BODY_FILE:-/dev/null}"
+	fi
+	if [ -n "${IMPLEMENT_STAGED_SUPPORT_RUN_DIR:-}" ] && [ -f "${scope_guard}" ] && [ -s "${tmp}/expected_paths.txt" ] \
+		&& [ "${ENFORCE_FILES_TOUCHED:-true}" = "true" ] && [ "${ALLOW_OUT_OF_SCOPE_FILES:-false}" != "true" ]; then
+		PYTHONDONTWRITEBYTECODE=1 python3 -I -B "${scope_guard}" --issue-body-file "${scope_body}" --issue-number "${ISSUE_NUMBER:-}" \
+			--issue-meta-file "${ISSUE_META_FILE:-}" --pipeline-login "${IMPLEMENT_SCOPE_PIPELINE_LOGIN:-}" \
+			--staged-file "${tmp}/expected_paths.txt" --allowlist-out "${tmp}/expected_entries.txt" > "${tmp}/expected_denied.txt" 2>/dev/null || scope_rc=$?
+		# 20 = out of scope (denied paths on stdout); 0 / 10 and anything else deny nothing.
+		[ "${scope_rc}" -eq 20 ] || : > "${tmp}/expected_denied.txt"
+	fi
+	while IFS= read -r expected_line; do
+		case "${expected_line}" in
+			"- registry check: "*) ;;
+			"- "?*)
+				expected_path="${expected_line#- }"
+				if grep -Fqx -- "${expected_path}" "${tmp}/expected_denied.txt"; then
+					printf '%s\n' "${expected_line}" >> "${tmp}/expected_out.txt"
+					continue
+				fi
+				;;
+		esac
+		printf '%s\n' "${expected_line}" >> "${tmp}/expected_in.txt"
+	done < "${tmp}/expected_lines.txt"
+	if [ -s "${tmp}/expected_in.txt" ]; then
+		echo "EXPECTED FILES (ADVISORY)"
+		echo "Tests and registries the pre-push gate expects this change to affect. This is not a scope."
+		cat "${tmp}/expected_in.txt"
+		echo
+	fi
+	if [ -s "${tmp}/expected_out.txt" ]; then
+		echo "OUT-OF-SCOPE EXPECTED FILES (DO NOT EDIT)"
+		echo "The pre-push gate expects these files to be affected, but they are outside this issue's scope: do not edit them, and report any conflict with them in your summary."
+		cat "${tmp}/expected_out.txt"
+		echo
+		out_count="$(wc -l < "${tmp}/expected_out.txt" | tr -d ' ')"
+		implement_prepush_test_gate_log "outcome=info reason=expected_files_out_of_scope count=${out_count}"
+	fi
+	return 0
+}
+
 # expected-files PLAN_FILE ISSUE_BODY_FILE: advisory section for standalone issues.
 implement_prepush_test_gate_expected_files()
 {
@@ -983,10 +1051,7 @@ PY
 		&& implement_prepush_test_gate_py_module select --repo-root "$(git rev-parse --show-toplevel 2>/dev/null || pwd)" --paths-file "${tmp}/paths.txt" --out "${tmp}/selection.json"; then
 		lines="$(implement_prepush_test_gate_py expected "${tmp}/selection.json")"
 		if [ -n "${lines}" ]; then
-			echo "EXPECTED FILES (ADVISORY)"
-			echo "Tests and registries the pre-push gate expects this change to affect. This is not a scope."
-			printf '%s\n' "${lines}"
-			echo
+			implement_prepush_test_gate_expected_scope_split "${lines}" "${body}" "${tmp}"
 		fi
 	fi
 	rm -rf -- "${tmp}"
