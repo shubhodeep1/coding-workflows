@@ -420,6 +420,11 @@ def _gate_dispatch_steps(text: str) -> list[dict]:
 				continue
 			header = chunk.split("        run: |", 1)[0]
 			cap_match = re.search(r'^          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "([0-9]+)"$', header, re.M)
+			# Fail closed: a cap key set any other way (unquoted, an expression, or a
+			# job-level env entry) must not be scored as the 1500 default.
+			cap_key_re = r"^\s*DISPATCH_RATE_LIMIT_MAX_WAIT_SECS\s*:"
+			assert cap_match is not None or not re.search(cap_key_re, header, re.M), (name, "cap must be a quoted integer")
+			assert not re.search(cap_key_re, job_header, re.M), (job_id, "set the cap on the step, not the job")
 			cap = int(cap_match.group(1)) if cap_match else 1500
 			budget = re.search(r"^        timeout-minutes: ([0-9]+)$", header, re.M)
 			deadlines = [
