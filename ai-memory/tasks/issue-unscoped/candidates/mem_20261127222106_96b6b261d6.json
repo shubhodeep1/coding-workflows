@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/test_review_autofix_step_scripts_contract.py:400-410 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: test_workspace_fallback_requires_verified_support_checkout builds fallback_lines from the whole workflow file (`raw.split(\"\\n\")` at line 402) instead of only the codex-agent job text in `job`. It therefore also matches .github/workflows/review_autofix.yml:937 and :1739, which use the WORKFLOW_SUPPORT_REF inline-verify shape, so the `_gated_fallback_line` assertion at line 409 fails.\n  WHY: The test fails with \"ungated .codex-workflow-src fallback\" on the merged tree. The reviewers rate it BLOCKER, which is mapped here to the top severity, critical. The one-line fix is to use `job.split(\"\\n\")`.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/test_review_autofix_step_scripts_contract.py:400-404 (402) | severity=BLOCKER | confidence=5\n  PROBLEM: The `fallback_lines` comprehension scans `raw.split(\"\\n\")` (the whole file) instead of the codex-agent `job` text. It matches review_autofix.yml lines 937 (post-merge-validate-dispatch) and 1739 (fingerprint-cap-block), which have no gated fallback shape.\n  WHY: The assertion at lines 406-409 fails on those two lines. The defect is test-only, since the workflow itself is correct. Fix: use `job.split(\"\\n\")`.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/test_review_autofix_step_scripts_contract.py:402 | severity=BLOCKER | confidence=5\n  PROBLEM: test_workspace_fallback_requires_verified_support_checkout iterates over the whole workflow file (`raw.split(\"\\n\")`) instead of limiting the scan to the codex-agent job text.\n  WHY: Wrappers outside codex-agent that legitimately lack the gated fallback are included in the check, so the test assertion fails on the merged workflow.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- tests/test_review_autofix_step_scripts_contract.py:400-410 (402, 409) | severity=BLOCKER | confidence=5\n  PROBLEM: The test scans the whole workflow file and asserts every match equals `_gated_fallback_line(...)`. The two wrappers at review_autofix.yml:937 and :1739 use WORKFLOW_SUPPORT_REF with an inline HEAD check, and the filter at line 403 still matches them.\n  WHY: The assertion at line 409 raises AssertionError for each of those lines and fails the contract test in CI. Fix: replace `raw.split(\"\\n\")` with `job.split(\"\\n\")` at line 402.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- tests/test_review_autofix_step_scripts_contract.py:400-409 | severity=BLOCKER | confidence=5\n  PROBLEM: The test gathers fallback lines from the entire workflow (`raw.split(\"\\n\")`) instead of only the codex-agent job.\n  WHY: The non-codex-agent script assignments at .github/workflows/review_autofix.yml:937 and :1739 use WORKFLOW_SUPPORT_REF verification, not the gated fallback shape, so the assertion at line 409 fails.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- tests/test_review_autofix_step_scripts_contract.py:400-409 | severity=BLOCKER | confidence=5\n  PROBLEM: The fallback-line sweep scans the whole file (`raw.split(\"\\n\")`) instead of the codex-agent `job` text already extracted at line 388. Two self-verifying wrappers at review_autofix.yml:937 and review_autofix.yml:1739 match the filter but not `_gated_fallback_line(...)`.\n  WHY: The assertion at line 409 raises AssertionError (\"ungated .codex-workflow-src fallback\") and fails the whole contract-test file. Fix: change `raw.split(\"\\n\")` at line 402 to `job.split(\"\\n\")`.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "884a531866cc50e8d3f82470437734ee86f11563c656dfb6f4e701f62c7d0fd4",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10226,
+    "run_id": "46072697916",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46072697916",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127222106_96b6b261d6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10226,
+    "run_id": "46072697916"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-27T22:21:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
