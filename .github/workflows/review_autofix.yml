@@ -3325,7 +3325,11 @@ jobs:
           fi
 
       - name: Capture runtime context
-        if: always()
+        # Gated on the trusted support checkout: before it runs, the
+        # wrapper's .codex-workflow-src fallback could resolve a PR-committed
+        # script. RUNTIME_CONTEXT_DIR is only set after staging, so the body
+        # had nothing to capture then anyway (#10166 security pass).
+        if: always() && steps.checkout_support_source.outcome == 'success'
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_capture_runtime_context.sh"
           [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_capture_runtime_context.sh"

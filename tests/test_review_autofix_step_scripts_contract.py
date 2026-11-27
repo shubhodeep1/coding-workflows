@@ -220,3 +220,12 @@ def main() -> int:
 
 if __name__ == "__main__":
 	raise SystemExit(main())
+
+
+def test_capture_runtime_context_runs_only_after_the_trusted_support_checkout() -> None:
+	# #10166 security pass: the always() step's .codex-workflow-src fallback
+	# must never resolve a PR-committed script after an early failure.
+	steps = _steps_by_name(REVIEW_AUTOFIX_WORKFLOW_PATH.read_text(encoding="utf-8"))
+	condition = str(steps["Capture runtime context"].get("if", ""))
+	assert condition.startswith("always()"), condition
+	assert "steps.checkout_support_source.outcome == 'success'" in condition, condition
