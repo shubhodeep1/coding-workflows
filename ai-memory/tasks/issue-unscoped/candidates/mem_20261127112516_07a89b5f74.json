@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A fixture workflow with the plain, chained, multi-line and `!= 'false'` forms, plus a commented-out line and a default-`false` switch: discovery returns the four live names only.\"\n  expected_change_site: tests/test_stage_switch_registry.py::test_registry_check_fails_on_unlisted_workflow_switch fixture (`new.yml` content)\n  confidence=[3]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The fixture workflow at tests/test_stage_switch_registry.py:152-159 lacks an explicit default-false switch variable test case (e.g., `vars.OFF_ENABLED || 'false'`). Other reviewers (anthropic_claude-sonnet-5_5, minimax_minimax-m3, z-ai_glm-5_3-flash) refuted this by citing tests/test_stage_switch_registry.py:149 (`OPT_IN_ENABLED ... || 'false'`). Source severity: NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"A fixture workflow with the plain, chained, multi-line and `!= 'false'` forms, plus a commented-out line and a default-`false` switch: discovery returns the four live names only.\"\n  Expected change site: tests/test_stage_switch_registry.py::test_registry_check_fails_on_unlisted_workflow_switch fixture (`new.yml` content)\n  Evidence of absence: The fixture workflow at tests/test_stage_switch_registry.py:152-159 lacks an explicit default-false switch variable test case (e.g., `vars.OFF_ENABLED || 'false'`), which is required by the issue description's acceptance criteria to verify the discovery logic's exclusion behavior.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "576b08e60d2d54779079172339c532887f180c3484ff254c6454fbb7b3128606",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10171,
+    "run_id": "45979887863",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45979887863",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127112516_07a89b5f74",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10171,
+    "run_id": "45979887863"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-27T11:25:16Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
