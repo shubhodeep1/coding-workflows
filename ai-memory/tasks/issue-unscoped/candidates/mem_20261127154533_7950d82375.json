@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/stage_switch_watch.py:221-256 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The discover_switches function does not explicitly handle or log file-read issues during discovery other than failing open.\n  WHY: Fail-open makes debugging discovery failures difficult when a switch is expected to be discovered automatically (reviewer severity NIT).\n- scripts/stage_switch_watch.sh:51-59 | severity=high | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The new repo-root guard warns on a missing root or one with no `.github/workflows`, but the script still attempts discovery when `stage_switch_repo_root` is set to a wrong path.\n  WHY: Discovery may silently return nothing, so the watch checks only registry entries and skips new default-on switches (reviewer severity MAJOR).\n- .github/workflows/ci.yml:1729-1742 | severity=critical | confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  PROBLEM: Final CI failed because `tests-heal-plan-and-validation` was cancelled in runs 45978675130 and 45995040066; the logs show tests passing before the cancellation, but its cause is not established or tied to this PR.\n  WHY: `lint` rejects the cancelled job result, leaving final CI red on this head and blocking the required check (reviewer severity BLOCKER; other reviewers judged this cancellation to be infrastructure unrelated to the PR).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Add `\"pending\": true` to every entry and every `off_on_purpose` marker whose name ends in `_ENABLED`, matches `[A-Z][A-Z0-9_]*`, and is not discovered.\"\n  expected_change_site: scripts/stage_switches.json\n  confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR diff shows `\"pending\": true` added to several entries, but a full review of all 175+ registry entries against the discovery list is needed to confirm every qualifying undiscovered entry has it.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/stage_switch_watch.sh:51-59 | severity=MAJOR | confidence=4\n  PROBLEM: The new repo-root guard warns on a missing root or one with no `.github/workflows`, but the script still attempts discovery when `stage_switch_repo_root` is set to a wrong path.\n  WHY: Discovery may silently return nothing, so the watch checks only registry entries and skips new default-on switches.\n- scripts/stage_switch_watch.py:221-256 | severity=NIT | confidence=3\n  PROBLEM: The discover_switches function does not explicitly handle or log file-read issues during discovery other than failing open.\n  WHY: Fail-open makes debugging discovery failures difficult when a switch is expected to be discovered automatically.\n- TASK_GAP:\n  Requirement: \"Add `\"pending\": true` to every entry and every `off_on_purpose` marker whose name ends in `_ENABLED`, matches `[A-Z][A-Z0-9_]*`, and is not discovered.\"\n  Expected change site: scripts/stage_switches.json\n  Evidence of absence: The PR diff shows `\"pending\": true` added to several entries, but a full review of all 175+ registry entries against the discovery list is needed to confirm every qualifying undiscovered entry has it.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:1729-1742 | severity=BLOCKER | confidence=5\n  PROBLEM: Final CI failed because `tests-heal-plan-and-validation` was cancelled in runs 45978675130 and 45995040066; the logs show tests passing before the cancellation, but its cause is not established or tied to this PR.\n  WHY: `lint` rejects the cancelled job result, leaving final CI red on this head and blocking the required check.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d2d9b6bdade3e344bd2230d71a7ad3f7de9a6b97d17aeebb1b6de9cffabb1ea2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10171,
+    "run_id": "46016150579",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46016150579",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127154533_7950d82375",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10171,
+    "run_id": "46016150579"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 4 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-27T15:45:33Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
