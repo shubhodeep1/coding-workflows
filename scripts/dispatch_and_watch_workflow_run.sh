@@ -79,23 +79,135 @@ conclusion_allowed()
 	return 1
 }
 
+# Rate-limit wait for the dispatch (issue #10197).
+#
+# Release gate run 45927857867 lost its orphan-workflows-test job because
+# `gh workflow run` hit the PAT's primary REST rate limit: five tries in 32 s
+# failed and the limit reset 8 minutes later. A primary limit only clears at
+# the reset GitHub reports, so a rate-limited dispatch now waits for it.
+#
+# The rate-limit text is matched with the same extended regex as
+# _is_gh_rate_limit in scripts/gh_helpers.sh (kept in step by
+# tests/test_dispatch_and_watch_rate_limit.py). This script and
+# comprehensive_test_and_release_gh_api.sh stay self-contained and never
+# source gh_helpers.sh, which is not always staged next to them; when
+# _is_gh_rate_limit is already defined it is used instead.
+DISPATCH_WATCH_RATE_LIMIT_RE='rate limit|abuse detection|secondary rate|HTTP 429'
+
+dispatch_watch_is_rate_limit()
+{
+	if declare -F _is_gh_rate_limit >/dev/null 2>&1; then
+		_is_gh_rate_limit "$1"
+		return
+	fi
+	grep -qiE "${DISPATCH_WATCH_RATE_LIMIT_RE}" <<< "$1"
+}
+
+# dispatch_watch_rate_limit_plan <stderr text>
+# Prints "<kind> <wait_s>":
+#   - secondary limit text (`secondary rate`, `abuse detection`, the same test
+#     _gh_rate_limit_wait_for uses): "secondary 60", no API call;
+#   - otherwise one `GET /rate_limit` (GitHub does not count it) with the
+#     step's GH_TOKEN, the token whose core bucket ran out (not gh_api_safe*,
+#     which adds its own rate-limit backoff, and not the GH_READ_TOKEN read
+#     path, which reads another token's bucket):
+#       core.remaining == 0: "primary <max(reset - now, 0) + 5>";
+#       core.remaining > 0:  "secondary 60" (the core bucket did not fail);
+#       read failed or did not parse: "primary 60".
+dispatch_watch_rate_limit_plan()
+{
+	local rl_text="${1:-}" rl_core="" rl_remaining="" rl_reset="" rl_now=0 rl_secs=0
+	if grep -qiE 'secondary rate|abuse detection' <<< "${rl_text}"; then
+		echo "secondary 60"
+		return 0
+	fi
+	rl_core="$(timeout 20 gh api rate_limit --jq '.resources.core | "\(.remaining) \(.reset)"' 2>/dev/null || true)"
+	read -r rl_remaining rl_reset _ <<< "${rl_core}" || true
+	if [[ "${rl_remaining}" =~ ^[0-9]{1,9}$ ]] && [[ "${rl_reset}" =~ ^[0-9]{1,12}$ ]]; then
+		if [ "$((10#${rl_remaining}))" -gt 0 ]; then
+			echo "secondary 60"
+			return 0
+		fi
+		rl_now="$(date +%s)"
+		rl_secs=$(( 10#${rl_reset} - rl_now ))
+		[ "${rl_secs}" -ge 0 ] || rl_secs=0
+		echo "primary $(( rl_secs + 5 ))"
+		return 0
+	fi
+	echo "primary 60"
+}
+
+# dispatch_workflow: runs `gh workflow run` with the --field values.
+# - gh's stderr is captured and still printed to stderr; stdout is unchanged.
+# - Rate limit (issue #10197) and DISPATCH_RATE_LIMIT_MAX_WAIT_SECS > 0: wait
+#   as dispatch_watch_rate_limit_plan says and try again. The wait does not
+#   use up one of DISPATCH_MAX_ATTEMPTS. One line per wait:
+#     DISPATCH_RATE_LIMIT_WAIT workflow=<file> kind=<primary|secondary> wait_s=<n> waited_total_s=<n> max_s=<n>
+#   When the next wait would take the total past the cap, it logs the same
+#   line with `outcome=cap_reached` (waited_total_s = time waited so far),
+#   prints the existing `failed after N attempts` error line and returns 1
+#   without sleeping: a primary limit cannot clear before its reset.
+# - Any other failure, or a cap of 0: the attempt count and backoff as before.
+# API calls: one uncounted `GET /rate_limit` per rate-limited attempt that is
+# not a secondary-limit message; none otherwise.
 dispatch_workflow()
 {
 	local attempt=1
 	local backoff=0
 	local cmd=(gh workflow run "${WORKFLOW_FILE}" --repo "${TARGET_REPO}")
 	local field
+	local dispatch_err_file=""
+	local dispatch_err_text=""
+	local rl_plan=""
+	local rl_kind=""
+	local rl_wait=0
+	local rl_waited_total=0
+	local rl_workflow_label=""
 	for field in "${DISPATCH_FIELDS[@]}"; do
 		cmd+=(--field "${field}")
 	done
+	rl_workflow_label="$(printf '%s' "${WORKFLOW_FILE}" | tr -cd 'A-Za-z0-9._-' | cut -c1-100)"
+	# Without a temp file the stderr is not captured and every failure takes
+	# the attempt/backoff path, as before.
+	dispatch_err_file="$(mktemp 2>/dev/null || true)"
 
 	while true; do
-		if "${cmd[@]}"; then
+		dispatch_err_text=""
+		if [ -n "${dispatch_err_file}" ]; then
+			if "${cmd[@]}" 2>"${dispatch_err_file}"; then
+				cat "${dispatch_err_file}" >&2 2>/dev/null || true
+				rm -f "${dispatch_err_file}"
+				return 0
+			fi
+			cat "${dispatch_err_file}" >&2 2>/dev/null || true
+			dispatch_err_text="$(cat "${dispatch_err_file}" 2>/dev/null || true)"
+		elif "${cmd[@]}"; then
 			return 0
+		fi
+
+		if [ "${DISPATCH_RATE_LIMIT_MAX_WAIT_SECS}" -gt 0 ] && [ -n "${dispatch_err_text}" ] \
+			&& dispatch_watch_is_rate_limit "${dispatch_err_text}"; then
+			rl_plan="$(dispatch_watch_rate_limit_plan "${dispatch_err_text}")"
+			read -r rl_kind rl_wait _ <<< "${rl_plan}" || true
+			if ! [[ "${rl_kind}" =~ ^(primary|secondary)$ ]] || ! [[ "${rl_wait}" =~ ^[0-9]{1,12}$ ]]; then
+				rl_kind="primary"
+				rl_wait=60
+			fi
+			if [ $(( rl_waited_total + rl_wait )) -gt "${DISPATCH_RATE_LIMIT_MAX_WAIT_SECS}" ]; then
+				echo "DISPATCH_RATE_LIMIT_WAIT workflow=${rl_workflow_label} kind=${rl_kind} wait_s=${rl_wait} waited_total_s=${rl_waited_total} max_s=${DISPATCH_RATE_LIMIT_MAX_WAIT_SECS} outcome=cap_reached"
+				echo "::error::gh workflow run ${WORKFLOW_FILE} failed after ${DISPATCH_MAX_ATTEMPTS} attempts"
+				rm -f "${dispatch_err_file}"
+				return 1
+			fi
+			rl_waited_total=$(( rl_waited_total + rl_wait ))
+			echo "DISPATCH_RATE_LIMIT_WAIT workflow=${rl_workflow_label} kind=${rl_kind} wait_s=${rl_wait} waited_total_s=${rl_waited_total} max_s=${DISPATCH_RATE_LIMIT_MAX_WAIT_SECS}"
+			sleep "${rl_wait}"
+			continue
 		fi
 
 		if [ "${attempt}" -ge "${DISPATCH_MAX_ATTEMPTS}" ]; then
 			echo "::error::gh workflow run ${WORKFLOW_FILE} failed after ${DISPATCH_MAX_ATTEMPTS} attempts"
+			[ -z "${dispatch_err_file}" ] || rm -f "${dispatch_err_file}"
 			return 1
 		fi
 
@@ -593,6 +705,16 @@ require_numeric "registration timeout" "${REGISTRATION_TIMEOUT_SECS}"
 require_numeric "registration poll interval" "${REGISTRATION_POLL_INTERVAL_SECS}"
 require_numeric "dispatch max attempts" "${DISPATCH_MAX_ATTEMPTS}"
 require_numeric "dispatch backoff base" "${DISPATCH_BACKOFF_BASE_SECS}"
+
+# Cap on the time one dispatch spends waiting on rate limits (issue #10197);
+# 0 turns the wait off. A bad value warns and uses the default instead of
+# failing the gate.
+DISPATCH_RATE_LIMIT_MAX_WAIT_SECS="${DISPATCH_RATE_LIMIT_MAX_WAIT_SECS:-1500}"
+if ! [[ "${DISPATCH_RATE_LIMIT_MAX_WAIT_SECS}" =~ ^[0-9]{1,5}$ ]]; then
+	echo "::warning::DISPATCH_RATE_LIMIT_MAX_WAIT_SECS must be an integer (0-99999); using 1500"
+	DISPATCH_RATE_LIMIT_MAX_WAIT_SECS=1500
+fi
+DISPATCH_RATE_LIMIT_MAX_WAIT_SECS=$((10#${DISPATCH_RATE_LIMIT_MAX_WAIT_SECS}))
 
 if [ "${SNAPSHOT_ONLY}" != "1" ]; then
 	if [ -z "${COMPLETION_TIMEOUT_SECS}" ]; then
