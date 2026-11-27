@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-11-27T19:13:44Z",
+  "issue_number": 10200,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 003 as out-of-scope; anchor=changelog.d/10200-ci-heal-job-steps-to-poll-groups.md:1-1; cited_path=agents.md; files_touched=.github/workflows/ci.yml, changelog.d/10200-ci-heal-job-steps-to-poll-groups.md, tests/test_ci_poll_test_sharding.py.",
+  "phase": "review_autofix",
+  "pr_number": 10202,
+  "record_id": "lesson_20261127191344_c94f0c2b1d",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "agents.md",
+    "changelog.d/10200-ci-heal-job-steps-to-poll-groups.md",
+    ".github/workflows/ci.yml",
+    "tests/test_ci_poll_test_sharding.py"
+  ]
+}
