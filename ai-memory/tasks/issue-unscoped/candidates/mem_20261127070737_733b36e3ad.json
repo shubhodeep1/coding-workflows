@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- changelog.d/10197-dispatch-rate-limit-wait.md:15 | severity=low | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The release note says any rate limit on the pre-dispatch lookup makes the validation-refresh, standalone validate, internal-memory-maintenance and orchestrate steps fail at once with `outcome=cap_reached`, but that happens only when the lookup uses its full 210 s backoff.\n  WHY: `gh_api_safe` (scripts/comprehensive_test_and_release_gh_api.sh lines 134-147) returns as soon as a retry succeeds. After a 30 s backoff, the cap check in `dispatch_workflow` sees 30 + 60 = 90, and all four steps absorb the wait. After a 90 s backoff it sees 150, and only the 110 s validation-refresh step fails. The source rated this NIT, mapped here to low. It is a documentation error, not a code fault. z-ai_glm-5_3-flash checked the same line and found the arithmetic correct for the 210 s case.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Acceptance criterion 1 requires replaying the incident to end in a successful dispatch after an approximately 8.5-minute wait.\n  expected_change_site: The `update_workflows` dispatch step in `.github/workflows/test-and-mark-stable.yml`, and its corresponding replay test.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: That step sets `DISPATCH_RATE_LIMIT_MAX_WAIT_SECS` to 410 seconds, but the incident needs a wait of about 510 seconds, so the script reaches `cap_reached` before it dispatches again. The replay test uses the default 1500-second cap, so it does not check the configured workflow step. The changelog also says this scenario still fails.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- changelog.d/10197-dispatch-rate-limit-wait.md:Line 15 | severity=NIT | confidence=3\n  PROBLEM: The line says that if the pre-dispatch lookup was rate-limited at all, the validation-refresh, standalone validate, internal-memory-maintenance and orchestrate steps (caps 110 to 240 s) fail at once with `outcome=cap_reached`. That only happens when the lookup used its full 210 s backoff. `gh_api_safe` (scripts/comprehensive_test_and_release_gh_api.sh lines 134-147) sleeps 30, 60 and then 120 s and returns as soon as a retry succeeds. The cap check `rl_spent + rl_wait > DISPATCH_RATE_LIMIT_MAX_WAIT_SECS` sees 90 after one 30 s backoff, which all four steps absorb. After a 90 s backoff it sees 150, and only the 110 s step fails.\n  WHY: This is a documentation error, not a code fault. An operator who sees `DISPATCH_RATE_LIMIT_WAIT kind=secondary` without `cap_reached` after a single lookup rate limit would think it contradicts the release note. The sentence should say \"when the lookup used its full backoff (210 s)\".\n- TASK COMPLETENESS / INTENT GAPS: NONE. The reviewer did not re-flag two items. AC1 (replay under the update_workflows step's 410 s cap) was recorded as deferred in earlier rounds and the changelog states it. AC3's failures are inherited from the merge base.\n- Verification note (no finding): in tests/test_dispatch_and_watch_rate_limit.py, the `clock_floor` assertion in `test_pre_lookup_failure_then_wait_restarts_the_fallback_window` is deterministic and correct. The fallback `created=>` query runs only when `PRE_RUN_ID_LOOKUP_OK=false` (line 786).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n- TASK COMPLETENESS / INTENT GAPS: NONE. AC1 (the update_workflows step's 410 s cap cannot replay the 510 s incident wait) is the same TASK_GAP_DEFERRED documented in earlier editor summaries, and the changelog records it.\n- Note (explicitly not raised as a finding, NIT): `tests/test_dispatch_and_watch_rate_limit.py` `test_pre_lookup_failure_then_wait_restarts_the_fallback_window` (line 310) checks only a lower bound on `window_start`.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: Acceptance criterion 1 requires replaying the incident to end in a successful dispatch after an approximately 8.5-minute wait.\n  Expected change site: The `update_workflows` dispatch step in `.github/workflows/test-and-mark-stable.yml`, and its corresponding replay test.\n  Evidence of absence: That step sets `DISPATCH_RATE_LIMIT_MAX_WAIT_SECS` to 410 seconds, but the incident needs a wait of about 510 seconds, so the script reaches `cap_reached` before it dispatches again. The replay test uses the default 1500-second cap, so it does not check the configured workflow step. The changelog also says this scenario still fails.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- Verification note: the test fix and the changelog edits on lines 6 and 15 are accurate. With a 210 s lookup backoff plus a 60 s secondary wait (270 s), every cap from 110 to 240 s is exceeded (scripts/dispatch_and_watch_workflow_run.sh:775-779). The AC1 replay gap under the 410 s cap was already documented as deferred and is unchanged.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1a0f2f9e048e46d050e1e901341b5bd20829560f3638d743e82a8a79aec31040",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10201,
+    "run_id": "45954506071",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45954506071",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127070737_733b36e3ad",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10201,
+    "run_id": "45954506071"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-27T07:07:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
