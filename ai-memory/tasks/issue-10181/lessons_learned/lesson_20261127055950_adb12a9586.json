@@ -1,0 +1,21 @@
+{
+  "discovered_at": "2026-11-27T05:59:50Z",
+  "issue_number": 10181,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=tests/test_auto_release_stable.py:1-1; cited_path=repository-wide test suite (inherited failures; gate environment lacks PyYAML); files_touched=agents.d/10037-release-gate-runner-wait.md, agents.d/10181-runner-wait-job-age.md, changelog.d/10181-runner-wait-job-age.md, scripts/auto_release_stable.sh, scripts/gh_helpers.sh, scripts/promote_main_cycle.sh, tests/test_auto_release_stable.py, tests/test_promote_main_cycle.py.",
+  "phase": "review_autofix",
+  "pr_number": 10185,
+  "record_id": "lesson_20261127055950_adb12a9586",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "repository-wide test suite (inherited failures; gate environment lacks PyYAML)",
+    "tests/test_auto_release_stable.py",
+    "agents.d/10037-release-gate-runner-wait.md",
+    "agents.d/10181-runner-wait-job-age.md",
+    "changelog.d/10181-runner-wait-job-age.md",
+    "scripts/auto_release_stable.sh",
+    "scripts/gh_helpers.sh",
+    "scripts/promote_main_cycle.sh",
+    "tests/test_promote_main_cycle.py"
+  ]
+}
