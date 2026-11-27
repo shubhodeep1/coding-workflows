@@ -688,7 +688,9 @@ def test_step_block_stays_within_the_byte_budget():
 	text = REVIEW_YML.read_text(encoding="utf-8")
 	start = text.index("      # Pre-push affected-test gate (plan P4)")
 	end = text.index("      - name: Commit changes\n", start)
-	assert len(text[start:end].encode("utf-8")) <= 2000
+	# 2,300: room for the .codex-workflow-src fallback verify line every
+	# step-script wrapper carries (#10208).
+	assert len(text[start:end].encode("utf-8")) <= 2300
 	assert len(text.encode("utf-8")) < 480_000
 
 
