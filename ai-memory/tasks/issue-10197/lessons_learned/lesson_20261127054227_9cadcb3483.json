@@ -1,0 +1,19 @@
+{
+  "discovered_at": "2026-11-27T05:42:27Z",
+  "issue_number": 10197,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 006 as out-of-scope; anchor=.github/workflows/test-and-mark-stable.yml:4039-4039; cited_path=PR description body (pipeline-composed, not a repository file); files_touched=.github/workflows/test-and-mark-stable.yml, README.md, agents.d/10197-dispatch-rate-limit-wait.md, changelog.d/10197-dispatch-rate-limit-wait.md, scripts/dispatch_and_watch_workflow_run.sh, tests/test_dispatch_and_watch_rate_limit.py.",
+  "phase": "review_autofix",
+  "pr_number": 10201,
+  "record_id": "lesson_20261127054227_9cadcb3483",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "PR description body (pipeline-composed, not a repository file)",
+    ".github/workflows/test-and-mark-stable.yml",
+    "README.md",
+    "agents.d/10197-dispatch-rate-limit-wait.md",
+    "changelog.d/10197-dispatch-rate-limit-wait.md",
+    "scripts/dispatch_and_watch_workflow_run.sh",
+    "tests/test_dispatch_and_watch_rate_limit.py"
+  ]
+}
