@@ -6256,7 +6256,7 @@ _stall_reissue_guard_refuse()
 #     .github/workflows/<wf> for that head, where <wf> is the step's
 #     final-CI workflow captured at start-up in
 #     _OPP_STALL_MERGE_FINAL_CI_WORKFLOW (default ci.yml; the poller clears
-#     the original variable, #9737) (run-id binding, so a same-name `lint`
+#     the original variable, #9732) (run-id binding, so a same-name `lint`
 #     from another workflow does not count). The CI state comes from
 #     _pr_checks_completed.
 # Fails CLOSED: any read error refuses with reason=check_unavailable,
