@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Check that a red CI quick on the PR head reaches the review editor as a failing check to repair. If it does not, say so in the PR body and stop there; do not widen this change.\" (issue #10206, item 4)\n  expected_change_site: PR body / description documenting the verification outcome (or a stop-here note if it fails)\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  EVIDENCE: The PR description acceptance table does not mention any verification of the CI-quick \u2192 review-editor propagation path, related test rows show \"unmet\" / \"not run\" (tests/test_ci_pr_quick.py::test_static_checks_runs_prompt_template_parity \"unmet\"; tests/test_assemble_prompt.py::test_first_difference_message_reports_offset_and_prompt_name \"not run\"), no hunk, comment, or PR-body section records this verification (all three reviewers rate it SEVERITY: NIT; anthropic_claude-sonnet-5_5 explicitly rejects this gap, saying a PR-body note is required only if the failure does NOT reach the editor and that PR_CHECK_RUNS_CONTEXT shows the CI quick check runs reaching the editor)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTIONS: NONE; HARDENING_RISK_SCORE: 0\n- Rejects the pass-1 consensus TASK_GAP (issue item 4 PR-body note): item 4 asks for a PR-body note only if the failure does NOT reach the editor. PR_CHECK_RUNS_CONTEXT lists 28 check runs on head 87c23c34, the CI quick jobs among them, so a red \"Prompt template parity (quick)\" step reaches the editor. No gap.\n- Observation, not a finding: tests/test_ci_pr_quick.py and tests/test_ci_job_split_contract.py are inherited failures that also fail on the merge-base. This is a pre-existing environment issue, not one the diff introduces.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Check that a red CI quick on the PR head reaches the review editor as a failing check to repair. If it does not, say so in the PR body and stop there; do not widen this change.\"\n  Expected change site: PR body / description documenting the verification outcome.\n  Evidence of absence: The PR description acceptance table does not mention any verification of the CI-quick \u2192 review-editor propagation path; status rows for related tests show \"unmet\" / \"not run\" without an explicit note that the review editor sees the failing check to repair as required by the issue description.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Check that a red CI quick on the PR head reaches the review editor as a failing check to repair. If it does not, say so in the PR body and stop there; do not widen this change.\"\n  Expected change site: PR description / PR body documenting the verification outcome (or a stop-here note if it fails).\n  Evidence of absence: PR description acceptance table lists no entry for the CI-quick \u2192 review-editor propagation check; it only shows tests/test_ci_pr_quick.py::test_static_checks_runs_prompt_template_parity as \"unmet\" and tests/test_assemble_prompt.py::test_first_difference_message_reports_offset_and_prompt_name as \"not run\". Plan step 4 requires a confirmation or an explicit stop-here note, and neither is present. The wiring is otherwise correct (the new step has no `if:`), so the gap is the missing note, not a functional defect.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP\n  Requirement: \"Check that a red `CI quick` on the PR head reaches the review editor as a failing check to repair. If it does not, say so in the PR body and stop there; do not widen this change.\" (issue #10206, item 4)\n  Expected change site: PR body / description \u2014 a recorded statement of the verification outcome (either that a red CI quick is delivered to the editor as a repairable failing check, or an explicit statement that it is not).\n  Evidence of absence: The PR description's acceptance table marks `tests/test_ci_pr_quick.py::test_static_checks_runs_prompt_template_parity` (red-on-base) as `unmet` and never states whether a failing `quick / static-checks` check-run is picked up by the review editor's repair path. No hunk, comment, or PR-body section records this verification. (Indirect evidence the path exists: the pre-push gate ran in repair mode against failing checks on the head SHA, and tests/test_review_prepush_test_gate.py pins the editor's reaction to failing checks.)\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "538565636fbdcc08b674e9ddde1999eeab678f1e872787ab0c9ee31e31422680",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10209,
+    "run_id": "46006670966",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46006670966",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127140747_7b0d5d2f07",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10209,
+    "run_id": "46006670966"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-27T14:07:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
