@@ -387,12 +387,18 @@ jobs:
         # The step timeout (issue #9393): a hung gh call would otherwise hold
         # the poll job until GitHub's 360-minute job limit and fail it;
         # continue-on-error turns the step timeout into a warning.
+        # The signing secret lets the helper verify signed github-actions[bot]
+        # entry comments (PR #9643); without it this step read none of them and
+        # closed tracker #9647 with 7 open entries (2026-11-23). The helper
+        # keeps the tracker open when signed entries cannot be verified.
         continue-on-error: true
         timeout-minutes: 5
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           OPERATOR_STEP_AUTO_RESOLVE_ENABLED: ${{ vars.OPERATOR_STEP_AUTO_RESOLVE_ENABLED || 'true' }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           set -uo pipefail
           helper=".codex-workflow-src/scripts/operator_step_issue.py"
@@ -1117,6 +1123,9 @@ jobs:
           RECLARIFY_UNROUTED_MAX_AGE_HOURS: ${{ vars.RECLARIFY_UNROUTED_MAX_AGE_HOURS || '168' }}
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS || '3' }}
+          STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED: ${{ vars.STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED || 'true' }}
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
           HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}
@@ -1564,6 +1573,9 @@ jobs:
           PARTIAL_DELIVERY_TRACKING_ENABLED: ${{ vars.PARTIAL_DELIVERY_TRACKING_ENABLED || 'true' }}
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS || '3' }}
+          STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED: ${{ vars.STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED || 'true' }}
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
           HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}
@@ -1671,6 +1683,7 @@ jobs:
           # Issue #8685: close a complete project's tracking issue once its follow-ups settle.
           ORCHESTRATOR_CLOSE_COMPLETED_TRACKING: ${{ vars.ORCHESTRATOR_CLOSE_COMPLETED_TRACKING || 'true' }}
           ENABLE_STALL_MERGED_PR_GUARD: ${{ vars.ENABLE_STALL_MERGED_PR_GUARD || 'true' }}
+          UNBLOCK_EXISTING_PR_ROUTING_ENABLED: ${{ vars.UNBLOCK_EXISTING_PR_ROUTING_ENABLED || 'true' }}
           # Issue #6680 kill switch for closing and re-issuing a PR whose only
           # host-only conflicts are retired files the base no longer has.
           STALL_RETIRED_CONFLICT_REISSUE_ENABLED: ${{ vars.STALL_RETIRED_CONFLICT_REISSUE_ENABLED || 'true' }}
@@ -1832,6 +1845,9 @@ jobs:
           PARTIAL_DELIVERY_TRACKING_ENABLED: ${{ vars.PARTIAL_DELIVERY_TRACKING_ENABLED || 'true' }}
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS || '3' }}
+          STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED: ${{ vars.STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED || 'true' }}
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
           HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}
@@ -1910,6 +1926,7 @@ jobs:
           # Issue #8685: close a complete project's tracking issue once its follow-ups settle.
           ORCHESTRATOR_CLOSE_COMPLETED_TRACKING: ${{ vars.ORCHESTRATOR_CLOSE_COMPLETED_TRACKING || 'true' }}
           ENABLE_STALL_MERGED_PR_GUARD: ${{ vars.ENABLE_STALL_MERGED_PR_GUARD || 'true' }}
+          UNBLOCK_EXISTING_PR_ROUTING_ENABLED: ${{ vars.UNBLOCK_EXISTING_PR_ROUTING_ENABLED || 'true' }}
           STALL_RETIRED_CONFLICT_REISSUE_ENABLED: ${{ vars.STALL_RETIRED_CONFLICT_REISSUE_ENABLED || 'true' }}
           # PR #7709: stall recovery's check-triage resolution gate; false turns it off.
           CHECK_TRIAGE_RESOLVED_GATE_ENABLED: ${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}
@@ -1967,6 +1984,9 @@ jobs:
           STAGED_SUPPORT_LATCH_SWEEP_ONLY: "true"
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS || '3' }}
+          STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED: ${{ vars.STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED || 'true' }}
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
           HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}
@@ -2009,6 +2029,9 @@ jobs:
           STALL_THRESHOLD_IMPLEMENTING_MINUTES: ${{ vars.STALL_THRESHOLD_IMPLEMENTING_MINUTES || '' }}
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS || '3' }}
+          STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED: ${{ vars.STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED || 'true' }}
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
           HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}
