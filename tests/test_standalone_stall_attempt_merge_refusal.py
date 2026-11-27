@@ -45,6 +45,9 @@ _resolve_issue_implementation_pr() {
   return 0
 }
 gh_retry() { :; }
+# These cases cover the legacy chain: STALL_MERGE_REQUIRED_CHECKS_ENABLED=false
+# (#9732). The #9732 chain has its own tests in test_orchestrate_poll_process.py.
+_stall_merge_required_checks_enabled() { return 1; }
 _pr_checks_completed() {
   printf '_pr_checks_completed %s\\n' "$*" >> "$CALLS_FILE"
   return "${CHECKS_RC}"

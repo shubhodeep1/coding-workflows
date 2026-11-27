@@ -416,3 +416,27 @@ Copy this block when adding a new entry:
   - `gh run list -R shubhodeep1/tele-funtoken-msg-scoring --workflow ai-cs-investigate.yml --created ">=$(date -u -d '30 days ago' +%F)" --json databaseId --jq length` prints `0` (no `cs_investigate.yml` run in the last 30 days), for every caller repo.
   - `tests/test_cs_bridge_query.py` (and its `ci.yml` entry) is removed in the same PR.
 - **Owner:** @shubhodeep1
+
+### `scripts/plan_scope_block_route.sh` + the "Route planning scope block" step of `.github/workflows/plan.yml`
+
+- **Introduced in:** PR for #9534 (2026-11-23), Refs #9503
+- **Type:** long-running
+- **Removal trigger:** permanent — review annually. It runs as a step of the existing planning workflow on every blocked plan, never by hand, and is the only path that turns a missing-scope planning block into an `override_guard` offer.
+- **Removal preflight checks:**
+  - `rg -n "plan_scope_block_route" .github scripts` returns only the lines being removed in the same PR.
+  - No `PLAN_SCOPE_BLOCK outcome=routed` log line in plan runs from the last 30 days (`gh run list --workflow plan.yml --created ">=$(date -u -d '30 days ago' +%F)"` and grep each run's log).
+  - `tests/test_plan_scope_block_route.py` (and its `ci.yml` entry) is removed in the same PR.
+- **Owner:** @shubhodeep1
+
+### `tools/runner_scaler/` (the `runner_scaler` service, `tools/runner_scaler/app.yaml`, `tools/runner_scaler/bootstrap/runner-boot.sh`)
+
+- **Introduced in:** PR for Phase 2 of `docs/plans/digitalocean-runners-for-consumer-pipelines-plan.md` (2026-11-18), Refs #9722
+- **Type:** supervisor
+- **Removal trigger:** when no repository has set `PIPELINE_RUNS_ON=do-runner` for 30 days; otherwise permanent — review annually.
+- **Removal preflight checks:**
+  - For every repository in the app's `RUNNER_SCALER_REPOS`, `gh api repos/<repo>/actions/variables/PIPELINE_RUNS_ON` returns HTTP 404 (variable unset).
+  - `curl -sS -H "Authorization: Bearer ${DIGITALOCEAN_ACCESS_TOKEN}" "https://api.digitalocean.com/v2/droplets?tag_name=gh-runner&per_page=1"` reports `meta.total` `0`.
+  - The Actions jobs of those repositories over the last 30 days include no job with the label `do-runner` (jobs API, `labels` field).
+  - The App Platform app and the Uptime check recorded in the agents file's `## DigitalOcean resources` table are deleted in the same change (ask-first, CLAUDE.md §22.B), and their rows are removed.
+  - `tests/test_runner_scaler_*.py` and `tests/runner_scaler_fakes.py` are removed in the same PR.
+- **Owner:** @shubhodeep1

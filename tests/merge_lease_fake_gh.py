@@ -16,7 +16,10 @@ runs {sha: [workflow runs]} (actions/runs?head_sha=), check_runs {sha: [check-ru
 (commits/<sha>/check-runs), fail ["substring", ...] (any call whose joined
 argv contains one fails), move_ref_on_patch {ref: sha} (simulates a peer
 winning the race: applied before the first PATCH of that ref; a list of SHAs
-is applied one per PATCH), graphql {..}.
+is applied one per PATCH), graphql {..}, active_runs [workflow runs]
+(actions/runs?status=<s> returns those whose status is <s>; issue #9983),
+default_branch "main" (GET repos/<o>/<r>), dispatch_adds_run true (each
+`gh workflow run` adds a queued `[pr:<n>]` run to active_runs).
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from urllib.parse import parse_qs, urlparse
 
 
@@ -81,6 +85,16 @@ def main() -> None:
 			fail(f"forced failure on {needle}")
 	if argv[:2] == ["workflow", "run"]:
 		state.setdefault("dispatched", []).append(argv)
+		if state.get("dispatch_adds_run"):
+			# Issue #9983: the dispatch creates a queued `[pr:<n>]` review run
+			# on the default branch, seen by the next active-run listing.
+			pr = next((x.split("=", 1)[1] for x in argv if x.startswith("pr_number=")), "")
+			title = f"Internal: AI Review & Autofix [pr:{pr}]"
+			state.setdefault("active_runs", []).append({"id": 900 + len(state["active_runs"]), "name": title,
+				"display_title": title, "status": "queued", "event": "workflow_dispatch",
+				"head_branch": state.get("default_branch", "main"), "head_sha": "9" * 40,
+				"path": ".github/workflows/internal-review.yml",
+				"created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())})
 		save(state)
 		return
 	if argv[:2] == ["pr", "merge"]:
@@ -120,6 +134,9 @@ def main() -> None:
 		return
 	if path == "graphql":
 		emit(state.get("graphql", {"data": {"repository": {"pullRequest": {"closingIssuesReferences": {"nodes": []}}}}}), jq_filter)
+		return
+	if len(parts) == 3 and parts[0] == "repos":
+		emit({"default_branch": state.get("default_branch", "main")}, jq_filter)
 		return
 	# repos/o/r/...
 	rest = "/".join(parts[3:])
@@ -245,6 +262,8 @@ def main() -> None:
 	if parts[3:5] == ["actions", "runs"] or (len(parts) > 4 and parts[3] == "actions"):
 		run_sha = (query.get("head_sha") or [""])[0]
 		runs = state.get("runs", {}).get(run_sha, []) if parts[3:5] == ["actions", "runs"] else []
+		if parts[3:5] == ["actions", "runs"] and "status" in query:
+			runs = [r for r in state.get("active_runs", []) if r.get("status") == query["status"][0]]
 		emit({"total_count": len(runs), "workflow_runs": runs}, jq_filter)
 		return
 	if parts[3:4] == ["check-runs"] or (len(parts) > 5 and parts[5] == "check-runs"):

@@ -70,7 +70,7 @@ jobs:
         )
       ) &&
       contains(github.event.comment.body, 'Clarification required')
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.PIPELINE_RUNS_ON == 'do-runner' && 'do-runner' || 'ubuntu-latest' }}
     timeout-minutes: 30
     concurrency:
       group: ai-orchestrate-clarify-respond-${{ github.event.issue.number }}
@@ -423,7 +423,7 @@ jobs:
 
       - name: Install Codex CLI
         if: steps.check_orchestrator.outputs.respond == 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@cbe65b01a1ff0890a0149a244ee46121065a0c45
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
@@ -868,7 +868,7 @@ jobs:
       - name: Restore semantic cache SQLite
         if: steps.check_orchestrator.outputs.respond == 'true' && steps.check_orchestrator.outputs.mode != 'standalone' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec'
         continue-on-error: true
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ${{ vars.SEMANTIC_CACHE_SQLITE_PATH || '/tmp/semantic_cache.sqlite3' }}
           key: semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -1417,7 +1417,7 @@ jobs:
       - name: Save semantic cache SQLite
         if: env.CLAUDE_CAPACITY_WAIT != 'true' && (always() && steps.check_orchestrator.outputs.respond == 'true' && steps.check_orchestrator.outputs.mode != 'standalone' && vars.SEMANTIC_CACHE_BACKEND == 'sqlite-vec' && steps.run_codex.outcome == 'success')
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ${{ vars.SEMANTIC_CACHE_SQLITE_PATH || '/tmp/semantic_cache.sqlite3' }}
           key: semantic-cache-${{ github.repository }}-${{ vars.SEMANTIC_CACHE_BACKEND }}-${{ vars.SEMANTIC_CACHE_EMBEDDING_MODEL || 'openai/text-embedding-3-small' }}-${{ github.run_id }}-${{ github.run_attempt }}

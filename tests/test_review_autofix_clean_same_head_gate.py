@@ -25,6 +25,8 @@ import sys
 import textwrap
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
@@ -873,6 +875,53 @@ def test_gate_final_ci_repair_ignores_a_provider_pause_notice(tmp_path: Path) ->
 		"body": "**AI review/autofix paused — model provider unavailable**"}
 	result, outputs, _ = _run_gate(tmp_path, _repair_fixture(pause))
 	assert outputs["final_ci_repair"] == "true", result.stdout
+
+
+# Issue #10023: a final CI attempt that turned green after the hand-back.
+_HEAD_GATE_SUCCESS = {"context": "ai-review/head-gate", "state": "success", "creator": {"login": PIPELINE}}
+
+
+def _ci_final(state: str, created_at: str, creator: str = "github-actions[bot]") -> dict:
+	return {"context": "ci/final", "state": state, "created_at": created_at, "creator": {"login": creator}}
+
+
+def test_gate_final_ci_repair_skips_a_head_whose_final_ci_turned_green(tmp_path: Path) -> None:
+	# GitHub lists statuses newest first; the marker is at 2026-11-06T12:00:00Z.
+	statuses = [_ci_final("success", "2026-11-06T13:00:00Z"), _HEAD_GATE_SUCCESS, _ci_final("failure", "2026-11-06T11:59:00Z")]
+	result, outputs, calls = _run_gate(tmp_path, _repair_fixture(statuses=statuses))
+	assert f"FINAL_CI_REPAIR pr=42 head={HEAD} outcome=skipped reason=final_ci_now_green" in result.stdout, result.stdout + result.stderr
+	assert outputs["final_ci_repair"] == "false" and outputs["final_ci_repair_attempt"] == ""
+	assert outputs["should_run"] == "false" and outputs["skip_reason"] == "final_ci_now_green"
+	assert "outcome=selected" not in result.stdout
+	# One searchable skip line per skip (issue #4985).
+	assert f"AUTOFIX_GATE_SKIP reason=final_ci_now_green pr=42 head_sha={HEAD}" in result.stdout
+	assert result.stdout.count("AUTOFIX_GATE_SKIP ") == 1
+	assert _statuses_calls(calls) == 1
+
+
+@pytest.mark.parametrize("ci_final", [
+	[_ci_final("failure", "2026-11-06T13:00:00Z"), _ci_final("success", "2026-11-06T12:30:00Z")],
+	[_ci_final("success", "2026-11-06T11:00:00Z")],
+	[_ci_final("success", "2026-11-06T13:00:00Z", creator="mallory")],
+	[_ci_final("success", "not-a-time")],
+	[],
+], ids=["newest_failure", "older_than_marker", "untrusted_creator", "unparseable_time", "no_ci_final"])
+def test_gate_final_ci_repair_still_selected_when_final_ci_is_not_newer_green(tmp_path: Path, ci_final: list) -> None:
+	result, outputs, calls = _run_gate(tmp_path, _repair_fixture(statuses=[*ci_final, _HEAD_GATE_SUCCESS]))
+	assert outputs["should_run"] == "true", result.stdout + result.stderr
+	assert outputs["final_ci_repair"] == "true" and outputs["final_ci_repair_attempt"] == "1"
+	assert f"FINAL_CI_REPAIR pr=42 head={HEAD} outcome=selected attempt=1" in result.stdout
+	assert "final_ci_now_green" not in result.stdout
+	assert _statuses_calls(calls) == 1
+
+
+def test_gate_final_ci_now_green_needs_a_pipeline_head_gate_success(tmp_path: Path) -> None:
+	# An unapproved head keeps the full review even when ci/final is green.
+	statuses = [_ci_final("success", "2026-11-06T13:00:00Z"), {"context": "ai-review/head-gate", "state": "pending", "creator": {"login": PIPELINE}}]
+	result, outputs, _ = _run_gate(tmp_path, _repair_fixture(statuses=statuses))
+	assert outputs["should_run"] == "true" and outputs["final_ci_repair"] == "false"
+	assert "reason=head_gate_not_success state=pending" in result.stdout
+	assert "final_ci_now_green" not in result.stdout
 
 
 # ---------------------------------------------------------------------------
