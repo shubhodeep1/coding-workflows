@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cEvery step env block that passes any MERGE_LEASE_* setting \u2026 passes the full set.\u201d\n  expected_change_site: tests/test_merge_lease_env_contract.py, READ_ONLY_LEASE_STEPS and violations().\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The contract explicitly permits both \u201cSingle-issue security pass\u201d steps to pass only MERGE_LEASE_ENABLED and MERGE_LEASE_MAX_HOLDERS (lines 89-100, 233-240). Those env blocks pass MERGE_LEASE_* settings but not the required full set.\n- requirement: \u201cEvery step env block \u2026 that runs a script able to write the lease, passes the full set,\u201d and the test should ensure a new step cannot miss a setting.\n  expected_change_site: tests/test_merge_lease_env_contract.py, collect_env_blocks() and violations().\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The contract states that lease-writing steps are identified by env markers, \u201cnot by\u201d their run text (lines 13-20). violations() only triggers the full-set check for lease env keys, MERGE_BASE_FRESHNESS_ENABLED, or a READ_ONLY_LEASE_STEPS entry (lines 222-240). A step running a lease-writing script without those markers is not checked.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cEvery step env block that passes any MERGE_LEASE_* setting \u2026 passes the full set.\u201d\n  Expected change site: tests/test_merge_lease_env_contract.py, READ_ONLY_LEASE_STEPS and violations().\n  Evidence of absence: The contract explicitly permits both \u201cSingle-issue security pass\u201d steps to pass only MERGE_LEASE_ENABLED and MERGE_LEASE_MAX_HOLDERS (lines 89-100, 233-240). Those env blocks pass MERGE_LEASE_* settings but not the required full set.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \u201cEvery step env block \u2026 that runs a script able to write the lease, passes the full set,\u201d and the test should ensure a new step cannot miss a setting.\n  Expected change site: tests/test_merge_lease_env_contract.py, collect_env_blocks() and violations().\n  Evidence of absence: The contract states that lease-writing steps are identified by env markers, \u201cnot by\u201d their run text (lines 13-20). violations() only triggers the full-set check for lease env keys, MERGE_BASE_FRESHNESS_ENABLED, or a READ_ONLY_LEASE_STEPS entry (lines 222-240). A step running a lease-writing script without those markers is not checked.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "09adaf2947b4cca62d60278be4dd374a83ddfe59ee7d78eef00e98f5d455d029",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10081,
+    "run_id": "46056094611",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46056094611",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127195731_ef7d8f7ea1",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10081,
+    "run_id": "46056094611"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-27T19:57:31Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
