@@ -4308,12 +4308,14 @@ class MovedHooks9391StepsContractTest(unittest.TestCase):
 # poll group, module paths its body names). The run's step timings were not
 # readable, so the steps were picked by test and subprocess counts, an
 # estimate, not a measurement. The merge-train step (the job's largest step
-# that needs no git history or prepared .claude/ live copies) runs in group 0,
+# that needs no git history or prepared .claude/ live copies) went to group 0,
 # which had carried its slice, the fast-fail subset, since #9450 the
 # check-failure triage step after #9214 and since #9639 the pre-push
 # affected-test gate step (its headroom is unmeasured); the
 # Semble and pre-seed steps run in group 1, which pinned only the
-# review-pipeline plumbing step.
+# review-pipeline plumbing step. The pre-push gate step left the poll matrix
+# in #9895, and since #10223 the merge-train and check-failure triage steps
+# run in group 3 (MERGE_TRAIN_POLL_GROUP, RELEASE_9450_TARGET_GROUP).
 HOOKS_9496_SOURCE_JOB_ID = "tests-hooks-and-orchestrator"
 HOOKS_9496_TARGET_JOB_ID = POLL_JOB_ID
 HOOKS_9496_SETUP_STEP = "Install Python CI dependencies"
