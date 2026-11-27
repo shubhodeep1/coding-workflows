@@ -28,6 +28,11 @@ from pathlib import Path
 
 import pytest
 
+# Moved review_autofix.yml step bodies live in scripts/review_autofix_step_*.sh
+# (#10166); read the workflow with them inlined again.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO_ROOT / "scripts"
 REVIEWERS = SCRIPTS / "review_run_reviewers.sh"
@@ -792,7 +797,8 @@ def test_relay_is_staged_as_optional_support() -> None:
 
 
 def test_workflow_wiring_defaults_off() -> None:
-	text = WORKFLOW.read_text(encoding="utf-8")
+	# The "Resolve AI engine" body lives in a step script (#10166); read it inlined.
+	text = expanded_review_autofix_text()
 	assert len(WORKFLOW.read_bytes()) < 480_000
 	for name in ("REVIEWER_CHATGPT_SLOT_ENABLED", "REVIEWER_CHATGPT_MODEL", "REVIEWER_CHATGPT_REPLACES"):
 		assert f"  {name}: ${{{{ vars.{name} || '' }}}}\n" in text
@@ -819,7 +825,7 @@ def test_workflow_wiring_defaults_off() -> None:
 
 
 def _resolve_step_body() -> str:
-	text = WORKFLOW.read_text(encoding="utf-8")
+	text = expanded_review_autofix_text()
 	step = text.split("      - name: Resolve AI engine\n", 1)[1].split("      - name: Install Claude Code CLI", 1)[0]
 	body = step.split("        run: |\n", 1)[1]
 	return textwrap.dedent(body)

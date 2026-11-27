@@ -13,10 +13,16 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 import textwrap
 from pathlib import Path
 
 import pytest
+
+# Moved review_autofix.yml step bodies live in scripts/review_autofix_step_*.sh
+# (#10166); read the workflow with them inlined again.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_review_autofix_text  # noqa: E402
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -32,20 +38,20 @@ FAKE_SANDBOX = textwrap.dedent("""\
 	set -u
 	printf '%s\\n' "$*" >> "${FAKE_CALLS}"
 	case "$1" in
-	  prepare-ephemeral)
-	    [ "${FAKE_PREPARE_RC:-0}" -eq 0 ] || exit "${FAKE_PREPARE_RC}"
-	    root="$(mktemp -d)"; printf '%s\\n' "${root}"; exit 0 ;;
-	  cleanup) exit 0 ;;
-	  run)
-	    out="$3"; model="$4"
-	    case "${model}" in
-	      claude-sonnet-5-5) rc="${FAKE_SONNET_RC:-0}"; body="${FAKE_SONNET_OUT:-}"; reason="${FAKE_SONNET_REASON:-}" ;;
-	      *) rc="${FAKE_HAIKU_RC:-0}"; body="${FAKE_HAIKU_OUT:-}"; reason="${FAKE_HAIKU_REASON:-}" ;;
-	    esac
-	    echo "CLAUDE_POOL run role=$8 account=TEST outcome=fake reason=fake exit_code=${rc}" >&2
-	    [ -z "${reason}" ] || echo "AI_ENGINE_FALLBACK role=$8 reason=${reason}" >&2
-	    [ -z "${body}" ] || printf '%s\\n' "${body}" > "${out}"
-	    exit "${rc}" ;;
+		prepare-ephemeral)
+			[ "${FAKE_PREPARE_RC:-0}" -eq 0 ] || exit "${FAKE_PREPARE_RC}"
+			root="$(mktemp -d)"; printf '%s\\n' "${root}"; exit 0 ;;
+		cleanup) exit 0 ;;
+		run)
+			out="$3"; model="$4"
+			case "${model}" in
+				claude-sonnet-5-5) rc="${FAKE_SONNET_RC:-0}"; body="${FAKE_SONNET_OUT:-}"; reason="${FAKE_SONNET_REASON:-}" ;;
+				*) rc="${FAKE_HAIKU_RC:-0}"; body="${FAKE_HAIKU_OUT:-}"; reason="${FAKE_HAIKU_REASON:-}" ;;
+			esac
+			echo "CLAUDE_POOL run role=$8 account=TEST outcome=fake reason=fake exit_code=${rc}" >&2
+			[ -z "${reason}" ] || echo "AI_ENGINE_FALLBACK role=$8 reason=${reason}" >&2
+			[ -z "${body}" ] || printf '%s\\n' "${body}" > "${out}"
+			exit "${rc}" ;;
 	esac
 	exit 2
 	""")
@@ -267,7 +273,8 @@ def test_low_run_budget_skips_before_any_pool_run(tmp_path: Path) -> None:
 def test_pool_slot_contract_in_scripts_and_workflow() -> None:
 	reviewers = REVIEWERS.read_text(encoding="utf-8")
 	sandbox = SANDBOX.read_text(encoding="utf-8")
-	workflow = WORKFLOW.read_text(encoding="utf-8")
+	# The "Resolve AI engine" body lives in a step script (#10166); read it inlined.
+	workflow = expanded_review_autofix_text()
 	# Dispatch: anthropic/claude-* slots never reach the OpenRouter runner.
 	assert 'if reviewer_is_pool_slot "${model}"; then\n      run_pool_reviewer' in reviewers
 	assert "pr_closed|skipped_unmapped|skipped_open|skipped_pool)" in reviewers
@@ -299,16 +306,16 @@ def _run_sole_reviewer_pass(tmp_path: Path, sole_model: str, sole_status: str, r
 		normalize_reviewer_model_list() { printf '%s\\n' "$1" | tr ',' '\\n'; }
 		reviewer_is_pool_slot() { case "$1" in anthropic/claude-*) return 0 ;; esac; return 1; }
 		run_pool_reviewer() {
-		  printf 'pool %s\\n' "$1" >> "$CALLS_FILE"
-		  printf '%s\\n' "$SOLE_STATUS" > "$PREVIOUS_REVIEWS_DIR/status_$3_$2.txt"
+			printf 'pool %s\\n' "$1" >> "$CALLS_FILE"
+			printf '%s\\n' "$SOLE_STATUS" > "$PREVIOUS_REVIEWS_DIR/status_$3_$2.txt"
 		}
 		run_reviewer() {
-		  printf 'openrouter %s\\n' "$1" >> "$CALLS_FILE"
-		  if [ "$1" = "$SOLE_MODEL" ]; then
-		    printf '%s\\n' "$SOLE_STATUS" > "$PREVIOUS_REVIEWS_DIR/status_$3_$2.txt"
-		  else
-		    printf 'success\\n' > "$PREVIOUS_REVIEWS_DIR/status_$3_$2.txt"
-		  fi
+			printf 'openrouter %s\\n' "$1" >> "$CALLS_FILE"
+			if [ "$1" = "$SOLE_MODEL" ]; then
+				printf '%s\\n' "$SOLE_STATUS" > "$PREVIOUS_REVIEWS_DIR/status_$3_$2.txt"
+			else
+				printf 'success\\n' > "$PREVIOUS_REVIEWS_DIR/status_$3_$2.txt"
+			fi
 		}
 		result="$(run_reviewer_pass review "$PROMPT_FILE" high)"
 		printf 'RESULT=%s\\nACTIVE=%s\\n' "$result" "$(cat "$REVIEWER_ACTIVE_MODELS_FILE")"

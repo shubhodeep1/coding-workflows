@@ -99,6 +99,8 @@ REVIEW_AUTOFIX_STEP_SCRIPTS: dict[str, tuple[str, str]] = {
 	"Telegram review-blocked judge decision": ("review_autofix_step_telegram_rb_judge_decision.sh", "error"),
 	"Push all pending commits": ("review_autofix_step_push_pending_commits.sh", "error"),
 	"Pre-assemble static context (cacheable across runs)": ("review_autofix_step_static_context.sh", "error"),
+	"Capture runtime context": ("review_autofix_step_capture_runtime_context.sh", "warning"),
+	"Resolve AI engine": ("review_autofix_step_resolve_ai_engine.sh", "error"),
 }
 
 # Gate-job step scripts -> the verified checkout directory their wrapper reads.
