@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Replaying the evidence (403 rate limit at 03:14:38, reset at 03:23:03) ends in a successful dispatch after one wait of about 8.5 minutes.\" (issue #10197 acceptance criterion 1)\n  expected_change_site: .github/workflows/test-and-mark-stable.yml, the \"Dispatch & watch \u2014 update_workflows (allow_workflow_edits=false)\" step\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: That step sets `DISPATCH_RATE_LIMIT_MAX_WAIT_SECS` to `410` (at `.github/workflows/test-and-mark-stable.yml:4039` per openai_gpt-6-luna; \"workflow file line ~4037\" per minimax_minimax-m3), which is below the ~505-510 s wait the incident replay needs (505 s reset window + 5 s buffer), `scripts/dispatch_and_watch_workflow_run.sh:212-216` / `dispatch_workflow()` rejects any wait where `rl_spent + rl_wait > DISPATCH_RATE_LIMIT_MAX_WAIT_SECS` (0 + 510 > 410 gives `outcome=cap_reached`), so the step fails before the reset, `test_primary_rate_limit_replay_waits_for_reset_then_dispatches` tests the replay only under the default 1500 s cap and never under this step's 410 s cap, the `timeout-minutes: 18` (1080 s) budget cannot fit the 510 s wait plus the 600 s completion watch (4 + 510 + 600 = 1114 > 1080), changelog.d/10197-dispatch-rate-limit-wait.md line 15 documents the limitation, and the last-run diff (a changelog line 15 refinement) does not address AC1. Severity disagreement: BLOCKER (google_gemini-3_1-flash-lite, openai_gpt-6-luna) vs MAJOR (minimax_minimax-m3). anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash explicitly declined to re-flag it because it is an accepted, documented residual with no new evidence.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Replaying the evidence (403 rate limit at 03:14:38, reset at 03:23:03) ends in a successful dispatch after one wait of about 8.5 minutes.\"\n  Expected change site: .github/workflows/test-and-mark-stable.yml, the Dispatch & watch \u2014 update_workflows (allow_workflow_edits=false) step.\n  Evidence of absence: The step sets DISPATCH_RATE_LIMIT_MAX_WAIT_SECS to 410, which is less than the ~505s wait required to replay the incident, causing the dispatch to fail the cap check before the rate limit resets.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Replaying the evidence (403 rate limit at 03:14:38, reset at 03:23:03) ends in a successful dispatch after one wait of about 8.5 minutes.\" (issue #10197 acceptance criterion 1)\n  Expected change site: .github/workflows/test-and-mark-stable.yml, the \"Dispatch & watch \u2014 update_workflows (allow_workflow_edits=false)\" step\n  Evidence of absence: The step sets `DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: \"410\"` (workflow file line ~4037), but the replay needs ~510 s (505 s reset + 5 s buffer). `dispatch_workflow()` in scripts/dispatch_and_watch_workflow_run.sh refuses any wait where `rl_spent + rl_wait > DISPATCH_RATE_LIMIT_MAX_WAIT_SECS`, so `0 + 510 > 410` triggers `outcome=cap_reached` and the step fails before the reset. `test_primary_rate_limit_replay_waits_for_reset_then_dispatches` covers the replay only under the default 1500 s cap. `timeout-minutes: 18` (1080 s) fits 4 + 600 + 410 = 1014 s but not 4 + 510 + 600 = 1114 s. changelog.d/10197-dispatch-rate-limit-wait.md line 15 documents the limitation, and the last-run diff does not address AC1. Pass-1 reviewer openai/gpt-6-luna flagged the gap and earlier rounds deferred it as `TASK_GAP_DEFERRED`. The issue's guidance to lower caps through env: rather than raising timeout-minutes conflicts with AC1 for this step.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cReplaying the evidence (403 rate limit at 03:14:38, reset at 03:23:03) ends in a successful dispatch after one wait of about 8.5 minutes.\u201d\n  Expected change site: `.github/workflows/test-and-mark-stable.yml`, the `Dispatch & watch \u2014 update_workflows (allow_workflow_edits=false)` step.\n  Evidence of absence: That step sets `DISPATCH_RATE_LIMIT_MAX_WAIT_SECS` to `410` at `.github/workflows/test-and-mark-stable.yml:4039`, below the ~510-second wait the stated reset time requires. `scripts/dispatch_and_watch_workflow_run.sh:212-216` rejects a wait that exceeds the cap, so this step fails before the reset. The replay test uses the default 1500-second cap and does not check this step's cap, and the changelog says the incident wait exceeds it.\n  SEVERITY: BLOCKER\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "bf10345752b74d2cd7821e4cd6089527ac43c209c76a321e257e22fababc2025",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10201,
+    "run_id": "45956728024",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45956728024",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127074608_664449019a",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10201,
+    "run_id": "45956728024"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-27T07:46:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
