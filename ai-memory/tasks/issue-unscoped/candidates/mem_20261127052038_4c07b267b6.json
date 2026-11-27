@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Complete the approved-plan acceptance checks for Codex v0.171.0 compatibility \u2014 the PR description's acceptance table names the test and check targets that must be verified before the PR is done: `tests/test_write_codex_config.py::test_catalog_entries_parse_on_codex_v0171`, `tests/test_review_chatgpt_reviewer_slot.py::test_shipped_pool_config_file_is_committed_and_switched_off`, `tests/test_sandbox_image.py`, `tests/test_check_failure_triage_workflow_security.py`, `tests-promote-stall-and-review`, `tests-hooks-and-orchestrator`, and `tests-sandbox-python`.\n  expected_change_site: Acceptance targets `tests/test_write_codex_config.py::test_catalog_entries_parse_on_codex_v0171`, `tests/test_review_chatgpt_reviewer_slot.py::test_shipped_pool_config_file_is_committed_and_switched_off`, `tests/test_sandbox_image.py`, `tests/test_check_failure_triage_workflow_security.py`, `tests-promote-stall-and-review`, `tests-hooks-and-orchestrator`, and `tests-sandbox-python`, plus the pre-push test gate status / acceptance table in the PR description body\n  confidence=5\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The PR description's acceptance table marks 6 of 8 acceptance targets as \"not run\" or \"unmet\": `test_catalog_entries_parse_on_codex_v0171`, `test_shipped_pool_config_file_is_committed_and_switched_off` and the three named checks are \"not run\", while `tests/test_sandbox_image.py` and `tests/test_check_failure_triage_workflow_security.py` are \"unmet\"; the pre-push test gate status is \"unverified\" (the repair turn was skipped when the step-time budget expired, and 69 tests are in the unverified bucket); the current check-run snapshot (20 checks, 0 failed) does not show that these specific acceptance targets ran and passed; the last-run edit (`agents.d/chatgpt-reviewer-slot.md:2`, `gpt-6-sol` \u2192 `gpt-6.2-sol`) adds no new defect, and the gap is in the verification state of the broader PR. Note: anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash explicitly rejected this gap. They say the table is a stale status record rather than missing code: the deliverables are in the PR diff, CI is green on head b83e1b90 (20 checks, 0 failed, 0 incomplete), and the pre-push gate ran the PR-touched test files with 0 change-caused failures.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: Complete the approved-plan acceptance checks for Codex v0.171.0 compatibility \u2014 the PR description's acceptance table names the test and check targets that must be verified before the PR is done: `tests/test_write_codex_config.py::test_catalog_entries_parse_on_codex_v0171`, `tests/test_review_chatgpt_reviewer_slot.py::test_shipped_pool_config_file_is_committed_and_switched_off`, `tests/test_sandbox_image.py`, `tests/test_check_failure_triage_workflow_security.py`, `tests-promote-stall-and-review`, `tests-hooks-and-orchestrator`, and `tests-sandbox-python`.\n  Expected change site: The pre-push test gate status / acceptance table in the PR description body, plus the corresponding test suites at `tests/test_write_codex_config.py`, `tests/test_review_chatgpt_reviewer_slot.py`, `tests/test_sandbox_image.py`, `tests/test_check_failure_triage_workflow_security.py`.\n  Evidence of absence: The acceptance table marks 6 of 8 acceptance targets as \"not run\" or \"unmet\". The two red-on-base tests and the three named checks are \"not run\", and `tests/test_sandbox_image.py` and `tests/test_check_failure_triage_workflow_security.py` are \"unmet\". The pre-push test gate status is \"unverified\": the repair turn was skipped when the step-time budget expired, and 69 tests are in the unverified bucket. The CI snapshot (20 checks, 0 failed) does not cover the named targets. The last-run delta in `agents.d/chatgpt-reviewer-slot.md:2` is a clean fix and adds no defect.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: The PR acceptance table requires the listed Codex v0.171.0 compatibility tests and checks to be completed; it says the catalog and ChatGPT-slot tests and three checks are \u201cnot run,\u201d and the sandbox-image and check-failure-triage tests are \u201cunmet.\u201d\n  Expected change site: Acceptance targets `tests/test_write_codex_config.py::test_catalog_entries_parse_on_codex_v0171`, `tests/test_review_chatgpt_reviewer_slot.py::test_shipped_pool_config_file_is_committed_and_switched_off`, `tests/test_sandbox_image.py`, `tests/test_check_failure_triage_workflow_security.py`, `tests-promote-stall-and-review`, `tests-hooks-and-orchestrator`, and `tests-sandbox-python`.\n  Evidence of absence: The PR description\u2019s acceptance table still records those targets as not run or unmet. The current check-run snapshot reports 20 checks with no failures, but does not establish that these specific acceptance targets ran and passed.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "747ec8c932a8463ee362a2dd17cf05e6f09dbd0c29a43d4267ccc4f98275cbd2",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10132,
+    "run_id": "45937921426",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45937921426",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127052038_4c07b267b6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10132,
+    "run_id": "45937921426"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-27T05:20:38Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
