@@ -41,7 +41,10 @@ STAGE_SUPPORT_HELPER = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
 # files committed in the PR, and failure()/always() steps carry GH_PAT.
 SUPPORT_SOURCE_VERIFIED_FLAG_LINE = 'echo "WORKFLOW_SUPPORT_SOURCE_VERIFIED=true" >> "$GITHUB_ENV"'
 FALLBACK_FLAG_TEST = '[ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ]'
-FALLBACK_HEAD_TEST = '[ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ]'
+# env -u GIT_DIR -u GIT_WORK_TREE: "Activate workspace shell context" exports
+# them for the split PR workspace; git would otherwise read the PR checkout's
+# HEAD and never take the verified fallback (#10208).
+FALLBACK_HEAD_TEST = '[ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ]'
 FAILURE_PATH_STEPS_10221 = (
 	"Assemble failure evidence",
 	"Mark linked issues review-blocked (workflow failure)",
@@ -80,6 +83,22 @@ def _raw_step_run(job_text: str, step_name: str) -> str:
 			body.append(line[10:])
 	assert in_run, f"{step_name}: no run: | block"
 	return "\n".join(body).rstrip("\n") + "\n"
+
+# #10208: the .codex-workflow-src fallback is sourced only when the trusted
+# "Ensure workflow support source checkout" step verified that checkout at
+# SCRIPT_REF. An early failure (before support staging) otherwise leaves a
+# PR-committed .codex-workflow-src/scripts/<script> for always() steps to source.
+# The rev-parse clears GIT_DIR/GIT_WORK_TREE: "Activate workspace shell
+# context" exports them for the split PR workspace, and they would otherwise
+# make git read the PR checkout's HEAD instead of .codex-workflow-src's.
+SUPPORT_SOURCE_FALLBACK_VERIFY_LINE = (
+	'case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) '
+	'[[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && '
+	'[ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && '
+	'[ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || '
+	'{ echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; '
+	'REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac'
+)
 
 
 def _steps_by_name(workflow_text: str) -> dict[str, dict]:
@@ -134,19 +153,36 @@ def test_moved_steps_run_only_the_resolving_wrapper() -> None:
 		expected_lines = [
 			f'REVIEW_AUTOFIX_STEP_SCRIPT="${{SUPPORT_SCRIPTS_DIR:-}}/{script_name}"',
 			_gated_fallback_line(script_name),
+			SUPPORT_SOURCE_FALLBACK_VERIFY_LINE,
 			'if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then',
 		]
 		run_lines = run.rstrip("\n").split("\n")
-		assert run_lines[:3] == expected_lines, f"{step_name}: unexpected resolution order:\n{run}"
+		assert run_lines[:4] == expected_lines, f"{step_name}: unexpected resolution order:\n{run}"
 		assert run_lines[-2:] == ["fi", 'source "${REVIEW_AUTOFIX_STEP_SCRIPT}"'], (
 			f"{step_name}: the script must be sourced in the step shell (not run in a child bash) "
 			"so BASH_ENV state, set -e and exit codes behave as they did inline"
 		)
 		if severity == "error":
-			assert run_lines[3].startswith("  echo \"::error::") and run_lines[4] == "  exit 1", step_name
+			assert run_lines[4].startswith("  echo \"::error::") and run_lines[5] == "  exit 1", step_name
 		else:
-			assert run_lines[3].startswith("  echo \"::warning::") and run_lines[4] == "  exit 0", step_name
+			assert run_lines[4].startswith("  echo \"::warning::") and run_lines[5] == "  exit 0", step_name
 		assert "${{" not in run, f"{step_name}: wrapper must not carry GitHub expressions"
+
+
+def test_support_source_verify_step_writes_fallback_sentinel() -> None:
+	# Only the trusted verify step may mark .codex-workflow-src as verified,
+	# and only after its rev-parse HEAD == SCRIPT_REF check (#10208).
+	workflow = yaml.safe_load(REVIEW_AUTOFIX_WORKFLOW_PATH.read_text(encoding="utf-8"))
+	steps = workflow["jobs"]["codex-agent"]["steps"]
+	names = [step.get("name") for step in steps]
+	ensure = steps[names.index("Ensure workflow support source checkout")]["run"]
+	sentinel = 'echo "REVIEW_SUPPORT_SOURCE_VERIFIED_SHA=${SCRIPT_REF}" >> "$GITHUB_ENV"'
+	check = 'if [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF}" ]; then'
+	assert check in ensure and sentinel in ensure
+	assert ensure.index(check) < ensure.index("exit 1") < ensure.index(sentinel)
+	writers = [step.get("name") for step in steps if "REVIEW_SUPPORT_SOURCE_VERIFIED_SHA=" in str(step.get("run", ""))]
+	assert writers == ["Ensure workflow support source checkout"], writers
+	assert names.index("Checkout workflow support source") < names.index("Ensure workflow support source checkout")
 
 
 def test_fail_open_only_for_steps_that_run_after_staging_failures() -> None:
@@ -307,7 +343,7 @@ def _run_wrapper_10221(run: str, workspace: Path, marker: Path, env_extra: dict[
 	env = {
 		k: v
 		for k, v in os.environ.items()
-		if not k.startswith("GIT_") and k not in ("SUPPORT_SCRIPTS_DIR", "SCRIPT_REF", "WORKFLOW_SUPPORT_SOURCE_VERIFIED", "BASH_ENV", "ENV")
+		if not k.startswith("GIT_") and k not in ("SUPPORT_SCRIPTS_DIR", "SCRIPT_REF", "WORKFLOW_SUPPORT_SOURCE_VERIFIED", "REVIEW_SUPPORT_SOURCE_VERIFIED_SHA", "BASH_ENV", "ENV")
 	}
 	env.update(
 		{
@@ -384,7 +420,14 @@ def test_workspace_fallback_never_sources_unverified_pr_tree_copy() -> None:
 			assert not marker.exists(), f"{step_name}: sourced the checkout without the verified flag"
 
 			# Verified checkout whose HEAD equals SCRIPT_REF: fallback allowed.
-			result = _run_wrapper_10221(run, workspace, marker, {"SCRIPT_REF": head, "WORKFLOW_SUPPORT_SOURCE_VERIFIED": "true"})
+			# "Ensure workflow support source checkout" writes the #10208 SHA
+			# sentinel alongside the flag; the verify line requires both.
+			result = _run_wrapper_10221(
+				run,
+				workspace,
+				marker,
+				{"SCRIPT_REF": head, "WORKFLOW_SUPPORT_SOURCE_VERIFIED": "true", "REVIEW_SUPPORT_SOURCE_VERIFIED_SHA": head},
+			)
 			assert result.returncode == 0, (step_name, result.stderr)
 			assert marker.read_text(encoding="utf-8") == "planted\n", f"{step_name}: verified fallback did not run"
 
@@ -399,4 +442,3 @@ def main() -> int:
 
 if __name__ == "__main__":
 	raise SystemExit(main())
-

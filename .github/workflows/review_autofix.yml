@@ -2361,6 +2361,10 @@ jobs:
           # checkout itself, so reviewers see the working tree as usual.
           filter: blob:none
           token: ${{ secrets.GH_PAT }}
+          # Do not leave GH_PAT in .git/config as an http.extraheader for
+          # PR-controlled code (#10208). "Configure git auth for memory helper
+          # clones" and every later push/fetch helper set their own token URL.
+          persist-credentials: false
 
       - name: Reject project OpenCode configuration before agent setup
         # OpenCode discovers project configuration and plugins even when a
@@ -2437,6 +2441,10 @@ jobs:
           # #10221: step wrappers fall back to .codex-workflow-src only after
           # this check passed. Before it, that path may hold PR-committed files.
           echo "WORKFLOW_SUPPORT_SOURCE_VERIFIED=true" >> "$GITHUB_ENV"
+          # Sentinel for the step-script wrappers' .codex-workflow-src fallback
+          # (#10208): only this trusted step, after the SHA check above, may
+          # mark the workspace support checkout as verified.
+          echo "REVIEW_SUPPORT_SOURCE_VERIFIED_SHA=${SCRIPT_REF}" >> "$GITHUB_ENV"
 
       - name: Stage workflow support files
         run: |
@@ -2621,7 +2629,8 @@ jobs:
           CLAUDE_FIXER_ENABLED: ${{ vars.CLAUDE_FIXER_ENABLED || 'true' }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_resolve_ai_engine.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_resolve_ai_engine.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_resolve_ai_engine.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_resolve_ai_engine.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Resolve AI engine'."
             exit 1
@@ -2675,7 +2684,8 @@ jobs:
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_claude_pool_capacity.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_claude_pool_capacity.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_claude_pool_capacity.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::warning::review_autofix_step_claude_pool_capacity.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); skipping step 'Record Claude pool capacity' (fail open)."
             exit 0
@@ -2698,7 +2708,8 @@ jobs:
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_claude_capacity_wait.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_claude_capacity_wait.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_claude_capacity_wait.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_claude_capacity_wait.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Defer review on Claude capacity'."
             exit 1
@@ -2752,7 +2763,8 @@ jobs:
       - name: Initialize runtime workspace
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_init_runtime_workspace.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_init_runtime_workspace.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_init_runtime_workspace.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_init_runtime_workspace.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Initialize runtime workspace'."
             exit 1
@@ -2947,7 +2959,8 @@ jobs:
           STATIC_CONTEXT_AGENTS_MODE: ${{ vars.STATIC_CONTEXT_AGENTS_MODE || 'index' }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_static_context.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_static_context.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_static_context.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_static_context.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Pre-assemble static context (cacheable across runs)'."
             exit 1
@@ -3100,7 +3113,8 @@ jobs:
         if: env.PR_CLOSED != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true'
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_restore_partial_resume.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_restore_partial_resume.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_restore_partial_resume.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_restore_partial_resume.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Restore same-head partial resume state'."
             exit 1
@@ -3115,7 +3129,8 @@ jobs:
           AUTOFIX_STEP_REPOSITORY: ${{ github.repository }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_detect_smoke_test.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_detect_smoke_test.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_detect_smoke_test.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_detect_smoke_test.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Detect smoke test and tune LLM settings'."
             exit 1
@@ -3144,7 +3159,8 @@ jobs:
           REVIEW_HEAD_CHECKOUT_REPOSITORY: ${{ github.repository }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_checkout_pr_head_branch.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_checkout_pr_head_branch.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_checkout_pr_head_branch.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_checkout_pr_head_branch.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Checkout PR head branch'."
             exit 1
@@ -3222,7 +3238,8 @@ jobs:
           ORCH_INTEGRATION_BRANCH_PATTERN: ${{ vars.ORCH_INTEGRATION_BRANCH_PATTERN || '^orchestrator/project-' }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_count_iterations.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_count_iterations.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_count_iterations.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_count_iterations.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Count autofix iterations'."
             exit 1
@@ -3242,7 +3259,8 @@ jobs:
           REVIEW_DIFF_BASE_SHA: ${{ needs.gate.outputs.review_diff_base_sha }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_generate_diff_context.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_generate_diff_context.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_generate_diff_context.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_generate_diff_context.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Generate diff context'."
             exit 1
@@ -3428,7 +3446,8 @@ jobs:
           REVIEW_EDITOR_PREFLIGHT_ENABLED: ${{ vars.REVIEW_EDITOR_PREFLIGHT_ENABLED || 'true' }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_preflight_required_files.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_preflight_required_files.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_preflight_required_files.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_preflight_required_files.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Preflight: Verify required files before reviewer invocation'."
             exit 1
@@ -3491,7 +3510,8 @@ jobs:
           LOCAL_HEAD_SHA: ${{ env.INITIAL_HEAD_SHA }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_merge_topology_gate.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_merge_topology_gate.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_merge_topology_gate.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_merge_topology_gate.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Pre-review deterministic merge-topology gate'."
             exit 1
@@ -3523,7 +3543,8 @@ jobs:
           CONFLICT_RESOLVER_REASONING_EFFORT: ${{ vars.THINKING_LEVEL_CONFLICT_RESOLVER || 'high' }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_prepush_test_gate.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_prepush_test_gate.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_prepush_test_gate.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_prepush_test_gate.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Integration post-sync test repair'."
             exit 1
@@ -3886,7 +3907,8 @@ jobs:
           TOOL_CALL_BUDGET_JUDGE: ${{ vars.TOOL_CALL_BUDGET_JUDGE || '60' }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_apply_fixes_editor.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_apply_fixes_editor.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_apply_fixes_editor.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_apply_fixes_editor.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Apply fixes with editor model'."
             exit 1
@@ -3939,6 +3961,7 @@ jobs:
         run: |
           infra_round_helper="${SUPPORT_SCRIPTS_DIR:-}/review_sweep_round_cap.sh"
           [ -f "${infra_round_helper}" ] || infra_round_helper="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_sweep_round_cap.sh"
+          case "${infra_round_helper}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; infra_round_helper=""; } ;; esac
           infra_round_reason=""
           if [ -f "${infra_round_helper}" ] && source "${infra_round_helper}" && type review_round_infra_failure_reason >/dev/null 2>&1; then
             infra_round_reason="$(review_round_infra_failure_reason 2>/dev/null || true)"
@@ -3968,7 +3991,8 @@ jobs:
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_partial_finalize_safety.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_partial_finalize_safety.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_partial_finalize_safety.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_partial_finalize_safety.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Decide partial-finalize validation/push safety'."
             exit 1
@@ -4005,7 +4029,8 @@ jobs:
           PREPUSH_TEST_GATE_SHARDS: ${{ vars.PREPUSH_TEST_GATE_SHARDS || '4' }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_prepush_test_gate.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_prepush_test_gate.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_prepush_test_gate.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_prepush_test_gate.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Pre-push affected-test gate'."
             exit 1
@@ -4148,7 +4173,8 @@ jobs:
           REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED: ${{ vars.REVIEW_FAILURE_FINGERPRINT_MAX_IDENTICAL_REVIEWERS_FAILED || '2' }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_post_editor_summary.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_post_editor_summary.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_post_editor_summary.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_post_editor_summary.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Post editor summary comment'."
             exit 1
@@ -4169,6 +4195,7 @@ jobs:
         run: |
           REVIEW_FINDINGS_RECORD_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_findings_record.py"
           [ -f "${REVIEW_FINDINGS_RECORD_SCRIPT}" ] || REVIEW_FINDINGS_RECORD_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_findings_record.py"
+          case "${REVIEW_FINDINGS_RECORD_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_FINDINGS_RECORD_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_FINDINGS_RECORD_SCRIPT}" ]; then
             echo "REVIEW_FINDINGS_RECORD: outcome=skipped reason=helper_unavailable"
             exit 0
@@ -4224,7 +4251,8 @@ jobs:
         if: "!cancelled() && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT_STRICT == 'true') && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true') && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.AUTOFIX_UPDATER_COMMIT_WITHHELD != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'"
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_editor_uncommitted_changes.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_editor_uncommitted_changes.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_editor_uncommitted_changes.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_editor_uncommitted_changes.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Detect editor-claimed-but-uncommitted changes'."
             exit 1
@@ -4279,7 +4307,8 @@ jobs:
         if: "!cancelled() && steps.retrigger_guard.outputs.max_iterations_reached != 'true' && (steps.commit_changes.outputs.did_commit != 'true' || env.LEDGER_ONLY_COMMIT == 'true') && env.EDITOR_CHANGES_LOST != 'true' && env.PR_CLOSED != 'true' && env.AUTOFIX_STALE_BASE_SKIP != 'true' && env.CLAUDE_BRANCH_REVIEW_MODE != 'true' && (env.AUTOFIX_PARTIAL_FINALIZE_REQUESTED != 'true' || env.AUTOFIX_PARTIAL_FINALIZE_VALIDATION_TAIL_CAN_COMPLETE == 'true' || (env.AUTOFIX_PARTIAL_FINALIZE_PHASE == 'editor' && (env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'recoverable_failure' || env.AUTOFIX_PARTIAL_FINALIZE_REASON == 'refusal'))) && env.AUTOFIX_RESUME_TERMINAL != 'true' && env.AUTOFIX_PRE_REVIEW_RESOLVE != 'true' && env.INTEGRATION_TEST_REPAIR_ACTIVE != 'true'"
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_editor_noop_disposition.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_editor_noop_disposition.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_editor_noop_disposition.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_editor_noop_disposition.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Validate editor no-op disposition'."
             exit 1
@@ -4326,7 +4355,8 @@ jobs:
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_detect_merge_conflicts.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_detect_merge_conflicts.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_detect_merge_conflicts.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_detect_merge_conflicts.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Detect merge conflicts'."
             exit 1
@@ -4735,7 +4765,8 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_mark_ready_to_merge.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_mark_ready_to_merge.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_mark_ready_to_merge.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_mark_ready_to_merge.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Mark linked issues ready to merge'."
             exit 1
@@ -4933,7 +4964,8 @@ jobs:
           MAX_AUTOFIX_ITERATIONS: ${{ vars.MAX_AUTOFIX_ITERATIONS || '5' }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_mark_review_blocked_exhaustion.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_mark_review_blocked_exhaustion.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_mark_review_blocked_exhaustion.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_mark_review_blocked_exhaustion.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Mark linked issues review-blocked (autofix exhaustion)'."
             exit 1
@@ -5032,7 +5064,8 @@ jobs:
           AUTOFIX_STEP_RUN_ID: ${{ github.run_id }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_post_review_blocked_comment.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_post_review_blocked_comment.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_post_review_blocked_comment.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_post_review_blocked_comment.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Post review-blocked comment on PR (autofix exhaustion)'."
             exit 1
@@ -5058,7 +5091,8 @@ jobs:
           AUTOFIX_PUSH_TRANSIENT_RETRY_ENABLED: ${{ vars.AUTOFIX_PUSH_TRANSIENT_RETRY_ENABLED || 'true' }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_push_pending_commits.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_push_pending_commits.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_push_pending_commits.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_push_pending_commits.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Push all pending commits'."
             exit 1
@@ -5125,7 +5159,8 @@ jobs:
           REVIEW_AUTOFIX_CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_post_commit_retrigger.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_post_commit_retrigger.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_post_commit_retrigger.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_post_commit_retrigger.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Re-trigger review via workflow_dispatch'."
             exit 1
@@ -5143,7 +5178,8 @@ jobs:
           EDITOR_COMMIT_PRODUCED: ${{ steps.commit_changes.outputs.did_commit }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_partial_finalize.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_partial_finalize.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_partial_finalize.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::warning::review_autofix_step_partial_finalize.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); skipping step 'Post partial finalize comment and persist runtime marker' (fail open)."
             exit 0
@@ -5268,7 +5304,8 @@ jobs:
           REVIEW_AUTOFIX_CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_changes_lost_redispatch.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_changes_lost_redispatch.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_changes_lost_redispatch.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_changes_lost_redispatch.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Re-dispatch review on editor-changes-lost'."
             exit 1
@@ -5381,7 +5418,8 @@ jobs:
           AUTOFIX_STEP_RUN_ID: ${{ github.run_id }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_editor_noop_suspicious_warning.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_editor_noop_suspicious_warning.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_editor_noop_suspicious_warning.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_editor_noop_suspicious_warning.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Telegram editor-noop-suspicious warning'."
             exit 1
@@ -5416,7 +5454,8 @@ jobs:
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_telegram_rb_judge_decision.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_telegram_rb_judge_decision.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_telegram_rb_judge_decision.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_telegram_rb_judge_decision.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Telegram review-blocked judge decision'."
             exit 1
@@ -5461,7 +5500,8 @@ jobs:
           AI_COMMENT_JOB_TOKEN: ${{ github.token }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_assemble_failure_evidence.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_assemble_failure_evidence.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_assemble_failure_evidence.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::warning::review_autofix_step_assemble_failure_evidence.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); skipping step 'Assemble failure evidence' (fail open)."
             exit 0
@@ -5484,7 +5524,8 @@ jobs:
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_claude_capacity_wait.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_claude_capacity_wait.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_claude_capacity_wait.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::warning::review_autofix_step_claude_capacity_wait.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); skipping step 'Record Claude capacity wait' (fail open)."
             exit 0
@@ -5506,7 +5547,8 @@ jobs:
           ALERT_MSG_LEVEL: ${{ env.ALERT_MSG_LEVEL || vars.ALERT_MSG_LEVEL || 'WARNING' }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_provider_outage_record.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_provider_outage_record.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_provider_outage_record.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::warning::review_autofix_step_provider_outage_record.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); skipping step 'Record model-provider outage' (fail open)."
             exit 0
@@ -5522,7 +5564,8 @@ jobs:
           REPOSITORY: ${{ github.repository }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_mark_review_blocked_workflow_failure.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_mark_review_blocked_workflow_failure.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_mark_review_blocked_workflow_failure.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_mark_review_blocked_workflow_failure.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Mark linked issues review-blocked (workflow failure)'."
             exit 1
@@ -5571,7 +5614,8 @@ jobs:
           REVIEW_FAILURE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_failure_comment.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_failure_comment.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_failure_comment.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::error::review_autofix_step_failure_comment.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); cannot run step 'Post review-blocked comment on PR (workflow failure)'."
             exit 1
@@ -5680,7 +5724,8 @@ jobs:
         if: always() && env.RUNTIME_DIR != '' && (failure() || cancelled() || env.EDITOR_NOOP_SUSPICIOUS == 'true' || env.EDITOR_CHANGES_LOST == 'true')
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_stage_codex_logs.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_stage_codex_logs.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_stage_codex_logs.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::warning::review_autofix_step_stage_codex_logs.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); skipping step 'Stage codex logs for upload (failure or empty-editor)' (fail open)."
             exit 0
@@ -5740,7 +5785,8 @@ jobs:
           JUDGE_SKIP_REASON: ${{ steps.rb_judge.outputs.judge_skip_reason }}
         run: |
           REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_iteration_summary.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_iteration_summary.sh"
+          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || [ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ] || [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_iteration_summary.sh"
+          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
           if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
             echo "::warning::review_autofix_step_iteration_summary.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); skipping step 'Append review pipeline iteration summary' (fail open)."
             exit 0
