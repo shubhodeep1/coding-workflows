@@ -9,7 +9,8 @@
 # Subcommands (each in its own workflow step, so GH_PAT and TG_BOT_SECRET
 # never share a step):
 #   read    one paginated `actions/variables` listing (GH_TOKEN = GH_PAT),
-#           filtered to the names in scripts/stage_switches.json and written
+#           filtered to the registry switches plus the switches discovered in
+#           the workflows and README (issue #10170) and written
 #           as a sanitized snapshot (no raw values) to
 #           ${RUNNER_TEMP}/stage-switch-watch/snapshot.json.
 #           GITHUB_OUTPUT: day=<YYYY-MM-DD UTC>, snapshot_ready=true|false
@@ -31,6 +32,8 @@
 #   STAGE_SWITCH_ALERTED_TODAY     `true` when today's alert marker exists (default false)
 #   STAGE_SWITCH_REGISTRY          registry path (default scripts/stage_switches.json)
 #   STAGE_SWITCH_SNAPSHOT_DIR      snapshot directory (default ${RUNNER_TEMP}/stage-switch-watch)
+#   STAGE_SWITCH_REPO_ROOT         checkout whose .github/workflows and README.md are scanned
+#                                  for switches (default: the folder above scripts/)
 #   STAGE_SWITCH_NOW               ISO timestamp override (tests; default now)
 #   STAGE_SWITCH_ALERT_MARKER_DIR  day-marker directory the cache step saves
 #                                  (default ${RUNNER_TEMP}/stage-switch-alert-day)
@@ -43,6 +46,17 @@ set -uo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 stage_switch_registry="${STAGE_SWITCH_REGISTRY:-${script_dir}/stage_switches.json}"
+# Both python calls get the same root, so a switch found only by discovery is
+# kept by the snapshot and evaluated by the report.
+stage_switch_repo_root="${STAGE_SWITCH_REPO_ROOT:-$(cd "${script_dir}/.." && pwd)}"
+# An empty root means "no discovery" to the python CLI; say so instead of
+# silently narrowing the watch to the registry names.
+if [ -z "${stage_switch_repo_root}" ]; then
+	echo "::warning::STAGE_SWITCH_WATCH repo root unresolved; switch discovery is off for this run."
+elif [ ! -d "${stage_switch_repo_root}/.github/workflows" ]; then
+	# A mistyped STAGE_SWITCH_REPO_ROOT makes discovery fail open to nothing.
+	echo "::warning::STAGE_SWITCH_WATCH repo root ${stage_switch_repo_root} has no .github/workflows; workflow switch discovery finds nothing this run."
+fi
 stage_switch_dir="${STAGE_SWITCH_SNAPSHOT_DIR:-${RUNNER_TEMP:-/tmp}/stage-switch-watch}"
 stage_switch_snapshot="${stage_switch_dir}/snapshot.json"
 stage_switch_output="${GITHUB_OUTPUT:-/dev/null}"
@@ -99,7 +113,8 @@ stage_switch_read()
 	fi
 	rm -f "${stage_switch_dir}/listing.err"
 	PYTHONDONTWRITEBYTECODE=1 python3 "${script_dir}/stage_switch_watch.py" snapshot \
-		--registry "${stage_switch_registry}" < "${listing}" > "${stage_switch_snapshot}.tmp"
+		--registry "${stage_switch_registry}" --repo-root "${stage_switch_repo_root}" \
+		< "${listing}" > "${stage_switch_snapshot}.tmp"
 	rc=$?
 	# The raw listing holds every variable's value; never keep it.
 	rm -f "${listing}"
@@ -136,7 +151,7 @@ stage_switch_report()
 	wait_hours="${STAGE_SWITCH_OFF_ALERT_HOURS:-24}"
 	result="$(PYTHONDONTWRITEBYTECODE=1 python3 "${script_dir}/stage_switch_watch.py" evaluate \
 		--registry "${stage_switch_registry}" --snapshot "${stage_switch_snapshot}" \
-		--now "${STAGE_SWITCH_NOW:-}" --wait-hours "${wait_hours}")"
+		--repo-root "${stage_switch_repo_root}" --now "${STAGE_SWITCH_NOW:-}" --wait-hours "${wait_hours}")"
 	rc=$?
 	if [ "${rc}" -ne 0 ] || [ -z "${result}" ]; then
 		echo "::warning::STAGE_SWITCH_WATCH evaluation failed (exit ${rc})."

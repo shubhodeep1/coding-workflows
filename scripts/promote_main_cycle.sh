@@ -139,8 +139,9 @@
 #   RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES
 #                                       default 30 (issue #10037): before the smoke
 #                                       gate, skip with runner_wait_long while the
-#                                       oldest live queued run of this repository has
-#                                       waited this long; 0 disables the check
+#                                       oldest queued job of a live queued run of this
+#                                       repository has waited this long (issue #10181:
+#                                       job wait, not run age); 0 disables the check
 #   AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS
 #                                       default 24: the runner-wait bound. Once the
 #                                       newest gate-only gate run is this old (or
@@ -2049,11 +2050,15 @@ else
 		rw_result="$(release_gate_oldest_queued_wait "${GITHUB_REPOSITORY}" "${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}" "${zq_cutoff}" 2>/dev/null || true)"
 		rw_outcome="$(printf '%s' "${rw_result}" | sed -n 's/^outcome=\([a-z_]*\) .*/\1/p' | head -n 1)"
 		rw_oldest_min="$(printf '%s' "${rw_result}" | sed -n 's/.* oldest_queued_min=\([0-9]*\) .*/\1/p' | head -n 1)"
-		rw_calls="$(printf '%s' "${rw_result}" | sed -n 's/.* calls=\([0-9]*\)$/\1/p' | head -n 1)"
+		# Issue #10181: `runs_unread=<n>` may follow `calls=`, so neither
+		# pattern is anchored at the end of the line.
+		rw_calls="$(printf '%s' "${rw_result}" | sed -n 's/.* calls=\([0-9]*\).*/\1/p' | head -n 1)"
+		rw_runs_unread="$(printf '%s' "${rw_result}" | sed -n 's/.* runs_unread=\([0-9]*\).*/\1/p' | head -n 1)"
+		[[ "${rw_runs_unread}" =~ ^[0-9]+$ ]] || rw_runs_unread=""
 		if [ "${rw_outcome}" = "long" ] && [[ "${rw_oldest_min}" =~ ^[0-9]+$ ]] && [ "${rw_oldest_min}" -ge "${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES}" ]; then
 			skip_cycle runner_wait_long "oldest_queued_min=${rw_oldest_min} max=${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES} last_run=${rw_last_run_id} last_age_hours=${rw_last_age_hours} window_hours=${AUTO_RELEASE_STABLE_QUEUE_BACKOFF_HOURS}"
 		elif [ "${rw_outcome}" = "short" ] || [ "${rw_outcome}" = "long" ]; then
-			echo "PROMOTE_CYCLE_RUNNER_WAIT_CHECK outcome=clear max=${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES} calls=${rw_calls:-0}"
+			echo "PROMOTE_CYCLE_RUNNER_WAIT_CHECK outcome=clear max=${RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES} calls=${rw_calls:-0}${rw_runs_unread:+ runs_unread=${rw_runs_unread}}"
 		else
 			echo "::warning::PROMOTE_CYCLE_RUNNER_WAIT_CHECK outcome=read_failed calls=${rw_calls:-0} — running the cycle without the runner-wait check."
 		fi
