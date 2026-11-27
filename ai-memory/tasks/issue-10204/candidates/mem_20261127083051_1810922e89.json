@@ -1,0 +1,37 @@
+{
+  "category": "decisions",
+  "confidence": 0.9,
+  "details": "Q1: The fix needs files outside this issue's verified scope. How should it be delivered?\nChoices:\nA) File a normal issue (no heal scope marker) with the same fix: the provenance union rule in `scripts/review_conflict_resolve.sh`, the prompt wording, and the regression test in `tests/test_review_conflict_resolve_provenance.py`. Close this issue and point to the new one. (RECOMMENDED)\nB) Keep this issue and have a human approve a plan that is held as out of scope, accepting that implementation can still be refused at the scope-checked commit step.\nC) Close this issue without a code change and leave PR #10100 to the review-blocked judge or the unblock judge.\n**Note:** under C, Q2 does not apply.\nQ2: The provenance report that decides between the two root causes is not available. What should the fix cover?\nChoices:\nA) Treat both causes as possible and apply items 1 and 2. Item 1 accepts only a strict one-line union (only `equal`/`insert` opcodes against each side, every character taken from stage 2 or stage 3, same rule as `_is_must_contain_resolver_union_merge_false_positive`), so it does not let invented content through. Item 2 fixes the wording in `prompts/integration-sync-conflict-resolver.txt` around lines 103-110 and 148, and the matching \"synthesize a hunk that layers\u2026\" wording in `prompts/integration-sync-conflict-resolver-retry-prelude.txt` around lines 12 and 30. Add both the union and the extra-token regression tests. (RECOMMENDED)\nB) Treat it as cause 1 only: relax the gate for one-line unions and leave the prompts unchanged.\nC) Treat it as cause 2 only: change the prompts and add a test that the main prompt states the provenance rule, with no change to the gate.\nD) Wait until someone attaches the provenance report from artifact 15182462285 (run 45960909393) to this issue, then choose.",
+  "fingerprint": "0a1466c4914ac190e3e423367de23b5f1657efdf336d21f173acce0504b7908e",
+  "lineage": {
+    "issue_number": 10204,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45964964928",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45964964928",
+    "source_refs": [],
+    "workflow": "clarify"
+  },
+  "record_id": "mem_20261127083051_1810922e89",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10204,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45964964928"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Issue #10204 needs clarification",
+  "timestamps": {
+    "created_at": "2026-11-27T08:30:51Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
