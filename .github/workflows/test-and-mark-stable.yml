@@ -3087,9 +3087,20 @@ jobs:
           ISSUE_TITLE: ${{ steps.create-issue.outputs.title }}
           IMPL_CREATED_AFTER_INPUT: ${{ steps.create-issue.outputs.created_after }}
         run: |
-          declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh  # #10225: rate-limit-aware reads
+          # #10225: rate-limit-aware reads. always() cleanup stays best-effort:
+          # without the checkout's helper the reads fall back to plain gh api.
+          declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh 2>/dev/null || gh_api_retry() { gh api "$@"; }
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
+          # #10225 review: this step runs inside the finalization reserve, so
+          # cap each rate-limit wait at 1/8 of the job time left (at most 600 s):
+          # two reads that each wait twice still leave half of it for the writes.
+          if [[ "${E2E_JOB_STARTED_EPOCH:-}" =~ ^[0-9]+$ ]] && [[ "${E2E_JOB_TIMEOUT_MINUTES:-}" =~ ^[0-9]+$ ]]; then
+            cleanup_rl_wait=$(( (E2E_JOB_STARTED_EPOCH + E2E_JOB_TIMEOUT_MINUTES * 60 - $(date +%s)) / 8 ))
+            [ "${cleanup_rl_wait}" -ge 0 ] || cleanup_rl_wait=0
+            [ "${cleanup_rl_wait}" -le 600 ] || cleanup_rl_wait=600
+            export GH_RETRY_RATE_LIMIT_MAX_WAIT_SECS="${cleanup_rl_wait}"
+          fi
           echo "Cleaning up E2E test artifacts..."
 
           # Close PR without merging (idempotent — Phase 7 already closed
@@ -3696,7 +3707,8 @@ jobs:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       # Issue #10225: bounds for gh_api_retry / gh_retry reads in this job. A
       # read waits at most (3 - 1) x 600 s for a rate-limit reset; a reset
-      # further away gives up at once. 600 is the helpers' own default.
+      # further away gives up at once. 600 is the helpers' own default. No
+      # step reads through them today; the bound is set for a future one.
       GH_RETRY_MAX_ATTEMPTS: "3"
       GH_RETRY_RATE_LIMIT_MAX_WAIT_SECS: "600"
       AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
@@ -3903,7 +3915,8 @@ jobs:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       # Issue #10225: bounds for gh_api_retry / gh_retry reads in this job. A
       # read waits at most (3 - 1) x 600 s for a rate-limit reset; a reset
-      # further away gives up at once. 600 is the helpers' own default.
+      # further away gives up at once. 600 is the helpers' own default. No
+      # step reads through them today; the bound is set for a future one.
       GH_RETRY_MAX_ATTEMPTS: "3"
       GH_RETRY_RATE_LIMIT_MAX_WAIT_SECS: "600"
       AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
@@ -4377,6 +4390,8 @@ jobs:
           GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
           # Rate-limit wait cap for the dispatch (issue #10197), lowered so the
           # wait fits the step budget: no step limit; 3000s completion + 240s leaves 360s of the 60 min job for its other steps.
+          # Issue #10225: the job is now 80 min; its extra 1200s is for one gh_api_retry read's
+          # (3 - 1) x 600s rate-limit wait, so this cap stays 240s (3000 + 240 + 1200 + 360 = 4800).
           DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "240"
         run: |
           declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh  # #10225: rate-limit-aware reads
@@ -4766,14 +4781,15 @@ jobs:
     # headroom) and leave time for the always() soft-error analyser.
     # At 30 minutes the job was cancelled before the watcher could
     # report its own timeout (run 37624152181).
-    # Issue #10225: 45 + 20 so one read may wait out a rate-limit reset
-    # ((3 - 1) x 600 s) on top of the 35-minute dispatch step.
-    timeout-minutes: 65
+    # Issue #10225: unchanged, as no step of this job reads through
+    # gh_api_retry / gh_retry (the dispatch uses DISPATCH_RATE_LIMIT_MAX_WAIT_SECS).
+    timeout-minutes: 45
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       # Issue #10225: bounds for gh_api_retry / gh_retry reads in this job. A
       # read waits at most (3 - 1) x 600 s for a rate-limit reset; a reset
-      # further away gives up at once. 600 is the helpers' own default.
+      # further away gives up at once. 600 is the helpers' own default. No
+      # step reads through them today; the bound is set for a future one.
       GH_RETRY_MAX_ATTEMPTS: "3"
       GH_RETRY_RATE_LIMIT_MAX_WAIT_SECS: "600"
       AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
@@ -5688,7 +5704,9 @@ jobs:
           PRE_IMPLEMENT: ${{ steps.create.outputs.pre_implement_run_id }}
           ALT_CREATED_AFTER: ${{ steps.create.outputs.created_after }}
         run: |
-          declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh  # #10225: rate-limit-aware reads
+          # #10225: rate-limit-aware reads. always() cleanup stays best-effort:
+          # without the checkout's helper the reads fall back to plain gh api.
+          declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh 2>/dev/null || gh_api_retry() { gh api "$@"; }
           # Defence in depth — never abort on single failure; retry each
           # close 3× with backoff. Same pattern as orchestrate-decompose-test
           # cleanup so all e2e jobs leak resources at the same (low) rate

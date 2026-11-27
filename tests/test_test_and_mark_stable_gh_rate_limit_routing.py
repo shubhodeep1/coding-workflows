@@ -107,16 +107,25 @@ ALLOWLIST: tuple[tuple[str, str, str], ...] = (
 	(
 		WORKFLOW_REL,
 		'RELEASE_SUPERSEDED_BY="$(gh api',
-		"notify job (timeout-minutes 5): a reset wait cannot fit, and a failed read already falls back to the plain message",
+		"notify job (timeout-minutes 5): a deliberate exception to raising the limit, as a reset wait would delay the "
+		"failure report by up to 20 min only to pick its header; a failed read keeps the FAILED header",
+	),
+	(
+		WORKFLOW_REL,
+		'gh_api_retry() { gh api "$@"; }',
+		"always() cleanup fallback when the checkout's scripts/gh_helpers.sh is missing, so cleanup stays best-effort",
 	),
 )
 
-# A call starts a command: line start, after `$(`, a shell operator or a
-# keyword, or after `timeout N` / `command`. `gh` inside echo text such as
+# A call starts a command: line start, after `$(`, a shell operator, a
+# group or function-body brace, a subshell `( `, a keyword, or after
+# `timeout N` / `command` / `env` / a leading `NAME=value ` assignment or a
+# `$VAR ` / `${VAR} ` word. `gh` inside echo text such as
 # "::warning::gh api failed" or "(gh api returned empty)" is prose, and
 # `gh_retry gh api ...` already goes through a helper.
 _GH_CALL = re.compile(
-	r"(?:^|\$\(|[;|&!]|\b(?:then|do|if|while|else)\b|\btimeout\s+\d+|\bcommand)\s*gh\s+(api|run|pr|issue)\b(.*)"
+	r"(?:^|\$\(|\(\s|[;|&!{]|\b(?:then|do|if|while|else)\b|\btimeout\s+\d+|\bcommand|\benv"
+	r"|\b[A-Za-z_][A-Za-z0-9_]*=[^\s()]*\s|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\s)\s*gh\s+(api|run|pr|issue)\b(.*)"
 )
 _READ_SUBCOMMANDS = {
 	"run": {"view", "list", "watch"},
@@ -256,6 +265,14 @@ def test_scanner_recognises_reads_and_writes() -> None:
 			'gh workflow run x.yml',
 			'gh_api_retry "repos/o/r/pulls/1"',
 			'command gh api -i "$@"',
+			'GH_TOKEN=x gh api repos/o/r/issues',
+			'A=1 B="2" gh pr view 5',
+			'Y="$(gh_retry gh api repos/o/r/x)"',
+			'env gh issue list --repo o/r',
+			'f() { gh api repos/o/r/labels; }',
+			'( gh run list --repo o/r )',
+			'${SUDO} gh api repos/o/r/hooks',
+			'echo "::warning::gh api failed (gh api returned empty)"',
 		]
 	)
 	got = raw_reads(text)
@@ -264,6 +281,12 @@ def test_scanner_recognises_reads_and_writes() -> None:
 		'gh api -X GET "repos/o/r/issues" -f per_page=1',
 		"gh run view 5 --repo o/r --json status",
 		'command gh api -i "$@"',
+		'GH_TOKEN=x gh api repos/o/r/issues',
+		'A=1 B="2" gh pr view 5',
+		'env gh issue list --repo o/r',
+		'f() { gh api repos/o/r/labels; }',
+		'( gh run list --repo o/r )',
+		'${SUDO} gh api repos/o/r/hooks',
 	], got
 
 

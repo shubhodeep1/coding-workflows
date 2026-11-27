@@ -210,8 +210,10 @@ def test_smoke_cleanup_cancels_a_caller_run_past_page_one() -> None:
 	fallback = body[start:body.index("# Close issue", start)]
 	# Issue #10225: the step's reads go through gh_api_retry; keep the step's
 	# own first line, which sources scripts/gh_helpers.sh from the checkout.
-	source_line = body.splitlines()[0]
-	assert source_line.startswith("declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh"), source_line
+	# The line is fail-soft here (always() cleanup): a missing helper falls
+	# back to a plain read instead of stopping the step.
+	source_line = next(line for line in body.splitlines() if line.startswith("declare -F gh_api_retry"))
+	assert source_line.startswith("declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh 2>/dev/null || gh_api_retry()"), source_line
 	script = "set -euo pipefail\n" + source_line + "\nif false; then :\n" + fallback + "\n"
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
