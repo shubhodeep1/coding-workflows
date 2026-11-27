@@ -1792,7 +1792,7 @@ gh_pr_cached_read()
 		if _gh_pr_cache_entry_fresh "${entry}" "${repo}" "${number}" "${kind}" "${sha_key}" "${now}"; then
 			printf 'hit %s\n' "${kind}" >> "${stats}" 2>/dev/null || true
 			hit_epoch=""
-			read -r _ _ _ _ hit_epoch < "${entry}.meta" 2>/dev/null || true
+			{ read -r _ _ _ _ hit_epoch < "${entry}.meta"; } 2>/dev/null || true
 			[[ "${hit_epoch}" =~ ^[0-9]{1,12}$ ]] || hit_epoch=""
 			_gh_pr_cache_note_source cache_hit "${hit_epoch}"
 			cat "${entry}"
