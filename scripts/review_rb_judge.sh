@@ -2023,7 +2023,9 @@ rb_judge_route_red_checks()
     rb_judge_red_check_log handover_post_failed "mode=${mode} reason=${reason}"
     return 0
   fi
-  gh label create "ai:needs-human" --repo "${REPOSITORY}" --color "d93f0b" --description "Needs a person to continue" >/dev/null 2>&1 || true
+  # Canonical ai:needs-human metadata (scripts/label_helpers.sh); only used
+  # when the label is missing.
+  gh label create "ai:needs-human" --repo "${REPOSITORY}" --color "e11d48" --description "Escalated for human intervention; autonomous stall recovery is paused" >/dev/null 2>&1 || true
   local labelled="false" issue_number=""
   while IFS= read -r issue_number; do
     [[ "${issue_number}" =~ ^[1-9][0-9]*$ ]] || continue
