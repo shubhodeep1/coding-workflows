@@ -234,6 +234,16 @@ def test_cached_read_records_which_path_served_it(tmp_path: Path) -> None:
 	assert not note.exists()
 
 
+def test_unwritable_source_note_is_silent_and_fail_open(tmp_path: Path) -> None:
+	"""Issue #10176: a sidecar path that cannot be opened leaves no stderr line."""
+	env = _setup(tmp_path)
+	note = tmp_path / "missing_dir" / "note"
+	res = _run(env, f'GH_PR_CACHED_READ_SOURCE_FILE="{note}" gh_pr_cached_read issue_comments o/r 7 {SHA_A}')
+	assert res.returncode == 0 and res.stderr == "", res.stderr
+	assert json.loads(res.stdout) == [{"id": 1}, {"id": 2}]
+	assert not note.exists()
+
+
 def test_failed_live_fetch_returns_1_with_no_stdout_and_caches_nothing(tmp_path: Path) -> None:
 	env = _setup(tmp_path)
 	(Path(env["FAKE_DIR"]) / "fail").write_text("")

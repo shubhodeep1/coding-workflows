@@ -1744,7 +1744,7 @@ _gh_pr_cache_entry_fresh()
 _gh_pr_cache_note_source()
 {
 	[ -n "${GH_PR_CACHED_READ_SOURCE_FILE:-}" ] || return 0
-	printf '%s %s\n' "$1" "${2:-$(date +%s)}" > "${GH_PR_CACHED_READ_SOURCE_FILE}" 2>/dev/null || true
+	{ printf '%s %s\n' "$1" "${2:-$(date +%s)}" > "${GH_PR_CACHED_READ_SOURCE_FILE}"; } 2>/dev/null || true
 }
 
 gh_pr_cached_read()
