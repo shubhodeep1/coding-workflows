@@ -24397,8 +24397,19 @@ REISSUE_EOF
         surface_reissue_closed_without_pr "${issue_num}" "${phase}" "${stall_minutes}" "${recovery_count}" "main"
         close_linked_pr "${issue_num}" "${_stall_reissue_close_msg}" "${stall_minutes}"
         if [ -n "${CLOSE_LINKED_PR_HELD_PRS:-}" ]; then
-          # The replacement already exists; make a PR left open visible (#9892).
-          echo "::warning::close_and_reissue for #${issue_num}: close_linked_pr left held PR(s) ${CLOSE_LINKED_PR_HELD_PRS} open (detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown}) next to replacement #${new_num}."
+          # A hold (e.g. ai:merge-lease-wait) appeared after the pre-create
+          # re-check (issue #9892): roll the re-issue back rather than close
+          # the source next to an open, held PR. The replacement is closed as
+          # not planned, the source issue and the held PR stay open, and no
+          # attempt is counted.
+          echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${CLOSE_LINKED_PR_HELD_PRS%% *} detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown} phase=${phase} action=none requested_action=close_and_reissue source=close_linked_pr"
+          echo "::warning::close_and_reissue for #${issue_num}: close_linked_pr left held PR(s) ${CLOSE_LINKED_PR_HELD_PRS} open (detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown}); closing replacement #${new_num} and keeping #${issue_num} open."
+          gh_retry gh issue close "${new_num}" --repo "${GITHUB_REPOSITORY}" --reason "not planned" \
+            -c "Closed by orchestrator stall recovery: the implementation PR of #${issue_num} became held (${CLOSE_LINKED_PR_HELD_DETAIL:-unknown}) while this replacement was being created, so #${issue_num} stays open." 2>/dev/null \
+            || echo "::warning::Could not close replacement #${new_num}; it duplicates #${issue_num}, which stays open."
+          STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue_skipped_pr_ai_hold"
+          STALL_RECOVERY_SHOULD_INCREMENT="false"
+          return 1
         fi
         ensure_label_exists "ai:closed"
         gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
@@ -32289,8 +32300,20 @@ REISSUE_EOF
           surface_reissue_closed_without_pr "${issue_num}" "${phase}" "${elapsed_minutes}" "${recovery_count}" "standalone"
           close_linked_pr "${issue_num}" "${_std_reissue_close_msg}" "${elapsed_minutes}"
           if [ -n "${CLOSE_LINKED_PR_HELD_PRS:-}" ]; then
-            # The replacement already exists; make a PR left open visible (#9892).
-            echo "::warning::close_and_reissue for #${issue_num}: close_linked_pr left held PR(s) ${CLOSE_LINKED_PR_HELD_PRS} open (detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown}) next to replacement #${new_num}."
+            # A hold appeared after the pre-create re-check (issue #9892):
+            # roll the re-issue back, as in the managed arm. The replacement
+            # is closed as not planned; the source issue and the held PR stay
+            # open; no attempt is counted.
+            echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${CLOSE_LINKED_PR_HELD_PRS%% *} detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown} phase=${phase} action=none requested_action=close_and_reissue source=close_linked_pr"
+            echo "::warning::close_and_reissue for #${issue_num}: close_linked_pr left held PR(s) ${CLOSE_LINKED_PR_HELD_PRS} open (detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown}); closing replacement #${new_num} and keeping #${issue_num} open."
+            gh_retry gh issue close "${new_num}" --repo "${GITHUB_REPOSITORY}" --reason "not planned" \
+              -c "Closed by standalone stall recovery: the implementation PR of #${issue_num} became held (${CLOSE_LINKED_PR_HELD_DETAIL:-unknown}) while this replacement was being created, so #${issue_num} stays open." 2>/dev/null \
+              || echo "::warning::Could not close replacement #${new_num}; it duplicates #${issue_num}, which stays open."
+            STALL_RECOVERY_SHOULD_INCREMENT="false"
+            if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+              write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+            fi
+            continue
           fi
           ensure_label_exists "ai:closed"
           gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
