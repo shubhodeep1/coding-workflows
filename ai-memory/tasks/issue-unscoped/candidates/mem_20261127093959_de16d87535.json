@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: .github/workflows/ci.yml, selection and placement of steps moved from tests-release-and-log-analysis\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: The comments at .github/workflows/ci.yml:4392-4396 and :4447-4449 (cited by openai_gpt-6-luna as `.github/workflows/ci.yml:4390-4396, 4445-4449`) say the run's step timings could not be read and that the steps were picked from estimates based on test and subprocess counts, not from measured step timings, the changelog entry `changelog.d/10182-ci-release-job-budget-move.md` says the same, so the PR does not show that the picked steps were the slowest according to the run's timings, remaining candidates (e.g., the heaviest step the #9450 comment cites at ~162s, pinned by `#9214`) were excluded on contract grounds rather than timing grounds, all three reviewers rated it SEVERITY: MAJOR, while anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash chose not to raise it again because three earlier editor rounds had accepted it as residual and the last run brought no new evidence\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: .github/workflows/ci.yml, selection of steps moved from tests-release-and-log-analysis.\n  Evidence of absence: The comments at .github/workflows/ci.yml:4392-4396 and :4447-4449 state that the run's step timings were unreadable and the steps were selected using estimates from test and subprocess counts, not measured step timings as the requirement explicitly requested.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, selection and placement of steps removed from `tests-release-and-log-analysis`.\n  Evidence of absence: The comments added at `.github/workflows/ci.yml:4392-4396` and `:4447-4449` (inside both new step blocks) and the changelog entry `changelog.d/10182-ci-release-job-budget-move.md` all state that run 45766722607's step timings were not readable and that the steps were picked from \"test and subprocess counts\", not from the run's measured step timings. The issue tells whoever moves the steps to check the run's step timings, but the PR uses an estimate instead. The picked steps are not shown to be the slowest. Other candidates (e.g., the heaviest step the #9450 comment cites at ~162s, pinned by `#9214`) were left out on contract grounds rather than timing grounds.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, selection and placement of steps moved from `tests-release-and-log-analysis`.\n  Evidence of absence: The workflow says the run's step timings could not be read and describes the moved steps as estimates based on test and subprocess counts (`.github/workflows/ci.yml:4390-4396, 4445-4449`). The PR therefore does not establish that the selected steps were the slowest according to the run timings.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "2bf0fa93a57a6e1da5b6699fcd9f7c8a02f59be64cdb26c3e834b45ee3898e89",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10184,
+    "run_id": "45968020950",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45968020950",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127093959_de16d87535",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10184,
+    "run_id": "45968020950"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-27T09:39:59Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
