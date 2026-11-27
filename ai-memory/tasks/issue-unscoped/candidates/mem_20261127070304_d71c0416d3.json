@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION (not a finding; HARDENING_RISK_SCORE: 1) scripts/gh_helpers.sh:1795 (`gh_pr_cached_read`, cache-hit branch, line 1795: `read -r _ _ _ _ hit_epoch < \"${entry}.meta\" 2>/dev/null || true`)\n  PROBLEM: the redirects apply left to right, so if `.meta` disappears between `_gh_pr_cache_entry_fresh` and this read (for example, a concurrent `gh_pr_cache_evict`), bash prints its open error to stderr before `2>/dev/null` takes effect.\n  WHY: the read itself stays fail-open. This is the same stray-stderr pattern the last run fixed in `_gh_pr_cache_note_source`, but the window here is narrow. Suggested fix: `{ read -r _ _ _ _ hit_epoch < \"${entry}.meta\"; } 2>/dev/null || true` (estimated lines changed: 1).\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8aa79d4a45e8fe34357e0152104ae75386e9a4d2ae659c591e76be422b60127d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10178,
+    "run_id": "45953299098",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45953299098",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127070304_d71c0416d3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10178,
+    "run_id": "45953299098"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-27T07:03:04Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
