@@ -54,13 +54,39 @@
 # are read by the classifier, as in the sweep. Extra API budget: one jobs GET
 # plus at most 10 annotation GETs, only on a non-sync-quick run on the current
 # head with no marker yet.
-# Logs: REVIEW_FINAL_CI_FAILED pr=<n> head=<sha> outcome=redispatched|already_reported|superseded|disabled|invalid_input|read_failed|marker_failed|dispatch_failed|full_suite_dispatched|full_suite_dispatch_failed|infra_rerun_deferred|deferred [workflow=<file>] [current=<sha>] [reason=<verdict>]
+# Logs: REVIEW_FINAL_CI_FAILED pr=<n> head=<sha> outcome=redispatched|already_reported|superseded|disabled|invalid_input|read_failed|marker_failed|dispatch_failed|full_suite_dispatched|full_suite_dispatch_failed|infra_rerun_deferred|deferred|stale_workflow_sync_deferred [workflow=<file>] [current=<sha>] [reason=<verdict>]
 # `outcome=deferred reason=cancelled_jobs_rerun` (issue #10023) follows the
 # `infra_rerun_deferred reason=abandoned` line: the failed attempt has no
 # failed test, only cancelled jobs the classifier reports as abandoned (no
 # timeout annotation), so the sweep's one re-run answers it and no hand-back
 # is dispatched. A job cancelled at its timeout-minutes limit is `genuine`
-# and is handed back as before.
+# and is handed back as before, unless the stale-workflow rule below applies.
+# Stale workflow file (issue #10093): a final CI run is dispatched on the PR
+# head ref, so it runs the branch's own ci.yml and its `timeout-minutes`. When
+# classify-run (given --stale-workflow-head/--stale-workflow-base) answers
+# `stale_workflow_timeout` (`lint` failed only at its require step, every job
+# it names was cancelled at its time limit with no failed step, and the
+# base's ci.yml differs, with a higher limit for that job when both parse),
+# this posts no failed marker and dispatches nothing. It posts
+#   <!-- ai:final-ci-stale-workflow:v1 pr=<n> head=<40-hex sha> -->
+# instead and logs outcome=stale_workflow_sync_deferred: this job only has
+# `contents: read`, so the review sweep's base-sync pass
+# (scripts/review_final_ci_sweep.sh) updates the branch from the base once
+# (within FINAL_CI_SWEEP_BASE_SYNC_MAX) and the new head gets its own final
+# CI run; when it cannot sync, the sweep runs this script again with the
+# stale and infra switches off, which hands the head back as below. Deferred
+# only in shubhodeep1/coding-workflows, for a same-repository head outside
+# orchestrator/project-*, on attempt 1, with FINAL_CI_SWEEP_BASE_SYNC_ENABLED
+# (default true; true/1/yes/on) on and FINAL_CI_SWEEP_BASE_SYNC_MAX (default
+# 3) not 0: only there does the sweep's pass visit the head. Switch:
+# FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED (unset, empty or `true` = on; `false` =
+# off; anything else = off with a warning). The base ref comes from the same
+# `GET pulls/<n>` read. Extra API budget: two contents GETs (ci.yml at the
+# head and at the base) inside classify-run, only when every failure is such
+# a time-limit cut-off, and one comment POST (up to 3 attempts). A failed
+# stale-marker POST falls back to the hand-back.
+# `outcome=stale_workflow_sync_deferred reason=stale_workflow_timeout` is the
+# new outcome of the Logs: line above.
 
 set -uo pipefail
 # Signed job-token comments (run-volume plan item 15): route this script's
@@ -68,6 +94,7 @@ set -uo pipefail
 [ -z "${BASH_SOURCE[0]:-}" ] || AI_COMMENT_SIG_ACTIVATE_ONLY=1 source "$(dirname "${BASH_SOURCE[0]}")/gh_helpers.sh" >/dev/null 2>&1 || true
 
 REVIEW_FINAL_CI_FAILED_MARKER_PREFIX="<!-- ai:final-ci-failed:v1"
+REVIEW_FINAL_CI_STALE_WORKFLOW_MARKER_PREFIX="<!-- ai:final-ci-stale-workflow:v1"
 REVIEW_FINAL_CI_FAILED_SCRIPT_DIR="$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
 review_final_ci_failed_log()
@@ -75,34 +102,109 @@ review_final_ci_failed_log()
 	echo "REVIEW_FINAL_CI_FAILED pr=${PR_NUMBER:-?} head=${PR_HEAD_SHA:-?} outcome=$1${2:+ $2}"
 }
 
+# FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED (issue #10093): returns 0 when on.
+# Unset, empty or `true` (any case) = on; `false` = off; anything else = off
+# with a warning (the value is never echoed).
+review_final_ci_failed_stale_workflow_enabled()
+{
+	local final_ci_stale_switch
+	final_ci_stale_switch="$(printf '%s' "${FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
+	case "${final_ci_stale_switch}" in
+		''|true) return 0 ;;
+		false) return 1 ;;
+		*)
+			echo "::warning::FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED has an unrecognised value; a final CI run cut off under an old workflow file is handed back to review. Use true or false." >&2
+			return 1
+			;;
+	esac
+}
+
+# `review_final_ci_failed_infra_verdict [<base ref> <head ref> <head repo>]`
 # Print the classify-run verdict when the run may be deferred to the sweep's
-# re-run, or nothing when it must be handed back (fail toward the hand-back).
+# re-run (infra verdicts) or base sync (`stale_workflow_timeout`, issue
+# #10093), or nothing when it must be handed back (fail toward the hand-back).
 review_final_ci_failed_infra_verdict()
 {
-	local final_ci_infra_switch final_ci_infra_verdict
+	local final_ci_stale_base="${1:-}" final_ci_stale_head_ref="${2:-}" final_ci_stale_head_repo="${3:-}"
+	local final_ci_infra_switch final_ci_infra_verdict final_ci_infra_ok=true final_ci_stale_ok=false
+	local final_ci_stale_sweep_switch final_ci_stale_sweep_max
+	local -a final_ci_stale_args=()
 	final_ci_infra_switch="$(printf '%s' "${FINAL_CI_FAILED_INFRA_RERUN_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
 	case "${final_ci_infra_switch}" in
 		''|true) ;;
-		false) return 0 ;;
+		false) final_ci_infra_ok=false ;;
 		*)
 			echo "::warning::FINAL_CI_FAILED_INFRA_RERUN_ENABLED has an unrecognised value; infra failures are handed back to review. Use true or false." >&2
-			return 0
+			final_ci_infra_ok=false
 			;;
 	esac
-	# Defer only where the sweep re-runs: its source repository, with its
-	# switch parsed the same way (unset = on, empty or anything but `true` = off).
+	# Defer infra failures only where the sweep re-runs, with its switch
+	# parsed the same way (unset = on, empty or anything but `true` = off).
+	if [ "$(printf '%s' "${CI_CANCELLED_AUTO_RERUN_ENABLED-true}" | tr '[:upper:]' '[:lower:]')" != "true" ]; then
+		final_ci_infra_ok=false
+	fi
+	# Defer a stale-workflow cut-off only where the sweep's base-sync pass
+	# visits the head (issue #10093): a same-repository head outside
+	# orchestrator/project-*, with the pass on and its cap above 0.
+	if [[ "${final_ci_stale_base}" =~ ^[A-Za-z0-9._/-]+$ ]] && [[ "${final_ci_stale_base}" != *..* ]] \
+		&& [[ "${final_ci_stale_base}" != -* ]] && [ "${final_ci_stale_head_repo}" = "${REPOSITORY}" ] \
+		&& [ -n "${final_ci_stale_head_ref}" ] && [ "${final_ci_stale_head_ref}" != "-" ] \
+		&& [[ "${final_ci_stale_head_ref}" != orchestrator/project-* ]] \
+		&& review_final_ci_failed_stale_workflow_enabled; then
+		final_ci_stale_sweep_switch="$(printf '%s' "${FINAL_CI_SWEEP_BASE_SYNC_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
+		final_ci_stale_sweep_max="${FINAL_CI_SWEEP_BASE_SYNC_MAX:-3}"
+		{ [[ "${final_ci_stale_sweep_max}" =~ ^[0-9]{1,2}$ ]] && [ "$((10#${final_ci_stale_sweep_max}))" -le 20 ]; } || final_ci_stale_sweep_max=3
+		case "${final_ci_stale_sweep_switch}" in
+			true|1|yes|on)
+				[ "$((10#${final_ci_stale_sweep_max}))" -gt 0 ] && final_ci_stale_ok=true
+				;;
+		esac
+	fi
+	# Both deferrals exist only in the sweep's source repository, and only
+	# for attempt 1 of the run.
 	if [ "${REPOSITORY}" != "shubhodeep1/coding-workflows" ] \
-		|| [ "$(printf '%s' "${CI_CANCELLED_AUTO_RERUN_ENABLED-true}" | tr '[:upper:]' '[:lower:]')" != "true" ] \
 		|| [ "${FINAL_CI_FAILED_RUN_ATTEMPT:-}" != "1" ] \
-		|| ! [[ "${FINAL_CI_FAILED_RUN_ID:-}" =~ ^[1-9][0-9]*$ ]]; then
+		|| ! [[ "${FINAL_CI_FAILED_RUN_ID:-}" =~ ^[1-9][0-9]*$ ]] \
+		|| { [ "${final_ci_infra_ok}" != "true" ] && [ "${final_ci_stale_ok}" != "true" ]; }; then
 		return 0
 	fi
+	if [ "${final_ci_stale_ok}" = "true" ]; then
+		final_ci_stale_args=(--stale-workflow-head "${PR_HEAD_SHA}" --stale-workflow-base "${final_ci_stale_base}")
+	fi
 	final_ci_infra_verdict="$(PYTHONDONTWRITEBYTECODE=1 timeout 120 python3 "${REVIEW_FINAL_CI_FAILED_SCRIPT_DIR}/ci_cancelled_rerun.py" classify-run \
-		--repo "${REPOSITORY}" --run-id "${FINAL_CI_FAILED_RUN_ID}" --ignore-job final-ci-failed 2>/dev/null | tail -n 1)"
+		--repo "${REPOSITORY}" --run-id "${FINAL_CI_FAILED_RUN_ID}" --ignore-job final-ci-failed \
+		${final_ci_stale_args[@]+"${final_ci_stale_args[@]}"} 2>/dev/null | tail -n 1)"
 	case "${final_ci_infra_verdict}" in
-		shutdown|action_resolution|checkout_fetch|abandoned) printf '%s' "${final_ci_infra_verdict}" ;;
+		shutdown|action_resolution|checkout_fetch|abandoned)
+			[ "${final_ci_infra_ok}" = "true" ] && printf '%s' "${final_ci_infra_verdict}"
+			;;
+		stale_workflow_timeout)
+			[ "${final_ci_stale_ok}" = "true" ] && printf '%s' "${final_ci_infra_verdict}"
+			;;
 	esac
 	return 0
+}
+
+# `review_final_ci_failed_post_stale_marker <base ref>`: posts the
+# stale-workflow marker comment the sweep reads (issue #10093), up to 3
+# attempts; returns 1 when every attempt failed.
+review_final_ci_failed_post_stale_marker()
+{
+	local final_ci_stale_body final_ci_stale_attempt=1
+	local final_ci_stale_sleep="${FINAL_CI_FAILED_RETRY_SLEEP_SECS:-5}"
+	{ [[ "${final_ci_stale_sleep}" =~ ^[0-9]{1,2}$ ]] && [ "$((10#${final_ci_stale_sleep}))" -le 60 ]; } || final_ci_stale_sleep=5
+	# The backticks are Markdown code spans, not command substitution.
+	# shellcheck disable=SC2016
+	final_ci_stale_body="$(printf '**The final CI run on head `%s` was cut off at a job time limit, and `%s` has a different `.github/workflows/ci.yml`.** A final CI run uses the workflow file of the branch it tests, so it ran under older job limits. The review sweep updates this branch from `%s` once and the new head gets its own final CI run; when it cannot, the PR goes back to review.\n\n%s pr=%s head=%s -->' \
+		"${PR_HEAD_SHA:0:12}" "$1" "$1" "${REVIEW_FINAL_CI_STALE_WORKFLOW_MARKER_PREFIX}" "${PR_NUMBER}" "${PR_HEAD_SHA}")"
+	while [ "${final_ci_stale_attempt}" -le 3 ]; do
+		if gh api -X POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" -f body="${final_ci_stale_body}" >/dev/null 2>&1; then
+			return 0
+		fi
+		[ "${final_ci_stale_attempt}" -lt 3 ] && sleep "${final_ci_stale_sleep}"
+		final_ci_stale_attempt=$((final_ci_stale_attempt + 1))
+	done
+	return 1
 }
 
 review_final_ci_failed_main()
@@ -132,8 +234,9 @@ review_final_ci_failed_main()
 	# The PR must still be open at the head this run tested; a newer head gets
 	# its own final run, so an old head is never sent back to review.
 	local current_head="" current_pull final_ci_failed_head_ref="" final_ci_failed_head_repo="" final_ci_failed_wf
-	current_pull="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq 'if .state == "open" then "\(.head.sha // "") \(.head.ref // "-") \(.head.repo.full_name // "-")" else "closed - -" end' 2>/dev/null || echo "")"
-	read -r current_head final_ci_failed_head_ref final_ci_failed_head_repo <<<"${current_pull}"
+	local final_ci_failed_base_ref=""
+	current_pull="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq 'if .state == "open" then "\(.head.sha // "") \(.head.ref // "-") \(.head.repo.full_name // "-") \(.base.ref // "-")" else "closed - - -" end' 2>/dev/null || echo "")"
+	read -r current_head final_ci_failed_head_ref final_ci_failed_head_repo final_ci_failed_base_ref <<<"${current_pull}"
 	if [ -z "${current_head}" ]; then
 		echo "::warning::Could not read PR #${PR_NUMBER}; not sending it back to review this run."
 		review_final_ci_failed_log read_failed
@@ -181,7 +284,18 @@ review_final_ci_failed_main()
 	fi
 
 	local final_ci_infra_reason
-	final_ci_infra_reason="$(review_final_ci_failed_infra_verdict)"
+	final_ci_infra_reason="$(review_final_ci_failed_infra_verdict "${final_ci_failed_base_ref}" "${final_ci_failed_head_ref}" "${final_ci_failed_head_repo}")"
+	if [ "${final_ci_infra_reason}" = "stale_workflow_timeout" ]; then
+		# Issue #10093: the branch's old ci.yml cut a job off; the sweep's base
+		# sync gives the head the base's workflow file instead of a review round.
+		if review_final_ci_failed_post_stale_marker "${final_ci_failed_base_ref}"; then
+			echo "::notice::The final CI run for PR #${PR_NUMBER} was cut off at a job time limit set by the branch's older ci.yml; the review sweep updates the branch from ${final_ci_failed_base_ref} instead of sending the PR back to review."
+			review_final_ci_failed_log stale_workflow_sync_deferred "reason=stale_workflow_timeout"
+			return 0
+		fi
+		echo "::warning::Could not post the stale-workflow marker on PR #${PR_NUMBER}; sending it back to review instead."
+		final_ci_infra_reason=""
+	fi
 	if [ -n "${final_ci_infra_reason}" ]; then
 		echo "::notice::The final CI run for PR #${PR_NUMBER} failed for an infrastructure reason (${final_ci_infra_reason}); the review sweep re-runs its failed jobs once instead of sending the PR back to review."
 		review_final_ci_failed_log infra_rerun_deferred "reason=${final_ci_infra_reason}"
