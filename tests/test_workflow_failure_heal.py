@@ -2860,6 +2860,120 @@ def test_intake_workflow_run_targets_failed_branch_and_skips_downstream_gate() -
 	assert "issues_created" not in state_after
 
 
+def _runner_wait_gate_payload(name: str = "Test & Mark Stable Release") -> dict:
+	return heal.build_workflow_run_payload(
+		repo=SELF_REPO,
+		workflow_run={"id": 500, "name": name, "conclusion": "failure", "head_sha": SHA_B, "head_branch": "stable", "html_url": f"https://github.com/{SELF_REPO}/actions/runs/500", "display_title": name},
+	)
+
+
+_RUNNER_WAIT_LOG = (
+	"2026-11-24T02:18:00.0000000Z ::warning::internal-memory-maintenance run #45306352148 watch diagnosis: status=queued the whole time (no runner was assigned); status_reads=160\n"
+	"2026-11-24T02:18:01.0000000Z DISPATCH_WATCH_RESULT outcome=runner_wait run=45306352148 reason=never_assigned jobs=1 queued_without_runner=1\n"
+	"2026-11-24T02:18:02.0000000Z RELEASE_GATE_RUNNER_WAIT outcome=stop_failed detail=still_running gate_run=500 watched_run=45306352148 reason=never_assigned waited_secs=240 display_name=internal-memory-maintenance\n"
+	"2026-11-24T02:18:03.0000000Z ::error::internal-memory-maintenance run #45306352148 timed out\n"
+)
+_PHASE4_RUNNER_WAIT_LOG = (
+	"2026-11-24T15:19:00.0000000Z E2E_REVIEW_RUNNER_WAIT run=30 outcome=runner_wait reason=never_assigned\n"
+	"2026-11-24T15:19:01.0000000Z RELEASE_GATE_RUNNER_WAIT outcome=cancel_requested gate_run=500 watched_run=30 reason=never_assigned display_name=review\n"
+)
+
+
+def _runner_wait_job(job_id: int, name: str, step: str) -> dict:
+	return {"id": job_id, "name": name, "workflow_name": "Test & Mark Stable Release", "conclusion": "failure", "steps": [{"name": step, "conclusion": "failure"}]}
+
+
+def test_intake_skips_a_release_gate_run_whose_only_failures_are_runner_waits() -> None:
+	"""Issue #10037 (G4): a gate whose watch steps only waited for a runner is not a heal issue."""
+	jobs = [
+		_runner_wait_job(9001, "orphan-workflows-test", "Dispatch & watch — internal-memory-maintenance"),
+		_runner_wait_job(9002, "e2e-smoke-test", "Phase 4: Wait for review & autofix to complete"),
+	]
+	for name in ("Test & Mark Stable Release", "Test & Mark Stable Release [cycle:45296434662]"):
+		state = _intake_state(jobs={"500": jobs}, job_logs={"9001": _RUNNER_WAIT_LOG, "9002": _PHASE4_RUNNER_WAIT_LOG})
+		result, state_after, _ = _run_intake(_runner_wait_gate_payload(name), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "skip reason=release_gate_runner_wait run=500 jobs=2" in result.stdout, result.stdout
+		assert "issues_created" not in state_after
+		assert not _composed_issues(state_after)
+
+
+def test_intake_skips_runner_waits_on_the_orchestrate_and_standalone_validate_watch_steps() -> None:
+	"""Both steps run dispatch_and_watch_workflow_run.sh without the "Dispatch & watch — " title."""
+	jobs = [
+		_runner_wait_job(9001, "orchestrate-decompose-test", "Dispatch internal-orchestrate.yml with multi-issue project"),
+		_runner_wait_job(9002, "validate-standalone-test", "Dispatch internal-validate.yml standalone"),
+	]
+	state = _intake_state(jobs={"500": jobs}, job_logs={"9001": _RUNNER_WAIT_LOG, "9002": _RUNNER_WAIT_LOG})
+	result, state_after, _ = _run_intake(_runner_wait_gate_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "skip reason=release_gate_runner_wait run=500 jobs=2" in result.stdout, result.stdout
+	assert not _composed_issues(state_after)
+
+
+def test_intake_skips_a_runner_wait_on_the_alt_model_wait_step() -> None:
+	"""The alt-model wait (dispatch_and_watch_workflow_run.sh --alt-model-runner-wait) prints the same marker."""
+	jobs = [_runner_wait_job(9001, "e2e-alt-model-test", "Wait for clarify→plan→implement (alt-model)")]
+	log = "2026-11-24T02:07:01.0000000Z RELEASE_GATE_RUNNER_WAIT outcome=stop_failed detail=still_running gate_run=500 watched_run=61 reason=never_assigned waited_secs=240 display_name=alt-model\n"
+	state = _intake_state(jobs={"500": jobs}, job_logs={"9001": log})
+	result, state_after, _ = _run_intake(_runner_wait_gate_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "skip reason=release_gate_runner_wait run=500 jobs=1" in result.stdout, result.stdout
+	assert not _composed_issues(state_after)
+
+
+def test_intake_files_a_release_gate_run_with_a_real_failure_next_to_a_runner_wait() -> None:
+	jobs = [
+		_runner_wait_job(9001, "orphan-workflows-test", "Dispatch & watch — internal-memory-maintenance"),
+		_runner_wait_job(9003, "validate-scripts", "Run pytest"),
+	]
+	logs = {"9001": _RUNNER_WAIT_LOG, "9003": "2026-11-24T02:00:00.0000000Z ##[error]Process completed with exit code 1.\n"}
+	state = _intake_state(jobs={"500": jobs}, job_logs=logs)
+	result, state_after, _ = _run_intake(_runner_wait_gate_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "release_gate_runner_wait" not in result.stdout
+	assert _composed_issues(state_after), result.stdout
+
+
+def test_intake_runner_wait_marker_counts_only_on_a_watch_step_at_line_start() -> None:
+	cases = (
+		# The marker on a step that is not a gate watch step.
+		(_runner_wait_job(9001, "e2e-smoke-test", "Phase 4b: Verify editor restored canary (pytest + retry)"), _RUNNER_WAIT_LOG),
+		# Echoed text: the marker does not start the line.
+		(_runner_wait_job(9001, "orphan-workflows-test", "Dispatch & watch — internal-memory-maintenance"),
+			"2026-11-24T02:18:00.0000000Z issue body said RELEASE_GATE_RUNNER_WAIT outcome=cancel_requested gate_run=500\n"),
+		# Any other outcome does not count.
+		(_runner_wait_job(9001, "orphan-workflows-test", "Dispatch & watch — internal-memory-maintenance"),
+			"2026-11-24T02:18:00.0000000Z RELEASE_GATE_RUNNER_WAIT outcome=real_failure_present gate_run=500 watched_run=1\n"),
+	)
+	for job, log in cases:
+		state = _intake_state(jobs={"500": [job]}, job_logs={"9001": log})
+		result, state_after, _ = _run_intake(_runner_wait_gate_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert "release_gate_runner_wait" not in result.stdout, (job, log)
+		assert _composed_issues(state_after), (job, result.stdout)
+
+
+def test_intake_files_a_runner_wait_job_with_a_second_failed_step() -> None:
+	"""A later always() step that failed in the same job is a real failure (G4 is per step)."""
+	job = _runner_wait_job(9001, "orphan-workflows-test", "Dispatch & watch — internal-memory-maintenance")
+	job["steps"].append({"name": "Soft-error analyser (memory_maintenance)", "conclusion": "failure"})
+	state = _intake_state(jobs={"500": [job]}, job_logs={"9001": _RUNNER_WAIT_LOG})
+	result, state_after, _ = _run_intake(_runner_wait_gate_payload(), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "release_gate_runner_wait" not in result.stdout
+	assert _composed_issues(state_after), result.stdout
+
+
+def test_intake_runner_wait_skip_is_limited_to_the_release_gate() -> None:
+	jobs = [_runner_wait_job(9001, "orphan-workflows-test", "Dispatch & watch — internal-memory-maintenance")]
+	state = _intake_state(jobs={"500": jobs}, job_logs={"9001": _RUNNER_WAIT_LOG})
+	result, state_after, _ = _run_intake(_runner_wait_gate_payload("Mark Stable Release"), state, diagnosis=DIAG_WORKFLOW_DEFECT)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "release_gate_runner_wait" not in result.stdout
+	assert _composed_issues(state_after)
+
+
 def test_intake_workflow_run_preserves_slash_bearing_target_branch() -> None:
 	branch_name = "release/2026-09"
 	run_payload = heal.build_workflow_run_payload(
@@ -7133,6 +7247,127 @@ def test_intake_rejects_ci_run_that_is_not_a_default_branch_push(tmp_path) -> No
 		assert "run_id=500 reason=ci_not_default_branch_push" in result.stdout
 		assert "skip reason=provenance_rejected" in result.stdout
 		assert "issues_created" not in state_after
+
+
+def _run_intake_capturing_tg(payload: dict, state: dict, extra_env: dict[str, str | None] | None = None, *, delivered: bool = True) -> tuple[subprocess.CompletedProcess[str], list[str], str]:
+	"""Run the intake with a stubbed ``tg_send_msg``; return the result, every
+	``level|text`` line it recorded, and what the intake wrote to GITHUB_OUTPUT.
+	Like the real helper, the stub prints a message id only when ``delivered``."""
+	tg_dir = Path(tempfile.mkdtemp(prefix="heal-tg-"))
+	try:
+		output_file = tg_dir / "github_output.txt"
+		output_file.write_text("", encoding="utf-8")
+		msg_id_echo = " printf '4242';" if delivered else ""
+		def setup(tmp: Path, work: Path) -> None:
+			(work / "scripts" / "tg_helpers.sh").write_text(
+				f'tg_send_msg() {{ printf \'%s|%s\\n\' "${{2:-}}" "$1" >> {str(tg_dir / "calls.txt")!r};{msg_id_echo} }}\n', encoding="utf-8")
+		result, _state_after, _ = _run_intake(payload, state, diagnosis=DIAG_WORKFLOW_DEFECT, setup_git=setup,
+			extra_env={"GITHUB_OUTPUT": str(output_file), **(extra_env or {})})
+		calls_file = tg_dir / "calls.txt"
+		calls = calls_file.read_text(encoding="utf-8").splitlines() if calls_file.exists() else []
+		return result, calls, output_file.read_text(encoding="utf-8")
+	finally:
+		shutil.rmtree(tg_dir, ignore_errors=True)
+
+
+def test_intake_unregistered_source_repo_warns_once_per_day() -> None:
+	# atlas-bridge.gd sent six identical WARNINGs overnight: the workflow's
+	# actions/cache lookup now tells the intake today's WARNING already went out.
+	payload = _consumer_payload(source_repo="shubhodeep1/not-registered")
+	result, calls, output = _run_intake_capturing_tg(payload, _intake_state())
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert "skip reason=unregistered_source_repo" in result.stdout
+	assert [line.split("|", 1)[0] for line in calls if "ignored a report" in line] == ["WARNING"], calls
+	assert "unregistered_source_repo_alert level=WARNING source=shubhodeep1/not-registered" in result.stdout
+	assert "heal_unregistered_warned=true" in output.splitlines()
+	result, calls, output = _run_intake_capturing_tg(payload, _intake_state(), {"WORKFLOW_HEAL_UNREGISTERED_WARNED_TODAY": "true"})
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert [line.split("|", 1)[0] for line in calls if "ignored a report" in line] == ["DEBUG"], calls
+	assert "unregistered_source_repo_alert level=DEBUG reason=already_warned_today" in result.stdout
+	assert "heal_unregistered_warned" not in output
+	# Fail open: anything but "true" (cache miss, failed lookup) sends the WARNING.
+	for warned_today in ("false", "", None):
+		result, calls, output = _run_intake_capturing_tg(payload, _intake_state(), {"WORKFLOW_HEAL_UNREGISTERED_WARNED_TODAY": warned_today})
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert [line.split("|", 1)[0] for line in calls if "ignored a report" in line] == ["WARNING"], (warned_today, calls)
+	# An undelivered WARNING (no message id) leaves no marker, so the next
+	# report that day retries the WARNING instead of being sent at DEBUG.
+	result, calls, output = _run_intake_capturing_tg(payload, _intake_state(), delivered=False)
+	assert result.returncode == 0, result.stderr + result.stdout
+	assert [line.split("|", 1)[0] for line in calls if "ignored a report" in line] == ["WARNING"], calls
+	assert "unregistered_source_repo_alert marker=skipped reason=not_delivered" in result.stdout
+	assert "heal_unregistered_warned" not in output
+
+
+def test_intake_unregistered_warning_workflow_cache_wiring() -> None:
+	workflow = yaml.safe_load((REPO_ROOT / ".github" / "workflows" / "workflow-failure-heal-intake.yml").read_text(encoding="utf-8"))
+	steps = workflow["jobs"]["intake"]["steps"]
+	names = [step.get("name") for step in steps]
+	lookup = steps[names.index("Look up today's unregistered-repo warning marker")]
+	run = steps[names.index("Run workflow failure heal intake")]
+	save = steps[names.index("Save today's unregistered-repo warning marker")]
+	day = steps[names.index("Compute today's unregistered-repo warning day")]
+	assert names.index("Wait for the heal intake queue") < names.index(day["name"]) < names.index(lookup["name"]) < names.index(run["name"]) < names.index(save["name"]) < names.index("Leave the heal intake queue")
+	assert lookup["uses"] == "actions/cache/restore@v4" and save["uses"] == "actions/cache/save@v4"
+	assert lookup["continue-on-error"] is True and save["continue-on-error"] is True
+	# A failed day step must leave `day` empty and let the intake send the WARNING (fail open).
+	assert day["continue-on-error"] is True
+	assert lookup["with"]["lookup-only"] is True
+	assert lookup["with"]["path"] == save["with"]["path"] == "/tmp/workflow-heal-unregistered-warned"
+	assert run["env"]["WORKFLOW_HEAL_UNREGISTERED_MARKER"] == "/tmp/workflow-heal-unregistered-warned"
+	# The UTC day is taken after the queue wait, so a report that waits across
+	# midnight saves under the day it warned on.
+	assert day["id"] == "heal_unregistered_day" and "date -u +%Y%m%d" in day["run"]
+	assert lookup["with"]["key"] == save["with"]["key"] == "${{ steps.payload.outputs.heal_unregistered_cache_key }}-${{ steps.heal_unregistered_day.outputs.day }}"
+	assert run["id"] == "intake_run"
+	assert "steps.heal_unregistered_seen.outputs.cache-hit == 'true'" in run["env"]["WORKFLOW_HEAL_UNREGISTERED_WARNED_TODAY"]
+	assert "steps.intake_run.outputs.heal_unregistered_warned == 'true'" in save["if"]
+	payload_run = steps[names.index("Materialize the report payload")]["run"]
+	assert "heal_unregistered_cache_key=heal-unregistered-${heal_unregistered_repo}\" >>" in payload_run
+	assert "date -u" not in payload_run
+
+
+def _provenance_alert_filter() -> str:
+	text = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	match = re.search(r"PROVENANCE_ALERT_LEVEL=\"WARNING\"\n\t\tif jq -e '(.*?)' \\\n", text, re.S)
+	assert match, "provenance alert-level filter not found"
+	return match.group(1)
+
+
+def test_intake_provenance_alert_level_filter() -> None:
+	jq_filter = _provenance_alert_filter()
+	def is_debug(result: dict) -> bool:
+		return subprocess.run(["jq", "-e", jq_filter], input=json.dumps(result), capture_output=True, text=True).returncode == 0
+	assert is_debug({"reason": "current_run_rejected:ci_not_default_branch_push", "rejections": [{"run_id": "500", "reason": "ci_not_default_branch_push"}]})
+	assert is_debug({"reason": "current_run_rejected:not_failed", "rejections": [{"run_id": "500", "reason": "not_failed"}]})
+	assert is_debug({"reason": "no_verified_runs", "rejections": [{"run_id": "500", "reason": "not_failed"}, {"run_id": "499", "reason": "not_failed"}]})
+	for warning in (
+		{"reason": "no_verified_runs", "rejections": [{"run_id": "500", "reason": "not_failed"}, {"run_id": "499", "reason": "not_linked_to_pr"}]},
+		{"reason": "no_verified_runs", "rejections": []},
+		{"reason": "verifier_error", "rejections": []},
+		{"reason": "current_run_rejected:run_lookup_failed", "rejections": [{"run_id": "500", "reason": "run_lookup_failed"}]},
+		{"reason": "current_run_rejected:unexpected_workflow_path", "rejections": [{"run_id": "500", "reason": "unexpected_workflow_path"}]},
+		{"reason": "identity_unavailable", "rejections": []},
+	):
+		assert not is_debug(warning), warning
+
+
+def test_intake_provenance_rejection_alert_levels() -> None:
+	# A CI run on a PR branch and a cited run that did not fail are expected
+	# rejections: DEBUG. Any other rejection keeps the WARNING.
+	ci_run = _ci_intake_state()["run_details"]["500"]
+	for state, level, detail in (
+		(_ci_intake_state(event="pull_request"), "DEBUG", "current_run_rejected:ci_not_default_branch_push"),
+		(_ci_intake_state(head_branch="feature/x"), "DEBUG", "current_run_rejected:ci_not_default_branch_push"),
+		({**_ci_intake_state(), "run_details": {"500": {**ci_run, "conclusion": "success"}}}, "DEBUG", "current_run_rejected:not_failed"),
+		({**_ci_intake_state(), "run_details": {}}, "WARNING", "current_run_rejected:run_lookup_failed"),
+	):
+		result, calls, _ = _run_intake_capturing_tg(_ci_run_payload(), state, {"WORKFLOW_HEAL_DEFAULT_BRANCH": "main"})
+		assert result.returncode == 0, result.stderr + result.stdout
+		assert f"skip reason=provenance_rejected source={SELF_REPO} kind=workflow_run issue=none detail={detail}" in result.stdout, result.stdout
+		assert f"provenance_rejected_alert level={level} " in result.stdout
+		provenance_calls = [line for line in calls if "rejected run provenance" in line]
+		assert [line.split("|", 1)[0] for line in provenance_calls] == [level], calls
 
 
 def test_build_phase_failure_payload_validates_and_carries_lineage() -> None:
@@ -11868,8 +12103,8 @@ def test_heal_stale_closes_a_held_plan_with_no_files() -> None:
 
 def test_heal_stale_target_and_resolve_fallback() -> None:
 	target = heal.heal_stale_target(_stale_issue())
-	assert target == {"source_repo": "owner/repo", "source_kind": "run", "workflow": "ci.yml", "branch": "main",
-		"fallback_run": None, "reason": ""}
+	assert target == {"source_repo": "owner/repo", "source_kind": "run", "source_number": None, "workflow": "ci.yml",
+		"branch": "main", "fallback_run": None, "reason": ""}
 	legacy = heal.heal_stale_target(_stale_issue(body=_stale_body(workflow=None, branch=None,
 		scope_runs="other/repo:7,owner/repo:40990538508")))
 	assert legacy["workflow"] is None and legacy["fallback_run"] == {"repo": "owner/repo", "run_id": "40990538508"}
@@ -11908,6 +12143,82 @@ def test_heal_stale_decision_cli(tmp_path) -> None:
 	assert run("--stage", "decide", "--issue-json", str(tmp_path / "missing.json")).returncode == 2
 	target = run("--stage", "target", "--issue-json", str(tmp_path / "issue.json"))
 	assert target.returncode == 0 and json.loads(target.stdout)["workflow"] == "ci.yml"
+
+
+def test_heal_stale_target_reports_the_pr_source_number() -> None:
+	# #9967: the unblock judge reads a `#<n>` source item's state.
+	target = heal.heal_stale_target(_stale_issue(body=_stale_body(source="owner/consumer#123")))
+	assert target["source_kind"] == "pr" and target["source_number"] == 123
+	assert heal.heal_stale_target(_stale_issue(body=_stale_body(source="owner/consumer#x")))["source_number"] is None
+	assert heal.heal_stale_target(_stale_issue(body=_stale_body(source="owner/consumer#0")))["source_number"] is None
+
+
+def test_heal_stale_default_purpose_still_needs_approval_label_and_hold_marker() -> None:
+	unheld = _stale_issue(labels=["ai:workflow-heal", "ai:blocked"])
+	assert _stale_decide(issue=unheld)["reason"] == "not_awaiting_approval"
+	assert _stale_decide(comments=[])["reason"] == "hold_marker_missing"
+	# source_closed is ignored without the unblock purpose.
+	assert _stale_decide(comments=[], source_closed=True)["reason"] == "hold_marker_missing"
+
+
+def test_heal_stale_unblock_placeholder_purpose_skips_only_the_hold_gates() -> None:
+	unheld = _stale_issue(labels=["ai:workflow-heal", "ai:blocked"])
+	result = _stale_decide(issue=unheld, comments=[], purpose="unblock_placeholder")
+	assert result["decision"] == "close" and result["reason"] == "workflow_green" and result["green_runs"] == 5
+	assert "comment_body" not in result
+	# Every other gate stays.
+	runs = _stale_runs(6)
+	runs["workflow_runs"][2]["conclusion"] = "failure"
+	assert _stale_decide(issue=unheld, comments=[], runs=runs, purpose="unblock_placeholder")["reason"] == "run_not_green"
+	assert _stale_decide(issue=unheld, comments=[], purpose="unblock_placeholder",
+		linked_pr={"state": "OPEN"})["reason"] == "open_pr"
+	assert _stale_decide(issue=unheld, comments=[], purpose="unblock_placeholder",
+		linked_pr=heal.HEAL_STALE_LINKED_PR_UNKNOWN)["reason"] == "linked_pr_unknown"
+	assert _stale_decide(issue=_stale_issue(labels=["ai:workflow-heal", "ai:orchestrator-managed"]), comments=[],
+		purpose="unblock_placeholder")["reason"] == "orchestrator_managed"
+	assert _stale_decide(issue=_stale_issue(labels=["ai:blocked"]), comments=[], purpose="unblock_placeholder")["reason"] == "not_heal_issue"
+	assert _stale_decide(issue=_stale_issue(labels=["ai:workflow-heal"], user={"login": "outsider"}), comments=[],
+		purpose="unblock_placeholder")["reason"] == "untrusted_issue_author"
+	assert _stale_decide(issue=unheld, comments=[], purpose="unblock_placeholder", workflow="")["reason"] == "workflow_unknown"
+	assert _stale_decide(issue=unheld, comments=[], purpose="unblock_placeholder",
+		now=datetime(2026, 1, 1, 12, tzinfo=timezone.utc))["reason"] == "too_young"
+
+
+def test_heal_stale_unblock_placeholder_source_closed_decides_without_runs() -> None:
+	pr_issue = _stale_issue(labels=["ai:workflow-heal", "ai:blocked"], body=_stale_body(source="owner/consumer#123"))
+	params = {"comments": [], "runs": None, "workflow": "", "branch": "", "purpose": "unblock_placeholder"}
+	closed = _stale_decide(issue=pr_issue, source_closed=True, **params)
+	assert closed["decision"] == "close" and closed["reason"] == "source_closed_no_recurrence" and closed["green_runs"] == 0
+	assert _stale_decide(issue=pr_issue, source_closed=False, **params)["reason"] == "source_open"
+	assert _stale_decide(issue=pr_issue, source_closed=True, now=datetime(2026, 1, 1, 12, tzinfo=timezone.utc),
+		**{k: v for k, v in params.items()})["reason"] == "too_young"
+	# A trusted occurrence report moves the anchor, so a recent recurrence keeps it.
+	occurrence = _stale_comment("<!-- workflow-failure-heal:occurrence -->\nSeen again.", created_at="2026-02-28T12:00:00Z")
+	assert _stale_decide(issue=pr_issue, source_closed=True, **{**params, "comments": [occurrence]})["reason"] == "too_young"
+	# Without source_closed the runs path applies (and here, no runs: kept).
+	assert _stale_decide(issue=pr_issue, **params)["reason"] == "workflow_unknown"
+
+
+def test_heal_stale_decision_cli_unblock_placeholder_flags(tmp_path) -> None:
+	def write(name: str, value: object) -> str:
+		path = tmp_path / name
+		path.write_text(json.dumps(value), encoding="utf-8")
+		return str(path)
+
+	def run(*args: str) -> subprocess.CompletedProcess:
+		return subprocess.run([sys.executable, "-I", "-B", str(LIB_PATH), "heal-stale-decision", *args],
+			capture_output=True, text=True, check=False)
+
+	base = ["--stage", "decide", "--issue-json", write("issue.json", _stale_issue(labels=["ai:workflow-heal"])),
+		"--comments-json", write("comments.json", []), "--pipeline-login", _STALE_LOGIN, "--workflow", "ci.yml",
+		"--branch", "main", "--now", "2026-03-01T00:00:00Z", "--runs-json", write("runs.json", _stale_runs(5)),
+		"--linked-pr-json", write("pr.json", None)]
+	assert json.loads(run(*base).stdout)["reason"] == "not_awaiting_approval"
+	assert json.loads(run(*base, "--purpose", "unblock_placeholder").stdout)["decision"] == "close"
+	assert json.loads(run(*base, "--purpose", "unblock_placeholder", "--source-closed", "false").stdout)["reason"] == "source_open"
+	assert json.loads(run(*base, "--purpose", "unblock_placeholder", "--source-closed", "true").stdout)["reason"] == \
+		"source_closed_no_recurrence"
+	assert run(*base, "--purpose", "other").returncode == 2
 
 
 def test_compose_issue_body_adds_workflow_marker_only_for_workflow_run() -> None:
@@ -14780,3 +15091,197 @@ def test_heal_scope_recovery_budget_rerun_drops_the_report_issue() -> None:
 	loop = recovery.split("local recovery_budget_args=()", 1)[1].split("done", 1)[0]
 	report_arm = loop.split("--report-issue)", 1)[1].split(";;", 1)[0]
 	assert "recovery_arg_index=$((recovery_arg_index + 2))" in report_arm and "continue" in report_arm
+
+
+# ---------------------------------------------------------------------------
+# Red-main grouping (issue #9823, plan Phase 2 of
+# docs/plans/pipeline-human-wait-elimination-plan.md)
+#
+# A red default-branch push CI run whose error text differs from the previous
+# one got a new fingerprint and a second heal issue. The red-main group key
+# (workflow name, failing job, branch) records it on the open heal issue.
+# ---------------------------------------------------------------------------
+
+RED_MAIN_ENV_LINE = "      WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED: ${{ vars.WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED || 'true' }}\n"
+RED_MAIN_CI = {"default_branch": "main", "event": "push", "workflow_path": ".github/workflows/ci.yml"}
+
+
+def _red_main_issue(number: int, *, fp: str, group: str, state: str = "open") -> dict:
+	issue = _p5_cause_issue(number, fp=fp, state=state)
+	issue["body"] = issue["body"].replace(
+		f"<!-- {heal.MARKER_PREFIX}cause={P5_CAUSE} -->",
+		f"<!-- {heal.MARKER_PREFIX}cause={P5_CAUSE} -->\n<!-- {heal.MARKER_PREFIX}red-main-group={group} -->",
+	)
+	return issue
+
+
+def test_red_main_group_key_only_for_default_branch_push_ci() -> None:
+	key = heal.red_main_group_key("CI", "tests", "main", **RED_MAIN_CI)
+	assert re.fullmatch(r"[0-9a-f]{64}", key)
+	assert key == hashlib.sha256(b"red-main|ci|tests|main").hexdigest()
+	# Pure and stable: the cycle suffix and a pinned path ref do not change it.
+	assert key == heal.red_main_group_key("CI [cycle:7]", "tests", "main", **RED_MAIN_CI)
+	assert key == heal.red_main_group_key("CI", "tests", "main", **{**RED_MAIN_CI, "workflow_path": ".github/workflows/ci.yml@refs/heads/main"})
+	assert key != heal.red_main_group_key("CI", "lint", "main", **RED_MAIN_CI)
+	ineligible = (
+		(("CI", "tests", "main"), {**RED_MAIN_CI, "event": "pull_request"}, "not_default_branch_push"),
+		(("CI", "tests", "feature/x"), RED_MAIN_CI, "not_default_branch_push"),
+		(("CI", "tests", "main"), {**RED_MAIN_CI, "default_branch": "bad..branch"}, "not_default_branch_push"),
+		(("CI", "tests", "main"), {**RED_MAIN_CI, "default_branch": ""}, "not_default_branch_push"),
+		(("CI", "tests", "main"), {**RED_MAIN_CI, "workflow_path": ".github/workflows/implement.yml"}, "not_ci_workflow"),
+		(("CI", "tests", "main"), {**RED_MAIN_CI, "workflow_path": ""}, "not_ci_workflow"),
+		(("CI", "", "main"), RED_MAIN_CI, "no_job"),
+		(("", "tests", "main"), RED_MAIN_CI, "no_job"),
+	)
+	for args, facts, reason in ineligible:
+		assert heal.red_main_group_key(*args, **facts) == "", (args, facts)
+		assert heal.red_main_group_reason(*args, **facts) == reason, (args, facts)
+	assert heal.red_main_group_reason("CI", "tests", "main", **RED_MAIN_CI) == "ok"
+	assert "no API call" in (heal.red_main_group_key.__doc__ or "")
+
+
+def test_budget_decision_red_main_group_hit_miss_branch_and_switch_off(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
+	fp, other = "1" * 64, "2" * 64
+	group = heal.red_main_group_key("CI", "tests", "main", **RED_MAIN_CI)
+	grouped = _red_main_issue(9701, fp=other, group=group)
+	# Hit: a different fingerprint, same group.
+	hit = heal.budget_decision([grouped], fp=fp, now=P5_NOW, red_main_group=group)
+	assert hit == {
+		"action": "duplicate", "match": "red_main_group", "red_main_group": group, "existing_issue": 9701,
+		"existing_url": grouped["html_url"], "existing_repo": "", "gen": 1, "root": other,
+		"open_count": 1, "today_count": 0,
+	}
+	# Checked first: ahead of a fingerprint duplicate and of the budget caps.
+	same_fp = _heal_issue(9, state="open", fp=fp)
+	assert heal.budget_decision([same_fp, grouped], fp=fp, now=P5_NOW, red_main_group=group)["match"] == "red_main_group"
+	assert heal.budget_decision([grouped], fp=fp, now=P5_NOW, red_main_group=group, max_open=1)["match"] == "red_main_group"
+	# The group issue also carries this report's fingerprint: the fingerprint
+	# match records it, so inline heal-scope recovery still sees the issue.
+	same_fp_grouped = _red_main_issue(9702, fp=fp, group=group)
+	same_fp_decision = heal.budget_decision([same_fp_grouped], fp=fp, now=P5_NOW, red_main_group=group)
+	assert same_fp_decision["action"] == "duplicate" and same_fp_decision["match"] == "fingerprint"
+	assert same_fp_decision["existing_issue"] == 9702
+	assert heal.budget_decision([same_fp_grouped, grouped], fp=fp, now=P5_NOW, red_main_group=group)["match"] == "fingerprint"
+	# A lower-numbered group issue with this fingerprint beats a higher-numbered
+	# group issue with another one: the occurrence lands on the matching issue.
+	low_same_fp = _red_main_issue(9690, fp=fp, group=group)
+	low_decision = heal.budget_decision([grouped, low_same_fp], fp=fp, now=P5_NOW, red_main_group=group)
+	assert low_decision["match"] == "fingerprint" and low_decision["existing_issue"] == 9690
+	# A higher-numbered open non-group issue with this fingerprint never takes
+	# the occurrence from the group issue that carries the same fingerprint.
+	high_non_group = _heal_issue(9800, state="open", fp=fp)
+	for listing in ([low_same_fp, high_non_group], [high_non_group, low_same_fp], [grouped, high_non_group, low_same_fp]):
+		pinned = heal.budget_decision(listing, fp=fp, now=P5_NOW, red_main_group=group)
+		assert pinned["match"] == "fingerprint" and pinned["existing_issue"] == 9690, listing
+	# Grouping off: today's fingerprint preference (the higher number) applies.
+	assert heal.budget_decision([low_same_fp, high_non_group], fp=fp, now=P5_NOW)["existing_issue"] == 9800
+	# Miss: another group, or a closed grouped issue, falls through to today's logic.
+	baseline = heal.budget_decision([grouped], fp=fp, now=P5_NOW)
+	assert baseline["action"] == "open"
+	assert heal.budget_decision([grouped], fp=fp, now=P5_NOW, red_main_group="d" * 64) == baseline
+	assert heal.budget_decision([same_fp], fp=fp, now=P5_NOW, red_main_group=group)["match"] == "fingerprint"
+	closed = _red_main_issue(9701, fp=other, group=group, state="closed")
+	assert heal.budget_decision([closed], fp=fp, now=P5_NOW, red_main_group=group) == heal.budget_decision([closed], fp=fp, now=P5_NOW)
+	# Marker quoted in the body (outside the header block) never matches.
+	quoted = dict(grouped, body=f"<!-- {heal.MARKER_PREFIX}fp={other} -->\nsome text\n<!-- {heal.MARKER_PREFIX}red-main-group={group} -->")
+	assert heal.parse_red_main_group_marker(quoted["body"]) == ""
+	assert heal.budget_decision([quoted], fp=fp, now=P5_NOW, red_main_group=group)["action"] == "open"
+	# Non-main branch: no key, so no group match.
+	assert heal.red_main_group_key("CI", "tests", "feature/x", **RED_MAIN_CI) == ""
+	assert heal.budget_decision([grouped], fp=fp, now=P5_NOW, red_main_group=heal.red_main_group_key("CI", "tests", "feature/x", **RED_MAIN_CI) or None) == baseline
+	# Switch off, or an invalid key: today's decision.
+	assert heal.budget_decision([grouped], fp=fp, now=P5_NOW, red_main_group=group, red_main_grouping_enabled=False) == baseline
+	for value in ("", "D" * 64, "d" * 63):
+		assert heal.budget_decision([grouped], fp=fp, now=P5_NOW, red_main_group=value) == baseline
+	# CLI: the env switch is a second gate.
+	issues_json = tmp_path / "issues.json"
+	issues_json.write_text(json.dumps([grouped]), encoding="utf-8")
+	cli = ["budget", "--issues-json", str(issues_json), "--fingerprint", fp, "--red-main-group", group]
+	monkeypatch.delenv("WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED", raising=False)
+	assert heal.main(cli) == 0
+	assert json.loads(capsys.readouterr().out)["match"] == "red_main_group"
+	monkeypatch.setenv("WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED", "FALSE")
+	assert heal.main(cli) == 0
+	assert json.loads(capsys.readouterr().out)["action"] == "open"
+	# red-main-group-key subcommand: always exits 0 with a reason.
+	assert heal.main(["red-main-group-key", "--workflow-name", "CI", "--failing-job", "tests", "--branch", "main",
+		"--default-branch", "main", "--event", "push", "--workflow-path", ".github/workflows/ci.yml"]) == 0
+	assert json.loads(capsys.readouterr().out) == {"key": group, "reason": "ok"}
+	assert heal.main(["red-main-group-key", "--workflow-name", "CI", "--failing-job", "tests", "--branch", "dev",
+		"--default-branch", "main", "--event", "push", "--workflow-path", ".github/workflows/ci.yml"]) == 0
+	assert json.loads(capsys.readouterr().out) == {"key": "", "reason": "not_default_branch_push"}
+
+
+def test_red_main_group_header_line_compose_and_validator() -> None:
+	group = "e" * 64
+	five = _p5_body()
+	six = _p5_body(cause=P5_CAUSE)
+	check = lambda body: heal.validate_heal_issue_body_routing(body, target_branch="main", integration_branch=None)  # noqa: E731
+	group_line = f"<!-- {heal.MARKER_PREFIX}red-main-group={group} -->"
+	with_group = _p5_body(cause=P5_CAUSE, red_main_group=group)
+	lines = with_group.split("\n")
+	assert lines[5] == f"<!-- {heal.MARKER_PREFIX}cause={P5_CAUSE} -->" and lines[6] == group_line
+	assert lines[:6] == six.split("\n")[:6] and lines[7:] == six.split("\n")[6:]
+	assert check(with_group) == ""
+	assert heal.parse_red_main_group_marker(with_group) == group
+	only_group = _p5_body(red_main_group=group)
+	assert only_group.split("\n")[5] == group_line and check(only_group) == ""
+	# Absent / invalid key: byte-identical body.
+	for value in (None, "", "E" * 64, "e" * 63):
+		assert _p5_body(cause=P5_CAUSE, red_main_group=value) == six, value
+		assert _p5_body(red_main_group=value) == five, value
+	# Only workflow_run sources carry the line.
+	non_run = heal.compose_issue_body(
+		payload=dict(_p1_payload(), source_kind="phase_failure"), diagnosis=DIAG_WORKFLOW_DEFECT, fp="1" * 64, gen=1, root="1" * 64,
+		classification="workflow-defect", target_branch="main", max_depth=3,
+		intake_run_url=f"https://github.com/{SELF_REPO}/actions/runs/1", run_summaries=[], red_main_group=group,
+	)
+	assert group_line not in non_run
+	# Duplicated, malformed or indented lines are rejected.
+	assert check("\n".join(lines[:7] + [group_line] + lines[7:])) == "marker"
+	for bad in ("E" * 64, "e" * 63, "e" * 65):
+		assert check("\n".join(lines[:6] + [f"<!-- {heal.MARKER_PREFIX}red-main-group={bad} -->"] + lines[7:])) == "marker", bad
+	assert check("\n".join(lines[:6] + [" " + group_line] + lines[7:])) == "marker"
+	assert check(with_group + "\n<!-- injected -->\n") == "marker"
+
+
+def test_red_main_grouping_switch_default_log_and_workflow_wiring() -> None:
+	script = INTAKE_SCRIPT.read_text(encoding="utf-8")
+	assert 'RED_MAIN_GROUPING_ENABLED="${WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED:-true}"' in script
+	assert "WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED default \"true\"" in script
+	# Computed after the cause key, before the budget decision.
+	assert script.index("\n_heal_cause_key ||") < script.index("\n_heal_red_main_group_key ||") < script.index('python3 "${HEAL_PY}" budget "${BUDGET_ARGS[@]}" >')
+	body = script.split("\n_heal_red_main_group_key()\n{", 1)[1].split("\n}\n", 1)[0]
+	assert "gh " not in body and "gh_retry" not in body and "curl" not in body
+	assert '"${PROVENANCE_RUNS}"' in body and '"${SUMMARIES_FILE}"' in body and "--default-branch \"${PROVENANCE_DEFAULT_BRANCH:-}\"" in body
+	assert 'log "red_main_group key= outcome=skipped reason=disabled"' in body
+	assert 'BUDGET_ARGS+=(--red-main-group "${RED_MAIN_GROUP_KEY}")' in script
+	assert 'log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=open_group_heal"' in script
+	assert 'log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=new reason=no_open_group_heal"' in script
+	assert 'log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=fingerprint_match"' in script
+	# Other duplicates, and escalate / budget caps, are never logged as a new issue.
+	assert 'log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=other_match"' in script
+	assert 'log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=skipped reason=budget_decision"' in script
+	assert 'elif [ "${red_main_decision_action}" = "open" ]; then\n\t\tlog "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=new reason=no_open_group_heal"' in script
+	# The outcome is logged from the final decision: after the re-issue lookup
+	# and scope recovery, which can rewrite DECISION_FILE.
+	outcome_log = script.index('log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=duplicate reason=open_group_heal"')
+	assert script.index("\n_heal_reissue_lookup\n") < outcome_log
+	assert script.index("\n_heal_scope_recovery_evaluate\n") < outcome_log < script.index('\ncase "${ACTION}" in\n\tduplicate)')
+	assert 'log "red_main_group key=${RED_MAIN_GROUP_KEY} outcome=new reason=scope_recovery"' in script
+	# Recovery strips the group argument and never replaces a group-matched issue.
+	recovery = script.split("\n_heal_scope_recovery_evaluate()\n{", 1)[1].split("\n}\n", 1)[0]
+	assert '!= "red_main_group" ] || return 0' in recovery
+	assert "\t\t\t--red-main-group)\n\t\t\t\trecovery_arg_index=$((recovery_arg_index + 2))" in recovery
+	# New red-main heals carry the marker only with the switch on.
+	assert '[ "${RED_MAIN_GROUPING_ENABLED}" = true ] && [ -n "${RED_MAIN_GROUP_KEY}" ]; then\n\t\tcause_args+=(--red-main-group "${RED_MAIN_GROUP_KEY}")' in script
+	workflow = INTAKE_WORKFLOW.read_text(encoding="utf-8")
+	intake_job, scan_job = workflow.split("\n  recovery-scan:\n", 1)
+	assert workflow.count(RED_MAIN_ENV_LINE) == 2
+	assert intake_job.split("\n  intake:\n", 1)[1].count(RED_MAIN_ENV_LINE) == 1
+	assert scan_job.count(RED_MAIN_ENV_LINE) == 1
+	# End to end: a non-CI release run is skipped with a reason; switch off logs disabled.
+	result, _state, _frozen = _run_p1_intake(_p1_state(), {"WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED": None})
+	assert re.search(r"WORKFLOW_HEAL red_main_group key= outcome=skipped reason=(not_default_branch_push|not_ci_workflow|no_verified_run)", result.stdout + result.stderr)
+	off, _state, _frozen = _run_p1_intake(_p1_state(), {"WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED": "false"})
+	assert "WORKFLOW_HEAL red_main_group key= outcome=skipped reason=disabled" in off.stdout + off.stderr

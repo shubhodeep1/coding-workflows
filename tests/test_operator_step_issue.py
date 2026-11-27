@@ -44,6 +44,11 @@ class FakeGitHub:
 		self.closed: list[int] = []
 		self.closed_issues: dict[int, dict] = {}
 		self.reopened: list[int] = []
+		# Daily observable tick (#10118): repository settings, PRs and workflow runs.
+		# "error" (or a missing PR / workflow) fails the call.
+		self.repo_settings: dict | str = "error"
+		self.pulls: dict[int, dict] = {}
+		self.workflow_runs: dict[str, list[dict]] = {}
 
 	def __call__(self, args: list[str], *, allow_existing_label: bool = False) -> str:
 		self.calls.append(args)
@@ -56,6 +61,20 @@ class FakeGitHub:
 			if status == "error":
 				raise writer.ApiError("compare failed: HTTP 404")
 			return status + "\n"
+		if args == ["api", f"repos/{REPO}"]:
+			if self.repo_settings == "error":
+				raise writer.ApiError("repo read failed: HTTP 403")
+			return json.dumps(self.repo_settings)
+		pull = re.fullmatch(rf"repos/{re.escape(REPO)}/pulls/([0-9]+)", args[1]) if len(args) == 2 and args[0] == "api" else None
+		if pull:
+			if int(pull.group(1)) not in self.pulls:
+				raise writer.ApiError("pull read failed: HTTP 404")
+			return json.dumps(self.pulls[int(pull.group(1))])
+		runs = re.fullmatch(rf"repos/{re.escape(REPO)}/actions/workflows/([A-Za-z0-9_.-]+)/runs\?status=success&per_page=1", args[1]) if len(args) == 2 and args[0] == "api" else None
+		if runs:
+			if runs.group(1) not in self.workflow_runs:
+				raise writer.ApiError("workflow runs read failed: HTTP 404")
+			return json.dumps({"total_count": len(self.workflow_runs[runs.group(1)]), "workflow_runs": self.workflow_runs[runs.group(1)]})
 		if args[:2] == ["api", "-X"] and args[2] == "POST" and args[3].endswith("/labels"):
 			self.labels_added.append((args[3], args[-1]))
 			return "{}"
@@ -1554,3 +1573,308 @@ def test_operator_step_resolve_holds_a_signed_entry_with_a_mangled_signature_pre
 	result = writer.resolve(REPO, BOT)
 	assert result["closed"] is False and result["unverified"] == 1 and fake.patches() == []
 	assert f"op=close issue={number} outcome=open reason=unverified_signed_entries" in capsys.readouterr().err
+
+
+# --- daily observable tick (pipeline-human-wait-elimination Phase 9, #10118) ---
+
+AUTO_MERGE_STEP = {"title": "Enable Allow auto-merge", "instructions": "Turn it on under Settings > General > Pull Requests."}
+CREDENTIAL_STEP = {"title": "Add the GH_PAT secret", "instructions": "gh secret set GH_PAT --repo o/r"}
+STABLE_PR_STEP = {"title": "Wait for the release", "instructions": "Done once stable contains #77."}
+CONDITIONAL_STEP = {"title": "Re-run clarification when needed",
+	"instructions": "Only when you want a new question round, run `/reclarify` on the issue."}
+HUMAN_STEP = {"title": "Ask the vendor for a quota bump", "instructions": "Email the vendor support desk."}
+
+
+def _api_reads(fake: FakeGitHub, fragment: str) -> list[list[str]]:
+	"""Condition-check reads only (repository settings, PRs, workflow runs) whose path holds `fragment`."""
+	return [args for args in fake.calls if len(args) == 2 and args[0] == "api" and fragment in args[1]
+		and (args[1] == f"repos/{REPO}" or "/pulls/" in args[1] or "/actions/workflows/" in args[1])]
+
+
+@pytest.fixture
+def daily(fake: FakeGitHub, monkeypatch: pytest.MonkeyPatch) -> FakeGitHub:
+	monkeypatch.delenv("OPERATOR_STEP_DAILY_TICK_ENABLED", raising=False)
+	monkeypatch.setattr(writer, "_now_iso", lambda: NOW)
+	return fake
+
+
+def test_operator_step_daily_tick_ticks_observable_steps_and_closes_the_tracker(
+		daily: FakeGitHub, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+	fake = daily
+	repo, base, stable, _ = _git_repo(tmp_path)
+	number = _tracker(fake)
+	_entry_comment(fake, number, 10, writer.render_entry("unblock-1", "auto-merge", [AUTO_MERGE_STEP]))
+	_entry_comment(fake, number, 11, writer.render_entry("unblock-2", "credential", [CREDENTIAL_STEP]))
+	_entry_comment(fake, number, 12, writer.render_entry("unblock-3", "release", [STABLE_PR_STEP, CONDITIONAL_STEP]))
+	# A sourced entry keeps the promote cycle's ancestor path.
+	_entry_comment(fake, number, 13, writer.render_entry("pr-5", "sourced", STEPS, base))
+	fake.repo_settings = {"allow_auto_merge": True}
+	fake.workflow_runs = {"review_autofix.yml": [], "internal-review.yml": [{"updated_at": "2026-10-05T00:00:00Z"}]}
+	fake.pulls = {77: {"merged_at": "2026-10-01T00:00:00Z", "merge_commit_sha": base}}
+	result = writer.tick(REPO, stable, str(repo), BOT, observable=True)
+	assert sorted(result["ticked"]) == ["pr-5", "unblock-1", "unblock-2", "unblock-3"] and result["skipped"] == {}
+	assert result["observed"] == [
+		{"key": "unblock-1", "reasons": ["allow_auto_merge"]},
+		{"key": "unblock-2", "reasons": ["credentials"]},
+		{"key": "unblock-3", "reasons": ["stable_release", "conditional_not_a_gate"]},
+	]
+	# Each check is read once; credentials stop at the first workflow with proof.
+	assert len(_api_reads(fake, "")) == 4
+	assert len(_api_reads(fake, "/actions/workflows/")) == 2 and len(_api_reads(fake, "/pulls/77")) == 1
+	ticked = next(c["body"] for c in fake.comments[number] if c["id"] > 13 and "key=unblock-3" in c["body"].split("\n", 1)[0])
+	lines = ticked.split("\n")
+	assert f"<!-- ai:operator-step:done stable={stable} -->" in lines and not any(line.startswith("- [ ]") for line in lines)
+	assert lines[-1].startswith("Done: the `stable` tag includes") and lines[-1].endswith("ticked by the daily operator-step tick.")
+	# The tracker is closed with the resolve close rules.
+	assert result["closed"] is True and fake.closed == [number]
+	patch = _issue_patches(fake, number)
+	assert len(patch) == 1 and "state=closed" in patch[0] and "state_reason=completed" in patch[0]
+	assert len([c for c in fake.comments[number] if c["body"].startswith(writer.AUTO_CLOSED_MARKER)]) == 1
+	err = capsys.readouterr().err
+	assert "OPERATOR_STEP_TICK key=unblock-1 outcome=ticked reason=allow_auto_merge" in err
+	assert "OPERATOR_STEP_TICK key=unblock-3 outcome=ticked reason=stable_release,conditional_not_a_gate" in err
+	assert f"OPERATOR_STEP_TICK key=pr-5 outcome=ticked stable={stable[:7]}" in err
+	assert f"OPERATOR_STEP_TICK tracker={number} outcome=closed reason=closed" in err
+	assert "OPERATOR_STEP_RESOLVE" not in err
+
+
+def test_operator_step_daily_tick_keeps_a_reopened_tracker_open(daily: FakeGitHub, tmp_path: Path,
+		capsys: pytest.CaptureFixture[str]) -> None:
+	repo, _, stable, _ = _git_repo(tmp_path)
+	number = _tracker(daily)
+	daily.issues[0]["state_reason"] = "reopened"
+	_entry_comment(daily, number, 10, writer.render_entry("unblock-4", "conditional", [CONDITIONAL_STEP]))
+	result = writer.tick(REPO, stable, str(repo), BOT, observable=True)
+	assert result["ticked"] == ["unblock-4"] and result["closed"] is False and _issue_patches(daily, number) == []
+	assert f"OPERATOR_STEP_TICK tracker={number} outcome=open reason=reopened" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(("steps", "setup", "outcome"), [
+	([HUMAN_STEP], {}, "unrecognised"),
+	([AUTO_MERGE_STEP, HUMAN_STEP], {"repo_settings": {"allow_auto_merge": True}}, "unrecognised"),
+	([{"title": "Enable Allow auto-merge and add DEPLOY_KEY", "instructions": ""}], {"repo_settings": {"allow_auto_merge": True}}, "unrecognised"),
+	([{"title": "Enable auto-merge", "instructions": "Also add the deploy secret."}], {"repo_settings": {"allow_auto_merge": True}}, "unrecognised"),
+	([{"title": "Set GH_PAT", "instructions": "Rotate GH_PAT before it expires."}], {"runs": "recent"}, "unrecognised"),
+	([{"title": "Add GH_PAT", "instructions": "A PAT with the repo scope."}], {"runs": "recent"}, "unrecognised"),
+	([{"title": "Disable auto-merge", "instructions": ""}], {"repo_settings": {"allow_auto_merge": True}}, "unrecognised"),
+	([AUTO_MERGE_STEP], {"repo_settings": {"allow_auto_merge": False}}, "not_met"),
+	([AUTO_MERGE_STEP], {"repo_settings": {}}, "not_met"),
+	([AUTO_MERGE_STEP], {"repo_settings": {"allow_auto_merge": None}}, "not_met"),
+	([AUTO_MERGE_STEP], {}, "check_failed"),
+	([CREDENTIAL_STEP], {"runs": "old"}, "not_met"),
+	([CREDENTIAL_STEP], {}, "check_failed"),
+	([CREDENTIAL_STEP], {"runs": "none"}, "not_met"),
+	([{"title": "Provide GH_PAT to the vendor", "instructions": ""}], {"runs": "recent"}, "unrecognised"),
+	([{"title": "Add GH_PAT", "instructions": "Set it in every consumer repo."}], {"runs": "recent"}, "unrecognised"),
+	([{"title": "Add GH_PAT", "instructions": "gh secret set GH_PAT --repo acme/consumer-app"}], {"runs": "recent"}, "unrecognised"),
+	([{"title": "Add GH_PAT", "instructions": "gh secret set GH_PAT -R=acme/other"}], {"runs": "recent"}, "unrecognised"),
+	([{"title": "Add GH_PAT", "instructions": "gh secret set GH_PAT --repo \"acme/consumer-app\""}], {"runs": "recent"}, "unrecognised"),
+	([{"title": "Add GH_PAT", "instructions": "gh secret set GH_PAT -R 'acme/other'"}], {"runs": "recent"}, "unrecognised"),
+	([{"title": "Add GH_PAT", "instructions": "gh secret set GH_PAT --org acme --repos app1"}], {"runs": "recent"}, "unrecognised"),
+	([{"title": "Add GH_PAT", "instructions": "gh secret set GH_PAT --env production"}], {"runs": "recent"}, "unrecognised"),
+	([{"title": "Add GH_PAT", "instructions": "gh secret set GH_PAT --repo <owner>/<consumer-app>"}], {"runs": "recent"}, "unrecognised"),
+	([{"title": "Add GH_PAT", "instructions": "gh secret set GH_PAT --repo $TARGET"}], {"runs": "recent"}, "unrecognised"),
+	([{"title": "Add GH_PAT", "instructions": "gh secret set GH_PAT --repo `acme/app`"}], {"runs": "recent"}, "unrecognised"),
+	([{"title": "Add GH_PAT", "instructions": "gh secret set GH_PAT --repo \"o/r\"-other"}], {"runs": "recent"}, "unrecognised"),
+	([{"title": "Add GH_PAT", "instructions": "gh secret set GH_PAT --repo o/r -R acme/other"}], {"runs": "recent"}, "unrecognised"),
+	([{"title": "Add GH_PAT", "instructions": "gh secret set GH_PAT --app dependabot"}], {"runs": "recent"}, "unrecognised"),
+	([{"title": "Add GH_PAT", "instructions": "gh secret set GH_PAT -a codespaces"}], {"runs": "recent"}, "unrecognised"),
+	([{"title": "Add GH_PAT", "instructions": "gh secret set GH_PAT --user"}], {"runs": "recent"}, "unrecognised"),
+	([{"title": "Add GH_PAT", "instructions": "gh secret set GH_PAT -Racme/other"}], {"runs": "recent"}, "unrecognised"),
+	# security-audit.yml falls back to the job token: its run does not prove GH_PAT.
+	([CREDENTIAL_STEP], {"runs": "audit_only"}, "not_met"),
+	([{"title": "Set GH_PAT", "instructions": "Paste it on the consumer portal."}], {"runs": "recent"}, "unrecognised"),
+	([{"title": "Set GH_PAT in the vendor's portal", "instructions": ""}], {"runs": "recent"}, "unrecognised"),
+	([{"title": "Add OPENROUTER_API_KEY", "instructions": "Paste it at the consumer support desk."}], {"runs": "recent"}, "unrecognised"),
+	([STABLE_PR_STEP], {"pull": "side"}, "not_met"),
+	([STABLE_PR_STEP], {"pull": "open"}, "not_met"),
+	([STABLE_PR_STEP], {}, "check_failed"),
+	([{"title": "Wait for the release", "instructions": "Done once stable includes " + ", ".join(f"#{n}" for n in range(1, 12)) + "."}],
+		{"pull": "many"}, "deferred"),
+])
+def test_operator_step_daily_tick_never_ticks_unrecognised_or_unmet_steps(
+		daily: FakeGitHub, tmp_path: Path, capsys: pytest.CaptureFixture[str], steps: list[dict], setup: dict, outcome: str) -> None:
+	fake = daily
+	repo, base, stable, side = _git_repo(tmp_path)
+	number = _tracker(fake)
+	_entry_comment(fake, number, 10, writer.render_entry("unblock-1", "entry", steps))
+	if "repo_settings" in setup:
+		fake.repo_settings = setup["repo_settings"]
+	if setup.get("runs") == "none":
+		fake.workflow_runs = {name: [] for name in writer.OBSERVABLE_CREDENTIAL_WORKFLOWS}
+	elif setup.get("runs") == "audit_only":
+		fake.workflow_runs = {name: [] for name in writer.OBSERVABLE_CREDENTIAL_WORKFLOWS}
+		fake.workflow_runs["security-audit.yml"] = [{"updated_at": "2026-10-05T00:00:00Z"}]
+	elif setup.get("runs"):
+		stamp = "2026-10-05T00:00:00Z" if setup["runs"] == "recent" else "2026-09-30T00:00:00Z"
+		fake.workflow_runs = {name: [{"updated_at": stamp}] for name in writer.OBSERVABLE_CREDENTIAL_WORKFLOWS}
+	if setup.get("pull") == "side":
+		fake.pulls = {77: {"merged_at": "2026-10-01T00:00:00Z", "merge_commit_sha": side}}
+	elif setup.get("pull") == "open":
+		fake.pulls = {77: {"merged_at": None, "merge_commit_sha": base}}
+	elif setup.get("pull") == "many":
+		fake.pulls = {n: {"merged_at": "2026-10-01T00:00:00Z", "merge_commit_sha": base} for n in range(1, 12)}
+	result = writer.tick(REPO, stable, str(repo), BOT, observable=True)
+	assert result["ticked"] == [] and result["observed"] == [] and result["skipped"] == {outcome: 1}
+	assert _posts(fake, number) == [] and fake.patches() == [] and result["closed"] is False
+	if outcome == "unrecognised":
+		# Classification happens before any check: no settings, runs or PR read.
+		assert len(_api_reads(fake, "")) == 0
+	if outcome == "deferred":
+		assert len(_api_reads(fake, "/pulls/")) == writer.MAX_OBSERVABLE_PR_READS
+	err = capsys.readouterr().err
+	assert f"OPERATOR_STEP_TICK key=unblock-1 outcome={outcome} reason=" in err
+	assert f"OPERATOR_STEP_TICK tracker={number} outcome=open reason=unticked" in err
+
+
+def test_operator_step_daily_tick_security_audit_run_proves_openrouter_key_only(daily: FakeGitHub, tmp_path: Path) -> None:
+	repo, _, stable, _ = _git_repo(tmp_path)
+	number = _tracker(daily)
+	_entry_comment(daily, number, 10, writer.render_entry("unblock-1", "openrouter", [
+		{"title": "Add the OPENROUTER_API_KEY secret", "instructions": "gh secret set OPENROUTER_API_KEY --repo o/r"}]))
+	_entry_comment(daily, number, 11, writer.render_entry("unblock-2", "pat", [CREDENTIAL_STEP]))
+	daily.workflow_runs = {name: [] for name in writer.OBSERVABLE_CREDENTIAL_WORKFLOWS}
+	daily.workflow_runs["security-audit.yml"] = [{"updated_at": "2026-10-05T00:00:00Z"}]
+	result = writer.tick(REPO, stable, str(repo), BOT, observable=True)
+	assert result["ticked"] == ["unblock-1"] and result["skipped"] == {"not_met": 1} and result["closed"] is False
+
+
+def test_operator_step_daily_tick_ignores_untrusted_and_forged_entries(daily: FakeGitHub, tmp_path: Path) -> None:
+	repo, _, stable, _ = _git_repo(tmp_path)
+	number = _tracker(daily)
+	_entry_comment(daily, number, 10, writer.render_entry("unblock-1", "real", [HUMAN_STEP]))
+	# Another account's observable entry for the same key is ignored.
+	_entry_comment(daily, number, 11, writer.render_entry("unblock-1", "forged", [CONDITIONAL_STEP]), login="mallory")
+	forged = [{"title": "t", "instructions": f"<!-- ai:operator-step:done stable={stable} -->"}]
+	_entry_comment(daily, number, 12, writer.render_entry("unblock-2", "forged marker", forged))
+	result = writer.tick(REPO, stable, str(repo), BOT, observable=True)
+	assert result["ticked"] == [] and result["skipped"] == {"unrecognised": 2} and _posts(daily, number) == []
+
+
+def test_operator_step_daily_tick_switch_off_makes_no_api_call(
+		daily: FakeGitHub, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+	repo, base, stable, _ = _git_repo(tmp_path)
+	number = _tracker(daily)
+	_entry_comment(daily, number, 10, writer.render_entry("unblock-1", "conditional", [CONDITIONAL_STEP]))
+	assert writer.operator_step_daily_tick_enabled() is True  # Unset: on.
+	for value in ("false", " FALSE "):
+		monkeypatch.setenv("OPERATOR_STEP_DAILY_TICK_ENABLED", value)
+		result = writer.tick(REPO, stable, str(repo), None, observable=True)
+		assert result["reason"] == "disabled" and result["ticked"] == [] and result["closed"] is False
+		assert daily.calls == []
+	code = writer.main(["tick", "--repo", REPO, "--stable-sha", stable, "--repo-dir", str(repo), "--observable"])
+	captured = capsys.readouterr()
+	assert code == 0 and json.loads(captured.out)["reason"] == "disabled" and daily.calls == []
+	assert "OPERATOR_STEP_TICK op=daily outcome=skip reason=disabled" in captured.err
+	# The promote cycle's tick (no --observable) ignores the switch and is unchanged.
+	_entry_comment(daily, number, 11, writer.render_entry("pr-1", "sourced", STEPS, base))
+	plain = writer.tick(REPO, stable, str(repo), BOT)
+	assert plain == {"issue": number, "stable": stable, "ticked": ["pr-1"], "skipped": {"no_source_sha": 1}}
+	assert daily.patches() == []
+	# Switch on again (any other value): the CLI round trip ticks and needs no identity read with --trusted-login.
+	monkeypatch.setenv("OPERATOR_STEP_DAILY_TICK_ENABLED", "true")
+	daily.calls.clear()
+	code = writer.main(["tick", "--repo", REPO, "--stable-sha", stable, "--repo-dir", str(repo), "--observable",
+		"--trusted-login", BOT])
+	out = json.loads(capsys.readouterr().out)
+	assert code == 0 and out["ticked"] == ["unblock-1"] and out["closed"] is True
+	assert not any(args[:2] == ["api", "user"] for args in daily.calls)
+
+
+def _workflow_step(text: str, job: str, name: str, following_job: str) -> tuple[list[str | None], str]:
+	body = text.split(f"\n  {job}:\n", 1)[1].split(f"\n  {following_job}:\n", 1)[0]
+	blocks = body.split("\n      - ")[1:]
+	names = [block.split("\n", 1)[0][len("name: "):].strip() if block.startswith("name: ") else None for block in blocks]
+	return names, blocks[names.index(name)]
+
+
+def test_workflow_log_analysis_runs_the_operator_step_tick_daily_only() -> None:
+	# Plain-text parse: PyYAML is not installed in every test container.
+	text = (ROOT / ".github" / "workflows" / "workflow-log-analysis.yml").read_text(encoding="utf-8")
+	jobs = re.findall(r"^  ([A-Za-z0-9_-]+):$", text.split("\njobs:\n", 1)[1], re.M)
+	assert jobs == ["collect-logs", "weekly-retro", "analyze-commit-notify", "deep-audit", "api-redundancy", "deliver-report"]
+	names, block = _workflow_step(text, "collect-logs", "Tick observable operator steps", "weekly-retro")
+	assert names.index("Upload daily PAT consumer ranking") + 1 == names.index("Tick observable operator steps")
+	assert names.count("Tick observable operator steps") == 1
+	assert "operator_step_daily_tick.sh" not in text.split("\n  weekly-retro:\n", 1)[1]
+	assert re.search(r"^        if: \$\{\{ !cancelled\(\) && github\.event_name == 'schedule' && github\.event\.schedule == '0 6 \* \* \*' \}\}$", block, re.M)
+	assert re.search(r"^        continue-on-error: true$", block, re.M)
+	assert re.search(r"^        timeout-minutes: 10$", block, re.M)
+	env_block = re.search(r"^        env:\n((?:          .*\n)+)", block, re.M)
+	assert env_block
+	env = dict(line.strip().split(": ", 1) for line in env_block.group(1).splitlines())
+	assert env == {
+		"OPERATOR_STEP_DAILY_TICK_ENABLED": "${{ vars.OPERATOR_STEP_DAILY_TICK_ENABLED || 'true' }}",
+		"GH_TOKEN": "${{ secrets.GH_PAT }}",
+		"AI_COMMENT_SIGNING_SECRET": "${{ secrets.AI_COMMENT_SIGNING_SECRET }}",
+		"AI_COMMENT_JOB_TOKEN": "${{ github.token }}",
+	}
+	assert re.search(r"^        run: bash scripts/operator_step_daily_tick\.sh$", block, re.M)
+	assert "trusted-login" not in block and "github-actions[bot]" not in block
+	# Job permissions stay least-privilege.
+	collect = text.split("\n  collect-logs:\n", 1)[1].split("\n    steps:\n", 1)[0]
+	assert "    permissions:\n      contents: read\n      actions: read\n" in collect
+	# The step script defaults its switch and helper itself (CLAUDE.md section 8).
+	script = (ROOT / "scripts" / "operator_step_daily_tick.sh").read_text(encoding="utf-8")
+	assert '"${OPERATOR_STEP_DAILY_TICK_ENABLED:-true}"' in script
+	assert '"${OPERATOR_STEP_DAILY_TICK_HELPER:-${SCRIPT_DIR}/operator_step_issue.py}"' in script
+
+
+def _run_daily_script(tmp_path: Path, env_extra: dict[str, str], helper_rc: int = 0,
+		stable_sha: str = "a" * 40) -> tuple[subprocess.CompletedProcess, str, str]:
+	import os
+	import shutil
+	stubs = tmp_path / "stubs"
+	stubs.mkdir(exist_ok=True)
+	log = tmp_path / "calls.log"
+	log.write_text("", encoding="utf-8")
+	(stubs / "git").write_text(
+		"#!/bin/sh\n"
+		f"echo \"git $*\" >> '{log}'\n"
+		"case \"$*\" in\n"
+		"  *is-shallow-repository*) echo true ;;\n"
+		f"  *refs/tags/stable*commit*) echo '{stable_sha}' ;;\n"
+		"esac\n"
+		"exit 0\n", encoding="utf-8")
+	(stubs / "python3").write_text(f"#!/bin/sh\necho \"python3 $*\" >> '{log}'\nexit {helper_rc}\n", encoding="utf-8")
+	for stub in ("git", "python3"):
+		(stubs / stub).chmod(0o755)
+	helper = tmp_path / "operator_step_issue.py"
+	helper.write_text("# stub helper\n", encoding="utf-8")
+	env = {key: value for key, value in os.environ.items() if not key.startswith("OPERATOR_STEP_")}
+	env.update({"PATH": f"{stubs}{os.pathsep}{env.get('PATH', '')}", "GH_TOKEN": "pat", "GITHUB_REPOSITORY": REPO,
+		"OPERATOR_STEP_DAILY_TICK_HELPER": str(helper)})
+	env.update(env_extra)
+	proc = subprocess.run([shutil.which("bash") or "bash", str(ROOT / "scripts" / "operator_step_daily_tick.sh")],
+		cwd=tmp_path, env=env, capture_output=True, text=True, check=False)
+	return proc, log.read_text(encoding="utf-8"), str(helper)
+
+
+def test_operator_step_daily_tick_step_script_skips_and_fails_open(tmp_path: Path) -> None:
+	# Switch off: no git and no helper call.
+	proc, calls, _ = _run_daily_script(tmp_path, {"OPERATOR_STEP_DAILY_TICK_ENABLED": "false"})
+	assert proc.returncode == 0 and calls == ""
+	assert "OPERATOR_STEP_TICK op=daily outcome=skip reason=disabled" in proc.stdout
+	# No PAT: skip.
+	proc, calls, _ = _run_daily_script(tmp_path, {"GH_TOKEN": ""})
+	assert proc.returncode == 0 and calls == "" and "reason=no_pat" in proc.stdout
+	# Missing helper: skip.
+	proc, calls, _ = _run_daily_script(tmp_path, {"OPERATOR_STEP_DAILY_TICK_HELPER": str(tmp_path / "absent.py")})
+	assert proc.returncode == 0 and calls == "" and "reason=helper_missing" in proc.stdout
+	# Symlinked helper: skip.
+	link = tmp_path / "link.py"
+	link.symlink_to(tmp_path / "operator_step_issue.py")
+	proc, calls, _ = _run_daily_script(tmp_path, {"OPERATOR_STEP_DAILY_TICK_HELPER": str(link)})
+	assert proc.returncode == 0 and calls == "" and "reason=helper_missing" in proc.stdout
+	# No stable tag: skip after the fetch, no helper call.
+	proc, calls, _ = _run_daily_script(tmp_path, {}, stable_sha="")
+	assert proc.returncode == 0 and "reason=no_stable_tag" in proc.stdout and "python3" not in calls
+	# Happy path (switch unset: on): history-only fetch, then the observable tick on the tag commit.
+	proc, calls, helper = _run_daily_script(tmp_path, {})
+	assert proc.returncode == 0 and "::warning::" not in proc.stdout
+	assert "git fetch --quiet --no-tags --filter=tree:0 --unshallow origin +refs/tags/stable:refs/tags/stable" in calls
+	assert (f"python3 {helper} tick --repo {REPO} --stable-sha {'a' * 40} --repo-dir {tmp_path} --observable") in calls
+	# Helper failure: a warning, still exit 0.
+	proc, _, _ = _run_daily_script(tmp_path, {}, helper_rc=2)
+	assert proc.returncode == 0
+	assert "::warning::OPERATOR_STEP_TICK op=daily outcome=error reason=helper_exit rc=2" in proc.stdout

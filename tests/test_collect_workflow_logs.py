@@ -2952,6 +2952,68 @@ def test_pat_budget_daily_ranking_is_hourly_deduped_and_discloses_gaps():
 	assert "No measured job-end deltas" in missing_report
 
 
+def test_pat_budget_line_parses_call_counter_keys():
+	"""Issue #9887: old and new GH_PAT_BUDGET end lines parse; jobs rank by calls_in_job."""
+	old = "GH_PAT_BUDGET phase=end workflow=clarify job=clarify remaining=10 reset=500 used_in_job=4"
+	new = (old + " calls_in_job=12 paginated_in_job=2 calls_by_token=pat:10,github_token:1,other:1")
+	unknown = (old + " calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown")
+	old_match = collector.PAT_BUDGET_LINE.fullmatch(old)
+	assert old_match is not None and old_match.group(4) == "4" and old_match.group(5) is None
+	new_match = collector.PAT_BUDGET_LINE.fullmatch(new)
+	assert new_match is not None
+	assert new_match.group(2, 3, 4) == ("clarify", "clarify", "4")
+	assert new_match.group(5, 6, 7) == ("12", "2", "pat:10,github_token:1,other:1")
+	assert collector.PAT_BUDGET_LINE.fullmatch(unknown).group(5) == "unknown"
+	release = ("2026-10-05T10:00:00Z GH_PAT_BUDGET phase=end workflow=test-and-mark-stable job=e2e-smoke-test "
+		"remaining=unknown reset=unknown used_in_job=unknown calls_in_job=3 paginated_in_job=0 "
+		"calls_by_token=pat:3,github_token:0,other:0")
+	assert collector.PAT_BUDGET_LINE.fullmatch(release).group(3) == "e2e-smoke-test"
+	assert collector.PAT_BUDGET_WORKFLOWS["test-and-mark-stable.yml"] == "test-and-mark-stable"
+	# Injected text after the keys never matches.
+	assert collector.PAT_BUDGET_LINE.fullmatch(new + " extra=1") is None
+	assert collector.PAT_BUDGET_LINE.fullmatch(old + " calls_in_job=1 paginated_in_job=0 calls_by_token=Pat:1") is None
+
+	day = datetime(2026, 10, 5, tzinfo=timezone.utc)
+	texts = {
+		1: "2026-10-05T10:20:00Z " + new + "\n",
+		2: ("2026-10-05T11:20:00Z GH_PAT_BUDGET phase=end workflow=clarify job=clarify remaining=9 reset=500 "
+			"used_in_job=unknown calls_in_job=5 paginated_in_job=1 calls_by_token=pat:4,github_token:0,other:1\n"),
+		3: ("2026-10-05T10:30:00Z GH_PAT_BUDGET phase=end workflow=review_autofix job=gate remaining=4 reset=500 "
+			"used_in_job=12 calls_in_job=30 paginated_in_job=0 calls_by_token=pat:20,github_token:10,other:0\n"),
+		4: "2026-10-05T10:40:00Z GH_PAT_BUDGET phase=end workflow=review_autofix job=gate remaining=2 reset=500 used_in_job=2\n",
+		5: release + "\n",
+	}
+	paths = {1: "internal-clarify.yml", 2: "internal-clarify.yml", 3: "internal-review.yml",
+		4: "internal-review.yml", 5: "test-and-mark-stable.yml"}
+	runs = [
+		{"repository": "owner/repo", "run_id": run_id, "run_attempt": 1,
+			"workflow_path": f".github/workflows/{paths[run_id]}",
+			"created_at": "2026-10-05T09:00:00Z", "updated_at": "2026-10-05T11:49:00Z"}
+		for run_id in texts
+	]
+
+	def archive_for(run_id: int) -> bytes:
+		buffer = io.BytesIO()
+		with zipfile.ZipFile(buffer, mode="w") as zipped:
+			zipped.writestr("job/step.log", texts[run_id])
+		return buffer.getvalue()
+
+	with patch.object(collector, "_fetch_run_log_archive", side_effect=lambda repo, run_id, **kwargs: archive_for(run_id)):
+		report = collector.build_pat_budget_report(runs, day, "test-token", None)
+	# The hourly used_in_job table keeps its shape (runs 3 and 4 share the hour).
+	assert "| 2026-10-05 10:00 | 1 | review_autofix / gate | 14 | 2 |" in report
+	assert "### Top consumers by calls_in_job (UTC 2026-10-05)" in report
+	assert "Coverage: 1 job-end lines without calls_in_job." in report
+	assert "| 1 | review_autofix / gate | 30 | 0 | 20 | 10 | 0 | 1 |" in report
+	assert "| 2 | clarify / clarify | 17 | 3 | 14 | 1 | 2 | 2 |" in report
+	assert "| 3 | test-and-mark-stable / e2e-smoke-test | 3 | 0 | 3 | 0 | 0 | 1 |" in report
+	assert report.index("| 1 | review_autofix / gate | 30 |") < report.index("| 2 | clarify / clarify | 17 |")
+
+	with patch.object(collector, "_fetch_run_log_archive", side_effect=lambda repo, run_id, **kwargs: archive_for(4)):
+		legacy_only = collector.build_pat_budget_report(runs[3:4], day, "test-token", None)
+	assert "| No jobs reported calls_in_job | | | | | | | |" in legacy_only
+
+
 def test_pat_budget_workflow_listing_marks_api_ceiling_incomplete():
 	day = datetime(2026, 10, 5, tzinfo=timezone.utc)
 	with patch.object(collector, "gh_api_json", return_value=(
@@ -3713,6 +3775,72 @@ def test_build_report_omits_coverage_when_not_supplied() -> None:
 	with_coverage = collector.build_report(["owner/repo"], [], [], coverage=supplied)
 	assert with_coverage["coverage"] == supplied
 	assert set(with_coverage) - set(report) == {"coverage"}
+
+
+# --- REVIEWER_FINDINGS lines (Refs #10058) ---
+
+_RF_COUNTED = "REVIEWER_FINDINGS pr=42 round=3 reviewer=google/gemini-4-pro raised=2 lone=1 lone_rejected=1 lone_accepted=0 shared=1"
+_RF_UNAVAILABLE = "REVIEWER_FINDINGS pr=unknown round=unknown reviewer=x-ai_grok-5 outcome=unavailable reason=flagged_by_missing"
+
+
+def test_reviewer_findings_parsed_from_full_logs():
+	full_logs = [
+		{"step_name": "job", "content": f"2026-04-10T12:00:00.1234567Z {_RF_COUNTED}\n{_RF_UNAVAILABLE}\n"},
+		# Step-level copy of the same line (different timestamp) counts once.
+		{"step_name": "step", "content": f"2026-04-10T12:00:00.9999999Z {_RF_COUNTED}\n"},
+		{"step_name": "noise", "content": "\n".join([
+			"echo 'REVIEWER_FINDINGS pr=1 round=1 reviewer=a raised=1 lone=1 lone_rejected=0 lone_accepted=0 shared=0'",
+			"::warning::REVIEWER_FINDINGS outcome=failed reason=RuntimeError",
+			"REVIEWER_FINDINGS pr=1 round=1 reviewer=bad|name raised=1 lone=1 lone_rejected=0 lone_accepted=0 shared=0",
+			"REVIEWER_FINDINGS pr=1 round=1 reviewer=a raised=12345678 lone=1 lone_rejected=0 lone_accepted=0 shared=0",
+			"REVIEWER_FINDINGS pr=1 round=1 reviewer=a outcome=unavailable reason=Bad",
+			"REVIEWER_FINDINGS pr=12345678901 round=1 reviewer=a raised=1 lone=1 lone_rejected=0 lone_accepted=0 shared=0",
+		])},
+	]
+	entries = collector._reviewer_findings_from_full_logs(full_logs)
+	assert entries == [
+		{"pr": 42, "round": "3", "reviewer": "google/gemini-4-pro", "outcome": "counted", "raised": 2, "lone": 1, "lone_rejected": 1, "lone_accepted": 0, "shared": 1},
+		{"pr": None, "round": "unknown", "reviewer": "x-ai_grok-5", "outcome": "unavailable", "reason": "flagged_by_missing"},
+	]
+	assert collector._reviewer_findings_from_full_logs(None) == []
+	many = [{"step_name": "s", "content": "\n".join(
+		f"REVIEWER_FINDINGS pr=1 round={n} reviewer=a raised=1 lone=1 lone_rejected=0 lone_accepted=0 shared=0" for n in range(100)
+	)}]
+	assert len(collector._reviewer_findings_from_full_logs(many)) == collector.REVIEWER_FINDINGS_MAX_PER_RUN
+
+	trusted = {"origin_trust": "trusted"}
+	collector._apply_reviewer_findings_from_full_logs(trusted, full_logs)
+	assert trusted["reviewer_findings"] == entries
+	fork = {"origin_trust": "fork", "reviewer_findings": [{"stale": True}]}
+	collector._apply_reviewer_findings_from_full_logs(fork, full_logs)
+	assert "reviewer_findings" not in fork
+	quiet = {"origin_trust": "trusted"}
+	collector._apply_reviewer_findings_from_full_logs(quiet, [{"step_name": "s", "content": "nothing\n"}])
+	assert "reviewer_findings" not in quiet
+	row = {"origin_trust": "fork", "reviewer_findings": entries}
+	assert collector._apply_untrusted_origin_exclusion(row) is True
+	assert "reviewer_findings" not in row
+	assert collector._cached_reviewer_findings({"reviewer_findings": entries}) == entries
+	assert collector._cached_reviewer_findings({"reviewer_findings": "x"}) is None
+	assert collector._cached_reviewer_findings(None) is None
+
+
+def test_main_reviewer_findings_on_trusted_run_only():
+	log_text = f"2026-04-10T12:00:00.0000000Z {_RF_COUNTED}\n"
+	rc, report, _fetched, _stderr = _run_main_with_runs(
+		[_api_run(3, "pull_request", "owner/repo")], log_text_by_run={3: log_text},
+	)
+	assert rc == 0
+	assert report["runs"][0]["reviewer_findings"][0]["reviewer"] == "google/gemini-4-pro"
+	rc, report, fetched, _stderr = _run_main_with_runs(
+		[_api_run(1, "pull_request", "attacker/repo")], log_text_by_run={1: log_text},
+	)
+	assert rc == 0
+	assert fetched == []
+	assert "reviewer_findings" not in report["runs"][0]
+	rc, report, _fetched, _stderr = _run_main_with_runs([_api_run(3, "pull_request", "owner/repo")])
+	assert rc == 0
+	assert "reviewer_findings" not in report["runs"][0]
 
 
 def main() -> int:
