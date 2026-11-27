@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: a README bullet under \"Operator-step auto-resolve\"\n  expected_change_site: README.md\n  confidence=[4]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The PR description requests a README bullet under \"Operator-step auto-resolve\", but the actual diff adds the bullet under the \"The unattended-pipeline stuck-states project\" section instead of creating or finding a section titled \"Operator-step auto-resolve\". (Severity NIT. Rejected by anthropic_claude-sonnet-5_5, minimax_minimax-m3 and z-ai_glm-5_3-flash, who place the bullet at README.md:4225-4231 / README.md:4228 inside the Operator-step auto-resolve section.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP:\n  Requirement: a README bullet under \"Operator-step auto-resolve\"\n  Expected change site: README.md\n  Evidence of absence: The PR description requests a README bullet under \"Operator-step auto-resolve\", but the actual diff adds the bullet under the \"The unattended-pipeline stuck-states project\" section instead of creating or finding a section titled \"Operator-step auto-resolve\".\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "130c188356355721936df1e7c023d4b980f2965e02788f8083b1987dd3a33cb3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10102,
+    "run_id": "45958184933",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45958184933",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127074626_63f2305f1d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10102,
+    "run_id": "45958184933"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-27T07:46:26Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
