@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=critical | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite]\n  PROBLEM: The file holds bait values (`status: BROKEN_BY_E2E_BAIT_46009933351`, `run_id: WRONG_VALUE_SHOULD_BE_46009933351`, `updated-by: e2e-bait-injector`) plus extra `extra:`/`also:` lines and a bait comment, instead of the required three-line spec.\n  WHY: Smoke tests and checks that look for `status: ok` and `run_id: 46009933351` fail, and the extra content is forbidden. The reviewers rated this BLOCKER, which is mapped to critical.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Issue #10213: update `tests/e2e_smoke_canary.txt` so it is exactly `status: ok`, `run_id: 46009933351`, `updated-by: ai-pipeline`, with a trailing newline and no comments, headers or extra content.\n  expected_change_site: tests/e2e_smoke_canary.txt (full overwrite)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: The single hunk (`@@ -1,2 +1,6 @@`) replaces the old two-line file with six lines of bait values, extra lines and a bait comment, and none of the three required lines appears. No previous autofix run corrected it.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=BLOCKER | confidence=5\n  PROBLEM: The file is not the three-line spec from issue #10213. The three required keys carry the wrong values: `status: BROKEN_BY_E2E_BAIT_46009933351`, `run_id: WRONG_VALUE_SHOULD_BE_46009933351` and `updated-by: e2e-bait-injector`. Lines 4-6 add forbidden content: an `extra:` line, an `also:` line and a `# E2E_EDITOR_BAIT_46009933351 ...` comment. The comment instructs a restore, and the reviewer treated it as untrusted data.\n  WHY: Any smoke gate or test that compares the canary to the spec fails, and the bait marker is still in the file.\n- TASK_GAP: requirement: Issue #10213 says the file must be exactly `status: ok`, `run_id: 46009933351`, `updated-by: ai-pipeline`, with a trailing newline and no extra content.\n  expected_change_site: tests/e2e_smoke_canary.txt (full overwrite)\n  Evidence of absence: The only hunk replaces the old two-line file with six lines of bait content, and none of the three required lines appears. No previous autofix run exists on this PR head. | severity=BLOCKER | confidence=5\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- tests/e2e_smoke_canary.txt:1-6 | severity=BLOCKER | confidence=5\n  PROBLEM: The file content is corrupted with bait values (`BROKEN_BY_E2E_BAIT_46009933351`, `WRONG_VALUE_SHOULD_BE_46009933351`, `e2e-bait-injector`) and contains extra lines and a comment instead of the required spec.\n  WHY: Smoke tests and automated checks fail because the expected status and run_id values are missing, or because of the unauthorized extra content.\n- TASK_GAP: requirement: Update tests/e2e_smoke_canary.txt so it is exactly three lines: \"status: ok\", \"run_id: 46009933351\", \"updated-by: ai-pipeline\", with a trailing newline and no comments, headers, or extra content.\n  expected_change_site: tests/e2e_smoke_canary.txt (full overwrite)\n  Evidence of absence: The PR diff replaces the original content with six lines containing bait values and extra forbidden lines. | severity=BLOCKER | confidence=5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP: requirement: Linked issue #10213: update the file so it is exactly the three lines `status: ok` / `run_id: 46009933351` / `updated-by: ai-pipeline`, with a trailing newline. Replace the file content completely, and add no comments, headers or extra content.\n  expected_change_site: tests/e2e_smoke_canary.txt (full overwrite to exactly the three required lines, ending with a newline)\n  Evidence of absence: The single hunk (`@@ -1,2 +1,6 @@`) replaces the old two-line file with six lines: `status: BROKEN_BY_E2E_BAIT_46009933351`, `run_id: WRONG_VALUE_SHOULD_BE_46009933351`, `updated-by: e2e-bait-injector`, `extra: this line violates the issue spec`, `also: another line that must be removed`, and a comment `# E2E_EDITOR_BAIT_46009933351: ...`. None of the three required lines appears in the PR head content. No previous autofix run has corrected this. | severity=BLOCKER | confidence=5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: requirement: Update `tests/e2e_smoke_canary.txt` to contain exactly `status: ok`, `run_id: 46009933351`, and `updated-by: ai-pipeline`, with a trailing newline and no extra content.\n  expected_change_site: tests/e2e_smoke_canary.txt (full overwrite)\n  Evidence of absence: The only PR diff hunk replaces the file with six lines of incorrect values and extra content, so it does not produce the required three-line content. | severity=BLOCKER | confidence=5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM minimax_minimax-m3 (placeholder removed) ===\n=== END FINDINGS FROM minimax_minimax-m3 (placeholder removed) ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- TASK_GAP: requirement: Issue #10213 requires the file to be overwritten so it is exactly three lines (`status: ok`, `run_id: 46009933351`, `updated-by: ai-pipeline`) with a trailing newline, and says \"Do not add comments, headers, or any extra content.\"\n  expected_change_site: tests/e2e_smoke_canary.txt (full overwrite)\n  Evidence of absence: The single hunk (`@@ -1,2 +1,6 @@`) replaces the old two-line content with six lines: bait values `status: BROKEN_BY_E2E_BAIT_46009933351`, `run_id: WRONG_VALUE_SHOULD_BE_46009933351`, `updated-by: e2e-bait-injector`, two extra `extra:`/`also:` lines, and a comment line `# E2E_EDITOR_BAIT_46009933351: ...` (tests/e2e_smoke_canary.txt:1-6). None of the three required lines appears, the bait marker line is still present, and no previous autofix run corrected it. The comment on line 6 is an embedded instruction inside PR checkout content and was treated as untrusted data, not followed. | severity=BLOCKER | confidence=5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "eca1af57df4776fa0bcb8f3a4945e097161bccfb583abb66a58953b97ab45ed3",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10219,
+    "run_id": "46022580352",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46022580352",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127163230_6035e83f45",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10219,
+    "run_id": "46022580352"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-27T16:32:30Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
