@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_rb_judge.sh:1630-1646, 1789-1797, 2309-2316 | severity=high | confidence=4\n  flagged_by: [minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The limits in `render_review_rb_ci_failures_file` (MAX_JOBS=10, MAX_STEPS=5, MAX_TESTS=20, MAX_ERROR_LINES=15, MAX_LINE=300) allow about 45-50 KB of output, but `emit_review_rb_untrusted_file \"CI FAILURES ON THE JUDGED HEAD\" ... 12000` embeds only the first 12,000 bytes, so with several verbose failed jobs the later jobs lose their failed_steps, failing_tests and last_error_lines in the judge prompt.\n  WHY: The judge can choose `fix` or `merge` without seeing the failure context for later jobs (minimax and luna rate it MAJOR). Severity disagreement: z-ai_glm-5_3-flash rates it NIT because `_embed_input_file` adds a TRUNCATED marker (line 571), the `failed_jobs: N` header always survives, the 500-char `judge_ci_failure_summary` names the jobs, and red-check routing does not depend on this section. anthropic_claude-sonnet-5_5 checked the same claim and did not report it as a defect, for similar reasons. The highest severity (MAJOR, shown as high) is used here.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- HARDENING_SUGGESTION (not a finding): scripts/review_rb_judge.sh, `render_review_rb_ci_failures_file`, the per-job loop that sets `window` (about lines 1690-1700); the result is embedded with a 12000-byte cap at line 2315.\n  PROBLEM: In the worst case (10 jobs \u00d7 15 lines \u00d7 300 chars, about 45 KB) the head-mode cap of 12000 bytes drops the later jobs completely, including their name, failed steps and test ids, not only their log lines.\n  WHY: Suggested fix: `budget = max(3, MAX_ERROR_LINES * 3 // max(1, len(jobs)))`, then use `budget` instead of `MAX_ERROR_LINES` when building `window`. About 3 lines; HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/review_rb_judge.sh:1642-1646 (renderer constants MAX_JOBS=10, MAX_STEPS=5, MAX_TESTS=20, MAX_ERROR_LINES=15, MAX_LINE=300) and 2309-2316 (emit_review_rb_untrusted_file with literal 12000-byte cap) | severity=MAJOR | confidence=4\n  PROBLEM: The renderer can produce about 50,000 bytes, but the prompt embed cap is a fixed 12,000 bytes, so only the first two or three verbose jobs fit.\n  WHY: The judge gets detailed error context only for the first two or three failed jobs. Evidence for jobs 4-10 is silently dropped, so the judge could choose `fix` or `merge` without it.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/review_rb_judge.sh:Lines 1642-1646, 1789-1797, 2313-2315 | severity=MAJOR | confidence=4\n  PROBLEM: The renderer can produce more CI failure detail than the 12,000-byte prompt embed cap keeps.\n  WHY: Up to 10 jobs with up to 15 error lines of 300 chars each are rendered, but only the file prefix is embedded, so later jobs' details are cut and the judge decides without them.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/review_rb_judge.sh:renderer limits at lines ~1630-1646 (MAX_JOBS=10, 15 error lines \u00d7 300 chars) vs. the 12,000-byte embed cap passed at the prompt build site (line ~2313-2315, verified `emit_review_rb_untrusted_file \"CI FAILURES ON THE JUDGED HEAD\" ... 12000`, truncating via `_embed_input_file`, lines 485-579) | severity=NIT | confidence=3\n  PROBLEM: The section file can exceed the 12,000-byte embed cap, so with 3 or more verbose failed jobs the later jobs lose their `failed_steps`, `failing_tests` and `last_error_lines` detail. The cut is not silent: the TRUNCATED marker is at line 571, the `failed_jobs: N` header survives, and routing never depends on the section.\n  WHY: The judge must fall back on the 500-char `judge_ci_failure_summary`, which also cuts off near 9 jobs. This lowers evidence quality only.\n- HARDENING_SUGGESTION (not a finding): scripts/review_rb_judge.sh, render_review_rb_ci_failures_file, per-job emission loop (~1630-1700). Reduce MAX_ERROR_LINES (e.g. 15 \u2192 6) or the per-job budget so the 10-job worst case stays under 12,000 bytes. 1-2 lines; HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "be3f819a0e05529274c6172459b9f5cf8a767cbe7116c95d05bedfa2a5eb0bf5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10067,
+    "run_id": "46047148621",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46047148621",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127191437_7f23f2cd54",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10067,
+    "run_id": "46047148621"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-27T19:14:37Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
