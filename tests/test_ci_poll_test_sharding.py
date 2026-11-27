@@ -1191,6 +1191,10 @@ GROUP_PINNED_STEPS = {
 	"Review Semble contract test": 1,
 	# Moved from tests-hooks-and-orchestrator in #9496.
 	"Clarify sandbox base image pre-seed tests (#6985)": 1,
+	# Moved from tests-release-and-log-analysis in #10182.
+	"Orchestrate lib unit tests": 3,
+	# Moved from tests-release-and-log-analysis in #10182.
+	"Implement post-Codex recovery unit tests": 0,
 }
 # The only steps pinned to the last matrix group (#8118; #8772's step moved
 # on to group 0 in #8980; #9037 moved the Claude engine judges and validation
@@ -1893,8 +1897,9 @@ MOVED_HOOKS_JOB_STEPS = {
 	# unchanged, to tests-promote-stall-and-review. Issue #8771 moved
 	# "Orchestrate lib unit tests" on to tests-heal-plan-and-validation.
 	# Issue #8993 moved it on to tests-release-and-log-analysis.
+	# Issue #10182 moved it on to orchestrate-poll group 3.
 	"Orchestrate lib unit tests": (
-		"tests-release-and-log-analysis",
+		POLL_JOB_ID,
 		(
 			"tests/test_orchestrate_lib.py",
 			"tests/test_task_state.py",
@@ -2436,14 +2441,16 @@ class MovedPromote8466StepsContractTest(unittest.TestCase):
 # subprocess counts; the run's step timings were not readable. The two steps
 # first went to different jobs; issue #8993 moved "Orchestrate lib unit tests"
 # on to tests-release-and-log-analysis, so both ran in that job until issue
-# #9450 moved the triage step on to orchestrate-poll group 0. The two steps no
-# longer share a job.
+# #9450 moved the triage step on to orchestrate-poll group 0. Issue #10182
+# moved "Orchestrate lib unit tests" on to orchestrate-poll group 3, so both
+# steps run in the poll matrix again, in different groups.
 PROMOTE_8771_SOURCE_JOB_ID = "tests-promote-stall-and-review"
 PROMOTE_8771_SETUP_STEP = "Install Python CI dependencies"
 MOVED_PROMOTE_8771_STEPS = {
 	# Issue #8993 moved it on from tests-heal-plan-and-validation.
+	# Issue #10182 moved it on to orchestrate-poll group 3.
 	"Orchestrate lib unit tests": (
-		"tests-release-and-log-analysis",
+		POLL_JOB_ID,
 		(
 			"tests/test_orchestrate_lib.py",
 			"tests/test_orchestrate_initial_state_v2.py",
@@ -2487,8 +2494,9 @@ class MovedPromote8771StepsContractTest(unittest.TestCase):
 				self.assertEqual([owner for owner, _step in self.owning_steps(name)], [job_id])
 
 	def test_each_step_has_no_matrix_guard(self) -> None:
-		# Since #9450 the triage step runs in the orchestrate-poll matrix;
-		# without its group guard it would run once per group.
+		# Since #9450 the triage step, and since #10182 the orchestrate lib
+		# step, run in the orchestrate-poll matrix; without its group guard
+		# such a step would run once per group.
 		for name in MOVED_PROMOTE_8771_STEPS:
 			with self.subTest(step=name):
 				for _owner, step in self.owning_steps(name):
@@ -2698,18 +2706,121 @@ class MovedRelease9966StepsContractTest(unittest.TestCase):
 				self.assertLess(names.index(RELEASE_9966_SETUP_STEP), names.index(name))
 
 
+# Steps moved out of tests-release-and-log-analysis, which took 18m23s of its
+# 20 minutes (run 45766722607, budget-watch issue #10182, re-issued from
+# #10162): step name -> (orchestrate-poll group, module paths its body names).
+# The run's step timings were not readable; the pick is an estimate from test
+# and subprocess counts: the two heaviest steps of that job that run their
+# tests one after another and can move whole. They go to two different groups
+# of the job with the only 30-minute budget; neither is the last group, whose
+# steps LAST_GROUP_PINNED_STEPS locks.
+RELEASE_10182_SOURCE_JOB_ID = "tests-release-and-log-analysis"
+RELEASE_10182_SETUP_STEP = "Install Python CI dependencies"
+MOVED_RELEASE_10182_STEPS = {
+	"Orchestrate lib unit tests": (
+		3,
+		(
+			"tests/test_orchestrate_lib.py",
+			"tests/test_orchestrate_initial_state_v2.py",
+			"tests/test_orchestrate_state_v2_compression.py",
+			"tests/test_task_state.py",
+			"tests/test_task_state_unblock.py",
+			"tests/test_blocker_check.py",
+			"tests/test_codex_stall_guard_poller.py",
+			"tests/test_orchestrate_force_tick.py",
+			"tests/test_orchestrate_poll_follow_up.py",
+			"tests/test_orchestrator_concurrency_caps.py",
+		),
+	),
+	"Implement post-Codex recovery unit tests": (
+		0,
+		("tests/test_implement_post_codex_recovery.py",),
+	),
+}
+RELEASE_10182_GROUP_ZERO_STEPS = tuple(
+	name for name, (group, _modules) in MOVED_RELEASE_10182_STEPS.items() if group == 0
+)
+
+
+class MovedRelease10182StepsContractTest(unittest.TestCase):
+	"""The steps moved out of tests-release-and-log-analysis run once, in one orchestrate-poll group (#10182)."""
+
+	def jobs(self) -> dict:
+		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
+
+	def owning_steps(self, name: str) -> list[tuple[str, dict]]:
+		return [
+			(job_id, step)
+			for job_id, job in self.jobs().items()
+			for step in job.get("steps", [])
+			if step.get("name") == name
+		]
+
+	def test_each_step_is_owned_only_by_the_poll_job(self) -> None:
+		for name in MOVED_RELEASE_10182_STEPS:
+			with self.subTest(step=name):
+				self.assertEqual([owner for owner, _step in self.owning_steps(name)], [POLL_JOB_ID])
+
+	def test_each_step_is_guarded_to_its_group(self) -> None:
+		last_group = poll_group_count() - 1
+		for name, (group, _modules) in MOVED_RELEASE_10182_STEPS.items():
+			with self.subTest(step=name):
+				self.assertEqual(GROUP_PINNED_STEPS.get(name), group)
+				self.assertLess(group, poll_group_count(), "guard names a group the matrix does not run")
+				self.assertNotEqual(group, last_group, "the last group's steps are locked by LAST_GROUP_PINNED_STEPS")
+				for _owner, step in self.owning_steps(name):
+					self.assertEqual(step.get("if"), f"strategy.job-index == {group}")
+
+	def test_the_steps_go_to_different_groups(self) -> None:
+		groups = [group for group, _modules in MOVED_RELEASE_10182_STEPS.values()]
+		self.assertEqual(len(groups), len(set(groups)))
+
+	def test_each_step_still_names_its_modules(self) -> None:
+		for name, (_group, modules) in MOVED_RELEASE_10182_STEPS.items():
+			steps = self.owning_steps(name)
+			self.assertEqual(len(steps), 1, name)
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertTrue((REPO_ROOT / module).is_file(), module)
+					self.assertIn(module, steps[0][1]["run"])
+
+	def test_each_module_runs_once_in_ci(self) -> None:
+		# A module left behind in the release job would run twice per CI run.
+		text = CI_WF.read_text(encoding="utf-8")
+		for name, (_group, modules) in MOVED_RELEASE_10182_STEPS.items():
+			for module in modules:
+				with self.subTest(step=name, module=module):
+					self.assertEqual(len(re.findall(rf"\b{re.escape(module)}\b", text)), 1, module)
+
+	def test_moved_steps_left_the_source_job(self) -> None:
+		source_names = {step.get("name") for step in self.jobs()[RELEASE_10182_SOURCE_JOB_ID]["steps"]}
+		for name in MOVED_RELEASE_10182_STEPS:
+			with self.subTest(step=name):
+				self.assertNotIn(name, source_names)
+
+	def test_moved_steps_run_after_the_poll_job_setup(self) -> None:
+		names = [step.get("name") for step in self.jobs()[POLL_JOB_ID]["steps"]]
+		for name in MOVED_RELEASE_10182_STEPS:
+			with self.subTest(step=name):
+				self.assertIn(RELEASE_10182_SETUP_STEP, names)
+				self.assertIn(name, names)
+				self.assertLess(names.index(RELEASE_10182_SETUP_STEP), names.index(name))
+
+
 # Steps moved out of tests-heal-plan-and-validation, which took 16m08s of its
 # 20 minutes (run 42373283876, budget-watch issue #8993): step name -> (target
 # job id, module paths its body names). The run's step timings were not
 # readable; the pick is the heal job's slowest unsplit steps in the planning
 # sandbox, an estimate. #8993 split them across two jobs so that no single job
 # took all of them; #9078 moved the two in tests-hooks-and-orchestrator on, so
-# all three now run in tests-release-and-log-analysis.
+# all three ran in tests-release-and-log-analysis until #10182 moved
+# "Orchestrate lib unit tests" on to orchestrate-poll group 3.
 HEAL_8993_SOURCE_JOB_ID = "tests-heal-plan-and-validation"
 HEAL_8993_SETUP_STEP = "Install Python CI dependencies"
 MOVED_HEAL_8993_STEPS = {
+	# Issue #10182 moved it on to orchestrate-poll group 3.
 	"Orchestrate lib unit tests": (
-		"tests-release-and-log-analysis",
+		POLL_JOB_ID,
 		(
 			"tests/test_orchestrate_lib.py",
 			"tests/test_orchestrate_initial_state_v2.py",
@@ -2758,10 +2869,17 @@ class MovedHeal8993StepsContractTest(unittest.TestCase):
 				self.assertEqual([owner for owner, _step in self.owning_steps(name)], [job_id])
 
 	def test_each_step_has_no_matrix_guard(self) -> None:
+		# Since #10182 the orchestrate lib step runs in the orchestrate-poll
+		# matrix; without its group guard it would run once per group.
 		for name in MOVED_HEAL_8993_STEPS:
 			with self.subTest(step=name):
 				for _owner, step in self.owning_steps(name):
-					self.assertNotIn("if", step)
+					if name in GROUP_PINNED_STEPS:
+						group = GROUP_PINNED_STEPS[name]
+						self.assertLess(group, poll_group_count())
+						self.assertEqual(step.get("if"), f"strategy.job-index == {group}")
+					else:
+						self.assertNotIn("if", step)
 
 	def test_each_step_still_names_its_modules(self) -> None:
 		for name, (_job_id, modules) in MOVED_HEAL_8993_STEPS.items():
@@ -3087,8 +3205,9 @@ STATIC_8394_SOURCE_JOB_ID = "static-checks"
 STATIC_8394_SETUP_STEP = "Install Python CI dependencies"
 MOVED_STATIC_8394_STEPS = {
 	# Issue #9078 moved it on to tests-release-and-log-analysis.
+	# Issue #10182 moved it on to orchestrate-poll group 0.
 	"Implement post-Codex recovery unit tests": (
-		"tests-release-and-log-analysis",
+		POLL_JOB_ID,
 		("tests/test_implement_post_codex_recovery.py",),
 	),
 	# "Validation self-test unit tests" moved on to orchestrate-poll (3), then
@@ -3208,9 +3327,11 @@ MOVED_POLL_GROUP_THREE_8472_STEPS = {
 # group 4, so only the single-file module step stays. #9391 then pinned the
 # pre-push affected-test gate step (moved from tests-hooks-and-orchestrator)
 # to group 3, and #9639 moved that step on to group 0, so only the single-file
-# module step stays.
+# module step stays. #10182 then pinned "Orchestrate lib unit tests" (moved
+# from tests-release-and-log-analysis) to group 3.
 POLL_GROUP_THREE_8472_REMAINING_STEPS = {
 	SINGLE_FILE_MODULES_STEP,
+	"Orchestrate lib unit tests",
 }
 
 
@@ -4101,13 +4222,16 @@ class MovedPollGroupThree9037StepsContractTest(unittest.TestCase):
 # minutes (run 42513195209, budget-watch issue #9078): step name -> (target job
 # id, module paths its body names). The run's step timings were not readable;
 # the pick is the hooks job's slowest unsplit steps in the planning sandbox, an
-# estimate. None needs Node or the prepared .claude/ live copies, so they run
-# at the end of tests-release-and-log-analysis without a guard.
+# estimate. None needs Node or the prepared .claude/ live copies, so they ran
+# at the end of tests-release-and-log-analysis without a guard. Issue #10182
+# moved "Implement post-Codex recovery unit tests" on to orchestrate-poll
+# group 0; the other two still run in tests-release-and-log-analysis.
 HOOKS_9078_SOURCE_JOB_ID = "tests-hooks-and-orchestrator"
 HOOKS_9078_SETUP_STEP = "Install Python CI dependencies"
 MOVED_HOOKS_9078_STEPS = {
+	# Issue #10182 moved it on to orchestrate-poll group 0.
 	"Implement post-Codex recovery unit tests": (
-		"tests-release-and-log-analysis",
+		POLL_JOB_ID,
 		("tests/test_implement_post_codex_recovery.py",),
 	),
 	"Merge-base freshness gate (pr_checks_lib) tests": (
@@ -4144,11 +4268,22 @@ class MovedHooks9078StepsContractTest(unittest.TestCase):
 				self.assertEqual([owner for owner, _step in self.owning_steps(name)], [job_id])
 
 	def test_each_step_has_no_guard(self) -> None:
-		for name in MOVED_HOOKS_9078_STEPS:
+		# Since #10182 the post-Codex recovery step runs in the orchestrate-poll
+		# matrix and keeps its single group guard; the steps still in
+		# tests-release-and-log-analysis stay unguarded.
+		for name, (job_id, _modules) in MOVED_HOOKS_9078_STEPS.items():
 			with self.subTest(step=name):
-				self.assertNotIn(name, GROUP_PINNED_STEPS)
+				if job_id == POLL_JOB_ID:
+					self.assertIn(name, GROUP_PINNED_STEPS)
+				else:
+					self.assertNotIn(name, GROUP_PINNED_STEPS)
 				for _owner, step in self.owning_steps(name):
-					self.assertNotIn("if", step)
+					if name in GROUP_PINNED_STEPS:
+						group = GROUP_PINNED_STEPS[name]
+						self.assertLess(group, poll_group_count())
+						self.assertEqual(step.get("if"), f"strategy.job-index == {group}")
+					else:
+						self.assertNotIn("if", step)
 
 	def test_each_step_still_names_its_modules(self) -> None:
 		for name, (_job_id, modules) in MOVED_HOOKS_9078_STEPS.items():
@@ -5000,19 +5135,22 @@ class MovedPollGroupZero9214StepsContractTest(unittest.TestCase):
 		# fast-fail step; #9639 pinned the pre-push gate step there, right after
 		# the fast-fail step in workflow order, and #9895 moved it out of the
 		# poll matrix back to tests-hooks-and-orchestrator. Since #9496 group 0
-		# also runs the merge-train step, before the triage step. Any further
-		# group-0 step must update POLL_GROUP_ZERO_9496_PINNED_STEPS on purpose.
+		# also runs the merge-train step, before the triage step. Since #10182
+		# group 0 also runs the post-Codex recovery step, after the triage step.
+		# Any further group-0 step must update POLL_GROUP_ZERO_9496_PINNED_STEPS
+		# or RELEASE_10182_GROUP_ZERO_STEPS on purpose.
 		self.assertEqual(
 			group_zero_guarded,
 			[
 				POLL_GROUP_ZERO_9214_FAST_FAIL_STEP,
 				*POLL_GROUP_ZERO_9496_PINNED_STEPS,
 				RELEASE_9450_STEP_NAME,
+				*RELEASE_10182_GROUP_ZERO_STEPS,
 			],
 		)
 		self.assertEqual(
 			{name for name, group in GROUP_PINNED_STEPS.items() if group == 0},
-			{*POLL_GROUP_ZERO_9496_PINNED_STEPS, RELEASE_9450_STEP_NAME},
+			{*POLL_GROUP_ZERO_9496_PINNED_STEPS, RELEASE_9450_STEP_NAME, *RELEASE_10182_GROUP_ZERO_STEPS},
 		)
 
 

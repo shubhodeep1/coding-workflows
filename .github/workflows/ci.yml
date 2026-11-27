@@ -2894,48 +2894,6 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_prompt_invalid_utf8.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_mode_workflow_analysis_prompt_findings_first.py
 
-      # Moved again from tests-heal-plan-and-validation, which took 16m08s of
-      # its 20 minutes on main (run 42373283876, budget-watch issue #8993). The
-      # run's step timings could not be read; the pick is the heal job's
-      # slowest unsplit step in the planning sandbox (about 56s, a relative
-      # weight only). This job has the fewest test functions of the 20-minute
-      # non-matrix jobs (about 1,374) and lost 557 test functions in #8777.
-      # Release checks out at depth 1 plus the base-history fetch step; the
-      # step needs no Node or prepared .claude/ live copies. Name and body
-      # unchanged.
-      # Moved again from tests-promote-stall-and-review, which took 16m02s of
-      # its 20 minutes on main (run 41704793081, budget-watch issue #8771).
-      # The run's step timings could not be read, so the pick is an estimate
-      # from test and subprocess counts (9 modules, about 240 test functions),
-      # not a measurement. It was also the slowest step that could be timed in
-      # the planning sandbox (about 49s across eight of its nine modules, a
-      # relative weight only); 825s was the whole run's elapsed time, not this
-      # step's duration, when run 37499559962 failed at this
-      # step. This job's last budget-watch issue was #8395 (15m10s, run
-      # 40954844196), which moved a step out of it; its headroom now is an
-      # estimate, not a measurement. It needs no git
-      # history, Node or prepared .claude/ live copies. Name and body unchanged.
-      # Moved here unchanged from tests-hooks-and-orchestrator (15m01s of its 20
-      # minutes, run 40264887710, budget-watch issue #8179). Step timings were not
-      # readable when this was planned; chosen by test and subprocess counts
-      # (estimated, not measured). None of these needs git history, Node or the
-      # prepared .claude/ live copies. Names and bodies unchanged.
-      - name: Orchestrate lib unit tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_lib.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_initial_state_v2.py
-          # Stable-only wiring (backport of #9695): main runs this file through its
-          # tests-system-python catch-all, which stable does not have.
-          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_orchestrate_state_v2_compression.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state_unblock.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_blocker_check.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_poller.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_force_tick.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_follow_up.py
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrator_concurrency_caps.py
-
       # Moved from tests-heal-plan-and-validation, which took 15m26s of its 20
       # minutes on main (run 39230958248, budget-watch issue #7690). That run's
       # step timings were not readable, so the steps were chosen by timing each
@@ -3182,36 +3140,6 @@ jobs:
           npm ci --no-audit --no-fund
           npx vitest run
 
-      # Moved from tests-heal-plan-and-validation, which measured 15m08s of
-      # its 20 minutes on main (run 38222993326, issue #7250); static-checks
-      # measured about 2 minutes. Step names and bodies are unchanged.
-      # "Regression tests wired by the CI wiring guard (part 1)", moved to
-      # static-checks with it, moved on to tests-release-and-log-analysis in
-      # #7382, was in tests-heal-plan-and-validation from #7406, was in
-      # tests-promote-stall-and-review from #9018, was in
-      # tests-release-and-log-analysis from #9363 and is in orchestrate-poll
-      # group 1 since #9966.
-      # Moved on from static-checks, which took 11m17s of its 15 minutes on
-      # main (run 40954844196, budget-watch issue #8394). The pick is an
-      # estimate from test and subprocess counts, not measured; the run's step
-      # timings were not readable. Name and body unchanged.
-      #
-      # Moved again from tests-hooks-and-orchestrator, which took 15m33s of its
-      # 20 minutes on main (run 42513195209, budget-watch issue #9078), to this
-      # job together with the two steps below. That run's step timings could
-      # not be read, so the pick is an estimate from the planning sandbox (about
-      # 31s for this step and 34s and 32s for the two below, relative weights
-      # only), not a measurement. Per-job durations could not be read either,
-      # so "most headroom" is a proxy, not a measured comparison: this job has
-      # the fewest subprocess call sites of the 20-minute non-matrix test jobs
-      # (about 284) and checks out at depth 1 plus the base-history fetch
-      # step. None of the three steps needs
-      # Node or the prepared .claude/ live copies. Names and bodies unchanged.
-      - name: Implement post-Codex recovery unit tests
-        run: |
-          set -euo pipefail
-          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py
-
       # Moved from tests-heal-plan-and-validation, which took 16m08s of its 20
       # minutes on main (run 42373283876, budget-watch issue #8993). Step
       # timings could not be read; picked as that job's next slowest unsplit
@@ -3224,8 +3152,9 @@ jobs:
       # unchanged.
       #
       # Moved again from tests-hooks-and-orchestrator to this job in budget-watch
-      # issue #9078, with the step above; see its comment. Names and bodies
-      # unchanged.
+      # issue #9078, with "Implement post-Codex recovery unit tests"; see its
+      # comment (that step runs in orchestrate-poll group 0 since #10182).
+      # Names and bodies unchanged.
       - name: Merge-base freshness gate (pr_checks_lib) tests
         run: |
           set -euo pipefail
@@ -3276,6 +3205,8 @@ jobs:
     # from group 3).
     # Since #9895, the pre-push affected-test gate step runs in
     # tests-hooks-and-orchestrator instead of group 0.
+    # Since #10182, group 3 also pins the orchestrate lib step and group 0
+    # the post-Codex recovery step (moved from tests-release-and-log-analysis).
     # On 2026-11-21, after #9641 moved the pre-push gate step out of group
     # 3, shards still ran 15.0-17.1 minutes on a passing run (#9867, run
     # 44914391485) and were cancelled at the 20-minute cap in runs
@@ -4451,6 +4382,104 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_post_stage.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_transient_rerun.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_owned_failures.py
+
+      # Moved again from tests-release-and-log-analysis, which took 18m23s of
+      # its 20 minutes on main (run 45766722607, budget-watch issue #10182,
+      # re-issued from #10162). The run's step timings could not be read, so
+      # the pick is an estimate from test and subprocess counts (10 modules
+      # run one after another, about 298 test functions and 25 subprocess
+      # call sites), not a measurement. It goes to group 3, the group with
+      # the fewest pinned steps, in the job with the only 30-minute budget.
+      # It needs no git history, Node or prepared .claude/ live copies. Name
+      # and body unchanged; the group guard keeps it to one run per CI run.
+      # If the release job is flagged again, read the step timings before
+      # moving anything else.
+      #
+      # Moved again from tests-heal-plan-and-validation, which took 16m08s of
+      # its 20 minutes on main (run 42373283876, budget-watch issue #8993). The
+      # run's step timings could not be read; the pick is the heal job's
+      # slowest unsplit step in the planning sandbox (about 56s, a relative
+      # weight only). This job has the fewest test functions of the 20-minute
+      # non-matrix jobs (about 1,374) and lost 557 test functions in #8777.
+      # Release checks out at depth 1 plus the base-history fetch step; the
+      # step needs no Node or prepared .claude/ live copies. Name and body
+      # unchanged.
+      # Moved again from tests-promote-stall-and-review, which took 16m02s of
+      # its 20 minutes on main (run 41704793081, budget-watch issue #8771).
+      # The run's step timings could not be read, so the pick is an estimate
+      # from test and subprocess counts (9 modules, about 240 test functions),
+      # not a measurement. It was also the slowest step that could be timed in
+      # the planning sandbox (about 49s across eight of its nine modules, a
+      # relative weight only); 825s was the whole run's elapsed time, not this
+      # step's duration, when run 37499559962 failed at this
+      # step. This job's last budget-watch issue was #8395 (15m10s, run
+      # 40954844196), which moved a step out of it; its headroom now is an
+      # estimate, not a measurement. It needs no git
+      # history, Node or prepared .claude/ live copies. Name and body unchanged.
+      # Moved here unchanged from tests-hooks-and-orchestrator (15m01s of its 20
+      # minutes, run 40264887710, budget-watch issue #8179). Step timings were not
+      # readable when this was planned; chosen by test and subprocess counts
+      # (estimated, not measured). None of these needs git history, Node or the
+      # prepared .claude/ live copies. Names and bodies unchanged.
+      - name: Orchestrate lib unit tests
+        if: strategy.job-index == 3
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_lib.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_initial_state_v2.py
+          # Stable-only wiring (backport of #9695): main runs this file through its
+          # tests-system-python catch-all, which stable does not have.
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_orchestrate_state_v2_compression.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_task_state_unblock.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_blocker_check.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_codex_stall_guard_poller.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_force_tick.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrate_poll_follow_up.py
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_orchestrator_concurrency_caps.py
+
+      # Moved again from tests-release-and-log-analysis, which took 18m23s of
+      # its 20 minutes on main (run 45766722607, budget-watch issue #10182,
+      # re-issued from #10162). Same estimate basis as "Orchestrate lib unit
+      # tests" (one module, about 162 test functions and 38 subprocess call
+      # sites), not a measurement. It goes to group 0, so the two #10182
+      # steps land in different groups. The "two steps below" in the #9078
+      # paragraph are "Merge-base freshness gate (pr_checks_lib) tests" and
+      # "Conflict-dispatch active-run visibility contract tests", which stay
+      # in tests-release-and-log-analysis. It needs no git history, Node or
+      # prepared .claude/ live copies. Name and body unchanged; the group
+      # guard keeps it to one run per CI run.
+      #
+      # Moved from tests-heal-plan-and-validation, which measured 15m08s of
+      # its 20 minutes on main (run 38222993326, issue #7250); static-checks
+      # measured about 2 minutes. Step names and bodies are unchanged.
+      # "Regression tests wired by the CI wiring guard (part 1)", moved to
+      # static-checks with it, moved on to tests-release-and-log-analysis in
+      # #7382, was in tests-heal-plan-and-validation from #7406, was in
+      # tests-promote-stall-and-review from #9018, was in
+      # tests-release-and-log-analysis from #9363 and is in orchestrate-poll
+      # group 1 since #9966.
+      # Moved on from static-checks, which took 11m17s of its 15 minutes on
+      # main (run 40954844196, budget-watch issue #8394). The pick is an
+      # estimate from test and subprocess counts, not measured; the run's step
+      # timings were not readable. Name and body unchanged.
+      #
+      # Moved again from tests-hooks-and-orchestrator, which took 15m33s of its
+      # 20 minutes on main (run 42513195209, budget-watch issue #9078), to this
+      # job together with the two steps below. That run's step timings could
+      # not be read, so the pick is an estimate from the planning sandbox (about
+      # 31s for this step and 34s and 32s for the two below, relative weights
+      # only), not a measurement. Per-job durations could not be read either,
+      # so "most headroom" is a proxy, not a measured comparison: this job has
+      # the fewest subprocess call sites of the 20-minute non-matrix test jobs
+      # (about 284) and checks out at depth 1 plus the base-history fetch
+      # step. None of the three steps needs
+      # Node or the prepared .claude/ live copies. Names and bodies unchanged.
+      - name: Implement post-Codex recovery unit tests
+        if: strategy.job-index == 0
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/test_implement_post_codex_recovery.py
 
   tests-system-python:
     # The whole pytest-collected tests/ suite on the runner's own
