@@ -36,11 +36,14 @@ STAGE_SUPPORT_HELPER = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
 # "Ensure workflow support source checkout" step verified that checkout at
 # SCRIPT_REF. An early failure (before support staging) otherwise leaves a
 # PR-committed .codex-workflow-src/scripts/<script> for always() steps to source.
+# The rev-parse clears GIT_DIR/GIT_WORK_TREE: "Activate workspace shell
+# context" exports them for the split PR workspace, and they would otherwise
+# make git read the PR checkout's HEAD instead of .codex-workflow-src's.
 SUPPORT_SOURCE_FALLBACK_VERIFY_LINE = (
 	'case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) '
 	'[[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && '
 	'[ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && '
-	'[ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || '
+	'[ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || '
 	'{ echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; '
 	'REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac'
 )

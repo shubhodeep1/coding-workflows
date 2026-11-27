@@ -85,6 +85,21 @@ def _commit_support_checkout(workspace: Path) -> str:
 	return _git(support, "rev-parse", "HEAD")
 
 
+def _activated_git_env(tmp_path: Path) -> dict[str, str]:
+	"""GIT_DIR/GIT_WORK_TREE as "Activate workspace shell context" exports them.
+
+	They point at a different repository (the PR checkout), so a verify line
+	that does not clear them reads the wrong HEAD and refuses the fallback.
+	"""
+	pr_checkout = tmp_path / "pr-checkout"
+	pr_checkout.mkdir(exist_ok=True)
+	_git(pr_checkout, "init", "-q")
+	(pr_checkout / "README").write_text("pr\n", encoding="utf-8")
+	_git(pr_checkout, "add", "README")
+	_git(pr_checkout, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "pr")
+	return {"GIT_DIR": str(pr_checkout / ".git"), "GIT_WORK_TREE": str(pr_checkout)}
+
+
 def _plant(workspace: Path, script_name: str, marker: Path) -> None:
 	scripts = workspace / ".codex-workflow-src" / "scripts"
 	scripts.mkdir(parents=True, exist_ok=True)
@@ -169,6 +184,12 @@ def test_wrapper_keeps_verified_fallback_and_staged_bundle(step_name: str, scrip
 	assert result.returncode == 0, (step_name, result.stdout, result.stderr)
 	assert marker.read_text() == "sourced", f"{step_name}: verified .codex-workflow-src fallback must still be sourced"
 
+	# Same, with the job-wide GIT_DIR/GIT_WORK_TREE of the split PR workspace.
+	marker.unlink()
+	result = _run_step(run, tmp_path, workspace, {"SCRIPT_REF": head, SENTINEL: head, **_activated_git_env(tmp_path)})
+	assert result.returncode == 0, (step_name, result.stdout, result.stderr)
+	assert marker.read_text() == "sourced", f"{step_name}: verified fallback must be sourced after GIT_DIR is exported"
+
 	# The staged bundle outside the workspace needs no sentinel.
 	marker.unlink()
 	(workspace / ".codex-workflow-src" / "scripts" / script_name).unlink()
@@ -213,7 +234,7 @@ def test_non_wrapper_fallbacks_refuse_unverified_workspace_copy(step_name: str, 
 	assert "Refusing unverified .codex-workflow-src fallback" in result.stdout
 
 	head = _commit_support_checkout(workspace)
-	result = _run_step(run, tmp_path, workspace, {**env, "SCRIPT_REF": head, SENTINEL: head})
+	result = _run_step(run, tmp_path, workspace, {**env, "SCRIPT_REF": head, SENTINEL: head, **_activated_git_env(tmp_path)})
 	assert result.returncode == 0, (step_name, result.stdout, result.stderr)
 	assert marker.read_text() == "sourced", f"{step_name}: verified fallback must still be used"
 
@@ -230,7 +251,7 @@ def test_every_codex_agent_workspace_fallback_is_verified() -> None:
 		nxt = site.group("next").strip()
 		assert nxt.startswith(f'case "${{{var}}}" in "${{GITHUB_WORKSPACE}}/.codex-workflow-src/"*) '), f"{var}: fallback not followed by the verify line"
 		assert f'[ "${{{SENTINEL}:-}}" = "${{SCRIPT_REF}}" ]' in nxt
-		assert '[ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ]' in nxt
+		assert '[ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ]' in nxt
 		assert f'{var}=""; }} ;; esac' in nxt
 
 
