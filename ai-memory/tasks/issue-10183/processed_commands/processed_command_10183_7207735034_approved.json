@@ -5,13 +5,28 @@
   "entry_id": "processed_command_10183_7207735034_approved",
   "issue_number": 10183,
   "metadata": {
+    "branch": "ai/issue-10183",
+    "changed_files": [
+      ".github/workflows/review_autofix.yml",
+      "README.md",
+      "agents.d/10183-final-ci-now-green-merge.md",
+      "changelog.d/10183-final-ci-now-green-merge.md",
+      "scripts/review_autofix_step_evaluate_gate.sh",
+      "scripts/stage_switches.json",
+      "tests/test_review_autofix_clean_same_head_gate.py"
+    ],
+    "issue_number": 10183,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/10183",
+    "pr_number": 10190,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/10190",
+    "run_attempt": "1",
+    "run_id": "45925649924",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/45925649924"
   },
   "run_attempt": 1,
   "run_id": "45925649924",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-27T02:05:35Z",
+  "status": "completed",
+  "timestamp": "2026-11-27T02:37:05Z",
   "workflow": "implement"
 }
