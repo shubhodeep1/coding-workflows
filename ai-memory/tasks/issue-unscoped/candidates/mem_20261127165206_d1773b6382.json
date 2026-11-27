@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Every step `env:` block that passes any `MERGE_LEASE_*` setting, or that runs a script able to write the lease, passes the full set.\" The contract test must prevent a new step from missing those settings.\n  expected_change_site: tests/test_merge_lease_env_contract.py::violations\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: The violations() function skips env blocks that do not contain MERGE_LEASE_* keys or the MERGE_BASE_FRESHNESS_ENABLED marker, so it cannot identify steps that run lease-writing scripts without these markers, At lines 218-219, the test skips an env block when it has no required lease keys and does not set `MERGE_BASE_FRESHNESS_ENABLED`; it does not inspect a step's `run` command to detect lease-writing scripts, so a new lease-writing step with no lease env settings passes this contract check and can use script defaults instead of repository variables; this skip also bypasses the reader-key check if both listed keys are removed.\n- requirement: \"A contract test fails when a workflow step passes some lease settings but not all\" (issue #10078, Goals).\n  expected_change_site: tests/test_merge_lease_env_contract.py around lines 218-219 in violations().\n  confidence=3\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: The early-skip `if not any(k in REQUIRED_KEYS for k in lease_keys) and not runs_freshness_gate: continue` at tests/test_merge_lease_env_contract.py:218-219 still fires when a reader step has both of its listed keys removed at once, so the stricter missing-key check is bypassed in that case. The editor's last-run summary acknowledges this, and the reviewer calls it a known limitation that the issue's Approach scopes in, not a regression (SEVERITY: NIT).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: Every step env: block that passes any MERGE_LEASE_* setting, or that runs a script able to write the lease, passes the full set. The contract test must prevent a new step from missing those settings.\n  Expected change site: tests/test_merge_lease_env_contract.py::violations\n  Evidence of absence: The violations() function skips env blocks that do not contain MERGE_LEASE_* keys or the MERGE_BASE_FRESHNESS_ENABLED marker. It cannot identify steps that run lease-writing scripts without these markers, so the contract test does not fully prevent a new step from missing the required settings.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"A contract test fails when a workflow step passes some lease settings but not all\" (issue #10078, Goals).\n  Expected change site: tests/test_merge_lease_env_contract.py around lines 218-219 in violations().\n  Evidence of absence:\n  - The LAST RUN DIFF tightens the read-only exemption, so a reader that drops one listed key (e.g. MERGE_LEASE_MAX_HOLDERS) is now reported as missing. It also adds test_fixture_read_only_step_missing_listed_key_fails.\n  - The early-skip `if not any(k in REQUIRED_KEYS for k in lease_keys) and not runs_freshness_gate: continue` at tests/test_merge_lease_env_contract.py:218-219 still fires when a reader has both listed keys removed at once, which bypasses the new missing-key check.\n  - The editor's last-run summary acknowledges this.\n  - The issue's Approach scopes detection to collected MERGE_LEASE_* env keys, so the reviewer calls this a known limitation, not a regression.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Every step `env:` block that passes any `MERGE_LEASE_*` setting, or that runs a script able to write the lease, passes the full set.\" The contract test must prevent a new step from missing those settings.\n  Expected change site: `tests/test_merge_lease_env_contract.py::violations`\n  Evidence of absence:\n  - At lines 218-219, the test skips an env block that has no required lease keys and does not set `MERGE_BASE_FRESHNESS_ENABLED`.\n  - It does not inspect a step's `run` command to detect lease-writing scripts. A new lease-writing step with no lease env settings therefore passes this contract check and can use script defaults instead of repository variables.\n  - This skip also bypasses the reader-key check if both listed keys are removed.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "4bf2add9254f92b24a81c3c6db91c798ede737256dc8a253fbe6e9a8b5676772",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10081,
+    "run_id": "46028281172",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46028281172",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127165206_d1773b6382",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10081,
+    "run_id": "46028281172"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-27T16:52:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
