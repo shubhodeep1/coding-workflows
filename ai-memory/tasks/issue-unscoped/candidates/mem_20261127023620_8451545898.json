@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"In the PR body, use Refs #9865.\"\n  expected_change_site: PR description / PR body (pipeline-composed; not a repository file)\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  EVIDENCE: PR description reads \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/10172\" and has no `Refs #9865`, changelog fragment `changelog.d/10172-broker-sha-check-all-branches.md` already carries `Refs #9865` and no auto-close keyword points at #9865 (\u00a721 not violated), a worktree edit cannot change the pipeline-composed PR body. Severity NIT across reviewers.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nTASK_GAP:\nRequirement: \"In the PR body, use Refs #9865.\"\nExpected change site: the PR description, which the pipeline composes. It is not a repository file.\nEvidence of absence: the PR description reads \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/10172\" and has no `Refs #9865`. A worktree edit cannot change it. The changelog fragment `changelog.d/10172-broker-sha-check-all-branches.md` already ends with `Refs #9865`, and no auto-close keyword points at #9865, so \u00a721 is not violated.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nTASK_GAP:\nRequirement: \"In the PR body, use Refs #9865.\"\nExpected change site: PR body / PR description (pipeline-composed).\nEvidence of absence: The PR description does not contain \"Refs #9865\". While the changelog fragment (`changelog.d/10172-broker-sha-check-all-branches.md`) does include `Refs #9865`, the original issue specifically requested it in the PR body.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nTASK_GAP:\nRequirement: \"In the PR body, use Refs #9865.\"\nExpected change site: PR description (pipeline-composed; not a repository file).\nEvidence of absence: The inlined PR description contains no \"Refs #9865\". The changelog fragment `changelog.d/10172-broker-sha-check-all-branches.md:15` already carries `Refs #9865`, and no auto-close keyword points at #9865, so \u00a721 is not broken.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: \"In the PR body, use Refs #9865.\"\nExpected change site: PR description / PR body (pipeline-composed artefact, not a repository file).\nEvidence of absence: The inlined PR description contains no \"Refs #9865\" reference. The changelog fragment changelog.d/10172-broker-sha-check-all-branches.md:15 already carries \"Refs #9865\", and no auto-close keyword points at #9865, so \u00a721 is not violated.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "62d59c345ccf79b2ccaf5dde8f032d1c79420bbe55d4da411140f3b817388c89",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10174,
+    "run_id": "45925948566",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45925948566",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127023620_8451545898",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10174,
+    "run_id": "45925948566"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-27T02:36:20Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
