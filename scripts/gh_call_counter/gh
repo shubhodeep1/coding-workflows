@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# gh call counter shim (issue #9887). Canonical copy of the shim that
+# scripts/gh_helpers.sh (gh_call_counter_install) writes into a
+# ${RUNNER_TEMP}/gh_call_counter.XXXXXX dir put first on PATH; the two are
+# kept byte-identical by tests/test_gh_call_counter.py.
+#
+# One line per invocation goes to the job's counter log: the first
+# subcommand when it is a known gh command (else `other`), whether
+# --paginate was given, and which token variable is in effect. The token is
+# classified by variable name only; no argument, token or other value is
+# ever written. Then the next gh on PATH is exec'd (the comment-signing shim
+# or the real binary), so exit code, stdout, stderr and stdin pass through.
+# The target is found on every call and skips counter dirs, so the shim can
+# never exec itself and never bypasses the comment-signing shim.
+_gcc_self_dir="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+_gcc_target=""
+_gcc_oldifs="${IFS}"
+IFS=":"
+for _gcc_entry in ${PATH}; do
+	case "${_gcc_entry}" in
+		""|"${_gcc_self_dir}"|*/gh_call_counter.*) continue ;;
+	esac
+	if [ -f "${_gcc_entry}/gh" ] && [ -x "${_gcc_entry}/gh" ]; then
+		_gcc_target="${_gcc_entry}/gh"
+		break
+	fi
+done
+IFS="${_gcc_oldifs}"
+if [ -z "${_gcc_target}" ]; then
+	echo "gh: not found (GH_CALL_COUNTER shim)" >&2
+	exit 127
+fi
+if [ "${GH_CALL_COUNTER_ENABLED:-true}" = "false" ]; then
+	exec "${_gcc_target}" "$@"
+fi
+case "${1:-}" in
+	api|pr|issue|run|workflow|release|label|repo|search|gist|secret|variable|cache|project|ruleset|auth|status|browse|extension|alias|config|codespace|attestation|org|ssh-key|gpg-key|completion|help|version)
+		_gcc_cmd="$1" ;;
+	*) _gcc_cmd="other" ;;
+esac
+_gcc_paginate=0
+for _gcc_arg in "$@"; do
+	if [ "${_gcc_arg}" = "--paginate" ]; then
+		_gcc_paginate=1
+		break
+	fi
+done
+case "${GH_CALL_COUNTER_TOKEN_KIND:-}" in
+	pat|github_token|other) _gcc_token="${GH_CALL_COUNTER_TOKEN_KIND}" ;;
+	*)
+		if [ -n "${GH_TOKEN:-}" ]; then
+			_gcc_token="pat"
+		elif [ -n "${GITHUB_TOKEN:-}" ]; then
+			_gcc_token="github_token"
+		else
+			_gcc_token="other"
+		fi
+		;;
+esac
+{ printf 'v1 cmd=%s paginate=%s token=%s\n' "${_gcc_cmd}" "${_gcc_paginate}" "${_gcc_token}" \
+	>> "${GH_CALL_COUNTER_LOG:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/gh_call_counter.log}"; } 2>/dev/null || true
+exec "${_gcc_target}" "$@"

@@ -214,7 +214,7 @@ class EngineError(ValueError):
 # The slot never runs Claude, so its role stays out of ROLES (which drives the
 # Claude role defaults and claude_engine.json normalisation).
 CHATGPT_ROLES: tuple[str, ...] = ("PANEL_REVIEWER_CHATGPT",)
-CHATGPT_SLOT_DEFAULTS: dict[str, str] = {"model": "gpt-6-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh"}
+CHATGPT_SLOT_DEFAULTS: dict[str, str] = {"model": "gpt-6.2-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh"}
 CHATGPT_MODEL_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{0,63}$")
 CHATGPT_REPLACES_RE = re.compile(r"^[a-z0-9-]+/[a-z0-9._-]+$")
 CHATGPT_REASONING: tuple[str, ...] = ("none", "low", "medium", "high", "xhigh")

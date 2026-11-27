@@ -590,10 +590,12 @@ def test_single_branch_clone_failure_falls_back_to_full_clone(
 	monkeypatch.delenv("AI_MEMORY_SINGLE_BRANCH_CLONE_ENABLED", raising=False)
 	monkeypatch.delenv("AI_MEMORY_CLONE_DIAGNOSTICS", raising=False)
 	ls_remote_stdout = f"deadbeef\trefs/heads/{_MEMORY_BRANCH}\n" if branch_on_remote else ""
+	# A non-transient shallow-clone failure: a transient one (403, 429,
+	# network) now raises for the read retry instead (issue #10052).
 	calls = _install_fake_git(
 		monkeypatch,
 		single_branch_returncode=128,
-		single_branch_stderr=f"fatal: unable to access '{_FAKE_ORIGIN_URL}/': Could not resolve host\n",
+		single_branch_stderr="fatal: dumb http transport does not support shallow capabilities\n",
 		ls_remote_stdout=ls_remote_stdout,
 	)
 

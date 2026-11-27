@@ -16,6 +16,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import subprocess
 import textwrap
 from pathlib import Path
@@ -887,6 +888,10 @@ def test_review_autofix_exports_the_input_and_the_sweep_runs_the_helper() -> Non
 	assert step["env"]["FINAL_CI_SWEEP_BASE_SYNC_MIN_AGE_MINUTES"] == "${{ vars.FINAL_CI_SWEEP_BASE_SYNC_MIN_AGE_MINUTES || '30' }}"
 	assert step["env"]["FINAL_CI_SWEEP_BASE_SYNC_MAX"] == "${{ vars.FINAL_CI_SWEEP_BASE_SYNC_MAX || '3' }}"
 	assert step["env"]["FINAL_CI_SWEEP_ACTIVE_REVIEW_RUNS"] == "${{ runner.temp }}/final-ci-active-review-runs.txt"
+	# Issue #10093: the stale-workflow switch and what the hand-back reads.
+	assert step["env"]["FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED"] == "${{ vars.FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED || 'true' }}"
+	assert step["env"]["FINAL_CI_FAILED_REDISPATCH_ENABLED"] == "${{ vars.FINAL_CI_FAILED_REDISPATCH_ENABLED || 'true' }}"
+	assert "ALLOW_WORKFLOW_EDITS" in step["env"]
 	enumerate_step = next(s for s in sweep["jobs"]["sweep"]["steps"] if s.get("name") == "Enumerate open PRs and dispatch internal-review.yml")
 	assert '> "${RUNNER_TEMP}/final-ci-active-review-runs.txt"' in enumerate_step["run"]
 	assert enumerate_step["run"].index("final-ci-active-review-runs.txt") > enumerate_step["run"].index('snapshot_active_review_runs "${wf}"')
@@ -1110,3 +1115,576 @@ def test_refused_dispatch_marker_numbers_the_update_after_earlier_syncs(fake_gh)
 	assert f"from={SHA} sync=3 base={REFUSED_BASE_TIP} merge={UPDATE_SHA} -->" in body
 	assert "predates its `workflow_dispatch` trigger" in body
 
+
+
+# ---------------------------------------------------------------------------
+# CI wiring behind the base (issue #9993): _pr_final_ci_wiring_behind_update,
+# its hook in _pr_ensure_final_ci and _pr_sync_merge_blocked_guard (G3).
+
+WIRING_BASE_TIP = "f" * 40
+WIRING_UPDATE_SHA = "9" * 40
+WIRING_MARKER = f"<!-- ai:final-ci-wiring-behind:v1 pr=7 head={SHA} reason=update_branch_refused -->"
+COMPARE_KEY = f"repos/{REPO}/compare/{SHA}...main"
+WIRING_ENV = {
+	"PR_FINAL_CI_BASE_REF": "main",
+	"MERGE_LEASE_ENABLED": "false",
+	"MERGE_BASE_SYNC_HEAD_POLL_SECONDS": "1",
+	"MERGE_BASE_SYNC_HEAD_POLL_ATTEMPTS": "1",
+	"MERGE_BASE_SYNC_MERGE_REF_POLL_ATTEMPTS": "0",
+}
+
+
+def _wiring_fixtures(base_files: list | None = None, *, comments: list | None = None, update_rc: int = 0, runs: dict | None = None) -> dict:
+	files = [{"filename": ".github/workflows/ci.yml"}, {"filename": "scripts/x.sh"}] if base_files is None else base_files
+	fixtures = {
+		RUNS_KEY: {"body": runs if runs is not None else {"workflow_runs": []}},
+		COMPARE_KEY: {"body": {"ahead_by": 2, "files": files, "commits": [{"sha": "1" * 40}, {"sha": WIRING_BASE_TIP}]}},
+		"user": {"body": {"login": "bot"}},
+		f"repos/{REPO}/issues/7/comments": {"body": comments or []},
+		f"repos/{REPO}/pulls/7/update-branch": {"rc": update_rc} if update_rc else {"body": {}},
+		f"repos/{REPO}/pulls/7/files": {"body": [{"filename": "scripts/y.sh"}]},
+		# A refused update leaves the head where it was, and GitHub reports
+		# the conflict as `mergeable: false`.
+		f"repos/{REPO}/pulls/7": {"body": {"head": {"sha": SHA if update_rc else WIRING_UPDATE_SHA, "ref": "ai/issue-1", "repo": {"full_name": REPO}},
+			"base": {"ref": "main"}, "mergeable": False if update_rc else True}},
+		f"repos/{REPO}/commits/{WIRING_UPDATE_SHA}": {"body": {"parents": [{"sha": SHA}, {"sha": WIRING_BASE_TIP}],
+			"committer": {"login": "web-flow"}, "commit": {"verification": {"verified": True}}}},
+		f"repos/{REPO}/actions/workflows/ci.yml/runs?head_sha={WIRING_UPDATE_SHA}": {"body": {"workflow_runs": []}},
+	}
+	return fixtures
+
+
+def _puts_of(calls: list[list[str]]) -> list[list[str]]:
+	return [c for c in calls if c[:3] == ["api", "-X", "PUT"]]
+
+
+def _posts_of(calls: list[list[str]]) -> list[list[str]]:
+	return [c for c in calls if c[:3] == ["api", "-X", "POST"]]
+
+
+def _old_head_dispatches(calls: list[list[str]]) -> list[list[str]]:
+	return [d for d in _dispatches(calls) if f"head_sha={SHA}" in d]
+
+
+def test_wiring_behind_head_is_updated_not_dispatched(fake_gh) -> None:
+	result, calls = _ensure(fake_gh, _wiring_fixtures(), env=WIRING_ENV)
+	out = result.stdout + result.stderr
+	assert f"REVIEW_FINAL_CI_WIRING pr=7 head={SHA} entry=dispatch outcome=updated reason=ci_wiring_behind" in out, out
+	assert f"REVIEW_FINAL_CI pr=7 head={SHA} outcome=deferred reason=ci_wiring_behind" in out
+	assert "rc=0 outcome=deferred" in out
+	puts = _puts_of(calls)
+	assert len(puts) == 1 and puts[0][3] == f"repos/{REPO}/pulls/7/update-branch" and f"expected_head_sha={SHA}" in puts[0]
+	assert _old_head_dispatches(calls) == []
+	assert [d for d in _dispatches(calls) if f"head_sha={WIRING_UPDATE_SHA}" in d], calls
+	posts = _posts_of(calls)
+	assert len(posts) == 1
+	body = posts[0][-1]
+	assert body.startswith("body=**Branch updated from `main` before merging** (update 1;")
+	assert "lacks commits that `main` (2 commit(s) ahead) made to it" in body
+	assert body.rstrip().endswith(f"<!-- ai:merge-base-sync:v1 pr=7 from={SHA} sync=1 base={WIRING_BASE_TIP} merge={WIRING_UPDATE_SHA} -->")
+	assert "final-ci-wiring-behind" not in body
+
+
+def test_wiring_current_head_dispatches_with_no_extra_call(fake_gh) -> None:
+	fixtures = _wiring_fixtures()
+	off, off_calls = _ensure(fake_gh, fixtures, env={**WIRING_ENV, "FINAL_CI_WIRING_BEHIND_UPDATE_ENABLED": "false"})
+	assert "outcome=dispatched reason=no_run" in off.stdout, off.stdout + off.stderr
+	fresh_env = {**WIRING_ENV, "PR_FINAL_CI_BASE_REF": "", "PR_BASE_FRESHNESS_OUTCOME": "fresh",
+		"PR_BASE_FRESHNESS_HEAD_SHA": SHA, "PR_BASE_FRESHNESS_BASE_REF": "main"}
+	result, calls = _ensure(fake_gh, fixtures, env=fresh_env)
+	assert f"REVIEW_FINAL_CI_WIRING pr=7 head={SHA} entry=dispatch outcome=current reason=not_behind" in result.stdout, result.stdout + result.stderr
+	assert "outcome=dispatched reason=no_run" in result.stdout
+	assert calls == off_calls
+	assert not any("compare/" in " ".join(c) or c[:2] == ["api", "user"] for c in calls)
+
+
+def test_freshness_side_channel_spares_the_compare(fake_gh) -> None:
+	"""_pr_base_freshness keeps the base-side paths; the hook reads no second compare (G4)."""
+	fixtures = _wiring_fixtures(base_files=[{"filename": "docs/a.md"}, {"filename": "x.sh", "previous_filename": "y.sh"}])
+	script = LIB_PRELUDE + (f'_pr_base_freshness 7 "{SHA}" main >/dev/null; printf "paths=%s\\n" "$(printf %s "$PR_BASE_FRESHNESS_BASE_PATHS" | paste -sd, -)"; '
+		f'_pr_ensure_final_ci "{REPO}" 7 "{SHA}" ai/issue-1; echo "outcome=${{PR_FINAL_CI_OUTCOME}}"')
+	result, calls = fake_gh(script, fixtures, {"REVIEW_FINAL_CI_WORKFLOW": "ci.yml", **WIRING_ENV, "PR_FINAL_CI_BASE_REF": ""})
+	assert "paths=docs/a.md,x.sh,y.sh" in result.stdout, result.stdout + result.stderr
+	assert "outcome=current reason=not_behind" in result.stdout
+	assert "outcome=dispatched" in result.stdout
+	assert len([c for c in calls if "compare/" in " ".join(c)]) == 1
+
+
+def test_pr_changing_ci_yml_itself_dispatches_as_today(fake_gh) -> None:
+	fixtures = _wiring_fixtures(base_files=[{"filename": "scripts/x.sh"}])
+	fixtures[f"repos/{REPO}/pulls/7/files"] = {"body": [{"filename": ".github/workflows/ci.yml"}]}
+	result, calls = _ensure(fake_gh, fixtures, env=WIRING_ENV)
+	assert "outcome=current reason=not_behind" in result.stdout, result.stdout + result.stderr
+	assert "outcome=dispatched reason=no_run" in result.stdout
+	assert len(_old_head_dispatches(calls)) == 1
+	assert _puts_of(calls) == []
+	# Same through the freshness side channel (clean, base paths known): no compare.
+	env = {**WIRING_ENV, "PR_BASE_FRESHNESS_OUTCOME": "clean", "PR_BASE_FRESHNESS_HEAD_SHA": SHA,
+		"PR_BASE_FRESHNESS_BASE_REF": "main", "PR_BASE_FRESHNESS_BASE_PATHS": "scripts/x.sh\ndocs/a.md"}
+	result, calls = _ensure(fake_gh, fixtures, env=env)
+	assert "outcome=current reason=not_behind" in result.stdout
+	assert len(_old_head_dispatches(calls)) == 1
+	assert not any("compare/" in " ".join(c) for c in calls)
+
+
+def test_wiring_behind_update_refused_records_reason_and_does_not_dispatch(fake_gh) -> None:
+	result, calls = _ensure(fake_gh, _wiring_fixtures(update_rc=1), env=WIRING_ENV)
+	out = result.stdout + result.stderr
+	assert f"REVIEW_FINAL_CI_WIRING pr=7 head={SHA} entry=dispatch outcome=held reason=update_branch_refused" in out, out
+	assert "outcome=deferred reason=ci_wiring_behind" in out
+	assert _dispatches(calls) == []
+	posts = _posts_of(calls)
+	assert len(posts) == 1 and posts[0][-1].rstrip().endswith(WIRING_MARKER)
+	assert "Final CI held" in posts[0][-1]
+	assert "because of a merge conflict" in posts[0][-1]
+	# The recorded refusal (by the token's own login) holds the head: no new attempt.
+	recorded = [{"user": {"login": "bot"}, "body": "x\n\n" + WIRING_MARKER}]
+	result, calls = _ensure(fake_gh, _wiring_fixtures(update_rc=1, comments=recorded), env=WIRING_ENV)
+	assert "outcome=held reason=recorded" in result.stdout, result.stdout + result.stderr
+	assert _puts_of(calls) == [] and _posts_of(calls) == [] and _dispatches(calls) == []
+	# A forged marker from another login does not suppress the update.
+	forged = [{"user": {"login": "mallory"}, "body": WIRING_MARKER}]
+	result, calls = _ensure(fake_gh, _wiring_fixtures(update_rc=1, comments=forged), env=WIRING_ENV)
+	assert "outcome=held reason=update_branch_refused" in result.stdout, result.stdout + result.stderr
+	assert len(_puts_of(calls)) == 1
+
+
+def test_wiring_behind_refusal_without_conflict_or_after_a_move_posts_no_marker(fake_gh) -> None:
+	"""A head another caller already moved records nothing; a refusal without a
+	confirmed conflict (mergeable true, null, or an unreadable PR read) posts only
+	the one-time retry note, never the hold marker."""
+	pr_key = f"repos/{REPO}/pulls/7"
+	retry_marker = f"<!-- ai:final-ci-wiring-behind:v1 pr=7 head={SHA} reason=update_branch_failed -->"
+	cases = (
+		({"body": {"head": {"sha": WIRING_UPDATE_SHA, "ref": "ai/issue-1", "repo": {"full_name": REPO}}, "base": {"ref": "main"}, "mergeable": False}}, "head_moved"),
+		({"body": {"head": {"sha": SHA, "ref": "ai/issue-1", "repo": {"full_name": REPO}}, "base": {"ref": "main"}, "mergeable": True}}, "update_branch_failed"),
+		({"body": {"head": {"sha": SHA, "ref": "ai/issue-1", "repo": {"full_name": REPO}}, "base": {"ref": "main"}, "mergeable": None}}, "update_branch_failed"),
+		({"rc": 1}, "update_branch_failed"),
+	)
+	for pr_fixture, reason in cases:
+		fixtures = _wiring_fixtures(update_rc=1)
+		fixtures[pr_key] = pr_fixture
+		result, calls = _ensure(fake_gh, fixtures, env=WIRING_ENV)
+		out = result.stdout + result.stderr
+		assert f"REVIEW_FINAL_CI_WIRING pr=7 head={SHA} entry=dispatch outcome=held reason={reason}" in out, out
+		assert "outcome=deferred reason=ci_wiring_behind" in out
+		assert len(_puts_of(calls)) == 1 and _dispatches(calls) == []
+		posts = _posts_of(calls)
+		if reason == "head_moved":
+			assert posts == []
+		else:
+			assert len(posts) == 1 and posts[0][-1].rstrip().endswith(retry_marker), posts
+			assert WIRING_MARKER not in posts[0][-1]
+
+
+def test_wiring_behind_second_refusal_after_retry_note_records_the_hold(fake_gh) -> None:
+	"""The retry note allows one more attempt; a second refusal posts the hold marker."""
+	retry_note = [{"user": {"login": "bot"}, "body": f"x\n\n<!-- ai:final-ci-wiring-behind:v1 pr=7 head={SHA} reason=update_branch_failed -->"}]
+	fixtures = _wiring_fixtures(update_rc=1, comments=retry_note)
+	fixtures[f"repos/{REPO}/pulls/7"] = {"body": {"head": {"sha": SHA, "ref": "ai/issue-1", "repo": {"full_name": REPO}},
+		"base": {"ref": "main"}, "mergeable": True}}
+	result, calls = _ensure(fake_gh, fixtures, env=WIRING_ENV)
+	out = result.stdout + result.stderr
+	assert f"REVIEW_FINAL_CI_WIRING pr=7 head={SHA} entry=dispatch outcome=held reason=update_branch_refused" in out, out
+	assert len(_puts_of(calls)) == 1 and _dispatches(calls) == []
+	posts = _posts_of(calls)
+	assert len(posts) == 1 and posts[0][-1].rstrip().endswith(WIRING_MARKER)
+	assert "without reporting a merge conflict" in posts[0][-1]
+
+
+NO_UPDATE_NOTE = f"<!-- ai:final-ci-wiring-behind:v1 pr=7 head={SHA} reason=no_update_path -->"
+
+
+def test_wiring_behind_check_only_holds_without_lease_update_or_dispatch(fake_gh) -> None:
+	"""PR_FINAL_CI_WIRING_NO_UPDATE (review exits that never merge): hold, no update, no stale
+	dispatch, and one note on the PR (G2) that is not a hold."""
+	result, calls = _ensure(fake_gh, _wiring_fixtures(), env={**WIRING_ENV, "PR_FINAL_CI_WIRING_NO_UPDATE": "true"})
+	out = result.stdout + result.stderr
+	assert f"REVIEW_FINAL_CI_WIRING pr=7 head={SHA} entry=dispatch outcome=held reason=no_update_path" in out, out
+	assert "outcome=deferred reason=ci_wiring_behind" in out
+	assert _puts_of(calls) == [] and _dispatches(calls) == []
+	posts = _posts_of(calls)
+	assert len(posts) == 1 and posts[0][-1].rstrip().endswith(NO_UPDATE_NOTE), posts
+	# The note is posted once per head.
+	noted = [{"user": {"login": "bot"}, "body": "x\n\n" + NO_UPDATE_NOTE}]
+	result, calls = _ensure(fake_gh, _wiring_fixtures(comments=noted), env={**WIRING_ENV, "PR_FINAL_CI_WIRING_NO_UPDATE": "true"})
+	assert "outcome=held reason=no_update_path" in result.stdout, result.stdout + result.stderr
+	assert _puts_of(calls) == [] and _posts_of(calls) == [] and _dispatches(calls) == []
+	# The note is not a hold: a merge path still updates the branch.
+	result, calls = _ensure(fake_gh, _wiring_fixtures(comments=noted), env=WIRING_ENV)
+	assert "outcome=updated reason=ci_wiring_behind" in result.stdout, result.stdout + result.stderr
+	assert len(_puts_of(calls)) == 1
+	# A current head still dispatches as before.
+	fixtures = _wiring_fixtures(base_files=[{"filename": "scripts/x.sh"}])
+	result, calls = _ensure(fake_gh, fixtures, env={**WIRING_ENV, "PR_FINAL_CI_WIRING_NO_UPDATE": "true"})
+	assert "outcome=dispatched reason=no_run" in result.stdout, result.stdout + result.stderr
+	assert len(_old_head_dispatches(calls)) == 1
+
+
+def test_e2e_labelled_pr_is_never_updated_by_the_sweep_path(fake_gh) -> None:
+	"""The sweep calls _pr_ensure_final_ci without the check-only flag; the e2e-smoke-test
+	label in the PR read it already makes (no base ref known) holds the head instead."""
+	fixtures = _wiring_fixtures()
+	fixtures[f"repos/{REPO}/pulls/7"] = {"body": {"head": {"sha": SHA, "ref": "ai/issue-1", "repo": {"full_name": REPO}},
+		"base": {"ref": "main"}, "labels": [{"name": "e2e-smoke-test"}]}}
+	result, calls = _ensure(fake_gh, fixtures, env={**WIRING_ENV, "PR_FINAL_CI_BASE_REF": ""})
+	out = result.stdout + result.stderr
+	assert f"REVIEW_FINAL_CI_WIRING pr=7 head={SHA} entry=dispatch outcome=held reason=no_update_path" in out, out
+	assert _puts_of(calls) == [] and _dispatches(calls) == []
+
+
+def test_non_merge_auto_merge_exits_skip_the_wiring_update() -> None:
+	"""The auto-merge-off and e2e-smoke-test exits never merge: check only (no lease, no branch update)."""
+	text = (REPO_ROOT / "scripts/review_enable_auto_merge.sh").read_text(encoding="utf-8")
+	calls = re.findall(r"^\s*(.*)review_enable_auto_merge_ensure_final_ci\s*$", text, re.M)
+	assert len(calls) == 2, calls
+	assert all(c.strip() == "PR_FINAL_CI_WIRING_NO_UPDATE=true" for c in calls), calls
+
+
+def test_poller_ruleset_blocked_final_merge_routes_missing_ci_final() -> None:
+	"""G3 on the poller's final merge: the rc=1 early return calls the wiring update first."""
+	text = (REPO_ROOT / "scripts/orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	start = text.index('if [ "${final_ruleset_rc}" = "1" ]; then')
+	branch = text[start:text.index("return 1", start)]
+	assert '"${FINAL_CI_WIRING_STATUS_CONTEXT:-ci/final} (missing)"' in branch
+	assert '_pr_final_ci_wiring_behind_update "${final_pr}" "${pr_head_sha}" "${default_branch}"' in branch
+	assert "blocked_status || true" in branch
+
+
+def test_wiring_behind_unreadable_comments_attempt_without_posting(fake_gh) -> None:
+	fixtures = _wiring_fixtures(update_rc=1)
+	fixtures["user"] = {"rc": 1}
+	result, calls = _ensure(fake_gh, fixtures, env=WIRING_ENV)
+	assert "outcome=held reason=update_branch_refused" in result.stdout, result.stdout + result.stderr
+	assert "comment=skipped reason=notes_unreadable" in result.stdout + result.stderr
+	assert len(_puts_of(calls)) == 1 and _posts_of(calls) == [] and _dispatches(calls) == []
+
+
+def test_wiring_behind_waits_for_a_merge_lease_held_by_another_pr(fake_gh) -> None:
+	import time
+
+	lease_sha, tree_sha, now = "3" * 40, "4" * 40, int(time.time())
+	fixtures = _wiring_fixtures()
+	fixtures[f"repos/{REPO}/git/matching-refs/merge-lease/main"] = {"body": [{"ref": "refs/merge-lease/main", "object": {"sha": lease_sha}}]}
+	fixtures[f"repos/{REPO}/git/commits/{lease_sha}"] = {"body": {"tree": {"sha": tree_sha},
+		"message": f"merge-lease v1\nstate=held\nbase=main\npr=5\nhead={'b' * 40}\nexpires={now + 3600}\nacquired={now}\nupdated={now}\npaths:\n"}}
+	result, calls = _ensure(fake_gh, fixtures, env={**WIRING_ENV, "MERGE_LEASE_ENABLED": "true"})
+	out = result.stdout + result.stderr
+	assert "REVIEW_FINAL_CI_WIRING pr=7 head=" + SHA + " entry=dispatch outcome=held reason=merge_lease_" in out, out
+	assert "outcome=deferred reason=ci_wiring_behind" in out
+	assert _puts_of(calls) == [] and _dispatches(calls) == []
+
+
+def _guard(fake_gh, fixtures: dict, blockers: str, env: dict | None = None):
+	pr_json = json.dumps({"number": 7, "head": {"sha": SHA}, "base": {"ref": "main"}, "mergeable_state": "blocked"})
+	script = LIB_PRELUDE + f"_pr_sync_merge_blocked_guard '{pr_json}' main '{blockers}'; echo \"guard_rc=$?\""
+	return fake_gh(script, fixtures, {**WIRING_ENV, **(env or {})})
+
+
+def test_blocked_by_missing_ci_final_routes_to_update(fake_gh) -> None:
+	runs = _runs({"status": "completed", "conclusion": "success"})
+	result, calls = _guard(fake_gh, _wiring_fixtures(runs=runs), "ci/final (missing)")
+	out = result.stdout + result.stderr
+	assert f"SYNC_MERGE_BLOCKED_GUARD outcome=deferred pr=7 head={SHA} state=blocked blockers=ci/final (missing)" in out
+	assert f"REVIEW_FINAL_CI_WIRING pr=7 head={SHA} entry=blocked_status outcome=updated reason=ci_wiring_behind" in out, out
+	assert "guard_rc=1" in out
+	puts = _puts_of(calls)
+	assert len(puts) == 1 and f"expected_head_sha={SHA}" in puts[0]
+	# The poller never sets REVIEW_FINAL_CI_WORKFLOW; the update head still gets its final CI.
+	assert [d for d in _dispatches(calls) if f"head_sha={WIRING_UPDATE_SHA}" in d], out
+	# Any other blocker set: no wiring check at all.
+	result, calls = _guard(fake_gh, _wiring_fixtures(runs=runs), "ci/final (missing), ai-review/head-gate (pending)")
+	assert "REVIEW_FINAL_CI_WIRING" not in result.stdout and "guard_rc=1" in result.stdout
+	assert _puts_of(calls) == []
+	# A final CI run still in flight is not a wiring problem.
+	result, calls = _guard(fake_gh, _wiring_fixtures(runs=_runs({"status": "in_progress", "conclusion": None})), "ci/final (missing)")
+	assert "entry=blocked_status outcome=current reason=final_ci_in_flight" in result.stdout, result.stdout + result.stderr
+	assert _puts_of(calls) == [] and not any("compare/" in " ".join(c) for c in calls)
+
+
+def test_wiring_behind_switch_off_and_failed_compare_dispatch_as_today(fake_gh) -> None:
+	result, calls = _ensure(fake_gh, _wiring_fixtures(), env={**WIRING_ENV, "FINAL_CI_WIRING_BEHIND_UPDATE_ENABLED": "false"})
+	assert "REVIEW_FINAL_CI_WIRING pr=7 head=" + SHA + " entry=dispatch outcome=current reason=disabled" in result.stdout, result.stdout
+	assert "outcome=dispatched reason=no_run" in result.stdout
+	assert len(_old_head_dispatches(calls)) == 1 and _puts_of(calls) == []
+	assert not any("compare/" in " ".join(c) for c in calls)
+	fixtures = {**_wiring_fixtures(), COMPARE_KEY: {"rc": 1}}
+	result, calls = _ensure(fake_gh, fixtures, env=WIRING_ENV)
+	assert "entry=dispatch outcome=unknown reason=compare_failed" in result.stdout, result.stdout + result.stderr
+	assert "outcome=dispatched reason=no_run" in result.stdout
+	assert len(_old_head_dispatches(calls)) == 1 and _puts_of(calls) == []
+
+
+def test_wiring_behind_truncated_compare_asks_for_the_file_commit(fake_gh) -> None:
+	file_sha = "5" * 40
+	many = [{"filename": f"f{n}.txt"} for n in range(300)]
+	base = {**_wiring_fixtures(base_files=many),
+		f"repos/{REPO}/commits?sha=main&path=.github/workflows/ci.yml": {"body": [{"sha": file_sha}]}}
+	for status, expected in (("ahead", "outcome=current reason=not_behind"), ("diverged", "outcome=updated reason=ci_wiring_behind")):
+		fixtures = {**base, f"repos/{REPO}/compare/{file_sha}...{SHA}": {"body": {"status": status}}}
+		result, calls = _ensure(fake_gh, fixtures, env=WIRING_ENV)
+		assert expected in result.stdout, result.stdout + result.stderr
+
+
+def test_wait_stops_at_once_when_the_wiring_is_behind(fake_gh) -> None:
+	fixtures = {**WAIT_FIXTURES, **_wiring_fixtures(update_rc=1)}
+	fixtures[f"repos/{REPO}/actions/runs?head_sha={SHA}"] = {"body": {"workflow_runs": []}}
+	script = LIB_PRELUDE + f'_pr_wait_for_required_checks 7 "{SHA}" main 5; echo "rc=$? outcome=${{PR_CHECKS_WAIT_OUTCOME}} final=${{PR_FINAL_CI_OUTCOME:-unset}}"'
+	env = {**WIRING_ENV, "PR_FINAL_CI_BASE_REF": "", "AUTO_MERGE_CHECKS_POLL_SECONDS": "30", "AUTO_MERGE_REQUIRED_CI_CHECK": "lint",
+		"ORCH_FINAL_MERGE_REQUIRED_CHECKS": "", "PR_CHECKS_HEAD_REF": "ai/issue-1", "REVIEW_FINAL_CI_WORKFLOW": "ci.yml"}
+	result, calls = fake_gh(script, fixtures, env)
+	out = result.stdout + result.stderr
+	assert "outcome=timeout waited_s=0 pending=0 reason=final_ci_wiring_behind ci_check=lint ci_state=absent" in out, out
+	assert "rc=1 outcome=timeout final=deferred" in out
+	assert _dispatches(calls) == []
+
+
+def test_ci_workflow_calls_no_local_reusable_workflow() -> None:
+	"""_pr_final_ci_wiring_behind_update checks only .github/workflows/<file>."""
+	text = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+	assert "uses: ./.github/workflows/" not in text
+
+
+def test_blocked_guard_honours_an_empty_final_ci_workflow(fake_gh) -> None:
+	"""REVIEW_FINAL_CI_WORKFLOW set to empty is the documented "final CI off": the guard's
+	G3 hook makes no wiring call, no update and no dispatch (unset still means ci.yml)."""
+	runs = _runs({"status": "completed", "conclusion": "success"})
+	result, calls = _guard(fake_gh, _wiring_fixtures(runs=runs), "ci/final (missing)", env={"REVIEW_FINAL_CI_WORKFLOW": ""})
+	out = result.stdout + result.stderr
+	assert "SYNC_MERGE_BLOCKED_GUARD outcome=deferred" in out and "guard_rc=1" in out, out
+	assert "REVIEW_FINAL_CI_WIRING" not in out
+	assert calls == []
+
+
+def test_blocked_status_hooks_do_not_turn_an_empty_workflow_into_ci_yml() -> None:
+	"""Both G3 hooks resolve the workflow through _pr_final_ci_wiring_workflow, never `:-ci.yml`."""
+	lib = (REPO_ROOT / "scripts/pr_checks_lib.sh").read_text(encoding="utf-8")
+	poller = (REPO_ROOT / "scripts/orchestrate_poll_process.sh").read_text(encoding="utf-8")
+	assert "${REVIEW_FINAL_CI_WORKFLOW:-ci.yml}" not in lib
+	assert "${REVIEW_FINAL_CI_WORKFLOW:-ci.yml}" not in poller
+	assert 'local REVIEW_FINAL_CI_WORKFLOW="${REVIEW_FINAL_CI_WORKFLOW-${wiring_wf}}"' in lib
+	assert poller.count("_pr_final_ci_wiring_workflow") >= 1 and lib.count('="$(_pr_final_ci_wiring_workflow)"') == 1
+
+
+# ---------------------------------------------------------------------------
+# Stale workflow file (issue #10093): a job cut off under the branch's older
+# ci.yml goes to the sweep's base sync instead of a review round.
+
+STALE_TIMEOUT_TEXT = "The job has exceeded the maximum execution time of 20m0s"
+STALE_HEAD_CI = "jobs:\n  orchestrate-poll:\n    timeout-minutes: 20\n  lint:\n    timeout-minutes: 5\n"
+STALE_BASE_CI = STALE_HEAD_CI.replace("timeout-minutes: 20", "timeout-minutes: 30")
+STALE_ENV = {**INFRA_ENV, "FINAL_CI_SWEEP_BASE_SYNC_ENABLED": "true"}
+
+
+def _blob(text: str, blob: str) -> dict:
+	return {"body": {**_contents(text)["body"], "sha": blob}}
+
+
+def _stale_step(name: str, conclusion: str) -> dict:
+	return {"name": name, "status": "completed", "conclusion": conclusion}
+
+
+def _stale_fixtures(*, base_ci: str = STALE_BASE_CI, base_blob: str = "2" * 40, poll_step: str = "cancelled",
+		head: dict | None = None) -> dict:
+	# Mirrors run 45520845433 (PR #9832): orchestrate-poll (0) cancelled at
+	# its 20-minute limit with no failed step; lint failed at its require step.
+	poll = {**_job("orchestrate-poll (0)", 1, "cancelled"), "steps": [
+		_stale_step("Set up job", "success"), _stale_step("Run the main poll suite", "success"),
+		_stale_step("Check-failure triage workflow security tests", poll_step)]}
+	lint = {**_job("lint", 2), "steps": [
+		_stale_step("Set up job", "success"), _stale_step("Require every CI job to succeed", "failure")]}
+	jobs = [poll, lint, _job("static-checks", 4, "success"), _job("final-ci-failed", 3, None, "in_progress")]
+	return {
+		f"repos/{REPO}/pulls/7": {"body": {"state": "open", "head": head or {"sha": SHA, "ref": "ai/issue-7", "repo": {"full_name": INFRA_REPO}},
+			"base": {"ref": "main"}}},
+		_comments_key(): {"body": []},
+		f"repos/{REPO}/{JOBS_KEY}": {"body": {"total_count": 4, "jobs": jobs}},
+		f"repos/{REPO}/check-runs/1001/annotations": {"body": [
+			{"message": "fingerprint drift (a passing test's ##[error] line)", "annotation_level": "failure"},
+			{"message": STALE_TIMEOUT_TEXT, "annotation_level": "failure"},
+			{"message": "The operation was canceled.", "annotation_level": "failure"}]},
+		f"repos/{REPO}/check-runs/1002/annotations": {"body": [
+			{"message": "CI jobs that did not succeed: orchestrate-poll", "annotation_level": "failure"},
+			{"message": "Process completed with exit code 1.", "annotation_level": "failure"}]},
+		f"repos/{REPO}/contents/.github/workflows/ci.yml?ref={SHA}": _blob(STALE_HEAD_CI, "1" * 40),
+		f"repos/{REPO}/contents/.github/workflows/ci.yml?ref=main": _blob(base_ci, base_blob),
+	}
+
+
+def test_stale_workflow_timeout_posts_no_failed_marker_and_defers_to_the_sweep(fake_gh) -> None:
+	result, calls = _infra_failed(fake_gh, _stale_fixtures(), STALE_ENV)
+	out = result.stdout + result.stderr
+	assert f"REVIEW_FINAL_CI_FAILED pr=7 head={SHA} outcome=stale_workflow_sync_deferred reason=stale_workflow_timeout" in result.stdout, out
+	bodies = _posted_bodies(calls)
+	assert len(bodies) == 1
+	assert bodies[0].rstrip().endswith(f"<!-- ai:final-ci-stale-workflow:v1 pr=7 head={SHA} -->")
+	assert "ai:final-ci-failed:v1" not in bodies[0]
+	assert _dispatches(calls) == []
+	reads = [" ".join(call) for call in calls]
+	assert any(f"contents/.github/workflows/ci.yml?ref={SHA}" in call for call in reads)
+	assert any("contents/.github/workflows/ci.yml?ref=main" in call for call in reads)
+	assert "infra_rerun_deferred" not in result.stdout
+
+
+@pytest.mark.parametrize("fixtures, env", [
+	# The synced head fails again under the same workflow file: handed back.
+	(_stale_fixtures(base_ci=STALE_HEAD_CI, base_blob="1" * 40), STALE_ENV),
+	# A step really failed.
+	(_stale_fixtures(poll_step="failure"), STALE_ENV),
+	# Base limit not higher than the head's.
+	(_stale_fixtures(base_ci=STALE_HEAD_CI + "# other change\n"), STALE_ENV),
+	({**_stale_fixtures(), f"repos/{REPO}/contents/.github/workflows/ci.yml?ref=main": {"rc": 1}}, STALE_ENV),
+	(_stale_fixtures(), {**STALE_ENV, "FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED": "false"}),
+	(_stale_fixtures(), {**STALE_ENV, "FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED": "maybe"}),
+	(_stale_fixtures(), {**STALE_ENV, "FINAL_CI_FAILED_RUN_ATTEMPT": "2"}),
+	(_stale_fixtures(), {**STALE_ENV, "FINAL_CI_SWEEP_BASE_SYNC_MAX": "0"}),
+	(_stale_fixtures(), {**STALE_ENV, "FINAL_CI_SWEEP_BASE_SYNC_ENABLED": "false"}),
+	(_stale_fixtures(), {**STALE_ENV, "REPOSITORY": "other/repo"}),
+	(_stale_fixtures(head={"sha": SHA, "ref": "orchestrator/project-5", "repo": {"full_name": INFRA_REPO}}), STALE_ENV),
+	(_stale_fixtures(head={"sha": SHA, "ref": "ai/issue-7", "repo": {"full_name": "fork/r"}}), STALE_ENV),
+])
+def test_stale_workflow_deferral_falls_back_to_the_hand_back(fake_gh, fixtures: dict, env: dict) -> None:
+	result, calls = _infra_failed(fake_gh, fixtures, env)
+	out = result.stdout + result.stderr
+	assert "outcome=redispatched" in result.stdout, out
+	assert "stale_workflow_sync_deferred" not in result.stdout
+	bodies = _posted_bodies(calls)
+	assert len(bodies) == 1 and f"<!-- ai:final-ci-failed:v1 pr=7 head={SHA} -->" in bodies[0]
+	if env.get("FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED") == "maybe":
+		assert "::warning::FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED has an unrecognised value" in out
+		assert "maybe" not in out
+
+
+def test_stale_marker_post_failure_falls_back_to_the_hand_back(fake_gh) -> None:
+	fixtures = {**_stale_fixtures(), _comments_key(): {"rc": 1}, f"{_comments_key()}?per_page=100": {"body": []}}
+	result, calls = _infra_failed(fake_gh, fixtures, STALE_ENV)
+	out = result.stdout + result.stderr
+	assert "::warning::Could not post the stale-workflow marker" in out, out
+	assert "stale_workflow_sync_deferred" not in result.stdout
+	# The fallback is today's hand-back (its marker POST fails the same way here).
+	assert "outcome=marker_failed" in result.stdout
+
+
+def test_ci_workflow_passes_the_stale_workflow_switches() -> None:
+	text = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+	job = text[text.index("\n  final-ci-failed:\n"):]
+	for line in (
+		"FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED: ${{ vars.FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED || 'true' }}",
+		"FINAL_CI_SWEEP_BASE_SYNC_ENABLED: ${{ vars.FINAL_CI_SWEEP_BASE_SYNC_ENABLED || 'true' }}",
+		"FINAL_CI_SWEEP_BASE_SYNC_MAX: ${{ vars.FINAL_CI_SWEEP_BASE_SYNC_MAX || '3' }}",
+	):
+		assert line in job, line
+	sweep = (REPO_ROOT / ".github/workflows/review_autofix_sweep.yml").read_text(encoding="utf-8")
+	step = sweep[sweep.index("- name: Ensure the final CI run on reviewed PR heads"):]
+	step = step[:step.index("\n      - name:")]
+	for line in (
+		"FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED: ${{ vars.FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED || 'true' }}",
+		"FINAL_CI_FAILED_REDISPATCH_ENABLED: ${{ vars.FINAL_CI_FAILED_REDISPATCH_ENABLED || 'true' }}",
+		"ALLOW_WORKFLOW_EDITS: ${{ contains(' 1 true yes on ', format(' {0} ', vars.ALLOW_WORKFLOW_EDITS || 'true')) }}",
+	):
+		assert line in step, line
+
+
+def _stale_marker_comment(head: str = SHA) -> dict:
+	return {"user": {"login": "github-actions[bot]", "type": "Bot"}, "author_association": "NONE",
+		"body": f"cut off\n\n<!-- ai:final-ci-stale-workflow:v1 pr=1 head={head} -->"}
+
+
+def _stale_sync_fixtures(comments: list, **overrides) -> dict:
+	fixtures = _base_sync_fixtures(comments=comments, **overrides)
+	# The hand-back reads the PR: still open on the marked head.
+	fixtures[f"repos/{REPO}/pulls/1"]["body"].update({"state": "open", "head": {"sha": SHA, "ref": "ai/issue-1", "repo": {"full_name": REPO}}})
+	return fixtures
+
+
+SYNC_MARKERS = [{"user": {"login": "pipeline-bot"}, "body": f"**Branch updated from `x` before merging** <!-- ai:final-ci-base-sync:v1 pr=1 -->\n\n<!-- ai:merge-base-sync:v1 pr=1 from={SHA} sync={n} base={BASE_TIP} merge={MERGE_SHA} -->"} for n in (1, 2, 3)]
+
+
+@pytest.mark.parametrize(("case", "reason"), [
+	("up_to_date", "outcome=skipped reason=up_to_date stale_workflow=handed_back"),
+	("max_syncs", "outcome=skipped reason=max_syncs syncs=3 max=3 stale_workflow=handed_back"),
+	("refused", "outcome=failed reason=update_branch_refused base=ai/issue-9 stale_workflow=handed_back"),
+	("switch_off", "outcome=skipped reason=stale_workflow_sync_disabled stale_workflow=handed_back"),
+	# An older branch's ci.yml does not pass the base-sync switches to the
+	# deferral, so the marker can appear while the sweep cannot sync at all.
+	("cap_zero", "outcome=skipped reason=cap_zero stale_workflow=handed_back"),
+	("base_sync_disabled", "outcome=skipped reason=base_sync_disabled stale_workflow=handed_back"),
+])
+def test_sweep_hands_a_stale_marked_head_back_when_it_cannot_sync(fake_gh, tmp_path: Path, case: str, reason: str) -> None:
+	env = {}
+	if case == "up_to_date":
+		fixtures = _stale_sync_fixtures([_stale_marker_comment()], ahead_by=0)
+	elif case == "max_syncs":
+		fixtures = _stale_sync_fixtures(SYNC_MARKERS + [_stale_marker_comment()])
+	elif case == "refused":
+		fixtures = _stale_sync_fixtures([_stale_marker_comment()])
+		fixtures[f"repos/{REPO}/pulls/1/update-branch"] = {"rc": 1}
+	elif case == "cap_zero":
+		fixtures = _stale_sync_fixtures([_stale_marker_comment()])
+		env["FINAL_CI_SWEEP_BASE_SYNC_MAX"] = "0"
+	elif case == "base_sync_disabled":
+		fixtures = _stale_sync_fixtures([_stale_marker_comment()])
+		env["FINAL_CI_SWEEP_BASE_SYNC_ENABLED"] = "false"
+	else:
+		fixtures = _stale_sync_fixtures([_stale_marker_comment()])
+		env["FINAL_CI_STALE_WORKFLOW_SYNC_ENABLED"] = "false"
+	result, calls = _sweep_one(fake_gh, tmp_path, fixtures, env)
+	out = result.stdout + result.stderr
+	assert f"REVIEW_FINAL_CI_BASE_SYNC pr=1 head={SHA} {reason}" in result.stdout, out
+	assert f"REVIEW_FINAL_CI_FAILED pr=1 head={SHA} outcome=redispatched workflow=internal-review.yml" in result.stdout, out
+	bodies = _posted_bodies(calls)
+	assert len(bodies) == 1 and f"<!-- ai:final-ci-failed:v1 pr=1 head={SHA} -->" in bodies[0]
+	dispatches = _dispatches(calls)
+	assert len(dispatches) == 1 and dispatches[0][2] == "internal-review.yml" and "pr_number=1" in dispatches[0]
+	if case != "refused":
+		assert _puts(calls) == []
+
+
+def test_sweep_syncs_a_stale_marked_head_that_is_behind(fake_gh, tmp_path: Path) -> None:
+	result, calls = _sweep_one(fake_gh, tmp_path, _base_sync_fixtures(comments=[_stale_marker_comment()]))
+	out = result.stdout + result.stderr
+	assert "outcome=synced reason=behind base=ai/issue-9" in result.stdout, out
+	assert "stale_workflow=" not in result.stdout and "REVIEW_FINAL_CI_FAILED" not in result.stdout
+	assert len(_puts(calls)) == 1
+	bodies = _posted_bodies(calls)
+	assert len(bodies) == 1 and "<!-- ai:final-ci-base-sync:v1 pr=1 -->" in bodies[0]
+
+
+@pytest.mark.parametrize("comments, overrides", [
+	# A transient skip retries on a later tick.
+	([_stale_marker_comment()], {"gate": "pending"}),
+	# A marker for another head, or an untrusted author, does not count.
+	([_stale_marker_comment(OTHER_SHA)], {"ahead_by": 0}),
+	([{**_stale_marker_comment(), "user": {"login": "mallory", "type": "User"}}], {"ahead_by": 0}),
+	# Already handed back once: the failed marker is on the head.
+	([_stale_marker_comment(), {"user": {"type": "Bot"}, "body": f"<!-- ai:final-ci-failed:v1 pr=1 head={SHA} -->"}], {"ahead_by": 0}),
+])
+def test_sweep_does_not_hand_back_unmarked_or_transient_heads(fake_gh, tmp_path: Path, comments: list, overrides: dict) -> None:
+	result, calls = _sweep_one(fake_gh, tmp_path, _stale_sync_fixtures(comments, **overrides))
+	assert "REVIEW_FINAL_CI_BASE_SYNC pr=1" in result.stdout, result.stdout + result.stderr
+	assert "stale_workflow=" not in result.stdout and "REVIEW_FINAL_CI_FAILED" not in result.stdout
+	assert _dispatches(calls) == [] and _posted_bodies(calls) == []
+
+
+def test_sweep_stale_hand_back_runs_nothing_in_dry_run(fake_gh, tmp_path: Path) -> None:
+	result, calls = _sweep_one(fake_gh, tmp_path, _stale_sync_fixtures([_stale_marker_comment()], ahead_by=0), {"DRY_RUN": "true"})
+	assert "reason=up_to_date stale_workflow=dry_run" in result.stdout, result.stdout + result.stderr
+	assert _dispatches(calls) == [] and _posted_bodies(calls) == []
+
+
+def test_sweep_logs_a_failed_stale_hand_back(fake_gh, tmp_path: Path) -> None:
+	# The hand-back script ran but dispatched nothing: the note says so.
+	fixtures = _stale_sync_fixtures([_stale_marker_comment()], ahead_by=0)
+	result, calls = _sweep_one(fake_gh, tmp_path, fixtures, {"FINAL_CI_FAILED_REDISPATCH_ENABLED": "false"})
+	out = result.stdout + result.stderr
+	assert f"REVIEW_FINAL_CI_BASE_SYNC pr=1 head={SHA} outcome=skipped reason=up_to_date stale_workflow=hand_back_failed" in result.stdout, out
+	assert "stale_workflow=handed_back" not in result.stdout
+	assert _dispatches(calls) == [] and _posted_bodies(calls) == []
+
+
+def test_sweep_unmarked_head_is_not_handed_back_when_syncing_is_off(fake_gh, tmp_path: Path) -> None:
+	for env, reason in (({"FINAL_CI_SWEEP_BASE_SYNC_MAX": "0"}, "cap_zero"), ({"FINAL_CI_SWEEP_BASE_SYNC_ENABLED": "false"}, "base_sync_disabled")):
+		result, calls = _sweep_one(fake_gh, tmp_path, _stale_sync_fixtures([]), env)
+		assert f"REVIEW_FINAL_CI_BASE_SYNC pr=1 head={SHA} outcome=skipped reason={reason}" in result.stdout, result.stdout + result.stderr
+		assert "stale_workflow=" not in result.stdout and "REVIEW_FINAL_CI_FAILED" not in result.stdout
+		assert _puts(calls) == [] and _dispatches(calls) == [] and _posted_bodies(calls) == []

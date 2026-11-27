@@ -6,6 +6,9 @@ ci.yml. A fake `gh` answers `pulls/7` reads and, when FAKE_GH_REFRESH_TO is
 set, moves the origin's merge ref on the first `mergeable` read, standing in
 for GitHub's recompute. It answers `actions/runs/<id>` with
 FAKE_GH_CREATED_AT, the run's creation time the script pins the base to.
+The sync-only check's `compare/...` and `pulls/7/files?...` reads are answered
+from JSON fixtures under FAKE_GH_FIXTURES (see `_fixture_name`), filtered with
+the real `jq`; a missing fixture is an API error.
 
 Commit dates are fixed: base 1 at 00:00, the PR head at 00:30, base 2 (the
 fix) at 02:00 on 2026-01-01. The default run was created at 03:00, so its
@@ -37,6 +40,19 @@ FAKE_GH = textwrap.dedent(
 	jq = args[args.index("--jq") + 1] if "--jq" in args else ""
 	if os.environ.get("FAKE_GH_FAIL") == "1":
 		sys.exit(1)
+	path = args[1] if len(args) > 1 else ""
+	if "/compare/" in path or "/pulls/7/files" in path:
+		name = path.split("repos/o/r/", 1)[-1].replace("/", "_").replace("?", "_").replace("&", "_") + ".json"
+		fixture = os.path.join(os.environ.get("FAKE_GH_FIXTURES", "/nonexistent"), name)
+		if not os.path.exists(fixture):
+			sys.exit(1)
+		move_ref, move_to = os.environ.get("FAKE_GH_FILES_MOVE_REF", ""), os.environ.get("FAKE_GH_FILES_MOVE_TO", "")
+		if "/pulls/7/files" in path and move_ref and move_to:
+			# The base moves while the sync-only check reads the PR's files.
+			subprocess.run(["git", "-C", os.environ["FAKE_ORIGIN"], "update-ref", move_ref, move_to], check=True)
+		out = subprocess.run(["jq", "-r", jq, fixture], capture_output=True, text=True)
+		sys.stdout.write(out.stdout)
+		sys.exit(out.returncode)
 	if ".created_at" in jq:
 		created = os.environ.get("FAKE_GH_CREATED_AT", "")
 		if not created:
@@ -62,6 +78,9 @@ FAKE_GH = textwrap.dedent(
 			print(answers[min(n, len(answers) - 1)])
 			sys.exit(0)
 		print(os.environ.get("FAKE_GH_MERGEABLE", "true"))
+		sys.exit(0)
+	if ".changed_files" in jq:
+		print(os.environ.get("FAKE_GH_BASE_REF", "main") + "\t" + os.environ.get("FAKE_GH_CHANGED_FILES", "1"))
 		sys.exit(0)
 	if ".base.ref" in jq:
 		print(os.environ.get("FAKE_GH_BASE_REF", "main"))
@@ -444,6 +463,9 @@ def test_every_final_ci_checkout_is_followed_by_the_check() -> None:
 			assert check.get("if") == (step.get("if") or "github.event_name == 'workflow_dispatch'"), name
 			assert "inputs.pr_number" in check["env"]["FINAL_CI_PR_NUMBER"]
 			assert check["env"]["CI_FINAL_MERGE_REF_FRESH_ENABLED"] == "${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}"
+			assert check["env"]["CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED"] == (
+				"${{ vars.CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED || 'true' }}"
+			), name
 	assert seen == 10
 
 
@@ -460,3 +482,310 @@ def test_steps_that_fetch_the_merge_commit_fetch_a_local_merges_parents() -> Non
 	for body in bodies:
 		assert 'origin "${head_commit}"' not in body
 		assert "CI_FINAL_MERGE_REF_LOCAL_MERGE" in body
+
+
+# --- Sync-only acceptance at the stale exit (issue #10177, Phase 10 / D10) ---
+#
+# Integration world on top of `world`: `orchestrator/project-1` at I0 (02:10),
+# the PR head H from I0 touching p.txt (02:20), `refs/pull/7/merge` =
+# merge(I0, H). The default branch gets M1 touching m.txt (02:30), and the
+# integration tip S is the sync merge (I0, M1) (02:40). The run was created at
+# 03:00, so the pin is S. CI_FINAL_MERGE_REF_MERGE_DEPTH=1 makes the local
+# merge fail as merge_base_too_deep, which reaches the stale exit.
+
+INTEGRATION = "orchestrator/project-1"
+
+
+def _fixture_name(endpoint: str) -> str:
+	return endpoint.replace("/", "_").replace("?", "_").replace("&", "_") + ".json"
+
+
+def _commit(sha: str, parents: list[str], message: str) -> dict:
+	return {"sha": sha, "parents": [{"sha": p} for p in parents], "commit": {"message": message}}
+
+
+@pytest.fixture()
+def integration(world, tmp_path: Path):
+	def build(default: str = "main") -> dict:
+		work, origin = world["work"], world["origin"]
+		_git(work, "checkout", "-q", "--detach", world["new_base"])
+		(work / "i.txt").write_text("i\n", encoding="utf-8")
+		_git(work, "add", "i.txt")
+		_git(work, "commit", "-q", "-m", "integration start", date="02:10:00")
+		i0 = _git(work, "rev-parse", "HEAD")
+		(work / "p.txt").write_text("pr\n", encoding="utf-8")
+		_git(work, "add", "p.txt")
+		_git(work, "commit", "-q", "-m", "integration pr", date="02:20:00")
+		pr_head = _git(work, "rev-parse", "HEAD")
+		_git(work, "checkout", "-q", "--detach", i0)
+		_git(work, "merge", "-q", "--no-ff", "-m", "integration merge ref", pr_head, date="02:21:00")
+		merge_ref = _git(work, "rev-parse", "HEAD")
+		_git(work, "checkout", "-q", "--detach", world["new_base"])
+		(work / "m.txt").write_text("m\n", encoding="utf-8")
+		_git(work, "add", "m.txt")
+		_git(work, "commit", "-q", "-m", "main 1", date="02:30:00")
+		m1 = _git(work, "rev-parse", "HEAD")
+		# A merge of the PR head into M1: a refreshed ref whose first parent is not the pin.
+		_git(work, "merge", "-q", "--no-ff", "-m", "merge into m1", pr_head, date="02:35:00")
+		m1_merge = _git(work, "rev-parse", "HEAD")
+		_git(work, "checkout", "-q", "--detach", i0)
+		_git(work, "merge", "-q", "--no-ff", "-m", f"chore: sync {default} into {INTEGRATION}", m1, date="02:40:00")
+		sync = _git(work, "rev-parse", "HEAD")
+		_git(work, "checkout", "-q", "main")
+		_git(
+			work, "push", "-q", "--force", str(origin),
+			f"{m1}:refs/heads/{default}",
+			f"{sync}:refs/heads/{INTEGRATION}",
+			f"{pr_head}:refs/heads/integration-pr",
+			f"{m1_merge}:refs/heads/keep-m1-merge",
+			f"+{merge_ref}:refs/pull/7/merge",
+		)
+		if default != "main":
+			_git(origin, "symbolic-ref", "HEAD", f"refs/heads/{default}")
+		fixtures = tmp_path / "fixtures"
+		fixtures.mkdir(exist_ok=True)
+		summary = tmp_path / "step_summary.md"
+		summary.write_text("", encoding="utf-8")
+		state = {
+			"default": default, "i0": i0, "pr_head": pr_head, "merge_ref": merge_ref, "m1": m1, "m1_merge": m1_merge,
+			"sync": sync, "fixtures": fixtures, "summary": summary,
+		}
+
+		def fixture(endpoint: str, payload) -> None:
+			(fixtures / _fixture_name(endpoint)).write_text(json.dumps(payload), encoding="utf-8")
+
+		def standard(*, range_commits=None, range_files=None, default_commits=None, pr_files=None, status="ahead"):
+			commits = range_commits if range_commits is not None else [
+				_commit(m1, [world["new_base"]], "main 1"),
+				_commit(sync, [i0, m1], f"chore: sync {default} into {INTEGRATION}\n\nbody"),
+			]
+			fixture(f"compare/{i0}...{sync}", {
+				"status": status, "total_commits": len(commits), "commits": commits,
+				"files": range_files if range_files is not None else [{"filename": "m.txt", "status": "added"}],
+			})
+			dflt = default_commits if default_commits is not None else [_commit(m1, [world["new_base"]], "main 1")]
+			fixture(f"compare/{i0}...{default}", {"status": "diverged", "total_commits": len(dflt), "commits": dflt})
+			fixture("pulls/7/files?per_page=100&page=1", pr_files if pr_files is not None else [{"filename": "p.txt", "status": "added"}])
+
+		def run(env: dict | None = None):
+			full = {
+				"FAKE_GH_BASE_REF": INTEGRATION, "FAKE_GH_FIXTURES": str(fixtures), "FAKE_GH_CHANGED_FILES": "1",
+				"GITHUB_SHA": pr_head, "CI_FINAL_MERGE_REF_MERGE_DEPTH": "1", "GITHUB_STEP_SUMMARY": str(summary),
+			}
+			full.update(env or {})
+			return world["run"](env=full)
+
+		state.update({"fixture": fixture, "standard": standard, "run": run})
+		return state
+
+	return build
+
+
+def _stale_detail(result, detail: str) -> None:
+	assert result.returncode == 1, result.stdout + result.stderr
+	assert "::error::CI_FINAL_MERGE_REF:" in result.stdout
+	line = next(ln for ln in result.stdout.splitlines() if "outcome=stale " in ln)
+	assert line.endswith(f" detail={detail}"), line
+	assert "outcome=stale_accepted" not in result.stdout
+
+
+def test_sync_only_stale_merge_ref_is_accepted(integration) -> None:
+	it = integration()
+	it["standard"]()
+	result, tested, calls = it["run"]()
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "::error::" not in result.stdout
+	assert (
+		f"outcome=stale_accepted reason=sync_only_no_overlap base={INTEGRATION} tested_base={it['i0']} "
+		f"tip={it['sync']} commits=2 files=1"
+	) in result.stdout
+	assert tested == it["merge_ref"]
+	summary = it["summary"].read_text(encoding="utf-8").splitlines()
+	assert len(summary) == 1 and it["i0"] in summary[0] and it["sync"] in summary[0]
+	assert result.exported == []
+	assert sum(1 for c in calls if "/compare/" in c[1]) == 2
+	assert sum(1 for c in calls if "/pulls/7/files" in c[1]) == 1
+
+
+def test_default_branch_pr_stale_merge_ref_still_fails(world) -> None:
+	result, tested, calls = world["run"](env={"CI_FINAL_MERGE_REF_MERGE_DEPTH": "1"})
+	_stale_detail(result, "default_base")
+	assert f"outcome=stale reason=merge_base_too_deep base=main tested_base={world['old_base']}" in result.stdout
+	assert tested == world["old_merge"]
+	assert not any("/compare/" in c[1] or "/files" in c[1] for c in calls)
+
+
+def test_sync_only_switch_off_keeps_the_stale_exit(integration) -> None:
+	it = integration()
+	it["standard"]()
+	result, tested, calls = it["run"](env={"CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED": "false"})
+	assert result.returncode == 1
+	expected = (
+		f"CI_FINAL_MERGE_REF pr=7 head={it['pr_head']} outcome=stale reason=merge_base_too_deep base={INTEGRATION} "
+		f"tested_base={it['i0']} tip={it['sync']} pin={it['sync']} pin_source=run_created_at"
+	)
+	assert expected in result.stdout.splitlines(), result.stdout
+	assert "detail=" not in result.stdout
+	assert not any("/compare/" in c[1] for c in calls)
+	assert it["summary"].read_text(encoding="utf-8") == ""
+
+
+def test_sync_touching_a_pr_file_fails_as_overlap(integration) -> None:
+	it = integration()
+	it["standard"](range_files=[{"filename": "m.txt", "status": "added"}, {"filename": "p.txt", "status": "modified"}])
+	result, _, _ = it["run"]()
+	_stale_detail(result, "file_overlap")
+
+
+def test_sync_renaming_a_pr_file_fails_as_overlap(integration) -> None:
+	it = integration()
+	it["standard"](range_files=[{"filename": "q.txt", "status": "renamed", "previous_filename": "p.txt"}])
+	result, _, _ = it["run"]()
+	_stale_detail(result, "file_overlap")
+
+
+def test_pr_renamed_file_counts_its_old_path(integration) -> None:
+	it = integration()
+	it["standard"](pr_files=[{"filename": "p2.txt", "status": "renamed", "previous_filename": "m.txt"}])
+	result, _, _ = it["run"]()
+	_stale_detail(result, "file_overlap")
+
+
+def test_non_sync_commit_fails_as_foreign(integration) -> None:
+	it = integration()
+	it["standard"](range_commits=[
+		_commit(it["m1"], ["0" * 40], "main 1"),
+		_commit("a" * 40, [it["i0"]], "feat: someone pushed to the integration branch"),
+	])
+	result, _, _ = it["run"]()
+	_stale_detail(result, "foreign_commit")
+
+
+def test_sync_subject_with_a_foreign_second_parent_fails_as_foreign(integration) -> None:
+	it = integration()
+	it["standard"](range_commits=[
+		_commit(it["sync"], [it["i0"], "e" * 40], f"chore: sync main into {INTEGRATION}"),
+	])
+	result, _, _ = it["run"]()
+	_stale_detail(result, "foreign_commit")
+
+
+def test_diverged_range_fails_as_not_ahead(integration) -> None:
+	it = integration()
+	it["standard"](status="diverged")
+	result, _, _ = it["run"]()
+	_stale_detail(result, "not_ahead")
+
+
+@pytest.mark.parametrize("shape", ["total_over_250", "short_commit_list", "300_files"])
+def test_truncated_range_compare_fails(integration, shape: str) -> None:
+	it = integration()
+	it["standard"]()
+	endpoint = f"compare/{it['i0']}...{it['sync']}"
+	path = it["fixtures"] / _fixture_name(endpoint)
+	payload = json.loads(path.read_text(encoding="utf-8"))
+	if shape == "total_over_250":
+		payload["total_commits"] = 251
+	elif shape == "short_commit_list":
+		payload["total_commits"] = 3
+	else:
+		payload["files"] = [{"filename": f"f{i}.txt", "status": "added"} for i in range(300)]
+	it["fixture"](endpoint, payload)
+	result, _, _ = it["run"]()
+	_stale_detail(result, "truncated")
+
+
+def test_truncated_default_branch_compare_fails(integration) -> None:
+	it = integration()
+	it["standard"]()
+	it["fixture"](f"compare/{it['i0']}...main", {"status": "diverged", "total_commits": 3, "commits": [_commit(it["m1"], ["0" * 40], "main 1")]})
+	result, _, _ = it["run"]()
+	_stale_detail(result, "truncated")
+
+
+def test_default_branch_other_than_main_is_read_from_the_symref(integration) -> None:
+	it = integration(default="trunk")
+	it["standard"]()
+	result, _, calls = it["run"]()
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "outcome=stale_accepted reason=sync_only_no_overlap" in result.stdout
+	assert any(c[1].endswith(f"compare/{it['i0']}...trunk") for c in calls)
+
+
+def test_non_merge_resolver_commit_is_accepted(integration) -> None:
+	it = integration()
+	it["standard"](range_commits=[
+		_commit(it["m1"], ["0" * 40], "main 1"),
+		_commit(it["sync"], [it["i0"], it["m1"]], f"chore: sync main into {INTEGRATION}"),
+		_commit("d" * 40, [it["sync"]], "[ai-merge-resolve] repair post-sync test failures"),
+	])
+	result, _, _ = it["run"]()
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert "outcome=stale_accepted reason=sync_only_no_overlap" in result.stdout and "commits=3 files=1" in result.stdout
+
+
+def test_too_many_pr_files_fails_without_a_listing(integration) -> None:
+	it = integration()
+	it["standard"]()
+	result, _, calls = it["run"](env={"FAKE_GH_CHANGED_FILES": "3001"})
+	_stale_detail(result, "too_many_files")
+	assert not any("/pulls/7/files" in c[1] for c in calls)
+
+
+def test_short_pr_files_listing_fails_as_truncated(integration) -> None:
+	it = integration()
+	it["standard"]()
+	result, _, _ = it["run"](env={"FAKE_GH_CHANGED_FILES": "2"})
+	_stale_detail(result, "truncated")
+
+
+def test_missing_api_response_fails_closed(integration) -> None:
+	it = integration()  # no fixtures: the first compare cannot be read
+	result, tested, _ = it["run"]()
+	_stale_detail(result, "api_error")
+	assert f"outcome=stale reason=merge_base_too_deep base={INTEGRATION}" in result.stdout
+	assert tested == it["merge_ref"]
+
+
+def test_tokenless_tree_fails_closed_at_the_files_listing(integration, tmp_path: Path) -> None:
+	it = integration()
+	api = tmp_path / "api" / "repos" / "o" / "r"
+	(api / "pulls").mkdir(parents=True)
+	(api / "actions" / "runs").mkdir(parents=True)
+	(api / "compare").mkdir(parents=True)
+	(api / "pulls" / "7").write_text(json.dumps({"base": {"ref": INTEGRATION}, "changed_files": 1, "mergeable": True}), encoding="utf-8")
+	(api / "actions" / "runs" / "42").write_text(json.dumps({"created_at": f"{DAY}03:00:00Z"}), encoding="utf-8")
+	it["standard"]()
+	for endpoint in (f"compare/{it['i0']}...{it['sync']}", f"compare/{it['i0']}...main"):
+		(api / endpoint).write_text((it["fixtures"] / _fixture_name(endpoint)).read_text(encoding="utf-8"), encoding="utf-8")
+	result, _, calls = it["run"](env={"GH_TOKEN": "", "CI_FINAL_MERGE_REF_API_URL": f"file://{tmp_path / 'api'}"})
+	_stale_detail(result, "api_error")
+	assert calls == []
+
+
+def test_tested_base_is_the_original_checkouts_first_parent(integration) -> None:
+	"""A refresh moves the merge ref to merge(M1, H) without a checkout: the original first parent is judged."""
+	it = integration()
+	it["standard"]()
+	result, tested, _ = it["run"](env={"FAKE_GH_REFRESH_TO": it["m1_merge"]})
+	assert result.returncode == 0, result.stdout + result.stderr
+	assert f"outcome=stale_accepted reason=sync_only_no_overlap base={INTEGRATION} tested_base={it['i0']} tip={it['sync']}" in result.stdout
+	assert tested == it["merge_ref"]
+
+
+def test_base_tip_moving_during_the_check_fails_as_truncated(integration) -> None:
+	it = integration()
+	it["standard"]()
+	result, _, _ = it["run"](env={
+		"FAKE_GH_FILES_MOVE_REF": f"refs/heads/{INTEGRATION}", "FAKE_GH_FILES_MOVE_TO": it["m1_merge"],
+	})
+	_stale_detail(result, "truncated")
+	assert it["summary"].read_text(encoding="utf-8") == ""
+
+
+def test_fresh_path_makes_no_sync_only_calls(world) -> None:
+	_git(world["origin"], "update-ref", "refs/pull/7/merge", world["new_merge"])
+	result, _, calls = world["run"]()
+	assert result.returncode == 0
+	assert len(calls) == 2
+	assert not any("/compare/" in c[1] or "/files" in c[1] for c in calls)

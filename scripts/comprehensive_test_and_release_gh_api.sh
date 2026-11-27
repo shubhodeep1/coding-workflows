@@ -208,12 +208,15 @@ gh_api_safe_quiet_print()
 # - the GH_READ_TOKEN_ENABLED kill switch (default true) and the same
 #   per-job latch file, written on a 401 or a non-rate-limit 403;
 # - xtrace off while the token is in use; gh's stderr is never replayed;
-# - one `GH_READ_FALLBACK reason=<401|403|404|rate_limit> caller=<script>`
-#   line to stderr when the job token is refused or rate limited.
+# - one `GH_READ_FALLBACK reason=<401|403|404|rate_limit|error>
+#   caller=<script>` line to stderr when the job token fails (`error` for a
+#   5xx, network or other non-HTTP failure, which does not latch).
 # Returns 0 with the output on success; 2 for a call that is not a read
 # (gh is not run); 3 when the caller should use the PAT (feature off, no
-# token, latch set, another repository, or a logged fallback); 1 on any
-# other failure. Makes at most one API call. xtrace is switched off before
+# token, latch set, another repository, or a logged 401/403/404/rate-limit
+# fallback); 1 on any other failure (logged as reason=error). gh_api_safe
+# runs its PAT loop on every non-zero result, so a job-token failure never
+# fails a read the PAT can answer. Makes at most one API call. xtrace is switched off before
 # anything reads GH_READ_TOKEN and restored on return.
 gh_api_safe_job_token_read()
 {
@@ -303,7 +306,11 @@ _gh_api_safe_job_token_read_run()
 		reason="404"
 	fi
 	rm -f "${out_file}" "${err_file}"
-	[ -n "${reason}" ] || return 1
+	local other_failure=0
+	if [ -z "${reason}" ]; then
+		reason="error"
+		other_failure=1
+	fi
 	if [ "${reason}" = "401" ] || [ "${reason}" = "403" ]; then
 		: > "${latch_file}" 2>/dev/null || true
 	fi
@@ -317,6 +324,9 @@ _gh_api_safe_job_token_read_run()
 	done
 	caller="${caller//[^A-Za-z0-9_.-]/}"
 	echo "GH_READ_FALLBACK reason=${reason} caller=${caller:-unknown}" >&2
+	if [ "${other_failure}" = "1" ]; then
+		return 1
+	fi
 	return 3
 }
 

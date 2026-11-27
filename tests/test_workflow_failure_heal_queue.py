@@ -369,7 +369,11 @@ def test_workflow_uses_per_run_groups_and_queue_steps() -> None:
 		# Queued before the Claude credential is resolved (it must not age while
 		# waiting) and released right after the work.
 		assert names.index("Checkout repository") < names.index("Wait for the heal intake queue") < names.index("Install Codex CLI") < names.index("Resolve Claude credential")
-		assert names.index(run_step) + 1 == names.index("Leave the heal intake queue")
+		# Only the intake's unregistered-repo warning marker save (a quick
+		# actions/cache/save) sits between the work and the release, so the
+		# next queued report sees today's marker.
+		between = names[names.index(run_step) + 1:names.index("Leave the heal intake queue")]
+		assert between == (["Save today's unregistered-repo warning marker"] if job_name == "intake" else [])
 	assert workflow["jobs"]["intake"]["steps"][[s.get("name") for s in workflow["jobs"]["intake"]["steps"]].index("Wait for the heal intake queue") - 1]["id"] == "payload"
 
 

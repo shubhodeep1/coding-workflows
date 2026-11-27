@@ -8,6 +8,10 @@ import {
 	REGISTRY_TTL_MS,
 	REGISTRY_URL,
 	VERIFIED_SHA_TTL_MS,
+	VERIFIED_SHA_MAX,
+	DURABLE_VERIFIED_SHA_TTL_MS,
+	WORKFLOW_SHA_CACHE_OBJECT,
+	WORKFLOW_SHA_CACHE_PATH,
 	CHATGPT_MAX_ACCOUNTS,
 	CHATGPT_STALE_MS,
 	ChatgptAccount,
@@ -91,7 +95,7 @@ interface Stub
 	headers: Record<string, Record<string, string>>;
 }
 
-type CompareAnswer = { status: number; body?: unknown; raw?: string } | "throw";
+type CompareAnswer = { status: number; body?: unknown; raw?: string; headers?: Record<string, string> } | "throw";
 
 function stub(): Stub
 {
@@ -115,9 +119,9 @@ function stub(): Stub
 					throw new Error("network down");
 				}
 				if (answer.raw !== undefined) {
-					return new Response(answer.raw, { status: answer.status });
+					return new Response(answer.raw, { status: answer.status, headers: answer.headers });
 				}
-				return Response.json(answer.body ?? {}, { status: answer.status });
+				return Response.json(answer.body ?? {}, { status: answer.status, headers: answer.headers });
 			}
 			if (input === JWKS_URL) {
 				if (!jwks.ok) {
@@ -442,6 +446,8 @@ describe("workflow identity", () => {
 		expect((await call(s, request(await sign(pinned())), env)).status).toBe(200);
 		expect(s.headers[compareCalls(s)[0]].authorization).toBe("Bearer ghp_read_only_secret");
 		expect(s.logs.join("\n")).not.toContain("ghp_read_only_secret");
+		expect(s.logs.some((line) => line.startsWith("CLAUDE_POOL broker workflow_sha_compare "))).toBe(true);
+		expect(s.logs.every((line) => !line.includes("ghp_read_only_secret") && !line.includes(GITHUB_API))).toBe(true);
 	});
 
 	const refused: [string, string, string][] = [
@@ -1176,5 +1182,192 @@ describe("chatgpt helpers", () => {
 		const copy = stripRefreshToken(input);
 		expect((copy.tokens as Record<string, unknown>).refresh_token).toBeUndefined();
 		expect((input.tokens as Record<string, unknown>).refresh_token).toBe("rt-secret-A");
+	});
+});
+
+// ---------------------------------------------------------------------------
+// Durable SHA cache and compare logging (Refs #9990).
+// ---------------------------------------------------------------------------
+
+describe("durable SHA cache", () => {
+	function shaMap(store: FakeStore): Record<string, number> | undefined
+	{
+		return store.mapFor(WORKFLOW_SHA_CACHE_OBJECT).get("verified_shas") as Record<string, number> | undefined;
+	}
+
+	it("a SHA verified by one handler is granted by a fresh one without a GitHub call", async () => {
+		const store = fakeStore();
+		const first = stub();
+		first.compare[`main...${SHA}`] = { status: 200, body: { status: "behind" } };
+		expect((await call(first, request(await sign(pinned())), chatgptEnv(store))).status).toBe(200);
+		expect(shaMap(store)).toEqual({ [SHA]: NOW_MS });
+		const second = stub();
+		const { status } = await call(second, request(await sign(pinned())), chatgptEnv(store));
+		expect(status).toBe(200);
+		expect(compareCalls(second)).toEqual([]);
+		expect(second.logs).toContain(`CLAUDE_POOL broker workflow_sha_check sha=${SHA.slice(0, 12)} result=trusted source=durable`);
+		// The durable hit fills the memory cache.
+		await call(second, request(await sign(pinned())), chatgptEnv(store));
+		expect(second.logs.some((line) => line.includes("source=cache"))).toBe(true);
+	});
+
+	it("also serves the promote-candidate branch from the durable cache", async () => {
+		const store = fakeStore();
+		store.mapFor(WORKFLOW_SHA_CACHE_OBJECT).set("verified_shas", { [SHA]: NOW_MS - 1000 });
+		const s = stub();
+		const token = await sign(claims({ repository: "shubhodeep1/coding-workflows", job_workflow_ref: `${WF}orchestrate_poll.yml@refs/heads/promote-candidate`, job_workflow_sha: SHA }));
+		expect((await call(s, request(token), chatgptEnv(store))).status).toBe(200);
+		expect(compareCalls(s)).toEqual([]);
+	});
+
+	for (const [name, at] of [["an expired", NOW_MS - DURABLE_VERIFIED_SHA_TTL_MS - 1], ["a future", NOW_MS + 60_000]] as const) {
+		it(`ignores ${name} entry and asks the API`, async () => {
+			const store = fakeStore();
+			store.mapFor(WORKFLOW_SHA_CACHE_OBJECT).set("verified_shas", { [SHA]: at });
+			const s = stub();
+			s.compare[`main...${SHA}`] = { status: 503, body: {} };
+			expect((await call(s, request(await sign(pinned())), chatgptEnv(store))).body.error).toBe("workflow_sha_unverifiable");
+			expect(compareCalls(s).length).toBe(1);
+		});
+	}
+
+	it("a storage read failure falls through to the API and is logged", async () => {
+		const store = fakeStore();
+		store.failing.get = true;
+		const s = stub();
+		s.compare[`main...${SHA}`] = { status: 200, body: { status: "behind" } };
+		expect((await call(s, request(await sign(pinned())), chatgptEnv(store))).status).toBe(200);
+		expect(compareCalls(s).length).toBe(1);
+		expect(s.logs).toContain(`CLAUDE_POOL broker workflow_sha_cache_read sha=${SHA.slice(0, 12)} result=failed`);
+		const refused = stub();
+		refused.compare[`main...${SHA}`] = { status: 403, body: {} };
+		expect((await call(refused, request(await sign(pinned())), chatgptEnv(store))).body.error).toBe("workflow_sha_unverifiable");
+	});
+
+	it("a namespace that throws falls through to the API; a failed write still grants", async () => {
+		const broken: ChatgptNamespace = { idFromName: () => { throw new Error("boom"); }, get: () => ({ fetch: async () => new Response("x") }) };
+		const s = stub();
+		s.compare[`main...${SHA}`] = { status: 200, body: { status: "identical" } };
+		expect((await call(s, request(await sign(pinned())), chatgptEnv(null, { CHATGPT_ACCOUNTS: broken }))).status).toBe(200);
+		expect(compareCalls(s).length).toBe(1);
+		expect(s.logs).toContain(`CLAUDE_POOL broker workflow_sha_cache_read sha=${SHA.slice(0, 12)} result=failed`);
+		expect(s.logs).toContain(`CLAUDE_POOL broker workflow_sha_cache_write sha=${SHA.slice(0, 12)} result=failed`);
+	});
+
+	it("a write that answers 500 still grants and logs the failure", async () => {
+		const failingWrite: ChatgptNamespace = {
+			idFromName: (n) => n,
+			get: () => ({ fetch: async (_input, init) => (init?.method === "POST" ? Response.json({ error: "x" }, { status: 500 }) : Response.json({ verified_at: null })) }),
+		};
+		const s = stub();
+		s.compare[`main...${SHA}`] = { status: 200, body: { status: "behind" } };
+		expect((await call(s, request(await sign(pinned())), chatgptEnv(null, { CHATGPT_ACCOUNTS: failingWrite }))).status).toBe(200);
+		expect(s.logs).toContain(`CLAUDE_POOL broker workflow_sha_cache_write sha=${SHA.slice(0, 12)} result=failed`);
+		expect(s.logs.some((line) => line.includes("workflow_sha_cache_read"))).toBe(false);
+	});
+
+	it("never caches an untrusted or unavailable verdict", async () => {
+		const store = fakeStore();
+		const untrusted = stub();
+		untrusted.compare[`main...${SHA}`] = { status: 200, body: { status: "diverged" } };
+		untrusted.compare[`stable...${SHA}`] = { status: 200, body: { status: "diverged" } };
+		expect((await call(untrusted, request(await sign(pinned())), chatgptEnv(store))).body.error).toBe("workflow_sha_unverified");
+		const unavailable = stub();
+		unavailable.compare[`main...${SHA}`] = { status: 503, body: {} };
+		expect((await call(unavailable, request(await sign(pinned())), chatgptEnv(store))).body.error).toBe("workflow_sha_unverifiable");
+		expect(shaMap(store)).toBeUndefined();
+	});
+
+	it("without a binding logs nothing about the durable cache", async () => {
+		const s = stub();
+		s.compare[`main...${SHA}`] = { status: 200, body: { status: "behind" } };
+		expect((await call(s, request(await sign(pinned())))).status).toBe(200);
+		expect(s.logs.some((line) => line.includes("workflow_sha_cache_"))).toBe(false);
+	});
+});
+
+describe("durable SHA cache routes", () => {
+	function objectFetch(store: FakeStore, path: string, init?: RequestInit): Promise<Response>
+	{
+		return store.namespace.get(store.namespace.idFromName(WORKFLOW_SHA_CACHE_OBJECT)).fetch(`https://chatgpt-account.internal${path}`, init);
+	}
+
+	function post(store: FakeStore, body: unknown): Promise<Response>
+	{
+		return objectFetch(store, WORKFLOW_SHA_CACHE_PATH, { method: "POST", body: JSON.stringify(body), headers: { "content-type": "application/json" } });
+	}
+
+	it("validates the sha, now and method", async () => {
+		const store = fakeStore();
+		for (const query of ["", "?sha=abc", `?sha=${SHA.toUpperCase()}`]) {
+			expect((await objectFetch(store, `${WORKFLOW_SHA_CACHE_PATH}${query}`)).status).toBe(400);
+		}
+		expect((await post(store, { sha: "abc", now: 1 })).status).toBe(400);
+		expect((await post(store, { sha: SHA, now: "1" })).status).toBe(400);
+		expect((await post(store, { sha: SHA })).status).toBe(400);
+		expect((await objectFetch(store, WORKFLOW_SHA_CACHE_PATH, { method: "POST", body: "{" })).status).toBe(400);
+		for (const method of ["PUT", "DELETE"]) {
+			expect((await objectFetch(store, `${WORKFLOW_SHA_CACHE_PATH}?sha=${SHA}`, { method })).status).toBe(405);
+		}
+		expect(store.mapFor(WORKFLOW_SHA_CACHE_OBJECT).get("verified_shas")).toBeUndefined();
+	});
+
+	it("stores, reads back and treats a malformed stored value as empty", async () => {
+		const store = fakeStore();
+		expect(await (await objectFetch(store, `${WORKFLOW_SHA_CACHE_PATH}?sha=${SHA}`)).json()).toEqual({ verified_at: null });
+		expect((await post(store, { sha: SHA, now: 5 })).status).toBe(200);
+		expect(await (await objectFetch(store, `${WORKFLOW_SHA_CACHE_PATH}?sha=${SHA}`)).json()).toEqual({ verified_at: 5 });
+		store.mapFor(WORKFLOW_SHA_CACHE_OBJECT).set("verified_shas", ["junk"]);
+		expect(await (await objectFetch(store, `${WORKFLOW_SHA_CACHE_PATH}?sha=${SHA}`)).json()).toEqual({ verified_at: null });
+		store.mapFor(WORKFLOW_SHA_CACHE_OBJECT).set("verified_shas", { [SHA]: "x", bad: 1 });
+		expect((await post(store, { sha: "f".repeat(40), now: 9 })).status).toBe(200);
+		expect(store.mapFor(WORKFLOW_SHA_CACHE_OBJECT).get("verified_shas")).toEqual({ ["f".repeat(40)]: 9 });
+	});
+
+	it("drops expired entries and evicts the oldest past the cap", async () => {
+		const store = fakeStore();
+		const now = DURABLE_VERIFIED_SHA_TTL_MS * 2;
+		expect((await post(store, { sha: "e".repeat(40), now: 0 })).status).toBe(200);
+		for (let i = 0; i <= VERIFIED_SHA_MAX; i++) {
+			const sha = i.toString(16).padStart(40, "0");
+			expect((await post(store, { sha, now: now + i })).status).toBe(200);
+		}
+		const map = store.mapFor(WORKFLOW_SHA_CACHE_OBJECT).get("verified_shas") as Record<string, number>;
+		expect(Object.keys(map).length).toBe(VERIFIED_SHA_MAX);
+		expect(map["e".repeat(40)]).toBeUndefined();
+		expect(map["0".repeat(40)]).toBeUndefined();
+		expect(map[(1).toString(16).padStart(40, "0")]).toBe(now + 1);
+	});
+});
+
+describe("workflow_sha_compare logging", () => {
+	const short = SHA.slice(0, 12);
+	const cases: [string, CompareAnswer, string][] = [
+		["a 200 behind", { status: 200, body: { status: "behind" }, headers: { "x-ratelimit-remaining": "4321" } }, "http=200 ratelimit_remaining=4321 cause=ok"],
+		["a rate-limited 403", { status: 403, body: { message: "API rate limit exceeded" }, headers: { "x-ratelimit-remaining": "0" } }, "http=403 ratelimit_remaining=0 cause=http_error"],
+		["a 404", { status: 404, body: {} }, "http=404 ratelimit_remaining=unknown cause=not_found"],
+		["a thrown fetch", "throw", "http=000 ratelimit_remaining=unknown cause=network"],
+		["invalid JSON", { status: 200, raw: "not json", headers: { "x-ratelimit-remaining": "12" } }, "http=200 ratelimit_remaining=12 cause=bad_json"],
+		["an unknown status", { status: 200, body: { status: "weird" } }, "http=200 ratelimit_remaining=unknown cause=unexpected_status"],
+		["a non-numeric header", { status: 500, body: {}, headers: { "x-ratelimit-remaining": "lots" } }, "http=500 ratelimit_remaining=unknown cause=http_error"],
+	];
+	for (const [name, answer, fields] of cases) {
+		it(`logs ${name}`, async () => {
+			const s = stub();
+			s.compare[`main...${SHA}`] = answer;
+			await call(s, request(await sign(pinned())));
+			expect(s.logs).toContain(`CLAUDE_POOL broker workflow_sha_compare branch=main sha=${short} ${fields}`);
+		});
+	}
+
+	it("logs the stable call too", async () => {
+		const s = stub();
+		s.compare[`main...${SHA}`] = { status: 200, body: { status: "diverged" } };
+		s.compare[`stable...${SHA}`] = { status: 200, body: { status: "behind" } };
+		await call(s, request(await sign(pinned())));
+		expect(s.logs.filter((line) => line.includes("workflow_sha_compare"))).toEqual([
+			`CLAUDE_POOL broker workflow_sha_compare branch=main sha=${short} http=200 ratelimit_remaining=unknown cause=ok`,
+			`CLAUDE_POOL broker workflow_sha_compare branch=stable sha=${short} http=200 ratelimit_remaining=unknown cause=ok`,
+		]);
 	});
 });

@@ -41,7 +41,7 @@ POOL_CONFIG = REPO_ROOT / ".github" / "ai" / "chatgpt_pool.json"
 # The shipped switch value. The tests use this literal instead of reading the
 # file at import time, so a checkout without the file still collects; a missing
 # file resolves to config_missing, which keeps the slot off (fail closed).
-SHIPPED_CONFIG = '{"reviewer_slot_enabled": false, "model": "gpt-6-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh"}'
+SHIPPED_CONFIG = '{"reviewer_slot_enabled": false, "model": "gpt-6.2-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh"}'
 
 
 def _shipped_config_text() -> str:
@@ -113,9 +113,9 @@ def _slot(tmp_path: Path, content: str | None, *args: str) -> dict[str, str]:
 def test_shipped_config_keeps_the_slot_off(tmp_path: Path) -> None:
 	shipped = json.loads(_shipped_config_text())
 	assert shipped["reviewer_slot_enabled"] is False
-	assert shipped == {"reviewer_slot_enabled": False, "model": "gpt-6-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh"}
+	assert shipped == {"reviewer_slot_enabled": False, "model": "gpt-6.2-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh"}
 	result = _slot(tmp_path, _shipped_config_text())
-	assert result == {"enabled": "false", "model": "gpt-6-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh", "source": "file", "reason": "switch_off"}
+	assert result == {"enabled": "false", "model": "gpt-6.2-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh", "source": "file", "reason": "switch_off"}
 
 
 def test_shipped_pool_config_file_is_committed_and_switched_off() -> None:
@@ -137,7 +137,7 @@ def test_shipped_pool_config_file_is_committed_and_switched_off() -> None:
 		results[args] = dict(part.split("=", 1) for part in lines[0].split())
 	default = results[()]
 	assert default["reason"] != "config_missing"
-	assert default == {"enabled": "false", "model": "gpt-6-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh", "source": "file", "reason": "switch_off"}
+	assert default == {"enabled": "false", "model": "gpt-6.2-sol", "replaces": "openai/gpt-6-luna", "reasoning": "xhigh", "source": "file", "reason": "switch_off"}
 	override = results[("--override", "true")]
 	assert (override["enabled"], override["reason"], override["source"]) == ("true", "ok", "var")
 
@@ -510,7 +510,8 @@ def _pass_harness(tmp_path: Path, tier: str, statuses: dict[str, str], panel: li
 def test_lite_floor_runs_one_seeded_live_reviewer(tmp_path: Path, statuses: dict[str, str]) -> None:
 	result = _pass_harness(tmp_path, "lite", statuses, PANEL)
 	floor = _seeded(1, ["minimax/minimax-m3", "z-ai/glm-5.3-flash", "google/gemini-3.1-flash-lite"])[0]
-	# The pool and ChatGPT slots run as background jobs; only their set is deterministic.
+	# The pool and chatgpt slots start as parallel background jobs, so their
+	# order in the calls file is not deterministic; the floor runs after both.
 	assert sorted(result["calls"][:2]) == sorted(["pool anthropic/claude-sonnet-5.5", f"chatgpt {SLOT}"])
 	assert result["calls"][2:] == [f"openrouter {floor}"]
 	assert f"REVIEWER_CHATGPT: lite_floor model={floor} reason=account_slots_unsuccessful" in result["stderr"]
@@ -519,7 +520,8 @@ def test_lite_floor_runs_one_seeded_live_reviewer(tmp_path: Path, statuses: dict
 
 def test_no_floor_when_an_account_slot_succeeded(tmp_path: Path) -> None:
 	result = _pass_harness(tmp_path, "lite", {"anthropic/claude-sonnet-5.5": "skipped_pool", SLOT: "success"}, PANEL)
-	# Slots run as background jobs, so the call log order is not deterministic.
+	# The pool and chatgpt slots start as parallel background jobs, so their
+	# order in the calls file is not deterministic; no openrouter floor runs.
 	assert sorted(call.split()[0] for call in result["calls"]) == ["chatgpt", "pool"]
 	assert "lite_floor" not in result["stderr"]
 
