@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.78,
+  "details": "When changing workflow behavior, look for the corresponding shell or Python helper rather than assuming the YAML contains all of the logic. Merged changes repeatedly pair scripts such as orchestration, dispatch, and CI helpers with targeted tests for their behavior.",
+  "fingerprint": "2222063e771168ee0fd223a4666b2cec4cdbc694d9bd30edfd85c6eb829cc45d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "46018249451",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46018249451",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10072",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10129",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10177",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10181",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10197",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10075",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10132",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10179",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10185",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10201"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261127150245_9cd95ecff3",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Workflow orchestration changes are commonly implemented in scripts and validated with focused tests.",
+  "timestamps": {
+    "created_at": "2026-11-27T15:02:45Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
