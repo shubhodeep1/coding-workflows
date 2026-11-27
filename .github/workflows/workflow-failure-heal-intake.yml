@@ -171,6 +171,9 @@ jobs:
       # WORKFLOW_HEAL_CAUSE_GROUPING_DAYS) as an occurrence; off by default.
       WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED: ${{ vars.WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED || 'false' }}
       WORKFLOW_HEAL_CAUSE_GROUPING_DAYS: ${{ vars.WORKFLOW_HEAL_CAUSE_GROUPING_DAYS || '3' }}
+      # Red-main grouping (#9823): 'false' stops grouping red default-branch push CI
+      # runs of one failing job into one open heal issue (red-main-group= marker).
+      WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED: ${{ vars.WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED || 'true' }}
       # Code-ref routing (P6 step 1): 'true' routes the heal to the branch the failing
       # child run's code came from (in-scope workflow only) and adds `Code ran from:`; off by default.
       WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED || 'false' }}
@@ -217,6 +220,19 @@ jobs:
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
           persist-credentials: false
+
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
 
       - name: Create runtime workspace
         run: |
@@ -428,7 +444,8 @@ jobs:
             source scripts/gh_helpers.sh
             gh_pat_budget end workflow-failure-heal-intake intake "${GH_PAT_BUDGET_FILE}"
           else
-            echo 'GH_PAT_BUDGET phase=end workflow=workflow-failure-heal-intake job=intake remaining=unknown reset=unknown used_in_job=unknown'
+            counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+            echo "GH_PAT_BUDGET phase=end workflow=workflow-failure-heal-intake job=intake remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
           fi
 
   recovery-candidates:
@@ -526,6 +543,9 @@ jobs:
       # WORKFLOW_HEAL_CAUSE_GROUPING_DAYS) as an occurrence; off by default.
       WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED: ${{ vars.WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED || 'false' }}
       WORKFLOW_HEAL_CAUSE_GROUPING_DAYS: ${{ vars.WORKFLOW_HEAL_CAUSE_GROUPING_DAYS || '3' }}
+      # Red-main grouping (#9823): 'false' stops grouping red default-branch push CI
+      # runs of one failing job into one open heal issue (red-main-group= marker).
+      WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED: ${{ vars.WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED || 'true' }}
       # Code-ref routing (P6 step 1): 'true' routes the heal to the branch the failing
       # child run's code came from (in-scope workflow only) and adds `Code ran from:`; off by default.
       WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED || 'false' }}
@@ -564,6 +584,19 @@ jobs:
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
           persist-credentials: false
+
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
 
       - name: Create runtime workspace
         run: |
@@ -659,7 +692,8 @@ jobs:
             source scripts/gh_helpers.sh
             gh_pat_budget end workflow-failure-heal-intake recovery-scan "${GH_PAT_BUDGET_FILE}"
           else
-            echo 'GH_PAT_BUDGET phase=end workflow=workflow-failure-heal-intake job=recovery-scan remaining=unknown reset=unknown used_in_job=unknown'
+            counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+            echo "GH_PAT_BUDGET phase=end workflow=workflow-failure-heal-intake job=recovery-scan remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
           fi
 
   heal-verify:
@@ -710,6 +744,19 @@ jobs:
           token: ${{ secrets.GH_PAT }}
           persist-credentials: false
 
+      - name: Install gh call counter
+        # Issue #9887: count this job's own gh calls for the GH_PAT_BUDGET end
+        # line. Sources only this job's trusted support copy; no token here.
+        continue-on-error: true
+        env:
+          GH_CALL_COUNTER_ENABLED: ${{ vars.GH_CALL_COUNTER_ENABLED || 'true' }}
+          GH_CALL_COUNTER_HELPERS: scripts/gh_helpers.sh
+        run: |
+          if [ -f "${GH_CALL_COUNTER_HELPERS}" ] && grep -q '^gh_call_counter_install()' "${GH_CALL_COUNTER_HELPERS}"; then
+            { source "${GH_CALL_COUNTER_HELPERS}" && gh_call_counter_install; } || true
+          fi
+          exit 0
+
       - name: Run heal post-merge verification
         run: |
           set -euo pipefail
@@ -724,5 +771,6 @@ jobs:
             source scripts/gh_helpers.sh
             gh_pat_budget end workflow-failure-heal-intake heal-verify "${GH_PAT_BUDGET_FILE}"
           else
-            echo 'GH_PAT_BUDGET phase=end workflow=workflow-failure-heal-intake job=heal-verify remaining=unknown reset=unknown used_in_job=unknown'
+            counter_keys="$(gh-call-counter-summary 2>/dev/null || printf '%s' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown')"
+            echo "GH_PAT_BUDGET phase=end workflow=workflow-failure-heal-intake job=heal-verify remaining=unknown reset=unknown used_in_job=unknown ${counter_keys}"
           fi
