@@ -6253,9 +6253,12 @@ _stall_reissue_guard_refuse()
 #     its head is success AND the required CI check
 #     (_pr_auto_merge_required_ci_check_name; `none` counts as satisfied, as
 #     on the merge path) succeeded on a run of
-#     .github/workflows/${REVIEW_FINAL_CI_WORKFLOW:-ci.yml} for that head
-#     (run-id binding, so a same-name `lint` from another workflow does not
-#     count). The CI state comes from _pr_checks_completed.
+#     .github/workflows/<wf> for that head, where <wf> is the step's
+#     final-CI workflow captured at start-up in
+#     _OPP_STALL_MERGE_FINAL_CI_WORKFLOW (default ci.yml; the poller clears
+#     the original variable, #9737) (run-id binding, so a same-name `lint`
+#     from another workflow does not count). The CI state comes from
+#     _pr_checks_completed.
 # Fails CLOSED: any read error refuses with reason=check_unavailable,
 # because closing a good PR unmerged is the costly mistake.
 # Kill switch: STALL_REISSUE_GREEN_PR_GUARD_ENABLED (default true).
@@ -6383,7 +6386,7 @@ _stall_reissue_green_pr_guard()
 		fi
 		_srg_ci_name="$(_pr_auto_merge_required_ci_check_name "${_srg_base}" 2>/dev/null || echo "")"
 		if [ "${_srg_ci_name}" != "none" ]; then
-			_srg_wf="${REVIEW_FINAL_CI_WORKFLOW:-ci.yml}"
+			_srg_wf="${_OPP_STALL_MERGE_FINAL_CI_WORKFLOW:-ci.yml}"
 			if ! [[ "${_srg_wf}" =~ ^[A-Za-z0-9._-]+\.ya?ml$ ]]; then
 				_stall_reissue_guard_refuse "${issue_num}" "${_srg_pr}" "check_unavailable"
 				return 1
