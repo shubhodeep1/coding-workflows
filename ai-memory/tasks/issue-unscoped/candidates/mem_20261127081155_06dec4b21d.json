@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"A status=failed or status=pending marker is not posted with a cycle number that a trusted marker on the PR already carries.\" (issue #10176, change 3).\n  expected_change_site: `scripts/review_single_issue_security_pass.sh`, in `single_pass_gate` between the fresh marker read and posting the pending or failed marker.\n  confidence=4\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: `single_pass_gate` reads the fresh view, then `single_pass_next_free_cycle` (line 1567 area) picks `max(candidate, highest trusted cycle + 1)` from that view, and the dispatch and post happen later in the same run. Nothing reserves the number, excludes other runs, or checks it after posting during that read-to-post interval. The PR's `agents.d` and `changelog.d` fragments document the residual race (\"two review runs that overlap on one PR can still pick the same number\"). Two runs that both read before either posts can both post the next cycle number. Source severity: MAJOR. Other reviewers disagree: anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash call this race a documented residual that earlier rounds accepted, and they do not re-raise it.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  Requirement: \"A status=failed or status=pending marker is not posted with a cycle number that a trusted marker on the PR already carries.\" (issue #10176, change 3).\n  Expected change site: `scripts/review_single_issue_security_pass.sh`, in `single_pass_gate` between the fresh marker read and posting the pending or failed marker.\n  Evidence of absence: `single_pass_next_free_cycle` (line 1567 area) picks `max(candidate, highest trusted cycle + 1)` from the fresh view. Nothing reserves the number, excludes other runs, or checks it after posting during the read-to-post interval. The fragments document the residual race, and overlapping runs can post the same cycle number. The race has not surfaced yet only because the issue's evidence cases (PR #10175, PR #10005) were hours apart.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "a78d326a5af19e51ab45040a0c1658db6630de4360bf927e8f5efa97b233cdab",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10178,
+    "run_id": "45953915274",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45953915274",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127081155_06dec4b21d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10178,
+    "run_id": "45953915274"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-27T08:11:55Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
