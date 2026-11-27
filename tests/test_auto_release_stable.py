@@ -1252,6 +1252,18 @@ def test_runner_wait_short_last_page_reads_the_page_before_it() -> None:
 	assert out == "outcome=long oldest_queued_min=50 queued_in_window=201 calls=6", out
 
 
+def test_runner_wait_overlapping_pages_read_each_run_once() -> None:
+	# The page before a short last page is read seconds later; when the queue
+	# shifts, the oldest run can be on both. It is read once, so the third
+	# candidate's aged queued job is still read.
+	jobs = {"9": [], "40": [], "41": [_job("queued", 50)]}
+	state = {"window_total": 201, "window_runs": [_queued(50, 35)],
+		"window_pages": {"3": [_queued(9, 120)], "2": [_queued(9, 120), _queued(40, 90), _queued(41, 80)]}, "window_jobs": jobs}
+	with tempfile.TemporaryDirectory() as tmp:
+		out = _helper_output(Path(tmp), state)
+	assert out == "outcome=long oldest_queued_min=50 queued_in_window=201 calls=6", out
+
+
 def test_runner_wait_empty_listing_makes_no_jobs_read() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		out = _helper_output(Path(tmp), {"window_runs": []})

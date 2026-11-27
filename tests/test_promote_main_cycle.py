@@ -1982,6 +1982,18 @@ def test_runner_wait_read_failure_runs_the_cycle_with_a_warning() -> None:
 	assert [d[0] for d in final["dispatches"]] == ["test-and-mark-stable.yml"]
 
 
+def test_runner_wait_jobs_read_failure_runs_the_cycle_with_a_warning() -> None:
+	# Issue #10181: the run listing succeeds but the candidate's jobs read
+	# fails, so the check answers read_failed and the cycle does not skip.
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final, _ = _run(Path(tmp), _rw_state(window_runs=[_rw_queued(1, 70)], window_jobs_error=True), env={"GH_RETRY_MAX_ATTEMPTS": "1"})
+	assert proc.returncode == 0, proc.stderr + proc.stdout
+	assert "::warning::PROMOTE_CYCLE_RUNNER_WAIT_CHECK outcome=read_failed calls=2" in proc.stdout
+	assert "runner_wait_long" not in proc.stdout
+	assert len(final["window_jobs_reads"]) == 1
+	assert [d[0] for d in final["dispatches"]] == ["test-and-mark-stable.yml"]
+
+
 def test_runner_wait_limit_zero_makes_no_read() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		proc, final, _ = _run(Path(tmp), _rw_state(window_runs=[_rw_queued(1, 70)]), env={"RELEASE_GATE_MAX_RUNNER_WAIT_MINUTES": "0"})

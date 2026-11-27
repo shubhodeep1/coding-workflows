@@ -5155,14 +5155,16 @@ release_gate_oldest_queued_wait()
 	fi
 	# Live queued runs at or before the upper bound (the server-side range is
 	# re-checked here): the count on the first line, then the ids of the
-	# oldest _rgw_max_job_reads by run created_at.
+	# oldest _rgw_max_job_reads by run created_at. unique_by(.id): two pages
+	# read seconds apart can overlap while the queue shifts, and a duplicate
+	# would take a second job-read slot from another candidate.
 	if ! _rgw_candidates="$(printf '%s' "${_rgw_json}" | jq -r --argjson zq_cutoff "${_rgw_cutoff}" --argjson upper "${_rgw_upper_epoch}" --argjson max_reads "${_rgw_max_job_reads}" "${_rgw_jq_def}"'
 		[.workflow_runs[]? | select(type == "object")
 			| select(((.status // "") | tostring | ascii_downcase) == "queued")
 			| select(is_wedged_queued($zq_cutoff) | not)
 			| ((.created_at // "") | tostring | sub("\\.[0-9]+Z$"; "Z") | (try fromdateiso8601 catch null)) as $c
 			| select($c != null and $c <= $upper) | {c: $c, id: ((.id // "") | tostring)}]
-		| sort_by(.c) | (length | tostring), (.[:$max_reads][] | .id)' 2>/dev/null)"; then
+		| unique_by(.id) | sort_by(.c) | (length | tostring), (.[:$max_reads][] | .id)' 2>/dev/null)"; then
 		echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=${_rgw_calls}"
 		return 0
 	fi
