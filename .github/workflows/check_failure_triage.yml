@@ -261,6 +261,9 @@ jobs:
       CHECK_TRIAGE_SKIP_HEAD_ADVANCED_ENABLED: ${{ vars.CHECK_TRIAGE_SKIP_HEAD_ADVANCED_ENABLED || 'true' }}
       CHECK_TRIAGE_SKIP_FINAL_CI_ENABLED: ${{ vars.CHECK_TRIAGE_SKIP_FINAL_CI_ENABLED || 'true' }}
       FINAL_CI_FAILED_REDISPATCH_ENABLED: ${{ vars.FINAL_CI_FAILED_REDISPATCH_ENABLED || 'true' }}
+      # Issue #9823: with PR-branch routing on, route to the default branch when
+      # none of the failing files exist on the PR head (local git check only).
+      CHECK_TRIAGE_TARGET_FILES_GUARD_ENABLED: ${{ vars.CHECK_TRIAGE_TARGET_FILES_GUARD_ENABLED || 'true' }}
       # Issue #8671: supersede a blocked triage issue from an older PR head.
       CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED: ${{ vars.CHECK_TRIAGE_SUPERSEDE_STALE_ENABLED || 'true' }}
       # Issue #9387: one rerun-failed-jobs request when the triaged run failed
@@ -322,8 +325,43 @@ jobs:
           token: ${{ github.token }}
           persist-credentials: false
 
+      # Issue #9823: the target-files guard in scripts/check_failure_triage.sh
+      # compares the failing files with the default branch's tree, which the
+      # depth-1 PR-head checkout above does not hold. Depth-1 checkout of the
+      # default branch (data only, never executed, no credentials kept), only
+      # when PR-branch routing and the guard are on. Fails open: without it the
+      # guard keeps the route (reason=default_ref_unavailable).
+      - name: Checkout default branch for target-files guard
+        id: checkout_default_branch_tree
+        if: ${{ inputs.historical_run_id == '' && github.event.repository.default_branch != '' && (vars.CHECK_TRIAGE_PR_BRANCH_ROUTING_ENABLED || 'false') == 'true' && (vars.CHECK_TRIAGE_TARGET_FILES_GUARD_ENABLED || 'true') != 'false' }}
+        continue-on-error: true
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: .codex-triage-default-branch
+          fetch-depth: 1
+          token: ${{ github.token }}
+          persist-credentials: false
+
+      # Move the default-branch tree out of the workspace, so no later step or
+      # sandbox snapshot of the PR checkout sees it.
+      - name: Stage default-branch tree for target-files guard
+        if: ${{ steps.checkout_default_branch_tree.outcome == 'success' || steps.checkout_default_branch_tree.outcome == 'failure' }}
+        env:
+          TRIAGE_DEFAULT_TREE_OUTCOME: ${{ steps.checkout_default_branch_tree.outcome }}
+        run: |
+          set -euo pipefail
+          triage_default_tree_dir="${RUNNER_TEMP}/check-triage-default-branch"
+          rm -rf "${triage_default_tree_dir}"
+          if [ "${TRIAGE_DEFAULT_TREE_OUTCOME}" = "success" ] && [ ! -L .codex-triage-default-branch ] && [ -d .codex-triage-default-branch/.git ]; then
+            mv .codex-triage-default-branch "${triage_default_tree_dir}"
+            echo "CHECK_TRIAGE_DEFAULT_BRANCH_TREE_DIR=${triage_default_tree_dir}" >> "$GITHUB_ENV"
+          else
+            rm -rf .codex-triage-default-branch
+          fi
+
       - name: Install Codex CLI
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@cbe65b01a1ff0890a0149a244ee46121065a0c45
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 

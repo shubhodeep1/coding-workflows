@@ -22,6 +22,10 @@ env:
   CLAUDE_POOL_CAPACITY_WAIT_ENABLED: ${{ vars.CLAUDE_POOL_CAPACITY_WAIT_ENABLED || (vars.WORKFLOW_PROFILE == 'core' && 'false') || 'true' }}
   # Attempt journal (issue #8428, P1): default off; see scripts/attempt_journal.py.
   PERSIST_JOURNAL_ENABLED: ${{ vars.PERSIST_JOURNAL_ENABLED || 'false' }}
+  # Plan-granted .github/ai/<file> writes (issue #9920, plan Phase 5 / R3): default on;
+  # repo variable AI_PLAN_GRANT_WRITE_ENABLED=false rolls back (GitHub reserves the GITHUB_
+  # prefix for configuration variables). Scripts default to true too.
+  GITHUB_AI_PLAN_GRANT_WRITE_ENABLED: ${{ vars.AI_PLAN_GRANT_WRITE_ENABLED || 'true' }}
   # Done-check (issue #8427, P2): default off; see scripts/acceptance_check.py.
   PERSIST_ACCEPTANCE_ENABLED: ${{ vars.PERSIST_ACCEPTANCE_ENABLED || 'false' }}
   # Repair loop (issue #8427, P3): default off; see scripts/implement_step_prepush_test_gate.sh.
@@ -323,7 +327,7 @@ jobs:
 
       - name: Install dependencies
         if: env.SKIP_IMPLEMENT != 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@cbe65b01a1ff0890a0149a244ee46121065a0c45
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
@@ -4836,7 +4840,7 @@ jobs:
 
       - name: Upload destructive-rejection snapshot
         if: always() && steps.handle_guard_block.outputs.rejection_snapshot == 'true'
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: destructive-rejection-issue-${{ env.ISSUE_NUMBER }}
           path: ${{ env.RUNTIME_DIR }}/destructive_rejection/destructive_rejection.json
@@ -6501,7 +6505,7 @@ jobs:
 
       - name: Upload codex logs (failure only)
         if: (failure() || cancelled()) && env.CODEX_FAILURE_LOG_DIR != ''
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: codex-implement-failure-logs-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ env.CODEX_FAILURE_LOG_DIR }}

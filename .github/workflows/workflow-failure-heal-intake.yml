@@ -171,6 +171,9 @@ jobs:
       # WORKFLOW_HEAL_CAUSE_GROUPING_DAYS) as an occurrence; off by default.
       WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED: ${{ vars.WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED || 'false' }}
       WORKFLOW_HEAL_CAUSE_GROUPING_DAYS: ${{ vars.WORKFLOW_HEAL_CAUSE_GROUPING_DAYS || '3' }}
+      # Red-main grouping (#9823): 'false' stops grouping red default-branch push CI
+      # runs of one failing job into one open heal issue (red-main-group= marker).
+      WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED: ${{ vars.WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED || 'true' }}
       # Code-ref routing (P6 step 1): 'true' routes the heal to the branch the failing
       # child run's code came from (in-scope workflow only) and adds `Code ran from:`; off by default.
       WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED || 'false' }}
@@ -540,6 +543,9 @@ jobs:
       # WORKFLOW_HEAL_CAUSE_GROUPING_DAYS) as an occurrence; off by default.
       WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED: ${{ vars.WORKFLOW_HEAL_CAUSE_GROUPING_ENABLED || 'false' }}
       WORKFLOW_HEAL_CAUSE_GROUPING_DAYS: ${{ vars.WORKFLOW_HEAL_CAUSE_GROUPING_DAYS || '3' }}
+      # Red-main grouping (#9823): 'false' stops grouping red default-branch push CI
+      # runs of one failing job into one open heal issue (red-main-group= marker).
+      WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED: ${{ vars.WORKFLOW_HEAL_RED_MAIN_GROUPING_ENABLED || 'true' }}
       # Code-ref routing (P6 step 1): 'true' routes the heal to the branch the failing
       # child run's code came from (in-scope workflow only) and adds `Code ran from:`; off by default.
       WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED: ${{ vars.WORKFLOW_HEAL_CODE_REF_ROUTING_ENABLED || 'false' }}

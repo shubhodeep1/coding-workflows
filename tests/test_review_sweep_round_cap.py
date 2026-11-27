@@ -90,6 +90,14 @@ if "--jq" in args and args[args.index("--jq") + 1] == ".default_branch":
 	out("main\n")
 if endpoint.endswith("/pulls"):
 	out(fixture("pulls.json", []))
+if endpoint.endswith("/actions/artifacts"):
+	# Infra-failed round markers (issue #9917); pages are already projected.
+	if (root / "artifacts_fail").exists():
+		sys.stderr.write("HTTP 502\n")
+		sys.exit(1)
+	pages = fixture("artifacts.json", [[]])
+	sys.stdout.write("".join(json.dumps(page) for page in pages))
+	sys.exit(0)
 if "/actions/workflows/" in endpoint and endpoint.endswith("/runs"):
 	if "event=workflow_dispatch" in args:
 		if (root / "rounds_fail").exists():
@@ -162,7 +170,7 @@ def _page(*runs: dict) -> dict:
 
 def _setup(tmp_path: Path, *, prs: list[dict] | None = None, rounds: list[dict] | None = None, active: list[dict] | None = None,
 		helper: bool = True, flags: tuple[str, ...] = (), gate: dict[str, str] | None = None,
-		commit_dates: dict[str, str | None] | None = None) -> Path:
+		commit_dates: dict[str, str | None] | None = None, artifacts: list | None = None) -> Path:
 	bin_dir = tmp_path / "bin"
 	bin_dir.mkdir()
 	gh = bin_dir / "gh"
@@ -178,6 +186,8 @@ def _setup(tmp_path: Path, *, prs: list[dict] | None = None, rounds: list[dict] 
 		(tmp_path / "gate.json").write_text(json.dumps(gate), encoding="utf-8")
 	if commit_dates is not None:
 		(tmp_path / "commit_dates.json").write_text(json.dumps(commit_dates), encoding="utf-8")
+	if artifacts is not None:
+		(tmp_path / "artifacts.json").write_text(json.dumps(artifacts), encoding="utf-8")
 	for flag in flags:
 		(tmp_path / flag).write_text("", encoding="utf-8")
 	# The head-gate helper is always staged (it supplies head_gate_state, which
@@ -246,7 +256,9 @@ def test_counts_dispatched_rounds_per_pr_across_pages(tmp_path: Path) -> None:
 	assert "REVIEW_SWEEP_ROUND_CAP outcome=counted window_hours=72 runs=6 prs=3 truncated=false" in result.stderr
 	# One paginated listing for all PRs, filtered at the API to dispatched runs in the window.
 	calls = [json.loads(line) for line in _lines(tmp_path, "calls.log")]
-	assert len(calls) == 1
+	# Plus one artifacts listing for the infra-failed round markers (issue #9917).
+	assert len(calls) == 2
+	assert "repos/o/r/actions/artifacts" in calls[1] and "name=review-round-infra-failed" in calls[1]
 	assert "--paginate" in calls[0] and "event=workflow_dispatch" in calls[0] and "per_page=100" in calls[0]
 	assert any(re.fullmatch(r"created=>=\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ", arg) for arg in calls[0])
 	assert "repos/o/r/actions/workflows/internal-review.yml/runs" in calls[0]
@@ -533,7 +545,8 @@ def test_counts_use_the_callers_retry_wrapper_and_project_each_page(tmp_path: Pa
 	script = f'gh_api_retry() {{ echo wrapped >> "{tmp_path}/wrapper.log"; gh api "$@"; }}; source "{HELPER}"; review_sweep_round_counts o/r main 48'
 	result = subprocess.run(["bash", "-c", script], env=_env(tmp_path, bin_dir), capture_output=True, text=True, cwd=tmp_path, check=False)
 	assert json.loads(result.stdout) == {"5": 1}
-	assert _lines(tmp_path, "wrapper.log") == ["wrapped"]
+	# The runs listing and the infra-failed artifacts listing (issue #9917).
+	assert _lines(tmp_path, "wrapper.log") == ["wrapped", "wrapped"]
 	call = json.loads(_lines(tmp_path, "calls.log")[0])
 	assert "--jq" in call and "display_title" in call[call.index("--jq") + 1]
 

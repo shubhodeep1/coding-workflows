@@ -399,6 +399,17 @@ if [ ! -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeo
     rm -f "${SUPPORT_PROMPTS_DIR}/integration-sync-conflict-resolver-retry-timeout-prelude.txt"
   fi
 fi
+# Provenance-retry prelude (issue #9842). Soft install: without it the
+# resolver's provenance retry uses its inline header plus the same report.
+if [ ! -f "${SUPPORT_PROMPTS_DIR}/conflict-resolver-retry-provenance-prelude.txt" ]; then
+  src=".codex-workflow-src/prompts/conflict-resolver-retry-provenance-prelude.txt"
+  if [ -f "${src}" ]; then
+    install -m 0644 "${src}" "${SUPPORT_PROMPTS_DIR}/conflict-resolver-retry-provenance-prelude.txt"
+  else
+    echo "::warning::conflict-resolver-retry-provenance-prelude.txt not found in checked-out support sources for ${SCRIPT_REF}; resolver provenance retries will use the inline provenance header."
+    rm -f "${SUPPORT_PROMPTS_DIR}/conflict-resolver-retry-provenance-prelude.txt"
+  fi
+fi
 }
 
 WORKFLOW_SUPPORT_SOURCE_REPO_DEFAULT="shubhodeep1/coding-workflows"

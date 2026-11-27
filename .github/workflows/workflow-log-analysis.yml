@@ -356,15 +356,33 @@ jobs:
 
       - name: Upload daily PAT consumer ranking
         if: ${{ github.event_name == 'schedule' && github.event.schedule == '0 6 * * *' }}
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: gh-pat-budget-day
           path: ${{ runner.temp }}/gh-pat-budget.md
           if-no-files-found: error
           retention-days: 30
 
+      # Pipeline-human-wait-elimination Phase 9 (#10118): tick ai:operator-step
+      # entries whose condition the pipeline can observe, and close an empty
+      # tracker. Daily schedule only, folded into this job (no new runner).
+      # GH_TOKEN is GH_PAT because entries are written under the PAT login,
+      # which `tick` reads from /user as its trusted login. Fail-open: the step
+      # script always exits 0. `OPERATOR_STEP_DAILY_TICK_ENABLED=false` makes no
+      # git or API call.
+      - name: Tick observable operator steps
+        if: ${{ !cancelled() && github.event_name == 'schedule' && github.event.schedule == '0 6 * * *' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          OPERATOR_STEP_DAILY_TICK_ENABLED: ${{ vars.OPERATOR_STEP_DAILY_TICK_ENABLED || 'true' }}
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+          AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
+          AI_COMMENT_JOB_TOKEN: ${{ github.token }}
+        run: bash scripts/operator_step_daily_tick.sh
+
       - name: Upload workflow log report artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: workflow-log-report
           path: workflow_log_report.json
@@ -372,7 +390,7 @@ jobs:
           retention-days: 7
 
       - name: Upload full workflow log directory artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: workflow-log-output
           path: ${{ steps.collect.outputs.log_output_dir }}
@@ -555,7 +573,7 @@ jobs:
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@cbe65b01a1ff0890a0149a244ee46121065a0c45
         with:
           codex_version: ${{ env.CODEX_VERSION }}
 
@@ -1206,7 +1224,7 @@ jobs:
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@cbe65b01a1ff0890a0149a244ee46121065a0c45
         with:
           codex_version: ${{ env.CODEX_VERSION }}
 
@@ -1821,7 +1839,7 @@ jobs:
       - name: Upload workflow log analysis report
         if: always() && (steps.analyze.outputs.report_file != '' || steps.analyze.outputs.held_report_file != '')
         continue-on-error: true
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: workflow-log-analysis-report
           path: ${{ steps.analyze.outputs.report_file || steps.analyze.outputs.held_report_file }}
@@ -2554,7 +2572,7 @@ jobs:
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@cbe65b01a1ff0890a0149a244ee46121065a0c45
         with:
           codex_version: ${{ env.CODEX_VERSION }}
 
@@ -3223,7 +3241,7 @@ jobs:
 
       - name: Install Codex CLI
         if: steps.cache-codex.outputs.cache-hit != 'true'
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@cbe65b01a1ff0890a0149a244ee46121065a0c45
         with:
           codex_version: ${{ env.CODEX_VERSION }}
 
