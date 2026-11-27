@@ -5127,8 +5127,10 @@ jobs:
   tests-main-delta:
     # Delta suite on a push to main (issue #10156). Replaces the seven gated
     # test jobs there: scripts/ci_main_delta.sh `select` reads main's ci.yml
-    # runs once, takes the head of the newest successful push or scheduled
-    # run as the base, and selects the tests the changes since then affect
+    # runs once, takes the head of the push or scheduled run that finished
+    # last as the base when it is green (a red run stays the result until a
+    # green run started after it finished; a re-run counts from its creation),
+    # and selects the tests the changes since then affect
     # (workflow-templates/.claude/hooks/prepush_affected_tests.py select);
     # `run-tests` runs them plus the CI-structure tests. When the selection
     # cannot be trusted (read failure, red base, selector error, over
@@ -5158,14 +5160,18 @@ jobs:
           persist-credentials: false
 
       # Never runs here (push only); listed so every worker job keeps the
-      # same setup steps (tests/test_ci_job_split_contract.py).
+      # same setup steps (tests/test_ci_job_split_contract.py). `--depth`
+      # matches the checkout's fetch-depth as tests/test_ci_final_merge_ref_fresh.py
+      # requires; the script reads 0 (full history) as its default of 1, which
+      # does not matter while the step cannot run in this push-only job.
       - name: Verify the final-CI merge ref is current
         if: github.event_name == 'workflow_dispatch'
         env:
           FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
           GH_TOKEN: ${{ github.token }}
           CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
-        run: bash scripts/ci_final_merge_ref_fresh.sh --depth 1
+          CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED || 'true' }}
+        run: bash scripts/ci_final_merge_ref_fresh.sh --depth 0
 
       - name: Setup Python
         uses: actions/setup-python@v6
