@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":10200,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/10200\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/10202\",\"pr_number\":10202,\"branch\":\"ai/issue-10200\",\"run_id\":\"45941721804\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/45941721804\",\"changed_files\":[\".github/workflows/ci.yml\",\"changelog.d/10200-ci-heal-job-steps-to-poll-groups.md\",\"tests/test_ci_poll_test_sharding.py\"]}",
+  "fingerprint": "a8705739ed948aa1b8362b702ccb282612f65a2de1bcca4905bba82f8036f1a1",
+  "lineage": {
+    "issue_number": 10200,
+    "parent_ids": [],
+    "pr_number": 10202,
+    "run_id": "45941721804",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45941721804",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/10202"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261127054152_c297624a12",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10200,
+    "level": "run",
+    "pr_number": 10202,
+    "run_id": "45941721804"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #10200: https://github.com/shubhodeep1/coding-workflows/pull/10202",
+  "timestamps": {
+    "created_at": "2026-11-27T05:41:52Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
