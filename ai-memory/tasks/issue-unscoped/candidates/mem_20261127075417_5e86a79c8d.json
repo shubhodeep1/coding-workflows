@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n- scripts/gh_helpers.sh:1793 | HARDENING_SUGGESTION (advisory, not a finding) | HARDENING_RISK_SCORE: 1\n  PROBLEM: `printf 'hit %s\\n' \"${kind}\" >> \"${stats}\" 2>/dev/null || true` (the miss-counter line a few lines below has the same shape). Bash opens the `>>` target before it applies `2>/dev/null`, so if the stats file cannot be opened, the open error reaches the caller's stderr.\n  WHY: This is the pattern the last run fixed on line 1795. This line predates the PR (#9928), and a failed write only loses a statistic. Suggested fix: `{ printf 'hit %s\\n' \"${kind}\" >> \"${stats}\"; } 2>/dev/null || true`, and the same for the miss line. Estimated lines changed: 2.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n- scripts/gh_helpers.sh:1793, 1801 | HARDENING_SUGGESTION (advisory, not a finding) | HARDENING_RISK_SCORE: 1\n  PROBLEM: line 1793 (`printf 'hit %s\\n' \"${kind}\" >> \"${stats}\" 2>/dev/null || true`) and line 1801 (`printf 'miss %s\\n' \"${kind}\" >> \"${stats}\" 2>/dev/null || true`) have the same redirect-order pattern as the line the last run fixed at 1795. A stats-file open failure would print to the caller's stderr before the suppression applies.\n  WHY: Advisory only. These lines predate this PR (#9928), and the stats path is inside the cache directory that is already verified writable at function entry. The prior editor round declined this as won't-fix. Suggested fix: brace-group both lines, `{ printf ... >> \"${stats}\"; } 2>/dev/null || true`. Estimated lines changed: 2.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "58dc98b03e09943c1b45e6351c73ce4dfba010fd1396062ed43852c3ede216c5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10178,
+    "run_id": "45959446673",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45959446673",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127075417_5e86a79c8d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10178,
+    "run_id": "45959446673"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 0 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-27T07:54:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
