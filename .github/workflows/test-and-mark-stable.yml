@@ -3092,22 +3092,27 @@ jobs:
           declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh 2>/dev/null || gh_api_retry() { gh api "$@"; }
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
-          # #10225 review: this step runs inside the finalization reserve, so
-          # cap each rate-limit wait at 1/8 of the job time left (at most 600 s):
-          # two reads that each wait twice still leave half of it for the writes.
-          if [[ "${E2E_JOB_STARTED_EPOCH:-}" =~ ^[0-9]+$ ]] && [[ "${E2E_JOB_TIMEOUT_MINUTES:-}" =~ ^[0-9]+$ ]]; then
-            cleanup_rl_wait=$(( (E2E_JOB_STARTED_EPOCH + E2E_JOB_TIMEOUT_MINUTES * 60 - $(date +%s)) / 8 ))
-            [ "${cleanup_rl_wait}" -ge 0 ] || cleanup_rl_wait=0
-            [ "${cleanup_rl_wait}" -le 600 ] || cleanup_rl_wait=600
-            export GH_RETRY_RATE_LIMIT_MAX_WAIT_SECS="${cleanup_rl_wait}"
-          fi
+          # #10225 review: this step runs inside the finalization reserve and
+          # makes up to 12 reads. Each read recomputes its rate-limit wait cap
+          # as 1/8 of the job time left (at most 600 s); with 3 attempts it
+          # waits at most twice, so one read takes at most a quarter of what is
+          # left and all of them together never use it up before the writes.
+          cleanup_gh_api_read() {
+            local cleanup_rl_wait="${GH_RETRY_RATE_LIMIT_MAX_WAIT_SECS:-600}"
+            if [[ "${E2E_JOB_STARTED_EPOCH:-}" =~ ^[0-9]+$ ]] && [[ "${E2E_JOB_TIMEOUT_MINUTES:-}" =~ ^[0-9]+$ ]]; then
+              cleanup_rl_wait=$(( (E2E_JOB_STARTED_EPOCH + E2E_JOB_TIMEOUT_MINUTES * 60 - $(date +%s)) / 8 ))
+              [ "${cleanup_rl_wait}" -ge 0 ] || cleanup_rl_wait=0
+              [ "${cleanup_rl_wait}" -le 600 ] || cleanup_rl_wait=600
+            fi
+            GH_RETRY_RATE_LIMIT_MAX_WAIT_SECS="${cleanup_rl_wait}" gh_api_retry "$@"
+          }
           echo "Cleaning up E2E test artifacts..."
 
           # Close PR without merging (idempotent — Phase 7 already closed
           # it for the cancel_on_pr_close test; if Phase 7 was skipped this
           # path closes the PR for the first time).
           if [ -n "${PR_NUMBER}" ]; then
-            EXISTING_PR_BODY="$(_safe_gh_jq "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.body // ""' || echo "")"
+            EXISTING_PR_BODY="$(cleanup_gh_api_read "repos/${TEST_REPO}/pulls/${PR_NUMBER}" --jq '.body // ""' || echo "")"
             NEW_PR_BODY="${EXISTING_PR_BODY}
 
           ---
@@ -3135,7 +3140,7 @@ jobs:
               # first, up to 10 pages; stop at a short or failed page.
               LATE_IMPL_RUN_IDS=""
               for LATE_IMPL_PAGE in 1 2 3 4 5 6 7 8 9 10; do
-                LATE_IMPL_PAGE_JSON="$(gh_api_retry "repos/${TEST_REPO}/actions/runs?per_page=100&page=${LATE_IMPL_PAGE}${LATE_IMPL_CREATED_FILTER}" 2>/dev/null)" \
+                LATE_IMPL_PAGE_JSON="$(cleanup_gh_api_read "repos/${TEST_REPO}/actions/runs?per_page=100&page=${LATE_IMPL_PAGE}${LATE_IMPL_CREATED_FILTER}" 2>/dev/null)" \
                   && printf '%s' "${LATE_IMPL_PAGE_JSON}" | jq -e '.workflow_runs | type == "array"' >/dev/null 2>&1 \
                   || { echo "::warning::Implement run lookup failed for issue #${ISSUE_NUMBER} (page ${LATE_IMPL_PAGE})"; break; }
                 LATE_IMPL_RUN_IDS+=" $(printf '%s' "${LATE_IMPL_PAGE_JSON}" | jq -r '.workflow_runs[] | select((.name // "") | test("Implement"; "i")) | select(.display_title == env.ISSUE_TITLE) | select(.status != "completed") | .id' 2>/dev/null || true)"
@@ -3151,7 +3156,7 @@ jobs:
                 fi
               done
             fi
-            LATE_PR_NUMBERS="$(gh_api_retry "repos/${TEST_REPO}/pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=100" --jq '.[].number' 2>/dev/null || true)"
+            LATE_PR_NUMBERS="$(cleanup_gh_api_read "repos/${TEST_REPO}/pulls?state=open&head=${TEST_REPO%%/*}:ai/issue-${ISSUE_NUMBER}&per_page=100" --jq '.[].number' 2>/dev/null || true)"
             for LATE_PR in ${LATE_PR_NUMBERS}; do
               [[ "${LATE_PR}" =~ ^[1-9][0-9]*$ ]] || continue
               # Close only, keeping the PR body as diagnosis evidence; the
@@ -3210,7 +3215,7 @@ jobs:
             # A failed listing must not read as "no active runs": warn and
             # skip the "No active" line so a leaked run stays visible.
             CLEANUP_DISPATCH_LIST_FAILED=0
-            if ! CLEANUP_DISPATCH_REVIEW_RUN_IDS="$(_safe_gh_jq "repos/${TEST_REPO}/actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?event=workflow_dispatch&branch=${BRANCH}&per_page=20" \
+            if ! CLEANUP_DISPATCH_REVIEW_RUN_IDS="$(cleanup_gh_api_read "repos/${TEST_REPO}/actions/workflows/${REVIEW_WORKFLOW_FILE}/runs?event=workflow_dispatch&branch=${BRANCH}&per_page=20" \
               --jq '.workflow_runs[]? | select(.status == "queued" or .status == "in_progress" or .status == "waiting" or .status == "pending" or .status == "requested") | "\(.id) \(.status) \(.event) \(.head_branch)"')"; then
               echo "Warning: could not list dispatch review runs on ${BRANCH}; an active dispatch review run may be left uncancelled"
               CLEANUP_DISPATCH_REVIEW_RUN_IDS=""

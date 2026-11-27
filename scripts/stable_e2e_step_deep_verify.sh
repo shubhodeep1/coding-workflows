@@ -102,9 +102,13 @@ check_all_steps() {
   }
 
   JOBS_JSON='{"jobs":[]}'
+  # rc of the latest jobs listing read: a failed read is "listing
+  # unavailable", never "no jobs" (review of #10225).
+  local dv_last_rc=0
   for _attempt in 1 2 3; do
     local dv_read_rc=0
     _JOBS_OUT=$(deep_verify_gh_api_read "repos/${TEST_REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null) || dv_read_rc=$?
+    dv_last_rc="${dv_read_rc}"
     if [ "${dv_read_rc}" -eq 0 ]; then
       JOBS_JSON="$_JOBS_OUT"
       break
@@ -133,7 +137,7 @@ check_all_steps() {
   # internal-implement.yml but the reusable workflow skips the job.
   TOTAL_JOBS=$(echo "$JOBS_JSON" | jq '.jobs | length')
   SKIPPED_JOBS=$(echo "$JOBS_JSON" | jq '[.jobs[] | select(.conclusion == "skipped")] | length')
-  if [ "$TOTAL_JOBS" -eq 0 ]; then
+  if [ "$TOTAL_JOBS" -eq 0 ] && [ "${dv_last_rc}" -ne 75 ]; then
     # GitHub can briefly report zero jobs before the run is fully indexed.
     # Re-fetch a few times so we don't false-pass real runs as spurious.
     echo "  │  ⚠ Run has no jobs yet — rechecking for indexing delay..."
@@ -144,6 +148,7 @@ check_all_steps() {
       # concatenate with the literal fallback JSON.
       local dv_recheck_rc=0
       _JOBS_OUT=$(deep_verify_gh_api_read "repos/${TEST_REPO}/actions/runs/${run_id}/jobs?per_page=100" 2>/dev/null) || dv_recheck_rc=$?
+      dv_last_rc="${dv_recheck_rc}"
       if [ "${dv_recheck_rc}" -eq 0 ]; then
         JOBS_JSON="$_JOBS_OUT"
       else
@@ -161,6 +166,15 @@ check_all_steps() {
       SKIPPED_JOBS=$(echo "$JOBS_JSON" | jq '[.jobs[] | select(.conclusion == "skipped")] | length')
       [ "$TOTAL_JOBS" -gt 0 ] && break
     done
+  fi
+  # Fail closed: the steps of a run whose listing could not be read were
+  # not verified, so it must not pass as a spurious re-trigger.
+  if [ "$TOTAL_JOBS" -eq 0 ] && [ "${dv_last_rc}" -ne 0 ]; then
+    echo "  │  ✗ Jobs listing unavailable (gh_api_retry rc=${dv_last_rc}) — steps not verified"
+    DEEP_PASS=false
+    FAILED_STEPS="${FAILED_STEPS}\n  - ${phase_name}: jobs listing unavailable (gh_api_retry rc=${dv_last_rc})"
+    echo "  └─"
+    return 0
   fi
   if [ "$TOTAL_JOBS" -eq 0 ]; then
     echo "  │  ⊘ Run has no jobs after retries (spurious re-trigger) — OK"

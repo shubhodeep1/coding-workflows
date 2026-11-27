@@ -214,7 +214,10 @@ def test_smoke_cleanup_cancels_a_caller_run_past_page_one() -> None:
 	# back to a plain read instead of stopping the step.
 	source_line = next(line for line in body.splitlines() if line.startswith("declare -F gh_api_retry"))
 	assert source_line.startswith("declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh 2>/dev/null || gh_api_retry()"), source_line
-	script = "set -euo pipefail\n" + source_line + "\nif false; then :\n" + fallback + "\n"
+	# The reads go through the step's own cleanup_gh_api_read (per-read wait cap).
+	fn_start = body.index("cleanup_gh_api_read() {")
+	read_fn = body[fn_start:body.index("\n}\n", fn_start) + 3]
+	script = "set -euo pipefail\n" + source_line + "\n" + read_fn + "if false; then :\n" + fallback + "\n"
 	with tempfile.TemporaryDirectory() as tmp:
 		root = Path(tmp)
 		bin_dir = root / "bin"

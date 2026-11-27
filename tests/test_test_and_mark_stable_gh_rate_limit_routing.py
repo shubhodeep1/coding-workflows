@@ -112,6 +112,17 @@ ALLOWLIST: tuple[tuple[str, str, str], ...] = (
 	),
 	(
 		WORKFLOW_REL,
+		'TIMEOUT_INV_RUNS="$(_safe_gh_jq',
+		"Phase 4d review-timeout inventory: failure-path diagnostics with timeout-minutes 3 and continue-on-error; "
+		"a reset wait cannot fit and a failed read already prints '(review run inventory fetch failed)'",
+	),
+	(
+		WORKFLOW_REL,
+		'TIMEOUT_INV_JOBS="$(_safe_gh_jq',
+		"Phase 4d review-timeout inventory job lookup: same 3-minute diagnostic step, fail soft per run",
+	),
+	(
+		WORKFLOW_REL,
 		'gh_api_retry() { gh api "$@"; }',
 		"always() cleanup fallback when the checkout's scripts/gh_helpers.sh is missing, so cleanup stays best-effort",
 	),
@@ -127,6 +138,10 @@ _GH_CALL = re.compile(
 	r"(?:^|\$\(|\(\s|[;|&!{]|\b(?:then|do|if|while|else)\b|\btimeout\s+\d+|\bcommand|\benv"
 	r"|\b[A-Za-z_][A-Za-z0-9_]*=[^\s()]*\s|\$\{?[A-Za-z_][A-Za-z0-9_]*\}?\s)\s*gh\s+(api|run|pr|issue)\b(.*)"
 )
+# `_safe_gh_jq` (scripts/gh_helpers.sh) makes one plain `gh api` attempt and
+# never waits for a rate-limit reset, so a call to it counts as a raw read;
+# `gh_retry _safe_gh_jq ...` goes through a helper and is not matched.
+_SAFE_GH_JQ_CALL = re.compile(r"(?:^|\$\(|\(\s|[;|&!{]|\b(?:then|do|if|while|else)\b)\s*_safe_gh_jq\s")
 _READ_SUBCOMMANDS = {
 	"run": {"view", "list", "watch"},
 	"pr": {"view", "list", "checks", "diff"},
@@ -171,6 +186,9 @@ def _is_raw_read(sub: str, rest: str) -> bool:
 def raw_reads(text: str) -> list[str]:
 	found: list[str] = []
 	for line in _logical_lines(text):
+		if _SAFE_GH_JQ_CALL.search(line):
+			found.append(line)
+			continue
 		for match in _GH_CALL.finditer(line):
 			if _is_raw_read(match.group(1), match.group(2)):
 				found.append(line)
@@ -273,6 +291,8 @@ def test_scanner_recognises_reads_and_writes() -> None:
 			'( gh run list --repo o/r )',
 			'${SUDO} gh api repos/o/r/hooks',
 			'echo "::warning::gh api failed (gh api returned empty)"',
+			'if ! R="$(_safe_gh_jq "repos/o/r/runs" --jq .x)"; then',
+			'Z="$(gh_retry _safe_gh_jq repos/o/r/y)"',
 		]
 	)
 	got = raw_reads(text)
@@ -287,6 +307,7 @@ def test_scanner_recognises_reads_and_writes() -> None:
 		'f() { gh api repos/o/r/labels; }',
 		'( gh run list --repo o/r )',
 		'${SUDO} gh api repos/o/r/hooks',
+		'if ! R="$(_safe_gh_jq "repos/o/r/runs" --jq .x)"; then',
 	], got
 
 

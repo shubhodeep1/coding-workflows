@@ -65,9 +65,12 @@ def test_cleanup_step_cancels_dispatch_review_run_before_branch_delete() -> None
 def test_cancel_block_calls_are_fail_soft() -> None:
 	block = _cancel_block(_read_workflow())
 	listing = _slice_between(block, "CLEANUP_DISPATCH_REVIEW_RUN_IDS=", "CLEANUP_DISPATCH_MATCHED=0")
-	assert "_safe_gh_jq" in listing
+	# Issue #10225: the listing goes through the step's cleanup_gh_api_read
+	# (gh_api_retry with a per-read rate-limit wait cap), not _safe_gh_jq.
+	assert "cleanup_gh_api_read" in listing
+	assert "_safe_gh_jq" not in listing
 	# A failed listing warns instead of folding into an empty listing.
-	assert 'if ! CLEANUP_DISPATCH_REVIEW_RUN_IDS="$(_safe_gh_jq' in block
+	assert 'if ! CLEANUP_DISPATCH_REVIEW_RUN_IDS="$(cleanup_gh_api_read' in block
 	assert '|| echo "")"' not in listing
 	assert "Warning: could not list dispatch review runs on ${BRANCH}" in listing
 	post_line = next(line for line in block.splitlines() if "gh api -X POST" in line)
@@ -86,7 +89,7 @@ def _run_block(
 		script = textwrap.dedent(
 			f"""\
 			set -euo pipefail
-			_safe_gh_jq() {{ echo "LIST $*" >> "{calls}"; cat "{listing_file}"; return {list_rc}; }}
+			cleanup_gh_api_read() {{ echo "LIST $*" >> "{calls}"; cat "{listing_file}"; return {list_rc}; }}
 			gh() {{ echo "GH $*" >> "{calls}"; return {gh_rc}; }}
 			BRANCH="ai/issue-${{ISSUE_NUMBER}}"
 			"""
