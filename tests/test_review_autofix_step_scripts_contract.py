@@ -24,6 +24,7 @@ from review_autofix_step_scripts import (  # noqa: E402
 	REVIEW_AUTOFIX_GATE_JOB_STEP_SCRIPTS,
 	REVIEW_AUTOFIX_SKIP_MERGE_JOB_STEP_SCRIPTS,
 	REVIEW_AUTOFIX_STEP_SCRIPTS,
+	REVIEW_AUTOFIX_SUPPORT_CHECKOUT_JOB_STEP_SCRIPTS,
 	REVIEW_AUTOFIX_WORKFLOW_PATH,
 	expanded_review_autofix_text,
 	review_autofix_step_script_body,
@@ -96,6 +97,23 @@ def test_moved_steps_run_only_the_resolving_wrapper() -> None:
 			assert skip_run_lines[-2:] == ["fi", 'source "${REVIEW_AUTOFIX_STEP_SCRIPT}"'], step_name
 			assert len(skip_run_lines) == 6, f"{step_name}: skip-job wrapper must have no other resolution path"
 			assert "SUPPORT_SCRIPTS_DIR" not in run and ".codex-workflow-src" not in run, step_name
+			assert "${{" not in run, f"{step_name}: wrapper must not carry GitHub expressions"
+			continue
+		if script_name in REVIEW_AUTOFIX_SUPPORT_CHECKOUT_JOB_STEP_SCRIPTS:
+			# #10166: jobs without the support bundle that verify their own
+			# .codex-workflow-src checkout; no other resolution path.
+			own_run_lines = run.rstrip("\n").split("\n")
+			assert own_run_lines[0] == f'REVIEW_AUTOFIX_STEP_SCRIPT="${{GITHUB_WORKSPACE}}/.codex-workflow-src/scripts/{script_name}"', step_name
+			for check in (
+				'! [[ "${WORKFLOW_SUPPORT_REF:-}" =~ ^[0-9a-f]{40}$ ]]',
+				'[ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${WORKFLOW_SUPPORT_REF}" ]',
+				'[ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]',
+			):
+				assert check in own_run_lines[1], f"{step_name}: wrapper must verify {check}"
+			assert own_run_lines[2].startswith("  echo \"::error::") and own_run_lines[3] == "  exit 1", step_name
+			assert own_run_lines[-2:] == ["fi", 'source "${REVIEW_AUTOFIX_STEP_SCRIPT}"'], step_name
+			assert len(own_run_lines) == 6, f"{step_name}: wrapper must have no other resolution path"
+			assert "SUPPORT_SCRIPTS_DIR" not in run, step_name
 			assert "${{" not in run, f"{step_name}: wrapper must not carry GitHub expressions"
 			continue
 		expected_lines = [
@@ -172,7 +190,7 @@ def test_every_wrapper_is_registered_and_expands() -> None:
 	raw = REVIEW_AUTOFIX_WORKFLOW_PATH.read_text(encoding="utf-8")
 	wrapped = set(
 		re.findall(
-			r'REVIEW_AUTOFIX_STEP_SCRIPT="(?:\$\{SUPPORT_SCRIPTS_DIR:-\}|\$\{GITHUB_WORKSPACE\}/\.codex-head-gate-src/scripts|\$\{GITHUB_WORKSPACE\}/\.codex-freshness-src/scripts)/([a-z0-9_]+\.sh)"',
+			r'REVIEW_AUTOFIX_STEP_SCRIPT="(?:\$\{SUPPORT_SCRIPTS_DIR:-\}|\$\{GITHUB_WORKSPACE\}/\.codex-head-gate-src/scripts|\$\{GITHUB_WORKSPACE\}/\.codex-freshness-src/scripts|\$\{GITHUB_WORKSPACE\}/\.codex-workflow-src/scripts)/([a-z0-9_]+\.sh)"',
 			raw,
 		)
 	)
@@ -241,6 +259,32 @@ def test_skip_merge_job_step_scripts_come_only_from_verified_freshness_checkout(
 		assert by_name[step_name]["env"]["FRESHNESS_HELPER_CHECKOUT_OUTCOME"] == "${{ steps.checkout_freshness_helper.outcome }}"
 		assert by_name[step_name]["env"]["REVIEW_SUPPORT_SHA"] == "${{ needs.gate.outputs.review_support_sha }}"
 		assert names.index("Checkout merge-base freshness helper") < names.index(step_name)
+
+
+def test_support_checkout_job_step_scripts_come_only_from_their_verified_checkout() -> None:
+	# #10166: these jobs have no staged support bundle. Each checks out
+	# .codex-workflow-src at review_support_sha and verifies it (exit 1 on
+	# mismatch, exporting WORKFLOW_SUPPORT_REF) before the moved step runs.
+	assert REVIEW_AUTOFIX_SUPPORT_CHECKOUT_JOB_STEP_SCRIPTS, "support-checkout step registry must not be empty"
+	workflow = yaml.safe_load(REVIEW_AUTOFIX_WORKFLOW_PATH.read_text(encoding="utf-8"))
+	for step_name, (script_name, severity) in REVIEW_AUTOFIX_STEP_SCRIPTS.items():
+		if script_name not in REVIEW_AUTOFIX_SUPPORT_CHECKOUT_JOB_STEP_SCRIPTS:
+			continue
+		assert severity == "error", step_name
+		steps = workflow["jobs"][REVIEW_AUTOFIX_SUPPORT_CHECKOUT_JOB_STEP_SCRIPTS[script_name]]["steps"]
+		names = [step.get("name") for step in steps]
+		by_name = {step.get("name"): step for step in steps}
+		checkout = by_name["Checkout workflow support source"]
+		assert checkout["with"]["ref"] == "${{ needs.gate.outputs.review_support_sha }}"
+		assert checkout["with"]["path"] == ".codex-workflow-src"
+		sparse = checkout["with"].get("sparse-checkout")
+		if sparse is not None:
+			assert f"scripts/{script_name}" in sparse.split(), f"{script_name} must be in the sparse checkout"
+		verify = by_name["Verify workflow support source"]
+		assert "continue-on-error" not in verify and "if" not in verify
+		assert 'echo "WORKFLOW_SUPPORT_REF=${WORKFLOW_SHA}" >> "$GITHUB_ENV"' in verify["run"]
+		assert "if" not in by_name[step_name], f"{step_name}: must run only after the verify step succeeded"
+		assert names.index("Checkout workflow support source") < names.index("Verify workflow support source") < names.index(step_name)
 
 
 def test_capture_runtime_context_stays_inline() -> None:

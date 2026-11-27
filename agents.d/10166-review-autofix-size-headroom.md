@@ -20,7 +20,19 @@
   `scripts/review_autofix_step_editor_noop_suspicious_warning.sh`; one
   script and one registry entry per step). The judge-decision script opens
   with `set -euo pipefail` then `set +u +o pipefail` to keep the runner's
-  default `bash -e` options of the inline body. "Capture runtime context"
+  default `bash -e` options of the inline body. Two bodies outside
+  `codex-agent` also moved: `scripts/review_autofix_step_post_merge_validate_dispatch.sh`
+  ("Dispatch standalone validate for orchestrator short-circuit issues") and
+  `scripts/review_autofix_step_fingerprint_cap_block.sh` ("Apply
+  identical-failure cap outcome"). Their jobs have no staged support bundle
+  but check out and verify their own `.codex-workflow-src` ("Verify workflow
+  support source" exports `WORKFLOW_SUPPORT_REF`), so the wrapper reads only
+  `${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/<script>`, fails closed
+  unless that checkout's HEAD equals `WORKFLOW_SUPPORT_REF`, and has no
+  `SUPPORT_SCRIPTS_DIR` path. They are listed in
+  `REVIEW_AUTOFIX_SUPPORT_CHECKOUT_JOB_STEP_SCRIPTS` (job id per script) in
+  `tests/review_autofix_step_scripts.py`; a sparse support checkout must
+  list the script. "Capture runtime context"
   stays inline: it runs under `always()`, possibly before the trusted support
   checkout, and the wrapper's `.codex-workflow-src` fallback would then source
   a file from the PR tree (#10166 security pass). Keep `always()` steps that
