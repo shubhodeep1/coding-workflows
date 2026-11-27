@@ -320,7 +320,6 @@ This file is the authoritative inventory for the Phase B drift-control surfaces.
 - `scripts/review_autofix_step_telegram_rb_judge_decision.sh` — body of the review_autofix.yml "Telegram review-blocked judge decision" step (sourced by the step; the step passes the server URL, repository and run id as `AUTOFIX_STEP_SERVER_URL` / `AUTOFIX_STEP_REPOSITORY` / `AUTOFIX_STEP_RUN_ID`; moved out for size headroom, #10166).
 - `scripts/review_autofix_step_push_pending_commits.sh` — body of the review_autofix.yml "Push all pending commits" step (sourced by the step; moved out for size headroom, #10166).
 - `scripts/review_autofix_step_static_context.sh` — body of the review_autofix.yml "Pre-assemble static context (cacheable across runs)" step (sourced by the step; moved out for size headroom, #10166).
-- `scripts/review_autofix_step_mark_review_blocked_exhaustion.sh` — body of the review_autofix.yml "Mark linked issues review-blocked (autofix exhaustion)" step (sourced by the step; moved out for size headroom, #10166).
 - `scripts/review_autofix_sweep_reaper.sh` — sourced by the review_autofix_sweep.yml enumerate step from the trusted default-branch checkout: cancels, then force-cancels on 409, up to 10 review runs per sweep queued longer than `ZOMBIE_RUN_MAX_QUEUED_HOURS`, from the listing the sweep already fetched (P11b; log prefix `ZOMBIE_RUN_REAPED`).
 - `scripts/review_collect_pr_metadata.sh` — artifacts for review_autofix.yml.
 - `scripts/review_commit_changes.sh` — review_commit_changes.sh — stage + commit editor output in review_autofix.yml.

@@ -9,11 +9,12 @@
   (`tests/test_ci_budget_watch.py::test_default_warn_threshold_is_under_the_test_ceiling`),
   so the watcher opens its `ai:ci-budget` issue before a test fails.
   Workflow-size findings skip the re-file cooldown. `review_autofix.yml`
-  moved four more `codex-agent` step bodies out:
+  moved three more `codex-agent` step bodies out:
   `scripts/review_autofix_step_telegram_rb_judge_decision.sh`,
-  `scripts/review_autofix_step_push_pending_commits.sh`,
-  `scripts/review_autofix_step_static_context.sh` and
-  `scripts/review_autofix_step_mark_review_blocked_exhaustion.sh` (the
+  `scripts/review_autofix_step_push_pending_commits.sh` and
+  `scripts/review_autofix_step_static_context.sh` (the "Mark linked issues
+  review-blocked (autofix exhaustion)" body stays in #9654's
+  `scripts/review_autofix_step_mark_review_blocked_exhaustion.sh`, and the
   "Telegram editor-noop-suspicious warning" body stays in #9944's
   `scripts/review_autofix_step_editor_noop_suspicious_warning.sh`; one
   script and one registry entry per step). The judge-decision script opens

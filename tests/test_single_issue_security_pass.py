@@ -741,7 +741,8 @@ def test_unpushed_commit_on_top_of_the_pr_head_holds_as_head_unpushed(tmp_path: 
 
 
 def test_head_unpushed_is_a_self_clearing_judge_hold() -> None:
-	assert "security_hold_awaiting_followups|security_hold_head_unpushed)" in REVIEW.read_text(encoding="utf-8")
+	# The judge-decision body lives in a step script (#10166); read it inlined.
+	assert "security_hold_awaiting_followups|security_hold_head_unpushed)" in expanded_review_autofix_text()
 
 
 def test_unpushed_local_commit_without_extensions_does_not_hold(tmp_path: Path) -> None:
