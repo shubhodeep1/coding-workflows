@@ -285,6 +285,8 @@ def test_pre_lookup_backoff_counts_against_the_cap() -> None:
 
 
 def test_pre_lookup_failure_then_wait_restarts_the_fallback_window() -> None:
+	# The fake clock's base is taken inside _run, so it is at least this value.
+	clock_floor = int(time.time())
 	rc, out, calls, sleeps, dispatches = _run(
 		dispatch_fails=1, reset_offset=295, pre_lookup_rate_limit=True, fake_clock=True
 	)
@@ -304,7 +306,8 @@ def test_pre_lookup_failure_then_wait_restarts_the_fallback_window() -> None:
 	)
 	# The window starts after the 210 s lookup backoff and the rate-limit wait,
 	# not before the lookup.
-	assert window_start >= int(time.time()) + 210 + int(waits[0].group(2)) - 30, (window_start, out)
+	# Compared on the fake clock only, so a slow runner cannot fail it.
+	assert window_start >= clock_floor + 210 + int(waits[0].group(2)) - 1, (window_start, out)
 
 
 def test_non_rate_limit_failure_keeps_todays_backoff() -> None:
