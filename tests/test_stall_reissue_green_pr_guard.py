@@ -514,6 +514,51 @@ def test_replay_2026_11_21_issue_9398_keeps_pr_9402_open(tmp: Path):
 	assert "issue create" not in gh_log, gh_log
 
 
+@_with_tmp
+def test_close_linked_pr_keeps_lease_waiting_pr_open(tmp: Path):
+	"""The skip and exhausted close-outs reach `gh pr close` through
+	close_linked_pr without the green-PR guard: its own hold check must see
+	the merge-lease label through its --jq projection (labels + number)."""
+	r = _invoke(
+		tmp,
+		"""
+		_safe_gh_jq() {
+			local path="$1"; shift
+			[ -n "${API_JSON[${path}]+set}" ] || return 1
+			if [ "${1:-}" = "--jq" ]; then printf '%s' "${API_JSON[${path}]}" | jq -c "$2"; else printf '%s' "${API_JSON[${path}]}"; fi
+		}
+		_stall_merge_lease_label_age_minutes() { [ "$1" = "9402" ] || return 1; printf '%s\\n' "${LABEL_AGE:-5}"; }
+		_find_all_linked_prs() { printf '9402\\n'; }
+		close_linked_pr 9398 "why"
+		echo "HELD=[${CLOSE_LINKED_PR_HELD_PRS}] DETAIL=[${CLOSE_LINKED_PR_HELD_DETAIL}]"
+		LABEL_AGE=5000 close_linked_pr 9398 "why"
+		echo "HELD2=[${CLOSE_LINKED_PR_HELD_PRS}]"
+		""",
+		prs={9402: _pr(9402, "ai/issue-9398", labels=["ai:merge-lease-wait"])},
+	)
+	assert r.returncode == 0, r.stderr
+	assert "HELD=[9402] DETAIL=[merge_lease_wait]" in r.stdout, (r.stdout, r.stderr)
+	assert "detail=merge_lease_wait" in r.stdout, r.stdout
+	# A label older than STALL_MERGE_LEASE_WAIT_MAX_MINUTES lapses: closed.
+	assert "HELD2=[]" in r.stdout, (r.stdout, r.stderr)
+	gh_log = (tmp / "gh.log").read_text(encoding="utf-8") if (tmp / "gh.log").exists() else ""
+	assert gh_log.count("pr close 9402") == 1, gh_log
+
+
+def test_stall_hold_rechecks_pass_the_stall_clock():
+	"""The REST re-checks on the skip, dispatch_rb_judge (managed and
+	standalone) and open-PR fallback paths enable the lease hold."""
+	text = POLLER_SCRIPT.read_text(encoding="utf-8")
+	for call in (
+		'_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON}" "${stall_minutes}"',
+		'_rbj_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON:-}" "${stall_minutes}")"',
+		'_std_rb_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON:-}" "${elapsed_minutes}")"',
+		'_stall_pr_ai_hold_reason "${_opr_json}" "${stall_minutes}"',
+		'_stall_pr_ai_hold_reason "${pr_meta_json}" "0"',
+	):
+		assert text.count(call) == 1, call
+
+
 def test_close_and_reissue_arms_call_the_guard():
 	"""All three close_and_reissue arms run the guard first."""
 	text = POLLER_SCRIPT.read_text(encoding="utf-8")

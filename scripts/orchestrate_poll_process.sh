@@ -21534,7 +21534,7 @@ close_linked_pr() {
     # The same request also carries draft/title for the owner-hold check.
     local pr_meta_json pr_state pr_head_ref pr_base_ref pr_body pr_hold_reason
     pr_meta_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" \
-      --jq '{state: (.state // ""), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), body: (.body // ""), draft: (.draft // false), title: (.title // "")}' || echo "")"
+      --jq '{state: (.state // ""), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), body: (.body // ""), draft: (.draft // false), title: (.title // ""), number: (.number // null), labels: [(.labels // [])[]? | (.name // empty)]}' || echo "")"
     pr_state="$(printf '%s' "${pr_meta_json}" | jq -r '.state // ""' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
     pr_head_ref="$(printf '%s' "${pr_meta_json}" | jq -r '.head_ref // ""' 2>/dev/null || echo "")"
     pr_base_ref="$(printf '%s' "${pr_meta_json}" | jq -r '.base_ref // ""' 2>/dev/null || echo "")"
@@ -21551,7 +21551,13 @@ close_linked_pr() {
       echo "  close_linked_pr: skipping PR #${pr_num} for issue #${issue_num} (cross-reference only; head=${pr_head_ref:-?} does not match the issue's implementation branch pattern and the body carries no close keyword; base=${pr_base_ref:-?} is shown for context and is not evaluated)."
       continue
     fi
-    pr_hold_reason="$(_stall_pr_ai_hold_reason "${pr_meta_json}")"
+    # Issue #9892: every caller is a stall-recovery close path (the skip and
+    # exhausted close-outs never run _stall_reissue_green_pr_guard), so a
+    # PR waiting for the merge lease is held here too. `0` enables the
+    # lease hold without the stall-clock backstops (as in the review-blocked
+    # arm): it lapses only on the label's own readable age. The projection
+    # above carries `number` and `labels` for that check.
+    pr_hold_reason="$(_stall_pr_ai_hold_reason "${pr_meta_json}" "0")"
     if [ -n "${pr_hold_reason}" ]; then
       echo "  close_linked_pr: skipping PR #${pr_num} for issue #${issue_num} (owner hold: reason=pr_ai_hold detail=${pr_hold_reason})."
       CLOSE_LINKED_PR_HELD_PRS="${CLOSE_LINKED_PR_HELD_PRS:+${CLOSE_LINKED_PR_HELD_PRS} }${pr_num}"
@@ -24423,7 +24429,7 @@ REISSUE_EOF
           # fetched (0 extra API calls): recover_stalled_issue's hold guard
           # fails open when the linked-PR caches lack draft/title.
           local _skip_hold_reason=""
-          _skip_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON}")"
+          _skip_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON}" "${stall_minutes}")"
           if [ -n "${_skip_hold_reason}" ]; then
             echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${_skip_pr_num} detail=${_skip_hold_reason} phase=${phase} action=none requested_action=skip"
             STALL_RECOVERY_EFFECTIVE_ACTION="skip_skipped_pr_ai_hold"
@@ -24638,7 +24644,7 @@ The judge will evaluate this gap when the wave completes and decide whether to r
       # Owner hold (#9733) on the payload resolved above (0 extra calls):
       # also covers the stall judge's dispatch_rb_judge fallback.
       local _rbj_hold_reason=""
-      _rbj_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON:-}")"
+      _rbj_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON:-}" "${stall_minutes}")"
       if [ -n "${_rbj_hold_reason}" ]; then
         echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${rb_pr_num} detail=${_rbj_hold_reason} phase=${phase} action=none requested_action=dispatch_rb_judge"
         STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_rb_judge_skipped_pr_ai_hold"
@@ -31498,7 +31504,7 @@ PY
       # calls), mirroring the managed dispatch_rb_judge arm: the generic
       # guard above fails open when the batched linked_pr lacks draft/title.
       local _std_rb_hold_reason=""
-      [[ "${_std_rb_pre_pr_num}" =~ ^[0-9]+$ ]] && _std_rb_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON:-}")"
+      [[ "${_std_rb_pre_pr_num}" =~ ^[0-9]+$ ]] && _std_rb_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON:-}" "${elapsed_minutes}")"
       if [ -n "${_std_rb_hold_reason}" ]; then
         echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${_std_rb_pre_pr_num} detail=${_std_rb_hold_reason} phase=${phase} action=none requested_action=dispatch_rb_judge"
         STALL_RECOVERY_SHOULD_INCREMENT="false"
@@ -32974,7 +32980,7 @@ recover_stalled_issue() {
         # Owner hold re-check (issue #9733) on this payload (0 extra calls):
         # the guard above fails open when the cached payloads lack draft/title.
         local _opr_hold_reason=""
-        _opr_hold_reason="$(_stall_pr_ai_hold_reason "${_opr_json}")"
+        _opr_hold_reason="$(_stall_pr_ai_hold_reason "${_opr_json}" "${stall_minutes}")"
         if [ -n "${_opr_hold_reason}" ]; then
           echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${_lpr_num} detail=${_opr_hold_reason} phase=${phase} action=none requested_action=${action}"
           STALL_RECOVERY_EFFECTIVE_ACTION="${action}_skipped_pr_ai_hold"
