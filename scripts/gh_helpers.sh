@@ -5146,7 +5146,9 @@ release_gate_oldest_queued_wait()
 		fi
 		# Runs on the pages not fetched (newer pages, and pages past 10) are
 		# candidates whose jobs are never read: count them in runs_unread.
-		_rgw_unread_extra="$(printf '%s' "${_rgw_json}" | jq -r '.workflow_runs | length' 2>/dev/null || true)"
+		# Distinct ids, on the same basis as the unique_by(.id) candidate
+		# count below: a run on both overlapping merged pages is one run.
+		_rgw_unread_extra="$(printf '%s' "${_rgw_json}" | jq -r '[.workflow_runs[]? | select(type == "object") | ((.id // "") | tostring)] | unique | length' 2>/dev/null || true)"
 		if [[ "${_rgw_unread_extra}" =~ ^[0-9]+$ ]] && [ "${_rgw_total}" -gt "${_rgw_unread_extra}" ]; then
 			_rgw_unread_extra=$(( _rgw_total - _rgw_unread_extra ))
 		else

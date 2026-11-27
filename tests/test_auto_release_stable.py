@@ -1264,6 +1264,17 @@ def test_runner_wait_overlapping_pages_read_each_run_once() -> None:
 	assert out == "outcome=long oldest_queued_min=50 queued_in_window=201 calls=6", out
 
 
+def test_runner_wait_overlapping_pages_count_runs_unread_once() -> None:
+	# Run 9 is on both merged pages: 4 distinct runs fetched, 3 read, so
+	# runs_unread = 4 + (201 - 4) - 3 = 198 (197 if the duplicate counted).
+	jobs = {"9": [], "40": [], "41": [_job("queued", 2)], "42": []}
+	state = {"window_total": 201, "window_runs": [_queued(50, 35)],
+		"window_pages": {"3": [_queued(9, 120)], "2": [_queued(9, 120), _queued(40, 90), _queued(41, 80), _queued(42, 70)]}, "window_jobs": jobs}
+	with tempfile.TemporaryDirectory() as tmp:
+		out = _helper_output(Path(tmp), state)
+	assert out == "outcome=short oldest_queued_min=2 queued_in_window=201 calls=6 runs_unread=198", out
+
+
 def test_runner_wait_empty_listing_makes_no_jobs_read() -> None:
 	with tempfile.TemporaryDirectory() as tmp:
 		out = _helper_output(Path(tmp), {"window_runs": []})
