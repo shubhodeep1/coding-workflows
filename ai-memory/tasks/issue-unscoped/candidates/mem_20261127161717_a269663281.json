@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/review_autofix_step_telegram_rb_judge_decision.sh:1-286 | severity=high | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: This PR adds the script body, but the same logic was restored inline in `.github/workflows/review_autofix.yml` in the last run, so the script is orphaned and redundant.\n  WHY: The inline step in the workflow sources nothing, so nothing runs this script. The source gave severity MAJOR, mapped here to high.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move the largest inline `run:` bodies into `scripts/review_autofix_step_<slug>.sh`\" (Issue #10166)\n  expected_change_site: `.github/workflows/review_autofix.yml`\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The last run's fix restored the step \"Telegram review-blocked judge decision\" inline, but `scripts/review_autofix_step_telegram_rb_judge_decision.sh` was not deleted. It stays in the repository as an orphaned, unused script, which violates the \"Automation and wiring\" and \"Scripts\" requirements of one script per moved step. The source gave severity MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/review_autofix_step_telegram_rb_judge_decision.sh:1-286 | severity=MAJOR | confidence=5\n  PROBLEM: The script body was added in this PR, but it duplicates the logic that was restored to being inline in `.github/workflows/review_autofix.yml` in the last run.\n  WHY: This script is now orphaned and redundant. The inline step in the workflow sources nothing.\n- TASK_GAP\n  Requirement: \"Move the largest inline `run:` bodies into `scripts/review_autofix_step_<slug>.sh`\" (Issue #10166)\n  Expected change site: `.github/workflows/review_autofix.yml`\n  Evidence of absence: The last run's fix restored the step \"Telegram review-blocked judge decision\" inline. The associated script `scripts/review_autofix_step_telegram_rb_judge_decision.sh` was not deleted and remains as an orphaned, unused script, violating the \"Automation and wiring\" and \"Scripts\" requirements that dictate one script per moved step.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "cfb3d9ac0a38030bc47e1c98042f083ceb5a71dcd930b2fd96a885373ced7f8c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10167,
+    "run_id": "46020979837",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46020979837",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127161717_a269663281",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10167,
+    "run_id": "46020979837"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-27T16:17:17Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
