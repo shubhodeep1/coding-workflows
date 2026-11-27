@@ -31,8 +31,9 @@ Rules enforced here, for every workflow-level, job-level and step-level
 6. Unknown settings. Any other MERGE_LEASE_* env key must first be
    classified in one of the three lists above.
 7. Read-only lease steps. A step listed in READ_ONLY_LEASE_STEPS only reads
-   the lease and never grants or renews one, so it may pass just the listed
-   subset of REQUIRED_KEYS (rule 2 still applies to each value). Passing any
+   the lease and never grants or renews one, so it passes exactly the listed
+   subset of REQUIRED_KEYS instead of the full set (rule 2 still applies to
+   each value, and dropping a listed key is reported as missing). Passing any
    other required key, or setting MERGE_BASE_FRESHNESS_ENABLED, puts the step
    back under rule 1.
 """
@@ -87,9 +88,12 @@ LITERAL_EXCEPTIONS = {
 # whose lease check only calls _merge_lease_read / _merge_lease_holder_row /
 # _merge_lease_max_holders to let a lease holder past the audit limit; it
 # never writes the lease, so TTL, idle and revocation settings have no reader
-# there. It reached this branch from main through the base sync.
+# there. It reached this branch from main through the base sync. Its twin
+# "Single-issue security pass (deterministic skip)" runs the same script and is
+# listed too, so its classification does not depend on its job env.
 READ_ONLY_LEASE_STEPS = {
 	("review_autofix.yml", "Single-issue security pass"): frozenset({"MERGE_LEASE_ENABLED", "MERGE_LEASE_MAX_HOLDERS"}),
+	("review_autofix.yml", "Single-issue security pass (deterministic skip)"): frozenset({"MERGE_LEASE_ENABLED", "MERGE_LEASE_MAX_HOLDERS"}),
 }
 
 VALUE_RE = re.compile(r"^\$\{\{ vars\.([A-Z0-9_]+) \|\| '([^']*)' \}\}$")
@@ -220,7 +224,10 @@ def violations(files: dict[str, str], defaults: dict[str, str], optional_default
 				and not runs_freshness_gate
 				and {k for k in lease_keys if k in REQUIRED_KEYS} <= read_only_keys
 			):
-				missing = []
+				# A reader is held to its listed keys: dropping one (for example
+				# MERGE_LEASE_MAX_HOLDERS, which falls back to the script default
+				# of 1) is still reported as missing.
+				missing = [k for k in REQUIRED_KEYS if k in read_only_keys and k not in effective]
 			if missing:
 				reason = "passes some merge-lease settings" if lease_keys else "runs the merge-base freshness gate"
 				out.append(f"{where}: {reason} but is missing {', '.join(missing)}")
@@ -434,6 +441,16 @@ class MergeLeaseEnvContractTest(unittest.TestCase):
 		found = violations({"review_autofix.yml": text}, self.defaults)
 		self.assertEqual(len(found), 1, found)
 		self.assertIn("missing MERGE_LEASE_TTL_MINUTES", found[0])
+
+	def test_fixture_read_only_step_missing_listed_key_fails(self) -> None:
+		text = _fixture(
+			"          MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}",
+			step_name="Single-issue security pass",
+		)
+		found = violations({"review_autofix.yml": text}, self.defaults)
+		self.assertEqual(len(found), 1, found)
+		self.assertIn("passes some merge-lease settings but is missing MERGE_LEASE_MAX_HOLDERS", found[0])
+		self.assertNotIn("MERGE_LEASE_TTL_MINUTES", found[0])
 
 	def test_fixture_read_only_step_wrong_default_fails(self) -> None:
 		text = _fixture(
