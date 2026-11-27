@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Move the slowest steps of `tests-heal-plan-and-validation` into the CI job with the most headroom, unchanged and with job and step names kept. Do not raise `timeout-minutes` and do not add required job names.\n  expected_change_site: `.github/workflows/ci.yml`, a step move between `tests-heal-plan-and-validation` and another test job\n  confidence=[1]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: The PR diff has no step move; its only hunk is the six comment lines at ci.yml:1855-1860. Reviewer says this is not a defect to fix in this PR (severity NIT): `Merge probe unit tests` (ci.yml:1625) and `Cancelled CI sweep recovery tests` (ci.yml:1845) already sit in `tests-hooks-and-orchestrator` (the #9420 / #9684 move), and no step timings for run 44214045174 are in the repository.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP (severity=NIT, confidence=1)\n  Requirement: Move the slowest steps of `tests-heal-plan-and-validation` into the CI job with the most headroom, unchanged and with job and step names kept. Do not raise `timeout-minutes` and do not add required job names.\n  Expected change site: `.github/workflows/ci.yml`, a step move between `tests-heal-plan-and-validation` and another test job.\n  Evidence of absence: The PR diff has no step move; its only hunk is the six comment lines at ci.yml:1855-1860. Not a defect to fix in this PR: `Merge probe unit tests` (ci.yml:1625) and `Cancelled CI sweep recovery tests` (ci.yml:1845) already sit in `tests-hooks-and-orchestrator`, which ends where `tests-heal-plan-and-validation` starts at line 1850 (the #9420 / #9684 move). The comments at ci.yml:1578, 1610 and 1652 record that move. No step timings for run 44214045174 are in the repository, so moving more steps would be a guess. `timeout-minutes: 20` is unchanged and no job was added or renamed.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "71fa59c4ee41e9fa46be6e5d56854dcb486f30672c79eb9040e48db61097839d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10074,
+    "run_id": "45925538246",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45925538246",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127021721_2c8a2d34eb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10074,
+    "run_id": "45925538246"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-27T02:17:21Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
