@@ -544,9 +544,11 @@ def test_gate_names_no_withdrawal_when_the_withdraw_switch_is_off(tmp_path: Path
 
 
 def test_gate_proceeds_when_the_run_status_is_empty(tmp_path: Path) -> None:
-	rc, _out, calls = _owner(tmp_path, [_gate_marker(f" inline_run={RUN_ID}")], FAKE_RUN_STATUS="")
+	rc, out, calls = _owner(tmp_path, [_gate_marker(f" inline_run={RUN_ID}")], FAKE_RUN_STATUS="")
 	assert rc == 1
 	assert len(calls) == 1
+	# An empty answer is logged as a failed read, like a failed GET.
+	assert f"AUTOFIX_GATE_DET_SKIP_EVAL pr=7 skip=false reason=lease_inline_owner_read_failed run={RUN_ID}" in out
 
 
 def test_gate_proceeds_with_auto_merge_enabled_once_the_owner_completed(tmp_path: Path) -> None:

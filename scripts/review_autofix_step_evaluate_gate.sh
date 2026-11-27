@@ -1285,7 +1285,11 @@ if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
     # waiting, pending) is a live owner, so a status GitHub adds later fails
     # toward the single owner.
     case "${inline_owner_status}" in
-      completed|"") return 1 ;;
+      completed) return 1 ;;
+      "")
+        echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} skip=false reason=lease_inline_owner_read_failed run=${inline_owner_run}"
+        return 1
+        ;;
     esac
     # The owner run's status decides, never the PR's auto-merge flag: that
     # flag was read before the early head-gate call withdrew it and cannot
