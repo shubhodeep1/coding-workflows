@@ -88,6 +88,18 @@ if args[:1] == ["api"]:
             respond({"total_count": state.get("window_total", 0), "workflow_runs": state.get("window_last_page", [])})
         runs = state.get("window_runs", [])
         respond({"total_count": state.get("window_total", len(runs)), "workflow_runs": runs})
+    if "/actions/runs/" in path and "/jobs" in path:
+        # Issue #10181: a candidate run's jobs. A run without a window_jobs
+        # entry gets one queued job created with the run; [] means no jobs.
+        state.setdefault("window_jobs_reads", []).append(path)
+        if state.get("window_jobs_error"):
+            save(); sys.stderr.write("HTTP 503\n"); sys.exit(1)
+        run_id = path.split("/actions/runs/")[1].split("/")[0]
+        jobs = state.get("window_jobs", {}).get(run_id)
+        if jobs is None:
+            run = next((r for r in state.get("window_runs", []) + state.get("window_last_page", []) if str(r.get("id")) == run_id), None)
+            jobs = [{"id": 1, "status": "queued", "created_at": run["created_at"]}] if run else []
+        respond({"total_count": len(jobs), "jobs": jobs})
     if "/git/ref/heads/" in path:
         respond({"object": {"type": "commit", "sha": state["branch_tip"]}})
     if path.endswith("/git/ref/tags/stable"):
@@ -1094,6 +1106,111 @@ def test_runner_wait_limit_beyond_the_wedged_cutoff_makes_no_read() -> None:
 	assert "AUTO_RELEASE_RUNNER_WAIT_CHECK outcome=clear max=2000 calls=0" in proc.stdout
 	assert not final.get("window_reads")
 	assert len(final["dispatches"]) == 1
+
+
+def _job(status: str, minutes_ago: float) -> dict:
+	return {"id": int(minutes_ago * 10) + 1, "status": status, "created_at": _minutes_ago(minutes_ago)}
+
+
+def _helper_output(tmp: Path, state: dict, limit: str = "30") -> str:
+	"""Run release_gate_oldest_queued_wait directly against the fake gh."""
+	bin_dir = tmp / "bin"
+	bin_dir.mkdir()
+	(bin_dir / "gh").write_text(MOCK_GH, encoding="utf-8")
+	(bin_dir / "gh").chmod(0o755)
+	state_file = tmp / "state.json"
+	state_file.write_text(json.dumps(state), encoding="utf-8")
+	run_env = os.environ.copy()
+	run_env.update({"PATH": f"{bin_dir}:{run_env['PATH']}", "MOCK_GH_STATE": str(state_file), "GH_TOKEN": "x",
+		"PYTHONDONTWRITEBYTECODE": "1", "GH_RETRY_MAX_ATTEMPTS": "1"})
+	for key in ("BASH_ENV", "ENV"):
+		run_env.pop(key, None)
+	helpers = REPO_ROOT / "scripts" / "gh_helpers.sh"
+	proc = subprocess.run(["bash", "-c", f'source "{helpers}" >/dev/null 2>&1; release_gate_oldest_queued_wait owner/repo {limit} 0'],
+		env=run_env, text=True, capture_output=True, timeout=60)
+	assert proc.returncode == 0, proc.stderr
+	return proc.stdout.strip()
+
+
+def test_runner_wait_held_run_without_jobs_dispatches() -> None:
+	# Issue #10181: a run held by a concurrency group is queued but has no
+	# jobs; its age is not a runner wait.
+	state = _state(tag_commit="3" * 40, runs=[_recent_stable_gate()], window_runs=[_queued(11, 70)], window_jobs={"11": []})
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state)
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTO_RELEASE_RUNNER_WAIT_CHECK outcome=clear max=30 calls=2" in proc.stdout
+	assert "runner_wait_long" not in proc.stdout
+	assert len(final["dispatches"]) == 1
+	with tempfile.TemporaryDirectory() as tmp:
+		out = _helper_output(Path(tmp), {"window_runs": [_queued(11, 70)], "window_jobs": {"11": []}})
+	assert out.startswith("outcome=short oldest_queued_min=- queued_in_window=1 calls=2"), out
+	assert "runs_unread" not in out
+
+
+def test_runner_wait_fresh_job_in_an_old_run_dispatches() -> None:
+	# A long run whose aggregate job was just created: the queued job's wait
+	# counts, not the run's age, and in-progress jobs are left out.
+	jobs = {"11": [_job("in_progress", 60), _job("queued", 2)]}
+	state = _state(tag_commit="3" * 40, runs=[_recent_stable_gate()], window_runs=[_queued(11, 70)], window_jobs=jobs)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state)
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTO_RELEASE_RUNNER_WAIT_CHECK outcome=clear max=30 calls=2" in proc.stdout
+	assert len(final["dispatches"]) == 1
+	with tempfile.TemporaryDirectory() as tmp:
+		out = _helper_output(Path(tmp), {"window_runs": [_queued(11, 70)], "window_jobs": jobs})
+	assert out.startswith("outcome=short oldest_queued_min=2 "), out
+
+
+def test_runner_wait_job_waiting_past_the_limit_skips() -> None:
+	jobs = {"11": [_job("queued", 45)]}
+	state = _state(tag_commit="3" * 40, runs=[_recent_stable_gate()], window_runs=[_queued(11, 70)], window_jobs=jobs)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state)
+	assert proc.returncode == 0, proc.stderr
+	assert f"AUTO_RELEASE_SKIPPED reason=runner_wait_long oldest_queued_min=45 max=30 sha={TIP}" in proc.stdout
+	assert not final.get("dispatches")
+	with tempfile.TemporaryDirectory() as tmp:
+		out = _helper_output(Path(tmp), {"window_runs": [_queued(11, 70)], "window_jobs": jobs})
+	assert out == "outcome=long oldest_queued_min=45 queued_in_window=1 calls=2", out
+
+
+def test_runner_wait_jobs_read_failure_dispatches_with_a_warning() -> None:
+	state = _state(tag_commit="3" * 40, runs=[_recent_stable_gate()], window_runs=[_queued(11, 70)], window_jobs_error=True)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state, env={"GH_RETRY_MAX_ATTEMPTS": "1"})
+	assert proc.returncode == 0, proc.stderr
+	assert "::warning::AUTO_RELEASE_RUNNER_WAIT_CHECK outcome=read_failed calls=2" in proc.stdout
+	assert "runner_wait_long" not in proc.stdout
+	assert len(final["dispatches"]) == 1
+	with tempfile.TemporaryDirectory() as tmp:
+		out = _helper_output(Path(tmp), {"window_runs": [_queued(11, 70)], "window_jobs_error": True})
+	assert out == "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=2", out
+
+
+def test_runner_wait_reads_at_most_three_runs_and_reports_runs_unread() -> None:
+	window = [_queued(20 + i, 70 - i * 5) for i in range(5)]
+	jobs = {str(20 + i): [_job("queued", 2)] for i in range(5)}
+	state = _state(tag_commit="3" * 40, runs=[_recent_stable_gate()], window_runs=list(reversed(window)), window_jobs=jobs)
+	with tempfile.TemporaryDirectory() as tmp:
+		proc, final = _run(Path(tmp), state)
+	assert proc.returncode == 0, proc.stderr
+	assert "AUTO_RELEASE_RUNNER_WAIT_CHECK outcome=clear max=30 calls=4 runs_unread=2" in proc.stdout
+	assert len(final["dispatches"]) == 1
+	reads = final["window_jobs_reads"]
+	assert [r.split("/actions/runs/")[1].split("/")[0] for r in reads] == ["20", "21", "22"], reads
+	for read in reads:
+		assert "per_page=100" in read and "filter=latest" in read, read
+	with tempfile.TemporaryDirectory() as tmp:
+		out = _helper_output(Path(tmp), {"window_runs": window, "window_jobs": jobs})
+	assert out.startswith("outcome=short oldest_queued_min=2 queued_in_window=5 calls=4 runs_unread=2"), out
+
+
+def test_runner_wait_empty_listing_makes_no_jobs_read() -> None:
+	with tempfile.TemporaryDirectory() as tmp:
+		out = _helper_output(Path(tmp), {"window_runs": []})
+	assert out == "outcome=short oldest_queued_min=- queued_in_window=0 calls=1", out
 
 
 def test_workflow_passes_the_runner_wait_limit() -> None:

@@ -5018,26 +5018,46 @@ zombie_queued_log_ignored()
 }
 
 # ---------------------------------------------------------------
-# Release-gate runner wait (issue #10037)
+# Release-gate runner wait (issue #10037; job-based since issue #10181)
 #
 # release_gate_oldest_queued_wait <repo> <limit_minutes> <zq_cutoff_epoch>
 #
-# Measures how long the oldest live queued run of <repo> has waited for a
-# runner, for the release scripts' runner_wait_long skip
+# Measures how long the oldest queued JOB of <repo> has waited for a runner,
+# for the release scripts' runner_wait_long skip
 # (scripts/auto_release_stable.sh, scripts/promote_main_cycle.sh).
-# Only runs created between the wedged-queued cutoff (zombie_queued_cutoff_epoch,
-# 0 = no lower bound) and now - <limit_minutes> are read, so the answer is
-# "is any live run queued for at least the limit, and the oldest one's age".
+# A run's own age is not the wait: GitHub also reports `queued` for a run held
+# by a `concurrency:` group (no jobs yet) and for a long run whose newest job
+# (an aggregate `needs:` job) was created seconds ago. Issue #10181: a held CI
+# push run 70 minutes old skipped the promote cycle while the oldest job
+# waiting for a runner had waited 28 minutes.
+#
+# Candidates are live queued runs created between the wedged-queued cutoff
+# (zombie_queued_cutoff_epoch, 0 = no lower bound) and now - <limit_minutes>
+# (a job cannot be older than its run, so a younger run cannot hold a job
+# that has waited the limit). The oldest _rgw_max_job_reads (3) candidates by
+# run created_at are read; a run with no jobs (concurrency hold) and a run
+# with no `queued` job are ignored. The answer is the oldest queued job's
+# created_at across the runs read: long when it has waited the limit or
+# longer, else short.
 #
 # Output: exactly one line on stdout, always exit 0 (fail open):
-#   outcome=<long|short|read_failed> oldest_queued_min=<n|-> queued_in_window=<n|-> calls=<0|1|2>
+#   outcome=<long|short|read_failed> oldest_queued_min=<n|-> queued_in_window=<n|-> calls=<0..5>[ runs_unread=<n>]
+#   oldest_queued_min  the oldest queued job's wait in minutes (also on
+#                      short), `-` when no queued job was found
+#   queued_in_window   total_count of the run listing (queued runs in range)
+#   runs_unread        only on short, when more than 3 candidates exist: the
+#                      candidates whose jobs were not read (bounded check)
 #
 # API calls (§14): no existing call in the callers returns queued runs'
-# created_at (they list workflow-scoped runs or a queued count), so:
+# created_at or job created_at values (they list workflow-scoped runs or a
+# queued count), so:
 #   call 1  GET repos/<repo>/actions/runs?status=queued&created=<lower>..<upper>&per_page=100
 #   call 2  only when total_count > 100: the last page (newest first, so the
 #           oldest runs are there), capped at page 10 (the API's 1,000-result
 #           limit).
+#   +0..3   GET repos/<repo>/actions/runs/<id>/jobs?per_page=100&filter=latest
+#           for at most 3 candidate runs; none when there is no candidate.
+#           Only the first 100 jobs of the latest attempt are read.
 # Any failed or unparseable read prints outcome=read_failed.
 # ---------------------------------------------------------------
 release_gate_oldest_queued_wait()
@@ -5045,6 +5065,9 @@ release_gate_oldest_queued_wait()
 	local _rgw_repo="${1:-}" _rgw_limit="${2:-}" _rgw_cutoff="${3:-0}"
 	local _rgw_now="" _rgw_upper_epoch="" _rgw_upper="" _rgw_lower="" _rgw_json="" _rgw_total="" _rgw_page="" _rgw_calls=0 _rgw_oldest=""
 	local _rgw_jq_def=""
+	local _rgw_max_job_reads=3 _rgw_candidates="" _rgw_candidate_count="" _rgw_run_id="" _rgw_jobs_json="" _rgw_job_oldest=""
+	local _rgw_wait_min="" _rgw_outcome="" _rgw_unread_suffix=""
+	local -a _rgw_run_ids=()
 	if ! [[ "${_rgw_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || ! [[ "${_rgw_limit}" =~ ^[0-9]{1,6}$ ]]; then
 		echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=0"
 		return 0
@@ -5097,23 +5120,76 @@ release_gate_oldest_queued_wait()
 			return 0
 		fi
 	fi
-	# Oldest created_at among live queued runs at or before the upper bound
-	# (the server-side range is re-checked here).
-	_rgw_oldest="$(printf '%s' "${_rgw_json}" | jq -r --argjson zq_cutoff "${_rgw_cutoff}" --argjson upper "${_rgw_upper_epoch}" "${_rgw_jq_def}"'
+	# Live queued runs at or before the upper bound (the server-side range is
+	# re-checked here): the count on the first line, then the ids of the
+	# oldest _rgw_max_job_reads by run created_at.
+	if ! _rgw_candidates="$(printf '%s' "${_rgw_json}" | jq -r --argjson zq_cutoff "${_rgw_cutoff}" --argjson upper "${_rgw_upper_epoch}" --argjson max_reads "${_rgw_max_job_reads}" "${_rgw_jq_def}"'
 		[.workflow_runs[]? | select(type == "object")
 			| select(((.status // "") | tostring | ascii_downcase) == "queued")
 			| select(is_wedged_queued($zq_cutoff) | not)
 			| ((.created_at // "") | tostring | sub("\\.[0-9]+Z$"; "Z") | (try fromdateiso8601 catch null)) as $c
-			| select($c != null and $c <= $upper) | $c] | min // empty' 2>/dev/null || true)"
-	if [ -z "${_rgw_oldest}" ]; then
-		echo "outcome=short oldest_queued_min=- queued_in_window=${_rgw_total} calls=${_rgw_calls}"
-		return 0
-	fi
-	if ! [[ "${_rgw_oldest}" =~ ^[0-9]+$ ]]; then
+			| select($c != null and $c <= $upper) | {c: $c, id: ((.id // "") | tostring)}]
+		| sort_by(.c) | (length | tostring), (.[:$max_reads][] | .id)' 2>/dev/null)"; then
 		echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=${_rgw_calls}"
 		return 0
 	fi
-	echo "outcome=long oldest_queued_min=$(( (_rgw_now - _rgw_oldest) / 60 )) queued_in_window=${_rgw_total} calls=${_rgw_calls}"
+	_rgw_candidate_count="$(printf '%s\n' "${_rgw_candidates}" | head -n 1)"
+	if ! [[ "${_rgw_candidate_count}" =~ ^[0-9]+$ ]]; then
+		echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=${_rgw_calls}"
+		return 0
+	fi
+	if [ "${_rgw_candidate_count}" -eq 0 ]; then
+		echo "outcome=short oldest_queued_min=- queued_in_window=${_rgw_total} calls=${_rgw_calls}"
+		return 0
+	fi
+	while IFS= read -r _rgw_run_id; do
+		# An id goes into a request path: anything but digits fails closed
+		# into the fail-open read_failed answer.
+		if ! [[ "${_rgw_run_id}" =~ ^[0-9]{1,20}$ ]]; then
+			echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=${_rgw_calls}"
+			return 0
+		fi
+		_rgw_run_ids+=("${_rgw_run_id}")
+	done < <(printf '%s\n' "${_rgw_candidates}" | tail -n +2)
+	for _rgw_run_id in "${_rgw_run_ids[@]}"; do
+		_rgw_calls=$(( _rgw_calls + 1 ))
+		# gh-loop-ok: at most _rgw_max_job_reads (3) runs per check, issue #10181
+		if ! _rgw_jobs_json="$(gh_retry gh api "repos/${_rgw_repo}/actions/runs/${_rgw_run_id}/jobs?per_page=100&filter=latest" 2>/dev/null)"; then
+			echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=${_rgw_calls}"
+			return 0
+		fi
+		# Oldest created_at among the run's queued jobs, or `none` for a run
+		# with no jobs (concurrency hold) or no queued job.
+		_rgw_job_oldest="$(printf '%s' "${_rgw_jobs_json}" | jq -r '
+			if (.jobs | type) != "array" then error("no jobs array") else . end
+			| [.jobs[] | select(type == "object")
+				| select(((.status // "") | tostring | ascii_downcase) == "queued")
+				| ((.created_at // "") | tostring | sub("\\.[0-9]+Z$"; "Z") | (try fromdateiso8601 catch null))
+				| select(. != null)] | min // "none"' 2>/dev/null || true)"
+		if [ "${_rgw_job_oldest}" = "none" ]; then
+			continue
+		fi
+		if ! [[ "${_rgw_job_oldest}" =~ ^[0-9]+$ ]]; then
+			echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=${_rgw_calls}"
+			return 0
+		fi
+		if [ -z "${_rgw_oldest}" ] || [ "${_rgw_job_oldest}" -lt "${_rgw_oldest}" ]; then
+			_rgw_oldest="${_rgw_job_oldest}"
+		fi
+	done
+	_rgw_outcome="short"
+	_rgw_wait_min="-"
+	if [ -n "${_rgw_oldest}" ]; then
+		_rgw_wait_min=$(( (_rgw_now - _rgw_oldest) / 60 ))
+		[ "${_rgw_wait_min}" -ge 0 ] || _rgw_wait_min=0
+		if [ "${_rgw_wait_min}" -ge "$((10#${_rgw_limit}))" ]; then
+			_rgw_outcome="long"
+		fi
+	fi
+	if [ "${_rgw_outcome}" = "short" ] && [ "${_rgw_candidate_count}" -gt "${_rgw_max_job_reads}" ]; then
+		_rgw_unread_suffix=" runs_unread=$(( _rgw_candidate_count - _rgw_max_job_reads ))"
+	fi
+	echo "outcome=${_rgw_outcome} oldest_queued_min=${_rgw_wait_min} queued_in_window=${_rgw_total} calls=${_rgw_calls}${_rgw_unread_suffix}"
 	return 0
 }
 
