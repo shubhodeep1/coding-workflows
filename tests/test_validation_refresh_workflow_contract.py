@@ -170,9 +170,11 @@ def test_release_gate_validation_refresh_watch_includes_queue_allowance() -> Non
 	assert watch, "--completion-timeout-secs missing"
 	assert int(watch.group(1)) >= child_minutes * 60 + 60 + 1800, watch.group(1)
 	assert "--completion-timeout-secs 5520" in step
-	assert re.search(r"^        timeout-minutes: 95$", step, re.MULTILINE)
-	assert _job_header_timeout(job) == 165
+	assert re.search(r"^        timeout-minutes: 119$", step, re.MULTILINE)
+	assert _job_header_timeout(job) == 240
 	assert "8520s" in job
+	# Issue #10205: the three 1500s dispatch rate-limit caps are in the job budget.
+	assert "13020s" in job
 
 
 # ---------------------------------------------------------------------------

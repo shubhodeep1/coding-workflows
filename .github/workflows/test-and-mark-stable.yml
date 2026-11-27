@@ -3838,9 +3838,11 @@ jobs:
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
     # Sum of remaining in-step DEADLINEs (validation-refresh 5520s +
-    # update_workflows 600s + memory-maintenance 2400s = 8520s = 142m);
-    # step limits 95 + 18 + 45 = 158m; the analyser steps below have no
-    # step limit, so the DEADLINE sum (142m) is what fits the 165m cap.
+    # update_workflows 600s + memory-maintenance 2400s = 8520s = 142m),
+    # plus three independent 1500s dispatch rate-limit caps (issue #10205)
+    # = 4500s, so 8520s + 4500s = 13020s (217m); step limits
+    # 119 + 37 + 67 = 223m; the analyser steps below have no step limit,
+    # so the DEADLINE-plus-cap sum (217m) is what fits the 240m cap.
     # The validation-refresh watch covers that workflow's whole 60-minute
     # `refresh` job budget (run 39694107256 timed out after 40m on a run
     # that was still in_progress) plus a 1800s runner-queue allowance
@@ -3851,11 +3853,11 @@ jobs:
     # up to wait_for_completion_secs=120s and then runs an OpenRouter
     # call; log1 of run #25200117236 observed ~40s per phase, so 3
     # phases under OpenRouter latency variance can plausibly reach
-    # 6–9m), runner queueing, and step setup. Cap at 165m so a runaway
+    # 6–9m), runner queueing, and step setup. Cap at 240m so a runaway
     # validation-refresh / update_workflows / memory_maintenance can
     # still be killed within a sensible budget. Down from 360m before
     # the workflow-log-analysis split-out.
-    timeout-minutes: 165
+    timeout-minutes: 240
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
@@ -3935,12 +3937,14 @@ jobs:
       # deterministic ones whose failures still gate the release.
       - name: Dispatch & watch — validation-refresh
         id: dispatch_validation_refresh
-        timeout-minutes: 95
+        timeout-minutes: 119
         env:
           GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
-          # Rate-limit wait cap for the dispatch (issue #10197), lowered so the
-          # wait fits the step budget: 4s sleep + 5520s completion + 110s + 60s margin = 5694s <= 95 min (5700s).
-          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "110"
+          # Rate-limit wait cap for the dispatch (issues #10197, #10205): the script
+          # default and the 1500s floor enforced in tests/test_dispatch_and_watch_rate_limit.py;
+          # raise timeout-minutes to fit it, never lower the cap. Budget:
+          # 4s sleep + 5520s completion + 1500s + 60s margin = 7084s <= 119 min (7140s).
+          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "1500"
         run: |
           set -euo pipefail
           sleep 4
@@ -4031,12 +4035,15 @@ jobs:
 
       - name: Dispatch & watch — update_workflows (allow_workflow_edits=false)
         id: dispatch_update_workflows
-        timeout-minutes: 18
+        timeout-minutes: 37
         env:
           GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
-          # Rate-limit wait cap for the dispatch (issue #10197), lowered so the
-          # wait fits the step budget: 4s sleep + 600s completion + 410s + 60s margin = 1074s <= 18 min (1080s).
-          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "410"
+          # Rate-limit wait cap for the dispatch (issues #10197, #10205): the script
+          # default and the 1500s floor enforced in tests/test_dispatch_and_watch_rate_limit.py;
+          # raise timeout-minutes to fit it, never lower the cap. Budget:
+          # 4s sleep + 600s completion + 1500s + 60s margin = 2164s <= 37 min (2220s).
+          # Release gate run 45927857867 needed 505s here (the 410s cap failed it).
+          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "1500"
         run: |
           set -euo pipefail
           sleep 4
@@ -4116,12 +4123,14 @@ jobs:
 
       - name: Dispatch & watch — internal-memory-maintenance
         id: dispatch_memory_maintenance
-        timeout-minutes: 45
+        timeout-minutes: 67
         env:
           GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
-          # Rate-limit wait cap for the dispatch (issue #10197), lowered so the
-          # wait fits the step budget: 4s sleep + 2400s completion + 230s + 60s margin = 2694s <= 45 min (2700s).
-          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "230"
+          # Rate-limit wait cap for the dispatch (issues #10197, #10205): the script
+          # default and the 1500s floor enforced in tests/test_dispatch_and_watch_rate_limit.py;
+          # raise timeout-minutes to fit it, never lower the cap. Budget:
+          # 4s sleep + 2400s completion + 1500s + 60s margin = 3964s <= 67 min (4020s).
+          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "1500"
         run: |
           set -euo pipefail
           sleep 4
@@ -4233,7 +4242,9 @@ jobs:
     needs: [resolve-version]
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # The dispatch step has no step limit: its 3000s watch + 1500s
+    # rate-limit cap (issue #10205) + 360s for the other steps = 4860s = 81m.
+    timeout-minutes: 81
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
@@ -4298,9 +4309,11 @@ jobs:
         id: dispatch
         env:
           GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
-          # Rate-limit wait cap for the dispatch (issue #10197), lowered so the
-          # wait fits the step budget: no step limit; 3000s completion + 240s leaves 360s of the 60 min job for its other steps.
-          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "240"
+          # Rate-limit wait cap for the dispatch (issues #10197, #10205): the script
+          # default and the 1500s floor enforced in tests/test_dispatch_and_watch_rate_limit.py;
+          # raise timeout-minutes to fit it, never lower the cap. Budget:
+          # no step limit; 3000s completion + 1500s leaves 360s of the 81 min job (4860s) for its other steps.
+          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "1500"
         run: |
           set -euo pipefail
           WF_FILE="internal-orchestrate.yml"
@@ -4676,12 +4689,14 @@ jobs:
     needs: [resolve-version]
     if: ${{ !inputs.skip_e2e && !inputs.dry_run }}
     runs-on: ubuntu-latest
-    # The job cap must exceed the dispatch step's 35-minute cap (the
+    # The job cap must exceed the dispatch step's 57-minute cap (the
     # watcher's 1800s registration/completion waits plus poll and retry
     # headroom) and leave time for the always() soft-error analyser.
     # At 30 minutes the job was cancelled before the watcher could
     # report its own timeout (run 37624152181).
-    timeout-minutes: 45
+    # The step holds a 1500s dispatch rate-limit cap (issue #10205), so
+    # 35 -> 57 minutes and the job keeps its 10-minute gap: 45 -> 67.
+    timeout-minutes: 67
     env:
       GH_TOKEN: ${{ secrets.GH_PAT }}
       AI_COMMENT_SIGNING_SECRET: ${{ secrets.AI_COMMENT_SIGNING_SECRET }}
@@ -4739,13 +4754,15 @@ jobs:
 
       - name: Dispatch internal-validate.yml standalone
         id: dispatch
-        # 1800s watcher wait + one 20s poll + gh retry backoff headroom.
-        timeout-minutes: 35
+        # 1800s watcher wait + one 20s poll + 1500s rate-limit cap + gh retry backoff headroom.
+        timeout-minutes: 57
         env:
           GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
-          # Rate-limit wait cap for the dispatch (issue #10197), lowered so the
-          # wait fits the step budget: 1800s completion + 20s poll + 180s + 64s margin = 2064s <= 35 min (2100s).
-          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "180"
+          # Rate-limit wait cap for the dispatch (issues #10197, #10205): the script
+          # default and the 1500s floor enforced in tests/test_dispatch_and_watch_rate_limit.py;
+          # raise timeout-minutes to fit it, never lower the cap. Budget:
+          # 1800s completion + 20s poll + 1500s + 64s margin = 3384s <= 57 min (3420s).
+          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "1500"
         run: |
           set -euo pipefail
           WF_FILE="internal-validate.yml"
