@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/review_autofix.yml:2361-2370 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: Checkout step sets persist-credentials: false (reported as a positive hardening note, severity NIT).\n  WHY: It prevents the PR-head checkout from leaving GH_PAT in .git/config, which was the main risk in issue #10208.\n- .github/workflows/review_autofix.yml:2627, 2682 (multiple wrappers) | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: A verified fallback for .codex-workflow-src/scripts was added to the wrappers (reported as a positive note, severity NIT).\n  WHY: The fallback runs only when SCRIPT_REF is a 40-character SHA, REVIEW_SUPPORT_SOURCE_VERIFIED_SHA matches it, and the support directory HEAD matches it with GIT_DIR/GIT_WORK_TREE cleared.\n- .github/workflows/review_autofix.yml:2627, 3958 (all 39 verify-line call sites) | severity=low | confidence=3\n  flagged_by: [minimax_minimax-m3]\n  PROBLEM: The verify line clears only GIT_DIR and GIT_WORK_TREE, not GIT_INDEX_FILE or GIT_OBJECT_DIRECTORY, which the test helper `_git` in tests/test_review_autofix_step_fallback_verify.py does clear.\n  WHY: If a later step exports those variables, rev-parse could read the wrong repo's HEAD and refuse every verified fallback. The current risk is low (hardening risk score 2).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/review_autofix.yml:2361-2370 | severity=low | confidence=5\n  PROBLEM: Checkout step sets persist-credentials: false (reported as a positive hardening note, severity NIT).\n  WHY: It prevents the PR-head checkout from leaving GH_PAT in .git/config, which was the main risk in issue #10208.\n- .github/workflows/review_autofix.yml:2627, 2682 (multiple wrappers) | severity=low | confidence=5\n  PROBLEM: A verified fallback for .codex-workflow-src/scripts was added to the wrappers (reported as a positive note, severity NIT).\n  WHY: The fallback runs only when SCRIPT_REF is a 40-character SHA, REVIEW_SUPPORT_SOURCE_VERIFIED_SHA matches it, and the support directory HEAD matches it with GIT_DIR/GIT_WORK_TREE cleared.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/review_autofix.yml:2627, 3958 (all 39 verify-line call sites) | confidence=3\n  PROBLEM: The verify line clears only GIT_DIR and GIT_WORK_TREE, not GIT_INDEX_FILE or GIT_OBJECT_DIRECTORY, which the test helper `_git` in tests/test_review_autofix_step_fallback_verify.py does clear.\n  WHY: If a later step exports those variables, rev-parse could read the wrong repo's HEAD and refuse every verified fallback. The current risk is low (hardening risk score 2).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "5ed0feadafa62943b065c2a618ce9051b7edfdea48a57817b5fa6bb07f1c203d",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10210,
+    "run_id": "46036800478",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46036800478",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127171608_eb97dfd715",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10210,
+    "run_id": "46036800478"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-27T17:16:08Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
