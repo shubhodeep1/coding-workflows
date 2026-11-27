@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.9,
+  "details": "Implementation Plan\n\n## Plan for issue #10187: update the e2e smoke canary file\n\nPlanning ref: `main` at `6c61a0e3d1e26a950369bb1dacc22450b7afd859`. The integration-branch mismatch line reads `unknown`, not `true`, so it is not a blocker.\n\n## Files likely to change\n- `tests/e2e_smoke_canary.txt`\n\n## Acceptance\nACCEPTANCE: test tests/test_e2e_editor_smoke_canary.py\nACCEPTANCE: post-merge none: this is a fixture content change only, so no workflow needs to run after merge.\n\n## Functions or modules to implement\n- None. Replace the whole content of `tests/e2e_smoke_canary.txt` with exactly these three lines, each ending in a newline:\n  ```\n  status: ok\n  run_id: alt-45927857867\n  updated-by: ai-pipeline\n  ```\n  The file currently holds `status: ok` and `decompose-run: 41445772297`. The `decompose-run:` line is removed.\n\n## Data structures affected\n- Only the plain-text canary file.\n\n## API or interface changes\n- None.\n\n## Decisions\n### D1 \u2014 Overwrite the whole file\n- Chosen: rewrite the file so it holds exactly the three lines from the issue, each ending in a newline (LF).\n- Alternatives considered: change only the second line and keep the rest of the file as it is.\n- Why: the issue asks for \"exactly\" three lines. The current second line (`decompose-run:`) is not in the target content, so editing in place would leave the wrong text.\n\n## Security considerations\n- No trust boundary, endpoint or secret is involved. The new content is static text taken from the issue.\n- Abuse case: the canary test rejects any `E2E_EDITOR_BAIT_` marker in the file. The new content contains no such marker.\n\n## Potential risks or edge cases\n- A missing final newline or Windows line endings (CRLF) would break the canary test's byte-for-byte comparison. Write LF line endings and one final newline.\n- Many tests mention this file. They appear to read it only when the e2e environment is set up for it, so they should still pass, but this was not confirmed by running them.\n\n## Testing considerations\n- Run `tests/test_e2e_editor_smoke_canary.py`. It is expected to skip, or pass, when its e2e environment inputs are absent.\n- Check the result with `git diff --stat`: it should show one file changed.\n\nScope-mode: Hold Scope\nReuse-audit: extends tests/e2e_smoke_canary.txt\nScope-mode justification: The issue fully specifies one file's exact content and limits the change to that file. The plan rewrites that file and touches nothing else.\n\nPLAN_SELF_CHECK: PASS\nSTATUS: CLEAR\nTo proceed reply:\n\n/approved\n\nTo restart clarification reply:\n\n/reclarify\n\n<!-- AI_ACCEPTANCE_V1 {\"checks\":[],\"errors\":[],\"post_merge\":null,\"post_merge_none\":\"this is a fixture content change only, so no workflow needs to run after merge.\",\"schema\":\"acceptance.v1\",\"source\":\"plan\",\"state\":\"valid\",\"tests\":[{\"name\":\"\",\"path\":\"tests/test_e2e_editor_smoke_canary.py\",\"red_on_base\":false}]} -->\n<!-- ai:plan-proposal:v1 -->",
+  "fingerprint": "eda3c4d47d266f1d428df072f046cfe4e782c98ab3b6cd70bf84ad07f60a4f64",
+  "lineage": {
+    "issue_number": 10187,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "45929832252",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45929832252",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10187"
+    ],
+    "workflow": "plan"
+  },
+  "record_id": "mem_20261127024749_de1d8f2d8d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10187,
+    "level": "run",
+    "pr_number": null,
+    "run_id": "45929832252"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation plan posted for issue #10187",
+  "timestamps": {
+    "created_at": "2026-11-27T02:47:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
