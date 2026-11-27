@@ -337,7 +337,12 @@ def test_compute_waves_parallel_deps():
 # Tests: check-wave-status
 # ---------------------------------------------------------------------------
 
-def _run_check_wave_status(state: dict, labels: dict[str, list[str]]) -> dict:
+def _run_check_wave_status(
+	state: dict,
+	labels: dict[str, list[str]],
+	issue_states: dict[str, str] | None = None,
+	issue_state_reasons: dict[str, object] | None = None,
+) -> dict:
 	"""Run check-wave-status via the CLI and return parsed JSON."""
 	with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
 		json.dump(state, f)
@@ -346,11 +351,17 @@ def _run_check_wave_status(state: dict, labels: dict[str, list[str]]) -> dict:
 	import io
 	from contextlib import redirect_stdout
 
+	args_attrs: dict[str, object] = {"state_file": state_path, "labels_json": json.dumps(labels)}
+	if issue_states is not None:
+		args_attrs["issue_states_json"] = json.dumps(issue_states)
+	if issue_state_reasons is not None:
+		args_attrs["issue_state_reasons_json"] = json.dumps(issue_state_reasons)
+
 	try:
 		buf = io.StringIO()
 		with redirect_stdout(buf):
 			orchestrate_lib.cmd_check_wave_status(
-				type("Args", (), {"state_file": state_path, "labels_json": json.dumps(labels)})()
+				type("Args", (), args_attrs)()
 			)
 		return json.loads(buf.getvalue())
 	finally:
@@ -489,6 +500,85 @@ def test_check_wave_status_closed_counts_as_failed():
 	assert result["any_failed"] is True
 	issues_by_gh = {i["github_issue"]: i for i in result["issues"]}
 	assert issues_by_gh[10]["status"] == "closed"
+
+
+def test_check_wave_status_closed_as_delivered_is_not_blocking():
+	"""Issue #10059: closed as completed + ai:closed + no blocking failure
+	label is "closed as already delivered". any_failed and every gate it
+	feeds stay as today; only any_failed_blocking is false."""
+	state = _make_state()
+	labels = {"10": ["ai:closed"], "11": ["ai:merged"]}
+	baseline = _run_check_wave_status(state, labels, issue_states={"10": "closed", "11": "closed"})
+	result = _run_check_wave_status(
+		state,
+		labels,
+		issue_states={"10": "closed", "11": "closed"},
+		issue_state_reasons={"10": "COMPLETED", "11": "completed"},
+	)
+	assert result["any_failed"] is True
+	assert result["any_failed_blocking"] is False
+	issues_by_gh = {i["github_issue"]: i for i in result["issues"]}
+	assert issues_by_gh[10]["status"] == "closed"
+	assert issues_by_gh[10]["closed_as_delivered"] is True
+	assert issues_by_gh[11]["closed_as_delivered"] is False
+	for key in ("wave_complete", "any_failed", "validation_dispatch_safe_despite_failures", "project_complete"):
+		assert result[key] == baseline[key], key
+	for got, base in zip(result["issues"], baseline["issues"]):
+		assert got["status"] == base["status"]
+		assert got["decision_source"] == base["decision_source"]
+	# Without reasons the item fails closed (blocking), same as today.
+	assert baseline["any_failed_blocking"] is True
+
+
+def test_check_wave_status_closed_not_delivered_stays_blocking():
+	# Plain loop rather than pytest.mark.parametrize: CI also runs this file
+	# through its own main(), which calls each test with no arguments.
+	cases: list[tuple[list[str], dict[str, object] | None]] = [
+		(["ai:closed"], {"10": "not_planned"}),
+		(["ai:closed"], {}),
+		(["ai:closed"], None),
+		(["ai:closed"], {"10": 1}),
+		([], {"10": "completed"}),
+		(["ai:closed", "ai:plan-failed"], {"10": "completed"}),
+	]
+	for labels_10, reasons in cases:
+		state = _make_state()
+		labels = {"10": labels_10, "11": ["ai:merged"]}
+		result = _run_check_wave_status(
+			state,
+			labels,
+			issue_states={"10": "closed", "11": "closed"},
+			issue_state_reasons=reasons,
+		)
+		issues_by_gh = {i["github_issue"]: i for i in result["issues"]}
+		case = (labels_10, reasons)
+		assert issues_by_gh[10]["status"] in ("closed", "implementation-failed"), case
+		assert result["any_failed"] is True, case
+		assert result["any_failed_blocking"] is True, case
+		assert issues_by_gh[10]["closed_as_delivered"] is False, case
+
+
+def test_check_wave_status_mixed_closed_kinds_stays_blocking():
+	state = _make_state()
+	labels = {"10": ["ai:closed"], "11": ["ai:closed"]}
+	result = _run_check_wave_status(
+		state,
+		labels,
+		issue_states={"10": "closed", "11": "closed"},
+		issue_state_reasons={"10": "completed", "11": "not_planned"},
+	)
+	issues_by_gh = {i["github_issue"]: i for i in result["issues"]}
+	assert issues_by_gh[10]["closed_as_delivered"] is True
+	assert issues_by_gh[11]["closed_as_delivered"] is False
+	assert result["any_failed"] is True
+	assert result["any_failed_blocking"] is True
+
+
+def test_check_wave_status_issue_state_reasons_must_be_object():
+	state = _make_state()
+	result = _run_check_wave_status(state, {"10": ["ai:closed"]}, issue_state_reasons=["completed"])  # type: ignore[arg-type]
+	assert result["ok"] is False
+	assert "issue_state_reasons_json" in result["error"]
 
 
 def test_check_wave_status_final_wave_one_closed_rest_merged_is_complete_but_failed():

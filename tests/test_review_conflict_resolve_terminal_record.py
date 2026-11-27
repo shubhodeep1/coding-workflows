@@ -33,7 +33,7 @@ RECORD_KEYS = [
 	"fp_violations",
 	"markers",
 ]
-CLASS_TOKENS = ["timeout", "no_progress", "markers", "fingerprint", "scope", "commit", "other"]
+CLASS_TOKENS = ["timeout", "no_progress", "markers", "fingerprint", "scope", "commit", "provenance", "other"]
 HELPERS = [
 	"_resolver_terminal_now_ms",
 	"_resolver_terminal_attempt_end",
@@ -218,6 +218,15 @@ def test_invalid_class_falls_back_to_other(tmp_path):
 def test_valid_class_is_reported(tmp_path):
 	proc = _run(tmp_path, 'RESOLVER_TERMINAL_EXIT_CLASS="no_progress"\nexit 1\n')
 	assert _fields(_records(proc.stdout)[0])["exit_class"] == "no_progress"
+
+
+def test_provenance_class_is_reported(tmp_path):
+	# Issue #9842: a resolution whose regions match neither side escalates
+	# with exit_class=provenance.
+	proc = _run(tmp_path, 'RESOLVER_TERMINAL_EXIT_CLASS="provenance"\nexit 1\n')
+	assert proc.returncode == 1
+	assert _fields(_records(proc.stdout)[0])["exit_class"] == "provenance"
+	assert "DISPATCH" in proc.stdout
 
 
 def test_two_attempts_are_timed(tmp_path):

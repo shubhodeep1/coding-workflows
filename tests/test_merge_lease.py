@@ -1706,7 +1706,10 @@ class Wiring(unittest.TestCase):
 			self.assertIn("MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '480' }}", text, wf.name)
 
 	def test_merge_paths_get_the_lease_switches(self) -> None:
-		self.assertEqual(REVIEW.read_text().count("MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}"), 3)
+		# Issue #10017: the fourth and fifth are the single-issue security pass
+		# gates (codex-agent and deterministic skip), which read the lease to
+		# exempt the holder from the audit throttle.
+		self.assertEqual(REVIEW.read_text().count("MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}"), 5)
 
 	def test_release_steps_get_the_review_paths_switches(self) -> None:
 		for wf in (POLL, CLOSE):
@@ -2406,7 +2409,11 @@ class LeaseQueueSnapshot(unittest.TestCase):
 class MultiHolderWiring(unittest.TestCase):
 	def test_max_holders_switch_reaches_every_lease_path(self) -> None:
 		line = "MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}"
-		for wf, expected, before in ((REVIEW, 3, "MERGE_LEASE_SOFT_PATHS: ${{ vars."), (POLL, 4, "MERGE_LEASE_SOFT_PATHS: ${{ vars."),
+		# Issue #10017: two of REVIEW's hits are the single-issue security pass
+		# gates (codex-agent and deterministic skip), lease readers without the
+		# soft-path list; they follow MERGE_LEASE_ENABLED, and only those two may.
+		gate_before = "MERGE_LEASE_ENABLED: ${{ vars."
+		for wf, expected, before in ((REVIEW, 5, ("MERGE_LEASE_SOFT_PATHS: ${{ vars.", gate_before)), (POLL, 4, "MERGE_LEASE_SOFT_PATHS: ${{ vars."),
 				(CLOSE, 1, "MERGE_LEASE_SOFT_PATHS: ${{ vars."), (SWEEP, 1, "MERGE_LEASE_WAIT_LABEL: ${{ vars.")):
 			lines = wf.read_text().splitlines()
 			hits = [i for i, ln in enumerate(lines) if ln.strip() == line]
@@ -2414,6 +2421,8 @@ class MultiHolderWiring(unittest.TestCase):
 			for i in hits:
 				self.assertTrue(lines[i - 1].strip().startswith(before), f"{wf.name}:{i + 1}")
 				self.assertEqual(len(lines[i]) - len(lines[i].lstrip()), len(lines[i - 1]) - len(lines[i - 1].lstrip()))
+			if wf == REVIEW:
+				self.assertEqual(sum(lines[i - 1].strip().startswith(gate_before) for i in hits), 2, wf.name)
 		self.assertIn("${MERGE_LEASE_MAX_HOLDERS:-1}", LIB.read_text())
 
 

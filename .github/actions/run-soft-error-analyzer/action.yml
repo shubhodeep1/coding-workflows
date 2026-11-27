@@ -158,7 +158,7 @@ runs:
 
     - name: Upload soft-error report artifact
       if: always() && steps.run-analyser.outputs.report_path != ''
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ inputs.artifact_name }}
         path: ${{ steps.run-analyser.outputs.report_path }}
