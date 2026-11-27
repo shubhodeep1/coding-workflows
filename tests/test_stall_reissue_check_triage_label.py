@@ -166,6 +166,12 @@ def test_both_reissue_reads_request_the_check_triage_flag() -> None:
 	[
 		('{"number":42,"state":"open","draft":true,"title":"impl"}', "draft"),
 		('{"number":42,"state":"open","draft":false,"title":"[skip ai] impl"}', "skip_ai_title"),
+		# Issue #9892: a merge-lease label applied after the green-PR guard
+		# passed is caught here, before the replacement issue exists.
+		(
+			'{"number":42,"state":"open","draft":false,"title":"impl","labels":[{"name":"ai:merge-lease-wait"}]}',
+			"merge_lease_wait",
+		),
 	],
 )
 def test_reissue_leaves_issue_and_held_pr_alone(tmp_path: Path, mode: str, pr_json: str, detail: str) -> None:

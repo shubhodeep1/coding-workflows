@@ -24302,9 +24302,13 @@ STALL_EOF
       # reuses the skip arm's REST implementation-PR lookup (1 `gh pr list
       # --head` + 1 pulls/<n> on the common path) on this rare arm only.
       # A failed or empty lookup fails open to the legacy flow.
+      # The stall clock enables the merge-lease hold here too (issue #9892):
+      # a lease label applied after _stall_reissue_green_pr_guard passed is
+      # caught before the replacement exists (0 extra calls on the full
+      # pulls/<n> payload, apart from the cached label-age read).
       if _resolve_issue_implementation_pr "${issue_num}"; then
         local _reissue_hold_reason=""
-        _reissue_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON}")"
+        _reissue_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON}" "${stall_minutes}")"
         if [ -n "${_reissue_hold_reason}" ]; then
           echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${STALL_IMPL_PR_NUM} detail=${_reissue_hold_reason} phase=${phase} action=none requested_action=close_and_reissue source=reissue_precheck"
           STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue_skipped_pr_ai_hold"
@@ -32244,9 +32248,10 @@ REISSUE_EOF
         # Owner hold re-check before the replacement exists (issue #9733);
         # same REST lookup and fail-open rule as the managed close_and_reissue
         # arm in execute_stall_recovery_action. Counts nothing, keeps the clock.
+        # The stall clock also enables the merge-lease hold (issue #9892).
         if _resolve_issue_implementation_pr "${issue_num}"; then
           local _std_reissue_hold_reason=""
-          _std_reissue_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON}")"
+          _std_reissue_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON}" "${elapsed_minutes}")"
           if [ -n "${_std_reissue_hold_reason}" ]; then
             echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${STALL_IMPL_PR_NUM} detail=${_std_reissue_hold_reason} phase=${phase} action=none requested_action=close_and_reissue source=reissue_precheck"
             STALL_RECOVERY_SHOULD_INCREMENT="false"

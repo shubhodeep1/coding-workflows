@@ -562,13 +562,19 @@ def test_stall_hold_rechecks_pass_the_stall_clock():
 	standalone) and open-PR fallback paths enable the lease hold."""
 	text = POLLER_SCRIPT.read_text(encoding="utf-8")
 	for call in (
-		'_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON}" "${stall_minutes}"',
 		'_rbj_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON:-}" "${stall_minutes}")"',
 		'_std_rb_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON:-}" "${elapsed_minutes}")"',
 		'_stall_pr_ai_hold_reason "${_opr_json}" "${stall_minutes}"',
 		'_stall_pr_ai_hold_reason "${pr_meta_json}" "${_clp_stall_minutes}"',
 	):
 		assert text.count(call) == 1, call
+	# The managed skip arm and the managed close_and_reissue pre-create
+	# re-check pass the stall clock; so does the standalone pre-create
+	# re-check, so a lease label added after the green-PR guard passed is
+	# refused before the replacement issue exists.
+	assert text.count('_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON}" "${stall_minutes}"') == 2
+	assert text.count('_std_reissue_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON}" "${elapsed_minutes}")"') == 1
+	assert '_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON}")"' not in text
 	# Every close_linked_pr caller hands over its stall clock, so the hold
 	# inside close_linked_pr lapses when the caller's own hold check did.
 	assert text.count('_clp_stall_minutes="${3:-0}"') == 1
