@@ -411,6 +411,9 @@ def _gate_dispatch_steps(text: str) -> list[dict]:
 	pre-sleep + 60 s margin; `step_minutes` is None when the step has no
 	timeout-minutes of its own.
 	"""
+	# A workflow-level env cap would reach every step yet be scored as the default.
+	workflow_prefix = text.split("\njobs:\n", 1)[0]
+	assert not re.search(r"^\s*DISPATCH_RATE_LIMIT_MAX_WAIT_SECS\s*:", workflow_prefix, re.M), "set the cap on the step, not the workflow"
 	steps = []
 	for job_id, job_text in _workflow_jobs(text):
 		job_header = job_text.split("\n    steps:\n", 1)[0]
