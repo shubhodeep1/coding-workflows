@@ -376,6 +376,7 @@ def test_gate_findings_go_through_the_issue_path(tmp_path: Path) -> None:
 	payload = json.loads(created[0]["stdin"])
 	assert payload["title"].startswith("CI budget: release gate job validate-scripts (test-and-mark-stable.yml) took 125m00s")
 	assert payload["labels"] == ["ai:ci-budget"]
+	assert f"Measured run: https://github.com/o/r/actions/runs/{GATE_RUN_ID}" in payload["body"]
 	calls = [json.loads(line) for line in Path(env["LOG"]).read_text().splitlines()]
 	runs_reads = [c for c in calls if "actions/workflows/test-and-mark-stable.yml/runs" in c["args"][1]]
 	assert len(runs_reads) == 1 and "status=completed" in runs_reads[0]["args"][1] and "per_page=1" in runs_reads[0]["args"][1]
@@ -420,3 +421,26 @@ def test_gate_read_problems_fail_open(tmp_path: Path, case: str) -> None:
 	calls = [json.loads(line) for line in Path(env["LOG"]).read_text().splitlines()]
 	# A non-integer run id never reaches an API path.
 	assert not [c for c in calls if "rm -rf" in c["args"][1]]
+
+
+def test_gate_serial_run_against_a_matrix_checkout_is_stale(tmp_path: Path) -> None:
+	# The push that merges the split still sees the serial pre-split run as
+	# the latest completed gate run; it must not file an issue for it.
+	gate = {"jobs": {"validate-scripts": {"timeout-minutes": 135, "strategy": {"matrix": {"leg": ["orchestrate-poll", "unit-tests"]}}},
+		"e2e-smoke-test": {"timeout-minutes": 360}}}
+	root = _tree(tmp_path, {}, CI, gate=gate)
+	env = _fake_gh(tmp_path, [], [], gate_runs=[{"id": GATE_RUN_ID}], gate_jobs=_gate_run_45927857867_jobs())
+	result = _run(root, env)
+	assert result.returncode == 0, result.stderr
+	assert f"CI_BUDGET_GATE outcome=read run_id={GATE_RUN_ID} jobs=2 findings=0 stale_jobs=1" in result.stdout
+	assert "subject=test-and-mark-stable.yml/validate-scripts" not in result.stdout
+	assert _created(env) == []
+	# A leg of the split layout is still measured against the base timeout.
+	legs = [_job_at("validate-scripts (orchestrate-poll)", 110, step_offsets=(0, 1))]
+	env2_dir = tmp_path / "second"
+	env2_dir.mkdir()
+	root2 = _tree(env2_dir, {}, CI, gate=gate)
+	env2 = _fake_gh(env2_dir, [], [], gate_runs=[{"id": GATE_RUN_ID}], gate_jobs=legs)
+	result2 = _run(root2, env2)
+	assert "findings=1 stale_jobs=0" in result2.stdout
+	assert len(_created(env2)) == 1

@@ -18,7 +18,10 @@ default branch, after the test jobs. It checks:
   same ratio of the `timeout-minutes` in that file, measured the same way.
   Its finding subject is `test-and-mark-stable.yml/<job>` so it cannot share
   a dedup marker with a `ci.yml` job of the same name. Matrix legs
-  (`validate-scripts (orchestrate-poll)`) use the base job's timeout.
+  (`validate-scripts (orchestrate-poll)`) use the base job's timeout. A job
+  reported under the bare id of a job that now defines `strategy.matrix` comes
+  from a run before the split and is skipped as stale (`stale_jobs=N` on the
+  `CI_BUDGET_GATE outcome=read` line). A gate issue links the measured run.
 
 For every finding it prints a `::warning::` and makes sure exactly one open
 issue labelled `ai:ci-budget` exists for it (deduplicated by a hidden marker
@@ -198,6 +201,22 @@ def _escape_command_data(text: str) -> str:
 	return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
+def _matrix_job_keys(workflow_path: Path) -> set[str]:
+	"""Job ids and display names of jobs that define `strategy.matrix` (#10220)."""
+	import yaml
+
+	data = yaml.safe_load(workflow_path.read_text(encoding="utf-8")) or {}
+	keys: set[str] = set()
+	for job_id, job in (data.get("jobs") or {}).items():
+		strategy = job.get("strategy") if isinstance(job, dict) else None
+		if isinstance(strategy, dict) and strategy.get("matrix"):
+			keys.add(str(job_id))
+			name = job.get("name")
+			if isinstance(name, str) and name:
+				keys.add(name)
+	return keys
+
+
 def gate_job_findings(repo: str, root: Path, ratio: float) -> list[dict[str, Any]]:
 	"""Duration findings for the latest completed release-gate run (#10220).
 
@@ -227,12 +246,23 @@ def gate_job_findings(repo: str, root: Path, ratio: float) -> list[dict[str, Any
 		if not isinstance(gate_jobs, list):
 			raise ValueError("jobs is not a list")
 		gate_jobs = [job for job in gate_jobs if isinstance(job, dict)]
-		found = job_duration_findings(gate_jobs, job_timeouts(gate_path), ratio, workflow=GATE_WORKFLOW)
+		# A run from before a job became a matrix (for example the serial
+		# `validate-scripts` measured on the push that merged #10220) reports
+		# the bare job name; measuring it against the split layout would file
+		# an issue asking for a split already made, so it is skipped as stale.
+		matrix_keys = _matrix_job_keys(gate_path)
+		measured_jobs = [job for job in gate_jobs if job.get("name") not in matrix_keys]
+		stale_jobs = len(gate_jobs) - len(measured_jobs)
+		found = job_duration_findings(measured_jobs, job_timeouts(gate_path), ratio, workflow=GATE_WORKFLOW)
+		gate_run_url = f"{os.environ.get('GITHUB_SERVER_URL', 'https://github.com')}/{repo}/actions/runs/{gate_run_id}"
+		for gate_finding in found:
+			gate_finding["run_id"] = gate_run_id
+			gate_finding["run_url"] = gate_run_url
 	except Exception as exc:  # noqa: BLE001 - fail-open by contract
 		print(f"::warning::ci_budget_watch: could not read the latest {GATE_WORKFLOW} run ({_escape_command_data(str(exc))}); gate job durations not checked.")
 		print("CI_BUDGET_GATE outcome=read_failed")
 		return []
-	print(f"CI_BUDGET_GATE outcome=read run_id={gate_run_id} jobs={len(gate_jobs)} findings={len(found)}")
+	print(f"CI_BUDGET_GATE outcome=read run_id={gate_run_id} jobs={len(gate_jobs)} findings={len(found)} stale_jobs={stale_jobs}")
 	return found
 
 
@@ -271,6 +301,8 @@ def issue_body(finding: dict[str, Any], run_url: str) -> str:
 			"Split the job's longest steps into parallel legs (a small matrix, keeping the job id and every step name) or move "
 			"them, unchanged, to the gate job with the most headroom. Do not raise `timeout-minutes`."
 		)
+		if finding.get("run_url"):
+			task += f"\n\nMeasured run: {finding['run_url']} (see its step timings)."
 	else:
 		job = finding.get("job", finding["subject"])
 		task = (
