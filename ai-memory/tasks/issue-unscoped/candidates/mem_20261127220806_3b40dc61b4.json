@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Raise the job's timeout-minutes ... by the added wait plus the same 60 second margin #10201 used.\"\n  expected_change_site: .github/workflows/test-and-mark-stable.yml, orchestrate-decompose-test timeout-minutes; corresponding budget assertion in tests/test_dispatch_and_watch_rate_limit.py.\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The job limit is 81 minutes, budgeting 3000 seconds for the watch, 1500 seconds for the cap, and 360 seconds for other steps (.github/workflows/test-and-mark-stable.yml:4245-4247). The updated assertion computes spent as step[\"need\"] - 64 + GATE_JOB_OTHER_STEPS_RESERVE_SECS (tests/test_dispatch_and_watch_rate_limit.py:503-505), so it counts the 64-second margin inside the 360-second reserve instead of adding it on top. The required margin is therefore not kept, and the budget would need another minute, to 82 minutes. The reviewer rated it SEVERITY: NIT. anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash said this 64 s overlap was accepted as residual risk in an earlier round and did not raise it again.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Raise the job's timeout-minutes ... by the added wait plus the same 60 second margin #10201 used.\"\n  Expected change site: .github/workflows/test-and-mark-stable.yml, orchestrate-decompose-test timeout-minutes; corresponding budget assertion in tests/test_dispatch_and_watch_rate_limit.py.\n  Evidence of absence: The job limit is 81 minutes, budgeting 3000 seconds for the watch, 1500 seconds for the cap, and 360 seconds for other steps (.github/workflows/test-and-mark-stable.yml:4245-4247). The updated assertion computes spent as step[\"need\"] - 64 + GATE_JOB_OTHER_STEPS_RESERVE_SECS (tests/test_dispatch_and_watch_rate_limit.py:503-505), so it counts the 64-second margin inside the 360-second reserve rather than in addition to the other-step reserve. The required margin is therefore not preserved; the budget would need another minute, to 82 minutes.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "43407bc879acb9b6886c60c3f26440bfec2f1ccb67545d1dd7b4105563103247",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10207,
+    "run_id": "46072269588",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46072269588",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127220806_3b40dc61b4",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10207,
+    "run_id": "46072269588"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-27T22:08:06Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
