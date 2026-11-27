@@ -10,9 +10,9 @@ description: |
 
 inputs:
   codex_version:
-    description: Pinned Codex CLI version (e.g. v0.114.0).
+    description: Pinned Codex CLI version (e.g. v0.171.0).
     required: false
-    default: v0.114.0
+    default: v0.171.0
 
 runs:
   using: composite
@@ -25,7 +25,7 @@ runs:
         set -euo pipefail
 
         # Strip a leading "v" if the caller supplied a tag-style version, since
-        # the platform tarball is published without it (e.g. 0.114.0-linux-x64).
+        # the platform tarball is published without it (e.g. 0.171.0-linux-x64).
         version="${CODEX_VERSION#v}"
 
         # Install both packages explicitly so the platform binary is never
