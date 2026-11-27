@@ -42,7 +42,14 @@ def _case_body(mode: str) -> str:
 	return POLLER_TEXT[start:stop]
 
 
-def _run(tmp_path: Path, mode: str, source_labels: list[str], labels_json: str = "[]") -> list[str]:
+def _hold_helper() -> str:
+	start = POLLER_TEXT.index("_stall_pr_ai_hold_reason()\n{")
+	return POLLER_TEXT[start:POLLER_TEXT.index("\n}\n", start) + 2]
+
+
+def _run_raw(
+	tmp_path: Path, mode: str, source_labels: list[str], labels_json: str = "[]", impl_pr_json: str = "",
+) -> subprocess.CompletedProcess:
 	issue_json = json.dumps({
 		"title": "CI failure: check on PR #32",
 		"body": TRIAGE_BODY,
@@ -53,7 +60,13 @@ def _run(tmp_path: Path, mode: str, source_labels: list[str], labels_json: str =
 	script = """set -euo pipefail
 count_noop_ancestors() { printf '0\\n'; }
 ensure_label_exists() { :; }
-close_linked_pr() { :; }
+close_linked_pr() { echo "CLOSE_LINKED_PR_CALLED $1"; }
+_resolve_issue_implementation_pr() {
+  STALL_IMPL_PR_NUM=""; STALL_IMPL_PR_JSON=""
+  [ -n "$IMPL_PR_JSON" ] || return 1
+  STALL_IMPL_PR_NUM=42; STALL_IMPL_PR_JSON="$IMPL_PR_JSON"; return 0
+}
+""" + _hold_helper() + """
 surface_reissue_closed_without_pr() { :; }
 tg_notify() { :; }
 tg_notify_issue() { :; }
@@ -63,6 +76,8 @@ write_standalone_state_json() { :; }
 gh_retry() {
   if [ "$1" = _safe_gh_jq ]; then
     printf '%s\\n' "$ORIG_ISSUE_JSON"
+  elif [ "$1" = gh ] && [ "$2" = issue ] && [ "$3" = close ]; then
+    echo "ISSUE_CLOSE_CALLED $4"
   elif [ "$1" = gh ] && [ "$2" = issue ] && [ "$3" = create ]; then
     printf '%s\\n' "$@" > "$CAPTURED_CREATE_ARGS_FILE"
     printf 'https://github.com/o/r/issues/99\\n'
@@ -80,15 +95,23 @@ reissue_case() {
   done
 }
 STALL_RECOVERY_SHOULD_INCREMENT=''
-reissue_case
+REISSUE_RC=0
+reissue_case || REISSUE_RC=$?
+echo "REISSUE_RC=${REISSUE_RC} INCREMENT=${STALL_RECOVERY_SHOULD_INCREMENT}"
 """
 	args_file = tmp_path / "create-args.txt"
 	result = subprocess.run(
 		["bash", "-c", script], capture_output=True, text=True, check=False,
 		env={**os.environ, "ORIG_ISSUE_JSON": issue_json, "SOURCE_LABELS_JSON": labels_json,
-			"CAPTURED_CREATE_ARGS_FILE": str(args_file)},
+			"CAPTURED_CREATE_ARGS_FILE": str(args_file), "IMPL_PR_JSON": impl_pr_json},
 	)
 	assert result.returncode == 0, result.stderr + result.stdout
+	return result
+
+
+def _run(tmp_path: Path, mode: str, source_labels: list[str], labels_json: str = "[]") -> list[str]:
+	_run_raw(tmp_path, mode, source_labels, labels_json)
+	args_file = tmp_path / "create-args.txt"
 	if not args_file.exists():
 		return []
 	return args_file.read_text(encoding="utf-8").splitlines()
@@ -134,3 +157,39 @@ def test_both_reissue_reads_request_the_check_triage_flag() -> None:
 		body = _case_body(mode)
 		assert 'check_triage: ([.labels[]?.name] | index("ai:check-triage") != null)' in body, mode
 		assert '${_check_triage_reissue_label_args[@]+"${_check_triage_reissue_label_args[@]}"}' in body, mode
+
+
+@needs_jq
+@pytest.mark.parametrize("mode", ["managed", "standalone"])
+@pytest.mark.parametrize(
+	("pr_json", "detail"),
+	[
+		('{"number":42,"state":"open","draft":true,"title":"impl"}', "draft"),
+		('{"number":42,"state":"open","draft":false,"title":"[skip ai] impl"}', "skip_ai_title"),
+	],
+)
+def test_reissue_leaves_issue_and_held_pr_alone(tmp_path: Path, mode: str, pr_json: str, detail: str) -> None:
+	# Issue #9733: with the cached linked-PR payload lacking draft/title, the
+	# re-issue arm must catch the owner hold before the replacement exists.
+	result = _run_raw(tmp_path, mode, [], impl_pr_json=pr_json)
+	out = result.stdout
+	assert (
+		f"STALL_SKIP issue=7 reason=pr_ai_hold pr=42 detail={detail} phase=ai:ready-to-merge "
+		"action=none requested_action=close_and_reissue source=reissue_precheck"
+	) in out, out
+	assert not (tmp_path / "create-args.txt").exists(), "no replacement issue may be created"
+	assert "CLOSE_LINKED_PR_CALLED" not in out
+	assert "ISSUE_CLOSE_CALLED" not in out
+	assert "INCREMENT=false" in out
+	assert ("REISSUE_RC=1" in out) == (mode == "managed"), out
+
+
+@needs_jq
+@pytest.mark.parametrize("mode", ["managed", "standalone"])
+def test_reissue_of_unheld_pr_still_closes_and_reissues(tmp_path: Path, mode: str) -> None:
+	result = _run_raw(tmp_path, mode, [], impl_pr_json='{"number":42,"state":"open","draft":false,"title":"impl"}')
+	out = result.stdout
+	assert "reason=pr_ai_hold" not in out
+	assert (tmp_path / "create-args.txt").exists()
+	assert "CLOSE_LINKED_PR_CALLED 7" in out
+	assert "ISSUE_CLOSE_CALLED 7" in out

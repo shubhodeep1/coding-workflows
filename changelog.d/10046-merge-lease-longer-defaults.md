@@ -1,0 +1,4 @@
+<!-- changelog: changed -->
+- **The merge lease now ships with longer defaults: `MERGE_LEASE_TTL_MINUTES` 480 (was 240) and `MERGE_LEASE_IDLE_MINUTES` 180 (was 60).** Review and final CI runs often wait one to two hours each for a runner, so a holder lost the lease at the 4-hour TTL or after 60 to 90 idle minutes before it could merge (#9897, #9502, #9983). Consumers get the new values on the next `@stable` sync. When `MERGE_LEASE_IDLE_MINUTES` is `0`, the head-gate grace a holder keeps while its head is re-reviewed now also uses 180 minutes. A repository variable still overrides either default, and the ranges and clamping are unchanged (TTL 30-1440, idle 0-1440). To keep the old behaviour, set the repository variables `MERGE_LEASE_TTL_MINUTES=240` and `MERGE_LEASE_IDLE_MINUTES=60`. `MERGE_LEASE_MAX_HOLD_MINUTES` (720) still ends every hold.
+
+Refs #10046.
