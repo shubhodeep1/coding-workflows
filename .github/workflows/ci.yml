@@ -3306,6 +3306,8 @@ jobs:
     # from group 3).
     # Since #9895, the pre-push affected-test gate step runs in
     # tests-hooks-and-orchestrator instead of group 0.
+    # Since #10223, group 3 runs the merge-train and check-failure triage
+    # steps (moved from group 0).
     # On 2026-11-21, after #9641 moved the pre-push gate step out of group
     # 3, shards still ran 15.0-17.1 minutes on a passing run (#9867, run
     # 44914391485) and were cancelled at the 20-minute cap in runs
@@ -4311,8 +4313,14 @@ jobs:
       # 10 serial pytest runs). The run's step timings could not be read, so the pick is an estimate from
       # test and subprocess counts, not a measurement, and group 0's headroom
       # is unmeasured. The group guard keeps it to one run per CI run.
+      #
+      # Budget-watch issue #10223: orchestrate-poll (0) took 27m26s of its 30
+      # minutes (run 46015617074), so this step moved, name and body
+      # unchanged, from group 0 to group 3, the leg with the fewest pinned
+      # steps. The run's step timings were not readable, so the pick is an
+      # estimate from test counts, not a measurement.
       - name: Merge-train and gh_helpers rate-limit tests (CLAUDE.md §15)
-        if: strategy.job-index == 0
+        if: strategy.job-index == 3
         # Drives scripts/review_merge_train.sh through a fake `gh` and pins
         # the per-run file-list cache (one GET /pulls/{n}/files per distinct
         # PR per release tick), plus _parse_reset_header's Retry-After
@@ -4473,8 +4481,13 @@ jobs:
       # most bash-driven step after the merge-train step (estimated, not
       # measured). It needs no git history, Node or prepared .claude/ live
       # copies. Name and body unchanged.
+      # Budget-watch issue #10223: orchestrate-poll (0) took 27m26s of its 30
+      # minutes (run 46015617074), so this step moved, name and body
+      # unchanged, from group 0 to group 3, the leg with the fewest pinned
+      # steps. The run's step timings were not readable, so the pick is an
+      # estimate from test counts, not a measurement.
       - name: Check-failure triage workflow security tests
-        if: strategy.job-index == 0
+        if: strategy.job-index == 3
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_check_failure_triage_workflow_security.py
