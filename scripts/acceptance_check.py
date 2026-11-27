@@ -37,6 +37,8 @@ CLI (exit 0 on handled outcomes; 2 on usage or IO errors):
 	gate-result --in F --gate-result F --out F                (P3)
 	fetch-plan --repo R --pr N --head-ref REF [--issue N] [--comments-file F]
 		[--trusted-login L] --out F                           (P3, review)
+	verify-targets --plan-file F --issue-json F --repo-root D --out F
+		(issue #10015: tests a nothing-to-implement plan block runs)
 Log lines (stderr, tokens only):
 	PERSIST acceptance outcome=<valid|invalid|none> errors=<n>
 
@@ -627,6 +629,54 @@ def fetch_plan(repo: str | None, pr: str | None, head_ref: str | None, issue: st
 	return obj, ("ok" if obj["state"] == "valid" else "plan_absent")
 
 
+# --- Nothing-to-implement verify (issue #10015, Phase 8a) -------------------
+
+VERIFY_TARGETS_SCHEMA = "plan_verify_targets.v1"
+# A `tests/...py` path that does not start inside a longer token (no URL or
+# `foo/tests/` prefix) and does not run on into a longer file name.
+ISSUE_TEST_PATH_RE = re.compile(
+	r"(?<![A-Za-z0-9._/:@~-])(tests/[A-Za-z0-9._/-]{1,290}?\.py)(?![A-Za-z0-9_/-]|\.[A-Za-z0-9])"
+)
+
+
+def extract_issue_test_paths(text: Any, repo_root: str | Path, limit: int = MAX_TESTS) -> list[str]:
+	"""Existing `tests/...py` file paths named in an issue body (untrusted text):
+	safe relative paths only, no symlinks, first-seen order, at most `limit`."""
+	if not isinstance(text, str) or limit <= 0:
+		return []
+	out: list[str] = []
+	for match in ISSUE_TEST_PATH_RE.finditer(text):
+		path = match.group(1)
+		if path in out or not path.endswith(".py") or not _safe_test_path(path):
+			continue
+		if not _test_exists(repo_root, path):
+			continue
+		out.append(path)
+		if len(out) >= limit:
+			break
+	return out
+
+
+def verify_targets(plan_text: str, issue_body: Any, repo_root: str | Path) -> dict:
+	"""Tests a nothing-to-implement block runs: the plan's valid `ACCEPTANCE:
+	test` lines whose file exists, else `tests/` paths in the issue body."""
+	items, _errors = parse_acceptance_lines(plan_text)
+	tests: list[str] = []
+	for item in items:
+		if item.get("kind") != "test" or not _test_exists(repo_root, item["path"]):
+			continue
+		target = _target_of(item)
+		if target not in tests:
+			tests.append(target)
+		if len(tests) >= MAX_TESTS:
+			break
+	source = "plan"
+	if not tests:
+		tests = extract_issue_test_paths(issue_body, repo_root)
+		source = "issue" if tests else "none"
+	return {"schema": VERIFY_TARGETS_SCHEMA, "source": source, "tests": tests}
+
+
 # --- CLI ----------------------------------------------------------------------
 
 
@@ -676,6 +726,11 @@ def build_parser() -> argparse.ArgumentParser:
 	fetch.add_argument("--comments-file")
 	fetch.add_argument("--trusted-login")
 	fetch.add_argument("--out", required=True)
+	targets = sub.add_parser("verify-targets")
+	targets.add_argument("--plan-file", required=True)
+	targets.add_argument("--issue-json", required=True)
+	targets.add_argument("--repo-root", required=True)
+	targets.add_argument("--out", required=True)
 	return parser
 
 
@@ -716,6 +771,11 @@ def main(argv: list[str] | None = None) -> int:
 				obj, reason = _empty(), "fetch_failed"
 			Path(args.out).write_text(_dump(obj), encoding="utf-8")
 			log(obj["state"], f"reason={reason}")
+		elif args.cmd == "verify-targets":
+			issue = _read_json(args.issue_json)
+			body = issue.get("body") if isinstance(issue, dict) else None
+			targets = verify_targets(_read_text(args.plan_file), body, args.repo_root)
+			Path(args.out).write_text(_dump(targets), encoding="utf-8")
 	except OSError:
 		log("error", "reason=io")
 		return 2
