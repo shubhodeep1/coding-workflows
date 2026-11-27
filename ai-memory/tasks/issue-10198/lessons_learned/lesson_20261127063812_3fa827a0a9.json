@@ -1,0 +1,25 @@
+{
+  "discovered_at": "2026-11-27T06:38:12Z",
+  "issue_number": 10198,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 002 as out-of-scope; anchor=scripts/review_merge_train.sh:3013-3025; cited_path=scripts/review_merge_train.sh; files_touched=.github/workflows/review_autofix.yml, README.md, agents.d/merge-lease-short-cs-p4-inline-sync.md, changelog.d/merge-lease-short-cs-p4-inline-sync.md, scripts/pr_checks_lib.sh, scripts/review_autofix_step_evaluate_gate.sh, scripts/review_enable_auto_merge.sh, scripts/review_head_gate.sh, scripts/review_rb_judge.sh, scripts/stage_switches.json, tests/test_merge_lease_inline_sync.py, tests/test_pr_base_freshness_gate.py.",
+  "phase": "review_autofix",
+  "pr_number": 10203,
+  "record_id": "lesson_20261127063812_3fa827a0a9",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "scripts/review_merge_train.sh",
+    ".github/workflows/review_autofix.yml",
+    "README.md",
+    "agents.d/merge-lease-short-cs-p4-inline-sync.md",
+    "changelog.d/merge-lease-short-cs-p4-inline-sync.md",
+    "scripts/pr_checks_lib.sh",
+    "scripts/review_autofix_step_evaluate_gate.sh",
+    "scripts/review_enable_auto_merge.sh",
+    "scripts/review_head_gate.sh",
+    "scripts/review_rb_judge.sh",
+    "scripts/stage_switches.json",
+    "tests/test_merge_lease_inline_sync.py",
+    "tests/test_pr_base_freshness_gate.py"
+  ]
+}
