@@ -1,0 +1,22 @@
+{
+  "discovered_at": "2026-11-27T15:47:05Z",
+  "issue_number": 10170,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 004 as out-of-scope; anchor=.github/workflows/ci.yml:1729-1742; cited_path=.github/workflows/ci.yml; files_touched=README.md, agents.d/10170-stage-switch-discovery.md, agents.d/9994-stage-switch-watch.md, changelog.d/10170-stage-switch-discovery.md, scripts/stage_switch_watch.py, scripts/stage_switch_watch.sh, scripts/stage_switches.json, tests/test_stage_switch_registry.py, tests/test_stage_switch_watch.py.",
+  "phase": "review_autofix",
+  "pr_number": 10171,
+  "record_id": "lesson_20261127154705_f8d1d40a8b",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    ".github/workflows/ci.yml",
+    "README.md",
+    "agents.d/10170-stage-switch-discovery.md",
+    "agents.d/9994-stage-switch-watch.md",
+    "changelog.d/10170-stage-switch-discovery.md",
+    "scripts/stage_switch_watch.py",
+    "scripts/stage_switch_watch.sh",
+    "scripts/stage_switches.json",
+    "tests/test_stage_switch_registry.py",
+    "tests/test_stage_switch_watch.py"
+  ]
+}
