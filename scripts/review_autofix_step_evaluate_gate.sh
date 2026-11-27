@@ -1912,6 +1912,12 @@ gate_final_ci_now_green_merge_route()
     echo "FINAL_CI_NOW_GREEN_MERGE pr=${PR_NUMBER} head=${pr_head_sha_gate} outcome=not_routed reason=${final_ci_now_green_merge_block}${final_ci_now_green_merge_detail}"
     return 1
   fi
+  # gate_freshness_sync_fast_path sets DET_SKIP_SECURITY_PASS_REQUIRED before
+  # its helper decides and leaves it set when the helper fails; a generated
+  # chore needs no pass, so clear that stale value. A non-chore keeps it.
+  if [ "${GENERATED_CHORE:-false}" = "true" ]; then
+    DET_SKIP_SECURITY_PASS_REQUIRED="false"
+  fi
   DETERMINISTIC_SKIP="true"
   DET_SKIP_REASON="final_ci_now_green"
   echo "FINAL_CI_NOW_GREEN_MERGE pr=${PR_NUMBER} head=${pr_head_sha_gate} outcome=routed det_skip_reason=final_ci_now_green"

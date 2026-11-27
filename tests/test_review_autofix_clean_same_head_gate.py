@@ -1028,6 +1028,30 @@ def test_gate_final_ci_now_green_generated_chore_skips_the_pass_with_the_skip_jo
 	assert "AUTOFIX_GATE_DET_SKIP_SECURITY_PASS" not in result.stdout
 
 
+def test_gate_final_ci_now_green_generated_chore_clears_a_stale_pass_flag_from_the_freshness_path(tmp_path: Path) -> None:
+	# Production path: HEAD_GATE_HELPER_VERIFIED=true lets the freshness-sync
+	# fast path set DET_SKIP_SECURITY_PASS_REQUIRED before its helper fails
+	# (no ai:merge-base-sync:v1 marker). The chore exemption must still hold.
+	_stage_head_gate_src(tmp_path)
+	fixture = _now_green_fixture()
+	fixture["pr"]["head"]["ref"] = "auto/workflow-log-analysis-report-123-1"
+	fixture["pr"]["user"] = {"login": PIPELINE, "type": "User"}
+	fixture["files"] = [{"filename": "analysis/workflow-optimization-2026-11-26.md", "status": "added"}]
+	result, outputs, _ = _run_gate(tmp_path, fixture, **_SECURITY_PASS_ENV, AUTOFIX_SKIP_RUNS_SECURITY_PASS="true",
+		HEAD_GATE_HELPER_VERIFIED="true", GH_RETRY_MAX_ATTEMPTS="1")
+	assert outputs["deterministic_skip"] == "true" and outputs["det_skip_reason"] == "final_ci_now_green", result.stdout + result.stderr
+	assert outputs["det_skip_security_pass"] == "false", result.stdout
+	assert "AUTOFIX_GATE_DET_SKIP_SECURITY_PASS " not in result.stdout
+
+
+def test_gate_final_ci_now_green_keeps_the_pass_for_a_non_chore_on_the_freshness_path(tmp_path: Path) -> None:
+	_stage_head_gate_src(tmp_path)
+	result, outputs, _ = _run_gate(tmp_path, _now_green_fixture(), **_SECURITY_PASS_ENV, AUTOFIX_SKIP_RUNS_SECURITY_PASS="true",
+		HEAD_GATE_HELPER_VERIFIED="true", GH_RETRY_MAX_ATTEMPTS="1")
+	assert outputs["deterministic_skip"] == "true" and outputs["det_skip_reason"] == "final_ci_now_green", result.stdout + result.stderr
+	assert outputs["det_skip_security_pass"] == "true", result.stdout
+
+
 def _job_block(text: str, job: str) -> str:
 	match = re.search(rf"^  {re.escape(job)}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)", text, re.M | re.S)
 	assert match, job
