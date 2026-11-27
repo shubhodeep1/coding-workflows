@@ -140,6 +140,12 @@
 			"stage": "scripts/ci_final_merge_ref_fresh.sh compares the merge commit's first parent with the run's pinned base: the tip of the base branch when the run was created (the event payload's repository.pushed_at, else GET actions/..."
 		},
 		{
+			"name": "CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED",
+			"default": "true",
+			"stage": "Final-CI stale merge-ref acceptance (issue #10177, ci.yml): at the stale exit of scripts/ci_final_merge_ref_fresh.sh, an integration-branch PR whose tested base differs from the tip only by default-branch syncs and [ai-merge-resolve] commits touching none of its files passes as outcome=stale_accepted.",
+			"on_values": ["1", "yes", "on"]
+		},
+		{
 			"name": "CI_TRIAGE_PR_BRANCH_ROUTING_ENABLED",
 			"default": "true",
 			"stage": "Turns on ci triage pr branch routing (clarify.yml, implement.yml, orchestrate_clarify_respond.yml, plan.yml, validate.yml); false turns that stage off."
