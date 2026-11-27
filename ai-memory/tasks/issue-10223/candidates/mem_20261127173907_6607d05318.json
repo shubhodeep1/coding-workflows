@@ -1,0 +1,39 @@
+{
+  "category": "task_summaries",
+  "confidence": 0.7,
+  "details": "{\"issue_number\":10223,\"issue_url\":\"https://github.com/shubhodeep1/coding-workflows/issues/10223\",\"pr_url\":\"https://github.com/shubhodeep1/coding-workflows/pull/10227\",\"pr_number\":10227,\"branch\":\"ai/issue-10223\",\"run_id\":\"46040552511\",\"run_attempt\":\"1\",\"run_url\":\"https://github.com/shubhodeep1/coding-workflows/actions/runs/46040552511\",\"changed_files\":[\".github/workflows/ci.yml\",\"changelog.d/10223-ci-poll-group-zero-steps-to-group-3.md\",\"tests/test_ci_poll_test_sharding.py\"]}",
+  "fingerprint": "902613722dd1ec69be6a9bac5230566eb24542d99c45d064b2e003ee9dcf4d4a",
+  "lineage": {
+    "issue_number": 10223,
+    "parent_ids": [],
+    "pr_number": 10227,
+    "run_id": "46040552511",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46040552511",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/pull/10227"
+    ],
+    "workflow": "implement"
+  },
+  "record_id": "mem_20261127173907_6607d05318",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": 10223,
+    "level": "run",
+    "pr_number": 10227,
+    "run_id": "46040552511"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Implementation PR created for issue #10223: https://github.com/shubhodeep1/coding-workflows/pull/10227",
+  "timestamps": {
+    "created_at": "2026-11-27T17:39:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
