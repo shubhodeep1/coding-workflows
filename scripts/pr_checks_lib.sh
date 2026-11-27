@@ -2711,7 +2711,11 @@ _pr_base_fresh_for_merge()
 #                     (AUTO_MERGE_CHECKS_WAIT_MINUTES);
 #   5 ok              the head-gate success is posted again (a pushed run's early
 #                     `pending` may have replaced it), PR_BASE_SYNC_INLINE_HEAD is
-#                     set to the update head and 0 is returned.
+#                     set to the update head and 0 is returned. A failed post
+#                     (here or in step 2) is reason=head_gate_status. An empty
+#                     DEFAULT_BRANCH with the pass switch on counts as "pass
+#                     required" (fail closed); the codex-agent callers have no
+#                     .codex-skip-pr-head checkout, so there it hands off.
 # Every failure after the precondition dispatches the PR's review once
 # (_mt_dispatch_review's call), so a head the marker names as owned by this
 # run is never left without an owner; the dispatched run is workflow_dispatch,
@@ -2753,18 +2757,26 @@ _pr_base_sync_inline_handoff()
 
 # _pr_base_sync_inline_post_status <lib dir> <repo> <pr> <sha>: the head-gate
 # success through review_head_gate_post_status, in a subshell from the
-# library's own (verified) directory. Returns 1 when the helpers cannot load.
+# library's own (verified) directory. Returns 1 when the helpers cannot load
+# or the POST did not land: review_head_gate_post_status always returns 0, so
+# its outcome line is read (as review_head_gate_updater_exempt does). A status
+# switched off by REVIEW_HEAD_GATE_STATUS_ENABLED=false (outcome=disabled) passes.
 _pr_base_sync_inline_post_status()
 {
-	local status_lib="$1" status_repo="$2" status_pr="$3" status_sha="$4"
+	local status_lib="$1" status_repo="$2" status_pr="$3" status_sha="$4" status_out=""
 	[ -f "${status_lib}/review_head_gate.sh" ] && [ -f "${status_lib}/gh_helpers.sh" ] || return 1
 	# shellcheck source=/dev/null
-	(
+	status_out="$(
 		cd "${status_lib}" \
 			&& source "${status_lib}/gh_helpers.sh" \
 			&& source "${status_lib}/review_head_gate.sh" \
 			&& PR_NUMBER="${status_pr}" review_head_gate_post_status "${status_repo}" "${status_sha}" success "deterministic skip evaluated this head"
-	)
+	)" || return 1
+	[ -z "${status_out}" ] || printf '%s\n' "${status_out}"
+	case "${status_out}" in
+		*"state=success outcome=posted"*|*"state=success outcome=disabled"*) return 0 ;;
+	esac
+	return 1
 }
 
 _pr_base_sync_inline_merge()
@@ -2847,7 +2859,12 @@ _pr_base_sync_inline_merge()
 	inline_head_repo="$(jq -r '.head.repo.full_name // ""' <<< "${inline_pull}" 2>/dev/null || true)"
 	inline_head_ref="$(jq -r '.head.ref // ""' <<< "${inline_pull}" 2>/dev/null || true)"
 	inline_labels="$(jq -r '[.labels[]?.name // empty] | join(",")' <<< "${inline_pull}" 2>/dev/null || true)"
-	if [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-false}" != "false" ] \
+	if [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-false}" != "false" ] && [ -z "${DEFAULT_BRANCH:-}" ]; then
+		# Fail closed: without the default branch the gate's predicate cannot
+		# be evaluated, so the carry is treated as required (and hands off
+		# below unless its inputs are present).
+		inline_pass_required="true"
+	elif [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-false}" != "false" ] \
 		&& [ -n "${DEFAULT_BRANCH:-}" ] && [ "${inline_base_ref}" = "${DEFAULT_BRANCH}" ] \
 		&& [ "${inline_head_repo}" = "${inline_repo}" ] \
 		&& ! [[ "${inline_head_ref}" =~ ${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-} ]] \
@@ -2902,8 +2919,13 @@ _pr_base_sync_inline_merge()
 	fi
 
 	# Step 5: the pushed run's early gate call may have posted `pending` on
-	# the update head after step 2; post the success again (idempotent).
-	_pr_base_sync_inline_post_status "${inline_lib}" "${inline_repo}" "${inline_pr}" "${inline_update}" || true
+	# the update head after step 2; post the success again (idempotent). A
+	# failed post would leave the merge waiting on a `pending` head-gate with
+	# no owner (the pushed run skips for this live run), so it hands off.
+	if ! _pr_base_sync_inline_post_status "${inline_lib}" "${inline_repo}" "${inline_pr}" "${inline_update}"; then
+		_pr_base_sync_inline_finish head_gate_status
+		return 1
+	fi
 	PR_BASE_SYNC_INLINE_HEAD="${inline_update}"
 	export PR_BASE_SYNC_INLINE_HEAD
 	_pr_base_sync_inline_finish ok

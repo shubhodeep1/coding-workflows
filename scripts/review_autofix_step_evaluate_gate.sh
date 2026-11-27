@@ -1273,6 +1273,14 @@ if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
     inline_owner_run="$(bash .codex-head-gate-src/scripts/review_head_gate.sh freshness-sync-inline-run "${PR_NUMBER}" \
       "${pr_head_sha_gate}" "${gate_marker_author_login}" "${gate_marker_comments_file}" 2>/dev/null || true)"
     [[ "${inline_owner_run}" =~ ^[1-9][0-9]{0,19}$ ]] || return 1
+    # The early head-gate call above withdraws an enabled auto-merge on
+    # synchronize and posts `pending`. An owner that had already enabled it
+    # is past its merge step and will not redo it, so the freshness fast path
+    # must (no owner skip, no run read).
+    if [ "${pr_auto_merge_enabled:-}" = "true" ]; then
+      echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} skip=false reason=lease_inline_owner_auto_merge_enabled run=${inline_owner_run}"
+      return 1
+    fi
     # No existing read has another run's status (the gate reads only this
     # PR, its comments and its checks); this GET is made only when the
     # trusted freshness marker for this head carries inline_run.

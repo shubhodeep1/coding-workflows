@@ -4941,6 +4941,8 @@ jobs:
           # Security follow-up merge guard (#9479/#9671) kill switch, raw: only
           # an explicit `false` turns it off; unset keeps it on.
           SINGLE_ISSUE_SECURITY_PASS_ENABLED: ${{ vars.SINGLE_ISSUE_SECURITY_PASS_ENABLED }}
+          # Read only by _pr_base_sync_inline_merge's security-pass predicate (merge-lease Phase 4).
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           # When 'true' (default), forward-merge fallback PRs auto-merge via a
           # real merge commit instead of being suppressed for manual merge.
           # See the forward-merge-fallback branch below for the full rationale.

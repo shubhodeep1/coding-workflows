@@ -234,7 +234,14 @@ def test_inline_run_subcommand_rejects_invalid_input(tmp_path: Path) -> None:
 # --- _pr_base_sync_inline_merge --------------------------------------------------
 
 STUB_HEAD_GATE = '''#!/usr/bin/env bash
-review_head_gate_post_status() { echo "POST_STATUS repo=$1 sha=$2 state=$3" >> "${CALL_LOG}"; return 0; }
+review_head_gate_post_status() {
+	echo "POST_STATUS repo=$1 sha=$2 state=$3" >> "${CALL_LOG}"
+	local n outcome=posted
+	n="$(grep -c '^POST_STATUS ' "${CALL_LOG}")"
+	[ "${n}" != "${POST_FAIL_ON:-0}" ] || outcome=failed
+	echo "REVIEW_HEAD_GATE mode=status pr=${PR_NUMBER:-?} head=$2 state=$3 outcome=${outcome}"
+	return 0
+}
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 	echo "FRESHNESS_SYNC $*" >> "${CALL_LOG}"
 	exit "${FS_RC:-0}"
@@ -353,6 +360,9 @@ def test_switch_off_returns_1_without_dispatch(tmp_path: Path) -> None:
 	({"ci_outcome": "dispatch_failed"}, "not_quick"),
 	({"FS_RC": "1"}, "freshness_sync"),
 	({"gh_helpers": False}, "head_gate_status"),
+	({"POST_FAIL_ON": "1"}, "head_gate_status"),
+	({"POST_FAIL_ON": "2"}, "head_gate_status"),
+	({"SINGLE_ISSUE_SECURITY_PASS_ENABLED": "true"}, "security_pass"),
 	({"wait_rc": 1}, "required_checks"),
 	({"args": f"o/r 7 {APPROVED} {'d' * 40} main"}, "invalid_input"),
 	({"pull_json": _pull_json("e" * 40)}, "security_pass"),
@@ -366,6 +376,27 @@ def test_each_failing_step_dispatches_the_review_once(tmp_path: Path, kwargs: di
 	assert len(dispatches) == 1, calls
 	assert dispatches[0] == "GH workflow run ai-review.yml --repo o/r -f pr_number=7 -f allow_workflow_edits=true"
 	assert re.search(r"^rc=1 inline_head=$", out, re.M), out
+
+
+def test_failed_first_post_stops_before_the_checks_wait(tmp_path: Path) -> None:
+	rc, out, calls = _inline(tmp_path, POST_FAIL_ON="1")
+	assert rc == 1 and "reason=head_gate_status" in out
+	assert not any(c.startswith("WAIT ") for c in calls)
+
+
+def test_head_gate_status_switched_off_still_merges(tmp_path: Path) -> None:
+	lib = tmp_path / "real" / "scripts"
+	lib.mkdir(parents=True)
+	shutil.copy(HEAD_GATE, lib / "review_head_gate.sh")
+	(lib / "gh_helpers.sh").write_text("#!/usr/bin/env bash\n:\n", encoding="utf-8")
+	script = f"""
+set -euo pipefail
+source {str(LIB)!r}
+_pr_base_sync_inline_post_status {str(lib)!r} o/r 7 {UPDATE} && echo "post_rc=0" || echo "post_rc=1"
+"""
+	res = subprocess.run(["bash", "-c", script], env=_base_env(tmp_path, REVIEW_HEAD_GATE_STATUS_ENABLED="false"),
+		capture_output=True, text=True, timeout=60)
+	assert "outcome=disabled" in res.stdout and "post_rc=0" in res.stdout, res.stdout + res.stderr
 
 
 def test_failed_dispatch_tries_each_workflow_and_logs_it(tmp_path: Path) -> None:
@@ -488,6 +519,14 @@ def test_gate_skips_for_a_live_owner_run(tmp_path: Path, status: str) -> None:
 	rc, _out, calls = _owner(tmp_path, [_gate_marker(f" inline_run={RUN_ID}")], FAKE_RUN_STATUS=status)
 	assert rc == 0
 	assert len(calls) == 1 and calls[0].startswith(f"gh api repos/o/r/actions/runs/{RUN_ID} --jq ")
+
+
+def test_gate_proceeds_when_the_early_call_withdrew_auto_merge(tmp_path: Path) -> None:
+	rc, out, calls = _owner(tmp_path, [_gate_marker(f" inline_run={RUN_ID}")], FAKE_RUN_STATUS="in_progress",
+		pr_auto_merge_enabled="true")
+	assert rc == 1
+	assert calls == []
+	assert "skip=false reason=lease_inline_owner_auto_merge_enabled" in out
 
 
 def test_gate_proceeds_for_a_completed_run(tmp_path: Path) -> None:
