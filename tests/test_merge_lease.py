@@ -1652,9 +1652,11 @@ class Wiring(unittest.TestCase):
 				kind, value = match.group(1), match.group(2)
 				self.assertEqual(value, expected[kind], f"{path.relative_to(REPO_ROOT)}: MERGE_LEASE_{kind}_MINUTES default {value}")
 				counts[(path.name, kind)] = counts.get((path.name, kind), 0) + 1
+		# Issue #10078: the three poller steps and the two sweep steps that can
+		# grant or renew a lease now pass the full lease set, TTL included.
 		self.assertEqual(counts, {
-			(REVIEW.name, "TTL"): 3, (POLL.name, "TTL"): 1, (CLOSE.name, "TTL"): 1,
-			(REVIEW.name, "IDLE"): 3, (POLL.name, "IDLE"): 4, (CLOSE.name, "IDLE"): 1,
+			(REVIEW.name, "TTL"): 3, (POLL.name, "TTL"): 4, (CLOSE.name, "TTL"): 1, (SWEEP.name, "TTL"): 2,
+			(REVIEW.name, "IDLE"): 3, (POLL.name, "IDLE"): 4, (CLOSE.name, "IDLE"): 1, (SWEEP.name, "IDLE"): 2,
 		})
 		lib = LIB.read_text()
 		for needle in ("${MERGE_LEASE_TTL_MINUTES:-480}", "lease_ttl_minutes=480",
