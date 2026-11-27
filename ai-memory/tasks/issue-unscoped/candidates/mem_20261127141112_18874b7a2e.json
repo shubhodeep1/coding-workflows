@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1729-1742, 5144-5147, 5243-5246 | severity=blocker | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: Job `tests-heal-plan-and-validation` was cancelled in final CI runs 45978675130 and 45995040066, so the aggregate `lint` check fails.\n  WHY: `lint` fails when a needed job is not `success`; severity disagreement: anthropic_claude-sonnet-5_5 rated NIT (confidence 2, inferred 20-minute timeout), others BLOCKER, so the highest is used. z-ai_glm-5_3-flash attributes it to the ci.yml:94-96 concurrency cancel-in-progress and notes that it maps to no hunk in this PR.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:1729,1742 | severity=NIT | confidence=2\n  PROBLEM: Job `tests-heal-plan-and-validation` ended `cancelled` in final CI runs 45978675130 and 45995040066, so the aggregate `lint` check failed. All tests passed before `##[error]The operation was canceled.`\n  WHY: The PR does not touch ci.yml, and the cause is most likely the 20-minute timeout or runner infrastructure (inferred, not confirmed). No fix exists inside this PR.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:5144-5147, 5243-5246 | severity=BLOCKER | confidence=5\n  PROBLEM: Final CI fails due to the cancellation of job tests-heal-plan-and-validation, which causes the lint aggregate check to fail.\n  WHY: The required lint check exits nonzero when a needed job is not successful, blocking the final CI pipeline.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- .github/workflows/ci.yml:1729-1742, 5243-5246 | severity=BLOCKER | confidence=5\n  PROBLEM: `tests-heal-plan-and-validation` was cancelled twice in the supplied final CI runs, and the `lint` aggregation rejects that result and exits nonzero.\n  WHY: A cancelled job is not `success` or an allowed skip, so the required `lint` check fails. The logs do not establish a cause or link it to this PR's changes.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:94-96 | severity=BLOCKER | confidence=4\n  PROBLEM: Both final-CI runs ended with `tests-heal-plan-and-validation` cancelled and no failing test. ci.yml:96 sets `cancel-in-progress` true for final-CI `workflow_dispatch` runs sharing `ci-final-pr-<PR number>`, so a superseding dispatch cancels the in-flight run and the required `lint` aggregate fails.\n  WHY: The cancellations map to this concurrency mechanism, not to any hunk in this PR. The fix path is the cancelled-CI rerun sweep (ci.yml:88-89, `scripts/ci_cancelled_rerun.py`) or a fresh final-CI run on the next head, not a code change in this diff.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "50c87e33be57926450f23ef048cb732f1f6db51e4ff46acc6b8a5ba11db14d6f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10171,
+    "run_id": "45994808556",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "github-actions[bot]",
+    "run_attempt": 1,
+    "run_id": "45994808556",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127141112_18874b7a2e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10171,
+    "run_id": "45994808556"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-27T14:11:12Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
