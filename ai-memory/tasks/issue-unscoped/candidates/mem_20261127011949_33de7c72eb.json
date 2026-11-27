@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Read the run's jobs \u201cthrough `gh_retry`.\u201d\n  expected_change_site: `scripts/ci_cancelled_rerun.py`, `list_run_jobs` and its call from `classify_cancelled_run`.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: `list_run_jobs` calls `subprocess.run` directly for the jobs GET (line 515); `classify_cancelled_run` retries it with `time.sleep(2)` (lines 752-759). The requested `gh_retry` path is not used. (severity=NIT per source; anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash noted this as a previously accepted deviation and did not raise it)\n- requirement: \u201cReuse the existing classifier in `scripts/ci_cancelled_rerun.py` and not write a second one.\u201d\n  expected_change_site: Existing `classify_runner_shutdown` path in `scripts/ci_cancelled_rerun.py`.\n  confidence=4\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The diff adds a separate `classify_cancelled_run` function (line 722) with its own job-result checks and annotation loop (lines 760-776). It reuses helper functions, but does not reuse or extend the existing classifier. (severity=NIT per source)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: Read the run's jobs \u201cthrough `gh_retry`.\u201d\n  Expected change site: `scripts/ci_cancelled_rerun.py`, `list_run_jobs` and its call from `classify_cancelled_run`.\n  Evidence of absence: `list_run_jobs` calls `subprocess.run` directly for the jobs GET (line 515); `classify_cancelled_run` retries it with `time.sleep(2)` (lines 752-759). The requested `gh_retry` path is not used.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: \u201cReuse the existing classifier in `scripts/ci_cancelled_rerun.py` and not write a second one.\u201d\n  Expected change site: Existing `classify_runner_shutdown` path in `scripts/ci_cancelled_rerun.py`.\n  Evidence of absence: The diff adds a separate `classify_cancelled_run` function (line 722) with its own job-result checks and annotation loop (lines 760-776). It reuses helper functions, but does not reuse or extend the existing classifier.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "af263968f6301e8758f391ade214be965984ee9fee841082ad31d4bc79e8934a",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10135,
+    "run_id": "45918606440",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45918606440",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127011949_33de7c72eb",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10135,
+    "run_id": "45918606440"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 2 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-27T01:19:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
