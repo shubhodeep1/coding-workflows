@@ -10,9 +10,11 @@ fail-open split, and the staging entries.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import yaml
@@ -31,6 +33,53 @@ from review_autofix_step_scripts import (  # noqa: E402
 
 
 STAGE_SUPPORT_HELPER = REPO_ROOT / "scripts" / "stage_workflow_support.sh"
+
+# #10221: the codex-agent wrapper falls back to the workspace
+# .codex-workflow-src checkout only after "Ensure workflow support source
+# checkout" verified it (WORKFLOW_SUPPORT_SOURCE_VERIFIED=true) and only while
+# its HEAD still equals SCRIPT_REF. Before that step the directory may hold
+# files committed in the PR, and failure()/always() steps carry GH_PAT.
+SUPPORT_SOURCE_VERIFIED_FLAG_LINE = 'echo "WORKFLOW_SUPPORT_SOURCE_VERIFIED=true" >> "$GITHUB_ENV"'
+FALLBACK_FLAG_TEST = '[ "${WORKFLOW_SUPPORT_SOURCE_VERIFIED:-false}" != "true" ]'
+FALLBACK_HEAD_TEST = '[ "$(git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF:-unset}" ]'
+FAILURE_PATH_STEPS_10221 = (
+	"Assemble failure evidence",
+	"Mark linked issues review-blocked (workflow failure)",
+	"Post review-blocked comment on PR (workflow failure)",
+)
+
+
+def _gated_fallback_line(script_name: str) -> str:
+	return (
+		f'[ -f "${{REVIEW_AUTOFIX_STEP_SCRIPT}}" ] || {FALLBACK_FLAG_TEST} || {FALLBACK_HEAD_TEST} '
+		f'|| REVIEW_AUTOFIX_STEP_SCRIPT="${{GITHUB_WORKSPACE}}/.codex-workflow-src/scripts/{script_name}"'
+	)
+
+
+def _raw_job_text(raw: str, job_id: str) -> str:
+	match = re.search(rf"^  {re.escape(job_id)}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)", raw, re.MULTILINE | re.DOTALL)
+	assert match, f"job {job_id} not found in review_autofix.yml"
+	return match.group(1)
+
+
+def _raw_step_run(job_text: str, step_name: str) -> str:
+	"""Return the dedented run: | block of the named step, read from raw text."""
+	lines = job_text.split("\n")
+	headers = {f"      - name: {quoted}" for quoted in (step_name, f'"{step_name}"', f"'{step_name}'")}
+	start = next(i for i, line in enumerate(lines) if line in headers)
+	end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("      - ")), len(lines))
+	body: list[str] = []
+	in_run = False
+	for line in lines[start + 1:end]:
+		if line == "        run: |":
+			in_run = True
+			continue
+		if in_run:
+			if line.strip() and not line.startswith("          "):
+				break
+			body.append(line[10:])
+	assert in_run, f"{step_name}: no run: | block"
+	return "\n".join(body).rstrip("\n") + "\n"
 
 
 def _steps_by_name(workflow_text: str) -> dict[str, dict]:
@@ -84,7 +133,7 @@ def test_moved_steps_run_only_the_resolving_wrapper() -> None:
 			continue
 		expected_lines = [
 			f'REVIEW_AUTOFIX_STEP_SCRIPT="${{SUPPORT_SCRIPTS_DIR:-}}/{script_name}"',
-			f'[ -f "${{REVIEW_AUTOFIX_STEP_SCRIPT}}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${{GITHUB_WORKSPACE}}/.codex-workflow-src/scripts/{script_name}"',
+			_gated_fallback_line(script_name),
 			'if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then',
 		]
 		run_lines = run.rstrip("\n").split("\n")
@@ -220,6 +269,124 @@ def test_capture_runtime_context_stays_inline() -> None:
 	assert "REVIEW_AUTOFIX_STEP_SCRIPT" not in step["run"] and "source " not in step["run"], step["run"]
 	assert 'mkdir -p "${RUNTIME_CONTEXT_DIR}"' in step["run"]
 	assert "Capture runtime context" not in REVIEW_AUTOFIX_STEP_SCRIPTS
+
+
+def test_workspace_fallback_requires_verified_support_checkout() -> None:
+	raw = REVIEW_AUTOFIX_WORKFLOW_PATH.read_text(encoding="utf-8")
+	# Only the trusted verify step may set the flag.
+	assert raw.count("WORKFLOW_SUPPORT_SOURCE_VERIFIED=true") == 1, "only one step may set WORKFLOW_SUPPORT_SOURCE_VERIFIED"
+	job = _raw_job_text(raw, "codex-agent")
+	names = [name.strip("\"'") for name in re.findall(r"^      - name: (.+)$", job, re.MULTILINE)]
+	checkout_idx = names.index("Checkout workflow support source")
+	verify_idx = names.index("Ensure workflow support source checkout")
+	stage_idx = names.index("Stage workflow support files")
+	assert checkout_idx < verify_idx < stage_idx, (checkout_idx, verify_idx, stage_idx)
+	verify_lines = _raw_step_run(job, "Ensure workflow support source checkout").split("\n")
+	head_check = verify_lines.index('if [ "$(git -C .codex-workflow-src rev-parse HEAD 2>/dev/null)" != "${SCRIPT_REF}" ]; then')
+	assert verify_lines[head_check + 2] == "  exit 1", "a HEAD mismatch must stop the verify step before the flag is set"
+	assert verify_lines.index(SUPPORT_SOURCE_VERIFIED_FLAG_LINE) > head_check + 2, (
+		"WORKFLOW_SUPPORT_SOURCE_VERIFIED must be set only after the HEAD check passed"
+	)
+	fallback_lines = [
+		line.strip()
+		for line in raw.split("\n")
+		if 'REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/' in line
+	]
+	assert len(fallback_lines) >= len(FAILURE_PATH_STEPS_10221)
+	for line in fallback_lines:
+		script = re.search(r'\.codex-workflow-src/scripts/([a-z0-9_]+\.sh)"$', line)
+		assert script, f"unexpected .codex-workflow-src fallback shape: {line}"
+		assert line == _gated_fallback_line(script.group(1)), f"ungated .codex-workflow-src fallback: {line}"
+		assert FALLBACK_FLAG_TEST in line and FALLBACK_HEAD_TEST in line
+	for step_name in FAILURE_PATH_STEPS_10221:
+		script_name = REVIEW_AUTOFIX_STEP_SCRIPTS[step_name][0]
+		assert _gated_fallback_line(script_name) in _raw_step_run(job, step_name).split("\n"), step_name
+
+
+def _run_wrapper_10221(run: str, workspace: Path, marker: Path, env_extra: dict[str, str]) -> subprocess.CompletedProcess:
+	env = {
+		k: v
+		for k, v in os.environ.items()
+		if not k.startswith("GIT_") and k not in ("SUPPORT_SCRIPTS_DIR", "SCRIPT_REF", "WORKFLOW_SUPPORT_SOURCE_VERIFIED", "BASH_ENV", "ENV")
+	}
+	env.update(
+		{
+			"GITHUB_WORKSPACE": str(workspace),
+			"MARKER_10221": str(marker),
+			"GIT_CONFIG_GLOBAL": os.devnull,
+			"GIT_CONFIG_NOSYSTEM": "1",
+			"GIT_CEILING_DIRECTORIES": str(workspace),
+		}
+	)
+	env.update(env_extra)
+	return subprocess.run(["bash", "-e", "-c", run], cwd=str(workspace), env=env, capture_output=True, text=True)
+
+
+def test_workspace_fallback_never_sources_unverified_pr_tree_copy() -> None:
+	job = _raw_job_text(REVIEW_AUTOFIX_WORKFLOW_PATH.read_text(encoding="utf-8"), "codex-agent")
+	cases = (
+		("Mark linked issues review-blocked (workflow failure)", 1),
+		("Assemble failure evidence", 0),
+	)
+	for step_name, unverified_exit in cases:
+		script_name = REVIEW_AUTOFIX_STEP_SCRIPTS[step_name][0]
+		run = _raw_step_run(job, step_name)
+		with tempfile.TemporaryDirectory() as tmp:
+			workspace = Path(tmp) / "workspace"
+			planted_dir = workspace / ".codex-workflow-src" / "scripts"
+			planted_dir.mkdir(parents=True)
+			(planted_dir / script_name).write_text('echo planted > "${MARKER_10221}"\n', encoding="utf-8")
+			marker = Path(tmp) / "marker"
+			fake_ref = "0123456789abcdef0123456789abcdef01234567"
+
+			# Early failure: verify step never ran, flag unset.
+			result = _run_wrapper_10221(run, workspace, marker, {"SCRIPT_REF": fake_ref})
+			assert not marker.exists(), f"{step_name}: sourced PR-tree copy with the flag unset"
+			assert result.returncode == unverified_exit, (step_name, result.returncode, result.stderr)
+
+			# Flag set, but the directory is not a git checkout.
+			result = _run_wrapper_10221(run, workspace, marker, {"SCRIPT_REF": fake_ref, "WORKFLOW_SUPPORT_SOURCE_VERIFIED": "true"})
+			assert not marker.exists(), f"{step_name}: sourced a non-checkout copy"
+			assert result.returncode == unverified_exit, (step_name, result.returncode, result.stderr)
+
+			# Flag set, empty SCRIPT_REF: a failing git call must not match.
+			result = _run_wrapper_10221(run, workspace, marker, {"SCRIPT_REF": "", "WORKFLOW_SUPPORT_SOURCE_VERIFIED": "true"})
+			assert not marker.exists(), f"{step_name}: empty SCRIPT_REF matched"
+
+			src = workspace / ".codex-workflow-src"
+			git_env = {
+				k: v for k, v in os.environ.items() if not k.startswith("GIT_")
+			}
+			git_env.update(
+				{
+					"GIT_CONFIG_GLOBAL": os.devnull,
+					"GIT_CONFIG_NOSYSTEM": "1",
+					"GIT_CEILING_DIRECTORIES": str(workspace),
+					"GIT_AUTHOR_NAME": "t",
+					"GIT_AUTHOR_EMAIL": "t@example.invalid",
+					"GIT_COMMITTER_NAME": "t",
+					"GIT_COMMITTER_EMAIL": "t@example.invalid",
+				}
+			)
+			for cmd in (["init", "-q"], ["add", "-A"], ["-c", "commit.gpgsign=false", "commit", "-q", "-m", "support"]):
+				subprocess.run(["git", "-C", str(src), *cmd], env=git_env, check=True, capture_output=True)
+			head = subprocess.run(
+				["git", "-C", str(src), "rev-parse", "HEAD"], env=git_env, check=True, capture_output=True, text=True
+			).stdout.strip()
+
+			# Flag set, HEAD differs from SCRIPT_REF.
+			result = _run_wrapper_10221(run, workspace, marker, {"SCRIPT_REF": fake_ref, "WORKFLOW_SUPPORT_SOURCE_VERIFIED": "true"})
+			assert not marker.exists(), f"{step_name}: sourced a checkout whose HEAD != SCRIPT_REF"
+			assert result.returncode == unverified_exit, (step_name, result.returncode, result.stderr)
+
+			# Flag unset even though HEAD matches.
+			result = _run_wrapper_10221(run, workspace, marker, {"SCRIPT_REF": head})
+			assert not marker.exists(), f"{step_name}: sourced the checkout without the verified flag"
+
+			# Verified checkout whose HEAD equals SCRIPT_REF: fallback allowed.
+			result = _run_wrapper_10221(run, workspace, marker, {"SCRIPT_REF": head, "WORKFLOW_SUPPORT_SOURCE_VERIFIED": "true"})
+			assert result.returncode == 0, (step_name, result.stderr)
+			assert marker.read_text(encoding="utf-8") == "planted\n", f"{step_name}: verified fallback did not run"
 
 
 def main() -> int:
