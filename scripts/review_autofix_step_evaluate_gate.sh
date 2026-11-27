@@ -1888,7 +1888,11 @@ gate_final_ci_now_green_merge_route()
   fi
   # Same single-issue security pass eligibility as gate_freshness_sync_fast_path
   # (#8333): the skip job runs the pass only with AUTOFIX_SKIP_RUNS_SECURITY_PASS.
+  # A generated chore PR is exempt, as on the doc-only / small-diff path: it
+  # carries no code to audit (GENERATED_CHORE is unset outside the candidate
+  # block, hence the default).
   if [ -z "${final_ci_now_green_merge_block}" ] \
+    && [ "${GENERATED_CHORE:-false}" != "true" ] \
     && [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-false}" != "false" ] \
     && [ -n "${DEFAULT_BRANCH:-}" ] && [ "${pr_base_ref:-}" = "${DEFAULT_BRANCH}" ] \
     && [ "${pr_head_repo:-}" = "${REPOSITORY:-}" ] \

@@ -332,7 +332,7 @@ if "/commits/" in endpoint and "/statuses" in endpoint:
 		sys.exit(1)
 	emit(fixture.get("statuses", []))
 if endpoint.endswith("/pulls/42/files"):
-	emit([{"filename": "scripts/tool.sh", "status": "modified"}])
+	emit(fixture.get("files", [{"filename": "scripts/tool.sh", "status": "modified"}]))
 sys.exit(2)
 '''
 
@@ -997,6 +997,22 @@ def test_gate_final_ci_now_green_routes_with_the_skip_job_security_pass(tmp_path
 	pr_json = json.loads(outputs["det_skip_security_pass_pr_json"])
 	assert pr_json["head"]["sha"] == HEAD and pr_json["base"]["ref"] == "main"
 	assert "AUTOFIX_GATE_DET_SKIP_SECURITY_PASS pr=42 candidate=final_ci_now_green route=skip_job" in result.stdout
+
+
+def test_gate_final_ci_now_green_routes_a_generated_chore_without_the_security_pass(tmp_path: Path) -> None:
+	# A generated chore PR carries no code to audit: like the doc-only /
+	# small-diff path, the now-green route neither holds it for the pass nor
+	# asks the skip job to run one.
+	fixture = _now_green_fixture()
+	fixture["pr"]["head"]["ref"] = "auto/workflow-log-analysis-report-123-1"
+	fixture["pr"]["user"] = {"login": PIPELINE, "type": "User"}
+	fixture["files"] = [{"filename": "analysis/workflow-optimization-2026-11-26.md", "status": "added"}]
+	result, outputs, _ = _run_gate(tmp_path, fixture, **_SECURITY_PASS_ENV, AUTOFIX_SKIP_RUNS_SECURITY_PASS="false")
+	assert "AUTOFIX_GATE_GENERATED_CHORE pr=42 kind=workflow_log_analysis_report outcome=skip_candidate" in result.stdout, result.stdout + result.stderr
+	assert outputs["should_run"] == "false" and outputs["skip_reason"] == "final_ci_now_green", result.stdout
+	assert outputs["deterministic_skip"] == "true" and outputs["det_skip_reason"] == "final_ci_now_green", result.stdout
+	assert outputs.get("det_skip_security_pass", "false") != "true"
+	assert f"FINAL_CI_NOW_GREEN_MERGE pr=42 head={HEAD} outcome=routed det_skip_reason=final_ci_now_green" in result.stdout
 
 
 def _job_block(text: str, job: str) -> str:
