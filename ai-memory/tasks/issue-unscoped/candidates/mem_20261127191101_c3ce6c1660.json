@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Every step env block that passes any MERGE_LEASE_* setting, or that runs a script able to write the lease, passes the full set,\" and the contract test must prevent a step from missing settings.\n  expected_change_site: tests/test_merge_lease_env_contract.py, workflow-step discovery (collect_env_blocks()) and violations()\n  confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, openai_gpt-6-luna]\n  EVIDENCE: collect_env_blocks() collects env blocks but not their run commands (lines 106-132), the module docstring explicitly says lease-writing steps are not found by run text (lines 16-20), violations() checks only blocks that have a lease env key, MERGE_BASE_FRESHNESS_ENABLED or a READ_ONLY_LEASE_STEPS entry and skips the rest (lines 225-230), so a workflow step that runs a lease-writing script without those markers can fall back to script defaults and is ignored by the contract test, which still passes (severity NIT from both reviewers)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: \"Every step ... that runs a script able to write the lease must pass the full lease settings, and the contract test must prevent a step from missing them.\"\n  Expected change site: tests/test_merge_lease_env_contract.py, in workflow-step discovery and violations().\n  Evidence of absence: The test discovers env blocks in collect_env_blocks() and only checks blocks triggered by lease env keys, MERGE_BASE_FRESHNESS_ENABLED, or READ_ONLY_LEASE_STEPS. A workflow step invoking a lease-writing script that omits all such markers is completely ignored by the contract test.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \"Every step env block that passes any MERGE_LEASE_* setting, or that runs a script able to write the lease, passes the full set,\" and the contract test must prevent a step from missing settings.\n  Expected change site: tests/test_merge_lease_env_contract.py, workflow-step discovery and violations().\n  Evidence of absence: collect_env_blocks() collects env blocks but not their run commands (lines 106-132). The module docstring explicitly says lease-writing steps are not found by run text (lines 16-20), and violations() skips blocks without lease-key, freshness-flag, or read-only-step markers (lines 225-230). A workflow step added to run a lease-writing script without those markers can therefore fall back to script defaults while the contract test passes.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "8b6b1a52d194d31f36e4279b6b2d1f719208d3f0a9d54f2015c4f1d54ff95dca",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10081,
+    "run_id": "46045144327",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46045144327",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127191101_c3ce6c1660",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10081,
+    "run_id": "46045144327"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-27T19:11:01Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
