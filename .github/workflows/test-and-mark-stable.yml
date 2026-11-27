@@ -3938,6 +3938,9 @@ jobs:
         timeout-minutes: 95
         env:
           GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
+          # Rate-limit wait cap for the dispatch (issue #10197), lowered so the
+          # wait fits the step budget: 4s sleep + 5520s completion + 110s + 60s margin = 5694s <= 95 min (5700s).
+          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "110"
         run: |
           set -euo pipefail
           sleep 4
@@ -4031,6 +4034,9 @@ jobs:
         timeout-minutes: 18
         env:
           GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
+          # Rate-limit wait cap for the dispatch (issue #10197), lowered so the
+          # wait fits the step budget: 4s sleep + 600s completion + 410s + 60s margin = 1074s <= 18 min (1080s).
+          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "410"
         run: |
           set -euo pipefail
           sleep 4
@@ -4113,6 +4119,9 @@ jobs:
         timeout-minutes: 45
         env:
           GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
+          # Rate-limit wait cap for the dispatch (issue #10197), lowered so the
+          # wait fits the step budget: 4s sleep + 2400s completion + 230s + 60s margin = 2694s <= 45 min (2700s).
+          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "230"
         run: |
           set -euo pipefail
           sleep 4
@@ -4289,6 +4298,9 @@ jobs:
         id: dispatch
         env:
           GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
+          # Rate-limit wait cap for the dispatch (issue #10197), lowered so the
+          # wait fits the step budget: no step limit; 3000s completion + 240s leaves 360s of the 60 min job for its other steps.
+          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "240"
         run: |
           set -euo pipefail
           WF_FILE="internal-orchestrate.yml"
@@ -4731,6 +4743,9 @@ jobs:
         timeout-minutes: 35
         env:
           GH_READ_TOKEN: ${{ vars.GH_READ_TOKEN_ENABLED != 'false' && github.token || '' }}
+          # Rate-limit wait cap for the dispatch (issue #10197), lowered so the
+          # wait fits the step budget: 1800s completion + 20s poll + 180s + 64s margin = 2064s <= 35 min (2100s).
+          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "180"
         run: |
           set -euo pipefail
           WF_FILE="internal-validate.yml"
