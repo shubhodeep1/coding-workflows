@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"In the PR body, use Refs #9865.\"\n  expected_change_site: PR description / body of the GitHub pull request (pipeline-written, not a repository file)\n  confidence=[3]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, z-ai_glm-5_3-flash]\n  EVIDENCE: PR description reads \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/10172\" with no `Refs #9865` line, changelog.d/10172-broker-sha-check-all-branches.md already carries `Refs #9865`, no auto-close keyword targets #9865 so \u00a721 is not violated; severity NIT\n- requirement: \"Run the broker test suite.\"\n  expected_change_site: vitest run of tools/claude-pool-broker/test/broker.test.ts\n  confidence=[2]\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  EVIDENCE: pre-push gate lists the file as `Unverified: no_test_command`, so the suite was not run in the sandbox; PR description says it runs in CI; severity NIT\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"In the PR body, use Refs #9865.\"\nExpected change site: the PR description, which the pipeline writes. It is not a repository file.\nEvidence of absence: the PR description says \"Closes .../issues/10172\" and has no `Refs #9865` line. `changelog.d/10172-broker-sha-check-all-branches.md` already ends with `Refs #9865`. No auto-close keyword targets #9865, so the \u00a721 rule is not broken.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n\nTASK_GAP:\nRequirement: \"Run the broker test suite.\"\nExpected change site: a vitest run of `tools/claude-pool-broker/test/broker.test.ts`.\nEvidence of absence: the pre-push gate lists the file as `Unverified: no_test_command`, so the suite was not run in the sandbox. The PR description says it runs in CI.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"In the PR body, use Refs #9865.\"\nExpected change site: PR description / body of the GitHub pull request\nEvidence of absence: The PR description reads only \"Automated implementation. Closes https://github.com/shubhodeep1/coding-workflows/issues/10172\" with no \"Refs #9865\" line. The changelog fragment `changelog.d/10172-broker-sha-check-all-branches.md` includes `Refs #9865` at line 14.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"In the PR body, use Refs #9865.\"\nExpected change site: the PR description / body of the GitHub pull request (not a repository file).\nEvidence of absence: the PR description has no `Refs #9865` line. The changelog fragment `changelog.d/10172-broker-sha-check-all-branches.md:15` already carries `Refs #9865`, and no auto-close keyword targets #9865, so \u00a721 is not violated.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d6c11be8472f0de2a1e3d6c97520a2b803ac50548293839086595d6db8f09c50",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10174,
+    "run_id": "46050046865",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46050046865",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127192225_fecd8e5f1f",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10174,
+    "run_id": "46050046865"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-27T19:22:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
