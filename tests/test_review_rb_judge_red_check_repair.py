@@ -104,6 +104,9 @@ if len(args) > 1 and args[0] == "api" and "/actions/runs/" in args[1] and "/jobs
 		sys.exit(1)
 	print(os.environ["FAKE_GH_JOBS"])
 	sys.exit(0)
+if len(args) > 1 and args[0] == "api" and "/check-runs" in args[1]:
+	print(os.environ.get("FAKE_GH_CHECK_RUNS", ""))
+	sys.exit(0)
 sys.exit(0)
 '''
 
@@ -562,3 +565,46 @@ def test_manual_merge_branches_check_before_the_head_gate_success() -> None:
 		manual = after.index('RB_MERGE_STATUS="manual_merge_required"')
 		assert after.index("review_head_gate_post_status") < manual
 		assert after.index("RB_MERGE_READY_LABEL_ALLOWED=\"true\"") < manual
+
+
+# ---------------------------------------------------------------------------
+# Snapshot cannot name the failures; exhaustion comment step stays out
+# ---------------------------------------------------------------------------
+
+
+def test_hand_over_names_failures_when_the_snapshot_cannot(tmp_path: Path) -> None:
+	check_runs = json.dumps({"check_runs": [
+		{"name": "tests (3)", "conclusion": "failure"},
+		{"name": "lint`$(x)", "conclusion": "timed_out"},
+		{"name": "docs", "conclusion": "success"},
+		{"name": "review / codex-agent", "conclusion": None},
+	]})
+	run = _run(tmp_path, snapshot=None, comments=[_repair_comment(JUDGED)], tail=_route(), FAKE_GH_CHECK_RUNS=check_runs)
+	assert run["result"].returncode == 0, run["result"].stderr
+	assert _status(run) == "final_ci_handover"
+	post = run["posts"][0]
+	assert "- `tests (3)`" in post and "- `lint(x)`" in post and "docs" not in post.split("Failing:", 1)[1]
+	assert "could not be read" not in post
+	assert run["outputs"]["judge_ci_failure_summary"] == "lint(x); tests (3)"
+	reads = [call for call in run["calls"] if call[0] == "api" and "/check-runs" in call[1]]
+	assert len(reads) == 1 and f"/commits/{JUDGED}/check-runs" in reads[0][1]
+	# A snapshot that already named the failures costs no extra read.
+	run = _run(tmp_path, comments=[_repair_comment(JUDGED)], tail=_route(), FAKE_GH_CHECK_RUNS=check_runs)
+	assert not any(call[0] == "api" and "/check-runs" in call[1] for call in run["calls"])
+	# An unreadable listing keeps the fixed fallback line.
+	run = _run(tmp_path, snapshot=None, comments=[_repair_comment(JUDGED)], tail=_route())
+	assert "could not be read for this head" in run["posts"][0]
+
+
+def test_exhaustion_comment_skips_the_red_check_outcomes() -> None:
+	raw = WORKFLOW.read_text(encoding="utf-8")
+	step = raw[raw.index("      - name: Post review-blocked comment on PR (autofix exhaustion)\n"):]
+	step = step[:step.index("        env:\n")]
+	assert "!contains(fromJSON('[\"final_ci_repair_requested\",\"final_ci_handover\",\"final_ci_handover_posted\"]'), steps.rb_judge.outputs.judge_skip_reason)" in step
+
+
+def test_merge_with_followup_logs_the_switch_off() -> None:
+	text = SCRIPT.read_text(encoding="utf-8")
+	block = text[text.index('blocking) _checks_reason="blocking_check_runs" ;;'):]
+	block = block[:block.index('rb_judge_route_red_checks merge_with_followup || true')]
+	assert '|| rb_judge_red_check_log disabled "mode=merge_with_followup"' in block

@@ -1925,6 +1925,36 @@ rb_judge_red_check_failure_list()
   fi
 }
 
+# rb_judge_red_check_fill_names: when the snapshot could not name the failures
+# of the judged head (missing, disabled/unavailable sentinel, another head or
+# a render failure: the names file is empty), list the failed check-runs of
+# that head so the request / hand-over comment and the alert still name them.
+# API cost (§14): one GET commits/<head>/check-runs, only on this degraded
+# path and only when a red-check comment is about to be posted. The live read
+# _pr_checks_completed already made keeps its listing local
+# (scripts/pr_checks_lib.sh exposes only counts), and the snapshot is the only
+# other source. Names only (sanitised like the renderer's), never log text;
+# fails open (the fixed fallback line stays).
+rb_judge_red_check_fill_names()
+{
+  local listing="" names=""
+  [ ! -s "${RB_JUDGE_CI_FAILURE_NAMES_FILE}" ] || return 0
+  [[ "${RB_JUDGED_HEAD_SHA:-}" =~ ^[0-9a-f]{40}$ ]] || return 0
+  [[ "${REPOSITORY:-}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || return 0
+  listing="$(gh api "repos/${REPOSITORY}/commits/${RB_JUDGED_HEAD_SHA}/check-runs?filter=latest&per_page=100" 2>/dev/null)" || return 0
+  names="$(printf '%s' "${listing}" | jq -r '[(.check_runs // [])[]? | select(type == "object")
+    | select((.conclusion // "") | IN("failure", "timed_out", "cancelled", "action_required", "startup_failure"))
+    | ((.name // "") | tostring | gsub("[^A-Za-z0-9 _./:()\\[\\],#+=@-]"; "") | gsub("\\s+"; " ") | ltrimstr(" ") | rtrimstr(" ") | .[0:200])
+    | select(length > 0)] | unique | .[0:10][]' 2>/dev/null)" || return 0
+  [ -n "${names}" ] || return 0
+  printf '%s\n' "${names}" > "${RB_JUDGE_CI_FAILURE_NAMES_FILE}" 2>/dev/null || return 0
+  RB_JUDGE_CI_FAILURE_SUMMARY="$(tr '\n' ';' < "${RB_JUDGE_CI_FAILURE_NAMES_FILE}" | sed 's/;$//; s/;/; /g' | cut -c1-500)"
+  # A later value of the same step output replaces the empty one written
+  # before the prompt was built.
+  echo "judge_ci_failure_summary=${RB_JUDGE_CI_FAILURE_SUMMARY}" >> "${GITHUB_OUTPUT:-/dev/null}"
+  return 0
+}
+
 # rb_judge_route_red_checks <merge|terminal>: called right after the merge
 # path set RB_MERGE_STATUS=checks_failed. Sets RB_MERGE_STATUS to
 # final_ci_repair_requested, final_ci_handover or final_ci_handover_posted,
@@ -1983,6 +2013,8 @@ rb_judge_route_red_checks()
   elif [ "${repaired:-0}" -ge 2 ] 2>/dev/null; then
     reason="pr_cap"
   fi
+  # The comment and the alert name the failures even when the snapshot could not.
+  rb_judge_red_check_fill_names || true
   if [ -z "${reason}" ]; then
     body="$(printf '**Final CI is red on head `%s`, so the review-blocked judge'"'"'s merge was not made.**\n\nThe judge chose `%s`, but required check-runs failed on this head. This asks for the final-CI repair (one CI-fix attempt for this head) and dispatches a review run to make it.\n\nFailing:\n%s\n\n<!-- ai:final-ci-repair-request:v1 pr=%s head=%s -->' \
       "${short_head}" "${decision}" "$(rb_judge_red_check_failure_list)" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}")"
@@ -4115,6 +4147,10 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
               # hand-over, like the `merge` path, instead of a stall. The
               # switch off keeps the pre-#10063 blocking_check_runs outcome.
               _rb_mwf_red_status=""
+              # The contractual `outcome=disabled` line (and the switch's
+              # unrecognised-value warning) for this mode too.
+              [ "${PR_CHECKS_LAST_PENDING:-0}" != "0" ] || [ "$(rb_judge_red_check_switch)" = "true" ] \
+                || rb_judge_red_check_log disabled "mode=merge_with_followup"
               if [ "${PR_CHECKS_LAST_PENDING:-0}" = "0" ] && [ "$(rb_judge_red_check_switch 2>/dev/null)" = "true" ]; then
                 RB_MERGE_STATUS="checks_failed"
                 rb_judge_route_red_checks merge_with_followup || true
