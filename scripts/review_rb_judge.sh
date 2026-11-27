@@ -278,6 +278,16 @@ if ! type _pr_wait_for_required_checks >/dev/null 2>&1; then
     return 1
   }
 fi
+# Issue #9502: after a base_freshness_unknown deferral, export the PR the
+# merge lease waits on (MERGE_LEASE_BLOCKER from _pr_base_fresh_for_merge)
+# so the review-blocked alert and PR comment can name it. Only a lease wait
+# (merge_lease_*) with a numeric blocker writes the output; no API call.
+rb_judge_emit_lease_blocker()
+{
+  if [[ "${PR_BASE_FRESHNESS_LAST_REASON:-}" == merge_lease_* ]] && [[ "${MERGE_LEASE_BLOCKER:-}" =~ ^[0-9]+$ ]]; then
+    echo "judge_merge_lease_blocker=${MERGE_LEASE_BLOCKER}" >> "${GITHUB_OUTPUT:-/dev/null}"
+  fi
+}
 if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   # Keep prompt sanitization available even when gh_helpers.sh was not
   # sourced. Large-diff truncation can still fall back to a raw byte prefix,
@@ -3534,9 +3544,11 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
               echo "PR #${PR_NUMBER} waits for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?} — merge_with_followup deferred, re-dispatched when the lease is granted. Leaving linked issues in ai:review-blocked."
               rb_judge_mark_merge_pending merge_with_followup
               echo "judge_skip_reason=base_freshness_unknown" >> "$GITHUB_OUTPUT"
+              rb_judge_emit_lease_blocker
             else
               echo "::warning::PR #${PR_NUMBER} base freshness could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}) — merge_with_followup deferred, no branch update requested. Leaving linked issues in ai:review-blocked."
               echo "judge_skip_reason=base_freshness_unknown" >> "$GITHUB_OUTPUT"
+              rb_judge_emit_lease_blocker
             fi
           elif [ "${ENABLE_AUTO_MERGE}" = "true" ] && ! rb_judge_followup_merge_guard sync "${_pr_json:-}"; then
             # Security follow-up guard (#9671): no success status, no merge and

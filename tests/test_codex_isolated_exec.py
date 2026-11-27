@@ -805,7 +805,7 @@ def test_static_context_marker_is_advertised():
 
 # --- opt-in solc in the sandbox image (SANDBOX_SOLC_VERSIONS) ------------------------
 
-DEFAULT_IMAGE_ARGS = ["--build-arg", "CODEX_VERSION=v0.114.0"]
+DEFAULT_IMAGE_ARGS = ["--build-arg", "CODEX_VERSION=v0.171.0"]
 
 
 def _fake_uname(bin_dir, machine="x86_64"):
