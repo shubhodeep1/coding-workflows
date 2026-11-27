@@ -508,6 +508,9 @@ ci_final_merge_ref_sync_only_check()
 		ci_final_merge_ref_sync_only_fail api_error; return 1
 	fi
 	if [ "${so_now_tip}" != "${so_tip}" ]; then
+		# Plain diagnostic (not the contractual stale line): tells a moved tip
+		# apart from an incomplete compare or files listing, both `truncated`.
+		echo "CI_FINAL_MERGE_REF: ${so_base_ref} moved from ${so_tip} to ${so_now_tip} during the sync-only check; not accepting."
 		ci_final_merge_ref_sync_only_fail truncated; return 1
 	fi
 	CI_FINAL_MERGE_REF_SYNC_ONLY_COMMITS="${so_range_total}"
