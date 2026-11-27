@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Issue #10131 step 1 specifies the jobs read should go \"through `gh_retry`\" using `GET repos/<repo>/actions/runs/<run_id>/jobs?per_page=100&filter=latest`. The current implementation calls `subprocess.run([\"gh\", \"api\", \"-X\", \"GET\", ...])` directly and uses a single bounded local retry after 2 s instead.\n  expected_change_site: scripts/ci_cancelled_rerun.py (the `list_run_jobs`/`classify_cancelled_run` jobs read) and the PR description (which should note the deviation, since the code-level reason is already in the comment at lines 753-757)\n  confidence=5\n  flagged_by: [minimax_minimax-m3]\n  EVIDENCE: scripts/ci_cancelled_rerun.py lines 515-519 (`list_run_jobs`) and lines 750-759 (`classify_cancelled_run` jobs read with the local retry) call `subprocess.run` directly with no shell-level `gh_retry` wrapper, `list_run_jobs` reads `attempts/<n>/jobs` instead of `jobs?filter=latest`, and the PR description does not mention this deviation. The rationale is in code comments at scripts/ci_cancelled_rerun.py:753-757 and :512-514. The reviewer rates this NIT: the deviation is fail-closed, and earlier rounds recorded it as TASK_GAP_DEFERRED.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP\n  File: scripts/ci_cancelled_rerun.py\n  Line or code reference: lines 515-519 (`list_run_jobs`) and lines 750-759 (`classify_cancelled_run` jobs read with the local retry)\n  Requirement: Issue #10131 step 1 specifies the jobs read should go \"through `gh_retry`\" using `GET repos/<repo>/actions/runs/<run_id>/jobs?per_page=100&filter=latest`. The current implementation calls `subprocess.run([\"gh\", \"api\", \"-X\", \"GET\", ...])` directly and uses a single bounded local retry after 2 s instead.\n  Expected change site: scripts/ci_cancelled_rerun.py (the `list_run_jobs`/`classify_cancelled_run` jobs read) and the PR description (which should note the deviation, since the code-level reason is already in the comment at lines 753-757)\n  Evidence of absence: The classifier calls `subprocess.run` directly with no shell-level `gh_retry` wrapper, and `list_run_jobs` reads `attempts/<n>/jobs`, not `jobs?filter=latest`. A code comment gives the reason: `gh_retry` is a bash helper that Python cannot call, and its 600 s default rate-limit wait cannot fit inside the `timeout 90` around the classifier. The PR description does not mention this deviation.\n  Why it fails at runtime: It does not. The deviation is fail-closed: a failed read returns `unverified`, and `ci_final_status.sh` then posts `ci/final=failure`. That meets the issue's fail-closed rule, but it is still a documented deviation from the issue's wording.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n  Note: Many earlier rounds recorded this as an accepted TASK_GAP_DEFERRED consensus gap. The reviewer re-reported it only to satisfy the lens.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "1ba00749d56241cce313579a055c91cf18d383ab3afee0b93339c3621e5add36",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10135,
+    "run_id": "45973611983",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45973611983",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127101635_197ad5566b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10135,
+    "run_id": "45973611983"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 1 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-27T10:16:35Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
