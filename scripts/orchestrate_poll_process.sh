@@ -111,9 +111,28 @@ _orch_poll_cycle_project_begin()
 	return 0
 }
 
+# Issue #9927: records one per-cycle cache hit (pr_json, default_branch or
+# labels) in the run's hit ledger. A file, like the sleep ledger, so hits
+# inside $(...) subshells are counted; a no-op without a ledger.
+_orch_poll_cycle_cache_hit()
+{
+	local _orch_poll_cycle_hit_ledger="${_ORCH_POLL_CYCLE_CACHE_HITS_LEDGER:-}"
+	case "${1:-}" in
+		pr_json|default_branch|labels) ;;
+		*) return 0 ;;
+	esac
+	if [ -n "${_orch_poll_cycle_hit_ledger}" ] && [ -f "${_orch_poll_cycle_hit_ledger}" ] && [ ! -L "${_orch_poll_cycle_hit_ledger}" ]; then
+		printf '%s\n' "${1}" 2>/dev/null >> "${_orch_poll_cycle_hit_ledger}" || true
+	fi
+	return 0
+}
+
 _orch_poll_cycle_on_exit()
 {
 	local _orch_poll_cycle_exit_code="${1:-}" _orch_poll_cycle_exit_now="" _orch_poll_cycle_exit_elapsed="unknown"
+	local _orch_poll_cycle_exit_hits_ledger="${_ORCH_POLL_CYCLE_CACHE_HITS_LEDGER:-}" _orch_poll_cycle_exit_hits=""
+	local _orch_poll_cycle_exit_hits_pr="unknown" _orch_poll_cycle_exit_hits_branch="unknown" _orch_poll_cycle_exit_hits_labels="unknown"
+	local _orch_poll_cycle_exit_cache_dir="${ORCH_POLL_PR_JSON_CACHE_DIR:-}"
 	local _orch_poll_cycle_exit_sleep="unknown" _orch_poll_cycle_exit_ledger="${_ORCH_POLL_CYCLE_SLEEP_LEDGER:-}"
 	local _orch_poll_cycle_exit_seen="${_ORCH_POLL_CYCLE_PROJECTS_SEEN:-unknown}" _orch_poll_cycle_exit_processed="${_ORCH_POLL_CYCLE_PROJECTS_PROCESSED:-unknown}"
 	local _orch_poll_cycle_exit_reason="completed"
@@ -135,6 +154,17 @@ _orch_poll_cycle_on_exit()
 	if [ -n "${_orch_poll_cycle_exit_ledger}" ]; then
 		rm -f "${_orch_poll_cycle_exit_ledger}" 2>/dev/null || true
 	fi
+	if [ -n "${_orch_poll_cycle_exit_hits_ledger}" ] && [ -f "${_orch_poll_cycle_exit_hits_ledger}" ] && [ -r "${_orch_poll_cycle_exit_hits_ledger}" ] && [ ! -L "${_orch_poll_cycle_exit_hits_ledger}" ]; then
+		_orch_poll_cycle_exit_hits="$(awk 'BEGIN { p = 0; d = 0; l = 0 } $0 == "pr_json" { p++ } $0 == "default_branch" { d++ } $0 == "labels" { l++ } END { printf "%d %d %d\n", p, d, l }' "${_orch_poll_cycle_exit_hits_ledger}" 2>/dev/null || true)"
+		if [[ "${_orch_poll_cycle_exit_hits}" =~ ^([0-9]+)\ ([0-9]+)\ ([0-9]+)$ ]]; then
+			_orch_poll_cycle_exit_hits_pr="${BASH_REMATCH[1]}"
+			_orch_poll_cycle_exit_hits_branch="${BASH_REMATCH[2]}"
+			_orch_poll_cycle_exit_hits_labels="${BASH_REMATCH[3]}"
+		fi
+	fi
+	if [ -n "${_orch_poll_cycle_exit_hits_ledger}" ]; then
+		rm -f "${_orch_poll_cycle_exit_hits_ledger}" 2>/dev/null || true
+	fi
 	[[ "${_orch_poll_cycle_exit_seen}" =~ ^[0-9]+$ ]] || _orch_poll_cycle_exit_seen="unknown"
 	[[ "${_orch_poll_cycle_exit_processed}" =~ ^[0-9]+$ ]] || _orch_poll_cycle_exit_processed="unknown"
 	if [ "${_orch_poll_cycle_exit_code}" != "0" ]; then
@@ -142,7 +172,13 @@ _orch_poll_cycle_on_exit()
 	elif [ "${_orch_poll_cycle_exit_seen}" = "0" ]; then
 		_orch_poll_cycle_exit_reason="no_projects"
 	fi
-	echo "ORCH_POLL_CYCLE_SUMMARY elapsed_ms=${_orch_poll_cycle_exit_elapsed} projects_seen=${_orch_poll_cycle_exit_seen} projects_processed=${_orch_poll_cycle_exit_processed} sleep_ms=${_orch_poll_cycle_exit_sleep} exit_code=${_orch_poll_cycle_exit_code} terminal_reason=${_orch_poll_cycle_exit_reason}" 2>/dev/null || true
+	echo "ORCH_POLL_CYCLE_SUMMARY elapsed_ms=${_orch_poll_cycle_exit_elapsed} projects_seen=${_orch_poll_cycle_exit_seen} projects_processed=${_orch_poll_cycle_exit_processed} sleep_ms=${_orch_poll_cycle_exit_sleep} exit_code=${_orch_poll_cycle_exit_code} terminal_reason=${_orch_poll_cycle_exit_reason} cache_hits_pr_json=${_orch_poll_cycle_exit_hits_pr} cache_hits_default_branch=${_orch_poll_cycle_exit_hits_branch} cache_hits_labels=${_orch_poll_cycle_exit_hits_labels}" 2>/dev/null || true
+	# The PR JSON cache directory (issue #9927) is removed only when this run
+	# created it, after the summary line.
+	if [ "${_ORCH_POLL_PR_JSON_CACHE_OWNED:-false}" = "true" ] && [ -n "${_orch_poll_cycle_exit_cache_dir}" ] \
+		&& [ -d "${_orch_poll_cycle_exit_cache_dir}" ] && [ ! -L "${_orch_poll_cycle_exit_cache_dir}" ]; then
+		rm -rf -- "${_orch_poll_cycle_exit_cache_dir}" 2>/dev/null || true
+	fi
 	return 0
 }
 
@@ -162,10 +198,12 @@ _ORCH_POLL_CYCLE_EMITTED="false"
 _ORCH_POLL_CYCLE_ENABLED="false"
 _ORCH_POLL_CYCLE_SLEEP_LEDGER=""
 _ORCH_POLL_CYCLE_SLEEP_CMD="sleep"
+_ORCH_POLL_CYCLE_CACHE_HITS_LEDGER=""
 if [ "${BASH_SOURCE[0]:-}" = "${0:-}" ]; then
 	_ORCH_POLL_CYCLE_ENABLED="true"
 	_ORCH_POLL_CYCLE_SLEEP_LEDGER="$(mktemp "${TMPDIR:-/tmp}/orch_poll_cycle_sleep.XXXXXX" 2>/dev/null || true)"
 	_ORCH_POLL_CYCLE_SLEEP_CMD="_orch_poll_cycle_sleep"
+	_ORCH_POLL_CYCLE_CACHE_HITS_LEDGER="$(mktemp "${TMPDIR:-/tmp}/orch_poll_cycle_cache_hits.XXXXXX" 2>/dev/null || true)"
 fi
 _orch_poll_cycle_install_exit_trap || true
 # --- ORCH_POLL_CYCLE_SUMMARY helpers (end) ---
@@ -179,10 +217,510 @@ if [ -f "scripts/gh_helpers.sh" ]; then
   source scripts/gh_helpers.sh
 fi
 
+# --- ORCH_POLL_PR_JSON_CACHE helpers (issue #9927; begin) ---
+# Per-run cache of `_fetch_pr_json` results so repeat reads of the same PR in
+# one poll cycle cost one GET (GH_PAT budget, part D).
+#
+# Contract:
+#   * Enabled only when the poller runs directly (not when sourced by a test
+#     harness), ORCH_POLL_PR_JSON_CACHE_TTL_SECS is a positive integer
+#     (default 60; 0 is the kill switch) and gh_helpers.sh runs the gh_retry
+#     call hook (GH_RETRY_AFTER_CALL_HOOK_SUPPORTED=1).
+#   * Storage: a 0700 `mktemp -d` directory, ORCH_POLL_PR_JSON_CACHE_DIR, one
+#     `<owner>__<repo>__<n>.json` file per PR (line 1 `ts <epoch> gen <token>`,
+#     then the JSON) and a `gen` token file. Removed by the EXIT trap.
+#   * Invalidation: every gh_retry call that is not a read runs
+#     _orch_poll_pr_json_cache_after_gh_call, which changes the token of the
+#     one PR an issue/PR-numbered write targets (`<owner>__<repo>__<n>.gen`),
+#     or else (merges, update-branch, mutations, unnumbered writes) flushes
+#     the whole cache and changes the global gen token. `git push`, the
+#     gh_retry_to_file PR-body PATCH and unwrapped PR writes call
+#     _invalidate_pr_json_cache explicitly; the RB race-guard and post-judge
+#     reads invalidate their PR immediately before reading, so they stay live.
+#   * An entry is served only when its gen token equals the current one, it
+#     is younger than the TTL and its JSON is an object whose .number is the
+#     requested PR. A failed read ({}) is never stored.
+#   * Fail open: every cache read or write error falls back to the live GET.
+#   * API calls: none; the cache only removes repeat GETs.
+ORCH_POLL_PR_JSON_CACHE_TTL_SECS="${ORCH_POLL_PR_JSON_CACHE_TTL_SECS:-60}"
+ORCH_POLL_PR_JSON_CACHE_DIR=""
+_ORCH_POLL_PR_JSON_CACHE_OWNED="false"
+GH_RETRY_AFTER_CALL_HOOK="${GH_RETRY_AFTER_CALL_HOOK:-}"
+
+# Prints the cache entry path for PR <n>; returns 1 (no output) when the cache
+# is off or the repo or number is not safe to use in a file name.
+_orch_poll_pr_json_cache_entry_path()
+{
+	local _opjc_dir="${ORCH_POLL_PR_JSON_CACHE_DIR:-}" _opjc_num="${1:-}" _opjc_repo="${GITHUB_REPOSITORY:-}"
+	[ -n "${_opjc_dir}" ] && [ -d "${_opjc_dir}" ] && [ ! -L "${_opjc_dir}" ] || return 1
+	[[ "${_opjc_num}" =~ ^[1-9][0-9]{0,9}$ ]] || return 1
+	[[ "${_opjc_repo}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || return 1
+	printf '%s/%s__%s__%s.json\n' "${_opjc_dir}" "${_opjc_repo%%/*}" "${_opjc_repo##*/}" "${_opjc_num}"
+}
+
+# _orch_poll_pr_json_cache_gen [<entry>]
+# Prints the current gen token; nothing when it is missing or malformed.
+# With an entry path, the token also carries that PR's own token
+# (`<entry minus .json>.gen`, written by a per-PR _invalidate_pr_json_cache),
+# so invalidating one PR does not discard the other PRs' entries.
+_orch_poll_pr_json_cache_gen()
+{
+	local _opjg_dir="${ORCH_POLL_PR_JSON_CACHE_DIR:-}" _opjg_line="" _opjg_entry="${1:-}" _opjg_num_file="" _opjg_num_line=""
+	[ -n "${_opjg_dir}" ] && [ -f "${_opjg_dir}/gen" ] && [ ! -L "${_opjg_dir}/gen" ] || return 0
+	IFS= read -r _opjg_line < "${_opjg_dir}/gen" 2>/dev/null || true
+	[[ "${_opjg_line}" =~ ^[A-Za-z0-9]{1,128}$ ]] || return 0
+	if [ -n "${_opjg_entry}" ]; then
+		_opjg_num_file="${_opjg_entry%.json}.gen"
+		if [ -L "${_opjg_num_file}" ]; then
+			return 0
+		fi
+		if [ -f "${_opjg_num_file}" ]; then
+			IFS= read -r _opjg_num_line < "${_opjg_num_file}" 2>/dev/null || true
+			[[ "${_opjg_num_line}" =~ ^[A-Za-z0-9]{1,60}$ ]] || return 0
+			_opjg_line="${_opjg_line}n${_opjg_num_line}"
+			[ "${#_opjg_line}" -le 128 ] || return 0
+		fi
+	fi
+	printf '%s\n' "${_opjg_line}"
+	return 0
+}
+
+# _orch_poll_pr_json_cache_lookup <entry> <n> <gen>: prints a valid, fresh
+# entry body and returns 0; returns 1 on any miss.
+_orch_poll_pr_json_cache_lookup()
+{
+	local _opjl_entry="${1:-}" _opjl_num="${2:-}" _opjl_gen="${3:-}" _opjl_header="" _opjl_ts="" _opjl_now="" _opjl_age="" _opjl_body=""
+	local _opjl_ttl="${ORCH_POLL_PR_JSON_CACHE_TTL_SECS:-60}"
+	[ -n "${_opjl_gen}" ] && [ -n "${_opjl_entry}" ] && [ -f "${_opjl_entry}" ] && [ ! -L "${_opjl_entry}" ] || return 1
+	[[ "${_opjl_ttl}" =~ ^[0-9]{1,6}$ ]] && [ "$(( 10#${_opjl_ttl} ))" -gt 0 ] || return 1
+	IFS= read -r _opjl_header < "${_opjl_entry}" 2>/dev/null || return 1
+	[[ "${_opjl_header}" =~ ^ts\ ([0-9]{1,12})\ gen\ ([A-Za-z0-9]{1,128})$ ]] || return 1
+	_opjl_ts="${BASH_REMATCH[1]}"
+	[ "${BASH_REMATCH[2]}" = "${_opjl_gen}" ] || return 1
+	printf -v _opjl_now '%(%s)T' -1 2>/dev/null || return 1
+	[[ "${_opjl_now}" =~ ^[0-9]+$ ]] || return 1
+	_opjl_age="$(( _opjl_now - 10#${_opjl_ts} ))"
+	[ "${_opjl_age}" -ge 0 ] && [ "${_opjl_age}" -lt "$(( 10#${_opjl_ttl} ))" ] || return 1
+	_opjl_body="$(tail -n +2 "${_opjl_entry}" 2>/dev/null)" || return 1
+	printf '%s' "${_opjl_body}" | jq -e --argjson n "${_opjl_num}" 'type == "object" and .number == $n' >/dev/null 2>&1 || return 1
+	printf '%s\n' "${_opjl_body}"
+}
+
+# _orch_poll_pr_json_cache_store <entry> <n> <gen> <body>: stores a valid live
+# result unless the gen token changed since the read began. Never fails.
+_orch_poll_pr_json_cache_store()
+{
+	local _opjs_entry="${1:-}" _opjs_num="${2:-}" _opjs_gen="${3:-}" _opjs_body="${4:-}" _opjs_tmp="" _opjs_now=""
+	[ -n "${_opjs_gen}" ] && [ -n "${_opjs_entry}" ] || return 0
+	printf '%s' "${_opjs_body}" | jq -e --argjson n "${_opjs_num}" 'type == "object" and .number == $n' >/dev/null 2>&1 || return 0
+	[ "$(_orch_poll_pr_json_cache_gen "${_opjs_entry}")" = "${_opjs_gen}" ] || return 0
+	printf -v _opjs_now '%(%s)T' -1 2>/dev/null || return 0
+	[[ "${_opjs_now}" =~ ^[0-9]+$ ]] || return 0
+	_opjs_tmp="$(mktemp "${_opjs_entry%/*}/.entry.XXXXXX" 2>/dev/null)" || return 0
+	if printf 'ts %s gen %s\n%s\n' "${_opjs_now}" "${_opjs_gen}" "${_opjs_body}" > "${_opjs_tmp}" 2>/dev/null \
+		&& [ "$(_orch_poll_pr_json_cache_gen "${_opjs_entry}")" = "${_opjs_gen}" ] \
+		&& mv -f "${_opjs_tmp}" "${_opjs_entry}" 2>/dev/null; then
+		return 0
+	fi
+	rm -f "${_opjs_tmp}" 2>/dev/null || true
+	return 0
+}
+
+# _invalidate_pr_json_cache <repo> [<number>]
+# With a number: changes that PR's own token (`<owner>__<repo>__<n>.gen`) so
+# no read of it that began earlier can store, then removes its entry; other
+# PRs' entries stay. Without a number (or one not safe as a file name), or
+# when the PR token cannot be written: changes the global gen token and
+# removes every entry. Never fails and makes no API call.
+_invalidate_pr_json_cache()
+{
+	local _ipjc_dir="${ORCH_POLL_PR_JSON_CACHE_DIR:-}" _ipjc_repo="${1:-}" _ipjc_num="${2:-}" _ipjc_tok="" _ipjc_rt="${EPOCHREALTIME:-}" _ipjc_tmp=""
+	local _ipjc_base=""
+	[ -n "${_ipjc_dir}" ] && [ -d "${_ipjc_dir}" ] && [ ! -L "${_ipjc_dir}" ] || return 0
+	_ipjc_rt="${_ipjc_rt//[^0-9]/}"
+	_ipjc_tok="g${BASHPID:-$$}x${RANDOM}x${RANDOM}x${_ipjc_rt}"
+	if [[ "${_ipjc_repo}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] && [[ "${_ipjc_num}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+		_ipjc_base="${_ipjc_dir}/${_ipjc_repo%%/*}__${_ipjc_repo##*/}__${_ipjc_num}"
+		if [ ! -L "${_ipjc_base}.gen" ] \
+			&& _ipjc_tmp="$(mktemp "${_ipjc_dir}/.gen.XXXXXX" 2>/dev/null)" \
+			&& printf '%s\n' "${_ipjc_tok}" > "${_ipjc_tmp}" 2>/dev/null \
+			&& mv -f "${_ipjc_tmp}" "${_ipjc_base}.gen" 2>/dev/null; then
+			rm -f "${_ipjc_base}.json" 2>/dev/null || true
+			return 0
+		fi
+		[ -z "${_ipjc_tmp}" ] || rm -f "${_ipjc_tmp}" 2>/dev/null || true
+		_ipjc_tmp=""
+		# The PR token could not be changed: fall through to a full flush.
+		_ipjc_num=""
+	fi
+	if _ipjc_tmp="$(mktemp "${_ipjc_dir}/.gen.XXXXXX" 2>/dev/null)" \
+		&& printf '%s\n' "${_ipjc_tok}" > "${_ipjc_tmp}" 2>/dev/null \
+		&& mv -f "${_ipjc_tmp}" "${_ipjc_dir}/gen" 2>/dev/null; then
+		:
+	else
+		# Without a fresh token no entry may be served or stored again.
+		[ -z "${_ipjc_tmp}" ] || rm -f "${_ipjc_tmp}" 2>/dev/null || true
+		rm -f "${_ipjc_dir}/gen" 2>/dev/null || true
+	fi
+	if [[ "${_ipjc_repo}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] && [[ "${_ipjc_num}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+		rm -f "${_ipjc_dir}/${_ipjc_repo%%/*}__${_ipjc_repo##*/}__${_ipjc_num}.json" 2>/dev/null || true
+	else
+		rm -f "${_ipjc_dir}"/*.json 2>/dev/null || true
+	fi
+	return 0
+}
+
+# True (0) when a gh_retry argv is a read that cannot change a PR: a
+# `_safe_gh_jq` / `gh api` call with no method other than GET that
+# _gh_api_args_unsafe_post does not treat as a POST (no fields; a graphql
+# query, not a mutation), or `gh <noun> view|list|status|checks|diff`.
+# Anything else, including an unknown command, counts as a write.
+_orch_poll_pr_json_cache_gh_call_is_read()
+{
+	local _opjr_a="" _opjr_next="" _opjr_method=""
+	case "${1:-}" in
+		_safe_gh_jq) shift ;;
+		gh)
+			shift
+			if [ "${1:-}" != "api" ]; then
+				case "${2:-}" in
+					view|list|status|checks|diff) return 0 ;;
+					*) return 1 ;;
+				esac
+			fi
+			shift
+			;;
+		*) return 1 ;;
+	esac
+	for _opjr_a in "$@"; do
+		if [ "${_opjr_next}" = "method" ]; then
+			_opjr_method="$(printf '%s' "${_opjr_a}" | tr '[:lower:]' '[:upper:]')"
+			_opjr_next=""
+			[ "${_opjr_method}" = "GET" ] || return 1
+			continue
+		fi
+		case "${_opjr_a}" in
+			-X|--method) _opjr_next="method" ;;
+			--method=*|-X?*)
+				_opjr_method="${_opjr_a#--method=}"
+				_opjr_method="${_opjr_method#-X}"
+				_opjr_method="$(printf '%s' "${_opjr_method}" | tr '[:lower:]' '[:upper:]')"
+				[ "${_opjr_method}" = "GET" ] || return 1
+				;;
+		esac
+	done
+	[ "${_opjr_next}" != "method" ] || return 1
+	declare -F _gh_api_args_unsafe_post >/dev/null 2>&1 || return 1
+	if [ -z "${_opjr_method}" ] && _gh_api_args_unsafe_post "$@"; then
+		return 1
+	fi
+	return 0
+}
+
+# Prints the one issue/PR number of GITHUB_REPOSITORY that a gh_retry write
+# can change, and returns 0; returns 1 (the caller flushes everything) for
+# any other write. Only these are narrowed: `gh issue <verb> <n>` and
+# `gh pr <verb> <n>` for the verbs listed below, and `gh api` /
+# `_safe_gh_jq` on `repos/<repo>/issues/<n>[/...]` or
+# `repos/<repo>/pulls/<n>[/...]`. Merges and update-branch move a branch that
+# other PRs may use as their base, so they, graphql mutations and every
+# unnumbered or unknown write still flush the whole cache.
+_orch_poll_pr_json_cache_gh_write_number()
+{
+	local _opjw_a="" _opjw_repo="${GITHUB_REPOSITORY:-}" _opjw_ep=""
+	[[ "${_opjw_repo}" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]] || return 1
+	case "${1:-}" in
+		_safe_gh_jq) shift ;;
+		gh)
+			shift
+			case "${1:-}:${2:-}" in
+				issue:edit|issue:comment|issue:close|issue:reopen|issue:lock|issue:unlock|issue:pin|issue:unpin|pr:edit|pr:comment|pr:ready|pr:review|pr:lock|pr:unlock)
+					[[ "${3:-}" =~ ^[1-9][0-9]{0,9}$ ]] || return 1
+					printf '%s\n' "${3}"
+					return 0
+					;;
+				api:*) shift ;;
+				*) return 1 ;;
+			esac
+			;;
+		*) return 1 ;;
+	esac
+	for _opjw_a in "$@"; do
+		case "${_opjw_a}" in
+			repos/*|/repos/*) _opjw_ep="${_opjw_a#/}"; break ;;
+		esac
+	done
+	_opjw_ep="${_opjw_ep%%\?*}"
+	case "${_opjw_ep}" in
+		"repos/${_opjw_repo}/"*) _opjw_ep="${_opjw_ep#"repos/${_opjw_repo}/"}" ;;
+		*) return 1 ;;
+	esac
+	[[ "${_opjw_ep}" =~ ^(issues|pulls)/([1-9][0-9]{0,9})(/.*)?$ ]] || return 1
+	case "${BASH_REMATCH[1]}${BASH_REMATCH[3]}" in
+		pulls/merge*|pulls/update-branch*) return 1 ;;
+	esac
+	printf '%s\n' "${BASH_REMATCH[2]}"
+	return 0
+}
+
+# gh_retry call hook (GH_RETRY_AFTER_CALL_HOOK): for every call that is not
+# a read, invalidates the one PR the write targets (see
+# _orch_poll_pr_json_cache_gh_write_number) or else flushes the whole PR JSON
+# cache. Makes no API call.
+_orch_poll_pr_json_cache_after_gh_call()
+{
+	local _opjh_num=""
+	[ -n "${ORCH_POLL_PR_JSON_CACHE_DIR:-}" ] || return 0
+	if _orch_poll_pr_json_cache_gh_call_is_read "$@"; then
+		return 0
+	fi
+	if _opjh_num="$(_orch_poll_pr_json_cache_gh_write_number "$@" 2>/dev/null)" && [[ "${_opjh_num}" =~ ^[1-9][0-9]{0,9}$ ]]; then
+		_invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" "${_opjh_num}" || true
+		return 0
+	fi
+	_invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
+	return 0
+}
+
+if [ "${_ORCH_POLL_CYCLE_ENABLED:-false}" = "true" ]; then
+	GH_RETRY_AFTER_CALL_HOOK=""
+	_orch_poll_pr_json_cache_new_dir=""
+	if [[ "${ORCH_POLL_PR_JSON_CACHE_TTL_SECS}" =~ ^[0-9]{1,6}$ ]] && [ "$(( 10#${ORCH_POLL_PR_JSON_CACHE_TTL_SECS} ))" -gt 0 ] \
+		&& [ "${GH_RETRY_AFTER_CALL_HOOK_SUPPORTED:-}" = "1" ] \
+		&& [[ "$(declare -f gh_retry 2>/dev/null || true)" == *GH_RETRY_AFTER_CALL_HOOK* ]]; then
+		_orch_poll_pr_json_cache_new_dir="$(mktemp -d "${TMPDIR:-/tmp}/orch_poll_pr_json_cache.XXXXXX" 2>/dev/null || true)"
+		if [ -n "${_orch_poll_pr_json_cache_new_dir}" ] && [ -d "${_orch_poll_pr_json_cache_new_dir}" ] && [ ! -L "${_orch_poll_pr_json_cache_new_dir}" ] \
+			&& chmod 700 "${_orch_poll_pr_json_cache_new_dir}" 2>/dev/null \
+			&& printf 'g%sx%sx%s\n' "$$" "${RANDOM}" "${RANDOM}" > "${_orch_poll_pr_json_cache_new_dir}/gen" 2>/dev/null; then
+			ORCH_POLL_PR_JSON_CACHE_DIR="${_orch_poll_pr_json_cache_new_dir}"
+			_ORCH_POLL_PR_JSON_CACHE_OWNED="true"
+			GH_RETRY_AFTER_CALL_HOOK="_orch_poll_pr_json_cache_after_gh_call"
+		elif [ -n "${_orch_poll_pr_json_cache_new_dir}" ] && [ -d "${_orch_poll_pr_json_cache_new_dir}" ] && [ ! -L "${_orch_poll_pr_json_cache_new_dir}" ]; then
+			rm -rf -- "${_orch_poll_pr_json_cache_new_dir}" 2>/dev/null || true
+		fi
+	fi
+	unset _orch_poll_pr_json_cache_new_dir
+fi
+
+# _orch_poll_default_branch_or_live <fallback> [quiet]
+# The repo's default branch for the many sites that used to GET repos/<repo>
+# each time: served by the per-process memo _review_run_default_branch (one
+# GET per poller process, shared with subshells). When the memo is missing
+# or fails, runs the site's original live call with the site's fallback
+# (`quiet` keeps its stderr redirect). A memo hit is counted in the cycle
+# summary as cache_hits_default_branch.
+#
+# The memo is only read here, never asked to resolve: while it is unresolved
+# (or the review-run matchers recorded `failed`), the site makes its own one
+# live GET exactly as before, so a transient failure here can neither leave
+# the matchers failing closed for the rest of the poll nor cost a second GET.
+# A successful live read that passes the memo's own branch-name check seeds
+# an unresolved memo, so later sites (and the matchers) reuse it.
+_orch_poll_default_branch_or_live()
+{
+	local _odbl_fallback="${1:-}" _odbl_quiet="${2:-}" _odbl_value="" _odbl_cached="false" _odbl_memo_line=""
+	local _odbl_memo_file="${RUNTIME_DIR:-${TMPDIR:-/tmp}}/review_run_default_branch.${GITHUB_RUN_ID:-0}.$$"
+	local _odbl_memo_state="${_REVIEW_RUN_DEFAULT_BRANCH_STATE:-}" _odbl_live_rc=0 _odbl_memo_tmp=""
+	if declare -F _review_run_default_branch >/dev/null 2>&1; then
+		if [ "${_odbl_memo_state}" = "ok" ]; then
+			_odbl_cached="true"
+		elif [ -L "${_odbl_memo_file}" ]; then
+			_odbl_memo_state="failed"
+		elif [ -f "${_odbl_memo_file}" ]; then
+			IFS= read -r _odbl_memo_line < "${_odbl_memo_file}" 2>/dev/null || true
+			case "${_odbl_memo_line}" in
+				"ok "*)
+					if [[ "${_odbl_memo_line#ok }" =~ ^[A-Za-z0-9._/-]+$ ]] && [ "${_odbl_memo_line#ok }" != "null" ]; then
+						_odbl_cached="true"
+					else
+						_odbl_memo_state="failed"
+					fi
+					;;
+				*) _odbl_memo_state="failed" ;;
+			esac
+		fi
+		if [ "${_odbl_cached}" = "true" ] && _odbl_value="$(_review_run_default_branch 2>/dev/null)" && [ -n "${_odbl_value}" ]; then
+			printf '%s\n' "${_odbl_value}"
+			_orch_poll_cycle_cache_hit default_branch || true
+			return 0
+		fi
+		[ "${_odbl_cached}" != "true" ] || _odbl_memo_state="failed"
+	else
+		_odbl_memo_state="failed"
+	fi
+	_odbl_value=""
+	if [ "${_odbl_quiet}" = "quiet" ]; then
+		_odbl_value="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null)" || _odbl_live_rc=$?
+	else
+		_odbl_value="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch')" || _odbl_live_rc=$?
+	fi
+	if [ "${_odbl_live_rc}" -ne 0 ]; then
+		[ -z "${_odbl_value}" ] || printf '%s\n' "${_odbl_value}"
+		echo "${_odbl_fallback}"
+		return 0
+	fi
+	printf '%s\n' "${_odbl_value}"
+	if [ -z "${_odbl_memo_state}" ] && [ ! -e "${_odbl_memo_file}" ] \
+		&& [[ "${_odbl_value}" =~ ^[A-Za-z0-9._/-]+$ ]] && [ "${_odbl_value}" != "null" ] \
+		&& _odbl_memo_tmp="$(mktemp "${_odbl_memo_file}.XXXXXX" 2>/dev/null)"; then
+		if printf 'ok %s\n' "${_odbl_value}" > "${_odbl_memo_tmp}" 2>/dev/null \
+			&& mv -f "${_odbl_memo_tmp}" "${_odbl_memo_file}" 2>/dev/null; then
+			_REVIEW_RUN_DEFAULT_BRANCH="${_odbl_value}"
+			_REVIEW_RUN_DEFAULT_BRANCH_STATE="ok"
+		else
+			rm -f "${_odbl_memo_tmp}" 2>/dev/null || true
+		fi
+	fi
+	return 0
+}
+# --- ORCH_POLL_PR_JSON_CACHE helpers (issue #9927; end) ---
+
 # Same rule as clarify.yml's jobs.clarify.if (issue #6630): /reclarify on the
 # first line, or on a later line of a comment without an automation marker or
 # the plan-comment trailer. Case-insensitive like GitHub's startsWith/contains.
 RECLARIFY_COMMAND_JQ_DEF='def is_reclarify_command: (. // "" | ascii_downcase) as $b | ($b | startswith("/reclarify")) or ((("\n" + $b) | contains("\n/reclarify")) and ($b | contains("<!-- ai:") | not) and ($b | contains("to restart clarification reply:") | not));'
+
+# Rate-limit requeue (issue #10031). Fixed constants, no env surface: at most
+# this many automatic re-entries per item (issues: replays since the last
+# successful clarify; PRs: requeues per head), then ai:needs-human. The grace
+# period is added to the recorded reset epoch; the per-cycle cap bounds PR
+# re-dispatches. Defined here so the reclarify-only early exit can use them.
+RATE_LIMIT_REQUEUE_MAX_ATTEMPTS=3
+RATE_LIMIT_REQUEUE_GRACE_SECS=60
+REVIEW_GATE_RATE_LIMIT_REQUEUE_MAX_PER_CYCLE=5
+CLARIFY_RATE_LIMIT_MARKER_RE='^<!-- ai:clarify-rate-limited:v1 run=[1-9][0-9]* reset=[1-9][0-9]{9} event=(issues|issue_comment|other) source=(0|[1-9][0-9]*) -->$'
+
+# _replay_rate_limited_clarify <issue> <issue_json> <comments_json> <trusted_login>
+# Called by replay_failed_reclarify_commands when the newest trusted Actions
+# marker on a labelled issue is `ai:clarify-rate-limited:v1` (clarify.yml
+# "Queue rate-limited clarify for poller"). Uses only the caller's issue and
+# comment reads; writes only on replay, escalation or label removal. The
+# marker is data, not authorization: a replay needs a live trusted source
+# /reclarify comment, or (source=0) a trusted issue author. Log prefix:
+# CLARIFY_RATE_LIMIT_REQUEUE. Always returns 0.
+_replay_rate_limited_clarify() {
+  local issue_num="$1" issue_json="$2" comments_json="$3" trusted_login="$4"
+  local marker marker_id="" run="" reset="" event="" source="" created="" created_epoch now attempts body log rl_replay_source
+  marker="$(printf '%s' "${comments_json}" | jq -r --arg re "${CLARIFY_RATE_LIMIT_MARKER_RE}" '
+    [.[] | select(.user.login == "github-actions[bot]" and .user.type == "Bot" and ((.body // "") | test($re)))]
+    | max_by(.id) // empty
+    | (.body | capture("run=(?<run>[0-9]+) reset=(?<reset>[0-9]+) event=(?<event>[a-z_]+) source=(?<source>[0-9]+)")) as $m
+    | [(.id | tostring), $m.run, $m.reset, $m.event, $m.source, (.created_at // "")] | @tsv' 2>/dev/null)" || marker=""
+  IFS=$'\t' read -r marker_id run reset event source created <<< "${marker}" || true
+  if ! [[ "${marker_id}" =~ ^[1-9][0-9]*$ && "${run}" =~ ^[1-9][0-9]*$ && "${reset}" =~ ^[1-9][0-9]{9}$ && "${source}" =~ ^(0|[1-9][0-9]*)$ ]]; then
+    echo "CLARIFY_RATE_LIMIT_REQUEUE issue=${issue_num} outcome=skipped reason=marker_invalid"
+    return 0
+  fi
+  log="issue=${issue_num} run=${run}"
+  # A forged or skewed far-future reset cannot park the issue: clamp it to the
+  # marker's own creation time plus 3900 s (the writer's accepted maximum).
+  created_epoch="$(jq -rn --arg t "${created}" '$t | fromdateiso8601' 2>/dev/null)" || created_epoch=""
+  if ! [[ "${created_epoch}" =~ ^[1-9][0-9]*$ ]]; then
+    echo "CLARIFY_RATE_LIMIT_REQUEUE ${log} outcome=skipped reason=marker_invalid"
+    return 0
+  fi
+  [ "${reset}" -le $((created_epoch + 3900)) ] || reset=$((created_epoch + 3900))
+  # Obsolete: a newer trusted success outcome, this run's replay, or this
+  # run's escalation already exists (a previous label removal may have failed).
+  if printf '%s' "${comments_json}" | jq -e --argjson id "${marker_id}" --arg login "${trusted_login}" '
+    any(.[]; .id > $id and .user.login == $login and
+      ((.body // "") | startswith("/answer [auto-answered-by-clarify]") or contains("<!-- ai:clarification-questions -->") or contains("<!-- ai:claude-issue-routed:v1 -->")))' >/dev/null 2>&1; then
+    gh_retry gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels/ai%3Areclarify-requeue" >/dev/null 2>&1 || true
+    echo "CLARIFY_RATE_LIMIT_REQUEUE ${log} outcome=obsolete"
+    return 0
+  fi
+  if printf '%s' "${comments_json}" | jq -e --argjson id "${marker_id}" --arg login "${trusted_login}" --arg run "${run}" '
+    any(.[]; .id > $id and .user.login == $login and
+      ((.body // "") | contains("<!-- ai:clarify-rate-limit-replay:v1 run=" + $run + " ") or contains("<!-- ai:clarify-rate-limit-escalated:v1 run=" + $run + " -->")))' >/dev/null 2>&1; then
+    gh_retry gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels/ai%3Areclarify-requeue" >/dev/null 2>&1 || true
+    echo "CLARIFY_RATE_LIMIT_REQUEUE ${log} outcome=already_requeued"
+    return 0
+  fi
+  # A newer human /reclarify is in flight: keep the label until it resolves.
+  if printf '%s' "${comments_json}" | jq -e --argjson id "${marker_id}" "${RECLARIFY_COMMAND_JQ_DEF}"'
+    any(.[]; .id > $id and .user.type == "User" and
+      (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")) and
+      ((.body // "") | is_reclarify_command and (contains("<!-- ai:reclarify-replay:v1 source=") | not) and (contains("<!-- ai:clarify-rate-limit-replay:v1 ") | not)))' >/dev/null 2>&1; then
+    echo "CLARIFY_RATE_LIMIT_REQUEUE ${log} outcome=skipped reason=newer_request"
+    return 0
+  fi
+  # Authorization from live data, never from the marker alone.
+  if [ "${event}" = "issue_comment" ] && [ "${source}" != "0" ]; then
+    printf '%s' "${comments_json}" | jq -e --argjson id "${source}" "${RECLARIFY_COMMAND_JQ_DEF}"'
+      any(.[]; .id == $id and .user.type == "User" and
+        (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")) and ((.body // "") | is_reclarify_command))' >/dev/null 2>&1 || source="untrusted"
+  else
+    printf '%s' "${issue_json}" | jq -e '(.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR")' >/dev/null 2>&1 || source="untrusted"
+  fi
+  if [ "${source}" = "untrusted" ]; then
+    gh_retry gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels/ai%3Areclarify-requeue" >/dev/null 2>&1 || true
+    echo "CLARIFY_RATE_LIMIT_REQUEUE ${log} outcome=skipped reason=untrusted_source"
+    return 0
+  fi
+  # The replay keeps the trigger semantics of the rate-limited run: an
+  # automated trigger (issue opened, this issue's GH_PAT pr-dependency or
+  # partial-delivery release, the poller replay of one, or a source=none
+  # capacity-wait replay) replays as source=0, which clarify.yml clarify_route
+  # restarts without the human-answer marker; a human /reclarify keeps its id.
+  # The poller's own earlier source=0 rate-limit replay is automated as well,
+  # so a chained rate limit keeps the automated semantics on every attempt.
+  rl_replay_source="${source}"
+  if [ "${event}" != "issue_comment" ] || [ "${source}" = "0" ]; then
+    rl_replay_source=0
+  elif printf '%s' "${comments_json}" | jq -e --argjson id "${source}" --arg login "${trusted_login}" --arg n "${issue_num}" '
+    def norm: (. // "") | gsub("\r"; "") | sub("\\s+$"; "");
+    def rel: . == ("/reclarify\n<!-- ai:pr-dependency-released:" + $n + " -->") or . == ("/reclarify\n<!-- ai:partial-delivery-restart:" + $n + " -->");
+    . as $all
+    | any(.[]; .id == $id and .user.login == $login and ((.body | norm) as $b | ($b | split("\n")) as $l
+      | ($b | rel)
+      or ($l[0] == "/reclarify [auto-requeued-by-capacity-wait]" and ($l[-1] | test("^<!-- ai:claude-capacity-wait-replay:v1 source=none run=[0-9]+ -->$")))
+      or (($l | length) == 2 and $l[0] == "/reclarify [auto-requeued-by-poller]" and ($l[1] | test("^<!-- ai:reclarify-replay:v1 source=[1-9][0-9]* -->$"))
+        and (($l[1] | ltrimstr("<!-- ai:reclarify-replay:v1 source=") | rtrimstr(" -->") | tonumber) as $s
+        | any($all[]; .id == $s and .user.login == $login and (.body | norm | rel))))
+      or (($l | length) == 2 and $l[0] == "/reclarify [auto-requeued-by-poller]" and ($l[1] | test("^<!-- ai:clarify-rate-limit-replay:v1 run=[1-9][0-9]* source=0 -->$")))))' >/dev/null 2>&1; then
+    rl_replay_source=0
+  fi
+  now="$(date -u +%s)"
+  if [ "${now}" -lt $((reset + RATE_LIMIT_REQUEUE_GRACE_SECS)) ]; then
+    echo "CLARIFY_RATE_LIMIT_REQUEUE ${log} reset=${reset} outcome=waiting_for_reset"
+    return 0
+  fi
+  attempts="$(printf '%s' "${comments_json}" | jq -r --arg login "${trusted_login}" '
+    ([.[] | select(.user.login == $login and ((.body // "") | startswith("/answer [auto-answered-by-clarify]") or contains("<!-- ai:clarification-questions -->") or contains("<!-- ai:claude-issue-routed:v1 -->"))) | .id] | max // 0) as $ok
+    | [.[] | select(.id > $ok and .user.login == $login and ((.body // "") | contains("<!-- ai:clarify-rate-limit-replay:v1 ")))] | length' 2>/dev/null)" || attempts=""
+  [[ "${attempts}" =~ ^[0-9]+$ ]] || attempts="${RATE_LIMIT_REQUEUE_MAX_ATTEMPTS}"
+  if [ "${attempts}" -ge "${RATE_LIMIT_REQUEUE_MAX_ATTEMPTS}" ]; then
+    local label_state="added" comment_state="skipped"
+    GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels" \
+      -f 'labels[]=ai:needs-human' >/dev/null 2>&1 || label_state="failed"
+    body="AI clarification stopped retrying this issue. The GitHub API primary rate limit of GH_PAT stopped clarification ${attempts} times (last run ${run}), so automatic re-entry has stopped. A maintainer can reply with the reclarify command once the rate limit has recovered.
+
+<!-- ai:clarify-rate-limit-escalated:v1 run=${run} -->"
+    # The escalated marker is terminal (already_requeued above), so it is
+    # posted only once ai:needs-human is on the issue; a failed label write
+    # keeps ai:reclarify-requeue and the next tick retries the escalation.
+    if [ "${label_state}" = "added" ]; then
+      comment_state="written"
+      gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${body}" >/dev/null 2>&1 || comment_state="write_failed"
+    fi
+    if [ "${label_state}" = "added" ] && [ "${comment_state}" = "written" ]; then
+      gh_retry gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels/ai%3Areclarify-requeue" >/dev/null 2>&1 || true
+    fi
+    echo "CLARIFY_RATE_LIMIT_REQUEUE ${log} outcome=escalated attempts=${attempts}/${RATE_LIMIT_REQUEUE_MAX_ATTEMPTS} label=${label_state} marker=${comment_state}"
+    return 0
+  fi
+  # A failed POST is left labelled for the next tick; a posted replay carries
+  # this run's id so a later label-removal failure cannot replay twice.
+  if gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
+    -f body="/reclarify [auto-requeued-by-poller]
+<!-- ai:clarify-rate-limit-replay:v1 run=${run} source=${rl_replay_source} -->" >/dev/null 2>&1; then
+    echo "CLARIFY_RATE_LIMIT_REQUEUE ${log} outcome=requeued attempt=$((attempts + 1))/${RATE_LIMIT_REQUEUE_MAX_ATTEMPTS}"
+    gh_retry gh api -X DELETE "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/labels/ai%3Areclarify-requeue" >/dev/null 2>&1 || true
+  else
+    echo "CLARIFY_RATE_LIMIT_REQUEUE ${log} outcome=skipped reason=replay_post_failed"
+  fi
+  return 0
+}
 
 # Cron entry point, including ticks with no active tracking project. Only a
 # trusted Actions marker AND its original live trusted User command may cause
@@ -208,6 +746,15 @@ replay_failed_reclarify_commands() {
     comments_json="$(gh_retry gh api --paginate --slurp "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments?per_page=100" 2>/dev/null)" || continue
     # Incomplete or malformed comment history never authorizes replay.
     comments_json="$(printf '%s' "${comments_json}" | jq -ce 'if type == "array" and all(.[]; type == "array") then add // [] else error("invalid pages") end' 2>/dev/null)" || continue
+    # Issue #10031: the newest trusted Actions marker of either kind decides
+    # the path; a rate-limited clarify run has its own reset-aware replay.
+    if printf '%s' "${comments_json}" | jq -e --arg re "${CLARIFY_RATE_LIMIT_MARKER_RE}" '
+      [.[] | select(.user.login == "github-actions[bot]" and .user.type == "Bot" and
+        ((.body // "") | test("^<!-- ai:reclarify-requeue:v1 source=[1-9][0-9]* -->$") or test($re)))]
+      | max_by(.id) | (.body // "") | startswith("<!-- ai:clarify-rate-limited:v1 ")' >/dev/null 2>&1; then
+      _replay_rate_limited_clarify "${issue_num}" "${issue_json}" "${comments_json}" "${trusted_login}" || true
+      continue
+    fi
     source_id="$(printf '%s' "${comments_json}" | jq -r '
       [.[] | select(.user.login == "github-actions[bot]" and .user.type == "Bot" and
         ((.body // "") | test("^<!-- ai:reclarify-requeue:v1 source=[1-9][0-9]* -->$")))]
@@ -236,7 +783,7 @@ replay_failed_reclarify_commands() {
     if printf '%s' "${comments_json}" | jq -e --argjson id "${source_id}" "${RECLARIFY_COMMAND_JQ_DEF}"'
       any(.[]; .id > $id and .user.type == "User" and
         (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")) and
-        ((.body // "") | is_reclarify_command and (contains("<!-- ai:reclarify-replay:v1 source=") | not)))' >/dev/null 2>&1; then
+        ((.body // "") | is_reclarify_command and (contains("<!-- ai:reclarify-replay:v1 source=") | not) and (contains("<!-- ai:clarify-rate-limit-replay:v1 ") | not)))' >/dev/null 2>&1; then
       continue
     fi
     # A failed POST is left labelled for the next tick. A successful POST
@@ -2440,6 +2987,7 @@ _record_merge_conflict_telemetry()
 			fi
 			git commit --quiet -m "orchestrator: merge-conflict telemetry (${project}/${pr_a}↔${pr_b})" 2>/dev/null || exit 1
 			git push --quiet origin "${branch}:${branch}" 2>/dev/null || exit 2
+			_invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
 		) || push_rc=$?
 		worktree_registry_deregister "$(basename -- "${wt}")"
 		git worktree remove --force "${wt}" 2>/dev/null || true
@@ -2573,6 +3121,7 @@ _sync_integration_and_rebase_subissue()
 				merged_sha="$(git -C "${_ws}" rev-parse HEAD)"
 				if git push --force-with-lease="${integration_branch}:${int_sha}" \
 				    origin "${merged_sha}:refs/heads/${integration_branch}" >/dev/null 2>&1; then
+					_invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
 					echo "  [premerge-rebase] ${integration_branch}: merged ${default_branch}@${main_sha:0:7} (pre-merge alignment)."
 					int_sha="${merged_sha}"
 					_did_push=1
@@ -2620,6 +3169,7 @@ _sync_integration_and_rebase_subissue()
 		rebased_sha="$(git -C "${_wh}" rev-parse HEAD)"
 		if git push --force-with-lease="${head_ref}:${head_sha}" \
 		    origin "${rebased_sha}:refs/heads/${head_ref}" >/dev/null 2>&1; then
+			_invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
 			echo "  [premerge-rebase] PR #${pr_num}: rebased ${head_ref} onto ${integration_branch}@${int_sha:0:7}."
 			_did_push=1
 		else
@@ -2653,10 +3203,28 @@ _sync_integration_and_rebase_subissue()
 #   PR_STATE="$(_jq_field "${pr_json}" '.state' 'open|closed|merged')"
 #   PR_MERGEABLE="$(_jq_field "${pr_json}" '.mergeable' 'true|false')"
 # ---------------------------------------------------------------
+#
+# Issue #9927: repeat reads of the same PR within one poll cycle are served
+# from the per-run cache (see "ORCH_POLL_PR_JSON_CACHE helpers"). With the
+# cache off, or a repo/number unsafe as a file name, this is the live call.
 _fetch_pr_json()
 {
 	local pr_number="$1"
-	gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" || echo '{}'
+	local _fpj_entry="" _fpj_gen="" _fpj_body=""
+	if ! _fpj_entry="$(_orch_poll_pr_json_cache_entry_path "${pr_number}" 2>/dev/null)" || [ -z "${_fpj_entry}" ]; then
+		gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" || echo '{}'
+		return
+	fi
+	_fpj_gen="$(_orch_poll_pr_json_cache_gen "${_fpj_entry}" 2>/dev/null || true)"
+	if [ -n "${_fpj_gen}" ] && _fpj_body="$(_orch_poll_pr_json_cache_lookup "${_fpj_entry}" "${pr_number}" "${_fpj_gen}" 2>/dev/null)"; then
+		printf '%s\n' "${_fpj_body}"
+		_orch_poll_cycle_cache_hit pr_json || true
+		return 0
+	fi
+	_fpj_body="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_number}" || echo '{}')"
+	printf '%s\n' "${_fpj_body}"
+	_orch_poll_pr_json_cache_store "${_fpj_entry}" "${pr_number}" "${_fpj_gen}" "${_fpj_body}" 2>/dev/null || true
+	return 0
 }
 
 # _jq_field — Extract a field from JSON, optionally validating against
@@ -3228,6 +3796,25 @@ HEAL_STALE_RUNS_CACHE_JSON='{}'
 HEAL_STALE_RUN_LOOKUP_CACHE_JSON='{}'
 HEAL_STALE_CLOSE_OUTCOME=""
 
+# Issue #9986 (plan docs/plans/pipeline-human-wait-elimination-plan.md,
+# Phase 7 / D6): a heal counterfactual hold nobody answers is escalated at
+# half of HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS and closed as not planned at the
+# limit (see _heal_counterfactual_hold_expiry_check). On by default; `false`
+# turns it off, any other value is treated as `true` with a warning. The day
+# limit is validated and clamped to 1-30 inside the check.
+HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED="${HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED:-true}"
+HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS="${HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS:-3}"
+HEAL_CF_HOLD_EXPIRY_OUTCOME=""
+# Issue #9986: the stall judge picks the issue's implementation PR before a
+# PR that only cross-references the issue, and skips cross-referencing PRs
+# that change only docs/plans/ files (see _stall_judge_resolve_linked_pr).
+# On by default; only `false` restores the last-cross-reference lookup.
+STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED="${STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED:-true}"
+# Tick-local: PR number -> 1 (every changed file under docs/plans/) or 0.
+declare -gA STALL_PR_DOCS_PLANS_ONLY_CACHE=()
+declare -g STALL_JUDGE_LINKED_PR_JSON=''
+declare -g STALL_JUDGE_LINKED_PR_NUM=''
+
 # Issue #8809: an UNVERIFIED heal plan that lists only exact tests/ and
 # changelog.d/*.md files inside the verified heal scope is auto-approved (see
 # _plan_heal_test_only_check). On by default; `false` turns it off, any other
@@ -3374,6 +3961,9 @@ fi
 # DEBUG; after this many automatic resolution attempts on the same PR head
 # the sweep sends one WARNING. 0 disables that alert.
 STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS="${STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS:-3}"
+# Issue #9534: judge-created issues get the scope companions (tests/**,
+# changelog.d/*, agents.d/*) in their files_touched block. `false` disables it.
+JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED="${JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED:-true}"
 if ! [[ "${STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS}" =~ ^[0-9]+$ ]]; then
   echo "::warning::STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS must be a non-negative integer; defaulting to 3"
   STANDALONE_CONFLICT_STUCK_ALERT_ATTEMPTS="3"
@@ -3531,6 +4121,15 @@ if is_truthy "${ENABLE_STALL_MERGED_PR_GUARD}"; then
 else
   ENABLE_STALL_MERGED_PR_GUARD="false"
 fi
+
+# UNBLOCK_EXISTING_PR_ROUTING_ENABLED (#9809) — when on, the auto_approve and
+# retrigger_implement stall-recovery arms check for the issue's open
+# implementation PR first and dispatch its review instead of posting
+# /approved, which implement.yml refuses with `existing_pr` while that PR is
+# open (#9733). Default true: unset, empty or `true` (any case) is on;
+# `false` keeps today's /approved; any other value is off with a warning
+# (_existing_pr_routing_enabled).
+UNBLOCK_EXISTING_PR_ROUTING_ENABLED="${UNBLOCK_EXISTING_PR_ROUTING_ENABLED:-true}"
 
 MAX_RECOVERY_ATTEMPTS="${MAX_RECOVERY_ATTEMPTS:-3}"
 if ! [[ "${MAX_RECOVERY_ATTEMPTS}" =~ ^[0-9]+$ ]] || [ "${MAX_RECOVERY_ATTEMPTS}" -lt 1 ]; then
@@ -4697,7 +5296,7 @@ refresh_validation_dispatch_wave_gate() {
   integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
   [ "${integration_branch}" = "null" ] && integration_branch=""
   if [ -n "${integration_branch}" ]; then
-    default_branch="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "")"
+    default_branch="$(_orch_poll_default_branch_or_live "")"
     if [ -z "${default_branch}" ]; then
       ahead_by=""
     elif ahead_by="$(_integration_branch_ahead_of_default "${integration_branch}" "${default_branch}")"; then
@@ -5188,6 +5787,66 @@ PY
 	fi
 
 	rm -f "${desired_body_file}" "${render_err_file}" "${issue_json_file}" "${template_body_file}"
+	return 0
+}
+
+# _orch_poll_labels_fill_missing <labels_json> <issue numbers…>
+# Issue #9927. Adds the labels of every numeric issue not yet a key of
+# <labels_json> ({"<n>":[names]}) and prints the result.
+#   * 1+ missing numbers: one _fetch_issue_labels_batch_graphql call
+#     (ceil(N/25) GraphQL requests, billed outside the REST core budget);
+#     each issue it serves counts as a `labels` cache hit in the cycle
+#     summary.
+#   * Numbers the batch did not return (including a failed batch): the
+#     legacy per-issue REST read with its '[]' fallback, so REST is spent
+#     only on batch misses.
+#   * <labels_json> that is not a JSON object is printed unchanged with no
+#     call (the legacy per-key merge could not have changed it either).
+_orch_poll_labels_fill_missing()
+{
+	local _olfm_json="${1:-}" _olfm_n="" _olfm_batch="" _olfm_labels="" _olfm_missing_json="" _olfm_hits="" _olfm_merged=""
+	local -a _olfm_missing=()
+	shift || true
+	if ! printf '%s' "${_olfm_json}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+		printf '%s\n' "${_olfm_json}"
+		return 0
+	fi
+	for _olfm_n in "$@"; do
+		[[ "${_olfm_n}" =~ ^[0-9]+$ ]] || continue
+		case " ${_olfm_missing[*]:-} " in
+			*" ${_olfm_n} "*) continue ;;
+		esac
+		if printf '%s' "${_olfm_json}" | jq -e --arg key "${_olfm_n}" 'has($key)' >/dev/null 2>&1; then
+			continue
+		fi
+		_olfm_missing+=("${_olfm_n}")
+	done
+	if [ "${#_olfm_missing[@]}" -ge 1 ]; then
+		_olfm_missing_json="$(printf '%s\n' "${_olfm_missing[@]}" | jq -R 'tonumber' | jq -s -c '.' 2>/dev/null || echo '[]')"
+		_olfm_batch="$(_fetch_issue_labels_batch_graphql "${_olfm_missing_json}" 2>/dev/null || echo '{}')"
+		if printf '%s' "${_olfm_batch}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+			if _olfm_merged="$(printf '%s' "${_olfm_json}" | jq -c --argjson b "${_olfm_batch}" --argjson m "${_olfm_missing_json}" \
+				'($m | map(tostring)) as $want | . + ($b | with_entries(select(.key as $k | ($want | index($k)) != null and (.value | type) == "array")))' 2>/dev/null)" \
+				&& [ -n "${_olfm_merged}" ]; then
+				_olfm_json="${_olfm_merged}"
+				_olfm_hits="$(jq -n --argjson b "${_olfm_batch}" --argjson m "${_olfm_missing_json}" '[$m[] | tostring | select(. as $k | $b | has($k) and ((.[$k] | type) == "array"))] | length' 2>/dev/null || echo 0)"
+				[[ "${_olfm_hits}" =~ ^[0-9]+$ ]] || _olfm_hits=0
+				while [ "${_olfm_hits}" -gt 0 ]; do
+					_orch_poll_cycle_cache_hit labels || true
+					_olfm_hits=$(( _olfm_hits - 1 ))
+				done
+			fi
+		fi
+	fi
+	for _olfm_n in "${_olfm_missing[@]+"${_olfm_missing[@]}"}"; do
+		if printf '%s' "${_olfm_json}" | jq -e --arg key "${_olfm_n}" 'has($key)' >/dev/null 2>&1; then
+			continue
+		fi
+		_olfm_labels="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${_olfm_n}/labels" --jq '[.[].name]' || echo '[]')"
+		[ -n "${_olfm_labels}" ] || _olfm_labels='[]'
+		_olfm_json="$(printf '%s' "${_olfm_json}" | jq -c --arg key "${_olfm_n}" --argjson labels "${_olfm_labels}" '. + {($key): $labels}' 2>/dev/null || printf '%s' "${_olfm_json}")"
+	done
+	printf '%s\n' "${_olfm_json}"
 	return 0
 }
 
@@ -6058,7 +6717,7 @@ close_merged_issues_sweep() {
   local _sweep_default_branch=""
   _sweep_default_branch="${CWS_DEFAULT_BRANCH:-}"
   if [ -z "${_sweep_default_branch}" ]; then
-    _sweep_default_branch="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "")"
+    _sweep_default_branch="$(_orch_poll_default_branch_or_live "" quiet)"
   fi
   _sweep_default_branch="$(printf '%s' "${_sweep_default_branch}" | tr -d '\r\n')"
   if [ -z "${_sweep_default_branch}" ] || [ "${_sweep_default_branch}" = "null" ]; then
@@ -6632,7 +7291,7 @@ compute_cycle_integration_ahead_by() {
 	CWS_DEFAULT_BRANCH=""
 	CWS_WORK_AHEAD_BY=""
 	if [ -n "${CWS_INTEGRATION_BRANCH}" ]; then
-		CWS_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "")"
+		CWS_DEFAULT_BRANCH="$(_orch_poll_default_branch_or_live "")"
 		if [ -z "${CWS_DEFAULT_BRANCH}" ]; then
 			CWS_AHEAD_BY=""
 			echo "::warning::  [check-wave-status] Could not resolve default branch via GitHub API; passing empty ahead_by so check-wave-status fails closed and keeps project_complete=false."
@@ -7444,7 +8103,7 @@ external_finalize_delivery_check() {
             EXTFIN_DELIVERY_OUTCOME="unverified"
             EXTFIN_DELIVERY_REASON="content_check_unavailable"
             if [ -z "${default_branch}" ]; then
-              default_branch="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "")"
+              default_branch="$(_orch_poll_default_branch_or_live "" quiet)"
               EXTFIN_DEFAULT_BRANCH="${default_branch}"
             fi
             if [ -n "${default_branch}" ] \
@@ -10999,6 +11658,129 @@ judge_tracking_issue_closed_skip() {
   return 1
 }
 
+# add_files_touched_companions <body> (issue #9534)
+# Input: $1 is an issue body (a judge addition or judge fix-up).
+# Output: one JSON line on stdout,
+#   {"outcome":"added|unchanged|no_block","added":<n>,"body":"<body>"}
+# where body is the input with each missing PIPELINE_PLAN_GRANT_COMPANIONS
+# entry (scripts/files_touched_scope_guard.py) appended to the first
+# `files_touched:` block, at that block's indent and bullet prefix. Entries
+# the judge wrote keep their text and order; a body without a block (or with
+# an empty one) comes back unchanged as `no_block`. The block is located with
+# the same rules as extract_files_touched, imported from the guard module, so
+# there is one source of truth. 0 API calls. Exits non-zero when the guard
+# module is missing or the scan disagrees with extract_files_touched; callers
+# fail open and keep the body as it was.
+add_files_touched_companions() {
+  local aftc_body="${1-}"
+  local aftc_dir=""
+  aftc_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || return 1
+  [ -f "${aftc_dir}/files_touched_scope_guard.py" ] || return 1
+  printf '%s' "${aftc_body}" | python3 -I -B -c '
+import json
+import re
+import sys
+
+sys.path.insert(0, sys.argv[1])
+from files_touched_scope_guard import PIPELINE_PLAN_GRANT_COMPANIONS, extract_files_touched, normalize_path
+
+body = sys.stdin.read()
+
+
+def emit(outcome, added, text):
+	print(json.dumps({"outcome": outcome, "added": added, "body": text}))
+
+
+entries = extract_files_touched(body)
+if not entries:
+	emit("no_block", 0, body)
+	raise SystemExit(0)
+lines = body.split("\n")
+found = None
+for idx, raw in enumerate(lines):
+	stripped = raw.strip()
+	if stripped not in {"files_touched:", "- files_touched:"}:
+		continue
+	base_indent = len(raw) - len(raw.lstrip(" "))
+	flush_allowed = stripped == "files_touched:"
+	flush = None
+	scanned = []
+	last_index = -1
+	for offset, candidate in enumerate(lines[idx + 1:], start=idx + 1):
+		if not candidate.strip():
+			if scanned:
+				break
+			continue
+		indent = len(candidate) - len(candidate.lstrip(" "))
+		if flush is None:
+			flush = flush_allowed and indent == base_indent
+		if flush:
+			if indent != base_indent:
+				break
+		elif indent <= base_indent:
+			break
+		match = re.match(r"^\s*-\s+(.+?)\s*$", candidate)
+		if not match:
+			break
+		entry = match.group(1).strip()
+		if entry:
+			scanned.append(entry)
+			last_index = offset
+	found = (scanned, last_index)
+	break
+if found is None or found[0] != entries or found[1] < 0:
+	raise SystemExit(3)
+existing = {normalize_path(entry) for entry in entries}
+missing = [companion for companion in PIPELINE_PLAN_GRANT_COMPANIONS if companion not in existing]
+if not missing:
+	emit("unchanged", 0, body)
+	raise SystemExit(0)
+last_line = lines[found[1]]
+prefix = re.match(r"^(\s*-\s+)", last_line).group(1)
+new_lines = lines[: found[1] + 1] + [prefix + companion for companion in missing] + lines[found[1] + 1:]
+emit("added", len(missing), "\n".join(new_lines))
+' "${aftc_dir}"
+}
+
+# apply_judge_files_touched_companions <body> <addition|fixup> <local_id>
+# Sets JUDGE_COMPANIONS_BODY_OUT to the body with the scope companions added
+# (add_files_touched_companions), or to the body unchanged when
+# JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED is `false` or the helper fails (fail
+# open). Logs one JUDGE_SCOPE_COMPANIONS line. Runs in the caller's shell so
+# the result needs no command substitution. 0 API calls.
+apply_judge_files_touched_companions() {
+  local ajc_body="${1-}" ajc_kind="${2:-addition}" ajc_id="${3:-}"
+  local ajc_flag="" ajc_json="" ajc_outcome="" ajc_added="" ajc_new="" ajc_reason=""
+  JUDGE_COMPANIONS_BODY_OUT="${ajc_body}"
+  ajc_id="$(printf '%s' "${ajc_id}" | tr -c 'A-Za-z0-9._-' '_' | cut -c1-80)" || ajc_id="unknown"
+  ajc_flag="$(printf '%s' "${JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')" || ajc_flag="true"
+  if [ "${ajc_flag}" = "false" ]; then
+    echo "JUDGE_SCOPE_COMPANIONS outcome=skipped issue_kind=${ajc_kind} local_id=${ajc_id} added=0 reason=disabled"
+    return 0
+  fi
+  if ! ajc_json="$(add_files_touched_companions "${ajc_body}" 2>/dev/null)" \
+    || ! ajc_outcome="$(printf '%s' "${ajc_json}" | jq -er '.outcome | select(. == "added" or . == "unchanged" or . == "no_block")' 2>/dev/null)" \
+    || ! ajc_added="$(printf '%s' "${ajc_json}" | jq -er '.added | select(type == "number") | floor' 2>/dev/null)" \
+    || ! ajc_new="$(printf '%s' "${ajc_json}" | jq -er '.body | select(type == "string")' 2>/dev/null)"; then
+    echo "JUDGE_SCOPE_COMPANIONS outcome=skipped issue_kind=${ajc_kind} local_id=${ajc_id} added=0 reason=helper_failed"
+    return 0
+  fi
+  case "${ajc_outcome}" in
+    added)
+      JUDGE_COMPANIONS_BODY_OUT="${ajc_new}"
+      echo "JUDGE_SCOPE_COMPANIONS outcome=added issue_kind=${ajc_kind} local_id=${ajc_id} added=${ajc_added}"
+      ;;
+    no_block)
+      ajc_reason=" reason=no_block"
+      echo "JUDGE_SCOPE_COMPANIONS outcome=unchanged issue_kind=${ajc_kind} local_id=${ajc_id} added=0${ajc_reason}"
+      ;;
+    *)
+      echo "JUDGE_SCOPE_COMPANIONS outcome=unchanged issue_kind=${ajc_kind} local_id=${ajc_id} added=0"
+      ;;
+  esac
+  return 0
+}
+
 create_judge_fixup_issues_from_verdict() {
       if [ "${NEW_ISSUES_COUNT}" -gt 0 ] && ! judge_tracking_issue_closed_skip judge-fix-up; then
         echo "Processing ${NEW_ISSUES_COUNT} judge fix-up candidate(s)..."
@@ -11033,6 +11815,11 @@ create_judge_fixup_issues_from_verdict() {
               echo "  ${FIX_ID}: prior issue #${EXISTING_NUM} is already merged/closed, allowing new fix-up."
             fi
           fi
+
+          # Issue #9534: add the standard scope companions to a judge-written
+          # files_touched block (fail open; JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED).
+          apply_judge_files_touched_companions "${FIX_BODY}" fixup "${FIX_ID}"
+          FIX_BODY="${JUDGE_COMPANIONS_BODY_OUT}"
 
           FULL_FIX_BODY="${FIX_BODY}
 
@@ -11743,6 +12530,8 @@ else:
     rm -f "${body_payload_file}" "${response_file}"
     return 1
   fi
+  # gh_retry_to_file does not run the gh_retry call hook (issue #9927).
+  _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${pr_number}" || true
   rm -f "${body_payload_file}" "${response_file}"
   return 0
 }
@@ -12946,6 +13735,7 @@ _integration_judge_commit_and_push() {
   if git -C "${wt}" -c credential.helper= \
       -c 'credential.helper=!f() { printf "username=x-access-token\npassword=%s\n" "$GH_TOKEN"; }; f' \
       push "https://github.com/${GITHUB_REPOSITORY}" "HEAD:refs/heads/${integration_branch}" >/dev/null 2>&1; then
+    _invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
     echo "  [integration-heal] Pushed the judge resolution to ${integration_branch} for PR #${final_pr}."
     return 0
   fi
@@ -13267,6 +14057,7 @@ _refresh_integration_resolver_tooling() {
       if ! git push --quiet origin "HEAD:refs/heads/${integration_branch}" 2>/dev/null; then
         exit 2
       fi
+      _invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
       echo "  ${log_prefix} pushed [ai-maint] refresh: ${refreshed_count} file(s) updated from ${default_branch}."
       exit 0
 	# Keep cleanup reachable under the script's global `set -e`.
@@ -13503,6 +14294,7 @@ sync_contract_list_union_merge() {
         printf 'push' > "${tmpdir}/reason"
         exit 2
       fi
+      _invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
       exit 0
     # Keep cleanup reachable under the script's global `set -e`.
     ) || subshell_rc=$?
@@ -14470,6 +15262,7 @@ _attempt_branch_rebuild_after_escalation() {
     done < <(printf '%s' "${BRANCH_REBUILD_REPLAY_COMMITS_JSON}" | jq -c '.[]' 2>/dev/null)
 
     git push origin "HEAD:refs/heads/${integration_branch}" >>"${replay_log}" 2>&1 || exit 24
+    _invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
     exit 0
 	# Capture replay-specific exit codes without letting `set -e` bypass
 	# the deregister/remove cleanup and structured failure handling.
@@ -15945,6 +16738,18 @@ Unable to create or locate the final integration PR from \`${integration_branch}
     _pr_ruleset_required_check_blockers "${pr_head_sha}" "${default_branch}" || final_ruleset_rc=$?
     if [ "${final_ruleset_rc}" = "1" ]; then
       FINAL_MERGE_BUDGET_ELIGIBLE="0"
+      # Issue #9993 (G3): a head whose only blocker is a missing final-CI
+      # status may sit on a branch whose workflow copy cannot post it; route
+      # it to the CI-wiring update (it acts only on a succeeded final CI run).
+      # Reuses the blockers read above; the PR still waits for the next poll.
+      # A final-CI workflow set to empty (final CI off) makes no wiring call.
+      local final_wiring_wf=""
+      if [ "${PR_RULESET_BLOCKERS_SUMMARY:-}" = "${FINAL_CI_WIRING_STATUS_CONTEXT:-ci/final} (missing)" ] \
+        && declare -F _pr_final_ci_wiring_behind_update >/dev/null 2>&1 \
+        && declare -F _pr_final_ci_wiring_workflow >/dev/null 2>&1 \
+        && final_wiring_wf="$(_pr_final_ci_wiring_workflow)"; then
+        _pr_final_ci_wiring_behind_update "${final_pr}" "${pr_head_sha}" "${default_branch}" "${final_wiring_wf}" blocked_status || true
+      fi
       echo "  [final-merge] PR #${final_pr} is blocked by ruleset-required check(s): ${PR_RULESET_BLOCKERS_SUMMARY}. Will retry next poll."
       return 1
     fi
@@ -19112,7 +19917,7 @@ mark_validation_complete() {
   local validation_history_conclusion="${LAST_VAL_CONCLUSION:-}"
 
   integration_branch="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
-  default_branch="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+  default_branch="$(_orch_poll_default_branch_or_live "main")"
   project_title="$(jq -r '.project_title // "Orchestrator project"' "${STATE_FILE}")"
   _final_pr="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || true)"
   if [ "${ENABLE_SECURITY_PASS}" = "true" ] && [[ "${_final_pr}" =~ ^[0-9]+$ ]]; then
@@ -20389,6 +21194,12 @@ cancel_zombie_runs_for_issue() {
 close_linked_pr() {
   local issue_num="$1"
   local close_reason="${2:-Closed by orchestrator stall recovery.}"
+  # Owner-held PRs (draft / `[skip ai]` title, issue #9733) are never
+  # closed: their numbers land here (space-separated) and the first hold
+  # detail in CLOSE_LINKED_PR_HELD_DETAIL, so a caller about to close the
+  # issue too can leave it open. Reset on every call.
+  CLOSE_LINKED_PR_HELD_PRS=""
+  CLOSE_LINKED_PR_HELD_DETAIL=""
   local pr_nums
   pr_nums="$(_find_all_linked_prs "${issue_num}" 2>/dev/null || true)"
 
@@ -20412,9 +21223,10 @@ close_linked_pr() {
     # than issuing a second request.  A failed call yields an empty blob,
     # which parses to state="" and is skipped as unknown, exactly as the
     # previous `.state`-only lookup behaved.
-    local pr_meta_json pr_state pr_head_ref pr_base_ref pr_body
+    # The same request also carries draft/title for the owner-hold check.
+    local pr_meta_json pr_state pr_head_ref pr_base_ref pr_body pr_hold_reason
     pr_meta_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}" \
-      --jq '{state: (.state // ""), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), body: (.body // "")}' || echo "")"
+      --jq '{state: (.state // ""), head_ref: (.head.ref // ""), base_ref: (.base.ref // ""), body: (.body // ""), draft: (.draft // false), title: (.title // "")}' || echo "")"
     pr_state="$(printf '%s' "${pr_meta_json}" | jq -r '.state // ""' 2>/dev/null | grep -xE 'open|closed|merged' || echo "")"
     pr_head_ref="$(printf '%s' "${pr_meta_json}" | jq -r '.head_ref // ""' 2>/dev/null || echo "")"
     pr_base_ref="$(printf '%s' "${pr_meta_json}" | jq -r '.base_ref // ""' 2>/dev/null || echo "")"
@@ -20429,6 +21241,13 @@ close_linked_pr() {
     # skip leaves the same trail the other outcomes do.
     if ! _linked_pr_is_issue_implementation "${issue_num}" "${pr_head_ref}" "${pr_body}"; then
       echo "  close_linked_pr: skipping PR #${pr_num} for issue #${issue_num} (cross-reference only; head=${pr_head_ref:-?} does not match the issue's implementation branch pattern and the body carries no close keyword; base=${pr_base_ref:-?} is shown for context and is not evaluated)."
+      continue
+    fi
+    pr_hold_reason="$(_stall_pr_ai_hold_reason "${pr_meta_json}")"
+    if [ -n "${pr_hold_reason}" ]; then
+      echo "  close_linked_pr: skipping PR #${pr_num} for issue #${issue_num} (owner hold: reason=pr_ai_hold detail=${pr_hold_reason})."
+      CLOSE_LINKED_PR_HELD_PRS="${CLOSE_LINKED_PR_HELD_PRS:+${CLOSE_LINKED_PR_HELD_PRS} }${pr_num}"
+      [ -n "${CLOSE_LINKED_PR_HELD_DETAIL}" ] || CLOSE_LINKED_PR_HELD_DETAIL="${pr_hold_reason}"
       continue
     fi
     echo "  close_linked_pr: closing linked PR #${pr_num} for issue #${issue_num} (state=open)."
@@ -21539,6 +22358,213 @@ _heal_counterfactual_hold_notify()
   return 0
 }
 
+# Issue #9986 (plan docs/plans/pipeline-human-wait-elimination-plan.md,
+# Phase 7 / D6): end a heal counterfactual hold nobody answers. Called from
+# the heal_counterfactual_hold branch of _plan_auto_approval_gate after
+# _heal_stale_close_check and before _heal_counterfactual_hold_notify, in the
+# main shell. Reads only the gate's comment snapshot (no new read, §14: the
+# batched details map and STALL_MANAGED_LINKED_PR_CACHE carry no comment
+# data, and the snapshot is what the gate already holds).
+# - The hold age runs from the earliest trusted
+#   `ai:heal-counterfactual-hold:v1 issue=<n> ` marker newer than the latest
+#   human answer (an OWNER/MEMBER/COLLABORATOR, non-[bot] comment starting
+#   with /approved, /reclarify or /answer; auto-answers and stall-recovery
+#   /answer posts are excluded by text because the pipeline login can be the
+#   owner). A marker outside the snapshot means no close (fails safe).
+# - At half of HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS (default 3, clamped 1-30)
+#   it posts one ai:heal-counterfactual-hold-escalated:v1 comment and a
+#   Telegram WARNING (none when the post fails; the next tick retries).
+# - At the limit, once the escalation is at least half the limit old, it
+#   PATCHes state=closed/state_reason=not_planned (labels untouched), then
+#   posts ai:heal-counterfactual-hold-expired:v1 and a Telegram DEBUG.
+#   Closing first makes a trusted expired marker on an open issue mean a
+#   person reopened it: such an issue is kept and never closed again.
+# Markers count only from the gate login, a [bot] login or an
+# OWNER/MEMBER/COLLABORATOR. Sets HEAL_CF_HOLD_EXPIRY_OUTCOME
+# (escalated|expired|kept|skipped), always logs one
+# HEAL_COUNTERFACTUAL_HOLD_EXPIRY line (ints and [a-z_] tokens only) and
+# always returns 0.
+# Args: <issue_num> <comments_json> <login>
+_heal_counterfactual_hold_expiry_check()
+{
+  local issue_num="$1"
+  local comments_json="$2"
+  local login="$3"
+  local flag_norm="" max_days="" max_secs=0 outcome="skipped" reason="" age_days="0" issue_log=""
+  local scan="" hold_epoch="" answered="" esc_epoch="" expired_present="" now="" age=0 esc_age=0
+  local hold_prefix="" esc_marker="" exp_prefix="" note_body=""
+
+  HEAL_CF_HOLD_EXPIRY_OUTCOME="skipped"
+  issue_log="$(printf '%s' "${issue_num}" | tr -cd '0-9' | cut -c1-20)"
+  [ -n "${issue_log}" ] || issue_log="invalid"
+  # One pass; each `break` ends the check with outcome/reason set.
+  while :; do
+    # sed, not xargs: xargs fails on an unmatched quote in the flag value.
+    flag_norm="$(printf '%s' "${HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')" || flag_norm="true"
+    case "${flag_norm}" in
+      false) reason="disabled"; break ;;
+      ""|true) ;;
+      *) echo "::warning::HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED has invalid value; treating as true" ;;
+    esac
+    if ! [[ "${issue_num}" =~ ^[0-9]+$ ]]; then
+      reason="invalid_issue"; break
+    fi
+    max_days="${HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS:-3}"
+    if ! [[ "${max_days}" =~ ^[0-9]{1,6}$ ]]; then
+      echo "::warning::HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS must be an integer from 1 to 30; defaulting to 3"
+      max_days="3"
+    fi
+    max_days="$(( 10#${max_days} ))"
+    if [ "${max_days}" -lt 1 ]; then
+      echo "::warning::HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS below 1; using 1"
+      max_days="1"
+    elif [ "${max_days}" -gt 30 ]; then
+      echo "::warning::HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS above 30; using 30"
+      max_days="30"
+    fi
+    max_secs=$(( max_days * 86400 ))
+    if [ "${HEAL_CF_GATE_REASON:-}" = "heal_route_unknown" ]; then
+      reason="heal_route_unknown"; break
+    fi
+    hold_prefix="<!-- ai:heal-counterfactual-hold:v1 issue=${issue_num} "
+    esc_marker="<!-- ai:heal-counterfactual-hold-escalated:v1 issue=${issue_num} -->"
+    exp_prefix="<!-- ai:heal-counterfactual-hold-expired:v1 issue=${issue_num} "
+    # Output: <hold_epoch>|<answered>|<escalated_epoch>|<expired_present>;
+    # an epoch is "" when absent and -1 when unparseable.
+    if ! scan="$(printf '%s' "${comments_json:-[]}" | jq -r --arg login "${login}" --arg hold "${hold_prefix}" \
+      --arg esc "${esc_marker}" --arg exp "${exp_prefix}" '
+        def ep: (try fromdateiso8601 catch -1);
+        if type != "array" then error("not an array") else . end
+        | [ .[]
+            | select(type == "object")
+            | { login: ((.user.login // "") | tostring),
+                assoc: ((.author_association // "") | tostring),
+                body: ((.body // "") | tostring),
+                ts: ((.created_at // "") | tostring),
+                trusted: (((.user.login // "") == $login and $login != "")
+                  or ((.user.login // "") | tostring | test("\\[bot\\]$"))
+                  or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))) } ] as $c
+        | ([ $c[]
+            | select(.assoc | IN("OWNER", "MEMBER", "COLLABORATOR"))
+            | select((.login | test("\\[bot\\]$")) | not)
+            | select(.body | test("^\\s*/(approved|reclarify|answer)\\b"))
+            | select((.body | contains("[auto-answered-by-")) | not)
+            | select((.body | contains("_Orchestrator stall recovery")) | not)
+            | select((.body | contains("_Standalone stall recovery")) | not)
+            | .ts ] | max // "") as $answer_ts
+        | ([ $c[] | select(.trusted) | select(.body | contains($hold)) | .ts ] | sort) as $holds
+        | ([ $holds[] | select(. > $answer_ts) ] | first // "") as $hold_ts
+        | ($answer_ts != "" and ($holds | length) > 0 and $answer_ts > ($holds | last)) as $answered
+        | ([ $c[] | select(.trusted) | select(.body | contains($esc)) | .ts
+            | select($hold_ts != "" and . >= $hold_ts) ] | max // "") as $esc_ts
+        | ([ $c[] | select(.trusted) | select(.body | contains($exp)) ] | length > 0) as $expired
+        | [ (if $hold_ts == "" then "" else ($hold_ts | ep | tostring) end),
+            ($answered | tostring),
+            (if $esc_ts == "" then "" else ($esc_ts | ep | tostring) end),
+            ($expired | tostring) ]
+        | join("|")' 2>/dev/null)" || [ -z "${scan}" ]; then
+      reason="snapshot_unreadable"; break
+    fi
+    if [ -z "${scan}" ]; then
+      reason="snapshot_unreadable"; break
+    fi
+    IFS='|' read -r hold_epoch answered esc_epoch expired_present <<< "${scan}"
+    if [ "${expired_present}" = "true" ]; then
+      # Log-only trace on every tick (no Telegram: this branch repeats each
+      # tick, and tg_notify_issue has no dedupe). It also covers a lost
+      # response on the expired-comment POST, whose DEBUG alert is filtered.
+      # Skipped once a maintainer answered: the advice is then stale. The
+      # marker scan has no timestamp, so a re-plan never re-arms expiry.
+      if [ "${answered}" != "true" ]; then
+        echo "::notice::Heal issue #${issue_num} is open and carries a hold-expired marker, so this check never expires its hold again (even after re-planning); a maintainer should reply /approved to implement the held plan, or close it."
+      fi
+      outcome="kept"; reason="reopened"; break
+    fi
+    # Checked before the marker: an answer newer than every hold leaves no
+    # hold marker to age from.
+    if [ "${answered}" = "true" ]; then
+      outcome="kept"; reason="answered"; break
+    fi
+    if [ -z "${hold_epoch}" ]; then
+      reason="no_hold_marker"; break
+    fi
+    now="$(date -u +%s 2>/dev/null)" || now=""
+    if ! [[ "${hold_epoch}" =~ ^[0-9]{1,12}$ ]] || ! [[ "${now}" =~ ^[0-9]{1,12}$ ]]; then
+      reason="bad_timestamp"; break
+    fi
+    age=$(( 10#${now} - 10#${hold_epoch} ))
+    [ "${age}" -ge 0 ] || age=0
+    age_days=$(( age / 86400 ))
+    if [ $(( age * 2 )) -lt "${max_secs}" ]; then
+      outcome="kept"; reason="below_half_limit"; break
+    fi
+    if [ -z "${esc_epoch}" ]; then
+      # The notices name only /approved and /reclarify on purpose: a
+      # maintainer /answer also restarts the clock, but it does not resume
+      # the held plan.
+      note_body="$(printf '%s\n' \
+        "**Heal counterfactual hold open for ${age_days} days.** The plan's automatic approval is still withheld and no maintainer has answered." \
+        "" \
+        "This issue closes as not planned once the hold has been open for ${max_days} days, and no sooner than half that time after this notice, unless a maintainer replies \`/approved\` (implement the held plan) or \`/reclarify\` (re-plan). Labels are left as they are, and the issue can be reopened." \
+        "" \
+        "${esc_marker}")"
+      if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${note_body}" >/dev/null 2>&1; then
+        reason="escalation_post_failed"; break
+      fi
+      tg_notify_issue "${issue_num}" "Stall recovery: heal counterfactual hold open ${age_days} days; closes as not planned at ${max_days} days unless a maintainer replies /approved or /reclarify." "WARNING" || true
+      outcome="escalated"; reason="half_limit"; break
+    fi
+    if ! [[ "${esc_epoch}" =~ ^[0-9]{1,12}$ ]]; then
+      reason="bad_timestamp"; break
+    fi
+    if [ "${age}" -lt "${max_secs}" ]; then
+      outcome="kept"; reason="escalated_awaiting_expiry"; break
+    fi
+    esc_age=$(( 10#${now} - 10#${esc_epoch} ))
+    if [ $(( esc_age * 2 )) -lt "${max_secs}" ]; then
+      outcome="kept"; reason="escalation_window"; break
+    fi
+    if ! gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" \
+      -f state=closed -f state_reason=not_planned >/dev/null 2>&1; then
+      reason="close_failed"; break
+    fi
+    note_body="$(printf '%s\n' \
+      "**Heal counterfactual hold expired after ${age_days} days: closed as not planned.** No maintainer replied \`/approved\` or \`/reclarify\`." \
+      "" \
+      "To continue, reopen this issue and reply \`/reclarify\` to re-plan it or \`/approved\` to implement the held plan. A reopened issue is not closed again by this check." \
+      "" \
+      "<!-- ai:heal-counterfactual-hold-expired:v1 issue=${issue_num} days=${age_days} -->")"
+    if ! gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="${note_body}" >/dev/null 2>&1; then
+      # The expired marker is the only reopen guard: without it a person's
+      # reopen would be closed again. Undo the close so the next tick retries
+      # the whole expiry; marker-first would let a failed close block expiry.
+      if gh_retry gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" -f state=open >/dev/null 2>&1; then
+        # The POST makes one attempt (gh_retry, #6634): if GitHub created the
+        # comment but the response was lost, the marker is on a reopened issue
+        # and later ticks log kept reason=reopened, so tell operators.
+        # This branch writes no marker, so it repeats every tick while the
+        # POST keeps failing: the Telegram send is DEBUG (filtered by
+        # ALERT_MSG_LEVEL) and the ::warning:: line is the operator signal.
+        echo "::warning::Could not post the hold-expired comment on heal issue #${issue_num}; reopened it so the next tick retries the expiry. If an ai:heal-counterfactual-hold-expired:v1 comment appears anyway, the hold counts as reopened and will not expire on its own."
+        tg_notify_issue "${issue_num}" "Heal counterfactual hold: the hold-expired comment failed to post, so the issue was reopened and the expiry retries next tick. If the hold-expired comment appears anyway, the hold will not expire on its own; close or answer it by hand." "DEBUG" || true
+        reason="expired_marker_post_failed"; break
+      fi
+      echo "::warning::Closed heal issue #${issue_num} but could not post the hold-expired comment, and reopening it failed; a later reopen may be closed again."
+      tg_notify_issue "${issue_num}" "Heal counterfactual hold closed as not planned, but the hold-expired marker could not be posted and the issue could not be reopened. Before reopening it, post /approved or /reclarify, or the next tick closes it again." "WARNING" || true
+      outcome="expired"; reason="reopen_failed"; break
+    fi
+    tg_notify_issue "${issue_num}" "Heal counterfactual hold closed as not planned after ${age_days} days (limit ${max_days} days)." "DEBUG" || true
+    outcome="expired"; reason="max_days"; break
+  done
+  reason="$(printf '%s' "${reason}" | tr -cd 'a-z_' | cut -c1-80)"
+  [ -n "${reason}" ] || reason="unknown"
+  age_days="$(printf '%s' "${age_days}" | tr -cd '0-9' | cut -c1-6)"
+  [ -n "${age_days}" ] || age_days="0"
+  HEAL_CF_HOLD_EXPIRY_OUTCOME="${outcome}"
+  echo "HEAL_COUNTERFACTUAL_HOLD_EXPIRY issue=${issue_log} outcome=${outcome} reason=${reason} age_days=${age_days}"
+  return 0
+}
+
 # Issue #8808: close a held run-sourced heal issue whose failing workflow
 # stopped failing. Called from the heal_counterfactual_hold branch of
 # _plan_auto_approval_gate before the hold notice, in the main shell so the
@@ -21926,7 +22952,14 @@ ${HEAL_TEST_ONLY_GATE_MARKER}" >/dev/null 2>&1; then
     HEAL_STALE_CLOSE_OUTCOME=""
     _heal_stale_close_check "${issue_num}" "${details_map_json}" "${comments_json}" "${gate_login}" "${phase}" || true
     if [ "${HEAL_STALE_CLOSE_OUTCOME:-}" != "closed" ]; then
-      _heal_counterfactual_hold_notify "${issue_num}" "${comments_json}" "${gate_login}" || true
+      # Issue #9986: an unanswered hold is escalated at half the limit and
+      # closed as not planned at the limit; a just-expired hold gets no
+      # hold notice.
+      HEAL_CF_HOLD_EXPIRY_OUTCOME=""
+      _heal_counterfactual_hold_expiry_check "${issue_num}" "${comments_json}" "${gate_login}" || true
+      if [ "${HEAL_CF_HOLD_EXPIRY_OUTCOME:-}" != "expired" ]; then
+        _heal_counterfactual_hold_notify "${issue_num}" "${comments_json}" "${gate_login}" || true
+      fi
     fi
     return 1
   fi
@@ -22087,6 +23120,119 @@ _plan_auto_approval_hold_notify()
   return 0
 }
 
+# _existing_pr_routing_enabled — UNBLOCK_EXISTING_PR_ROUTING_ENABLED (#9809):
+# unset, empty or `true` (any case) returns 0; `false` returns 1; any other
+# value returns 1 with a ::warning::.
+_existing_pr_routing_enabled() {
+  local _eprf_value
+  _eprf_value="$(printf '%s' "${UNBLOCK_EXISTING_PR_ROUTING_ENABLED-true}" | tr '[:upper:]' '[:lower:]')"
+  case "${_eprf_value}" in
+    ""|true) return 0 ;;
+    false) return 1 ;;
+  esac
+  echo "::warning::UNBLOCK_EXISTING_PR_ROUTING_ENABLED is not true or false; existing-PR routing is off" >&2
+  return 1
+}
+
+# _stall_route_open_impl_pr <issue_num> <phase> <action> (#9809)
+#
+# implement.yml stops at `existing_pr` while the issue has an open
+# implementation PR, so the /approved the auto_approve / retrigger_implement
+# arms post does nothing there (#9733). When the issue's own implementation PR
+# (_resolve_issue_implementation_pr) is open, dispatch its review instead
+# (_dispatch_review_for_conflicts, default branch only, #4701).
+# Returns: 0 = review dispatched; 1 = flag off, no open implementation PR or
+# an inconclusive lookup (the caller keeps today's /approved, fail open);
+# 2 = a review run is already active; 3 = the dispatch failed.
+# API (§14): the resolver's head-branch / cross-reference reads plus one
+# pulls/<n> read; only when the flag is on, per action fired.
+_stall_route_open_impl_pr() {
+  local issue_num="$1"
+  local phase="$2"
+  local action="$3"
+  local _srip_pr _srip_head _srip_rc=0
+  _existing_pr_routing_enabled || return 1
+  _resolve_issue_implementation_pr "${issue_num}" || return 1
+  _srip_pr="${STALL_IMPL_PR_NUM:-}"
+  [[ "${_srip_pr}" =~ ^[1-9][0-9]*$ ]] || return 1
+  printf '%s' "${STALL_IMPL_PR_JSON:-}" | jq -e '.state == "open"' >/dev/null 2>&1 || return 1
+  _srip_head="$(printf '%s' "${STALL_IMPL_PR_JSON}" | jq -r '.head.ref // ""' 2>/dev/null || true)"
+  _dispatch_review_for_conflicts "${_srip_pr}" "${_srip_head}" || _srip_rc=$?
+  case "${_srip_rc}" in
+    0)
+      echo "STALL_RECOVERY issue=${issue_num} reason=open_impl_pr pr=${_srip_pr} phase=${phase} action=dispatch_review override_from=${action}"
+      add_healing_note "Issue #${issue_num}: stall recovery dispatched review on its open implementation PR #${_srip_pr} instead of posting /approved (${action})."
+      STALL_HEALING_CHANGED=true
+      tg_notify "Stall recovery: dispatched review on open implementation PR #${_srip_pr} for issue #${issue_num} instead of ${action}."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
+      return 0
+      ;;
+    2)
+      echo "STALL_SKIP issue=${issue_num} reason=open_impl_pr_review_active pr=${_srip_pr} phase=${phase} action=${action}"
+      return 2
+      ;;
+    *)
+      echo "STALL_SKIP issue=${issue_num} reason=open_impl_pr_dispatch_failed pr=${_srip_pr} phase=${phase} action=${action}"
+      return 3
+      ;;
+  esac
+}
+
+# Issue #9821: once an escalate_human is confirmed (ai:needs-human read back),
+# post one comment on the stalled issue saying why and how to resume.
+# STALL_ESCALATE_HUMAN_JUSTIFICATION is set only by the stall-judge dispatch
+# arm of invoke_stall_judge (source=stall_judge, even when empty); unset means
+# the recovery ladder escalated (source=stall_recovery). Fail-open: logs one
+# STALL_ESCALATE_HUMAN_COMMENT line and always returns 0, so a failed write
+# never changes the recovery result.
+_post_stall_escalate_human_comment() {
+  local issue="$1"
+  local phase="$2"
+  local minutes="$3"
+  local local_id="$4"
+  local source="stall_recovery"
+  local reason=""
+  local body=""
+  if [ -n "${STALL_ESCALATE_HUMAN_JUSTIFICATION+x}" ]; then
+    source="stall_judge"
+    reason="${STALL_ESCALATE_HUMAN_JUSTIFICATION}"
+  fi
+  if ! [[ "${issue}" =~ ^[0-9]+$ ]]; then
+    echo "STALL_ESCALATE_HUMAN_COMMENT issue=${issue} phase=${phase} source=${source} outcome=write_failed"
+    return 0
+  fi
+  [ -n "${reason}" ] || reason="Stall recovery ran out of automatic actions for this phase."
+  # Bound the model-supplied reason so an oversized justification cannot
+  # push the body past GitHub's comment size limit (truncate before
+  # neutralising so a split delimiter is still caught below).
+  reason="${reason:0:2000}"
+  # The judge justification is model output: neutralise HTML comment
+  # delimiters so it cannot forge ai:* markers that other pollers read.
+  # (No '&' in the replacements: bash 5.2 patsub_replacement expands it.)
+  reason="${reason//<!--/< !--}"
+  reason="${reason//-->/-- >}"
+  body="## Stall recovery: human input needed
+
+${reason}
+
+Stuck in \`${phase}\` for ${minutes}m."
+  if [ -n "${local_id}" ] && [[ "${TRACKING_NUM:-}" =~ ^[0-9]+$ ]]; then
+    body="${body}
+
+Tracking issue: #${TRACKING_NUM}"
+  fi
+  body="${body}
+
+To resume, fix the blocker, then remove \`ai:needs-human\`.
+
+<!-- ai:stall-escalate-human:v1 issue=${issue} phase=${phase} -->"
+  if gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue}/comments" -f body="${body}" >/dev/null 2>&1; then
+    echo "STALL_ESCALATE_HUMAN_COMMENT issue=${issue} phase=${phase} source=${source} outcome=posted"
+  else
+    echo "STALL_ESCALATE_HUMAN_COMMENT issue=${issue} phase=${phase} source=${source} outcome=write_failed"
+  fi
+  return 0
+}
+
 execute_stall_recovery_action() {
   local issue_num="$1"
   local phase="$2"
@@ -22240,6 +23386,19 @@ STALL_EOF
         "${_managed_staged_support_comments}" "${phase}"; then
         return 1
       fi
+      # #9809: an open implementation PR makes /approved a no-op; review it
+      # instead. Runs after the no-op cap, the staged-support latch and the
+      # plan gate, so every existing hold keeps running first.
+      local _auto_approve_route_rc=0
+      _stall_route_open_impl_pr "${issue_num}" "${phase}" "${action}" || _auto_approve_route_rc=$?
+      case "${_auto_approve_route_rc}" in
+        0)
+          STALL_RECOVERY_SHOULD_INCREMENT="true"
+          STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_review"
+          return 0
+          ;;
+        2|3) return 1 ;;
+      esac
       echo "  Auto-approving plan for issue #${issue_num}..."
       local _auto_approve_rc=0
       gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" \
@@ -22280,6 +23439,18 @@ STALL_EOF
           return 1
         fi
       fi
+      # #9809: an open implementation PR makes /approved a no-op; review it
+      # instead. Runs after the no-op cap and the plan gate.
+      local _retrigger_implement_route_rc=0
+      _stall_route_open_impl_pr "${issue_num}" "${phase}" "${action}" || _retrigger_implement_route_rc=$?
+      case "${_retrigger_implement_route_rc}" in
+        0)
+          STALL_RECOVERY_SHOULD_INCREMENT="true"
+          STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_review"
+          return 0
+          ;;
+        2|3) return 1 ;;
+      esac
       echo "  Re-triggering implementation for issue #${issue_num}..."
       # The implement workflow precheck (implement.yml) skips when
       # ai:implementing is present ("another implement run is in progress")
@@ -22701,6 +23872,7 @@ STALL_EOF
               git config user.email "codex-bot@users.noreply.invalid"
               git commit --allow-empty -m "[orchestrator] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
               if git push origin "HEAD:${head_ref}" 2>/dev/null; then
+                _invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
                 STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_empty_commit_fallback"
                 echo "  Issue #${issue_num} PR #${pr_num} pushed the empty-commit fallback (action=retrigger_review_empty_commit_fallback)."
                 tg_notify "Stall recovery: re-triggered review for PR #${pr_num} (issue #${issue_num}, stuck ${stall_minutes}m, attempt $((recovery_count + 1)))."$'\n'"PR: $(_gh_url "pull/${pr_num}")"$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "DEBUG"
@@ -22753,6 +23925,13 @@ STALL_EOF
         ensure_label_exists "ai:closed"
         close_linked_pr "${issue_num}" \
           "Closed by orchestrator stall recovery — ancestor-chain no-op cap reached (${stall_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES})."
+        if [ -n "${CLOSE_LINKED_PR_HELD_PRS:-}" ]; then
+          # close_linked_pr left an owner-held PR open (#9733): leave the issue open too.
+          echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${CLOSE_LINKED_PR_HELD_PRS%% *} detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown} phase=${phase} action=none requested_action=close_and_reissue source=close_linked_pr"
+          STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue_skipped_pr_ai_hold"
+          STALL_RECOVERY_SHOULD_INCREMENT="false"
+          return 1
+        fi
         gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
           --remove-label 'ai:done' --remove-label 'ai:implementing' \
           --remove-label 'ai:planning' --remove-label 'ai:clarification' \
@@ -22775,6 +23954,26 @@ STALL_EOF
       STALL_RETIRED_CONFLICT_CLOSE_MESSAGE=""
       STALL_REISSUE_EXTRA_GUIDANCE_ISSUE=""
       [ -n "${_stall_reissue_close_msg}" ] || _stall_reissue_close_msg="Closed by orchestrator stall recovery — issue #${issue_num} was stuck in '${phase}' for ${stall_minutes}m. A replacement issue will be created."
+
+      # Owner hold re-check before the replacement exists (issue #9733).
+      # The pre-action guards fail open when the cached linked-PR payloads
+      # lack draft/title, and once the replacement is created the source
+      # issue is closed even when close_linked_pr leaves a held PR open.
+      # §14 audit: those cached payloads (_fresh_lpr_entry, the wave's
+      # batched linked_pr) are exactly what lacked the fields, so this
+      # reuses the skip arm's REST implementation-PR lookup (1 `gh pr list
+      # --head` + 1 pulls/<n> on the common path) on this rare arm only.
+      # A failed or empty lookup fails open to the legacy flow.
+      if _resolve_issue_implementation_pr "${issue_num}"; then
+        local _reissue_hold_reason=""
+        _reissue_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON}")"
+        if [ -n "${_reissue_hold_reason}" ]; then
+          echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${STALL_IMPL_PR_NUM} detail=${_reissue_hold_reason} phase=${phase} action=none requested_action=close_and_reissue source=reissue_precheck"
+          STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue_skipped_pr_ai_hold"
+          STALL_RECOVERY_SHOULD_INCREMENT="false"
+          return 1
+        fi
+      fi
 
       local orig_title orig_body orig_issue_json orig_issue_is_heal orig_issue_is_managed orig_issue_is_check_triage
       orig_issue_json="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${issue_num}" --jq '{title: (.title // ""), body: (.body // ""), heal: ([.labels[]?.name] | index("ai:workflow-heal") != null), managed: ([.labels[]?.name] | index("ai:orchestrator-managed") != null), check_triage: ([.labels[]?.name] | index("ai:check-triage") != null)}' || echo "")"
@@ -22898,6 +24097,17 @@ REISSUE_EOF
       if [ "${SKIP_HEALTHY_PR_GUARD_ENABLED:-true}" = "true" ]; then
         if _resolve_issue_implementation_pr "${issue_num}"; then
           _skip_pr_num="${STALL_IMPL_PR_NUM}"
+          # Owner hold re-check on the REST payload this lookup already
+          # fetched (0 extra API calls): recover_stalled_issue's hold guard
+          # fails open when the linked-PR caches lack draft/title.
+          local _skip_hold_reason=""
+          _skip_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON}")"
+          if [ -n "${_skip_hold_reason}" ]; then
+            echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${_skip_pr_num} detail=${_skip_hold_reason} phase=${phase} action=none requested_action=skip"
+            STALL_RECOVERY_EFFECTIVE_ACTION="skip_skipped_pr_ai_hold"
+            STALL_RECOVERY_SHOULD_INCREMENT="false"
+            return 1
+          fi
         elif [ "${STALL_IMPL_PR_FAILURE_REASON}" = "pr_fetch_failed" ]; then
           echo "::warning::skip healthy-PR guard: implementation PR lookup was inconclusive for issue #${issue_num}; retrying next poll instead of closing or dispatching against an unverified PR."
           STALL_RECOVERY_EFFECTIVE_ACTION="skip_skipped_pr_lookup_failed"
@@ -22985,6 +24195,13 @@ The issue and its linked PR stay open with \`ai:needs-human\`; the unblock judge
       echo "  Skipping issue #${issue_num} after ${recovery_count} recovery attempts."
       close_linked_pr "${issue_num}" \
         "Closed by orchestrator: stall recovery exhausted (${recovery_count} attempts). The judge will evaluate this gap."
+      if [ -n "${CLOSE_LINKED_PR_HELD_PRS:-}" ]; then
+        # close_linked_pr left an owner-held PR open: leave the issue open too.
+        echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${CLOSE_LINKED_PR_HELD_PRS%% *} detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown} phase=${phase} action=none requested_action=skip source=close_linked_pr"
+        STALL_RECOVERY_EFFECTIVE_ACTION="skip_skipped_pr_ai_hold"
+        STALL_RECOVERY_SHOULD_INCREMENT="false"
+        return 1
+      fi
       ensure_label_exists "ai:closed"
       gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
         --add-label 'ai:closed' 2>/dev/null || true
@@ -23008,6 +24225,7 @@ The judge will evaluate this gap when the wave completes and decide whether to r
       escalated_labels="$(get_issue_labels_json "${issue_num}")"
       if has_label "${escalated_labels}" "ai:needs-human"; then
         tg_notify "Stall judge escalated issue #${issue_num} for human intervention (phase ${phase}, stuck ${stall_minutes}m)."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "CRITICAL"
+        _post_stall_escalate_human_comment "${issue_num}" "${phase}" "${stall_minutes}" "${local_id}" || true
       else
         echo "::warning::Stall judge could not verify ai:needs-human label on #${issue_num}; continuing bounded recovery retries." >&2
         tg_notify "Stall judge escalation could not verify ai:needs-human on issue #${issue_num} (phase ${phase}, stuck ${stall_minutes}m)."$'\n'"Issue: $(_gh_url "issues/${issue_num}")" "WARNING"
@@ -23045,7 +24263,10 @@ The judge will evaluate this gap when the wave completes and decide whether to r
         STALL_HEALING_CHANGED=true
         local _rmc_reissue_rc=0
         "${STALL_RETIRED_CONFLICT_REISSUE_FN}" "${issue_num}" "${phase}" "close_and_reissue" "${recovery_count}" "${local_id}" "${stall_minutes}" || _rmc_reissue_rc=$?
-        STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
+        # Keep the nested reissue's owner-hold marker (#9733) so
+        # invoke_stall_judge skips its fallback dispatch too.
+        [ "${STALL_RECOVERY_EFFECTIVE_ACTION:-}" = "close_and_reissue_skipped_pr_ai_hold" ] \
+          || STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
         return "${_rmc_reissue_rc}"
       fi
       head_sha="$(_jq_field "${pr_json}" '.head.sha')"
@@ -23091,6 +24312,16 @@ The judge will evaluate this gap when the wave completes and decide whether to r
         STALL_RECOVERY_SHOULD_INCREMENT="true"
         return 0
       fi
+      # Owner hold (#9733) on the payload resolved above (0 extra calls):
+      # also covers the stall judge's dispatch_rb_judge fallback.
+      local _rbj_hold_reason=""
+      _rbj_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON:-}")"
+      if [ -n "${_rbj_hold_reason}" ]; then
+        echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${rb_pr_num} detail=${_rbj_hold_reason} phase=${phase} action=none requested_action=dispatch_rb_judge"
+        STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_rb_judge_skipped_pr_ai_hold"
+        STALL_RECOVERY_SHOULD_INCREMENT="false"
+        return 1
+      fi
       # Issue #6680: a PR that conflicts with its base only on retired
       # host-only file(s) the base no longer has can never be merged by the
       # sandboxed resolver, and the judge cannot merge it either. Close and
@@ -23102,7 +24333,8 @@ The judge will evaluate this gap when the wave completes and decide whether to r
         STALL_HEALING_CHANGED=true
         local _rbj_reissue_rc=0
         "${STALL_RETIRED_CONFLICT_REISSUE_FN}" "${issue_num}" "${phase}" "close_and_reissue" "${recovery_count}" "${local_id}" "${stall_minutes}" || _rbj_reissue_rc=$?
-        STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
+        [ "${STALL_RECOVERY_EFFECTIVE_ACTION:-}" = "close_and_reissue_skipped_pr_ai_hold" ] \
+          || STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
         return "${_rbj_reissue_rc}"
       fi
       local rb_dispatch_rc=0
@@ -24127,6 +25359,171 @@ persist_orch_redecompose() {
   return 0
 }
 
+# Issue #9986: does the PR change only files under docs/plans/? Input: the
+# PR number and its already-fetched REST `pulls/<n>` JSON. Returns 0 only when
+# every changed file (and every rename source) is under docs/plans/. When
+# .changed_files is missing, 0 or above 100 it returns 1 with no call;
+# otherwise one `pulls/<n>/files?per_page=100` read, cached per tick in
+# STALL_PR_DOCS_PLANS_ONLY_CACHE (audited: STALL_MANAGED_LINKED_PR_CACHE and
+# the batched details map carry no file lists). Fail-open: a read or parse
+# error returns 1 (not docs-only), which keeps the PR a candidate.
+_pr_files_all_under_docs_plans()
+{
+  local pr_num="$1"
+  local pr_json="${2:-}"
+  local changed="" files_json="" verdict=""
+  [[ "${pr_num}" =~ ^[0-9]+$ ]] || return 1
+  declare -p STALL_PR_DOCS_PLANS_ONLY_CACHE >/dev/null 2>&1 || declare -gA STALL_PR_DOCS_PLANS_ONLY_CACHE=()
+  if [ -n "${STALL_PR_DOCS_PLANS_ONLY_CACHE[${pr_num}]+x}" ]; then
+    [ "${STALL_PR_DOCS_PLANS_ONLY_CACHE[${pr_num}]}" = "1" ]
+    return $?
+  fi
+  changed="$(printf '%s' "${pr_json}" | jq -r '.changed_files // "" | tostring' 2>/dev/null)" || changed=""
+  if ! [[ "${changed}" =~ ^[0-9]{1,9}$ ]] || [ "${changed}" -eq 0 ] || [ "${changed}" -gt 100 ]; then
+    return 1
+  fi
+  files_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr_num}/files?per_page=100" 2>/dev/null)" || files_json=""
+  verdict="$(printf '%s' "${files_json}" | jq -r '
+    def under_plans: (type == "string") and startswith("docs/plans/") and (contains("..") | not);
+    if type == "array" and length > 0 then
+      (if all(.[]; type == "object" and (.filename | under_plans)
+          and ((.previous_filename // null) == null or (.previous_filename | under_plans)))
+       then "1" else "0" end)
+    else error("unreadable") end' 2>/dev/null)" || verdict=""
+  case "${verdict}" in
+    1|0) ;;
+    *) verdict="0" ;;
+  esac
+  STALL_PR_DOCS_PLANS_ONLY_CACHE["${pr_num}"]="${verdict}"
+  [ "${verdict}" = "1" ]
+}
+
+# Issue #9986 (plan docs/plans/pipeline-human-wait-elimination-plan.md,
+# Phase 7): pick the PR the stall judge reasons about. The last
+# cross-reference alone picked a later docs-only plan PR over the issue's
+# merged implementation PR (#9212: #9478 over #9262). Runs in the main shell
+# and sets STALL_JUDGE_LINKED_PR_NUM (digits or "") and
+# STALL_JUDGE_LINKED_PR_JSON (the fetched pulls/<n> JSON, or "" when the
+# caller must fetch). STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED=false
+# keeps _issue_cross_ref_pr_number_last (source=legacy). Otherwise, in order:
+#   1. an open `ai/issue-<n>` PR that passes
+#      _pr_json_is_issue_implementation_pr (source=branch; no docs filter,
+#      a plan-writing issue's own PR is legitimately docs-only);
+#   2. the cross-referenced PRs (one timeline read; newest number first, at
+#      most 10): the first that passes the predicate and, unless its head is
+#      `ai/issue-<n>`, does not change only docs/plans/ (source=cross_ref_impl);
+#   3. the last cross-reference unless it changes only docs/plans/
+#      (source=cross_ref_last), else none (source=none).
+# Fetch failures count as rejections. API: 1 `gh pr list --head`, 1 timeline,
+# at most 11 pulls/<n> reads and cached pulls/<n>/files reads; the walk runs
+# only when the branch lookup misses. Logs one STALL_JUDGE_LINKED_PR line.
+# Always returns 0.
+_stall_judge_resolve_linked_pr()
+{
+  local issue_num="$1"
+  local flag_norm="" source="none" chosen="" chosen_json="" cand="" cand_json="" head_ref=""
+  local branch_cands="" timeline_json="" xref_cands="" last_xref="" skipped_docs=0
+  local -A sjr_json_cache=()
+  local -A sjr_docs_counted=()
+
+  STALL_JUDGE_LINKED_PR_NUM=""
+  STALL_JUDGE_LINKED_PR_JSON=""
+  if ! [[ "${issue_num}" =~ ^[0-9]+$ ]]; then
+    echo "STALL_JUDGE_LINKED_PR issue=invalid pr=none source=none skipped_docs_plans=0"
+    return 0
+  fi
+  flag_norm="$(printf '%s' "${STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED:-true}" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')" || flag_norm="true"
+  if [ "${flag_norm}" = "false" ]; then
+    chosen="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
+    STALL_JUDGE_LINKED_PR_NUM="${chosen}"
+    [[ "${chosen}" =~ ^[0-9]+$ ]] || chosen=""
+    echo "STALL_JUDGE_LINKED_PR issue=${issue_num} pr=${chosen:-none} source=legacy skipped_docs_plans=0"
+    return 0
+  fi
+  case "${flag_norm}" in
+    ""|true) ;;
+    *) echo "::warning::STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED has invalid value; treating as true" ;;
+  esac
+
+  # 1. The issue's own open branch PR, highest number first.
+  branch_cands="$(_linked_prs_by_branch_name "${issue_num}" 2>/dev/null | grep -E '^[0-9]+$' | sort -rn | head -n 3)" || branch_cands=""
+  for cand in ${branch_cands}; do
+    cand_json="$(_fetch_pr_json "${cand}" 2>/dev/null)" || cand_json="{}"
+    [ -n "${cand_json}" ] || cand_json="{}"
+    sjr_json_cache["${cand}"]="${cand_json}"
+    if _pr_json_is_issue_implementation_pr "${issue_num}" "${cand_json}" 2>/dev/null; then
+      chosen="${cand}"; chosen_json="${cand_json}"; source="branch"
+      break
+    fi
+  done
+
+  if [ -z "${chosen}" ]; then
+    timeline_json="$(_issue_timeline_with_cross_refs_json "${issue_num}" 2>/dev/null)" || timeline_json=""
+    xref_cands="$(printf '%s' "${timeline_json}" | jq -r '
+      if type == "array" then
+        [ .[] | select(type == "object" and .event == "cross-referenced" and .source.issue.pull_request != null)
+          | .source.issue.number | select(type == "number" and . >= 1) ]
+        | unique | reverse | .[:10] | .[] | tostring
+      else empty end' 2>/dev/null)" || xref_cands=""
+    last_xref="$(printf '%s' "${timeline_json}" | jq -r '
+      if type == "array" then
+        [ .[] | select(type == "object" and .event == "cross-referenced" and .source.issue.pull_request != null)
+          | .source.issue.number | select(type == "number" and . >= 1) ] | last // empty | tostring
+      else empty end' 2>/dev/null | tail -n1)" || last_xref=""
+    [[ "${last_xref}" =~ ^[0-9]+$ ]] || last_xref=""
+
+    # 2. The first cross-referenced implementation PR that is not docs-only.
+    for cand in ${xref_cands}; do
+      [[ "${cand}" =~ ^[0-9]+$ ]] || continue
+      if [ -n "${sjr_json_cache[${cand}]+x}" ]; then
+        cand_json="${sjr_json_cache[${cand}]}"
+      else
+        cand_json="$(_fetch_pr_json "${cand}" 2>/dev/null)" || cand_json="{}"
+        [ -n "${cand_json}" ] || cand_json="{}"
+        sjr_json_cache["${cand}"]="${cand_json}"
+      fi
+      _pr_json_is_issue_implementation_pr "${issue_num}" "${cand_json}" 2>/dev/null || continue
+      head_ref="$(printf '%s' "${cand_json}" | jq -r '.head.ref // "" | tostring' 2>/dev/null)" || head_ref=""
+      if [ "${head_ref}" != "ai/issue-${issue_num}" ] && _pr_files_all_under_docs_plans "${cand}" "${cand_json}"; then
+        if [ -z "${sjr_docs_counted[${cand}]+x}" ]; then
+          sjr_docs_counted["${cand}"]=1
+          skipped_docs=$(( skipped_docs + 1 ))
+        fi
+        continue
+      fi
+      chosen="${cand}"; chosen_json="${cand_json}"; source="cross_ref_impl"
+      break
+    done
+  fi
+
+  # 3. The last cross-reference (today's choice) unless it is docs-only.
+  if [ -z "${chosen}" ] && [ -n "${last_xref}" ]; then
+    if [ -n "${sjr_json_cache[${last_xref}]+x}" ]; then
+      cand_json="${sjr_json_cache[${last_xref}]}"
+    else
+      cand_json="$(_fetch_pr_json "${last_xref}" 2>/dev/null)" || cand_json="{}"
+      [ -n "${cand_json}" ] || cand_json="{}"
+    fi
+    head_ref="$(printf '%s' "${cand_json}" | jq -r '.head.ref // "" | tostring' 2>/dev/null)" || head_ref=""
+    if [ "${head_ref}" != "ai/issue-${issue_num}" ] && _pr_files_all_under_docs_plans "${last_xref}" "${cand_json}"; then
+      if [ -z "${sjr_docs_counted[${last_xref}]+x}" ]; then
+        sjr_docs_counted["${last_xref}"]=1
+        skipped_docs=$(( skipped_docs + 1 ))
+      fi
+      source="none"
+    else
+      chosen="${last_xref}"; chosen_json="${cand_json}"; source="cross_ref_last"
+    fi
+  fi
+
+  STALL_JUDGE_LINKED_PR_NUM="${chosen}"
+  if [ -n "${chosen}" ] && [ -n "${chosen_json}" ] && [ "${chosen_json}" != "{}" ]; then
+    STALL_JUDGE_LINKED_PR_JSON="${chosen_json}"
+  fi
+  echo "STALL_JUDGE_LINKED_PR issue=${issue_num} pr=${chosen:-none} source=${source} skipped_docs_plans=${skipped_docs}"
+  return 0
+}
+
 invoke_stall_judge() {
   local issue_num="$1"
   local phase="$2"
@@ -24182,7 +25579,13 @@ invoke_stall_judge() {
   ' 2>/dev/null || echo '[]')"
 
   local linked_pr
-  linked_pr="$(_issue_cross_ref_pr_number_last "${issue_num}" 2>/dev/null || echo "")"
+  # Issue #9986: resolved in the main shell so the fetched PR JSON is reused
+  # below; STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED=false keeps the
+  # last-cross-reference lookup.
+  STALL_JUDGE_LINKED_PR_JSON=''
+  STALL_JUDGE_LINKED_PR_NUM=''
+  _stall_judge_resolve_linked_pr "${issue_num}" || true
+  linked_pr="${STALL_JUDGE_LINKED_PR_NUM:-}"
 
   local linked_pr_json='{}'
   local target_pr=""
@@ -24194,7 +25597,11 @@ invoke_stall_judge() {
 
   if [[ "${linked_pr}" =~ ^[0-9]+$ ]]; then
     target_pr="${linked_pr}"
-    linked_pr_json="$(_fetch_pr_json "${linked_pr}")"
+    if [ -n "${STALL_JUDGE_LINKED_PR_JSON:-}" ]; then
+      linked_pr_json="${STALL_JUDGE_LINKED_PR_JSON}"
+    else
+      linked_pr_json="$(_fetch_pr_json "${linked_pr}")"
+    fi
     pr_state="$(_jq_field "${linked_pr_json}" '.state' 'open|closed|merged')"
     pr_mergeable="$(_jq_field "${linked_pr_json}" '.mergeable' 'true|false')"
     head_ref="$(_jq_field "${linked_pr_json}" '.head.ref')"
@@ -24641,8 +26048,13 @@ ${diagnostics}
 
   case "${effective_action}" in
     retrigger_pipeline|auto_respond_clarify|retrigger_plan|auto_approve|retrigger_implement|retrigger_review|attempt_merge|close_and_reissue|escalate_human|skip)
-      execute_stall_recovery_action "${issue_num}" "${phase}" "${effective_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
-      return $?
+      # Issue #9821: an escalate_human comment carries the judge's reason.
+      # Cleared right after, even on a non-zero return.
+      STALL_ESCALATE_HUMAN_JUSTIFICATION="${judge_justification}"
+      local _judge_dispatch_rc=0
+      execute_stall_recovery_action "${issue_num}" "${phase}" "${effective_action}" "${recovery_count}" "${local_id}" "${stall_minutes}" || _judge_dispatch_rc=$?
+      unset STALL_ESCALATE_HUMAN_JUSTIFICATION
+      return "${_judge_dispatch_rc}"
       ;;
     resolve_merge_conflict)
       if ! [[ "${STALL_JUDGE_TARGET_PR}" =~ ^[0-9]+$ ]]; then
@@ -24657,10 +26069,14 @@ ${diagnostics}
       fi
       if ! execute_stall_recovery_action "${issue_num}" "${phase}" "resolve_merge_conflict" "${recovery_count}" "${local_id}" "${stall_minutes}"; then
         # Owner hold (PR #9750): the target PR is held, so no fallback
-        # dispatch either; no attempt is counted.
-        if [ "${STALL_RECOVERY_EFFECTIVE_ACTION:-}" = "resolve_merge_conflict_skipped_pr_ai_hold" ]; then
-          return 1
-        fi
+        # dispatch either; no attempt is counted. A retired-host-only
+        # reissue stopped by its own hold re-check (#9733) reports
+        # close_and_reissue_skipped_pr_ai_hold and gets the same treatment.
+        case "${STALL_RECOVERY_EFFECTIVE_ACTION:-}" in
+          resolve_merge_conflict_skipped_pr_ai_hold|close_and_reissue_skipped_pr_ai_hold)
+            return 1
+            ;;
+        esac
         echo "::warning::resolve_merge_conflict dispatch failed for issue #${issue_num}; falling back to ${fallback_action}."
         execute_stall_recovery_action "${issue_num}" "${phase}" "${fallback_action}" "${recovery_count}" "${local_id}" "${stall_minutes}"
         return $?
@@ -24902,6 +26318,7 @@ _fetch_candidate_issue_details_graphql() {
           number
           title
           state
+          stateReason
           createdAt
           body
           author { login }
@@ -24960,6 +26377,7 @@ _fetch_candidate_issue_details_graphql() {
           key: (.value.number | tostring),
           value: {
             state: (((.value.state // "OPEN") | ascii_downcase) | if . == "closed" then "closed" else "open" end),
+            state_reason: ((.value.stateReason // "") | ascii_downcase),
             created_at: (.value.createdAt // null),
             body: .value.body,
             title: (.value.title // ""),
@@ -26183,7 +27601,7 @@ _stall_standalone_default_branch_resolve() {
     _STALL_STANDALONE_DEFAULT_BRANCH_TRIED=true
     _STALL_STANDALONE_DEFAULT_BRANCH="${CWS_DEFAULT_BRANCH:-}"
     if [ -z "${_STALL_STANDALONE_DEFAULT_BRANCH}" ]; then
-      _STALL_STANDALONE_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "")"
+      _STALL_STANDALONE_DEFAULT_BRANCH="$(_orch_poll_default_branch_or_live "" quiet)"
     fi
     _STALL_STANDALONE_DEFAULT_BRANCH="$(printf '%s' "${_STALL_STANDALONE_DEFAULT_BRANCH}" | tr -d '\r\n')"
     [ "${_STALL_STANDALONE_DEFAULT_BRANCH}" = "null" ] && _STALL_STANDALONE_DEFAULT_BRANCH=""
@@ -27798,12 +29216,32 @@ _Orchestrator: released the \`ai:needs-human\` latch that the staged-support res
 #     head starts at zero; a PR still over the cap is labelled again by the
 #     next sweep tick. A cap comment without the head marker (posted before
 #     it existed) is never released here.
+#   autofix_cap_head_moved   scripts/review_autofix_step_post_review_blocked_comment.sh
+#     The default "AI review/autofix blocked — needs human intervention"
+#     comment (autofix iteration cap, or a judge that gave up) carries
+#     `<!-- ai:autofix-cap-head:v1 head=<sha> -->` (issue #9917). A legacy
+#     comment without that marker is matched by its `Run: <server>/<repo>/
+#     actions/runs/<id>` line instead, only when <repo> is this repository:
+#     the run's head counts only when the run is a `pull_request` run with a
+#     40-hex `head_sha` whose head branch and head repository equal the PR's
+#     (a `workflow_dispatch` run's head_sha is a default-branch commit, so it
+#     never proves the PR head moved; such a latch stays for a person, logged
+#     `latch_head_unverifiable`; a failed run read logs `run_unavailable`).
+#     The two other labelling blocked-comment headings (judge omitted follow-up
+#     details, auto-merge disabled) are never latches here: a later trusted
+#     comment with either heading re-asserts the hold like a later
+#     `ai:needs-human` mention.
 # A latch is released only when all of these hold: the newest trusted latch
-# comment (a `[bot]` login or OWNER/MEMBER/COLLABORATOR) is one of the two
-# above and names a 40-hex head; the newest ai:needs-human label event is a
+# comment (a `[bot]` login or OWNER/MEMBER/COLLABORATOR) is one of the three
+# above and names (or, for a legacy autofix-cap comment, resolves) a 40-hex head; the newest ai:needs-human label event is a
 # `labeled` event by the same login, at or after that comment and at most
 # 30 minutes later (the fixed local `hl_bind_minutes`, not an env var), which
-# binds the label to that latch (both writers comment first, then label); no
+# binds the label to that latch (both writers comment first, then label;
+# an autofix-cap latch, whose writer does not always label, also binds when
+# the newest older trusted latch comment the label is bound to that way has
+# a head that is not the PR's current head and no trusted comment between it
+# and the autofix-cap comment re-asserts the hold or latches again on the
+# current head or an unresolved head, issue #9917); no
 # later trusted comment other than a release comment mentions
 # `ai:needs-human` (another path re-asserting the hold; a label re-added by
 # hand after a release fails the label binding above instead); no trusted
@@ -27837,7 +29275,10 @@ _Orchestrator: released the \`ai:needs-human\` latch that the staged-support res
 # `pulls/<n>` re-read (revalidation), one label removal, one comments read
 # after the removal (a latch that raced the removal gets its label back: one
 # label add, no release comment) and one comment write. PRs without a
-# head-bound latch cost only the comments read. Every read failure skips that PR for the tick
+# head-bound latch cost only the comments read. A legacy autofix-cap comment
+# (no head marker) costs one `actions/runs/<id>` read per run id per tick,
+# cached in the function-local `hl_run_head_cache` (no existing read carries a
+# run's event, head and head branch). Every read failure skips that PR for the tick
 # (fail open: the label stays). NEEDS_HUMAN_HEAD_LATCH_AUTO_RELEASE_ENABLED=false
 # skips the sweep.
 release_head_bound_needs_human_latches() {
@@ -27849,7 +29290,10 @@ release_head_bound_needs_human_latches() {
   local hl_prs hl_count hl_idx hl_pr hl_labels hl_comments hl_latch hl_latch_idx
   local hl_latch_at hl_latch_login hl_latch_head hl_reason hl_events hl_event
   local hl_pull hl_head hl_release_marker hl_body hl_refreshed_comments hl_refreshed_events hl_refreshed_event hl_refreshed_pull
-  local hl_post_delete_comments
+  local hl_post_delete_comments hl_latch_run hl_latch_legacy hl_run_info hl_run_branch hl_run_repo hl_latch_candidates hl_bound_idx hl_bound_head hl_bound_reason
+  # Per-tick cache of legacy autofix-cap run reads (issue #9917): run id ->
+  # projected run JSON, or "unavailable" when the read failed.
+  local -A hl_run_head_cache=()
   if ! hl_prs="$(gh_retry gh api --paginate "repos/${GITHUB_REPOSITORY}/issues?state=open&labels=ai%3Aneeds-human&per_page=100" \
     | jq -s 'add // [] | map(select(.pull_request != null))' 2>/dev/null)" \
     || ! hl_count="$(printf '%s' "${hl_prs}" | jq 'length' 2>/dev/null)" \
@@ -27870,8 +29314,9 @@ release_head_bound_needs_human_latches() {
       echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=comments_unavailable"
       continue
     fi
-    # Newest trusted latch comment of either kind, with its head.
-    hl_latch="$(printf '%s' "${hl_comments}" | jq -c '
+    # Every trusted latch comment of any kind, oldest first, with its head;
+    # the newest one is the latch.
+    hl_latch_candidates="$(printf '%s' "${hl_comments}" | jq -c --arg repo "${GITHUB_REPOSITORY}" '
       def trusted: ((.user.login // "") | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"));
       [to_entries[]
         | .value as $c
@@ -27883,8 +29328,15 @@ release_head_bound_needs_human_latches() {
           elif ($b | contains("<!-- ai:review-round-cap:v1 -->")) then
             {idx: .key, created_at: ($c.created_at // ""), login: ($c.user.login // ""), reason: "review_round_cap_head_moved",
              head: (($b | capture("<!-- ai:review-round-cap-head:v1 head=(?<h>[0-9a-f]{40}) -->") // {h: ""}).h)}
-          else empty end]
-      | last // null' 2>/dev/null || echo null)"
+          elif ($b | contains("<!-- ai:autofix-cap-head:v1 ")) then
+            {idx: .key, created_at: ($c.created_at // ""), login: ($c.user.login // ""), reason: "autofix_cap_head_moved",
+             head: (($b | capture("<!-- ai:autofix-cap-head:v1 head=(?<h>[0-9a-f]{40}) -->") // {h: ""}).h), run: ""}
+          elif ($b | contains("**AI review/autofix blocked — needs human intervention**")) then
+            {idx: .key, created_at: ($c.created_at // ""), login: ($c.user.login // ""), reason: "autofix_cap_head_moved", head: "",
+             run: (($b | capture("Run: https?://[^/\\s]+/(?<r>[^/\\s]+/[^/\\s]+)/actions/runs/(?<id>[0-9]+)") // {r: "", id: ""})
+               | if .r != "" and (.r | ascii_downcase) == ($repo | ascii_downcase) then .id else "" end)}
+          else empty end]' 2>/dev/null || echo '[]')"
+    hl_latch="$(printf '%s' "${hl_latch_candidates}" | jq -c 'last // null' 2>/dev/null || echo null)"
     hl_latch_idx="$(printf '%s' "${hl_latch}" | jq -r '.idx // -1' 2>/dev/null || echo -1)"
     if ! [[ "${hl_latch_idx}" =~ ^[0-9]+$ ]]; then
       echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=no_head_bound_latch"
@@ -27894,6 +29346,40 @@ release_head_bound_needs_human_latches() {
     hl_latch_login="$(printf '%s' "${hl_latch}" | jq -r '.login')"
     hl_latch_head="$(printf '%s' "${hl_latch}" | jq -r '.head')"
     hl_reason="$(printf '%s' "${hl_latch}" | jq -r '.reason')"
+    hl_latch_run="$(printf '%s' "${hl_latch}" | jq -r '.run // ""')"
+    hl_latch_legacy=false
+    hl_run_branch=""
+    hl_run_repo=""
+    # Set only by the autofix-cap fallback binding below; reset per PR.
+    hl_bound_idx=""
+    # Legacy autofix-cap comment (issue #9917): no head marker, so take the
+    # head from the run it names, read once per run id per tick.
+    if [ "${hl_reason}" = "autofix_cap_head_moved" ] && [ -z "${hl_latch_head}" ] && [[ "${hl_latch_run}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+      if [ -z "${hl_run_head_cache[${hl_latch_run}]+set}" ]; then
+        # gh-loop-ok: one read per legacy autofix-cap run id per tick, cached in hl_run_head_cache (§14)
+        if hl_run_info="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${hl_latch_run}" --jq '{event, head_sha, head_branch, head_repo: (.head_repository.full_name // "")}' 2>/dev/null)" \
+          && printf '%s' "${hl_run_info}" | jq -e 'type == "object"' >/dev/null 2>&1; then
+          hl_run_head_cache[${hl_latch_run}]="${hl_run_info}"
+        else
+          hl_run_head_cache[${hl_latch_run}]="unavailable"
+        fi
+      fi
+      hl_run_info="${hl_run_head_cache[${hl_latch_run}]}"
+      if [ "${hl_run_info}" = "unavailable" ]; then
+        echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=run_unavailable latch=${hl_reason} run=${hl_latch_run}"
+        continue
+      fi
+      # Only a pull_request run's head_sha is the PR head; a
+      # workflow_dispatch run's head_sha is a default-branch commit.
+      hl_latch_head="$(printf '%s' "${hl_run_info}" | jq -r 'if (.event // "") == "pull_request" and ((.head_sha // "") | type == "string" and test("^[0-9a-f]{40}$")) and ((.head_branch // "") | type == "string" and . != "") and ((.head_repo // "") | type == "string" and . != "") then .head_sha else "" end' 2>/dev/null || true)"
+      if ! [[ "${hl_latch_head}" =~ ^[0-9a-f]{40}$ ]]; then
+        echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=latch_head_unverifiable latch=${hl_reason} run=${hl_latch_run}"
+        continue
+      fi
+      hl_run_branch="$(printf '%s' "${hl_run_info}" | jq -r '.head_branch')"
+      hl_run_repo="$(printf '%s' "${hl_run_info}" | jq -r '.head_repo')"
+      hl_latch_legacy=true
+    fi
     if ! [[ "${hl_latch_head}" =~ ^[0-9a-f]{40}$ ]]; then
       echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=latch_head_missing latch=${hl_reason}"
       continue
@@ -27905,11 +29391,11 @@ release_head_bound_needs_human_latches() {
         any(to_entries[];
           .key > $i
           and ((((.value.user.login // "") | test("\\[bot\\]$")) or ((.value.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))))
-          and ((.value.body // "") | contains("ai:needs-human") and (test("<!-- ai:needs-human-auto-release reason=(non_retryable_head_moved|review_round_cap_head_moved) pr=" + $pr + " head=[0-9a-f]{40} -->\\s*$") | not)))' >/dev/null 2>&1; then
+          and ((.value.body // "") | (contains("ai:needs-human") or contains("**AI review/autofix — judge omitted follow-up issue details**") or contains("**AI review/autofix — judge approved merge but auto-merge is disabled**")) and (test("<!-- ai:needs-human-auto-release reason=(non_retryable_head_moved|review_round_cap_head_moved|autofix_cap_head_moved) pr=" + $pr + " head=[0-9a-f]{40} -->\\s*$") | not)))' >/dev/null 2>&1; then
       echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=later_needs_human_comment latch=${hl_reason}"
       continue
     fi
-    if ! hl_pull="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${hl_pr}" --jq '{state, head: (.head.sha // ""), labels: [.labels[]?.name]}' 2>/dev/null)" \
+    if ! hl_pull="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${hl_pr}" --jq '{state, head: (.head.sha // ""), ref: (.head.ref // ""), head_repo: (.head.repo.full_name // ""), labels: [.labels[]?.name]}' 2>/dev/null)" \
       || ! hl_head="$(printf '%s' "${hl_pull}" | jq -r '.head' 2>/dev/null)"; then
       echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=pull_unavailable"
       continue
@@ -27917,6 +29403,12 @@ release_head_bound_needs_human_latches() {
     if ! printf '%s' "${hl_pull}" | jq -e '.state == "open" and (.labels | index("ai:needs-human") != null) and (.labels | index("ai:destructive-blocked") == null) and (.labels | index("ai:scope-blocked") == null)' >/dev/null 2>&1 \
       || ! [[ "${hl_head}" =~ ^[0-9a-f]{40}$ ]]; then
       echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=pull_changed latch=${hl_reason}"
+      continue
+    fi
+    # A legacy-derived head counts only when its run was on this PR's branch.
+    if [ "${hl_latch_legacy}" = "true" ] && ! printf '%s' "${hl_pull}" | jq -e --arg ref "${hl_run_branch}" --arg repo "${hl_run_repo}" \
+      '(.ref // "") != "" and .ref == $ref and (.head_repo // "") != "" and .head_repo == $repo' >/dev/null 2>&1; then
+      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=latch_head_unverifiable latch=${hl_reason} run=${hl_latch_run}"
       continue
     fi
     if [ "${hl_head}" = "${hl_latch_head}" ]; then
@@ -27946,8 +29438,47 @@ release_head_bound_needs_human_latches() {
         and .created_at != "" and $at != ""
         and (.created_at >= $at)
         and (((.created_at | fromdateiso8601) - ($at | fromdateiso8601)) <= ($bind * 60))' >/dev/null 2>&1; then
-      echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=label_not_bound_to_latch latch=${hl_reason}"
-      continue
+      # Issue #9917: the default autofix-cap comment does not always add the
+      # label itself (review_autofix_step_post_review_blocked_comment.sh labels
+      # only some JUDGE_SKIP_REASON values), so an unlabelled one can be newer
+      # than the latch that set the label. It does not shadow that latch: the
+      # label still binds to the newest older trusted latch comment it is bound
+      # to (same login, at or after it, within hl_bind_minutes), when that
+      # latch's own 40-hex head is not the PR's current head either.
+      hl_bound_idx=""
+      if [ "${hl_reason}" = "autofix_cap_head_moved" ]; then
+        hl_bound_idx="$(printf '%s' "${hl_latch_candidates}" | jq -r --argjson e "${hl_event}" --argjson i "${hl_latch_idx}" --arg cur "${hl_head}" --argjson bind "${hl_bind_minutes}" '
+          if ($e | type) == "object" and $e.event == "labeled" and ($e.login // "") != "" and ($e.created_at // "") != "" then
+            ([.[] | select(.idx < $i
+                and (.login // "") == $e.login
+                and (.created_at // "") != "" and $e.created_at >= .created_at
+                and ((($e.created_at | fromdateiso8601) - (.created_at | fromdateiso8601)) <= ($bind * 60)))] | last // null)
+            | if . != null and ((.head // "") | test("^[0-9a-f]{40}$")) and .head != $cur then .idx else "" end
+          else "" end' 2>/dev/null || true)"
+      fi
+      if ! [[ "${hl_bound_idx}" =~ ^[0-9]+$ ]]; then
+        echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=label_not_bound_to_latch latch=${hl_reason}"
+        continue
+      fi
+      # The re-assertion check above starts after the newest latch. With the
+      # label bound to an older latch, a trusted comment between the two keeps
+      # the hold when it is itself a latch on the PR's current head (its label
+      # add was a no-op) or on a head that cannot be resolved (fail closed), or
+      # when it is not a latch and re-asserts ai:needs-human. A latch between
+      # them on a head the PR has left (e.g. the same writer re-firing on the
+      # stale head) holds nothing on the current head.
+      if printf '%s' "${hl_comments}" | jq -e --argjson b "${hl_bound_idx}" --argjson i "${hl_latch_idx}" --arg pr "${hl_pr}" --argjson c "${hl_latch_candidates}" --arg cur "${hl_head}" '
+          any(to_entries[];
+            .key as $k
+            | .key > $b and .key < $i
+            and ((((.value.user.login // "") | test("\\[bot\\]$")) or ((.value.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))))
+            and (([$c[] | select(.idx == $k)] | first // null) as $between_latch
+              | if $between_latch != null then (($between_latch.head // "") | (test("^[0-9a-f]{40}$") | not) or . == $cur) else true end)
+            and ((.value.body // "") | (contains("ai:needs-human") or contains("<!-- ai:workflow-heal-non-retryable:v1 ") or contains("<!-- ai:review-round-cap:v1 -->") or contains("<!-- ai:autofix-cap-head:v1 ") or contains("**AI review/autofix blocked — needs human intervention**") or contains("**AI review/autofix — judge omitted follow-up issue details**") or contains("**AI review/autofix — judge approved merge but auto-merge is disabled**"))
+              and (test("<!-- ai:needs-human-auto-release reason=(non_retryable_head_moved|review_round_cap_head_moved|autofix_cap_head_moved) pr=" + $pr + " head=[0-9a-f]{40} -->\\s*$") | not)))' >/dev/null 2>&1; then
+        echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=later_needs_human_comment latch=${hl_reason}"
+        continue
+      fi
     fi
     # Revalidate right before the write, like the staged-support release's
     # latch_changed_during_release guard: a writer that commented a new latch
@@ -27969,15 +29500,15 @@ release_head_bound_needs_human_latches() {
         any(.[];
           (.created_at // "") > $at
           and ((((.user.login // "") | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))))
-          and ((.body // "") | (contains("ai:needs-human") or contains("<!-- ai:workflow-heal-non-retryable:v1 ") or contains("<!-- ai:review-round-cap:v1 -->"))
-            and (test("<!-- ai:needs-human-auto-release reason=(non_retryable_head_moved|review_round_cap_head_moved) pr=" + $pr + " head=[0-9a-f]{40} -->\\s*$") | not)))' >/dev/null 2>&1; then
+          and ((.body // "") | (contains("ai:needs-human") or contains("<!-- ai:workflow-heal-non-retryable:v1 ") or contains("<!-- ai:review-round-cap:v1 -->") or contains("<!-- ai:autofix-cap-head:v1 ") or contains("**AI review/autofix blocked — needs human intervention**") or contains("**AI review/autofix — judge omitted follow-up issue details**") or contains("**AI review/autofix — judge approved merge but auto-merge is disabled**"))
+            and (test("<!-- ai:needs-human-auto-release reason=(non_retryable_head_moved|review_round_cap_head_moved|autofix_cap_head_moved) pr=" + $pr + " head=[0-9a-f]{40} -->\\s*$") | not)))' >/dev/null 2>&1; then
       echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=latch_changed_during_release latch=${hl_reason}"
       continue
     fi
     # The head and labels were checked on the first pulls/<n> read; read them
     # again so a push back to the latched head (or any other head change) or a
     # newly added ai:scope-blocked / ai:destructive-blocked keeps the hold.
-    if ! hl_refreshed_pull="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${hl_pr}" --jq '{state, head: (.head.sha // ""), labels: [.labels[]?.name]}' 2>/dev/null)"; then
+    if ! hl_refreshed_pull="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${hl_pr}" --jq '{state, head: (.head.sha // ""), ref: (.head.ref // ""), head_repo: (.head.repo.full_name // ""), labels: [.labels[]?.name]}' 2>/dev/null)"; then
       echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=skip reason=latch_revalidation_unavailable latch=${hl_reason}"
       continue
     fi
@@ -28006,8 +29537,8 @@ release_head_bound_needs_human_latches() {
         any(.[];
           (.created_at // "") > $at
           and ((((.user.login // "") | test("\\[bot\\]$")) or ((.author_association // "") | IN("OWNER", "MEMBER", "COLLABORATOR"))))
-          and ((.body // "") | (contains("ai:needs-human") or contains("<!-- ai:workflow-heal-non-retryable:v1 ") or contains("<!-- ai:review-round-cap:v1 -->"))
-            and (test("<!-- ai:needs-human-auto-release reason=(non_retryable_head_moved|review_round_cap_head_moved) pr=" + $pr + " head=[0-9a-f]{40} -->\\s*$") | not)))' >/dev/null 2>&1; then
+          and ((.body // "") | (contains("ai:needs-human") or contains("<!-- ai:workflow-heal-non-retryable:v1 ") or contains("<!-- ai:review-round-cap:v1 -->") or contains("<!-- ai:autofix-cap-head:v1 ") or contains("**AI review/autofix blocked — needs human intervention**") or contains("**AI review/autofix — judge omitted follow-up issue details**") or contains("**AI review/autofix — judge approved merge but auto-merge is disabled**"))
+            and (test("<!-- ai:needs-human-auto-release reason=(non_retryable_head_moved|review_round_cap_head_moved|autofix_cap_head_moved) pr=" + $pr + " head=[0-9a-f]{40} -->\\s*$") | not)))' >/dev/null 2>&1; then
       if GH_RETRY_IDEMPOTENT=true gh_retry gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${hl_pr}/labels" -f "labels[]=ai:needs-human" >/dev/null 2>&1; then
         echo "NEEDS_HUMAN_HEAD_LATCH pr=${hl_pr} outcome=relatched_after_release latch=${hl_reason} head=${hl_head:0:12}"
       else
@@ -28018,6 +29549,27 @@ release_head_bound_needs_human_latches() {
     fi
     if [ "${hl_reason}" = "non_retryable_head_moved" ]; then
       hl_body="_Orchestrator: removed \`ai:needs-human\`. It was set because a review/autofix run on head \`${hl_latch_head:0:12}\` failed in a way another run on that head could not fix. The PR is now on head \`${hl_head:0:12}\`, so that diagnosis no longer applies and the review runs on the new head as usual. If the same failure happens on this head, the label comes back._"
+    elif [ "${hl_reason}" = "autofix_cap_head_moved" ]; then
+      # When the label was bound to an older latch (fallback above), name
+      # that latch's head and cause, not the newest autofix-cap comment's.
+      hl_bound_head="${hl_latch_head}"
+      hl_bound_reason="autofix_cap_head_moved"
+      if [[ "${hl_bound_idx}" =~ ^[0-9]+$ ]]; then
+        hl_bound_head="$(printf '%s' "${hl_latch_candidates}" | jq -r --argjson b "${hl_bound_idx}" '[.[] | select(.idx == $b) | .head] | first // ""' 2>/dev/null || true)"
+        if [[ "${hl_bound_head}" =~ ^[0-9a-f]{40}$ ]]; then
+          hl_bound_reason="$(printf '%s' "${hl_latch_candidates}" | jq -r --argjson b "${hl_bound_idx}" '[.[] | select(.idx == $b) | .reason] | first // ""' 2>/dev/null || true)"
+        else
+          hl_bound_head="${hl_latch_head}"
+        fi
+      fi
+      case "${hl_bound_reason}" in
+        non_retryable_head_moved)
+          hl_body="_Orchestrator: removed \`ai:needs-human\`. It was set because a review/autofix run on head \`${hl_bound_head:0:12}\` failed in a way another run on that head could not fix. The PR is now on head \`${hl_head:0:12}\`, so that diagnosis no longer applies and the review runs on the new head as usual. If the same failure happens on this head, the label comes back._" ;;
+        review_round_cap_head_moved)
+          hl_body="_Orchestrator: removed \`ai:needs-human\`. The review sweep set it when head \`${hl_bound_head:0:12}\` reached the review-round cap. The PR is now on head \`${hl_head:0:12}\` and the round count starts again for it, so the sweep reviews it as usual. If this head reaches the cap too, the sweep labels it again._" ;;
+        *)
+          hl_body="_Orchestrator: removed \`ai:needs-human\`. It was set when review/autofix stopped on head \`${hl_bound_head:0:12}\` (autofix iteration cap, or a review-blocked judge that gave up). The PR is now on head \`${hl_head:0:12}\`, so the review runs on the new head as usual. If review/autofix stops on this head too, the label comes back._" ;;
+      esac
     else
       hl_body="_Orchestrator: removed \`ai:needs-human\`. The review sweep set it when head \`${hl_latch_head:0:12}\` reached the review-round cap. The PR is now on head \`${hl_head:0:12}\` and the round count starts again for it, so the sweep reviews it as usual. If this head reaches the cap too, the sweep labels it again._"
     fi
@@ -29106,23 +30658,23 @@ PY
       continue
     fi
 
-    # Owner hold (draft PR or `[skip ai]` title): leave an ai:done issue alone
+    # Owner hold (draft PR or `[skip ai]` title): leave the issue alone
     # before the stall judge, conflict dispatch or review retrigger runs. The
     # linked_pr entry comes from the batched details GraphQL (isDraft/title
     # ride on the existing query) or the implementation-PR REST payload
     # resolved above, so this adds no API calls. No attempt is counted and
     # the stall clock is not reset. A payload without the fields fails open;
     # the retrigger_review arms re-check the implementation PR payload.
-    if [ "${phase}" = "ai:done" ] && [ "${action}" != "skip" ]; then
-      local _std_ai_hold_reason=""
-      _std_ai_hold_reason="$(_stall_pr_ai_hold_reason "${_std_linked_json}")"
-      if [ -n "${_std_ai_hold_reason}" ]; then
-        echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=$(printf '%s' "${_std_linked_json}" | jq -r '.number // "unknown"' 2>/dev/null || echo unknown) detail=${_std_ai_hold_reason} phase=${phase} action=none"
-        if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
-          write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
-        fi
-        continue
+    # Every phase and every action, `skip` included (issue #9733: the
+    # exhausted close-out closed a held PR in ai:awaiting-approval).
+    local _std_ai_hold_reason=""
+    _std_ai_hold_reason="$(_stall_pr_ai_hold_reason "${_std_linked_json}")"
+    if [ -n "${_std_ai_hold_reason}" ]; then
+      echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=$(printf '%s' "${_std_linked_json}" | jq -r '.number // "unknown"' 2>/dev/null || echo unknown) detail=${_std_ai_hold_reason} phase=${phase} action=none requested_action=${action}"
+      if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+        write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
       fi
+      continue
     fi
 
     # Fresh-push guard complements issue_has_active_workflow above; see
@@ -29268,6 +30820,10 @@ PY
         fi
         if [[ "${_std_conflict_pr_num_try}" =~ ^[0-9]+$ ]]; then
           for _std_attempt in 0 1 2 3 4; do
+            # Issue #9927: every attempt must be a live GET (the GET is what
+            # starts GitHub's mergeability recomputation), so never serve the
+            # cached unsettled payload here.
+            _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${_std_conflict_pr_num_try}" || true
             _std_conflict_pr_json_try="$(_fetch_pr_json "${_std_conflict_pr_num_try}")"
             if [ -n "${_std_conflict_pr_json_try}" ] && [ "${_std_conflict_pr_json_try}" != "{}" ]; then
               _STD_ITER_PR_NUM_CACHED="${_std_conflict_pr_num_try}"
@@ -29399,6 +30955,19 @@ PY
         _std_rb_pre_pr_num="${STALL_IMPL_PR_NUM}"
       fi
       _std_rb_pre_failure_reason="${STALL_IMPL_PR_FAILURE_REASON}"
+      # Owner hold (#9733) on the REST payload resolved above (0 extra
+      # calls), mirroring the managed dispatch_rb_judge arm: the generic
+      # guard above fails open when the batched linked_pr lacks draft/title.
+      local _std_rb_hold_reason=""
+      [[ "${_std_rb_pre_pr_num}" =~ ^[0-9]+$ ]] && _std_rb_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON:-}")"
+      if [ -n "${_std_rb_hold_reason}" ]; then
+        echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${_std_rb_pre_pr_num} detail=${_std_rb_hold_reason} phase=${phase} action=none requested_action=dispatch_rb_judge"
+        STALL_RECOVERY_SHOULD_INCREMENT="false"
+        if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+          write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+        fi
+        continue
+      fi
       if [[ "${_std_rb_pre_pr_num}" =~ ^[0-9]+$ ]] \
         && _stall_pr_json_may_conflict "${STALL_IMPL_PR_JSON:-}" \
         && _stall_retired_host_only_conflict_check "${issue_num}" "${_std_rb_pre_pr_num}" "${STALL_IMPL_PR_JSON:-}"; then
@@ -29540,12 +31109,28 @@ STALL_EOF
         # the staged-support skip.
         # In ai:awaiting-approval, comments_json already holds the complete
         # history (_staged_support_comments_for_guard above); reuse it.
+        # #9809: reset per issue; "gate_held" means the plan gate held it and
+        # nothing below runs (this function loops over issues, so a `local`
+        # from an earlier issue would otherwise carry over).
+        local _std_auto_approve_route_rc="gate_held"
         local _std_plan_gate_comments="${comments_json:-[]}"
         if [ "${phase}" != "ai:awaiting-approval" ]; then
           _std_plan_gate_comments="$(_plan_auto_approval_gate_comments "${issue_num}" "${_candidate_details_json:-}")"
         fi
         if _plan_auto_approval_gate "${issue_num}" "${_candidate_details_json:-}" \
           "${_std_plan_gate_comments}" "${phase}"; then
+          # #9809: an open implementation PR makes /approved a no-op; review it
+          # instead. Runs only once the plan gate approves, so its holds run
+          # first (rc 0 counts, rc 2/3 take no action, rc 1 keeps /approved).
+          _std_auto_approve_route_rc=0
+          _stall_route_open_impl_pr "${issue_num}" "${phase}" "${action}" || _std_auto_approve_route_rc=$?
+          if [ "${_std_auto_approve_route_rc}" -eq 0 ]; then
+            STALL_RECOVERY_SHOULD_INCREMENT="true"
+            STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_review"
+            took_action="true"
+          fi
+        fi
+        if [ "${_std_auto_approve_route_rc}" = "1" ]; then
           local _std_auto_approve_rc=0
           gh_retry gh api "repos/${GITHUB_REPOSITORY}/issues/${issue_num}/comments" -f body="$(cat <<'STALL_EOF'
 /approved
@@ -29571,6 +31156,21 @@ STALL_EOF
           if ! _plan_auto_approval_gate "${issue_num}" "${_candidate_details_json:-}" \
             "${_std_rti_gate_comments}" "${phase}"; then
             _std_rti_gate_ok="false"
+          fi
+        fi
+        # #9809: an open implementation PR makes /approved a no-op; review it
+        # instead. Runs only once the plan gate passes (rc 0 counts, rc 2/3
+        # take no action, rc 1 keeps /approved).
+        if [ "${_std_rti_gate_ok}" = "true" ]; then
+          local _std_retrigger_implement_route_rc=0
+          _stall_route_open_impl_pr "${issue_num}" "${phase}" "${action}" || _std_retrigger_implement_route_rc=$?
+          if [ "${_std_retrigger_implement_route_rc}" -ne 1 ]; then
+            _std_rti_gate_ok="false"
+          fi
+          if [ "${_std_retrigger_implement_route_rc}" -eq 0 ]; then
+            STALL_RECOVERY_SHOULD_INCREMENT="true"
+            STALL_RECOVERY_EFFECTIVE_ACTION="dispatch_review"
+            took_action="true"
           fi
         fi
         if [ "${_std_rti_gate_ok}" = "true" ]; then
@@ -29794,6 +31394,7 @@ STALL_EOF
                   git config user.email "codex-bot@users.noreply.invalid"
                   git commit --allow-empty -m "[standalone] stall recovery: re-trigger review for issue #${issue_num}" 2>/dev/null || true
                   if git push origin "HEAD:${head_ref}" 2>/dev/null; then
+                    _invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
                     _std_rtr_push_succeeded="true"
                     STALL_RECOVERY_EFFECTIVE_ACTION="retrigger_review_empty_commit_fallback"
                     echo "  [standalone-stall] Issue #${issue_num} PR #${pr_num} pushed the empty-commit fallback (action=retrigger_review_empty_commit_fallback)."
@@ -30003,6 +31604,15 @@ STALL_EOF
           echo "  [standalone-stall-recovery] Ancestor-chain no-op cap reached for #${issue_num} (${standalone_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES:-2}). Closing without re-issue — judge will verify."
           ensure_label_exists "ai:closed"
           close_linked_pr "${issue_num}" "Closed by standalone stall recovery — ancestor-chain no-op cap reached (${standalone_anc_noop_count}/${MAX_IMPL_NOOP_REISSUES:-2})."
+          if [ -n "${CLOSE_LINKED_PR_HELD_PRS:-}" ]; then
+            # close_linked_pr left an owner-held PR open (#9733): leave the issue open too.
+            echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${CLOSE_LINKED_PR_HELD_PRS%% *} detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown} phase=${phase} action=none requested_action=close_and_reissue source=close_linked_pr"
+            STALL_RECOVERY_SHOULD_INCREMENT="false"
+            if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+              write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+            fi
+            continue
+          fi
           gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" \
             --remove-label 'ai:done' --remove-label 'ai:implementing' --remove-label 'ai:planning' --remove-label 'ai:clarification' --remove-label 'ai:awaiting-approval' --remove-label 'ai:ready-to-merge' \
             --add-label 'ai:closed' 2>/dev/null || true
@@ -30060,6 +31670,21 @@ REISSUE_EOF
           new_body="${new_body}"$'\n'"- ${_std_reissue_extra}"
         fi
         [ -n "${_std_reissue_close_msg}" ] || _std_reissue_close_msg="Closed by standalone stall recovery — issue #${issue_num} was stuck in '${phase}' for ${elapsed_minutes}m."
+        # Owner hold re-check before the replacement exists (issue #9733);
+        # same REST lookup and fail-open rule as the managed close_and_reissue
+        # arm in execute_stall_recovery_action. Counts nothing, keeps the clock.
+        if _resolve_issue_implementation_pr "${issue_num}"; then
+          local _std_reissue_hold_reason=""
+          _std_reissue_hold_reason="$(_stall_pr_ai_hold_reason "${STALL_IMPL_PR_JSON}")"
+          if [ -n "${_std_reissue_hold_reason}" ]; then
+            echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${STALL_IMPL_PR_NUM} detail=${_std_reissue_hold_reason} phase=${phase} action=none requested_action=close_and_reissue source=reissue_precheck"
+            STALL_RECOVERY_SHOULD_INCREMENT="false"
+            if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+              write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+            fi
+            continue
+          fi
+        fi
         ensure_label_exists "ai:clarification"
         local -a _heal_reissue_label_args=()
         if [ "${orig_issue_is_heal}" = true ] || printf '%s' "${orig_body}" | grep -q 'workflow-failure-heal:fp=' || printf '%s' "${labels_json:-[]}" | jq -e 'index("ai:workflow-heal") != null' >/dev/null 2>&1; then
@@ -30180,6 +31805,17 @@ This issue and its linked PR stay open with \`ai:needs-human\`; the unblock judg
           STALL_RECOVERY_SHOULD_INCREMENT="false"
         else
           close_linked_pr "${issue_num}" "Closed by standalone stall recovery: max recovery attempts exhausted (${_std_exhausted_attempts} attempts in '${phase}' phase, limit ${effective_max_recoveries})."
+          if [ -n "${CLOSE_LINKED_PR_HELD_PRS:-}" ]; then
+            # close_linked_pr left an owner-held PR open (the batched linked_pr
+            # lacked draft/title, so the hold guard above failed open): leave
+            # the issue open too, count nothing and keep the stall clock.
+            echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${CLOSE_LINKED_PR_HELD_PRS%% *} detail=${CLOSE_LINKED_PR_HELD_DETAIL:-unknown} phase=${phase} action=none requested_action=skip source=close_linked_pr"
+            STALL_RECOVERY_SHOULD_INCREMENT="false"
+            if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
+              write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
+            fi
+            continue
+          fi
           ensure_label_exists "ai:closed"
           gh_retry gh issue edit "${issue_num}" --repo "${GITHUB_REPOSITORY}" --add-label 'ai:closed' 2>/dev/null || true
           gh_retry gh issue close "${issue_num}" --repo "${GITHUB_REPOSITORY}" -c "Closing: standalone stall recovery exhausted (${_std_exhausted_attempts} attempts in '${phase}' phase, limit ${effective_max_recoveries}; stuck ${elapsed_minutes} minutes this time)." 2>/dev/null || true
@@ -30630,6 +32266,36 @@ recover_stalled_issue() {
     return 1  # Signal: no action taken (caller should not increment counter)
   fi
 
+  # ---- Guard: owner hold on the linked PR (draft / `[skip ai]` title) ----
+  # PR #9750 added this for managed ai:done issues only. Issue #9733 showed
+  # the gap: an ai:awaiting-approval issue whose held PR #9744 exhausted its
+  # budget took the `skip` action, and close_linked_pr closed the held PR.
+  # An owner hold now means "leave this item alone" in every phase and for
+  # every action, `skip` included, and it runs before the early-phase
+  # open-PR guard below so a held PR with conflicts gets no resolver either.
+  # Reads _fresh_lpr_entry first (the same STALL_MANAGED_LINKED_PR_CACHE
+  # entry, or REST implementation-PR fallback, the guards above use), then
+  # the wave's batched GraphQL linked_pr (0 extra API calls). A missing
+  # payload fails open; execute_stall_recovery_action retrigger_review /
+  # resolve_merge_conflict / skip and close_linked_pr re-check the REST
+  # payload they already fetch. No attempt is counted and the stall clock
+  # is not reset.
+  local _recover_hold_pr_json="${_fresh_lpr_entry:-}"
+  local _recover_hold_reason=""
+  _recover_hold_reason="$(_stall_pr_ai_hold_reason "${_recover_hold_pr_json}")"
+  if [ -z "${_recover_hold_reason}" ]; then
+    _recover_hold_pr_json="$(printf '%s' "${_current_wave_details_json:-}" | jq -c --arg n "${issue_num}" '.[$n].linked_pr // empty' 2>/dev/null || true)"
+    _recover_hold_reason="$(_stall_pr_ai_hold_reason "${_recover_hold_pr_json}")"
+  fi
+  if [ -n "${_recover_hold_reason}" ]; then
+    local _recover_hold_pr_num=""
+    _recover_hold_pr_num="$(printf '%s' "${_recover_hold_pr_json}" | jq -r '.number // empty' 2>/dev/null || true)"
+    echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${_recover_hold_pr_num} detail=${_recover_hold_reason} phase=${phase} action=none requested_action=${action}"
+    STALL_RECOVERY_EFFECTIVE_ACTION="${action}_skipped_pr_ai_hold"
+    STALL_RECOVERY_SHOULD_INCREMENT="false"
+    return 1
+  fi
+
   # ---- Guard: skip pre-implementation recovery when a linked PR already exists ----
   # Early-phase actions (retrigger_pipeline, auto_respond_clarify, retrigger_plan,
   # auto_approve, retrigger_implement) assume the issue has not yet produced a PR.
@@ -30752,6 +32418,16 @@ recover_stalled_issue() {
         _opr_mergeable="$(_jq_field "${_opr_json}" '.mergeable' 'true|false')"
         _opr_mergeable_state="$(_jq_field "${_opr_json}" '.mergeable_state')"
         _opr_head_ref="$(_jq_field "${_opr_json}" '.head.ref')"
+        # Owner hold re-check (issue #9733) on this payload (0 extra calls):
+        # the guard above fails open when the cached payloads lack draft/title.
+        local _opr_hold_reason=""
+        _opr_hold_reason="$(_stall_pr_ai_hold_reason "${_opr_json}")"
+        if [ -n "${_opr_hold_reason}" ]; then
+          echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${_lpr_num} detail=${_opr_hold_reason} phase=${phase} action=none requested_action=${action}"
+          STALL_RECOVERY_EFFECTIVE_ACTION="${action}_skipped_pr_ai_hold"
+          STALL_RECOVERY_SHOULD_INCREMENT="false"
+          return 1
+        fi
 
         # Sub-case 1: PR has merge conflicts → dispatch conflict resolver
         if { [ "${_opr_mergeable}" = "false" ] || [ "${_opr_mergeable_state}" = "dirty" ]; } && [ -n "${_opr_head_ref}" ]; then
@@ -30762,7 +32438,8 @@ recover_stalled_issue() {
             STALL_HEALING_CHANGED=true
             local _opr_reissue_rc=0
             "${STALL_RETIRED_CONFLICT_REISSUE_FN}" "${issue_num}" "${phase}" "close_and_reissue" "${recovery_count}" "${local_id}" "${stall_minutes}" || _opr_reissue_rc=$?
-            STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
+            [ "${STALL_RECOVERY_EFFECTIVE_ACTION:-}" = "close_and_reissue_skipped_pr_ai_hold" ] \
+              || STALL_RECOVERY_EFFECTIVE_ACTION="close_and_reissue"
             return "${_opr_reissue_rc}"
           fi
           local _opr_dispatch_rc=0
@@ -30820,31 +32497,6 @@ recover_stalled_issue() {
   esac
 
   # Cancel any zombie runs for this issue before retrying.
-  # Owner hold on the linked PR (draft / `[skip ai]` title, PR #9750):
-  # managed ai:done issues skip the stall judge and every dispatch. Reads
-  # _fresh_lpr_entry first (the same STALL_MANAGED_LINKED_PR_CACHE entry,
-  # or REST implementation-PR fallback, the guards above use), then the
-  # wave's batched GraphQL linked_pr (0 extra API calls); a missing
-  # payload fails open, and execute_stall_recovery_action retrigger_review
-  # / resolve_merge_conflict re-check the REST payload.
-  if [ "${phase}" = "ai:done" ] && [ "${action}" != "skip" ]; then
-    local _recover_hold_pr_json="${_fresh_lpr_entry:-}"
-    local _recover_hold_reason=""
-    _recover_hold_reason="$(_stall_pr_ai_hold_reason "${_recover_hold_pr_json}")"
-    if [ -z "${_recover_hold_reason}" ]; then
-      _recover_hold_pr_json="$(printf '%s' "${_current_wave_details_json:-}" | jq -c --arg n "${issue_num}" '.[$n].linked_pr // empty' 2>/dev/null || true)"
-      _recover_hold_reason="$(_stall_pr_ai_hold_reason "${_recover_hold_pr_json}")"
-    fi
-    if [ -n "${_recover_hold_reason}" ]; then
-      local _recover_hold_pr_num=""
-      _recover_hold_pr_num="$(printf '%s' "${_recover_hold_pr_json}" | jq -r '.number // empty' 2>/dev/null || true)"
-      echo "STALL_SKIP issue=${issue_num} reason=pr_ai_hold pr=${_recover_hold_pr_num} detail=${_recover_hold_reason} phase=${phase} action=none"
-      STALL_RECOVERY_EFFECTIVE_ACTION="${action}_skipped_pr_ai_hold"
-      STALL_RECOVERY_SHOULD_INCREMENT="false"
-      return 1
-    fi
-  fi
-
   if [ "${action}" != "skip" ] && [ "${action}" != "attempt_merge" ] && [ "${action}" != "escalate_human" ]; then
     cancel_zombie_runs_for_issue "${issue_num}"
   fi
@@ -32018,7 +33670,7 @@ for ((tidx=0; tidx<COUNT; tidx++)); do
 		TRACKING_LABELS="$(get_issue_labels_json "${TRACKING_NUM}")"
 	fi
 	if [ "${PROJECT_STATUS}" = "security-pass" ] || [ "${PROJECT_STATUS}" = "security-pass-fixing" ]; then
-		DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+		DEFAULT_BRANCH_TRACKING="$(_orch_poll_default_branch_or_live "main")"
 		# The tick-level sync below skips both states; heal a final PR that
 		# main made unmergeable now instead of after the pass (Q41: A).
 		if [ -n "${INTEGRATION_BRANCH_TRACKING}" ]; then
@@ -32190,7 +33842,7 @@ ${SECURITY_PASS_WAIVE_LINES}
 The bounded security-pass fix loop was reset. Re-running the mandatory current-head audit."
           tg_notify "/security-pass-waive: project #${TRACKING_NUM} waived $(printf '%s' "${SECURITY_PASS_WAIVE_IDS_JSON}" | jq -r 'length') finding(s) (by ${SECURITY_PASS_WAIVE_AUTHOR}); security-pass state reset and re-running the audit." "DEBUG"
           if [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
-            DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+            DEFAULT_BRANCH_TRACKING="$(_orch_poll_default_branch_or_live "main")"
           fi
           ensure_security_pass_before_completion "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" || true
           continue
@@ -32487,7 +34139,7 @@ Security-pass fix issue #${SECURITY_FIX_ISSUE} was closed by orchestrator stall 
             continue
           fi
           if [ "${ENABLE_SECURITY_PASS}" = "true" ] && [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
-            DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+            DEFAULT_BRANCH_TRACKING="$(_orch_poll_default_branch_or_live "main")"
           fi
           if ! ensure_security_pass_before_completion "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" "${_orch_extfin_pr_json}"; then
             continue
@@ -32664,7 +34316,7 @@ ${_orch_extfin_validation_line}"
   # can own externally merged/deleted final-PR completion without the
   # integration-branch missing/conflict path preempting it.
   if [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
-    DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+    DEFAULT_BRANCH_TRACKING="$(_orch_poll_default_branch_or_live "main")"
   fi
   # Retry advisory creation on every later merged-state tick. The transition
   # arms attempt filing immediately, but a transient create failure leaves the
@@ -32709,7 +34361,7 @@ ${_orch_extfin_validation_line}"
 
   if [ "${PROJECT_STATUS}" = "merge_conflict" ]; then
     FINAL_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
-    FINAL_DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+    FINAL_DEFAULT_BRANCH="$(_orch_poll_default_branch_or_live "main")"
     FINAL_PROJECT_TITLE="$(jq -r '.project_title // "Orchestrator project"' "${STATE_FILE}")"
     FINAL_PR_FOR_TRACKING_BODY="$(jq -r '.final_merge_pr // empty' "${STATE_FILE}" 2>/dev/null || echo "")"
 
@@ -33115,7 +34767,7 @@ The \`ai:validated\` label was missing but the last validation workflow run conc
 The bounded security-pass fix loop was reset by \`/re-security-pass\`. Re-running the mandatory current-head audit."
       tg_notify "/re-security-pass: project #${TRACKING_NUM} security-pass state reset; re-running the audit." "DEBUG"
       if [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
-        DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+        DEFAULT_BRANCH_TRACKING="$(_orch_poll_default_branch_or_live "main")"
       fi
       ensure_security_pass_before_completion "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" || true
       continue
@@ -33185,7 +34837,7 @@ The bounded security-pass fix loop was reset by \`/re-security-pass\`. Re-runnin
 The security pass that parked this project ran on workflow engine \`${SP_AUTO_RESET_FAILED_ENGINE_SHA:-unknown}\`; this poll runs on \`${SP_AUTO_RESET_ENGINE_SHA}\`. The bounded fix loop is reset once for the new engine and the mandatory current-head audit re-runs. Comment \`/re-security-pass\` to reset it again by hand, or set \`SECURITY_PASS_AUTO_RESET_ON_ENGINE_CHANGE=false\` to keep exhausted projects parked."
       tg_notify "Project #${TRACKING_NUM} security pass reset automatically: workflow engine ${SP_AUTO_RESET_ENGINE_SHA} replaced ${SP_AUTO_RESET_FAILED_ENGINE_SHA:-unknown}; re-running the audit." "DEBUG"
       if [ -z "${DEFAULT_BRANCH_TRACKING}" ]; then
-        DEFAULT_BRANCH_TRACKING="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+        DEFAULT_BRANCH_TRACKING="$(_orch_poll_default_branch_or_live "main")"
       fi
       ensure_security_pass_before_completion "${INTEGRATION_BRANCH_TRACKING}" "${DEFAULT_BRANCH_TRACKING}" || true
       continue
@@ -33278,7 +34930,7 @@ PY
 
       REVALIDATE_MEMORY_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}" 2>/dev/null || echo "")"
       if [ -z "${REVALIDATE_MEMORY_BRANCH}" ] || [ "${REVALIDATE_MEMORY_BRANCH}" = "null" ]; then
-        REVALIDATE_MEMORY_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' 2>/dev/null || echo "")"
+        REVALIDATE_MEMORY_BRANCH="$(_orch_poll_default_branch_or_live "" quiet)"
       fi
       REVALIDATE_INTEGRATION_SHA=""
       if [ -n "${REVALIDATE_MEMORY_BRANCH}" ]; then
@@ -34219,6 +35871,10 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   # Reconcile managed issue labels + truth signals before status/stall checks
   # ---------------------------------------------------------------
   ISSUE_STATES_JSON='{}'
+  # Issue #10059: close reasons (GitHub stateReason, lowercased) read from the
+  # same GraphQL batch as the state; no extra API call. Only filled when the
+  # batch supplied the item, so the REST fallback fails closed (blocking).
+  ISSUE_STATE_REASONS_JSON='{}'
   PR_STATES_JSON='{}'
   # Merged PR per issue for persist_merged_pr (issue #8427, P7); filled only
   # with PERSIST_ORCH_CONTEXT_ENABLED, never persisted (PR_STATES_JSON unchanged).
@@ -34232,9 +35888,17 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     fi
 
     ISSUE_STATE=""
+    _iss_state_reason=""
     if printf '%s' "${_current_wave_details_json}" | jq -e --arg key "${inum}" 'has($key)' >/dev/null 2>&1; then
       ISSUE_STATE="$(printf '%s' "${_current_wave_details_json}" | jq -r --arg key "${inum}" '.[$key].state // empty' 2>/dev/null | grep -xE 'open|closed' || true)"
+      if [ -n "${ISSUE_STATE}" ]; then
+        _iss_state_reason="$(printf '%s' "${_current_wave_details_json}" | jq -r --arg key "${inum}" '.[$key].state_reason // empty' 2>/dev/null | grep -xE '[a-z_]{1,32}' || true)"
+      fi
     fi
+    if [ -n "${_iss_state_reason}" ]; then
+      ISSUE_STATE_REASONS_JSON="$(printf '%s' "${ISSUE_STATE_REASONS_JSON}" | jq -c --arg key "${inum}" --arg reason "${_iss_state_reason}" '. + {($key): $reason}' 2>/dev/null || printf '%s' "${ISSUE_STATE_REASONS_JSON}")"
+    fi
+    unset _iss_state_reason
     if [ -z "${ISSUE_STATE}" ]; then
       ISSUE_STATE="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}" --jq '.state' | grep -xE 'open|closed' || echo "open")"
     fi
@@ -34370,6 +36034,9 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     fi
     LABELS_JSON="$(printf '%s' "${LABELS_JSON}" | jq -c --arg key "${_rb_reissue_num}" --argjson succ "${_rb_reissue_json}" '. + {($key): $succ.labels}' 2>/dev/null || printf '%s' "${LABELS_JSON}")"
     ISSUE_STATES_JSON="$(printf '%s' "${ISSUE_STATES_JSON}" | jq -c --arg key "${_rb_reissue_num}" --argjson succ "${_rb_reissue_json}" '. + {($key): $succ.state}' 2>/dev/null || printf '%s' "${ISSUE_STATES_JSON}")"
+    # Issue #10059: no reliable close reason for the adopted successor this
+    # tick; drop any stale one so the item fails closed (blocking).
+    ISSUE_STATE_REASONS_JSON="$(printf '%s' "${ISSUE_STATE_REASONS_JSON}" | jq -c --arg key "${_rb_reissue_num}" 'del(.[$key])' 2>/dev/null || echo '{}')"
     # A failed PR lookup must not read as merged:false (closed-without-merge
     # would let the wave judge open a duplicate redo).  Treat the successor as
     # open for this tick only; the next tick's reconcile reads its real state.
@@ -34409,6 +36076,7 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     --state-file "${STATE_FILE}" \
     --labels-json "${LABELS_JSON}" \
     --issue-states-json "${ISSUE_STATES_JSON}" \
+    --issue-state-reasons-json "${ISSUE_STATE_REASONS_JSON}" \
     --pr-states-json "${PR_STATES_JSON}" \
     --integration-ahead-by "${CWS_AHEAD_BY}")"
 
@@ -34417,6 +36085,9 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   echo "Wave status: ${WAVE_STATUS}"
   WAVE_COMPLETE="$(echo "${WAVE_STATUS}" | jq -r '.wave_complete')"
   ANY_FAILED="$(echo "${WAVE_STATUS}" | jq -r '.any_failed')"
+  # Issue #10059: read only by the completion-status comment and alert. Falls
+  # back to any_failed when the field is absent (older helper).
+  ANY_FAILED_BLOCKING="$(echo "${WAVE_STATUS}" | jq -r 'if has("any_failed_blocking") then .any_failed_blocking else .any_failed end' 2>/dev/null || echo "${ANY_FAILED}")"
   PROJECT_COMPLETE="$(echo "${WAVE_STATUS}" | jq -r '.project_complete')"
 
   # Ensure the integration→default PR exists as soon as the integration
@@ -34467,7 +36138,9 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     _csc_validation_recovery_count=0
   fi
   _completion_status_text="in-progress"
-  if [ "${ANY_FAILED}" = "true" ]; then
+  # Issue #10059: only blocking failures mark the project failed; items closed
+  # as already delivered fall through so the judge decides completion.
+  if [ "${ANY_FAILED_BLOCKING:-${ANY_FAILED}}" = "true" ]; then
     _completion_status_text="failed"
   elif [ "${PROJECT_STATUS:-}" = "in_progress" ] && [ "${_csc_validation_recovery_count}" -gt 0 ]; then
     _completion_status_text="in-progress"
@@ -34503,6 +36176,21 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       | select(.status == "closed" or .status == "implementation-failed")
       | "- #\(.github_issue // "?"): \(.status) (\(.decision_source // "unknown"))"]
     | join("\n")')"
+  # Issue #10059: when every closed/failed item was closed as already
+  # delivered, list them under their own heading instead of the failed one.
+  # A mix keeps today's failed list (all items) and wording.
+  _csc_delivered_lines=""
+  _csc_delivered_nums_json='[]'
+  if [ "${ANY_FAILED}" = "true" ] && [ "${ANY_FAILED_BLOCKING:-${ANY_FAILED}}" != "true" ]; then
+    _csc_delivered_lines="${_csc_failed_lines}"
+    _csc_delivered_lines="$(echo "${WAVE_STATUS}" | jq -r '
+      [.issues[]
+        | select(.closed_as_delivered == true)
+        | "- #\(.github_issue // "?"): \(.status) (\(.decision_source // "unknown"))"]
+      | join("\n")' 2>/dev/null || printf '%s' "${_csc_delivered_lines}")"
+    _csc_delivered_nums_json="$(echo "${WAVE_STATUS}" | jq -c '[.issues[] | select(.closed_as_delivered == true) | .github_issue | select(type == "number")] | unique' 2>/dev/null || echo '[]')"
+    _csc_failed_lines=""
+  fi
 
   _csc_body="## Completion status"$'\n\n'
   _csc_body+="**State:** \`${_completion_status_text}\`"$'\n'
@@ -34534,6 +36222,10 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
     _csc_body+=$'\n'"**Wave issues closed without merge / implementation-failed:**"$'\n'"${_csc_failed_lines}"$'\n'
     _csc_body+=$'\n'"Project cannot complete until these are resolved (re-open, re-merge, or skip)."$'\n'
   fi
+  if [ -n "${_csc_delivered_lines}" ]; then
+    _csc_body+=$'\n'"**Wave issues closed as already delivered:**"$'\n'"${_csc_delivered_lines}"$'\n'
+    _csc_body+=$'\n'"These were closed as completed with \`ai:closed\` and no failure label; the project judge decides whether the project can complete."$'\n'
+  fi
   if [ -n "${_csc_skipped_lines}" ]; then
     _csc_body+=$'\n'"**Wave issues skipped:**"$'\n'"${_csc_skipped_lines}"$'\n'
     _csc_body+=$'\n'"Skipped issues are already accounted for and do not block completion."$'\n'
@@ -34549,7 +36241,12 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
   # so the operator sees the alert as soon as ANY_FAILED first goes
   # true. Guarded by a state-file flag so we never alert more than once
   # per project for the same condition.
-  if [ "${ANY_FAILED}" = "true" ]; then
+  #
+  # Issue #10059: gated on ANY_FAILED_BLOCKING so items closed as already
+  # delivered (closed as completed, ai:closed, no blocking failure label) get
+  # the WARNING below instead. That path never sets
+  # completion_status_failure_alert_sent, so a later real failure still pages.
+  if [ "${ANY_FAILED_BLOCKING:-${ANY_FAILED}}" = "true" ]; then
     _csc_alert_sent="$(jq -r '.completion_status_failure_alert_sent // false' "${STATE_FILE}" 2>/dev/null || echo false)"
     if [ "${_csc_alert_sent}" != "true" ]; then
       tg_notify "Project #${TRACKING_NUM}: one or more wave PR(s) closed without merge — see the pinned 'Completion status' comment on the tracking issue for the full list. The project cannot complete until these are resolved." "CRITICAL"
@@ -34562,10 +36259,44 @@ These issues will enter the AI pipeline (clarify → plan → implement → revi
       fi
     fi
     unset _csc_alert_sent
+  elif [ "${ANY_FAILED}" = "true" ]; then
+    # Issue #10059: one WARNING per project and delivered-closed item, deduped
+    # via completion_status_delivered_closed_alerted (array of issue numbers).
+    _csc_delivered_alerted_json="$(jq -c '(.completion_status_delivered_closed_alerted // []) | if type == "array" then [.[] | select(type == "number")] else [] end' "${STATE_FILE}" 2>/dev/null || echo '[]')"
+    [ -n "${_csc_delivered_alerted_json}" ] || _csc_delivered_alerted_json='[]'
+    _csc_delivered_new_json="$(jq -cn --argjson cur "${_csc_delivered_nums_json:-[]}" --argjson seen "${_csc_delivered_alerted_json}" '$cur - $seen' 2>/dev/null || echo '[]')"
+    _csc_delivered_csv="$(printf '%s' "${_csc_delivered_nums_json:-[]}" | jq -r 'map(tostring) | join(",")' 2>/dev/null || echo "")"
+    if [ "$(printf '%s' "${_csc_delivered_new_json}" | jq -r 'length' 2>/dev/null || echo 0)" -gt 0 ]; then
+      # One WARNING per project and item (issue #10059 Goals); the dedupe
+      # array below still records every newly alerted item in one write.
+      _csc_delivered_new_refs="$(printf '%s' "${_csc_delivered_new_json}" | jq -r '.[] | tostring' 2>/dev/null | grep -xE '[0-9]+' || true)"
+      while IFS= read -r _csc_delivered_item; do
+        [ -n "${_csc_delivered_item}" ] || continue
+        tg_notify "Project #${TRACKING_NUM}: wave item #${_csc_delivered_item} closed as already delivered (closed as completed, ai:closed, no failure label) without a merged PR. The project judge will decide whether the project can complete; see the pinned 'Completion status' comment." "WARNING" </dev/null
+      done <<< "${_csc_delivered_new_refs}"
+      unset _csc_delivered_item
+      if jq --argjson add "${_csc_delivered_new_json}" '.completion_status_delivered_closed_alerted = (((.completion_status_delivered_closed_alerted // []) | if type == "array" then [.[] | select(type == "number")] else [] end) + $add | unique)' "${STATE_FILE}" > "${STATE_FILE}.tmp" \
+        && mv "${STATE_FILE}.tmp" "${STATE_FILE}"; then
+        COMPLETION_STATUS_STATE_CHANGED="true"
+        echo "COMPLETION_DELIVERED_CLOSED tracking_issue=${TRACKING_NUM:-?} items=${_csc_delivered_csv} alert=sent"
+      else
+        rm -f "${STATE_FILE}.tmp" || true
+        echo "::warning::[completion-status] failed to persist completion_status_delivered_closed_alerted for issue #${TRACKING_NUM:-?}; the delivered-closed warning may repeat on a later tick."
+        echo "COMPLETION_DELIVERED_CLOSED tracking_issue=${TRACKING_NUM:-?} items=${_csc_delivered_csv} alert=persist_failed"
+      fi
+    elif [ -n "${_csc_delivered_csv}" ]; then
+      echo "COMPLETION_DELIVERED_CLOSED tracking_issue=${TRACKING_NUM:-?} items=${_csc_delivered_csv} alert=already_sent"
+    else
+      # No delivered item could be listed (e.g. jq failed); no alert went out.
+      echo "::warning::[completion-status] delivered-closed items could not be enumerated for issue #${TRACKING_NUM:-?}; no warning sent."
+      echo "COMPLETION_DELIVERED_CLOSED tracking_issue=${TRACKING_NUM:-?} items= alert=none"
+    fi
+    unset _csc_delivered_alerted_json _csc_delivered_new_json _csc_delivered_new_refs _csc_delivered_csv
   fi
 
   unset _completion_status_text _csc_integration_ahead_by _csc_integration_contained
   unset _csc_total_waves _csc_current_wave _csc_pending_lines _csc_failed_lines _csc_skipped_lines _csc_body _csc_validation_recovery_count _csc_effective_threshold
+  unset _csc_delivered_lines _csc_delivered_nums_json
 
   # Persist reconciled status decisions every cycle (not only narrow branches).
   RECONCILE_STATE_CHANGED=false
@@ -35373,6 +37104,7 @@ $(cat "${_rb_pr_diff_capped_tmp}")"
         _rb_prev_pr_state="${RB_PR_STATE:-}"
         _rb_prev_pr_merged="${RB_PR_MERGED:-false}"
         _rb_fix_refreshed="false"
+        _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${RB_PR}" || true
         _rb_pr_json_refetched="$(_fetch_pr_json "${RB_PR}")"
         if printf '%s' "${_rb_pr_json_refetched}" | jq -e 'type == "object" and ((.state // "") | IN("open","closed","merged"))' >/dev/null 2>&1; then
           _rb_fix_refreshed="true"
@@ -35968,6 +37700,7 @@ sys.exit(1)
           # Attempt squash merge (with branch update if needed)
           # Re-fetch PR data (state may have changed since the judge ran)
           RB_MERGED="false"
+          _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${RB_PR}" || true
           _rb_merge_json="$(_fetch_pr_json "${RB_PR}")"
           PR_STATE="$(_jq_field "${_rb_merge_json}" '.state' 'open|closed|merged')"
           PR_MERGEABLE="$(_jq_field "${_rb_merge_json}" '.mergeable' 'true|false')"
@@ -35988,6 +37721,7 @@ sys.exit(1)
 		    && _pr_checks_completed "${RB_PR}" "${_rb_merge_sha}" "${_rb_merge_base}" \
 		    && _pr_base_fresh_for_merge "${RB_PR}" "${_rb_merge_sha}" "${_rb_merge_base}"; then
 		    if _orch_squash_merge_bound "${RB_PR}" "${_rb_merge_sha}" auto; then
+		      _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${RB_PR}" || true
 		      if [ "${ORCH_MERGE_BOUND_OUTCOME}" = "merged" ]; then
 		        echo "  PR #${RB_PR} merged directly."
 		      else
@@ -36002,6 +37736,7 @@ sys.exit(1)
             if gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/update-branch" \
               -X PUT -f expected_head_sha="${_rb_merge_sha}" \
               2>/dev/null; then
+              _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${RB_PR}" || true
               echo "  PR #${RB_PR} branch updated. Synchronize event will re-trigger review + conflict resolution."
             else
               echo "  API branch update failed for review-blocked PR #${RB_PR}. Dispatching review workflow for conflict resolution..."
@@ -36037,6 +37772,7 @@ sys.exit(1)
             gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
               --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
             RB_FORCE_MERGED="false"
+            _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${RB_PR}" || true
             _rb_fm_json="$(_fetch_pr_json "${RB_PR}")"
             PR_STATE="$(_jq_field "${_rb_fm_json}" '.state' 'open|closed|merged')"
             PR_MERGEABLE="$(_jq_field "${_rb_fm_json}" '.mergeable' 'true|false')"
@@ -36052,6 +37788,7 @@ sys.exit(1)
 				  && _pr_checks_completed "${RB_PR}" "${_rb_fm_sha}" "${_rb_fm_base}" \
 				  && _pr_base_fresh_for_merge "${RB_PR}" "${_rb_fm_sha}" "${_rb_fm_base}"; then
 				  if _orch_squash_merge_bound "${RB_PR}" "${_rb_fm_sha}" auto; then
+				    _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${RB_PR}" || true
 				    RB_FORCE_MERGED="true"
 				  else
 				    echo "::warning::Could not merge PR #${RB_PR} in force-merge path."
@@ -36061,6 +37798,7 @@ sys.exit(1)
               if gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${RB_PR}/update-branch" \
                 -X PUT -f expected_head_sha="${_rb_fm_sha}" \
                 2>/dev/null; then
+                _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${RB_PR}" || true
                 echo "  PR #${RB_PR} branch updated. Will retry force-merge on next poll cycle."
               else
                 echo "  API branch update failed for force-merge PR #${RB_PR}. Dispatching review workflow for conflict resolution..."
@@ -36087,6 +37825,7 @@ sys.exit(1)
           else
             echo "  Judge is applying fixes to PR #${RB_PR}..."
             # Re-check PR state before expensive fix+push (race condition safety net)
+            _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${RB_PR}" || true
             _rb_recheck_json="$(_fetch_pr_json "${RB_PR}")"
             RB_PR_STATE_NOW="$(_jq_field "${_rb_recheck_json}" '.state' 'open|closed|merged')"
             RB_PR_MERGED_NOW="$(_jq_field "${_rb_recheck_json}" '.merged_at != null' 'true|false')"
@@ -36264,6 +38003,7 @@ ${RB_FIX_DESC}" || true
                   elif git -C "${RB_COMBINED_WORKDIR}" -c credential.helper= \
                       -c 'credential.helper=!f() { printf "username=x-access-token\npassword=%s\n" "$GH_TOKEN"; }; f' \
                       push "https://github.com/${GITHUB_REPOSITORY}" "HEAD:${FOLLOWUP_BRANCH}" 2>/dev/null; then
+                    _invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
                     echo "  Pushed follow-up branch ${FOLLOWUP_BRANCH}."
 
                     if [ "${STATE_FOLLOWUP_INTEGRATION_BRANCH_EXISTS}" = "true" ] && [ -n "${STATE_FOLLOWUP_INTEGRATION_BRANCH}" ]; then
@@ -36328,6 +38068,7 @@ ${RB_FIX_DESC}
                   if git -C "${RB_COMBINED_WORKDIR}" -c credential.helper= \
                       -c 'credential.helper=!f() { printf "username=x-access-token\npassword=%s\n" "$GH_TOKEN"; }; f' \
                       push "https://github.com/${GITHUB_REPOSITORY}" "HEAD:${HEAD_REF}" 2>/dev/null; then
+                    _invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
                     echo "  Pushed [orchestrator-fix] commit to ${HEAD_REF}."
                     # Remove review-blocked label — the push triggers synchronize
                     # which re-runs review_autofix with a reset autofix counter.
@@ -36376,6 +38117,7 @@ ${RB_FIX_DESC}
                   ensure_label_exists "ai:ready-to-merge"
                   gh_retry gh issue edit "${rb_issue}" --repo "${GITHUB_REPOSITORY}" \
                     --remove-label 'ai:review-blocked' --add-label 'ai:ready-to-merge' 2>/dev/null || true
+                  _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${RB_PR}" || true
                   _rb_nofix_json="$(_fetch_pr_json "${RB_PR}")"
                   PR_STATE="$(_jq_field "${_rb_nofix_json}" '.state' 'open|closed|merged')"
                   PR_MERGEABLE="$(_jq_field "${_rb_nofix_json}" '.mergeable' 'true|false')"
@@ -36391,6 +38133,7 @@ ${RB_FIX_DESC}
                     && _pr_checks_completed "${RB_PR}" "${_rb_nofix_sha}" "${_rb_nofix_base}" \
                     && _pr_base_fresh_for_merge "${RB_PR}" "${_rb_nofix_sha}" "${_rb_nofix_base}"; then
                     if _orch_squash_merge_bound "${RB_PR}" "${_rb_nofix_sha}" auto; then
+                      _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${RB_PR}" || true
                       tg_notify "Orchestrator judge merged PR #${RB_PR} (no fix changes needed, issue #${rb_issue})"$'\n'"PR: $(_gh_url "pull/${RB_PR}")"$'\n'"Issue: $(_gh_url "issues/${rb_issue}")" "DEBUG"
                     else
                       echo "::warning::Could not merge PR #${RB_PR} in no-fix merge path."
@@ -36447,6 +38190,7 @@ ${RB_FIX_DESC}
             # ran) and run the MERGE_CONFIRMED ladder. Mirrors the
             # standalone review_rb_judge.sh script's merge_with_followup
             # branch — see that file for the rationale on each gate.
+            _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" "${RB_PR}" || true
             _rb_mwf_json="$(_fetch_pr_json "${RB_PR}")"
             # GitHub's REST /pulls/{N} returns .state as one of `open`
             # or `closed` (never `merged` — merged PRs are state=closed
@@ -36546,9 +38290,12 @@ ${RB_FIX_DESC}
                   || ! _pr_sync_merge_blocked_guard "${_rb_mwf_json}" "${_rb_mwf_base}"; then
                   echo "::warning::PR #${RB_PR} sync merge deferred: GitHub reports mergeable_state=${SYNC_MERGE_BLOCKED_GUARD_STATE:-unknown} (blockers: ${SYNC_MERGE_BLOCKED_GUARD_BLOCKERS:-unknown}). Leaving issue in ai:review-blocked — next poll cycle will re-fire the judge."
                 elif gh pr merge "${RB_PR}" --repo "${GITHUB_REPOSITORY}" --squash "${_rb_mwf_match_arg[@]}" 2>/dev/null; then
+                  # A merge can change other PRs' mergeability: flush all.
+                  _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" || true
                   echo "  PR #${RB_PR} merged synchronously."
                   MERGE_CONFIRMED="true"
                 else
+                  _invalidate_pr_json_cache "${GITHUB_REPOSITORY}" || true
                   echo "::warning::PR #${RB_PR} sync merge failed (typically: required checks still pending, branch protection rules, merge queue, permissions, or 422). Leaving issue in ai:review-blocked — next poll cycle will re-fire the judge after merge lands; that run hits the PR_MERGED_NOW=true short path and creates the follow-up."
                 fi
               else
@@ -36703,34 +38450,12 @@ ${RB_FIX_DESC}
       # Re-check wave status after handling review-blocked issues
       # (some may have been merged or reissued)
       echo "Re-checking wave status after review-blocked handling..."
-      LABELS_JSON="{"
-      first=true
-      for inum in ${ISSUE_NUMS}; do
-        if [ -z "${inum}" ] || [ "${inum}" = "null" ]; then
-          continue
-        fi
-        # Re-read labels since we may have changed them
-        LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${inum}/labels" --jq '[.[].name]' || echo '[]')"
-        if [ "${first}" = true ]; then
-          first=false
-        else
-          LABELS_JSON+=","
-        fi
-        LABELS_JSON+="\"${inum}\":${LABELS}"
-      done
-      LABELS_JSON+="}"
-
-      # Also check any reissued issue numbers
+      # Re-read labels since we may have changed them (issue #9927: one
+      # batched GraphQL read for this wave's issues plus any reissued
+      # numbers; per-issue REST only for numbers the batch did not return).
       REISSUED_NUMS="$(jq -r '.waves['"${WAVE_IDX}"'].issues[].github_issue' "${STATE_FILE}" 2>/dev/null | sort -u)"
-      for rnum in ${REISSUED_NUMS}; do
-        if [ -z "${rnum}" ] || [ "${rnum}" = "null" ]; then continue; fi
-        if echo "${LABELS_JSON}" | jq -e --arg key "${rnum}" 'has($key)' >/dev/null 2>&1; then
-          continue
-        fi
-        LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rnum}/labels" --jq '[.[].name]' || echo '[]')"
-        [ -z "${LABELS}" ] && LABELS='[]'
-        LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${rnum}" --argjson labels "${LABELS}" '. + {($key): $labels}' 2>/dev/null || echo "${LABELS_JSON}")"
-      done
+      # shellcheck disable=SC2086
+      LABELS_JSON="$(_orch_poll_labels_fill_missing '{}' ${ISSUE_NUMS} ${REISSUED_NUMS})"
 
       WAVE_STATUS="$(python3 scripts/orchestrate_lib.py check-wave-status \
         --state-file "${STATE_FILE}" \
@@ -37160,13 +38885,9 @@ if [ "${IMPL_FAILED_STATE_CHANGED}" = "true" ]; then
 
   # Add labels for any replacement issues created in this cycle.
   REISSUED_NUMS="$(jq -r '.waves['"${WAVE_IDX}"'].issues[].github_issue' "${STATE_FILE}" 2>/dev/null | sort -u)"
-  for rnum in ${REISSUED_NUMS}; do
-    if [ -z "${rnum}" ] || [ "${rnum}" = "null" ]; then continue; fi
-    if echo "${LABELS_JSON}" | jq -e --arg key "${rnum}" 'has($key)' >/dev/null 2>&1; then continue; fi
-    LABELS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/issues/${rnum}/labels" --jq '[.[].name]' || echo '[]')"
-    [ -z "${LABELS}" ] && LABELS='[]'
-    LABELS_JSON="$(echo "${LABELS_JSON}" | jq -c --arg key "${rnum}" --argjson labels "${LABELS}" '. + {($key): $labels}' 2>/dev/null || echo "${LABELS_JSON}")"
-  done
+  # Issue #9927: the numbers missing from LABELS_JSON share one batched read.
+  # shellcheck disable=SC2086
+  LABELS_JSON="$(_orch_poll_labels_fill_missing "${LABELS_JSON}" ${REISSUED_NUMS})"
 fi
 
   INVOKE_JUDGE_FOR_STUCK=false
@@ -37817,7 +39538,7 @@ ${PR_DIFF}
   unset _sorted_issue_nums _issue_status _judge_diff_pass _judge_pr_diff_budget_left
 
   # Fetch CI status on default branch
-  DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+  DEFAULT_BRANCH="$(_orch_poll_default_branch_or_live "main")"
   CI_STATUS="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}/commits/${DEFAULT_BRANCH}/check-runs" \
     --jq '[.check_runs[] | {name: .name, conclusion: .conclusion}]' || echo "[]")"
 
@@ -38174,7 +39895,7 @@ PRs to revert: ${REVERT_COUNT}"
   case "${JUDGE_STATUS}" in
     complete)
       FINAL_INTEGRATION_BRANCH="$(jq -r '.integration_branch // ""' "${STATE_FILE}")"
-      FINAL_DEFAULT_BRANCH="${DEFAULT_BRANCH_TRACKING:-$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")}"
+      FINAL_DEFAULT_BRANCH="${DEFAULT_BRANCH_TRACKING:-$(_orch_poll_default_branch_or_live "main")}"
       # Run-volume plan item 3: the per-tick sync is throttled, so bring the
       # integration branch up to main once here, before the security pass
       # binds to its head and validation / the final merge test it. Like the
@@ -38388,6 +40109,7 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
                 git checkout -b "${REVERT_BRANCH}" "${DEFAULT_BRANCH}"
                 if git revert --no-edit "${MERGE_SHA}"; then
                   git push -u origin "${REVERT_BRANCH}"
+                  _invalidate_pr_json_cache "${GITHUB_REPOSITORY:-}" || true
                   mapfile -t _engine_label_args < <(engine_label_create_args)
                   gh_retry gh pr create "${_engine_label_args[@]}" \
                     --repo "${GITHUB_REPOSITORY}" \
@@ -38465,6 +40187,11 @@ They are tracked in the current wave; post \`/judge_resume\` (optionally with \`
               echo "  ${NEW_ID}: prior issue #${EXISTING_NUM} is already merged/closed, allowing new addition."
             fi
           fi
+
+          # Issue #9534: add the standard scope companions to a judge-written
+          # files_touched block (fail open; JUDGE_FILES_TOUCHED_COMPANIONS_ENABLED).
+          apply_judge_files_touched_companions "${NEW_BODY}" addition "${NEW_ID}"
+          NEW_BODY="${JUDGE_COMPANIONS_BODY_OUT}"
 
           FULL_NEW_BODY="${NEW_BODY}
 
@@ -39014,7 +40741,7 @@ CONFLICT_SWEEP_DISPATCHED=0
 CONFLICT_SWEEP_DISPATCH_INFLIGHT=0
 CONFLICT_SWEEP_DISPATCH_FAILED=0
 CONFLICT_SWEEP_UNRESOLVED_SAME_HEAD=0
-DEFAULT_BRANCH="$(gh_retry _safe_gh_jq "repos/${GITHUB_REPOSITORY}" --jq '.default_branch' || echo "main")"
+DEFAULT_BRANCH="$(_orch_poll_default_branch_or_live "main")"
 
 # Input: the open-PR snapshot, in bounded 30-PR batches. Output: numbers
 # mapped to a verified CLEAN state at the snapshot head. One GraphQL request
@@ -39041,6 +40768,11 @@ declare -A _STANDALONE_CONFLICT_STATE_LOADED=()
 # oldest first). Only own-line markers are parsed; author trust is applied
 # later by run_issueless_review_retry_pass. A failed list or batch leaves
 # its PRs out and sets _STANDALONE_ISSUELESS_RETRY_PREFETCH_FAILED (fail open).
+# Issue #10031: a comment item also carries gate ({head, reset, run}),
+# gate_retry ({run, head}) and gate_escalated ({run}) only when its body holds
+# the matching own-line ai:review-gate-rate-limited:v1,
+# ai:review-gate-rate-limit-requeue:v1 or ai:review-gate-rate-limit-escalated:v1
+# marker; run_review_gate_rate_limit_requeue_pass reads them.
 declare -A _STANDALONE_ISSUELESS_RETRY_STATE=()
 _STANDALONE_ISSUELESS_RETRY_PREFETCH_FAILED="false"
 if [ "${_conflict_sweep_list_failed:-false}" = "true" ]; then
@@ -39100,7 +40832,9 @@ if [[ "${GITHUB_REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
 				[ -n "${_standalone_issueless_row}" ] || _standalone_issueless_row='{}'
 				_standalone_issueless_entry="$(printf '%s' "${_standalone_response}" | jq -c --arg key "p${_standalone_num}" --arg ref "${_standalone_head}" --arg oid "${_standalone_list_oid}" --argjson num "${_standalone_num}" \
 					--argjson row "${_standalone_issueless_row}" --argjson pipeline "${ISSUELESS_REVIEW_RETRY_PIPELINE_LABELS_JSON}" \
-					--arg fail_tag "review-autofix-failure:v1" --arg retry_tag "${ISSUELESS_REVIEW_RETRY_MARKER_TAG}" '
+					--arg fail_tag "review-autofix-failure:v1" --arg retry_tag "${ISSUELESS_REVIEW_RETRY_MARKER_TAG}" \
+					--arg gate_tag "ai:review-gate-rate-limited:v1" --arg gate_retry_tag "ai:review-gate-rate-limit-requeue:v1" \
+					--arg gate_esc_tag "ai:review-gate-rate-limit-escalated:v1" '
 					def own_marker($tag):
 						[capture("(^|\n)<!-- " + $tag + " (?<f>[^>\n]*?) -->[ \r]*(\n|$)"; "g") | .f] | last
 						| if . == null then null else
@@ -39120,11 +40854,14 @@ if [[ "${GITHUB_REPOSITORY}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
 							closing_total: ($n.closingIssuesReferences.totalCount | if type == "number" then . else 2147483647 end),
 							closing_seen: ($closing | length),
 							linked_pipeline: any($closing[]; any((.labels.nodes // [])[]?; (.name? // "") as $l | $pipeline | index($l) != null)),
-							comments: [($n.comments.nodes // [])[]? | (.body // "" | if type == "string" then . else "" end) as $b | {
+							comments: [($n.comments.nodes // [])[]? | (.body // "" | if type == "string" then . else "" end) as $b | ({
 								a: ((.author.login // "") | if type == "string" then . else "" end),
 								fail: ($b | own_marker($fail_tag) | if . == null then null else {head: (.head // ""), reason: (.reason // ""), support: (.support // ""), fp: (.fp // "")} end),
 								retry: ($b | own_marker($retry_tag) | if . == null then null else {head: (.head // ""), support: (.support // "")} end)
-							}]
+							}
+							+ ($b | own_marker($gate_tag) | if . == null then {} else {gate: {head: (.head // ""), reset: (.reset // ""), run: (.run // "")}} end)
+							+ ($b | own_marker($gate_retry_tag) | if . == null then {} else {gate_retry: {run: (.run // ""), head: (.head // "")}} end)
+							+ ($b | own_marker($gate_esc_tag) | if . == null then {} else {gate_escalated: {run: (.run // "")}} end))]
 						}
 					else empty end' 2>/dev/null || true)"
 				if [ -n "${_standalone_issueless_entry}" ]; then
@@ -40253,4 +41990,184 @@ run_issueless_review_retry_pass() {
 }
 
 run_issueless_review_retry_pass || echo "ISSUELESS_REVIEW_RETRY outcome=skipped reason=error rc=$?"
+
+# ---------------------------------------------------------------
+# Review gate rate-limit requeue pass (issue #10031)
+# ---------------------------------------------------------------
+# When the review gate's PR read gives up on a GH_PAT primary rate limit
+# (AUTOFIX_GATE_PR_READ_FAILED rc=75), scripts/review_autofix_step_evaluate_gate.sh
+# posts a job-token comment ending in
+# `<!-- ai:review-gate-rate-limited:v1 head=<sha|unknown> reset=<epoch> run=<id> -->`.
+# Nothing re-entered the PR afterwards (binance-blessings PR #716 and
+# tele-funtoken-msg-scoring PR #5718 sat two days). This pass reads the same
+# _STANDALONE_ISSUELESS_RETRY_STATE the issue-less pass reads (no extra read)
+# and re-dispatches the review through _dispatch_review_for_conflicts (default
+# branch only; in-flight guard) once the reset has passed, at most
+# RATE_LIMIT_REQUEUE_MAX_ATTEMPTS times per head, then adds ai:needs-human.
+# Gate markers count only from `github-actions` (the job token); requeue and
+# escalation markers only from unblock_trusted_login. PRs with a linked
+# pipeline issue are included. Log prefix: REVIEW_GATE_RATE_LIMIT_REQUEUE.
+
+# _review_gate_rate_limit_requeue_decide <entry_json> <trusted_login> <now_epoch>
+# Pure: prints "<decision>|<reason>|<run>|<reset>|<attempts>" where decision is
+# none, skipped, already_requeued, already_escalated, waiting_for_reset,
+# escalate or eligible. Malformed input prints "none||||" (fail closed).
+_review_gate_rate_limit_requeue_decide() {
+	local entry="${1:-}" login="${2:-}" now="${3:-0}" result
+	[[ "${now}" =~ ^[0-9]+$ ]] || now=0
+	result="$(printf '%s' "${entry}" | jq -r --arg login "${login}" --argjson now "${now}" --arg repo_owner "${GITHUB_REPOSITORY%%/*}" \
+		--argjson grace "${RATE_LIMIT_REQUEUE_GRACE_SECS}" --argjson max "${RATE_LIMIT_REQUEUE_MAX_ATTEMPTS}" \
+		--argjson exclude "${ISSUELESS_REVIEW_RETRY_EXCLUDE_LABELS_JSON}" '
+		def sha: (type == "string") and test("^[0-9a-f]{40}$");
+		def valid_gate: (type == "object") and ((.run // "") | type == "string" and test("^[1-9][0-9]*$")) and ((.reset // "") | type == "string" and test("^[1-9][0-9]{9}$"));
+		. as $e
+		| if ($e | type) != "object" or $login == "" or ($e.comments | type) != "array" then "none||||" else
+		$e.comments as $c
+		| ([range(0; $c | length) | select((($c[.].a // "") == "github-actions") and ($c[.].gate | valid_gate))] | last) as $i
+		| if $i == null then "none||||" else
+		$c[$i].gate as $g
+		| $c[($i + 1):] as $after
+		| ([$c[] | select((.a // "") == $login and (.gate_retry | type) == "object" and ($e.oid | sha) and .gate_retry.head == $e.oid)] | length) as $retries
+		# Each further rc=75 gate marker on this head also counts, so a requeue
+		# whose marker write failed still uses up an attempt. Re-dispatched
+		# (workflow_dispatch) gate runs have no PR head SHA and write
+		# head=unknown, so those count too, but only after the newest marker
+		# that names a different head (over-counting escalates early: fail safe).
+		# A later non-marker pipeline comment (a trusted-login comment without a
+		# requeue/escalation marker, or a github-actions comment without a gate
+		# marker) closes the window only when the next gate marker after it
+		# names the current head SHA: that gate run came from a fresh PR event,
+		# so the earlier episode was resolved and its markers stop counting.
+		# Poller re-dispatches write head=unknown, so a comment that lands
+		# between them never resets the count. This matters when requeue
+		# marker writes fail: $retries then stays 0 and $gate_reruns is the
+		# only cap left. Unknown-head markers of episodes that a review
+		# resolved without a later SHA-named gate run still count, which only
+		# escalates early (fail safe).
+		| ([range(0; $c | length) | select(
+			((($c[.].a // "") == "github-actions") and ($c[.].gate | valid_gate) and ($c[.].gate.head | sha) and $c[.].gate.head != $e.oid)
+			or ((($c[.].a // "") == $login) and ($c[.].gate_retry | type) == "object" and ($c[.].gate_retry.head | sha) and $c[.].gate_retry.head != $e.oid)
+			or ((((($c[.].a // "") == $login) and ($c[.].gate_retry | type) != "object" and ($c[.].gate_escalated | type) != "object")
+				or ((($c[.].a // "") == "github-actions") and ($c[.].gate | type) != "object"))
+				and (. as $k | [range($k + 1; $c | length) | select((($c[.].a // "") == "github-actions") and ($c[.].gate | valid_gate)) | $c[.].gate.head] | first
+					| . == null or ((. | sha) and . == $e.oid))))] | last // -1) as $head_start
+		| ([$c[($head_start + 1):][] | select((.a // "") == "github-actions" and (.gate | valid_gate) and ($e.oid | sha) and ((.gate.head == $e.oid) or (.gate.head | sha | not)))] | length - 1) as $gate_reruns
+		| ([$retries, $gate_reruns, 0] | max) as $attempts
+		| "|\($g.run)|\($g.reset)|\($attempts)" as $tail
+		| if any($after[]; (.a // "") == $login and (.gate_retry | type) == "object" and .gate_retry.run == $g.run) then "already_requeued|\($tail)"
+		elif any($after[]; (.a // "") == $login and (.gate_escalated | type) == "object" and .gate_escalated.run == $g.run) then "already_escalated|\($tail)"
+		elif any($after[]; ((.a // "") == $login) or ((.a // "") == "github-actions")) then "skipped|later_review|\($g.run)|\($g.reset)|\($attempts)"
+		elif ($e.cross != "false") or (($e.owner // "") == "") or (($e.owner | ascii_downcase) != ($repo_owner | ascii_downcase)) then "skipped|fork_or_unknown_head|\($g.run)|\($g.reset)|\($attempts)"
+		elif $e.draft != false then "skipped|draft|\($g.run)|\($g.reset)|\($attempts)"
+		elif any(($e.labels // [])[]; . as $l | $exclude | index($l) != null) then "skipped|excluded_label|\($g.run)|\($g.reset)|\($attempts)"
+		elif ($e.oid | sha | not) or (($g.head | sha) and $g.head != $e.oid) then "skipped|head_moved|\($g.run)|\($g.reset)|\($attempts)"
+		elif (($g.reset | tonumber) <= ($now + 3900)) and $now < (($g.reset | tonumber) + $grace) then "waiting_for_reset|\($tail)"
+		elif $attempts >= $max then "escalate|\($tail)"
+		else "eligible|\($tail)" end
+		end end' 2>/dev/null || true)"
+	[ -n "${result}" ] || result="none||||"
+	printf '%s\n' "${result}"
+}
+
+# run_review_gate_rate_limit_requeue_pass: one pass per cycle; always returns 0.
+run_review_gate_rate_limit_requeue_pass() {
+	local repo="${GITHUB_REPOSITORY:-}" login now pr entry decision reason run reset attempts head head_ref
+	local dispatch_rc body dispatched=0 requeued=0 log_head log_line label_state comment_state
+	echo ""
+	echo "========================================"
+	echo "Review gate rate-limit requeue pass"
+	echo "========================================"
+	if [ "${_STANDALONE_ISSUELESS_RETRY_PREFETCH_FAILED:-false}" = "true" ]; then
+		echo "REVIEW_GATE_RATE_LIMIT_REQUEUE outcome=skipped reason=prefetch_unavailable repo=${repo}"
+	fi
+	if [ "${#_STANDALONE_ISSUELESS_RETRY_STATE[@]}" -eq 0 ]; then
+		echo "Review gate rate-limit requeue pass complete. Requeued: 0."
+		return 0
+	fi
+	unblock_trusted_login >/dev/null || true
+	login="${UNBLOCK_TRUSTED_LOGIN:-}"
+	if [ -z "${login}" ]; then
+		echo "REVIEW_GATE_RATE_LIMIT_REQUEUE outcome=skipped reason=trusted_login_unresolved repo=${repo}"
+		echo "Review gate rate-limit requeue pass complete. Requeued: 0."
+		return 0
+	fi
+	now="$(date -u +%s)"
+	while IFS= read -r pr; do
+		[[ "${pr}" =~ ^[1-9][0-9]*$ ]] || continue
+		entry="${_STANDALONE_ISSUELESS_RETRY_STATE["${pr}"]:-}"
+		decision="" reason="" run="" reset="" attempts=""
+		IFS='|' read -r decision reason run reset attempts < <(_review_gate_rate_limit_requeue_decide "${entry}" "${login}" "${now}") || true
+		if [ "${decision:-none}" = "none" ]; then
+			continue
+		fi
+		[[ "${run}" =~ ^[1-9][0-9]*$ ]] || continue
+		[[ "${attempts}" =~ ^[0-9]+$ ]] || attempts=0
+		head="$(printf '%s' "${entry}" | jq -r '.oid // ""' 2>/dev/null || true)"
+		log_head="${head}"; [[ "${log_head}" =~ ^[0-9a-f]{40}$ ]] || log_head="unknown"
+		log_line="pr=${pr} repo=${repo} head=${log_head} run=${run} reset=${reset:-unknown} attempts=${attempts}/${RATE_LIMIT_REQUEUE_MAX_ATTEMPTS}"
+		case "${decision}" in
+			skipped)
+				echo "REVIEW_GATE_RATE_LIMIT_REQUEUE outcome=skipped ${log_line} reason=${reason:-unknown}"
+				continue
+				;;
+			waiting_for_reset|already_requeued|already_escalated)
+				echo "REVIEW_GATE_RATE_LIMIT_REQUEUE outcome=${decision} ${log_line}"
+				continue
+				;;
+			escalate)
+				label_state="added"; comment_state="skipped"
+				# gh-loop-ok: escalation writes only, once per (PR, gate run); reads come from the batch cache
+				GH_RETRY_IDEMPOTENT=true gh_retry gh api "repos/${repo}/issues/${pr}/labels" -f 'labels[]=ai:needs-human' >/dev/null 2>&1 || label_state="failed"
+				# already_escalated is terminal: without the label, post no marker
+				# so the next tick retries the escalation.
+				if [ "${label_state}" != "added" ]; then
+					echo "REVIEW_GATE_RATE_LIMIT_REQUEUE outcome=escalated ${log_line} label=${label_state} marker=${comment_state}"
+					continue
+				fi
+				comment_state="written"
+				body="Review gate rate-limit requeue stopped: the GitHub API primary rate limit of GH_PAT stopped the AI review gate on head \`${log_head}\` ${attempts} times after automatic re-dispatch (last run ${run}). Automatic re-entry has stopped and \`ai:needs-human\` was added; re-run the review once the rate limit has recovered.
+
+<!-- ai:review-gate-rate-limit-escalated:v1 run=${run} -->"
+				# gh-loop-ok: escalation marker write, once per (PR, gate run)
+				gh_retry gh api "repos/${repo}/issues/${pr}/comments" -f body="${body}" >/dev/null 2>&1 || comment_state="write_failed"
+				echo "REVIEW_GATE_RATE_LIMIT_REQUEUE outcome=escalated ${log_line} label=${label_state} marker=${comment_state}"
+				continue
+				;;
+			eligible) ;;
+			*) continue ;;
+		esac
+		if [ "${dispatched}" -ge "${REVIEW_GATE_RATE_LIMIT_REQUEUE_MAX_PER_CYCLE}" ]; then
+			echo "REVIEW_GATE_RATE_LIMIT_REQUEUE outcome=skipped ${log_line} reason=cycle_cap"
+			continue
+		fi
+		dispatched=$((dispatched + 1))
+		head_ref="$(printf '%s' "${entry}" | jq -r '.ref // ""' 2>/dev/null || true)"
+		dispatch_rc=0
+		_dispatch_review_for_conflicts "${pr}" "${head_ref}" || dispatch_rc=$?
+		case "${dispatch_rc}" in
+			0)
+				requeued=$((requeued + 1))
+				body="Review gate rate-limit requeue: re-dispatched the review after the GitHub API rate limit reset (attempt $((attempts + 1)) of ${RATE_LIMIT_REQUEUE_MAX_ATTEMPTS}).
+
+<!-- ai:review-gate-rate-limit-requeue:v1 run=${run} head=${log_head} -->"
+				# gh-loop-ok: requeue marker write after a dispatch, capped by REVIEW_GATE_RATE_LIMIT_REQUEUE_MAX_PER_CYCLE
+				if gh_retry gh api "repos/${repo}/issues/${pr}/comments" -f body="${body}" >/dev/null 2>&1; then
+					echo "REVIEW_GATE_RATE_LIMIT_REQUEUE outcome=requeued ${log_line} attempt=$((attempts + 1))/${RATE_LIMIT_REQUEUE_MAX_ATTEMPTS}"
+				else
+					echo "REVIEW_GATE_RATE_LIMIT_REQUEUE outcome=requeued ${log_line} attempt=$((attempts + 1))/${RATE_LIMIT_REQUEUE_MAX_ATTEMPTS} marker=write_failed"
+				fi
+				;;
+			2)
+				echo "REVIEW_GATE_RATE_LIMIT_REQUEUE outcome=in_flight ${log_line}"
+				;;
+			*)
+				echo "REVIEW_GATE_RATE_LIMIT_REQUEUE outcome=skipped ${log_line} reason=dispatch_failed"
+				;;
+		esac
+	done < <(printf '%s\n' "${!_STANDALONE_ISSUELESS_RETRY_STATE[@]}" | sort -n)
+	echo "Review gate rate-limit requeue pass complete. Requeued: ${requeued}."
+	return 0
+}
+
+run_review_gate_rate_limit_requeue_pass || echo "REVIEW_GATE_RATE_LIMIT_REQUEUE outcome=skipped reason=error rc=$?"
 _standalone_sweep_alert_level_restore

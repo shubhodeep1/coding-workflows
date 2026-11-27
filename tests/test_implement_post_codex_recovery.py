@@ -23,6 +23,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from review_autofix_step_scripts import expanded_implement_text  # noqa: E402
 from codex_isolation_fakes import enable_fake_isolation  # noqa: E402
 IMPLEMENT_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "implement.yml"
 IMPLEMENT_COMMIT_SCRIPT = REPO_ROOT / "scripts" / "implement_commit_changes.sh"
@@ -32,7 +33,8 @@ FILES_TOUCHED_SCOPE_GUARD = REPO_ROOT / "scripts" / "files_touched_scope_guard.p
 
 
 def _workflow_text() -> str:
-	return IMPLEMENT_WORKFLOW.read_text(encoding="utf-8")
+	# Two step bodies live in scripts/implement_step_*.sh (#9678); inline them.
+	return expanded_implement_text()
 
 
 def _implement_commit_script_text() -> str:
@@ -1063,8 +1065,8 @@ def test_resolve_checkout_ref_ignores_prior_pr_baseline_branch_when_present() ->
 				- Type: review-blocked-reissue
 				- prior_pr_baseline_branch: {baseline_branch}
 				- files_touched:
-				  - src/app.py
-				"""
+				\x20\x20- src/app.py
+				"""  # noqa: E101 - YAML list indent inside the dedented body
 			),
 			default_checkout_ref="orchestrator/project-829",
 			branch_exists={baseline_branch: True},
@@ -1907,6 +1909,10 @@ def _run_github_ai_add_fixture(
 	env.pop("IMPLEMENT_STAGED_SUPPORT_RUN_DIR", None)
 	if not extra_env or "IMPLEMENT_SELF_REPO_GITHUB_AI_ADDS_ENABLED" not in extra_env:
 		env.pop("IMPLEMENT_SELF_REPO_GITHUB_AI_ADDS_ENABLED", None)
+	# These cases isolate the #9111 self-repo block; the #9920 plan-grant block
+	# (default on) is covered by tests/test_github_ai_plan_grant_write.py.
+	if not extra_env or "GITHUB_AI_PLAN_GRANT_WRITE_ENABLED" not in extra_env:
+		env["GITHUB_AI_PLAN_GRANT_WRITE_ENABLED"] = "false"
 	for key in ("STAGED_SUPPORT_LEDGER", "STAGED_SUPPORT_BASE_DIR", "STAGED_SUPPORT_EDITOR_HEAD_LEDGER",
 			"HEAL_ROUTE", "SCOPE_LOCK_LABEL_ENABLED", "ISSUE_SCOPE_LOCK_GLOB", "FETCHED_MANIFEST"):
 		env.pop(key, None)
@@ -1990,6 +1996,19 @@ def test_commit_helper_consumer_repo_never_stages_github_ai_file() -> None:
 		assert "self-repo .github/ai additions" not in proc.stdout, details
 		assert committed == ["tests/new_test.py"], details
 		assert ".github/ai/x.json" in untracked.splitlines(), details
+
+
+def test_commit_helper_consumer_repo_stages_plan_granted_github_ai_file() -> None:
+	"""#9920: with the plan-grant switch on, the exact granted path is staged in a consumer repo."""
+	with tempfile.TemporaryDirectory(prefix="test_commit_github_ai_grant_consumer_") as td:
+		proc, committed, untracked = _run_github_ai_add_fixture(
+			Path(td), repository="owner/repo", extra_env={"GITHUB_AI_PLAN_GRANT_WRITE_ENABLED": "true"},
+		)
+		details = f"stdout:\n{proc.stdout}\n\nstderr:\n{proc.stderr}"
+		assert proc.returncode == 0, details
+		assert "IMPLEMENT_GITHUB_AI_GRANT path=.github/ai/x.json outcome=staged" in proc.stdout, details
+		assert sorted(committed) == [".github/ai/x.json", "tests/new_test.py"], details
+		assert ".github/ai/y.json" in untracked.splitlines(), details
 
 
 # ---------------------------------------------------------------------------
@@ -2930,7 +2949,7 @@ def test_destructive_snapshot_upload_wiring() -> None:
 	upload = _step_block_text("Upload destructive-rejection snapshot")
 	assert "id: handle_guard_block" in handler
 	assert "always() && steps.handle_guard_block.outputs.rejection_snapshot == 'true'" in upload
-	assert "uses: actions/upload-artifact@v6" in upload
+	assert "uses: actions/upload-artifact@v7" in upload
 	assert "name: destructive-rejection-issue-${{ env.ISSUE_NUMBER }}" in upload
 	assert "path: ${{ env.RUNTIME_DIR }}/destructive_rejection/destructive_rejection.json" in upload
 	assert "retention-days: 30" in upload and "continue-on-error: true" in upload
@@ -5696,10 +5715,10 @@ def test_validator_offending_bytes_redacts_secrets() -> None:
 
 	Two layered guards (per Copilot review):
 	(a) Path denylist: skip the dump for files whose names match
-	    common secret-bearing patterns (.env, *secret*, *.pem, ...).
+		common secret-bearing patterns (.env, *secret*, *.pem, ...).
 	(b) Per-line redaction: replace lines whose key contains
-	    secret-like keywords (token/password/api_key/...) or whose
-	    value contains a long opaque token with a redaction marker.
+		secret-like keywords (token/password/api_key/...) or whose
+		value contains a long opaque token with a redaction marker.
 	"""
 	with tempfile.TemporaryDirectory(prefix="test_validator_redact_") as td:
 		repo_dir = Path(td)

@@ -82,7 +82,7 @@ _ai_comment_sig_activate()
 	IFS=":"
 	for _acs_entry in ${PATH}; do
 		case "${_acs_entry}" in
-			*/ai_comment_sig_shim.*) continue ;;
+			*/ai_comment_sig_shim.*|*/gh_call_counter.*) continue ;;
 		esac
 		if [ -n "${_acs_entry}" ] && [ -x "${_acs_entry}/gh" ] && [ ! -d "${_acs_entry}/gh" ]; then
 			_acs_real="${_acs_entry}/gh"
@@ -108,7 +108,7 @@ if [ -z "${AI_COMMENT_SIG_REAL_GH:-}" ] || [ ! -x "${AI_COMMENT_SIG_REAL_GH}" ];
 	IFS=":"
 	for _shim_entry in ${PATH}; do
 		case "${_shim_entry}" in
-			"${_shim_self_dir}"|*/ai_comment_sig_shim.*) continue ;;
+			"${_shim_self_dir}"|*/ai_comment_sig_shim.*|*/gh_call_counter.*) continue ;;
 		esac
 		if [ -n "${_shim_entry}" ] && [ -x "${_shim_entry}/gh" ]; then
 			AI_COMMENT_SIG_REAL_GH="${_shim_entry}/gh"
@@ -160,6 +160,11 @@ AI_COMMENT_SIG_SHIM
 	# in a later step that does not hold AI_COMMENT_SIGNING_SECRET.
 	if [ -n "${GITHUB_PATH:-}" ] && [ -w "${GITHUB_PATH}" ]; then
 		printf '%s\n' "${_acs_dir}" >> "${GITHUB_PATH}" || true
+	fi
+	# Issue #9887: a gh call counter installed earlier must stay first on PATH
+	# (it execs the next gh, this shim, so signing is never bypassed).
+	if declare -F _gh_call_counter_refront >/dev/null 2>&1; then
+		_gh_call_counter_refront
 	fi
 	echo "AI_COMMENT_SIG outcome=active shim=${_acs_dir}" >&2
 }
@@ -955,6 +960,213 @@ if __name__ == "__main__":
 	sys.exit(main(sys.argv[1:]))
 AI_COMMENT_SIGNER_PY
 }
+# ---------------------------------------------------------------
+# Per-job gh call counter (issue #9887, GH_PAT budget part A).
+#
+# gh_call_counter_install writes a tiny `gh` shim and its summary command
+# into ${RUNNER_TEMP}/gh_call_counter.XXXXXX, puts that dir first on PATH and
+# appends only the dir to GITHUB_PATH, so every later step of the job goes
+# through it. The shim logs one line per invocation (allowlisted subcommand,
+# --paginate bit, token kind by variable name; never an argument or value)
+# to ${GH_CALL_COUNTER_LOG:-${RUNNER_TEMP}/gh_call_counter.log} and execs the
+# next gh on PATH. gh_pat_budget end appends the summary keys
+#   calls_in_job=<n> paginated_in_job=<n> calls_by_token=pat:<n>,github_token:<n>,other:<n>
+# after used_in_job=. Canonical copies of the embedded scripts live in
+# scripts/gh_call_counter/ (kept byte-identical by tests/test_gh_call_counter.py).
+# Kill switch: GH_CALL_COUNTER_ENABLED=false (default true). No API calls.
+# Defined above the activate-only early return so _ai_comment_sig_activate
+# can keep the counter outermost.
+# ---------------------------------------------------------------
+_gh_call_counter_write_shim()
+{
+	cat > "$1" 2>/dev/null <<'GH_CALL_COUNTER_SHIM'
+#!/usr/bin/env bash
+# gh call counter shim (issue #9887). Canonical copy of the shim that
+# scripts/gh_helpers.sh (gh_call_counter_install) writes into a
+# ${RUNNER_TEMP}/gh_call_counter.XXXXXX dir put first on PATH; the two are
+# kept byte-identical by tests/test_gh_call_counter.py.
+#
+# One line per invocation goes to the job's counter log: the first
+# subcommand when it is a known gh command (else `other`), whether
+# --paginate was given, and which token variable is in effect. The token is
+# classified by variable name only; no argument, token or other value is
+# ever written. Then the next gh on PATH is exec'd (the comment-signing shim
+# or the real binary), so exit code, stdout, stderr and stdin pass through.
+# The target is found on every call and skips counter dirs, so the shim can
+# never exec itself and never bypasses the comment-signing shim.
+_gcc_self_dir="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+_gcc_target=""
+_gcc_oldifs="${IFS}"
+IFS=":"
+for _gcc_entry in ${PATH}; do
+	case "${_gcc_entry}" in
+		""|"${_gcc_self_dir}"|*/gh_call_counter.*) continue ;;
+	esac
+	if [ -f "${_gcc_entry}/gh" ] && [ -x "${_gcc_entry}/gh" ]; then
+		_gcc_target="${_gcc_entry}/gh"
+		break
+	fi
+done
+IFS="${_gcc_oldifs}"
+if [ -z "${_gcc_target}" ]; then
+	echo "gh: not found (GH_CALL_COUNTER shim)" >&2
+	exit 127
+fi
+if [ "${GH_CALL_COUNTER_ENABLED:-true}" = "false" ]; then
+	exec "${_gcc_target}" "$@"
+fi
+case "${1:-}" in
+	api|pr|issue|run|workflow|release|label|repo|search|gist|secret|variable|cache|project|ruleset|auth|status|browse|extension|alias|config|codespace|attestation|org|ssh-key|gpg-key|completion|help|version)
+		_gcc_cmd="$1" ;;
+	*) _gcc_cmd="other" ;;
+esac
+_gcc_paginate=0
+for _gcc_arg in "$@"; do
+	if [ "${_gcc_arg}" = "--paginate" ]; then
+		_gcc_paginate=1
+		break
+	fi
+done
+case "${GH_CALL_COUNTER_TOKEN_KIND:-}" in
+	pat|github_token|other) _gcc_token="${GH_CALL_COUNTER_TOKEN_KIND}" ;;
+	*)
+		if [ -n "${GH_TOKEN:-}" ]; then
+			_gcc_token="pat"
+		elif [ -n "${GITHUB_TOKEN:-}" ]; then
+			_gcc_token="github_token"
+		else
+			_gcc_token="other"
+		fi
+		;;
+esac
+{ printf 'v1 cmd=%s paginate=%s token=%s\n' "${_gcc_cmd}" "${_gcc_paginate}" "${_gcc_token}" \
+	>> "${GH_CALL_COUNTER_LOG:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/gh_call_counter.log}"; } 2>/dev/null || true
+exec "${_gcc_target}" "$@"
+GH_CALL_COUNTER_SHIM
+}
+_gh_call_counter_write_summary()
+{
+	cat > "$1" 2>/dev/null <<'GH_CALL_COUNTER_SUMMARY'
+#!/usr/bin/env bash
+# gh call counter summary (issue #9887). Canonical copy of the command that
+# scripts/gh_helpers.sh (gh_call_counter_install) writes next to the gh
+# shim; kept byte-identical by tests/test_gh_call_counter.py.
+# Prints one line of GH_PAT_BUDGET end-line keys from the job's counter log:
+#   calls_in_job=<n> paginated_in_job=<n> calls_by_token=pat:<n>,github_token:<n>,other:<n>
+# Lines that do not match the shim's exact format are skipped. A missing or
+# unreadable log prints the three keys as `unknown`. Always exits 0.
+_gcc_unknown='calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown'
+_gcc_log="${GH_CALL_COUNTER_LOG:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/gh_call_counter.log}"
+if [ ! -f "${_gcc_log}" ] || [ ! -r "${_gcc_log}" ]; then
+	printf '%s\n' "${_gcc_unknown}"
+	exit 0
+fi
+_gcc_out="$(awk '
+	/^v1 cmd=[a-z-]+ paginate=[01] token=(pat|github_token|other)$/ {
+		calls++
+		if ($3 == "paginate=1") paginated++
+		sub(/^token=/, "", $4)
+		tokens[$4]++
+	}
+	END {
+		printf "calls_in_job=%d paginated_in_job=%d calls_by_token=pat:%d,github_token:%d,other:%d\n", \
+			calls, paginated, tokens["pat"], tokens["github_token"], tokens["other"]
+	}' "${_gcc_log}" 2>/dev/null)" || _gcc_out=""
+case "${_gcc_out}" in
+	calls_in_job=[0-9]*) printf '%s\n' "${_gcc_out}" ;;
+	*) printf '%s\n' "${_gcc_unknown}" ;;
+esac
+exit 0
+GH_CALL_COUNTER_SUMMARY
+}
+# Move a counter dir already on PATH to the front (and re-persist it through
+# GITHUB_PATH) when something else was prepended after it. No-op otherwise.
+_gh_call_counter_refront()
+{
+	local _gcr_entry _gcr_dir="" _gcr_oldifs="${IFS}"
+	IFS=":"
+	for _gcr_entry in ${PATH}; do
+		case "${_gcr_entry}" in
+			*/gh_call_counter.*)
+				if [ -x "${_gcr_entry}/gh" ]; then
+					_gcr_dir="${_gcr_entry}"
+					break
+				fi
+				;;
+		esac
+	done
+	IFS="${_gcr_oldifs}"
+	[ -n "${_gcr_dir}" ] || return 0
+	[ "${PATH%%:*}" = "${_gcr_dir}" ] && return 0
+	export PATH="${_gcr_dir}:${PATH}"
+	hash -r 2>/dev/null || true
+	if [ -n "${GITHUB_PATH:-}" ] && [ -w "${GITHUB_PATH}" ]; then
+		printf '%s\n' "${_gcr_dir}" >> "${GITHUB_PATH}" || true
+	fi
+	return 0
+}
+gh_call_counter_install()
+{
+	if [ "${GH_CALL_COUNTER_ENABLED:-true}" = "false" ]; then
+		echo "GH_CALL_COUNTER outcome=disabled" >&2
+		return 0
+	fi
+	local _gci_entry _gci_dir="" _gci_oldifs="${IFS}" _gci_log
+	# A later step (or a second source) of the job: reuse the dir already on
+	# PATH, so the log is truncated only by the first install of the job.
+	IFS=":"
+	for _gci_entry in ${PATH}; do
+		case "${_gci_entry}" in
+			*/gh_call_counter.*)
+				if [ -x "${_gci_entry}/gh" ] && [ -x "${_gci_entry}/gh-call-counter-summary" ]; then
+					_gci_dir="${_gci_entry}"
+					break
+				fi
+				;;
+		esac
+	done
+	IFS="${_gci_oldifs}"
+	if [ -n "${_gci_dir}" ]; then
+		_gh_call_counter_refront
+		echo "GH_CALL_COUNTER outcome=active dir=${_gci_dir}" >&2
+		return 0
+	fi
+	if ! _gci_dir="$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/gh_call_counter.XXXXXX" 2>/dev/null)" || [ -z "${_gci_dir}" ]; then
+		echo "::warning::GH_CALL_COUNTER outcome=inactive reason=mktemp_failed" >&2
+		return 0
+	fi
+	if ! _gh_call_counter_write_shim "${_gci_dir}/gh" \
+		|| ! _gh_call_counter_write_summary "${_gci_dir}/gh-call-counter-summary" \
+		|| ! chmod 0755 "${_gci_dir}/gh" "${_gci_dir}/gh-call-counter-summary" 2>/dev/null; then
+		echo "::warning::GH_CALL_COUNTER outcome=inactive reason=write_failed" >&2
+		rm -rf "${_gci_dir}" 2>/dev/null || true
+		return 0
+	fi
+	_gci_log="${GH_CALL_COUNTER_LOG:-${RUNNER_TEMP:-${TMPDIR:-/tmp}}/gh_call_counter.log}"
+	{ : > "${_gci_log}"; } 2>/dev/null || true
+	export PATH="${_gci_dir}:${PATH}"
+	hash -r 2>/dev/null || true
+	# Only the dir is persisted (no variables, no credentials).
+	if [ -n "${GITHUB_PATH:-}" ] && [ -w "${GITHUB_PATH}" ]; then
+		printf '%s\n' "${_gci_dir}" >> "${GITHUB_PATH}" || true
+	fi
+	echo "GH_CALL_COUNTER outcome=active dir=${_gci_dir}" >&2
+	return 0
+}
+# Print the counter keys for a GH_PAT_BUDGET end line (always one line).
+gh_call_counter_summary()
+{
+	local _gcs_out=""
+	if command -v gh-call-counter-summary >/dev/null 2>&1; then
+		_gcs_out="$(gh-call-counter-summary 2>/dev/null)" || _gcs_out=""
+	fi
+	if [[ "${_gcs_out}" =~ ^calls_in_job=[0-9a-z]+\ paginated_in_job=[0-9a-z]+\ calls_by_token=[a-z_:0-9,]+$ ]]; then
+		printf '%s\n' "${_gcs_out}"
+	else
+		printf '%s\n' 'calls_in_job=unknown paginated_in_job=unknown calls_by_token=unknown'
+	fi
+	return 0
+}
 _ai_comment_sig_activate
 # Activate-only mode: a script that posts comments but does not otherwise use
 # these helpers runs `AI_COMMENT_SIG_ACTIVATE_ONLY=1 source .../gh_helpers.sh`
@@ -969,8 +1181,13 @@ fi
 # concurrently. /rate_limit does not debit the primary REST allowance.
 gh_pat_budget()
 {
-	local phase="$1" workflow="$2" job="$3" snapshot_file="$4" response payload header_resource header_remaining header_reset remaining reset used="unknown" previous_remaining previous_reset
+	local phase="$1" workflow="$2" job="$3" snapshot_file="$4" response payload header_resource header_remaining header_reset remaining reset used="unknown" previous_remaining previous_reset counter_keys=""
 	case "${phase}" in start|end) ;; *) return 1 ;; esac
+	# Issue #9887: read the job's own gh call count before the rate_limit
+	# read below, so the budget read itself is not counted.
+	if [ "${phase}" = "end" ]; then
+		counter_keys="$(gh_call_counter_summary)"
+	fi
 	remaining="unknown"
 	reset="unknown"
 	if response="$(gh api -i rate_limit 2>/dev/null)"; then
@@ -1009,6 +1226,11 @@ gh_pat_budget()
 		   [ "${previous_remaining}" -ge "${remaining}" ]; then
 			used=$((previous_remaining - remaining))
 		fi
+	fi
+	if [ "${phase}" = "end" ]; then
+		printf 'GH_PAT_BUDGET phase=%s workflow=%s job=%s remaining=%s reset=%s used_in_job=%s %s\n' \
+			"${phase}" "${workflow}" "${job}" "${remaining}" "${reset}" "${used}" "${counter_keys}"
+		return 0
 	fi
 	printf 'GH_PAT_BUDGET phase=%s workflow=%s job=%s remaining=%s reset=%s used_in_job=%s\n' \
 		"${phase}" "${workflow}" "${job}" "${remaining}" "${reset}" "${used}"
@@ -1079,8 +1301,17 @@ gh_review_pr_state()
 #   caller=<script>` is logged to stderr, and gh runs once with the PAT.
 #   A 401 or a non-rate-limit 403 (missing scope) writes a per-job
 #   latch file so later calls go straight to the PAT.
-# - Any other failure returns the job-token result to the caller's own
-#   retry wrapper (gh_retry).
+# - Any other job-token failure (a 5xx, a network or other non-HTTP
+#   error) also drops the output, logs `GH_READ_FALLBACK reason=error
+#   caller=<script>` and runs gh once with the PAT, without latching, so
+#   a failing job token can never stop a polling read that the PAT would
+#   have answered (follow-up to #9888). When the PAT fails too, the
+#   job token's stderr and rc are returned instead of the PAT's, so the
+#   caller's own retry wrapper (gh_retry) treats the attempt as
+#   transient rather than as a PAT rate limit; a permanent PAT failure
+#   (not a rate limit) returns the PAT's stderr and rc so gh_retry fails
+#   fast. `pr checks`, which exits
+#   non-zero with a valid answer, returns the job-token result unchanged.
 # The token value is never printed: xtrace is off while it is in use.
 # ---------------------------------------------------------------
 _gh_read_args_are_read()
@@ -1310,18 +1541,62 @@ _gh_read_run()
 	elif printf '%s' "${err_text}" | grep -q 'HTTP 404'; then
 		reason="404"
 	fi
+	# Any other failure (5xx, network, non-HTTP error) also falls back once
+	# to the PAT: before #9888 these reads used the PAT alone, so a job-token
+	# problem must never fail a read the PAT can answer. The job-token output
+	# is dropped; when the PAT succeeds its result is returned, and when it
+	# fails too the job token's transient error is returned unless the PAT's
+	# error is permanent (see below). No latch: the next call tries the job
+	# token again.
 	if [ -z "${reason}" ]; then
-		cat "${out_file}" 2>/dev/null || true
-		cat "${err_file}" >&2 2>/dev/null || true
-		rm -f "${out_file}" "${err_file}"
-		return "${rc}"
+		# `gh pr checks` exits non-zero with a valid answer for pending (8) or
+		# failed (1, with the check table on stdout) checks, so that result is
+		# returned unchanged. A `pr checks` failure with rc 1 and no output
+		# (5xx, network) takes the reason=error PAT fallback below.
+		if [ "${1:-} ${2:-}" = "pr checks" ] && { [ "${rc}" -eq 8 ] || { [ "${rc}" -eq 1 ] && [ -s "${out_file}" ]; }; }; then
+			cat "${out_file}" 2>/dev/null || true
+			cat "${err_file}" >&2 2>/dev/null || true
+			rm -f "${out_file}" "${err_file}"
+			return "${rc}"
+		fi
+		reason="error"
 	fi
-	rm -f "${out_file}" "${err_file}"
 	if [ "${reason}" = "401" ] || [ "${reason}" = "403" ]; then
 		: > "$(_gh_read_latch_file)" 2>/dev/null || true
 	fi
 	echo "GH_READ_FALLBACK reason=${reason} caller=$(_gh_read_caller)" >&2
-	gh "$@"
+	if [ "${reason}" != "error" ]; then
+		rm -f "${out_file}" "${err_file}"
+		gh "$@"
+		return $?
+	fi
+	# reason=error: when the PAT fails too, return the job token's transient
+	# error, not the PAT's, so a wrapping gh_retry backs off and retries the
+	# job token instead of treating an exhausted PAT as a rate limit (alert,
+	# breaker trip, wait for the PAT reset). Each attempt then costs one
+	# job-token call plus one PAT call. A permanent PAT failure (revoked PAT,
+	# 404, 422; never a rate limit) returns the PAT's stderr and rc instead,
+	# so gh_retry fails fast and reports the real cause.
+	local pat_rc=0
+	gh "$@" >"${out_file}" 2>"${err_file}" || pat_rc=$?
+	# A PAT `pr checks` answer (rc 8 pending, or rc 1 with the check table)
+	# is valid too, so it is returned with its own rc like a success.
+	if [ "${pat_rc}" -eq 0 ] || { [ "${1:-} ${2:-}" = "pr checks" ] && { [ "${pat_rc}" -eq 8 ] || { [ "${pat_rc}" -eq 1 ] && [ -s "${out_file}" ]; }; }; }; then
+		local pat_replay_rc="${pat_rc}"
+		( cat "${out_file}" ) || pat_replay_rc=$?
+		cat "${err_file}" >&2 2>/dev/null || true
+		rm -f "${out_file}" "${err_file}"
+		return "${pat_replay_rc}"
+	fi
+	local pat_err_text=""
+	pat_err_text="$(cat "${err_file}" 2>/dev/null || true)"
+	rm -f "${out_file}" "${err_file}"
+	if ! _is_gh_rate_limit "${pat_err_text}" && _is_gh_permanent_failure "${pat_err_text}"; then
+		printf '%s\n' "${pat_err_text}" >&2
+		return "${pat_rc}"
+	fi
+	[ -z "${err_text}" ] || printf '%s\n' "${err_text}" >&2
+	return "${rc}"
 }
 
 # ---------------------------------------------------------------
@@ -2739,13 +3014,24 @@ gh_api_retry()
 # Usage:
 #   gh_retry gh api repos/owner/repo/issues
 #   gh_retry gh issue edit 42 --add-label bug
+#
+# Optional call hook (issue #9927): when GH_RETRY_AFTER_CALL_HOOK names a
+# defined shell function, gh_retry runs it once per call with the command's
+# argv, before the first attempt, with its output discarded and its status
+# ignored. It cannot change gh_retry's result. Default: empty (no hook).
+# GH_RETRY_AFTER_CALL_HOOK_SUPPORTED=1 tells callers this copy runs the hook.
 # ---------------------------------------------------------------
+# shellcheck disable=SC2034  # read by scripts/orchestrate_poll_process.sh
+GH_RETRY_AFTER_CALL_HOOK_SUPPORTED=1
 gh_retry()
 {
 	# Q2=A (issue #6634): a POST create makes one attempt unless a leading
 	# --idempotent or GH_RETRY_IDEMPOTENT=true marks it safe to repeat.
 	local _ghr_idem="${GH_RETRY_IDEMPOTENT:-false}"
 	if [ "${1:-}" = "--idempotent" ]; then _ghr_idem=true; shift; fi
+	if [ -n "${GH_RETRY_AFTER_CALL_HOOK:-}" ] && declare -F "${GH_RETRY_AFTER_CALL_HOOK}" >/dev/null 2>&1; then
+		"${GH_RETRY_AFTER_CALL_HOOK}" "$@" >/dev/null 2>&1 || true
+	fi
 	local max_attempts="${GH_RETRY_MAX_ATTEMPTS:-5}"
 	if [ "${_ghr_idem}" != "true" ] && _gh_cmd_is_unsafe_post "$@"; then
 		max_attempts=1
@@ -4728,5 +5014,174 @@ zombie_queued_log_ignored()
 		_ZOMBIE_RUN_IGNORED_SEEN["${_zq_guard}:${_zq_id}"]=1
 		echo "ZOMBIE_RUN_IGNORED run=${_zq_id} workflow=${_zq_wf} age_h=${_zq_age} guard=${_zq_guard}" >&2
 	done <<< "${_zq_rows}"
+	return 0
+}
+
+# ---------------------------------------------------------------
+# Release-gate runner wait (issue #10037)
+#
+# release_gate_oldest_queued_wait <repo> <limit_minutes> <zq_cutoff_epoch>
+#
+# Measures how long the oldest live queued run of <repo> has waited for a
+# runner, for the release scripts' runner_wait_long skip
+# (scripts/auto_release_stable.sh, scripts/promote_main_cycle.sh).
+# Only runs created between the wedged-queued cutoff (zombie_queued_cutoff_epoch,
+# 0 = no lower bound) and now - <limit_minutes> are read, so the answer is
+# "is any live run queued for at least the limit, and the oldest one's age".
+#
+# Output: exactly one line on stdout, always exit 0 (fail open):
+#   outcome=<long|short|read_failed> oldest_queued_min=<n|-> queued_in_window=<n|-> calls=<0|1|2>
+#
+# API calls (§14): no existing call in the callers returns queued runs'
+# created_at (they list workflow-scoped runs or a queued count), so:
+#   call 1  GET repos/<repo>/actions/runs?status=queued&created=<lower>..<upper>&per_page=100
+#   call 2  only when total_count > 100: the last page (newest first, so the
+#           oldest runs are there), capped at page 10 (the API's 1,000-result
+#           limit).
+# Any failed or unparseable read prints outcome=read_failed.
+# ---------------------------------------------------------------
+release_gate_oldest_queued_wait()
+{
+	local _rgw_repo="${1:-}" _rgw_limit="${2:-}" _rgw_cutoff="${3:-0}"
+	local _rgw_now="" _rgw_upper_epoch="" _rgw_upper="" _rgw_lower="" _rgw_json="" _rgw_total="" _rgw_page="" _rgw_calls=0 _rgw_oldest=""
+	local _rgw_jq_def=""
+	if ! [[ "${_rgw_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || ! [[ "${_rgw_limit}" =~ ^[0-9]{1,6}$ ]]; then
+		echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=0"
+		return 0
+	fi
+	[[ "${_rgw_cutoff}" =~ ^[0-9]+$ ]] || _rgw_cutoff=0
+	_rgw_now="$(date -u +%s 2>/dev/null || true)"
+	if ! [[ "${_rgw_now}" =~ ^[0-9]+$ ]]; then
+		echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=0"
+		return 0
+	fi
+	_rgw_upper_epoch=$(( _rgw_now - 10#${_rgw_limit} * 60 ))
+	# A limit at or beyond the wedged-queued cutoff leaves an empty (inverted)
+	# created range: every run queued that long is wedged, so no live run can
+	# reach the limit. Answer short without a read instead of a 422.
+	if [ "${_rgw_cutoff}" -gt 0 ] && [ "${_rgw_upper_epoch}" -le "${_rgw_cutoff}" ]; then
+		echo "outcome=short oldest_queued_min=- queued_in_window=0 calls=0"
+		return 0
+	fi
+	_rgw_upper="$(date -u -d "@${_rgw_upper_epoch}" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+	if [ "${_rgw_cutoff}" -gt 0 ]; then
+		_rgw_lower="$(date -u -d "@$(( _rgw_cutoff + 1 ))" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || true)"
+	else
+		_rgw_lower="1970-01-01T00:00:00Z"
+	fi
+	if [ -z "${_rgw_upper}" ] || [ -z "${_rgw_lower}" ]; then
+		echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=0"
+		return 0
+	fi
+	if declare -F zombie_queued_jq_def >/dev/null 2>&1; then
+		_rgw_jq_def="$(zombie_queued_jq_def 2>/dev/null || true)"
+	fi
+	[ -n "${_rgw_jq_def}" ] || _rgw_jq_def='def is_wedged_queued($cutoff): false;'
+	_rgw_calls=1
+	if ! _rgw_json="$(gh_retry gh api -X GET "repos/${_rgw_repo}/actions/runs" -f status=queued -f "created=${_rgw_lower}..${_rgw_upper}" -f per_page=100 2>/dev/null)"; then
+		echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=${_rgw_calls}"
+		return 0
+	fi
+	_rgw_total="$(printf '%s' "${_rgw_json}" | jq -r 'if (.total_count | type) == "number" and (.workflow_runs | type) == "array" then .total_count else empty end' 2>/dev/null || true)"
+	if ! [[ "${_rgw_total}" =~ ^[0-9]+$ ]]; then
+		echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=${_rgw_calls}"
+		return 0
+	fi
+	if [ "${_rgw_total}" -gt 100 ]; then
+		_rgw_page=$(( (_rgw_total + 99) / 100 ))
+		[ "${_rgw_page}" -le 10 ] || _rgw_page=10
+		_rgw_calls=2
+		if ! _rgw_json="$(gh_retry gh api -X GET "repos/${_rgw_repo}/actions/runs" -f status=queued -f "created=${_rgw_lower}..${_rgw_upper}" -f per_page=100 -f "page=${_rgw_page}" 2>/dev/null)" \
+			|| ! printf '%s' "${_rgw_json}" | jq -e '(.workflow_runs | type) == "array"' >/dev/null 2>&1; then
+			echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=${_rgw_calls}"
+			return 0
+		fi
+	fi
+	# Oldest created_at among live queued runs at or before the upper bound
+	# (the server-side range is re-checked here).
+	_rgw_oldest="$(printf '%s' "${_rgw_json}" | jq -r --argjson zq_cutoff "${_rgw_cutoff}" --argjson upper "${_rgw_upper_epoch}" "${_rgw_jq_def}"'
+		[.workflow_runs[]? | select(type == "object")
+			| select(((.status // "") | tostring | ascii_downcase) == "queued")
+			| select(is_wedged_queued($zq_cutoff) | not)
+			| ((.created_at // "") | tostring | sub("\\.[0-9]+Z$"; "Z") | (try fromdateiso8601 catch null)) as $c
+			| select($c != null and $c <= $upper) | $c] | min // empty' 2>/dev/null || true)"
+	if [ -z "${_rgw_oldest}" ]; then
+		echo "outcome=short oldest_queued_min=- queued_in_window=${_rgw_total} calls=${_rgw_calls}"
+		return 0
+	fi
+	if ! [[ "${_rgw_oldest}" =~ ^[0-9]+$ ]]; then
+		echo "outcome=read_failed oldest_queued_min=- queued_in_window=- calls=${_rgw_calls}"
+		return 0
+	fi
+	echo "outcome=long oldest_queued_min=$(( (_rgw_now - _rgw_oldest) / 60 )) queued_in_window=${_rgw_total} calls=${_rgw_calls}"
+	return 0
+}
+
+# ---------------------------------------------------------------
+# zombie_queued_live_count <repo> <limit> [cutoff_epoch]  (issue #10032)
+#
+# Queue depth with wedged queued runs left out: the number of this
+# repository's `queued` runs minus those created at or before the
+# wedged cutoff (the same `created_at <= cutoff` rule as
+# is_wedged_queued). A caller that needs queue depth uses this instead
+# of reading the raw `actions/runs?status=queued` total.
+#
+# Batching contract (CLAUDE.md §15):
+#   input   repo (owner/name), limit (non-negative integer), optional
+#           cutoff epoch (the caller's zombie_queued_cutoff_epoch value;
+#           computed here when missing or not numeric).
+#   calls   read 1, always: actions/runs?status=queued&per_page=1
+#           (.total_count). Read 2, only when limit > 0, total >= limit
+#           and cutoff > 0: the same with &created=<=<ISO cutoff>.
+#           Both are per_page=1; nothing is paginated. At most 2 calls.
+#   output  "<live>\t<wedged>" on stdout, exit 0. wedged is clamped to
+#           [0, total], so live never goes negative. When read 2 is
+#           skipped the output is "<total>\t0".
+#   exit    1: bad repo or read 1 unreadable (nothing on stdout).
+#           2: read 2 unreadable (nothing on stdout).
+#           Fail-open handling is left to the caller.
+# ---------------------------------------------------------------
+zombie_queued_live_count()
+{
+	local _zq_repo="${1:-}" _zq_limit="${2:-0}" _zq_cutoff="${3:-}"
+	local _zq_total="" _zq_wedged="" _zq_iso="" _zq_json=""
+	if ! [[ "${_zq_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+		return 1
+	fi
+	[[ "${_zq_limit}" =~ ^[0-9]{1,9}$ ]] || _zq_limit=0
+	_zq_limit=$((10#${_zq_limit}))
+	if ! [[ "${_zq_cutoff}" =~ ^[0-9]{1,12}$ ]]; then
+		_zq_cutoff="$(zombie_queued_cutoff_epoch || echo 0)"
+		[[ "${_zq_cutoff}" =~ ^[0-9]{1,12}$ ]] || _zq_cutoff=0
+	fi
+	_zq_cutoff=$((10#${_zq_cutoff}))
+	_zq_json="$(gh_retry gh api "repos/${_zq_repo}/actions/runs?status=queued&per_page=1" 2>/dev/null || true)"
+	_zq_total="$(printf '%s' "${_zq_json}" | jq -r 'if (.total_count | type) == "number" then .total_count else empty end' 2>/dev/null || true)"
+	if ! [[ "${_zq_total}" =~ ^[0-9]{1,12}$ ]]; then
+		return 1
+	fi
+	_zq_total=$((10#${_zq_total}))
+	if [ "${_zq_limit}" -le 0 ] || [ "${_zq_total}" -lt "${_zq_limit}" ] || [ "${_zq_cutoff}" -le 0 ]; then
+		printf '%s\t0\n' "${_zq_total}"
+		return 0
+	fi
+	_zq_iso="$(jq -nr --argjson c "${_zq_cutoff}" '$c | todate' 2>/dev/null || true)"
+	if ! [[ "${_zq_iso}" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]]; then
+		# Cannot express the cutoff: compare the raw count, as before #10032.
+		echo "::warning::zombie_queued_live_count could not format the wedged cutoff; using the raw queued count" >&2
+		printf '%s\t0\n' "${_zq_total}"
+		return 0
+	fi
+	_zq_json="$(gh_retry gh api "repos/${_zq_repo}/actions/runs?status=queued&per_page=1&created=%3C%3D${_zq_iso}" 2>/dev/null || true)"
+	_zq_wedged="$(printf '%s' "${_zq_json}" | jq -r 'if (.total_count | type) == "number" then .total_count else empty end' 2>/dev/null || true)"
+	if ! [[ "${_zq_wedged}" =~ ^[0-9]{1,12}$ ]]; then
+		return 2
+	fi
+	_zq_wedged=$((10#${_zq_wedged}))
+	# The two reads are not atomic: clamp so live stays in [0, total].
+	if [ "${_zq_wedged}" -gt "${_zq_total}" ]; then
+		_zq_wedged="${_zq_total}"
+	fi
+	printf '%s\t%s\n' "$((_zq_total - _zq_wedged))" "${_zq_wedged}"
 	return 0
 }
