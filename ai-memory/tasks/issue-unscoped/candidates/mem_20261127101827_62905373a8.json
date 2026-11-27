@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- scripts/orchestrate_poll_process.sh:6256-6259 | severity=low | confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  PROBLEM: The header comment of `_stall_reissue_green_pr_guard` says issue #9737 introduced the startup capture and clear of `REVIEW_FINAL_CI_WORKFLOW`, but the capture block at lines 1087-1096 cites issue #9732; the fix is to change \"#9737\" to \"#9732\" on line 6259.\n  WHY: Nothing changes at runtime, because the read at line 6389 (`_srg_wf=\"${_OPP_STALL_MERGE_FINAL_CI_WORKFLOW:-ci.yml}\"`) is correct, but a maintainer tracing the capture-and-clear behaviour is sent to the wrong issue; all five reviewers rated it SEVERITY: NIT (mapped here to low, the lowest allowed value), with confidence ranging from 4 to 5.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- scripts/orchestrate_poll_process.sh:lines 6258-6259, the header comment of _stall_reissue_green_pr_guard: \"_OPP_STALL_MERGE_FINAL_CI_WORKFLOW (default ci.yml; the poller clears the original variable, #9737)\" | severity=NIT | confidence=5\n  PROBLEM: The comment says issue #9737 introduced the startup capture and clear of REVIEW_FINAL_CI_WORKFLOW, but that capture (lines 1087-1096) says \"Issue #9732\", and the script mentions #9737 nowhere else.\n  WHY: Nothing fails at runtime, because line 6389 correctly reads the value that line 1095 captures before line 1096 unsets REVIEW_FINAL_CI_WORKFLOW; the only harm is that the wrong issue number misleads maintainers. Fix: change \"#9737\" to \"#9732\" in this one comment line.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- scripts/orchestrate_poll_process.sh:6259 | severity=NIT | confidence=4\n  PROBLEM: The header comment for `_stall_reissue_green_pr_guard` cites issue #9737 instead of #9732 as the source of the `REVIEW_FINAL_CI_WORKFLOW` startup capture-and-clear pattern.\n  WHY: Runtime behaviour is unaffected, but the wrong issue number misleads future maintainers.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- scripts/orchestrate_poll_process.sh:line 6259 (header comment of `_stall_reissue_green_pr_guard`, just below the `_srg_wf=...` block ending at line 6389) | severity=NIT | confidence=5\n  PROBLEM: The comment cites #9737, but the capture-and-clear at line 1087 and `agents.d/9732-stall-merge-required-checks.md` both cite #9732; `#9737` appears nowhere else in the script, and the other repository mentions (CHANGELOG.md:4848, docs/plans/merge-lease-short-critical-section-plan.md:65, :542) are unrelated.\n  WHY: The bug is documentation-only, since the runtime read at line 6389 is correct; a maintainer who follows the comment to #9737 finds nothing. Three reviewers flagged it in an earlier round and it is still unfixed after the last autofix round.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- scripts/orchestrate_poll_process.sh:6258-6259, `_stall_reissue_green_pr_guard` header comment | severity=NIT | confidence=4\n  PROBLEM: The comment attributes the startup capture and clearing of `REVIEW_FINAL_CI_WORKFLOW` to issue #9737, but the capture block at lines 1087-1096 identifies issue #9732.\n  WHY: No runtime behaviour changes, but maintainers tracing why the variable is captured and cleared are sent to the wrong issue.\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- scripts/orchestrate_poll_process.sh:lines 6256-6259, header comment of `_stall_reissue_green_pr_guard`: \"final-CI workflow captured at start-up in _OPP_STALL_MERGE_FINAL_CI_WORKFLOW (default ci.yml; the poller clears the original variable, #9737)\" | severity=NIT | confidence=4\n  PROBLEM: The comment credits the capture-and-clear to #9737, but scripts/orchestrate_poll_process.sh:1087-1096, the other references in the file (lines 3303, 3328, 31992, 32041, 32095), `agents.d/9732-stall-merge-required-checks.md` and `changelog.d/9732-stall-merge-required-checks.md` all cite #9732; `#9737` appears nowhere else in the repository.\n  WHY: There is no runtime effect, because the read at line 6389 is correct, but the contract header sends maintainers to a nonexistent context. Fix: change `#9737` to `#9732` on line 6259.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "6543b85b610b8685636bc3d94249d0f075eef9edb55dcdd45bfef9033056833c",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 9902,
+    "run_id": "45972029496",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45972029496",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127101827_62905373a8",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 9902,
+    "run_id": "45972029496"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-27T10:18:27Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
