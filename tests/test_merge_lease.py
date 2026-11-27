@@ -345,9 +345,13 @@ class FinalCiPendingMark(unittest.TestCase):
 		start = text.index("_pr_wait_for_required_checks()\n{")
 		body = text[start:text.index("\n}\n", start)]
 		timeouts = re.findall(r'echo "AUTOFIX_AUTO_MERGE_CHECKS ([^\n]*outcome=timeout[^\n]*)\n\t*([^\n]*)', body)
-		# A failed final CI dispatch leaves no run to wait for, so that exit must not mark.
-		marking = [follow for line, follow in timeouts if "reason=final_ci_dispatch_failed" not in line]
-		unmarked = [follow for line, follow in timeouts if "reason=final_ci_dispatch_failed" in line]
+		# A failed final CI dispatch, or a head held back because its CI wiring
+		# is behind the base (issue #9993), leaves no run to wait for, so those
+		# exits must not mark.
+		no_run = ("reason=final_ci_dispatch_failed", "reason=final_ci_wiring_behind")
+		marking = [follow for line, follow in timeouts if not any(r in line for r in no_run)]
+		unmarked = [follow for line, follow in timeouts if any(r in line for r in no_run)]
+		self.assertEqual(len(unmarked), 2)
 		self.assertEqual(len(marking), 3)
 		for follow in unmarked:
 			self.assertNotIn("_pr_final_ci_merge_pending_mark", follow)
@@ -1702,7 +1706,10 @@ class Wiring(unittest.TestCase):
 			self.assertIn("MERGE_LEASE_TTL_MINUTES: ${{ vars.MERGE_LEASE_TTL_MINUTES || '480' }}", text, wf.name)
 
 	def test_merge_paths_get_the_lease_switches(self) -> None:
-		self.assertEqual(REVIEW.read_text().count("MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}"), 3)
+		# Issue #10017: the fourth and fifth are the single-issue security pass
+		# gates (codex-agent and deterministic skip), which read the lease to
+		# exempt the holder from the audit throttle.
+		self.assertEqual(REVIEW.read_text().count("MERGE_LEASE_ENABLED: ${{ vars.MERGE_LEASE_ENABLED || 'true' }}"), 5)
 
 	def test_release_steps_get_the_review_paths_switches(self) -> None:
 		for wf in (POLL, CLOSE):
@@ -2567,7 +2574,11 @@ class LeaseQueueSnapshot(unittest.TestCase):
 class MultiHolderWiring(unittest.TestCase):
 	def test_max_holders_switch_reaches_every_lease_path(self) -> None:
 		line = "MERGE_LEASE_MAX_HOLDERS: ${{ vars.MERGE_LEASE_MAX_HOLDERS || '1' }}"
-		for wf, expected, before in ((REVIEW, 3, "MERGE_LEASE_SOFT_PATHS: ${{ vars."), (POLL, 4, "MERGE_LEASE_SOFT_PATHS: ${{ vars."),
+		# Issue #10017: two of REVIEW's hits are the single-issue security pass
+		# gates (codex-agent and deterministic skip), lease readers without the
+		# soft-path list; they follow MERGE_LEASE_ENABLED, and only those two may.
+		gate_before = "MERGE_LEASE_ENABLED: ${{ vars."
+		for wf, expected, before in ((REVIEW, 5, ("MERGE_LEASE_SOFT_PATHS: ${{ vars.", gate_before)), (POLL, 4, "MERGE_LEASE_SOFT_PATHS: ${{ vars."),
 				(CLOSE, 1, "MERGE_LEASE_SOFT_PATHS: ${{ vars."), (SWEEP, 1, "MERGE_LEASE_WAIT_LABEL: ${{ vars.")):
 			lines = wf.read_text().splitlines()
 			hits = [i for i, ln in enumerate(lines) if ln.strip() == line]
@@ -2575,6 +2586,8 @@ class MultiHolderWiring(unittest.TestCase):
 			for i in hits:
 				self.assertTrue(lines[i - 1].strip().startswith(before), f"{wf.name}:{i + 1}")
 				self.assertEqual(len(lines[i]) - len(lines[i].lstrip()), len(lines[i - 1]) - len(lines[i - 1].lstrip()))
+			if wf == REVIEW:
+				self.assertEqual(sum(lines[i - 1].strip().startswith(gate_before) for i in hits), 2, wf.name)
 		self.assertIn("${MERGE_LEASE_MAX_HOLDERS:-1}", LIB.read_text())
 
 

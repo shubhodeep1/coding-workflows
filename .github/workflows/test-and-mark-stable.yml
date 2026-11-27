@@ -6156,7 +6156,7 @@ jobs:
       # A failed attestation fails the job here, before any tag is pushed.
       - name: Attest sync manifest
         if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: ${{ steps.sync_manifest.outputs.path }}
 
@@ -6353,7 +6353,7 @@ jobs:
 
       - name: Attest release manifest
         if: ${{ !inputs.dry_run && steps.release_switch.outputs.enabled == 'true' && steps.release_tagging.outputs.enabled == 'true' }}
-        uses: actions/attest-build-provenance@v3
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: ${{ steps.release_manifest.outputs.manifest_path }}
 
@@ -6798,7 +6798,7 @@ jobs:
 
       - name: Upload consolidated soft-error report
         if: always() && steps.consolidate_soft_errors.outputs.report_path != ''
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           # Artifact name preserved for backward compatibility with any
           # operator tooling that fetches `soft-error-report-<run_id>`.

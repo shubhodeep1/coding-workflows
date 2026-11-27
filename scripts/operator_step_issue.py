@@ -56,6 +56,56 @@ Tick API budget (CLAUDE.md §15): at most one identity read (none with
 comment write per ticked key. No per-entry reads and no compare calls: the
 ancestor check is local git.
 
+Daily observable tick (pipeline-human-wait-elimination plan, Phase 9, #10118):
+
+  operator_step_issue.py tick --repo OWNER/REPO --stable-sha SHA --repo-dir DIR --observable
+
+`.github/workflows/workflow-log-analysis.yml` (job `collect-logs`, daily
+`0 6 * * *` schedule only) runs it through scripts/operator_step_daily_tick.sh
+with GH_PAT, so the trusted login is the PAT login read from `/user`.
+Without `--observable` (the promote cycle) `tick` behaves exactly as above.
+With it, an entry that has no source-sha line and at least one unticked step
+is also ticked when every unticked step names a condition the pipeline can
+observe and every condition holds:
+
+- `conditional_not_a_gate`: "only when/if ... run `/cmd`"; not a gate, always met.
+- `stable_release`: "stable ... contains/includes #N"; every `#N` in the step
+  is merged and its 40-hex merge commit is an ancestor of `--stable-sha`
+  (local git). At most MAX_OBSERVABLE_PR_READS PR reads per run (`deferred`).
+- `allow_auto_merge`: the repository read returns `allow_auto_merge: true`
+  (missing or null is not met).
+- `credentials`: the title starts with set/add/configure/provide/create and the
+  step names GH_PAT or OPENROUTER_API_KEY; met when one of
+  OBSERVABLE_CREDENTIAL_WORKFLOWS that requires every named credential
+  (OBSERVABLE_CREDENTIAL_PROOF_WORKFLOWS: `security-audit.yml` proves
+  OPENROUTER_API_KEY only) has a successful run updated within
+  OBSERVABLE_CREDENTIAL_MAX_AGE_DAYS days.
+
+A step that also names any other UPPER_SNAKE identifier or rotate, revoke,
+scope, expire or permission wording (or a secret/token/variable/setting-like
+word outside its own condition) is unrecognised, and one unrecognised step
+keeps the whole entry open. A `credentials` step is unrecognised too when it
+hands the secret to someone or somewhere else (CREDENTIAL_HANDOFF_RE), names a
+`--repo`/`-R` value that is not a literal slug equal to `--repo`
+(CREDENTIAL_REPO_FLAG_RE, CREDENTIAL_REPO_SLUG_RE), or targets an organisation,
+environment, app or user secret (CREDENTIAL_SCOPE_FLAG_RE): the run proof covers
+only this repository's Actions secrets. Every check fails closed (`check_failed`). The
+ticked comment reuses the done marker, with the line `Done: <reasons>; ticked
+by the daily operator-step tick.` After the entries, the tracker is closed as
+`completed` by the same close logic as `resolve` when no unticked step is left.
+Logs: `OPERATOR_STEP_TICK key= outcome=ticked|unrecognised|not_met|
+check_failed|deferred reason=` and `OPERATOR_STEP_TICK tracker= outcome=closed|
+open reason=`. Kill switch `OPERATOR_STEP_DAILY_TICK_ENABLED` (default
+`true`): `false` returns `reason` `disabled` before any API call and logs
+`OPERATOR_STEP_TICK op=daily outcome=skip reason=disabled`. Output adds
+`closed` and `observed` (`[{key, reasons}]`).
+
+Observable tick API budget (CLAUDE.md section 14): the tick budget above, plus
+at most one repository read, len(OBSERVABLE_CREDENTIAL_WORKFLOWS) workflow-run
+reads and MAX_OBSERVABLE_PR_READS PR reads per run, each made only when a step
+needs it and cached for the run, plus the `resolve` close budget. The tracker
+listing and comment read carry no repository settings, runs or merge commits.
+
 Resolving released entries (stuck-states P10, Refs #8291):
 
   operator_step_issue.py resolve --repo OWNER/REPO [--trusted-login LOGIN]
@@ -584,7 +634,7 @@ def _is_ancestor(repo_dir: str, source_sha: str, stable_sha: str) -> str:
 	return "unknown_commit"
 
 
-def _render_ticked(body: str, stable_sha: str, source_sha: str) -> str:
+def _render_ticked(body: str, stable_sha: str, source_sha: str, done_text: str | None = None) -> str:
 	lines = [
 		"- [x]" + line[len("- [ ]"):] if line.startswith("- [ ]") else line
 		for line in body.replace("\r\n", "\n").rstrip().split("\n")
@@ -592,20 +642,29 @@ def _render_ticked(body: str, stable_sha: str, source_sha: str) -> str:
 	lines += [
 		"",
 		f"<!-- ai:operator-step:done stable={stable_sha} -->",
+		f"Done: {done_text}; ticked by the daily operator-step tick." if done_text else
 		f"Done: the `stable` tag (`{stable_sha[:7]}`) includes the merge `{source_sha[:7]}`; ticked by the promote cycle.",
 	]
 	return "\n".join(lines)
 
 
-def tick(repo: str, stable_sha: str, repo_dir: str = ".", trusted_login: str | None = None) -> dict:
+def tick(repo: str, stable_sha: str, repo_dir: str = ".", trusted_login: str | None = None,
+		observable: bool = False) -> dict:
 	if not REPO_RE.match(repo):
 		raise UsageError(f"--repo must be OWNER/REPO, got {repo!r}")
 	if not isinstance(stable_sha, str) or not SHA_RE.match(stable_sha):
 		raise UsageError(f"--stable-sha must be 40 lower-case hex characters, got {stable_sha!r}")
+	result: dict = {"issue": None, "stable": stable_sha, "ticked": [], "skipped": {}}
+	if observable:
+		result.update({"closed": False, "observed": []})
+		if not operator_step_daily_tick_enabled():
+			# Kill switch: no API call at all, today's behaviour (no daily tick).
+			print("OPERATOR_STEP_TICK op=daily outcome=skip reason=disabled", file=sys.stderr)
+			result["reason"] = "disabled"
+			return result
 	login = (trusted_login or "").strip() or _gh(["api", "user", "--jq", ".login"]).strip()
 	if not login:
 		raise ApiError("operator-step tick identity is unavailable")
-	result: dict = {"issue": None, "stable": stable_sha, "ticked": [], "skipped": {}}
 	listing = _gh(["api", f"repos/{repo}/issues?labels={LABEL}&state=open&per_page=30"])
 	try:
 		issues = json.loads(listing or "[]")
@@ -619,25 +678,282 @@ def tick(repo: str, stable_sha: str, repo_dir: str = ".", trusted_login: str | N
 		raise ApiError("unreadable issue list: operator-step tracker has no issue number")
 	result["issue"] = number
 	latest = _authoritative_entry_comments(load_entry_comments(repo, number), login)
+	observe_cache: dict = {}
 	for key in sorted(latest):
 		body = str(latest[key].get("body") or "").replace("\r\n", "\n")
 		lines = [line.strip() for line in body.split("\n")]
 		source_match = SOURCE_SHA_RE.match(lines[1]) if len(lines) > 1 else None
+		observed: tuple[str, list[str], str] | None = None
 		if any(DONE_RE.match(line) or RESOLVED_RE.match(line) for line in lines):
 			outcome = "already_done"
 		elif not source_match:
 			outcome = "no_source_sha"
+			if observable and _unticked_step_blocks(body):
+				observed = _observe_entry(repo, body, repo_dir, stable_sha, observe_cache)
+				outcome = observed[0]
 		else:
 			ancestry = _is_ancestor(repo_dir, source_match.group(1), stable_sha)
 			outcome = "ticked" if ancestry == "ancestor" else ancestry
-		if outcome == "ticked":
+		if outcome == "ticked" and observed is not None:
+			_gh(["api", f"repos/{repo}/issues/{number}/comments", "-f",
+				f"body={_render_ticked(body, stable_sha, '', observed[2])}"])
+			result["ticked"].append(key)
+			result["observed"].append({"key": key, "reasons": observed[1]})
+		elif outcome == "ticked":
 			_gh(["api", f"repos/{repo}/issues/{number}/comments", "-f",
 				f"body={_render_ticked(body, stable_sha, source_match.group(1))}"])
 			result["ticked"].append(key)
 		else:
 			result["skipped"][outcome] = result["skipped"].get(outcome, 0) + 1
-		print(f"OPERATOR_STEP_TICK key={key} outcome={outcome} stable={stable_sha[:7]}", file=sys.stderr)
+		if observed is not None:
+			print(f"OPERATOR_STEP_TICK key={key} outcome={outcome} reason={','.join(observed[1]) or 'none'}", file=sys.stderr)
+		else:
+			print(f"OPERATOR_STEP_TICK key={key} outcome={outcome} stable={stable_sha[:7]}", file=sys.stderr)
+	if observable:
+		close_state = _close_tracker_when_done(repo, candidates[0], latest, set(result["ticked"]), login, _tick_close_log)
+		result["closed"] = close_state["closed"]
 	return result
+
+
+# --- daily observable tick (pipeline-human-wait-elimination Phase 9, #10118) ---
+
+OBSERVABLE_CREDENTIAL_WORKFLOWS = ("review_autofix.yml", "internal-review.yml", "security-audit.yml")
+# Only a workflow that requires the named credential proves it (#10118 review):
+# security-audit.yml declares `GH_PAT: required: false` and falls back to the job
+# token, so its run proves OPENROUTER_API_KEY only. An unknown name proves nothing.
+OBSERVABLE_CREDENTIAL_PROOF_WORKFLOWS = {
+	"GH_PAT": ("review_autofix.yml", "internal-review.yml"),
+	"OPENROUTER_API_KEY": OBSERVABLE_CREDENTIAL_WORKFLOWS,
+}
+OBSERVABLE_CREDENTIAL_MAX_AGE_DAYS = 7
+MAX_OBSERVABLE_PR_READS = 10
+CONDITIONAL_STEP_RE = re.compile(
+	r"\bonly\s+(?:when|if)\b[^\n]{0,200}?\b(?:invoke[sd]?|invoking|runs?|running|uses?|using|calls?|calling)\b"
+	r"[^\n]{0,120}?(?:`[^`\n]+`|(?<![\w/])/[a-z][a-z0-9-]*)",
+	re.I,
+)
+STABLE_CONTAINS_PR_RE = re.compile(
+	r"\bstable\b[^\n]{0,120}?\b(?:contains?|containing|includes?|including)\b[^\n]{0,80}?#([1-9][0-9]{0,9})(?![0-9])",
+	re.I,
+)
+PR_REF_RE = re.compile(r"#([0-9]+)(?![0-9])")
+ALLOW_AUTO_MERGE_RE = re.compile(r"allow[ _-]auto[ _-]merge|\bauto[ _-]merge", re.I)
+CREDENTIAL_TITLE_RE = re.compile(r"^(?:set|add|configure|provide|create)\b", re.I)
+CREDENTIAL_NAMES = ("GH_PAT", "OPENROUTER_API_KEY")
+CREDENTIAL_NAME_RE = re.compile(r"(?<![A-Za-z0-9_])(?:GH_PAT|OPENROUTER_API_KEY)(?![A-Za-z0-9_])")
+UPPER_SNAKE_RE = re.compile(r"(?<![A-Za-z0-9_])[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+(?![A-Za-z0-9_])")
+HUMAN_ACTION_RE = re.compile(r"(?<![A-Za-z])(?:rotat\w*|revok\w*|scopes?|scoped|expir\w*|permissions?)(?![A-Za-z])", re.I)
+NEGATED_ACTION_RE = re.compile(r"(?<![A-Za-z])(?:disabl\w*|turn(?:ing)?\s+off|remov\w*|delet\w*|unset\w*)(?![A-Za-z])", re.I)
+# A credential step that hands the secret to someone or somewhere else is a human
+# step: the workflow-run proof only shows this repository's own runs (#10118 review).
+CREDENTIAL_HANDOFF_RE = re.compile(
+	r"(?<![A-Za-z])(?:to|for|with|from|in|into|onto|on|at|via|by)\s+(?:the\s+|a\s+|an\s+|our\s+|your\s+|each\s+|every\s+|all\s+)?"
+	r"(?:vendors?|consumers?|customers?|clients?|partners?|teams?|support|maintainers?|owners?|admins?|third[ -]part(?:y|ies))(?![A-Za-z])"
+	r"|(?<![A-Za-z])(?:consumer|other|every|each|all)\s+repo|(?<![A-Za-z])(?:send|email|share|forward|hand\s+(?:over|off))(?![A-Za-z])",
+	re.I,
+)
+# `--repo OWNER/REPO` / `-R OWNER/REPO` in a credential step: another repository's
+# secret cannot be proven by this repository's runs (#10118 review).
+# A quoted slug (`--repo "acme/app"`, `-R 'acme/app'`) is matched too (#10118 review).
+# The slug must end the argument (an optional closing quote, then whitespace, a
+# backtick, light punctuation or the end), so `--repo "o/r"-other` captures nothing
+# instead of the prefix `o/r` (#10118 review).
+CREDENTIAL_REPO_SLUG_RE = re.compile(
+	r"(?<![A-Za-z0-9_-])(?:--repo|-R)(?:\s+|=)[\"']?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(?=[\"']?(?:[\s,;:)\]\x60]|$))"
+)
+# Every `--repo`/`-R` flag must yield one captured slug: a value the slug pattern
+# cannot read (`<owner>/<app>`, `$TARGET`, a backtick-quoted value) keeps the step
+# open instead of skipping the repository check (#10118 review).
+# The attached short form `-Racme/other` (pflag) counts as a flag too; the slug
+# pattern cannot read it, so the counts differ and the step stays open (#10118 review).
+CREDENTIAL_REPO_FLAG_RE = re.compile(r"(?<![A-Za-z0-9_-])(?:--repo(?:\s|=|$)|-R)")
+# An organisation, environment, app (Dependabot, Codespaces) or user secret
+# (`gh secret set --org/--repos/--env/--app/--user`, `-o`, `-e`, `-a`, `-u`) cannot be
+# proven by this repository's Actions runs either: such a step stays open (#10118 review).
+CREDENTIAL_SCOPE_FLAG_RE = re.compile(r"(?<![A-Za-z0-9_-])(?:--(?:org|repos|env|app|user)|-[oeau])(?:\s|=|$)")
+# Human-object words a recognised step may name without becoming a human step:
+# the auto-merge toggle lives in the repository settings, and a credential
+# step necessarily names its secret/token/key.
+_OBSERVABLE_ALLOWED_OBJECT_WORDS = {
+	"allow_auto_merge": re.compile(r"^settings?$", re.I),
+	"credentials": re.compile(r"^(?:secrets?|tokens?|keys?|credentials?)$", re.I),
+}
+_OBSERVABLE_ALLOWED_IDENTIFIERS = {
+	"allow_auto_merge": {"ALLOW_AUTO_MERGE"},
+	"credentials": set(CREDENTIAL_NAMES),
+}
+OBSERVABLE_REASON_TEXT = {
+	"conditional_not_a_gate": "a conditional step (only when a command is used) is not a gate",
+	"stable_release": "the `stable` tag includes the merge of every named pull request",
+	"allow_auto_merge": "the repository allows auto-merge",
+	"credentials": "a pipeline workflow that needs the credential succeeded in the last "
+		f"{OBSERVABLE_CREDENTIAL_MAX_AGE_DAYS} days",
+}
+
+
+def operator_step_daily_tick_enabled() -> bool:
+	return os.environ.get("OPERATOR_STEP_DAILY_TICK_ENABLED", "true").strip().lower() != "false"
+
+
+def _tick_close_log(**fields: object) -> None:
+	print(f"OPERATOR_STEP_TICK tracker={fields.get('issue')} outcome={fields.get('outcome')} reason={fields.get('reason')}",
+		file=sys.stderr)
+
+
+def _observable_condition(title: str, lines: list[str], repo: str = "") -> tuple[str, list[int]] | None:
+	"""(condition, PR numbers) for a step the pipeline can observe, else None.
+
+	Fails closed: any other UPPER_SNAKE name, rotate/revoke/scope/expire/
+	permission wording or a human-object word outside the condition's own
+	vocabulary makes the step unrecognised, so a human step hidden in a
+	recognised one ("enable Allow auto-merge and add DEPLOY_KEY") stays open.
+	"""
+	text = "\n".join([str(title or "")] + [str(line) for line in lines])
+	if CONDITIONAL_STEP_RE.search(text):
+		condition = "conditional_not_a_gate"
+	elif STABLE_CONTAINS_PR_RE.search(text):
+		condition = "stable_release"
+	elif ALLOW_AUTO_MERGE_RE.search(text):
+		condition = "allow_auto_merge"
+	elif CREDENTIAL_TITLE_RE.match(str(title or "").strip()) and CREDENTIAL_NAME_RE.search(text):
+		condition = "credentials"
+	else:
+		return None
+	allowed_names = _OBSERVABLE_ALLOWED_IDENTIFIERS.get(condition, set())
+	if any(name not in allowed_names for name in UPPER_SNAKE_RE.findall(text)):
+		return None
+	if HUMAN_ACTION_RE.search(text):
+		return None
+	if condition in ("allow_auto_merge", "credentials") and NEGATED_ACTION_RE.search(text):
+		return None
+	if condition == "credentials" and CREDENTIAL_HANDOFF_RE.search(text):
+		return None
+	if condition == "credentials" and any(
+			slug.lower() != str(repo or "").lower() for slug in CREDENTIAL_REPO_SLUG_RE.findall(text)):
+		# Fails closed: without `repo`, any named repository keeps the step open.
+		return None
+	if condition == "credentials" and (
+			len(CREDENTIAL_REPO_FLAG_RE.findall(text)) != len(CREDENTIAL_REPO_SLUG_RE.findall(text))):
+		# Fails closed: a `--repo`/`-R` value that is not a literal slug is unverifiable.
+		return None
+	if condition == "credentials" and CREDENTIAL_SCOPE_FLAG_RE.search(text):
+		return None
+	stripped = UPPER_SNAKE_RE.sub(" ", text)
+	allowed_words = _OBSERVABLE_ALLOWED_OBJECT_WORDS.get(condition)
+	for word_match in HUMAN_OBJECT_TITLE_RE.finditer(re.sub(r"(?<=[a-z])(?=[A-Z])", "_", stripped)):
+		if allowed_words is None or not allowed_words.match(word_match.group(0)):
+			return None
+	numbers: list[int] = []
+	if condition == "stable_release":
+		# Every `#N` in the step must be released, not only the first one matched.
+		numbers = sorted({int(n) for n in PR_REF_RE.findall(text)})
+		if not numbers or any(n < 1 or n > 9_999_999_999 for n in numbers):
+			return None
+	return condition, numbers
+
+
+def _parse_utc(value: object) -> dt.datetime | None:
+	if not isinstance(value, str):
+		return None
+	try:
+		return dt.datetime.strptime(value.strip(), "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=dt.timezone.utc)
+	except ValueError:
+		return None
+
+
+def _check_allow_auto_merge(repo: str, cache: dict) -> str:
+	if "repo" not in cache:
+		try:
+			cache["repo"] = json.loads(_gh(["api", f"repos/{repo}"]) or "{}")
+		except (ApiError, ValueError):
+			cache["repo"] = None
+	data = cache["repo"]
+	if not isinstance(data, dict):
+		return "check_failed"
+	# A missing or null field (hidden from a lower-permission token) is not met.
+	return "met" if data.get("allow_auto_merge") is True else "not_met"
+
+
+def _check_credentials(repo: str, cache: dict, names: tuple[str, ...] | None = None) -> str:
+	now = _parse_utc(_now_iso())
+	if now is None:
+		return "check_failed"
+	# A workflow counts only when it requires every credential the step names.
+	proof_workflows = tuple(
+		workflow for workflow in OBSERVABLE_CREDENTIAL_WORKFLOWS
+		if all(workflow in OBSERVABLE_CREDENTIAL_PROOF_WORKFLOWS.get(name, ()) for name in (names or CREDENTIAL_NAMES))
+	)
+	if not proof_workflows:
+		return "not_met"
+	max_age = dt.timedelta(days=OBSERVABLE_CREDENTIAL_MAX_AGE_DAYS)
+	for workflow in proof_workflows:
+		cache_key = f"runs:{workflow}"
+		if cache_key not in cache:
+			updated = None
+			try:
+				data = json.loads(_gh(["api", f"repos/{repo}/actions/workflows/{workflow}/runs?status=success&per_page=1"]) or "{}")
+			except (ApiError, ValueError):
+				data = None
+			runs = data.get("workflow_runs") if isinstance(data, dict) else None
+			if isinstance(runs, list) and runs and isinstance(runs[0], dict):
+				updated = _parse_utc(runs[0].get("updated_at"))
+			# A failed or unreadable read is cached as "error" so it fails closed below.
+			cache[cache_key] = updated if isinstance(data, dict) else "error"
+		updated = cache[cache_key]
+		if isinstance(updated, dt.datetime) and dt.timedelta(0) <= now - updated <= max_age:
+			return "met"
+	# No proof: an unread workflow is a failed check, not an unmet condition.
+	if any(cache.get(f"runs:{workflow}") == "error" for workflow in proof_workflows):
+		return "check_failed"
+	return "not_met"
+
+
+def _check_stable_release(repo: str, numbers: list[int], repo_dir: str, stable_sha: str, cache: dict) -> str:
+	prs = cache.setdefault("prs", {})
+	for pr_number in numbers:
+		if pr_number not in prs:
+			if len(prs) >= MAX_OBSERVABLE_PR_READS:
+				return "deferred"
+			try:
+				prs[pr_number] = json.loads(_gh(["api", f"repos/{repo}/pulls/{pr_number}"]) or "{}")
+			except (ApiError, ValueError):
+				prs[pr_number] = None
+		pull = prs[pr_number]
+		if not isinstance(pull, dict):
+			return "check_failed"
+		merge_sha = pull.get("merge_commit_sha")
+		if not pull.get("merged_at") or not isinstance(merge_sha, str) or not SHA_RE.match(merge_sha):
+			return "not_met"
+		if _is_ancestor(repo_dir, merge_sha, stable_sha) != "ancestor":
+			return "not_met"
+	return "met"
+
+
+def _observe_entry(repo: str, body: str, repo_dir: str, stable_sha: str, cache: dict) -> tuple[str, list[str], str]:
+	"""(outcome, reasons, done text) for an entry without a source commit.
+
+	Every unticked step is classified before any API call; one unrecognised
+	step keeps the entry open. Checks stop at the first step that is not met.
+	"""
+	blocks = _unticked_step_blocks(body)
+	classified = [_observable_condition(title, lines, repo) for title, lines in blocks]
+	reasons = [found[0] if found else "unrecognised" for found in classified]
+	if not classified or any(found is None for found in classified):
+		return "unrecognised", reasons, ""
+	for (title, lines), (condition, numbers) in zip(blocks, classified):
+		if condition == "conditional_not_a_gate":
+			status = "met"
+		elif condition == "stable_release":
+			status = _check_stable_release(repo, numbers, repo_dir, stable_sha, cache)
+		elif condition == "allow_auto_merge":
+			status = _check_allow_auto_merge(repo, cache)
+		else:
+			step_text = "\n".join([str(title or "")] + [str(line) for line in lines])
+			status = _check_credentials(repo, cache, tuple(sorted(set(CREDENTIAL_NAME_RE.findall(step_text)))))
+		if status != "met":
+			return status, [condition], ""
+	unique = list(dict.fromkeys(reasons))
+	return "ticked", unique, "; ".join(OBSERVABLE_REASON_TEXT[reason] for reason in unique)
 
 
 # --- resolving released entries (stuck-states P10) -----------------------------
@@ -680,6 +996,15 @@ def _unticked_steps(body: str) -> list[tuple[str, str]]:
 	render_entry writes the dormant line last in a step, so only the step's
 	last indented line counts; an instruction line cannot stand in for it.
 	"""
+	result = []
+	for title, indented in _unticked_step_blocks(body):
+		dormant_match = DORMANT_LINE_RE.match(indented[-1]) if indented else None
+		result.append((title, dormant_match.group(1) if dormant_match else ""))
+	return result
+
+
+def _unticked_step_blocks(body: str) -> list[tuple[str, list[str]]]:
+	"""(title, stripped indented lines) per `- [ ] **Title**` step, in body order."""
 	steps: list[list] = []
 	current: list | None = None
 	for raw in str(body or "").replace("\r\n", "\n").split("\n"):
@@ -692,11 +1017,7 @@ def _unticked_steps(body: str) -> list[tuple[str, str]]:
 			current[1].append(raw.strip())
 		elif current is not None and raw.strip():
 			current = None
-	result = []
-	for title, indented in steps:
-		dormant_match = DORMANT_LINE_RE.match(indented[-1]) if indented else None
-		result.append((title, dormant_match.group(1) if dormant_match else ""))
-	return result
+	return [(title, indented) for title, indented in steps]
 
 
 def _is_release_entry(body: str) -> bool:
@@ -837,6 +1158,23 @@ def resolve(repo: str, trusted_login: str | None = None, max_compares: int = MAX
 		else:
 			result["skipped"][outcome] = result["skipped"].get(outcome, 0) + 1
 		_resolve_log(key=key, outcome=outcome, status=status)
+	close_state = _close_tracker_when_done(repo, tracker, latest, resolved, login, _resolve_log)
+	result["unticked"] = close_state["unticked"]
+	result["closed"] = close_state["closed"]
+	return result
+
+
+def _close_tracker_when_done(repo: str, tracker: dict, latest: dict[str, dict], ticked: set[str], login: str,
+		log) -> dict:
+	"""Close the tracker as completed when no unticked step is left (shared by resolve and the daily tick).
+
+	Moved verbatim from resolve(); `log(op=, issue=, outcome=, reason=)` is the
+	caller's logger, so resolve's `OPERATOR_STEP_RESOLVE op=close` lines are
+	unchanged. Returns {"unticked": n, "closed": bool}.
+	"""
+	number = tracker["number"]
+	resolved = ticked
+	result: dict = {"unticked": None, "closed": False}
 	legacy = parse_entries(str(tracker.get("body") or ""))
 	unticked, entry_count = _resolve_open_state(latest, legacy, resolved)
 	result["unticked"] = unticked
@@ -889,15 +1227,15 @@ def resolve(repo: str, trusted_login: str | None = None, max_compares: int = MAX
 				try:
 					_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", "state=open", "-f", "state_reason=reopened"])
 				except ApiError:
-					_resolve_log(op="close", issue=number, outcome="closed", reason="after_close_reopen_failed")
+					log(op="close", issue=number, outcome="closed", reason="after_close_reopen_failed")
 					raise
-				_resolve_log(op="close", issue=number, outcome="open", reason="after_close_read_failed")
+				log(op="close", issue=number, outcome="open", reason="after_close_read_failed")
 				raise
 			if any(key not in recheck_latest or comment["id"] != recheck_latest[key]["id"] for key, comment in after_close.items()):
 				_gh(["api", "-X", "PATCH", f"repos/{repo}/issues/{number}", "-f", "state=open", "-f", "state_reason=reopened"])
 				result["closed"] = False
 				reason = "reopened_after_close"
-	_resolve_log(op="close", issue=number, outcome="closed" if result["closed"] else "open", reason=reason)
+	log(op="close", issue=number, outcome="closed" if result["closed"] else "open", reason=reason)
 	return result
 
 
@@ -1426,6 +1764,7 @@ def main(argv: list[str] | None = None) -> int:
 	tick_cmd.add_argument("--stable-sha", required=True)
 	tick_cmd.add_argument("--repo-dir", default=".")
 	tick_cmd.add_argument("--trusted-login", default="")
+	tick_cmd.add_argument("--observable", action="store_true")
 	resolve_cmd = sub.add_parser("resolve")
 	resolve_cmd.add_argument("--repo", required=True)
 	resolve_cmd.add_argument("--trusted-login", default="")
@@ -1468,7 +1807,8 @@ def main(argv: list[str] | None = None) -> int:
 		elif args.command == "resolve":
 			result = resolve(args.repo, args.trusted_login or None)
 		elif args.command == "tick":
-			result = tick(args.repo, args.stable_sha, args.repo_dir, args.trusted_login or None)
+			result = tick(args.repo, args.stable_sha, args.repo_dir, args.trusted_login or None,
+				observable=args.observable)
 		else:
 			result = upsert(args.repo, args.key, args.source, load_steps(args.steps_file), args.source_sha or None)
 	except UsageError as exc:

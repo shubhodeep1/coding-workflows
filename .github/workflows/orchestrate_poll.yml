@@ -598,7 +598,7 @@ jobs:
 
       - name: Setup Node.js
         if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
           node-version: "22"
 
@@ -612,7 +612,7 @@ jobs:
         if: (steps.find_tracking.outputs.has_work == 'true' || steps.find_tracking.outputs.standalone_recovery == 'true')
         # Pinned by commit (tele-funtoken-msg-scoring#4566); bump it in the PR
         # that changes the action.
-        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@91b30f6fba400686c5dded34423f88f1ea10e163
+        uses: shubhodeep1/coding-workflows/.github/actions/install-codex@cbe65b01a1ff0890a0149a244ee46121065a0c45
         with:
           codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
 
@@ -1118,6 +1118,9 @@ jobs:
           RECLARIFY_UNROUTED_MAX_AGE_HOURS: ${{ vars.RECLARIFY_UNROUTED_MAX_AGE_HOURS || '168' }}
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS || '3' }}
+          STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED: ${{ vars.STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED || 'true' }}
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
           HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}
@@ -1476,7 +1479,7 @@ jobs:
         id: pool_daily_seen
         if: steps.pool_daily_slot.outputs.in_slot == 'true'
         continue-on-error: true
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: .claude-pool-daily-usage/sent
           key: claude-pool-daily-usage-v1-${{ steps.pool_daily_slot.outputs.date }}
@@ -1566,6 +1569,9 @@ jobs:
           PARTIAL_DELIVERY_TRACKING_ENABLED: ${{ vars.PARTIAL_DELIVERY_TRACKING_ENABLED || 'true' }}
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS || '3' }}
+          STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED: ${{ vars.STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED || 'true' }}
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
           HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}
@@ -1671,6 +1677,7 @@ jobs:
           # Issue #8685: close a complete project's tracking issue once its follow-ups settle.
           ORCHESTRATOR_CLOSE_COMPLETED_TRACKING: ${{ vars.ORCHESTRATOR_CLOSE_COMPLETED_TRACKING || 'true' }}
           ENABLE_STALL_MERGED_PR_GUARD: ${{ vars.ENABLE_STALL_MERGED_PR_GUARD || 'true' }}
+          UNBLOCK_EXISTING_PR_ROUTING_ENABLED: ${{ vars.UNBLOCK_EXISTING_PR_ROUTING_ENABLED || 'true' }}
           # Issue #6680 kill switch for closing and re-issuing a PR whose only
           # host-only conflicts are retired files the base no longer has.
           STALL_RETIRED_CONFLICT_REISSUE_ENABLED: ${{ vars.STALL_RETIRED_CONFLICT_REISSUE_ENABLED || 'true' }}
@@ -1833,6 +1840,9 @@ jobs:
           PARTIAL_DELIVERY_TRACKING_ENABLED: ${{ vars.PARTIAL_DELIVERY_TRACKING_ENABLED || 'true' }}
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS || '3' }}
+          STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED: ${{ vars.STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED || 'true' }}
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
           HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}
@@ -1909,6 +1919,7 @@ jobs:
           # Issue #8685: close a complete project's tracking issue once its follow-ups settle.
           ORCHESTRATOR_CLOSE_COMPLETED_TRACKING: ${{ vars.ORCHESTRATOR_CLOSE_COMPLETED_TRACKING || 'true' }}
           ENABLE_STALL_MERGED_PR_GUARD: ${{ vars.ENABLE_STALL_MERGED_PR_GUARD || 'true' }}
+          UNBLOCK_EXISTING_PR_ROUTING_ENABLED: ${{ vars.UNBLOCK_EXISTING_PR_ROUTING_ENABLED || 'true' }}
           STALL_RETIRED_CONFLICT_REISSUE_ENABLED: ${{ vars.STALL_RETIRED_CONFLICT_REISSUE_ENABLED || 'true' }}
           # PR #7709: stall recovery's check-triage resolution gate; false turns it off.
           CHECK_TRIAGE_RESOLVED_GATE_ENABLED: ${{ vars.CHECK_TRIAGE_RESOLVED_GATE_ENABLED || 'true' }}
@@ -1966,6 +1977,9 @@ jobs:
           STAGED_SUPPORT_LATCH_SWEEP_ONLY: "true"
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS || '3' }}
+          STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED: ${{ vars.STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED || 'true' }}
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
           HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}
@@ -2009,6 +2023,9 @@ jobs:
           STALL_THRESHOLD_IMPLEMENTING_MINUTES: ${{ vars.STALL_THRESHOLD_IMPLEMENTING_MINUTES || '' }}
           AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED: ${{ vars.AUTOMATION_PATH_PLAN_AUTO_APPROVAL_ENABLED || 'true' }}
           HEAL_COUNTERFACTUAL_GATE_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_GATE_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_EXPIRY_ENABLED || 'true' }}
+          HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS: ${{ vars.HEAL_COUNTERFACTUAL_HOLD_MAX_DAYS || '3' }}
+          STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED: ${{ vars.STALL_PR_RESOLVE_IMPLEMENTATION_FIRST_ENABLED || 'true' }}
           HEAL_STALE_AUTO_CLOSE_ENABLED: ${{ vars.HEAL_STALE_AUTO_CLOSE_ENABLED || 'true' }}
           HEAL_STALE_GREEN_RUNS: ${{ vars.HEAL_STALE_GREEN_RUNS || '5' }}
           HEAL_STALE_MIN_AGE_HOURS: ${{ vars.HEAL_STALE_MIN_AGE_HOURS || '24' }}
@@ -2116,7 +2133,7 @@ jobs:
         id: consumer_health_day
         if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_date.outputs.day != ''
         continue-on-error: true
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ${{ runner.temp }}/consumer-health-day
           key: consumer-health-check-${{ steps.consumer_health_date.outputs.day }}
@@ -2129,7 +2146,7 @@ jobs:
         id: consumer_health_alerted
         if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_date.outputs.day != '' && steps.consumer_health_day.outputs.cache-hit != 'true'
         continue-on-error: true
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: ${{ runner.temp }}/consumer-health-day
           key: consumer-health-alert-${{ steps.consumer_health_date.outputs.day }}
@@ -2172,7 +2189,7 @@ jobs:
       - name: Record today's consumer health check
         if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_date.outputs.day != '' && steps.consumer_health.outcome == 'success'
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ${{ runner.temp }}/consumer-health-day
           key: consumer-health-check-${{ steps.consumer_health_date.outputs.day }}
@@ -2180,7 +2197,7 @@ jobs:
       - name: Record today's consumer health failure alert
         if: github.repository == 'shubhodeep1/coding-workflows' && steps.consumer_health_date.outputs.day != '' && steps.consumer_health.outputs.failure_alerted == 'true'
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: ${{ runner.temp }}/consumer-health-day
           key: consumer-health-alert-${{ steps.consumer_health_date.outputs.day }}
@@ -2295,7 +2312,7 @@ jobs:
         # `if-no-files-found: error` is kept so a genuinely missing snapshot,
         # which is a real defect, still surfaces as a failed-step annotation.
         continue-on-error: true
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: state-snapshot
           path: ${{ env.RUNTIME_DIR }}/state-snapshot/state.json
@@ -2544,7 +2561,7 @@ jobs:
       - name: Re-check today's Claude pool daily usage marker
         id: pool_daily_recheck
         continue-on-error: true
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: .claude-pool-daily-usage/sent
           key: claude-pool-daily-usage-v1-${{ needs.poll.outputs.claude_pool_daily_date }}
@@ -2604,7 +2621,7 @@ jobs:
       - name: Save today's Claude pool daily usage marker
         if: steps.pool_daily_send.outputs.sent == 'true'
         continue-on-error: true
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: .claude-pool-daily-usage/sent
           key: claude-pool-daily-usage-v1-${{ needs.poll.outputs.claude_pool_daily_date }}
