@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- .github/workflows/ci.yml:1730-1739 | severity=high | confidence=3\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, z-ai_glm-5_3-flash]\n  PROBLEM: The five moved steps were chosen by test and subprocess counts, and the heaviest sharded `Workflow failure heal contract and driver tests` step stays in the heal job. The estimated saving is small (about 1 minute, as in #9018), so budget-watch may flag the job again.\n  WHY: The heal job likely stays near 17-18 minutes against the 15-minute warn threshold, so the issue's outcome is not reached. Severity disagreement: NIT (sonnet, glm), MAJOR (gemini, minimax); the highest is used. Also cited at lines 4436-4442 and 4458-4519 (moved steps).\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  expected_change_site: .github/workflows/ci.yml, selection of steps moved from `tests-heal-plan-and-validation` to `orchestrate-poll`\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna]\n  EVIDENCE: Comments at ci.yml lines 1730-1734, 1963-1964, 1999-2000, 2012-2015 and 4434-4444 state that the step timings were not readable. The steps were picked by test and subprocess counts, so the diff does not show they are the slowest. The historical saving of about 59 s for 604 tests projects that the heal job stays above the 0.9 ratio. Sonnet rated this NIT, with confidence 2.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- .github/workflows/ci.yml:1729-1739, 4458-4519 | severity=NIT | confidence=3\n  PROBLEM: The five moved steps were picked by test and subprocess counts, not measured timings. The sharded heal step that stays probably holds most of the time, and the earlier move #9018 saved only about 1 minute.\n  WHY: The heal job may stay above the 15-minute budget-watch threshold. The headroom of `orchestrate-poll` group 3 is unmeasured. There is no red-CI risk because timeouts are unchanged.\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  Expected change site: .github/workflows/ci.yml, steps moved out of `tests-heal-plan-and-validation`\n  Evidence of absence: All other constraints are met. The step timings could not be read, so the five steps are not shown to be the slowest. This is documented in the comments at lines 1730-1734 and 4434-4444 and in the changelog, as an estimate rather than an omission. SEVERITY: NIT, ISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:1730-1734 | severity=MAJOR | confidence=3\n  PROBLEM: The moved steps are selected from test count estimates, and the heaviest `Workflow failure heal contract and driver tests` step remains in the original job.\n  WHY: The move may not save enough time to prevent the 20-minute timeout, since similar moves saved only about 1 minute (#9018: 17m59s to 17m00s).\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: .github/workflows/ci.yml (selection of steps moved from `tests-heal-plan-and-validation` to `orchestrate-poll`)\n  Evidence of absence: Comments at lines 1730-1734, 1963-1964, 1999-2000, 2012-2015 and 4434-4444 state that the step timings were not readable and the steps were chosen by test and subprocess counts. SEVERITY: MAJOR, ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- .github/workflows/ci.yml:1730-1738, 4436-4442 | severity=MAJOR | confidence=3\n  PROBLEM: The five moved steps (about 363 tests in total) are an estimate by test and subprocess counts because the step timings were not readable. At about 0.1 s/test, the saving is roughly 30-40 s, which leaves the heal job at about 18m00s-18m10s.\n  WHY: Budget-watch opens an issue at 0.75 of the timeout, and the re-file cooldown only suppresses below 0.9. The job stays near the 0.9 ratio, so the budget-watch finding that triggered #10200 is not resolved. The diff's own comment concedes that moving the remaining small steps will not help.\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: .github/workflows/ci.yml, selection of steps moved from tests-heal-plan-and-validation to orchestrate-poll.\n  Evidence of absence: Comments at ci.yml:1730-1734 and :4436-4442 say the timings could not be read and the pick is an estimate by count. The diff shows no use of the run's step timings. The projected saving is under one minute, so the heal job stays above the 0.9 ratio. SEVERITY: MAJOR, ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP: Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom.\"\n  Expected change site: `.github/workflows/ci.yml`, selection of steps moved from `tests-heal-plan-and-validation` to `orchestrate-poll`.\n  Evidence of absence: The comments at lines 1730\u20131734 and 4434\u20134444 state that the step timings could not be read and the steps were estimated from test and subprocess counts. The diff does not establish that the moved steps were the slowest. SEVERITY: MAJOR, ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n- .github/workflows/ci.yml:4434-4519, 1737-1739 | severity=NIT | confidence=3\n  PROBLEM: The estimated saving from moving the five steps is likely below what is needed to bring the heal job under the 15-minute budget-watch warn threshold (0.75 \u00d7 20 min). The job took 18m44s, the sharded step stays, and the diff's own comment concedes that moving the remaining small steps will not help.\n  WHY: Budget-watch (CI_BUDGET_JOB_WARN_RATIO=0.75) will likely re-flag the heal job on the next main CI run, so the issue's stated outcome is not achieved by this change alone.\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "79b2463296b7238f68ca3881f4f07704926c8cd1e09d025ec1a096a448820823",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10202,
+    "run_id": "45947291527",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45947291527",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127063215_49d007e537",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10202,
+    "run_id": "45947291527"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 2 multi-reviewer item(s) across 2 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-27T06:32:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
