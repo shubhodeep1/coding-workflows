@@ -176,6 +176,7 @@ jobs:
           FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
           GH_TOKEN: ${{ github.token }}
           CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+          CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED || 'true' }}
         run: bash scripts/ci_final_merge_ref_fresh.sh --depth 1
 
       - name: Shared shell-block anti-regression checks
@@ -377,6 +378,12 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_ci_wires_every_test_file.py
+
+      # Runs the inventory parity gate on every PR push (R1a, Refs #9650).
+      - name: Inventory parity (quick)
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 tests/inventory_parity.py
 
       - name: YAML lint
         run: |
@@ -748,6 +755,8 @@ jobs:
             py:tests/test_fingerprint_quarantine.py
             py:tests/test_review_conflict_resolve_retry_state.py
             pytest:tests/test_review_conflict_resolve_terminal_record.py
+            pytest:tests/test_review_conflict_resolve_provenance.py
+            pytest:tests/test_review_conflict_modify_delete.py
             pytest:tests/test_epochrealtime_ms_clock.py
             pytest:tests/test_touched_set_symlink_aware.py
             py:tests/test_consumer_artifact_cleanup_preserves_tracked.py
@@ -914,6 +923,7 @@ jobs:
           FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
           GH_TOKEN: ${{ github.token }}
           CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+          CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED || 'true' }}
         run: bash scripts/ci_final_merge_ref_fresh.sh --depth 1
 
       - name: Fetch base commits for the shallow checkout (hooks and orchestrator)
@@ -1390,6 +1400,7 @@ jobs:
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_clarify_blocked_output.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_plan_scope_block_route.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_blocked_wait_on_pr.py
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_plan_nothing_to_implement_verify.py
           PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_plan_check_triage_branch_guard.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_clarify_header_prompt_staging.py
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_plan_auto_approve_safe_state_fetch.py
@@ -1754,6 +1765,7 @@ jobs:
           FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
           GH_TOKEN: ${{ github.token }}
           CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+          CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED || 'true' }}
         run: bash scripts/ci_final_merge_ref_fresh.sh --depth 1
 
       - name: Setup Python
@@ -2065,6 +2077,7 @@ jobs:
           FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
           GH_TOKEN: ${{ github.token }}
           CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+          CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED || 'true' }}
         run: bash scripts/ci_final_merge_ref_fresh.sh --depth 1
 
       - name: Setup Python
@@ -2081,6 +2094,11 @@ jobs:
         run: |
           set -euo pipefail
           PYTHONDONTWRITEBYTECODE=1 python3 tests/test_stall_recovery_pr_lookup.py
+
+      - name: Heal counterfactual hold expiry unit tests
+        run: |
+          set -euo pipefail
+          PYTHONDONTWRITEBYTECODE=1 python3 -m pytest -q -p no:cacheprovider tests/test_heal_counterfactual_hold_expiry.py
 
       - name: Review editor stderr-drain unit tests
         run: |
@@ -2499,6 +2517,7 @@ jobs:
           FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
           GH_TOKEN: ${{ github.token }}
           CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+          CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED || 'true' }}
         run: bash scripts/ci_final_merge_ref_fresh.sh --depth 1
 
       - name: Fetch base commits for the shallow checkout (release and log analysis)
@@ -3326,6 +3345,7 @@ jobs:
           FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
           GH_TOKEN: ${{ github.token }}
           CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+          CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED || 'true' }}
         run: bash scripts/ci_final_merge_ref_fresh.sh --depth 1
 
       - name: Setup Python
@@ -4515,6 +4535,7 @@ jobs:
           FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
           GH_TOKEN: ${{ github.token }}
           CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+          CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED || 'true' }}
         run: bash scripts/ci_final_merge_ref_fresh.sh --depth 1
 
       - name: Fetch base commits for the shallow checkout (system Python)
@@ -4831,6 +4852,7 @@ jobs:
           # No token: this job passes none (tests/test_sandbox_python_coverage.py),
           # so the script reads the PR from the public REST API instead.
           CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+          CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED || 'true' }}
         run: bash scripts/ci_final_merge_ref_fresh.sh --depth 1
 
       - name: Setup Python
@@ -5043,6 +5065,7 @@ jobs:
           FINAL_CI_PR_NUMBER: ${{ github.event_name == 'workflow_dispatch' && inputs.pr_number || '' }}
           GH_TOKEN: ${{ github.token }}
           CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+          CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED || 'true' }}
         run: bash scripts/ci_final_merge_ref_fresh.sh --depth 3
 
       - name: Setup Python
@@ -5170,6 +5193,7 @@ jobs:
           FINAL_CI_PR_NUMBER: ${{ inputs.pr_number }}
           GH_TOKEN: ${{ github.token }}
           CI_FINAL_MERGE_REF_FRESH_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_FRESH_ENABLED || 'true' }}
+          CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED: ${{ vars.CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED || 'true' }}
         run: bash scripts/ci_final_merge_ref_fresh.sh --depth 2
 
       - name: Verify every changed file is docs-only
