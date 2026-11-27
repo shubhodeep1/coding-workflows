@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- README.md:200 | severity=low | confidence=4\n  flagged_by: [anthropic_claude-sonnet-5_5]\n  PROBLEM: The CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED row in the README still says \"`ci.yml` (final CI, the ten merge-ref checks)\". The last run added the variable to an eleventh merge-ref check (tests-main-delta), and tests/test_ci_final_merge_ref_fresh.py line 470 now asserts seen == 11.\n  WHY: This is documentation drift only and nothing fails at runtime, but anyone using the README to find every place the variable is read will miss the tests-main-delta copy. The source severity was NIT, mapped here to low.\n- .github/workflows/ci.yml:5130 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The comment on the tests-main-delta job says it \"takes the head of the newest successful push or scheduled run as the base\".\n  WHY: The code actually uses the \"head of the push or scheduled run that finished last\" with the red-wins logic, so the comment misleads future maintainers. The source severity was NIT, mapped here to low. z-ai_glm-5_3-flash states that ci.yml:5129-5132 now describes the finished-last base with the red-stays-red rule.\n- scripts/ci_main_delta.sh:161 | severity=low | confidence=3\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The temporary file for gh error output (read_err_file) is created but not explicitly removed on every exit path, for example when the script is interrupted during the read.\n  WHY: Transient files are left in the runner's temporary directory and could accumulate if many runs are cancelled. The source severity was NIT, mapped here to low. z-ai_glm-5_3-flash notes that earlier editor and judge rounds accepted this temp-file leak on cancel as residual.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- README.md:line 200, the CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED row: \"`ci.yml` (final CI, the ten merge-ref checks)\" | severity=NIT | confidence=4\n  PROBLEM: The last run added CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED to an eleventh merge-ref check (tests-main-delta), and tests/test_ci_final_merge_ref_fresh.py line 470 now asserts seen == 11. The README still says ten.\n  WHY: Nothing fails at runtime. This is documentation drift only: anyone using the README to find every place the variable is read will miss the tests-main-delta copy.\n- HARDENING_SUGGESTION: .github/workflows/ci.yml, tests-main-delta, the step \"Verify the final-CI merge ref is current\" and the comment above it\n  PROBLEM: The step passes \"--depth 0\", but scripts/ci_final_merge_ref_fresh.sh only accepts 1-50 and treats 0 as 1 (line 534). If the job ever gains a dispatch path, the re-fetch would make its full-history clone shallow.\n  WHY: No fix is needed now. If the job ever runs on workflow_dispatch, give the checkout a finite fetch-depth and pass the same value to --depth. Estimated lines changed: 2. HARDENING_RISK_SCORE: 1.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- .github/workflows/ci.yml:5130 | severity=NIT | confidence=4\n  PROBLEM: The comment on the tests-main-delta job incorrectly states that it \"takes the head of the newest successful push or scheduled run as the base\".\n  WHY: The code actually implements the \"head of the push or scheduled run that finished last\" with the red-wins logic. The comment is misleading for future maintainers.\n- scripts/ci_main_delta.sh:161 | severity=NIT | confidence=3\n  PROBLEM: The temporary file for gh error output (read_err_file) is created but not explicitly removed in all exit paths (e.g., if the script is interrupted during the read).\n  WHY: It leaves transient files in the runner's temporary directory, which could accumulate over time if many runs are cancelled.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e71e69c7bcd5e62655781b98e70f0a130874ffb834bfb2c46fb504b23244339f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10163,
+    "run_id": "46013813179",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46013813179",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127152247_f60064ed0b",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10163,
+    "run_id": "46013813179"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-27T15:22:47Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
