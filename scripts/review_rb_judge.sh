@@ -2016,7 +2016,7 @@ rb_judge_route_red_checks()
   # The comment and the alert name the failures even when the snapshot could not.
   rb_judge_red_check_fill_names || true
   if [ -z "${reason}" ]; then
-    body="$(printf '**Final CI is red on head `%s`, so the review-blocked judge'"'"'s merge was not made.**\n\nThe judge chose `%s`, but required check-runs failed on this head. This asks for the final-CI repair (one CI-fix attempt for this head) and dispatches a review run to make it.\n\nFailing:\n%s\n\n<!-- ai:final-ci-repair-request:v1 pr=%s head=%s -->' \
+    body="$(printf '**Final CI is red on head `%s`, so the review-blocked judge'"'"'s merge was not made.**\n\nThe judge chose `%s`, but required check-runs failed on this head. This asks for the final-CI repair (one CI-fix attempt for this head) and dispatches a review run to make it.\n\nFailed check-runs on this head (required and advisory):\n%s\n\n<!-- ai:final-ci-repair-request:v1 pr=%s head=%s -->' \
       "${short_head}" "${decision}" "$(rb_judge_red_check_failure_list)" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}")"
     if ! request_id="$(rb_judge_post_issue_comment -f body="${body}" --jq '.id // ""' 2>/dev/null)"; then
       echo "::warning::Review-blocked judge could not post the final-CI repair request on PR #${PR_NUMBER}; keeping checks_failed."
@@ -2048,7 +2048,7 @@ rb_judge_route_red_checks()
     fi
     return 0
   fi
-  body="$(printf '**Final CI is red on head `%s` and the final-CI repair cannot run again (%s), so this PR is handed to a person.**\n\nThe review-blocked judge chose `%s`, but required check-runs failed on this head, so no merge was made. Failing:\n%s\n\nA new push to the branch starts the pipeline again.\n\n<!-- ai:final-ci-handover:v1 pr=%s head=%s -->' \
+  body="$(printf '**Final CI is red on head `%s` and the final-CI repair cannot run again (%s), so this PR is handed to a person.**\n\nThe review-blocked judge chose `%s`, but required check-runs failed on this head, so no merge was made. Failed check-runs on this head (required and advisory):\n%s\n\nA new push to the branch starts the pipeline again.\n\n<!-- ai:final-ci-handover:v1 pr=%s head=%s -->' \
     "${short_head}" "${reason}" "${decision}" "$(rb_judge_red_check_failure_list)" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}")"
   if ! rb_judge_post_issue_comment -f body="${body}" >/dev/null 2>&1; then
     echo "::warning::Review-blocked judge could not post the final-CI hand-over on PR #${PR_NUMBER}; keeping checks_failed."

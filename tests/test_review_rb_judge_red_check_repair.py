@@ -583,7 +583,7 @@ def test_hand_over_names_failures_when_the_snapshot_cannot(tmp_path: Path) -> No
 	assert run["result"].returncode == 0, run["result"].stderr
 	assert _status(run) == "final_ci_handover"
 	post = run["posts"][0]
-	assert "- `tests (3)`" in post and "- `lint(x)`" in post and "docs" not in post.split("Failing:", 1)[1]
+	assert "- `tests (3)`" in post and "- `lint(x)`" in post and "docs" not in post.split("(required and advisory):", 1)[1]
 	assert "could not be read" not in post
 	assert run["outputs"]["judge_ci_failure_summary"] == "lint(x); tests (3)"
 	reads = [call for call in run["calls"] if call[0] == "api" and "/check-runs" in call[1]]
