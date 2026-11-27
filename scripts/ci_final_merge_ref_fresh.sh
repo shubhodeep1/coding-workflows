@@ -74,6 +74,30 @@
 #     and exit 1, as a stale ref did before. The red `lint` sends the PR back
 #     through `final-ci-failed`, and the review sweep's base sync
 #     (scripts/review_final_ci_sweep.sh) updates a head that is behind.
+#   - before that stale exit fails the job, `ci_final_merge_ref_sync_only`
+#     (switch CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED, default true;
+#     issue #10177, Phase 10 / D10 of
+#     docs/plans/pipeline-human-wait-elimination-plan.md) keeps the original
+#     checkout and exits 0 (`outcome=stale_accepted
+#     reason=sync_only_no_overlap`) when all of these hold, checked in this
+#     order: (0) the PR's base is not the default branch (`git ls-remote
+#     --symref origin HEAD`); (1) `compare/<tested_base>...<tip>` is `ahead`
+#     with a complete listing (at most 250 commits, all listed, under 300
+#     files); (2) every commit in that range is a default-branch commit
+#     (`compare/<tested_base>...<default>`), an exact `chore: sync <default>
+#     into <base>` two-parent merge whose second parent is a default-branch
+#     commit, or a `[ai-merge-resolve]` commit; (3) none of the range's files
+#     (with `previous_filename` for renames) is in the PR's paginated files
+#     listing (at most 3000, counted against `changed_files`); a base tip
+#     that moved during these reads is `truncated`. tested_base is
+#     the first parent of the commit the job checked out, captured before the
+#     refresh loop. Any failed condition or unreadable response keeps the
+#     `::error::` and exit 1 and adds `detail=default_base|not_ahead|
+#     truncated|foreign_commit|file_overlap|too_many_files|api_error` to the
+#     stale line; with the switch off the stale line is unchanged. The
+#     residual risk (sync and resolver content in files the PR does not
+#     touch is not tested together with the PR) is recorded in D10; set the
+#     switch to false to roll back.
 # Fail-open: not a final-CI run, the switch off, an unreadable base branch,
 # tip or commit, a merge ref that could not be re-fetched at all and no other
 # fetch of this step worked (e.g. a private repository and a checkout without
@@ -98,14 +122,29 @@
 # the run are read from the public REST API unauthenticated;
 # CI_FINAL_MERGE_REF_API_URL overrides the API base for tests),
 # CI_FINAL_MERGE_REF_FRESH_ENABLED (default true; true/1/yes/on), the refresh
-# knobs above, CI_FINAL_MERGE_REF_MERGE_DEPTH (default 200).
+# knobs above, CI_FINAL_MERGE_REF_MERGE_DEPTH (default 200),
+# CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED (default true; true/1/yes/on),
+# GITHUB_STEP_SUMMARY (optional; one line on a stale_accepted exit).
 # API budget (§15): one `GET pulls/<n>` for the base branch name (the job's
 # shallow-checkout step reads the same PR later for its own exports; the
 # check must run before that step, so it cannot reuse that read), one
 # `GET actions/runs/<id>` for the pin only when the event payload carries no
 # `repository.pushed_at` (no earlier step of the job reads the run), plus one `GET pulls/<n>` per refresh attempt, only when the merge ref
-# is stale and the pin is the live tip.
-# Log: `CI_FINAL_MERGE_REF pr=<n> head=<sha> outcome=fresh|refreshed|merged_locally|stale|conflict|skipped reason=<token> [base=<ref>] [tested_base=<sha>] [tip=<sha>] [attempt=<n>] [merge=<sha>] [tree=<sha>] [pin=<sha>|pin=none pin_reason=<token>]`.
+# is stale and the pin is the live tip. The sync-only check adds up to 32 GETs
+# per job (two `compare/...` reads plus at most 30 pages of
+# `pulls/<n>/files?per_page=100`), only on the already-failing stale exit and
+# never on the fresh, refreshed or merged-locally paths. Condition 0 needs no
+# call, a failed compare check stops before the files listing, and a typical
+# PR's listing is one page. `changed_files` comes from the widened `pulls/<n>`
+# read above, not from a new call. Audited reads: the `pulls/<n>` read (base
+# ref, changed_files, mergeable) and the `actions/runs/<id>` read carry no
+# compare or files data, so the compare and files reads are new. Each of the
+# ten final-CI jobs that reaches the stale exit pays it; on a token-less job a
+# rate-limit refusal fails closed as `detail=api_error`. With GH_TOKEN set, a
+# refused authenticated read is retried once without credentials over curl
+# (`ci_final_merge_ref_api`), so a refused read costs two requests: the 32
+# reads are at most 64 HTTP requests when every authenticated read is refused.
+# Log: `CI_FINAL_MERGE_REF pr=<n> head=<sha> outcome=fresh|refreshed|merged_locally|stale|stale_accepted|conflict|skipped reason=<token> [base=<ref>] [tested_base=<sha>] [tip=<sha>] [attempt=<n>] [merge=<sha>] [tree=<sha>] [commits=<k>] [files=<m>] [pin=<sha>|pin=none pin_reason=<token>] [detail=<token>]` (`stale_accepted` has reason `sync_only_no_overlap`).
 
 set -uo pipefail
 
@@ -286,10 +325,205 @@ ci_final_merge_ref_merge_locally()
 	return 0
 }
 
+# `ci_final_merge_ref_default_branch` prints the short name of origin's
+# default branch from `git ls-remote --symref origin HEAD` (no API call), or
+# nothing and returns 1 when it is unreadable or not a safe ref name.
+ci_final_merge_ref_default_branch()
+{
+	local symref_name=""
+	symref_name="$(git ls-remote --symref origin HEAD 2>/dev/null \
+		| awk -F '\t' '$2 == "HEAD" && index($1, "ref: refs/heads/") == 1 { print substr($1, 17); exit }')"
+	if ! [[ "${symref_name}" =~ ^[A-Za-z0-9._/-]+$ ]] || [[ "${symref_name}" == *..* ]] || [[ "${symref_name}" == -* ]]; then
+		return 1
+	fi
+	printf '%s\n' "${symref_name}"
+}
+
+# jq filters of the sync-only check. Every field is non-empty ("-" for a
+# missing value), so a tab-split read cannot shift fields; commit subjects
+# and file names are JSON-encoded, so no author-controlled tab or newline can
+# break a line, and they are only ever compared as strings.
+CI_FINAL_MERGE_REF_SYNC_ONLY_RANGE_FILTER='if type == "object" and has("status") then ("H\t\(.status // "-" | tostring)\t\(.total_commits // "-" | tostring)\t\((.commits // []) | length)\t\((.files // []) | length)", ((.commits // [])[] | "C\t\(.sha // "-")\t\((.parents // []) | length)\t\((.parents // [])[1].sha // "-")\t\((.commit.message // "") | split("\n") | (.[0] // "") | tojson)"), ((.files // [])[] | "F\t\(.filename // "" | tojson)", (select(.status == "renamed" and ((.previous_filename // "") != "")) | "F\t\(.previous_filename | tojson)"))) else empty end'
+CI_FINAL_MERGE_REF_SYNC_ONLY_DEFAULT_FILTER='if type == "object" and has("status") then ("H\t\(.status // "-" | tostring)\t\(.total_commits // "-" | tostring)\t\((.commits // []) | length)", ((.commits // [])[] | "C\t\(.sha // "-")")) else empty end'
+CI_FINAL_MERGE_REF_SYNC_ONLY_FILES_FILTER='if type == "array" then ("A\t\(length)", (.[] | "F\t\(.filename // "" | tojson)", (select(.status == "renamed" and ((.previous_filename // "") != "")) | "F\t\(.previous_filename | tojson)"))) else empty end'
+
+# `ci_final_merge_ref_sync_only <tested_base> <tip> <base ref> <changed_files>
+# <checked-out commit>`: the stale-path acceptance described in the header.
+# Sets CI_FINAL_MERGE_REF_SYNC_ONLY_DETAIL (first failed condition),
+# _COMMITS, _FILES and _TIP (the tip it judged). Returns 0 to accept, 1 to
+# reject. The temporary directory is removed here on every return; no EXIT
+# trap is set, so a caller's trap is never replaced.
+ci_final_merge_ref_sync_only()
+{
+	local so_work_dir="" so_rc=0
+	CI_FINAL_MERGE_REF_SYNC_ONLY_DETAIL=""
+	CI_FINAL_MERGE_REF_SYNC_ONLY_COMMITS=""
+	CI_FINAL_MERGE_REF_SYNC_ONLY_FILES=""
+	CI_FINAL_MERGE_REF_SYNC_ONLY_TIP=""
+	if ! so_work_dir="$(mktemp -d 2>/dev/null)" || [ ! -d "${so_work_dir}" ]; then
+		CI_FINAL_MERGE_REF_SYNC_ONLY_DETAIL="api_error"
+		return 1
+	fi
+	ci_final_merge_ref_sync_only_check "${so_work_dir}" "$@" || so_rc=$?
+	rm -rf -- "${so_work_dir}"
+	if [ "${so_rc}" -ne 0 ]; then
+		[ -n "${CI_FINAL_MERGE_REF_SYNC_ONLY_DETAIL}" ] || CI_FINAL_MERGE_REF_SYNC_ONLY_DETAIL="api_error"
+		return 1
+	fi
+	return 0
+}
+
+# `ci_final_merge_ref_sync_only_fail <detail>` records the first failed
+# condition; callers return 1 right after it.
+ci_final_merge_ref_sync_only_fail()
+{
+	CI_FINAL_MERGE_REF_SYNC_ONLY_DETAIL="$1"
+	return 0
+}
+
+ci_final_merge_ref_sync_only_check()
+{
+	local so_dir="$1" so_tested_base="$2" so_tip="$3" so_base_ref="$4" so_changed_files="$5" so_checked_out="$6"
+	local so_p1="" so_p2="" so_p3="" so_default="" so_kind="" so_status="" so_total="" so_listed="" so_nfiles=""
+	local so_sha="" so_pcount="" so_second="" so_subject="" so_sync_subject="" so_pages=0 so_page=0 so_entries=0
+	local so_page_count="" so_lines=0 so_range_total=0 so_now_tip=""
+	# Pre-checks (all api_error): a readable tip, the original checkout with
+	# parents <tested_base> <head>, and a readable default branch.
+	if ! [[ "${so_tip}" =~ ^[0-9a-f]{40}$ ]]; then
+		so_tip="$(ci_final_merge_ref_tip "${so_base_ref}")"
+	fi
+	if ! [[ "${so_tip}" =~ ^[0-9a-f]{40}$ ]] || ! [[ "${so_tested_base}" =~ ^[0-9a-f]{40}$ ]] \
+		|| ! [[ "${so_checked_out}" =~ ^[0-9a-f]{40}$ ]] || ! [[ "${FINAL_CI_PR_NUMBER:-}" =~ ^[1-9][0-9]*$ ]]; then
+		ci_final_merge_ref_sync_only_fail api_error; return 1
+	fi
+	CI_FINAL_MERGE_REF_SYNC_ONLY_TIP="${so_tip}"
+	# A failed local merge can leave HEAD elsewhere; accepting means "keep the
+	# original checkout", so restore and verify it.
+	if [ "$(git rev-parse HEAD 2>/dev/null)" != "${so_checked_out}" ]; then
+		git -c core.hooksPath=/dev/null checkout --quiet --detach --force "${so_checked_out}" >/dev/null 2>&1 || true
+	fi
+	if [ "$(git rev-parse HEAD 2>/dev/null)" != "${so_checked_out}" ]; then
+		ci_final_merge_ref_sync_only_fail api_error; return 1
+	fi
+	read -r so_p1 so_p2 so_p3 <<< "$(ci_final_merge_ref_parents HEAD)"
+	if [ "${so_p1:-}" != "${so_tested_base}" ] || [ "${so_p2:-}" != "${GITHUB_SHA:-}" ] || [ -n "${so_p3:-}" ]; then
+		ci_final_merge_ref_sync_only_fail api_error; return 1
+	fi
+	so_default="$(ci_final_merge_ref_default_branch || true)"
+	if [ -z "${so_default}" ]; then
+		ci_final_merge_ref_sync_only_fail api_error; return 1
+	fi
+	# (0) Integration base only: for a default-branch PR every commit in range
+	# is a default-branch commit, so (2) would pass vacuously.
+	if [ "${so_base_ref}" = "${so_default}" ]; then
+		ci_final_merge_ref_sync_only_fail default_base; return 1
+	fi
+	# (1) Ancestry and a complete range listing.
+	ci_final_merge_ref_api "compare/${so_tested_base}...${so_tip}" "${CI_FINAL_MERGE_REF_SYNC_ONLY_RANGE_FILTER}" > "${so_dir}/range" 2>/dev/null || true
+	IFS=$'\t' read -r so_kind so_status so_total so_listed so_nfiles < <(grep -m 1 $'^H\t' "${so_dir}/range" 2>/dev/null || true)
+	if [ "${so_kind:-}" != "H" ] || ! [[ "${so_total:-}" =~ ^[0-9]{1,9}$ ]] || ! [[ "${so_listed:-}" =~ ^[0-9]{1,9}$ ]] \
+		|| ! [[ "${so_nfiles:-}" =~ ^[0-9]{1,9}$ ]]; then
+		ci_final_merge_ref_sync_only_fail api_error; return 1
+	fi
+	if [ "${so_status}" != "ahead" ]; then
+		ci_final_merge_ref_sync_only_fail not_ahead; return 1
+	fi
+	if [ "$((10#${so_total}))" -gt 250 ] || [ "$((10#${so_listed}))" -ne "$((10#${so_total}))" ] || [ "$((10#${so_nfiles}))" -ge 300 ]; then
+		ci_final_merge_ref_sync_only_fail truncated; return 1
+	fi
+	so_range_total=$((10#${so_total}))
+	grep $'^C\t' "${so_dir}/range" > "${so_dir}/range_commits" 2>/dev/null || true
+	so_lines="$(wc -l < "${so_dir}/range_commits" | tr -d ' ')"
+	if [ "${so_lines}" != "$((10#${so_listed}))" ]; then
+		ci_final_merge_ref_sync_only_fail api_error; return 1
+	fi
+	grep $'^F\t' "${so_dir}/range" | cut -f 2- | LC_ALL=C sort -u > "${so_dir}/range_files" 2>/dev/null || true
+	# (2) Commit types, against the complete set of default-branch commits.
+	ci_final_merge_ref_api "compare/${so_tested_base}...${so_default}" "${CI_FINAL_MERGE_REF_SYNC_ONLY_DEFAULT_FILTER}" > "${so_dir}/default" 2>/dev/null || true
+	so_kind="" so_status="" so_total="" so_listed=""
+	IFS=$'\t' read -r so_kind so_status so_total so_listed < <(grep -m 1 $'^H\t' "${so_dir}/default" 2>/dev/null || true)
+	if [ "${so_kind:-}" != "H" ] || ! [[ "${so_total:-}" =~ ^[0-9]{1,9}$ ]] || ! [[ "${so_listed:-}" =~ ^[0-9]{1,9}$ ]]; then
+		ci_final_merge_ref_sync_only_fail api_error; return 1
+	fi
+	if [ "$((10#${so_total}))" -gt 250 ] || [ "$((10#${so_listed}))" -ne "$((10#${so_total}))" ]; then
+		ci_final_merge_ref_sync_only_fail truncated; return 1
+	fi
+	grep $'^C\t' "${so_dir}/default" | cut -f 2 > "${so_dir}/default_set" 2>/dev/null || true
+	if grep -qvE '^[0-9a-f]{40}$' "${so_dir}/default_set"; then
+		ci_final_merge_ref_sync_only_fail api_error; return 1
+	fi
+	# The subject scripts/orchestrate_poll_process.sh writes, JSON-encoded the
+	# way the filter encodes subjects (branch names hold no character that
+	# JSON escapes).
+	so_sync_subject="\"chore: sync ${so_default} into ${so_base_ref}\""
+	while IFS=$'\t' read -r so_kind so_sha so_pcount so_second so_subject; do
+		if ! [[ "${so_sha}" =~ ^[0-9a-f]{40}$ ]]; then
+			ci_final_merge_ref_sync_only_fail api_error; return 1
+		fi
+		if grep -qxF -- "${so_sha}" "${so_dir}/default_set"; then
+			continue
+		fi
+		if [ "${so_pcount}" = "2" ] && [ "${so_subject}" = "${so_sync_subject}" ] \
+			&& [[ "${so_second}" =~ ^[0-9a-f]{40}$ ]] && grep -qxF -- "${so_second}" "${so_dir}/default_set"; then
+			continue
+		fi
+		if [[ "${so_subject}" == '"[ai-merge-resolve]'* ]]; then
+			continue
+		fi
+		ci_final_merge_ref_sync_only_fail foreign_commit; return 1
+	done < "${so_dir}/range_commits"
+	# (3) No overlap with the PR's complete changed-file list.
+	if ! [[ "${so_changed_files}" =~ ^[0-9]{1,9}$ ]]; then
+		ci_final_merge_ref_sync_only_fail api_error; return 1
+	fi
+	so_changed_files=$((10#${so_changed_files}))
+	if [ "${so_changed_files}" -gt 3000 ]; then
+		ci_final_merge_ref_sync_only_fail too_many_files; return 1
+	fi
+	so_pages=$(( (so_changed_files + 99) / 100 ))
+	: > "${so_dir}/pr_raw"
+	for (( so_page = 1; so_page <= so_pages; so_page++ )); do
+		if ! ci_final_merge_ref_api "pulls/${FINAL_CI_PR_NUMBER}/files?per_page=100&page=${so_page}" "${CI_FINAL_MERGE_REF_SYNC_ONLY_FILES_FILTER}" > "${so_dir}/page" 2>/dev/null; then
+			ci_final_merge_ref_sync_only_fail api_error; return 1
+		fi
+		so_page_count="$(awk -F '\t' '$1 == "A" { print $2; exit }' "${so_dir}/page")"
+		if ! [[ "${so_page_count}" =~ ^[0-9]{1,4}$ ]]; then
+			ci_final_merge_ref_sync_only_fail api_error; return 1
+		fi
+		so_entries=$(( so_entries + 10#${so_page_count} ))
+		grep $'^F\t' "${so_dir}/page" >> "${so_dir}/pr_raw" 2>/dev/null || true
+	done
+	if [ "${so_entries}" -ne "${so_changed_files}" ]; then
+		ci_final_merge_ref_sync_only_fail truncated; return 1
+	fi
+	cut -f 2- "${so_dir}/pr_raw" | LC_ALL=C sort -u > "${so_dir}/pr_files"
+	if [ -n "$(LC_ALL=C comm -12 "${so_dir}/range_files" "${so_dir}/pr_files")" ]; then
+		ci_final_merge_ref_sync_only_fail file_overlap; return 1
+	fi
+	# The base can move while the reads above run; commits past the judged tip
+	# were never classified, so a moved tip is an incomplete listing
+	# (`truncated`) and an unreadable one `api_error`. One `git ls-remote`.
+	so_now_tip="$(ci_final_merge_ref_tip "${so_base_ref}")"
+	if ! [[ "${so_now_tip}" =~ ^[0-9a-f]{40}$ ]]; then
+		ci_final_merge_ref_sync_only_fail api_error; return 1
+	fi
+	if [ "${so_now_tip}" != "${so_tip}" ]; then
+		# Plain diagnostic (not the contractual stale line): tells a moved tip
+		# apart from an incomplete compare or files listing, both `truncated`.
+		echo "CI_FINAL_MERGE_REF: ${so_base_ref} moved from ${so_tip} to ${so_now_tip} during the sync-only check; not accepting."
+		ci_final_merge_ref_sync_only_fail truncated; return 1
+	fi
+	CI_FINAL_MERGE_REF_SYNC_ONLY_COMMITS="${so_range_total}"
+	CI_FINAL_MERGE_REF_SYNC_ONLY_FILES="$(wc -l < "${so_dir}/range_files" | tr -d ' ')"
+	return 0
+}
+
 ci_final_merge_ref_main()
 {
 	local depth=1 switch attempts sleep_s base_ref tip first second seen_tips attempt mergeable fetched
 	local merge_depth pin pin_note merge_into merge_reason local_rc=0 head_tree fresh_tip deferred_to_pin=false
+	local sync_only_tested_base="" sync_only_checked_out="" sync_only_pr_changed_files="" sync_only_pull_line=""
+	local sync_only_switch="" sync_only_detail_note=""
 	CI_FINAL_MERGE_REF_FETCHED=false
 	while [ "$#" -gt 0 ]; do
 		case "$1" in
@@ -334,7 +568,17 @@ ci_final_merge_ref_main()
 		ci_final_merge_ref_log skipped not_a_merge_of_the_head "tested_base=${first:-none}"
 		return 0
 	fi
-	base_ref="$(ci_final_merge_ref_pull '.base.ref // ""' || true)"
+	# The sync-only check at the stale exit needs the tested base as the
+	# first parent of the commit actually checked out: the refresh loop
+	# reassigns `first` from each re-fetched ref, so keep it separately.
+	sync_only_tested_base="${first}"
+	sync_only_checked_out="$(git rev-parse HEAD 2>/dev/null || true)"
+	# One read gives the base branch and, for that check, `changed_files`.
+	sync_only_pull_line="$(ci_final_merge_ref_pull '"\(.base.ref // "")\t\(.changed_files // "" | tostring)"' || true)"
+	base_ref="${sync_only_pull_line%%$'\t'*}"
+	if [[ "${sync_only_pull_line}" == *$'\t'* ]]; then
+		sync_only_pr_changed_files="${sync_only_pull_line#*$'\t'}"
+	fi
 	if ! [[ "${base_ref}" =~ ^[A-Za-z0-9._/-]+$ ]] || [[ "${base_ref}" == *..* ]] || [[ "${base_ref}" == -* ]]; then
 		echo "::warning::CI_FINAL_MERGE_REF: could not read the base branch of PR #${FINAL_CI_PR_NUMBER}; testing the checked-out merge ref unverified."
 		ci_final_merge_ref_log skipped base_ref_unreadable "tested_base=${first}"
@@ -461,12 +705,26 @@ ci_final_merge_ref_main()
 		ci_final_merge_ref_log skipped fetch_unavailable "base=${base_ref} tested_base=${first} tip=${tip:-none}"
 		return 0
 	fi
+	sync_only_switch="$(printf '%s' "${CI_FINAL_MERGE_REF_SYNC_ONLY_ACCEPT_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')"
+	case "${sync_only_switch}" in
+		true|1|yes|on)
+			if ci_final_merge_ref_sync_only "${sync_only_tested_base}" "${tip:-}" "${base_ref}" "${sync_only_pr_changed_files}" "${sync_only_checked_out}"; then
+				echo "CI_FINAL_MERGE_REF: refs/pull/${FINAL_CI_PR_NUMBER}/merge is stale, but ${base_ref} moved from ${sync_only_tested_base} to ${CI_FINAL_MERGE_REF_SYNC_ONLY_TIP} only by syncs of the default branch and [ai-merge-resolve] commits that touch none of the PR's files; testing the checked-out merge."
+				ci_final_merge_ref_log stale_accepted sync_only_no_overlap "base=${base_ref} tested_base=${sync_only_tested_base} tip=${CI_FINAL_MERGE_REF_SYNC_ONLY_TIP} commits=${CI_FINAL_MERGE_REF_SYNC_ONLY_COMMITS} files=${CI_FINAL_MERGE_REF_SYNC_ONLY_FILES} ${pin_note}"
+				if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+					echo "Final CI tested base \`${sync_only_tested_base}\` of \`${base_ref}\`: the ${CI_FINAL_MERGE_REF_SYNC_ONLY_COMMITS} sync commit(s) up to \`${CI_FINAL_MERGE_REF_SYNC_ONLY_TIP}\` touch none of the PR's files (CI_FINAL_MERGE_REF outcome=stale_accepted)." >> "${GITHUB_STEP_SUMMARY}" 2>/dev/null || true
+				fi
+				return 0
+			fi
+			sync_only_detail_note=" detail=${CI_FINAL_MERGE_REF_SYNC_ONLY_DETAIL:-api_error}"
+			;;
+	esac
 	if [ "${CI_FINAL_MERGE_REF_LOCAL_REASON}" = "merge_tree_unsupported" ]; then
 		echo "::error::CI_FINAL_MERGE_REF: the runner's git does not support --attr-source (git 2.41 or newer is required), so the job could not build the merge of ${GITHUB_SHA} into ${merge_into} (${base_ref}) itself. This is a runner problem, not a defect in the PR."
 	else
 		echo "::error::CI_FINAL_MERGE_REF: refs/pull/${FINAL_CI_PR_NUMBER}/merge merges into ${first:-unknown}, not ${merge_into} (${base_ref}), and the job could not build the merge itself (${CI_FINAL_MERGE_REF_LOCAL_REASON:-unknown}). This run would test an old base, so it stops here; this is not a defect in the PR. The review sweep updates a head that is behind its base, and the next final run tests the current base."
 	fi
-	ci_final_merge_ref_log stale "${CI_FINAL_MERGE_REF_LOCAL_REASON:-merge_failed}" "base=${base_ref} tested_base=${first:-none} tip=${tip:-none} ${pin_note}"
+	ci_final_merge_ref_log stale "${CI_FINAL_MERGE_REF_LOCAL_REASON:-merge_failed}" "base=${base_ref} tested_base=${first:-none} tip=${tip:-none} ${pin_note}${sync_only_detail_note}"
 	return 1
 }
 
