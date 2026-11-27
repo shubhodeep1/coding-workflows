@@ -3345,14 +3345,88 @@ jobs:
       - name: Capture runtime context
         if: always()
         run: |
-          REVIEW_AUTOFIX_STEP_SCRIPT="${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_capture_runtime_context.sh"
-          [ -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ] || REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/scripts/review_autofix_step_capture_runtime_context.sh"
-          case "${REVIEW_AUTOFIX_STEP_SCRIPT}" in "${GITHUB_WORKSPACE}/.codex-workflow-src/"*) [[ "${SCRIPT_REF:-}" =~ ^[0-9a-f]{40}$ ]] && [ "${REVIEW_SUPPORT_SOURCE_VERIFIED_SHA:-}" = "${SCRIPT_REF}" ] && [ "$(env -u GIT_DIR -u GIT_WORK_TREE git -C "${GITHUB_WORKSPACE}/.codex-workflow-src" rev-parse HEAD 2>/dev/null)" = "${SCRIPT_REF}" ] || { echo "::warning::Refusing unverified .codex-workflow-src fallback (SCRIPT_REF=${SCRIPT_REF:-unset})."; REVIEW_AUTOFIX_STEP_SCRIPT=""; } ;; esac
-          if [ ! -f "${REVIEW_AUTOFIX_STEP_SCRIPT}" ]; then
-            echo "::warning::review_autofix_step_capture_runtime_context.sh not found in the staged support bundle or .codex-workflow-src/scripts (SCRIPT_REF=${SCRIPT_REF:-unknown}); skipping step 'Capture runtime context' (fail open)."
+          set -euo pipefail
+
+          # Early guard: if the Create runtime workspace step never ran
+          # (e.g. a prior step failed before RUNTIME_CONTEXT_DIR was
+          # written to $GITHUB_ENV), this step would otherwise fail with
+          # "unbound variable" under set -u and mask the real root-cause
+          # error in the failure notification step.  Skip cleanly so the
+          # job's failure reason stays pinned to the actual first failure.
+          if [ -z "${RUNTIME_CONTEXT_DIR:-}" ]; then
+            echo "::warning::RUNTIME_CONTEXT_DIR not set; runtime workspace step did not complete. Skipping runtime context capture."
             exit 0
           fi
-          source "${REVIEW_AUTOFIX_STEP_SCRIPT}"
+
+          mkdir -p "${RUNTIME_CONTEXT_DIR}"
+
+          git status --short --branch > "${RUNTIME_CONTEXT_DIR}/git_status.txt" || true
+          git diff --stat > "${RUNTIME_CONTEXT_DIR}/git_diff_stat.txt" || true
+          ls -R . | sed -n "1,400p" > "${RUNTIME_CONTEXT_DIR}/shallow_tree.txt" || true
+          {
+            for key in \
+              CI \
+              GITHUB_ACTION \
+              GITHUB_ACTIONS \
+              GITHUB_ACTOR \
+              GITHUB_ACTOR_ID \
+              GITHUB_API_URL \
+              GITHUB_BASE_REF \
+              GITHUB_ENV \
+              GITHUB_EVENT_NAME \
+              GITHUB_EVENT_PATH \
+              GITHUB_GRAPHQL_URL \
+              GITHUB_HEAD_REF \
+              GITHUB_JOB \
+              GITHUB_OUTPUT \
+              GITHUB_PATH \
+              GITHUB_REF \
+              GITHUB_REF_NAME \
+              GITHUB_REF_PROTECTED \
+              GITHUB_REF_TYPE \
+              GITHUB_REPOSITORY \
+              GITHUB_REPOSITORY_ID \
+              GITHUB_REPOSITORY_OWNER \
+              GITHUB_REPOSITORY_OWNER_ID \
+              GITHUB_RETENTION_DAYS \
+              GITHUB_RUN_ATTEMPT \
+              GITHUB_RUN_ID \
+              GITHUB_RUN_NUMBER \
+              GITHUB_SERVER_URL \
+              GITHUB_SHA \
+              GITHUB_STEP_SUMMARY \
+              GITHUB_TRIGGERING_ACTOR \
+              GITHUB_WORKFLOW \
+              GITHUB_WORKFLOW_REF \
+              GITHUB_WORKFLOW_SHA \
+              GITHUB_WORKSPACE \
+              HOME \
+              LANG \
+              LC_ALL \
+              PATH \
+              PWD \
+              RUNNER_ARCH \
+              RUNNER_NAME \
+              RUNNER_OS \
+              RUNNER_TEMP \
+              RUNNER_TOOL_CACHE \
+              RUNNER_WORKSPACE \
+              SHELL \
+              SHLVL \
+              TZ \
+              USER; do
+              if [ "${!key+x}" = "x" ]; then
+                printf '%s=%s\n' "${key}" "${!key}"
+              fi
+            done
+          } | sort > "${RUNTIME_CONTEXT_DIR}/environment_sorted.txt" || true
+          git log --oneline -n 20 > "${RUNTIME_CONTEXT_DIR}/recent_commits.txt" || true
+          git branch -a > "${RUNTIME_CONTEXT_DIR}/branches.txt" || true
+          cp .github/workflows/review_autofix.yml "${RUNTIME_CONTEXT_DIR}/workflow_snapshot.yml" || true
+          {
+            [ -d "${HOME}/.npm/_logs" ] && ls -1 "${HOME}/.npm/_logs" | tail -n 5 || true
+            [ -f "${GITHUB_STEP_SUMMARY:-}" ] && cat "${GITHUB_STEP_SUMMARY}" || true
+          } > "${RUNTIME_CONTEXT_DIR}/run_logs_best_effort.txt" || true
 
       - name: "Preflight: Verify required files before reviewer invocation"
         if: steps.retrigger_guard.outputs.max_iterations_reached != 'true' && env.PR_CLOSED != 'true'
