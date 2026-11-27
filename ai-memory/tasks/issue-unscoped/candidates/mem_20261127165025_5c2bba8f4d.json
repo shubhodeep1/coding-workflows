@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  expected_change_site: .github/workflows/ci.yml, the selection of steps moved from tests-heal-plan-and-validation to orchestrate-poll\n  confidence=[5]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: .github/workflows/ci.yml lines 1729-1739 and 4431-4526 (also 1730\u20131734 and 4436\u20134444) and changelog.d/10200-ci-heal-job-steps-to-poll-groups.md state that run 45931627782's step timings could not be read, so the five moved steps were picked by test and subprocess counts, not measured timings, and the sharded step \"Workflow failure heal contract and driver tests\" is untouched. The names, timeouts and no-new-job constraints are met. Severity disagreement: NIT (sonnet, glm) vs MAJOR (gemini, minimax, openai); the highest is MAJOR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\nExpected change site: `.github/workflows/ci.yml`, the choice of which steps move from `tests-heal-plan-and-validation` to `orchestrate-poll`.\nEvidence of absence: The \"slowest by step timings\" part is not met. Comments at ci.yml lines 1729-1739 and 4431-4526 and the changelog fragment say the step timings could not be read, so steps were chosen by test and subprocess counts. Documented limitation.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 2\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\nExpected change site: `.github/workflows/ci.yml`, the selection of steps moved from `tests-heal-plan-and-validation` to `orchestrate-poll`.\nEvidence of absence: The PR moves steps based on estimates from test and subprocess counts, not the run's actual step timings, as documented in `.github/workflows/ci.yml` (lines 1729-1739 and 4431-4526) and the changelog.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\nExpected change site: `.github/workflows/ci.yml`, the selection of steps moved out of `tests-heal-plan-and-validation` into `orchestrate-poll`.\nEvidence of absence: ci.yml lines 1729-1739, lines 4431-4526 and `changelog.d/10200-ci-heal-job-steps-to-poll-groups.md` state the step timings were not readable, so the five moved steps were picked by test and subprocess counts. The sharded step `Workflow failure heal contract and driver tests` (about 602 test functions) is untouched. Name, timeout and no-new-job constraints are met and pinned by `MovedHeal10200StepsContractTest` in `tests/test_ci_poll_test_sharding.py:5276-5333`.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\nRequirement: \u201cMove its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\u201d\nExpected change site: `.github/workflows/ci.yml`, the selection of steps moved from `tests-heal-plan-and-validation` to `orchestrate-poll`.\nEvidence of absence: Workflow comments at lines 1730\u20131734 and 4436\u20134444 state the step timings could not be read and the five steps were selected by test and subprocess counts. The diff does not establish they were the slowest by measured timings.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: .github/workflows/ci.yml \u2014 the selection of which steps were moved out of tests-heal-plan-and-validation into orchestrate-poll.\nEvidence of absence: The diff does not select steps from the run's step timings; this is documented at ci.yml lines 1729-1739, in the per-step comments at lines 4431-4526, and in changelog.d/10200-ci-heal-job-steps-to-poll-groups.md. The sharded step \"Workflow failure heal contract and driver tests\" is untouched, so the job may still exceed the 15-minute budget-watch warning. Hard constraints are met and pinned by MovedHeal10200StepsContractTest; residual risk rather than blocking gap.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "823b5b45cb7d14f2cfd4e12027f75f3f2e99c1c248e955acab28a836a4bd6b54",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10202,
+    "run_id": "46025732487",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46025732487",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127165025_5c2bba8f4d",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10202,
+    "run_id": "46025732487"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-27T16:50:25Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
