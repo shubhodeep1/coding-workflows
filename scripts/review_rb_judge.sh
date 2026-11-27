@@ -1780,21 +1780,28 @@ def failing_tests(text: str) -> list[str]:
 lines = [f"Failed check-runs on the judged head {head} (job and step names, failing test ids and the last error lines only; the full logs are not included):",
     f"failed_jobs: {len(failed)}" + (f" (first {MAX_JOBS} shown)" if len(failed) > MAX_JOBS else "")]
 names: list[str] = []
+# The prompt embeds this file with a 12000-byte head cap: with many failed jobs
+# each one gets fewer error lines, so every job's name, steps and tests survive.
+error_lines = max(3, MAX_ERROR_LINES * 3 // max(3, len(jobs)))
+error_chars = max(600, 7000 // max(1, len(jobs)))
 for number, job in enumerate(jobs, start=1):
     tail = [ANSI.sub("", str(line)) for line in job.get("log_tail") or [] if not str(line).startswith("log_tail_anchor:")]
     summary = str(job.get("summary") or "")
     tests = failing_tests("\n".join(tail + [summary]))
     steps = steps_by_job.get(str(job.get("job_id") or ""), [])
     error_end = max((idx for idx, line in enumerate(tail) if "##[error]" in line), default=-1)
-    window = tail[max(0, error_end - MAX_ERROR_LINES + 1):error_end + 1] if error_end >= 0 else [line for line in tail if line.strip()][-MAX_ERROR_LINES:]
+    window = tail[max(0, error_end - error_lines + 1):error_end + 1] if error_end >= 0 else [line for line in tail if line.strip()][-error_lines:]
     if not window and summary.strip():
-        window = summary.splitlines()[:MAX_ERROR_LINES]
+        window = summary.splitlines()[:error_lines]
     job_name = name(job.get("name")) or "unnamed check"
     lines.append(f"job[{number}]: {job_name} (conclusion: {name(job.get('conclusion')) or 'unknown'})")
     lines.append(f"job[{number}].failed_steps: {' | '.join(steps) if steps else 'unknown'}")
     lines.append(f"job[{number}].failing_tests: {', '.join(tests) if tests else 'none found'}")
     lines.append(f"job[{number}].last_error_lines:")
-    lines.extend("  " + clean(line) for line in window if clean(line))
+    shown = [clean(line) for line in window if clean(line)]
+    while len(shown) > 1 and sum(len(line) + 3 for line in shown) > error_chars:
+        shown.pop(0)
+    lines.extend("  " + line for line in shown)
     bullet = job_name + (f" / {', '.join(steps)}" if steps else "")
     names.append(bullet + (f": {', '.join(tests)}" if tests else ""))
 write(lines, names)

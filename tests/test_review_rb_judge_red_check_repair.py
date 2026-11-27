@@ -608,3 +608,20 @@ def test_merge_with_followup_logs_the_switch_off() -> None:
 	block = text[text.index('blocking) _checks_reason="blocking_check_runs" ;;'):]
 	block = block[:block.index('rb_judge_route_red_checks merge_with_followup || true')]
 	assert '|| rb_judge_red_check_log disabled "mode=merge_with_followup"' in block
+
+
+def test_ten_verbose_jobs_fit_the_prompt_embed_cap(tmp_path: Path) -> None:
+	# The prompt embeds the section with a 12000-byte head cap: every job's
+	# header lines must survive even when all ten jobs carry long error tails.
+	tail = "".join(f"{'x' * 290} line {i:02d}\n" for i in range(30)) + "##[error]Process completed with exit code 1.\n"
+	jobs = "".join(
+		f"failed[{i}].name: job {i}\nfailed[{i}].conclusion: failure\nfailed[{i}].details_url: https://github.com/o/r/actions/runs/500/job/{i}\n"
+		f"failed[{i}].log_tail ({len(tail)} chars):\n{tail}"
+		for i in range(10))
+	snapshot = f"PR_CHECK_RUNS_CONTEXT\nhead_sha: {JUDGED}\ncollection_status: ok\nfailed_count: 10\nincomplete_count: 0\n\n{jobs}"
+	run = _run(tmp_path, snapshot=snapshot, heal=False)
+	assert run["result"].returncode == 0, run["result"].stderr
+	section = run["section"]
+	assert len(section.encode("utf-8")) < 12000, len(section.encode("utf-8"))
+	assert "job[10]: job 9 (conclusion: failure)" in section and "job[10].failing_tests:" in section
+	assert section.count("##[error]Process completed") == 10
