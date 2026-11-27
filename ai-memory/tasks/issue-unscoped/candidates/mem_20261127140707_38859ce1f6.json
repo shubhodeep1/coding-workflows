@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"In the PR body, use Refs #9865.\"\n  expected_change_site: PR description (pipeline-composed; not a repository file)\n  confidence=[4]\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  EVIDENCE: The PR description says \"Closes https://github.com/shubhodeep1/coding-workflows/issues/10172\" and has no `Refs #9865` line, the changelog fragment `changelog.d/10172-broker-sha-check-all-branches.md` carries `Refs #9865` (minimax cites line 15), no auto-close keyword targets #9865 so \u00a721 is not violated, no worktree edit can change the PR body, and earlier autofix rounds deferred this for the same reason. All three reviewers rated it NIT.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"In the PR body, use Refs #9865.\"\n  Expected change site: The PR description. The pipeline writes it, so it is not a repository file.\n  Evidence of absence: The PR description says \"Closes https://github.com/shubhodeep1/coding-workflows/issues/10172\" and has no `Refs #9865` line. The changelog fragment `changelog.d/10172-broker-sha-check-all-branches.md` ends with `Refs #9865`. No auto-close keyword points at #9865, so \u00a721 is not broken. No worktree edit can change the PR body, and earlier autofix rounds deferred this for the same reason.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"In the PR body, use Refs #9865.\"\n  Expected change site: The PR description (pipeline-composed; not a repository file).\n  Evidence of absence: The PR description shows \"Closes https://github.com/shubhodeep1/coding-workflows/issues/10172\" and has no \"Refs #9865\" line, nor is this line present in the patch or last run diff. The PR body is pipeline-composed and not a repository file, so this cannot be implemented via a worktree edit.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n\nTASK_GAP:\n- Requirement: \"In the PR body, use Refs #9865.\"\n  Expected change site: PR description (pipeline-composed artefact, not a repository file)\n  Evidence of absence: The inlined PR description is `Closes https://github.com/shubhodeep1/coding-workflows/issues/10172` and has no `Refs #9865` line. The changelog fragment `changelog.d/10172-broker-sha-check-all-branches.md:15` carries `Refs #9865`, so the semantic link is preserved in the repository. Multiple autofix rounds (entry[1]\u2026entry[13] in `pr_all_comments_context.txt`) deferred the same gap for the same reason.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 4\n\nHARDENING_SUGGESTIONS:\n- tools/claude-pool-broker/src/index.ts: shaCheckAllBranchesEnabled, around the `if (typeof raw === \"boolean\")` branch (lines 740-742). A boolean `true`/`false` from wrangler.toml `[vars]` is honored silently. Not a runtime defect. Suggested minimal fix: None, current behavior is intentional. Skip.\nHARDENING_RISK_SCORE: 0\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n\n(Reviewer reported TASK COMPLETENESS / INTENT GAPS as NONE. It noted that the \"In the PR body, use Refs #9865\" item targets the pipeline-written PR description and cannot be satisfied by a worktree edit, so it did not re-emit it as a TASK_GAP.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "e5bccc8964cc53c979b0761175419cfb645a578ba8863751eeb367becbf3b448",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10174,
+    "run_id": "46007248908",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46007248908",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127140707_38859ce1f6",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10174,
+    "run_id": "46007248908"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-27T14:07:07Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
