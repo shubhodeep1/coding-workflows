@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \u201cA status=failed or status=pending marker is not posted with a cycle number that a trusted marker on the PR already carries.\u201d\n  expected_change_site: `scripts/review_single_issue_security_pass.sh`, `single_pass_gate` and the marker-posting flow after `single_pass_next_free_cycle`.\n  confidence=5\n  flagged_by: [openai_gpt-6-luna]\n  EVIDENCE: The gate reads comments and chooses the next cycle before posting, but it does not reserve that number or serialize all gate invocations for the PR. The PR's changelog says two overlapping runs can both read before either posts and choose the same number, so the requirement is unmet for concurrent runs (severity MAJOR). z-ai_glm-5_3-flash disagrees in its notes: it calls this race a pre-existing residual documented in both fragments, so not a task gap.\n- requirement: A test reproduces the 20:22 case: a comments file that is empty or unreadable, on a PR whose fresh comments contain status=clean for the head. The gate ends clean, dispatches nothing and posts nothing.\n  expected_change_site: tests/test_single_issue_security_pass.py\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer's own evidence says the deliverable is present: test_empty_or_unreadable_snapshot_with_fresh_clean_marker_ends_clean exists in tests/test_single_issue_security_pass.py and covers the described scenarios (severity NIT).\n- requirement: A test covers a failed fresh read: outcome hold reason=markers_unverifiable, no dispatch, no marker, no cycle counted.\n  expected_change_site: tests/test_single_issue_security_pass.py\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer's own evidence says the deliverable is present: test_failed_or_empty_fresh_comments_read_holds_markers_unverifiable exists and covers these cases (severity NIT).\n- requirement: A test shows that no marker is posted with a cycle number already present.\n  expected_change_site: tests/test_single_issue_security_pass.py\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer's own evidence says the deliverable is present: test_marker_cycle_number_is_never_reused exists and checks that cycle numbers are numbered correctly and not reused (severity NIT).\n- requirement: The new log line appears in the existing gate tests' output with the four fields.\n  expected_change_site: tests/test_single_issue_security_pass.py\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer's own evidence says the deliverable is present: test_gate_logs_the_markers_view and test_reentry_logs_the_fresh_view_once verify the logging requirements (severity NIT).\n- requirement: agents.d/ and changelog.d/ fragments describe the new log fields, the switch and the hold reason.\n  expected_change_site: agents.d/10176-security-pass-marker-reread.md, changelog.d/10176-security-pass-marker-reread.md\n  confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The reviewer's own evidence says the deliverable is present: both fragments exist and contain the required documentation (severity NIT).\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- TASK_GAP\n  Requirement: A test reproduces the 20:22 case: a comments file that is empty or unreadable, on a PR whose fresh comments contain status=clean for the head. The gate ends clean, dispatches nothing and posts nothing.\n  Expected change site: tests/test_single_issue_security_pass.py\n  Evidence of absence: The test test_empty_or_unreadable_snapshot_with_fresh_clean_marker_ends_clean is present in tests/test_single_issue_security_pass.py and covers the described scenarios.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: A test covers a failed fresh read: outcome hold reason=markers_unverifiable, no dispatch, no marker, no cycle counted.\n  Expected change site: tests/test_single_issue_security_pass.py\n  Evidence of absence: The test test_failed_or_empty_fresh_comments_read_holds_markers_unverifiable is present and covers these cases.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: A test shows that no marker is posted with a cycle number already present.\n  Expected change site: tests/test_single_issue_security_pass.py\n  Evidence of absence: The test test_marker_cycle_number_is_never_reused is present and checks that cycle numbers are numbered correctly and not reused.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: The new log line appears in the existing gate tests' output with the four fields.\n  Expected change site: tests/test_single_issue_security_pass.py\n  Evidence of absence: test_gate_logs_the_markers_view and test_reentry_logs_the_fresh_view_once verify the logging requirements.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP\n  Requirement: agents.d/ and changelog.d/ fragments describe the new log fields, the switch and the hold reason.\n  Expected change site: agents.d/10176-security-pass-marker-reread.md, changelog.d/10176-security-pass-marker-reread.md\n  Evidence of absence: Both fragments exist and contain the required documentation.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n- TASK_GAP\n  Requirement: \u201cA status=failed or status=pending marker is not posted with a cycle number that a trusted marker on the PR already carries.\u201d\n  Expected change site: `scripts/review_single_issue_security_pass.sh`, `single_pass_gate` and the marker-posting flow after `single_pass_next_free_cycle`.\n  Evidence of absence: The gate reads comments and chooses the next cycle before posting, without reserving that number or serializing all gate invocations for the PR. The PR\u2019s changelog explicitly acknowledges that two overlapping runs can both read before either posts and choose the same number. The requirement is therefore unmet for concurrent runs.\n  SEVERITY: MAJOR\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "07840b9f0f1ab57c3fff0ef0de68ea055f77006087b09fdc25b09c7d76ab795f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10178,
+    "run_id": "45929297701",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45929297701",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127040415_1b52735492",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10178,
+    "run_id": "45929297701"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 6 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-27T04:04:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
