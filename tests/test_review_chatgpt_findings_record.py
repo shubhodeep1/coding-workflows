@@ -554,7 +554,7 @@ def test_workflow_steps_contract() -> None:
 	assert "outcome=skipped reason=helper_unavailable" in write_step
 	assert "REVIEWER_CHATGPT_SLOT_RESOLVED: ${{ steps.ai_engine.outputs.chatgpt_slot || '' }}" in write_step
 	assert "AUTOFIX_ITERATION_METRIC: ${{ steps.retrigger_guard.outputs.autofix_iteration || '' }}" in write_step
-	assert "uses: actions/upload-artifact@v6" in upload_step
+	assert "uses: actions/upload-artifact@v7" in upload_step
 	assert "name: reviewer-findings-${{ github.run_id }}-${{ github.run_attempt }}" in upload_step
 	assert "path: ${{ env.PREVIOUS_REVIEWS_DIR }}/review_findings_record.json" in upload_step
 	assert "retention-days: 30" in upload_step

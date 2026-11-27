@@ -278,6 +278,16 @@ if ! type _pr_wait_for_required_checks >/dev/null 2>&1; then
     return 1
   }
 fi
+# Issue #9502: after a base_freshness_unknown deferral, export the PR the
+# merge lease waits on (MERGE_LEASE_BLOCKER from _pr_base_fresh_for_merge)
+# so the review-blocked alert and PR comment can name it. Only a lease wait
+# (merge_lease_*) with a numeric blocker writes the output; no API call.
+rb_judge_emit_lease_blocker()
+{
+  if [[ "${PR_BASE_FRESHNESS_LAST_REASON:-}" == merge_lease_* ]] && [[ "${MERGE_LEASE_BLOCKER:-}" =~ ^[0-9]+$ ]]; then
+    echo "judge_merge_lease_blocker=${MERGE_LEASE_BLOCKER}" >> "${GITHUB_OUTPUT:-/dev/null}"
+  fi
+}
 if ! command -v sanitize_codex_prompt_file >/dev/null 2>&1; then
   # Keep prompt sanitization available even when gh_helpers.sh was not
   # sourced. Large-diff truncation can still fall back to a raw byte prefix,
@@ -2523,7 +2533,9 @@ rb_judge_sync_merge_guard() {
 #     on the judged head: the failed call may have landed server-side;
 #   - returns 1 when the PR is closed or its head moved off the judged head;
 #   - otherwise repeats the same head-bound attempts (unreadable PR state
-#     also repeats them: --match-head-commit still binds the head).
+#     also repeats them: --match-head-commit still binds the head). A site
+#     that ran the security follow-up guard (#9671) skips the attempt when
+#     the read gave no base ref: the base is not bound, so it reads again.
 # At most 3 retries. Each prints one RB_JUDGE_MERGE_RETRY line. The retried
 # attempts overwrite the stderr files, so a final failure reports the last
 # error through rb_judge_merge_err_report as before.
@@ -2538,7 +2550,7 @@ rb_judge_sync_merge_guard() {
 rb_judge_merge_retry_transient() {
   local _rb_retry_mode="${1:-direct}" _rb_retry_path="${2:-unknown}"
   local _rb_retry_attempt=0 _rb_retry_delay="" _rb_retry_pr=""
-  local _rb_retry_state="" _rb_retry_merged="" _rb_retry_auto="" _rb_retry_head=""
+  local _rb_retry_state="" _rb_retry_merged="" _rb_retry_auto="" _rb_retry_head="" _rb_retry_base=""
   local _rb_retry_mergeable_state="" _rb_retry_base_ref="" _rb_retry_guard_json=""
   local _rb_retry_auto_only="false"
   RB_MERGE_RETRY_GIVEUP=""
@@ -2558,6 +2570,8 @@ rb_judge_merge_retry_transient() {
     _rb_retry_attempt=$((_rb_retry_attempt + 1))
     echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 delay_s=${_rb_retry_delay} reason=transient"
     sleep "${_rb_retry_delay}"
+    # The base ref (last field, #9671) lets the follow-up guard re-run below
+    # see a retarget made during the delay; same single read, no extra call.
     _rb_retry_pr="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '[.state, (.merged // false), (.auto_merge != null), .head.sha, (.mergeable_state // "none"), (.base.ref // "-")] | @tsv' 2>/dev/null)" || _rb_retry_pr=""
     _rb_retry_mergeable_state=""; _rb_retry_base_ref=""
     # Non-empty placeholders ("none", "-"): tab is IFS whitespace, so an
@@ -2565,11 +2579,12 @@ rb_judge_merge_retry_transient() {
     # state (#9939). "none" lands in the guard's defer arm.
     IFS=$'\t' read -r _rb_retry_state _rb_retry_merged _rb_retry_auto _rb_retry_head _rb_retry_mergeable_state _rb_retry_base_ref <<< "${_rb_retry_pr}" || true
     [ "${_rb_retry_base_ref}" != "-" ] || _rb_retry_base_ref=""
+    _rb_retry_base="${_rb_retry_base_ref}"
     # gh api prints an HTTP error's response body to stdout (--jq is skipped),
     # so a failed read or a state other than open/closed counts as unreadable.
     case "${_rb_retry_state}" in
       open|closed) ;;
-      *) _rb_retry_state=""; _rb_retry_merged=""; _rb_retry_auto=""; _rb_retry_head=""; _rb_retry_mergeable_state=""; _rb_retry_base_ref="" ;;
+      *) _rb_retry_state=""; _rb_retry_merged=""; _rb_retry_auto=""; _rb_retry_head=""; _rb_retry_mergeable_state=""; _rb_retry_base_ref=""; _rb_retry_base="" ;;
     esac
     # Head first: a PR merged at a head other than the judged one is not the
     # judge's merge, so it stays a failure (head_moved).
@@ -2590,6 +2605,33 @@ rb_judge_merge_retry_transient() {
     if [ "${_rb_retry_mode}" = "auto" ] && [ "${_rb_retry_auto}" = "true" ] && [ "${_rb_retry_head}" = "${RB_JUDGED_HEAD_SHA:-}" ]; then
       echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=auto_merge_enabled"
       return 0
+    fi
+    # A site that ran the guard never retries a merge on a base it could not
+    # read (#9671): the merge binds only the head, so a retarget during the
+    # delay would go unseen. The next attempt reads again; after the last
+    # one the site's failure branch runs. An explicit kill switch (`false`,
+    # the guard's own `allow disabled` test) keeps the old retry behaviour.
+    if [ -n "${RB_JUDGE_FOLLOWUP_GUARD_RESULT:-}" ] && [ -z "${_rb_retry_base}" ] \
+      && [ "${SINGLE_PASS_FOLLOWUP_GUARD_SWITCH-}" != "false" ]; then
+      echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 note=base_unverified action=skip_attempt"
+      continue
+    fi
+    # A PR retargeted during the delay (#9671): the guard re-run evaluates the
+    # live base, not the one in the site's payload. A failed rewrite empties
+    # the payload, so the guard fails closed.
+    if [ -n "${RB_JUDGE_FOLLOWUP_GUARD_RESULT:-}" ] && [ -n "${_rb_retry_base}" ] \
+      && [ "${_rb_retry_base}" != "$(printf '%s' "${RB_JUDGE_FOLLOWUP_GUARD_PAYLOAD:-}" | jq -r '.base.ref // ""' 2>/dev/null)" ]; then
+      RB_JUDGE_FOLLOWUP_GUARD_PAYLOAD="$(printf '%s' "${RB_JUDGE_FOLLOWUP_GUARD_PAYLOAD:-}" | jq -c --arg base "${_rb_retry_base}" '.base.ref = $base' 2>/dev/null)" || RB_JUDGE_FOLLOWUP_GUARD_PAYLOAD=""
+    fi
+    # Security follow-up guard (#9671): a clean audit of the base branch's
+    # head can land during the delay, so a site that ran the guard re-runs
+    # it before each retried merge, on the payload that site passed it (no
+    # extra PR read). Anything but `allow` stops the retries; the site's
+    # failure branch then runs.
+    if [ -n "${RB_JUDGE_FOLLOWUP_GUARD_RESULT:-}" ] \
+      && ! rb_judge_followup_merge_guard "${_rb_retry_path}" "${RB_JUDGE_FOLLOWUP_GUARD_PAYLOAD:-}"; then
+      echo "RB_JUDGE_MERGE_RETRY pr=${PR_NUMBER} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${_rb_retry_path} attempt=${_rb_retry_attempt}/3 outcome=security_followup_guard"
+      return 1
     fi
     if [ "${_rb_retry_mode}" = "auto" ]; then
       gh pr merge "${PR_NUMBER}" --repo "${REPOSITORY}" "${RB_MERGE_METHOD_FLAG:---squash}" --auto --match-head-commit "${RB_JUDGED_HEAD_SHA}" 2>"${RB_MERGE_ERR_AUTO_FILE}" && return 0
@@ -2650,6 +2692,57 @@ rb_judge_deferred_merge_pending() {
   return 0
 }
 # END rb-judge merge error capture (#7659)
+
+# BEGIN rb-judge security follow-up guard (#9671)
+# A PR whose base is a standalone PR's head branch must not merge once that
+# head has a clean single-issue security audit (#9479): the merge would move
+# the clean head. Each judge merge site runs this right before its merge,
+# after the checks wait and the freshness re-check, as
+# `rb_judge_followup_merge_guard <merge|terminal|sync> <pulls/<n> JSON>`.
+# The payload is one the judge already fetched (no new API call); PRs into
+# the default or an integration branch get `allow` from the guard with no
+# call. Anything but `allow` returns 1, so the caller skips the merge and the
+# PR stays open in ai:review-blocked. A payload without `.base.ref` (failed
+# fetch: `{}`) fails closed as `unavailable`, because the guard itself
+# answers `allow no_base` for it. SINGLE_PASS_FOLLOWUP_GUARD_SWITCH carries
+# the raw repository variable: only an explicit `false` turns the guard off;
+# unset keeps it on (the step's SINGLE_ISSUE_SECURITY_PASS_ENABLED defaults
+# to `false` for the judge's own security pass and is not forwarded).
+# RB_JUDGE_FOLLOWUP_GUARD_PAYLOAD keeps the last payload, so the transient
+# merge retry (rb_judge_merge_retry_transient) can re-run the guard on it.
+RB_JUDGE_FOLLOWUP_GUARD_RESULT=""
+RB_JUDGE_FOLLOWUP_GUARD_PAYLOAD=""
+rb_judge_followup_merge_guard() {
+  local rb_judge_fg_path="${1:-merge}" rb_judge_fg_payload="${2:-}"
+  local rb_judge_fg_script="${SUPPORT_SCRIPTS_DIR:-scripts}/review_single_issue_security_pass.sh"
+  local rb_judge_fg_file="" rb_judge_fg_output=""
+  RB_JUDGE_FOLLOWUP_GUARD_RESULT="unavailable"
+  RB_JUDGE_FOLLOWUP_GUARD_PAYLOAD="${rb_judge_fg_payload}"
+  # Non-empty check first: `jq -e` on empty input exits 0 on some jq versions.
+  if [ -f "${rb_judge_fg_script}" ] && [ -n "${rb_judge_fg_payload}" ] \
+    && printf '%s' "${rb_judge_fg_payload}" | jq -e 'type == "object" and ((.base.ref // "") | type == "string" and length > 0)' >/dev/null 2>&1 \
+    && rb_judge_fg_file="$(mktemp "${TMPDIR:-/tmp}/rb_judge_followup_guard.XXXXXX" 2>/dev/null)"; then
+    if printf '%s' "${rb_judge_fg_payload}" > "${rb_judge_fg_file}"; then
+      rb_judge_fg_output="$(REPOSITORY="${REPOSITORY:-}" PR_NUMBER="${PR_NUMBER:-}" PR_PAYLOAD_FILE="${rb_judge_fg_file}" \
+        DEFAULT_BRANCH="${DEFAULT_BRANCH:-}" SINGLE_ISSUE_SECURITY_PASS_ENABLED="${SINGLE_PASS_FOLLOWUP_GUARD_SWITCH:-}" \
+        bash "${rb_judge_fg_script}" followup-guard 2>/dev/null)" || rb_judge_fg_output=""
+      printf '%s\n' "${rb_judge_fg_output}" | grep '^SINGLE_ISSUE_SECURITY_PASS ' || true
+      RB_JUDGE_FOLLOWUP_GUARD_RESULT="$(printf '%s\n' "${rb_judge_fg_output}" | sed -n 's/^SINGLE_ISSUE_SECURITY_PASS_FOLLOWUP_MERGE=//p' | tail -n 1)" || RB_JUDGE_FOLLOWUP_GUARD_RESULT=""
+      case "${RB_JUDGE_FOLLOWUP_GUARD_RESULT}" in
+        allow|refuse|unverifiable) ;;
+        *) RB_JUDGE_FOLLOWUP_GUARD_RESULT="unavailable" ;;
+      esac
+    fi
+  fi
+  [ -n "${rb_judge_fg_file}" ] && rm -f "${rb_judge_fg_file}"
+  if [ "${RB_JUDGE_FOLLOWUP_GUARD_RESULT}" = "allow" ]; then
+    return 0
+  fi
+  echo "RB_JUDGE_SECURITY_FOLLOWUP_GUARD pr=${PR_NUMBER:-} head=${RB_JUDGED_HEAD_SHA:-unknown} path=${rb_judge_fg_path} result=${RB_JUDGE_FOLLOWUP_GUARD_RESULT} action=skip_merge"
+  echo "::warning::Review-blocked judge did not merge PR #${PR_NUMBER:-}: the security follow-up guard returned '${RB_JUDGE_FOLLOWUP_GUARD_RESULT}' (its base branch's head passed a clean security audit, or that could not be verified). The PR stays open in ai:review-blocked."
+  return 1
+}
+# END rb-judge security follow-up guard (#9671)
 
 # BEGIN rb-judge judge-decision lease mark (#9987)
 # The judge waits for the merge lease before it posts ai-review/head-gate
@@ -2773,6 +2866,9 @@ case "${RB_ACTION}" in
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
           fi
+        elif ! rb_judge_followup_merge_guard merge "${_pr_json:-}"; then
+          # Security follow-up guard (#9671): no success status and no merge.
+          RB_MERGE_STATUS="security_followup_guard"
         else
           rb_judge_merge_err_open
           # Auto-merge first; the direct fallback runs only when GitHub does
@@ -2851,8 +2947,12 @@ case "${RB_ACTION}" in
       RB_MERGE_STATUS=""
 
       # GitHub's REST /pulls/{N} returns .state as one of `open` or
-      # `closed`; drop the unreachable `merged` alt.
-      PR_STATE="$(gh_retry gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.state' 2>/dev/null | grep -xE 'open|closed' || echo "")"
+      # `closed`; drop the unreachable `merged` alt. The same single read
+      # keeps the full payload for the security follow-up guard below
+      # (#9671): `_pr_meta` and `_guard_pr_meta` are unset by now, and this
+      # replaces the old `--jq '.state'` read, so it adds no API call.
+      _rb_terminal_pr_json="$(gh_retry _safe_gh_jq "repos/${REPOSITORY}/pulls/${PR_NUMBER}" 2>/dev/null || echo '{}')"
+      PR_STATE="$(printf '%s\n' "${_rb_terminal_pr_json}" | jq -r '.state // ""' 2>/dev/null | grep -xE 'open|closed' || echo "")"
       if [ "${PR_STATE}" = "open" ] && [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
         # Best-effort merge — see note above re: gh_retry.
         # Gates first: the head-gate success status is posted only for a
@@ -2888,6 +2988,9 @@ case "${RB_ACTION}" in
             echo "::warning::Review-blocked judge: base freshness for PR #${PR_NUMBER} could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}); merge deferred, no branch update requested."
             RB_MERGE_STATUS="mergeability_pending"
           fi
+        elif ! rb_judge_followup_merge_guard terminal "${_rb_terminal_pr_json:-}"; then
+          # Security follow-up guard (#9671): no success status and no merge.
+          RB_MERGE_STATUS="security_followup_guard"
         else
           rb_judge_merge_err_open
           # Auto-merge first; the direct fallback runs only when GitHub does
@@ -3441,10 +3544,16 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
               echo "PR #${PR_NUMBER} waits for the merge lease held by or queued for PR #${MERGE_LEASE_BLOCKER:-?} — merge_with_followup deferred, re-dispatched when the lease is granted. Leaving linked issues in ai:review-blocked."
               rb_judge_mark_merge_pending merge_with_followup
               echo "judge_skip_reason=base_freshness_unknown" >> "$GITHUB_OUTPUT"
+              rb_judge_emit_lease_blocker
             else
               echo "::warning::PR #${PR_NUMBER} base freshness could not be verified (${PR_BASE_FRESHNESS_LAST_REASON:-unknown}) — merge_with_followup deferred, no branch update requested. Leaving linked issues in ai:review-blocked."
               echo "judge_skip_reason=base_freshness_unknown" >> "$GITHUB_OUTPUT"
+              rb_judge_emit_lease_blocker
             fi
+          elif [ "${ENABLE_AUTO_MERGE}" = "true" ] && ! rb_judge_followup_merge_guard sync "${_pr_json:-}"; then
+            # Security follow-up guard (#9671): no success status, no merge and
+            # so no follow-up issue; linked issues stay in ai:review-blocked.
+            echo "judge_skip_reason=security_followup_guard" >> "$GITHUB_OUTPUT"
           elif [ "${ENABLE_AUTO_MERGE}" = "true" ]; then
             # Sync merge only — NEVER --auto enrollment. The whole point
             # of the conservative ladder is to ensure follow-up creation
