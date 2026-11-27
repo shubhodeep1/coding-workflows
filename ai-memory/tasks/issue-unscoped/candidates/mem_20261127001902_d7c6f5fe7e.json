@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  expected_change_site: .github/workflows/ci.yml, between the tests-heal-plan-and-validation job and its neighbour job (the job that would receive the steps)\n  confidence=[1]\n  flagged_by: [anthropic_claude-sonnet-5_5, minimax_minimax-m3]\n  EVIDENCE: The PR diff moves no step and only adds YAML comments (ci.yml:1855-1860). The move already exists in the base tree (`Merge probe unit tests` at ci.yml:1625, \"moved on\" note at ci.yml:2065, `Cancelled CI sweep recovery tests` at ci.yml:1845). The repository has no step timings for run 44214045174. `timeout-minutes: 20` at ci.yml:1863 is unchanged. Both reviewers rated it a NIT and a deferral, not a defect.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n- TASK_GAP (severity=NIT, confidence=1)\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  Expected change site: .github/workflows/ci.yml, between the tests-heal-plan-and-validation job and the job that would receive the steps.\n  Evidence of absence: The PR diff moves no step. The base tree already holds the move. `Merge probe unit tests` is at ci.yml:1625 and the \"moved on\" note is at ci.yml:2065. The comment at ci.yml:1856-1858 ties the earlier move to #9420, #9684 and PR #9702. The repository has no step timings for run 44214045174, so picking more steps would be a guess. The comment at ci.yml:1859-1860 tells maintainers to read the flagged run's step timings before moving anything. `timeout-minutes: 20` at ci.yml:1863 is unchanged and no job or step was added. The diff only adds YAML comments. This is a deferral, not a defect in this PR.\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- TASK_GAP (severity=NIT, confidence=1)\n  Requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise timeout-minutes and do not split tests into new required job names.\"\n  Expected change site: `.github/workflows/ci.yml`, between the `tests-heal-plan-and-validation` job and its neighbour job.\n  Evidence of absence: The PR's diff is comment-only (6 lines added at ci.yml:1855-1860) and moves no step. The move was already performed in the base tree by budget-watch issue #9420 (re-issued as #9684, PR #9702): `Merge probe unit tests` is at ci.yml:1625 and `Cancelled CI sweep recovery tests` at ci.yml:1845, both inside `tests-hooks-and-orchestrator` (starts line 885, ends line 1850). The note at ci.yml:2065 and `changelog.d/9420-ci-heal-job-steps-to-hooks-job.md` record the move. The repository has no step timings for run 44214045174, and the receiving job has not been timed against its own timeout with the moved steps. The comment at ci.yml:1858-1860 tells maintainers to read the flagged run's step timings before moving anything further. `timeout-minutes: 20` at ci.yml:1863 is unchanged and no job or step was added or renamed. Deferral, not an unmet deliverable in this PR.\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "b06bfb01510833c6c78982a46fd0ad90dc0e59ca788011428f3eedfa19fa78a6",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10074,
+    "run_id": "45913910099",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45913910099",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127001902_d7c6f5fe7e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10074,
+    "run_id": "45913910099"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-27T00:19:02Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
