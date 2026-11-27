@@ -521,12 +521,24 @@ def test_gate_skips_for_a_live_owner_run(tmp_path: Path, status: str) -> None:
 	assert len(calls) == 1 and calls[0].startswith(f"gh api repos/o/r/actions/runs/{RUN_ID} --jq ")
 
 
-def test_gate_proceeds_when_the_early_call_withdrew_auto_merge(tmp_path: Path) -> None:
+@pytest.mark.parametrize("action", ["synchronize", "opened"])
+def test_gate_keeps_the_owner_skip_when_auto_merge_was_enabled(tmp_path: Path, action: str) -> None:
+	# The PR's auto-merge flag (read before the early head-gate call withdrew
+	# it) never bypasses the owner run's status: a live owner keeps the head.
 	rc, out, calls = _owner(tmp_path, [_gate_marker(f" inline_run={RUN_ID}")], FAKE_RUN_STATUS="in_progress",
-		pr_auto_merge_enabled="true")
+		pr_auto_merge_enabled="true", EVENT_ACTION=action)
+	assert rc == 0
+	assert len(calls) == 1 and calls[0].startswith(f"gh api repos/o/r/actions/runs/{RUN_ID} --jq ")
+	withdrawn = f"skip=true reason=lease_inline_owner_auto_merge_withdrawn run={RUN_ID}"
+	assert (withdrawn in out) == (action == "synchronize")
+
+
+def test_gate_proceeds_with_auto_merge_enabled_once_the_owner_completed(tmp_path: Path) -> None:
+	rc, out, calls = _owner(tmp_path, [_gate_marker(f" inline_run={RUN_ID}")], FAKE_RUN_STATUS="completed",
+		pr_auto_merge_enabled="true", EVENT_ACTION="synchronize")
 	assert rc == 1
-	assert calls == []
-	assert "skip=false reason=lease_inline_owner_auto_merge_enabled" in out
+	assert len(calls) == 1
+	assert "lease_inline_owner_auto_merge_withdrawn" not in out
 
 
 def test_gate_proceeds_for_a_completed_run(tmp_path: Path) -> None:

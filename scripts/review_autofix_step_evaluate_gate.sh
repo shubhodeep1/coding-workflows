@@ -1273,14 +1273,6 @@ if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
     inline_owner_run="$(bash .codex-head-gate-src/scripts/review_head_gate.sh freshness-sync-inline-run "${PR_NUMBER}" \
       "${pr_head_sha_gate}" "${gate_marker_author_login}" "${gate_marker_comments_file}" 2>/dev/null || true)"
     [[ "${inline_owner_run}" =~ ^[1-9][0-9]{0,19}$ ]] || return 1
-    # The early head-gate call above withdraws an enabled auto-merge on
-    # synchronize and posts `pending`. An owner that had already enabled it
-    # is past its merge step and will not redo it, so the freshness fast path
-    # must (no owner skip, no run read).
-    if [ "${pr_auto_merge_enabled:-}" = "true" ]; then
-      echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} skip=false reason=lease_inline_owner_auto_merge_enabled run=${inline_owner_run}"
-      return 1
-    fi
     # No existing read has another run's status (the gate reads only this
     # PR, its comments and its checks); this GET is made only when the
     # trusted freshness marker for this head carries inline_run.
@@ -1289,9 +1281,21 @@ if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
       return 1
     fi
     case "${inline_owner_status}" in
-      queued|in_progress) return 0 ;;
+      queued|in_progress) ;;
+      *) return 1 ;;
     esac
-    return 1
+    # The owner run's status decides, never the PR's auto-merge flag: that
+    # flag was read before the early head-gate call withdrew it and cannot
+    # tell an enrollment left over from before the update (the common case;
+    # the owner enables auto-merge only after its checks wait) from one the
+    # owner made. A live owner keeps the head (single owner). When an
+    # enrollment was withdrawn on synchronize, say so: if the owner had
+    # already enabled it, the merge is left to the next review run on this
+    # head, as for a late `pending` after the owner's second success.
+    if [ "${pr_auto_merge_enabled:-}" = "true" ] && [ "${EVENT_ACTION:-}" = "synchronize" ]; then
+      echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} skip=true reason=lease_inline_owner_auto_merge_withdrawn run=${inline_owner_run}"
+    fi
+    return 0
   }
   if [ "${FORCE_REVIEW}" = "true" ]; then
     echo "AUTOFIX_GATE_DET_SKIP_OVERRIDE pr=${PR_NUMBER} reason=force_review_marker"
