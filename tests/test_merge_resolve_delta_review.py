@@ -633,12 +633,15 @@ def test_workflow_wiring() -> None:
 	# The deterministic-skip copy of the same gate honours the rollback too.
 	assert switch in _step(text, "Single-issue security pass (deterministic skip)")
 	assert "REVIEW_REMERGE_HEAD: ${{ needs.gate.outputs.review_remerge_head }}" in _step(text, "Enable auto-merge on PR")
-	push = _step(text, "Push all pending commits")
-	assert switch in push
+	# The push step body lives in its step script (workflow size guard).
+	push_step = _step(text, "Push all pending commits")
+	assert '"${SUPPORT_SCRIPTS_DIR:-}/review_autofix_step_push_pending_commits.sh"' in push_step
+	assert switch in push_step
+	push = (SCRIPTS / "review_autofix_step_push_pending_commits.sh").read_text(encoding="utf-8")
 	call = '( source "${SUPPORT_SCRIPTS_DIR:-}/gh_helpers.sh" && source "${SUPPORT_SCRIPTS_DIR:-}/pr_checks_lib.sh" && _pr_merge_resolve_marker_post "${PR_NUMBER:-}" "${LOCAL_HEAD_SHA:-}" ) || true'
 	assert push.count(call) == 1
 	# After the push loop, before the cache eviction.
-	assert push.rindex("          done\n") < push.index(call) < push.index("gh_pr_cache_evict")
+	assert push.rindex("\ndone\n") < push.index(call) < push.index("gh_pr_cache_evict")
 	assert len(text.encode("utf-8")) < 480_000
 
 

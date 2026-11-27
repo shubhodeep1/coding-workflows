@@ -8,3 +8,5 @@ What this means for operators: expect `MERGE_RESOLVE_MARKER`, `REVIEW_HEAD_GATE 
 ### For contributors
 
 New: `scripts/review_head_gate.sh merge-resolve`, `_pr_merge_resolve_marker_post` and `_pr_merge_resolve_final_ci_quick` in `scripts/pr_checks_lib.sh`, the gate output `review_remerge_head`, and the `merge_resolve_audit` carry-skip reason in `scripts/review_single_issue_security_pass.sh`.
+
+The "Push all pending commits" step body of `review_autofix.yml` moved verbatim into `scripts/review_autofix_step_push_pending_commits.sh` (sourced by the standard step wrapper) to keep the workflow under the 430,000-byte contract guard.
