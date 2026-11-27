@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- agents.d/10206-quick-ci-prompt-template-parity.md:1 | severity=low | confidence=4\n  flagged_by: [google_gemini-3_1-flash-lite, minimax_minimax-m3]\n  PROBLEM: The fragment's marker `<!-- agents: section=\"Review pipeline consolidator + ledger contract\" -->` puts the new static-checks \"Prompt template parity (quick)\" doc text under the review-consolidation/ledger section, when it belongs under `## Workflow architecture` (agents.md line 39), which describes static-checks.\n  WHY: Nothing fails at runtime; this is a documentation-placement issue: readers looking for what static-checks runs under Workflow architecture will miss the new step, and other CI-step fragments (agents.d/9993-final-ci-wiring-behind.md, agents.d/9647-operator-step-signed-entries.md, agents.d/10093-final-ci-stale-workflow-sync.md) target `## Workflow architecture`. Both flagging reviewers rated it SEVERITY: NIT (mapped here to low). anthropic_claude-sonnet-5_5 and z-ai_glm-5_3-flash checked it and dropped it, because agents.md:5211 already holds the \"CI job layout (#4707)\" bullet at agents.md:5249 that documents static-checks.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n(No task gaps reported.)\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- agents.d/10206-quick-ci-prompt-template-parity.md:<!-- agents: section=\"Review pipeline consolidator + ledger contract\" --> | severity=NIT | confidence=3\n  PROBLEM: Incorrect section marker for the documentation fragment.\n  WHY: Nothing fails at runtime, but the fragment is in the wrong section: it belongs under \"Workflow architecture\", where static-checks is described, so agents and reviewers looking in the architectural overview will miss it.\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n- agents.d/10206-quick-ci-prompt-template-parity.md:line 1 marker `<!-- agents: section=\"Review pipeline consolidator + ledger contract\" -->` | severity=NIT | confidence=4\n  PROBLEM: The fragment documents the static-checks \"Prompt template parity (quick)\" step but targets `## Review pipeline consolidator + ledger contract` (agents.md line 5211) instead of `## Workflow architecture` (agents.md line 39, with static-checks mentions at lines 569 and 812), so the folded bullet lands away from the rest of the static-checks description.\n  WHY: No runtime failure; it is a documentation-placement finding. The fix is a one-line marker edit to `section=\"Workflow architecture\"`, in line with other CI-step fragments (agents.d/9993-final-ci-wiring-behind.md, agents.d/9647-operator-step-signed-entries.md, agents.d/10093-final-ci-stale-workflow-sync.md).\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "0c61eb2a5cd5f255be15871f8cc1db6c2f9007f6e49949bd42de18cb4343a2fa",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10209,
+    "run_id": "46064557395",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46064557395",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127212515_76521265c2",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10209,
+    "run_id": "46064557395"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-27T21:25:15Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
