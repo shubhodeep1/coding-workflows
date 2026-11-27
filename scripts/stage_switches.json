@@ -405,6 +405,12 @@
 			"stage": "Merge lease (scripts/pr_checks_lib.sh \"Merge lease\")."
 		},
 		{
+			"name": "MERGE_LEASE_INLINE_SYNC_ENABLED",
+			"default": "true",
+			"stage": "Merge-lease Phase 4 inline update-and-merge (scripts/pr_checks_lib.sh _pr_base_sync_inline_merge): the review job that updated a holder's branch merges the update head itself, and the pushed run's gate leaves a head whose marker names a live owner run (lease_inline_owner_active); only false turns it off.",
+			"on_values": ["1", "yes", "on"]
+		},
+		{
 			"name": "MERGE_LEASE_METRICS_ENABLED",
 			"default": "true",
 			"stage": "Merge-lease Phase 1: one MERGE_LEASE_METRIC event=... base=... pr=... mode=... reason=... holder=... hold_s=... waiters=... ts=... line after each lease gate and tick decision; the tick's released lines end with merge..."

@@ -1254,14 +1254,53 @@ if [ "${SHOULD_RUN}" = "true" ] && [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
     bash .codex-head-gate-src/scripts/review_head_gate.sh freshness-sync "${REPOSITORY}" "${PR_NUMBER}" \
       "${pr_head_sha_gate}" "${pr_base_ref_gate:-${pr_base_ref:-}}" "${gate_marker_author_login}" "${gate_marker_comments_file}"
   }
+  # Merge-lease Phase 4 (inline update-and-merge): the job that updated the
+  # branch names its run in the freshness marker (inline_run=<id>) and merges
+  # the update head itself. While that run is live, this push-triggered run
+  # leaves the head to it. Only `pull_request` events: the owner's own
+  # hand-off dispatch (workflow_dispatch) must never exit here. Returns 0
+  # only for a live owner; anything else (switch off, no field, completed
+  # run, failed read) keeps the freshness fast path.
+  gate_lease_inline_owner_active()
+  {
+    local inline_owner_run="" inline_owner_status=""
+    case "$(printf '%s' "${MERGE_LEASE_INLINE_SYNC_ENABLED:-true}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')" in
+      true|1|yes|on) ;;
+      *) return 1 ;;
+    esac
+    [ "${EVENT_NAME:-}" = "pull_request" ] || return 1
+    [ "${gate_marker_fetch_state}" = "ok" ] || return 1
+    inline_owner_run="$(bash .codex-head-gate-src/scripts/review_head_gate.sh freshness-sync-inline-run "${PR_NUMBER}" \
+      "${pr_head_sha_gate}" "${gate_marker_author_login}" "${gate_marker_comments_file}" 2>/dev/null || true)"
+    [[ "${inline_owner_run}" =~ ^[1-9][0-9]{0,19}$ ]] || return 1
+    # No existing read has another run's status (the gate reads only this
+    # PR, its comments and its checks); this GET is made only when the
+    # trusted freshness marker for this head carries inline_run.
+    if ! inline_owner_status="$(gh api "repos/${REPOSITORY}/actions/runs/${inline_owner_run}" --jq '.status // ""' 2>/dev/null)"; then
+      echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} skip=false reason=lease_inline_owner_read_failed run=${inline_owner_run}"
+      return 1
+    fi
+    case "${inline_owner_status}" in
+      queued|in_progress) return 0 ;;
+    esac
+    return 1
+  }
   if [ "${FORCE_REVIEW}" = "true" ]; then
     echo "AUTOFIX_GATE_DET_SKIP_OVERRIDE pr=${PR_NUMBER} reason=force_review_marker"
   elif gate_freshness_sync_fast_path; then
-    DETERMINISTIC_SKIP="true"
-    DET_SKIP_REASON="freshness_sync"
-    SHOULD_RUN="false"
-    SKIP_REASON="deterministic_skip_freshness_sync"
-    echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} skip=true reason=freshness_sync head=${pr_head_sha_gate}"
+    if gate_lease_inline_owner_active; then
+      # The owner job merges this head; this run does nothing (no skip job).
+      SHOULD_RUN="false"
+      SKIP_REASON="lease_inline_owner_active"
+      DET_SKIP_SECURITY_PASS_REQUIRED="false"
+      echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} skip=true reason=lease_inline_owner head=${pr_head_sha_gate}"
+    else
+      DETERMINISTIC_SKIP="true"
+      DET_SKIP_REASON="freshness_sync"
+      SHOULD_RUN="false"
+      SKIP_REASON="deterministic_skip_freshness_sync"
+      echo "AUTOFIX_GATE_DET_SKIP_EVAL pr=${PR_NUMBER} skip=true reason=freshness_sync head=${pr_head_sha_gate}"
+    fi
   else
     # Size check uses the .additions/.deletions totals already
     # returned by the PR-state fetch above (no extra API call).

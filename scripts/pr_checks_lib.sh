@@ -2115,7 +2115,7 @@ _pr_base_sync_count()
 	PR_BASE_SYNC_COUNT="$(printf '%s' "${sync_comments_json}" | jq -r --arg login "${sync_login}" --arg pr "${pr_number}" '
 		[ .[]? | if type == "array" then .[] else . end
 		  | select(type == "object" and ((.user.login // "") == $login))
-		  | (.body // "") | select(type == "string" and startswith("**Branch updated from `") and test("<!-- ai:merge-base-sync:v1 pr=" + $pr + " from=[0-9a-f]{40} sync=[0-9]+( base=[0-9a-f]{40} merge=[0-9a-f]{40})? -->\\s*$")) ]
+		  | (.body // "") | select(type == "string" and startswith("**Branch updated from `") and test("<!-- ai:merge-base-sync:v1 pr=" + $pr + " from=[0-9a-f]{40} sync=[0-9]+( base=[0-9a-f]{40} merge=[0-9a-f]{40}( inline_run=[0-9]+)?)? -->\\s*$")) ]
 		| length' 2>/dev/null | tail -n1)"
 	if ! [[ "${PR_BASE_SYNC_COUNT}" =~ ^[0-9]+$ ]]; then
 		PR_BASE_SYNC_COUNT=""
@@ -2126,7 +2126,7 @@ _pr_base_sync_count()
 	PR_BASE_SYNC_FINAL_CI_COUNT="$(printf '%s' "${sync_comments_json}" | jq -r --arg login "${sync_login}" --arg pr "${pr_number}" '
 		[ .[]? | if type == "array" then .[] else . end
 		  | select(type == "object" and ((.user.login // "") == $login))
-		  | (.body // "") | select(type == "string" and startswith("**Branch updated from `") and contains("<!-- ai:final-ci-base-sync:v1 pr=" + $pr + " -->") and test("<!-- ai:merge-base-sync:v1 pr=" + $pr + " from=[0-9a-f]{40} sync=[0-9]+( base=[0-9a-f]{40} merge=[0-9a-f]{40})? -->\\s*$")) ]
+		  | (.body // "") | select(type == "string" and startswith("**Branch updated from `") and contains("<!-- ai:final-ci-base-sync:v1 pr=" + $pr + " -->") and test("<!-- ai:merge-base-sync:v1 pr=" + $pr + " from=[0-9a-f]{40} sync=[0-9]+( base=[0-9a-f]{40} merge=[0-9a-f]{40}( inline_run=[0-9]+)?)? -->\\s*$")) ]
 		| length' 2>/dev/null | tail -n1)"
 	[[ "${PR_BASE_SYNC_FINAL_CI_COUNT}" =~ ^[0-9]+$ ]] || PR_BASE_SYNC_FINAL_CI_COUNT=""
 	# Stale-workflow marker for this head (issue #10093); same read.
@@ -2181,6 +2181,8 @@ _pr_base_sync_observe_update_commit()
 	PR_BASE_SYNC_HEAD_REF=""
 	PR_BASE_SYNC_HEAD_REPO=""
 	PR_BASE_SYNC_MERGEABLE=""
+	# Merge-lease Phase 4: the same read, kept for _pr_base_sync_inline_merge.
+	PR_BASE_SYNC_PULL_JSON=""
 	if [[ "${observe_attempts}" =~ ^[0-9]+$ ]] && [ "${observe_attempts}" -ge 1 ] && [ "${observe_attempts}" -le 20 ]; then :; else observe_attempts=5; fi
 	if [[ "${observe_sleep}" =~ ^[0-9]+$ ]] && [ "${observe_sleep}" -ge 1 ] && [ "${observe_sleep}" -le 30 ]; then :; else observe_sleep=3; fi
 	if ! [[ "${from_head}" =~ ^[0-9a-f]{40}$ ]]; then
@@ -2203,6 +2205,7 @@ _pr_base_sync_observe_update_commit()
 				PR_BASE_SYNC_HEAD_REF="$(printf '%s' "${observe_pull_json}" | jq -r 'if type == "object" then (.head.ref // "") else "" end' 2>/dev/null | tail -n1)"
 				PR_BASE_SYNC_HEAD_REPO="$(printf '%s' "${observe_pull_json}" | jq -r 'if type == "object" then (.head.repo.full_name // "") else "" end' 2>/dev/null | tail -n1)"
 				PR_BASE_SYNC_MERGEABLE="$(printf '%s' "${observe_pull_json}" | jq -r 'if type == "object" then (.mergeable | tostring) else "null" end' 2>/dev/null | tail -n1)"
+				PR_BASE_SYNC_PULL_JSON="${observe_pull_json}"
 				break
 			fi
 		fi
@@ -2252,6 +2255,10 @@ _pr_base_sync_marker_post()
 	local repo="${PR_CHECKS_REPOSITORY:-${GITHUB_REPOSITORY:-}}"
 	local base_label="${PR_BASE_FRESHNESS_BASE_REF:-the base branch}" sync_body sync_lead
 	local overlap_label="${PR_BASE_FRESHNESS_OVERLAP:-shared paths}"
+	local sync_inline_field=""
+	# Merge-lease Phase 4: true only when this call posted a marker carrying
+	# inline_run=<this run> (read by _pr_base_sync_inline_merge).
+	PR_BASE_SYNC_INLINE_MARKED="false"
 	# Keep the comment far below GitHub's 65,536-character body limit.
 	[ "${#overlap_label}" -le 2000 ] || overlap_label="${overlap_label:0:2000}, ..."
 	if ! [[ "${head_sha}" =~ ^[0-9a-f]{40}$ ]]; then
@@ -2271,12 +2278,25 @@ _pr_base_sync_marker_post()
 		sync_lead="$(printf '`%s` gained %s commit(s) that touch files this PR also changes (%s), so CI must run on the combined tree first.' \
 			"${base_label}" "${PR_BASE_FRESHNESS_BEHIND_BY:-?}" "${overlap_label}")"
 	fi
-	sync_body="$(printf '**Branch updated from `%s` before merging** (update %s; warning threshold %s).\n\n%s This head was already approved for merge: the next review run for update commit `%s` only waits for CI and then merges, without running the reviewers again. Any other head is reviewed normally. If the base changes these files again before the merge, the branch is updated again and the merge waits for CI on the new combined tree.\n\n<!-- ai:merge-base-sync:v1 pr=%s from=%s sync=%s base=%s merge=%s -->' \
-		"${base_label}" "${sync_number}" "${sync_max}" "${sync_lead}" "${sync_merge_sha}" "${pr_number}" "${head_sha}" "${sync_number}" "${sync_base_sha}" "${sync_merge_sha}")"
+	# Merge-lease Phase 4 (inline update-and-merge): a caller that merges the
+	# update head in its own job (PR_BASE_SYNC_INLINE_CALLER=true, set as a
+	# per-call prefix) names its run, so the pushed synchronize run's gate
+	# can tell that a live job owns this head. Without the switch or the
+	# caller flag the marker is byte-identical to before.
+	case "$(printf '%s' "${MERGE_LEASE_INLINE_SYNC_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+		true|1|yes|on)
+			if [ "${PR_BASE_SYNC_INLINE_CALLER:-}" = "true" ] && [[ "${GITHUB_RUN_ID:-}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+				sync_inline_field=" inline_run=${GITHUB_RUN_ID}"
+			fi
+			;;
+	esac
+	sync_body="$(printf '**Branch updated from `%s` before merging** (update %s; warning threshold %s).\n\n%s This head was already approved for merge: the next review run for update commit `%s` only waits for CI and then merges, without running the reviewers again. Any other head is reviewed normally. If the base changes these files again before the merge, the branch is updated again and the merge waits for CI on the new combined tree.\n\n<!-- ai:merge-base-sync:v1 pr=%s from=%s sync=%s base=%s merge=%s%s -->' \
+		"${base_label}" "${sync_number}" "${sync_max}" "${sync_lead}" "${sync_merge_sha}" "${pr_number}" "${head_sha}" "${sync_number}" "${sync_base_sha}" "${sync_merge_sha}" "${sync_inline_field}")"
 	# One attempt only: a retried POST whose first response was lost would
 	# post a duplicate marker.
 	if _safe_gh_jq -X POST "repos/${repo}/issues/${pr_number}/comments" -f "body=${sync_body}" >/dev/null 2>&1; then
 		echo "MERGE_BASE_SYNC_MARKER pr=${pr_number} head_sha=${head_sha} sync=${sync_number} merge=${sync_merge_sha} outcome=posted"
+		[ -z "${sync_inline_field}" ] || PR_BASE_SYNC_INLINE_MARKED="true"
 	else
 		echo "::warning::MERGE_BASE_SYNC_MARKER pr=${pr_number} head_sha=${head_sha} sync=${sync_number} outcome=failed (the synchronize run reviews normally)"
 	fi
@@ -2477,6 +2497,10 @@ _pr_base_sync_dispatch_final_ci()
 	local sync_ci_attempts="${MERGE_BASE_SYNC_MERGE_REF_POLL_ATTEMPTS:-3}" sync_ci_sleep="${MERGE_BASE_SYNC_HEAD_POLL_SECONDS:-3}"
 	local sync_ci_i sync_ci_pull sync_ci_pull_head sync_ci_quick="false" sync_ci_verdict="" sync_ci_classifier sync_ci_reason="full_suite"
 	local sync_ci_delta_switch sync_ci_delta_probe=""
+	# Merge-lease Phase 4: whether this call dispatched (or found) a quick
+	# final-CI run for the update head; read by _pr_base_sync_inline_merge.
+	PR_BASE_SYNC_CI_QUICK="false"
+	PR_BASE_SYNC_CI_OUTCOME=""
 	sync_ci_log()
 	{
 		echo "MERGE_BASE_SYNC_FINAL_CI pr=${pr_number:-?} head=${sync_update_head:-?} outcome=$1 reason=$2 sync_quick=${sync_ci_quick}"
@@ -2563,6 +2587,8 @@ _pr_base_sync_dispatch_final_ci()
 	# merge with the base tip, so its wiring is current (issue #9993).
 	PR_FINAL_CI_WIRING_SKIP=true PR_FINAL_CI_SYNC_QUICK="${sync_ci_quick}" \
 		_pr_ensure_final_ci "${repo}" "${pr_number}" "${sync_update_head}" "${PR_BASE_SYNC_HEAD_REF}" || true
+	PR_BASE_SYNC_CI_QUICK="${sync_ci_quick}"
+	PR_BASE_SYNC_CI_OUTCOME="${PR_FINAL_CI_OUTCOME:-}"
 	sync_ci_log "${PR_FINAL_CI_OUTCOME:-unknown}" "${sync_ci_reason}"
 	return 0
 }
@@ -2572,6 +2598,14 @@ _pr_base_fresh_for_merge()
 	local pr_number="$1"
 	local head_sha="${2:-}"
 	local base_ref="${3:-}"
+	# Merge-lease Phase 4: clear the side channels _pr_base_sync_inline_merge
+	# reads, so a value from an earlier call in this shell is never taken
+	# for an update made by this call.
+	PR_BASE_SYNC_INLINE_MARKED="false"
+	PR_BASE_SYNC_CI_QUICK="false"
+	PR_BASE_SYNC_CI_OUTCOME=""
+	PR_BASE_SYNC_MERGE_SHA=""
+	PR_BASE_SYNC_INLINE_HEAD=""
 	# Run in this shell (no command substitution) so the side-channel
 	# variables survive for the log line and the update call.
 	_pr_base_freshness "${pr_number}" "${head_sha}" "${base_ref}" >/dev/null
@@ -2641,6 +2675,235 @@ _pr_base_fresh_for_merge()
 			return 0
 			;;
 	esac
+}
+
+# ---------------------------------------------------------------------------
+# Inline update-and-merge (docs/plans/merge-lease-short-critical-section-plan.md
+# Phase 4). When _pr_base_fresh_for_merge updated a lease holder's branch in
+# this job, the job that made the update merges it instead of ending with
+# "updated, waiting" and leaving the merge to the pushed synchronize run.
+#
+#   _pr_base_sync_inline_merge <repo> <pr> <approved head> <update head> <base ref>
+#
+# Callers (review_autofix.yml deterministic-skip-merge, review_enable_auto_merge.sh,
+# review_rb_judge.sh) run it right after `PR_BASE_SYNC_INLINE_CALLER=true
+# _pr_base_fresh_for_merge` returned 1, and continue to their existing merge
+# call (with its --match-head-commit) on 0, using PR_BASE_SYNC_INLINE_HEAD as
+# the head. The poller and review_merge_train.sh never call it: they keep the
+# update-and-return behaviour (no 45-minute wait in the poller).
+# Precondition (silent return 1, no log, no dispatch, exactly today's
+# result): MERGE_LEASE_INLINE_SYNC_ENABLED is on (default true) and this
+# call's marker carried inline_run=<this run> (PR_BASE_SYNC_INLINE_MARKED).
+# Then, each failure returns 1 ("updated, waiting"):
+#   invalid_input     the side channels do not describe this update;
+#   not_quick         no quick final-CI run was dispatched for the update head;
+#   1 freshness_sync  review_head_gate.sh freshness-sync must give the skip
+#                     verdict on the update head (one `user` read, one
+#                     paginated comments read, plus the verifier's own reads);
+#   2 head_gate_status ai-review/head-gate success on the update head through
+#                     review_head_gate_post_status (the freshness_sync skip's text);
+#   3 security_pass   when the single-issue security pass applies (the gate's
+#                     predicate), review_autofix_step_deterministic_skip_security_pass.sh
+#                     runs on a detached worktree of the update head and must
+#                     write hold=false (AUTOFIX_SKIP_RUNS_SECURITY_PASS=true and
+#                     the .codex-skip-pr-head checkout are required; no PR code runs);
+#   4 required_checks _pr_wait_for_required_checks on the update head
+#                     (AUTO_MERGE_CHECKS_WAIT_MINUTES);
+#   5 ok              the head-gate success is posted again (a pushed run's early
+#                     `pending` may have replaced it), PR_BASE_SYNC_INLINE_HEAD is
+#                     set to the update head and 0 is returned.
+# Every failure after the precondition dispatches the PR's review once
+# (_mt_dispatch_review's call), so a head the marker names as owned by this
+# run is never left without an owner; the dispatched run is workflow_dispatch,
+# which the gate's owner skip never applies to. An exhausted security pass
+# already dispatched the review itself (dispatch=by_security_pass).
+# Log (one line once the precondition holds):
+#   MERGE_BASE_FRESHNESS pr=<n> outcome=inline_merge reason=<ok|token> head=<sha> dispatch=<none|dispatched|dispatch_failed|by_security_pass>
+# Rollback: MERGE_LEASE_INLINE_SYNC_ENABLED=false (no marker field, no call).
+_pr_base_sync_inline_enabled()
+{
+	case "$(printf '%s' "${MERGE_LEASE_INLINE_SYNC_ENABLED:-true}" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')" in
+		true|1|yes|on) return 0 ;;
+	esac
+	return 1
+}
+
+# _pr_base_sync_inline_handoff <repo> <pr>: the _mt_dispatch_review call
+# (scripts/review_merge_train.sh). Prints dispatched or dispatch_failed.
+_pr_base_sync_inline_handoff()
+{
+	local handoff_repo="$1" handoff_pr="$2" handoff_wf
+	local -a handoff_workflows=()
+	if ! [[ "${handoff_pr}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${handoff_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]]; then
+		echo "dispatch_failed"
+		return 0
+	fi
+	IFS=$' \t\n' read -r -d '' -a handoff_workflows \
+		<<< "${MERGE_TRAIN_DISPATCH_WORKFLOWS:-ai-review.yml internal-review.yml review_autofix.yml}" || true
+	for handoff_wf in "${handoff_workflows[@]}"; do
+		if gh_retry gh workflow run "${handoff_wf}" --repo "${handoff_repo}" \
+			-f pr_number="${handoff_pr}" -f allow_workflow_edits="${MERGE_TRAIN_ALLOW_WORKFLOW_EDITS:-true}" >/dev/null 2>&1; then
+			echo "dispatched"
+			return 0
+		fi
+	done
+	echo "dispatch_failed"
+	return 0
+}
+
+# _pr_base_sync_inline_post_status <lib dir> <repo> <pr> <sha>: the head-gate
+# success through review_head_gate_post_status, in a subshell from the
+# library's own (verified) directory. Returns 1 when the helpers cannot load.
+_pr_base_sync_inline_post_status()
+{
+	local status_lib="$1" status_repo="$2" status_pr="$3" status_sha="$4"
+	[ -f "${status_lib}/review_head_gate.sh" ] && [ -f "${status_lib}/gh_helpers.sh" ] || return 1
+	# shellcheck source=/dev/null
+	(
+		cd "${status_lib}" \
+			&& source "${status_lib}/gh_helpers.sh" \
+			&& source "${status_lib}/review_head_gate.sh" \
+			&& PR_NUMBER="${status_pr}" review_head_gate_post_status "${status_repo}" "${status_sha}" success "deterministic skip evaluated this head"
+	)
+}
+
+_pr_base_sync_inline_merge()
+{
+	local inline_repo="${1:-}" inline_pr="${2:-}" inline_approved="${3:-}" inline_update="${4:-}" inline_base="${5:-}"
+	local inline_lib="${BASH_SOURCE[0]%/*}" inline_dispatch="none" inline_reason=""
+	local inline_login="" inline_comments="" inline_pull="" inline_pass_required="false"
+	local inline_base_ref="" inline_head_repo="" inline_head_ref="" inline_labels=""
+	local inline_checkout="" inline_tmp="" inline_wt="" inline_out="" inline_pass_rc=0
+	PR_BASE_SYNC_INLINE_HEAD=""
+	_pr_base_sync_inline_enabled || return 1
+	[ "${PR_BASE_SYNC_INLINE_MARKED:-false}" = "true" ] || return 1
+	[ -n "${inline_lib}" ] && [ -d "${inline_lib}" ] || inline_lib="."
+	_pr_base_sync_inline_finish()
+	{
+		inline_reason="$1"
+		if [ "${inline_reason}" != "ok" ] && [ "${inline_dispatch}" = "none" ]; then
+			inline_dispatch="$(_pr_base_sync_inline_handoff "${inline_repo}" "${inline_pr}")"
+		fi
+		echo "MERGE_BASE_FRESHNESS pr=${inline_pr:-?} outcome=inline_merge reason=${inline_reason} head=${inline_update:-?} dispatch=${inline_dispatch}"
+	}
+	if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" != "overlap" ] \
+		|| ! [[ "${inline_approved}" =~ ^[0-9a-f]{40}$ ]] || ! [[ "${inline_update}" =~ ^[0-9a-f]{40}$ ]] \
+		|| [ "${inline_approved}" != "${PR_BASE_FRESHNESS_HEAD_SHA:-}" ] || [ "${inline_update}" != "${PR_BASE_SYNC_MERGE_SHA:-}" ] \
+		|| ! [[ "${inline_repo}" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || [[ "${inline_repo}" == *..* ]] \
+		|| ! [[ "${inline_pr}" =~ ^[1-9][0-9]*$ ]] \
+		|| ! [[ "${inline_base}" =~ ^[A-Za-z0-9._/-]{1,200}$ ]] || [[ "${inline_base}" == *..* ]]; then
+		_pr_base_sync_inline_finish invalid_input
+		return 1
+	fi
+	if [ "${PR_BASE_SYNC_CI_QUICK:-false}" != "true" ]; then
+		_pr_base_sync_inline_finish not_quick
+		return 1
+	fi
+	case "${PR_BASE_SYNC_CI_OUTCOME:-}" in
+		dispatched|exists) ;;
+		*) _pr_base_sync_inline_finish not_quick; return 1 ;;
+	esac
+
+	# Step 1: the freshness_sync verifier on the update head (same marker
+	# rules as the gate's fast path). The comments are read after the marker
+	# POST (the comment cache was evicted then), in the gate's projected shape.
+	inline_login="$(gh_retry _safe_gh_jq user 2>/dev/null | jq -r 'if type == "object" then (.login // "") else "" end' 2>/dev/null | tail -n1)"
+	if ! [[ "${inline_login}" =~ ^[A-Za-z0-9][A-Za-z0-9-]*(\[bot\])?$ ]] \
+		|| ! inline_comments="$(mktemp "${RUNNER_TEMP:-/tmp}/inline_sync_comments.XXXXXX" 2>/dev/null)"; then
+		_pr_base_sync_inline_finish freshness_sync
+		return 1
+	fi
+	if ! gh_retry _safe_gh_jq --paginate --slurp "repos/${inline_repo}/issues/${inline_pr}/comments?per_page=100" 2>/dev/null \
+		| jq -c '[ .[]? | if type == "array" then .[] else . end | select(type == "object") | {author_login: (.user.login // ""), body: (.body // "")} ]' \
+			> "${inline_comments}" 2>/dev/null \
+		|| ! jq -e 'type == "array"' "${inline_comments}" >/dev/null 2>&1 \
+		|| ! bash "${inline_lib}/review_head_gate.sh" freshness-sync "${inline_repo}" "${inline_pr}" "${inline_update}" \
+			"${inline_base}" "${inline_login}" "${inline_comments}"; then
+		rm -f "${inline_comments}"
+		_pr_base_sync_inline_finish freshness_sync
+		return 1
+	fi
+	rm -f "${inline_comments}"
+
+	# Step 2: the head-gate success the freshness_sync skip posts.
+	if ! _pr_base_sync_inline_post_status "${inline_lib}" "${inline_repo}" "${inline_pr}" "${inline_update}"; then
+		_pr_base_sync_inline_finish head_gate_status
+		return 1
+	fi
+
+	# Step 3: the security audit carry, exactly as the deterministic-skip-merge
+	# job runs it. The predicate is the gate's (freshness fast path), read from
+	# the observe step's PR read of the update head (no new pulls read).
+	inline_pull="${PR_BASE_SYNC_PULL_JSON:-}"
+	if ! jq -e --arg sha "${inline_update}" 'type == "object" and (.head.sha // "") == $sha' <<< "${inline_pull:-null}" >/dev/null 2>&1; then
+		_pr_base_sync_inline_finish security_pass
+		return 1
+	fi
+	inline_base_ref="$(jq -r '.base.ref // ""' <<< "${inline_pull}" 2>/dev/null || true)"
+	inline_head_repo="$(jq -r '.head.repo.full_name // ""' <<< "${inline_pull}" 2>/dev/null || true)"
+	inline_head_ref="$(jq -r '.head.ref // ""' <<< "${inline_pull}" 2>/dev/null || true)"
+	inline_labels="$(jq -r '[.labels[]?.name // empty] | join(",")' <<< "${inline_pull}" 2>/dev/null || true)"
+	if [ "${SINGLE_ISSUE_SECURITY_PASS_ENABLED:-false}" != "false" ] \
+		&& [ -n "${DEFAULT_BRANCH:-}" ] && [ "${inline_base_ref}" = "${DEFAULT_BRANCH}" ] \
+		&& [ "${inline_head_repo}" = "${inline_repo}" ] \
+		&& ! [[ "${inline_head_ref}" =~ ${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-} ]] \
+		&& [[ ",${inline_labels}," != *,e2e-smoke-test,* ]]; then
+		inline_pass_required="true"
+	fi
+	if [ "${inline_pass_required}" = "true" ]; then
+		inline_checkout="${DET_SKIP_SECURITY_PASS_CHECKOUT:-${GITHUB_WORKSPACE:-.}/.codex-skip-pr-head}"
+		if [ "${AUTOFIX_SKIP_RUNS_SECURITY_PASS:-false}" != "true" ] \
+			|| [[ ",${inline_labels}," == *,ai:security-pass-failed,* ]] \
+			|| [ ! -f "${inline_lib}/review_autofix_step_deterministic_skip_security_pass.sh" ] \
+			|| [ "$(git -C "${inline_checkout}" rev-parse --is-inside-work-tree 2>/dev/null)" != "true" ] \
+			|| ! inline_tmp="$(mktemp -d "${RUNNER_TEMP:-/tmp}/inline_sync_pass.XXXXXX" 2>/dev/null)"; then
+			_pr_base_sync_inline_finish security_pass
+			return 1
+		fi
+		inline_wt="${inline_tmp}/head"
+		inline_out="${inline_tmp}/output"
+		: > "${inline_out}"
+		inline_pass_rc=1
+		if git -C "${inline_checkout}" fetch --no-tags --depth=2 origin "${inline_update}" >/dev/null 2>&1 \
+			&& git -C "${inline_checkout}" worktree add --detach "${inline_wt}" "${inline_update}" >/dev/null 2>&1; then
+			inline_pass_rc=0
+			(
+				PR_NUMBER="${inline_pr}" PR_HEAD_SHA="${inline_update}" REPOSITORY="${inline_repo}" \
+					DET_SKIP_SECURITY_PASS_PR_JSON="${inline_pull}" \
+					DET_SKIP_SECURITY_PASS_CHECKOUT="${inline_wt}" \
+					DET_SKIP_SECURITY_PASS_SUPPORT_DIR="${inline_lib}" \
+					GITHUB_OUTPUT="${inline_out}" \
+					bash "${inline_lib}/review_autofix_step_deterministic_skip_security_pass.sh"
+			) || inline_pass_rc=$?
+		fi
+		# Removed on every path: the worktree registration and the temp dir
+		# this call created.
+		git -C "${inline_checkout}" worktree remove --force "${inline_wt}" >/dev/null 2>&1 || true
+		if grep -qx 'exhausted=true' "${inline_out}" 2>/dev/null; then
+			inline_dispatch="by_security_pass"
+		fi
+		if [ "${inline_pass_rc}" -ne 0 ] || ! grep -qx 'hold=false' "${inline_out}" 2>/dev/null \
+			|| grep -qx 'hold=true' "${inline_out}" 2>/dev/null; then
+			rm -rf "${inline_tmp}"
+			_pr_base_sync_inline_finish security_pass
+			return 1
+		fi
+		rm -rf "${inline_tmp}"
+	fi
+
+	# Step 4: wait for the quick (or delta) run on the update head.
+	if ! PR_CHECKS_REPOSITORY="${inline_repo}" _pr_wait_for_required_checks "${inline_pr}" "${inline_update}" "${inline_base}"; then
+		_pr_base_sync_inline_finish required_checks
+		return 1
+	fi
+
+	# Step 5: the pushed run's early gate call may have posted `pending` on
+	# the update head after step 2; post the success again (idempotent).
+	_pr_base_sync_inline_post_status "${inline_lib}" "${inline_repo}" "${inline_pr}" "${inline_update}" || true
+	PR_BASE_SYNC_INLINE_HEAD="${inline_update}"
+	export PR_BASE_SYNC_INLINE_HEAD
+	_pr_base_sync_inline_finish ok
+	return 0
 }
 
 # Base update for a refused final-CI dispatch (operator decision Q2: A,

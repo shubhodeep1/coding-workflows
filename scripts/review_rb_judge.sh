@@ -2835,7 +2835,7 @@ case "${RB_ACTION}" in
         # instead; other failures still fall through at once.
         # Gates first: the head-gate success status is posted only for a
         # merge request that actually follows it, right before it.
-        if ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
+        if ! { PR_CHECKS_REPOSITORY="${REPOSITORY}" PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}" || { type _pr_base_sync_inline_merge >/dev/null 2>&1 && PR_CHECKS_REPOSITORY="${REPOSITORY}" FINAL_CI_MERGE_RESUME_ENABLED=false _pr_base_sync_inline_merge "${REPOSITORY}" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_SYNC_MERGE_SHA:-}" "${PR_BASE_FRESHNESS_BASE_REF:-${PR_BASE_REF:-}}" && RB_JUDGED_HEAD_SHA="${PR_BASE_SYNC_INLINE_HEAD}"; }; }; then
           if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
             echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, merge deferred to the synchronize run."
             RB_MERGE_STATUS="deferred_base_moved"
@@ -2957,7 +2957,7 @@ case "${RB_ACTION}" in
         # Best-effort merge — see note above re: gh_retry.
         # Gates first: the head-gate success status is posted only for a
         # merge request that actually follows it, right before it.
-        if ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
+        if ! { PR_CHECKS_REPOSITORY="${REPOSITORY}" PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}" || { type _pr_base_sync_inline_merge >/dev/null 2>&1 && PR_CHECKS_REPOSITORY="${REPOSITORY}" FINAL_CI_MERGE_RESUME_ENABLED=false _pr_base_sync_inline_merge "${REPOSITORY}" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_SYNC_MERGE_SHA:-}" "${PR_BASE_FRESHNESS_BASE_REF:-${PR_BASE_REF:-}}" && RB_JUDGED_HEAD_SHA="${PR_BASE_SYNC_INLINE_HEAD}"; }; }; then
           if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
             echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, terminal merge deferred to the synchronize run."
             RB_MERGE_STATUS="deferred_base_moved"
@@ -3532,7 +3532,7 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
               echo "judge_skip_reason=blocking_check_runs" >> "$GITHUB_OUTPUT"
             fi
           elif [ "${ENABLE_AUTO_MERGE}" = "true" ] \
-            && ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}"; then
+            && ! { PR_CHECKS_REPOSITORY="${REPOSITORY}" PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}" || { type _pr_base_sync_inline_merge >/dev/null 2>&1 && PR_CHECKS_REPOSITORY="${REPOSITORY}" FINAL_CI_MERGE_RESUME_ENABLED=false _pr_base_sync_inline_merge "${REPOSITORY}" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_SYNC_MERGE_SHA:-}" "${PR_BASE_FRESHNESS_BASE_REF:-${PR_BASE_REF:-}}" && RB_JUDGED_HEAD_SHA="${PR_BASE_SYNC_INLINE_HEAD}"; }; }; then
             # Merge-base freshness gate (Q35: A): the base moved under files
             # this PR touches; the update's synchronize run re-validates.
             if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then

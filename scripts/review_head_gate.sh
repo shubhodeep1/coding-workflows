@@ -260,7 +260,7 @@ review_head_gate_freshness_sync()
 	fs_markers="$(jq -r --arg login "${fs_login}" --arg pr "${fs_pr}" '
 		.[]? | select(type == "object" and (.author_login // "") == $login)
 		| (.body // "") | select(type == "string" and startswith("**Branch updated from `"))
-		| capture("<!-- ai:merge-base-sync:v1 pr=(?<pr>[0-9]+) from=(?<from>[0-9a-f]{40}) sync=(?<sync>[0-9]+)( base=(?<base>[0-9a-f]{40}) merge=(?<merge>[0-9a-f]{40}))? -->\\s*$")?
+		| capture("<!-- ai:merge-base-sync:v1 pr=(?<pr>[0-9]+) from=(?<from>[0-9a-f]{40}) sync=(?<sync>[0-9]+)( base=(?<base>[0-9a-f]{40}) merge=(?<merge>[0-9a-f]{40})( inline_run=(?<inline_run>[0-9]+))?)? -->\\s*$")?
 		| select(.pr == $pr) | "\(.from) \(.sync) \(.base // "-") \(.merge // "-")"' "${fs_comments}" 2>/dev/null || true)"
 	if [ -z "${fs_markers}" ]; then
 		fs_log review no_sync_marker
@@ -324,6 +324,31 @@ review_head_gate_freshness_sync()
 	REVIEW_HEAD_GATE_FRESHNESS_BASE_PARENT="${fs_second}"
 	fs_log skip freshness_sync "from=${fs_from} base_parent=${fs_second} sync=${fs_sync} merge=${fs_head}"
 	REVIEW_HEAD_GATE_FRESHNESS_SYNC_FROM="${fs_from}"
+	return 0
+}
+
+# freshness-sync-inline-run <pr> <head sha> <author login> <comments json file>
+# (docs/plans/merge-lease-short-critical-section-plan.md Phase 4). Prints the
+# inline_run=<run id> of the newest trusted ai:merge-base-sync:v1 marker for
+# <pr> whose `merge` equals <head sha> (same author, heading and capture rules
+# as freshness-sync), or nothing when that marker has no inline_run field or
+# there is no such marker. The id must match ^[1-9][0-9]{0,19}$. No API call.
+# Exit 0 on valid input, 2 on invalid input.
+review_head_gate_freshness_inline_run()
+{
+	local ir_pr="${1:-}" ir_head="${2:-}" ir_login="${3:-}" ir_comments="${4:-}" ir_run=""
+	if ! [[ "${ir_pr}" =~ ^[1-9][0-9]*$ ]] || ! [[ "${ir_head}" =~ ^[0-9a-f]{40}$ ]] \
+		|| [ -z "${ir_login}" ] || [ ! -f "${ir_comments}" ]; then
+		return 2
+	fi
+	ir_run="$(jq -r --arg login "${ir_login}" --arg pr "${ir_pr}" --arg head "${ir_head}" '
+		[ .[]? | select(type == "object" and (.author_login // "") == $login)
+		| (.body // "") | select(type == "string" and startswith("**Branch updated from `"))
+		| capture("<!-- ai:merge-base-sync:v1 pr=(?<pr>[0-9]+) from=(?<from>[0-9a-f]{40}) sync=(?<sync>[0-9]+)( base=(?<base>[0-9a-f]{40}) merge=(?<merge>[0-9a-f]{40})( inline_run=(?<inline_run>[0-9]+))?)? -->\\s*$")?
+		| select(.pr == $pr and .merge == $head) ] | last | (.inline_run // "")' "${ir_comments}" 2>/dev/null || true)"
+	if [[ "${ir_run}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+		printf '%s\n' "${ir_run}"
+	fi
 	return 0
 }
 
@@ -504,6 +529,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
 		freshness-sync) shift; review_head_gate_freshness_sync "$@" ;;
 		final-ci-repair) shift; review_head_gate_final_ci_repair "$@" ;;
 		merge-resolve) shift; review_head_gate_merge_resolve "$@" ;;
-		*) echo "Usage: review_head_gate.sh gate | freshness-sync <repo> <pr> <head sha> <base ref> <author login> <comments json file> | final-ci-repair <repo> <pr> <head sha> <author login> <comments json file> | merge-resolve <repo> <pr> <head sha> <base ref> <author login> <comments json file>" >&2; exit 2 ;;
+		freshness-sync-inline-run) shift; review_head_gate_freshness_inline_run "$@" ;;
+		*) echo "Usage: review_head_gate.sh gate | freshness-sync <repo> <pr> <head sha> <base ref> <author login> <comments json file> | freshness-sync-inline-run <pr> <head sha> <author login> <comments json file> | final-ci-repair <repo> <pr> <head sha> <author login> <comments json file> | merge-resolve <repo> <pr> <head sha> <base ref> <author login> <comments json file>" >&2; exit 2 ;;
 	esac
 fi

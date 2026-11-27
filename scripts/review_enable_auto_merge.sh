@@ -337,10 +337,13 @@ PR_CHECKS_HEAD_REF="${_orch_pr_head_ref}"
 # update and stop here. The synchronize run re-validates the combined tree
 # and reaches this step again with a current head. Integration PRs are
 # synced by the orchestrator itself and never auto-merged here, so they
-# skip the two reads.
+# skip the two reads. Merge-lease Phase 4: when this job made the update, it
+# merges the update head itself (_pr_base_sync_inline_merge) and continues
+# below with INITIAL_HEAD_SHA set to that head; any failure there is today's
+# "updated, waiting" (the helper hands the PR to a review run).
 _orch_pr_base_ref="$(printf '%s' "${_ORCH_PR_META_JSON}" | jq -r '.base.ref // ""' 2>/dev/null || echo "")"
 if ! printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}" \
-	&& ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${_orch_pr_base_ref}"; then
+	&& ! { PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${_orch_pr_base_ref}" || { type _pr_base_sync_inline_merge >/dev/null 2>&1 && _pr_base_sync_inline_merge "${GITHUB_REPOSITORY}" "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${PR_BASE_SYNC_MERGE_SHA:-}" "${PR_BASE_FRESHNESS_BASE_REF:-${_orch_pr_base_ref}}" && INITIAL_HEAD_SHA="${PR_BASE_SYNC_INLINE_HEAD}"; }; }; then
 	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=defer reason=$(base_freshness_defer_reason)"
 	if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
 		echo "Auto-merge not enabled for PR #${PR_NUMBER}: the base moved under files this PR touches since its checks ran. The branch update's synchronize run re-validates and re-enables auto-merge."
@@ -369,7 +372,7 @@ fi
 # freshness once more when the wait actually polled.
 if [ "${PR_CHECKS_WAIT_WAITED_S:-0}" -gt 0 ] 2>/dev/null \
 	&& ! printf '%s\n' "${_orch_pr_head_ref}" | grep -Eq -- "${ORCH_INTEGRATION_BRANCH_PATTERN:-^orchestrator/project-}" \
-	&& ! _pr_base_fresh_for_merge "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${_orch_pr_base_ref}"; then
+	&& ! { PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${_orch_pr_base_ref}" || { type _pr_base_sync_inline_merge >/dev/null 2>&1 && _pr_base_sync_inline_merge "${GITHUB_REPOSITORY}" "${PR_NUMBER}" "${INITIAL_HEAD_SHA}" "${PR_BASE_SYNC_MERGE_SHA:-}" "${PR_BASE_FRESHNESS_BASE_REF:-${_orch_pr_base_ref}}" && INITIAL_HEAD_SHA="${PR_BASE_SYNC_INLINE_HEAD}"; }; }; then
 	echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER} head_sha=${INITIAL_HEAD_SHA} action=defer reason=$(base_freshness_defer_reason)"
 	if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
 		echo "Auto-merge not enabled for PR #${PR_NUMBER}: the base moved under files this PR touches while its checks ran. The branch update's synchronize run re-validates and re-enables auto-merge."
