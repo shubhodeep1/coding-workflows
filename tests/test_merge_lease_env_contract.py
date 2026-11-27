@@ -181,7 +181,11 @@ def violations(files: dict[str, str], defaults: dict[str, str], optional_default
 	# key -> [(where, default)] for optional keys without a script default.
 	optional_seen: dict[str, list[tuple[str, str]]] = {}
 	for name, text in sorted(files.items()):
-		if "MERGE_LEASE_" not in text and "MERGE_BASE_FRESHNESS_ENABLED" not in text:
+		if (
+			"MERGE_LEASE_" not in text
+			and "MERGE_BASE_FRESHNESS_ENABLED" not in text
+			and not any(reader_wf == name for reader_wf, _ in READ_ONLY_LEASE_STEPS)
+		):
 			continue
 		for wf, job_id, step_name, env, effective in collect_env_blocks(name, text):
 			where = f"{wf} job={job_id or '-'} step={step_name or '-'}"
@@ -215,10 +219,12 @@ def violations(files: dict[str, str], defaults: dict[str, str], optional_default
 			# _pr_base_fresh_for_merge, which can renew a lease, so it needs the
 			# full set even when it carries no MERGE_LEASE_* key itself.
 			runs_freshness_gate = "MERGE_BASE_FRESHNESS_ENABLED" in env
-			if not any(k in REQUIRED_KEYS for k in lease_keys) and not runs_freshness_gate:
+			# A listed reader is looked up before the skip, so one that drops
+			# both of its listed keys is still reported as missing them.
+			read_only_keys = READ_ONLY_LEASE_STEPS.get((wf, step_name))
+			if not any(k in REQUIRED_KEYS for k in lease_keys) and not runs_freshness_gate and read_only_keys is None:
 				continue
 			missing = [k for k in REQUIRED_KEYS if k not in effective]
-			read_only_keys = READ_ONLY_LEASE_STEPS.get((wf, step_name))
 			if (
 				read_only_keys is not None
 				and not runs_freshness_gate
@@ -229,7 +235,12 @@ def violations(files: dict[str, str], defaults: dict[str, str], optional_default
 				# of 1) is still reported as missing.
 				missing = [k for k in REQUIRED_KEYS if k in read_only_keys and k not in effective]
 			if missing:
-				reason = "passes some merge-lease settings" if lease_keys else "runs the merge-base freshness gate"
+				if lease_keys:
+					reason = "passes some merge-lease settings"
+				elif runs_freshness_gate:
+					reason = "runs the merge-base freshness gate"
+				else:
+					reason = "is a listed read-only lease step"
 				out.append(f"{where}: {reason} but is missing {', '.join(missing)}")
 			for key in lease_keys:
 				if key not in REQUIRED_KEYS:
@@ -451,6 +462,24 @@ class MergeLeaseEnvContractTest(unittest.TestCase):
 		self.assertEqual(len(found), 1, found)
 		self.assertIn("passes some merge-lease settings but is missing MERGE_LEASE_MAX_HOLDERS", found[0])
 		self.assertNotIn("MERGE_LEASE_TTL_MINUTES", found[0])
+
+	def test_fixture_read_only_step_missing_both_listed_keys_fails(self) -> None:
+		text = _fixture("          OTHER: x", step_name="Single-issue security pass")
+		found = violations({"review_autofix.yml": text}, self.defaults)
+		self.assertEqual(len(found), 1, found)
+		self.assertIn("is a listed read-only lease step but is missing MERGE_LEASE_ENABLED, MERGE_LEASE_MAX_HOLDERS", found[0])
+
+	def test_read_only_steps_exist_with_env(self) -> None:
+		# A renamed reader step, or one whose env block is gone, would no
+		# longer be checked at all; keep each READ_ONLY_LEASE_STEPS entry live.
+		files = _repo_workflow_files()
+		seen = set()
+		for name, text in files.items():
+			if "MERGE_LEASE_" not in text:
+				continue
+			for wf, _job, step_name, _env, _effective in collect_env_blocks(name, text):
+				seen.add((wf, step_name))
+		self.assertEqual(sorted(set(READ_ONLY_LEASE_STEPS) - seen), [])
 
 	def test_fixture_read_only_step_wrong_default_fails(self) -> None:
 		text = _fixture(
