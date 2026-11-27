@@ -1,0 +1,14 @@
+{
+  "discovered_at": "2026-11-27T07:00:48Z",
+  "issue_number": 9650,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Orchestrator project \"Pipeline human-wait elimination: CI-quick parity, red-main heal dedupe, resolver safeguards, .github/ai plan grants, hold re-evaluation, nothing-to-implement verify, operator-step tick\" (#9650): issues stalled and needed automated recovery (20 time(s)). Causes: stuck in ai:done for 125m; recovery: retrigger_review (#9733); stuck in ai:done for 126m; recovery: run_stall_judge (#9733); stuck in ai:done for 123m; recovery: run_stall_judge (#9733); stuck in ai:done for 125m; recovery: run_stall_judge (#9733); stuck in ai:awaiting-approval for 85m; recovery: auto_approve (#9733); stuck in ai:awaiting-approval for 97m; recovery: auto_approve (#9733); stuck in ai:awaiting-approval for 66m; recovery: run_stall_judge (#9733); stuck in ai:awaiting-approval for 81m; recovery: run_stall_judge (#9733); stuck in ai:awaiting-approval for 63m; recovery: run_stall_judge (#9733); stuck in ai:done for 129m; recovery: retrigger_review (#9809); stuck in ai:done for 125m; recovery: retrigger_review (#9842); stuck in ai:done for 121m; recovery: retrigger_review (#9842); stuck in ai:done for 126m; recovery: run_stall_judge (#9842); stuck in ai:done for 128m; recovery: run_stall_judge (#9842); stuck in ai:done for 124m; recovery: run_stall_judge (#9842); stuck in ai:clarification for 70m; recovery: auto_respond_clarify (#9886); stuck in ai:done for 155m; recovery: retrigger_review (#9920); stuck in ai:planning for 66m; recovery: retrigger_plan (#9967); stuck in ai:planning for 67m; recovery: retrigger_plan (#9986); stuck in ai:done for 205m; recovery: retrigger_review (#10015). Similar work may need smaller, more explicit issues for these phases.",
+  "phase": "orchestrator_completion",
+  "pr_number": 9654,
+  "record_id": "lesson-orchestrator-9650-stall-recovery-58ea917e84e95ce1",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:stall_recovery",
+    "project:9650"
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "discovered_at": "2026-11-27T07:00:48Z",
+  "issue_number": 9650,
+  "lesson_kind": "project_retrospective",
+  "lesson_text": "Orchestrator project \"Pipeline human-wait elimination: CI-quick parity, red-main heal dedupe, resolver safeguards, .github/ai plan grants, hold re-evaluation, nothing-to-implement verify, operator-step tick\" (#9650) completed only after 1 judge stall cycle(s). Similar projects may need smaller waves or more explicit issue specs.",
+  "phase": "orchestrator_completion",
+  "pr_number": 9654,
+  "record_id": "lesson-orchestrator-9650-summary-960dd65ed7dacf8a",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "source:summary",
+    "project:9650"
+  ]
+}
