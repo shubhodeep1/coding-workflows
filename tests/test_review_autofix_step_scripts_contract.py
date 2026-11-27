@@ -399,7 +399,10 @@ def test_workspace_fallback_requires_verified_support_checkout() -> None:
 	)
 	fallback_lines = [
 		line.strip()
-		for line in raw.split("\n")
+		# Only codex-agent carries the #10221 gate; other jobs (e.g.
+		# post-merge-validate-dispatch) verify their own checkout via
+		# WORKFLOW_SUPPORT_REF and use a different wrapper shape.
+		for line in job.split("\n")
 		if 'REVIEW_AUTOFIX_STEP_SCRIPT="${GITHUB_WORKSPACE}/.codex-workflow-src/' in line
 	]
 	assert len(fallback_lines) >= len(FAILURE_PATH_STEPS_10221)
