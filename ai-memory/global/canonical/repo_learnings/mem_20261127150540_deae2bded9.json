@@ -1,0 +1,48 @@
+{
+  "category": "repo_learnings",
+  "confidence": 0.73,
+  "details": "CI changes include a dedicated fresh-merge-ref helper and tests, with related documentation distinguishing final CI synchronization from base synchronization. When changing merge validation, inspect this behavior and its tests rather than assuming a branch-head check is equivalent.",
+  "fingerprint": "fe97fbb07afee66b12346e7f7a86de253c692a98c10f514bdedb991ab153ec4f",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": null,
+    "run_id": "46018249451",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46018249451",
+    "source_refs": [
+      "https://github.com/shubhodeep1/coding-workflows/issues/10072",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10129",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10177",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10181",
+      "https://github.com/shubhodeep1/coding-workflows/issues/10197",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10075",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10132",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10179",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10185",
+      "https://github.com/shubhodeep1/coding-workflows/pull/10201"
+    ],
+    "workflow": "memory_maintenance"
+  },
+  "record_id": "mem_20261127150540_deae2bded9",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "global",
+    "pr_number": null,
+    "run_id": null
+  },
+  "sensitive": false,
+  "status": "active",
+  "summary": "Final CI validation has explicit merge-ref freshness behavior.",
+  "timestamps": {
+    "created_at": "2026-11-27T15:05:40Z",
+    "promoted_at": "2026-11-27T15:06:26Z",
+    "superseded_at": null
+  }
+}
