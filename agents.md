@@ -3213,8 +3213,8 @@ historical `high` value across every layer was a workaround for the
 openai/codex#11151 announce-without-emit failure mode (implement /
 review_autofix smoke runs at 2026-05-07 12:41 / 12:42, where the model
 emitted a reasoning trace and exited without a tool call); the workaround
-now relies on `include_apply_patch_tool = true` as the primary
-belt-and-suspenders. If the announce-without-emit pattern recurs at `low`,
+then relied on `include_apply_patch_tool = true`, which Codex CLI v0.171.0
+ignores with a warning (#10129). If the announce-without-emit pattern recurs at `low`,
 raise verbosity at the layer that needs it (start with the editor /
 implement callsites, since those are the original 11151 reproducers).
 
@@ -3226,8 +3226,8 @@ phases on a separate older slug) was retired after the announce-without-emit
 regression (openai/codex#11151) drove repeat no-edit failures. The
 2026-05-07 ablation suite then identified the underlying root cause as
 `apply_patch_tool_type: "freeform"` on the OpenRouter Responses path (see
-the `openai/gpt-5.4` catalog entry — `apply_patch_tool_type` is now
-`function`).
+the `openai/gpt-5.4` catalog entry — `apply_patch_tool_type` went to
+`function`, then back to `freeform` with the Codex CLI v0.171.0 pin, #10129).
 
 The reviewer-only multi-model run (claude-branch-review) uses the same
 reviewer models (`minimax/minimax-m3`, `anthropic/claude-sonnet-5.5`,
@@ -4287,7 +4287,7 @@ and shipped:
 - `AI_ENGINE_FALLBACK_REPORT` (`scripts/ai_engine_fallback_report.sh`: `outcome=none|reported pairs= dispatched= records= codex_fallbacks=`, `dispatched role= fallback_reason=`, `skip_dispatch reason=`, `skip reason=no_records|records_symlink|records_oversized`)
 - `REVIEW_UTILITY_ISOLATION` (`scripts/summarize_reviewer_consensus.sh`, `scripts/review_synthesise_smoke.sh`, `scripts/review_run_judge_interim.sh`, as `::error::REVIEW_UTILITY_ISOLATION role=SUMMARISER|BEHAVIOURAL_SMOKE|JUDGE_INTERIM engine=claude|codex outcome=refused reason=sandbox_unavailable|sandbox_helper_outdated`: the review sandbox could not run the role, so the attempt was refused instead of running OpenCode on the host. The interim judge (`JUDGE_INTERIM_ENABLED`) runs only sandboxed OpenCode in the read-only `JUDGE_INTERIM` role of `scripts/review_untrusted_sandbox.sh` (`engine=codex`; the role refuses the Claude engine) and, when refused, logs `JUDGE_INTERIM_PASS_FAIL reason=isolation_unavailable` and stays fail-open. All three scripts load their helpers (the sandbox helper, `ai_engine.sh`, `opencode_helpers.sh`, `write_opencode_config.sh`) from an absolute `SUPPORT_SCRIPTS_DIR`; when it is unset or relative they use their own directory and log a `::warning::`, so a relative `scripts` path never selects the PR checkout's copies)
 - `NEEDS_HUMAN` (`scripts/operator_step_issue.py needs-human park|prune`, called by `scripts/unblock_judge.sh` and `scripts/orchestrate_poll_process.sh`: `item= kind= reason= outcome=parked|updated|removed|skip`, poller skips add `detail=`)
-- `OPERATOR_STEP_TICK` (`scripts/operator_step_issue.py tick`, run by `scripts/promote_main_cycle.sh`: `key= outcome=ticked|already_done|no_source_sha|not_ancestor|unknown_commit stable=`)
+- `OPERATOR_STEP_TICK` (`scripts/operator_step_issue.py tick`, run by `scripts/promote_main_cycle.sh`: `key= outcome=ticked|already_done|no_source_sha|not_ancestor|unknown_commit|unverified stable=`)
 - `CLAUDE_POOL` (`scripts/ai_engine.sh` and the sandbox Claude branches: `run role= account= outcome= reason= exit_code=`, `account_skipped account= reason=`)
 - `CLAUDE_POOL_HEALTH` (`scripts/claude_pool_health_alert.sh`, the "Alert on Claude pool accounts at the usage gate" step of `orchestrate_poll.yml`: `accounts= gated= auth_failed= probe_failed= alert=sent|not_delivered|none|outside_window|disabled|no_probes|invalid_probes`; `sent` means one Telegram notice listed every probed account with both utilizations and the hours until each window resets (plus the UTC reset time of each window at or above `gate_utilization`) and every rejected token; the step reads the pool action's `probes` output and sends at most once an hour, see README "Near-cap alert")
 - `SANDBOX_IMAGE` (`scripts/sandbox_image.sh`: `family= outcome=pulled|built|published|publish_skipped reason= ref=`)
@@ -5479,12 +5479,12 @@ An extracted candidate, empty or non-empty, also requires every earlier opener t
 ## Operational lessons learned (categorised)
 
 **General / Tooling**
-- Treat the `openai/codex#11151` no-edit regression as closed only with function-style patch tooling; keep `apply_patch_tool_type = "function"` as the settled baseline. Pointers: `scripts/codex_model_catalog.json`, `scripts/write_codex_config.sh`.
+- Codex CLI v0.171.0 removed function-style patch tooling (openai/codex#21651, #10129): catalog `apply_patch_tool_type` must be `freeform` or `null`, never `function` (the catalog no longer parses); `tests/test_write_codex_config.py::test_catalog_entries_parse_on_codex_v0171` guards it. If the `openai/codex#11151` no-edit regression recurs, raise editor verbosity first. Pointers: `scripts/codex_model_catalog.json`, `scripts/write_codex_config.sh`.
 - Keep `low` as the default gpt-6-sol verbosity across workflow entrypoints unless a specific phase re-proves the old announce-without-emit failure. Pointers: `.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, `.github/workflows/implement.yml`, `.github/workflows/orchestrate.yml`.
 
 **codex-cli quirks**
-- Announce-without-emit is a known codex-cli failure mode on patch-heavy turns; the mitigation is to keep patch tooling explicitly enabled rather than raising verbosity by default. Pointers: `scripts/codex_model_catalog.json`, `.github/workflows/implement.yml`.
-- The OpenRouter Responses-path regression was tied to `apply_patch_tool_type: "freeform"`; keep `include_apply_patch_tool = true` and function-style patch wiring in editor phases. Pointers: `scripts/codex_model_catalog.json`, `.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, `.github/workflows/implement.yml`.
+- Announce-without-emit is a known codex-cli failure mode on patch-heavy turns; on Codex CLI v0.171.0 patch tooling can no longer be forced on (`function` is gone and `include_apply_patch_tool` is ignored, #10129), so the first mitigation is to raise editor verbosity in the affected phase. Pointers: `scripts/codex_model_catalog.json`, `.github/workflows/implement.yml`.
+- The OpenRouter Responses-path regression was tied to `apply_patch_tool_type: "freeform"` before the v0.171.0 pin; on v0.171.0 `function` no longer exists and `include_apply_patch_tool` is ignored with a warning, so watch editor phases for no-edit turns instead of restoring either setting. Pointers: `scripts/codex_model_catalog.json`, `.github/workflows/clarify.yml`, `.github/workflows/plan.yml`, `.github/workflows/implement.yml`.
 
 **OpenRouter / prompt-cache**
 - Prompt-cache hit rate depends on stable prompt ordering and unchanged prefix blocks; preserve cache-friendly layout before adding new dynamic material. Pointers: `probably_unnecessary_but_read_if_stuck.md` (OpenRouter Prompt Cache Instrumentation / Semantic Cache Scope), `scripts/openrouter_prompt_cache.py`.
