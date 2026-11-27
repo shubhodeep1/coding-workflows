@@ -5,13 +5,26 @@
   "entry_id": "processed_command_10206_7217833980_approved",
   "issue_number": 10206,
   "metadata": {
+    "branch": "ai/issue-10206",
+    "changed_files": [
+      ".github/workflows/ci.yml",
+      "agents.d/10206-quick-ci-prompt-template-parity.md",
+      "changelog.d/10206-quick-ci-prompt-template-parity.md",
+      "tests/test_assemble_prompt.py",
+      "tests/test_ci_pr_quick.py"
+    ],
+    "issue_number": 10206,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/10206",
+    "pr_number": 10209,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/10209",
+    "run_attempt": "1",
+    "run_id": "45995785585",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/45995785585"
   },
   "run_attempt": 1,
   "run_id": "45995785585",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-27T12:38:49Z",
+  "status": "completed",
+  "timestamp": "2026-11-27T13:24:29Z",
   "workflow": "implement"
 }
