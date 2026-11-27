@@ -2,7 +2,7 @@
   "deferred": [],
   "running": [],
   "schema_version": "state_snapshot.v1",
-  "tick_at": "2026-11-27T02:58:00Z",
+  "tick_at": "2026-11-27T03:27:16Z",
   "totals": {
     "deferred": 0,
     "running": 0,
@@ -11,7 +11,7 @@
       "output": 0,
       "total": 0
     },
-    "tracking_issues": 5
+    "tracking_issues": 4
   },
   "tracking_issues": [
     {
@@ -95,27 +95,6 @@
       "status": "waiting",
       "title": "[Orchestrator] Merge lease as a short critical section: ready-first grant, delta CI after update, resolution-only review, one job per hold",
       "total_waves": 4,
-      "wave_complete": true
-    },
-    {
-      "current_wave": 1,
-      "integration_ahead_by": "0",
-      "issue_counts": {
-        "closed": 2,
-        "done": 0,
-        "implementation_failed": 0,
-        "in_progress": 0,
-        "merged": 0,
-        "not_created": 0,
-        "ready_to_merge": 0,
-        "review_blocked": 0,
-        "skipped": 0
-      },
-      "number": 10191,
-      "project_complete": true,
-      "status": "failed",
-      "title": "[Orchestrator] [E2E Orchestrate Smoke 45927857867] Update two independent smoke canary files",
-      "total_waves": 1,
       "wave_complete": true
     }
   ]
