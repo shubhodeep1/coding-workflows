@@ -1,0 +1,16 @@
+{
+  "discovered_at": "2026-11-27T05:36:42Z",
+  "issue_number": 10172,
+  "lesson_kind": "review_finding_outside_plan_scope",
+  "lesson_text": "Consolidator rejected issue 001 as out-of-scope; anchor=changelog.d/10172-broker-sha-check-all-branches.md:1-11; cited_path=PR description body (pipeline-composed, not a repository file); files_touched=changelog.d/10172-broker-sha-check-all-branches.md, tools/claude-pool-broker/src/index.ts, tools/claude-pool-broker/test/broker.test.ts.",
+  "phase": "review_autofix",
+  "pr_number": 10174,
+  "record_id": "lesson_20261127053642_fcac570239",
+  "schema_version": "lessons_learned_record.v1",
+  "tags": [
+    "PR description body (pipeline-composed, not a repository file)",
+    "changelog.d/10172-broker-sha-check-all-branches.md",
+    "tools/claude-pool-broker/src/index.ts",
+    "tools/claude-pool-broker/test/broker.test.ts"
+  ]
+}
