@@ -123,7 +123,7 @@ ALLOWLIST: tuple[tuple[str, str, str], ...] = (
 	),
 	(
 		WORKFLOW_REL,
-		'gh_api_retry() { gh api "$@"; }',
+		'gh_api_retry() { local cleanup_fallback_out; cleanup_fallback_out="$(gh api "$@")" || return 1;',
 		"always() cleanup fallback when the checkout's scripts/gh_helpers.sh is missing, so cleanup stays best-effort",
 	),
 )

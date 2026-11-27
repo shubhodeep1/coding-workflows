@@ -119,6 +119,11 @@ check_all_steps() {
       echo "  │  ⚠ API rate-limited (gh_api_retry rc=75) — not retrying"
       break
     fi
+    # rc 2: a permanent answer (e.g. 404); a retry cannot change it.
+    if [ "${dv_read_rc}" -eq 2 ]; then
+      echo "  │  ⚠ API read failed permanently (gh_api_retry rc=2) — not retrying"
+      break
+    fi
     echo "  │  ⚠ API attempt ${_attempt}/3 failed — retrying in 2s..."
     sleep 2
   done
@@ -137,7 +142,7 @@ check_all_steps() {
   # internal-implement.yml but the reusable workflow skips the job.
   TOTAL_JOBS=$(echo "$JOBS_JSON" | jq '.jobs | length')
   SKIPPED_JOBS=$(echo "$JOBS_JSON" | jq '[.jobs[] | select(.conclusion == "skipped")] | length')
-  if [ "$TOTAL_JOBS" -eq 0 ] && [ "${dv_last_rc}" -ne 75 ]; then
+  if [ "$TOTAL_JOBS" -eq 0 ] && [ "${dv_last_rc}" -ne 75 ] && [ "${dv_last_rc}" -ne 2 ]; then
     # GitHub can briefly report zero jobs before the run is fully indexed.
     # Re-fetch a few times so we don't false-pass real runs as spurious.
     echo "  │  ⚠ Run has no jobs yet — rechecking for indexing delay..."
@@ -157,6 +162,10 @@ check_all_steps() {
       unset _JOBS_OUT
       if [ "${dv_recheck_rc}" -eq 75 ]; then
         echo "  │  ⚠ API rate-limited during recheck (gh_api_retry rc=75) — not retrying"
+        break
+      fi
+      if [ "${dv_recheck_rc}" -eq 2 ]; then
+        echo "  │  ⚠ API read failed permanently during recheck (gh_api_retry rc=2) — not retrying"
         break
       fi
       if ! _jobs_json_valid "$JOBS_JSON"; then

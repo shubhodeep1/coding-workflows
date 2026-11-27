@@ -3088,8 +3088,9 @@ jobs:
           IMPL_CREATED_AFTER_INPUT: ${{ steps.create-issue.outputs.created_after }}
         run: |
           # #10225: rate-limit-aware reads. always() cleanup stays best-effort:
-          # without the checkout's helper the reads fall back to plain gh api.
-          declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh 2>/dev/null || gh_api_retry() { gh api "$@"; }
+          # without the checkout's helper the reads fall back to plain gh api,
+          # which prints the reply only on success (no error body on stdout).
+          declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh 2>/dev/null || gh_api_retry() { local cleanup_fallback_out; cleanup_fallback_out="$(gh api "$@")" || return 1; printf '%s\n' "${cleanup_fallback_out}"; }
           set -euo pipefail
           source scripts/gh_helpers.sh 2>/dev/null || true
           # #10225 review: this step runs inside the finalization reserve and
@@ -5710,8 +5711,9 @@ jobs:
           ALT_CREATED_AFTER: ${{ steps.create.outputs.created_after }}
         run: |
           # #10225: rate-limit-aware reads. always() cleanup stays best-effort:
-          # without the checkout's helper the reads fall back to plain gh api.
-          declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh 2>/dev/null || gh_api_retry() { gh api "$@"; }
+          # without the checkout's helper the reads fall back to plain gh api,
+          # which prints the reply only on success (no error body on stdout).
+          declare -F gh_api_retry >/dev/null || source scripts/gh_helpers.sh 2>/dev/null || gh_api_retry() { local cleanup_fallback_out; cleanup_fallback_out="$(gh api "$@")" || return 1; printf '%s\n' "${cleanup_fallback_out}"; }
           # Defence in depth — never abort on single failure; retry each
           # close 3× with backoff. Same pattern as orchestrate-decompose-test
           # cleanup so all e2e jobs leak resources at the same (low) rate
