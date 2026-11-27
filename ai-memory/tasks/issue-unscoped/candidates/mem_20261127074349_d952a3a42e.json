@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n(No findings reported.)\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\n  expected_change_site: .github/workflows/ci.yml, selection and placement of steps moved out of job tests-heal-plan-and-validation\n  confidence=5\n  flagged_by: [anthropic_claude-sonnet-5_5, google_gemini-3_1-flash-lite, minimax_minimax-m3, openai_gpt-6-luna, z-ai_glm-5_3-flash]\n  EVIDENCE: Run 45931627782's step timings were unreadable, so the five moved steps were chosen by test and subprocess counts (.github/workflows/ci.yml lines 1729-1739, 4434-4444, 4436-4438, 4434-4494, changelog.d/10200-ci-heal-job-steps-to-poll-groups.md); the sharded \"Workflow failure heal contract and driver tests\" step (~602 test functions) stays in tests-heal-plan-and-validation; no timing evidence that the moved steps were the slowest. Severity disagreement across reviewers (NIT vs MAJOR; highest is MAJOR). Residual risk is documented in the PR.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\nExpected change site: `.github/workflows/ci.yml`, job `tests-heal-plan-and-validation` (the choice and placement of the moved steps).\nEvidence of absence: Step timings of run 45931627782 were not readable, so five steps were chosen by test and subprocess counts (ci.yml around lines 1729-1739 and 4434-4444; changelog.d/10200-ci-heal-job-steps-to-poll-groups.md). The sharded heal step (about 602 test functions) stays in the job. No evidence these were the slowest steps. Not fixable in the sandbox.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\nExpected change site: Selection of steps moved from `tests-heal-plan-and-validation` in `.github/workflows/ci.yml`.\nEvidence of absence: Timings for run 45931627782 were unreadable, so steps were selected by test/subprocess counts. The slowest step, `Workflow failure heal contract and driver tests`, remains in the job. Limitation documented as residual risk, but the requirement to move the slowest steps was not fully met.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names. Do not raise `timeout-minutes` and do not split tests into new required job names.\"\nExpected change site: .github/workflows/ci.yml - selection of steps to move out of tests-heal-plan-and-validation (lines 1726-1739)\nEvidence of absence: Five moved steps (Tracking issue comment cap tests, Workflow log analysis contract tests, Review conflict-resolve sandbox-only tests, Review conflict-resolve retry-prelude rendering contract test, Review-blocked judge security-pass helper tests) chosen by counts because timings were unreadable (.github/workflows/ci.yml:1729-1739, 4431-4526; changelog.d/10200-ci-heal-job-steps-to-poll-groups.md:1). The slowest step (sharded test_workflow_failure_heal.py, ~602 tests) stays. Job may still exceed the 15-minute budget-watch warn level. Other constraints are met.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 4\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged.\"\nExpected change site: `.github/workflows/ci.yml`, selection and placement of steps from `tests-heal-plan-and-validation`.\nEvidence of absence: `.github/workflows/ci.yml` lines 1729\u20131734 and 4434\u20134494 state that timings were unreadable and the five moved steps were selected by test and subprocess counts. No timing-based selection in the diff.\nSEVERITY: MAJOR\nISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n\nTASK_GAP:\nRequirement: \"Move its slowest steps (see the run's step timings) into the CI job with the most headroom, unchanged, keeping job and step names.\"\nExpected change site: .github/workflows/ci.yml, step selection for job tests-heal-plan-and-validation (selection comments at lines 1729-1739 and 4434-4444)\nEvidence of absence: Run 45931627782's timings were unreadable, so the five steps were picked by counts, documented as \"an estimate ... not timings\" (ci.yml:4436-4438, changelog.d/10200-ci-heal-job-steps-to-poll-groups.md:2). The sharded heal step (~602 test functions) stays in the job. No evidence the moved steps were the slowest. Mitigating: timings were unreadable for prior moves (#7366, #8268, #9363), and the issue's constraints rule out alternatives.\nSEVERITY: NIT\nISSUE_CONFIDENCE: 3\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "d3082cd847530b29f902eae3ed35bda8d02e7f29089eb1ffc42d4eb1865892b5",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10202,
+    "run_id": "45953478724",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "45953478724",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261127074349_d952a3a42e",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10202,
+    "run_id": "45953478724"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus flagged 1 multi-reviewer item(s) across 1 total consensus item(s)",
+  "timestamps": {
+    "created_at": "2026-11-27T07:43:49Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
