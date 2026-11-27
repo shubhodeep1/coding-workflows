@@ -2443,8 +2443,8 @@ class MovedPromote8466StepsContractTest(unittest.TestCase):
 # subprocess counts; the run's step timings were not readable. The two steps
 # first went to different jobs; issue #8993 moved "Orchestrate lib unit tests"
 # on to tests-release-and-log-analysis, so both ran in that job until issue
-# #9450 moved the triage step on to orchestrate-poll group 0. The two steps no
-# longer share a job.
+# #9450 moved the triage step on to orchestrate-poll group 0 (group 3 since
+# #10223). The two steps no longer share a job.
 PROMOTE_8771_SOURCE_JOB_ID = "tests-promote-stall-and-review"
 PROMOTE_8771_SETUP_STEP = "Install Python CI dependencies"
 MOVED_PROMOTE_8771_STEPS = {
@@ -2463,7 +2463,7 @@ MOVED_PROMOTE_8771_STEPS = {
 			"tests/test_orchestrator_concurrency_caps.py",
 		),
 	),
-	# Issue #9450 moved it on to orchestrate-poll group 0.
+	# Issue #9450 moved it on to orchestrate-poll group 0, and #10223 to group 3.
 	"Check-failure triage workflow security tests": (
 		POLL_JOB_ID,
 		(
@@ -4347,7 +4347,11 @@ POLL_GROUP_ZERO_9496_PINNED_STEPS = (MERGE_TRAIN_STEP_NAME,)
 
 
 class MovedHooks9496StepsContractTest(unittest.TestCase):
-	"""The steps moved out of tests-hooks-and-orchestrator run once, in orchestrate-poll groups 0 and 1 (#9496)."""
+	"""The steps moved out of tests-hooks-and-orchestrator run once, in orchestrate-poll groups 0 and 1 (#9496).
+
+	Since #10223 the merge-train step runs in group 3 (MERGE_TRAIN_POLL_GROUP);
+	the other steps stay in group 1.
+	"""
 
 	def jobs(self) -> dict:
 		return yaml.safe_load(CI_WF.read_text(encoding="utf-8"))["jobs"]
