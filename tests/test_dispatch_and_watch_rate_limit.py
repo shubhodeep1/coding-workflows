@@ -30,6 +30,19 @@ HELPERS = ("dispatch_and_watch_workflow_run.sh", "comprehensive_test_and_release
 WATCHER = REPO_ROOT / "scripts" / "dispatch_and_watch_workflow_run.sh"
 GH_HELPERS = REPO_ROOT / "scripts" / "gh_helpers.sh"
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "test-and-mark-stable.yml"
+# Issue #10205: the lowest DISPATCH_RATE_LIMIT_MAX_WAIT_SECS a release-gate
+# dispatch step may set. A primary limit resets once an hour, so a refusal can
+# come up to 3600 s before the reset; 1500 s is the script default and covers
+# 42% of that window. The 2026-11-27 refusal (run 45927857867) needed 505 s and
+# failed under the 410 s cap #10201 had set to fit the step limit. To fit a step
+# limit, raise its timeout-minutes; never lower the cap below this floor.
+GATE_RATE_LIMIT_CAP_FLOOR_SECS = 1500
+UPDATE_WORKFLOWS_STEP = "Dispatch & watch — update_workflows (allow_workflow_edits=false)"
+# A dispatch step without its own timeout-minutes shares its job limit with the
+# job's other steps; the workflow budgets 360 s for them (orchestrate-decompose-test:
+# 3000s watch + 1500s cap + 360s = 4860s, plus 1200s for one gh_api_retry reset
+# wait (#10225) = 6060s = 101m). The floor test counts that reserve.
+GATE_JOB_OTHER_STEPS_RESERVE_SECS = 360
 
 pytestmark = pytest.mark.skipif(shutil.which("jq") is None, reason="jq is required by the watcher")
 
@@ -382,33 +395,152 @@ def _workflow_steps(text: str) -> list[tuple[str, str]]:
 	return steps
 
 
+def _workflow_jobs(text: str) -> list[tuple[str, str]]:
+	"""Split the workflow's `jobs:` section into (job id, job text) pairs."""
+	jobs_match = re.search(r"^jobs:\n", text, re.M)
+	assert jobs_match is not None
+	chunks = re.split(r"\n(?=  [A-Za-z0-9_-]+:\n)", "\n" + text[jobs_match.end():])
+	jobs = []
+	for chunk in chunks:
+		if not chunk.startswith("  ") or chunk.startswith("   "):
+			continue
+		jobs.append((chunk.split(":", 1)[0].strip(), chunk))
+	return jobs
+
+
+def _gate_dispatch_steps(text: str) -> list[dict]:
+	"""Every step that runs the dispatch watcher, with its cap and limits.
+
+	`cap` is the explicit DISPATCH_RATE_LIMIT_MAX_WAIT_SECS env value or the
+	script default 1500; `need` is cap + the longest watch deadline + 4 s
+	pre-sleep + 60 s margin; `step_minutes` is None when the step has no
+	timeout-minutes of its own.
+	"""
+	# A workflow-level env cap would reach every step yet be scored as the default.
+	workflow_prefix = text.split("\njobs:\n", 1)[0]
+	assert not re.search(r"^\s*DISPATCH_RATE_LIMIT_MAX_WAIT_SECS\s*:", workflow_prefix, re.M), "set the cap on the step, not the workflow"
+	steps = []
+	for job_id, job_text in _workflow_jobs(text):
+		job_header = job_text.split("\n    steps:\n", 1)[0]
+		job_budget = re.search(r"^    timeout-minutes: ([0-9]+)$", job_header, re.M)
+		for name, chunk in _workflow_steps(job_text):
+			if "bash ./scripts/dispatch_and_watch_workflow_run.sh \\\n" not in chunk or "--workflow" not in chunk:
+				continue
+			header = chunk.split("        run: |", 1)[0]
+			cap_match = re.search(r'^          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "([0-9]+)"$', header, re.M)
+			# Fail closed: a cap key set any other way (unquoted, an expression, or a
+			# job-level env entry) must not be scored as the 1500 default.
+			cap_key_re = r"^\s*DISPATCH_RATE_LIMIT_MAX_WAIT_SECS\s*:"
+			assert cap_match is not None or not re.search(cap_key_re, header, re.M), (name, "cap must be a quoted integer")
+			assert not re.search(cap_key_re, job_header, re.M), (job_id, "set the cap on the step, not the job")
+			cap = int(cap_match.group(1)) if cap_match else 1500
+			budget = re.search(r"^        timeout-minutes: ([0-9]+)$", header, re.M)
+			deadlines = [
+				int(v) for v in re.findall(r"--(?:completion|registration)-timeout-secs ([0-9]+)", chunk)
+			]
+			assert deadlines, name
+			steps.append({
+				"job": job_id,
+				"job_minutes": int(job_budget.group(1)) if job_budget else None,
+				"name": name,
+				"chunk": chunk,
+				"explicit_cap": cap_match.group(1) if cap_match else None,
+				"cap": cap,
+				"step_minutes": int(budget.group(1)) if budget else None,
+				"need": cap + max(deadlines) + 64,
+			})
+	return steps
+
+
 def test_gate_dispatch_steps_fit_rate_limit_cap_in_step_budget() -> None:
 	"""cap + watch deadline + 4 s pre-sleep + 60 s margin fits each step budget.
 
 	The cap clock starts before the pre-dispatch run-id lookup, so its
 	rate-limit backoff and the `GET /rate_limit` reads are inside the cap; the
 	60 s margin covers the backoff after the last wait (<= 30 s) and gh calls.
+	A step without its own timeout-minutes is checked against its job limit.
 	"""
 	text = WORKFLOW.read_text(encoding="utf-8")
 	checked = []
 	orchestrate_cap = None
-	for name, chunk in _workflow_steps(text):
-		if "bash ./scripts/dispatch_and_watch_workflow_run.sh \\\n" not in chunk or "--workflow" not in chunk:
-			continue
-		header = chunk.split("        run: |", 1)[0]
-		cap_match = re.search(r'^          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "([0-9]+)"$', header, re.M)
-		cap = int(cap_match.group(1)) if cap_match else 1500
+	for step in _gate_dispatch_steps(text):
+		name = step["name"]
 		if name == "Dispatch internal-orchestrate.yml with multi-issue project":
-			orchestrate_cap = cap_match.group(1) if cap_match else None
-		budget = re.search(r"^        timeout-minutes: ([0-9]+)$", header, re.M)
-		if budget is None:
+			orchestrate_cap = step["explicit_cap"]
+		if step["step_minutes"] is None:
+			assert step["job_minutes"] is not None, (step["job"], name)
+			assert step["need"] <= step["job_minutes"] * 60, (name, step["need"], step["job_minutes"])
 			continue
-		deadlines = [
-			int(v) for v in re.findall(r"--(?:completion|registration)-timeout-secs ([0-9]+)", chunk)
-		]
-		assert deadlines, name
-		assert cap + max(deadlines) + 64 <= int(budget.group(1)) * 60, (name, cap, max(deadlines), budget.group(1))
+		assert step["need"] <= step["step_minutes"] * 60, (name, step["need"], step["step_minutes"])
 		checked.append(name)
 	assert "Dispatch & watch — update_workflows (allow_workflow_edits=false)" in checked, checked
 	assert len(checked) >= 5, checked
 	assert orchestrate_cap is not None, "the orchestrate dispatch step must set an explicit cap"
+
+
+def test_gate_dispatch_steps_rate_limit_cap_meets_floor() -> None:
+	"""Issue #10205: every gate dispatch can wait >= the floor for a reset.
+
+	Each cap is at least GATE_RATE_LIMIT_CAP_FLOOR_SECS, each step's limit (or,
+	without one, its job's limit) holds the cap plus its watch deadline, and the
+	dispatch steps of one job fit that job's limit together (a step without its
+	own limit also keeps GATE_JOB_OTHER_STEPS_RESERVE_SECS for the other steps).
+	"""
+	text = WORKFLOW.read_text(encoding="utf-8")
+	steps = _gate_dispatch_steps(text)
+	per_job: dict[str, int] = {}
+	job_limits: dict[str, int] = {}
+	for step in steps:
+		name = step["name"]
+		assert step["cap"] >= GATE_RATE_LIMIT_CAP_FLOOR_SECS, (name, step["cap"])
+		assert step["job_minutes"] is not None, (step["job"], name)
+		assert step["job_minutes"] <= 360, (step["job"], step["job_minutes"])
+		job_limits[step["job"]] = step["job_minutes"]
+		if step["step_minutes"] is not None:
+			assert step["need"] <= step["step_minutes"] * 60, (name, step["need"], step["step_minutes"])
+			spent = step["step_minutes"] * 60
+		else:
+			assert step["need"] <= step["job_minutes"] * 60, (name, step["need"], step["job_minutes"])
+			# cap + watch deadline + the reserve for the job's other steps, which
+			# also covers the step's own 64 s margin.
+			spent = step["need"] - 64 + GATE_JOB_OTHER_STEPS_RESERVE_SECS
+		per_job[step["job"]] = per_job.get(step["job"], 0) + spent
+	for job, total in per_job.items():
+		assert total <= job_limits[job] * 60, (job, total, job_limits[job])
+	names = {step["name"] for step in steps}
+	for expected in (
+		"Dispatch & watch — validation-refresh",
+		UPDATE_WORKFLOWS_STEP,
+		"Dispatch & watch — internal-memory-maintenance",
+		"Dispatch internal-orchestrate.yml with multi-issue project",
+		"Dispatch internal-validate.yml standalone",
+		"Dispatch & snapshot — workflow-log-analysis",
+	):
+		assert expected in names, (expected, sorted(names))
+
+
+def test_update_workflows_step_cap_replays_2026_11_27_refusal() -> None:
+	"""Release gate run 45927857867: refused 505 s before the core reset.
+
+	With the update_workflows step's real cap the dispatch now waits once and
+	dispatches instead of logging outcome=cap_reached.
+	"""
+	text = WORKFLOW.read_text(encoding="utf-8")
+	chunks = [chunk for name, chunk in _workflow_steps(text) if name == UPDATE_WORKFLOWS_STEP]
+	assert len(chunks) == 1, len(chunks)
+	header = chunks[0].split("        run: |", 1)[0]
+	cap_match = re.search(r'^          DISPATCH_RATE_LIMIT_MAX_WAIT_SECS: "([0-9]+)"$', header, re.M)
+	assert cap_match is not None
+	cap = cap_match.group(1)
+	# _run watches with the same 600 s completion deadline.
+	assert "--completion-timeout-secs 600 " in chunks[0], chunks[0]
+	rc, out, _, sleeps, dispatches = _run(dispatch_fails=1, reset_offset=505, cap=cap)
+	assert rc == 0, out
+	assert "outcome=cap_reached" not in out, out
+	waits = _waits(out)
+	assert len(waits) == 1, out
+	kind, wait_s, _total, max_s, _elapsed, cap_reached = waits[0].groups()
+	assert kind == "primary" and cap_reached is None, out
+	assert max_s == cap, out
+	assert sleeps == [int(wait_s)], sleeps
+	assert dispatches == 2, out

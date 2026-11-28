@@ -49,6 +49,7 @@ def _hold_helper() -> str:
 
 def _run_raw(
 	tmp_path: Path, mode: str, source_labels: list[str], labels_json: str = "[]", impl_pr_json: str = "",
+	held_after_create: bool = False,
 ) -> subprocess.CompletedProcess:
 	issue_json = json.dumps({
 		"title": "CI failure: check on PR #32",
@@ -60,7 +61,10 @@ def _run_raw(
 	script = """set -euo pipefail
 count_noop_ancestors() { printf '0\\n'; }
 ensure_label_exists() { :; }
-close_linked_pr() { echo "CLOSE_LINKED_PR_CALLED $1"; }
+close_linked_pr() {
+  echo "CLOSE_LINKED_PR_CALLED $1"
+  if [ -n "${HELD_AFTER_CREATE:-}" ]; then CLOSE_LINKED_PR_HELD_PRS=42; CLOSE_LINKED_PR_HELD_DETAIL=merge_lease_wait; fi
+}
 _resolve_issue_implementation_pr() {
   STALL_IMPL_PR_NUM=""; STALL_IMPL_PR_JSON=""
   [ -n "$IMPL_PR_JSON" ] || return 1
@@ -78,6 +82,8 @@ gh_retry() {
     printf '%s\\n' "$ORIG_ISSUE_JSON"
   elif [ "$1" = gh ] && [ "$2" = issue ] && [ "$3" = close ]; then
     echo "ISSUE_CLOSE_CALLED $4"
+  elif [ "$1" = gh ] && [ "$2" = issue ] && [ "$3" = edit ]; then
+    echo "ISSUE_EDIT_CALLED $4"
   elif [ "$1" = gh ] && [ "$2" = issue ] && [ "$3" = create ]; then
     printf '%s\\n' "$@" > "$CAPTURED_CREATE_ARGS_FILE"
     printf 'https://github.com/o/r/issues/99\\n'
@@ -103,7 +109,8 @@ echo "REISSUE_RC=${REISSUE_RC} INCREMENT=${STALL_RECOVERY_SHOULD_INCREMENT}"
 	result = subprocess.run(
 		["bash", "-c", script], capture_output=True, text=True, check=False,
 		env={**os.environ, "ORIG_ISSUE_JSON": issue_json, "SOURCE_LABELS_JSON": labels_json,
-			"CAPTURED_CREATE_ARGS_FILE": str(args_file), "IMPL_PR_JSON": impl_pr_json},
+			"CAPTURED_CREATE_ARGS_FILE": str(args_file), "IMPL_PR_JSON": impl_pr_json,
+			"HELD_AFTER_CREATE": "1" if held_after_create else ""},
 	)
 	assert result.returncode == 0, result.stderr + result.stdout
 	return result
@@ -166,6 +173,12 @@ def test_both_reissue_reads_request_the_check_triage_flag() -> None:
 	[
 		('{"number":42,"state":"open","draft":true,"title":"impl"}', "draft"),
 		('{"number":42,"state":"open","draft":false,"title":"[skip ai] impl"}', "skip_ai_title"),
+		# Issue #9892: a merge-lease label applied after the green-PR guard
+		# passed is caught here, before the replacement issue exists.
+		(
+			'{"number":42,"state":"open","draft":false,"title":"impl","labels":[{"name":"ai:merge-lease-wait"}]}',
+			"merge_lease_wait",
+		),
 	],
 )
 def test_reissue_leaves_issue_and_held_pr_alone(tmp_path: Path, mode: str, pr_json: str, detail: str) -> None:
@@ -193,3 +206,27 @@ def test_reissue_of_unheld_pr_still_closes_and_reissues(tmp_path: Path, mode: st
 	assert (tmp_path / "create-args.txt").exists()
 	assert "CLOSE_LINKED_PR_CALLED 7" in out
 	assert "ISSUE_CLOSE_CALLED 7" in out
+
+
+@needs_jq
+@pytest.mark.parametrize("mode", ["managed", "standalone"])
+def test_reissue_rolls_back_when_pr_becomes_held_after_create(tmp_path: Path, mode: str) -> None:
+	# Issue #9892: a lease label applied after the pre-create re-check makes
+	# close_linked_pr leave the PR open. The replacement is closed and the
+	# source issue stays open and unlabelled; no attempt is counted.
+	result = _run_raw(
+		tmp_path, mode, [], impl_pr_json='{"number":42,"state":"open","draft":false,"title":"impl"}',
+		held_after_create=True,
+	)
+	out = result.stdout
+	assert (tmp_path / "create-args.txt").exists()
+	assert "CLOSE_LINKED_PR_CALLED 7" in out
+	assert (
+		"STALL_SKIP issue=7 reason=pr_ai_hold pr=42 detail=merge_lease_wait phase=ai:ready-to-merge "
+		"action=none requested_action=close_and_reissue source=close_linked_pr"
+	) in out, out
+	assert "ISSUE_CLOSE_CALLED 99" in out, out
+	assert "ISSUE_CLOSE_CALLED 7" not in out, out
+	assert "ISSUE_EDIT_CALLED 7" not in out, out
+	assert "INCREMENT=false" in out
+	assert ("REISSUE_RC=1" in out) == (mode == "managed"), out
