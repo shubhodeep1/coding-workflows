@@ -334,7 +334,7 @@ if "/commits/" in endpoint and "/statuses" in endpoint:
 		sys.exit(1)
 	emit(fixture.get("statuses", []))
 if endpoint.endswith("/pulls/42/files"):
-	emit([{"filename": "scripts/tool.sh", "status": "modified"}])
+	emit(fixture.get("files", [{"filename": "scripts/tool.sh", "status": "modified"}]))
 sys.exit(2)
 '''
 
@@ -924,6 +924,162 @@ def test_gate_final_ci_now_green_needs_a_pipeline_head_gate_success(tmp_path: Pa
 	assert outputs["should_run"] == "true" and outputs["final_ci_repair"] == "false"
 	assert "reason=head_gate_not_success state=pending" in result.stdout
 	assert "final_ci_now_green" not in result.stdout
+
+
+# Issue #10183: a now-green approved head goes to the deterministic-skip merge
+# path instead of ending the run. Replays PR #10021: hand-back marker at
+# 08:37:53, ci/final success (a re-run) at 09:15:13, head gate success.
+_NOW_GREEN_MARKER_AT = "2026-11-26T08:37:53Z"
+_NOW_GREEN_STATUSES = [_ci_final("success", "2026-11-26T09:15:13Z"), _HEAD_GATE_SUCCESS, _ci_final("failure", "2026-11-26T08:23:49Z")]
+
+
+def _now_green_fixture(*, labels: list[str] | None = None, mergeable: object = True, mergeable_state: str = "clean") -> dict:
+	fixture = _repair_fixture(statuses=list(_NOW_GREEN_STATUSES))
+	for comment in fixture["comments"]:
+		if comment["id"] == 40:
+			comment["created_at"] = _NOW_GREEN_MARKER_AT
+	fixture["pr"]["labels"] = [{"name": name} for name in (labels or [])]
+	fixture["pr"]["mergeable"] = mergeable
+	fixture["pr"]["mergeable_state"] = mergeable_state
+	return fixture
+
+
+def _now_green_old_end(outputs: dict[str, str]) -> None:
+	assert outputs["should_run"] == "false" and outputs["skip_reason"] == "final_ci_now_green"
+	assert outputs["deterministic_skip"] == "false" and outputs["det_skip_reason"] == ""
+	assert outputs["final_ci_repair"] == "false"
+
+
+def test_gate_final_ci_now_green_routes_to_the_deterministic_skip_merge(tmp_path: Path) -> None:
+	result, outputs, calls = _run_gate(tmp_path, _now_green_fixture(), SINGLE_ISSUE_SECURITY_PASS_ENABLED="false")
+	assert outputs["should_run"] == "false" and outputs["skip_reason"] == "final_ci_now_green", result.stdout + result.stderr
+	assert outputs["deterministic_skip"] == "true" and outputs["det_skip_reason"] == "final_ci_now_green", result.stdout
+	assert outputs["final_ci_repair"] == "false" and outputs["final_ci_repair_attempt"] == ""
+	assert f"FINAL_CI_REPAIR pr=42 head={HEAD} outcome=skipped reason=final_ci_now_green" in result.stdout
+	assert f"FINAL_CI_NOW_GREEN_MERGE pr=42 head={HEAD} outcome=routed det_skip_reason=final_ci_now_green" in result.stdout
+	assert "outcome=selected" not in result.stdout
+	assert result.stdout.count("AUTOFIX_GATE_SKIP ") == 1
+	assert _statuses_calls(calls) == 1
+
+
+@pytest.mark.parametrize("value", ["false", "FALSE", "maybe"])
+def test_gate_final_ci_now_green_merge_switch_off_keeps_the_old_end(tmp_path: Path, value: str) -> None:
+	result, outputs, _ = _run_gate(tmp_path, _now_green_fixture(), FINAL_CI_NOW_GREEN_MERGE_ENABLED=value)
+	_now_green_old_end(outputs)
+	assert f"FINAL_CI_NOW_GREEN_MERGE pr=42 head={HEAD} outcome=not_routed reason=disabled" in result.stdout, result.stdout
+	assert f"FINAL_CI_REPAIR pr=42 head={HEAD} outcome=skipped reason=final_ci_now_green" in result.stdout
+	warning = "FINAL_CI_NOW_GREEN_MERGE_ENABLED has an unrecognised value" in result.stdout
+	assert warning == (value == "maybe")
+
+
+_SECURITY_PASS_ENV = {"SINGLE_ISSUE_SECURITY_PASS_ENABLED": "true", "DEFAULT_BRANCH": "main"}
+
+
+@pytest.mark.parametrize(("fixture_kwargs", "env", "reason"), [
+	({"mergeable": False, "mergeable_state": "dirty"}, {}, "reason=conflict"),
+	({"mergeable_state": "dirty"}, {}, "reason=conflict"),
+	({"labels": ["force-review"]}, {}, "reason=force_review"),
+	({}, {**_SECURITY_PASS_ENV, "AUTOFIX_SKIP_RUNS_SECURITY_PASS": "false"}, "reason=security_pass detail=skip_job_pass_off"),
+	({"labels": ["ai:security-pass-failed"]}, {**_SECURITY_PASS_ENV, "AUTOFIX_SKIP_RUNS_SECURITY_PASS": "true"},
+		"reason=security_pass detail=security_pass_failed"),
+], ids=["conflict", "dirty_state", "force_review", "security_pass_off", "security_pass_failed"])
+def test_gate_final_ci_now_green_not_routed_when_blocked(tmp_path: Path, fixture_kwargs: dict, env: dict, reason: str) -> None:
+	env = {"SINGLE_ISSUE_SECURITY_PASS_ENABLED": "false", **env}
+	result, outputs, _ = _run_gate(tmp_path, _now_green_fixture(**fixture_kwargs), **env)
+	_now_green_old_end(outputs)
+	assert f"FINAL_CI_NOW_GREEN_MERGE pr=42 head={HEAD} outcome=not_routed {reason}" in result.stdout, result.stdout + result.stderr
+	assert "outcome=routed" not in result.stdout
+
+
+def test_gate_final_ci_now_green_routes_with_the_skip_job_security_pass(tmp_path: Path) -> None:
+	result, outputs, _ = _run_gate(tmp_path, _now_green_fixture(), **_SECURITY_PASS_ENV, AUTOFIX_SKIP_RUNS_SECURITY_PASS="true")
+	assert outputs["deterministic_skip"] == "true" and outputs["det_skip_reason"] == "final_ci_now_green", result.stdout + result.stderr
+	assert outputs["should_run"] == "false" and outputs["final_ci_repair"] == "false"
+	assert outputs["det_skip_security_pass"] == "true"
+	pr_json = json.loads(outputs["det_skip_security_pass_pr_json"])
+	assert pr_json["head"]["sha"] == HEAD and pr_json["base"]["ref"] == "main"
+	assert "AUTOFIX_GATE_DET_SKIP_SECURITY_PASS pr=42 candidate=final_ci_now_green route=skip_job" in result.stdout
+
+
+def test_gate_final_ci_now_green_routes_a_generated_chore_without_the_security_pass(tmp_path: Path) -> None:
+	# A generated chore PR carries no code to audit: like the doc-only /
+	# small-diff path, the now-green route neither holds it for the pass nor
+	# asks the skip job to run one.
+	fixture = _now_green_fixture()
+	fixture["pr"]["head"]["ref"] = "auto/workflow-log-analysis-report-123-1"
+	fixture["pr"]["user"] = {"login": PIPELINE, "type": "User"}
+	fixture["files"] = [{"filename": "analysis/workflow-optimization-2026-11-26.md", "status": "added"}]
+	result, outputs, _ = _run_gate(tmp_path, fixture, **_SECURITY_PASS_ENV, AUTOFIX_SKIP_RUNS_SECURITY_PASS="false")
+	assert "AUTOFIX_GATE_GENERATED_CHORE pr=42 kind=workflow_log_analysis_report outcome=skip_candidate" in result.stdout, result.stdout + result.stderr
+	assert outputs["should_run"] == "false" and outputs["skip_reason"] == "final_ci_now_green", result.stdout
+	assert outputs["deterministic_skip"] == "true" and outputs["det_skip_reason"] == "final_ci_now_green", result.stdout
+	assert outputs.get("det_skip_security_pass", "false") != "true"
+	assert f"FINAL_CI_NOW_GREEN_MERGE pr=42 head={HEAD} outcome=routed det_skip_reason=final_ci_now_green" in result.stdout
+
+
+def test_gate_final_ci_now_green_generated_chore_skips_the_pass_with_the_skip_job_pass_on(tmp_path: Path) -> None:
+	# With AUTOFIX_SKIP_RUNS_SECURITY_PASS=true the gate always writes
+	# det_skip_security_pass, so this run shows the chore is not handed a pass.
+	fixture = _now_green_fixture()
+	fixture["pr"]["head"]["ref"] = "auto/workflow-log-analysis-report-123-1"
+	fixture["pr"]["user"] = {"login": PIPELINE, "type": "User"}
+	fixture["files"] = [{"filename": "analysis/workflow-optimization-2026-11-26.md", "status": "added"}]
+	result, outputs, _ = _run_gate(tmp_path, fixture, **_SECURITY_PASS_ENV, AUTOFIX_SKIP_RUNS_SECURITY_PASS="true")
+	assert outputs["deterministic_skip"] == "true" and outputs["det_skip_reason"] == "final_ci_now_green", result.stdout + result.stderr
+	assert outputs["det_skip_security_pass"] == "false"
+	assert "AUTOFIX_GATE_DET_SKIP_SECURITY_PASS" not in result.stdout
+
+
+def test_gate_final_ci_now_green_generated_chore_clears_a_stale_pass_flag_from_the_freshness_path(tmp_path: Path) -> None:
+	# Production path: HEAD_GATE_HELPER_VERIFIED=true lets the freshness-sync
+	# fast path set DET_SKIP_SECURITY_PASS_REQUIRED before its helper fails
+	# (no ai:merge-base-sync:v1 marker). The chore exemption must still hold.
+	_stage_head_gate_src(tmp_path)
+	fixture = _now_green_fixture()
+	fixture["pr"]["head"]["ref"] = "auto/workflow-log-analysis-report-123-1"
+	fixture["pr"]["user"] = {"login": PIPELINE, "type": "User"}
+	fixture["files"] = [{"filename": "analysis/workflow-optimization-2026-11-26.md", "status": "added"}]
+	result, outputs, _ = _run_gate(tmp_path, fixture, **_SECURITY_PASS_ENV, AUTOFIX_SKIP_RUNS_SECURITY_PASS="true",
+		HEAD_GATE_HELPER_VERIFIED="true", GH_RETRY_MAX_ATTEMPTS="1")
+	assert outputs["deterministic_skip"] == "true" and outputs["det_skip_reason"] == "final_ci_now_green", result.stdout + result.stderr
+	assert outputs["det_skip_security_pass"] == "false", result.stdout
+	assert "AUTOFIX_GATE_DET_SKIP_SECURITY_PASS " not in result.stdout
+
+
+def test_gate_final_ci_now_green_keeps_the_pass_for_a_non_chore_on_the_freshness_path(tmp_path: Path) -> None:
+	_stage_head_gate_src(tmp_path)
+	result, outputs, _ = _run_gate(tmp_path, _now_green_fixture(), **_SECURITY_PASS_ENV, AUTOFIX_SKIP_RUNS_SECURITY_PASS="true",
+		HEAD_GATE_HELPER_VERIFIED="true", GH_RETRY_MAX_ATTEMPTS="1")
+	assert outputs["deterministic_skip"] == "true" and outputs["det_skip_reason"] == "final_ci_now_green", result.stdout + result.stderr
+	assert outputs["det_skip_security_pass"] == "true", result.stdout
+
+
+def _job_block(text: str, job: str) -> str:
+	match = re.search(rf"^  {re.escape(job)}:\n(.*?)(?=^  [A-Za-z0-9_-]+:\n|\Z)", text, re.M | re.S)
+	assert match, job
+	return match.group(1)
+
+
+def test_deterministic_skip_merge_job_accepts_final_ci_now_green() -> None:
+	text = WORKFLOW.read_text(encoding="utf-8")
+	job = _job_block(text, "deterministic-skip-merge")
+	job_if = re.search(r"^    if: (.+)$", job, re.M)
+	assert job_if and job_if.group(1).strip() == "${{ needs.gate.outputs.deterministic_skip == 'true' }}"
+	# No DET_SKIP_REASON allowlist: the only reason-specific branch is the
+	# freshness_sync failed-CI redispatch, so final_ci_now_green takes the
+	# generic freshness / lease / required-checks / merge path.
+	comparisons = re.findall(r'"\$\{DET_SKIP_REASON[^}]*\}"\s*!?=\s*"([^"]*)"', job)
+	assert comparisons == ["freshness_sync"]
+	assert not re.search(r"case\s+\"?\$\{?DET_SKIP_REASON", job)
+	gate_job = _job_block(text, "gate")
+	assert "FINAL_CI_NOW_GREEN_MERGE_ENABLED: ${{ vars.FINAL_CI_NOW_GREEN_MERGE_ENABLED || 'true' }}" in gate_job
+	script = GATE_SCRIPT.read_text(encoding="utf-8")
+	branch = script.split('echo "AUTOFIX_GATE_SKIP reason=final_ci_now_green ', 1)[1].split("elif", 1)[0]
+	assert "gate_final_ci_now_green_merge_route || true" in branch
+	assert "${FINAL_CI_NOW_GREEN_MERGE_ENABLED:-true}" in script
+	registry = json.loads((REPO_ROOT / "scripts" / "stage_switches.json").read_text(encoding="utf-8"))
+	entry = next(entry for entry in registry["switches"] if entry["name"] == "FINAL_CI_NOW_GREEN_MERGE_ENABLED")
+	assert entry["default"] == "true"
 
 
 # ---------------------------------------------------------------------------
