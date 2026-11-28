@@ -7525,3 +7525,17 @@ def test_judge_skips_the_wait_label_read_without_an_own_pr_candidate(tmp_path: P
 	assert "op=own_prs outcome=ok count=0 reason=reused" in result.stdout, result.stdout + result.stderr
 	assert "repos/o/r/actions/variables/MERGE_LEASE_WAIT_LABEL" not in state.get("actions_reads", [])
 	assert len(state["created"]) == 1
+
+
+def test_judge_fork_or_other_author_pr_does_not_trigger_the_wait_label_read(tmp_path: Path) -> None:
+	# #10241: G1-G3 ignore fork and other-author PRs, so a failed variable read must not refuse for them.
+	fork = dict(_own_node(62, gate="PENDING"), headRepository={"nameWithOwner": "evil/r"})
+	other = dict(_own_node(63, gate="PENDING"), headRepository={"nameWithOwner": "o/r"}, author={"login": "mallory"})
+	payload = json.dumps(_own_payload([fork, other]))
+	result, state = _judge(tmp_path, ISSUE, verdict=REISSUE, FAKE_GH_GRAPHQL=payload, UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED="true",
+		FAKE_GH_FAIL_VARIABLE_READ="1")
+	assert result.returncode == 0, result.stderr
+	assert "op=own_prs outcome=ok count=0 reason=reused" in result.stdout, result.stdout + result.stderr
+	assert "repos/o/r/actions/variables/MERGE_LEASE_WAIT_LABEL" not in state.get("actions_reads", [])
+	assert "outcome=refused" not in result.stdout
+	assert len(state["created"]) == 1
