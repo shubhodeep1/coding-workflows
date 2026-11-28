@@ -231,7 +231,10 @@ def _verify(tmp_path: Path, repo: Path, head: str, *, green: bool = True, docs_o
 	approved = parent.stdout.strip() if parent.returncode == 0 else APPROVED
 	runs = [_run_entry(approved)] if green else []
 	env = _clean_env(PATH=f"{bin_dir}:{os.environ.get('PATH', '')}", FAKE_GH_LOG=str(log), FAKE_GH_RUNS=json.dumps({"workflow_runs": runs}),
-		CI_SYNC_QUICK_HEAD_SHA=head, CI_SYNC_QUICK_REPOSITORY="o/r", CI_SYNC_QUICK_PR_NUMBER="7", CI_SYNC_QUICK_DOCS_ONLY=docs_only)
+		CI_SYNC_QUICK_HEAD_SHA=head, CI_SYNC_QUICK_REPOSITORY="o/r", CI_SYNC_QUICK_PR_NUMBER="7", CI_SYNC_QUICK_DOCS_ONLY=docs_only,
+		# Delta final CI off: these fixtures pin the pre-delta verdicts
+		# (tests/test_ci_sync_quick_delta.py covers the delta branch).
+		MERGE_BASE_SYNC_DELTA_CI_ENABLED="false")
 	return subprocess.run(["bash", str(SCRIPT), "verify"], cwd=repo, capture_output=True, text=True, env=env, check=False)
 
 
@@ -263,7 +266,7 @@ def test_verify_fails_when_a_code_file_overlaps(tmp_path: Path) -> None:
 		pr_touches={".github/workflows/ci.yml": _ci_yml("bottom"), "scripts/tool.sh": "echo zero\necho one\n"})
 	result = _verify(tmp_path, repo, update)
 	assert result.returncode == 1
-	assert "reason=overlap_not_ci_wiring first=scripts/tool.sh" in result.stdout
+	assert "reason=delta_disabled first=scripts/tool.sh" in result.stdout
 
 
 def test_verify_fails_when_the_approved_head_had_no_full_green_run(tmp_path: Path) -> None:
@@ -323,7 +326,7 @@ def test_verify_fails_on_an_unusable_head_sha(tmp_path: Path) -> None:
 
 def _run_tests(repo: Path, head: str) -> subprocess.CompletedProcess:
 	return subprocess.run(["bash", str(SCRIPT), "run-tests"], cwd=repo, capture_output=True, text=True,
-		env=_clean_env(CI_SYNC_QUICK_HEAD_SHA=head), check=False)
+		env=_clean_env(CI_SYNC_QUICK_HEAD_SHA=head, MERGE_BASE_SYNC_DELTA_CI_ENABLED="false"), check=False)
 
 
 def test_run_tests_runs_the_prs_own_test_files(tmp_path: Path) -> None:
@@ -391,6 +394,8 @@ echo "rc=$?"
 		PR_CHECKS_REPOSITORY="owner/repo",
 		REVIEW_FINAL_CI_WORKFLOW="ci.yml",
 		MERGE_BASE_SYNC_HEAD_POLL_SECONDS="1",
+		# Pre-delta verdicts; tests/test_ci_sync_quick_delta.py turns it on.
+		MERGE_BASE_SYNC_DELTA_CI_ENABLED="false",
 	)
 	run_env.update(env or {})
 	for name in [key for key, value in run_env.items() if value == "__unset__"]:

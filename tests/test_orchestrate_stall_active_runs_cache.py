@@ -106,6 +106,7 @@ def _run_judge_streak_block(stored: int | None, unverifiable: str) -> tuple[str,
 			"  local _judge_state_file_ready=true _judge_state_file=state.json\n"
 			"  local judge_action=escalate_human issue_num=42 _judge_force_escalate=false\n"
 			"  local phase=ai:done recovery_count=1\n"
+			"  local _sj_review_waiting_for_runner=false\n"
 			+ block
 			+ '  echo "EFFECTIVE=${effective_action}"\n'
 			"}\n"
@@ -152,6 +153,7 @@ def _run_judge_effective_label(effective: str, unverifiable: str) -> str:
 			"set -euo pipefail\n"
 			"run_block() {\n"
 			f"  local effective_action={effective}\n"
+			"  local _sj_review_runner_hold=false\n"
 			+ block
 			+ '  echo "LABEL=${_judge_effective_label}"\n'
 			"}\n"

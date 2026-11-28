@@ -78,6 +78,32 @@ fi
 if ! type rb_security_disable_auto_merge >/dev/null 2>&1; then
   rb_security_disable_auto_merge() { return 1; }
 fi
+# Issue #10057: a security finding on a path the review editor may not change
+# (review ledger STATUS: unreachable with UNREACHABLE_SECURITY: true, written
+# by scripts/review_issue_ledger.sh) keeps the PR blocked for the judge too.
+# Every judge merge path (merge, merge_with_followup, a final-attempt fix, a
+# fix that staged no change) goes through rb_security_merge_gate, so the
+# check wraps that gate: on a hold it returns 1 with
+# RB_SECURITY_HOLD_REASON=unreachable_security_hold and the existing hold
+# branches skip the merge. A missing ledger means no hold was recorded;
+# REVIEW_UNREACHABLE_FOLLOWUP_ENABLED=false turns the check off.
+rb_unreachable_security_hold_active() {
+  local rb_hold_ledger="${REVIEW_LEDGER_PATH:-.ai/review_issue_ledger/pr-${PR_NUMBER:-0}.txt}"
+  case "$(printf '%s' "${REVIEW_UNREACHABLE_FOLLOWUP_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+    false|0|no|off) return 1 ;;
+  esac
+  [ -f "${rb_hold_ledger}" ] || return 1
+  awk '/^=== ENTRY / { st = 0; sec = 0 } /^STATUS: unreachable$/ { st = 1 } /^UNREACHABLE_SECURITY: true$/ { sec = 1 } /^=== END ENTRY ===$/ { if (st && sec) found = 1 } END { exit !found }' "${rb_hold_ledger}" 2>/dev/null
+}
+eval "_rb_unreachable_inner_merge_gate() $(declare -f rb_security_merge_gate | tail -n +2)"
+rb_security_merge_gate() {
+  if rb_unreachable_security_hold_active; then
+    RB_SECURITY_HOLD_REASON="unreachable_security_hold"
+    echo "AUTOFIX_AUTO_MERGE_HEAD_BOUND pr=${PR_NUMBER:-?} head_sha=${RB_JUDGED_HEAD_SHA:-unknown} action=refuse reason=unreachable_security_hold judge_action=${RB_ACTION:-unknown}"
+    return 1
+  fi
+  _rb_unreachable_inner_merge_gate
+}
 OPENCODE_HELPERS_PATH="${OPENCODE_HELPERS_PATH:-${SUPPORT_SCRIPTS_DIR}/opencode_helpers.sh}"
 OPENCODE_CONFIG_WRITER_PATH="${OPENCODE_CONFIG_WRITER_PATH:-${SUPPORT_SCRIPTS_DIR}/write_opencode_config.sh}"
 # shellcheck source=/dev/null
@@ -713,11 +739,27 @@ render_review_rb_prior_round_decisions_file() {
   local out_path="$2"
   local tmp_path=""
 
+  local rb_unreachable_only=0
+
   : > "${out_path}"
-  if ! flag_enabled "${REVIEW_LEDGER_ENABLED:-1}" || ! flag_enabled "${REVIEW_LEDGER_REREVIEW_ENABLED:-0}"; then
+  if ! flag_enabled "${REVIEW_LEDGER_ENABLED:-1}"; then
     return 0
   fi
+  if ! flag_enabled "${REVIEW_LEDGER_REREVIEW_ENABLED:-0}"; then
+    # Issue #10057: the judge must see unreachable findings (and their
+    # security hold) even with rereview off, so in that case only the
+    # status=unreachable rows are rendered. Switch off restores the empty file.
+    case "$(printf '%s' "${REVIEW_UNREACHABLE_FOLLOWUP_ENABLED:-true}" | tr '[:upper:]' '[:lower:]')" in
+      false|0|no|off)
+        return 0
+        ;;
+    esac
+    rb_unreachable_only=1
+  fi
   if [ ! -s "${ledger_path}" ]; then
+    return 0
+  fi
+  if [ "${rb_unreachable_only}" = "1" ] && ! grep -q '^STATUS: unreachable$' "${ledger_path}" 2>/dev/null; then
     return 0
   fi
   if ! command -v python3 >/dev/null 2>&1; then
@@ -726,11 +768,13 @@ render_review_rb_prior_round_decisions_file() {
   fi
 
   tmp_path="$(mktemp)" || return 0
-  if PYTHONDONTWRITEBYTECODE=1 python3 - "${ledger_path}" > "${tmp_path}" <<'PY'
+  if PYTHONDONTWRITEBYTECODE=1 python3 - "${ledger_path}" "${rb_unreachable_only}" > "${tmp_path}" <<'PY'
 from pathlib import Path
+import re
 import sys
 
 ledger_path = Path(sys.argv[1])
+unreachable_only = len(sys.argv) > 2 and sys.argv[2] == "1"
 raw = ledger_path.read_text(encoding="utf-8", errors="replace").splitlines()
 
 entries = []
@@ -784,11 +828,17 @@ flush_current()
 
 for entry in sorted(entries, key=lambda item: item.get("ISSUE_ID", "")):
     status = clean(entry.get("STATUS", ""))
+    if unreachable_only and status != "unreachable":
+        continue
     editor_text = entry.get("EDITOR_OUTCOMES", "")
     editor_lower = editor_text.lower()
     prior_decision = ""
     if status == "accepted-residual":
         prior_decision = "accepted-residual"
+    elif status == "unreachable":
+        # Issue #10057: a finding on a path the review editor cannot change,
+        # tracked in the PR's follow-up issue.
+        prior_decision = "unreachable-followup"
     elif (
         "won't fix" in editor_lower
         or "wont fix" in editor_lower
@@ -809,6 +859,10 @@ for entry in sorted(entries, key=lambda item: item.get("ISSUE_ID", "")):
         f'persist_count={clean(entry.get("PERSIST_COUNT", "")) or "0"}',
         f'editor_outcomes={editor_text or "none"}',
     ]
+    if status == "unreachable":
+        followup = clean(entry.get("UNREACHABLE_FOLLOWUP", ""))
+        parts.append(f'followup={followup if re.fullmatch(r"#[1-9][0-9]{0,9}", followup) else "pending"}')
+        parts.append(f'security_hold={"true" if clean(entry.get("UNREACHABLE_SECURITY", "")) == "true" else "false"}')
     print("; ".join(parts))
 PY
   then
@@ -3002,10 +3056,15 @@ if [ "${RB_MERGE_ACTION}" = "true" ] && [ "${PR_ALREADY_MERGED:-false}" != "true
     RB_SECURITY_FINAL_FIX_NOTE="The final-attempt fix is treated as a merge because judge fix retries are exhausted; no fix commit was created. "
   fi
   echo "Judge chose ${RB_ACTION} for PR #${PR_NUMBER}; ${RB_SECURITY_FINAL_FIX_NOTE}the single-issue security pass holds the merge."
+  RB_SECURITY_HOLD_DETAIL="This PR's single-issue security audit has not passed for its current head, so the merge waits. The audit result re-runs the review, and the judge decides again then."
+  if [ "${RB_SECURITY_HOLD_REASON:-}" = "unreachable_security_hold" ]; then
+    # Issue #10057: the hold comes from the review ledger, not the audit.
+    RB_SECURITY_HOLD_DETAIL="A security finding on a file the review editor may not change in this PR is still open (review ledger status unreachable, security hold). It is tracked in the PR's follow-up issue and does not clear inside this PR; a person decides the merge."
+  fi
   rb_judge_post_issue_comment \
     -f body="## Review-Blocked Judge — merge held for the security pass
 
-The judge chose **${RB_ACTION}**. ${RB_SECURITY_FINAL_FIX_NOTE}This PR's single-issue security audit has not passed for its current head, so the merge waits. The audit result re-runs the review, and the judge decides again then." >/dev/null 2>&1 || true
+The judge chose **${RB_ACTION}**. ${RB_SECURITY_FINAL_FIX_NOTE}${RB_SECURITY_HOLD_DETAIL}" >/dev/null 2>&1 || true
   echo "judge_handled=true" >> "$GITHUB_OUTPUT"
   echo "judge_action=security_hold" >> "$GITHUB_OUTPUT"
   echo "judge_skip_reason=security_hold_${RB_SECURITY_HOLD_REASON:-unknown}" >> "$GITHUB_OUTPUT"
@@ -3441,7 +3500,7 @@ case "${RB_ACTION}" in
         # instead; other failures still fall through at once.
         # Gates first: the head-gate success status is posted only for a
         # merge request that actually follows it, right before it.
-        if ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
+        if ! { PR_CHECKS_REPOSITORY="${REPOSITORY}" PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}" || { type _pr_base_sync_inline_merge >/dev/null 2>&1 && PR_CHECKS_REPOSITORY="${REPOSITORY}" FINAL_CI_MERGE_RESUME_ENABLED=false _pr_base_sync_inline_merge "${REPOSITORY}" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_SYNC_MERGE_SHA:-}" "${PR_BASE_FRESHNESS_BASE_REF:-${PR_BASE_REF:-}}" && RB_JUDGED_HEAD_SHA="${PR_BASE_SYNC_INLINE_HEAD}"; }; }; then
           if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
             echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, merge deferred to the synchronize run."
             RB_MERGE_STATUS="deferred_base_moved"
@@ -3569,7 +3628,7 @@ case "${RB_ACTION}" in
         # Best-effort merge — see note above re: gh_retry.
         # Gates first: the head-gate success status is posted only for a
         # merge request that actually follows it, right before it.
-        if ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}"; then
+        if ! { PR_CHECKS_REPOSITORY="${REPOSITORY}" PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF:-}" || { type _pr_base_sync_inline_merge >/dev/null 2>&1 && PR_CHECKS_REPOSITORY="${REPOSITORY}" FINAL_CI_MERGE_RESUME_ENABLED=false _pr_base_sync_inline_merge "${REPOSITORY}" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_SYNC_MERGE_SHA:-}" "${PR_BASE_FRESHNESS_BASE_REF:-${PR_BASE_REF:-}}" && RB_JUDGED_HEAD_SHA="${PR_BASE_SYNC_INLINE_HEAD}"; }; }; then
           if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
             echo "Review-blocked judge: base moved under files PR #${PR_NUMBER} touches; branch update requested, terminal merge deferred to the synchronize run."
             RB_MERGE_STATUS="deferred_base_moved"
@@ -4174,7 +4233,7 @@ Leaving the PR's linked issues in ai:review-blocked. The workflow's review-block
               fi
             fi
           elif [ "${ENABLE_AUTO_MERGE}" = "true" ] \
-            && ! PR_CHECKS_REPOSITORY="${REPOSITORY}" _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}"; then
+            && ! { PR_CHECKS_REPOSITORY="${REPOSITORY}" PR_BASE_SYNC_INLINE_CALLER=true _pr_base_fresh_for_merge "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_REF}" || { type _pr_base_sync_inline_merge >/dev/null 2>&1 && PR_CHECKS_REPOSITORY="${REPOSITORY}" FINAL_CI_MERGE_RESUME_ENABLED=false _pr_base_sync_inline_merge "${REPOSITORY}" "${PR_NUMBER}" "${RB_JUDGED_HEAD_SHA}" "${PR_BASE_SYNC_MERGE_SHA:-}" "${PR_BASE_FRESHNESS_BASE_REF:-${PR_BASE_REF:-}}" && RB_JUDGED_HEAD_SHA="${PR_BASE_SYNC_INLINE_HEAD}"; }; }; then
             # Merge-base freshness gate (Q35: A): the base moved under files
             # this PR touches; the update's synchronize run re-validates.
             if [ "${PR_BASE_FRESHNESS_OUTCOME:-}" = "overlap" ]; then
