@@ -5,13 +5,27 @@
   "entry_id": "processed_command_10076_7243198700_approved",
   "issue_number": 10076,
   "metadata": {
+    "branch": "ai/issue-10076",
+    "changed_files": [
+      ".github/workflows/promote-main-to-stable.yml",
+      "README.md",
+      "agents.d/10076-promote-hold-gate.md",
+      "agents.d/9342-stable-rollback.md",
+      "changelog.d/10076-promote-hold-gate.md",
+      "tests/test_promote_main_to_stable_push_retry.py"
+    ],
+    "issue_number": 10076,
     "issue_url": "https://github.com/shubhodeep1/coding-workflows/issues/10076",
+    "pr_number": 10277,
+    "pr_url": "https://github.com/shubhodeep1/coding-workflows/pull/10277",
+    "run_attempt": "1",
+    "run_id": "46171741011",
     "run_url": "https://github.com/shubhodeep1/coding-workflows/actions/runs/46171741011"
   },
   "run_attempt": 1,
   "run_id": "46171741011",
   "schema_version": "processed_command_entry.v1",
-  "status": "claimed",
-  "timestamp": "2026-11-28T17:45:46Z",
+  "status": "completed",
+  "timestamp": "2026-11-28T18:19:56Z",
   "workflow": "implement"
 }
