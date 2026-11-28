@@ -1,0 +1,39 @@
+{
+  "category": "patterns",
+  "confidence": 0.7,
+  "details": "=== CONSENSUS FINDINGS ===\n- prompts/_templates/mode-issue-pr-audit.txt:1 | severity=low | confidence=5\n  flagged_by: [google_gemini-3_1-flash-lite]\n  PROBLEM: The reviewer's entry titled \"Content verification\" reports no defect. It confirms that line 1 is the include of `_prelude_common.txt` and that the template matches the live prompt.\n  WHY: The reviewer states that the assembly and parity tests cover the requirement and that the fix run confirmed byte-for-byte parity. Severity was not stated in the source, so low is a placeholder.\n=== END CONSENSUS FINDINGS ===\n\n=== CONSENSUS TASK GAPS ===\n- requirement: Pass the repository variable `APPLY_ANALYSIS_DOC_GLOB_EXTRA` to the hand-off steps in `.github/workflows/orchestrate_poll.yml` and `.github/workflows/promote-main-to-stable.yml`.\n  expected_change_site: .github/workflows/orchestrate_poll.yml and .github/workflows/promote-main-to-stable.yml\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The linked issue lists this as \"Out of scope (track separately)\", so the reviewer concluded it is not a gap.\n- requirement: Real token and cost figures in the Metrics Appendix.\n  expected_change_site: scripts/issue_pr_audit.py\n  confidence=[5]\n  flagged_by: [google_gemini-3_1-flash-lite]\n  EVIDENCE: The linked issue lists this as \"Out of scope (track separately)\", so the reviewer concluded it is not a gap.\n=== END CONSENSUS TASK GAPS ===\n\n=== FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n(No findings reported.)\n=== END FINDINGS FROM anthropic_claude-sonnet-5_5 ===\n\n=== FINDINGS FROM google_gemini-3_1-flash-lite ===\n- prompts/_templates/mode-issue-pr-audit.txt:1 | confidence=5\n  PROBLEM: Content verification. This is not a defect report.\n  WHY: Line 1 is the include of `_prelude_common.txt`, followed by lines 9-43 of `prompts/mode-issue-pr-audit.txt`. The reviewer says `test_assemble_prompt.py` covers this parity and that the fix run confirmed byte-for-byte matching.\n- TASK_GAP: Requirement: \"Pass the repository variable `APPLY_ANALYSIS_DOC_GLOB_EXTRA` to the hand-off steps in `.github/workflows/orchestrate_poll.yml` and `.github/workflows/promote-main-to-stable.yml`.\"\n  Expected change site: .github/workflows/orchestrate_poll.yml and .github/workflows/promote-main-to-stable.yml\n  Evidence of absence: The linked issue explicitly states this requirement is \"Out of scope (track separately)\". As per the instructions, this is not a gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n- TASK_GAP: Requirement: \"Real token and cost figures in the Metrics Appendix.\"\n  Expected change site: scripts/issue_pr_audit.py\n  Evidence of absence: The linked issue explicitly states this requirement is \"Out of scope (track separately)\". As per the instructions, this is not a gap.\n  SEVERITY: NIT\n  ISSUE_CONFIDENCE: 5\n=== END FINDINGS FROM google_gemini-3_1-flash-lite ===\n\n=== FINDINGS FROM minimax_minimax-m3 ===\n(No findings reported.)\n=== END FINDINGS FROM minimax_minimax-m3 ===\n\n=== FINDINGS FROM openai_gpt-6-luna ===\n(No findings reported.)\n=== END FINDINGS FROM openai_gpt-6-luna ===\n\n=== FINDINGS FROM z-ai_glm-5_3-flash ===\n(No findings reported.)\n=== END FINDINGS FROM z-ai_glm-5_3-flash ===",
+  "fingerprint": "540a5918ccf2a6abdddace1f0b7d6892e2f528d54015daf0e4d868133df25295",
+  "lineage": {
+    "issue_number": null,
+    "parent_ids": [],
+    "pr_number": 10237,
+    "run_id": "46143138790",
+    "superseded_by": null,
+    "supersedes": null
+  },
+  "provenance": {
+    "actor": "shubhodeep1",
+    "run_attempt": 1,
+    "run_id": "46143138790",
+    "source_refs": [
+      "reviewer_consensus.txt"
+    ],
+    "workflow": "review_autofix"
+  },
+  "record_id": "mem_20261128131805_c8a8a792ed",
+  "schema_version": "memory_record.v1",
+  "scope": {
+    "issue_number": null,
+    "level": "run",
+    "pr_number": 10237,
+    "run_id": "46143138790"
+  },
+  "sensitive": false,
+  "status": "candidate",
+  "summary": "Reviewer consensus produced 3 consensus item(s); none flagged by multiple reviewers",
+  "timestamps": {
+    "created_at": "2026-11-28T13:18:05Z",
+    "promoted_at": null,
+    "superseded_at": null
+  }
+}
