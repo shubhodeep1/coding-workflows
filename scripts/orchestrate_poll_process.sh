@@ -21421,19 +21421,46 @@ STANDALONE_STATE_MARKER_CLOSE="AI_STANDALONE_STALL_STATE_V1 -->"
 # GitHub API just to re-parse the same data, which was previously a
 # significant contributor to rate-limit pressure during standalone stall
 # recovery sweeps.
+#
+# Security (#9718): any commenter can post a body carrying the marker, so a
+# state comment counts only when its author is the pipeline's own login
+# (UNBLOCK_TRUSTED_LOGIN, the GH_PAT user that write_standalone_state_json
+# posts as), the same author filter extract_latest_valid_orchestrator_state
+# applies to ORCHESTRATOR_STATE_V1. The login is read from the global, so a
+# caller in a $(...) subshell does not repeat the `user` lookup; resolve it in
+# the parent shell first (run_standalone_stall_recovery does). An empty login
+# trusts no comment (fail closed): the parsers then return the default state
+# and no comment id.
+_standalone_state_trusted_login() {
+  if [ -z "${UNBLOCK_TRUSTED_LOGIN:-}" ] && [ "${UNBLOCK_TRUSTED_LOGIN_STATE:-unset}" = "unset" ]; then
+    unblock_trusted_login >/dev/null 2>&1 || true
+  fi
+  printf '%s' "${UNBLOCK_TRUSTED_LOGIN:-}"
+}
+
 _extract_standalone_state_comment_id_from_comments() {
   local comments_json="$1"
+  local _std_state_login
+  _std_state_login="$(_standalone_state_trusted_login)"
+  [ -n "${_std_state_login}" ] || return 0
   printf '%s' "${comments_json:-[]}" \
-    | jq -r --arg marker "${STANDALONE_STATE_MARKER_OPEN}" '(. // []) | [.[] | select((.body // "") | contains($marker))] | max_by(.created_at // "") | .id // ""' \
+    | jq -r --arg marker "${STANDALONE_STATE_MARKER_OPEN}" --arg login "${_std_state_login}" '(. // []) | [.[] | select(((.user.login // "") == $login) and ((.body // "") | contains($marker)))] | max_by(.created_at // "") | .id // ""' \
     2>/dev/null || true
 }
 
 _extract_standalone_state_json_from_comments() {
   local comments_json="$1"
   local state_raw
-  state_raw="$(printf '%s' "${comments_json:-[]}" \
-    | jq -r --arg marker "${STANDALONE_STATE_MARKER_OPEN}" '(. // []) | [.[] | select((.body // "") | contains($marker))] | max_by(.created_at // "") | .body // ""' \
-    2>/dev/null || echo "")"
+  local _std_state_login
+  # Security (#9718): only the pipeline's own state comments count; see
+  # _standalone_state_trusted_login above. Empty login: default state.
+  _std_state_login="$(_standalone_state_trusted_login)"
+  state_raw=""
+  if [ -n "${_std_state_login}" ]; then
+    state_raw="$(printf '%s' "${comments_json:-[]}" \
+      | jq -r --arg marker "${STANDALONE_STATE_MARKER_OPEN}" --arg login "${_std_state_login}" '(. // []) | [.[] | select(((.user.login // "") == $login) and ((.body // "") | contains($marker)))] | max_by(.created_at // "") | .body // ""' \
+      2>/dev/null || echo "")"
+  fi
 
   if [ -z "${state_raw}" ] || [ "${state_raw}" = "null" ]; then
     echo '{"schema_version":1,"last_seen_phase":"","status_since_ts":0,"stall_recovery_count":0,"phase_attempts":{},"conflict_override_count":{},"judge_escalate_streak":{},"failure_fingerprints":[]}'
@@ -25591,6 +25618,8 @@ invoke_stall_judge() {
   local target_pr=""
   local pr_state=""
   local pr_mergeable=""
+  local pr_merged=""
+  local pr_merged_at=""
   local head_ref=""
   local base_ref=""
   local head_sha=""
@@ -25603,6 +25632,16 @@ invoke_stall_judge() {
       linked_pr_json="$(_fetch_pr_json "${linked_pr}")"
     fi
     pr_state="$(_jq_field "${linked_pr_json}" '.state' 'open|closed|merged')"
+    # Issue #9482: REST `.state` is `closed` for a merged PR, so the judge
+    # could not tell a merged PR from an abandoned one. Read the merge
+    # signal from the payload already in hand (no extra API call).
+    pr_merged="$(_jq_field "${linked_pr_json}" '.merged' 'true|false')"
+    pr_merged_at="$(_jq_field "${linked_pr_json}" '.merged_at')"
+    # `.merged` is authoritative when present; merged_at only fills in when
+    # the payload lacks a boolean merged field.
+    if [ "${pr_merged}" = "true" ] || { [ -z "${pr_merged}" ] && [ -n "${pr_merged_at}" ]; }; then
+      pr_state="merged"
+    fi
     pr_mergeable="$(_jq_field "${linked_pr_json}" '.mergeable' 'true|false')"
     head_ref="$(_jq_field "${linked_pr_json}" '.head.ref')"
     base_ref="$(_jq_field "${linked_pr_json}" '.base.ref')"
@@ -25785,6 +25824,8 @@ invoke_stall_judge() {
     --arg target_pr "${target_pr}" \
     --arg pr_state "${pr_state}" \
     --arg pr_mergeable "${pr_mergeable}" \
+    --arg pr_merged "${pr_merged}" \
+    --arg pr_merged_at "${pr_merged_at}" \
     --arg head_ref "${head_ref}" \
     --arg base_ref "${base_ref}" \
     --argjson workflow_outcomes "${workflow_outcomes}" \
@@ -25801,6 +25842,8 @@ invoke_stall_judge() {
         number: (if $target_pr == "" then null else ($target_pr | tonumber) end),
         state: (if $pr_state == "" then null else $pr_state end),
         mergeable: (if $pr_mergeable == "" then null else ($pr_mergeable == "true") end),
+        merged: (if $pr_merged == "" then null else ($pr_merged == "true") end),
+        merged_at: (if $pr_merged_at == "" then null else $pr_merged_at end),
         head_ref: (if $head_ref == "" then null else $head_ref end),
         base_ref: (if $base_ref == "" then null else $base_ref end)
       },
@@ -25825,6 +25868,8 @@ invoke_stall_judge() {
       --arg target_pr "${target_pr}" \
       --arg pr_state "${pr_state}" \
       --arg pr_mergeable "${pr_mergeable}" \
+      --arg pr_merged "${pr_merged}" \
+      --arg pr_merged_at "${pr_merged_at}" \
       --arg head_ref "${head_ref}" \
       --arg base_ref "${base_ref}" \
       '{
@@ -25837,6 +25882,8 @@ invoke_stall_judge() {
           number: (if $target_pr == "" then null else ($target_pr | tonumber? // null) end),
           state: (if $pr_state == "" then null else $pr_state end),
           mergeable: (if $pr_mergeable == "" then null else ($pr_mergeable == "true") end),
+          merged: (if $pr_merged == "" then null else ($pr_merged == "true") end),
+          merged_at: (if $pr_merged_at == "" then null else $pr_merged_at end),
           head_ref: (if $head_ref == "" then null else $head_ref end),
           base_ref: (if $base_ref == "" then null else $base_ref end)
         },
@@ -26100,6 +26147,21 @@ invoke_stall_judge() {
       && _stall_judge_linked_pr_keeps_escalation "${issue_num}" "${linked_pr_json}" "${_keep_escalation_managed}" "${_keep_escalation_declared}"; then
     effective_action="escalate_human"
     echo "STALL_RECOVERY issue=${issue_num} reason=judge_escalate_kept linked_pr=${_STALL_KEEP_ESCALATION_REASON} pr=${target_pr:-none} base=$(_close_sweep_log_ref "${_STALL_KEEP_ESCALATION_BASE}" "unknown") phase=${phase}"
+  # Issue #9482: normalising escalate_human to attempt_merge is a guaranteed
+  # no-op when the linked PR is already closed or merged, so the issue would
+  # loop forever. Keep the judge's escalation in that case. An empty
+  # pr_state (fetch failure) is inconclusive and keeps the normalisation.
+  # The #9481 branch above already keeps every closed-unmerged PR and every
+  # PR merged into a non-target base, whoever authored it, so this elif in
+  # practice adds the PR merged into a target base. target_pr is only the
+  # last cross-reference, so require it to be the issue's implementation PR
+  # (payload already in hand, no API call) before keeping on that basis
+  # (#3816 / #3828 mis-target).
+  elif [ "${judge_action}" = "escalate_human" ] && [ "${effective_action}" = "attempt_merge" ] && \
+     [[ "${target_pr}" =~ ^[0-9]+$ ]] && { [ "${pr_state}" = "closed" ] || [ "${pr_state}" = "merged" ]; } && \
+     _pr_json_is_issue_implementation_pr "${issue_num}" "${linked_pr_json}"; then
+    effective_action="escalate_human"
+    echo "::notice::Stall judge action 'escalate_human' kept for issue #${issue_num}: linked PR #${target_pr} is ${pr_state}, so 'attempt_merge' cannot act (head=${head_ref:-unknown})."
   fi
   # Issue #10149: a review run of the PR's current head is waiting for a
   # runner, so escalating or closing the PR now would act on a review that
@@ -27739,6 +27801,9 @@ _reconcile_merged_pr_issue() {
 _STALL_STANDALONE_DEFAULT_BRANCH=""
 # Set once the lookup ran, so a failed read is not repeated per candidate.
 _STALL_STANDALONE_DEFAULT_BRANCH_TRIED=false
+# Issue #9482: set to true when the reconcile printed its own STALL_SKIP line,
+# so the caller does not log a second STALL_SKIP for the same skip.
+_STALL_STANDALONE_NT_SKIP_LOGGED=false
 # _stall_standalone_default_branch_resolve — fill _STALL_STANDALONE_DEFAULT_BRANCH
 # once per poller process (CWS_DEFAULT_BRANCH, else one memoized repos/<repo>
 # read). Shared by _reconcile_standalone_merged_pr_issue and the stall judge's
@@ -27806,6 +27871,7 @@ _reconcile_standalone_merged_pr_issue() {
   local issue_json_file="$6"
   local labels_json="${7:-[]}"
   local _stall_nt_base _stall_nt_body _stall_nt_declared _stall_nt_managed _stall_nt_pr_json
+  _STALL_STANDALONE_NT_SKIP_LOGGED=false
 
   _stall_nt_base="$(printf '%s' "${linked_json}" | jq -r '(.base_ref // .base.ref // "") | strings' 2>/dev/null | tr -d '\r\n' || echo "")"
   if [ -z "${_stall_nt_base}" ]; then
@@ -27838,6 +27904,7 @@ _reconcile_standalone_merged_pr_issue() {
     return 0
   fi
 
+  _STALL_STANDALONE_NT_SKIP_LOGGED=true
   echo "STALL_SKIP issue=${issue_num} reason=merged_non_target_base pr=${pr_num} base=$(_close_sweep_log_ref "${_stall_nt_base}" "unknown") declared=$(_close_sweep_log_ref "${_stall_nt_declared}" "none") phase=${phase} action=${action}"
   if printf '%s' "${labels_json}" | jq -e 'index("ai:check-triage") != null' >/dev/null 2>&1; then
     _stall_check_triage_resolution_gate "${issue_num}" "${pr_num}"
@@ -30240,9 +30307,21 @@ run_standalone_stall_recovery() {
   local _pr_dependency_reason
   local _pr_dependency_login
   local _pr_dependency_comments_complete
+  # Issue #9482: implementation PR resolved by the merged-guard fallback,
+  # reused by attempt_merge so the tick does not fetch it twice.
+  local _std_prefetched_impl_pr_num=""
+  local _std_prefetched_impl_pr_json=""
+  # Failure reason when that fallback ran and missed; attempt_merge reuses it
+  # instead of repeating the same discovery in the same tick.
+  local _std_prefetched_impl_pr_miss_reason=""
 
   for ((c_idx=0; c_idx<c_count; c_idx++)); do
     issue_num="$(echo "${candidates}" | jq -r ".[${c_idx}].number")"
+    _std_prefetched_impl_pr_num=""
+    _std_prefetched_impl_pr_json=""
+    _std_prefetched_impl_pr_miss_reason=""
+    # Issue #9482: per-candidate reset so a stale true never leaks across issues.
+    _STALL_STANDALONE_NT_SKIP_LOGGED=false
     [ -n "${issue_num}" ] || continue
 
     if [ -n "${orchestrator_managed_set}" ] && echo "${orchestrator_managed_set}" | grep -qxF "${issue_num}"; then
@@ -30550,6 +30629,16 @@ PY
       continue
     fi
 
+    # Security (#9718): the state comment is trusted only from the pipeline's
+    # own login. Resolve it here, in this shell, so the cached value reaches
+    # the parsers' subshells. Without it no state comment can be verified, and
+    # recovering from a default state would post a fresh state comment every
+    # tick, so skip the candidate (fail closed; counters untouched).
+    unblock_trusted_login >/dev/null 2>&1 || true
+    if [ -z "${UNBLOCK_TRUSTED_LOGIN:-}" ]; then
+      echo "::warning::STANDALONE_STATE_AUTHOR_FILTER issue=${issue_num} outcome=identity_unavailable action=skip" >&2
+      continue
+    fi
     state_comment_id="$(_extract_standalone_state_comment_id_from_comments "${comments_json}")"
     state_json="$(_extract_standalone_state_json_from_comments "${comments_json}")"
 
@@ -30769,17 +30858,35 @@ PY
       # falling back to the legacy timeline/body heuristics.
       _std_linked_json="$(_single_issue_linked_pr_status_graphql "${issue_num}")"
     fi
-    if [ "${phase}" = "ai:done" ] && { [ -z "${_std_linked_json}" ] || [ "${_std_linked_json}" = "null" ] || [ "${_std_linked_json}" = "{}" ]; }; then
+    local _std_resolver_phase="false"
+    case "${phase}" in
+      # Issue #9482: a PR merged into an integration branch
+      # (orchestrator/project-*) never sets willCloseTarget, so both GraphQL
+      # lookups miss it. ai:ready-to-merge needs the same resolver fallback
+      # as ai:done, or the merged guard never fires and attempt_merge loops.
+      ai:done|ai:ready-to-merge) _std_resolver_phase="true" ;;
+    esac
+    if [ "${_std_resolver_phase}" = "true" ] && { [ -z "${_std_linked_json}" ] || [ "${_std_linked_json}" = "null" ] || [ "${_std_linked_json}" = "{}" ]; }; then
       # Batch + single-query miss: reuse the established implementation-PR
       # resolver before any stall judge, conflict dispatch, or empty commit.
+      # A resolver failure leaves _std_linked_json as it was (fail open).
       if _resolve_issue_implementation_pr "${issue_num}"; then
         _std_linked_json="$(printf '%s' "${STALL_IMPL_PR_JSON}" | jq -c '{
           number: (.number // null), state: (.state // null), merged: (.merged // false),
+          merged_at: (.merged_at // null),
           labels: [(.labels // [])[]? | if type == "object" then (.name // empty) else . end],
           head_ref: (.head.ref // null), head_sha: (.head.sha // null), base_ref: (.base.ref // null),
           mergeable: (.mergeable // null), merge_state_status: (.mergeable_state // null),
           draft: (.draft // null), title: (.title // null)
         }' 2>/dev/null || echo "null")"
+        if [[ "${STALL_IMPL_PR_NUM}" =~ ^[0-9]+$ ]]; then
+          _std_prefetched_impl_pr_num="${STALL_IMPL_PR_NUM}"
+          _std_prefetched_impl_pr_json="${STALL_IMPL_PR_JSON}"
+        fi
+      else
+        # Empty reason is normalised to not_implementation_pr, matching how
+        # attempt_merge treats any non-pr_fetch_failed miss.
+        _std_prefetched_impl_pr_miss_reason="${STALL_IMPL_PR_FAILURE_REASON:-not_implementation_pr}"
       fi
     fi
     if [ "${phase}" = "ai:done" ] && _linked_pr_is_merge_queued "${_std_linked_json}"; then
@@ -30799,6 +30906,10 @@ PY
     if _check_merged_pr_guard "${issue_num}" "${_std_linked_json}"; then
       echo "  [standalone-stall] Issue #${issue_num} linked PR #${STALL_MERGED_PR_NUM} is MERGED — skipping '${action}'."
       _reconcile_standalone_merged_pr_issue "${issue_num}" "${phase}" "${action}" "${STALL_MERGED_PR_NUM}" "${_std_linked_json}" "${_security_dependency_issue_file}" "${labels_json}"
+      # One STALL_SKIP per skip: the non-target-base reconcile logs its own.
+      if [ "${_STALL_STANDALONE_NT_SKIP_LOGGED}" != "true" ]; then
+        echo "STALL_SKIP issue=${issue_num} reason=linked_pr_merged pr=${STALL_MERGED_PR_NUM} phase=${phase} action=${action}"
+      fi
       if [ -z "${state_comment_id}" ] || [ "${updated_state}" != "${state_json}" ]; then
         write_standalone_state_json "${issue_num}" "${updated_state}" "${state_comment_id}"
       fi
@@ -31598,16 +31709,26 @@ STALL_EOF
         # the most destructive mis-target of all, so never resolve the merge
         # candidate from a bare mention-only cross-reference (issue #3816 /
         # PR #3828 incident — the last cross-reference was an unrelated PR).
-        if _resolve_issue_implementation_pr "${issue_num}"; then
+        local merge_pr_json=""
+        if [[ "${_std_prefetched_impl_pr_num:-}" =~ ^[0-9]+$ ]]; then
+          # Issue #9482: the merged-guard fallback already resolved (and
+          # verified) the implementation PR this tick; reuse it.
+          merge_pr="${_std_prefetched_impl_pr_num:-}"
+          merge_pr_json="${_std_prefetched_impl_pr_json:-}"
+        elif [ -n "${_std_prefetched_impl_pr_miss_reason:-}" ]; then
+          # The fallback already ran the resolver this tick and missed; reuse
+          # its failure reason rather than repeating discovery and fetches.
+          merge_pr=""
+          STALL_IMPL_PR_FAILURE_REASON="${_std_prefetched_impl_pr_miss_reason:-}"
+        elif _resolve_issue_implementation_pr "${issue_num}"; then
           merge_pr="${STALL_IMPL_PR_NUM}"
+          merge_pr_json="${STALL_IMPL_PR_JSON:-}"
         else
           merge_pr=""
         fi
         if [[ "${merge_pr}" =~ ^[0-9]+$ ]]; then
-          local merge_pr_json
           local merge_state
           local merge_mergeable
-          merge_pr_json="${STALL_IMPL_PR_JSON:-}"
           [ -n "${merge_pr_json}" ] || merge_pr_json="$(gh_retry gh api "repos/${GITHUB_REPOSITORY}/pulls/${merge_pr}" 2>/dev/null || echo "")"
           merge_state="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and .state?) then .state else empty end' 2>/dev/null | tail -n1)"
           merge_mergeable="$(printf '%s' "${merge_pr_json}" | jq -r 'if (type == "object" and (.mergeable == true or .mergeable == false)) then .mergeable else empty end' 2>/dev/null | tail -n1)"
