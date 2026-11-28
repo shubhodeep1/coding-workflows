@@ -241,6 +241,109 @@ fi
   echo
 } > "${PR_EDITOR_COMMENT_FILE}"
 
+# Review convergence rule (issue #10056). Findings the ledger stage marked
+# advisory-lone (one reviewer, no FLOOR_CRITICAL_KEYWORD tag, not a security
+# lens, from round REVIEW_CONVERGENCE_FROM_ROUND on) did not block this round;
+# list them here so they are never dropped silently. Rides on this step's
+# existing comment (no extra API call). Every field is re-sanitised: no
+# control characters, backticks, @, < or >, [ ] ( ) (no markdown links),
+# no URL scheme or # (no autolinks or cross-references), and the summary is
+# capped. A same-head resume restores the stubbed review_issues.txt without
+# the advisory TSV, so the rows are then rebuilt from its
+# `=== ADVISORY ISSUE` stubs. REVIEW_CONVERGENCE_ENABLED off (0|false|no|off,
+# parsed as in review_issue_ledger.sh) renders nothing.
+review_convergence_comment_file="${RUNTIME_DIR:-}/review_convergence_advisory.txt"
+review_convergence_comment_stub_tsv=""
+if [ -n "${RUNTIME_DIR:-}" ] && printf '%s' "${REVIEW_CONVERGENCE_ENABLED:-true}" | grep -qixE '0|false|no|off'; then
+  review_convergence_comment_file=""
+fi
+review_convergence_comment_issues="${RUNTIME_DIR:-}/review_issues.txt"
+if [ -n "${RUNTIME_DIR:-}" ] && [ -n "${review_convergence_comment_file}" ] \
+  && ! { [ -f "${review_convergence_comment_file}" ] && [ ! -L "${review_convergence_comment_file}" ] && [ -s "${review_convergence_comment_file}" ]; } \
+  && [ -f "${review_convergence_comment_issues}" ] && [ ! -L "${review_convergence_comment_issues}" ] \
+  && grep -qs '^=== ADVISORY ISSUE ' "${review_convergence_comment_issues}" \
+  && review_convergence_comment_stub_tsv="$(mktemp 2>/dev/null)"; then
+  LC_ALL=C awk '
+    function val(l,    v) {
+      v = substr(l, index(l, ":") + 1)
+      gsub(/\t/, " ", v)
+      sub(/^[[:space:]]+/, "", v)
+      sub(/[[:space:]]+$/, "", v)
+      return v
+    }
+    /^=== ADVISORY ISSUE .* ===$/ {
+      in_b = 1
+      id = $0
+      sub(/^=== ADVISORY ISSUE /, "", id)
+      sub(/ ===$/, "", id)
+      gsub(/\t/, " ", id)
+      f = ""; ln = ""; lens = ""; sev = ""; rv = ""; rd = ""; sm = ""
+      next
+    }
+    in_b && /^=== END ADVISORY ISSUE / {
+      printf "%s\t%s:%s\t%s\t%s\t%s\t%s\t%s\n", id, (f == "" ? "unknown" : f), (ln == "" ? "unknown" : ln), (lens == "" ? "UNKNOWN_LENS" : lens), (sev == "" ? "unknown" : sev), (rv == "" ? "none" : rv), (rd == "" ? "unknown" : rd), (sm == "" ? "no summary" : sm)
+      in_b = 0
+      next
+    }
+    in_b && /^FILE:/ { f = val($0); next }
+    in_b && /^LINES:/ { ln = val($0); next }
+    in_b && /^LENS:/ { lens = val($0); next }
+    in_b && /^SEVERITY:/ { sev = val($0); next }
+    in_b && /^CONVERGENCE_REVIEWERS:/ { rv = val($0); next }
+    in_b && /^CONVERGENCE_ROUND:/ { rd = val($0); next }
+    in_b && /^SUMMARY:/ { sm = val($0); next }
+  ' "${review_convergence_comment_issues}" > "${review_convergence_comment_stub_tsv}" 2>/dev/null \
+    || : > "${review_convergence_comment_stub_tsv}"
+  review_convergence_comment_file="${review_convergence_comment_stub_tsv}"
+fi
+if [ -n "${RUNTIME_DIR:-}" ] && [ -n "${review_convergence_comment_file}" ] && [ -f "${review_convergence_comment_file}" ] && [ ! -L "${review_convergence_comment_file}" ] \
+  && [ -s "${review_convergence_comment_file}" ]; then
+  review_convergence_comment_bullets="$(LC_ALL=C awk -F '\t' '
+    function clean(s, maxlen) {
+      gsub(/[[:cntrl:]]/, " ", s)
+      gsub(/[`@<>]/, "", s)
+      gsub(/[\[\]()]/, "", s)
+      gsub(/[A-Za-z][A-Za-z0-9+.-]*:\/\//, "", s)
+      gsub(/#/, "", s)
+      gsub(/[[:space:]]+/, " ", s)
+      sub(/^ /, "", s)
+      sub(/ $/, "", s)
+      if (maxlen > 0 && length(s) > maxlen) {
+        s = substr(s, 1, maxlen)
+        sub(/[\300-\377][\200-\277]*$/, "", s)
+      }
+      return s
+    }
+    NF >= 7 {
+      total++
+    }
+    NF >= 7 && n < 50 {
+      n++
+      printf "- `%s` (%s, %s) — raised by %s in round %s: %s\n", clean($2, 300), clean($3, 80), clean($4, 20), clean($5, 200), clean($6, 6), clean($7, 200)
+    }
+    END {
+      # The list is capped at 50 rows; say how many more there are so none
+      # is dropped silently.
+      if (total > n) {
+        printf "- ... and %d more not shown here (see the review ledger)\n", total - n
+      }
+    }
+  ' "${review_convergence_comment_file}" 2>/dev/null || true)"
+  if [ -n "${review_convergence_comment_bullets}" ]; then
+    {
+      echo "### Not blocking (one reviewer)"
+      echo
+      echo "From this review round on, a finding raised by only one reviewer (no critical floor tag, not a security finding) does not start another fix round. It is recorded in the review ledger and passed to the review-blocked judge."
+      echo
+      printf '%s\n' "${review_convergence_comment_bullets}"
+      echo
+    } >> "${PR_EDITOR_COMMENT_FILE}"
+  fi
+fi
+if [ -n "${review_convergence_comment_stub_tsv}" ]; then
+  rm -f "${review_convergence_comment_stub_tsv}"
+fi
+
 type gh_retry >/dev/null 2>&1 || gh_retry() { "$@"; }
 
 # Sandbox-excluded escalation (#8321). PR #8250 was re-reviewed 29 times on

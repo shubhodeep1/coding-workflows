@@ -20,6 +20,12 @@ Conservative merge rule:
 - If duplicate status is ambiguous, keep separate issue blocks.
 - When you merge, keep one survivor block and add `MERGED_FROM:` with prior ids.
 
+Reviewer attribution (FLAGGED_BY):
+- `FLAGGED_BY` must name every reviewer that raised the finding, including every reviewer of a merged duplicate.
+- Each name is the reviewer's `FILE_PATH:` basename without the `review_` prefix and the `.txt` suffix (for example `FILE_PATH: /tmp/previous_reviews/review_gpt-5.txt` is `gpt-5`). Each `EVIDENCE` line uses the same name before `>`.
+- A deterministic step checks every name against that reviewer's own file (a nearby `path:line` anchor or the quoted evidence). A name it cannot check does not count, so never add a reviewer that did not raise the finding.
+- Never emit `CLASSIFICATION: advisory-lone`; that value is reserved for the deterministic convergence step. The allowed CLASSIFICATION values below are unchanged.
+
 Required handling rules:
 - Do not emit JSON.
 - Do not emit markdown wrappers around the full output.
