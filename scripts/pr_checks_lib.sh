@@ -2619,7 +2619,12 @@ _pr_base_fresh_for_merge()
 			if ! _merge_lease_gate "${pr_number}" "${base_ref:-${PR_BASE_FRESHNESS_BASE_REF:-}}" "${PR_BASE_FRESHNESS_HEAD_SHA:-}" update; then
 				PR_BASE_FRESHNESS_OUTCOME="lease_wait"
 				PR_BASE_FRESHNESS_LAST_REASON="merge_lease_${MERGE_LEASE_REASON:-held}"
-				echo "  [merge-lease] PR #${pr_number}: the merge lease for ${base_ref:-${PR_BASE_FRESHNESS_BASE_REF:-the base}} is held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; not updating the branch. This PR is labelled ${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait} and is re-dispatched when the lease is granted to it."
+				if [ "${MERGE_LEASE_REASON:-}" = "source_issue_not_planned" ]; then
+					# Issue #10241 (G4): the gate unlabelled an orphan; no grant will come.
+					echo "  [merge-lease] PR #${pr_number}: its ai/issue-<n> source issue is closed as not planned, so the merge lease for ${base_ref:-${PR_BASE_FRESHNESS_BASE_REF:-the base}} is not granted to it; not updating the branch."
+				else
+					echo "  [merge-lease] PR #${pr_number}: the merge lease for ${base_ref:-${PR_BASE_FRESHNESS_BASE_REF:-the base}} is held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; not updating the branch. This PR is labelled ${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait} and is re-dispatched when the lease is granted to it."
+				fi
 				return 1
 			fi
 			local sync_max="${MERGE_BASE_FRESHNESS_MAX_SYNCS:-2}" sync_done=""
@@ -3327,7 +3332,12 @@ _pr_final_ci_wiring_behind_update()
 		return 0
 	fi
 	if ! _merge_lease_gate "${wiring_pr}" "${wiring_base}" "${wiring_head}" update; then
-		echo "  [merge-lease] PR #${wiring_pr}: the merge lease for ${wiring_base} is held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; not updating the branch's CI wiring. This PR is labelled ${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait} and is re-dispatched when the lease is granted to it."
+		if [ "${MERGE_LEASE_REASON:-}" = "source_issue_not_planned" ]; then
+			# Issue #10241 (G4): the gate unlabelled an orphan; no grant will come.
+			echo "  [merge-lease] PR #${wiring_pr}: its ai/issue-<n> source issue is closed as not planned, so the merge lease for ${wiring_base} is not granted to it; not updating the branch's CI wiring."
+		else
+			echo "  [merge-lease] PR #${wiring_pr}: the merge lease for ${wiring_base} is held by or queued for PR #${MERGE_LEASE_BLOCKER:-?}; not updating the branch's CI wiring. This PR is labelled ${MERGE_LEASE_WAIT_LABEL:-ai:merge-lease-wait} and is re-dispatched when the lease is granted to it."
+		fi
 		_pr_final_ci_wiring_log held "merge_lease_${MERGE_LEASE_REASON:-held}"
 		return 0
 	fi

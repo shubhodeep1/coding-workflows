@@ -2382,7 +2382,7 @@ unblock_reissue_own_pr_guard_enabled()
 # it (one call for both); otherwise this is the one GraphQL read for the item.
 unblock_resolve_own_prs()
 {
-	local owner name graphql_file result_file reason="read" count
+	local owner name graphql_file result_file reason="read" count own_wait_label="${MERGE_LEASE_WAIT_LABEL:-}"
 	[ "${ITEM_KIND:-}" = "issue" ] || return 0
 	unblock_reissue_own_pr_guard_enabled || return 0
 	result_file="${RUNTIME_DIR}/own_prs.json"
@@ -2402,7 +2402,15 @@ unblock_resolve_own_prs()
 			reason="read_failed"
 		fi
 	fi
-	if [ -n "${graphql_file}" ] && ! unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" own-prs --graphql-file "${graphql_file}" \
+	# The parser marks `lease_wait` by the repository's merge-lease wait label.
+	# unblock_judge.yml does not forward MERGE_LEASE_WAIT_LABEL, so when it is
+	# unset the repository variable is read once. §14 audit: no other call in
+	# this run returns repository variables (the placeholder hold reads only its
+	# own name). A missing variable or a failed read keeps the default label.
+	if [ -n "${graphql_file}" ] && [ -z "${own_wait_label}" ]; then
+		own_wait_label="$(gh api "repos/${REPOSITORY}/actions/variables/MERGE_LEASE_WAIT_LABEL" --jq '.value // ""' 2>/dev/null | head -n 1 | tr -d '[:cntrl:]' | cut -c1-100 || true)"
+	fi
+	if [ -n "${graphql_file}" ] && ! MERGE_LEASE_WAIT_LABEL="${own_wait_label:-ai:merge-lease-wait}" unblock_py "${SUPPORT_DIR}/scripts/unblock_actions.py" own-prs --graphql-file "${graphql_file}" \
 		--item "${ITEM}" --repo "${REPOSITORY}" --pipeline-login "${UNBLOCK_LOGIN:-}" > "${result_file}" 2>/dev/null; then
 		printf '{"status":"unknown","prs":[]}\n' > "${result_file}"
 		reason="parse_failed"

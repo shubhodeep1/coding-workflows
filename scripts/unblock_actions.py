@@ -870,6 +870,10 @@ def own_prs_from_graphql(raw: object, item: int, repo: str, pipeline_login: str,
 	wait_label = str(env.get("MERGE_LEASE_WAIT_LABEL", "") or "").strip() or "ai:merge-lease-wait"
 	head_ref = f"ai/issue-{item}"
 	try:
+		# A reply with GraphQL `errors` may carry nulled `labels` / `status`
+		# fields that would read as "not waiting" / "absent": fail closed.
+		if isinstance(raw, dict) and raw.get("errors"):
+			return unknown
 		connection = raw["data"]["repository"]["pullRequests"]
 		nodes = connection["nodes"]
 		page = connection.get("pageInfo") or {}

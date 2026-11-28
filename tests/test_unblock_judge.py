@@ -1438,6 +1438,10 @@ if endpoint.startswith(("repos/o/r/actions/variables/", "repos/o/r/actions/secre
 	kind = "VARIABLES" if "/variables/" in endpoint else "SECRETS"
 	name = endpoint.rsplit("/", 1)[1]
 	state.setdefault("actions_reads", []).append(endpoint)
+	# #10241: a variable's value (the own-PR wait label read); --jq is not applied.
+	variable_values = json.loads(os.environ.get("FAKE_GH_VARIABLE_VALUES") or "{}")
+	if kind == "VARIABLES" and name in variable_values:
+		done(variable_values[name])
 	if name in os.environ.get("FAKE_GH_ACTIONS_" + kind, "").split(","):
 		done(name)
 	json.dump(state, open(state_path, "w"))
@@ -7474,3 +7478,21 @@ def test_unblock_judge_wires_the_own_pr_guard_and_lease_switch() -> None:
 		workflow = (workflows / name).read_text(encoding="utf-8")
 		assert workflow.count(unblock_line) == unblock_count == workflow.count("UNBLOCK_EXISTING_PR_ROUTING_ENABLED:"), name
 		assert workflow.count(lease_line) == lease_count == workflow.count("MERGE_LEASE_REVOKE_ENABLED:"), name
+
+
+def test_own_prs_parser_treats_a_graphql_errors_reply_as_unknown(own_pr_guard_default: None) -> None:
+	# A partial reply can null `labels` or `status`; it must never read as "not waiting".
+	payload = _own_payload([_own_node(40, gate="PENDING")])
+	payload["errors"] = [{"message": "x", "path": ["repository", "pullRequests", "nodes", 0, "labels"]}]
+	assert actions.own_prs_from_graphql(payload, 7, "acme/app", BOT) == {"status": "unknown", "prs": []}
+
+
+def test_judge_reads_the_repositorys_custom_wait_label(tmp_path: Path) -> None:
+	# unblock_judge.yml does not forward MERGE_LEASE_WAIT_LABEL: the judge reads the variable.
+	payload = _judge_own_payload(_own_node(62, gate="PENDING", labels=("custom:lease-wait",)))
+	result, state = _judge(tmp_path, ISSUE, verdict=REISSUE, FAKE_GH_GRAPHQL=payload, UNBLOCK_REISSUE_OWN_PR_GUARD_ENABLED="true",
+		FAKE_GH_VARIABLE_VALUES=json.dumps({"MERGE_LEASE_WAIT_LABEL": "custom:lease-wait"}))
+	assert result.returncode == 0, result.stderr
+	assert "op=reissue outcome=refused reason=own_pr_lease_wait pr=62" in result.stdout, result.stdout + result.stderr
+	assert "repos/o/r/actions/variables/MERGE_LEASE_WAIT_LABEL" in state.get("actions_reads", [])
+	assert state["created"] == [] and not any(endpoint == "repos/o/r/pulls/62" for endpoint, _ in state["patched"])
