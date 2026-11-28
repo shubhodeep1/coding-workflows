@@ -96,7 +96,7 @@ jobs:
         continue-on-error: true
         uses: ./.github/actions/install-codex
         with:
-          codex_version: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          codex_version: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
 
       - name: Create Codex config
         if: steps.prepare.outputs.model_groups != '' && steps.prepare.outputs.model_groups != '0'
@@ -145,7 +145,7 @@ jobs:
         if: steps.prepare.outputs.model_groups != '' && steps.prepare.outputs.model_groups != '0'
         env:
           ALERT_TRIAGE_MODEL: ${{ vars.ALERT_TRIAGE_MODEL || vars.WORKFLOW_EDITOR_MODEL || 'openai/gpt-6-sol' }}
-          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.114.0' }}
+          CODEX_VERSION: ${{ vars.CODEX_VERSION || 'v0.171.0' }}
           # The codex fallback's host-side broker needs the inference key
           # (scripts/codex_isolated_exec.sh); it never enters the sandbox.
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
